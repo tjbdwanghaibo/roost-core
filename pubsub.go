@@ -2,29 +2,45 @@ package redis
 
 import (
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	"sync"
 
 	goredis "github.com/redis/go-redis/v9"
 )
 
 type pubSub struct {
-	ps *goredis.PubSub
-	ch <-chan *fredis.PubSubMessage
+	ps   *goredis.PubSub
+	ch   <-chan *fredis.PubSubMessage
+	done chan struct{}
+	once sync.Once
 }
 
 func newPubSub(ps *goredis.PubSub) *pubSub {
 	goCh := ps.Channel()
 	// Convert go-redis channel to framework channel
 	msgCh := make(chan *fredis.PubSubMessage, cap(goCh))
+	done := make(chan struct{})
 	go func() {
-		for msg := range goCh {
-			msgCh <- &fredis.PubSubMessage{
-				Channel: msg.Channel,
-				Payload: msg.Payload,
+		defer close(msgCh)
+		for {
+			select {
+			case <-done:
+				return
+			case msg, ok := <-goCh:
+				if !ok {
+					return
+				}
+				select {
+				case msgCh <- &fredis.PubSubMessage{
+					Channel: msg.Channel,
+					Payload: msg.Payload,
+				}:
+				case <-done:
+					return
+				}
 			}
 		}
-		close(msgCh)
 	}()
-	return &pubSub{ps: ps, ch: msgCh}
+	return &pubSub{ps: ps, ch: msgCh, done: done}
 }
 
 func (p *pubSub) Channel() <-chan *fredis.PubSubMessage {
@@ -32,7 +48,12 @@ func (p *pubSub) Channel() <-chan *fredis.PubSubMessage {
 }
 
 func (p *pubSub) Close() error {
-	return p.ps.Close()
+	var err error
+	p.once.Do(func() {
+		close(p.done)
+		err = p.ps.Close()
+	})
+	return err
 }
 
 var _ fredis.IPubSub = (*pubSub)(nil)

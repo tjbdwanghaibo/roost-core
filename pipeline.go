@@ -99,6 +99,11 @@ func (p *pipeline) LPop(ctx context.Context, key string) *fredis.FutureBytes {
 }
 
 func (p *pipeline) Exec(ctx context.Context) error {
+	defer func() {
+		p.bytesFutures = nil
+		p.stringMapFutures = nil
+		p.int64Futures = nil
+	}()
 	_, err := p.pipe.Exec(ctx)
 	// Assign results to futures
 	for _, bc := range p.bytesFutures {
