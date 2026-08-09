@@ -1,8 +1,11 @@
 package syncstream
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	coresync "github.com/tjbdwanghaibo/cube-core/sync"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
@@ -62,6 +65,82 @@ func TestEnqueueReportsPublishErrors(t *testing.T) {
 	publisher.Enqueue(corestream.Packet{Stream: corestream.Stream{Topic: "state"}})
 	if !errors.Is(got, want) {
 		t.Fatalf("reported error = %v", got)
+	}
+}
+
+func TestObserverAndPayloadGuards(t *testing.T) {
+	bus := &memoryBus{}
+	observer := corestream.Observer{ID: 7, Scope: "match"}
+	publisher, err := NewPublisherWithOptions(bus, PublisherOptions{ExpectedObserver: &observer, MaxPayloadBytes: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(corestream.Packet{Observer: corestream.Observer{ID: 8}, Stream: corestream.Stream{Topic: "state"}}); !errors.Is(err, ErrObserverMismatch) {
+		t.Fatalf("publisher observer error = %v", err)
+	}
+	if err := publisher.Publish(corestream.Packet{Observer: observer, Stream: corestream.Stream{Topic: "state"}, Payload: []byte("large")}); !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("publisher payload error = %v", err)
+	}
+
+	if _, err := SubscribeWithOptions(bus, "state", SubscribeOptions{ExpectedObserver: &observer, MaxPayloadBytes: 4}, func(corestream.Packet) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	foreign := corestream.Packet{Observer: corestream.Observer{ID: 9}, Stream: corestream.Stream{Topic: "state"}, Sequence: 1}
+	payload, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Publish(&coresync.SyncMsg{Topic: "state", Version: 1, Data: payload}); !errors.Is(err, ErrObserverMismatch) {
+		t.Fatalf("subscriber observer error = %v", err)
+	}
+}
+
+type blockingPublisher struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (publisher *blockingPublisher) Publish(corestream.Packet) error {
+	select {
+	case publisher.started <- struct{}{}:
+	default:
+	}
+	<-publisher.release
+	return nil
+}
+
+func TestBufferedPublisherSignalsBackpressureAndDrains(t *testing.T) {
+	downstream := &blockingPublisher{started: make(chan struct{}, 1), release: make(chan struct{})}
+	publisher, err := NewBufferedPublisher(downstream, BufferedPublisherOptions{Capacity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(corestream.Packet{Sequence: 1}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-downstream.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	if err := publisher.Publish(corestream.Packet{Sequence: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(corestream.Packet{Sequence: 3}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("backpressure error = %v", err)
+	}
+	close(downstream.release)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := publisher.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	metrics := publisher.Metrics()
+	if metrics.Queued != 2 || metrics.Published != 2 || metrics.Backpressure != 1 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	if err := publisher.Publish(corestream.Packet{}); !errors.Is(err, ErrPublisherClosed) {
+		t.Fatalf("closed error = %v", err)
 	}
 }
 
