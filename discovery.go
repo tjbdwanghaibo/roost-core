@@ -2,9 +2,10 @@ package etcd
 
 import (
 	"context"
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 	"encoding/json"
+	"errors"
 	"fmt"
+	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 	"log/slog"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type discovery struct {
 	key     string // registered key
 
 	mu               sync.Mutex
+	lifecycleMu      sync.Mutex
 	stopping         bool
 	keepaliveCancel  context.CancelFunc
 	loopCancel       context.CancelFunc
@@ -58,6 +60,11 @@ func newDiscovery(cli *clientv3.Client, prefix string, ttl int64) *discovery {
 }
 
 func (d *discovery) Register(ctx context.Context, info *fetcd.ServiceInfo) error {
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+	if d.hasRegistration() {
+		return fmt.Errorf("etcd discovery: service is already registered")
+	}
 	d.markActive()
 	if ctx == nil {
 		ctx = context.Background()
@@ -67,9 +74,16 @@ func (d *discovery) Register(ctx context.Context, info *fetcd.ServiceInfo) error
 		return err
 	}
 	loopCtx, cancel := context.WithCancel(context.Background())
-	d.setRegistration(reg)
 	done := make(chan struct{})
-	d.setLoop(cancel, done)
+	if !d.setRegistration(reg, cancel, done) {
+		cancel()
+		reg.cancel()
+		<-reg.keepaliveDone
+		if err := d.revokeLease(ctx, reg.leaseID); err != nil {
+			return fmt.Errorf("etcd discovery: revoke cancelled registration: %w", err)
+		}
+		return context.Canceled
+	}
 	go d.registrationLoop(loopCtx, info, reg, done)
 	return nil
 }
@@ -91,7 +105,10 @@ func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *fetcd.Servic
 	// Put with lease
 	_, err = d.cli.Put(ctx, key, string(value), clientv3.WithLease(resp.ID))
 	if err != nil {
-		return discoveryRegistration{}, fmt.Errorf("etcd discovery: put: %w", err)
+		return discoveryRegistration{}, errors.Join(
+			fmt.Errorf("etcd discovery: put: %w", err),
+			d.revokeSetupLease(resp.ID),
+		)
 	}
 
 	// Start keepalive
@@ -99,7 +116,10 @@ func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *fetcd.Servic
 	ch, err := d.cli.KeepAlive(keepCtx, resp.ID)
 	if err != nil {
 		cancel()
-		return discoveryRegistration{}, fmt.Errorf("etcd discovery: keepalive: %w", err)
+		return discoveryRegistration{}, errors.Join(
+			fmt.Errorf("etcd discovery: keepalive: %w", err),
+			d.revokeSetupLease(resp.ID),
+		)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -152,9 +172,12 @@ func (d *discovery) logRegistered(reg discoveryRegistration) {
 }
 
 func (d *discovery) Deregister(ctx context.Context) error {
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
 	d.markStopping()
 	d.cancelLoop()
 	d.cancelKeepalive()
@@ -163,6 +186,7 @@ func (d *discovery) Deregister(ctx context.Context) error {
 	if leaseID == 0 {
 		return nil
 	}
+
 	// Revoke lease (automatically deletes all keys attached to it)
 	err := d.revokeLease(ctx, leaseID)
 	if err != nil {
@@ -170,6 +194,15 @@ func (d *discovery) Deregister(ctx context.Context) error {
 	}
 	slog.Info("etcd discovery: deregistered", "key", d.currentKey())
 	d.clearRegistration()
+	return nil
+}
+
+func (d *discovery) revokeSetupLease(leaseID clientv3.LeaseID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.revokeLease(ctx, leaseID); err != nil {
+		return fmt.Errorf("etcd discovery: revoke setup lease: %w", err)
+	}
 	return nil
 }
 
@@ -199,12 +232,24 @@ func (d *discovery) shouldWarnLeaseLost() bool {
 	return !d.stopping
 }
 
-func (d *discovery) setRegistration(reg discoveryRegistration) {
+func (d *discovery) setRegistration(reg discoveryRegistration, loopCancel context.CancelFunc, loopDone chan struct{}) bool {
 	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopping {
+		return false
+	}
 	d.leaseID = reg.leaseID
 	d.key = reg.key
 	d.keepaliveCancel = reg.cancel
-	d.mu.Unlock()
+	d.loopCancel = loopCancel
+	d.loopDone = loopDone
+	return true
+}
+
+func (d *discovery) hasRegistration() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.leaseID != 0 || d.loopDone != nil
 }
 
 func (d *discovery) setCurrentRegistration(reg discoveryRegistration) {
@@ -233,13 +278,6 @@ func (d *discovery) currentKey() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.key
-}
-
-func (d *discovery) setLoop(cancel context.CancelFunc, done chan struct{}) {
-	d.mu.Lock()
-	d.loopCancel = cancel
-	d.loopDone = done
-	d.mu.Unlock()
 }
 
 func (d *discovery) cancelLoop() {
@@ -320,9 +358,13 @@ func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*fetcd.
 }
 
 func (d *discovery) WatchService(ctx context.Context, serviceType string) fetcd.IServiceWatcher {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	prefix := d.prefix + serviceType + "/"
-	wch := d.cli.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
-	return newServiceWatcher(wch)
+	watchCtx, cancel := context.WithCancel(ctx)
+	wch := d.cli.Watch(watchCtx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
+	return newServiceWatcher(watchCtx, wch, cancel)
 }
 
 var _ fetcd.IDiscovery = (*discovery)(nil)
@@ -331,12 +373,16 @@ var _ fetcd.IDiscovery = (*discovery)(nil)
 type serviceWatcher struct {
 	eventCh chan *fetcd.ServiceEvent
 	cancel  context.CancelFunc
+	done    chan struct{}
+	once    sync.Once
 }
 
-func newServiceWatcher(wch clientv3.WatchChan) *serviceWatcher {
+func newServiceWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.CancelFunc) *serviceWatcher {
 	eventCh := make(chan *fetcd.ServiceEvent, 32)
-	ctx, cancel := context.WithCancel(context.Background())
-	sw := &serviceWatcher{eventCh: eventCh, cancel: cancel}
+	if ctx == nil || cancel == nil {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	sw := &serviceWatcher{eventCh: eventCh, cancel: cancel, done: make(chan struct{})}
 	go sw.loop(ctx, wch)
 	return sw
 }
@@ -346,11 +392,15 @@ func (sw *serviceWatcher) EventChan() <-chan *fetcd.ServiceEvent {
 }
 
 func (sw *serviceWatcher) Close() error {
-	sw.cancel()
+	sw.once.Do(func() {
+		sw.cancel()
+		<-sw.done
+	})
 	return nil
 }
 
 func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
+	defer close(sw.done)
 	defer close(sw.eventCh)
 	for {
 		select {

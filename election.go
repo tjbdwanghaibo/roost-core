@@ -2,7 +2,9 @@ package etcd
 
 import (
 	"context"
+	"fmt"
 	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	"sync"
 	"sync/atomic"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -19,11 +21,13 @@ func newElectionFactory(cli *clientv3.Client) *electionFactory {
 }
 
 func (f *electionFactory) NewElection(prefix string) fetcd.IElection {
-	return &election{
+	e := &election{
 		cli:      f.cli,
 		prefix:   prefix,
 		leaderCh: make(chan struct{}),
 	}
+	e.create = e.createWithEtcd
+	return e
 }
 
 var _ fetcd.IElectionFactory = (*electionFactory)(nil)
@@ -32,63 +36,116 @@ var _ fetcd.IElectionFactory = (*electionFactory)(nil)
 type election struct {
 	cli      *clientv3.Client
 	prefix   string
-	session  *concurrency.Session
-	elect    *concurrency.Election
+	create   func() (electionSession, electionBackend, error)
+	session  electionSession
+	elect    electionBackend
 	isLeader atomic.Bool
+	mu       sync.Mutex
 	leaderCh chan struct{}
+	closed   bool
+	campaign bool
+}
+
+type electionSession interface {
+	Done() <-chan struct{}
+	Close() error
+}
+
+type electionBackend interface {
+	Campaign(ctx context.Context, value string) error
+	Resign(ctx context.Context) error
+	Leader(ctx context.Context) (*clientv3.GetResponse, error)
+}
+
+func (e *election) createWithEtcd() (electionSession, electionBackend, error) {
+	session, err := concurrency.NewSession(e.cli)
+	if err != nil {
+		return nil, nil, err
+	}
+	return session, concurrency.NewElection(session, e.prefix), nil
 }
 
 func (e *election) Campaign(ctx context.Context, value string) error {
-	// Create session with default TTL
-	session, err := concurrency.NewSession(e.cli)
+	e.mu.Lock()
+	if e.campaign {
+		e.mu.Unlock()
+		return fmt.Errorf("etcd election: campaign already active")
+	}
+	e.campaign = true
+	e.leaderCh = make(chan struct{})
+	e.closed = false
+	e.mu.Unlock()
+
+	create := e.create
+	if create == nil {
+		create = e.createWithEtcd
+	}
+	session, elect, err := create()
 	if err != nil {
+		e.finish(nil)
 		return err
 	}
+	e.mu.Lock()
+	if !e.campaign {
+		e.mu.Unlock()
+		_ = session.Close()
+		return fetcd.ErrNotLeader
+	}
 	e.session = session
-
-	elect := concurrency.NewElection(session, e.prefix)
 	e.elect = elect
+	e.mu.Unlock()
 
 	// Campaign blocks until elected or context cancelled
 	if err := elect.Campaign(ctx, value); err != nil {
-		session.Close()
+		_ = session.Close()
+		e.finish(session)
 		return err
 	}
 
+	e.mu.Lock()
+	if e.session != session || !e.campaign {
+		e.mu.Unlock()
+		_ = session.Close()
+		return fetcd.ErrNotLeader
+	}
 	e.isLeader.Store(true)
+	e.mu.Unlock()
 
 	// Watch for session expiry (loss of leadership)
 	go func() {
-		select {
-		case <-session.Done():
-			e.isLeader.Store(false)
-			close(e.leaderCh)
-		case <-ctx.Done():
-			e.isLeader.Store(false)
-			close(e.leaderCh)
-		}
+		<-session.Done()
+		e.finish(session)
 	}()
 
 	return nil
 }
 
 func (e *election) Resign(ctx context.Context) error {
-	if e.elect == nil {
+	e.mu.Lock()
+	elect := e.elect
+	session := e.session
+	active := e.campaign
+	e.mu.Unlock()
+	if !active || elect == nil || session == nil {
 		return fetcd.ErrNotLeader
 	}
-	err := e.elect.Resign(ctx)
-	e.isLeader.Store(false)
-	if e.session != nil {
-		e.session.Close()
+	err := elect.Resign(ctx)
+	closeErr := session.Close()
+	e.finish(session)
+	if err == nil {
+		err = closeErr
 	}
 	return err
 }
 
 func (e *election) Leader(ctx context.Context) (string, error) {
-	if e.elect == nil {
+	e.mu.Lock()
+	elect := e.elect
+	e.mu.Unlock()
+	if elect == nil {
 		return "", fetcd.ErrElectionNoLeader
 	}
-	resp, err := e.elect.Leader(ctx)
+	resp, err := elect.Leader(ctx)
 	if err != nil {
 		return "", fetcd.ErrElectionNoLeader
 	}
@@ -103,7 +160,25 @@ func (e *election) IsLeader() bool {
 }
 
 func (e *election) LeaderChan() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.leaderCh
+}
+
+func (e *election) finish(session electionSession) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if session != nil && e.session != session {
+		return
+	}
+	e.isLeader.Store(false)
+	e.campaign = false
+	e.session = nil
+	e.elect = nil
+	if !e.closed {
+		close(e.leaderCh)
+		e.closed = true
+	}
 }
 
 var _ fetcd.IElection = (*election)(nil)

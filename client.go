@@ -2,8 +2,8 @@ package etcd
 
 import (
 	"context"
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 	"fmt"
+	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -135,15 +135,17 @@ func (c *etcdClient) Revoke(ctx context.Context, leaseID int64) error {
 
 func (c *etcdClient) Watch(ctx context.Context, key string, opts ...fetcd.WatchOption) fetcd.IWatcher {
 	watchOpts := buildWatchOpts(opts)
-	wch := c.cli.Watch(ctx, key, watchOpts...)
-	return newWatcher(wch)
+	watchCtx, cancel := context.WithCancel(ctx)
+	wch := c.cli.Watch(watchCtx, key, watchOpts...)
+	return newWatcher(watchCtx, wch, cancel)
 }
 
 func (c *etcdClient) WatchPrefix(ctx context.Context, prefix string, opts ...fetcd.WatchOption) fetcd.IWatcher {
 	watchOpts := buildWatchOpts(opts)
 	watchOpts = append(watchOpts, clientv3.WithPrefix())
-	wch := c.cli.Watch(ctx, prefix, watchOpts...)
-	return newWatcher(wch)
+	watchCtx, cancel := context.WithCancel(ctx)
+	wch := c.cli.Watch(watchCtx, prefix, watchOpts...)
+	return newWatcher(watchCtx, wch, cancel)
 }
 
 // --- Connection ---

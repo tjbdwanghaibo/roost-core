@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	"sync"
 
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -12,14 +13,21 @@ import (
 type watcher struct {
 	eventCh chan *fetcd.WatchEvent
 	cancel  context.CancelFunc
+	done    chan struct{}
+	once    sync.Once
 }
 
-func newWatcher(wch clientv3.WatchChan) *watcher {
+func newWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.CancelFunc) *watcher {
 	eventCh := make(chan *fetcd.WatchEvent, 64)
-	ctx, cancel := context.WithCancel(context.Background())
+	if cancel == nil {
+		watchCtx, derivedCancel := context.WithCancel(ctx)
+		ctx = watchCtx
+		cancel = derivedCancel
+	}
 	w := &watcher{
 		eventCh: eventCh,
 		cancel:  cancel,
+		done:    make(chan struct{}),
 	}
 	go w.loop(ctx, wch)
 	return w
@@ -30,12 +38,16 @@ func (w *watcher) EventChan() <-chan *fetcd.WatchEvent {
 }
 
 func (w *watcher) Close() error {
-	w.cancel()
+	w.once.Do(func() {
+		w.cancel()
+		<-w.done
+	})
 	return nil
 }
 
 func (w *watcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 	defer close(w.eventCh)
+	defer close(w.done)
 	for {
 		select {
 		case <-ctx.Done():
