@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"sync"
 
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 
@@ -62,22 +63,24 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	if err != nil {
 		return nil, err
 	}
+	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
 		if handler == nil {
 			_ = msg.Ack()
 			return
 		}
 		wrapped := jetStreamMsg(msg)
-		if err := handler(ctx, wrapped); err != nil {
+		if err := handler(handlerCtx, wrapped); err != nil {
 			_ = msg.Nak()
 			return
 		}
 		_ = msg.Ack()
 	})
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	return &jetStreamSubscription{cc: cc}, nil
+	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
 }
 
 func toJetStreamStreamConfig(cfg fnats.JetStreamConfig) gojs.StreamConfig {
@@ -147,18 +150,51 @@ func jetStreamMsg(msg gojs.Msg) *fnats.JetStreamMsg {
 }
 
 type jetStreamSubscription struct {
-	cc gojs.ConsumeContext
+	cc         gojs.ConsumeContext
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	cancelOnce sync.Once
+	draining   bool
+	stopped    bool
 }
 
 func (s *jetStreamSubscription) Stop() {
 	if s != nil && s.cc != nil {
+		s.mu.Lock()
+		if s.stopped {
+			s.mu.Unlock()
+			return
+		}
+		s.stopped = true
+		s.mu.Unlock()
+		s.cancelHandler()
 		s.cc.Stop()
 	}
 }
 
 func (s *jetStreamSubscription) Drain() {
 	if s != nil && s.cc != nil {
+		s.mu.Lock()
+		if s.stopped || s.draining {
+			s.mu.Unlock()
+			return
+		}
+		s.draining = true
+		s.mu.Unlock()
 		s.cc.Drain()
+		go func() {
+			<-s.cc.Closed()
+			s.cancelHandler()
+			s.mu.Lock()
+			s.stopped = true
+			s.mu.Unlock()
+		}()
+	}
+}
+
+func (s *jetStreamSubscription) cancelHandler() {
+	if s.cancel != nil {
+		s.cancelOnce.Do(s.cancel)
 	}
 }
 

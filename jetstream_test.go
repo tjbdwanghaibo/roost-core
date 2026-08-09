@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,6 +9,34 @@ import (
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
+
+type fakeConsumeContext struct {
+	closed        chan struct{}
+	drainCalled   chan struct{}
+	stopCalled    chan struct{}
+	drainObserved func()
+}
+
+func newFakeConsumeContext() *fakeConsumeContext {
+	return &fakeConsumeContext{
+		closed:      make(chan struct{}),
+		drainCalled: make(chan struct{}),
+		stopCalled:  make(chan struct{}),
+	}
+}
+
+func (c *fakeConsumeContext) Stop() {
+	close(c.stopCalled)
+}
+
+func (c *fakeConsumeContext) Drain() {
+	if c.drainObserved != nil {
+		c.drainObserved()
+	}
+	close(c.drainCalled)
+}
+
+func (c *fakeConsumeContext) Closed() <-chan struct{} { return c.closed }
 
 func TestJetStreamStreamConfigMapping(t *testing.T) {
 	got := toJetStreamStreamConfig(fnats.JetStreamConfig{
@@ -53,4 +82,53 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 	if got.AckPolicy != gojs.AckExplicitPolicy || got.AckWait != 3*time.Second || got.MaxDeliver != 5 {
 		t.Fatalf("ack config mismatch: %+v", got)
 	}
+}
+
+func TestJetStreamDrainKeepsHandlerContextAliveUntilBufferedMessagesFinish(t *testing.T) {
+	handlerCtx, cancel := context.WithCancel(context.Background())
+	cc := newFakeConsumeContext()
+	cc.drainObserved = func() {
+		select {
+		case <-handlerCtx.Done():
+			t.Fatal("handler context was cancelled before ConsumeContext.Drain")
+		default:
+		}
+	}
+	sub := &jetStreamSubscription{cc: cc, cancel: cancel}
+	sub.Drain()
+	select {
+	case <-cc.drainCalled:
+	default:
+		t.Fatal("ConsumeContext.Drain was not called")
+	}
+	select {
+	case <-handlerCtx.Done():
+		t.Fatal("handler context was cancelled before ConsumeContext.Closed")
+	default:
+	}
+	close(cc.closed)
+	select {
+	case <-handlerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("handler context remained alive after drain completion")
+	}
+}
+
+func TestJetStreamStopCanForcePendingDrain(t *testing.T) {
+	handlerCtx, cancel := context.WithCancel(context.Background())
+	cc := newFakeConsumeContext()
+	sub := &jetStreamSubscription{cc: cc, cancel: cancel}
+	sub.Drain()
+	sub.Stop()
+	select {
+	case <-cc.stopCalled:
+	default:
+		t.Fatal("Stop did not force a pending drain to stop")
+	}
+	select {
+	case <-handlerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel the handler context")
+	}
+	close(cc.closed)
 }
