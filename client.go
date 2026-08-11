@@ -41,6 +41,14 @@ func (c *etcdClient) Get(ctx context.Context, key string) (*fetcd.KV, error) {
 }
 
 func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*fetcd.KV, error) {
+	snapshot, err := c.GetPrefixSnapshot(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.KVs, nil
+}
+
+func (c *etcdClient) GetPrefixSnapshot(ctx context.Context, prefix string) (*fetcd.PrefixSnapshot, error) {
 	resp, err := c.cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
@@ -49,7 +57,7 @@ func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*fetcd
 	for i, kv := range resp.Kvs {
 		kvs[i] = convertKV((*mvccpb.KeyValue)(kv))
 	}
-	return kvs, nil
+	return &fetcd.PrefixSnapshot{KVs: kvs, Revision: resp.Header.Revision}, nil
 }
 
 func (c *etcdClient) Put(ctx context.Context, key, value string) error {
@@ -225,8 +233,12 @@ func buildWatchOpts(opts []fetcd.WatchOption) []clientv3.OpOption {
 		if opt.WithRevision > 0 {
 			result = append(result, clientv3.WithRev(opt.WithRevision))
 		}
+		if opt.CreatedNotify {
+			result = append(result, clientv3.WithCreatedNotify())
+		}
 	}
 	return result
 }
 
 var _ fetcd.IEtcd = (*etcdClient)(nil)
+var _ fetcd.IPrefixSnapshotReader = (*etcdClient)(nil)
