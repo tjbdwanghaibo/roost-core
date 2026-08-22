@@ -467,6 +467,179 @@ func TestLocalMirrorIgnoresStaleMalformedWatchValue(t *testing.T) {
 	}
 }
 
+func TestLocalMirrorSubscriptionDeliversAtomicSnapshotAndOrderedChanges(t *testing.T) {
+	client := newMirrorTestClient(&fetcd.PrefixSnapshot{Revision: 5, KVs: []*fetcd.KV{{
+		Key: "/sync/a", Value: `{"count":1,"labels":{"owner":"one"}}`, ModRevision: 5,
+	}}})
+	mirror, err := newLocalMirror(context.Background(), client, mirrorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mirror.Close() })
+	<-client.watchRevisions
+	if err := mirror.WaitForSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	changes := make(chan fetcd.LocalMirrorChange[mirrorTestRecord], 3)
+	subscription, err := fetcd.SubscribeLocalMirror[mirrorTestRecord](mirror, context.Background(), func(_ context.Context, change fetcd.LocalMirrorChange[mirrorTestRecord]) error {
+		// Calling back into the mirror proves handlers do not run under its state lock.
+		_, _, _ = mirror.Get("/sync/a")
+		changes <- change
+		return nil
+	}, fetcd.LocalMirrorSubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+
+	initial := receiveMirrorChange(t, changes)
+	if initial.Type != fetcd.LocalMirrorSnapshot || initial.Revision != 5 || initial.Snapshot["/sync/a"].Count != 1 {
+		t.Fatalf("initial change=%+v", initial)
+	}
+	initial.Snapshot["/sync/a"].Labels["owner"] = "mutated"
+	current, _, _ := mirror.Get("/sync/a")
+	if current.Labels["owner"] != "one" {
+		t.Fatalf("callback mutation leaked into mirror: %+v", current)
+	}
+
+	client.watcher(0).events <- &fetcd.WatchEvent{Type: fetcd.EventPut, KV: &fetcd.KV{
+		Key: "/sync/a", Value: `{"count":2,"labels":{"owner":"two"}}`, ModRevision: 6,
+	}}
+	client.watcher(0).events <- &fetcd.WatchEvent{Type: fetcd.EventDelete, KV: &fetcd.KV{Key: "/sync/a", ModRevision: 7}}
+	put := receiveMirrorChange(t, changes)
+	deleted := receiveMirrorChange(t, changes)
+	if put.Type != fetcd.LocalMirrorPut || put.Key != "/sync/a" || put.Revision != 6 || put.Entry.Value.Count != 2 || put.Previous.Value.Count != 1 {
+		t.Fatalf("put change=%+v", put)
+	}
+	if deleted.Type != fetcd.LocalMirrorDelete || deleted.Key != "/sync/a" || deleted.Revision != 7 || deleted.Entry != nil || deleted.Previous.Value.Count != 2 {
+		t.Fatalf("delete change=%+v", deleted)
+	}
+}
+
+func TestLocalMirrorSubscriptionReceivesResnapshot(t *testing.T) {
+	client := newMirrorTestClient(&fetcd.PrefixSnapshot{Revision: 3, KVs: []*fetcd.KV{{
+		Key: "/sync/old", Value: `{"count":1}`, ModRevision: 3,
+	}}})
+	mirror, err := newLocalMirror(context.Background(), client, mirrorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mirror.Close() })
+	<-client.watchRevisions
+	changes := make(chan fetcd.LocalMirrorChange[mirrorTestRecord], 2)
+	subscription, err := mirror.Subscribe(context.Background(), func(_ context.Context, change fetcd.LocalMirrorChange[mirrorTestRecord]) error {
+		changes <- change
+		return nil
+	}, fetcd.LocalMirrorSubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	_ = receiveMirrorChange(t, changes)
+
+	client.setSnapshot(&fetcd.PrefixSnapshot{Revision: 10, KVs: []*fetcd.KV{{
+		Key: "/sync/new", Value: `{"count":10}`, ModRevision: 10,
+	}}})
+	close(client.watcher(0).events)
+	select {
+	case <-client.watchRevisions:
+	case <-time.After(time.Second):
+		t.Fatal("mirror did not reconnect")
+	}
+	resnapshot := receiveMirrorChange(t, changes)
+	if resnapshot.Type != fetcd.LocalMirrorSnapshot || resnapshot.Revision != 10 || len(resnapshot.Snapshot) != 1 || resnapshot.Snapshot["/sync/new"].Count != 10 {
+		t.Fatalf("resnapshot=%+v", resnapshot)
+	}
+}
+
+func TestLocalMirrorSlowSubscriptionIsIsolated(t *testing.T) {
+	client := newMirrorTestClient(&fetcd.PrefixSnapshot{Revision: 5})
+	mirror, err := newLocalMirror(context.Background(), client, mirrorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mirror.Close() })
+	<-client.watchRevisions
+	started := make(chan struct{})
+	release := make(chan struct{})
+	subscription, err := mirror.Subscribe(context.Background(), func(_ context.Context, _ fetcd.LocalMirrorChange[mirrorTestRecord]) error {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		return nil
+	}, fetcd.LocalMirrorSubscribeOptions{QueueCapacity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	watcher := client.watcher(0)
+	watcher.events <- &fetcd.WatchEvent{Type: fetcd.EventPut, KV: &fetcd.KV{Key: "/sync/a", Value: `{"count":1}`, ModRevision: 6}}
+	waitMirrorValue(t, mirror, "/sync/a", 1)
+	watcher.events <- &fetcd.WatchEvent{Type: fetcd.EventPut, KV: &fetcd.KV{Key: "/sync/a", Value: `{"count":2}`, ModRevision: 7}}
+	waitMirrorValue(t, mirror, "/sync/a", 2)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !errors.Is(subscription.Err(), fetcd.ErrMirrorSubscriberSlow) {
+		time.Sleep(time.Millisecond)
+	}
+	if !errors.Is(subscription.Err(), fetcd.ErrMirrorSubscriberSlow) {
+		t.Fatal("subscriber queue did not report overflow")
+	}
+	close(release)
+	select {
+	case <-subscription.Done():
+	case <-time.After(time.Second):
+		t.Fatal("slow subscription did not terminate")
+	}
+	if !errors.Is(subscription.Err(), fetcd.ErrMirrorSubscriberSlow) {
+		t.Fatalf("Err()=%v", subscription.Err())
+	}
+	if status := mirror.Status(); status.Revision != 7 {
+		t.Fatalf("slow subscriber blocked mirror: %+v", status)
+	}
+}
+
+func TestLocalMirrorSubscriptionContainsHandlerPanic(t *testing.T) {
+	client := newMirrorTestClient(&fetcd.PrefixSnapshot{Revision: 1})
+	mirror, err := newLocalMirror(context.Background(), client, mirrorTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mirror.Close() })
+	<-client.watchRevisions
+	subscription, err := mirror.Subscribe(context.Background(), func(context.Context, fetcd.LocalMirrorChange[mirrorTestRecord]) error {
+		panic("broken callback")
+	}, fetcd.LocalMirrorSubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.Done():
+	case <-time.After(time.Second):
+		t.Fatal("panicking subscription did not terminate")
+	}
+	if !errors.Is(subscription.Err(), fetcd.ErrWatchCallbackPanic) {
+		t.Fatalf("Err()=%v", subscription.Err())
+	}
+	if status := mirror.Status(); status.Revision != 1 {
+		t.Fatalf("callback panic affected mirror: %+v", status)
+	}
+}
+
+func receiveMirrorChange(t *testing.T, changes <-chan fetcd.LocalMirrorChange[mirrorTestRecord]) fetcd.LocalMirrorChange[mirrorTestRecord] {
+	t.Helper()
+	select {
+	case change := <-changes:
+		return change
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mirror callback")
+		return fetcd.LocalMirrorChange[mirrorTestRecord]{}
+	}
+}
+
 func TestLocalMirrorResnapshotsAfterMalformedWatchValue(t *testing.T) {
 	client := newMirrorTestClient(&fetcd.PrefixSnapshot{Revision: 5, KVs: []*fetcd.KV{{Key: "/sync/a", Value: `{"count":1}`, ModRevision: 5}}})
 	mirror, err := newLocalMirror(context.Background(), client, mirrorTestConfig())

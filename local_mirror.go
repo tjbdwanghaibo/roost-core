@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	defaultMirrorRetryMin = 100 * time.Millisecond
-	defaultMirrorRetryMax = 5 * time.Second
+	defaultMirrorRetryMin        = 100 * time.Millisecond
+	defaultMirrorRetryMax        = 5 * time.Second
+	defaultMirrorSubscriberQueue = 64
+	maxMirrorSubscriberQueue     = 65536
 )
 
 type mirrorClient interface {
@@ -51,6 +53,10 @@ type localMirror[T any] struct {
 	synced    bool
 	lastError error
 	stateCh   chan struct{}
+
+	callbackMu     sync.Mutex
+	subscribers    map[uint64]*mirrorSubscription[T]
+	nextSubscriber uint64
 }
 
 // NewLocalMirror creates a typed local mirror backed by a consistent etcd
@@ -116,13 +122,14 @@ func newLocalMirror[T any](ctx context.Context, client mirrorClient, cfg fetcd.L
 	}
 	mirrorCtx, cancel := context.WithCancel(ctx)
 	m := &localMirror[T]{
-		client:  client,
-		cfg:     cfg,
-		ctx:     mirrorCtx,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		items:   make(map[string]localMirrorItem[T]),
-		stateCh: make(chan struct{}),
+		client:      client,
+		cfg:         cfg,
+		ctx:         mirrorCtx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		items:       make(map[string]localMirrorItem[T]),
+		stateCh:     make(chan struct{}),
+		subscribers: make(map[uint64]*mirrorSubscription[T]),
 	}
 	if err := m.reload(); err != nil {
 		cancel()
@@ -348,6 +355,7 @@ func (m *localMirror[T]) Close() error {
 func (m *localMirror[T]) run() {
 	defer func() {
 		m.setStatus(false, fetcd.ErrMirrorClosed)
+		m.stopSubscriptions(fetcd.ErrMirrorClosed)
 		close(m.done)
 	}()
 	backoff := m.cfg.RetryMinInterval
@@ -455,23 +463,43 @@ func (m *localMirror[T]) apply(event *fetcd.WatchEvent) error {
 		}
 		item = localMirrorItem[T]{value: value, kv: kv}
 	}
+	m.callbackMu.Lock()
+	defer m.callbackMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if kv.ModRevision > 0 && kv.ModRevision < m.revision {
+		m.mu.Unlock()
 		return nil
 	}
+	previous, existed := m.items[kv.Key]
 	switch event.Type {
 	case fetcd.EventPut:
 		m.items[kv.Key] = item
 	case fetcd.EventDelete:
 		delete(m.items, kv.Key)
 	default:
+		m.mu.Unlock()
 		return fmt.Errorf("etcd local mirror: unknown watch event type %d", event.Type)
 	}
 	if kv.ModRevision > m.revision {
 		m.revision = kv.ModRevision
 	}
 	m.lastError = nil
+	revision := m.revision
+	m.mu.Unlock()
+
+	change := mirrorInternalChange[T]{key: kv.Key, revision: revision}
+	if existed {
+		previousCopy := previous
+		change.previous = &previousCopy
+	}
+	if event.Type == fetcd.EventPut {
+		itemCopy := item
+		change.kind = fetcd.LocalMirrorPut
+		change.entry = &itemCopy
+	} else {
+		change.kind = fetcd.LocalMirrorDelete
+	}
+	m.dispatchLocked(change)
 	return nil
 }
 
@@ -498,14 +526,22 @@ func (m *localMirror[T]) reload() error {
 		}
 		items[kv.Key] = localMirrorItem[T]{value: value, kv: kv}
 	}
+	m.callbackMu.Lock()
+	defer m.callbackMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if snapshot.Revision < m.revision {
+		m.mu.Unlock()
 		return fmt.Errorf("etcd local mirror: snapshot revision regressed from %d to %d", m.revision, snapshot.Revision)
 	}
 	m.items = items
 	m.revision = snapshot.Revision
 	m.lastError = nil
+	m.mu.Unlock()
+	m.dispatchLocked(mirrorInternalChange[T]{
+		kind:     fetcd.LocalMirrorSnapshot,
+		snapshot: cloneInternalItems(items),
+		revision: snapshot.Revision,
+	})
 	return nil
 }
 
@@ -565,3 +601,4 @@ func nextMirrorBackoff(current, max time.Duration) time.Duration {
 }
 
 var _ fetcd.ILocalMirror[any] = (*localMirror[any])(nil)
+var _ fetcd.ILocalMirrorSubscriber[any] = (*localMirror[any])(nil)
