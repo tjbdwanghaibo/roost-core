@@ -1,0 +1,794 @@
+// Package nestwal provides a single-writer segmented commit log for Nest
+// transactions. Records are checksummed, group committed, replayed in append
+// order, and acknowledged through a double-buffered durable checkpoint.
+package nestwal
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"hash/crc32"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+)
+
+const (
+	frameMagic      = uint32(0x5253574c) // RSWL
+	frameVersion    = uint16(1)
+	frameHeaderSize = 20
+)
+
+var (
+	ErrClosed         = errors.New("nestwal: closed")
+	ErrLocked         = errors.New("nestwal: directory is already locked")
+	ErrCorrupt        = errors.New("nestwal: corrupt log")
+	ErrRecordTooLarge = errors.New("nestwal: record exceeds configured limit")
+)
+
+type Options struct {
+	Dir                 string
+	SegmentBytes        int64
+	MaxRecordBytes      int
+	QueueCapacity       int
+	BatchMaxRecords     int
+	BatchMaxBytes       int
+	BatchDelay          time.Duration
+	GroupCommitInterval time.Duration
+	RetainSegments      int
+	FileMode            os.FileMode
+	// OnFatal fences the hosting process when a physical write or fsync has an
+	// indeterminate outcome. It must initiate shutdown rather than retry writes.
+	OnFatal func(error)
+}
+
+func DefaultOptions(dir string) Options {
+	return Options{
+		Dir:                 dir,
+		SegmentBytes:        256 << 20,
+		MaxRecordBytes:      16 << 20,
+		QueueCapacity:       8192,
+		BatchMaxRecords:     256,
+		BatchMaxBytes:       4 << 20,
+		BatchDelay:          500 * time.Microsecond,
+		GroupCommitInterval: 10 * time.Millisecond,
+		RetainSegments:      2,
+		FileMode:            0o600,
+	}
+}
+
+type Stats struct {
+	Segment       uint64
+	Offset        int64
+	Queued        int
+	Appended      uint64
+	Bytes         uint64
+	Syncs         uint64
+	Replayed      uint64
+	Acknowledged  uint64
+	TerminalError string
+}
+
+type WAL struct {
+	opts Options
+
+	appendCh chan appendRequest
+	closeCh  chan struct{}
+	doneCh   chan struct{}
+
+	lifecycleMu sync.RWMutex
+	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
+
+	stateMu      sync.RWMutex
+	active       *os.File
+	segment      uint64
+	offset       int64
+	unsynced     bool
+	lockHandle   *os.File
+	terminalMu   sync.RWMutex
+	terminalErr  error
+	fatalOnce    sync.Once
+	replayMu     sync.Mutex
+	checkpointMu sync.Mutex
+	checkpoint   checkpointState
+
+	appended     atomic.Uint64
+	bytesWritten atomic.Uint64
+	syncs        atomic.Uint64
+	replayed     atomic.Uint64
+	acked        atomic.Uint64
+	batchBuffers sync.Pool
+}
+
+type appendRequest struct {
+	record      corenest.CommitRecord
+	frame       []byte
+	requireSync bool
+	done        chan appendResult
+}
+
+type appendResult struct {
+	fence corenest.CommitFence
+	err   error
+}
+
+func Open(options Options) (*WAL, error) {
+	opts, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(opts.Dir, 0o750); err != nil {
+		return nil, fmt.Errorf("nestwal: create directory: %w", err)
+	}
+	lockHandle, err := os.OpenFile(filepath.Join(opts.Dir, "writer.lock"), os.O_CREATE|os.O_RDWR, opts.FileMode)
+	if err != nil {
+		return nil, fmt.Errorf("nestwal: open lock: %w", err)
+	}
+	if err := lockFile(lockHandle); err != nil {
+		_ = lockHandle.Close()
+		return nil, errors.Join(ErrLocked, err)
+	}
+
+	w := &WAL{
+		opts:       opts,
+		appendCh:   make(chan appendRequest, opts.QueueCapacity),
+		closeCh:    make(chan struct{}),
+		doneCh:     make(chan struct{}),
+		lockHandle: lockHandle,
+	}
+	w.batchBuffers.New = func() any {
+		buffer := make([]byte, 0, opts.BatchMaxBytes)
+		return &buffer
+	}
+	w.checkpoint, err = loadCheckpoint(opts.Dir)
+	if err == nil {
+		err = w.openActive()
+	}
+	if err != nil {
+		_ = unlockFile(lockHandle)
+		_ = lockHandle.Close()
+		return nil, err
+	}
+	go w.writerLoop()
+	return w, nil
+}
+
+func normalizeOptions(opts Options) (Options, error) {
+	defaults := DefaultOptions(opts.Dir)
+	if strings.TrimSpace(opts.Dir) == "" {
+		return opts, errors.New("nestwal: directory is required")
+	}
+	abs, err := filepath.Abs(opts.Dir)
+	if err != nil {
+		return opts, err
+	}
+	opts.Dir = filepath.Clean(abs)
+	if opts.SegmentBytes <= 0 {
+		opts.SegmentBytes = defaults.SegmentBytes
+	}
+	if opts.MaxRecordBytes <= 0 {
+		opts.MaxRecordBytes = defaults.MaxRecordBytes
+	}
+	if opts.QueueCapacity <= 0 {
+		opts.QueueCapacity = defaults.QueueCapacity
+	}
+	if opts.BatchMaxRecords <= 0 {
+		opts.BatchMaxRecords = defaults.BatchMaxRecords
+	}
+	if opts.BatchMaxBytes <= 0 {
+		opts.BatchMaxBytes = defaults.BatchMaxBytes
+	}
+	if opts.BatchDelay <= 0 {
+		opts.BatchDelay = defaults.BatchDelay
+	}
+	if opts.GroupCommitInterval <= 0 {
+		opts.GroupCommitInterval = defaults.GroupCommitInterval
+	}
+	if opts.RetainSegments < 0 {
+		return opts, errors.New("nestwal: retain segments cannot be negative")
+	}
+	if opts.RetainSegments == 0 {
+		opts.RetainSegments = defaults.RetainSegments
+	}
+	if opts.FileMode == 0 {
+		opts.FileMode = defaults.FileMode
+	}
+	if opts.SegmentBytes <= frameHeaderSize || int64(opts.MaxRecordBytes+frameHeaderSize) > opts.SegmentBytes {
+		return opts, errors.New("nestwal: segment must be larger than maximum record")
+	}
+	return opts, nil
+}
+
+func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenest.CommitFence, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	payload, err := encodeRecord(record)
+	if err != nil {
+		return corenest.CommitFence{}, err
+	}
+	if len(payload) > w.opts.MaxRecordBytes {
+		return corenest.CommitFence{}, ErrRecordTooLarge
+	}
+	frame := encodeFrame(payload)
+	req := appendRequest{
+		record:      record,
+		frame:       frame,
+		requireSync: record.Durability == corenest.DurabilityStrict,
+		done:        make(chan appendResult, 1),
+	}
+
+	w.lifecycleMu.RLock()
+	if w.closed {
+		w.lifecycleMu.RUnlock()
+		return corenest.CommitFence{}, ErrClosed
+	}
+	if terminal := w.terminal(); terminal != nil {
+		w.lifecycleMu.RUnlock()
+		return corenest.CommitFence{}, terminal
+	}
+	select {
+	case w.appendCh <- req:
+		w.lifecycleMu.RUnlock()
+	case <-ctx.Done():
+		w.lifecycleMu.RUnlock()
+		return corenest.CommitFence{}, ctx.Err()
+	}
+	// Cancellation controls queue admission only. Once admitted, returning
+	// before the writer decides the outcome would make commit ambiguous.
+	result := <-req.done
+	return result.fence, result.err
+}
+
+func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
+	if fence.Segment == 0 || fence.Offset <= 0 {
+		return errors.New("nestwal: invalid acknowledgement fence")
+	}
+	w.checkpointMu.Lock()
+	defer w.checkpointMu.Unlock()
+	if !fenceAfter(fence, w.checkpoint.fence) {
+		return nil
+	}
+	w.stateMu.RLock()
+	beyondEnd := fence.Segment > w.segment || fence.Segment == w.segment && fence.Offset > w.offset
+	w.stateMu.RUnlock()
+	if beyondEnd {
+		return errors.New("nestwal: acknowledgement is beyond log end")
+	}
+	next := checkpointState{generation: w.checkpoint.generation + 1, fence: fence}
+	if err := storeCheckpoint(w.opts.Dir, next, w.opts.FileMode); err != nil {
+		return fmt.Errorf("nestwal: store acknowledgement: %w", err)
+	}
+	w.checkpoint = next
+	w.acked.Add(1)
+	w.pruneAcked(fence.Segment)
+	return nil
+}
+
+func (w *WAL) Replay(ctx context.Context, consume func(corenest.CommitFence, corenest.CommitRecord) error) error {
+	if consume == nil {
+		return errors.New("nestwal: nil replay consumer")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.replayMu.Lock()
+	defer w.replayMu.Unlock()
+
+	w.stateMu.RLock()
+	activeSegment, activeLimit := w.segment, w.offset
+	w.stateMu.RUnlock()
+	w.checkpointMu.Lock()
+	ack := w.checkpoint.fence
+	w.checkpointMu.Unlock()
+	segments, err := listSegments(w.opts.Dir)
+	if err != nil {
+		return err
+	}
+	for _, segment := range segments {
+		if segment > activeSegment {
+			break
+		}
+		path := filepath.Join(w.opts.Dir, segmentName(segment))
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		limit := int64(-1)
+		if segment == activeSegment {
+			limit = activeLimit
+		}
+		err = scanFrames(file, segment, limit, w.opts.MaxRecordBytes, false, func(fence corenest.CommitFence, payload []byte) error {
+			if !fenceAfter(fence, ack) {
+				return nil
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			record, err := decodeRecord(payload)
+			if err != nil {
+				return errors.Join(ErrCorrupt, err)
+			}
+			fence.TransactionID = record.ID
+			if err := consume(fence, record); err != nil {
+				return err
+			}
+			w.replayed.Add(1)
+			return nil
+		})
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Sync forces all accepted asynchronous appends to stable storage. Append
+// already waits for the physical write, so no queue barrier is required.
+func (w *WAL) Sync(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if terminal := w.terminal(); terminal != nil {
+		return terminal
+	}
+	if err := w.syncActive(); err != nil {
+		err = errors.Join(corenest.ErrCommitIndeterminate, err)
+		w.setTerminal(err)
+		return err
+	}
+	return nil
+}
+
+func (w *WAL) Stats() Stats {
+	w.stateMu.RLock()
+	segment, offset := w.segment, w.offset
+	w.stateMu.RUnlock()
+	stats := Stats{
+		Segment:      segment,
+		Offset:       offset,
+		Queued:       len(w.appendCh),
+		Appended:     w.appended.Load(),
+		Bytes:        w.bytesWritten.Load(),
+		Syncs:        w.syncs.Load(),
+		Replayed:     w.replayed.Load(),
+		Acknowledged: w.acked.Load(),
+	}
+	if err := w.terminal(); err != nil {
+		stats.TerminalError = err.Error()
+	}
+	return stats
+}
+
+func (w *WAL) Healthy() error { return w.terminal() }
+
+func (w *WAL) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.closeOnce.Do(func() {
+		w.lifecycleMu.Lock()
+		w.closed = true
+		close(w.closeCh)
+		w.lifecycleMu.Unlock()
+	})
+	select {
+	case <-w.doneCh:
+		return w.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *WAL) writerLoop() {
+	ticker := time.NewTicker(w.opts.GroupCommitInterval)
+	defer ticker.Stop()
+	defer close(w.doneCh)
+	for {
+		select {
+		case first := <-w.appendCh:
+			w.processBatch(w.collectBatch(first))
+		case <-ticker.C:
+			if err := w.syncActive(); err != nil {
+				w.setTerminal(errors.Join(corenest.ErrCommitIndeterminate, err))
+			}
+		case <-w.closeCh:
+			w.drainAndClose()
+			return
+		}
+	}
+}
+
+func (w *WAL) collectBatch(first appendRequest) []appendRequest {
+	batch := make([]appendRequest, 0, w.opts.BatchMaxRecords)
+	batch = append(batch, first)
+	bytesTotal := len(first.frame)
+	timer := time.NewTimer(w.opts.BatchDelay)
+	defer timer.Stop()
+	for len(batch) < w.opts.BatchMaxRecords && bytesTotal < w.opts.BatchMaxBytes {
+		select {
+		case req := <-w.appendCh:
+			batch = append(batch, req)
+			bytesTotal += len(req.frame)
+		case <-timer.C:
+			return batch
+		case <-w.closeCh:
+			return batch
+		}
+	}
+	return batch
+}
+
+func (w *WAL) processBatch(batch []appendRequest) {
+	if len(batch) == 0 {
+		return
+	}
+	if terminal := w.terminal(); terminal != nil {
+		for i := range batch {
+			batch[i].done <- appendResult{err: terminal}
+		}
+		return
+	}
+	fences := make([]corenest.CommitFence, len(batch))
+	requireSync := false
+	w.stateMu.Lock()
+	var err error
+	bufferPtr := w.batchBuffers.Get().(*[]byte)
+	buffer := (*bufferPtr)[:0]
+	for start := 0; start < len(batch); {
+		if w.offset > 0 && w.offset+int64(len(batch[start].frame)) > w.opts.SegmentBytes {
+			if err = w.rotateLocked(); err != nil {
+				break
+			}
+		}
+		buffer = buffer[:0]
+		end := start
+		nextOffset := w.offset
+		for end < len(batch) {
+			frameSize := int64(len(batch[end].frame))
+			if end > start && nextOffset+frameSize > w.opts.SegmentBytes {
+				break
+			}
+			buffer = append(buffer, batch[end].frame...)
+			nextOffset += frameSize
+			fences[end] = corenest.CommitFence{TransactionID: batch[end].record.ID, Segment: w.segment, Offset: nextOffset}
+			requireSync = requireSync || batch[end].requireSync
+			end++
+		}
+		if err = writeFull(w.active, buffer); err != nil {
+			break
+		}
+		w.offset = nextOffset
+		w.unsynced = true
+		start = end
+	}
+	if err == nil && requireSync {
+		err = w.syncActiveLocked()
+	}
+	w.stateMu.Unlock()
+	if cap(buffer) <= w.opts.BatchMaxBytes*2 {
+		*bufferPtr = buffer[:0]
+		w.batchBuffers.Put(bufferPtr)
+	}
+	if err != nil {
+		err = errors.Join(corenest.ErrCommitIndeterminate, err)
+		w.setTerminal(err)
+		for i := range batch {
+			batch[i].done <- appendResult{err: err}
+		}
+		return
+	}
+	for i := range batch {
+		w.appended.Add(1)
+		w.bytesWritten.Add(uint64(len(batch[i].frame)))
+		batch[i].done <- appendResult{fence: fences[i]}
+	}
+}
+
+func (w *WAL) drainAndClose() {
+drainLoop:
+	for {
+		batch := make([]appendRequest, 0, w.opts.BatchMaxRecords)
+		for len(batch) < w.opts.BatchMaxRecords {
+			select {
+			case req := <-w.appendCh:
+				batch = append(batch, req)
+			default:
+				if len(batch) > 0 {
+					w.processBatch(batch)
+					continue drainLoop
+				}
+				if err := w.syncAndCloseActive(); err != nil {
+					w.closeErr = errors.Join(w.closeErr, err)
+				}
+				w.closeErr = errors.Join(w.closeErr, w.terminal())
+				if w.lockHandle != nil {
+					w.closeErr = errors.Join(w.closeErr, unlockFile(w.lockHandle), w.lockHandle.Close())
+				}
+				return
+			}
+		}
+		w.processBatch(batch)
+	}
+}
+
+func (w *WAL) openActive() error {
+	segments, err := listSegments(w.opts.Dir)
+	if err != nil {
+		return err
+	}
+	if len(segments) == 0 {
+		segments = []uint64{1}
+	} else {
+		for i := 1; i < len(segments); i++ {
+			if segments[i] != segments[i-1]+1 {
+				return errors.Join(ErrCorrupt, errors.New("non-contiguous WAL segments"))
+			}
+		}
+		if segments[0] > 1 && w.checkpoint.fence.Segment == 0 {
+			return errors.Join(ErrCorrupt, errors.New("WAL starts after segment 1 without an acknowledgement"))
+		}
+	}
+	w.segment = segments[len(segments)-1]
+	path := filepath.Join(w.opts.Dir, segmentName(w.segment))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, w.opts.FileMode)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	lastGood, err := scanFramesEnd(file, w.segment, info.Size(), w.opts.MaxRecordBytes)
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	if lastGood != info.Size() {
+		if err := file.Truncate(lastGood); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	if _, err := file.Seek(lastGood, io.SeekStart); err != nil {
+		_ = file.Close()
+		return err
+	}
+	w.active = file
+	w.offset = lastGood
+	if fenceAfter(w.checkpoint.fence, corenest.CommitFence{Segment: w.segment, Offset: w.offset}) {
+		_ = file.Close()
+		w.active = nil
+		return errors.Join(ErrCorrupt, errors.New("acknowledgement is beyond recovered WAL end"))
+	}
+	return nil
+}
+
+func (w *WAL) rotateLocked() error {
+	if err := w.syncActiveLocked(); err != nil {
+		return err
+	}
+	if err := w.active.Close(); err != nil {
+		return err
+	}
+	w.segment++
+	path := filepath.Join(w.opts.Dir, segmentName(w.segment))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, w.opts.FileMode)
+	if err != nil {
+		return err
+	}
+	w.active = file
+	w.offset = 0
+	return nil
+}
+
+func (w *WAL) syncActive() error {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	return w.syncActiveLocked()
+}
+
+func (w *WAL) syncActiveLocked() error {
+	if w.active == nil || !w.unsynced {
+		return nil
+	}
+	if err := w.active.Sync(); err != nil {
+		return err
+	}
+	w.unsynced = false
+	w.syncs.Add(1)
+	return nil
+}
+
+func (w *WAL) syncAndCloseActive() error {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.active == nil {
+		return nil
+	}
+	err := w.syncActiveLocked()
+	err = errors.Join(err, w.active.Close())
+	w.active = nil
+	return err
+}
+
+func (w *WAL) terminal() error {
+	w.terminalMu.RLock()
+	defer w.terminalMu.RUnlock()
+	return w.terminalErr
+}
+
+func (w *WAL) setTerminal(err error) {
+	if err == nil {
+		return
+	}
+	first := false
+	w.terminalMu.Lock()
+	if w.terminalErr == nil {
+		w.terminalErr = err
+		first = true
+	}
+	w.terminalMu.Unlock()
+	if first && w.opts.OnFatal != nil {
+		w.fatalOnce.Do(func() {
+			go func() {
+				defer func() { _ = recover() }()
+				w.opts.OnFatal(err)
+			}()
+		})
+	}
+}
+
+func (w *WAL) pruneAcked(ackSegment uint64) {
+	if ackSegment <= uint64(w.opts.RetainSegments) {
+		return
+	}
+	removeBefore := ackSegment - uint64(w.opts.RetainSegments)
+	segments, err := listSegments(w.opts.Dir)
+	if err != nil {
+		return
+	}
+	for _, segment := range segments {
+		if segment >= removeBefore {
+			break
+		}
+		_ = os.Remove(filepath.Join(w.opts.Dir, segmentName(segment)))
+	}
+}
+
+func encodeFrame(payload []byte) []byte {
+	frame := make([]byte, frameHeaderSize+len(payload))
+	binary.BigEndian.PutUint32(frame[0:4], frameMagic)
+	binary.BigEndian.PutUint16(frame[4:6], frameVersion)
+	binary.BigEndian.PutUint32(frame[8:12], uint32(len(payload)))
+	binary.BigEndian.PutUint32(frame[12:16], crc32.ChecksumIEEE(payload))
+	binary.BigEndian.PutUint32(frame[16:20], crc32.ChecksumIEEE(frame[:16]))
+	copy(frame[frameHeaderSize:], payload)
+	return frame
+}
+
+func scanFramesEnd(file *os.File, segment uint64, limit int64, maxRecord int) (int64, error) {
+	lastGood := int64(0)
+	err := scanFrames(file, segment, limit, maxRecord, true, func(fence corenest.CommitFence, _ []byte) error {
+		lastGood = fence.Offset
+		return nil
+	})
+	return lastGood, err
+}
+
+func scanFrames(file *os.File, segment uint64, limit int64, maxRecord int, allowTornTail bool, consume func(corenest.CommitFence, []byte) error) error {
+	if limit < 0 {
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		limit = info.Size()
+	}
+	offset := int64(0)
+	header := make([]byte, frameHeaderSize)
+	for offset < limit {
+		n, err := file.ReadAt(header, offset)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if n < frameHeaderSize {
+			if allowTornTail {
+				return nil
+			}
+			return errors.Join(ErrCorrupt, io.ErrUnexpectedEOF)
+		}
+		if binary.BigEndian.Uint32(header[0:4]) != frameMagic || binary.BigEndian.Uint16(header[4:6]) != frameVersion {
+			return errors.Join(ErrCorrupt, errors.New("invalid frame header"))
+		}
+		if crc32.ChecksumIEEE(header[:16]) != binary.BigEndian.Uint32(header[16:20]) {
+			return errors.Join(ErrCorrupt, errors.New("invalid frame header checksum"))
+		}
+		size := int(binary.BigEndian.Uint32(header[8:12]))
+		if size <= 0 || size > maxRecord {
+			return errors.Join(ErrCorrupt, ErrRecordTooLarge)
+		}
+		end := offset + frameHeaderSize + int64(size)
+		if end > limit {
+			if allowTornTail {
+				return nil
+			}
+			return errors.Join(ErrCorrupt, io.ErrUnexpectedEOF)
+		}
+		payload := make([]byte, size)
+		if _, err := file.ReadAt(payload, offset+frameHeaderSize); err != nil {
+			return err
+		}
+		if crc32.ChecksumIEEE(payload) != binary.BigEndian.Uint32(header[12:16]) {
+			return errors.Join(ErrCorrupt, errors.New("invalid frame payload checksum"))
+		}
+		if consume != nil {
+			if err := consume(corenest.CommitFence{Segment: segment, Offset: end}, payload); err != nil {
+				return err
+			}
+		}
+		offset = end
+	}
+	return nil
+}
+
+func listSegments(dir string) ([]uint64, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	segments := make([]uint64, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "segment-") || !strings.HasSuffix(name, ".wal") {
+			continue
+		}
+		raw := strings.TrimSuffix(strings.TrimPrefix(name, "segment-"), ".wal")
+		segment, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || segment == 0 {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	sort.Slice(segments, func(i, j int) bool { return segments[i] < segments[j] })
+	return segments, nil
+}
+
+func segmentName(segment uint64) string {
+	return fmt.Sprintf("segment-%020d.wal", segment)
+}
+
+func writeFull(writer io.Writer, raw []byte) error {
+	for len(raw) > 0 {
+		n, err := writer.Write(raw)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		raw = raw[n:]
+	}
+	return nil
+}
