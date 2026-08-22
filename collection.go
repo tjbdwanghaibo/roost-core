@@ -2,9 +2,9 @@ package mongo
 
 import (
 	"context"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	"errors"
 	"fmt"
+	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -67,12 +67,48 @@ func (c *collection) Find(ctx context.Context, filter any, results any, opts ...
 		if opt.Skip > 0 {
 			findOpts.SetSkip(opt.Skip)
 		}
+		if opt.BatchSize > 0 {
+			findOpts.SetBatchSize(opt.BatchSize)
+		}
 	}
 	cursor, err := c.coll.Find(ctx, filter, findOpts)
 	if err != nil {
 		return wrapError(err)
 	}
 	return cursor.All(ctx, results)
+}
+
+func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
+	if consume == nil {
+		return fmt.Errorf("mongo: nil stream consumer")
+	}
+	findOpts := options.Find()
+	for _, opt := range opts {
+		if opt.Sort != nil {
+			findOpts.SetSort(opt.Sort)
+		}
+		if opt.Limit > 0 {
+			findOpts.SetLimit(opt.Limit)
+		}
+		if opt.Skip > 0 {
+			findOpts.SetSkip(opt.Skip)
+		}
+		if opt.BatchSize > 0 {
+			findOpts.SetBatchSize(opt.BatchSize)
+		}
+	}
+	cursor, err := c.coll.Find(ctx, filter, findOpts)
+	if err != nil {
+		return wrapError(err)
+	}
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		raw := append([]byte(nil), cursor.Current...)
+		if err := consume(raw); err != nil {
+			return err
+		}
+	}
+	return wrapError(cursor.Err())
 }
 
 func (c *collection) UpdateOne(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
@@ -318,3 +354,4 @@ func wrapError(err error) error {
 var _ = bson.D{}
 
 var _ fmongo.ICollection = (*collection)(nil)
+var _ fmongo.IStreamingCollection = (*collection)(nil)
