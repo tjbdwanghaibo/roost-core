@@ -282,6 +282,17 @@ type SaveOp struct {
 	Patch      PersistPatch // field-level update when Mode is SaveModePatch
 }
 
+// RemoveItem is one versioned delete tombstone. Version participates in the
+// same per-document CAS ordering as SaveOp.Version. A backend must retain the
+// tombstone so a delayed save with an older version cannot resurrect the ID.
+type RemoveItem struct {
+	ID       int64
+	Version  uint64
+	Fence    uint64
+	OwnerSid int32
+	Shared   bool
+}
+
 // SaveResult is the outcome of a single SaveOp.
 type SaveResult struct {
 	OK              bool
@@ -294,10 +305,7 @@ type RemoveOp struct {
 	Db         string
 	DbScope    DatabaseScope
 	Collection string
-	IDs        []int64
-	Fence      uint64
-	OwnerSid   int32
-	Shared     bool
+	Items      []RemoveItem
 }
 
 // RawDoc is a loaded document with metadata.
@@ -309,6 +317,7 @@ type RawDoc struct {
 	LockFence     uint64
 	RouteEpoch    uint64
 	DataEnvelope  bool
+	Deleted       bool
 	Data          []byte // raw BSON
 }
 
@@ -330,7 +339,8 @@ type StorageBackend interface {
 	// BulkLoad loads all documents matching the criteria.
 	BulkLoad(ctx context.Context, op LoadOp) ([]RawDoc, error)
 
-	// BulkRemove deletes documents by IDs.
+	// BulkRemove persists versioned tombstones. Implementations must not
+	// physically remove the identity/version fence on this path.
 	BulkRemove(ctx context.Context, op RemoveOp) error
 }
 

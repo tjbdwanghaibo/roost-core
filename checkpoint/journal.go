@@ -16,6 +16,7 @@ type SaveItem struct {
 	Fence      uint64 // remote ownership generation; zero is an unfenced local save
 	OwnerSid   int32  // owner recorded for the ownership generation
 	Shared     bool   // whether the ownership generation is in shared mode
+	Deleted    bool   // versioned persistent tombstone; deleted IDs are not implicitly reusable
 	Mask       uint64 // field-level dirty mask sampled under entity lock
 	Mode       SaveMode
 	Data       []byte       // full serialized data
@@ -147,37 +148,20 @@ func (j *Journal) wakeOnContextDoneLocked(ctx context.Context) chan struct{} {
 	return stop
 }
 
-// PushRemove adds a remove operation as a special entry with nil Data.
-func (j *Journal) PushRemove(collection string, ids []int64) bool {
-	if len(ids) == 0 {
-		return true
-	}
-
-	items := make([]SaveItem, len(ids))
-	for i, id := range ids {
-		items[i] = SaveItem{
-			Collection: collection,
-			ID:         id,
-			Version:    0, // version 0 signals removal
-		}
-	}
-	return j.PushRemoveItems(items)
-}
-
 func (j *Journal) PushRemoveItems(items []SaveItem) bool {
 	if len(items) == 0 {
 		return true
 	}
-	normalized := make([]SaveItem, 0, len(items))
-	for _, item := range items {
-		if item.Collection == "" || item.ID == 0 {
-			continue
+	normalized := make([]SaveItem, len(items))
+	for i, item := range items {
+		if item.Collection == "" || item.ID == 0 || item.Version == 0 {
+			return false
 		}
-		item.Version = 0
+		item.Deleted = true
 		item.Data = nil
 		item.Patch = PersistPatch{}
 		item.Mode = SaveModeFull
-		normalized = append(normalized, item)
+		normalized[i] = item
 	}
 	return j.Push(normalized)
 }

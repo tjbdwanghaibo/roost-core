@@ -140,6 +140,12 @@ func (l *Loader) loadOne(ctx context.Context, t *LoadTemplate) error {
 
 	var loaded, skipped int
 	consume := func(doc RawDoc) error {
+		// Backends normally filter tombstones at the query boundary. Keep this
+		// guard as a second safety boundary for custom/legacy storage adapters.
+		if doc.Deleted {
+			skipped++
+			return nil
+		}
 		// Skip if already in memory
 		if l.exister != nil && l.exister.Exists(doc.ID) {
 			skipped++

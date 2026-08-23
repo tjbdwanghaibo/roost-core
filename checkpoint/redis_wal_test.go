@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,13 +189,78 @@ func TestRedisSnapshotWALSubmitDurableWritesImmediatelyWithoutWorker(t *testing.
 	}
 }
 
+func TestRedisSnapshotWALSubmitDurableRequiresSameConnectionAOF(t *testing.T) {
+	ctx := context.Background()
+	redis := newSnapshotWALFakeRedis()
+	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{
+		Prefix: "cube:test:wal", Shards: 2, RequireAOF: true, AOFLocal: 1,
+	})
+	item := SaveItem{Db: "game_1", Collection: "players", ID: 1001, Version: 1, Data: []byte("snapshot")}
+
+	if ok := wal.SubmitDurable(ctx, []SaveItem{item}); !ok {
+		t.Fatal("SubmitDurable returned false with confirmed local AOF")
+	}
+	if redis.durableCalls.Load() != 1 {
+		t.Fatalf("durable calls = %d, want 1", redis.durableCalls.Load())
+	}
+}
+
+func TestRedisSnapshotWALSubmitDurableUsesOneAOFBarrierPerBatch(t *testing.T) {
+	redis := newSnapshotWALFakeRedis()
+	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{
+		Prefix: "cube:test:wal", Shards: 2, RequireAOF: true, AOFLocal: 1,
+	})
+	items := []SaveItem{
+		{Db: "game_1", Collection: "players", ID: 1001, Version: 1, Data: []byte("one")},
+		{Db: "game_1", Collection: "bags", ID: 1001, Version: 1, Data: []byte("two")},
+	}
+
+	if ok := wal.SubmitDurable(context.Background(), items); !ok {
+		t.Fatal("SubmitDurable returned false")
+	}
+	if redis.durableCalls.Load() != 1 {
+		t.Fatalf("durable calls = %d, want one AOF barrier for the batch", redis.durableCalls.Load())
+	}
+	if stats := wal.Stats(); stats.Written != 2 {
+		t.Fatalf("written = %d, want 2", stats.Written)
+	}
+}
+
+func TestRedisSnapshotWALSubmitDurableFailsClosedBelowAOFThreshold(t *testing.T) {
+	ctx := context.Background()
+	redis := newSnapshotWALFakeRedis()
+	redis.aofLocal = 0
+	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{
+		Prefix: "cube:test:wal", Shards: 2, RequireAOF: true, AOFLocal: 1,
+	})
+	item := SaveItem{Db: "game_1", Collection: "players", ID: 1001, Version: 1, Data: []byte("snapshot")}
+
+	if ok := wal.SubmitDurable(ctx, []SaveItem{item}); ok {
+		t.Fatal("SubmitDurable succeeded without required local AOF confirmation")
+	}
+}
+
+type snapshotWALNonDurableRedis struct{ fredis.IRedis }
+
+func TestRedisSnapshotWALSubmitDurableRejectsUnsupportedClient(t *testing.T) {
+	redis := newSnapshotWALFakeRedis()
+	wal := NewRedisSnapshotWAL(snapshotWALNonDurableRedis{IRedis: redis}, RedisSnapshotWALConfig{
+		Prefix: "cube:test:wal", Shards: 2, RequireAOF: true,
+	})
+	item := SaveItem{Db: "game_1", Collection: "players", ID: 1001, Version: 1, Data: []byte("snapshot")}
+
+	if ok := wal.SubmitDurable(context.Background(), []SaveItem{item}); ok {
+		t.Fatal("SubmitDurable succeeded with a client lacking same-connection AOF support")
+	}
+}
+
 func TestRedisSnapshotWALDurableDeleteReplaysTombstone(t *testing.T) {
 	ctx := context.Background()
 	redis := newSnapshotWALFakeRedis()
 	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{
 		Prefix: "cube:test:wal", Shards: 2, ReplayBatchSize: 10,
 	})
-	item := SaveItem{Db: "game_1", DbScope: DatabaseScopeServer, Collection: "players", ID: 1001, Version: 9}
+	item := SaveItem{Db: "game_1", DbScope: DatabaseScopeServer, Collection: "players", ID: 1001, Version: 9, Deleted: true}
 	if ok := wal.SubmitDeleteDurable(ctx, []SaveItem{item}); !ok {
 		t.Fatal("SubmitDeleteDurable returned false")
 	}
@@ -215,11 +282,60 @@ func TestRedisSnapshotWALDurableDeleteReplaysTombstone(t *testing.T) {
 	removed := append([]RemoveOp(nil), backend.removed...)
 	backend.mu.Unlock()
 	if len(removed) != 1 || removed[0].Db != "game_1" || removed[0].DbScope != DatabaseScopeServer ||
-		removed[0].Collection != "players" || len(removed[0].IDs) != 1 || removed[0].IDs[0] != 1001 {
+		removed[0].Collection != "players" || len(removed[0].Items) != 1 || removed[0].Items[0].ID != 1001 || removed[0].Items[0].Version != 9 {
 		t.Fatalf("replayed removes = %+v", removed)
 	}
 	if _, ok := redis.hashes[redisSnapshotWALSnapshotKey("cube:test:wal", shard)][target]; ok {
 		t.Fatal("replayed delete tombstone was not acknowledged")
+	}
+}
+
+func TestRedisSnapshotWALStaleAckCannotDeleteNewerTombstone(t *testing.T) {
+	ctx := context.Background()
+	redis := newSnapshotWALFakeRedis()
+	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{Prefix: "cube:test:wal", Shards: 1})
+	save := SaveItem{Db: "game_1", Collection: "players", ID: 1001, Version: 8, Data: []byte("old")}
+	tombstone := SaveItem{Db: "game_1", Collection: "players", ID: 1001, Version: 9, Deleted: true}
+	if !wal.SubmitDurable(ctx, []SaveItem{save}) || !wal.SubmitDeleteDurable(ctx, []SaveItem{tombstone}) {
+		t.Fatal("durable WAL writes failed")
+	}
+	if err := wal.Ack(ctx, []SaveItem{save}); err != nil {
+		t.Fatal(err)
+	}
+	target := redisSnapshotWALTarget(tombstone)
+	raw := redis.hashes[redisSnapshotWALSnapshotKey("cube:test:wal", 0)][target]
+	var payload redisSnapshotWALPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("newer tombstone was removed by stale ack: %v", err)
+	}
+	if payload.Operation != redisSnapshotWALOperationDelete || payload.Version != 9 {
+		t.Fatalf("payload = %+v, want version 9 tombstone", payload)
+	}
+	if err := wal.Ack(ctx, []SaveItem{tombstone}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := redis.hashes[redisSnapshotWALSnapshotKey("cube:test:wal", 0)][target]; exists {
+		t.Fatal("matching tombstone ack did not clean WAL")
+	}
+}
+
+func TestRedisSnapshotWALDelayedOlderWriteCannotReplaceTombstone(t *testing.T) {
+	ctx := context.Background()
+	redis := newSnapshotWALFakeRedis()
+	wal := NewRedisSnapshotWAL(redis, RedisSnapshotWALConfig{Prefix: "cube:test:wal", Shards: 1})
+	tombstone := SaveItem{Db: "game_1", Collection: "players", ID: 1002, Version: 20, Deleted: true}
+	delayed := SaveItem{Db: "game_1", Collection: "players", ID: 1002, Version: 19, Data: []byte("delayed")}
+	if !wal.SubmitDeleteDurable(ctx, []SaveItem{tombstone}) || !wal.SubmitDurable(ctx, []SaveItem{delayed}) {
+		t.Fatal("durable WAL writes failed")
+	}
+	target := redisSnapshotWALTarget(tombstone)
+	raw := redis.hashes[redisSnapshotWALSnapshotKey("cube:test:wal", 0)][target]
+	var payload redisSnapshotWALPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Operation != redisSnapshotWALOperationDelete || payload.Version != 20 {
+		t.Fatalf("delayed write replaced tombstone: %+v", payload)
 	}
 }
 
@@ -318,13 +434,18 @@ type snapshotWALFakeRedis struct {
 	blockExec   chan struct{}
 	execStarted chan struct{}
 	execCtxDone chan struct{}
+
+	aofLocal     int64
+	aofReplicas  int64
+	durableCalls atomic.Int64
 }
 
 func newSnapshotWALFakeRedis() *snapshotWALFakeRedis {
 	return &snapshotWALFakeRedis{
-		hashes:  make(map[string]map[string]string),
-		zsets:   make(map[string]map[string]float64),
-		expires: make(map[string]time.Duration),
+		hashes:   make(map[string]map[string]string),
+		zsets:    make(map[string]map[string]float64),
+		expires:  make(map[string]time.Duration),
+		aofLocal: 1,
 	}
 }
 
@@ -545,8 +666,111 @@ func (r *snapshotWALFakeRedis) SIsMember(context.Context, string, any) (bool, er
 func (r *snapshotWALFakeRedis) Pipeline() fredis.IPipeline {
 	return &snapshotWALFakePipeline{redis: r, blockExec: r.blockExec, execStarted: r.execStarted, execCtxDone: r.execCtxDone}
 }
-func (r *snapshotWALFakeRedis) Eval(context.Context, string, []string, ...any) (any, error) {
-	return nil, nil
+func (r *snapshotWALFakeRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if r.blockExec != nil {
+		if r.execStarted != nil {
+			close(r.execStarted)
+		}
+		if r.execCtxDone != nil {
+			defer close(r.execCtxDone)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-r.blockExec:
+		}
+	}
+	if len(keys) != 3 {
+		return nil, errors.New("unsupported eval keys")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if script == redisSnapshotWALWriteScript {
+		if len(args) != 7 {
+			return nil, errors.New("invalid write eval arguments")
+		}
+		target := fmt.Sprint(args[0])
+		incomingVersion, err := strconv.ParseUint(fmt.Sprint(args[5]), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		if current := r.hashes[keys[2]][target]; current != "" {
+			parts := strings.Split(current, ":")
+			currentVersion, parseErr := strconv.ParseUint(parts[1], 10, 64)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			incomingFence, parseErr := strconv.ParseUint(fmt.Sprint(args[6]), 10, 64)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			currentFence, parseErr := strconv.ParseUint(parts[2], 10, 64)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			incomingToken := fmt.Sprint(args[2])
+			if currentVersion > incomingVersion || currentVersion == incomingVersion && currentFence > incomingFence || currentVersion == incomingVersion && currentFence == incomingFence && strings.HasPrefix(current, "d:") && !strings.HasPrefix(incomingToken, "d:") {
+				return int64(0), nil
+			}
+		}
+		for _, key := range []string{keys[0], keys[2]} {
+			if r.hashes[key] == nil {
+				r.hashes[key] = make(map[string]string)
+			}
+		}
+		r.hashes[keys[0]][target] = snapshotWALFakeString(args[1])
+		r.hashes[keys[2]][target] = fmt.Sprint(args[2])
+		if r.zsets[keys[1]] == nil {
+			r.zsets[keys[1]] = make(map[string]float64)
+		}
+		score, err := strconv.ParseFloat(fmt.Sprint(args[3]), 64)
+		if err != nil {
+			return nil, err
+		}
+		r.zsets[keys[1]][target] = score
+		ttlMillis, err := strconv.ParseInt(fmt.Sprint(args[4]), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		if ttlMillis > 0 {
+			for _, key := range keys {
+				r.expires[key] = time.Duration(ttlMillis) * time.Millisecond
+			}
+		}
+		return int64(1), nil
+	}
+	if script != redisSnapshotWALAckScript || len(args)%2 != 0 {
+		return nil, errors.New("unsupported eval")
+	}
+	var cleaned int64
+	for i := 0; i < len(args); i += 2 {
+		target, token := fmt.Sprint(args[i]), fmt.Sprint(args[i+1])
+		if r.hashes[keys[2]][target] != token {
+			continue
+		}
+		delete(r.hashes[keys[0]], target)
+		delete(r.hashes[keys[2]], target)
+		delete(r.zsets[keys[1]], target)
+		cleaned++
+	}
+	return cleaned, nil
+}
+func (r *snapshotWALFakeRedis) EvalDurable(ctx context.Context, script string, keys []string, _, _ int, _ time.Duration, args ...any) (any, int64, int64, error) {
+	r.durableCalls.Add(1)
+	result, err := r.Eval(ctx, script, keys, args...)
+	return result, r.aofLocal, r.aofReplicas, err
+}
+func (r *snapshotWALFakeRedis) EvalBatchDurable(ctx context.Context, script string, calls []fredis.EvalCall, _, _ int, _ time.Duration) ([]any, int64, int64, error) {
+	r.durableCalls.Add(1)
+	results := make([]any, 0, len(calls))
+	for _, call := range calls {
+		result, err := r.Eval(ctx, script, call.Keys, call.Args...)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		results = append(results, result)
+	}
+	return results, r.aofLocal, r.aofReplicas, nil
 }
 func (r *snapshotWALFakeRedis) EvalSha(context.Context, string, []string, ...any) (any, error) {
 	return nil, nil

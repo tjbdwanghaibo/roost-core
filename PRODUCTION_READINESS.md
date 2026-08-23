@@ -26,6 +26,9 @@
 - `checkpoint.admission_pending_capacity` 是硬上限；达到上限会触发 RuntimeFailure 并 fence 进程，禁止用无限内存换可用性。
 - `Stop(ctx)` 在关闭 worker 前执行最终 flush；超时或失败必须向上返回，不允许静默丢弃。
 - Mongo 保存使用版本、marker epoch、lock fence 和 route epoch 做条件更新；加载按完整聚合 snapshot 恢复，不发布半初始化 Entity。
+- 删除是携带严格递增 version 的持久 tombstone，不再物理删除。旧 save、旧 WAL ACK 和并发 flush 都不能复活已删除 ID；业务 ID 默认不可复用，确需重建必须提交严格更高 version。
+- Mongo 启动固定 primary + majority+journal 写、transaction snapshot read，并拒绝不支持 session/transaction 的 standalone。`_nest_transactions` 由 TTL 索引限制幂等 receipt 生命周期。
+- Checkpoint admission 使用同一物理 Redis 连接批量执行 Lua CAS，再以一次 `WAITAOF` 接纳整批数据，并校验 local/replica fsync 数量；生产要求 Redis 7.2+、AOF 开启和单主/Sentinel 接入。不能证明同连接同分片语义的 Redis Cluster 必须 fail-closed，不能把普通命令成功冒充持久化成功。
 
 ## 4. Remote Entity
 
@@ -39,6 +42,7 @@
 ## 5. 帧同步与重同步
 
 - replication 数据面支持 snapshot、delta、LOD/interest、分片、压缩和可靠重传；服务器可按房间以 20 Hz 驱动。
+- 房间默认硬限制 100 subject/100 subscriber。单个慢客户端只淘汰自己的 session，框架自动解除其房间订阅，不阻塞同帧的健康客户端；退房、断线和房间销毁会释放 sequence/baseline/LOD 状态。
 - UDP 控制面使用固定长度带校验的 ACK/Resync 报文，包含 room、epoch、tick 和单调 sequence。过期 epoch、回退 sequence、非法 checksum 均被拒绝。
 - `cube-kit/replication.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
 
@@ -46,9 +50,9 @@
 
 发布顺序：
 
-1. 发布 `cube-core v1.2.0`。
-2. 使用已发布 core 构建并发布 `cube-kit v1.2.0`。
-3. 发布 `roost-codegen v1.2.0`，新项目默认引用上述两个版本。
+1. 发布 `roost-core v1.3.0`。
+2. 使用已发布 core 构建并发布 `roost-kit v1.3.0`。
+3. 发布 `roost-codegen v1.3.0`，新项目默认引用上述两个版本。
 
 每次发布至少执行：
 
@@ -61,5 +65,7 @@ git diff --check
 ```
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
+
+升级到 v1.3.0 前必须先停止旧 writer 并排空旧 checkpoint 队列。旧的物理删除记录没有 version，不能混入新进程；升级后必须重新生成 Entity，使 `RemoveSnapshot` 在 Entity mutex 内递增 DAO tracker version。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。
 
 第二条 race 命令在 `cube-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

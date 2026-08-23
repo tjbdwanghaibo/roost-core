@@ -63,6 +63,23 @@ type IRedis interface {
 	Close() error
 }
 
+type EvalCall struct {
+	Keys []string
+	Args []any
+}
+
+// DurableEvaler executes a script and WAITAOF on the same physical Redis
+// connection. Independent pooled calls do not satisfy this contract.
+type DurableEvaler interface {
+	EvalDurable(ctx context.Context, script string, keys []string, numLocal, numReplicas int, timeout time.Duration, args ...any) (result any, local, replicas int64, err error)
+}
+
+// DurableBatchEvaler pipelines all scripts and one trailing WAITAOF on one
+// physical connection, amortizing the fsync across the admitted batch.
+type DurableBatchEvaler interface {
+	EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) (results []any, local, replicas int64, err error)
+}
+
 // Z represents a sorted set member with score.
 type Z struct {
 	Score  float64

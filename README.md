@@ -142,6 +142,8 @@ log:
 
 `SnapshotWALRequired` / `SnapshotWALModeDurable` 下，WAL 实现必须同时实现 `DeleteSnapshotWAL`；durable 模式还必须实现 `DurableDeleteSnapshotWAL`。删除先写 tombstone、后进入 journal，后端 `BulkRemove` 成功后才 ACK tombstone，因此进程崩溃后不会由旧 save WAL 复活已删除实体。Checkpoint 启动时先完成 WAL replay，再接受实时 flush。
 
+Redis WAL 的 production adapter 还必须实现 `redis.DurableEvaler` 和 `redis.DurableBatchEvaler`：Lua 写入和 `WAITAOF` 必须固定在同一物理连接，并校验返回的 local/replica fsync 数量；批量接口用一次 fsync 接纳整批快照。`RequireAOF` 打开时缺少该能力或确认数量不足会拒绝 admission，不会退化为普通 Redis ACK。
+
 ### 开发与验证
 
 业务请求的新执行模型、锁边界和兼容迁移见

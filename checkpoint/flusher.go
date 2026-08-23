@@ -198,12 +198,7 @@ func (f *Flusher) processBatch(ctx context.Context, entries []JournalEntry) erro
 	return nil
 }
 
-// dedupEntry holds a SaveItem with its deduplication key.
-type dedupEntry struct {
-	item SaveItem
-}
-
-func (f *Flusher) dedup(entries []JournalEntry) (saves []SaveItem, removes map[removeKey][]int64) {
+func (f *Flusher) dedup(entries []JournalEntry) (saves []SaveItem, removes map[removeKey][]SaveItem) {
 	// Dedup saves: merge patches for the same (collection, id). A later full
 	// snapshot replaces earlier patches. We only commit dirty masks after the
 	// merged write succeeds, so a failed flush can roll back to a full save.
@@ -214,25 +209,42 @@ func (f *Flusher) dedup(entries []JournalEntry) (saves []SaveItem, removes map[r
 		id      int64
 	}
 	saveMap := make(map[key]SaveItem)
-	removes = make(map[removeKey][]int64)
+	removes = make(map[removeKey][]SaveItem)
 	removeIndex := make(map[key]removeKey)
 
 	for _, entry := range entries {
 		for _, item := range entry.Items {
-			if item.Version == 0 && item.Data == nil {
-				// Remove operation
+			if item.Deleted {
+				// A delete is a versioned mutation. Keep only the newest mutation
+				// for this identity inside the batch; backend CAS protects the same
+				// ordering across concurrently executing batches.
+				k := key{item.Db, item.DbScope, item.Collection, item.ID}
+				if existing, ok := saveMap[k]; ok && existing.Version > item.Version {
+					continue
+				}
 				rk := removeKey{db: item.Db, dbScope: item.DbScope, coll: item.Collection, fence: item.Fence, ownerSid: item.OwnerSid, shared: item.Shared}
-				removes[rk] = append(removes[rk], item.ID)
-				// Also remove from saveMap if present
-				delete(saveMap, key{item.Db, item.DbScope, item.Collection, item.ID})
-				removeIndex[key{item.Db, item.DbScope, item.Collection, item.ID}] = rk
+				if previous, ok := removeIndex[k]; ok {
+					if removeVersion(removes[previous], item.ID) >= item.Version {
+						continue
+					}
+					removes[previous] = removeSaveItem(removes[previous], item.ID)
+					if len(removes[previous]) == 0 {
+						delete(removes, previous)
+					}
+				}
+				removes[rk] = append(removes[rk], item)
+				delete(saveMap, k)
+				removeIndex[k] = rk
 				continue
 			}
 			k := key{item.Db, item.DbScope, item.Collection, item.ID}
-			// Last operation wins. A save after a tombstone recreates the
-			// document and must cancel the earlier remove from this batch.
+			// Re-creation is explicit: only a strictly newer version may cancel a
+			// tombstone. Ordinary generated entity IDs are never reused.
 			if rk, ok := removeIndex[k]; ok {
-				removes[rk] = removeID(removes[rk], item.ID)
+				if removeVersion(removes[rk], item.ID) >= item.Version {
+					continue
+				}
+				removes[rk] = removeSaveItem(removes[rk], item.ID)
 				if len(removes[rk]) == 0 {
 					delete(removes, rk)
 				}
@@ -265,13 +277,22 @@ func (f *Flusher) dedup(entries []JournalEntry) (saves []SaveItem, removes map[r
 	return saves, removes
 }
 
-func removeID(ids []int64, target int64) []int64 {
-	for i := range ids {
-		if ids[i] == target {
-			return append(ids[:i], ids[i+1:]...)
+func removeSaveItem(items []SaveItem, target int64) []SaveItem {
+	for i := range items {
+		if items[i].ID == target {
+			return append(items[:i], items[i+1:]...)
 		}
 	}
-	return ids
+	return items
+}
+
+func removeVersion(items []SaveItem, target int64) uint64 {
+	for i := range items {
+		if items[i].ID == target {
+			return items[i].Version
+		}
+	}
+	return 0
 }
 
 type removeKey struct {
@@ -430,16 +451,9 @@ func (f *Flusher) flushSaveBatch(ctx context.Context, items []SaveItem) error {
 	}
 }
 
-func removeJournalEntries(removes map[removeKey][]int64) []JournalEntry {
+func removeJournalEntries(removes map[removeKey][]SaveItem) []JournalEntry {
 	entries := make([]JournalEntry, 0, len(removes))
-	for key, ids := range removes {
-		items := make([]SaveItem, 0, len(ids))
-		for _, id := range ids {
-			items = append(items, SaveItem{
-				Db: key.db, DbScope: key.dbScope, Collection: key.coll, ID: id,
-				Fence: key.fence, OwnerSid: key.ownerSid, Shared: key.shared,
-			})
-		}
+	for _, items := range removes {
 		entries = append(entries, JournalEntry{Items: items, PushAt: time.Now().UnixNano()})
 	}
 	return entries
@@ -456,7 +470,7 @@ func saveJournalEntries(items []SaveItem) []JournalEntry {
 	return entries
 }
 
-func (f *Flusher) flushRemoves(ctx context.Context, removes map[removeKey][]int64) error {
+func (f *Flusher) flushRemoves(ctx context.Context, removes map[removeKey][]SaveItem) error {
 	keys := make([]removeKey, 0, len(removes))
 	for key := range removes {
 		keys = append(keys, key)
@@ -471,17 +485,17 @@ func (f *Flusher) flushRemoves(ctx context.Context, removes map[removeKey][]int6
 		return keys[i].coll < keys[j].coll
 	})
 	for _, key := range keys {
-		ids := removes[key]
+		items := removes[key]
+		removeItems := make([]RemoveItem, len(items))
+		for i := range items {
+			removeItems[i] = RemoveItem{ID: items[i].ID, Version: items[i].Version, Fence: items[i].Fence, OwnerSid: items[i].OwnerSid, Shared: items[i].Shared}
+		}
 		backoff := f.cfg.RetryBackoff
 		for {
-			err := f.backend.BulkRemove(ctx, RemoveOp{Db: key.db, DbScope: key.dbScope, Collection: key.coll, IDs: ids, Fence: key.fence, OwnerSid: key.ownerSid, Shared: key.shared})
+			err := f.backend.BulkRemove(ctx, RemoveOp{Db: key.db, DbScope: key.dbScope, Collection: key.coll, Items: removeItems})
 			if err == nil {
 				if f.wal != nil {
-					ackItems := make([]SaveItem, 0, len(ids))
-					for _, id := range ids {
-						ackItems = append(ackItems, SaveItem{Db: key.db, DbScope: key.dbScope, Collection: key.coll, ID: id, Fence: key.fence, OwnerSid: key.ownerSid, Shared: key.shared})
-					}
-					if ackErr := f.wal.Ack(ctx, ackItems); ackErr != nil {
+					if ackErr := f.wal.Ack(ctx, items); ackErr != nil {
 						err = fmt.Errorf("checkpoint delete WAL ack: %w", ackErr)
 					} else {
 						break

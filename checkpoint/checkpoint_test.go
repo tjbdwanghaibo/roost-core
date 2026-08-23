@@ -225,6 +225,19 @@ func TestJournal_Close(t *testing.T) {
 	}
 }
 
+func TestJournalRejectsPartialInvalidTombstoneBatch(t *testing.T) {
+	j := NewJournal(10)
+	if j.PushRemoveItems([]SaveItem{
+		{Collection: "players", ID: 1, Version: 2},
+		{Collection: "players", ID: 2},
+	}) {
+		t.Fatal("invalid tombstone batch was partially admitted")
+	}
+	if j.Len() != 0 {
+		t.Fatalf("journal len = %d, want atomic rejection", j.Len())
+	}
+}
+
 func TestJournalStatsExposeCapacityPressure(t *testing.T) {
 	j := NewJournal(2)
 	if stats := j.Stats(); stats.Cap != 2 || stats.Len != 0 || stats.Closed {
@@ -555,8 +568,8 @@ func TestCheckpointSubmitRemovePersistsDeleteTombstoneBeforeFlush(t *testing.T) 
 	wal := &fakeSnapshotWAL{}
 	cp := New(&mockBackend{}, WithSnapshotWAL(wal), WithFlushWorkers(0))
 
-	if ok := cp.SubmitRemove("players", []int64{1001, 1002}); !ok {
-		t.Fatal("SubmitRemove returned false")
+	if ok := cp.SubmitRemoveItems([]SaveItem{{Collection: "players", ID: 1001, Version: 4}, {Collection: "players", ID: 1002, Version: 7}}); !ok {
+		t.Fatal("SubmitRemoveItems returned false")
 	}
 
 	if len(wal.deleted) != 1 {
@@ -577,8 +590,8 @@ func TestCheckpointSubmitRemoveItemsPreservesDbForBackendAndWAL(t *testing.T) {
 	cp := New(backend, WithSnapshotWAL(wal), WithFlushWorkers(0))
 
 	if ok := cp.SubmitRemoveItems([]SaveItem{
-		{Db: "game_1", Collection: "players", ID: 1001, Fence: 9, OwnerSid: 1001, Shared: true},
-		{Db: "game_2", Collection: "players", ID: 1001},
+		{Db: "game_1", Collection: "players", ID: 1001, Version: 10, Fence: 9, OwnerSid: 1001, Shared: true},
+		{Db: "game_2", Collection: "players", ID: 1001, Version: 3},
 	}); !ok {
 		t.Fatal("SubmitRemoveItems returned false")
 	}
@@ -593,7 +606,7 @@ func TestCheckpointSubmitRemoveItemsPreservesDbForBackendAndWAL(t *testing.T) {
 	if backend.removed[0].Db != "game_1" || backend.removed[1].Db != "game_2" {
 		t.Fatalf("removed ops = %+v, want db game_1/game_2", backend.removed)
 	}
-	if op := backend.removed[0]; op.Fence != 9 || op.OwnerSid != 1001 || !op.Shared {
+	if op := backend.removed[0]; len(op.Items) != 1 || op.Items[0].Version != 10 || op.Items[0].Fence != 9 || op.Items[0].OwnerSid != 1001 || !op.Items[0].Shared {
 		t.Fatalf("fenced remove metadata was not forwarded: %+v", op)
 	}
 	acked := make([]SaveItem, 0, 2)
@@ -718,14 +731,30 @@ func TestFlusherDedupSaveAfterRemoveRecreatesDocument(t *testing.T) {
 	cp := New(&mockBackend{})
 	saves, removes := cp.flusher.dedup([]JournalEntry{{Items: []SaveItem{
 		{Db: "game", Collection: "players", ID: 100, Version: 2, Data: []byte("old")},
-		{Db: "game", Collection: "players", ID: 100},
-		{Db: "game", Collection: "players", ID: 100, Version: 3, Data: []byte("new")},
+		{Db: "game", Collection: "players", ID: 100, Version: 3, Deleted: true},
+		{Db: "game", Collection: "players", ID: 100, Version: 4, Data: []byte("new")},
 	}}})
 	if len(removes) != 0 {
 		t.Fatalf("save after remove must cancel tombstone, got %+v", removes)
 	}
-	if len(saves) != 1 || saves[0].Version != 3 || string(saves[0].Data) != "new" {
+	if len(saves) != 1 || saves[0].Version != 4 || string(saves[0].Data) != "new" {
 		t.Fatalf("unexpected final save: %+v", saves)
+	}
+}
+
+func TestFlusherDedupTombstoneRejectsDelayedOlderSave(t *testing.T) {
+	cp := New(&mockBackend{})
+	saves, removes := cp.flusher.dedup([]JournalEntry{{Items: []SaveItem{
+		{Db: "game", Collection: "players", ID: 100, Version: 9, Deleted: true},
+		{Db: "game", Collection: "players", ID: 100, Version: 8, Data: []byte("delayed")},
+	}}})
+	if len(saves) != 0 || len(removes) != 1 {
+		t.Fatalf("older save resurrected tombstone: saves=%+v removes=%+v", saves, removes)
+	}
+	for _, items := range removes {
+		if len(items) != 1 || items[0].Version != 9 || !items[0].Deleted {
+			t.Fatalf("unexpected tombstone: %+v", items)
+		}
 	}
 }
 

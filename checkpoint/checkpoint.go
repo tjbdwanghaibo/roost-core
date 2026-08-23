@@ -244,17 +244,15 @@ func (c *Checkpoint) Submit(items []SaveItem) bool {
 	return ok
 }
 
-// SubmitRemove queues a remove operation.
-func (c *Checkpoint) SubmitRemove(collection string, ids []int64) bool {
-	items := make([]SaveItem, 0, len(ids))
-	for _, id := range ids {
-		items = append(items, SaveItem{Collection: collection, ID: id})
-	}
-	return c.SubmitRemoveItems(items)
-}
-
+// SubmitRemoveItems queues versioned delete tombstones. Every item must carry
+// a non-zero version obtained while the entity lock is held.
 func (c *Checkpoint) SubmitRemoveItems(items []SaveItem) bool {
+	requested := len(items)
 	items = normalizeRemoveItems(items)
+	if len(items) != requested {
+		slog.Error("checkpoint: rejected delete without a valid identity and version", "requested", requested, "valid", len(items))
+		return false
+	}
 	if len(items) == 0 {
 		return true
 	}
@@ -371,10 +369,10 @@ func (c *Checkpoint) pushRemoveJournal(items []SaveItem) bool {
 func normalizeRemoveItems(items []SaveItem) []SaveItem {
 	normalized := make([]SaveItem, 0, len(items))
 	for _, item := range items {
-		if item.Collection == "" || item.ID == 0 {
+		if item.Collection == "" || item.ID == 0 || item.Version == 0 {
 			continue
 		}
-		item.Version = 0
+		item.Deleted = true
 		item.Data = nil
 		item.Patch = PersistPatch{}
 		item.Mode = SaveModeFull

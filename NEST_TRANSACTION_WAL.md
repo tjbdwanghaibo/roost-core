@@ -85,7 +85,9 @@ durability 非 `memory` 时必须配置 rollback。调用 `nest.Emit` 会自动�
 - 完整 frame CRC 错误、segment 缺口、ack 越界均拒绝启动，不静默跳过；
 - writer 目录使用 OS 文件锁，禁止双进程同时写；
 - ack 使用双槽 checkpoint，更新一个槽时另一个槽保持可恢复；
+- segment 创建、轮转、删除和 checkpoint 原子替换同时持久化目录元数据；Windows checkpoint 使用 write-through replace；
 - replay 严格按 append 顺序；ack 后清理过老且已确认的 segment。
+- `max_disk_bytes` 与 `max_unacked_age` 进入健康门禁，超过恢复窗口立即摘除实例并告警。
 
 ## 6. 一致性和幂等
 
@@ -95,7 +97,7 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 
 - mutation applier 必须按 `(entity, version)` 做 CAS；“已存在相同或更高 version”视为成功；
 - `MutationApplier.ApplyMutations` 一次接收整个多 entity transaction；需要对外可见的跨实体原子性时，实现必须使用数据库原生 transaction；
-- effect consumer/publisher 必须以 `Effect.ID` 去重；
+- publisher 使用 `Effect.ID` 作为 JetStream MsgID；这只是去重优化。Mongo 副作用必须经 `MongoEffectInbox`，在同一个 snapshot/majority transaction 内同时写业务数据与 inbox receipt；receipt TTL 必须大于 broker 最大保留/重投窗口；
 - 不允许把不可幂等的外部调用放入 `AfterCommit`；应改为 `nest.Emit`；
 - `CheckpointApplier` 已将 `VersionConflict` 视为幂等成功。
 
@@ -162,7 +164,7 @@ if err := runtime.Flush(ctx); err != nil {
 
 这次新增了 core Nest 契约，发布顺序必须是：
 
-1. 发布包含 transaction API 的 core v1.2.0；
+1. 发布包含 transaction API 的 core v1.3.0；
 2. roost-codegen 依赖该 core 版本并重新生成 DAO/Nest handler；
 3. kit 依赖同一 core 版本并发布；
 4. 应用升级生成代码和 kit；
