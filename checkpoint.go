@@ -94,17 +94,11 @@ func storeCheckpoint(dir string, state checkpointState, mode os.FileMode) error 
 		_ = os.Remove(tmp)
 		return err
 	}
-	// Windows does not replace an existing destination with os.Rename. The
-	// alternate slot remains valid throughout this replacement.
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := replaceCheckpointFile(tmp, target); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, target); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return syncDirectory(dir)
 }
 
 func checkpointName(slot int) string {

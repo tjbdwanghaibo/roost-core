@@ -58,29 +58,36 @@ func (fn EffectPublishFunc) PublishEffect(ctx context.Context, txID corenest.Tra
 }
 
 type CommitterOptions struct {
-	RetryMin           time.Duration
-	RetryMax           time.Duration
-	IdlePoll           time.Duration
-	CloseWAL           bool
-	ReplayBatchRecords int
+	RetryMin               time.Duration
+	RetryMax               time.Duration
+	IdlePoll               time.Duration
+	CloseWAL               bool
+	ReplayBatchRecords     int
+	ReceiptCleanupBatch    int
+	ReceiptCleanupCapacity int
 }
 
 func DefaultCommitterOptions() CommitterOptions {
 	return CommitterOptions{
-		RetryMin:           10 * time.Millisecond,
-		RetryMax:           5 * time.Second,
-		IdlePoll:           time.Second,
-		CloseWAL:           true,
-		ReplayBatchRecords: 256,
+		RetryMin:               10 * time.Millisecond,
+		RetryMax:               5 * time.Second,
+		IdlePoll:               time.Second,
+		CloseWAL:               true,
+		ReplayBatchRecords:     256,
+		ReceiptCleanupBatch:    256,
+		ReceiptCleanupCapacity: 65536,
 	}
 }
 
 type CommitterStats struct {
-	Committed      uint64
-	Applied        uint64
-	Published      uint64
-	ReplayFailures uint64
-	LastError      string
+	Committed              uint64
+	Applied                uint64
+	Published              uint64
+	ReplayFailures         uint64
+	LastError              string
+	PendingReceiptCleanup  int
+	ReceiptCleanupFailures uint64
+	ReceiptCleanupDropped  uint64
 }
 
 // Committer implements core Nest's TransactionCommitter and owns the
@@ -97,16 +104,23 @@ type Committer struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	flushMu sync.Mutex
-	heldMu  sync.RWMutex
-	held    map[corenest.TransactionID]struct{}
-	errMu   sync.RWMutex
-	lastErr error
+	flushMu           sync.Mutex
+	heldMu            sync.RWMutex
+	held              map[corenest.TransactionID]struct{}
+	errMu             sync.RWMutex
+	lastErr           error
+	cleanupErr        error
+	receiptMu         sync.Mutex
+	receiptCleanupMu  sync.Mutex
+	pendingReceipts   []corenest.TransactionID
+	pendingReceiptSet map[corenest.TransactionID]struct{}
 
-	committed atomic.Uint64
-	applied   atomic.Uint64
-	published atomic.Uint64
-	failures  atomic.Uint64
+	committed       atomic.Uint64
+	applied         atomic.Uint64
+	published       atomic.Uint64
+	failures        atomic.Uint64
+	cleanupFailures atomic.Uint64
+	cleanupDropped  atomic.Uint64
 }
 
 func NewCommitter(wal *WAL, applier MutationApplier, publisher EffectPublisher, options CommitterOptions) (*Committer, error) {
@@ -129,17 +143,24 @@ func NewCommitter(wal *WAL, applier MutationApplier, publisher EffectPublisher, 
 	if options.ReplayBatchRecords <= 0 {
 		options.ReplayBatchRecords = defaults.ReplayBatchRecords
 	}
+	if options.ReceiptCleanupBatch <= 0 {
+		options.ReceiptCleanupBatch = defaults.ReceiptCleanupBatch
+	}
+	if options.ReceiptCleanupCapacity <= 0 {
+		options.ReceiptCleanupCapacity = defaults.ReceiptCleanupCapacity
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Committer{
-		wal:       wal,
-		applier:   applier,
-		publisher: publisher,
-		opts:      options,
-		ctx:       ctx,
-		cancel:    cancel,
-		kick:      make(chan struct{}, 1),
-		done:      make(chan struct{}),
-		held:      make(map[corenest.TransactionID]struct{}),
+		wal:               wal,
+		applier:           applier,
+		publisher:         publisher,
+		opts:              options,
+		ctx:               ctx,
+		cancel:            cancel,
+		kick:              make(chan struct{}, 1),
+		done:              make(chan struct{}),
+		held:              make(map[corenest.TransactionID]struct{}),
+		pendingReceiptSet: make(map[corenest.TransactionID]struct{}),
 	}
 	go c.run()
 	c.signal()
@@ -189,6 +210,9 @@ func (c *Committer) Flush(ctx context.Context) error {
 			return err
 		}
 		if processed == 0 {
+			if err := c.flushReceiptCleanup(ctx); err != nil {
+				return err
+			}
 			c.setLastError(nil)
 			return nil
 		}
@@ -197,14 +221,21 @@ func (c *Committer) Flush(ctx context.Context) error {
 
 func (c *Committer) Stats() CommitterStats {
 	stats := CommitterStats{
-		Committed:      c.committed.Load(),
-		Applied:        c.applied.Load(),
-		Published:      c.published.Load(),
-		ReplayFailures: c.failures.Load(),
+		Committed:              c.committed.Load(),
+		Applied:                c.applied.Load(),
+		Published:              c.published.Load(),
+		ReplayFailures:         c.failures.Load(),
+		ReceiptCleanupFailures: c.cleanupFailures.Load(),
+		ReceiptCleanupDropped:  c.cleanupDropped.Load(),
 	}
+	c.receiptMu.Lock()
+	stats.PendingReceiptCleanup = len(c.pendingReceipts)
+	c.receiptMu.Unlock()
 	c.errMu.RLock()
 	if c.lastErr != nil {
 		stats.LastError = c.lastErr.Error()
+	} else if c.cleanupErr != nil {
+		stats.LastError = c.cleanupErr.Error()
 	}
 	c.errMu.RUnlock()
 	return stats
@@ -219,7 +250,7 @@ func (c *Committer) Healthy() error {
 	}
 	c.errMu.RLock()
 	defer c.errMu.RUnlock()
-	return c.lastErr
+	return errors.Join(c.lastErr, c.cleanupErr)
 }
 
 func (c *Committer) Close(ctx context.Context) error {
@@ -305,6 +336,9 @@ func (c *Committer) run() {
 }
 
 func (c *Committer) replayPass(ctx context.Context) (int, error) {
+	// Receipt deletion is off the commit hot path, but every failed deletion is
+	// retained in a bounded retry set and retried on each replay pass.
+	_ = c.retryReceiptCleanup(ctx)
 	processed := 0
 	var lastFence corenest.CommitFence
 	processedIDs := make([]corenest.TransactionID, 0, c.opts.ReplayBatchRecords)
@@ -345,13 +379,78 @@ func (c *Committer) replayPass(ctx context.Context) (int, error) {
 		if ackErr := c.wal.Ack(ctx, lastFence); ackErr != nil {
 			return processed, errors.Join(err, ackErr)
 		}
-		if cleaner, ok := c.applier.(TransactionReceiptCleaner); ok {
-			if cleanupErr := cleaner.AcknowledgeTransactions(ctx, processedIDs); cleanupErr != nil {
-				slog.Warn("nestwal: transaction receipt cleanup failed", "err", cleanupErr, "count", len(processedIDs))
-			}
+		if _, ok := c.applier.(TransactionReceiptCleaner); ok {
+			c.enqueueReceiptCleanup(processedIDs)
+			_ = c.retryReceiptCleanup(ctx)
 		}
 	}
 	return processed, err
+}
+
+func (c *Committer) enqueueReceiptCleanup(ids []corenest.TransactionID) {
+	if len(ids) == 0 {
+		return
+	}
+	c.receiptMu.Lock()
+	defer c.receiptMu.Unlock()
+	for _, id := range ids {
+		if _, exists := c.pendingReceiptSet[id]; exists {
+			continue
+		}
+		if len(c.pendingReceipts) >= c.opts.ReceiptCleanupCapacity {
+			c.cleanupDropped.Add(1)
+			c.setCleanupError(fmt.Errorf("nestwal: transaction receipt cleanup queue is full"))
+			continue
+		}
+		c.pendingReceiptSet[id] = struct{}{}
+		c.pendingReceipts = append(c.pendingReceipts, id)
+	}
+}
+
+func (c *Committer) retryReceiptCleanup(ctx context.Context) error {
+	c.receiptCleanupMu.Lock()
+	defer c.receiptCleanupMu.Unlock()
+	cleaner, ok := c.applier.(TransactionReceiptCleaner)
+	if !ok {
+		return nil
+	}
+	c.receiptMu.Lock()
+	n := min(len(c.pendingReceipts), c.opts.ReceiptCleanupBatch)
+	batch := append([]corenest.TransactionID(nil), c.pendingReceipts[:n]...)
+	c.receiptMu.Unlock()
+	if len(batch) == 0 {
+		c.setCleanupError(nil)
+		return nil
+	}
+	if err := cleaner.AcknowledgeTransactions(ctx, batch); err != nil {
+		c.cleanupFailures.Add(1)
+		wrapped := fmt.Errorf("nestwal: transaction receipt cleanup: %w", err)
+		c.setCleanupError(wrapped)
+		slog.Warn("nestwal: transaction receipt cleanup failed", "err", err, "count", len(batch))
+		return wrapped
+	}
+	c.receiptMu.Lock()
+	for _, id := range batch {
+		delete(c.pendingReceiptSet, id)
+	}
+	c.pendingReceipts = c.pendingReceipts[len(batch):]
+	c.receiptMu.Unlock()
+	c.setCleanupError(nil)
+	return nil
+}
+
+func (c *Committer) flushReceiptCleanup(ctx context.Context) error {
+	for {
+		c.receiptMu.Lock()
+		pending := len(c.pendingReceipts)
+		c.receiptMu.Unlock()
+		if pending == 0 {
+			return nil
+		}
+		if err := c.retryReceiptCleanup(ctx); err != nil {
+			return err
+		}
+	}
 }
 
 func (c *Committer) hold(id corenest.TransactionID) {
@@ -383,6 +482,12 @@ func (c *Committer) signal() {
 func (c *Committer) setLastError(err error) {
 	c.errMu.Lock()
 	c.lastErr = err
+	c.errMu.Unlock()
+}
+
+func (c *Committer) setCleanupError(err error) {
+	c.errMu.Lock()
+	c.cleanupErr = err
 	c.errMu.Unlock()
 }
 

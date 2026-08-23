@@ -33,6 +33,8 @@ var (
 	ErrLocked         = errors.New("nestwal: directory is already locked")
 	ErrCorrupt        = errors.New("nestwal: corrupt log")
 	ErrRecordTooLarge = errors.New("nestwal: record exceeds configured limit")
+	ErrCapacity       = errors.New("nestwal: disk capacity limit reached")
+	errStatsStop      = errors.New("nestwal: stats stop")
 )
 
 type Options struct {
@@ -45,6 +47,8 @@ type Options struct {
 	BatchDelay          time.Duration
 	GroupCommitInterval time.Duration
 	RetainSegments      int
+	MaxDiskBytes        int64
+	MaxUnackedAge       time.Duration
 	FileMode            os.FileMode
 	// OnFatal fences the hosting process when a physical write or fsync has an
 	// indeterminate outcome. It must initiate shutdown rather than retry writes.
@@ -62,20 +66,25 @@ func DefaultOptions(dir string) Options {
 		BatchDelay:          500 * time.Microsecond,
 		GroupCommitInterval: 10 * time.Millisecond,
 		RetainSegments:      2,
+		MaxDiskBytes:        8 << 30,
+		MaxUnackedAge:       24 * time.Hour,
 		FileMode:            0o600,
 	}
 }
 
 type Stats struct {
-	Segment       uint64
-	Offset        int64
-	Queued        int
-	Appended      uint64
-	Bytes         uint64
-	Syncs         uint64
-	Replayed      uint64
-	Acknowledged  uint64
-	TerminalError string
+	Segment          uint64
+	Offset           int64
+	Queued           int
+	Appended         uint64
+	Bytes            uint64
+	Syncs            uint64
+	Replayed         uint64
+	Acknowledged     uint64
+	TerminalError    string
+	DiskBytes        int64
+	SegmentFiles     int
+	OldestUnackedAge time.Duration
 }
 
 type WAL struct {
@@ -108,6 +117,7 @@ type WAL struct {
 	syncs        atomic.Uint64
 	replayed     atomic.Uint64
 	acked        atomic.Uint64
+	diskBytes    atomic.Int64
 	batchBuffers sync.Pool
 }
 
@@ -130,6 +140,9 @@ func Open(options Options) (*WAL, error) {
 	}
 	if err := os.MkdirAll(opts.Dir, 0o750); err != nil {
 		return nil, fmt.Errorf("nestwal: create directory: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(opts.Dir)); err != nil {
+		return nil, fmt.Errorf("nestwal: sync parent directory: %w", err)
 	}
 	lockHandle, err := os.OpenFile(filepath.Join(opts.Dir, "writer.lock"), os.O_CREATE|os.O_RDWR, opts.FileMode)
 	if err != nil {
@@ -160,6 +173,8 @@ func Open(options Options) (*WAL, error) {
 		_ = lockHandle.Close()
 		return nil, err
 	}
+	usage, _ := w.diskUsage()
+	w.diskBytes.Store(usage)
 	go w.writerLoop()
 	return w, nil
 }
@@ -200,6 +215,12 @@ func normalizeOptions(opts Options) (Options, error) {
 	}
 	if opts.RetainSegments == 0 {
 		opts.RetainSegments = defaults.RetainSegments
+	}
+	if opts.MaxDiskBytes <= 0 {
+		opts.MaxDiskBytes = defaults.MaxDiskBytes
+	}
+	if opts.MaxUnackedAge <= 0 {
+		opts.MaxUnackedAge = defaults.MaxUnackedAge
 	}
 	if opts.FileMode == 0 {
 		opts.FileMode = defaults.FileMode
@@ -375,10 +396,63 @@ func (w *WAL) Stats() Stats {
 	if err := w.terminal(); err != nil {
 		stats.TerminalError = err.Error()
 	}
+	stats.DiskBytes, stats.SegmentFiles = w.diskUsage()
+	stats.OldestUnackedAge = w.oldestUnackedAge()
 	return stats
 }
 
-func (w *WAL) Healthy() error { return w.terminal() }
+func (w *WAL) Healthy() error {
+	if err := w.terminal(); err != nil {
+		return err
+	}
+	stats := w.Stats()
+	if w.opts.MaxDiskBytes > 0 && stats.DiskBytes > w.opts.MaxDiskBytes {
+		return fmt.Errorf("nestwal: disk usage %d exceeds limit %d", stats.DiskBytes, w.opts.MaxDiskBytes)
+	}
+	if w.opts.MaxUnackedAge > 0 && stats.OldestUnackedAge > w.opts.MaxUnackedAge {
+		return fmt.Errorf("nestwal: oldest unacknowledged record age %s exceeds limit %s", stats.OldestUnackedAge, w.opts.MaxUnackedAge)
+	}
+	return nil
+}
+
+func (w *WAL) diskUsage() (int64, int) {
+	entries, err := os.ReadDir(w.opts.Dir)
+	if err != nil {
+		return 0, 0
+	}
+	var bytes int64
+	segments := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		bytes += info.Size()
+		if strings.HasPrefix(entry.Name(), "segment-") && strings.HasSuffix(entry.Name(), ".wal") {
+			segments++
+		}
+	}
+	return bytes, segments
+}
+
+func (w *WAL) oldestUnackedAge() time.Duration {
+	var createdAt int64
+	err := w.Replay(context.Background(), func(_ corenest.CommitFence, record corenest.CommitRecord) error {
+		createdAt = record.CreatedAt
+		return errStatsStop
+	})
+	if err != nil && !errors.Is(err, errStatsStop) || createdAt <= 0 {
+		return 0
+	}
+	age := time.Since(time.Unix(0, createdAt))
+	if age < 0 {
+		return 0
+	}
+	return age
+}
 
 func (w *WAL) Close(ctx context.Context) error {
 	if ctx == nil {
@@ -447,6 +521,17 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		}
 		return
 	}
+	batchBytes := int64(0)
+	for i := range batch {
+		batchBytes += int64(len(batch[i].frame))
+	}
+	if w.opts.MaxDiskBytes > 0 && w.diskBytes.Load()+batchBytes > w.opts.MaxDiskBytes {
+		err := fmt.Errorf("%w: current=%d incoming=%d limit=%d", ErrCapacity, w.diskBytes.Load(), batchBytes, w.opts.MaxDiskBytes)
+		for i := range batch {
+			batch[i].done <- appendResult{err: err}
+		}
+		return
+	}
 	fences := make([]corenest.CommitFence, len(batch))
 	requireSync := false
 	w.stateMu.Lock()
@@ -476,6 +561,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		if err = writeFull(w.active, buffer); err != nil {
 			break
 		}
+		w.diskBytes.Add(int64(len(buffer)))
 		w.offset = nextOffset
 		w.unsynced = true
 		start = end
@@ -553,6 +639,12 @@ func (w *WAL) openActive() error {
 	if err != nil {
 		return err
 	}
+	if info, statErr := file.Stat(); statErr == nil && info.Size() == 0 {
+		if err := syncDirectory(w.opts.Dir); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
@@ -594,6 +686,14 @@ func (w *WAL) rotateLocked() error {
 	path := filepath.Join(w.opts.Dir, segmentName(w.segment))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, w.opts.FileMode)
 	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := syncDirectory(w.opts.Dir); err != nil {
+		_ = file.Close()
 		return err
 	}
 	w.active = file
@@ -667,11 +767,23 @@ func (w *WAL) pruneAcked(ackSegment uint64) {
 	if err != nil {
 		return
 	}
+	removed := false
 	for _, segment := range segments {
 		if segment >= removeBefore {
 			break
 		}
-		_ = os.Remove(filepath.Join(w.opts.Dir, segmentName(segment)))
+		path := filepath.Join(w.opts.Dir, segmentName(segment))
+		var size int64
+		if info, statErr := os.Stat(path); statErr == nil {
+			size = info.Size()
+		}
+		if os.Remove(path) == nil {
+			removed = true
+			w.diskBytes.Add(-size)
+		}
+	}
+	if removed {
+		_ = syncDirectory(w.opts.Dir)
 	}
 }
 

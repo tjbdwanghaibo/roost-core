@@ -81,6 +81,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if cfg.IsSet("nest.wal.retain_segments") {
 		wal.RetainSegments = cfg.GetInt("nest.wal.retain_segments")
 	}
+	if value := cfg.GetInt64("nest.wal.max_disk_bytes"); value > 0 {
+		wal.MaxDiskBytes = value
+	}
+	if value := cfg.GetDuration("nest.wal.max_unacked_age"); value > 0 {
+		wal.MaxUnackedAge = value
+	}
 	wal.OnFatal = m.onFatal
 
 	committer := DefaultCommitterOptions()
@@ -96,6 +102,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if value := cfg.GetInt("nest.wal.replay_batch_records"); value > 0 {
 		committer.ReplayBatchRecords = value
 	}
+	if value := cfg.GetInt("nest.wal.receipt_cleanup_batch"); value > 0 {
+		committer.ReceiptCleanupBatch = value
+	}
+	if value := cfg.GetInt("nest.wal.receipt_cleanup_capacity"); value > 0 {
+		committer.ReceiptCleanupCapacity = value
+	}
 	prefix := cfg.GetString("nest.wal.effects.subject_prefix")
 	if prefix == "" {
 		prefix = "roost.effect"
@@ -104,13 +116,18 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if streamName == "" {
 		streamName = "ROOST_EFFECTS"
 	}
+	maxAge := durationDefault(cfg.GetDuration("nest.wal.effects.max_age"), 7*24*time.Hour)
+	// Broker dedup is only a short hot-path optimization. Durable exactly-once
+	// is provided by MongoEffectInbox, so this window must not scale with the
+	// full stream retention period and consume unbounded server memory.
+	duplicateWindow := durationDefault(cfg.GetDuration("nest.wal.effects.duplicate_window"), 10*time.Minute)
 	m.config = modConfig{
 		wal: wal, committer: committer, effectPrefix: prefix,
 		startupTimeout: durationDefault(cfg.GetDuration("nest.wal.startup_timeout"), 30*time.Second),
 		effectStream: fnats.JetStreamConfig{
 			Name: streamName, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
-			MaxAge:     durationDefault(cfg.GetDuration("nest.wal.effects.max_age"), 7*24*time.Hour),
-			Duplicates: durationDefault(cfg.GetDuration("nest.wal.effects.duplicate_window"), 24*time.Hour),
+			MaxAge:     maxAge,
+			Duplicates: duplicateWindow,
 			Replicas:   positiveDefault(cfg.GetInt("nest.wal.effects.replicas"), 1),
 			MaxBytes:   cfg.GetInt64("nest.wal.effects.max_bytes"),
 		},
@@ -243,7 +260,7 @@ func (m *Mod) checkHealth(context.Context) health.Result {
 	}
 	walStats := m.runtime.WAL.Stats()
 	commitStats := m.runtime.Committer.Stats()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("queued=%d appended=%d acked=%d replay_failures=%d", walStats.Queued, walStats.Appended, walStats.Acknowledged, commitStats.ReplayFailures)}
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("queued=%d appended=%d acked=%d disk_bytes=%d segments=%d oldest_unacked=%s replay_failures=%d receipt_cleanup_pending=%d", walStats.Queued, walStats.Appended, walStats.Acknowledged, walStats.DiskBytes, walStats.SegmentFiles, walStats.OldestUnackedAge, commitStats.ReplayFailures, commitStats.PendingReceiptCleanup)}
 }
 
 func durationDefault(value, fallback time.Duration) time.Duration {

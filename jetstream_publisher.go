@@ -15,7 +15,7 @@ type JetStreamEffectPublisher struct {
 	prefix string
 }
 
-type effectEnvelope struct {
+type EffectEnvelope struct {
 	TransactionID string            `json:"transaction_id"`
 	EffectID      string            `json:"effect_id"`
 	Topic         string            `json:"topic"`
@@ -36,7 +36,7 @@ func (p *JetStreamEffectPublisher) PublishEffect(ctx context.Context, txID coren
 	if p == nil || p.client == nil || effect.ID == "" || effect.Topic == "" {
 		return ErrEffectPublisherRequired
 	}
-	payload, err := json.Marshal(effectEnvelope{
+	payload, err := json.Marshal(EffectEnvelope{
 		TransactionID: txID.String(), EffectID: effect.ID, Topic: effect.Topic,
 		Key: effect.Key, Headers: effect.Headers, Payload: effect.Payload,
 	})

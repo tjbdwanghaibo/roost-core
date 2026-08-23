@@ -374,3 +374,45 @@ func TestCommitterWaitsForEntityRelease(t *testing.T) {
 		t.Fatalf("mutation apply calls=%d, want 1", calls.Load())
 	}
 }
+
+func TestWALHealthReportsDiskAndOldestUnackedLimits(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.MaxDiskBytes = 1 << 20
+	opts.MaxUnackedAge = time.Millisecond
+	w, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	record := testRecord(44, corenest.DurabilityStrict)
+	record.CreatedAt = time.Now().Add(-time.Second).UnixNano()
+	if _, err := w.Append(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	stats := w.Stats()
+	if stats.DiskBytes <= 1 || stats.SegmentFiles == 0 || stats.OldestUnackedAge < time.Second {
+		t.Fatalf("wal stats = %+v", stats)
+	}
+	w.opts.MaxDiskBytes = 1
+	if err := w.Healthy(); err == nil {
+		t.Fatal("WAL health ignored production capacity limits")
+	}
+}
+
+func TestWALRejectsAppendBeforeDiskLimitIsExceeded(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.MaxDiskBytes = 1
+	w, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	record := testRecord(45, corenest.DurabilityStrict)
+	record.CreatedAt = time.Now().UnixNano()
+	if _, err := w.Append(context.Background(), record); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("append error = %v, want ErrCapacity", err)
+	}
+	if w.Stats().Appended != 0 {
+		t.Fatal("capacity-rejected append was counted as durable")
+	}
+}
