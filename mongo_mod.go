@@ -2,11 +2,11 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/health"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	"github.com/tjbdwanghaibo/cube-kit/mods"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -42,6 +42,15 @@ func (m *MongoMod) Init(cfg *viper.Viper) error {
 	}
 	if minPool := cfg.GetUint64("mongo.min_pool_size"); minPool > 0 {
 		m.cfg.MinPoolSize = minPool
+	}
+	if maxIdle := cfg.GetDuration("mongo.max_idle_time"); maxIdle > 0 {
+		m.cfg.MaxIdleTime = maxIdle
+	}
+	if timeout := cfg.GetDuration("mongo.transaction_timeout"); timeout > 0 {
+		m.cfg.TransactionTimeout = timeout
+	}
+	if cfg.IsSet("mongo.require_replica_set") {
+		m.cfg.RequireReplicaSet = cfg.GetBool("mongo.require_replica_set")
 	}
 	m.policy = IndexMigrationPolicy{
 		AllowRecreate: cfg.GetBool("mongo.index.allow_recreate"),
@@ -82,6 +91,11 @@ func (m *MongoMod) Start() error {
 	if err := m.client.Ping(ctx); err != nil {
 		return err
 	}
+	if client, ok := m.client.(*mongoClient); ok {
+		if err := client.validateDeployment(ctx); err != nil {
+			return err
+		}
+	}
 	slog.Info("mongo mod: connected", "uri", m.cfg.URI)
 	return nil
 }
@@ -90,7 +104,10 @@ func (m *MongoMod) Stop() {
 	if m.client != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = m.client.Close(ctx)
+		if err := m.client.Close(ctx); err != nil {
+			slog.Error("mongo mod: close failed", "err", err)
+			return
+		}
 		slog.Info("mongo mod: closed")
 	}
 }
