@@ -121,6 +121,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	// is provided by MongoEffectInbox, so this window must not scale with the
 	// full stream retention period and consume unbounded server memory.
 	duplicateWindow := durationDefault(cfg.GetDuration("nest.wal.effects.duplicate_window"), 10*time.Minute)
+	maxEffectBytes := cfg.GetInt64("nest.wal.effects.max_bytes")
+	if maxEffectBytes <= 0 {
+		maxEffectBytes = 8 << 30
+	}
 	m.config = modConfig{
 		wal: wal, committer: committer, effectPrefix: prefix,
 		startupTimeout: durationDefault(cfg.GetDuration("nest.wal.startup_timeout"), 30*time.Second),
@@ -129,7 +133,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			MaxAge:     maxAge,
 			Duplicates: duplicateWindow,
 			Replicas:   positiveDefault(cfg.GetInt("nest.wal.effects.replicas"), 1),
-			MaxBytes:   cfg.GetInt64("nest.wal.effects.max_bytes"),
+			MaxBytes:   maxEffectBytes,
 		},
 	}
 	return nil
