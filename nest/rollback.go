@@ -564,15 +564,23 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 			}
 			// Phase 2: hand the post-durability work to the completion pump
-			// so the worker moves on. Submission happens while the entity
-			// locks are still held — that is what keeps same-entity
-			// completions in commit order through the FIFO pump.
+			// so the worker moves on. The ordering link is taken while the
+			// entity locks are still held, so same-entity completions run in
+			// commit order on every path — including the inline fallback
+			// below when the pump is saturated.
 			if ticket != nil && completions != nil {
 				if msg := currentNestDispatchMsg(); msg != nil {
-					if deferPipelinedCompletion(completions, msg, es, tx, ticket, handler, ret) {
-						releaseLocks()
+					deferred, runInline := prepareCompletion(completions, msg, es, tx, ticket, handler, ret)
+					releaseLocks()
+					if deferred {
 						return
 					}
+					<-ticket.Done()
+					// runInline records durable_wait, performs abandon or
+					// Commit in entity order, and replies; err stays nil
+					// because the caller is answered through it.
+					runInline(ticket.Err())
+					return
 				}
 			}
 			// Nothing after this point can reject the transaction, so the

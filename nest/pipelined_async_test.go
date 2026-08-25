@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/obs"
 )
 
 func newAsyncPilotEntity(t *testing.T, unique int64, value int) (int64, *rollbackTestEntity) {
@@ -283,6 +284,162 @@ func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("pending reply was dropped by shutdown")
+	}
+}
+
+func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
+	// Regression: the saturated-pump fallback used to run its Commit and
+	// AfterCommit hooks inline without regard for same-entity completions
+	// still queued in the pump, so an overloaded engine could reorder
+	// AfterCommit against commit order. The entity completion chain now
+	// covers every path, so ordering is unconditional.
+	getter := newMockGetter()
+	id, ent := newAsyncPilotEntity(t, 345, 0)
+	getter.Add(ent)
+	committer := newPipelinedTestCommitter(false)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(committer),
+		// Queue capacity 1: the pump holds one entry in flight and one in the
+		// queue, so the third transaction is forced onto the fallback path.
+		NestOptionWithPipelinedAsyncCompletion(1, 1),
+		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	var hooks []int
+	var hooksMu sync.Mutex
+	MustRegisterHandlerWithMeta(NewHandlerName("test_async_saturated_order"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		e := es[0].(*rollbackTestEntity)
+		old := e.dao.Value
+		if !RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil }) {
+			return nil, errors.New("missing undo transaction")
+		}
+		e.dao.Value++
+		e.dao.Tracker.MarkPersist(1)
+		// The value carries commit order: hooks must observe 1, 2, 3.
+		value := e.dao.Value
+		AfterCommit(func() {
+			hooksMu.Lock()
+			hooks = append(hooks, value)
+			hooksMu.Unlock()
+		})
+		return value, nil
+	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
+
+	const transactions = 3
+	replies := make(chan any, transactions)
+	for i := 0; i < transactions; i++ {
+		go func() {
+			ret, err := Nest.Request(context.Background(), NewHandlerName("test_async_saturated_order"), id, nil)
+			if err != nil {
+				replies <- err
+				return
+			}
+			replies <- ret
+		}()
+	}
+	// All three must reach the WAL before any ticket resolves, so that one of
+	// them provably takes the saturated fallback.
+	for i := 0; i < transactions; i++ {
+		select {
+		case <-committer.enqueued:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d of %d transactions were enqueued", i, transactions)
+		}
+	}
+	committer.resolveAll(nil)
+
+	seen := make(map[int]bool, transactions)
+	for i := 0; i < transactions; i++ {
+		select {
+		case ret := <-replies:
+			value, ok := ret.(int)
+			if !ok {
+				t.Fatalf("reply %v", ret)
+			}
+			seen[value] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d replies delivered", i, transactions)
+		}
+	}
+	for value := 1; value <= transactions; value++ {
+		if !seen[value] {
+			t.Fatalf("missing reply for commit %d: %v", value, seen)
+		}
+	}
+	// Self-check: the scenario is only meaningful if a transaction actually
+	// took the saturated fallback path.
+	degraded := int64(0)
+	for _, metric := range obs.Snapshot() {
+		if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
+			degraded += metric.Value
+		}
+	}
+	if degraded == 0 {
+		t.Fatal("no transaction took the saturated fallback path: the ordering claim was not exercised")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		hooksMu.Lock()
+		n := len(hooks)
+		hooksMu.Unlock()
+		if n == transactions || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	hooksMu.Lock()
+	defer hooksMu.Unlock()
+	if len(hooks) != transactions {
+		t.Fatalf("hooks=%v, want %d entries", hooks, transactions)
+	}
+	for i, value := range hooks {
+		if value != i+1 {
+			t.Fatalf("AfterCommit order=%v, want [1 2 3] (commit order)", hooks)
+		}
+	}
+}
+
+func TestCompletionPumpOrdersEntityChainAcrossPaths(t *testing.T) {
+	// The ordering primitive itself: links taken in commit order release in
+	// that order, and a different entity is never blocked behind them.
+	pump := newCompletionPump(1, 1)
+	first := pump.link(7)
+	second := pump.link(7)
+	other := pump.link(8)
+
+	// A different entity has no predecessor and proceeds immediately.
+	other.await()
+	other.release()
+
+	secondRan := make(chan struct{})
+	go func() {
+		second.await()
+		close(secondRan)
+	}()
+	select {
+	case <-secondRan:
+		t.Fatal("second completion ran before its predecessor")
+	case <-time.After(20 * time.Millisecond):
+	}
+	first.await() // no predecessor
+	first.release()
+	select {
+	case <-secondRan:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second completion never unblocked")
+	}
+	second.release()
+
+	// The chain entry is dropped once the tail releases.
+	pump.chainMu.Lock()
+	remaining := len(pump.chains)
+	pump.chainMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("chain leaked %d entries", remaining)
 	}
 }
 
