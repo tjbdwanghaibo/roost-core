@@ -448,6 +448,82 @@ func TestCheckpointActiveFlushWaitsForInFlightWorker(t *testing.T) {
 	}
 }
 
+func TestCheckpointConcurrentFlushersAllObserveCompletion(t *testing.T) {
+	// Regression: the flush barrier used a capacity-1 channel, so the single
+	// completion signal of the last in-flight batch could be consumed by one
+	// waiter while a second concurrent Flush stayed parked forever on an idle
+	// system. Completion must be broadcast to every waiter.
+	backend := &blockingBackend{entered: make(chan struct{}), release: make(chan struct{})}
+	cp := New(backend, WithFlushWorkers(1), WithFlushInterval(time.Millisecond))
+	if err := cp.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !cp.Submit([]SaveItem{{Collection: "players", ID: 304, Version: 1, Data: []byte("state")}}) {
+		t.Fatal("submit failed")
+	}
+	<-backend.entered
+
+	const flushers = 4
+	flushed := make(chan error, flushers)
+	for i := 0; i < flushers; i++ {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			flushed <- cp.Flush(ctx)
+		}()
+	}
+	// Give every flusher time to park on the barrier before the batch ends.
+	time.Sleep(20 * time.Millisecond)
+	close(backend.release)
+
+	for i := 0; i < flushers; i++ {
+		select {
+		case err := <-flushed:
+			if err != nil {
+				t.Fatalf("flusher %d: %v", i, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("flusher %d never observed completion", i)
+		}
+	}
+	if err := cp.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckpointSanitizesNonPositiveConfig(t *testing.T) {
+	// Regression: FlushInterval <= 0 used to panic time.NewTicker inside a
+	// worker goroutine, killing the process. Invalid numeric settings are
+	// clamped to defaults instead.
+	backend := &mockBackend{}
+	cp := New(backend,
+		WithFlushInterval(0),
+		WithJournalCap(-1),
+		WithBatchSize(0),
+		WithBatchBytes(-5),
+	)
+	if got := cp.cfg.FlushInterval; got != defaultConfig().FlushInterval {
+		t.Fatalf("FlushInterval not sanitized: %v", got)
+	}
+	if err := cp.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !cp.Submit([]SaveItem{{Collection: "players", ID: 305, Version: 1, Data: []byte("state")}}) {
+		t.Fatal("submit failed")
+	}
+	if err := cp.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// FlushWorkers == 0 stays a valid manual-flush mode and must not be clamped.
+	manual := New(&mockBackend{}, WithFlushWorkers(0))
+	if manual.cfg.FlushWorkers != 0 {
+		t.Fatalf("FlushWorkers(0) must remain a manual-flush mode, got %d", manual.cfg.FlushWorkers)
+	}
+}
+
 func TestCheckpointRequeuesPerItemBackendFailure(t *testing.T) {
 	backend := &mockBackend{results: []SaveResult{{Err: errors.New("rejected")}}}
 	cp := New(backend, WithFlushWorkers(0))

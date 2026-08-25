@@ -240,8 +240,15 @@ func (b *Bus) stopJetStreamRPCSubscriptions() {
 			sub.Stop()
 		}
 	}
-	b.jsRPC.pending.Range(func(key, value any) bool {
-		b.jsRPC.pending.Delete(key)
+	// Ownership of a pending call is claimed by LoadAndDelete: whoever removes
+	// the entry is the only party allowed to touch its channel. Closing the
+	// value observed by Range directly would race a concurrent responder that
+	// already claimed the same entry and is about to send.
+	b.jsRPC.pending.Range(func(key, _ any) bool {
+		value, ok := b.jsRPC.pending.LoadAndDelete(key)
+		if !ok {
+			return true
+		}
 		if pending, ok := value.(*pendingJetStreamRPCCall); ok && pending != nil {
 			close(pending.resp)
 		}

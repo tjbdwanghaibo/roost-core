@@ -1,6 +1,9 @@
 package checkpoint
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 // Option configures the Checkpoint system.
 type Option func(*Config)
@@ -42,6 +45,44 @@ func defaultConfig() Config {
 		SnapshotWALDurableTimeout: 20 * time.Millisecond,
 		LoadConcurrency:           4,
 	}
+}
+
+// sanitize replaces non-positive numeric settings with their defaults. A zero
+// or negative value here is never a valid intent: FlushInterval <= 0 would
+// panic time.NewTicker inside a worker goroutine (unrecoverable), and
+// FlushWorkers <= 0 would start no workers and stall the journal without any
+// signal. Clamping with a warning keeps the process safe regardless of how
+// the Config was assembled.
+func (c Config) sanitize() Config {
+	def := defaultConfig()
+	clampInt := func(name string, v *int, d int) {
+		if *v <= 0 {
+			slog.Warn("checkpoint config: non-positive value replaced with default", "option", name, "value", *v, "default", d)
+			*v = d
+		}
+	}
+	clampDuration := func(name string, v *time.Duration, d time.Duration) {
+		if *v <= 0 {
+			slog.Warn("checkpoint config: non-positive value replaced with default", "option", name, "value", *v, "default", d)
+			*v = d
+		}
+	}
+	clampInt("JournalCap", &c.JournalCap, def.JournalCap)
+	// FlushWorkers == 0 is a supported mode: no background workers, the
+	// journal drains only through explicit Flush calls. Only a negative
+	// count is meaningless.
+	if c.FlushWorkers < 0 {
+		slog.Warn("checkpoint config: negative value replaced with default", "option", "FlushWorkers", "value", c.FlushWorkers, "default", def.FlushWorkers)
+		c.FlushWorkers = def.FlushWorkers
+	}
+	clampInt("BatchSize", &c.BatchSize, def.BatchSize)
+	clampInt("BatchBytes", &c.BatchBytes, def.BatchBytes)
+	clampInt("LoadConcurrency", &c.LoadConcurrency, def.LoadConcurrency)
+	clampDuration("FlushInterval", &c.FlushInterval, def.FlushInterval)
+	clampDuration("RetryBackoff", &c.RetryBackoff, def.RetryBackoff)
+	clampDuration("RetryMaxBack", &c.RetryMaxBack, def.RetryMaxBack)
+	clampDuration("SnapshotWALDurableTimeout", &c.SnapshotWALDurableTimeout, def.SnapshotWALDurableTimeout)
+	return c
 }
 
 func WithLoadConcurrency(n int) Option {

@@ -1,20 +1,34 @@
 package lock
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/misc"
-	"runtime"
-	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/tjbdwanghaibo/cube-core/misc"
 )
 
 var _ Mutex = (*ReentrantMutex)(nil)
 
 // ReentrantMutex is an in-process reentrant mutual exclusion lock.
 // It allows the same goroutine to acquire the lock multiple times without deadlock.
+//
+// Waiters park on a capacity-1 semaphore channel instead of spinning, so a
+// holder performing slow work (e.g. a WAL commit at the transaction commit
+// point) does not burn CPU on every waiting goroutine. Channel receive order
+// also gives waiters FIFO-ish fairness, so a hot entity lock cannot starve
+// an individual waiter the way an unfair spin loop can.
+//
+// Invariants:
+//   - The token is in sem exactly when the lock is free.
+//   - owner is non-zero exactly while some goroutine holds the lock, and is
+//     only ever compared against the caller's own goroutine ID, so a stale
+//     read can never satisfy the reentrancy fast path for a non-holder.
+//   - recursion is touched only by the holder; the sem handoff provides the
+//     happens-before edge between successive holders.
 type ReentrantMutex struct {
-	mu        sync.Mutex
-	owner     int64 // goroutine ID of lock holder
-	recursion int32 // reentry count
+	sem       chan struct{} // capacity 1; holds the token while the lock is free
+	owner     atomic.Int64  // goroutine ID of lock holder, 0 when free
+	recursion int32         // reentry count, owned by the holder
 	id        int64
 }
 
@@ -24,7 +38,12 @@ func NewReentrantMutex(ids ...int64) *ReentrantMutex {
 	if len(ids) > 0 {
 		id = ids[0]
 	}
-	return &ReentrantMutex{id: id}
+	rm := &ReentrantMutex{
+		sem: make(chan struct{}, 1),
+		id:  id,
+	}
+	rm.sem <- struct{}{}
+	return rm
 }
 
 func (rm *ReentrantMutex) LockId() int64 {
@@ -34,68 +53,50 @@ func (rm *ReentrantMutex) LockId() int64 {
 // Lock acquires the lock. The same goroutine can call this multiple times.
 func (rm *ReentrantMutex) Lock() {
 	gid := misc.GoID()
-
-	rm.mu.Lock()
-	if rm.owner == gid {
+	if rm.owner.Load() == gid {
 		rm.recursion++
-		rm.mu.Unlock()
 		return
 	}
 
-	for rm.owner != 0 {
-		rm.mu.Unlock()
-		runtime.Gosched()
-		rm.mu.Lock()
-	}
-
-	rm.owner = gid
+	<-rm.sem
+	rm.owner.Store(gid)
 	rm.recursion = 1
-	rm.mu.Unlock()
 }
 
 // Unlock releases the lock.
 func (rm *ReentrantMutex) Unlock() {
 	gid := misc.GoID()
-
-	rm.mu.Lock()
-	if rm.owner != gid {
-		rm.mu.Unlock()
+	if rm.owner.Load() != gid {
 		panic("unlock of unowned mutex")
 	}
 
-	recursion := rm.recursion - 1
-	rm.recursion = recursion
-	if recursion < 0 {
-		rm.mu.Unlock()
+	rm.recursion--
+	if rm.recursion < 0 {
 		panic("unlock of unlocked mutex")
 	}
 
-	if recursion == 0 {
-		rm.owner = 0
+	if rm.recursion == 0 {
+		rm.owner.Store(0)
+		rm.sem <- struct{}{}
 	}
-	rm.mu.Unlock()
 }
 
 // TryLock attempts to acquire the lock without blocking.
 func (rm *ReentrantMutex) TryLock() bool {
 	gid := misc.GoID()
-
-	rm.mu.Lock()
-	if rm.owner == gid {
+	if rm.owner.Load() == gid {
 		rm.recursion++
-		rm.mu.Unlock()
 		return true
 	}
 
-	if rm.owner != 0 {
-		rm.mu.Unlock()
+	select {
+	case <-rm.sem:
+		rm.owner.Store(gid)
+		rm.recursion = 1
+		return true
+	default:
 		return false
 	}
-
-	rm.owner = gid
-	rm.recursion = 1
-	rm.mu.Unlock()
-	return true
 }
 
 // LockWithTimeout acquires the lock with a timeout. Returns false if timeout expires.
@@ -105,50 +106,20 @@ func (rm *ReentrantMutex) LockWithTimeout(timeout time.Duration) bool {
 	}
 
 	gid := misc.GoID()
-	deadline := time.Now().Add(timeout)
-
-	rm.mu.Lock()
-	if rm.owner == gid {
+	if rm.owner.Load() == gid {
 		rm.recursion++
-		rm.mu.Unlock()
 		return true
 	}
 
-	if rm.owner == 0 {
-		rm.owner = gid
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-rm.sem:
+		rm.owner.Store(gid)
 		rm.recursion = 1
-		rm.mu.Unlock()
 		return true
+	case <-timer.C:
+		return false
 	}
-
-	for rm.owner != 0 {
-		if time.Now().After(deadline) {
-			rm.mu.Unlock()
-			return false
-		}
-
-		rm.mu.Unlock()
-		remaining := time.Until(deadline)
-		waitTime := 1 * time.Millisecond
-		if remaining < waitTime {
-			waitTime = remaining
-		}
-		if waitTime > 0 {
-			time.Sleep(waitTime)
-		} else {
-			runtime.Gosched()
-		}
-		rm.mu.Lock()
-
-		if rm.owner == gid {
-			rm.recursion++
-			rm.mu.Unlock()
-			return true
-		}
-	}
-
-	rm.owner = gid
-	rm.recursion = 1
-	rm.mu.Unlock()
-	return true
 }

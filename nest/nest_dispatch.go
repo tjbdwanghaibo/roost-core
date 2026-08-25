@@ -46,7 +46,7 @@ func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta Handler
 	if meta.Rollback > RollbackUndo {
 		return fmt.Errorf("nest: invalid rollback policy %d", meta.Rollback)
 	}
-	if meta.Durability > DurabilityStrict {
+	if meta.Durability > DurabilityPipelined {
 		return fmt.Errorf("nest: invalid durability policy %d", meta.Durability)
 	}
 	if meta.Durability != DurabilityMemory && meta.Rollback == RollbackNone {
@@ -661,8 +661,9 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLocks()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, func() (any, error) {
+	releaseOnce := sync.OnceFunc(releaseLocks)
+	defer releaseOnce()
+	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params)
 	})
 }
@@ -713,8 +714,9 @@ func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, 
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLocks()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, func() (any, error) {
+	releaseOnce := sync.OnceFunc(releaseLocks)
+	defer releaseOnce()
+	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params)
 	})
 }
@@ -770,8 +772,9 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLocks()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, func() (any, error) {
+	releaseOnce := sync.OnceFunc(releaseLocks)
+	defer releaseOnce()
+	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params, HandlerOptionWithGroup(groupLen))
 	})
 }
@@ -889,7 +892,9 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 				e.UnTouch()
 			}()
 			oneEntity[0] = e
-			if _, err := invokeWithTransaction(entry.meta, oneEntity, mgr.committer, name, func() (any, error) {
+			// Broadcast has no early-release closure: pipelined handlers run
+			// with strict in-lock commit semantics on this path.
+			if _, err := invokeWithTransaction(entry.meta, oneEntity, mgr.committer, name, nil, func() (any, error) {
 				return entry.handler(oneEntity, params)
 			}); err != nil {
 				slog.Debug("nest broadcast handler failed", "id", meta.FullID, "handler", name, "err", err)

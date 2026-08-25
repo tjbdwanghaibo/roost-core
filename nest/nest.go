@@ -41,6 +41,11 @@ var (
 	ErrDurableRemoteWriteUnsupported  = errors.New("nest: durable remote write requires a lease-aware WAL committer")
 	ErrRemoteBroadcastUnsupported     = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
 	ErrCommitRejected                 = errors.New("nest: transaction commit rejected")
+	// ErrPipelinedCommitterRequired means a handler declared
+	// DurabilityPipelined but the configured committer does not implement
+	// PipelinedTransactionCommitter. This is a deployment configuration error
+	// and is reported instead of silently degrading to strict commits.
+	ErrPipelinedCommitterRequired = errors.New("nest: pipelined durability requires a PipelinedTransactionCommitter")
 	// ErrCommitIndeterminate means the storage device returned an error after
 	// commit bytes may have reached durable media. The process must be fenced
 	// and recovered from WAL; rolling the in-memory state back could create a

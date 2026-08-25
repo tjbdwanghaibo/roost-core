@@ -83,6 +83,32 @@ func TestBusStartFailureCleansPartialSubscriptions(t *testing.T) {
 	b.Stop()
 }
 
+func TestBusRejectsRestartAfterStop(t *testing.T) {
+	// Regression: Stop tears down RPC subscriptions registered via HandleRpc
+	// but Start only rebuilds the base subjects, so a restarted Bus silently
+	// lost every RPC subject. Restart is rejected instead of half-working.
+	client := &lifecycleClient{}
+	b := New(client, nil, nil, Config{Sid: 1, SvcType: "game"})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	b.Stop()
+	if err := b.Start(); err == nil {
+		t.Fatal("restart after stop must be rejected")
+	}
+	// Cleanup of a failed Start keeps the Bus eligible for a retry.
+	retryClient := &lifecycleClient{failAt: 1}
+	retry := New(retryClient, nil, nil, Config{Sid: 2, SvcType: "game"})
+	if err := retry.Start(); err == nil {
+		t.Fatal("expected start failure")
+	}
+	retryClient.failAt = 0
+	if err := retry.Start(); err != nil {
+		t.Fatalf("retry after failed start must stay possible: %v", err)
+	}
+	retry.Stop()
+}
+
 func TestHandleRpcReturnsSubscribeError(t *testing.T) {
 	client := &lifecycleClient{failAt: 1}
 	b := New(client, nil, nil, Config{Sid: 1, SvcType: "rank"})

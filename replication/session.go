@@ -2,6 +2,15 @@ package replication
 
 import "sync"
 
+// sequenceNewer reports whether a is strictly newer than b under serial
+// number arithmetic (RFC 1982). prepare already skips 0 when the counter
+// wraps, so acceptance checks must tolerate wraparound too: a plain a <= b
+// comparison would permanently reject every frame of a long-lived session
+// once its sequence wraps.
+func sequenceNewer(a, b uint32) bool {
+	return a != b && int32(a-b) > 0
+}
+
 type SessionState struct {
 	mu          sync.Mutex
 	sendMu      sync.Mutex
@@ -29,7 +38,7 @@ func (s *SessionState) handleControl(message ControlMessage, latestPublished uin
 	if s.closed {
 		return ErrSessionNotFound
 	}
-	if message.Sequence <= s.controlSeq {
+	if !sequenceNewer(message.Sequence, s.controlSeq) {
 		return ErrInvalidControl
 	}
 	s.controlSeq = message.Sequence
@@ -169,7 +178,7 @@ func (s *SessionState) commitPrepared(snapshot Snapshot, sequence uint32, genera
 	if s.closed {
 		return ErrSessionNotFound
 	}
-	if generation != s.generation || sequence <= s.committed {
+	if generation != s.generation || !sequenceNewer(sequence, s.committed) {
 		return ErrPreparedFrameStale
 	}
 	s.committed = sequence

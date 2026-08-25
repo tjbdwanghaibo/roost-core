@@ -116,16 +116,21 @@ type Record struct {
 	Step              int
 	CompletedSteps    int
 	Attempt           uint32
-	Version           uint64
-	Data              []byte
-	LastError         string
-	OperationKey      string
-	CommandID         string
-	NextRunAt         time.Time
-	DeadlineAt        time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	Lease             Lease
+	// Incarnation counts Resume generations. It is folded into CommandID so a
+	// resumed operation can never reuse a CommandID from a previous life of
+	// the same Saga (Resume resets Attempt), which would collide with stale
+	// completion receipts and stall the Saga as a false duplicate.
+	Incarnation  uint32
+	Version      uint64
+	Data         []byte
+	LastError    string
+	OperationKey string
+	CommandID    string
+	NextRunAt    time.Time
+	DeadlineAt   time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Lease        Lease
 }
 
 func (r Record) Clone() Record {

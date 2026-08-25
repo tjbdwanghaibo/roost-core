@@ -57,6 +57,46 @@ func TestSubjectSyncPrepareCommitProfiles(t *testing.T) {
 	}
 }
 
+func TestSubjectSyncReclaimsAbandonedPrepare(t *testing.T) {
+	// Regression: a PreparedSubjectSync dropped without Commit/Abort held the
+	// in-flight token forever and permanently stalled the subject's sync.
+	state := NewSubjectSyncState(SubjectSyncCreateParam{
+		Enabled: true, SubjectID: 44,
+		Packer: SubjectSyncPackFunc{Delta: func(SyncProfile, uint64) (FrozenSyncPayload, error) {
+			return TakeFrozenSyncPayload(1, []byte{1}), nil
+		}},
+	})
+	state.MarkDirty(1)
+	abandoned, err := state.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh in-flight prepare still blocks new prepares.
+	if _, err := state.Prepare(nil); !errors.Is(err, ErrSubjectSyncInFlight) {
+		t.Fatalf("fresh in-flight token must block: %v", err)
+	}
+	// Simulate the abandoned prepare aging past the stale threshold.
+	state.mu.Lock()
+	state.inflightSince = time.Now().Add(-subjectSyncInFlightStaleAfter - time.Second)
+	state.mu.Unlock()
+
+	reclaimed, err := state.Prepare(nil)
+	if err != nil {
+		t.Fatalf("stale in-flight token was not reclaimed: %v", err)
+	}
+	// The abandoned prepare lost its reservation: its commit must fail stale
+	// instead of racing the reclaimed one.
+	if err := abandoned.Commit(); !errors.Is(err, ErrSubjectSyncStalePrepare) {
+		t.Fatalf("abandoned commit must be stale, got %v", err)
+	}
+	if err := reclaimed.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version() != 1 {
+		t.Fatalf("reclaimed prepare did not commit: version=%d", state.Version())
+	}
+}
+
 func TestSubjectSyncAbortAndConcurrentDirty(t *testing.T) {
 	state := NewSubjectSyncState(SubjectSyncCreateParam{
 		Enabled: true, SubjectID: 43,

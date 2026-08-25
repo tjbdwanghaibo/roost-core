@@ -164,8 +164,22 @@ func (p *Pool[T]) Dispatch(key int64, task T) error {
 }
 
 // Go executes a task in an independent goroutine (for expensive/blocking tasks).
+// Goroutines started while the pool runs are waited for by StopWithContext; a
+// call before Start or after Stop still executes but is untracked.
 func (p *Pool[T]) Go(task T, handler func(T)) {
+	tracked := false
+	p.mu.Lock()
+	if p.started && !p.stopped {
+		// Add happens under the same mutex that Stop uses to flip stopped,
+		// so it always precedes Stop's wg.Wait and never races it.
+		p.wg.Add(1)
+		tracked = true
+	}
+	p.mu.Unlock()
 	go func() {
+		if tracked {
+			defer p.wg.Done()
+		}
 		misc.SafeFunc(func() {
 			defer task.OnRelease()
 			handler(task)

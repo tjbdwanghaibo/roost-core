@@ -27,6 +27,7 @@ type Worker[T Task] struct {
 	handler func(T)
 	wg      *sync.WaitGroup
 	closed  atomic.Bool
+	closeMu sync.RWMutex // pairs the closed check with the push in TryCast
 	notify  chan struct{}
 }
 
@@ -81,11 +82,20 @@ func (w *Worker[T]) safeHandle(task T) {
 
 // TryCast enqueues a task without waiting. It returns false when the queue is
 // full or the worker has already been closed.
+//
+// The read lock makes the closed check and the push one atomic step against
+// Close: once Close holds the write lock, every accepted task is already in
+// the queue and therefore visible to the final drain, so acceptance always
+// implies execution — a push can never land after the drain and leak its task.
 func (w *Worker[T]) TryCast(task T) bool {
+	w.closeMu.RLock()
 	if w.closed.Load() {
+		w.closeMu.RUnlock()
 		return false
 	}
-	if !w.queue.Push(task) {
+	pushed := w.queue.Push(task)
+	w.closeMu.RUnlock()
+	if !pushed {
 		return false
 	}
 	select {
@@ -119,7 +129,11 @@ func (w *Worker[T]) Cast(task T) {
 
 // Close signals the worker to drain and stop.
 func (w *Worker[T]) Close() {
+	// The write lock waits out every in-flight TryCast, so after this store
+	// no new push can be admitted and the final drain sees the whole queue.
+	w.closeMu.Lock()
 	w.closed.Store(true)
+	w.closeMu.Unlock()
 	select {
 	case w.notify <- struct{}{}:
 	default:

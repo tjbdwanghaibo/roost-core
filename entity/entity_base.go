@@ -36,6 +36,12 @@ type EntityBase struct {
 	groupState     atomic.Int32
 	groupTargetID  atomic.Int64
 	owner          atomic.Pointer[EntityManager]
+	// lastCommitLSN is the WAL LSN of the newest pipelined transaction that
+	// mutated this entity (set under the entity lock at enqueue time). It is
+	// the externalization gate input: checkpoint and sync must not persist or
+	// distribute state whose LSN is above the committer's durable watermark.
+	// Zero means no pipelined transaction touched the entity.
+	lastCommitLSN atomic.Uint64
 
 	// Event bus for pub/sub capability.
 	eventBus *event.EventBus
@@ -45,6 +51,28 @@ type EntityBase struct {
 	// Lifecycle hooks — set by generated entity factory code.
 	onClear   func()
 	onDestroy func(EntityDestroyReason)
+}
+
+// SetLastCommitLSN records the WAL LSN of the newest pipelined transaction
+// that mutated this entity. Called by nest under the entity lock; the value
+// is also mirrored into the subject sync state when sync is enabled.
+func (e *EntityBase) SetLastCommitLSN(lsn uint64) {
+	if e == nil {
+		return
+	}
+	e.lastCommitLSN.Store(lsn)
+	if state := e.Sync(); state != nil {
+		state.SetLastCommitLSN(lsn)
+	}
+}
+
+// LastCommitLSN returns the newest pipelined-commit LSN for this entity, or
+// zero when no pipelined transaction touched it.
+func (e *EntityBase) LastCommitLSN() uint64 {
+	if e == nil {
+		return 0
+	}
+	return e.lastCommitLSN.Load()
 }
 
 func (e *EntityBase) setOwner(owner *EntityManager) {

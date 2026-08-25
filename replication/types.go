@@ -43,17 +43,23 @@ type Limits struct {
 	MaxDatagramBytes       int
 	MaxFragments           int
 	MaxInflightFrames      int
+	// MaxInflightFramesPerSession bounds how much of the shared reassembly
+	// table one session may occupy. Without it a single peer sending
+	// never-completing first fragments could hold every inflight slot until
+	// TTL expiry and starve reassembly for all other sessions.
+	MaxInflightFramesPerSession int
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxObjects:             100,
-		MaxComponentsPerObject: 64,
-		MaxComponentBytes:      64 << 10,
-		MaxFrameBytes:          4 << 20,
-		MaxDatagramBytes:       DefaultMaxDatagram,
-		MaxFragments:           64,
-		MaxInflightFrames:      32,
+		MaxObjects:                  100,
+		MaxComponentsPerObject:      64,
+		MaxComponentBytes:           64 << 10,
+		MaxFrameBytes:               4 << 20,
+		MaxDatagramBytes:            DefaultMaxDatagram,
+		MaxFragments:                64,
+		MaxInflightFrames:           32,
+		MaxInflightFramesPerSession: 8,
 	}
 }
 
@@ -79,6 +85,9 @@ func normalizeLimits(limits Limits) Limits {
 	}
 	if limits.MaxInflightFrames <= 0 {
 		limits.MaxInflightFrames = defaults.MaxInflightFrames
+	}
+	if limits.MaxInflightFramesPerSession <= 0 {
+		limits.MaxInflightFramesPerSession = defaults.MaxInflightFramesPerSession
 	}
 	return limits
 }

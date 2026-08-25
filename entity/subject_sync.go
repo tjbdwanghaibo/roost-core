@@ -7,6 +7,9 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	flog "github.com/tjbdwanghaibo/cube-core/log"
 )
 
 var (
@@ -26,6 +29,14 @@ const (
 )
 
 const SyncMaskFull uint64 = ^uint64(0)
+
+// subjectSyncInFlightStaleAfter bounds how long an unfinished prepare may
+// block new prepares. A PreparedSubjectSync whose owner panicked or discarded
+// it without Commit/Abort would otherwise hold the in-flight token forever
+// and permanently stall the subject's sync. Reclaiming is safe because Commit
+// and Abort validate token and base version and turn into stale errors after
+// the token is superseded.
+const subjectSyncInFlightStaleAfter = 30 * time.Second
 
 const (
 	SyncFullReasonNone uint32 = iota
@@ -182,7 +193,13 @@ type SubjectSyncState struct {
 	dirtyNotifier   SubjectSyncDirtyNotifier
 	nextToken       uint64
 	inflightToken   uint64
+	inflightSince   time.Time
 	lastError       error
+	// lastCommitLSN mirrors EntityBase.lastCommitLSN so the subscription
+	// coordinator can gate distribution on the durable watermark without a
+	// back-reference to the entity. Atomic: written under the entity lock,
+	// read by flush timers.
+	lastCommitLSN atomic.Uint64
 }
 
 func NewSubjectSyncState(param SubjectSyncCreateParam) *SubjectSyncState {
@@ -391,8 +408,18 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 		return nil, ErrSubjectSyncClosed
 	}
 	if s.inflightToken != 0 {
-		s.mu.Unlock()
-		return nil, ErrSubjectSyncInFlight
+		if s.inflightSince.IsZero() || time.Since(s.inflightSince) < subjectSyncInFlightStaleAfter {
+			s.mu.Unlock()
+			return nil, ErrSubjectSyncInFlight
+		}
+		// Escape hatch: the previous prepare was abandoned without
+		// Commit/Abort. Reclaim so the subject does not stall forever; a
+		// late Commit of the abandoned token fails its token check.
+		flog.Error("entity: reclaiming abandoned subject sync prepare",
+			"subject", s.subjectID, "namespace", s.namespace,
+			"token", s.inflightToken, "age", time.Since(s.inflightSince))
+		s.inflightToken = 0
+		s.inflightSince = time.Time{}
 	}
 	if s.dirtyMask == 0 && !s.fullDirty {
 		s.mu.Unlock()
@@ -406,6 +433,7 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 	s.nextToken++
 	token := s.nextToken
 	s.inflightToken = token
+	s.inflightSince = time.Now()
 	packer := s.packer
 	subjectID := s.subjectID
 	namespace := s.namespace
@@ -498,10 +526,31 @@ func (s *SubjectSyncState) CaptureSnapshot(profiles []SyncProfile, reason uint32
 	return updates, nil
 }
 
+// SetLastCommitLSN mirrors EntityBase.SetLastCommitLSN for the sync state.
+// Callers normally go through the entity; this is exported for hosts that
+// manage subject sync states without an EntityBase.
+func (s *SubjectSyncState) SetLastCommitLSN(lsn uint64) {
+	if s == nil {
+		return
+	}
+	s.lastCommitLSN.Store(lsn)
+}
+
+// LastCommitLSN returns the newest pipelined-commit LSN of the owning entity,
+// or zero when no pipelined transaction touched it. Distribution must not run
+// while this is above the committer's durable watermark.
+func (s *SubjectSyncState) LastCommitLSN() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.lastCommitLSN.Load()
+}
+
 func (s *SubjectSyncState) failPrepare(token uint64, err error) {
 	s.mu.Lock()
 	if s.inflightToken == token {
 		s.inflightToken = 0
+		s.inflightSince = time.Time{}
 	}
 	s.lastError = err
 	s.mu.Unlock()
@@ -666,6 +715,7 @@ func (b *PreparedSubjectSyncBatch) Commit() error {
 			state.fullReason = SyncFullReasonNone
 		}
 		state.inflightToken = 0
+		state.inflightSince = time.Time{}
 		state.lastError = nil
 		item.finished.Store(preparedSubjectSyncFinished)
 	}
@@ -699,6 +749,7 @@ func (b *PreparedSubjectSyncBatch) abortLocked(cause error) {
 		state := item.state
 		if state.inflightToken == item.token {
 			state.inflightToken = 0
+			state.inflightSince = time.Time{}
 			state.lastError = cause
 		}
 		item.finished.Store(preparedSubjectSyncFinished)

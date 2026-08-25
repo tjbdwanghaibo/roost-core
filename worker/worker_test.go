@@ -55,6 +55,50 @@ func TestWorker_ProcessesTasksAndStops(t *testing.T) {
 	}
 }
 
+func TestWorker_AcceptedTasksSurviveConcurrentClose(t *testing.T) {
+	// Regression: TryCast checked closed and pushed as two separate steps, so
+	// a push racing Close could land after the final drain — the task was
+	// accepted (TryCast returned true) but never handled and never released.
+	// Every accepted task must be handled exactly once.
+	for round := 0; round < 50; round++ {
+		var handled atomic.Int64
+		var released atomic.Int64
+		w := NewWorker[workerTestTask]("test", 0, 1024, func(workerTestTask) {
+			handled.Add(1)
+		})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		w.Run(&wg)
+
+		var accepted atomic.Int64
+		var casters sync.WaitGroup
+		start := make(chan struct{})
+		for g := 0; g < 4; g++ {
+			casters.Add(1)
+			go func() {
+				defer casters.Done()
+				<-start
+				for i := 0; i < 64; i++ {
+					if w.TryCast(workerTestTask{id: i, released: &released}) {
+						accepted.Add(1)
+					}
+				}
+			}()
+		}
+		close(start)
+		w.Close()
+		casters.Wait()
+		wg.Wait()
+
+		if handled.Load() != accepted.Load() {
+			t.Fatalf("round %d: accepted %d tasks but handled %d", round, accepted.Load(), handled.Load())
+		}
+		if released.Load() != accepted.Load() {
+			t.Fatalf("round %d: accepted %d tasks but released %d", round, accepted.Load(), released.Load())
+		}
+	}
+}
+
 func TestWorker_CloseWakesIdleWorker(t *testing.T) {
 	w := NewWorker[workerTestTask]("test", 0, 16, nil)
 	var wg sync.WaitGroup

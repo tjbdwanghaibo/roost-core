@@ -222,6 +222,21 @@ func (r *Reassembler) push(session SessionID, packet []byte, now time.Time) ([]b
 		if len(r.inflight) >= r.limits.MaxInflightFrames {
 			return nil, false, header, ErrReassemblyCapacity
 		}
+		// Per-session admission keeps one peer's never-completing fragments
+		// from occupying the whole shared table; the global cap above bounds
+		// this scan. Session 0 is the dedicated per-client Push path, which
+		// has the table to itself and is limited by the global cap alone.
+		if session != 0 {
+			owned := 0
+			for existing := range r.inflight {
+				if existing.session == session {
+					owned++
+				}
+			}
+			if owned >= r.limits.MaxInflightFramesPerSession {
+				return nil, false, header, ErrReassemblyCapacity
+			}
+		}
 		assembly = &frameAssembly{header: header, created: now, chunks: make([][]byte, int(header.ChunkCount))}
 		r.inflight[key] = assembly
 	} else if assembly.header.ChunkCount != header.ChunkCount || assembly.header.BaseTick != header.BaseTick || assembly.header.Flags != header.Flags {

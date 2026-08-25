@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
 )
@@ -115,6 +116,12 @@ type SubscriptionCoordinator struct {
 	revision      uint64
 	closed        bool
 	subjectOps    [subscriptionSubjectShardCount]sync.Mutex
+	// durableWatermark, when set, is the pipelined-commit externalization
+	// gate: FlushSubject skips (keeping dirty state) any subject whose last
+	// commit LSN is above the watermark, so state that is not yet durable in
+	// the WAL never leaves the process. Nil means no gating (no pipelined
+	// committer in this deployment).
+	durableWatermark atomic.Pointer[func() uint64]
 }
 
 func NewSubscriptionCoordinator(sink ReliableEnvelopeSink) *SubscriptionCoordinator {
@@ -452,11 +459,36 @@ func abortPreparedBatch(prepared []*entity.PreparedSubjectSync, cause error) {
 	}
 }
 
+// SetDurableWatermark installs the pipelined-commit watermark source
+// (typically PipelinedTransactionCommitter.DurableLSN) used to gate
+// distribution. Pass nil to remove the gate. Assembly-time configuration;
+// safe to call concurrently with flushes.
+func (c *SubscriptionCoordinator) SetDurableWatermark(watermark func() uint64) {
+	if c == nil {
+		return
+	}
+	if watermark == nil {
+		c.durableWatermark.Store(nil)
+		return
+	}
+	c.durableWatermark.Store(&watermark)
+}
+
 // FlushSubject derives the active profile set, prepares each profile exactly
 // once, and transactionally distributes the resulting shared payloads.
+//
+// Subjects whose newest pipelined commit is not durable yet are skipped with
+// no error: their dirty state is preserved and the next flush tick retries.
+// The added latency is bounded by the WAL group-commit interval, which is far
+// below a sync tick.
 func (c *SubscriptionCoordinator) FlushSubject(ctx context.Context, state *entity.SubjectSyncState) error {
 	if c == nil || state == nil || state.SubjectID() == 0 {
 		return ErrSubscriptionSubject
+	}
+	if watermark := c.durableWatermark.Load(); watermark != nil {
+		if lsn := state.LastCommitLSN(); lsn > (*watermark)() {
+			return nil
+		}
 	}
 	profiles := c.Profiles(state.SubjectID())
 	prepared, err := state.Prepare(profiles)

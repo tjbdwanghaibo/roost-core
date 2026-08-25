@@ -345,6 +345,78 @@ func TestReassemblerExpiresAndBoundsInflightFrames(t *testing.T) {
 	}
 }
 
+func TestReassemblerPerSessionCapPreventsStarvation(t *testing.T) {
+	// Regression: the inflight table cap was global only, so one session
+	// sending never-completing first fragments could occupy every slot and
+	// starve all other sessions until TTL expiry.
+	limits := DefaultLimits()
+	limits.MaxInflightFrames = 8
+	limits.MaxInflightFramesPerSession = 2
+	reassembler := NewReassembler(limits, time.Second)
+	now := time.Now()
+
+	frame := DeltaFrame{SnapshotMeta: testMeta(1), Kind: FrameFull}
+	for tick := uint32(1); ; tick++ {
+		frame.Tick = tick
+		packets, err := FragmentFrame(frame, tick, bytes.Repeat([]byte{byte(tick)}, 400), 300, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, pushErr := reassembler.PushFor(101, packets[0], now)
+		if errors.Is(pushErr, ErrReassemblyCapacity) {
+			if tick != uint32(limits.MaxInflightFramesPerSession)+1 {
+				t.Fatalf("session cap hit at tick %d, want %d", tick, limits.MaxInflightFramesPerSession+1)
+			}
+			break
+		}
+		if pushErr != nil {
+			t.Fatal(pushErr)
+		}
+	}
+
+	// Another session must still be admitted while the attacker is capped.
+	frame.Tick = 100
+	packets, err := FragmentFrame(frame, 100, bytes.Repeat([]byte{9}, 400), 300, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := reassembler.PushFor(202, packets[0], now); err != nil {
+		t.Fatalf("victim session starved: %v", err)
+	}
+}
+
+func TestSessionSequenceComparisonsSurviveWraparound(t *testing.T) {
+	// Regression: prepare handles uint32 wraparound (it skips 0) but frame
+	// commit and control dedup compared sequences with plain <=, so a
+	// long-lived session bricked itself once the counter wrapped.
+	if !sequenceNewer(1, 0xFFFFFFFF) {
+		t.Fatal("post-wrap sequence must be newer than pre-wrap sequence")
+	}
+	if sequenceNewer(0xFFFFFFFF, 1) {
+		t.Fatal("pre-wrap sequence must not be newer than post-wrap sequence")
+	}
+	if sequenceNewer(7, 7) {
+		t.Fatal("equal sequences are not newer")
+	}
+
+	session := &SessionState{
+		sent:       map[uint32]Snapshot{},
+		maxHistory: 4,
+		sequence:   0xFFFFFFFF,
+		committed:  0xFFFFFFFF,
+	}
+	_, _, _, _, sequence, generation, _, err := session.prepare(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence != 1 {
+		t.Fatalf("prepare skipped-zero wraparound produced sequence %d", sequence)
+	}
+	if err := session.commitPrepared(Snapshot{SnapshotMeta: testMeta(1)}, sequence, generation, true); err != nil {
+		t.Fatalf("post-wrap frame rejected as stale: %v", err)
+	}
+}
+
 func TestReplicatorUsesAckedProjectedBaseline(t *testing.T) {
 	projector := ProjectorFunc(func(session SessionInfo, snapshot Snapshot) (Snapshot, error) {
 		if session.TeamID == 1 {

@@ -233,6 +233,9 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 		after.Version++
 		after.UpdatedAt = now
 		after.Attempt = 0
+		// A new incarnation keeps future CommandIDs disjoint from every
+		// receipt recorded before this resume; see Record.Incarnation.
+		after.Incarnation++
 		after.LastError = ""
 		after.CommandID = ""
 		after.OperationKey = ""
@@ -553,7 +556,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	after.UpdatedAt = now
 	after.NextRunAt = now.Add(step.Timeout)
 	after.OperationKey = operationKey(record.ID, record.Phase, record.Step)
-	after.CommandID = fmt.Sprintf("%s:%d", after.OperationKey, after.Attempt)
+	after.CommandID = commandID(after.OperationKey, after.Incarnation, after.Attempt)
 	clearLease(&after)
 	topic := step.ForwardTopic
 	if record.Phase == PhaseCompensate {
@@ -684,6 +687,17 @@ func stepFor(record Record, definition Definition) (Step, bool) {
 }
 func operationKey(id string, phase Phase, step int) string {
 	return fmt.Sprintf("%s:%d:%d", id, phase, step)
+}
+
+// commandID names one dispatch attempt. Incarnation 0 keeps the historical
+// "operationKey:attempt" format so records and receipts that predate the
+// field survive an upgrade unchanged; resumed records carry a non-zero
+// incarnation and therefore mint identifiers disjoint from every earlier life.
+func commandID(operationKey string, incarnation, attempt uint32) string {
+	if incarnation == 0 {
+		return fmt.Sprintf("%s:%d", operationKey, attempt)
+	}
+	return fmt.Sprintf("%s:r%d:%d", operationKey, incarnation, attempt)
 }
 func clearLease(record *Record) { record.Lease = Lease{} }
 func canonicalDeadline(value time.Time) time.Time {

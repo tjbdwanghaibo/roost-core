@@ -132,6 +132,66 @@ func TestLockManager_ReleaseLock(t *testing.T) {
 	}
 }
 
+func TestReentrantMutex_LockWithTimeout_SucceedsAfterRelease(t *testing.T) {
+	mu := NewReentrantMutex(5)
+	mu.Lock()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- mu.LockWithTimeout(time.Second)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	mu.Unlock()
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("LockWithTimeout should succeed once the lock is released")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("LockWithTimeout did not return in time")
+	}
+}
+
+func TestReentrantMutex_UnlockByNonOwnerPanics(t *testing.T) {
+	mu := NewReentrantMutex(6)
+	mu.Lock()
+	defer mu.Unlock()
+
+	done := make(chan bool, 1)
+	go func() {
+		defer func() {
+			done <- recover() != nil
+		}()
+		mu.Unlock()
+	}()
+
+	if !<-done {
+		t.Fatal("Unlock by non-owner should panic")
+	}
+}
+
+func TestDefaultMutex_LockWithTimeout(t *testing.T) {
+	mu := NewDefaultMutex(7)
+	mu.Lock()
+
+	// Held by this goroutine: a bounded wait must fail instead of blocking.
+	start := time.Now()
+	if mu.LockWithTimeout(50 * time.Millisecond) {
+		t.Fatal("LockWithTimeout should time out while the lock is held")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("LockWithTimeout blocked too long: %v", elapsed)
+	}
+
+	mu.Unlock()
+	if !mu.LockWithTimeout(50 * time.Millisecond) {
+		t.Fatal("LockWithTimeout should succeed on a free lock")
+	}
+	mu.Unlock()
+}
+
 func TestLockManager_CustomFactory(t *testing.T) {
 	var callCount atomic.Int32
 	factory := func(id int64) Mutex {

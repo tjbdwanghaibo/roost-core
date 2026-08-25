@@ -508,6 +508,49 @@ func TestResumeRequiresExplicitExpiredDeadlinePolicy(t *testing.T) {
 	}
 }
 
+func TestResumeMintsCommandIDsDisjointFromPreviousLife(t *testing.T) {
+	// Regression: Resume resets Attempt, so the first redispatch used to mint
+	// the same CommandID as the first attempt of the failed life. A stale
+	// completion receipt under that ID then blocked the resumed operation as
+	// a false duplicate. Incarnation keeps every life's identifiers disjoint.
+	engine, _, commands, _ := newTestEngine(t)
+	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "resume-ids"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := waitCommand(t, commands)
+	failed, err := engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: false, Error: "boom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != StatusFailed {
+		t.Fatalf("expected failed record, got %+v", failed)
+	}
+
+	resumed, err := engine.Resume(context.Background(), ResumeRequest{ID: record.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Incarnation != 1 {
+		t.Fatalf("expected incarnation 1, got %d", resumed.Incarnation)
+	}
+	redispatched := waitCommand(t, commands)
+	if redispatched.ID == first.ID {
+		t.Fatalf("resumed dispatch reused CommandID %q from the failed life", first.ID)
+	}
+	if redispatched.IdempotencyKey != first.IdempotencyKey {
+		t.Fatalf("operation identity must survive resume: %q != %q", redispatched.IdempotencyKey, first.IdempotencyKey)
+	}
+	// The resumed completion must apply as fresh progress, not a duplicate.
+	after, err := engine.Complete(context.Background(), Completion{CommandID: redispatched.ID, IdempotencyKey: redispatched.IdempotencyKey, SagaID: record.ID, Success: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.CompletedSteps != 1 {
+		t.Fatalf("resumed completion did not advance the saga: %+v", after)
+	}
+}
+
 func TestDefinitionValidation(t *testing.T) {
 	tests := []Definition{{}, {Type: "x", Version: 1, Steps: []Step{{Name: "x"}}}, {Type: "x", Version: 1, Steps: []Step{{Name: "x", ForwardTopic: "x", Timeout: time.Second, MaxAttempts: 1, BackoffMin: time.Second, BackoffMax: time.Second}, {Name: "x", ForwardTopic: "y", Timeout: time.Second, MaxAttempts: 1, BackoffMin: time.Second, BackoffMax: time.Second}}}}
 	for i, test := range tests {

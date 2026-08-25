@@ -21,6 +21,11 @@ const (
 	DurabilityMemory DurabilityPolicy = iota
 	DurabilityAsync
 	DurabilityStrict
+	// DurabilityPipelined splits admission: Enqueue (in-lock) is the only
+	// rejection point, fsync happens out of lock, and success is externalized
+	// (reply, AfterCommit) only after the commit ticket resolves durable.
+	// See NEST_PIPELINED_COMMIT.md for the full contract.
+	DurabilityPipelined
 )
 
 func (p DurabilityPolicy) String() string {
@@ -29,6 +34,8 @@ func (p DurabilityPolicy) String() string {
 		return "async"
 	case DurabilityStrict:
 		return "strict"
+	case DurabilityPipelined:
+		return "pipelined"
 	default:
 		return "memory"
 	}
@@ -42,6 +49,8 @@ func ParseDurabilityPolicy(value string) (DurabilityPolicy, error) {
 		return DurabilityAsync, nil
 	case "strict":
 		return DurabilityStrict, nil
+	case "pipelined":
+		return DurabilityPipelined, nil
 	default:
 		return DurabilityMemory, fmt.Errorf("nest: unsupported durability policy %q", value)
 	}
@@ -142,6 +151,30 @@ type TransactionCommitter interface {
 // avoid racing the normal checkpoint path in the committing process.
 type TransactionReleaseNotifier interface {
 	TransactionReleased(TransactionID)
+}
+
+// CommitTicket resolves when an enqueued record becomes durable. Err is nil
+// on success or ErrCommitIndeterminate when the fsync outcome is unknown; no
+// other error is legal — every rejectable condition must be reported
+// synchronously by Enqueue while the caller still holds entity locks and can
+// roll back.
+type CommitTicket interface {
+	LSN() uint64
+	Done() <-chan struct{}
+	Err() error
+}
+
+// PipelinedTransactionCommitter is an optional committer capability backing
+// DurabilityPipelined. Enqueue is called with entity locks held: it must
+// perform ALL rejectable validation and buffer admission synchronously
+// (rejecting instead of waiting under backpressure — the caller holds locks),
+// assign the LSN, and return; the group-commit worker resolves the ticket.
+// DurableLSN is the monotone watermark: every record with LSN <= it is
+// durable (prefix durability). See NEST_PIPELINED_COMMIT.md.
+type PipelinedTransactionCommitter interface {
+	TransactionCommitter
+	Enqueue(ctx context.Context, record CommitRecord) (CommitTicket, error)
+	DurableLSN() uint64
 }
 
 // CommitParticipant materializes a final after-image/delta exactly once at

@@ -83,10 +83,12 @@ type Bus struct {
 	rpcHandlers map[string]RpcHandlerFunc // "method" → handler
 
 	// dispatcher pool for incoming messages
-	lifeMu sync.Mutex
-	pool   *worker.Pool[*incomingTask]
-	ctx    context.Context
-	cancel context.CancelFunc
+	lifeMu  sync.Mutex
+	pool    *worker.Pool[*incomingTask]
+	ctx     atomic.Pointer[context.Context] // read lock-free by dispatch paths
+	cancel  context.CancelFunc
+	started bool // a successful Start happened; guarded by lifeMu
+	stopped bool // a started Bus was stopped; guarded by lifeMu
 
 	// subscriptions
 	subs []nats.ISubscription
@@ -218,15 +220,25 @@ func (b *Bus) deadLetterSubject(entry DeadLetterEntry) string {
 }
 
 // Start subscribes to subjects and starts the dispatcher worker pool.
+//
+// A Bus does not restart: Stop tears down every subscription, including RPC
+// subjects registered through HandleRpc, and Start only rebuilds the base
+// subjects. Restarting would therefore silently lose RPC subscriptions, so it
+// is rejected instead. Create a new Bus if a fresh instance is needed.
 func (b *Bus) Start() error {
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
 	if b.pool != nil {
 		return nil
 	}
+	if b.stopped {
+		return fmt.Errorf("bus: cannot restart a stopped bus")
+	}
 
 	// Start worker pool
-	b.ctx, b.cancel = context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.Background())
+	b.ctx.Store(&runCtx)
+	b.cancel = cancel
 	b.pool = worker.NewPool[*incomingTask](worker.PoolConfig{
 		Name:      "bus",
 		WorkerNum: b.cfg.WorkerNum,
@@ -255,6 +267,7 @@ func (b *Bus) Start() error {
 		slog.Info("bus: subscribed", "subject", s.subject)
 	}
 
+	b.started = true
 	return nil
 }
 
@@ -278,7 +291,13 @@ func (b *Bus) stopLocked(ctx context.Context) error {
 		b.cancel()
 		b.cancel = nil
 	}
-	b.ctx = nil
+	b.ctx.Store(nil)
+	// Only a Bus that completed Start becomes non-restartable; cleanup of a
+	// failed Start leaves the Bus eligible for a retry.
+	if b.started {
+		b.started = false
+		b.stopped = true
+	}
 	for _, sub := range b.subs {
 		if sub == nil {
 			continue
@@ -724,8 +743,10 @@ func (b *Bus) consumer() ReliableConsumer {
 }
 
 func (b *Bus) baseContext() context.Context {
-	if b != nil && b.ctx != nil {
-		return b.ctx
+	if b != nil {
+		if ctx := b.ctx.Load(); ctx != nil {
+			return *ctx
+		}
 	}
 	return context.Background()
 }

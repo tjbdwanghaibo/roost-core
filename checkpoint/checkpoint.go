@@ -60,6 +60,7 @@ func New(backend StorageBackend, opts ...Option) *Checkpoint {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	cfg = cfg.sanitize()
 
 	journal := NewJournal(cfg.JournalCap)
 

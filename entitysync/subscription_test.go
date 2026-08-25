@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
@@ -171,6 +172,51 @@ func TestSubscriptionCoordinatorFlushSubjectAndContainsSinkPanic(t *testing.T) {
 	}
 	if state.Version() != 1 || state.PendingDirty() {
 		t.Fatalf("FlushSubject did not commit: version=%d dirty=%v", state.Version(), state.PendingDirty())
+	}
+}
+
+func TestSubscriptionCoordinatorGatesFlushOnDurableWatermark(t *testing.T) {
+	// Externalization gate for pipelined commits: a subject whose newest
+	// commit LSN is above the durable watermark must not be distributed —
+	// dirty state is preserved and the next tick retries.
+	sink := &recordingEnvelopeSink{}
+	coordinator := NewSubscriptionCoordinator(sink)
+	packCount := 0
+	state := newSubscriptionTestState(t, 1006, &packCount)
+	subscriber := SubscriberRef{Kind: SubscriberKindPlayer, ID: 15}
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, state, entity.SyncProfile{Key: "default"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var watermark atomic.Uint64
+	coordinator.SetDurableWatermark(watermark.Load)
+
+	state.MarkDirty(1)
+	state.SetLastCommitLSN(7) // enqueued but not durable yet (watermark 0)
+	if err := coordinator.FlushSubject(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version() != 0 || !state.PendingDirty() {
+		t.Fatalf("non-durable state escaped the gate: version=%d dirty=%v", state.Version(), state.PendingDirty())
+	}
+
+	watermark.Store(7) // fsync caught up
+	if err := coordinator.FlushSubject(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version() != 1 || state.PendingDirty() {
+		t.Fatalf("durable state was not flushed: version=%d dirty=%v", state.Version(), state.PendingDirty())
+	}
+
+	// Removing the gate restores ungated behavior.
+	coordinator.SetDurableWatermark(nil)
+	state.MarkDirty(2)
+	state.SetLastCommitLSN(99)
+	if err := coordinator.FlushSubject(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version() != 2 {
+		t.Fatalf("ungated flush did not run: version=%d", state.Version())
 	}
 }
 

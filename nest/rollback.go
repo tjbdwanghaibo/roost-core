@@ -409,6 +409,31 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 	return nil
 }
 
+// pipelinedEnqueue performs the in-lock half of a pipelined commit. It is the
+// only rejection point: prepare and Enqueue run synchronously while the
+// caller still holds entity locks and can roll back. A nil ticket with nil
+// error means the record was empty and nothing needs to become durable.
+func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedTransactionCommitter) (CommitTicket, error) {
+	record, err := tx.prepareCommitRecord()
+	if err != nil {
+		return nil, err
+	}
+	if record.Empty() {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticket, err := committer.Enqueue(ctx, record)
+	if err != nil {
+		return nil, errors.Join(ErrCommitRejected, err)
+	}
+	if ticket == nil {
+		return nil, errors.Join(ErrCommitRejected, errors.New("nest: pipelined committer returned nil ticket"))
+	}
+	return ticket, nil
+}
+
 type rollbackContextKey struct{}
 
 func CurrentRollbackTx() *RollbackTx {
@@ -450,10 +475,29 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 	return fn()
 }
 
-func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, call func() (any, error)) (ret any, err error) {
+// invokeWithTransaction wraps one handler call in a rollback/commit envelope.
+// releaseLocks, when non-nil, must be idempotent (the dispatch site also
+// defers it); the pipelined path calls it right after WAL admission so entity
+// locks are not held across the fsync wait. A nil releaseLocks (broadcast)
+// keeps pipelined handlers on strict in-lock commit semantics.
+func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), call func() (any, error)) (ret any, err error) {
 	msg := currentNestDispatchMsg()
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
 		return call()
+	}
+	var pipelinedCommitter PipelinedTransactionCommitter
+	if meta.Durability == DurabilityPipelined {
+		pc, ok := committer.(PipelinedTransactionCommitter)
+		if !ok {
+			// Deployment configuration error: report instead of silently
+			// degrading to strict commits.
+			return nil, ErrPipelinedCommitterRequired
+		}
+		// Remote write batches keep their own two-phase protocol and stay on
+		// the strict path; so does broadcast, which has no early release.
+		if releaseLocks != nil && (msg == nil || msg.RemoteWriteBatch == nil) {
+			pipelinedCommitter = pc
+		}
 	}
 	tx := NewRollbackTx(meta.Rollback)
 	tx.durability = meta.Durability
@@ -490,6 +534,47 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 				}
 				return
 			}
+		}
+		if pipelinedCommitter != nil {
+			// Pipelined commit sequence (see NEST_PIPELINED_COMMIT.md):
+			// enqueue in-lock (the only rejection point), stamp entity LSNs,
+			// release locks early, then wait for durability out of lock.
+			ticket, enqueueErr := tx.pipelinedEnqueue(commitCtx, pipelinedCommitter)
+			if enqueueErr != nil {
+				err = enqueueErr
+				if rbErr := tx.Rollback(); rbErr != nil {
+					err = errors.Join(err, ErrRollbackFailed, rbErr)
+				}
+				return
+			}
+			if ticket != nil {
+				lsn := ticket.LSN()
+				for _, e := range es {
+					if e != nil && e.Base() != nil {
+						e.Base().SetLastCommitLSN(lsn)
+					}
+				}
+			}
+			// Nothing after this point can reject the transaction, so the
+			// in-memory state is final and the locks can be released before
+			// the fsync wait. Same-entity successors enqueue with higher
+			// LSNs; prefix durability keeps replay consistent with every
+			// state they observed.
+			releaseLocks()
+			if ticket != nil {
+				<-ticket.Done()
+				if ticketErr := ticket.Err(); ticketErr != nil {
+					err = ticketErr
+					tx.abandon()
+					return
+				}
+			}
+			if notifier, ok := committer.(TransactionReleaseNotifier); ok {
+				txID := tx.ID()
+				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
+			}
+			tx.Commit()
+			return
 		}
 		if commitErr := tx.durableCommit(commitCtx, committer); commitErr != nil {
 			err = commitErr

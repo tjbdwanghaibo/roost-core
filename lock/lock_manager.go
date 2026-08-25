@@ -32,11 +32,25 @@ func NewLockManager(factory MutexFactory) *LockManager {
 }
 
 // GetLock returns the Mutex for the given entity ID, creating one if necessary.
+//
+// A Mutex obtained here may be released from the manager concurrently (see
+// ReleaseLock), so acquiring it proves nothing by itself: callers must
+// revalidate the guarded state after Lock (e.g. entity IsRemoved/IsClear and
+// index membership) and retreat if the state is gone. That revalidation is
+// what makes holding a stale, released instance harmless.
 func (m *LockManager) GetLock(id int64) Mutex {
 	return m.locks.Get(id)
 }
 
 // ReleaseLock removes the lock for the given ID from the manager.
+//
+// After removal a subsequent GetLock returns a fresh instance while late
+// waiters may still acquire the stale one, so two goroutines can each hold "a
+// lock for id" at once. This is only safe under the GetLock contract above:
+// the caller must first make the guarded state unreachable (removed from the
+// index, marked removed) while holding the lock, so any stale-lock winner
+// revalidates, observes the removal, and retreats. Do not call this for ids
+// whose readers do not revalidate.
 func (m *LockManager) ReleaseLock(id int64) {
 	m.locks.Del(id)
 }

@@ -24,17 +24,18 @@ type Flusher struct {
 
 	workMu   sync.Mutex
 	inFlight int
-	progress chan struct{}
+	progress *sync.Cond // broadcasts on batch completion; guarded by workMu
 }
 
 func newFlusher(journal *Journal, backend StorageBackend, cfg Config, wal SnapshotWAL) *Flusher {
-	return &Flusher{
-		journal:  journal,
-		backend:  backend,
-		cfg:      cfg,
-		wal:      wal,
-		progress: make(chan struct{}, 1),
+	f := &Flusher{
+		journal: journal,
+		backend: backend,
+		cfg:     cfg,
+		wal:     wal,
 	}
+	f.progress = sync.NewCond(&f.workMu)
+	return f
 }
 
 // Start launches flush workers.
@@ -85,10 +86,21 @@ func (f *Flusher) Stop(ctx context.Context) error {
 }
 
 // FlushAll drains the journal completely. Called during graceful shutdown.
+// Safe for concurrent callers: completion is broadcast to every waiter, so a
+// single progress event can never be consumed by one waiter and lost to the
+// rest.
 func (f *Flusher) FlushAll(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// sync.Cond cannot select on ctx; wake the wait below on cancellation so
+	// the loop re-checks ctx.Err.
+	stopWake := context.AfterFunc(ctx, func() {
+		f.workMu.Lock()
+		f.progress.Broadcast()
+		f.workMu.Unlock()
+	})
+	defer stopWake()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -96,16 +108,14 @@ func (f *Flusher) FlushAll(ctx context.Context) error {
 		batch := f.takeBatch()
 		if len(batch) == 0 {
 			f.workMu.Lock()
-			idle := f.inFlight == 0 && f.journal.Len() == 0
-			f.workMu.Unlock()
-			if idle {
+			if f.inFlight == 0 && f.journal.Len() == 0 {
+				f.workMu.Unlock()
 				return nil
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-f.progress:
+			if ctx.Err() == nil {
+				f.progress.Wait()
 			}
+			f.workMu.Unlock()
 			continue
 		}
 		err := f.processBatch(ctx, batch)
@@ -168,11 +178,8 @@ func (f *Flusher) finishBatch() {
 	if f.inFlight > 0 {
 		f.inFlight--
 	}
+	f.progress.Broadcast()
 	f.workMu.Unlock()
-	select {
-	case f.progress <- struct{}{}:
-	default:
-	}
 }
 
 func (f *Flusher) processBatch(ctx context.Context, entries []JournalEntry) error {
