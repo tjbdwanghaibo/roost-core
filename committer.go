@@ -181,6 +181,34 @@ func (c *Committer) Commit(ctx context.Context, record corenest.CommitRecord) er
 	return nil
 }
 
+// Enqueue implements corenest.PipelinedTransactionCommitter. It is called
+// with entity locks held and performs every rejectable check synchronously;
+// the returned ticket resolves when the record is durable. The transaction is
+// held until core Nest calls TransactionReleased — which the pipelined path
+// schedules after durability — so the replay loop cannot apply or publish a
+// record whose bytes may not have reached stable storage yet.
+func (c *Committer) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
+	if c == nil || c.wal == nil {
+		return nil, errors.New("nestwal: committer is not initialized")
+	}
+	c.hold(record.ID)
+	ticket, err := c.wal.Enqueue(ctx, record)
+	if err != nil {
+		c.release(record.ID)
+		return nil, err
+	}
+	c.committed.Add(1)
+	return ticket, nil
+}
+
+// DurableLSN implements corenest.PipelinedTransactionCommitter.
+func (c *Committer) DurableLSN() uint64 {
+	if c == nil || c.wal == nil {
+		return 0
+	}
+	return c.wal.DurableLSN()
+}
+
 // TransactionReleased is called by core Nest after the entity guard has
 // released every lock involved in the transaction.
 func (c *Committer) TransactionReleased(id corenest.TransactionID) {
@@ -512,3 +540,4 @@ func jitter(duration time.Duration) time.Duration {
 
 var _ corenest.TransactionCommitter = (*Committer)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Committer)(nil)
+var _ corenest.PipelinedTransactionCommitter = (*Committer)(nil)

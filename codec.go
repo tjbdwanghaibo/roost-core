@@ -25,7 +25,7 @@ func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
 	if record.Empty() {
 		return nil, errors.New("nestwal: empty commit record")
 	}
-	if record.Durability > corenest.DurabilityStrict {
+	if record.Durability > corenest.DurabilityPipelined {
 		return nil, errors.New("nestwal: invalid durability policy")
 	}
 	if len(record.Mutations) > maxEntryCount || len(record.Effects) > maxEntryCount {

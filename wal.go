@@ -119,13 +119,48 @@ type WAL struct {
 	acked        atomic.Uint64
 	diskBytes    atomic.Int64
 	batchBuffers sync.Pool
+
+	// Pipelined commit state (see NEST_PIPELINED_COMMIT.md in cube-core).
+	// enqueueMu serializes LSN assignment with queue admission so LSN order
+	// equals physical log order; reservedBytes moves the capacity check into
+	// Enqueue, which must be the only rejection point; writtenLSN (guarded by
+	// stateMu) tracks the newest ticketed record physically written; tickets
+	// resolve on fsync. Lock order: stateMu -> ticketMu.
+	enqueueMu     sync.Mutex
+	nextLSN       uint64 // guarded by enqueueMu
+	reservedBytes atomic.Int64
+	writtenLSN    uint64 // guarded by stateMu
+	durableLSN    atomic.Uint64
+	ticketMu      sync.Mutex
+	tickets       []*walTicket // FIFO, ascending LSN
 }
 
 type appendRequest struct {
 	record      corenest.CommitRecord
 	frame       []byte
 	requireSync bool
+	reserved    bool // capacity admitted by Enqueue; never rejected here
+	lsn         uint64
 	done        chan appendResult
+}
+
+// walTicket implements corenest.CommitTicket. err is written before done is
+// closed and read only after it is closed, so no lock is needed.
+type walTicket struct {
+	lsn  uint64
+	done chan struct{}
+	err  error
+}
+
+func (t *walTicket) LSN() uint64           { return t.lsn }
+func (t *walTicket) Done() <-chan struct{} { return t.done }
+func (t *walTicket) Err() error {
+	select {
+	case <-t.done:
+		return t.err
+	default:
+		return nil
+	}
 }
 
 type appendResult struct {
@@ -270,6 +305,122 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 	// before the writer decides the outcome would make commit ambiguous.
 	result := <-req.done
 	return result.fence, result.err
+}
+
+// Enqueue admits one pipelined record and returns a ticket that resolves when
+// the record is durable. It is called with entity locks held, so it performs
+// every rejectable check synchronously (encoding, size, capacity reservation,
+// terminal state, queue admission) and never blocks on I/O. After it returns
+// successfully the only possible failure is ErrCommitIndeterminate on the
+// ticket, delivered through the WAL terminal path.
+func (w *WAL) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	payload, err := encodeRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > w.opts.MaxRecordBytes {
+		return nil, ErrRecordTooLarge
+	}
+	frame := encodeFrame(payload)
+	// Reserve capacity now: processBatch must never reject a ticketed record,
+	// because the caller has already released its right to roll back by the
+	// time the batch is written.
+	frameBytes := int64(len(frame))
+	if w.opts.MaxDiskBytes > 0 {
+		if w.diskBytes.Load()+w.reservedBytes.Add(frameBytes) > w.opts.MaxDiskBytes {
+			w.reservedBytes.Add(-frameBytes)
+			return nil, fmt.Errorf("%w: current=%d incoming=%d limit=%d", ErrCapacity, w.diskBytes.Load(), frameBytes, w.opts.MaxDiskBytes)
+		}
+	}
+	req := appendRequest{
+		record:      record,
+		frame:       frame,
+		requireSync: true,
+		reserved:    true,
+		done:        make(chan appendResult, 1),
+	}
+
+	w.lifecycleMu.RLock()
+	if w.closed {
+		w.lifecycleMu.RUnlock()
+		w.reservedBytes.Add(-frameBytes)
+		return nil, ErrClosed
+	}
+	if terminal := w.terminal(); terminal != nil {
+		w.lifecycleMu.RUnlock()
+		w.reservedBytes.Add(-frameBytes)
+		return nil, terminal
+	}
+	// enqueueMu makes LSN assignment atomic with queue admission and ticket
+	// registration, so LSN order equals log order and the ticket FIFO stays
+	// sorted. Sends never block long: capacity rejections above and the
+	// bounded queue are the only backpressure, and a full queue is a
+	// synchronous rejection because the caller holds entity locks.
+	w.enqueueMu.Lock()
+	req.lsn = w.nextLSN + 1
+	select {
+	case w.appendCh <- req:
+		w.nextLSN++
+	default:
+		w.enqueueMu.Unlock()
+		w.lifecycleMu.RUnlock()
+		w.reservedBytes.Add(-frameBytes)
+		return nil, fmt.Errorf("%w: append queue is full", ErrCapacity)
+	}
+	ticket := &walTicket{lsn: req.lsn, done: make(chan struct{})}
+	w.ticketMu.Lock()
+	w.tickets = append(w.tickets, ticket)
+	w.ticketMu.Unlock()
+	w.enqueueMu.Unlock()
+	w.lifecycleMu.RUnlock()
+	return ticket, nil
+}
+
+// DurableLSN is the pipelined-commit watermark: every ticketed record with
+// LSN <= this value is durable.
+func (w *WAL) DurableLSN() uint64 {
+	return w.durableLSN.Load()
+}
+
+// resolveDurableLocked resolves every pending ticket whose record is covered
+// by the latest successful fsync. Caller holds stateMu; ticketMu nests inside.
+func (w *WAL) resolveDurableLocked() {
+	upto := w.writtenLSN
+	if upto == 0 {
+		return
+	}
+	w.ticketMu.Lock()
+	resolved := 0
+	for _, ticket := range w.tickets {
+		if ticket.lsn > upto {
+			break
+		}
+		close(ticket.done)
+		resolved++
+	}
+	if resolved > 0 {
+		w.tickets = w.tickets[resolved:]
+		if w.durableLSN.Load() < upto {
+			w.durableLSN.Store(upto)
+		}
+	}
+	w.ticketMu.Unlock()
+}
+
+// failPendingTickets resolves every pending ticket with the terminal error.
+// The write outcome of enqueued records is unknown once the WAL is fenced, so
+// indeterminate is the only honest verdict.
+func (w *WAL) failPendingTickets(err error) {
+	w.ticketMu.Lock()
+	for _, ticket := range w.tickets {
+		ticket.err = err
+		close(ticket.done)
+	}
+	w.tickets = nil
+	w.ticketMu.Unlock()
 }
 
 func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
@@ -519,18 +670,46 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		for i := range batch {
 			batch[i].done <- appendResult{err: terminal}
 		}
+		// A ticket registered concurrently with the terminal transition may
+		// have missed the setTerminal sweep; its record lands here, so fail
+		// the pending set again rather than leave the waiter blocked.
+		w.failPendingTickets(terminal)
 		return
 	}
-	batchBytes := int64(0)
+	// Reserved (ticketed) requests were capacity-admitted in Enqueue and can
+	// no longer be rejected: their callers already released entity locks on
+	// the strength of that admission. Only unreserved requests compete for
+	// the remaining capacity here.
+	unreservedBytes := int64(0)
+	reservedBytes := int64(0)
 	for i := range batch {
-		batchBytes += int64(len(batch[i].frame))
+		if batch[i].reserved {
+			reservedBytes += int64(len(batch[i].frame))
+		} else {
+			unreservedBytes += int64(len(batch[i].frame))
+		}
 	}
-	if w.opts.MaxDiskBytes > 0 && w.diskBytes.Load()+batchBytes > w.opts.MaxDiskBytes {
-		err := fmt.Errorf("%w: current=%d incoming=%d limit=%d", ErrCapacity, w.diskBytes.Load(), batchBytes, w.opts.MaxDiskBytes)
+	if w.opts.MaxDiskBytes > 0 && unreservedBytes > 0 &&
+		w.diskBytes.Load()+w.reservedBytes.Load()+unreservedBytes > w.opts.MaxDiskBytes {
+		err := fmt.Errorf("%w: current=%d incoming=%d limit=%d", ErrCapacity, w.diskBytes.Load(), unreservedBytes, w.opts.MaxDiskBytes)
+		kept := batch[:0]
 		for i := range batch {
+			if batch[i].reserved {
+				kept = append(kept, batch[i])
+				continue
+			}
 			batch[i].done <- appendResult{err: err}
 		}
-		return
+		batch = kept
+		if len(batch) == 0 {
+			return
+		}
+	}
+	// The reservation's job ends once the batch is committed to the write
+	// path: from here on the bytes are accounted through diskBytes, and every
+	// failure below is terminal rather than a rejection.
+	if reservedBytes > 0 {
+		w.reservedBytes.Add(-reservedBytes)
 	}
 	fences := make([]corenest.CommitFence, len(batch))
 	requireSync := false
@@ -564,6 +743,11 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		w.diskBytes.Add(int64(len(buffer)))
 		w.offset = nextOffset
 		w.unsynced = true
+		for i := start; i < end; i++ {
+			if batch[i].lsn > w.writtenLSN {
+				w.writtenLSN = batch[i].lsn
+			}
+		}
 		start = end
 	}
 	if err == nil && requireSync {
@@ -603,6 +787,10 @@ drainLoop:
 					continue drainLoop
 				}
 				if err := w.syncAndCloseActive(); err != nil {
+					// A failed final sync leaves enqueued outcomes unknown;
+					// fence and fail the remaining tickets so no pipelined
+					// waiter blocks past close.
+					w.setTerminal(errors.Join(corenest.ErrCommitIndeterminate, err))
 					w.closeErr = errors.Join(w.closeErr, err)
 				}
 				w.closeErr = errors.Join(w.closeErr, w.terminal())
@@ -709,6 +897,9 @@ func (w *WAL) syncActive() error {
 
 func (w *WAL) syncActiveLocked() error {
 	if w.active == nil || !w.unsynced {
+		// Everything written is already durable; late-registered tickets
+		// covered by the current watermark still need resolution.
+		w.resolveDurableLocked()
 		return nil
 	}
 	if err := w.active.Sync(); err != nil {
@@ -716,6 +907,7 @@ func (w *WAL) syncActiveLocked() error {
 	}
 	w.unsynced = false
 	w.syncs.Add(1)
+	w.resolveDurableLocked()
 	return nil
 }
 
@@ -748,6 +940,12 @@ func (w *WAL) setTerminal(err error) {
 		first = true
 	}
 	w.terminalMu.Unlock()
+	if first {
+		// Enqueued records have unknown write outcomes once the WAL is
+		// fenced; their waiters must observe the terminal verdict instead of
+		// blocking forever.
+		w.failPendingTickets(err)
+	}
 	if first && w.opts.OnFatal != nil {
 		w.fatalOnce.Do(func() {
 			go func() {
