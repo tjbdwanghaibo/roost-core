@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/obs"
 )
 
 type RollbackPolicy uint8
@@ -562,7 +563,13 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			// state they observed.
 			releaseLocks()
 			if ticket != nil {
+				// The worker stays blocked here for one group-commit cycle
+				// (Phase 1). This duration is the Phase 2 decision input: if
+				// it dominates worker busy time and adding workers does not
+				// help, move the wait off the worker (async reply).
+				waitStart := time.Now()
 				<-ticket.Done()
+				obs.ObserveDuration("nest.pipelined.durable_wait", obs.Labels{"handler": handler}, time.Since(waitStart))
 				if ticketErr := ticket.Err(); ticketErr != nil {
 					err = ticketErr
 					tx.abandon()

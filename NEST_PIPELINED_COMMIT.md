@@ -130,8 +130,17 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
 - durability 是 per-handler 元数据，逐 handler 灰度；首选高频写、非跨服、AfterCommit 简单的
   handler 试点。
 - prod 配置门禁初期要求 pipelined 显式白名单。
-- 指标：enqueue→durable 延迟直方图、水位线滞后 gauge、闸门跳过计数（entitysync/checkpoint
-  各一）、worker 因等 ticket 阻塞时长。
+- 装配接线（使用 pipelined 时必须同时完成，否则闸门旁路）：
+  `coordinator.SetDurableWatermark(committer.DurableLSN)`（entitysync）与
+  `checkpointMod.SetDurableWatermark(committer.DurableLSN)`（kit checkpoint mod）。
+- 已实现的指标：
+  - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
+    时长，**Phase 2 的决策输入**：若其占 worker 忙时比例持续偏高且加 worker 无效，才立项
+    Phase 2；
+  - `entitysync_flush_gate_deferred_total` —— 同步分发被水位线推迟的次数；
+  - `checkpoint_release_gate_deferred_total`（kit）—— 实体快照被水位线推迟的次数，另见
+    checkpoint mod 的 `gateDeferrals` 统计与 admission pending（推迟实体计入重试预算，
+    WAL 卡死时按既有 fail-stop 语义熔断）。
 
 ## 10. Phase 2（按需）
 
