@@ -16,21 +16,22 @@ var (
 )
 
 // RateLimit applies the core token bucket by authenticated player and message
-// ID. Authentication middleware should be placed before it in the chain.
+// ID. Authentication middleware should be placed before it in the chain; the
+// principal checks here are a defense-in-depth backstop for the limit key and
+// therefore run regardless of whether a limiter is configured, so disabling
+// rate limiting can never widen the authentication surface.
 func RateLimit(limiter *security.RateLimiter) coregateway.Middleware {
 	return func(next coregateway.Endpoint) coregateway.Endpoint {
 		return coregateway.EndpointFunc(func(ctx context.Context, session coregateway.Session, request coregateway.Request) (any, error) {
-			if limiter != nil {
-				if session == nil {
-					return nil, coregateway.ErrUnauthenticated
-				}
-				principal := session.Principal()
-				if !principal.Authenticated() {
-					return nil, coregateway.ErrUnauthenticated
-				}
-				if !limiter.Allow(security.RateLimitKey{OwnerID: principal.PlayerID, Action: request.MessageID}) {
-					return nil, ErrRateLimited
-				}
+			if session == nil {
+				return nil, coregateway.ErrUnauthenticated
+			}
+			principal := session.Principal()
+			if !principal.Authenticated() {
+				return nil, coregateway.ErrUnauthenticated
+			}
+			if limiter != nil && !limiter.Allow(security.RateLimitKey{OwnerID: principal.PlayerID, Action: request.MessageID}) {
+				return nil, ErrRateLimited
 			}
 			return next.Handle(ctx, session, request)
 		})

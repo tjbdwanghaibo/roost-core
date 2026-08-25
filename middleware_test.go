@@ -31,6 +31,27 @@ func TestRateLimitByPlayerAndMessage(t *testing.T) {
 	}
 }
 
+func TestRateLimitBackstopHoldsWithoutLimiter(t *testing.T) {
+	// Regression: with a nil limiter the middleware used to skip its
+	// defense-in-depth principal checks together with the rate limit, so a
+	// chain missing RequireAuthenticated lost its only authentication
+	// backstop. Disabling rate limiting must not widen the auth surface.
+	endpoint := coregateway.Chain(coregateway.EndpointFunc(func(context.Context, coregateway.Session, coregateway.Request) (any, error) {
+		return "ok", nil
+	}), RateLimit(nil))
+	request := coregateway.Request{MessageID: 10}
+	if _, err := endpoint.Handle(context.Background(), nil, request); !errors.Is(err, coregateway.ErrUnauthenticated) {
+		t.Fatalf("nil session error=%v want ErrUnauthenticated", err)
+	}
+	if _, err := endpoint.Handle(context.Background(), &session{}, request); !errors.Is(err, coregateway.ErrUnauthenticated) {
+		t.Fatalf("anonymous principal error=%v want ErrUnauthenticated", err)
+	}
+	authed := &session{principal: coregateway.Principal{PlayerID: 1, SessionID: "s"}}
+	if ret, err := endpoint.Handle(context.Background(), authed, request); err != nil || ret != "ok" {
+		t.Fatalf("authenticated request: ret=%v err=%v", ret, err)
+	}
+}
+
 func TestTimeoutAndRecover(t *testing.T) {
 	var reported bool
 	endpoint := coregateway.Chain(coregateway.EndpointFunc(func(ctx context.Context, _ coregateway.Session, request coregateway.Request) (any, error) {
