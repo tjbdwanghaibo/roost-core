@@ -26,12 +26,15 @@ func (s *fakeElectionSession) Close() error {
 
 type fakeElectionBackend struct {
 	value string
+	rev   int64
 }
 
 func (e *fakeElectionBackend) Campaign(_ context.Context, value string) error {
 	e.value = value
 	return nil
 }
+
+func (e *fakeElectionBackend) Rev() int64 { return e.rev }
 
 func (e *fakeElectionBackend) Resign(context.Context) error { return nil }
 
@@ -45,7 +48,7 @@ func newTestElection() (*election, *[]*fakeElectionSession) {
 	e.create = func() (electionSession, electionBackend, error) {
 		session := newFakeElectionSession()
 		sessions = append(sessions, session)
-		return session, &fakeElectionBackend{}, nil
+		return session, &fakeElectionBackend{rev: int64(len(sessions))}, nil
 	}
 	return e, &sessions
 }
@@ -74,6 +77,32 @@ func TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership(t
 	case <-leaderLost:
 	case <-time.After(time.Second):
 		t.Fatal("leader channel did not close after session loss")
+	}
+}
+
+func TestElectionFenceTracksLeadershipTerm(t *testing.T) {
+	e, sessions := newTestElection()
+	if _, ok := e.Fence(); ok {
+		t.Fatal("fence must be unavailable before leadership")
+	}
+	if err := e.Campaign(context.Background(), "server-1"); err != nil {
+		t.Fatalf("Campaign: %v", err)
+	}
+	token, ok := e.Fence()
+	if !ok || token != 1 {
+		t.Fatalf("fence=(%d,%v), want (1,true)", token, ok)
+	}
+	// Session end (lease loss) revokes the fence together with leadership.
+	_ = (*sessions)[0].Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := e.Fence(); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fence survived leadership loss")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

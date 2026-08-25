@@ -40,6 +40,7 @@ type election struct {
 	session  electionSession
 	elect    electionBackend
 	isLeader atomic.Bool
+	fence    atomic.Int64
 	mu       sync.Mutex
 	leaderCh chan struct{}
 	closed   bool
@@ -55,6 +56,10 @@ type electionBackend interface {
 	Campaign(ctx context.Context, value string) error
 	Resign(ctx context.Context) error
 	Leader(ctx context.Context) (*clientv3.GetResponse, error)
+	// Rev is the CreateRevision of this candidate's campaign key: it
+	// increases monotonically across leadership changes of the prefix and
+	// serves as the fencing token.
+	Rev() int64
 }
 
 func (e *election) createWithEtcd() (electionSession, electionBackend, error) {
@@ -108,6 +113,9 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 		_ = session.Close()
 		return fetcd.ErrNotLeader
 	}
+	// Publish the fencing token before the leadership flag: a caller that
+	// observes IsLeader must be able to read the token of that term.
+	e.fence.Store(elect.Rev())
 	e.isLeader.Store(true)
 	e.mu.Unlock()
 
@@ -159,6 +167,17 @@ func (e *election) IsLeader() bool {
 	return e.isLeader.Load()
 }
 
+// Fence implements fetcd.IFencedElection: the campaign key's CreateRevision,
+// monotonic across leadership changes of the prefix. Leadership-sensitive
+// writes should carry it and reject older tokens, which closes the inherent
+// IsLeader stale window (lease expired server-side, client not yet aware).
+func (e *election) Fence() (int64, bool) {
+	if !e.isLeader.Load() {
+		return 0, false
+	}
+	return e.fence.Load(), true
+}
+
 func (e *election) LeaderChan() <-chan struct{} {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -182,3 +201,7 @@ func (e *election) finish(session electionSession) {
 }
 
 var _ fetcd.IElection = (*election)(nil)
+
+// election also satisfies fetcd.IFencedElection (cube-core > v1.6.1); the
+// compile-time assertion is added once the dependency is bumped past the
+// release that introduces the capability interface.
