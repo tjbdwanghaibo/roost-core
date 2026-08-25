@@ -2,6 +2,7 @@ package nest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -231,6 +232,10 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 	return false, complete
 }
 
+// completionEntityID picks the chain/pool key: the first non-nil (primary)
+// entity. Ordering is therefore guaranteed per PRIMARY entity — two
+// multi-entity transactions that share only a secondary entity are not
+// ordered against each other, matching how dispatch itself hashes work.
 func completionEntityID(es []entity.IThreadSafeEntity, msg *Msg) int64 {
 	for _, e := range es {
 		if e != nil {
@@ -255,11 +260,14 @@ func (p *completionPump) stop(ctx context.Context) error {
 		close(p.queue)
 		select {
 		case <-p.done:
+			err = p.pool.StopWithContext(ctx)
 		case <-ctx.Done():
-			err = ctx.Err()
-			return
+			// Still initiate the pool stop: the pump keeps draining in the
+			// background and a rejected Dispatch falls back to inline
+			// delivery, so stopping here bounds the leak instead of leaving
+			// the pool goroutines alive forever after a timed-out shutdown.
+			err = errors.Join(ctx.Err(), p.pool.StopWithContext(ctx))
 		}
-		err = p.pool.StopWithContext(ctx)
 	})
 	return err
 }
