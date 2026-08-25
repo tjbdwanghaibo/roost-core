@@ -133,7 +133,18 @@ type WAL struct {
 	durableLSN    atomic.Uint64
 	ticketMu      sync.Mutex
 	tickets       []*walTicket // FIFO, ascending LSN
+
+	// statsCacheMu guards the cached oldest-unacked timestamp so periodic
+	// health checks do not touch the disk on every probe. The age derived
+	// from the cached CreatedAt stays exact while the cache holds (it grows
+	// with the clock); Ack invalidates it because acknowledgement is the only
+	// event that can move the oldest record forward.
+	statsCacheMu       sync.Mutex
+	statsOldestCreated int64
+	statsOldestValid   time.Time
 }
+
+const statsOldestCacheTTL = 5 * time.Second
 
 type appendRequest struct {
 	record      corenest.CommitRecord
@@ -393,6 +404,14 @@ func (w *WAL) resolveDurableLocked() {
 		return
 	}
 	w.ticketMu.Lock()
+	// Publish the watermark BEFORE waking any waiter: a resolved ticket is a
+	// promise that DurableLSN already covers its record — the externalization
+	// gates read the watermark right after Done() fires. The store is also
+	// unconditional on pending tickets: durability advanced regardless of who
+	// is waiting.
+	if w.durableLSN.Load() < upto {
+		w.durableLSN.Store(upto)
+	}
 	resolved := 0
 	for _, ticket := range w.tickets {
 		if ticket.lsn > upto {
@@ -403,9 +422,6 @@ func (w *WAL) resolveDurableLocked() {
 	}
 	if resolved > 0 {
 		w.tickets = w.tickets[resolved:]
-		if w.durableLSN.Load() < upto {
-			w.durableLSN.Store(upto)
-		}
 	}
 	w.ticketMu.Unlock()
 }
@@ -444,6 +460,9 @@ func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
 	}
 	w.checkpoint = next
 	w.acked.Add(1)
+	w.statsCacheMu.Lock()
+	w.statsOldestValid = time.Time{}
+	w.statsCacheMu.Unlock()
 	w.pruneAcked(fence.Segment)
 	return nil
 }
@@ -472,6 +491,17 @@ func (w *WAL) Replay(ctx context.Context, consume func(corenest.CommitFence, cor
 		if segment > activeSegment {
 			break
 		}
+		// The acknowledgement fence is the end offset of a frame, so it is a
+		// valid scan start: skip fully acknowledged segments and the
+		// acknowledged prefix of the fence segment instead of re-reading and
+		// re-checksumming them on every pass.
+		if segment < ack.Segment {
+			continue
+		}
+		start := int64(0)
+		if segment == ack.Segment {
+			start = ack.Offset
+		}
 		path := filepath.Join(w.opts.Dir, segmentName(segment))
 		file, err := os.Open(path)
 		if err != nil {
@@ -481,7 +511,7 @@ func (w *WAL) Replay(ctx context.Context, consume func(corenest.CommitFence, cor
 		if segment == activeSegment {
 			limit = activeLimit
 		}
-		err = scanFrames(file, segment, limit, w.opts.MaxRecordBytes, false, func(fence corenest.CommitFence, payload []byte) error {
+		err = scanFramesFrom(file, segment, start, limit, w.opts.MaxRecordBytes, false, func(fence corenest.CommitFence, payload []byte) error {
 			if !fenceAfter(fence, ack) {
 				return nil
 			}
@@ -590,12 +620,33 @@ func (w *WAL) diskUsage() (int64, int) {
 }
 
 func (w *WAL) oldestUnackedAge() time.Duration {
+	w.statsCacheMu.Lock()
+	if time.Now().Before(w.statsOldestValid) {
+		createdAt := w.statsOldestCreated
+		w.statsCacheMu.Unlock()
+		return ageSince(createdAt)
+	}
+	w.statsCacheMu.Unlock()
+
+	// Replay starts at the acknowledgement fence and stops on the first
+	// record, so a cache miss costs one frame read, not a log scan.
 	var createdAt int64
 	err := w.Replay(context.Background(), func(_ corenest.CommitFence, record corenest.CommitRecord) error {
 		createdAt = record.CreatedAt
 		return errStatsStop
 	})
-	if err != nil && !errors.Is(err, errStatsStop) || createdAt <= 0 {
+	if err != nil && !errors.Is(err, errStatsStop) {
+		return 0
+	}
+	w.statsCacheMu.Lock()
+	w.statsOldestCreated = createdAt
+	w.statsOldestValid = time.Now().Add(statsOldestCacheTTL)
+	w.statsCacheMu.Unlock()
+	return ageSince(createdAt)
+}
+
+func ageSince(createdAt int64) time.Duration {
+	if createdAt <= 0 {
 		return 0
 	}
 	age := time.Since(time.Unix(0, createdAt))
@@ -1006,6 +1057,13 @@ func scanFramesEnd(file *os.File, segment uint64, limit int64, maxRecord int) (i
 }
 
 func scanFrames(file *os.File, segment uint64, limit int64, maxRecord int, allowTornTail bool, consume func(corenest.CommitFence, []byte) error) error {
+	return scanFramesFrom(file, segment, 0, limit, maxRecord, allowTornTail, consume)
+}
+
+// scanFramesFrom scans frames starting at the given offset, which must be a
+// frame boundary (0 or the end offset of a previously scanned frame, e.g. an
+// acknowledgement fence).
+func scanFramesFrom(file *os.File, segment uint64, start, limit int64, maxRecord int, allowTornTail bool, consume func(corenest.CommitFence, []byte) error) error {
 	if limit < 0 {
 		info, err := file.Stat()
 		if err != nil {
@@ -1013,7 +1071,7 @@ func scanFrames(file *os.File, segment uint64, limit int64, maxRecord int, allow
 		}
 		limit = info.Size()
 	}
-	offset := int64(0)
+	offset := start
 	header := make([]byte, frameHeaderSize)
 	for offset < limit {
 		n, err := file.ReadAt(header, offset)

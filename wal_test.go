@@ -115,6 +115,61 @@ func TestWALReplayAckAndReopen(t *testing.T) {
 	}
 }
 
+func TestWALReplayStartsAtAckFenceAcrossRotation(t *testing.T) {
+	// Regression: Replay used to scan every retained segment from offset 0,
+	// re-checksumming acknowledged data on each pass — Stats/Healthy paid
+	// that cost on every probe. Replay now starts at the acknowledgement
+	// fence, which is always a frame boundary, and must still return exactly
+	// the unacknowledged suffix after segment rotation.
+	opts := testOptions(t.TempDir())
+	w, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+
+	const total = 8
+	fences := make([]corenest.CommitFence, 0, total)
+	for i := byte(1); i <= total; i++ {
+		fence, err := w.Append(context.Background(), testRecord(i, corenest.DurabilityStrict))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fences = append(fences, fence)
+	}
+	if w.Stats().Segment < 2 {
+		t.Fatalf("test needs a rotation to cover the cross-segment fence path: segment=%d", w.Stats().Segment)
+	}
+	// Acknowledge up to a record beyond the first segment boundary.
+	ackUpTo := 5
+	if err := w.Ack(context.Background(), fences[ackUpTo-1]); err != nil {
+		t.Fatal(err)
+	}
+
+	var replayed []byte
+	if err := w.Replay(context.Background(), func(_ corenest.CommitFence, record corenest.CommitRecord) error {
+		replayed = append(replayed, record.ID[15])
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if string(replayed) != string([]byte{6, 7, 8}) {
+		t.Fatalf("replay=%v, want exactly the unacknowledged suffix", replayed)
+	}
+
+	// The oldest-unacked cache must not survive an acknowledgement: age
+	// drops as soon as the tail is fully acked.
+	if age := w.Stats().OldestUnackedAge; age <= 0 {
+		t.Fatalf("unacked records must report a positive age, got %v", age)
+	}
+	if err := w.Ack(context.Background(), fences[total-1]); err != nil {
+		t.Fatal(err)
+	}
+	if age := w.Stats().OldestUnackedAge; age != 0 {
+		t.Fatalf("fully acknowledged log must report zero age, got %v", age)
+	}
+}
+
 func TestWALConcurrentAppendAndRotation(t *testing.T) {
 	dir := t.TempDir()
 	w, err := Open(testOptions(dir))
