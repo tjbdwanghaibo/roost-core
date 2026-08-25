@@ -68,6 +68,7 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 		DeliverPolicy: fnats.JetStreamDeliverNew,
 		AckWait:       3 * time.Second,
 		MaxDeliver:    5,
+		MaxAckPending: 128,
 	})
 
 	if got.Name != "task-progress" || got.Durable != "task-progress" {
@@ -79,8 +80,20 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 	if got.DeliverPolicy != gojs.DeliverNewPolicy {
 		t.Fatalf("deliver policy=%v, want new", got.DeliverPolicy)
 	}
-	if got.AckPolicy != gojs.AckExplicitPolicy || got.AckWait != 3*time.Second || got.MaxDeliver != 5 {
+	if got.AckPolicy != gojs.AckExplicitPolicy || got.AckWait != 3*time.Second || got.MaxDeliver != 5 || got.MaxAckPending != 128 {
 		t.Fatalf("ack config mismatch: %+v", got)
+	}
+}
+
+func TestJetStreamNakBackoffIsBounded(t *testing.T) {
+	config := fnats.JetStreamConsumerConfig{NakBackoffMin: 250 * time.Millisecond, NakBackoffMax: 5 * time.Second}
+	for deliveries, want := range map[uint64]time.Duration{1: 250 * time.Millisecond, 2: 500 * time.Millisecond, 3: time.Second, 10: 5 * time.Second} {
+		if got := nakBackoff(config, deliveries); got != want {
+			t.Fatalf("deliveries=%d got=%s want=%s", deliveries, got, want)
+		}
+	}
+	if got := nakBackoff(fnats.JetStreamConsumerConfig{}, 10); got != 0 {
+		t.Fatalf("zero config backoff=%s", got)
 	}
 }
 

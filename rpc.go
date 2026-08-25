@@ -2,9 +2,9 @@ package nats
 
 import (
 	"context"
+	"fmt"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"github.com/tjbdwanghaibo/cube-core/worker"
-	"fmt"
 	"log/slog"
 	"math"
 	"math/rand"

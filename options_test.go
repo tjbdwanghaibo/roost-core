@@ -2,8 +2,8 @@ package nats
 
 import (
 	"bytes"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"errors"
+	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"log/slog"
 	"strings"
 	"sync/atomic"

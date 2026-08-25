@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"github.com/tjbdwanghaibo/cube-core/admin"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/bus"
@@ -10,7 +11,6 @@ import (
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 	"github.com/tjbdwanghaibo/cube-kit/mods"
-	"errors"
 	"log/slog"
 	"strings"
 

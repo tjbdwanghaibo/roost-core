@@ -2,8 +2,8 @@ package nats
 
 import (
 	"context"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"fmt"
+	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"log/slog"
 	"sync/atomic"
 	"time"

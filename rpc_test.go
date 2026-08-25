@@ -1,9 +1,9 @@
 package nats
 
 import (
+	"errors"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"github.com/tjbdwanghaibo/cube-core/worker"
-	"errors"
 	"testing"
 	"time"
 )

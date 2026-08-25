@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 
@@ -71,7 +72,11 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		}
 		wrapped := jetStreamMsg(msg)
 		if err := handler(handlerCtx, wrapped); err != nil {
-			_ = msg.Nak()
+			if delay := nakBackoff(cfg, wrapped.NumDelivered); delay > 0 {
+				_ = msg.NakWithDelay(delay)
+			} else {
+				_ = msg.Nak()
+			}
 			return
 		}
 		_ = msg.Ack()
@@ -81,6 +86,27 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		return nil, err
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
+}
+
+func nakBackoff(config fnats.JetStreamConsumerConfig, deliveries uint64) time.Duration {
+	minimum, maximum := config.NakBackoffMin, config.NakBackoffMax
+	if minimum <= 0 {
+		return 0
+	}
+	if maximum < minimum {
+		maximum = minimum
+	}
+	delay := minimum
+	for attempt := uint64(1); attempt < deliveries && delay < maximum; attempt++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
 }
 
 func toJetStreamStreamConfig(cfg fnats.JetStreamConfig) gojs.StreamConfig {
@@ -112,6 +138,7 @@ func toJetStreamConsumerConfig(cfg fnats.JetStreamConsumerConfig) gojs.ConsumerC
 		AckPolicy:     gojs.AckExplicitPolicy,
 		AckWait:       cfg.AckWait,
 		MaxDeliver:    cfg.MaxDeliver,
+		MaxAckPending: cfg.MaxAckPending,
 	}
 }
 
