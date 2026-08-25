@@ -33,6 +33,20 @@ func (r *Runtime) NestOption() corenest.NestOption {
 	return corenest.NestOptionWithTransactionCommitter(r.Committer)
 }
 
+// DurableWatermark returns the pipelined-commit watermark source for
+// externalization gates that the mod cannot reach automatically — wire the
+// application-owned entitysync coordinator with one line:
+//
+//	coordinator.SetDurableWatermark(runtime.DurableWatermark())
+//
+// (The kit checkpoint mod is wired automatically by the nestwal mod.)
+func (r *Runtime) DurableWatermark() func() uint64 {
+	if r == nil || r.Committer == nil {
+		return func() uint64 { return 0 }
+	}
+	return r.Committer.DurableLSN
+}
+
 func (r *Runtime) Flush(ctx context.Context) error {
 	if r == nil || r.Committer == nil {
 		return nil

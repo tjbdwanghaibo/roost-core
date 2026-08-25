@@ -34,6 +34,17 @@ type modConfig struct {
 	effectPrefix   string
 	effectStream   fnats.JetStreamConfig
 	startupTimeout time.Duration
+	pipelined      pipelinedConfig
+}
+
+// pipelinedConfig carries the config-driven rollout controls for pipelined
+// durability (see NEST_PIPELINED_COMMIT.md in cube-core): the production
+// allowlist and the Phase 2 async completion switch.
+type pipelinedConfig struct {
+	allowlist     []string
+	async         bool
+	asyncWorkers  int
+	asyncQueueCap int
 }
 
 func NewMod(remoteEnabled bool) *Mod { return &Mod{remoteEnabled: remoteEnabled} }
@@ -128,6 +139,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	m.config = modConfig{
 		wal: wal, committer: committer, effectPrefix: prefix,
 		startupTimeout: durationDefault(cfg.GetDuration("nest.wal.startup_timeout"), 30*time.Second),
+		pipelined: pipelinedConfig{
+			allowlist:     cfg.GetStringSlice("nest.pipelined.allowlist"),
+			async:         cfg.GetBool("nest.pipelined.async"),
+			asyncWorkers:  cfg.GetInt("nest.pipelined.async_workers"),
+			asyncQueueCap: cfg.GetInt("nest.pipelined.async_queue_capacity"),
+		},
 		effectStream: fnats.JetStreamConfig{
 			Name: streamName, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
 			MaxAge:     maxAge,
@@ -179,6 +196,11 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	m.runtime = runtime
 	m.registry = registry
+	// Externalization gate wiring: checkpoint must never persist an
+	// after-image whose pipelined commit is not durable in this WAL. Wired
+	// unconditionally — entities untouched by pipelined transactions carry
+	// LSN 0 and always pass, so the gate costs one atomic read when unused.
+	cp.SetDurableWatermark(runtime.Committer.DurableLSN)
 	if err := registry.Register(mods.ModNestWAL, runtime); err != nil {
 		_ = runtime.Shutdown(context.Background())
 		m.runtime = nil
@@ -232,6 +254,25 @@ func (m *Mod) Runtime() *Runtime {
 		return nil
 	}
 	return m.runtime
+}
+
+// NestOptions returns the engine options this mod contributes: the WAL
+// committer plus the config-driven pipelined rollout controls
+// (nest.pipelined.allowlist, nest.pipelined.async and its sizing). Preferred
+// over Runtime().NestOption() when assembling the Nest engine.
+func (m *Mod) NestOptions() []corenest.NestOption {
+	if m == nil || m.runtime == nil {
+		return nil
+	}
+	options := []corenest.NestOption{m.runtime.NestOption()}
+	if len(m.config.pipelined.allowlist) > 0 {
+		options = append(options, corenest.NestOptionWithPipelinedAllowlist(m.config.pipelined.allowlist...))
+	}
+	if m.config.pipelined.async {
+		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(
+			m.config.pipelined.asyncWorkers, m.config.pipelined.asyncQueueCap))
+	}
+	return options
 }
 
 func (m *Mod) onFatal(err error) {
