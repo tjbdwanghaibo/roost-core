@@ -1,12 +1,39 @@
 // Package spatial provides game-agnostic two-dimensional integer-grid
 // primitives without entity, scene, protocol, or gameplay dependencies.
+//
+// Scope: a lightweight uniform-grid ID index (BlockIndex) plus
+// four-direction grid A* — suited to room-scale gameplay on 2D grids. It is
+// deliberately NOT an MMO spatial service: there is no Z axis, no navmesh,
+// and no built-in interest management; object positions and visibility policy
+// stay with the caller.
 package spatial
 
-import "math/bits"
+import (
+	"math"
+	"math/bits"
+)
 
 type Point struct {
 	X int64
 	Y int64
+}
+
+func saturatingAdd(a, b int64) int64 {
+	sum := a + b
+	if b > 0 && sum < a {
+		return math.MaxInt64
+	}
+	if b < 0 && sum > a {
+		return math.MinInt64
+	}
+	return sum
+}
+
+func saturatingSub(a, b int64) int64 {
+	if b == math.MinInt64 {
+		return saturatingAdd(saturatingAdd(a, math.MaxInt64), 1)
+	}
+	return saturatingAdd(a, -b)
 }
 
 // Rect is half-open: Min is inclusive and Max is exclusive.

@@ -5,7 +5,15 @@ import (
 	"errors"
 )
 
-var ErrNoPath = errors.New("spatial: no path")
+var (
+	ErrNoPath = errors.New("spatial: no path")
+	// ErrPathBudgetExhausted means the search hit MaxVisited before proving
+	// anything: a path may still exist. Callers react differently to "there
+	// is no path" (reroute, reject the move) and "the search ran out of
+	// budget" (retry with a larger budget, fall back to a coarser route), so
+	// the two outcomes are distinct errors.
+	ErrPathBudgetExhausted = errors.New("spatial: path search budget exhausted")
+)
 
 type Terrain interface {
 	InBounds(Point) bool
@@ -35,7 +43,7 @@ func FindPath(terrain Terrain, start, goal Point, options PathOptions) ([]Point,
 	for visited := 0; open.Len() > 0; {
 		visited++
 		if visited > options.MaxVisited {
-			return nil, ErrNoPath
+			return nil, ErrPathBudgetExhausted
 		}
 		current := heap.Pop(open).(*pathNode).point
 		if current == goal {

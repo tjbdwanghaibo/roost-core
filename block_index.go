@@ -162,6 +162,21 @@ func (i *BlockIndex) QueryRect(rect Rect) []int64 {
 	return i.QueryBlocks(blocks)
 }
 
+// QueryRadius returns the ids indexed in every block intersecting the
+// axis-aligned bounding box of the circle — the natural AOI candidate set.
+// The index stores ids only, so the result is a superset of the true circle:
+// callers filter candidates against their own object positions, consistent
+// with the caller-owned visibility policy of this type.
+func (i *BlockIndex) QueryRadius(center Point, radius int64) []int64 {
+	if i == nil || radius < 0 {
+		return nil
+	}
+	return i.QueryRect(Rect{
+		Min: Point{X: saturatingSub(center.X, radius), Y: saturatingSub(center.Y, radius)},
+		Max: Point{X: saturatingAdd(center.X, radius), Y: saturatingAdd(center.Y, radius)},
+	})
+}
+
 func (i *BlockIndex) QueryBlock(point Point) []int64 {
 	seen := make(map[int64]struct{})
 	i.collect(i.BlockIndex(point), seen)
