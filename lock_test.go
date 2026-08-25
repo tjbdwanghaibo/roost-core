@@ -13,10 +13,11 @@ import (
 // fakeDistLock counts extensions and can start refusing them, modeling a
 // lease that expired or was taken over.
 type fakeDistLock struct {
-	mu       sync.Mutex
-	held     bool
-	extends  int
-	extendOK bool
+	mu            sync.Mutex
+	held          bool
+	extends       int
+	extendOK      bool
+	transientErrs int
 }
 
 func (f *fakeDistLock) Acquire(context.Context) (bool, error) {
@@ -44,6 +45,10 @@ func (f *fakeDistLock) Extend(context.Context, time.Duration) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.extends++
+	if f.transientErrs > 0 {
+		f.transientErrs--
+		return false, errors.New("stub: transient network error")
+	}
 	return f.extendOK, nil
 }
 
@@ -85,6 +90,44 @@ func TestAutoExtendLockKeepsLeaseAliveUntilRelease(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if got := inner.extendCount(); got != settled {
 		t.Fatalf("watchdog kept extending after release: %d -> %d", settled, got)
+	}
+}
+
+func TestAutoExtendLockSurvivesTransientExtendErrors(t *testing.T) {
+	// Regression: a single transient Extend error (network blip) used to stop
+	// the watchdog permanently even though the lease was still healthy. The
+	// watchdog now keeps retrying while the last successful renewal can still
+	// cover the lease, and only declares loss once the TTL has provably run
+	// out without a renewal.
+	inner := &fakeDistLock{}
+	lock := NewAutoExtendLock(inner, 200*time.Millisecond, 5*time.Millisecond)
+	if ok, err := lock.Acquire(context.Background()); err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	inner.mu.Lock()
+	inner.transientErrs = 3
+	inner.mu.Unlock()
+
+	// Wait until the transient errors are consumed AND a later renewal
+	// succeeded.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		inner.mu.Lock()
+		recovered := inner.transientErrs == 0 && inner.extends >= 5
+		inner.mu.Unlock()
+		if recovered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("watchdog never recovered past the transient errors")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := lock.Err(); err != nil {
+		t.Fatalf("transient errors must not surface as lease loss: %v", err)
+	}
+	if err := lock.Release(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

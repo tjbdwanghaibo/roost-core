@@ -148,26 +148,45 @@ func (l *AutoExtendLock) watch(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
+	lastRenewed := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		extended, err := l.inner.Extend(ctx, l.ttl)
+		// Bound every extension attempt: an unbounded call against a hung
+		// Redis would freeze the watchdog while the lease silently expired,
+		// leaving Err() reporting a healthy lock.
+		extendCtx, cancel := context.WithTimeout(ctx, l.interval)
+		extended, err := l.inner.Extend(extendCtx, l.ttl)
+		cancel()
 		if err == nil && extended {
+			lastRenewed = time.Now()
 			continue
 		}
 		if err == nil {
-			err = fredis.ErrLockNotHeld
+			// Authoritative server answer: the lease is not held anymore.
+			// Stop extending and make the loss observable instead of
+			// fighting the new holder.
+			l.recordLost(fredis.ErrLockNotHeld)
+			return
 		}
-		// The lease is gone (expired or taken over): stop extending and make
-		// the loss observable instead of fighting the new holder.
-		l.mu.Lock()
-		l.lostErr = fmt.Errorf("redis: auto extend lost lock: %w", err)
-		l.mu.Unlock()
-		return
+		// Transient failure (network, timeout): the last successful renewal
+		// may still be covering the lease, so keep retrying on the ticker.
+		// Only when the renewal gap exceeds the TTL has the lease provably
+		// expired.
+		if time.Since(lastRenewed) >= l.ttl {
+			l.recordLost(err)
+			return
+		}
 	}
+}
+
+func (l *AutoExtendLock) recordLost(cause error) {
+	l.mu.Lock()
+	l.lostErr = fmt.Errorf("redis: auto extend lost lock: %w", cause)
+	l.mu.Unlock()
 }
 
 // Err reports whether the watchdog lost the lease since the last Acquire.
