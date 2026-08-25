@@ -46,6 +46,11 @@ var (
 	// PipelinedTransactionCommitter. This is a deployment configuration error
 	// and is reported instead of silently degrading to strict commits.
 	ErrPipelinedCommitterRequired = errors.New("nest: pipelined durability requires a PipelinedTransactionCommitter")
+	// ErrPipelinedNotAllowed means a handler declared DurabilityPipelined but
+	// the engine's pipelined allowlist does not include it. Early lock
+	// release changes commit semantics, so production rollout is gated per
+	// handler; see NEST_PIPELINED_COMMIT.md.
+	ErrPipelinedNotAllowed = errors.New("nest: handler is not on the pipelined durability allowlist")
 	// ErrCommitIndeterminate means the storage device returned an error after
 	// commit bytes may have reached durable media. The process must be fenced
 	// and recovered from WAL; rolling the in-memory state back could create a
@@ -85,6 +90,16 @@ type NestMgr struct {
 	fenceErr               error
 	groupLocks             *entityLockGroupLockManager
 	handlers               map[HandlerName]handlerEntry
+	// pipelinedAllow, when non-nil, is the set of handler names permitted to
+	// run with DurabilityPipelined. Nil permits all handlers (development
+	// default); production deployments should pin an explicit allowlist so a
+	// handler cannot adopt early lock release without an operations review.
+	pipelinedAllow map[string]struct{}
+	// completions, when non-nil, enables Phase 2 async completion: dispatch
+	// workers hand the post-durability work (AfterCommit, reply) to the pump
+	// instead of parking on the commit ticket. Nil keeps the Phase 1
+	// in-worker wait.
+	completions *completionPump
 }
 
 func (mgr *NestMgr) groupLockManager() *entityLockGroupLockManager {
@@ -165,6 +180,10 @@ type NestOpts struct {
 	TickDuration           time.Duration
 	SyncTimeout            time.Duration
 	Committer              TransactionCommitter
+	PipelinedAllowlist     []string
+	PipelinedAsync         bool
+	PipelinedAsyncWorkers  int
+	PipelinedAsyncQueueCap int
 }
 
 type NestOption func(*NestOpts)
@@ -213,6 +232,30 @@ var (
 			opts.Committer = committer
 		}
 	}
+	// NestOptionWithPipelinedAllowlist restricts DurabilityPipelined to the
+	// named handlers; dispatching any other pipelined handler fails with
+	// ErrPipelinedNotAllowed. Not calling it (or passing no names) permits
+	// every handler — production deployments should always pin a list.
+	NestOptionWithPipelinedAllowlist = func(names ...string) NestOption {
+		return func(opts *NestOpts) {
+			opts.PipelinedAllowlist = append(opts.PipelinedAllowlist, names...)
+		}
+	}
+	// NestOptionWithPipelinedAsyncCompletion enables Phase 2 of the pipelined
+	// commit: the dispatch worker no longer parks on the commit ticket —
+	// AfterCommit hooks and the reply run on a completion pool (hashed by
+	// entity, so same-entity completions keep commit order) once the record
+	// is durable. Hooks therefore run without the request context or entity
+	// locks; see NEST_PIPELINED_COMMIT.md §10 before enabling. workers and
+	// queueCap <= 0 select defaults (4, 8192); a full queue degrades single
+	// transactions back to the Phase 1 in-worker wait.
+	NestOptionWithPipelinedAsyncCompletion = func(workers, queueCap int) NestOption {
+		return func(opts *NestOpts) {
+			opts.PipelinedAsync = true
+			opts.PipelinedAsyncWorkers = workers
+			opts.PipelinedAsyncQueueCap = queueCap
+		}
+	}
 )
 
 // NewEngine constructs an instance-scoped Nest engine. Callers inject its
@@ -234,6 +277,15 @@ func NewEngine(opts ...NestOption) *NestMgr {
 		stopDone:               make(chan struct{}),
 		groupLocks:             newEntityLockGroupLockManager(),
 		handlers:               snapshotHandlerEntries(),
+	}
+	if len(params.PipelinedAllowlist) > 0 {
+		ret.pipelinedAllow = make(map[string]struct{}, len(params.PipelinedAllowlist))
+		for _, name := range params.PipelinedAllowlist {
+			ret.pipelinedAllow[name] = struct{}{}
+		}
+	}
+	if params.PipelinedAsync {
+		ret.completions = newCompletionPump(params.PipelinedAsyncWorkers, params.PipelinedAsyncQueueCap)
 	}
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout
@@ -265,6 +317,9 @@ func (mgr *NestMgr) Start() error {
 	}
 	mgr.dispatcher.OnInit()
 	mgr.dispatcher.OnRun()
+	if mgr.completions != nil {
+		mgr.completions.start()
+	}
 	mgr.ticker.Start()
 	mgr.started = true
 	return nil
@@ -299,7 +354,14 @@ func (mgr *NestMgr) Shutdown(ctx context.Context) error {
 	// workers still mutate entities. The caller's context bounds only its wait.
 	go func() {
 		mgr.ticker.Stop()
-		mgr.finishShutdown(mgr.dispatcher.OnDestroyWithContext(context.Background()))
+		err := mgr.dispatcher.OnDestroyWithContext(context.Background())
+		// Deferred completions are accepted work: every reply and AfterCommit
+		// promised to a caller must be delivered before shutdown finishes.
+		// The dispatcher is drained, so no new submissions can arrive.
+		if mgr.completions != nil {
+			err = errors.Join(err, mgr.completions.stop(context.Background()))
+		}
+		mgr.finishShutdown(err)
 	}()
 	return mgr.waitStopped(ctx, done)
 }

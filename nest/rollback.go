@@ -480,8 +480,11 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 // releaseLocks, when non-nil, must be idempotent (the dispatch site also
 // defers it); the pipelined path calls it right after WAL admission so entity
 // locks are not held across the fsync wait. A nil releaseLocks (broadcast)
-// keeps pipelined handlers on strict in-lock commit semantics.
-func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), call func() (any, error)) (ret any, err error) {
+// keeps pipelined handlers on strict in-lock commit semantics. completions,
+// when non-nil, additionally moves the post-durability work off the calling
+// worker (Phase 2); a nil pump or full pump queue keeps the Phase 1 in-worker
+// wait for this transaction.
+func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error)) (ret any, err error) {
 	msg := currentNestDispatchMsg()
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
 		return call()
@@ -556,6 +559,22 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 					}
 				}
 			}
+			if notifier, ok := committer.(TransactionReleaseNotifier); ok {
+				txID := tx.ID()
+				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
+			}
+			// Phase 2: hand the post-durability work to the completion pump
+			// so the worker moves on. Submission happens while the entity
+			// locks are still held — that is what keeps same-entity
+			// completions in commit order through the FIFO pump.
+			if ticket != nil && completions != nil {
+				if msg := currentNestDispatchMsg(); msg != nil {
+					if deferPipelinedCompletion(completions, msg, es, tx, ticket, handler, ret) {
+						releaseLocks()
+						return
+					}
+				}
+			}
 			// Nothing after this point can reject the transaction, so the
 			// in-memory state is final and the locks can be released before
 			// the fsync wait. Same-entity successors enqueue with higher
@@ -566,7 +585,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 				// The worker stays blocked here for one group-commit cycle
 				// (Phase 1). This duration is the Phase 2 decision input: if
 				// it dominates worker busy time and adding workers does not
-				// help, move the wait off the worker (async reply).
+				// help, move the wait off the worker (async completion).
 				waitStart := time.Now()
 				<-ticket.Done()
 				obs.ObserveDuration("nest.pipelined.durable_wait", obs.Labels{"handler": handler}, time.Since(waitStart))
@@ -575,10 +594,6 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 					tx.abandon()
 					return
 				}
-			}
-			if notifier, ok := committer.(TransactionReleaseNotifier); ok {
-				txID := tx.ID()
-				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 			}
 			tx.Commit()
 			return

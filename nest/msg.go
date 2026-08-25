@@ -189,9 +189,13 @@ type Msg struct {
 	GroupTransition     *GroupTransitionRequest
 	remoteFinalized     bool
 	remoteIndeterminate bool
-	afterUnlock         []func()
-	postRemoteCommit    []func()
-	getter              entity.Getter
+	// deferredCompletion marks a pipelined transaction whose reply and
+	// AfterCommit hooks were handed to the completion pump: the dispatch
+	// path must not send RetChan itself. Reset by clean().
+	deferredCompletion bool
+	afterUnlock        []func()
+	postRemoteCommit   []func()
+	getter             entity.Getter
 }
 
 func (m *Msg) Key() int64 {

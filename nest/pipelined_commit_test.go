@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 )
 
@@ -295,6 +296,184 @@ func TestPipelinedRequiresCapableCommitter(t *testing.T) {
 	}
 	if handlerRan.Load() {
 		t.Fatal("handler must not run when the committer lacks pipelined capability")
+	}
+}
+
+func TestPipelinedAllowlistGatesHandlers(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 324, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(&rollbackTestEntity{
+		EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind),
+		dao:        &rollbackTestDao{id: id, Value: 10},
+	})
+	committer := newPipelinedTestCommitter(true)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(committer),
+		NestOptionWithPipelinedAllowlist("test_pipelined_allowed"),
+		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	handler := func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		e := es[0].(*rollbackTestEntity)
+		old := e.dao.Value
+		if !RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil }) {
+			return nil, errors.New("missing undo transaction")
+		}
+		e.dao.Value++
+		e.dao.Tracker.MarkPersist(1)
+		return "ok", nil
+	}
+	meta := HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}
+	MustRegisterHandlerWithMeta(NewHandlerName("test_pipelined_allowed"), handler, meta)
+	MustRegisterHandlerWithMeta(NewHandlerName("test_pipelined_unlisted"), handler, meta)
+
+	if ret, err := Nest.Request(context.Background(), NewHandlerName("test_pipelined_allowed"), id, nil); err != nil || ret != "ok" {
+		t.Fatalf("allowlisted handler: ret=%v err=%v", ret, err)
+	}
+	if _, err := Nest.Request(context.Background(), NewHandlerName("test_pipelined_unlisted"), id, nil); !errors.Is(err, ErrPipelinedNotAllowed) {
+		t.Fatalf("unlisted handler err=%v, want %v", err, ErrPipelinedNotAllowed)
+	}
+}
+
+func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
+	// Design doc §8.4: T1 enqueues and releases its locks before durability;
+	// T2 (a multi-entity handler on another worker) reads the state T1 wrote
+	// and enqueues on top of it. Neither reply may escape before its own
+	// ticket resolves, LSN order matches observation order, and resolving T1
+	// alone must not release T2.
+	getter := newMockGetter()
+	idA := mustBuildCastID(t, 325, entity.EntityCategory(1), nestLocalKind)
+	entA := &rollbackTestEntity{
+		EntityBase: entity.NewEntityBase(idA, entity.EntityCategory(1), false, nestLocalKind),
+		dao:        &rollbackTestDao{id: idA, Value: 10},
+	}
+	idB := mustBuildCastID(t, 326, entity.EntityCategory(1), nestLocalKind)
+	entB := &rollbackTestEntity{
+		EntityBase: entity.NewEntityBase(idB, entity.EntityCategory(1), false, nestLocalKind),
+		dao:        &rollbackTestDao{id: idB, Value: 0},
+	}
+	getter.Add(entA)
+	getter.Add(entB)
+	committer := newPipelinedTestCommitter(false)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(committer),
+		NestOptionWithWorkerNumAndMsgCap(4, 1, 64),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	meta := HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}
+	MustRegisterHandlerWithMeta(NewHandlerName("test_cascade_t1"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		e := es[0].(*rollbackTestEntity)
+		old := e.dao.Value
+		if !RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil }) {
+			return nil, errors.New("missing undo transaction")
+		}
+		e.dao.Value = 20
+		e.dao.Tracker.MarkPersist(1)
+		return nil, nil
+	}, meta)
+	// T2 locks both entities and copies A's value into B: a cross-entity read
+	// of state that is not durable yet.
+	MustRegisterHandlerWithMeta(NewHandlerName("test_cascade_t2"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		b := es[0].(*rollbackTestEntity)
+		a := es[1].(*rollbackTestEntity)
+		old := b.dao.Value
+		if !RecordUndo(b.dao, 1, func() error { b.dao.Value = old; return nil }) {
+			return nil, errors.New("missing undo transaction")
+		}
+		b.dao.Value = a.dao.Value
+		b.dao.Tracker.MarkPersist(1)
+		return b.dao.Value, nil
+	}, meta)
+
+	// Dispatch functions are called directly (they are synchronous and fully
+	// exercise locking and commit): in Phase 1 a worker goroutine parks on
+	// its own ticket, so routing T2 through the worker pool would deadlock
+	// the test whenever both requests hash to the same worker — exactly the
+	// serialization Phase 2 would remove.
+	// Direct dispatch calls need the same goroutine-scoped environment that
+	// NestDispatch sets up: a request context (RollbackTx travels in it) and
+	// a guard scope.
+	withDispatchEnv := func(name string, run func() (any, error)) (any, error) {
+		c, releaseCtx := fctx.NewContext()
+		c.MergeMeta(fctx.RequestMeta{Source: "nest", Handler: name})
+		defer releaseCtx()
+		_, releaseScope := entity.NewGuardScope("test:" + name)
+		defer releaseScope()
+		return run()
+	}
+
+	t1Done := make(chan error, 1)
+	go func() {
+		_, err := withDispatchEnv("test_cascade_t1", func() (any, error) {
+			return Nest.singleDispatch("test_cascade_t1", idA, nil)
+		})
+		t1Done <- err
+	}()
+	select {
+	case err := <-t1Done:
+		t.Fatalf("T1 finished before enqueue: %v", err)
+	case <-committer.enqueued: // T1 enqueued (LSN 1), locks released, reply gated
+	}
+
+	t2Done := make(chan any, 1)
+	go func() {
+		ret, err := withDispatchEnv("test_cascade_t2", func() (any, error) {
+			return Nest.multiDispatch("test_cascade_t2", []int64{idB, idA}, nil)
+		})
+		if err != nil {
+			t2Done <- err
+			return
+		}
+		t2Done <- ret
+	}()
+	select {
+	case ret := <-t2Done:
+		t.Fatalf("T2 finished before enqueue: %v", ret)
+	case <-committer.enqueued: // T2 enqueued (LSN 2): it acquired A's lock and read pre-durable state
+	}
+
+	select {
+	case <-t1Done:
+		t.Fatal("T1 replied before its commit was durable")
+	case <-t2Done:
+		t.Fatal("T2 replied before its commit was durable")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	committer.mu.Lock()
+	if len(committer.tickets) != 2 || committer.tickets[0].lsn >= committer.tickets[1].lsn {
+		t.Fatalf("LSN order does not match observation order: %+v", committer.tickets)
+	}
+	t1Ticket, t2Ticket := committer.tickets[0], committer.tickets[1]
+	committer.mu.Unlock()
+
+	// Prefix durability: resolving T1 releases only T1.
+	committer.durable.Store(t1Ticket.lsn)
+	close(t1Ticket.done)
+	if err := <-t1Done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-t2Done:
+		t.Fatal("T2 replied on T1's durability")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	committer.durable.Store(t2Ticket.lsn)
+	close(t2Ticket.done)
+	if ret := <-t2Done; ret != 20 {
+		t.Fatalf("T2 result=%v, want the value written by T1", ret)
+	}
+	if entB.dao.Value != 20 || entB.Base().LastCommitLSN() != t2Ticket.lsn {
+		t.Fatalf("cascade state: value=%d lsn=%d", entB.dao.Value, entB.Base().LastCommitLSN())
 	}
 }
 

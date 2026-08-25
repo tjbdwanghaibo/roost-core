@@ -115,15 +115,21 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
 
 ## 8. 测试与验收
 
+全部已实现（core `nest/pipelined_commit_test.go`、`nest/pipelined_bench_test.go`；kit
+`nestwal/pipelined_test.go`、`nestwal/crash_test.go`、`checkpoint/pipelined_gate_test.go`）：
+
 1. 单元（fake PipelinedCommitter，可控 resolve 时机/结果）：Enqueue 拒绝→回滚完好；
-   indeterminate→abandon 不回滚；早放锁后同实体第二事务可入队且 LSN 递增；AfterCommit 严格
-   晚于 durable；committer 缺能力→`ErrPipelinedCommitterRequired`。
-2. 锁时长回归基准：人工 10ms fsync 延迟下对比 strict vs pipelined 的锁等待分布，量化收益。
-3. crash 注入 e2e（kit，照 `fatal_fence_test` 模子）："Enqueue 后、fsync 前"kill，重放后断言：
-   已回包请求的效果必在恢复状态中；未回包请求效果可无但不矛盾；checkpoint 后端不存在超出
-   durable 前缀的 after-image。
-4. 级联脏读专项：T1 入队未 durable、T2 读 T1 状态并入队；fsync 只到 T1 时 T2 不回包，全完成
-   时两者都回包且重放等价。
+   indeterminate→abandon 不回滚；早放锁（探针在 ticket 未 resolve 时成功抢到实体锁）；
+   AfterCommit 严格晚于 durable；committer 缺能力→`ErrPipelinedCommitterRequired`；
+   白名单外 handler→`ErrPipelinedNotAllowed`。
+2. 锁时长回归基准（`BenchmarkCommitLockHold`）：5ms 模拟 fsync 下 strict 锁不可用
+   ≈5.0ms/次、pipelined ≈50ns/次，端到端回包延迟两者相同。
+3. crash 注入 e2e（`TestNestWALCrashKeepsDurablePrefix`）：子进程持续 Enqueue 时被
+   SIGKILL，重放必须是连续前缀且覆盖每个已 resolve 的 ticket——durability 承诺在真实
+   进程死亡下验证。
+4. 级联脏读专项（`TestPipelinedCascadedReadGatesBothRepliesInOrder`）：T2 跨实体读到
+   T1 未落盘的状态并入队，LSN 序=观察序；只 resolve T1 时仅 T1 回包，全部 resolve 后
+   两者按序回包。
 
 ## 9. 灰度与观测
 
@@ -142,7 +148,71 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
     checkpoint mod 的 `gateDeferrals` 统计与 admission pending（推迟实体计入重试预算，
     WAL 卡死时按既有 fail-stop 语义熔断）。
 
-## 10. Phase 2（按需）
+## 10. Phase 2（决策记录：2026-08-25 灰度试点数据）
 
 异步回包：dispatch 返回 deferred 结果、reply 路径注册 ticket 回调、worker 立即空出。侵入每条
-回包链路，只有"worker 等 ticket 阻塞时长"指标证明成为瓶颈时才做。
+回包链路，预定立项标准："durable_wait 占 worker 忙时 > 30% 且加 worker 无法缓解"。
+
+试点台架：`cube-kit/nestwal/pilot_test.go`（`NESTWAL_PILOT=1` 运行；需要 core >= v1.5.1 的
+`nest.pipelined.durable_wait` 埋点）。真实 nestwal 磁盘 fsync、真实 Nest worker 池、32 个
+闭环客户端、256 实体 + 25% 流量集中在一个热点实体。Apple M5 / APFS 实测（每场景 5s）：
+
+| 场景 | 总 req/s | 热点 req/s | p50 | 热点 p50 | durable_wait 占比 | wait 均值 |
+| --- | --- | --- | --- | --- | --- | --- |
+| strict/w4 | 362 | 91 | 16.0ms | 204ms | — | — |
+| pipelined/w4 | 361 | 91 | 16.0ms | 204ms | 99.0% | 6.73ms |
+| strict/w16 | 549 | 137 | 8.1ms | 192ms | — | — |
+| pipelined/w16 | 555 | 138 | 8.0ms | 189ms | 99.3% | 6.51ms |
+| strict/w32 | 601 | 150 | 8.0ms | 183ms | — | — |
+| pipelined/w32 | 589 | 146 | 8.0ms | 188ms | 99.3% | 6.44ms |
+
+读数：
+
+1. durable_wait 占 worker 忙时 ~99%（极简 handler 下的上界），远超 30% 阈值。
+2. 加 worker 的收益在 w16→w32 塌缩到 +8%，热点链吞吐贴死在 ~150/s ——正是
+   1/durable_wait（6.5ms）的单 worker 串行上限：热点实体按哈希固定落在一个 worker 上，
+   Phase 1 下该 worker 每笔阻塞一个组提交周期，**加 worker 无法缓解**。两条立项标准均满足。
+3. Phase 1 与 strict 的吞吐/延迟相同——符合设计（worker 阻塞相同，Phase 1 的收益在锁可用性，
+   此闭环负载不消费锁）。
+
+结论与判据：**Phase 2 立项条件成立**，适用场景为 durable handler 密集 + 单实体热点。可移植
+判据：Phase 1 的单实体 durable 吞吐硬上限 = 1/durable_wait（本机 SSD ≈150/s；服务器 NVMe
+fsync 0.5–2ms 对应 ≈500–2000/s）。任一热点实体的 durable 事务需求超过该值时，要么 Phase 2，
+要么业务侧拆分该实体。偏置声明：台架 handler 为纳秒级，真实业务逻辑会稀释 wait 占比；25%
+热点集中度是偏保守（偏高）的设定；闭环负载与线上开环流量的排队形态不同。
+
+## 11. Phase 2 实现（异步完成）
+
+由 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap)` 显式开启（默认关闭 = Phase 1
+行为原样）。机制（`nest/pipelined_completion.go`）：
+
+- 派发 worker 不再停在 ticket 上：完成体（AfterCommit 钩子、release 通知、RetChan 回包）
+  在**实体锁内**提交给 engine 级完成泵，worker 立即处理下一条消息。
+- 泵只做"FIFO 等 ticket → 转发"，业务钩子在按实体哈希的完成 worker 池里执行——**同实体
+  完成严格按提交（LSN）序**，与 Phase 1 在派发 worker 上内联执行的顺序语义一致；不同实体
+  的慢钩子互不队头阻塞。
+- 完成体只捕获普通值（cap-1 缓冲的回包 channel、handler 返回值），不持有池化的 Msg；
+  RetChan 缓冲保证客户端超时离开后回包发送也不阻塞。
+- 泵队列满时该事务**降级为 Phase 1 的原地等待**（同步拒绝、绝不丢失）；engine Shutdown
+  把未决完成视为已受理工作，排空后才结束。
+- indeterminate 判定不变：完成体 abandon、不回滚、错误回包；fence 流程照旧。
+- **契约变更**：AfterCommit 钩子在完成池 goroutine 上运行——没有请求上下文（goid 绑定的
+  fctx/guard/CurrentRollbackTx 均不可见）、不持任何实体锁。启用前需审计存量钩子。
+- 指标口径变更：async 模式下 `nest.pipelined.durable_wait` 度量的是"入队→完成"的提交管道
+  延迟（并发采样），"占 worker 忙时比例"的读法只适用于 Phase 1；新增
+  `nest.pipelined.async_total{result}` 计数。
+- 范围：走 dispatcher 的 single/multi/multi-group 路径生效；直调、broadcast、remote batch
+  维持原语义。
+
+同台架同负载复测（Apple M5 / APFS，5s/场景）：
+
+| 场景 | 总 req/s | 热点 req/s | p50 | p95 |
+| --- | --- | --- | --- | --- |
+| pipelined/w32（Phase 1 最优） | 597 | 149 | 7.9ms | 194ms |
+| **async/w4（Phase 2）** | **5653** | **1416** | 4.2ms | 8.2ms |
+| **async/w16（Phase 2）** | **5719** | **1435** | 4.2ms | 8.1ms |
+
+热点链击穿 1/durable_wait 天花板 ~10 倍（149→1435/s，此时受限于 32 个闭环客户端而非框架），
+总吞吐 ×9.6，p95 由 worker 排队主导的 ~200ms 塌缩到一个组提交批次的 ~8ms；w4 与 w16 结果
+相同——worker 数不再是瓶颈，符合设计。验收测试：`nest/pipelined_async_test.go`（worker 解放、
+同实体完成序、indeterminate、Shutdown 排空、泵满降级五项，`-race` 全绿）。

@@ -205,7 +205,11 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		if requeueTransientDispatch(mgr, msg, err) {
 			err = nil
 		}
-		if msg.RetChan != nil {
+		if msg.deferredCompletion {
+			// The completion pump owns the reply: it sends RetChan (or logs
+			// the failure) once the commit ticket resolves. Sending here
+			// would leak a result whose durability is not decided yet.
+		} else if msg.RetChan != nil {
 			if err != nil {
 				msg.RetChan <- err
 			} else {
@@ -663,7 +667,7 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	}
 	releaseOnce := sync.OnceFunc(releaseLocks)
 	defer releaseOnce()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
+	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params)
 	})
 }
@@ -716,7 +720,7 @@ func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, 
 	}
 	releaseOnce := sync.OnceFunc(releaseLocks)
 	defer releaseOnce()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
+	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params)
 	})
 }
@@ -774,9 +778,21 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 	}
 	releaseOnce := sync.OnceFunc(releaseLocks)
 	defer releaseOnce()
-	return invokeWithTransaction(entry.meta, es, mgr.committer, name, releaseOnce, func() (any, error) {
+	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
 		return entry.handler(es, params, HandlerOptionWithGroup(groupLen))
 	})
+}
+
+// invokeHandlerTransaction is the single dispatch-side entry into
+// invokeWithTransaction: it enforces the pipelined allowlist before any
+// handler code runs and supplies the engine's completion pump.
+func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, name string, releaseLocks func(), call func() (any, error)) (any, error) {
+	if meta.Durability == DurabilityPipelined && mgr != nil && mgr.pipelinedAllow != nil {
+		if _, ok := mgr.pipelinedAllow[name]; !ok {
+			return nil, fmt.Errorf("%w: %q", ErrPipelinedNotAllowed, name)
+		}
+	}
+	return invokeWithTransaction(meta, es, mgr.committer, name, releaseLocks, mgr.completions, call)
 }
 
 func firstDispatchEntityMissing(es []entity.IThreadSafeEntity) bool {
@@ -894,7 +910,7 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			oneEntity[0] = e
 			// Broadcast has no early-release closure: pipelined handlers run
 			// with strict in-lock commit semantics on this path.
-			if _, err := invokeWithTransaction(entry.meta, oneEntity, mgr.committer, name, nil, func() (any, error) {
+			if _, err := mgr.invokeHandlerTransaction(entry.meta, oneEntity, name, nil, func() (any, error) {
 				return entry.handler(oneEntity, params)
 			}); err != nil {
 				slog.Debug("nest broadcast handler failed", "id", meta.FullID, "handler", name, "err", err)
