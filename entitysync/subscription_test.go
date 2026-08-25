@@ -174,6 +174,170 @@ func TestSubscriptionCoordinatorFlushSubjectAndContainsSinkPanic(t *testing.T) {
 	}
 }
 
+func TestSubscriptionCoordinatorCloseIsTerminal(t *testing.T) {
+	sink := &recordingEnvelopeSink{}
+	coordinator := NewSubscriptionCoordinator(sink)
+	packCount := 0
+	state := newSubscriptionTestState(t, 1005, &packCount)
+	subscriber := SubscriberRef{Kind: SubscriberKindPlayer, ID: 14}
+	profile := entity.SyncProfile{Key: "default"}
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, state, profile); err != nil {
+		t.Fatal(err)
+	}
+
+	state.MarkDirty(1)
+	prepared, err := state.Prepare([]entity.SyncProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.Close()
+	if _, ok := coordinator.Get(subscriber, state.SubjectID()); ok {
+		t.Fatal("Close retained subscription membership")
+	}
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, state, profile); !errors.Is(err, ErrCoordinatorClosed) {
+		t.Fatalf("Subscribe after Close error=%v", err)
+	}
+	if err := coordinator.Unsubscribe(context.Background(), subscriber, state.SubjectID()); !errors.Is(err, ErrCoordinatorClosed) {
+		t.Fatalf("Unsubscribe after Close error=%v", err)
+	}
+	if err := coordinator.Distribute(context.Background(), prepared); !errors.Is(err, ErrCoordinatorClosed) {
+		t.Fatalf("Distribute after Close error=%v", err)
+	}
+	if state.Version() != 0 || !state.PendingDirty() {
+		t.Fatalf("closed coordinator committed prepared state: version=%d dirty=%v", state.Version(), state.PendingDirty())
+	}
+	coordinator.SetSink(sink)
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, state, profile); !errors.Is(err, ErrCoordinatorClosed) {
+		t.Fatalf("SetSink reopened coordinator: %v", err)
+	}
+}
+
+func TestSubscriptionCoordinatorDistributeBatchIsAtomic(t *testing.T) {
+	sink := &recordingEnvelopeSink{}
+	coordinator := NewSubscriptionCoordinator(sink)
+	packCount := 0
+	first := newSubscriptionTestState(t, 1101, &packCount)
+	second := newSubscriptionTestState(t, 1102, &packCount)
+	profile := entity.SyncProfile{Key: "default"}
+	for id := int64(1); id <= 2; id++ {
+		subscriber := SubscriberRef{Kind: SubscriberKindPlayer, ID: id}
+		if _, err := coordinator.Subscribe(context.Background(), subscriber, first, profile); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := coordinator.Subscribe(context.Background(), subscriber, second, profile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sink.mu.Lock()
+	sink.batches = nil
+	sink.mu.Unlock()
+	first.MarkDirty(1)
+	second.MarkDirty(2)
+	firstPrepared, err := first.Prepare([]entity.SyncProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPrepared, err := second.Prepare([]entity.SyncProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.DistributeBatch(context.Background(), []*entity.PreparedSubjectSync{secondPrepared, firstPrepared}); err != nil {
+		t.Fatal(err)
+	}
+	batches := sink.snapshot()
+	if len(batches) != 1 || len(batches[0]) != 4 {
+		t.Fatalf("batch admission = %+v", batches)
+	}
+	if first.Version() != 1 || second.Version() != 1 || first.PendingDirty() || second.PendingDirty() {
+		t.Fatalf("batch was not committed: first=(%d,%v) second=(%d,%v)", first.Version(), first.PendingDirty(), second.Version(), second.PendingDirty())
+	}
+
+	wantErr := errors.New("batch full")
+	sink.rejectErr = wantErr
+	first.MarkDirty(4)
+	second.MarkDirty(8)
+	firstPrepared, err = first.Prepare([]entity.SyncProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPrepared, err = second.Prepare([]entity.SyncProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.DistributeBatch(context.Background(), []*entity.PreparedSubjectSync{firstPrepared, secondPrepared}); !errors.Is(err, wantErr) {
+		t.Fatalf("DistributeBatch error=%v", err)
+	}
+	if first.Version() != 1 || second.Version() != 1 || !first.PendingDirty() || !second.PendingDirty() {
+		t.Fatalf("failed batch partially committed: first=(%d,%v) second=(%d,%v)", first.Version(), first.PendingDirty(), second.Version(), second.PendingDirty())
+	}
+}
+
+func TestSubscriptionCoordinatorRejectsFinishedBatchBeforeAdmission(t *testing.T) {
+	sink := &recordingEnvelopeSink{}
+	coordinator := NewSubscriptionCoordinator(sink)
+	packCount := 0
+	first := newSubscriptionTestState(t, 1201, &packCount)
+	second := newSubscriptionTestState(t, 1202, &packCount)
+	profile := entity.SyncProfile{Key: "default"}
+	subscriber := SubscriberRef{Kind: SubscriberKindPlayer, ID: 1}
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, first, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.Subscribe(context.Background(), subscriber, second, profile); err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	sink.batches = nil
+	sink.mu.Unlock()
+	first.MarkDirty(1)
+	second.MarkDirty(2)
+	firstPrepared, err := first.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPrepared, err := second.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondPrepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.DistributeBatch(context.Background(), []*entity.PreparedSubjectSync{firstPrepared, secondPrepared}); !errors.Is(err, entity.ErrSubjectSyncFinished) {
+		t.Fatalf("DistributeBatch error=%v", err)
+	}
+	if len(sink.snapshot()) != 0 {
+		t.Fatal("invalid prepared batch reached durable sink")
+	}
+	if first.Version() != 0 || !first.PendingDirty() || second.Version() != 1 {
+		t.Fatalf("invalid batch changed state: first=(%d,%v) second=%d", first.Version(), first.PendingDirty(), second.Version())
+	}
+}
+
+func TestSubscriptionCoordinatorCommitRemainsValidWhenStateClosesAfterAdmission(t *testing.T) {
+	packCount := 0
+	state := newSubscriptionTestState(t, 1203, &packCount)
+	coordinator := NewSubscriptionCoordinator(discardEnvelopeSink{})
+	profile := entity.SyncProfile{Key: "default"}
+	if _, err := coordinator.Subscribe(context.Background(), SubscriberRef{Kind: SubscriberKindPlayer, ID: 1}, state, profile); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.SetSink(ReliableEnvelopeSinkFunc(func(context.Context, []DeliveryEnvelope) error {
+		state.Close()
+		return nil
+	}))
+	state.MarkDirty(1)
+	prepared, err := state.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Distribute(context.Background(), prepared); err != nil {
+		t.Fatalf("admitted update failed to commit during Close: %v", err)
+	}
+	if state.Version() != 1 || state.Enabled() {
+		t.Fatalf("closed state version=%d enabled=%v", state.Version(), state.Enabled())
+	}
+}
+
 func BenchmarkSubscriptionCoordinatorSharedPayload100Subscribers(b *testing.B) {
 	coordinator := NewSubscriptionCoordinator(discardEnvelopeSink{})
 	state := entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{

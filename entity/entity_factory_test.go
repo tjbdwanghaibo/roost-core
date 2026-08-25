@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 )
@@ -139,7 +140,7 @@ func TestEntityManagerCreateUsesInstanceDependencies(t *testing.T) {
 		t.Fatalf("instance create did not publish generated entity: %+v", value)
 	}
 	id := value.ID()
-	if err := access.Destroy(value, EntityDestroyReason(0), false); err != nil {
+	if err := access.Destroy(context.Background(), value, EntityDestroyReason(0), false); err != nil {
 		t.Fatal(err)
 	}
 	if manager.Get(id) != nil {
@@ -297,7 +298,9 @@ func TestDestroyEntity(t *testing.T) {
 	}
 	e, _ := manager.Create(param)
 
-	manager.Remove(e, testDestroyCommon, false)
+	if err := manager.Destroy(context.Background(), e, testDestroyCommon, false); err != nil {
+		t.Fatal(err)
+	}
 
 	if manager.Get(e.ID()) != nil {
 		t.Fatal("entity should be removed from manager")

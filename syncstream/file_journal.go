@@ -42,6 +42,9 @@ func NewFileHistoryJournal(directory string, initialEpoch uint64) (*FileHistoryJ
 	if err := os.MkdirAll(absolute, 0o700); err != nil {
 		return nil, err
 	}
+	if err := syncJournalDirectory(absolute); err != nil {
+		return nil, fmt.Errorf("syncstream: sync journal directory: %w", err)
+	}
 	if initialEpoch == 0 {
 		initialEpoch = newEpoch()
 	}
@@ -170,7 +173,13 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
-	file, err := os.OpenFile(journal.walPath(journal.generation), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	path := journal.walPath(journal.generation)
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return statErr
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -180,6 +189,9 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 	closeErr := file.Close()
 	if err == nil {
 		err = closeErr
+	}
+	if err == nil && created {
+		err = syncJournalDirectory(journal.directory)
 	}
 	return err
 }
@@ -207,6 +219,9 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	}
 	if err := wal.Close(); err != nil {
 		return err
+	}
+	if err := syncJournalDirectory(journal.directory); err != nil {
+		return fmt.Errorf("syncstream: persist WAL generation %d: %w", next, err)
 	}
 
 	data, err := json.Marshal(fileCheckpoint{Generation: next, Snapshot: snapshot})
@@ -239,7 +254,7 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryName, journal.checkpointPath(next)); err != nil {
+	if err := durableReplace(temporaryName, journal.checkpointPath(next), journal.directory); err != nil {
 		return err
 	}
 	removeTemporary = false
@@ -253,8 +268,16 @@ func (journal *FileHistoryJournal) removeObsoleteGenerations(current uint64) {
 		return
 	}
 	obsolete := current - 2
-	_ = os.Remove(journal.checkpointPath(obsolete))
-	_ = os.Remove(journal.walPath(obsolete))
+	removed := false
+	if err := os.Remove(journal.checkpointPath(obsolete)); err == nil {
+		removed = true
+	}
+	if err := os.Remove(journal.walPath(obsolete)); err == nil {
+		removed = true
+	}
+	if removed {
+		_ = syncJournalDirectory(journal.directory)
+	}
 }
 
 func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) error {

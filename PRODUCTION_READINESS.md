@@ -22,7 +22,8 @@
 ## 3. Save/Load 与主动 Flush
 
 - `checkpoint.Mod` 是注册到应用 Registry 的唯一 checkpoint 能力。应用不得绕过 Mod 直接持有内部 checkpoint。
-- admission 失败的 save/delete 会进入有界 pending 集合，由后台 worker 重试；`Flush(ctx)` 同时排空 pending 与 checkpoint 队列。
+- admission 失败的 save 会进入有界 pending 集合，由后台 worker 重试；`Flush(ctx)` 同时排空 pending 与 checkpoint 队列。
+- 持久删除在 Entity mutex 内先生成版本化 tombstone，并等待 Redis durable admission 成功后才从 EntityManager 移除。删除 admission 的失败结果可能不确定，因此必须保留内存 Entity、fence 进程并由 WAL replay 恢复，禁止退化为仅内存重试。
 - `checkpoint.admission_pending_capacity` 是硬上限；达到上限会触发 RuntimeFailure 并 fence 进程，禁止用无限内存换可用性。
 - `Stop(ctx)` 在关闭 worker 前执行最终 flush；超时或失败必须向上返回，不允许静默丢弃。
 - Mongo 保存使用版本、marker epoch、lock fence 和 route epoch 做条件更新；加载按完整聚合 snapshot 恢复，不发布半初始化 Entity。
@@ -32,7 +33,7 @@
 
 ## 4. Remote Entity
 
-- Read 模式只暴露不可变 snapshot，L1 使用进程内原子快照，L2 使用共享 snapshot store；业务读取不获取分布式锁。
+- Read 模式只暴露不可变 snapshot，L1 使用有界进程内原子快照，L2 使用共享 snapshot store；业务读取不获取分布式锁。Cached 只读 L1/L2，Monotonic 在版本不足时对相同 key/version 单飞回源，Linearizable 始终读取权威存储；回源并发、等待者和超时均有默认硬上限。
 - Write 模式先通过 Redis ownership marker CAS 获取 owner/marker epoch，再获取带 fence 的分布式锁，之后才加载和修改权威 Entity。
 - 提交条件包含 `StateVersion + MarkerEpoch + LockFence + RouteEpoch`。任一维度落后都会被存储层拒绝。
 - ownership 切换、shared mode 和 owner transfer 均为显式状态机；状态迁移错误必须返回，不能忽略。
@@ -42,30 +43,36 @@
 ## 5. 帧同步与重同步
 
 - replication 数据面支持 snapshot、delta、LOD/interest、分片、压缩和可靠重传；服务器可按房间以 20 Hz 驱动。
-- 房间默认硬限制 100 subject/100 subscriber。单个慢客户端只淘汰自己的 session，框架自动解除其房间订阅，不阻塞同帧的健康客户端；退房、断线和房间销毁会释放 sequence/baseline/LOD 状态。
+- 房间默认硬限制 100 subject/100 subscriber。`RoomManager` 同时限制房间总数、全局 subject/subscriber 预算并回收空闲房间；应用不得自行维护无上限的房间 map。
+- 单个慢客户端只淘汰自己的 session；共享 transport sink 按房间分片，不让一个房间阻塞全部房间。框架生命周期回调使用固定 worker 和有界队列，退房、断线和房间销毁会释放 sequence/baseline/LOD 状态。
 - UDP 控制面使用固定长度带校验的 ACK/Resync 报文，包含 room、epoch、tick 和单调 sequence。过期 epoch、回退 sequence、非法 checksum 均被拒绝。
 - `cube-kit/replication.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
 
-## 6. 发布顺序与门禁
+## 6. Saga
+
+跨独立事务域的流程使用 `saga` 包。生产部署必须使用具备原子状态/outbox、
+lease fencing、幂等 completion receipt 的持久化 Store；完整语义见 [SAGA.md](SAGA.md)。
+
+## 7. 发布顺序与门禁
 
 发布顺序：
 
-1. 发布 `roost-core v1.3.0`。
-2. 使用已发布 core 构建并发布 `roost-kit v1.3.0`。
-3. 发布 `roost-codegen v1.3.0`，新项目默认引用上述两个版本。
+1. 发布包含 Saga contract/engine 的 `roost-core v1.4.0`。
+2. 使用已发布 core 构建并发布 `roost-kit v1.4.0`。
+3. 发布 `roost-codegen v1.4.0`，新项目默认引用上述两个版本。
 
 每次发布至少执行：
 
 ```text
 go test ./...
 go vet ./...
-go test -race ./entity ./nest ./checkpoint ./entitysync ./replication
-go test -race ./checkpoint ./remote_entity ./nestwal ./nest ./replication
+go test -race ./entity ./nest ./checkpoint ./entitysync ./replication ./sync ./syncstream ./ownerroute ./etcd ./cache ./saga
+go test -race ./checkpoint ./remote_entity ./nestwal ./nest ./replication ./sync ./saga
 git diff --check
 ```
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 
-升级到 v1.3.0 前必须先停止旧 writer 并排空旧 checkpoint 队列。旧的物理删除记录没有 version，不能混入新进程；升级后必须重新生成 Entity，使 `RemoveSnapshot` 在 Entity mutex 内递增 DAO tracker version。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。
+升级前必须先停止旧 writer 并排空旧 checkpoint 队列。`EntityManager.Remove/RemoveAfter` 与无返回值删除 hook 已移除，业务必须改用带 context 和 error 的 `ManagerAccess.Destroy`。旧的物理删除记录没有 version，不能混入新进程；升级后必须重新生成 Entity，使 `RemoveSnapshot` 在 Entity mutex 内递增 DAO tracker version。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。文件型 sync history 的 WAL 与 checkpoint 会在发布提交点同步目录元数据；Windows 使用 write-through rename，Linux/Unix 使用 rename 后目录 fsync。
 
 第二条 race 命令在 `cube-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

@@ -352,19 +352,32 @@ func (e *EntityBase) ClearBase() {
 }
 
 func (e *EntityBase) doClear() {
-	if e.onClear != nil {
-		e.onClear()
+	var firstPanic any
+	runCleanup := func(fn func()) {
+		if fn == nil {
+			return
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil && firstPanic == nil {
+				firstPanic = recovered
+			}
+		}()
+		fn()
 	}
-	if e.eventBus != nil {
-		e.eventBus.Destroy()
-		e.eventBus = nil
+	onClear := e.onClear
+	e.onClear = nil
+	runCleanup(onClear)
+	eventBus := e.eventBus
+	e.eventBus = nil
+	if eventBus != nil {
+		runCleanup(eventBus.Destroy)
 	}
 	e.syncMu.Lock()
 	syncState := e.sync
 	e.sync = nil
 	e.syncMu.Unlock()
 	if syncState != nil {
-		syncState.Close()
+		runCleanup(syncState.Close)
 	}
 	e.id = 0
 	e.category = EntityCategoryNone
@@ -376,8 +389,10 @@ func (e *EntityBase) doClear() {
 	e.groupState.Store(int32(EntityGroupTransitionNone))
 	e.groupTargetID.Store(0)
 	e.owner.Store(nil)
-	e.onClear = nil
 	e.onDestroy = nil
+	if firstPanic != nil {
+		panic(firstPanic)
+	}
 }
 
 // DestroyAll invokes the destroy hook (for components cleanup).
@@ -464,6 +479,15 @@ func (c *ComponentManager) InitAll(param *EntityCreateParam, isCreate bool) erro
 
 // DestroyAll calls OnDestroy on all components.
 func (c *ComponentManager) DestroyAll(reason EntityDestroyReason) {
+	var firstPanic any
+	destroy := func(comp ComponentInterfaceBase) {
+		defer func() {
+			if recovered := recover(); recovered != nil && firstPanic == nil {
+				firstPanic = recovered
+			}
+		}()
+		comp.OnDestroy(reason)
+	}
 	destroyed := make(map[ComponentType]bool, len(c.initOrder))
 	for i := len(c.initOrder) - 1; i >= 0; i-- {
 		ct := c.initOrder[i]
@@ -471,8 +495,8 @@ func (c *ComponentManager) DestroyAll(reason EntityDestroyReason) {
 		if comp == nil || destroyed[ct] {
 			continue
 		}
-		comp.OnDestroy(reason)
 		destroyed[ct] = true
+		destroy(comp)
 	}
 	types := sortedComponentTypes(c.Comps)
 	for i := len(types) - 1; i >= 0; i-- {
@@ -481,8 +505,12 @@ func (c *ComponentManager) DestroyAll(reason EntityDestroyReason) {
 			continue
 		}
 		if comp := c.Comps[ct]; comp != nil {
-			comp.OnDestroy(reason)
+			destroyed[ct] = true
+			destroy(comp)
 		}
+	}
+	if firstPanic != nil {
+		panic(firstPanic)
 	}
 }
 

@@ -3,6 +3,8 @@ package entity
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -105,6 +107,124 @@ func TestRemoteSnapshotPayloadCannotMutateCache(t *testing.T) {
 	again, _, _ := cache.Get(context.Background(), key, RemoteReadCached, 0)
 	if string(again.Payload.BytesCopy()) != "immutable" {
 		t.Fatalf("cache payload mutated through read copy")
+	}
+}
+
+func TestRemoteSnapshotLinearizableAlwaysLoadsAuthority(t *testing.T) {
+	const kind EntityKind = 198
+	MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: 1, RemotePolicy: RemotePolicyManaged})
+	id, err := BuildEntityID(9106, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
+	var calls atomic.Int32
+	var observed RemoteReadConsistency
+	cache := NewRemoteSnapshotCache(RemoteSnapshotCacheConfig{Shards: 1, MaxEntries: 4, MaxBytes: 1024}, nil,
+		func(_ context.Context, got RemoteSnapshotKey, consistency RemoteReadConsistency, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
+			calls.Add(1)
+			observed = consistency
+			if got != key || minVersion != 1 {
+				t.Fatalf("loader key=%+v min=%d", got, minVersion)
+			}
+			return RemoteSnapshotEnvelope{Key: key, StateVersion: 2, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Full: true, Payload: CopyFrozenRemoteSnapshotPayload([]byte("authority"))}, true, nil
+		})
+	if err := cache.Publish(context.Background(), RemoteSnapshotEnvelope{Key: key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Full: true, Payload: CopyFrozenRemoteSnapshotPayload([]byte("cached"))}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := cache.Get(context.Background(), key, RemoteReadLinearizable, 1)
+	if err != nil || !ok || calls.Load() != 1 || observed != RemoteReadLinearizable || string(got.Payload.BytesCopy()) != "authority" {
+		t.Fatalf("snapshot=%+v ok=%v calls=%d consistency=%d err=%v", got, ok, calls.Load(), observed, err)
+	}
+}
+
+func TestRemoteSnapshotCachedMissDoesNotLoadAuthority(t *testing.T) {
+	const kind EntityKind = 200
+	MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: 1, RemotePolicy: RemotePolicyManaged})
+	id, err := BuildEntityID(9108, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
+	var calls atomic.Int32
+	cache := NewRemoteSnapshotCache(RemoteSnapshotCacheConfig{}, nil,
+		func(context.Context, RemoteSnapshotKey, RemoteReadConsistency, uint64) (RemoteSnapshotEnvelope, bool, error) {
+			calls.Add(1)
+			return RemoteSnapshotEnvelope{}, false, nil
+		})
+	if _, ok, err := cache.Get(context.Background(), key, RemoteReadCached, 0); err != nil || ok {
+		t.Fatalf("cached miss ok=%v err=%v", ok, err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("cached miss performed %d authoritative loads", calls.Load())
+	}
+}
+
+func TestRemoteSnapshotMonotonicStaleLoadsAreCoalesced(t *testing.T) {
+	const kind EntityKind = 199
+	MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: 1, RemotePolicy: RemotePolicyManaged})
+	id, err := BuildEntityID(9107, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	cache := NewRemoteSnapshotCache(RemoteSnapshotCacheConfig{Shards: 1, MaxEntries: 4, MaxBytes: 1024, MaxWaiters: 32}, nil,
+		func(context.Context, RemoteSnapshotKey, RemoteReadConsistency, uint64) (RemoteSnapshotEnvelope, bool, error) {
+			if calls.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return RemoteSnapshotEnvelope{Key: key, StateVersion: 2, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Full: true, Payload: CopyFrozenRemoteSnapshotPayload([]byte("fresh"))}, true, nil
+		})
+	if err := cache.Publish(context.Background(), RemoteSnapshotEnvelope{Key: key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Full: true, Payload: CopyFrozenRemoteSnapshotPayload([]byte("old"))}); err != nil {
+		t.Fatal(err)
+	}
+	const readers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, readers)
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, ok, err := cache.Get(context.Background(), key, RemoteReadMonotonic, 2)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if !ok || got.StateVersion != 2 {
+				errs <- errors.New("monotonic load did not return requested version")
+			}
+		}()
+	}
+	<-started
+	deadline := time.Now().Add(time.Second)
+	for {
+		cache.loadMu.Lock()
+		call := cache.loads[remoteSnapshotLoadKey{key: key, minVersion: 2}]
+		waiters := 0
+		if call != nil {
+			waiters = call.waiters
+		}
+		cache.loadMu.Unlock()
+		if waiters == readers-1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("coalesced waiters=%d, want %d", waiters, readers-1)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("authority loads=%d, want 1", calls.Load())
 	}
 }
 

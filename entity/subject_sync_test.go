@@ -203,3 +203,66 @@ func TestSubjectSyncDirtyNotifierPanicIsContained(t *testing.T) {
 		t.Fatal("notifier panic lost dirty state")
 	}
 }
+
+func TestPreparedSubjectSyncBatchOwnsCompletionAndCommitsAll(t *testing.T) {
+	newState := func(id int64) *SubjectSyncState {
+		return NewSubjectSyncState(SubjectSyncCreateParam{
+			Enabled: true, SubjectID: id,
+			Packer: SubjectSyncPackFunc{Delta: func(SyncProfile, uint64) (FrozenSyncPayload, error) {
+				return TakeFrozenSyncPayload(1, []byte("delta")), nil
+			}},
+		})
+	}
+	first, second := newState(9011), newState(9012)
+	first.MarkDirty(1)
+	second.MarkDirty(2)
+	firstPrepared, err := first.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPrepared, err := second.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := ReservePreparedSubjectSyncBatch([]*PreparedSubjectSync{secondPrepared, firstPrepared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstPrepared.Commit(); !errors.Is(err, ErrSubjectSyncFinished) {
+		t.Fatalf("reserved item Commit error=%v", err)
+	}
+	if err := secondPrepared.Abort(); !errors.Is(err, ErrSubjectSyncFinished) {
+		t.Fatalf("reserved item Abort error=%v", err)
+	}
+	if err := batch.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if first.Version() != 1 || second.Version() != 1 || first.PendingDirty() || second.PendingDirty() {
+		t.Fatalf("batch state first=(%d,%v) second=(%d,%v)", first.Version(), first.PendingDirty(), second.Version(), second.PendingDirty())
+	}
+}
+
+func TestPreparedSubjectSyncBatchSurvivesCloseAfterReservation(t *testing.T) {
+	state := NewSubjectSyncState(SubjectSyncCreateParam{
+		Enabled: true, SubjectID: 9013,
+		Packer: SubjectSyncPackFunc{Delta: func(SyncProfile, uint64) (FrozenSyncPayload, error) {
+			return TakeFrozenSyncPayload(1, []byte("delta")), nil
+		}},
+	})
+	state.MarkDirty(1)
+	prepared, err := state.Prepare(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := ReservePreparedSubjectSyncBatch([]*PreparedSubjectSync{prepared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Close()
+	if err := batch.Commit(); err != nil {
+		t.Fatalf("reserved durable admission became stale during Close: %v", err)
+	}
+	if state.Version() != 1 || state.Enabled() {
+		t.Fatalf("closed state version=%d enabled=%v", state.Version(), state.Enabled())
+	}
+}

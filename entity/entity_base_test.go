@@ -82,6 +82,26 @@ func TestTouchAfterRemoved(t *testing.T) {
 	}
 }
 
+func TestClearCompletesAfterCleanupHookPanic(t *testing.T) {
+	base := NewEntityBase(22, testEntityCategoryPlayer, false)
+	base.SetHooks(func() { panic("clear failed") }, nil)
+	if !base.Touch() {
+		t.Fatal("Touch failed")
+	}
+	base.SetRemoved()
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("expected cleanup panic")
+			}
+		}()
+		base.UnTouch()
+	}()
+	if !base.IsClear() || base.ID() != 0 || base.GetEntityCategory() != EntityCategoryNone {
+		t.Fatalf("cleanup stopped after hook panic: clear=%v id=%d category=%d", base.IsClear(), base.ID(), base.GetEntityCategory())
+	}
+}
+
 func TestConcurrentTouch(t *testing.T) {
 	e := newTestEntity(3, testEntityCategoryPlayer)
 	const goroutines = 100

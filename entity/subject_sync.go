@@ -16,6 +16,13 @@ var (
 	ErrSubjectSyncPacker       = errors.New("entity: subject sync packer is required")
 	ErrSubjectSyncStalePrepare = errors.New("entity: subject sync prepared update is stale")
 	ErrSubjectSyncFinished     = errors.New("entity: subject sync prepared update is already finished")
+	ErrSubjectSyncBatchInvalid = errors.New("entity: subject sync prepared batch is invalid")
+)
+
+const (
+	preparedSubjectSyncOpen uint32 = iota
+	preparedSubjectSyncFinished
+	preparedSubjectSyncReserved
 )
 
 const SyncMaskFull uint64 = ^uint64(0)
@@ -519,7 +526,6 @@ func (s *SubjectSyncState) Close() {
 	s.dirtyMask = 0
 	s.fullDirty = false
 	s.fullReason = SyncFullReasonNone
-	s.inflightToken = 0
 	s.packer = nil
 	s.dirtyNotifier = nil
 	s.mu.Unlock()
@@ -551,50 +557,152 @@ func (p *PreparedSubjectSync) Updates() []SubjectSyncUpdate {
 }
 
 func (p *PreparedSubjectSync) Commit() error {
-	if p == nil || p.state == nil {
-		return ErrSubjectSyncStalePrepare
+	batch, err := ReservePreparedSubjectSyncBatch([]*PreparedSubjectSync{p})
+	if err != nil {
+		return err
 	}
-	if !p.finished.CompareAndSwap(0, 1) {
-		return ErrSubjectSyncFinished
-	}
-	s := p.state
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enabled || s.inflightToken != p.token || s.version != p.baseVersion {
-		if s.inflightToken == p.token {
-			s.inflightToken = 0
-		}
-		return ErrSubjectSyncStalePrepare
-	}
-	s.version = p.version
-	if s.dirtyGeneration == p.generation {
-		s.dirtyMask = 0
-		s.fullDirty = false
-		s.fullReason = SyncFullReasonNone
-	}
-	s.inflightToken = 0
-	s.lastError = nil
-	return nil
+	return batch.Commit()
 }
 
 func (p *PreparedSubjectSync) Abort() error { return p.AbortWithError(nil) }
 
 func (p *PreparedSubjectSync) AbortWithError(cause error) error {
-	if p == nil || p.state == nil {
-		return ErrSubjectSyncStalePrepare
+	batch, err := ReservePreparedSubjectSyncBatch([]*PreparedSubjectSync{p})
+	if err != nil {
+		return err
 	}
-	if !p.finished.CompareAndSwap(0, 1) {
+	return batch.AbortWithError(cause)
+}
+
+// PreparedSubjectSyncBatch reserves a set of prepared subjects before a
+// downstream admission. Reservation prevents any caller from independently
+// committing or aborting one member while the batch is in flight. Commit and
+// AbortWithError update every SubjectSyncState while holding all state locks,
+// so observers cannot observe or create a partially committed batch.
+type PreparedSubjectSyncBatch struct {
+	items    []*PreparedSubjectSync
+	finished atomic.Uint32
+}
+
+// ReservePreparedSubjectSyncBatch transfers completion ownership for every
+// prepared item to one batch. Callers must invoke Commit after successful
+// durable admission or AbortWithError after failed admission.
+func ReservePreparedSubjectSyncBatch(items []*PreparedSubjectSync) (*PreparedSubjectSyncBatch, error) {
+	if len(items) == 0 {
+		return nil, ErrSubjectSyncBatchInvalid
+	}
+	ordered := append([]*PreparedSubjectSync(nil), items...)
+	seen := make(map[*SubjectSyncState]struct{}, len(ordered))
+	for _, item := range ordered {
+		if item == nil || item.state == nil {
+			return nil, ErrSubjectSyncBatchInvalid
+		}
+		if _, duplicate := seen[item.state]; duplicate {
+			return nil, ErrSubjectSyncBatchInvalid
+		}
+		seen[item.state] = struct{}{}
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := ordered[i], ordered[j]
+		if left.state.subjectID != right.state.subjectID {
+			return left.state.subjectID < right.state.subjectID
+		}
+		return left.token < right.token
+	})
+	reserved := 0
+	for _, item := range ordered {
+		if !item.finished.CompareAndSwap(preparedSubjectSyncOpen, preparedSubjectSyncReserved) {
+			for i := 0; i < reserved; i++ {
+				ordered[i].finished.CompareAndSwap(preparedSubjectSyncReserved, preparedSubjectSyncOpen)
+			}
+			return nil, ErrSubjectSyncFinished
+		}
+		reserved++
+	}
+	for _, item := range ordered {
+		state := item.state
+		state.mu.Lock()
+		valid := state.enabled && state.inflightToken == item.token && state.version == item.baseVersion
+		state.mu.Unlock()
+		if !valid {
+			for _, rollback := range ordered {
+				rollback.finished.CompareAndSwap(preparedSubjectSyncReserved, preparedSubjectSyncOpen)
+			}
+			return nil, ErrSubjectSyncStalePrepare
+		}
+	}
+	return &PreparedSubjectSyncBatch{items: ordered}, nil
+}
+
+// Commit atomically advances all reserved content versions.
+func (b *PreparedSubjectSyncBatch) Commit() error {
+	if b == nil || len(b.items) == 0 {
+		return ErrSubjectSyncBatchInvalid
+	}
+	if !b.finished.CompareAndSwap(0, 1) {
 		return ErrSubjectSyncFinished
 	}
-	s := p.state
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.inflightToken != p.token {
-		return ErrSubjectSyncStalePrepare
+	for _, item := range b.items {
+		item.state.mu.Lock()
 	}
-	s.inflightToken = 0
-	s.lastError = cause
+	defer func() {
+		for i := len(b.items) - 1; i >= 0; i-- {
+			b.items[i].state.mu.Unlock()
+		}
+	}()
+	for _, item := range b.items {
+		state := item.state
+		if item.finished.Load() != preparedSubjectSyncReserved || state.inflightToken != item.token || state.version != item.baseVersion {
+			b.abortLocked(ErrSubjectSyncStalePrepare)
+			return ErrSubjectSyncStalePrepare
+		}
+	}
+	for _, item := range b.items {
+		state := item.state
+		state.version = item.version
+		if state.dirtyGeneration == item.generation {
+			state.dirtyMask = 0
+			state.fullDirty = false
+			state.fullReason = SyncFullReasonNone
+		}
+		state.inflightToken = 0
+		state.lastError = nil
+		item.finished.Store(preparedSubjectSyncFinished)
+	}
 	return nil
+}
+
+func (b *PreparedSubjectSyncBatch) Abort() error { return b.AbortWithError(nil) }
+
+// AbortWithError releases every reservation without consuming dirty state.
+func (b *PreparedSubjectSyncBatch) AbortWithError(cause error) error {
+	if b == nil || len(b.items) == 0 {
+		return ErrSubjectSyncBatchInvalid
+	}
+	if !b.finished.CompareAndSwap(0, 1) {
+		return ErrSubjectSyncFinished
+	}
+	for _, item := range b.items {
+		item.state.mu.Lock()
+	}
+	defer func() {
+		for i := len(b.items) - 1; i >= 0; i-- {
+			b.items[i].state.mu.Unlock()
+		}
+	}()
+	b.abortLocked(cause)
+	return nil
+}
+
+func (b *PreparedSubjectSyncBatch) abortLocked(cause error) {
+	for _, item := range b.items {
+		state := item.state
+		if state.inflightToken == item.token {
+			state.inflightToken = 0
+			state.lastError = cause
+		}
+		item.finished.Store(preparedSubjectSyncFinished)
+	}
 }
 
 func normalizeSyncProfiles(profiles []SyncProfile) []SyncProfile {

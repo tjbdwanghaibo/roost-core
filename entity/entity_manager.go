@@ -1,12 +1,14 @@
 package entity
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/tjbdwanghaibo/cube-core/lock"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
 	"github.com/tjbdwanghaibo/cube-core/misc"
-	"sync"
 )
 
 const defaultBucketCnt = 64
@@ -14,26 +16,28 @@ const defaultBucketCnt = 64
 // EntityManager is the central registry for all entities.
 // Uses sharded buckets for high-concurrency access with hundreds of thousands of entities.
 type EntityManager struct {
-	entities          *misc.BucketHolder[int64, IThreadSafeEntity]
-	idGen             func() (uint64, error)
-	locks             *lock.LockManager
-	configMu          sync.RWMutex
-	addMu             sync.Mutex
-	removing          map[int64]struct{}
-	groupMu           sync.RWMutex
-	groups            map[int64]map[int64]IThreadSafeEntity
-	hookMu            sync.RWMutex
-	nextHookID        uint64
-	releaseHooks      []entityReleaseHook
-	removeFromDBHooks []entityRemoveFromDBHook
+	entities       *misc.BucketHolder[int64, IThreadSafeEntity]
+	idGen          func() (uint64, error)
+	locks          *lock.LockManager
+	configMu       sync.RWMutex
+	addMu          sync.Mutex
+	removing       map[int64]struct{}
+	groupMu        sync.RWMutex
+	groups         map[int64]map[int64]IThreadSafeEntity
+	hookMu         sync.RWMutex
+	nextHookID     uint64
+	releaseHooks   []entityReleaseHook
+	deleteAdmitter entityDeleteAdmitter
 }
 
 var (
-	ErrEntityNil           = errors.New("entity manager: nil entity")
-	ErrEntityRemoved       = errors.New("entity manager: entity removed")
-	ErrEntityExists        = errors.New("entity manager: entity already exists")
-	ErrEntityNotManaged    = errors.New("entity manager: entity not managed")
-	ErrIDGeneratorRequired = errors.New("entity manager: id generator is required for new entities")
+	ErrEntityNil            = errors.New("entity manager: nil entity")
+	ErrEntityRemoved        = errors.New("entity manager: entity removed")
+	ErrEntityExists         = errors.New("entity manager: entity already exists")
+	ErrEntityNotManaged     = errors.New("entity manager: entity not managed")
+	ErrIDGeneratorRequired  = errors.New("entity manager: id generator is required for new entities")
+	ErrDeleteAdmitterExists = errors.New("entity manager: delete admitter already registered")
+	ErrDeleteAdmitterNeeded = errors.New("entity manager: delete admitter is required")
 )
 
 // NewEntityManager creates an EntityManager with default bucket count.
@@ -118,53 +122,57 @@ func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 	return nil
 }
 
-type entityRemoveFromDBHook struct {
+type entityDeleteAdmitter struct {
 	id uint64
-	fn func(IThreadSafeEntity)
+	fn func(context.Context, IThreadSafeEntity) error
 }
 
-func (m *EntityManager) RegisterOnEntityRemoveFromDB(hook func(IThreadSafeEntity)) func() {
-	if m == nil || hook == nil {
-		return func() {}
+// RegisterDeleteAdmitter installs the single durable admission gate used by
+// persistent deletion. Multiple independent gates are rejected because they
+// cannot form one atomic deletion decision.
+func (m *EntityManager) RegisterDeleteAdmitter(admitter func(context.Context, IThreadSafeEntity) error) (func(), error) {
+	if m == nil || admitter == nil {
+		return nil, ErrDeleteAdmitterNeeded
 	}
 	m.hookMu.Lock()
+	defer m.hookMu.Unlock()
+	if m.deleteAdmitter.fn != nil {
+		return nil, ErrDeleteAdmitterExists
+	}
 	m.nextHookID++
 	id := m.nextHookID
-	m.removeFromDBHooks = append(m.removeFromDBHooks, entityRemoveFromDBHook{id: id, fn: hook})
-	m.hookMu.Unlock()
+	m.deleteAdmitter = entityDeleteAdmitter{id: id, fn: admitter}
 	return func() {
 		m.hookMu.Lock()
-		defer m.hookMu.Unlock()
-		for i, item := range m.removeFromDBHooks {
-			if item.id == id {
-				m.removeFromDBHooks = append(m.removeFromDBHooks[:i], m.removeFromDBHooks[i+1:]...)
-				return
-			}
+		if m.deleteAdmitter.id == id {
+			m.deleteAdmitter = entityDeleteAdmitter{}
 		}
-	}
+		m.hookMu.Unlock()
+	}, nil
 }
 
-func (m *EntityManager) runOnEntityRemoveFromDB(e IThreadSafeEntity) {
+func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity) error {
 	m.hookMu.RLock()
-	hooks := append([]entityRemoveFromDBHook(nil), m.removeFromDBHooks...)
+	admitter := m.deleteAdmitter.fn
 	m.hookMu.RUnlock()
-	for _, hook := range hooks {
-		hook.fn(e)
+	if admitter == nil {
+		return ErrDeleteAdmitterNeeded
 	}
+	return admitter(ctx, e)
 }
 
-// Remove destroys, marks removed, removes from bucket, and directly cleans the entity.
-// If deleteFromDB is true, triggers OnEntityRemoveFromDB to persist the deletion.
-func (m *EntityManager) Remove(e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) {
-	_ = m.RemoveAfter(e, reason, deleteFromDB, nil)
-}
-
-// RemoveAfter runs beforeDestroy while holding the entity lock, then removes
-// the entity from memory. It is used by hot/cold eviction to synchronously
-// persist dirty state before the entity becomes unreachable.
-func (m *EntityManager) RemoveAfter(e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool, beforeDestroy func(IThreadSafeEntity) error) error {
+// Destroy durably admits a versioned delete tombstone while holding the entity
+// mutex, then removes the entity from memory. Admission failure leaves the
+// entity live so success can never be observed before the commit point.
+func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if !e.Touch() {
 		return ErrEntityRemoved
@@ -180,11 +188,19 @@ func (m *EntityManager) RemoveAfter(e IThreadSafeEntity, reason EntityDestroyRea
 		e.UnTouch()
 		return ErrEntityRemoved
 	}
-	if beforeDestroy != nil {
-		if err := beforeDestroy(e); err != nil {
+	m.addMu.Lock()
+	managed := m.entities.Get(e.ID()) == e
+	m.addMu.Unlock()
+	if !managed {
+		mu.Unlock()
+		e.UnTouch()
+		return ErrEntityNotManaged
+	}
+	if deleteFromDB {
+		if err := m.admitDelete(ctx, e); err != nil {
 			mu.Unlock()
 			e.UnTouch()
-			flog.Warn("entity manager: before destroy failed", "id", e.ID(), "category", e.GetEntityCategory(), "kind", e.GetEntityKind(), "reason", reason, "err", err)
+			flog.Warn("entity manager: durable delete admission failed", "id", e.ID(), "category", e.GetEntityCategory(), "kind", e.GetEntityKind(), "reason", reason, "err", err)
 			return err
 		}
 	}
@@ -216,18 +232,15 @@ func (m *EntityManager) RemoveAfter(e IThreadSafeEntity, reason EntityDestroyRea
 		m.addMu.Unlock()
 	}()
 	mu.Unlock()
+	defer func() {
+		e.UnTouch()
+		e.ClearBase()
+		flog.Debug("entity manager: removed", "id", id, "category", category, "kind", kind, "reason", reason, "delete_db", deleteFromDB)
+	}()
 
 	e.Base().DestroyAll(reason)
 
 	e.OnDestroy(reason)
-
-	if deleteFromDB {
-		m.runOnEntityRemoveFromDB(e)
-	}
-
-	e.UnTouch()
-	e.ClearBase()
-	flog.Debug("entity manager: removed", "id", id, "category", category, "kind", kind, "reason", reason, "delete_db", deleteFromDB)
 	return nil
 }
 

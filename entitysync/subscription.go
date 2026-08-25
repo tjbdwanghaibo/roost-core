@@ -18,6 +18,7 @@ var (
 	ErrSubscriptionNotFound    = errors.New("entitysync: subscription not found")
 	ErrSubscriptionState       = errors.New("entitysync: invalid subscription state")
 	ErrPreparedProfilesMissing = errors.New("entitysync: prepared update is missing a subscribed profile")
+	ErrCoordinatorClosed       = errors.New("entitysync: subscription coordinator is closed")
 )
 
 type SubscriberKind uint8
@@ -110,7 +111,9 @@ type SubscriptionCoordinator struct {
 	mu            sync.RWMutex
 	sink          ReliableEnvelopeSink
 	subscriptions map[subscriptionKey]Subscription
+	bySubject     map[int64]map[subscriptionKey]struct{}
 	revision      uint64
+	closed        bool
 	subjectOps    [subscriptionSubjectShardCount]sync.Mutex
 }
 
@@ -118,6 +121,7 @@ func NewSubscriptionCoordinator(sink ReliableEnvelopeSink) *SubscriptionCoordina
 	return &SubscriptionCoordinator{
 		sink:          sink,
 		subscriptions: make(map[subscriptionKey]Subscription),
+		bySubject:     make(map[int64]map[subscriptionKey]struct{}),
 	}
 }
 
@@ -126,7 +130,34 @@ func (c *SubscriptionCoordinator) SetSink(sink ReliableEnvelopeSink) {
 		return
 	}
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
 	c.sink = sink
+	c.mu.Unlock()
+}
+
+// Close releases all membership and detaches the sink. The owner must first
+// stop new operations and wait for in-flight subject operations to finish.
+func (c *SubscriptionCoordinator) Close() {
+	if c == nil {
+		return
+	}
+	for i := range c.subjectOps {
+		c.subjectOps[i].Lock()
+	}
+	defer func() {
+		for i := len(c.subjectOps) - 1; i >= 0; i-- {
+			c.subjectOps[i].Unlock()
+		}
+	}()
+	c.mu.Lock()
+	c.closed = true
+	c.sink = nil
+	clear(c.subscriptions)
+	clear(c.bySubject)
+	c.revision++
 	c.mu.Unlock()
 }
 
@@ -146,6 +177,12 @@ func (c *SubscriptionCoordinator) Subscribe(ctx context.Context, subscriber Subs
 	op := c.subjectOp(subjectID)
 	op.Lock()
 	defer op.Unlock()
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return Subscription{}, ErrCoordinatorClosed
+	}
 
 	key := subscriptionKey{subscriber: subscriber, subjectID: subjectID}
 	c.mu.RLock()
@@ -162,6 +199,7 @@ func (c *SubscriptionCoordinator) Subscribe(ctx context.Context, subscriber Subs
 	}
 	c.mu.Lock()
 	c.subscriptions[key] = pending
+	c.addSubjectKeyLocked(key)
 	sink := c.sink
 	c.mu.Unlock()
 	if sink == nil {
@@ -210,6 +248,12 @@ func (c *SubscriptionCoordinator) Unsubscribe(ctx context.Context, subscriber Su
 	op := c.subjectOp(subjectID)
 	op.Lock()
 	defer op.Unlock()
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return ErrCoordinatorClosed
+	}
 	key := subscriptionKey{subscriber: subscriber, subjectID: subjectID}
 	c.mu.Lock()
 	current, ok := c.subscriptions[key]
@@ -247,6 +291,7 @@ func (c *SubscriptionCoordinator) Unsubscribe(ctx context.Context, subscriber Su
 	latest, ok := c.subscriptions[key]
 	if ok && latest.Revision == current.Revision && latest.State == SubscriptionClosing {
 		delete(c.subscriptions, key)
+		c.removeSubjectKeyLocked(key)
 	}
 	c.mu.Unlock()
 	return nil
@@ -255,77 +300,156 @@ func (c *SubscriptionCoordinator) Unsubscribe(ctx context.Context, subscriber Su
 // Distribute admits all envelopes first and commits Entity content only after
 // successful admission. Subscriber membership is never stored in Entity state.
 func (c *SubscriptionCoordinator) Distribute(ctx context.Context, prepared *entity.PreparedSubjectSync) error {
-	if c == nil || prepared == nil {
-		return ErrSubscriptionSubject
-	}
-	updates := prepared.Updates()
-	if len(updates) == 0 || updates[0].SubjectID == 0 {
-		_ = prepared.AbortWithError(ErrSubscriptionSubject)
+	return c.DistributeBatch(ctx, []*entity.PreparedSubjectSync{prepared})
+}
+
+type preparedDistribution struct {
+	prepared      *entity.PreparedSubjectSync
+	subjectID     int64
+	version       uint64
+	byProfile     map[entity.SyncProfile]entity.SubjectSyncUpdate
+	subscriptions []Subscription
+}
+
+// DistributeBatch admits updates for multiple subjects as one transaction.
+// This is the room-tick primitive: a downstream sink can group all entries
+// into one receiver-specific global frame, while every prepared state remains
+// dirty if the complete admission fails.
+func (c *SubscriptionCoordinator) DistributeBatch(ctx context.Context, prepared []*entity.PreparedSubjectSync) error {
+	if c == nil || len(prepared) == 0 {
+		abortPreparedBatch(prepared, ErrSubscriptionSubject)
 		return ErrSubscriptionSubject
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	subjectID := updates[0].SubjectID
-	op := c.subjectOp(subjectID)
-	op.Lock()
-	defer op.Unlock()
-
-	byProfile := make(map[entity.SyncProfile]entity.SubjectSyncUpdate, len(updates))
-	for _, update := range updates {
-		if update.SubjectID != subjectID {
-			_ = prepared.AbortWithError(ErrSubscriptionSubject)
+	distributions := make([]preparedDistribution, 0, len(prepared))
+	subjects := make(map[int64]struct{}, len(prepared))
+	stripes := make(map[int]struct{}, len(prepared))
+	for _, item := range prepared {
+		if item == nil {
+			abortPreparedBatch(prepared, ErrSubscriptionSubject)
 			return ErrSubscriptionSubject
 		}
-		byProfile[update.Profile.Normalize()] = update
+		updates := item.Updates()
+		if len(updates) == 0 || updates[0].SubjectID == 0 {
+			abortPreparedBatch(prepared, ErrSubscriptionSubject)
+			return ErrSubscriptionSubject
+		}
+		subjectID := updates[0].SubjectID
+		if _, duplicate := subjects[subjectID]; duplicate {
+			abortPreparedBatch(prepared, ErrSubscriptionState)
+			return fmt.Errorf("%w: duplicate subject %d", ErrSubscriptionState, subjectID)
+		}
+		subjects[subjectID] = struct{}{}
+		byProfile := make(map[entity.SyncProfile]entity.SubjectSyncUpdate, len(updates))
+		for _, update := range updates {
+			if update.SubjectID != subjectID {
+				abortPreparedBatch(prepared, ErrSubscriptionSubject)
+				return ErrSubscriptionSubject
+			}
+			byProfile[update.Profile.Normalize()] = update
+		}
+		distributions = append(distributions, preparedDistribution{
+			prepared: item, subjectID: subjectID, version: item.Version(), byProfile: byProfile,
+		})
+		stripes[c.subjectOpIndex(subjectID)] = struct{}{}
 	}
+	sort.Slice(distributions, func(i, j int) bool { return distributions[i].subjectID < distributions[j].subjectID })
+	distributionIndex := make(map[int64]int, len(distributions))
+	for i := range distributions {
+		distributionIndex[distributions[i].subjectID] = i
+	}
+	stripeIDs := make([]int, 0, len(stripes))
+	for stripe := range stripes {
+		stripeIDs = append(stripeIDs, stripe)
+	}
+	sort.Ints(stripeIDs)
+	for _, stripe := range stripeIDs {
+		c.subjectOps[stripe].Lock()
+	}
+	defer func() {
+		for i := len(stripeIDs) - 1; i >= 0; i-- {
+			c.subjectOps[stripeIDs[i]].Unlock()
+		}
+	}()
+
 	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		abortPreparedBatch(prepared, ErrCoordinatorClosed)
+		return ErrCoordinatorClosed
+	}
 	sink := c.sink
-	subscriptions := make([]Subscription, 0)
-	for _, subscription := range c.subscriptions {
-		if subscription.SubjectID == subjectID && subscription.State == SubscriptionActive {
-			subscriptions = append(subscriptions, subscription)
+	for subjectID, index := range distributionIndex {
+		for key := range c.bySubject[subjectID] {
+			subscription, ok := c.subscriptions[key]
+			if ok && subscription.State == SubscriptionActive {
+				distributions[index].subscriptions = append(distributions[index].subscriptions, subscription)
+			}
 		}
 	}
 	c.mu.RUnlock()
-	sortSubscriptions(subscriptions)
-	if len(subscriptions) > 0 && sink == nil {
-		_ = prepared.AbortWithError(ErrEnvelopeSinkRequired)
+
+	totalSubscriptions := 0
+	for i := range distributions {
+		sortSubscriptions(distributions[i].subscriptions)
+		totalSubscriptions += len(distributions[i].subscriptions)
+	}
+	if totalSubscriptions > 0 && sink == nil {
+		abortPreparedBatch(prepared, ErrEnvelopeSinkRequired)
 		return ErrEnvelopeSinkRequired
 	}
-	envelopes := make([]DeliveryEnvelope, 0, len(subscriptions))
-	for _, subscription := range subscriptions {
-		update, ok := byProfile[subscription.Profile.Normalize()]
-		if !ok {
-			_ = prepared.AbortWithError(ErrPreparedProfilesMissing)
-			return fmt.Errorf("%w: %q", ErrPreparedProfilesMissing, subscription.Profile.Key)
+	envelopes := make([]DeliveryEnvelope, 0, totalSubscriptions)
+	for _, distribution := range distributions {
+		for _, subscription := range distribution.subscriptions {
+			update, ok := distribution.byProfile[subscription.Profile.Normalize()]
+			if !ok {
+				abortPreparedBatch(prepared, ErrPreparedProfilesMissing)
+				return fmt.Errorf("%w: %q", ErrPreparedProfilesMissing, subscription.Profile.Key)
+			}
+			kind := EnvelopeDelta
+			if update.Full {
+				kind = EnvelopeSnapshot
+			}
+			envelopes = append(envelopes, DeliveryEnvelope{Subscriber: subscription.Subscriber, Kind: kind, Update: update})
 		}
-		kind := EnvelopeDelta
-		if update.Full {
-			kind = EnvelopeSnapshot
-		}
-		envelopes = append(envelopes, DeliveryEnvelope{Subscriber: subscription.Subscriber, Kind: kind, Update: update})
+	}
+	batch, err := entity.ReservePreparedSubjectSyncBatch(prepared)
+	if err != nil {
+		abortPreparedBatch(prepared, err)
+		return err
 	}
 	if len(envelopes) > 0 {
 		if err := admitEnvelopes(ctx, sink, envelopes); err != nil {
-			_ = prepared.AbortWithError(err)
+			_ = batch.AbortWithError(err)
 			return errors.Join(ErrEnvelopeAdmission, err)
 		}
 	}
-	if err := prepared.Commit(); err != nil {
+	if err := batch.Commit(); err != nil {
 		return err
 	}
 	c.mu.Lock()
-	for _, subscription := range subscriptions {
-		key := subscriptionKey{subscriber: subscription.Subscriber, subjectID: subjectID}
-		current, ok := c.subscriptions[key]
-		if ok && current.State == SubscriptionActive && current.Revision == subscription.Revision {
-			current.ContentVersion = prepared.Version()
-			c.subscriptions[key] = current
+	for _, distribution := range distributions {
+		for _, subscription := range distribution.subscriptions {
+			key := subscriptionKey{subscriber: subscription.Subscriber, subjectID: distribution.subjectID}
+			current, ok := c.subscriptions[key]
+			if ok && current.State == SubscriptionActive && current.Revision == subscription.Revision {
+				current.ContentVersion = distribution.version
+				c.subscriptions[key] = current
+			}
 		}
 	}
 	c.mu.Unlock()
 	return nil
+}
+
+func abortPreparedBatch(prepared []*entity.PreparedSubjectSync, cause error) {
+	for _, item := range prepared {
+		if item != nil {
+			_ = item.AbortWithError(cause)
+		}
+	}
 }
 
 // FlushSubject derives the active profile set, prepares each profile exactly
@@ -361,9 +485,9 @@ func (c *SubscriptionCoordinator) Subscribers(subjectID int64) []Subscription {
 		return nil
 	}
 	c.mu.RLock()
-	out := make([]Subscription, 0)
-	for _, subscription := range c.subscriptions {
-		if subscription.SubjectID == subjectID && subscription.State == SubscriptionActive {
+	out := make([]Subscription, 0, len(c.bySubject[subjectID]))
+	for key := range c.bySubject[subjectID] {
+		if subscription, ok := c.subscriptions[key]; ok && subscription.State == SubscriptionActive {
 			out = append(out, subscription)
 		}
 	}
@@ -373,11 +497,17 @@ func (c *SubscriptionCoordinator) Subscribers(subjectID int64) []Subscription {
 }
 
 func (c *SubscriptionCoordinator) Profiles(subjectID int64) []entity.SyncProfile {
-	subscriptions := c.Subscribers(subjectID)
-	unique := make(map[entity.SyncProfile]struct{}, len(subscriptions))
-	for _, subscription := range subscriptions {
-		unique[subscription.Profile.Normalize()] = struct{}{}
+	if c == nil || subjectID == 0 {
+		return nil
 	}
+	c.mu.RLock()
+	unique := make(map[entity.SyncProfile]struct{}, len(c.bySubject[subjectID]))
+	for key := range c.bySubject[subjectID] {
+		if subscription, ok := c.subscriptions[key]; ok && subscription.State == SubscriptionActive {
+			unique[subscription.Profile.Normalize()] = struct{}{}
+		}
+	}
+	c.mu.RUnlock()
 	profiles := make([]entity.SyncProfile, 0, len(unique))
 	for profile := range unique {
 		profiles = append(profiles, profile)
@@ -395,11 +525,15 @@ func (c *SubscriptionCoordinator) Profiles(subjectID int64) []entity.SyncProfile
 }
 
 func (c *SubscriptionCoordinator) subjectOp(subjectID int64) *sync.Mutex {
+	return &c.subjectOps[c.subjectOpIndex(subjectID)]
+}
+
+func (c *SubscriptionCoordinator) subjectOpIndex(subjectID int64) int {
 	idx := uint64(subjectID)
 	idx ^= idx >> 33
 	idx *= 0xff51afd7ed558ccd
 	idx ^= idx >> 33
-	return &c.subjectOps[idx%subscriptionSubjectShardCount]
+	return int(idx % subscriptionSubjectShardCount)
 }
 
 func (c *SubscriptionCoordinator) nextRevision() uint64 {
@@ -420,6 +554,7 @@ func (c *SubscriptionCoordinator) rollbackSubscription(key subscriptionKey, prev
 		c.subscriptions[key] = previous
 	} else {
 		delete(c.subscriptions, key)
+		c.removeSubjectKeyLocked(key)
 	}
 	c.mu.Unlock()
 }
@@ -429,6 +564,26 @@ func (c *SubscriptionCoordinator) restoreActive(key subscriptionKey, subscriptio
 	c.mu.Lock()
 	c.subscriptions[key] = subscription
 	c.mu.Unlock()
+}
+
+func (c *SubscriptionCoordinator) addSubjectKeyLocked(key subscriptionKey) {
+	keys := c.bySubject[key.subjectID]
+	if keys == nil {
+		keys = make(map[subscriptionKey]struct{})
+		c.bySubject[key.subjectID] = keys
+	}
+	keys[key] = struct{}{}
+}
+
+func (c *SubscriptionCoordinator) removeSubjectKeyLocked(key subscriptionKey) {
+	keys := c.bySubject[key.subjectID]
+	if keys == nil {
+		return
+	}
+	delete(keys, key)
+	if len(keys) == 0 {
+		delete(c.bySubject, key.subjectID)
+	}
 }
 
 func sortSubscriptions(subscriptions []Subscription) {

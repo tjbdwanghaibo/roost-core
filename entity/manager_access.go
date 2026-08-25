@@ -44,11 +44,11 @@ func (access *ManagerAccess) RegisterOnEntityRelease(hook func(IThreadSafeEntity
 	return access.manager.RegisterOnEntityRelease(hook), nil
 }
 
-func (access *ManagerAccess) RegisterOnEntityRemoveFromDB(hook func(IThreadSafeEntity)) (func(), error) {
+func (access *ManagerAccess) RegisterDeleteAdmitter(admitter func(context.Context, IThreadSafeEntity) error) (func(), error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
 	}
-	return access.manager.RegisterOnEntityRemoveFromDB(hook), nil
+	return access.manager.RegisterDeleteAdmitter(admitter)
 }
 
 func (access *ManagerAccess) ConfigureLoader(loader AggregateLoader) (func(), error) {
@@ -267,11 +267,11 @@ func (access *ManagerAccess) CreateInScope(scope *GuardScope, param *EntityCreat
 	return access.manager.CreateInScope(scope, param)
 }
 
-func (access *ManagerAccess) Destroy(value IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
+func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
 	}
-	return access.manager.RemoveAfter(value, reason, deleteFromDB, nil)
+	return access.manager.Destroy(ctx, value, reason, deleteFromDB)
 }
 
 func (access *ManagerAccess) ConfigureIDGenerator(generator func() (uint64, error)) error {

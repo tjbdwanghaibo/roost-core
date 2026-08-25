@@ -14,6 +14,7 @@ var (
 	ErrRemoteSnapshotGap            = errors.New("remote snapshot: delta gap")
 	ErrRemoteSnapshotEpochMismatch  = errors.New("remote snapshot: epoch mismatch")
 	ErrRemoteSnapshotSchemaMismatch = errors.New("remote snapshot: schema mismatch")
+	ErrRemoteReadConsistency        = errors.New("remote snapshot: invalid read consistency")
 )
 
 type RemoteReadConsistency uint8
@@ -99,12 +100,13 @@ func (s RemoteSnapshotEnvelope) Expired(now time.Time) bool {
 type RemoteSnapshotLoader func(context.Context, RemoteSnapshotKey, RemoteReadConsistency, uint64) (RemoteSnapshotEnvelope, bool, error)
 
 type RemoteSnapshotCacheConfig struct {
-	Shards      int
-	MaxEntries  int
-	MaxBytes    int64
-	TTL         time.Duration
-	LoadTimeout time.Duration
-	MaxWaiters  int
+	Shards             int
+	MaxEntries         int
+	MaxBytes           int64
+	TTL                time.Duration
+	LoadTimeout        time.Duration
+	MaxWaiters         int
+	MaxConcurrentLoads int
 }
 
 // RemoteSnapshotCache is the entity-specific adapter over core/cache. Epoch,
@@ -119,6 +121,11 @@ type RemoteSnapshotCache struct {
 	maxWaiters  int
 	loader      RemoteSnapshotLoader
 	publishMu   [64]sync.Mutex
+
+	loadMu      sync.Mutex
+	loads       map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall
+	loadSlots   chan struct{}
+	loadTimeout time.Duration
 }
 
 type remoteVersionWaiter struct {
@@ -126,7 +133,41 @@ type remoteVersionWaiter struct {
 	done chan struct{}
 }
 
+type remoteSnapshotLoadKey struct {
+	key        RemoteSnapshotKey
+	minVersion uint64
+}
+
+type remoteSnapshotLoadCall struct {
+	done     chan struct{}
+	snapshot RemoteSnapshotEnvelope
+	ok       bool
+	err      error
+	waiters  int
+}
+
+const (
+	defaultRemoteSnapshotEntries           = 64 << 10
+	defaultRemoteSnapshotBytes       int64 = 256 << 20
+	defaultRemoteSnapshotLoadTimeout       = 3 * time.Second
+)
+
 func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[RemoteSnapshotKey, RemoteSnapshotEnvelope], loader RemoteSnapshotLoader) *RemoteSnapshotCache {
+	if cfg.MaxEntries <= 0 {
+		cfg.MaxEntries = defaultRemoteSnapshotEntries
+	}
+	if cfg.MaxBytes <= 0 {
+		cfg.MaxBytes = defaultRemoteSnapshotBytes
+	}
+	if cfg.LoadTimeout <= 0 {
+		cfg.LoadTimeout = defaultRemoteSnapshotLoadTimeout
+	}
+	if cfg.MaxWaiters <= 0 {
+		cfg.MaxWaiters = 256
+	}
+	if cfg.MaxConcurrentLoads <= 0 {
+		cfg.MaxConcurrentLoads = 128
+	}
 	storeCfg := cache.StoreConfig[RemoteSnapshotKey, RemoteSnapshotEnvelope]{
 		KeyOf: func(value RemoteSnapshotEnvelope) RemoteSnapshotKey { return value.Key },
 		Stale: func(old, next RemoteSnapshotEnvelope) bool {
@@ -143,20 +184,17 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		MaxBytes: cfg.MaxBytes, DefaultTTL: cfg.TTL,
 		SizeOf: func(value RemoteSnapshotEnvelope) int64 { return int64(value.Payload.Len() + 96) },
 	})
-	loadFn := cache.Loader[RemoteSnapshotKey, RemoteSnapshotEnvelope](nil)
-	if loader != nil {
-		loadFn = func(ctx context.Context, key RemoteSnapshotKey) (RemoteSnapshotEnvelope, bool, error) {
-			return loader(ctx, key, RemoteReadMonotonic, 0)
-		}
-	}
 	return &RemoteSnapshotCache{
 		local: local,
-		layered: cache.NewReadThroughStore(local, l2, loadFn, storeCfg, cache.ReadThroughOptions{
+		layered: cache.NewReadThroughStore(local, l2, nil, storeCfg, cache.ReadThroughOptions{
 			LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters, IgnoreRemoteError: true,
 		}),
-		waiters:    make(map[RemoteSnapshotKey][]remoteVersionWaiter),
-		maxWaiters: cfg.MaxWaiters,
-		loader:     loader,
+		waiters:     make(map[RemoteSnapshotKey][]remoteVersionWaiter),
+		maxWaiters:  cfg.MaxWaiters,
+		loader:      loader,
+		loads:       make(map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall),
+		loadSlots:   make(chan struct{}, cfg.MaxConcurrentLoads),
+		loadTimeout: cfg.LoadTimeout,
 	}
 }
 
@@ -164,17 +202,35 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	if c == nil || c.loader == nil {
 		return RemoteSnapshotEnvelope{}, false, nil
 	}
-	snapshot, ok, err := c.loader(ctx, key, consistency, minVersion)
+	if !key.Valid() || consistency < RemoteReadMonotonic || consistency > RemoteReadLinearizable {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteReadConsistency
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	loadCtx := ctx
+	var cancel context.CancelFunc
+	if c.loadTimeout > 0 {
+		loadCtx, cancel = context.WithTimeout(ctx, c.loadTimeout)
+		defer cancel()
+	}
+	select {
+	case c.loadSlots <- struct{}{}:
+		defer func() { <-c.loadSlots }()
+	case <-loadCtx.Done():
+		return RemoteSnapshotEnvelope{}, false, loadCtx.Err()
+	}
+	snapshot, ok, err := c.loader(loadCtx, key, consistency, minVersion)
 	if err != nil || !ok {
 		return snapshot, ok, err
 	}
 	if snapshot.StateVersion < minVersion {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
-	if err := c.Publish(ctx, snapshot); err != nil {
+	if err := c.Publish(loadCtx, snapshot); err != nil {
 		return RemoteSnapshotEnvelope{}, false, err
 	}
-	stored, found, err := c.local.Get(ctx, key)
+	stored, found, err := c.local.Get(loadCtx, key)
 	return stored.Clone(), found, err
 }
 
@@ -182,14 +238,64 @@ func (c *RemoteSnapshotCache) Get(ctx context.Context, key RemoteSnapshotKey, co
 	if c == nil || c.layered == nil {
 		return RemoteSnapshotEnvelope{}, false, nil
 	}
+	if !key.Valid() || consistency < RemoteReadMonotonic || consistency > RemoteReadLinearizable {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteReadConsistency
+	}
+	if consistency == RemoteReadLinearizable {
+		return c.LoadAuthoritative(ctx, key, consistency, minVersion)
+	}
 	snapshot, ok, err := c.layered.Get(ctx, key)
-	if err != nil || !ok {
+	if err != nil {
 		return snapshot, ok, err
+	}
+	if !ok {
+		if consistency == RemoteReadMonotonic {
+			return c.loadMonotonic(ctx, key, minVersion)
+		}
+		return snapshot, false, nil
 	}
 	if consistency == RemoteReadCached || snapshot.StateVersion >= minVersion {
 		return snapshot, true, nil
 	}
+	if consistency == RemoteReadMonotonic {
+		return c.loadMonotonic(ctx, key, minVersion)
+	}
 	return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
+}
+
+func (c *RemoteSnapshotCache) loadMonotonic(ctx context.Context, key RemoteSnapshotKey, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
+	if c.loader == nil {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	callKey := remoteSnapshotLoadKey{key: key, minVersion: minVersion}
+	c.loadMu.Lock()
+	if call := c.loads[callKey]; call != nil {
+		if call.waiters >= c.maxWaiters {
+			c.loadMu.Unlock()
+			return RemoteSnapshotEnvelope{}, false, ErrRemoteOverloaded
+		}
+		call.waiters++
+		c.loadMu.Unlock()
+		select {
+		case <-call.done:
+			return call.snapshot.Clone(), call.ok, call.err
+		case <-ctx.Done():
+			return RemoteSnapshotEnvelope{}, false, ctx.Err()
+		}
+	}
+	call := &remoteSnapshotLoadCall{done: make(chan struct{})}
+	c.loads[callKey] = call
+	c.loadMu.Unlock()
+
+	call.snapshot, call.ok, call.err = c.LoadAuthoritative(ctx, key, RemoteReadMonotonic, minVersion)
+	c.loadMu.Lock()
+	delete(c.loads, callKey)
+	close(call.done)
+	c.loadMu.Unlock()
+	return call.snapshot.Clone(), call.ok, call.err
 }
 
 func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapshotEnvelope) error {
@@ -271,6 +377,9 @@ func (c *RemoteSnapshotCache) Delete(ctx context.Context, key RemoteSnapshotKey)
 func (c *RemoteSnapshotCache) WaitForVersion(ctx context.Context, key RemoteSnapshotKey, minVersion uint64) error {
 	if minVersion == 0 {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if snapshot, ok, _ := c.local.Get(ctx, key); ok && snapshot.StateVersion >= minVersion {
 		return nil

@@ -53,6 +53,9 @@ type JetStreamConsumerConfig struct {
 	DeliverPolicy JetStreamDeliverPolicy
 	AckWait       time.Duration
 	MaxDeliver    int
+	MaxAckPending int
+	NakBackoffMin time.Duration
+	NakBackoffMax time.Duration
 }
 
 type JetStreamHandler func(context.Context, *JetStreamMsg) error

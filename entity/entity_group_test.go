@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -78,7 +79,9 @@ func TestEntityGroupManagerIndexTracksAddUpdateRemove(t *testing.T) {
 		t.Fatalf("new group lookup returned %v, want e1", got)
 	}
 
-	mgr.Remove(e2, EntityDestroyReason(0), false)
+	if err := mgr.Destroy(context.Background(), e2, EntityDestroyReason(0), false); err != nil {
+		t.Fatal(err)
+	}
 	if got := mgr.GetGroupEntity(9001, e2.ID()); got != nil {
 		t.Fatalf("removed entity lookup returned %v, want nil", got)
 	}
@@ -121,7 +124,9 @@ func TestEntityGroupManagerLifecycleEdges(t *testing.T) {
 	if err := mgr.UpdateEntityGroup(e, 9102); err != nil {
 		t.Fatalf("UpdateEntityGroup rejoin: %v", err)
 	}
-	mgr.Remove(e, EntityDestroyReason(0), false)
+	if err := mgr.Destroy(context.Background(), e, EntityDestroyReason(0), false); err != nil {
+		t.Fatal(err)
+	}
 	if got := mgr.GetGroupEntity(9102, e.ID()); got != nil {
 		t.Fatalf("removed group lookup returned %v, want nil", got)
 	}

@@ -17,44 +17,47 @@ func EncodeFrame(frame DeltaFrame, limits Limits) ([]byte, error) {
 	if len(frame.Objects) > int(^uint16(0)) {
 		return nil, ErrObjectLimit
 	}
-	buffer := bytes.NewBuffer(make([]byte, 0, minInt(limits.MaxFrameBytes, 4096)))
-	write := func(value any) error { return binary.Write(buffer, binary.BigEndian, value) }
-	for _, value := range []any{
-		frameMagic, ProtocolVersion, uint8(frame.Kind), uint8(0), frame.RoomID, frame.Epoch,
-		frame.Tick, frame.BaseTick, frame.SchemaVersion, uint16(len(frame.Objects)),
-	} {
-		if err := write(value); err != nil {
-			return nil, err
-		}
-	}
+	encodedSize := 32
 	for _, obj := range frame.Objects {
-		if len(obj.Components) > int(^uint16(0)) {
-			return nil, ErrComponentLimit
-		}
-		for _, value := range []any{
-			uint8(obj.Operation), obj.Ref.ID, obj.Ref.Generation, obj.Archetype, uint16(len(obj.Components)),
-		} {
-			if err := write(value); err != nil {
-				return nil, err
-			}
+		encodedSize += 9
+		if encodedSize > limits.MaxFrameBytes {
+			return nil, ErrFrameTooLarge
 		}
 		for _, component := range obj.Components {
-			for _, value := range []any{
-				uint8(component.Operation), component.TypeID, component.SchemaVersion, uint32(len(component.Data)),
-			} {
-				if err := write(value); err != nil {
-					return nil, err
-				}
-			}
-			if _, err := buffer.Write(component.Data); err != nil {
-				return nil, err
-			}
-			if buffer.Len() > limits.MaxFrameBytes {
+			encodedSize += 9 + len(component.Data)
+			if encodedSize > limits.MaxFrameBytes {
 				return nil, ErrFrameTooLarge
 			}
 		}
 	}
-	return buffer.Bytes(), nil
+	buffer := make([]byte, 0, encodedSize)
+	buffer = binary.BigEndian.AppendUint32(buffer, frameMagic)
+	buffer = binary.BigEndian.AppendUint16(buffer, ProtocolVersion)
+	buffer = append(buffer, uint8(frame.Kind), 0)
+	buffer = binary.BigEndian.AppendUint64(buffer, frame.RoomID)
+	buffer = binary.BigEndian.AppendUint32(buffer, frame.Epoch)
+	buffer = binary.BigEndian.AppendUint32(buffer, frame.Tick)
+	buffer = binary.BigEndian.AppendUint32(buffer, frame.BaseTick)
+	buffer = binary.BigEndian.AppendUint16(buffer, frame.SchemaVersion)
+	buffer = binary.BigEndian.AppendUint16(buffer, uint16(len(frame.Objects)))
+	for _, obj := range frame.Objects {
+		if len(obj.Components) > int(^uint16(0)) {
+			return nil, ErrComponentLimit
+		}
+		buffer = append(buffer, uint8(obj.Operation))
+		buffer = binary.BigEndian.AppendUint16(buffer, obj.Ref.ID)
+		buffer = binary.BigEndian.AppendUint16(buffer, obj.Ref.Generation)
+		buffer = binary.BigEndian.AppendUint16(buffer, obj.Archetype)
+		buffer = binary.BigEndian.AppendUint16(buffer, uint16(len(obj.Components)))
+		for _, component := range obj.Components {
+			buffer = append(buffer, uint8(component.Operation))
+			buffer = binary.BigEndian.AppendUint16(buffer, component.TypeID)
+			buffer = binary.BigEndian.AppendUint16(buffer, component.SchemaVersion)
+			buffer = binary.BigEndian.AppendUint32(buffer, uint32(len(component.Data)))
+			buffer = append(buffer, component.Data...)
+		}
+	}
+	return buffer, nil
 }
 
 func DecodeFrame(data []byte, limits Limits) (DeltaFrame, error) {
