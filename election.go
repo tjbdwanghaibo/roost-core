@@ -201,7 +201,4 @@ func (e *election) finish(session electionSession) {
 }
 
 var _ fetcd.IElection = (*election)(nil)
-
-// election also satisfies fetcd.IFencedElection (cube-core > v1.6.1); the
-// compile-time assertion is added once the dependency is bumped past the
-// release that introduces the capability interface.
+var _ fetcd.IFencedElection = (*election)(nil)
