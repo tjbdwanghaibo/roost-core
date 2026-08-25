@@ -136,9 +136,14 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
 - durability 是 per-handler 元数据，逐 handler 灰度；首选高频写、非跨服、AfterCommit 简单的
   handler 试点。
 - prod 配置门禁初期要求 pipelined 显式白名单。
-- 装配接线（使用 pipelined 时必须同时完成，否则闸门旁路）：
-  `coordinator.SetDurableWatermark(committer.DurableLSN)`（entitysync）与
-  `checkpointMod.SetDurableWatermark(committer.DurableLSN)`（kit checkpoint mod）。
+- 装配接线（kit >= 对应版本）：
+  - checkpoint 闸门由 nestwal mod 在 Provide 时**自动接线**（未用 pipelined 的实体 LSN 为 0
+    恒通过，闸门空转成本为一次原子读）；
+  - entitysync 闸门一行接线：`coordinator.SetDurableWatermark(runtime.DurableWatermark())`；
+  - 引擎选项改用 `nestwalMod.NestOptions()`（committer + 配置驱动的
+    `nest.pipelined.allowlist` / `nest.pipelined.async` /
+    `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`），
+    不配置时与旧行为完全一致。
 - 已实现的指标：
   - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
     时长，**Phase 2 的决策输入**：若其占 worker 忙时比例持续偏高且加 worker 无效，才立项
