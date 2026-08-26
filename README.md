@@ -429,6 +429,9 @@ CI 在 Linux 与 Windows 上运行完整测试矩阵，核心包开启 `-race`�
 
 ## 深入文档索引
 
+可观测性规范与全仓指标清单：[OBSERVABILITY.md](OBSERVABILITY.md)（含 Prometheus 导出接线、告警基线与 [Grafana 总览面板](observability/grafana-roost-overview.json)）。
+
+
 | 文档 | 内容 |
 | --- | --- |
 | [RUNTIME_EXECUTION_MODEL.md](RUNTIME_EXECUTION_MODEL.md) | 业务执行模型、锁边界、兼容迁移 |

@@ -1,0 +1,83 @@
+{
+  "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus"}],
+  "title": "Roost Overview",
+  "uid": "roost-overview",
+  "schemaVersion": 39,
+  "tags": ["roost"],
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {"list": []},
+  "panels": [
+    {"type": "row", "title": "调度与事务 (nest)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
+    {"type": "timeseries", "title": "Dispatch 吞吐 (按 handler)", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "sum by (handler) (rate(nest_dispatch_total[1m]))", "legendFormat": "{{handler}}"}]},
+    {"type": "timeseries", "title": "Dispatch 平均耗时", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "rate(nest_dispatch_cost_sum_nanos[1m]) / rate(nest_dispatch_cost_count[1m])", "legendFormat": "avg ns"}]},
+    {"type": "timeseries", "title": "队列水位 / 重排队", "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "nest_dispatch_queue_len", "legendFormat": "queue"},
+       {"expr": "nest_dispatch_delayed_messages", "legendFormat": "delayed"},
+       {"expr": "rate(nest_dispatch_requeue_total[1m])", "legendFormat": "requeue/s"}]},
+    {"type": "timeseries", "title": "锁内耗时 (按 handler, 平均)", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "sum by (handler) (rate(nest_handler_lock_hold_sum_nanos[1m])) / sum by (handler) (rate(nest_handler_lock_hold_count[1m]))", "legendFormat": "{{handler}}"}]},
+    {"type": "timeseries", "title": "慢持锁 (>阈值)", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "sum by (handler) (increase(nest_handler_lock_hold_slow_total[5m]))", "legendFormat": "{{handler}}"}]},
+    {"type": "timeseries", "title": "Pipelined 完成结果 (indeterminate 非零即事故)", "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "sum by (result) (rate(nest_pipelined_async_total[1m]))", "legendFormat": "{{result}}"}]},
+
+    {"type": "row", "title": "Durability 管线 (nestwal / checkpoint)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}},
+    {"type": "timeseries", "title": "WAL 写入: 记录/批 (合批放大率)", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 18},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(nestwal_append_total[1m])", "legendFormat": "records/s"},
+       {"expr": "rate(nestwal_batch_total[1m])", "legendFormat": "batches/s"},
+       {"expr": "rate(nestwal_append_total[1m]) / rate(nestwal_batch_total[1m])", "legendFormat": "records per batch"}]},
+    {"type": "timeseries", "title": "fsync 时延 (平均/最近)", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 18},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(nestwal_fsync_duration_sum_nanos[1m]) / rate(nestwal_fsync_duration_count[1m])", "legendFormat": "avg ns"},
+       {"expr": "nestwal_fsync_duration_last_nanos", "legendFormat": "last ns"}]},
+    {"type": "timeseries", "title": "Durable 压力: 未决 ticket / 磁盘占用 / 拒绝", "gridPos": {"h": 8, "w": 8, "x": 16, "y": 18},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "nestwal_pending_tickets", "legendFormat": "pending tickets"},
+       {"expr": "nestwal_disk_bytes", "legendFormat": "disk bytes"},
+       {"expr": "sum by (reason) (rate(nestwal_reject_total[1m]))", "legendFormat": "reject {{reason}}"}]},
+    {"type": "timeseries", "title": "Durable wait / 外化闸门推迟", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(nest_pipelined_durable_wait_sum_nanos[1m]) / rate(nest_pipelined_durable_wait_count[1m])", "legendFormat": "durable wait avg ns"},
+       {"expr": "rate(entitysync_flush_gate_deferred_total[1m])", "legendFormat": "entitysync gate deferred/s"},
+       {"expr": "rate(checkpoint_release_gate_deferred_total[1m])", "legendFormat": "checkpoint gate deferred/s"}]},
+    {"type": "timeseries", "title": "Redis WAL 生命周期", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(checkpoint_redis_wal_submit_total[1m])", "legendFormat": "submit/s"},
+       {"expr": "rate(checkpoint_redis_wal_write_total[1m])", "legendFormat": "write/s"},
+       {"expr": "rate(checkpoint_redis_wal_ack_total[1m])", "legendFormat": "ack/s"},
+       {"expr": "rate(checkpoint_redis_wal_replay_total[1m])", "legendFormat": "replay/s"}]},
+
+    {"type": "row", "title": "缓存 / 总线 / 跨服实体", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34}},
+    {"type": "stat", "title": "refhmap 非原子降级 (应为 0)", "gridPos": {"h": 8, "w": 4, "x": 0, "y": 35},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [{"expr": "cache_refhmap_write_degraded_total"}],
+     "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}},
+    {"type": "timeseries", "title": "总线吞吐与死信", "gridPos": {"h": 8, "w": 10, "x": 4, "y": 35},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(bus_dispatch_total[1m])", "legendFormat": "dispatch/s"},
+       {"expr": "rate(bus_dispatch_drop_total[1m])", "legendFormat": "drop/s"},
+       {"expr": "rate(bus_dead_letter_total[1m])", "legendFormat": "dead letter/s"}]},
+    {"type": "timeseries", "title": "远程实体延迟 (read/prepare/apply 平均)", "gridPos": {"h": 8, "w": 10, "x": 14, "y": 35},
+     "datasource": {"uid": "${DS_PROMETHEUS}"},
+     "targets": [
+       {"expr": "rate(remote_entity_remote_read_latency_sum_nanos[1m]) / rate(remote_entity_remote_read_latency_count[1m])", "legendFormat": "read"},
+       {"expr": "rate(remote_entity_remote_prepare_latency_sum_nanos[1m]) / rate(remote_entity_remote_prepare_latency_count[1m])", "legendFormat": "prepare"},
+       {"expr": "rate(remote_entity_remote_apply_latency_sum_nanos[1m]) / rate(remote_entity_remote_apply_latency_count[1m])", "legendFormat": "apply"}]}
+  ]
+}
