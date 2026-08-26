@@ -2,11 +2,11 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/health"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 	"github.com/tjbdwanghaibo/cube-kit/mods"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
