@@ -2,8 +2,8 @@ package app_test
 
 import (
 	"context"
-	"github.com/tjbdwanghaibo/cube-core/app"
 	"fmt"
+	"github.com/tjbdwanghaibo/cube-core/app"
 
 	"github.com/spf13/viper"
 )

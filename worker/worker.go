@@ -1,8 +1,8 @@
 package worker
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/misc"
 	"errors"
+	"github.com/tjbdwanghaibo/cube-core/misc"
 	"runtime"
 	"sync"
 	"sync/atomic"

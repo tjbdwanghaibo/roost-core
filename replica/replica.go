@@ -2,9 +2,9 @@ package replica
 
 import (
 	"context"
+	"encoding/json"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	fsync "github.com/tjbdwanghaibo/cube-core/sync"
-	"encoding/json"
 	"sync"
 	"time"
 )

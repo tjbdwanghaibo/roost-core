@@ -1,9 +1,9 @@
 package entity_test
 
 import (
+	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"fmt"
 	"sync"
 )
 

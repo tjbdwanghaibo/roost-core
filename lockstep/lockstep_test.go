@@ -315,3 +315,68 @@ func BenchmarkRedundantEncodePush(b *testing.B) {
 		}
 	}
 }
+
+func TestFrameAssemblerHealsThirtyPercentLoss(t *testing.T) {
+	sequencer, err := NewSequencer(SequencerConfig{Players: []PlayerID{1, 2, 3}, MaxInputBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := NewRedundantEncoder(4)
+	assembler := NewFrameAssembler(0)
+	received := 0
+	for step := 1; step <= 400; step++ {
+		if _, err := sequencer.SubmitInput(PlayerID(step%3+1), FrameID(step), []byte{byte(step)}); err != nil {
+			t.Fatal(err)
+		}
+		packet := encoder.Push(sequencer.Advance())
+		// Deterministic ~30% loss with the tail kept so redundancy can heal
+		// the checked range.
+		if step%10 < 3 && step <= 396 {
+			continue
+		}
+		frames, err := assembler.Ingest(packet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range frames {
+			received++
+			if frame.ID != FrameID(received) {
+				t.Fatalf("out-of-order release: got %d want %d", frame.ID, received)
+			}
+		}
+	}
+	if received != 400 {
+		t.Fatalf("frames released = %d, want 400 (zero loss after redundancy)", received)
+	}
+	if assembler.Duplicates() == 0 {
+		t.Fatal("redundancy produced no duplicates? loss simulation broken")
+	}
+	if assembler.Gap() {
+		t.Fatal("gap left open at stream end")
+	}
+}
+
+func TestFrameAssemblerReportsUnhealableGap(t *testing.T) {
+	assembler := NewFrameAssembler(4)
+	// Frames 10..14 arrive but 1..9 never do: the buffer bound trips and the
+	// client is told to catch up instead of buffering forever.
+	var err error
+	for id := FrameID(10); id <= 14 && err == nil; id++ {
+		_, err = assembler.IngestFrames([]Frame{{ID: id}})
+	}
+	if err == nil || !assembler.Gap() {
+		t.Fatalf("unhealable gap not reported: %v", err)
+	}
+	// Catch-up delivers the missing prefix; everything releases in order.
+	var missing []Frame
+	for id := FrameID(1); id <= 9; id++ {
+		missing = append(missing, Frame{ID: id})
+	}
+	released, err := assembler.IngestFrames(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(released) != 13 || released[0].ID != 1 || released[12].ID != 13 {
+		t.Fatalf("released = %d frames, first=%v", len(released), released[0].ID)
+	}
+}

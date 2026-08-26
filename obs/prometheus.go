@@ -25,9 +25,30 @@ func PrometheusText(metrics []Metric) []byte {
 			writePrometheusSample(&buf, name+"_sum_nanos", labels, m.TotalNanos)
 			writePrometheusSample(&buf, name+"_max_nanos", labels, m.MaxNanos)
 			writePrometheusSample(&buf, name+"_last_nanos", labels, m.LastNanos)
+		case KindHistogram:
+			// Standard Prometheus histogram shape: cumulative _bucket series
+			// with le labels (seconds), then +Inf, _sum and _count.
+			bounds := HistogramBounds()
+			cumulative := int64(0)
+			for i, bucket := range m.Buckets {
+				cumulative += bucket
+				le := strconv.FormatFloat(float64(bounds[i])/1e9, 'g', -1, 64)
+				writePrometheusSample(&buf, name+"_bucket", joinPrometheusLabels(labels, `le="`+le+`"`), cumulative)
+			}
+			cumulative += m.Overflow
+			writePrometheusSample(&buf, name+"_bucket", joinPrometheusLabels(labels, `le="+Inf"`), cumulative)
+			writePrometheusSample(&buf, name+"_sum_nanos", labels, m.TotalNanos)
+			writePrometheusSample(&buf, name+"_count", labels, m.Count)
 		}
 	}
 	return buf.Bytes()
+}
+
+func joinPrometheusLabels(labels, extra string) string {
+	if labels == "" {
+		return extra
+	}
+	return labels + "," + extra
 }
 
 func prometheusCounterName(name string) string {

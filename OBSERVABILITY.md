@@ -1,6 +1,6 @@
 # roost 可观测性规范与指标清单
 
-所有指标经 `cube-core/obs` 注册表（Counter / Gauge / Duration 三类），`obs.Snapshot()` 导出快照、`obs.PrometheusText(obs.Snapshot())` 输出 Prometheus 文本格式。宿主服务暴露一个抓取端点即可：
+所有指标经 `cube-core/obs` 注册表（Counter / Gauge / Duration / Histogram 四类），`obs.Snapshot()` 导出快照、`obs.PrometheusText(obs.Snapshot())` 输出 Prometheus 文本格式。宿主服务暴露一个抓取端点即可：
 
 ```go
 http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
@@ -14,6 +14,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 - **存量下划线命名（`bus_*`、`checkpoint_*`、`failurelog_*`、`entitysync_*`）保持不变**——改名会打断既有采集，规范只约束新增。
 - **label 基数必须有界**：handler 名、result 枚举、reason 枚举可以；实体 ID、玩家 ID、技能 ID 一律禁止（`obs.Registry` 有 series 上限兜底，但打到上限本身就是事故）。
 - Duration 一律用 `obs.ObserveDuration`，不要把毫秒塞进 Counter。
+- **需要分位数的时长用 `obs.ObserveHistogram`**：17 个固定指数桶（1ms 起逐桶翻倍到 ~65s，`obs.HistogramBounds()` 可查），`obs.HistogramQuantile(name, labels, q)` 桶内线性插值取分位数；Prometheus 导出为标准累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。桶固定意味着无采样窗口——它是进程生命期累积分布，压测类"单场分布"要在场景开始前 `obs.Reset()` 或用 label 区分场次。
 - skillv2/combat 是零依赖包，**不直接接 obs**：技能侧观测由宿主适配（Runtime 的 `StateDeltas`/基准数据经宿主转发），这是设计边界不是遗漏。
 
 ## 指标清单（按面板分组）
@@ -76,6 +77,16 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
 | `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug） |
+
+### 机器人 / 压测（core/robot）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `robot.session.call{msg,result}` | Histogram | 每次请求/响应调用的时延分布；result 枚举 ok/timeout/closed/error/encode_error/send_error/mismatch/decode_error——非 ok 占比是被测服务的第一告警面 |
+| `robot.runner.scenario.cost{profile,run,scenario,result}` | Histogram | 一次场景执行的全程耗时（ok/error/canceled）；loadtest 阈值裁决从它取 p50–p99。`run` label 每场压测唯一——同 profile 连跑两场分布互不污染（series 随场次增长，靠 series 上限兜底，长驻进程注意场次频率） |
+| `robot.runner.scenario.total{profile,run,scenario,result}` | Counter | 场景执行结果计数（error_rate 的分母/分子） |
+| `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
+| `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
 
 ## 告警基线建议
 

@@ -2,8 +2,8 @@ package ctx
 
 import (
 	stdctx "context"
-	"github.com/tjbdwanghaibo/cube-core/clock"
 	"fmt"
+	"github.com/tjbdwanghaibo/cube-core/clock"
 	"sync"
 	"sync/atomic"
 	"time"

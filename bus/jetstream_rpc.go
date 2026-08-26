@@ -2,11 +2,11 @@ package bus
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"github.com/tjbdwanghaibo/cube-core/obs"
-	"errors"
-	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"strings"

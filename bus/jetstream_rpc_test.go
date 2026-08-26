@@ -2,9 +2,9 @@ package bus
 
 import (
 	"context"
+	"errors"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"github.com/tjbdwanghaibo/cube-core/obs"
-	"errors"
 	"strings"
 	"sync"
 	"testing"

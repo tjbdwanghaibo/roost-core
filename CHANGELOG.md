@@ -4,9 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+- **`robot` 机器人框架**（从 cube 的 robot 服务拣入并重构，cube 仓库零改动）：模拟客户端逻辑 + 压测双用途。分层：`robot/transport`（统一包协议 `[4B body_len][4B msg_id][4B seq]` 小端、TCP/WebSocket 内置、`RegisterDialer` 扩展点——KCP/QUIC 客户端拨号在 cube-kit `robot` 包）；`robot/protocol`（编解码注册表，`Codec` 注入 + `EnsureEncoder`/`EnsureDecoder` 按方向幂等安装——请求响应共用 msgID 不冲突）；`robot/session`（seq 匹配请求响应、push 分发、幂等关闭，每次 Call 埋 `robot.session.call{msg,result}` 直方图）；`robot`（Context 黑板 + `TypedKey[T]` 类型化访问器、LIFO 关闭钩子、`EnsurePushCapture`、`Coalescer`（去重合帧确认）、`BoundedQueue`（drop-oldest））；`robot/action`（动作注册表 + 内置 connect/wait/wait_push；**`RegisterCall[Req,Resp]` 泛型一行注册调用动作**——请求字段按 json tag/snake_case 从参数与黑板自动填充、`GetCode()` 约定判错、业务只写 `OnResp` 闭包）；`robot/scenario`（行为树组合子 Sequence/Selector/Parallel/Retry/Timeout/加权 Random（按 Seed 确定性），可选 YAML spec 解释器，解析期全量校验）；`robot/runner`（k6 式三执行器 pool/looping（含 `Stages` 分段升降）/arrival-rate，账目不变量 `Started == Success+Failure+Canceled`，10k bot 基准 ~2s/60MB）；`robot/loadtest`（单活跃 run 状态机、`Threshold` SLO 裁决（error_rate/p50–p99，违约即 `StateFailed`+`StopReasonThreshold`）、环形历史、6 条 admin 命令、Markdown 报告；默认指标带 `run` label——同 profile 连跑分布互不污染）。端到端示例 `examples/robotdemo`。
+- `obs`：新增 **Histogram** 指标类型——17 个固定指数桶（1ms 起逐桶翻倍），`ObserveHistogram`/`HistogramQuantile`（桶内线性插值）/`HistogramBounds`；Prometheus 导出累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。
+- `lockstep`：新增 **`FrameAssembler`**——客户端半场的帧装配器：冗余广播/追帧页去重、严格顺序释放、等待帧到达即时释放并排空连续段（追帧补洞永不被缓冲上限误拒）、缓冲越界返回"该追帧了"错误（`ErrHistoryUnknown` 链）。回归：3 客户端 × 600 帧 × 30% 丢包经冗余愈合零丢帧。
+
+## [1.8.0] - 2026-08
+
 ### Fixed（v1.7.1 发布后复审：lockstep 首审 + configdata 修复波自查，共 46 项全部实施，均带回归测试）
 - `lockstep`（核心层）：`SubmitWindow` 硬上限 64 + 溢出配置注册期拒绝；`SequencerConfig.MaxInputBytes` 每局可收紧的输入上限（kit Room 据此做传输预算校验）；显式当前帧输入覆盖迟到折入的过期 payload（原先真实操作被静默丢弃）；帧号耗尽显式 panic（一局一 Sequencer）；`RedundantEncoder` 定长环 + `NormalizeRedundancyDepth`（按解码端上限收口）；解码补 `MaxFrameInputs` 与包内帧号严格递增（关闭 ~16× 内存放大）；`History.TrimBefore/FirstID`（长局内存收口）+ 单所有者/最坏内存文档；`DesyncDetector` quorum 改为"同意组大小"语义（少数抢先上报无法定罪）+ Trim 墓碑化（迟到补报不能重建报告集）。房间层修复见 cube-kit CHANGELOG。
 - `configdata`（上一轮修复的自查，31 项）：`required`/`ref` 改逐指令解析（原先子串匹配会误拒 `index=required_level` 这类合法 tag、误报合法零值）；嵌入字段实现 encoding/json 的深度遮蔽规则（同名外层胜出、平局丢弃，被遮蔽字段带 cfg tag 报错——原先 key 可能静默取到恒零的内层字段；带 json 名的匿名字段不再被错误提升）；readJSON 包装文档改显式探测（对象目标的包装文档在宽松模式不再静默归零、strict/宽松语义一致；rows 为 null 拒绝；strict 模式补尾部垃圾检测）；listener 的 `Name()` 在 recover 保护内求值（typed-nil 监听器不再逃逸 panic）；版本号改单调分配永不回退（失败/回滚烧号，向监听者暴露过的号永不复用于不同内容）；Rollback 消费 previous 槽（连按两次不再回到坏配置）+ 事件带 `from_version`；全局槽位（defaultStore/fctx）改保存/恢复并加包级锁（跨 Store 并发不再互相抹除、首载失败不再清掉别人的运行时配置）；`ValidateReload` 在 Reload 与 DryRun 间保持单线程（`valMu`，只锁校验阶段——DryRun 的长 build 仍不阻塞紧急 Rollback）；panic 错误保留 `errors.Is` 链并附堆栈，`Must*` panic 改为包装 error；外部聚合指纹改顺序无关（按文件名排序折叠 per-file 摘要，并发读安全）+ 零读取报错（绕过注入 reader 即失败）+ 符号链接解析校验 + `WithExternalValidate` 选项；`finalize` 对全非导出字段的 custom/object 拒绝静默空对象哈希、未消费的指纹名报错、载荷流式写入；`SetFingerprint` 在快照定稿后封印；auto 表 ref 校验整体移入表级 `ValidateTable`（目标解析每 build 一次）+ `WithAutoValidateTable` 选项；回调契约文档化（不得 Goexit）。**行为说明：hash 值再次变化；重复注册与部分宽松解析路径现在报错。**
+
+## [1.7.1] - 2026-08
 
 ### Fixed（configdata 三路对抗性复审，39 项发现全部实施，均带回归测试）
 - **发布路径重构为单一提交点**（`configdata.Store.commit`）：current/version/defaultStore/fctx 四个状态在锁内一次性推进与回退（此前分五步推进，中途失败留下混合世代——Version 重号、Rollback 跳代、defaultStore 被劫持、typed-nil 进 fctx 槽）。所有 listener 回调、lifecycle emit、def 的 load/build/validate **全部 panic 容器化**（对齐全仓惯例；此前 listener panic 会让 Store 永久失去一致性）。
@@ -32,10 +41,16 @@
 ### Changed
 - README 按全量能力审计扩充：能力总览修正分类（taskflow/ai 独立成"实体行为契约"行并指明 runner 在 kit、ownerroute 的"路由 epoch"归位到 entity、`cache`/`httpclient`/`httpserver` 从"接口抽象"改为完整实现三档分类）；实现细节新增第 12–16 条（平台注册表实例优先、缓存分层选型、bus 四条易踩契约、`CaptureSnapshot` 跨 goroutine 正向出路、单所有者组件清单）；"补充契约"新增分布式 fence 三化身、configdata 热更一致性、`errcode.ClientError` 信息隐藏边界；修正第 7 条"时长分布"措辞（obs timer 无分位数）；学习路径补第 11–12 条测试即规格清单。
 
-### Added
+### Added（v1.7.1）
 - `configdata` 配置管线打磨（映射零手写）：① `RegisterAutoTable`——`cfg` struct tag（`key`/`index[=名]`/`ref=表名`）推导全部映射，`ref` 为 Luban 式悬空引用校验（每次 load/reload 进程内执行，零值=无引用），tag 错误一律注册期 fail-fast，读取路径零反射；② `RegisterExternalTables`/`ExternalTablesFrom`——外部生成的表聚合（如 Luban code_go_json 的 Tables）作为快照成员接入，原子热更/回滚/hash/请求一致性全部继承，文件读取限制在数据目录内（拒绝路径逃逸）；③ 新增 `examples/` 模块：`configgen`（cfggen meta→生成→热更/ref 拦截端到端）与 `lubanreal`（**真实 Luban 接入**：gen/ 与导出数据由官方 luban CLI v4.11.0 生成，XML schema + JSON 数据源，`RegisterExternalTables` 接线后热更/回滚全继承，重生成脚本 gen.sh）。配套的 schema 生成器 `cfggen` 在 roost-codegen。
+
+## [1.7.0] - 2026-08
+
+### Added
 - `lockstep` 包：帧同步（输入帧）核心，与状态同步（entitysync / kit sync）并列的第三条同步通道。`Sequencer` 乐观帧锁定（到点切帧永不等待、缺席即空输入、迟到折入下一未切帧、提交窗口防未来帧滥用、重复提交幂等）；`RedundantEncoder`/`EncodeBroadcast`/`DecodeBroadcast` 帧冗余广播编码（每报文携带最近 N 帧，丢包靠冗余修复而非重传；解码严格 fail-fast，坏包永不变成静默错帧）；`History` 全量帧历史（追帧分页 + 回放产物）；`DesyncDetector` 关键帧哈希多数派裁决（首报不可改口、法定人数后出裁决）。单帧封包基准 ~0.84µs（验收线 50µs）；30% 丢包仿真零帧缺失。房间与传输接线在 cube-kit 的 `lockstep` 包。
 - 可观测性统一：`OBSERVABILITY.md`（命名规范、全仓指标清单、告警基线、Prometheus 导出接线）与 `observability/grafana-roost-overview.json` 总览面板（调度/durability/缓存总线/跨服实体四组）。
+
+## [1.6.3 – 1.6.5] - 2026-08
 
 ### Fixed
 - `cache/ref_hmap`：Redis Lua 写失败降级为非原子回退时不再静默——记录 `slog.Warn` 并递增 `cache.refhmap.write_degraded_total` 指标（降级行为本身保留，可用性优先）。

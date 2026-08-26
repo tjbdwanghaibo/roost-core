@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -80,4 +81,56 @@ func TestSeriesLimitDropIsVisible(t *testing.T) {
 		}
 	}
 	t.Fatalf("obs.series.dropped series missing: %+v", reg.Snapshot())
+}
+
+func TestHistogramObserveQuantileAndExport(t *testing.T) {
+	reg := NewRegistry()
+	for i := 0; i < 90; i++ {
+		reg.ObserveHistogram("robot.call", Labels{"msg": "ping"}, 3*time.Millisecond)
+	}
+	for i := 0; i < 10; i++ {
+		reg.ObserveHistogram("robot.call", Labels{"msg": "ping"}, 300*time.Millisecond)
+	}
+	p50 := reg.HistogramQuantile("robot.call", Labels{"msg": "ping"}, 0.50)
+	p99 := reg.HistogramQuantile("robot.call", Labels{"msg": "ping"}, 0.99)
+	if p50 <= 0 || p50 > 8*time.Millisecond {
+		t.Fatalf("p50 = %v, want within the 2-4ms bucket range", p50)
+	}
+	if p99 < 100*time.Millisecond || p99 > 600*time.Millisecond {
+		t.Fatalf("p99 = %v, want within the ~256-512ms bucket range", p99)
+	}
+	// Unknown series is zero, not a panic.
+	if q := reg.HistogramQuantile("missing", nil, 0.5); q != 0 {
+		t.Fatalf("missing series quantile = %v", q)
+	}
+	var found *Metric
+	for _, m := range reg.Snapshot() {
+		if m.Kind == KindHistogram && m.Name == "robot.call" {
+			found = &m
+			break
+		}
+	}
+	if found == nil || found.Count != 100 {
+		t.Fatalf("histogram snapshot missing: %+v", found)
+	}
+	text := string(PrometheusText([]Metric{*found}))
+	for _, want := range []string{`robot_call_bucket{msg="ping",le="+Inf"} 100`, "robot_call_count", "robot_call_sum_nanos"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("prometheus export missing %q:\n%s", want, text)
+		}
+	}
+	// Cumulative buckets must be monotonically non-decreasing.
+	last := int64(-1)
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "robot_call_bucket") {
+			var v int64
+			if _, err := fmt.Sscanf(line[strings.LastIndex(line, " ")+1:], "%d", &v); err != nil {
+				t.Fatal(err)
+			}
+			if v < last {
+				t.Fatalf("buckets not cumulative:\n%s", text)
+			}
+			last = v
+		}
+	}
 }

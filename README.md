@@ -30,8 +30,9 @@
 | `taskflow`、`ai` | 实体内行为契约（**不是通信设施**）：动作/任务状态机接口、声明式 `MissionPlan` 步骤图、ActionGroup 分组冻结；AI 策略契约（`CanStopByNext` 抢占仲裁、经 `ActionList` 下达动作）。**core 只有接口，执行器在 cube-kit 的 `taskflow`/`ai` 包** | 实体行为层（怪物/NPC/玩法状态机） |
 | `ownerroute`、`replica`、`entity`（remote 部分） | 按 owner sid 分派命令的泛型路由器（本地执行 vs 经 bus 转发）；带订阅-应用回环的副本复制器（空 Data 即删除的线格式）；ownership marker + fence + 路由 epoch（epoch 在 `entity`，不在 ownerroute） | 跨服实体读写与命令路由 |
 | `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 三档：`mongo`/`nats` 纯接口（实现全在 kit）；`redis`/`etcd` 接口 + 核心实现（Lua `CompareAndSet`、`WatchCallback`、LocalMirror 契约）；`cache`/`httpclient`/`httpserver` 是完整实现（8 种缓存 store、HMAC 签名客户端、chi 之上的生产 HTTP 引擎——core 对 chi 的依赖是唯一例外） | 缓存选型见实现细节第 13 条；连接装配由 `roost-kit` 的 Mod 提供 |
-| `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer，无分位数）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
+| `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer 无分位数；histogram 17 桶指数分布带 p50–p99 与 Prometheus `_bucket` 导出）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
 | `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照（原子热更/回滚/内容 hash/请求一致性；三条接入通道：手写 TableDef、`cfg` tag 自动注册 `RegisterAutoTable`、外部生成聚合 `RegisterExternalTables`——配置定义可全量生成，见实现细节第 17 条） | 接入层契约 |
+| `robot` | 机器人（模拟客户端）框架：统一包协议 transport（TCP/WS 内置，KCP/QUIC 在 kit）、seq 匹配会话、`RegisterCall` 泛型零样板动作、行为树场景（Go 组合子 + 可选 YAML）、三种压测执行器（pool/looping/arrival-rate）+ SLO 阈值裁决与 Markdown 报告 | 模拟客户端逻辑回归、压测（见实现细节第 18 条） |
 | `timer`、`clock`、`map`、`query`、`ctx` | 时间任务、逻辑时间、容器与索引、请求上下文 | 通用工具 |
 
 core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间件连接实现——那些分别属于业务仓库与 `roost-kit`。
@@ -360,7 +361,7 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 
 ### 7. 锁内耗时预算：`nest.handler.lock_hold` —— `nest/nest_dispatch.go`
 
-每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长 `nest.handler.lock_hold{handler}`（obs 的 timer 只有 count/sum/max/last，**没有分位数**——看均值用 sum/count，max 是进程生命期高水位永不衰减）；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
+每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长 `nest.handler.lock_hold{handler}`（obs 的 timer 只有 count/sum/max/last，**没有分位数**——看均值用 sum/count，max 是进程生命期高水位永不衰减；需要分位数的时长用 `obs.ObserveHistogram`——17 桶指数直方图，1ms 起逐桶翻倍，`HistogramQuantile` 线性插值取 p50–p99，Prometheus 侧导出累积 `_bucket{le}`）；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
 
 ### 8. 冷加载合并与缓存降级可见性 —— `entity/manager_access.go`、`cache/ref_hmap.go`
 
@@ -415,6 +416,19 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 **热更回调契约**（`ReloadListener`）：所有回调 panic 容器化（panic = 失败并整体回退）；`RollbackReload` 与 `BeforeApplyReload` 配对（只有 prepare 成功的监听者按逆序收到回滚）；`Old == nil` 的首次加载失败**不触发**回滚回调——监听者不得把它当"回退默认配置"。外部聚合的内容经 read 字节指纹进入 `Snapshot.Hash`；自带非导出状态的 custom 值需调 `Snapshot.SetFingerprint`，否则 build 报错提示。
 
 接真正的 Luban 时用 `RegisterExternalTables`：Luban 管定义/校验/导出/代码生成（Excel 族源、bean 继承多态、ref/path/range 导出期校验），生成的 `Tables` 聚合作为快照成员装进 roost——原子热更、回滚、hash、`ActiveSnapshot` 请求一致性全部继承，Luban 侧零运行时。**已真实接入**：`examples/lubanreal` 的 `gen/` 与导出数据由官方 luban CLI（v4.11.0，XML schema + JSON 数据源）真实生成并可运行验证，重新生成见其 `gen.sh`。
+
+### 18. 机器人框架：约定优于配置，业务只写 OnResp —— `robot/`、kit `robot/`
+
+`robot` 从 cube 的 robot 服务提炼而来（实现拣入 core，业务协议留在业务侧），针对两个痛点重构：**手写太多**、**基建不全**。分层自下而上：
+
+- **transport**：统一包协议 `[4B body_len][4B msg_id][4B seq]`（小端，seq=0 为服务端推送）。TCP/WebSocket 内置；`RegisterDialer` 是扩展点——kit `robot` 包据此注册 KCP（AES-GCM+FEC，流式复用同一帧协议）与 QUIC（单双向 stream 承载）客户端拨号。
+- **session**：seq 匹配的请求/响应 + push 分发，`Call` 自动埋 `robot.session.call{msg,result}` 直方图（result 枚举 ok/timeout/closed/…）。未注册解码器的推送保留原始字节，不算错误。
+- **action（消灭手写样板的核心）**：`RegisterCall[Req,Resp](reg, protocols, name, msgID, opts...)` 一行注册一个可在场景里引用的调用动作——请求字段按 json tag/snake_case 自动从场景参数与黑板取值填充，响应按 `GetCode() int32/int64` 约定判错，**业务唯一要写的是 `OnResp` 闭包**（把响应写回黑板/断言）。编码器按方向拆分安装（`EnsureEncoder`/`EnsureDecoder`），请求响应共用 msgID 也不冲突。
+- **scenario**：行为树组合子（Sequence/Selector/Parallel/Retry/Timeout/加权 Random——随机数按 robot Seed 确定性），Go 代码是第一公民；YAML spec（`ParseSpec`）是**可选**通道，供无需编译的编排复用已注册动作，解析期全量校验（未知键/一节点多种类/路径定位错误）。
+- **runner/loadtest**：借鉴 k6 的三种执行器——pool（闭环跑一遍）、looping（持续 + `Stages` 分段升降 VU）、arrival-rate（开环恒定到达率，测系统而非测机器人）；账目不变量 `Started == Success+Failure+Canceled`（中断的 bot 计 Canceled，不失踪）。`loadtest.Manager` 单活跃 run 状态机 + 环形历史 + 6 条 admin 命令（`robot.loadtest.start/stop/status/…/report`），`Threshold`（error_rate/p50–p99）不满足即整场判 failed（`StopReasonThreshold`），报告直接产出 Markdown 分位数表。10k bot 全生命周期基准 ~2s/60MB（goroutine-per-bot，万级单进程）。
+- **lockstep 客户端半场**：core `lockstep.FrameAssembler`（冗余广播去重 + 严格顺序释放 + 缓冲越界报"该追帧了"）；kit `robot.LockstepBot` 在其上补输入提交、关键帧哈希上报（缺省哈希是输入链 FNV 折叠——确定性模拟下输入同则状态同）、每 gap 一次的追帧请求去重。回归基线：3 bot × 600 帧 × 30% 独立丢包，冗余 + 追帧后全帧应用、`DesyncDetector` 零误报。
+
+端到端示例 `examples/robotdemo`：进程内游戏服 + 2 行 `RegisterCall` + YAML 场景 + 200 bot 压测 + 阈值裁决 + Markdown 报告。
 
 ### 补充几条常踩的契约
 

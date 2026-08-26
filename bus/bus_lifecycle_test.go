@@ -2,8 +2,8 @@ package bus
 
 import (
 	"context"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"fmt"
+	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"testing"
 	"time"
 )
