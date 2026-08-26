@@ -1,4 +1,9 @@
-// Package gateway contains reusable middleware for core/gateway boundaries.
+// Package gateway contains reusable middleware for core/gateway boundaries
+// (rate limiting, authentication requirements, request guards).
+//
+// Scope: middleware only. This is not a gateway server — no listener, no
+// protocol termination, no routing, no session management; those live in the
+// application's gateway service, which composes these middlewares.
 package gateway
 
 import (
