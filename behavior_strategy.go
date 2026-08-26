@@ -85,6 +85,8 @@ func (s *BehaviorStrategy[C]) Init(*coreai.Context) error {
 
 func (s *BehaviorStrategy[C]) Tick(ctx *coreai.Context, _ time.Time) {
 	if s.root == nil {
+		// No tree consumes completions; drop them or they accumulate forever.
+		s.pending = nil
 		return
 	}
 	behavior := BehaviorContext[C]{Core: ctx, Data: s.options.Data, actionEnds: s.pending}

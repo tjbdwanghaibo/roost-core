@@ -67,9 +67,13 @@ func (r *Registry[C]) RegisterAction(kind string, build func(args json.RawMessag
 // strict in the skillv2 wire tradition: unknown fields, unknown node names,
 // arity violations, and depth blowups are all compile-time rejections that
 // name the offending JSON path — a broken document never becomes a silently
-// wrong tree. The returned tree is freshly stateful and ready for
-// NewBehaviorStrategy (a failed parse leaves any currently installed
-// strategy untouched, which Controller.SetStrategy already guarantees).
+// wrong tree.
+//
+// The returned tree carries live evaluation state and belongs to exactly ONE
+// strategy: sharing it between strategies (or agents) crosses their cursor
+// and timer state — parse once per consumer instead. A failed parse leaves
+// any currently installed strategy untouched, which Controller.SetStrategy
+// already guarantees.
 func ParseTree[C any](data []byte, registry *Registry[C]) (Node[C], error) {
 	if registry == nil {
 		return nil, fmt.Errorf("%w: registry is required", ErrTreeInvalid)
@@ -195,6 +199,14 @@ func parseNode[C any](data []byte, registry *Registry[C], path string, depth int
 		if len(raw.Condition) == 0 {
 			return nil, fmt.Errorf("%w: %s.condition is required", ErrTreeInvalid, path)
 		}
+		// A guard predicate is re-evaluated every tick and its result is
+		// collapsed to a bool, so only stateless predicate shapes are legal:
+		// condition leaves and pure logic over them. Anything with side
+		// effects or running state (action, cooldown, repeat, ...) would fire
+		// on every check and never be reset — reject at assembly time.
+		if err := validatePredicate(raw.Condition, path+".condition", depth+1); err != nil {
+			return nil, err
+		}
 		predicate, err := parseNode(raw.Condition, registry, path+".condition", depth+1)
 		if err != nil {
 			return nil, err
@@ -291,6 +303,41 @@ func requireChild[C any](child json.RawMessage, registry *Registry[C], path stri
 		return nil, fmt.Errorf("%w: %s.child is required", ErrTreeInvalid, path)
 	}
 	return parseNode(child, registry, path+".child", depth+1)
+}
+
+// validatePredicate restricts a guard predicate subtree to stateless shapes:
+// condition leaves composed through sequence (AND), selector (OR), and
+// inverter (NOT).
+func validatePredicate(data []byte, path string, depth int) error {
+	if depth > maxTreeDepth {
+		return fmt.Errorf("%w: %s exceeds depth %d", ErrTreeInvalid, path, maxTreeDepth)
+	}
+	var header struct {
+		Node     string            `json:"node"`
+		Children []json.RawMessage `json:"children"`
+		Child    json.RawMessage   `json:"child"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrTreeInvalid, path, err)
+	}
+	switch header.Node {
+	case "condition":
+		return nil
+	case "sequence", "selector":
+		for index, child := range header.Children {
+			if err := validatePredicate(child, fmt.Sprintf("%s.children[%d]", path, index), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "inverter":
+		if len(header.Child) == 0 {
+			return fmt.Errorf("%w: %s.child is required", ErrTreeInvalid, path)
+		}
+		return validatePredicate(header.Child, path+".child", depth+1)
+	default:
+		return fmt.Errorf("%w: %s: node %q is not a valid guard predicate (allowed: condition, sequence, selector, inverter)", ErrTreeInvalid, path, header.Node)
+	}
 }
 
 // decodeStrictJSON decodes one JSON value rejecting unknown fields and

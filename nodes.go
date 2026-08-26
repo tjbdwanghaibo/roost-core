@@ -246,6 +246,11 @@ func (n *Cooldown[C]) Tick(ctx *C) Status {
 	return status
 }
 
+// Reset deliberately keeps last/armed: the strategy resets the whole tree
+// after every completed evaluation, and a cooldown that forgot its last
+// firing on each reset would never gate anything. The cooldown therefore
+// persists across evaluations (and across strategy re-installs sharing the
+// same tree instance) until the node value itself is discarded.
 func (n *Cooldown[C]) Reset() {
 	if n != nil && n.Child != nil {
 		n.Child.Reset()

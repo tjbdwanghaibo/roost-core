@@ -287,3 +287,37 @@ func TestBehaviorStrategyDeterministicDecisions(t *testing.T) {
 		t.Fatal("decision log differs across identical runs")
 	}
 }
+
+// Regression (review): a guard predicate accepted arbitrary nodes — an
+// action leaf as predicate would fire side effects on every check with no
+// reset. Predicates are now restricted to stateless shapes at assembly.
+func TestParseTreeRejectsStatefulGuardPredicates(t *testing.T) {
+	registry := wireRegistry(t)
+	bad := `{"schema":"cube.ai/v1","root":{"node":"guard",
+	  "condition":{"node":"action","kind":"log","args":{"name":"boom"}},
+	  "child":{"node":"condition","name":"hp_below","args":{"threshold":1}}}}`
+	if _, err := ParseTree([]byte(bad), registry); err == nil || !strings.Contains(err.Error(), "not a valid guard predicate") {
+		t.Fatalf("action predicate accepted: %v", err)
+	}
+	good := `{"schema":"cube.ai/v1","root":{"node":"guard",
+	  "condition":{"node":"inverter","child":{"node":"selector","children":[
+	    {"node":"condition","name":"hp_below","args":{"threshold":1}},
+	    {"node":"condition","name":"hp_below","args":{"threshold":2}}]}},
+	  "child":{"node":"condition","name":"hp_below","args":{"threshold":100}}}}`
+	if _, err := ParseTree([]byte(good), registry); err != nil {
+		t.Fatalf("pure logic predicate rejected: %v", err)
+	}
+}
+
+// Regression (review): a nil-root strategy accumulated action completions
+// forever; Tick now drops them.
+func TestBehaviorStrategyNilRootDropsPendingCompletions(t *testing.T) {
+	strategy := NewBehaviorStrategy[treeData](nil, BehaviorStrategyOptions[treeData]{})
+	for i := 0; i < 100; i++ {
+		strategy.OnActionEnd(nil, int64(i), coreflow.ActionKind(1), coreflow.NewActionReason("done"))
+		strategy.Tick(&coreai.Context{}, time.Time{})
+	}
+	if len(strategy.pending) != 0 {
+		t.Fatalf("pending grew to %d", len(strategy.pending))
+	}
+}
