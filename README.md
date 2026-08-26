@@ -23,7 +23,8 @@
 | `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
 | `checkpoint` | `DirtyTracker` 字段级脏掩码、有界 `Journal`、`Flusher` 批量合并刷盘、版本化 tombstone、Redis WAL | 实体状态的后台持久化 |
 | `lock`、`worker`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool、goroutine-ID 等基础原语 | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
-| `entitysync`、`sync`、`syncstream`、`replication` | 订阅协调 + prepare/commit 两阶段同步、有序状态流、Quake3 风格 delta+LOD 房间复制 | 把实体状态推送给客户端或其他服务 |
+| `entitysync`、`sync`、`syncstream`、`replication` | 订阅协调 + prepare/commit 两阶段同步、有序状态流、Quake3 风格 delta+LOD 房间复制 | 把实体状态推送给客户端或其他服务（状态同步通道） |
+| `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
 | `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
 | `bus`、`event`、`taskflow` | NATS 之上的模块级消息 / RPC / 可靠消费（inbox 去重 + 死信）；进程内事件总线；任务流契约 | 服务间与实体间的异步通信 |
 | `ownerroute`、`replica`、`entity`（remote 部分） | 路由 epoch、副本 payload 编解码、ownership marker + fence | 跨服实体读写 |
@@ -372,6 +373,16 @@ tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调
 
 生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），fsync 次数从每条降到每批——观察者频繁进出的场景不再被逐条 fsync 地板限速。
 
+### 11. 输入帧同步与状态同步：三条通道的取舍 —— `lockstep/`、`entitysync/`、kit `sync/`
+
+roost 的同步能力是三条并列通道，按"谁跑模拟"划分：
+
+- **entitysync（core）**：按订阅主体推送字段级 delta + LOD，服务端跑模拟，客户端是显示器。通用状态同步。
+- **kit `sync/room_replication`**：entitysync 之上的房间批处理前端——固定 tick（默认 50ms）把房间内全部脏主体合成一个**状态帧**下发。它是状态同步的分支，不是帧同步。
+- **lockstep（core）+ kit `lockstep/`**：服务端只裁决**输入帧**——`Sequencer` 乐观帧锁定（到点就切帧，永不等慢客户端；缺席即空输入，迟到折入下一未切帧），模拟由客户端确定性执行（定点数学、注入随机、无墙钟——`roost-skill` 运行时天然满足该契约）。带宽与玩家状态规模无关，回放 = 输入历史，反外挂靠关键帧哈希多数派裁决（`DesyncDetector`）。
+
+lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最近 N 帧（`RedundantEncoder`，深度 N 可修复连续 N−1 个丢包），走不可靠 datagram 通道（AEAD UDP）；追帧/重连走可靠通道（KCP/QUIC），按 tick 限速分页（kit `Room.StartCatchup`）。对实时帧广播用 ARQ 重传是用错工具——重传回来的帧已经过期。
+
 ### 补充两条常踩的契约
 
 - **`lock.LockManager` 的重验合同**（`lock/lock_manager.go`）：锁实例可能被 `ReleaseLock` 并发释放重建，两个 goroutine 可能各持"同一 ID 的锁"。因此拿锁本身证明不了什么——加锁后必须重验受保护状态（`IsRemoved`/`IsClear`、索引成员资格），状态已消失就退让；释放方必须先在持锁状态下让状态不可达，再释放锁实例。
@@ -390,7 +401,8 @@ tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调
 7. **checkpoint 持久化**：`checkpoint/dirty.go` → `checkpoint/journal.go` → `checkpoint/flusher.go`（dedup/tombstone）→ `checkpoint/checkpoint.go` → `checkpoint/redis_wal.go` + `checkpoint/redis_wal_test.go`、`checkpoint/checkpoint_test.go`。
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
 9. **状态同步**：`entity/subject_sync.go` + `entitysync/subscription.go`（prepare/commit 两阶段）→ `syncstream/syncstream.go` → `replication/`（delta+LOD）→ 文档 `ENTITY_SYNC.md`。
-10. **编排与装配**：`saga/engine.go` + `SAGA.md` → `bus/bus.go` → `app/app.go`、`app/registry.go` + `app/example_test.go`。
+10. **帧同步（输入帧）**：`lockstep/sequencer.go`（乐观帧锁定）→ `lockstep/wire.go`（冗余广播编码）→ `lockstep/history.go`、`lockstep/desync.go` → `lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `lockstep/room.go`（房间与传输接线）。
+11. **编排与装配**：`saga/engine.go` + `SAGA.md` → `bus/bus.go` → `app/app.go`、`app/registry.go` + `app/example_test.go`。
 
 ## 与 roost-kit / roost-codegen / roost-skill 的关系
 

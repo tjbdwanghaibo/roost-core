@@ -65,6 +65,15 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `remote_entity.remote.interest_rejected_total` | Counter | interest 拒绝 |
 | `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |
 
+### 帧同步（kit/lockstep）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `lockstep.frame.total` | Counter | 切帧数（速率 ≈ 房间数 × 逻辑帧率，掉速 = tick 驱动异常） |
+| `lockstep.input.late.total` | Counter | 迟到输入折入后续帧的次数（客户端上行 RTT 健康度；占比高应上调 `SubmitWindow` 或降逻辑帧率） |
+| `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
+| `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug） |
+
 ## 告警基线建议
 
 1. `nest.pipelined.async_total{result="indeterminate"} > 0` —— 立即告警（fence 事故）。
@@ -73,5 +82,6 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 4. `nestwal.pending.tickets` 持续爬升 —— durable 落后于提交，检查磁盘。
 5. `nest.handler.lock_hold.slow.total` 新增 handler label —— 该 handler 是下一个 pipelined 灰度对象（见 NEST_PIPELINED_COMMIT.md §12）。
 6. `remote_entity.release_failure_total` / `quarantine_error_total` 非零 —— 所有权收尾异常。
+7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。

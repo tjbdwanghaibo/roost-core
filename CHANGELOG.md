@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `lockstep` 包：帧同步（输入帧）核心，与状态同步（entitysync / kit sync）并列的第三条同步通道。`Sequencer` 乐观帧锁定（到点切帧永不等待、缺席即空输入、迟到折入下一未切帧、提交窗口防未来帧滥用、重复提交幂等）；`RedundantEncoder`/`EncodeBroadcast`/`DecodeBroadcast` 帧冗余广播编码（每报文携带最近 N 帧，丢包靠冗余修复而非重传；解码严格 fail-fast，坏包永不变成静默错帧）；`History` 全量帧历史（追帧分页 + 回放产物）；`DesyncDetector` 关键帧哈希多数派裁决（首报不可改口、法定人数后出裁决）。单帧封包基准 ~0.84µs（验收线 50µs）；30% 丢包仿真零帧缺失。房间与传输接线在 cube-kit 的 `lockstep` 包。
 - 可观测性统一：`OBSERVABILITY.md`（命名规范、全仓指标清单、告警基线、Prometheus 导出接线）与 `observability/grafana-roost-overview.json` 总览面板（调度/durability/缓存总线/跨服实体四组）。
 
 ### Fixed
