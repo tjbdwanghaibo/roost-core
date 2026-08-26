@@ -146,6 +146,17 @@ func (c *redisClient) LRange(ctx context.Context, key string, start, stop int64)
 	return c.rdb.LRange(ctx, key, start, stop).Result()
 }
 
+// LTrim implements fredis.ListTrimmer: in-place trim without the DEL+RPUSH
+// loss window of the emulated fallback.
+func (c *redisClient) LTrim(ctx context.Context, key string, start, stop int64) error {
+	return c.rdb.LTrim(ctx, key, start, stop).Err()
+}
+
+// LRem implements fredis.ListRemover.
+func (c *redisClient) LRem(ctx context.Context, key string, count int64, value any) (int64, error) {
+	return c.rdb.LRem(ctx, key, count, value).Result()
+}
+
 // --- Sorted Set ---
 
 func (c *redisClient) ZAdd(ctx context.Context, key string, members ...fredis.Z) (int64, error) {
@@ -354,3 +365,5 @@ func redisInteger(value any) (int64, error) {
 var _ fredis.IRedis = (*redisClient)(nil)
 var _ fredis.DurableEvaler = (*redisClient)(nil)
 var _ fredis.DurableBatchEvaler = (*redisClient)(nil)
+var _ fredis.ListTrimmer = (*redisClient)(nil)
+var _ fredis.ListRemover = (*redisClient)(nil)
