@@ -1,11 +1,15 @@
 // Package spatial provides game-agnostic two-dimensional integer-grid
 // primitives without entity, scene, protocol, or gameplay dependencies.
 //
-// Scope: a lightweight uniform-grid ID index (BlockIndex) plus
-// four-direction grid A* — suited to room-scale gameplay on 2D grids. It is
-// deliberately NOT an MMO spatial service: there is no Z axis, no navmesh,
-// and no built-in interest management; object positions and visibility policy
-// stay with the caller.
+// Scope: a uniform-grid ID index (BlockIndex), four-direction grid A*, and
+// incremental interest management — InterestManager for one room
+// (enter/leave hysteresis, distance bands for LOD, visible-set caps) and
+// InterestCluster for seamless multi-room worlds on a shared coordinate
+// plane (boundary mirroring, blink-free border migration). Cross-room
+// seamlessness is within one process; cross-process handover additionally
+// needs remote-entity ownership fences and subscription replication and is
+// not provided here. There is still no Z axis and no navmesh; object data
+// beyond ids and positions stays with the caller.
 package spatial
 
 import (

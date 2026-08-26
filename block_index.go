@@ -178,8 +178,14 @@ func (i *BlockIndex) QueryRadius(center Point, radius int64) []int64 {
 }
 
 func (i *BlockIndex) QueryBlock(point Point) []int64 {
+	return i.QueryBlockIndex(i.BlockIndex(point))
+}
+
+// QueryBlockIndex returns the ids indexed in one block, addressed by block
+// index (as produced by BlockIndex/BlockRects), in ascending order.
+func (i *BlockIndex) QueryBlockIndex(index int64) []int64 {
 	seen := make(map[int64]struct{})
-	i.collect(i.BlockIndex(point), seen)
+	i.collect(index, seen)
 	return sortedIDs(seen)
 }
 
