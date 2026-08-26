@@ -2,11 +2,11 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 	"github.com/tjbdwanghaibo/cube-core/health"
 	"github.com/tjbdwanghaibo/cube-kit/mods"
-	"errors"
 	"log/slog"
 	"strings"
 	"time"
