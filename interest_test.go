@@ -307,3 +307,103 @@ func BenchmarkClusterFlushRandomWalk(b *testing.B) {
 		cluster.Flush()
 	}
 }
+
+// Regression (review): per-room MaxVisible multiplied a border observer's
+// budget by the number of touched rooms; the cap is now enforced globally at
+// the cluster level.
+func TestClusterMaxVisibleHoldsAcrossSeams(t *testing.T) {
+	cluster, err := NewInterestCluster(InterestConfig{BlockSize: 500, EnterRadius: 600, LeaveRadius: 800, MaxVisible: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddRoom(1, Rect{Min: Point{0, 0}, Max: Point{10000, 10000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddRoom(2, Rect{Min: Point{10000, 0}, Max: Point{20000, 10000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddObserver(1, Point{9900, 5000}); err != nil {
+		t.Fatal(err)
+	}
+	cluster.AddSubject(2, Point{9800, 5000})  // room 1, distance 100
+	cluster.AddSubject(3, Point{10100, 5000}) // room 2, distance 200
+	cluster.Flush()
+	if got := cluster.Visible(1); !reflect.DeepEqual(got, []int64{2}) {
+		t.Fatalf("cap leaked across the seam: visible = %v, want [2]", got)
+	}
+	// The nearer newcomer displaces the incumbent, downstream sees the swap.
+	cluster.AddSubject(4, Point{9950, 5000}) // distance 50
+	events := cluster.Flush()
+	want := []InterestEvent{
+		{Observer: 1, Subject: 2, Kind: InterestLeave, Band: -1},
+		{Observer: 1, Subject: 4, Kind: InterestEnter, Band: 0},
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("displacement events = %+v, want %+v", events, want)
+	}
+	if got := cluster.Visible(1); !reflect.DeepEqual(got, []int64{4}) {
+		t.Fatalf("visible = %v, want [4]", got)
+	}
+}
+
+// Regression (review): a room added after observers existed left stationary
+// border observers with a permanent visibility hole into it (mirrors were
+// only rebuilt on observer movement). AddRoom now retrofits mirrors.
+func TestClusterAddRoomBackfillsStationaryObservers(t *testing.T) {
+	cluster, err := NewInterestCluster(InterestConfig{BlockSize: 500, EnterRadius: 600, LeaveRadius: 800})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddRoom(1, Rect{Min: Point{0, 0}, Max: Point{10000, 10000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddObserver(1, Point{9900, 5000}); err != nil { // stationary turret at the future seam
+		t.Fatal(err)
+	}
+	if err := cluster.AddRoom(2, Rect{Min: Point{10000, 0}, Max: Point{20000, 10000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddSubject(2, Point{10200, 5000}); err != nil { // room 2, distance 300
+		t.Fatal(err)
+	}
+	events := cluster.Flush()
+	if len(events) != 1 || events[0].Kind != InterestEnter || events[0].Subject != 2 {
+		t.Fatalf("stationary observer blind to the new room: %+v", events)
+	}
+}
+
+// Regression (review): id 0 was half-tracked (BlockIndex silently refuses
+// it) — visibility split between observers. Now rejected outright, and a
+// giant LeaveRadius that would wrap the subscription box is rejected too.
+func TestInterestRejectsZeroIDAndWrappingRadius(t *testing.T) {
+	manager := interestFixture(t, InterestConfig{})
+	if err := manager.AddSubject(0, Point{5000, 5000}); err == nil {
+		t.Fatal("subject id 0 accepted")
+	}
+	if err := manager.AddObserver(0, Point{5000, 5000}); err == nil {
+		t.Fatal("observer id 0 accepted")
+	}
+	if _, err := NewInterestManager(InterestConfig{
+		Bounds: Rect{Min: Point{0, 0}, Max: Point{1000, 1000}}, BlockSize: 100,
+		EnterRadius: 1, LeaveRadius: int64(1) << 62,
+	}); err == nil {
+		t.Fatal("wrapping LeaveRadius accepted")
+	}
+}
+
+// Regression (review): block-order admission could emit a transient
+// Enter+Leave pair for a farther subject during one observer evaluation.
+func TestInterestObserverEvaluationAdmitsNearestFirst(t *testing.T) {
+	manager := interestFixture(t, InterestConfig{MaxVisible: 1})
+	// Farther subject sits in a lower block index than the nearer one.
+	manager.AddSubject(5, Point{4600, 4600}) // farther
+	manager.AddSubject(9, Point{5050, 5050}) // nearer
+	if err := manager.AddObserver(1, Point{5000, 5000}); err != nil {
+		t.Fatal(err)
+	}
+	events := manager.Flush()
+	want := []InterestEvent{{Observer: 1, Subject: 9, Kind: InterestEnter, Band: 0}}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("admission emitted transients: %+v, want %+v", events, want)
+	}
+}

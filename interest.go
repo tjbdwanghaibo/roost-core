@@ -54,8 +54,12 @@ type InterestConfig struct {
 	MaxVisible int
 }
 
+// maxInterestRadius bounds LeaveRadius so subscription-box arithmetic can
+// never wrap (at ± (radius+1) must stay well inside int64).
+const maxInterestRadius = int64(1) << 62
+
 func (c InterestConfig) validate() error {
-	if c.EnterRadius <= 0 || c.LeaveRadius < c.EnterRadius {
+	if c.EnterRadius <= 0 || c.LeaveRadius < c.EnterRadius || c.LeaveRadius >= maxInterestRadius {
 		return ErrInterestConfig
 	}
 	for index, edge := range c.Bands {
@@ -127,8 +131,13 @@ func (m *InterestManager) emit(observer, subject int64, kind InterestEventKind, 
 }
 
 // AddSubject indexes a subject and evaluates it against the neighborhood's
-// observers.
+// observers. Id zero is rejected: BlockIndex silently refuses it, which
+// would leave the subject half-tracked (visible through some evaluation
+// paths and invisible through block scans).
 func (m *InterestManager) AddSubject(id int64, at Point) error {
+	if id == 0 {
+		return ErrInterestUnknown
+	}
 	if !m.config.Bounds.Contains(at) {
 		return ErrInvalidBounds
 	}
@@ -174,6 +183,9 @@ func (m *InterestManager) RemoveSubject(id int64) error {
 // AddObserver registers an observer and evaluates its initial visible set.
 // An id may be both an observer and a subject; it never observes itself.
 func (m *InterestManager) AddObserver(id int64, at Point) error {
+	if id == 0 {
+		return ErrInterestUnknown
+	}
 	if !m.config.Bounds.Contains(at) {
 		return ErrInvalidBounds
 	}
@@ -265,9 +277,10 @@ func (m *InterestManager) Flush() []InterestEvent {
 // resubscribe diffs the observer's block subscriptions against the blocks
 // its leave-radius box currently covers.
 func (m *InterestManager) resubscribe(observer *interestObserver) {
+	reach := saturatingAdd(m.config.LeaveRadius, 1)
 	box := Rect{
 		Min: Point{X: saturatingSub(observer.at.X, m.config.LeaveRadius), Y: saturatingSub(observer.at.Y, m.config.LeaveRadius)},
-		Max: Point{X: saturatingAdd(observer.at.X, m.config.LeaveRadius+1), Y: saturatingAdd(observer.at.Y, m.config.LeaveRadius+1)},
+		Max: Point{X: saturatingAdd(observer.at.X, reach), Y: saturatingAdd(observer.at.Y, reach)},
 	}
 	next, _ := m.index.BlockRects(box)
 	for block := range observer.blocks {
@@ -341,15 +354,38 @@ func (m *InterestManager) evaluateObserver(observer *interestObserver) {
 		blocks = append(blocks, block)
 	}
 	sort.Slice(blocks, func(i, j int) bool { return blocks[i] < blocks[j] })
+	// Admit new candidates nearest-first: block-order admission could let a
+	// farther subject enter and be evicted by a nearer one within the same
+	// evaluation, emitting a transient Enter+Leave pair downstream.
+	type entryCandidate struct {
+		subject  int64
+		at       Point
+		distance int64
+	}
+	var candidates []entryCandidate
+	seen := make(map[int64]struct{})
 	for _, block := range blocks {
 		for _, subject := range m.index.QueryBlockIndex(block) {
 			if _, alreadyVisible := observer.visible[subject]; alreadyVisible {
 				continue
 			}
+			if _, duplicate := seen[subject]; duplicate {
+				continue
+			}
+			seen[subject] = struct{}{}
 			if at, exists := m.subjects[subject]; exists {
-				m.evaluatePair(observer, subject, at, false)
+				candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: DistanceSquared(observer.at, at)})
 			}
 		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].distance != candidates[j].distance {
+			return candidates[i].distance < candidates[j].distance
+		}
+		return candidates[i].subject < candidates[j].subject
+	})
+	for _, candidate := range candidates {
+		m.evaluatePair(observer, candidate.subject, candidate.at, false)
 	}
 }
 

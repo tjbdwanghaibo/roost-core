@@ -53,7 +53,9 @@ type InterestCluster struct {
 	// visible tracks, per (observer, subject) pair, the band contributed by
 	// each room and the state last emitted downstream.
 	visible map[interestPair]*clusterVisibility
-	pending []InterestEvent
+	// observerPairs indexes visible by observer for capacity settlement.
+	observerPairs map[int64]map[int64]*clusterVisibility
+	pending       []InterestEvent
 }
 
 type clusterRoom struct {
@@ -75,9 +77,12 @@ type interestPair struct {
 }
 
 type clusterVisibility struct {
-	bands        map[RoomID]int
-	emitted      bool
-	emittedBand  int
+	bands       map[RoomID]int
+	emitted     bool
+	emittedBand int
+	// suppressed marks a pair held back by the cluster-level MaxVisible cap:
+	// visible to some room manager, but not surfaced downstream.
+	suppressed bool
 }
 
 func NewInterestCluster(config InterestConfig) (*InterestCluster, error) {
@@ -88,18 +93,20 @@ func NewInterestCluster(config InterestConfig) (*InterestCluster, error) {
 		return nil, ErrInvalidBounds
 	}
 	return &InterestCluster{
-		config:    config,
-		rooms:     make(map[RoomID]*clusterRoom),
-		subjects:  make(map[int64]clusterPlacement),
-		observers: make(map[int64]clusterPlacement),
-		visible:   make(map[interestPair]*clusterVisibility),
+		config:        config,
+		rooms:         make(map[RoomID]*clusterRoom),
+		subjects:      make(map[int64]clusterPlacement),
+		observers:     make(map[int64]clusterPlacement),
+		visible:       make(map[interestPair]*clusterVisibility),
+		observerPairs: make(map[int64]map[int64]*clusterVisibility),
 	}, nil
 }
 
 // AddRoom registers a world-plane rectangle as a room. Bounds must not
-// overlap any existing room. Rooms are expected to be added before entities;
-// adding rooms later is allowed but existing boundary mirrors are not
-// retrofitted until the next observer movement.
+// overlap any existing room. Adding a room after observers exist retrofits
+// their boundary mirrors immediately — without that, a stationary observer
+// near the new seam would have an unbounded visibility hole into the new
+// room (its mirrors are otherwise only rebuilt when it moves).
 func (c *InterestCluster) AddRoom(id RoomID, bounds Rect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -114,6 +121,11 @@ func (c *InterestCluster) AddRoom(id RoomID, bounds Rect) error {
 	}
 	roomConfig := c.config
 	roomConfig.Bounds = bounds
+	// Rooms run uncapped: a border observer is mirrored into several rooms,
+	// and per-room caps would multiply its budget by the number of touched
+	// rooms exactly where entities are densest. The cluster enforces
+	// MaxVisible globally in collect instead.
+	roomConfig.MaxVisible = 0
 	manager, err := NewInterestManager(roomConfig)
 	if err != nil {
 		return err
@@ -121,6 +133,16 @@ func (c *InterestCluster) AddRoom(id RoomID, bounds Rect) error {
 	c.rooms[id] = &clusterRoom{id: id, bounds: bounds, manager: manager}
 	c.order = append(c.order, id)
 	sort.Slice(c.order, func(i, j int) bool { return c.order[i] < c.order[j] })
+	observers := make([]int64, 0, len(c.observers))
+	for observer := range c.observers {
+		observers = append(observers, observer)
+	}
+	sort.Slice(observers, func(i, j int) bool { return observers[i] < observers[j] })
+	for _, observer := range observers {
+		if err := c.placeObserverLocked(observer, c.observers[observer].at); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -231,9 +253,10 @@ func (c *InterestCluster) placeObserverLocked(id int64, at Point) error {
 	if !ok {
 		return ErrRoomUnknown
 	}
+	span := saturatingAdd(c.config.LeaveRadius, 1)
 	reach := Rect{
 		Min: Point{X: saturatingSub(at.X, c.config.LeaveRadius), Y: saturatingSub(at.Y, c.config.LeaveRadius)},
-		Max: Point{X: saturatingAdd(at.X, c.config.LeaveRadius+1), Y: saturatingAdd(at.Y, c.config.LeaveRadius+1)},
+		Max: Point{X: saturatingAdd(at.X, span), Y: saturatingAdd(at.Y, span)},
 	}
 	for _, roomID := range c.order {
 		room := c.rooms[roomID]
@@ -315,10 +338,13 @@ func (c *InterestCluster) Flush() []InterestEvent {
 	return events
 }
 
-// collect folds the rooms' raw events into per-pair room/band tables and
-// emits only net changes against the previously emitted state.
+// collect folds the rooms' raw events into per-pair room/band tables, then
+// settles each touched observer: cluster-level MaxVisible (nearest-N across
+// ALL rooms — per-room caps would multiply a border observer's budget) picks
+// the surfaced set, and only net changes against the previously emitted
+// state are appended to pending.
 func (c *InterestCluster) collect() {
-	touched := make(map[interestPair]struct{})
+	touchedObservers := make(map[int64]struct{})
 	for _, roomID := range c.order {
 		room := c.rooms[roomID]
 		for _, event := range room.manager.Flush() {
@@ -327,6 +353,12 @@ func (c *InterestCluster) collect() {
 			if state == nil {
 				state = &clusterVisibility{bands: make(map[RoomID]int)}
 				c.visible[pair] = state
+				pairs := c.observerPairs[pair.observer]
+				if pairs == nil {
+					pairs = make(map[int64]*clusterVisibility)
+					c.observerPairs[pair.observer] = pairs
+				}
+				pairs[pair.subject] = state
 			}
 			switch event.Kind {
 			case InterestEnter, InterestBandChanged:
@@ -334,22 +366,56 @@ func (c *InterestCluster) collect() {
 			case InterestLeave:
 				delete(state.bands, roomID)
 			}
-			touched[pair] = struct{}{}
+			touchedObservers[pair.observer] = struct{}{}
 		}
 	}
-	pairs := make([]interestPair, 0, len(touched))
-	for pair := range touched {
-		pairs = append(pairs, pair)
+	observers := make([]int64, 0, len(touchedObservers))
+	for observer := range touchedObservers {
+		observers = append(observers, observer)
 	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].observer != pairs[j].observer {
-			return pairs[i].observer < pairs[j].observer
+	sort.Slice(observers, func(i, j int) bool { return observers[i] < observers[j] })
+	for _, observer := range observers {
+		c.settleObserverLocked(observer)
+	}
+}
+
+// settleObserverLocked reconciles one observer's emitted set with its
+// room-visible set under the cluster-level MaxVisible cap.
+func (c *InterestCluster) settleObserverLocked(observer int64) {
+	pairs := c.observerPairs[observer]
+	subjects := make([]int64, 0, len(pairs))
+	for subject := range pairs {
+		subjects = append(subjects, subject)
+	}
+	sort.Slice(subjects, func(i, j int) bool { return subjects[i] < subjects[j] })
+	// Capacity: keep the nearest MaxVisible of the room-visible subjects
+	// (distance ties break by id — deterministic).
+	if c.config.MaxVisible > 0 {
+		type candidate struct {
+			subject  int64
+			distance int64
 		}
-		return pairs[i].subject < pairs[j].subject
-	})
-	for _, pair := range pairs {
-		state := c.visible[pair]
-		nowVisible := len(state.bands) > 0
+		var candidates []candidate
+		observerAt := c.observers[observer].at
+		for _, subject := range subjects {
+			if len(pairs[subject].bands) == 0 {
+				continue
+			}
+			candidates = append(candidates, candidate{subject: subject, distance: DistanceSquared(observerAt, c.subjects[subject].at)})
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].distance != candidates[j].distance {
+				return candidates[i].distance < candidates[j].distance
+			}
+			return candidates[i].subject < candidates[j].subject
+		})
+		for index, entry := range candidates {
+			pairs[entry.subject].suppressed = index >= c.config.MaxVisible
+		}
+	}
+	for _, subject := range subjects {
+		state := pairs[subject]
+		nowVisible := len(state.bands) > 0 && !state.suppressed
 		band := 0
 		if nowVisible {
 			band = effectiveBand(state.bands)
@@ -357,16 +423,21 @@ func (c *InterestCluster) collect() {
 		switch {
 		case nowVisible && !state.emitted:
 			state.emitted, state.emittedBand = true, band
-			c.pending = append(c.pending, InterestEvent{Observer: pair.observer, Subject: pair.subject, Kind: InterestEnter, Band: band})
+			c.pending = append(c.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter, Band: band})
 		case !nowVisible && state.emitted:
-			delete(c.visible, pair)
-			c.pending = append(c.pending, InterestEvent{Observer: pair.observer, Subject: pair.subject, Kind: InterestLeave, Band: -1})
-		case nowVisible && state.emitted && band != state.emittedBand:
+			state.emitted = false
+			c.pending = append(c.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
+		case nowVisible && band != state.emittedBand:
 			state.emittedBand = band
-			c.pending = append(c.pending, InterestEvent{Observer: pair.observer, Subject: pair.subject, Kind: InterestBandChanged, Band: band})
-		case !nowVisible && !state.emitted:
-			delete(c.visible, pair)
+			c.pending = append(c.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestBandChanged, Band: band})
 		}
+		if len(state.bands) == 0 {
+			delete(c.visible, interestPair{observer: observer, subject: subject})
+			delete(pairs, subject)
+		}
+	}
+	if len(pairs) == 0 {
+		delete(c.observerPairs, observer)
 	}
 }
 
