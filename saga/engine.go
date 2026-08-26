@@ -119,15 +119,45 @@ func NewEngine(store Store, publisher Publisher, options Options) (*Engine, erro
 	if options.MaxPayloadBytes <= 0 {
 		options.MaxPayloadBytes = defaults.MaxPayloadBytes
 	}
+	// Every rejected configuration names the offending field and the violated
+	// budget: these cross-parameter lease constraints are the ones operators
+	// cannot eyeball, and a single opaque "unsafe limits" answer forced a
+	// source dive per misconfiguration.
 	if options.StoreTimeout >= options.LeaseDuration {
-		return nil, fmt.Errorf("saga: unsafe engine limits")
+		return nil, fmt.Errorf("saga: StoreTimeout (%v) must be < LeaseDuration (%v)", options.StoreTimeout, options.LeaseDuration)
+	}
+	if len(options.Owner) > 256 {
+		return nil, fmt.Errorf("saga: Owner length %d exceeds 256", len(options.Owner))
+	}
+	if options.CoordinatorWorkers > 1024 {
+		return nil, fmt.Errorf("saga: CoordinatorWorkers %d exceeds 1024", options.CoordinatorWorkers)
+	}
+	if options.PublisherWorkers > 1024 {
+		return nil, fmt.Errorf("saga: PublisherWorkers %d exceeds 1024", options.PublisherWorkers)
+	}
+	if options.CoordinatorBatch > 4096 {
+		return nil, fmt.Errorf("saga: CoordinatorBatch %d exceeds 4096", options.CoordinatorBatch)
+	}
+	if options.PublisherBatch > 4096 {
+		return nil, fmt.Errorf("saga: PublisherBatch %d exceeds 4096", options.PublisherBatch)
+	}
+	if options.MaxPayloadBytes > 4<<20 {
+		return nil, fmt.Errorf("saga: MaxPayloadBytes %d exceeds %d", options.MaxPayloadBytes, 4<<20)
+	}
+	if options.LeaseDuration <= options.PublishTimeout {
+		return nil, fmt.Errorf("saga: LeaseDuration (%v) must be > PublishTimeout (%v)", options.LeaseDuration, options.PublishTimeout)
 	}
 	leaseAfterClaim := options.LeaseDuration - options.StoreTimeout
 	coordinatorBudget := leaseAfterClaim / time.Duration(options.CoordinatorBatch)
 	publisherBudget := leaseAfterClaim / time.Duration(options.PublisherBatch)
-	unsafePublisherBudget := options.PublishTimeout >= publisherBudget || options.StoreTimeout >= publisherBudget-options.PublishTimeout
-	if len(options.Owner) > 256 || options.CoordinatorWorkers > 1024 || options.PublisherWorkers > 1024 || options.CoordinatorBatch > 4096 || options.PublisherBatch > 4096 || options.MaxPayloadBytes > 4<<20 || options.LeaseDuration <= options.PublishTimeout || options.StoreTimeout >= coordinatorBudget || unsafePublisherBudget {
-		return nil, fmt.Errorf("saga: unsafe engine limits")
+	if options.StoreTimeout >= coordinatorBudget {
+		return nil, fmt.Errorf("saga: coordinator budget exhausted: (LeaseDuration-StoreTimeout)/CoordinatorBatch = %v must be > StoreTimeout (%v)", coordinatorBudget, options.StoreTimeout)
+	}
+	if options.PublishTimeout >= publisherBudget {
+		return nil, fmt.Errorf("saga: publisher budget exhausted: (LeaseDuration-StoreTimeout)/PublisherBatch = %v must be > PublishTimeout (%v)", publisherBudget, options.PublishTimeout)
+	}
+	if options.StoreTimeout >= publisherBudget-options.PublishTimeout {
+		return nil, fmt.Errorf("saga: publisher budget exhausted: (LeaseDuration-StoreTimeout)/PublisherBatch - PublishTimeout = %v must be > StoreTimeout (%v)", publisherBudget-options.PublishTimeout, options.StoreTimeout)
 	}
 	return &Engine{store: store, publisher: publisher, opts: options, definitions: make(map[definitionKey]Definition), dueKick: make(chan struct{}, 1), outboxKick: make(chan struct{}, 1)}, nil
 }

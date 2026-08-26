@@ -24,6 +24,16 @@ type FileHistoryJournal struct {
 	directory    string
 	initialEpoch uint64
 	generation   uint64
+	// walFile is the resident append handle for the current generation,
+	// opened lazily on first Record and dropped on generation rotation.
+	walFile *os.File
+	// Group commit: concurrent Records append to pending and one leader
+	// drains it with a single write+fsync — "Record returns => durable"
+	// stays intact while fsync count drops from per-record to per-batch.
+	batchMu  sync.Mutex
+	pending  []byte
+	waiters  []chan error
+	flushing bool
 }
 
 type fileCheckpoint struct {
@@ -171,29 +181,63 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 	}
 	data = append(data, '\n')
 
+	journal.batchMu.Lock()
+	journal.pending = append(journal.pending, data...)
+	done := make(chan error, 1)
+	journal.waiters = append(journal.waiters, done)
+	if journal.flushing {
+		// A leader is draining; it will flush this batch too.
+		journal.batchMu.Unlock()
+		return <-done
+	}
+	journal.flushing = true
+	journal.batchMu.Unlock()
+	for {
+		journal.batchMu.Lock()
+		batch, waiters := journal.pending, journal.waiters
+		journal.pending, journal.waiters = nil, nil
+		if len(waiters) == 0 {
+			journal.flushing = false
+			journal.batchMu.Unlock()
+			break
+		}
+		journal.batchMu.Unlock()
+		flushErr := journal.flushBatch(batch)
+		for _, waiter := range waiters {
+			waiter <- flushErr
+		}
+	}
+	return <-done
+}
+
+// flushBatch appends one batch to the current generation's WAL and fsyncs
+// once. journal.mutex serializes it against Checkpoint's generation rotation.
+func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
-	path := journal.walPath(journal.generation)
-	_, statErr := os.Stat(path)
-	created := errors.Is(statErr, os.ErrNotExist)
-	if statErr != nil && !created {
-		return statErr
+	if journal.walFile == nil {
+		path := journal.walPath(journal.generation)
+		_, statErr := os.Stat(path)
+		created := errors.Is(statErr, os.ErrNotExist)
+		if statErr != nil && !created {
+			return statErr
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if created {
+			if err := syncJournalDirectory(journal.directory); err != nil {
+				_ = file.Close()
+				return err
+			}
+		}
+		journal.walFile = file
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
+	if _, err := journal.walFile.Write(batch); err != nil {
 		return err
 	}
-	if _, err = file.Write(data); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err == nil && created {
-		err = syncJournalDirectory(journal.directory)
-	}
-	return err
+	return journal.walFile.Sync()
 }
 
 func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
@@ -259,6 +303,10 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	}
 	removeTemporary = false
 	journal.generation = next
+	if journal.walFile != nil {
+		_ = journal.walFile.Close()
+		journal.walFile = nil
+	}
 	journal.removeObsoleteGenerations(next)
 	return nil
 }

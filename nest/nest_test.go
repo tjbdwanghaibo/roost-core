@@ -1417,3 +1417,75 @@ func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
 		t.Fatalf("lock hold metrics missing: hold=%v slow=%v (%+v)", holdSeen, slowSeen, registry.Snapshot())
 	}
 }
+
+func TestTickCallbacksRegisteredAfterStartTakeEffectInOrder(t *testing.T) {
+	// Regression: NewTicker used to snapshot the global registry at engine
+	// construction — callbacks registered afterwards silently never ran, and
+	// snapshot order came from map iteration (nondeterministic).
+	var order []int
+	var orderMu sync.Mutex
+	MustRegisterTickCallback(NewTickCallbackName("tick_order_a"), func(TickMsg) {
+		orderMu.Lock()
+		order = append(order, 1)
+		orderMu.Unlock()
+	})
+	ticker := NewTicker(time.Hour) // never fires on its own; we drive doTick manually
+	ticker.doTick()
+	MustRegisterTickCallback(NewTickCallbackName("tick_order_b"), func(TickMsg) {
+		orderMu.Lock()
+		order = append(order, 2)
+		orderMu.Unlock()
+	})
+	ticker.doTick()
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if len(order) != 3 || order[0] != 1 || order[1] != 1 || order[2] != 2 {
+		t.Fatalf("callback order = %v, want [1 1 2] (late registration effective, registration order kept)", order)
+	}
+}
+
+func TestInstanceScopedHandlersDoNotCollideAcrossEngines(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 321, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(&rollbackTestEntity{
+		EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind),
+		dao:        &rollbackTestDao{id: id},
+	})
+	name := NewHandlerName("test_instance_scoped")
+	newEngine := func(reply string) *NestMgr {
+		engine := NewEngine(
+			NestOptionWithGetter(getter),
+			NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+			NestOptionWithTickDuration(100*time.Millisecond),
+		)
+		engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+			return reply, nil
+		}, HandlerMeta{Rollback: RollbackUndo})
+		if err := engine.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return engine
+	}
+	// The same name registers on two engines without touching global state.
+	first := newEngine("first")
+	defer func() { _ = first.Shutdown(context.Background()) }()
+	second := newEngine("second")
+	defer func() { _ = second.Shutdown(context.Background()) }()
+	if ret, err := first.Request(context.Background(), name, id, nil); err != nil || ret != "first" {
+		t.Fatalf("first engine: %v %v", ret, err)
+	}
+	if ret, err := second.Request(context.Background(), name, id, nil); err != nil || ret != "second" {
+		t.Fatalf("second engine: %v %v", ret, err)
+	}
+	// Post-start registration is refused, and duplicates are refused pre-start.
+	if err := first.RegisterHandlerWithMeta(NewHandlerName("late"), nil, HandlerMeta{}); err == nil {
+		t.Fatal("post-start registration accepted")
+	}
+	idle := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerNumAndMsgCap(1, 1, 64), NestOptionWithTickDuration(time.Second))
+	if err := idle.RegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return nil, nil }, HandlerMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idle.RegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return nil, nil }, HandlerMeta{}); err == nil {
+		t.Fatal("duplicate instance handler accepted")
+	}
+}

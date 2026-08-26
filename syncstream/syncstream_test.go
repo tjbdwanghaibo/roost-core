@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -403,5 +404,59 @@ func TestFileHistoryJournalFailsClosedOnNewestGenerationCorruption(t *testing.T)
 	reopened, _ := NewFileHistoryJournal(journal.directory, 1)
 	if _, err := NewHistoryWithJournal(HistoryOptions{}, reopened); err == nil {
 		t.Fatal("expected newest generation corruption to stop recovery")
+	}
+}
+
+// Group commit: concurrent Records collapse into batched fsyncs while every
+// record that returned nil is durable and replayable, across a generation
+// rotation mid-stream.
+func TestFileHistoryJournalConcurrentRecordsAllReplay(t *testing.T) {
+	journal, err := NewFileHistoryJournal(t.TempDir(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for index := 0; index < writers; index++ {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			errs <- journal.Record(HistoryMutation{
+				Version: HistoryMutationVersion, Kind: HistoryMutationAppend, Epoch: 7,
+				Packet: Packet{Observer: Observer{Kind: 1, ID: id}, Stream: Stream{Topic: "state"}, Epoch: 7, Sequence: 1, Payload: []byte("x")},
+			})
+		}(int64(index + 1))
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := journal.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(snapshot.Streams); got != writers {
+		t.Fatalf("replayed %d streams, want %d", got, writers)
+	}
+	// Rotation drops the resident handle; the next Record reopens cleanly.
+	if err := journal.Checkpoint(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Record(HistoryMutation{
+		Version: HistoryMutationVersion, Kind: HistoryMutationAppend, Epoch: 7,
+		Packet: Packet{Observer: Observer{Kind: 1, ID: 99}, Stream: Stream{Topic: "state"}, Epoch: 7, Sequence: 1, Payload: []byte("y")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := journal.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(after.Streams); got != writers+1 {
+		t.Fatalf("post-rotation replay = %d streams, want %d", got, writers+1)
 	}
 }

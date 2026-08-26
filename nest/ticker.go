@@ -23,8 +23,12 @@ func SetTick(curTick uint64) {
 }
 
 var (
-	tickMu    sync.RWMutex
-	tickCbMap = make(map[TickCallbackName]func(msg TickMsg))
+	tickMu sync.RWMutex
+	// tickCbSeen deduplicates names; tickCbList preserves registration order
+	// so callbacks execute deterministically (a map-ordered walk would make
+	// inter-callback ordering vary per process).
+	tickCbSeen = make(map[TickCallbackName]struct{})
+	tickCbList []func(msg TickMsg)
 )
 
 type TickCallbackName struct {
@@ -42,10 +46,11 @@ func (n TickCallbackName) String() string {
 func RegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) error {
 	tickMu.Lock()
 	defer tickMu.Unlock()
-	if _, exist := tickCbMap[name]; exist {
+	if _, exist := tickCbSeen[name]; exist {
 		return fmt.Errorf("nest: duplicate tick callback %q", name.String())
 	}
-	tickCbMap[name] = cb
+	tickCbSeen[name] = struct{}{}
+	tickCbList = append(tickCbList, cb)
 	return nil
 }
 
@@ -56,11 +61,20 @@ func MustRegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) {
 }
 
 func RangeAllTickCallback(f func(ff func(msg TickMsg))) {
-	tickMu.RLock()
-	defer tickMu.RUnlock()
-	for _, cb := range tickCbMap {
+	for _, cb := range snapshotTickCallbacks() {
 		f(cb)
 	}
+}
+
+// snapshotTickCallbacks copies the registration-ordered callback list so
+// callers run callbacks outside the registry lock (a callback registering
+// another callback must not deadlock).
+func snapshotTickCallbacks() []func(msg TickMsg) {
+	tickMu.RLock()
+	defer tickMu.RUnlock()
+	callbacks := make([]func(msg TickMsg), len(tickCbList))
+	copy(callbacks, tickCbList)
+	return callbacks
 }
 
 // Ticker is the frame-based timing system (channel-based, no actor).
@@ -68,7 +82,6 @@ type Ticker struct {
 	duration     time.Duration
 	lastTickTime time.Time
 	tick         atomic.Uint64
-	callbacks    []func(TickMsg)
 	stopChan     chan struct{}
 	done         chan struct{}
 	started      atomic.Bool
@@ -80,12 +93,9 @@ func NewTicker(duration time.Duration) *Ticker {
 	if duration <= 0 {
 		duration = 100 * time.Millisecond
 	}
-	callbacks := make([]func(TickMsg), 0)
-	RangeAllTickCallback(func(cb func(TickMsg)) { callbacks = append(callbacks, cb) })
 	return &Ticker{
 		duration:     duration,
 		lastTickTime: time.Now(),
-		callbacks:    callbacks,
 		stopChan:     make(chan struct{}),
 		done:         make(chan struct{}),
 	}
@@ -160,7 +170,10 @@ func (t *Ticker) doTick() {
 	}
 	t.lastTickTime = now
 	msg := TickMsg{Elapsed: elapsed, FrameNumber: curFrame}
-	for _, f := range t.callbacks {
+	// Read the live registry every tick (registration order, copied outside
+	// the lock): callbacks registered after the engine started take effect on
+	// the next tick instead of being silently dropped by a construction-time snapshot.
+	for _, f := range snapshotTickCallbacks() {
 		misc.SafeFunc(func() {
 			f(msg)
 		})

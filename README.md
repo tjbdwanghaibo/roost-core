@@ -364,6 +364,14 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 
 `ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。`cache` 的 Redis Lua 写失败会降级为非原子回退——降级保留（可用性优先），但通过 `cache.refhmap.write_degraded_total` 指标与 Warn 日志强制可见：非原子窗口是运维必须知道的事实。
 
+### 9. tick 回调与 handler 注册的作用域 —— `nest/ticker.go`、`nest/nest_dispatch.go`
+
+tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调下一个 tick 即执行，顺序确定）。handler 注册有两级作用域：包级 `MustRegisterHandlerWithMeta`（生产便利入口）与实例级 `(*NestMgr).RegisterHandlerWithMeta`（Start 前有效，实例优先查找）——测试与多引擎进程用实例级，避免共享包级注册表带来的重复注册冲突。
+
+### 10. file journal 的组提交 —— `syncstream/file_journal.go`
+
+生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），fsync 次数从每条降到每批——观察者频繁进出的场景不再被逐条 fsync 地板限速。
+
 ### 补充两条常踩的契约
 
 - **`lock.LockManager` 的重验合同**（`lock/lock_manager.go`）：锁实例可能被 `ReleaseLock` 并发释放重建，两个 goroutine 可能各持"同一 ID 的锁"。因此拿锁本身证明不了什么——加锁后必须重验受保护状态（`IsRemoved`/`IsClear`、索引成员资格），状态已消失就退让；释放方必须先在持锁状态下让状态不可达，再释放锁实例。

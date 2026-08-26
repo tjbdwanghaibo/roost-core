@@ -13,6 +13,12 @@
 - `nest`：每 handler 锁内耗时指标 `nest.handler.lock_hold`（pipelined 提前放锁按提前点计），超阈值（`NestOptionWithSlowLockThreshold`，默认 100ms）计 `nest.handler.lock_hold.slow.total` 并告警——`DurabilityPipelined` 灰度对象的选择依据。
 - `cmd/glsvet`：静态检查器，扫描 `go` 语句内对 goroutine 绑定 API（RecordUndo/CurrentRollbackTx/fctx.CurrentContext 等）的调用；已接入本仓库 CI。
 - `NEST_PIPELINED_COMMIT.md` §12：pipelined 灰度扩大到默认提交档的四步路线（含量化门槛与回退开关）。
+- `nest`：实例作用域 handler 注册 `(*NestMgr).RegisterHandlerWithMeta`/`MustRegisterHandlerWithMeta`（Start 前有效；实例优先、全局注册表兜底）——测试与多引擎进程不再共享包级 handler 表。
+- `saga`：`NewEngine` 的配置拒绝逐条给出具体字段、实际值与被违反的预算计算式（原先 8 类错误共用一句 "unsafe engine limits"）。
+
+### Fixed
+- `nest/ticker`：tick 回调改为每 tick 读取实时注册表（按注册顺序执行）——原先 `NewTicker` 做构造期快照，引擎启动后注册的回调**静默不执行**，且执行顺序来自 map 迭代（跨进程不定）。
+- `syncstream/file_journal`：`Record` 从"每条 open+fsync+close"改为常驻句柄 + leader 合批组提交——"返回即持久"语义不变，fsync 次数从每条降为每批；generation 轮转时释放句柄。
 
 ## [1.6.2] - 2026-08
 

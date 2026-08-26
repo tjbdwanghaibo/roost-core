@@ -86,14 +86,14 @@ type NestMgr struct {
 	// counted and logged as slow. Zero disables the warning; the metric is
 	// recorded regardless.
 	slowLockThreshold time.Duration
-	lifecycleMu            sync.Mutex
-	started                bool
-	stopped                bool
-	stopDone               chan struct{}
-	stopErr                error
-	fenceErr               error
-	groupLocks             *entityLockGroupLockManager
-	handlers               map[HandlerName]handlerEntry
+	lifecycleMu       sync.Mutex
+	started           bool
+	stopped           bool
+	stopDone          chan struct{}
+	stopErr           error
+	fenceErr          error
+	groupLocks        *entityLockGroupLockManager
+	handlers          map[HandlerName]handlerEntry
 	// pipelinedAllow, when non-nil, is the set of handler names permitted to
 	// run with DurabilityPipelined. Nil permits all handlers (development
 	// default); production deployments should pin an explicit allowlist so a

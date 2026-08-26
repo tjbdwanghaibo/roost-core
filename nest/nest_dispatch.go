@@ -42,7 +42,7 @@ func RegisterMemoryHandler(name HandlerName, handler BaseHandler) error {
 	return RegisterHandlerWithMeta(name, handler, HandlerMeta{})
 }
 
-func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
+func validateHandlerMeta(name HandlerName, meta HandlerMeta) error {
 	if meta.Rollback > RollbackUndo {
 		return fmt.Errorf("nest: invalid rollback policy %d", meta.Rollback)
 	}
@@ -51,6 +51,13 @@ func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta Handler
 	}
 	if meta.Durability != DurabilityMemory && meta.Rollback == RollbackNone {
 		return fmt.Errorf("%w: durable handler %q requires rollback", ErrRollbackUnsupported, name.String())
+	}
+	return nil
+}
+
+func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
+	if err := validateHandlerMeta(name, meta); err != nil {
+		return err
 	}
 	handlerMu.Lock()
 	defer handlerMu.Unlock()
@@ -122,6 +129,40 @@ func (mgr *NestMgr) getHandlerEntry(name HandlerName) (handlerEntry, bool) {
 		entry.handler = hotcode.Resolve[BaseHandler](HandlerPatchName(name), entry.handler)
 	}
 	return entry, ok
+}
+
+// RegisterHandlerWithMeta registers a handler on this engine instance only.
+// Tests and multi-engine processes should prefer it over the package-global
+// registry: instance tables don't collide across engines or across
+// `go test -count>1` reruns, and need no ResetHandlersForTest hygiene.
+// Instance registration is only valid before Start — the table is read
+// lock-free once dispatch begins. Lookup order is instance first, then the
+// global registry (see getHandlerEntry).
+func (mgr *NestMgr) RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
+	if mgr == nil {
+		return fmt.Errorf("nest: nil engine")
+	}
+	if err := validateHandlerMeta(name, meta); err != nil {
+		return err
+	}
+	mgr.lifecycleMu.Lock()
+	defer mgr.lifecycleMu.Unlock()
+	if mgr.started {
+		return fmt.Errorf("nest: handler %q registered after engine start", name.String())
+	}
+	if _, ok := mgr.handlers[name]; ok {
+		return fmt.Errorf("nest: duplicate handler %q", name.String())
+	}
+	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta}
+	return nil
+}
+
+// MustRegisterHandlerWithMeta is the panicking form of the instance-scoped
+// RegisterHandlerWithMeta.
+func (mgr *NestMgr) MustRegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) {
+	if err := mgr.RegisterHandlerWithMeta(name, handler, meta); err != nil {
+		panic(err)
+	}
 }
 
 func ResetHandlersForTest() {
