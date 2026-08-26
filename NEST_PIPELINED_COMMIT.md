@@ -224,3 +224,29 @@ fsync 0.5–2ms 对应 ≈500–2000/s）。任一热点实体的 durable 事务
 总吞吐 ×9.6，p95 由 worker 排队主导的 ~200ms 塌缩到一个组提交批次的 ~8ms；w4 与 w16 结果
 相同——worker 数不再是瓶颈，符合设计。验收测试：`nest/pipelined_async_test.go`（worker 解放、
 同实体完成序、indeterminate、Shutdown 排空、泵满降级五项，`-race` 全绿）。
+
+## 12. 灰度扩大到默认档的路线（规划，2026-08-26）
+
+当前档位：`DurabilityPipelined` 按 handler 经 `NestOptionWithPipelinedAllowlist` 白名单启用，
+Phase 2 异步完成经 `NestOptionWithPipelinedAsyncCompletion` 单独开关。把它推进为默认提交档，
+分四步，每步有明确的量化门槛与回退开关：
+
+1. **观测就绪（当前版本已具备）**。`nest.handler.lock_hold`（按 handler 的锁内耗时分布）与
+   `nest.handler.lock_hold.slow.total` 是选择灰度对象的依据：锁内耗时被 fsync 主导的 handler
+   （strict 下 hold ≈ 组提交延迟）是最先受益者。配套指标：`nest.pipelined.async_total`
+   （ok/degraded/indeterminate 三分）、nestwal 的 durable lag 与批大小。
+2. **白名单扩大**。按 lock_hold 排序逐批把写多读少、AfterCommit 无请求上下文依赖的 handler
+   加入 allowlist；每批观察一个发布周期，门槛：`async_total{result="degraded"}` 占比 < 0.1%、
+   indeterminate 为零（出现即触发 fence，属于事故而非灰度信号）、无 checkpoint 水位线告警。
+   Phase 2 泵参数（workers/queueCap）按 degraded 占比调整，而不是按吞吐调整。
+3. **默认翻转，显式退出**。allowlist 语义反转：新增 `NestOptionWithStrictList`（规划）声明
+   仍需 strict 的 handler（跨实体 remote write batch 自动豁免，广播天然无提前放锁），其余
+   handler 默认 pipelined。翻转前置条件：≥ 两个发布周期内 slow.total 无新增、回放/对账
+   （entitysync 的 LastCommitLSN 闸门）零分叉。
+4. **收尾**。strict 档保留为逃生舱（配置可回退，无需发版）；文档把"默认即 pipelined"写入
+   Host/handler 编写规范——AfterCommit 在完成池上运行、无实体锁、无请求上下文（§10 的契约
+   从"选择启用者须知"升级为"默认行为"）。
+
+不做的事：不打算移除 strict 档（remote write batch 与需要"返回即持久"语义的管理面接口
+永久保留 strict）；不打算让 Phase 2 的降级路径消失（泵满回退到 in-worker 等待是保序的
+安全网，见 §11）。

@@ -785,14 +785,48 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 
 // invokeHandlerTransaction is the single dispatch-side entry into
 // invokeWithTransaction: it enforces the pipelined allowlist before any
-// handler code runs and supplies the engine's completion pump.
+// handler code runs, supplies the engine's completion pump, and measures how
+// long the dispatch held its entity locks.
 func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, name string, releaseLocks func(), call func() (any, error)) (any, error) {
 	if meta.Durability == DurabilityPipelined && mgr != nil && mgr.pipelinedAllow != nil {
 		if _, ok := mgr.pipelinedAllow[name]; !ok {
 			return nil, fmt.Errorf("%w: %q", ErrPipelinedNotAllowed, name)
 		}
 	}
-	return invokeWithTransaction(meta, es, mgr.committer, name, releaseLocks, mgr.completions, call)
+	// Lock-hold budget: the locks are already held here, and they are
+	// released either through releaseLocks (the pipelined early release) or
+	// by the dispatch site right after this call returns — record at
+	// whichever happens first, once, on this goroutine.
+	start := time.Now()
+	recorded := false
+	record := func() {
+		if !recorded {
+			recorded = true
+			mgr.observeLockHold(name, time.Since(start))
+		}
+	}
+	wrappedRelease := releaseLocks
+	if releaseLocks != nil {
+		wrappedRelease = func() {
+			record()
+			releaseLocks()
+		}
+	}
+	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, wrappedRelease, mgr.completions, call)
+	record()
+	return ret, err
+}
+
+// observeLockHold records the per-handler entity-lock hold time and flags
+// holds beyond the configured threshold — the operational signal for "which
+// handler is doing slow work inside its entity locks" (the exact cost class
+// DurabilityPipelined exists to remove).
+func (mgr *NestMgr) observeLockHold(handler string, hold time.Duration) {
+	obs.ObserveDuration("nest.handler.lock_hold", obs.Labels{"handler": handler}, hold)
+	if threshold := mgr.slowLockThreshold; threshold > 0 && hold >= threshold {
+		obs.IncCounter("nest.handler.lock_hold.slow.total", obs.Labels{"handler": handler}, 1)
+		slog.Warn("nest handler held entity locks beyond threshold", "handler", handler, "hold", hold, "threshold", threshold)
+	}
 }
 
 func firstDispatchEntityMissing(es []entity.IThreadSafeEntity) bool {

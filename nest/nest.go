@@ -82,6 +82,10 @@ type NestMgr struct {
 	remoteManager          entity.IRemoteEntityManager
 	committer              TransactionCommitter
 	syncTimeout            time.Duration
+	// slowLockThreshold is the entity-lock hold time at which a dispatch is
+	// counted and logged as slow. Zero disables the warning; the metric is
+	// recorded regardless.
+	slowLockThreshold time.Duration
 	lifecycleMu            sync.Mutex
 	started                bool
 	stopped                bool
@@ -184,6 +188,8 @@ type NestOpts struct {
 	PipelinedAsync         bool
 	PipelinedAsyncWorkers  int
 	PipelinedAsyncQueueCap int
+	SlowLockThreshold      time.Duration
+	SlowLockThresholdSet   bool
 }
 
 type NestOption func(*NestOpts)
@@ -236,6 +242,18 @@ var (
 	// named handlers; dispatching any other pipelined handler fails with
 	// ErrPipelinedNotAllowed. Not calling it (or passing no names) permits
 	// every handler — production deployments should always pin a list.
+	// NestOptionWithSlowLockThreshold sets the warn threshold for the
+	// per-handler entity-lock hold time. Every dispatch records its hold in
+	// the nest.handler.lock_hold metric; holds at or beyond the threshold
+	// additionally count nest.handler.lock_hold.slow.total and log a
+	// warning. Zero disables the warning (the metric is always recorded);
+	// the default is 100ms.
+	NestOptionWithSlowLockThreshold = func(threshold time.Duration) NestOption {
+		return func(opts *NestOpts) {
+			opts.SlowLockThreshold = threshold
+			opts.SlowLockThresholdSet = true
+		}
+	}
 	NestOptionWithPipelinedAllowlist = func(names ...string) NestOption {
 		return func(opts *NestOpts) {
 			opts.PipelinedAllowlist = append(opts.PipelinedAllowlist, names...)
@@ -268,12 +286,16 @@ func NewEngine(opts ...NestOption) *NestMgr {
 			opt(params)
 		}
 	}
+	if !params.SlowLockThresholdSet {
+		params.SlowLockThreshold = 100 * time.Millisecond
+	}
 	ret := &NestMgr{
 		getter:                 params.Getter,
 		remoteSnapshotResolver: params.RemoteSnapshotResolver,
 		remoteManager:          params.RemoteManager,
 		committer:              params.Committer,
 		syncTimeout:            params.SyncTimeout,
+		slowLockThreshold:      params.SlowLockThreshold,
 		stopDone:               make(chan struct{}),
 		groupLocks:             newEntityLockGroupLockManager(),
 		handlers:               snapshotHandlerEntries(),

@@ -354,6 +354,16 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 
 这是**被接受的架构决策**：它换来了业务代码零显式 context 传递的 handler 签名。其硬性约束是——**handler 内严禁裸 `go func(){...}` 后再访问框架能力**：新 goroutine 的 gid 不同，事务、guard、可重入锁全部静默丢失（读到 nil 或死锁，而不是报错）。需要异步工作时，用 `worker.Pool.Go`（受 `StopWithContext` 追踪）或把工作作为新消息投回 Nest。
 
+该约束有静态检查器兜底：`go run ./cmd/glsvet ./...` 扫描 `go` 语句内对 goroutine 绑定 API（`RecordUndo`/`CurrentRollbackTx`/`fctx.CurrentContext`/`GetEntityGuard` 等）的调用并报错，已接入本仓库 CI；业务仓库同样可以把它加进自己的 CI。默认跳过 `_test.go`（测试常合法地模拟跨 goroutine 行为），`-tests` 可包含。
+
+### 7. 锁内耗时预算：`nest.handler.lock_hold` —— `nest/nest_dispatch.go`
+
+每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长分布 `nest.handler.lock_hold{handler}`；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
+
+### 8. 冷加载合并与缓存降级可见性 —— `entity/manager_access.go`、`cache/ref_hmap.go`
+
+`ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。`cache` 的 Redis Lua 写失败会降级为非原子回退——降级保留（可用性优先），但通过 `cache.refhmap.write_degraded_total` 指标与 Warn 日志强制可见：非原子窗口是运维必须知道的事实。
+
 ### 补充两条常踩的契约
 
 - **`lock.LockManager` 的重验合同**（`lock/lock_manager.go`）：锁实例可能被 `ReleaseLock` 并发释放重建，两个 goroutine 可能各持"同一 ID 的锁"。因此拿锁本身证明不了什么——加锁后必须重验受保护状态（`IsRemoved`/`IsClear`、索引成员资格），状态已消失就退让；释放方必须先在持锁状态下让状态不可达，再释放锁实例。

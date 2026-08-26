@@ -1377,3 +1377,43 @@ func TestEntityKindRemoteCapability(t *testing.T) {
 		t.Fatal("unregistered kind should not be remote-capable")
 	}
 }
+
+func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 320, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(&rollbackTestEntity{
+		EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind),
+		dao:        &rollbackTestDao{id: id},
+	})
+	registry := obs.NewRegistry()
+	previous := obs.DefaultRegistry()
+	obs.SetDefaultRegistry(registry)
+	defer obs.SetDefaultRegistry(previous)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithTickDuration(100*time.Millisecond),
+		NestOptionWithSlowLockThreshold(time.Millisecond),
+	)
+	defer StopNest()
+	MustRegisterHandlerWithMeta(NewHandlerName("test_lock_hold_slow"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		time.Sleep(3 * time.Millisecond)
+		return nil, nil
+	}, HandlerMeta{Rollback: RollbackUndo})
+	if _, err := Nest.Request(context.Background(), NewHandlerName("test_lock_hold_slow"), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	holdSeen, slowSeen := false, false
+	for _, metric := range registry.Snapshot() {
+		switch metric.Name {
+		case "nest.handler.lock_hold":
+			holdSeen = holdSeen || metric.Labels["handler"] == "test_lock_hold_slow"
+		case "nest.handler.lock_hold.slow.total":
+			slowSeen = slowSeen || (metric.Labels["handler"] == "test_lock_hold_slow" && metric.Value >= 1)
+		}
+	}
+	if !holdSeen || !slowSeen {
+		t.Fatalf("lock hold metrics missing: hold=%v slow=%v (%+v)", holdSeen, slowSeen, registry.Snapshot())
+	}
+}
