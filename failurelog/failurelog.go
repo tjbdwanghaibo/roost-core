@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -216,6 +217,23 @@ func (l *RedisList) labels(result string) obs.Labels {
 	return labels
 }
 
+// degraded marks one atomic-script miss: the operation falls back to a
+// non-atomic command sequence. The fallback is kept (availability first) but
+// must stay visible — a Warn when the script actually failed, and a counter
+// either way, mirroring the cache.refhmap.write_degraded_total convention.
+func (l *RedisList) degraded(op string, err error) {
+	labels := l.labels("")
+	if labels == nil {
+		labels = obs.Labels{}
+	}
+	labels["op"] = op
+	obs.IncCounter("failurelog_degraded_total", labels, 1)
+	if err != nil {
+		slog.Warn("failurelog: atomic script failed, falling back to non-atomic commands",
+			"op", op, "namespace", l.cfg.Namespace, "err", err)
+	}
+}
+
 func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []byte) bool {
 	if l == nil || l.redis == nil {
 		return false
@@ -228,7 +246,11 @@ func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []b
 		}
 	}
 	ret, err := l.redis.Eval(ctx, appendTrimScript, []string{key}, string(raw), l.cfg.MaxEntries, ttlMillis)
-	return err == nil && ret != nil
+	if err == nil && ret != nil {
+		return true
+	}
+	l.degraded("append", err)
+	return false
 }
 
 func (l *RedisList) tryDeleteWithScript(ctx context.Context, key string, args []any) (int64, bool) {
@@ -237,10 +259,12 @@ func (l *RedisList) tryDeleteWithScript(ctx context.Context, key string, args []
 	}
 	ret, err := l.redis.Eval(ctx, deleteRawScript, []string{key}, args...)
 	if err != nil || ret == nil {
+		l.degraded("delete", err)
 		return 0, false
 	}
 	n, err := redisInt64(ret)
 	if err != nil {
+		l.degraded("delete", err)
 		return 0, false
 	}
 	return n, true
@@ -269,16 +293,41 @@ func (l *RedisList) tryPurgeWithScript(ctx context.Context, key string) (int64, 
 	}
 	ret, err := l.redis.Eval(ctx, purgeRawScript, []string{key})
 	if err != nil || ret == nil {
+		l.degraded("purge", err)
 		return 0, false
 	}
 	n, err := redisInt64(ret)
 	if err != nil {
+		l.degraded("purge", err)
 		return 0, false
 	}
 	return n, true
 }
 
 func (l *RedisList) deleteRawFallback(ctx context.Context, key string, args []any) (int64, error) {
+	// LREM removes in place; only clients without it take the legacy
+	// LRANGE+DEL+RPUSH path, whose DEL..RPUSH window can lose the whole
+	// list on a crash.
+	if remover, ok := l.redis.(fredis.ListRemover); ok {
+		var removed int64
+		counts := make(map[string]int64, len(args))
+		order := make([]string, 0, len(args))
+		for _, arg := range args {
+			value := fmt.Sprint(arg)
+			if counts[value] == 0 {
+				order = append(order, value)
+			}
+			counts[value]++
+		}
+		for _, value := range order {
+			n, err := remover.LRem(ctx, key, counts[value], value)
+			if err != nil {
+				return removed, err
+			}
+			removed += n
+		}
+		return removed, nil
+	}
 	items, err := l.redis.LRange(ctx, key, 0, -1)
 	if err != nil {
 		return 0, err
@@ -329,7 +378,10 @@ func (l *RedisList) trim(ctx context.Context, key string) error {
 	if count <= l.cfg.MaxEntries {
 		return nil
 	}
-	obs.IncCounter("failurelog_trim_total", nil, 1)
+	obs.IncCounter("failurelog_trim_total", l.labels(""), 1)
+	if trimmer, ok := l.redis.(fredis.ListTrimmer); ok {
+		return trimmer.LTrim(ctx, key, -l.cfg.MaxEntries, -1)
+	}
 	items, err := l.redis.LRange(ctx, key, count-l.cfg.MaxEntries, -1)
 	if err != nil {
 		return err

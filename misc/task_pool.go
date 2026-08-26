@@ -57,8 +57,24 @@ type TaskPool struct {
 }
 
 func NewTaskPool(config *TaskPoolConfig) *TaskPool {
+	defaults := DefaultTaskPoolConfig()
 	if config == nil {
-		config = DefaultTaskPoolConfig()
+		config = defaults
+	} else {
+		// Normalize a partially filled config instead of trusting it: a
+		// zero WorkerCount used to build an empty worker slice and made
+		// every Submit divide by zero. The caller's struct is not mutated.
+		normalized := *config
+		if normalized.WorkerCount <= 0 {
+			normalized.WorkerCount = defaults.WorkerCount
+		}
+		if normalized.MaxTaskCount <= 0 {
+			normalized.MaxTaskCount = defaults.MaxTaskCount
+		}
+		if normalized.ShutdownTimeout <= 0 {
+			normalized.ShutdownTimeout = defaults.ShutdownTimeout
+		}
+		config = &normalized
 	}
 	pool := &TaskPool{
 		config:  config,
@@ -140,7 +156,9 @@ func (tp *TaskPool) IsRunning() bool {
 func (tp *TaskPool) hashTaskID(taskID int64) int {
 	h := fnv.New32a()
 	h.Write([]byte(fmt.Sprintf("%d", taskID)))
-	return int(h.Sum32()) % len(tp.workers)
+	// Modulo in uint32 space: int(h.Sum32()) is negative on 32-bit ints and
+	// a negative index panics.
+	return int(h.Sum32() % uint32(len(tp.workers)))
 }
 
 type taskWorker struct {

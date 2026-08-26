@@ -72,3 +72,25 @@ func TestSchedulerReschedulesFromHandler(t *testing.T) {
 		t.Fatalf("second fired = %d, want 2", fired)
 	}
 }
+
+func TestSchedulerSetClockStampsNewTimers(t *testing.T) {
+	s := NewScheduler(1, 0, nil, nil)
+	base := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	s.SetClock(func() time.Time { return base })
+	s.RegisterHandler(7, func(Context) time.Duration { return 0 })
+	id := s.NewTimer(10*time.Second, 7, 0, 0, nil)
+	if id == 0 {
+		t.Fatal("NewTimer rejected")
+	}
+	nodes := s.Nodes()
+	if len(nodes) != 1 || !nodes[0].End.Equal(base.Add(10*time.Second)) {
+		t.Fatalf("End = %v, want injected clock + delay (wall-clock regression)", nodes[0].End)
+	}
+	// The tick driven by the same clock fires it exactly on schedule.
+	fired := 0
+	s.RegisterHandler(7, func(Context) time.Duration { fired++; return 0 })
+	s.Tick(base.Add(10*time.Second + time.Nanosecond))
+	if fired != 1 {
+		t.Fatalf("fired = %d", fired)
+	}
+}

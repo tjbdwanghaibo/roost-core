@@ -62,3 +62,22 @@ func TestRegistryLimitsMetricSeriesCardinality(t *testing.T) {
 		t.Fatalf("dropped series = %d, want 1", dropped)
 	}
 }
+
+func TestSeriesLimitDropIsVisible(t *testing.T) {
+	reg := NewRegistry(WithMaxSeriesPerMetric(1))
+	reg.IncCounter("demo.metric", Labels{"k": "a"}, 1)
+	reg.IncCounter("demo.metric", Labels{"k": "b"}, 1) // over budget: dropped
+	reg.IncCounter("demo.metric", Labels{"k": "c"}, 1) // dropped again
+	if reg.DroppedSeries() != 2 {
+		t.Fatalf("dropped = %d, want 2", reg.DroppedSeries())
+	}
+	for _, metric := range reg.Snapshot() {
+		if metric.Name == "obs.series.dropped" &&
+			metric.Kind == KindCounter &&
+			metric.Labels["metric"] == "demo.metric" &&
+			metric.Value == 2 {
+			return
+		}
+	}
+	t.Fatalf("obs.series.dropped series missing: %+v", reg.Snapshot())
+}

@@ -1,6 +1,7 @@
 package featureflag
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -60,8 +61,11 @@ func (s *Store) Replace(flags []Flag) {
 	}
 	s.mu.Lock()
 	s.flags = next
-	s.mu.Unlock()
+	// Bump inside the critical section: with the bump outside, a reader
+	// could observe the new map with the old version and treat a stale
+	// version-based cache as current.
 	s.ver.Add(1)
+	s.mu.Unlock()
 }
 
 func (s *Store) Enabled(name string) bool {
@@ -84,6 +88,7 @@ func (s *Store) Snapshot() []Flag {
 	for _, flag := range s.flags {
 		out = append(out, flag)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

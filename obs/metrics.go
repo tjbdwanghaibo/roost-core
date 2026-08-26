@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +61,7 @@ type Registry struct {
 	series             map[string]int
 	maxSeriesPerMetric int
 	droppedSeries      atomic.Int64
+	droppedByName      map[string]int64
 }
 
 var defaultRegistry atomic.Pointer[Registry]
@@ -124,6 +126,7 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 		labels:             make(map[string]Labels),
 		names:              make(map[string]string),
 		series:             make(map[string]int),
+		droppedByName:      make(map[string]int64),
 		maxSeriesPerMetric: defaultMaxSeriesPerMetric,
 	}
 	for _, opt := range opts {
@@ -231,6 +234,17 @@ func (r *Registry) Snapshot() []Metric {
 			LastUpdated: unixNanoTime(t.lastUpdated.Load()),
 		})
 	}
+	for name, dropped := range r.droppedByName {
+		if dropped <= 0 {
+			continue
+		}
+		out = append(out, Metric{
+			Name:   "obs.series.dropped",
+			Kind:   KindCounter,
+			Labels: Labels{"metric": name},
+			Value:  dropped,
+		})
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name == out[j].Name {
 			return labelsKey(out[i].Labels) < labelsKey(out[j].Labels)
@@ -252,6 +266,7 @@ func (r *Registry) Reset() {
 	r.labels = make(map[string]Labels)
 	r.names = make(map[string]string)
 	r.series = make(map[string]int)
+	r.droppedByName = make(map[string]int64)
 	r.droppedSeries.Store(0)
 }
 
@@ -339,6 +354,18 @@ func (r *Registry) reserveSeriesLocked(name string, key string) bool {
 		return true
 	}
 	if r.series[name] >= r.maxSeriesPerMetric {
+		// A saturated metric silently ignoring updates is invisible on any
+		// dashboard, so surface the degradation: warn once per metric name
+		// and export the drop count as a series of its own (bounded by the
+		// number of saturated names, never by label cardinality).
+		if r.droppedByName == nil {
+			r.droppedByName = make(map[string]int64)
+		}
+		if r.droppedByName[name] == 0 {
+			slog.Warn("obs: metric series limit reached, new label combinations are dropped",
+				"metric", name, "limit", r.maxSeriesPerMetric)
+		}
+		r.droppedByName[name]++
 		r.droppedSeries.Add(1)
 		return false
 	}

@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 )
@@ -138,12 +139,29 @@ func (i *OrderedIndex[K, V]) Query(value V) []K {
 		return nil
 	}
 	out := i.index.Query(value)
-	if i.less != nil {
-		sort.Slice(out, func(a, b int) bool { return i.less(out[a], out[b]) })
-		return out
+	less := i.less
+	if less == nil {
+		less = defaultLess[K]
 	}
-	sort.Slice(out, func(a, b int) bool {
-		return fmt.Sprint(out[a]) < fmt.Sprint(out[b])
-	})
+	sort.Slice(out, func(a, b int) bool { return less(out[a], out[b]) })
 	return out
+}
+
+// defaultLess orders numeric and string keys by their natural order; only
+// other comparable kinds fall back to the formatted representation (the old
+// blanket fmt.Sprint comparison sorted integers lexically: [9, 10] -> [10, 9]).
+func defaultLess[K comparable](a, b K) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	switch va.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return va.Int() < vb.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return va.Uint() < vb.Uint()
+	case reflect.Float32, reflect.Float64:
+		return va.Float() < vb.Float()
+	case reflect.String:
+		return va.String() < vb.String()
+	default:
+		return fmt.Sprint(a) < fmt.Sprint(b)
+	}
 }

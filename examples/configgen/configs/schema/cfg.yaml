@@ -1,0 +1,30 @@
+# cfggen schema：唯一手写的配置定义文件（简化版 Luban）。
+# 重新生成：
+#   go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen \
+#     -meta ./configs/schema/cfg.yaml -out ./cfg
+package: cfg
+beans:
+  - name: DropItem
+    fields:
+      - { name: item_id, type: int32 }
+      - { name: weight,  type: int32 }
+tables:
+  - name: drop
+    key: id
+    comment: 掉落组
+    fields:
+      - { name: id,    type: int32 }
+      - { name: items, type: "[]DropItem" }
+  - name: monster
+    key: id
+    comment: 怪物表
+    fields:
+      - { name: id,       type: int32 }
+      - { name: name,     type: string }
+      - { name: scene_id, type: int32, index: true }
+      - { name: drop_id,  type: int32, ref: drop }
+globals:            # 无主键的全局单例配置（objects 为兼容别名）
+  - name: world
+    fields:
+      - { name: width,  type: int32 }
+      - { name: height, type: int32 }

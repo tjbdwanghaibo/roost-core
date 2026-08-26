@@ -47,6 +47,7 @@ type Scheduler struct {
 
 	running  bool
 	deferred []func()
+	clock    func() time.Time
 }
 
 func NewScheduler(ownerID int64, seed int64, saved []Node, onChange ChangeFunc) *Scheduler {
@@ -82,6 +83,24 @@ func (s *Scheduler) Seed() int64 {
 		return 0
 	}
 	return s.seed
+}
+
+// SetClock replaces the time source used to stamp new timers' End (default
+// time.Now). Hosts that drive Tick with an offset-aware clock (e.g.
+// clock.Now under time.logic_offset) must inject the same source here,
+// otherwise every new timer is shifted by the offset relative to the ticks.
+func (s *Scheduler) SetClock(now func() time.Time) {
+	if s == nil || now == nil {
+		return
+	}
+	s.clock = now
+}
+
+func (s *Scheduler) now() time.Time {
+	if s != nil && s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 func (s *Scheduler) RegisterHandler(timerType int32, h Handler) {
@@ -130,7 +149,7 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 		return false
 	}
 	if now.IsZero() {
-		now = time.Now()
+		now = s.now()
 	}
 	if s.running {
 		s.deferred = append(s.deferred, func() { s.ChangeTimer(id, now, delay) })
@@ -154,7 +173,7 @@ func (s *Scheduler) Tick(now time.Time) {
 		return
 	}
 	if now.IsZero() {
-		now = time.Now()
+		now = s.now()
 	}
 	s.running = true
 	defer func() {
@@ -240,7 +259,7 @@ func (s *Scheduler) addNode(id int64, delay time.Duration, timerType int32, para
 		Param1:  param1,
 		Param2:  param2,
 		Payload: append([]byte(nil), payload...),
-		End:     time.Now().Add(delay),
+		End:     s.now().Add(delay),
 		Delay:   delay,
 		handler: h,
 	}

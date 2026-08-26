@@ -40,16 +40,36 @@ type Snapshot struct {
 	tables  map[Name]any
 	objects map[Name]any
 	custom  map[Name]any
+	// fingerprints holds explicit content digests set via SetFingerprint;
+	// they take precedence over json.Marshal in the snapshot hash, so
+	// aggregates with unexported state (external table sets) still make
+	// content drift visible.
+	fingerprints map[Name]string
 }
 
 func newSnapshot(version uint64) *Snapshot {
 	return &Snapshot{
-		Version:  version,
-		LoadedAt: time.Now(),
-		tables:   make(map[Name]any),
-		objects:  make(map[Name]any),
-		custom:   make(map[Name]any),
+		Version:      version,
+		LoadedAt:     time.Now(),
+		tables:       make(map[Name]any),
+		objects:      make(map[Name]any),
+		custom:       make(map[Name]any),
+		fingerprints: make(map[Name]string),
 	}
+}
+
+// SetFingerprint records an explicit content digest for one snapshot member,
+// overriding json.Marshal in the hash computation. Build callbacks whose
+// value would serialize opaquely (unexported fields, external generated
+// aggregates) must call this or their content stays invisible to Hash.
+func (s *Snapshot) SetFingerprint(name Name, digest string) {
+	if s == nil || name == "" {
+		return
+	}
+	if s.fingerprints == nil {
+		s.fingerprints = make(map[Name]string)
+	}
+	s.fingerprints[name] = digest
 }
 
 func (s *Snapshot) table(name Name) (any, bool) {
@@ -76,27 +96,48 @@ func (s *Snapshot) customData(name Name) (any, bool) {
 	return v, ok
 }
 
-func (s *Snapshot) finalize() {
+func (s *Snapshot) finalize() error {
 	if s == nil {
-		return
+		return nil
 	}
-	var parts []string
-	appendPart := func(kind string, values map[Name]any) {
+	hasher := sha256.New()
+	writePart := func(kind, name, payload string) {
+		// Length-prefixed segments: no delimiter collision even when a name
+		// contains the separator characters.
+		_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s%d:%s", len(kind), kind, len(name), name, len(payload), payload)
+	}
+	appendPart := func(kind string, values map[Name]any) error {
 		names := make([]string, 0, len(values))
 		for name := range values {
 			names = append(names, string(name))
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			raw, _ := json.Marshal(values[Name(name)])
-			parts = append(parts, kind+":"+name+":"+string(raw))
+			if digest, ok := s.fingerprints[Name(name)]; ok {
+				writePart(kind, name, digest)
+				continue
+			}
+			raw, err := json.Marshal(values[Name(name)])
+			if err != nil {
+				// A swallowed error here would freeze the hash into a
+				// constant and silently disable drift detection.
+				return fmt.Errorf("configdata: hash %s %s: %w (provide Snapshot.SetFingerprint for unmarshalable values)", kind, name, err)
+			}
+			writePart(kind, name, string(raw))
 		}
+		return nil
 	}
-	appendPart("table", s.tables)
-	appendPart("object", s.objects)
-	appendPart("custom", s.custom)
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
-	s.Hash = hex.EncodeToString(sum[:])
+	if err := appendPart("table", s.tables); err != nil {
+		return err
+	}
+	if err := appendPart("object", s.objects); err != nil {
+		return err
+	}
+	if err := appendPart("custom", s.custom); err != nil {
+		return err
+	}
+	s.Hash = hex.EncodeToString(hasher.Sum(nil))
+	return nil
 }
 
 // Table is an immutable keyed business configuration table.
@@ -139,6 +180,19 @@ func newTable[K comparable, V any](def TableDef[K, V], rows []V) (*Table[K, V], 
 	return t, nil
 }
 
+// MarshalJSON serializes the table name and rows (in file order). Without
+// it the snapshot hash would see an empty object for every table (all fields
+// are unexported) and config drift in table content would go undetected.
+func (t *Table[K, V]) MarshalJSON() ([]byte, error) {
+	if t == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(struct {
+		Name Name `json:"name"`
+		Rows []V  `json:"rows"`
+	}{Name: t.name, Rows: t.rows})
+}
+
 func (t *Table[K, V]) Name() Name {
 	if t == nil {
 		return ""
@@ -168,7 +222,7 @@ func (t *Table[K, V]) Get(key K) (V, bool) {
 func (t *Table[K, V]) MustGet(key K) V {
 	v, ok := t.Get(key)
 	if !ok {
-		panic(fmt.Sprintf("configdata: table %s key %v not found", t.name, key))
+		panic(fmt.Sprintf("configdata: table %s key %v not found", t.Name(), key))
 	}
 	return v
 }
@@ -204,6 +258,9 @@ func (t *Table[K, V]) GetByIndex(indexName string, value string) []V {
 type BuildContext struct {
 	Dir      string
 	Snapshot *Snapshot
+	// StrictJSON rejects unknown fields when decoding table/object files
+	// (Store.SetStrictJSON).
+	StrictJSON bool
 }
 
 func TableFrom[K comparable, V any](snap *Snapshot, name Name) (*Table[K, V], bool) {
@@ -295,11 +352,16 @@ type IndexDef[V any] struct {
 
 // TableDef describes a JSON-backed keyed table.
 type TableDef[K comparable, V any] struct {
-	Name     Name
-	File     string
-	Key      func(V) K
-	Indexes  []IndexDef[V]
+	Name    Name
+	File    string
+	Key     func(V) K
+	Indexes []IndexDef[V]
+	// Validate runs once per row after every table and object is loaded.
 	Validate func(*BuildContext, V) error
+	// ValidateTable runs once per table before the row loop — the place for
+	// whole-table invariants (reference target existence, row-count bounds)
+	// that must fire even when the table is empty.
+	ValidateTable func(*BuildContext, *Table[K, V]) error
 }
 
 func (d TableDef[K, V]) name() Name   { return d.Name }
@@ -316,19 +378,27 @@ func (d TableDef[K, V]) load(ctx *BuildContext) (any, error) {
 		return nil, fmt.Errorf("configdata: table %s key func is nil", d.Name)
 	}
 	var rows []V
-	if err := readJSON(filepath.Join(ctx.Dir, d.File), &rows); err != nil {
+	if err := readJSON(filepath.Join(ctx.Dir, d.File), &rows, ctx.StrictJSON); err != nil {
 		return nil, fmt.Errorf("configdata: load table %s: %w", d.Name, err)
 	}
 	return newTable(d, rows)
 }
 
 func (d TableDef[K, V]) validate(ctx *BuildContext, raw any) error {
-	if d.Validate == nil {
+	if d.Validate == nil && d.ValidateTable == nil {
 		return nil
 	}
 	table, ok := raw.(*Table[K, V])
 	if !ok {
 		return fmt.Errorf("configdata: table %s type mismatch", d.Name)
+	}
+	if d.ValidateTable != nil {
+		if err := d.ValidateTable(ctx, table); err != nil {
+			return fmt.Errorf("configdata: validate table %s: %w", d.Name, err)
+		}
+	}
+	if d.Validate == nil {
+		return nil
 	}
 	for _, row := range table.rows {
 		if err := d.Validate(ctx, row); err != nil {
@@ -356,7 +426,7 @@ func (d ObjectDef[V]) load(ctx *BuildContext) (any, error) {
 		return nil, fmt.Errorf("configdata: object %s file is empty", d.Name)
 	}
 	var obj V
-	if err := readJSON(filepath.Join(ctx.Dir, d.File), &obj); err != nil {
+	if err := readJSON(filepath.Join(ctx.Dir, d.File), &obj, ctx.StrictJSON); err != nil {
 		return nil, fmt.Errorf("configdata: load object %s: %w", d.Name, err)
 	}
 	return obj, nil
@@ -461,10 +531,12 @@ func (r *Registry) register(name Name, kind string, appendDef func()) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if oldKind, exists := r.names[name]; exists {
-		if oldKind == kind {
-			return nil
-		}
-		return fmt.Errorf("configdata: duplicate config name %s old=%s new=%s", name, oldKind, kind)
+		// A same-kind duplicate used to be a silent no-op ("idempotent"),
+		// which also silently discarded a *different* definition that
+		// happened to collide on the name (easy with inferred auto-table
+		// names) — the second table then never loaded. Defs contain
+		// closures and cannot be compared, so every duplicate is an error.
+		return fmt.Errorf("configdata: config name %s already registered (old=%s new=%s)", name, oldKind, kind)
 	}
 	r.names[name] = kind
 	appendDef()
@@ -579,6 +651,8 @@ func (h ReloadHook) RollbackReload(ctx context.Context, event ReloadEvent, cause
 type Store struct {
 	registry  *Registry
 	dir       string
+	dirMu     sync.RWMutex
+	strict    atomic.Bool
 	lifecycle *lifecycle.Registry
 	current   atomic.Pointer[Snapshot]
 	previous  atomic.Pointer[Snapshot]
@@ -612,6 +686,8 @@ func (s *Store) Dir() string {
 	if s == nil {
 		return ""
 	}
+	s.dirMu.RLock()
+	defer s.dirMu.RUnlock()
 	return s.dir
 }
 
@@ -625,8 +701,21 @@ func (s *Store) SetLifecycleRegistry(reg *lifecycle.Registry) {
 }
 
 func (s *Store) SetDir(dir string) {
+	if s == nil {
+		return
+	}
+	s.dirMu.Lock()
+	s.dir = dir
+	s.dirMu.Unlock()
+}
+
+// SetStrictJSON toggles strict decoding for table and object files: unknown
+// JSON fields are rejected instead of silently ignored. Off by default (a
+// renamed column otherwise zeroes silently — with reference checks then
+// short-circuited by the zero values, the drift is invisible).
+func (s *Store) SetStrictJSON(strict bool) {
 	if s != nil {
-		s.dir = dir
+		s.strict.Store(strict)
 	}
 }
 
@@ -652,60 +741,108 @@ func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.current.Load()
-	oldVersion := s.version.Load()
-	nextVersion := oldVersion + 1
 	started := time.Now()
-	snap, err := s.build(ctx, nextVersion)
+	snap, err := s.build(ctx, s.version.Load()+1)
 	if err != nil {
 		return nil, err
 	}
-	event := ReloadEvent{Reason: reason, Old: old, New: snap, StartedAt: started}
-	listeners := s.reloadListeners()
-	if err := runReloadValidate(ctx, listeners, event); err != nil {
-		return nil, err
-	}
-	if err := runReloadBeforeApply(ctx, listeners, event); err != nil {
-		return nil, err
-	}
-	event.AppliedAt = time.Now()
-	s.current.Store(snap)
-	SetDefaultStore(s)
-	fctx.SetRuntimeConfig(snap)
-	if err := s.emitConfigReload(ctx, lifecycle.Event{
-		Phase: lifecycle.PhaseConfigReload,
-		Name:  "configdata",
-		Data: map[string]any{
-			"reason":  reason,
-			"version": snap.Version,
-			"hash":    snap.Hash,
-		},
+	if err := s.commit(ctx, commitRequest{
+		reason: reason, emitName: "configdata",
+		old: old, target: snap, started: started,
 	}); err != nil {
-		s.current.Store(old)
-		s.version.Store(oldVersion)
-		fctx.SetRuntimeConfig(old)
-		runReloadRollback(ctx, listeners, event, err)
 		return nil, err
 	}
-	if err := runReloadAfterApply(ctx, listeners, event); err != nil {
-		s.current.Store(old)
-		s.version.Store(oldVersion)
-		fctx.SetRuntimeConfig(old)
-		runReloadRollback(ctx, listeners, event, err)
-		return nil, err
-	}
-	if old != nil {
-		s.previous.Store(old)
-	}
-	s.version.Store(nextVersion)
 	return snap, nil
 }
 
+// commitRequest carries one snapshot publication (reload or rollback).
+type commitRequest struct {
+	reason   string
+	emitName string
+	old      *Snapshot
+	target   *Snapshot
+	started  time.Time
+	extra    map[string]any
+}
+
+// commit publishes req.target through the full listener protocol. Contract:
+//   - Every listener callback (and the lifecycle emit) is panic-contained: a
+//     panic becomes an error and takes the failure path instead of leaving
+//     the store with a half-published generation.
+//   - RollbackReload pairs with BeforeApplyReload: it fires, in reverse
+//     order, for exactly the listeners whose BeforeApplyReload succeeded —
+//     regardless of whether their AfterApplyReload ran.
+//   - When req.old is nil (first load) there is no previous generation to
+//     restore, so rollback callbacks are skipped entirely: listeners must
+//     never interpret a nil Old as "revert to defaults".
+//   - The store state (current/version/defaultStore/fctx) is applied and
+//     reverted as one unit under s.mu; no listener runs between the
+//     individual stores.
+func (s *Store) commit(ctx context.Context, req commitRequest) error {
+	event := ReloadEvent{Reason: req.reason, Old: req.old, New: req.target, StartedAt: req.started}
+	listeners := s.reloadListeners()
+	if err := runReloadValidate(ctx, listeners, event); err != nil {
+		return err
+	}
+	prepared, err := runReloadBeforeApply(ctx, listeners, event)
+	if err != nil {
+		runReloadRollback(ctx, listeners[:prepared], event, err)
+		return err
+	}
+	event.AppliedAt = time.Now()
+	oldVersion := s.version.Load()
+	prevDefault := DefaultStore()
+	s.current.Store(req.target)
+	s.version.Store(req.target.Version)
+	SetDefaultStore(s)
+	fctx.SetRuntimeConfig(req.target)
+	revert := func() {
+		s.current.Store(req.old)
+		s.version.Store(oldVersion)
+		defaultStore.Store(prevDefault)
+		if req.old != nil {
+			fctx.SetRuntimeConfig(req.old)
+		} else {
+			// Never park a typed-nil *Snapshot in the runtime config slot:
+			// consumers checking != nil would be fooled.
+			fctx.SetRuntimeConfig(nil)
+		}
+	}
+	data := map[string]any{
+		"reason":  req.reason,
+		"version": req.target.Version,
+		"hash":    req.target.Hash,
+	}
+	for k, v := range req.extra {
+		data[k] = v
+	}
+	if err := s.emitConfigReload(ctx, lifecycle.Event{
+		Phase: lifecycle.PhaseConfigReload,
+		Name:  req.emitName,
+		Data:  data,
+	}); err != nil {
+		revert()
+		runReloadRollback(ctx, listeners[:prepared], event, err)
+		return err
+	}
+	if err := runReloadAfterApply(ctx, listeners, event); err != nil {
+		revert()
+		runReloadRollback(ctx, listeners[:prepared], event, err)
+		return err
+	}
+	if req.old != nil {
+		s.previous.Store(req.old)
+	}
+	return nil
+}
+
+// DryRun builds and validates a candidate snapshot without publishing it.
+// It deliberately does not take the store mutex: a long dry-run over a large
+// dataset must never block an emergency Rollback.
 func (s *Store) DryRun(ctx context.Context, reason string) (*Snapshot, error) {
 	if s == nil {
 		return nil, errors.New("configdata: store is nil")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	old := s.current.Load()
 	started := time.Now()
 	snap, err := s.build(ctx, s.version.Load()+1)
@@ -730,43 +867,16 @@ func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) 
 		return nil, errors.New("configdata: previous snapshot not found")
 	}
 	old := s.current.Load()
-	started := time.Now()
-	event := ReloadEvent{Reason: reason, Old: old, New: prev, StartedAt: started}
-	listeners := s.reloadListeners()
-	if err := runReloadValidate(ctx, listeners, event); err != nil {
-		return nil, err
-	}
-	if err := runReloadBeforeApply(ctx, listeners, event); err != nil {
-		return nil, err
-	}
-	event.AppliedAt = time.Now()
-	s.current.Store(prev)
-	SetDefaultStore(s)
-	fctx.SetRuntimeConfig(prev)
-	if err := s.emitConfigReload(ctx, lifecycle.Event{
-		Phase: lifecycle.PhaseConfigReload,
-		Name:  "configdata.rollback",
-		Data: map[string]any{
-			"reason":  reason,
-			"version": prev.Version,
-			"hash":    prev.Hash,
-		},
-	}); err != nil {
-		s.current.Store(old)
-		fctx.SetRuntimeConfig(old)
-		runReloadRollback(ctx, listeners, event, err)
-		return nil, err
-	}
-	if err := runReloadAfterApply(ctx, listeners, event); err != nil {
-		s.current.Store(old)
-		fctx.SetRuntimeConfig(old)
-		runReloadRollback(ctx, listeners, event, err)
-		return nil, err
-	}
+	extra := map[string]any{}
 	if old != nil {
-		s.previous.Store(old)
+		extra["from_version"] = old.Version
 	}
-	s.version.Store(prev.Version)
+	if err := s.commit(ctx, commitRequest{
+		reason: reason, emitName: "configdata.rollback",
+		old: old, target: prev, started: time.Now(), extra: extra,
+	}); err != nil {
+		return nil, err
+	}
 	return prev, nil
 }
 
@@ -780,7 +890,9 @@ func (s *Store) emitConfigReload(ctx context.Context, event lifecycle.Event) err
 	if reg == nil {
 		return nil
 	}
-	return reg.Emit(ctx, event)
+	return safeReloadCall("lifecycle emit", string(event.Phase), func() error {
+		return reg.Emit(ctx, event)
+	})
 }
 
 func (s *Store) AddReloadListener(listener ReloadListener) func() {
@@ -817,28 +929,50 @@ func (s *Store) reloadListeners() []ReloadListener {
 	return listeners
 }
 
+// safeReloadCall runs one listener callback with the panic containment every
+// other callback registry in this repository provides (lifecycle.emitHook,
+// etcd.WatchCallback, misc.SafeFunc): a panicking listener must fail the
+// reload cleanly, never abandon the store between two of its state stores.
+func safeReloadCall(phase, name string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("configdata: reload %s %s: panic: %v", phase, name, r)
+		}
+	}()
+	if err := fn(); err != nil {
+		return fmt.Errorf("configdata: reload %s %s: %w", phase, name, err)
+	}
+	return nil
+}
+
 func runReloadValidate(ctx context.Context, listeners []ReloadListener, event ReloadEvent) error {
 	for _, listener := range listeners {
 		if listener == nil {
 			continue
 		}
-		if err := listener.ValidateReload(ctx, event); err != nil {
-			return fmt.Errorf("configdata: reload validate %s: %w", listener.Name(), err)
+		if err := safeReloadCall("validate", listener.Name(), func() error {
+			return listener.ValidateReload(ctx, event)
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func runReloadBeforeApply(ctx context.Context, listeners []ReloadListener, event ReloadEvent) error {
-	for _, listener := range listeners {
+// runReloadBeforeApply returns how many listeners prepared successfully so
+// the failure paths can roll back exactly the prepared ones.
+func runReloadBeforeApply(ctx context.Context, listeners []ReloadListener, event ReloadEvent) (int, error) {
+	for i, listener := range listeners {
 		if listener == nil {
 			continue
 		}
-		if err := listener.BeforeApplyReload(ctx, event); err != nil {
-			return fmt.Errorf("configdata: reload before apply %s: %w", listener.Name(), err)
+		if err := safeReloadCall("before apply", listener.Name(), func() error {
+			return listener.BeforeApplyReload(ctx, event)
+		}); err != nil {
+			return i, err
 		}
 	}
-	return nil
+	return len(listeners), nil
 }
 
 func runReloadAfterApply(ctx context.Context, listeners []ReloadListener, event ReloadEvent) error {
@@ -846,18 +980,31 @@ func runReloadAfterApply(ctx context.Context, listeners []ReloadListener, event 
 		if listener == nil {
 			continue
 		}
-		if err := listener.AfterApplyReload(ctx, event); err != nil {
-			return fmt.Errorf("configdata: reload after apply %s: %w", listener.Name(), err)
+		if err := safeReloadCall("after apply", listener.Name(), func() error {
+			return listener.AfterApplyReload(ctx, event)
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func runReloadRollback(ctx context.Context, listeners []ReloadListener, event ReloadEvent, cause error) {
-	for i := len(listeners) - 1; i >= 0; i-- {
-		if listeners[i] != nil {
-			listeners[i].RollbackReload(ctx, event, cause)
+// runReloadRollback notifies the given prepared listeners in reverse order.
+// A nil event.Old means there is no previous generation to restore — the
+// callbacks are skipped so no listener ever "rolls back" into defaults.
+func runReloadRollback(ctx context.Context, prepared []ReloadListener, event ReloadEvent, cause error) {
+	if event.Old == nil {
+		return
+	}
+	for i := len(prepared) - 1; i >= 0; i-- {
+		listener := prepared[i]
+		if listener == nil {
+			continue
 		}
+		_ = safeReloadCall("rollback", listener.Name(), func() error {
+			listener.RollbackReload(ctx, event, cause)
+			return nil
+		})
 	}
 }
 
@@ -868,63 +1015,112 @@ func (s *Store) build(ctx context.Context, version uint64) (*Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.dir == "" {
+	// One consistent dir for the whole build (SetDir is concurrent-safe but
+	// must not change the directory between the stat check and the reads).
+	dir := s.Dir()
+	if dir == "" {
 		return nil, errors.New("configdata: data dir is empty")
 	}
-	if stat, err := os.Stat(s.dir); err != nil {
-		return nil, fmt.Errorf("configdata: stat dir %s: %w", s.dir, err)
+	if stat, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("configdata: stat dir %s: %w", dir, err)
 	} else if !stat.IsDir() {
-		return nil, fmt.Errorf("configdata: data dir %s is not a directory", s.dir)
+		return nil, fmt.Errorf("configdata: data dir %s is not a directory", dir)
 	}
 	tables, objects, custom := s.registry.defs()
 	snap := newSnapshot(version)
-	buildCtx := &BuildContext{Dir: s.dir, Snapshot: snap}
+	buildCtx := &BuildContext{Dir: dir, Snapshot: snap, StrictJSON: s.strict.Load()}
+	// A panicking def (business Build/Validate code, or generated loaders
+	// choking on malformed data) must fail the build, not the process.
+	safeDef := func(kind string, name Name, fn func() error) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("configdata: %s %s: panic: %v", kind, name, r)
+			}
+		}()
+		return fn()
+	}
 	for _, def := range tables {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		raw, err := def.load(buildCtx)
-		if err != nil {
+		if err := safeDef("load table", def.name(), func() error {
+			raw, err := def.load(buildCtx)
+			if err != nil {
+				return err
+			}
+			snap.tables[def.name()] = raw
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		snap.tables[def.name()] = raw
 	}
 	for _, def := range objects {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		raw, err := def.load(buildCtx)
-		if err != nil {
+		if err := safeDef("load object", def.name(), func() error {
+			raw, err := def.load(buildCtx)
+			if err != nil {
+				return err
+			}
+			snap.objects[def.name()] = raw
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		snap.objects[def.name()] = raw
+	}
+	// Validate tables and objects BEFORE building customs: custom builders
+	// consume table data assuming referential integrity, and a dangling
+	// reference should surface as the precise validate error, not as a
+	// builder crash.
+	for _, def := range tables {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := safeDef("validate table", def.name(), func() error {
+			return def.validate(buildCtx, snap.tables[def.name()])
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, def := range objects {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := safeDef("validate object", def.name(), func() error {
+			return def.validate(buildCtx, snap.objects[def.name()])
+		}); err != nil {
+			return nil, err
+		}
 	}
 	for _, def := range custom {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		raw, err := def.build(buildCtx)
-		if err != nil {
-			return nil, err
-		}
-		snap.custom[def.name()] = raw
-	}
-	for _, def := range tables {
-		if err := def.validate(buildCtx, snap.tables[def.name()]); err != nil {
-			return nil, err
-		}
-	}
-	for _, def := range objects {
-		if err := def.validate(buildCtx, snap.objects[def.name()]); err != nil {
+		if err := safeDef("build custom", def.name(), func() error {
+			raw, err := def.build(buildCtx)
+			if err != nil {
+				return err
+			}
+			snap.custom[def.name()] = raw
+			return nil
+		}); err != nil {
 			return nil, err
 		}
 	}
 	for _, def := range custom {
-		if err := def.validate(buildCtx, snap.custom[def.name()]); err != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := safeDef("validate custom", def.name(), func() error {
+			return def.validate(buildCtx, snap.custom[def.name()])
+		}); err != nil {
 			return nil, err
 		}
 	}
-	snap.finalize()
+	if err := snap.finalize(); err != nil {
+		return nil, err
+	}
 	return snap, nil
 }
 
@@ -961,17 +1157,30 @@ func ActiveSnapshot() *Snapshot {
 	return Current()
 }
 
-func readJSON(path string, out any) error {
+func readJSON(path string, out any, strict bool) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	trimmed := strings.TrimSpace(string(raw))
+	// A file truncated to "null" (or emptied) decodes into a zero table with
+	// no error — a whole dataset silently vanishing. Refuse it.
+	if trimmed == "" || trimmed == "null" {
+		return fmt.Errorf("configdata: %s: empty or null document", path)
+	}
+	decode := func(data []byte) error {
+		if !strict {
+			return json.Unmarshal(data, out)
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		return decoder.Decode(out)
+	}
 	if strings.HasPrefix(trimmed, "[") {
-		return json.Unmarshal(raw, out)
+		return decode(raw)
 	}
 	if strings.HasPrefix(trimmed, "{") {
-		if err := json.Unmarshal(raw, out); err == nil {
+		if err := decode(raw); err == nil {
 			return nil
 		}
 		var wrapped struct {
@@ -982,11 +1191,22 @@ func readJSON(path string, out any) error {
 		if err := json.Unmarshal(raw, &wrapped); err != nil {
 			return err
 		}
-		for _, candidate := range []json.RawMessage{wrapped.Rows, wrapped.Records, wrapped.Data} {
-			if len(candidate) > 0 {
-				return json.Unmarshal(candidate, out)
+		present := 0
+		var candidate json.RawMessage
+		for _, c := range []json.RawMessage{wrapped.Rows, wrapped.Records, wrapped.Data} {
+			if len(c) > 0 {
+				present++
+				if candidate == nil {
+					candidate = c
+				}
 			}
 		}
+		if present > 1 {
+			return fmt.Errorf("configdata: %s: multiple wrapper keys (rows/records/data) present — ambiguous document", path)
+		}
+		if candidate != nil {
+			return decode(candidate)
+		}
 	}
-	return json.Unmarshal(raw, out)
+	return decode(raw)
 }

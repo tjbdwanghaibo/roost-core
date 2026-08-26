@@ -232,3 +232,37 @@ func writeFile(t *testing.T, path string, data string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestSnapshotHashCoversTableRowContent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"wolf","scene_id":7}]`)
+	reg := NewRegistry()
+	MustRegisterTable(reg, TableDef[int32, testMonsterCfg]{
+		Name: "monster",
+		File: "monster.json",
+		Key:  func(v testMonsterCfg) int32 { return v.ID },
+	})
+	store := NewStore(reg, dir)
+	snap1, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Same table name, different row content: the hash must change, or the
+	// hash is useless for config-consistency checks.
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"bear","scene_id":7}]`)
+	snap2, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if snap1.Hash == snap2.Hash {
+		t.Fatalf("hash unchanged across row edit: %s", snap1.Hash)
+	}
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"wolf","scene_id":7}]`)
+	snap3, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("reload back: %v", err)
+	}
+	if snap3.Hash != snap1.Hash {
+		t.Fatalf("hash not deterministic: %s vs %s", snap3.Hash, snap1.Hash)
+	}
+}

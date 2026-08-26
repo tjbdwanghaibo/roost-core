@@ -1,6 +1,6 @@
 # cube-core
 
-`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前版本 v1.6.2）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
+`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前版本 v1.7.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
 
 本 README 面向新手使用者：先跑通一个最小示例，再系统理解核心概念，最后进入关键实现细节与学习路径。
 
@@ -26,11 +26,12 @@
 | `entitysync`、`sync`、`syncstream`、`replication` | 订阅协调 + prepare/commit 两阶段同步、有序状态流、Quake3 风格 delta+LOD 房间复制 | 把实体状态推送给客户端或其他服务（状态同步通道） |
 | `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
 | `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
-| `bus`、`event`、`taskflow` | NATS 之上的模块级消息 / RPC / 可靠消费（inbox 去重 + 死信）；进程内事件总线；任务流契约 | 服务间与实体间的异步通信 |
-| `ownerroute`、`replica`、`entity`（remote 部分） | 路由 epoch、副本 payload 编解码、ownership marker + fence | 跨服实体读写 |
-| `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 面向业务的接口与类型抽象，不含生产连接装配 | 具体实现由 `roost-kit` 的 Mod 提供 |
-| `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查、指标、结构化日志（自动注入 goId/逻辑帧/player）、管理命令、热修补 | 平台能力，随 `app.Registry` 就绪 |
-| `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照 | 接入层契约 |
+| `bus`、`event` | NATS 之上的模块级消息 / 轻量 RPC / **JetStream 持久化 RPC**（`CallReliable`，与轻量 RPC 并存）/ 可靠消费（inbox 去重 + 死信 + `bus.dlq.*` 运维命令）；进程内事件总线（self 同步、他人异步） | 服务间与实体间的异步通信 |
+| `taskflow`、`ai` | 实体内行为契约（**不是通信设施**）：动作/任务状态机接口、声明式 `MissionPlan` 步骤图、ActionGroup 分组冻结；AI 策略契约（`CanStopByNext` 抢占仲裁、经 `ActionList` 下达动作）。**core 只有接口，执行器在 cube-kit 的 `taskflow`/`ai` 包** | 实体行为层（怪物/NPC/玩法状态机） |
+| `ownerroute`、`replica`、`entity`（remote 部分） | 按 owner sid 分派命令的泛型路由器（本地执行 vs 经 bus 转发）；带订阅-应用回环的副本复制器（空 Data 即删除的线格式）；ownership marker + fence + 路由 epoch（epoch 在 `entity`，不在 ownerroute） | 跨服实体读写与命令路由 |
+| `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 三档：`mongo`/`nats` 纯接口（实现全在 kit）；`redis`/`etcd` 接口 + 核心实现（Lua `CompareAndSet`、`WatchCallback`、LocalMirror 契约）；`cache`/`httpclient`/`httpserver` 是完整实现（8 种缓存 store、HMAC 签名客户端、chi 之上的生产 HTTP 引擎——core 对 chi 的依赖是唯一例外） | 缓存选型见实现细节第 13 条；连接装配由 `roost-kit` 的 Mod 提供 |
+| `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer，无分位数）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
+| `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照（原子热更/回滚/内容 hash/请求一致性；三条接入通道：手写 TableDef、`cfg` tag 自动注册 `RegisterAutoTable`、外部生成聚合 `RegisterExternalTables`——配置定义可全量生成，见实现细节第 17 条） | 接入层契约 |
 | `timer`、`clock`、`map`、`query`、`ctx` | 时间任务、逻辑时间、容器与索引、请求上下文 | 通用工具 |
 
 core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间件连接实现——那些分别属于业务仓库与 `roost-kit`。
@@ -46,12 +47,12 @@ core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间
 
 ## 快速启动
 
-下面的示例约 130 行，展示最小闭环：**定义一个实体 + DAO → 注册 nest handler → 跑一次成功提交和一次带 undo 回滚的事务请求**。示例已在本仓库 v1.6.2 上编译运行验证。
+下面的示例约 130 行，展示最小闭环：**定义一个实体 + DAO → 注册 nest handler → 跑一次成功提交和一次带 undo 回滚的事务请求**。示例已在本仓库上编译运行验证（v1.6.2 起可用）。
 
 ```bash
 mkdir quickstart && cd quickstart
 go mod init quickstart
-go get github.com/tjbdwanghaibo/cube-core@v1.6.2
+go get github.com/tjbdwanghaibo/cube-core@v1.7.0
 # 将下面代码存为 main.go 后：
 go run .
 ```
@@ -359,7 +360,7 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 
 ### 7. 锁内耗时预算：`nest.handler.lock_hold` —— `nest/nest_dispatch.go`
 
-每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长分布 `nest.handler.lock_hold{handler}`；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
+每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长 `nest.handler.lock_hold{handler}`（obs 的 timer 只有 count/sum/max/last，**没有分位数**——看均值用 sum/count，max 是进程生命期高水位永不衰减）；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
 
 ### 8. 冷加载合并与缓存降级可见性 —— `entity/manager_access.go`、`cache/ref_hmap.go`
 
@@ -383,10 +384,45 @@ roost 的同步能力是三条并列通道，按"谁跑模拟"划分：
 
 lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最近 N 帧（`RedundantEncoder`，深度 N 可修复连续 N−1 个丢包），走不可靠 datagram 通道（AEAD UDP）；追帧/重连走可靠通道（KCP/QUIC），按 tick 限速分页（kit `Room.StartCatchup`）。对实时帧广播用 ARQ 重传是用错工具——重传回来的帧已经过期。
 
-### 补充两条常踩的契约
+### 12. 平台注册表：实例优先，包级 default 只是进程内兜底 —— `app/registry.go`
+
+`app.NewRegistry` 预装 6 个平台 capability（health/obs/admin/admin.metadata/lifecycle/runtime.failure），其中**只有 obs 把包级 default 同步指向了实例**。因此平台能力一律通过 `app.Lookup[*T](r, app.ModX)` 取**实例**；包级 `health.Register`/`admin.Register`/`lifecycle.Register` 写的是另一个进程内 default，除 obs 外**不会被 app 装配路径（如 kit 的 ops HTTP）看到**。写 Mod/业务代码时把这条当铁律，能避免"注册了却查不到"的一整类问题。`hotcode.RegisterAdminCommands(reg)` 就按此契约设计：装配期从 `app.Lookup`（`app.ModAdmin`）拿实例传入，热修补命令才会出现在运维端点。
+
+### 13. 缓存分层与选型 —— `cache/`
+
+八种 store 按需组合：`LocalStore`（精确 LRU）、`AtomicLocalStore`（分片 + 读路径零锁竞争：读只取 RLock 不动 LRU 链，淘汰用插入时钟近似；**MaxBytes 按 shard 均分，单条超过 `MaxBytes/shards` 直接 `ErrEntryTooLarge`**）、`GroupedLocalStore`（O(1) 整组失效）、`LayeredStore`（write-through + 回读校验：写 remote 后回读填 L1，回读不存在则删本地——remote 是权威）、`ReadThroughStore`（single-flight 不开 goroutine，领航者在自己调用栈里加载；每 key 等待者上限超限**拒绝**而非排队）、四种 Redis 后端（JSON/Hash/Raw/SortedSet）、`RedisRefHMapStore`（反射把嵌套 struct 铺成多个 Redis hash + `Patch` 单字段更新 + Lua 原子重写，key 用 `{hash tag}` 保证 Cluster 同 slot）。两个通用陷阱：**配了 `Stale` 的 Redis store 每次写都先读一次做版本比较且读写不原子**；RefHMap 的 Lua 失败降级为非原子 DEL+HSET（保可用性，Warn + `cache.refhmap.write_degraded_total` 强制可见——降级窗口内可能读到空值）。
+
+### 14. bus 的四条易踩契约 —— `bus/bus.go`、`bus/jetstream_rpc.go`
+
+① **Bus 是一次性对象**：Stop 会退订包括 RPC 在内的全部订阅，而 Start 只重建基础 subject，所以 Stop 后拒绝重启（Start 失败可重试，成功过才不可重启）。② **`Send(toSid, module)` 是服务类型无关的**——发到 `{prefix}.srv.{sid}`，同 sid 的不同类型进程都会收到；定向到某类型用 `SendByType`。③ 有序性粒度：异步消息按 `ToModule` 哈希到固定 worker（**同 module FIFO、跨 module 并行**），RPC 按 method 哈希。④ **开启 JetStream RPC 后 `HandleRpc` 只注册持久化通道，但 `Call`/`CallTo` 仍走轻量 core-NATS**——要持久化必须显式 `CallReliable`/`CallToReliable`。另注意可靠消费的崩溃语义是**至多一次**：`BeginConsume` 只 SetNX 占位，handler 执行中崩溃后重投会被判重复而静默跳过（直到 inbox TTL 过期）；需要更强语义由 store 实现提供。
+
+### 15. 跨 goroutine 的正确出路：`CaptureSnapshot` —— `ctx/context.go`
+
+第 6 条讲了"handler 内禁止裸 `go func()` 后访问框架能力"，正向出路是：`snap := fctx.CaptureSnapshot()` → 新 goroutine 里 `ctx, release := fctx.NewContext(fctx.WithSnapshot(snap)); defer release()`。三个要点：snapshot **刻意不携带 Now**（每个 goroutine 装载时自己盖逻辑时间戳，时间不该跨 goroutine 冻结）；`Context` 是 `sync.Pool` 复用对象，**release 之后继续持有 `*Context` 是 use-after-free**；snapshot 的 keyValue 是浅拷贝，共享可变对象仍有竞态。`worker.Pool.Go` 的 goroutine 只在 pool 运行期间（Start 后 Stop 前发起）才被 `StopWithContext` 追踪；`worker.Cast` 是**有损**的（自旋超限或已关闭时静默 `OnRelease` 丢弃）——优先 `TryCast`/`TryDispatch`，并注意 `TryDispatch` 失败时任务未被释放（调用方负责）而 `Dispatch` 失败时已代为释放。
+
+### 16. 单所有者组件清单（非并发安全，靠实体锁/单 worker 独占）
+
+`timer.Scheduler`（无锁；Tick 内的增删改延迟到 tick 结束统一执行，闭包 timer 纯内存不持久化、不进快照；宿主用偏移时钟驱动 Tick 时必须 `SetClock` 同源注入，否则新建 timer 的 End 与 tick 时钟差一个偏移）、`fmap.FastMap`（开放寻址 + tombstone，为"已被外层锁保护的热路径"设计）、`misc.KeyMap`、`misc.ObjectPool`、`misc.BucketHolder` 的游标遍历（`RangeWithCursorCnt` 把全量扫描摊平到多个 tick——大规模实体周期巡检的惯用法）。与之相对：`fmap.ShardedSafeMap`（分片锁；`Compute` 持写锁回调不可重入同分片，`Range` 脱锁回调可安全改 map）、`fmap.SmallSafeMap`（唯一带 BSON codec、可直接嵌 DAO 字段的容器）。
+
+### 17. 配置管线：meta 定义一切，映射零手写 —— `configdata/auto.go`、`configdata/external.go`、roost-codegen `cfggen`
+
+配置接入有三条递进的通道，业务按场景选：
+
+1. **手写 `TableDef`**（存量兼容）：Key/Index 函数手写，适合有特殊构建逻辑的表。
+2. **`cfg` tag 自动注册**（`RegisterAutoTable`）：struct 上打 `cfg:"key"`/`cfg:"index[=名],skipempty"`/`cfg:"ref=表名[,required]"`，映射全部推导；嵌入（非指针）字段按 encoding/json 语义提升。`ref` 是 Luban 式悬空引用校验——目标表存在性与 key 类型兼容在**表级前置校验**（空表也拦拼写错误），每行成员校验非零值必须存在于目标表主键（零值 = 无引用，`required` 则零值即错）。tag 错误一律注册期 fail-fast；反射只发生在注册与构建期，读取路径零反射。配合 `Store.SetStrictJSON(true)` 可拒绝数据里的未知字段（防字段改名静默归零）。
+3. **meta 文件全量生成**（推荐，类似简化版 Luban）：roost-codegen 的 `cfggen` 从一个 YAML schema（表/字段/类型/key/index/ref/bean 嵌套；`objects` 段定义无主键的全局单例配置）生成 struct + 注册 + 类型化访问器（含二级索引的强类型查询函数，如 `MonsterBySceneID(snap, 7)`），**业务只写 meta 文件和一行 `cfg.MustRegisterGeneratedConfigData(reg)`**。schema 错误（未声明的 key、悬空 ref、类型不匹配、meta 拼写错误）全部在生成期 fail-fast。端到端示例：`examples/configgen`；**meta 文件完整参考见 roost-codegen 的 `docs/CFGGEN_META.zh-CN.md`**。
+
+**热更回调契约**（`ReloadListener`）：所有回调 panic 容器化（panic = 失败并整体回退）；`RollbackReload` 与 `BeforeApplyReload` 配对（只有 prepare 成功的监听者按逆序收到回滚）；`Old == nil` 的首次加载失败**不触发**回滚回调——监听者不得把它当"回退默认配置"。外部聚合的内容经 read 字节指纹进入 `Snapshot.Hash`；自带非导出状态的 custom 值需调 `Snapshot.SetFingerprint`，否则 build 报错提示。
+
+接真正的 Luban 时用 `RegisterExternalTables`：Luban 管定义/校验/导出/代码生成（Excel 族源、bean 继承多态、ref/path/range 导出期校验），生成的 `Tables` 聚合作为快照成员装进 roost——原子热更、回滚、hash、`ActiveSnapshot` 请求一致性全部继承，Luban 侧零运行时。**已真实接入**：`examples/lubanreal` 的 `gen/` 与导出数据由官方 luban CLI（v4.11.0，XML schema + JSON 数据源）真实生成并可运行验证，重新生成见其 `gen.sh`。
+
+### 补充几条常踩的契约
 
 - **`lock.LockManager` 的重验合同**（`lock/lock_manager.go`）：锁实例可能被 `ReleaseLock` 并发释放重建，两个 goroutine 可能各持"同一 ID 的锁"。因此拿锁本身证明不了什么——加锁后必须重验受保护状态（`IsRemoved`/`IsClear`、索引成员资格），状态已消失就退让；释放方必须先在持锁状态下让状态不可达，再释放锁实例。
-- **saga 的租约预算静态校验**（`saga/engine.go`）：`NewEngine` 在构造期校验 `(LeaseDuration − StoreTimeout) / Batch` 对 coordinator 与 publisher 的预算，拒绝任何"处理中租约过期 → 双主并发"的配置组合；Resume 递增 `Record.Incarnation` 并折入 `CommandID`，恢复后的命令与故障前的 completion receipt 永不碰撞。
+- **saga 的租约预算静态校验**（`saga/engine.go`）：`NewEngine` 在构造期校验 `(LeaseDuration − StoreTimeout) / Batch` 对 coordinator 与 publisher 的预算，拒绝任何"处理中租约过期 → 双主并发"的配置组合；Resume 递增 `Record.Incarnation` 并折入 `CommandID`，恢复后的命令与故障前的 completion receipt 永不碰撞。saga 还有几条同族设计：coordinator 时钟是唯一权威（远端 `CompletedAt` 被无条件覆盖为本地 UTC）；迟到的重复 completion 查收据表后**作为可 ACK 的成功返回**（防重投风暴）；缺失 definition 版本的记录直接 fence 到 `ManualRequired` 而不猜测；补偿阶段的失败一律进人工（补偿不可补偿）。
+- **陈旧持有者必须能被 fence（三处同族契约）**：`redis.IDistLock` 是 best-effort（无 fence token，TTL 过期后旧持有者不自知）——只用于重复执行可容忍的场景；必须阻止陈旧写入时用 `redis.IVersionedLock`（fence 单调、下游 CAS 拒旧）；选主侧 `etcd.IsLeader()` 有固有 stale 窗口（服务端租约已过期、客户端未感知），**领导权敏感写必须携带 `IFencedElection.Fence()` 的 token 并在存储侧比较**。这与 nest WAL 的"结果不确定时 fence"是同一条设计不变量在分布式层的三个化身。
+- **configdata 的热更不撕裂请求**（`configdata/configdata.go`、`ctx/context.go`）：`Reload` 成功后新快照写进 goroutine context 的 Config 槽，但**只有新建的 Context 才读到它**——在途 handler 手上仍是旧快照。取配置一律用 `configdata.ActiveSnapshot()`（优先 goroutine 绑定的快照，回退全局）；直接 `configdata.Current()` 会在热更瞬间读到新表，破坏同请求一致性。Rollback 只有一级（连续两次是在两个快照间来回），且回滚后 Version 不再单调——别用 Version 做审计/幂等键。
+- **`errcode.ClientError` 是信息隐藏边界**（`errcode/errcode.go`）：任何非 `*IntError` 的错误统一变成 `(1, "server error")`，内部细节永不外泄给客户端；`errors.Is` 按 code 匹配（code 是唯一身份，重复 code 的 `Define` 会静默覆盖——大项目自行做重复检测）。`httpserver.HandleJSON` 则相反：把 handler error 文本直接返回客户端（400）——生产上配 `webroute.WriteResultWithMapper` 包一层。
 
 ## 学习路径
 
@@ -402,7 +438,8 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
 9. **状态同步**：`entity/subject_sync.go` + `entitysync/subscription.go`（prepare/commit 两阶段）→ `syncstream/syncstream.go` → `replication/`（delta+LOD）→ 文档 `ENTITY_SYNC.md`。
 10. **帧同步（输入帧）**：`lockstep/sequencer.go`（乐观帧锁定）→ `lockstep/wire.go`（冗余广播编码）→ `lockstep/history.go`、`lockstep/desync.go` → `lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `lockstep/room.go`（房间与传输接线）。
-11. **编排与装配**：`saga/engine.go` + `SAGA.md` → `bus/bus.go` → `app/app.go`、`app/registry.go` + `app/example_test.go`。
+11. **编排与装配**：`saga/engine.go` + `SAGA.md`（`saga/engine_test.go` 开头的 `memoryStore` 与 `TestStoreContract*` 是 Store 实现者的必读规格）→ `bus/bus.go` + `bus/bus_lifecycle_test.go`（生命周期与 subject 布局的权威文档）→ `app/app.go`、`app/registry.go` + `app/example_test.go`（shared/service-specific mod 分层的完整装配样例）。
+12. **语义即测试的推荐清单**：`worker/worker_test.go`（"接纳即执行"不变量的回归，注释写明了原缺陷）、`webroute/route_test.go`（生成路由运行时的完整用法说明书）、`configdata/configdata_test.go`（reload/DryRun/Rollback/listener 回滚）、`etcd/watch_callback_test.go`（无损背压 vs LocalMirror 订阅隔离的选型依据）、`bus/reliable_test.go`（去重按 consumer、DLQ requeue 语义）。
 
 ## 与 roost-kit / roost-codegen / roost-skill 的关系
 

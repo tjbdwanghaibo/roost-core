@@ -80,6 +80,19 @@ type DurableBatchEvaler interface {
 	EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) (results []any, local, replicas int64, err error)
 }
 
+// ListTrimmer trims a list in place (LTRIM). Optional capability: callers
+// that would otherwise emulate a trim with DEL+RPUSH (a window in which a
+// crash loses the whole list) should prefer this when the client provides it.
+type ListTrimmer interface {
+	LTrim(ctx context.Context, key string, start, stop int64) error
+}
+
+// ListRemover removes occurrences of a value from a list in place (LREM).
+// Optional capability with the same motivation as ListTrimmer.
+type ListRemover interface {
+	LRem(ctx context.Context, key string, count int64, value any) (int64, error)
+}
+
 // Z represents a sorted set member with score.
 type Z struct {
 	Score  float64

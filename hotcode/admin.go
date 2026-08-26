@@ -2,7 +2,7 @@ package hotcode
 
 import (
 	"context"
-	"sync"
+	"errors"
 
 	"github.com/tjbdwanghaibo/cube-core/admin"
 )
@@ -21,18 +21,23 @@ type LoadPluginCommand struct {
 	Path string `json:"path"`
 }
 
-var adminOnce sync.Once
-
-func RegisterAdminCommands() {
-	adminOnce.Do(func() {
-		_ = admin.Register(admin.CommandDef{
+// RegisterAdminCommands registers the hot-code commands on the given admin
+// registry — pass the instance from app.Lookup (app.ModAdmin) so the commands
+// are reachable through the assembled ops surface; the package-level default
+// registry is a different instance that assembled paths never consult.
+func RegisterAdminCommands(reg *admin.Registry) error {
+	if reg == nil {
+		return errors.New("hotcode: admin registry is required")
+	}
+	return errors.Join(
+		reg.Register(admin.CommandDef{
 			Name:        AdminCommandList,
 			Description: "list hot-code patch points",
 			Handler: func(context.Context, admin.Command) (admin.Result, error) {
 				return admin.Result{Data: map[string]any{"points": List()}}, nil
 			},
-		})
-		_ = admin.Register(admin.CommandDef{
+		}),
+		reg.Register(admin.CommandDef{
 			Name:        AdminCommandRevert,
 			Description: "revert one hot-code patch point to its original function",
 			Handler: func(_ context.Context, cmd admin.Command) (admin.Result, error) {
@@ -45,8 +50,8 @@ func RegisterAdminCommands() {
 				}
 				return admin.Result{Data: map[string]any{"name": payload.Name}}, nil
 			},
-		})
-		_ = admin.Register(admin.CommandDef{
+		}),
+		reg.Register(admin.CommandDef{
 			Name:        AdminCommandLoadPlugin,
 			Description: "load and apply a Go hot-code plugin",
 			Handler: func(_ context.Context, cmd admin.Command) (admin.Result, error) {
@@ -60,6 +65,6 @@ func RegisterAdminCommands() {
 				}
 				return admin.Result{Data: map[string]any{"path": payload.Path, "meta": bundle.Meta()}}, nil
 			},
-		})
-	})
+		}),
+	)
 }

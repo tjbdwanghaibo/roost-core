@@ -4,7 +4,32 @@
 
 ## [Unreleased]
 
+### Fixed（configdata 三路对抗性复审，39 项发现全部实施，均带回归测试）
+- **发布路径重构为单一提交点**（`configdata.Store.commit`）：current/version/defaultStore/fctx 四个状态在锁内一次性推进与回退（此前分五步推进，中途失败留下混合世代——Version 重号、Rollback 跳代、defaultStore 被劫持、typed-nil 进 fctx 槽）。所有 listener 回调、lifecycle emit、def 的 load/build/validate **全部 panic 容器化**（对齐全仓惯例；此前 listener panic 会让 Store 永久失去一致性）。
+- **回滚配对语义修正**：`RollbackReload` 与 `BeforeApplyReload` 配对——只对 prepare 成功的监听者按逆序回调（此前 BeforeApply 失败不触发任何回滚、AfterApply 失败却回调从未执行过的监听者）；**`Old == nil`（首次加载失败）跳过全部回滚回调**——监听者永远不会把"没有上一代"误读成"回退到默认配置"。
+- **Hash 修复三连**：`finalize` 的 `json.Marshal` 错误不再被吞（含循环引用等不可序列化值时 build 失败并提示 `SetFingerprint`，此前 hash 静默退化为常量）；新增 `Snapshot.SetFingerprint` 显式内容摘要；**`RegisterExternalTables` 对回调实际读到的字节做增量 sha256 作为该聚合的 hash 贡献**（Luban Tables 内部状态非导出，`json.Marshal` 恒为 `{}`，外部表内容漂移此前对 hash 完全不可见）。hash 算法同时改为长度前缀增量计算（消除大字符串物化与定界符歧义）。**升级后 Hash 值会变化。**
+- **`RegisterExternalTables` 加固**：build 回调 panic 转为构建错误（Luban 生成的 loader 遇畸形数据习惯 panic，此前 bootstrap 期直接崩进程）；read 闭包在 build 返回后失效（惰性加载会绕过指纹与 fail-fast）；路径检查改用 `filepath.IsLocal`；目录在 build 开始时一次性捕获。
+- **auto 表注册期校验补齐到文档承诺**：嵌入（非指针）字段按 encoding/json 语义提升（此前 base 里的 ref/index tag 被静默忽略）；ref/key 字段类型白名单（整数/字符串，bool/float/切片/指针注册期拒绝）；ref 类型兼容性收紧为同 Kind（int64→int32 截断、int→string rune 转换此前会放过悬空引用）；**ref 目标表存在性与类型兼容改为表级前置校验**（`TableDef.ValidateTable` 新 API，空表/全零列不再隐藏拼写错误）；index 重名注册期拒绝（此前两列静默并入同一索引）；新增 `required`（零值即错，抓字段改名导致的整列归零）与 `skipempty`（零值不进索引）指令；错误信息用完整类型名。
+- **`Registry` 同名同 kind 注册从静默幂等改为报错**——此前第二个同名定义被静默丢弃、整张表不加载（自动名字推导下极易撞名）。**行为变更：依赖重复注册幂等的装配代码需要清理。**
+- **`readJSON` 收紧**：`null`/空文档拒绝（此前静默变成空表）；`rows`/`records`/`data` 多包装键并存拒绝（此前静默取优先者）；新增 `Store.SetStrictJSON`（opt-in 拒绝未知字段——字段改名此前静默整列归零，且被 ref 零值跳过掩护）。
+- 其它：`SetDir` 加锁（与 build 的数据竞争）、build 目录单次捕获（三次读取不一致绕过目录校验）、custom 构建移到表/对象校验**之后**（悬空引用报精确校验错误而非 builder 崩溃）、validate 循环响应 ctx 取消、`DryRun` 不再持store 锁（大配置 dry-run 不阻塞紧急 Rollback）、`MustGet` nil 接收者不再裸解引用、`Rollback` 的 lifecycle 事件带 `from_version`。
+- kit `configdata` Mod：Rollback 回调把 `configdata.version` gauge 复位到 `Old.Version`（此前失败的 reload 让 gauge 永久停在已回滚的版本上，监控误报成功）。
+
+### Fixed（全量能力审计发现，均带回归测试）
+- `hotcode`：`RegisterAdminCommands` 改为注册到调用方传入的 admin **实例**注册表（对齐 bus 的模式，返回聚合错误）——原先注册到包级 default，而装配路径（kit ops HTTP）只读实例注册表，`hotcode.list/revert/load_plugin` 三条命令在生产运维端点不可达。
+- `configdata`：`Table` 增加 `MarshalJSON`（表名 + 行数据，文件序）——原先 Table 字段全不可导出，`json.Marshal` 恒为 `{}`，快照 `Hash` 只反映表名集合、改任意行数据 hash 不变，无法用于配置一致性校验。**注意：升级后同一份配置的 Hash 值会变化**（首次真实覆盖内容）。
+- `query`：`OrderedIndex` 默认比较器改为类型感知（整数/无符号/浮点/字符串按自然序，其余回退格式化串）——原先统一 `fmt.Sprint` 字典序，整数 key `[9,10]` 排成 `[10,9]`。显式传入 `less` 的行为不变。
+- `obs`：指标基数打满不再全静默——首次打满每 metric 记一条 Warn，丢弃数以 `obs.series.dropped{metric}` counter 随 Snapshot/Prometheus 导出（序列数以打满的 metric 名数为界）；`Reset` 同步清零。
+- `failurelog`：① 原子 Lua 失败降级为非原子回退时记 `failurelog_degraded_total{namespace,op}` + Warn（对齐 `cache.refhmap` 的"降级必须可见"规范）；② trim/delete 回退优先走新的 `fredis.ListTrimmer`/`ListRemover`（LTRIM/LREM 就地操作）——原先 DEL+RPUSH 两步间崩溃会丢整个列表，无该能力的客户端保留旧回退；③ `failurelog_trim_total` 补上 namespace label。
+- `timer`：`Scheduler` 新增 `SetClock` 注入时间源（默认 `time.Now` 行为不变）——原先 `NewTimer` 的 End 用裸墙钟而 Tick 用调用方时钟，`time.logic_offset` 非 0 时所有新建 timer 整体偏移一个 offset；宿主用偏移时钟驱动 Tick 时必须同源注入。
+- `misc`：`SafeFuncWithTryCount` 补上与同族 `Safe*` 一致的 panic 恢复、返回包装后的真实末次错误（原先吞掉所有 error 只返回 "try count exceeded"）、`tryCount<=0` 至少执行一次（原先一次都不调用就报错）；`TaskPool` 对非 nil 配置做归一化（`WorkerCount==0` 原先构造空 worker 切片致 `Submit` 除零 panic），哈希取模改在 uint32 空间（32 位平台负索引 panic）。
+- `featureflag`：`Replace` 的版本号递增移入临界区（原先先换 map 再递增，读者可能观察到"新数据 + 旧版本号"，基于版本的缓存失效判定会漏）；`Snapshot` 按 Name 排序输出（对齐全仓 List 类方法）。
+
+### Changed
+- README 按全量能力审计扩充：能力总览修正分类（taskflow/ai 独立成"实体行为契约"行并指明 runner 在 kit、ownerroute 的"路由 epoch"归位到 entity、`cache`/`httpclient`/`httpserver` 从"接口抽象"改为完整实现三档分类）；实现细节新增第 12–16 条（平台注册表实例优先、缓存分层选型、bus 四条易踩契约、`CaptureSnapshot` 跨 goroutine 正向出路、单所有者组件清单）；"补充契约"新增分布式 fence 三化身、configdata 热更一致性、`errcode.ClientError` 信息隐藏边界；修正第 7 条"时长分布"措辞（obs timer 无分位数）；学习路径补第 11–12 条测试即规格清单。
+
 ### Added
+- `configdata` 配置管线打磨（映射零手写）：① `RegisterAutoTable`——`cfg` struct tag（`key`/`index[=名]`/`ref=表名`）推导全部映射，`ref` 为 Luban 式悬空引用校验（每次 load/reload 进程内执行，零值=无引用），tag 错误一律注册期 fail-fast，读取路径零反射；② `RegisterExternalTables`/`ExternalTablesFrom`——外部生成的表聚合（如 Luban code_go_json 的 Tables）作为快照成员接入，原子热更/回滚/hash/请求一致性全部继承，文件读取限制在数据目录内（拒绝路径逃逸）；③ 新增 `examples/` 模块：`configgen`（cfggen meta→生成→热更/ref 拦截端到端）与 `lubanreal`（**真实 Luban 接入**：gen/ 与导出数据由官方 luban CLI v4.11.0 生成，XML schema + JSON 数据源，`RegisterExternalTables` 接线后热更/回滚全继承，重生成脚本 gen.sh）。配套的 schema 生成器 `cfggen` 在 roost-codegen。
 - `lockstep` 包：帧同步（输入帧）核心，与状态同步（entitysync / kit sync）并列的第三条同步通道。`Sequencer` 乐观帧锁定（到点切帧永不等待、缺席即空输入、迟到折入下一未切帧、提交窗口防未来帧滥用、重复提交幂等）；`RedundantEncoder`/`EncodeBroadcast`/`DecodeBroadcast` 帧冗余广播编码（每报文携带最近 N 帧，丢包靠冗余修复而非重传；解码严格 fail-fast，坏包永不变成静默错帧）；`History` 全量帧历史（追帧分页 + 回放产物）；`DesyncDetector` 关键帧哈希多数派裁决（首报不可改口、法定人数后出裁决）。单帧封包基准 ~0.84µs（验收线 50µs）；30% 丢包仿真零帧缺失。房间与传输接线在 cube-kit 的 `lockstep` 包。
 - 可观测性统一：`OBSERVABILITY.md`（命名规范、全仓指标清单、告警基线、Prometheus 导出接线）与 `observability/grafana-roost-overview.json` 总览面板（调度/durability/缓存总线/跨服实体四组）。
 

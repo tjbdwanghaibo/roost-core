@@ -1,0 +1,4 @@
+github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d h1:e3xdlObtriVu9HlrOfYB8Nmy51+DuJy5Hcgsg+x7ixg=
+github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d/go.mod h1:I8AX+yW//L8Hshx6+a1m3bYkwXkpsVjA2795vP4f4oQ=
+github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
+github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
