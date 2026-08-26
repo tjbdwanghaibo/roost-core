@@ -1,3 +1,11 @@
+// Package ai provides a minimal behavior-tree skeleton: composite/decorator
+// nodes over a Status state machine, a Blackboard, and a tick Controller.
+//
+// Scope: this is deliberately a skeleton, not an AI middleware. There is no
+// node library (no pathfinding/steering/perception nodes), no visual editor
+// format, no utility/GOAP planner, and no built-in scheduling across agents.
+// Games compose their own node vocabulary on top; anything beyond "tick a
+// tree against a blackboard" stays with the caller.
 package ai
 
 type Status uint8
