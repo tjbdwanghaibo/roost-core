@@ -15,10 +15,21 @@ type ManagerAccess struct {
 	loader          AggregateLoader
 	loaderID        uint64
 	loadConcurrency int
+	flightMu        sync.Mutex
+	flights         map[int64]*entityLoadFlight
+}
+
+// entityLoadFlight deduplicates concurrent cold loads of one entity: the
+// first caller performs LoadEntity, everyone else waits on done. Without it a
+// hot entity's cache miss stampedes the database with one load per caller.
+type entityLoadFlight struct {
+	done  chan struct{}
+	value IThreadSafeEntity
+	err   error
 }
 
 func NewManagerAccess(manager *EntityManager) *ManagerAccess {
-	return &ManagerAccess{manager: manager, loadConcurrency: 8}
+	return &ManagerAccess{manager: manager, loadConcurrency: 8, flights: make(map[int64]*entityLoadFlight)}
 }
 
 func (access *ManagerAccess) ConfigureLoadConcurrency(concurrency int) {
@@ -86,7 +97,7 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	value, err := loader.LoadEntity(ctx, meta.FullID, meta.Kind)
+	value, err := access.loadEntityShared(ctx, meta.FullID, meta.Kind, loader)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +105,36 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 		return nil, fmt.Errorf("entity manager access: loaded entity %d category mismatch", id)
 	}
 	return value, nil
+}
+
+// loadEntityShared collapses concurrent loads of the same entity into one
+// LoadEntity call. Results (including errors) are shared with every waiter;
+// the flight is removed before done closes, so a retry after a failure
+// starts a fresh load. A waiter whose own context is cancelled stops waiting
+// without affecting the in-flight load.
+func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64, kind EntityKind, loader AggregateLoader) (IThreadSafeEntity, error) {
+	access.flightMu.Lock()
+	if flight, ok := access.flights[fullID]; ok {
+		access.flightMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.value, flight.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	flight := &entityLoadFlight{done: make(chan struct{})}
+	if access.flights == nil {
+		access.flights = make(map[int64]*entityLoadFlight)
+	}
+	access.flights[fullID] = flight
+	access.flightMu.Unlock()
+	flight.value, flight.err = loader.LoadEntity(ctx, fullID, kind)
+	access.flightMu.Lock()
+	delete(access.flights, fullID)
+	access.flightMu.Unlock()
+	close(flight.done)
+	return flight.value, flight.err
 }
 
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {

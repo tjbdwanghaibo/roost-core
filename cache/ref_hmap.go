@@ -5,12 +5,14 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/tjbdwanghaibo/cube-core/obs"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 )
 
@@ -311,6 +313,13 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 	}
 	if _, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...); err == nil {
 		return nil
+	} else {
+		// The fallbacks below are NOT atomic: a concurrent reader can observe
+		// the delete before the re-write lands. Degrading silently would hide
+		// exactly the window operators need to know about, so it is logged
+		// and counted before availability is chosen over atomicity.
+		slog.Warn("cache: redis ref hmap Lua write failed, degrading to non-atomic fallback", "keys", len(keys), "err", err)
+		obs.IncCounter("cache.refhmap.write_degraded_total", nil, 1)
 	}
 	if pipe := s.redis.Pipeline(); pipe != nil {
 		pipe.Del(ctx, keys...)

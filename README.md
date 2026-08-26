@@ -1,219 +1,404 @@
 # cube-core
 
-[English](#english) | [中文](#cube-core-中文说明)
+`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前版本 v1.6.2）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
 
-`cube-core` 是 Cube 游戏服务端的通用运行时。它定义应用生命周期、能力注册、Entity / Component、Nest Actor 调度、事务与 WAL 持久化、状态同步、Saga 编排、缓存、可观测性和基础安全能力；它不包含具体玩法、玩家协议或某个中间件的连接实现。
+本 README 面向新手使用者：先跑通一个最小示例，再系统理解核心概念，最后进入关键实现细节与学习路径。
 
-## cube-core 中文说明
+- [能力总览](#能力总览)
+- [设计不变量](#设计不变量)
+- [快速启动](#快速启动)
+- [核心概念](#核心概念)
+- [关键实现细节（进阶）](#关键实现细节进阶)
+- [学习路径](#学习路径)
+- [与 roost-kit / roost-codegen / roost-skill 的关系](#与-roost-kit--roost-codegen--roost-skill-的关系)
+- [开发与验证](#开发与验证)
+- [深入文档索引](#深入文档索引)
 
-### 仓库关系
+## 能力总览
 
-```text
-cube (业务服务、玩法、协议和部署)
-  ├── cube-core (通用运行时与抽象)
-  └── cube-kit  (Redis、Mongo、NATS、etcd 等 Mod 实现)
-             └── cube-core
-```
+| 模块 | 解决什么问题 | 何时用 |
+| --- | --- | --- |
+| `app` | `Mod`/`Service` 生命周期、类型安全的 capability `Registry`、配置生产门禁、运行期 fail-stop | 装配任何服务的入口 |
+| `entity` | 实体 = `EntityBase` + 组件 + DAO 的组合；`EntityManager`/`Getter`；实体锁与 guard 作用域；远程实体元数据 | 定义所有业务对象 |
+| `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
+| `checkpoint` | `DirtyTracker` 字段级脏掩码、有界 `Journal`、`Flusher` 批量合并刷盘、版本化 tombstone、Redis WAL | 实体状态的后台持久化 |
+| `lock`、`worker`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool、goroutine-ID 等基础原语 | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
+| `entitysync`、`sync`、`syncstream`、`replication` | 订阅协调 + prepare/commit 两阶段同步、有序状态流、Quake3 风格 delta+LOD 房间复制 | 把实体状态推送给客户端或其他服务 |
+| `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
+| `bus`、`event`、`taskflow` | NATS 之上的模块级消息 / RPC / 可靠消费（inbox 去重 + 死信）；进程内事件总线；任务流契约 | 服务间与实体间的异步通信 |
+| `ownerroute`、`replica`、`entity`（remote 部分） | 路由 epoch、副本 payload 编解码、ownership marker + fence | 跨服实体读写 |
+| `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 面向业务的接口与类型抽象，不含生产连接装配 | 具体实现由 `roost-kit` 的 Mod 提供 |
+| `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查、指标、结构化日志（自动注入 goId/逻辑帧/player）、管理命令、热修补 | 平台能力，随 `app.Registry` 就绪 |
+| `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照 | 接入层契约 |
+| `timer`、`clock`、`map`、`query`、`ctx` | 时间任务、逻辑时间、容器与索引、请求上下文 | 通用工具 |
 
-业务代码优先依赖本仓库暴露的接口和稳定类型；具体 Redis、Mongo、NATS、etcd 客户端由 `cube-kit` 提供。这样业务服务可以替换基础设施实现，而不把连接细节扩散到玩法代码中。
+core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间件连接实现——那些分别属于业务仓库与 `roost-kit`。
 
-### 设计哲学
+## 设计不变量
 
-整个仓库围绕四条不变量构建，所有模块的失败语义都从这里推导：
+所有模块的失败语义都从四条不变量推导，读代码前先记住它们：
 
 1. **成功不可先于 commit point 被观察。** 任何"已完成"的对外承诺（返回值、outbox、同步分发）都必须晚于对应的持久化 admission。
-2. **结果不确定时 fence，而不是猜。** fsync / 网络写的结果不确定（`ErrCommitIndeterminate`）时不做内存回滚——那会制造与 WAL 已提交历史冲突的第二条历史——而是放弃事务、熔断进程，由新进程 WAL replay 判定权威结果。
-3. **删除防复活。** 版本化 tombstone 语义在内存去重、Redis Lua 脚本、WAL 回放三层保持一致：同版本 delete 胜出，复活必须携带严格更高的版本。
-4. **接纳即执行。** 有界队列一旦受理任务（返回 true），任务必然被执行或被显式释放，不存在"接受了但悄悄丢掉"的窗口。
+2. **结果不确定时 fence，而不是猜。** fsync 结果不确定（`ErrCommitIndeterminate`）时不做内存回滚——那会制造与 WAL 已提交历史冲突的第二条历史——而是放弃事务、熔断进程，由新进程 WAL replay 判定权威结果。
+3. **删除防复活。** 版本化 tombstone 语义在内存去重、Redis Lua 脚本、WAL 回放三层一致：同版本 delete 胜出，复活必须携带严格更高的版本。
+4. **接纳即执行。** 有界队列一旦受理任务（返回 true / nil），任务必然被执行或被显式释放，不存在"接受了但悄悄丢掉"的窗口。
 
-### 能力边界
+## 快速启动
 
-| 领域 | 包 | 责任 |
-| --- | --- | --- |
-| 应用装配 | `app` | `Mod` / `Service` 生命周期、CLI、配置校验、`Registry`、运行期故障 fail-stop |
-| 实体运行时 | `entity`、`nest`、`replica`、`ownerroute` | Entity / Component、串行 Actor、可重入实体锁、锁序死锁预防、跨实体投递、副本与所有权路由 |
-| 事务与持久化 | `nest`（rollback/WAL）、`checkpoint`、`migration` | 内存事务 + undo、WAL commit point、journal + 批量刷盘、版本化 tombstone、数据版本迁移 |
-| 状态同步 | `entitysync`、`sync`、`syncstream`、`replication` | dirty 掩码同步、subject prepare/commit、有序状态流、delta + LOD 房间复制 |
-| 分布式编排 | `saga`、`bus`、`event`、`taskflow` | Saga 状态机 + outbox、服务间消息 / RPC、事件分发、任务流契约 |
-| 通用连接抽象 | `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 面向业务的接口、类型和通用辅助逻辑；不负责生产连接装配 |
-| 平台能力 | `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查、指标、日志、管理命令、生命周期 hook、会话令牌、故障记录、灰度开关、热修补 |
-| 接入契约 | `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照 |
-| 调度与工具 | `worker`、`timer`、`clock`、`lock`、`map`、`query`、`ctx`、`misc` | worker pool、时间任务、逻辑时间、锁原语、容器与索引、请求上下文、GoID |
-
-包可以依赖标准库、稳定第三方库和其他 core 抽象；不得引入 `player`、`alliance`、`activity` 等玩法语义，也不得直接依赖 `cube` 的业务包。
-
-### 安装
-
-发布版本可用后，业务模块按需引用：
+下面的示例约 130 行，展示最小闭环：**定义一个实体 + DAO → 注册 nest handler → 跑一次成功提交和一次带 undo 回滚的事务请求**。示例已在本仓库 v1.6.2 上编译运行验证。
 
 ```bash
-go get github.com/tjbdwanghaibo/cube-core@latest
+mkdir quickstart && cd quickstart
+go mod init quickstart
+go get github.com/tjbdwanghaibo/cube-core@v1.6.2
+# 将下面代码存为 main.go 后：
+go run .
 ```
 
-开发 Cube 三仓库时，在共同父目录创建临时工作区，不要将此 `go.work` 提交到任一仓库：
+```go
+package main
 
-```bash
-cd /path/to/workspace
-go work init ./cube ./cube-core ./cube-kit
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/nest"
+)
+
+// ---- 1. DAO：实体的持久化文档，字段级脏掩码由 checkpoint.DirtyTracker 跟踪 ----
+
+const heroGoldField = 1 // 字段位：Gold 对应脏掩码第 1 位
+
+type HeroDao struct {
+	id      int64
+	tracker checkpoint.DirtyTracker
+	Gold    int64
+}
+
+func (d *HeroDao) Id() int64            { return d.id }
+func (d *HeroDao) SetId(id int64)       { d.id = id }
+func (d *HeroDao) DbName() string       { return "game" }
+func (d *HeroDao) CollName() string     { return "heroes" }
+func (d *HeroDao) Dirty() entity.IDirty { return &d.tracker }
+func (d *HeroDao) CleanDirty()          { d.tracker.SelfClean() }
+
+// DirtyTracker 让 RollbackUndo 事务能在回滚时恢复脏掩码快照。
+func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
+
+// AddGold 是"可回滚写"的最小样板：先 RecordUndo 登记逆操作，再改内存、标脏。
+// 真实项目中这类 setter 由 roost-codegen 生成。
+func (d *HeroDao) AddGold(n int64) error {
+	old := d.Gold
+	if !nest.RecordUndo(d, heroGoldField, func() error { d.Gold = old; return nil }) {
+		return errors.New("AddGold must run inside a rollback=undo nest handler")
+	}
+	d.Gold += n
+	d.tracker.MarkPersist(1 << heroGoldField)
+	return nil
+}
+
+// ---- 2. 实体：嵌入 EntityBase，绑定 DAO ----
+
+const (
+	heroKind     entity.EntityKind     = 1
+	heroCategory entity.EntityCategory = 1
+)
+
+type Hero struct {
+	*entity.EntityBase
+	Dao *HeroDao
+}
+
+func (h *Hero) Base() *entity.EntityBase { return h.EntityBase }
+
+// RangeDao 实现 entity.Guardable：事务与 checkpoint 由此发现实体的 DAO。
+func (h *Hero) RangeDao(f func(entity.DaoInterface)) { f(h.Dao) }
+
+// ---- 3. Getter：Nest 通过它按 ID 取实体（生产中由 EntityManager 提供）----
+
+type memGetter struct {
+	mu sync.RWMutex
+	m  map[int64]entity.IThreadSafeEntity
+}
+
+func (g *memGetter) Add(e entity.IThreadSafeEntity) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.m[e.ID()] = e
+}
+
+func (g *memGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if e, ok := g.m[id]; ok {
+		return e, nil
+	}
+	return nil, nest.ErrEntityNotFound
+}
+
+func (g *memGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	ret := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		ret[i] = e
+	}
+	return ret, nil
+}
+
+func main() {
+	// 注册实体 Kind -> Category 映射（ID 编码需要）
+	entity.MustRegisterEntityKindCategory(heroKind, heroCategory)
+
+	// 创建实体：完整 EntityID 由 uniqueID + kind 编码而成
+	id, err := entity.BuildEntityID(1001, heroKind)
+	if err != nil {
+		panic(err)
+	}
+	hero := &Hero{
+		EntityBase: entity.NewEntityBase(id, heroCategory, false, heroKind),
+		Dao:        &HeroDao{id: id, Gold: 100},
+	}
+
+	getter := &memGetter{m: map[int64]entity.IThreadSafeEntity{}}
+	getter.Add(hero)
+
+	// 注册 handler：Rollback=undo —— handler 出错时按登记的逆操作恢复内存
+	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("hero.add_gold"),
+		func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			h := es[0].(*Hero) // 进入 handler 时实体锁已按全局锁序持有
+			if err := h.Dao.AddGold(params[0].(int64)); err != nil {
+				return nil, err
+			}
+			if h.Dao.Gold < 0 {
+				return nil, errors.New("gold would go negative") // 触发回滚
+			}
+			return h.Dao.Gold, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo})
+
+	// 启动引擎：消息按实体 ID 哈希到固定 worker，同一实体串行执行
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(getter),
+		nest.NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+	)
+	if err := engine.Start(); err != nil {
+		panic(err)
+	}
+	defer engine.Shutdown(context.Background())
+
+	name := nest.NewHandlerName("hero.add_gold")
+
+	// 成功：+50，事务提交，内存生效、脏位保留（等待 checkpoint 刷盘）
+	ret, err := engine.Request(context.Background(), name, id, nest.NewParams(int64(50)))
+	fmt.Printf("add +50: gold=%v err=%v dirty=%v\n", ret, err, hero.Dao.DirtyTracker().Dirty())
+	hero.Dao.CleanDirty() // 示例简化：模拟 checkpoint 已刷盘并清理脏位
+
+	// 失败：-1000 使余额为负，handler 返回错误，事务按 undo 回滚：
+	// 内存值恢复为 150，脏掩码恢复为 handler 进入前的快照（干净）
+	_, err = engine.Request(context.Background(), name, id, nest.NewParams(int64(-1000)))
+	fmt.Printf("add -1000: err=%v\n", err)
+	fmt.Printf("after rollback: gold=%d dirty=%v\n", hero.Dao.Gold, hero.Dao.DirtyTracker().Dirty())
+}
 ```
 
-### 应用生命周期
-
-`app.App` 统一管理配置与启动顺序。`Mod` 是基础能力提供者，`Service` 是业务入口。
+输出：
 
 ```text
-Mod.Init -> Mod.Provide -> Mod.Start -> Service.Init -> Service.Serve
-                                                     -> Service.Shutdown
-Mod.Stop (按注册逆序)
+add +50: gold=150 err=<nil> dirty=true
+add -1000: err=gold would go negative
+after rollback: gold=150 dirty=false
 ```
 
-- `Init` 只读取配置、创建对象，不启动后台任务。
-- `Provide` 将能力注册到 `app.Registry`；同名 capability 会失败，避免静默覆盖。
-- `Start` 建立外部连接、注册健康检查并启动后台任务。启动失败时已完成的 Mod 按逆序精确回滚。
-- `Stop` 必须释放资源；服务退出时按逆序执行。shutdown 超时时故意不再继续停 Mod（写明理由），避免半停状态下的未定义行为。
-- `Service.Serve` 阻塞直到上层 context 被取消，`Shutdown` 处理服务自身的优雅收敛。
-- `app/runtime_failure` 提供基础设施不可安全写入时 first-error-wins 的统一 fail-stop；`app/config_validation` 在 `env=prod` 下强制生产门禁（非 dev 密钥、WAL durable 等）。
+这个示例没有配置 `TransactionCommitter`，事务停留在内存层（`DurabilityMemory`）。生产环境把 handler 声明为 `DurabilityStrict`/`DurabilityPipelined` 并注入 `roost-kit` 的 WAL committer，即可获得崩溃一致性——业务代码一行不改。本地联调多仓库时可用 `go.work` 或 `go mod edit -replace` 指向本地目录。
 
-最小装配形态如下。中间件 Mod 位于 `cube-kit`，业务 `Service` 由应用自行实现。
+## 核心概念
 
-```go
-application := app.New("game", "v1.0.0").
-    Mods(sharedMods...).
-    RegisterServer("game", gameService, gameOnlyMods...)
+### 实体 / 组件 / DAO
 
-if err := application.Execute(); err != nil {
-    panic(err)
-}
+实体是**组合**而非继承（`entity/entity_base.go`、`entity/entity.go`）：
+
+```text
+Hero（业务实体，具体类型）
+ ├── *entity.EntityBase        身份、生命周期（Touch/UnTouch 引用计数 + removed/cleared 位）、
+ │                             实体锁、事件总线、同步状态、lastCommitLSN
+ ├── entity.ComponentManager   组件容器；组件按注册的依赖关系拓扑排序初始化
+ └── entity.DaoManager         DAO 容器；每个 DAO 对应一个持久化 collection 文档
 ```
 
-服务从 `Registry` 使用类型安全的 capability，而不是引用全局单例：
+- **组件（Component）** 持有对宿主实体的**具体类型指针**（不是 interface），实现行为逻辑；用 `entity.RegisterComponentDependency` 声明初始化顺序。
+- **DAO** 是持久化边界：实现 `entity.DaoInterface`，内嵌 `checkpoint.DirtyTracker` 做字段级脏掩码。组件改状态时只改 DAO 字段并标脏，何时刷盘由框架决定。
+- 组件/DAO 与实体之间的接线代码（工厂、快照、undo setter）在真实项目中由 `roost-codegen` 生成，`entity/example_gen_test.go` 手写模拟了生成产物的形态，是理解这套约定的最佳入口。
+- 实体注册进 `entity.EntityManager` 后通过 `ManagerAccess`（`entity/manager_access.go`）暴露创建/获取/销毁/分组索引，服务持有实例而不是全局单例；ID 由 `entity.IDGen`（Redis/etcd 分配号段）生成。
 
-```go
-client, ok := app.Lookup[MyClient](registry, "my_client")
-if !ok {
-    return errors.New("my_client capability is unavailable")
-}
-_ = client
+### 串行调度模型（Nest Actor）
+
+Nest 是所有实体状态修改的唯一入口（`nest/nest.go`、`nest/dispatcher.go`）：
+
+```text
+Client.Dispatch/Request(handlerName, entityID, params)
+        │  按 entityID 哈希（misc.Hash64）选择固定 worker
+        ▼
+worker（每 worker 一条 MPSC 队列，有界，满即拒绝 ErrQueueFull）
+        │  NestDispatch：取实体 → Touch → 按锁序 Sort → 加实体锁
+        ▼
+handler(es []entity.IThreadSafeEntity, params []any) (any, error)
+        │  事务提交 / 回滚（见下节）
+        ▼
+解锁 → guard release hook（checkpoint/sync）→ 回包
 ```
 
-Entity 生命周期同样使用服务拥有的实例。启动阶段为 manager 配置由 Redis/etcd
-分配 block 的 `entity.IDGen.Generate`，随后把 `ManagerAccess` 同时注入 Nest、
-Remote Entity 和业务 Service；创建、销毁、分组索引都不会经过全局 manager：
+- **同一实体天然串行**：同 ID 恒定哈希到同一 worker，队内 FIFO。不同实体并行。
+- **handler 内已持锁**，可安全读写传入实体；多实体请求（`DispatchMulti`）在进入 handler 前一次性按全局锁序拿齐所有锁。
+- **handler 内禁止同步跨实体调用**：`Request`/`Dispatch` 在 handler 内会 panic（`ErrSyncInHandler`/`ErrAsyncInHandler`）。跨实体写用 `nest` 的 cast（`nest/cast.go`），它带加载前锁序预检。
+- 引擎实例化（`nest.NewEngine`）、单次使用、不可重启；`Fence` 用于不确定故障后的立即熔断。
 
-```go
-manager := entity.NewEntityManager()
-idGen, err := entity.NewIDGen(initialBlock, acquireNextBlock)
-if err != nil { return err }
-if err := manager.ConfigureIDGenerator(idGen.Generate); err != nil { return err }
-entities := entity.NewManagerAccess(manager)
+### 事务与回滚策略
+
+每个 handler 注册时声明 `HandlerMeta{Rollback, Durability}` 两个独立维度（`nest/rollback.go`、`nest/transaction.go`）。**Rollback 管 commit point 之前的失败，Durability 管 commit point 何时被确认。**
+
+Rollback 三档：
+
+| 策略 | 机制 | 适用 |
+| --- | --- | --- |
+| `RollbackNone` | 无事务开销 | 只读 handler |
+| `RollbackState` | handler 前对每个 DAO 抓完整快照（DAO 需实现 `RollbackSnapshotter` 或 `RollbackParticipant`），失败时整体恢复 | 简单、写字段多 |
+| `RollbackUndo` | setter 第一次改字段时 `nest.RecordUndo(owner, field, inverse)` 登记逆操作（同 owner+field 自动去重合并，map 键用 `RecordUndoToken`），失败时逆序执行 | 热路径推荐；生成代码默认 |
+
+两种策略都会自动快照并恢复 `DirtyTracker` 的脏掩码与版本，回滚后实体"字节级"回到事务前。
+
+Durability 四档：
+
+| 策略 | commit point | 说明 |
+| --- | --- | --- |
+| `DurabilityMemory` | 无 WAL | 靠实体 release 后的 checkpoint 异步落盘 |
+| `DurabilityAsync` | WAL write 受理，不等本批 fsync | 后台按间隔刷盘 |
+| `DurabilityStrict` | **锁内**等待 group commit fsync 完成 | 返回成功即已持久化 |
+| `DurabilityPipelined` | 锁内仅"入队拿 LSN"，fsync 锁外等待 | 热点实体锁不被 I/O 拖住，见进阶细节 |
+
+handler 成功后，框架把所有被改实体的 after-image/delta（由 `CommitParticipant.PrepareCommit` 物化）连同 `nest.Emit` 发出的 outbox `Effect` 组成**一条** `CommitRecord` 交给 `TransactionCommitter`——多实体修改与外部消息在 WAL 里永远是一个原子单元。外部副作用（DB、RPC、消息）严禁写在 handler 里，用 `nest.AfterCommit`（提交后、通常锁外执行）或 `nest.Emit`（事务性 outbox，会自动把 memory 事务升为 strict）。
+
+### 持久化管线（checkpoint）
+
+`checkpoint` 是"内存 → 数据库"的 after-image 管道：
+
+```text
+DAO setter 标脏（DirtyTracker，原子 Or）
+   ▼ 实体 guard 释放时（release hook，持锁内）采集 Snapshot → SaveItem
+Journal（有界队列，满则背压/拒绝）
+   ▼ Flusher worker 或显式 Flush(ctx)
+按 (collection, id) 去重合并 + 版本化 CAS → StorageBackend（Mongo 等，kit 实现）
 ```
 
-### 执行模型：Nest Actor 与锁
+- `DirtyTracker`（`checkpoint/dirty.go`）用 `atomic.Or`/`Swap` 维护 persist/sync 两套 64 位掩码：`TakePersistDirty` 交换出快照后，其后标的脏位落在新掩码里，旧确认永远清不掉新数据（天然免 ABA）。
+- WAL 三档（`checkpoint/option.go`）：async 尽力、required WAL 拒绝则拒绝提交、durable fsync 确认才受理。`Checkpoint.Start` 强制先完成 WAL replay 再接受实时 flush。
+- 删除是**版本化 tombstone**（`JournalEntry.Deleted`），先 WAL 后 journal，后端 `BulkRemove` 成功才 ACK——防止崩溃窗口让旧快照复活实体（见进阶细节）。
 
-完整模型见 [Roost 业务执行模型](RUNTIME_EXECUTION_MODEL.md)。要点：
+## 关键实现细节（进阶）
 
-- **串行调度。** 消息按实体 ID 哈希到固定 worker（`worker.Pool`），同一实体的处理天然串行。`nest.NewEngine` / `nest.Client` 是唯一入口，不再新增业务 Runtime 门面。
-- **实体锁是停车等待的可重入锁**（`lock.ReentrantMutex`）。等待者停在信号量 channel 上而非自旋，持有者做慢操作（例如 WAL 提交）时等待者不烧 CPU；channel 接收顺序提供近似 FIFO 公平性。可重入语义基于 goroutine ID。
-- **死锁预防是体系化设计**：全局锁序（Remote → Player → Alliance → Other）+ 批内确定性排序加锁 + handler 内 cast 的加载前预检 + 已持锁时降级 TryLock + 锁冲突的有界延迟重排队（带指标）。API 层直接禁止 handler 内同步跨实体调用（panic + 明确错误）；跨实体写使用 cast。
-- **goroutine ID 是框架上下文的载体。** guard 作用域、请求上下文（`ctx`）、锁可重入性都挂在当前 goroutine 上。因此 **handler 内严禁裸 `go func(){...}` 后再访问框架能力**——新 goroutine 会静默丢失事务上下文、guard 与锁可重入性。需要异步工作时使用 `worker.Pool.Go` 或把工作投递回 Nest。
-- `lock.LockManager.ReleaseLock` 与 `GetLock` 有明确契约：锁实例可能被并发释放并重建，因此 **拿到锁后必须重验受保护状态**（entity 的 `IsRemoved`/`IsClear` 与索引成员资格），发现状态已消失就退让。释放方必须先在持锁状态下使状态不可达（摘索引、置 removed）再释放锁与锁实例。
+每条附源文件指引，建议对照代码阅读。
 
-### 事务、WAL 与 commit point
+### 1. 实体锁为什么是 parking 而非自旋 —— `lock/reentrant_mutex.go`
 
-完整语义见 [Nest Transaction WAL](NEST_TRANSACTION_WAL.md)。要点：
+`ReentrantMutex` 用**容量 1 的信号量 channel** 实现：token 在 channel 里 ⇔ 锁空闲，等待者阻塞在 `<-rm.sem` 上停车（park），由 Go runtime 挂起。持有者做慢操作（典型：`DurabilityStrict` 的锁内 WAL fsync，毫秒级）时，等待者不烧 CPU；channel 的接收顺序还提供近似 FIFO 公平性，热点实体锁不会像不公平自旋锁那样饿死个别等待者。可重入基于 goroutine ID（`owner atomic.Int64` 只与调用者自己的 gid 比较，非持有者的陈旧读不可能误中快路径）；`recursion` 只被持有者触碰，sem 交接提供前后持有者之间的 happens-before。
 
-- Handler 声明 `Rollback` 与 `Durability` 元数据；`RollbackTx` 捕获实体 after-image，handler 失败时按 undo 恢复内存。
-- **commit point 在锁内**（`DurabilityStrict`）：`durableCommit` 通过 `TransactionCommitter`（WAL group-commit + fsync）完成 admission，成功后才解锁、才执行 `AfterCommit`。数据库、RPC、消息发布等外部副作用必须走 `nest.AfterCommit`、outbox 或独立 service 流程，不能直接写在 handler 里绕开提交点。
-- **`DurabilityPipelined`**（见 [Nest Pipelined Commit](NEST_PIPELINED_COMMIT.md)）：锁内只做到"日志已入队（拿到 LSN）"，`Enqueue` 是唯一拒绝点；fsync 在锁外等待，回包与 `AfterCommit` 在 durable 后执行。级联脏读由 WAL 的前缀持久性保证安全；未落盘状态由外化闸门（entitysync 水位线、checkpoint 水位线）挡在进程内。要求 committer 实现 `PipelinedTransactionCommitter`，否则派发返回 `ErrPipelinedCommitterRequired`；跨服写批与 broadcast 路径继续走锁内提交。
-- **`ErrCommitIndeterminate` 不回滚**：内存状态保持事务后形态、事务 abandon、进程 fence，由新进程 WAL replay 判定该事务是否成为历史。这是设计哲学第 2 条的直接体现。
-- 持久删除在实体锁内先做 durable admission（tombstone），admission 成功才把实体从内存移除——删除的"成功"同样不可先于 commit point 被观察。
+### 2. 锁序如何防死锁 —— `entity/entity_guard.go`、`nest/nest_dispatch.go`
 
-### checkpoint：journal 与批量刷盘
+死锁预防是多层体系而不是单个技巧：
 
-`checkpoint` 提供 after-image 持久化管道：`DirtyTracker`（原子 Swap/OR 的无锁脏位，天然免 ABA）→ 有界 `Journal`（背压）→ `Flusher`（按 (collection, id) 去重合并、版本化 CAS 写入后端）。
+- **全局锁序**：`EntityGroupRemote → Player → Alliance → Other`（`GetEntityGroupFunc` 由应用映射 category 到组），Remote 最先因为分布式锁必须先于任何本地 mutex。
+- **批内确定性排序**：多实体请求进 handler 前 `SortEntity` 按（组，GUID）排序后依次加锁——任意两个事务对同一批实体的加锁顺序全局一致。
+- **cast 预检**：handler 内跨实体 cast 在加载实体前用 `CheckContainAllIDs` 校验目标组不违反已持有的最大组序，违序直接拒绝。
+- **已持锁时降级 TryLock**：`lockDispatchEntities` 发现 guard 已持有锁且新目标不满足全序时，改用 `TryLock`，拿不到立即全部回退而不是阻塞等待（阻塞就可能成环）。
+- **有界重排队**：锁冲突（`ErrLockTimeout`）的消息由 `requeueTransientDispatch`（`nest/group_transition.go`）延迟重新入队，最多 `entityGroupDispatchRequeueMax` 次，带 `nest.dispatch.requeue.total` 指标。
 
-- **WAL 三档**：`SnapshotWALModeAsync`（尽力）、`SnapshotWALRequired`（WAL 拒绝则拒绝提交）、`SnapshotWALModeDurable`（fsync 确认后才受理）。durable 模式先 WAL 后 journal；journal 满时因数据已持久化而返回成功并回滚脏位，等待重试或回放。
-- **启动即回放**：`Start` 强制先完成 WAL replay 再接受实时 flush，回放失败拒绝启动。
-- **删除防复活**：删除先写 tombstone、后进 journal，后端 `BulkRemove` 成功后才 ACK tombstone；Redis WAL 的 Lua 脚本用十进制字符串比较规避 Lua number 53-bit 精度陷阱，ack 用期望 token 栅栏（`version:fence:sid`）CAS 删除，迟到的旧 ack 无法误删更新记录。
-- **并发 Flush 安全**：刷盘进度通过条件变量广播，任意数量的并发 `Flush` 调用者都会观察到完成事件；`FlushWorkers: 0` 是受支持的模式（无后台 worker，journal 仅由显式 `Flush` 驱动）。
-- **配置消毒**：非法的数值配置（如 `FlushInterval <= 0`）在 `New` 时被钳制为默认值并告警，不会在 worker goroutine 里 panic。
-- Redis WAL 的 production adapter 必须实现 `redis.DurableEvaler` / `redis.DurableBatchEvaler`：Lua 写入和 `WAITAOF` 固定在同一物理连接并校验 fsync 确认数量；`RequireAOF` 打开时缺少该能力不会退化为普通 ACK。
+API 层再补一刀：handler 内同步跨实体调用直接 panic，从根上消除"持锁等待另一个持锁者回包"的环。
 
-### 状态同步
+### 3. WAL commit point 与 `ErrCommitIndeterminate` 的崩溃一致性哲学 —— `nest/rollback.go`、`nest/transaction.go`
 
-**Entity Sync（`entitysync` + `entity.SubjectSyncState`）**，完整契约见 [Entity Sync](ENTITY_SYNC.md)：
+`invokeWithTransaction` 是全部语义的汇聚点。`DurabilityStrict` 下 `tx.durableCommit` 在**实体锁内**调用 `committer.Commit`：
 
-- 只保留 observer-free 链路：`EntityBase.Sync()` 保存内容状态，`SubscriptionCoordinator` 保存订阅关系，业务 packer 在 Entity mutex 内生成不可变 `FrozenSyncPayload`。
-- Subject 同步采用 prepare/commit 两阶段：`Prepare` 捕获版本与 dirty 掩码，`ReliableEnvelopeSink` 原子接收完整 envelope batch，只有 admission 成功后才提交 version、清除 dirty；失败保留 dirty，可安全重试。
-- **in-flight 逃生门**：被丢弃（未 Commit/Abort）的 prepare 在超过 stale 阈值后被下一次 `Prepare` 回收并记录错误日志；被回收的旧 prepare 迟到提交会因 token 校验失败得到 `ErrSubjectSyncStalePrepare`，不会与新 prepare 竞争。
-- 定时同步和主动 flush 都调用 `SubscriptionCoordinator.FlushSubject`，业务层不接触 Entity mutex，也不持有 observer/session/history 状态。
+- committer 明确拒绝 → `ErrCommitRejected`，执行内存回滚，对外报错——世界回到事务前。
+- committer 报告 `ErrCommitIndeterminate`（fsync 出错，字节可能已到、也可能没到持久介质）→ **不回滚**：`tx.abandon()` 丢弃 undo 与 AfterCommit，内存保持事务后形态，进程应当 `Fence` 停止接流。
 
-**实时复制（`replication`）**：Quake3 风格 acked-baseline delta + LOD 的房间状态数据面。
+为什么不回滚？因为如果 WAL 实际已提交，内存回滚会制造一条与持久历史相反的第二历史，后续事务会在错误状态上继续叠加。唯一诚实的做法是承认"不知道"，把裁决权交给新进程的 WAL replay：replay 到该记录则事务成立，没有则自然消失。这是设计不变量第 2 条的直接实现；`TestIndeterminateCommitDoesNotRollback`（`nest/nest_test.go`）固化了该语义。
 
-- `LODProjector` 在不可变 Snapshot 上执行 per-session Object LOD，不读取或锁定业务 Entity；支持八个细节等级、`LODCulled` 裁剪、按组件 LOD mask / 优先级 / 最大更新频率裁剪，非采样帧沿用上次已发送组件值避免错误的 ComponentRemove。可见性 Projector 作为 `LODProjectorConfig.Upstream` 先消除无权数据。
-- 发送状态采用 prepare/commit 事务：`SendLatest` 在完整 datagram batch 被 transport 接收后自动提交；自定义发送链路必须 `PrepareLatest` → 成功 `Commit()` / 失败 `Abort()`。generation 守卫（ForceFull / 换传输 / Resync 都会 bump）保证过期投影构建的帧不可能被提交为 delta 基线。`BuildLatest` 仅用于无副作用预览。
-- 帧序列号与控制消息去重使用 serial number arithmetic（RFC 1982），长会话序列号回绕后仍正确接受新帧。
-- 分片重组（`Reassembler`）除全局 inflight 上限外还有 **per-session 上限**（`Limits.MaxInflightFramesPerSession`），单个会话发送永不补齐的首分片无法占满共享表、饿死其他会话。网关共享一个 Reassembler 时必须使用 `PushFor`；每客户端独立 Reassembler 可用 `Push`。
-- `ObjectRef{ID, Generation}` 解决对象 ID 复用的 ABA 问题；解码面对不可信输入有长度与容量的纵深防御。
+### 4. `DurabilityPipelined`：前缀持久化与外化闸门 —— `nest/rollback.go`、`nest/pipelined_completion.go`、`NEST_PIPELINED_COMMIT.md`
 
-**有序状态流（`syncstream`）**：领域无关的分片、压缩、确认发布流，可选 WAL 日志。
+Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两者解耦：
 
-### Saga 编排
+1. **锁内只做 `Enqueue`**（`PipelinedTransactionCommitter`）：同步完成全部可拒绝校验并分配 LSN——这是唯一拒绝点，且背压策略是拒绝而非等待（调用方持着锁，等待会把背压转化为锁占用）；随后给每个实体盖 `lastCommitLSN` 戳（`entity/entity_base.go`）。
+2. **提前放锁**，fsync 在锁外由 group-commit 完成。
+3. **回包与 `AfterCommit` 等到 ticket 变 durable 后**才执行。
 
-`saga` 提供存储无关的多域业务操作状态机（Store 与消息实现在 cube-kit），完整说明见 [SAGA](SAGA.md)：
+正确性靠两条性质：**前缀持久性**（单 WAL 按 LSN 顺序 fsync，任一记录落盘则所有更小 LSN 已落盘）使进程内的级联脏读无需阻止——T2 若观察过 T1 的状态，T2 的 LSN 必大于 T1，崩溃只截 LSN 后缀，重放不出"有 T2 没 T1"的历史；**外化闸门**负责堵住脏状态离开进程——entitysync 与 checkpoint 对比 `entity.LastCommitLSN()` 和 committer 的 `DurableLSN()` 水位线，未落盘的状态不分发、不落库。committer 不实现该能力时派发返回 `ErrPipelinedCommitterRequired`，绝不静默降级；生产还应用 `NestOptionWithPipelinedAllowlist` 按 handler 灰度。Phase 2 异步完成（`completionPump`）把 durable 等待也移出 worker，per-entity 完成链（锁内 link，链序 = LSN 序）保证同实体完成回调在任何路径（池内、内联降级）都按提交序执行。
 
-- `NewEngine` 在构造期按 `(LeaseDuration − StoreTimeout) / Batch` 静态校验租约预算，拒绝任何"处理中租约过期 → 双主并发"的配置组合。
-- 精确意图幂等：Create 撞 `ErrAlreadyExists` 时只有 ID/版本/Data/Deadline 全部相等才返回既有记录，否则 `ErrIdentityConflict`。
-- Coordinator 是唯一时间权威：强制覆盖 `completion.CompletedAt`，远端时钟无法把状态推回过去或提前过期去重 receipt。
-- **Resume 开启新 incarnation**：`Record.Incarnation` 在每次 Resume 时递增并折入 `CommandID`，恢复后的命令标识与故障前生命周期的 completion receipt 永不碰撞；incarnation 0 保持历史格式，升级前的在途记录不受影响。
-- Nest 集成（`saga/nest.go`）的 effect ID 取规范化 payload 的 sha256，业务键复用不同 payload 的编程错误不会被消息去重掩盖。
+### 5. tombstone 的"同版本 delete 胜"语义 —— `checkpoint/flusher.go`、`checkpoint/redis_wal.go`
 
-### 服务间消息（bus）
+删除与保存的竞争按版本裁决，且**平局判给删除**、**复活要求严格更高版本**，三层实现同一规则：
 
-`bus` 在 NATS 之上提供模块级消息、RPC（轻量 request/reply 与 JetStream 可靠两种）、可靠消费（inbox 去重 + 死信）：
+- 内存去重（`Flusher.dedup`）：delete 只有在已存在**严格更高**版本的 save 时才让位；反过来 save 想取消同批次的 tombstone 必须版本**严格大于**它。
+- Redis WAL Lua 脚本：token 形如 `s|d:version:fence:...`，同版本时先比 fence，再比 `d` 前缀——已有 `d` 记录时同版本 save 直接被拒。版本比较用 `decimal_greater`（先比字符串长度再比字典序）规避 Lua number 53-bit 精度陷阱；ACK 脚本用期望 token 的 CAS 删除，迟到的旧 ack 无法误删更新的记录。
+- WAL replay 与后端 `BulkRemove` 沿用同一版本 CAS。
 
-- **Bus 不可重启。** `Stop` 会拆除包括 `HandleRpc` 注册的全部订阅，而 `Start` 只重建基础 subject，重启会静默丢失 RPC 订阅——因此 `Start` 在 Stop 之后直接返回错误；需要新实例就重新 `New`。Start 失败后的重试不受影响。
-- pending RPC 调用的回收遵循单一所有权：谁 `LoadAndDelete` 成功谁独占该调用的 channel，响应路径与停机清扫不会同时触碰同一 channel。
-- 可靠消费要求 completion receipt TTL 大于 JetStream max age，否则 receipt 先于消息过期会破坏幂等（kit 侧装配时校验）。
+动机：普通生成实体 ID 永不复用，"同版本又出现一个 save"只可能是崩溃重放里的旧快照——判给 delete 就是防复活；真正的重建业务必须显式携带更高版本。
 
-### Remote Entity 与所有权路由
+### 6. goroutine-ID 上下文的边界 —— `misc/goid_prod.go`、`entity/entity_guard.go`、`ctx/`
 
-跨服实体写的唯一生产协议、Mongo fenced commit、Nest WAL/outbox、L1/L2 snapshot 与恢复边界见 [Remote Entity](REMOTE_ENTITY.md)。core 侧提供 `ownerroute`（路由 epoch）、`replica`（副本 payload 编解码）与 entity ownership 元数据（fence、owner sid）；写提交需同时满足 ownership marker、lock fence、route epoch 等提交条件。
+框架把三样东西挂在**当前 goroutine ID** 上：guard 作用域（`guardScopes sync.Map`）、请求上下文（`ctx` 包，事务通过它定位 `CurrentRollbackTx`）、锁可重入性（`ReentrantMutex.owner`）。`misc.GoID()` 非 race 构建用 `modern-go/gls` 高速取 gid，race 构建退化为 `runtime.Stack` 解析。
 
-### 并发与一致性约束（速查）
+这是**被接受的架构决策**：它换来了业务代码零显式 context 传递的 handler 签名。其硬性约束是——**handler 内严禁裸 `go func(){...}` 后再访问框架能力**：新 goroutine 的 gid 不同，事务、guard、可重入锁全部静默丢失（读到 nil 或死锁，而不是报错）。需要异步工作时，用 `worker.Pool.Go`（受 `StopWithContext` 追踪）或把工作作为新消息投回 Nest。
 
-- Entity 状态修改在 Nest handler 或明确的 entity guard 内完成，避免绕过 Actor 串行模型直接写指针。
-- 不能在 Nest handler 内进行同步跨实体调用；跨实体写使用 cast，必须等待结果时把同步调用放到 handler 外层。
-- Handler 内不要裸起 goroutine 再访问框架上下文（事务、guard、可重入锁都挂在 goroutine ID 上，会静默丢失）。
-- 数据库、RPC、消息发布等外部副作用使用 `nest.AfterCommit`、outbox 或独立 service 流程，不能在锁内执行。
-- 从 `LockManager` 拿到的锁在加锁后必须重验受保护状态（见执行模型一节的 ReleaseLock 契约）。
-- `worker.Worker.TryCast` 返回 true 即保证任务被执行且 `OnRelease` 被调用（接纳即执行）；`Pool.Go` 在池运行期间启动的 goroutine 会被 `StopWithContext` 等待。
-- 长期状态必须有可恢复的 source；内存 map 只能作为缓存或索引。
+### 补充两条常踩的契约
 
-### 日志与可观测性
+- **`lock.LockManager` 的重验合同**（`lock/lock_manager.go`）：锁实例可能被 `ReleaseLock` 并发释放重建，两个 goroutine 可能各持"同一 ID 的锁"。因此拿锁本身证明不了什么——加锁后必须重验受保护状态（`IsRemoved`/`IsClear`、索引成员资格），状态已消失就退让；释放方必须先在持锁状态下让状态不可达，再释放锁实例。
+- **saga 的租约预算静态校验**（`saga/engine.go`）：`NewEngine` 在构造期校验 `(LeaseDuration − StoreTimeout) / Batch` 对 coordinator 与 publisher 的预算，拒绝任何"处理中租约过期 → 双主并发"的配置组合；Resume 递增 `Record.Incarnation` 并折入 `CommandID`，恢复后的命令与故障前的 completion receipt 永不碰撞。
 
-`log` 基于标准库 `slog`，支持 JSON、文件轮转、服务标识、逻辑帧和调用点输出，并自动注入 goId / 逻辑帧 / player 上下文。应用配置中启用调用点：
+## 学习路径
 
-```yaml
-log:
-  level: info
-  json: false
-  caller: true
+按由浅入深顺序，每步"源文件 + 对应测试"配对阅读（测试往往就是最好的用法文档）：
+
+1. **实体模型**：`entity/entity_base.go` → `entity/example_gen_test.go`（模拟生成代码的完整样例）→ `entity/entity.go`（接口与 CreateParam）。
+2. **锁与 worker 原语**：`lock/reentrant_mutex.go` + `lock/lock_test.go`；`worker/pool.go` + `worker/worker_test.go`（接纳即执行、同 key 串行）。
+3. **Nest 调度主线**：`nest/nest.go`（引擎与选项）→ `nest/client.go`（Dispatch/Request 六个入口）→ `nest/nest_dispatch.go`（`NestDispatch` 到加锁调 handler 的全流程）→ `nest/nest_test.go`。
+4. **事务与回滚**：`nest/rollback.go`（`RollbackTx`、`invokeWithTransaction`）+ `nest/transaction.go`（CommitRecord/Committer 契约）→ `nest/nest_test.go` 中 `TestRollback*`、`TestStrictCommit*`、`TestIndeterminateCommitDoesNotRollback` → 文档 `NEST_TRANSACTION_WAL.md`。
+5. **Pipelined 提交**：文档 `NEST_PIPELINED_COMMIT.md` 先读正确性论证 → `nest/pipelined_completion.go` → `nest/pipelined_commit_test.go`、`nest/pipelined_async_test.go`。
+6. **Guard 与实体管理**：`entity/entity_guard.go`（锁序、guard 作用域、release hook）→ `entity/entity_manager.go`、`entity/manager_access.go` + 对应测试。
+7. **checkpoint 持久化**：`checkpoint/dirty.go` → `checkpoint/journal.go` → `checkpoint/flusher.go`（dedup/tombstone）→ `checkpoint/checkpoint.go` → `checkpoint/redis_wal.go` + `checkpoint/redis_wal_test.go`、`checkpoint/checkpoint_test.go`。
+8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
+9. **状态同步**：`entity/subject_sync.go` + `entitysync/subscription.go`（prepare/commit 两阶段）→ `syncstream/syncstream.go` → `replication/`（delta+LOD）→ 文档 `ENTITY_SYNC.md`。
+10. **编排与装配**：`saga/engine.go` + `SAGA.md` → `bus/bus.go` → `app/app.go`、`app/registry.go` + `app/example_test.go`。
+
+## 与 roost-kit / roost-codegen / roost-skill 的关系
+
+```text
+业务服务（roost-codegen 生成的项目骨架 + 手写玩法）
+  ├── roost-core     通用运行时与抽象（本仓库，模块名 cube-core）
+  ├── roost-kit      具体基础设施 Mod（模块名 cube-kit）：Redis、Mongo、NATS/JetStream、
+  │                  etcd、nest WAL committer（kit/nestwal）、分布式锁、运维 HTTP 等，
+  │                  实现 core 定义的接口并注册进 app.Registry
+  └── roost-skill    可复用技能编译器与权威战斗运行时：其 combatcomponent 把战斗状态
+                     接成 core 实体的 DAO（DirtyTracker + nest.RecordUndo 逆操作），
+                     是"第三方库如何正确接入 core 事务体系"的参考实现
 ```
 
-`health`、`obs` 和 `admin` 在 `app.Registry` 创建时即注册。具体 Mod 应在 `Start` 阶段把外部依赖的健康检查和指标接入这些能力。Nest 自带慢派发看门狗（超阈值触发全栈 trace）、按 trace 标记的逐事件指标、队列与延迟消息 gauge。
+- **roost-core（本仓库）**：只定义抽象与框架语义。业务代码依赖这里的接口和稳定类型，不直接依赖任何中间件客户端。
+- **roost-kit**：每个 Mod 实现 `app.Mod` 生命周期（Init 读配置 → Provide 注册 capability → Start 建连接 → Stop 释放），为 core 的 committer、StorageBackend、Redis WAL 等接口提供生产实现。
+- **roost-codegen**：项目生成器 + 代码生成器。`roost project new <name>` 按 `roost.yaml` 生成服务骨架；扫描实体/组件/DAO 定义生成工厂、无副作用回滚快照、setter 级 inverse undo、`PrepareCommit` after-image 等——本 README 手写的样板在真实项目中全部由它产出。
+- **roost-skill**：building on core 的领域库（技能/战斗），展示 checkpoint、nest 事务、syncstream 的完整集成方式。
 
-### etcd Watch 回调契约
+本地联调多仓库时在共同父目录建 `go.work`（不要提交到任何仓库）：
 
-`etcd.IWatcher` 保留 channel 形式，供需要自行控制背压的底层代码使用；`etcd.WatchCallback` 将一个 watcher 交给单个有序回调消费，并通过 `IWatchSubscription` 暴露 `Done/Err/CloseWithContext`。回调返回错误或 panic 时只终止该订阅，错误可由 `Err()` 观测。
+```bash
+go work init ./roost-core ./roost-kit <你的业务仓库>
+```
 
-类型化本地镜像通过 `ILocalMirrorSubscriber.Subscribe` 提供更适合业务的回调：默认先发送完整 Snapshot，随后发送 Put/Delete，断线重建时再次发送 Snapshot。实现必须保证订阅注册与初始快照原子化、回调在镜像锁外运行，并用有界队列隔离慢订阅者。
-
-### 热修补（hotcode）
-
-`hotcode` 提供预埋补丁点 + Go plugin 的运行期修补，配套 admin 命令（list/load/rollback）。Go plugin 不可卸载，补丁点必须预先埋设；`hotcode.load_plugin` 等价于代码执行入口，生产环境必须限制 admin 通道的访问面。
-
-### 开发与验证
+## 开发与验证
 
 ```bash
 go build ./...
@@ -222,30 +407,20 @@ go test ./...
 go test -race ./...
 ```
 
-CI 在 Linux 与 Windows 上运行完整测试矩阵，核心包开启 `-race`。修改公开接口时，请同时检查：生命周期是否可停止、是否需要 health/metrics、是否泄漏业务语义、以及是否能在没有具体中间件的测试环境中被替换。修复并发/一致性缺陷时必须附带能复现原缺陷的回归测试（现有测试中有大量此类样例可参考）。
+CI 在 Linux 与 Windows 上运行完整测试矩阵，核心包开启 `-race`。修改公开接口时检查：生命周期是否可停止、是否需要 health/metrics、是否泄漏业务语义（core 不得出现 `player`、`alliance` 等玩法词汇）、能否在无具体中间件的测试环境中替换。修复并发/一致性缺陷必须附带能复现原缺陷的回归测试。
 
-### 文档索引
+## 深入文档索引
 
 | 文档 | 内容 |
 | --- | --- |
 | [RUNTIME_EXECUTION_MODEL.md](RUNTIME_EXECUTION_MODEL.md) | 业务执行模型、锁边界、兼容迁移 |
-| [NEST_TRANSACTION_WAL.md](NEST_TRANSACTION_WAL.md) | 内存事务、WAL commit point、indeterminate 语义 |
+| [NEST_TRANSACTION_WAL.md](NEST_TRANSACTION_WAL.md) | 内存事务、WAL commit point、indeterminate 语义、幂等要求 |
 | [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) | Pipelined 提交：锁外 fsync、外化闸门、灰度与验收 |
 | [ENTITY_SYNC.md](ENTITY_SYNC.md) | Entity 同步契约、prepare/commit、订阅协调 |
 | [REMOTE_ENTITY.md](REMOTE_ENTITY.md) | 跨服实体写协议、fenced commit、恢复边界 |
 | [SAGA.md](SAGA.md) | Saga 状态机、outbox、幂等与补偿 |
 | [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | 生产部署门禁与检查清单 |
 
-### 许可证
+## 许可证
 
-本仓库随 Cube 项目以 [MIT License](LICENSE) 发布。
-
-## English
-
-`cube-core` is the generic runtime for Cube game services. It provides application lifecycle management, typed capability registration, entity/Nest actor scheduling with ordered locking, in-memory transactions with a WAL commit point (indeterminate outcomes fence the process and defer to WAL replay), checkpoint persistence with versioned anti-resurrection tombstones, subject/state synchronization, delta+LOD room replication, saga orchestration with resume incarnations, and infrastructure abstractions. Gameplay and concrete middleware clients belong in [`cube`](https://github.com/tjbdwanghaibo/cube) and [`cube-kit`](https://github.com/tjbdwanghaibo/cube-kit).
-
-Key invariants: success is never observable before its commit point; indeterminate durability fences instead of guessing; deletes cannot be resurrected by stale saves; bounded queues execute every task they admit. See the document index above for the full contracts.
-
-```bash
-go get github.com/tjbdwanghaibo/cube-core@latest
-```
+[MIT License](LICENSE)。
