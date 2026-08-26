@@ -9,9 +9,14 @@ import "sort"
 // determinism bug — so verdicts are meant to be acted on (kick, flag,
 // dump), not smoothed over.
 type DesyncDetector struct {
-	// quorum is the minimum number of reports before a frame can be judged.
-	quorum  int
-	reports map[FrameID]map[PlayerID]uint64
+	// quorum is the minimum size of the AGREEING group before a frame can
+	// be judged: a verdict exists only once some hash has quorum reports
+	// backing it. Choose quorum > seats/2 (the kit Room derives it that
+	// way) and the majority can never flip afterwards — a minority that
+	// reports first can no longer frame an honest player.
+	quorum        int
+	reports       map[FrameID]map[PlayerID]uint64
+	trimmedBefore FrameID
 }
 
 // DesyncVerdict is the ruling for one sampled frame.
@@ -37,11 +42,15 @@ func NewDesyncDetector(quorum int) *DesyncDetector {
 
 // Report records one player's simulation hash for a sampled frame. The
 // first report per (frame, player) wins — later duplicates are ignored, so
-// a client cannot revise its story. It returns a verdict once the frame has
-// quorum; further reports for an already-judged frame re-judge with the
-// larger set (the ruling can only gain outliers, never lose them, because
-// first reports are immutable).
+// a client cannot revise its story. It returns a verdict once some hash is
+// backed by at least quorum agreeing reports; later reports re-judge with
+// the larger set. Frames already trimmed are tombstoned: late reports for
+// them are ignored, so a colluding pair cannot rebuild a "majority" on a
+// frame whose honest reports were already reclaimed.
 func (d *DesyncDetector) Report(player PlayerID, frame FrameID, hash uint64) (DesyncVerdict, bool) {
+	if frame < d.trimmedBefore {
+		return DesyncVerdict{}, false
+	}
 	reports := d.reports[frame]
 	if reports == nil {
 		reports = make(map[PlayerID]uint64)
@@ -50,15 +59,27 @@ func (d *DesyncDetector) Report(player PlayerID, frame FrameID, hash uint64) (De
 	if _, submitted := reports[player]; !submitted {
 		reports[player] = hash
 	}
-	if len(reports) < d.quorum {
+	counts := make(map[uint64]int, len(reports))
+	best := 0
+	for _, h := range reports {
+		counts[h]++
+		if counts[h] > best {
+			best = counts[h]
+		}
+	}
+	if best < d.quorum {
 		return DesyncVerdict{}, false
 	}
 	return d.judge(frame, reports), true
 }
 
 // Trim drops report state for frames before the given id (already judged
-// and acted on).
+// and acted on) and tombstones them: later reports for trimmed frames are
+// ignored instead of rebuilding a fresh (and forgeable) report set.
 func (d *DesyncDetector) Trim(before FrameID) {
+	if before > d.trimmedBefore {
+		d.trimmedBefore = before
+	}
 	for frame := range d.reports {
 		if frame < before {
 			delete(d.reports, frame)

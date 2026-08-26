@@ -78,14 +78,15 @@ func TestListenerPanicFailsReloadAndKeepsStateConsistent(t *testing.T) {
 	if got := store.Current(); got != first {
 		t.Fatalf("current = v%d, want the pre-reload snapshot v%d", got.Version, first.Version)
 	}
-	// A subsequent reload gets a fresh, non-colliding version.
+	// A subsequent reload gets a fresh, non-colliding version: the failed
+	// generation BURNED its number (it was already exposed to listeners),
+	// so the next successful reload is first+2, never a reused first+1.
 	snap, err := store.Reload(context.Background())
-	if err == nil {
-		if snap.Version != first.Version+1 {
-			t.Fatalf("version after recovered panic = %d, want %d", snap.Version, first.Version+1)
-		}
-	} else {
+	if err != nil {
 		t.Fatalf("reload after recovered panic: %v", err)
+	}
+	if snap.Version != first.Version+2 {
+		t.Fatalf("version after recovered panic = %d, want %d (burned number must not be reused)", snap.Version, first.Version+2)
 	}
 }
 

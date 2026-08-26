@@ -30,12 +30,18 @@ func TestSequencerOptimisticLockingAndLateFolding(t *testing.T) {
 	if err != nil || folded != 2 {
 		t.Fatalf("late fold = %d err=%v, want 2", folded, err)
 	}
-	// Duplicate submission keeps the first payload (idempotent).
+	// An explicit input for the frame REPLACES the folded placeholder: the
+	// stale packet must not shadow the player's real input.
 	if _, err := sequencer.SubmitInput(2, 2, []byte{0xFF}); err != nil {
 		t.Fatal(err)
 	}
+	// A second explicit submission keeps the first (idempotent vs datagram
+	// redundancy).
+	if _, err := sequencer.SubmitInput(2, 2, []byte{0xEE}); err != nil {
+		t.Fatal(err)
+	}
 	frame = sequencer.Advance()
-	if frame.ID != 2 || len(frame.Inputs) != 1 || !reflect.DeepEqual(frame.Inputs[0].Payload, []byte{0x02}) {
+	if frame.ID != 2 || len(frame.Inputs) != 1 || !reflect.DeepEqual(frame.Inputs[0].Payload, []byte{0xFF}) {
 		t.Fatalf("frame 2 = %+v", frame)
 	}
 	// Empty frame when nobody submits.
@@ -171,6 +177,9 @@ func TestHistoryCatchupPagingAndSequenceGuard(t *testing.T) {
 }
 
 func TestDesyncMajorityVerdict(t *testing.T) {
+	// Quorum counts the AGREEING group: two matching + one dissenting is
+	// not a verdict yet at quorum 3 — a minority reporting first can never
+	// convict anyone.
 	detector := NewDesyncDetector(3)
 	if _, ready := detector.Report(1, 30, 0xAB); ready {
 		t.Fatal("verdict before quorum")
@@ -178,7 +187,10 @@ func TestDesyncMajorityVerdict(t *testing.T) {
 	if _, ready := detector.Report(2, 30, 0xAB); ready {
 		t.Fatal("verdict before quorum")
 	}
-	verdict, ready := detector.Report(3, 30, 0xEE)
+	if _, ready := detector.Report(3, 30, 0xEE); ready {
+		t.Fatal("two agreeing + one dissenting must not be a verdict at quorum 3")
+	}
+	verdict, ready := detector.Report(4, 30, 0xAB)
 	if !ready || verdict.Majority != 0xAB || !reflect.DeepEqual(verdict.Outliers, []PlayerID{3}) {
 		t.Fatalf("verdict = %+v ready=%v", verdict, ready)
 	}
@@ -187,9 +199,98 @@ func TestDesyncMajorityVerdict(t *testing.T) {
 	if !reflect.DeepEqual(verdict.Outliers, []PlayerID{3}) {
 		t.Fatalf("revised report accepted: %+v", verdict)
 	}
+	// Trim tombstones the frame: late reports cannot rebuild a forgeable
+	// report set for it.
 	detector.Trim(31)
 	if _, ready := detector.Report(1, 30, 0xAB); ready {
-		t.Fatal("trimmed frame still judging with stale quorum")
+		t.Fatal("trimmed frame re-judged from scratch")
+	}
+	if _, ready := detector.Report(5, 30, 0xEE); ready {
+		t.Fatal("tombstoned frame accepted new reports")
+	}
+}
+
+func TestDesyncMinorityFirstCannotConvictHonestMajority(t *testing.T) {
+	// Regression for the weaponizable ruling: with quorum = majority of
+	// seats (3 of 5), two colluders reporting a fake hash first must not
+	// produce any verdict against the honest third reporter.
+	detector := NewDesyncDetector(3)
+	if _, ready := detector.Report(1, 10, 0xFA); ready {
+		t.Fatal("premature verdict")
+	}
+	if _, ready := detector.Report(2, 10, 0xFA); ready {
+		t.Fatal("premature verdict")
+	}
+	if _, ready := detector.Report(3, 10, 0x01); ready {
+		t.Fatal("honest first responder convicted by colluding minority")
+	}
+	if _, ready := detector.Report(4, 10, 0x01); ready {
+		t.Fatal("still no agreeing quorum")
+	}
+	verdict, ready := detector.Report(5, 10, 0x01)
+	if !ready || verdict.Majority != 0x01 || !reflect.DeepEqual(verdict.Outliers, []PlayerID{1, 2}) {
+		t.Fatalf("colluders not identified: %+v ready=%v", verdict, ready)
+	}
+}
+
+func TestHistoryTrimBefore(t *testing.T) {
+	history := NewHistory()
+	for id := FrameID(1); id <= 10; id++ {
+		history.Append(Frame{ID: id})
+	}
+	history.TrimBefore(5)
+	if history.FirstID() != 5 || history.Len() != 6 || history.Latest() != 10 {
+		t.Fatalf("first=%d len=%d latest=%d", history.FirstID(), history.Len(), history.Latest())
+	}
+	if page := history.ReadRange(1, 3); len(page) != 3 || page[0].ID != 5 {
+		t.Fatalf("page after trim = %+v", page)
+	}
+	history.Append(Frame{ID: 11}) // sequence check still holds after trim
+	if history.Latest() != 11 {
+		t.Fatalf("latest = %d", history.Latest())
+	}
+}
+
+func TestSequencerConfigBounds(t *testing.T) {
+	if _, err := NewSequencer(SequencerConfig{Players: []PlayerID{1}, SubmitWindow: MaxSubmitWindow + 1}); err == nil {
+		t.Fatal("oversized submit window accepted")
+	}
+	if _, err := NewSequencer(SequencerConfig{Players: []PlayerID{1}, SubmitWindow: ^FrameID(0)}); err == nil {
+		t.Fatal("overflowing submit window accepted (would reject every input)")
+	}
+	if _, err := NewSequencer(SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: MaxInputPayloadBytes + 1}); err == nil {
+		t.Fatal("oversized input cap accepted")
+	}
+	sequencer, err := NewSequencer(SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sequencer.SubmitInput(1, 1, make([]byte, 9)); err == nil {
+		t.Fatal("payload over per-match cap accepted")
+	}
+}
+
+func TestDecodeRejectsNonIncreasingFrameIDsAndInputBombs(t *testing.T) {
+	packet := EncodeBroadcast([]Frame{{ID: 5}, {ID: 5}})
+	if _, err := DecodeBroadcast(packet); err == nil {
+		t.Fatal("duplicate frame ids in one packet accepted")
+	}
+	packet = EncodeBroadcast([]Frame{{ID: 6}, {ID: 5}})
+	if _, err := DecodeBroadcast(packet); err == nil {
+		t.Fatal("decreasing frame ids accepted")
+	}
+	// Encoder depth is clamped to what decoders accept.
+	encoder := NewRedundantEncoder(MaxBroadcastFrames * 2)
+	var packetOut []byte
+	for i := 1; i <= MaxBroadcastFrames+8; i++ {
+		packetOut = encoder.Push(Frame{ID: FrameID(i)})
+	}
+	frames, err := DecodeBroadcast(packetOut)
+	if err != nil {
+		t.Fatalf("clamped-depth packet rejected: %v", err)
+	}
+	if len(frames) != MaxBroadcastFrames {
+		t.Fatalf("frames = %d, want clamp at %d", len(frames), MaxBroadcastFrames)
 	}
 }
 

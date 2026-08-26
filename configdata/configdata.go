@@ -1,6 +1,7 @@
 package configdata
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,8 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime/debug"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,8 +64,11 @@ func newSnapshot(version uint64) *Snapshot {
 // overriding json.Marshal in the hash computation. Build callbacks whose
 // value would serialize opaquely (unexported fields, external generated
 // aggregates) must call this or their content stays invisible to Hash.
+// SetFingerprint is only valid inside a build callback, before the snapshot
+// is finalized; on a published snapshot it is a no-op (the Hash is already
+// sealed and must stay immutable).
 func (s *Snapshot) SetFingerprint(name Name, digest string) {
-	if s == nil || name == "" {
+	if s == nil || name == "" || s.Hash != "" {
 		return
 	}
 	if s.fingerprints == nil {
@@ -101,11 +106,14 @@ func (s *Snapshot) finalize() error {
 		return nil
 	}
 	hasher := sha256.New()
-	writePart := func(kind, name, payload string) {
+	writePart := func(kind, name string, payload []byte) {
 		// Length-prefixed segments: no delimiter collision even when a name
-		// contains the separator characters.
-		_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s%d:%s", len(kind), kind, len(name), name, len(payload), payload)
+		// contains the separator characters; the payload is streamed, never
+		// materialized into an intermediate string.
+		_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s%d:", len(kind), kind, len(name), name, len(payload))
+		_, _ = hasher.Write(payload)
 	}
+	consumed := make(map[Name]bool, len(s.fingerprints))
 	appendPart := func(kind string, values map[Name]any) error {
 		names := make([]string, 0, len(values))
 		for name := range values {
@@ -114,16 +122,24 @@ func (s *Snapshot) finalize() error {
 		sort.Strings(names)
 		for _, name := range names {
 			if digest, ok := s.fingerprints[Name(name)]; ok {
-				writePart(kind, name, digest)
+				consumed[Name(name)] = true
+				writePart(kind, name, []byte(digest))
 				continue
 			}
-			raw, err := json.Marshal(values[Name(name)])
+			value := values[Name(name)]
+			raw, err := json.Marshal(value)
 			if err != nil {
 				// A swallowed error here would freeze the hash into a
 				// constant and silently disable drift detection.
 				return fmt.Errorf("configdata: hash %s %s: %w (provide Snapshot.SetFingerprint for unmarshalable values)", kind, name, err)
 			}
-			writePart(kind, name, string(raw))
+			// A struct whose fields are all unexported marshals to "{}" —
+			// the member's content would be invisible to the hash. Demand an
+			// explicit fingerprint instead of silently degrading.
+			if string(raw) == "{}" && marshalsOpaquely(value) {
+				return fmt.Errorf("configdata: hash %s %s: value serializes opaquely (no exported fields) — call Snapshot.SetFingerprint in the build callback", kind, name)
+			}
+			writePart(kind, name, raw)
 		}
 		return nil
 	}
@@ -136,8 +152,31 @@ func (s *Snapshot) finalize() error {
 	if err := appendPart("custom", s.custom); err != nil {
 		return err
 	}
+	for name := range s.fingerprints {
+		if !consumed[name] {
+			return fmt.Errorf("configdata: fingerprint set for unknown member %s (typo?)", name)
+		}
+	}
 	s.Hash = hex.EncodeToString(hasher.Sum(nil))
 	return nil
+}
+
+// marshalsOpaquely reports whether v is a struct (or pointer to one) with
+// fields but none of them exported — json.Marshal yields "{}" for it.
+func marshalsOpaquely(v any) bool {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct || t.NumField() == 0 {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).IsExported() {
+			return false
+		}
+	}
+	return true
 }
 
 // Table is an immutable keyed business configuration table.
@@ -222,7 +261,7 @@ func (t *Table[K, V]) Get(key K) (V, bool) {
 func (t *Table[K, V]) MustGet(key K) V {
 	v, ok := t.Get(key)
 	if !ok {
-		panic(fmt.Sprintf("configdata: table %s key %v not found", t.Name(), key))
+		panic(fmt.Errorf("configdata: table %s key %v: %w", t.Name(), key, ErrTableNotFound))
 	}
 	return v
 }
@@ -275,7 +314,7 @@ func TableFrom[K comparable, V any](snap *Snapshot, name Name) (*Table[K, V], bo
 func MustTableFrom[K comparable, V any](snap *Snapshot, name Name) *Table[K, V] {
 	table, ok := TableFrom[K, V](snap, name)
 	if !ok || table == nil {
-		panic(fmt.Sprintf("%v: %s", ErrTableNotFound, name))
+		panic(fmt.Errorf("configdata: table %s: %w", name, ErrTableNotFound))
 	}
 	return table
 }
@@ -296,7 +335,7 @@ func ObjectFrom[V any](snap *Snapshot, name Name) (V, bool) {
 func MustObjectFrom[V any](snap *Snapshot, name Name) V {
 	obj, ok := ObjectFrom[V](snap, name)
 	if !ok {
-		panic(fmt.Sprintf("%v: %s", ErrObjectNotFound, name))
+		panic(fmt.Errorf("configdata: object %s: %w", name, ErrObjectNotFound))
 	}
 	return obj
 }
@@ -317,7 +356,7 @@ func CustomFrom[V any](snap *Snapshot, name Name) (V, bool) {
 func MustCustomFrom[V any](snap *Snapshot, name Name) V {
 	obj, ok := CustomFrom[V](snap, name)
 	if !ok {
-		panic(fmt.Sprintf("%v: %s", ErrCustomNotFound, name))
+		panic(fmt.Errorf("configdata: custom %s: %w", name, ErrCustomNotFound))
 	}
 	return obj
 }
@@ -658,9 +697,14 @@ type Store struct {
 	previous  atomic.Pointer[Snapshot]
 	version   atomic.Uint64
 	mu        sync.Mutex
-	listMu    sync.RWMutex
-	listener  []reloadListenerEntry
-	nextID    uint64
+	// valMu keeps ReloadListener.ValidateReload single-threaded across
+	// Reload and the lock-free DryRun (listeners commonly reuse scratch
+	// state in Validate); it is held only for the validate phase, so a
+	// long DryRun build still never blocks an emergency Rollback.
+	valMu    sync.Mutex
+	listMu   sync.RWMutex
+	listener []reloadListenerEntry
+	nextID   uint64
 }
 
 type reloadListenerEntry struct {
@@ -742,7 +786,11 @@ func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot,
 	defer s.mu.Unlock()
 	old := s.current.Load()
 	started := time.Now()
-	snap, err := s.build(ctx, s.version.Load()+1)
+	// Version numbers are allocated from a monotonic counter and never
+	// reverted: a failed or rolled-back generation burns its number, so a
+	// number handed to listeners (or to the metrics gauge) is never reused
+	// for different content.
+	snap, err := s.build(ctx, s.version.Add(1))
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +811,16 @@ type commitRequest struct {
 	target   *Snapshot
 	started  time.Time
 	extra    map[string]any
+	// clearPrevious consumes the one-level undo slot instead of writing it:
+	// a rollback must not leave the just-rejected snapshot reachable as
+	// "previous" (a second rollback would republish the bad generation).
+	clearPrevious bool
 }
+
+// publishMu serializes transitions of the process-global slots (defaultStore
+// and the fctx runtime-config) across Stores: two stores committing
+// concurrently must not lose each other's updates on revert.
+var publishMu sync.Mutex
 
 // commit publishes req.target through the full listener protocol. Contract:
 //   - Every listener callback (and the lifecycle emit) is panic-contained: a
@@ -781,7 +838,10 @@ type commitRequest struct {
 func (s *Store) commit(ctx context.Context, req commitRequest) error {
 	event := ReloadEvent{Reason: req.reason, Old: req.old, New: req.target, StartedAt: req.started}
 	listeners := s.reloadListeners()
-	if err := runReloadValidate(ctx, listeners, event); err != nil {
+	s.valMu.Lock()
+	err := runReloadValidate(ctx, listeners, event)
+	s.valMu.Unlock()
+	if err != nil {
 		return err
 	}
 	prepared, err := runReloadBeforeApply(ctx, listeners, event)
@@ -790,23 +850,21 @@ func (s *Store) commit(ctx context.Context, req commitRequest) error {
 		return err
 	}
 	event.AppliedAt = time.Now()
-	oldVersion := s.version.Load()
+	publishMu.Lock()
 	prevDefault := DefaultStore()
+	prevConfig := fctx.RuntimeConfig()
 	s.current.Store(req.target)
-	s.version.Store(req.target.Version)
 	SetDefaultStore(s)
 	fctx.SetRuntimeConfig(req.target)
+	publishMu.Unlock()
 	revert := func() {
+		// Restore the saved values, not values derived from req.old: the
+		// global slots may have belonged to a different Store.
+		publishMu.Lock()
 		s.current.Store(req.old)
-		s.version.Store(oldVersion)
-		defaultStore.Store(prevDefault)
-		if req.old != nil {
-			fctx.SetRuntimeConfig(req.old)
-		} else {
-			// Never park a typed-nil *Snapshot in the runtime config slot:
-			// consumers checking != nil would be fooled.
-			fctx.SetRuntimeConfig(nil)
-		}
+		SetDefaultStore(prevDefault)
+		fctx.SetRuntimeConfig(prevConfig)
+		publishMu.Unlock()
 	}
 	data := map[string]any{
 		"reason":  req.reason,
@@ -830,7 +888,9 @@ func (s *Store) commit(ctx context.Context, req commitRequest) error {
 		runReloadRollback(ctx, listeners[:prepared], event, err)
 		return err
 	}
-	if req.old != nil {
+	if req.clearPrevious {
+		s.previous.Store(nil)
+	} else if req.old != nil {
 		s.previous.Store(req.old)
 	}
 	return nil
@@ -845,12 +905,15 @@ func (s *Store) DryRun(ctx context.Context, reason string) (*Snapshot, error) {
 	}
 	old := s.current.Load()
 	started := time.Now()
-	snap, err := s.build(ctx, s.version.Load()+1)
+	snap, err := s.build(ctx, s.version.Add(1)) // burns a number: candidates never collide with published versions
 	if err != nil {
 		return nil, err
 	}
 	event := ReloadEvent{Reason: reason, Old: old, New: snap, StartedAt: started}
-	if err := runReloadValidate(ctx, s.reloadListeners(), event); err != nil {
+	s.valMu.Lock()
+	err = runReloadValidate(ctx, s.reloadListeners(), event)
+	s.valMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	return snap, nil
@@ -874,6 +937,7 @@ func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) 
 	if err := s.commit(ctx, commitRequest{
 		reason: reason, emitName: "configdata.rollback",
 		old: old, target: prev, started: time.Now(), extra: extra,
+		clearPrevious: true,
 	}); err != nil {
 		return nil, err
 	}
@@ -933,10 +997,12 @@ func (s *Store) reloadListeners() []ReloadListener {
 // other callback registry in this repository provides (lifecycle.emitHook,
 // etcd.WatchCallback, misc.SafeFunc): a panicking listener must fail the
 // reload cleanly, never abandon the store between two of its state stores.
+// Callbacks must not call runtime.Goexit (t.Fatal included): Goexit unwinds
+// past recover and skips the revert.
 func safeReloadCall(phase, name string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("configdata: reload %s %s: panic: %v", phase, name, r)
+			err = wrapPanic(fmt.Sprintf("configdata: reload %s %s", phase, name), r)
 		}
 	}()
 	if err := fn(); err != nil {
@@ -945,12 +1011,34 @@ func safeReloadCall(phase, name string, fn func() error) (err error) {
 	return nil
 }
 
+// wrapPanic keeps the errors.Is chain when the panic value is an error, and
+// attaches the stack — a panicking generated loader is undiagnosable
+// without it.
+func wrapPanic(prefix string, r any) error {
+	stack := debug.Stack()
+	if e, ok := r.(error); ok {
+		return fmt.Errorf("%s: panic: %w\n%s", prefix, e, stack)
+	}
+	return fmt.Errorf("%s: panic: %v\n%s", prefix, r, stack)
+}
+
+// safeListenerName resolves a listener's name without letting a broken
+// (typed-nil) implementation panic outside the containment.
+func safeListenerName(listener ReloadListener) (name string) {
+	defer func() {
+		if recover() != nil {
+			name = "<unnamed>"
+		}
+	}()
+	return listener.Name()
+}
+
 func runReloadValidate(ctx context.Context, listeners []ReloadListener, event ReloadEvent) error {
 	for _, listener := range listeners {
 		if listener == nil {
 			continue
 		}
-		if err := safeReloadCall("validate", listener.Name(), func() error {
+		if err := safeReloadCall("validate", safeListenerName(listener), func() error {
 			return listener.ValidateReload(ctx, event)
 		}); err != nil {
 			return err
@@ -966,7 +1054,7 @@ func runReloadBeforeApply(ctx context.Context, listeners []ReloadListener, event
 		if listener == nil {
 			continue
 		}
-		if err := safeReloadCall("before apply", listener.Name(), func() error {
+		if err := safeReloadCall("before apply", safeListenerName(listener), func() error {
 			return listener.BeforeApplyReload(ctx, event)
 		}); err != nil {
 			return i, err
@@ -980,7 +1068,7 @@ func runReloadAfterApply(ctx context.Context, listeners []ReloadListener, event 
 		if listener == nil {
 			continue
 		}
-		if err := safeReloadCall("after apply", listener.Name(), func() error {
+		if err := safeReloadCall("after apply", safeListenerName(listener), func() error {
 			return listener.AfterApplyReload(ctx, event)
 		}); err != nil {
 			return err
@@ -1001,7 +1089,7 @@ func runReloadRollback(ctx context.Context, prepared []ReloadListener, event Rel
 		if listener == nil {
 			continue
 		}
-		_ = safeReloadCall("rollback", listener.Name(), func() error {
+		_ = safeReloadCall("rollback", safeListenerName(listener), func() error {
 			listener.RollbackReload(ctx, event, cause)
 			return nil
 		})
@@ -1034,7 +1122,7 @@ func (s *Store) build(ctx context.Context, version uint64) (*Snapshot, error) {
 	safeDef := func(kind string, name Name, fn func() error) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("configdata: %s %s: panic: %v", kind, name, r)
+				err = wrapPanic(fmt.Sprintf("configdata: %s %s", kind, name), r)
 			}
 		}()
 		return fn()
@@ -1162,51 +1250,67 @@ func readJSON(path string, out any, strict bool) error {
 	if err != nil {
 		return err
 	}
-	trimmed := strings.TrimSpace(string(raw))
+	trimmed := bytes.TrimSpace(raw)
 	// A file truncated to "null" (or emptied) decodes into a zero table with
 	// no error — a whole dataset silently vanishing. Refuse it.
-	if trimmed == "" || trimmed == "null" {
+	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return fmt.Errorf("configdata: %s: empty or null document", path)
 	}
 	decode := func(data []byte) error {
 		if !strict {
 			return json.Unmarshal(data, out)
 		}
-		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
-		return decoder.Decode(out)
-	}
-	if strings.HasPrefix(trimmed, "[") {
-		return decode(raw)
-	}
-	if strings.HasPrefix(trimmed, "{") {
-		if err := decode(raw); err == nil {
-			return nil
-		}
-		var wrapped struct {
-			Rows    json.RawMessage `json:"rows"`
-			Records json.RawMessage `json:"records"`
-			Data    json.RawMessage `json:"data"`
-		}
-		if err := json.Unmarshal(raw, &wrapped); err != nil {
+		if err := decoder.Decode(out); err != nil {
 			return err
 		}
-		present := 0
-		var candidate json.RawMessage
-		for _, c := range []json.RawMessage{wrapped.Rows, wrapped.Records, wrapped.Data} {
-			if len(c) > 0 {
-				present++
+		// json.Unmarshal rejects trailing content; strict mode must not be
+		// more lenient than lenient mode.
+		if decoder.More() {
+			return fmt.Errorf("trailing content after top-level JSON value")
+		}
+		return nil
+	}
+	// Wrapper detection is explicit, not "first decode failed": with an
+	// object target the lenient decode of {"data":{...}} would silently
+	// succeed as an all-zero value and the wrapper branch would never run.
+	if trimmed[0] == '{' {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &probe); err == nil {
+			wrapperKeys := 0
+			var candidate json.RawMessage
+			for _, key := range []string{"rows", "records", "data"} {
+				value, ok := probe[key]
+				if !ok {
+					continue
+				}
+				if string(bytes.TrimSpace(value)) == "null" {
+					// An explicit null wrapper must not sneak past the
+					// null-document guard above.
+					return fmt.Errorf("configdata: %s: wrapper key %q is null", path, key)
+				}
+				wrapperKeys++
 				if candidate == nil {
-					candidate = c
+					candidate = value
 				}
 			}
-		}
-		if present > 1 {
-			return fmt.Errorf("configdata: %s: multiple wrapper keys (rows/records/data) present — ambiguous document", path)
-		}
-		if candidate != nil {
-			return decode(candidate)
+			if wrapperKeys > 1 {
+				return fmt.Errorf("configdata: %s: multiple wrapper keys (rows/records/data) present — ambiguous document", path)
+			}
+			// Treat as a wrapper only when the document is exactly one
+			// wrapper key and nothing else; any other shape is the real
+			// document.
+			if wrapperKeys == 1 && len(probe) == 1 {
+				if err := decode(candidate); err != nil {
+					return fmt.Errorf("configdata: %s: %w", path, err)
+				}
+				return nil
+			}
 		}
 	}
-	return decode(raw)
+	if err := decode(raw); err != nil {
+		return fmt.Errorf("configdata: %s: %w", path, err)
+	}
+	return nil
 }

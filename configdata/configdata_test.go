@@ -34,8 +34,10 @@ func TestStoreLoadReloadAndActiveSnapshot(t *testing.T) {
 			{Name: "scene_id", Key: func(v testMonsterCfg) string { return "scene:" + string(rune(v.SceneID)) }},
 		},
 		Validate: func(ctx *BuildContext, v testMonsterCfg) error {
+			// No t.Fatal here: it Goexits past the build's recover and would
+			// leave the store half-published (documented callback contract).
 			if _, ok := ObjectFrom[testWorldCfg](ctx.Snapshot, "world"); !ok {
-				t.Fatalf("object should be visible during table validation")
+				return errors.New("object should be visible during table validation")
 			}
 			return nil
 		},

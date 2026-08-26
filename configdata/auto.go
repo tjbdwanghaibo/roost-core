@@ -50,9 +50,10 @@ import (
 type AutoOption func(*autoConfig)
 
 type autoConfig struct {
-	name     string
-	file     string
-	validate any // func(*BuildContext, V) error, typed at use site
+	name          string
+	file          string
+	validate      any // func(*BuildContext, V) error, typed at use site
+	validateTable any // func(*BuildContext, *Table[K, V]) error, typed at use site
 }
 
 // WithAutoName overrides the inferred table name.
@@ -71,10 +72,18 @@ func WithAutoValidate[V any](validate func(*BuildContext, V) error) AutoOption {
 	return func(c *autoConfig) { c.validate = validate }
 }
 
-// autoScalarKinds are the reflect kinds usable as keys and ref fields:
+// WithAutoValidateTable adds a whole-table validation callback (same
+// contract as TableDef.ValidateTable); it runs after the tag-derived
+// reference checks.
+func WithAutoValidateTable[K comparable, V any](validate func(*BuildContext, *Table[K, V]) error) AutoOption {
+	return func(c *autoConfig) { c.validateTable = validate }
+}
+
+// autoScalarKind reports the reflect kinds usable as keys and ref fields:
 // integers and strings, matching cfggen's schema whitelist. bool and floats
-// are rejected — a bool key has two possible rows and a float ref invites
-// silent truncation.
+// are rejected for key/ref — a bool key has two possible rows and a float
+// ref invites silent truncation. (Indexes additionally accept bool, see
+// indexStringifier.)
 func autoScalarKind(k reflect.Kind) bool {
 	switch k {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
@@ -117,21 +126,37 @@ func RegisterAutoTable[K comparable, V any](r *Registry, opts ...AutoOption) err
 		}
 		userValidate = typed
 	}
+	var userValidateTable func(*BuildContext, *Table[K, V]) error
+	if cfg.validateTable != nil {
+		typed, ok := cfg.validateTable.(func(*BuildContext, *Table[K, V]) error)
+		if !ok {
+			return fmt.Errorf("configdata: auto table %s: WithAutoValidateTable callback signature mismatch", name)
+		}
+		userValidateTable = typed
+	}
+	// Reference checks run in ValidateTable: targets are resolved once per
+	// build (not once per row × ref) and the target check fires even for
+	// empty tables. Validate stays nil unless the caller supplied one — no
+	// per-row closure cost for tables without refs.
+	var validateTable func(*BuildContext, *Table[K, V]) error
+	if len(spec.refs) > 0 || userValidateTable != nil {
+		validateTable = func(ctx *BuildContext, table *Table[K, V]) error {
+			if err := spec.validateRefs(ctx, table); err != nil {
+				return err
+			}
+			if userValidateTable != nil {
+				return userValidateTable(ctx, table)
+			}
+			return nil
+		}
+	}
 	return RegisterTable(r, TableDef[K, V]{
 		Name:          Name(name),
 		File:          file,
 		Key:           spec.key,
 		Indexes:       spec.indexes,
-		ValidateTable: spec.validateRefTargets,
-		Validate: func(ctx *BuildContext, row V) error {
-			if err := spec.checkRefs(ctx, row); err != nil {
-				return err
-			}
-			if userValidate != nil {
-				return userValidate(ctx, row)
-			}
-			return nil
-		},
+		ValidateTable: validateTable,
+		Validate:      userValidate,
 	})
 }
 
@@ -157,14 +182,25 @@ type autoSpec[K comparable, V any] struct {
 	refs        []autoRef
 }
 
-// autoField is one struct field with its promotion path (embedded structs
-// are flattened the way encoding/json flattens them).
+// autoField is one struct field with its promotion path and depth (embedded
+// structs are flattened the way encoding/json flattens them).
 type autoField struct {
 	index []int
+	depth int
 	field reflect.StructField
 }
 
-func collectAutoFields(t reflect.Type, prefix []int) ([]autoField, error) {
+// jsonTagName returns the json tag's name part ("" when absent or empty).
+func jsonTagName(field reflect.StructField) string {
+	tag, ok := field.Tag.Lookup("json")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	return name
+}
+
+func collectAutoFields(t reflect.Type, prefix []int, depth int) ([]autoField, error) {
 	var out []autoField
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
@@ -173,8 +209,22 @@ func collectAutoFields(t reflect.Type, prefix []int) ([]autoField, error) {
 			if _, tagged := field.Tag.Lookup("cfg"); tagged {
 				return nil, fmt.Errorf("cfg tag on embedded field %s is not supported (tag the promoted fields instead)", field.Name)
 			}
+			// An embedded field with an explicit json name is NOT promoted
+			// by encoding/json — it decodes as a nested document. Its inner
+			// cfg tags would silently never see data, so reject them.
+			if jsonTagName(field) != "" {
+				inner := field.Type
+				if inner.Kind() == reflect.Pointer {
+					inner = inner.Elem()
+				}
+				if inner.Kind() == reflect.Struct && fieldsHaveCfgTag(inner) {
+					return nil, fmt.Errorf("embedded field %s has a json name (not promoted by encoding/json) but carries cfg tags inside", field.Name)
+				}
+				out = append(out, autoField{index: index, depth: depth, field: field})
+				continue
+			}
 			if field.Type.Kind() == reflect.Struct {
-				nested, err := collectAutoFields(field.Type, index)
+				nested, err := collectAutoFields(field.Type, index, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -190,9 +240,81 @@ func collectAutoFields(t reflect.Type, prefix []int) ([]autoField, error) {
 			}
 			continue
 		}
-		out = append(out, autoField{index: index, field: field})
+		out = append(out, autoField{index: index, depth: depth, field: field})
 	}
 	return out, nil
+}
+
+// resolveShadowing applies encoding/json's promotion conflict rules to the
+// collected fields: for fields sharing a json name the shallowest wins, an
+// equal-depth tie drops the whole group. A shadowed (or tie-dropped) field
+// carrying a cfg tag is an error — json will never fill it, so its key/ref/
+// index would silently operate on a permanently zero column.
+func resolveShadowing(fields []autoField) ([]autoField, error) {
+	type slot struct {
+		winner autoField
+		depth  int
+		tie    bool
+	}
+	slots := make(map[string]*slot, len(fields))
+	for _, entry := range fields {
+		name := jsonFieldName(entry.field)
+		current, ok := slots[name]
+		if !ok {
+			slots[name] = &slot{winner: entry, depth: entry.depth}
+			continue
+		}
+		switch {
+		case entry.depth < current.depth:
+			if err := rejectShadowedCfgTag(current.winner, entry); err != nil {
+				return nil, err
+			}
+			slots[name] = &slot{winner: entry, depth: entry.depth}
+		case entry.depth == current.depth:
+			current.tie = true
+			if _, tagged := entry.field.Tag.Lookup("cfg"); tagged {
+				return nil, fmt.Errorf("fields %s and %s tie on json name %q and are both dropped by encoding/json, but %s carries a cfg tag", current.winner.field.Name, entry.field.Name, name, entry.field.Name)
+			}
+			if _, tagged := current.winner.field.Tag.Lookup("cfg"); tagged {
+				return nil, fmt.Errorf("fields %s and %s tie on json name %q and are both dropped by encoding/json, but %s carries a cfg tag", current.winner.field.Name, entry.field.Name, name, current.winner.field.Name)
+			}
+		default:
+			if err := rejectShadowedCfgTag(entry, current.winner); err != nil {
+				return nil, err
+			}
+		}
+	}
+	out := make([]autoField, 0, len(fields))
+	for _, entry := range fields {
+		name := jsonFieldName(entry.field)
+		current := slots[name]
+		if current.tie {
+			continue
+		}
+		if current.winner.depth == entry.depth && current.winner.field.Name == entry.field.Name && equalIndex(current.winner.index, entry.index) {
+			out = append(out, entry)
+		}
+	}
+	return out, nil
+}
+
+func rejectShadowedCfgTag(shadowed, winner autoField) error {
+	if _, tagged := shadowed.field.Tag.Lookup("cfg"); tagged {
+		return fmt.Errorf("field %s is shadowed by %s for json name %q — its cfg tag would silently operate on a never-filled column", shadowed.field.Name, winner.field.Name, jsonFieldName(winner.field))
+	}
+	return nil
+}
+
+func equalIndex(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func fieldsHaveCfgTag(t reflect.Type) bool {
@@ -201,7 +323,11 @@ func fieldsHaveCfgTag(t reflect.Type) bool {
 		if _, ok := field.Tag.Lookup("cfg"); ok {
 			return true
 		}
-		if field.Anonymous && field.Type.Kind() == reflect.Struct && fieldsHaveCfgTag(field.Type) {
+		inner := field.Type
+		if inner.Kind() == reflect.Pointer {
+			inner = inner.Elem()
+		}
+		if field.Anonymous && inner.Kind() == reflect.Struct && fieldsHaveCfgTag(inner) {
 			return true
 		}
 	}
@@ -217,7 +343,11 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 	if !autoScalarKind(keyType.Kind()) {
 		return nil, fmt.Errorf("configdata: auto table %s: key type %s must be an integer or string", valueType.String(), keyType.String())
 	}
-	fields, err := collectAutoFields(valueType, nil)
+	collected, err := collectAutoFields(valueType, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("configdata: auto table %s: %w", valueType.String(), err)
+	}
+	fields, err := resolveShadowing(collected)
 	if err != nil {
 		return nil, fmt.Errorf("configdata: auto table %s: %w", valueType.String(), err)
 	}
@@ -234,15 +364,14 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		if !field.IsExported() {
 			return nil, fmt.Errorf("configdata: auto table %s: cfg tag on unexported field %s", valueType.String(), field.Name)
 		}
-		var indexName string
-		hasIndex := false
-		skipEmpty := false
+		var indexName, refTarget string
+		hasIndex, hasRef, hasRequired, skipEmpty := false, false, false, false
 		for _, directive := range strings.Split(tag, ",") {
 			directive = strings.TrimSpace(directive)
 			switch {
 			case directive == "key":
 				if keyPath != nil {
-					return nil, fmt.Errorf("configdata: auto table %s: multiple cfg:\"key\" fields (%s and %s)", valueType.String(), keyName, field.Name)
+					return nil, fmt.Errorf("configdata: auto table %s: multiple cfg:%q fields (%s and %s)", valueType.String(), "key", keyName, field.Name)
 				}
 				if field.Type != keyType {
 					return nil, fmt.Errorf("configdata: auto table %s: key field %s is %s, want %s", valueType.String(), field.Name, field.Type, keyType)
@@ -263,22 +392,19 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 			case directive == "skipempty":
 				skipEmpty = true
 			case directive == "required":
-				// consumed below together with ref
+				hasRequired = true
 			case strings.HasPrefix(directive, "ref="):
-				target := strings.TrimPrefix(directive, "ref=")
-				if target == "" {
+				if hasRef {
+					return nil, fmt.Errorf("configdata: auto table %s: field %s: multiple ref directives", valueType.String(), field.Name)
+				}
+				refTarget = strings.TrimPrefix(directive, "ref=")
+				if refTarget == "" {
 					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty ref target", valueType.String(), field.Name)
 				}
 				if !autoScalarKind(field.Type.Kind()) {
 					return nil, fmt.Errorf("configdata: auto table %s: ref field %s must be an integer or string, got %s", valueType.String(), field.Name, field.Type)
 				}
-				spec.refs = append(spec.refs, autoRef{
-					fieldIndex: entry.index,
-					fieldName:  field.Name,
-					fieldType:  field.Type,
-					table:      Name(target),
-					required:   strings.Contains(tag, "required"),
-				})
+				hasRef = true
 			default:
 				return nil, fmt.Errorf("configdata: auto table %s: field %s: unknown cfg directive %q", valueType.String(), field.Name, directive)
 			}
@@ -286,8 +412,17 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		if skipEmpty && !hasIndex {
 			return nil, fmt.Errorf("configdata: auto table %s: field %s: skipempty requires index", valueType.String(), field.Name)
 		}
-		if strings.Contains(tag, "required") && !strings.Contains(tag, "ref=") {
+		if hasRequired && !hasRef {
 			return nil, fmt.Errorf("configdata: auto table %s: field %s: required requires ref", valueType.String(), field.Name)
+		}
+		if hasRef {
+			spec.refs = append(spec.refs, autoRef{
+				fieldIndex: entry.index,
+				fieldName:  field.Name,
+				fieldType:  field.Type,
+				table:      Name(refTarget),
+				required:   hasRequired,
+			})
 		}
 		if hasIndex {
 			if prev, dup := indexNames[indexName]; dup {
@@ -314,7 +449,7 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		}
 	}
 	if keyPath == nil {
-		return nil, fmt.Errorf("configdata: auto table %s: no cfg:\"key\" field", valueType.String())
+		return nil, fmt.Errorf("configdata: auto table %s: no cfg key field", valueType.String())
 	}
 	spec.key = func(v V) K {
 		return reflect.ValueOf(v).FieldByIndex(keyPath).Interface().(K)
@@ -322,12 +457,14 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 	return spec, nil
 }
 
-// validateRefTargets runs once per table build: every ref target must exist
-// as a registered table with a key type the ref field can address. This
-// fires even for empty tables and all-zero columns, so a misspelled target
-// name cannot hide until the first non-zero value shows up in production.
-func (s *autoSpec[K, V]) validateRefTargets(ctx *BuildContext, _ *Table[K, V]) error {
-	for _, ref := range s.refs {
+// validateRefs runs once per table build: every ref target must exist as a
+// registered table with a compatible key type (this fires even for empty
+// tables and all-zero columns, so a misspelled target cannot hide until the
+// first non-zero value ships), then row membership is checked with the
+// lookups resolved exactly once — not once per row × ref.
+func (s *autoSpec[K, V]) validateRefs(ctx *BuildContext, table *Table[K, V]) error {
+	lookups := make([]refKeyLookup, len(s.refs))
+	for i, ref := range s.refs {
 		lookup, err := refTargetLookup(ctx, ref.table, ref.fieldName)
 		if err != nil {
 			return err
@@ -336,32 +473,21 @@ func (s *autoSpec[K, V]) validateRefTargets(ctx *BuildContext, _ *Table[K, V]) e
 		if !refTypeCompatible(ref.fieldType, targetKey) {
 			return fmt.Errorf("field %s: ref type %s is not compatible with %s key type %s", ref.fieldName, ref.fieldType, ref.table, targetKey)
 		}
+		lookups[i] = lookup
 	}
-	return nil
-}
-
-// checkRefs enforces membership per row: a non-zero value must exist as a
-// key in the target table. Zero values mean "no reference" unless the ref
-// is tagged required.
-func (s *autoSpec[K, V]) checkRefs(ctx *BuildContext, row V) error {
-	if len(s.refs) == 0 {
-		return nil
-	}
-	value := reflect.ValueOf(row)
-	for _, ref := range s.refs {
-		field := value.FieldByIndex(ref.fieldIndex)
-		if field.IsZero() {
-			if ref.required {
-				return fmt.Errorf("field %s: required reference to %s is zero", ref.fieldName, ref.table)
+	for _, row := range table.rows {
+		value := reflect.ValueOf(row)
+		for i, ref := range s.refs {
+			field := value.FieldByIndex(ref.fieldIndex)
+			if field.IsZero() {
+				if ref.required {
+					return fmt.Errorf("field %s: required reference to %s is zero (row key %v)", ref.fieldName, ref.table, s.key(row))
+				}
+				continue
 			}
-			continue
-		}
-		lookup, err := refTargetLookup(ctx, ref.table, ref.fieldName)
-		if err != nil {
-			return err
-		}
-		if !lookup.containsKeyValue(field) {
-			return fmt.Errorf("field %s references missing %s key %v", ref.fieldName, ref.table, field.Interface())
+			if !lookups[i].containsKeyValue(field) {
+				return fmt.Errorf("field %s references missing %s key %v", ref.fieldName, ref.table, field.Interface())
+			}
 		}
 	}
 	return nil
@@ -447,9 +573,14 @@ func jsonFieldName(field reflect.StructField) string {
 // inferTableName maps a config struct type name to its table name:
 // MonsterCfg / MonsterConfig -> monster, DropGroup -> drop_group.
 func inferTableName(typeName string) string {
-	typeName = strings.TrimSuffix(typeName, "Config")
-	typeName = strings.TrimSuffix(typeName, "Cfg")
-	return snakeCase(typeName)
+	stripped := strings.TrimSuffix(typeName, "Config")
+	stripped = strings.TrimSuffix(stripped, "Cfg")
+	if stripped == "" {
+		// A type literally named Cfg/Config: fall back to the raw name
+		// rather than reporting a confusing "table name is empty".
+		stripped = typeName
+	}
+	return snakeCase(stripped)
 }
 
 func snakeCase(s string) string {

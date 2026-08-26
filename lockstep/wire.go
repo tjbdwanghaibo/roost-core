@@ -20,32 +20,56 @@ const (
 	// MaxBroadcastFrames bounds frames per packet on decode (a corrupt or
 	// hostile packet cannot allocate unbounded frames).
 	MaxBroadcastFrames = 64
+	// MaxFrameInputs bounds inputs per frame on decode: a frame can never
+	// carry more inputs than seats, and no match has this many seats. Caps
+	// the decode-side memory amplification of a hostile reliable-lane page.
+	MaxFrameInputs = 256
 )
 
-// RedundantEncoder keeps the most recent frames and encodes each broadcast
-// packet with all of them.
+// RedundantEncoder keeps the most recent frames in a fixed ring and encodes
+// each broadcast packet with all of them.
 type RedundantEncoder struct {
-	depth int
-	ring  []Frame
+	ring    []Frame // fixed length = depth
+	count   int
+	next    int
+	ordered []Frame // reused oldest-first view for encoding
+}
+
+// NormalizeRedundancyDepth maps a configured depth to the effective one:
+// depth <= 0 selects 3, and the decoder-side MaxBroadcastFrames is the hard
+// ceiling — a deeper encoder would emit packets every receiver rejects.
+func NormalizeRedundancyDepth(depth int) int {
+	if depth <= 0 {
+		return 3
+	}
+	if depth > MaxBroadcastFrames {
+		return MaxBroadcastFrames
+	}
+	return depth
 }
 
 // NewRedundantEncoder builds an encoder carrying depth frames per packet
-// (depth <= 0 selects 3).
+// (normalized via NormalizeRedundancyDepth).
 func NewRedundantEncoder(depth int) *RedundantEncoder {
-	if depth <= 0 {
-		depth = 3
-	}
-	return &RedundantEncoder{depth: depth}
+	depth = NormalizeRedundancyDepth(depth)
+	return &RedundantEncoder{ring: make([]Frame, depth), ordered: make([]Frame, 0, depth)}
 }
 
 // Push appends a cut frame and returns the encoded broadcast packet carrying
-// it plus up to depth-1 predecessors.
+// it plus up to depth-1 predecessors. The ring is fixed-size: no sliding
+// reallocation, and evicted frames drop their payload references.
 func (e *RedundantEncoder) Push(frame Frame) []byte {
-	e.ring = append(e.ring, frame)
-	if len(e.ring) > e.depth {
-		e.ring = e.ring[len(e.ring)-e.depth:]
+	e.ring[e.next] = frame
+	e.next = (e.next + 1) % len(e.ring)
+	if e.count < len(e.ring) {
+		e.count++
 	}
-	return EncodeBroadcast(e.ring)
+	e.ordered = e.ordered[:0]
+	start := (e.next - e.count + len(e.ring)) % len(e.ring)
+	for i := 0; i < e.count; i++ {
+		e.ordered = append(e.ordered, e.ring[(start+i)%len(e.ring)])
+	}
+	return EncodeBroadcast(e.ordered)
 }
 
 // EncodeBroadcast encodes frames (oldest first) into one packet.
@@ -88,6 +112,7 @@ func DecodeBroadcast(packet []byte) ([]Frame, error) {
 		return nil, fmt.Errorf("%w: %d frames exceeds %d", ErrFrameCorrupt, frameCount, MaxBroadcastFrames)
 	}
 	frames := make([]Frame, 0, frameCount)
+	lastID := uint64(0)
 	for index := uint64(0); index < frameCount; index++ {
 		var frame Frame
 		var id, inputCount uint64
@@ -97,11 +122,17 @@ func DecodeBroadcast(packet []byte) ([]Frame, error) {
 		if id == 0 || id > uint64(^FrameID(0)) {
 			return nil, fmt.Errorf("%w: frame id %d", ErrFrameCorrupt, id)
 		}
+		// Frames in one packet are strictly increasing (the encoder emits
+		// oldest-first): duplicates or reordering mark a forged packet.
+		if id <= lastID {
+			return nil, fmt.Errorf("%w: frame id %d not increasing", ErrFrameCorrupt, id)
+		}
+		lastID = id
 		frame.ID = FrameID(id)
 		if inputCount, rest, err = readUvarint(rest); err != nil {
 			return nil, err
 		}
-		if inputCount > uint64(len(rest)) {
+		if inputCount > MaxFrameInputs || inputCount > uint64(len(rest)) {
 			return nil, fmt.Errorf("%w: input count %d", ErrFrameCorrupt, inputCount)
 		}
 		for input := uint64(0); input < inputCount; input++ {

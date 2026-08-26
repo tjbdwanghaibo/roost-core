@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed（v1.7.1 发布后复审：lockstep 首审 + configdata 修复波自查，共 46 项全部实施，均带回归测试）
+- `lockstep`（核心层）：`SubmitWindow` 硬上限 64 + 溢出配置注册期拒绝；`SequencerConfig.MaxInputBytes` 每局可收紧的输入上限（kit Room 据此做传输预算校验）；显式当前帧输入覆盖迟到折入的过期 payload（原先真实操作被静默丢弃）；帧号耗尽显式 panic（一局一 Sequencer）；`RedundantEncoder` 定长环 + `NormalizeRedundancyDepth`（按解码端上限收口）；解码补 `MaxFrameInputs` 与包内帧号严格递增（关闭 ~16× 内存放大）；`History.TrimBefore/FirstID`（长局内存收口）+ 单所有者/最坏内存文档；`DesyncDetector` quorum 改为"同意组大小"语义（少数抢先上报无法定罪）+ Trim 墓碑化（迟到补报不能重建报告集）。房间层修复见 cube-kit CHANGELOG。
+- `configdata`（上一轮修复的自查，31 项）：`required`/`ref` 改逐指令解析（原先子串匹配会误拒 `index=required_level` 这类合法 tag、误报合法零值）；嵌入字段实现 encoding/json 的深度遮蔽规则（同名外层胜出、平局丢弃，被遮蔽字段带 cfg tag 报错——原先 key 可能静默取到恒零的内层字段；带 json 名的匿名字段不再被错误提升）；readJSON 包装文档改显式探测（对象目标的包装文档在宽松模式不再静默归零、strict/宽松语义一致；rows 为 null 拒绝；strict 模式补尾部垃圾检测）；listener 的 `Name()` 在 recover 保护内求值（typed-nil 监听器不再逃逸 panic）；版本号改单调分配永不回退（失败/回滚烧号，向监听者暴露过的号永不复用于不同内容）；Rollback 消费 previous 槽（连按两次不再回到坏配置）+ 事件带 `from_version`；全局槽位（defaultStore/fctx）改保存/恢复并加包级锁（跨 Store 并发不再互相抹除、首载失败不再清掉别人的运行时配置）；`ValidateReload` 在 Reload 与 DryRun 间保持单线程（`valMu`，只锁校验阶段——DryRun 的长 build 仍不阻塞紧急 Rollback）；panic 错误保留 `errors.Is` 链并附堆栈，`Must*` panic 改为包装 error；外部聚合指纹改顺序无关（按文件名排序折叠 per-file 摘要，并发读安全）+ 零读取报错（绕过注入 reader 即失败）+ 符号链接解析校验 + `WithExternalValidate` 选项；`finalize` 对全非导出字段的 custom/object 拒绝静默空对象哈希、未消费的指纹名报错、载荷流式写入；`SetFingerprint` 在快照定稿后封印；auto 表 ref 校验整体移入表级 `ValidateTable`（目标解析每 build 一次）+ `WithAutoValidateTable` 选项；回调契约文档化（不得 Goexit）。**行为说明：hash 值再次变化；重复注册与部分宽松解析路径现在报错。**
+
 ### Fixed（configdata 三路对抗性复审，39 项发现全部实施，均带回归测试）
 - **发布路径重构为单一提交点**（`configdata.Store.commit`）：current/version/defaultStore/fctx 四个状态在锁内一次性推进与回退（此前分五步推进，中途失败留下混合世代——Version 重号、Rollback 跳代、defaultStore 被劫持、typed-nil 进 fctx 槽）。所有 listener 回调、lifecycle emit、def 的 load/build/validate **全部 panic 容器化**（对齐全仓惯例；此前 listener panic 会让 Store 永久失去一致性）。
 - **回滚配对语义修正**：`RollbackReload` 与 `BeforeApplyReload` 配对——只对 prepare 成功的监听者按逆序回调（此前 BeforeApply 失败不触发任何回滚、AfterApply 失败却回调从未执行过的监听者）；**`Old == nil`（首次加载失败）跳过全部回滚回调**——监听者永远不会把"没有上一代"误读成"回退到默认配置"。

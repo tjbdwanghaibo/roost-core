@@ -206,7 +206,7 @@ func TestExternalTablesBuildPanicBecomesError(t *testing.T) {
 		panic("generated loader exploded")
 	})
 	store := NewStore(reg, dir)
-	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "build panicked: generated loader exploded") {
+	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "panic: generated loader exploded") {
 		t.Fatalf("external build panic escaped: %v", err)
 	}
 }
@@ -217,6 +217,9 @@ func TestExternalTablesReadInvalidAfterBuild(t *testing.T) {
 	var leaked func(string) ([]byte, error)
 	reg := NewRegistry()
 	MustRegisterExternalTables(reg, "luban", func(read func(string) ([]byte, error)) (int, error) {
+		if _, err := read("a.json"); err != nil { // one legit read: fingerprint satisfied
+			return 0, err
+		}
 		leaked = read
 		return 1, nil
 	})

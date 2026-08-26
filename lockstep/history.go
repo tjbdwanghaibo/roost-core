@@ -4,9 +4,15 @@ package lockstep
 // reconnects, mid-game joins and spectators, and — because inputs plus a
 // deterministic simulation ARE the match — the replay file, for free.
 //
-// Memory budget: frames are tiny (a 10-minute match at 15 logical fps is
-// ~9000 frames; idle frames are a handful of bytes), so History keeps the
-// full match in memory rather than tiering.
+// Memory budget: the worst case is duration × rate × players × payload —
+// e.g. one hour at 30 fps with 10 players × 8-byte inputs ≈ 50 MB. Hosts
+// that do not need the full replay must TrimBefore periodically (catch-up
+// older than the trim point becomes unservable).
+//
+// History is single-owner state like the rest of the package: Replay and
+// ReadRange return views that are only valid inside the owning serial
+// handler — Append may reallocate the backing array under a concurrent
+// reader.
 type History struct {
 	first  FrameID
 	frames []Frame
@@ -36,6 +42,31 @@ func (h *History) Latest() FrameID {
 
 // Len is the stored frame count.
 func (h *History) Len() int { return len(h.frames) }
+
+// FirstID is the oldest stored frame id (0 when empty).
+func (h *History) FirstID() FrameID {
+	if len(h.frames) == 0 {
+		return 0
+	}
+	return h.first
+}
+
+// TrimBefore drops all frames with id < keep, bounding memory for hosts
+// that do not need the full replay. Catch-up requests older than keep
+// become unservable (the room abandons them with an explicit error).
+func (h *History) TrimBefore(keep FrameID) {
+	if len(h.frames) == 0 || keep <= h.first {
+		return
+	}
+	if keep > h.first+FrameID(len(h.frames)) {
+		keep = h.first + FrameID(len(h.frames))
+	}
+	offset := int(keep - h.first)
+	remaining := make([]Frame, len(h.frames)-offset)
+	copy(remaining, h.frames[offset:])
+	h.frames = remaining // fresh backing array: trimmed payloads become collectable
+	h.first = keep
+}
 
 // ReadRange returns up to limit frames starting at from, for catch-up
 // paging. from == 0 or before the first stored frame starts at the
