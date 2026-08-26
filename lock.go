@@ -35,6 +35,15 @@ type distLockFactory struct {
 	rdb goredis.UniversalClient
 }
 
+// Contract boundary: the locks in this file implement fredis.IDistLock —
+// value-guarded mutual exclusion WITHOUT a fencing token. A holder whose TTL
+// expires (GC pause, network stall) keeps executing without knowing the lock
+// is gone, so a second holder can run concurrently for that window. Use them
+// only where a double-execution is tolerable (cache warm-up, dedup-able
+// jobs, optimization-grade exclusivity). For correctness-grade exclusivity —
+// entity ownership, anything a store must be able to reject stale writers
+// for — use remote_entity's versionedLock (fence counter outlives the TTL,
+// stores compare fences) or etcd's IFencedElection.
 func newDistLockFactory(rdb goredis.UniversalClient) *distLockFactory {
 	return &distLockFactory{rdb: rdb}
 }
