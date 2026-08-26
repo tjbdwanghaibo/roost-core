@@ -1,11 +1,14 @@
-// Package ai provides a minimal behavior-tree skeleton: composite/decorator
-// nodes over a Status state machine, a Blackboard, and a tick Controller.
+// Package ai provides behavior trees over the cube-core AI strategy and
+// taskflow execution contracts: a node library (composites, decorators,
+// deterministic tick-based timing, injected randomness), a BehaviorStrategy
+// bridge that runs a tree inside the Controller, a TaskflowAction leaf that
+// lets trees launch and await taskflow actions, and strict JSON tree
+// assembly (ParseTree + Registry) with fail-fast, path-addressed diagnostics.
 //
-// Scope: this is deliberately a skeleton, not an AI middleware. There is no
-// node library (no pathfinding/steering/perception nodes), no visual editor
-// format, no utility/GOAP planner, and no built-in scheduling across agents.
-// Games compose their own node vocabulary on top; anything beyond "tick a
-// tree against a blackboard" stays with the caller.
+// Scope: JSON documents are the source of truth for data-driven trees — no
+// visual-editor format is defined here. There is still no utility/GOAP
+// planner, no perception/steering node library (games register their own
+// condition/action vocabulary), and no cross-agent scheduling.
 package ai
 
 type Status uint8
