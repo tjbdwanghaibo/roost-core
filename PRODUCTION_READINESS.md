@@ -55,11 +55,14 @@ lease fencing、幂等 completion receipt 的持久化 Store；完整语义见 [
 
 ## 7. 发布顺序与门禁
 
+当前已发布运行时基线为 `cube-core v1.8.0`、`cube-kit v1.8.0`、`roost-skill v1.7.0`。本轮生产部署和三级文档生成属于 `roost-codegen v1.7.0`，发布后新项目固定这一组合。
+
 发布顺序：
 
-1. 发布包含 Saga contract/engine 的 `roost-core v1.4.0`。
-2. 使用已发布 core 构建并发布 `roost-kit v1.4.0`。
-3. 发布 `roost-codegen v1.4.0`，新项目默认引用上述两个版本。
+1. 发布包含公共契约变更的 `cube-core`。
+2. 关闭 `go.work`，只使用已发布 core 构建、验证并发布 `cube-kit`。
+3. 使用已发布 core/kit 验证并发布 `roost-skill`（若本轮有变更）。
+4. 最后发布 `roost-codegen`，并用 release defaults 生成一个全新项目，执行 `GOWORK=off go mod tidy/verify/test/vet` 与部署模板检查。
 
 每次发布至少执行：
 
@@ -70,6 +73,8 @@ go test -race ./entity ./nest ./checkpoint ./entitysync ./replication ./sync ./s
 go test -race ./checkpoint ./remote_entity ./nestwal ./nest ./replication ./sync ./saga
 git diff --check
 ```
+
+生成项目还必须校验 `deploy/shell/*.sh` 可通过 `sh -n`、全部 Kubernetes YAML 可解析、镜像不包含配置、生产 Secret 示例不被 kustomization 自动应用。正式流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 

@@ -41,6 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: root module has no local replace
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "release module must not contain replace directives"
+            grep -nE '^[[:space:]]*replace([[:space:]]|\()' go.mod
+            exit 1
+          fi
       # The module path must resolve as a real repository, and a version tag
       # must match the module's major suffix — the two failure modes that made
       # v1.4.0-era roost-skill uninstallable (module pointed at a nonexistent

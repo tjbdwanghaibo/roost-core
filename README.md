@@ -1,8 +1,14 @@
 # cube-core
 
-`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前版本 v1.7.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
+`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前稳定版本 v1.8.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
 
-本 README 面向新手使用者：先跑通一个最小示例，再系统理解核心概念，最后进入关键实现细节与学习路径。
+## 三级文档入口
+
+- **完全新手**：从 [五分钟快速开始](docs/QUICKSTART.md) 生成并运行第一个项目。
+- **有经验的开发者**：阅读 [开发者完整使用说明](docs/USER_GUIDE.md)，按场景选择 Entity/Nest、Remote Entity、Saga、状态同步或帧同步。
+- **框架维护者/生产负责人**：阅读 [实现原理与不变量](docs/INTERNALS.md)、[生产部署手册](docs/DEPLOYMENT.md) 和 [薄弱点与路线图](docs/ROADMAP.md)。完整索引见 [文档中心](docs/README.md)。
+
+本 README 保留能力总览和可独立运行的 core 最小示例。
 
 - [能力总览](#能力总览)
 - [设计不变量](#设计不变量)
@@ -53,7 +59,7 @@ core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间
 ```bash
 mkdir quickstart && cd quickstart
 go mod init quickstart
-go get github.com/tjbdwanghaibo/cube-core@v1.7.0
+go get github.com/tjbdwanghaibo/cube-core@v1.8.0
 # 将下面代码存为 main.go 后：
 go run .
 ```

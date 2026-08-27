@@ -25,3 +25,12 @@ type ModStopperWithContext interface {
 type ModDependencyProvider interface {
 	DependsOn() []ModName
 }
+
+// ModOptionalDependencyProvider declares ordering constraints for capabilities
+// that a Mod can integrate with but does not require. A named Mod is ordered
+// before this Mod when it is present; an absent optional dependency is ignored.
+// Use DependsOn for hard requirements so missing infrastructure still fails
+// during graph validation.
+type ModOptionalDependencyProvider interface {
+	OptionalDependsOn() []ModName
+}

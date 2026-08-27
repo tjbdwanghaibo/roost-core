@@ -25,6 +25,7 @@ var (
 	ErrInvalidSnapshot              = errors.New("syncstream: invalid history snapshot")
 	ErrHistoryStoreRequired         = errors.New("syncstream: history store is required")
 	ErrHistoryJournalRequired       = errors.New("syncstream: history journal is required")
+	ErrHistoryJournalClosed         = errors.New("syncstream: history journal is closed")
 )
 
 const HistorySnapshotVersion uint32 = 1

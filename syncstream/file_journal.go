@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // FileHistoryJournal stores immutable checkpoint/WAL generations. A
@@ -30,10 +31,14 @@ type FileHistoryJournal struct {
 	// Group commit: concurrent Records append to pending and one leader
 	// drains it with a single write+fsync — "Record returns => durable"
 	// stays intact while fsync count drops from per-record to per-batch.
-	batchMu  sync.Mutex
-	pending  []byte
-	waiters  []chan error
-	flushing bool
+	batchMu   sync.Mutex
+	pending   []byte
+	waiters   []chan error
+	flushing  bool
+	idle      chan struct{}
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type fileCheckpoint struct {
@@ -70,6 +75,9 @@ func (journal *FileHistoryJournal) walPath(generation uint64) string {
 }
 
 func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
+	if journal == nil || journal.closed.Load() {
+		return HistorySnapshot{}, ErrHistoryJournalClosed
+	}
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
 
@@ -172,6 +180,9 @@ func replayWAL(path string, snapshot *HistorySnapshot) error {
 }
 
 func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
+	if journal == nil || journal.closed.Load() {
+		return ErrHistoryJournalClosed
+	}
 	if mutation.Version != HistoryMutationVersion {
 		return ErrInvalidSnapshot
 	}
@@ -182,6 +193,10 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 	data = append(data, '\n')
 
 	journal.batchMu.Lock()
+	if journal.closed.Load() {
+		journal.batchMu.Unlock()
+		return ErrHistoryJournalClosed
+	}
 	journal.pending = append(journal.pending, data...)
 	done := make(chan error, 1)
 	journal.waiters = append(journal.waiters, done)
@@ -191,6 +206,7 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 		return <-done
 	}
 	journal.flushing = true
+	journal.idle = make(chan struct{})
 	journal.batchMu.Unlock()
 	for {
 		journal.batchMu.Lock()
@@ -198,6 +214,8 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 		journal.pending, journal.waiters = nil, nil
 		if len(waiters) == 0 {
 			journal.flushing = false
+			close(journal.idle)
+			journal.idle = nil
 			journal.batchMu.Unlock()
 			break
 		}
@@ -241,6 +259,9 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 }
 
 func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
+	if journal == nil || journal.closed.Load() {
+		return ErrHistoryJournalClosed
+	}
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
 
@@ -309,6 +330,32 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	}
 	journal.removeObsoleteGenerations(next)
 	return nil
+}
+
+// Close waits for an admitted group-commit batch, then closes the resident WAL
+// handle. It is idempotent. A closed journal rejects Load, Record, and
+// Checkpoint so callers cannot silently fall back to non-durable history.
+func (journal *FileHistoryJournal) Close() error {
+	if journal == nil {
+		return nil
+	}
+	journal.closeOnce.Do(func() {
+		journal.closed.Store(true)
+		journal.batchMu.Lock()
+		idle := journal.idle
+		journal.batchMu.Unlock()
+		if idle != nil {
+			<-idle
+		}
+
+		journal.mutex.Lock()
+		defer journal.mutex.Unlock()
+		if journal.walFile != nil {
+			journal.closeErr = journal.walFile.Close()
+			journal.walFile = nil
+		}
+	})
+	return journal.closeErr
 }
 
 func (journal *FileHistoryJournal) removeObsoleteGenerations(current uint64) {

@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Added
+- `app.ModOptionalDependencyProvider`：声明“安装时需要排在当前 Mod 前、未安装时忽略”的可选依赖；与硬依赖共同拓扑排序并检测依赖环，消除可选集成对业务 Mod 书写顺序的隐式依赖。
+- 新增三级文档中心：新手快速开始、熟练开发者完整说明、框架实现原理、生产部署手册和分级路线图。
+- `syncstream.FileHistoryJournal` 新增幂等 `Close`，等待已接纳 group commit 后关闭常驻 WAL handle；关闭后持久操作 fail-closed。`History.Close` 将资源释放纳入运行时生命周期，修复重复启停的文件句柄泄漏。
 - **`robot` 机器人框架**（从 cube 的 robot 服务拣入并重构，cube 仓库零改动）：模拟客户端逻辑 + 压测双用途。分层：`robot/transport`（统一包协议 `[4B body_len][4B msg_id][4B seq]` 小端、TCP/WebSocket 内置、`RegisterDialer` 扩展点——KCP/QUIC 客户端拨号在 cube-kit `robot` 包）；`robot/protocol`（编解码注册表，`Codec` 注入 + `EnsureEncoder`/`EnsureDecoder` 按方向幂等安装——请求响应共用 msgID 不冲突）；`robot/session`（seq 匹配请求响应、push 分发、幂等关闭，每次 Call 埋 `robot.session.call{msg,result}` 直方图）；`robot`（Context 黑板 + `TypedKey[T]` 类型化访问器、LIFO 关闭钩子、`EnsurePushCapture`、`Coalescer`（去重合帧确认）、`BoundedQueue`（drop-oldest））；`robot/action`（动作注册表 + 内置 connect/wait/wait_push；**`RegisterCall[Req,Resp]` 泛型一行注册调用动作**——请求字段按 json tag/snake_case 从参数与黑板自动填充、`GetCode()` 约定判错、业务只写 `OnResp` 闭包）；`robot/scenario`（行为树组合子 Sequence/Selector/Parallel/Retry/Timeout/加权 Random（按 Seed 确定性），可选 YAML spec 解释器，解析期全量校验）；`robot/runner`（k6 式三执行器 pool/looping（含 `Stages` 分段升降）/arrival-rate，账目不变量 `Started == Success+Failure+Canceled`，10k bot 基准 ~2s/60MB）；`robot/loadtest`（单活跃 run 状态机、`Threshold` SLO 裁决（error_rate/p50–p99，违约即 `StateFailed`+`StopReasonThreshold`）、环形历史、6 条 admin 命令、Markdown 报告；默认指标带 `run` label——同 profile 连跑分布互不污染）。端到端示例 `examples/robotdemo`。
 - `obs`：新增 **Histogram** 指标类型——17 个固定指数桶（1ms 起逐桶翻倍），`ObserveHistogram`/`HistogramQuantile`（桶内线性插值）/`HistogramBounds`；Prometheus 导出累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。
 - `lockstep`：新增 **`FrameAssembler`**——客户端半场的帧装配器：冗余广播/追帧页去重、严格顺序释放、等待帧到达即时释放并排空连续段（追帧补洞永不被缓冲上限误拒）、缓冲越界返回"该追帧了"错误（`ErrHistoryUnknown` 链）。回归：3 客户端 × 600 帧 × 30% 丢包经冗余愈合零丢帧。

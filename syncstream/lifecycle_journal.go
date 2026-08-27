@@ -1,6 +1,7 @@
 package syncstream
 
 import (
+	"io"
 	"time"
 )
 
@@ -68,6 +69,22 @@ func (history *History) Checkpoint() error {
 	history.mutex.RLock()
 	defer history.mutex.RUnlock()
 	return history.journal.Checkpoint(history.exportLocked())
+}
+
+// Close releases journal resources after all producers have stopped. The
+// History remains closed for durable mutation because its journal rejects new
+// records; callers must not resume a stopped synchronization runtime.
+func (history *History) Close() error {
+	if history == nil {
+		return nil
+	}
+	history.mutex.Lock()
+	defer history.mutex.Unlock()
+	closer, ok := history.journal.(io.Closer)
+	if !ok {
+		return nil
+	}
+	return closer.Close()
 }
 
 func (history *History) Epoch() uint64 {

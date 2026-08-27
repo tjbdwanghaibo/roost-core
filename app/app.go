@@ -472,6 +472,25 @@ func sortMods(mods []Mod, external map[ModName]struct{}) ([]Mod, error) {
 				}
 			}
 		}
+		if depProvider, ok := mod.(ModOptionalDependencyProvider); ok {
+			deps := append([]ModName(nil), depProvider.OptionalDependsOn()...)
+			sort.SliceStable(deps, func(i, j int) bool {
+				return order[deps[i]] < order[deps[j]]
+			})
+			for _, dep := range deps {
+				if dep == "" {
+					continue
+				}
+				if _, present := byName[dep]; !present {
+					// A shared Mod is already initialized before service Mods;
+					// an entirely absent optional Mod intentionally has no edge.
+					continue
+				}
+				if err := visit(dep); err != nil {
+					return fmt.Errorf("mod %s optionally depends on %s: %w", name, dep, err)
+				}
+			}
+		}
 		visiting[name] = false
 		visited[name] = true
 		out = append(out, mod)

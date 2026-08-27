@@ -301,6 +301,7 @@ func TestFileHistoryJournalRecoversCheckpointAndWAL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = journal.Close() })
 	history, err := NewHistoryWithJournal(HistoryOptions{MaxPacketsPerStream: 8}, journal)
 	if err != nil {
 		t.Fatal(err)
@@ -325,6 +326,7 @@ func TestFileHistoryJournalRecoversCheckpointAndWAL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = reopenedJournal.Close() })
 	reopened, err := NewHistoryWithJournal(HistoryOptions{MaxPacketsPerStream: 8}, reopenedJournal)
 	if err != nil {
 		t.Fatal(err)
@@ -345,6 +347,7 @@ func TestAcknowledgementPrunesAndJournalRecoversPrunedStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = journal.Close() })
 	history, err := NewHistoryWithJournal(HistoryOptions{PruneAcknowledged: true}, journal)
 	if err != nil {
 		t.Fatal(err)
@@ -366,6 +369,7 @@ func TestAcknowledgementPrunesAndJournalRecoversPrunedStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = reopenedJournal.Close() })
 	reopened, err := NewHistoryWithJournal(HistoryOptions{PruneAcknowledged: true}, reopenedJournal)
 	if err != nil {
 		t.Fatal(err)
@@ -385,6 +389,7 @@ func TestFileHistoryJournalFailsClosedOnNewestGenerationCorruption(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = journal.Close() })
 	history, err := NewHistoryWithJournal(HistoryOptions{}, journal)
 	if err != nil {
 		t.Fatal(err)
@@ -402,6 +407,7 @@ func TestFileHistoryJournalFailsClosedOnNewestGenerationCorruption(t *testing.T)
 		t.Fatal(err)
 	}
 	reopened, _ := NewFileHistoryJournal(journal.directory, 1)
+	t.Cleanup(func() { _ = reopened.Close() })
 	if _, err := NewHistoryWithJournal(HistoryOptions{}, reopened); err == nil {
 		t.Fatal("expected newest generation corruption to stop recovery")
 	}
@@ -415,6 +421,7 @@ func TestFileHistoryJournalConcurrentRecordsAllReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = journal.Close() })
 	const writers = 32
 	var wg sync.WaitGroup
 	errs := make(chan error, writers)
@@ -458,5 +465,36 @@ func TestFileHistoryJournalConcurrentRecordsAllReplay(t *testing.T) {
 	}
 	if got := len(after.Streams); got != writers+1 {
 		t.Fatalf("post-rotation replay = %d streams, want %d", got, writers+1)
+	}
+}
+
+func TestFileHistoryJournalCloseIsIdempotentAndFailClosed(t *testing.T) {
+	journal, err := NewFileHistoryJournal(t.TempDir(), 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := HistoryMutation{
+		Version: HistoryMutationVersion,
+		Kind:    HistoryMutationAppend,
+		Epoch:   17,
+		Packet:  Packet{Stream: Stream{Topic: "state"}, Epoch: 17, Sequence: 1},
+	}
+	if err := journal.Record(mutation); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if err := journal.Record(mutation); !errors.Is(err, ErrHistoryJournalClosed) {
+		t.Fatalf("Record after Close = %v", err)
+	}
+	if _, err := journal.Load(); !errors.Is(err, ErrHistoryJournalClosed) {
+		t.Fatalf("Load after Close = %v", err)
+	}
+	if err := journal.Checkpoint(HistorySnapshot{}); !errors.Is(err, ErrHistoryJournalClosed) {
+		t.Fatalf("Checkpoint after Close = %v", err)
 	}
 }
