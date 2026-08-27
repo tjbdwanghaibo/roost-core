@@ -36,6 +36,10 @@ func NewNatsMod(codec bus.Codec) *NatsMod {
 
 func (m *NatsMod) Name() app.ModName { return mods.ModNats }
 
+// OptionalDependsOn makes reliable-bus integration independent of the order
+// in which applications list Mods. Redis remains optional for plain NATS.
+func (m *NatsMod) OptionalDependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
+
 func (m *NatsMod) Init(cfg *viper.Viper) error {
 	url := cfg.GetString("nats.url")
 	if url == "" {
