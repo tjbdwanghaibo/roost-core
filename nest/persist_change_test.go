@@ -135,6 +135,26 @@ func TestAddReceiptDeduplicatesAndRejectsDigestConflict(t *testing.T) {
 	}
 }
 
+func TestSetReceiptPayloadPreservesBoundIdentity(t *testing.T) {
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.AddReceipt(dataengine.Receipt{Namespace: "saga-step", ID: "command-1", Digest: []byte{1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.SetReceiptPayload("saga-step", "command-1", []byte("completion")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := tx.prepareCommitRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Receipts) != 1 || string(record.Receipts[0].Payload) != "completion" || string(record.Receipts[0].Digest) != "\x01" {
+		t.Fatalf("receipts=%+v", record.Receipts)
+	}
+	if err := tx.SetReceiptPayload("saga-step", "missing", nil); err == nil {
+		t.Fatal("unbound receipt payload was accepted")
+	}
+}
+
 func TestPipelinedEnqueueAcceptsVersionBeforeReturning(t *testing.T) {
 	p := &fakeMutationParticipant{}
 	tx := NewRollbackTx(RollbackUndo)

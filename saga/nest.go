@@ -4,18 +4,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 const StartEffectTopic = "saga.start"
+const CompletionEffectTopicPrefix = "saga.result."
+const StepReceiptNamespace = "saga-step"
 const WireVersion uint16 = 1
 
 type startEffectPayload struct {
 	Version uint16       `json:"version"`
 	Start   StartRequest `json:"start"`
+}
+
+type completionEffectPayload struct {
+	Version    uint16     `json:"version"`
+	Completion Completion `json:"completion"`
 }
 
 // NewStartEffect creates a stable Nest transactional outbox intent. The
@@ -51,6 +60,61 @@ func EmitStart(request StartRequest) error {
 	return nest.Emit(effect)
 }
 
+// BindCommand makes this command identity part of the active Nest transaction.
+// The caller supplies the validated retention deadline; Saga policy, not this
+// helper, owns TTL selection.
+func BindCommand(command Command, expiresAt time.Time) error {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil {
+		return nest.ErrTransactionClosed
+	}
+	if expiresAt.IsZero() || command.Validate() != nil {
+		return ErrInvalidRecord
+	}
+	raw, err := json.Marshal(command)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(raw)
+	return tx.AddReceipt(dataengine.Receipt{
+		Namespace: StepReceiptNamespace, ID: command.ID, Digest: digest[:], ExpiresAt: expiresAt.UnixNano(),
+	})
+}
+
+func NewCompletionEffect(completion Completion) (nest.Effect, error) {
+	if completion.CompletedAt.IsZero() {
+		completion.CompletedAt = time.Now().UTC()
+	}
+	if err := completion.Validate(); err != nil {
+		return nest.Effect{}, err
+	}
+	payload, err := json.Marshal(completionEffectPayload{Version: WireVersion, Completion: completion})
+	if err != nil {
+		return nest.Effect{}, err
+	}
+	return nest.Effect{
+		ID: "saga-completion:" + completion.CommandID, Topic: CompletionEffectTopicPrefix + completion.SagaID,
+		Key: completion.IdempotencyKey, Payload: payload, Headers: map[string]string{"saga-id": completion.SagaID},
+	}, nil
+}
+
+// EmitCompletion attaches the replayable completion to the bound receipt and
+// appends its broker delivery intent to the same Nest CommitRecord.
+func EmitCompletion(completion Completion) error {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil {
+		return nest.ErrTransactionClosed
+	}
+	effect, err := NewCompletionEffect(completion)
+	if err != nil {
+		return err
+	}
+	if err := tx.SetReceiptPayload(StepReceiptNamespace, completion.CommandID, effect.Payload); err != nil {
+		return fmt.Errorf("saga: bind completion receipt: %w", err)
+	}
+	return tx.Emit(effect)
+}
+
 func DecodeStartEffect(payload []byte) (StartRequest, error) {
 	var envelope startEffectPayload
 	if len(payload) == 0 {
@@ -72,4 +136,15 @@ func DecodeStartEffect(payload []byte) (StartRequest, error) {
 		return StartRequest{}, ErrInvalidRecord
 	}
 	return request, nil
+}
+
+func DecodeCompletionEffect(payload []byte) (Completion, error) {
+	var envelope completionEffectPayload
+	if len(payload) == 0 || json.Unmarshal(payload, &envelope) != nil || envelope.Version != WireVersion {
+		return Completion{}, ErrInvalidRecord
+	}
+	if err := envelope.Completion.Validate(); err != nil {
+		return Completion{}, err
+	}
+	return envelope.Completion, nil
 }

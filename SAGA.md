@@ -57,6 +57,20 @@ WAL record，再由 kit 的 durable consumer 幂等创建 Saga。直接 `StartSa
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
 
+Native Entity step 使用 Data Engine inbox：进入 Nest handler 后先调用
+`inbox.Bind(command)`，业务修改照常产生 Put/Patch，最后调用
+`saga.EmitCompletion(completion)`。三者会形成同一个 CommitRecord：Entity mutation、
+`saga-step/CommandID` receipt，以及 ID 为 `saga-completion:{CommandID}` 的 completion
+effect。handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt
+和 outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
+receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`，不同 CommandID 即使共享
+IdempotencyKey 仍表示新的 Saga attempt，业务 step 继续按 IdempotencyKey 保证语义幂等。
+
+raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo transaction 中；
+不要在这类 handler 中混用 Nest Entity 修改。两种 inbox 分开是为了保持各自的原子边界，
+不是让 Saga coordinator 改走 Entity WAL。Coordinator 的 state/outbox/completion receipt
+仍由 Saga Store 的 Mongo transaction 负责。
+
 `Completion.Data` 会成为下一步的 `Command.Payload`，用于传递流程状态。不要放入
 大对象；业务实体仍应存放在其权威服务中。
 

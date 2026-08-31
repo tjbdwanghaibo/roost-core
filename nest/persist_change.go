@@ -222,6 +222,33 @@ func AddReceipt(receipt dataengine.Receipt) error {
 	return CurrentRollbackTx().AddReceipt(receipt)
 }
 
+// SetReceiptPayload attaches the durable result of an operation to a receipt
+// already bound in this transaction. Identity and digest cannot be changed.
+func (tx *RollbackTx) SetReceiptPayload(namespace, id string, payload []byte) error {
+	if tx == nil || tx.state != rollbackTxOpen {
+		return ErrTransactionClosed
+	}
+	key := receiptKey{namespace: namespace, id: id}
+	if _, exists := tx.receiptDigests[key]; !exists {
+		return fmt.Errorf("nest: transaction receipt %s/%s is not bound", namespace, id)
+	}
+	for index := range tx.receipts {
+		if tx.receipts[index].Namespace == namespace && tx.receipts[index].ID == id {
+			tx.receipts[index].Payload = slices.Clone(payload)
+			return nil
+		}
+	}
+	return fmt.Errorf("nest: transaction receipt %s/%s is not bound", namespace, id)
+}
+
+func SetReceiptPayload(namespace, id string, payload []byte) error {
+	tx := CurrentRollbackTx()
+	if tx == nil {
+		return ErrTransactionClosed
+	}
+	return tx.SetReceiptPayload(namespace, id, payload)
+}
+
 func (tx *RollbackTx) preparePersistence() error {
 	if tx.persistencePrepared {
 		return nil

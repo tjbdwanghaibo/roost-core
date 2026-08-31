@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 type memoryStore struct {
@@ -404,6 +406,35 @@ func TestNestStartEffectHasStableIdentity(t *testing.T) {
 func TestNestStartEffectRejectsUnknownWireVersion(t *testing.T) {
 	if _, err := DecodeStartEffect([]byte(`{"version":2,"start":{"Type":"rally","BusinessKey":"r-1"}}`)); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestNestCompletionEffectHasStableCommandIdentityAndWireVersion(t *testing.T) {
+	completion := Completion{CommandID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", Success: true, Data: []byte("done")}
+	effect, err := NewCompletionEffect(completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effect.ID != "saga-completion:command-1" || effect.Topic != "saga.result.saga-1" {
+		t.Fatalf("effect=%+v", effect)
+	}
+	decoded, err := DecodeCompletionEffect(effect.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.CommandID != completion.CommandID || string(decoded.Data) != "done" {
+		t.Fatalf("decoded=%+v", decoded)
+	}
+}
+
+func TestBindCommandRequiresActiveNestTransactionAndCallerTTL(t *testing.T) {
+	now := time.Now().UTC()
+	command := Command{ID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "rally.reserve", CreatedAt: now, DeadlineAt: now.Add(time.Minute)}
+	if err := BindCommand(command, now.Add(time.Hour)); !errors.Is(err, nest.ErrTransactionClosed) {
+		t.Fatalf("err=%v", err)
+	}
+	if err := BindCommand(command, time.Time{}); !errors.Is(err, nest.ErrTransactionClosed) {
+		t.Fatalf("zero expiry err=%v", err)
 	}
 }
 
