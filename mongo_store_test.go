@@ -52,8 +52,12 @@ type mongoStoreFakeCollection struct {
 	updateResult        *fmongo.UpdateResult
 	updateErr           error
 	findOneAndUpdateErr error
+	findOneAndUpdateDoc *outboxDocument
 	findDoc             any
+	findDocs            []outboxDocument
 	findErr             error
+	deleteCount         int64
+	count               int64
 	lastFilter          any
 	lastUpdate          any
 	inserted            []any
@@ -81,7 +85,10 @@ func (c *mongoStoreFakeCollection) FindOne(_ context.Context, filter any, result
 	}
 	return bson.Unmarshal(raw, result)
 }
-func (*mongoStoreFakeCollection) Find(context.Context, any, any, ...fmongo.FindOption) error {
+func (c *mongoStoreFakeCollection) Find(_ context.Context, _ any, results any, _ ...fmongo.FindOption) error {
+	if out, ok := results.(*[]outboxDocument); ok {
+		*out = append([]outboxDocument(nil), c.findDocs...)
+	}
 	return nil
 }
 func (c *mongoStoreFakeCollection) UpdateOne(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
@@ -100,18 +107,25 @@ func (*mongoStoreFakeCollection) UpdateMany(context.Context, any, any) (*fmongo.
 func (*mongoStoreFakeCollection) ReplaceOne(context.Context, any, any) (*fmongo.UpdateResult, error) {
 	return nil, nil
 }
-func (*mongoStoreFakeCollection) DeleteOne(context.Context, any) (int64, error)  { return 0, nil }
+func (c *mongoStoreFakeCollection) DeleteOne(context.Context, any) (int64, error) {
+	return c.deleteCount, nil
+}
 func (*mongoStoreFakeCollection) DeleteMany(context.Context, any) (int64, error) { return 0, nil }
-func (c *mongoStoreFakeCollection) FindOneAndUpdate(_ context.Context, filter any, update any, _ any, _ ...fmongo.FindOneAndUpdateOption) error {
+func (c *mongoStoreFakeCollection) FindOneAndUpdate(_ context.Context, filter any, update any, result any, _ ...fmongo.FindOneAndUpdateOption) error {
 	c.lastFilter, c.lastUpdate = filter, update
+	if c.findOneAndUpdateErr == nil && c.findOneAndUpdateDoc != nil {
+		if out, ok := result.(*outboxDocument); ok {
+			*out = *c.findOneAndUpdateDoc
+		}
+	}
 	return c.findOneAndUpdateErr
 }
 func (*mongoStoreFakeCollection) FindOneAndDelete(context.Context, any, any) error { return nil }
 func (*mongoStoreFakeCollection) FindOneAndReplace(context.Context, any, any, any) error {
 	return nil
 }
-func (*mongoStoreFakeCollection) CountDocuments(context.Context, any) (int64, error) {
-	return 0, nil
+func (c *mongoStoreFakeCollection) CountDocuments(context.Context, any) (int64, error) {
+	return c.count, nil
 }
 func (*mongoStoreFakeCollection) Aggregate(context.Context, any, any) error { return nil }
 func (*mongoStoreFakeCollection) BulkWrite(context.Context, []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {

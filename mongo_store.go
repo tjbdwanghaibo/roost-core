@@ -370,8 +370,11 @@ type outboxDocument struct {
 	Payload       []byte            `bson:"payload,omitempty"`
 	Headers       map[string]string `bson:"headers,omitempty"`
 	AvailableAt   time.Time         `bson:"available_at"`
+	LeaseOwner    string            `bson:"lease_owner,omitempty"`
 	LeaseUntil    time.Time         `bson:"lease_until"`
+	LeaseToken    uint64            `bson:"lease_token"`
 	Attempt       uint32            `bson:"attempt"`
+	LastError     string            `bson:"last_error,omitempty"`
 	CreatedAt     time.Time         `bson:"created_at"`
 }
 
