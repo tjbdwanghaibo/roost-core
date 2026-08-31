@@ -39,7 +39,10 @@ var (
 )
 
 type Options struct {
-	Dir                 string
+	Dir string
+	// WriterVersion controls record encoding only. Readers always accept both
+	// deployed v1 and Data Engine v2 records. Zero defaults to v1 for rollout.
+	WriterVersion       WriterVersion
 	SegmentBytes        int64
 	MaxRecordBytes      int
 	QueueCapacity       int
@@ -59,6 +62,7 @@ type Options struct {
 func DefaultOptions(dir string) Options {
 	return Options{
 		Dir:                 dir,
+		WriterVersion:       WriterVersionV1,
 		SegmentBytes:        256 << 20,
 		MaxRecordBytes:      16 << 20,
 		QueueCapacity:       8192,
@@ -239,6 +243,12 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.SegmentBytes <= 0 {
 		opts.SegmentBytes = defaults.SegmentBytes
 	}
+	if opts.WriterVersion == 0 {
+		opts.WriterVersion = defaults.WriterVersion
+	}
+	if opts.WriterVersion != WriterVersionV1 && opts.WriterVersion != WriterVersionV2 {
+		return opts, fmt.Errorf("nestwal: unsupported writer version %d", opts.WriterVersion)
+	}
 	if opts.MaxRecordBytes <= 0 {
 		opts.MaxRecordBytes = defaults.MaxRecordBytes
 	}
@@ -282,7 +292,7 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	payload, err := encodeRecord(record)
+	payload, err := encodeRecordVersion(record, w.opts.WriterVersion)
 	if err != nil {
 		return corenest.CommitFence{}, err
 	}
@@ -329,7 +339,7 @@ func (w *WAL) Enqueue(ctx context.Context, record corenest.CommitRecord) (corene
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	payload, err := encodeRecord(record)
+	payload, err := encodeRecordVersion(record, w.opts.WriterVersion)
 	if err != nil {
 		return nil, err
 	}

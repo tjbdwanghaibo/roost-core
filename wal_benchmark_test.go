@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
 )
 
@@ -31,6 +32,44 @@ func BenchmarkWALAppendAsyncParallel(b *testing.B) {
 				Mutations: []corenest.EntityMutation{{
 					EntityID: int64(seq), Database: "game", Resource: "players",
 					Version: seq, Codec: "bson-full-v1", Data: []byte("small-after-image"),
+				}},
+			})
+			if err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
+
+func BenchmarkWALAppendV2AsyncParallel(b *testing.B) {
+	opts := DefaultOptions(b.TempDir())
+	opts.WriterVersion = WriterVersionV2
+	opts.SegmentBytes = 1 << 30
+	w, err := Open(opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	var sequence atomic.Uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			seq := sequence.Add(1)
+			var id corenest.TransactionID
+			for i := 0; i < 8; i++ {
+				id[15-i] = byte(seq >> (i * 8))
+			}
+			_, err := w.Append(context.Background(), corenest.CommitRecord{
+				ID: id, Durability: corenest.DurabilityAsync,
+				Mutations: []corenest.EntityMutation{{
+					Key:             dataengine.DocumentKey{Database: "game", Resource: "players", ID: int64(seq)},
+					Kind:            dataengine.MutationPut,
+					ExpectedVersion: seq - 1,
+					NextVersion:     seq,
+					Codec:           "bson-v2",
+					Data:            []byte("small-after-image"),
 				}},
 			})
 			if err != nil {

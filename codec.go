@@ -8,64 +8,120 @@ import (
 	"io"
 	"sort"
 
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 const (
-	codecVersion   = uint16(5)
+	// codecVersionV1 is the already-deployed Nest WAL wire version. The public
+	// writer versions are rollout controls and intentionally do not renumber
+	// existing bytes on disk.
+	codecVersionV1 = uint16(5)
+	codecVersionV2 = uint16(6)
 	maxEntryCount  = 1 << 20
 	maxStringBytes = 1 << 20
 )
 
+type WriterVersion uint16
+
+const (
+	WriterVersionV1 WriterVersion = 1
+	WriterVersionV2 WriterVersion = 2
+)
+
+var (
+	ErrUnsupportedRecordVersion = errors.New("nestwal: unsupported record version")
+	ErrWriterVersionUnsupported = errors.New("nestwal: record requires writer v2")
+)
+
 func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
-	if record.ID.IsZero() {
-		return nil, errors.New("nestwal: zero transaction id")
+	return encodeRecordVersion(record, WriterVersionV1)
+}
+
+func encodeRecordVersion(record corenest.CommitRecord, writerVersion WriterVersion) ([]byte, error) {
+	canonical, err := canonicalizeRecord(record)
+	if err != nil {
+		return nil, err
 	}
+	switch writerVersion {
+	case WriterVersionV1:
+		return encodeRecordV1(canonical)
+	case WriterVersionV2:
+		return encodeRecordV2(canonical)
+	default:
+		return nil, fmt.Errorf("nestwal: invalid writer version %d", writerVersion)
+	}
+}
+
+func canonicalizeRecord(record corenest.CommitRecord) (corenest.CommitRecord, error) {
 	if record.Empty() {
-		return nil, errors.New("nestwal: empty commit record")
+		return record, errors.New("nestwal: empty commit record")
 	}
 	if record.Durability > corenest.DurabilityPipelined {
-		return nil, errors.New("nestwal: invalid durability policy")
+		return record, errors.New("nestwal: invalid durability policy")
 	}
-	if len(record.Mutations) > maxEntryCount || len(record.Effects) > maxEntryCount {
-		return nil, errors.New("nestwal: too many entries in commit record")
+	if len(record.Mutations) > maxEntryCount || len(record.Effects) > maxEntryCount || len(record.Receipts) > maxEntryCount {
+		return record, errors.New("nestwal: too many entries in commit record")
 	}
+	record = dataengine.CloneCommitRecord(record)
 	for i := range record.Mutations {
-		mutation := &record.Mutations[i]
-		if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
-			return nil, fmt.Errorf("nestwal: invalid mutation %d", i)
+		mutation, err := dataengine.CanonicalizeMutation(record.Mutations[i])
+		if err != nil {
+			return record, fmt.Errorf("nestwal: canonicalize mutation %d: %w", i, err)
 		}
+		record.Mutations[i] = mutation
 	}
-	for i := range record.Effects {
-		effect := &record.Effects[i]
-		if effect.ID == "" || effect.Topic == "" {
-			return nil, fmt.Errorf("nestwal: invalid effect %d", i)
-		}
+	if err := dataengine.ValidateCommitRecord(record); err != nil {
+		return record, err
 	}
-	b := bytes.NewBuffer(make([]byte, 0, recordSizeHint(record)))
-	_ = binary.Write(b, binary.BigEndian, codecVersion)
+	return record, nil
+}
+
+func encodeRecordHeader(b *bytes.Buffer, codec uint16, record corenest.CommitRecord) error {
+	_ = binary.Write(b, binary.BigEndian, codec)
 	_, _ = b.Write(record.ID[:])
 	_ = binary.Write(b, binary.BigEndian, record.CreatedAt)
 	_ = b.WriteByte(byte(record.Durability))
 	if err := writeString(b, record.Handler); err != nil {
-		return nil, err
+		return err
 	}
 	if err := writeString(b, record.RequestID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func encodeRecordV1(record corenest.CommitRecord) ([]byte, error) {
+	if len(record.Receipts) != 0 {
+		return nil, ErrWriterVersionUnsupported
+	}
+	for _, effect := range record.Effects {
+		if effect.AvailableAt != 0 {
+			return nil, ErrWriterVersionUnsupported
+		}
+	}
+	for _, mutation := range record.Mutations {
+		if mutation.Remote == nil && mutation.Kind != dataengine.MutationPut {
+			return nil, ErrWriterVersionUnsupported
+		}
+	}
+	b := bytes.NewBuffer(make([]byte, 0, recordSizeHint(record)))
+	if err := encodeRecordHeader(b, codecVersionV1, record); err != nil {
 		return nil, err
 	}
 	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Mutations)))
 	for i := range record.Mutations {
 		m := &record.Mutations[i]
-		_ = binary.Write(b, binary.BigEndian, m.EntityID)
-		_ = binary.Write(b, binary.BigEndian, m.Version)
+		_ = binary.Write(b, binary.BigEndian, m.Key.ID)
+		_ = binary.Write(b, binary.BigEndian, m.NextVersion)
 		_ = binary.Write(b, binary.BigEndian, m.Mask)
 		_ = binary.Write(b, binary.BigEndian, m.Schema)
-		if err := writeString(b, m.Database); err != nil {
+		if err := writeString(b, m.Key.Database); err != nil {
 			return nil, err
 		}
-		_ = b.WriteByte(m.DatabaseScope)
-		if err := writeString(b, m.Resource); err != nil {
+		_ = b.WriteByte(byte(m.Key.Scope))
+		if err := writeString(b, m.Key.Resource); err != nil {
 			return nil, err
 		}
 		if err := writeString(b, m.Codec); err != nil {
@@ -78,23 +134,99 @@ func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
 			return nil, err
 		}
 	}
-	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Effects)))
-	for i := range record.Effects {
-		e := &record.Effects[i]
-		if err := writeString(b, e.ID); err != nil {
+	if err := writeEffects(b, record.Effects, false); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func encodeRecordV2(record corenest.CommitRecord) ([]byte, error) {
+	b := bytes.NewBuffer(make([]byte, 0, recordSizeHint(record)))
+	if err := encodeRecordHeader(b, codecVersionV2, record); err != nil {
+		return nil, err
+	}
+	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Mutations)))
+	for i := range record.Mutations {
+		m := &record.Mutations[i]
+		_ = binary.Write(b, binary.BigEndian, m.Key.ID)
+		_ = binary.Write(b, binary.BigEndian, m.ExpectedVersion)
+		_ = binary.Write(b, binary.BigEndian, m.NextVersion)
+		_ = binary.Write(b, binary.BigEndian, m.Mask)
+		_ = binary.Write(b, binary.BigEndian, m.Schema)
+		_ = b.WriteByte(byte(m.Kind))
+		_ = b.WriteByte(byte(m.Key.Scope))
+		if err := writeString(b, m.Key.Database); err != nil {
 			return nil, err
+		}
+		if err := writeString(b, m.Key.Resource); err != nil {
+			return nil, err
+		}
+		if err := writeString(b, m.Codec); err != nil {
+			return nil, err
+		}
+		if err := writeBytes(b, m.Data); err != nil {
+			return nil, err
+		}
+		if err := writeBytes(b, m.Patch.SetBSON); err != nil {
+			return nil, err
+		}
+		if len(m.Patch.Unset) > maxEntryCount {
+			return nil, errors.New("nestwal: too many unset paths")
+		}
+		_ = binary.Write(b, binary.BigEndian, uint32(len(m.Patch.Unset)))
+		for _, path := range m.Patch.Unset {
+			if err := writeString(b, path); err != nil {
+				return nil, err
+			}
+		}
+		if err := writeRemoteCommit(b, m.Remote); err != nil {
+			return nil, err
+		}
+	}
+	if err := writeEffects(b, record.Effects, true); err != nil {
+		return nil, err
+	}
+	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Receipts)))
+	for i := range record.Receipts {
+		receipt := &record.Receipts[i]
+		if err := writeString(b, receipt.Namespace); err != nil {
+			return nil, err
+		}
+		if err := writeString(b, receipt.ID); err != nil {
+			return nil, err
+		}
+		if err := writeBytes(b, receipt.Digest); err != nil {
+			return nil, err
+		}
+		if err := writeBytes(b, receipt.Payload); err != nil {
+			return nil, err
+		}
+		_ = binary.Write(b, binary.BigEndian, receipt.ExpiresAt)
+	}
+	return b.Bytes(), nil
+}
+
+func writeEffects(b *bytes.Buffer, effects []corenest.Effect, includeAvailableAt bool) error {
+	_ = binary.Write(b, binary.BigEndian, uint32(len(effects)))
+	for i := range effects {
+		e := &effects[i]
+		if err := writeString(b, e.ID); err != nil {
+			return err
 		}
 		if err := writeString(b, e.Topic); err != nil {
-			return nil, err
+			return err
 		}
 		if err := writeString(b, e.Key); err != nil {
-			return nil, err
+			return err
 		}
 		if err := writeBytes(b, e.Payload); err != nil {
-			return nil, err
+			return err
+		}
+		if includeAvailableAt {
+			_ = binary.Write(b, binary.BigEndian, e.AvailableAt)
 		}
 		if len(e.Headers) > maxEntryCount {
-			return nil, errors.New("nestwal: too many effect headers")
+			return errors.New("nestwal: too many effect headers")
 		}
 		keys := make([]string, 0, len(e.Headers))
 		for key := range e.Headers {
@@ -104,14 +236,14 @@ func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
 		_ = binary.Write(b, binary.BigEndian, uint32(len(keys)))
 		for _, key := range keys {
 			if err := writeString(b, key); err != nil {
-				return nil, err
+				return err
 			}
 			if err := writeString(b, e.Headers[key]); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	return b.Bytes(), nil
+	return nil
 }
 
 func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
@@ -120,9 +252,17 @@ func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
 	if err := binary.Read(r, binary.BigEndian, &version); err != nil {
 		return corenest.CommitRecord{}, err
 	}
-	if version != codecVersion {
-		return corenest.CommitRecord{}, fmt.Errorf("nestwal: unsupported record codec %d", version)
+	switch version {
+	case codecVersionV1:
+		return decodeRecordV1(r)
+	case codecVersionV2:
+		return decodeRecordV2(r)
+	default:
+		return corenest.CommitRecord{}, fmt.Errorf("%w: codec=%d", ErrUnsupportedRecordVersion, version)
 	}
+}
+
+func decodeRecordHeader(r *bytes.Reader) (corenest.CommitRecord, error) {
 	var record corenest.CommitRecord
 	if _, err := io.ReadFull(r, record.ID[:]); err != nil {
 		return record, err
@@ -139,6 +279,14 @@ func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
 		return record, err
 	}
 	if record.RequestID, err = readString(r); err != nil {
+		return record, err
+	}
+	return record, nil
+}
+
+func decodeRecordV1(r *bytes.Reader) (corenest.CommitRecord, error) {
+	record, err := decodeRecordHeader(r)
+	if err != nil {
 		return record, err
 	}
 	mutationCount, err := readCount(r)
@@ -178,29 +326,146 @@ func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
 		if m.Remote, err = readRemoteCommit(r); err != nil {
 			return record, err
 		}
+		canonical, canonicalErr := dataengine.CanonicalizeMutation(*m)
+		if canonicalErr != nil {
+			return record, canonicalErr
+		}
+		*m = canonical
 	}
-	effectCount, err := readCount(r)
+	if record.Effects, err = readEffects(r, false); err != nil {
+		return record, err
+	}
+	if r.Len() != 0 {
+		return record, fmt.Errorf("nestwal: %d trailing record bytes", r.Len())
+	}
+	if err := dataengine.ValidateCommitRecord(record); err != nil {
+		return record, err
+	}
+	return record, nil
+}
+
+func decodeRecordV2(r *bytes.Reader) (corenest.CommitRecord, error) {
+	record, err := decodeRecordHeader(r)
 	if err != nil {
 		return record, err
 	}
-	record.Effects = make([]corenest.Effect, effectCount)
-	for i := range record.Effects {
-		e := &record.Effects[i]
-		if e.ID, err = readString(r); err != nil {
+	mutationCount, err := readCount(r)
+	if err != nil {
+		return record, err
+	}
+	record.Mutations = make([]corenest.EntityMutation, mutationCount)
+	for i := range record.Mutations {
+		m := &record.Mutations[i]
+		if err := binary.Read(r, binary.BigEndian, &m.Key.ID); err != nil {
 			return record, err
+		}
+		for _, field := range []any{&m.ExpectedVersion, &m.NextVersion, &m.Mask, &m.Schema} {
+			if err := binary.Read(r, binary.BigEndian, field); err != nil {
+				return record, err
+			}
+		}
+		kind, readErr := r.ReadByte()
+		if readErr != nil {
+			return record, readErr
+		}
+		m.Kind = dataengine.MutationKind(kind)
+		scope, readErr := r.ReadByte()
+		if readErr != nil {
+			return record, readErr
+		}
+		m.Key.Scope = dataengine.DatabaseScope(scope)
+		if m.Key.Database, err = readString(r); err != nil {
+			return record, err
+		}
+		if m.Key.Resource, err = readString(r); err != nil {
+			return record, err
+		}
+		if m.Codec, err = readString(r); err != nil {
+			return record, err
+		}
+		if m.Data, err = readBytes(r); err != nil {
+			return record, err
+		}
+		if m.Patch.SetBSON, err = readBytes(r); err != nil {
+			return record, err
+		}
+		unsetCount, readErr := readCount(r)
+		if readErr != nil {
+			return record, readErr
+		}
+		m.Patch.Unset = make([]string, unsetCount)
+		for j := range m.Patch.Unset {
+			if m.Patch.Unset[j], err = readString(r); err != nil {
+				return record, err
+			}
+		}
+		if m.Remote, err = readRemoteCommit(r); err != nil {
+			return record, err
+		}
+	}
+	if record.Effects, err = readEffects(r, true); err != nil {
+		return record, err
+	}
+	receiptCount, err := readCount(r)
+	if err != nil {
+		return record, err
+	}
+	record.Receipts = make([]dataengine.Receipt, receiptCount)
+	for i := range record.Receipts {
+		receipt := &record.Receipts[i]
+		if receipt.Namespace, err = readString(r); err != nil {
+			return record, err
+		}
+		if receipt.ID, err = readString(r); err != nil {
+			return record, err
+		}
+		if receipt.Digest, err = readBytes(r); err != nil {
+			return record, err
+		}
+		if receipt.Payload, err = readBytes(r); err != nil {
+			return record, err
+		}
+		if err := binary.Read(r, binary.BigEndian, &receipt.ExpiresAt); err != nil {
+			return record, err
+		}
+	}
+	if r.Len() != 0 {
+		return record, fmt.Errorf("nestwal: %d trailing record bytes", r.Len())
+	}
+	if err := dataengine.ValidateCommitRecord(record); err != nil {
+		return record, err
+	}
+	return record, nil
+}
+
+func readEffects(r *bytes.Reader, includeAvailableAt bool) ([]corenest.Effect, error) {
+	effectCount, err := readCount(r)
+	if err != nil {
+		return nil, err
+	}
+	effects := make([]corenest.Effect, effectCount)
+	for i := range effects {
+		e := &effects[i]
+		if e.ID, err = readString(r); err != nil {
+			return nil, err
 		}
 		if e.Topic, err = readString(r); err != nil {
-			return record, err
+			return nil, err
 		}
 		if e.Key, err = readString(r); err != nil {
-			return record, err
+			return nil, err
 		}
 		if e.Payload, err = readBytes(r); err != nil {
-			return record, err
+			return nil, err
+		}
+		if includeAvailableAt {
+			if err := binary.Read(r, binary.BigEndian, &e.AvailableAt); err != nil {
+				return nil, err
+			}
 		}
 		headerCount, readErr := readCount(r)
 		if readErr != nil {
-			return record, readErr
+			return nil, readErr
 		}
 		if headerCount > 0 {
 			e.Headers = make(map[string]string, headerCount)
@@ -208,26 +473,26 @@ func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
 		for range headerCount {
 			key, readErr := readString(r)
 			if readErr != nil {
-				return record, readErr
+				return nil, readErr
 			}
 			value, readErr := readString(r)
 			if readErr != nil {
-				return record, readErr
+				return nil, readErr
 			}
 			e.Headers[key] = value
 		}
 	}
-	if r.Len() != 0 {
-		return record, fmt.Errorf("nestwal: %d trailing record bytes", r.Len())
-	}
-	return record, nil
+	return effects, nil
 }
 
 func recordSizeHint(record corenest.CommitRecord) int {
 	n := 64 + len(record.Handler) + len(record.RequestID)
 	for i := range record.Mutations {
 		m := &record.Mutations[i]
-		n += 52 + len(m.Database) + len(m.Resource) + len(m.Codec) + len(m.Data)
+		n += 72 + len(m.Key.Database) + len(m.Key.Resource) + len(m.Codec) + len(m.Data) + len(m.Patch.SetBSON)
+		for _, path := range m.Patch.Unset {
+			n += 4 + len(path)
+		}
 	}
 	for i := range record.Effects {
 		e := &record.Effects[i]
@@ -235,6 +500,10 @@ func recordSizeHint(record corenest.CommitRecord) int {
 		for key, value := range e.Headers {
 			n += 8 + len(key) + len(value)
 		}
+	}
+	for i := range record.Receipts {
+		receipt := &record.Receipts[i]
+		n += 32 + len(receipt.Namespace) + len(receipt.ID) + len(receipt.Digest) + len(receipt.Payload)
 	}
 	return n
 }
