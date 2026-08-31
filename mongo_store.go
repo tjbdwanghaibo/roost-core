@@ -403,7 +403,7 @@ func (store *MongoStore) stageReceipt(ctx context.Context, txID string, receipt 
 	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(receiptCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
 		return errors.Join(err, findErr)
 	}
-	if !bytes.Equal(stored.Digest, doc.Digest) {
+	if !bytes.Equal(stored.Digest, doc.Digest) || !bytes.Equal(stored.Payload, doc.Payload) {
 		return ErrReceiptIdentity
 	}
 	return nil

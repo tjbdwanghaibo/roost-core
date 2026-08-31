@@ -78,12 +78,13 @@ type mongoStoreFakeCollection struct {
 	lastFilter          any
 	lastUpdate          any
 	inserted            []any
+	insertErr           error
 	ensureIndexes       []fmongo.IndexModel
 }
 
 func (c *mongoStoreFakeCollection) InsertOne(_ context.Context, doc any) (string, error) {
 	c.inserted = append(c.inserted, doc)
-	return "id", nil
+	return "id", c.insertErr
 }
 func (*mongoStoreFakeCollection) InsertMany(context.Context, []any) ([]string, error) {
 	return nil, nil
@@ -313,5 +314,18 @@ func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing
 	}
 	if len(client.db.Collection(outboxCollection).(*mongoStoreFakeCollection).inserted) != 1 || len(client.db.Collection(receiptCollection).(*mongoStoreFakeCollection).inserted) != 1 || len(client.db.Collection(transactionCollection).(*mongoStoreFakeCollection).inserted) != 1 {
 		t.Fatal("transaction did not stage effect, receipt, and transaction identity")
+	}
+}
+
+func TestMongoStoreReceiptIdentityIncludesCompletionPayload(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	collection := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
+	collection.insertErr = fmongo.ErrDuplicateKey
+	collection.findDoc = receiptDocument{Digest: []byte{1}, Payload: []byte("different")}
+	err := store.stageReceipt(context.Background(), "tx-1", coredata.Receipt{
+		Namespace: "saga-step", ID: "command-1", Digest: []byte{1}, Payload: []byte("completion"),
+	})
+	if !errors.Is(err, ErrReceiptIdentity) {
+		t.Fatalf("err=%v", err)
 	}
 }
