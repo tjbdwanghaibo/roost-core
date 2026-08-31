@@ -7,9 +7,25 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
+	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type mongoRemoteProjectionFake struct {
+	stored  int
+	applied int
+}
+
+func (fake *mongoRemoteProjectionFake) ApplyRemoteCommitsInTransaction(_ context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	fake.stored += len(commits)
+	return nil, nil
+}
+
+func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ entity.RemoteTransactionID, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	fake.applied += len(commits)
+	return nil, nil
+}
 
 type mongoStoreFakeClient struct {
 	db            *mongoStoreFakeDatabase
@@ -238,6 +254,38 @@ func TestMongoStoreMigrationConflictBecomesObsoleteNoop(t *testing.T) {
 	record.Handler = MigrationHandler
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatalf("obsolete migration must be acknowledged for repository reload: %v", err)
+	}
+}
+
+func TestMongoStoreProjectsRemoteAndOrdinaryMutationInOneSession(t *testing.T) {
+	const kind entity.EntityKind = 241
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	entityID, err := entity.BuildEntityID(77, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, client, _ := newMongoStoreTest(t)
+	remoteProjection := &mongoRemoteProjectionFake{}
+	if err := store.SetRemoteProjection(remoteProjection, remoteProjection); err != nil {
+		t.Fatal(err)
+	}
+	var txID coredata.TransactionID
+	txID[15] = 44
+	remote := entity.RemoteCommit{
+		TransactionID: entity.RemoteTransactionID(txID), EntityID: entityID, Kind: kind,
+		BaseVersion: 1, NextVersion: 2, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
+		Mutations: []entity.RemoteDataMutation{{Collection: "heroes", ID: entityID, Version: 2, Mask: 1, Data: []byte("remote")}},
+	}
+	ordinary, _ := bson.Marshal(bson.M{"_id": int64(5), "value": "ordinary"})
+	record := coredata.CommitRecord{ID: txID, Mutations: []coredata.Mutation{
+		{Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut, ExpectedVersion: 1, NextVersion: 2, Remote: &remote},
+		{Key: coredata.DocumentKey{Database: "game", Resource: "mail", ID: 5}, Kind: coredata.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: ordinary},
+	}}
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if client.startSessions != 1 || remoteProjection.stored != 1 || remoteProjection.applied != 1 {
+		t.Fatalf("sessions=%d stored=%d applied=%d", client.startSessions, remoteProjection.stored, remoteProjection.applied)
 	}
 }
 

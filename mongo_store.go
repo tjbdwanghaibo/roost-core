@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
+	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -40,9 +41,23 @@ type MongoStoreConfig struct {
 // A single ordinary mutation uses a one-document fast path; every transaction
 // involving multiple documents, effects, or receipts uses one Mongo session.
 type MongoStore struct {
-	client fmongo.IMongo
-	cfg    MongoStoreConfig
-	now    func() time.Time
+	client        fmongo.IMongo
+	cfg           MongoStoreConfig
+	now           func() time.Time
+	remoteStore   RemoteProjectionStore
+	remoteApplier entity.RemoteCommitApplier
+}
+
+type RemoteProjectionStore interface {
+	ApplyRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error)
+}
+
+func (store *MongoStore) SetRemoteProjection(remoteStore RemoteProjectionStore, applier entity.RemoteCommitApplier) error {
+	if store == nil || remoteStore == nil || applier == nil {
+		return errors.New("dataengine mongo: remote store and applier are required")
+	}
+	store.remoteStore, store.remoteApplier = remoteStore, applier
+	return nil
 }
 
 func NewMongoStore(client fmongo.IMongo, cfg MongoStoreConfig) (*MongoStore, error) {
@@ -128,19 +143,36 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		return err
 	}
 	defer session.EndSession(ctx)
-	return session.WithTransaction(ctx, func(txCtx context.Context) error {
+	mutations := append([]coredata.Mutation(nil), record.Mutations...)
+	sort.Slice(mutations, func(i, j int) bool { return documentKeyLess(mutations[i].Key, mutations[j].Key) })
+	remote := make([]entity.RemoteCommit, 0, len(mutations))
+	ordinary := make([]coredata.Mutation, 0, len(mutations))
+	for i := range mutations {
+		if mutations[i].Remote == nil {
+			ordinary = append(ordinary, mutations[i])
+			continue
+		}
+		if mutations[i].Remote.TransactionID != entity.RemoteTransactionID(record.ID) {
+			return fmt.Errorf("dataengine mongo: remote transaction identity mismatch at mutation %d", i)
+		}
+		remote = append(remote, mutations[i].Remote.Clone())
+	}
+	if len(remote) > 0 && (store.remoteStore == nil || store.remoteApplier == nil) {
+		return ErrRemoteProjection
+	}
+	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
 		alreadyApplied, err := store.checkTransaction(txCtx, record.ID.String(), digest)
 		if err != nil || alreadyApplied {
 			return err
 		}
-		mutations := append([]coredata.Mutation(nil), record.Mutations...)
-		sort.Slice(mutations, func(i, j int) bool { return documentKeyLess(mutations[i].Key, mutations[j].Key) })
-		for i := range mutations {
-			if mutations[i].Remote != nil {
-				return ErrRemoteProjection
-			}
-			if err := store.applyMutation(txCtx, record.ID.String(), mutations[i]); err != nil {
+		for i := range ordinary {
+			if err := store.applyMutation(txCtx, record.ID.String(), ordinary[i]); err != nil {
 				return fmt.Errorf("dataengine mongo: mutation %d: %w", i, err)
+			}
+		}
+		if len(remote) > 0 {
+			if _, err := store.remoteStore.ApplyRemoteCommitsInTransaction(txCtx, remote); err != nil {
+				return fmt.Errorf("dataengine mongo: remote projection: %w", err)
 			}
 		}
 		for i := range record.Receipts {
@@ -167,6 +199,15 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		}
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	if len(remote) > 0 {
+		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
+			return fmt.Errorf("dataengine mongo: remote publication: %w", err)
+		}
+	}
+	return nil
 }
 
 func (store *MongoStore) applyMutation(ctx context.Context, txID string, mutation coredata.Mutation) error {
