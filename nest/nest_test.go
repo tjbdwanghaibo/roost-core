@@ -311,7 +311,9 @@ func (d *rollbackTestDao) PrepareCommit(tx *RollbackTx) error {
 	}
 	return tx.AddMutation(EntityMutation{
 		EntityID: d.id,
+		Database: "test",
 		Resource: d.CollName(),
+		Version:  d.Tracker.Version() + 1,
 		Mask:     d.Tracker.Snapshot().PersistDirty,
 		Codec:    "json",
 		Data:     d.Marshal(),
@@ -989,7 +991,7 @@ func TestStrictCommitFailureRollsBack(t *testing.T) {
 	if dao.Value != 10 || dao.Tracker.Dirty() {
 		t.Fatalf("value=%d dirty=%v, want rollback", dao.Value, dao.Tracker.Dirty())
 	}
-	if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].EntityID != id {
+	if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].Key.ID != id {
 		t.Fatalf("commit record=%+v", committer.record)
 	}
 }

@@ -4,12 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 )
 
 // DurabilityPolicy is independent from rollback policy. Rollback controls
@@ -58,11 +57,7 @@ func ParseDurabilityPolicy(value string) (DurabilityPolicy, error) {
 
 // TransactionID is sortable by its process-random prefix and local sequence.
 // It avoids a crypto/rand call on every hot-path transaction.
-type TransactionID [16]byte
-
-func (id TransactionID) IsZero() bool { return id == TransactionID{} }
-
-func (id TransactionID) String() string { return fmt.Sprintf("%x", id[:]) }
+type TransactionID = dataengine.TransactionID
 
 var transactionIDState struct {
 	prefix [8]byte
@@ -82,47 +77,11 @@ func newTransactionID() TransactionID {
 	return id
 }
 
-// EntityMutation is an immutable after-image or generated delta. Codec and
-// Schema let replay consumers evolve independently from the WAL format.
-type EntityMutation struct {
-	EntityID      int64
-	Database      string
-	DatabaseScope uint8
-	Resource      string
-	Version       uint64
-	Mask          uint64
-	Schema        uint32
-	Codec         string
-	Data          []byte
-	// Remote is present only for Remote Entity. It carries the complete
-	// immutable, lease-aware commit required by WAL replay.
-	Remote *entity.RemoteCommit
-}
-
-// Effect is a transactional outbox item. ID must be stable across replay and
-// consumers must apply it idempotently.
-type Effect struct {
-	ID      string
-	Topic   string
-	Key     string
-	Payload []byte
-	Headers map[string]string
-}
-
-// CommitRecord is the durable transaction unit. A multi-entity command emits
-// one record so replay never loses the relationship between its mutations and
-// external effects.
-type CommitRecord struct {
-	ID         TransactionID
-	Handler    string
-	RequestID  string
-	CreatedAt  int64
-	Durability DurabilityPolicy
-	Mutations  []EntityMutation
-	Effects    []Effect
-}
-
-func (r CommitRecord) Empty() bool { return len(r.Mutations) == 0 && len(r.Effects) == 0 }
+// These aliases keep existing Nest and generated callers source compatible
+// while the durable model is owned by the Data Engine package.
+type EntityMutation = dataengine.Mutation
+type Effect = dataengine.Effect
+type CommitRecord = dataengine.CommitRecord
 
 // CommitFence identifies one WAL record for acknowledgement.
 type CommitFence struct {
@@ -185,44 +144,13 @@ type CommitParticipant interface {
 }
 
 func cloneMutation(m EntityMutation) EntityMutation {
-	m.Data = append([]byte(nil), m.Data...)
-	if m.Remote != nil {
-		cloned := m.Remote.Clone()
-		m.Remote = &cloned
-	}
-	return m
+	return dataengine.CloneMutation(m)
 }
 
 func cloneEffect(effect Effect) Effect {
-	effect.Payload = append([]byte(nil), effect.Payload...)
-	if effect.Headers != nil {
-		headers := make(map[string]string, len(effect.Headers))
-		for key, value := range effect.Headers {
-			headers[key] = value
-		}
-		effect.Headers = headers
-	}
-	return effect
+	return dataengine.CloneEffect(effect)
 }
 
 func validateCommitRecord(record CommitRecord) error {
-	if record.ID.IsZero() {
-		return errors.New("nest: zero transaction id")
-	}
-	for i, mutation := range record.Mutations {
-		if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
-			return fmt.Errorf("nest: invalid mutation %d", i)
-		}
-		if mutation.Remote != nil {
-			if err := mutation.Remote.Validate(); err != nil {
-				return fmt.Errorf("nest: invalid remote mutation %d: %w", i, err)
-			}
-		}
-	}
-	for i, effect := range record.Effects {
-		if effect.ID == "" || effect.Topic == "" {
-			return fmt.Errorf("nest: invalid effect %d", i)
-		}
-	}
-	return nil
+	return dataengine.ValidateCommitRecord(record)
 }

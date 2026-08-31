@@ -10,6 +10,7 @@ import (
 
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/obs"
 )
@@ -216,15 +217,24 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
 	}
-	if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
+	entityID, database, resource := mutation.EntityID, mutation.Database, mutation.Resource
+	if mutation.Key != (dataengine.DocumentKey{}) {
+		if mutation.EntityID != 0 || mutation.Database != "" || mutation.DatabaseScope != 0 || mutation.Resource != "" || mutation.Version != 0 {
+			return dataengine.ErrMixedMutationForms
+		}
+		if err := dataengine.ValidateMutation(mutation); err != nil {
+			return err
+		}
+		entityID, database, resource = mutation.Key.ID, mutation.Key.Database, mutation.Key.Resource
+	} else if entityID == 0 || resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
 		return errors.New("nest: invalid entity mutation")
 	}
 	if tx.mutationKeys == nil {
 		tx.mutationKeys = make(map[mutationKey]struct{}, 4)
 	}
-	key := mutationKey{database: mutation.Database, resource: mutation.Resource, entityID: mutation.EntityID}
+	key := mutationKey{database: database, resource: resource, entityID: entityID}
 	if _, exists := tx.mutationKeys[key]; exists {
-		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", mutation.Database, mutation.Resource, mutation.EntityID)
+		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", database, resource, entityID)
 	}
 	tx.mutationKeys[key] = struct{}{}
 	tx.mutations = append(tx.mutations, cloneMutation(mutation))
@@ -355,9 +365,17 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 		}
 	}
 	requestID := tx.requestID()
+	mutations := make([]EntityMutation, len(tx.mutations))
+	for i := range tx.mutations {
+		canonical, err := dataengine.CanonicalizeMutation(tx.mutations[i])
+		if err != nil {
+			return CommitRecord{}, fmt.Errorf("nest: canonicalize mutation %d: %w", i, err)
+		}
+		mutations[i] = canonical
+	}
 	record := CommitRecord{
-		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: tx.durability,
-		Mutations: append([]EntityMutation(nil), tx.mutations...),
+		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: uint8(tx.durability),
+		Mutations: mutations,
 		Effects:   append([]Effect(nil), tx.effects...),
 	}
 	if !record.Empty() {

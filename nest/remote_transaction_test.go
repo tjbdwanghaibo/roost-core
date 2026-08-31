@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 )
 
@@ -107,8 +108,20 @@ func TestCommitRecordAcceptsMixedRemoteAndOrdinaryMutations(t *testing.T) {
 	record := CommitRecord{
 		ID: txID,
 		Mutations: []EntityMutation{
-			{EntityID: id, Resource: "players", Remote: &remote},
-			{EntityID: 42, Resource: "mail", Data: []byte("ordinary-state")},
+			{
+				Key:             dataengine.DocumentKey{Resource: "players", ID: id},
+				Kind:            dataengine.MutationPut,
+				ExpectedVersion: remote.BaseVersion,
+				NextVersion:     remote.NextVersion,
+				Remote:          &remote,
+			},
+			{
+				Key:             dataengine.DocumentKey{Database: "game", Resource: "mail", ID: 42},
+				Kind:            dataengine.MutationPut,
+				ExpectedVersion: 0,
+				NextVersion:     1,
+				Data:            []byte("ordinary-state"),
+			},
 		},
 	}
 	if err := validateCommitRecord(record); err != nil {
