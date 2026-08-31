@@ -55,6 +55,7 @@ type mongoStoreFakeCollection struct {
 	findOneAndUpdateDoc *outboxDocument
 	findDoc             any
 	findDocs            []outboxDocument
+	findRaw             []bson.Raw
 	findErr             error
 	deleteCount         int64
 	count               int64
@@ -85,9 +86,16 @@ func (c *mongoStoreFakeCollection) FindOne(_ context.Context, filter any, result
 	}
 	return bson.Unmarshal(raw, result)
 }
-func (c *mongoStoreFakeCollection) Find(_ context.Context, _ any, results any, _ ...fmongo.FindOption) error {
+func (c *mongoStoreFakeCollection) Find(_ context.Context, filter any, results any, _ ...fmongo.FindOption) error {
+	c.lastFilter = filter
+	if c.findErr != nil {
+		return c.findErr
+	}
 	if out, ok := results.(*[]outboxDocument); ok {
 		*out = append([]outboxDocument(nil), c.findDocs...)
+	}
+	if out, ok := results.(*[]bson.Raw); ok {
+		*out = append([]bson.Raw(nil), c.findRaw...)
 	}
 	return nil
 }
@@ -219,6 +227,17 @@ func TestMongoStoreDeleteWritesVersionedTombstone(t *testing.T) {
 	set := update["$set"].(bson.M)
 	if set["_deleted"] != true || set["_version"] != uint64(5) {
 		t.Fatalf("delete update=%v", update)
+	}
+}
+
+func TestMongoStoreMigrationConflictBecomesObsoleteNoop(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	collection.findOneAndUpdateErr = fmongo.ErrDuplicateKey
+	collection.findDoc = projectionMeta{Version: 12, LastTx: "another-transaction"}
+	record := testMutationRecord(coredata.MutationPut)
+	record.Handler = MigrationHandler
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatalf("obsolete migration must be acknowledged for repository reload: %v", err)
 	}
 }
 

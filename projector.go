@@ -70,6 +70,8 @@ type Projector struct {
 	lastErr   error
 	fatalErr  error
 	fatalOnce sync.Once
+	ticketMu  sync.Mutex
+	tickets   map[coredata.TransactionID]*projectionTicket
 
 	committed      atomic.Uint64
 	projected      atomic.Uint64
@@ -102,10 +104,57 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 	projector := &Projector{
 		wal: wal, store: store, opts: options, ctx: ctx, cancel: cancel,
 		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
+		tickets: make(map[coredata.TransactionID]*projectionTicket),
 	}
 	go projector.run()
 	projector.signal()
 	return projector, nil
+}
+
+type projectionTicket struct {
+	done chan struct{}
+	err  error
+}
+
+func (ticket *projectionTicket) Done() <-chan struct{} { return ticket.done }
+func (ticket *projectionTicket) Err() error {
+	select {
+	case <-ticket.done:
+		return ticket.err
+	default:
+		return nil
+	}
+}
+
+// CommitSystem durably admits an infrastructure mutation and returns a ticket
+// that resolves only after Mongo projection, not merely after WAL fsync.
+func (projector *Projector) CommitSystem(ctx context.Context, record coredata.CommitRecord) (coredata.ProjectionTicket, error) {
+	if projector == nil || projector.wal == nil {
+		return nil, errors.New("dataengine projector: not initialized")
+	}
+	if fatal := projector.fatal(); fatal != nil {
+		return nil, fatal
+	}
+	if record.Durability == corenest.DurabilityMemory {
+		record.Durability = corenest.DurabilityStrict
+	}
+	ticket := &projectionTicket{done: make(chan struct{})}
+	projector.ticketMu.Lock()
+	if _, duplicate := projector.tickets[record.ID]; duplicate {
+		projector.ticketMu.Unlock()
+		return nil, fmt.Errorf("dataengine projector: duplicate system transaction %s", record.ID.String())
+	}
+	projector.tickets[record.ID] = ticket
+	projector.ticketMu.Unlock()
+	projector.admitSystem(record.ID)
+	if _, err := projector.wal.Append(ctx, record); err != nil {
+		projector.discard(record.ID)
+		projector.removeTicket(record.ID)
+		return nil, err
+	}
+	projector.committed.Add(1)
+	projector.signal()
+	return ticket, nil
 }
 
 func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRecord) error {
@@ -191,8 +240,12 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 			return errProjectorTransactionHeld
 		}
 		if err := projector.store.Project(ctx, record); err != nil {
+			if projector.isFatalProjection(err) {
+				projector.completeProjection(record.ID, err)
+			}
 			return fmt.Errorf("dataengine projector: transaction %s: %w", record.ID.String(), err)
 		}
+		projector.completeProjection(record.ID, nil)
 		projector.projected.Add(1)
 		processed++
 		processedIDs = append(processedIDs, record.ID)
@@ -307,6 +360,7 @@ func (projector *Projector) Close(ctx context.Context) error {
 	projector.closeOnce.Do(projector.cancel)
 	select {
 	case <-projector.done:
+		projector.completeAllTickets(context.Canceled)
 		if projector.opts.CloseWAL {
 			return projector.wal.Close(ctx)
 		}
@@ -323,6 +377,18 @@ func (projector *Projector) Shutdown(ctx context.Context) error {
 func (projector *Projector) admit(id coredata.TransactionID) {
 	projector.heldMu.Lock()
 	projector.held[id] = struct{}{}
+	_, alreadyAdmitted := projector.admitted[id]
+	if !alreadyAdmitted {
+		projector.admitted[id] = struct{}{}
+	}
+	projector.heldMu.Unlock()
+	if !alreadyAdmitted {
+		projector.walUnacked.Add(1)
+	}
+}
+
+func (projector *Projector) admitSystem(id coredata.TransactionID) {
+	projector.heldMu.Lock()
 	_, alreadyAdmitted := projector.admitted[id]
 	if !alreadyAdmitted {
 		projector.admitted[id] = struct{}{}
@@ -401,6 +467,33 @@ func (projector *Projector) fatal() error {
 	return err
 }
 
+func (projector *Projector) completeProjection(id coredata.TransactionID, err error) {
+	projector.ticketMu.Lock()
+	ticket := projector.tickets[id]
+	if ticket != nil {
+		delete(projector.tickets, id)
+		ticket.err = err
+		close(ticket.done)
+	}
+	projector.ticketMu.Unlock()
+}
+
+func (projector *Projector) removeTicket(id coredata.TransactionID) {
+	projector.ticketMu.Lock()
+	delete(projector.tickets, id)
+	projector.ticketMu.Unlock()
+}
+
+func (projector *Projector) completeAllTickets(err error) {
+	projector.ticketMu.Lock()
+	for id, ticket := range projector.tickets {
+		delete(projector.tickets, id)
+		ticket.err = err
+		close(ticket.done)
+	}
+	projector.ticketMu.Unlock()
+}
+
 func jitterDuration(duration time.Duration) time.Duration {
 	if duration <= 1 {
 		return duration
@@ -412,3 +505,4 @@ func jitterDuration(duration time.Duration) time.Duration {
 var _ corenest.TransactionCommitter = (*Projector)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Projector)(nil)
 var _ corenest.PipelinedTransactionCommitter = (*Projector)(nil)
+var _ coredata.SystemCommitter = (*Projector)(nil)

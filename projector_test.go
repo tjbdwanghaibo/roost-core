@@ -210,3 +210,36 @@ func TestProjectorFatalConflictInvokesFence(t *testing.T) {
 		t.Fatal("fatal projection conflict did not fence")
 	}
 }
+
+func TestProjectorCommitSystemTicketCompletesAfterProjection(t *testing.T) {
+	opts := nestwal.DefaultOptions(t.TempDir())
+	opts.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newProjectorOutboxFake()
+	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer projector.Close(context.Background())
+	ticket, err := projector.CommitSystem(context.Background(), projectorRecord(9, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ticket.Done():
+		if err := ticket.Err(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("system projection ticket did not complete")
+	}
+	store.mu.Lock()
+	_, projected := store.records[projectorRecord(9, false).ID]
+	store.mu.Unlock()
+	if !projected {
+		t.Fatal("ticket completed before projection")
+	}
+}

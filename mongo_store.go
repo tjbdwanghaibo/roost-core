@@ -110,7 +110,14 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		return err
 	}
 	if len(record.Mutations) == 1 && len(record.Effects) == 0 && len(record.Receipts) == 0 && record.Mutations[0].Remote == nil {
-		return store.applyMutation(ctx, record.ID.String(), record.Mutations[0])
+		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0])
+		if record.Handler == MigrationHandler && errors.Is(err, ErrProjectionConflict) {
+			// A concurrent writer made this migration record obsolete. It must
+			// still advance the WAL checkpoint; the repository reloads and either
+			// observes the migrated schema or submits one new CAS attempt.
+			return nil
+		}
+		return err
 	}
 	digest, err := digestRecord(record)
 	if err != nil {
