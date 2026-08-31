@@ -14,7 +14,7 @@ import (
 // DurabilityPolicy is independent from rollback policy. Rollback controls
 // failures before the commit point; durability controls when the commit point
 // is acknowledged.
-type DurabilityPolicy uint8
+type DurabilityPolicy = dataengine.Durability
 
 const (
 	DurabilityMemory DurabilityPolicy = iota
@@ -26,19 +26,6 @@ const (
 	// See NEST_PIPELINED_COMMIT.md for the full contract.
 	DurabilityPipelined
 )
-
-func (p DurabilityPolicy) String() string {
-	switch p {
-	case DurabilityAsync:
-		return "async"
-	case DurabilityStrict:
-		return "strict"
-	case DurabilityPipelined:
-		return "pipelined"
-	default:
-		return "memory"
-	}
-}
 
 func ParseDurabilityPolicy(value string) (DurabilityPolicy, error) {
 	switch value {

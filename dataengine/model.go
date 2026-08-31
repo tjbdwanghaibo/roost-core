@@ -16,6 +16,21 @@ func (id TransactionID) IsZero() bool { return id == TransactionID{} }
 
 func (id TransactionID) String() string { return fmt.Sprintf("%x", id[:]) }
 
+type Durability uint8
+
+func (durability Durability) String() string {
+	switch durability {
+	case 1:
+		return "async"
+	case 2:
+		return "strict"
+	case 3:
+		return "pipelined"
+	default:
+		return "memory"
+	}
+}
+
 type MutationKind uint8
 
 const (
@@ -95,7 +110,7 @@ type CommitRecord struct {
 	Handler    string
 	RequestID  string
 	CreatedAt  int64
-	Durability uint8
+	Durability Durability
 	Mutations  []Mutation
 	Effects    []Effect
 	Receipts   []Receipt

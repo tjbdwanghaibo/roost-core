@@ -23,7 +23,7 @@ func TestPrepareCommitRecordCanonicalizesLegacyMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Durability != uint8(DurabilityAsync) {
+	if record.Durability != DurabilityAsync {
 		t.Fatalf("durability = %d", record.Durability)
 	}
 	if len(record.Mutations) != 1 {
