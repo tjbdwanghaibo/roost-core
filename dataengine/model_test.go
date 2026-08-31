@@ -86,3 +86,12 @@ func TestValidateMutationRejectsUnsafePatchPath(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidPatchPath", err)
 	}
 }
+
+func TestCloneEffectPreservesAndDetachesHeaders(t *testing.T) {
+	original := Effect{Headers: map[string]string{"trace": "abc"}}
+	cloned := CloneEffect(original)
+	original.Headers["trace"] = "changed"
+	if cloned.Headers["trace"] != "abc" {
+		t.Fatalf("cloned headers=%v", cloned.Headers)
+	}
+}

@@ -134,10 +134,11 @@ func CloneMutation(m Mutation) Mutation {
 func CloneEffect(effect Effect) Effect {
 	effect.Payload = slices.Clone(effect.Payload)
 	if effect.Headers != nil {
-		effect.Headers = make(map[string]string, len(effect.Headers))
+		headers := make(map[string]string, len(effect.Headers))
 		for key, value := range effect.Headers {
-			effect.Headers[key] = value
+			headers[key] = value
 		}
+		effect.Headers = headers
 	}
 	return effect
 }
