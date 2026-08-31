@@ -181,7 +181,7 @@ type StepConsumerConfig struct {
 	NakBackoffMax          time.Duration
 }
 
-func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
+func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
 	if client == nil || transport == nil || inbox == nil || handler == nil || config.Stream == "" || config.Durable == "" || !validSubjectPath(config.Topic) {
 		return nil, fmt.Errorf("saga: invalid step consumer configuration")
 	}
@@ -256,6 +256,100 @@ func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetS
 		}
 		return err
 	})
+}
+
+// SubscribeStep is retained for raw Mongo handlers.
+// Deprecated: use SubscribeMongoStep or SubscribeDataEngineStep explicitly.
+func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
+	return SubscribeMongoStep(ctx, client, transport, inbox, config, handler)
+}
+
+// SubscribeDataEngineStep coordinates duplicate deliveries, but never
+// publishes the completion directly. A native handler must execute its Nest
+// transaction with inbox.Bind(command) and coresaga.EmitCompletion; this
+// consumer acknowledges only after the authoritative Data Engine receipt is
+// projected and replayable.
+func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *DataEngineStepInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
+	if client == nil || transport == nil || inbox == nil || handler == nil || config.Stream == "" || config.Durable == "" || !validSubjectPath(config.Topic) {
+		return nil, fmt.Errorf("saga: invalid dataengine step consumer configuration")
+	}
+	if config.AckWait <= 0 {
+		config.AckWait = 30 * time.Second
+	}
+	if config.MaxDeliver <= 0 {
+		config.MaxDeliver = 25_000
+	}
+	if config.MaxAckPending <= 0 {
+		config.MaxAckPending = 256
+	}
+	if config.NakBackoffMin <= 0 {
+		config.NakBackoffMin = 250 * time.Millisecond
+	}
+	if config.NakBackoffMax < config.NakBackoffMin {
+		config.NakBackoffMax = 30 * time.Second
+	}
+	if !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) || inbox.options.LeaseDuration <= config.AckWait {
+		return nil, fmt.Errorf("saga: unsafe dataengine step consumer limits")
+	}
+	if err := inbox.EnsureInfrastructure(ctx); err != nil {
+		return nil, err
+	}
+	subject := transport.prefix + ".command." + strings.Trim(config.Topic, ".")
+	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{
+		Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject,
+		DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver,
+		MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax,
+	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+		command, err := decodeStepCommand(message)
+		if err != nil {
+			return err
+		}
+		if !time.Now().Before(command.DeadlineAt) {
+			_, found, replayErr := inbox.Replay(messageCtx, command)
+			if replayErr != nil {
+				return replayErr
+			}
+			if found {
+				return nil
+			}
+			return context.DeadlineExceeded
+		}
+		processCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
+		defer cancel()
+		reservation, err := inbox.Reserve(processCtx, command)
+		if err != nil {
+			return err
+		}
+		if reservation.Duplicate && reservation.Completion.CommandID != "" {
+			return nil
+		}
+		if !reservation.Duplicate {
+			completion, err := handler(processCtx, command)
+			if err != nil {
+				return err
+			}
+			completion.CommandID, completion.IdempotencyKey, completion.SagaID = command.ID, command.IdempotencyKey, command.SagaID
+			if err := completion.Validate(); err != nil {
+				return err
+			}
+		}
+		_, err = inbox.waitReplay(processCtx, command)
+		return err
+	})
+}
+
+func decodeStepCommand(message *fnats.JetStreamMsg) (coresaga.Command, error) {
+	if message == nil || len(message.Data) > maxWireEnvelopeBytes {
+		return coresaga.Command{}, coresaga.ErrInvalidRecord
+	}
+	var envelope commandEnvelope
+	if err := json.Unmarshal(message.Data, &envelope); err != nil {
+		return coresaga.Command{}, err
+	}
+	if envelope.Version != coresaga.WireVersion || envelope.Command.Validate() != nil {
+		return coresaga.Command{}, coresaga.ErrInvalidRecord
+	}
+	return envelope.Command, nil
 }
 
 type commandReceiptDoc struct {

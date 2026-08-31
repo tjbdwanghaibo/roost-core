@@ -65,7 +65,11 @@ func CombineDefinitions(groups ...[]coresaga.Definition) []coresaga.Definition {
 
 func (m *Mod) Name() app.ModName { return mods.ModSaga }
 func (m *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModMongo, mods.ModNatsJetStream, mods.ModHealth, mods.ModNestWAL}
+	return []app.ModName{mods.ModMongo, mods.ModNatsJetStream, mods.ModHealth}
+}
+
+func (m *Mod) OptionalDependsOn() []app.ModName {
+	return []app.ModName{mods.ModNestWAL, mods.ModDataEngine}
 }
 
 func (m *Mod) Init(cfg *viper.Viper) error {
@@ -279,3 +283,4 @@ func stringDefault(value, fallback string) string {
 }
 
 var _ app.Mod = (*Mod)(nil)
+var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
