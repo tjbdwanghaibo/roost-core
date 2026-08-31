@@ -20,6 +20,7 @@ import (
 )
 
 type Mod struct {
+	active        bool
 	remoteEnabled bool
 	runtime       *Runtime
 	config        modConfig
@@ -52,7 +53,11 @@ func NewMod(remoteEnabled bool) *Mod { return &Mod{remoteEnabled: remoteEnabled}
 func (m *Mod) Name() app.ModName { return mods.ModNestWAL }
 
 func (m *Mod) DependsOn() []app.ModName {
-	deps := []app.ModName{mods.ModCheckpoint, mods.ModNatsJetStream, mods.ModHealth}
+	return []app.ModName{mods.ModNatsJetStream, mods.ModHealth}
+}
+
+func (m *Mod) OptionalDependsOn() []app.ModName {
+	deps := []app.ModName{mods.ModCheckpoint, mods.ModDataEngine}
 	if m != nil && m.remoteEnabled {
 		deps = append(deps, mods.ModRemoteEntity)
 	}
@@ -63,11 +68,27 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if cfg == nil {
 		cfg = viper.New()
 	}
+	selection, err := mods.ResolvePersistenceEngine(cfg)
+	if err != nil {
+		return err
+	}
+	m.active = selection.CheckpointEnabled
+	if !m.active {
+		return nil
+	}
 	dir := cfg.GetString("nest.wal.dir")
 	if dir == "" {
 		dir = filepath.Join("data", "wal", "nest", fmt.Sprintf("%d", cfg.GetInt32("sid")))
 	}
 	wal := DefaultOptions(dir)
+	switch cfg.GetInt("nest.wal.writer_version") {
+	case 0, 1:
+		wal.WriterVersion = WriterVersionV1
+	case 2:
+		wal.WriterVersion = WriterVersionV2
+	default:
+		return fmt.Errorf("nestwal mod: writer_version must be 1 or 2")
+	}
 	if value := cfg.GetInt64("nest.wal.segment_bytes"); value > 0 {
 		wal.SegmentBytes = value
 	}
@@ -157,6 +178,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 }
 
 func (m *Mod) Provide(registry *app.Registry) error {
+	if m != nil && !m.active {
+		return nil
+	}
 	if registry == nil {
 		return fmt.Errorf("nestwal mod: nil registry")
 	}
@@ -215,6 +239,9 @@ func (m *Mod) Provide(registry *app.Registry) error {
 }
 
 func (m *Mod) Start() error {
+	if m != nil && !m.active {
+		return nil
+	}
 	if m == nil || m.runtime == nil || m.registry == nil {
 		return fmt.Errorf("nestwal mod: not provided")
 	}
@@ -234,7 +261,7 @@ func (m *Mod) Start() error {
 func (m *Mod) Stop() { _ = m.StopWithContext(context.Background()) }
 
 func (m *Mod) StopWithContext(ctx context.Context) error {
-	if m == nil || m.runtime == nil {
+	if m == nil || !m.active || m.runtime == nil {
 		return nil
 	}
 	err := m.runtime.Shutdown(ctx)
@@ -324,3 +351,4 @@ func positiveDefault(value, fallback int) int {
 
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
+var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
