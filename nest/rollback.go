@@ -61,21 +61,28 @@ type RollbackParticipant interface {
 }
 
 type RollbackTx struct {
-	id             TransactionID
-	policy         RollbackPolicy
-	durability     DurabilityPolicy
-	handler        string
-	state          rollbackTxState
-	rollbacks      []func() error
-	commits        []func()
-	undoKeys       map[undoKey]struct{}
-	participants   []CommitParticipant
-	participantSet map[CommitParticipant]struct{}
-	mutations      []EntityMutation
-	mutationKeys   map[mutationKey]struct{}
-	effects        []Effect
-	effectIDs      map[string]struct{}
-	remoteWrite    bool
+	id                  TransactionID
+	policy              RollbackPolicy
+	durability          DurabilityPolicy
+	handler             string
+	state               rollbackTxState
+	rollbacks           []func() error
+	commits             []func()
+	undoKeys            map[undoKey]struct{}
+	participants        []CommitParticipant
+	participantSet      map[CommitParticipant]struct{}
+	participantChanges  map[MutationParticipant]*PersistChange
+	participantOrder    []MutationParticipant
+	preparedMutations   map[MutationParticipant]dataengine.Mutation
+	persistencePrepared bool
+	accepted            bool
+	mutations           []EntityMutation
+	mutationKeys        map[mutationKey]struct{}
+	effects             []Effect
+	effectIDs           map[string]struct{}
+	receipts            []dataengine.Receipt
+	receiptDigests      map[receiptKey][]byte
+	remoteWrite         bool
 }
 
 type rollbackTxState uint8
@@ -96,6 +103,11 @@ type mutationKey struct {
 	database string
 	resource string
 	entityID int64
+}
+
+type receiptKey struct {
+	namespace string
+	id        string
 }
 
 func NewRollbackTx(policy RollbackPolicy) *RollbackTx {
@@ -297,10 +309,15 @@ func (tx *RollbackTx) Rollback() error {
 		}
 	}
 	tx.commits = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.preparedMutations = nil
 	tx.mutations = nil
 	tx.mutationKeys = nil
 	tx.effects = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 	return errors.Join(errs...)
 }
 
@@ -313,8 +330,13 @@ func (tx *RollbackTx) Commit() {
 	tx.undoKeys = nil
 	tx.participants = nil
 	tx.participantSet = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 	if len(tx.commits) == 0 {
 		return
 	}
@@ -348,8 +370,13 @@ func (tx *RollbackTx) abandon() {
 	tx.undoKeys = nil
 	tx.participants = nil
 	tx.participantSet = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 }
 
 func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
@@ -364,6 +391,9 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 			return CommitRecord{}, fmt.Errorf("nest: prepare commit: %w", err)
 		}
 	}
+	if err := tx.preparePersistence(); err != nil {
+		return CommitRecord{}, fmt.Errorf("nest: prepare persistence: %w", err)
+	}
 	requestID := tx.requestID()
 	mutations := make([]EntityMutation, len(tx.mutations))
 	for i := range tx.mutations {
@@ -377,6 +407,7 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: uint8(tx.durability),
 		Mutations: mutations,
 		Effects:   append([]Effect(nil), tx.effects...),
+		Receipts:  append([]dataengine.Receipt(nil), tx.receipts...),
 	}
 	if !record.Empty() {
 		if err := validateCommitRecord(record); err != nil {
@@ -425,7 +456,7 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 		}
 		return errors.Join(ErrCommitRejected, err)
 	}
-	return nil
+	return tx.acceptPersistence()
 }
 
 // pipelinedEnqueue performs the in-lock half of a pipelined commit. It is the
@@ -449,6 +480,9 @@ func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedT
 	}
 	if ticket == nil {
 		return nil, errors.Join(ErrCommitRejected, errors.New("nest: pipelined committer returned nil ticket"))
+	}
+	if err := tx.acceptPersistence(); err != nil {
+		return ticket, err
 	}
 	return ticket, nil
 }
@@ -564,6 +598,10 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			ticket, enqueueErr := tx.pipelinedEnqueue(commitCtx, pipelinedCommitter)
 			if enqueueErr != nil {
 				err = enqueueErr
+				if errors.Is(enqueueErr, ErrCommitIndeterminate) {
+					tx.abandon()
+					return
+				}
 				if rbErr := tx.Rollback(); rbErr != nil {
 					err = errors.Join(err, ErrRollbackFailed, rbErr)
 				}

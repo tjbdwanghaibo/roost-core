@@ -854,6 +854,9 @@ func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThre
 		}
 	}
 	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, wrappedRelease, mgr.completions, call)
+	if errors.Is(err, ErrCommitIndeterminate) {
+		mgr.Fence(err)
+	}
 	record()
 	return ret, err
 }

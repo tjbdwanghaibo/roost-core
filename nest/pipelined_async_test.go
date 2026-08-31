@@ -226,6 +226,9 @@ func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
 	if ent.dao.Value != 11 {
 		t.Fatalf("value=%d: indeterminate outcome must not roll back", ent.dao.Value)
 	}
+	if fence := Nest.FenceError(); !errors.Is(fence, ErrNestFenced) || !errors.Is(fence, ErrCommitIndeterminate) {
+		t.Fatalf("fence=%v", fence)
+	}
 }
 
 func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {

@@ -47,6 +47,7 @@ type completionPump struct {
 	queue chan pipelinedCompletion
 	pool  *worker.Pool[*completionTask]
 	done  chan struct{}
+	fence func(error)
 	// closeMu pairs the closed check with the queue send in submit, so a
 	// send can never race stop's close of the queue.
 	closeMu sync.RWMutex
@@ -207,6 +208,9 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 			// back — successors may already build on this state and WAL
 			// replay owns the final history.
 			tx.abandon()
+			if pump.fence != nil {
+				pump.fence(ticketErr)
+			}
 			obs.IncCounter("nest.pipelined.async_total", obs.Labels{"result": "indeterminate"}, 1)
 			if retChan != nil {
 				retChan <- ticketErr
