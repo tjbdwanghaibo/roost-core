@@ -18,6 +18,7 @@ var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
 // written back to the DAO.
 type PersistChange struct {
 	Mask       uint64
+	Delete     bool
 	Set        map[string]any
 	Unset      []string
 	FullFields map[string]struct{}
@@ -25,8 +26,9 @@ type PersistChange struct {
 
 func (change PersistChange) Clone() PersistChange {
 	cloned := PersistChange{
-		Mask:  change.Mask,
-		Unset: slices.Clone(change.Unset),
+		Mask:   change.Mask,
+		Delete: change.Delete,
+		Unset:  slices.Clone(change.Unset),
 	}
 	if change.Set != nil {
 		cloned.Set = make(map[string]any, len(change.Set))
@@ -175,6 +177,22 @@ func (tx *RollbackTx) MarkPersistFull(participant MutationParticipant, mask uint
 
 func MarkPersistFull(participant MutationParticipant, mask uint64, field string) error {
 	return CurrentRollbackTx().MarkPersistFull(participant, mask, field)
+}
+
+func (tx *RollbackTx) MarkPersistDelete(participant MutationParticipant) error {
+	change, err := tx.persistChange(participant, dataengine.AllFields)
+	if err != nil {
+		return err
+	}
+	change.Delete = true
+	change.Set = nil
+	change.Unset = nil
+	change.FullFields = nil
+	return nil
+}
+
+func MarkPersistDelete(participant MutationParticipant) error {
+	return CurrentRollbackTx().MarkPersistDelete(participant)
 }
 
 func (tx *RollbackTx) AddReceipt(receipt dataengine.Receipt) error {

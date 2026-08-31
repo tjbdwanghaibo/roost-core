@@ -10,6 +10,12 @@ type Tracker struct {
 	syncVersion atomic.Uint64
 }
 
+type TrackerSnapshot struct {
+	Version     uint64
+	SyncDirty   uint64
+	SyncVersion uint64
+}
+
 func (t *Tracker) Version() uint64 { return t.version.Load() }
 
 func (t *Tracker) SetVersion(version uint64) { t.version.Store(version) }
@@ -31,6 +37,8 @@ func (t *Tracker) SyncDirtyMask() uint64 { return t.syncDirty.Load() }
 
 func (t *Tracker) HasSyncDirty() bool { return t.SyncDirtyMask() != 0 }
 
+func (t *Tracker) Dirty() bool { return t.HasSyncDirty() }
+
 func (t *Tracker) TakeSyncDirty() uint64 { return t.syncDirty.Swap(0) }
 
 func (t *Tracker) CommitSync(_ uint64) {}
@@ -44,3 +52,25 @@ func (t *Tracker) IncSyncVersion() uint64 { return t.syncVersion.Add(1) }
 func (t *Tracker) SetSyncVersion(version uint64) { t.syncVersion.Store(version) }
 
 func (t *Tracker) SelfCleanSync() { t.syncDirty.Store(0) }
+
+func (t *Tracker) SelfClean() { t.SelfCleanSync() }
+
+func (t *Tracker) Snapshot() TrackerSnapshot {
+	if t == nil {
+		return TrackerSnapshot{}
+	}
+	return TrackerSnapshot{
+		Version:     t.version.Load(),
+		SyncDirty:   t.syncDirty.Load(),
+		SyncVersion: t.syncVersion.Load(),
+	}
+}
+
+func (t *Tracker) Restore(snapshot TrackerSnapshot) {
+	if t == nil {
+		return
+	}
+	t.version.Store(snapshot.Version)
+	t.syncDirty.Store(snapshot.SyncDirty)
+	t.syncVersion.Store(snapshot.SyncVersion)
+}

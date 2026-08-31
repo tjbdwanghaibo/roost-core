@@ -17,20 +17,37 @@ type fakeMutationParticipant struct {
 	acceptErr  error
 }
 
+type dataEngineTrackedRollbackDAO struct {
+	tracker dataengine.Tracker
+}
+
+func (d *dataEngineTrackedRollbackDAO) Id() int64                         { return 7 }
+func (d *dataEngineTrackedRollbackDAO) SetId(int64)                       {}
+func (d *dataEngineTrackedRollbackDAO) DbName() string                    { return "game" }
+func (d *dataEngineTrackedRollbackDAO) CollName() string                  { return "hero" }
+func (d *dataEngineTrackedRollbackDAO) Dirty() entity.IDirty              { return &d.tracker }
+func (d *dataEngineTrackedRollbackDAO) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *dataEngineTrackedRollbackDAO) DirtyTracker() *dataengine.Tracker { return &d.tracker }
+
 func (p *fakeMutationParticipant) PrepareMutation(change PersistChange) (dataengine.Mutation, error) {
 	p.prepared = append(p.prepared, change.Clone())
 	if p.prepareErr != nil {
 		return dataengine.Mutation{}, p.prepareErr
 	}
 	version := p.tracker.Version()
-	return dataengine.Mutation{
+	mutation := dataengine.Mutation{
 		Key:             dataengine.DocumentKey{Database: "game", Resource: "hero", ID: 7},
 		Kind:            dataengine.MutationPut,
 		ExpectedVersion: version,
 		NextVersion:     version + 1,
 		Mask:            change.Mask,
 		Data:            []byte{1},
-	}, nil
+	}
+	if change.Delete {
+		mutation.Kind = dataengine.MutationDelete
+		mutation.Data = nil
+	}
+	return mutation, nil
 }
 
 func (p *fakeMutationParticipant) AcceptMutation(mutation dataengine.Mutation) error {
@@ -229,5 +246,43 @@ func TestPipelinedAcceptFailureDoesNotRollbackAndFencesNest(t *testing.T) {
 	}
 	if fence := Nest.FenceError(); !errors.Is(fence, ErrNestFenced) || !errors.Is(fence, ErrCommitIndeterminate) {
 		t.Fatalf("fence=%v", fence)
+	}
+}
+
+func TestRollbackRestoresDataEngineTracker(t *testing.T) {
+	dao := &dataEngineTrackedRollbackDAO{}
+	dao.tracker.SetVersion(4)
+	dao.tracker.SetSyncVersion(6)
+	dao.tracker.MarkSync(1)
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.captureDao(dao); err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.tracker.AcceptVersion(4, 5); err != nil {
+		t.Fatal(err)
+	}
+	dao.tracker.IncSyncVersion()
+	dao.tracker.MarkSync(2)
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if dao.tracker.Version() != 4 || dao.tracker.SyncVersion() != 6 || dao.tracker.SyncDirtyMask() != 1 {
+		t.Fatalf("tracker not restored: %+v", dao.tracker.Snapshot())
+	}
+}
+
+func TestMarkPersistDeleteProducesDeleteMutation(t *testing.T) {
+	p := &fakeMutationParticipant{}
+	p.tracker.SetVersion(3)
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.MarkPersistDelete(p); err != nil {
+		t.Fatal(err)
+	}
+	record, err := tx.prepareCommitRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Mutations) != 1 || record.Mutations[0].Kind != dataengine.MutationDelete || record.Mutations[0].ExpectedVersion != 3 || record.Mutations[0].NextVersion != 4 {
+		t.Fatalf("delete mutation=%+v", record.Mutations)
 	}
 }

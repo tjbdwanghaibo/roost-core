@@ -44,3 +44,38 @@ func TestTrackerRollbackSyncRestoresMask(t *testing.T) {
 		t.Fatalf("sync dirty = %b, want 101", dirty)
 	}
 }
+
+func TestTrackerSnapshotRestoreCoversVersionAndSyncState(t *testing.T) {
+	var tracker Tracker
+	tracker.SetVersion(4)
+	tracker.SetSyncVersion(7)
+	tracker.MarkSync(0b011)
+	snapshot := tracker.Snapshot()
+
+	if err := tracker.AcceptVersion(4, 5); err != nil {
+		t.Fatal(err)
+	}
+	tracker.IncSyncVersion()
+	tracker.TakeSyncDirty()
+	tracker.MarkSync(0b100)
+	tracker.Restore(snapshot)
+
+	if tracker.Version() != 4 || tracker.SyncVersion() != 7 || tracker.SyncDirtyMask() != 0b011 {
+		t.Fatalf("restored tracker: version=%d syncVersion=%d dirty=%b", tracker.Version(), tracker.SyncVersion(), tracker.SyncDirtyMask())
+	}
+}
+
+func TestTrackerImplementsSyncOnlyDirtyContract(t *testing.T) {
+	var tracker Tracker
+	if tracker.Dirty() {
+		t.Fatal("new tracker is dirty")
+	}
+	tracker.MarkSync(1)
+	if !tracker.Dirty() {
+		t.Fatal("sync dirty was not reported")
+	}
+	tracker.SelfClean()
+	if tracker.Dirty() {
+		t.Fatal("SelfClean did not clear sync dirty")
+	}
+}

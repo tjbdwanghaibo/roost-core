@@ -760,6 +760,10 @@ type dirtyTrackerDao interface {
 	DirtyTracker() *checkpoint.DirtyTracker
 }
 
+type dataEngineTrackerDao interface {
+	DirtyTracker() *dataengine.Tracker
+}
+
 // RollbackSnapshotter captures all rollback-relevant state without consuming
 // persistence patch metadata.
 type RollbackSnapshotter interface {
@@ -774,10 +778,22 @@ func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
 		dirty = d.DirtyTracker()
 		dirtySnapshot = dirty.Snapshot()
 	}
+	var engineTracker *dataengine.Tracker
+	var engineSnapshot dataengine.TrackerSnapshot
+	if d, ok := dao.(dataEngineTrackerDao); ok {
+		engineTracker = d.DirtyTracker()
+		engineSnapshot = engineTracker.Snapshot()
+	}
 	if tx.policy == RollbackUndo {
 		if dirty != nil {
 			tx.DeferRollback(func() error {
 				dirty.Restore(dirtySnapshot)
+				return nil
+			})
+		}
+		if engineTracker != nil {
+			tx.DeferRollback(func() error {
+				engineTracker.Restore(engineSnapshot)
 				return nil
 			})
 		}
@@ -798,6 +814,9 @@ func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
 			}
 			if dirty != nil {
 				dirty.Restore(dirtySnapshot)
+			}
+			if engineTracker != nil {
+				engineTracker.Restore(engineSnapshot)
 			}
 			return nil
 		})
