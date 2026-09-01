@@ -33,7 +33,7 @@ func TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID(t *testing
 		t.Fatal(err)
 	}
 	store := newProjectorOutboxFake()
-	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: true, IdlePoll: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

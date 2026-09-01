@@ -180,7 +180,7 @@ func TestProjectorAckNotBlockedByPublisherFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newProjectorOutboxFake()
-	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: true, IdlePoll: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestProjectorFatalConflictInvokesFence(t *testing.T) {
 	store := newProjectorOutboxFake()
 	store.projectErr = ErrProjectionConflict
 	fenced := make(chan error, 1)
-	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour, OnFatal: func(err error) { fenced <- err }})
+	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: true, IdlePoll: time.Hour, OnFatal: func(err error) { fenced <- err }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestProjectorCommitSystemTicketCompletesAfterProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newProjectorOutboxFake()
-	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	projector, err := NewProjector(wal, store, ProjectorOptions{CloseWAL: true, IdlePoll: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestProjectorUsesAtomicBatchStoreForBacklog(t *testing.T) {
 		}
 	}
 	store := &projectorBatchStore{}
-	projector, err := NewProjector(w, store, ProjectorOptions{ReplayBatchRecords: 16})
+	projector, err := NewProjector(w, store, ProjectorOptions{ReplayBatchRecords: 16, CloseWAL: true})
 	if err != nil {
 		t.Fatal(err)
 	}
