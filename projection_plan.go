@@ -38,6 +38,28 @@ func saturatingSum(parts ...int) int {
 	return total
 }
 
+func saturatingMul(a, b int) int {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	if a > 0 {
+		if b > 0 && a > math.MaxInt/b {
+			return math.MaxInt
+		}
+		if b < 0 && b < math.MinInt/a {
+			return math.MinInt
+		}
+	} else {
+		if b > 0 && a < math.MinInt/b {
+			return math.MinInt
+		}
+		if b < 0 && a < math.MaxInt/b {
+			return math.MaxInt
+		}
+	}
+	return a * b
+}
+
 func projectionRecordLogicalBytes(record coredata.CommitRecord) int {
 	n := 64
 	n = saturatingAdd(n, len(record.Handler))
@@ -58,7 +80,7 @@ func projectionRecordLogicalBytes(record coredata.CommitRecord) int {
 			for _, snapshot := range m.Remote.Snapshots {
 				n = saturatingAdd(n, saturatingSum(64, len(snapshot.Data)))
 			}
-			n = saturatingAdd(n, len(m.Remote.Invalidations)*32)
+			n = saturatingAdd(n, saturatingMul(len(m.Remote.Invalidations), 32))
 		}
 	}
 	for _, e := range record.Effects {

@@ -1,6 +1,7 @@
 package dataengine
 
 import (
+	"math"
 	"testing"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
@@ -68,6 +69,50 @@ func TestPlanProjectionSegmentsBoundsOrdinaryBatches(t *testing.T) {
 	}
 	if len(segments) != 3 {
 		t.Fatalf("segments=%d", len(segments))
+	}
+}
+
+func TestPlanProjectionSegmentsHonorsMaxRecords(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false)}
+	segments, err := planProjectionSegments(records, projectionTestFences(records), 2, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 2 || len(segments[0].records) != 2 || len(segments[1].records) != 1 {
+		t.Fatalf("segments=%+v", segments)
+	}
+}
+
+func TestPlanProjectionSegmentsPreservesEveryRecordAndFence(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, true), projectorRecord(3, false), projectorRecord(4, false)}
+	fences := projectionTestFences(records)
+	segments, err := planProjectionSegments(records, fences, 1, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flat := 0
+	for _, segment := range segments {
+		if len(segment.records) != len(segment.fences) {
+			t.Fatalf("segment records=%d fences=%d", len(segment.records), len(segment.fences))
+		}
+		for i := range segment.records {
+			if segment.records[i].ID != records[flat].ID || segment.fences[i] != fences[flat] {
+				t.Fatalf("at flattened index %d: got record=%v fence=%v", flat, segment.records[i].ID, segment.fences[i])
+			}
+			flat++
+		}
+	}
+	if flat != len(records) {
+		t.Fatalf("flattened %d records, want %d", flat, len(records))
+	}
+}
+
+func TestProjectionPlanSaturatingMultiply(t *testing.T) {
+	if got := saturatingMul(3, 4); got != 12 {
+		t.Fatalf("saturatingMul(3,4)=%d", got)
+	}
+	if got := saturatingMul(math.MaxInt, 2); got != math.MaxInt {
+		t.Fatalf("positive overflow=%d", got)
 	}
 }
 
