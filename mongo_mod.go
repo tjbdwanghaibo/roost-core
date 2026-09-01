@@ -101,15 +101,29 @@ func (m *MongoMod) Start() error {
 }
 
 func (m *MongoMod) Stop() {
-	if m.client != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := m.client.Close(ctx); err != nil {
-			slog.Error("mongo mod: close failed", "err", err)
-			return
-		}
-		slog.Info("mongo mod: closed")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.StopWithContext(ctx); err != nil {
+		slog.Error("mongo mod: close failed", "err", err)
 	}
+}
+
+func (m *MongoMod) StopWithContext(ctx context.Context) error {
+	if m == nil || m.client == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := m.client.Close(ctx)
+	if err == nil {
+		slog.Info("mongo mod: closed")
+		m.client = nil
+	}
+	return err
 }
 
 // Client returns the IMongo instance. Must be called after Start().
@@ -118,3 +132,4 @@ func (m *MongoMod) Client() fmongo.IMongo {
 }
 
 var _ app.Mod = (*MongoMod)(nil)
+var _ app.ModStopperWithContext = (*MongoMod)(nil)
