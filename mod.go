@@ -69,7 +69,7 @@ func (m *Mod) DependsOn() []app.ModName {
 }
 
 func (m *Mod) OptionalDependsOn() []app.ModName {
-	return []app.ModName{mods.ModNestWAL, mods.ModDataEngine}
+	return []app.ModName{mods.ModDataEngine}
 }
 
 func (m *Mod) Init(cfg *viper.Viper) error {
