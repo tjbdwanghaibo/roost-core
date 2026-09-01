@@ -153,3 +153,24 @@ func TestAutoExtendLockSurfacesLostLease(t *testing.T) {
 		t.Fatalf("release after loss err=%v", err)
 	}
 }
+
+func TestAutoExtendLockRejectsInvalidConfiguration(t *testing.T) {
+	lock := NewAutoExtendLock(nil, 0, 0)
+	if ok, err := lock.Acquire(context.Background()); err == nil || ok {
+		t.Fatalf("invalid lock acquired: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAutoExtendLockRejectsConcurrentAcquire(t *testing.T) {
+	inner := &fakeDistLock{}
+	lock := NewAutoExtendLock(inner, time.Second, 100*time.Millisecond)
+	if ok, err := lock.Acquire(context.Background()); err != nil || !ok {
+		t.Fatalf("first acquire: ok=%v err=%v", ok, err)
+	}
+	if ok, err := lock.Acquire(context.Background()); !errors.Is(err, ErrDistLockAlreadyActive) || ok {
+		t.Fatalf("second acquire: ok=%v err=%v", ok, err)
+	}
+	if err := lock.Release(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -3,7 +3,7 @@ package redis
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -49,40 +49,93 @@ func newDistLockFactory(rdb goredis.UniversalClient) *distLockFactory {
 }
 
 func (f *distLockFactory) NewLock(key string, ttl time.Duration) fredis.IDistLock {
-	return &distLock{
-		rdb:   f.rdb,
-		key:   key,
-		ttl:   ttl,
-		value: generateLockValue(),
+	if f == nil {
+		return &distLock{key: key, ttl: ttl}
 	}
+	return &distLock{rdb: f.rdb, key: key, ttl: ttl}
 }
 
 var _ fredis.IDistLockFactory = (*distLockFactory)(nil)
 
 // distLock implements fredis.IDistLock.
 type distLock struct {
-	rdb   goredis.UniversalClient
-	key   string
-	ttl   time.Duration
-	value string // unique value to identify lock owner
+	rdb goredis.UniversalClient
+	key string
+	ttl time.Duration
+
+	mu    sync.Mutex
+	value string // unique per-acquisition owner identity
+	state distLockState
 }
 
+type distLockState uint8
+
+const (
+	distLockIdle distLockState = iota
+	distLockAcquired
+	distLockUncertain
+)
+
+var (
+	// ErrDistLockConfig reports a nil client, empty key or invalid TTL.
+	ErrDistLockConfig = errors.New("redis: invalid distributed lock configuration")
+	// ErrDistLockAlreadyActive reports a repeated Acquire on one active object.
+	ErrDistLockAlreadyActive = errors.New("redis: distributed lock already active")
+	// ErrDistLockStateUncertain requires a value-guarded Release before reuse.
+	ErrDistLockStateUncertain = errors.New("redis: distributed lock ownership is uncertain; call Release to reconcile")
+)
+
 func (l *distLock) Acquire(ctx context.Context) (bool, error) {
-	ok, err := l.rdb.SetNX(ctx, l.key, l.value, l.ttl).Result()
+	if l == nil || l.rdb == nil || l.key == "" || l.ttl < time.Millisecond {
+		return false, ErrDistLockConfig
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch l.state {
+	case distLockAcquired:
+		return false, ErrDistLockAlreadyActive
+	case distLockUncertain:
+		return false, ErrDistLockStateUncertain
+	}
+	value := generateLockValue()
+	ok, err := l.rdb.SetNX(ctx, l.key, value, l.ttl).Result()
 	if err != nil {
+		// SetNX may have reached Redis even when the reply is lost. Preserve the
+		// token so Release can reconcile with a value-guarded delete.
+		l.value = value
+		l.state = distLockUncertain
 		return false, err
 	}
 	if !ok {
 		return false, nil
 	}
+	l.value = value
+	l.state = distLockAcquired
 	return true, nil
 }
 
 func (l *distLock) Release(ctx context.Context) error {
+	if l == nil || l.rdb == nil {
+		return ErrDistLockConfig
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state == distLockIdle || l.value == "" {
+		return fredis.ErrLockNotHeld
+	}
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
+		l.state = distLockUncertain
 		return err
 	}
+	l.state = distLockIdle
+	l.value = ""
 	if result == 0 {
 		return fredis.ErrLockNotHeld
 	}
@@ -90,19 +143,35 @@ func (l *distLock) Release(ctx context.Context) error {
 }
 
 func (l *distLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) {
+	if l == nil || l.rdb == nil || ttl < time.Millisecond {
+		return false, ErrDistLockConfig
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state == distLockIdle || l.value == "" {
+		return false, fredis.ErrLockNotHeld
+	}
 	result, err := l.rdb.Eval(ctx, extendLockScript, []string{l.key}, l.value, ttl.Milliseconds()).Int64()
 	if err != nil {
+		l.state = distLockUncertain
 		return false, err
 	}
-	return result == 1, nil
+	if result != 1 {
+		l.state = distLockIdle
+		l.value = ""
+		return false, nil
+	}
+	l.state = distLockAcquired
+	return true, nil
 }
 
 var _ fredis.IDistLock = (*distLock)(nil)
 
 func generateLockValue() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	return rand.Text()
 }
 
 // AutoExtendLock wraps an IDistLock with a keep-alive watchdog: after a
@@ -118,26 +187,52 @@ type AutoExtendLock struct {
 	inner    fredis.IDistLock
 	ttl      time.Duration
 	interval time.Duration
+	opMu     sync.Mutex
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	done    chan struct{}
 	lostErr error
+	initErr error
 }
 
 // NewAutoExtendLock wraps lock, which must have been created with the given
 // ttl. extendInterval <= 0 defaults to ttl/3.
 func NewAutoExtendLock(lock fredis.IDistLock, ttl time.Duration, extendInterval time.Duration) *AutoExtendLock {
+	var initErr error
+	if lock == nil {
+		initErr = errors.Join(initErr, fmt.Errorf("redis: auto extend lock is nil"))
+	}
+	if ttl < time.Millisecond {
+		initErr = errors.Join(initErr, fmt.Errorf("redis: auto extend TTL must be at least 1ms"))
+	}
 	if extendInterval <= 0 {
 		extendInterval = ttl / 3
 	}
 	if extendInterval <= 0 {
 		extendInterval = time.Second
 	}
-	return &AutoExtendLock{inner: lock, ttl: ttl, interval: extendInterval}
+	if ttl >= time.Millisecond && extendInterval >= ttl {
+		initErr = errors.Join(initErr, fmt.Errorf("redis: auto extend interval must be shorter than TTL"))
+	}
+	return &AutoExtendLock{inner: lock, ttl: ttl, interval: extendInterval, initErr: initErr}
 }
 
 func (l *AutoExtendLock) Acquire(ctx context.Context) (bool, error) {
+	if l == nil || l.initErr != nil {
+		if l == nil {
+			return false, fmt.Errorf("redis: auto extend lock is nil")
+		}
+		return false, l.initErr
+	}
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
+	l.mu.Lock()
+	if l.cancel != nil {
+		l.mu.Unlock()
+		return false, ErrDistLockAlreadyActive
+	}
+	l.mu.Unlock()
 	ok, err := l.inner.Acquire(ctx)
 	if err != nil || !ok {
 		return ok, err
@@ -208,6 +303,14 @@ func (l *AutoExtendLock) Err() error {
 }
 
 func (l *AutoExtendLock) Release(ctx context.Context) error {
+	if l == nil || l.initErr != nil {
+		if l == nil {
+			return fmt.Errorf("redis: auto extend lock is nil")
+		}
+		return l.initErr
+	}
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
 	l.mu.Lock()
 	cancel, done := l.cancel, l.done
 	l.cancel, l.done = nil, nil
@@ -220,6 +323,14 @@ func (l *AutoExtendLock) Release(ctx context.Context) error {
 }
 
 func (l *AutoExtendLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) {
+	if l == nil || l.initErr != nil {
+		if l == nil {
+			return false, fmt.Errorf("redis: auto extend lock is nil")
+		}
+		return false, l.initErr
+	}
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
 	return l.inner.Extend(ctx, ttl)
 }
 
