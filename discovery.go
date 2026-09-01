@@ -375,6 +375,8 @@ type serviceWatcher struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	once    sync.Once
+	errMu   sync.RWMutex
+	err     error
 }
 
 func newServiceWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.CancelFunc) *serviceWatcher {
@@ -399,6 +401,28 @@ func (sw *serviceWatcher) Close() error {
 	return nil
 }
 
+func (sw *serviceWatcher) Done() <-chan struct{} { return sw.done }
+
+func (sw *serviceWatcher) Err() error {
+	if sw == nil {
+		return nil
+	}
+	sw.errMu.RLock()
+	defer sw.errMu.RUnlock()
+	return sw.err
+}
+
+func (sw *serviceWatcher) setErr(err error) {
+	if sw == nil || err == nil {
+		return
+	}
+	sw.errMu.Lock()
+	if sw.err == nil {
+		sw.err = err
+	}
+	sw.errMu.Unlock()
+}
+
 func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 	defer close(sw.done)
 	defer close(sw.eventCh)
@@ -408,6 +432,15 @@ func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 			return
 		case resp, ok := <-wch:
 			if !ok {
+				if ctx.Err() == nil {
+					sw.setErr(errors.New("etcd discovery: watch channel closed unexpectedly"))
+				}
+				return
+			}
+			if err := resp.Err(); err != nil {
+				if ctx.Err() == nil {
+					sw.setErr(fmt.Errorf("etcd discovery: watch failed: %w", err))
+				}
 				return
 			}
 			for _, ev := range resp.Events {

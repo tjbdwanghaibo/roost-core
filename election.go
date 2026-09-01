@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
 	"sync"
@@ -77,8 +78,10 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 		return fmt.Errorf("etcd election: campaign already active")
 	}
 	e.campaign = true
-	e.leaderCh = make(chan struct{})
-	e.closed = false
+	if e.closed {
+		e.leaderCh = make(chan struct{})
+		e.closed = false
+	}
 	e.mu.Unlock()
 
 	create := e.create
@@ -155,7 +158,7 @@ func (e *election) Leader(ctx context.Context) (string, error) {
 	}
 	resp, err := elect.Leader(ctx)
 	if err != nil {
-		return "", fetcd.ErrElectionNoLeader
+		return "", errors.Join(fetcd.ErrElectionNoLeader, err)
 	}
 	if len(resp.Kvs) == 0 {
 		return "", fetcd.ErrElectionNoLeader

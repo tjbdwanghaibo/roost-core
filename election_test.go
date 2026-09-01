@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,37 @@ import (
 type fakeElectionSession struct {
 	done chan struct{}
 	once sync.Once
+}
+
+func TestElectionFirstCampaignKeepsPreCampaignLeaderChannel(t *testing.T) {
+	e, sessions := newTestElection()
+	before := e.LeaderChan()
+	if err := e.Campaign(context.Background(), "server-1"); err != nil {
+		t.Fatal(err)
+	}
+	if before != e.LeaderChan() {
+		t.Fatal("first campaign replaced the channel observed by an early waiter")
+	}
+	_ = (*sessions)[0].Close()
+	select {
+	case <-before:
+	case <-time.After(time.Second):
+		t.Fatal("pre-campaign waiter was not notified of leadership loss")
+	}
+}
+
+type failingLeaderBackend struct{ fakeElectionBackend }
+
+func (f *failingLeaderBackend) Leader(context.Context) (*clientv3.GetResponse, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestElectionLeaderPreservesBackendError(t *testing.T) {
+	e := &election{elect: &failingLeaderBackend{}}
+	_, err := e.Leader(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Leader error lost backend cause: %v", err)
+	}
 }
 
 func newFakeElectionSession() *fakeElectionSession {
