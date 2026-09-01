@@ -470,3 +470,24 @@ func TestProjectorStopsAfterSegmentAckFailure(t *testing.T) {
 	}
 	assertWALReplayCount(t, wal, 3)
 }
+
+func TestProjectorAckFailureOverridesHeldReplaySentinel(t *testing.T) {
+	records := []coredata.CommitRecord{
+		projectorRecord(1, false), projectorRecord(2, false),
+		projectorRecord(3, true), projectorRecord(4, false),
+	}
+	store := &recordingSegmentStore{}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	projector.admit(records[2].ID)
+	ackErr := errors.New("checkpoint unavailable behind held transaction")
+	projector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, ackErr) || errors.Is(err, errProjectorTransactionHeld) || processed != 2 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if !slices.Equal(store.events, []string{"batch:2"}) {
+		t.Fatalf("events=%v", store.events)
+	}
+	assertWALReplayCount(t, wal, len(records))
+}

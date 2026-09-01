@@ -289,7 +289,11 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 		projector.projected.Add(uint64(len(segment.records)))
 		processed += len(segment.records)
 		if ackErr := projector.ack(ctx, segment.fences[len(segment.fences)-1]); ackErr != nil {
-			return processed, errors.Join(replayErr, ackErr)
+			ackReplayErr := replayErr
+			if ackReplayErr == errProjectorTransactionHeld || ackReplayErr == errProjectorBatchComplete {
+				ackReplayErr = nil
+			}
+			return processed, errors.Join(ackReplayErr, ackErr)
 		}
 		projector.acknowledge(processedIDs)
 	}
