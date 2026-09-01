@@ -3,6 +3,8 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -44,6 +46,24 @@ type projectorBatchStore struct {
 	projectCalls int
 	batchCalls   int
 	batchRecords int
+}
+
+type recordingSegmentStore struct {
+	events []string
+	failID coredata.TransactionID
+}
+
+func (store *recordingSegmentStore) Project(_ context.Context, record coredata.CommitRecord) error {
+	store.events = append(store.events, "project:"+record.ID.String())
+	if record.ID == store.failID {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func (store *recordingSegmentStore) ProjectBatch(_ context.Context, records []coredata.CommitRecord) error {
+	store.events = append(store.events, fmt.Sprintf("batch:%d", len(records)))
+	return nil
 }
 
 func (store *projectorBatchStore) Project(context.Context, coredata.CommitRecord) error {
@@ -285,4 +305,168 @@ func TestProjectorUsesAtomicBatchStoreForBacklog(t *testing.T) {
 	if store.batchCalls != 1 || store.batchRecords != 2 || store.projectCalls != 0 {
 		t.Fatalf("batch_calls=%d batch_records=%d project_calls=%d", store.batchCalls, store.batchRecords, store.projectCalls)
 	}
+}
+
+func TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure(t *testing.T) {
+	options := nestwal.DefaultOptions(t.TempDir())
+	options.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wal.Close(context.Background())
+	records := []coredata.CommitRecord{
+		projectorRecord(1, false), projectorRecord(2, false),
+		projectorRecord(3, true), projectorRecord(4, false),
+	}
+	store := &recordingSegmentStore{failID: records[2].ID}
+	projector, err := NewProjector(wal, store, ProjectorOptions{
+		ReplayBatchRecords: 16, ReplayBatchBytes: 4 << 20, CloseWAL: false, IdlePoll: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.cancel()
+	<-projector.done
+	t.Cleanup(func() { _ = projector.Close(context.Background()) })
+	for i := range records {
+		if _, err := wal.Append(context.Background(), records[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) || processed != 2 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	var remaining []coredata.TransactionID
+	if err := wal.Replay(context.Background(), func(_ corenest.CommitFence, record coredata.CommitRecord) error {
+		remaining = append(remaining, record.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []coredata.TransactionID{records[2].ID, records[3].ID}
+	if !slices.Equal(remaining, want) {
+		t.Fatalf("remaining=%v want=%v", remaining, want)
+	}
+	if !slices.Equal(store.events, []string{"batch:2", "project:" + records[2].ID.String()}) {
+		t.Fatalf("events=%v", store.events)
+	}
+}
+
+func stoppedProjectorWithRecords(t *testing.T, store ProjectionStore, records []coredata.CommitRecord, batchBytes int) (*Projector, *nestwal.WAL) {
+	t.Helper()
+	options := nestwal.DefaultOptions(t.TempDir())
+	options.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wal.Close(context.Background()) })
+	projector, err := NewProjector(wal, store, ProjectorOptions{
+		ReplayBatchRecords: 16, ReplayBatchBytes: batchBytes, CloseWAL: false, IdlePoll: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.cancel()
+	<-projector.done
+	t.Cleanup(func() { _ = projector.Close(context.Background()) })
+	for i := range records {
+		if _, err := wal.Append(context.Background(), records[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return projector, wal
+}
+
+func assertWALReplayCount(t *testing.T, wal *nestwal.WAL, want int) {
+	t.Helper()
+	got := 0
+	if err := wal.Replay(context.Background(), func(corenest.CommitFence, coredata.CommitRecord) error {
+		got++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("replay records=%d want=%d", got, want)
+	}
+}
+
+func TestProjectorKeepsSingleOrdinarySegmentsOnProjectFastPath(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, true), projectorRecord(3, false)}
+	store := &recordingSegmentStore{}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	processed, err := projector.replayPass(context.Background())
+	if err != nil || processed != 3 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	want := []string{
+		"project:" + records[0].ID.String(), "project:" + records[1].ID.String(), "project:" + records[2].ID.String(),
+	}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v want=%v", store.events, want)
+	}
+	assertWALReplayCount(t, wal, 0)
+}
+
+func TestProjectorSplitsOrdinaryBatchAtLogicalByteLimit(t *testing.T) {
+	records := []coredata.CommitRecord{
+		projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false), projectorRecord(4, false),
+	}
+	store := &recordingSegmentStore{}
+	limit := projectionRecordLogicalBytes(records[0]) + projectionRecordLogicalBytes(records[1])
+	projector, wal := stoppedProjectorWithRecords(t, store, records, limit)
+	processed, err := projector.replayPass(context.Background())
+	if err != nil || processed != 4 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if !slices.Equal(store.events, []string{"batch:2", "batch:2"}) {
+		t.Fatalf("events=%v", store.events)
+	}
+	assertWALReplayCount(t, wal, 0)
+}
+
+func TestProjectorStopsAfterSegmentAckFailure(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, true)}
+	store := &recordingSegmentStore{}
+	projector, wal := stoppedProjectorWithRecords(t, store, nil, 4<<20)
+	tickets := make([]coredata.ProjectionTicket, 0, len(records))
+	for i := range records {
+		ticket, err := projector.CommitSystem(context.Background(), records[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	ackErr := errors.New("checkpoint unavailable")
+	projector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, ackErr) || processed != 2 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if !slices.Equal(store.events, []string{"batch:2"}) {
+		t.Fatalf("events=%v", store.events)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-tickets[i].Done():
+			if err := tickets[i].Err(); err != nil {
+				t.Fatalf("ticket %d err=%v", i, err)
+			}
+		default:
+			t.Fatalf("ticket %d did not complete after Mongo success", i)
+		}
+	}
+	select {
+	case <-tickets[2].Done():
+		t.Fatal("later segment ticket completed after checkpoint failure")
+	default:
+	}
+	if stats := projector.Stats(); stats.Projected != 2 || stats.WALUnacked != 3 {
+		t.Fatalf("stats after checkpoint failure=%+v", stats)
+	}
+	assertWALReplayCount(t, wal, 3)
 }

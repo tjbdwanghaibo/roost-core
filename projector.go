@@ -33,6 +33,7 @@ type ProjectorOptions struct {
 	RetryMax           time.Duration
 	IdlePoll           time.Duration
 	ReplayBatchRecords int
+	ReplayBatchBytes   int
 	CloseWAL           bool
 	OnFatal            func(error)
 }
@@ -40,7 +41,7 @@ type ProjectorOptions struct {
 func DefaultProjectorOptions() ProjectorOptions {
 	return ProjectorOptions{
 		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
-		IdlePoll: time.Second, ReplayBatchRecords: 256, CloseWAL: true,
+		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, CloseWAL: true,
 	}
 }
 
@@ -60,6 +61,7 @@ type Projector struct {
 	wal   *nestwal.WAL
 	store ProjectionStore
 	opts  ProjectorOptions
+	ack   func(context.Context, corenest.CommitFence) error
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -106,9 +108,12 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 	if options.ReplayBatchRecords <= 0 {
 		options.ReplayBatchRecords = defaults.ReplayBatchRecords
 	}
+	if options.ReplayBatchBytes <= 0 {
+		options.ReplayBatchBytes = defaults.ReplayBatchBytes
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	projector := &Projector{
-		wal: wal, store: store, opts: options, ctx: ctx, cancel: cancel,
+		wal: wal, store: store, opts: options, ack: wal.Ack, ctx: ctx, cancel: cancel,
 		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
 		tickets: make(map[coredata.TransactionID]*projectionTicket),
 	}
@@ -259,45 +264,51 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 		}
 		return 0, replayErr
 	}
-	if err := projector.projectRecords(ctx, records); err != nil {
-		if projector.isFatalProjection(err) {
-			for i := range records {
-				projector.completeProjection(records[i].ID, err)
-			}
-		}
-		return 0, fmt.Errorf("dataengine projector: batch first_transaction=%s records=%d: %w", records[0].ID.String(), len(records), err)
-	}
-	processedIDs := make([]coredata.TransactionID, len(records))
-	for i := range records {
-		processedIDs[i] = records[i].ID
-		projector.completeProjection(records[i].ID, nil)
-	}
-	projector.projected.Add(uint64(len(records)))
-	if ackErr := projector.wal.Ack(ctx, fences[len(fences)-1]); ackErr != nil {
-		return len(records), errors.Join(replayErr, ackErr)
-	}
-	projector.acknowledge(processedIDs)
 	if errors.Is(replayErr, errProjectorBatchComplete) {
 		replayErr = nil
 	}
-	return len(records), replayErr
+	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
+	if err != nil {
+		return 0, err
+	}
+	processed := 0
+	for _, segment := range segments {
+		if err := projector.projectSegment(ctx, segment); err != nil {
+			if projector.isFatalProjection(err) {
+				for i := range records {
+					projector.completeProjection(records[i].ID, err)
+				}
+			}
+			return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", segment.records[0].ID.String(), len(segment.records), err)
+		}
+		processedIDs := make([]coredata.TransactionID, len(segment.records))
+		for i := range segment.records {
+			processedIDs[i] = segment.records[i].ID
+			projector.completeProjection(segment.records[i].ID, nil)
+		}
+		projector.projected.Add(uint64(len(segment.records)))
+		processed += len(segment.records)
+		if ackErr := projector.ack(ctx, segment.fences[len(segment.fences)-1]); ackErr != nil {
+			return processed, errors.Join(replayErr, ackErr)
+		}
+		projector.acknowledge(processedIDs)
+	}
+	return processed, replayErr
 }
 
-func (projector *Projector) projectRecords(ctx context.Context, records []corenest.CommitRecord) error {
-	if len(records) > 1 {
-		if store, ok := projector.store.(BatchProjectionStore); ok {
-			err := store.ProjectBatch(ctx, records)
-			if err == nil {
-				return nil
-			}
-			if !errors.Is(err, errProjectionBatchUnsupported) {
-				return err
-			}
+func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) error {
+	if len(segment.records) == 1 {
+		if err := projector.store.Project(ctx, segment.records[0]); err != nil {
+			return fmt.Errorf("transaction %s: %w", segment.records[0].ID.String(), err)
 		}
+		return nil
 	}
-	for i := range records {
-		if err := projector.store.Project(ctx, records[i]); err != nil {
-			return fmt.Errorf("transaction %s: %w", records[i].ID.String(), err)
+	if store, ok := projector.store.(BatchProjectionStore); ok {
+		return store.ProjectBatch(ctx, segment.records)
+	}
+	for i := range segment.records {
+		if err := projector.store.Project(ctx, segment.records[i]); err != nil {
+			return fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
 		}
 	}
 	return nil
