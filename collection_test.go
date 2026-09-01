@@ -51,3 +51,12 @@ func TestIndexConflictPolicyRequiresExplicitAutoRecreate(t *testing.T) {
 		t.Fatal("index conflict should recreate when model and migration policy both allow it")
 	}
 }
+
+func TestStringifyIDDoesNotExposeNilSentinel(t *testing.T) {
+	if got := stringifyID(nil); got != "" {
+		t.Fatalf("nil id=%q, want empty", got)
+	}
+	if got := stringifyID(42); got != "42" {
+		t.Fatalf("id=%q, want 42", got)
+	}
+}

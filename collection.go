@@ -32,7 +32,7 @@ func (c *collection) InsertOne(ctx context.Context, doc any) (string, error) {
 	if err != nil {
 		return "", wrapError(err)
 	}
-	return fmt.Sprintf("%v", result.InsertedID), nil
+	return stringifyID(result.InsertedID), nil
 }
 
 func (c *collection) InsertMany(ctx context.Context, docs []any) ([]string, error) {
@@ -42,7 +42,7 @@ func (c *collection) InsertMany(ctx context.Context, docs []any) ([]string, erro
 	}
 	ids := make([]string, len(result.InsertedIDs))
 	for i, id := range result.InsertedIDs {
-		ids[i] = fmt.Sprintf("%v", id)
+		ids[i] = stringifyID(id)
 	}
 	return ids, nil
 }
@@ -75,7 +75,7 @@ func (c *collection) Find(ctx context.Context, filter any, results any, opts ...
 	if err != nil {
 		return wrapError(err)
 	}
-	return cursor.All(ctx, results)
+	return wrapError(cursor.All(ctx, results))
 }
 
 func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
@@ -136,7 +136,7 @@ func (c *collection) ReplaceOne(ctx context.Context, filter any, replacement any
 		MatchedCount:  result.MatchedCount,
 		ModifiedCount: result.ModifiedCount,
 		UpsertedCount: result.UpsertedCount,
-		UpsertedID:    fmt.Sprintf("%v", result.UpsertedID),
+		UpsertedID:    stringifyID(result.UpsertedID),
 	}, nil
 }
 
@@ -185,7 +185,8 @@ func (c *collection) FindOneAndReplace(ctx context.Context, filter any, replacem
 // --- Count ---
 
 func (c *collection) CountDocuments(ctx context.Context, filter any) (int64, error) {
-	return c.coll.CountDocuments(ctx, filter)
+	count, err := c.coll.CountDocuments(ctx, filter)
+	return count, wrapError(err)
 }
 
 // --- Aggregate ---
@@ -193,9 +194,9 @@ func (c *collection) CountDocuments(ctx context.Context, filter any) (int64, err
 func (c *collection) Aggregate(ctx context.Context, pipeline any, results any) error {
 	cursor, err := c.coll.Aggregate(ctx, pipeline)
 	if err != nil {
-		return err
+		return wrapError(err)
 	}
-	return cursor.All(ctx, results)
+	return wrapError(cursor.All(ctx, results))
 }
 
 // --- Bulk ---
@@ -220,6 +221,8 @@ func (c *collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) 
 			writeModels[i] = wm
 		case fmongo.WriteModelDeleteOne:
 			writeModels[i] = mongo.NewDeleteOneModel().SetFilter(m.Filter)
+		default:
+			return nil, fmt.Errorf("mongo: unsupported bulk write model type %d at index %d", m.Type, i)
 		}
 	}
 
@@ -333,8 +336,15 @@ func convertUpdateResult(r *mongo.UpdateResult) *fmongo.UpdateResult {
 		MatchedCount:  r.MatchedCount,
 		ModifiedCount: r.ModifiedCount,
 		UpsertedCount: r.UpsertedCount,
-		UpsertedID:    fmt.Sprintf("%v", r.UpsertedID),
+		UpsertedID:    stringifyID(r.UpsertedID),
 	}
+}
+
+func stringifyID(id any) string {
+	if id == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", id)
 }
 
 func wrapError(err error) error {
