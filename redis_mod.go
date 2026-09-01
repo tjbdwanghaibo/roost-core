@@ -72,10 +72,10 @@ func (m *RedisMod) Provide(r *app.Registry) error {
 		return health.Result{Status: health.StatusOK, Message: "connected"}
 	}))
 
-	if err := r.Register(mods.ModRedis, fredis.IRedis(m.client)); err != nil {
-		return err
-	}
-	return r.Register(mods.ModRedisLock, fredis.IDistLockFactory(m.locker))
+	return mods.RegisterAll(r,
+		mods.Capability{Name: mods.ModRedis, Value: fredis.IRedis(m.client)},
+		mods.Capability{Name: mods.ModRedisLock, Value: fredis.IDistLockFactory(m.locker)},
+	)
 }
 
 func (m *RedisMod) Start() error {
@@ -90,8 +90,21 @@ func (m *RedisMod) Start() error {
 }
 
 func (m *RedisMod) Stop() {
-	if m.client != nil {
-		m.client.Close()
-		slog.Info("redis mod: closed")
+	if err := m.StopWithContext(context.Background()); err != nil {
+		slog.Error("redis mod: close failed", "err", err)
 	}
 }
+
+func (m *RedisMod) StopWithContext(_ context.Context) error {
+	if m == nil || m.client == nil {
+		return nil
+	}
+	err := m.client.Close()
+	if err == nil {
+		slog.Info("redis mod: closed")
+		m.client = nil
+	}
+	return err
+}
+
+var _ app.ModStopperWithContext = (*RedisMod)(nil)
