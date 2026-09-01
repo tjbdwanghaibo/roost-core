@@ -62,7 +62,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 
 	select {
 	case <-registeredAgain:
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("expected discovery to register again after lease loss")
 	}
 

@@ -138,10 +138,10 @@ func (m *EtcdMod) Provide(r *app.Registry) error {
 		return health.Result{Status: health.StatusOK, Message: "connected"}
 	}))
 
-	return errors.Join(
-		r.Register(mods.ModEtcd, fetcd.IEtcd(m.client)),
-		r.Register(mods.ModEtcdDiscov, fetcd.IDiscovery(m.discovery)),
-		r.Register(mods.ModEtcdElection, fetcd.IElectionFactory(m.election)),
+	return mods.RegisterAll(r,
+		mods.Capability{Name: mods.ModEtcd, Value: fetcd.IEtcd(m.client)},
+		mods.Capability{Name: mods.ModEtcdDiscov, Value: fetcd.IDiscovery(m.discovery)},
+		mods.Capability{Name: mods.ModEtcdElection, Value: fetcd.IElectionFactory(m.election)},
 	)
 }
 
@@ -157,7 +157,7 @@ func (m *EtcdMod) Start() error {
 
 	// Auto-register service
 	if m.serviceInfo.ServiceType != "" {
-		if err := m.discovery.Register(context.Background(), m.serviceInfo); err != nil {
+		if err := m.discovery.Register(ctx, m.serviceInfo); err != nil {
 			return err
 		}
 	}
