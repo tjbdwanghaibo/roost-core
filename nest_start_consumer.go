@@ -10,6 +10,7 @@ import (
 
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
+	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
 	"github.com/tjbdwanghaibo/cube-kit/nestwal"
 )
 
@@ -87,21 +88,21 @@ func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config Ne
 
 func handleNestStart(ctx context.Context, message *fnats.JetStreamMsg, starter Starter) error {
 	if message == nil || starter == nil {
-		return coresaga.ErrInvalidRecord
+		return kitnats.Permanent(coresaga.ErrInvalidRecord)
 	}
 	if len(message.Data) > maxWireEnvelopeBytes {
-		return coresaga.ErrInvalidRecord
+		return kitnats.Permanent(coresaga.ErrInvalidRecord)
 	}
 	var envelope nestwal.EffectEnvelope
 	if err := json.Unmarshal(message.Data, &envelope); err != nil {
-		return err
+		return kitnats.Permanent(err)
 	}
 	if envelope.EffectID == "" || envelope.Topic != coresaga.StartEffectTopic {
-		return coresaga.ErrInvalidRecord
+		return kitnats.Permanent(coresaga.ErrInvalidRecord)
 	}
 	request, err := coresaga.DecodeStartEffect(envelope.Payload)
 	if err != nil {
-		return err
+		return kitnats.Permanent(err)
 	}
 	_, err = starter.StartSaga(ctx, request)
 	return err

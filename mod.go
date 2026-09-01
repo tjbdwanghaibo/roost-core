@@ -17,6 +17,8 @@ import (
 )
 
 type Mod struct {
+	lifecycleMu sync.Mutex
+	stateMu     sync.RWMutex
 	definitions []coresaga.Definition
 	config      modConfig
 	store       *MongoStore
@@ -158,6 +160,11 @@ func (m *Mod) Provide(registry *app.Registry) error {
 }
 
 func (m *Mod) Start() error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.running.Load() {
+		return nil
+	}
 	if m.engine == nil || m.store == nil || m.transport == nil {
 		return fmt.Errorf("saga mod: not provided")
 	}
@@ -182,11 +189,17 @@ func (m *Mod) Start() error {
 		runCancel()
 		return fmt.Errorf("saga mod: subscribe Nest starts: %w", err)
 	}
+	m.stateMu.Lock()
 	m.cancel, m.resultSub, m.startSub, m.done = runCancel, sub, startSub, make(chan struct{})
+	done := m.done
+	m.stateMu.Unlock()
+	m.errMu.Lock()
+	m.runErr = nil
+	m.errMu.Unlock()
 	m.running.Store(true)
 	go func() {
 		defer m.running.Store(false)
-		defer close(m.done)
+		defer close(done)
 		err := m.engine.Run(runCtx)
 		if err != nil && runCtx.Err() == nil {
 			m.errMu.Lock()
@@ -199,23 +212,62 @@ func (m *Mod) Start() error {
 
 func (m *Mod) Stop() { _ = m.StopWithContext(context.Background()) }
 func (m *Mod) StopWithContext(ctx context.Context) error {
-	if m.resultSub != nil {
-		m.resultSub.Drain()
-		m.resultSub = nil
+	if m == nil {
+		return nil
 	}
-	if m.startSub != nil {
-		m.startSub.Drain()
-		m.startSub = nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if m.cancel != nil {
-		m.cancel()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	m.stateMu.RLock()
+	resultSub, startSub, runCancel, done := m.resultSub, m.startSub, m.cancel, m.done
+	m.stateMu.RUnlock()
+	subs := []fnats.IJetStreamSubscription{resultSub, startSub}
+	if err := drainSubscriptions(ctx, subs); err != nil {
+		for _, sub := range subs {
+			if sub != nil {
+				sub.Stop()
+			}
+		}
+		if runCancel != nil {
+			runCancel()
+		}
+		return err
+	}
+	m.stateMu.Lock()
+	m.resultSub, m.startSub, m.cancel = nil, nil, nil
+	m.stateMu.Unlock()
+	if runCancel != nil {
+		runCancel()
 	}
 	if m.engine != nil {
-		_ = m.engine.Stop(ctx)
+		if err := m.engine.Stop(ctx); err != nil {
+			return err
+		}
 	}
-	if m.done != nil {
+	if done != nil {
 		select {
-		case <-m.done:
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func drainSubscriptions(ctx context.Context, subscriptions []fnats.IJetStreamSubscription) error {
+	for _, sub := range subscriptions {
+		if sub != nil {
+			sub.Drain()
+		}
+	}
+	for _, sub := range subscriptions {
+		if sub == nil {
+			continue
+		}
+		select {
+		case <-sub.Closed():
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -229,7 +281,10 @@ func (m *Mod) checkHealth(ctx context.Context) health.Result {
 	if m.engine == nil || !m.running.Load() {
 		return health.Result{Status: health.StatusFail, Message: "not initialized"}
 	}
-	if subscriptionClosed(m.resultSub) || subscriptionClosed(m.startSub) {
+	m.stateMu.RLock()
+	resultSub, startSub := m.resultSub, m.startSub
+	m.stateMu.RUnlock()
+	if subscriptionClosed(resultSub) || subscriptionClosed(startSub) {
 		return health.Result{Status: health.StatusFail, Message: "durable consumer stopped"}
 	}
 	m.errMu.RLock()

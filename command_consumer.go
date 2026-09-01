@@ -13,6 +13,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
+	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -209,23 +210,23 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 	subject := transport.prefix + ".command." + strings.Trim(config.Topic, ".")
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		if message == nil {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		if len(message.Data) > maxWireEnvelopeBytes {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		var envelope commandEnvelope
 		if err := json.Unmarshal(message.Data, &envelope); err != nil {
 			logConsumerError("step decode", message, err)
-			return err
+			return kitnats.Permanent(err)
 		}
 		if envelope.Version != coresaga.WireVersion {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		command := envelope.Command
 		if err := command.Validate(); err != nil {
 			logConsumerError("step command", message, err)
-			return err
+			return kitnats.Permanent(err)
 		}
 		if !time.Now().Before(command.DeadlineAt) {
 			// The coordinator owns timeout/retry. Do not begin new business work,

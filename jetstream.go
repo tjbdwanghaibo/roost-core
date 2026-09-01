@@ -9,6 +9,7 @@ import (
 
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
+	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
 )
 
 const maxWireEnvelopeBytes = 8 << 20
@@ -107,20 +108,23 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 	}
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		if message == nil {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		if len(message.Data) > maxWireEnvelopeBytes {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		var envelope completionEnvelope
 		if err := json.Unmarshal(message.Data, &envelope); err != nil {
 			logConsumerError("completion decode", message, err)
-			return err
+			return kitnats.Permanent(err)
 		}
 		if envelope.Version != coresaga.WireVersion {
-			return coresaga.ErrInvalidRecord
+			return kitnats.Permanent(coresaga.ErrInvalidRecord)
 		}
 		completion := envelope.Completion
+		if err := completion.Validate(); err != nil {
+			return kitnats.Permanent(err)
+		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.ProcessTimeout)
 		_, err := engine.Complete(processCtx, completion)
 		cancel()
