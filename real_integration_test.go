@@ -3,11 +3,14 @@
 package dataengine
 
 import (
+	"encoding/binary"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
+	corenest "github.com/tjbdwanghaibo/cube-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -173,4 +176,43 @@ func TestRealIntegrationDeadlineIsBounded(t *testing.T) {
 	if !ok || time.Until(deadline) > 31*time.Second {
 		t.Fatalf("integration context deadline=%v ok=%v", deadline, ok)
 	}
+}
+
+func TestRealSagaReceiptTransactionThroughput(t *testing.T) {
+	fx := newRealFixture(t)
+	defer fx.close()
+
+	const records = 1_000
+	started := time.Now()
+	for index := 0; index < records; index++ {
+		var id coredata.TransactionID
+		binary.BigEndian.PutUint64(id[8:], uint64(index+1))
+		var mutation coredata.Mutation
+		if index == 0 {
+			mutation = realPut(t, fx.database, "saga_entities", 701, 0, 1, bson.M{"step": int64(index)})
+		} else {
+			set, err := bson.Marshal(bson.D{{Key: "step", Value: int64(index)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation = coredata.Mutation{
+				Key:  coredata.DocumentKey{Database: fx.database, Resource: "saga_entities", ID: 701},
+				Kind: coredata.MutationPatch, ExpectedVersion: uint64(index), NextVersion: uint64(index + 1),
+				Mask: 1, Schema: 1, Codec: "bson-v2", Patch: coredata.FieldPatch{SetBSON: set},
+			}
+		}
+		record := coredata.CommitRecord{
+			ID: id, Handler: "saga-throughput", CreatedAt: time.Now().UnixNano(),
+			Durability: corenest.DurabilityStrict, Mutations: []coredata.Mutation{mutation},
+			Receipts: []coredata.Receipt{{Namespace: "saga-throughput", ID: strconv.Itoa(index + 1)}},
+		}
+		if err := fx.runtime.Store.Project(fx.context(), record); err != nil {
+			t.Fatalf("project Saga transaction %d: %v", index, err)
+		}
+	}
+	elapsed := time.Since(started)
+	assertDocumentVersion(t, fx, "saga_entities", 701, records)
+	assertCollectionCount(t, fx, transactionCollection, records)
+	assertCollectionCount(t, fx, receiptCollection, records)
+	t.Logf("Saga receipt transactions: %s (%.0f records/s)", elapsed, float64(records)/elapsed.Seconds())
 }

@@ -24,10 +24,11 @@ const (
 )
 
 var (
-	ErrProjectionConflict  = errors.New("dataengine mongo: fatal projection version conflict")
-	ErrTransactionIdentity = errors.New("dataengine mongo: transaction identity conflict")
-	ErrReceiptIdentity     = errors.New("dataengine mongo: receipt identity conflict")
-	ErrRemoteProjection    = errors.New("dataengine mongo: remote mutation requires remote projector")
+	ErrProjectionConflict         = errors.New("dataengine mongo: fatal projection version conflict")
+	ErrTransactionIdentity        = errors.New("dataengine mongo: transaction identity conflict")
+	ErrReceiptIdentity            = errors.New("dataengine mongo: receipt identity conflict")
+	ErrRemoteProjection           = errors.New("dataengine mongo: remote mutation requires remote projector")
+	errProjectionBatchUnsupported = errors.New("dataengine mongo: projection batch is unsupported")
 )
 
 type MongoStoreConfig struct {
@@ -208,6 +209,168 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		}
 	}
 	return nil
+}
+
+// ProjectBatch atomically projects a bounded recovery batch of ordinary
+// one-document records. Ordered bulk writes remove one Mongo round-trip per
+// WAL record, while transaction markers make a committed-but-unacknowledged
+// batch idempotent across restart. Records with effects, receipts, remote
+// mutations, or migrations retain the per-record projection path.
+func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
+	if store == nil || store.client == nil {
+		return errors.New("dataengine mongo: store is not configured")
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	digests := make(map[string][]byte, len(records))
+	for i := range records {
+		record := records[i]
+		if err := coredata.ValidateCommitRecord(record); err != nil {
+			return err
+		}
+		if record.Handler == MigrationHandler || len(record.Mutations) != 1 || len(record.Effects) != 0 || len(record.Receipts) != 0 || record.Mutations[0].Remote != nil {
+			return errProjectionBatchUnsupported
+		}
+		digest, err := digestRecord(record)
+		if err != nil {
+			return err
+		}
+		digests[record.ID.String()] = digest
+	}
+	session, err := store.client.StartSession(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+	return session.WithTransaction(ctx, func(txCtx context.Context) error {
+		ids := make([]string, 0, len(records))
+		for i := range records {
+			ids = append(ids, records[i].ID.String())
+		}
+		transactionColl := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection)
+		var existing []transactionDocument
+		if err := transactionColl.Find(txCtx, bson.M{"_id": bson.M{"$in": ids}}, &existing, fmongo.FindOption{BatchSize: int32(min(len(ids), 4096))}); err != nil {
+			return err
+		}
+		applied := make(map[string]struct{}, len(existing))
+		for i := range existing {
+			want, ok := digests[existing[i].ID]
+			if !ok || !bytes.Equal(existing[i].Digest, want) {
+				return ErrTransactionIdentity
+			}
+			applied[existing[i].ID] = struct{}{}
+		}
+
+		type mutationGroup struct {
+			collection fmongo.ICollection
+			models     []fmongo.WriteModel
+		}
+		groups := make(map[string]*mutationGroup)
+		markers := make([]fmongo.WriteModel, 0, len(records)-len(applied))
+		for i := range records {
+			record := records[i]
+			txID := record.ID.String()
+			if _, ok := applied[txID]; ok {
+				continue
+			}
+			mutation := record.Mutations[0]
+			model, err := store.batchMutationModel(txID, mutation)
+			if err != nil {
+				return err
+			}
+			groupKey := batchCollectionKey(store, mutation.Key)
+			group := groups[groupKey]
+			if group == nil {
+				group = &mutationGroup{collection: store.collection(mutation.Key)}
+				groups[groupKey] = group
+			}
+			group.models = append(group.models, model)
+			markers = append(markers, fmongo.NewInsertOneModel(transactionDocument{
+				ID: txID, Digest: digests[txID], CreatedAt: store.now().UTC(),
+			}))
+		}
+		if len(markers) == 0 {
+			return nil
+		}
+		for _, group := range groups {
+			result, err := group.collection.BulkWrite(txCtx, group.models)
+			if err != nil {
+				if errors.Is(err, fmongo.ErrDuplicateKey) {
+					return fmt.Errorf("%w: batch duplicate key", ErrProjectionConflict)
+				}
+				return err
+			}
+			if result == nil || result.MatchedCount+result.UpsertedCount != int64(len(group.models)) {
+				return fmt.Errorf("%w: batch matched=%d upserted=%d expected=%d", ErrProjectionConflict,
+					bulkMatched(result), bulkUpserted(result), len(group.models))
+			}
+		}
+		_, err := transactionColl.BulkWrite(txCtx, markers)
+		if errors.Is(err, fmongo.ErrDuplicateKey) {
+			return ErrTransactionIdentity
+		}
+		return err
+	})
+}
+
+func (store *MongoStore) batchMutationModel(txID string, mutation coredata.Mutation) (fmongo.WriteModel, error) {
+	switch mutation.Kind {
+	case coredata.MutationPut:
+		var doc bson.M
+		if err := bson.Unmarshal(mutation.Data, &doc); err != nil {
+			return fmongo.WriteModel{}, err
+		}
+		if id, ok := documentInt64(doc["_id"]); !ok || id != mutation.Key.ID {
+			return fmongo.WriteModel{}, coredata.ErrInvalidDocumentKey
+		}
+		doc["_id"] = mutation.Key.ID
+		doc["_version"] = mutation.NextVersion
+		doc["_schema"] = mutation.Schema
+		doc["_last_tx"] = txID
+		delete(doc, "_deleted")
+		delete(doc, "_deleted_at")
+		return fmongo.NewReplaceOneModel(mutationFilter(mutation), doc, true), nil
+	case coredata.MutationPatch:
+		update, err := patchUpdate(txID, mutation)
+		if err != nil {
+			return fmongo.WriteModel{}, err
+		}
+		return fmongo.NewUpdateOneModel(mutationFilter(mutation), update, false), nil
+	case coredata.MutationDelete:
+		update := bson.M{"$set": bson.M{
+			"_version": mutation.NextVersion, "_schema": mutation.Schema, "_last_tx": txID,
+			"_deleted": true, "_deleted_at": store.now().UTC(),
+		}}
+		return fmongo.NewUpdateOneModel(mutationFilter(mutation), update, false), nil
+	default:
+		return fmongo.WriteModel{}, coredata.ErrInvalidMutationKind
+	}
+}
+
+func batchCollectionKey(store *MongoStore, key coredata.DocumentKey) string {
+	database := key.Database
+	if database == "" {
+		database = store.cfg.DefaultDatabase
+	}
+	return fmt.Sprintf("%d/%s/%s", key.Scope, database, key.Resource)
+}
+
+func bulkMatched(result *fmongo.BulkWriteResult) int64 {
+	if result == nil {
+		return 0
+	}
+	return result.MatchedCount
+}
+
+func bulkUpserted(result *fmongo.BulkWriteResult) int64 {
+	if result == nil {
+		return 0
+	}
+	return result.UpsertedCount
 }
 
 func (store *MongoStore) applyMutation(ctx context.Context, txID string, mutation coredata.Mutation) error {

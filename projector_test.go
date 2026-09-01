@@ -40,6 +40,23 @@ func (store *projectorOutboxFake) Project(_ context.Context, record coredata.Com
 	return nil
 }
 
+type projectorBatchStore struct {
+	projectCalls int
+	batchCalls   int
+	batchRecords int
+}
+
+func (store *projectorBatchStore) Project(context.Context, coredata.CommitRecord) error {
+	store.projectCalls++
+	return nil
+}
+
+func (store *projectorBatchStore) ProjectBatch(_ context.Context, records []coredata.CommitRecord) error {
+	store.batchCalls++
+	store.batchRecords += len(records)
+	return nil
+}
+
 func (store *projectorOutboxFake) Claim(_ context.Context, owner string, _ time.Time, limit int, _ time.Duration) ([]OutboxItem, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -241,5 +258,31 @@ func TestProjectorCommitSystemTicketCompletesAfterProjection(t *testing.T) {
 	store.mu.Unlock()
 	if !projected {
 		t.Fatal("ticket completed before projection")
+	}
+}
+
+func TestProjectorUsesAtomicBatchStoreForBacklog(t *testing.T) {
+	options := nestwal.DefaultOptions(t.TempDir())
+	options.WriterVersion = nestwal.WriterVersionV2
+	w, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sequence := byte(1); sequence <= 2; sequence++ {
+		if _, err := w.Append(context.Background(), projectorRecord(sequence, false)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &projectorBatchStore{}
+	projector, err := NewProjector(w, store, ProjectorOptions{ReplayBatchRecords: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer projector.Close(context.Background())
+	if err := projector.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.batchCalls != 1 || store.batchRecords != 2 || store.projectCalls != 0 {
+		t.Fatalf("batch_calls=%d batch_records=%d project_calls=%d", store.batchCalls, store.batchRecords, store.projectCalls)
 	}
 }

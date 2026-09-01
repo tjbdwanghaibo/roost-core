@@ -16,7 +16,9 @@ import (
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
+	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/cube-kit/mods"
 	kitmongo "github.com/tjbdwanghaibo/cube-kit/mongo"
 	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -30,7 +32,10 @@ type realFixture struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	database  string
+	stream    string
+	effectSub string
 	mongo     fmongo.IMongo
+	jetStream fnats.IJetStream
 	runtime   *Runtime
 	mongoMod  *kitmongo.MongoMod
 	natsMod   *kitnats.NatsMod
@@ -54,9 +59,11 @@ func newRealFixture(t *testing.T) *realFixture {
 	ctx, cancel := context.WithTimeout(context.Background(), realIntegrationTimeout)
 	fx := &realFixture{
 		ctx: ctx, cancel: cancel,
-		database: fmt.Sprintf("roost_it_%s", suffix),
-		mongoMod: kitmongo.NewMongoMod(),
-		natsMod:  kitnats.NewNatsMod(nil),
+		database:  fmt.Sprintf("roost_it_%s", suffix),
+		stream:    fmt.Sprintf("ROOST_IT_EFFECTS_%s", suffix),
+		effectSub: fmt.Sprintf("roost.it.%s", suffix),
+		mongoMod:  kitmongo.NewMongoMod(),
+		natsMod:   kitnats.NewNatsMod(nil),
 	}
 	t.Cleanup(fx.close)
 
@@ -72,11 +79,13 @@ func newRealFixture(t *testing.T) *realFixture {
 	cfg.Set("dataengine.database", fx.database)
 	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
-	cfg.Set("dataengine.effects.stream", fmt.Sprintf("ROOST_IT_EFFECTS_%s", suffix))
-	cfg.Set("dataengine.effects.subject_prefix", fmt.Sprintf("roost.it.%s", suffix))
+	cfg.Set("dataengine.effects.stream", fx.stream)
+	cfg.Set("dataengine.effects.subject_prefix", fx.effectSub)
 	cfg.Set("dataengine.effects.replicas", 3)
 	cfg.Set("dataengine.effects.max_bytes", int64(64<<20))
-	cfg.Set("dataengine.outbox.poll_interval", time.Hour)
+	cfg.Set("dataengine.outbox.poll_interval", 50*time.Millisecond)
+	cfg.Set("dataengine.outbox.retry_min", 100*time.Millisecond)
+	cfg.Set("dataengine.outbox.retry_max", time.Second)
 	cfg.Set("dataengine.startup_timeout", realIntegrationTimeout)
 	cfg.Set("dataengine.shutdown_timeout", realIntegrationTimeout)
 
@@ -102,6 +111,11 @@ func newRealFixture(t *testing.T) *realFixture {
 	fx.mongo = fx.mongoMod.Client()
 	if err := fx.natsMod.Provide(registry); err != nil {
 		t.Fatalf("provide nats mod: %v", err)
+	}
+	var ok bool
+	fx.jetStream, ok = app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
+	if !ok || fx.jetStream == nil {
+		t.Fatal("NATS mod did not provide JetStream")
 	}
 	if err := fx.natsMod.Start(); err != nil {
 		t.Fatalf("start nats mod: %v", err)

@@ -74,6 +74,7 @@ type mongoStoreFakeCollection struct {
 	findDoc             any
 	findDocs            []outboxDocument
 	findRaw             []bson.Raw
+	findTransactions    []transactionDocument
 	findErr             error
 	deleteCount         int64
 	count               int64
@@ -81,6 +82,9 @@ type mongoStoreFakeCollection struct {
 	lastUpdate          any
 	inserted            []any
 	insertErr           error
+	bulkModels          []fmongo.WriteModel
+	bulkResult          *fmongo.BulkWriteResult
+	bulkErr             error
 	ensureIndexes       []fmongo.IndexModel
 }
 
@@ -121,6 +125,9 @@ func (c *mongoStoreFakeCollection) Find(_ context.Context, filter any, results a
 	}
 	if out, ok := results.(*[]bson.Raw); ok {
 		*out = append([]bson.Raw(nil), c.findRaw...)
+	}
+	if out, ok := results.(*[]transactionDocument); ok {
+		*out = append([]transactionDocument(nil), c.findTransactions...)
 	}
 	return nil
 }
@@ -169,8 +176,18 @@ func (c *mongoStoreFakeCollection) CountDocuments(context.Context, any) (int64, 
 	return c.count, nil
 }
 func (*mongoStoreFakeCollection) Aggregate(context.Context, any, any) error { return nil }
-func (*mongoStoreFakeCollection) BulkWrite(context.Context, []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
-	return nil, nil
+func (c *mongoStoreFakeCollection) BulkWrite(_ context.Context, models []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bulkModels = append(c.bulkModels, models...)
+	if c.bulkErr != nil {
+		return nil, c.bulkErr
+	}
+	if c.bulkResult != nil {
+		result := *c.bulkResult
+		return &result, nil
+	}
+	return &fmongo.BulkWriteResult{MatchedCount: int64(len(models))}, nil
 }
 func (c *mongoStoreFakeCollection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
 	c.mu.Lock()
@@ -249,6 +266,44 @@ func TestMongoStorePatchRejectsWrongOrMissingBase(t *testing.T) {
 	collection.findErr = fmongo.ErrNotFound
 	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPatch)); !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("missing base err=%v", err)
+	}
+}
+
+func TestMongoStoreProjectBatchUsesOneTransactionAndDurableMarkers(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	first := testMutationRecord(coredata.MutationPatch)
+	second := testMutationRecord(coredata.MutationPatch)
+	second.ID[15] = 10
+	second.Mutations[0].ExpectedVersion = 5
+	second.Mutations[0].NextVersion = 6
+	collection.bulkResult = &fmongo.BulkWriteResult{MatchedCount: 2, ModifiedCount: 2}
+
+	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if client.startSessions != 1 {
+		t.Fatalf("sessions=%d, want 1", client.startSessions)
+	}
+	if len(collection.bulkModels) != 2 {
+		t.Fatalf("mutation bulk models=%d, want 2", len(collection.bulkModels))
+	}
+	markers := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
+	if len(markers.bulkModels) != 2 {
+		t.Fatalf("transaction marker bulk models=%d, want 2", len(markers.bulkModels))
+	}
+}
+
+func TestMongoStoreProjectBatchRollsBackOnCASMismatch(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	first := testMutationRecord(coredata.MutationPatch)
+	second := testMutationRecord(coredata.MutationPatch)
+	second.ID[15] = 10
+	second.Mutations[0].ExpectedVersion = 5
+	second.Mutations[0].NextVersion = 6
+	collection.bulkResult = &fmongo.BulkWriteResult{MatchedCount: 1, ModifiedCount: 1}
+
+	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); !errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("err=%v, want ErrProjectionConflict", err)
 	}
 }
 

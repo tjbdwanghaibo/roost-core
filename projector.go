@@ -23,6 +23,11 @@ type ProjectionStore interface {
 	Project(context.Context, coredata.CommitRecord) error
 }
 
+type BatchProjectionStore interface {
+	ProjectionStore
+	ProjectBatch(context.Context, []coredata.CommitRecord) error
+}
+
 type ProjectorOptions struct {
 	RetryMin           time.Duration
 	RetryMax           time.Duration
@@ -62,6 +67,7 @@ type Projector struct {
 	done      chan struct{}
 	closeOnce sync.Once
 	flushMu   sync.Mutex
+	replayMu  sync.Mutex
 
 	heldMu    sync.RWMutex
 	held      map[coredata.TransactionID]struct{}
@@ -232,39 +238,69 @@ func (projector *Projector) Flush(ctx context.Context) error {
 }
 
 func (projector *Projector) replayPass(ctx context.Context) (int, error) {
-	processed := 0
-	var lastFence corenest.CommitFence
-	processedIDs := make([]coredata.TransactionID, 0, projector.opts.ReplayBatchRecords)
-	err := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
+	projector.replayMu.Lock()
+	defer projector.replayMu.Unlock()
+	records := make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
+	fences := make([]corenest.CommitFence, 0, projector.opts.ReplayBatchRecords)
+	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
 		if projector.isHeld(record.ID) {
 			return errProjectorTransactionHeld
 		}
-		if err := projector.store.Project(ctx, record); err != nil {
-			if projector.isFatalProjection(err) {
-				projector.completeProjection(record.ID, err)
-			}
-			return fmt.Errorf("dataengine projector: transaction %s: %w", record.ID.String(), err)
-		}
-		projector.completeProjection(record.ID, nil)
-		projector.projected.Add(1)
-		processed++
-		processedIDs = append(processedIDs, record.ID)
-		lastFence = fence
-		if processed >= projector.opts.ReplayBatchRecords {
+		records = append(records, record)
+		fences = append(fences, fence)
+		if len(records) >= projector.opts.ReplayBatchRecords {
 			return errProjectorBatchComplete
 		}
 		return nil
 	})
-	if errors.Is(err, errProjectorBatchComplete) {
-		err = nil
-	}
-	if processed > 0 {
-		if ackErr := projector.wal.Ack(ctx, lastFence); ackErr != nil {
-			return processed, errors.Join(err, ackErr)
+	if len(records) == 0 {
+		if errors.Is(replayErr, errProjectorBatchComplete) {
+			replayErr = nil
 		}
-		projector.acknowledge(processedIDs)
+		return 0, replayErr
 	}
-	return processed, err
+	if err := projector.projectRecords(ctx, records); err != nil {
+		if projector.isFatalProjection(err) {
+			for i := range records {
+				projector.completeProjection(records[i].ID, err)
+			}
+		}
+		return 0, fmt.Errorf("dataengine projector: batch first_transaction=%s records=%d: %w", records[0].ID.String(), len(records), err)
+	}
+	processedIDs := make([]coredata.TransactionID, len(records))
+	for i := range records {
+		processedIDs[i] = records[i].ID
+		projector.completeProjection(records[i].ID, nil)
+	}
+	projector.projected.Add(uint64(len(records)))
+	if ackErr := projector.wal.Ack(ctx, fences[len(fences)-1]); ackErr != nil {
+		return len(records), errors.Join(replayErr, ackErr)
+	}
+	projector.acknowledge(processedIDs)
+	if errors.Is(replayErr, errProjectorBatchComplete) {
+		replayErr = nil
+	}
+	return len(records), replayErr
+}
+
+func (projector *Projector) projectRecords(ctx context.Context, records []corenest.CommitRecord) error {
+	if len(records) > 1 {
+		if store, ok := projector.store.(BatchProjectionStore); ok {
+			err := store.ProjectBatch(ctx, records)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, errProjectionBatchUnsupported) {
+				return err
+			}
+		}
+	}
+	for i := range records {
+		if err := projector.store.Project(ctx, records[i]); err != nil {
+			return fmt.Errorf("transaction %s: %w", records[i].ID.String(), err)
+		}
+	}
+	return nil
 }
 
 func (projector *Projector) run() {
