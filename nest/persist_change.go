@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
+	"github.com/tjbdwanghaibo/cube-core/entity"
 )
 
 var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
@@ -195,6 +196,28 @@ func MarkPersistDelete(participant MutationParticipant) error {
 	return CurrentRollbackTx().MarkPersistDelete(participant)
 }
 
+// RemotePersistChangeFor claims one transaction-local DAO change for the
+// remote aggregate commit. Claimed participants are excluded from the
+// ordinary mutation list, preventing duplicate persistence paths.
+func (tx *RollbackTx) RemotePersistChangeFor(value any) (entity.RemotePersistChange, bool) {
+	if tx == nil || tx.state != rollbackTxOpen || tx.persistencePrepared {
+		return entity.RemotePersistChange{}, false
+	}
+	participant, ok := value.(MutationParticipant)
+	if !ok || isNilMutationParticipant(participant) {
+		return entity.RemotePersistChange{}, false
+	}
+	change := tx.participantChanges[participant]
+	if change == nil {
+		return entity.RemotePersistChange{}, false
+	}
+	if tx.remoteParticipants == nil {
+		tx.remoteParticipants = make(map[MutationParticipant]struct{}, 2)
+	}
+	tx.remoteParticipants[participant] = struct{}{}
+	return entity.RemotePersistChange{Mask: change.Mask, Delete: change.Delete}, true
+}
+
 func (tx *RollbackTx) AddReceipt(receipt dataengine.Receipt) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
@@ -259,6 +282,9 @@ func (tx *RollbackTx) preparePersistence() error {
 	}
 	tx.preparedMutations = make(map[MutationParticipant]dataengine.Mutation, len(tx.participantOrder))
 	for _, participant := range tx.participantOrder {
+		if _, remote := tx.remoteParticipants[participant]; remote {
+			continue
+		}
 		mutation, err := participant.PrepareMutation(tx.participantChanges[participant].Clone())
 		if err != nil {
 			return err

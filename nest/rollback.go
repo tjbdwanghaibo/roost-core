@@ -73,6 +73,7 @@ type RollbackTx struct {
 	participantSet      map[CommitParticipant]struct{}
 	participantChanges  map[MutationParticipant]*PersistChange
 	participantOrder    []MutationParticipant
+	remoteParticipants  map[MutationParticipant]struct{}
 	preparedMutations   map[MutationParticipant]dataengine.Mutation
 	persistencePrepared bool
 	accepted            bool
@@ -311,6 +312,7 @@ func (tx *RollbackTx) Rollback() error {
 	tx.commits = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
+	tx.remoteParticipants = nil
 	tx.preparedMutations = nil
 	tx.mutations = nil
 	tx.mutationKeys = nil
@@ -332,6 +334,7 @@ func (tx *RollbackTx) Commit() {
 	tx.participantSet = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
+	tx.remoteParticipants = nil
 	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
@@ -372,6 +375,7 @@ func (tx *RollbackTx) abandon() {
 	tx.participantSet = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
+	tx.remoteParticipants = nil
 	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil

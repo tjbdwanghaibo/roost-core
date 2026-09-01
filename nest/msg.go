@@ -48,6 +48,7 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	outcome := entity.NewRemoteTransactionOutcome(
 		entity.RemoteTransactionID(tx.ID()), tx.handler, tx.requestID(), true, uint8(tx.durability),
 	)
+	outcome.PersistChanges = tx
 	if err := m.RemoteWriteBatch.FinalizeLocked(outcome); err != nil {
 		return err
 	}

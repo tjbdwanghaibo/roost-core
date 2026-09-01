@@ -22,6 +22,23 @@ func TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap(t *testing.T) {
 	}
 }
 
+func TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent(t *testing.T) {
+	var tracker Tracker
+	tracker.SetVersion(2)
+	if err := tracker.AdvanceVersion(5); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.Version(); got != 5 {
+		t.Fatalf("version = %d, want 5", got)
+	}
+	if err := tracker.AdvanceVersion(5); err != nil {
+		t.Fatalf("idempotent advance: %v", err)
+	}
+	if err := tracker.AdvanceVersion(4); !errors.Is(err, ErrInvalidVersion) {
+		t.Fatalf("stale advance err = %v, want ErrInvalidVersion", err)
+	}
+}
+
 func TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty(t *testing.T) {
 	var tracker Tracker
 	tracker.SetVersion(8)

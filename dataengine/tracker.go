@@ -27,6 +27,27 @@ func (t *Tracker) AcceptVersion(expected, next uint64) error {
 	return nil
 }
 
+// AdvanceVersion accepts an authoritative remote-entity version. A DAO can
+// legitimately skip entity versions when another DAO in the same remote
+// aggregate was the only document changed by an intervening transaction.
+func (t *Tracker) AdvanceVersion(next uint64) error {
+	if next == 0 {
+		return ErrInvalidVersion
+	}
+	for {
+		current := t.version.Load()
+		if current == next {
+			return nil
+		}
+		if current > next {
+			return ErrInvalidVersion
+		}
+		if t.version.CompareAndSwap(current, next) {
+			return nil
+		}
+	}
+}
+
 func (t *Tracker) MarkSync(mask uint64) {
 	if mask != 0 {
 		t.syncDirty.Or(mask)

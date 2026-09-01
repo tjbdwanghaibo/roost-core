@@ -227,6 +227,32 @@ func TestRollbackDiscardsPersistChangeWithoutPreparingParticipant(t *testing.T) 
 	}
 }
 
+func TestRemotePersistChangeIsTransactionLocalAndExcludedFromOrdinaryMutations(t *testing.T) {
+	p := &fakeMutationParticipant{}
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.MarkPersistSet(p, 0b01, "profile.level", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.MarkPersistUnset(p, 0b10, "profile.title"); err != nil {
+		t.Fatal(err)
+	}
+
+	change, ok := tx.RemotePersistChangeFor(p)
+	if !ok || change.Mask != 0b11 || change.Delete {
+		t.Fatalf("remote change = %+v, ok=%v", change, ok)
+	}
+	record, err := tx.prepareCommitRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Mutations) != 0 {
+		t.Fatalf("remote participant leaked into ordinary mutations: %+v", record.Mutations)
+	}
+	if len(p.prepared) != 0 || len(p.accepted) != 0 {
+		t.Fatalf("remote participant prepared=%d accepted=%d", len(p.prepared), len(p.accepted))
+	}
+}
+
 func TestPipelinedAcceptFailureDoesNotRollbackAndFencesNest(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 390, 1, nestLocalKind)
