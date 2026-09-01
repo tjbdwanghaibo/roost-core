@@ -271,31 +271,44 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	_, batchCapable := projector.store.(BatchProjectionStore)
 	processed := 0
 	for _, segment := range segments {
-		if err := projector.projectSegment(ctx, segment); err != nil {
-			if projector.isFatalProjection(err) {
-				for i := range records {
-					projector.completeProjection(records[i].ID, err)
+		for start := 0; start < len(segment.records); {
+			end := len(segment.records)
+			if segment.batch && !batchCapable {
+				end = start + 1
+			}
+			unit := projectionSegment{
+				records: segment.records[start:end],
+				fences:  segment.fences[start:end],
+				batch:   segment.batch,
+			}
+			if err := projector.projectSegment(ctx, unit); err != nil {
+				if projector.isFatalProjection(err) {
+					for i := range records {
+						projector.completeProjection(records[i].ID, err)
+					}
 				}
+				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
 			}
-			return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", segment.records[0].ID.String(), len(segment.records), err)
-		}
-		processedIDs := make([]coredata.TransactionID, len(segment.records))
-		for i := range segment.records {
-			processedIDs[i] = segment.records[i].ID
-			projector.completeProjection(segment.records[i].ID, nil)
-		}
-		projector.projected.Add(uint64(len(segment.records)))
-		processed += len(segment.records)
-		if ackErr := projector.ack(ctx, segment.fences[len(segment.fences)-1]); ackErr != nil {
-			ackReplayErr := replayErr
-			if ackReplayErr == errProjectorTransactionHeld || ackReplayErr == errProjectorBatchComplete {
-				ackReplayErr = nil
+			processedIDs := make([]coredata.TransactionID, len(unit.records))
+			for i := range unit.records {
+				processedIDs[i] = unit.records[i].ID
+				projector.completeProjection(unit.records[i].ID, nil)
 			}
-			return processed, errors.Join(ackReplayErr, ackErr)
+			projector.projected.Add(uint64(len(unit.records)))
+			processed += len(unit.records)
+			if ackErr := projector.ack(ctx, unit.fences[len(unit.fences)-1]); ackErr != nil {
+				ackReplayErr := replayErr
+				if ackReplayErr == errProjectorTransactionHeld || ackReplayErr == errProjectorBatchComplete {
+					ackReplayErr = nil
+				}
+				return processed, errors.Join(ackReplayErr, ackErr)
+			}
+			projector.acknowledge(processedIDs)
+			start = end
 		}
-		projector.acknowledge(processedIDs)
 	}
 	return processed, replayErr
 }

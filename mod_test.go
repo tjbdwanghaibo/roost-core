@@ -39,6 +39,29 @@ func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 	}
 }
 
+func TestDataEngineModKeepsProjectionBatchByteDefaultForNonPositiveValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value int
+	}{
+		{name: "zero", value: 0},
+		{name: "negative", value: -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("persistence.engine", "dataengine")
+			cfg.Set("dataengine.projection.batch_bytes", test.value)
+			mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+			if err := mod.Init(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := mod.cfg.projector.ReplayBatchBytes, 4<<20; got != want {
+				t.Fatalf("projection batch bytes=%d want default %d", got, want)
+			}
+		})
+	}
+}
+
 func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")

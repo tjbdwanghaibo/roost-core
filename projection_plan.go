@@ -105,7 +105,7 @@ func planProjectionSegments(records []coredata.CommitRecord, fences []corenest.C
 	segments := make([]projectionSegment, 0)
 	for i := 0; i < len(records); {
 		if !isBatchProjectionRecord(records[i]) {
-			segments = append(segments, projectionSegment{records: []coredata.CommitRecord{records[i]}, fences: []corenest.CommitFence{fences[i]}})
+			segments = append(segments, projectionSegment{records: records[i : i+1 : i+1], fences: fences[i : i+1 : i+1]})
 			i++
 			continue
 		}

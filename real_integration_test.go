@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -15,6 +16,31 @@ import (
 	"github.com/tjbdwanghaibo/cube-kit/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type projectionOnlyMongoStore struct{ delegate ProjectionStore }
+
+func (store *projectionOnlyMongoStore) Project(ctx context.Context, record coredata.CommitRecord) error {
+	return store.delegate.Project(ctx, record)
+}
+
+type blockingProjectionOnlyMongoStore struct {
+	delegate  ProjectionStore
+	attempted chan struct{}
+	release   chan struct{}
+}
+
+func (store *blockingProjectionOnlyMongoStore) Project(ctx context.Context, record coredata.CommitRecord) error {
+	select {
+	case store.attempted <- struct{}{}:
+	default:
+	}
+	select {
+	case <-store.release:
+		return store.delegate.Project(ctx, record)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func TestRealMultiDocumentReceiptAndOutboxAreAtomic(t *testing.T) {
 	fx := newRealFixture(t)
@@ -251,6 +277,219 @@ func TestRealMixedProjectionSegmentsPreserveOrder(t *testing.T) {
 	if replayed != 0 {
 		t.Fatalf("replay records=%d, want 0", replayed)
 	}
+}
+
+func TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder(t *testing.T) {
+	fx := newRealFixture(t)
+	defer fx.close()
+
+	first := realRecord(51, []coredata.Mutation{
+		realPut(t, fx.database, "projection_only_restart", 5101, 0, 1, bson.M{"value": int64(1)}),
+	})
+	set, err := bson.Marshal(bson.D{{Key: "value", Value: int64(2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := realRecord(52, []coredata.Mutation{{
+		Key:  coredata.DocumentKey{Database: fx.database, Resource: "projection_only_restart", ID: 5101},
+		Kind: coredata.MutationPatch, ExpectedVersion: 1, NextVersion: 2,
+		Mask: 1, Schema: 1, Codec: "bson-v2", Patch: coredata.FieldPatch{SetBSON: set},
+	}})
+	records := []coredata.CommitRecord{first, second}
+
+	walDir := t.TempDir()
+	options := nestwal.DefaultOptions(walDir)
+	options.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstStore := &projectionOnlyMongoStore{delegate: fx.runtime.Store}
+	firstProjector, err := NewProjector(wal, firstStore, ProjectorOptions{
+		ReplayBatchRecords: 16, ReplayBatchBytes: 4 << 20, CloseWAL: false, IdlePoll: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProjector.cancel()
+	<-firstProjector.done
+	for i := range records {
+		if _, err := wal.Append(fx.context(), records[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ackErr := errors.New("injected checkpoint failure after Mongo success")
+	firstProjector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
+	processed, err := firstProjector.replayPass(fx.context())
+	if !errors.Is(err, ackErr) || processed != 1 {
+		t.Fatalf("pre-restart processed=%d err=%v", processed, err)
+	}
+	assertDocumentVersion(t, fx, "projection_only_restart", 5101, 1)
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{first.ID, second.ID})
+	if err := firstProjector.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartStore := &blockingProjectionOnlyMongoStore{
+		delegate: fx.runtime.Store, attempted: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	restarted, err := NewProjector(reopened, restartStore, ProjectorOptions{
+		RetryMin: time.Hour, RetryMax: time.Hour, IdlePoll: time.Hour,
+		ReplayBatchRecords: 16, ReplayBatchBytes: 4 << 20, CloseWAL: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-restartStore.attempted:
+	case <-fx.context().Done():
+		t.Fatalf("restarted projector did not attempt WAL replay: %v", fx.context().Err())
+	}
+	close(restartStore.release)
+	if err := restarted.Flush(fx.context()); err != nil {
+		t.Fatalf("restart replay raised false projection conflict: %v", err)
+	}
+	if stats := restarted.Stats(); stats.FatalProjectionConflicts != 0 {
+		t.Fatalf("restart stats=%+v", stats)
+	}
+	doc := findDocument(t, fx, "projection_only_restart", 5101)
+	if got := documentVersion(t, doc); got != 2 || doc["value"] != int64(2) {
+		t.Fatalf("restart projection=%#v version=%d", doc, got)
+	}
+	assertWALReplayCount(t, reopened, 0)
+	if err := restarted.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRealMongoMixedRatioWALReplayAckThroughput(t *testing.T) {
+	fx := newRealFixture(t)
+	defer fx.close()
+
+	const (
+		recordCount = 256
+		entityCount = 16
+	)
+	totalSpecial := 0
+	for workloadIndex, workload := range []struct {
+		name         string
+		specialEvery int
+	}{
+		{name: "ordinary_only"},
+		{name: "special_1_percent", specialEvery: 100},
+		{name: "special_10_percent", specialEvery: 10},
+		{name: "all_special", specialEvery: 1},
+	} {
+		t.Run(workload.name, func(t *testing.T) {
+			resource := fmt.Sprintf("mixed_ratio_%d", workloadIndex)
+			records, specialCount := realMixedRatioRecords(t, fx.database, resource, workloadIndex, recordCount, entityCount, workload.specialEvery)
+			options := nestwal.DefaultOptions(t.TempDir())
+			options.WriterVersion = nestwal.WriterVersionV2
+			wal, err := nestwal.Open(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector, err := NewProjector(wal, fx.runtime.Store, ProjectorOptions{
+				ReplayBatchRecords: recordCount, ReplayBatchBytes: 64 << 20,
+				CloseWAL: false, IdlePoll: time.Hour,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.cancel()
+			<-projector.done
+			for i := range records {
+				if _, err := wal.Append(fx.context(), records[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := wal.Sync(fx.context()); err != nil {
+				t.Fatal(err)
+			}
+			ack := wal.Ack
+			ackCalls := 0
+			projector.ack = func(ctx context.Context, fence corenest.CommitFence) error {
+				ackCalls++
+				return ack(ctx, fence)
+			}
+
+			started := time.Now()
+			if err := projector.Flush(fx.context()); err != nil {
+				t.Fatal(err)
+			}
+			elapsed := time.Since(started)
+			if stats := projector.Stats(); stats.Projected != recordCount || ackCalls == 0 {
+				t.Fatalf("stats=%+v checkpoint acks=%d", stats, ackCalls)
+			}
+			assertWALReplayCount(t, wal, 0)
+			for entityIndex := 0; entityIndex < entityCount; entityIndex++ {
+				assertDocumentVersion(t, fx, resource, int64(entityIndex+1), recordCount/entityCount)
+			}
+			totalSpecial += specialCount
+			assertCollectionCount(t, fx, receiptCollection, int64(totalSpecial))
+			t.Logf("backend=real MongoDB + file WAL workload=%s records=%d entities=%d special=%d checkpoint_acks=%d elapsed=%s throughput=%.0f records/s",
+				workload.name, recordCount, entityCount, specialCount, ackCalls, elapsed, float64(recordCount)/elapsed.Seconds())
+			if err := projector.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := wal.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func realMixedRatioRecords(t *testing.T, database, resource string, workloadIndex, count, entityCount, specialEvery int) ([]coredata.CommitRecord, int) {
+	t.Helper()
+	versions := make([]uint64, entityCount)
+	records := make([]coredata.CommitRecord, count)
+	specialCount := 0
+	for i := range records {
+		entityIndex := i % entityCount
+		entityID := int64(entityIndex + 1)
+		expected := versions[entityIndex]
+		next := expected + 1
+		var mutation coredata.Mutation
+		if expected == 0 {
+			mutation = realPut(t, database, resource, entityID, expected, next, bson.M{"value": int64(i)})
+		} else {
+			set, err := bson.Marshal(bson.D{{Key: "value", Value: int64(i)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation = coredata.Mutation{
+				Key:  coredata.DocumentKey{Database: database, Resource: resource, ID: entityID},
+				Kind: coredata.MutationPatch, ExpectedVersion: expected, NextVersion: next,
+				Mask: 1, Schema: 1, Codec: "bson-v2", Patch: coredata.FieldPatch{SetBSON: set},
+			}
+		}
+		var transactionID coredata.TransactionID
+		binary.BigEndian.PutUint64(transactionID[:8], uint64(workloadIndex+1))
+		binary.BigEndian.PutUint64(transactionID[8:], uint64(i+1))
+		record := coredata.CommitRecord{
+			ID: transactionID, Handler: "real-mixed-ratio", CreatedAt: time.Now().UnixNano(),
+			Durability: corenest.DurabilityAsync, Mutations: []coredata.Mutation{mutation},
+		}
+		if specialEvery > 0 && (i+1)%specialEvery == 0 {
+			record.Receipts = []coredata.Receipt{{
+				Namespace: "real-mixed-ratio", ID: fmt.Sprintf("%s-%d", resource, i+1),
+			}}
+			specialCount++
+		}
+		records[i] = record
+		versions[entityIndex] = next
+	}
+	return records, specialCount
 }
 
 func TestRealSagaReceiptTransactionThroughput(t *testing.T) {

@@ -307,6 +307,40 @@ func TestMongoStoreProjectBatchRollsBackOnCASMismatch(t *testing.T) {
 	}
 }
 
+func TestMongoStoreProjectBatchValidatesBeforeCheckingEligibility(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	record := testMutationRecord(coredata.MutationPatch)
+	record.Mutations[0].Key.Resource = ""
+	record.Effects = []coredata.Effect{{ID: "special", Topic: "special"}}
+	if err := coredata.ValidateCommitRecord(record); err == nil {
+		t.Fatal("test record unexpectedly passed validation")
+	}
+
+	err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{record})
+	if err == nil || errors.Is(err, errProjectionBatchUnsupported) {
+		t.Fatalf("err=%v, want validation error before unsupported classification", err)
+	}
+	if client.startSessions != 0 || len(collection.bulkModels) != 0 {
+		t.Fatalf("validation failure started sessions=%d mutation writes=%d", client.startSessions, len(collection.bulkModels))
+	}
+}
+
+func TestMongoStoreProjectBatchRejectsUnsupportedBeforeSessionOrWrites(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	record := testMutationRecord(coredata.MutationPatch)
+	record.Effects = []coredata.Effect{{ID: "special", Topic: "special"}}
+
+	err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{record})
+	if !errors.Is(err, errProjectionBatchUnsupported) {
+		t.Fatalf("err=%v, want errProjectionBatchUnsupported", err)
+	}
+	markers := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
+	if client.startSessions != 0 || len(collection.bulkModels) != 0 || len(markers.bulkModels) != 0 {
+		t.Fatalf("unsupported batch started sessions=%d mutation writes=%d marker writes=%d",
+			client.startSessions, len(collection.bulkModels), len(markers.bulkModels))
+	}
+}
+
 func TestMongoStoreDeleteWritesVersionedTombstone(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
 	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}

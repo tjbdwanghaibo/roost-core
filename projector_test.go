@@ -49,8 +49,9 @@ type projectorBatchStore struct {
 }
 
 type recordingSegmentStore struct {
-	events []string
-	failID coredata.TransactionID
+	events   []string
+	failID   coredata.TransactionID
+	batchErr error
 }
 
 func (store *recordingSegmentStore) Project(_ context.Context, record coredata.CommitRecord) error {
@@ -63,6 +64,20 @@ func (store *recordingSegmentStore) Project(_ context.Context, record coredata.C
 
 func (store *recordingSegmentStore) ProjectBatch(_ context.Context, records []coredata.CommitRecord) error {
 	store.events = append(store.events, fmt.Sprintf("batch:%d", len(records)))
+	return store.batchErr
+}
+
+type projectionOnlySegmentStore struct {
+	events        []string
+	failRemaining map[coredata.TransactionID]int
+}
+
+func (store *projectionOnlySegmentStore) Project(_ context.Context, record coredata.CommitRecord) error {
+	store.events = append(store.events, "project:"+record.ID.String())
+	if store.failRemaining[record.ID] > 0 {
+		store.failRemaining[record.ID]--
+		return context.DeadlineExceeded
+	}
 	return nil
 }
 
@@ -395,6 +410,20 @@ func assertWALReplayCount(t *testing.T, wal *nestwal.WAL, want int) {
 	}
 }
 
+func assertWALReplayIDs(t *testing.T, wal *nestwal.WAL, want []coredata.TransactionID) {
+	t.Helper()
+	got := make([]coredata.TransactionID, 0, len(want))
+	if err := wal.Replay(context.Background(), func(_ corenest.CommitFence, record coredata.CommitRecord) error {
+		got = append(got, record.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("replay transaction IDs=%v want=%v", got, want)
+	}
+}
+
 func TestProjectorKeepsSingleOrdinarySegmentsOnProjectFastPath(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, true), projectorRecord(3, false)}
 	store := &recordingSegmentStore{}
@@ -469,6 +498,158 @@ func TestProjectorStopsAfterSegmentAckFailure(t *testing.T) {
 		t.Fatalf("stats after checkpoint failure=%+v", stats)
 	}
 	assertWALReplayCount(t, wal, 3)
+}
+
+func TestProjectorProjectionOnlyStoreExecutesAndAcknowledgesOrdinaryRecordsOneAtATime(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(31, false), projectorRecord(32, false)}
+	store := &projectionOnlySegmentStore{}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	ack := wal.Ack
+	projector.ack = func(ctx context.Context, fence corenest.CommitFence) error {
+		store.events = append(store.events, "ack:"+fence.TransactionID.String())
+		return ack(ctx, fence)
+	}
+
+	processed, err := projector.replayPass(context.Background())
+	if err != nil || processed != len(records) {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	want := []string{
+		"project:" + records[0].ID.String(), "ack:" + records[0].ID.String(),
+		"project:" + records[1].ID.String(), "ack:" + records[1].ID.String(),
+	}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v want=%v", store.events, want)
+	}
+	assertWALReplayCount(t, wal, 0)
+}
+
+func TestProjectorProjectionOnlyStoreStopsBeforeSecondOrdinaryRecordWhenFirstAckFails(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(33, false), projectorRecord(34, false)}
+	firstData, err := bson.Marshal(bson.M{"_id": int64(909), "value": int64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPatch, err := bson.Marshal(bson.D{{Key: "value", Value: int64(2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records[0].Mutations[0].Key.ID = 909
+	records[0].Mutations[0].Data = firstData
+	records[1].Mutations[0] = coredata.Mutation{
+		Key:  coredata.DocumentKey{Database: "game", Resource: "heroes", ID: 909},
+		Kind: coredata.MutationPatch, ExpectedVersion: 1, NextVersion: 2,
+		Mask: 1, Schema: 1, Codec: "bson-v2", Patch: coredata.FieldPatch{SetBSON: secondPatch},
+	}
+	store := &projectionOnlySegmentStore{}
+	projector, wal := stoppedProjectorWithRecords(t, store, nil, 4<<20)
+	tickets := make([]coredata.ProjectionTicket, 0, len(records))
+	for i := range records {
+		ticket, err := projector.CommitSystem(context.Background(), records[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	ackErr := errors.New("checkpoint unavailable after first projection")
+	projector.ack = func(_ context.Context, fence corenest.CommitFence) error {
+		store.events = append(store.events, "ack:"+fence.TransactionID.String())
+		return ackErr
+	}
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, ackErr) || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	want := []string{"project:" + records[0].ID.String(), "ack:" + records[0].ID.String()}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v want=%v", store.events, want)
+	}
+	select {
+	case <-tickets[0].Done():
+		if err := tickets[0].Err(); err != nil {
+			t.Fatalf("first ticket err=%v", err)
+		}
+	default:
+		t.Fatal("first ticket did not complete after projection")
+	}
+	select {
+	case <-tickets[1].Done():
+		t.Fatal("second ticket completed without projection")
+	default:
+	}
+	if stats := projector.Stats(); stats.Projected != 1 || stats.WALUnacked != 2 {
+		t.Fatalf("stats after first ack failure=%+v", stats)
+	}
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[0].ID, records[1].ID})
+}
+
+func TestProjectorProjectionOnlyStoreAcknowledgesFirstOrdinaryRecordBeforeSecondProjectFailure(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(35, false), projectorRecord(36, false), projectorRecord(37, false)}
+	store := &projectionOnlySegmentStore{failRemaining: map[coredata.TransactionID]int{records[1].ID: 1}}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	ack := wal.Ack
+	projector.ack = func(ctx context.Context, fence corenest.CommitFence) error {
+		store.events = append(store.events, "ack:"+fence.TransactionID.String())
+		return ack(ctx, fence)
+	}
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	want := []string{
+		"project:" + records[0].ID.String(), "ack:" + records[0].ID.String(),
+		"project:" + records[1].ID.String(),
+	}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v want=%v", store.events, want)
+	}
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[1].ID, records[2].ID})
+}
+
+func TestProjectorTransientSpecialFailureRecoversFromAcknowledgedOrdinaryPrefix(t *testing.T) {
+	records := []coredata.CommitRecord{
+		projectorRecord(38, false), projectorRecord(39, false),
+		projectorRecord(40, true), projectorRecord(41, false),
+	}
+	store := &recordingSegmentStore{failID: records[2].ID}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) || processed != 2 {
+		t.Fatalf("first replay processed=%d err=%v", processed, err)
+	}
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[2].ID, records[3].ID})
+
+	store.failID = coredata.TransactionID{}
+	processed, err = projector.replayPass(context.Background())
+	if err != nil || processed != 2 {
+		t.Fatalf("recovery replay processed=%d err=%v", processed, err)
+	}
+	assertWALReplayCount(t, wal, 0)
+	want := []string{
+		"batch:2", "project:" + records[2].ID.String(),
+		"project:" + records[2].ID.String(), "project:" + records[3].ID.String(),
+	}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v want=%v", store.events, want)
+	}
+}
+
+func TestProjectorBatchUnsupportedDoesNotFallbackOrRunLaterSegment(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(42, false), projectorRecord(43, false), projectorRecord(44, true)}
+	store := &recordingSegmentStore{batchErr: errProjectionBatchUnsupported}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+
+	processed, err := projector.replayPass(context.Background())
+	if !errors.Is(err, errProjectionBatchUnsupported) || processed != 0 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if !slices.Equal(store.events, []string{"batch:2"}) {
+		t.Fatalf("events=%v", store.events)
+	}
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[0].ID, records[1].ID, records[2].ID})
 }
 
 func TestProjectorAckFailureOverridesHeldReplaySentinel(t *testing.T) {

@@ -232,7 +232,7 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 		if err := coredata.ValidateCommitRecord(record); err != nil {
 			return err
 		}
-		if record.Handler == MigrationHandler || len(record.Mutations) != 1 || len(record.Effects) != 0 || len(record.Receipts) != 0 || record.Mutations[0].Remote != nil {
+		if !isBatchProjectionRecord(record) {
 			return errProjectionBatchUnsupported
 		}
 		digest, err := digestRecord(record)
