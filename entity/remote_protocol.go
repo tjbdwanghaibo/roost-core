@@ -134,13 +134,29 @@ type RemoteTransactionID [16]byte
 func (id RemoteTransactionID) IsZero() bool   { return id == RemoteTransactionID{} }
 func (id RemoteTransactionID) String() string { return fmt.Sprintf("%x", id[:]) }
 
+// RemotePersistChange is the persistence-relevant part of one DAO change.
+// The detailed patch remains owned by Nest; remote aggregates deliberately
+// freeze full documents under their lease and entity version fence.
+type RemotePersistChange struct {
+	Mask   uint64
+	Delete bool
+}
+
+// RemotePersistChangeSource exposes only changes recorded by the transaction
+// currently being finalized. Looking up a participant claims it for the
+// remote commit so it is not also emitted as an ordinary mutation.
+type RemotePersistChangeSource interface {
+	RemotePersistChangeFor(any) (RemotePersistChange, bool)
+}
+
 type RemoteTransactionOutcome struct {
-	TransactionID RemoteTransactionID
-	Handler       string
-	RequestID     string
-	Succeeded     bool
-	Durability    uint8
-	FinalizedAt   int64
+	TransactionID  RemoteTransactionID
+	Handler        string
+	RequestID      string
+	Succeeded      bool
+	Durability     uint8
+	FinalizedAt    int64
+	PersistChanges RemotePersistChangeSource
 }
 
 type RemoteSnapshotRecord struct {
@@ -350,13 +366,20 @@ func (s RemoteCommitStatus) Clone() RemoteCommitStatus {
 }
 
 // IRemoteCommitParticipant is generated on a remotely managed entity. Build is
-// called with the entity mutex held. Acknowledge and Rollback operate only on
-// DirtyTracker atomics and therefore do not expose lock management to business
-// code.
+// called with the entity mutex held and freezes transaction-local changes.
+// Acknowledge runs only after the authoritative remote outcome is known;
+// Rollback must not require business code to manage entity locks.
 type IRemoteCommitParticipant interface {
 	BuildRemoteCommitLocked(RemoteWriteLease, RemoteTransactionOutcome) (RemoteCommit, error)
 	AcknowledgeRemoteCommit(RemoteCommit) error
 	RollbackRemoteCommit(RemoteCommit)
+}
+
+// IRemoteCommitChangeParticipant lets generated remote entities decide from
+// transaction-local changes whether a commit is necessary. Older generated
+// participants continue to use the legacy dirty check during rollout.
+type IRemoteCommitChangeParticipant interface {
+	HasRemoteCommitLocked(RemoteTransactionOutcome) bool
 }
 
 // IRemoteCommitter applies immutable commits with storage-side version and

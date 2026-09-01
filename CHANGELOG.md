@@ -13,6 +13,14 @@
 - 内存限流器增加默认 10 万 key 硬上限、空闲 TTL 与机会式回收；未知 key 在容量耗尽且无空闲项可回收时 fail-closed，并通过 `Stats` 暴露当前基数、容量拒绝和回收计数，阻断随机身份造成的无界内存增长。
 - Nest ticker 测试清理全局 callback 注册，使 `go test -count=N` 可重复执行。
 
+### Added — Data Engine
+- `dataengine` 统一持久化契约：事务内 `PersistChange` 生成 Put/Patch/Delete，WAL record 原子携带 receipt/effect，并定义聚合 load、schema migration、tombstone 与 system transaction 接口；迁移和运维边界见 `docs/DATA_ENGINE_MIGRATION.md`。
+- Native Saga step 可把 Entity mutation、Command receipt 与 completion effect 绑定到同一 CommitRecord；Remote Entity commit 也改为消费同一事务变更源，并保留 lease/fence/version 语义。
+
+### Changed — Data Engine
+- Data Engine tracker 只保留已接受持久化版本和 sync dirty；持久化 dirty 不再写回 DAO。`DurabilityPipelined` 在 WAL Enqueue 接受后、Entity 解锁前推进普通 DAO version。
+- Legacy Checkpoint write runtime、dirty contract 与独立包已删除，运行时只保留 Data Engine 单一持久化路径，避免 WAL 与 snapshot 重复落地。
+
 ### Added
 - `worker.Pool.TryGo`：返回异步任务 admission error；已接纳任务全部纳入 `StopWithContext`。
 - `app.ModOptionalDependencyProvider`：声明“安装时需要排在当前 Mod 前、未安装时忽略”的可选依赖；与硬依赖共同拓扑排序并检测依赖环，消除可选集成对业务 Mod 书写顺序的隐式依赖。

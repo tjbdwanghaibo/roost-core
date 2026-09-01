@@ -21,7 +21,7 @@ Nest handler 在进入业务代码前已经持有所有目标 entity 的 mutex�
 
 ### cube-kit
 
-`kit/nestwal` 提供生产基础设施：分段文件 WAL、CRC、group commit、fsync、ack checkpoint、replay、重试、outbox、健康状态和主动 flush。`CheckpointApplier` 将 replay 接到现有 `checkpoint.StorageBackend`。
+`kit/nestwal` 提供物理日志原语：分段 WAL、CRC、group commit、fsync、ack checkpoint 与 replay。`kit/dataengine` 在其上提供 Mongo projection、aggregate load/migration、Saga/Remote mutation、effect outbox、健康状态和主动 flush；应用只装配 Data Engine Mod。
 
 ### roost-codegen
 
@@ -30,8 +30,8 @@ Nest handler 在进入业务代码前已经持有所有目标 entity 的 mutex�
 - 无副作用的 `CaptureRollbackState` / `RestoreRollbackState`；
 - setter 级 inverse undo；
 - map 按 key 去重的 undo；
-- 不消费 dirty/patch 的最终持久化 after-image；
-- `CommitParticipant.PrepareCommit`。
+- transaction-local `PersistChange` 与字段级 patch；
+- `MutationParticipant.PrepareMutation` / `AcceptMutation`。
 
 业务层仍然只调用生成的 component/entity API，不处理锁、WAL 和 rollback。
 
@@ -51,7 +51,7 @@ Rollback：
 
 Durability：
 
-- `memory`：不写 commit WAL，沿用 entity release/checkpoint；
+- `memory`：不写 commit WAL，因此禁止修改 persistent 字段；
 - `async`：等待 WAL write，不等待本批 fsync；后台按间隔刷盘；
 - `strict`：等待所在 group commit 完成 fsync 后才返回成功。
 
@@ -60,17 +60,17 @@ durability 非 `memory` 时必须配置 rollback。调用 `nest.Emit` 会自动�
 ## 4. 提交时序
 
 1. Nest 按既有顺序持有涉及的 entity mutex。
-2. 建立 `RollbackTx`，抓取 dirty snapshot 或注册 undo。
-3. 执行 handler。setter 修改状态并标 dirty。
-4. handler 失败：逆序执行 undo/snapshot restore，恢复 dirty/version。
-5. handler 成功：DAO participant 生成最终持久化 after-image；该过程不清 dirty，不消费 patch。
+2. 建立 `RollbackTx`，抓取 tracker snapshot 或注册 undo。
+3. 执行 handler。setter 修改状态并向当前 transaction 登记 `PersistChange`。
+4. handler 失败：逆序执行 undo/snapshot restore，恢复 tracker/version。
+5. handler 成功：DAO participant 生成 Put/Patch/Delete mutation。
 6. committer 将整个多 entity record 追加到 WAL。
 7. strict 在 group fsync 成功后形成 commit point。
-8. Nest 提交内存事务，随后 entity release hook 运行既有 checkpoint/sync 逻辑并释放锁。
-9. 解锁后通知 committer，replay 才允许落库和发布 outbox。
+8. Nest 提交内存事务，entity release hook 只处理 sync/lifecycle 并释放锁。
+9. 解锁后通知 Data Engine projector，replay 才允许落库；effect 先 staging 到 Mongo outbox。
 10. mutations 与 effects 全部成功后，持久化 ack checkpoint。
 
-同一进程内的“暂缓到解锁后 replay”避免 WAL applier 与 entity release checkpoint 并发写同一实体。若进程在第 7 步后、第 9 步前崩溃，新进程没有暂缓表，会直接从 WAL 恢复，符合 commit point 语义。
+同一进程内的“暂缓到解锁后 replay”避免 projector 在事务仍持有 Entity 锁时抢占存储工作。若进程在第 7 步后、第 9 步前崩溃，新进程没有暂缓表，会直接从 WAL 恢复，符合 commit point 语义。
 
 ## 5. WAL 格式与恢复
 
@@ -97,13 +97,11 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 
 - mutation applier 必须按 `(entity, version)` 做 CAS；“已存在相同或更高 version”视为成功；
 - `MutationApplier.ApplyMutations` 一次接收整个多 entity transaction；需要对外可见的跨实体原子性时，实现必须使用数据库原生 transaction；
-- publisher 使用 `Effect.ID` 作为 JetStream MsgID；这只是去重优化。Mongo 副作用必须经 `MongoEffectInbox`，在同一个 snapshot/majority transaction 内同时写业务数据与 inbox receipt；receipt TTL 必须大于 broker 最大保留/重投窗口；
+- publisher 使用 `Effect.ID` 作为 JetStream MsgID；这只是去重优化。Data Engine 先在业务 mutation 的 Mongo transaction 中 staging outbox；消费端仍需持久 receipt，TTL 必须大于 broker 最大保留/重投窗口；
 - 不允许把不可幂等的外部调用放入 `AfterCommit`；应改为 `nest.Emit`；
-- `CheckpointApplier` 已将 `VersionConflict` 视为幂等成功。
+- Mongo Store 使用 transaction receipt 与 expected/next version CAS 吸收重复 replay；版本冲突只有在已投影完全相同事务时才是幂等成功。
 
-`CheckpointApplier` 会把同一 transaction 的 mutations 合并为一次 `BulkSave`，但 `StorageBackend.BulkSave` 接口本身不承诺跨文档 ACID；它提供 WAL 原子提交和最终完整恢复。转账、交易等要求读侧永远看不到中间态的场景，应提供使用 Mongo transaction、SQL transaction 等实现的自定义 `MutationApplier`。
-
-生成 DAO 的 WAL version 使用 `DirtyTracker.Version()+1`，与随后 entity release 的正常 checkpoint 版本一致。
+同一 `CommitRecord` 的普通 mutation、Remote commit、Saga receipt 与 effect staging 按需进入一个 Mongo transaction，读侧不会看到跨文档中间态。生成 DAO 的 WAL version 使用 `dataengine.Tracker.Version()+1`，投影确认后由 `AcceptMutation` 推进。
 
 ## 7. fsync 不确定结果
 
@@ -119,23 +117,13 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 ## 8. 接入示例
 
 ```go
-walOpts := nestwal.DefaultOptions("./data/nest-wal")
-walOpts.OnFatal = func(err error) {
-    // 标记实例不可用、停止接流并触发进程退出。
-}
-
-commitOpts := nestwal.DefaultCommitterOptions()
-runtime, err := nestwal.OpenRuntime(
-    walOpts,
-    nestwal.CheckpointApplier{Backend: storageBackend},
-    messagePublisher,
-    commitOpts,
+dataMod := dataengine.NewMod(dataengine.WithEntityAccess(entityAccess))
+application.Mods(
+    mongo.NewMongoMod(),
+    nats.NewNatsMod(codec),
+    dataMod,
+    nestkit.NewMod(entityAccess), // 从 ModDataEngine 取得 lazy committer
 )
-if err != nil {
-    return err
-}
-
-nestMod := nestkit.NewMod(entityGetter, runtime.NestOption())
 ```
 
 主动排空：
@@ -143,12 +131,12 @@ nestMod := nestkit.NewMod(entityGetter, runtime.NestOption())
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
-if err := runtime.Flush(ctx); err != nil {
+if err := dataMod.Flush(ctx); err != nil {
     return err
 }
 ```
 
-停服顺序：停止网关接流 -> 等待 Nest 请求和 entity guard 排空 -> `runtime.Shutdown(ctx)` -> 关闭 storage/message client。
+停服顺序：停止网关接流 -> 等待 Nest 请求和 entity guard 排空 -> `dataMod.StopWithContext(ctx)` -> 关闭 Mongo/NATS client。
 
 ## 9. 监控建议
 

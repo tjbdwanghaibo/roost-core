@@ -90,7 +90,9 @@ func BenchmarkCommitLockHold(b *testing.B) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 	lockHoldBenchOnce.Do(func() {

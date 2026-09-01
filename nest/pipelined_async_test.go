@@ -28,7 +28,9 @@ func registerAsyncIncrementHandler(name string, hooks *[]string, hooksMu *sync.M
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		if hooks != nil {
 			AfterCommit(func() {
 				hooksMu.Lock()
@@ -226,6 +228,9 @@ func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
 	if ent.dao.Value != 11 {
 		t.Fatalf("value=%d: indeterminate outcome must not roll back", ent.dao.Value)
 	}
+	if fence := Nest.FenceError(); !errors.Is(fence, ErrNestFenced) || !errors.Is(fence, ErrCommitIndeterminate) {
+		t.Fatalf("fence=%v", fence)
+	}
 }
 
 func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
@@ -320,7 +325,9 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		// The value carries commit order: hooks must observe 1, 2, 3.
 		value := e.dao.Value
 		AfterCommit(func() {

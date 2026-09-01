@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/hotcode"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
@@ -264,7 +264,7 @@ type mockGetter struct {
 
 type rollbackTestDao struct {
 	id      int64
-	Tracker checkpoint.DirtyTracker
+	Tracker dataengine.Tracker
 	Value   int
 }
 
@@ -274,7 +274,7 @@ func (d *rollbackTestDao) DbName() string       { return "test" }
 func (d *rollbackTestDao) CollName() string     { return "rollback_test" }
 func (d *rollbackTestDao) Dirty() entity.IDirty { return &d.Tracker }
 func (d *rollbackTestDao) CleanDirty()          { d.Tracker.SelfClean() }
-func (d *rollbackTestDao) DirtyTracker() *checkpoint.DirtyTracker {
+func (d *rollbackTestDao) DirtyTracker() *dataengine.Tracker {
 	return &d.Tracker
 }
 func (d *rollbackTestDao) Marshal() []byte {
@@ -305,17 +305,17 @@ func (d *rollbackTestDao) RestoreRollbackState(raw []byte) error {
 	return d.Unmarshal(raw)
 }
 
-func (d *rollbackTestDao) PrepareCommit(tx *RollbackTx) error {
-	if !d.Tracker.Dirty() {
-		return nil
-	}
-	return tx.AddMutation(EntityMutation{
-		EntityID: d.id,
-		Resource: d.CollName(),
-		Mask:     d.Tracker.Snapshot().PersistDirty,
-		Codec:    "json",
-		Data:     d.Marshal(),
-	})
+func (d *rollbackTestDao) PrepareMutation(change PersistChange) (dataengine.Mutation, error) {
+	version := d.Tracker.Version()
+	return dataengine.Mutation{
+		Key:  dataengine.DocumentKey{Database: "test", Resource: d.CollName(), ID: d.id},
+		Kind: dataengine.MutationPut, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: 1, Codec: "json", Data: d.Marshal(),
+	}, nil
+}
+
+func (d *rollbackTestDao) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.Tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
 type recordingCommitter struct {
@@ -849,7 +849,9 @@ func TestRollbackStateRestoresDaoAndDirty(t *testing.T) {
 	MustRegisterHandlerWithMeta(NewHandlerName("test_rollback_state"), func(es []entity.IThreadSafeEntity, param []any, opts ...HandlerOption) (any, error) {
 		ent := es[0].(*rollbackTestEntity)
 		ent.dao.Value = 99
-		ent.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
 		ent.dao.Tracker.MarkSync(2)
 		AfterCommit(func() { committed = true })
 		return nil, errors.New("boom")
@@ -937,7 +939,9 @@ func TestRollbackUndoRestoresStateAndDirty(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		ent.dao.Value = 99
-		ent.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
 		return nil, errors.New("boom")
 	}, HandlerMeta{Rollback: RollbackUndo})
 
@@ -975,7 +979,9 @@ func TestStrictCommitFailureRollsBack(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		ent.dao.Value = 20
-		ent.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
 		return "not-committed", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict})
 
@@ -989,7 +995,7 @@ func TestStrictCommitFailureRollsBack(t *testing.T) {
 	if dao.Value != 10 || dao.Tracker.Dirty() {
 		t.Fatalf("value=%d dirty=%v, want rollback", dao.Value, dao.Tracker.Dirty())
 	}
-	if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].EntityID != id {
+	if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].Key.ID != id {
 		t.Fatalf("commit record=%+v", committer.record)
 	}
 }
@@ -1019,7 +1025,9 @@ func TestStrictCommitSuccessKeepsState(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		ent.dao.Value = 20
-		ent.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
 		return "committed", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict})
 
@@ -1060,7 +1068,9 @@ func TestIndeterminateCommitDoesNotRollback(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		ent.dao.Value = 20
-		ent.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
 		return "unknown", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict})
 
@@ -1068,8 +1078,8 @@ func TestIndeterminateCommitDoesNotRollback(t *testing.T) {
 	if !errors.Is(err, ErrCommitIndeterminate) || ret != nil {
 		t.Fatalf("ret=%v err=%v", ret, err)
 	}
-	if dao.Value != 20 || !dao.Tracker.Dirty() {
-		t.Fatalf("value=%d dirty=%v, indeterminate state must not roll back", dao.Value, dao.Tracker.Dirty())
+	if dao.Value != 20 || dao.Tracker.Version() != 0 || dao.Tracker.Dirty() {
+		t.Fatalf("value=%d version=%d sync_dirty=%v, indeterminate state must remain for WAL recovery without DAO persistence dirty", dao.Value, dao.Tracker.Version(), dao.Tracker.Dirty())
 	}
 	if !committer.released.IsZero() {
 		t.Fatalf("indeterminate transaction was released to delivery: %s", committer.released.String())

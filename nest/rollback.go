@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/obs"
 )
@@ -60,21 +60,29 @@ type RollbackParticipant interface {
 }
 
 type RollbackTx struct {
-	id             TransactionID
-	policy         RollbackPolicy
-	durability     DurabilityPolicy
-	handler        string
-	state          rollbackTxState
-	rollbacks      []func() error
-	commits        []func()
-	undoKeys       map[undoKey]struct{}
-	participants   []CommitParticipant
-	participantSet map[CommitParticipant]struct{}
-	mutations      []EntityMutation
-	mutationKeys   map[mutationKey]struct{}
-	effects        []Effect
-	effectIDs      map[string]struct{}
-	remoteWrite    bool
+	id                  TransactionID
+	policy              RollbackPolicy
+	durability          DurabilityPolicy
+	handler             string
+	state               rollbackTxState
+	rollbacks           []func() error
+	commits             []func()
+	undoKeys            map[undoKey]struct{}
+	participants        []CommitParticipant
+	participantSet      map[CommitParticipant]struct{}
+	participantChanges  map[MutationParticipant]*PersistChange
+	participantOrder    []MutationParticipant
+	remoteParticipants  map[MutationParticipant]struct{}
+	preparedMutations   map[MutationParticipant]dataengine.Mutation
+	persistencePrepared bool
+	accepted            bool
+	mutations           []EntityMutation
+	mutationKeys        map[mutationKey]struct{}
+	effects             []Effect
+	effectIDs           map[string]struct{}
+	receipts            []dataengine.Receipt
+	receiptDigests      map[receiptKey][]byte
+	remoteWrite         bool
 }
 
 type rollbackTxState uint8
@@ -95,6 +103,11 @@ type mutationKey struct {
 	database string
 	resource string
 	entityID int64
+}
+
+type receiptKey struct {
+	namespace string
+	id        string
 }
 
 func NewRollbackTx(policy RollbackPolicy) *RollbackTx {
@@ -216,15 +229,24 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
 	}
-	if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
+	entityID, database, resource := mutation.EntityID, mutation.Database, mutation.Resource
+	if mutation.Key != (dataengine.DocumentKey{}) {
+		if mutation.EntityID != 0 || mutation.Database != "" || mutation.DatabaseScope != 0 || mutation.Resource != "" || mutation.Version != 0 {
+			return dataengine.ErrMixedMutationForms
+		}
+		if err := dataengine.ValidateMutation(mutation); err != nil {
+			return err
+		}
+		entityID, database, resource = mutation.Key.ID, mutation.Key.Database, mutation.Key.Resource
+	} else if entityID == 0 || resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
 		return errors.New("nest: invalid entity mutation")
 	}
 	if tx.mutationKeys == nil {
 		tx.mutationKeys = make(map[mutationKey]struct{}, 4)
 	}
-	key := mutationKey{database: mutation.Database, resource: mutation.Resource, entityID: mutation.EntityID}
+	key := mutationKey{database: database, resource: resource, entityID: entityID}
 	if _, exists := tx.mutationKeys[key]; exists {
-		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", mutation.Database, mutation.Resource, mutation.EntityID)
+		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", database, resource, entityID)
 	}
 	tx.mutationKeys[key] = struct{}{}
 	tx.mutations = append(tx.mutations, cloneMutation(mutation))
@@ -287,10 +309,16 @@ func (tx *RollbackTx) Rollback() error {
 		}
 	}
 	tx.commits = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.remoteParticipants = nil
+	tx.preparedMutations = nil
 	tx.mutations = nil
 	tx.mutationKeys = nil
 	tx.effects = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 	return errors.Join(errs...)
 }
 
@@ -303,8 +331,14 @@ func (tx *RollbackTx) Commit() {
 	tx.undoKeys = nil
 	tx.participants = nil
 	tx.participantSet = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.remoteParticipants = nil
+	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 	if len(tx.commits) == 0 {
 		return
 	}
@@ -338,8 +372,14 @@ func (tx *RollbackTx) abandon() {
 	tx.undoKeys = nil
 	tx.participants = nil
 	tx.participantSet = nil
+	tx.participantChanges = nil
+	tx.participantOrder = nil
+	tx.remoteParticipants = nil
+	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
+	tx.receipts = nil
+	tx.receiptDigests = nil
 }
 
 func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
@@ -354,11 +394,23 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 			return CommitRecord{}, fmt.Errorf("nest: prepare commit: %w", err)
 		}
 	}
+	if err := tx.preparePersistence(); err != nil {
+		return CommitRecord{}, fmt.Errorf("nest: prepare persistence: %w", err)
+	}
 	requestID := tx.requestID()
+	mutations := make([]EntityMutation, len(tx.mutations))
+	for i := range tx.mutations {
+		canonical, err := dataengine.CanonicalizeMutation(tx.mutations[i])
+		if err != nil {
+			return CommitRecord{}, fmt.Errorf("nest: canonicalize mutation %d: %w", i, err)
+		}
+		mutations[i] = canonical
+	}
 	record := CommitRecord{
 		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: tx.durability,
-		Mutations: append([]EntityMutation(nil), tx.mutations...),
+		Mutations: mutations,
 		Effects:   append([]Effect(nil), tx.effects...),
+		Receipts:  append([]dataengine.Receipt(nil), tx.receipts...),
 	}
 	if !record.Empty() {
 		if err := validateCommitRecord(record); err != nil {
@@ -407,7 +459,7 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 		}
 		return errors.Join(ErrCommitRejected, err)
 	}
-	return nil
+	return tx.acceptPersistence()
 }
 
 // pipelinedEnqueue performs the in-lock half of a pipelined commit. It is the
@@ -431,6 +483,9 @@ func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedT
 	}
 	if ticket == nil {
 		return nil, errors.Join(ErrCommitRejected, errors.New("nest: pipelined committer returned nil ticket"))
+	}
+	if err := tx.acceptPersistence(); err != nil {
+		return ticket, err
 	}
 	return ticket, nil
 }
@@ -474,6 +529,26 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 		}
 	}()
 	return fn()
+}
+
+// RunDetachedTransaction gives infrastructure adapters a lower-isolation
+// transaction boundary when they are invoked outside an entity-locked Nest
+// handler. It still requires a durable committer and uses the same
+// prepare/admit/accept/rollback lifecycle; the only omitted guarantee is
+// entity locking, which remains the caller's responsibility.
+func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
+	if call == nil {
+		return nil, errors.New("nest: detached transaction call is nil")
+	}
+	if CurrentRollbackTx() != nil {
+		return call()
+	}
+	if committer == nil {
+		return nil, ErrCommitterRequired
+	}
+	release := fctx.BindBase(ctx)
+	defer release()
+	return invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
 }
 
 // invokeWithTransaction wraps one handler call in a rollback/commit envelope.
@@ -546,6 +621,10 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			ticket, enqueueErr := tx.pipelinedEnqueue(commitCtx, pipelinedCommitter)
 			if enqueueErr != nil {
 				err = enqueueErr
+				if errors.Is(enqueueErr, ErrCommitIndeterminate) {
+					tx.abandon()
+					return
+				}
 				if rbErr := tx.Rollback(); rbErr != nil {
 					err = errors.Join(err, ErrRollbackFailed, rbErr)
 				}
@@ -700,8 +779,8 @@ func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	return nil
 }
 
-type dirtyTrackerDao interface {
-	DirtyTracker() *checkpoint.DirtyTracker
+type dataEngineTrackerDao interface {
+	DirtyTracker() *dataengine.Tracker
 }
 
 // RollbackSnapshotter captures all rollback-relevant state without consuming
@@ -712,16 +791,16 @@ type RollbackSnapshotter interface {
 }
 
 func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
-	var dirty *checkpoint.DirtyTracker
-	var dirtySnapshot checkpoint.DirtySnapshot
-	if d, ok := dao.(dirtyTrackerDao); ok {
-		dirty = d.DirtyTracker()
-		dirtySnapshot = dirty.Snapshot()
+	var engineTracker *dataengine.Tracker
+	var engineSnapshot dataengine.TrackerSnapshot
+	if d, ok := dao.(dataEngineTrackerDao); ok {
+		engineTracker = d.DirtyTracker()
+		engineSnapshot = engineTracker.Snapshot()
 	}
 	if tx.policy == RollbackUndo {
-		if dirty != nil {
+		if engineTracker != nil {
 			tx.DeferRollback(func() error {
-				dirty.Restore(dirtySnapshot)
+				engineTracker.Restore(engineSnapshot)
 				return nil
 			})
 		}
@@ -740,8 +819,8 @@ func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
 			if err := snapshotter.RestoreRollbackState(raw); err != nil {
 				return err
 			}
-			if dirty != nil {
-				dirty.Restore(dirtySnapshot)
+			if engineTracker != nil {
+				engineTracker.Restore(engineSnapshot)
 			}
 			return nil
 		})

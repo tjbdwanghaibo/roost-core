@@ -308,6 +308,7 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	}
 	if params.PipelinedAsync {
 		ret.completions = newCompletionPump(params.PipelinedAsyncWorkers, params.PipelinedAsyncQueueCap)
+		ret.completions.fence = ret.Fence
 	}
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout

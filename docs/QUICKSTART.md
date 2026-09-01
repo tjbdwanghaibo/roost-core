@@ -24,7 +24,7 @@ docker compose version
 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.7.0
 roost project new planet \
   -services game,gate \
-  -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,checkpoint,nestwal,nest
+  -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest
 cd planet
 ```
 
@@ -55,7 +55,7 @@ curl --fail http://127.0.0.1:9100/readyz
 curl --fail http://127.0.0.1:9100/metrics
 ```
 
-`healthz` 表示进程活着；只有 `readyz` 成功才可以接流量。退出使用 `Ctrl+C`，框架会在统一停机期限内按 Service → Nest → Saga → checkpoint/WAL → 中间件的逆依赖方向收敛。
+`healthz` 表示进程活着；只有 `readyz` 成功才可以接流量。退出使用 `Ctrl+C`，框架会在统一停机期限内按 Service → Nest → Saga → Data Engine projection/outbox/WAL → 中间件的逆依赖方向收敛。
 
 ## 4. 业务代码写在哪里
 
