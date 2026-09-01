@@ -128,7 +128,9 @@ func TestPipelinedCommitReleasesLocksBeforeDurable(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value = 20
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return "durable", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
 
@@ -208,7 +210,9 @@ func TestPipelinedEnqueueRejectionRollsBack(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value = 20
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return "not-committed", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
 
@@ -246,7 +250,9 @@ func TestPipelinedIndeterminateAbandonsWithoutRollback(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value = 20
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return "unknown", nil
 	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
 
@@ -324,7 +330,9 @@ func TestPipelinedAllowlistGatesHandlers(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return "ok", nil
 	}
 	meta := HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}
@@ -376,7 +384,9 @@ func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value = 20
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}, meta)
 	// T2 locks both entities and copies A's value into B: a cross-entity read
@@ -389,7 +399,9 @@ func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		b.dao.Value = a.dao.Value
-		b.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(b.dao, 1); err != nil {
+			return nil, err
+		}
 		return b.dao.Value, nil
 	}, meta)
 

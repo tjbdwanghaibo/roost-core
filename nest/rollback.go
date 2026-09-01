@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
@@ -532,6 +531,26 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 	return fn()
 }
 
+// RunDetachedTransaction gives infrastructure adapters a lower-isolation
+// transaction boundary when they are invoked outside an entity-locked Nest
+// handler. It still requires a durable committer and uses the same
+// prepare/admit/accept/rollback lifecycle; the only omitted guarantee is
+// entity locking, which remains the caller's responsibility.
+func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
+	if call == nil {
+		return nil, errors.New("nest: detached transaction call is nil")
+	}
+	if CurrentRollbackTx() != nil {
+		return call()
+	}
+	if committer == nil {
+		return nil, ErrCommitterRequired
+	}
+	release := fctx.BindBase(ctx)
+	defer release()
+	return invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
+}
+
 // invokeWithTransaction wraps one handler call in a rollback/commit envelope.
 // releaseLocks, when non-nil, must be idempotent (the dispatch site also
 // defers it); the pipelined path calls it right after WAL admission so entity
@@ -760,10 +779,6 @@ func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	return nil
 }
 
-type dirtyTrackerDao interface {
-	DirtyTracker() *checkpoint.DirtyTracker
-}
-
 type dataEngineTrackerDao interface {
 	DirtyTracker() *dataengine.Tracker
 }
@@ -776,12 +791,6 @@ type RollbackSnapshotter interface {
 }
 
 func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
-	var dirty *checkpoint.DirtyTracker
-	var dirtySnapshot checkpoint.DirtySnapshot
-	if d, ok := dao.(dirtyTrackerDao); ok {
-		dirty = d.DirtyTracker()
-		dirtySnapshot = dirty.Snapshot()
-	}
 	var engineTracker *dataengine.Tracker
 	var engineSnapshot dataengine.TrackerSnapshot
 	if d, ok := dao.(dataEngineTrackerDao); ok {
@@ -789,12 +798,6 @@ func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
 		engineSnapshot = engineTracker.Snapshot()
 	}
 	if tx.policy == RollbackUndo {
-		if dirty != nil {
-			tx.DeferRollback(func() error {
-				dirty.Restore(dirtySnapshot)
-				return nil
-			})
-		}
 		if engineTracker != nil {
 			tx.DeferRollback(func() error {
 				engineTracker.Restore(engineSnapshot)
@@ -815,9 +818,6 @@ func (tx *RollbackTx) captureDao(dao entity.DaoInterface) error {
 		tx.DeferRollback(func() error {
 			if err := snapshotter.RestoreRollbackState(raw); err != nil {
 				return err
-			}
-			if dirty != nil {
-				dirty.Restore(dirtySnapshot)
 			}
 			if engineTracker != nil {
 				engineTracker.Restore(engineSnapshot)

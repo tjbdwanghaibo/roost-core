@@ -39,11 +39,11 @@ const (
 	MutationDelete
 )
 
-type DatabaseScope uint8
+type DatabaseScope = entity.DatabaseScope
 
 const (
-	DatabaseGlobal DatabaseScope = iota
-	DatabaseServer
+	DatabaseGlobal = entity.DatabaseGlobal
+	DatabaseServer = entity.DatabaseServer
 )
 
 type DocumentKey struct {

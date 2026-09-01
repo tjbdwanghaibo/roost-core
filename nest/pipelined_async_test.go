@@ -28,7 +28,9 @@ func registerAsyncIncrementHandler(name string, hooks *[]string, hooksMu *sync.M
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		if hooks != nil {
 			AfterCommit(func() {
 				hooksMu.Lock()
@@ -321,7 +323,9 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 			return nil, errors.New("missing undo transaction")
 		}
 		e.dao.Value++
-		e.dao.Tracker.MarkPersist(1)
+		if err := MarkPersist(e.dao, 1); err != nil {
+			return nil, err
+		}
 		// The value carries commit order: hooks must observe 1, 2, 3.
 		value := e.dao.Value
 		AfterCommit(func() {

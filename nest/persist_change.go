@@ -68,6 +68,14 @@ func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64
 	}
 	change := tx.participantChanges[participant]
 	if change == nil {
+		if tracked, ok := participant.(dataEngineTrackerDao); ok && tracked.DirtyTracker() != nil {
+			tracker := tracked.DirtyTracker()
+			snapshot := tracker.Snapshot()
+			tx.DeferRollback(func() error {
+				tracker.Restore(snapshot)
+				return nil
+			})
+		}
 		change = &PersistChange{}
 		tx.participantChanges[participant] = change
 		tx.participantOrder = append(tx.participantOrder, participant)

@@ -3,7 +3,6 @@ package entity
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/lock"
 )
 
@@ -75,8 +74,15 @@ type DaoInterface interface {
 
 // DatabaseScopedDao optionally declares how its logical database name is
 // resolved by the storage service.
+type DatabaseScope uint8
+
+const (
+	DatabaseGlobal DatabaseScope = iota
+	DatabaseServer
+)
+
 type DatabaseScopedDao interface {
-	DbScope() checkpoint.DatabaseScope
+	DbScope() DatabaseScope
 }
 
 // PersistedDaoLoader is implemented by generated DAOs. RestorePersisted owns

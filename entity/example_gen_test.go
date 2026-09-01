@@ -2,7 +2,7 @@ package entity_test
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"sync"
 )
@@ -16,19 +16,19 @@ import (
 // --- DAO definition (手写) ---
 
 type PlayerDao struct {
-	id    int64
-	coll  string
-	dirty checkpoint.DirtyTracker
-	Name  string
-	Level int
+	id      int64
+	coll    string
+	tracker dataengine.Tracker
+	Name    string
+	Level   int
 }
 
 func (d *PlayerDao) Id() int64            { return d.id }
 func (d *PlayerDao) SetId(id int64)       { d.id = id }
 func (d *PlayerDao) DbName() string       { return "game" }
 func (d *PlayerDao) CollName() string     { return d.coll }
-func (d *PlayerDao) Dirty() entity.IDirty { return &d.dirty }
-func (d *PlayerDao) CleanDirty()          { d.dirty.SelfClean() }
+func (d *PlayerDao) Dirty() entity.IDirty { return &d.tracker }
+func (d *PlayerDao) CleanDirty()          { d.tracker.SelfClean() }
 
 // --- Component definition (手写) ---
 
@@ -40,11 +40,6 @@ type BagComponent struct {
 func (b *BagComponent) Name() string                                           { return "bag" }
 func (b *BagComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error { return nil }
 func (b *BagComponent) OnDestroy(_ entity.EntityDestroyReason)                 {}
-
-func (b *BagComponent) AddItem(id int64, count int) {
-	b.items[id] += count
-	b.player.dao.dirty.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, checkpoint.DirtyAll)
-}
 
 // --- Entity definition (手写，只定义结构) ---
 
@@ -112,30 +107,6 @@ func NewPlayer(param *entity.EntityCreateParam) (*Player, error) {
 }
 
 // ============================================================
-// Snapshot 方法（生成代码产出，配合 checkpoint）
-// ============================================================
-
-func (p *Player) Snapshot() []checkpoint.SaveItem {
-	mask := p.dao.dirty.TakePersistDirty()
-	if mask == 0 {
-		return nil
-	}
-	ver := p.dao.dirty.IncVersion()
-	// 序列化 DAO（实际用 BSON/MessagePack）
-	data := []byte(fmt.Sprintf(`{"name":"%s","level":%d}`, p.dao.Name, p.dao.Level))
-	return []checkpoint.SaveItem{
-		{
-			Collection: p.dao.CollName(),
-			ID:         p.dao.Id(),
-			Version:    ver,
-			Mask:       mask,
-			Data:       data,
-			Tracker:    &p.dao.dirty,
-		},
-	}
-}
-
-// ============================================================
 // Example: 展示完整流程
 // ============================================================
 
@@ -154,13 +125,7 @@ func Example_generatedEntityFactory() {
 		panic(err)
 	}
 
-	// 业务逻辑：直接操作具体类型
-	player.bag.AddItem(1001, 5)
-
-	// checkpoint: guard release 时调用 Snapshot
-	items := player.Snapshot()
-	fmt.Printf("entity_id=%d, storage_id=%d, snapshot_items=%d, version=%d\n",
-		player.ID(), player.StorageID(), len(items), items[0].Version)
+	fmt.Printf("entity_id=%d, storage_id=%d\n", player.ID(), player.StorageID())
 
 	// Touch/UnTouch 生命周期
 	player.Touch()
@@ -181,7 +146,7 @@ func Example_generatedEntityFactory() {
 	_ = sync.Mutex{}
 
 	// Output:
-	// entity_id=10241029, storage_id=10241029, snapshot_items=1, version=1
+	// entity_id=10241029, storage_id=10241029
 	// touched, removed=false
 	// guard_acquired=true
 	// no interface reference in EntityBase
