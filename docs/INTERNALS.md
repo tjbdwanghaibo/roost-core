@@ -6,7 +6,7 @@
 
 | 层 | 拥有什么 | 不拥有什么 |
 | --- | --- | --- |
-| core | 生命周期、Registry、Entity/Nest/checkpoint 契约与算法、同步协议语义、Saga engine、观测和安全原语 | Mongo/NATS/QUIC 等具体连接装配 |
+| core | 生命周期、Registry、Entity/Nest/Data Engine 契约与算法、同步协议语义、Saga engine、观测和安全原语 | Mongo/NATS/QUIC 等具体连接装配 |
 | kit | 中间件 Mod、WAL/store、网络 transport、AI/taskflow/spatial 执行器 | 业务 Entity、协议认证、玩法规则 |
 | skill | 技能 Program/Runtime、确定性数值与宿主契约 | Entity 锁、网络会话、数据库事务 |
 | codegen | 项目声明、DAO/Entity/Nest/协议/配置/部署生成 | 生产 Secret、业务容量决策 |
@@ -44,7 +44,7 @@ admit request
 
 错误发生在 commit point 前时执行 state/undo 回滚并恢复 dirty snapshot。commit 结果确定失败时可返回错误；结果不确定时不能回滚内存后继续服务，因为 WAL/Mongo 可能已经成功。此时事务进入 indeterminate，实例 fence 并退出，由 replay 使用 transaction ID 和 receipt 决定历史。
 
-Pipelined commit 把 fsync 摊销到一批事务，但每个事务仍有 admission 序号和 durable watermark。业务结果、checkpoint 外化和同步可见性不得越过 watermark。
+Pipelined commit 把 fsync 摊销到一批事务，但每个事务仍有 admission 序号和 durable watermark。业务结果、Data Engine projection 和同步可见性不得越过 watermark。
 
 ## 5. WAL 与恢复
 
@@ -52,13 +52,13 @@ kit/nestwal 使用分段 append-only WAL。记录有长度、版本和校验，�
 
 恢复流程先打开并验证 WAL，重放未确认事务到幂等 Mongo transaction/outbox，再启动 Nest 接流量。WAL 目录只能由一个 writer 使用。文件系统、PVC 或挂载无法提供 write ordering/fsync 语义时，框架不能宣称 strict durability。
 
-## 6. Checkpoint 与 Save/Load
+## 6. Data Engine 与 Commit/Load
 
-DirtyTracker 用字段位掩码区分 persist 与 sync dirty。Journal 接收不可变 patch，Flusher 按 key/version 合并批次。Redis 通过 Lua CAS 拒绝旧版本，并在同连接执行 WAITAOF 作为 durable admission；Mongo 用 version/epoch/fence 条件更新权威文档。
+`dataengine.Tracker` 维护 persisted version 与 sync mask；persist change 只属于当前 Nest transaction。生成 DAO 把变化物化为 Put/Patch/Delete，kit Projector 从 WAL 按序写入带 version/epoch/fence 条件的 Mongo transaction。
 
-pending admission、batch、journal、并发 flush 都有硬上限。主动 `Flush(ctx)` 与后台 flush 走同一条路径，因此不会产生“主动刷盘绕开版本检查”的第二套语义。Stop 在 worker 关闭前 flush；超时向上返回。
+WAL admission、projection batch、outbox claim 和并发 migration 都有硬上限。主动 `Flush(ctx)` 与后台 projector 走同一条路径，因此不会产生绕开 receipt/version 检查的第二套语义。Stop 在关闭 outbox 前收敛 projection；超时向上返回。
 
-Load 必须恢复 Entity 聚合、DirtyTracker version、删除状态和 Remote marker/route 版本。Schema migration 在发布 Entity 前运行。配置或数据不兼容时 fail closed，不能用零值覆盖。
+Load 必须在 snapshot read transaction 中恢复完整 Entity 聚合、Tracker version、删除状态和 Remote marker/route 版本。Schema migration 通过 system transaction 写回同一 WAL/Projector，配置或数据不兼容时 fail closed。
 
 ## 7. Remote Entity 四维 fencing
 
@@ -97,7 +97,7 @@ Skill compiler 严格解析配置，验证引用和预算，输出不可变 Prog
 
 ## 12. 观测与失败语义
 
-健康状态分 liveness、readiness 和 dependency health。Liveness 不因为下游短暂失败重启进程；readiness 在 fence、队列饱和、恢复未完成或关键依赖失败时撤流。指标至少覆盖请求延迟/错误、队列、水位、WAL fsync/replay、checkpoint pending、Remote cache/source、Saga backlog、同步丢帧/重同步和连接数。
+健康状态分 liveness、readiness 和 dependency health。Liveness 不因为下游短暂失败重启进程；readiness 在 fence、队列饱和、恢复未完成或关键依赖失败时撤流。指标至少覆盖请求延迟/错误、队列、水位、WAL fsync/replay/unacked、projection/outbox pending、Remote cache/source、Saga backlog、同步丢帧/重同步和连接数。
 
 日志携带 service、sid、entity、transaction/request ID、route/marker/fence/version。任何后台 goroutine panic 必须被容器化为错误、健康失败或 RuntimeFailure，不能静默退出。
 
@@ -108,7 +108,7 @@ Skill compiler 严格解析配置，验证引用和预算，输出不可变 Prog
 | 生命周期/依赖图 | `app/app.go`、`app/mod.go` |
 | 实体与锁 | `entity/`、`lock/`、`worker/` |
 | 事务/WAL 契约 | `nest/`、[Nest WAL](../NEST_TRANSACTION_WAL.md) |
-| 保存 | `checkpoint/` |
+| 数据引擎契约 | `dataengine/`；生产实现见 cube-kit `dataengine/` 与 `nestwal/` |
 | Remote | `entity/remote*`、`ownerroute/`、`replica/`、[Remote 文档](../REMOTE_ENTITY.md) |
 | Saga | `saga/`、[Saga 文档](../SAGA.md) |
 | 同步 | `entitysync/`、`sync/`、`syncstream/`、`replication/`、`lockstep/` |

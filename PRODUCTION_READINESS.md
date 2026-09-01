@@ -19,17 +19,16 @@
 
 生产环境要求 MongoDB 使用支持事务的 replica set/sharded cluster。所有需要原子提交的 collection 必须处于同一 Mongo database scope；跨 database 原子性不被宣称。
 
-## 3. Save/Load 与主动 Flush
+## 3. Data Engine：Commit/Load/Migrate/Flush
 
-- `checkpoint.Mod` 是注册到应用 Registry 的唯一 checkpoint 能力。应用不得绕过 Mod 直接持有内部 checkpoint。
-- admission 失败的 save 会进入有界 pending 集合，由后台 worker 重试；`Flush(ctx)` 同时排空 pending 与 checkpoint 队列。
-- 持久删除在 Entity mutex 内先生成版本化 tombstone，并等待 Redis durable admission 成功后才从 EntityManager 移除。删除 admission 的失败结果可能不确定，因此必须保留内存 Entity、fence 进程并由 WAL replay 恢复，禁止退化为仅内存重试。
-- `checkpoint.admission_pending_capacity` 是硬上限；达到上限会触发 RuntimeFailure 并 fence 进程，禁止用无限内存换可用性。
-- `Stop(ctx)` 在关闭 worker 前执行最终 flush；超时或失败必须向上返回，不允许静默丢弃。
-- Mongo 保存使用版本、marker epoch、lock fence 和 route epoch 做条件更新；加载按完整聚合 snapshot 恢复，不发布半初始化 Entity。
-- 删除是携带严格递增 version 的持久 tombstone，不再物理删除。旧 save、旧 WAL ACK 和并发 flush 都不能复活已删除 ID；业务 ID 默认不可复用，确需重建必须提交严格更高 version。
-- Mongo 启动固定 primary + majority+journal 写、transaction snapshot read，并拒绝不支持 session/transaction 的 standalone。`_nest_transactions` 由 TTL 索引限制幂等 receipt 生命周期。
-- Checkpoint admission 使用同一物理 Redis 连接批量执行 Lua CAS，再以一次 `WAITAOF` 接纳整批数据，并校验 local/replica fsync 数量；生产要求 Redis 7.2+、AOF 开启和单主/Sentinel 接入。不能证明同连接同分片语义的 Redis Cluster 必须 fail-closed，不能把普通命令成功冒充持久化成功。
+- `dataengine.Mod` 是 Registry 中唯一的 Entity 数据引擎，同时提供 lazy Nest committer、aggregate loader、migration runner 和主动 `Flush(ctx)`。
+- 所有持久化字段修改必须位于 Nest transaction；低隔离入口使用 detached transaction，不能在 Entity release 时另走 after-image 保存。
+- WAL admission 有界；磁盘容量、最长 unacked age 或 fsync 不确定错误会使进程 fence，禁止无限堆内存或猜测结果。
+- Projector 将 Put/Patch/Delete、Remote commit、Saga receipt 与 effect staging 按需放入同一个 Mongo transaction；成功后才推进 WAL ack。
+- Mongo projection 使用 expected/next version CAS。删除写版本化 tombstone，旧 Patch 和重复 replay 不能复活已删除 ID；显式重建必须提交更高 version。
+- aggregate load 在一个 snapshot read transaction 中读取完整 DAO 集合，完成 schema migration 与 tracker version 恢复后才发布 Entity。
+- `Stop(ctx)` 先停止接入并收敛 Projector，再停止 outbox claim；未发布 effect 已经在 Mongo 持久化，下次启动继续投递。
+- Mongo 必须支持 session/transaction；写 concern 为 majority+journal。transaction/effect receipt TTL 必须长于对应 WAL/stream 的重放窗口。
 
 ## 4. Remote Entity
 
@@ -69,8 +68,8 @@ lease fencing、幂等 completion receipt 的持久化 Store；完整语义见 [
 ```text
 go test ./...
 go vet ./...
-go test -race ./entity ./nest ./checkpoint ./entitysync ./replication ./sync ./syncstream ./ownerroute ./etcd ./cache ./saga
-go test -race ./checkpoint ./remote_entity ./nestwal ./nest ./replication ./sync ./saga
+go test -race ./dataengine ./entity ./nest ./entitysync ./replication ./sync ./syncstream ./ownerroute ./etcd ./cache ./saga
+go test -race ./dataengine ./remote_entity ./nestwal ./nest ./replication ./sync ./saga
 git diff --check
 ```
 
@@ -78,6 +77,6 @@ git diff --check
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 
-升级前必须先停止旧 writer 并排空旧 checkpoint 队列。`EntityManager.Remove/RemoveAfter` 与无返回值删除 hook 已移除，业务必须改用带 context 和 error 的 `ManagerAccess.Destroy`。旧的物理删除记录没有 version，不能混入新进程；升级后必须重新生成 Entity，使 `RemoveSnapshot` 在 Entity mutex 内递增 DAO tracker version。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。文件型 sync history 的 WAL 与 checkpoint 会在发布提交点同步目录元数据；Windows 使用 write-through rename，Linux/Unix 使用 rename 后目录 fsync。
+从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并按 [docs/DATA_ENGINE_MIGRATION.md](docs/DATA_ENGINE_MIGRATION.md) 执行一次性数据审计。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
 
 第二条 race 命令在 `cube-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

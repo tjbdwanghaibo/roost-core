@@ -27,7 +27,7 @@
 | `app` | `Mod`/`Service` 生命周期、类型安全的 capability `Registry`、配置生产门禁、运行期 fail-stop | 装配任何服务的入口 |
 | `entity` | 实体 = `EntityBase` + 组件 + DAO 的组合；`EntityManager`/`Getter`；实体锁与 guard 作用域；远程实体元数据 | 定义所有业务对象 |
 | `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
-| `checkpoint` | `DirtyTracker` 字段级脏掩码、有界 `Journal`、`Flusher` 批量合并刷盘、版本化 tombstone、Redis WAL | 实体状态的后台持久化 |
+| `dataengine` | `Tracker`、Put/Patch/Delete mutation、聚合 Load、schema migration、Saga/Remote commit 契约 | Entity 状态统一进入 Nest transaction 与 kit Data Engine WAL |
 | `lock`、`worker`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool、goroutine-ID 等基础原语 | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
 | `entitysync`、`sync`、`syncstream`、`replication` | 订阅协调 + prepare/commit 两阶段同步、有序状态流、Quake3 风格 delta+LOD 房间复制 | 把实体状态推送给客户端或其他服务（状态同步通道） |
 | `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
@@ -73,18 +73,18 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
-// ---- 1. DAO：实体的持久化文档，字段级脏掩码由 checkpoint.DirtyTracker 跟踪 ----
+// ---- 1. DAO：本例只演示事务回滚和同步 dirty；持久化 DAO 由 codegen 生成 ----
 
 const heroGoldField = 1 // 字段位：Gold 对应脏掩码第 1 位
 
 type HeroDao struct {
 	id      int64
-	tracker checkpoint.DirtyTracker
+	tracker dataengine.Tracker
 	Gold    int64
 }
 
@@ -96,7 +96,7 @@ func (d *HeroDao) Dirty() entity.IDirty { return &d.tracker }
 func (d *HeroDao) CleanDirty()          { d.tracker.SelfClean() }
 
 // DirtyTracker 让 RollbackUndo 事务能在回滚时恢复脏掩码快照。
-func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
+func (d *HeroDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
 
 // AddGold 是"可回滚写"的最小样板：先 RecordUndo 登记逆操作，再改内存、标脏。
 // 真实项目中这类 setter 由 roost-codegen 生成。
@@ -106,7 +106,7 @@ func (d *HeroDao) AddGold(n int64) error {
 		return errors.New("AddGold must run inside a rollback=undo nest handler")
 	}
 	d.Gold += n
-	d.tracker.MarkPersist(1 << heroGoldField)
+	d.tracker.MarkSync(1 << heroGoldField)
 	return nil
 }
 
@@ -124,7 +124,7 @@ type Hero struct {
 
 func (h *Hero) Base() *entity.EntityBase { return h.EntityBase }
 
-// RangeDao 实现 entity.Guardable：事务与 checkpoint 由此发现实体的 DAO。
+// RangeDao 实现 entity.Guardable：事务由此发现实体的 DAO。
 func (h *Hero) RangeDao(f func(entity.DaoInterface)) { f(h.Dao) }
 
 // ---- 3. Getter：Nest 通过它按 ID 取实体（生产中由 EntityManager 提供）----
@@ -203,10 +203,10 @@ func main() {
 
 	name := nest.NewHandlerName("hero.add_gold")
 
-	// 成功：+50，事务提交，内存生效、脏位保留（等待 checkpoint 刷盘）
+	// 成功：+50，事务提交，内存生效、同步 dirty 保留
 	ret, err := engine.Request(context.Background(), name, id, nest.NewParams(int64(50)))
 	fmt.Printf("add +50: gold=%v err=%v dirty=%v\n", ret, err, hero.Dao.DirtyTracker().Dirty())
-	hero.Dao.CleanDirty() // 示例简化：模拟 checkpoint 已刷盘并清理脏位
+	hero.Dao.CleanDirty() // 示例简化：模拟同步帧已消费 dirty
 
 	// 失败：-1000 使余额为负，handler 返回错误，事务按 undo 回滚：
 	// 内存值恢复为 150，脏掩码恢复为 handler 进入前的快照（干净）
@@ -241,7 +241,7 @@ Hero（业务实体，具体类型）
 ```
 
 - **组件（Component）** 持有对宿主实体的**具体类型指针**（不是 interface），实现行为逻辑；用 `entity.RegisterComponentDependency` 声明初始化顺序。
-- **DAO** 是持久化边界：实现 `entity.DaoInterface`，内嵌 `checkpoint.DirtyTracker` 做字段级脏掩码。组件改状态时只改 DAO 字段并标脏，何时刷盘由框架决定。
+- **DAO** 是持久化边界：实现 `entity.DaoInterface` 和 `nest.MutationParticipant`，内嵌 `dataengine.Tracker`。生成 mutator 把 persistence change 写入当前 Nest transaction，同时维护 sync mask。
 - 组件/DAO 与实体之间的接线代码（工厂、快照、undo setter）在真实项目中由 `roost-codegen` 生成，`entity/example_gen_test.go` 手写模拟了生成产物的形态，是理解这套约定的最佳入口。
 - 实体注册进 `entity.EntityManager` 后通过 `ManagerAccess`（`entity/manager_access.go`）暴露创建/获取/销毁/分组索引，服务持有实例而不是全局单例；ID 由 `entity.IDGen`（Redis/etcd 分配号段）生成。
 
@@ -259,7 +259,7 @@ worker（每 worker 一条 MPSC 队列，有界，满即拒绝 ErrQueueFull）
 handler(es []entity.IThreadSafeEntity, params []any) (any, error)
         │  事务提交 / 回滚（见下节）
         ▼
-解锁 → guard release hook（checkpoint/sync）→ 回包
+解锁 → guard release hook（sync/lifecycle）→ 回包
 ```
 
 - **同一实体天然串行**：同 ID 恒定哈希到同一 worker，队内 FIFO。不同实体并行。
@@ -279,34 +279,34 @@ Rollback 三档：
 | `RollbackState` | handler 前对每个 DAO 抓完整快照（DAO 需实现 `RollbackSnapshotter` 或 `RollbackParticipant`），失败时整体恢复 | 简单、写字段多 |
 | `RollbackUndo` | setter 第一次改字段时 `nest.RecordUndo(owner, field, inverse)` 登记逆操作（同 owner+field 自动去重合并，map 键用 `RecordUndoToken`），失败时逆序执行 | 热路径推荐；生成代码默认 |
 
-两种策略都会自动快照并恢复 `DirtyTracker` 的脏掩码与版本，回滚后实体"字节级"回到事务前。
+两种策略都会自动快照并恢复 `dataengine.Tracker` 的同步掩码与版本，回滚后实体回到事务前。
 
 Durability 四档：
 
 | 策略 | commit point | 说明 |
 | --- | --- | --- |
-| `DurabilityMemory` | 无 WAL | 靠实体 release 后的 checkpoint 异步落盘 |
+| `DurabilityMemory` | 无 WAL | 只允许不修改 persistent 字段的内存事务 |
 | `DurabilityAsync` | WAL write 受理，不等本批 fsync | 后台按间隔刷盘 |
 | `DurabilityStrict` | **锁内**等待 group commit fsync 完成 | 返回成功即已持久化 |
 | `DurabilityPipelined` | 锁内仅"入队拿 LSN"，fsync 锁外等待 | 热点实体锁不被 I/O 拖住，见进阶细节 |
 
-handler 成功后，框架把所有被改实体的 after-image/delta（由 `CommitParticipant.PrepareCommit` 物化）连同 `nest.Emit` 发出的 outbox `Effect` 组成**一条** `CommitRecord` 交给 `TransactionCommitter`——多实体修改与外部消息在 WAL 里永远是一个原子单元。外部副作用（DB、RPC、消息）严禁写在 handler 里，用 `nest.AfterCommit`（提交后、通常锁外执行）或 `nest.Emit`（事务性 outbox，会自动把 memory 事务升为 strict）。
+handler 成功后，框架把所有被改 DAO 的 Put/Patch/Delete（由 `MutationParticipant.PrepareMutation` 物化）连同 `nest.Emit` 发出的 outbox `Effect` 组成**一条** `CommitRecord` 交给 `TransactionCommitter`——多实体修改与外部消息在 WAL 里永远是一个原子单元。外部副作用（DB、RPC、消息）严禁写在 handler 里，用 `nest.AfterCommit` 或 `nest.Emit`。
 
-### 持久化管线（checkpoint）
+### 持久化管线（Data Engine）
 
-`checkpoint` 是"内存 → 数据库"的 after-image 管道：
+Data Engine 是唯一的 Entity 数据管线：
 
 ```text
-DAO setter 标脏（DirtyTracker，原子 Or）
-   ▼ 实体 guard 释放时（release hook，持锁内）采集 Snapshot → SaveItem
-Journal（有界队列，满则背压/拒绝）
-   ▼ Flusher worker 或显式 Flush(ctx)
-按 (collection, id) 去重合并 + 版本化 CAS → StorageBackend（Mongo 等，kit 实现）
+DAO mutator → nest.MarkPersist/Set/Unset（transaction-local PersistChange）
+   ▼ handler 成功时 PrepareMutation
+一条 CommitRecord（Put/Patch/Delete + Saga/Remote mutation + effects）
+   ▼ kit Data Engine WAL group commit
+Mongo transaction/CAS projection → WAL ack → effect outbox
 ```
 
-- `DirtyTracker`（`checkpoint/dirty.go`）用 `atomic.Or`/`Swap` 维护 persist/sync 两套 64 位掩码：`TakePersistDirty` 交换出快照后，其后标的脏位落在新掩码里，旧确认永远清不掉新数据（天然免 ABA）。
-- WAL 三档（`checkpoint/option.go`）：async 尽力、required WAL 拒绝则拒绝提交、durable fsync 确认才受理。`Checkpoint.Start` 强制先完成 WAL replay 再接受实时 flush。
-- 删除是**版本化 tombstone**（`JournalEntry.Deleted`），先 WAL 后 journal，后端 `BulkRemove` 成功才 ACK——防止崩溃窗口让旧快照复活实体（见进阶细节）。
+- `dataengine.Tracker` 保存 persisted version 与 sync mask；持久化字段变化只存在于当前事务，不存在 release 时重新收集的第二套 dirty。
+- `DurabilityAsync`、`Strict`、`Pipelined` 共享同一 WAL；差别只在调用方等待 admission/fsync/completion 的位置。
+- Load、schema migration、字段级 Patch、删除 tombstone、Saga receipt 与 Remote commit 均通过同一 Store/Projector 边界。
 
 ## 关键实现细节（进阶）
 
@@ -345,17 +345,11 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 2. **提前放锁**，fsync 在锁外由 group-commit 完成。
 3. **回包与 `AfterCommit` 等到 ticket 变 durable 后**才执行。
 
-正确性靠两条性质：**前缀持久性**（单 WAL 按 LSN 顺序 fsync，任一记录落盘则所有更小 LSN 已落盘）使进程内的级联脏读无需阻止——T2 若观察过 T1 的状态，T2 的 LSN 必大于 T1，崩溃只截 LSN 后缀，重放不出"有 T2 没 T1"的历史；**外化闸门**负责堵住脏状态离开进程——entitysync 与 checkpoint 对比 `entity.LastCommitLSN()` 和 committer 的 `DurableLSN()` 水位线，未落盘的状态不分发、不落库。committer 不实现该能力时派发返回 `ErrPipelinedCommitterRequired`，绝不静默降级；生产还应用 `NestOptionWithPipelinedAllowlist` 按 handler 灰度。Phase 2 异步完成（`completionPump`）把 durable 等待也移出 worker，per-entity 完成链（锁内 link，链序 = LSN 序）保证同实体完成回调在任何路径（池内、内联降级）都按提交序执行。
+正确性靠两条性质：**前缀持久性**（单 WAL 按 LSN 顺序 fsync，任一记录落盘则所有更小 LSN 已落盘）使进程内的级联脏读无需阻止——T2 若观察过 T1 的状态，T2 的 LSN 必大于 T1，崩溃只截 LSN 后缀，重放不出"有 T2 没 T1"的历史；**外化闸门**负责堵住脏状态离开进程——entitysync 对比 `entity.LastCommitLSN()` 和 committer 的 `DurableLSN()` 水位线，Data Engine projector 只处理 durable WAL record。committer 不实现该能力时派发返回 `ErrPipelinedCommitterRequired`，绝不静默降级；生产还应用 `NestOptionWithPipelinedAllowlist` 按 handler 灰度。异步完成（`completionPump`）把 durable 等待也移出 worker，per-entity 完成链保证同实体完成回调按提交序执行。
 
-### 5. tombstone 的"同版本 delete 胜"语义 —— `checkpoint/flusher.go`、`checkpoint/redis_wal.go`
+### 5. tombstone 与 version CAS —— `dataengine/mutation.go`、kit `dataengine/mongo_store.go`
 
-删除与保存的竞争按版本裁决，且**平局判给删除**、**复活要求严格更高版本**，三层实现同一规则：
-
-- 内存去重（`Flusher.dedup`）：delete 只有在已存在**严格更高**版本的 save 时才让位；反过来 save 想取消同批次的 tombstone 必须版本**严格大于**它。
-- Redis WAL Lua 脚本：token 形如 `s|d:version:fence:...`，同版本时先比 fence，再比 `d` 前缀——已有 `d` 记录时同版本 save 直接被拒。版本比较用 `decimal_greater`（先比字符串长度再比字典序）规避 Lua number 53-bit 精度陷阱；ACK 脚本用期望 token 的 CAS 删除，迟到的旧 ack 无法误删更新的记录。
-- WAL replay 与后端 `BulkRemove` 沿用同一版本 CAS。
-
-动机：普通生成实体 ID 永不复用，"同版本又出现一个 save"只可能是崩溃重放里的旧快照——判给 delete 就是防复活；真正的重建业务必须显式携带更高版本。
+Put/Patch/Delete 都携带 `ExpectedVersion` 与 `NextVersion`。Mongo projection 在同一过滤器中校验版本，Delete 写 tombstone 而不是无条件物理删除；WAL 重放重复记录由 transaction receipt 和 version CAS 吸收。复活必须是显式、严格更高版本的 Put，迟到的旧 Patch 无法覆盖 tombstone。
 
 ### 6. goroutine-ID 上下文的边界 —— `misc/goid_prod.go`、`entity/entity_guard.go`、`ctx/`
 
@@ -454,7 +448,7 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 4. **事务与回滚**：`nest/rollback.go`（`RollbackTx`、`invokeWithTransaction`）+ `nest/transaction.go`（CommitRecord/Committer 契约）→ `nest/nest_test.go` 中 `TestRollback*`、`TestStrictCommit*`、`TestIndeterminateCommitDoesNotRollback` → 文档 `NEST_TRANSACTION_WAL.md`。
 5. **Pipelined 提交**：文档 `NEST_PIPELINED_COMMIT.md` 先读正确性论证 → `nest/pipelined_completion.go` → `nest/pipelined_commit_test.go`、`nest/pipelined_async_test.go`。
 6. **Guard 与实体管理**：`entity/entity_guard.go`（锁序、guard 作用域、release hook）→ `entity/entity_manager.go`、`entity/manager_access.go` + 对应测试。
-7. **checkpoint 持久化**：`checkpoint/dirty.go` → `checkpoint/journal.go` → `checkpoint/flusher.go`（dedup/tombstone）→ `checkpoint/checkpoint.go` → `checkpoint/redis_wal.go` + `checkpoint/redis_wal_test.go`、`checkpoint/checkpoint_test.go`。
+7. **Data Engine 契约**：`dataengine/tracker.go` → `dataengine/mutation.go` → `dataengine/store.go`，再到 kit `dataengine/projector.go`、`mongo_store.go`、`entity_repository.go` 与 `migration.go`。
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
 9. **状态同步**：`entity/subject_sync.go` + `entitysync/subscription.go`（prepare/commit 两阶段）→ `syncstream/syncstream.go` → `replication/`（delta+LOD）→ 文档 `ENTITY_SYNC.md`。
 10. **帧同步（输入帧）**：`lockstep/sequencer.go`（乐观帧锁定）→ `lockstep/wire.go`（冗余广播编码）→ `lockstep/history.go`、`lockstep/desync.go` → `lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `lockstep/room.go`（房间与传输接线）。
@@ -467,17 +461,17 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 业务服务（roost-codegen 生成的项目骨架 + 手写玩法）
   ├── roost-core     通用运行时与抽象（本仓库，模块名 cube-core）
   ├── roost-kit      具体基础设施 Mod（模块名 cube-kit）：Redis、Mongo、NATS/JetStream、
-  │                  etcd、nest WAL committer（kit/nestwal）、分布式锁、运维 HTTP 等，
+  │                  etcd、Data Engine（复用 kit/nestwal 物理 WAL）、分布式锁、运维 HTTP 等，
   │                  实现 core 定义的接口并注册进 app.Registry
   └── roost-skill    可复用技能编译器与权威战斗运行时：其 combatcomponent 把战斗状态
-                     接成 core 实体的 DAO（DirtyTracker + nest.RecordUndo 逆操作），
+                     接成 core 实体的 DAO（dataengine.Tracker + nest.RecordUndo 逆操作），
                      是"第三方库如何正确接入 core 事务体系"的参考实现
 ```
 
 - **roost-core（本仓库）**：只定义抽象与框架语义。业务代码依赖这里的接口和稳定类型，不直接依赖任何中间件客户端。
-- **roost-kit**：每个 Mod 实现 `app.Mod` 生命周期（Init 读配置 → Provide 注册 capability → Start 建连接 → Stop 释放），为 core 的 committer、StorageBackend、Redis WAL 等接口提供生产实现。
-- **roost-codegen**：项目生成器 + 代码生成器。`roost project new <name>` 按 `roost.yaml` 生成服务骨架；扫描实体/组件/DAO 定义生成工厂、无副作用回滚快照、setter 级 inverse undo、`PrepareCommit` after-image 等——本 README 手写的样板在真实项目中全部由它产出。
-- **roost-skill**：building on core 的领域库（技能/战斗），展示 checkpoint、nest 事务、syncstream 的完整集成方式。
+- **roost-kit**：每个 Mod 实现 `app.Mod` 生命周期；Data Engine Mod 提供唯一 committer、WAL、Mongo Store、aggregate loader/migration 与 outbox。
+- **roost-codegen**：项目生成器 + 代码生成器。它生成工厂、回滚快照、setter 级 inverse undo、`PrepareMutation` 与字段级 BSON patch。
+- **roost-skill**：building on core 的领域库（技能/战斗），展示 Data Engine transaction、Saga 与 syncstream 的完整集成方式。
 
 本地联调多仓库时在共同父目录建 `go.work`（不要提交到任何仓库）：
 

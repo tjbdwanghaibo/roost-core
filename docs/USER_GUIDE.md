@@ -11,7 +11,7 @@
 ```text
 接入层 -> 生成 Sender -> Nest handler -> Entity/Component/DAO
                                       -> Remote Entity/Saga（需要跨域时）
-Entity dirty -> checkpoint/WAL -> Redis/Mongo
+DAO mutation -> Nest transaction -> Data Engine WAL -> Mongo projection/outbox
 Entity mutation -> entitysync/replication 或 lockstep -> 客户端
 ```
 
@@ -26,9 +26,9 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 | 场景 | 建议 Mod |
 | --- | --- |
 | 无状态网关 | configdata、etcd、nats、ops、gateway |
-| 普通实体服 | redis、mongo、nats、checkpoint、nestwal、nest、ops |
+| 普通实体服 | mongo、nats、dataengine、nest、ops |
 | 跨服实体 | 普通实体服 + sync、remote_entity |
-| 长事务协调器 | mongo、nats、nestwal、saga、ops |
+| 长事务协调器 | mongo、nats、dataengine、saga、ops |
 | 状态同步房间 | nats、sync、replication transport；业务显式装 RoomManager |
 | 确定性帧同步 | lockstep + KCP/QUIC/UDP transport |
 
@@ -63,11 +63,11 @@ DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。�
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
 
-## 5. Save、Load 与主动 Flush
+## 5. Commit、Load 与主动 Flush
 
-checkpoint 是唯一保存入口。字段 dirty 被合并为版本化 patch，Redis durable admission 与 Mongo 条件更新共同防止旧写覆盖新状态。后台 save admission 失败进入有界 pending；容量耗尽触发 runtime failure，而不是无限堆内存。
+Data Engine 是唯一保存入口。字段变化先进入当前 Nest transaction，再作为版本化 Put/Patch/Delete 写入 WAL；Mongo version CAS 防止旧写覆盖新状态。WAL/Projector backlog 有硬容量和年龄上限，超过门禁触发 runtime failure，而不是无限堆内存。
 
-主动刷盘使用 Registry 中的 checkpoint 能力调用 `Flush(ctx)`。典型时机：停机、迁服、玩家登出前强保证、运维快照、版本升级。不要为每个普通请求 Flush，否则会破坏批处理吞吐；需要强确认的业务应选择 Nest strict durability。
+主动刷盘使用 Registry 中的 Data Engine 能力调用 `Flush(ctx)`。典型时机：停机、迁服、运维检查和版本升级。不要为每个普通请求 Flush，否则会破坏 group commit/批 projection 吞吐；需要强确认的业务选择 Nest strict durability。
 
 Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带 schema version；加载失败不允许生成“空玩家”覆盖旧数据。
 
