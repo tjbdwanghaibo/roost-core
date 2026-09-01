@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 )
 
 func newCommitTestStore(t *testing.T) (*Store, string) {
@@ -17,6 +19,67 @@ func newCommitTestStore(t *testing.T) (*Store, string) {
 		Key: func(v testMonsterCfg) int32 { return v.ID },
 	})
 	return NewStore(reg, dir), dir
+}
+
+type blockingFailListener struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (l *blockingFailListener) Name() string                                         { return "blocking-fail" }
+func (l *blockingFailListener) ValidateReload(context.Context, ReloadEvent) error    { return nil }
+func (l *blockingFailListener) BeforeApplyReload(context.Context, ReloadEvent) error { return nil }
+func (l *blockingFailListener) AfterApplyReload(context.Context, ReloadEvent) error {
+	close(l.entered)
+	<-l.release
+	return errFail
+}
+func (l *blockingFailListener) RollbackReload(context.Context, ReloadEvent, error) {}
+
+func TestFailedCommitDoesNotRollBackAnotherStorePublication(t *testing.T) {
+	previousDefault := DefaultStore()
+	previousConfig := fctx.RuntimeConfig()
+	defer func() {
+		publishMu.Lock()
+		SetDefaultStore(previousDefault)
+		fctx.SetRuntimeConfig(previousConfig)
+		publishMu.Unlock()
+	}()
+
+	storeA, _ := newCommitTestStore(t)
+	storeB, _ := newCommitTestStore(t)
+	oldA, err := storeA.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeB.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	listener := &blockingFailListener{entered: make(chan struct{}), release: make(chan struct{})}
+	storeA.AddReloadListener(listener)
+	aResult := make(chan error, 1)
+	go func() {
+		_, err := storeA.Reload(context.Background())
+		aResult <- err
+	}()
+	<-listener.entered
+
+	bTarget, err := storeB.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(listener.release)
+	if err := <-aResult; err == nil {
+		t.Fatal("store A reload unexpectedly succeeded")
+	}
+
+	if storeA.Current() != oldA {
+		t.Fatal("store A did not revert its own snapshot")
+	}
+	if DefaultStore() != storeB || fctx.RuntimeConfig() != bTarget {
+		t.Fatal("store A rollback overwrote store B's successful publication")
+	}
 }
 
 // recordingListener tracks which callbacks ran, and can fail or panic per phase.

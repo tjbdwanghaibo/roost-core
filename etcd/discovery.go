@@ -35,6 +35,14 @@ type IServiceWatcher interface {
 	Close() error
 }
 
+// IServiceWatcherStatus is an optional terminal-status capability. A closed
+// EventChan alone cannot distinguish caller cancellation from watch failure.
+type IServiceWatcherStatus interface {
+	IServiceWatcher
+	Done() <-chan struct{}
+	Err() error
+}
+
 // ServiceEvent is a service instance change notification.
 type ServiceEvent struct {
 	Type EventType

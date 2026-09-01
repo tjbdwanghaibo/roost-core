@@ -40,6 +40,13 @@ type IVersionedLock interface {
 	Close() error
 }
 
+// IFencedVersionedLock is the optional correctness-grade lock capability used
+// by storage paths that must reject writes from stale lock holders.
+type IFencedVersionedLock interface {
+	IVersionedLock
+	Fence() uint64
+}
+
 // VersionedLockOptions configures a versioned lock.
 type VersionedLockOptions struct {
 	Key           string        // logical key prefix

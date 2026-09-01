@@ -494,6 +494,9 @@ func (a *App) emitLifecycle(ctx context.Context, event lifecycle.Event) error {
 	if !ok || reg == nil {
 		return fmt.Errorf("app: capability %q not found or wrong type", ModLifecycle)
 	}
+	if event.Phase == lifecycle.PhaseServiceStopping || event.Phase == lifecycle.PhaseServiceStopped {
+		return reg.EmitAll(ctx, event)
+	}
 	return reg.Emit(ctx, event)
 }
 

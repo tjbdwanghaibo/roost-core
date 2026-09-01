@@ -303,4 +303,22 @@ stored version == requested newVersion
 - Election channel replacement和错误压平：`cube-kit/etcd/election.go`；watch 终止：`cube-kit/etcd/discovery.go`。
 - Redis best-effort 契约与实现：`cube-core/redis/lock.go`、`cube-kit/redis/lock.go`。
 - NATS callback 包装：`cube-kit/nats/client.go`；Mongo WriteModel 转换：`cube-kit/mongo/collection.go`。
+
+## 11. 实施结果（2026-09-01）
+
+M1–M9 已按复评后的边界落地：
+
+- M1：Sync 增加独立 `MessageID`、可选 `IContextPublisher`、Patch 业务 `VersionOf`，NATS/JetStream handler error 统一为记录后不重试，durable 名称增加稳定 hash；
+- M2：Replica 以外层信封为权威，拒绝内外 topic/key/version 分叉，并传递 publish deadline；
+- M3：ConfigData 回滚只在全局槽位仍指向本次 target 时恢复，跨 Store 后继发布不会被覆盖；
+- M4：versioned lock 每次 acquisition 更换 owner token，unlock 以 operation receipt 幂等；core 暴露 `IFencedVersionedLock`；
+- M5：Saga drain 等待 consumer 关闭后才取消 worker；JetStream 支持 permanent/MaxDeliver `Term` 与终态指标；
+- M6：修复首轮 Election channel 替换，保留 Leader 底层错误，watcher 暴露 `Done/Err`；
+- M7：普通 Redis 锁补齐 idle/acquired/uncertain 状态机与 watchdog 配置门禁；
+- M8：NATS callback/空依赖边界 fail-closed，Mongo 拒绝未知 BulkWrite 类型且不再返回 `"<nil>"` UpsertedID；
+- M9：cleanup 使用 `EmitAll`，单个 hook 失败不阻断后续释放。
+
+验收结果：core 与 kit 的 `go vet ./...` 通过；kit `go test ./...` 通过；core 全量测试除沙箱内 Windows 临时目录真实路径权限外均通过，configdata 在非沙箱环境复跑通过；M1–M9 相关关键包 `go test -race` 全通过。Redis 8.8 本机真实进程验证了“旧持有者在 TTL 过期后 Release 不会删除新 acquisition”，测试由 `ROOST_REDIS_TEST_ADDR` 门控；NATS/etcd/Mongo 本机无服务端，真实依赖门禁仍需 CI 环境完成。未修改 checkpoint/WAL snapshot 逻辑，也未改变 handler 异步 Context 原则。
+
+发布必须按 core → kit 顺序：kit 为兼容当前已发布 core v1.9.1，对新 `SyncMsg.MessageID` 暂用滚动升级读取；core 新版本发布并升级 kit 依赖后可改为静态字段访问。两仓直接拼入同一 `go.work` 时发现并修复了历史 `google.golang.org/genproto` 单体包与新拆分包冲突：kit 明确排除两个 2018/2019 单体旧版本后，source-head 组合 `go test ./...` 已全通过。
 - Lifecycle phase 与首错返回：`cube-core/lifecycle/lifecycle.go`。

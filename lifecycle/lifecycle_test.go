@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,18 @@ func TestEmitOrder(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("order = %v", got)
+	}
+}
+
+func TestEmitAllContinuesAfterFailure(t *testing.T) {
+	reg := NewRegistry()
+	cause := errors.New("cleanup failed")
+	called := false
+	_ = reg.Register(Hook{Name: "bad", Phase: PhaseServiceStopping, Order: 1, Handler: func(context.Context, Event) error { return cause }})
+	_ = reg.Register(Hook{Name: "later", Phase: PhaseServiceStopping, Order: 2, Handler: func(context.Context, Event) error { called = true; return nil }})
+	err := reg.EmitAll(context.Background(), Event{Phase: PhaseServiceStopping})
+	if !errors.Is(err, cause) || !called {
+		t.Fatalf("EmitAll err=%v later_called=%v", err, called)
 	}
 }
 

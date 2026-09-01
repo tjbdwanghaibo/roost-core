@@ -2,6 +2,8 @@ package replica
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	fsync "github.com/tjbdwanghaibo/cube-core/sync"
 	"testing"
 )
@@ -32,6 +34,37 @@ func TestReplicatorPublishesAndAppliesEnvelope(t *testing.T) {
 	}
 	if len(store.items) != 2 || store.items[1].Op != OpDelete || store.items[1].Version != 4 {
 		t.Fatalf("delete item = %+v", store.items)
+	}
+}
+
+func TestReplicatorRejectsForgedInnerIdentity(t *testing.T) {
+	bus := newFakeBus()
+	store := &fakeStore{}
+	rep := New(bus, "topic", store)
+	if err := rep.Start(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(Envelope{Topic: "topic", Key: 99, Version: 3, Op: OpUpsert})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = bus.Publish(&fsync.SyncMsg{Topic: "topic", Key: 7, Version: 3, Data: raw})
+	if err == nil {
+		t.Fatal("forged inner key was accepted")
+	}
+	if len(store.items) != 0 {
+		t.Fatalf("forged envelope reached store: %+v", store.items)
+	}
+}
+
+func TestReplicatorHonorsCanceledPublishContext(t *testing.T) {
+	bus := newFakeBus()
+	rep := New(bus, "topic", &fakeStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := rep.Publish(ctx, Envelope{Key: 7, Version: 1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Publish error=%v, want context.Canceled", err)
 	}
 }
 

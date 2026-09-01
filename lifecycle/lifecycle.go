@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -43,8 +44,9 @@ var defaultRegistry = NewRegistry()
 
 func DefaultRegistry() *Registry { return defaultRegistry }
 
-func Register(hook Hook) error                    { return DefaultRegistry().Register(hook) }
-func Emit(ctx context.Context, event Event) error { return DefaultRegistry().Emit(ctx, event) }
+func Register(hook Hook) error                       { return DefaultRegistry().Register(hook) }
+func Emit(ctx context.Context, event Event) error    { return DefaultRegistry().Emit(ctx, event) }
+func EmitAll(ctx context.Context, event Event) error { return DefaultRegistry().EmitAll(ctx, event) }
 
 func NewRegistry() *Registry {
 	return &Registry{hooks: make(map[Phase][]Hook)}
@@ -102,6 +104,27 @@ func (r *Registry) Emit(ctx context.Context, event Event) error {
 		}
 	}
 	return nil
+}
+
+// EmitAll runs every hook and joins failures. It is intended for cleanup
+// phases, where one broken hook must not prevent later resources from closing.
+func (r *Registry) EmitAll(ctx context.Context, event Event) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.mu.RLock()
+	hooks := append([]Hook(nil), r.hooks[event.Phase]...)
+	r.mu.RUnlock()
+	var result error
+	for _, hook := range hooks {
+		if err := emitHook(ctx, event, hook); err != nil {
+			result = errors.Join(result, fmt.Errorf("lifecycle: %s/%s: %w", event.Phase, hook.Name, err))
+		}
+	}
+	return result
 }
 
 func emitHook(ctx context.Context, event Event, hook Hook) (err error) {

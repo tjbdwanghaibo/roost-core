@@ -858,12 +858,15 @@ func (s *Store) commit(ctx context.Context, req commitRequest) error {
 	fctx.SetRuntimeConfig(req.target)
 	publishMu.Unlock()
 	revert := func() {
-		// Restore the saved values, not values derived from req.old: the
-		// global slots may have belonged to a different Store.
+		// Always revert this store's own generation. Restore the process-global
+		// publication only if it still points at this exact commit; another
+		// Store may have published successfully while callbacks were running.
 		publishMu.Lock()
 		s.current.Store(req.old)
-		SetDefaultStore(prevDefault)
-		fctx.SetRuntimeConfig(prevConfig)
+		if DefaultStore() == s && fctx.RuntimeConfig() == req.target {
+			SetDefaultStore(prevDefault)
+			fctx.SetRuntimeConfig(prevConfig)
+		}
 		publishMu.Unlock()
 	}
 	data := map[string]any{

@@ -9,6 +9,7 @@ import (
 type testPatch struct {
 	PlayerID int64  `json:"player_id"`
 	Name     string `json:"name,omitempty"`
+	Version  int64  `json:"version,omitempty"`
 }
 
 func (p testPatch) HasData() bool {
@@ -19,9 +20,10 @@ func TestPatchSyncerPublishesAndAppliesRemotePatch(t *testing.T) {
 	bus := newPatchFakeBus()
 	applied := make([]testPatch, 0, 1)
 	syncer := NewPatchSyncer[testPatch](bus, PatchSyncerConfig[testPatch]{
-		Topic:    "player.patch",
-		LocalSid: 2,
-		KeyOf:    func(p testPatch) int64 { return p.PlayerID },
+		Topic:     "player.patch",
+		LocalSid:  2,
+		KeyOf:     func(p testPatch) int64 { return p.PlayerID },
+		VersionOf: func(p testPatch) int64 { return p.Version },
 		WithKey: func(p testPatch, key int64) testPatch {
 			p.PlayerID = key
 			return p
@@ -37,8 +39,17 @@ func TestPatchSyncerPublishesAndAppliesRemotePatch(t *testing.T) {
 	}
 	defer syncer.Stop()
 
-	if err := syncer.Publish(context.Background(), testPatch{PlayerID: 7, Name: "hero"}); err != nil {
+	if err := syncer.Publish(context.Background(), testPatch{PlayerID: 7, Name: "hero", Version: 11}); err != nil {
 		t.Fatal(err)
+	}
+	if err := syncer.Publish(context.Background(), testPatch{PlayerID: 7, Name: "hero", Version: 11}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bus.published) != 2 || bus.published[0].MessageID == "" || bus.published[0].MessageID == bus.published[1].MessageID {
+		t.Fatalf("delivery ids are not unique: %+v", bus.published)
+	}
+	if bus.published[0].Version != 11 {
+		t.Fatalf("business version=%d, want 11", bus.published[0].Version)
 	}
 
 	if len(applied) != 0 {
@@ -109,7 +120,8 @@ func TestPatchSyncerSkipsEmptyPatch(t *testing.T) {
 }
 
 type patchFakeBus struct {
-	handlers map[string][]Handler
+	handlers  map[string][]Handler
+	published []*SyncMsg
 }
 
 func newPatchFakeBus() *patchFakeBus {
@@ -120,6 +132,9 @@ func (b *patchFakeBus) Publish(msg *SyncMsg) error {
 	if msg == nil {
 		return nil
 	}
+	clone := *msg
+	clone.Data = append([]byte(nil), msg.Data...)
+	b.published = append(b.published, &clone)
 	for _, h := range b.handlers[msg.Topic] {
 		if err := h(msg); err != nil {
 			return err
