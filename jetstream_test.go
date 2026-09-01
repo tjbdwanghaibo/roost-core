@@ -2,6 +2,8 @@ package nats
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,28 @@ type fakeConsumeContext struct {
 	drainCalled   chan struct{}
 	stopCalled    chan struct{}
 	drainObserved func()
+}
+
+func TestJetStreamTerminalClassification(t *testing.T) {
+	cause := errors.New("bad wire")
+	if got := terminalReason(Permanent(cause), 10, 1); got != "permanent" {
+		t.Fatalf("permanent reason=%q", got)
+	}
+	if got := terminalReason(cause, 3, 3); got != "max_deliver" {
+		t.Fatalf("max-deliver reason=%q", got)
+	}
+	if got := terminalReason(cause, 3, 2); got != "" {
+		t.Fatalf("transient delivery terminated early: %q", got)
+	}
+}
+
+func TestInvokeJetStreamHandlerContainsPanic(t *testing.T) {
+	err := invokeJetStreamHandler(context.Background(), func(context.Context, *fnats.JetStreamMsg) error {
+		panic("boom")
+	}, &fnats.JetStreamMsg{})
+	if err == nil || !strings.Contains(err.Error(), "panic: boom") {
+		t.Fatalf("panic was not contained: %v", err)
+	}
 }
 
 func newFakeConsumeContext() *fakeConsumeContext {

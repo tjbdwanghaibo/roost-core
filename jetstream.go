@@ -3,10 +3,13 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/cube-core/obs"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
@@ -60,18 +63,24 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	if c == nil || c.js == nil {
 		return nil, errors.New("nats jetstream: not initialized")
 	}
+	if handler == nil {
+		return nil, errors.New("nats jetstream: handler is nil")
+	}
 	consumer, err := c.js.CreateOrUpdateConsumer(ctx, cfg.Stream, toJetStreamConsumerConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
 	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
-		if handler == nil {
-			_ = msg.Ack()
-			return
-		}
 		wrapped := jetStreamMsg(msg)
-		if err := handler(handlerCtx, wrapped); err != nil {
+		err := invokeJetStreamHandler(handlerCtx, handler, wrapped)
+		if err != nil {
+			if reason := terminalReason(err, cfg.MaxDeliver, wrapped.NumDelivered); reason != "" {
+				slog.Error("nats jetstream: terminating failed delivery", "subject", wrapped.Subject, "stream", wrapped.Stream, "consumer", wrapped.Consumer, "stream_sequence", wrapped.StreamSeq, "deliveries", wrapped.NumDelivered, "reason", reason, "err", err)
+				obs.IncCounter("nats.jetstream.terminal.total", obs.Labels{"reason": reason}, 1)
+				_ = msg.Term()
+				return
+			}
 			if delay := nakBackoff(cfg, wrapped.NumDelivered); delay > 0 {
 				_ = msg.NakWithDelay(delay)
 			} else {
@@ -86,6 +95,25 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		return nil, err
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
+}
+
+func terminalReason(err error, maxDeliver int, deliveries uint64) string {
+	if isPermanent(err) {
+		return "permanent"
+	}
+	if err != nil && maxDeliver > 0 && deliveries >= uint64(maxDeliver) {
+		return "max_deliver"
+	}
+	return ""
+}
+
+func invokeJetStreamHandler(ctx context.Context, handler fnats.JetStreamHandler, msg *fnats.JetStreamMsg) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("nats jetstream: handler panic: %v", recovered)
+		}
+	}()
+	return handler(ctx, msg)
 }
 
 func nakBackoff(config fnats.JetStreamConsumerConfig, deliveries uint64) time.Duration {
