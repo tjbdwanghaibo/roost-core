@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 
-	corecheckpoint "github.com/tjbdwanghaibo/cube-core/checkpoint"
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 )
@@ -193,10 +192,7 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 					return fmt.Errorf("%w: duplicate DAO resource %q", ErrEntityAggregateCorrupt, dao.CollName())
 				}
 			}
-			scope := coredata.DatabaseGlobal
-			if corecheckpoint.ResolveDatabaseScope(dao) == corecheckpoint.DatabaseScopeServer {
-				scope = coredata.DatabaseServer
-			}
+			scope := coredata.ResolveDatabaseScope(dao)
 			docs, err := repository.store.Load(readCtx, coredata.LoadSpec{
 				Database: dao.DbName(), Scope: scope, Resource: dao.CollName(), Filter: map[string]any{"_id": fullID}, BatchSize: 1,
 			})
