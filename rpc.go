@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/cube-core/obs"
 	"github.com/tjbdwanghaibo/cube-core/worker"
 	"log/slog"
 	"math"
@@ -28,9 +29,46 @@ type rpcClient struct {
 }
 
 type pendingCall struct {
-	cb    fnats.RpcCallback
-	timer *time.Timer
-	sub   *gonats.Subscription
+	cb        fnats.RpcCallback
+	startedAt time.Time
+
+	mu       sync.Mutex
+	timer    *time.Timer
+	sub      *gonats.Subscription
+	finished bool
+}
+
+func (p *pendingCall) setTimer(timer *time.Timer) {
+	if p == nil || timer == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.finished {
+		p.mu.Unlock()
+		timer.Stop()
+		return
+	}
+	p.timer = timer
+	p.mu.Unlock()
+}
+
+func (p *pendingCall) closeResources() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.finished = true
+	timer := p.timer
+	p.timer = nil
+	sub := p.sub
+	p.sub = nil
+	p.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+	if sub != nil {
+		_ = sub.Unsubscribe()
+	}
 }
 
 // rpcTask carries an async callback execution for the worker pool.
@@ -38,9 +76,25 @@ type rpcTask struct {
 	cb   fnats.RpcCallback
 	resp []byte
 	err  error
+	once sync.Once
 }
 
-func (t *rpcTask) OnRelease() {}
+func (t *rpcTask) complete() {
+	if t == nil {
+		return
+	}
+	t.once.Do(func() {
+		if t.cb != nil {
+			t.cb(t.resp, t.err)
+		}
+	})
+}
+
+// OnRelease is also the admission-failure fallback. worker.Pool.Dispatch
+// releases a task when the callback queue is closed or full; completing here
+// guarantees that an accepted RPC result never loses its terminal callback.
+// The once guard makes the normal handler + release path exactly-once.
+func (t *rpcTask) OnRelease() { t.complete() }
 
 func newRpcClient(client *natsClient, policy fnats.RetryPolicy, cbWorkerNum int) *rpcClient {
 	if cbWorkerNum <= 0 {
@@ -55,13 +109,17 @@ func newRpcClient(client *natsClient, policy fnats.RetryPolicy, cbWorkerNum int)
 		WorkerNum: cbWorkerNum,
 		QueueCap:  256,
 	}, func(task *rpcTask) {
-		task.cb(task.resp, task.err)
+		task.complete()
 	})
 	rc.pool.Start()
+	obs.SetGauge("nats.rpc.duplicate_completion", nil, 0)
 	return rc
 }
 
 func (r *rpcClient) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 	for attempt := 0; attempt < r.policy.MaxAttempts; attempt++ {
 		if attempt > 0 {
@@ -73,19 +131,11 @@ func (r *rpcClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 			}
 		}
 
-		// Per-attempt timeout: use context deadline or default 5s
-		timeout := 5 * time.Second
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				return nil, fnats.ErrCancelled
-			}
-			if remaining < timeout {
-				timeout = remaining
-			}
-		}
-
-		resp, err := r.client.Request(subject, req, timeout)
+		// Bound each transport attempt while still allowing caller cancellation
+		// to interrupt the in-flight NATS request immediately.
+		attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		resp, err := r.client.requestWithContext(attemptCtx, subject, req)
+		cancel()
 		if err == nil {
 			return resp, nil
 		}
@@ -108,73 +158,43 @@ func (r *rpcClient) CallWithTimeout(subject string, req []byte, timeout time.Dur
 
 func (r *rpcClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) {
 	if r.stopped.Load() {
-		cb(nil, fnats.ErrCancelled)
+		if cb != nil {
+			cb(nil, fnats.ErrCancelled)
+		}
 		return
 	}
 
 	// Generate unique inbox for this request
 	inbox := r.client.natsConn().NewRespInbox()
 
-	// Set up timeout
-	timeout := 5 * time.Second
 	sid := r.sessionId.Add(1)
-
-	timer := time.AfterFunc(timeout, func() {
-		if v, ok := r.pending.LoadAndDelete(sid); ok {
-			pc := v.(*pendingCall)
-			if pc.sub != nil {
-				_ = pc.sub.Unsubscribe()
-			}
-			r.dispatchCallback(sid, &rpcTask{cb: pc.cb, err: fnats.ErrTimeout})
-		}
-	})
 
 	// Subscribe to inbox
 	sub, err := r.client.natsConn().Subscribe(inbox, func(msg *gonats.Msg) {
-		if v, ok := r.pending.LoadAndDelete(sid); ok {
-			pc := v.(*pendingCall)
-			if pc.timer != nil {
-				pc.timer.Stop()
-			}
-			if pc.sub != nil {
-				_ = pc.sub.Unsubscribe()
-			}
-			r.dispatchCallback(sid, &rpcTask{cb: pc.cb, resp: msg.Data})
-		}
+		r.finishPending(sid, msg.Data, nil)
 	})
 	if err != nil {
-		timer.Stop()
-		cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", err))
+		if cb != nil {
+			cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", err))
+		}
 		return
 	}
 	sub.AutoUnsubscribe(1)
-	r.pending.Store(sid, &pendingCall{cb: cb, timer: timer, sub: sub})
+	pc := &pendingCall{cb: cb, sub: sub, startedAt: time.Now()}
+	r.pending.Store(sid, pc)
+	obs.IncCounter("nats.rpc.started.total", nil, 1)
+	obs.AddGauge("nats.rpc.pending", nil, 1)
+	pc.setTimer(time.AfterFunc(5*time.Second, func() {
+		r.finishPending(sid, nil, fnats.ErrTimeout)
+	}))
 	if r.stopped.Load() {
-		if v, ok := r.pending.LoadAndDelete(sid); ok {
-			pc := v.(*pendingCall)
-			if pc.timer != nil {
-				pc.timer.Stop()
-			}
-			if pc.sub != nil {
-				_ = pc.sub.Unsubscribe()
-			}
-		}
-		cb(nil, fnats.ErrCancelled)
+		r.finishPending(sid, nil, fnats.ErrCancelled)
 		return
 	}
 
 	// Publish request with reply subject
 	if err := r.client.natsConn().PublishRequest(subject, inbox, req); err != nil {
-		if v, ok := r.pending.LoadAndDelete(sid); ok {
-			pc := v.(*pendingCall)
-			if pc.timer != nil {
-				pc.timer.Stop()
-			}
-			if pc.sub != nil {
-				_ = pc.sub.Unsubscribe()
-			}
-		}
-		cb(nil, fmt.Errorf("rpc: publish: %w", err))
+		r.finishPending(sid, nil, fmt.Errorf("rpc: publish: %w", err))
 	}
 }
 
@@ -188,20 +208,8 @@ func (r *rpcClient) Stop() {
 	}
 
 	r.pending.Range(func(key, value any) bool {
-		r.pending.Delete(key)
-		pc, ok := value.(*pendingCall)
-		if !ok || pc == nil {
-			return true
-		}
-		if pc.timer != nil {
-			pc.timer.Stop()
-		}
-		if pc.sub != nil {
-			_ = pc.sub.Unsubscribe()
-		}
-		if pc.cb != nil {
-			sid, _ := key.(int64)
-			r.dispatchCallback(sid, &rpcTask{cb: pc.cb, err: fnats.ErrCancelled})
+		if sid, ok := key.(int64); ok {
+			r.finishPending(sid, nil, fnats.ErrCancelled)
 		}
 		return true
 	})
@@ -211,12 +219,40 @@ func (r *rpcClient) Stop() {
 	}
 }
 
+// finishPending is the only terminal transition after a call enters pending.
+// LoadAndDelete elects exactly one winner among reply, timeout, publish error,
+// and Stop; losers perform no callback or resource cleanup a second time.
+func (r *rpcClient) finishPending(sid int64, resp []byte, err error) bool {
+	value, ok := r.pending.LoadAndDelete(sid)
+	if !ok {
+		return false
+	}
+	pc, ok := value.(*pendingCall)
+	if !ok || pc == nil {
+		return false
+	}
+	obs.AddGauge("nats.rpc.pending", nil, -1)
+	obs.IncCounter("nats.rpc.completed.total", nil, 1)
+	if !pc.startedAt.IsZero() {
+		obs.ObserveHistogram("nats.rpc.callback.latency", nil, time.Since(pc.startedAt))
+	}
+	pc.closeResources()
+	r.dispatchCallback(sid, &rpcTask{cb: pc.cb, resp: resp, err: err})
+	return true
+}
+
 func (r *rpcClient) dispatchCallback(key int64, task *rpcTask) {
 	if r.pool == nil {
 		task.OnRelease()
 		return
 	}
-	r.pool.Dispatch(key, task)
+	if err := r.pool.Dispatch(key, task); err != nil {
+		obs.IncCounter("nats.rpc.queue_rejected.total", nil, 1)
+		// Dispatch transfers ownership even on rejection; rpcTask.OnRelease
+		// completes the callback synchronously, so the terminal result is not
+		// lost. The caller only needs to avoid a second completion here.
+		return
+	}
 }
 
 func (r *rpcClient) isRetryable(err error) bool {

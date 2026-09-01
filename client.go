@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"log/slog"
@@ -58,6 +59,23 @@ func (c *natsClient) Publish(subject string, data []byte) error {
 func (c *natsClient) Request(subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	msg, err := c.conn.Request(subject, data, timeout)
 	if err != nil {
+		return nil, c.wrapError(err)
+	}
+	return msg.Data, nil
+}
+
+func (c *natsClient) requestWithContext(ctx context.Context, subject string, data []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	msg, err := c.conn.RequestWithContext(ctx, subject, data)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fnats.ErrTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, fnats.ErrCancelled
+		}
 		return nil, c.wrapError(err)
 	}
 	return msg.Data, nil

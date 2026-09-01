@@ -130,11 +130,11 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		return err
 	}
 
-	return errors.Join(
-		r.Register(mods.ModNats, fnats.IClient(m.client)),
-		r.Register(mods.ModNatsJetStream, fnats.IJetStream(m.jetStream)),
-		r.Register(mods.ModNatsRpc, fnats.IRpc(m.rpc)),
-		r.Register(mods.ModBus, bus.IBus(m.bus)),
+	return mods.RegisterAll(r,
+		mods.Capability{Name: mods.ModNats, Value: fnats.IClient(m.client)},
+		mods.Capability{Name: mods.ModNatsJetStream, Value: fnats.IJetStream(m.jetStream)},
+		mods.Capability{Name: mods.ModNatsRpc, Value: fnats.IRpc(m.rpc)},
+		mods.Capability{Name: mods.ModBus, Value: bus.IBus(m.bus)},
 	)
 }
 
