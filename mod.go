@@ -29,6 +29,7 @@ type Mod struct {
 	cfg           modConfig
 	registry      *app.Registry
 	store         *MongoStore
+	runtimeMu     sync.RWMutex
 	runtime       *Runtime
 	jetStream     fnats.IJetStream
 
@@ -278,7 +279,9 @@ func (mod *Mod) Start() error {
 		_ = runtime.Shutdown(ctx)
 		return err
 	}
+	mod.runtimeMu.Lock()
 	mod.runtime = runtime
+	mod.runtimeMu.Unlock()
 	return nil
 }
 
@@ -292,11 +295,21 @@ func (mod *Mod) Stop() {
 }
 
 func (mod *Mod) StopWithContext(ctx context.Context) error {
-	if mod == nil || !mod.active || mod.runtime == nil {
+	if mod == nil || !mod.active {
 		return nil
 	}
-	err := mod.runtime.Shutdown(ctx)
-	mod.runtime = nil
+	mod.runtimeMu.RLock()
+	runtime := mod.runtime
+	mod.runtimeMu.RUnlock()
+	if runtime == nil {
+		return nil
+	}
+	err := runtime.Shutdown(ctx)
+	mod.runtimeMu.Lock()
+	if mod.runtime == runtime {
+		mod.runtime = nil
+	}
+	mod.runtimeMu.Unlock()
 	return err
 }
 
@@ -304,25 +317,67 @@ func (mod *Mod) Runtime() *Runtime {
 	if mod == nil {
 		return nil
 	}
+	mod.runtimeMu.RLock()
+	defer mod.runtimeMu.RUnlock()
 	return mod.runtime
 }
 func (mod *Mod) Repository() *EntityRepository {
-	if mod == nil || mod.runtime == nil {
+	runtime := mod.Runtime()
+	if runtime == nil {
 		return nil
 	}
-	return mod.runtime.Repository
+	return runtime.Repository
 }
 func (mod *Mod) NestOptions() []corenest.NestOption {
-	if mod == nil || mod.runtime == nil {
+	if mod == nil || !mod.active {
 		return nil
 	}
-	return mod.runtime.NestOptions()
+	options := []corenest.NestOption{corenest.NestOptionWithTransactionCommitter(mod)}
+	if len(mod.cfg.pipelined.Allowlist) > 0 {
+		options = append(options, corenest.NestOptionWithPipelinedAllowlist(mod.cfg.pipelined.Allowlist...))
+	}
+	if mod.cfg.pipelined.Async {
+		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(mod.cfg.pipelined.AsyncWorkers, mod.cfg.pipelined.AsyncQueueCap))
+	}
+	return options
 }
 func (mod *Mod) Flush(ctx context.Context) error {
-	if mod == nil || mod.runtime == nil {
+	runtime := mod.Runtime()
+	if runtime == nil {
 		return nil
 	}
-	return mod.runtime.Flush(ctx)
+	return runtime.Flush(ctx)
+}
+
+func (mod *Mod) Commit(ctx context.Context, record corenest.CommitRecord) error {
+	runtime := mod.Runtime()
+	if runtime == nil || !runtime.Ready() || runtime.Projector == nil {
+		return corenest.ErrCommitterRequired
+	}
+	return runtime.Projector.Commit(ctx, record)
+}
+
+func (mod *Mod) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
+	runtime := mod.Runtime()
+	if runtime == nil || !runtime.Ready() || runtime.Projector == nil {
+		return nil, corenest.ErrCommitterRequired
+	}
+	return runtime.Projector.Enqueue(ctx, record)
+}
+
+func (mod *Mod) DurableLSN() uint64 {
+	runtime := mod.Runtime()
+	if runtime == nil || runtime.Projector == nil {
+		return 0
+	}
+	return runtime.Projector.DurableLSN()
+}
+
+func (mod *Mod) TransactionReleased(id corenest.TransactionID) {
+	runtime := mod.Runtime()
+	if runtime != nil && runtime.Projector != nil {
+		runtime.Projector.TransactionReleased(id)
+	}
 }
 
 func (mod *Mod) onFatal(err error) {
@@ -350,7 +405,8 @@ func (mod *Mod) checkHealth(context.Context) health.Result {
 	if mod == nil || !mod.active {
 		return health.Result{Status: health.StatusOK, Message: "inactive (checkpoint selected)"}
 	}
-	if mod.runtime == nil || !mod.runtime.Ready() {
+	runtime := mod.Runtime()
+	if runtime == nil || !runtime.Ready() {
 		return health.Result{Status: health.StatusFail, Message: "not ready"}
 	}
 	mod.fatalMu.RLock()
@@ -359,12 +415,15 @@ func (mod *Mod) checkHealth(context.Context) health.Result {
 	if fatal != nil {
 		return health.Result{Status: health.StatusFail, Message: "fenced", Err: fatal}
 	}
-	if err := errors.Join(mod.runtime.Projector.Healthy(), mod.runtime.Outbox.Healthy()); err != nil {
+	if err := errors.Join(runtime.Projector.Healthy(), runtime.Outbox.Healthy()); err != nil {
 		return health.Result{Status: health.StatusFail, Message: "unhealthy", Err: err}
 	}
-	walStats, projectorStats, outboxStats := mod.runtime.WAL.Stats(), mod.runtime.Projector.Stats(), mod.runtime.Outbox.Stats()
+	walStats, projectorStats, outboxStats := runtime.WAL.Stats(), runtime.Projector.Stats(), runtime.Outbox.Stats()
 	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wal_unacked=%d wal_oldest=%s projection_failures=%d outbox_pending=%d outbox_oldest=%s publish_failures=%d fatal_projection_conflicts=%d", projectorStats.WALUnacked, walStats.OldestUnackedAge, projectorStats.ProjectionFailures, outboxStats.Pending, outboxStats.OldestAge, outboxStats.PublishFailures, projectorStats.FatalProjectionConflicts)}
 }
+
+var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)
+var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
 
 type jetStreamOutboxPublisher struct {
 	client fnats.IJetStream

@@ -80,8 +80,8 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	if err := mod.Provide(registry); err != nil {
 		t.Fatal(err)
 	}
-	if mod.Runtime() != nil {
-		t.Fatal("runtime opened WAL during Provide instead of ordered Start")
+	if mod.Runtime() != nil || len(mod.NestOptions()) == 0 {
+		t.Fatalf("runtime=%v options=%d; Provide must expose a lazy committer without opening WAL", mod.Runtime(), len(mod.NestOptions()))
 	}
 	if err := mod.Start(); err != nil {
 		t.Fatal(err)
