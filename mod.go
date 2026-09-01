@@ -23,7 +23,6 @@ import (
 )
 
 type Mod struct {
-	active        bool
 	remoteEnabled bool
 	access        *entity.ManagerAccess
 	cfg           modConfig
@@ -87,13 +86,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if cfg == nil {
 		cfg = viper.New()
 	}
-	selection, err := mods.ResolvePersistenceEngine(cfg)
-	if err != nil {
+	if _, err := mods.ResolvePersistenceEngine(cfg); err != nil {
 		return err
-	}
-	mod.active = selection.DataEngineEnabled
-	if !mod.active {
-		return nil
 	}
 	sid := cfg.GetInt32("sid")
 	database := strings.TrimSpace(cfg.GetString("dataengine.database"))
@@ -185,9 +179,6 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 }
 
 func (mod *Mod) Provide(registry *app.Registry) error {
-	if mod != nil && !mod.active {
-		return nil
-	}
 	if registry == nil {
 		return errors.New("dataengine mod: nil registry")
 	}
@@ -236,9 +227,6 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 }
 
 func (mod *Mod) Start() error {
-	if mod != nil && !mod.active {
-		return nil
-	}
 	if mod == nil || mod.store == nil || mod.jetStream == nil {
 		return errors.New("dataengine mod: not provided")
 	}
@@ -286,7 +274,7 @@ func (mod *Mod) Start() error {
 }
 
 func (mod *Mod) Stop() {
-	if mod == nil || !mod.active {
+	if mod == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mod.cfg.shutdownTimeout)
@@ -295,7 +283,7 @@ func (mod *Mod) Stop() {
 }
 
 func (mod *Mod) StopWithContext(ctx context.Context) error {
-	if mod == nil || !mod.active {
+	if mod == nil {
 		return nil
 	}
 	mod.runtimeMu.RLock()
@@ -329,7 +317,7 @@ func (mod *Mod) Repository() *EntityRepository {
 	return runtime.Repository
 }
 func (mod *Mod) NestOptions() []corenest.NestOption {
-	if mod == nil || !mod.active {
+	if mod == nil {
 		return nil
 	}
 	options := []corenest.NestOption{corenest.NestOptionWithTransactionCommitter(mod)}
@@ -402,8 +390,8 @@ func (mod *Mod) onFatal(err error) {
 }
 
 func (mod *Mod) checkHealth(context.Context) health.Result {
-	if mod == nil || !mod.active {
-		return health.Result{Status: health.StatusOK, Message: "inactive (checkpoint selected)"}
+	if mod == nil {
+		return health.Result{Status: health.StatusFail, Message: "not initialized"}
 	}
 	runtime := mod.Runtime()
 	if runtime == nil || !runtime.Ready() {

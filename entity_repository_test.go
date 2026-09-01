@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	corecheckpoint "github.com/tjbdwanghaibo/cube-core/checkpoint"
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -57,9 +56,6 @@ func (*dataEngineRepositoryEntity) Touch() bool                                 
 func (*dataEngineRepositoryEntity) UnTouch()                                     {}
 func (*dataEngineRepositoryEntity) ClearBase()                                   {}
 func (*dataEngineRepositoryEntity) IsClear() bool                                { return false }
-func (value *dataEngineRepositoryEntity) RemoveSnapshot() []corecheckpoint.SaveItem {
-	return []corecheckpoint.SaveItem{{Db: "game", Collection: "repository_profile", ID: value.ID(), Version: 1, Deleted: true}}
-}
 
 var registerDataEngineRepositoryEntity sync.Once
 var registerDataEngineRemoteRepositoryEntity sync.Once
@@ -101,9 +97,6 @@ func (*dataEngineRemoteRepositoryEntity) Touch() bool                           
 func (*dataEngineRemoteRepositoryEntity) UnTouch()                                     {}
 func (*dataEngineRemoteRepositoryEntity) ClearBase()                                   {}
 func (*dataEngineRemoteRepositoryEntity) IsClear() bool                                { return false }
-func (value *dataEngineRemoteRepositoryEntity) RemoveSnapshot() []corecheckpoint.SaveItem {
-	return []corecheckpoint.SaveItem{{Db: "game", Collection: "repository_remote", ID: value.ID(), Version: 1, Deleted: true}}
-}
 
 func ensureDataEngineRemoteRepositoryEntity() {
 	registerDataEngineRemoteRepositoryEntity.Do(func() {

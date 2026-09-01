@@ -121,33 +121,4 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	return errors.Join(projectorErr, outboxErr)
 }
 
-type CutoverState struct {
-	CheckpointPending           int64
-	RedisWALPending             int64
-	LegacyWALUnacked            int64
-	DataEngineWALUnacked        int64
-	ProjectorHealthy            bool
-	OutboxStagingDurable        bool
-	CheckpointRollbackSupported bool
-}
-
-func ValidateCutover(from, to string, state CutoverState) error {
-	if from == "checkpoint" && to == "dataengine" {
-		if state.CheckpointPending != 0 || state.RedisWALPending != 0 || state.LegacyWALUnacked != 0 {
-			return fmt.Errorf("dataengine cutover blocked: checkpoint_pending=%d redis_wal_pending=%d legacy_wal_unacked=%d", state.CheckpointPending, state.RedisWALPending, state.LegacyWALUnacked)
-		}
-		return nil
-	}
-	if from == "dataengine" && to == "checkpoint" {
-		if !state.CheckpointRollbackSupported {
-			return errors.New("dataengine rollback blocked: generated patch-only DAOs no longer support checkpoint")
-		}
-		if state.DataEngineWALUnacked != 0 || !state.ProjectorHealthy || !state.OutboxStagingDurable {
-			return fmt.Errorf("dataengine rollback blocked: wal_unacked=%d projector_healthy=%t outbox_staging_durable=%t", state.DataEngineWALUnacked, state.ProjectorHealthy, state.OutboxStagingDurable)
-		}
-		return nil
-	}
-	return fmt.Errorf("dataengine cutover: unsupported direction %q -> %q", from, to)
-}
-
 var _ coredata.Store = (*MongoStore)(nil)
