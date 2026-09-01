@@ -3,6 +3,7 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,6 +66,7 @@ func (d *mongoStoreFakeDatabase) Collection(name string) fmongo.ICollection {
 func (*mongoStoreFakeDatabase) Drop(context.Context) error { return nil }
 
 type mongoStoreFakeCollection struct {
+	mu                  sync.Mutex
 	updateResult        *fmongo.UpdateResult
 	updateErr           error
 	findOneAndUpdateErr error
@@ -83,6 +85,8 @@ type mongoStoreFakeCollection struct {
 }
 
 func (c *mongoStoreFakeCollection) InsertOne(_ context.Context, doc any) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.inserted = append(c.inserted, doc)
 	return "id", c.insertErr
 }
@@ -90,6 +94,8 @@ func (*mongoStoreFakeCollection) InsertMany(context.Context, []any) ([]string, e
 	return nil, nil
 }
 func (c *mongoStoreFakeCollection) FindOne(_ context.Context, filter any, result any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastFilter = filter
 	if c.findErr != nil {
 		return c.findErr
@@ -104,6 +110,8 @@ func (c *mongoStoreFakeCollection) FindOne(_ context.Context, filter any, result
 	return bson.Unmarshal(raw, result)
 }
 func (c *mongoStoreFakeCollection) Find(_ context.Context, filter any, results any, _ ...fmongo.FindOption) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastFilter = filter
 	if c.findErr != nil {
 		return c.findErr
@@ -117,6 +125,8 @@ func (c *mongoStoreFakeCollection) Find(_ context.Context, filter any, results a
 	return nil
 }
 func (c *mongoStoreFakeCollection) UpdateOne(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastFilter, c.lastUpdate = filter, update
 	if c.updateErr != nil {
 		return nil, c.updateErr
@@ -133,10 +143,14 @@ func (*mongoStoreFakeCollection) ReplaceOne(context.Context, any, any) (*fmongo.
 	return nil, nil
 }
 func (c *mongoStoreFakeCollection) DeleteOne(context.Context, any) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.deleteCount, nil
 }
 func (*mongoStoreFakeCollection) DeleteMany(context.Context, any) (int64, error) { return 0, nil }
 func (c *mongoStoreFakeCollection) FindOneAndUpdate(_ context.Context, filter any, update any, result any, _ ...fmongo.FindOneAndUpdateOption) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lastFilter, c.lastUpdate = filter, update
 	if c.findOneAndUpdateErr == nil && c.findOneAndUpdateDoc != nil {
 		if out, ok := result.(*outboxDocument); ok {
@@ -150,6 +164,8 @@ func (*mongoStoreFakeCollection) FindOneAndReplace(context.Context, any, any, an
 	return nil
 }
 func (c *mongoStoreFakeCollection) CountDocuments(context.Context, any) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.count, nil
 }
 func (*mongoStoreFakeCollection) Aggregate(context.Context, any, any) error { return nil }
@@ -157,6 +173,8 @@ func (*mongoStoreFakeCollection) BulkWrite(context.Context, []fmongo.WriteModel)
 	return nil, nil
 }
 func (c *mongoStoreFakeCollection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.ensureIndexes = append(c.ensureIndexes, indexes...)
 	return nil
 }
