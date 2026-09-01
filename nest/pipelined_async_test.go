@@ -294,6 +294,8 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 	// AfterCommit against commit order. The entity completion chain now
 	// covers every path, so ordering is unconditional.
 	getter := newMockGetter()
+	obs.DefaultRegistry().Reset()
+	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
 	id, ent := newAsyncPilotEntity(t, 345, 0)
 	getter.Add(ent)
 	committer := newPipelinedTestCommitter(false)
@@ -350,6 +352,26 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 			t.Fatalf("only %d of %d transactions were enqueued", i, transactions)
 		}
 	}
+	// Enqueue is reported just before prepareCompletion tries the pump. Wait
+	// until the third transaction has actually observed the full queue before
+	// resolving tickets; otherwise a fast resolve can drain the queue between
+	// those two operations and make this overload test scheduler-dependent.
+	degraded := int64(0)
+	degradedDeadline := time.Now().Add(2 * time.Second)
+	for degraded == 0 && time.Now().Before(degradedDeadline) {
+		for _, metric := range obs.Snapshot() {
+			if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
+				degraded += metric.Value
+			}
+		}
+		if degraded == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if degraded == 0 {
+		committer.resolveAll(errors.New("test cleanup: pump did not saturate"))
+		t.Fatal("no transaction took the saturated fallback path: the ordering claim was not exercised")
+	}
 	committer.resolveAll(nil)
 
 	seen := make(map[int]bool, transactions)
@@ -372,7 +394,7 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 	}
 	// Self-check: the scenario is only meaningful if a transaction actually
 	// took the saturated fallback path.
-	degraded := int64(0)
+	degraded = 0
 	for _, metric := range obs.Snapshot() {
 		if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
 			degraded += metric.Value

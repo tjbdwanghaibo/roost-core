@@ -26,7 +26,7 @@ type RpcCallback func(resp []byte, err error)
 
 // RetryPolicy controls transport-level retry behavior for RPC calls.
 type RetryPolicy struct {
-	MaxAttempts  int           // total attempts including first try, default: 3
+	MaxAttempts  int           // total attempts including first try, default: 1
 	BaseInterval time.Duration // initial retry wait, default: 50ms
 	MaxInterval  time.Duration // max backoff cap, default: 1s
 	Multiplier   float64       // exponential multiplier, default: 2.0
@@ -34,7 +34,7 @@ type RetryPolicy struct {
 
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
-		MaxAttempts:  3,
+		MaxAttempts:  1,
 		BaseInterval: 50 * time.Millisecond,
 		MaxInterval:  time.Second,
 		Multiplier:   2.0,

@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +128,29 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 	}
 }
 
+func TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails(t *testing.T) {
+	store := newReliableMemoryStore()
+	client := &captureNatsClient{}
+	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "cube"})
+	b.EnableReliable(store, ReliableConfig{Enabled: true})
+	b.deadLetter(&fnats.NatsMsg{ToSid: 2, ToModule: "mail", MsgName: "Changed", MsgID: "dead-1"}, "handler failed")
+
+	store.deleteErr = errors.New("injected delete failure")
+	n, err := b.RequeueDeadLetters(context.Background(), DeadLetterQuery{Module: "mail", MsgName: "Changed"})
+	if n != 1 || err == nil || len(client.published) != 1 {
+		t.Fatalf("first requeue n=%d err=%v published=%v", n, err, client.published)
+	}
+	first := client.published[0]
+	store.deleteErr = nil
+	n, err = b.RequeueDeadLetters(context.Background(), DeadLetterQuery{Module: "mail", MsgName: "Changed"})
+	if err != nil || n != 1 || len(client.published) != 2 {
+		t.Fatalf("retry requeue n=%d err=%v published=%v", n, err, client.published)
+	}
+	if client.published[1] != first {
+		t.Fatalf("requeue id changed after delete failure: first=%q retry=%q", first, client.published[1])
+	}
+}
+
 func TestBusRpcNoHandlerRepliesWithErrorEnvelope(t *testing.T) {
 	rpc := &lifecycleRpc{replies: make(chan []byte, 1)}
 	b := New(&lifecycleClient{}, rpc, JSONCodec{}, Config{Sid: 5001, SvcType: "mail"})
@@ -138,12 +162,9 @@ func TestBusRpcNoHandlerRepliesWithErrorEnvelope(t *testing.T) {
 
 	select {
 	case raw := <-rpc.replies:
-		var resp rpcErrorEnvelope
-		if err := b.codec.Unmarshal(raw, &resp); err != nil {
-			t.Fatalf("Unmarshal rpc error: %v", err)
-		}
-		if resp.Code == 0 || resp.Reason == "" {
-			t.Fatalf("rpc error envelope = %+v, want non-zero code and reason", resp)
+		var resp struct{}
+		if err := decodeRPCResponse(b.codec, raw, &resp); err == nil {
+			t.Fatal("rpc failure response decoded as success")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("rpc error reply was not sent")
@@ -191,10 +212,11 @@ func TestBusDeadLetterAdminCommandsListAndRequeue(t *testing.T) {
 }
 
 type reliableMemoryStore struct {
-	mu       sync.Mutex
-	started  map[string]struct{}
-	finished map[string]struct{}
-	dead     map[string][]DeadLetterEntry
+	mu        sync.Mutex
+	started   map[string]struct{}
+	finished  map[string]struct{}
+	dead      map[string][]DeadLetterEntry
+	deleteErr error
 }
 
 func newReliableMemoryStore() *reliableMemoryStore {
@@ -283,6 +305,9 @@ func (s *reliableMemoryStore) PurgeDeadLetters(_ context.Context, query DeadLett
 func (s *reliableMemoryStore) DeleteDeadLetters(_ context.Context, query DeadLetterQuery, entries []DeadLetterEntry) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return 0, s.deleteErr
+	}
 	return s.deleteDeadLettersLocked(DeadLetterKey(query.Module, query.MsgName), entries), nil
 }
 

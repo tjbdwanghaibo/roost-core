@@ -61,6 +61,16 @@ func TestTouchUnTouch(t *testing.T) {
 	}
 }
 
+func TestUnTouchPanicsOnReferenceUnderflow(t *testing.T) {
+	e := NewEntityBase(1, testEntityCategoryPlayer, false)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("UnTouch did not panic on reference underflow")
+		}
+	}()
+	e.UnTouch()
+}
+
 func TestTouchAfterRemoved(t *testing.T) {
 	e := newTestEntity(2, testEntityCategoryAlliance)
 

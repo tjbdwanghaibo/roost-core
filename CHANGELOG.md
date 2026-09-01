@@ -4,7 +4,17 @@
 
 ## [Unreleased]
 
+### Fixed
+- `worker` 为队列任务和 `Pool.Go/TryGo` 的每次执行建立并释放全新 `fctx.Context`，不再隐式继承父请求或跨任务泄漏；生命周期外的 `Pool.Go` 不再启动无人追踪的 goroutine。Nest 异步 Dispatch 只保留配置代际、Trace 与 Player/Msg/Seq 框架信封，KV/Base/SyncWait/Frame/事务不再跨异步边界传播，业务数据必须显式放入 Params。
+- `cmd/glsvet` 将 Handler 并发约束升级为机器门禁：拒绝裸 `go`、同文件命名 wrapper、非 core worker 的 `.Go`、worker callback 外层捕获和裸忽略 Dispatch/Publish/Submit admission；保留框架既有 `AfterCommit` 合法语义。`app` 对显式 `--config` 以及默认配置的解析/权限错误 fail-closed，仅允许缺失的默认开发配置使用 defaults。
+- App 对每个 Mod 分配 shutdown 子预算并隔离 Stop panic；普通错误或 panic 后继续反序停止其他模块，但任一 Mod 超时/取消后立即停止拆除其下游依赖，避免上层仍在运行时关闭底层连接。Provide 失败会回收失败 Mod 自身及此前已装配模块；Registry 批量注册先全量预检再一次提交，避免 capability 半注册。
+- 轻量与 JetStream RPC 统一使用带版本、路由身份和业务成败字段的信封；服务端业务错误不再伪装成成功字节。轻量 RPC 默认仅发送一次，调用方取消会中断正在等待的 NATS 请求；RPC handler 的空值和重复注册在启动期显式报错。
+- Bus 停止流程不再持有生命周期锁等待订阅/worker 退出，消除正在执行的 handler 回调注册路径与 Stop 互锁；实体引用计数增加溢出/下溢 fail-fast；DLQ 重放使用稳定消息 ID，并在后端支持时逐条删除，发布成功而删除失败后的重试不再制造新业务消息。
+- 内存限流器增加默认 10 万 key 硬上限、空闲 TTL 与机会式回收；未知 key 在容量耗尽且无空闲项可回收时 fail-closed，并通过 `Stats` 暴露当前基数、容量拒绝和回收计数，阻断随机身份造成的无界内存增长。
+- Nest ticker 测试清理全局 callback 注册，使 `go test -count=N` 可重复执行。
+
 ### Added
+- `worker.Pool.TryGo`：返回异步任务 admission error；已接纳任务全部纳入 `StopWithContext`。
 - `app.ModOptionalDependencyProvider`：声明“安装时需要排在当前 Mod 前、未安装时忽略”的可选依赖；与硬依赖共同拓扑排序并检测依赖环，消除可选集成对业务 Mod 书写顺序的隐式依赖。
 - 新增三级文档中心：新手快速开始、熟练开发者完整说明、框架实现原理、生产部署手册和分级路线图。
 - `syncstream.FileHistoryJournal` 新增幂等 `Close`，等待已接纳 group commit 后关闭常驻 WAL handle；关闭后持久操作 fail-closed。`History.Close` 将资源释放纳入运行时生命周期，修复重复启停的文件句柄泄漏。

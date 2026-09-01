@@ -49,7 +49,7 @@ type IBus interface {
 	// --- Handler Registration ---
 
 	// Handle registers a handler for a module message.
-	Handle(module string, msgName string, handler HandlerFunc)
+	Handle(module string, msgName string, handler HandlerFunc) error
 
 	// HandleRpc registers a handler for an RPC method.
 	HandleRpc(method string, handler RpcHandlerFunc) error
@@ -83,12 +83,15 @@ type Bus struct {
 	rpcHandlers map[string]RpcHandlerFunc // "method" → handler
 
 	// dispatcher pool for incoming messages
-	lifeMu  sync.Mutex
-	pool    *worker.Pool[*incomingTask]
-	ctx     atomic.Pointer[context.Context] // read lock-free by dispatch paths
-	cancel  context.CancelFunc
-	started bool // a successful Start happened; guarded by lifeMu
-	stopped bool // a started Bus was stopped; guarded by lifeMu
+	lifeMu   sync.Mutex
+	pool     *worker.Pool[*incomingTask]
+	ctx      atomic.Pointer[context.Context] // read lock-free by dispatch paths
+	cancel   context.CancelFunc
+	started  bool // a successful Start happened; guarded by lifeMu
+	stopped  bool // a started Bus was stopped; guarded by lifeMu
+	stopping bool
+	stopDone chan struct{}
+	stopErr  error
 
 	// subscriptions
 	subs []nats.ISubscription
@@ -152,34 +155,41 @@ func (b *Bus) RequeueDeadLetters(ctx context.Context, query DeadLetterQuery) (in
 	if err != nil {
 		return 0, err
 	}
+	deleter, canDeleteEntry := store.(ReliableDeadLetterEntryDeleter)
+	var requeued int64
 	for _, entry := range entries {
-		msg := entry.toNatsMsg(b.nextMsgID())
+		if err := ctx.Err(); err != nil {
+			return requeued, err
+		}
+		msg := entry.toNatsMsg(entry.requeueMsgID())
 		raw, err := b.codec.Marshal(msg)
 		if err != nil {
-			return 0, fmt.Errorf("bus: marshal dead letter %s: %w", entry.MsgID, err)
+			return requeued, fmt.Errorf("bus: marshal dead letter %s: %w", entry.MsgID, err)
 		}
 		if err := b.client.Publish(b.deadLetterSubject(entry), raw); err != nil {
-			return 0, fmt.Errorf("bus: requeue dead letter %s: %w", entry.MsgID, err)
+			return requeued, fmt.Errorf("bus: requeue dead letter %s: %w", entry.MsgID, err)
+		}
+		requeued++
+		if canDeleteEntry {
+			if _, err := deleter.DeleteDeadLetters(ctx, query, []DeadLetterEntry{entry}); err != nil {
+				return requeued, fmt.Errorf("bus: delete requeued dead letter %s: %w", entry.MsgID, err)
+			}
 		}
 	}
-	if deleter, ok := store.(ReliableDeadLetterEntryDeleter); ok {
-		if _, err := deleter.DeleteDeadLetters(ctx, query, entries); err != nil {
-			return 0, err
-		}
-	} else {
+	if !canDeleteEntry {
 		normalized := query.normalize()
 		if !normalized.isWholeBucket() {
-			return 0, fmt.Errorf("bus: reliable store does not support partial dead letter deletion")
+			return requeued, fmt.Errorf("bus: reliable store does not support partial dead letter deletion")
 		}
 		if _, err := store.PurgeDeadLetters(ctx, normalized); err != nil {
-			return 0, err
+			return requeued, err
 		}
 	}
 	obs.IncCounter("bus_dead_letter_requeue_total", obs.Labels{
 		"module": query.Module,
 		"msg":    query.MsgName,
-	}, int64(len(entries)))
-	return int64(len(entries)), nil
+	}, requeued)
+	return requeued, nil
 }
 
 func (b *Bus) PurgeDeadLetters(ctx context.Context, query DeadLetterQuery) (int64, error) {
@@ -231,7 +241,7 @@ func (b *Bus) Start() error {
 	if b.pool != nil {
 		return nil
 	}
-	if b.stopped {
+	if b.stopped || b.stopping {
 		return fmt.Errorf("bus: cannot restart a stopped bus")
 	}
 
@@ -281,8 +291,61 @@ func (b *Bus) StopWithContext(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	b.lifeMu.Lock()
-	defer b.lifeMu.Unlock()
-	return b.stopLocked(ctx)
+	if b.stopDone != nil {
+		done := b.stopDone
+		b.lifeMu.Unlock()
+		select {
+		case <-done:
+			b.lifeMu.Lock()
+			err := b.stopErr
+			b.lifeMu.Unlock()
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	b.stopping = true
+	b.stopDone = make(chan struct{})
+	done := b.stopDone
+	if b.cancel != nil {
+		b.cancel()
+		b.cancel = nil
+	}
+	b.ctx.Store(nil)
+	if b.started {
+		b.started = false
+		b.stopped = true
+	}
+	subs := b.subs
+	b.subs = nil
+	pool := b.pool
+	b.pool = nil
+	b.lifeMu.Unlock()
+
+	err := b.stopResources(ctx, subs, pool)
+	b.lifeMu.Lock()
+	b.stopErr = err
+	close(done)
+	b.lifeMu.Unlock()
+	return err
+}
+
+func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool *worker.Pool[*incomingTask]) error {
+	var err error
+	for _, sub := range subs {
+		if sub == nil || !sub.IsValid() {
+			continue
+		}
+		if unsubscribeErr := sub.Unsubscribe(); unsubscribeErr != nil {
+			slog.Warn("bus: unsubscribe failed", "err", unsubscribeErr)
+			err = errors.Join(err, unsubscribeErr)
+		}
+	}
+	if pool != nil {
+		err = errors.Join(err, pool.StopWithContext(ctx))
+	}
+	b.stopJetStreamRPCSubscriptions()
+	return err
 }
 
 func (b *Bus) stopLocked(ctx context.Context) error {
@@ -385,11 +448,20 @@ func (b *Bus) callSubject(ctx context.Context, subject string, method string, to
 	if err != nil {
 		return fmt.Errorf("bus: marshal req: %w", err)
 	}
-	data, err := b.rpc.Call(ctx, subject, payload)
+	now := time.Now()
+	requestID := b.nextMsgID()
+	wire, err := b.codec.Marshal(&nats.NatsMsg{
+		FromSid: b.cfg.Sid, ToSid: toSid, MsgName: method, Payload: payload,
+		SessionId: requestID, MsgID: requestID, Attempt: 1, CreatedAt: now.UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("bus: marshal rpc request envelope: %w", err)
+	}
+	data, err := b.rpc.Call(ctx, subject, wire)
 	if err != nil {
 		return err
 	}
-	return b.codec.Unmarshal(data, resp)
+	return decodeRPCResponse(b.codec, data, resp)
 }
 
 func (b *Bus) callReliableSubject(ctx context.Context, subject string, method string, toSid int32, req any, resp any) error {
@@ -404,7 +476,7 @@ func (b *Bus) callReliableSubject(ctx context.Context, subject string, method st
 	if err != nil {
 		return err
 	}
-	return b.codec.Unmarshal(data, resp)
+	return decodeRPCResponse(b.codec, data, resp)
 }
 
 func (b *Bus) CallWithTimeout(svcType string, method string, req any, resp any, timeout time.Duration) error {
@@ -414,6 +486,9 @@ func (b *Bus) CallWithTimeout(svcType string, method string, req any, resp any, 
 }
 
 func (b *Bus) CallAsync(svcType string, method string, req any, cb func(resp []byte, err error)) {
+	if cb == nil {
+		return
+	}
 	if b == nil || b.rpc == nil {
 		cb(nil, fmt.Errorf("bus: rpc client is nil"))
 		return
@@ -423,20 +498,58 @@ func (b *Bus) CallAsync(svcType string, method string, req any, cb func(resp []b
 		cb(nil, fmt.Errorf("bus: marshal req: %w", err))
 		return
 	}
+	requestID := b.nextMsgID()
+	wire, err := b.codec.Marshal(&nats.NatsMsg{
+		FromSid: b.cfg.Sid, MsgName: method, Payload: payload,
+		SessionId: requestID, MsgID: requestID, Attempt: 1, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		cb(nil, fmt.Errorf("bus: marshal rpc request envelope: %w", err))
+		return
+	}
 	subject := b.subject.Rpc(svcType, method)
-	b.rpc.CallAsync(subject, payload, cb)
+	b.rpc.CallAsync(subject, wire, func(data []byte, callErr error) {
+		if callErr != nil {
+			cb(nil, callErr)
+			return
+		}
+		resp, decodeErr := decodeRPCResponseBytes(b.codec, data)
+		cb(resp, decodeErr)
+	})
 }
 
 // --- IBus: Handler Registration ---
 
-func (b *Bus) Handle(module string, msgName string, handler HandlerFunc) {
+func (b *Bus) Handle(module string, msgName string, handler HandlerFunc) error {
+	if b == nil {
+		return fmt.Errorf("bus: nil bus")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if module == "" || msgName == "" {
+		return fmt.Errorf("bus: message handler module and name are required")
+	}
+	if handler == nil {
+		return fmt.Errorf("bus: message handler %s:%s is nil", module, msgName)
+	}
 	key := module + ":" + msgName
+	if _, exists := b.handlers[key]; exists {
+		return fmt.Errorf("bus: duplicate message handler %s", key)
+	}
 	b.handlers[key] = handler
+	return nil
 }
 
 func (b *Bus) HandleRpc(method string, handler RpcHandlerFunc) error {
+	if b == nil {
+		return fmt.Errorf("bus: nil bus")
+	}
+	b.lifeMu.Lock()
+	unavailable := b.stopping || b.stopped
+	b.lifeMu.Unlock()
+	if unavailable {
+		return fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+	}
 	b.mu.Lock()
 	if method == "" {
 		b.mu.Unlock()
@@ -482,6 +595,9 @@ func (b *Bus) subscribeLightweightRPCMethod(method string) ([]nats.ISubscription
 	subject := b.subject.Rpc(b.cfg.SvcType, method)
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
+	if b.stopping || b.stopped {
+		return nil, fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+	}
 	sub, err := b.client.QueueSubscribe(subject, b.cfg.SvcType+"_rpc", b.onRpcMessage)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe rpc %s: %w", method, err)
@@ -537,19 +653,14 @@ func (b *Bus) onMessage(msg *nats.Msg) {
 
 func (b *Bus) onRpcMessage(msg *nats.Msg) {
 	natsMsg := &nats.NatsMsg{}
-	if err := b.codec.Unmarshal(msg.Data, natsMsg); err != nil || (natsMsg.MsgName == "" && len(natsMsg.Payload) == 0) {
-		// For RPC, try treating the raw payload as the request directly
-		method := b.extractRpcMethod(msg.Subject)
-		task := &incomingTask{
-			natsMsg: &nats.NatsMsg{
-				MsgName: method,
-				Payload: msg.Data,
-			},
-			isRpc:        true,
-			replySubject: msg.Reply,
+	if err := b.codec.Unmarshal(msg.Data, natsMsg); err != nil || natsMsg.MsgName == "" || natsMsg.SessionId == "" {
+		slog.Error("bus: invalid rpc request envelope", "subject", msg.Subject, "err", err)
+		if msg.Reply != "" {
+			data, encodeErr := encodeRPCFailure(b.codec, fmt.Errorf("bus: invalid rpc request envelope"))
+			if encodeErr == nil {
+				_ = b.rpc.Reply(msg.Reply, data)
+			}
 		}
-		key := hashString(method)
-		b.dispatchTask(key, task)
 		return
 	}
 	task := &incomingTask{
@@ -680,8 +791,12 @@ func (b *Bus) dispatchRpc(task *incomingTask) {
 	if !ok {
 		slog.Warn("bus: no rpc handler", "method", method)
 		if task.replySubject != "" {
-			errResp, _ := b.codec.Marshal(rpcErrorResponse(fmt.Errorf("%w: %s", ErrNoHandler, method)))
-			b.rpc.Reply(task.replySubject, errResp)
+			errResp, encodeErr := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, method))
+			if encodeErr == nil {
+				if replyErr := b.rpc.Reply(task.replySubject, errResp); replyErr != nil {
+					slog.Error("bus: reply rpc no-handler failed", "method", method, "err", replyErr)
+				}
+			}
 		}
 		return
 	}
@@ -717,15 +832,23 @@ func (b *Bus) dispatchRpc(task *incomingTask) {
 	}()
 	if task.replySubject != "" {
 		if err != nil {
-			errResp, _ := b.codec.Marshal(rpcErrorResponse(err))
-			b.rpc.Reply(task.replySubject, errResp)
+			errResp, encErr := encodeRPCFailure(b.codec, err)
+			if encErr != nil {
+				slog.Error("bus: marshal rpc error response failed", "method", method, "err", encErr)
+				return
+			}
+			if replyErr := b.rpc.Reply(task.replySubject, errResp); replyErr != nil {
+				slog.Error("bus: reply rpc error failed", "method", method, "err", replyErr)
+			}
 		} else {
-			data, encErr := b.codec.Marshal(resp)
+			data, encErr := encodeRPCSuccess(b.codec, resp)
 			if encErr != nil {
 				slog.Error("bus: marshal rpc resp failed", "method", method, "err", encErr)
 				return
 			}
-			b.rpc.Reply(task.replySubject, data)
+			if replyErr := b.rpc.Reply(task.replySubject, data); replyErr != nil {
+				slog.Error("bus: reply rpc response failed", "method", method, "err", replyErr)
+			}
 		}
 	}
 }

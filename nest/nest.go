@@ -489,10 +489,27 @@ func bindMsgContext(msg *Msg, carryBase bool) {
 	}
 	snapshot := fctx.CaptureSnapshot()
 	if !carryBase {
-		snapshot.Base = nil
-		snapshot.SyncWait = 0
+		snapshot = asyncMessageContextSnapshot(snapshot)
 	}
 	msg.Context = snapshot
+}
+
+// asyncMessageContextSnapshot keeps the immutable framework envelope needed
+// for tracing, request identity and config-generation consistency, while
+// dropping execution-local state. In particular Base values, arbitrary KV
+// (which may contain the active rollback transaction), frame and sync wait
+// never cross the asynchronous boundary.
+func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnapshot {
+	if !snapshot.Valid {
+		snapshot.Valid = true
+		snapshot.Config = fctx.RuntimeConfig()
+	}
+	return fctx.ContextSnapshot{
+		Valid:  true,
+		Config: snapshot.Config,
+		Meta:   snapshot.Meta,
+		Trace:  snapshot.Trace.Clone(),
+	}
 }
 
 func ensureAsyncDispatchAllowed(api string, name HandlerName) {

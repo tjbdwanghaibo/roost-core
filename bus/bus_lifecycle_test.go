@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	"testing"
@@ -121,6 +122,19 @@ func TestHandleRpcReturnsSubscribeError(t *testing.T) {
 	}
 }
 
+func TestHandleRejectsNilAndDuplicateRegistration(t *testing.T) {
+	b := New(&lifecycleClient{}, nil, nil, Config{Sid: 1, SvcType: "game"})
+	if err := b.Handle("mail", "Changed", nil); err == nil {
+		t.Fatal("nil message handler was accepted")
+	}
+	if err := b.Handle("mail", "Changed", func(*MsgContext) {}); err != nil {
+		t.Fatalf("first Handle: %v", err)
+	}
+	if err := b.Handle("mail", "Changed", func(*MsgContext) {}); err == nil {
+		t.Fatal("duplicate message handler was accepted")
+	}
+}
+
 func TestHandleRpcSubscribesServiceQueueAndInstanceSubject(t *testing.T) {
 	client := &lifecycleClient{}
 	b := New(client, nil, nil, Config{Sid: 8001, SvcType: "instance"})
@@ -140,13 +154,20 @@ func TestHandleRpcSubscribesServiceQueueAndInstanceSubject(t *testing.T) {
 }
 
 type lifecycleRpc struct {
-	replies chan []byte
-	subject string
+	replies  chan []byte
+	subject  string
+	request  []byte
+	response []byte
+	callErr  error
 }
 
-func (r *lifecycleRpc) Call(_ context.Context, subject string, _ []byte) ([]byte, error) {
+func (r *lifecycleRpc) Call(_ context.Context, subject string, request []byte) ([]byte, error) {
 	r.subject = subject
-	return []byte(`{}`), nil
+	r.request = append([]byte(nil), request...)
+	if r.callErr != nil || r.response != nil {
+		return r.response, r.callErr
+	}
+	return encodeRPCSuccess(JSONCodec{}, struct{}{})
 }
 
 func (r *lifecycleRpc) CallWithTimeout(string, []byte, time.Duration) ([]byte, error) {
@@ -160,7 +181,7 @@ func (r *lifecycleRpc) Reply(_ string, resp []byte) error {
 	return nil
 }
 
-func TestBusRpcRawPayloadUsesFullDottedMethodFromSubject(t *testing.T) {
+func TestBusRpcEnvelopeUsesDeclaredDottedMethod(t *testing.T) {
 	rpc := &lifecycleRpc{replies: make(chan []byte, 1)}
 	b := New(&lifecycleClient{}, rpc, nil, Config{Sid: 5001, SvcType: "mail", WorkerNum: 1})
 	handled := make(chan struct{})
@@ -190,10 +211,17 @@ func TestBusRpcRawPayloadUsesFullDottedMethodFromSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
+	wire, err := b.codec.Marshal(&fnats.NatsMsg{
+		FromSid: 1001, MsgName: "mail.Summary", Payload: payload,
+		SessionId: "request-1", MsgID: "request-1", Attempt: 1,
+	})
+	if err != nil {
+		t.Fatalf("Marshal envelope: %v", err)
+	}
 	b.onRpcMessage(&fnats.Msg{
 		Subject: "cube.rpc.mail.mail.Summary",
 		Reply:   "reply",
-		Data:    payload,
+		Data:    wire,
 	})
 
 	select {
@@ -221,5 +249,80 @@ func TestBusCallToUsesInstanceRpcSubject(t *testing.T) {
 	}
 	if rpc.subject != "cube.rpc.instance.8001.instance.GetState" {
 		t.Fatalf("rpc subject = %q", rpc.subject)
+	}
+	var envelope fnats.NatsMsg
+	if err := b.codec.Unmarshal(rpc.request, &envelope); err != nil {
+		t.Fatalf("decode request envelope: %v", err)
+	}
+	if envelope.MsgName != "instance.GetState" || envelope.ToSid != 8001 || envelope.SessionId == "" || envelope.MsgID != envelope.SessionId {
+		t.Fatalf("request envelope = %+v", envelope)
+	}
+}
+
+func TestBusCallReturnsRemoteBusinessError(t *testing.T) {
+	rpc := &lifecycleRpc{}
+	b := New(&lifecycleClient{}, rpc, nil, Config{Sid: 2001, SvcType: "game"})
+	response, err := encodeRPCFailure(b.codec, errors.New("storage unavailable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpc.response = response
+
+	var resp struct{ Balance int64 }
+	err = b.Call(context.Background(), "wallet", "wallet.GetBalance", struct{}{}, &resp)
+	if err == nil {
+		t.Fatalf("remote business failure decoded as success: %+v", resp)
+	}
+}
+
+func TestBusStopDoesNotDeadlockHandlerAttemptingRPCRegistration(t *testing.T) {
+	b := New(&lifecycleClient{}, &lifecycleRpc{replies: make(chan []byte, 1)}, nil, Config{Sid: 7, SvcType: "game", WorkerNum: 1})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	registration := make(chan error, 1)
+	if err := b.Handle("mail", "Changed", func(*MsgContext) {
+		close(entered)
+		<-release
+		registration <- b.HandleRpc("mail.Late", func(*RpcContext) (any, error) { return nil, nil })
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := b.encodeMsg(7, "mail", "Changed", struct{}{}, fnats.BroadcastNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.onMessage(&fnats.Msg{Data: wire})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	stopDone := make(chan error, 1)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() { stopDone <- b.StopWithContext(stopCtx) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.lifeMu.Lock()
+		stopping := b.stopping
+		b.lifeMu.Unlock()
+		if stopping {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bus did not enter stopping state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-registration; err == nil {
+		t.Fatal("rpc registration succeeded during stop")
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("StopWithContext: %v", err)
 	}
 }

@@ -98,6 +98,7 @@ func (a *App) RootCmd() *cobra.Command {
 func (a *App) run(serverType ServiceName) error {
 	// --- Load config ---
 	cfgPath, _ := a.rootCmd.Flags().GetString("config")
+	explicitConfig := a.rootCmd.PersistentFlags().Changed("config")
 	if cfgPath == "" {
 		cfgPath = defaultServiceConfigPath(serverType)
 	}
@@ -116,7 +117,10 @@ func (a *App) run(serverType ServiceName) error {
 	a.cfg.SetDefault("player_protocol.rate_limit.enabled", false)
 
 	if err := a.cfg.ReadInConfig(); err != nil {
-		slog.Warn("config file not found, using defaults", "path", cfgPath, "err", err)
+		if explicitConfig || !isMissingConfig(err) {
+			return fmt.Errorf("read config %q: %w", cfgPath, err)
+		}
+		slog.Warn("default config file not found, using development defaults", "path", cfgPath, "err", err)
 	}
 	a.cfg.Set("server_type", serverType)
 	if a.rootCmd.Flags().Changed("sid") {
@@ -185,7 +189,7 @@ func (a *App) run(serverType ServiceName) error {
 	}
 	for _, mod := range sharedMods {
 		if err := mod.Provide(a.registry); err != nil {
-			stopModsReverse(providedSharedMods, "mod stop after provide error")
+			stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
 		providedSharedMods = append(providedSharedMods, mod)
@@ -225,7 +229,7 @@ func (a *App) run(serverType ServiceName) error {
 	}
 	for _, mod := range serviceMods {
 		if err := mod.Provide(a.registry); err != nil {
-			stopModsReverse(providedServiceMods, "mod stop after provide error (service-specific)")
+			stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)")
 			stopModsReverse(startedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
@@ -349,6 +353,11 @@ func (a *App) run(serverType ServiceName) error {
 	// Stop service-specific mods in reverse order
 	if err := stopModsReverseWithContext(shutdownCtx, startedServiceMods, "mod stop (service-specific)"); err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
+		if stopIncomplete(err) {
+			// A service-specific Mod may still use shared capabilities. Preserve
+			// those dependencies until the process terminates.
+			return errors.Join(serviceErr, shutdownErr)
+		}
 	}
 
 	// Stop shared mods in reverse order
@@ -380,6 +389,17 @@ func defaultServiceConfigPath(serverType ServiceName) string {
 	return fmt.Sprintf("configs/service/config.%s.yaml", serverType)
 }
 
+func isMissingConfig(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsNotExist(err) {
+		return true
+	}
+	var notFound viper.ConfigFileNotFoundError
+	return errors.As(err, &notFound)
+}
+
 func stopModsReverse(mods []Mod, msg string) {
 	if err := stopModsReverseWithContext(context.Background(), mods, msg); err != nil {
 		slog.Error("mod stop failed", "err", err)
@@ -392,17 +412,78 @@ func stopModsReverseWithContext(ctx context.Context, mods []Mod, msg string) err
 	}
 	var joined error
 	for i := len(mods) - 1; i >= 0; i-- {
-		slog.Info(msg, "mod", mods[i].Name())
-		if stopper, ok := mods[i].(ModStopperWithContext); ok {
-			if err := stopper.StopWithContext(ctx); err != nil {
-				slog.Error("mod stop failed", "mod", mods[i].Name(), "err", err)
-				joined = errors.Join(joined, fmt.Errorf("mod %s stop: %w", mods[i].Name(), err))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(joined, ctxErr)
+		}
+		mod := mods[i]
+		if mod == nil {
+			joined = errors.Join(joined, errors.New("app: nil mod during stop"))
+			continue
+		}
+		modCtx, cancel := modStopContext(ctx, i+1)
+		started := time.Now()
+		slog.Info(msg, "mod", mod.Name())
+		err := stopModSafely(modCtx, mod)
+		cancel()
+		duration := time.Since(started)
+		if err != nil {
+			slog.Error("mod stop failed", "mod", mod.Name(), "duration", duration, "err", err)
+			joined = errors.Join(joined, fmt.Errorf("mod %s stop: %w", mod.Name(), err))
+			if stopIncomplete(err) {
+				break
 			}
 			continue
 		}
-		mods[i].Stop()
+		slog.Info("mod stopped", "mod", mod.Name(), "duration", duration)
 	}
 	return joined
+}
+
+func stopIncomplete(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+const defaultModStopTimeout = 5 * time.Second
+
+func modStopContext(parent context.Context, remainingMods int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if remainingMods < 1 {
+		remainingMods = 1
+	}
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return context.WithCancel(parent)
+		}
+		return context.WithTimeout(parent, remaining/time.Duration(remainingMods))
+	}
+	return context.WithTimeout(parent, defaultModStopTimeout)
+}
+
+func stopModSafely(ctx context.Context, mod Mod) error {
+	result := make(chan error, 1)
+	go func() {
+		var err error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("panic: %v", recovered)
+			}
+			result <- err
+		}()
+		if stopper, ok := mod.(ModStopperWithContext); ok {
+			err = stopper.StopWithContext(ctx)
+			return
+		}
+		mod.Stop()
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *App) emitLifecycle(ctx context.Context, event lifecycle.Event) error {

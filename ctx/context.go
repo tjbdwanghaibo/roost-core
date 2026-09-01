@@ -23,10 +23,10 @@ type Context struct {
 	keyValue map[any]any
 }
 
-// ContextSnapshot is an immutable copy of the request context fields that are
-// meaningful across goroutines. It intentionally does not carry Now/NowMilli:
-// every goroutine should stamp its own logical server time when the context is
-// installed.
+// ContextSnapshot is an immutable copy for framework-controlled synchronous
+// handoff boundaries. Async Nest dispatch and worker tasks deliberately do not
+// propagate it: business data must be carried explicitly in Params/Task/Effect
+// fields. It intentionally does not carry Now/NowMilli.
 type ContextSnapshot struct {
 	Valid    bool
 	Config   any
@@ -201,8 +201,10 @@ func BindBase(base stdctx.Context) func() {
 	return release
 }
 
-// CaptureSnapshot copies the current request Context for handoff to another
-// goroutine. A zero-value snapshot means no request context was active.
+// CaptureSnapshot copies the current request Context for an explicit,
+// framework-controlled handoff. It is not the business async API; handlers
+// must use Nest effects or worker tasks with explicit data instead. A
+// zero-value snapshot means no request context was active.
 func CaptureSnapshot() ContextSnapshot {
 	if c := CurrentContext(); c != nil {
 		return c.Snapshot()

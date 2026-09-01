@@ -2,6 +2,8 @@ package bus
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -269,4 +271,12 @@ func (e DeadLetterEntry) toNatsMsg(newMsgID string) *nats.NatsMsg {
 		Attempt:   attempt,
 		CreatedAt: time.Now().UnixMilli(),
 	}
+}
+
+func (e DeadLetterEntry) requeueMsgID() string {
+	// The ID must remain stable when publish succeeds but DLQ deletion fails;
+	// otherwise an operator retry bypasses inbox deduplication.
+	raw, _ := json.Marshal(e)
+	digest := sha256.Sum256(raw)
+	return "requeue:" + hex.EncodeToString(digest[:16])
 }

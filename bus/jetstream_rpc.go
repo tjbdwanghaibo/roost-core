@@ -181,6 +181,11 @@ func (b *Bus) subscribeJetStreamRPCMethod(method string) error {
 	if !b.jetStreamRPCEnabled() {
 		return ErrJetStreamRPCUnavailable
 	}
+	b.lifeMu.Lock()
+	defer b.lifeMu.Unlock()
+	if b.stopping || b.stopped {
+		return fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+	}
 	cfg := b.jsRPC.cfg
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.SetupTimeout)
 	defer cancel()
@@ -435,9 +440,9 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	var data []byte
 	var err error
 	if handlerErr != nil {
-		data, err = b.codec.Marshal(rpcErrorResponse(handlerErr))
+		data, err = encodeRPCFailure(b.codec, handlerErr)
 	} else {
-		data, err = b.codec.Marshal(resp)
+		data, err = encodeRPCSuccess(b.codec, resp)
 	}
 	if err != nil {
 		b.recordJetStreamRPCRequest(req.MsgName, "marshal_error")

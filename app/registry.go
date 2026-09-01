@@ -19,6 +19,12 @@ type Registry struct {
 	cfg   *viper.Viper
 }
 
+// Capability is one atomic Registry registration entry.
+type Capability struct {
+	Name  ModName
+	Value any
+}
+
 func NewRegistry(cfg *viper.Viper) *Registry {
 	r := &Registry{
 		store: make(map[ModName]any),
@@ -37,12 +43,30 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 
 // Register registers a capability and fails if another provider already owns it.
 func (r *Registry) Register(name ModName, value any) error {
+	return r.RegisterBatch(Capability{Name: name, Value: value})
+}
+
+// RegisterBatch validates every capability before publishing any of them.
+// This prevents consumers from observing a partially provided Mod.
+func (r *Registry) RegisterBatch(entries ...Capability) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if existing, ok := r.store[name]; ok {
-		return fmt.Errorf("registry: capability %q already registered by %T", name, existing)
+	seen := make(map[ModName]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.Name == "" {
+			return fmt.Errorf("registry: capability name is empty")
+		}
+		if _, duplicate := seen[entry.Name]; duplicate {
+			return fmt.Errorf("registry: capability %q appears more than once in batch", entry.Name)
+		}
+		seen[entry.Name] = struct{}{}
+		if existing, ok := r.store[entry.Name]; ok {
+			return fmt.Errorf("registry: capability %q already registered by %T", entry.Name, existing)
+		}
 	}
-	r.store[name] = value
+	for _, entry := range entries {
+		r.store[entry.Name] = entry.Value
+	}
 	return nil
 }
 

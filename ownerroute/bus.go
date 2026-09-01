@@ -25,11 +25,11 @@ func (t *BusTransport[C]) Send(_ context.Context, sid int32, cmd *C) error {
 	return t.Bus.SendByType(t.ServiceType, sid, t.Module, cmd)
 }
 
-func RegisterBusHandler[C any](b bus.IBus, module string, msgName string, execute func(context.Context, *C) error) {
+func RegisterBusHandler[C any](b bus.IBus, module string, msgName string, execute func(context.Context, *C) error) error {
 	if b == nil || execute == nil || module == "" || msgName == "" {
-		return
+		return fmt.Errorf("ownerroute: invalid bus handler registration")
 	}
-	b.Handle(module, msgName, func(ctx *bus.MsgContext) {
+	return b.Handle(module, msgName, func(ctx *bus.MsgContext) {
 		var cmd C
 		if err := ctx.Decode(&cmd); err != nil {
 			slog.Warn("ownerroute: decode command failed", "module", module, "msg", msgName, "err", err)

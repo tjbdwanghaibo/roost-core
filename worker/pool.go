@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/misc"
 	"sync"
 )
@@ -163,28 +164,40 @@ func (p *Pool[T]) Dispatch(key int64, task T) error {
 	return nil
 }
 
-// Go executes a task in an independent goroutine (for expensive/blocking tasks).
-// Goroutines started while the pool runs are waited for by StopWithContext; a
-// call before Start or after Stop still executes but is untracked.
+// Go executes a task in an independent, lifecycle-tracked goroutine. Calls
+// outside the Start/Stop lifetime are rejected and release task ownership.
+// Use TryGo when the caller must observe admission failure.
 func (p *Pool[T]) Go(task T, handler func(T)) {
-	tracked := false
-	p.mu.Lock()
-	if p.started && !p.stopped {
-		// Add happens under the same mutex that Stop uses to flip stopped,
-		// so it always precedes Stop's wg.Wait and never races it.
-		p.wg.Add(1)
-		tracked = true
+	if err := p.TryGo(task, handler); err != nil {
+		task.OnRelease()
 	}
+}
+
+// TryGo admits a task only while the pool is running. Every admitted goroutine
+// is included in StopWithContext and receives a fresh framework Context.
+func (p *Pool[T]) TryGo(task T, handler func(T)) error {
+	p.mu.Lock()
+	if !p.started || p.stopped {
+		p.mu.Unlock()
+		return ErrWorkerClosed
+	}
+	// Add happens under the same mutex that Stop uses to flip stopped, so it
+	// always precedes Stop's wg.Wait and never races it.
+	p.wg.Add(1)
 	p.mu.Unlock()
 	go func() {
-		if tracked {
-			defer p.wg.Done()
-		}
+		defer p.wg.Done()
 		misc.SafeFunc(func() {
+			_, releaseContext := fctx.NewContext(
+				fctx.WithSource("worker"),
+				fctx.WithHandler(p.name),
+			)
+			defer releaseContext()
 			defer task.OnRelease()
 			handler(task)
 		})
 	}()
+	return nil
 }
 
 // WorkerNum returns the number of workers in the pool.

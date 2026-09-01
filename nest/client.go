@@ -200,18 +200,20 @@ func prepareClientMessage(ctx context.Context, msg *Msg, name HandlerName, param
 	msg.Params = append(msg.Params[:0], params...)
 	opt := resolveSendOptions(opts)
 	msg.Cost = opt.Cost
-	snapshot := fctx.CaptureSnapshot()
-	if !snapshot.Valid {
-		snapshot.Valid = true
-		snapshot.Config = fctx.RuntimeConfig()
-	}
+	var snapshot fctx.ContextSnapshot
 	if wait {
+		snapshot = fctx.CaptureSnapshot()
+		if !snapshot.Valid {
+			snapshot.Valid = true
+			snapshot.Config = fctx.RuntimeConfig()
+		}
 		snapshot.Base = ctx
 	} else {
-		// An accepted command outlives the request that admitted it, while still
-		// carrying context values and Roost request metadata.
-		snapshot.Base = context.WithoutCancel(ctx)
-		snapshot.SyncWait = 0
+		// Async admission uses ctx only for its cancellation/deadline check.
+		// Preserve the framework message envelope (config generation, request
+		// identity and trace), but never Base values, arbitrary KV or transaction
+		// state. Business data must travel explicitly in Params.
+		snapshot = asyncMessageContextSnapshot(fctx.CaptureSnapshot())
 	}
 	msg.Context = snapshot
 }

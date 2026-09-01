@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+func rpcTestSuccessBytes(b *Bus, value any) []byte {
+	data, err := encodeRPCSuccess(b.codec, value)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
 func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 	obs.DefaultRegistry().Reset()
 	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
@@ -40,7 +48,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 		if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
 			_ = handler(context.Background(), &fnats.JetStreamMsg{
 				Subject: req.ReplySubject,
-				Data:    []byte(`{"code":0}`),
+				Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
 			})
 		}
 	}
@@ -111,14 +119,14 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 			if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
-					Data:    []byte(`{"code":0}`),
+					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
 				})
 			}
 		case "mail.Summary":
 			if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
-					Data:    []byte(`{"code":0}`),
+					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
 				})
 			}
 		}

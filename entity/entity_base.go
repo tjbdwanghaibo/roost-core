@@ -315,6 +315,9 @@ func (e *EntityBase) Touch() bool {
 		if old&(removedBit|clearedBit) != 0 {
 			return false
 		}
+		if old&touchCntMask == touchCntMask {
+			panic("entity: reference count overflow")
+		}
 		if e.tryTouch.CompareAndSwap(old, old+1) {
 			return true
 		}
@@ -323,7 +326,20 @@ func (e *EntityBase) Touch() bool {
 
 // UnTouch atomically decrements reference count. Triggers clear if removed and count reaches zero.
 func (e *EntityBase) UnTouch() {
-	new := e.tryTouch.Add(-1)
+	if e == nil {
+		panic("entity: nil EntityBase reference release")
+	}
+	var new int32
+	for {
+		old := e.tryTouch.Load()
+		if old&touchCntMask == 0 {
+			panic("entity: reference count underflow")
+		}
+		new = old - 1
+		if e.tryTouch.CompareAndSwap(old, new) {
+			break
+		}
+	}
 	if new&removedBit != 0 && new&touchCntMask == 0 {
 		for {
 			old := e.tryTouch.Load()

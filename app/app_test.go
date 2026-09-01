@@ -38,6 +38,42 @@ func TestAppReturnsServeError(t *testing.T) {
 	}
 }
 
+func TestAppExplicitConfigPathFailsClosed(t *testing.T) {
+	a := newTestApp(t, &errService{})
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	a.RootCmd().SetArgs([]string{"--config", missing, "game"})
+
+	err := a.Execute()
+	if err == nil || !strings.Contains(err.Error(), "read config") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("explicit missing config error = %v", err)
+	}
+}
+
+func TestAppInvalidDefaultConfigFailsClosed(t *testing.T) {
+	oldWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	configDir := filepath.Join(root, "configs", "service")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.game.yaml"), []byte("sid: [invalid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWorkingDirectory) })
+
+	a := newTestApp(t, &errService{})
+	a.RootCmd().SetArgs([]string{"game"})
+	if err := a.Execute(); err == nil || !strings.Contains(err.Error(), "read config") {
+		t.Fatalf("invalid default config error = %v", err)
+	}
+}
+
 var (
 	errShutdownFailed = errors.New("shutdown failed")
 	errModStopFailed  = errors.New("mod stop failed")
@@ -259,6 +295,89 @@ func TestStopModsReversePrefersContextStopper(t *testing.T) {
 	}
 	if mod.stopCalled.Load() {
 		t.Fatal("Stop should not be called when StopWithContext is available")
+	}
+}
+
+type panicStopMod struct{ stopped atomic.Bool }
+
+func (m *panicStopMod) Name() ModName           { return "panic_stop" }
+func (m *panicStopMod) Init(*viper.Viper) error { return nil }
+func (m *panicStopMod) Provide(*Registry) error { return nil }
+func (m *panicStopMod) Start() error            { return nil }
+func (m *panicStopMod) Stop() {
+	m.stopped.Store(true)
+	panic("stop boom")
+}
+
+func TestStopModsReverseContainsPanicAndContinues(t *testing.T) {
+	quick := &contextStopMod{}
+	panicking := &panicStopMod{}
+	err := stopModsReverseWithContext(context.Background(), []Mod{quick, panicking}, "test stop")
+	if err == nil || !strings.Contains(err.Error(), "panic: stop boom") {
+		t.Fatalf("panic stop error = %v", err)
+	}
+	if !panicking.stopped.Load() || !quick.stopContextCalled.Load() {
+		t.Fatalf("reverse stop did not continue: panic=%v quick=%v", panicking.stopped.Load(), quick.stopContextCalled.Load())
+	}
+}
+
+type hangingStopMod struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *hangingStopMod) Name() ModName           { return "hanging_stop" }
+func (m *hangingStopMod) Init(*viper.Viper) error { return nil }
+func (m *hangingStopMod) Provide(*Registry) error { return nil }
+func (m *hangingStopMod) Start() error            { return nil }
+func (m *hangingStopMod) Stop()                   {}
+func (m *hangingStopMod) StopWithContext(context.Context) error {
+	close(m.entered)
+	<-m.release
+	return nil
+}
+
+func TestStopModsReversePreservesDependenciesAfterTimeout(t *testing.T) {
+	hanging := &hangingStopMod{entered: make(chan struct{}), release: make(chan struct{})}
+	quick := &contextStopMod{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := stopModsReverseWithContext(ctx, []Mod{quick, hanging}, "test stop")
+	close(hanging.release)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop error = %v, want deadline", err)
+	}
+	if quick.stopContextCalled.Load() {
+		t.Fatal("dependency was stopped while predecessor stop remained incomplete")
+	}
+}
+
+type failingProvideMod struct {
+	stopped atomic.Bool
+}
+
+func (m *failingProvideMod) Name() ModName           { return "failing_provide" }
+func (m *failingProvideMod) Init(*viper.Viper) error { return nil }
+func (m *failingProvideMod) Provide(r *Registry) error {
+	if err := r.Register("partial_capability", m); err != nil {
+		return err
+	}
+	return errors.New("provide failed after resource creation")
+}
+func (m *failingProvideMod) Start() error { return nil }
+func (m *failingProvideMod) Stop()        { m.stopped.Store(true) }
+
+func TestAppStopsModWhoseProvideFails(t *testing.T) {
+	mod := &failingProvideMod{}
+	a := newTestApp(t, &errService{}, mod)
+	a.RootCmd().SetArgs([]string{"game"})
+
+	err := a.Execute()
+	if err == nil || !strings.Contains(err.Error(), "provide failed") {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !mod.stopped.Load() {
+		t.Fatal("mod was not stopped after partial Provide failure")
 	}
 }
 

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/misc"
 	"runtime"
 	"sync"
@@ -73,6 +74,11 @@ func (w *Worker[T]) loop() {
 
 func (w *Worker[T]) safeHandle(task T) {
 	misc.SafeFunc(func() {
+		_, releaseContext := fctx.NewContext(
+			fctx.WithSource("worker"),
+			fctx.WithHandler(w.name),
+		)
+		defer releaseContext()
 		defer task.OnRelease()
 		if w.handler != nil {
 			w.handler(task)

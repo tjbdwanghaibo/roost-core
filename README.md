@@ -361,9 +361,9 @@ Strict 的代价是热点实体的锁持有时长包含 fsync。Pipelined 把两
 
 框架把三样东西挂在**当前 goroutine ID** 上：guard 作用域（`guardScopes sync.Map`）、请求上下文（`ctx` 包，事务通过它定位 `CurrentRollbackTx`）、锁可重入性（`ReentrantMutex.owner`）。`misc.GoID()` 非 race 构建用 `modern-go/gls` 高速取 gid，race 构建退化为 `runtime.Stack` 解析。
 
-这是**被接受的架构决策**：它换来了业务代码零显式 context 传递的 handler 签名。其硬性约束是——**handler 内严禁裸 `go func(){...}` 后再访问框架能力**：新 goroutine 的 gid 不同，事务、guard、可重入锁全部静默丢失（读到 nil 或死锁，而不是报错）。需要异步工作时，用 `worker.Pool.Go`（受 `StopWithContext` 追踪）或把工作作为新消息投回 Nest。
+这是**被接受的架构决策**：它换来了业务代码零显式 context 传递的 handler 签名。其硬性约束是——**handler 内严禁启动任何裸 goroutine，也不能用 `errgroup.Go` 或业务 wrapper 绕过**：新 goroutine 的 gid 不同，事务、guard、可重入锁全部静默丢失（读到 nil 或死锁，而不是报错）。需要异步工作时，只能使用 `worker.Pool.Go`（受 `StopWithContext` 追踪）或把显式 Effect/Params 投递给 Nest。
 
-该约束有静态检查器兜底：`go run ./cmd/glsvet ./...` 扫描 `go` 语句内对 goroutine 绑定 API（`RecordUndo`/`CurrentRollbackTx`/`fctx.CurrentContext`/`GetEntityGuard` 等）的调用并报错，已接入本仓库 CI；业务仓库同样可以把它加进自己的 CI。默认跳过 `_test.go`（测试常合法地模拟跨 goroutine 行为），`-tests` 可包含。
+该约束有静态检查器兜底：`go run ./cmd/glsvet ./...` 会拒绝 Nest handler 可达路径里的裸 `go`、同文件命名 wrapper、非 core worker 的 `.Go`，以及 worker callback 对 handler 外层状态的捕获；同时扫描普通 `go` 语句中的 goroutine 绑定 API，并拒绝裸忽略 Dispatch/Publish/Submit admission 结果。`AfterCommit` 是框架原有的提交后钩子，仍然合法；外部可靠副作用优先使用 `nest.Emit`。检查器已接入本仓库 CI；业务仓库也应接入。默认跳过 `_test.go`，`-tests` 可包含。
 
 ### 7. 锁内耗时预算：`nest.handler.lock_hold` —— `nest/nest_dispatch.go`
 
@@ -401,11 +401,13 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 
 ### 14. bus 的四条易踩契约 —— `bus/bus.go`、`bus/jetstream_rpc.go`
 
-① **Bus 是一次性对象**：Stop 会退订包括 RPC 在内的全部订阅，而 Start 只重建基础 subject，所以 Stop 后拒绝重启（Start 失败可重试，成功过才不可重启）。② **`Send(toSid, module)` 是服务类型无关的**——发到 `{prefix}.srv.{sid}`，同 sid 的不同类型进程都会收到；定向到某类型用 `SendByType`。③ 有序性粒度：异步消息按 `ToModule` 哈希到固定 worker（**同 module FIFO、跨 module 并行**），RPC 按 method 哈希。④ **开启 JetStream RPC 后 `HandleRpc` 只注册持久化通道，但 `Call`/`CallTo` 仍走轻量 core-NATS**——要持久化必须显式 `CallReliable`/`CallToReliable`。另注意可靠消费的崩溃语义是**至多一次**：`BeginConsume` 只 SetNX 占位，handler 执行中崩溃后重投会被判重复而静默跳过（直到 inbox TTL 过期）；需要更强语义由 store 实现提供。
+① **Bus 是一次性对象**：Stop 会退订包括 RPC 在内的全部订阅，而 Start 只重建基础 subject，所以 Stop 后拒绝重启（Start 失败可重试，成功过才不可重启）。② **`Send(toSid, module)` 是服务类型无关的**——发到 `{prefix}.srv.{sid}`，同 sid 的不同类型进程都会收到；定向到某类型用 `SendByType`。③ 有序性粒度：异步消息按 `ToModule` 哈希到固定 worker（**同 module FIFO、跨 module 并行**），RPC 按 method 哈希。④ **开启 JetStream RPC 后 `HandleRpc` 只注册持久化通道，但 `Call`/`CallTo` 仍走轻量 core-NATS**——要持久化必须显式 `CallReliable`/`CallToReliable`。两类 RPC 使用同一版显式信封，远端业务错误会作为 error 返回，非信封请求/响应 fail-closed；轻量 Call 默认只发送一次，业务若确认操作幂等才应在更高层显式重试。`Handle`/`HandleRpc` 会拒绝空 handler、重复方法和停止期间的注册。另注意可靠消费的崩溃语义是**至多一次**：`BeginConsume` 只 SetNX 占位，handler 执行中崩溃后重投会被判重复而静默跳过（直到 inbox TTL 过期）；需要更强语义由 store 实现提供。
 
-### 15. 跨 goroutine 的正确出路：`CaptureSnapshot` —— `ctx/context.go`
+### 15. 异步 Context 隔离：业务参数显式传递 —— `ctx/context.go`、`worker/`、`nest/client.go`
 
-第 6 条讲了"handler 内禁止裸 `go func()` 后访问框架能力"，正向出路是：`snap := fctx.CaptureSnapshot()` → 新 goroutine 里 `ctx, release := fctx.NewContext(fctx.WithSnapshot(snap)); defer release()`。三个要点：snapshot **刻意不携带 Now**（每个 goroutine 装载时自己盖逻辑时间戳，时间不该跨 goroutine 冻结）；`Context` 是 `sync.Pool` 复用对象，**release 之后继续持有 `*Context` 是 use-after-free**；snapshot 的 keyValue 是浅拷贝，共享可变对象仍有竞态。`worker.Pool.Go` 的 goroutine 只在 pool 运行期间（Start 后 Stop 前发起）才被 `StopWithContext` 追踪；`worker.Cast` 是**有损**的（自旋超限或已关闭时静默 `OnRelease` 丢弃）——优先 `TryCast`/`TryDispatch`，并注意 `TryDispatch` 失败时任务未被释放（调用方负责）而 `Dispatch` 失败时已代为释放。
+Handler 不得自行创建异步执行；需要事务提交后可靠执行的工作使用 `nest.Emit(Effect)`，本机阻塞或计算任务使用 core `worker.Pool`。框架既有的 `AfterCommit` 仍是合法的提交后钩子，但不替代可靠 outbox。worker 在消费端建立完全独立的 `fctx.Context`，不继承提交者状态，需要的业务数据必须复制为 Task 字段。Nest 异步消息会保留只读的框架信封（配置代际、Trace、Player/Msg/Seq 请求身份），以维持日志链路、WAL `RequestID` 和配置一致性；但不会传播 Base Context/value、KV、SyncWait、Frame、事务、guard 或锁。业务数据仍必须显式放入 Params 或 Effect payload，不能把框架信封当业务参数通道。
+
+`CaptureSnapshot` 仍供框架同步边界和明确受控的内部适配使用，但不是 handler 启动异步工作的 API；业务不得把 snapshot、`*Context`、Entity/Component/DAO、Guard 或 RollbackTx 放进异步任务。`Context` 来自 `sync.Pool`，release 后继续持有是 use-after-free。`worker.Pool.Go` 只在 pool 运行期间（Start 后 Stop 前）接纳并追踪任务，生命周期外会释放任务而不执行；需要处理 admission error 时使用 `TryGo`。队列路径优先使用 `TryCast`/`TryDispatch`，并明确失败时的任务所有权。
 
 ### 16. 单所有者组件清单（非并发安全，靠实体锁/单 worker 独占）
 

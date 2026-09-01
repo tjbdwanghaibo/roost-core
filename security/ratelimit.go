@@ -11,9 +11,12 @@ type RateLimitKey struct {
 }
 
 type RateLimitConfig struct {
-	Capacity int64
-	Refill   int64
-	Interval time.Duration
+	Capacity      int64
+	Refill        int64
+	Interval      time.Duration
+	MaxKeys       int
+	IdleTTL       time.Duration
+	SweepInterval time.Duration
 }
 
 func (c RateLimitConfig) Normalize() RateLimitConfig {
@@ -26,7 +29,26 @@ func (c RateLimitConfig) Normalize() RateLimitConfig {
 	if c.Interval <= 0 {
 		c.Interval = time.Second
 	}
+	if c.MaxKeys <= 0 {
+		c.MaxKeys = 100_000
+	}
+	if c.IdleTTL <= 0 {
+		c.IdleTTL = 10 * time.Minute
+	}
+	if c.SweepInterval <= 0 {
+		c.SweepInterval = time.Minute
+	}
+	if c.SweepInterval > c.IdleTTL {
+		c.SweepInterval = c.IdleTTL
+	}
 	return c
+}
+
+type RateLimitStats struct {
+	Keys             int
+	MaxKeys          int
+	CapacityRejected uint64
+	Evicted          uint64
 }
 
 type RateLimiter struct {
@@ -34,11 +56,16 @@ type RateLimiter struct {
 	mu  sync.Mutex
 	bkt map[RateLimitKey]*bucket
 	now func() time.Time
+
+	lastSweep        time.Time
+	capacityRejected uint64
+	evicted          uint64
 }
 
 type bucket struct {
-	tokens int64
-	at     time.Time
+	tokens   int64
+	at       time.Time
+	lastSeen time.Time
 }
 
 func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
@@ -64,17 +91,46 @@ func (l *RateLimiter) AllowN(key RateLimitKey, n int64) bool {
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.cfg.SweepInterval {
+		l.evicted += uint64(l.gcLocked(now.Add(-l.cfg.IdleTTL)))
+		l.lastSweep = now
+	}
 	b := l.bkt[key]
 	if b == nil {
-		b = &bucket{tokens: l.cfg.Capacity, at: now}
+		if len(l.bkt) >= l.cfg.MaxKeys {
+			// A key flood must not grow the map without bound. Try one full idle
+			// sweep before rejecting a previously unseen key; active keys are
+			// never evicted to make room for attacker-controlled cardinality.
+			l.evicted += uint64(l.gcLocked(now.Add(-l.cfg.IdleTTL)))
+		}
+		if len(l.bkt) >= l.cfg.MaxKeys {
+			l.capacityRejected++
+			return false
+		}
+		b = &bucket{tokens: l.cfg.Capacity, at: now, lastSeen: now}
 		l.bkt[key] = b
 	}
+	b.lastSeen = now
 	l.refill(b, now)
 	if b.tokens < n {
 		return false
 	}
 	b.tokens -= n
 	return true
+}
+
+func (l *RateLimiter) Stats() RateLimitStats {
+	if l == nil {
+		return RateLimitStats{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return RateLimitStats{
+		Keys:             len(l.bkt),
+		MaxKeys:          l.cfg.MaxKeys,
+		CapacityRejected: l.capacityRejected,
+		Evicted:          l.evicted,
+	}
 }
 
 func (l *RateLimiter) Size() int {
@@ -93,9 +149,15 @@ func (l *RateLimiter) GC(idle time.Duration) int {
 	cutoff := l.now().Add(-idle)
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	removed := l.gcLocked(cutoff)
+	l.evicted += uint64(removed)
+	return removed
+}
+
+func (l *RateLimiter) gcLocked(cutoff time.Time) int {
 	removed := 0
 	for key, b := range l.bkt {
-		if b.at.Before(cutoff) {
+		if !b.lastSeen.After(cutoff) {
 			delete(l.bkt, key)
 			removed++
 		}

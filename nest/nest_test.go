@@ -1262,6 +1262,8 @@ func hasNestTraceCounter(event string, handler string, result string) bool {
 }
 
 func TestTickerBasic(t *testing.T) {
+	resetTickCallbacksForTest()
+	t.Cleanup(resetTickCallbacksForTest)
 	tickCount := make(chan uint64, 10)
 	MustRegisterTickCallback(NewTickCallbackName("test_tick"), func(msg TickMsg) {
 		tickCount <- msg.FrameNumber
@@ -1282,6 +1284,8 @@ func TestTickerBasic(t *testing.T) {
 }
 
 func TestTickerStopIdempotentAndCallbackPanicSafe(t *testing.T) {
+	resetTickCallbacksForTest()
+	t.Cleanup(resetTickCallbacksForTest)
 	MustRegisterTickCallback(NewTickCallbackName("test_tick_panic_safe"), func(msg TickMsg) {
 		panic("boom")
 	})
@@ -1419,6 +1423,8 @@ func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
 }
 
 func TestTickCallbacksRegisteredAfterStartTakeEffectInOrder(t *testing.T) {
+	resetTickCallbacksForTest()
+	t.Cleanup(resetTickCallbacksForTest)
 	// Regression: NewTicker used to snapshot the global registry at engine
 	// construction — callbacks registered afterwards silently never ran, and
 	// snapshot order came from map iteration (nondeterministic).
@@ -1442,6 +1448,13 @@ func TestTickCallbacksRegisteredAfterStartTakeEffectInOrder(t *testing.T) {
 	if len(order) != 3 || order[0] != 1 || order[1] != 1 || order[2] != 2 {
 		t.Fatalf("callback order = %v, want [1 1 2] (late registration effective, registration order kept)", order)
 	}
+}
+
+func resetTickCallbacksForTest() {
+	tickMu.Lock()
+	tickCbSeen = make(map[TickCallbackName]struct{})
+	tickCbList = nil
+	tickMu.Unlock()
 }
 
 func TestInstanceScopedHandlersDoNotCollideAcrossEngines(t *testing.T) {

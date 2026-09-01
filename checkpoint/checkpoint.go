@@ -240,7 +240,11 @@ func (c *Checkpoint) Submit(items []SaveItem) bool {
 	}
 	ok := c.pushJournal(items)
 	if ok && c.wal != nil {
-		_ = c.wal.Submit(items)
+		if !c.wal.Submit(items) {
+			// The journal already owns the save, so optional WAL rejection does
+			// not change admission. It must remain visible for capacity alerting.
+			slog.Warn("checkpoint: optional snapshot wal rejected after journal accepted", "items", len(items))
+		}
 	}
 	return ok
 }
