@@ -3,6 +3,7 @@
 package dataengine
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/cube-kit/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -175,6 +177,79 @@ func TestRealIntegrationDeadlineIsBounded(t *testing.T) {
 	deadline, ok := fx.context().Deadline()
 	if !ok || time.Until(deadline) > 31*time.Second {
 		t.Fatalf("integration context deadline=%v ok=%v", deadline, ok)
+	}
+}
+
+func TestRealMixedProjectionSegmentsPreserveOrder(t *testing.T) {
+	fx := newRealFixture(t)
+	defer fx.close()
+
+	first := realRecord(41, []coredata.Mutation{
+		realPut(t, fx.database, "mixed_entities", 4101, 0, 1, bson.M{"value": int64(1)}),
+	})
+	patch2, err := bson.Marshal(bson.D{{Key: "value", Value: int64(2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := realRecord(42, []coredata.Mutation{{
+		Key:  coredata.DocumentKey{Database: fx.database, Resource: "mixed_entities", ID: 4101},
+		Kind: coredata.MutationPatch, ExpectedVersion: 1, NextVersion: 2, Schema: 1,
+		Patch: coredata.FieldPatch{SetBSON: patch2},
+	}})
+	second.Receipts = []coredata.Receipt{{Namespace: "mixed", ID: "receipt-42", Digest: []byte("42")}}
+	second.Effects = []coredata.Effect{{
+		ID: "mixed-effect-42", Topic: "mixed.changed", Key: "4101",
+		AvailableAt: time.Now().Add(time.Hour).UnixNano(),
+	}}
+	patch3, err := bson.Marshal(bson.D{{Key: "value", Value: int64(3)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := realRecord(43, []coredata.Mutation{{
+		Key:  coredata.DocumentKey{Database: fx.database, Resource: "mixed_entities", ID: 4101},
+		Kind: coredata.MutationPatch, ExpectedVersion: 2, NextVersion: 3, Schema: 1,
+		Patch: coredata.FieldPatch{SetBSON: patch3},
+	}})
+
+	options := nestwal.DefaultOptions(t.TempDir())
+	options.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := wal.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	projector, err := NewProjector(wal, fx.runtime.Store, ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.cancel()
+	<-projector.done
+	for _, record := range []coredata.CommitRecord{first, second, third} {
+		if _, err := wal.Append(fx.context(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if processed, err := projector.replayPass(fx.context()); err != nil || processed != 3 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+
+	assertDocumentVersion(t, fx, "mixed_entities", 4101, 3)
+	assertCollectionCount(t, fx, receiptCollection, 1)
+	assertCollectionCount(t, fx, outboxCollection, 1)
+	assertCollectionCount(t, fx, transactionCollection, 1)
+	replayed := 0
+	if err := wal.Replay(fx.context(), func(corenest.CommitFence, coredata.CommitRecord) error {
+		replayed++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if replayed != 0 {
+		t.Fatalf("replay records=%d, want 0", replayed)
 	}
 }
 

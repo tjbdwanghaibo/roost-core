@@ -21,6 +21,26 @@ func (store *benchmarkProjectionStore) Project(context.Context, coredata.CommitR
 	return nil
 }
 
+func BenchmarkProjectionSegmentPlanner(b *testing.B) {
+	for _, specialEvery := range []int{0, 100, 10, 1} {
+		name := fmt.Sprintf("special_every_%d", specialEvery)
+		b.Run(name, func(b *testing.B) {
+			records := make([]coredata.CommitRecord, 1024)
+			for i := range records {
+				records[i] = projectorRecord(byte(i%255+1), specialEvery > 0 && i%specialEvery == 0)
+			}
+			fences := projectionTestFences(records)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, err := planProjectionSegments(records, fences, 1024, 4<<20); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkProjectorAdmissionMatrix(b *testing.B) {
 	for _, durability := range []corenest.DurabilityPolicy{corenest.DurabilityAsync, corenest.DurabilityStrict, corenest.DurabilityPipelined} {
 		for _, writers := range []int{1, 8, 32} {
