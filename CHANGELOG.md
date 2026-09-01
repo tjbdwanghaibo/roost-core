@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added — Data Engine
+- `dataengine` 统一持久化契约：事务内 `PersistChange` 生成 Put/Patch/Delete，WAL record 原子携带 receipt/effect，并定义聚合 load、schema migration、tombstone 与 system transaction 接口；迁移和运维边界见 `docs/DATA_ENGINE_MIGRATION.md`。
+- Native Saga step 可把 Entity mutation、Command receipt 与 completion effect 绑定到同一 CommitRecord；Remote Entity commit 也改为消费同一事务变更源，并保留 lease/fence/version 语义。
+
+### Changed — Data Engine
+- Data Engine tracker 只保留已接受持久化版本和 sync dirty；持久化 dirty 不再写回 DAO。`DurabilityPipelined` 在 WAL Enqueue 接受后、Entity 解锁前推进普通 DAO version。
+- Legacy Checkpoint write runtime 仅保留为滚动迁移旧引擎，不能与 Data Engine 双写；物理删除需等待 patch-only 生产观察和真实 Mongo/JetStream 门禁完成。
+
 ### Added
 - `app.ModOptionalDependencyProvider`：声明“安装时需要排在当前 Mod 前、未安装时忽略”的可选依赖；与硬依赖共同拓扑排序并检测依赖环，消除可选集成对业务 Mod 书写顺序的隐式依赖。
 - 新增三级文档中心：新手快速开始、熟练开发者完整说明、框架实现原理、生产部署手册和分级路线图。
