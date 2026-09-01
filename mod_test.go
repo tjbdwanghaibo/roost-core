@@ -26,6 +26,19 @@ func (*modJetStream) Subscribe(context.Context, fnats.JetStreamConsumerConfig, f
 	return nil, errors.New("unused")
 }
 
+func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("dataengine.projection.batch_bytes", 2<<20)
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mod.cfg.projector.ReplayBatchBytes; got != 2<<20 {
+		t.Fatalf("projection batch bytes=%d", got)
+	}
+}
+
 func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")

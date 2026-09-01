@@ -133,6 +133,9 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if value := cfg.GetInt("dataengine.projection.batch_records"); value > 0 {
 		projector.ReplayBatchRecords = value
 	}
+	if value := cfg.GetInt("dataengine.projection.batch_bytes"); value > 0 {
+		projector.ReplayBatchBytes = value
+	}
 	projector.OnFatal = mod.onFatal
 	owner := strings.TrimSpace(cfg.GetString("dataengine.outbox.owner"))
 	if owner == "" {
