@@ -2,12 +2,13 @@ package ai
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	coreflow "github.com/tjbdwanghaibo/cube-core/actionflow"
 	coreai "github.com/tjbdwanghaibo/cube-core/ai"
-	coreflow "github.com/tjbdwanghaibo/cube-core/taskflow"
 )
 
 type controllerTestStrategy struct {
@@ -59,19 +60,44 @@ func TestBehaviorTreeReadyDoesNotAdvanceSequence(t *testing.T) {
 	}
 }
 
-func TestBlackboardConcurrentAccess(t *testing.T) {
+// Race-freedom is necessary but not sufficient: a Blackboard that dropped
+// writes, or returned a Snapshot aliasing live state, would have passed the
+// previous version of this test since it discarded every return value.
+func TestBlackboardConcurrentAccessKeepsEveryWorkersWrite(t *testing.T) {
 	board := NewBlackboard()
+	const workers, rounds = 8, 100
 	var wait sync.WaitGroup
-	for worker := 0; worker < 8; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		wait.Add(1)
-		go func(value int) {
+		go func(id int) {
 			defer wait.Done()
-			for index := 0; index < 100; index++ {
-				board.Set("key", value)
-				_, _ = board.Get("key")
+			key := fmt.Sprintf("worker_%d", id)
+			for index := 0; index < rounds; index++ {
+				board.Set(key, index)
+				// Reading a neighbour's key concurrently is what the race
+				// detector is here for.
+				_, _ = board.Get(fmt.Sprintf("worker_%d", (id+1)%workers))
 				_ = board.Snapshot()
 			}
 		}(worker)
 	}
 	wait.Wait()
+
+	for worker := 0; worker < workers; worker++ {
+		key := fmt.Sprintf("worker_%d", worker)
+		value, ok := board.Get(key)
+		if !ok {
+			t.Fatalf("%s is missing after concurrent writes", key)
+		}
+		if value != rounds-1 {
+			t.Fatalf("%s = %v, want the last write %d", key, value, rounds-1)
+		}
+	}
+
+	// Snapshot must be a copy: mutating it must not reach the board.
+	snapshot := board.Snapshot()
+	snapshot["worker_0"] = "tampered"
+	if value, _ := board.Get("worker_0"); value == "tampered" {
+		t.Fatal("Snapshot aliases live state; it must return a copy")
+	}
 }

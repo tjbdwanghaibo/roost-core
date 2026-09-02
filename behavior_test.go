@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	coreflow "github.com/tjbdwanghaibo/cube-core/actionflow"
 	coreai "github.com/tjbdwanghaibo/cube-core/ai"
-	coreflow "github.com/tjbdwanghaibo/cube-core/taskflow"
 )
 
 type treeData struct {

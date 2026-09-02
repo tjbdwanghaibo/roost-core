@@ -3,8 +3,8 @@ package ai
 import (
 	"time"
 
+	coreflow "github.com/tjbdwanghaibo/cube-core/actionflow"
 	coreai "github.com/tjbdwanghaibo/cube-core/ai"
-	coreflow "github.com/tjbdwanghaibo/cube-core/taskflow"
 )
 
 // ActionEnd is one taskflow action completion delivered to the tree on the
