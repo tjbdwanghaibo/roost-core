@@ -31,6 +31,7 @@ type Mod struct {
 	runtimeMu     sync.RWMutex
 	runtime       *Runtime
 	jetStream     fnats.IJetStream
+	remoteManager entity.IRemoteEntityManager
 
 	fatalMu  sync.RWMutex
 	fatalErr error
@@ -100,7 +101,9 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	wal := nestwal.DefaultOptions(dir)
 	switch cfg.GetInt("dataengine.wal.writer_version") {
-	case 0, 1:
+	case 0:
+		wal.WriterVersion = nestwal.WriterVersionV2
+	case 1:
 		wal.WriterVersion = nestwal.WriterVersionV1
 	case 2:
 		wal.WriterVersion = nestwal.WriterVersionV2
@@ -216,6 +219,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		if err := store.SetRemoteProjection(remoteStore, applier); err != nil {
 			return err
 		}
+		mod.remoteManager = manager
 	}
 	mod.registry, mod.store, mod.jetStream = registry, store, jetStream
 	if err := registry.Register(mods.ModDataEngine, mod); err != nil {
@@ -261,7 +265,7 @@ func (mod *Mod) Start() error {
 		_ = projector.Close(ctx)
 		return err
 	}
-	runtime, err := newRuntime(mod.store, wal, projector, outbox, mod.access, mod.cfg.pipelined)
+	runtime, err := newRuntime(mod.store, wal, projector, outbox, mod.access, mod.remoteManager, mod.onFatal, mod.cfg.pipelined)
 	if err != nil {
 		_ = projector.Close(ctx)
 		return err

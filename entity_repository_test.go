@@ -3,6 +3,7 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,7 +38,10 @@ func (dao *dataEngineRepositoryDAO) RestorePersisted(raw []byte, _ uint32, versi
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	dao.id, dao.version = doc.ID, version
+	if dao.id != doc.ID {
+		return fmt.Errorf("repository test DAO was not pre-bound: got=%d payload=%d", dao.id, doc.ID)
+	}
+	dao.version = version
 	return nil
 }
 
@@ -221,7 +225,7 @@ func TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate(t *testing.T) {
 		t.Fatalf("barrier err=%v", err)
 	}
 	repository, _ := newEntityRepository(manager, store, nil, repositoryGate(true))
-	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
+	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("missing DAO err=%v", err)
 	}
 	if manager.Get(id) != nil {
@@ -238,8 +242,32 @@ func TestEntityRepositoryRejectsTombstone(t *testing.T) {
 		"repository_profile": {deleted}, "repository_inventory": {repositoryRaw(t, "repository_inventory", id, 2)},
 	}}
 	repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
-	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
+	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("tombstone err=%v", err)
+	}
+}
+
+func TestEntityRepositoryTreatsUniformAbsenceAsNotFound(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	id, _ := entity.BuildEntityID(995, dataEngineRepositoryKind)
+	for _, test := range []struct {
+		name string
+		docs map[string][]coredata.RawDocument
+	}{
+		{name: "all missing", docs: map[string][]coredata.RawDocument{}},
+		{name: "all tombstones", docs: func() map[string][]coredata.RawDocument {
+			profile := repositoryRaw(t, "repository_profile", id, 2)
+			inventory := repositoryRaw(t, "repository_inventory", id, 2)
+			profile.Deleted, inventory.Deleted = true, true
+			return map[string][]coredata.RawDocument{"repository_profile": {profile}, "repository_inventory": {inventory}}
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, nil, repositoryGate(true))
+			if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
+				t.Fatalf("err=%v, want not found", err)
+			}
+		})
 	}
 }
 

@@ -86,10 +86,6 @@ func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	receiptTTL, err := ttlSeconds(store.cfg.ReceiptTTL)
-	if err != nil {
-		return err
-	}
 	db := store.client.Database(store.cfg.DefaultDatabase)
 	if err := db.Collection(transactionCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
 		Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: transactionTTL,
@@ -97,7 +93,7 @@ func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 		return err
 	}
 	if err := db.Collection(receiptCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
-		Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", TTL: receiptTTL,
+		Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", ExpireAt: true, RecreateOnConflict: true,
 	}}); err != nil {
 		return err
 	}
@@ -161,10 +157,26 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 	if len(remote) > 0 && (store.remoteStore == nil || store.remoteApplier == nil) {
 		return ErrRemoteProjection
 	}
+	transactionSkipped := false
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
-		alreadyApplied, err := store.checkTransaction(txCtx, record.ID.String(), digest)
+		// The Mongo driver may retry this callback. Recompute the outcome from
+		// the durable marker on every invocation rather than retaining a prior
+		// callback's transient value.
+		transactionSkipped = false
+		alreadyApplied, skipped, err := store.checkTransaction(txCtx, record.ID.String(), digest)
 		if err != nil || alreadyApplied {
+			transactionSkipped = skipped
 			return err
+		}
+		fencesMatch, err := store.leaseFencesMatch(txCtx, record.Receipts)
+		if err != nil {
+			return err
+		}
+		if !fencesMatch {
+			transactionSkipped = true
+			return store.insertTransactionMarker(txCtx, transactionDocument{
+				ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(), Skipped: true,
+			})
 		}
 		for i := range ordinary {
 			if err := store.applyMutation(txCtx, record.ID.String(), ordinary[i]); err != nil {
@@ -177,6 +189,9 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 			}
 		}
 		for i := range record.Receipts {
+			if record.Receipts[i].Namespace == coredata.LeaseFenceReceiptNamespace {
+				continue
+			}
 			if err := store.stageReceipt(txCtx, record.ID.String(), record.Receipts[i]); err != nil {
 				return fmt.Errorf("dataengine mongo: receipt %d: %w", i, err)
 			}
@@ -186,22 +201,16 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 				return fmt.Errorf("dataengine mongo: effect %d: %w", i, err)
 			}
 		}
-		_, err = store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection).InsertOne(txCtx, transactionDocument{
+		err = store.insertTransactionMarker(txCtx, transactionDocument{
 			ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(),
 		})
-		if errors.Is(err, fmongo.ErrDuplicateKey) {
-			applied, checkErr := store.checkTransaction(txCtx, record.ID.String(), digest)
-			if checkErr != nil {
-				return checkErr
-			}
-			if applied {
-				return nil
-			}
-		}
 		return err
 	})
 	if err != nil {
 		return err
+	}
+	if transactionSkipped {
+		return nil
 	}
 	if len(remote) > 0 {
 		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
@@ -520,21 +529,66 @@ type transactionDocument struct {
 	ID        string    `bson:"_id"`
 	Digest    []byte    `bson:"digest"`
 	CreatedAt time.Time `bson:"created_at"`
+	Skipped   bool      `bson:"skipped,omitempty"`
 }
 
-func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, error) {
+func (store *MongoStore) insertTransactionMarker(ctx context.Context, document transactionDocument) error {
+	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection).InsertOne(ctx, document)
+	if !errors.Is(err, fmongo.ErrDuplicateKey) {
+		return err
+	}
+	applied, _, checkErr := store.checkTransaction(ctx, document.ID, document.Digest)
+	if checkErr != nil {
+		return checkErr
+	}
+	if applied {
+		return nil
+	}
+	return err
+}
+
+func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coredata.Receipt) (bool, error) {
+	now := store.now().UTC()
+	for i := range receipts {
+		fence, control, err := coredata.DecodeLeaseFenceReceipt(receipts[i])
+		if err != nil {
+			return false, err
+		}
+		if !control {
+			continue
+		}
+		var found bson.M
+		err = store.client.Database(fence.Database).Collection(fence.Resource).FindOne(ctx, bson.M{
+			"_id":         fence.DocumentID,
+			"owner":       fence.Owner,
+			"lease_token": fence.Token,
+			"digest":      fence.Digest,
+			"status":      "pending",
+			"lease_until": bson.M{"$gt": now},
+		}, &found)
+		if errors.Is(err, fmongo.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, bool, error) {
 	var stored transactionDocument
 	err := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection).FindOne(ctx, bson.M{"_id": txID}, &stored)
 	if errors.Is(err, fmongo.ErrNotFound) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if !bytes.Equal(stored.Digest, digest) {
-		return false, ErrTransactionIdentity
+		return false, false, ErrTransactionIdentity
 	}
-	return true, nil
+	return true, stored.Skipped, nil
 }
 
 type receiptDocument struct {

@@ -39,6 +39,26 @@ func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 	}
 }
 
+func TestDataEngineModDefaultsToCanonicalWALWriterV2(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mod.cfg.wal.WriterVersion; got != 2 {
+		t.Fatalf("writer version=%d, want 2", got)
+	}
+
+	cfg.Set("dataengine.wal.writer_version", 1)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mod.cfg.wal.WriterVersion; got != 1 {
+		t.Fatalf("explicit compatibility writer version=%d, want 1", got)
+	}
+}
+
 func TestDataEngineModKeepsProjectionBatchByteDefaultForNonPositiveValues(t *testing.T) {
 	for _, test := range []struct {
 		name  string

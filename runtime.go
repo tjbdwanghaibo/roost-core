@@ -21,6 +21,9 @@ type Runtime struct {
 
 	access           *entity.ManagerAccess
 	unregisterLoader func()
+	unregisterDelete func()
+	remoteManager    entity.IRemoteEntityManager
+	onFatal          func(error)
 	ready            atomic.Bool
 	pipelined        pipelinedRuntimeConfig
 }
@@ -32,7 +35,7 @@ type pipelinedRuntimeConfig struct {
 	AsyncQueueCap int
 }
 
-func newRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbox *OutboxWorker, access *entity.ManagerAccess, pipelined pipelinedRuntimeConfig) (*Runtime, error) {
+func newRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbox *OutboxWorker, access *entity.ManagerAccess, remoteManager entity.IRemoteEntityManager, onFatal func(error), pipelined pipelinedRuntimeConfig) (*Runtime, error) {
 	if store == nil || wal == nil || projector == nil || outbox == nil || access == nil || access.Manager() == nil {
 		return nil, errors.New("dataengine runtime: store, WAL, projector, outbox and entity access are required")
 	}
@@ -40,7 +43,7 @@ func newRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbo
 	if err != nil {
 		return nil, err
 	}
-	runtime := &Runtime{Store: store, WAL: wal, Projector: projector, Outbox: outbox, access: access, pipelined: pipelined}
+	runtime := &Runtime{Store: store, WAL: wal, Projector: projector, Outbox: outbox, access: access, remoteManager: remoteManager, onFatal: onFatal, pipelined: pipelined}
 	repository, err := NewEntityRepository(access.Manager(), store, migration, runtime)
 	if err != nil {
 		return nil, err
@@ -62,14 +65,25 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("dataengine runtime: startup projection recovery: %w", err)
 	}
 	runtime.Outbox.Start(context.Background())
-	runtime.ready.Store(true)
 	unregister, err := runtime.access.ConfigureLoader(runtime.Repository)
 	if err != nil {
-		runtime.ready.Store(false)
 		_ = runtime.Outbox.Close(ctx)
 		return err
 	}
 	runtime.unregisterLoader = unregister
+	unregisterDelete, err := runtime.access.RegisterDeleteAdmitter(runtime.admitEntityDelete)
+	if err != nil {
+		runtime.unregisterLoader()
+		runtime.unregisterLoader = nil
+		runtime.ready.Store(false)
+		_ = runtime.Outbox.Close(ctx)
+		return err
+	}
+	runtime.unregisterDelete = unregisterDelete
+	// Publish readiness only after both framework entry points are installed.
+	// A concurrent health/committer lookup must never observe a half-wired
+	// runtime with a loader but no durable delete gate.
+	runtime.ready.Store(true)
 	return nil
 }
 
@@ -103,6 +117,10 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	runtime.ready.Store(false)
+	if runtime.unregisterDelete != nil {
+		runtime.unregisterDelete()
+		runtime.unregisterDelete = nil
+	}
 	if runtime.unregisterLoader != nil {
 		runtime.unregisterLoader()
 		runtime.unregisterLoader = nil

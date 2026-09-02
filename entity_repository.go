@@ -179,6 +179,7 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 	loaded := make([]loadedDAO, 0, len(builder.DaoBuilders))
 	var remoteVector entity.RemoteVersionVector
 	err := repository.store.ReadConsistent(ctx, func(readCtx context.Context) error {
+		missing, tombstones := 0, 0
 		for index, buildDAO := range builder.DaoBuilders {
 			if buildDAO == nil {
 				return fmt.Errorf("%w: DAO builder %d is nil", ErrEntityAggregateCorrupt, index)
@@ -187,6 +188,10 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			if dao == nil || dao.CollName() == "" {
 				return fmt.Errorf("%w: DAO builder %d returned invalid DAO", ErrEntityAggregateCorrupt, index)
 			}
+			// Builders intentionally return an empty DAO. Bind the aggregate identity
+			// before migration and restore so migrators can emit a valid _id and
+			// loaders can reject a payload that belongs to another entity.
+			dao.SetId(fullID)
 			for _, existing := range loaded {
 				if existing.dao.CollName() == dao.CollName() {
 					return fmt.Errorf("%w: duplicate DAO resource %q", ErrEntityAggregateCorrupt, dao.CollName())
@@ -199,13 +204,18 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			if err != nil {
 				return fmt.Errorf("dataengine repository: load %s/%d: %w", dao.CollName(), fullID, err)
 			}
-			if len(docs) == 0 || len(docs) == 1 && docs[0].Deleted {
-				return fmt.Errorf("%w: resource=%s entity=%d", ErrEntityAggregateNotFound, dao.CollName(), fullID)
+			if len(docs) == 0 {
+				missing++
+				continue
 			}
 			if len(docs) != 1 || docs[0].Key.ID != fullID {
 				return fmt.Errorf("%w: resource=%s entity=%d documents=%d", ErrEntityAggregateCorrupt, dao.CollName(), fullID, len(docs))
 			}
 			doc := docs[0]
+			if doc.Deleted {
+				tombstones++
+				continue
+			}
 			payload, schema, err := persistedPayload(doc)
 			if err != nil {
 				return fmt.Errorf("%w: resource=%s entity=%d: %v", ErrEntityAggregateCorrupt, dao.CollName(), fullID, err)
@@ -217,6 +227,13 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 					LockFence: doc.LockFence, RouteEpoch: doc.RouteEpoch,
 				}
 			}
+		}
+		total := len(builder.DaoBuilders)
+		switch {
+		case missing == total || tombstones == total:
+			return fmt.Errorf("%w: entity=%d", ErrEntityAggregateNotFound, fullID)
+		case len(loaded) != total:
+			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, len(loaded), missing, tombstones)
 		}
 		return nil
 	})

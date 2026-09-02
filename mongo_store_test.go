@@ -1,6 +1,7 @@
 package dataengine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -206,6 +207,145 @@ func newMongoStoreTest(t *testing.T) (*MongoStore, *mongoStoreFakeClient, *mongo
 	}
 	collection := db.Collection("heroes").(*mongoStoreFakeCollection)
 	return store, client, collection
+}
+
+func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	if err := store.EnsureInfrastructure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	receipts := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
+	if len(receipts.ensureIndexes) != 1 {
+		t.Fatalf("receipt indexes=%d, want 1", len(receipts.ensureIndexes))
+	}
+	index := receipts.ensureIndexes[0]
+	if !index.ExpireAt || index.TTL != 0 || !index.RecreateOnConflict {
+		t.Fatalf("receipt expiry index=%+v", index)
+	}
+}
+
+func TestMongoStoreLeaseFenceSkipsStaleSagaTransaction(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+	record := testMutationRecord(coredata.MutationPatch)
+	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-1", Owner: "worker-1", Token: 7,
+		Digest: bytes.Repeat([]byte{1}, 32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Receipts = append(record.Receipts, fenceReceipt)
+
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if collection.lastUpdate != nil {
+		t.Fatal("stale fenced transaction mutated business state")
+	}
+	transactions := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
+	if len(transactions.inserted) != 1 || !transactions.inserted[0].(transactionDocument).Skipped {
+		t.Fatalf("transaction marker=%+v, want skipped", transactions.inserted)
+	}
+}
+
+func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
+	const kind entity.EntityKind = 242
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	entityID, err := entity.BuildEntityID(78, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, client, _ := newMongoStoreTest(t)
+	remoteProjection := &mongoRemoteProjectionFake{}
+	if err := store.SetRemoteProjection(remoteProjection, remoteProjection); err != nil {
+		t.Fatal(err)
+	}
+	var txID coredata.TransactionID
+	txID[15] = 45
+	remote := entity.RemoteCommit{
+		TransactionID: entity.RemoteTransactionID(txID), EntityID: entityID, Kind: kind,
+		BaseVersion: 1, NextVersion: 2, MarkerEpoch: 1, LockFence: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
+		Mutations: []entity.RemoteDataMutation{{Collection: "heroes", ID: entityID, Version: 2, Mask: 1, Data: []byte("remote")}},
+	}
+	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-remote", Owner: "worker-1", Token: 8,
+		Digest: bytes.Repeat([]byte{2}, 32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := coredata.CommitRecord{ID: txID, Receipts: []coredata.Receipt{fenceReceipt}, Mutations: []coredata.Mutation{{
+		Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut,
+		ExpectedVersion: 1, NextVersion: 2, Remote: &remote,
+	}}}
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
+		t.Fatalf("stale fenced remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
+	}
+
+	// A WAL replay sees the durable skipped marker. It must remain a no-op and
+	// must not publish the remote commit outside the Mongo transaction.
+	digest, err := digestRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.db.Collection(transactionCollection).(*mongoStoreFakeCollection).findDoc = transactionDocument{
+		ID: record.ID.String(), Digest: digest, Skipped: true,
+	}
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
+		t.Fatalf("replayed skipped remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
+	}
+}
+
+func TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+	claims := client.db.Collection("_dataengine_inbox_claims").(*mongoStoreFakeCollection)
+	claims.findDoc = bson.M{"_id": "saga-step/cmd-1", "owner": "worker-1", "lease_token": uint64(7)}
+	record := testMutationRecord(coredata.MutationPatch)
+	claimDigest := bytes.Repeat([]byte{3}, 32)
+	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-1", Owner: "worker-1", Token: 7,
+		Digest: claimDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Receipts = append(record.Receipts, fenceReceipt)
+
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	filter, ok := claims.lastFilter.(bson.M)
+	if !ok || filter["owner"] != "worker-1" || filter["lease_token"] != uint64(7) {
+		t.Fatalf("lease filter=%+v", claims.lastFilter)
+	}
+	if digest, ok := filter["digest"].([]byte); !ok || !bytes.Equal(digest, claimDigest) {
+		t.Fatalf("lease filter=%+v, want command digest", claims.lastFilter)
+	}
+	if filter["status"] != "pending" {
+		t.Fatalf("lease filter=%+v, want pending status", claims.lastFilter)
+	}
+	leaseUntil, ok := filter["lease_until"].(bson.M)
+	if !ok {
+		t.Fatalf("lease filter=%+v, want expiry comparison", claims.lastFilter)
+	}
+	if _, ok := leaseUntil["$gt"].(time.Time); !ok {
+		t.Fatalf("lease_until filter=%+v, want time comparison", leaseUntil)
+	}
+	if collection.lastUpdate == nil {
+		t.Fatal("matching lease fence did not apply business mutation")
+	}
+	receipts := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
+	if len(receipts.inserted) != 0 {
+		t.Fatal("lease fence leaked into business receipt collection")
+	}
 }
 
 func testMutationRecord(kind coredata.MutationKind) coredata.CommitRecord {
