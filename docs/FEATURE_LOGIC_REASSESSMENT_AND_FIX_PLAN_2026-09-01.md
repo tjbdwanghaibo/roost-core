@@ -292,13 +292,13 @@ stored version == requested newVersion
 
 ## 10. 主要代码证据索引
 
-- Sync“不重试”契约：`cube-core/sync/sync.go`；JetStream Sync 返回 handler error：`cube-kit/sync/jetstream_sync.go`。
-- PatchSyncer 墙钟 Version：`cube-core/sync/patch_syncer.go`；JetStream MsgID tuple：`cube-kit/sync/jetstream_sync.go`。
+- Sync“不重试”契约：`cube-core/syncbus/sync.go`；JetStream Sync 返回 handler error：`cube-kit/room/jetstream_syncbus.go`。
+- PatchSyncer 墙钟 Version：`cube-core/syncbus/patch_syncer.go`；JetStream MsgID tuple：`cube-kit/room/jetstream_syncbus.go`。
 - generic JetStream nil handler ACK、error Nak：`cube-kit/nats/jetstream.go`。
 - Replica 内层字段覆盖外层、context 被丢弃：`cube-core/replica/replica.go`。
 - ConfigData 发布后释放 `publishMu`、失败时无条件恢复全局槽位：`cube-core/configdata/configdata.go`。
-- Remote lock 固定 token、unlock version 幂等分支：`cube-kit/remote_entity/versioned_lock.go`、`versioned_lock_lua.go`。
-- Remote Commit 四维信息与 Mongo CAS：`cube-core/entity/remote_protocol.go`、`cube-kit/remote_entity/batch.go`、`mongo_committer.go`。
+- Remote lock 固定 token、unlock version 幂等分支：`cube-kit/remoteentity/versioned_lock.go`、`versioned_lock_lua.go`。
+- Remote Commit 四维信息与 Mongo CAS：`cube-core/entity/remote_protocol.go`、`cube-kit/remoteentity/batch.go`、`mongo_committer.go`。
 - Saga drain/cancel/Stop 顺序：`cube-kit/saga/mod.go`；JetStream `Closed()` 语义：`cube-core/nats/jetstream.go`、`cube-kit/nats/jetstream.go`。
 - Election channel replacement和错误压平：`cube-kit/etcd/election.go`；watch 终止：`cube-kit/etcd/discovery.go`。
 - Redis best-effort 契约与实现：`cube-core/redis/lock.go`、`cube-kit/redis/lock.go`。

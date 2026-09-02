@@ -3,21 +3,21 @@ package app
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 
 	"github.com/spf13/viper"
 )
 
 func TestNewRegistryInstallsRuntimeObsRegistry(t *testing.T) {
-	old := obs.DefaultRegistry()
-	t.Cleanup(func() { obs.SetDefaultRegistry(old) })
+	old := metrics.DefaultRegistry()
+	t.Cleanup(func() { metrics.SetDefaultRegistry(old) })
 	reg := NewRegistry(viper.New())
-	metrics := MustLookup[*obs.Registry](reg, ModObs)
+	registry := MustLookup[*metrics.Registry](reg, ModMetrics)
 
-	obs.IncCounter("app_registry_test_total", obs.Labels{"case": "runtime"}, 1)
+	registry.IncCounter("app_registry_test_total", metrics.Labels{"case": "runtime"}, 1)
 
 	found := false
-	for _, metric := range metrics.Snapshot() {
+	for _, metric := range registry.Snapshot() {
 		if metric.Name == "app_registry_test_total" && metric.Value == 1 {
 			found = true
 			break

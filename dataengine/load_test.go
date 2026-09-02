@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 type loaderStore struct {
@@ -82,5 +84,66 @@ func TestLoaderRejectsUnknownCircularAndStrictCallbackFailures(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+// counterValue reads one counter series without needing a package-level
+// reset, so the assertion is a delta and stays correct however the rest of
+// the suite exercises the same metric.
+func counterValue(name string, labels metrics.Labels) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name != name || metric.Kind != metrics.KindCounter {
+			continue
+		}
+		match := len(metric.Labels) == len(labels)
+		for key, want := range labels {
+			if metric.Labels[key] != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+// A non-strict template tolerates a bad row, but it must not do so invisibly:
+// a systematic decode failure otherwise loads zero entities and reports
+// nothing at all, which is the one outcome the framework must never hide.
+func TestLoaderNonStrictSkipIsCountedAndStrictStillFails(t *testing.T) {
+	broken := errors.New("cannot decode row")
+	labels := metrics.Labels{"resource": "players"}
+	before := counterValue("dataengine.load.skipped.total", labels)
+	store := &loaderStore{docs: []RawDocument{
+		{Key: DocumentKey{Resource: "players", ID: 1}, Version: 1},
+		{Key: DocumentKey{Resource: "players", ID: 2}, Version: 1},
+	}}
+
+	loaded := 0
+	if err := NewLoader(store, nil).LoadAll(context.Background(), []LoadTemplate{{
+		Resource: "players", OnLoad: func(RawDocument) error { loaded++; return broken },
+	}}); err != nil {
+		t.Fatalf("non-strict load must not fail: %v", err)
+	}
+	if loaded != len(store.docs) {
+		t.Fatalf("callback invocations=%d, want %d", loaded, len(store.docs))
+	}
+	if delta := counterValue("dataengine.load.skipped.total", labels) - before; delta != int64(len(store.docs)) {
+		t.Fatalf("skipped counter delta=%d, want %d", delta, len(store.docs))
+	}
+
+	// Strict still fails loudly, and stops at the first bad row.
+	strictCalls := 0
+	err := NewLoader(store, nil).LoadAll(context.Background(), []LoadTemplate{{
+		Resource: "players", Strict: true,
+		OnLoad: func(RawDocument) error { strictCalls++; return broken },
+	}})
+	if !errors.Is(err, ErrLoadCallback) {
+		t.Fatalf("strict err=%v, want ErrLoadCallback", err)
+	}
+	if strictCalls != 1 {
+		t.Fatalf("strict template kept going after a bad row: calls=%d", strictCalls)
 	}
 }

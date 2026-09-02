@@ -175,9 +175,11 @@ func TestSubjectSyncEntityLockOrderAvoidsGuardInversion(t *testing.T) {
 	mu.Lock()
 	asyncStarted := make(chan struct{})
 	asyncDone := make(chan struct{})
+	var asyncErr error
 	go func() {
 		close(asyncStarted)
 		prepared, err := state.Prepare(nil)
+		asyncErr = err
 		if err == nil {
 			_ = prepared.Abort()
 		}
@@ -185,12 +187,39 @@ func TestSubjectSyncEntityLockOrderAvoidsGuardInversion(t *testing.T) {
 	}()
 	<-asyncStarted
 
-	// The async caller waits for Entity without holding prepareMu. A guarded
-	// caller can therefore prepare and abort without a lock cycle.
-	state.prepareMu.Lock()
-	state.prepareMu.Unlock()
+	// The async caller must be waiting for the Entity lock WITHOUT holding
+	// prepareMu, so a guarded caller can take prepareMu while the entity lock
+	// is still held. Both halves are asserted: the earlier version of this
+	// test had no assertions at all, so it also passed when Prepare returned
+	// immediately (never waiting for the lock) and its error was discarded.
+	prepareMuTaken := make(chan struct{})
+	go func() {
+		state.prepareMu.Lock()
+		state.prepareMu.Unlock()
+		close(prepareMuTaken)
+	}()
+	select {
+	case <-prepareMuTaken:
+	case <-time.After(2 * time.Second):
+		t.Fatal("guarded caller could not take prepareMu while the entity lock was held: lock order inverted")
+	}
+
+	// Prepare must still be blocked on the entity lock at this point.
+	select {
+	case <-asyncDone:
+		t.Fatalf("Prepare completed while the entity lock was held (err=%v); it did not wait for Entity", asyncErr)
+	case <-time.After(50 * time.Millisecond):
+	}
+
 	mu.Unlock()
-	<-asyncDone
+	select {
+	case <-asyncDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Prepare did not complete after the entity lock was released")
+	}
+	if asyncErr != nil {
+		t.Fatalf("Prepare after lock release: %v", asyncErr)
+	}
 }
 
 func TestSubjectSyncConcurrentMarkDirtyRace(t *testing.T) {

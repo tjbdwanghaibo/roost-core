@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 var (
@@ -488,7 +488,7 @@ func (c *SubscriptionCoordinator) FlushSubject(ctx context.Context, state *entit
 	}
 	if watermark := c.durableWatermark.Load(); watermark != nil {
 		if lsn := state.LastCommitLSN(); lsn > (*watermark)() {
-			obs.IncCounter("entitysync_flush_gate_deferred_total", nil, 1)
+			metrics.IncCounter("entitysync_flush_gate_deferred_total", nil, 1)
 			return nil
 		}
 	}

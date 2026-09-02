@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 	"github.com/tjbdwanghaibo/cube-core/lifecycle"
 )
 
@@ -998,7 +998,7 @@ func (s *Store) reloadListeners() []ReloadListener {
 
 // safeReloadCall runs one listener callback with the panic containment every
 // other callback registry in this repository provides (lifecycle.emitHook,
-// etcd.WatchCallback, misc.SafeFunc): a panicking listener must fail the
+// etcd.WatchCallback, goroutine.SafeFunc): a panicking listener must fail the
 // reload cleanly, never abandon the store between two of its state stores.
 // Callbacks must not call runtime.Goexit (t.Fatal included): Goexit unwinds
 // past recover and skips the revert.

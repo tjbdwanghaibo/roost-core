@@ -252,3 +252,89 @@ func TestValidateServiceConfigRejectsProductionGlobalWithoutRedis(t *testing.T) 
 		}
 	}
 }
+
+// productionServiceConfig is a config that satisfies every OTHER production
+// requirement, so a test can add exactly the one field it is about and be
+// sure the rejection it sees is the one it asked for.
+func productionServiceConfig(serverType string) *viper.Viper {
+	cfg := viper.New()
+	cfg.Set("server_type", serverType)
+	cfg.Set("sid", 2001)
+	cfg.Set("env", "production")
+	cfg.Set("redis.addr", "127.0.0.1:6379")
+	cfg.Set("player.login_auth_required", true)
+	cfg.Set("player.login_secret", "login-secret")
+	cfg.Set("player_protocol.rate_limit.enabled", true)
+	cfg.Set("save_load.wal.enabled", true)
+	cfg.Set("save_load.wal.required", true)
+	cfg.Set("save_load.wal.mode", "durable")
+	return cfg
+}
+
+// The helper is only useful if it is actually clean: a stale baseline would
+// make every test built on it assert the wrong rejection.
+func TestProductionServiceConfigBaselineIsValid(t *testing.T) {
+	if err := ValidateServiceConfig(productionServiceConfig("game")); err != nil {
+		t.Fatalf("production baseline is not valid: %v", err)
+	}
+}
+
+// The ops endpoint exposes an unauthenticated /metrics and, with admin on,
+// every registered admin command. Loopback is only the default, so production
+// must not silently accept a public bind.
+func TestValidateServiceConfigRejectsPublicOpsAddrInProduction(t *testing.T) {
+	base := func() *viper.Viper {
+		cfg := productionServiceConfig("game")
+		cfg.Set("ops.enabled", true)
+		return cfg
+	}
+	for name, addr := range map[string]string{
+		"all interfaces":  "0.0.0.0:9100",
+		"bare port":       ":9100",
+		"specific public": "10.0.0.5:9100",
+		"ipv6 wildcard":   "[::]:9100",
+	} {
+		cfg := base()
+		cfg.Set("ops.addr", addr)
+		err := ValidateServiceConfig(cfg)
+		if err == nil || !strings.Contains(err.Error(), "ops.addr") {
+			t.Fatalf("%s (%s): err=%v, want an ops.addr rejection", name, addr, err)
+		}
+	}
+	for name, addr := range map[string]string{
+		"ipv4 loopback": "127.0.0.1:9100",
+		"ipv6 loopback": "[::1]:9100",
+		"localhost":     "localhost:9100",
+		"unset":         "",
+	} {
+		cfg := base()
+		if addr != "" {
+			cfg.Set("ops.addr", addr)
+		}
+		if err := ValidateServiceConfig(cfg); err != nil {
+			t.Fatalf("%s (%s) rejected: %v", name, addr, err)
+		}
+	}
+	// A declared opt-out is accepted: the operator is asserting there is an
+	// authenticated proxy in front.
+	cfg := base()
+	cfg.Set("ops.addr", "0.0.0.0:9100")
+	cfg.Set("ops.allow_public_addr", true)
+	if err := ValidateServiceConfig(cfg); err != nil {
+		t.Fatalf("declared opt-out rejected: %v", err)
+	}
+	// Outside production the bind address is the operator's business.
+	dev := base()
+	dev.Set("env", "dev")
+	dev.Set("ops.addr", "0.0.0.0:9100")
+	if err := ValidateServiceConfig(dev); err != nil {
+		t.Fatalf("non-production public bind rejected: %v", err)
+	}
+	// A disabled ops endpoint cannot be exposed at all.
+	off := base()
+	off.Set("ops.enabled", false)
+	off.Set("ops.addr", "0.0.0.0:9100")
+	if err := ValidateServiceConfig(off); err != nil {
+		t.Fatalf("disabled ops rejected: %v", err)
+	}
+}

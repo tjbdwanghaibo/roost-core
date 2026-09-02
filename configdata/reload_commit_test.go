@@ -5,8 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 )
 
 func newCommitTestStore(t *testing.T) (*Store, string) {
@@ -63,14 +64,14 @@ func TestFailedCommitDoesNotRollBackAnotherStorePublication(t *testing.T) {
 		_, err := storeA.Reload(context.Background())
 		aResult <- err
 	}()
-	<-listener.entered
+	awaitChan(t, listener.entered, "the listener to enter commit")
 
 	bTarget, err := storeB.Reload(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	close(listener.release)
-	if err := <-aResult; err == nil {
+	if err := awaitChan(t, aResult, "store A's commit result"); err == nil {
 		t.Fatal("store A reload unexpectedly succeeded")
 	}
 
@@ -306,5 +307,21 @@ func TestCustomBuildRunsAfterTableValidation(t *testing.T) {
 	// The custom builder must not have consumed unvalidated table data.
 	if built {
 		t.Fatal("custom built before table validation")
+	}
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
 	}
 }

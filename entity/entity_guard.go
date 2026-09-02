@@ -1,7 +1,7 @@
 package entity
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 	"log/slog"
 	"sync"
 )
@@ -115,7 +115,7 @@ func WithGuardScope(name string, fn func(*GuardScope) error) error {
 }
 
 func CurrentGuardScope() *GuardScope {
-	if value, ok := guardScopes.Load(misc.GoID()); ok {
+	if value, ok := guardScopes.Load(goroutine.GoID()); ok {
 		if scope, ok := value.(*GuardScope); ok {
 			return scope
 		}
@@ -139,10 +139,10 @@ func (s *GuardScope) Guard() *EntityGuard {
 
 func storeGuardScope(scope *GuardScope) {
 	if scope == nil {
-		guardScopes.Delete(misc.GoID())
+		guardScopes.Delete(goroutine.GoID())
 		return
 	}
-	guardScopes.Store(misc.GoID(), scope)
+	guardScopes.Store(goroutine.GoID(), scope)
 }
 
 func releaseGuardScope(scope *GuardScope) {
@@ -159,7 +159,7 @@ func releaseGuardScope(scope *GuardScope) {
 	if scope.prev != nil {
 		storeGuardScope(scope.prev)
 	} else {
-		guardScopes.Delete(misc.GoID())
+		guardScopes.Delete(goroutine.GoID())
 	}
 	scope.guard = nil
 	scope.prev = nil
@@ -361,7 +361,40 @@ func (e *EntityGuard) doReleaseEntity(ent IThreadSafeEntity) {
 	runOnEntityRelease(ent)
 }
 
-// Entities returns all currently guarded entities.
+// Guarded reports whether this guard currently holds the entity's lock. This
+// is the accessor the framework's hot paths use: it answers the only question
+// they ask, and it does so without handing out the guard's bookkeeping or
+// allocating anything.
+func (e *EntityGuard) Guarded(id int64) bool {
+	if e == nil {
+		return false
+	}
+	_, held := e.eMap[id]
+	return held
+}
+
+// GuardedCount is the number of entities this guard currently holds.
+func (e *EntityGuard) GuardedCount() int {
+	if e == nil {
+		return 0
+	}
+	return len(e.eMap)
+}
+
+// Entities returns a snapshot of the currently guarded entities.
+//
+// It is a copy on purpose. eMap is the lock-scope ledger that drives lock
+// ordering and reentrancy decisions in nest, so handing out the live map let
+// any caller corrupt deadlock prevention with a stray delete. Callers that
+// only need membership or a count should use Guarded/GuardedCount, which
+// allocate nothing; this one exists for diagnostics and iteration.
 func (e *EntityGuard) Entities() map[int64]IThreadSafeEntity {
-	return e.eMap
+	if e == nil {
+		return nil
+	}
+	out := make(map[int64]IThreadSafeEntity, len(e.eMap))
+	for id, ent := range e.eMap {
+		out[id] = ent
+	}
+	return out
 }

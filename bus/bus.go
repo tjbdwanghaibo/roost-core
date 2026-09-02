@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"github.com/tjbdwanghaibo/cube-core/worker"
 	"log/slog"
 	"runtime/debug"
@@ -185,7 +185,7 @@ func (b *Bus) RequeueDeadLetters(ctx context.Context, query DeadLetterQuery) (in
 			return requeued, err
 		}
 	}
-	obs.IncCounter("bus_dead_letter_requeue_total", obs.Labels{
+	metrics.IncCounter("bus_dead_letter_requeue_total", metrics.Labels{
 		"module": query.Module,
 		"msg":    query.MsgName,
 	}, requeued)
@@ -199,7 +199,7 @@ func (b *Bus) PurgeDeadLetters(ctx context.Context, query DeadLetterQuery) (int6
 	}
 	n, err := store.PurgeDeadLetters(ctx, query)
 	if err == nil {
-		obs.IncCounter("bus_dead_letter_purge_total", obs.Labels{
+		metrics.IncCounter("bus_dead_letter_purge_total", metrics.Labels{
 			"module": query.Module,
 			"msg":    query.MsgName,
 		}, n)
@@ -235,14 +235,32 @@ func (b *Bus) deadLetterSubject(entry DeadLetterEntry) string {
 // subjects registered through HandleRpc, and Start only rebuilds the base
 // subjects. Restarting would therefore silently lose RPC subscriptions, so it
 // is rejected instead. Create a new Bus if a fresh instance is needed.
+// Start builds the base subscriptions and the dispatch pool. A failure part
+// way through cleans up, and that cleanup drains the pool — which is why the
+// draining happens here, outside the lifecycle lock: a worker's business
+// handler may call back into Handle/HandleRpc/Stop, all of which take that
+// lock, and waiting for such a handler while holding it deadlocks with no
+// deadline. StopWithContext was restructured for exactly this reason; the
+// Start-failure path has to follow the same rule.
 func (b *Bus) Start() error {
+	drain, err := b.startLocked()
+	if drain != nil {
+		return errors.Join(err, drain())
+	}
+	return err
+}
+
+// startLocked holds the lifecycle lock for the whole start attempt. On
+// failure it returns a drain closure the caller must run after the lock is
+// released; on success the closure is nil.
+func (b *Bus) startLocked() (func() error, error) {
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
 	if b.pool != nil {
-		return nil
+		return nil, nil
 	}
 	if b.stopped || b.stopping {
-		return fmt.Errorf("bus: cannot restart a stopped bus")
+		return nil, fmt.Errorf("bus: cannot restart a stopped bus")
 	}
 
 	// Start worker pool
@@ -270,15 +288,15 @@ func (b *Bus) Start() error {
 	for _, s := range subs {
 		sub, err := b.client.Subscribe(s.subject, b.onMessage)
 		if err != nil {
-			_ = b.stopLocked(context.Background())
-			return fmt.Errorf("bus: subscribe %s: %w", s.subject, err)
+			drain := b.detachLocked()
+			return drain, fmt.Errorf("bus: subscribe %s: %w", s.subject, err)
 		}
 		b.subs = append(b.subs, sub)
 		slog.Info("bus: subscribed", "subject", s.subject)
 	}
 
 	b.started = true
-	return nil
+	return nil, nil
 }
 
 // Stop unsubscribes and stops the worker pool.
@@ -348,8 +366,12 @@ func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool
 	return err
 }
 
-func (b *Bus) stopLocked(ctx context.Context) error {
-	var err error
+// detachLocked cancels the run context and takes the subscriptions and pool
+// out of the Bus, returning the closure that actually tears them down. The
+// split matters: unsubscribing and draining the pool must happen with the
+// lifecycle lock released (see Start), while the state transition must happen
+// under it. Called with lifeMu held.
+func (b *Bus) detachLocked() func() error {
 	if b.cancel != nil {
 		b.cancel()
 		b.cancel = nil
@@ -361,25 +383,13 @@ func (b *Bus) stopLocked(ctx context.Context) error {
 		b.started = false
 		b.stopped = true
 	}
-	for _, sub := range b.subs {
-		if sub == nil {
-			continue
-		}
-		if !sub.IsValid() {
-			continue
-		}
-		if unsubscribeErr := sub.Unsubscribe(); unsubscribeErr != nil {
-			slog.Warn("bus: unsubscribe failed", "err", unsubscribeErr)
-			err = errors.Join(err, unsubscribeErr)
-		}
-	}
+	subs := b.subs
 	b.subs = nil
-	if b.pool != nil {
-		err = errors.Join(err, b.pool.StopWithContext(ctx))
-		b.pool = nil
+	pool := b.pool
+	b.pool = nil
+	return func() error {
+		return b.stopResources(context.Background(), subs, pool)
 	}
-	b.stopJetStreamRPCSubscriptions()
-	return err
 }
 
 // --- IBus: Send ---
@@ -708,7 +718,7 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 			"msg_id", task.natsMsg.MsgID,
 			"err", err,
 		)
-		obs.IncCounter("bus_dispatch_drop_total", obs.Labels{
+		metrics.IncCounter("bus_dispatch_drop_total", metrics.Labels{
 			"module": task.natsMsg.ToModule,
 			"msg":    task.natsMsg.MsgName,
 			"reason": err.Error(),
@@ -741,7 +751,7 @@ func (b *Bus) dispatchMsg(task *incomingTask) {
 	}
 	start := time.Now()
 	defer func() {
-		obs.ObserveDuration("bus_dispatch_duration", obs.Labels{
+		metrics.ObserveDuration("bus_dispatch_duration", metrics.Labels{
 			"module": task.natsMsg.ToModule,
 			"msg":    task.natsMsg.MsgName,
 		}, time.Since(start))
@@ -776,7 +786,7 @@ func (b *Bus) dispatchMsg(task *incomingTask) {
 		slog.Error("bus: finish consume failed", "msg_id", task.natsMsg.MsgID, "err", err)
 		b.deadLetter(task.natsMsg, "finish consume failed: "+err.Error())
 	}
-	obs.IncCounter("bus_dispatch_total", obs.Labels{
+	metrics.IncCounter("bus_dispatch_total", metrics.Labels{
 		"module": task.natsMsg.ToModule,
 		"msg":    task.natsMsg.MsgName,
 	}, 1)
@@ -892,7 +902,7 @@ func (b *Bus) beginConsume(msg *nats.NatsMsg) bool {
 		return false
 	}
 	if !ok {
-		obs.IncCounter("bus_duplicate_total", obs.Labels{
+		metrics.IncCounter("bus_duplicate_total", metrics.Labels{
 			"module": msg.ToModule,
 			"msg":    msg.MsgName,
 		}, 1)
@@ -927,7 +937,7 @@ func (b *Bus) deadLetter(msg *nats.NatsMsg, reason string) {
 		)
 		return
 	}
-	obs.IncCounter("bus_dead_letter_total", obs.Labels{
+	metrics.IncCounter("bus_dead_letter_total", metrics.Labels{
 		"module": msg.ToModule,
 		"msg":    msg.MsgName,
 	}, 1)

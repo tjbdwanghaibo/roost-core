@@ -7,7 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/admin"
 	"github.com/tjbdwanghaibo/cube-core/health"
 	"github.com/tjbdwanghaibo/cube-core/lifecycle"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 
 	"github.com/spf13/viper"
 )
@@ -31,9 +31,9 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 		cfg:   cfg,
 	}
 	r.store[ModHealth] = health.NewRegistry()
-	metrics := obs.NewRegistry(obs.WithMaxSeriesPerMetric(obsMaxSeriesPerMetric(cfg)))
-	obs.SetDefaultRegistry(metrics)
-	r.store[ModObs] = metrics
+	metricsRegistry := metrics.NewRegistry(metrics.WithMaxSeriesPerMetric(metricsMaxSeriesPerMetric(cfg)))
+	metrics.SetDefaultRegistry(metricsRegistry)
+	r.store[ModMetrics] = metricsRegistry
 	r.store[ModAdmin] = admin.NewRegistry()
 	r.store[ModAdminMetadata] = admin.NewMetadataRegistry()
 	r.store[ModLifecycle] = lifecycle.NewRegistry()
@@ -116,12 +116,12 @@ func MustLookup[T any](r *Registry, name ModName) T {
 	return v
 }
 
-func obsMaxSeriesPerMetric(cfg *viper.Viper) int {
+func metricsMaxSeriesPerMetric(cfg *viper.Viper) int {
 	if cfg == nil {
 		return 0
 	}
-	if cfg.IsSet("obs.max_series_per_metric") {
-		return cfg.GetInt("obs.max_series_per_metric")
+	if cfg.IsSet("metrics.max_series_per_metric") {
+		return cfg.GetInt("metrics.max_series_per_metric")
 	}
 	if cfg.IsSet("metrics.max_series_per_metric") {
 		return cfg.GetInt("metrics.max_series_per_metric")

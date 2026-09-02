@@ -378,7 +378,7 @@ func entitySyncLockedInCurrentGuard(entityID int64) bool {
 	if scope == nil || scope.Guard() == nil {
 		return false
 	}
-	_, ok := scope.Guard().Entities()[entityID]
+	ok := scope.Guard().Guarded(entityID)
 	return ok
 }
 

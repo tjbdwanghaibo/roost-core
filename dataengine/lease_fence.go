@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // LeaseFenceReceiptNamespace is reserved for transaction preconditions. The
@@ -14,6 +17,25 @@ import (
 const LeaseFenceReceiptNamespace = "__dataengine_lease_fence_v1"
 
 var ErrInvalidLeaseFence = errors.New("dataengine: invalid lease fence")
+
+// Field names of the coordination document a LeaseFence points at, and the
+// only status under which a fenced transaction may apply.
+//
+// These are shared on purpose. The projector queries the document and the
+// lease owner writes it, and the two live in different packages; when each
+// side spelled the schema out for itself, a rename on either side turned
+// every fenced transaction into a silent no-op — a fence that can never match
+// is indistinguishable from a legitimately stale lease, and both are
+// acknowledged as a skipped transaction with no error and no metric.
+const (
+	LeaseFenceFieldOwner      = "owner"
+	LeaseFenceFieldToken      = "lease_token"
+	LeaseFenceFieldDigest     = "digest"
+	LeaseFenceFieldStatus     = "status"
+	LeaseFenceFieldLeaseUntil = "lease_until"
+
+	LeaseFenceStatusPending = "pending"
+)
 
 // LeaseFence requires one Mongo coordination document to still belong to the
 // same owner/token when the WAL record is projected. A stale fence makes the
@@ -32,6 +54,21 @@ func (fence LeaseFence) Validate() error {
 		return ErrInvalidLeaseFence
 	}
 	return nil
+}
+
+// Predicate is the document that must still exist for this fence to hold:
+// same owner, same lease token, same command digest, still pending, and a
+// lease that has not expired at now. A projector must use exactly this rather
+// than assembling its own filter — see the constants above for why.
+func (fence LeaseFence) Predicate(now time.Time) bson.M {
+	return bson.M{
+		"_id":                     fence.DocumentID,
+		LeaseFenceFieldOwner:      fence.Owner,
+		LeaseFenceFieldToken:      fence.Token,
+		LeaseFenceFieldDigest:     fence.Digest,
+		LeaseFenceFieldStatus:     LeaseFenceStatusPending,
+		LeaseFenceFieldLeaseUntil: bson.M{"$gt": now},
+	}
 }
 
 func NewLeaseFenceReceipt(fence LeaseFence) (Receipt, error) {

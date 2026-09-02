@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 )
 
@@ -106,21 +106,21 @@ func (l *RedisList) AppendRaw(ctx context.Context, key string, raw []byte) error
 		ctx = context.Background()
 	}
 	if l.tryAppendWithScript(ctx, key, raw) {
-		obs.IncCounter("failurelog_append_total", l.labels("ok"), 1)
+		metrics.IncCounter("failurelog_append_total", l.labels("ok"), 1)
 		return nil
 	}
 	if _, err := l.redis.RPush(ctx, key, raw); err != nil {
-		obs.IncCounter("failurelog_append_total", l.labels("error"), 1)
+		metrics.IncCounter("failurelog_append_total", l.labels("error"), 1)
 		return err
 	}
 	if err := l.trim(ctx, key); err != nil {
-		obs.IncCounter("failurelog_append_total", l.labels("error"), 1)
+		metrics.IncCounter("failurelog_append_total", l.labels("error"), 1)
 		return err
 	}
 	if l.cfg.TTL > 0 {
 		_, _ = l.redis.Expire(ctx, key, l.cfg.TTL)
 	}
-	obs.IncCounter("failurelog_append_total", l.labels("ok"), 1)
+	metrics.IncCounter("failurelog_append_total", l.labels("ok"), 1)
 	return nil
 }
 
@@ -149,10 +149,10 @@ func (l *RedisList) Purge(ctx context.Context, key string) (int64, error) {
 	}
 	n, err := l.purgeRaw(ctx, key)
 	if err == nil {
-		obs.IncCounter("failurelog_purge_total", l.labels("ok"), n)
+		metrics.IncCounter("failurelog_purge_total", l.labels("ok"), n)
 	}
 	if err != nil {
-		obs.IncCounter("failurelog_purge_total", l.labels("error"), 1)
+		metrics.IncCounter("failurelog_purge_total", l.labels("error"), 1)
 	}
 	return n, err
 }
@@ -191,20 +191,20 @@ func (l *RedisList) DeleteRaw(ctx context.Context, key string, raws [][]byte) (i
 		return 0, nil
 	}
 	if n, ok := l.tryDeleteWithScript(ctx, key, args); ok {
-		obs.IncCounter("failurelog_delete_total", l.labels("ok"), n)
+		metrics.IncCounter("failurelog_delete_total", l.labels("ok"), n)
 		return n, nil
 	}
 	n, err := l.deleteRawFallback(ctx, key, args)
 	if err != nil {
-		obs.IncCounter("failurelog_delete_total", l.labels("error"), 1)
+		metrics.IncCounter("failurelog_delete_total", l.labels("error"), 1)
 		return 0, err
 	}
-	obs.IncCounter("failurelog_delete_total", l.labels("ok"), n)
+	metrics.IncCounter("failurelog_delete_total", l.labels("ok"), n)
 	return n, nil
 }
 
-func (l *RedisList) labels(result string) obs.Labels {
-	labels := obs.Labels{}
+func (l *RedisList) labels(result string) metrics.Labels {
+	labels := metrics.Labels{}
 	if l != nil && l.cfg.Namespace != "" {
 		labels["namespace"] = l.cfg.Namespace
 	}
@@ -224,10 +224,10 @@ func (l *RedisList) labels(result string) obs.Labels {
 func (l *RedisList) degraded(op string, err error) {
 	labels := l.labels("")
 	if labels == nil {
-		labels = obs.Labels{}
+		labels = metrics.Labels{}
 	}
 	labels["op"] = op
-	obs.IncCounter("failurelog_degraded_total", labels, 1)
+	metrics.IncCounter("failurelog_degraded_total", labels, 1)
 	if err != nil {
 		slog.Warn("failurelog: atomic script failed, falling back to non-atomic commands",
 			"op", op, "namespace", l.cfg.Namespace, "err", err)
@@ -378,7 +378,7 @@ func (l *RedisList) trim(ctx context.Context, key string) error {
 	if count <= l.cfg.MaxEntries {
 		return nil
 	}
-	obs.IncCounter("failurelog_trim_total", l.labels(""), 1)
+	metrics.IncCounter("failurelog_trim_total", l.labels(""), 1)
 	if trimmer, ok := l.redis.(fredis.ListTrimmer); ok {
 		return trimmer.LTrim(ctx, key, -l.cfg.MaxEntries, -1)
 	}

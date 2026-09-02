@@ -4,11 +4,11 @@ import (
 	"container/heap"
 	"context"
 	"errors"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/misc"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"github.com/tjbdwanghaibo/cube-core/worker"
 	"sync"
 	"sync/atomic"
@@ -327,7 +327,7 @@ func (m *Dispatcher) observeStats() {
 	m.observePoolStats("main", m.pool)
 	m.observePoolStats("heartbeat", m.hbPool)
 	m.observePoolStats("cost", m.costPool)
-	obs.SetGauge("nest.dispatch.delayed_messages", obs.Labels{
+	metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{
 		"dispatcher": m.Name,
 	}, int64(m.delayedCount()))
 }
@@ -337,12 +337,12 @@ func (m *Dispatcher) observePoolStats(poolName string, pool *worker.Pool[*Msg]) 
 		return
 	}
 	stats := pool.Stats()
-	labels := obs.Labels{
+	labels := metrics.Labels{
 		"dispatcher": m.Name,
 		"pool":       poolName,
 	}
-	obs.SetGauge("nest.dispatch.queue_len", labels, int64(stats.QueueLen))
-	obs.SetGauge("nest.dispatch.worker_num", labels, int64(stats.WorkerNum))
+	metrics.SetGauge("nest.dispatch.queue_len", labels, int64(stats.QueueLen))
+	metrics.SetGauge("nest.dispatch.worker_num", labels, int64(stats.WorkerNum))
 }
 
 func (m *Dispatcher) delayedCount() int {

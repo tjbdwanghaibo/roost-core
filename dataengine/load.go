@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
+
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 var (
@@ -152,8 +155,17 @@ func (loader *Loader) loadOne(ctx context.Context, template LoadTemplate) error 
 		if template.OnLoad == nil {
 			return nil
 		}
-		if err := template.OnLoad(doc); err != nil && template.Strict {
-			return fmt.Errorf("%w: resource=%s id=%d: %v", ErrLoadCallback, template.Resource, doc.Key.ID, err)
+		if err := template.OnLoad(doc); err != nil {
+			if template.Strict {
+				return fmt.Errorf("%w: resource=%s id=%d: %v", ErrLoadCallback, template.Resource, doc.Key.ID, err)
+			}
+			// Non-strict means "tolerate a bad row", not "load nothing and say
+			// so to no one". A systematic failure — a renamed field, a codec
+			// change — silently loads zero entities otherwise, which is the
+			// one outcome that must never be invisible.
+			metrics.IncCounter("dataengine.load.skipped.total", metrics.Labels{"resource": template.Resource}, 1)
+			slog.Warn("dataengine: skipped a row a non-strict load template could not decode",
+				"resource", template.Resource, "id", doc.Key.ID, "err", err)
 		}
 		return nil
 	})

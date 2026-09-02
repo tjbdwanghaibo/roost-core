@@ -1,2 +1,7 @@
 .DS_Store
 .idea/*
+
+# Local multi-repo development workspace (see roost-core/docs/DEVELOPMENT_WORKSPACE.md).
+# Never commit it: it would silently redirect every consumer to local source.
+go.work
+go.work.sum

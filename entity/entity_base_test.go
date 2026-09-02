@@ -481,3 +481,40 @@ func (m *mockDao) DbName() string   { return "" }
 func (m *mockDao) CollName() string { return m.coll }
 func (m *mockDao) Dirty() IDirty    { return nil }
 func (m *mockDao) CleanDirty()      {}
+
+// eMap is the lock-scope ledger nest consults for lock ordering and
+// reentrancy decisions, so Entities() must not hand out the live map: a stray
+// delete in business code would silently disable deadlock prevention.
+// Membership and count have allocation-free accessors precisely so the hot
+// paths never need the snapshot.
+func TestEntityGuardEntitiesSnapshotCannotMutateTheLedger(t *testing.T) {
+	e := newTestEntity(11, testEntityCategoryPlayer)
+	guard := GetEntityGuard()
+	if !guard.RequireEntity(e) {
+		t.Fatal("RequireEntity should succeed")
+	}
+	defer guard.ReleaseAll()
+
+	if !guard.Guarded(e.GUId()) || guard.GuardedCount() != 1 {
+		t.Fatalf("guarded=%v count=%d", guard.Guarded(e.GUId()), guard.GuardedCount())
+	}
+	snapshot := guard.Entities()
+	if len(snapshot) != 1 || snapshot[e.GUId()] == nil {
+		t.Fatalf("snapshot=%v", snapshot)
+	}
+	delete(snapshot, e.GUId())
+	snapshot[999] = e
+	if !guard.Guarded(e.GUId()) || guard.GuardedCount() != 1 || guard.Guarded(999) {
+		t.Fatal("Entities() handed out the live ledger: mutating the snapshot changed the guard")
+	}
+	if guard.Guarded(0) {
+		t.Fatal("Guarded reported an unheld id")
+	}
+}
+
+func TestEntityGuardAccessorsOnNilGuard(t *testing.T) {
+	var guard *EntityGuard
+	if guard.Guarded(1) || guard.GuardedCount() != 0 || guard.Entities() != nil {
+		t.Fatal("nil guard must read as empty")
+	}
+}

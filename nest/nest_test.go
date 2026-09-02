@@ -6,17 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 	"github.com/tjbdwanghaibo/cube-core/hotcode"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"io"
 	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -88,8 +89,8 @@ func TestHandlerHotcodePatch(t *testing.T) {
 }
 
 func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 
 	dispatcher := NewDispatcher("nest", 2, 1, 64, func(*Msg) {})
 	dispatcher.OnInit()
@@ -100,7 +101,7 @@ func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
 
 	wantPools := map[string]bool{"main": false, "heartbeat": false, "cost": false}
 	delayedSeen := false
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name == "nest.dispatch.delayed_messages" &&
 			metric.Labels["dispatcher"] == "nest" &&
 			metric.Value == 1 {
@@ -123,7 +124,7 @@ func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
 		}
 	}
 	if !delayedSeen {
-		t.Fatalf("missing delayed gauge in metrics: %+v", obs.Snapshot())
+		t.Fatalf("missing delayed gauge in metrics: %+v", metrics.Snapshot())
 	}
 }
 
@@ -1197,8 +1198,8 @@ func TestSyncCarriesCurrentContextIntoHandler(t *testing.T) {
 }
 
 func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 103, entity.EntityCategory(1), nestLocalKind)
@@ -1251,13 +1252,13 @@ func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
 	}
 	for _, event := range []string{"enqueue", "dispatch_start", "dispatch_done"} {
 		if !hasNestTraceCounter(event, name.String(), "ok") {
-			t.Fatalf("missing nest trace event %q in metrics: %+v", event, obs.Snapshot())
+			t.Fatalf("missing nest trace event %q in metrics: %+v", event, metrics.Snapshot())
 		}
 	}
 }
 
 func hasNestTraceCounter(event string, handler string, result string) bool {
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name != "nest.trace.events.total" {
 			continue
 		}
@@ -1293,18 +1294,78 @@ func TestTickerBasic(t *testing.T) {
 	}
 }
 
-func TestTickerStopIdempotentAndCallbackPanicSafe(t *testing.T) {
+// doTick wraps each callback in its own goroutine.SafeFunc, so the design
+// promise is stronger than "the process survives": a panicking callback must
+// not stop the ticker, and must not stop the callbacks registered after it
+// from running in the same tick. The previous version of this test asserted
+// neither — it would have passed with SafeFunc removed from the loop and the
+// whole tick abandoned on the first panic.
+func TestTickerPanickingCallbackStopsNeitherTheTickerNorItsPeers(t *testing.T) {
 	resetTickCallbacksForTest()
 	t.Cleanup(resetTickCallbacksForTest)
-	MustRegisterTickCallback(NewTickCallbackName("test_tick_panic_safe"), func(msg TickMsg) {
+
+	var panics, peerRuns atomic.Int64
+	MustRegisterTickCallback(NewTickCallbackName("test_tick_panic"), func(msg TickMsg) {
+		panics.Add(1)
 		panic("boom")
+	})
+	// Registered after the panicking one: reached only if the panic is
+	// contained per callback rather than per tick.
+	MustRegisterTickCallback(NewTickCallbackName("test_tick_peer"), func(msg TickMsg) {
+		peerRuns.Add(1)
 	})
 
 	tk := NewTicker(time.Millisecond)
 	tk.Start()
-	time.Sleep(5 * time.Millisecond)
+
+	// Bounded wait for three ticks: a t.Fatal here beats hanging until the
+	// go test timeout, which reports nothing useful.
+	deadline := time.Now().Add(2 * time.Second)
+	for tk.CurrentTick() < 3 {
+		if time.Now().After(deadline) {
+			tk.Stop()
+			t.Fatalf("ticker stalled at tick %d after a callback panicked (panics=%d)",
+				tk.CurrentTick(), panics.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	tk.Stop()
-	tk.Stop()
+
+	ticks := tk.CurrentTick()
+	if got := panics.Load(); got < 3 {
+		t.Fatalf("panicking callback ran %d times across %d ticks; it must be invoked every tick", got, ticks)
+	}
+	if got := peerRuns.Load(); got < 3 {
+		t.Fatalf("peer callback ran %d times across %d ticks; a panic must not skip its peers", got, ticks)
+	}
+
+	// Stop is idempotent and must not block on an already-stopped ticker.
+	stopped := make(chan struct{})
+	go func() { tk.Stop(); tk.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("repeated Stop blocked; Stop must be idempotent")
+	}
+}
+
+// A ticker that was never started must still be safe to stop, and must stay
+// stopped rather than starting later.
+func TestTickerStopBeforeStartIsSafeAndFinal(t *testing.T) {
+	tk := NewTicker(time.Millisecond)
+	done := make(chan struct{})
+	go func() { tk.Stop(); tk.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked on a ticker that was never started")
+	}
+
+	tk.Start()
+	time.Sleep(10 * time.Millisecond)
+	if got := tk.CurrentTick(); got != 0 {
+		t.Fatalf("a stopped ticker started anyway and reached tick %d", got)
+	}
 }
 
 func TestWorkerPool(t *testing.T) {
@@ -1399,10 +1460,10 @@ func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
 		EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind),
 		dao:        &rollbackTestDao{id: id},
 	})
-	registry := obs.NewRegistry()
-	previous := obs.DefaultRegistry()
-	obs.SetDefaultRegistry(registry)
-	defer obs.SetDefaultRegistry(previous)
+	registry := metrics.NewRegistry()
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(registry)
+	defer metrics.SetDefaultRegistry(previous)
 
 	InitNest(
 		NestOptionWithGetter(getter),

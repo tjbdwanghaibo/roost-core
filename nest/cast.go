@@ -167,7 +167,7 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 
 	lockedNow := make([]entity.IThreadSafeEntity, 0, len(lockEs))
 	for _, e := range lockEs {
-		if _, exists := guard.Entities()[e.GUId()]; exists {
+		if guard.Guarded(e.GUId()) {
 			continue
 		}
 		if !e.Touch() {
@@ -211,7 +211,7 @@ func prepareCastRemoteEntities(guard *entity.EntityGuard, metas []entity.EntityI
 		if !shouldPrepareRemoteID(meta) {
 			continue
 		}
-		if _, locked := guard.Entities()[meta.FullID]; locked {
+		if guard.Guarded(meta.FullID) {
 			continue
 		}
 		if _, ok := seen[meta.FullID]; ok {

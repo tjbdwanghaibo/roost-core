@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 )
 
 var (
@@ -229,7 +229,7 @@ func (h contextHandler) WithGroup(name string) slog.Handler {
 func (h contextHandler) contextAttrs(pc uintptr) []slog.Attr {
 	attrs := make([]slog.Attr, 0, 8)
 	if !h.opts.DisableGoID {
-		attrs = append(attrs, slog.Int64("goId", misc.GoID()))
+		attrs = append(attrs, slog.Int64("goId", goroutine.GoID()))
 	}
 	frame := uint64(0)
 	c := fctx.CurrentContext()

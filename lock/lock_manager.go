@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	"github.com/tjbdwanghaibo/cube-core/container"
 )
 
 const defaultBucketCnt = 64
@@ -12,7 +12,7 @@ type MutexFactory func(id int64) Mutex
 
 // LockManager manages a sharded pool of Mutex instances by entity ID.
 type LockManager struct {
-	locks   *misc.BucketHolder[int64, Mutex]
+	locks   *container.BucketHolder[int64, Mutex]
 	factory MutexFactory
 }
 
@@ -27,7 +27,7 @@ func NewLockManager(factory MutexFactory) *LockManager {
 	mgr := &LockManager{
 		factory: factory,
 	}
-	mgr.locks = misc.NewBucketHolder[int64, Mutex](defaultBucketCnt, mgr.factory, true)
+	mgr.locks = container.NewBucketHolder[int64, Mutex](defaultBucketCnt, mgr.factory, true)
 	return mgr
 }
 

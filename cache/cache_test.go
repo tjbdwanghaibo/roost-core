@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	fsync "github.com/tjbdwanghaibo/cube-core/sync"
+	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
 )
 
 type testItem struct {
@@ -157,14 +157,14 @@ func TestRedisRawSortedSetStoreUsesZSet(t *testing.T) {
 }
 
 type fakeSyncBus struct {
-	handlers map[string][]fsync.Handler
+	handlers map[string][]fsyncbus.Handler
 }
 
 func newFakeSyncBus() *fakeSyncBus {
-	return &fakeSyncBus{handlers: make(map[string][]fsync.Handler)}
+	return &fakeSyncBus{handlers: make(map[string][]fsyncbus.Handler)}
 }
 
-func (b *fakeSyncBus) Publish(msg *fsync.SyncMsg) error {
+func (b *fakeSyncBus) Publish(msg *fsyncbus.SyncMsg) error {
 	if msg == nil {
 		return nil
 	}
@@ -176,7 +176,7 @@ func (b *fakeSyncBus) Publish(msg *fsync.SyncMsg) error {
 	return nil
 }
 
-func (b *fakeSyncBus) Subscribe(topic string, handler fsync.Handler) (func(), error) {
+func (b *fakeSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (func(), error) {
 	b.handlers[topic] = append(b.handlers[topic], handler)
 	idx := len(b.handlers[topic]) - 1
 	return func() {
@@ -188,4 +188,4 @@ func (b *fakeSyncBus) Subscribe(topic string, handler fsync.Handler) (func(), er
 	}, nil
 }
 
-var _ fsync.ISyncBus = (*fakeSyncBus)(nil)
+var _ fsyncbus.ISyncBus = (*fakeSyncBus)(nil)

@@ -4,6 +4,68 @@
 
 ## [Unreleased]
 
+### Changed（破坏性：包与标识符重命名，无行为变化）
+
+一批只描述"机制"的包名换成描述"职责"的名字。旧名字里 `sync` / `replication` /
+`replica` 三个词互相混淆——它们分别指模块间同步总线、房间状态复制和跨服实体本地
+镜像，读代码时无法从名字区分；`ctx` 与标准库 `context` 的惯用别名冲突；`obs` 包里
+只有指标，没有 tracing 也没有 logging。升级只需替换 import 路径与包限定名。
+
+| 旧包 | 新包 | 为什么改 |
+| --- | --- | --- |
+| `sync` | `syncbus` | 与标准库 `sync` 同名，且它是一条总线，不是同步原语 |
+| `replication` | `statesync` | 它做的是房间状态同步（delta+LOD），不是数据库复制 |
+| `replica` | `mirror` | 它是订阅-应用回环的本地镜像，与 `replication` 无关 |
+| `ctx` | `fctx` | 与标准库 `context` 的惯用别名 `ctx` 冲突 |
+| `obs` | `metrics` | 包里只有指标，`obs` 名不副实 |
+| `query` | `index` | 它是二级索引，不是查询语言 |
+| `taskflow` | `actionflow` | 与 `Action`/`ActionGroup` 的实际类型名对齐 |
+| `misc` | `goroutine` + `container` + `misc` | 按职责三分 |
+
+`misc` 的三分：`goroutine` 收协程原语（`GoID`、`SafeFunc*`、`MPSCQueue`、`TaskPool`、
+`ParallelSlice/Map`），`container` 收通用容器（`BucketHolder`、`KeyMap`、`ObjectPool`、
+`TopologicalSortCache`），`misc` 只留真正跨包的小工具（`Hash64` 用于 worker/nest 分片、
+`Integer` 泛型约束）——`container` 依赖 `misc` 的这两样。
+
+capability 常量：`ModObs` → `ModMetrics`（值 `"obs"` → `"metrics"`）。
+
+文件级重命名（名字不指示内容的）：`dataengine/model.go` → `mutation_types.go`、
+`statesync/types.go` → `frame_limits.go`、`actionflow/types.go` → `action_types.go`、
+`entity/types.go` → `entity_kind.go`、`saga/model.go` → `record.go`、
+`mirror/replica.go` → `envelope.go`、`cache/replica.go` → `cache/mirror.go`。
+
+
+### Changed（测试质量：997 个 Test 函数的机器普查，两类形态清零）
+- **零断言测试 6 条重写**（另 3 条经核实是对带断言 helper 的合理委托）。其中
+  `container.TestObjectPool` 带着一个**空的 `if` 体**和"我不确定语义"的注释，
+  `lock.TestReentrantMutex_Basic` 只证明"Lock 两次不死锁"（换成 no-op 也能过），
+  `nest` 的 ticker 测试名字承诺 panic 安全而唯一"断言"是进程没崩。重写后钉住的是
+  真实设计属性：ObjectPool 的 freelist **不 reset**、`Put` 在两列表间移动、`Clear`
+  丢弃而 `Release` 归还；ReentrantMutex 的**内层 Unlock 不释放锁**、`TryLock` 只对
+  owner 可重入、非 owner Unlock panic；ticker 的 `SafeFunc` 是**每回调**而非每 tick，
+  且被 Stop 过的 ticker 不能再 Start。每条都用变异测试验证过（破坏实现 → 断言精确打红）。
+- **以 `go test` 超时当失败信号的 21 处消除**。测试主体顶层的裸通道接收会让属性
+  破坏表现为挂 10 分钟后一份堆栈，而不是一句话——这正是本轮 F9/F11 认定的坏信号
+  形态。改为每包一份泛型 `awaitChan(t, ch, what)`：5 秒上界，失败时说明在等什么。
+- `container.ObjectPool` 补上未声明的并发约束：它内嵌 `sync.Pool`（并发安全）
+  但 `workList`/`freeList` 是裸 slice，跨 goroutine 共享会 race。名字和内嵌的
+  `sync.Pool` 都在诱导相反的假设，故写进包注释。
+
+### Fixed（独立复审 F5/F6/F7/F9/F11/F12/F13/F15/F16，均带"无修复即红"验证过的回归测试）
+- **`bus`：Start 失败的清理不再持生命周期锁排空**。`StopWithContext` 早已为此重构过（锁内取走资源、解锁后拆卸），因为一个 worker 的业务 handler 可能回调 `Handle`/`HandleRpc`/`Stop`——这些都取 `lifeMu`，持锁等待它们排空会**无上界死锁**；但 Start 的失败清理路径没跟上，仍在锁内以 `context.Background()` 等待 pool 排空。现 `Start` 拆为薄壳 + `startLocked`，失败时返回拆卸闭包由外层在解锁后执行，且与 Stop 共用同一条 `stopResources` 实现，两条路径不会再各自漂移。
+- **`nest`：pipelined 完成链的释放从"调用方义务"变为"defer 保障"**。链节在 pump 决定归属**之前**就已占好（必须在实体锁内 link 才能保证链序 == 提交序），但 pump 满时的降级路径把释放义务转交调用方，而调用方的 `releaseLocks() → <-ticket.Done() → runInline(...)` 之间没有兜底：中途展开会让 `order.mine` 永不 close，该实体**后续每次 pipelined 完成都永久阻塞**在 `await()`（无超时、无指标、map 项也不回收）。现 `release()` 用 `sync.Once` 幂等、降级分支返回释放闭包、调用方立即 `defer`。
+- **`app`：生产配置校验新增 `ops.addr` 暴露面检查**。生产校验此前覆盖 admin token、密钥、限流、WAL durable，却不约束运维端点的绑定地址——README 的"默认只监听 127.0.0.1"是默认值而非强制，所以生产可以把带 admin 的端点绑到 `0.0.0.0` 而校验器不反对。现要求回环，或显式 `ops.allow_public_addr=true`（沿用 `allow_dev_token` 的声明式形态）。
+- **`cache/ref_hmap`：反射类型树改为每 store 构建一次**。`plan()` 原先在**每次** Get/Set/Delete/Patch 都重走整棵嵌套 struct 的类型树——而 `V` 是 store 的类型参数、`Name`/`Prefix`/`MaxDepth` 是 store 配置，整个结构在 store 生命周期内恒定，每次真正变化的只有实体 key。关键观察是节点里存的 key 实为"前缀（含实体 key）+ 由类型唯一决定的后缀"，故拆为 `refHMapNode.suffix` 与 `refHMapPlan.base`，类型树经 `sync.Once` 缓存（错误一并缓存，不支持的类型每次调用照样报错）。实测 4 字段 / 3 层嵌套：`plan()` 2874ns/31 allocs → **136.5ns/4 allocs**，完整 `Get` 4615ns/59 allocs → **2819ns/38 allocs**。**Redis key 格式逐字节不变**，并由回归测试钉住（挪一个字节就会让既有缓存实体全部失联）。
+- **`entity`：`EntityGuard.Entities()` 不再交出锁作用域账本本体**。`eMap` 驱动 nest 的锁序与重入判定，业务代码一次 `delete` 即可静默破坏死锁预防。新增零分配访问器 `Guarded(id)`/`GuardedCount()` 并迁移全部 6 处框架内调用（含 `nest_dispatch` 热路径的 `useTryLock`），`Entities()` 改为返回快照——安全与性能同时改善：账本不可被外部改坏，而热路径本就只问"在不在/有几个"，现在一次分配都不做。
+- **`dataengine`：非 strict 载入模板不再静默吞错**。`Strict=false` 的语义是"容忍一行坏数据"，不是"整表加载零条却不告诉任何人"；字段改名之类的系统性失败此前无日志无计数。现计 `dataengine.load.skipped.total{resource}` 并记 Warn。
+- **`cache`/`entity`：L2 写不再无上界，发布分片锁不会被无响应的 Redis 钉住**。`ReadThroughStore` 的读路径本就有界（`loadOne` 整体跑在 `LoadTimeout` 下），但公开的 `Set`/`Delete` 把调用方 ctx 原样交给远端——而 `RemoteSnapshotCache.Publish` 正是**持发布分片锁**跨越这次 L2 写（单点发布是版本 CAS 成立的前提，持锁本身是对的）。于是一个"不拒绝、只是永不作答"的 Redis 会让该分片上的所有远端快照发布无限期阻塞，而这是跨服实体的写路径。新增 `ReadThroughOptions.RemoteTimeout`（零值回退 `LoadTimeout`），`Set`/`Delete` 的远端调用套上它并把远端失败计入 `remoteError`（此前这两条路径的远端错误连计数都没有）。`RemoteSnapshotCache` 显式传入；`IgnoreRemoteError: true` 已经让降级结果是想要的那个——跳过 L2、保留 L1。
+- **`dataengine`：lease fence 的 schema 不再被两个包各自拼写**。新增 `LeaseFence.Predicate(now)` 与 `LeaseFenceField*`/`LeaseFenceStatusPending` 常量：fence 自己给出"必须仍然存在的那份文档"，投影方不再手拼 filter。原先字段名与 `"pending"` 在 kit 的 `dataengine` 与 `saga` 两侧各写一遍且无任何编译期耦合，而失效形态是最糟的一种——谓词不可满足与"租约确实过期了"从内部无法区分，两者都被当作 skipped no-op 正常提交，无错误、无指标、无失败测试。
+- `featureflag`、`entity`：两个测试名承诺了属性却零断言（前者丢弃 `Enabled()`/`Version()` 两个返回值，后者吞掉 `Prepare` 的 error 且唯一失败形态是挂到 `go test` 超时），已重写为有界的显式断言。
+
+### Added
+- `dataengine.load.skipped.total{resource}`：非 strict 载入模板跳过的行数。
+- `dataengine.fence.skipped.total{resource}`：fence 未命中计数。陈旧租约是这里的正常结果，但 schema 漂移长得一模一样——有了它，漂移表现为"所有被 fence 的事务同时开始跳过"，而不是一片安静。
+
 ### Fixed
 - Entity 持久删除改为唯一的 durable admission 状态机：明确区分 immediate、随当前事务 deferred 和 indeterminate 结果；deferred 只在 WAL admission 后完成内存生命周期，rollback 保持实体存活，indeterminate 则停止继续服务可能已删除的状态。Remote transaction outcome 携带显式 delete intent，不再借用 `IsRemoved()` 猜测持久化意图。
 - Native Saga step 新增 WAL v2 lease-fence 控制 receipt；reservation 的 owner/token/claim 位置进入业务 CommitRecord，使存储投影可在同一事务内拒绝过期 worker，而不把框架控制记录泄漏为业务 receipt。
@@ -31,7 +93,7 @@
 - 新增三级文档中心：新手快速开始、熟练开发者完整说明、框架实现原理、生产部署手册和分级路线图。
 - `syncstream.FileHistoryJournal` 新增幂等 `Close`，等待已接纳 group commit 后关闭常驻 WAL handle；关闭后持久操作 fail-closed。`History.Close` 将资源释放纳入运行时生命周期，修复重复启停的文件句柄泄漏。
 - **`robot` 机器人框架**（从 cube 的 robot 服务拣入并重构，cube 仓库零改动）：模拟客户端逻辑 + 压测双用途。分层：`robot/transport`（统一包协议 `[4B body_len][4B msg_id][4B seq]` 小端、TCP/WebSocket 内置、`RegisterDialer` 扩展点——KCP/QUIC 客户端拨号在 cube-kit `robot` 包）；`robot/protocol`（编解码注册表，`Codec` 注入 + `EnsureEncoder`/`EnsureDecoder` 按方向幂等安装——请求响应共用 msgID 不冲突）；`robot/session`（seq 匹配请求响应、push 分发、幂等关闭，每次 Call 埋 `robot.session.call{msg,result}` 直方图）；`robot`（Context 黑板 + `TypedKey[T]` 类型化访问器、LIFO 关闭钩子、`EnsurePushCapture`、`Coalescer`（去重合帧确认）、`BoundedQueue`（drop-oldest））；`robot/action`（动作注册表 + 内置 connect/wait/wait_push；**`RegisterCall[Req,Resp]` 泛型一行注册调用动作**——请求字段按 json tag/snake_case 从参数与黑板自动填充、`GetCode()` 约定判错、业务只写 `OnResp` 闭包）；`robot/scenario`（行为树组合子 Sequence/Selector/Parallel/Retry/Timeout/加权 Random（按 Seed 确定性），可选 YAML spec 解释器，解析期全量校验）；`robot/runner`（k6 式三执行器 pool/looping（含 `Stages` 分段升降）/arrival-rate，账目不变量 `Started == Success+Failure+Canceled`，10k bot 基准 ~2s/60MB）；`robot/loadtest`（单活跃 run 状态机、`Threshold` SLO 裁决（error_rate/p50–p99，违约即 `StateFailed`+`StopReasonThreshold`）、环形历史、6 条 admin 命令、Markdown 报告；默认指标带 `run` label——同 profile 连跑分布互不污染）。端到端示例 `examples/robotdemo`。
-- `obs`：新增 **Histogram** 指标类型——17 个固定指数桶（1ms 起逐桶翻倍），`ObserveHistogram`/`HistogramQuantile`（桶内线性插值）/`HistogramBounds`；Prometheus 导出累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。
+- `metrics`：新增 **Histogram** 指标类型——17 个固定指数桶（1ms 起逐桶翻倍），`ObserveHistogram`/`HistogramQuantile`（桶内线性插值）/`HistogramBounds`；Prometheus 导出累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。
 - `lockstep`：新增 **`FrameAssembler`**——客户端半场的帧装配器：冗余广播/追帧页去重、严格顺序释放、等待帧到达即时释放并排空连续段（追帧补洞永不被缓冲上限误拒）、缓冲越界返回"该追帧了"错误（`ErrHistoryUnknown` 链）。回归：3 客户端 × 600 帧 × 30% 丢包经冗余愈合零丢帧。
 
 ## [1.8.0] - 2026-08
@@ -56,8 +118,8 @@
 ### Fixed（全量能力审计发现，均带回归测试）
 - `hotcode`：`RegisterAdminCommands` 改为注册到调用方传入的 admin **实例**注册表（对齐 bus 的模式，返回聚合错误）——原先注册到包级 default，而装配路径（kit ops HTTP）只读实例注册表，`hotcode.list/revert/load_plugin` 三条命令在生产运维端点不可达。
 - `configdata`：`Table` 增加 `MarshalJSON`（表名 + 行数据，文件序）——原先 Table 字段全不可导出，`json.Marshal` 恒为 `{}`，快照 `Hash` 只反映表名集合、改任意行数据 hash 不变，无法用于配置一致性校验。**注意：升级后同一份配置的 Hash 值会变化**（首次真实覆盖内容）。
-- `query`：`OrderedIndex` 默认比较器改为类型感知（整数/无符号/浮点/字符串按自然序，其余回退格式化串）——原先统一 `fmt.Sprint` 字典序，整数 key `[9,10]` 排成 `[10,9]`。显式传入 `less` 的行为不变。
-- `obs`：指标基数打满不再全静默——首次打满每 metric 记一条 Warn，丢弃数以 `obs.series.dropped{metric}` counter 随 Snapshot/Prometheus 导出（序列数以打满的 metric 名数为界）；`Reset` 同步清零。
+- `index`：`OrderedIndex` 默认比较器改为类型感知（整数/无符号/浮点/字符串按自然序，其余回退格式化串）——原先统一 `fmt.Sprint` 字典序，整数 key `[9,10]` 排成 `[10,9]`。显式传入 `less` 的行为不变。
+- `metrics`：指标基数打满不再全静默——首次打满每 metric 记一条 Warn，丢弃数以 `metrics.series.dropped{metric}` counter 随 Snapshot/Prometheus 导出（序列数以打满的 metric 名数为界）；`Reset` 同步清零。
 - `failurelog`：① 原子 Lua 失败降级为非原子回退时记 `failurelog_degraded_total{namespace,op}` + Warn（对齐 `cache.refhmap` 的"降级必须可见"规范）；② trim/delete 回退优先走新的 `fredis.ListTrimmer`/`ListRemover`（LTRIM/LREM 就地操作）——原先 DEL+RPUSH 两步间崩溃会丢整个列表，无该能力的客户端保留旧回退；③ `failurelog_trim_total` 补上 namespace label。
 - `timer`：`Scheduler` 新增 `SetClock` 注入时间源（默认 `time.Now` 行为不变）——原先 `NewTimer` 的 End 用裸墙钟而 Tick 用调用方时钟，`time.logic_offset` 非 0 时所有新建 timer 整体偏移一个 offset；宿主用偏移时钟驱动 Tick 时必须同源注入。
 - `misc`：`SafeFuncWithTryCount` 补上与同族 `Safe*` 一致的 panic 恢复、返回包装后的真实末次错误（原先吞掉所有 error 只返回 "try count exceeded"）、`tryCount<=0` 至少执行一次（原先一次都不调用就报错）；`TaskPool` 对非 nil 配置做归一化（`WorkerCount==0` 原先构造空 worker 切片致 `Submit` 除零 panic），哈希取模改在 uint32 空间（32 位平台负索引 panic）。

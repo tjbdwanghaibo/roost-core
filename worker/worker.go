@@ -2,8 +2,8 @@ package worker
 
 import (
 	"errors"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -24,7 +24,7 @@ var (
 type Worker[T Task] struct {
 	id      int64
 	name    string
-	queue   *misc.MPSCQueue[T]
+	queue   *goroutine.MPSCQueue[T]
 	handler func(T)
 	wg      *sync.WaitGroup
 	closed  atomic.Bool
@@ -36,7 +36,7 @@ func NewWorker[T Task](name string, id int64, queueCap int, handler func(T)) *Wo
 	return &Worker[T]{
 		id:      id,
 		name:    name,
-		queue:   misc.NewMPSCQueue[T](queueCap),
+		queue:   goroutine.NewMPSCQueue[T](queueCap),
 		handler: handler,
 		notify:  make(chan struct{}, 1),
 	}
@@ -73,7 +73,7 @@ func (w *Worker[T]) loop() {
 }
 
 func (w *Worker[T]) safeHandle(task T) {
-	misc.SafeFunc(func() {
+	goroutine.SafeFunc(func() {
 		_, releaseContext := fctx.NewContext(
 			fctx.WithSource("worker"),
 			fctx.WithHandler(w.name),

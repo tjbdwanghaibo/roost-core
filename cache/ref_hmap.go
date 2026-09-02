@@ -9,10 +9,11 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 )
 
@@ -76,6 +77,11 @@ type RefHMapConfig[K comparable, V any] struct {
 }
 
 type RedisRefHMapStore[K comparable, V any] struct {
+	layoutOnce   sync.Once
+	layoutRoot   *refHMapNode
+	layoutPrefix string
+	layoutErr    error
+
 	redis fredis.IRedis
 	cfg   RefHMapConfig[K, V]
 }
@@ -100,12 +106,12 @@ func (s *RedisRefHMapStore[K, V]) Get(ctx context.Context, key K) (V, bool, erro
 	if err != nil {
 		return zero, false, err
 	}
-	rootHash := hashes[plan.root.key]
+	rootHash := hashes[plan.key(plan.root)]
 	if len(rootHash) == 0 {
 		return zero, false, nil
 	}
 	value := reflect.New(plan.root.typ).Elem()
-	if err := decodeRefHMapNode(value, plan.root, hashes); err != nil {
+	if err := decodeRefHMapNode(value, plan.root, hashes, plan.base); err != nil {
 		return zero, false, err
 	}
 	return value.Interface().(V), true, nil
@@ -137,7 +143,7 @@ func (s *RedisRefHMapStore[K, V]) Set(ctx context.Context, value V) error {
 			return nil
 		}
 	}
-	writes, err := encodeRefHMapNode(reflect.ValueOf(value), plan.root)
+	writes, err := encodeRefHMapNode(reflect.ValueOf(value), plan.root, plan.base)
 	if err != nil {
 		return err
 	}
@@ -167,43 +173,61 @@ func (s *RedisRefHMapStore[K, V]) Delete(ctx context.Context, key K) error {
 	return err
 }
 
+// layout builds the reflective type tree and the key prefix template once per
+// store. Both are decided by V and the store config, neither of which can
+// change, so doing this per operation was pure waste — it dominated a Get's
+// allocations while the network round trip it accompanies dwarfed everything.
+func (s *RedisRefHMapStore[K, V]) layout() (*refHMapNode, string, error) {
+	s.layoutOnce.Do(func() {
+		var zero V
+		rootType := reflect.TypeOf(zero)
+		if rootType == nil {
+			s.layoutErr = fmt.Errorf("%w: nil root type", ErrRefHMapUnsupported)
+			return
+		}
+		if rootType.Kind() == reflect.Pointer {
+			rootType = rootType.Elem()
+		}
+		if rootType.Kind() != reflect.Struct {
+			s.layoutErr = fmt.Errorf("%w: root type %s is not struct", ErrRefHMapUnsupported, rootType)
+			return
+		}
+		maxDepth := s.cfg.MaxDepth
+		if maxDepth <= 0 {
+			maxDepth = defaultRefHMapMaxDepth
+		}
+		name := strings.TrimSpace(s.cfg.Name)
+		if name == "" {
+			name = refHMapSnake(rootType.Name())
+		}
+		if name == "" {
+			name = "value"
+		}
+		prefix := strings.TrimRight(strings.TrimSpace(s.cfg.Prefix), ":")
+		if prefix == "" {
+			prefix = defaultRefHMapPrefix
+		}
+		root, err := buildRefHMapNode(rootType, nil, maxDepth, 0, make(map[reflect.Type]bool))
+		if err != nil {
+			s.layoutErr = err
+			return
+		}
+		s.layoutRoot = root
+		s.layoutPrefix = prefix + ":{" + name + ":"
+	})
+	return s.layoutRoot, s.layoutPrefix, s.layoutErr
+}
+
 func (s *RedisRefHMapStore[K, V]) plan(key K) (*refHMapPlan, error) {
-	var zero V
-	rootType := reflect.TypeOf(zero)
-	if rootType == nil {
-		return nil, fmt.Errorf("%w: nil root type", ErrRefHMapUnsupported)
-	}
-	if rootType.Kind() == reflect.Pointer {
-		rootType = rootType.Elem()
-	}
-	if rootType.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("%w: root type %s is not struct", ErrRefHMapUnsupported, rootType)
-	}
-	maxDepth := s.cfg.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = defaultRefHMapMaxDepth
-	}
-	name := strings.TrimSpace(s.cfg.Name)
-	if name == "" {
-		name = refHMapSnake(rootType.Name())
-	}
-	if name == "" {
-		name = "value"
+	root, prefix, err := s.layout()
+	if err != nil {
+		return nil, err
 	}
 	keyString := fmt.Sprint(key)
 	if s.cfg.KeyString != nil {
 		keyString = s.cfg.KeyString(key)
 	}
-	prefix := strings.TrimRight(strings.TrimSpace(s.cfg.Prefix), ":")
-	if prefix == "" {
-		prefix = defaultRefHMapPrefix
-	}
-	base := prefix + ":{" + name + ":" + keyString + "}"
-	root, err := buildRefHMapNode(rootType, nil, base, maxDepth, 0, make(map[reflect.Type]bool))
-	if err != nil {
-		return nil, err
-	}
-	return &refHMapPlan{root: root}, nil
+	return &refHMapPlan{root: root, base: prefix + keyString + "}"}, nil
 }
 
 func (s *RedisRefHMapStore[K, V]) Patch(ctx context.Context, key K, path string, value any) error {
@@ -223,17 +247,17 @@ func (s *RedisRefHMapStore[K, V]) Patch(ctx context.Context, key K, path string,
 		return err
 	}
 	if pipe := s.redis.Pipeline(); pipe != nil {
-		pipe.HSet(ctx, target.node.key, target.field.name, raw)
+		pipe.HSet(ctx, target.key, target.field.name, raw)
 		if s.cfg.TTL > 0 {
-			pipe.Expire(ctx, target.node.key, s.cfg.TTL)
+			pipe.Expire(ctx, target.key, s.cfg.TTL)
 		}
 		return pipe.Exec(ctx)
 	}
-	if err := s.redis.HSet(ctx, target.node.key, target.field.name, raw); err != nil {
+	if err := s.redis.HSet(ctx, target.key, target.field.name, raw); err != nil {
 		return err
 	}
 	if s.cfg.TTL > 0 {
-		_, err = s.redis.Expire(ctx, target.node.key, s.cfg.TTL)
+		_, err = s.redis.Expire(ctx, target.key, s.cfg.TTL)
 	}
 	return err
 }
@@ -280,7 +304,7 @@ func (s *RedisRefHMapStore[K, V]) writeHashes(ctx context.Context, plan *refHMap
 
 func (s *RedisRefHMapStore[K, V]) registeredKeys(ctx context.Context, plan *refHMapPlan) ([]string, error) {
 	fallback := plan.keys()
-	raw, err := s.redis.HGet(ctx, plan.root.key, refHMapRegistryField)
+	raw, err := s.redis.HGet(ctx, plan.key(plan.root), refHMapRegistryField)
 	if err != nil {
 		if errors.Is(err, fredis.ErrNil) {
 			return fallback, nil
@@ -291,7 +315,7 @@ func (s *RedisRefHMapStore[K, V]) registeredKeys(ctx context.Context, plan *refH
 	if len(keys) == 0 {
 		return fallback, nil
 	}
-	return uniqueRefHMapKeys(append(keys, plan.root.key)), nil
+	return uniqueRefHMapKeys(append(keys, plan.key(plan.root))), nil
 }
 
 func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []string, writes []refHMapWrite) error {
@@ -319,7 +343,7 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 		// exactly the window operators need to know about, so it is logged
 		// and counted before availability is chosen over atomicity.
 		slog.Warn("cache: redis ref hmap Lua write failed, degrading to non-atomic fallback", "keys", len(keys), "err", err)
-		obs.IncCounter("cache.refhmap.write_degraded_total", nil, 1)
+		metrics.IncCounter("cache.refhmap.write_degraded_total", nil, 1)
 	}
 	if pipe := s.redis.Pipeline(); pipe != nil {
 		pipe.Del(ctx, keys...)
@@ -355,6 +379,15 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 
 type refHMapPlan struct {
 	root *refHMapNode
+	base string
+}
+
+// key resolves one node's Redis key for this plan's entity.
+func (p *refHMapPlan) key(node *refHMapNode) string {
+	if p == nil || node == nil {
+		return ""
+	}
+	return p.base + node.suffix
 }
 
 func (p *refHMapPlan) keys() []string {
@@ -362,7 +395,7 @@ func (p *refHMapPlan) keys() []string {
 		return nil
 	}
 	var keys []string
-	p.root.collectKeys(&keys)
+	p.root.collectKeys(p.base, &keys)
 	return keys
 }
 
@@ -374,12 +407,13 @@ func (p *refHMapPlan) withRegistry(writes []refHMapWrite) []refHMapWrite {
 	out := make([]refHMapWrite, len(writes))
 	copy(out, writes)
 	for i := range out {
-		if out[i].key == p.root.key {
+		rootKey := p.key(p.root)
+		if out[i].key == rootKey {
 			out[i].values = append(out[i].values, refHMapRegistryField, registry)
 			return out
 		}
 	}
-	out = append(out, refHMapWrite{key: p.root.key, values: []any{refHMapRegistryField, registry}})
+	out = append(out, refHMapWrite{key: p.key(p.root), values: []any{refHMapRegistryField, registry}})
 	return out
 }
 
@@ -401,7 +435,7 @@ func (p *refHMapPlan) patchTarget(path string) (refHMapPatchTarget, error) {
 			if field.kind != refHMapScalarField {
 				return refHMapPatchTarget{}, fmt.Errorf("%w: patch path %q is not scalar", ErrRefHMapUnsupported, path)
 			}
-			return refHMapPatchTarget{node: node, field: field}, nil
+			return refHMapPatchTarget{node: node, field: field, key: p.key(node)}, nil
 		}
 		if field.kind != refHMapStructField || field.child == nil {
 			return refHMapPatchTarget{}, fmt.Errorf("%w: patch path %q crosses non-struct field", ErrRefHMapUnsupported, path)
@@ -414,22 +448,30 @@ func (p *refHMapPlan) patchTarget(path string) (refHMapPatchTarget, error) {
 type refHMapPatchTarget struct {
 	node  *refHMapNode
 	field refHMapField
+	key   string
 }
 
+// refHMapNode describes one Redis hash in the flattened struct. It holds a
+// key SUFFIX, not a key: the suffix is decided entirely by the value's type,
+// while the prefix carries the entity key. Keeping them apart is what lets the
+// whole tree be built once per store instead of once per operation — the tree
+// used to be rebuilt by reflection on every Get/Set/Delete/Patch, which cost
+// more than half of a Get's time and allocations even though V is a type
+// parameter and the structure never changes.
 type refHMapNode struct {
 	typ    reflect.Type
-	key    string
+	suffix string
 	fields []refHMapField
 }
 
-func (n *refHMapNode) collectKeys(keys *[]string) {
+func (n *refHMapNode) collectKeys(base string, keys *[]string) {
 	if n == nil {
 		return
 	}
-	*keys = append(*keys, n.key)
+	*keys = append(*keys, base+n.suffix)
 	for _, field := range n.fields {
 		if field.child != nil {
-			field.child.collectKeys(keys)
+			field.child.collectKeys(base, keys)
 		}
 	}
 }
@@ -466,7 +508,7 @@ type refHMapWrite struct {
 	values []any
 }
 
-func buildRefHMapNode(typ reflect.Type, path []string, base string, maxDepth int, depth int, stack map[reflect.Type]bool) (*refHMapNode, error) {
+func buildRefHMapNode(typ reflect.Type, path []string, maxDepth int, depth int, stack map[reflect.Type]bool) (*refHMapNode, error) {
 	if depth > maxDepth {
 		return nil, fmt.Errorf("%w: %s", ErrRefHMapMaxDepth, typ)
 	}
@@ -476,13 +518,13 @@ func buildRefHMapNode(typ reflect.Type, path []string, base string, maxDepth int
 	stack[typ] = true
 	defer delete(stack, typ)
 
-	key := base + ":root"
+	suffix := ":root"
 	if len(path) > 0 {
-		key = base + ":" + strings.Join(path, ":")
+		suffix = ":" + strings.Join(path, ":")
 	}
 	node := &refHMapNode{
-		typ: typ,
-		key: key,
+		typ:    typ,
+		suffix: suffix,
 	}
 	for i := 0; i < typ.NumField(); i++ {
 		sf := typ.Field(i)
@@ -513,7 +555,7 @@ func buildRefHMapNode(typ reflect.Type, path []string, base string, maxDepth int
 			childType = childType.Elem()
 		}
 		if childType.Kind() == reflect.Struct {
-			child, err := buildRefHMapNode(childType, append(path, name), base, maxDepth, depth+1, stack)
+			child, err := buildRefHMapNode(childType, append(path, name), maxDepth, depth+1, stack)
 			if err != nil {
 				return nil, err
 			}
@@ -533,7 +575,7 @@ func buildRefHMapNode(typ reflect.Type, path []string, base string, maxDepth int
 	return node, nil
 }
 
-func encodeRefHMapNode(value reflect.Value, node *refHMapNode) ([]refHMapWrite, error) {
+func encodeRefHMapNode(value reflect.Value, node *refHMapNode, base string) ([]refHMapWrite, error) {
 	value = refHMapIndirectValue(value)
 	if !value.IsValid() || value.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("%w: value is not struct", ErrRefHMapUnsupported)
@@ -555,21 +597,21 @@ func encodeRefHMapNode(value reflect.Value, node *refHMapNode) ([]refHMapWrite, 
 			if field.ptr && fv.IsNil() {
 				continue
 			}
-			values = append(values, field.name, field.child.key)
-			childWrites, err := encodeRefHMapNode(fv, field.child)
+			values = append(values, field.name, base+field.child.suffix)
+			childWrites, err := encodeRefHMapNode(fv, field.child, base)
 			if err != nil {
 				return nil, err
 			}
 			writes = append(writes, childWrites...)
 		}
 	}
-	writes = append(writes, refHMapWrite{key: node.key, values: values})
+	writes = append(writes, refHMapWrite{key: base + node.suffix, values: values})
 	return writes, nil
 }
 
-func decodeRefHMapNode(value reflect.Value, node *refHMapNode, hashes map[string]map[string]string) error {
+func decodeRefHMapNode(value reflect.Value, node *refHMapNode, hashes map[string]map[string]string, base string) error {
 	value = refHMapIndirectValue(value)
-	hash := hashes[node.key]
+	hash := hashes[base+node.suffix]
 	for _, field := range node.fields {
 		raw, ok := hash[field.name]
 		fv := value.FieldByIndex(field.index)
@@ -589,10 +631,10 @@ func decodeRefHMapNode(value reflect.Value, node *refHMapNode, hashes map[string
 				if fv.IsNil() {
 					fv.Set(reflect.New(field.child.typ))
 				}
-				if err := decodeRefHMapNode(fv, field.child, hashes); err != nil {
+				if err := decodeRefHMapNode(fv, field.child, hashes, base); err != nil {
 					return err
 				}
-			} else if err := decodeRefHMapNode(fv, field.child, hashes); err != nil {
+			} else if err := decodeRefHMapNode(fv, field.child, hashes, base); err != nil {
 				return err
 			}
 		}

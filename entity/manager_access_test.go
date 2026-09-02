@@ -162,14 +162,30 @@ func TestManagerAccessFlightWaiterHonorsOwnContext(t *testing.T) {
 	}()
 	time.Sleep(10 * time.Millisecond)
 	cancel()
-	if err := <-waiterDone; err != context.Canceled {
+	if err := awaitChan(t, waiterDone, "the waiter to observe its own cancellation"); err != context.Canceled {
 		t.Fatalf("cancelled waiter returned %v", err)
 	}
 	close(loader.block)
-	if err := <-started; err != nil {
+	if err := awaitChan(t, started, "the in-flight load to start"); err != nil {
 		t.Fatalf("original load was affected by waiter cancellation: %v", err)
 	}
 	if got := loader.loads.Load(); got != 1 {
 		t.Fatalf("loads = %d, want 1", got)
+	}
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
 	}
 }

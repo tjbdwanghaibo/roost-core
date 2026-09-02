@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 func newAsyncPilotEntity(t *testing.T, unique int64, value int) (int64, *rollbackTestEntity) {
@@ -299,8 +299,8 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 	// AfterCommit against commit order. The entity completion chain now
 	// covers every path, so ordering is unconditional.
 	getter := newMockGetter()
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 	id, ent := newAsyncPilotEntity(t, 345, 0)
 	getter.Add(ent)
 	committer := newPipelinedTestCommitter(false)
@@ -366,7 +366,7 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 	degraded := int64(0)
 	degradedDeadline := time.Now().Add(2 * time.Second)
 	for degraded == 0 && time.Now().Before(degradedDeadline) {
-		for _, metric := range obs.Snapshot() {
+		for _, metric := range metrics.Snapshot() {
 			if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
 				degraded += metric.Value
 			}
@@ -402,7 +402,7 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 	// Self-check: the scenario is only meaningful if a transaction actually
 	// took the saturated fallback path.
 	degraded = 0
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name == "nest.pipelined.async_total" && metric.Labels["result"] == "degraded" {
 			degraded += metric.Value
 		}
@@ -502,5 +502,63 @@ func TestCompletionPumpFullRejectsSynchronouslyAndDrainsAccepted(t *testing.T) {
 	// A closed pump rejects new submissions.
 	if pump.submit(pipelinedCompletion{ticket: ticket, entityID: 3, complete: func(error) {}}) {
 		t.Fatal("closed pump must reject submissions")
+	}
+}
+
+// The chain link is taken before the pump decides whether it can own the
+// work, so on the degraded path the caller holds the release obligation while
+// it waits for its own ticket. If that path unwinds — a panic while releasing
+// entity locks, a ticket that never resolves — an unreleased link would block
+// every later completion for that entity forever, with no timeout and no
+// metric. Release is therefore idempotent and the caller defers it.
+func TestCompletionOrderReleaseIsIdempotentAndUnblocksSuccessors(t *testing.T) {
+	pump := newCompletionPump(1, 1)
+	first := pump.link(11)
+	second := pump.link(11)
+
+	// Discharging the obligation twice (defensive defer plus the normal
+	// completion path) must not panic on a double close.
+	first.release()
+	first.release()
+
+	secondRan := make(chan struct{})
+	go func() {
+		second.await()
+		close(secondRan)
+	}()
+	select {
+	case <-secondRan:
+	case <-time.After(2 * time.Second):
+		t.Fatal("successor never unblocked after its predecessor released")
+	}
+	second.release()
+	second.release()
+
+	pump.chainMu.Lock()
+	remaining := len(pump.chains)
+	pump.chainMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("chain entries leaked: %d", remaining)
+	}
+}
+
+// Concurrent releases of the same link must also be safe: the deferred
+// discharge and the completion path can race in principle.
+func TestCompletionOrderReleaseIsRaceSafe(t *testing.T) {
+	pump := newCompletionPump(1, 1)
+	order := pump.link(12)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			order.release()
+		}()
+	}
+	wg.Wait()
+	select {
+	case <-order.mine:
+	default:
+		t.Fatal("link never published as finished")
 	}
 }

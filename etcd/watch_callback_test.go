@@ -63,7 +63,7 @@ func TestWatchCallbackRecoversPanicAndExplicitCloseIsClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	watcher.events <- &WatchEvent{KV: &KV{ModRevision: 1}}
-	<-subscription.Done()
+	awaitChan(t, subscription.Done(), "the watch subscription to terminate")
 	if !errors.Is(subscription.Err(), ErrWatchCallbackPanic) {
 		t.Fatalf("panic Err()=%v", subscription.Err())
 	}
@@ -89,7 +89,7 @@ func TestWatchCallbackReportsWatcherAndContextTermination(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = watcher.Close()
-	<-subscription.Done()
+	awaitChan(t, subscription.Done(), "the watch subscription to terminate")
 	if !errors.Is(subscription.Err(), ErrWatchCompacted) {
 		t.Fatalf("watch Err()=%v", subscription.Err())
 	}
@@ -101,7 +101,7 @@ func TestWatchCallbackReportsWatcherAndContextTermination(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancel()
-	<-subscription.Done()
+	awaitChan(t, subscription.Done(), "the watch subscription to terminate")
 	if !errors.Is(subscription.Err(), context.Canceled) {
 		t.Fatalf("context Err()=%v", subscription.Err())
 	}
@@ -112,5 +112,21 @@ func TestSubscribeLocalMirrorRejectsUnsupportedMirror(t *testing.T) {
 	_, err := SubscribeLocalMirror(mirror, context.Background(), func(context.Context, LocalMirrorChange[int]) error { return nil }, LocalMirrorSubscribeOptions{})
 	if !errors.Is(err, ErrMirrorSubscribeUnsupported) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
 	}
 }

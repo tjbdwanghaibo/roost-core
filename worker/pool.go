@@ -2,7 +2,8 @@ package worker
 
 import (
 	"context"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 	"github.com/tjbdwanghaibo/cube-core/misc"
 	"sync"
 )
@@ -187,7 +188,7 @@ func (p *Pool[T]) TryGo(task T, handler func(T)) error {
 	p.mu.Unlock()
 	go func() {
 		defer p.wg.Done()
-		misc.SafeFunc(func() {
+		goroutine.SafeFunc(func() {
 			_, releaseContext := fctx.NewContext(
 				fctx.WithSource("worker"),
 				fctx.WithHandler(p.name),

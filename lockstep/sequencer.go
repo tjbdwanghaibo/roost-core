@@ -7,7 +7,7 @@
 //
 // This is INPUT-frame synchronization (lockstep), not to be confused with
 // the state-frame path: entitysync replicates per-subject state deltas and
-// cube-kit's sync/room_replication batches them into per-room state frames.
+// cube-kit's room/room_broadcast batches them into per-room state frames.
 // A lockstep frame carries only what players pressed.
 //
 // The sequencer implements optimistic frame locking: frames are cut on the

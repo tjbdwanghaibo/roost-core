@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/robot"
 	"github.com/tjbdwanghaibo/cube-core/robot/action"
 	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
@@ -122,7 +122,7 @@ type Runner struct {
 	identity  IdentityProvider
 	bootstrap func() error
 	auth      robot.AuthProvider
-	labels    obs.Labels
+	labels    metrics.Labels
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
@@ -182,7 +182,7 @@ func WithAuthProvider(auth robot.AuthProvider) Option {
 	return func(r *Runner) { r.auth = auth }
 }
 
-func WithMetricLabels(labels obs.Labels) Option {
+func WithMetricLabels(labels metrics.Labels) Option {
 	return func(r *Runner) { r.labels = cloneLabels(labels) }
 }
 
@@ -235,7 +235,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	slog.Info("robot runner: start",
 		"executor", r.cfg.Executor, "count", r.cfg.Count, "rate", r.cfg.Rate,
 		"scenario", scn.Name(), "transport", r.cfg.Transport.Type, "endpoint", r.cfg.Transport.Endpoint)
-	obs.SetGauge("robot.runner.target", r.metricLabels(obs.Labels{"scenario": scn.Name()}), int64(r.cfg.Count))
+	metrics.SetGauge("robot.runner.target", r.metricLabels(metrics.Labels{"scenario": scn.Name()}), int64(r.cfg.Count))
 
 	var err error
 	switch r.cfg.Executor {
@@ -308,7 +308,7 @@ func (r *Runner) runPopulation(ctx context.Context, scn scenario.Scenario, loopi
 			} else if stage.Target < launched {
 				shrinkTo(stage.Target)
 			}
-			obs.SetGauge("robot.runner.target", r.metricLabels(obs.Labels{"scenario": scn.Name()}), int64(launched))
+			metrics.SetGauge("robot.runner.target", r.metricLabels(metrics.Labels{"scenario": scn.Name()}), int64(launched))
 			if !sleepCtx(ctx, stage.Duration) {
 				return nil
 			}
@@ -355,12 +355,12 @@ func (r *Runner) launch(ctx context.Context, index int, scn scenario.Scenario, l
 	r.started.Add(1)
 	go func() {
 		defer r.wg.Done()
-		labels := r.metricLabels(obs.Labels{"scenario": scn.Name()})
+		labels := r.metricLabels(metrics.Labels{"scenario": scn.Name()})
 		r.online.Add(1)
-		obs.AddGauge("robot.runner.online", labels, 1)
+		metrics.AddGauge("robot.runner.online", labels, 1)
 		defer func() {
 			r.online.Add(-1)
-			obs.AddGauge("robot.runner.online", labels, -1)
+			metrics.AddGauge("robot.runner.online", labels, -1)
 		}()
 
 		botCtx := ctx
@@ -409,16 +409,16 @@ func (r *Runner) runOnce(ctx context.Context, index int, playerID int64, scn sce
 		// The run was stopped mid-scenario: neither a success nor a failure,
 		// but it must not vanish from the accounting either.
 		r.canceled.Add(1)
-		obs.IncCounter("robot.runner.scenario.total", r.metricLabels(obs.Labels{"scenario": scn.Name(), "result": "canceled"}), 1)
+		metrics.IncCounter("robot.runner.scenario.total", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "canceled"}), 1)
 	case err != nil:
 		r.failure.Add(1)
-		obs.IncCounter("robot.runner.scenario.total", r.metricLabels(obs.Labels{"scenario": scn.Name(), "result": "error"}), 1)
-		obs.ObserveHistogram("robot.runner.scenario.cost", r.metricLabels(obs.Labels{"scenario": scn.Name(), "result": "error"}), elapsed)
+		metrics.IncCounter("robot.runner.scenario.total", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "error"}), 1)
+		metrics.ObserveHistogram("robot.runner.scenario.cost", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "error"}), elapsed)
 		slog.Warn("robot runner: scenario failed", "robot", index, "player", playerID, "scenario", scn.Name(), "err", err)
 	default:
 		r.success.Add(1)
-		obs.IncCounter("robot.runner.scenario.total", r.metricLabels(obs.Labels{"scenario": scn.Name(), "result": "ok"}), 1)
-		obs.ObserveHistogram("robot.runner.scenario.cost", r.metricLabels(obs.Labels{"scenario": scn.Name(), "result": "ok"}), elapsed)
+		metrics.IncCounter("robot.runner.scenario.total", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "ok"}), 1)
+		metrics.ObserveHistogram("robot.runner.scenario.cost", r.metricLabels(metrics.Labels{"scenario": scn.Name(), "result": "ok"}), elapsed)
 	}
 }
 
@@ -469,7 +469,7 @@ func (r *Runner) Actions() *action.Registry { return r.actions }
 // Scenarios exposes the scenario registry for business registration.
 func (r *Runner) Scenarios() *scenario.Registry { return r.scenarios }
 
-func (r *Runner) metricLabels(base obs.Labels) obs.Labels {
+func (r *Runner) metricLabels(base metrics.Labels) metrics.Labels {
 	labels := cloneLabels(r.labels)
 	for key, value := range base {
 		labels[key] = value
@@ -477,8 +477,8 @@ func (r *Runner) metricLabels(base obs.Labels) obs.Labels {
 	return labels
 }
 
-func cloneLabels(labels obs.Labels) obs.Labels {
-	out := make(obs.Labels, len(labels)+2)
+func cloneLabels(labels metrics.Labels) metrics.Labels {
+	out := make(metrics.Labels, len(labels)+2)
 	for key, value := range labels {
 		out[key] = value
 	}

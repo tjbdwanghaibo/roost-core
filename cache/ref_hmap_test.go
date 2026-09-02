@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -603,3 +604,60 @@ func cloneRefHMapFakeHash(in map[string]string) map[string]string {
 }
 
 var _ fredis.IRedis = (*refHMapFakeRedis)(nil)
+
+// The reflective type tree is decided by V and the store config, so it is
+// built once per store rather than once per operation. This pins both halves
+// of that: the tree really is shared across calls, and the Redis keys are
+// still composed exactly as before — the layout change must not move a single
+// byte of an existing key, or every cached entity would be orphaned.
+func TestRedisRefHMapStoreReusesTypeLayoutAcrossOperations(t *testing.T) {
+	store := NewRedisRefHMapStore[int64, refHMapSession](newRefHMapFakeRedis(), RefHMapConfig[int64, refHMapSession]{
+		Prefix: "cube:test", Name: "session", TTL: time.Hour, MaxDepth: 8,
+		StoreConfig: refHMapSessionConfig(),
+	})
+	first, err := store.plan(1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.plan(2002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.root != second.root {
+		t.Fatal("type layout was rebuilt for a second key")
+	}
+	if first.base == second.base {
+		t.Fatalf("both plans share a key prefix: %q", first.base)
+	}
+	// Byte-for-byte compatibility with keys already in Redis.
+	if got := first.keys(); !reflect.DeepEqual(got, []string{
+		"cube:test:{session:1001}:root",
+		"cube:test:{session:1001}:snapshot",
+		"cube:test:{session:1001}:snapshot:inner",
+		"cube:test:{session:1001}:meta",
+	}) {
+		t.Fatalf("key layout changed: %q", got)
+	}
+	if got := second.keys()[0]; got != "cube:test:{session:2002}:root" {
+		t.Fatalf("second key=%q", got)
+	}
+	// A patch target resolves against its own plan's prefix.
+	target, err := second.patchTarget("snapshot.inner.score")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.key != "cube:test:{session:2002}:snapshot:inner" {
+		t.Fatalf("patch target key=%q", target.key)
+	}
+
+	// An unsupported root type must keep failing on every call, not just the
+	// first — the cached layout holds the error too.
+	broken := NewRedisRefHMapStore[int64, int](newRefHMapFakeRedis(), RefHMapConfig[int64, int]{
+		StoreConfig: StoreConfig[int64, int]{KeyOf: func(v int) int64 { return int64(v) }},
+	})
+	for range 3 {
+		if _, err := broken.plan(1); !errors.Is(err, ErrRefHMapUnsupported) {
+			t.Fatalf("err=%v, want ErrRefHMapUnsupported", err)
+		}
+	}
+}

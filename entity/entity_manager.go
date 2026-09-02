@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tjbdwanghaibo/cube-core/container"
 	"github.com/tjbdwanghaibo/cube-core/lock"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
-	"github.com/tjbdwanghaibo/cube-core/misc"
 )
 
 const defaultBucketCnt = 64
@@ -16,7 +16,7 @@ const defaultBucketCnt = 64
 // EntityManager is the central registry for all entities.
 // Uses sharded buckets for high-concurrency access with hundreds of thousands of entities.
 type EntityManager struct {
-	entities       *misc.BucketHolder[int64, IThreadSafeEntity]
+	entities       *container.BucketHolder[int64, IThreadSafeEntity]
 	idGen          func() (uint64, error)
 	locks          *lock.LockManager
 	configMu       sync.RWMutex
@@ -79,7 +79,7 @@ func NewEntityManager(options ...EntityManagerOption) *EntityManager {
 // NewEntityManagerWithBuckets creates an EntityManager with specified bucket count.
 func NewEntityManagerWithBuckets(bucketCnt int, options ...EntityManagerOption) *EntityManager {
 	manager := &EntityManager{
-		entities: misc.NewBucketHolder[int64, IThreadSafeEntity](bucketCnt, nil, false),
+		entities: container.NewBucketHolder[int64, IThreadSafeEntity](bucketCnt, nil, false),
 		groups:   make(map[int64]map[int64]IThreadSafeEntity),
 		locks:    lock.NewLockManager(nil),
 		removing: make(map[int64]struct{}),

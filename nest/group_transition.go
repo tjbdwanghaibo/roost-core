@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/misc"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 const (
@@ -381,7 +381,7 @@ func requeueNestDispatch(mgr *NestMgr, msg *Msg, reason string) bool {
 	next.RemoteReleases = nil
 	next.PendingRequeues = msg.PendingRequeues + 1
 	msg.RetChan = nil
-	obs.IncCounter("nest.dispatch.requeue.total", obs.Labels{
+	metrics.IncCounter("nest.dispatch.requeue.total", metrics.Labels{
 		"reason": reason,
 		"type":   msg.Type.String(),
 	}, 1)
@@ -397,7 +397,7 @@ func observeEntityGroupTransition(req *GroupTransitionRequest, result string) {
 	if req == nil {
 		return
 	}
-	obs.IncCounter("nest.entity_group.transition.total", obs.Labels{
+	metrics.IncCounter("nest.entity_group.transition.total", metrics.Labels{
 		"state":  entityGroupTransitionStateName(req.State),
 		"result": result,
 	}, 1)
@@ -422,7 +422,7 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 	if msg == nil {
 		return func() {}
 	}
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 	prev, _ := currentNestDispatchMsgs.Load(gid)
 	currentNestDispatchMsgs.Store(gid, msg)
 	return func() {
@@ -435,7 +435,7 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 }
 
 func currentNestDispatchMsg() *Msg {
-	value, ok := currentNestDispatchMsgs.Load(misc.GoID())
+	value, ok := currentNestDispatchMsgs.Load(goroutine.GoID())
 	if !ok {
 		return nil
 	}

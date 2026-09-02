@@ -168,10 +168,10 @@ func TestSessionCloseFansOutToPendingAndWaiters(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond)
 	_ = s.Close()
-	if err := <-callErr; !errors.Is(err, session.ErrClosed) {
+	if err := awaitChan(t, callErr, "the pending call to fail"); !errors.Is(err, session.ErrClosed) {
 		t.Fatalf("pending call err = %v", err)
 	}
-	if err := <-waitErr; !errors.Is(err, session.ErrClosed) {
+	if err := awaitChan(t, waitErr, "the waiter to fail"); !errors.Is(err, session.ErrClosed) {
 		t.Fatalf("waiter err = %v", err)
 	}
 }
@@ -282,4 +282,20 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
 }

@@ -21,4 +21,4 @@ Subscribe 先安装 pending membership，再生成对应 profile 的完整 snaps
 
 ## 关闭与容量
 
-生产房间由 kit `RoomManager` 统一控制总房间数、全局 subject/subscriber 预算和空闲回收。房间销毁调用 `RoomReplication.Close(ctx)`；sink 必须提供有界队列、背压、session sequence、ACK/history 和 transport retry。Entity 清理会关闭唯一的 sync state，不存在 AsyncSync、observer sync 或兼容双写。
+生产房间由 kit `RoomManager` 统一控制总房间数、全局 subject/subscriber 预算和空闲回收。房间销毁调用 `RoomBroadcaster.Close(ctx)`；sink 必须提供有界队列、背压、session sequence、ACK/history 和 transport retry。Entity 清理会关闭唯一的 sync state，不存在 AsyncSync、observer sync 或兼容双写。

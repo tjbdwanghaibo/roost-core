@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/worker"
 )
 
@@ -66,10 +66,11 @@ type completionPump struct {
 
 // completionOrder is one entity's link in the completion chain.
 type completionOrder struct {
-	pump     *completionPump
-	entityID int64
-	prev     chan struct{}
-	mine     chan struct{}
+	pump        *completionPump
+	entityID    int64
+	prev        chan struct{}
+	mine        chan struct{}
+	releaseOnce sync.Once
 }
 
 // link reserves this transaction's place in its entity's completion order.
@@ -95,16 +96,24 @@ func (o *completionOrder) await() {
 
 // release publishes this completion as finished and drops the entity's chain
 // entry when no successor has been linked behind it.
+//
+// Idempotent on purpose: the link is taken before the pump decides whether it
+// can own the work, so on the degraded path the caller holds a release
+// obligation it must be able to discharge defensively without risking a double
+// close. An unreleased link would block every later completion for that entity
+// forever, with no timeout and no metric to show it.
 func (o *completionOrder) release() {
 	if o == nil {
 		return
 	}
-	close(o.mine)
-	o.pump.chainMu.Lock()
-	if o.pump.chains[o.entityID] == o.mine {
-		delete(o.pump.chains, o.entityID)
-	}
-	o.pump.chainMu.Unlock()
+	o.releaseOnce.Do(func() {
+		close(o.mine)
+		o.pump.chainMu.Lock()
+		if o.pump.chains[o.entityID] == o.mine {
+			delete(o.pump.chains, o.entityID)
+		}
+		o.pump.chainMu.Unlock()
+	})
 }
 
 func newCompletionPump(workers, queueCap int) *completionPump {
@@ -189,11 +198,14 @@ func (p *completionPump) submit(entry pipelinedCompletion) bool {
 //	                  in-worker wait and must call runInline once its ticket
 //	                  resolves. runInline honors the same completion order, so
 //	                  backpressure degrades latency — never ordering, never
-//	                  correctness.
+//	                  correctness. The caller must also `defer release()`:
+//	                  the chain link is already taken at this point, and if
+//	                  the path unwinds before runInline the entity's later
+//	                  completions would block forever.
 //
 // A deferred completion runs on a pool goroutine: no request context, no
 // guard scope, no entity locks held.
-func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEntity, tx *RollbackTx, ticket CommitTicket, handler string, ret any) (bool, func(error)) {
+func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEntity, tx *RollbackTx, ticket CommitTicket, handler string, ret any) (bool, func(error), func()) {
 	retChan := msg.RetChan
 	waitStart := time.Now()
 	entityID := completionEntityID(es, msg)
@@ -202,7 +214,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 	complete := func(ticketErr error) {
 		order.await()
 		defer order.release()
-		obs.ObserveDuration("nest.pipelined.durable_wait", obs.Labels{"handler": handler}, time.Since(waitStart))
+		metrics.ObserveDuration("nest.pipelined.durable_wait", metrics.Labels{"handler": handler}, time.Since(waitStart))
 		if ticketErr != nil {
 			// Same verdict as the in-worker path: indeterminate never rolls
 			// back — successors may already build on this state and WAL
@@ -211,7 +223,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 			if pump.fence != nil {
 				pump.fence(ticketErr)
 			}
-			obs.IncCounter("nest.pipelined.async_total", obs.Labels{"result": "indeterminate"}, 1)
+			metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "indeterminate"}, 1)
 			if retChan != nil {
 				retChan <- ticketErr
 			} else {
@@ -220,20 +232,20 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 			return
 		}
 		tx.Commit()
-		obs.IncCounter("nest.pipelined.async_total", obs.Labels{"result": "ok"}, 1)
+		metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "ok"}, 1)
 		if retChan != nil {
 			retChan <- ret
 		}
 	}
 	if pump.submit(pipelinedCompletion{ticket: ticket, entityID: entityID, complete: complete}) {
 		msg.deferredCompletion = true
-		return true, nil
+		return true, nil, nil
 	}
-	obs.IncCounter("nest.pipelined.async_total", obs.Labels{"result": "degraded"}, 1)
+	metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "degraded"}, 1)
 	// The caller replies through complete(), so the dispatch path must not
 	// also send RetChan.
 	msg.deferredCompletion = true
-	return false, complete
+	return false, complete, order.release
 }
 
 // completionEntityID picks the chain/pool key: the first non-nil (primary)

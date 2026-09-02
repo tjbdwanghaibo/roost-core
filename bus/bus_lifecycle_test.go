@@ -58,10 +58,33 @@ func (s *lifecycleSub) Unsubscribe() error {
 
 func (s *lifecycleSub) IsValid() bool { return s.valid }
 
-func TestBusStopBeforeStartIsSafe(t *testing.T) {
+// Stop on a never-started bus must be a bounded no-op that reports success,
+// and must stay final: a later Start must not resurrect it. The previous
+// version only called Stop twice and asserted nothing, so it would have
+// passed with StopWithContext returning an error or with Start reviving a
+// stopped bus.
+func TestBusStopBeforeStartIsSafeAndFinal(t *testing.T) {
 	b := New(&lifecycleClient{}, nil, nil, Config{Sid: 1, SvcType: "game"})
-	b.Stop()
-	b.Stop()
+
+	// Bounded: a Stop that blocks on a bus with nothing to drain is the bug
+	// this guards, and a bare call would surface it as a go test timeout.
+	done := make(chan error, 1)
+	go func() {
+		if err := b.StopWithContext(context.Background()); err != nil {
+			done <- err
+			return
+		}
+		// Idempotent: the second Stop must also return promptly.
+		done <- b.StopWithContext(context.Background())
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Stop on a never-started bus returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop blocked on a bus that was never started")
+	}
 }
 
 func TestBusStartFailureCleansPartialSubscriptions(t *testing.T) {
@@ -324,5 +347,87 @@ func TestBusStopDoesNotDeadlockHandlerAttemptingRPCRegistration(t *testing.T) {
 	}
 	if err := <-stopDone; err != nil {
 		t.Fatalf("StopWithContext: %v", err)
+	}
+}
+
+// blockingUnsubscribeSub stalls the teardown so a test can observe whether the
+// lifecycle lock is held while the Bus cleans up after a failed Start.
+type blockingUnsubscribeSub struct {
+	lifecycleSub
+	entered  chan struct{}
+	proceed  chan struct{}
+	oneShot  bool
+	unsubbed bool
+}
+
+func (s *blockingUnsubscribeSub) Unsubscribe() error {
+	if !s.unsubbed {
+		s.unsubbed = true
+		close(s.entered)
+		<-s.proceed
+	}
+	return nil
+}
+
+func (s *blockingUnsubscribeSub) IsValid() bool { return true }
+
+type blockingClient struct {
+	lifecycleClient
+	blocking *blockingUnsubscribeSub
+	calls    int
+}
+
+func (c *blockingClient) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	c.calls++
+	if c.calls == 1 {
+		return c.blocking, nil
+	}
+	return nil, errors.New("subscribe failed")
+}
+
+// Start-failure cleanup must not hold the lifecycle lock while tearing down.
+// A worker's business handler can call back into Handle/HandleRpc/Stop, all of
+// which take that lock, so waiting for teardown under it deadlocks with no
+// deadline — the same reason StopWithContext was restructured. This asserts
+// the property directly: while cleanup is stalled, a lock-taking registration
+// path must still make progress.
+func TestBusStartFailureCleanupDoesNotHoldLifecycleLock(t *testing.T) {
+	blocking := &blockingUnsubscribeSub{entered: make(chan struct{}), proceed: make(chan struct{})}
+	client := &blockingClient{blocking: blocking}
+	b := New(client, nil, nil, Config{Sid: 1, SvcType: "game"})
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- b.Start() }()
+
+	select {
+	case <-blocking.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup never reached the blocking unsubscribe")
+	}
+
+	// Cleanup is in progress. A path that takes lifeMu must not be blocked.
+	lockTaken := make(chan struct{})
+	go func() {
+		_ = b.HandleRpc("probe", func(*RpcContext) (any, error) { return nil, nil })
+		close(lockTaken)
+	}()
+	select {
+	case <-lockTaken:
+	case <-time.After(2 * time.Second):
+		close(blocking.proceed)
+		t.Fatal("lifecycle lock is held during Start-failure cleanup: a handler that re-enters registration would deadlock with no deadline")
+	}
+
+	close(blocking.proceed)
+	select {
+	case err := <-startDone:
+		if err == nil {
+			t.Fatal("expected start failure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start never returned")
+	}
+	if b.pool != nil || len(b.subs) != 0 {
+		t.Fatalf("start failure left state behind: pool=%v subs=%d", b.pool != nil, len(b.subs))
 	}
 }

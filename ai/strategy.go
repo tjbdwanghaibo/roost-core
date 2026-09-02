@@ -5,13 +5,13 @@ package ai
 import (
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/actionflow"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/taskflow"
 )
 
 type Context struct {
 	Owner      entity.IThreadSafeEntity
-	ActionList taskflow.ActionList
+	ActionList actionflow.ActionList
 	Now        time.Time
 }
 
@@ -19,8 +19,8 @@ type Strategy interface {
 	Name() string
 	Init(ctx *Context) error
 	Tick(ctx *Context, now time.Time)
-	OnActionEnd(ctx *Context, actionID int64, kind taskflow.ActionKind, reason taskflow.ActionReason)
-	OnMissionEnd(ctx *Context, mission taskflow.Mission, reason taskflow.ActionReason)
+	OnActionEnd(ctx *Context, actionID int64, kind actionflow.ActionKind, reason actionflow.ActionReason)
+	OnMissionEnd(ctx *Context, mission actionflow.Mission, reason actionflow.ActionReason)
 	CanStopByNext(next Strategy) bool
 }
 

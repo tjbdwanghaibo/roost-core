@@ -149,7 +149,7 @@ func TestStagedRampUpAndDown(t *testing.T) {
 	}
 	waitOnline(func(n int64) bool { return n >= 6 }, "stage ramp-up to 6")
 	waitOnline(func(n int64) bool { return n <= 1 }, "stage ramp-down to 1")
-	if err := <-runDone; err != nil {
+	if err := awaitChan(t, runDone, "the load-test run to finish"); err != nil {
 		t.Fatal(err)
 	}
 	if stats := r.Stats(); stats.Online != 0 {
@@ -238,5 +238,21 @@ func BenchmarkTenThousandBots(b *testing.B) {
 		if stats := r.Stats(); stats.Success != 10000 {
 			b.Fatalf("stats = %+v", stats)
 		}
+	}
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
 	}
 }

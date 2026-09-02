@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"
 )
 
@@ -116,7 +116,7 @@ func TestRedisListCountRawReturnsListLength(t *testing.T) {
 }
 
 func TestRedisListMetricsIncludeNamespace(t *testing.T) {
-	obs.DefaultRegistry().Reset()
+	metrics.DefaultRegistry().Reset()
 	redis := newFakeRedis()
 	log := NewRedisList(redis, Config{Namespace: "bus_dlq", MaxEntries: 10})
 
@@ -128,7 +128,7 @@ func TestRedisListMetricsIncludeNamespace(t *testing.T) {
 	}
 
 	var appendSeen, deleteSeen bool
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Labels["namespace"] != "bus_dlq" {
 			continue
 		}
@@ -140,12 +140,12 @@ func TestRedisListMetricsIncludeNamespace(t *testing.T) {
 		}
 	}
 	if !appendSeen || !deleteSeen {
-		t.Fatalf("namespace metrics missing append=%v delete=%v snapshot=%+v", appendSeen, deleteSeen, obs.Snapshot())
+		t.Fatalf("namespace metrics missing append=%v delete=%v snapshot=%+v", appendSeen, deleteSeen, metrics.Snapshot())
 	}
 }
 
 func TestRedisListMetricsRecordAppendErrors(t *testing.T) {
-	obs.DefaultRegistry().Reset()
+	metrics.DefaultRegistry().Reset()
 	redis := newFakeRedis()
 	redis.rpushErr = errors.New("redis unavailable")
 	log := NewRedisList(redis, Config{Namespace: "entitysync_failed", MaxEntries: 10})
@@ -154,7 +154,7 @@ func TestRedisListMetricsRecordAppendErrors(t *testing.T) {
 		t.Fatalf("AppendRaw should return redis error")
 	}
 
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name == "failurelog_append_total" &&
 			metric.Labels["namespace"] == "entitysync_failed" &&
 			metric.Labels["result"] == "error" &&
@@ -162,7 +162,7 @@ func TestRedisListMetricsRecordAppendErrors(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("append error metric missing: %+v", obs.Snapshot())
+	t.Fatalf("append error metric missing: %+v", metrics.Snapshot())
 }
 
 type fakeRedis struct {

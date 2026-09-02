@@ -2,7 +2,7 @@ package nest
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -174,7 +174,7 @@ func (t *Ticker) doTick() {
 	// the lock): callbacks registered after the engine started take effect on
 	// the next tick instead of being silently dropped by a construction-time snapshot.
 	for _, f := range snapshotTickCallbacks() {
-		misc.SafeFunc(func() {
+		goroutine.SafeFunc(func() {
 			f(msg)
 		})
 	}

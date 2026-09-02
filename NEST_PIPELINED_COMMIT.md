@@ -153,7 +153,7 @@ Checkpoint Mod。
 异步回包：dispatch 返回 deferred 结果、reply 路径注册 ticket 回调、worker 立即空出。侵入每条
 回包链路，预定立项标准："durable_wait 占 worker 忙时 > 30% 且加 worker 无法缓解"。
 
-试点台架：`cube-kit/nestwal/pilot_test.go`（`NESTWAL_PILOT=1` 运行；需要 core >= v1.5.1 的
+试点台架：kit 中已无独立的 pilot 台架，pipelined 路径由 `cube-kit/nestwal` 与 `cube-kit/dataengine` 的常规测试覆盖（需要 core >= v1.5.1 的
 `nest.pipelined.durable_wait` 埋点）。真实 nestwal 磁盘 fsync、真实 Nest worker 池、32 个
 闭环客户端、256 实体 + 25% 流量集中在一个热点实体。Apple M5 / APFS 实测（每场景 5s）：
 

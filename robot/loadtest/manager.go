@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/robot/runner"
 )
 
@@ -231,15 +231,15 @@ func New(cfg Config) *Manager {
 	if factory == nil {
 		shared := cfg.RunnerOptions
 		factory = func(runID string, profile string, cfg Profile) Runner {
-			opts := append([]runner.Option{runner.WithMetricLabels(obs.Labels{"profile": profile, "run": runID})}, shared...)
+			opts := append([]runner.Option{runner.WithMetricLabels(metrics.Labels{"profile": profile, "run": runID})}, shared...)
 			return runner.New(cfg.Run, opts...)
 		}
 	}
 	quantile := cfg.Quantile
 	if quantile == nil {
 		quantile = func(runID string, profile string, scenarioName string, q float64) time.Duration {
-			return obs.HistogramQuantile("robot.runner.scenario.cost",
-				obs.Labels{"profile": profile, "run": runID, "scenario": scenarioName, "result": "ok"}, q)
+			return metrics.HistogramQuantile("robot.runner.scenario.cost",
+				metrics.Labels{"profile": profile, "run": runID, "scenario": scenarioName, "result": "ok"}, q)
 		}
 	}
 	return &Manager{cfg: cfg, factory: factory, quantile: quantile, rootCtx: context.Background(), history: make([]RunSnapshot, 0, cfg.HistoryLimit)}
@@ -425,7 +425,7 @@ func (m *Manager) start(ctx context.Context, req StartRequest) (RunSnapshot, err
 		done:        make(chan struct{}),
 	}
 	m.active = rec
-	obs.SetGauge("robot.loadtest.active", obs.Labels{"profile": profileName}, 1)
+	metrics.SetGauge("robot.loadtest.active", metrics.Labels{"profile": profileName}, 1)
 	slog.Info("robot loadtest: run start accepted",
 		"run_id", rec.RunID, "profile", rec.Profile,
 		"scenario", profile.Run.Scenario, "count", profile.Run.Count,
@@ -477,9 +477,9 @@ func (m *Manager) execute(rec *runRecord) {
 	if snapshot.State == StateFailed {
 		result = "error"
 	}
-	obs.SetGauge("robot.loadtest.active", obs.Labels{"profile": rec.Profile}, 0)
-	obs.IncCounter("robot.loadtest.run.total", obs.Labels{"profile": rec.Profile, "result": result}, 1)
-	obs.ObserveDuration("robot.loadtest.run.duration", obs.Labels{"profile": rec.Profile, "result": result}, ended.Sub(start))
+	metrics.SetGauge("robot.loadtest.active", metrics.Labels{"profile": rec.Profile}, 0)
+	metrics.IncCounter("robot.loadtest.run.total", metrics.Labels{"profile": rec.Profile, "result": result}, 1)
+	metrics.ObserveDuration("robot.loadtest.run.duration", metrics.Labels{"profile": rec.Profile, "result": result}, ended.Sub(start))
 	slog.Info("robot loadtest: run done",
 		"run_id", rec.RunID, "profile", rec.Profile,
 		"state", snapshot.State, "stop_reason", snapshot.StopReason,

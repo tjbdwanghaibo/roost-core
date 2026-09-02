@@ -13,9 +13,19 @@ var ErrLoadWaitersExceeded = errors.New("cache: load waiter limit exceeded")
 type Loader[K comparable, V any] func(context.Context, K) (V, bool, error)
 
 type ReadThroughOptions struct {
-	LocalTTL          time.Duration
-	LoadTimeout       time.Duration
-	MaxWaitersPerKey  int
+	LocalTTL time.Duration
+	// LoadTimeout bounds one authoritative load, including the L2 read and
+	// the L2 back-fill performed on that path.
+	LoadTimeout      time.Duration
+	MaxWaitersPerKey int
+	// RemoteTimeout bounds the L2 call made by Set and Delete. It exists
+	// because those are the calls a caller cannot bound for itself: a
+	// write-through happens while the caller holds whatever lock serialises
+	// its publish, so an unresponsive L2 does not fail the write — it pins
+	// that lock for as long as the L2 stays unresponsive. Zero falls back to
+	// LoadTimeout; if both are zero the call is unbounded, which is only safe
+	// when the caller's own context carries a deadline.
+	RemoteTimeout     time.Duration
 	IgnoreRemoteError bool
 }
 
@@ -162,11 +172,32 @@ func (s *ReadThroughStore[K, V]) Set(ctx context.Context, value V) error {
 		return err
 	}
 	if s.remote != nil {
-		if err := s.remote.Set(ctx, value); err != nil && !s.opts.IgnoreRemoteError {
-			return err
+		remoteCtx, cancel := s.remoteContext(ctx)
+		defer cancel()
+		err := s.remote.Set(remoteCtx, value)
+		if err != nil {
+			s.remoteError.Add(1)
+			if !s.opts.IgnoreRemoteError {
+				return err
+			}
 		}
 	}
 	return s.setLocal(ctx, value)
+}
+
+// remoteContext bounds one L2 call. The returned cancel is always safe to
+// call and should be deferred: the bounded context is dead once the remote
+// call returns, so deferring costs nothing and keeps the context's timer from
+// outliving a panic in the store.
+func (s *ReadThroughStore[K, V]) remoteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.opts.RemoteTimeout
+	if timeout <= 0 {
+		timeout = s.opts.LoadTimeout
+	}
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (s *ReadThroughStore[K, V]) Delete(ctx context.Context, key K) error {
@@ -175,7 +206,14 @@ func (s *ReadThroughStore[K, V]) Delete(ctx context.Context, key K) error {
 	}
 	var joined error
 	if s.remote != nil {
-		joined = errors.Join(joined, s.remote.Delete(ctx, key))
+		remoteCtx, cancel := s.remoteContext(ctx)
+		defer cancel()
+		if err := s.remote.Delete(remoteCtx, key); err != nil {
+			s.remoteError.Add(1)
+			if !s.opts.IgnoreRemoteError {
+				joined = errors.Join(joined, err)
+			}
+		}
 	}
 	if s.local != nil {
 		joined = errors.Join(joined, s.local.Delete(ctx, key))

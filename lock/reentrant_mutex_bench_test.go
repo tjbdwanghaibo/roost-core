@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 )
 
 // spinReentrantMutex is the previous ReentrantMutex implementation, kept
@@ -20,7 +20,7 @@ type spinReentrantMutex struct {
 }
 
 func (rm *spinReentrantMutex) Lock() {
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 
 	rm.mu.Lock()
 	if rm.owner == gid {
@@ -41,7 +41,7 @@ func (rm *spinReentrantMutex) Lock() {
 }
 
 func (rm *spinReentrantMutex) Unlock() {
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 
 	rm.mu.Lock()
 	if rm.owner != gid {

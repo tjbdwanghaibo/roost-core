@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )

@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
 	"github.com/tjbdwanghaibo/cube-core/robot/transport"
 )
@@ -115,7 +115,7 @@ func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any
 	}
 	start := time.Now()
 	observe := func(resultLabel string) {
-		obs.ObserveHistogram("robot.session.call", obs.Labels{
+		metrics.ObserveHistogram("robot.session.call", metrics.Labels{
 			"msg":    strconv.FormatUint(uint64(reqID), 10),
 			"result": resultLabel,
 		}, time.Since(start))

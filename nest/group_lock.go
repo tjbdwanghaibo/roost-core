@@ -5,8 +5,8 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 	"github.com/tjbdwanghaibo/cube-core/lock"
-	"github.com/tjbdwanghaibo/cube-core/misc"
 )
 
 const entityLockGroupDispatchRetryMax = 4
@@ -31,7 +31,7 @@ func groupStoreOf(getter entity.Getter) entityGroupStore {
 var entityLockGroupScopes sync.Map // map[int64]*EntityLockGroupScope
 
 func CurrentEntityLockGroup() *EntityLockGroupScope {
-	if value, ok := entityLockGroupScopes.Load(misc.GoID()); ok {
+	if value, ok := entityLockGroupScopes.Load(goroutine.GoID()); ok {
 		if scope, ok := value.(*EntityLockGroupScope); ok {
 			return scope
 		}
@@ -90,17 +90,17 @@ func pushEntityLockGroupScope(groupID int64, store entityGroupStore) func() {
 	}
 	prev := CurrentEntityLockGroup()
 	scope := &EntityLockGroupScope{groupID: groupID, store: store, prev: prev}
-	entityLockGroupScopes.Store(misc.GoID(), scope)
+	entityLockGroupScopes.Store(goroutine.GoID(), scope)
 	return func() {
 		cur := CurrentEntityLockGroup()
 		if cur != scope {
-			entityLockGroupScopes.Delete(misc.GoID())
+			entityLockGroupScopes.Delete(goroutine.GoID())
 			return
 		}
 		if scope.prev != nil {
-			entityLockGroupScopes.Store(misc.GoID(), scope.prev)
+			entityLockGroupScopes.Store(goroutine.GoID(), scope.prev)
 		} else {
-			entityLockGroupScopes.Delete(misc.GoID())
+			entityLockGroupScopes.Delete(goroutine.GoID())
 		}
 		scope.prev = nil
 	}
@@ -297,7 +297,7 @@ func tryLockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadS
 		if ent == nil {
 			continue
 		}
-		if _, exists := guard.Entities()[ent.GUId()]; exists {
+		if guard.Guarded(ent.GUId()) {
 			continue
 		}
 		if !tryRequireDispatchEntity(guard, ent) {

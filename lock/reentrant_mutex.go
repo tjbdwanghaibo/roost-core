@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	"github.com/tjbdwanghaibo/cube-core/goroutine"
 )
 
 var _ Mutex = (*ReentrantMutex)(nil)
@@ -52,7 +52,7 @@ func (rm *ReentrantMutex) LockId() int64 {
 
 // Lock acquires the lock. The same goroutine can call this multiple times.
 func (rm *ReentrantMutex) Lock() {
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 	if rm.owner.Load() == gid {
 		rm.recursion++
 		return
@@ -65,7 +65,7 @@ func (rm *ReentrantMutex) Lock() {
 
 // Unlock releases the lock.
 func (rm *ReentrantMutex) Unlock() {
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 	if rm.owner.Load() != gid {
 		panic("unlock of unowned mutex")
 	}
@@ -83,7 +83,7 @@ func (rm *ReentrantMutex) Unlock() {
 
 // TryLock attempts to acquire the lock without blocking.
 func (rm *ReentrantMutex) TryLock() bool {
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 	if rm.owner.Load() == gid {
 		rm.recursion++
 		return true
@@ -105,7 +105,7 @@ func (rm *ReentrantMutex) LockWithTimeout(timeout time.Duration) bool {
 		return rm.TryLock()
 	}
 
-	gid := misc.GoID()
+	gid := goroutine.GoID()
 	if rm.owner.Load() == gid {
 		rm.recursion++
 		return true

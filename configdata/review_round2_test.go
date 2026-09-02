@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 )
 
 func TestBeforeApplyPanicRollsBackOnlyPrepared(t *testing.T) {

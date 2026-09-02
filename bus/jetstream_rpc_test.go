@@ -3,8 +3,8 @@ package bus
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"strings"
 	"sync"
 	"testing"
@@ -20,8 +20,8 @@ func rpcTestSuccessBytes(b *Bus, value any) []byte {
 }
 
 func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 	js := &captureJetStreamRPC{}
 	b := New(nil, nil, nil, Config{Sid: 2001, SvcType: "game"})
 	if err := b.EnableJetStreamRPC(js, JetStreamRPCConfig{RequestTTL: time.Second}); err != nil {
@@ -73,8 +73,8 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 }
 
 func TestJetStreamRPCRecordsTimeoutAndClearsPendingGauge(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 	js := &captureJetStreamRPC{}
 	b := New(nil, nil, nil, Config{Sid: 2001, SvcType: "game"})
 	if err := b.EnableJetStreamRPC(js, JetStreamRPCConfig{CallTimeout: 10 * time.Millisecond, RequestTTL: time.Second}); err != nil {
@@ -96,8 +96,8 @@ func TestJetStreamRPCRecordsTimeoutAndClearsPendingGauge(t *testing.T) {
 }
 
 func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 	js := &captureJetStreamRPC{}
 	b := New(nil, nil, nil, Config{Sid: 2001, SvcType: "game"})
 	if err := b.EnableJetStreamRPC(js, JetStreamRPCConfig{CallTimeout: time.Second, RequestTTL: time.Second}); err != nil {
@@ -138,7 +138,7 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 		var resp struct{}
 		blockingDone <- b.CallReliable(context.Background(), "rank", "rank.GetTop", map[string]int64{"player_id": 1001}, &resp)
 	}()
-	<-blockingPublished
+	awaitChan(t, blockingPublished, "the blocking call to publish")
 
 	var resp struct{}
 	if err := b.CallReliable(context.Background(), "mail", "mail.Summary", map[string]int64{"player_id": 1001}, &resp); err != nil {
@@ -152,14 +152,14 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 	}
 
 	close(releaseBlocking)
-	if err := <-blockingDone; err != nil {
+	if err := awaitChan(t, blockingDone, "the blocking call to return"); err != nil {
 		t.Fatalf("rank CallReliable: %v", err)
 	}
 }
 
 func TestJetStreamRPCHandleRpcPublishesResponseAfterHandler(t *testing.T) {
-	obs.DefaultRegistry().Reset()
-	t.Cleanup(func() { obs.DefaultRegistry().Reset() })
+	metrics.DefaultRegistry().Reset()
+	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 	js := &captureJetStreamRPC{}
 	b := New(nil, nil, nil, Config{Sid: 5001, SvcType: "mail"})
 	if err := b.EnableJetStreamRPC(js, JetStreamRPCConfig{RequestTTL: time.Second}); err != nil {
@@ -443,7 +443,7 @@ func (captureJetStreamSub) Closed() <-chan struct{} {
 var _ fnats.IJetStream = (*captureJetStreamRPC)(nil)
 
 func busMetricValue(name string, labels map[string]string) int64 {
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name != name {
 			continue
 		}
@@ -459,4 +459,20 @@ func busMetricValue(name string, labels map[string]string) int64 {
 		}
 	}
 	return 0
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
 }

@@ -187,7 +187,13 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 	return &RemoteSnapshotCache{
 		local: local,
 		layered: cache.NewReadThroughStore(local, l2, nil, storeCfg, cache.ReadThroughOptions{
-			LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters, IgnoreRemoteError: true,
+			LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters,
+			// Publish holds a publish shard lock across the L2 write (single
+			// point publish is what makes the version CAS meaningful), so the
+			// L2 call has to be bounded or an unresponsive Redis pins that
+			// shard for every entity hashing to it. IgnoreRemoteError already
+			// makes the degraded outcome the right one: skip L2, keep L1.
+			RemoteTimeout: cfg.LoadTimeout, IgnoreRemoteError: true,
 		}),
 		waiters:     make(map[RemoteSnapshotKey][]remoteVersionWaiter),
 		maxWaiters:  cfg.MaxWaiters,

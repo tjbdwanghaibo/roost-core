@@ -8,10 +8,10 @@ import (
 	"reflect"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 type RollbackPolicy uint8
@@ -728,7 +728,15 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			// below when the pump is saturated.
 			if ticket != nil && completions != nil {
 				if msg := currentNestDispatchMsg(); msg != nil {
-					deferred, runInline := prepareCompletion(completions, msg, es, tx, ticket, handler, ret)
+					deferred, runInline, releaseOrder := prepareCompletion(completions, msg, es, tx, ticket, handler, ret)
+					if !deferred {
+						// The chain link is already taken. Discharge it even
+						// if this path unwinds before runInline, otherwise
+						// every later completion for this entity blocks
+						// forever. release is idempotent, so runInline's own
+						// release still wins the normal case.
+						defer releaseOrder()
+					}
 					releaseLocks()
 					if deferred {
 						return
@@ -754,7 +762,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 				// help, move the wait off the worker (async completion).
 				waitStart := time.Now()
 				<-ticket.Done()
-				obs.ObserveDuration("nest.pipelined.durable_wait", obs.Labels{"handler": handler}, time.Since(waitStart))
+				metrics.ObserveDuration("nest.pipelined.durable_wait", metrics.Labels{"handler": handler}, time.Since(waitStart))
 				if ticketErr := ticket.Err(); ticketErr != nil {
 					err = ticketErr
 					tx.abandon()

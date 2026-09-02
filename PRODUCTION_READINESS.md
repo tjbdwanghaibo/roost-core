@@ -45,7 +45,7 @@
 - 房间默认硬限制 100 subject/100 subscriber。`RoomManager` 同时限制房间总数、全局 subject/subscriber 预算并回收空闲房间；应用不得自行维护无上限的房间 map。
 - 单个慢客户端只淘汰自己的 session；共享 transport sink 按房间分片，不让一个房间阻塞全部房间。框架生命周期回调使用固定 worker 和有界队列，退房、断线和房间销毁会释放 sequence/baseline/LOD 状态。
 - UDP 控制面使用固定长度带校验的 ACK/Resync 报文，包含 room、epoch、tick 和单调 sequence。过期 epoch、回退 sequence、非法 checksum 均被拒绝。
-- `cube-kit/replication.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
+- `cube-kit/nettransport.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
 
 ## 6. Saga
 

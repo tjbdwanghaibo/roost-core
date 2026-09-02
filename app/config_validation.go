@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -65,6 +66,7 @@ func validateProductionServiceConfig(errs *[]error, cfg *viper.Viper, serverType
 	if !isProductionServiceConfig(cfg) {
 		return
 	}
+	validateProductionOpsExposure(errs, cfg)
 	switch strings.ToLower(strings.TrimSpace(serverType)) {
 	case "game":
 		if !cfg.GetBool("player.login_auth_required") {
@@ -182,6 +184,41 @@ func validateProductionSecret(errs *[]error, cfg *viper.Viper, key string) {
 	if isUnsafeProductionSecret(cfg.GetString(key)) {
 		*errs = append(*errs, fmt.Errorf("config: production requires non-dev %s", key))
 	}
+}
+
+// validateProductionOpsExposure keeps the ops endpoint off public interfaces
+// in production. Loopback is only the default, and the endpoint carries both
+// an unauthenticated /metrics and — when admin is enabled — the ability to run
+// every registered admin command, so binding it to every interface has to be
+// a deliberate, declared decision rather than a forgotten default.
+func validateProductionOpsExposure(errs *[]error, cfg *viper.Viper) {
+	if !cfg.GetBool("ops.enabled") {
+		return
+	}
+	addr := strings.TrimSpace(cfg.GetString("ops.addr"))
+	if addr == "" || isLoopbackListenAddr(addr) || cfg.GetBool("ops.allow_public_addr") {
+		return
+	}
+	*errs = append(*errs, fmt.Errorf(
+		"config: production ops.addr %q is not loopback; bind 127.0.0.1 or set ops.allow_public_addr=true after putting the endpoint behind an authenticated proxy", addr))
+}
+
+// isLoopbackListenAddr reports whether a listen address is reachable only from
+// the host. A bare port or an empty/wildcard host means "every interface".
+func isLoopbackListenAddr(addr string) bool {
+	host := addr
+	if parsed, _, err := net.SplitHostPort(addr); err == nil {
+		host = parsed
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func isProductionServiceConfig(cfg *viper.Viper) bool {

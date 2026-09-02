@@ -7,13 +7,105 @@ import (
 	"time"
 )
 
-func TestReentrantMutex_Basic(t *testing.T) {
+// The promise of reentrancy is not "Lock twice does not deadlock" — the old
+// test only proved that, and would have passed with a plain sync.Mutex
+// replaced by a no-op. The promise is that the inner Unlock does NOT release
+// the lock: recursion has to unwind fully before another goroutine gets in.
+func TestReentrantMutexInnerUnlockDoesNotReleaseTheLock(t *testing.T) {
 	mu := NewReentrantMutex(1)
 
 	mu.Lock()
-	mu.Lock() // reentrant
+	mu.Lock() // reentrant: recursion 2
 	mu.Unlock()
+
+	// Still held: another goroutine must not be able to take it.
+	if acquiredElsewhere(t, mu) {
+		t.Fatal("inner Unlock released the lock; recursion must unwind to zero first")
+	}
+
+	mu.Unlock() // recursion 0 -> released
+	if !acquiredElsewhere(t, mu) {
+		t.Fatal("lock was not released after the outer Unlock")
+	}
+}
+
+// acquiredElsewhere reports whether a different goroutine can take mu. It uses
+// TryLock so the probe is bounded — a blocking Lock would turn a failure into
+// a go test timeout with no message.
+func acquiredElsewhere(t *testing.T, mu *ReentrantMutex) bool {
+	t.Helper()
+	result := make(chan bool, 1)
+	go func() {
+		if mu.TryLock() {
+			mu.Unlock()
+			result <- true
+			return
+		}
+		result <- false
+	}()
+	select {
+	case got := <-result:
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatal("TryLock from another goroutine never returned")
+		return false
+	}
+}
+
+// TryLock must be reentrant for the owner and refuse everyone else, since nest
+// uses it to decide between taking a lock and deferring the whole dispatch.
+func TestReentrantMutexTryLockIsReentrantForOwnerOnly(t *testing.T) {
+	mu := NewReentrantMutex(1)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !mu.TryLock() {
+		t.Fatal("TryLock refused the goroutine that already owns the lock")
+	}
+	mu.Unlock() // undo the reentrant acquisition, still held once
+
+	if acquiredElsewhere(t, mu) {
+		t.Fatal("TryLock succeeded for a goroutine that does not own the lock")
+	}
+}
+
+// Unlocking a mutex this goroutine does not hold is a programming error the
+// framework deliberately turns into a panic rather than silent corruption of
+// the lock-order bookkeeping.
+func TestReentrantMutexUnlockWithoutOwnershipPanics(t *testing.T) {
+	mu := NewReentrantMutex(1)
+
+	// Never locked at all.
+	assertPanics(t, "unlock of a never-locked mutex", func() { mu.Unlock() })
+
+	// Locked, fully unlocked, then unlocked once more.
+	mu.Lock()
 	mu.Unlock()
+	assertPanics(t, "unlock after the lock was already released", func() { mu.Unlock() })
+
+	// Held by another goroutine.
+	mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		assertPanics(t, "unlock from a non-owner goroutine", func() { mu.Unlock() })
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("non-owner Unlock neither panicked nor returned")
+	}
+	mu.Unlock()
+}
+
+func assertPanics(t *testing.T, what string, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Errorf("%s did not panic", what)
+		}
+	}()
+	fn()
 }
 
 func TestReentrantMutex_TryLock(t *testing.T) {

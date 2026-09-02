@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/fctx"
 )
 
 type RemoteAcquireMode = entity.RemoteAcquireMode
@@ -97,7 +97,7 @@ func prepareRemoteSnapshots(msg *Msg, resolver RemoteSnapshotResolver, manager e
 	if len(snapshots) == 0 {
 		return nil
 	}
-	c := ctx.CurrentContext()
+	c := fctx.CurrentContext()
 	if c == nil {
 		return nil
 	}
@@ -118,7 +118,7 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 		}
 	}
 	baseCtx := context.Background()
-	if current := ctx.CurrentContext(); current != nil && current.Base != nil {
+	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		baseCtx = current.Base
 	}
 	if manager == nil {
@@ -208,7 +208,7 @@ func MustRemote[T any](key RemoteKey[T]) T {
 
 func remoteSnapshot[T any](alias string) (T, bool) {
 	var zero T
-	c := ctx.CurrentContext()
+	c := fctx.CurrentContext()
 	if c == nil {
 		return zero, false
 	}

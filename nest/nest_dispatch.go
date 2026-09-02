@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/ctx"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/fctx"
 	"github.com/tjbdwanghaibo/cube-core/hotcode"
 	flog "github.com/tjbdwanghaibo/cube-core/log"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	"log/slog"
 	"runtime"
 	"sort"
@@ -229,7 +229,7 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		releaseGuardScope()
 		msg.runAfterUnlock()
 		commitCtx := context.Background()
-		if current := ctx.CurrentContext(); current != nil && current.Base != nil {
+		if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 			commitCtx = current.Base
 		}
 		if remoteErr := msg.finishRemoteWriteBatch(commitCtx, err); remoteErr != nil {
@@ -271,7 +271,7 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		err = fenced
 		return
 	}
-	if current := ctx.CurrentContext(); current != nil && current.Base != nil {
+	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		select {
 		case <-current.Base.Done():
 			err = errors.Join(ErrNestCanceled, current.Base.Err())
@@ -309,7 +309,7 @@ func observeDispatch(msg *Msg, err error, cost time.Duration) {
 	if msg == nil {
 		return
 	}
-	labels := obs.Labels{
+	labels := metrics.Labels{
 		"handler": msg.Name,
 		"type":    msg.Type.String(),
 	}
@@ -318,10 +318,10 @@ func observeDispatch(msg *Msg, err error, cost time.Duration) {
 	} else {
 		labels["result"] = "ok"
 	}
-	obs.IncCounter("nest.dispatch.total", labels, 1)
-	obs.ObserveDuration("nest.dispatch.cost", labels, cost)
+	metrics.IncCounter("nest.dispatch.total", labels, 1)
+	metrics.ObserveDuration("nest.dispatch.cost", labels, cost)
 	if msg.HasRemote {
-		obs.IncCounter("nest.dispatch.remote.total", labels, 1)
+		metrics.IncCounter("nest.dispatch.remote.total", labels, 1)
 	}
 	if shouldLogSlowDispatch(cost) {
 		flog.NewELog().Title("nest").Warn("slow dispatch",
@@ -598,15 +598,15 @@ func emitNestTraceEventInfo(info nestTraceEventInfo, event string, result string
 	if !info.Active {
 		return
 	}
-	labels := obs.Labels{
+	labels := metrics.Labels{
 		"handler": info.Handler,
 		"type":    info.Type,
 		"event":   event,
 		"result":  result,
 	}
-	obs.IncCounter("nest.trace.events.total", labels, 1)
+	metrics.IncCounter("nest.trace.events.total", labels, 1)
 	if cost > 0 {
-		obs.ObserveDuration("nest.trace.cost", labels, cost)
+		metrics.ObserveDuration("nest.trace.cost", labels, cost)
 	}
 	flog.NewELog().Title("nest_trace").Info("nest trace event",
 		"trace_id", info.TraceID,
@@ -654,7 +654,7 @@ func logAsyncDispatchError(msg *Msg, err error) {
 }
 
 func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
-	meta := ctx.RequestMeta{Source: "nest"}
+	meta := fctx.RequestMeta{Source: "nest"}
 	if msg != nil {
 		meta.Handler = msg.Name
 	}
@@ -662,18 +662,18 @@ func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
 	if mgr != nil && mgr.ticker != nil {
 		frame = mgr.ticker.CurrentTick()
 	}
-	var opts []ctx.Option
+	var opts []fctx.Option
 	if msg != nil && msg.Context.Valid {
-		opts = append(opts, ctx.WithSnapshot(msg.Context))
+		opts = append(opts, fctx.WithSnapshot(msg.Context))
 	}
-	c, release := ctx.NewContext(opts...)
+	c, release := fctx.NewContext(opts...)
 	c.MergeMeta(meta)
 	c.Frame = frame
 	return release
 }
 
 func nestBaseContext() context.Context {
-	if current := ctx.CurrentContext(); current != nil && current.Base != nil {
+	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		return current.Base
 	}
 	return context.Background()
@@ -866,9 +866,9 @@ func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThre
 // handler is doing slow work inside its entity locks" (the exact cost class
 // DurabilityPipelined exists to remove).
 func (mgr *NestMgr) observeLockHold(handler string, hold time.Duration) {
-	obs.ObserveDuration("nest.handler.lock_hold", obs.Labels{"handler": handler}, hold)
+	metrics.ObserveDuration("nest.handler.lock_hold", metrics.Labels{"handler": handler}, hold)
 	if threshold := mgr.slowLockThreshold; threshold > 0 && hold >= threshold {
-		obs.IncCounter("nest.handler.lock_hold.slow.total", obs.Labels{"handler": handler}, 1)
+		metrics.IncCounter("nest.handler.lock_hold.slow.total", metrics.Labels{"handler": handler}, 1)
 		slog.Warn("nest handler held entity locks beyond threshold", "handler", handler, "hold", hold, "threshold", threshold)
 	}
 }
@@ -881,13 +881,13 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 	if guard == nil {
 		return nil, ErrLockTimeout
 	}
-	useTryLock := len(guard.Entities()) > 0 && !guard.CheckContainAllLock(lockEs)
+	useTryLock := guard.GuardedCount() > 0 && !guard.CheckContainAllLock(lockEs)
 	acquired := make([]entity.IThreadSafeEntity, 0, len(lockEs))
 	for _, e := range lockEs {
 		if e == nil {
 			continue
 		}
-		if _, exists := guard.Entities()[e.GUId()]; exists {
+		if guard.Guarded(e.GUId()) {
 			continue
 		}
 		ok := false
@@ -914,7 +914,7 @@ func tryRequireDispatchEntity(guard *entity.EntityGuard, ent entity.IThreadSafeE
 	if gID == 0 || mu == nil {
 		return false
 	}
-	if _, exists := guard.Entities()[gID]; exists {
+	if guard.Guarded(gID) {
 		return true
 	}
 	if !mu.TryLock() {
@@ -1050,7 +1050,7 @@ func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) erro
 		return ErrRemoteBroadcastUnsupported
 	}
 	prepareCtx := context.Background()
-	if current := ctx.CurrentContext(); current != nil && current.Base != nil {
+	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		prepareCtx = current.Base
 	}
 	if manager == nil {

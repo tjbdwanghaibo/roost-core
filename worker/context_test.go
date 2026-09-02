@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 )
 
 type contextTestTask struct {

@@ -8,7 +8,7 @@ type ServiceName string
 
 const (
 	ModHealth         ModName = "health"
-	ModObs            ModName = "obs"
+	ModMetrics        ModName = "metrics"
 	ModAdmin          ModName = "admin"
 	ModAdminMetadata  ModName = "admin.metadata"
 	ModLifecycle      ModName = "lifecycle"

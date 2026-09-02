@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"log/slog"
 	"runtime/debug"
 	"strings"
@@ -381,7 +381,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		req.MsgName = b.extractRpcMethod(msg.Subject)
 	}
 	if msg.NumDelivered > 0 {
-		obs.SetGauge("bus_rpc_consumer_delivery", obs.Labels{
+		metrics.SetGauge("bus_rpc_consumer_delivery", metrics.Labels{
 			"transport": "jetstream",
 			"method":    req.MsgName,
 		}, int64(msg.NumDelivered))
@@ -548,10 +548,10 @@ func (b *Bus) addJetStreamRPCPending(method string, delta int64) {
 		methodValue = 0
 		methodCounter.Store(0)
 	}
-	obs.SetGauge("bus_rpc_pending_total", obs.Labels{
+	metrics.SetGauge("bus_rpc_pending_total", metrics.Labels{
 		"transport": "jetstream",
 	}, total)
-	obs.SetGauge("bus_rpc_pending", obs.Labels{
+	metrics.SetGauge("bus_rpc_pending", metrics.Labels{
 		"transport": "jetstream",
 		"method":    method,
 	}, methodValue)
@@ -571,7 +571,7 @@ func (b *Bus) jetStreamRPCMethodPendingCounter(method string) *atomic.Int64 {
 }
 
 func (b *Bus) recordJetStreamRPCCall(method string, result string, reason string) {
-	labels := obs.Labels{
+	labels := metrics.Labels{
 		"transport": "jetstream",
 		"method":    method,
 		"result":    result,
@@ -579,11 +579,11 @@ func (b *Bus) recordJetStreamRPCCall(method string, result string, reason string
 	if reason != "" {
 		labels["reason"] = reason
 	}
-	obs.IncCounter("bus_rpc_call_total", labels, 1)
+	metrics.IncCounter("bus_rpc_call_total", labels, 1)
 }
 
 func (b *Bus) recordJetStreamRPCRequest(method string, result string) {
-	obs.IncCounter("bus_rpc_request_total", obs.Labels{
+	metrics.IncCounter("bus_rpc_request_total", metrics.Labels{
 		"transport": "jetstream",
 		"method":    method,
 		"result":    result,

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 )
 
 // inPlaceFakeRedis adds the optional in-place list capabilities on top of
@@ -99,13 +99,13 @@ func TestDeleteRawUsesInPlaceLRemWithoutDelete(t *testing.T) {
 }
 
 func TestScriptFallbackIsCountedAsDegraded(t *testing.T) {
-	obs.DefaultRegistry().Reset()
+	metrics.DefaultRegistry().Reset()
 	redis := newFakeRedis() // Eval returns (nil, nil): the script path never engages
 	log := NewRedisList(redis, Config{Namespace: "combat", MaxEntries: 10})
 	if err := log.AppendRaw(context.Background(), "failure:{x}", []byte("one")); err != nil {
 		t.Fatalf("AppendRaw: %v", err)
 	}
-	for _, metric := range obs.Snapshot() {
+	for _, metric := range metrics.Snapshot() {
 		if metric.Name == "failurelog_degraded_total" &&
 			metric.Labels["namespace"] == "combat" &&
 			metric.Labels["op"] == "append" &&
@@ -113,5 +113,5 @@ func TestScriptFallbackIsCountedAsDegraded(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("degraded metric missing: %+v", obs.Snapshot())
+	t.Fatalf("degraded metric missing: %+v", metrics.Snapshot())
 }
