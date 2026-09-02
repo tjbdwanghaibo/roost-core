@@ -152,7 +152,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		RetryMin:      duration(cfg.GetDuration("dataengine.outbox.retry_min"), time.Second),
 		RetryMax:      duration(cfg.GetDuration("dataengine.outbox.retry_max"), time.Minute),
 		MaxPending:    cfg.GetInt64("dataengine.outbox.max_pending"), MaxOldestAge: cfg.GetDuration("dataengine.outbox.max_oldest_age"),
-		OnHardLimit: mod.onFatal,
+		BacklogInterval: duration(cfg.GetDuration("dataengine.outbox.backlog_interval"), time.Second),
+		OnHardLimit:     mod.onFatal,
 	}
 	prefix := strings.Trim(strings.TrimSpace(cfg.GetString("dataengine.effects.subject_prefix")), ".")
 	if prefix == "" {
@@ -396,7 +397,7 @@ func (mod *Mod) onFatal(err error) {
 	}
 }
 
-func (mod *Mod) checkHealth(context.Context) health.Result {
+func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 	if mod == nil {
 		return health.Result{Status: health.StatusFail, Message: "not initialized"}
 	}
@@ -412,6 +413,13 @@ func (mod *Mod) checkHealth(context.Context) health.Result {
 	}
 	if err := errors.Join(runtime.Projector.Healthy(), runtime.Outbox.Healthy()); err != nil {
 		return health.Result{Status: health.StatusFail, Message: "unhealthy", Err: err}
+	}
+	// The backlog gauge is sampled on an interval by the claim loop, so a
+	// health probe takes its own reading rather than reporting one that may be
+	// a whole interval stale. A probe failure is not a health failure on its
+	// own — the last known values still get reported.
+	if err := runtime.Outbox.RefreshBacklog(ctx); err != nil {
+		slog.Warn("dataengine: outbox backlog probe failed during health check", "err", err)
 	}
 	walStats, projectorStats, outboxStats := runtime.WAL.Stats(), runtime.Projector.Stats(), runtime.Outbox.Stats()
 	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wal_unacked=%d wal_oldest=%s projection_failures=%d outbox_pending=%d outbox_oldest=%s publish_failures=%d fatal_projection_conflicts=%d", projectorStats.WALUnacked, walStats.OldestUnackedAge, projectorStats.ProjectionFailures, outboxStats.Pending, outboxStats.OldestAge, outboxStats.PublishFailures, projectorStats.FatalProjectionConflicts)}

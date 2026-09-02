@@ -342,7 +342,7 @@ func TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure(t *testi
 		t.Fatal(err)
 	}
 	projector.cancel()
-	<-projector.done
+	awaitChan(t, projector.done, "the projector to finish its pass")
 	t.Cleanup(func() { _ = projector.Close(context.Background()) })
 	for i := range records {
 		if _, err := wal.Append(context.Background(), records[i]); err != nil {
@@ -386,7 +386,7 @@ func stoppedProjectorWithRecords(t *testing.T, store ProjectionStore, records []
 		t.Fatal(err)
 	}
 	projector.cancel()
-	<-projector.done
+	awaitChan(t, projector.done, "the projector to finish its pass")
 	t.Cleanup(func() { _ = projector.Close(context.Background()) })
 	for i := range records {
 		if _, err := wal.Append(context.Background(), records[i]); err != nil {
@@ -671,4 +671,98 @@ func TestProjectorAckFailureOverridesHeldReplaySentinel(t *testing.T) {
 		t.Fatalf("events=%v", store.events)
 	}
 	assertWALReplayCount(t, wal, len(records))
+}
+
+// deferringBatchStore defers the first batch it is asked to project, exactly
+// as MongoStore.ProjectBatch does when it cannot classify its own outcome
+// (an already-applied record replayed after a lost WAL acknowledgement looks
+// identical to a version conflict).
+type deferringBatchStore struct {
+	events     []string
+	deferBatch bool
+	projectErr map[coredata.TransactionID]error
+}
+
+func (store *deferringBatchStore) Project(_ context.Context, record coredata.CommitRecord) error {
+	store.events = append(store.events, "project:"+record.ID.String())
+	return store.projectErr[record.ID]
+}
+
+func (store *deferringBatchStore) ProjectBatch(_ context.Context, records []coredata.CommitRecord) error {
+	store.events = append(store.events, fmt.Sprintf("batch:%d", len(records)))
+	if store.deferBatch {
+		store.deferBatch = false
+		return fmt.Errorf("%w: batch matched=1 expected=%d", ErrProjectionBatchNeedsPerRecord, len(records))
+	}
+	return nil
+}
+
+// A deferral must never fence the projector: the pass has to fall back to the
+// single-record path, apply everything and acknowledge the whole segment.
+// Before the fix the batch declared ErrProjectionConflict here, which is fatal
+// — so a benign replay stopped the projector and, because the same batch was
+// replayed on every restart, the service could not boot again.
+func TestProjectorFallsBackToPerRecordWhenBatchDefers(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false)}
+	store := &deferringBatchStore{deferBatch: true}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+
+	processed, err := projector.replayPass(context.Background())
+	if err != nil {
+		t.Fatalf("deferral must not fail the pass: %v", err)
+	}
+	if processed != len(records) {
+		t.Fatalf("processed=%d, want %d", processed, len(records))
+	}
+	want := []string{"batch:3", "project:" + records[0].ID.String(), "project:" + records[1].ID.String(), "project:" + records[2].ID.String()}
+	if !slices.Equal(store.events, want) {
+		t.Fatalf("events=%v, want %v", store.events, want)
+	}
+	if projector.Stats().FatalProjectionConflicts != 0 {
+		t.Fatalf("deferral counted as a fatal conflict: %+v", projector.Stats())
+	}
+	if err := projector.Healthy(); err != nil {
+		t.Fatalf("projector unhealthy after a deferral: %v", err)
+	}
+	// The whole segment must be acknowledged, so a restart replays nothing.
+	assertWALReplayIDs(t, wal, nil)
+}
+
+// The deferral only changes who classifies the outcome, not what a genuine
+// conflict means: once the single-record path reports one, it is still fatal.
+func TestProjectorPerRecordFallbackStillFencesRealConflict(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false)}
+	store := &deferringBatchStore{
+		deferBatch: true,
+		projectErr: map[coredata.TransactionID]error{
+			records[1].ID: fmt.Errorf("%w: stale base version", ErrProjectionConflict),
+		},
+	}
+	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
+
+	if _, err := projector.replayPass(context.Background()); !errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("err=%v, want ErrProjectionConflict", err)
+	}
+	if projector.Stats().FatalProjectionConflicts != 1 {
+		t.Fatalf("real conflict was not fenced: %+v", projector.Stats())
+	}
+	// The first record applied and was acknowledged; the conflicting one stays
+	// in the log for the operator to inspect.
+	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[1].ID})
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
 }

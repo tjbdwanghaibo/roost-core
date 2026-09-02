@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -121,7 +122,12 @@ type repositoryStore struct {
 	mu           sync.Mutex
 	docs         map[string][]coredata.RawDocument
 	transactions atomic.Int32
+	attempts     atomic.Int32
 	delay        time.Duration
+	// transientRetries reproduces ISession.WithTransaction's documented
+	// automatic retry: the driver re-invokes the callback on a transient
+	// transaction error, so every callback body must be idempotent.
+	transientRetries int
 }
 
 func (store *repositoryStore) ReadConsistent(ctx context.Context, read func(context.Context) error) error {
@@ -129,7 +135,12 @@ func (store *repositoryStore) ReadConsistent(ctx context.Context, read func(cont
 	if store.delay > 0 {
 		time.Sleep(store.delay)
 	}
-	return read(ctx)
+	var err error
+	for attempt := 0; attempt <= store.transientRetries; attempt++ {
+		store.attempts.Add(1)
+		err = read(ctx)
+	}
+	return err
 }
 func (store *repositoryStore) Load(_ context.Context, spec coredata.LoadSpec) ([]coredata.RawDocument, error) {
 	store.mu.Lock()
@@ -315,5 +326,66 @@ func TestEntityRepositoryMigratesThenReloadsBeforePublishing(t *testing.T) {
 	profile := loaded.(*dataEngineRepositoryEntity).daos["repository_profile"]
 	if profile.version != 5 || store.transactions.Load() != 2 {
 		t.Fatalf("profile version=%d snapshot transactions=%d", profile.version, store.transactions.Load())
+	}
+}
+
+// A transient transaction retry re-invokes the read callback. Loading must be
+// idempotent across attempts: before the fix, `loaded` accumulated outside the
+// callback, so the second attempt hit the duplicate-resource guard and a
+// perfectly healthy aggregate was reported as corrupt — exactly during the
+// failovers and snapshot hiccups that cause retries in the first place.
+func TestEntityRepositoryLoadIsIdempotentAcrossTransactionRetries(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	id, _ := entity.BuildEntityID(4711, dataEngineRepositoryKind)
+	docs := map[string][]coredata.RawDocument{
+		"repository_profile":   {repositoryRaw(t, "repository_profile", id, 7)},
+		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
+	}
+	for _, retries := range []int{0, 1, 3} {
+		store := &repositoryStore{docs: docs, transientRetries: retries}
+		repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind)
+		if err != nil {
+			t.Fatalf("retries=%d: %v", retries, err)
+		}
+		loaded := value.(*dataEngineRepositoryEntity)
+		if len(loaded.daos) != 2 {
+			t.Fatalf("retries=%d: aggregate has %d DAOs, want 2", retries, len(loaded.daos))
+		}
+		if got := int(store.attempts.Load()); got != retries+1 {
+			t.Fatalf("retries=%d: callback invocations=%d", retries, got)
+		}
+	}
+}
+
+// The remote version vector is also accumulated inside the callback, so a
+// retry must not leave a stale envelope behind for a non-remote aggregate.
+func TestEntityRepositoryRemoteVectorDoesNotLeakAcrossRetries(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	id, _ := entity.BuildEntityID(4712, dataEngineRepositoryKind)
+	profile := repositoryRaw(t, "repository_profile", id, 7)
+	profile.Enveloped = true
+	profile.Version = 42
+	profile.MarkerEpoch, profile.LockFence, profile.RouteEpoch = 1, 2, 3
+	store := &repositoryStore{transientRetries: 2, docs: map[string][]coredata.RawDocument{
+		"repository_profile":   {profile},
+		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
+	}}
+	repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The enveloped payload is not a valid persisted document for this kind,
+	// so the load must fail cleanly on every attempt rather than accumulating.
+	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); err != nil {
+		if !errors.Is(err, ErrEntityAggregateCorrupt) {
+			t.Fatalf("unexpected error shape: %v", err)
+		}
+		if strings.Contains(err.Error(), "duplicate DAO resource") {
+			t.Fatalf("retry accumulated state across attempts: %v", err)
+		}
 	}
 }

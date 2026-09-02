@@ -27,6 +27,12 @@ type OutboxWorkerOptions struct {
 	MaxPending    int64
 	MaxOldestAge  time.Duration
 	OnHardLimit   func(error)
+	// BacklogInterval bounds how often the backlog is measured. The probe
+	// costs a collection count plus an oldest-document lookup, so running it
+	// after every claim (once per worker per PollInterval — 20 times a second
+	// on the defaults) made the measurement scale with the backlog it
+	// measures. Zero selects one second.
+	BacklogInterval time.Duration
 }
 
 type OutboxWorkerStats struct {
@@ -45,15 +51,16 @@ type OutboxWorker struct {
 	opts      OutboxWorkerOptions
 	now       func() time.Time
 
-	claimed         atomic.Uint64
-	published       atomic.Uint64
-	publishFailures atomic.Uint64
-	storeFailures   atomic.Uint64
-	pending         atomic.Int64
-	oldestAgeNanos  atomic.Int64
-	hardMu          sync.RWMutex
-	hardErr         error
-	hardOnce        sync.Once
+	claimed          atomic.Uint64
+	published        atomic.Uint64
+	publishFailures  atomic.Uint64
+	storeFailures    atomic.Uint64
+	pending          atomic.Int64
+	oldestAgeNanos   atomic.Int64
+	backlogSampledAt atomic.Int64
+	hardMu           sync.RWMutex
+	hardErr          error
+	hardOnce         sync.Once
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -89,6 +96,9 @@ func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options Outbo
 	if options.RetryMax < options.RetryMin {
 		return nil, errors.New("dataengine outbox: retry max is smaller than retry min")
 	}
+	if options.BacklogInterval <= 0 {
+		options.BacklogInterval = time.Second
+	}
 	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{})}, nil
 }
 
@@ -122,11 +132,45 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 		}
 		worker.published.Add(1)
 	}
-	if err := worker.refreshBacklog(ctx, worker.now().UTC()); err != nil {
+	if err := worker.maybeRefreshBacklog(ctx, worker.now().UTC()); err != nil {
 		worker.storeFailures.Add(1)
 		return len(items), err
 	}
 	return len(items), nil
+}
+
+// maybeRefreshBacklog rate-limits the probe across all workers. One sample per
+// BacklogInterval is enough for a gauge and a hard limit; sampling per claim
+// only multiplies the load on the same Mongo the projector is writing to.
+func (worker *OutboxWorker) maybeRefreshBacklog(ctx context.Context, now time.Time) error {
+	last := worker.backlogSampledAt.Load()
+	if last != 0 && now.UnixNano()-last < int64(worker.opts.BacklogInterval) {
+		return nil
+	}
+	if !worker.backlogSampledAt.CompareAndSwap(last, now.UnixNano()) {
+		// Another worker is taking this sample.
+		return nil
+	}
+	return worker.refreshBacklog(ctx, now)
+}
+
+// RefreshBacklog samples the backlog immediately, bypassing the interval.
+// Health checks and shutdown accounting need a current reading rather than
+// one that may be a whole interval stale.
+func (worker *OutboxWorker) RefreshBacklog(ctx context.Context) error {
+	if worker == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now := worker.now().UTC()
+	worker.backlogSampledAt.Store(now.UnixNano())
+	if err := worker.refreshBacklog(ctx, now); err != nil {
+		worker.storeFailures.Add(1)
+		return err
+	}
+	return nil
 }
 
 func (worker *OutboxWorker) refreshBacklog(ctx context.Context, now time.Time) error {

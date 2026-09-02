@@ -10,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
 	"github.com/tjbdwanghaibo/cube-kit/mods"
 )
 
@@ -87,8 +88,7 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
-	database := &mongoStoreFakeDatabase{}
-	mongoClient := &mongoStoreFakeClient{db: database}
+	mongoClient := mongofake.NewClient()
 	jetStream := &modJetStream{}
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongoClient)); err != nil {

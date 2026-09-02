@@ -13,6 +13,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -29,6 +30,16 @@ var (
 	ErrReceiptIdentity            = errors.New("dataengine mongo: receipt identity conflict")
 	ErrRemoteProjection           = errors.New("dataengine mongo: remote mutation requires remote projector")
 	errProjectionBatchUnsupported = errors.New("dataengine mongo: projection batch is unsupported")
+
+	// ErrProjectionBatchNeedsPerRecord asks the projector to re-project a
+	// batch one record at a time. A batch cannot tell which of its records
+	// failed to match, and "did not match" is ambiguous: it is a genuine
+	// version conflict for a fresh record, but an already-applied record
+	// replayed after a lost WAL acknowledgement looks identical. Only the
+	// single-record path can distinguish them (it compares the stored version
+	// and _last_tx), so the batch defers instead of guessing — guessing
+	// "conflict" is what used to fence the process on a benign replay.
+	ErrProjectionBatchNeedsPerRecord = errors.New("dataengine mongo: projection batch must be retried per record")
 )
 
 type MongoStoreConfig struct {
@@ -100,6 +111,10 @@ func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	return db.Collection(outboxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "available_at", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_due"},
 		{Keys: bson.D{{Key: "effect_id", Value: 1}}, Name: "uniq_effect", Unique: true},
+		// The backlog probe reads the oldest staged effect. Without this the
+		// sort scans the whole collection, so the probe would get slower in
+		// exact proportion to the backlog it exists to measure.
+		{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "backlog_oldest"},
 	})
 }
 
@@ -308,13 +323,16 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 		for _, group := range groups {
 			result, err := group.collection.BulkWrite(txCtx, group.models)
 			if err != nil {
+				// An upsert that collides on _id is what an already-applied
+				// Put looks like: its exact-version filter matches nothing, so
+				// the upsert tries to insert a document that already exists.
 				if errors.Is(err, fmongo.ErrDuplicateKey) {
-					return fmt.Errorf("%w: batch duplicate key", ErrProjectionConflict)
+					return fmt.Errorf("%w: batch duplicate key", ErrProjectionBatchNeedsPerRecord)
 				}
 				return err
 			}
 			if result == nil || result.MatchedCount+result.UpsertedCount != int64(len(group.models)) {
-				return fmt.Errorf("%w: batch matched=%d upserted=%d expected=%d", ErrProjectionConflict,
+				return fmt.Errorf("%w: batch matched=%d upserted=%d expected=%d", ErrProjectionBatchNeedsPerRecord,
 					bulkMatched(result), bulkUpserted(result), len(group.models))
 			}
 		}
@@ -557,16 +575,19 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 		if !control {
 			continue
 		}
+		// The predicate comes from the fence itself, not from a filter
+		// assembled here: the document is written by another package, and two
+		// independent spellings of the same schema is how a rename turns every
+		// fenced transaction into a silent no-op.
 		var found bson.M
-		err = store.client.Database(fence.Database).Collection(fence.Resource).FindOne(ctx, bson.M{
-			"_id":         fence.DocumentID,
-			"owner":       fence.Owner,
-			"lease_token": fence.Token,
-			"digest":      fence.Digest,
-			"status":      "pending",
-			"lease_until": bson.M{"$gt": now},
-		}, &found)
+		err = store.client.Database(fence.Database).Collection(fence.Resource).
+			FindOne(ctx, fence.Predicate(now), &found)
 		if errors.Is(err, fmongo.ErrNotFound) {
+			// A stale lease is the expected outcome here, but so is a schema
+			// drift that makes the predicate unsatisfiable — and the two look
+			// identical from inside. Count it so a drift shows up as every
+			// fenced transaction skipping at once instead of as silence.
+			metrics.IncCounter("dataengine.fence.skipped.total", metrics.Labels{"resource": fence.Resource}, 1)
 			return false, nil
 		}
 		if err != nil {

@@ -176,9 +176,17 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 }
 
 func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
-	loaded := make([]loadedDAO, 0, len(builder.DaoBuilders))
+	var loaded []loadedDAO
 	var remoteVector entity.RemoteVersionVector
 	err := repository.store.ReadConsistent(ctx, func(readCtx context.Context) error {
+		// ReadConsistent runs inside ISession.WithTransaction, which is
+		// documented to retry its callback (the driver re-invokes it on a
+		// TransientTransactionError or an unknown commit result). Every
+		// accumulator therefore has to be reset here, not outside: keeping
+		// `loaded` across attempts made a second attempt trip the duplicate
+		// resource guard and report healthy data as a corrupt aggregate.
+		loaded = make([]loadedDAO, 0, len(builder.DaoBuilders))
+		remoteVector = entity.RemoteVersionVector{}
 		missing, tombstones := 0, 0
 		for index, buildDAO := range builder.DaoBuilders {
 			if buildDAO == nil {

@@ -253,7 +253,7 @@ func TestRealMixedProjectionSegmentsPreserveOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	projector.cancel()
-	<-projector.done
+	awaitChan(t, projector.done, "the projector to finish its pass")
 	for _, record := range []coredata.CommitRecord{first, second, third} {
 		if _, err := wal.Append(fx.context(), record); err != nil {
 			t.Fatal(err)
@@ -312,7 +312,7 @@ func TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder(t *tes
 		t.Fatal(err)
 	}
 	firstProjector.cancel()
-	<-firstProjector.done
+	awaitChan(t, firstProjector.done, "the first projector to finish its pass")
 	for i := range records {
 		if _, err := wal.Append(fx.context(), records[i]); err != nil {
 			t.Fatal(err)

@@ -274,9 +274,17 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 	_, batchCapable := projector.store.(BatchProjectionStore)
 	processed := 0
 	for _, segment := range segments {
+		// perRecord is latched when a batch reports that it cannot classify
+		// its own outcome (ErrProjectionBatchNeedsPerRecord). The rest of the
+		// segment then goes through the single-record path, which compares the
+		// stored version and _last_tx and so can tell an already-applied
+		// replay from a real conflict. Latching rather than retrying just the
+		// failing unit keeps the pass from re-issuing a bulk write that is
+		// going to defer again.
+		perRecord := false
 		for start := 0; start < len(segment.records); {
 			end := len(segment.records)
-			if segment.batch && !batchCapable {
+			if segment.batch && (!batchCapable || perRecord) {
 				end = start + 1
 			}
 			unit := projectionSegment{
@@ -285,6 +293,10 @@ func (projector *Projector) replayPass(ctx context.Context) (int, error) {
 				batch:   segment.batch,
 			}
 			if err := projector.projectSegment(ctx, unit); err != nil {
+				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
+					perRecord = true
+					continue
+				}
 				if projector.isFatalProjection(err) {
 					for i := range records {
 						projector.completeProjection(records[i].ID, err)
@@ -375,6 +387,11 @@ func (projector *Projector) recordFailure(err error) {
 }
 
 func (projector *Projector) isFatalProjection(err error) bool {
+	// A deferral is a routing signal, not a verdict: it must never fence the
+	// projector, whatever path it arrives through.
+	if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
+		return false
+	}
 	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) {
 		return false
 	}

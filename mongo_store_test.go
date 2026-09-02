@@ -4,15 +4,25 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
+	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// These tests run against internal/mongofake, an in-memory Mongo that actually
+// evaluates filters, updates and unique indexes. That matters here more than
+// anywhere else in the repo: every correctness property of projection is
+// carried by a query predicate (the exact-version CAS, the transaction marker,
+// the lease fence, the effect/receipt identity). A fake that returned canned
+// results could not tell a correct predicate from a wrong one, so these tests
+// seed real documents and assert stored state instead.
+
+const testDatabase = "game"
 
 type mongoRemoteProjectionFake struct {
 	stored  int
@@ -29,184 +39,47 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ e
 	return nil, nil
 }
 
-type mongoStoreFakeClient struct {
-	db            *mongoStoreFakeDatabase
-	startSessions int
-}
-
-func (c *mongoStoreFakeClient) Database(string) fmongo.IDatabase              { return c.db }
-func (c *mongoStoreFakeClient) DatabaseForSid(string, int32) fmongo.IDatabase { return c.db }
-func (c *mongoStoreFakeClient) StartSession(context.Context) (fmongo.ISession, error) {
-	c.startSessions++
-	return &mongoStoreFakeSession{}, nil
-}
-func (c *mongoStoreFakeClient) Ping(context.Context) error  { return nil }
-func (c *mongoStoreFakeClient) Close(context.Context) error { return nil }
-
-type mongoStoreFakeSession struct{}
-
-func (*mongoStoreFakeSession) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-func (*mongoStoreFakeSession) EndSession(context.Context) {}
-
-type mongoStoreFakeDatabase struct {
-	collections map[string]*mongoStoreFakeCollection
-}
-
-func (d *mongoStoreFakeDatabase) Name() string { return "game" }
-func (d *mongoStoreFakeDatabase) Collection(name string) fmongo.ICollection {
-	if d.collections == nil {
-		d.collections = make(map[string]*mongoStoreFakeCollection)
-	}
-	if d.collections[name] == nil {
-		d.collections[name] = &mongoStoreFakeCollection{}
-	}
-	return d.collections[name]
-}
-func (*mongoStoreFakeDatabase) Drop(context.Context) error { return nil }
-
-type mongoStoreFakeCollection struct {
-	mu                  sync.Mutex
-	updateResult        *fmongo.UpdateResult
-	updateErr           error
-	findOneAndUpdateErr error
-	findOneAndUpdateDoc *outboxDocument
-	findDoc             any
-	findDocs            []outboxDocument
-	findRaw             []bson.Raw
-	findTransactions    []transactionDocument
-	findErr             error
-	deleteCount         int64
-	count               int64
-	lastFilter          any
-	lastUpdate          any
-	inserted            []any
-	insertErr           error
-	bulkModels          []fmongo.WriteModel
-	bulkResult          *fmongo.BulkWriteResult
-	bulkErr             error
-	ensureIndexes       []fmongo.IndexModel
-}
-
-func (c *mongoStoreFakeCollection) InsertOne(_ context.Context, doc any) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.inserted = append(c.inserted, doc)
-	return "id", c.insertErr
-}
-func (*mongoStoreFakeCollection) InsertMany(context.Context, []any) ([]string, error) {
-	return nil, nil
-}
-func (c *mongoStoreFakeCollection) FindOne(_ context.Context, filter any, result any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastFilter = filter
-	if c.findErr != nil {
-		return c.findErr
-	}
-	if c.findDoc == nil {
-		return fmongo.ErrNotFound
-	}
-	raw, err := bson.Marshal(c.findDoc)
-	if err != nil {
-		return err
-	}
-	return bson.Unmarshal(raw, result)
-}
-func (c *mongoStoreFakeCollection) Find(_ context.Context, filter any, results any, _ ...fmongo.FindOption) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastFilter = filter
-	if c.findErr != nil {
-		return c.findErr
-	}
-	if out, ok := results.(*[]outboxDocument); ok {
-		*out = append([]outboxDocument(nil), c.findDocs...)
-	}
-	if out, ok := results.(*[]bson.Raw); ok {
-		*out = append([]bson.Raw(nil), c.findRaw...)
-	}
-	if out, ok := results.(*[]transactionDocument); ok {
-		*out = append([]transactionDocument(nil), c.findTransactions...)
-	}
-	return nil
-}
-func (c *mongoStoreFakeCollection) UpdateOne(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastFilter, c.lastUpdate = filter, update
-	if c.updateErr != nil {
-		return nil, c.updateErr
-	}
-	if c.updateResult == nil {
-		return &fmongo.UpdateResult{}, nil
-	}
-	return c.updateResult, nil
-}
-func (*mongoStoreFakeCollection) UpdateMany(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	return nil, nil
-}
-func (*mongoStoreFakeCollection) ReplaceOne(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	return nil, nil
-}
-func (c *mongoStoreFakeCollection) DeleteOne(context.Context, any) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.deleteCount, nil
-}
-func (*mongoStoreFakeCollection) DeleteMany(context.Context, any) (int64, error) { return 0, nil }
-func (c *mongoStoreFakeCollection) FindOneAndUpdate(_ context.Context, filter any, update any, result any, _ ...fmongo.FindOneAndUpdateOption) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastFilter, c.lastUpdate = filter, update
-	if c.findOneAndUpdateErr == nil && c.findOneAndUpdateDoc != nil {
-		if out, ok := result.(*outboxDocument); ok {
-			*out = *c.findOneAndUpdateDoc
-		}
-	}
-	return c.findOneAndUpdateErr
-}
-func (*mongoStoreFakeCollection) FindOneAndDelete(context.Context, any, any) error { return nil }
-func (*mongoStoreFakeCollection) FindOneAndReplace(context.Context, any, any, any) error {
-	return nil
-}
-func (c *mongoStoreFakeCollection) CountDocuments(context.Context, any) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.count, nil
-}
-func (*mongoStoreFakeCollection) Aggregate(context.Context, any, any) error { return nil }
-func (c *mongoStoreFakeCollection) BulkWrite(_ context.Context, models []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.bulkModels = append(c.bulkModels, models...)
-	if c.bulkErr != nil {
-		return nil, c.bulkErr
-	}
-	if c.bulkResult != nil {
-		result := *c.bulkResult
-		return &result, nil
-	}
-	return &fmongo.BulkWriteResult{MatchedCount: int64(len(models))}, nil
-}
-func (c *mongoStoreFakeCollection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.ensureIndexes = append(c.ensureIndexes, indexes...)
-	return nil
-}
-
-func newMongoStoreTest(t *testing.T) (*MongoStore, *mongoStoreFakeClient, *mongoStoreFakeCollection) {
+func newMongoStoreTest(t *testing.T) (*MongoStore, *mongofake.Client, *mongofake.Collection) {
 	t.Helper()
-	db := &mongoStoreFakeDatabase{}
-	client := &mongoStoreFakeClient{db: db}
-	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	client := mongofake.NewClient()
+	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: testDatabase, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
-	collection := db.Collection("heroes").(*mongoStoreFakeCollection)
-	return store, client, collection
+	return store, client, client.Collection(testDatabase, "heroes")
+}
+
+func markerCollection(client *mongofake.Client) *mongofake.Collection {
+	return client.Collection(testDatabase, transactionCollection)
+}
+
+// seedHero installs the document an exact-version mutation expects to find.
+func seedHero(t *testing.T, coll *mongofake.Collection, version uint64) {
+	t.Helper()
+	if err := coll.Seed(bson.M{"_id": int64(7), "_version": version, "level": int32(1)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testMutationRecord(kind coredata.MutationKind) coredata.CommitRecord {
+	var id coredata.TransactionID
+	id[15] = 9
+	mutation := coredata.Mutation{
+		Key:             coredata.DocumentKey{Database: testDatabase, Resource: "heroes", ID: 7},
+		Kind:            kind,
+		ExpectedVersion: 4,
+		NextVersion:     5,
+		Mask:            1,
+		Schema:          2,
+		Codec:           "bson-v2",
+	}
+	if kind == coredata.MutationPut {
+		mutation.Data, _ = bson.Marshal(bson.M{"_id": int64(7), "level": int32(5)})
+	}
+	if kind == coredata.MutationPatch {
+		mutation.Patch.SetBSON, _ = bson.Marshal(bson.D{{Key: "level", Value: int32(5)}})
+	}
+	return coredata.CommitRecord{ID: id, Mutations: []coredata.Mutation{mutation}}
 }
 
 func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
@@ -214,38 +87,84 @@ func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
 	if err := store.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	receipts := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
-	if len(receipts.ensureIndexes) != 1 {
-		t.Fatalf("receipt indexes=%d, want 1", len(receipts.ensureIndexes))
+	receipts := client.Collection(testDatabase, receiptCollection)
+	if len(receipts.Indexes) != 1 {
+		t.Fatalf("receipt indexes=%d, want 1", len(receipts.Indexes))
 	}
-	index := receipts.ensureIndexes[0]
+	index := receipts.Indexes[0]
 	if !index.ExpireAt || index.TTL != 0 || !index.RecreateOnConflict {
 		t.Fatalf("receipt expiry index=%+v", index)
+	}
+	// The outbox claim path and the effect-id uniqueness both depend on their
+	// index existing; assert them rather than trusting the call went through.
+	outbox := client.Collection(testDatabase, outboxCollection)
+	if !outbox.HasIndex("available_at", "lease_until") || !outbox.HasIndex("effect_id") {
+		t.Fatalf("outbox indexes=%+v", outbox.Indexes)
+	}
+}
+
+func leaseFenceReceipt(t *testing.T, documentID, owner string, token uint64, digest []byte) coredata.Receipt {
+	t.Helper()
+	receipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: testDatabase, Resource: "_dataengine_inbox_claims", DocumentID: documentID,
+		Owner: owner, Token: token, Digest: digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+
+// seedClaim installs a live saga-step claim exactly as saga's
+// DataEngineStepInbox writes it. The field names and the "pending" literal are
+// the contract the projector's fence filter depends on.
+func seedClaim(t *testing.T, client *mongofake.Client, documentID, owner string, token uint64, digest []byte, leaseUntil time.Time) {
+	t.Helper()
+	claims := client.Collection(testDatabase, "_dataengine_inbox_claims")
+	if err := claims.Seed(bson.M{
+		"_id": documentID, "owner": owner, "lease_token": token, "digest": digest,
+		"status": "pending", "lease_until": leaseUntil,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestMongoStoreLeaseFenceSkipsStaleSagaTransaction(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+	seedHero(t, collection, 4)
 	record := testMutationRecord(coredata.MutationPatch)
-	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-1", Owner: "worker-1", Token: 7,
-		Digest: bytes.Repeat([]byte{1}, 32),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Receipts = append(record.Receipts, fenceReceipt)
+	// No claim document exists at all: the lease is gone.
+	record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-1", "worker-1", 7, bytes.Repeat([]byte{1}, 32)))
 
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if collection.lastUpdate != nil {
-		t.Fatal("stale fenced transaction mutated business state")
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) || doc["level"] != int32(1) {
+		t.Fatalf("stale fenced transaction mutated business state: %v", doc)
 	}
-	transactions := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
-	if len(transactions.inserted) != 1 || !transactions.inserted[0].(transactionDocument).Skipped {
-		t.Fatalf("transaction marker=%+v, want skipped", transactions.inserted)
+	markers := markerCollection(client).Documents()
+	if len(markers) != 1 || markers[0]["skipped"] != true {
+		t.Fatalf("transaction marker=%v, want skipped", markers)
+	}
+}
+
+func TestMongoStoreLeaseFenceRejectsExpiredLease(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	seedHero(t, collection, 4)
+	digest := bytes.Repeat([]byte{5}, 32)
+	// The claim exists and matches on identity, but its lease already expired.
+	seedClaim(t, client, "saga-step/cmd-expired", "worker-1", 7, digest, time.Now().UTC().Add(-time.Minute))
+	record := testMutationRecord(coredata.MutationPatch)
+	record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-expired", "worker-1", 7, digest))
+
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) {
+		t.Fatalf("expired lease applied the mutation: %v", doc)
+	}
+	if markers := markerCollection(client).Documents(); len(markers) != 1 || markers[0]["skipped"] != true {
+		t.Fatalf("marker=%v, want skipped", markers)
 	}
 }
 
@@ -268,17 +187,14 @@ func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
 		BaseVersion: 1, NextVersion: 2, MarkerEpoch: 1, LockFence: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
 		Mutations: []entity.RemoteDataMutation{{Collection: "heroes", ID: entityID, Version: 2, Mask: 1, Data: []byte("remote")}},
 	}
-	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-remote", Owner: "worker-1", Token: 8,
-		Digest: bytes.Repeat([]byte{2}, 32),
-	})
-	if err != nil {
-		t.Fatal(err)
+	record := coredata.CommitRecord{
+		ID:       txID,
+		Receipts: []coredata.Receipt{leaseFenceReceipt(t, "saga-step/cmd-remote", "worker-1", 8, bytes.Repeat([]byte{2}, 32))},
+		Mutations: []coredata.Mutation{{
+			Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut,
+			ExpectedVersion: 1, NextVersion: 2, Remote: &remote,
+		}},
 	}
-	record := coredata.CommitRecord{ID: txID, Receipts: []coredata.Receipt{fenceReceipt}, Mutations: []coredata.Mutation{{
-		Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut,
-		ExpectedVersion: 1, NextVersion: 2, Remote: &remote,
-	}}}
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
@@ -286,164 +202,285 @@ func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
 		t.Fatalf("stale fenced remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
 	}
 
-	// A WAL replay sees the durable skipped marker. It must remain a no-op and
-	// must not publish the remote commit outside the Mongo transaction.
-	digest, err := digestRecord(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.db.Collection(transactionCollection).(*mongoStoreFakeCollection).findDoc = transactionDocument{
-		ID: record.ID.String(), Digest: digest, Skipped: true,
-	}
+	// A WAL replay sees the durable skipped marker written by the first pass.
+	// It must remain a no-op and must not publish outside the transaction.
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
 		t.Fatalf("replayed skipped remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
 	}
+	if markers := markerCollection(client).Len(); markers != 1 {
+		t.Fatalf("replay wrote %d markers, want 1", markers)
+	}
 }
 
 func TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken(t *testing.T) {
-	store, client, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
-	claims := client.db.Collection("_dataengine_inbox_claims").(*mongoStoreFakeCollection)
-	claims.findDoc = bson.M{"_id": "saga-step/cmd-1", "owner": "worker-1", "lease_token": uint64(7)}
-	record := testMutationRecord(coredata.MutationPatch)
 	claimDigest := bytes.Repeat([]byte{3}, 32)
-	fenceReceipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/cmd-1", Owner: "worker-1", Token: 7,
-		Digest: claimDigest,
-	})
-	if err != nil {
-		t.Fatal(err)
+	// Each case keeps a live, identity-matching claim in storage and varies the
+	// fence the transaction carries. Only the exact match may apply.
+	for name, tc := range map[string]struct {
+		owner  string
+		token  uint64
+		digest []byte
+		apply  bool
+	}{
+		"exact match":  {"worker-1", 7, claimDigest, true},
+		"other owner":  {"worker-2", 7, claimDigest, false},
+		"other token":  {"worker-1", 8, claimDigest, false},
+		"other digest": {"worker-1", 7, bytes.Repeat([]byte{4}, 32), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, client, collection := newMongoStoreTest(t)
+			seedHero(t, collection, 4)
+			seedClaim(t, client, "saga-step/cmd-1", "worker-1", 7, claimDigest, time.Now().UTC().Add(time.Minute))
+			record := testMutationRecord(coredata.MutationPatch)
+			record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-1", tc.owner, tc.token, tc.digest))
+			if err := store.Project(context.Background(), record); err != nil {
+				t.Fatal(err)
+			}
+			doc, _ := collection.Lookup(int64(7))
+			applied := doc["_version"] == int64(5)
+			if applied != tc.apply {
+				t.Fatalf("applied=%v want=%v (document=%v)", applied, tc.apply, doc)
+			}
+			// A lease fence is a precondition, never a business receipt.
+			if receipts := client.Collection(testDatabase, receiptCollection).Len(); receipts != 0 {
+				t.Fatalf("lease fence leaked into receipt collection (%d docs)", receipts)
+			}
+		})
 	}
-	record.Receipts = append(record.Receipts, fenceReceipt)
-
-	if err := store.Project(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	filter, ok := claims.lastFilter.(bson.M)
-	if !ok || filter["owner"] != "worker-1" || filter["lease_token"] != uint64(7) {
-		t.Fatalf("lease filter=%+v", claims.lastFilter)
-	}
-	if digest, ok := filter["digest"].([]byte); !ok || !bytes.Equal(digest, claimDigest) {
-		t.Fatalf("lease filter=%+v, want command digest", claims.lastFilter)
-	}
-	if filter["status"] != "pending" {
-		t.Fatalf("lease filter=%+v, want pending status", claims.lastFilter)
-	}
-	leaseUntil, ok := filter["lease_until"].(bson.M)
-	if !ok {
-		t.Fatalf("lease filter=%+v, want expiry comparison", claims.lastFilter)
-	}
-	if _, ok := leaseUntil["$gt"].(time.Time); !ok {
-		t.Fatalf("lease_until filter=%+v, want time comparison", leaseUntil)
-	}
-	if collection.lastUpdate == nil {
-		t.Fatal("matching lease fence did not apply business mutation")
-	}
-	receipts := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
-	if len(receipts.inserted) != 0 {
-		t.Fatal("lease fence leaked into business receipt collection")
-	}
-}
-
-func testMutationRecord(kind coredata.MutationKind) coredata.CommitRecord {
-	var id coredata.TransactionID
-	id[15] = 9
-	mutation := coredata.Mutation{
-		Key:             coredata.DocumentKey{Database: "game", Resource: "heroes", ID: 7},
-		Kind:            kind,
-		ExpectedVersion: 4,
-		NextVersion:     5,
-		Mask:            1,
-		Schema:          2,
-		Codec:           "bson-v2",
-	}
-	if kind == coredata.MutationPut {
-		mutation.Data, _ = bson.Marshal(bson.M{"_id": int64(7), "level": int32(5)})
-	}
-	if kind == coredata.MutationPatch {
-		mutation.Patch.SetBSON, _ = bson.Marshal(bson.D{{Key: "level", Value: int32(5)}})
-	}
-	return coredata.CommitRecord{ID: id, Mutations: []coredata.Mutation{mutation}}
 }
 
 func TestMongoStorePatchExactVersionAndReplay(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}
+	seedHero(t, collection, 4)
 	record := testMutationRecord(coredata.MutationPatch)
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if client.startSessions != 0 {
-		t.Fatalf("single mutation fast path started %d sessions", client.startSessions)
+	if client.Sessions() != 0 {
+		t.Fatalf("single mutation fast path started %d sessions", client.Sessions())
 	}
-	filter := collection.lastFilter.(bson.M)
-	if filter["_id"] != int64(7) || filter["_version"] != uint64(4) {
-		t.Fatalf("filter=%v", filter)
+	doc, _ := collection.Lookup(int64(7))
+	if doc["_version"] != int64(5) || doc["level"] != int32(5) || doc["_last_tx"] != record.ID.String() {
+		t.Fatalf("projected document=%v", doc)
 	}
-	set := collection.lastUpdate.(bson.M)["$set"].(bson.M)
-	if set["level"] != int32(5) || set["_version"] != uint64(5) {
-		t.Fatalf("patch set=%#v", set)
-	}
-
-	collection.updateResult = &fmongo.UpdateResult{}
-	collection.findDoc = bson.M{"_id": int64(7), "_version": uint64(5), "_last_tx": record.ID.String()}
+	// Replay: the exact-version predicate no longer matches, and the stored
+	// document proves this transaction already applied, so it is idempotent.
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatalf("idempotent replay: %v", err)
+	}
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(5) {
+		t.Fatalf("replay changed the document: %v", doc)
 	}
 }
 
 func TestMongoStorePatchRejectsWrongOrMissingBase(t *testing.T) {
+	t.Run("wrong base version", func(t *testing.T) {
+		store, _, collection := newMongoStoreTest(t)
+		// Stored at 3 while the record expects 4 and was written by another tx.
+		if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(3), "_last_tx": "other"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPatch)); !errors.Is(err, ErrProjectionConflict) {
+			t.Fatalf("err=%v, want ErrProjectionConflict", err)
+		}
+	})
+	t.Run("missing base document", func(t *testing.T) {
+		store, _, _ := newMongoStoreTest(t)
+		if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPatch)); !errors.Is(err, ErrProjectionConflict) {
+			t.Fatalf("err=%v, want ErrProjectionConflict", err)
+		}
+	})
+}
+
+func TestMongoStorePutUpsertsWhenNoBaseVersionExpected(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{}
-	collection.findDoc = bson.M{"_id": int64(7), "_version": uint64(3), "_last_tx": "other"}
-	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPatch)); !errors.Is(err, ErrProjectionConflict) {
-		t.Fatalf("wrong base err=%v", err)
+	record := testMutationRecord(coredata.MutationPut)
+	record.Mutations[0].ExpectedVersion = 0
+	record.Mutations[0].NextVersion = 1
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatal(err)
 	}
-	collection.findDoc = nil
-	collection.findErr = fmongo.ErrNotFound
-	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPatch)); !errors.Is(err, ErrProjectionConflict) {
-		t.Fatalf("missing base err=%v", err)
+	doc, ok := collection.Lookup(int64(7))
+	if !ok || doc["_version"] != int64(1) || doc["level"] != int32(5) {
+		t.Fatalf("upserted document=%v ok=%v", doc, ok)
 	}
+}
+
+func batchRecord(t *testing.T, id byte, docID int64, expected, next uint64) coredata.CommitRecord {
+	t.Helper()
+	record := testMutationRecord(coredata.MutationPatch)
+	record.ID[15] = id
+	record.Mutations[0].Key.ID = docID
+	record.Mutations[0].ExpectedVersion = expected
+	record.Mutations[0].NextVersion = next
+	return record
 }
 
 func TestMongoStoreProjectBatchUsesOneTransactionAndDurableMarkers(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
-	first := testMutationRecord(coredata.MutationPatch)
-	second := testMutationRecord(coredata.MutationPatch)
-	second.ID[15] = 10
-	second.Mutations[0].ExpectedVersion = 5
-	second.Mutations[0].NextVersion = 6
-	collection.bulkResult = &fmongo.BulkWriteResult{MatchedCount: 2, ModifiedCount: 2}
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Seed(bson.M{"_id": int64(8), "_version": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	first := batchRecord(t, 9, 7, 4, 5)
+	second := batchRecord(t, 10, 8, 5, 6)
 
 	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); err != nil {
 		t.Fatal(err)
 	}
-	if client.startSessions != 1 {
-		t.Fatalf("sessions=%d, want 1", client.startSessions)
+	if client.Sessions() != 1 {
+		t.Fatalf("sessions=%d, want 1", client.Sessions())
 	}
-	if len(collection.bulkModels) != 2 {
-		t.Fatalf("mutation bulk models=%d, want 2", len(collection.bulkModels))
+	firstDoc, _ := collection.Lookup(int64(7))
+	secondDoc, _ := collection.Lookup(int64(8))
+	if firstDoc["_version"] != int64(5) || secondDoc["_version"] != int64(6) {
+		t.Fatalf("batch documents=%v %v", firstDoc, secondDoc)
 	}
-	markers := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
-	if len(markers.bulkModels) != 2 {
-		t.Fatalf("transaction marker bulk models=%d, want 2", len(markers.bulkModels))
+	if markers := markerCollection(client).Len(); markers != 2 {
+		t.Fatalf("transaction markers=%d, want 2", markers)
 	}
 }
 
 func TestMongoStoreProjectBatchRollsBackOnCASMismatch(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
-	first := testMutationRecord(coredata.MutationPatch)
-	second := testMutationRecord(coredata.MutationPatch)
-	second.ID[15] = 10
-	second.Mutations[0].ExpectedVersion = 5
-	second.Mutations[0].NextVersion = 6
-	collection.bulkResult = &fmongo.BulkWriteResult{MatchedCount: 1, ModifiedCount: 1}
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	// The second record's expected version does not match storage.
+	if err := collection.Seed(bson.M{"_id": int64(8), "_version": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	first := batchRecord(t, 9, 7, 4, 5)
+	second := batchRecord(t, 10, 8, 1, 2)
 
-	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); !errors.Is(err, ErrProjectionConflict) {
-		t.Fatalf("err=%v, want ErrProjectionConflict", err)
+	// A batch cannot tell an already-applied replay from a real conflict, so
+	// it defers rather than declaring a verdict. The projector then re-projects
+	// per record, and the single-record path classifies it (see
+	// TestMongoStoreProjectBatchDefersThenSingleRecordClassifies).
+	err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second})
+	if !errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
+		t.Fatalf("err=%v, want ErrProjectionBatchNeedsPerRecord", err)
+	}
+	if errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("deferral must not be a conflict verdict: %v", err)
+	}
+	// Nothing may be applied: the deferring batch is all-or-nothing.
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) {
+		t.Fatalf("deferred batch applied a partial write: %v", doc)
+	}
+}
+
+// Once the batch defers, the single-record path must reach the right verdict
+// for each record: idempotent for an already-applied replay, conflict for a
+// genuinely stale base version.
+func TestMongoStoreProjectBatchDefersThenSingleRecordClassifies(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Seed(bson.M{"_id": int64(8), "_version": int64(5), "_last_tx": "other"}); err != nil {
+		t.Fatal(err)
+	}
+	applicable := batchRecord(t, 9, 7, 4, 5)
+	stale := batchRecord(t, 10, 8, 1, 2)
+	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{applicable, stale}); !errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
+		t.Fatalf("err=%v, want a deferral", err)
+	}
+	if err := store.Project(context.Background(), applicable); err != nil {
+		t.Fatalf("applicable record per-record: %v", err)
+	}
+	if err := store.Project(context.Background(), stale); !errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("stale record per-record err=%v, want ErrProjectionConflict", err)
+	}
+}
+
+func TestMongoStoreProjectBatchSkipsRecordsWithDurableMarker(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	record := batchRecord(t, 9, 7, 4, 5)
+	digest, err := digestRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := markerCollection(client).Seed(transactionDocument{ID: record.ID.String(), Digest: digest, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	// Already applied and marked: the batch must be a no-op, not a conflict.
+	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{record}); err != nil {
+		t.Fatalf("marked record replay: %v", err)
+	}
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) {
+		t.Fatalf("marked record was re-applied: %v", doc)
+	}
+}
+
+func TestMongoStoreProjectBatchRejectsMarkerDigestMismatch(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	record := batchRecord(t, 9, 7, 4, 5)
+	if err := markerCollection(client).Seed(transactionDocument{
+		ID: record.ID.String(), Digest: []byte("different"), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{record}); !errors.Is(err, ErrTransactionIdentity) {
+		t.Fatalf("err=%v, want ErrTransactionIdentity", err)
+	}
+}
+
+// A batch-eligible record projected alone goes through the single-record fast
+// path, which deliberately writes no transaction marker (that saved round trip
+// is the point of the fast path). If the WAL acknowledgement is then lost — a
+// crash between the Mongo commit and the checkpoint fsync, or any Ack error —
+// the record replays inside a multi-record batch, where the missing marker and
+// a CAS predicate that can no longer match are indistinguishable from a real
+// conflict. The batch must therefore defer, and the per-record retry must
+// absorb it. Declaring a conflict here used to fence the projector
+// permanently: the same batch replayed on every restart.
+func TestMongoStoreProjectBatchAbsorbsFastPathProjection(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Seed(bson.M{"_id": int64(8), "_version": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	first := batchRecord(t, 9, 7, 4, 5)
+	second := batchRecord(t, 10, 8, 5, 6)
+	// Live projection of `first` alone: fast path, no marker.
+	if err := store.Project(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	// Crash before ACK, restart, replay batches it with its neighbour. The
+	// batch defers instead of fencing the process.
+	err := store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second})
+	if !errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
+		t.Fatalf("replay of a fast-path-projected record: err=%v, want a deferral", err)
+	}
+	if errors.Is(err, ErrProjectionConflict) || errors.Is(err, ErrTransactionIdentity) {
+		t.Fatalf("benign replay was reported as a fatal verdict: %v", err)
+	}
+	// The per-record retry the projector performs must then converge: the
+	// already-applied record is idempotent, its neighbour applies.
+	if err := store.Project(context.Background(), first); err != nil {
+		t.Fatalf("already-applied record must be idempotent: %v", err)
+	}
+	if err := store.Project(context.Background(), second); err != nil {
+		t.Fatalf("neighbour must apply: %v", err)
+	}
+	firstDoc, _ := collection.Lookup(int64(7))
+	secondDoc, _ := collection.Lookup(int64(8))
+	if firstDoc["_version"] != int64(5) || secondDoc["_version"] != int64(6) {
+		t.Fatalf("documents after replay=%v %v", firstDoc, secondDoc)
 	}
 }
 
@@ -460,8 +497,8 @@ func TestMongoStoreProjectBatchValidatesBeforeCheckingEligibility(t *testing.T) 
 	if err == nil || errors.Is(err, errProjectionBatchUnsupported) {
 		t.Fatalf("err=%v, want validation error before unsupported classification", err)
 	}
-	if client.startSessions != 0 || len(collection.bulkModels) != 0 {
-		t.Fatalf("validation failure started sessions=%d mutation writes=%d", client.startSessions, len(collection.bulkModels))
+	if client.Sessions() != 0 || collection.Calls["BulkWrite"] != 0 {
+		t.Fatalf("validation failure started sessions=%d bulk writes=%d", client.Sessions(), collection.Calls["BulkWrite"])
 	}
 }
 
@@ -474,34 +511,40 @@ func TestMongoStoreProjectBatchRejectsUnsupportedBeforeSessionOrWrites(t *testin
 	if !errors.Is(err, errProjectionBatchUnsupported) {
 		t.Fatalf("err=%v, want errProjectionBatchUnsupported", err)
 	}
-	markers := client.db.Collection(transactionCollection).(*mongoStoreFakeCollection)
-	if client.startSessions != 0 || len(collection.bulkModels) != 0 || len(markers.bulkModels) != 0 {
-		t.Fatalf("unsupported batch started sessions=%d mutation writes=%d marker writes=%d",
-			client.startSessions, len(collection.bulkModels), len(markers.bulkModels))
+	if client.Sessions() != 0 || collection.Calls["BulkWrite"] != 0 || markerCollection(client).Len() != 0 {
+		t.Fatalf("unsupported batch started sessions=%d bulk writes=%d markers=%d",
+			client.Sessions(), collection.Calls["BulkWrite"], markerCollection(client).Len())
 	}
 }
 
 func TestMongoStoreDeleteWritesVersionedTombstone(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+	seedHero(t, collection, 4)
 	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationDelete)); err != nil {
 		t.Fatal(err)
 	}
-	update := collection.lastUpdate.(bson.M)
-	set := update["$set"].(bson.M)
-	if set["_deleted"] != true || set["_version"] != uint64(5) {
-		t.Fatalf("delete update=%v", update)
+	doc, ok := collection.Lookup(int64(7))
+	if !ok {
+		t.Fatal("delete physically removed the document instead of writing a tombstone")
+	}
+	if doc["_deleted"] != true || doc["_version"] != int64(5) || doc["_deleted_at"] == nil {
+		t.Fatalf("tombstone=%v", doc)
 	}
 }
 
 func TestMongoStoreMigrationConflictBecomesObsoleteNoop(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
-	collection.findOneAndUpdateErr = fmongo.ErrDuplicateKey
-	collection.findDoc = projectionMeta{Version: 12, LastTx: "another-transaction"}
+	// A concurrent writer already moved the document past this migration.
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(12), "_last_tx": "another-transaction"}); err != nil {
+		t.Fatal(err)
+	}
 	record := testMutationRecord(coredata.MutationPut)
 	record.Handler = MigrationHandler
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatalf("obsolete migration must be acknowledged for repository reload: %v", err)
+	}
+	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(12) {
+		t.Fatalf("obsolete migration overwrote newer state: %v", doc)
 	}
 }
 
@@ -527,52 +570,114 @@ func TestMongoStoreProjectsRemoteAndOrdinaryMutationInOneSession(t *testing.T) {
 	ordinary, _ := bson.Marshal(bson.M{"_id": int64(5), "value": "ordinary"})
 	record := coredata.CommitRecord{ID: txID, Mutations: []coredata.Mutation{
 		{Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut, ExpectedVersion: 1, NextVersion: 2, Remote: &remote},
-		{Key: coredata.DocumentKey{Database: "game", Resource: "mail", ID: 5}, Kind: coredata.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: ordinary},
+		{Key: coredata.DocumentKey{Database: testDatabase, Resource: "mail", ID: 5}, Kind: coredata.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: ordinary},
 	}}
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if client.startSessions != 1 || remoteProjection.stored != 1 || remoteProjection.applied != 1 {
-		t.Fatalf("sessions=%d stored=%d applied=%d", client.startSessions, remoteProjection.stored, remoteProjection.applied)
+	if client.Sessions() != 1 || remoteProjection.stored != 1 || remoteProjection.applied != 1 {
+		t.Fatalf("sessions=%d stored=%d applied=%d", client.Sessions(), remoteProjection.stored, remoteProjection.applied)
+	}
+	if mail, ok := client.Collection(testDatabase, "mail").Lookup(int64(5)); !ok || mail["_version"] != int64(1) {
+		t.Fatalf("ordinary mutation in the same session=%v ok=%v", mail, ok)
 	}
 }
 
 func TestMongoStoreOlderPutCannotReviveTombstone(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
-	collection.findOneAndUpdateErr = fmongo.ErrDuplicateKey
-	collection.findDoc = bson.M{"_id": int64(7), "_version": uint64(6), "_deleted": true, "_last_tx": "other"}
+	if err := collection.Seed(bson.M{
+		"_id": int64(7), "_version": int64(6), "_deleted": true, "_last_tx": "other",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPut)); !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("err=%v, want ErrProjectionConflict", err)
+	}
+	if doc, _ := collection.Lookup(int64(7)); doc["_deleted"] != true {
+		t.Fatalf("stale put revived the tombstone: %v", doc)
+	}
+}
+
+func TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	if err := collection.Seed(bson.M{
+		"_id": int64(7), "_version": int64(4), "_deleted": true, "_deleted_at": time.Now().UTC(), "_last_tx": "delete-tx",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An explicit, strictly-higher Put is the documented resurrection path.
+	if err := store.Project(context.Background(), testMutationRecord(coredata.MutationPut)); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := collection.Lookup(int64(7))
+	if doc["_version"] != int64(5) || doc["_deleted"] != nil || doc["_deleted_at"] != nil {
+		t.Fatalf("resurrected document=%v", doc)
 	}
 }
 
 func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
-	collection.updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+	seedHero(t, collection, 4)
 	record := testMutationRecord(coredata.MutationPatch)
 	record.Effects = []coredata.Effect{{ID: "effect-1", Topic: "hero.changed", Payload: []byte{1}}}
 	record.Receipts = []coredata.Receipt{{Namespace: "saga-step", ID: "step-1", Digest: []byte{2}}}
-	client.db.Collection(transactionCollection).(*mongoStoreFakeCollection).findErr = fmongo.ErrNotFound
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if client.startSessions != 1 {
-		t.Fatalf("sessions=%d, want 1", client.startSessions)
+	if client.Sessions() != 1 {
+		t.Fatalf("sessions=%d, want 1", client.Sessions())
 	}
-	if len(client.db.Collection(outboxCollection).(*mongoStoreFakeCollection).inserted) != 1 || len(client.db.Collection(receiptCollection).(*mongoStoreFakeCollection).inserted) != 1 || len(client.db.Collection(transactionCollection).(*mongoStoreFakeCollection).inserted) != 1 {
+	if client.Collection(testDatabase, outboxCollection).Len() != 1 ||
+		client.Collection(testDatabase, receiptCollection).Len() != 1 ||
+		markerCollection(client).Len() != 1 {
 		t.Fatal("transaction did not stage effect, receipt, and transaction identity")
+	}
+	// Replay must be absorbed by the durable marker: no duplicate staging.
+	if err := store.Project(context.Background(), record); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if client.Collection(testDatabase, outboxCollection).Len() != 1 || client.Collection(testDatabase, receiptCollection).Len() != 1 {
+		t.Fatal("replay staged duplicates")
 	}
 }
 
 func TestMongoStoreReceiptIdentityIncludesCompletionPayload(t *testing.T) {
 	store, client, _ := newMongoStoreTest(t)
-	collection := client.db.Collection(receiptCollection).(*mongoStoreFakeCollection)
-	collection.insertErr = fmongo.ErrDuplicateKey
-	collection.findDoc = receiptDocument{Digest: []byte{1}, Payload: []byte("different")}
-	err := store.stageReceipt(context.Background(), "tx-1", coredata.Receipt{
-		Namespace: "saga-step", ID: "command-1", Digest: []byte{1}, Payload: []byte("completion"),
-	})
-	if !errors.Is(err, ErrReceiptIdentity) {
-		t.Fatalf("err=%v", err)
+	receipt := coredata.Receipt{Namespace: "saga-step", ID: "command-1", Digest: []byte{1}, Payload: []byte("completion")}
+	if err := store.stageReceipt(context.Background(), "tx-1", receipt); err != nil {
+		t.Fatal(err)
+	}
+	// Same receipt, same payload: idempotent.
+	if err := store.stageReceipt(context.Background(), "tx-1", receipt); err != nil {
+		t.Fatalf("identical receipt replay: %v", err)
+	}
+	if client.Collection(testDatabase, receiptCollection).Len() != 1 {
+		t.Fatal("identical receipt replay inserted a duplicate")
+	}
+	// Same identity, different completion payload: an identity conflict.
+	conflicting := receipt
+	conflicting.Payload = []byte("different")
+	if err := store.stageReceipt(context.Background(), "tx-1", conflicting); !errors.Is(err, ErrReceiptIdentity) {
+		t.Fatalf("err=%v, want ErrReceiptIdentity", err)
 	}
 }
+
+func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	effect := coredata.Effect{ID: "effect-1", Topic: "hero.changed", Payload: []byte{1}}
+	if err := store.stageEffect(context.Background(), "tx-1", effect); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.stageEffect(context.Background(), "tx-1", effect); err != nil {
+		t.Fatalf("identical effect replay: %v", err)
+	}
+	if client.Collection(testDatabase, outboxCollection).Len() != 1 {
+		t.Fatal("identical effect replay staged a duplicate")
+	}
+	// The same effect id under a different transaction is a WAL identity bug.
+	if err := store.stageEffect(context.Background(), "tx-2", effect); !errors.Is(err, ErrTransactionIdentity) {
+		t.Fatalf("err=%v, want ErrTransactionIdentity", err)
+	}
+}
+
+var _ fmongo.IMongo = (*mongofake.Client)(nil)

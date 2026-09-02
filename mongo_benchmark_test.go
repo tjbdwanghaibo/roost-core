@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
+	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -24,14 +24,18 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 		{name: "batch_256_independent", mutations: 256},
 	} {
 		b.Run(shape.name, func(b *testing.B) {
-			database := &mongoStoreFakeDatabase{}
-			client := &mongoStoreFakeClient{db: database}
+			client := mongofake.NewClient()
 			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
 			}
+			// Seed one document per collection; each iteration advances its
+			// version so every projection exercises a real matching CAS.
 			for index := 0; index < shape.mutations; index++ {
-				database.Collection(fmt.Sprintf("players_%d", index)).(*mongoStoreFakeCollection).updateResult = &fmongo.UpdateResult{MatchedCount: 1}
+				coll := client.Collection("game", fmt.Sprintf("players_%d", index))
+				if err := coll.Seed(bson.M{"_id": int64(index + 1), "_version": int64(7)}); err != nil {
+					b.Fatal(err)
+				}
 			}
 			set, _ := bson.Marshal(bson.M{"level": 8})
 			b.ReportAllocs()
@@ -43,8 +47,8 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 				record := coredata.CommitRecord{ID: id}
 				for index := 0; index < shape.mutations; index++ {
 					record.Mutations = append(record.Mutations, coredata.Mutation{
-						Key:  coredata.DocumentKey{Database: "game", Resource: fmt.Sprintf("players_%d", index), ID: int64(sequence*shape.mutations + index + 1)},
-						Kind: coredata.MutationPatch, ExpectedVersion: 7, NextVersion: 8, Schema: 1,
+						Key:  coredata.DocumentKey{Database: "game", Resource: fmt.Sprintf("players_%d", index), ID: int64(index + 1)},
+						Kind: coredata.MutationPatch, ExpectedVersion: uint64(7 + sequence), NextVersion: uint64(8 + sequence), Schema: 1,
 						Patch: coredata.FieldPatch{SetBSON: set},
 					})
 				}
@@ -62,13 +66,18 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 func BenchmarkMongoProjectionConflictMatrix(b *testing.B) {
 	for _, conflictPercent := range []int{1, 10} {
 		b.Run(fmt.Sprintf("conflict_%d_percent", conflictPercent), func(b *testing.B) {
-			database := &mongoStoreFakeDatabase{}
-			store, err := NewMongoStore(&mongoStoreFakeClient{db: database}, MongoStoreConfig{DefaultDatabase: "game"})
+			client := mongofake.NewClient()
+			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
 			}
-			database.Collection("players_ok").(*mongoStoreFakeCollection).updateResult = &fmongo.UpdateResult{MatchedCount: 1}
-			database.Collection("players_conflict").(*mongoStoreFakeCollection).updateResult = &fmongo.UpdateResult{}
+			if err := client.Collection("game", "players_ok").Seed(bson.M{"_id": int64(1), "_version": int64(7)}); err != nil {
+				b.Fatal(err)
+			}
+			if err := client.Collection("game", "players_conflict").Seed(bson.M{"_id": int64(1), "_version": int64(999), "_last_tx": "other"}); err != nil {
+				b.Fatal(err)
+			}
+			okVersion := uint64(7)
 			set, _ := bson.Marshal(bson.M{"level": 8})
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -80,9 +89,14 @@ func BenchmarkMongoProjectionConflictMatrix(b *testing.B) {
 				}
 				var id coredata.TransactionID
 				id[8], id[9], id[10], id[11], id[15] = byte(sequence>>24), byte(sequence>>16), byte(sequence>>8), byte(sequence), 2
+				expected, next := uint64(7), uint64(8)
+				if !conflict {
+					expected, next = okVersion, okVersion+1
+					okVersion++
+				}
 				record := coredata.CommitRecord{ID: id, Mutations: []coredata.Mutation{{
-					Key:  coredata.DocumentKey{Database: "game", Resource: resource, ID: int64(sequence + 1)},
-					Kind: coredata.MutationPatch, ExpectedVersion: 7, NextVersion: 8, Schema: 1,
+					Key:  coredata.DocumentKey{Database: "game", Resource: resource, ID: int64(1)},
+					Kind: coredata.MutationPatch, ExpectedVersion: expected, NextVersion: next, Schema: 1,
 					Patch: coredata.FieldPatch{SetBSON: set},
 				}}}
 				err := store.Project(context.Background(), record)
