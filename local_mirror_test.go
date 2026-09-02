@@ -250,7 +250,7 @@ func TestLocalMirrorWaitsForServerWatchReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if status := mirror.Status(); status.Synced {
 		t.Fatalf("mirror reported synced before server watch readiness: %+v", status)
 	}
@@ -299,7 +299,7 @@ func TestLocalMirrorPublishesAndUsesRevisionCAS(t *testing.T) {
 		t.Fatalf("newLocalMirror: %v", err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if err := mirror.WaitForSync(context.Background()); err != nil {
 		t.Fatalf("WaitForSync: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestLocalMirrorUsesNativeEtcdPrefixSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if err := mirror.WaitForSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestLocalMirrorReportsWatchFailuresAndRejectsOutOfScopeKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 
 	if _, _, err := mirror.Get("/other/a"); !errors.Is(err, fetcd.ErrMirrorKeyOutsidePrefix) {
 		t.Fatalf("outside key error=%v", err)
@@ -423,7 +423,7 @@ func TestLocalMirrorCloseMarksViewUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if err := mirror.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestLocalMirrorIgnoresStaleMalformedWatchValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if err := mirror.WaitForSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestLocalMirrorSubscriptionDeliversAtomicSnapshotAndOrderedChanges(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	if err := mirror.WaitForSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestLocalMirrorSubscriptionReceivesResnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	changes := make(chan fetcd.LocalMirrorChange[mirrorTestRecord], 2)
 	subscription, err := mirror.Subscribe(context.Background(), func(_ context.Context, change fetcd.LocalMirrorChange[mirrorTestRecord]) error {
 		changes <- change
@@ -560,7 +560,7 @@ func TestLocalMirrorSlowSubscriptionIsIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	subscription, err := mirror.Subscribe(context.Background(), func(_ context.Context, _ fetcd.LocalMirrorChange[mirrorTestRecord]) error {
@@ -609,7 +609,7 @@ func TestLocalMirrorSubscriptionContainsHandlerPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	subscription, err := mirror.Subscribe(context.Background(), func(context.Context, fetcd.LocalMirrorChange[mirrorTestRecord]) error {
 		panic("broken callback")
 	}, fetcd.LocalMirrorSubscribeOptions{})
@@ -647,7 +647,7 @@ func TestLocalMirrorResnapshotsAfterMalformedWatchValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mirror.Close() })
-	<-client.watchRevisions
+	awaitWatchStarted(t, client)
 	client.setSnapshot(&fetcd.PrefixSnapshot{Revision: 7, KVs: []*fetcd.KV{{Key: "/sync/a", Value: `{"count":2}`, ModRevision: 7}}})
 	client.watcher(0).events <- &fetcd.WatchEvent{Type: fetcd.EventPut, KV: &fetcd.KV{Key: "/sync/a", Value: "not-json", ModRevision: 6}}
 	select {
@@ -659,6 +659,20 @@ func TestLocalMirrorResnapshotsAfterMalformedWatchValue(t *testing.T) {
 		t.Fatal("mirror did not resnapshot after malformed event")
 	}
 	waitMirrorValue(t, mirror, "/sync/a", 2)
+}
+
+// awaitWatchStarted blocks until the mirror's watcher has registered, with an
+// upper bound. A bare `<-client.watchRevisions` made a mirror that never
+// started its watch fail as a go test timeout — ten minutes and a stack dump
+// instead of a sentence — so every wait in this file is bounded, matching
+// waitMirrorValue below.
+func awaitWatchStarted(t *testing.T, client *mirrorTestClient) {
+	t.Helper()
+	select {
+	case <-client.watchRevisions:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mirror never started its etcd watch")
+	}
 }
 
 func waitMirrorValue(t *testing.T, mirror fetcd.ILocalMirror[mirrorTestRecord], key string, count int) {
