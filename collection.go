@@ -297,7 +297,9 @@ func mongoIndexModel(idx fmongo.IndexModel) mongo.IndexModel {
 	if idx.Sparse {
 		indexOpts.SetSparse(true)
 	}
-	if idx.TTL > 0 {
+	if idx.ExpireAt {
+		indexOpts.SetExpireAfterSeconds(0)
+	} else if idx.TTL > 0 {
 		indexOpts.SetExpireAfterSeconds(int32(idx.TTL))
 	}
 	model.Options = indexOpts

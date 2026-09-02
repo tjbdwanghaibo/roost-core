@@ -7,6 +7,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 
 	drivermongo "go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 func TestIsIndexDefinitionConflict(t *testing.T) {
@@ -50,6 +51,32 @@ func TestIndexConflictPolicyRequiresExplicitAutoRecreate(t *testing.T) {
 	if !shouldRecreateIndexOnConflict(idx, IndexMigrationPolicy{AllowRecreate: true}) {
 		t.Fatal("index conflict should recreate when model and migration policy both allow it")
 	}
+}
+
+func TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry(t *testing.T) {
+	relative := resolveIndexOptions(t, fmongo.IndexModel{TTL: 60})
+	if relative.ExpireAfterSeconds == nil || *relative.ExpireAfterSeconds != 60 {
+		t.Fatalf("relative ttl=%v, want 60", relative.ExpireAfterSeconds)
+	}
+	absolute := resolveIndexOptions(t, fmongo.IndexModel{ExpireAt: true})
+	if absolute.ExpireAfterSeconds == nil || *absolute.ExpireAfterSeconds != 0 {
+		t.Fatalf("absolute ttl=%v, want 0", absolute.ExpireAfterSeconds)
+	}
+	none := resolveIndexOptions(t, fmongo.IndexModel{})
+	if none.ExpireAfterSeconds != nil {
+		t.Fatalf("unset ttl=%v, want nil", none.ExpireAfterSeconds)
+	}
+}
+
+func resolveIndexOptions(t *testing.T, idx fmongo.IndexModel) options.IndexOptions {
+	t.Helper()
+	var resolved options.IndexOptions
+	for _, apply := range mongoIndexModel(idx).Options.List() {
+		if err := apply(&resolved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resolved
 }
 
 func TestStringifyIDDoesNotExposeNilSentinel(t *testing.T) {
