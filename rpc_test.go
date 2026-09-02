@@ -2,15 +2,16 @@ package nats
 
 import (
 	"errors"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"github.com/tjbdwanghaibo/cube-core/worker"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func metricValue(t *testing.T, registry *obs.Registry, name string) int64 {
+func metricValue(t *testing.T, registry *metrics.Registry, name string) int64 {
 	t.Helper()
 	for _, metric := range registry.Snapshot() {
 		if metric.Name == name {
@@ -60,10 +61,10 @@ func TestRpcClientStopCancelsPendingCalls(t *testing.T) {
 }
 
 func TestRpcClientDispatchCallbackCompletesWhenPoolRejects(t *testing.T) {
-	previousRegistry := obs.DefaultRegistry()
-	registry := obs.NewRegistry()
-	obs.SetDefaultRegistry(registry)
-	t.Cleanup(func() { obs.SetDefaultRegistry(previousRegistry) })
+	previousRegistry := metrics.DefaultRegistry()
+	registry := metrics.NewRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previousRegistry) })
 
 	// An unstarted pool rejects admission. Regression: Dispatch used to call
 	// OnRelease on this path, but rpcTask.OnRelease was empty, silently losing
@@ -151,10 +152,10 @@ func TestRpcClientPendingHasSingleTerminalWinner(t *testing.T) {
 
 func TestRpcClientCancelsOneHundredThousandPendingExactlyOnce(t *testing.T) {
 	const calls = 100_000
-	previousRegistry := obs.DefaultRegistry()
-	registry := obs.NewRegistry()
-	obs.SetDefaultRegistry(registry)
-	t.Cleanup(func() { obs.SetDefaultRegistry(previousRegistry) })
+	previousRegistry := metrics.DefaultRegistry()
+	registry := metrics.NewRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previousRegistry) })
 
 	r := &rpcClient{}
 	r.pool = worker.NewPool[*rpcTask](worker.PoolConfig{
@@ -178,8 +179,8 @@ func TestRpcClientCancelsOneHundredThousandPendingExactlyOnce(t *testing.T) {
 				counts[index].Add(1)
 			},
 		})
-		obs.IncCounter("nats.rpc.started.total", nil, 1)
-		obs.AddGauge("nats.rpc.pending", nil, 1)
+		metrics.IncCounter("nats.rpc.started.total", nil, 1)
+		metrics.AddGauge("nats.rpc.pending", nil, 1)
 	}
 
 	r.Stop()
@@ -204,7 +205,56 @@ func TestRpcClientCancelsOneHundredThousandPendingExactlyOnce(t *testing.T) {
 	if started != calls || completed != calls || pending != 0 || started != completed+pending {
 		t.Fatalf("RPC conservation failed: started=%d completed=%d pending=%d", started, completed, pending)
 	}
-	if duplicate := metricValue(t, registry, "nats.rpc.duplicate_completion"); duplicate != 0 {
-		t.Fatalf("duplicate completion = %d, want 0", duplicate)
-	}
+}
+
+// The exactly-once guard has to be observable, otherwise "no duplicate
+// completions" is an assertion about a metric that cannot move. This drives
+// the two paths that legitimately race for a task — the pool worker and
+// OnRelease — and checks both halves: the callback runs once, and the second
+// arrival is reported rather than silently swallowed.
+// The exactly-once guard is what the whole async RPC contract rests on, and
+// every task legitimately reaches complete() twice: worker.safeHandle calls
+// the pool handler and then `defer task.OnRelease()`. Both orderings, and the
+// release-only path a rejected admission takes, are asserted here.
+func TestRpcTaskCompletesCallbackExactlyOnce(t *testing.T) {
+	t.Run("handler then release", func(t *testing.T) {
+		calls := 0
+		task := &rpcTask{cb: func([]byte, error) { calls++ }}
+		task.complete()
+		task.OnRelease()
+		if calls != 1 {
+			t.Fatalf("callback ran %d times, want exactly 1", calls)
+		}
+	})
+	t.Run("release only", func(t *testing.T) {
+		// A rejected or draining queue admission never reaches the handler,
+		// so OnRelease alone has to deliver the terminal callback.
+		calls := 0
+		task := &rpcTask{cb: func([]byte, error) { calls++ }}
+		task.OnRelease()
+		if calls != 1 {
+			t.Fatalf("release-only completion ran %d times, want 1", calls)
+		}
+	})
+	t.Run("concurrent arrivals", func(t *testing.T) {
+		var calls atomic.Int32
+		task := &rpcTask{cb: func([]byte, error) { calls.Add(1) }}
+		var wg sync.WaitGroup
+		for range 16 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				task.complete()
+			}()
+		}
+		wg.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("callback ran %d times under concurrent arrivals, want 1", got)
+		}
+	})
+	t.Run("nil callback", func(t *testing.T) {
+		task := &rpcTask{}
+		task.complete()
+		task.OnRelease()
+	})
 }

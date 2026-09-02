@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 
 	gonats "github.com/nats-io/nats.go"
 )
@@ -240,7 +240,7 @@ func invokeNatsHandler(handler fnats.MsgHandler, msg *fnats.Msg) {
 				subject = msg.Subject
 			}
 			slog.Error("nats: subscription handler panic", "subject", subject, "panic", recovered)
-			obs.IncCounter("nats.subscription.handler_panic.total", nil, 1)
+			metrics.IncCounter("nats.subscription.handler_panic.total", nil, 1)
 		}
 	}()
 	handler(msg)

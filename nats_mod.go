@@ -6,7 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/admin"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/bus"
-	fctx "github.com/tjbdwanghaibo/cube-core/ctx"
+	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
 	"github.com/tjbdwanghaibo/cube-core/health"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
 	fredis "github.com/tjbdwanghaibo/cube-core/redis"

@@ -3,8 +3,8 @@ package nats
 import (
 	"context"
 	"fmt"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 	"github.com/tjbdwanghaibo/cube-core/worker"
 	"log/slog"
 	"math"
@@ -76,18 +76,32 @@ type rpcTask struct {
 	cb   fnats.RpcCallback
 	resp []byte
 	err  error
-	once sync.Once
+	// arrivals is both the exactly-once guard and the observation of it.
+	arrivals atomic.Int32
 }
 
+// complete runs the terminal callback exactly once.
+//
+// Every task reaches here twice on the happy path: worker.Worker.safeHandle
+// calls the pool handler and then `defer task.OnRelease()`, which is the
+// pool's ownership-release protocol, not an anomaly. A rejected or draining
+// admission takes the OnRelease half alone, which is why that half has to be
+// able to run the callback by itself. So there is no "duplicate completion"
+// event to observe from in here — the second arrival is unconditional — and
+// the exactly-once property is asserted directly instead, by counting
+// callback invocations (see rpc_test.go). An earlier attempt to publish it as
+// a metric was a gauge set to zero at construction and never touched again;
+// it has been removed rather than left as an assertion that cannot fail.
 func (t *rpcTask) complete() {
 	if t == nil {
 		return
 	}
-	t.once.Do(func() {
-		if t.cb != nil {
-			t.cb(t.resp, t.err)
-		}
-	})
+	if t.arrivals.Add(1) > 1 {
+		return
+	}
+	if t.cb != nil {
+		t.cb(t.resp, t.err)
+	}
 }
 
 // OnRelease is also the admission-failure fallback. worker.Pool.Dispatch
@@ -112,7 +126,6 @@ func newRpcClient(client *natsClient, policy fnats.RetryPolicy, cbWorkerNum int)
 		task.complete()
 	})
 	rc.pool.Start()
-	obs.SetGauge("nats.rpc.duplicate_completion", nil, 0)
 	return rc
 }
 
@@ -182,8 +195,8 @@ func (r *rpcClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	sub.AutoUnsubscribe(1)
 	pc := &pendingCall{cb: cb, sub: sub, startedAt: time.Now()}
 	r.pending.Store(sid, pc)
-	obs.IncCounter("nats.rpc.started.total", nil, 1)
-	obs.AddGauge("nats.rpc.pending", nil, 1)
+	metrics.IncCounter("nats.rpc.started.total", nil, 1)
+	metrics.AddGauge("nats.rpc.pending", nil, 1)
 	pc.setTimer(time.AfterFunc(5*time.Second, func() {
 		r.finishPending(sid, nil, fnats.ErrTimeout)
 	}))
@@ -231,10 +244,10 @@ func (r *rpcClient) finishPending(sid int64, resp []byte, err error) bool {
 	if !ok || pc == nil {
 		return false
 	}
-	obs.AddGauge("nats.rpc.pending", nil, -1)
-	obs.IncCounter("nats.rpc.completed.total", nil, 1)
+	metrics.AddGauge("nats.rpc.pending", nil, -1)
+	metrics.IncCounter("nats.rpc.completed.total", nil, 1)
 	if !pc.startedAt.IsZero() {
-		obs.ObserveHistogram("nats.rpc.callback.latency", nil, time.Since(pc.startedAt))
+		metrics.ObserveHistogram("nats.rpc.callback.latency", nil, time.Since(pc.startedAt))
 	}
 	pc.closeResources()
 	r.dispatchCallback(sid, &rpcTask{cb: pc.cb, resp: resp, err: err})
@@ -247,7 +260,7 @@ func (r *rpcClient) dispatchCallback(key int64, task *rpcTask) {
 		return
 	}
 	if err := r.pool.Dispatch(key, task); err != nil {
-		obs.IncCounter("nats.rpc.queue_rejected.total", nil, 1)
+		metrics.IncCounter("nats.rpc.queue_rejected.total", nil, 1)
 		// Dispatch transfers ownership even on rejection; rpcTask.OnRelease
 		// completes the callback synchronously, so the terminal result is not
 		// lost. The caller only needs to avoid a second completion here.

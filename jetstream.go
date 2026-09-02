@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
@@ -77,7 +77,7 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		if err != nil {
 			if reason := terminalReason(err, cfg.MaxDeliver, wrapped.NumDelivered); reason != "" {
 				slog.Error("nats jetstream: terminating failed delivery", "subject", wrapped.Subject, "stream", wrapped.Stream, "consumer", wrapped.Consumer, "stream_sequence", wrapped.StreamSeq, "deliveries", wrapped.NumDelivered, "reason", reason, "err", err)
-				obs.IncCounter("nats.jetstream.terminal.total", obs.Labels{"reason": reason}, 1)
+				metrics.IncCounter("nats.jetstream.terminal.total", metrics.Labels{"reason": reason}, 1)
 				_ = msg.Term()
 				return
 			}
