@@ -39,22 +39,57 @@ func TestDistanceOperationsDoNotOverflow(t *testing.T) {
 	}
 }
 
-func TestGridTerrainConcurrentAccess(t *testing.T) {
-	terrain, _ := NewGridTerrain(32, 32)
+// The race detector is only half the requirement: concurrent SetBlocked /
+// Blocked must also stay consistent and must not swallow errors. The previous
+// version discarded both return values, so a terrain that rejected every write
+// would have passed.
+func TestGridTerrainConcurrentAccessKeepsWritesConsistent(t *testing.T) {
+	terrain, err := NewGridTerrain(32, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each worker owns one column, so the final state is deterministic even
+	// though the writes interleave.
+	const workers, rounds = 8, 1000
 	var group sync.WaitGroup
-	for worker := int64(0); worker < 8; worker++ {
+	failures := make([]error, workers)
+	for worker := int64(0); worker < workers; worker++ {
 		worker := worker
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			for index := int64(0); index < 1000; index++ {
-				point := Point{X: (worker + index) % 32, Y: (worker*3 + index) % 32}
-				_ = terrain.SetBlocked(point, index%2 == 0)
-				_ = terrain.Blocked(point)
+			for index := int64(0); index < rounds; index++ {
+				point := Point{X: worker, Y: index % 32}
+				blocked := (index/32)%2 == 0
+				if err := terrain.SetBlocked(point, blocked); err != nil {
+					failures[worker] = err
+					return
+				}
+				// Reading another worker's column concurrently is the part
+				// the race detector is here for.
+				_ = terrain.Blocked(Point{X: (worker + 1) % workers, Y: index % 32})
 			}
 		}()
 	}
 	group.Wait()
+	for worker, err := range failures {
+		if err != nil {
+			t.Fatalf("worker %d: SetBlocked failed: %v", worker, err)
+		}
+	}
+	// The expected value is derived from this test's own write schedule, not
+	// hardcoded: for row y the last write is the largest index < rounds with
+	// index%32 == y.
+	for worker := int64(0); worker < workers; worker++ {
+		for y := int64(0); y < 32; y++ {
+			lastIndex := y + 32*((rounds-1-y)/32)
+			want := (lastIndex/32)%2 == 0
+			if got := terrain.Blocked(Point{X: worker, Y: y}); got != want {
+				t.Fatalf("cell (%d,%d) = %v, want %v (last write at index %d)",
+					worker, y, got, want, lastIndex)
+			}
+		}
+	}
 }
 
 func TestFindPath(t *testing.T) {
