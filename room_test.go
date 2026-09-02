@@ -8,24 +8,24 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/cube-core/lockstep"
-	corerep "github.com/tjbdwanghaibo/cube-core/replication"
+	corestate "github.com/tjbdwanghaibo/cube-core/statesync"
 )
 
 type recordingTransport struct {
-	datagrams map[corerep.SessionID][][]byte
-	reliable  map[corerep.SessionID][][]byte
-	failing   map[corerep.SessionID]error
+	datagrams map[corestate.SessionID][][]byte
+	reliable  map[corestate.SessionID][][]byte
+	failing   map[corestate.SessionID]error
 }
 
 func newRecordingTransport() *recordingTransport {
 	return &recordingTransport{
-		datagrams: make(map[corerep.SessionID][][]byte),
-		reliable:  make(map[corerep.SessionID][][]byte),
-		failing:   make(map[corerep.SessionID]error),
+		datagrams: make(map[corestate.SessionID][][]byte),
+		reliable:  make(map[corestate.SessionID][][]byte),
+		failing:   make(map[corestate.SessionID]error),
 	}
 }
 
-func (t *recordingTransport) SendDatagram(_ context.Context, session corerep.SessionID, packet []byte) error {
+func (t *recordingTransport) SendDatagram(_ context.Context, session corestate.SessionID, packet []byte) error {
 	if err := t.failing[session]; err != nil {
 		return err
 	}
@@ -33,7 +33,7 @@ func (t *recordingTransport) SendDatagram(_ context.Context, session corerep.Ses
 	return nil
 }
 
-func (t *recordingTransport) SendReliable(_ context.Context, session corerep.SessionID, packet []byte) error {
+func (t *recordingTransport) SendReliable(_ context.Context, session corestate.SessionID, packet []byte) error {
 	if err := t.failing[session]; err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func TestRoomTickBroadcastsRedundantFrames(t *testing.T) {
 	if folded, err := room.SubmitInput(2, 1, []byte{0x22}); err != nil || folded != 4 {
 		t.Fatalf("late fold = %d err=%v, want 4", folded, err)
 	}
-	for _, session := range []corerep.SessionID{101, 102} {
+	for _, session := range []corestate.SessionID{101, 102} {
 		if len(transport.datagrams[session]) != 3 {
 			t.Fatalf("session %d datagrams = %d", session, len(transport.datagrams[session]))
 		}
@@ -267,8 +267,8 @@ func TestRoomTickSurvivesDeadSession(t *testing.T) {
 
 type nullTransport struct{}
 
-func (nullTransport) SendDatagram(context.Context, corerep.SessionID, []byte) error { return nil }
-func (nullTransport) SendReliable(context.Context, corerep.SessionID, []byte) error { return nil }
+func (nullTransport) SendDatagram(context.Context, corestate.SessionID, []byte) error { return nil }
+func (nullTransport) SendReliable(context.Context, corestate.SessionID, []byte) error { return nil }
 
 func BenchmarkRoomTickTenPlayers(b *testing.B) {
 	room, err := NewRoom(RoomConfig{
@@ -280,7 +280,7 @@ func BenchmarkRoomTickTenPlayers(b *testing.B) {
 		b.Fatal(err)
 	}
 	for player := lockstep.PlayerID(1); player <= 10; player++ {
-		if err := room.Attach(player, corerep.SessionID(player)); err != nil {
+		if err := room.Attach(player, corestate.SessionID(player)); err != nil {
 			b.Fatal(err)
 		}
 	}

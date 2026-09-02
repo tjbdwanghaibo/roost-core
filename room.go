@@ -12,7 +12,7 @@
 // Close when the match ends.
 //
 // Transport note: wire Datagrams to a raw transport sender (UDP/KCP/QUIC).
-// Do NOT route lockstep frames through replication.AsyncTransport's
+// Do NOT route lockstep frames through nettransport.AsyncTransport's
 // datagram lane — its latest-only per-stream folding is built for STATE
 // frames (a newer state replaces an older one); lockstep INPUT frames are
 // each irreplaceable, and folding under transient congestion silently loses
@@ -26,9 +26,9 @@ import (
 	"sort"
 
 	"github.com/tjbdwanghaibo/cube-core/lockstep"
-	"github.com/tjbdwanghaibo/cube-core/obs"
-	corerep "github.com/tjbdwanghaibo/cube-core/replication"
-	"github.com/tjbdwanghaibo/cube-kit/replication"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
+	corestate "github.com/tjbdwanghaibo/cube-core/statesync"
+	"github.com/tjbdwanghaibo/cube-kit/nettransport"
 )
 
 var (
@@ -80,10 +80,10 @@ type RoomConfig struct {
 	// Datagrams broadcasts cut frames (required). Loss-tolerant lane: the
 	// AEAD UDP transport, or any raw DatagramSender — never a latest-only
 	// folding queue (see the package note).
-	Datagrams replication.DatagramSender
+	Datagrams nettransport.DatagramSender
 	// Reliable pages catch-up frames to reconnecting sessions (optional;
 	// StartCatchup fails without it). KCP or QUIC transports fit here.
-	Reliable replication.ReliableSender
+	Reliable nettransport.ReliableSender
 	// OnDesync is invoked whenever a keyframe ruling gains outliers that
 	// were not surfaced before (set difference, not cardinality — an
 	// equal-size flip of the outlier set fires too). Nil ignores verdicts.
@@ -102,22 +102,22 @@ type Room struct {
 	history      *lockstep.History
 	encoder      *lockstep.RedundantEncoder
 	detector     *lockstep.DesyncDetector
-	datagrams    replication.DatagramSender
-	reliable     replication.ReliableSender
+	datagrams    nettransport.DatagramSender
+	reliable     nettransport.ReliableSender
 	onDesync     func(lockstep.DesyncVerdict)
 	catchupBatch int
 	catchupMax   int
 	closed       bool
 	// sessions binds attached seats to their transport session.
-	sessions map[lockstep.PlayerID]corerep.SessionID
+	sessions map[lockstep.PlayerID]corestate.SessionID
 	// spectators are receive-only sessions: they get live broadcasts and
 	// may catch up, but hold no seat and submit nothing.
-	spectators map[corerep.SessionID]struct{}
+	spectators map[corestate.SessionID]struct{}
 	// sessionOwners tracks which receiver (seat or spectator) holds each
 	// session id, so one session can never serve two receivers.
-	sessionOwners map[corerep.SessionID]lockstep.PlayerID // spectators use ownerSpectator
+	sessionOwners map[corestate.SessionID]lockstep.PlayerID // spectators use ownerSpectator
 	// catchups holds each catching-up session's paging state.
-	catchups map[corerep.SessionID]*catchupState
+	catchups map[corestate.SessionID]*catchupState
 	// ruled tracks the outliers already surfaced per judged frame, so
 	// OnDesync fires exactly on set growth/change, not cardinality change.
 	ruled map[lockstep.FrameID]map[lockstep.PlayerID]struct{}
@@ -177,10 +177,10 @@ func NewRoom(config RoomConfig) (*Room, error) {
 		onDesync:      config.OnDesync,
 		catchupBatch:  batch,
 		catchupMax:    maxFailures,
-		sessions:      make(map[lockstep.PlayerID]corerep.SessionID),
-		spectators:    make(map[corerep.SessionID]struct{}),
-		sessionOwners: make(map[corerep.SessionID]lockstep.PlayerID),
-		catchups:      make(map[corerep.SessionID]*catchupState),
+		sessions:      make(map[lockstep.PlayerID]corestate.SessionID),
+		spectators:    make(map[corestate.SessionID]struct{}),
+		sessionOwners: make(map[corestate.SessionID]lockstep.PlayerID),
+		catchups:      make(map[corestate.SessionID]*catchupState),
 		ruled:         make(map[lockstep.FrameID]map[lockstep.PlayerID]struct{}),
 	}, nil
 }
@@ -191,7 +191,7 @@ func NewRoom(config RoomConfig) (*Room, error) {
 // (reconnect) replaces the previous one and drops its catch-up. A session
 // already serving another seat or a spectator is refused — two receivers on
 // one session would double-send and cross-cancel each other's catch-up.
-func (r *Room) Attach(player lockstep.PlayerID, session corerep.SessionID) error {
+func (r *Room) Attach(player lockstep.PlayerID, session corestate.SessionID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -226,7 +226,7 @@ func (r *Room) Detach(player lockstep.PlayerID) {
 
 // AttachSpectator binds a receive-only session: it gets live broadcasts and
 // may catch up via SpectatorCatchup, but holds no seat.
-func (r *Room) AttachSpectator(session corerep.SessionID) error {
+func (r *Room) AttachSpectator(session corestate.SessionID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -239,7 +239,7 @@ func (r *Room) AttachSpectator(session corerep.SessionID) error {
 }
 
 // DetachSpectator unbinds a spectator session.
-func (r *Room) DetachSpectator(session corerep.SessionID) {
+func (r *Room) DetachSpectator(session corestate.SessionID) {
 	if _, ok := r.spectators[session]; ok {
 		delete(r.spectators, session)
 		delete(r.sessionOwners, session)
@@ -262,11 +262,11 @@ func (r *Room) SubmitInput(player lockstep.PlayerID, frame lockstep.FrameID, pay
 	late := frame != 0 && frame < r.sequencer.NextFrame()
 	folded, err := r.sequencer.SubmitInput(player, frame, payload)
 	if err != nil {
-		obs.IncCounter("lockstep.input.rejected.total", obs.Labels{"reason": rejectReason(err)}, 1)
+		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": rejectReason(err)}, 1)
 		return 0, err
 	}
 	if late {
-		obs.IncCounter("lockstep.input.late.total", nil, 1)
+		metrics.IncCounter("lockstep.input.late.total", nil, 1)
 	}
 	return folded, nil
 }
@@ -297,7 +297,7 @@ func (r *Room) Tick(ctx context.Context) (lockstep.Frame, error) {
 	frame := r.sequencer.Advance()
 	r.history.Append(frame)
 	packet := r.encoder.Push(frame)
-	obs.IncCounter("lockstep.frame.total", nil, 1)
+	metrics.IncCounter("lockstep.frame.total", nil, 1)
 
 	var errs []error
 	for _, receiver := range r.broadcastOrder() {
@@ -316,7 +316,7 @@ func (r *Room) Tick(ctx context.Context) (lockstep.Frame, error) {
 
 type broadcastReceiver struct {
 	owner   lockstep.PlayerID
-	session corerep.SessionID
+	session corestate.SessionID
 }
 
 // broadcastOrder returns seats (by ascending player) then spectators (by
@@ -332,7 +332,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 	for _, player := range players {
 		receivers = append(receivers, broadcastReceiver{owner: player, session: r.sessions[player]})
 	}
-	specs := make([]corerep.SessionID, 0, len(r.spectators))
+	specs := make([]corestate.SessionID, 0, len(r.spectators))
 	for session := range r.spectators {
 		specs = append(specs, session)
 	}
@@ -359,14 +359,14 @@ func (r *Room) StartCatchup(player lockstep.PlayerID, from lockstep.FrameID) err
 }
 
 // SpectatorCatchup begins paging history to an attached spectator session.
-func (r *Room) SpectatorCatchup(session corerep.SessionID, from lockstep.FrameID) error {
+func (r *Room) SpectatorCatchup(session corestate.SessionID, from lockstep.FrameID) error {
 	if _, ok := r.spectators[session]; !ok {
 		return ErrPlayerDetached
 	}
 	return r.startCatchup(session, from)
 }
 
-func (r *Room) startCatchup(session corerep.SessionID, from lockstep.FrameID) error {
+func (r *Room) startCatchup(session corestate.SessionID, from lockstep.FrameID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -400,7 +400,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 	if len(r.catchups) == 0 {
 		return nil
 	}
-	sessions := make([]corerep.SessionID, 0, len(r.catchups))
+	sessions := make([]corestate.SessionID, 0, len(r.catchups))
 	for session := range r.catchups {
 		sessions = append(sessions, session)
 	}
@@ -431,7 +431,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 			continue
 		}
 		state.failures = 0
-		obs.IncCounter("lockstep.catchup.frames.total", nil, int64(len(page)))
+		metrics.IncCounter("lockstep.catchup.frames.total", nil, int64(len(page)))
 		next := page[len(page)-1].ID + 1
 		if next > r.history.Latest() {
 			delete(r.catchups, session)
@@ -453,11 +453,11 @@ func (r *Room) ReportHash(player lockstep.PlayerID, frame lockstep.FrameID, hash
 		return ErrRoomClosed
 	}
 	if !r.sequencer.KnownPlayer(player) {
-		obs.IncCounter("lockstep.input.rejected.total", obs.Labels{"reason": "hash_unknown_player"}, 1)
+		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": "hash_unknown_player"}, 1)
 		return lockstep.ErrPlayerUnknown
 	}
 	if frame == 0 || frame > r.history.Latest() {
-		obs.IncCounter("lockstep.input.rejected.total", obs.Labels{"reason": "hash_invalid_frame"}, 1)
+		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": "hash_invalid_frame"}, 1)
 		return fmt.Errorf("%w: frame %d, latest %d", ErrHashFrameInvalid, frame, r.history.Latest())
 	}
 	verdict, ready := r.detector.Report(player, frame, hash)
@@ -482,7 +482,7 @@ func (r *Room) ReportHash(player lockstep.PlayerID, frame lockstep.FrameID, hash
 	}
 	r.ruled[frame] = next
 	if newOutliers > 0 {
-		obs.IncCounter("lockstep.desync.total", nil, int64(newOutliers))
+		metrics.IncCounter("lockstep.desync.total", nil, int64(newOutliers))
 	}
 	if r.onDesync != nil {
 		r.onDesync(verdict)
@@ -519,9 +519,9 @@ func (r *Room) History() *lockstep.History { return r.history }
 // exactly one match — do not reuse it.
 func (r *Room) Close() {
 	r.closed = true
-	r.sessions = make(map[lockstep.PlayerID]corerep.SessionID)
-	r.spectators = make(map[corerep.SessionID]struct{})
-	r.sessionOwners = make(map[corerep.SessionID]lockstep.PlayerID)
-	r.catchups = make(map[corerep.SessionID]*catchupState)
+	r.sessions = make(map[lockstep.PlayerID]corestate.SessionID)
+	r.spectators = make(map[corestate.SessionID]struct{})
+	r.sessionOwners = make(map[corestate.SessionID]lockstep.PlayerID)
+	r.catchups = make(map[corestate.SessionID]*catchupState)
 	r.ruled = make(map[lockstep.FrameID]map[lockstep.PlayerID]struct{})
 }
