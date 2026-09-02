@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	coresync "github.com/tjbdwanghaibo/cube-core/sync"
+	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 )
 
@@ -43,10 +43,12 @@ type ErrorHandler func(error)
 
 // ConfirmedSyncPublisher returns only after the broker durably accepts a frame.
 // JetStream implements this capability; plain NATS intentionally does not.
-type ConfirmedSyncPublisher interface{ PublishConfirmed(*coresync.SyncMsg) error }
+type ConfirmedSyncPublisher interface {
+	PublishConfirmed(*coresyncbus.SyncMsg) error
+}
 
 type Publisher struct {
-	bus                  coresync.IPublisher
+	bus                  coresyncbus.IPublisher
 	confirmed            ConfirmedSyncPublisher
 	fromSid              int32
 	onError              ErrorHandler
@@ -83,11 +85,11 @@ var gzipEncoderPool = sync.Pool{New: func() any {
 	return &gzipEncoder{writer: writer}
 }}
 
-func NewPublisher(bus coresync.IPublisher, fromSid int32, onError ErrorHandler) (*Publisher, error) {
+func NewPublisher(bus coresyncbus.IPublisher, fromSid int32, onError ErrorHandler) (*Publisher, error) {
 	return NewPublisherWithOptions(bus, PublisherOptions{FromSID: fromSid, OnError: onError})
 }
 
-func NewPublisherWithOptions(bus coresync.IPublisher, options PublisherOptions) (*Publisher, error) {
+func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOptions) (*Publisher, error) {
 	if bus == nil {
 		return nil, ErrPublisherRequired
 	}
@@ -148,7 +150,7 @@ func (publisher *Publisher) Publish(packet corestream.Packet) error {
 		if end > len(encoded) {
 			end = len(encoded)
 		}
-		message := &coresync.SyncMsg{Topic: packet.Stream.Topic, Key: packet.Stream.Key, Version: int64(packet.Sequence), Data: append([]byte(nil), encoded[start:end]...), FromSid: publisher.fromSid, Part: uint32(part), Parts: uint32(parts), Encoding: encoding, Checksum: checksumText}
+		message := &coresyncbus.SyncMsg{Topic: packet.Stream.Topic, Key: packet.Stream.Key, Version: int64(packet.Sequence), Data: append([]byte(nil), encoded[start:end]...), FromSid: publisher.fromSid, Part: uint32(part), Parts: uint32(parts), Encoding: encoding, Checksum: checksumText}
 		if err := publisher.publishFrame(message); err != nil {
 			publisher.failures.Add(1)
 			return err
@@ -159,7 +161,7 @@ func (publisher *Publisher) Publish(packet corestream.Packet) error {
 	return nil
 }
 
-func (publisher *Publisher) publishFrame(message *coresync.SyncMsg) error {
+func (publisher *Publisher) publishFrame(message *coresyncbus.SyncMsg) error {
 	if publisher.requireConfirmation {
 		return publisher.confirmed.PublishConfirmed(message)
 	}
@@ -213,10 +215,10 @@ type SubscribeOptions struct {
 	RequireChecksum  bool
 }
 
-func Subscribe(bus coresync.ISubscriber, topic string, handler Handler) (func(), error) {
+func Subscribe(bus coresyncbus.ISubscriber, topic string, handler Handler) (func(), error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{}, handler)
 }
-func SubscribeForObserver(bus coresync.ISubscriber, topic string, observer corestream.Observer, handler Handler) (func(), error) {
+func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer corestream.Observer, handler Handler) (func(), error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{ExpectedObserver: &observer}, handler)
 }
 
@@ -241,7 +243,7 @@ type reassembler struct {
 	values  map[assemblyKey]*assembly
 }
 
-func SubscribeWithOptions(bus coresync.ISubscriber, topic string, options SubscribeOptions, handler Handler) (func(), error) {
+func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options SubscribeOptions, handler Handler) (func(), error) {
 	if bus == nil {
 		return nil, ErrSubscriberRequired
 	}
@@ -261,7 +263,7 @@ func SubscribeWithOptions(bus coresync.ISubscriber, topic string, options Subscr
 		options.AssemblyTTL = 30 * time.Second
 	}
 	assembler := &reassembler{options: options, values: make(map[assemblyKey]*assembly)}
-	unsub, err := bus.Subscribe(topic, func(message *coresync.SyncMsg) error {
+	unsub, err := bus.Subscribe(topic, func(message *coresyncbus.SyncMsg) error {
 		if message == nil {
 			return nil
 		}
@@ -289,7 +291,7 @@ func SubscribeWithOptions(bus coresync.ISubscriber, topic string, options Subscr
 	}, nil
 }
 
-func (assembler *reassembler) accept(message *coresync.SyncMsg, now time.Time) ([]byte, bool, error) {
+func (assembler *reassembler) accept(message *coresyncbus.SyncMsg, now time.Time) ([]byte, bool, error) {
 	parts := message.Parts
 	if parts == 0 {
 		parts = 1
@@ -369,7 +371,7 @@ func (assembler *reassembler) decode(encoded []byte, encoding, checksum string) 
 	return decoded, true, nil
 }
 
-func decodePacket(data []byte, message *coresync.SyncMsg, options SubscribeOptions) (corestream.Packet, error) {
+func decodePacket(data []byte, message *coresyncbus.SyncMsg, options SubscribeOptions) (corestream.Packet, error) {
 	var packet corestream.Packet
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

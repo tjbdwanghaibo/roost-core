@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	coresync "github.com/tjbdwanghaibo/cube-core/sync"
+	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
 	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
 )
 
@@ -108,7 +108,7 @@ func TestObserverAndPayloadGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Publish(&coresync.SyncMsg{Topic: "state", Version: 1, Data: payload}); !errors.Is(err, ErrObserverMismatch) {
+	if err := bus.Publish(&coresyncbus.SyncMsg{Topic: "state", Version: 1, Data: payload}); !errors.Is(err, ErrObserverMismatch) {
 		t.Fatalf("subscriber observer error = %v", err)
 	}
 }
@@ -223,11 +223,11 @@ func TestConfirmedPublisherCapabilityIsExplicit(t *testing.T) {
 }
 
 type memoryBus struct {
-	handler coresync.Handler
-	last    *coresync.SyncMsg
+	handler coresyncbus.Handler
+	last    *coresyncbus.SyncMsg
 }
 
-func (bus *memoryBus) Publish(message *coresync.SyncMsg) error {
+func (bus *memoryBus) Publish(message *coresyncbus.SyncMsg) error {
 	copyMessage := *message
 	copyMessage.Data = append([]byte(nil), message.Data...)
 	bus.last = &copyMessage
@@ -237,19 +237,19 @@ func (bus *memoryBus) Publish(message *coresync.SyncMsg) error {
 	return nil
 }
 
-func (bus *memoryBus) Subscribe(_ string, handler coresync.Handler) (func(), error) {
+func (bus *memoryBus) Subscribe(_ string, handler coresyncbus.Handler) (func(), error) {
 	bus.handler = handler
 	return func() {}, nil
 }
 
 type capturingPublisher struct {
-	last *coresync.SyncMsg
+	last *coresyncbus.SyncMsg
 	err  error
 }
 
-type framePublisher struct{ messages []*coresync.SyncMsg }
+type framePublisher struct{ messages []*coresyncbus.SyncMsg }
 
-func (publisher *framePublisher) Publish(message *coresync.SyncMsg) error {
+func (publisher *framePublisher) Publish(message *coresyncbus.SyncMsg) error {
 	copyMessage := *message
 	copyMessage.Data = append([]byte(nil), message.Data...)
 	publisher.messages = append(publisher.messages, &copyMessage)
@@ -261,12 +261,12 @@ type confirmedMemoryBus struct {
 	confirmed int
 }
 
-func (bus *confirmedMemoryBus) PublishConfirmed(message *coresync.SyncMsg) error {
+func (bus *confirmedMemoryBus) PublishConfirmed(message *coresyncbus.SyncMsg) error {
 	bus.confirmed++
 	return bus.Publish(message)
 }
 
-func (publisher *capturingPublisher) Publish(message *coresync.SyncMsg) error {
+func (publisher *capturingPublisher) Publish(message *coresyncbus.SyncMsg) error {
 	copyMessage := *message
 	copyMessage.Data = append([]byte(nil), message.Data...)
 	publisher.last = &copyMessage
