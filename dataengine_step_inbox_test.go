@@ -1,13 +1,16 @@
 package saga
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
+	corenest "github.com/tjbdwanghaibo/cube-core/nest"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -18,6 +21,61 @@ func dataEngineCommand(id, operation string, payload string) coresaga.Command {
 		ID: id, IdempotencyKey: operation, SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1,
 		BusinessKey: "r-1", StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1,
 		Topic: "rally.reserve", Payload: []byte(payload), CreatedAt: now, DeadlineAt: now.Add(time.Minute),
+	}
+}
+
+type stepFenceCommitter struct{ record coredata.CommitRecord }
+
+func (committer *stepFenceCommitter) Commit(_ context.Context, record corenest.CommitRecord) error {
+	committer.record = coredata.CloneCommitRecord(record)
+	return nil
+}
+
+func TestDataEngineStepBindCarriesExplicitReservationFence(t *testing.T) {
+	inbox, err := NewDataEngineStepInbox(newDataEngineInboxMongo(), "game", DataEngineStepInboxOptions{Owner: "worker-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := dataEngineCommand("command-fenced", "operation-fenced", "payload")
+	reservation := inbox.activeReservation(command.ID, commandDigest(command), 9)
+	ctx := withReservation(context.Background(), reservation)
+	extracted, ok := ReservationFromContext(ctx)
+	if !ok || extracted.Token != reservation.Token {
+		t.Fatalf("reservation=%+v ok=%t", extracted, ok)
+	}
+	committer := &stepFenceCommitter{}
+	_, err = corenest.RunIsolatedTransaction(ctx, committer, "saga-fence-test", func() (any, error) {
+		return nil, inbox.Bind(command, extracted)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.record.Receipts) != 2 {
+		t.Fatalf("receipts=%+v", committer.record.Receipts)
+	}
+	fence, control, err := coredata.DecodeLeaseFenceReceipt(committer.record.Receipts[0])
+	if err != nil || !control || fence.Owner != "worker-1" || fence.Token != 9 || fence.DocumentID != "saga-step/command-fenced" || !bytes.Equal(fence.Digest, commandDigest(command)) {
+		t.Fatalf("fence=%+v control=%t err=%v", fence, control, err)
+	}
+}
+
+func TestDataEngineStepBindRejectsReservationFromAnotherCommand(t *testing.T) {
+	inbox, err := NewDataEngineStepInbox(newDataEngineInboxMongo(), "game", DataEngineStepInboxOptions{Owner: "worker-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := dataEngineCommand("command-a", "operation-a", "payload-a")
+	other := dataEngineCommand("command-b", "operation-b", "payload-b")
+	reservation := inbox.activeReservation(reserved.ID, commandDigest(reserved), 1)
+	committer := &stepFenceCommitter{}
+	_, err = corenest.RunIsolatedTransaction(context.Background(), committer, "saga-fence-test", func() (any, error) {
+		return nil, inbox.Bind(other, reservation)
+	})
+	if err == nil {
+		t.Fatal("reservation from another command was accepted")
+	}
+	if !committer.record.Empty() {
+		t.Fatalf("mismatched reservation committed record=%+v", committer.record)
 	}
 }
 
@@ -71,6 +129,24 @@ func TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim(t *test
 	}
 }
 
+func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
+	client := newDataEngineInboxMongo()
+	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{Owner: "worker-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.EnsureInfrastructure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.db.claims.indexes) != 3 {
+		t.Fatalf("claim indexes=%d, want 3", len(client.db.claims.indexes))
+	}
+	expiry := client.db.claims.indexes[2]
+	if !expiry.ExpireAt || expiry.TTL != 0 || !expiry.RecreateOnConflict {
+		t.Fatalf("claim expiry index=%+v", expiry)
+	}
+}
+
 type dataEngineInboxMongo struct{ db *dataEngineInboxDatabase }
 
 func newDataEngineInboxMongo() *dataEngineInboxMongo {
@@ -111,6 +187,7 @@ type dataEngineInboxCollection struct {
 	mu       sync.Mutex
 	claims   map[string]dataEngineClaim
 	receipts map[string]dataEngineReceipt
+	indexes  []fmongo.IndexModel
 }
 
 func (collection *dataEngineInboxCollection) InsertOne(_ context.Context, value any) (string, error) {
@@ -213,6 +290,7 @@ func (*dataEngineInboxCollection) Aggregate(context.Context, any, any) error {
 func (*dataEngineInboxCollection) BulkWrite(context.Context, []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
 	return nil, errors.New("unused")
 }
-func (*dataEngineInboxCollection) EnsureIndexes(context.Context, []fmongo.IndexModel) error {
+func (collection *dataEngineInboxCollection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
+	collection.indexes = append(collection.indexes, indexes...)
 	return nil
 }

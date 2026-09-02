@@ -267,7 +267,9 @@ func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetS
 
 // SubscribeDataEngineStep coordinates duplicate deliveries, but never
 // publishes the completion directly. A native handler must execute its Nest
-// transaction with inbox.Bind(command) and coresaga.EmitCompletion; this
+// transaction with inbox.Bind(command, reservation) and
+// coresaga.EmitCompletion; obtain reservation explicitly with
+// ReservationFromContext(ctx). This
 // consumer acknowledges only after the authoritative Data Engine receipt is
 // projected and replayable.
 func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *DataEngineStepInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
@@ -325,6 +327,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			return nil
 		}
 		if !reservation.Duplicate {
+			processCtx = withReservation(processCtx, reservation)
 			completion, err := handler(processCtx, command)
 			if err != nil {
 				return err

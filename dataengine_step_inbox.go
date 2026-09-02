@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -38,6 +39,26 @@ type Reservation struct {
 	Token      uint64
 	Duplicate  bool
 	Completion coresaga.Completion
+	commandID  string
+	owner      string
+	digest     []byte
+}
+
+type reservationContextKey struct{}
+
+func withReservation(ctx context.Context, reservation Reservation) context.Context {
+	return context.WithValue(ctx, reservationContextKey{}, reservation)
+}
+
+// ReservationFromContext returns the lease fence allocated for the current
+// synchronous step delivery. Business adapters pass it explicitly to Bind;
+// it must not be copied into detached goroutines as ambient context.
+func ReservationFromContext(ctx context.Context) (Reservation, bool) {
+	if ctx == nil {
+		return Reservation{}, false
+	}
+	reservation, ok := ctx.Value(reservationContextKey{}).(Reservation)
+	return reservation, ok && reservation.Token > 0 && !reservation.Duplicate && reservation.commandID != "" && reservation.owner != "" && len(reservation.digest) > 0
 }
 
 type dataEngineClaim struct {
@@ -81,24 +102,33 @@ func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) erro
 	if inbox == nil || inbox.client == nil {
 		return coresaga.ErrInvalidRecord
 	}
-	ttlSeconds := int64(inbox.options.ReceiptTTL / time.Second)
-	if ttlSeconds <= 0 || ttlSeconds > int64(^uint32(0)>>1) {
-		return fmt.Errorf("saga dataengine inbox: invalid receipt ttl %s", inbox.options.ReceiptTTL)
-	}
 	return inbox.claims().EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_expired"},
 		{Keys: bson.D{{Key: "namespace", Value: 1}, {Key: "command_id", Value: 1}}, Name: "uniq_command", Unique: true},
-		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", TTL: int32(ttlSeconds)},
+		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", ExpireAt: true, RecreateOnConflict: true},
 	})
 }
 
 // Bind is called from inside the native Nest handler. The inbox owns the
 // validated receipt retention policy; core Saga only binds the supplied time.
-func (inbox *DataEngineStepInbox) Bind(command coresaga.Command) error {
+func (inbox *DataEngineStepInbox) Bind(command coresaga.Command, reservations ...Reservation) error {
 	if inbox == nil || inbox.options.ReceiptTTL <= 0 {
 		return coresaga.ErrInvalidRecord
 	}
-	return coresaga.BindCommand(command, inbox.now().UTC().Add(inbox.options.ReceiptTTL))
+	if len(reservations) != 1 || reservations[0].Token == 0 || reservations[0].Duplicate {
+		return fmt.Errorf("saga dataengine inbox: an active reservation is required")
+	}
+	reservation := reservations[0]
+	digest := commandDigest(command)
+	if reservation.commandID != command.ID || reservation.owner != inbox.options.Owner || !bytes.Equal(reservation.digest, digest) {
+		return fmt.Errorf("saga dataengine inbox: reservation does not match command identity")
+	}
+	fence := coredata.LeaseFence{
+		Database: inbox.database, Resource: dataEngineClaimCollection,
+		DocumentID: dataEngineStepNamespace + "/" + command.ID,
+		Owner:      reservation.owner, Token: reservation.Token, Digest: append([]byte(nil), digest...),
+	}
+	return coresaga.BindCommand(command, inbox.now().UTC().Add(inbox.options.ReceiptTTL), fence)
 }
 
 func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command coresaga.Command) (Reservation, error) {
@@ -153,7 +183,7 @@ func (inbox *DataEngineStepInbox) reserveInTransaction(ctx context.Context, comm
 		if _, err := inbox.claims().InsertOne(ctx, claim); err != nil {
 			return Reservation{}, err
 		}
-		return Reservation{Token: 1}, nil
+		return inbox.activeReservation(commandID, digest, 1), nil
 	}
 	if err != nil {
 		return Reservation{}, err
@@ -180,7 +210,14 @@ func (inbox *DataEngineStepInbox) reserveInTransaction(ctx context.Context, comm
 		}
 		return Reservation{}, err
 	}
-	return Reservation{Token: renewed.LeaseToken}, nil
+	return inbox.activeReservation(commandID, digest, renewed.LeaseToken), nil
+}
+
+func (inbox *DataEngineStepInbox) activeReservation(commandID string, digest []byte, token uint64) Reservation {
+	return Reservation{
+		Token: token, commandID: commandID, owner: inbox.options.Owner,
+		digest: append([]byte(nil), digest...),
+	}
 }
 
 func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command coresaga.Command) (coresaga.Completion, bool, error) {
