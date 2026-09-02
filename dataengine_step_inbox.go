@@ -17,8 +17,10 @@ const (
 	dataEngineClaimCollection   = "_dataengine_inbox_claims"
 	dataEngineReceiptCollection = "_dataengine_receipts"
 	dataEngineStepNamespace     = "saga-step"
-	claimStatusPending          = "pending"
-	claimStatusCompleted        = "completed"
+	// The projector matches on this exact value, so it is taken from the
+	// shared fence contract rather than spelled out again here.
+	claimStatusPending   = coredata.LeaseFenceStatusPending
+	claimStatusCompleted = "completed"
 )
 
 type DataEngineStepInboxOptions struct {

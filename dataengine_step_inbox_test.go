@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
 	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
+	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -116,8 +116,10 @@ func TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim(t *test
 	}
 	completion := coresaga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: time.Now().UTC()}
 	effect, _ := coresaga.NewCompletionEffect(completion)
-	client.db.receipts.receipts[dataEngineStepNamespace+"/"+command.ID] = dataEngineReceipt{
+	if err := inboxReceipts(client).Seed(dataEngineReceipt{
 		ID: dataEngineStepNamespace + "/" + command.ID, Digest: commandDigest(command), Payload: effect.Payload,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	replayed, found, err := inbox.Replay(context.Background(), command)
 	if err != nil || !found || replayed.CommandID != command.ID || string(replayed.Data) != "reserved" {
@@ -138,159 +140,110 @@ func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
 	if err := inbox.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.db.claims.indexes) != 3 {
-		t.Fatalf("claim indexes=%d, want 3", len(client.db.claims.indexes))
+	claims := inboxClaims(client)
+	if len(claims.Indexes) != 3 {
+		t.Fatalf("claim indexes=%d, want 3", len(claims.Indexes))
 	}
-	expiry := client.db.claims.indexes[2]
+	// The claim path and the command-identity uniqueness both depend on their
+	// index existing, so assert them by shape rather than by position alone.
+	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") {
+		t.Fatalf("claim indexes=%+v", claims.Indexes)
+	}
+	expiry := claims.Indexes[2]
 	if !expiry.ExpireAt || expiry.TTL != 0 || !expiry.RecreateOnConflict {
 		t.Fatalf("claim expiry index=%+v", expiry)
 	}
 }
 
-type dataEngineInboxMongo struct{ db *dataEngineInboxDatabase }
+func newDataEngineInboxMongo() *mongofake.Client { return mongofake.NewClient() }
 
-func newDataEngineInboxMongo() *dataEngineInboxMongo {
-	return &dataEngineInboxMongo{db: &dataEngineInboxDatabase{
-		claims:   &dataEngineInboxCollection{claims: make(map[string]dataEngineClaim)},
-		receipts: &dataEngineInboxCollection{receipts: make(map[string]dataEngineReceipt)},
-	}}
-}
-func (mongo *dataEngineInboxMongo) Database(string) fmongo.IDatabase              { return mongo.db }
-func (mongo *dataEngineInboxMongo) DatabaseForSid(string, int32) fmongo.IDatabase { return mongo.db }
-func (*dataEngineInboxMongo) StartSession(context.Context) (fmongo.ISession, error) {
-	return dataEngineInboxSession{}, nil
-}
-func (*dataEngineInboxMongo) Ping(context.Context) error  { return nil }
-func (*dataEngineInboxMongo) Close(context.Context) error { return nil }
-
-type dataEngineInboxSession struct{}
-
-func (dataEngineInboxSession) WithTransaction(ctx context.Context, apply func(context.Context) error) error {
-	return apply(ctx)
-}
-func (dataEngineInboxSession) EndSession(context.Context) {}
-
-type dataEngineInboxDatabase struct {
-	claims, receipts *dataEngineInboxCollection
+func inboxClaims(client *mongofake.Client) *mongofake.Collection {
+	return client.Collection("game", dataEngineClaimCollection)
 }
 
-func (*dataEngineInboxDatabase) Name() string { return "game" }
-func (database *dataEngineInboxDatabase) Collection(name string) fmongo.ICollection {
-	if name == dataEngineClaimCollection {
-		return database.claims
+func inboxReceipts(client *mongofake.Client) *mongofake.Collection {
+	return client.Collection("game", dataEngineReceiptCollection)
+}
+
+// The projector lives in another package and queries the claim document this
+// package writes. Nothing in the compiler ties the two together, and a
+// mismatch is silent by construction: an unsatisfiable predicate looks exactly
+// like a legitimately stale lease, so every fenced transaction would be
+// acknowledged as a skipped no-op with no error and no failing test.
+//
+// This closes that gap by round-tripping a real claim through BSON and
+// evaluating the real predicate against it, then verifying the predicate
+// rejects every single-field deviation. A rename or a type change on either
+// side fails here.
+func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
+	client := mongofake.NewClient()
+	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{
+		Owner: "worker-1", LeaseDuration: time.Minute, ReceiptTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return database.receipts
-}
-func (*dataEngineInboxDatabase) Drop(context.Context) error { return nil }
-
-type dataEngineInboxCollection struct {
-	mu       sync.Mutex
-	claims   map[string]dataEngineClaim
-	receipts map[string]dataEngineReceipt
-	indexes  []fmongo.IndexModel
-}
-
-func (collection *dataEngineInboxCollection) InsertOne(_ context.Context, value any) (string, error) {
-	collection.mu.Lock()
-	defer collection.mu.Unlock()
-	claim, ok := value.(dataEngineClaim)
-	if !ok {
-		return "", errors.New("unexpected insert")
+	command := dataEngineCommand("command-fence", "operation-fence", "payload")
+	reservation, err := inbox.Reserve(context.Background(), command)
+	if err != nil || reservation.Token == 0 || reservation.Duplicate {
+		t.Fatalf("reservation=%+v err=%v", reservation, err)
 	}
-	if _, exists := collection.claims[claim.ID]; exists {
-		return "", fmongo.ErrDuplicateKey
+
+	// Bind produces the fence the projector will later evaluate.
+	committer := &stepFenceCommitter{}
+	ctx := withReservation(context.Background(), reservation)
+	extracted, _ := ReservationFromContext(ctx)
+	if _, err := corenest.RunIsolatedTransaction(ctx, committer, "saga-fence-contract", func() (any, error) {
+		return nil, inbox.Bind(command, extracted)
+	}); err != nil {
+		t.Fatal(err)
 	}
-	collection.claims[claim.ID] = claim
-	return claim.ID, nil
-}
-func (*dataEngineInboxCollection) InsertMany(context.Context, []any) ([]string, error) {
-	return nil, errors.New("unused")
-}
-func (collection *dataEngineInboxCollection) FindOne(_ context.Context, filter any, result any) error {
-	collection.mu.Lock()
-	defer collection.mu.Unlock()
-	id := filterID(filter)
-	switch target := result.(type) {
-	case *dataEngineClaim:
-		value, ok := collection.claims[id]
-		if !ok {
-			return fmongo.ErrNotFound
+	fence, control, err := coredata.DecodeLeaseFenceReceipt(committer.record.Receipts[0])
+	if err != nil || !control {
+		t.Fatalf("fence=%+v control=%v err=%v", fence, control, err)
+	}
+
+	claims := inboxClaims(client)
+	now := time.Now().UTC()
+	var found bson.M
+	if err := claims.FindOne(context.Background(), fence.Predicate(now), &found); err != nil {
+		stored, _ := claims.Lookup(fence.DocumentID)
+		t.Fatalf("the projector's predicate does not match the claim this package writes: %v\npredicate=%v\nstored=%v",
+			err, fence.Predicate(now), stored)
+	}
+
+	// Every field of the predicate must be load-bearing: if any deviation
+	// still matched, the fence would not actually be fencing anything.
+	for name, mutate := range map[string]func(*coredata.LeaseFence){
+		"other owner":  func(f *coredata.LeaseFence) { f.Owner = "worker-2" },
+		"other token":  func(f *coredata.LeaseFence) { f.Token++ },
+		"other digest": func(f *coredata.LeaseFence) { f.Digest = bytes.Repeat([]byte{9}, len(f.Digest)) },
+		"other document": func(f *coredata.LeaseFence) {
+			f.DocumentID = dataEngineStepNamespace + "/other-command"
+		},
+	} {
+		deviated := fence
+		mutate(&deviated)
+		if err := claims.FindOne(context.Background(), deviated.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
+			t.Fatalf("%s: predicate still matched (err=%v)", name, err)
 		}
-		*target = value
-		return nil
-	case *dataEngineReceipt:
-		value, ok := collection.receipts[id]
-		if !ok {
-			return fmongo.ErrNotFound
-		}
-		*target = value
-		return nil
-	default:
-		return errors.New("unexpected find result")
 	}
-}
-func (*dataEngineInboxCollection) Find(context.Context, any, any, ...fmongo.FindOption) error {
-	return errors.New("unused")
-}
-func (collection *dataEngineInboxCollection) UpdateOne(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
-	collection.mu.Lock()
-	defer collection.mu.Unlock()
-	id := filterID(filter)
-	claim, ok := collection.claims[id]
-	if !ok {
-		return &fmongo.UpdateResult{}, nil
+
+	// An expired lease must stop matching without touching the document.
+	if err := claims.FindOne(context.Background(), fence.Predicate(now.Add(2*time.Minute)), &found); !errors.Is(err, fmongo.ErrNotFound) {
+		t.Fatalf("expired lease still matched: %v", err)
 	}
-	set := update.(bson.M)["$set"].(bson.M)
-	if status, ok := set["status"].(string); ok {
-		claim.Status = status
+
+	// A completed claim must stop matching: the status value is shared with
+	// the projector precisely so this transition is respected.
+	completion := coresaga.Completion{
+		CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID,
+		Success: true, CompletedAt: now,
 	}
-	if raw, ok := set["completion"].([]byte); ok {
-		claim.Completion = append([]byte(nil), raw...)
+	if err := inbox.markCompleted(context.Background(), command.ID, completion); err != nil {
+		t.Fatal(err)
 	}
-	collection.claims[id] = claim
-	return &fmongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil
-}
-func (*dataEngineInboxCollection) UpdateMany(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	return nil, errors.New("unused")
-}
-func (*dataEngineInboxCollection) ReplaceOne(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	return nil, errors.New("unused")
-}
-func (*dataEngineInboxCollection) DeleteOne(context.Context, any) (int64, error) {
-	return 0, errors.New("unused")
-}
-func (*dataEngineInboxCollection) DeleteMany(context.Context, any) (int64, error) {
-	return 0, errors.New("unused")
-}
-func (collection *dataEngineInboxCollection) FindOneAndUpdate(_ context.Context, filter any, _ any, result any, _ ...fmongo.FindOneAndUpdateOption) error {
-	collection.mu.Lock()
-	defer collection.mu.Unlock()
-	id := filterID(filter)
-	claim, ok := collection.claims[id]
-	if !ok {
-		return fmongo.ErrNotFound
+	if err := claims.FindOne(context.Background(), fence.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
+		t.Fatalf("completed claim still matched the pending predicate: %v", err)
 	}
-	claim.LeaseToken++
-	collection.claims[id] = claim
-	*result.(*dataEngineClaim) = claim
-	return nil
-}
-func (*dataEngineInboxCollection) FindOneAndDelete(context.Context, any, any) error {
-	return errors.New("unused")
-}
-func (*dataEngineInboxCollection) FindOneAndReplace(context.Context, any, any, any) error {
-	return errors.New("unused")
-}
-func (*dataEngineInboxCollection) CountDocuments(context.Context, any) (int64, error) {
-	return 0, errors.New("unused")
-}
-func (*dataEngineInboxCollection) Aggregate(context.Context, any, any) error {
-	return errors.New("unused")
-}
-func (*dataEngineInboxCollection) BulkWrite(context.Context, []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
-	return nil, errors.New("unused")
-}
-func (collection *dataEngineInboxCollection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
-	collection.indexes = append(collection.indexes, indexes...)
-	return nil
 }
