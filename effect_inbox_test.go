@@ -3,123 +3,29 @@ package nestwal
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
 )
 
-type effectInboxMongoFake struct {
-	db *effectInboxDatabaseFake
-}
-
-func (m *effectInboxMongoFake) Database(string) fmongo.IDatabase              { return m.db }
-func (m *effectInboxMongoFake) DatabaseForSid(string, int32) fmongo.IDatabase { return m.db }
-func (m *effectInboxMongoFake) StartSession(context.Context) (fmongo.ISession, error) {
-	return effectInboxSessionFake{}, nil
-}
-func (m *effectInboxMongoFake) Ping(context.Context) error  { return nil }
-func (m *effectInboxMongoFake) Close(context.Context) error { return nil }
-
-type effectInboxSessionFake struct{}
-
-func (effectInboxSessionFake) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-func (effectInboxSessionFake) EndSession(context.Context) {}
-
-type effectInboxDatabaseFake struct{ collection *effectInboxCollectionFake }
-
-func (d *effectInboxDatabaseFake) Name() string { return "game" }
-func (d *effectInboxDatabaseFake) Collection(string) fmongo.ICollection {
-	return d.collection
-}
-func (d *effectInboxDatabaseFake) Drop(context.Context) error { return nil }
-
-type effectInboxCollectionFake struct {
-	mu       sync.Mutex
-	receipts map[string]effectInboxReceipt
-	indexes  []fmongo.IndexModel
-}
-
-func (c *effectInboxCollectionFake) InsertOne(_ context.Context, document any) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	receipt := document.(effectInboxReceipt)
-	if _, exists := c.receipts[receipt.ID]; exists {
-		return "", fmongo.ErrDuplicateKey
-	}
-	c.receipts[receipt.ID] = receipt
-	return receipt.ID, nil
-}
-func (c *effectInboxCollectionFake) InsertMany(context.Context, []any) ([]string, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) FindOne(_ context.Context, filter any, result any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	id := filter.(bson.M)["_id"].(string)
-	receipt, exists := c.receipts[id]
-	if !exists {
-		return fmongo.ErrNotFound
-	}
-	*(result.(*effectInboxReceipt)) = receipt
-	return nil
-}
-func (c *effectInboxCollectionFake) Find(context.Context, any, any, ...fmongo.FindOption) error {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) UpdateOne(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) UpdateMany(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) ReplaceOne(context.Context, any, any) (*fmongo.UpdateResult, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) DeleteOne(context.Context, any) (int64, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) DeleteMany(context.Context, any) (int64, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) FindOneAndUpdate(context.Context, any, any, any, ...fmongo.FindOneAndUpdateOption) error {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) FindOneAndDelete(context.Context, any, any) error {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) FindOneAndReplace(context.Context, any, any, any) error {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) CountDocuments(context.Context, any) (int64, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) Aggregate(context.Context, any, any) error { panic("unused") }
-func (c *effectInboxCollectionFake) BulkWrite(context.Context, []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
-	panic("unused")
-}
-func (c *effectInboxCollectionFake) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
-	c.mu.Lock()
-	c.indexes = append([]fmongo.IndexModel(nil), indexes...)
-	c.mu.Unlock()
-	return nil
-}
-
-func TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict(t *testing.T) {
-	collection := &effectInboxCollectionFake{receipts: make(map[string]effectInboxReceipt)}
-	inbox, err := NewMongoEffectInbox(&effectInboxMongoFake{db: &effectInboxDatabaseFake{collection: collection}}, "game", "", EffectInboxOptions{ReceiptTTL: 48 * time.Hour})
+func newEffectInboxTest(t *testing.T, ttl time.Duration) (*MongoEffectInbox, *mongofake.Client, *mongofake.Collection) {
+	t.Helper()
+	client := mongofake.NewClient()
+	inbox, err := NewMongoEffectInbox(client, "game", "", EffectInboxOptions{ReceiptTTL: ttl})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return inbox, client, client.Collection("game", inbox.collection)
+}
+
+func TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict(t *testing.T) {
+	inbox, _, collection := newEffectInboxTest(t, 48*time.Hour)
 	if err := inbox.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(collection.indexes) != 1 || collection.indexes[0].TTL != int32((48*time.Hour)/time.Second) {
-		t.Fatalf("indexes = %+v", collection.indexes)
+	if len(collection.Indexes) != 1 || collection.Indexes[0].TTL != int32((48*time.Hour)/time.Second) {
+		t.Fatalf("indexes = %+v", collection.Indexes)
 	}
 	envelope := EffectEnvelope{TransactionID: "tx-1", EffectID: "effect-1", Topic: "mail", Payload: []byte("reward")}
 	calls := 0
@@ -127,6 +33,9 @@ func TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict(t *testing.T) {
 	duplicate, err := inbox.Handle(context.Background(), envelope, handler)
 	if err != nil || duplicate {
 		t.Fatalf("first handle duplicate=%v err=%v", duplicate, err)
+	}
+	if collection.Len() != 1 {
+		t.Fatalf("receipts=%d, want 1", collection.Len())
 	}
 	duplicate, err = inbox.Handle(context.Background(), envelope, handler)
 	if err != nil || !duplicate || calls != 1 {
@@ -136,5 +45,56 @@ func TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict(t *testing.T) {
 	conflict.Payload = []byte("different")
 	if _, err := inbox.Handle(context.Background(), conflict, handler); !errors.Is(err, ErrEffectIdentityConflict) {
 		t.Fatalf("identity conflict error = %v", err)
+	}
+	if collection.Len() != 1 {
+		t.Fatalf("identity conflict wrote a receipt: %d", collection.Len())
+	}
+}
+
+// A failing handler must leave no receipt behind, otherwise the effect would
+// be permanently swallowed as a "duplicate" on redelivery.
+func TestMongoEffectInboxHandlerFailureLeavesNoReceipt(t *testing.T) {
+	inbox, _, collection := newEffectInboxTest(t, time.Hour)
+	envelope := EffectEnvelope{TransactionID: "tx-1", EffectID: "effect-1", Topic: "mail", Payload: []byte("reward")}
+	boom := errors.New("side effect failed")
+	if _, err := inbox.Handle(context.Background(), envelope, func(context.Context, EffectEnvelope) error {
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("err=%v, want the handler error", err)
+	}
+	if collection.Len() != 0 {
+		t.Fatalf("failed handler left %d receipts", collection.Len())
+	}
+	// Redelivery must run the handler again rather than reporting a duplicate.
+	calls := 0
+	duplicate, err := inbox.Handle(context.Background(), envelope, func(context.Context, EffectEnvelope) error {
+		calls++
+		return nil
+	})
+	if err != nil || duplicate || calls != 1 {
+		t.Fatalf("redelivery duplicate=%v calls=%d err=%v", duplicate, calls, err)
+	}
+}
+
+// ISession.WithTransaction retries its callback automatically, so Handle must
+// be idempotent across attempts: the handler may run again, but the receipt
+// must not turn a first delivery into a reported duplicate.
+func TestMongoEffectInboxSurvivesTransactionRetry(t *testing.T) {
+	inbox, client, collection := newEffectInboxTest(t, time.Hour)
+	client.TransientRetries = 1
+	envelope := EffectEnvelope{TransactionID: "tx-1", EffectID: "effect-1", Topic: "mail", Payload: []byte("reward")}
+	duplicate, err := inbox.Handle(context.Background(), envelope, func(context.Context, EffectEnvelope) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retried handle err=%v", err)
+	}
+	if collection.Len() != 1 {
+		t.Fatalf("retry wrote %d receipts, want 1", collection.Len())
+	}
+	if !duplicate {
+		// The retry legitimately observes its own first-attempt receipt; what
+		// must never happen is an error or a second stored receipt.
+		t.Log("retry reported a first delivery; receipt count is the invariant that matters")
 	}
 }

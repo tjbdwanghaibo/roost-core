@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	corenest "github.com/tjbdwanghaibo/cube-core/nest"
-	"github.com/tjbdwanghaibo/cube-core/obs"
 )
 
 const (
@@ -390,7 +390,7 @@ func (w *WAL) Enqueue(ctx context.Context, record corenest.CommitRecord) (corene
 		w.enqueueMu.Unlock()
 		w.lifecycleMu.RUnlock()
 		w.reservedBytes.Add(-frameBytes)
-		obs.IncCounter("nestwal.reject.total", obs.Labels{"reason": "queue_full"}, 1)
+		metrics.IncCounter("nestwal.reject.total", metrics.Labels{"reason": "queue_full"}, 1)
 		return nil, fmt.Errorf("%w: append queue is full", ErrCapacity)
 	}
 	ticket := &walTicket{lsn: req.lsn, done: make(chan struct{})}
@@ -435,7 +435,7 @@ func (w *WAL) resolveDurableLocked() {
 	if resolved > 0 {
 		w.tickets = w.tickets[resolved:]
 	}
-	obs.SetGauge("nestwal.pending.tickets", nil, int64(len(w.tickets)))
+	metrics.SetGauge("nestwal.pending.tickets", nil, int64(len(w.tickets)))
 	w.ticketMu.Unlock()
 }
 
@@ -755,7 +755,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 	}
 	if w.opts.MaxDiskBytes > 0 && unreservedBytes > 0 &&
 		w.diskBytes.Load()+w.reservedBytes.Load()+unreservedBytes > w.opts.MaxDiskBytes {
-		obs.IncCounter("nestwal.reject.total", obs.Labels{"reason": "disk_cap"}, 1)
+		metrics.IncCounter("nestwal.reject.total", metrics.Labels{"reason": "disk_cap"}, 1)
 		err := fmt.Errorf("%w: current=%d incoming=%d limit=%d", ErrCapacity, w.diskBytes.Load(), unreservedBytes, w.opts.MaxDiskBytes)
 		kept := batch[:0]
 		for i := range batch {
@@ -818,7 +818,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 	if err == nil && requireSync {
 		syncStart := time.Now()
 		err = w.syncActiveLocked()
-		obs.ObserveDuration("nestwal.fsync.duration", nil, time.Since(syncStart))
+		metrics.ObserveDuration("nestwal.fsync.duration", nil, time.Since(syncStart))
 	}
 	w.stateMu.Unlock()
 	if cap(buffer) <= w.opts.BatchMaxBytes*2 {
@@ -842,10 +842,10 @@ func (w *WAL) processBatch(batch []appendRequest) {
 	}
 	// Per-batch pipeline metrics: records/batches ratio is the group-commit
 	// amplification, disk bytes the retention pressure.
-	obs.IncCounter("nestwal.batch.total", nil, 1)
-	obs.IncCounter("nestwal.append.total", nil, int64(len(batch)))
-	obs.IncCounter("nestwal.bytes.total", nil, bytes)
-	obs.SetGauge("nestwal.disk.bytes", nil, w.diskBytes.Load())
+	metrics.IncCounter("nestwal.batch.total", nil, 1)
+	metrics.IncCounter("nestwal.append.total", nil, int64(len(batch)))
+	metrics.IncCounter("nestwal.bytes.total", nil, bytes)
+	metrics.SetGauge("nestwal.disk.bytes", nil, w.diskBytes.Load())
 }
 
 func (w *WAL) drainAndClose() {
