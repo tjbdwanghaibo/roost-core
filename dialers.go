@@ -18,11 +18,11 @@ import (
 
 	quic "github.com/quic-go/quic-go"
 
-	"github.com/tjbdwanghaibo/cube-kit/replication"
+	"github.com/tjbdwanghaibo/cube-kit/nettransport"
 )
 
 // KCPDialerConfig shapes the KCP client dialer. Encryption and FEC are
-// mandatory, mirroring replication.DialKCP: the kit refuses plaintext KCP.
+// mandatory, mirroring nettransport.DialKCP: the kit refuses plaintext KCP.
 type KCPDialerConfig struct {
 	// Key derives the AES-GCM block cipher; must match the server.
 	Key []byte
@@ -35,12 +35,12 @@ type KCPDialerConfig struct {
 // so runner configs select it with Transport.Type. The KCP session is a
 // stream: the shared length-prefix packet framing runs on top unchanged.
 func RegisterKCPDialer(transportType string, cfg KCPDialerConfig) error {
-	block, err := replication.NewKCPAESGCM(cfg.Key)
+	block, err := nettransport.NewKCPAESGCM(cfg.Key)
 	if err != nil {
 		return fmt.Errorf("robot kcp dialer: %w", err)
 	}
 	return transport.RegisterDialer(transportType, func(ctx context.Context, tc transport.Config) (transport.Conn, error) {
-		session, err := replication.DialKCP(tc.Endpoint, block, cfg.DataShards, cfg.ParityShards)
+		session, err := nettransport.DialKCP(tc.Endpoint, block, cfg.DataShards, cfg.ParityShards)
 		if err != nil {
 			return nil, fmt.Errorf("robot kcp dialer: dial %s: %w", tc.Endpoint, err)
 		}
@@ -53,7 +53,7 @@ func RegisterKCPDialer(transportType string, cfg KCPDialerConfig) error {
 }
 
 // QUICDialerConfig shapes the QUIC client dialer. TLS with ALPN is
-// mandatory, mirroring replication.DialQUIC.
+// mandatory, mirroring nettransport.DialQUIC.
 type QUICDialerConfig struct {
 	TLS  *tls.Config
 	QUIC *quic.Config
@@ -63,13 +63,13 @@ type QUICDialerConfig struct {
 // "quic"). Each robot connection opens one bidirectional stream and runs the
 // shared length-prefix packet framing over it.
 func RegisterQUICDialer(transportType string, cfg QUICDialerConfig) error {
-	if err := replication.ValidateQUICTLS(cfg.TLS); err != nil {
+	if err := nettransport.ValidateQUICTLS(cfg.TLS); err != nil {
 		return fmt.Errorf("robot quic dialer: %w", err)
 	}
 	return transport.RegisterDialer(transportType, func(ctx context.Context, tc transport.Config) (transport.Conn, error) {
 		dialCtx, cancel := context.WithTimeout(ctx, tc.DialTimeout)
 		defer cancel()
-		conn, err := replication.DialQUIC(dialCtx, tc.Endpoint, cfg.TLS, cfg.QUIC)
+		conn, err := nettransport.DialQUIC(dialCtx, tc.Endpoint, cfg.TLS, cfg.QUIC)
 		if err != nil {
 			return nil, fmt.Errorf("robot quic dialer: dial %s: %w", tc.Endpoint, err)
 		}

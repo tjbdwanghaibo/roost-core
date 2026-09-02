@@ -17,7 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/lockstep"
 	"github.com/tjbdwanghaibo/cube-core/robot/transport"
 
-	"github.com/tjbdwanghaibo/cube-kit/replication"
+	"github.com/tjbdwanghaibo/cube-kit/nettransport"
 	kitrobot "github.com/tjbdwanghaibo/cube-kit/robot"
 )
 
@@ -57,11 +57,11 @@ func roundtrip(t *testing.T, transportType, endpoint string) {
 
 func TestKCPDialerEndToEnd(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
-	block, err := replication.NewKCPAESGCM(key)
+	block, err := nettransport.NewKCPAESGCM(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := replication.ListenKCP("127.0.0.1:0", block, 10, 3)
+	listener, err := nettransport.ListenKCP("127.0.0.1:0", block, 10, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func testQUICCertificates(t *testing.T) (*tls.Config, *tls.Config) {
 		t.Fatal(err)
 	}
 	certificate := tls.Certificate{Certificate: [][]byte{certificateDER}, PrivateKey: privateKey}
-	server := &tls.Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{replication.DefaultQUICALPN}, MinVersion: tls.VersionTLS13}
-	client := &tls.Config{InsecureSkipVerify: true, NextProtos: []string{replication.DefaultQUICALPN}, MinVersion: tls.VersionTLS13} // test certificate only
+	server := &tls.Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{nettransport.DefaultQUICALPN}, MinVersion: tls.VersionTLS13}
+	client := &tls.Config{InsecureSkipVerify: true, NextProtos: []string{nettransport.DefaultQUICALPN}, MinVersion: tls.VersionTLS13} // test certificate only
 	return server, client
 }
 
 func TestQUICDialerEndToEnd(t *testing.T) {
 	serverTLS, clientTLS := testQUICCertificates(t)
-	listener, err := replication.ListenQUIC("127.0.0.1:0", serverTLS, nil)
+	listener, err := nettransport.ListenQUIC("127.0.0.1:0", serverTLS, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
