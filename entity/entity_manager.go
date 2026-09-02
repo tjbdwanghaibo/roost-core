@@ -38,6 +38,7 @@ var (
 	ErrIDGeneratorRequired  = errors.New("entity manager: id generator is required for new entities")
 	ErrDeleteAdmitterExists = errors.New("entity manager: delete admitter already registered")
 	ErrDeleteAdmitterNeeded = errors.New("entity manager: delete admitter is required")
+	ErrDeleteIndeterminate  = errors.New("entity manager: delete admission outcome is indeterminate")
 )
 
 // NewEntityManager creates an EntityManager with default bucket count.
@@ -124,13 +125,33 @@ func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 
 type entityDeleteAdmitter struct {
 	id uint64
-	fn func(context.Context, IThreadSafeEntity) error
+	fn DeleteAdmitter
 }
+
+// DeleteAdmission tells EntityManager whether durable admission completed in
+// this call or was attached to the active transaction. Deferred admission is
+// finalized by the admitter only after that transaction reaches its commit
+// point; rollback must leave the entity live.
+type DeleteAdmission uint8
+
+const (
+	DeleteAdmissionImmediate DeleteAdmission = iota
+	DeleteAdmissionDeferred
+	// DeleteAdmissionIndeterminate means persistence may already have accepted
+	// the delete. The entity must be removed from memory and the error returned
+	// so callers cannot continue serving possibly deleted state.
+	DeleteAdmissionIndeterminate
+)
+
+// DeleteAdmitter owns the persistence-specific delete transaction. The reason
+// is supplied so a deferred admission can perform the same in-memory lifecycle
+// transition after the durable commit point.
+type DeleteAdmitter func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error)
 
 // RegisterDeleteAdmitter installs the single durable admission gate used by
 // persistent deletion. Multiple independent gates are rejected because they
 // cannot form one atomic deletion decision.
-func (m *EntityManager) RegisterDeleteAdmitter(admitter func(context.Context, IThreadSafeEntity) error) (func(), error) {
+func (m *EntityManager) RegisterDeleteAdmitter(admitter DeleteAdmitter) (func(), error) {
 	if m == nil || admitter == nil {
 		return nil, ErrDeleteAdmitterNeeded
 	}
@@ -151,19 +172,20 @@ func (m *EntityManager) RegisterDeleteAdmitter(admitter func(context.Context, IT
 	}, nil
 }
 
-func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity) error {
+func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason) (DeleteAdmission, error) {
 	m.hookMu.RLock()
 	admitter := m.deleteAdmitter.fn
 	m.hookMu.RUnlock()
 	if admitter == nil {
-		return ErrDeleteAdmitterNeeded
+		return DeleteAdmissionImmediate, ErrDeleteAdmitterNeeded
 	}
-	return admitter(ctx, e)
+	return admitter(ctx, e, reason)
 }
 
 // Destroy durably admits a versioned delete tombstone while holding the entity
-// mutex, then removes the entity from memory. Admission failure leaves the
-// entity live so success can never be observed before the commit point.
+// mutex, then removes the entity from memory. A definitive admission failure
+// leaves the entity live. An indeterminate result removes it defensively so
+// callers cannot serve state that persistence may already have deleted.
 func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
@@ -196,12 +218,30 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		e.UnTouch()
 		return ErrEntityNotManaged
 	}
+	var admissionErr error
 	if deleteFromDB {
-		if err := m.admitDelete(ctx, e); err != nil {
+		admission, err := m.admitDelete(ctx, e, reason)
+		if admission == DeleteAdmissionIndeterminate && err == nil {
+			err = ErrDeleteIndeterminate
+		}
+		if err != nil && admission != DeleteAdmissionIndeterminate {
 			mu.Unlock()
 			e.UnTouch()
 			flog.Warn("entity manager: durable delete admission failed", "id", e.ID(), "category", e.GetEntityCategory(), "kind", e.GetEntityKind(), "reason", reason, "err", err)
 			return err
+		}
+		admissionErr = err
+		if admission == DeleteAdmissionDeferred {
+			// The admitter registered the lifecycle transition on the current
+			// transaction. It owns finalization after durable admission.
+			mu.Unlock()
+			e.UnTouch()
+			return nil
+		}
+		if admission != DeleteAdmissionImmediate && admission != DeleteAdmissionIndeterminate {
+			mu.Unlock()
+			e.UnTouch()
+			return fmt.Errorf("entity manager: invalid delete admission %d", admission)
 		}
 	}
 	id := e.ID()
@@ -241,7 +281,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	e.Base().DestroyAll(reason)
 
 	e.OnDestroy(reason)
-	return nil
+	return admissionErr
 }
 
 // Get returns the entity with the given ID, or nil if not found.

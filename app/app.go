@@ -318,12 +318,14 @@ func (a *App) run(serverType ServiceName) error {
 	defer shutdownCancel()
 
 	slog.Info("service shutdown", "service", svc.Name())
-	_ = a.emitLifecycle(shutdownCtx, lifecycle.Event{
+	var shutdownErr error
+	if err := a.emitLifecycle(shutdownCtx, lifecycle.Event{
 		Phase:   lifecycle.PhaseServiceStopping,
 		Service: string(serverType),
 		Name:    string(svc.Name()),
-	})
-	var shutdownErr error
+	}); err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
+	}
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- svc.Shutdown(shutdownCtx) }()
 	shutdownDone := false

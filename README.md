@@ -39,7 +39,7 @@
 | `health`、`obs`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer 无分位数；histogram 17 桶指数分布带 p50–p99 与 Prometheus `_bucket` 导出）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
 | `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照（原子热更/回滚/内容 hash/请求一致性；三条接入通道：手写 TableDef、`cfg` tag 自动注册 `RegisterAutoTable`、外部生成聚合 `RegisterExternalTables`——配置定义可全量生成，见实现细节第 17 条） | 接入层契约 |
 | `robot` | 机器人（模拟客户端）框架：统一包协议 transport（TCP/WS 内置，KCP/QUIC 在 kit）、seq 匹配会话、`RegisterCall` 泛型零样板动作、行为树场景（Go 组合子 + 可选 YAML）、三种压测执行器（pool/looping/arrival-rate）+ SLO 阈值裁决与 Markdown 报告 | 模拟客户端逻辑回归、压测（见实现细节第 18 条） |
-| `timer`、`clock`、`map`、`query`、`ctx` | 时间任务、逻辑时间、容器与索引、请求上下文 | 通用工具 |
+| `timer`、`clock`、`safemap`、`query`、`ctx` | 时间任务、逻辑时间、并发容器与索引、请求上下文 | 通用工具 |
 
 core 只定义抽象与框架语义，不含具体玩法、玩家协议或中间件连接实现——那些分别属于业务仓库与 `roost-kit`。
 
@@ -224,7 +224,7 @@ add -1000: err=gold would go negative
 after rollback: gold=150 dirty=false
 ```
 
-这个示例没有配置 `TransactionCommitter`，事务停留在内存层（`DurabilityMemory`）。生产环境把 handler 声明为 `DurabilityStrict`/`DurabilityPipelined` 并注入 `roost-kit` 的 WAL committer，即可获得崩溃一致性——业务代码一行不改。本地联调多仓库时可用 `go.work` 或 `go mod edit -replace` 指向本地目录。
+这个示例没有配置 `TransactionCommitter`，事务停留在内存层（`DurabilityMemory`）。生产环境把 handler 声明为 `DurabilityStrict`/`DurabilityPipelined` 并注入 `roost-kit` 的 WAL committer，即可获得崩溃一致性——业务代码一行不改。多仓研发统一使用本地 `go.work`；可发布性检查必须显式 `GOWORK=off`，不得把本地 `replace` 带入 module 或 tag。
 
 ## 核心概念
 
@@ -405,7 +405,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 
 ### 16. 单所有者组件清单（非并发安全，靠实体锁/单 worker 独占）
 
-`timer.Scheduler`（无锁；Tick 内的增删改延迟到 tick 结束统一执行，闭包 timer 纯内存不持久化、不进快照；宿主用偏移时钟驱动 Tick 时必须 `SetClock` 同源注入，否则新建 timer 的 End 与 tick 时钟差一个偏移）、`fmap.FastMap`（开放寻址 + tombstone，为"已被外层锁保护的热路径"设计）、`misc.KeyMap`、`misc.ObjectPool`、`misc.BucketHolder` 的游标遍历（`RangeWithCursorCnt` 把全量扫描摊平到多个 tick——大规模实体周期巡检的惯用法）。与之相对：`fmap.ShardedSafeMap`（分片锁；`Compute` 持写锁回调不可重入同分片，`Range` 脱锁回调可安全改 map）、`fmap.SmallSafeMap`（唯一带 BSON codec、可直接嵌 DAO 字段的容器）。
+`timer.Scheduler`（无锁；Tick 内的增删改延迟到 tick 结束统一执行，闭包 timer 纯内存不持久化、不进快照；宿主用偏移时钟驱动 Tick 时必须 `SetClock` 同源注入，否则新建 timer 的 End 与 tick 时钟差一个偏移）、`safemap.FastMap`（常用 import alias 可写为 `fmap`；开放寻址 + tombstone，为"已被外层锁保护的热路径"设计）、`misc.KeyMap`、`misc.ObjectPool`、`misc.BucketHolder` 的游标遍历（`RangeWithCursorCnt` 把全量扫描摊平到多个 tick——大规模实体周期巡检的惯用法）。与之相对：`safemap.ShardedSafeMap`（分片锁；`Compute` 持写锁回调不可重入同分片，`Range` 脱锁回调可安全改 map）、`safemap.SmallSafeMap`（唯一带 BSON codec、可直接嵌 DAO 字段的容器）。
 
 ### 17. 配置管线：meta 定义一切，映射零手写 —— `configdata/auto.go`、`configdata/external.go`、roost-codegen `cfggen`
 
@@ -478,8 +478,10 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 本地联调多仓库时在共同父目录建 `go.work`（不要提交到任何仓库）：
 
 ```bash
-go work init ./roost-core ./roost-kit <你的业务仓库>
+go work init ./cube-core ./cube-kit ./cube-skill ./cube-codegen
 ```
+
+当前开发、发布隔离和版本收口规则见 [多仓研发与发布](docs/DEVELOPMENT_WORKSPACE.md)。
 
 ## 开发与验证
 
@@ -489,6 +491,11 @@ go vet ./...
 go test ./...
 go test -race ./...
 ```
+
+上面命令在研发 workspace 中验证 source-head。发布前另跑 `GOWORK=off go test ./...`、
+`GOWORK=off go vet ./...` 和 codegen 的 pure-tag consumer smoke；若正式 tag 尚未按
+core → kit → skill → codegen 发布闭包，发布门禁保持红色是预期行为，不能用 workspace
+绿灯代替。
 
 CI 在 Linux 与 Windows 上运行完整测试矩阵，核心包开启 `-race`。修改公开接口时检查：生命周期是否可停止、是否需要 health/metrics、是否泄漏业务语义（core 不得出现 `player`、`alliance` 等玩法词汇）、能否在无具体中间件的测试环境中替换。修复并发/一致性缺陷必须附带能复现原缺陷的回归测试。
 

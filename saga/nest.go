@@ -63,7 +63,7 @@ func EmitStart(request StartRequest) error {
 // BindCommand makes this command identity part of the active Nest transaction.
 // The caller supplies the validated retention deadline; Saga policy, not this
 // helper, owns TTL selection.
-func BindCommand(command Command, expiresAt time.Time) error {
+func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.LeaseFence) error {
 	tx := nest.CurrentRollbackTx()
 	if tx == nil {
 		return nest.ErrTransactionClosed
@@ -76,6 +76,15 @@ func BindCommand(command Command, expiresAt time.Time) error {
 		return err
 	}
 	digest := sha256.Sum256(raw)
+	for _, fence := range fences {
+		receipt, err := dataengine.NewLeaseFenceReceipt(fence)
+		if err != nil {
+			return err
+		}
+		if err := tx.AddReceipt(receipt); err != nil {
+			return err
+		}
+	}
 	return tx.AddReceipt(dataengine.Receipt{
 		Namespace: StepReceiptNamespace, ID: command.ID, Digest: digest[:], ExpiresAt: expiresAt.UnixNano(),
 	})

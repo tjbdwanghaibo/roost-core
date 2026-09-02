@@ -1,4 +1,4 @@
-package fmap
+package safemap
 
 const (
 	slotEmpty uint8 = iota

@@ -1,4 +1,4 @@
-// Package ai defines entity-aware AI strategy contracts. Scheduling and
+// Package ai defines entity-aware AI strategy boundaries. Scheduling and
 // concrete decision algorithms are supplied by adapters and cube-kit.
 package ai
 

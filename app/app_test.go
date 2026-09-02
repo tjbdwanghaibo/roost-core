@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/cube-core/lifecycle"
 )
 
 var errServeFailed = errors.New("serve failed")
@@ -99,6 +100,33 @@ func TestAppReturnsShutdownError(t *testing.T) {
 	err := a.Execute()
 	if !errors.Is(err, errShutdownFailed) {
 		t.Fatalf("Execute err = %v, want shutdown error", err)
+	}
+}
+
+type stoppingLifecycleErrorMod struct{ err error }
+
+func (*stoppingLifecycleErrorMod) Name() ModName           { return "stopping_lifecycle_error" }
+func (*stoppingLifecycleErrorMod) Init(*viper.Viper) error { return nil }
+func (*stoppingLifecycleErrorMod) Start() error            { return nil }
+func (*stoppingLifecycleErrorMod) Stop()                   {}
+func (mod *stoppingLifecycleErrorMod) Provide(registry *Registry) error {
+	hooks, ok := Lookup[*lifecycle.Registry](registry, ModLifecycle)
+	if !ok {
+		return errors.New("lifecycle registry unavailable")
+	}
+	return hooks.Register(lifecycle.Hook{
+		Name: "fail-stopping", Phase: lifecycle.PhaseServiceStopping,
+		Handler: func(context.Context, lifecycle.Event) error { return mod.err },
+	})
+}
+
+func TestAppReturnsServiceStoppingLifecycleError(t *testing.T) {
+	want := errors.New("service stopping lifecycle failed")
+	a := newTestApp(t, &errService{})
+	a.Mods(&stoppingLifecycleErrorMod{err: want})
+	a.RootCmd().SetArgs([]string{"game"})
+	if err := a.Execute(); !errors.Is(err, want) {
+		t.Fatalf("Execute err=%v, want lifecycle failure", err)
 	}
 }
 

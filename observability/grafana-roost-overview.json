@@ -30,7 +30,7 @@
      "datasource": {"uid": "${DS_PROMETHEUS}"},
      "targets": [{"expr": "sum by (result) (rate(nest_pipelined_async_total[1m]))", "legendFormat": "{{result}}"}]},
 
-    {"type": "row", "title": "Durability 管线 (nestwal / checkpoint)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}},
+    {"type": "row", "title": "Durability 管线 (dataengine / nestwal)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}},
     {"type": "timeseries", "title": "WAL 写入: 记录/批 (合批放大率)", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 18},
      "datasource": {"uid": "${DS_PROMETHEUS}"},
      "targets": [
@@ -48,19 +48,11 @@
        {"expr": "nestwal_pending_tickets", "legendFormat": "pending tickets"},
        {"expr": "nestwal_disk_bytes", "legendFormat": "disk bytes"},
        {"expr": "sum by (reason) (rate(nestwal_reject_total[1m]))", "legendFormat": "reject {{reason}}"}]},
-    {"type": "timeseries", "title": "Durable wait / 外化闸门推迟", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+    {"type": "timeseries", "title": "Durable wait / 外化闸门推迟", "gridPos": {"h": 8, "w": 24, "x": 0, "y": 26},
      "datasource": {"uid": "${DS_PROMETHEUS}"},
      "targets": [
        {"expr": "rate(nest_pipelined_durable_wait_sum_nanos[1m]) / rate(nest_pipelined_durable_wait_count[1m])", "legendFormat": "durable wait avg ns"},
-       {"expr": "rate(entitysync_flush_gate_deferred_total[1m])", "legendFormat": "entitysync gate deferred/s"},
-       {"expr": "rate(checkpoint_release_gate_deferred_total[1m])", "legendFormat": "checkpoint gate deferred/s"}]},
-    {"type": "timeseries", "title": "Redis WAL 生命周期", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
-     "datasource": {"uid": "${DS_PROMETHEUS}"},
-     "targets": [
-       {"expr": "rate(checkpoint_redis_wal_submit_total[1m])", "legendFormat": "submit/s"},
-       {"expr": "rate(checkpoint_redis_wal_write_total[1m])", "legendFormat": "write/s"},
-       {"expr": "rate(checkpoint_redis_wal_ack_total[1m])", "legendFormat": "ack/s"},
-       {"expr": "rate(checkpoint_redis_wal_replay_total[1m])", "legendFormat": "replay/s"}]},
+       {"expr": "rate(entitysync_flush_gate_deferred_total[1m])", "legendFormat": "entitysync gate deferred/s"}]},
 
     {"type": "row", "title": "缓存 / 总线 / 跨服实体", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34}},
     {"type": "stat", "title": "refhmap 非原子降级 (应为 0)", "gridPos": {"h": 8, "w": 4, "x": 0, "y": 35},

@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Fixed
+- Entity 持久删除改为唯一的 durable admission 状态机：明确区分 immediate、随当前事务 deferred 和 indeterminate 结果；deferred 只在 WAL admission 后完成内存生命周期，rollback 保持实体存活，indeterminate 则停止继续服务可能已删除的状态。Remote transaction outcome 携带显式 delete intent，不再借用 `IsRemoved()` 猜测持久化意图。
+- Native Saga step 新增 WAL v2 lease-fence 控制 receipt；reservation 的 owner/token/claim 位置进入业务 CommitRecord，使存储投影可在同一事务内拒绝过期 worker，而不把框架控制记录泄漏为业务 receipt。
+- App 不再吞掉 `service.stopping` lifecycle hook 的错误；所有停止 hook 仍会执行，失败会与 Service/Mod shutdown 结果一起返回。Mongo 索引契约显式区分相对 TTL 与绝对日期到点过期，避免上层把 `expires_at` 再延长一轮 TTL。
 - `worker` 为队列任务和 `Pool.Go/TryGo` 的每次执行建立并释放全新 `fctx.Context`，不再隐式继承父请求或跨任务泄漏；生命周期外的 `Pool.Go` 不再启动无人追踪的 goroutine。Nest 异步 Dispatch 只保留配置代际、Trace 与 Player/Msg/Seq 框架信封，KV/Base/SyncWait/Frame/事务不再跨异步边界传播，业务数据必须显式放入 Params。
 - `cmd/glsvet` 将 Handler 并发约束升级为机器门禁：拒绝裸 `go`、同文件命名 wrapper、非 core worker 的 `.Go`、worker callback 外层捕获和裸忽略 Dispatch/Publish/Submit admission；保留框架既有 `AfterCommit` 合法语义。`app` 对显式 `--config` 以及默认配置的解析/权限错误 fail-closed，仅允许缺失的默认开发配置使用 defaults。
 - App 对每个 Mod 分配 shutdown 子预算并隔离 Stop panic；普通错误或 panic 后继续反序停止其他模块，但任一 Mod 超时/取消后立即停止拆除其下游依赖，避免上层仍在运行时关闭底层连接。Provide 失败会回收失败 Mod 自身及此前已装配模块；Registry 批量注册先全量预检再一次提交，避免 capability 半注册。
@@ -20,6 +23,7 @@
 ### Changed — Data Engine
 - Data Engine tracker 只保留已接受持久化版本和 sync dirty；持久化 dirty 不再写回 DAO。`DurabilityPipelined` 在 WAL Enqueue 接受后、Entity 解锁前推进普通 DAO version。
 - Legacy Checkpoint write runtime、dirty contract 与独立包已删除，运行时只保留 Data Engine 单一持久化路径，避免 WAL 与 snapshot 重复落地。
+- 并发容器包由含义模糊的 `map` 改名为 `safemap`；类型名保持不变，业务可继续使用 `fmap` import alias。AI/Taskflow 的定义文件改按职责命名为 `strategy.go`/`runtime.go`，不再使用无业务指向的 `contracts.go`。
 
 ### Added
 - `worker.Pool.TryGo`：返回异步任务 admission error；已接纳任务全部纳入 `StopWithContext`。

@@ -129,21 +129,23 @@ func TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval(t *testing.T)
 
 	admissionErr := errors.New("durable wal unavailable")
 	admissionCalls := 0
-	unregister, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity) error {
+	unregister, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
 		admissionCalls++
-		return admissionErr
+		return DeleteAdmissionImmediate, admissionErr
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity) error { return nil }); !errors.Is(err, ErrDeleteAdmitterExists) {
+	if _, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
+		return DeleteAdmissionImmediate, nil
+	}); !errors.Is(err, ErrDeleteAdmitterExists) {
 		t.Fatalf("duplicate admitter error = %v", err)
 	}
 	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, true); !errors.Is(err, admissionErr) {
 		t.Fatalf("destroy admission error = %v", err)
 	}
 	if mgr.Get(value.ID()) != value || value.IsRemoved() {
-		t.Fatal("indeterminate admission removed the entity")
+		t.Fatal("definitive admission failure removed the entity")
 	}
 	outsider := newMgrTestEntity(1003, testEntityCategoryPlayer)
 	if err := mgr.Destroy(context.Background(), outsider, testDestroyCommon, true); !errors.Is(err, ErrEntityNotManaged) {
@@ -155,9 +157,12 @@ func TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval(t *testing.T)
 
 	unregister()
 	admitted := false
-	_, err = mgr.RegisterDeleteAdmitter(func(_ context.Context, got IThreadSafeEntity) error {
+	_, err = mgr.RegisterDeleteAdmitter(func(_ context.Context, got IThreadSafeEntity, reason EntityDestroyReason) (DeleteAdmission, error) {
 		if got != value {
-			return errors.New("delete admission received another entity")
+			return DeleteAdmissionImmediate, errors.New("delete admission received another entity")
+		}
+		if reason != testDestroyCommon {
+			return DeleteAdmissionImmediate, errors.New("delete admission received another reason")
 		}
 		locked := make(chan bool, 1)
 		go func() {
@@ -168,10 +173,10 @@ func TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval(t *testing.T)
 			locked <- acquired
 		}()
 		if <-locked {
-			return errors.New("delete admission did not run under entity mutex")
+			return DeleteAdmissionImmediate, errors.New("delete admission did not run under entity mutex")
 		}
 		admitted = true
-		return nil
+		return DeleteAdmissionImmediate, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -184,6 +189,61 @@ func TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval(t *testing.T)
 	}
 }
 
+func TestEntityManagerDestroyDeferredAdmissionLeavesFinalizationToTransaction(t *testing.T) {
+	mgr := NewEntityManager()
+	value := newMgrTestEntity(1006, testEntityCategoryPlayer)
+	mgr.Add(value)
+	_, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
+		return DeleteAdmissionDeferred, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, true); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.Get(value.ID()) != value || value.IsRemoved() {
+		t.Fatal("deferred admission finalized before its transaction committed")
+	}
+}
+
+func TestEntityManagerDestroyIndeterminateAdmissionStopsServingEntity(t *testing.T) {
+	mgr := NewEntityManager()
+	value := newMgrTestEntity(1007, testEntityCategoryPlayer)
+	mgr.Add(value)
+	wantErr := errors.New("wal admission outcome unknown")
+	_, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
+		return DeleteAdmissionIndeterminate, wantErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, true); !errors.Is(err, wantErr) {
+		t.Fatalf("Destroy error=%v, want %v", err, wantErr)
+	}
+	if mgr.Get(1007) != nil {
+		t.Fatal("indeterminate admission left possibly deleted state reachable")
+	}
+}
+
+func TestEntityManagerDestroyIndeterminateAdmissionCannotReportSuccess(t *testing.T) {
+	mgr := NewEntityManager()
+	value := newMgrTestEntity(1008, testEntityCategoryPlayer)
+	mgr.Add(value)
+	_, err := mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
+		return DeleteAdmissionIndeterminate, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, true); !errors.Is(err, ErrDeleteIndeterminate) {
+		t.Fatalf("Destroy error=%v, want ErrDeleteIndeterminate", err)
+	}
+	if mgr.Get(1008) != nil {
+		t.Fatal("indeterminate admission without adapter error left entity reachable")
+	}
+}
+
 func TestEntityManagerDeleteAdmitterCanUnregisterOutsideRegistryLock(t *testing.T) {
 	mgr := NewEntityManager()
 	value := newMgrTestEntity(1004, testEntityCategoryPlayer)
@@ -191,9 +251,9 @@ func TestEntityManagerDeleteAdmitterCanUnregisterOutsideRegistryLock(t *testing.
 	wantErr := errors.New("admission stopped")
 	var unregister func()
 	var err error
-	unregister, err = mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity) error {
+	unregister, err = mgr.RegisterDeleteAdmitter(func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error) {
 		unregister()
-		return wantErr
+		return DeleteAdmissionImmediate, wantErr
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 ## 命名规范
 
 - **新指标一律点号分层**：`<子系统>.<对象>.<动作>`，计数器以 `_total` 结尾（Prometheus 导出时点号自动转下划线）。示例：`nest.handler.lock_hold.slow.total`、`nestwal.reject.total`。
-- **存量下划线命名（`bus_*`、`checkpoint_*`、`failurelog_*`、`entitysync_*`）保持不变**——改名会打断既有采集，规范只约束新增。
+- **存量下划线命名（`bus_*`、`failurelog_*`、`entitysync_*`）保持不变**——改名会打断既有采集，规范只约束新增。
 - **label 基数必须有界**：handler 名、result 枚举、reason 枚举可以；实体 ID、玩家 ID、技能 ID 一律禁止（`obs.Registry` 有 series 上限兜底，但打到上限本身就是事故）。
 - Duration 一律用 `obs.ObserveDuration`，不要把毫秒塞进 Counter。
 - **需要分位数的时长用 `obs.ObserveHistogram`**：17 个固定指数桶（1ms 起逐桶翻倍到 ~65s，`obs.HistogramBounds()` 可查），`obs.HistogramQuantile(name, labels, q)` 桶内线性插值取分位数；Prometheus 导出为标准累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。桶固定意味着无采样窗口——它是进程生命期累积分布，压测类"单场分布"要在场景开始前 `obs.Reset()` 或用 label 区分场次。
@@ -33,7 +33,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/indeterminate——**indeterminate 非零即事故**） |
 | `nest.entity_group.transition.total` | Counter | 锁组迁移 |
 
-### Durability 管线（kit/nestwal + core/checkpoint）
+### Durability 管线（kit/dataengine + kit/nestwal）
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
@@ -43,9 +43,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nestwal.pending.tickets` | Gauge | 未 durable 的 pipelined ticket 数（durable lag 的实体侧读数） |
 | `nestwal.disk.bytes` | Gauge | 段文件占用（回收压力） |
 | `nestwal.reject.total` | Counter | 容量拒绝（labels.reason: queue_full/disk_cap） |
-| `checkpoint_journal_submit_timeout_total` | Counter | journal 背压超时 |
-| `checkpoint_redis_wal_{submit,write,ack,replay,clean}_total` | Counter | Redis WAL 生命周期 |
-| `checkpoint_release_gate_deferred_total`（kit） / `entitysync_flush_gate_deferred_total` | Counter | 外化闸门推迟次数（durable watermark 落后信号） |
+| `entitysync_flush_gate_deferred_total` | Counter | 同步外化被 durable watermark 推迟的次数 |
 
 ### 缓存与总线（core）
 

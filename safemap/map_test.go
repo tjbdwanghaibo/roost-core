@@ -1,4 +1,4 @@
-package fmap
+package safemap
 
 import (
 	"fmt"

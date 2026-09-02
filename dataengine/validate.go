@@ -123,6 +123,9 @@ func ValidateCommitRecord(record CommitRecord) error {
 		if receipt.Namespace == "" || receipt.ID == "" {
 			return fmt.Errorf("dataengine: invalid receipt %d", i)
 		}
+		if _, control, err := DecodeLeaseFenceReceipt(receipt); control && err != nil {
+			return fmt.Errorf("dataengine: invalid lease fence receipt %d: %w", i, err)
+		}
 	}
 	return nil
 }

@@ -38,6 +38,23 @@ func (m *Msg) setRemoteWriteBatch(batch entity.RemoteWriteBatch) {
 	}
 }
 
+// CurrentRemoteWriteBatchContains reports whether the active Nest dispatch
+// prepared a fenced remote write entry for the entity. Infrastructure hooks
+// use it to reject a remote delete that was not declared in the message
+// targets before locks were acquired.
+func CurrentRemoteWriteBatchContains(entityID int64) bool {
+	msg := currentNestDispatchMsg()
+	if msg == nil || msg.RemoteWriteBatch == nil {
+		return false
+	}
+	for _, id := range msg.RemoteWriteBatch.EntityIDs() {
+		if id == entityID {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	if m == nil || m.RemoteWriteBatch == nil || m.remoteFinalized {
 		return nil
@@ -49,6 +66,7 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 		entity.RemoteTransactionID(tx.ID()), tx.handler, tx.requestID(), true, uint8(tx.durability),
 	)
 	outcome.PersistChanges = tx
+	outcome.DeleteIntents = tx
 	if err := m.RemoteWriteBatch.FinalizeLocked(outcome); err != nil {
 		return err
 	}

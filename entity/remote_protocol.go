@@ -149,6 +149,13 @@ type RemotePersistChangeSource interface {
 	RemotePersistChangeFor(any) (RemotePersistChange, bool)
 }
 
+// RemoteDeleteIntentSource exposes aggregate deletion explicitly. The intent
+// is transaction-local and does not depend on mutating IsRemoved before the
+// durable remote commit has been admitted.
+type RemoteDeleteIntentSource interface {
+	RemoteDeleteRequested(int64) bool
+}
+
 type RemoteTransactionOutcome struct {
 	TransactionID  RemoteTransactionID
 	Handler        string
@@ -157,6 +164,7 @@ type RemoteTransactionOutcome struct {
 	Durability     uint8
 	FinalizedAt    int64
 	PersistChanges RemotePersistChangeSource
+	DeleteIntents  RemoteDeleteIntentSource
 }
 
 type RemoteSnapshotRecord struct {

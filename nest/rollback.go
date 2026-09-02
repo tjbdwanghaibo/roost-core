@@ -66,6 +66,7 @@ type RollbackTx struct {
 	handler             string
 	state               rollbackTxState
 	rollbacks           []func() error
+	afterAdmission      []func()
 	commits             []func()
 	undoKeys            map[undoKey]struct{}
 	participants        []CommitParticipant
@@ -83,6 +84,7 @@ type RollbackTx struct {
 	receipts            []dataengine.Receipt
 	receiptDigests      map[receiptKey][]byte
 	remoteWrite         bool
+	deleteIntents       map[int64]struct{}
 }
 
 type rollbackTxState uint8
@@ -193,6 +195,54 @@ func (tx *RollbackTx) AfterCommit(fn func()) {
 	if tx != nil && tx.state == rollbackTxOpen && fn != nil {
 		tx.commits = append(tx.commits, fn)
 	}
+}
+
+// AfterAdmission runs after the transaction has crossed its durable admission
+// point but before Nest releases entity locks. It is reserved for lifecycle
+// transitions, such as removing an Entity whose delete tombstone is already
+// in the WAL. External side effects belong in AfterCommit instead.
+func (tx *RollbackTx) AfterAdmission(fn func()) {
+	if tx != nil && tx.state == rollbackTxOpen && fn != nil {
+		tx.afterAdmission = append(tx.afterAdmission, fn)
+	}
+}
+
+// RequestEntityDelete records one transaction-local aggregate delete intent.
+// The bool is true only for the first request for this entity in the current
+// transaction, allowing callers to register one lifecycle finalizer.
+func (tx *RollbackTx) RequestEntityDelete(entityID int64) (bool, error) {
+	if tx == nil || tx.state != rollbackTxOpen || entityID == 0 {
+		return false, ErrTransactionClosed
+	}
+	if tx.deleteIntents == nil {
+		tx.deleteIntents = make(map[int64]struct{}, 1)
+	}
+	if _, exists := tx.deleteIntents[entityID]; exists {
+		return false, nil
+	}
+	tx.deleteIntents[entityID] = struct{}{}
+	if tx.durability < DurabilityStrict {
+		tx.durability = DurabilityStrict
+	}
+	return true, nil
+}
+
+// CancelEntityDelete removes an intent that could not be prepared. It is only
+// valid before persistence preparation begins.
+func (tx *RollbackTx) CancelEntityDelete(entityID int64) {
+	if tx == nil || tx.state != rollbackTxOpen || tx.persistencePrepared {
+		return
+	}
+	delete(tx.deleteIntents, entityID)
+}
+
+// RemoteDeleteRequested implements entity.RemoteDeleteIntentSource.
+func (tx *RollbackTx) RemoteDeleteRequested(entityID int64) bool {
+	if tx == nil {
+		return false
+	}
+	_, requested := tx.deleteIntents[entityID]
+	return requested
 }
 
 func (tx *RollbackTx) RegisterCommitParticipant(participant CommitParticipant) error {
@@ -309,6 +359,8 @@ func (tx *RollbackTx) Rollback() error {
 		}
 	}
 	tx.commits = nil
+	tx.afterAdmission = nil
+	tx.deleteIntents = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
 	tx.remoteParticipants = nil
@@ -327,6 +379,8 @@ func (tx *RollbackTx) Commit() {
 		return
 	}
 	tx.state = rollbackTxCommitted
+	admitted := tx.afterAdmission
+	tx.afterAdmission = nil
 	tx.rollbacks = nil
 	tx.undoKeys = nil
 	tx.participants = nil
@@ -339,6 +393,12 @@ func (tx *RollbackTx) Commit() {
 	tx.effectIDs = nil
 	tx.receipts = nil
 	tx.receiptDigests = nil
+	tx.deleteIntents = nil
+	for _, fn := range admitted {
+		if fn != nil {
+			fn()
+		}
+	}
 	if len(tx.commits) == 0 {
 		return
 	}
@@ -368,6 +428,7 @@ func (tx *RollbackTx) abandon() {
 	}
 	tx.state = rollbackTxCommitted
 	tx.rollbacks = nil
+	tx.afterAdmission = nil
 	tx.commits = nil
 	tx.undoKeys = nil
 	tx.participants = nil
@@ -380,6 +441,7 @@ func (tx *RollbackTx) abandon() {
 	tx.effectIDs = nil
 	tx.receipts = nil
 	tx.receiptDigests = nil
+	tx.deleteIntents = nil
 }
 
 func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
@@ -542,6 +604,23 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 	}
 	if CurrentRollbackTx() != nil {
 		return call()
+	}
+	if committer == nil {
+		return nil, ErrCommitterRequired
+	}
+	release := fctx.BindBase(ctx)
+	defer release()
+	return invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
+}
+
+// RunIsolatedTransaction always creates its own strict durable transaction,
+// even when called from an existing Nest handler. It is intended for
+// infrastructure lifecycle operations whose commit point cannot be rolled
+// back with the surrounding business transaction. Callers must already hold
+// every entity lock required by call.
+func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
+	if call == nil {
+		return nil, errors.New("nest: isolated transaction call is nil")
 	}
 	if committer == nil {
 		return nil, ErrCommitterRequired

@@ -1,4 +1,6 @@
-package fmap
+// Package safemap provides the concurrent map implementations used by
+// generated DAO collections and framework registries.
+package safemap
 
 type IMap[K comparable, V any] interface {
 	Set(key K, value V)

@@ -55,7 +55,7 @@ func (access *ManagerAccess) RegisterOnEntityRelease(hook func(IThreadSafeEntity
 	return access.manager.RegisterOnEntityRelease(hook), nil
 }
 
-func (access *ManagerAccess) RegisterDeleteAdmitter(admitter func(context.Context, IThreadSafeEntity) error) (func(), error) {
+func (access *ManagerAccess) RegisterDeleteAdmitter(admitter DeleteAdmitter) (func(), error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
 	}

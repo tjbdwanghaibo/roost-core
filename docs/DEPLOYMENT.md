@@ -110,7 +110,7 @@ kubectl -n roost get pod,pvc,svc,pdb
 1. 构建一次不可变制品，生成 SBOM、签名和 provenance。
 2. 在临时环境启动真实依赖，执行 migration/read compatibility、WAL replay 和协议兼容检查。
 3. canary 使用新 SID 或明确 ownership transfer；readiness 成功后给少量流量。
-4. 观察请求错误、p99、queue、WAL fsync、checkpoint pending、Remote reject、Saga backlog、GC、CPU/内存和同步重传。
+4. 观察请求错误、p99、queue、WAL fsync、Data Engine projection/outbox backlog、Remote reject、Saga backlog、GC、CPU/内存和同步重传。
 5. 分批切流。每批先停止旧 writer/完成 Flush，再建立新 owner，不能让同 SID 并行。
 6. 到达稳定窗口后才清理旧制品和兼容读路径。
 
@@ -118,9 +118,9 @@ kubectl -n roost get pod,pvc,svc,pdb
 
 ## 8. 停机与回滚
 
-Kubernetes 先让 readiness 失败并停止新请求，再发送 SIGTERM。`terminationGracePeriodSeconds` 必须大于 `shutdown.total_timeout`，并给 preStop/网络摘流留余量。最终退出前检查 Nest admission 关闭、Service Shutdown、Saga/consumer drain、checkpoint Flush、WAL shutdown 和连接关闭的错误。
+Kubernetes 先让 readiness 失败并停止新请求，再发送 SIGTERM。`terminationGracePeriodSeconds` 必须大于 `shutdown.total_timeout`，并给 preStop/网络摘流留余量。最终退出前检查 Nest admission 关闭、Service Shutdown、Saga/consumer drain、Data Engine Flush/WAL shutdown 和连接关闭的错误。
 
-可回滚的前提是旧版本能读取新版本已经写入的 wire、WAL、checkpoint 和数据库数据。否则选择前滚修复。回滚有状态实例前：停止新 writer、记录 route/marker/fence、快照 PVC/数据库、再启动旧制品；绝不能让旧新两个 writer 同时运行。
+可回滚的前提是旧版本能读取新版本已经写入的 wire、WAL 和数据库数据。否则选择前滚修复。回滚有状态实例前：停止新 writer、记录 route/marker/fence、快照 PVC/数据库、再启动旧制品；绝不能让旧新两个 writer 同时运行。
 
 ## 9. 备份与灾难恢复
 
@@ -142,6 +142,6 @@ Kubernetes 先让 readiness 失败并停止新请求，再发送 SIGTERM。`term
 [ ] kill -9/磁盘满/主从切换/网络分区演练通过
 [ ] WAL 与 SID 单写关系已验证
 [ ] readiness、告警、dashboard、值班手册就绪
-[ ] schema/wire/WAL/checkpoint 回滚路径明确
+[ ] schema/wire/WAL/Data Engine projection 回滚路径明确
 [ ] 备份恢复最近一次演练在有效期内
 ```

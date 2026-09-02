@@ -57,12 +57,32 @@ WAL record，再由 kit 的 durable consumer 幂等创建 Saga。直接 `StartSa
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
 
-Native Entity step 使用 Data Engine inbox：进入 Nest handler 后先调用
-`inbox.Bind(command)`，业务修改照常产生 Put/Patch，最后调用
-`saga.EmitCompletion(completion)`。三者会形成同一个 CommitRecord：Entity mutation、
-`saga-step/CommandID` receipt，以及 ID 为 `saga-completion:{CommandID}` 的 completion
-effect。handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt
-和 outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
+Native Entity step 使用 Data Engine inbox。Kit consumer 在同步调用 handler 前分配
+`Reservation`；业务从当前调用 context 读取一次，并把它作为**显式业务参数**传进 Nest
+handler，不能把 handler context 交给异步 goroutine：
+
+```go
+reservation, ok := sagaKit.ReservationFromContext(ctx)
+if !ok {
+    return saga.Completion{}, errors.New("missing saga reservation")
+}
+// 将 command 与 reservation 作为 Nest Params 发送。
+// Nest handler 内：
+if err := inbox.Bind(command, reservation); err != nil {
+    return nil, err
+}
+// 业务修改产生 Put/Patch，最后 saga.EmitCompletion(completion)。
+```
+
+Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，以及 ID 为
+`saga-completion:{CommandID}` 的 completion effect 会形成同一个 CommitRecord。Mongo
+投影在同一事务里验证 claim 的 owner、lease token、`pending` 状态和 `lease_until`；任一
+不匹配都只写入幂等的 skipped transaction marker，不应用业务 mutation/effect，并让 WAL
+安全 ACK。这样新 owner 接管后，旧 worker 的晚到记录不能产生副作用，也不会成为永久
+poison WAL。控制 receipt 不进入业务 receipt collection。
+
+handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt 和
+outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
 receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`，不同 CommandID 即使共享
 IdempotencyKey 仍表示新的 Saga attempt，业务 step 继续按 IdempotencyKey 保证语义幂等。
 

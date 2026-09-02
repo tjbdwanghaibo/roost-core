@@ -99,10 +99,9 @@ type PipelinedTransactionCommitter interface {
 `FlushSubject` 在 Prepare 前检查 `state.LastCommitLSN() <= watermark()`，不满足则本 tick 跳过、
 dirty 保留、下 tick 重试。fsync 组提交是毫秒级、同步 tick 是几十毫秒级，闸门延迟在噪声水平。
 
-**checkpoint**：不变量一句话——**checkpoint 永不领先 WAL**。提交 after-image 的路径（kit
-checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.DurableLSN()` 做同样
-检查，未 durable 的实体本轮不 take dirty。否则崩溃后会出现"存储里有、WAL 重放历史里没有"
-的状态。未接入水位线的部署不受影响（watermark 未注入时闸门旁路）。
+**Data Engine**：Mongo projection 只消费已经进入统一 WAL 的记录，因此不存在独立 Entity
+snapshot 抢先落地的第二条路径。`LastCommitLSN` 只用于约束同步等外化行为，不再驱动旧
+Checkpoint Mod。
 
 ## 7. kit 侧（nestwal，独立交付）
 
@@ -116,7 +115,7 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
 ## 8. 测试与验收
 
 全部已实现（core `nest/pipelined_commit_test.go`、`nest/pipelined_bench_test.go`；kit
-`nestwal/pipelined_test.go`、`nestwal/crash_test.go`、`checkpoint/pipelined_gate_test.go`）：
+`nestwal/pipelined_test.go`、`nestwal/crash_test.go`、`dataengine/projector_test.go`）：
 
 1. 单元（fake PipelinedCommitter，可控 resolve 时机/结果）：Enqueue 拒绝→回滚完好；
    indeterminate→abandon 不回滚；早放锁（探针在 ticket 未 resolve 时成功抢到实体锁）；
@@ -137,10 +136,9 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
   handler 试点。
 - prod 配置门禁初期要求 pipelined 显式白名单。
 - 装配接线（kit >= 对应版本）：
-  - checkpoint 闸门由 nestwal mod 在 Provide 时**自动接线**（未用 pipelined 的实体 LSN 为 0
-    恒通过，闸门空转成本为一次原子读）；
+  - Data Engine Mod 独占 WAL，并在 recovery barrier 完成后提供 committer；
   - entitysync 闸门一行接线：`coordinator.SetDurableWatermark(runtime.DurableWatermark())`；
-  - 引擎选项改用 `nestwalMod.NestOptions()`（committer + 配置驱动的
+  - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
     `nest.pipelined.allowlist` / `nest.pipelined.async` /
     `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`），
     不配置时与旧行为完全一致。
@@ -148,10 +146,7 @@ checkpoint mod / entity repository）对 `entity.LastCommitLSN() <= committer.Du
   - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
     时长，**Phase 2 的决策输入**：若其占 worker 忙时比例持续偏高且加 worker 无效，才立项
     Phase 2；
-  - `entitysync_flush_gate_deferred_total` —— 同步分发被水位线推迟的次数；
-  - `checkpoint_release_gate_deferred_total`（kit）—— 实体快照被水位线推迟的次数，另见
-    checkpoint mod 的 `gateDeferrals` 统计与 admission pending（推迟实体计入重试预算，
-    WAL 卡死时按既有 fail-stop 语义熔断）。
+  - `entitysync_flush_gate_deferred_total` —— 同步分发被水位线推迟的次数。
 
 ## 10. Phase 2（决策记录：2026-08-25 灰度试点数据）
 
@@ -237,7 +232,7 @@ Phase 2 异步完成经 `NestOptionWithPipelinedAsyncCompletion` 单独开关。
    （ok/degraded/indeterminate 三分）、nestwal 的 durable lag 与批大小。
 2. **白名单扩大**。按 lock_hold 排序逐批把写多读少、AfterCommit 无请求上下文依赖的 handler
    加入 allowlist；每批观察一个发布周期，门槛：`async_total{result="degraded"}` 占比 < 0.1%、
-   indeterminate 为零（出现即触发 fence，属于事故而非灰度信号）、无 checkpoint 水位线告警。
+   indeterminate 为零（出现即触发 fence，属于事故而非灰度信号）、无 Data Engine WAL/projection 告警。
    Phase 2 泵参数（workers/queueCap）按 degraded 占比调整，而不是按吞吐调整。
 3. **默认翻转，显式退出**。allowlist 语义反转：新增 `NestOptionWithStrictList`（规划）声明
    仍需 strict 的 handler（跨实体 remote write batch 自动豁免，广播天然无提前放锁），其余
