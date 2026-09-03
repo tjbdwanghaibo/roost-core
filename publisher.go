@@ -1,4 +1,4 @@
-// Package syncstream adapts cube-core/syncstream packets to cube-kit sync
+// Package syncstream adapts roost-core/syncstream packets to roost-kit sync
 // transports with observer isolation, confirmed publishing, compression,
 // fragmentation, checksums, and bounded reassembly.
 package syncstream
@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 var (

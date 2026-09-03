@@ -36,9 +36,9 @@ func ExportMetrics(sink MetricSink, labels map[string]string, publisher *Publish
 		return
 	}
 	status := Health(publisher, buffered, HealthOptions{})
-	sink.Gauge("cube_sync_packets_published", float64(status.Publisher.Published), labels)
-	sink.Gauge("cube_sync_frames_published", float64(status.Publisher.Frames), labels)
-	sink.Gauge("cube_sync_publish_failures", float64(status.Publisher.Failures+status.Buffered.Failures), labels)
-	sink.Gauge("cube_sync_queue_backpressure", float64(status.Buffered.Backpressure), labels)
-	sink.Gauge("cube_sync_queue_depth_total", float64(status.Buffered.Queued), labels)
+	sink.Gauge("roost_sync_packets_published", float64(status.Publisher.Published), labels)
+	sink.Gauge("roost_sync_frames_published", float64(status.Publisher.Frames), labels)
+	sink.Gauge("roost_sync_publish_failures", float64(status.Publisher.Failures+status.Buffered.Failures), labels)
+	sink.Gauge("roost_sync_queue_backpressure", float64(status.Buffered.Backpressure), labels)
+	sink.Gauge("roost_sync_queue_depth_total", float64(status.Buffered.Queued), labels)
 }

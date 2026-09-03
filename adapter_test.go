@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/cube-core/syncstream"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func TestPublisherAndSubscriberRoundTrip(t *testing.T) {
