@@ -1,5 +1,5 @@
 // Package replication contains reusable transport-side building blocks for
-// cube-core/replication. Protocol state and delta algorithms stay in core;
+// roost-core/replication. Protocol state and delta algorithms stay in core;
 // queueing and concrete network adaptation belong in kit.
 package nettransport
 
@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"time"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 var (

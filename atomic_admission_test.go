@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 func TestAsyncTransportAdmitBatchIsAtomicOnReliableBackpressure(t *testing.T) {

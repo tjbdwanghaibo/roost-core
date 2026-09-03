@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 	kcp "github.com/xtaci/kcp-go/v5"
 )
 

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 const udpEnvelopeHeaderSize = 16 // session ID + packet sequence

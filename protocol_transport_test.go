@@ -16,7 +16,7 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 func TestAEADSessionProtectorRejectsReplayAndTamper(t *testing.T) {

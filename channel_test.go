@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type blockingTransport struct {

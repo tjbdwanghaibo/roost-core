@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type ControlTarget interface {

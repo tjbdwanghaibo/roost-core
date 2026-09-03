@@ -11,10 +11,13 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
-const DefaultQUICALPN = "cube-replication-v1"
+// DefaultQUICALPN is negotiated on every QUIC handshake. Client and server
+// must agree on it, so a rollout upgrades both sides together or pins the
+// value explicitly in their TLS config.
+const DefaultQUICALPN = "roost-nettransport-v1"
 
 type QUICTransportConfig struct {
 	MaxDatagramBytes    int

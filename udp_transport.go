@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 const DefaultUDPMaxPacketBytes = 1232 // IPv6 minimum MTU minus IPv6 + UDP headers
