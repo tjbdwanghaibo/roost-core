@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // fakeDistLock counts extensions and can start refusing them, modeling a

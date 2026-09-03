@@ -9,7 +9,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	rediscore "github.com/tjbdwanghaibo/cube-core/redis"
+	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 func TestDistLockExpiryAndReacquireIntegration(t *testing.T) {

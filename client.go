@@ -7,7 +7,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // redisClient implements fredis.IRedis by wrapping go-redis.

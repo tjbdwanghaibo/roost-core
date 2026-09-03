@@ -2,7 +2,7 @@ package redis
 
 import (
 	"context"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
