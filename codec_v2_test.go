@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

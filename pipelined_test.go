@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 func waitTicket(t *testing.T, ticket corenest.CommitTicket) error {

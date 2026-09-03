@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

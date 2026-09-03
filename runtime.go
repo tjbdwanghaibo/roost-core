@@ -3,7 +3,7 @@ package nestwal
 import (
 	"context"
 
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 // Runtime groups the WAL and recovery committer so application wiring stays

@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 const (
@@ -125,7 +125,7 @@ type WAL struct {
 	diskBytes    atomic.Int64
 	batchBuffers sync.Pool
 
-	// Pipelined commit state (see NEST_PIPELINED_COMMIT.md in cube-core).
+	// Pipelined commit state (see NEST_PIPELINED_COMMIT.md in roost-core).
 	// enqueueMu serializes LSN assignment with queue admission so LSN order
 	// equals physical log order; reservedBytes moves the capacity check into
 	// Enqueue, which must be the only rejection point; writtenLSN (guarded by

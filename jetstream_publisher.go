@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 type JetStreamEffectPublisher struct {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 )
 
 func newEffectInboxTest(t *testing.T, ttl time.Duration) (*MongoEffectInbox, *mongofake.Client, *mongofake.Collection) {

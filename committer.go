@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 var (

@@ -3,8 +3,8 @@ package nestwal
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 func TestRemoteCommitCodecRoundTrip(t *testing.T) {

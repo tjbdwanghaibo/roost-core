@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 func testRecord(sequence byte, durability corenest.DurabilityPolicy) corenest.CommitRecord {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 const crashChildDirEnv = "NESTWAL_CRASH_DIR"
