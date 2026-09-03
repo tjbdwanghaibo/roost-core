@@ -38,8 +38,10 @@ func TestAtomicLocalStoreVersionTTLAndBounds(t *testing.T) {
 	if err := store.Set(ctx, atomicTestValue{Key: 1, Version: 2, Size: 4}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Set(ctx, atomicTestValue{Key: 1, Version: 1, Size: 4}); err != nil {
-		t.Fatal(err)
+	// The older version must be refused, and refused visibly: a nil here
+	// would let a caller report success for a write that never happened.
+	if err := store.Set(ctx, atomicTestValue{Key: 1, Version: 1, Size: 4}); !errors.Is(err, ErrStaleWrite) {
+		t.Fatalf("stale Set returned %v, want ErrStaleWrite", err)
 	}
 	got, ok, _ := store.Get(ctx, 1)
 	if !ok || got.Version != 2 {

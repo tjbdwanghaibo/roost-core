@@ -321,7 +321,14 @@ func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapsh
 		return nil
 	}
 	if err := c.layered.Set(ctx, snapshot); err != nil {
-		return err
+		// Losing to a newer snapshot is the intended outcome here, not a
+		// failure: single-point publish plus the version predicate means the
+		// stored value is already at least as new as this one. Waiters are
+		// still notified below — notify only wakes those whose target is
+		// <= this version, and a newer stored value satisfies them too.
+		if !errors.Is(err, cache.ErrStaleWrite) {
+			return err
+		}
 	}
 	c.notify(snapshot.Key, snapshot.StateVersion)
 	return nil

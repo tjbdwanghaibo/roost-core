@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"sync"
 	"time"
 )
@@ -50,8 +52,16 @@ func (s *LayeredStore[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 		return value, ok, err
 	}
 	if s.local != nil {
-		_ = s.local.Set(ctx, value)
-		s.setLocalExpiry(key, time.Now())
+		// A failed L1 backfill must not fail the read, but it must not be
+		// invisible either: a store that never accepts a backfill turns every
+		// read into a remote round trip with no signal that it is happening.
+		// ErrStaleWrite is not a degradation — it means a newer value is
+		// already cached, which is the outcome we wanted.
+		if err := s.local.Set(ctx, value); err != nil && !errors.Is(err, ErrStaleWrite) {
+			metrics.IncCounter("cache.layered.backfill_failed.total", nil, 1)
+		} else {
+			s.setLocalExpiry(key, time.Now())
+		}
 	}
 	return value, true, nil
 }
@@ -114,9 +124,22 @@ func (s *LayeredStore[K, V]) Delete(ctx context.Context, key K) error {
 	return nil
 }
 
+// localValid reports whether the L1 copy of key may be served without
+// consulting the remote.
+//
+// A non-positive ttl means "do not serve from L1", not "serve from L1
+// forever". The opposite reading is the dangerous one: a caller that leaves
+// the TTL unset — which is what a missing config key yields, since
+// viper.GetDuration returns 0 — would get a first-level cache that never
+// revalidates, so every replica reads its own permanently stale view. Get
+// already short-circuits when there is no remote, so returning false here
+// degrades to "no L1 caching" rather than to "no store".
 func (s *LayeredStore[K, V]) localValid(key K, now time.Time) bool {
-	if s == nil || s.ttl <= 0 {
-		return true
+	if s == nil {
+		return false
+	}
+	if s.ttl <= 0 {
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

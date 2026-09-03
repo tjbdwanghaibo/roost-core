@@ -140,7 +140,7 @@ func (s *RedisRefHMapStore[K, V]) Set(ctx context.Context, value V) error {
 			return err
 		}
 		if ok && s.cfg.StoreConfig.Stale(old, value) {
-			return nil
+			return ErrStaleWrite
 		}
 	}
 	writes, err := encodeRefHMapNode(reflect.ValueOf(value), plan.root, plan.base)

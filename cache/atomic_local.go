@@ -174,7 +174,7 @@ func (s *AtomicLocalStore[K, V]) SetWithTTL(_ context.Context, value V, ttl time
 	old, exists := shard.items[key]
 	if exists && s.cfg.Stale != nil && s.cfg.Stale(old.value, value) {
 		shard.mu.Unlock()
-		return nil
+		return ErrStaleWrite
 	}
 	shard.generation++
 	entry := atomicLocalEntry[V]{value: value, expiresAt: expiresAt, size: size, generation: shard.generation}

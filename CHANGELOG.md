@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+### Added
+- `scripts/pretag.sh`（四仓各一份）：打 tag **之前**的发布预检。由 tag push 触发的
+  CI 运行在 tag 已存在于远端之后，能报告问题但阻止不了——core 因此出现过一个已推送的
+  `v2.0.0`，而 module 路径没有 `/v2` 后缀，任何消费者都选不到它。脚本检查 tag major
+  与 module 路径后缀一致、tag 未存在（本地与远端）、`go.mod` 无 replace、工作区干净、
+  以及 `GOWORK=off` 下 build/vet/test 通过。
+
+### Fixed（破坏性：`cache` 的陈旧写与分层 TTL 语义）
+
+两条都是"静默降级"类缺陷：框架把一个未发生的写、和一个未配置的选项，都当成了成功。
+
+- **`cache`：被判定陈旧的 `Set` 现在返回 `ErrStaleWrite`，不再静默返回 `nil`。**
+  三处写入点（`AtomicLocalStore`、`RedisJSONStore`、`RefHMapStore`）此前在
+  `StaleFunc` 判定新值更旧时丢弃写入并**报告成功**，调用方无法区分"已写入"和
+  "被丢弃"。这正是"取消操作返回 OK、而存储里仍是旧状态"这类 bug 的框架级源头。
+  **升级影响**：把陈旧丢弃视为正常结果的调用方需要显式
+  `errors.Is(err, cache.ErrStaleWrite)` 容忍它——core 内唯一这样的调用方
+  `RemoteSnapshotCache.Publish` 已按此改写（输给更新的快照本就是单点发布的期望结果，
+  且 `notify` 只唤醒目标 ≤ 本版本的等待者，更新的存储值同样满足它们）。
+  同时把 `StaleFunc` 的并发语义写进文档：`AtomicLocalStore` 在分片锁内求值，比较与
+  写入是原子的；而 `RedisJSONStore`/`RefHMapStore` 的读与写是两次独立往返，谓词
+  **仅供参考**——等版本的两个写入方都会通过它。需要"败者必须被拒绝"时用
+  `redis.CompareAndSet`。
+- **`cache`：`LayeredStore` 的 `ttl <= 0` 从"永不过期"改为"不从 L1 供读"。**
+  原语义把"没配 TTL"变成了一个**永不回源的一级缓存**——而 `viper.GetDuration` 对
+  缺失的配置键正好返回 0，于是漏配一个选项就让每个副本读自己私有的、永久陈旧的视图。
+  新语义退化为"不做 L1 缓存"，是安全的那一侧；`Get` 在无 remote 时本就短路使用
+  local，因此只有 local 的 store 不受影响。**升级影响**：依赖 `ttl=0` 表示
+  "local 即权威、永不过期"的调用方需要显式传一个足够大的 TTL。
+- `cache`：`LayeredStore` 回填 L1 失败不再被完全丢弃，改计
+  `cache.layered.backfill_failed.total`（`ErrStaleWrite` 不计入——它意味着已缓存了
+  更新的值，是期望结果）。此前一个永不接受回填的 local store 会让每次读都回源，
+  且没有任何信号。
+
+以上三处此前**没有任何测试覆盖**（改完行为后全量测试仍然全绿）。已补 6 条回归测试，
+并逐条做过变异验证：恢复静默 `return nil`、恢复 `ttl<=0` 即永久有效、以及把 L1 整个
+关掉，三种变异都精确打红对应断言。
+
 ### Changed（破坏性：Go 模块路径改为 roost-core）
 
 模块路径从 `github.com/tjbdwanghaibo/cube-core` 改为 `github.com/tjbdwanghaibo/roost-core`，

@@ -68,7 +68,7 @@ func (s *RedisJSONStore[K, V]) Set(ctx context.Context, value V) error {
 		return err
 	}
 	if ok && s.cfg.Stale != nil && s.cfg.Stale(old, value) {
-		return nil
+		return ErrStaleWrite
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {

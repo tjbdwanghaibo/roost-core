@@ -10,6 +10,13 @@ import (
 
 var ErrCASInvalidCommand = errors.New("redis cas: invalid command")
 
+// ScriptRunner is the one capability CompareAndSet needs. Taking the narrow
+// interface lets a caller — or a test double — supply just this rather than a
+// whole IRedis; IRedis satisfies it, so existing callers are unaffected.
+type ScriptRunner interface {
+	Eval(ctx context.Context, script string, keys []string, args ...any) (any, error)
+}
+
 type CompareAndSetCommand struct {
 	Key      string
 	Expected []byte
@@ -42,7 +49,7 @@ end
 return {1, ARGV[2]}
 `
 
-func CompareAndSet(ctx context.Context, client IRedis, cmd CompareAndSetCommand) (CompareAndSetResult, error) {
+func CompareAndSet(ctx context.Context, client ScriptRunner, cmd CompareAndSetCommand) (CompareAndSetResult, error) {
 	if client == nil || cmd.Key == "" || cmd.Next == nil {
 		return CompareAndSetResult{}, ErrCASInvalidCommand
 	}

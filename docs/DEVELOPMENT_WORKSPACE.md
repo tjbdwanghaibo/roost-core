@@ -39,6 +39,35 @@ go vet ./...
 并发、WAL、Remote Entity、Saga 变更还要对对应包运行 `go test -race`。Codegen 生成的
 consumer 应加入临时 workspace 后编译，证明模板与四仓 source-head 同代。
 
+## 打 tag 前：scripts/pretag.sh
+
+```bash
+./scripts/pretag.sh v1.11.0
+```
+
+**为什么需要它，而不只是 CI。** 由 tag push 触发的 workflow 运行在 tag **已经存在于
+远端、且已可被 module proxy 缓存之后**。它能报告这个 tag 不可用，但阻止不了。
+roost-core 就这样出现过一个已推送的 `v2.0.0`——module 路径没有 `/v2` 后缀，因此
+任何消费者都选不到它：
+
+```
+go: ...@v2.0.0: invalid version: module contains a go.mod file,
+so module path must match major version (".../roost-core/v2")
+```
+
+四仓各有一份相同的脚本，在创建 tag 之前检查五件事：
+
+1. **tag 的 major 与 module 路径后缀一致**。Go 对 v2+ 要求路径带 `/vN`；不一致的 tag
+   谁都选不到。这是上面那个事故的直接成因。
+2. **tag 不能已存在**（本地或远端）。重打一个已发布的版本比打错版本更糟——proxy
+   已经用那个名字缓存了旧内容。
+3. **`go.mod` 没有 replace**，工作区干净。
+4. **`GOWORK=off` 下能 build / vet / test**。workspace 恰好会隐藏消费者会撞上的
+   那类依赖错误。
+
+版本策略：**沿 v1.x 递增，不做 v2**。真要做 major 版本应当在一次有意的大重构里做，
+并且同时改 module 路径后缀与全部 import——不是为了某一处语义修正。
+
 ## 发布模式：GOWORK=off
 
 发布验证必须完全关闭 workspace：
