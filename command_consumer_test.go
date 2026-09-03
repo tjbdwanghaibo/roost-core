@@ -8,7 +8,7 @@ import (
 	"time"
 
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
 func TestMongoCommandInboxExecutesStepOnceForMessageRedelivery(t *testing.T) {
@@ -106,4 +106,4 @@ func TestStorageDigestsUseStableOperationIdentity(t *testing.T) {
 	}
 }
 
-func newInboxMongoFake() *mongofake.Client { return mongofake.NewClient() }
+func newInboxMongoFake() *mongotest.Client { return mongotest.NewClient() }

@@ -11,7 +11,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -155,13 +155,13 @@ func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
 	}
 }
 
-func newDataEngineInboxMongo() *mongofake.Client { return mongofake.NewClient() }
+func newDataEngineInboxMongo() *mongotest.Client { return mongotest.NewClient() }
 
-func inboxClaims(client *mongofake.Client) *mongofake.Collection {
+func inboxClaims(client *mongotest.Client) *mongotest.Collection {
 	return client.Collection("game", dataEngineClaimCollection)
 }
 
-func inboxReceipts(client *mongofake.Client) *mongofake.Collection {
+func inboxReceipts(client *mongotest.Client) *mongotest.Collection {
 	return client.Collection("game", dataEngineReceiptCollection)
 }
 
@@ -176,7 +176,7 @@ func inboxReceipts(client *mongofake.Client) *mongofake.Collection {
 // rejects every single-field deviation. A rename or a type change on either
 // side fails here.
 func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
-	client := mongofake.NewClient()
+	client := mongotest.NewClient()
 	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{
 		Owner: "worker-1", LeaseDuration: time.Minute, ReceiptTTL: time.Hour,
 	})
