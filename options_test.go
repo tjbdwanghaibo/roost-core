@@ -3,7 +3,7 @@ package nats
 import (
 	"bytes"
 	"errors"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
 	"strings"
 	"sync/atomic"

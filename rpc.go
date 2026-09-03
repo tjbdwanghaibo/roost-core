@@ -3,9 +3,9 @@ package nats
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/worker"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/worker"
 	"log/slog"
 	"math"
 	"math/rand"

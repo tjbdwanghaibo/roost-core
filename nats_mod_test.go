@@ -1,7 +1,7 @@
 package nats
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/bus"
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	"testing"
 	"time"
 

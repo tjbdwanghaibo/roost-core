@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 func TestNatsClientNilBoundaryFailsClosed(t *testing.T) {

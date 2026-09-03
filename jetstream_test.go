@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
@@ -64,8 +64,8 @@ func (c *fakeConsumeContext) Closed() <-chan struct{} { return c.closed }
 
 func TestJetStreamStreamConfigMapping(t *testing.T) {
 	got := toJetStreamStreamConfig(fnats.JetStreamConfig{
-		Name:       "CUBE_DOMAIN_EVENTS",
-		Subjects:   []string{"cube.domain.>"},
+		Name:       "ROOST_DOMAIN_EVENTS",
+		Subjects:   []string{"roost.domain.>"},
 		Storage:    fnats.JetStreamStorageMemory,
 		MaxAge:     time.Hour,
 		Duplicates: time.Minute,
@@ -73,7 +73,7 @@ func TestJetStreamStreamConfigMapping(t *testing.T) {
 		MaxBytes:   1024,
 	})
 
-	if got.Name != "CUBE_DOMAIN_EVENTS" || got.Subjects[0] != "cube.domain.>" {
+	if got.Name != "ROOST_DOMAIN_EVENTS" || got.Subjects[0] != "roost.domain.>" {
 		t.Fatalf("stream identity mismatch: %+v", got)
 	}
 	if got.Storage != gojs.MemoryStorage {
@@ -88,7 +88,7 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 	got := toJetStreamConsumerConfig(fnats.JetStreamConsumerConfig{
 		Name:          "task-progress",
 		Durable:       "task-progress",
-		FilterSubject: "cube.domain.battle.settled",
+		FilterSubject: "roost.domain.battle.settled",
 		DeliverPolicy: fnats.JetStreamDeliverNew,
 		AckWait:       3 * time.Second,
 		MaxDeliver:    5,
@@ -98,7 +98,7 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 	if got.Name != "task-progress" || got.Durable != "task-progress" {
 		t.Fatalf("consumer identity mismatch: %+v", got)
 	}
-	if got.FilterSubject != "cube.domain.battle.settled" {
+	if got.FilterSubject != "roost.domain.battle.settled" {
 		t.Fatalf("filter=%q", got.FilterSubject)
 	}
 	if got.DeliverPolicy != gojs.DeliverNewPolicy {

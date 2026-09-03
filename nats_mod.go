@@ -3,14 +3,14 @@ package nats
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/cube-core/admin"
-	"github.com/tjbdwanghaibo/cube-core/app"
-	"github.com/tjbdwanghaibo/cube-core/bus"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/health"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
-	"github.com/tjbdwanghaibo/cube-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/bus"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
 	"log/slog"
 	"strings"
 
@@ -86,7 +86,7 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 	svcType := r.Config().GetString("server_type")
 	prefix := r.Config().GetString("nats.prefix")
 	if prefix == "" {
-		prefix = "cube"
+		prefix = "roost"
 	}
 	workerNum := r.Config().GetInt("nats.worker_num")
 	if workerNum <= 0 {

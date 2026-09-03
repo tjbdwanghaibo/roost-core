@@ -1,7 +1,7 @@
 package nats
 
 import (
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
 
 	gonats "github.com/nats-io/nats.go"

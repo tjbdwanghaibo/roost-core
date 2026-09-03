@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
