@@ -25,6 +25,7 @@ package versionstore
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"time"
 )
 
@@ -105,3 +106,40 @@ const (
 	// budget together.
 	DefaultRetryBackoff = 2 * time.Millisecond
 )
+
+// RetryBackoff waits before the next attempt of a compare-and-set loop,
+// growing exponentially with full jitter so concurrent losers do not retry in
+// lockstep.
+//
+// It is exported because not every compare-and-set can use this package's
+// envelope model — a store that maintains a sorted set and a hash together
+// needs its own script — and those loops need the same policy. Retrying
+// immediately is what makes contention look like failure: N writers on one key
+// all lose, all retry together, and exhaust the budget at the same moment. The
+// caller then gets an error indistinguishable from an unreachable backend.
+//
+// base <= 0 selects DefaultRetryBackoff; a negative base disables sleeping,
+// which is how a test exercises budget exhaustion quickly. sleep nil means
+// time.Sleep.
+func RetryBackoff(attempt int, base time.Duration, sleep func(time.Duration)) {
+	if base < 0 {
+		return
+	}
+	if base == 0 {
+		base = DefaultRetryBackoff
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	shift := attempt
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 5 {
+		shift = 5
+	}
+	window := base << shift
+	// Full jitter: sleep somewhere in (0, window]. Sleeping the whole window
+	// would only move the lockstep collision later.
+	sleep(time.Duration(rand.Int63n(int64(window))) + time.Nanosecond)
+}

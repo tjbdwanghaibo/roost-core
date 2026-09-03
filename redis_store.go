@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"time"
 
@@ -243,22 +242,8 @@ func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T
 
 var deleteSentinel = []byte("0\n")
 
-// backoff waits before the next attempt, growing exponentially with jitter so
-// concurrent losers do not retry in lockstep.
 func (s *RedisStore[K, T]) backoff(attempt int) {
-	base := s.cfg.RetryBackoff
-	if base < 0 {
-		return
-	}
-	shift := attempt
-	if shift > 5 {
-		shift = 5
-	}
-	window := base << shift
-	// Full jitter: sleep somewhere in (0, window]. Sleeping the full window
-	// would just move the lockstep collision later.
-	delay := time.Duration(rand.Int63n(int64(window))) + time.Nanosecond
-	s.cfg.Sleep(delay)
+	RetryBackoff(attempt, s.cfg.RetryBackoff, s.cfg.Sleep)
 }
 
 func (s *RedisStore[K, T]) encodeEnvelope(value T, version uint64) ([]byte, error) {
