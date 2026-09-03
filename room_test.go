@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/lockstep"
-	corestate "github.com/tjbdwanghaibo/cube-core/statesync"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type recordingTransport struct {

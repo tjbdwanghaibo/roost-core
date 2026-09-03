@@ -1,4 +1,4 @@
-// Package lockstep binds cube-core/lockstep (deterministic input-frame
+// Package lockstep binds roost-core/lockstep (deterministic input-frame
 // synchronization) to rooms and transports: a Room owns one match's
 // sequencer, frame history, redundant broadcast encoder and desync detector,
 // broadcasts cut frames to attached sessions over the datagram lane (loss is
@@ -25,10 +25,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/tjbdwanghaibo/cube-core/lockstep"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	corestate "github.com/tjbdwanghaibo/cube-core/statesync"
-	"github.com/tjbdwanghaibo/cube-kit/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"github.com/tjbdwanghaibo/roost-kit/nettransport"
 )
 
 var (
@@ -49,7 +49,7 @@ const DefaultMaxDatagramBytes = 1232
 // RoomConfig shapes one match's lockstep room.
 type RoomConfig struct {
 	// Sequencer fixes the seat set, submit window and per-input payload cap
-	// (see cube-core/lockstep).
+	// (see roost-core/lockstep).
 	Sequencer lockstep.SequencerConfig
 	// RedundancyDepth is how many recent frames each broadcast datagram
 	// carries (normalized via lockstep.NormalizeRedundancyDepth: <= 0
