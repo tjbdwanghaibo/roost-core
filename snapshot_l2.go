@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	rediscore "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 const remoteSnapshotL2CAS = `

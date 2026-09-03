@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 func TestConcurrentOwnershipClaimElectsExactlyOneOwner(t *testing.T) {

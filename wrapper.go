@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	redis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // remoteEntityWrapper is an internal per-entity coordination cell. Business

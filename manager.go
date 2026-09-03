@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/cache"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	redis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/cache"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type remoteSyncTransport interface {

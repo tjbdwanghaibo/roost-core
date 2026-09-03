@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	redis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type mockVersionedLock struct {

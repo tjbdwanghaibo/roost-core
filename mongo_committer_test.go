@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 )
 
 func newRemoteMongoFake() *mongofake.Client { return mongofake.NewClient() }

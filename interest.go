@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	"github.com/tjbdwanghaibo/cube-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/mirror"
 )
 
 const syncTopicRemoteInterest = "remote_entity_interest"

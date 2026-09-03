@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 const (

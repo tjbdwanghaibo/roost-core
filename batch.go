@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 type remoteWriteEntry struct {
@@ -154,8 +154,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			return nil, fmt.Errorf("remote_entity: shared lock %d: %w", w.id, err)
 		}
 		distLocked = true
-		// Keep this structural assertion while cube-kit supports the preceding
-		// cube-core release; the public equivalent is redis.IFencedVersionedLock.
+		// Keep this structural assertion while roost-kit supports the preceding
+		// roost-core release; the public equivalent is redis.IFencedVersionedLock.
 		if provider, ok := w.rMu.(interface{ Fence() uint64 }); ok {
 			lockFence = provider.Fence()
 		}

@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/mirror"
 	"hash/fnv"
 )
 

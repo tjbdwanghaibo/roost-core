@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // unlockEvalStub emulates the versioned lock scripts on an in-memory hash and
