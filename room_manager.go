@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/health"
+	"github.com/tjbdwanghaibo/roost-core/health"
 )
 
 var (

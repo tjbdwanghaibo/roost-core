@@ -11,14 +11,14 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 )
 
 const (
-	defaultJetStreamSyncPrefix       = "cube.sync"
-	defaultJetStreamSyncStream       = "CUBE_SYNC"
+	defaultJetStreamSyncPrefix       = "roost.sync"
+	defaultJetStreamSyncStream       = "ROOST_SYNC"
 	defaultJetStreamSyncAckWait      = 10 * time.Second
 	defaultJetStreamSyncMaxDeliver   = 5
 	defaultJetStreamSyncMaxAge       = 30 * time.Minute
@@ -238,11 +238,10 @@ func syncMsgID(msg *fsyncbus.SyncMsg) string {
 	if msg == nil || msg.Topic == "" || msg.Key == 0 || msg.Version == 0 || msg.FromSid == 0 {
 		return ""
 	}
-	// The "sync:" prefix is wire state, not a package name: it is the
-	// JetStream dedup MessageID. Renaming it would make old and new nodes
-	// compute different IDs for the same logical message during a rolling
-	// upgrade, which is exactly the duplicate delivery dedup exists to stop.
-	return fmt.Sprintf("sync:%s:%d:%d:%d:%d", msg.Topic, msg.Key, msg.Version, msg.FromSid, msg.Part)
+	// MessageID is the JetStream dedup key; every publisher of a topic must build
+	// it identically, so the format is versioned by the package name, not the
+	// deployment.
+	return fmt.Sprintf("room:%s:%d:%d:%d:%d", msg.Topic, msg.Key, msg.Version, msg.FromSid, msg.Part)
 }
 
 func durableSyncName(topic string, sid int32) string {

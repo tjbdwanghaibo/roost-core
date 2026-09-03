@@ -3,12 +3,12 @@ package room
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/app"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/health"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
-	"github.com/tjbdwanghaibo/cube-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
 	"log/slog"
 	"strings"
 	"time"
@@ -64,7 +64,7 @@ func (m *RoomMod) Init(cfg *viper.Viper) error {
 	}
 	m.prefix = cfgGetString(cfg, "prefix")
 	if m.prefix == "" {
-		m.prefix = "cube.room"
+		m.prefix = "roost.room"
 	}
 	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
 	m.jsCfg = JetStreamSyncConfig{

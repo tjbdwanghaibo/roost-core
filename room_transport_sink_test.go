@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	coreentitysync "github.com/tjbdwanghaibo/cube-core/entitysync"
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
-	kit "github.com/tjbdwanghaibo/cube-kit/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	coreentitysync "github.com/tjbdwanghaibo/roost-core/entitysync"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
+	kit "github.com/tjbdwanghaibo/roost-kit/nettransport"
 )
 
 type recordingAtomicTransport struct {

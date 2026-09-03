@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 )
 
 func TestSyncModStopWithContextPrefersContextStopper(t *testing.T) {

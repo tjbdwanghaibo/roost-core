@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/nats"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/nats"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 	"log/slog"
 	"strings"
 )
@@ -14,12 +14,12 @@ import (
 type natsSyncBus struct {
 	client   nats.IClient
 	localSid int32
-	prefix   string // NATS subject prefix, e.g. "cube.sync"
+	prefix   string // NATS subject prefix, e.g. "roost.sync"
 }
 
 func NewNatsSyncBus(client nats.IClient, localSid int32, prefix string) fsyncbus.ISyncBus {
 	if prefix == "" {
-		prefix = "cube.sync"
+		prefix = "roost.sync"
 	}
 	return &natsSyncBus{client: client, localSid: localSid, prefix: prefix}
 }

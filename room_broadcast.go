@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	coreentitysync "github.com/tjbdwanghaibo/cube-core/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	coreentitysync "github.com/tjbdwanghaibo/roost-core/entitysync"
 )
 
 var (

@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	coreentitysync "github.com/tjbdwanghaibo/cube-core/entitysync"
-	"github.com/tjbdwanghaibo/cube-core/health"
-	core "github.com/tjbdwanghaibo/cube-core/statesync"
-	kit "github.com/tjbdwanghaibo/cube-kit/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	coreentitysync "github.com/tjbdwanghaibo/roost-core/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	core "github.com/tjbdwanghaibo/roost-core/statesync"
+	kit "github.com/tjbdwanghaibo/roost-kit/nettransport"
 )
 
 const (

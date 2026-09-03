@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 )
 
 func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {
 	js := newFakeJetStream()
 	bus, err := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{
 		LocalSid: 7,
-		Prefix:   "cube.sync",
-		Stream:   "CUBE_SYNC_TEST",
+		Prefix:   "roost.sync",
+		Stream:   "ROOST_SYNC_TEST",
 		Storage:  fnats.JetStreamStorageMemory,
 	})
 	if err != nil {
@@ -26,7 +26,7 @@ func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {
 	if len(js.streams) != 1 {
 		t.Fatalf("stream count=%d, want 1", len(js.streams))
 	}
-	if js.streams[0].Name != "CUBE_SYNC_TEST" || len(js.streams[0].Subjects) != 1 || js.streams[0].Subjects[0] != "cube.sync.>" {
+	if js.streams[0].Name != "ROOST_SYNC_TEST" || len(js.streams[0].Subjects) != 1 || js.streams[0].Subjects[0] != "roost.sync.>" {
 		t.Fatalf("stream config mismatch: %+v", js.streams[0])
 	}
 
@@ -43,12 +43,12 @@ func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {
 	if len(js.consumers) != 1 {
 		t.Fatalf("consumer count=%d, want 1", len(js.consumers))
 	}
-	if js.consumers[0].Stream != "CUBE_SYNC_TEST" || js.consumers[0].FilterSubject != "cube.sync.remote_entity" {
+	if js.consumers[0].Stream != "ROOST_SYNC_TEST" || js.consumers[0].FilterSubject != "roost.sync.remote_entity" {
 		t.Fatalf("consumer config mismatch: %+v", js.consumers[0])
 	}
 
 	msg := &fsyncbus.SyncMsg{Topic: "remote_entity", Key: 101, Version: 3, Data: []byte("payload"), FromSid: 12}
-	expectedMsgID := "sync:remote_entity:101:3:12:0"
+	expectedMsgID := "room:remote_entity:101:3:12:0"
 	messageID := reflect.ValueOf(msg).Elem().FieldByName("MessageID")
 	if messageID.IsValid() && messageID.CanSet() {
 		messageID.SetString("delivery-1")
@@ -61,13 +61,13 @@ func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {
 	if len(js.publishes) != 1 {
 		t.Fatalf("publish count=%d, want 1", len(js.publishes))
 	}
-	if js.publishes[0].subject != "cube.sync.remote_entity" {
+	if js.publishes[0].subject != "roost.sync.remote_entity" {
 		t.Fatalf("publish subject=%q", js.publishes[0].subject)
 	}
 	if js.publishes[0].opts.MsgID != expectedMsgID {
 		t.Fatalf("publish msg id=%q", js.publishes[0].opts.MsgID)
 	}
-	if err := js.deliver("cube.sync.remote_entity", js.publishes[0].data); err != nil {
+	if err := js.deliver("roost.sync.remote_entity", js.publishes[0].data); err != nil {
 		t.Fatalf("sync handler errors must be acknowledged, got %v", err)
 	}
 }
@@ -76,8 +76,8 @@ func TestJetStreamSyncBusSkipsSelfMessages(t *testing.T) {
 	js := newFakeJetStream()
 	bus, err := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{
 		LocalSid: 9,
-		Prefix:   "cube.sync",
-		Stream:   "CUBE_SYNC_TEST",
+		Prefix:   "roost.sync",
+		Stream:   "ROOST_SYNC_TEST",
 		Storage:  fnats.JetStreamStorageMemory,
 	})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestJetStreamSyncBusSkipsSelfMessages(t *testing.T) {
 	if err := bus.Publish(&fsyncbus.SyncMsg{Topic: "player.public", Key: 44, Version: 1}); err != nil {
 		t.Fatalf("Publish error: %v", err)
 	}
-	if err := js.deliver("cube.sync.player.public", js.publishes[0].data); err != nil {
+	if err := js.deliver("roost.sync.player.public", js.publishes[0].data); err != nil {
 		t.Fatal(err)
 	}
 	if called {
@@ -210,7 +210,7 @@ func (fakeJetStreamSubscription) Closed() <-chan struct{} {
 
 func TestJetStreamSyncConfigDefaults(t *testing.T) {
 	cfg := normalizeJetStreamSyncConfig(JetStreamSyncConfig{LocalSid: 3})
-	if cfg.Prefix != "cube.sync" || cfg.Stream != "CUBE_SYNC" || cfg.AckWait != 10*time.Second || cfg.MaxDeliver != 5 {
+	if cfg.Prefix != "roost.sync" || cfg.Stream != "ROOST_SYNC" || cfg.AckWait != 10*time.Second || cfg.MaxDeliver != 5 {
 		t.Fatalf("defaults mismatch: %+v", cfg)
 	}
 	if cfg.StreamMaxAge != 30*time.Minute || cfg.SetupTimeout != 5*time.Second || cfg.Duplicates != 2*time.Minute {
