@@ -8,7 +8,7 @@ import (
 )
 
 // TreeSchema is the wire schema identifier for JSON behavior trees.
-const TreeSchema = "cube.ai/v1"
+const TreeSchema = "roost.ai/v1"
 
 // maxTreeDepth bounds recursion so a hostile or broken document cannot blow
 // the stack.

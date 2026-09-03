@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	coreflow "github.com/tjbdwanghaibo/cube-core/actionflow"
-	coreai "github.com/tjbdwanghaibo/cube-core/ai"
+	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
+	coreai "github.com/tjbdwanghaibo/roost-core/ai"
 )
 
 type treeData struct {
@@ -167,7 +167,7 @@ func TestTaskflowActionInterruptHook(t *testing.T) {
 }
 
 const wireTreeJSON = `{
-  "schema": "cube.ai/v1",
+  "schema": "roost.ai/v1",
   "root": {
     "node": "selector",
     "children": [
@@ -242,14 +242,14 @@ func TestParseTreeAssemblesAndRuns(t *testing.T) {
 func TestParseTreeFailFast(t *testing.T) {
 	registry := wireRegistry(t)
 	cases := map[string]string{
-		"unknown schema": `{"schema":"cube.ai/v9","root":{"node":"sequence","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
-		"unknown node":   `{"schema":"cube.ai/v1","root":{"node":"paralel","children":[]}}`,
-		"unknown field":  `{"schema":"cube.ai/v1","root":{"node":"sequence","childs":[]}}`,
-		"empty children": `{"schema":"cube.ai/v1","root":{"node":"sequence","children":[]}}`,
-		"missing child":  `{"schema":"cube.ai/v1","root":{"node":"inverter"}}`,
-		"unknown leaf":   `{"schema":"cube.ai/v1","root":{"node":"condition","name":"nope","args":{}}}`,
-		"bad ticks":      `{"schema":"cube.ai/v1","root":{"node":"cooldown","ticks":0,"child":{"node":"condition","name":"hp_below","args":{}}}}`,
-		"unknown policy": `{"schema":"cube.ai/v1","root":{"node":"parallel","policy":"most","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
+		"unknown schema": `{"schema":"roost.ai/v9","root":{"node":"sequence","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
+		"unknown node":   `{"schema":"roost.ai/v1","root":{"node":"paralel","children":[]}}`,
+		"unknown field":  `{"schema":"roost.ai/v1","root":{"node":"sequence","childs":[]}}`,
+		"empty children": `{"schema":"roost.ai/v1","root":{"node":"sequence","children":[]}}`,
+		"missing child":  `{"schema":"roost.ai/v1","root":{"node":"inverter"}}`,
+		"unknown leaf":   `{"schema":"roost.ai/v1","root":{"node":"condition","name":"nope","args":{}}}`,
+		"bad ticks":      `{"schema":"roost.ai/v1","root":{"node":"cooldown","ticks":0,"child":{"node":"condition","name":"hp_below","args":{}}}}`,
+		"unknown policy": `{"schema":"roost.ai/v1","root":{"node":"parallel","policy":"most","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
 	}
 	for name, document := range cases {
 		if _, err := ParseTree([]byte(document), registry); err == nil {
@@ -259,7 +259,7 @@ func TestParseTreeFailFast(t *testing.T) {
 		}
 	}
 	// Diagnostics carry the JSON path.
-	_, err := ParseTree([]byte(`{"schema":"cube.ai/v1","root":{"node":"sequence","children":[{"node":"condition","name":"nope","args":{}}]}}`), registry)
+	_, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"sequence","children":[{"node":"condition","name":"nope","args":{}}]}}`), registry)
 	if err == nil || !strings.Contains(err.Error(), "$.root.children[0]") {
 		t.Fatalf("diagnostic lacks path: %v", err)
 	}
@@ -293,13 +293,13 @@ func TestBehaviorStrategyDeterministicDecisions(t *testing.T) {
 // reset. Predicates are now restricted to stateless shapes at assembly.
 func TestParseTreeRejectsStatefulGuardPredicates(t *testing.T) {
 	registry := wireRegistry(t)
-	bad := `{"schema":"cube.ai/v1","root":{"node":"guard",
+	bad := `{"schema":"roost.ai/v1","root":{"node":"guard",
 	  "condition":{"node":"action","kind":"log","args":{"name":"boom"}},
 	  "child":{"node":"condition","name":"hp_below","args":{"threshold":1}}}}`
 	if _, err := ParseTree([]byte(bad), registry); err == nil || !strings.Contains(err.Error(), "not a valid guard predicate") {
 		t.Fatalf("action predicate accepted: %v", err)
 	}
-	good := `{"schema":"cube.ai/v1","root":{"node":"guard",
+	good := `{"schema":"roost.ai/v1","root":{"node":"guard",
 	  "condition":{"node":"inverter","child":{"node":"selector","children":[
 	    {"node":"condition","name":"hp_below","args":{"threshold":1}},
 	    {"node":"condition","name":"hp_below","args":{"threshold":2}}]}},

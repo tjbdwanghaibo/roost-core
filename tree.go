@@ -1,4 +1,4 @@
-// Package ai provides behavior trees over the cube-core AI strategy and
+// Package ai provides behavior trees over the roost-core AI strategy and
 // taskflow execution contracts: a node library (composites, decorators,
 // deterministic tick-based timing, injected randomness), a BehaviorStrategy
 // bridge that runs a tree inside the Controller, a TaskflowAction leaf that
