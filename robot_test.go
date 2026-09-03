@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/lockstep"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 
-	"github.com/tjbdwanghaibo/cube-kit/nettransport"
-	kitrobot "github.com/tjbdwanghaibo/cube-kit/robot"
+	"github.com/tjbdwanghaibo/roost-kit/nettransport"
+	kitrobot "github.com/tjbdwanghaibo/roost-kit/robot"
 )
 
 func echoPackets(conn transport.Conn) {

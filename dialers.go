@@ -1,5 +1,5 @@
 // Package robot plugs the kit's transports and lockstep client machinery
-// into the cube-core robot framework: KCP/QUIC dialers registered through
+// into the roost-core robot framework: KCP/QUIC dialers registered through
 // transport.RegisterDialer, and a LockstepBot that consumes redundant frame
 // broadcasts, submits inputs, and reports keyframe hashes — the client half
 // of the kit lockstep Room, usable both for desync regression tests and for
@@ -14,11 +14,11 @@ import (
 	"io"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 
 	quic "github.com/quic-go/quic-go"
 
-	"github.com/tjbdwanghaibo/cube-kit/nettransport"
+	"github.com/tjbdwanghaibo/roost-kit/nettransport"
 )
 
 // KCPDialerConfig shapes the KCP client dialer. Encryption and FEC are
