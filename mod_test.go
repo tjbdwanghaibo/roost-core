@@ -10,8 +10,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
 type modJetStream struct{ streams int }
@@ -88,7 +88,7 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
-	mongoClient := mongofake.NewClient()
+	mongoClient := mongotest.NewClient()
 	jetStream := &modJetStream{}
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongoClient)); err != nil {

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func newOutboxStoreTest(t *testing.T) (*MongoOutboxStore, *mongofake.Collection) {
+func newOutboxStoreTest(t *testing.T) (*MongoOutboxStore, *mongotest.Collection) {
 	t.Helper()
 	mongoStore, client, _ := newMongoStoreTest(t)
 	store, err := NewMongoOutboxStore(mongoStore)
@@ -20,7 +20,7 @@ func newOutboxStoreTest(t *testing.T) (*MongoOutboxStore, *mongofake.Collection)
 	return store, client.Collection(testDatabase, outboxCollection)
 }
 
-func seedOutboxEffect(t *testing.T, outbox *mongofake.Collection, id string, availableAt, createdAt time.Time, token int64) {
+func seedOutboxEffect(t *testing.T, outbox *mongotest.Collection, id string, availableAt, createdAt time.Time, token int64) {
 	t.Helper()
 	if err := outbox.Seed(bson.M{
 		"_id": id, "effect_id": id, "transaction_id": "tx-1", "topic": "hero.changed",

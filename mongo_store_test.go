@@ -10,7 +10,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -39,9 +39,9 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ e
 	return nil, nil
 }
 
-func newMongoStoreTest(t *testing.T) (*MongoStore, *mongofake.Client, *mongofake.Collection) {
+func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest.Collection) {
 	t.Helper()
-	client := mongofake.NewClient()
+	client := mongotest.NewClient()
 	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: testDatabase, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
@@ -49,12 +49,12 @@ func newMongoStoreTest(t *testing.T) (*MongoStore, *mongofake.Client, *mongofake
 	return store, client, client.Collection(testDatabase, "heroes")
 }
 
-func markerCollection(client *mongofake.Client) *mongofake.Collection {
+func markerCollection(client *mongotest.Client) *mongotest.Collection {
 	return client.Collection(testDatabase, transactionCollection)
 }
 
 // seedHero installs the document an exact-version mutation expects to find.
-func seedHero(t *testing.T, coll *mongofake.Collection, version uint64) {
+func seedHero(t *testing.T, coll *mongotest.Collection, version uint64) {
 	t.Helper()
 	if err := coll.Seed(bson.M{"_id": int64(7), "_version": version, "level": int32(1)}); err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func leaseFenceReceipt(t *testing.T, documentID, owner string, token uint64, dig
 // seedClaim installs a live saga-step claim exactly as saga's
 // DataEngineStepInbox writes it. The field names and the "pending" literal are
 // the contract the projector's fence filter depends on.
-func seedClaim(t *testing.T, client *mongofake.Client, documentID, owner string, token uint64, digest []byte, leaseUntil time.Time) {
+func seedClaim(t *testing.T, client *mongotest.Client, documentID, owner string, token uint64, digest []byte, leaseUntil time.Time) {
 	t.Helper()
 	claims := client.Collection(testDatabase, "_dataengine_inbox_claims")
 	if err := claims.Seed(bson.M{
@@ -680,4 +680,4 @@ func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
 	}
 }
 
-var _ fmongo.IMongo = (*mongofake.Client)(nil)
+var _ fmongo.IMongo = (*mongotest.Client)(nil)

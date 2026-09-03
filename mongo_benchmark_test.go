@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -24,7 +24,7 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 		{name: "batch_256_independent", mutations: 256},
 	} {
 		b.Run(shape.name, func(b *testing.B) {
-			client := mongofake.NewClient()
+			client := mongotest.NewClient()
 			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
@@ -66,7 +66,7 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 func BenchmarkMongoProjectionConflictMatrix(b *testing.B) {
 	for _, conflictPercent := range []int{1, 10} {
 		b.Run(fmt.Sprintf("conflict_%d_percent", conflictPercent), func(b *testing.B) {
-			client := mongofake.NewClient()
+			client := mongotest.NewClient()
 			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
