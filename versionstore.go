@@ -77,6 +77,13 @@ type Store[K comparable, T any] interface {
 	// different intent than "compute from current", and expressing it through
 	// Update would rely on the caller checking found — which is exactly the
 	// check that gets forgotten.
+	//
+	// When it does NOT create, the returned Versioned is the ZERO VALUE — not
+	// the value it collided with. A caller that needs to see what is already
+	// there must Get it. This is stated because assuming otherwise is a
+	// plausible and quiet mistake: the zero value's fields read as empty
+	// strings and zeros, so code that inspects them takes a branch meant for
+	// "absent" while the key is in fact occupied.
 	Create(ctx context.Context, key K, value T) (Versioned[T], bool, error)
 
 	// Delete removes the key only if the caller's version still matches.

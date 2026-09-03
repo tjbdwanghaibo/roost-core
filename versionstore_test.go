@@ -141,6 +141,18 @@ func TestCreateRefusesAnExistingKey(t *testing.T) {
 		if second.Version != 0 {
 			t.Fatalf("refused Create returned version %d, want 0", second.Version)
 		}
+		// The refused Create hands back the ZERO value, not the value it
+		// collided with. Every implementation must agree on this, because the
+		// interface now promises it — and because assuming otherwise is a
+		// quiet mistake: the zero value's fields read as empty, so a caller
+		// inspecting them takes the branch meant for "absent" while the key
+		// is occupied. That misreading turned an exclusive per-owner claim
+		// into no exclusion at all in a consumer of this package.
+		if second.Value != (counter{}) {
+			t.Fatalf("refused Create returned the colliding value %+v; the contract says "+
+				"the zero value, and a caller that needs the existing one must Get it",
+				second.Value)
+		}
 		stored, _, _ := store.Get(ctx, "a")
 		if stored.Value.Name != "first" {
 			t.Fatalf("existing value was replaced: %+v", stored)
