@@ -411,24 +411,51 @@ roost-service/
    `versionstore` 的并发测试暴露出"竞争下耗尽重试预算即报冲突"这个缺陷——正是本文
    3.8 节记在 rank 名下的那一条——于是给重试补了指数退避与全抖动。**测试先于实现
    写、并且真的并发，才会在共享原语里发现它。**
-3. **`directory` 原语 + `rank`**。rank 最小、边界最清楚（唯一耦合是一个文件），
-   适合用来把"版本化存储契约 + errcode 段 + metrics + 求值型替身"这套模式立起来。
-   必修：幂等提交（`UpdateAdd` 走请求 ledger）、`Limit` 上界、归档改成可读且不截断、
-   补全 errcode、`Tie` 语义明确化。
-4. **`match`**。**从头设计**，不搬运：队列这一半在生产中无调用方，没有迁移压力。
-   服务端生成 ticket ID、per-subject 唯一性、成组提交用 saga 表达原子性、
-   超时真正执行、按 key 亲和的路由、ticket 操作带 caller 鉴权。
-5. **`account`**。改动最大，等于重写：身份验证变必填接口、删掉默认 ID 分配器、
-   `CreateRole` 改 insert-only + 唯一索引、`UpsertRoleInfo` 拆成受约束的窄接口、
-   CAS 改版本号、跨 collection 写进事务。
-6. **`global`**。全部 store 切到 5.2 的原语，`game_lease` 改用
-   `redis.IFencedVersionedLock`。`business-boundary.md` 里那几条 CAS 不变量
-   从"约定"变成"由类型保证"。
-7. **`chat`**。补存储契约、游标分页、保留策略（时间戳改 BSON date 才能加 TTL 索引）、
-   发布幂等键、`Body json.RawMessage` + 注册式校验器；删掉 `Trusted` 字段，
-   信任只能来自传输层身份。
-8. **`mail` + `platform` + `session` 原语**。mail 两阶段领取改 saga；
-   platform 补可观测性与自身幂等 ledger。
+3. ~~`directory` 原语 + `rank`~~（**已完成**）。实施中两项发现：
+   - `directory` 的"同 owner 幂等"意味着**它不是互斥锁**。一个 owner 自己 race 时
+     所有人拿到同一个 claim 全部通过——这对"可以重复请求的名字"是对的语义，对
+     "只准一次尝试"是错的。需要后者时用 `versionstore.Create`。已写进接口文档。
+   - 用 Go 重新实现 Lua 语义的测试替身，**无法发现脚本文本自身的缺陷**——改脚本
+     字符串对它没有影响。rank 的并发缺陷是真实 Redis 抓到、替身抓不到的，因此加了
+     `//go:build integration` 的真实 Redis 测试，并把脚本写得尽量小。
+4. ~~`match`~~（**已完成**，从头设计）。核心决定是**把整个队列状态放进一个
+   `versionstore` 条目**：提交因此天然是一次 CAS，那三个"弹出队首后非原子多写"的
+   缺陷在结构上消失。代价是单队列吞吐受限于一个 key 的竞争，这正是
+   `servicerpc.KeyAffinityPicker` 存在的理由。成组提交没有用 saga——一次 CAS 已经
+   给出原子性，引入 saga 只会增加活动部件。
+5. ~~`account`~~（**已完成**，重写）。名字唯一性用 `directory` 的两阶段 claim，
+   因此"崩溃烧掉名字"由 claim 过期解决，不需要跨 collection 事务。
+   而"每服一角色"**不能**用 `directory`（见第 3 步的发现），改用
+   `versionstore.Create` 的仅插入语义。`RolesPerServer > 1` 构造时直接拒绝——
+   接受一个配置项却执行别的，就是让配置项变成谎言。
+6. **`global`**（路由 + 租约**已完成**，跨服活动协调进行中）。一处方案修正：
+   `game_lease` **没有**改用 `redis.IFencedVersionedLock`——那是"临界区加锁 + fence
+   令牌"的形状，而租约是带续期的长期归属，不是围住一段临界区。fence 这个概念对、
+   锁这个机制不对，所以改用版本化状态里的 **incarnation 令牌**：续期必须出示它。
+   `business-boundary.md` 那几条 CAS 不变量现在由 `versionstore` 的契约保证——
+   它没有无条件写，非 CAS 实现不可能存在。
+7. **`chat`**（进行中，与第 6 步的活动协调并行）。补存储契约、游标分页、保留策略、
+   发布幂等键、opaque body + 注册式校验器；删掉 `Trusted` 字段——信任只能来自
+   传输层身份，表达为独立的特权入口而不是请求上的一个布尔。
+8. **`mail` + `platform` + `session` 原语**。✅ 已完成（30 / 24 / 26 条单测，
+   43 条变异验证）。三条计划修正：
+
+   - mail 的两阶段领取**没有改用 saga**。saga 编排的是"多个步骤各自可补偿"，而这里
+     真正的缺陷不是缺补偿，是**幂等键由客户端提供、且租约过期后可被另一个键抢占**。
+     换成 saga 不会修掉它。改法是把 claim token 变成服务端生成、对同一封邮件恒定的
+     值——于是重试拿回同一个键，任何按它去重的发货侧必然收敛，租约过期只多一次投递
+     尝试而不是多一次发放。
+   - mail 另外发现一条本文档未记录的严重缺陷：`listItems` 夹住的是**返回条数**而不是
+     **读取次数**。它循环取 `limit*4` 条信封、每封各读一次状态，直到凑满一页，**循环
+     次数无上界**。一个删除过很多邮件的玩家能把一个协议包变成不确定次数的往返。这是
+     "一个玩家包触发无界读"模式的第四次独立重现，也是最隐蔽的一次——它看起来有上界。
+   - session 从 instance 抽出时确认了本文档第 3.8 节记录的四条，并补上一条：
+     `saveSession` 在 store 为 nil 时 `return nil`——为一次没发生的写报告成功。
+
+   顺带修了 kit 的一处契约缺口：`versionstore.Store.Create` 在冲突时返回的是**零值**
+   而不是它撞上的那个值，接口文档没写。误信返回值会让"每 owner 独占"的 claim 退化成
+   完全不独占（零值的 run id 是 `""`，看起来像一个指向不存在 run 的孤儿 claim，于是每
+   个竞争者都"解决"掉一个活着的 claim 并接手）。已在接口写明并用测试钉住两个实现。
 
 ## 八、验收标准
 
