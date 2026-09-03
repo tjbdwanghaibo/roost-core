@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	coreflow "github.com/tjbdwanghaibo/cube-core/actionflow"
+	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 type runnerTestAction struct {
