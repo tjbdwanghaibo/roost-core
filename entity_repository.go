@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 var (

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

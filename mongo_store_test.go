@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-kit/nestwal"
+	"github.com/tjbdwanghaibo/roost-kit/nestwal"
 )
 
 type recoveringPublisher struct {

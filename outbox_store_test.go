@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

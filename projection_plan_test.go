@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 func projectionTestFences(records []coredata.CommitRecord) []corenest.CommitFence {

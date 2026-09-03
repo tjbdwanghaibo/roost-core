@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
-	"github.com/tjbdwanghaibo/cube-kit/nestwal"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-kit/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

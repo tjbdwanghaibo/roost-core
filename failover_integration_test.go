@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

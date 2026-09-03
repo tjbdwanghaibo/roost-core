@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 )
 
 type successfulOutboxPublisher struct{ ids []string }
