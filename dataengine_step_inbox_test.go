@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/cube-core/dataengine"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

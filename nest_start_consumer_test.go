@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	"github.com/tjbdwanghaibo/cube-kit/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/nestwal"
 )
 
 type startCapture struct {

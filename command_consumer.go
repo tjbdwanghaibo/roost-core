@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

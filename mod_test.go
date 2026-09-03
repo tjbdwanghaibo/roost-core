@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 type drainTestSubscription struct {

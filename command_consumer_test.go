@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	"github.com/tjbdwanghaibo/cube-kit/internal/mongofake"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
 )
 
 func TestMongoCommandInboxExecutesStepOnceForMessageRedelivery(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
-	"github.com/tjbdwanghaibo/cube-kit/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
+	"github.com/tjbdwanghaibo/roost-kit/nestwal"
 )
 
 // NestStartConsumerConfig configures the shared durable consumer which turns

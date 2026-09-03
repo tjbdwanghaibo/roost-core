@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	coresaga "github.com/tjbdwanghaibo/cube-core/saga"
-	kitnats "github.com/tjbdwanghaibo/cube-kit/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
+	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
 )
 
 const maxWireEnvelopeBytes = 8 << 20
