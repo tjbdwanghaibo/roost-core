@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/session"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // Built-in framework actions. Business actions register on top of these;

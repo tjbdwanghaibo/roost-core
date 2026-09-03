@@ -1,7 +1,7 @@
 package nest
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/worker"
+	"github.com/tjbdwanghaibo/roost-core/worker"
 	"time"
 )
 

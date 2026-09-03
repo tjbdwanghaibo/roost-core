@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 func TestRemoteManagedDispatchRejectsBroadcast(t *testing.T) {

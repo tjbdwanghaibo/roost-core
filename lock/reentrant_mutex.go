@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
 
 var _ Mutex = (*ReentrantMutex)(nil)

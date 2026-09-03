@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (

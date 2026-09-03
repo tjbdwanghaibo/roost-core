@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 func TestContextAttrsArePrepended(t *testing.T) {
@@ -104,7 +104,7 @@ func TestCallerAttrsIncludeFileLineAndFunction(t *testing.T) {
 	if !strings.Contains(line, "caller=") {
 		t.Fatalf("log should contain caller file and line: %s", line)
 	}
-	if !strings.Contains(line, "caller_func=github.com/tjbdwanghaibo/cube-core/log.logCallerAttrsTestHelper") {
+	if !strings.Contains(line, "caller_func=github.com/tjbdwanghaibo/roost-core/log.logCallerAttrsTestHelper") {
 		t.Fatalf("log should contain caller function: %s", line)
 	}
 	if strings.Contains(line, " source=") {
@@ -134,7 +134,7 @@ func TestELogCallerAttrsIncludeUserFunction(t *testing.T) {
 	elogCallerAttrsTestHelper()
 
 	line := buf.String()
-	if !strings.Contains(line, "caller_func=github.com/tjbdwanghaibo/cube-core/log.elogCallerAttrsTestHelper") {
+	if !strings.Contains(line, "caller_func=github.com/tjbdwanghaibo/roost-core/log.elogCallerAttrsTestHelper") {
 		t.Fatalf("elog should contain user caller function: %s", line)
 	}
 	if strings.Contains(line, "elog.go") {
@@ -264,7 +264,7 @@ func TestFileLogRotatesByTime(t *testing.T) {
 		Level:          slog.LevelInfo,
 		File:           true,
 		Dir:            dir,
-		Filename:       "cube.log",
+		Filename:       "roost.log",
 		RotateInterval: time.Hour,
 		NowFunc: func() time.Time {
 			return now
@@ -282,8 +282,8 @@ func TestFileLogRotatesByTime(t *testing.T) {
 		t.Fatalf("Close error: %v", err)
 	}
 
-	firstPath := filepath.Join(dir, "cube.2026052612.log")
-	secondPath := filepath.Join(dir, "cube.2026052613.log")
+	firstPath := filepath.Join(dir, "roost.2026052612.log")
+	secondPath := filepath.Join(dir, "roost.2026052613.log")
 	first, err := os.ReadFile(firstPath)
 	if err != nil {
 		t.Fatalf("read first log: %v", err)

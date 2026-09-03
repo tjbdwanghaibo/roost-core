@@ -3,7 +3,7 @@ package app_test
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/app"
+	"github.com/tjbdwanghaibo/roost-core/app"
 
 	"github.com/spf13/viper"
 )
@@ -83,7 +83,7 @@ func Example() {
 	gameMgrs := &ManagerMod{}
 	gameMgrs.Register(&DataLoaderMgr{})
 
-	a := app.New("cube", "1.0.0").
+	a := app.New("roost", "1.0.0").
 		Mods(&MongoMod{}, &RedisMod{}).                   // shared mods
 		RegisterServer("game", &GameService{}, gameMgrs). // game with its managers
 		RegisterServer("gate", &GateService{})            // gate without managers
@@ -91,8 +91,8 @@ func Example() {
 	// In real usage:
 	//   a.Execute()
 	// CLI:
-	//   ./cube game -c configs/service/config.game.yaml --sid 2001
-	//   ./cube gate -c configs/service/config.gate.yaml --sid 1001
+	//   ./roost game -c configs/service/config.game.yaml --sid 2001
+	//   ./roost gate -c configs/service/config.gate.yaml --sid 1001
 
 	_ = a
 	fmt.Println("app created with shared mods: mongo, redis; game mods: manager; services: game, gate")

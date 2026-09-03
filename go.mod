@@ -1,4 +1,4 @@
-module github.com/tjbdwanghaibo/cube-core
+module github.com/tjbdwanghaibo/roost-core
 
 go 1.25.0
 

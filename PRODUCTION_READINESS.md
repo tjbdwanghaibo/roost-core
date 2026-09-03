@@ -45,7 +45,7 @@
 - 房间默认硬限制 100 subject/100 subscriber。`RoomManager` 同时限制房间总数、全局 subject/subscriber 预算并回收空闲房间；应用不得自行维护无上限的房间 map。
 - 单个慢客户端只淘汰自己的 session；共享 transport sink 按房间分片，不让一个房间阻塞全部房间。框架生命周期回调使用固定 worker 和有界队列，退房、断线和房间销毁会释放 sequence/baseline/LOD 状态。
 - UDP 控制面使用固定长度带校验的 ACK/Resync 报文，包含 room、epoch、tick 和单调 sequence。过期 epoch、回退 sequence、非法 checksum 均被拒绝。
-- `cube-kit/nettransport.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
+- `roost-kit/nettransport.ControlPlane` 可直接接管 UDP 控制报文；业务层不解析协议。QUIC/KCP transport 只承担传输，不改变 replication 一致性语义。
 
 ## 6. Saga
 
@@ -54,12 +54,12 @@ lease fencing、幂等 completion receipt 的持久化 Store；完整语义见 [
 
 ## 7. 发布顺序与门禁
 
-当前已发布运行时基线为 `cube-core v1.8.0`、`cube-kit v1.8.0`、`roost-skill v1.7.0`。本轮生产部署和三级文档生成属于 `roost-codegen v1.7.0`，发布后新项目固定这一组合。
+当前运行时基线为 `roost-core v1.10.0`、`roost-kit v1.10.0`（模块路径自此版本起为 `github.com/tjbdwanghaibo/roost-*`）。本轮生产部署和三级文档生成属于 `roost-codegen v1.7.0`，发布后新项目固定这一组合。
 
 发布顺序：
 
-1. 发布包含公共契约变更的 `cube-core`。
-2. 关闭 `go.work`，只使用已发布 core 构建、验证并发布 `cube-kit`。
+1. 发布包含公共契约变更的 `roost-core`。
+2. 关闭 `go.work`，只使用已发布 core 构建、验证并发布 `roost-kit`。
 3. 使用已发布 core/kit 验证并发布 `roost-skill`（若本轮有变更）。
 4. 最后发布 `roost-codegen`，并用 release defaults 生成一个全新项目，执行 `GOWORK=off go mod tidy/verify/test/vet` 与部署模板检查。
 
@@ -79,4 +79,4 @@ git diff --check
 
 从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并按 [docs/DATA_ENGINE_MIGRATION.md](docs/DATA_ENGINE_MIGRATION.md) 执行一次性数据审计。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
 
-第二条 race 命令在 `cube-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。
+第二条 race 命令在 `roost-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

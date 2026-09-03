@@ -3,7 +3,7 @@ package bus
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 const rpcWireVersion uint8 = 1

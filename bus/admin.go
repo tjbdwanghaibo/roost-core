@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/admin"
 )
 
 const (

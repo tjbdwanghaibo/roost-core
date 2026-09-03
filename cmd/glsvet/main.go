@@ -1,15 +1,15 @@
 // glsvet enforces the Nest handler concurrency boundary and also flags calls
 // to goroutine-bound framework APIs from general `go` statements. A handler
-// may hand explicit business DTOs to Nest effects or cube-core/worker, but it
+// may hand explicit business DTOs to Nest effects or roost-core/worker, but it
 // must never create or wrap its own goroutine.
 //
 // Usage:
 //
-//	go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+//	go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
 //
 // The check follows same-file named function calls from a handler, catches raw
 // go statements and common async wrapper .Go calls, and recognizes direct
-// cube-core/worker Pool variables as the allowed .Go implementation. Test
+// roost-core/worker Pool variables as the allowed .Go implementation. Test
 // files are skipped by default; pass -tests to include them. Exit status is 1
 // when any finding is reported.
 package main
@@ -207,8 +207,8 @@ func frameworkImportAliases(file *ast.File) map[string]bool {
 	aliases := make(map[string]bool)
 	for _, spec := range file.Imports {
 		path := strings.Trim(spec.Path.Value, "\"")
-		if !strings.HasPrefix(path, "github.com/tjbdwanghaibo/cube-core/") &&
-			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/cube-kit/") &&
+		if !strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/") &&
+			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-kit/") &&
 			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-skill/") {
 			continue
 		}
@@ -330,7 +330,7 @@ func inspectHandlerFunction(fileSet *token.FileSet, function *ast.FuncDecl, hand
 		switch typed := node.(type) {
 		case *ast.GoStmt:
 			position := fileSet.Position(typed.Go)
-			fmt.Printf("%s: raw goroutine reachable from Nest handler %s; use nest.Emit(Effect) or cube-core/worker with explicit business parameters\n", position, handler)
+			fmt.Printf("%s: raw goroutine reachable from Nest handler %s; use nest.Emit(Effect) or roost-core/worker with explicit business parameters\n", position, handler)
 			findings++
 			return false
 		case *ast.CallExpr:
@@ -349,7 +349,7 @@ func inspectHandlerFunction(fileSet *token.FileSet, function *ast.FuncDecl, hand
 				return true
 			}
 			position := fileSet.Position(typed.Pos())
-			fmt.Printf("%s: async .%s wrapper reachable from Nest handler %s; only cube-core/worker Pool.Go/TryGo is allowed\n", position, selector.Sel.Name, handler)
+			fmt.Printf("%s: async .%s wrapper reachable from Nest handler %s; only roost-core/worker Pool.Go/TryGo is allowed\n", position, selector.Sel.Name, handler)
 			findings++
 		}
 		return true
@@ -482,7 +482,7 @@ func isNestHandler(function *ast.FuncDecl) bool {
 func workerImportAliases(file *ast.File) map[string]bool {
 	aliases := make(map[string]bool)
 	for _, spec := range file.Imports {
-		if strings.Trim(spec.Path.Value, "\"") != "github.com/tjbdwanghaibo/cube-core/worker" {
+		if strings.Trim(spec.Path.Value, "\"") != "github.com/tjbdwanghaibo/roost-core/worker" {
 			continue
 		}
 		name := "worker"

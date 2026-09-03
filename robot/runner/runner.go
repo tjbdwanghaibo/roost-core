@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/action"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/scenario"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // Executor selects the scheduling model (k6 terminology):

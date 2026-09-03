@@ -2,9 +2,9 @@ package worker
 
 import (
 	"context"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
-	"github.com/tjbdwanghaibo/cube-core/misc"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/misc"
 	"sync"
 )
 

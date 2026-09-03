@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 
 	"github.com/spf13/viper"
 )

@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
 // Scenario is a named behavior tree.

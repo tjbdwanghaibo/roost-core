@@ -1,6 +1,6 @@
-# cube-core
+# roost-core
 
-`cube-core`（仓库目录名 `roost-core`，Go 模块路径 `github.com/tjbdwanghaibo/cube-core`，当前稳定版本 v1.8.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
+`roost-core`（Go 模块路径 `github.com/tjbdwanghaibo/roost-core`，当前版本 v1.10.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
 
 ## 三级文档入口
 
@@ -34,7 +34,7 @@
 | `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
 | `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
 | `bus`、`event` | NATS 之上的模块级消息 / 轻量 RPC / **JetStream 持久化 RPC**（`CallReliable`，与轻量 RPC 并存）/ 可靠消费（inbox 去重 + 死信 + `bus.dlq.*` 运维命令）；进程内事件总线（self 同步、他人异步） | 服务间与实体间的异步通信 |
-| `actionflow`、`ai` | 实体内行为契约（**不是通信设施**）：动作/任务状态机接口、声明式 `MissionPlan` 步骤图、ActionGroup 分组冻结；AI 策略契约（`CanStopByNext` 抢占仲裁、经 `ActionList` 下达动作）。**core 只有接口，执行器在 cube-kit 的 `actionflow`/`ai` 包** | 实体行为层（怪物/NPC/玩法状态机） |
+| `actionflow`、`ai` | 实体内行为契约（**不是通信设施**）：动作/任务状态机接口、声明式 `MissionPlan` 步骤图、ActionGroup 分组冻结；AI 策略契约（`CanStopByNext` 抢占仲裁、经 `ActionList` 下达动作）。**core 只有接口，执行器在 roost-kit 的 `actionflow`/`ai` 包** | 实体行为层（怪物/NPC/玩法状态机） |
 | `ownerroute`、`mirror`、`entity`（remote 部分） | 按 owner sid 分派命令的泛型路由器（本地执行 vs 经 bus 转发）；带订阅-应用回环的副本复制器（空 Data 即删除的线格式）；ownership marker + fence + 路由 epoch（epoch 在 `entity`，不在 ownerroute） | 跨服实体读写与命令路由 |
 | `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 三档：`mongo`/`nats` 纯接口（实现全在 kit）；`redis`/`etcd` 接口 + 核心实现（Lua `CompareAndSet`、`WatchCallback`、LocalMirror 契约）；`cache`/`httpclient`/`httpserver` 是完整实现（8 种缓存 store、HMAC 签名客户端、chi 之上的生产 HTTP 引擎——core 对 chi 的依赖是唯一例外） | 缓存选型见实现细节第 13 条；连接装配由 `roost-kit` 的 Mod 提供 |
 | `health`、`metrics`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer 无分位数；histogram 17 桶指数分布带 p50–p99 与 Prometheus `_bucket` 导出）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
@@ -61,7 +61,7 @@ v1.10.0 把一批只描述"机制"的包名换成描述"职责"的名字。旧�
 | `taskflow` | `actionflow` | 与 `Action`/`ActionGroup` 的实际类型名对齐 |
 | `misc` | `goroutine` + `container` + `misc` | 按职责三分；`misc` 只留跨包小工具 |
 
-`cube-kit` 同步改名：`sync` → `room`、`replication` → `nettransport`、
+`roost-kit` 同步改名：`sync` → `room`、`replication` → `nettransport`、
 `remote_entity` → `remoteentity`、`taskflow` → `actionflow`。
 capability 常量 `ModObs` → `ModMetrics`（值 `"obs"` → `"metrics"`）、
 `ModSync` → `ModRoom`（值 `"sync"` → `"room"`）。
@@ -87,7 +87,7 @@ capability 常量 `ModObs` → `ModMetrics`（值 `"obs"` → `"metrics"`）、
 ```bash
 mkdir quickstart && cd quickstart
 go mod init quickstart
-go get github.com/tjbdwanghaibo/cube-core@v1.8.0
+go get github.com/tjbdwanghaibo/roost-core@v1.10.0
 # 将下面代码存为 main.go 后：
 go run .
 ```
@@ -101,9 +101,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 // ---- 1. DAO：本例只演示事务回滚和同步 dirty；持久化 DAO 由 codegen 生成 ----
@@ -489,8 +489,8 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 
 ```text
 业务服务（roost-codegen 生成的项目骨架 + 手写玩法）
-  ├── roost-core     通用运行时与抽象（本仓库，模块名 cube-core）
-  ├── roost-kit      具体基础设施 Mod（模块名 cube-kit）：Redis、Mongo、NATS/JetStream、
+  ├── roost-core     通用运行时与抽象（本仓库，模块名 roost-core）
+  ├── roost-kit      具体基础设施 Mod（模块名 roost-kit）：Redis、Mongo、NATS/JetStream、
   │                  etcd、Data Engine（复用 kit/nestwal 物理 WAL）、分布式锁、运维 HTTP 等，
   │                  实现 core 定义的接口并注册进 app.Registry
   └── roost-skill    可复用技能编译器与权威战斗运行时：其 combatcomponent 把战斗状态
@@ -506,7 +506,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 本地联调多仓库时在共同父目录建 `go.work`（不要提交到任何仓库）：
 
 ```bash
-go work init ./cube-core ./cube-kit ./cube-skill ./cube-codegen
+go work init ./roost-core ./roost-kit ./roost-skill ./roost-codegen
 ```
 
 当前开发、发布隔离和版本收口规则见 [多仓研发与发布](docs/DEVELOPMENT_WORKSPACE.md)。

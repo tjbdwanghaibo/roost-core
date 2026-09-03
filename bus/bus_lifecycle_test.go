@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"testing"
 	"time"
 )
@@ -168,10 +168,10 @@ func TestHandleRpcSubscribesServiceQueueAndInstanceSubject(t *testing.T) {
 	if len(client.subs) != 2 {
 		t.Fatalf("subscription count = %d, want 2", len(client.subs))
 	}
-	if client.subs[0].subject != "cube.rpc.instance.instance.GetState" || client.subs[0].queue != "instance_rpc" {
+	if client.subs[0].subject != "roost.rpc.instance.instance.GetState" || client.subs[0].queue != "instance_rpc" {
 		t.Fatalf("service rpc subscription = subject:%q queue:%q", client.subs[0].subject, client.subs[0].queue)
 	}
-	if client.subs[1].subject != "cube.rpc.instance.8001.instance.GetState" || client.subs[1].queue != "" {
+	if client.subs[1].subject != "roost.rpc.instance.8001.instance.GetState" || client.subs[1].queue != "" {
 		t.Fatalf("instance rpc subscription = subject:%q queue:%q", client.subs[1].subject, client.subs[1].queue)
 	}
 }
@@ -242,7 +242,7 @@ func TestBusRpcEnvelopeUsesDeclaredDottedMethod(t *testing.T) {
 		t.Fatalf("Marshal envelope: %v", err)
 	}
 	b.onRpcMessage(&fnats.Msg{
-		Subject: "cube.rpc.mail.mail.Summary",
+		Subject: "roost.rpc.mail.mail.Summary",
 		Reply:   "reply",
 		Data:    wire,
 	})
@@ -270,7 +270,7 @@ func TestBusCallToUsesInstanceRpcSubject(t *testing.T) {
 	if err := b.CallTo(context.Background(), "instance", 8001, "instance.GetState", map[string]int{"id": 1}, &resp); err != nil {
 		t.Fatalf("CallTo: %v", err)
 	}
-	if rpc.subject != "cube.rpc.instance.8001.instance.GetState" {
+	if rpc.subject != "roost.rpc.instance.8001.instance.GetState" {
 		t.Fatalf("rpc subject = %q", rpc.subject)
 	}
 	var envelope fnats.NatsMsg

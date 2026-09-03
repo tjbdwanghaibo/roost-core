@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tjbdwanghaibo/cube-core/bus"
+	"github.com/tjbdwanghaibo/roost-core/bus"
 )
 
 type BusTransport[C any] struct {

@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 var ErrClosed = errors.New("robot session: closed")

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
-	"github.com/tjbdwanghaibo/cube-core/lock"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/lock"
 )
 
 const entityLockGroupDispatchRetryMax = 4

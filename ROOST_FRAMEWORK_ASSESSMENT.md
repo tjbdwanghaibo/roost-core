@@ -1,7 +1,7 @@
 # Roost 通用游戏服务器框架评估
 
 > 评估日期：2026-08-27  
-> 评估范围：`roost-core`（Go 模块仍为 `cube-core`）、`roost-kit`（Go 模块仍为 `cube-kit`）、`roost-skill`。  
+> 评估范围：`roost-core`、`roost-kit`、`roost-skill`。（评估时 Go 模块路径仍为 `cube-core`/`cube-kit`；v1.10.0 已统一为 `roost-core`/`roost-kit`。）  
 > 运行目标：Linux；Windows 特有的文件句柄、临时目录和 PowerShell 限制不计入产品缺陷。  
 > 对照对象：Skynet 与 Microsoft Orleans。三者的抽象层次并不相同，因此本文比较“解决同一游戏服务器问题时，框架与业务团队各自需要承担什么”，而不是只比较 API 数量。
 
@@ -18,7 +18,7 @@ Roost 已经不是一个仅能演示 actor/entity 调度的原型。它在以下
 
 从架构和代码设计看，Roost 的优势并不是“比 Skynet 更轻”或“比 Orleans 更自动”，而是把游戏业务最容易反复出错的状态一致性、跨服写入和实时同步做成了一套 Go 原生、相对强约束的基础设施。这条路线合理，而且具有实际差异化。
 
-发行整改后，已发布的 `cube-core v1.8.0`、`cube-kit v1.8.0`、`roost-skill v1.7.0` 已在一个全新项目中以 `GOWORK=off`、无 `replace` 的方式完成 download/verify/tidy/test/vet；skill v1.7.0 tag 也单独通过全量 test/vet。库发行线已经从条件性 No-Go 提升为可用。剩余发行阻断集中在 codegen：已经发布的 v1.6.0 tag 仍带旧的 `v0.0.0 + replace` 项目模板；当前主线已修复，但不可回写已发布 tag，必须发布 v1.6.1 或更高版本才能让外部用户获得修复。
+发行整改后，当时发布的 `cube-core v1.8.0`、`cube-kit v1.8.0`、`roost-skill v1.7.0` 已在一个全新项目中以 `GOWORK=off`、无 `replace` 的方式完成 download/verify/tidy/test/vet；skill v1.7.0 tag 也单独通过全量 test/vet。库发行线已经从条件性 No-Go 提升为可用。剩余发行阻断集中在 codegen：已经发布的 v1.6.0 tag 仍带旧的 `v0.0.0 + replace` 项目模板；当前主线已修复，但不可回写已发布 tag，必须发布 v1.6.1 或更高版本才能让外部用户获得修复。
 
 综合判断：
 
@@ -134,7 +134,7 @@ Skill Runtime 用单 mutex 保护内部时间线，并可能在该边界内调�
 
 #### 版本与命名治理不统一
 
-仓库目录称 `roost-core/roost-kit`，模块仍称 `cube-core/cube-kit`；commit 写 `v9.0`，正式 tag 却为 v1.8.0；core README 仍为 v1.7.0；skill 本地与远端又存在 `/v2` 和无 major suffix 两条历史。技术上 module 名称可以与品牌不同，但必须有唯一、机器可校验的发布规则。
+仓库目录称 `roost-core/roost-kit`，模块当时仍称 `cube-core/cube-kit`（v1.10.0 已统一）；commit 写 `v9.0`，正式 tag 却为 v1.8.0；core README 仍为 v1.7.0；skill 本地与远端又存在 `/v2` 和无 major suffix 两条历史。技术上 module 名称可以与品牌不同，但必须有唯一、机器可校验的发布规则。
 
 #### Mod 依赖没有完全进入依赖图
 

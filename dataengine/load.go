@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (

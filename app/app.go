@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/clock"
-	"github.com/tjbdwanghaibo/cube-core/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/clock"
+	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -15,9 +15,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	flog "github.com/tjbdwanghaibo/cube-core/log"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	flog "github.com/tjbdwanghaibo/roost-core/log"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 // App is the top-level application container.

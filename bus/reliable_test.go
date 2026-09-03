@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/admin"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 func TestReliableBroadcastDedupIsPerConsumer(t *testing.T) {
@@ -62,7 +62,7 @@ func TestReliableDispatchDropGoesToDeadLetter(t *testing.T) {
 func TestBusDeadLetterListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "cube"})
+	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{
 		ToSid:    2,
@@ -100,7 +100,7 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 		MaxDLQEntries: 10,
 	})
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "cube"})
+	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 
 	for _, id := range []string{"dead-1", "dead-2", "dead-3"} {
@@ -131,7 +131,7 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 func TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "cube"})
+	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{ToSid: 2, ToModule: "mail", MsgName: "Changed", MsgID: "dead-1"}, "handler failed")
 
@@ -174,7 +174,7 @@ func TestBusRpcNoHandlerRepliesWithErrorEnvelope(t *testing.T) {
 func TestBusDeadLetterAdminCommandsListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "cube"})
+	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	reg := admin.NewRegistry()
 	if err := RegisterAdminCommands(reg, b); err != nil {

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 func (m *Msg) addRemoteRelease(release entity.RemoteEntityRelease) {

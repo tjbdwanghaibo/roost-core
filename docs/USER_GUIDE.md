@@ -4,7 +4,7 @@
 
 ## 1. 先理解边界
 
-`cube-core` 定义稳定契约、调度和一致性语义；`cube-kit` 提供 MongoDB、Redis、NATS、etcd、WAL、传输与常用玩法执行器；`roost-skill` 负责确定性技能程序；`roost-codegen` 生成工程、DAO、Entity、Nest、协议、配置和部署文件。业务仓库负责协议认证、玩家会话、具体组件、handler、玩法规则和容量参数。
+`roost-core` 定义稳定契约、调度和一致性语义；`roost-kit` 提供 MongoDB、Redis、NATS、etcd、WAL、传输与常用玩法执行器；`roost-skill` 负责确定性技能程序；`roost-codegen` 生成工程、DAO、Entity、Nest、协议、配置和部署文件。业务仓库负责协议认证、玩家会话、具体组件、handler、玩法规则和容量参数。
 
 推荐依赖方向：
 

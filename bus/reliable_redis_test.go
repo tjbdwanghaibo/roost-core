@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 func TestRedisReliableStoreDeadLettersKeepNewestMaxEntries(t *testing.T) {

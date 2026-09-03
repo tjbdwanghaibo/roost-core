@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 func TestDelayedAdmissionIsBounded(t *testing.T) {

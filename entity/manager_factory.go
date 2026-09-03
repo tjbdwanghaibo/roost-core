@@ -3,7 +3,7 @@ package entity
 import (
 	"fmt"
 
-	flog "github.com/tjbdwanghaibo/cube-core/log"
+	flog "github.com/tjbdwanghaibo/roost-core/log"
 )
 
 // Create builds and publishes an entity while holding its mutex until the

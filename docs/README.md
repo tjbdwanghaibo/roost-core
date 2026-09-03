@@ -1,6 +1,6 @@
 # Roost 文档中心
 
-Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `cube-core`、`cube-kit`、`roost-skill` 组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
+Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `roost-core`、`roost-kit`、`roost-skill` 组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
 
 ## 第一级：完全新手
 
@@ -34,4 +34,4 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 
 ## 版本基线
 
-当前已发布运行时组合为：`cube-core v1.8.0`、`cube-kit v1.8.0`、`roost-skill v1.7.0`。本轮新增生产部署生成能力属于 `roost-codegen v1.7.0` 源码基线；发布该版本后再在生产项目中固定使用。正式项目不得依赖 `@latest`、伪版本或本地 `replace`。
+当前运行时组合为：`roost-core v1.10.0`、`roost-kit v1.10.0`（模块路径自此版本起为 `github.com/tjbdwanghaibo/roost-*`）。本轮新增生产部署生成能力属于 `roost-codegen v1.7.0` 源码基线；发布该版本后再在生产项目中固定使用。正式项目不得依赖 `@latest`、伪版本或本地 `replace`。

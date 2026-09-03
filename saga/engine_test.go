@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 type memoryStore struct {

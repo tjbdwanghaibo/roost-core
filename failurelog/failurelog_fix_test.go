@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // inPlaceFakeRedis adds the optional in-place list capabilities on top of

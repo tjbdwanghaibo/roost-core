@@ -2,8 +2,8 @@ package entity_test
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	"sync"
 )
 

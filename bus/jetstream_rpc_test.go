@@ -3,8 +3,8 @@ package bus
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +29,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 	}
 
 	js.publishHook = func(subject string, data []byte, opts fnats.JetStreamPublishOptions) {
-		if subject != "cube.rpc.mail.mail.List" {
+		if subject != "roost.rpc.mail.mail.List" {
 			return
 		}
 		var req fnats.NatsMsg
@@ -45,7 +45,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 			t.Errorf("request envelope = %+v", req)
 			return
 		}
-		if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
+		if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 			_ = handler(context.Background(), &fnats.JetStreamMsg{
 				Subject: req.ReplySubject,
 				Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
@@ -64,7 +64,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 	if resp.Code != 0 {
 		t.Fatalf("resp.Code = %d, want 0", resp.Code)
 	}
-	if !js.hasStream("CUBE_RPC_REQUESTS") || !js.hasStream("CUBE_RPC_RESPONSES") {
+	if !js.hasStream("ROOST_RPC_REQUESTS") || !js.hasStream("ROOST_RPC_RESPONSES") {
 		t.Fatalf("streams were not ensured: %+v", js.streams)
 	}
 	if got := busMetricValue("bus_rpc_call_total", map[string]string{"transport": "jetstream", "method": "mail.List", "result": "ok"}); got != 1 {
@@ -116,14 +116,14 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 		case "rank.GetTop":
 			close(blockingPublished)
 			<-releaseBlocking
-			if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
+			if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
 					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
 				})
 			}
 		case "mail.Summary":
-			if handler := js.handlerForFilter("cube.rpc_resp.2001.>"); handler != nil {
+			if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
 					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
@@ -181,7 +181,7 @@ func TestJetStreamRPCHandleRpcPublishesResponseAfterHandler(t *testing.T) {
 		t.Fatalf("HandleRpc: %v", err)
 	}
 
-	handler := js.handlerForFilter("cube.rpc.mail.mail.List")
+	handler := js.handlerForFilter("roost.rpc.mail.mail.List")
 	if handler == nil {
 		t.Fatalf("service rpc subscription was not registered: %+v", js.consumers)
 	}
@@ -194,19 +194,19 @@ func TestJetStreamRPCHandleRpcPublishesResponseAfterHandler(t *testing.T) {
 		MsgName:      "mail.List",
 		SessionId:    "req-1",
 		MsgID:        "req-1",
-		ReplySubject: "cube.rpc_resp.2001.req-1",
+		ReplySubject: "roost.rpc_resp.2001.req-1",
 		DeadlineAt:   time.Now().Add(time.Second).UnixMilli(),
 		Payload:      payload,
 	})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if err := handler(context.Background(), &fnats.JetStreamMsg{Subject: "cube.rpc.mail.mail.List", Data: req, NumDelivered: 3}); err != nil {
+	if err := handler(context.Background(), &fnats.JetStreamMsg{Subject: "roost.rpc.mail.mail.List", Data: req, NumDelivered: 3}); err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
 
 	pub := js.lastPublish()
-	if pub.subject != "cube.rpc_resp.2001.req-1" || pub.opts.MsgID != "req-1" {
+	if pub.subject != "roost.rpc_resp.2001.req-1" || pub.opts.MsgID != "req-1" {
 		t.Fatalf("response publish = %+v", pub)
 	}
 	var resp struct {
@@ -235,7 +235,7 @@ func TestBusCallStaysLightweightWhenJetStreamRPCEnabled(t *testing.T) {
 	if err := b.Call(context.Background(), "mail", "mail.List", map[string]int64{"player_id": 1001}, &resp); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if rpc.subject != "cube.rpc.mail.mail.List" {
+	if rpc.subject != "roost.rpc.mail.mail.List" {
 		t.Fatalf("lightweight rpc subject = %q", rpc.subject)
 	}
 	if pub := js.lastPublish(); pub.subject != "" {
@@ -260,10 +260,10 @@ func TestHandleRpcRegistersOnlyJetStreamTransportWhenEnabled(t *testing.T) {
 	if len(client.subs) != 0 {
 		t.Fatalf("lightweight subscription count = %d, want 0 when JetStream RPC is enabled", len(client.subs))
 	}
-	if js.handlerForFilter("cube.rpc.mail.mail.List") == nil {
+	if js.handlerForFilter("roost.rpc.mail.mail.List") == nil {
 		t.Fatalf("jetstream service rpc subscription was not registered: %+v", js.consumers)
 	}
-	if js.handlerForFilter("cube.rpc.mail.5001.mail.List") == nil {
+	if js.handlerForFilter("roost.rpc.mail.5001.mail.List") == nil {
 		t.Fatalf("jetstream instance rpc subscription was not registered: %+v", js.consumers)
 	}
 }
@@ -281,7 +281,7 @@ func TestJetStreamRPCDropsExpiredRequestWithoutCallingHandler(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}
-	handler := js.handlerForFilter("cube.rpc.mail.mail.List")
+	handler := js.handlerForFilter("roost.rpc.mail.mail.List")
 	if handler == nil {
 		t.Fatal("service rpc subscription was not registered")
 	}
@@ -289,14 +289,14 @@ func TestJetStreamRPCDropsExpiredRequestWithoutCallingHandler(t *testing.T) {
 		MsgName:      "mail.List",
 		SessionId:    "req-expired",
 		MsgID:        "req-expired",
-		ReplySubject: "cube.rpc_resp.2001.req-expired",
+		ReplySubject: "roost.rpc_resp.2001.req-expired",
 		DeadlineAt:   time.Now().Add(-time.Second).UnixMilli(),
 		Payload:      []byte(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if err := handler(context.Background(), &fnats.JetStreamMsg{Subject: "cube.rpc.mail.mail.List", Data: req}); err != nil {
+	if err := handler(context.Background(), &fnats.JetStreamMsg{Subject: "roost.rpc.mail.mail.List", Data: req}); err != nil {
 		t.Fatalf("expired request should ack/drop, got %v", err)
 	}
 	if called {
@@ -318,7 +318,7 @@ func TestJetStreamRPCRequestIgnoresCanceledSubscribeContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}
-	handler := js.handlerForFilter("cube.rpc.mail.mail.List")
+	handler := js.handlerForFilter("roost.rpc.mail.mail.List")
 	if handler == nil {
 		t.Fatal("service rpc subscription was not registered")
 	}
@@ -326,7 +326,7 @@ func TestJetStreamRPCRequestIgnoresCanceledSubscribeContext(t *testing.T) {
 		MsgName:      "mail.List",
 		SessionId:    "req-canceled-subscribe-ctx",
 		MsgID:        "req-canceled-subscribe-ctx",
-		ReplySubject: "cube.rpc_resp.2001.req-canceled-subscribe-ctx",
+		ReplySubject: "roost.rpc_resp.2001.req-canceled-subscribe-ctx",
 		DeadlineAt:   time.Now().Add(time.Second).UnixMilli(),
 		Payload:      []byte(`{}`),
 	})
@@ -335,10 +335,10 @@ func TestJetStreamRPCRequestIgnoresCanceledSubscribeContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := handler(ctx, &fnats.JetStreamMsg{Subject: "cube.rpc.mail.mail.List", Data: req}); err != nil {
+	if err := handler(ctx, &fnats.JetStreamMsg{Subject: "roost.rpc.mail.mail.List", Data: req}); err != nil {
 		t.Fatalf("handler should not use canceled subscribe context for response publish: %v", err)
 	}
-	if pub := js.lastPublish(); pub.subject != "cube.rpc_resp.2001.req-canceled-subscribe-ctx" {
+	if pub := js.lastPublish(); pub.subject != "roost.rpc_resp.2001.req-canceled-subscribe-ctx" {
 		t.Fatalf("response publish = %+v", pub)
 	}
 }

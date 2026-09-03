@@ -29,7 +29,7 @@ func TestEngineRoutesGroupsAndJSONHandlersWithRequestID(t *testing.T) {
 	}))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/echo", strings.NewReader(`{"name":"cube"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/echo", strings.NewReader(`{"name":"roost"}`))
 	req.Header.Set(HeaderRequestID, "rid-1")
 	engine.ServeHTTP(rec, req)
 
@@ -43,7 +43,7 @@ func TestEngineRoutesGroupsAndJSONHandlersWithRequestID(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if out.Message != "hello cube" || out.RequestID != "rid-1" {
+	if out.Message != "hello roost" || out.RequestID != "rid-1" {
 		t.Fatalf("response = %+v", out)
 	}
 }

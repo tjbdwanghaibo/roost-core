@@ -2,8 +2,8 @@ package worker
 
 import (
 	"errors"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"runtime"
 	"sync"
 	"sync/atomic"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 	"testing"
 )
 

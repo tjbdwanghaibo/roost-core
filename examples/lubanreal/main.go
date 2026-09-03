@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/cube-core/configdata"
-	cfg "github.com/tjbdwanghaibo/cube-core/examples/lubanreal/gen"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	cfg "github.com/tjbdwanghaibo/roost-core/examples/lubanreal/gen"
 )
 
 func main() {

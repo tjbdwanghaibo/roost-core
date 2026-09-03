@@ -3,7 +3,7 @@ package entity
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/lock"
+	"github.com/tjbdwanghaibo/roost-core/lock"
 )
 
 // IThreadSafeEntity is the full entity interface for the nest framework.

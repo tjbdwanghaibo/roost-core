@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/lifecycle"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 )
 
 // Name is the stable identifier for a business configuration object.

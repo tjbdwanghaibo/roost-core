@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	"github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/worker"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/worker"
 	"log/slog"
 	"runtime/debug"
 	"strings"
@@ -106,7 +106,7 @@ func New(client nats.IClient, rpc nats.IRpc, codec Codec, cfg Config) *Bus {
 		cfg.QueueCap = 1024
 	}
 	if cfg.Prefix == "" {
-		cfg.Prefix = "cube"
+		cfg.Prefix = "roost"
 	}
 	if codec == nil {
 		codec = JSONCodec{}

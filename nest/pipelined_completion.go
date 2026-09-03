@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	"github.com/tjbdwanghaibo/cube-core/worker"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/worker"
 )
 
 // Phase 2 of the pipelined commit (see NEST_PIPELINED_COMMIT.md §10): instead

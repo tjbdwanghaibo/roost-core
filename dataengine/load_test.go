@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 type loaderStore struct {

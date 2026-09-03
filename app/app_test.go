@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/cube-core/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 )
 
 var errServeFailed = errors.New("serve failed")
@@ -411,7 +411,7 @@ func TestAppStopsModWhoseProvideFails(t *testing.T) {
 
 func TestAppPassesLogCallerConfig(t *testing.T) {
 	dir := t.TempDir()
-	a := New("cube-test", "0.0.0")
+	a := New("roost-test", "0.0.0")
 	a.RegisterServer("game", &shutdownErrService{})
 	a.cfg.Set("log.file", true)
 	a.cfg.Set("log.stdout", false)
@@ -440,7 +440,7 @@ func TestAppPassesLogCallerConfig(t *testing.T) {
 
 func newTestApp(t *testing.T, svc Service, mods ...Mod) *App {
 	t.Helper()
-	a := New("cube-test", "0.0.0")
+	a := New("roost-test", "0.0.0")
 	if len(mods) > 0 {
 		a.Mods(mods...)
 	}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/httpserver"
 )
 
 func TestRegisterRejectsDuplicateMethodPath(t *testing.T) {
@@ -65,7 +65,7 @@ func TestDecodeJSONAndWriteResult(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	engine.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/json", strings.NewReader(`{"name":"cube"}`)))
+	engine.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/json", strings.NewReader(`{"name":"roost"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -73,7 +73,7 @@ func TestDecodeJSONAndWriteResult(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response["message"] != "hello cube" {
+	if response["message"] != "hello roost" {
 		t.Fatalf("response = %#v", response)
 	}
 }

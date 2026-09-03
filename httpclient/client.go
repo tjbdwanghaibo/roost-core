@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/security"
+	"github.com/tjbdwanghaibo/roost-core/security"
 )
 
 const HeaderRequestID = "X-Request-ID"

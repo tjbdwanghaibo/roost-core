@@ -12,8 +12,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/cube-core/configdata"
-	"github.com/tjbdwanghaibo/cube-core/examples/configgen/cfg"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/examples/configgen/cfg"
 )
 
 func main() {

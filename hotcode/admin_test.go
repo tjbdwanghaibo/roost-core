@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/admin"
 )
 
 func TestRegisterAdminCommandsTargetsInstanceRegistry(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
 
 // spinReentrantMutex is the previous ReentrantMutex implementation, kept

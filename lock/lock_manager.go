@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/container"
+	"github.com/tjbdwanghaibo/roost-core/container"
 )
 
 const defaultBucketCnt = 64

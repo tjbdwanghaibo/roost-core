@@ -9,10 +9,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/action"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 const msgBuy = 21

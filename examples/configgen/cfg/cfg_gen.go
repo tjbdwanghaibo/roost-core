@@ -8,7 +8,7 @@ package cfg
 import (
 	"strconv"
 
-	"github.com/tjbdwanghaibo/cube-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
 )
 
 type DropItem struct {

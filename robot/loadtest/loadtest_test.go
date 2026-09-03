@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
-	"github.com/tjbdwanghaibo/cube-core/robot/loadtest"
-	"github.com/tjbdwanghaibo/cube-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 )
 
 // fakeRunner completes after a short scripted delay with scripted stats.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 func TestRPCErrorResponseUsesCodeReasonEnvelope(t *testing.T) {

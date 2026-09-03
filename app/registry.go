@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
-	"github.com/tjbdwanghaibo/cube-core/health"
-	"github.com/tjbdwanghaibo/cube-core/lifecycle"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 
 	"github.com/spf13/viper"
 )

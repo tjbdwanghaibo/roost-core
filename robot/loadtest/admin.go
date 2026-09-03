@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tjbdwanghaibo/cube-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/admin"
 )
 
 // Admin command names (reachable through the assembled ops surface).

@@ -2,8 +2,8 @@ package entity
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/event"
-	"github.com/tjbdwanghaibo/cube-core/lock"
+	"github.com/tjbdwanghaibo/roost-core/event"
+	"github.com/tjbdwanghaibo/roost-core/lock"
 	"sort"
 	"sync"
 	"sync/atomic"

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type refHMapSession struct {
@@ -44,7 +44,7 @@ func TestRedisRefHMapStoreStoresNestedStructsAsSameSlotKeyRefs(t *testing.T) {
 	ctx := context.Background()
 	redis := newRefHMapFakeRedis()
 	store := NewRedisRefHMapStore[int64, refHMapSession](redis, RefHMapConfig[int64, refHMapSession]{
-		Prefix:      "cube:test",
+		Prefix:      "roost:test",
 		Name:        "session",
 		TTL:         time.Hour,
 		MaxDepth:    8,
@@ -61,10 +61,10 @@ func TestRedisRefHMapStoreStoresNestedStructsAsSameSlotKeyRefs(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	rootKey := "cube:test:{session:1001}:root"
-	snapshotKey := "cube:test:{session:1001}:snapshot"
-	innerKey := "cube:test:{session:1001}:snapshot:inner"
-	metaKey := "cube:test:{session:1001}:meta"
+	rootKey := "roost:test:{session:1001}:root"
+	snapshotKey := "roost:test:{session:1001}:snapshot"
+	innerKey := "roost:test:{session:1001}:snapshot:inner"
+	metaKey := "roost:test:{session:1001}:meta"
 	if redis.pipelineExecs == 0 {
 		t.Fatal("Set should use pipeline")
 	}
@@ -109,13 +109,13 @@ func TestRedisRefHMapStoreSetDeletesPreviouslyRegisteredKeys(t *testing.T) {
 	ctx := context.Background()
 	redis := newRefHMapFakeRedis()
 	store := NewRedisRefHMapStore[int64, refHMapSession](redis, RefHMapConfig[int64, refHMapSession]{
-		Prefix:      "cube:test",
+		Prefix:      "roost:test",
 		Name:        "session",
 		StoreConfig: refHMapSessionConfig(),
 	})
 
-	rootKey := "cube:test:{session:1001}:root"
-	oldKey := "cube:test:{session:1001}:old_schema_child"
+	rootKey := "roost:test:{session:1001}:root"
+	oldKey := "roost:test:{session:1001}:old_schema_child"
 	redis.hashes[rootKey] = map[string]string{refHMapRegistryField: rootKey + "\n" + oldKey}
 	redis.hashes[oldKey] = map[string]string{"stale": "1"}
 
@@ -130,7 +130,7 @@ func TestRedisRefHMapStoreSetDeletesPreviouslyRegisteredKeys(t *testing.T) {
 	if _, ok := redis.hashes[oldKey]; ok {
 		t.Fatalf("Set left old registered key %s", oldKey)
 	}
-	if registry := redis.hashes[rootKey][refHMapRegistryField]; !strings.Contains(registry, "cube:test:{session:1001}:snapshot") {
+	if registry := redis.hashes[rootKey][refHMapRegistryField]; !strings.Contains(registry, "roost:test:{session:1001}:snapshot") {
 		t.Fatalf("registry = %q, missing new snapshot key", registry)
 	}
 }
@@ -139,13 +139,13 @@ func TestRedisRefHMapStoreDeleteUsesRegisteredKeys(t *testing.T) {
 	ctx := context.Background()
 	redis := newRefHMapFakeRedis()
 	store := NewRedisRefHMapStore[int64, refHMapSession](redis, RefHMapConfig[int64, refHMapSession]{
-		Prefix:      "cube:test",
+		Prefix:      "roost:test",
 		Name:        "session",
 		StoreConfig: refHMapSessionConfig(),
 	})
 
-	rootKey := "cube:test:{session:1001}:root"
-	oldKey := "cube:test:{session:1001}:old_schema_child"
+	rootKey := "roost:test:{session:1001}:root"
+	oldKey := "roost:test:{session:1001}:old_schema_child"
 	redis.hashes[rootKey] = map[string]string{refHMapRegistryField: rootKey + "\n" + oldKey}
 	redis.hashes[oldKey] = map[string]string{"stale": "1"}
 
@@ -164,7 +164,7 @@ func TestRedisRefHMapStorePatchUpdatesOnlyTargetScalar(t *testing.T) {
 	ctx := context.Background()
 	redis := newRefHMapFakeRedis()
 	store := NewRedisRefHMapStore[int64, refHMapSession](redis, RefHMapConfig[int64, refHMapSession]{
-		Prefix:      "cube:test",
+		Prefix:      "roost:test",
 		Name:        "session",
 		StoreConfig: refHMapSessionConfig(),
 	})
@@ -186,11 +186,11 @@ func TestRedisRefHMapStorePatchUpdatesOnlyTargetScalar(t *testing.T) {
 	if redis.delCalls != 0 {
 		t.Fatalf("Patch should not delete/rewrite whole object, delCalls=%d", redis.delCalls)
 	}
-	innerKey := "cube:test:{session:1001}:snapshot:inner"
+	innerKey := "roost:test:{session:1001}:snapshot:inner"
 	if got := redis.hashes[innerKey]["score"]; got != "901" {
 		t.Fatalf("patched score = %q, want 901", got)
 	}
-	if got := redis.hashes["cube:test:{session:1001}:meta"]["label"]; got != "open" {
+	if got := redis.hashes["roost:test:{session:1001}:meta"]["label"]; got != "open" {
 		t.Fatalf("patch changed unrelated meta label = %q", got)
 	}
 }
@@ -203,7 +203,7 @@ func TestRedisRefHMapStoreTreatsTimeAsScalar(t *testing.T) {
 	ctx := context.Background()
 	redis := newRefHMapFakeRedis()
 	store := NewRedisRefHMapStore[int64, timedValue](redis, RefHMapConfig[int64, timedValue]{
-		Prefix: "cube:test",
+		Prefix: "roost:test",
 		Name:   "timed",
 		StoreConfig: StoreConfig[int64, timedValue]{
 			KeyOf: func(v timedValue) int64 { return v.ID },
@@ -220,7 +220,7 @@ func TestRedisRefHMapStoreTreatsTimeAsScalar(t *testing.T) {
 	if !ok || !got.At.Equal(at) {
 		t.Fatalf("decoded timed value = %+v ok=%v", got, ok)
 	}
-	if _, ok := redis.hashes["cube:test:{timed:1}:at"]; ok {
+	if _, ok := redis.hashes["roost:test:{timed:1}:at"]; ok {
 		t.Fatal("time.Time should be stored as scalar field, not child hash")
 	}
 }
@@ -232,7 +232,7 @@ func TestRedisRefHMapStoreRejectsCycles(t *testing.T) {
 	}
 
 	store := NewRedisRefHMapStore[int64, cyclicNode](newRefHMapFakeRedis(), RefHMapConfig[int64, cyclicNode]{
-		Prefix: "cube:test",
+		Prefix: "roost:test",
 		Name:   "cyclic",
 		StoreConfig: StoreConfig[int64, cyclicNode]{
 			KeyOf: func(v cyclicNode) int64 { return v.ID },
@@ -612,7 +612,7 @@ var _ fredis.IRedis = (*refHMapFakeRedis)(nil)
 // byte of an existing key, or every cached entity would be orphaned.
 func TestRedisRefHMapStoreReusesTypeLayoutAcrossOperations(t *testing.T) {
 	store := NewRedisRefHMapStore[int64, refHMapSession](newRefHMapFakeRedis(), RefHMapConfig[int64, refHMapSession]{
-		Prefix: "cube:test", Name: "session", TTL: time.Hour, MaxDepth: 8,
+		Prefix: "roost:test", Name: "session", TTL: time.Hour, MaxDepth: 8,
 		StoreConfig: refHMapSessionConfig(),
 	})
 	first, err := store.plan(1001)
@@ -631,14 +631,14 @@ func TestRedisRefHMapStoreReusesTypeLayoutAcrossOperations(t *testing.T) {
 	}
 	// Byte-for-byte compatibility with keys already in Redis.
 	if got := first.keys(); !reflect.DeepEqual(got, []string{
-		"cube:test:{session:1001}:root",
-		"cube:test:{session:1001}:snapshot",
-		"cube:test:{session:1001}:snapshot:inner",
-		"cube:test:{session:1001}:meta",
+		"roost:test:{session:1001}:root",
+		"roost:test:{session:1001}:snapshot",
+		"roost:test:{session:1001}:snapshot:inner",
+		"roost:test:{session:1001}:meta",
 	}) {
 		t.Fatalf("key layout changed: %q", got)
 	}
-	if got := second.keys()[0]; got != "cube:test:{session:2002}:root" {
+	if got := second.keys()[0]; got != "roost:test:{session:2002}:root" {
 		t.Fatalf("second key=%q", got)
 	}
 	// A patch target resolves against its own plan's prefix.
@@ -646,7 +646,7 @@ func TestRedisRefHMapStoreReusesTypeLayoutAcrossOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.key != "cube:test:{session:2002}:snapshot:inner" {
+	if target.key != "roost:test:{session:2002}:snapshot:inner" {
 		t.Fatalf("patch target key=%q", target.key)
 	}
 

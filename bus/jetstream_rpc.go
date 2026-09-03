@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
 	"runtime/debug"
 	"strings"
@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	defaultJetStreamRPCRequestStream  = "CUBE_RPC_REQUESTS"
-	defaultJetStreamRPCResponseStream = "CUBE_RPC_RESPONSES"
+	defaultJetStreamRPCRequestStream  = "ROOST_RPC_REQUESTS"
+	defaultJetStreamRPCResponseStream = "ROOST_RPC_RESPONSES"
 	defaultJetStreamRPCAckWait        = 10 * time.Second
 	defaultJetStreamRPCMaxDeliver     = 5
 	defaultJetStreamRPCRequestTTL     = 30 * time.Second

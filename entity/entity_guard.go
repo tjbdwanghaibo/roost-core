@@ -1,7 +1,7 @@
 package entity
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"log/slog"
 	"sync"
 )

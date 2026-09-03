@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/cache"
+	"github.com/tjbdwanghaibo/roost-core/cache"
 )
 
 var (

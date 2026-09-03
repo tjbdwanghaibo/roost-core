@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/container"
-	"github.com/tjbdwanghaibo/cube-core/lock"
-	flog "github.com/tjbdwanghaibo/cube-core/log"
+	"github.com/tjbdwanghaibo/roost-core/container"
+	"github.com/tjbdwanghaibo/roost-core/lock"
+	flog "github.com/tjbdwanghaibo/roost-core/log"
 )
 
 const defaultBucketCnt = 64

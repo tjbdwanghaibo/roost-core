@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/worker"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/worker"
 )
 
 // Client is the instance-scoped command boundary used by generated senders.

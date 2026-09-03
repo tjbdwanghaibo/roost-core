@@ -15,7 +15,7 @@ import (
 // is idempotent (cron-style dedup, cache warmers, best-effort singletons).
 // Anything that must prevent a stale holder from writing — entity ownership,
 // storage commits — must use IVersionedLock, whose fence token makes writes
-// verifiable. cube-kit provides an auto-extending wrapper for long-running
+// verifiable. roost-kit provides an auto-extending wrapper for long-running
 // holders of this interface.
 type IDistLock interface {
 	// Acquire attempts to acquire the lock. Returns true if acquired.

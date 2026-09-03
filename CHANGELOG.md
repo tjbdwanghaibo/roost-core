@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Changed（破坏性：Go 模块路径改为 roost-core）
+
+模块路径从 `github.com/tjbdwanghaibo/cube-core` 改为 `github.com/tjbdwanghaibo/roost-core`，
+版本号延续（本版 v1.10.0）。GitHub 仓库早已改名为 roost-core，旧模块路径一直靠 301 重定向
+存活——模块名与仓库名不一致本身就是最大的历史包袱。升级只需全局替换 import 路径。
+新路径下没有旧 tag：`go.work` 联调需要**指定版本**的 replace，见
+`docs/DEVELOPMENT_WORKSPACE.md`。
+
+- 进程级默认名 `"cube"` → `"roost"`：`bus` 主题前缀、日志文件基名。
+- JetStream RPC 默认流名 `CUBE_RPC_REQUESTS/RESPONSES` → `ROOST_RPC_REQUESTS/RESPONSES`。
+  流名是 broker 侧持久状态：默认配置的部署升级后会在新流上继续，旧流中的消息不会被读到；
+  滚动升级前请显式配置流名与前缀，或接受切换到新流。
+- Redis key 前缀默认值 `cube:redisdao`（`cache` ref-hmap 快照缓存）、`cube:bus`（`bus` 可靠消费 inbox 去重）
+  → `roost:redisdao`、`roost:bus`。**不做兼容读取**：升级后的进程不会读旧前缀下的 key。缓存条目会
+  自然重建；inbox 去重状态在升级窗口内失效，期间已消费过的消息可能再投递一次——需要零重复的部署
+  请在升级前显式配置前缀沿用旧值，或在升级窗口停写。
+- 文档全部改为 roost 命名并以最新实现为准；过期的"已发布基线 v1.8.0"段落改为 v1.10.0。
+
 ### Changed（破坏性：包与标识符重命名，无行为变化）
 
 一批只描述"机制"的包名换成描述"职责"的名字。旧名字里 `sync` / `replication` /

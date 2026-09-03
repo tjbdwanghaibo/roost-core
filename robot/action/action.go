@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
 type Action interface {

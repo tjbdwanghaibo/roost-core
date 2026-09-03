@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	flock "github.com/tjbdwanghaibo/cube-core/lock"
+	flock "github.com/tjbdwanghaibo/roost-core/lock"
 )
 
 func TestFrozenSyncPayloadOwnership(t *testing.T) {

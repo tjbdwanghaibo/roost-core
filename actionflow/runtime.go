@@ -3,7 +3,7 @@ package actionflow
 import (
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 // ActionContext is callback-scoped. Implementations must not retain its pointer

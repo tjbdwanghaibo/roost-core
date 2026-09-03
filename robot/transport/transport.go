@@ -47,7 +47,7 @@ type Packet struct {
 
 // Conn abstracts a client transport. TCP and WebSocket share the same
 // Packet framing above this layer; custom transports (KCP, QUIC — see
-// cube-kit's robot package) only need to implement this interface.
+// roost-kit's robot package) only need to implement this interface.
 type Conn interface {
 	ReadPacket() (*Packet, error)
 	WritePackets([]*Packet) error
@@ -99,7 +99,7 @@ var (
 )
 
 // RegisterDialer adds (or overrides) a dialer for a transport type — the
-// hook cube-kit uses to plug KCP/QUIC client transports in.
+// hook roost-kit uses to plug KCP/QUIC client transports in.
 func RegisterDialer(transportType string, dialer Dialer) error {
 	transportType = strings.ToLower(strings.TrimSpace(transportType))
 	if transportType == "" {

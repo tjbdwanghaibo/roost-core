@@ -8,7 +8,7 @@ workspace 解决研发效率，module/tag 证明外部用户可安装和复现�
 在四个仓库的共同父目录创建不提交的 `go.work`：
 
 ```bash
-go work init ./cube-core ./cube-kit ./cube-skill ./cube-codegen
+go work init ./roost-core ./roost-kit ./roost-skill ./roost-codegen
 ```
 
 每个仓库应忽略 `go.work`/`go.work.sum`。业务仓库需要联调时，用 `go work use
@@ -16,6 +16,18 @@ go work init ./cube-core ./cube-kit ./cube-skill ./cube-codegen
 workspace 已经提供相同的源码替换能力，而且不会污染版本元数据。日常联调不运行
 `go work sync`；该命令可能把 workspace 选出的依赖版本写回各仓 `go.mod`，只有明确执行
 跨仓版本收口时才使用并审查 diff。
+
+**模块改名过渡期的例外。** workspace 只决定"用哪份代码"，MVS 计算模块图时仍会读取各仓
+`go.mod` 里 require 的那个版本的 `go.mod`。模块路径从 `cube-*` 改为 `roost-*` 后、新 tag 发布前，
+旧 tag 的 `go.mod` 仍声明 `cube-core`，会被拒绝。此时在 go.work 里加**指定版本**的 replace
+（Go 不允许对 workspace 模块做无版本 replace）：
+
+```
+replace github.com/tjbdwanghaibo/roost-core v1.10.0 => ./roost-core
+replace github.com/tjbdwanghaibo/roost-kit v1.10.0 => ./roost-kit
+```
+
+tag 发布后删除。它只存在于不提交的 go.work 里，不会进入任何可发布 module。
 
 研发验收在同一个 workspace 下运行：
 
@@ -50,12 +62,12 @@ codegen；后一层只能引用已经存在的正式 tag。每层发布后再执
 
 ## 命名迁移
 
-Core 的并发容器路径已从含义模糊且易与 Go 关键字混淆的 `cube-core/map` 改为
-`cube-core/safemap`；类型名不变，常用 alias 仍可写成 `fmap`。升级 source-head 后重新
+Core 的并发容器路径已从含义模糊且易与 Go 关键字混淆的 `roost-core/map` 改为
+`roost-core/safemap`；类型名不变，常用 alias 仍可写成 `fmap`。升级 source-head 后重新
 运行 codegen，或把业务 import 改为：
 
 ```go
-import fmap "github.com/tjbdwanghaibo/cube-core/safemap"
+import fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 ```
 
 该路径变化必须跟随下一次正式版本发布，不提供同时维护两套实现的兼容空壳。

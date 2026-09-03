@@ -2,18 +2,18 @@
 // the server sequences player inputs into fixed-rate frames and broadcasts
 // them; simulation runs on the clients (and optionally on a server-side
 // arbiter), which must be bit-deterministic — fixed-point math, injected
-// randomness, no wall clock (the contract cube-skill's runtime already
+// randomness, no wall clock (the contract roost-skill's runtime already
 // satisfies).
 //
 // This is INPUT-frame synchronization (lockstep), not to be confused with
 // the state-frame path: entitysync replicates per-subject state deltas and
-// cube-kit's room/room_broadcast batches them into per-room state frames.
+// roost-kit's room/room_broadcast batches them into per-room state frames.
 // A lockstep frame carries only what players pressed.
 //
 // The sequencer implements optimistic frame locking: frames are cut on the
 // host's clock, never waiting for slow clients — a missing input is an empty
 // input, and late inputs are folded into the next uncut frame. The package
-// has no dependencies and no transport opinions; cube-kit's lockstep package
+// has no dependencies and no transport opinions; roost-kit's lockstep package
 // wires it to rooms and datagram/reliable lanes.
 package lockstep
 

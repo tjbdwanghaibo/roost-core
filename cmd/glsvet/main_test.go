@@ -48,7 +48,7 @@ func handlerMove(g *group) { g.Go(func(){}) }
 
 func TestHandlerCoreWorkerPoolGoIsAllowed(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/cube-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -61,7 +61,7 @@ func handlerMove() { pool.Go(task{}, func(task){}) }
 
 func TestHandlerCoreWorkerPoolFieldGoIsAllowed(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/cube-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/worker"
 type task struct{}
 func (task) OnRelease() {}
 type runtime struct { pool *worker.Pool[task] }
@@ -74,7 +74,7 @@ func handlerMove(r *runtime) { r.pool.Go(task{}, func(task){}) }
 
 func TestHandlerCoreWorkerPoolTryGoIsAllowedWhenAdmissionHandled(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/cube-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -126,7 +126,7 @@ func run(p publisher) { p.Publish() }
 
 func TestFrameworkTypedAdmissionResultIsRejected(t *testing.T) {
 	if findings := vetSource(t, `package service
-import corebus "github.com/tjbdwanghaibo/cube-core/bus"
+import corebus "github.com/tjbdwanghaibo/roost-core/bus"
 func run(p corebus.Bus) { p.Publish() }
 `); findings != 1 {
 		t.Fatalf("findings = %d, want 1", findings)
@@ -135,7 +135,7 @@ func run(p corebus.Bus) { p.Publish() }
 
 func TestHandlerWorkerClosureCannotCaptureOuterState(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/cube-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/worker"
 type task struct{ id int }
 func (task) OnRelease() {}
 var pool *worker.Pool[task]

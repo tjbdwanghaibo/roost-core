@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/session"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // ActionRunner executes one named blocking action for a robot.

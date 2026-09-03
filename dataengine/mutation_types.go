@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 // TransactionID identifies one durable transaction.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 func TestRedisListAppendRawKeepsNewestEntries(t *testing.T) {

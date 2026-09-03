@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
 )
 
 // RegisterCall registers one protocol-call action from its request and

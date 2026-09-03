@@ -2,7 +2,7 @@ package entity
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/lock"
+	"github.com/tjbdwanghaibo/roost-core/lock"
 	"math"
 	"sync/atomic"
 )

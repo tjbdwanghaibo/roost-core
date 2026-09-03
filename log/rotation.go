@@ -110,7 +110,7 @@ func rotatedLogFilename(filename string, slice string) string {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
 	if base == "" {
-		base = "cube"
+		base = "roost"
 	}
 	return base + "." + slice + ext
 }

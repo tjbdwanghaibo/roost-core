@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	"github.com/tjbdwanghaibo/cube-core/goroutine"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
 
 var (
@@ -180,7 +180,7 @@ func openLogWriter(opts Options) (io.WriteCloser, error) {
 	if name == "" {
 		base := opts.Service
 		if base == "" {
-			base = "cube"
+			base = "roost"
 		}
 		if opts.Sid != 0 {
 			base = fmt.Sprintf("%s-%d", base, opts.Sid)

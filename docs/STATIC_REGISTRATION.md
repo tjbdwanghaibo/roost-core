@@ -61,17 +61,17 @@ builder 如果在某个 mod 的 `Start` 里注册，那么另一个在 `Provide`
 配置门禁、mod 依赖序、健康注册全部失效，"启动就绪即可服务"退化成"第一次写才知道
 数据库连不上"。
 
-## 机制：`//cube:register`
+## 机制：`//roost:register`
 
 component 的叶子函数是手写的，且命名不统一——`RegisterComponent()`、
 `RegisterScheduler()`、`RegisterBasicMissions()`、`RegisterBattleAction()`……
 codegen 无法按约定推导。因此不按类型推导，而是**让注册函数自己声明**：
 
 ```go
-//cube:register phase=component
+//roost:register phase=component
 func RegisterComponent() { ... }
 
-//cube:register phase=component order=-10
+//roost:register phase=component order=-10
 func RegisterScheduler() { ... }
 ```
 
@@ -79,7 +79,7 @@ func RegisterScheduler() { ... }
 - `phase=` 决定阶段，取值是固定枚举（见下），未知值直接报错并列出合法值。
 - `order=` 可选，用于阶段内的手工排序（默认 0）；同 order 时按 import 路径 + 函数名
   排序，因此**输出是确定的**，不随 map 顺序变化。
-- 生成的 entity wire 代码自带 `//cube:register phase=entity`，所以 entity 走同一条
+- 生成的 entity wire 代码自带 `//roost:register phase=entity`，所以 entity 走同一条
   路径，没有专门的分支。
 
 一个机制覆盖全部类别，新增一类不需要改 codegen——标记一个函数即可。
@@ -153,13 +153,13 @@ registry 的服务使用。
 
 每一步都可独立回退。
 
-1. **`//cube:register` 机制 + entity/component/config/nest 四个阶段。**（已完成）
+1. **`//roost:register` 机制 + entity/component/config/nest 四个阶段。**（已完成）
    component 是手工维护最痛的一类（业务仓 50 个包手工列举）。生成物与手写聚合器做过
    **只读比对**，迁移守卫在业务仓上精确识别三个手写聚合器。
 2. **层 B 降级**：业务仓那个"为了有地方调注册"而存在的 bootstrap mod 改成
    `app.IManager`，进 `manager` mod。它剩下的工作（建 runtime 注册到 capability、
    注册需要查表的 admin 命令）本来就是 `Start(r *app.Registry)` 的形状。
-3. **业务仓迁移**：给每个注册函数打上 `//cube:register phase=<phase>`，删掉
+3. **业务仓迁移**：给每个注册函数打上 `//roost:register phase=<phase>`，删掉
    `game/bootstrap/register.go` 的 `RegisterAll`、`game/entities/register/`、
    `game/components/register/`，跑 `roost generate`。守卫会在删干净之前拒绝生成。
 

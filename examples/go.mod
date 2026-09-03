@@ -1,8 +1,8 @@
-module github.com/tjbdwanghaibo/cube-core/examples
+module github.com/tjbdwanghaibo/roost-core/examples
 
 go 1.25.0
 
-require github.com/tjbdwanghaibo/cube-core v1.8.0
+require github.com/tjbdwanghaibo/roost-core v1.10.0
 
 require (
 	github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d // indirect
@@ -12,4 +12,4 @@ require (
 )
 
 // The examples always exercise the working tree.
-replace github.com/tjbdwanghaibo/cube-core => ..
+replace github.com/tjbdwanghaibo/roost-core => ..

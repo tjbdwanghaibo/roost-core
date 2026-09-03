@@ -13,12 +13,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tjbdwanghaibo/cube-core/metrics"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 const (
-	defaultRefHMapPrefix   = "cube:redisdao"
+	defaultRefHMapPrefix   = "roost:redisdao"
 	defaultRefHMapMaxDepth = 8
 	refHMapRegistryField   = "__keys"
 )

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 type RemoteAcquireMode = entity.RemoteAcquireMode

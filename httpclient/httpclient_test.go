@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/security"
+	"github.com/tjbdwanghaibo/roost-core/security"
 )
 
 type clientRequest struct {
@@ -27,8 +27,8 @@ func TestClientPostJSONSendsSignatureHeadersAndDecodesResponse(t *testing.T) {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
 		raw := mustReadAll(t, r)
-		if !security.VerifyPayloadSignature(raw, r.Header.Get("X-Cube-Signature"), secret) {
-			t.Fatalf("signature header is invalid: %q body=%s", r.Header.Get("X-Cube-Signature"), raw)
+		if !security.VerifyPayloadSignature(raw, r.Header.Get("X-Roost-Signature"), secret) {
+			t.Fatalf("signature header is invalid: %q body=%s", r.Header.Get("X-Roost-Signature"), raw)
 		}
 		if got := r.Header.Get("X-Request-ID"); got != "rid-2" {
 			t.Fatalf("request id = %q, want rid-2", got)
@@ -44,14 +44,14 @@ func TestClientPostJSONSendsSignatureHeadersAndDecodesResponse(t *testing.T) {
 	client := New(
 		WithBaseURL(server.URL),
 		WithTimeout(time.Second),
-		WithSigner("X-Cube-Signature", secret),
+		WithSigner("X-Roost-Signature", secret),
 	)
 	var out clientResponse
-	err := client.PostJSON(WithRequestID(context.Background(), "rid-2"), "/hello", clientRequest{Name: "cube"}, &out)
+	err := client.PostJSON(WithRequestID(context.Background(), "rid-2"), "/hello", clientRequest{Name: "roost"}, &out)
 	if err != nil {
 		t.Fatalf("PostJSON: %v", err)
 	}
-	if out.Message != "hello cube" {
+	if out.Message != "hello roost" {
 		t.Fatalf("response = %+v", out)
 	}
 }
@@ -65,7 +65,7 @@ func TestClientPostJSONDecodesErrorBodyAndReturnsStatusError(t *testing.T) {
 
 	client := New(WithBaseURL(server.URL), WithTimeout(time.Second))
 	var out clientResponse
-	err := client.PostJSON(context.Background(), "/fail", clientRequest{Name: "cube"}, &out)
+	err := client.PostJSON(context.Background(), "/fail", clientRequest{Name: "roost"}, &out)
 	var statusErr *StatusError
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("err = %v, want StatusError", err)
@@ -90,7 +90,7 @@ func TestClientClonePreservesBaseURLAndAddsHeaders(t *testing.T) {
 	base := New(WithBaseURL(server.URL), WithTimeout(time.Second))
 	clone := base.Clone(WithHeader("X-Admin-Token", "ops-token"))
 	var out clientResponse
-	if err := clone.PostJSON(context.Background(), "/execute", clientRequest{Name: "cube"}, &out); err != nil {
+	if err := clone.PostJSON(context.Background(), "/execute", clientRequest{Name: "roost"}, &out); err != nil {
 		t.Fatalf("PostJSON: %v", err)
 	}
 	if out.Message != "ok" {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 )
 
 type testItem struct {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 const (

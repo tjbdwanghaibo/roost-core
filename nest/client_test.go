@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 func TestClientRequestCarriesContextAndReturnsResult(t *testing.T) {

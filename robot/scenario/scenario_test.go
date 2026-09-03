@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 )
 
 func newRecordingContext(log *[]string, fail map[string]error) *robot.Context {

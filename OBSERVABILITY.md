@@ -1,6 +1,6 @@
 # roost 可观测性规范与指标清单
 
-所有指标经 `cube-core/metrics` 注册表（Counter / Gauge / Duration / Histogram 四类），`metrics.Snapshot()` 导出快照、`metrics.PrometheusText(metrics.Snapshot())` 输出 Prometheus 文本格式。宿主服务暴露一个抓取端点即可：
+所有指标经 `roost-core/metrics` 注册表（Counter / Gauge / Duration / Histogram 四类），`metrics.Snapshot()` 导出快照、`metrics.PrometheusText(metrics.Snapshot())` 输出 Prometheus 文本格式。宿主服务暴露一个抓取端点即可：
 
 ```go
 http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {

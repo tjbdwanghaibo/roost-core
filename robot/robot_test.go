@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/session"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // echoServer answers every request packet with the same msg id and seq; a

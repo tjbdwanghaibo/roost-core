@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
-	fsyncbus "github.com/tjbdwanghaibo/cube-core/syncbus"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 )
 
 type Op uint8

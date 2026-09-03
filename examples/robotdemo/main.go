@@ -13,13 +13,13 @@ import (
 	"net"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot"
-	"github.com/tjbdwanghaibo/cube-core/robot/action"
-	"github.com/tjbdwanghaibo/cube-core/robot/loadtest"
-	"github.com/tjbdwanghaibo/cube-core/robot/protocol"
-	"github.com/tjbdwanghaibo/cube-core/robot/runner"
-	"github.com/tjbdwanghaibo/cube-core/robot/scenario"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 const msgLogin, msgBuy = 1, 2

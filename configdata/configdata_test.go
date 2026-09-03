@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 type testMonsterCfg struct {

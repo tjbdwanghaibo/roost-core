@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/robot/action"
-	"github.com/tjbdwanghaibo/cube-core/robot/runner"
-	"github.com/tjbdwanghaibo/cube-core/robot/scenario"
-	"github.com/tjbdwanghaibo/cube-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // startEcho serves the packet framing, echoing every request.

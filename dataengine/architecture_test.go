@@ -19,7 +19,7 @@ func TestLegacyCheckpointWritePathIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacyImport := "github.com/tjbdwanghaibo/cube-core/" + "check" + "point"
+	legacyImport := "github.com/tjbdwanghaibo/roost-core/" + "check" + "point"
 	legacySymbols := []string{
 		"Snapshot" + "WAL",
 		"Entity" + "Snapshotter",

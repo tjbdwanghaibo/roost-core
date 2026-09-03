@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type RedisRawJSONStore[K comparable, V any] struct {

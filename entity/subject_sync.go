@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	flog "github.com/tjbdwanghaibo/cube-core/log"
+	flog "github.com/tjbdwanghaibo/roost-core/log"
 )
 
 var (

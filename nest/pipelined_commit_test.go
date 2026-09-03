@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	fctx "github.com/tjbdwanghaibo/cube-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 type fakeCommitTicket struct {

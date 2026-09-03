@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 // delayCommitter models a WAL whose fsync takes fsyncDelay. Strict commits

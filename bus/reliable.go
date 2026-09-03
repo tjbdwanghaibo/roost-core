@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/failurelog"
-	"github.com/tjbdwanghaibo/cube-core/nats"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/failurelog"
+	"github.com/tjbdwanghaibo/roost-core/nats"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 const (
-	defaultReliablePrefix = "cube:bus"
+	defaultReliablePrefix = "roost:bus"
 	defaultInboxTTL       = 24 * time.Hour
 	defaultDLQTTL         = 7 * 24 * time.Hour
 	defaultDLQMaxEntries  = 10000

@@ -10,5 +10,5 @@ cd "$(dirname "$0")"
 DOTNET_ROLL_FORWARD=LatestMajor dotnet "$LUBAN_DLL" \
   -t server -c go-json -d json --conf luban.conf \
   -x outputCodeDir=gen -x outputDataDir=configs/data \
-  -x lubanGoModule=github.com/tjbdwanghaibo/cube-core/examples/lubanreal/luban
+  -x lubanGoModule=github.com/tjbdwanghaibo/roost-core/examples/lubanreal/luban
 gofmt -w gen
