@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 )
 
 type mirrorTestRecord struct {

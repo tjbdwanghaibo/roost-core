@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"log/slog"
 	"sync"
 	"time"

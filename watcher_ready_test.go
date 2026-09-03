@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

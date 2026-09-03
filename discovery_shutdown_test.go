@@ -3,7 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"sync"
 	"testing"
 	"time"
@@ -12,8 +12,8 @@ import (
 )
 
 func TestDiscoverySuppressesLeaseLostWarningAfterDeregister(t *testing.T) {
-	d := newDiscovery(nil, "/cube/", 5)
-	d.key = "/cube/game/1"
+	d := newDiscovery(nil, "/roost/", 5)
+	d.key = "/roost/game/1"
 	d.markStopping()
 
 	if d.shouldWarnLeaseLost() {
@@ -22,8 +22,8 @@ func TestDiscoverySuppressesLeaseLostWarningAfterDeregister(t *testing.T) {
 }
 
 func TestDiscoveryWarnsWhenLeaseLostUnexpectedly(t *testing.T) {
-	d := newDiscovery(nil, "/cube/", 5)
-	d.key = "/cube/game/1"
+	d := newDiscovery(nil, "/roost/", 5)
+	d.key = "/roost/game/1"
 
 	if !d.shouldWarnLeaseLost() {
 		t.Fatalf("expected unexpected lease loss to warn")
@@ -31,7 +31,7 @@ func TestDiscoveryWarnsWhenLeaseLostUnexpectedly(t *testing.T) {
 }
 
 func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
-	d := newDiscovery(nil, "/cube/", 5)
+	d := newDiscovery(nil, "/roost/", 5)
 	d.retryMinInterval = time.Millisecond
 	d.retryMaxInterval = time.Millisecond
 
@@ -46,10 +46,10 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 		attempts++
 		switch attempts {
 		case 1:
-			return discoveryRegistration{leaseID: clientv3.LeaseID(101), key: "/cube/game/1", keepaliveDone: firstLost}, nil
+			return discoveryRegistration{leaseID: clientv3.LeaseID(101), key: "/roost/game/1", keepaliveDone: firstLost}, nil
 		case 2:
 			close(registeredAgain)
-			return discoveryRegistration{leaseID: clientv3.LeaseID(102), key: "/cube/game/1", keepaliveDone: secondLost}, nil
+			return discoveryRegistration{leaseID: clientv3.LeaseID(102), key: "/roost/game/1", keepaliveDone: secondLost}, nil
 		default:
 			return discoveryRegistration{}, errors.New("unexpected extra registration")
 		}
@@ -74,7 +74,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 }
 
 func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
-	d := newDiscovery(nil, "/cube/", 5)
+	d := newDiscovery(nil, "/roost/", 5)
 	d.retryMinInterval = time.Millisecond
 	d.retryMaxInterval = time.Millisecond
 
@@ -82,7 +82,7 @@ func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
 	calls := make(chan struct{}, 2)
 	d.registerOnce = func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error) {
 		calls <- struct{}{}
-		return discoveryRegistration{leaseID: clientv3.LeaseID(201), key: "/cube/game/1", keepaliveDone: lost}, nil
+		return discoveryRegistration{leaseID: clientv3.LeaseID(201), key: "/roost/game/1", keepaliveDone: lost}, nil
 	}
 
 	if err := d.Register(context.Background(), &fetcd.ServiceInfo{ServiceType: "game", Sid: 1}); err != nil {
@@ -105,14 +105,14 @@ func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
 }
 
 func TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration(t *testing.T) {
-	d := newDiscovery(nil, "/cube/", 5)
+	d := newDiscovery(nil, "/roost/", 5)
 	keepaliveDone := make(chan struct{})
 	calls := 0
 	d.registerOnce = func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error) {
 		calls++
 		return discoveryRegistration{
 			leaseID:       clientv3.LeaseID(301),
-			key:           "/cube/game/1",
+			key:           "/roost/game/1",
 			keepaliveDone: keepaliveDone,
 			cancel:        func() {},
 		}, nil

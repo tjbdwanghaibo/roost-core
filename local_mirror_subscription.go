@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 )
 
 type mirrorInternalChange[T any] struct {

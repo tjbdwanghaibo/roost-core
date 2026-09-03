@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/cube-core/etcd"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"sync"
 	"sync/atomic"
 
