@@ -15,6 +15,23 @@ type redisClient struct {
 	rdb goredis.UniversalClient
 }
 
+// NewClient builds a client from a configuration, outside the Mod lifecycle.
+//
+// Production wiring goes through RedisMod, which owns config parsing, the
+// registry capability and shutdown. This exists for the cases that have no
+// registry: integration tests that must exercise real Redis semantics
+// (Lua scripts, pipelines, WATCH) that an in-memory double reimplements
+// rather than executes, and one-off operational tools. Callers own Close.
+func NewClient(cfg *fredis.Config) (fredis.IRedis, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("redis: configuration is required")
+	}
+	if cfg.Addr == "" && !cfg.IsCluster() {
+		return nil, fmt.Errorf("redis: addr or cluster addrs are required")
+	}
+	return newRedisClient(cfg), nil
+}
+
 func newRedisClient(cfg *fredis.Config) *redisClient {
 	var rdb goredis.UniversalClient
 	if cfg.IsCluster() {
