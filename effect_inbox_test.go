@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
-func newEffectInboxTest(t *testing.T, ttl time.Duration) (*MongoEffectInbox, *mongofake.Client, *mongofake.Collection) {
+func newEffectInboxTest(t *testing.T, ttl time.Duration) (*MongoEffectInbox, *mongotest.Client, *mongotest.Collection) {
 	t.Helper()
-	client := mongofake.NewClient()
+	client := mongotest.NewClient()
 	inbox, err := NewMongoEffectInbox(client, "game", "", EffectInboxOptions{ReceiptTTL: ttl})
 	if err != nil {
 		t.Fatal(err)
