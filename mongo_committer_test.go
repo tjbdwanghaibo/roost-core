@@ -6,14 +6,14 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-kit/internal/mongofake"
+	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
-func newRemoteMongoFake() *mongofake.Client { return mongofake.NewClient() }
+func newRemoteMongoFake() *mongotest.Client { return mongotest.NewClient() }
 
 // lookupTxField reads one field of a stored transaction document, so the test
 // asserts what the committer actually persisted rather than a fake's bookkeeping.
-func lookupTxField(t *testing.T, coll *mongofake.Collection, id string, field string) (any, bool) {
+func lookupTxField(t *testing.T, coll *mongotest.Collection, id string, field string) (any, bool) {
 	t.Helper()
 	doc, ok := coll.Lookup(id)
 	if !ok {
