@@ -11,8 +11,8 @@ import (
 	"errors"
 	"time"
 
-	coregateway "github.com/tjbdwanghaibo/cube-core/gateway"
-	"github.com/tjbdwanghaibo/cube-core/security"
+	coregateway "github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/security"
 )
 
 var (

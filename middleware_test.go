@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	coregateway "github.com/tjbdwanghaibo/cube-core/gateway"
-	"github.com/tjbdwanghaibo/cube-core/security"
+	coregateway "github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/security"
 )
 
 type session struct{ principal coregateway.Principal }
