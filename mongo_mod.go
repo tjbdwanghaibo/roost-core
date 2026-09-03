@@ -3,10 +3,10 @@ package mongo
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/app"
-	"github.com/tjbdwanghaibo/cube-core/health"
-	fmongo "github.com/tjbdwanghaibo/cube-core/mongo"
-	"github.com/tjbdwanghaibo/cube-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
 	"log/slog"
 	"time"
 
