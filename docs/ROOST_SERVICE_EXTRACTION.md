@@ -497,7 +497,28 @@ roost-service/
     secret 接到 session secret 的位置，签发与校验仍然自洽，只有对着配置里的值独立验签
     才抓得到。
 
-11. **剩余：`client.go` / `rpc.go` / `admin.go`**（跨进程消费面）。未开始。
+11. **errcode 接线**。✅ 已完成，是 RPC 面的前置条件。
+
+    发现：九个包的 error code **此前全部没有接上 sentinel**，任何 RPC 边界上每个
+    错误都会变成 `CodeInternal`——正是第 3.8 节记在 rank 名下的那条缺陷。两处例外
+    要说清：`chat` 与 `global` 各有一张手写的 `errors.Is` 映射表，第一次审计的 grep
+    没匹配到。
+
+    改法：把 sentinel 本身变成 `errcode.Define(...)`，于是 `errcode.ClientError` 穿透
+    任意层 `fmt.Errorf` 找到 code，**所有调用点零改动**。那两张手写表删掉——逐
+    sentinel 的表是第二份清单，新增的错误会从上面静默掉下去。仍需函数的唯一理由是
+    **外部 sentinel**（`versionstore.ErrConflict` 不带本包 code，而 CAS 耗尽是调用方
+    能据以重试的真实结果）。
+
+    每个包的 `CodeStoreFailed` 都删了：未分类的错误诚实地报 `CodeInternal`，
+    为任何未分类的 bug 回答"存储失败"是把猜测当成诊断。`directory` 补了
+    530101-530106 段（它此前只有 sentinel、零 code）。`global` 段里留一个**有文档的
+    洞 570111**——活动码不向下重编号，因为它们在已发布版本里可观测，改值会破坏按码
+    匹配的客户端。
+
+12. **剩余：`client.go` / `rpc.go` / `admin.go`**（跨进程消费面）。未开始。
+    响应信封的填充已就绪：每个包的 `Error(err) (int32, string)` 与 kit
+    `servicerpc.Error` 的约定一致。
 
 ## 八、验收标准
 
