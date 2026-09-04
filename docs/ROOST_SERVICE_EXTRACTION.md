@@ -475,6 +475,30 @@ roost-service/
    的注入时钟不一致，导致 Service 用固定时钟（每个测试、以及任何回放/补投任务）时
    每封信封写下去就已过期。
 
+10. **装配面：每个服务一个 `app.Mod`**。✅ 已完成。第九节说的"业务逻辑包 + 一个
+    `app.Mod`（注册 capability）"是让这些包**在进程内可用**的最小充分条件；
+    `client.go`/`rpc.go` 只有跨进程消费才需要，因此排在后面。
+
+    实施中一条**设计判断**值得记下来：Mod 只能拥有**基建接线**（Redis 客户端来自
+    registry、key 前缀与 TTL 来自配置）。凡是配置给不出的东西都是构造参数、必填、
+    无默认——`account` 的 `IdentityVerifier`、`platform` 的
+    `Verifier`/`PlayerResolver`/`Deliverer`、`session` 的 `Releaser`、`chat` 的
+    `ChannelPolicy`/`SystemAuthenticator`、`directory` 的 `Normalizer`。理由不是风格：
+    第 3.6 节记的 `platform` 鉴权缺失，**缺席本身看起来就像一个默认值**。给这些东西
+    一个默认值，就是把漏洞装回去。
+
+    key 前缀也必填无默认：默认值在每个部署里都是同一个字符串，共用一个 Redis 的两套
+    部署会静默共享状态。这一条由实测保证——before/after 快照回读整个 keyspace，断言
+    每个服务的新 key 落在配置 root 下**且落在自己的子命名空间里**。后半句是必要的：
+    读错别人的 config key 仍然落在 root 下，那条变异一度是绿的。
+
+    另有两条变异一度是绿的，都是测试自身的问题：一条扫 key 用了固定 pattern，会捡到
+    上一次运行的遗留（改成快照差分）；一条是 platform 的会话令牌**自证**——把 payment
+    secret 接到 session secret 的位置，签发与校验仍然自洽，只有对着配置里的值独立验签
+    才抓得到。
+
+11. **剩余：`client.go` / `rpc.go` / `admin.go`**（跨进程消费面）。未开始。
+
 ## 八、验收标准
 
 每一步都要满足，否则不进下一步：
@@ -485,9 +509,9 @@ roost-service/
 - 测试不得使用不求值的替身（rank 的 `Pipeline() -> nil` 让生产路径零覆盖）；
 - 并发类不变量必须有并发测试。cube 的这四个服务里**没有一个** `go func` 或
   `-race` 导向的测试，而它们的严重缺陷全是并发问题；
-- 发布态 `GOWORK=off` 可独立构建；**当前不满足**：卡在 roost-kit 缺少含
-  `versionstore.RetryBackoff` 与 `redis.NewClient` 的规范 tag（远端只有畸形的
-  `1.11.1` 与不含这两个符号的 `v1.11.0`）。go.work 内构建与全部测试正常；
+- 发布态 `GOWORK=off` 可独立构建；**已满足**（core v1.11.2 + kit v1.11.2）：
+  `GOWORK=off` 下 build / vet / vet -tags integration / test / test -race 全绿，
+  真实 Redis 集成测试同样全绿；
 - 每个服务的 errcode 段完整，纯客户端错误不返回 `CodeInternal`。
 
 ## 九、与业务仓的关系
