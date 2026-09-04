@@ -7,7 +7,7 @@ require (
 	github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	go.mongodb.org/mongo-driver/v2 v2.6.0
+	go.mongodb.org/mongo-driver/v2 v2.8.1
 	golang.org/x/net v0.58.0
 	gopkg.in/yaml.v3 v3.0.1
 )
