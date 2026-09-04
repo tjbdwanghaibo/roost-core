@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **go 指令 1.25.0 → 1.27.0**，与 roost-kit / roost-codegen / roost-service 和
+  `go.work` 统一。取 1.27.0 而不是最新的 1.27.1：一个补丁级的 go 指令什么都买不到，
+  还会让停在 1.27.0 的工具链去下载一个新工具链。
+
+  **代价写在明处**：这是每个消费方都要满足的工具链下限。roost-codegen 的
+  `ci/framework-release.yaml` 里声明的 consumer lane 因此从 `[1.25.x, 1.26.x]` 变成
+  `[1.27.x]` —— Go 1.25/1.26 的工具链构建不了本仓，那两条 lane 不是"没测"而是
+  "不可能通过"。
+
 ### Added（`IRedis` 新增方法：对接口的实现者是破坏性变更）
 
 - **`redis.IRedis` 增加 `MGet(ctx, keys ...string) ([][]byte, error)`**：一次往返读多个

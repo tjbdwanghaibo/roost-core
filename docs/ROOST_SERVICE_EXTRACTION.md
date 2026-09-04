@@ -596,6 +596,10 @@ roost-service/
   `GOWORK=off` 下 build / vet / vet -tags integration / test / test -race 全绿，
   真实 Redis 集成测试同样全绿；
 - 每个服务的 errcode 段完整，纯客户端错误不返回 `CodeInternal`；
+- **生成物在发布态可验证。** 生成器以 tool 依赖接在 go.mod 里（roost-codegen
+  v1.12.0），所以 `GOWORK=off` 下 `go generate ./...` / `-check` 都能跑。这条是必要的：
+  否则"提交的生成物是否与接口一致"只能在 workspace 里验证，而发布态是消费方看到的
+  那一份；
 - **集成测试要真的跑起来。** `integration/` 没有 `REDIS_ADDR` 时全部 `t.Skip`，
   于是"`go test -tags integration` 显示 ok"可以是完全没跑。第 12 步就是因为这个
   抓到一件事：四个包里断言**具体类型**的集成子测试长期"绿着"，真的连上 Redis 那天
