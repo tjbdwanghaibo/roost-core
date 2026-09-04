@@ -516,9 +516,71 @@ roost-service/
     洞 570111**——活动码不向下重编号，因为它们在已发布版本里可观测，改值会破坏按码
     匹配的客户端。
 
-12. **剩余：`client.go` / `rpc.go` / `admin.go`**（跨进程消费面）。未开始。
-    响应信封的填充已就绪：每个包的 `Error(err) (int32, string)` 与 kit
-    `servicerpc.Error` 的约定一致。
+12. **跨进程面：接口 + 生成的传输层**。✅ 已完成（九个服务，`directory` 故意除外）。
+
+    原计划写的是"每个包手写 `client.go` / `rpc.go`"。**这条被两次修正推翻了**，
+    两次都是用户提出来的，都对：
+
+    - 第一次：*"之前的 core 中 bus 没有 client 的概念吗？还需要再重新造一个 rpc 和
+      client 吗？"* —— 不需要。`bus.IBus` 已经有
+      `Call`/`CallTo`/`CallWithTimeout`/`CallAsync`/`HandleRpc`，`kit/servicerpc` 已经
+      有带 `ResponseStatusProvider` 和 `KeyAffinityPicker` 的通用 `BusClient`。这一步
+      要做的不是造传输层，是**在既有传输层上定契约**。
+    - 第二次：*"手写的格式符合预期，但我希望有个 codegen"* —— mail 那一份手写的四件套
+      成了参照实现，然后由 `roost-codegen` 的 **`servicerpc` 生成器**从**手写的接口
+      本身**生成（不另立 def 文件）：线上类型、handler 注册、打字的 client、`Server`、
+      `ClientMod`、capability 包装。手写一遍再生成，比直接写生成器好，因为参照实现
+      是拿来对比的基准。
+
+    从接口生成，而不是从一份单独的 IDL 生成，是这个生成器唯一值得存在的理由：它省的
+    打字量不多，但让**接口与传输层漂移在结构上不可能**，而不是可被检测到。
+
+    还有一条计划里没有的**结构后果**：`registry` 里放的不能是具体类型。`Value:
+    mail.Mail(service)` 这种调用点转换**不管用**——Go 存进 `any` 的动态类型仍然是
+    `*Service`，`app.Lookup[*mail.Service]` 照样成功。所以 capability 是一个**包装
+    类型**，只满足接口。这一条由九个包一起断言（接口能查到、具体类型查不到），反向
+    变异确认变红。
+
+    接口刻意比进程内 API 小，每个省略都有理由；两条最有信息量的省略不是我定的，是
+    生成器的规则**顶出来的**：
+
+    - `platform.ValidateSession` 没有 `ctx`。生成器要求首参是 `context.Context`，于是
+      它自动落在接口外——而这个"限制"恰好是对的：它不做任何 I/O，只用本进程已有的
+      密钥重算一个 MAC，做成一次往返意味着全集群的会话校验排在一个进程后面。
+    - `chat.ChannelRef` 的 key 字段是故意未导出的（ref 只能来自 `Resolve`），生成器
+      按"未导出字段"点名拒绝并指出是 `ref.key`。它根本过不了总线：任何 codec 都会
+      静默丢掉 key，对面拿到的 ref 指向空而不是报错。
+
+    每个服务手写一个 `run(ctx)` 钩子，"没有周期性工作"也要显式写出来。这条的价值在
+    写下来之后才显出来：`match`/`session` 的过期扫描、`platform` 的发货重试、`chat`
+    的保留期裁剪、`global/activity` 的宽限窗推进——**四个服务此前都有"写了字段但全
+    代码库没人读"的截止时间**，这正是第 3.9 节那条模式。而 `rank`/`account`/`global`
+    答"没有"的理由三条各不相同，其中 `global` 的最反直觉：过期租约不是"被占着"，
+    而且删版本化 key 会让版本从 1 重来，续约要过的 fence 就变成跟一个刚归零的版本
+    比大小。
+
+13. **`global` 拆成两个包**。✅ 已完成，破坏性。
+
+    这一步计划里没有，是生成器顶出来的：生成文件在包级别声明十几个固定名字，一个包
+    里两个被标记的接口就是每个都声明两次。而这条规则只是把一件本文第六节就写下的事
+    说出来——`app.Service` **每进程一个**，所以 `global` 那两个 capability
+    （`service.global` / `service.global.activity`）从来就是两个独立部署的东西。
+
+    拆的时候确认了它们**不共享任何类型、任何 store**：活动侧一个 routing 符号都没用。
+    也就是说这个包一直是两个包住在一起。
+
+    顺带修掉两处历史包袱：`global` 错误码段在 570111 的"永久的洞"——那个洞完全是两个
+    服务从一个号段发号造成的，现在两边各自连续（5701xx / 6201xx）；以及"Mod 叫什么"
+    和"它发布什么"重新变成一件事（原先一个 Mod 发两个 capability，活动那个只能写成
+    一行字面量）。
+
+14. **剩余：`admin.go`**（运维面）。未开始。
+
+    需要它的地方是真实存在的运维死路，不是补齐对称性：`platform` 里尝试耗尽的订单
+    （玩家付了钱、任何重试都不会发货）、`session` 释放失败后残留的 claim、`mail` 满
+    了的邮箱、`global` 失效的租约、`global/activity` 里 audit 溢出的活动。这些都是
+    "只有人能决定怎么办"的状态，而它们现在**在接口外**——这是对的（同一条总线上的
+    任何进程都不该能关服、能抹掉一个排行榜），但也意味着必须另有一条路能到。
 
 ## 八、验收标准
 
@@ -533,7 +595,13 @@ roost-service/
 - 发布态 `GOWORK=off` 可独立构建；**已满足**（core v1.11.2 + kit v1.11.2）：
   `GOWORK=off` 下 build / vet / vet -tags integration / test / test -race 全绿，
   真实 Redis 集成测试同样全绿；
-- 每个服务的 errcode 段完整，纯客户端错误不返回 `CodeInternal`。
+- 每个服务的 errcode 段完整，纯客户端错误不返回 `CodeInternal`；
+- **集成测试要真的跑起来。** `integration/` 没有 `REDIS_ADDR` 时全部 `t.Skip`，
+  于是"`go test -tags integration` 显示 ok"可以是完全没跑。第 12 步就是因为这个
+  抓到一件事：四个包里断言**具体类型**的集成子测试长期"绿着"，真的连上 Redis 那天
+  同时红掉四条。所以验收命令是
+  `REDIS_ADDR=... go test -race -tags integration ./integration/`，并且要确认
+  测试数不是零。
 
 ## 九、与业务仓的关系
 
