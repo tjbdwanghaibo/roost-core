@@ -131,6 +131,21 @@ func (r *reliableFakeRedis) Get(_ context.Context, key string) ([]byte, error) {
 	}
 	return append([]byte(nil), value...), nil
 }
+
+// MGet evaluates against the same map Get reads: one element per key, nil for
+// absent ones.
+func (r *reliableFakeRedis) MGet(_ context.Context, keys ...string) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, len(keys))
+	for index, key := range keys {
+		if value, ok := r.values[key]; ok {
+			out[index] = append([]byte(nil), value...)
+		}
+	}
+	return out, nil
+}
 func (r *reliableFakeRedis) Set(_ context.Context, key string, value any, expiration time.Duration) error {
 	r.values[key] = []byte("")
 	r.expire[key] = expiration

@@ -9,6 +9,23 @@ import (
 type IRedis interface {
 	// --- String/KV ---
 	Get(ctx context.Context, key string) ([]byte, error)
+	// MGet reads several keys in ONE round trip.
+	//
+	// The result is POSITIONAL: len(result) always equals len(keys), and a nil
+	// element means that key is absent. It is a slice rather than a map on
+	// purpose — a map would omit missing keys, and then a reply that came back
+	// short for any other reason would be indistinguishable from "those keys
+	// were not there". A caller that can compare lengths can detect a
+	// truncated read; one holding a map cannot.
+	//
+	// Zero keys returns an empty result and makes NO round trip. This is part
+	// of the contract because `MGET` with no arguments is an error in Redis,
+	// so an implementation that passed the empty case through would fail on
+	// an ordinary empty page.
+	//
+	// Unlike Get, an absent key is not ErrNil: with several keys, absence is a
+	// per-element outcome and not a call-level one.
+	MGet(ctx context.Context, keys ...string) ([][]byte, error)
 	Set(ctx context.Context, key string, value any, expiration time.Duration) error
 	SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
 	Del(ctx context.Context, keys ...string) (int64, error)

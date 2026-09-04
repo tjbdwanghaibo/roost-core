@@ -457,6 +457,24 @@ roost-service/
    完全不独占（零值的 run id 是 `""`，看起来像一个指向不存在 run 的孤儿 claim，于是每
    个竞争者都"解决"掉一个活着的 claim 并接手）。已在接口写明并用测试钉住两个实现。
 
+9. **存储后端 + `integration/`**。✅ 已完成。计划外的收获是一条**判断修正**：
+   第六节把 `redis_store.go` 列为每个包都要写的文件，实际上**七个包一行都不用写**
+   ——它们的状态就是 `versionstore.Store[K,V]`，kit 的 `NewRedisStore` 就是该契约的
+   生产实现。每个包只加一个薄构造器把它装起来，零存储逻辑。
+
+   真正需要写后端的只有两处，都不是 versionstore 能表达的：`rank` 的 sorted set
+   （早已完成），和 `mail` 的 `EnvelopeStore`——信封写一次不再改、读路径是批量。
+
+   薄构造器唯一拥有的职责是 **key 命名空间**，这一条由 `integration/` 实测：驱动
+   九个包，`SCAN` 回读活 keyspace，断言 19 个声明的命名空间各自恰好收到写。十条
+   "故意撞前缀"的变异全部变红——其中一条最初是绿的，因为 account 的 `acct:` 与
+   `role:` 撞在一起也不冲突（一个 key 是字符串账号 ID、另一个是数字 playerID，
+   **只是恰好格式不同**）。这既是潜在隐患，也暴露命名空间测试当时只覆盖三个包。
+
+   另修一处自己的缺陷：`EnvelopeStore` 的 key TTL 用 `time.Until` 读墙钟，与 Service
+   的注入时钟不一致，导致 Service 用固定时钟（每个测试、以及任何回放/补投任务）时
+   每封信封写下去就已过期。
+
 ## 八、验收标准
 
 每一步都要满足，否则不进下一步：
@@ -467,7 +485,9 @@ roost-service/
 - 测试不得使用不求值的替身（rank 的 `Pipeline() -> nil` 让生产路径零覆盖）；
 - 并发类不变量必须有并发测试。cube 的这四个服务里**没有一个** `go func` 或
   `-race` 导向的测试，而它们的严重缺陷全是并发问题；
-- 发布态 `GOWORK=off` 可独立构建；
+- 发布态 `GOWORK=off` 可独立构建；**当前不满足**：卡在 roost-kit 缺少含
+  `versionstore.RetryBackoff` 与 `redis.NewClient` 的规范 tag（远端只有畸形的
+  `1.11.1` 与不含这两个符号的 `v1.11.0`）。go.work 内构建与全部测试正常；
 - 每个服务的 errcode 段完整，纯客户端错误不返回 `CodeInternal`。
 
 ## 九、与业务仓的关系

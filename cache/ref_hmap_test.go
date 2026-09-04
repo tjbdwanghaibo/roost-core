@@ -272,6 +272,22 @@ func (r *refHMapFakeRedis) Get(_ context.Context, key string) ([]byte, error) {
 	}
 	return []byte(value), nil
 }
+
+// MGet evaluates against the same map Get reads, and returns one element per
+// key with nil for absent ones. A double that returned an empty slice would
+// satisfy the interface and make every batch read look like a miss.
+func (r *refHMapFakeRedis) MGet(_ context.Context, keys ...string) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, len(keys))
+	for index, key := range keys {
+		if value, ok := r.kv[key]; ok {
+			out[index] = []byte(value)
+		}
+	}
+	return out, nil
+}
 func (r *refHMapFakeRedis) Set(_ context.Context, key string, value any, expiration time.Duration) error {
 	r.kv[key] = toRefHMapFakeString(value)
 	if expiration > 0 {

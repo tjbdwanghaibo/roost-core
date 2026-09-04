@@ -178,7 +178,17 @@ func newFakeRedis() *fakeRedis {
 	}
 }
 
-func (r *fakeRedis) Get(context.Context, string) ([]byte, error)           { return nil, fredis.ErrNil }
+func (r *fakeRedis) Get(context.Context, string) ([]byte, error) { return nil, fredis.ErrNil }
+
+// This double stores lists only, so every key is absent to a value read. MGet
+// still returns one element per key, because the contract is positional and a
+// caller comparing lengths must get a usable answer.
+func (r *fakeRedis) MGet(_ context.Context, keys ...string) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	return make([][]byte, len(keys)), nil
+}
 func (r *fakeRedis) Set(context.Context, string, any, time.Duration) error { return nil }
 func (r *fakeRedis) SetNX(context.Context, string, any, time.Duration) (bool, error) {
 	return false, nil
