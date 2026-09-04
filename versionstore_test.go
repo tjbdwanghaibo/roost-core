@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -201,20 +202,53 @@ func TestConcurrentUpdatesLoseNothing(t *testing.T) {
 	forEachStore(t, func(t *testing.T, store Store[string, counter]) {
 		ctx := context.Background()
 		const writers, perWriter = 8, 25
+		// A caller-level retry ceiling, so a store that ALWAYS conflicts still
+		// fails this test rather than spinning.
+		const maxCallerRetries = 200
 
-		var wait sync.WaitGroup
+		var (
+			wait      sync.WaitGroup
+			conflicts atomic.Int64
+		)
 		errs := make([]error, writers)
 		for writer := 0; writer < writers; writer++ {
 			wait.Add(1)
 			go func(index int) {
 				defer wait.Done()
 				for i := 0; i < perWriter; i++ {
-					if _, _, err := store.Update(ctx, "a", func(c counter, _ bool) (counter, bool, error) {
-						c.Total++
-						return c, true, nil
-					}); err != nil {
-						errs[index] = err
-						return
+					// Retry on ErrConflict, because that is what a caller does.
+					//
+					// The attempt budget inside Update is a BOUND, not a
+					// guarantee, and giving up after it is a reported outcome —
+					// a distinguishable error — not a lost update. So asserting
+					// that no writer ever reaches the bound would be a
+					// throughput claim wearing a correctness claim's name, and
+					// it is one that does not hold under -race, where every
+					// goroutine runs slowly enough for eight writers to lose
+					// eight times in a row on a single key. That version of this
+					// test failed 6 runs in 8 under -race and shipped in v1.11.0
+					// doing so.
+					//
+					// What is actually under test is below: after all the work,
+					// the total and the version are EXACT. A dropped update or
+					// a double count fails that, whatever the timing.
+					for attempt := 0; ; attempt++ {
+						_, _, err := store.Update(ctx, "a", func(c counter, _ bool) (counter, bool, error) {
+							c.Total++
+							return c, true, nil
+						})
+						if err == nil {
+							break
+						}
+						if !errors.Is(err, ErrConflict) {
+							errs[index] = err
+							return
+						}
+						conflicts.Add(1)
+						if attempt >= maxCallerRetries {
+							errs[index] = fmt.Errorf("gave up after %d caller retries: %w", attempt, err)
+							return
+						}
 					}
 				}
 			}(writer)
@@ -230,10 +264,12 @@ func TestConcurrentUpdatesLoseNothing(t *testing.T) {
 			t.Fatalf("get: found=%v err=%v", found, err)
 		}
 		if stored.Value.Total != writers*perWriter {
-			t.Fatalf("total = %d, want %d: updates were lost", stored.Value.Total, writers*perWriter)
+			t.Fatalf("total = %d, want %d: updates were lost (%d conflicts retried)",
+				stored.Value.Total, writers*perWriter, conflicts.Load())
 		}
 		if stored.Version != uint64(writers*perWriter) {
-			t.Fatalf("version = %d, want %d: a write did not bump the version", stored.Version, writers*perWriter)
+			t.Fatalf("version = %d, want %d: a write did not bump the version",
+				stored.Version, writers*perWriter)
 		}
 	})
 }
