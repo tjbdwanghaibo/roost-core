@@ -71,6 +71,52 @@ func (c *redisClient) Get(ctx context.Context, key string) ([]byte, error) {
 	return val, err
 }
 
+// MGet reads several keys in one round trip.
+//
+// Two details of the contract are handled here rather than left to callers.
+//
+// Zero keys returns early WITHOUT a round trip, because `MGET` with no
+// arguments is an error in Redis — a caller paging an empty result should not
+// have to special-case that, and one that forgot to would fail on an ordinary
+// empty page.
+//
+// The result is positional and always as long as keys: go-redis returns
+// `[]any` with a nil for each absent key, and that nil is preserved as a nil
+// element rather than dropped. Dropping it would shorten the result, and a
+// short result is indistinguishable from a truncated read — which is the
+// silent-loss failure this shape exists to make detectable.
+func (c *redisClient) MGet(ctx context.Context, keys ...string) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	values, err := c.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != len(keys) {
+		// An assertion, not a branch: a conforming driver always returns one
+		// element per key, so no test can reach this against a real Redis.
+		// It is here because the alternative to failing on a driver bug is
+		// returning a result whose positions no longer line up with the keys
+		// the caller asked for — misaligned data rather than an error.
+		return nil, fmt.Errorf("redis: MGET returned %d values for %d keys", len(values), len(keys))
+	}
+	out := make([][]byte, len(keys))
+	for index, value := range values {
+		switch typed := value.(type) {
+		case nil:
+			// Absent. Left as a nil element, deliberately.
+		case string:
+			out[index] = []byte(typed)
+		case []byte:
+			out[index] = append([]byte(nil), typed...)
+		default:
+			return nil, fmt.Errorf("redis: MGET element %d is %T, want a string", index, value)
+		}
+	}
+	return out, nil
+}
+
 func (c *redisClient) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
 	return c.rdb.Set(ctx, key, value, expiration).Err()
 }
