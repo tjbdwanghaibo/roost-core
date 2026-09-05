@@ -140,13 +140,14 @@
 | kit | `syncstream` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
 | kit | `versionstore` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 
-### roost-service（12 包）
+### roost-service（12 包 + CI 工作流）
 
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| service | `（根：CI 工作流）` | — | 09-05 U-0014 | — | — | — | — | — | — |
 | service | `account` | 未审 | 09-04 U-0005 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `chat` | 未审 | 09-04 U-0007 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `directory` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `directory` | 未审 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `global` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `global/activity` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `mail` | 未审 | 09-04 U-0006 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
@@ -155,7 +156,7 @@
 | service | `rank` | 未审 | 09-04 U-0004 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `servicemetrics` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `servicemods` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `session` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `session` | 未审 | 09-05 U-0017（回退验证） | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 
 ### roost-skill（5 包）
 
@@ -171,6 +172,7 @@
 
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| codegen | `（根：CI 工作流 + ci/）` | — | — | — | 09-05 U-0015 | — | — | — | — |
 | codegen | `internal/attribute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/cfggen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/dao` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -183,7 +185,7 @@
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/roost` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/roost` | — | 09-05 U-0015（部署模板） | — | 09-05 U-0015 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/webroute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -195,14 +197,14 @@
 | ~~B-01~~ | `core/mirror` + `kit/syncstream` 的 SyncMsg 发布路径 | C8 | ROADMAP M1 状态表 | **已完成 → U-0009**：三条发布路径统一经 `syncbus.DeliveryIDs` |
 | ~~B-02~~ | `kit/remoteentity/versioned_lock.go` | C8 | ROADMAP M4 | **已完成 → U-0011**：§4.2 第 1–5 项原本已实现（09-04 关键词误判），第 6、7 项与两条缺失测试在 U-0011 补齐 |
 | B-10 | `kit/dataengine` Remote commit 的 fence 竞争 | C8 | FEATURE_LOGIC §4.2 第五条测试 | "高 fence 与低 fence 的 Mongo 提交竞争最多一个成功，失败方得到版本冲突并进入既有隔离流程"尚无测试；需要真实 Mongo 副本集，放进 integration 套件（`dataengine/*_integration_test.go`） |
-| B-03 | `service/mail`、`service/rank`、`service/integration` 的 `REDIS_ADDR` 门控测试 | C2 | 09-04 巡检 | 3 处 `t.Skip` 改 `//go:build integration` 标签并进 CI；另 8 处 `twoDistinctSentinels` 的 skip 是防御分支，各包都有 ≥2 个 sentinel，不会触发，不算洞 |
+| ~~B-03~~ | `service/mail`、`service/rank`、`service/integration` 的 `REDIS_ADDR` 门控测试 | C2 | 09-04 巡检 | **已完成 → U-0014**：三处早已带 `//go:build integration` 标签，缺的是设置 `REDIS_ADDR` 的自动化——roost-service 此前没有任何 CI，32 个测试靠 skip 保绿。新建工作流，integration 段把含 `REDIS_ADDR` 字样的 skip 判失败；另 8 处 `twoDistinctSentinels` 的 skip 是防御分支，各包都有 ≥2 个 sentinel，不会触发，不算洞 |
 | ~~B-04~~ | `kit` integration 套件进 CI | 流程 | AUDIT F8 / FEATURE_LOGIC 阶段 E | **已完成 → U-0010**（job 已写入 `ci.yml`，actionlint 通过；首次 GitHub 运行结果待确认） |
 | ~~B-05~~ | M2 M3 M5 M6 M7 M8 M9 各一单元 | 对应类 | ROADMAP 状态表 | **已完成 → U-0012**：15 处回退，9 处已有测试红，6 处补测试后红 |
-| B-06 | `roost-skill` HEAD 领先 v1.10.0 三个 commit 且仍依赖 core v1.10.0 | 发布链 | 09-04 巡检 | 发布链的 skill 层未闭合；下次 tag 前先升 core 依赖 |
+| ~~B-06~~ | `roost-skill` HEAD 领先 v1.10.0 三个 commit 且仍依赖 core v1.10.0 | 发布链 | 09-04 巡检 | **已完成**（09-05 收尾）：skill 升 core v1.12.0 并打 v1.10.2 / v1.10.3，production-gates 绿 |
 | B-08 | `service/account` `CreateRole` 提交尾部的两处失败分支 | C8 | U-0005 观察 | `Names.Commit` 失败直接返回，不回滚：角色已插入、名字 claim 到期后失去保留，之后别的账号可占用同名；`Slots.Update` 失败同样返回错误但角色已存在，客户端重试得到 `ErrRoleLimit`。两条分支都没有测试（没有会失败的 directory 替身）。修法要改提交顺序或加重试/修复路径，超出单个 C2 单元 |
 | B-09 | `service/chat/server_run.go` `pruneChannels`、`service/match/server_run.go` `sweepQueues` | C6 | U-0007 / U-0008 观察 | 两个 run 钩子都返回硬编码 `nil` 且没有任何配置入口：默认部署里 chat 的 `Prune` 与 match 的 `Sweep` 永远不被调用，`retention_age` / `ticket_ttl` 的后台执行形同虚设（match 的过期仍在每次变更与读取时内联执行，所以票据不会永远等待；chat 的年龄保留则完全没有执行者）——正是这两个包自己批评的"看起来存在、什么也不做的机制"。需要由部署注入的枚举 provider，属设计改动 |
 | ~~B-11~~ | `kit/nestwal` committer | C8 | 09-05 CI 巡检 | **已完成 → U-0013**。登记时的判断（"测试断言了契约不保证的性质"）**不对**：读代码发现 WAL 只串行化了 Replay 的读取，运行循环与 `Flush` 的两条 pass 在"读完 → ack 落地"窗口重叠会重复 apply——是实现的竞争窗口，测试是对的。加 `replayMu` 覆盖整条 pass |
-| B-12 | roost-codegen CI 三处债 | 流程 | 09-05 CI 巡检（v1.12.1 起即红） | ① `quality` 的 actionlint/shellcheck 对 `release.yml` 第 50/114/196 行报 SC2251/SC2035；② `generated-project-release-smoke` 的 shellcheck 对生成的 `deploy/*/*.sh` 报 SC1007（`CDPATH= cd`）/SC2194；③ `framework-release` 的 consumer-acceptance 在生成工程目录里跑 actionlint，因非 git 仓库报 "no project was found"。三处都不是本轮改动引入；本轮的清单修复让 ③ 前面的 gate 首次通过 |
+| ~~B-12~~ | roost-codegen CI 三处债 | 流程 | 09-05 CI 巡检（v1.12.1 起即红） | **已完成 → U-0015**：登记的三处之外，逐轮推进又暴露四处（compose 短语法卷、minimum 集与生成器下限脱节、upgrade-compat 历史版本写 cube-* 路径、kustomize 祖先布局）加 Dockerfile Go 版本，共八处，四条工作流全绿。原登记：① `quality` 的 actionlint/shellcheck 对 `release.yml` 第 50/114/196 行报 SC2251/SC2035；② `generated-project-release-smoke` 的 shellcheck 对生成的 `deploy/*/*.sh` 报 SC1007（`CDPATH= cd`）/SC2194；③ `framework-release` 的 consumer-acceptance 在生成工程目录里跑 actionlint，因非 git 仓库报 "no project was found"。三处都不是本轮改动引入；本轮的清单修复让 ③ 前面的 gate 首次通过 |
 | B-13 | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
 | B-07 | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
 
@@ -211,6 +213,10 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0017 | 2026-09-05 | roost-service `session`（B-07，回退验证） | C2 | 六条注释承诺逐项临时回退：四条已有测试变红（失败的释放保持 pending、过期在 sweep 前可读、空 run id 拒绝、…）；`releaseClaim` 的 run id 守卫回退后全绿但与版本校验删除等价，不算洞；**`Enter` 在账本 `Create` 失败时返回错误**回退为返回成功后全绿——是洞 | `TestEnterReportsALostLedgerWriteInsteadOfSuccess`（`ledgerThatFailsOnce` 替身） | 补测试后回退该处变红：`Enter answered success although the replay ledger was never written`；`-race` 绿 | — |
+| U-0016 | 2026-09-05 | roost-service `directory`（B-07，7 个文件全部扫描） | C3 | 1：`Reserve` / `Commit` 在 `versionstore.Update` 回调内上报 `accepted` / `replayed` / `refused`；kit 契约允许 Mutate 多次调用，内存后端从不重试所以指标测试全绿；换"先输一次 CAS"的替身，一次预留 `accepted:reserve=2` | `TestAContendedWriteIsAcceptedOnce`（`contendedStore`：先对当前值跑一遍回调再委托） | 修复前 `accepted=2, replayed=2`；回调改为只做决定、Update 返回后上报一次 → 全 1；`-race` 绿。service CI 首轮 integration 绿 | T-27 |
+| U-0015 | 2026-09-05 | roost-codegen 四条工作流 + 部署模板（B-12） | C4 / 流程 | 8：① `release.yml` 三处 `! grep` 独立语句不受 errexit 约束（SC2251）——发布卫生检查从未真正失败过；② `sha256sum *.tar.gz` 裸通配；③ `framework-compat` minimum 集钉 v1.8.0 而生成器下限 v1.10.0；④ `upgrade-compat` 用写 cube-* 路径的 v1.9.0/v1.10.0 造历史工程，永远解析不了；⑤ consumer-acceptance 在无 `.git` 的生成工程跑 actionlint；⑥ 生成 compose 用短语法挂配置，相对 `ROOST_CONFIG_ROOT` 被当命名卷；⑦ 六个部署脚本 SC1007/SC2194；⑧ kustomize v5.7+ 拒绝 base 是 overlay 祖先的布局，且 sync 认不出无头的旧清单 → `removed=0`；⑨ Dockerfile `golang:1.25` 构建 `go 1.27.0` 工程 | `deploy_hygiene_test.go` 十一条：工作流 minimum 集 == `minimumVersions`、矩阵 ≥ v1.11.0、release.yml 无裸 `!`/裸通配、compose 显式 bind、绝对配置根、脚本无已知 shellcheck 项（有 shellcheck 则真跑）、base 非祖先（有 kubectl 则真渲染两个 overlay）、老布局 sync 后旧清单消失而手写文件保留、Go 版本钉本仓 go.mod | 每条先红后绿；远端逐轮：ci 三红因 → 二 → 一 → 绿，framework-compat 六格绿，upgrade-compat 绿。本地 `kubectl kustomize` 复现 cycle detected 并在修复后渲染 9 个对象 | T-23 T-24 T-25 |
+| U-0014 | 2026-09-05 | roost-service `.github/workflows/ci.yml`（新建，B-03） | C2 / 流程 | 1：仓库无任何 CI；mail / rank / integration 三处 Redis 套件带标签且以 `REDIS_ADDR` 门控，无人设置 → 32 个测试永远 skip。首轮远端又暴露：`-race` 步骤多包并行共用一个 Redis，`TestEveryModWritesUnderItsConfiguredPrefix` 把 mail 包的键当越界 | 根目录 `ci_test.go` 钉工作流四事实；integration 段对含 `REDIS_ADDR` 的 skip 判失败 | 本地 `-tags integration` 无 addr 计 32 skip；远端 unit / integration / release-hygiene 三段绿；`-p 1` 后 `-race` 步骤绿 | T-22 T-26 |
 | U-0013 | 2026-09-05 | roost-kit `nestwal` committer（B-11） | C8 | 1：运行循环与 `Flush` 各自调用 `replayPass`，WAL 只串行化读取，一条 pass 在另一条"读完、未 ack"的窗口进入会从旧 fence 重读并再次 apply。契约允许（at-least-once）但是纯浪费的竞争，也是 CI 偶发 `apply calls=2` 的根因。登记 B-11 时判为"测试过严"是错的 | `TestConcurrentReplayPassesApplyEachRecordOnce`：构造期 seam 把第一条 pass 停在读与 ack 之间，放第二条进去 | 修复前确定性 `apply calls=3, want 1`（含被唤醒的循环 pass）；加 `replayMu` 后 1；`-race`、`-count=3`、单测 ×10 全绿。中途 seam 先做成运行期字段触发 race detector（测试写 / 循环读），改为构造期 option | T-21 |
 | U-0012 | 2026-09-05 | FEATURE_LOGIC M2/M3/M5–M9 的实现（core mirror/configdata/lifecycle，kit saga/nats/etcd/redis/mongo） | C2（回退验证） | 15 处逐项临时回退：9 处已有测试变红；6 处无一变红——redis distLock 的 TTL 校验、SETNX 与 Release 回复丢失后的 uncertain 态、per-acquisition token；nats nil handler；mongo 未知 WriteModel。另发现 `TestInvokeNatsHandlerContainsPanic` 为空断言（置一个永远为 true 的标志） | 新增 redis `lock_state_test.go`（4 条 + `scriptedRedis` 求值型替身）、nats 2 条、mongo 1 条；空测试改为断言 `nats.subscription.handler_panic.total` +1 | 补测试后重跑 6 处回退全部变红；kit 28 包绿 | T-20 |
 | U-0011 | 2026-09-04 | roost-kit `remoteentity`（B-02 / M4） | C4（鸭子类型代替公开契约）+ 缺测试 | 2：① `batch.go` 用 `interface{ Fence() uint64 }` 鸭子类型而非 core 已公开的 `redis.IFencedVersionedLock`；无 fence 的锁工厂被接受，直到每次共享操作才以 `ErrRemoteFenced` 拒绝 ② §4.2 要求的"第一代迟到 unlock 不得删除第二代 owner"没有测试（机制正确） | `TestManagerRefusesALockFactoryWithoutFences`（构造 + 创建两处拒绝）、`TestStaleFirstGenerationUnlockCannotEvictSecondOwner` | ① 修复前 `a wrapper was created over an unfenced lock` 红，改公开契约 + 构造探针 + Provide 失败后绿 ② 新测试直接绿（补测试）。kit 全量 build、remoteentity 测试与 vet 绿 | T-19 |
@@ -259,4 +265,16 @@
 替身：仅 kit `MemoryStore` 与共享 `servicemetrics.Recorder`，无自写 fake。发现 ① 正是 MemoryStore 与 RedisStore 的语义差异（交出存储值 vs 每次解码）暴露出来的：match 没有像 chat 那样在回调开头 `clone()`。
 `match_test.go` 22 个测试全部有断言、无 `t.Skip`；并发测试 2 个；`TestResolvedTicketsLeaveTheWaitingList` 直接断言内部不变量并写明原因。`_ = expiring` / `_ = live` / `_ = fmt.Sprint()` 三处死变量（观察）。
 生产代码观察（不修）：`Enqueue` 回放命中已终态票据时按原样返回（同请求同结果，可接受）；`Refused` 计数在回调内但错误路径不重试，不会重复计数；`Enqueue` 成功后额外一次 `QueueLength` 读取用于深度指标；`Ticket()` 读路径把已到期票据报为 expired 而不落库（注释已说明）。
+
+### U-0015 扫描记录
+
+工作流四条（ci / framework-compat / upgrade-compat / release）与 `ci/framework-release.yaml` 逐步骤读过。未修的观察：`release.yml` 的 `binary-smoke` 三平台矩阵与 `consumer-acceptance` 仍以 tag 触发，本轮没有 tag 所以远端未验证（B-13 打 tag 时看）；`security.yml` 一直绿；`nightly.yml` 未读。生成器侧：`render_cicd.go` 生成的 CI 与本仓 `ci.yml` 的 smoke 步骤是同一组命令的两份手抄（compose / kustomize / shellcheck），本轮两边同改——是 C4 候选，未建单元。sync 的"过时产物删除"只认 `Code generated` 头与 `isGeneratedData` 路径，k8s 清单此前无头，是本次 `removed=0` 的根因；已给 base/ 清单加头，旧位置按固定文件名 + `roost` 命名空间识别。
+
+### U-0016 扫描记录
+
+`directory.go` / `store.go` / `redis_store.go` / `directory_mod.go` 全读。四个不变量对照：Reserve 过期即缺席（Update 内判定，无读-决-写）；Commit 先验 token 再验过期，"提交别人的预留"不可表达；Cancel / Release 版本校验删除，输掉即 no-op 并计数；无 Set。替身仅 kit `MemoryStore` + `servicemetrics.Recorder`，无自写 fake；`directory_test.go` 13 个测试全部断言具体哨兵或计数，并发测试 2 个。跨包扫描（脚本：Update/Create/Mutate 回调体内的 `report.*` / `.Add(`）：account / global / match 的回调内只有 `Refused` 且随错误返回——回调不会重跑，不计重；`.Add(` 全是 `time.Add`。只有 directory 在回调内 `Accepted`。
+
+### U-0017 扫描记录
+
+`session/service.go` 771 行按承诺注释读过 30 处；六条可低成本回退的逐项试：P5 释放失败保持 pending（3 个测试红）、P6 Get 在 sweep 前读为 expired（1 红）、P11 空 run id 拒绝（1 红）、P2 releaseClaim run id 守卫（绿，等价于版本校验，仅影响 `claim.release_not_ours` 计数——观察）、P8 账本写失败返回错误（绿 → 补测试）、P10 输掉 claim 时 discard 本 run（片段出现两次，未回退——观察：`TestAnOwnerRacingItselfGetsOneRun` 是否断言 run 数量待查）。替身：`recordingReleaser` 按资源计成功与尝试并可注入失败次数——是求值型替身，不是宽容桩。
 
