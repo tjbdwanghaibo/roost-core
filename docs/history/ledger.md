@@ -115,7 +115,7 @@
 | kit | `actionflow` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `dataengine` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `dataengine`（U-0025：C4 09-06） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -130,10 +130,10 @@
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `remoteentity` | 09-02 | 09-05 U-0023（真实 Mongo） | 09-02 | 09-04 U-0011 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
+| kit | `remoteentity` | 09-02 | 09-05 U-0023（真实 Mongo） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `saga` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `saga` | 09-02 | 09-02 | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `servicerpc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `spatial` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `statslog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -185,7 +185,7 @@
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/roost` | — | 09-05 U-0015（部署模板） | — | 09-05 U-0015 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle） | — | 09-05 U-0015 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/webroute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -213,6 +213,8 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0026 | 2026-09-06 | roost-codegen `add lifecycle`（game 模板 World + Player 触发） | C2 | 1：每个 Entity 的 lifecycle 文件都声明包级 `FromRegistry`，第二个 Entity 起同包重复声明、编译不过。从未有测试在一个工程里加两个 lifecycle | `TestGameTemplateScaffoldsWorldAndPlayer`：真建模板工程，go/parser 扫 lifecycle 包无重复顶层声明，且含 `PlayerFromRegistry` / `WorldFromRegistry` / `EnsureWorld` | 改为 `<Entity>FromRegistry` 后模板工程 build / vet / `generate --check` 通过；文档与 help 同改。已生成工程的文件是业务所有，不会被改写 | — |
+| U-0025 | 2026-09-06 | roost-kit `dataengine` / `saga` / `remoteentity` Mod 依赖声明（模板 game 进程首次启动触发） | C4 | 3：`DependsOn` 写了 `mods.ModHealth`（Registry 内建项，非 Mod）与 `mods.ModNatsJetStream`（nats Mod 的 capability，非 Mod）；app 按 Mod 名解析 → `unknown mod dependency "health"`。**默认生成的工程（mods 含 nest → dataengine）一个都起不来**；kit 自己的集成测试手工 Init/Provide、不经 app 排序，所以从未发现。与 U-0024 同一类：capability 名当 Mod 名 | kit 根目录 `TestEveryModDependencyNamesAKitMod`：构造全部 14 个 kit Mod，依赖名 ⊆ Mod 名集合 | 回退（stash 三处修复）测试报 5 条；修后绿；kit 全量绿。模板 game 进程对真实 Mongo 副本集 + NATS 集群 + Redis 连续两次启动 `service init` 通过、进程存活（本地环境需清空 JetStream store，否则旧 stream 预留容量触发 "insufficient storage"——环境问题，非缺陷） | T-31 |
 | U-0024 | 2026-09-05 | roost-codegen `internal/servicerpc` 模板（game 模板首次启动暴露） | C4 | 1：生成的 `ClientMod.DependsOn` 返回 `mods.ModBus`——总线 **capability** 名，而 app 按 Mod **名字**解析依赖，没有 Mod 叫 `bus`。任何进程把 `NewClientMod()` 与 nats Mod 装配在一起都在启动时 `unknown mod dependency "bus"`；roost-service 八个客户端全部如此。service 的集成测试手工 Init/Provide、不经 app 排序，所以从未发现 | `TestTheGeneratedClientDependsOnTheModThatPublishesTheBus`（codegen）；`TestEveryClientModDependsOnTheNATSMod`（service，八个客户端） | 修复前模板 game 进程启动即退；改为 `mods.ModNats`、重生成 service 八包后 game 进程带四个 ClientMod 起来并存活，mail / match / chat / account 四个托管子命令各自注册 handler（本地 Redis + NATS）| T-30 |
 | U-0023 | 2026-09-05 | roost-kit `remoteentity` `MongoCommitter`（B-10） | C8 | 0 缺陷：`applyCommit` 的过滤（`_ver`==base 且 `_lock_fence`<=提交 fence）在真实副本集上成立。此前只有 mongotest 假客户端的证据 | `TestRealCompetingFencedCommitsAdmitAtMostOne`（`integration` 标签）：同 base version 高低 fence 并发提交，恰一个成功、败方 `ErrRemoteVersionConflict`；低 fence 在正确版本上仍被拒、当前 fence 通过 | 首跑断言写成 `fmongo.ErrVersionConflict` 变红，committer 层已映射为协议错误，改断言后绿；本地脚本与 kit CI integration job 均绿。本地第二、三次重跑 dataengine 包因 JetStream "insufficient storage" 全红——环境问题，CI 全绿 | — |
 | U-0022 | 2026-09-05 | roost-service `chat` + `match` run 钩子（B-09） | C6 | 2：两个后台钩子遍历一个返回硬编码 `nil` 的方法、无配置入口——chat 的 `retention_age` 没有执行者，match 的 `ticket_ttl` 只有内联兜底 | `TestTheRetentionLoopPrunesTheEnumeratedChannels`、`TestTheExpiryLoopSweepsTheConfiguredQueues`（可调 tick 驱动真实 run 循环）+ 配置解析 fail-closed 两条 | 把 provider 换回硬编码 `nil` 两条循环测试都红（5s 超时）；`-race` 绿；Redis 集成套件绿 | T-29 |
@@ -305,5 +307,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **发布（2026-09-06）**：service v1.5.2（重生成的八个传输层 + U-0019～U-0022）→ codegen 清单 service v1.5.2 → codegen v1.13.3：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿；framework-compat 六格与 upgrade-compat 绿。随之把生成器的版本下限抬到 core / kit v1.12.0、skill v1.10.3、service v1.5.2——roost-service v1.5.x 要求 core / kit v1.12.0，钉旧版本的工程一托管框架服务就解析不了；下限从此是"能整体解析的最老组合"。**遗留**：roost-service go.mod 的 `tool` 指令仍指向 codegen v1.12.1（其模板仍生成 `ModBus` 依赖），下一次 service 发布时对齐到 v1.13.3 并用 `go generate` 复核八个包无 diff。
 
-**待做切片**：② World（进程内单例实体）与 Player 实体脚手架进模板（复用 `add entity` 生成器；World 的单例语义需要在 nest 层给出约束）；③ 生成工程的 QUICKSTART / FIRST_BUSINESS 文档加托管服务一节，`project next` 识别未实现的协作者；④ roost-service 的 `tool` 指令对齐到含 U-0024 的 codegen 版本；⑤ 发布：service v1.5.2（重生成的传输层）→ codegen 清单 service v1.5.2 → codegen v1.13.3。
+**第二切片（2026-09-06，codegen 360386c）已落地**：`-template game` 补 nest，生成 Player / World 两个 Entity 与 lifecycle、`game/lifecycle/world_singleton.go`（`WorldUniqueID = 1`，`EnsureWorld` = GetOrCreate）与在 `Init` 里确保 World 的 game Service。World 的"单例"是进程属性：一个 game 进程一份，首次创建、之后加载，没有 World 不启动。真启动暴露两个装配级缺陷（U-0025 kit、U-0026 codegen），这正是"模板是后续验证载体"的意义。**教训**：三个"装配级"缺陷（U-0024/25/26）都只有真的 `app.Execute()` 才能发现，单元与手工 Init/Provide 的集成测试全部看不见——下一步应把"生成工程真启动"做成 CI 门禁（见待做 ⑥）。
+
+**待做切片**：③ 生成工程的 QUICKSTART / FIRST_BUSINESS 文档加托管服务一节，`project next` 识别未实现的协作者；④ roost-service 的 `tool` 指令对齐到含 U-0024 的 codegen 版本；⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；本轮再发 kit v1.12.2（U-0025）→ codegen 清单 kit v1.12.2 → codegen v1.13.4；⑥ **启动门禁**：在 codegen 的 framework-compat 或 kit 的 integration job 里，对生成的模板工程真的 `game` / `mail` 起进程（Redis + NATS + Mongo 服务容器），断言 `service init` 通过——三个装配级缺陷都只有这一步能抓到。
 
