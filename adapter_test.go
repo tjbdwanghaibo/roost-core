@@ -272,3 +272,42 @@ func (publisher *capturingPublisher) Publish(message *coresyncbus.SyncMsg) error
 	publisher.last = &copyMessage
 	return publisher.err
 }
+
+// Every frame carries its own delivery identity. Without one the JetStream
+// transport keys dedup on (topic, key, sequence, sid, part), and a publisher
+// that restarts and reissues a sequence inside the broker's dedup window
+// collides with its former self: the new frame is dropped as a duplicate,
+// silently. Identity has to come from the publisher instance, not from the
+// stream position.
+func TestFramesCarryDistinctDeliveryIDsAcrossPartsAndPublishers(t *testing.T) {
+	frames := &framePublisher{}
+	packet := corestream.Packet{Stream: corestream.Stream{Topic: "state", Key: 8}, Epoch: 7, Sequence: 1, Payload: bytes.Repeat([]byte("payload-"), 8)}
+	first, err := NewPublisherWithOptions(frames, PublisherOptions{FromSID: 3, MaxFrameBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Publish(packet); err != nil {
+		t.Fatal(err)
+	}
+	// The same process restarted: same sid, same stream, same sequence.
+	second, err := NewPublisherWithOptions(frames, PublisherOptions{FromSID: 3, MaxFrameBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Publish(packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames.messages) < 4 {
+		t.Fatalf("frame count = %d, want at least two fragments per publish", len(frames.messages))
+	}
+	seen := map[string]int{}
+	for index, frame := range frames.messages {
+		if frame.MessageID == "" {
+			t.Fatalf("frame %d (part %d/%d) carries no delivery id", index, frame.Part, frame.Parts)
+		}
+		if prior, dup := seen[frame.MessageID]; dup {
+			t.Fatalf("frames %d and %d share delivery id %q: a restarted publisher collides with itself", prior, index, frame.MessageID)
+		}
+		seen[frame.MessageID] = index
+	}
+}

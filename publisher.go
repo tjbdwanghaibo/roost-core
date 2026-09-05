@@ -49,6 +49,7 @@ type ConfirmedSyncPublisher interface {
 
 type Publisher struct {
 	bus                  coresyncbus.IPublisher
+	ids                  *coresyncbus.DeliveryIDs
 	confirmed            ConfirmedSyncPublisher
 	fromSid              int32
 	onError              ErrorHandler
@@ -102,7 +103,7 @@ func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOption
 		value := *options.ExpectedObserver
 		observer = &value
 	}
-	return &Publisher{bus: bus, confirmed: confirmed, fromSid: options.FromSID, onError: options.OnError, expectedObserver: observer, maxPayloadBytes: options.MaxPayloadBytes, compressionThreshold: options.CompressionThreshold, maxFrameBytes: options.MaxFrameBytes, requireConfirmation: options.RequireConfirmation}, nil
+	return &Publisher{bus: bus, ids: coresyncbus.NewDeliveryIDs("stream"), confirmed: confirmed, fromSid: options.FromSID, onError: options.OnError, expectedObserver: observer, maxPayloadBytes: options.MaxPayloadBytes, compressionThreshold: options.CompressionThreshold, maxFrameBytes: options.MaxFrameBytes, requireConfirmation: options.RequireConfirmation}, nil
 }
 
 func (publisher *Publisher) Publish(packet corestream.Packet) error {
@@ -150,7 +151,10 @@ func (publisher *Publisher) Publish(packet corestream.Packet) error {
 		if end > len(encoded) {
 			end = len(encoded)
 		}
-		message := &coresyncbus.SyncMsg{Topic: packet.Stream.Topic, Key: packet.Stream.Key, Version: int64(packet.Sequence), Data: append([]byte(nil), encoded[start:end]...), FromSid: publisher.fromSid, Part: uint32(part), Parts: uint32(parts), Encoding: encoding, Checksum: checksumText}
+		// Each frame is its own delivery: the identity comes from this publisher
+		// instance, not from the stream position, so a restarted publisher that
+		// reissues a sequence does not collide with its former self at the broker.
+		message := &coresyncbus.SyncMsg{MessageID: publisher.ids.Next(), Topic: packet.Stream.Topic, Key: packet.Stream.Key, Version: int64(packet.Sequence), Data: append([]byte(nil), encoded[start:end]...), FromSid: publisher.fromSid, Part: uint32(part), Parts: uint32(parts), Encoding: encoding, Checksum: checksumText}
 		if err := publisher.publishFrame(message); err != nil {
 			publisher.failures.Add(1)
 			return err
