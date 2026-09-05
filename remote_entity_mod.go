@@ -228,7 +228,8 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 }
 
 func (m *RemoteEntityMod) DependsOn() []app.ModName {
-	dependencies := []app.ModName{mods.ModRedis, mods.ModRoom, mods.ModHealth}
+	// Mods only: health is a registry built-in, not a Mod (roost-codegen U-0025).
+	dependencies := []app.ModName{mods.ModRedis, mods.ModRoom}
 	if m != nil && m.mongoLoader != nil && m.backend == nil {
 		dependencies = append(dependencies, mods.ModMongo)
 	}
