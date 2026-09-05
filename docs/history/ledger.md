@@ -303,5 +303,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **设计选择与理由**：app 的模型是"一个子命令一个 Service"，因此托管服务是独立进程而不是塞进 game 进程；这与 roost-service `examples/split` 的形状一致，部署产物（compose / k8s / shell）随 `services` 自动覆盖每个托管服务。协作者不给宽容默认（拒绝而非放行）是 roost-service 自己的原则。
 
+**发布（2026-09-06）**：service v1.5.2（重生成的八个传输层 + U-0019～U-0022）→ codegen 清单 service v1.5.2 → codegen v1.13.3：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿；framework-compat 六格与 upgrade-compat 绿。随之把生成器的版本下限抬到 core / kit v1.12.0、skill v1.10.3、service v1.5.2——roost-service v1.5.x 要求 core / kit v1.12.0，钉旧版本的工程一托管框架服务就解析不了；下限从此是"能整体解析的最老组合"。**遗留**：roost-service go.mod 的 `tool` 指令仍指向 codegen v1.12.1（其模板仍生成 `ModBus` 依赖），下一次 service 发布时对齐到 v1.13.3 并用 `go generate` 复核八个包无 diff。
+
 **待做切片**：② World（进程内单例实体）与 Player 实体脚手架进模板（复用 `add entity` 生成器；World 的单例语义需要在 nest 层给出约束）；③ 生成工程的 QUICKSTART / FIRST_BUSINESS 文档加托管服务一节，`project next` 识别未实现的协作者；④ roost-service 的 `tool` 指令对齐到含 U-0024 的 codegen 版本；⑤ 发布：service v1.5.2（重生成的传输层）→ codegen 清单 service v1.5.2 → codegen v1.13.3。
 
