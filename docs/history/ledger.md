@@ -130,7 +130,7 @@
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `remoteentity` | 09-02 | 09-02 | 09-02 | 09-04 U-0011 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `remoteentity` | 09-02 | 09-05 U-0023（真实 Mongo） | 09-02 | 09-04 U-0011 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -186,7 +186,7 @@
 | codegen | `internal/protocol` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板） | — | 09-05 U-0015 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/servicerpc` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/webroute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 
@@ -196,7 +196,7 @@
 | --- | --- | --- | --- | --- |
 | ~~B-01~~ | `core/mirror` + `kit/syncstream` 的 SyncMsg 发布路径 | C8 | ROADMAP M1 状态表 | **已完成 → U-0009**：三条发布路径统一经 `syncbus.DeliveryIDs` |
 | ~~B-02~~ | `kit/remoteentity/versioned_lock.go` | C8 | ROADMAP M4 | **已完成 → U-0011**：§4.2 第 1–5 项原本已实现（09-04 关键词误判），第 6、7 项与两条缺失测试在 U-0011 补齐 |
-| B-10 | `kit/dataengine` Remote commit 的 fence 竞争 | C8 | FEATURE_LOGIC §4.2 第五条测试 | "高 fence 与低 fence 的 Mongo 提交竞争最多一个成功，失败方得到版本冲突并进入既有隔离流程"尚无测试；需要真实 Mongo 副本集，放进 integration 套件（`dataengine/*_integration_test.go`） |
+| ~~B-10~~ | `kit/dataengine` Remote commit 的 fence 竞争 | C8 | FEATURE_LOGIC §4.2 第五条测试 | **已完成 → U-0023**：`remoteentity/mongo_committer_integration_test.go` 对真实副本集并发高低 fence 提交，恰一个落库；集成脚本与 CI 的 integration job 已含 `./remoteentity`。原记录： "高 fence 与低 fence 的 Mongo 提交竞争最多一个成功，失败方得到版本冲突并进入既有隔离流程"尚无测试；需要真实 Mongo 副本集，放进 integration 套件（`dataengine/*_integration_test.go`） |
 | ~~B-03~~ | `service/mail`、`service/rank`、`service/integration` 的 `REDIS_ADDR` 门控测试 | C2 | 09-04 巡检 | **已完成 → U-0014**：三处早已带 `//go:build integration` 标签，缺的是设置 `REDIS_ADDR` 的自动化——roost-service 此前没有任何 CI，32 个测试靠 skip 保绿。新建工作流，integration 段把含 `REDIS_ADDR` 字样的 skip 判失败；另 8 处 `twoDistinctSentinels` 的 skip 是防御分支，各包都有 ≥2 个 sentinel，不会触发，不算洞 |
 | ~~B-04~~ | `kit` integration 套件进 CI | 流程 | AUDIT F8 / FEATURE_LOGIC 阶段 E | **已完成 → U-0010**（job 已写入 `ci.yml`，actionlint 通过；首次 GitHub 运行结果待确认） |
 | ~~B-05~~ | M2 M3 M5 M6 M7 M8 M9 各一单元 | 对应类 | ROADMAP 状态表 | **已完成 → U-0012**：15 处回退，9 处已有测试红，6 处补测试后红 |
@@ -213,6 +213,8 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0024 | 2026-09-05 | roost-codegen `internal/servicerpc` 模板（game 模板首次启动暴露） | C4 | 1：生成的 `ClientMod.DependsOn` 返回 `mods.ModBus`——总线 **capability** 名，而 app 按 Mod **名字**解析依赖，没有 Mod 叫 `bus`。任何进程把 `NewClientMod()` 与 nats Mod 装配在一起都在启动时 `unknown mod dependency "bus"`；roost-service 八个客户端全部如此。service 的集成测试手工 Init/Provide、不经 app 排序，所以从未发现 | `TestTheGeneratedClientDependsOnTheModThatPublishesTheBus`（codegen）；`TestEveryClientModDependsOnTheNATSMod`（service，八个客户端） | 修复前模板 game 进程启动即退；改为 `mods.ModNats`、重生成 service 八包后 game 进程带四个 ClientMod 起来并存活，mail / match / chat / account 四个托管子命令各自注册 handler（本地 Redis + NATS）| T-30 |
+| U-0023 | 2026-09-05 | roost-kit `remoteentity` `MongoCommitter`（B-10） | C8 | 0 缺陷：`applyCommit` 的过滤（`_ver`==base 且 `_lock_fence`<=提交 fence）在真实副本集上成立。此前只有 mongotest 假客户端的证据 | `TestRealCompetingFencedCommitsAdmitAtMostOne`（`integration` 标签）：同 base version 高低 fence 并发提交，恰一个成功、败方 `ErrRemoteVersionConflict`；低 fence 在正确版本上仍被拒、当前 fence 通过 | 首跑断言写成 `fmongo.ErrVersionConflict` 变红，committer 层已映射为协议错误，改断言后绿；本地脚本与 kit CI integration job 均绿。本地第二、三次重跑 dataengine 包因 JetStream "insufficient storage" 全红——环境问题，CI 全绿 | — |
 | U-0022 | 2026-09-05 | roost-service `chat` + `match` run 钩子（B-09） | C6 | 2：两个后台钩子遍历一个返回硬编码 `nil` 的方法、无配置入口——chat 的 `retention_age` 没有执行者，match 的 `ticket_ttl` 只有内联兜底 | `TestTheRetentionLoopPrunesTheEnumeratedChannels`、`TestTheExpiryLoopSweepsTheConfiguredQueues`（可调 tick 驱动真实 run 循环）+ 配置解析 fail-closed 两条 | 把 provider 换回硬编码 `nil` 两条循环测试都红（5s 超时）；`-race` 绿；Redis 集成套件绿 | T-29 |
 | U-0021 | 2026-09-05 | roost-service `account` `CreateRole`（B-08） | C8 | 2：角色记录之后 `Names.Commit` / `Slots.Update` 失败直接返回，角色留下——名字 claim 到期后可被他人占用；重试得 `ErrRoleLimit` | `TestACreateThatFailsAfterTheRoleRecordLeavesNothingBehind`（`namesFailingCommitOnce` / `slotsFailingUpdateOnce` 两个替身） | 修复前 `the role record survived a failed create`；提交点移到最后的槽位写入、之前全部撤销后绿；同账号立刻同名重试成功，他人被 `ErrNameTaken` 拒 | — |
 | U-0020 | 2026-09-05 | roost-service `global/activity`、`servicemetrics`、`servicemods`（B-07 收口） | C2 | 六条承诺回退：四条红；"有界扫描先完成最早截止"与"扫描补建缺失投递并出窗"两条全绿 → 补测试；"扫描不完成 pending"回退仍绿是 `completeExpired` 在 CAS 内二次校验（双重保险）。两个小包全读、每个分支有测试 | `sweep_promises_test.go` 两条（键序与截止序相反；`dispatchesFailingOnce`） | 补后两处回退变红；`-race` 绿 | — |
@@ -294,4 +296,12 @@ global：`service.go` 447 行全读；`Refused` 全在回调内且随错误返�
 ### U-0021 / U-0022 说明
 
 U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给调用方，版本校验删除是安全的；名字在 Commit 前按 claim 取消、Commit 后按 owner 释放；撤销本身失败计 `rollback.failed`（与既有语义一致）。U-0022 的设计选择：枚举由部署提供而不是扫描 keyspace——两处注释早已写明理由；chat 的静态项在 Provide 时逐条 `Resolve`，pair 类频道无法用配置表达（需要 participant），走 `WithPruneChannels`；match 的 `SweepQueues()` 以可选接口暴露，Store 的测试替身不必实现；两处未配置都在启动时告警一次，不再沉默。
+
+## 6. 方向二进度：game 模板
+
+**第一切片（2026-09-05，codegen 66b2d19）已落地**：`services.<name>.framework`（account / mail / match / chat 作为独立子命令托管：Server + owner Mod，redis / nats 自动补齐）、`services.<name>.uses`（业务 Service 装配 ClientMod、生成类型化访问器）、`versions.service` 与 `-roost-service-version` / `upgrade -service`、`-template game`。协作者文件 `internal/service/<name>/collaborators.go` 只生成一次、默认全部拒绝。验证：模板工程 build / vet / `generate --check` 通过；对本地 Redis + NATS 五个子命令全部起来（game 进程需要修复 U-0024 后的 roost-service）。framework-compat 的 full 场景已加 `-template game`。
+
+**设计选择与理由**：app 的模型是"一个子命令一个 Service"，因此托管服务是独立进程而不是塞进 game 进程；这与 roost-service `examples/split` 的形状一致，部署产物（compose / k8s / shell）随 `services` 自动覆盖每个托管服务。协作者不给宽容默认（拒绝而非放行）是 roost-service 自己的原则。
+
+**待做切片**：② World（进程内单例实体）与 Player 实体脚手架进模板（复用 `add entity` 生成器；World 的单例语义需要在 nest 层给出约束）；③ 生成工程的 QUICKSTART / FIRST_BUSINESS 文档加托管服务一节，`project next` 识别未实现的协作者；④ roost-service 的 `tool` 指令对齐到含 U-0024 的 codegen 版本；⑤ 发布：service v1.5.2（重生成的传输层）→ codegen 清单 service v1.5.2 → codegen v1.13.3。
 
