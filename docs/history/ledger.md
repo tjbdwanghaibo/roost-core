@@ -122,14 +122,14 @@
 | kit | `lockstep` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `manager` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mongo` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo/mongotest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nats` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `remoteentity` | 09-02 | 09-02 | 09-02 | 09-04 U-0011 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -197,7 +197,7 @@
 | B-10 | `kit/dataengine` Remote commit 的 fence 竞争 | C8 | FEATURE_LOGIC §4.2 第五条测试 | "高 fence 与低 fence 的 Mongo 提交竞争最多一个成功，失败方得到版本冲突并进入既有隔离流程"尚无测试；需要真实 Mongo 副本集，放进 integration 套件（`dataengine/*_integration_test.go`） |
 | B-03 | `service/mail`、`service/rank`、`service/integration` 的 `REDIS_ADDR` 门控测试 | C2 | 09-04 巡检 | 3 处 `t.Skip` 改 `//go:build integration` 标签并进 CI；另 8 处 `twoDistinctSentinels` 的 skip 是防御分支，各包都有 ≥2 个 sentinel，不会触发，不算洞 |
 | ~~B-04~~ | `kit` integration 套件进 CI | 流程 | AUDIT F8 / FEATURE_LOGIC 阶段 E | **已完成 → U-0010**（job 已写入 `ci.yml`，actionlint 通过；首次 GitHub 运行结果待确认） |
-| B-05 | M2 M3 M5 M6 M7 M8 M9 各一单元 | 对应类 | ROADMAP 状态表 | 只做回退验证：临时回退实现，确认已有测试变红；变不红的补测试 |
+| ~~B-05~~ | M2 M3 M5 M6 M7 M8 M9 各一单元 | 对应类 | ROADMAP 状态表 | **已完成 → U-0012**：15 处回退，9 处已有测试红，6 处补测试后红 |
 | B-06 | `roost-skill` HEAD 领先 v1.10.0 三个 commit 且仍依赖 core v1.10.0 | 发布链 | 09-04 巡检 | 发布链的 skill 层未闭合；下次 tag 前先升 core 依赖 |
 | B-08 | `service/account` `CreateRole` 提交尾部的两处失败分支 | C8 | U-0005 观察 | `Names.Commit` 失败直接返回，不回滚：角色已插入、名字 claim 到期后失去保留，之后别的账号可占用同名；`Slots.Update` 失败同样返回错误但角色已存在，客户端重试得到 `ErrRoleLimit`。两条分支都没有测试（没有会失败的 directory 替身）。修法要改提交顺序或加重试/修复路径，超出单个 C2 单元 |
 | B-09 | `service/chat/server_run.go` `pruneChannels`、`service/match/server_run.go` `sweepQueues` | C6 | U-0007 / U-0008 观察 | 两个 run 钩子都返回硬编码 `nil` 且没有任何配置入口：默认部署里 chat 的 `Prune` 与 match 的 `Sweep` 永远不被调用，`retention_age` / `ticket_ttl` 的后台执行形同虚设（match 的过期仍在每次变更与读取时内联执行，所以票据不会永远等待；chat 的年龄保留则完全没有执行者）——正是这两个包自己批评的"看起来存在、什么也不做的机制"。需要由部署注入的枚举 provider，属设计改动 |
@@ -211,6 +211,7 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0012 | 2026-09-05 | FEATURE_LOGIC M2/M3/M5–M9 的实现（core mirror/configdata/lifecycle，kit saga/nats/etcd/redis/mongo） | C2（回退验证） | 15 处逐项临时回退：9 处已有测试变红；6 处无一变红——redis distLock 的 TTL 校验、SETNX 与 Release 回复丢失后的 uncertain 态、per-acquisition token；nats nil handler；mongo 未知 WriteModel。另发现 `TestInvokeNatsHandlerContainsPanic` 为空断言（置一个永远为 true 的标志） | 新增 redis `lock_state_test.go`（4 条 + `scriptedRedis` 求值型替身）、nats 2 条、mongo 1 条；空测试改为断言 `nats.subscription.handler_panic.total` +1 | 补测试后重跑 6 处回退全部变红；kit 28 包绿 | T-20 |
 | U-0011 | 2026-09-04 | roost-kit `remoteentity`（B-02 / M4） | C4（鸭子类型代替公开契约）+ 缺测试 | 2：① `batch.go` 用 `interface{ Fence() uint64 }` 鸭子类型而非 core 已公开的 `redis.IFencedVersionedLock`；无 fence 的锁工厂被接受，直到每次共享操作才以 `ErrRemoteFenced` 拒绝 ② §4.2 要求的"第一代迟到 unlock 不得删除第二代 owner"没有测试（机制正确） | `TestManagerRefusesALockFactoryWithoutFences`（构造 + 创建两处拒绝）、`TestStaleFirstGenerationUnlockCannotEvictSecondOwner` | ① 修复前 `a wrapper was created over an unfenced lock` 红，改公开契约 + 构造探针 + Provide 失败后绿 ② 新测试直接绿（补测试）。kit 全量 build、remoteentity 测试与 vet 绿 | T-19 |
 | U-0010 | 2026-09-04 / 09-05 | roost-kit `.github/workflows/ci.yml`（B-04） | 流程（F8） | 1：集成套件只 vet 不跑。远端首跑又暴露 3 处脚本 `/private/tmp` 硬编码（macOS 专属，Linux 上 `mkdir /private` 被拒） | 新 `integration` job：装 mongod 8.0 / mongosh / nats-server v2.14.5 / jq / nc → 环境自检 → `dataengine-env.sh test` → 失败打印 status → 总是 down；脚本根目录改为 `$(cd /tmp && pwd -P)` 派生 | **回填**：run 33963458514 红（`mkdir /private`），33963686240 红（`GOCACHE=/private/tmp`），33964579095 **全绿**（Mongo 副本集 + NATS 集群 + dataengine/nestwal/saga 三包）。同一 run 里其余四个 job 也绿 | T-18 |
 | U-0009 | 2026-09-04 | roost-core `syncbus` + `mirror`、roost-kit `syncstream`（B-01，跨包因为它就是"三条路径一条规则"） | C8 | 1：三条 SyncMsg 发布路径两套身份规则——`PatchSyncer` 有进程唯一 ID，`mirror`（无 MessageID 也无 sid → 无去重键）与 `syncstream`（元组含序号 → 重启撞键）没有。具体后果：同 key 同 version 的 upsert/delete 会共享去重键；重启发布者与自己撞键，新帧被 broker 当重复丢弃 | `TestPublishedMessagesCarryDistinctDeliveryIDs`（mirror）、`TestFramesCarryDistinctDeliveryIDsAcrossPartsAndPublishers`（syncstream）、`DeliveryIDs` 两条单测 | 两条新测试修复前红（`carries no delivery id`），加 `DeliveryIDs` 并接入后绿；core/kit 全量 build、syncbus/mirror/syncstream/room/remoteentity 测试与 vet 绿 | T-17 |
