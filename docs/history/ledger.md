@@ -152,7 +152,7 @@
 | service | `global/activity` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `mail` | 未审 | 09-04 U-0006 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `match` | 未审 | 09-04 U-0008 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `platform` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `platform` | 未审 | 09-05 U-0018（回退验证） | 未审 | 未审 | 09-05 U-0018 | 未审 | 未审 | 未审 |
 | service | `rank` | 未审 | 09-04 U-0004 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `servicemetrics` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | service | `servicemods` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
@@ -205,7 +205,7 @@
 | B-09 | `service/chat/server_run.go` `pruneChannels`、`service/match/server_run.go` `sweepQueues` | C6 | U-0007 / U-0008 观察 | 两个 run 钩子都返回硬编码 `nil` 且没有任何配置入口：默认部署里 chat 的 `Prune` 与 match 的 `Sweep` 永远不被调用，`retention_age` / `ticket_ttl` 的后台执行形同虚设（match 的过期仍在每次变更与读取时内联执行，所以票据不会永远等待；chat 的年龄保留则完全没有执行者）——正是这两个包自己批评的"看起来存在、什么也不做的机制"。需要由部署注入的枚举 provider，属设计改动 |
 | ~~B-11~~ | `kit/nestwal` committer | C8 | 09-05 CI 巡检 | **已完成 → U-0013**。登记时的判断（"测试断言了契约不保证的性质"）**不对**：读代码发现 WAL 只串行化了 Replay 的读取，运行循环与 `Flush` 的两条 pass 在"读完 → ack 落地"窗口重叠会重复 apply——是实现的竞争窗口，测试是对的。加 `replayMu` 覆盖整条 pass |
 | ~~B-12~~ | roost-codegen CI 三处债 | 流程 | 09-05 CI 巡检（v1.12.1 起即红） | **已完成 → U-0015**：登记的三处之外，逐轮推进又暴露四处（compose 短语法卷、minimum 集与生成器下限脱节、upgrade-compat 历史版本写 cube-* 路径、kustomize 祖先布局）加 Dockerfile Go 版本，共八处，四条工作流全绿。原登记：① `quality` 的 actionlint/shellcheck 对 `release.yml` 第 50/114/196 行报 SC2251/SC2035；② `generated-project-release-smoke` 的 shellcheck 对生成的 `deploy/*/*.sh` 报 SC1007（`CDPATH= cd`）/SC2194；③ `framework-release` 的 consumer-acceptance 在生成工程目录里跑 actionlint，因非 git 仓库报 "no project was found"。三处都不是本轮改动引入；本轮的清单修复让 ③ 前面的 gate 首次通过 |
-| B-13 | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
+| ~~B-13~~ | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | **已完成**（09-05）：service v1.5.1（tag CI 首跑 rank 并发测试偶发 `lost 8 compare-and-swaps` → 测试按契约重试 ErrConflict，重跑绿）→ codegen 清单 kit v1.12.1 / skill v1.10.3 / service v1.5.1 → codegen v1.13.1（release 的 consumer-acceptance 首次真正跑 actionlint，报出生成 release 工作流的 SC2251/SC2035）→ 修模板 → codegen v1.13.2：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿。原记录： kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
 | B-07 | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
 
 ## 5. 单元日志
@@ -213,6 +213,7 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0018 | 2026-09-05 | roost-service `platform`（B-07，回退验证） | C2 / C5 | 五条注释承诺逐项临时回退：两条已有测试变红（settled ≠ held、送达后清 LastError）；三条全绿——投递方错误原因被常量替换、被超车的提交移动送达时间且不计 conflict、领取时预算已尽只原地拒绝不落 exhausted。补测试时发现 **`HandleCallback` 首次路径构造 Receipt 丢掉 `Replayed`**：`AttemptDelivery` 置位了，回调层抹平，"我发了货"与"货已被别人发过"在回调驱动的投递里不可区分 | 强化 `TestAFailedDeliveryIsRecordedNotDiscarded`（断言原因文本）；新增 `race_test.go`：`blockingDeliverer` 让重试超车慢投递、种一条 attempts==max 的 reserved 订单 | 三条回退补测试后全部变红；`HandleCallback` 补传 `Replayed` 后超车测试绿，`-race`、`-count=20` 绿 | T-28 |
 | U-0017 | 2026-09-05 | roost-service `session`（B-07，回退验证） | C2 | 六条注释承诺逐项临时回退：四条已有测试变红（失败的释放保持 pending、过期在 sweep 前可读、空 run id 拒绝、…）；`releaseClaim` 的 run id 守卫回退后全绿但与版本校验删除等价，不算洞；**`Enter` 在账本 `Create` 失败时返回错误**回退为返回成功后全绿——是洞 | `TestEnterReportsALostLedgerWriteInsteadOfSuccess`（`ledgerThatFailsOnce` 替身） | 补测试后回退该处变红：`Enter answered success although the replay ledger was never written`；`-race` 绿 | — |
 | U-0016 | 2026-09-05 | roost-service `directory`（B-07，7 个文件全部扫描） | C3 | 1：`Reserve` / `Commit` 在 `versionstore.Update` 回调内上报 `accepted` / `replayed` / `refused`；kit 契约允许 Mutate 多次调用，内存后端从不重试所以指标测试全绿；换"先输一次 CAS"的替身，一次预留 `accepted:reserve=2` | `TestAContendedWriteIsAcceptedOnce`（`contendedStore`：先对当前值跑一遍回调再委托） | 修复前 `accepted=2, replayed=2`；回调改为只做决定、Update 返回后上报一次 → 全 1；`-race` 绿。service CI 首轮 integration 绿 | T-27 |
 | U-0015 | 2026-09-05 | roost-codegen 四条工作流 + 部署模板（B-12） | C4 / 流程 | 8：① `release.yml` 三处 `! grep` 独立语句不受 errexit 约束（SC2251）——发布卫生检查从未真正失败过；② `sha256sum *.tar.gz` 裸通配；③ `framework-compat` minimum 集钉 v1.8.0 而生成器下限 v1.10.0；④ `upgrade-compat` 用写 cube-* 路径的 v1.9.0/v1.10.0 造历史工程，永远解析不了；⑤ consumer-acceptance 在无 `.git` 的生成工程跑 actionlint；⑥ 生成 compose 用短语法挂配置，相对 `ROOST_CONFIG_ROOT` 被当命名卷；⑦ 六个部署脚本 SC1007/SC2194；⑧ kustomize v5.7+ 拒绝 base 是 overlay 祖先的布局，且 sync 认不出无头的旧清单 → `removed=0`；⑨ Dockerfile `golang:1.25` 构建 `go 1.27.0` 工程 | `deploy_hygiene_test.go` 十一条：工作流 minimum 集 == `minimumVersions`、矩阵 ≥ v1.11.0、release.yml 无裸 `!`/裸通配、compose 显式 bind、绝对配置根、脚本无已知 shellcheck 项（有 shellcheck 则真跑）、base 非祖先（有 kubectl 则真渲染两个 overlay）、老布局 sync 后旧清单消失而手写文件保留、Go 版本钉本仓 go.mod | 每条先红后绿；远端逐轮：ci 三红因 → 二 → 一 → 绿，framework-compat 六格绿，upgrade-compat 绿。本地 `kubectl kustomize` 复现 cycle detected 并在修复后渲染 9 个对象 | T-23 T-24 T-25 |
@@ -277,4 +278,8 @@
 ### U-0017 扫描记录
 
 `session/service.go` 771 行按承诺注释读过 30 处；六条可低成本回退的逐项试：P5 释放失败保持 pending（3 个测试红）、P6 Get 在 sweep 前读为 expired（1 红）、P11 空 run id 拒绝（1 红）、P2 releaseClaim run id 守卫（绿，等价于版本校验，仅影响 `claim.release_not_ours` 计数——观察）、P8 账本写失败返回错误（绿 → 补测试）、P10 输掉 claim 时 discard 本 run（片段出现两次，未回退——观察：`TestAnOwnerRacingItselfGetsOneRun` 是否断言 run 数量待查）。替身：`recordingReleaser` 按资源计成功与尝试并可注入失败次数——是求值型替身，不是宽容桩。
+
+### U-0018 扫描记录
+
+`platform/service.go` 612 行读 `AttemptDelivery` / `HandleCallback` / `recordFailure` 全路径；`admin.go` 只读承诺注释。领取、判定、耗尽全在一个 CAS 回调内且回调只做决定（`outcome` 变量、返回后上报）——与 U-0016 的 directory 形成对照，platform 没有回调内计数问题。替身：`recordingDeliverer` 按订单计成功、可注入失败次数与固定错误，是求值型；`acceptingVerifier` / `resolver` 为最小可执行实现。观察（不修）：`raced` 分支的注释说"若走到这里是值得看的 bug"，但它其实是可达的正常竞态（慢投递 + 退避到期的重试），本次测试正是靠它成立——注释语气偏强，行为正确；`_ = found` 死赋值。B-07 至此覆盖 account / chat / directory / mail / match / platform / rank / session 八包，剩 global、global/activity、servicemetrics、servicemods。
 
