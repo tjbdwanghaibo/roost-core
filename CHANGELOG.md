@@ -4,8 +4,35 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`syncbus.DeliveryIDs`**：SyncMsg 投递身份的唯一生成器——进程唯一的随机前缀 + 单调序号，
+  `"<kind>:<random>:<n>"`。此前只有 `PatchSyncer` 自己拼这个格式；`mirror.Replicator` 与
+  roost-kit 的 `syncstream.Publisher` 根本不填 `MessageID`，JetStream 传输于是退回到
+  `(topic, key, version, sid, part)` 元组当去重键。元组不是身份：同 key 同 version 的 upsert 与
+  delete 共享一个键、不设 sid 的发布者根本没有键、重启后重发同一序号的发布者与"过去的自己"撞键——
+  第二条在 broker 去重窗口内被静默丢弃。这正是 FEATURE_LOGIC M1 第 1–3 条要求的东西。现在三条
+  发布路径共用一个规则；`PatchSyncer` 改为委托给它，格式不变。收敛单元 U-0009。
+- **`docs/history/ledger.md` 收敛覆盖账本**：bug 收敛的工作单元协议（一次会话、一个包、
+  一个缺陷类、四件固定产出、回退验证）、包 × 八类缺陷的覆盖矩阵、待开单元与单元日志。
+  八个缺陷类来自 2026-09-02 审计的实际产出率。
+- **`docs/TROUBLESHOOTING.md` 问题快速定位**：按症状索引，每行给出原因、看哪里、怎么处理。
+  与收敛循环绑定：每个工作单元必须为它加一行。
+- `docs/ROADMAP.md` 增加 FEATURE_LOGIC M1–M9 修改包的状态表（按代码检索判定，非测试证据）：
+  M1 部分、M4 未开始、其余已实现但欠回退验证。
+
+### Fixed
+
+- **`mirror.Replicator` 发布的消息没有投递身份**。`Publish` 与 `PublishDelete` 都不填
+  `MessageID`，也不填 `FromSid`，所以在 JetStream 上没有任何去重键；若某天填了 sid，同 key 同
+  version 的 upsert 与 delete 又会共享一个键。现在每次发布经 `syncbus.DeliveryIDs` 取独立身份，
+  新增测试断言四次发布（含同内容重发与"另一个进程"的发布者）身份两两不同。收敛单元 U-0009。
+
 ### Changed
 
+- **发布链加入 roost-service**：`core → kit → skill → service → codegen`。
+  `DEVELOPMENT_WORKSPACE.md`、`ROADMAP.md`、`docs/README.md` 同步；`docs/README.md`
+  的版本基线更新为当前正式 tag（此前仍写 v1.10.0，且运行时组成漏掉 service）。
 - **go 指令 1.25.0 → 1.27.0**，与 roost-kit / roost-codegen / roost-service 和
   `go.work` 统一。取 1.27.0 而不是最新的 1.27.1：一个补丁级的 go 指令什么都买不到，
   还会让停在 1.27.0 的工具链去下载一个新工具链。

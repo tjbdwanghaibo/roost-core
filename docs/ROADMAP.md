@@ -5,7 +5,25 @@ Roost 当前进入稳定化阶段。后续主线只接受三类工作：已复�
 ## 当前状态
 
 - **研发基线已闭环**：四仓用未提交的 `go.work` 做 source-head 联调。持久 Entity 删除已经进入唯一 Data Engine admission；Remote 删除使用显式 delete intent 并复用 ownership marker、lock fence、route epoch。Saga reservation token 已作为控制 receipt 进入同一 Mongo 事务，只有 owner、token、`pending` 状态和未过期租约全部匹配才应用业务 mutation。
-- **正式发布仍有一个门禁**：按 core → kit → skill → codegen 发布正式 tag，并让生成工程在 `GOWORK=off` 下只依赖这些 tag。研发 workspace 通过不能代替 pure-tag 闭包。
+- **正式发布仍有一个门禁**：按 core → kit → skill → service → codegen 发布正式 tag，并让生成工程在 `GOWORK=off` 下只依赖这些 tag。研发 workspace 通过不能代替 pure-tag 闭包。
+
+## Feature 逻辑修改包（M1–M9）状态
+
+来源：[FEATURE_LOGIC_REASSESSMENT_AND_FIX_PLAN_2026-09-01](FEATURE_LOGIC_REASSESSMENT_AND_FIX_PLAN_2026-09-01.md) §5。
+状态按 2026-09-04 的代码检索判定，**不是测试证据**：标"已实现"的项仍欠一次按
+[收敛工作单元协议](history/ledger.md) 执行的回退验证，已逐项登记为账本待开单元。
+
+| 包 | 状态 | 依据（代码位置） | 剩余 |
+| --- | --- | --- | --- |
+| M1 Sync 消息身份 | 已实现（U-0009 回退验证：去掉 MessageID 两条新测试变红） | `core/syncbus.DeliveryIDs` 是唯一身份规则；`PatchSyncer`、`core/mirror.Replicator`、`kit/syncstream.Publisher` 三条发布路径都经它取 `MessageID`；`kit/room.syncMsgID` 优先取 MessageID，元组仅为旧消息兼容 | — |
+| M2 Replica 信封与 Context | 已实现 | `core/mirror` 内外层字段一致性校验、Start 配置不全报错、context-aware publisher | 回退验证 |
+| M3 ConfigData 条件回滚 | 已实现 | `core/configdata` 在 `publishMu` 临界区内判定全局槽位所有权并计数冲突 | 回退验证 |
+| M4 Remote 锁代际证明 | 已实现（U-0011 核对：09-04 的"未开始"是关键词误判） | 每次 `TryLock` 新 token、每次 `UnlockWithRetry` 独立 operation ID、Lua 以 `last_unlock` 收据判定幂等重试、旧 unlock 只能读自己的收据（§4.2 第 1–5 项，含测试）；`batch.go` 改用 `redis.IFencedVersionedLock` 公开契约，无 fence 工厂在构造与 `Provide` 时 fail-closed（第 6、7 项，U-0011）；缺失的两条确定性测试已补 | §4.2 要求的第五条测试（高 fence 与低 fence 的 Mongo 提交竞争最多一个成功）需要真实 Mongo，登记为账本 B-10 |
+| M5 Saga/JetStream 终态 | 已实现 | `kit/saga` Stop 先 drain 并等待 `Closed()`；`kit/nats` permanent/Term 分类与 MaxDeliver 指标 | 回退验证 |
+| M6 Etcd election/watch 终态 | 已实现 | `LeaderChan` 复用、`ErrElectionNoLeader` 可 `errors.Is`、watcher `Done()/Err()`、compaction 处理 | 回退验证 |
+| M7 Redis best-effort 锁 | 已实现 | `kit/redis/lock.go` TTL < 1ms 报 `ErrDistLockConfig`、uncertain 状态、watchdog 代际 | 回退验证；确认 `Extend(newTTL)` 语义与文档一致 |
+| M8 适配层输入与 panic 边界 | 已实现 | `kit/nats` 拒绝 nil handler / 空 subject 并 recover；`kit/mongo` 未知 WriteModel 带 index 报错，`stringifyID(nil)` 返回空串 | 回退验证 |
+| M9 Lifecycle cleanup | 已实现 | `core/lifecycle` `EmitAll` + `errors.Join` | 回退验证 |
 
 ## P0：发布前必须关闭
 

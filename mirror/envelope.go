@@ -33,6 +33,7 @@ type Store interface {
 
 type Replicator struct {
 	bus     fsyncbus.ISyncBus
+	ids     *fsyncbus.DeliveryIDs
 	store   Store
 	topic   string
 	unsub   func()
@@ -41,7 +42,7 @@ type Replicator struct {
 }
 
 func New(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
-	return &Replicator{bus: bus, topic: topic, store: store}
+	return &Replicator{bus: bus, ids: fsyncbus.NewDeliveryIDs("mirror"), topic: topic, store: store}
 }
 
 func (r *Replicator) Start() error {
@@ -140,11 +141,15 @@ func (r *Replicator) Publish(ctx context.Context, env Envelope) error {
 	if err != nil {
 		return err
 	}
+	// MessageID is the delivery identity, minted per publish. The version is
+	// not one: an upsert and a delete at the same version must be two messages
+	// to the transport, or broker dedup drops whichever arrives second.
 	msg := &fsyncbus.SyncMsg{
-		Topic:   r.topic,
-		Key:     env.Key,
-		Version: env.Version,
-		Data:    raw,
+		MessageID: r.ids.Next(),
+		Topic:     r.topic,
+		Key:       env.Key,
+		Version:   env.Version,
+		Data:      raw,
 	}
 	return publish(ctx, r.bus, msg)
 }
@@ -157,9 +162,10 @@ func (r *Replicator) PublishDelete(ctx context.Context, key int64, version int64
 		return fmt.Errorf("replica: delete key is zero")
 	}
 	return publish(ctx, r.bus, &fsyncbus.SyncMsg{
-		Topic:   r.topic,
-		Key:     key,
-		Version: version,
+		MessageID: r.ids.Next(),
+		Topic:     r.topic,
+		Key:       key,
+		Version:   version,
 	})
 }
 

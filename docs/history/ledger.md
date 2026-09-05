@@ -1,0 +1,257 @@
+# 收敛覆盖账本
+
+> 建档 2026-09-04。这是 bug 收敛的唯一状态来源：哪些格子多久没被看过、哪些单元待开、每个单元做了什么。
+> 它放在 `docs/history/` 是因为它本身就是历史记录；每周更新一次，每个工作单元完成后追加。
+
+## 1. 工作单元协议
+
+一个单元 = **一次会话 · 一个 Go 包 · 一个缺陷类**。范围故意收窄：小到一次会话读得完、验得完，产出物固定，没有开放式结尾。
+
+| 步 | 动作 | 硬约束 |
+| --- | --- | --- |
+| 1 | 读检查表 | 只读本缺陷类的检查表（§2），不读别的 |
+| 2 | 穷举扫描目标包 | 只扫一个包（含 `_test.go`）；扫描点逐条记录，包括"看过、没问题" |
+| 3 | 先写失败测试 | 每个发现先有一条在当前代码上**确实变红**的测试；写不出红测试的发现降级为"观察"，不修 |
+| 4 | 修复 | 只修本发现；顺手看到的别的问题记到 §4 待开单元，不动手 |
+| 5 | 回退验证 | 临时回退修复，确认测试变红，再恢复。跳过这一步的修复不算完成 |
+| 6 | 四件产出 | ① 测试 ② 修复 ③ CHANGELOG 一条 ④ [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) 一行。缺一件不合并 |
+
+停止条件写在单元开头：目标包全部文件扫描记录完成，或发现数达 3 条（多余的开新单元）。
+禁止事项：重构、改公开 API、顺手修其他类缺陷、扩大到其他包。
+
+选单元的规则：取"最久未审"的格子；service 优先（正在重构、即将被 game 模板默认接入、11 处 `t.Skip`）；
+昨夜故障矩阵的失败项插队。
+
+## 2. 八个缺陷类与检查表
+
+来自 [AUDIT_FINDINGS_2026-09-02](../AUDIT_FINDINGS_2026-09-02.md) 的实际产出率，不是理论分类。
+
+| 编号 | 缺陷类 | 检查表（扫描时逐条问） | 09-02 产出 |
+| --- | --- | --- | --- |
+| C1 | 锁内远端调用 | `Lock()` 作用域内有无 redis/mongo/网络调用；调用是否带 ctx deadline；deadline 是否可配置 | F9 |
+| C2 | 空洞测试 / 宽容替身 | 测试是否有断言；替身对不支持的构造是返回 `ErrUnsupported` 还是静默匹配；`t.Skip` 是否让整段测试从不执行 | F4 F10 F11 |
+| C3 | 回调外累积状态 | 可重试回调（driver 重放、事务重试）外是否有累加器 | F2 |
+| C4 | 跨包字面量耦合 | 同一常量在两处以字面量出现（含 YAML / CI 里的包路径、指标名、capability 名）；漂移是否报错 | F6 |
+| C5 | 静默吞错 | `_ = err`、非 strict 模式吞错、日志后继续 | F5 |
+| C6 | 常量指标 | 注册了但永远不变的 counter/gauge；结构上不可能失败的断言 | F4 |
+| C7 | 释放无 defer | `Acquire/Lock` 后同函数无 `defer Release/Unlock`；完成链释放义务 | F13 F16 |
+| C8 | 快慢路径不对称 | 两条路径对同一状态的判据不同（快/批、本地/远端、首次/重试、两个发布入口） | F1 |
+
+其中 C1 / C2 / C6 / C7 计划写成 `cmd/glsvet` 规则（见 ROADMAP），写成规则后对应列不再消耗人工单元。
+
+## 3. 覆盖矩阵
+
+格子 = 最近一次完成单元的日期（+ 单元号）。`09-02` 表示该包在 2026-09-02 全量审计中被覆盖过一轮；`未审` 表示从未按本协议审过；`—` 表示该包不存在此类风险面。
+`cmd/*` 主程序、`examples/*`、`integration` 测试专用包不入账。
+
+### roost-core（57 包）
+
+| 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| core | `actionflow` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `admin` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `app` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `app/buildinfo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `bus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `cache` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `clock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `dataengine` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `entity` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `entitysync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `event` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `failurelog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `fctx` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `featureflag` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `goroutine` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `health` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `hotcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `httpclient` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `httpserver` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `index` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `lifecycle` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `lockstep` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `log` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `metrics` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `migration` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `mirror` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
+| core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `ownerroute` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/action` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/loadtest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/protocol` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/runner` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/scenario` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/session` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `saga` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `security` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `statesync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `syncbus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
+| core | `syncstream` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `timer` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `webroute` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `worker` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+
+### roost-kit（27 包 + CI 工作流）
+
+| 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| kit | `（根：CI 工作流）` | — | — | — | 09-04 U-0001 | — | — | — | — |
+| kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 | — | — | — | — | — | — |
+| kit | `actionflow` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `dataengine` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `lockstep` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `manager` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mongo/mongotest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nestwal` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `remoteentity` | 09-02 | 09-02 | 09-02 | 09-04 U-0011 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `saga` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `servicerpc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `spatial` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `statslog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `syncstream` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
+| kit | `versionstore` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+
+### roost-service（12 包）
+
+| 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| service | `account` | 未审 | 09-04 U-0005 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `chat` | 未审 | 09-04 U-0007 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `directory` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `global` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `global/activity` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `mail` | 未审 | 09-04 U-0006 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `match` | 未审 | 09-04 U-0008 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `platform` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `rank` | 未审 | 09-04 U-0004 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `servicemetrics` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `servicemods` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `session` | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+
+### roost-skill（5 包）
+
+| 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| skill | `combat` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `combatcomponent` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `skill` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `skillcompose` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `skillsync` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+
+### roost-codegen（16 包）
+
+| 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| codegen | `internal/attribute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/cfggen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/dao` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/entity` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/errcode` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/eventgen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/nest` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/protocol` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/registry` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/roost` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/servicerpc` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/webroute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+
+## 4. 待开单元
+
+| 编号 | 目标 | 缺陷类 | 来源 | 备注 |
+| --- | --- | --- | --- | --- |
+| ~~B-01~~ | `core/mirror` + `kit/syncstream` 的 SyncMsg 发布路径 | C8 | ROADMAP M1 状态表 | **已完成 → U-0009**：三条发布路径统一经 `syncbus.DeliveryIDs` |
+| ~~B-02~~ | `kit/remoteentity/versioned_lock.go` | C8 | ROADMAP M4 | **已完成 → U-0011**：§4.2 第 1–5 项原本已实现（09-04 关键词误判），第 6、7 项与两条缺失测试在 U-0011 补齐 |
+| B-10 | `kit/dataengine` Remote commit 的 fence 竞争 | C8 | FEATURE_LOGIC §4.2 第五条测试 | "高 fence 与低 fence 的 Mongo 提交竞争最多一个成功，失败方得到版本冲突并进入既有隔离流程"尚无测试；需要真实 Mongo 副本集，放进 integration 套件（`dataengine/*_integration_test.go`） |
+| B-03 | `service/mail`、`service/rank`、`service/integration` 的 `REDIS_ADDR` 门控测试 | C2 | 09-04 巡检 | 3 处 `t.Skip` 改 `//go:build integration` 标签并进 CI；另 8 处 `twoDistinctSentinels` 的 skip 是防御分支，各包都有 ≥2 个 sentinel，不会触发，不算洞 |
+| ~~B-04~~ | `kit` integration 套件进 CI | 流程 | AUDIT F8 / FEATURE_LOGIC 阶段 E | **已完成 → U-0010**（job 已写入 `ci.yml`，actionlint 通过；首次 GitHub 运行结果待确认） |
+| B-05 | M2 M3 M5 M6 M7 M8 M9 各一单元 | 对应类 | ROADMAP 状态表 | 只做回退验证：临时回退实现，确认已有测试变红；变不红的补测试 |
+| B-06 | `roost-skill` HEAD 领先 v1.10.0 三个 commit 且仍依赖 core v1.10.0 | 发布链 | 09-04 巡检 | 发布链的 skill 层未闭合；下次 tag 前先升 core 依赖 |
+| B-08 | `service/account` `CreateRole` 提交尾部的两处失败分支 | C8 | U-0005 观察 | `Names.Commit` 失败直接返回，不回滚：角色已插入、名字 claim 到期后失去保留，之后别的账号可占用同名；`Slots.Update` 失败同样返回错误但角色已存在，客户端重试得到 `ErrRoleLimit`。两条分支都没有测试（没有会失败的 directory 替身）。修法要改提交顺序或加重试/修复路径，超出单个 C2 单元 |
+| B-09 | `service/chat/server_run.go` `pruneChannels`、`service/match/server_run.go` `sweepQueues` | C6 | U-0007 / U-0008 观察 | 两个 run 钩子都返回硬编码 `nil` 且没有任何配置入口：默认部署里 chat 的 `Prune` 与 match 的 `Sweep` 永远不被调用，`retention_age` / `ticket_ttl` 的后台执行形同虚设（match 的过期仍在每次变更与读取时内联执行，所以票据不会永远等待；chat 的年龄保留则完全没有执行者）——正是这两个包自己批评的"看起来存在、什么也不做的机制"。需要由部署注入的枚举 provider，属设计改动 |
+| B-07 | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
+
+## 5. 单元日志
+
+| 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0011 | 2026-09-04 | roost-kit `remoteentity`（B-02 / M4） | C4（鸭子类型代替公开契约）+ 缺测试 | 2：① `batch.go` 用 `interface{ Fence() uint64 }` 鸭子类型而非 core 已公开的 `redis.IFencedVersionedLock`；无 fence 的锁工厂被接受，直到每次共享操作才以 `ErrRemoteFenced` 拒绝 ② §4.2 要求的"第一代迟到 unlock 不得删除第二代 owner"没有测试（机制正确） | `TestManagerRefusesALockFactoryWithoutFences`（构造 + 创建两处拒绝）、`TestStaleFirstGenerationUnlockCannotEvictSecondOwner` | ① 修复前 `a wrapper was created over an unfenced lock` 红，改公开契约 + 构造探针 + Provide 失败后绿 ② 新测试直接绿（补测试）。kit 全量 build、remoteentity 测试与 vet 绿 | T-19 |
+| U-0010 | 2026-09-04 | roost-kit `.github/workflows/ci.yml`（B-04） | 流程（F8） | 1：集成套件只 vet 不跑 | 新 `integration` job：装 mongod 8.0 / mongosh / nats-server v2.14.5 / jq / nc → 环境自检 → `dataengine-env.sh test` → 失败打印 status → 总是 down | actionlint 通过；`TestCIWorkflowPackagePathsExist` 绿；同一命令本地三包全绿。**未在 GitHub Actions 实跑**（本会话无法触发），首次运行结果需回填 | T-18 |
+| U-0009 | 2026-09-04 | roost-core `syncbus` + `mirror`、roost-kit `syncstream`（B-01，跨包因为它就是"三条路径一条规则"） | C8 | 1：三条 SyncMsg 发布路径两套身份规则——`PatchSyncer` 有进程唯一 ID，`mirror`（无 MessageID 也无 sid → 无去重键）与 `syncstream`（元组含序号 → 重启撞键）没有。具体后果：同 key 同 version 的 upsert/delete 会共享去重键；重启发布者与自己撞键，新帧被 broker 当重复丢弃 | `TestPublishedMessagesCarryDistinctDeliveryIDs`（mirror）、`TestFramesCarryDistinctDeliveryIDsAcrossPartsAndPublishers`（syncstream）、`DeliveryIDs` 两条单测 | 两条新测试修复前红（`carries no delivery id`），加 `DeliveryIDs` 并接入后绿；core/kit 全量 build、syncbus/mirror/syncstream/room/remoteentity 测试与 vet 绿 | T-17 |
+| U-0008 | 2026-09-04 | roost-service `match`（11 个文件全部扫描） | C2 | 2：① Mutate 回调不纯（实为 C3 类，经替身语义差异发现）：就地挪移 `Waiting` 后返回"不保存"，MemoryStore 存储值尾部重复，`Candidates` 给出同一张票两次；四个回调无一 clone，测试从未走"过期 + 放弃保存"的组合 ② `newStoreEach` 助手原样返回同一 store，注释声称隔离单票规则，实为死脚手架 | `TestAnAbortedMutationLeavesStoredStateUntouched`（过期票 + 回放式入队 → Candidates 无重复、长度为 1）；删除助手 | ① 修复前 `2 entries, ticket … seen 2 times` 红，加 `clone()` 后绿；② 删除后测试仍绿（它靠不同 player id 而非助手通过）。全包绿、全模块 13 包绿、vet 绿 | T-16 |
+| U-0007 | 2026-09-04 | roost-service `chat`（11 个文件全部扫描） | C2 | 2：① 幂等键去重不绑定发送者：同频道另一名玩家撞键时拿回前者消息且报成功，自己的消息静默丢失；角色可"回放"系统消息的键；无测试覆盖跨发送者撞键 ② `TestOnlyThePrivilegedEntryPoint…` 两处只断言 `err != nil` | `TestAnIdempotencyKeyIsBoundToItsSender`（角色/角色、角色/系统、系统/角色三种撞键 + 原发送者回放仍有效 + 计数）；两处断言改具体哨兵 | ① 修复前 `got <nil>, want ErrConflict` 红，修复后绿；② 收紧断言前后均绿。全包绿、全模块 13 包绿、vet 绿 | T-15 |
+| U-0006 | 2026-09-04 | roost-service `mail`（16 个文件全部扫描） | C2 | 3：① `Send` 回放路径不重投递，与代码注释"重试会重新尝试投递"矛盾——广播 fanout 失败一次即永久"已发送"，直投部分失败重试到不了漏掉的人；无测试覆盖投递失败后的重试 ② `List` 游标按 id 相等定位，游标邮件被删后翻页提前结束且无游标（静默截断）；翻页测试没有在两页之间删邮件 ③ `TestAnOversizedLimitIsClamped` 只断言 `>` 上限 | 3 条新测试：广播失败后重试投递计数为 2、直投漏投的收件人在重试后收到、游标邮件被删后 25 封全部可达；clamped 断言改 `!=` | ①② 修复前红（`attempted 1 times, want 2`；`never reached the recipient`；`reached 7 of 25`），修复后全包绿；③ 为收紧断言，前后均绿。全模块 13 包绿、vet 绿 | T-13 T-14 |
+| U-0005 | 2026-09-04 | roost-service `account`（11 个文件全部扫描） | C2 | 2：① `TestSelectRoleDoesNotPersistWhenSigningFails` 空测试——用不存在的 id 0 触发失败，签名从未执行，断言的是无关角色；把 SelectRole 的签名/落库倒序它仍绿 ② `UpdateProfile` 超长载荷返回 `ErrConflict`，`ErrRangeInvalid` 定义/配对/测过却无任何生产路径产出；原测试只断言 `err != nil` | 重写为在 store 种 id 0 角色（core 拒签）并断言版本与时间戳不变；oversize 断言 `errors.Is(err, ErrRangeInvalid)` | ① 倒序生产代码：旧测试绿（空洞证明）、新测试红；恢复后绿，`git diff` 确认 service.go 恢复原样 ② 修复前 `account: conflict: profile is 4097 bytes`，修复后绿；全包 + 全模块 13 包绿、vet 绿 | T-12 |
+| U-0004 | 2026-09-04 | roost-service `rank`（14 个文件全部扫描） | C2 | 2：① `CodeConflict` 声明了但没有带码哨兵，CAS 耗尽经 `errors.New` 返回，RPC 信封报 `CodeInternal`；`errcode_test` 的手写配对表漏掉它、`segmentAllocated=7` 与表而非与常量对齐，所以"每个哨兵都带码"对"有码无哨兵"盲 ② `TestAroundCentres…` 名字承诺"居中"，只断言 owner 在窗口内 | `TestSubmitContentionReportsCodeConflict`；配对表 +1、`segmentAllocated` 8；Around 断言中位与连续 rank | 修复前 `code 1 ("server error"), want 540108` 红；修复后全包绿、vet 绿 | T-11 |
+| U-0003 | 2026-09-04 | roost-kit `scripts/integration/lib/nats.sh` | C2 | 1：`nats_cluster_ready` 只查 JetStream 已启用 + 路由数，不等元集群选出 leader；冷启动后第一个夹具在 `ensure effect stream` 上等满 30s 超时，`TestRealMongoPrimaryFailoverContinuesProjection`（包内第一个执行的测试）在故障注入前就失败 | 环境自检 `dataengine_env_test.sh` + 完整套件 | 修复前两轮完整运行同一处确定性失败（不是 flaky）；加入 `/jsz .meta_cluster.leader` 判定后第三轮三个包全绿，`status` 显示三节点一致的 meta_leader | T-10 |
+| U-0002 | 2026-09-04 | roost-codegen `ci/framework-release.yaml` + `framework_release.go` | C4 | 1：清单落后两个次版本（core v1.9.1 / kit v1.9.2 / skill v1.9.1）且无 service 字段，release 门禁一直校验旧组合 | `TestFrameworkReleaseManifestStrictValidation/no-service` | 去掉 `service:` 字段清单不再通过校验 | T-09 |
+
+### U-0004 扫描记录（看过、没问题的项也记）
+
+`fake_redis_test.go`：按脚本文本子串分派三段 Lua，默认分支返回 `ErrCASInvalidCommand`（fail-closed）；swap / remove 语义与 Lua 逐条对照一致；`toStr` 对未知类型返回空串是宽容点，但当前调用方只传 string / int64，记为观察不修。
+`redis_store.go`：`luaString` 对非字符串返回空串（观察）；`_ = current` 死赋值（观察）；replay 路径两段重复注释（观察）。
+`store_test.go` 15 个测试全部有断言，无 `t.Skip`；`member_test.go` 用独立比较器验证字节序，非自证。
+`errcode_test.go` 的 `twoDistinctSentinels` skip 分支在本包不可达（8 个哨兵）。
+`redis_integration_test.go` 3 个测试覆盖 Lua 文本本身，`REDIS_ADDR` 门控 → B-03。
+`rank_rpc_gen.go` 生成物本包无直接测试，靠 codegen golden；`rank_mod_test.go` 5 个测试覆盖配置、依赖声明、缺 capability。
+
+### U-0005 扫描记录
+
+跨服务巡检（只用于选单元）：U-0004 之后十个服务的 `Code*` 常量全部有 `errcode.Define` 哨兵且进入配对表（`global/activity` 用切片而非 map 配对，形状不同但覆盖完整）。
+`account_test.go` 21 个测试：其余 19 个断言具体哨兵或具体值，无 `t.Skip`；`TestValidateSession…` 里 `_ = cfg` 死变量（观察）。
+`account_mod_test.go` 3 个测试覆盖三件必需协作者缺失、空 secret、缺 Redis capability。
+替身：无自写 fake，用 kit `versionstore.NewMemoryStore`、service `directory` 内存态、`servicemetrics.NewRecorder`——都是可执行实现而非桩，宽容度取决于 kit MemoryStore 与 RedisStore 的语义一致性（kit × C2 已在 09-02 覆盖）。
+生产代码观察（不修）：`MaxPageSize` 无使用（本包没有列表接口）；`CreateRole` 只拒绝 allocator 返回 0，负数放行；`ErrVerifierUnavailable` 为无码错误按设计走 `CodeInternal`（渠道故障就是服务侧故障，注释写明）。
+
+### U-0006 扫描记录
+
+替身两份：`fake_envelopes_test.go` 对 Create 严格不覆盖、计数单读/批读次数，`failGetMany` 钩子无任何测试使用（观察：死脚手架）；`redis_store_test.go` 的 `fakeRedisEnvelopes` 求值 SetNX / Get / MGet 语义，含短回复与损坏值注入，均被断言。
+`mail_test.go` 30 个测试全部断言具体哨兵、计数或结构，无 `t.Skip`；并发测试 3 个。`rpc_test.go` 12 个测试覆盖生成传输的本地/总线一致性与错误码穿透。`redis_integration_test.go` 5 个（`REDIS_ADDR` 门控 → B-03）。
+生产代码观察（不修）：`Send` 早期对 `AudienceBroadcast && Broadcast == nil` 的拒绝发生在账本查询之前，因此无 deliverer 的进程回放一条广播记录也会被拒——语义正确；`Deliver` 对 `nowUnix <= 0` 回退到当前时钟，测试大量传 0，实际时间由夹具时钟决定，可接受。
+在途状态：`mail/client.go`、`client_mod.go`、`rpc.go`、`server.go` 四个文件在 git index 中为"已暂存新增"、工作树中已删除（被生成的 `mail_rpc_gen.go` 取代）。工作树编译通过；若不带 `-a` 提交会把这四个文件带回并与生成物重复定义。未处理，等仓主决定。
+
+### U-0007 扫描记录
+
+替身：`allowAllPolicy`（仅测试）、`recordingPolicy`（计数 + 可拒绝，被断言）、`brokenState`（Get/Update 可注入失败，被断言）、共享 `servicemetrics.Recorder`；状态用 kit `MemoryStore`。无自写 Redis 替身——chat 的存储完全经 kit `versionstore`。
+`chat_test.go` 26 个测试全部断言具体哨兵 / 序列 / 计数，无 `t.Skip`；反射测试钉死请求类型字段集；时钟倒跑证明排序只来自序列。`chat_mod_test.go` 3 个。
+生产代码观察（不修）：`pageOf` 空页对 `BeforeSeq` 分支把 `NextCursor` 设为 `LastSeq`、`PrevCursor` 留 0——滚动到最旧后客户端以 `HasMore=false` 判终止，语义可用但两个游标含义在空页上不对称；`Prune` 不回收 `Requests` 键（已注释说明，由 `trim` 按数量兜底）；`AppendSystem` 对非 SystemOnly 的共享频道也放行（设计：系统可在世界频道发公告）。
+
+### U-0008 扫描记录
+
+替身：仅 kit `MemoryStore` 与共享 `servicemetrics.Recorder`，无自写 fake。发现 ① 正是 MemoryStore 与 RedisStore 的语义差异（交出存储值 vs 每次解码）暴露出来的：match 没有像 chat 那样在回调开头 `clone()`。
+`match_test.go` 22 个测试全部有断言、无 `t.Skip`；并发测试 2 个；`TestResolvedTicketsLeaveTheWaitingList` 直接断言内部不变量并写明原因。`_ = expiring` / `_ = live` / `_ = fmt.Sprint()` 三处死变量（观察）。
+生产代码观察（不修）：`Enqueue` 回放命中已终态票据时按原样返回（同请求同结果，可接受）；`Refused` 计数在回调内但错误路径不重试，不会重复计数；`Enqueue` 成功后额外一次 `QueueLength` 读取用于深度指标；`Ticket()` 读路径把已到期票据报为 expired 而不落库（注释已说明）。
+

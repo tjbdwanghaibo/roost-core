@@ -2,11 +2,9 @@ package syncbus
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	stdsync "sync"
-	"sync/atomic"
 )
 
 // PatchSyncerConfig describes transient patch replication over ISyncBus.
@@ -23,16 +21,15 @@ type PatchSyncerConfig[T any] struct {
 }
 
 type PatchSyncer[T any] struct {
-	bus         ISyncBus
-	cfg         PatchSyncerConfig[T]
-	mu          stdsync.Mutex
-	unsub       func()
-	publisherID string
-	sequence    atomic.Uint64
+	bus   ISyncBus
+	cfg   PatchSyncerConfig[T]
+	mu    stdsync.Mutex
+	unsub func()
+	ids   *DeliveryIDs
 }
 
 func NewPatchSyncer[T any](bus ISyncBus, cfg PatchSyncerConfig[T]) *PatchSyncer[T] {
-	return &PatchSyncer[T]{bus: bus, cfg: cfg, publisherID: rand.Text()}
+	return &PatchSyncer[T]{bus: bus, cfg: cfg, ids: NewDeliveryIDs("patch")}
 }
 
 func (s *PatchSyncer[T]) Start() error {
@@ -89,7 +86,7 @@ func (s *PatchSyncer[T]) Publish(ctx context.Context, patch T) error {
 		ctx = context.Background()
 	}
 	msg := &SyncMsg{
-		MessageID: fmt.Sprintf("patch:%s:%d", s.publisherID, s.sequence.Add(1)),
+		MessageID: s.ids.Next(),
 		Topic:     s.cfg.Topic, Key: key, Version: s.versionOf(patch),
 		Data: data, FromSid: s.cfg.LocalSid,
 	}

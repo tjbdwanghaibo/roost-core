@@ -1,14 +1,14 @@
 # 多仓研发与发布
 
-Roost 研发期以四仓 source-head 联调为主，正式稳定后再固定发布版本。两种模式必须隔离：
+Roost 研发期以五仓 source-head 联调为主，正式稳定后再固定发布版本。两种模式必须隔离：
 workspace 解决研发效率，module/tag 证明外部用户可安装和复现。
 
 ## 研发模式：go.work
 
-在四个仓库的共同父目录创建不提交的 `go.work`：
+在五个仓库的共同父目录创建不提交的 `go.work`：
 
 ```bash
-go work init ./roost-core ./roost-kit ./roost-skill ./roost-codegen
+go work init ./roost-core ./roost-kit ./roost-skill ./roost-service ./roost-codegen
 ```
 
 每个仓库应忽略 `go.work`/`go.work.sum`。业务仓库需要联调时，用 `go work use
@@ -77,7 +77,7 @@ GOWORK=off go test ./...
 GOWORK=off go vet ./...
 ```
 
-Windows PowerShell 使用 `$env:GOWORK='off'`。发布顺序固定为 core → kit → skill →
+Windows PowerShell 使用 `$env:GOWORK='off'`。发布顺序固定为 core → kit → skill → service →
 codegen；后一层只能引用已经存在的正式 tag。每层发布后再执行 pure-tag 生成工程 smoke。
 以下内容一律阻断 tag：
 
