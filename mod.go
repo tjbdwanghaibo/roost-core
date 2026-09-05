@@ -71,12 +71,19 @@ func NewMod(options ...ModOption) *Mod {
 
 func (mod *Mod) Name() app.ModName { return mods.ModDataEngine }
 
-func (mod *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModHealth}
-}
+// DependsOn names Mods only. The health registry this Mod publishes into is a
+// built-in of every app.Registry, not a Mod, and app resolves dependencies by
+// Mod NAME — so declaring mods.ModHealth here made every process that
+// assembled the data engine fail at startup with
+// `unknown mod dependency "health"` (found by the first generated project
+// that was actually started; roost-codegen U-0025).
+func (mod *Mod) DependsOn() []app.ModName { return nil }
 
+// OptionalDependsOn orders this Mod after the Mods whose capabilities it
+// loads: Mongo, NATS (JetStream is the NATS Mod's capability, not a Mod of
+// its own) and, when remote projection is on, Remote Entity.
 func (mod *Mod) OptionalDependsOn() []app.ModName {
-	deps := []app.ModName{mods.ModMongo, mods.ModNatsJetStream}
+	deps := []app.ModName{mods.ModMongo, mods.ModNats}
 	if mod != nil && mod.remoteEnabled {
 		deps = append(deps, mods.ModRemoteEntity)
 	}
