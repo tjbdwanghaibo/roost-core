@@ -78,9 +78,9 @@ func DefaultOptions(dir string) Options {
 }
 
 type Stats struct {
-	Segment          uint64
-	Offset           int64
-	Queued           int
+	Segment uint64
+	Offset  int64
+	Queued  int
 	// Admitted counts appends accepted into the WAL since Open; Admitted −
 	// Appended is what is in flight (queued or batched, not yet durable),
 	// which Queued alone cannot show once the writer has taken a batch off
