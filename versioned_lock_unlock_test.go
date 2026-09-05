@@ -189,3 +189,51 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		return zero
 	}
 }
+
+// A first-generation unlock that arrives after the lease lapsed and a second
+// generation acquired must not evict the second owner, and must not read the
+// second generation's state as its own success. FEATURE_LOGIC §4.2 item 4:
+// the old operation may only ever see its own receipt.
+func TestStaleFirstGenerationUnlockCannotEvictSecondOwner(t *testing.T) {
+	stub := newUnlockEvalStub()
+	first := newVersionedLock(stub, 42, fredis.VersionedLockOptions{TTL: time.Second})
+	if err := first.TryLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The first holder stalls until its lease lapses: Redis drops the owner
+	// field on expiry, nothing else changes.
+	stub.mu.Lock()
+	delete(stub.hash, "owner")
+	stub.hash["version"] = "3"
+	stub.mu.Unlock()
+
+	second := newVersionedLock(stub, 42, fredis.VersionedLockOptions{TTL: time.Second})
+	if err := second.TryLock(context.Background()); err != nil {
+		t.Fatalf("second generation could not acquire a lapsed lock: %v", err)
+	}
+	second.mu.Lock()
+	secondToken := second.token
+	second.mu.Unlock()
+
+	// The stalled first holder wakes up and unlocks with a new business version.
+	err := first.UnlockWithRetry(context.Background(), 9, time.Second, 2, time.Millisecond)
+	if !errors.Is(err, ErrVersionedLockNotOwned) {
+		t.Fatalf("stale unlock returned %v, want ErrVersionedLockNotOwned", err)
+	}
+	stub.mu.Lock()
+	owner, version := stub.hash["owner"], stub.hash["version"]
+	stub.mu.Unlock()
+	if owner != secondToken {
+		t.Fatalf("the stale unlock changed the owner to %q; the second generation held %q", owner, secondToken)
+	}
+	if version != "3" {
+		t.Fatalf("the stale unlock wrote version %q over the second generation's %q", version, "3")
+	}
+	if !second.IsAcquired() {
+		t.Fatal("the second generation lost its acquisition")
+	}
+	// And the second generation's own unlock still lands normally.
+	if err := second.Unlock(context.Background(), 4, time.Second); err != nil {
+		t.Fatalf("second generation unlock: %v", err)
+	}
+}

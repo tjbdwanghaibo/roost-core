@@ -24,20 +24,24 @@ type remoteSyncTransport interface {
 // Wrappers are private coordination cells and are not exposed as an alternate
 // persistence API.
 type remoteEntityManager struct {
-	mu             sync.RWMutex
-	wrappers       map[int64]*remoteEntityWrapper
-	creating       map[int64]*remoteWrapperCreate
-	lockFactory    redis.IVersionedLockFactory
-	backend        entity.IRemoteEntityBackend
-	ownershipStore entity.IRemoteEntityOwnershipStore
-	syncer         remoteSyncTransport
-	cfg            *Config
-	localSid       int32
-	remote         *remoteState
-	sealed         bool
-	fatalMu        sync.RWMutex
-	fatalErr       error
-	onFatal        func(error)
+	mu          sync.RWMutex
+	wrappers    map[int64]*remoteEntityWrapper
+	creating    map[int64]*remoteWrapperCreate
+	lockFactory redis.IVersionedLockFactory
+	// lockFactoryErr is set when the factory hands out locks without a fence;
+	// see newRemoteEntityManager. A manager carrying it creates no wrappers.
+	lockFactoryErr  error
+	lockFactoryWarn sync.Once
+	backend         entity.IRemoteEntityBackend
+	ownershipStore  entity.IRemoteEntityOwnershipStore
+	syncer          remoteSyncTransport
+	cfg             *Config
+	localSid        int32
+	remote          *remoteState
+	sealed          bool
+	fatalMu         sync.RWMutex
+	fatalErr        error
+	onFatal         func(error)
 }
 
 func (m *remoteEntityManager) setFatalHandler(handler func(error)) {
@@ -97,13 +101,42 @@ func newRemoteEntityManager(lockFactory redis.IVersionedLockFactory, cfg *Config
 		cfg:         cfg,
 		localSid:    localSid,
 	}
+	// Fail closed at construction, once, where the wiring is. Remote Entity's
+	// write gate needs the fence a lock allocates on acquisition
+	// (redis.IFencedVersionedLock). A factory of plain versioned locks would
+	// have every shared operation refused at run time with ErrRemoteFenced —
+	// correct, but late, noisy, and indistinguishable from a real fence
+	// conflict in the metrics. Constructing a probe lock performs no I/O.
+	if lockFactory != nil {
+		probeKey, probeTTL := "e", time.Hour
+		if cfg != nil {
+			probeKey, probeTTL = cfg.LockKey, cfg.LockTTL
+		}
+		if _, ok := lockFactory.NewVersionedLock(1, redis.VersionedLockOptions{Key: probeKey, TTL: probeTTL}).(redis.IFencedVersionedLock); !ok {
+			mgr.lockFactoryErr = fmt.Errorf("remote_entity: lock factory %T does not provide fenced locks (redis.IFencedVersionedLock); shared entities cannot be served", lockFactory)
+		}
+	}
 	mgr.remote = newRemoteState(mgr, cfg, snapshotL2...)
 	return mgr
+}
+
+// LockFactoryError reports why this manager will create no wrappers, or nil.
+// The Mod turns it into a Provide failure so a misconfigured deployment stops
+// at startup instead of refusing every shared operation.
+func (m *remoteEntityManager) LockFactoryError() error {
+	if m == nil {
+		return nil
+	}
+	return m.lockFactoryErr
 }
 
 func (m *remoteEntityManager) getOrCreate(id int64, category entity.EntityCategory, kind entity.EntityKind) *remoteEntityWrapper {
 	meta := resolveRemoteWrapperID(id, category, kind)
 	if meta.FullID == 0 || m == nil || m.lockFactory == nil || m.cfg == nil {
+		return nil
+	}
+	if m.lockFactoryErr != nil {
+		m.lockFactoryWarn.Do(func() { slog.Error("remote_entity: refusing to create wrappers", "err", m.lockFactoryErr) })
 		return nil
 	}
 

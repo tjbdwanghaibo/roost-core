@@ -9,6 +9,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type remoteWriteEntry struct {
@@ -154,9 +155,11 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			return nil, fmt.Errorf("remote_entity: shared lock %d: %w", w.id, err)
 		}
 		distLocked = true
-		// Keep this structural assertion while roost-kit supports the preceding
-		// roost-core release; the public equivalent is redis.IFencedVersionedLock.
-		if provider, ok := w.rMu.(interface{ Fence() uint64 }); ok {
+		// The public contract, not a duck type: the manager refuses a factory
+		// whose locks lack it at construction, so this assertion holds for
+		// every wrapper that exists. The zero check below stays as the
+		// last-line guard against a lock that has the method and lies.
+		if provider, ok := w.rMu.(redis.IFencedVersionedLock); ok {
 			lockFence = provider.Fence()
 		}
 		if lockFence == 0 {

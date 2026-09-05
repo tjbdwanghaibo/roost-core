@@ -176,6 +176,10 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 	lockFactory := newVersionedLockFactory(redis)
 
 	m.mgr = newRemoteEntityManager(lockFactory, m.cfg, m.localSid, newRemoteSnapshotL2Store(redis, m.cfg.SnapshotL2TTL))
+	if err := m.mgr.LockFactoryError(); err != nil {
+		m.mgr = nil
+		return err
+	}
 	if failure, ok := app.Lookup[*app.RuntimeFailure](r, app.ModRuntimeFailure); ok && failure != nil {
 		m.mgr.setFatalHandler(func(err error) { failure.Fail(fmt.Errorf("remote_entity fatal release failure: %w", err)) })
 	}

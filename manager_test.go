@@ -312,3 +312,56 @@ func TestVersionedLockTokenUsesCryptographicRandomness(t *testing.T) {
 		t.Fatalf("invalid tokens %q %q", first, second)
 	}
 }
+
+// unfencedLock is a versioned lock WITHOUT Fence(): what a foreign
+// IVersionedLockFactory would hand out. It delegates everything else to the
+// fenced mock so the only thing missing is the fence.
+type unfencedLock struct{ inner *mockVersionedLock }
+
+func (l *unfencedLock) TryLock(ctx context.Context) error { return l.inner.TryLock(ctx) }
+func (l *unfencedLock) Lock(ctx context.Context) error    { return l.inner.Lock(ctx) }
+func (l *unfencedLock) Unlock(ctx context.Context, version int64, ttl time.Duration) error {
+	return l.inner.Unlock(ctx, version, ttl)
+}
+func (l *unfencedLock) UnlockWithRetry(ctx context.Context, version int64, ttl time.Duration, count int, interval time.Duration) error {
+	return l.inner.UnlockWithRetry(ctx, version, ttl, count, interval)
+}
+func (l *unfencedLock) Version() int64   { return l.inner.Version() }
+func (l *unfencedLock) IsAcquired() bool { return l.inner.IsAcquired() }
+func (l *unfencedLock) Touch(ctx context.Context, d time.Duration) error {
+	return l.inner.Touch(ctx, d)
+}
+func (l *unfencedLock) Refresh(ctx context.Context) error { return l.inner.Refresh(ctx) }
+func (l *unfencedLock) Close() error                      { return l.inner.Close() }
+
+type unfencedLockFactory struct{}
+
+func (unfencedLockFactory) NewVersionedLock(int64, redis.VersionedLockOptions) redis.IVersionedLock {
+	return &unfencedLock{inner: &mockVersionedLock{}}
+}
+
+// A lock that cannot fence must be refused where the factory is wired, not
+// discovered one operation at a time. Remote Entity's write gate needs the
+// fence a lock allocates on acquisition; with a plain versioned lock every
+// shared operation is refused at run time with ErrRemoteFenced — which is
+// fail-closed, but late, noisy, and indistinguishable from a real fence
+// conflict in the metrics. FEATURE_LOGIC §4.2 item 7.
+func TestManagerRefusesALockFactoryWithoutFences(t *testing.T) {
+	mgr := newRemoteEntityManager(unfencedLockFactory{}, DefaultConfig(), 1000)
+	if err := mgr.LockFactoryError(); err == nil {
+		t.Fatal("a factory of unfenced locks was accepted at construction")
+	}
+	if w := mgr.getOrCreate(testRemoteFullIDWithKind(1302, 1, 1), 1, 1); w != nil {
+		w.release()
+		t.Fatal("a wrapper was created over an unfenced lock; every shared operation on it would be refused at run time")
+	}
+	fenced := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	if err := fenced.LockFactoryError(); err != nil {
+		t.Fatalf("a fenced factory was refused: %v", err)
+	}
+	if w := fenced.getOrCreate(testRemoteFullIDWithKind(1302, 1, 1), 1, 1); w == nil {
+		t.Fatal("a fenced factory was refused")
+	} else {
+		w.release()
+	}
+}
