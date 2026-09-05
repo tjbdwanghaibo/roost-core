@@ -58,13 +58,18 @@ func (fn EffectPublishFunc) PublishEffect(ctx context.Context, txID corenest.Tra
 }
 
 type CommitterOptions struct {
-	RetryMin               time.Duration
-	RetryMax               time.Duration
-	IdlePoll               time.Duration
-	CloseWAL               bool
-	ReplayBatchRecords     int
-	ReceiptCleanupBatch    int
-	ReceiptCleanupCapacity int
+	RetryMin time.Duration
+	RetryMax time.Duration
+	IdlePoll time.Duration
+	// testBetweenReplayAndAck is a test seam invoked after a replay pass has
+	// applied its records and before it acknowledges them. Set before
+	// NewCommitter, never at run time: the loop reads it without a lock. Nil in
+	// production.
+	testBetweenReplayAndAck func()
+	CloseWAL                bool
+	ReplayBatchRecords      int
+	ReceiptCleanupBatch     int
+	ReceiptCleanupCapacity  int
 }
 
 func DefaultCommitterOptions() CommitterOptions {
@@ -104,7 +109,15 @@ type Committer struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	flushMu           sync.Mutex
+	flushMu sync.Mutex
+	// replayMu makes a replay pass — read from the ack fence, apply, publish,
+	// ack — one unit. The WAL serializes only the read; without this, a pass
+	// that starts after another's read has returned but before its ack landed
+	// re-reads the same records and applies them again. The applier contract
+	// tolerates that (at-least-once, idempotent), but the run loop and an
+	// active Flush overlapping in that window is pure waste and a race worth
+	// closing rather than documenting.
+	replayMu          sync.Mutex
 	heldMu            sync.RWMutex
 	held              map[corenest.TransactionID]struct{}
 	errMu             sync.RWMutex
@@ -364,6 +377,8 @@ func (c *Committer) run() {
 }
 
 func (c *Committer) replayPass(ctx context.Context) (int, error) {
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
 	// Receipt deletion is off the commit hot path, but every failed deletion is
 	// retained in a bounded retry set and retried on each replay pass.
 	_ = c.retryReceiptCleanup(ctx)
@@ -402,6 +417,9 @@ func (c *Committer) replayPass(ctx context.Context) (int, error) {
 	})
 	if errors.Is(err, errReplayBatchComplete) {
 		err = nil
+	}
+	if c.opts.testBetweenReplayAndAck != nil {
+		c.opts.testBetweenReplayAndAck()
 	}
 	if processed > 0 {
 		if ackErr := c.wal.Ack(ctx, lastFence); ackErr != nil {

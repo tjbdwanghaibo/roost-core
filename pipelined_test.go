@@ -3,6 +3,7 @@ package nestwal
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -205,5 +206,82 @@ func TestCommitterEnqueueRejectionReleasesHold(t *testing.T) {
 	}
 	if committer.isHeld(record.ID) {
 		t.Fatal("rejected transaction is still held and would stall replay")
+	}
+}
+
+// Two replay passes must not both apply the same durable record. A pass is
+// "read from the ack fence → apply → ack"; the WAL serializes only the read, so
+// a second pass that starts after the first one's read returned but before its
+// ack landed re-reads the same records from the old fence and applies them
+// again. That is what made TestCommitterEnqueueHoldsReplayUntilReleased report
+// "apply calls=2" on a slow runner: the run loop and an active Flush overlapped
+// in exactly that window. The applier contract tolerates it (at-least-once,
+// idempotent), but two passes over one region is pure waste and the window is
+// a race the committer can simply close. This pins it deterministically with a
+// seam that parks the first pass between its read and its ack.
+func TestConcurrentReplayPassesApplyEachRecordOnce(t *testing.T) {
+	w, err := Open(testOptions(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applies atomic.Int32
+	applier := MutationApplyFunc(func(context.Context, corenest.TransactionID, corenest.EntityMutation) error {
+		applies.Add(1)
+		return nil
+	})
+	publisher := EffectPublishFunc(func(context.Context, corenest.TransactionID, corenest.Effect) error { return nil })
+	opts := DefaultCommitterOptions()
+	// Park the background loop so the two passes under test are the only ones.
+	opts.RetryMin, opts.RetryMax, opts.IdlePoll = time.Hour, time.Hour, time.Hour
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	opts.testBetweenReplayAndAck = func() {
+		once.Do(func() {
+			close(entered)
+			<-gate
+		})
+	}
+	committer, err := NewCommitter(w, applier, publisher, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close(context.Background())
+
+	record := testRecord(31, corenest.DurabilityPipelined)
+	ticket, err := committer.Enqueue(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waitTicket(t, ticket); err != nil {
+		t.Fatal(err)
+	}
+	// Release without signalling, so the parked loop stays parked.
+	committer.release(record.ID)
+
+	ctx := context.Background()
+	first := make(chan error, 1)
+	go func() { _, err := committer.replayPass(ctx); first <- err }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first pass never reached the seam")
+	}
+	// The second pass starts while the first has applied but not yet acked.
+	second := make(chan error, 1)
+	go func() { _, err := committer.replayPass(ctx); second <- err }()
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	for name, ch := range map[string]chan error{"first": first, "second": second} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s pass: %v", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s pass did not finish", name)
+		}
+	}
+	if got := applies.Load(); got != 1 {
+		t.Fatalf("mutation apply calls=%d, want 1: a second pass re-read records the first had applied but not yet acknowledged", got)
 	}
 }
