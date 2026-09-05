@@ -312,9 +312,17 @@ func TestWALCloseDrainsAdmittedAppends(t *testing.T) {
 		}(i)
 	}
 	close(start)
-	deadline := time.Now().Add(time.Second)
-	for w.Stats().Queued == 0 && time.Now().Before(deadline) {
+	// Every append must be ADMITTED before Close, or the ones still on their
+	// way legitimately get ErrClosed and the test measures scheduling, not
+	// draining. Waiting for one queued append (the previous precondition) let
+	// a slow Windows runner close the WAL under 31 goroutines that had not
+	// reached Append yet ("append 0: nestwal: closed", kit v1.12.2 tag CI).
+	deadline := time.Now().Add(5 * time.Second)
+	for w.Stats().Admitted < total && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
+	}
+	if admitted := w.Stats().Admitted; admitted != total {
+		t.Fatalf("only %d of %d appends were admitted before close; the precondition of this test did not hold", admitted, total)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

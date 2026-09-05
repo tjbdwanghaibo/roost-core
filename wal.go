@@ -81,6 +81,11 @@ type Stats struct {
 	Segment          uint64
 	Offset           int64
 	Queued           int
+	// Admitted counts appends accepted into the WAL since Open; Admitted −
+	// Appended is what is in flight (queued or batched, not yet durable),
+	// which Queued alone cannot show once the writer has taken a batch off
+	// the channel.
+	Admitted         uint64
 	Appended         uint64
 	Bytes            uint64
 	Syncs            uint64
@@ -118,6 +123,7 @@ type WAL struct {
 	checkpoint   checkpointState
 
 	appended     atomic.Uint64
+	admitted     atomic.Uint64
 	bytesWritten atomic.Uint64
 	syncs        atomic.Uint64
 	replayed     atomic.Uint64
@@ -318,6 +324,7 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 	}
 	select {
 	case w.appendCh <- req:
+		w.admitted.Add(1)
 		w.lifecycleMu.RUnlock()
 	case <-ctx.Done():
 		w.lifecycleMu.RUnlock()
@@ -385,6 +392,7 @@ func (w *WAL) Enqueue(ctx context.Context, record corenest.CommitRecord) (corene
 	req.lsn = w.nextLSN + 1
 	select {
 	case w.appendCh <- req:
+		w.admitted.Add(1)
 		w.nextLSN++
 	default:
 		w.enqueueMu.Unlock()
@@ -581,6 +589,7 @@ func (w *WAL) Stats() Stats {
 		Segment:      segment,
 		Offset:       offset,
 		Queued:       len(w.appendCh),
+		Admitted:     w.admitted.Load(),
 		Appended:     w.appended.Load(),
 		Bytes:        w.bytesWritten.Load(),
 		Syncs:        w.syncs.Load(),
