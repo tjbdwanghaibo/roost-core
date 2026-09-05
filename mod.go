@@ -66,8 +66,12 @@ func CombineDefinitions(groups ...[]coresaga.Definition) []coresaga.Definition {
 }
 
 func (m *Mod) Name() app.ModName { return mods.ModSaga }
+
+// DependsOn names Mods: Mongo and NATS. JetStream is the NATS Mod's
+// capability and health is a registry built-in — neither is a Mod name, and
+// app resolves dependencies by Mod name (roost-codegen U-0025).
 func (m *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModMongo, mods.ModNatsJetStream, mods.ModHealth}
+	return []app.ModName{mods.ModMongo, mods.ModNats}
 }
 
 func (m *Mod) OptionalDependsOn() []app.ModName {
