@@ -1,7 +1,9 @@
 package mongo
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
@@ -85,5 +87,26 @@ func TestStringifyIDDoesNotExposeNilSentinel(t *testing.T) {
 	}
 	if got := stringifyID(42); got != "42" {
 		t.Fatalf("id=%q, want 42", got)
+	}
+}
+
+// FEATURE_LOGIC M8 item 3: an unknown write model type is refused with its
+// index before anything reaches the driver — a nil model handed to the driver
+// panics inside it. The loop runs before c.coll is touched, so a zero
+// collection is enough to prove the refusal. Reverting the default branch made
+// no test red before this one existed.
+func TestBulkWriteRefusesAnUnknownModelTypeBeforeReachingTheDriver(t *testing.T) {
+	c := &collection{}
+	_, err := c.BulkWrite(context.Background(), []fmongo.WriteModel{
+		{Type: fmongo.WriteModelInsertOne, Document: map[string]any{"a": 1}},
+		{Type: fmongo.WriteModelType(99)},
+	})
+	if err == nil {
+		t.Fatal("an unknown write model type was accepted")
+	}
+	for _, want := range []string{"unsupported", "index 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not say %q", err, want)
+		}
 	}
 }
