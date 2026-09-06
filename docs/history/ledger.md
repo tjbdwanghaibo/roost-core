@@ -176,7 +176,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | codegen | `（根：CI 工作流 + ci/）` | — | — | — | 09-05 U-0015 | — | — | — | — |
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/entity` | — | 09-06 U-0039 | — | 未审 | 09-06 U-0039 | — | 未审 | 未审 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -187,7 +187,7 @@
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
-| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
+| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/tablegen` | — | 09-06 U-0033（回退 5 条） | — | 未审 | 未审 | 09-06 U-0033 | 未审 | 未审 |
 | codegen | `internal/webroute` | — | 09-06 U-0040（回退 4 条，2 洞） | — | 未审 | 09-06 U-0040 | — | 未审 | 未审 |
@@ -226,6 +226,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0090 | 2026-09-06 | roost-codegen `internal/cfggen` 元数据字段级规则 | C2 | codegen gap map 7/20；同 Go 字段碰撞需 `item_id`/`itemID`（`itemId` 不碰撞，exportName 保留后缀大小写） | `meta_promises_test.go` 一条 | 九处守卫回退各红 | — |
+| U-0089 | 2026-09-06 | roost-codegen `internal/roost` `roost add` 各 kind 参数守卫 | C2 | codegen gap map 15/20；每次拒绝后 roost.yaml 字节不变；`unknown kit mod` / `unsupported access layer` 两处前门冗余（下游 Validate / resolveMods 同文案拒绝并回滚） | `add_promises_test.go` 两条 | 14 处守卫回退 12 红、2 冗余 | — |
 | U-0088 | 2026-09-06 | roost-codegen `internal/nest` 处理器接收者 / target 声明 | C2 | codegen gap map 11/20；"非 error 跟在 error 后"经 Go 语法不可达（冗余）；"空 target 名"守卫同文本出现两次，按行号回退 | `handler_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0087 | 2026-09-06 | roost-codegen `internal/protocol` 取值与引用规则 | C2 | codegen 本地 gap map 15/20（U-0032 钉的是结构规则）；**工具坑**：`gapmap.sh` 收尾用 `git clean -fdq` 把采样期间新写的测试文件删了——只该还原已跟踪文件，五仓已改 | `definition_promises_test.go` 一条 | 六处守卫回退各红 | — |
 | U-0086 | 2026-09-06 | roost-kit `etcd` 本地镜像配置 | C2 | kit gap map 18/20；空前缀会 watch 整个键空间 | `local_mirror_promises_test.go` 一条（用 6 方法的空转客户端替身） | 三处守卫回退各红 | — |
