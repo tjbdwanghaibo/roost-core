@@ -165,7 +165,7 @@
 | skill | `combat` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `combatcomponent` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| skill | `skillcompose` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillsync` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
 ### roost-codegen（16 包）
@@ -216,7 +216,7 @@
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | B-22 | core 首份 nightly gap map 里整片无覆盖的包：`entity`（实体与远端协议——不变量①～④的宿主，**优先**）、`statesync`、`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | 先按"实质承诺"筛（`entity` 的 `RemoteCommit.Validate`、`statesync` 的帧校验、`security` 的鉴权拒绝优先），nil 守卫不算 |
-| B-23 | skill 首份 gap map（本地 `gapmap.sh --max 20`）：83 条采样 71 条无覆盖——`skillcompose` 19/20、`combatcomponent` 18/20、`skill` 17/20、`skillsync` 17/20，`combat` 0/3 | C2 | gapmap 本地跑 | skill 此前只做过 U-0028 一轮回退；编译器 / 组合器的校验规则与 codegen 生成器同型，预计密度高 |
+| B-23 | skill 首份 gap map：`combatcomponent` 18/20、`skill` 17/20、`skillsync` 17/20 | C2 | gapmap 本地跑 | skillcompose **已完成 → U-0063**；skillsync 的 applier 报文规则（epoch / schema / 形状 / 在途）优先 |
 
 ## 5. 单元日志
 
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0063 | 2026-09-06 | roost-skill `skillcompose` 合同构建 / 校验 | C2 | 本地 gap map 19/20 无覆盖；`ValidateContract` 的每条规则都藏在"摘要不符"后面——变异后必须重算摘要才测得到；builder 的"重复来源"被 validate 的同类检查掩盖（冗余） | `contract_promises_test.go` 两条（9 + 20 个变异） | 十处回退九处红、一处冗余 | — |
 | U-0062 | 2026-09-06 | roost-core `nest` 锁组迁移请求守卫（B-20 收尾） | C2 | 组 0、未知实体、迁移在途的第二次请求三条无测试 | `group_transition_promises_test.go` 一条 | 三处守卫回退各红（两处同文本 `groupID == 0`，按行号回退） | — |
 | U-0061 | 2026-09-06 | roost-kit `redis` 客户端 ctx 截止期（故障矩阵第四切片发现） | C8 | go-redis 默认 `ContextTimeoutEnabled=false`：3s 注入延迟下 500ms 预算的 `Acquire` 等满 2s ReadTimeout；快路径（连接错误）尊重 ctx、慢路径（等回复）不尊重 | `client_deadline_test.go`；`TestToxicRedisLatencyKeepsAcquireWithinItsDeadline`（501ms 返回） | 关掉选项单元测试红、集成测试红（首跑即红） | T-43 |
 | U-0060 | 2026-09-06 | roost-service `rank` `decodeEntry` 严格解码 | C2 | 解码失败必须是错误而非零分（零分写回即覆盖真实分数） | `member_promises_test.go` 一条（5 种坏成员） | 字段数守卫回退红 | — |
