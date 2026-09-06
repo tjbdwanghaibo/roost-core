@@ -213,7 +213,7 @@
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
-| B-20 | 回退复测后剩余的实质守卫：core `saga` 引擎 Start / Resume / Query / ForceCompensate / Complete 十二条状态与参数规则；kit `nestwal` 段连续性与帧损坏检测；core `nest` group_transition 与 `CheckContainAllLock` | C2 | 第 9 节复测 | saga 引擎那组最值钱（状态机边界）；nestwal 损坏检测需要构造坏段文件 |
+| B-20 | 回退复测后剩余的实质守卫：kit `nestwal` 段连续性与帧损坏检测；core `nest` group_transition 与 `CheckContainAllLock` | C2 | 第 9 节复测 | saga 引擎那组**已完成 → U-0052**；nestwal 损坏检测需要构造坏段文件 |
 
 ## 5. 单元日志
 
@@ -221,6 +221,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0052 | 2026-09-06 | roost-core `saga` 引擎 Register / Start / List / Resume / Compensate / Complete | C2 | 复测剩余 15 条中的 12 条实质规则；夹具用不跑协调循环的引擎 + 直接落库的记录 | `engine_promises_test.go` 三条 | 十一处守卫回退各红 | — |
 | U-0051 | 2026-09-06 | roost-kit `saga` 消费者配置 / 入站解码 | C2 | 回退 40 条 37 条全绿；首版"缺 id / 异 topic"用例被载荷解码失败掩盖（回退绿）——换成能独立通过的 start 载荷后才真正钉住；超大帧守卫是纵深防御（去掉后 JSON 解码仍拒绝） | `promises_test.go` 四条 | 六处守卫回退各红；一处冗余保留 | — |
 | U-0050 | 2026-09-06 | roost-core `saga` 引擎选项 / Command / Completion / 效果编解码 | C2 | 回退 40 条 34 条全绿；`Command.Validate` 是一条 17 子句的 `\|\|`——回退法要按子句做，整条中和没有意义 | `promises_test.go` 四条（11 条选项规则、17 + 8 个子句、编解码拒绝） | 六处回退各红（两处为子句级） | — |
 | U-0049 | 2026-09-06 | roost-kit `remoteentity` 写批次生命周期 / 准入 / Mod sid | C2 | 回退 40 条 37 条全绿；二次 finalize、commit 早于 finalize 属于"WAL 已拿到提交后改写"级别；`mongo_committer` 的 tx 复用检查是冗余互掩（已有测试） | `promises_test.go` 三条 | 五处守卫回退各红 | — |
@@ -387,7 +388,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | core `dataengine` | 27 | 20 → **8**（U-0044 后） | 剩余全是 nil / loader 空资源守卫 |
 | core `configdata` | 45 | 34 → **9**（U-0046 后复测） | 剩余：panic 转错误、空数据目录、一处并列丢弃分支——低价值 |
 | core `nest` | 45 | 44 → **30**（U-0047 后复测） | 剩余多为 nil 守卫与 CastTwo / Three 的第二、三位；实质：group_transition 四条、`CheckContainAllLock` 死锁风险、participant 可比较（B-20） |
-| core `saga` | 40 | 34 → **15**（U-0050 后复测） | 剩余实质：引擎 Start / Resume / Query / ForceCompensate / Complete 的十二条状态与参数规则（B-20，优先） |
+| core `saga` | 40 | 34 → **15**（U-0050 后复测）→ U-0052 又钉 11 条 | 剩余应只有 nil / 存储错误透传 |
 | core `mirror` | 14 | 13 → **4**（U-0045 后复测） | 剩余：`PublishDelete` 零 key、发布侧 op（两处 nil 守卫） |
 | core `entitysync` | 9 | 7 | 多为参数守卫 |
 | kit `redis` | 25 | 20 | 含配置 / nil 守卫（B-19） |

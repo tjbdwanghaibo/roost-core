@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **saga 引擎的状态机边界钉住**（U-0052，C2，B-20 第一项）。复测后剩余的十二条实质规则：重复注册定义、启动未知定义版本、
+  启动请求的业务键 / 载荷上限、`List` 上限 1000、`Resume` 的 id 形状与"清除截止期又给截止期"互斥、截止期已过、只有
+  Failed / ManualRequired 可恢复（Pending / Completed 报 `status N cannot resume`）、定义已卸载、恢复后新化身进入补偿；
+  `Compensate` 在步骤结果在途时拒绝、无已完成步骤拒绝、已在补偿时幂等返回；`Complete` 的载荷上限与校验。夹具是**不跑
+  协调循环的引擎**加直接落库的记录，让拒绝成为唯一可能发生的事。`engine_promises_test.go` 三条；回退十一处守卫各红。
 - **saga 的引擎选项预算、Command / Completion 校验与 start / completion 效果编解码逐条钉住**（U-0050，C2）。回退采样 40 条
   守卫 34 条全绿。`NewEngine` 十一条跨参数规则各自按报错里的字段名断言（原先只有 publisher batch 一条且只看 `err != nil`）；
   `Command.Validate` 的十七个子句、`Completion.Validate` 的八个子句各用单字段变异钉住——一条巨型 `||` 条件里任一子句丢失只
