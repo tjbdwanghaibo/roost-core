@@ -216,6 +216,7 @@
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | B-22 | core 首份 nightly gap map 里整片无覆盖的包：`entity`（实体与远端协议——不变量①～④的宿主，**优先**）、`statesync`、`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | 先按"实质承诺"筛（`entity` 的 `RemoteCommit.Validate`、`statesync` 的帧校验、`security` 的鉴权拒绝优先），nil 守卫不算 |
+| B-23 | skill 首份 gap map（本地 `gapmap.sh --max 20`）：83 条采样 71 条无覆盖——`skillcompose` 19/20、`combatcomponent` 18/20、`skill` 17/20、`skillsync` 17/20，`combat` 0/3 | C2 | gapmap 本地跑 | skill 此前只做过 U-0028 一轮回退；编译器 / 组合器的校验规则与 codegen 生成器同型，预计密度高 |
 
 ## 5. 单元日志
 
@@ -373,6 +374,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **第二轮（2026-09-06，kit / skill / service / codegen 共 26 篇）**：加白名单后 275 个可疑项，逐个核对源码：绝大多数是生成工程的相对路径、文件名、标记（`//roost:*`）、示例名（`ItemTableFrom` 是 `<表名>TableFrom` 的示例、`BagSender` 是 `New<Handler>Sender` 的示例）。真漂移 1 处、已修：skill 的 visual-sync 指南把发布器写成 `kitroom.PublisherWithOptions`，实际是 `roost-kit/syncstream.NewPublisherWithOptions`（room 包没有它）。历史性提法（`global.ActivityService → activity.Service`、`cube.skill/v2 → roost.skill/v2`）是迁移说明，保留。结论：五仓文档标识符层面的漂移在两轮后基本清零；剩下的复审要靠人读语义，而非脚本。
 
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
+
+**发布（2026-09-06 第四轮）**：kit v1.12.6（Redis 客户端 ctx 截止期 U-0061、`nats.ignore_discovered_servers`、两个故障切片、gap map 工具）→ codegen 清单 kit v1.12.6 → codegen v1.13.11。tag 工作流按名核对（结果见下一条记录）。
 
 **发布（2026-09-06 第三轮）**：kit v1.12.4 → **ci 红而当时没发现**：U-0037 的测试辅助函数 `waitFor` 与 `//go:build integration` 文件里的同名函数重复，只有带 tag 的构建能看见；本地 `go test` / pretag 不带 tag 全绿，而盯 CI 时按"main 上最新一次运行"取到的是 `codeql` 工作流、不是 `ci`（两个工作流都由 push 触发，`gh run list --limit 1` 取到哪个看时序）。修复：改名、pretag 加 `go vet -tags integration ./...`、**看 CI 一律 `--workflow ci`**。v1.12.4 不改写，补丁 v1.12.5，codegen 清单跟进（T-41）。codegen v1.13.9 的 ci / framework-release 按工作流名核对，均绿。
 
