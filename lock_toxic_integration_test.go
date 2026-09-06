@@ -60,7 +60,10 @@ func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 	proxy := toxiproxyClient{base: api}
 	proxy.do(t, http.MethodPost, "/reset", nil)
 	t.Cleanup(func() { proxy.do(t, http.MethodPost, "/reset", nil) })
-	rdb := goredis.NewClient(&goredis.Options{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second, MaxRetries: 0})
+	// Built through the kit's own constructor so the fixture carries the
+	// production client options (context deadlines on the wire included),
+	// not a hand-rolled approximation of them.
+	rdb := newRedisClient(&fredis.Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
 	t.Cleanup(func() { _ = rdb.Close() })
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("proxied redis: %v", err)
@@ -159,5 +162,53 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	}
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("lock unusable after reconciliation: ok=%v err=%v", ok, err)
+	}
+}
+
+// Latency, not loss: with three seconds added to every Redis reply, Acquire
+// must honour the caller's deadline and come back within it — a lock that
+// waits for the slow reply past its deadline is a lock that stalls every
+// handler behind it. The lock must also not be left in a state that refuses
+// the next Acquire once the network is fast again: a timed-out SETNX is
+// uncertain, and reconciliation through Release clears it.
+func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
+	rdb, proxy := toxicRedis(t)
+	ctx := context.Background()
+	factory := newDistLockFactory(rdb)
+	lock := factory.NewLock("toxic:slow", 5*time.Second)
+
+	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
+		"name": "slow", "type": "latency", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"latency": 3000, "jitter": 0},
+	})
+	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	started := time.Now()
+	ok, err := lock.Acquire(acquireCtx)
+	cancel()
+	elapsed := time.Since(started)
+	t.Logf("Acquire under 3s latency: ok=%v err=%v elapsed=%s", ok, err, elapsed)
+	if ok || err == nil {
+		t.Fatalf("Acquire reported success (ok=%v err=%v) although the reply could not have arrived within the deadline", ok, err)
+	}
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("Acquire took %s under a 500ms deadline; it waited for the slow reply instead of honouring the caller", elapsed)
+	}
+
+	proxy.do(t, http.MethodPost, "/reset", nil)
+	// The timed-out SETNX may or may not have been executed; the lock object
+	// says so and is reconciled through Release, never by a blind retry.
+	if ok, err := lock.Acquire(ctx); ok && err == nil {
+		t.Log("Acquire after heal succeeded directly: the timed-out SETNX had not reached Redis")
+	} else if errors.Is(err, ErrDistLockStateUncertain) {
+		if err := lock.Release(ctx); err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
+			t.Fatalf("reconciling Release after heal: %v", err)
+		}
+		if ok, err := lock.Acquire(ctx); err != nil || !ok {
+			t.Fatalf("lock not reusable after reconciliation: ok=%v err=%v", ok, err)
+		}
+	} else {
+		t.Fatalf("Acquire after heal: ok=%v err=%v", ok, err)
+	}
+	if err := lock.Release(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

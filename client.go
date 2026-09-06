@@ -44,18 +44,25 @@ func newRedisClient(cfg *fredis.Config) *redisClient {
 			ReadTimeout:  cfg.ReadTimeout,
 			WriteTimeout: cfg.WriteTimeout,
 			MaxRetries:   cfg.MaxRetries,
+			// Without this go-redis ignores the caller's context deadline on
+			// the wire and waits for ReadTimeout instead: a lock Acquire with a
+			// 500ms budget sat for the full 2s read timeout under injected
+			// latency. The caller's deadline is the contract; ReadTimeout is
+			// only the backstop for callers that gave none.
+			ContextTimeoutEnabled: true,
 		})
 	} else {
 		rdb = goredis.NewClient(&goredis.Options{
-			Addr:         cfg.Addr,
-			Password:     cfg.Password,
-			DB:           cfg.DB,
-			PoolSize:     cfg.PoolSize,
-			MinIdleConns: cfg.MinIdleConns,
-			DialTimeout:  cfg.DialTimeout,
-			ReadTimeout:  cfg.ReadTimeout,
-			WriteTimeout: cfg.WriteTimeout,
-			MaxRetries:   cfg.MaxRetries,
+			Addr:                  cfg.Addr,
+			Password:              cfg.Password,
+			DB:                    cfg.DB,
+			PoolSize:              cfg.PoolSize,
+			MinIdleConns:          cfg.MinIdleConns,
+			DialTimeout:           cfg.DialTimeout,
+			ReadTimeout:           cfg.ReadTimeout,
+			WriteTimeout:          cfg.WriteTimeout,
+			MaxRetries:            cfg.MaxRetries,
+			ContextTimeoutEnabled: true,
 		})
 	}
 	return &redisClient{rdb: rdb}
