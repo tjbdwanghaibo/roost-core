@@ -134,7 +134,7 @@
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
 | kit | `remoteentity` | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `room` | 09-02 | 09-02 / 09-06 U-0095（回退 20 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-06 U-0051（回退 40 条） / 09-06 U-0092（回退 9 条） | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `servicerpc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `spatial` | 09-02 | 09-06 U-0081（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0095 | 2026-09-06 | roost-kit `room` 同步总线 / 信封汇参数守卫 | C2 | kit gap map 20 条参数守卫；"不触网"用计数替身断言；`syncbus.Handler` 带 error 返回 | `guards_promises_test.go` 两条 | 二十处守卫回退各红 | — |
 | U-0094 | 2026-09-06 | roost-skill `skill` 执行器程序结构不变量 | C2 | skill gap map；对编译产物白盒篡改（初始相位 / 根表 / 操作表 / 编译期上限）；三处守卫回退后是 panic 而非错误，守卫的价值在于把越界变成 `ErrProgramInvariant`；skill id 不能含空格（`NORMALIZE_INVALID_IDENTIFIER`） | `executor_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0093 | 2026-09-06 | roost-kit `remoteentity` 所有权标记 / 兴趣注册 / 后端参数规则 | C2 | kit gap map；本地拒绝用计数 Eval 替身证明"不落 Redis"；zsh 里 `for x in $var` 不分词（要用数组或 `${=var}`），首轮回退全被当成一个 spec | `guards_promises_test.go` 三条 | 八处守卫回退各红 | — |
 | U-0092 | 2026-09-06 | roost-kit `saga` 步骤消费者配置拒绝 / Replay 身份 | C2 | kit gap map；`readReceipt` 的摘要冲突只在 Replay 路径可达（Handle 在事务内另行比较），故此前"ID 复用"测试没覆盖到它 | `step_consumer_promises_test.go` 三条 | 九处守卫回退各红 | — |
