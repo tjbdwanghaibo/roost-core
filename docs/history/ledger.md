@@ -145,13 +145,13 @@
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | service | `（根：CI 工作流）` | 09-06 脚本扫 | 09-05 U-0014 | — | — | 09-06 脚本扫 | — | 09-06 脚本扫 | — |
-| service | `account` | 09-06 脚本扫 | 09-04 U-0005 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 09-05 U-0021 |
+| service | `account` | 09-06 脚本扫 | 09-04 U-0005 / 09-06 U-0058（回退 30 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 09-05 U-0021 |
 | service | `chat` | 09-06 脚本扫 | 09-04 U-0007 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| service | `match` | 09-06 脚本扫 | 09-04 U-0008 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
+| service | `match` | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
 | service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
@@ -214,7 +214,7 @@
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | B-20 | 回退复测后剩余的实质守卫：core `nest` group_transition 四条与 `CheckContainAllLock` 死锁风险 | C2 | 第 9 节复测 | saga 引擎 → U-0052、nestwal 损坏检测 → U-0053 已完成 |
-| B-21 | service 回退采样剩余：`account`（19/30）、`global`（19/33）、`match`（21/38）、`rank`（16/32）；`mail` / `platform` / `session` 的请求参数守卫（playerID ≤ 0、空 id、"vanished during commit"） | C2 | 第 9 节 service 表 | session 的校验部分**已完成 → U-0056**；手工回退只看了每包几条，脚本化采样仍找出这么多 |
+| B-21 | service 回退采样剩余：`global`（19/33）、`rank`（16/32）；各服务的请求参数守卫（playerID ≤ 0、空 id、"vanished during commit"、非本人角色） | C2 | 第 9 节 service 表 | session → U-0056、match → U-0057、胶水 → U-0058 已完成 |
 
 ## 5. 单元日志
 
@@ -222,6 +222,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0058 | 2026-09-06 | roost-service `account` 生成的 RPC 胶水（servicerpc 模板，九服务同源） | C2 | 三条模板守卫在九个 `*_rpc_gen.go` 里各自全绿；在 account 钉一次即覆盖模板 | `rpc_glue_promises_test.go` 两条 | 两处守卫回退各红 | — |
+| U-0057 | 2026-09-06 | roost-service `match` Commit / Cancel | C2 | 回退 38 条 21 条全绿；"同一票号两次"首版断言文本同时匹配 subject 级规则（回退绿）→ 收紧到 `ticket X appears twice`；subject 级规则经公开 API 不可达 | `commit_promises_test.go` 两条 | 四处守卫回退各红 | — |
 | U-0056 | 2026-09-06 | roost-service `session` Run / Resource / EnterRequest 校验 | C2 | 回退 40 条 32 条全绿；"无截止期"与"空幂等键"是资源泄漏 / 重复分配级别的守卫 | `validate_promises_test.go` 两条 | 四处守卫回退各红 | — |
 | U-0055 | 2026-09-06 | roost-service `platform` Order / Credential / Verified 校验 | C2 | 回退 39 条 32 条全绿；金额非正（免费送货）与空 secret（被替换实现接受的形状）两条安全守卫无测试 | `validate_promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0054 | 2026-09-06 | roost-service `mail` Envelope 校验 | C2 | 回退 40 条 32 条全绿；信封校验整段无测试 | `validate_promises_test.go` 一条（12 子用例） | 三处守卫回退各红 | — |
@@ -409,8 +411,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | `mail` | 40 | 32 → **U-0054 钉 12 条** | 剩余：请求参数守卫、"vanished during commit" |
 | `platform` | 39 | 32 → **U-0055 钉 14 条** | 剩余：请求参数守卫、admin 的"not recorded" |
 | `session` | 40 | 32 → **U-0056 钉 13 条** | 剩余：请求参数守卫、ErrRunMissing 透传 |
-| `match` | 38 | 21 | B-21 |
-| `account` | 30 | 19 | B-21 |
+| `match` | 38 | 21 → **U-0057 钉 5 条** | 剩余：胶水（U-0058 覆盖）、ErrTicketMissing 透传 |
+| `account` | 30 | 19 → **U-0058 钉胶水 3 条** | 剩余：请求参数守卫、"vanished during commit"、非本人角色 |
 | `global` | 33 | 19 | B-21 |
 | `rank` | 32 | 16 | B-21 |
 | `chat` | 40 | 9 | U-0007 / U-0022 时已密 |
