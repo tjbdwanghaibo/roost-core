@@ -115,7 +115,7 @@
 | kit | `actionflow` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `dataengine`（U-0025：C4 09-06） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `dataengine`（U-0025：C4 09-06） | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
 | kit | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -124,7 +124,7 @@
 | kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo/mongotest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `nats` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nats` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-06 U-0036 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal` | 09-02 | 09-06 U-0027 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -144,19 +144,19 @@
 
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| service | `（根：CI 工作流）` | — | 09-05 U-0014 | — | — | — | — | — | — |
-| service | `account` | 未审 | 09-04 U-0005 | 未审 | 未审 | 未审 | 未审 | 未审 | 09-05 U-0021 |
-| service | `chat` | 未审 | 09-04 U-0007 | 未审 | 未审 | 未审 | 09-05 U-0022 | 未审 | 未审 |
-| service | `directory` | 未审 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `global` | 未审 | 09-05 U-0019（回退验证） | 未审 | 未审 | 未审 | 09-05 U-0019 | 未审 | 未审 |
-| service | `global/activity` | 未审 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `mail` | 未审 | 09-04 U-0006 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `match` | 未审 | 09-04 U-0008 | 未审 | 未审 | 未审 | 09-05 U-0022 | 未审 | 未审 |
-| service | `platform` | 未审 | 09-05 U-0018（回退验证） | 未审 | 未审 | 09-05 U-0018 | 未审 | 未审 | 未审 |
-| service | `rank` | 未审 | 09-04 U-0004 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| service | `servicemetrics` | — | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | — | — |
-| service | `servicemods` | — | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | — | — |
-| service | `session` | 未审 | 09-05 U-0017（回退验证） | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| service | `（根：CI 工作流）` | 09-06 脚本扫 | 09-05 U-0014 | — | — | 09-06 脚本扫 | — | 09-06 脚本扫 | — |
+| service | `account` | 09-06 脚本扫 | 09-04 U-0005 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 09-05 U-0021 |
+| service | `chat` | 09-06 脚本扫 | 09-04 U-0007 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
+| service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
+| service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `match` | 09-06 脚本扫 | 09-04 U-0008 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
+| service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `rank` | 09-06 脚本扫 | 09-04 U-0004 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
+| service | `servicemods` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
+| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
 ### roost-skill（5 包）
 
@@ -214,6 +214,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0037 | 2026-09-06 | roost-kit `dataengine` outbox 认领循环 / health 行 | C5 / C8 | `run` 里 `_, _ = worker.RunOnce(ctx)`：store 失败只加 `storeFailures`，无日志；health 行只报 `publish_failures`（saga 两侧都报） | `outbox_worker_failures_test.go` 三条（连败只 1 Warn、恢复 1 Info、停机不报 failing）+ `dataEngineHealthMessage` | 改成每次失败都打 → 5 条 Warn 红；去掉 ctx 取消守卫 → 停机测试红 | T-37 |
+| U-0036 | 2026-09-06 | roost-kit `nats` JetStream 结算路径 | C5 | `_ = msg.Ack()/Nak()/NakWithDelay()/Term()` 四处丢弃；失败后 broker 重投，但无计数无日志，与"处理器一直失败"不可分 | `jetstream_settle_test.go` 两条（三种 op 各计一次；成功不碰计数器） | `settleErr == nil || true` → 红 | T-36 |
 | U-0034 | 2026-09-06 | roost-codegen `internal/attribute`、`internal/cfggen` | C2 | attribute 九条校验回退全部全绿（742 行、1 条测试）；cfggen 八条中 C1"key 必填"与 C2"key 字段未声明"互为掩护（去掉任一条另一条仍红——原测试只要"有错"）、C7 bean 名为关键字无覆盖 | `attribute/validation_test.go` 九条 + 合法样例；`cfggen/validation_messages_test.go` 四条按错误文本断言 | 十二处回退各自变红；两包绿 | — |
 | U-0033 | 2026-09-06 | roost-codegen `internal/tablegen` | C6 / C2 | 1 缺陷 + 4 无测试：`unique="true"`、`min=`、主键唯一性从 tag 读出、印进 CSV 规则行，**从未执行**——重复 id 进 JSON、生成的 loader 静默保留最后一行；必填空格、解析错误行列、`-force`、跳过标题/类型/规则行四条行为无测试 | `validateRows`（生成期校验，`ref=` 留给 loader）；`csv_rules_test.go` 七条 | 五处回退各自变红；codegen 全量绿 | T-35 |
 | U-0032 | 2026-09-06 | roost-codegen `internal/protocol` 解析器校验 | C2 | 六条结构校验回退全部全绿（重复 struct、未导出类型、重复字段号、req/resp id 相等、枚举首值 0、枚举重复值名）；2.8k 行的包只有 4 条测试。"req id == resp id"是死分支（`RespID` 直接取 id）——观察，不补 | `validation_test.go` 表驱动五条，每条只破坏一处合法定义 | 补后五处回退变红；包绿 | — |
@@ -307,6 +309,13 @@ global：`service.go` 447 行全读；`Refused` 全在回调内且随错误返�
 ### U-0021 / U-0022 说明
 
 U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给调用方，版本校验删除是安全的；名字在 Commit 前按 claim 取消、Commit 后按 owner 释放；撤销本身失败计 `rollback.failed`（与既有语义一致）。U-0022 的设计选择：枚举由部署提供而不是扫描 keyspace——两处注释早已写明理由；chat 的静态项在 Provide 时逐条 `Resolve`，pair 类频道无法用配置表达（需要 participant），走 `WithPruneChannels`；match 的 `SweepQueues()` 以可选接口暴露，Store 的测试替身不必实现；两处未配置都在启动时告警一次，不再沉默。
+
+### U-0036 / U-0037 扫描记录（2026-09-06，service + kit 三类脚本扫描）
+
+- **C5（errcheck `-blank -ignoretests`）**：service 零条。kit 60 余处 `_ =`，逐条判读：`nestwal/codec.go` 的 `binary.Write` 写 `bytes.Buffer`（不可能失败）、`recover()`、关停路径的 `Close/Stop/Shutdown`、`SetDeadline` 复位、`remoteentity` 的 `unlockObserved`（内部已 `recordReleaseFailure` 计数）、错误路径上仅用于改善报错文本的 `refreshMarked`、有注释说明的 `RenewRemoteSnapshotInterest`、`entity_delete.go` 的 `Abort/Indeterminate`（之后紧跟 `runtime.fail` / `closeBatch` 上报）——都是**有意为之且有观测**。真洞两处：`nats/jetstream.go` 四处结算（U-0036）、`dataengine/outbox_worker.go` 的 `RunOnce`（U-0037）。存疑一处未动：`saga` 的 `commandDigest` / 完成摘要用 `json.Marshal(c)` 丢错——`Command` 是纯值字段，Marshal 不会失败，但若将来加了 `any` 字段会让全部命令摘要相同、去重误判；记入待开 C5。
+- **C7（`Lock()` 后无紧随 `defer Unlock()`）**：service 零处非 defer 锁。kit 160 余处，全部在同函数内配对释放（多为条带锁批量加锁 + 一个 defer 逆序解锁、或返回解锁闭包）；无真洞。
+- **C1（持锁区域内的 ctx 调用）**：service 零处。kit 两处命中：`room_broadcast.go` 条带 flush 锁内 `coordinator.DistributeBatch(ctx)`——进程内协调器、按设计串行化每条带的帧；`ownership.go` 每实体 `ownershipMu` 内做分布式锁释放——每实体互斥、就是写路径的设计。均记"看过、无问题"。
+- **方法结论**：三类脚本扫描对 service 全清零，说明 service 这一层的 C1 / C5 / C7 可以在矩阵上从"未审"改为"09-06 脚本扫"（12 包）；kit 的真洞集中在"失败→重试"的结算/轮询循环——失败本身被正确处理（重投/重轮询），但**不可见**，这是 C5 在成熟代码里的典型形态。
 
 ## 6. 方向二进度：game 模板
 
