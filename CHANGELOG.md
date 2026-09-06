@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **entity 的 `RemoteCommit.Validate` 二十五条规则逐条钉住**（U-0065，C2，B-22 首项）。首份 nightly gap map 里 `entity` 5/5
+  无覆盖。远端提交是不变量①～④的宿主：身份三要素、版本连续、两个所有权 epoch、更新 / 删除的互斥形状、每条数据变更与
+  提交头的实体 / 版本一致、重复变更 / 删除、快照的键 / 版本 / epoch / schema / 数据 / 校验和 / 重复、失效键的归属与重复。
+  夹具用注册过的 kind 与 `BuildEntityID` 构造（快照键的有效性要求实体 id 编码了 kind）。`remote_commit_promises_test.go`
+  一条（25 个变异）；回退七处守卫各红。
 - **nest 锁组迁移请求的守卫钉住**（U-0062，C2，B-20 收尾）：加入 / 移动到组 0、getter 不认识的实体、一次迁移在途时的第二次
   请求（移动或离开）各自拒绝，且被拒绝的请求不在实体上留下 pending 标记。`group_transition_promises_test.go` 一条；
   回退三处守卫各红。
