@@ -320,5 +320,9 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
 
+## 8. 故障矩阵（toxiproxy）
+
+**第一切片（2026-09-06，kit）**：隔离环境脚本在有 `toxiproxy-server` 时为三个 NATS 节点各起代理（24222–24224，API 18474），导出代理 URL；`heal` 清 toxic。两条集成测试：3s 延迟下提交与投影 2.5s 内完成（提交点是 WAL + Mongo，总线不在同步路径）、延迟清除后效果恰好一次；reset_peer 下提交仍被接纳、outbox 保留、恢复后恰好一次。本地对真实环境两条各 0.7s 通过。`nightly-fault-matrix` 工作流每日 03:00（Asia/Shanghai）以 `ROOST_IT_TOXIPROXY=1` 跑整套。**边界**：Mongo 不代理——副本集发现把驱动引到成员各自地址，代理会被绕开；Mongo 侧的故障仍由 `fault mongo-primary`（进程级）覆盖。**下一切片**：Redis 代理 + remoteentity 锁的超时 / 半开连接（对应 U-0012 的 uncertain 态）；NATS `timeout`（半开）toxic 对 JetStream 发布确认的影响；把四个不变量各配至少一条网络故障测试。
+
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
