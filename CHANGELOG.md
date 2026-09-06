@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Changed（测试质量）
+
+- **bus 的 RPC 响应信封解码、生命周期拒绝与死信能力拒绝补上测试**（U-0043，C2）。脚本化承诺回退对 `bus` 抽了 32 条守卫，
+  其中未被任何测试钉住的：`decodeRPCResponse` 的"版本不支持 / 失败无错误体 / 成功无载荷"三条线协议规则、`Handle` 的
+  module / name 必填、停止后 `HandleRpc` 拒绝、无 rpc / 无 JetStream 传输时的调用拒绝、无死信存储时三个死信操作的拒绝。
+  `promises_test.go` 五条按错误文本钉住；回退版本检查与必填检查各自变红。
+- **dataengine 的准入校验逐条钉住**（U-0044，C2）。`ValidateMutation` 的十二条形状规则（混用旧字段、文档键、put / patch /
+  delete 各自的载荷约束、未知 kind）、远端提交与头部的交叉校验（实体 id、版本、delete 标志、本地数据混入）、
+  `ValidateCommitRecord` 的效果 / 回执 / 租约围栏回执定位、`LeaseFence.Validate` 六个字段——此前只有"版本必须连续"和
+  "patch 不回落全量"两条测试。这是 WAL 回放与投影之前的最后一道门，`validate_promises_test.go` 四条；回退五处守卫
+  各自变红。**方法教训**：用 `&& false` 中和 `A || B` 形式的条件只中和最后一个析取项——必须加括号，否则回退法对
+  "或"条件给出假阴性（首轮把 `bus` 的重启拒绝误判为无覆盖）。
+
 ### Added
 
 - **`syncbus.DeliveryIDs`**：SyncMsg 投递身份的唯一生成器——进程唯一的随机前缀 + 单调序号，
