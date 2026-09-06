@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **webroute 注册器的五种拒绝按文本钉住**（U-0075，C2）：无 handler、空 / 相对路径、PUT 与未知方法、重复路由、nil 注册器；
+  方法与路径先归一化再校验。原测试只断言"有错"。`promises_test.go` 一条；回退三处守卫各红。
+- **cache 读穿透的远端失败策略钉住**（U-0076，C2 / C8）。`IgnoreRemoteError` 是"L2 故障是否也是读者的故障"的唯一开关：默认
+  远端 Get / 写回失败即调用方的错误且**不问 loader**；打开后降级到 L1 + loader，失败只计数。两个开关 × 两次 L2 调用四条
+  路径此前无测试。`read_through_promises_test.go` 一条；回退两处守卫各红。
 - **syncstream 文件日志的完整性守卫钉住**（U-0074，C2）。检查点正文声称另一个代数、最新代数的 WAL 文件丢失、WAL 行解不开——
   三种情况 `Load` 各自失败关闭而不是回放一份错的或残缺的历史；关闭后的 `Record` / `Load` / `Checkpoint` 与异版本的变更记录
   拒绝。`file_journal_promises_test.go` 两条；回退三处守卫各红，`Record` 入口的关闭检查与批锁内的同名检查互掩（冗余保留）。
