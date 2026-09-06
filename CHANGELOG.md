@@ -10,6 +10,9 @@
 
 ### Changed（测试质量）
 
+- **执行器的程序结构不变量钉住**（U-0094，C2）：初始相位越界、相位无 enter 根（`ErrAsyncFlowNotScheduled`）、根操作为空 / 越界、
+  repeat 次数超过编译期上限，`Start` 各自以 `ErrProgramInvariant` 拒绝而不是越界 panic；拒绝后无活动施法、留存的施法状态为 CastFailed。
+  `executor_promises_test.go` 一条（对编译产物做白盒篡改）；回退四处守卫各红（三处为 panic）。
 - **skill 内存宿主的时间单调与支付守卫钉住**（U-0085，C2）。内存宿主是所有技能测试的参照宿主，它的拒绝就是真实宿主被
   对照的契约：tick 只能前进（同 tick 幂等）、负费用、未映射句柄且无资源名、未知实体、总额超池——拒绝不扣减。
   `memory_host_promises_test.go` 一条；回退四处守卫各红。
