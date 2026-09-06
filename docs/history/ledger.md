@@ -207,6 +207,8 @@
 | ~~B-12~~ | roost-codegen CI 三处债 | 流程 | 09-05 CI 巡检（v1.12.1 起即红） | **已完成 → U-0015**：登记的三处之外，逐轮推进又暴露四处（compose 短语法卷、minimum 集与生成器下限脱节、upgrade-compat 历史版本写 cube-* 路径、kustomize 祖先布局）加 Dockerfile Go 版本，共八处，四条工作流全绿。原登记：① `quality` 的 actionlint/shellcheck 对 `release.yml` 第 50/114/196 行报 SC2251/SC2035；② `generated-project-release-smoke` 的 shellcheck 对生成的 `deploy/*/*.sh` 报 SC1007（`CDPATH= cd`）/SC2194；③ `framework-release` 的 consumer-acceptance 在生成工程目录里跑 actionlint，因非 git 仓库报 "no project was found"。三处都不是本轮改动引入；本轮的清单修复让 ③ 前面的 gate 首次通过 |
 | ~~B-13~~ | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | **已完成**（09-05）：service v1.5.1（tag CI 首跑 rank 并发测试偶发 `lost 8 compare-and-swaps` → 测试按契约重试 ErrConflict，重跑绿）→ codegen 清单 kit v1.12.1 / skill v1.10.3 / service v1.5.1 → codegen v1.13.1（release 的 consumer-acceptance 首次真正跑 actionlint，报出生成 release 工作流的 SC2251/SC2035）→ 修模板 → codegen v1.13.2：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿。原记录： kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
 | ~~B-07~~ | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | **已完成 → U-0004～U-0008、U-0016～U-0020**：12 包全部过了一遍 C2（承诺回退法），其中 8 包各有修复或补测。原记录： service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
+| B-14 | `core/bus/reliable.go` `requeueMsgID`、`kit/saga` `commandDigest` / 完成摘要：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | 今天的结构体都是纯值字段、不会失败；一旦加了 `any` / 函数字段，全部摘要退化为同一个值 → 去重误判。低优先，改成返回错误或在摘要里混入 ID |
+| B-15 | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 
 ## 5. 单元日志
 
@@ -345,6 +347,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
 
 **发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
+
+**本轮小结（2026-09-06 第三轮，"脚本扫描 + 生成器收口"）**：换方法——对 service / kit / core / skill 四仓做三类脚本扫描（errcheck `-blank`、非 defer 锁、持锁 ctx 调用），四仓合计约 100 处 `_ =`、170 处非 defer 锁、9 处持锁 ctx 调用，逐条判读后**运行时真洞两处**（U-0036 JetStream 结算失败不可见、U-0037 outbox 认领循环失败不可见），其余都是有意且有观测的丢弃或"批量条带加锁 + defer 逆序解锁"。经验：成熟代码里的 C5 不再是"吞掉后走错分支"，而是"失败被正确处理（重投 / 重轮询）但**不可见**"——修法是计数 + 只打转折日志，而不是每次失败一行。生成器侧收口：eventgen（U-0038）、entity（U-0039）、webroute（U-0040）三个解析器都存在"看得见的问题不出声"（跳过坏文件、丢掉未挂接标记、接受拼错的键），dao 生成器层四处守卫无测试（U-0041）；至此 codegen 16 个包全部至少过了一遍承诺回退法。文档复审第三轮（指标名）修 2 处。发布：kit v1.12.4、codegen v1.13.8（含 tablegen 执行约束）、v1.13.9（含四个生成器单元）。C3 包级可变状态扫描：service 2 处、kit 1 处，全是只读查表。
 
 ## 8. 故障矩阵（toxiproxy）
 
