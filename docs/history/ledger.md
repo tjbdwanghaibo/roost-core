@@ -407,6 +407,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第四切片（2026-09-06，Redis 延迟）**：`latency` toxic 3s 下带 500ms 预算的 `Acquire` **等了 2.0s** 才返回——go-redis 默认不把 ctx 截止期带到网络上（`ContextTimeoutEnabled=false`），只看 `ReadTimeout`；锁后面的每个处理器跟着停 2s。这是故障矩阵直接抓到的第二个运行时缺陷（第一个是 NATS 客户端绕开代理）。修复后 501ms 返回，原有两条丢回复测试也从 2.0s 缩到 0.7s（它们的 700ms 预算此前同样没被尊重）。Redis 半开（`timeout` toxic）与"回复被吞"同形态，第二切片已覆盖，不另开。**下一切片**：JetStream RPC（bus/jetstream_rpc）在 NATS 半开下的 `call_timeout` 是否同样被尊重——同一类问题在另一条路径上。
 
+**第五切片（2026-09-06，JetStream RPC 半开）**：kit `nats` 包按生产配置（NatsMod + `nats.rpc.transport=jetstream`）起一条 JetStream RPC，基线调用成功后黑洞化三个代理下行，带 500ms 截止期的 `CallReliable` **502ms** 返回（publish 阻塞在 ack 上、被 ctx 打断），恢复后同一条 bus 立刻恢复。这条路径本来就对——与 U-0061 形成对照：同一类"调用方截止期是否到达网络"的问题，Redis 客户端错、JetStream 发布对。至此四个不变量 × 三种依赖的形态：NATS latency / reset / 半开（数据面 + RPC 面）、Redis 丢回复 / 延迟、Mongo 进程级。**下一切片**：Mongo 侧只能进程级（副本集发现绕开代理），已由 `fault mongo-primary` 覆盖；矩阵本轮收口，后续只随新缺陷类扩展。
+
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
 ## 9. 脚本化承诺回退（gap map，2026-09-06）
