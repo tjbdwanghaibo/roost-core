@@ -66,6 +66,9 @@ echo "pretag: building with GOWORK=off"
 GOWORK=off go build ./... >/dev/null
 echo "pretag: vetting with GOWORK=off"
 GOWORK=off go vet ./... >/dev/null
+echo "pretag: checking go.mod / go.sum are tidy"
+GOWORK=off go mod tidy
+git diff --quiet -- go.mod go.sum || fail "go.mod / go.sum are not tidy; commit the result of go mod tidy first (the CI unit job diffs them)"
 echo "pretag: testing with GOWORK=off"
 GOWORK=off go test ./... >/dev/null
 
