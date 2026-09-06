@@ -215,6 +215,7 @@
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
+| B-22 | core 首份 nightly gap map 里整片无覆盖的包：`entity`（实体与远端协议——不变量①～④的宿主，**优先**）、`statesync`、`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | 先按"实质承诺"筛（`entity` 的 `RemoteCommit.Validate`、`statesync` 的帧校验、`security` 的鉴权拒绝优先），nil 守卫不算 |
 
 ## 5. 单元日志
 
@@ -430,6 +431,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **回退脚本的第四个坑（2026-09-06 第五轮）**：按文本替换只命中第一处。同一包里同文本的守卫（global 的 `RenewLease` / `ReleaseLease` 都写 `if incarnation == ""`）会让回退落在别的函数上、把被测那条误判为无覆盖。人工回退要**按行号**；采样脚本本身是按行号改的，不受影响。
 
 **工具入库（2026-09-06 第六轮）**：采样器进 `roost-core/scripts/gapmap/`（kit / service 同拷贝），`scripts/gapmap.sh` 对每个有测试的包采样并写 `gapmap-report.md`，`nightly-gapmap` 工作流每日跑、报告进 job summary，不阻塞。本节的数字此后以 nightly 报告为准，人工只做判读。
+
+**首份 nightly 报告（2026-09-06，core，`workflow_dispatch max=5`，1.5 分钟跑完 35 个包）**：146 条采样守卫 112 条无覆盖。已开过单元的包立刻可见：configdata 0/5、saga 0/5、mirror 1/5、nest 2/5、dataengine 2/5、bus 3/5；从未碰过的包整片全绿：`entity` 5/5、`statesync` 5/5、`syncbus` 5/5、`security` 5/5、`ownerroute` 5/5、`migration` 5/5、`failurelog` 5/5、`admin` 5/5、`hotcode` 5/5、`robot/*` 5/5 ×3、`etcd` 4/4。这些是 B-22。默认 `max=20` 的夜间跑预计 6 分钟以内。
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 
