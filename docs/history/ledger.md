@@ -176,7 +176,7 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/dao` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/entity` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/entity` | — | 09-06 U-0039 | — | 未审 | 09-06 U-0039 | — | 未审 | 未审 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 | — | 未审 | 09-06 U-0038 | — | 未审 | 未审 |
 | codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -214,6 +214,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0039 | 2026-09-06 | roost-codegen `internal/entity` 标记解析 | C5 | 未挂接的 `//roost:entity` 静默消失（0 实体、0 错）；坏键 / 裸词等同于没写；`remote=bogus`、`lifetime=forever`、`sync=ture` 回落默认 | `marker_promises_test.go` 六条（两条未挂接、坏键、坏值、六种合法写法放行） | 三处守卫各自回退 → 对应测试红 | T-39 |
 | U-0038 | 2026-09-06 | roost-codegen `internal/eventgen` 处理器扫描 | C5 | `scanFile` 对解析失败 `return nil, nil`（该文件全部 `DealEventXxx` 从分发里消失、事件永不投递、无报错）；处理器引用未声明事件时照常生成 `case *event.EventGhost:`（编译错落在生成文件里） | `handler_promises_test.go` 三条（拒绝坏文件、拒绝未声明事件、放行已声明） | 两处守卫各自回退 → 对应测试红 | T-38 |
 | U-0037 | 2026-09-06 | roost-kit `dataengine` outbox 认领循环 / health 行 | C5 / C8 | `run` 里 `_, _ = worker.RunOnce(ctx)`：store 失败只加 `storeFailures`，无日志；health 行只报 `publish_failures`（saga 两侧都报） | `outbox_worker_failures_test.go` 三条（连败只 1 Warn、恢复 1 Info、停机不报 failing）+ `dataEngineHealthMessage` | 改成每次失败都打 → 5 条 Warn 红；去掉 ctx 取消守卫 → 停机测试红 | T-37 |
 | U-0036 | 2026-09-06 | roost-kit `nats` JetStream 结算路径 | C5 | `_ = msg.Ack()/Nak()/NakWithDelay()/Term()` 四处丢弃；失败后 broker 重投，但无计数无日志，与"处理器一直失败"不可分 | `jetstream_settle_test.go` 两条（三种 op 各计一次；成功不碰计数器） | `settleErr == nil || true` → 红 | T-36 |
