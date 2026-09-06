@@ -11,7 +11,9 @@
   `Acquire` 去掉预留引用（首个持有者 Release 会在等待者拿到租约前逐出并卸载）后也全绿。新增
   `promises_test.go`：压缩型 MemoryHost 上检查点后追加事件再恢复，事件必须还在、游标必须回到检查点；
   门控型 loader 制造"加载中 + 第二个 Acquire 等待 + 第一个 Release"，卸载只能发生在最后一个租约释放之后。
-  "跨 owner 的能力枚举必须拒绝"一条已有测试变红，属已覆盖。
+  "跨 owner 的能力枚举必须拒绝"一条已有测试变红，属已覆盖。第二、三批再回退四条：cast window 钳位、cooldown 写点记录器、
+  `commit_tick ≤ windup_ticks_min` 三条有测试盯住；**"已完成但仍被引用（有 pending 任务或被进程指着）的 cast 不被保留上限逐出"**
+  去掉守卫后全绿——补 `TestReferencedCompletedCastsSurviveTheRetentionBound`。七条承诺三处洞。
 
 
 ### Changed

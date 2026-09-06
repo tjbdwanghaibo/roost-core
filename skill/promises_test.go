@@ -123,3 +123,35 @@ func TestAWaitingAcquireIsNotEvictedByTheFirstHoldersRelease(t *testing.T) {
 		t.Fatalf("after the last release the plan's asset was not unloaded: %v", loader.unloaded)
 	}
 }
+
+// CompletedCastLimit bounds inspectable terminal casts, but "active or still
+// referenced casts are never evicted": a finished cast that still has tasks
+// pending, or that a process still names, outlives the bound; the pruner
+// skips it and evicts the next evictable one instead. Removing that guard
+// left every test green (U-0028).
+func TestReferencedCompletedCastsSurviveTheRetentionBound(t *testing.T) {
+	runtime := NewRuntime(nil, RuntimeOptions{CompletedCastLimit: 1})
+	referenced := &castInstance{id: 1, status: CastFinished, committed: true, abilityFinished: true, pendingTasks: 1}
+	plain := &castInstance{id: 2, status: CastFinished, committed: true, abilityFinished: true}
+	newest := &castInstance{id: 3, status: CastFinished, committed: true, abilityFinished: true}
+	runtime.casts[1], runtime.casts[2], runtime.casts[3] = referenced, plain, newest
+	runtime.activeCastCount = 3
+	runtime.trackCompletedCastLocked(referenced)
+	runtime.trackCompletedCastLocked(plain)
+	runtime.trackCompletedCastLocked(newest)
+	if runtime.casts[1] == nil {
+		t.Fatal("a completed cast with a pending task was evicted by the retention bound")
+	}
+	if runtime.casts[2] != nil {
+		t.Fatal("the evictable cast was kept while the referenced one should have been skipped over")
+	}
+	// Once its task drains it becomes evictable like any other.
+	referenced.pendingTasks = 0
+	extra := &castInstance{id: 4, status: CastFinished, committed: true, abilityFinished: true}
+	runtime.casts[4] = extra
+	runtime.activeCastCount = 1
+	runtime.trackCompletedCastLocked(extra)
+	if runtime.casts[1] != nil {
+		t.Fatal("a cast whose references drained was still pinned")
+	}
+}
