@@ -337,6 +337,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第二轮（2026-09-06，kit / skill / service / codegen 共 26 篇）**：加白名单后 275 个可疑项，逐个核对源码：绝大多数是生成工程的相对路径、文件名、标记（`//roost:*`）、示例名（`ItemTableFrom` 是 `<表名>TableFrom` 的示例、`BagSender` 是 `New<Handler>Sender` 的示例）。真漂移 1 处、已修：skill 的 visual-sync 指南把发布器写成 `kitroom.PublisherWithOptions`，实际是 `roost-kit/syncstream.NewPublisherWithOptions`（room 包没有它）。历史性提法（`global.ActivityService → activity.Service`、`cube.skill/v2 → roost.skill/v2`）是迁移说明，保留。结论：五仓文档标识符层面的漂移在两轮后基本清零；剩下的复审要靠人读语义，而非脚本。
 
+**第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
+
 **发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
 
 ## 8. 故障矩阵（toxiproxy）
