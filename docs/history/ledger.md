@@ -213,7 +213,7 @@
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
-| B-20 | 回退复测后剩余的实质守卫：kit `nestwal` 段连续性与帧损坏检测；core `nest` group_transition 与 `CheckContainAllLock` | C2 | 第 9 节复测 | saga 引擎那组**已完成 → U-0052**；nestwal 损坏检测需要构造坏段文件 |
+| B-20 | 回退复测后剩余的实质守卫：core `nest` group_transition 四条与 `CheckContainAllLock` 死锁风险 | C2 | 第 9 节复测 | saga 引擎 → U-0052、nestwal 损坏检测 → U-0053 已完成 |
 
 ## 5. 单元日志
 
@@ -221,6 +221,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0053 | 2026-09-06 | roost-kit `nestwal` 目录布局 / 帧头损坏检测 | C2 | 复测剩余里的段不连续、起始段 > 1 无确认、帧魔数 / 头 CRC / 长度三字段；魔数与长度被头 CRC 覆盖——测试改字段后必须重算 CRC 才能钉住该规则（首版"魔数"用例回退绿） | `corruption_promises_test.go` 两条 | 五处守卫回退各红 | — |
 | U-0052 | 2026-09-06 | roost-core `saga` 引擎 Register / Start / List / Resume / Compensate / Complete | C2 | 复测剩余 15 条中的 12 条实质规则；夹具用不跑协调循环的引擎 + 直接落库的记录 | `engine_promises_test.go` 三条 | 十一处守卫回退各红 | — |
 | U-0051 | 2026-09-06 | roost-kit `saga` 消费者配置 / 入站解码 | C2 | 回退 40 条 37 条全绿；首版"缺 id / 异 topic"用例被载荷解码失败掩盖（回退绿）——换成能独立通过的 start 载荷后才真正钉住；超大帧守卫是纵深防御（去掉后 JSON 解码仍拒绝） | `promises_test.go` 四条 | 六处守卫回退各红；一处冗余保留 | — |
 | U-0050 | 2026-09-06 | roost-core `saga` 引擎选项 / Command / Completion / 效果编解码 | C2 | 回退 40 条 34 条全绿；`Command.Validate` 是一条 17 子句的 `\|\|`——回退法要按子句做，整条中和没有意义 | `promises_test.go` 四条（11 条选项规则、17 + 8 个子句、编解码拒绝） | 六处回退各红（两处为子句级） | — |
@@ -392,7 +393,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | core `mirror` | 14 | 13 → **4**（U-0045 后复测） | 剩余：`PublishDelete` 零 key、发布侧 op（两处 nil 守卫） |
 | core `entitysync` | 9 | 7 | 多为参数守卫 |
 | kit `redis` | 25 | 20 | 含配置 / nil 守卫（B-19） |
-| kit `nestwal` | 40 | 37 → **23**（U-0048 后复测） | 剩余实质：段文件不连续 / 早于检查点、帧魔数 / CRC / 长度三条损坏检测、committer 重试区间（B-20） |
+| kit `nestwal` | 40 | 37 → **23**（U-0048 后复测）→ U-0053 又钉 5 条 | 剩余：committer 重试区间、短写、nil 守卫 |
 | kit `remoteentity` | 40 | 37 → **31**（U-0049 后复测） | 剩余多为 nil / 配置守卫与 ownership 的实体种类校验 |
 | kit `saga` | 40 | 37 → **29**（U-0051 后复测） | 剩余：completion 消费者配置（与 nest-start 同形）、step inbox claim 状态、L2 快照 CAS 响应 |
 | kit `room` | 40（实跑 10） | 9 | 前 9 条全绿、多为 subjectID / roomID 为零的参数守卫；第 10 条（`room_broadcast.go:478` 的 ctx 取消 → 返回）去掉后整包测试**挂起** >600s——守卫是循环退出条件，算被覆盖；脚本首版遇超时中止整包，现改为记 HANG 继续 |
