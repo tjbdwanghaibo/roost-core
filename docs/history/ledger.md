@@ -112,7 +112,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | kit | `（根：CI 工作流）` | — | — | — | 09-04 U-0001 | — | — | — | — |
 | kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 | — | — | — | — | — | — |
-| kit | `actionflow` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `actionflow` | 09-02 | 09-06 U-0077（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `dataengine`（U-0025：C4 09-06） | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0077 | 2026-09-06 | roost-kit `actionflow` 冻结组 / 任务独占 | C2 | kit 本地 gap map 20/20；冻结组接受 Start、不可替换任务被替换都是状态机破洞 | `promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0076 | 2026-09-06 | roost-core `cache` 读穿透远端失败策略 | C2 / C8 | nightly 4/5：`IgnoreRemoteError` 两态 × Get / Set 两处无测试；默认态下远端失败不得去问 loader | `read_through_promises_test.go` 一条 | 两处守卫回退各红 | — |
 | U-0075 | 2026-09-06 | roost-core `webroute` 注册器 | C2 | nightly 4/5；原测试只断言有错 | `promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0074 | 2026-09-06 | roost-core `syncstream` 文件日志完整性 | C2 | nightly 4/5：检查点代数不符、WAL 缺失、WAL 行损坏、关闭后写入——回放错历史会让客户端拿到无法对齐的 resync | `file_journal_promises_test.go` 两条 | 三处守卫回退各红；`Record` 关闭检查是锁外 / 锁内双份（冗余互掩） | — |
@@ -456,6 +457,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **首份 nightly 报告（2026-09-06，core，`workflow_dispatch max=5`，1.5 分钟跑完 35 个包）**：146 条采样守卫 112 条无覆盖。已开过单元的包立刻可见：configdata 0/5、saga 0/5、mirror 1/5、nest 2/5、dataengine 2/5、bus 3/5；从未碰过的包整片全绿：`entity` 5/5、`statesync` 5/5、`syncbus` 5/5、`security` 5/5、`ownerroute` 5/5、`migration` 5/5、`failurelog` 5/5、`admin` 5/5、`hotcode` 5/5、`robot/*` 5/5 ×3、`etcd` 4/4。这些是 B-22。默认 `max=20` 的夜间跑预计 6 分钟以内。
 
 **回退脚本的第五个坑（2026-09-06 第六轮）**：带初始化语句的守卫（`if _, ok := m[k]; ok {`）不能整体套括号——`if (_, ok := …; ok) && false` 编译不过，`go test` 输出里没有 `--- FAIL`，按行数统计会记成 0 条红、误读为"已覆盖"。人工回退用 `if init; (cond) && false`；采样脚本本身已这么做，且把编译失败记为 `skip` 而不是绿。**统计红行时要同时数 `build failed`。**
+
+**kit（2026-09-06 第七轮，本地 `gapmap.sh --max 20`，25 包）**：358 条采样 275 条无覆盖。整片：`actionflow` 20/20（→ U-0077）、`room` 20/20（多为 topic / subjectID 参数守卫）、`dataengine` 19/20（`entity_repository` 的聚合装载完整性：解码 id 不符、重复 DAO 资源、文档数不为 1、远端无版本包——**优先**）、`etcd` 18/20、`nats` 17/20、`nettransport` 17/20、`mongo/mongotest` 16/20、`saga` 16/20、`ai` 16/20、`redis` 15/20、`remoteentity` 15/20、`nestwal` 14/20、`syncstream` 14/20、`spatial` 12/20、`mongo` 8/8。已开过单元的包仍然高，是因为采样按文件顺序取前 20 条、多数是 nil / 配置守卫；nightly 报告到后按实质筛。
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 
