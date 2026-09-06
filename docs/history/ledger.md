@@ -183,7 +183,7 @@
 | codegen | `internal/eventgen` | — | 09-06 U-0038 | — | 未审 | 09-06 U-0038 | — | 未审 | 未审 |
 | codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0088 | 2026-09-06 | roost-codegen `internal/nest` 处理器接收者 / target 声明 | C2 | codegen gap map 11/20；"非 error 跟在 error 后"经 Go 语法不可达（冗余）；"空 target 名"守卫同文本出现两次，按行号回退 | `handler_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0087 | 2026-09-06 | roost-codegen `internal/protocol` 取值与引用规则 | C2 | codegen 本地 gap map 15/20（U-0032 钉的是结构规则）；**工具坑**：`gapmap.sh` 收尾用 `git clean -fdq` 把采样期间新写的测试文件删了——只该还原已跟踪文件，五仓已改 | `definition_promises_test.go` 一条 | 六处守卫回退各红 | — |
 | U-0086 | 2026-09-06 | roost-kit `etcd` 本地镜像配置 | C2 | kit gap map 18/20；空前缀会 watch 整个键空间 | `local_mirror_promises_test.go` 一条（用 6 方法的空转客户端替身） | 三处守卫回退各红 | — |
 | U-0085 | 2026-09-06 | roost-skill `skill` 内存宿主时间单调 / 支付 | C2 | skill gap map 17/20；参照宿主的拒绝是真实宿主被对照的契约 | `memory_host_promises_test.go` 一条 | 四处守卫回退各红 | — |
@@ -419,6 +420,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **本轮小结（2026-09-06 第六轮，"工具入库 + 故障矩阵抓到第二个运行时缺陷"）**：① gap map 采样器入库（core / kit / service / skill 四仓同一份），`nightly-gapmap` 工作流首跑成功（core 35 包 1.5 分钟，112/146 @max=5），第 9 节的数字此后由 nightly 产出；② 故障矩阵第四切片（Redis 延迟）首跑抓到 **U-0061**：kit Redis 客户端不把 ctx 截止期带到网络上，500ms 预算等满 2s——修复后 501ms；kit v1.12.6 / codegen v1.13.11 发布，tag CI 按名核对均绿；③ 六个 C2 单元：core `nest` group_transition（U-0062，B-20 收尾）、skill `skillcompose`（U-0063）、`skillsync`（U-0064）、`combatcomponent`（U-0066），core `entity` `RemoteCommit.Validate` 二十五条（U-0065，B-22 首项）。方法：变异后**重算摘要 / CRC**（skillcompose、nestwal）与"用生产构造器造夹具"（Redis toxic 夹具改用 kit 自己的客户端构造器，否则夹具的选项和生产不一致，测出来的是夹具）。
 
 **本轮小结（2026-09-06 第七轮，"B-22 收口 + kit 全包地图"）**：十四个 C2 单元——core `migration`（U-0069）、`admin`（U-0070）、`hotcode`（U-0071）、`ownerroute`（U-0072）、`robot`（U-0073）、`syncstream` 文件日志（U-0074）、`webroute`（U-0075）、`cache` 读穿透策略（U-0076）；kit `actionflow`（U-0077）、`dataengine` 聚合装载（U-0078）、`nats` 客户端（U-0079）、`nettransport` 准入（U-0080）、`spatial`（U-0081）、`syncstream` 订阅端（U-0082）。B-22 全部完成。故障矩阵第五切片：JetStream RPC 半开下 502ms 返回——与 U-0061 对照，同类问题 Redis 客户端错、JetStream 发布对；矩阵本轮收口。kit 全包本地 gap map（358 条 275 无覆盖）入第 9 节；gap map 工具补进 codegen，五仓齐。方法：多包小守卫按"一包一单元"合并成一次提交；`Record` 类锁外 / 锁内双份检查一律记冗余不记缺口。
+
+**本轮小结（2026-09-06 第八轮，"发布 + 五仓地图补齐"）**：core v1.12.1（73 个提交的测试基线）→ codegen v1.13.12，tag CI 按名核对全绿。六个 C2 单元：kit `ai` 行为树（U-0083）、`mongo/mongotest` 替身契约（U-0084）、skill 内存宿主（U-0085）、kit `etcd` 本地镜像（U-0086）、codegen `protocol` 取值 / 引用规则（U-0087）、`nest` 接收者 / target（U-0088）。codegen 本地 gap map 跑完（175 条 67 无覆盖），五仓地图齐。**两个流程 / 工具坑**：① U-0084 首次提交没编译就推了——提交链必须以 `go test` 为门（已写入第 1 节规则）；② `gapmap.sh` 收尾的 `git clean -fdq` 删掉了采样期间新写的测试——只还原已跟踪文件（五仓已改）。**明天起**：五仓 nightly-gapmap 首次按 `max=20` 自动出报告，B-24 从报告里选。
 
 ## 8. 故障矩阵（toxiproxy）
 
