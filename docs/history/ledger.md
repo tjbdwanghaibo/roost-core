@@ -187,7 +187,7 @@
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/tablegen` | — | 09-06 U-0033（回退 5 条） | — | 未审 | 未审 | 09-06 U-0033 | 未审 | 未审 |
 | codegen | `internal/webroute` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 
 ## 4. 待开单元
@@ -213,6 +213,7 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0033 | 2026-09-06 | roost-codegen `internal/tablegen` | C6 / C2 | 1 缺陷 + 4 无测试：`unique="true"`、`min=`、主键唯一性从 tag 读出、印进 CSV 规则行，**从未执行**——重复 id 进 JSON、生成的 loader 静默保留最后一行；必填空格、解析错误行列、`-force`、跳过标题/类型/规则行四条行为无测试 | `validateRows`（生成期校验，`ref=` 留给 loader）；`csv_rules_test.go` 七条 | 五处回退各自变红；codegen 全量绿 | T-35 |
 | U-0032 | 2026-09-06 | roost-codegen `internal/protocol` 解析器校验 | C2 | 六条结构校验回退全部全绿（重复 struct、未导出类型、重复字段号、req/resp id 相等、枚举首值 0、枚举重复值名）；2.8k 行的包只有 4 条测试。"req id == resp id"是死分支（`RespID` 直接取 id）——观察，不补 | `validation_test.go` 表驱动五条，每条只破坏一处合法定义 | 补后五处回退变红；包绿 | — |
 | U-0031 | 2026-09-06 | roost-kit `remoteentity` `MongoCommitter` 删除路径（不变量 ③） | C8 | 0 缺陷：删除提交后旧 fence 的迟到写入被 `ErrRemoteVersionConflict` 拒绝、tombstone 与数据文档都不复现；当前 fence 的写入允许且为新版本（显式重建） | `TestRealDeleteIsNotResurrectedByAStaleFence`（真实副本集，`integration` 标签） | 本地 0.22s 绿；kit CI integration 绿。四个不变量至此各有至少一条真实依赖上的测试 | — |
 | U-0030 | 2026-09-06 | roost-codegen `internal/registry`、`internal/errcode`（生成器包首格） | C2 | 五条承诺回退：未知 phase、方法上的标记两条有测试红；**无法解析的源文件静默跳过**（会让聚合少注册）、**返回 error 的注册函数在生成的 `RegisterAll` 里不检查**（编译仍过、失败不可见）、**重复错码不报错** 三条全绿 | `registry/promises_test.go` 两条、`errcode/promises_test.go` 一条 | 补后三处回退变红；两包绿 | — |
