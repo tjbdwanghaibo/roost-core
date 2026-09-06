@@ -318,5 +318,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **运行时观察（2026-09-06，kit）**：statslog 本来就每分钟把 goroutine / 堆 / 实体按 category、kind 的数量写进 JSONL，但只在文件里。现在每次采集同步发布 gauge（`runtime.goroutines`、`runtime.heap_alloc_bytes`、`runtime.heap_sys_bytes`、`runtime.sys_bytes`、`runtime.num_gc`、`entity.count`、`entity.count_by_category{category}`、`entity.count_by_kind{kind}`），ops `/metrics` 与 Grafana 直接可见；ops 新增 `GET /statsz` 返回当前一次观察的 JSON（未装配 statslog 时 404 并说明）。**边界**：内存以进程堆为观察量，实体自身占用没有分配追踪无法归属，实体侧给数量——有意的取舍。**待做**：`observability/` 的 Grafana 面板加这组 gauge；文档细节复审未开始。
 
+**发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
+
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
