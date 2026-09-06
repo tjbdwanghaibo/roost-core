@@ -166,7 +166,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | skill | `combat` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `combatcomponent` | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0085 | 2026-09-06 | roost-skill `skill` 内存宿主时间单调 / 支付 | C2 | skill gap map 17/20；参照宿主的拒绝是真实宿主被对照的契约 | `memory_host_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0084 | 2026-09-06 | roost-kit `mongo/mongotest` 替身拒绝契约 | C2 | kit gap map 16/20；替身的拒绝就是绝大多数单元测试实际锻炼的契约。**流程坑**：首次提交 fcdaab0 的测试没编译就推了——提交链没有以 `go test` 结果为门，kit ci 红一轮，86def54 修复 | `contract_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0083 | 2026-09-06 | roost-kit `ai` 行为树注册表 / 文档解析器 | C2 | kit gap map 16/20；原 fail-fast 测试只看错误类别，任一规则丢失都被邻居兜住 | `tree_parser_promises_test.go` 两条（3 + 11 用例，带 JSON 路径） | 五处守卫回退各红 | — |
 | U-0082 | 2026-09-06 | roost-kit `syncstream` 订阅端尺寸上限 / 分片规则 | C2 | kit gap map 14/20；订阅端是同步总线上的信任边界，用真实 Publisher 铸信封再变异 | `subscribe_promises_test.go` 一条（7 子用例） | 五处守卫回退各红 | — |
