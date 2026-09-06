@@ -22,6 +22,8 @@
 选单元的规则：取"最久未审"的格子；service 优先（正在重构、即将被 game 模板默认接入、11 处 `t.Skip`）；
 昨夜故障矩阵的失败项插队。
 
+**流程规则补充（2026-09-06 第八轮）**：单元提交链必须写成 `go vet && go test ./pkg && git commit && git push`——测试结果是提交的门，不是并列步骤。U-0084 首次提交把 `go test` 放在 `;` 之后、`git add` 之前，测试没编译照样推送，kit ci 红一轮。之前 python 断言失败后照样提交（第一轮 CHANGELOG 漏改）是同一类错误。
+
 ## 2. 八个缺陷类与检查表
 
 来自 [AUDIT_FINDINGS_2026-09-02](../AUDIT_FINDINGS_2026-09-02.md) 的实际产出率，不是理论分类。
@@ -123,7 +125,7 @@
 | kit | `manager` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `mongo/mongotest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mongo/mongotest` | 09-02 | 09-06 U-0084（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nats` | 09-02 | 09-05 U-0012 / 09-06 U-0079（回退 5 条） | 09-02 | 09-02 | 09-06 U-0036 / U-0042 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal` | 09-02 | 09-06 U-0027 / 09-06 U-0048（回退 40 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
@@ -224,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0084 | 2026-09-06 | roost-kit `mongo/mongotest` 替身拒绝契约 | C2 | kit gap map 16/20；替身的拒绝就是绝大多数单元测试实际锻炼的契约。**流程坑**：首次提交 fcdaab0 的测试没编译就推了——提交链没有以 `go test` 结果为门，kit ci 红一轮，86def54 修复 | `contract_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0083 | 2026-09-06 | roost-kit `ai` 行为树注册表 / 文档解析器 | C2 | kit gap map 16/20；原 fail-fast 测试只看错误类别，任一规则丢失都被邻居兜住 | `tree_parser_promises_test.go` 两条（3 + 11 用例，带 JSON 路径） | 五处守卫回退各红 | — |
 | U-0082 | 2026-09-06 | roost-kit `syncstream` 订阅端尺寸上限 / 分片规则 | C2 | kit gap map 14/20；订阅端是同步总线上的信任边界，用真实 Publisher 铸信封再变异 | `subscribe_promises_test.go` 一条（7 子用例） | 五处守卫回退各红 | — |
 | U-0081 | 2026-09-06 | roost-kit `spatial` 兴趣管理器配置 / 边界 | C2 | kit gap map 12/20；配置错误会让盒运算溢出或滞回失效 | `interest_promises_test.go` 两条 | 三处守卫回退各红 | — |
@@ -396,7 +399,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
 
-**发布（2026-09-06 第五轮）**：core v1.12.1（v1.12.0 之后 73 个提交：U-0043～U-0076 的测试基线、gap map 工具，无 API 变化）→ codegen 清单 core v1.12.1 → codegen v1.13.12。tag 工作流按名核对：core ci ✓、codegen ci ✓、codegen framework-release（结果见下一条记录）。
+**发布（2026-09-06 第五轮）**：core v1.12.1（v1.12.0 之后 73 个提交：U-0043～U-0076 的测试基线、gap map 工具，无 API 变化）→ codegen 清单 core v1.12.1 → codegen v1.13.12。tag 工作流按名核对：core ci ✓、codegen ci ✓、codegen framework-release ✓。
 
 **发布（2026-09-06 第四轮）**：kit v1.12.6（Redis 客户端 ctx 截止期 U-0061、`nats.ignore_discovered_servers`、两个故障切片、gap map 工具）→ codegen 清单 kit v1.12.6 → codegen v1.13.11。tag 工作流按名核对：kit ci ✓、codegen ci ✓、codegen framework-release ✓。
 
