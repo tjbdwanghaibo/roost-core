@@ -8,7 +8,7 @@
 
 - **syncstream 文件日志的完整性守卫钉住**（U-0074，C2）。检查点正文声称另一个代数、最新代数的 WAL 文件丢失、WAL 行解不开——
   三种情况 `Load` 各自失败关闭而不是回放一份错的或残缺的历史；关闭后的 `Record` / `Load` / `Checkpoint` 与异版本的变更记录
-  拒绝。`file_journal_promises_test.go` 两条；回退四处守卫各红。
+  拒绝。`file_journal_promises_test.go` 两条；回退三处守卫各红，`Record` 入口的关闭检查与批锁内的同名检查互掩（冗余保留）。
 - **robot 的 action / scenario 注册表与 spec 文档规则按文本钉住**（U-0073，C2，B-22 收尾）。nil / 空名 / 归一化后重名的 action
   与 scenario 各自拒绝；spec 的六种坏文档（原 `TestSpecRejectsBrokenDocuments` 只断言"有错"）现在各对应一条错误文本。
   两个 `promises_test.go`；回退六处守卫各红。
