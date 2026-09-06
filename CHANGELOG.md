@@ -13,7 +13,7 @@
   门控型 loader 制造"加载中 + 第二个 Acquire 等待 + 第一个 Release"，卸载只能发生在最后一个租约释放之后。
   "跨 owner 的能力枚举必须拒绝"一条已有测试变红，属已覆盖。第二、三批再回退四条：cast window 钳位、cooldown 写点记录器、
   `commit_tick ≤ windup_ticks_min` 三条有测试盯住；**"已完成但仍被引用（有 pending 任务或被进程指着）的 cast 不被保留上限逐出"**
-  去掉守卫后全绿——补 `TestReferencedCompletedCastsSurviveTheRetentionBound`。七条承诺三处洞。
+  去掉守卫后全绿——补 `TestReferencedCompletedCastsSurviveTheRetentionBound`。第四批再回退四条：检查点版本号、presentation 游标过期、pending 任务先挂起再恢复三条有测试盯住；**检查点校验和不匹配必须拒绝恢复**去掉比对后全绿——补 `TestRestoreRefusesACheckpointWhosePayloadWasTampered`。十一条承诺四处洞。
 
 
 ### Changed

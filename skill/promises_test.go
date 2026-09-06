@@ -2,6 +2,8 @@ package skill
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,5 +155,44 @@ func TestReferencedCompletedCastsSurviveTheRetentionBound(t *testing.T) {
 	runtime.trackCompletedCastLocked(extra)
 	if runtime.casts[1] != nil {
 		t.Fatal("a cast whose references drained was still pinned")
+	}
+}
+
+// A checkpoint whose payload no longer matches its checksum is corrupt and
+// must not be restored: a bit flipped on disk becomes a runtime resumed from
+// state nobody wrote. Disabling the compare left every test green (U-0028).
+func TestRestoreRefusesACheckpointWhosePayloadWasTampered(t *testing.T) {
+	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
+	runtime := NewRuntime(host, RuntimeOptions{})
+	if err := runtime.Advance(0); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := ProgramResolverFunc(func(string, string) (*Program, error) { return nil, ErrCheckpointProgram })
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, resolver); err != nil {
+		t.Fatalf("an intact checkpoint was refused: %v", err)
+	}
+	tampered := checkpoint
+	tampered.Payload = append([]byte(nil), checkpoint.Payload...)
+	// Flip a byte inside the JSON payload without breaking its length.
+	for i := len(tampered.Payload) - 1; i > 0; i-- {
+		if tampered.Payload[i] == '0' {
+			tampered.Payload[i] = '1'
+			break
+		} else if tampered.Payload[i] == '1' {
+			tampered.Payload[i] = '2'
+			break
+		}
+	}
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, tampered, resolver); !errors.Is(err, ErrCheckpointCorrupt) {
+		t.Fatalf("a tampered payload restored with err=%v, want ErrCheckpointCorrupt", err)
+	}
+	wrongSum := checkpoint
+	wrongSum.Checksum = strings.Repeat("0", len(checkpoint.Checksum))
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, wrongSum, resolver); !errors.Is(err, ErrCheckpointCorrupt) {
+		t.Fatalf("a wrong checksum restored with err=%v, want ErrCheckpointCorrupt", err)
 	}
 }
