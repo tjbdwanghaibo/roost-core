@@ -147,7 +147,7 @@
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | service | `（根：CI 工作流）` | 09-06 脚本扫 | 09-05 U-0014 | — | — | 09-06 脚本扫 | — | 09-06 脚本扫 | — |
-| service | `account` | 09-06 脚本扫 | 09-04 U-0005 / 09-06 U-0058（回退 30 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 09-05 U-0021 |
+| service | `account` | 09-06 脚本扫 | 09-04 U-0005 / 09-06 U-0058（回退 30 条） / 09-06 U-0098（回退 3 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 09-05 U-0021 |
 | service | `chat` | 09-06 脚本扫 | 09-04 U-0007 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0098 | 2026-09-06 | roost-service `account` CreateRole 提交尾部异常 | C2 | 槽位行消失 / player id 占用 / 分配器返回 0，三条都要"什么都不留下、同名重试成功"；替身只让第一次 Slots.Update 见不到行，回滚用的 Delete 不受影响 | `create_role_race_promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0097 | 2026-09-06 | roost-service `platform` 回调 / 投递的订单竞态分支 | C2 | 插入输给并发者 + 行消失 / 载荷不同、认领后行消失（标记投递前 / 记录失败前）；"第 N 次 Update 让行消失"替身；跨行 `if` 条件要按文本中和 | `order_race_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0096 | 2026-09-06 | roost-service `mail` Send 的账本竞态分支 | C2 | 账本认领输给并发者 + 对方行消失 / 指向缺失邮件 / 邮件 id 占用；用嵌入真实内存 store 的替身只覆写 Create / Get 制造竞态；roost-skill 的 CI 工作流名是 `production-gates`（按 `ci` 找会 404，误报为红） | `send_race_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0095 | 2026-09-06 | roost-kit `room` 同步总线 / 信封汇参数守卫 | C2 | kit gap map 20 条参数守卫；"不触网"用计数替身断言；`syncbus.Handler` 带 error 返回 | `guards_promises_test.go` 两条 | 二十处守卫回退各红 | — |
@@ -431,6 +432,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **本轮小结（2026-09-06 第七轮，"B-22 收口 + kit 全包地图"）**：十四个 C2 单元——core `migration`（U-0069）、`admin`（U-0070）、`hotcode`（U-0071）、`ownerroute`（U-0072）、`robot`（U-0073）、`syncstream` 文件日志（U-0074）、`webroute`（U-0075）、`cache` 读穿透策略（U-0076）；kit `actionflow`（U-0077）、`dataengine` 聚合装载（U-0078）、`nats` 客户端（U-0079）、`nettransport` 准入（U-0080）、`spatial`（U-0081）、`syncstream` 订阅端（U-0082）。B-22 全部完成。故障矩阵第五切片：JetStream RPC 半开下 502ms 返回——与 U-0061 对照，同类问题 Redis 客户端错、JetStream 发布对；矩阵本轮收口。kit 全包本地 gap map（358 条 275 无覆盖）入第 9 节；gap map 工具补进 codegen，五仓齐。方法：多包小守卫按"一包一单元"合并成一次提交；`Record` 类锁外 / 锁内双份检查一律记冗余不记缺口。
 
 **本轮小结（2026-09-06 第八轮，"发布 + 五仓地图补齐"）**：core v1.12.1（73 个提交的测试基线）→ codegen v1.13.12，tag CI 按名核对全绿。六个 C2 单元：kit `ai` 行为树（U-0083）、`mongo/mongotest` 替身契约（U-0084）、skill 内存宿主（U-0085）、kit `etcd` 本地镜像（U-0086）、codegen `protocol` 取值 / 引用规则（U-0087）、`nest` 接收者 / target（U-0088）。codegen 本地 gap map 跑完（175 条 67 无覆盖），五仓地图齐。**两个流程 / 工具坑**：① U-0084 首次提交没编译就推了——提交链必须以 `go test` 为门（已写入第 1 节规则）；② `gapmap.sh` 收尾的 `git clean -fdq` 删掉了采样期间新写的测试——只还原已跟踪文件（五仓已改）。**明天起**：五仓 nightly-gapmap 首次按 `max=20` 自动出报告，B-24 从报告里选。
+
+**本轮小结（2026-09-06 第九轮，"按五仓地图收尾 C2"）**：十个 C2 单元 U-0089…U-0098——codegen `internal/roost`（add 参数守卫 14 条）、`cfggen`（字段级规则 9 条）、`entity`（managed 基类 / 参数重复）；kit `saga`（步骤消费者配置 + Replay 身份 9 条）、`remoteentity`（标记 / 兴趣 / 后端 8 条）、`room`（同步总线 / 信封汇 20 条）；skill 执行器结构不变量（4 条，3 处回退是 panic）；service `mail` / `platform` / `account` 的"世界在脚下变了"分支（账本竞态、订单竞态、提交尾部；3 + 4 + 3 条）。全部绿→回退红，无缺陷修复。**工具坑三个**：zsh `for x in $var` 不分词；跨行 `if` 要按文本中和；roost-skill 的工作流叫 `production-gates`（按 `ci` 找不到会被误报为红）。
 
 ## 8. 故障矩阵（toxiproxy）
 
