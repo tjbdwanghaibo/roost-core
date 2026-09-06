@@ -181,7 +181,7 @@
 | codegen | `internal/eventgen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/nest` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
@@ -213,6 +213,7 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
 | U-0034 | 2026-09-06 | roost-codegen `internal/attribute`、`internal/cfggen` | C2 | attribute 九条校验回退全部全绿（742 行、1 条测试）；cfggen 八条中 C1"key 必填"与 C2"key 字段未声明"互为掩护（去掉任一条另一条仍红——原测试只要"有错"）、C7 bean 名为关键字无覆盖 | `attribute/validation_test.go` 九条 + 合法样例；`cfggen/validation_messages_test.go` 四条按错误文本断言 | 十二处回退各自变红；两包绿 | — |
 | U-0033 | 2026-09-06 | roost-codegen `internal/tablegen` | C6 / C2 | 1 缺陷 + 4 无测试：`unique="true"`、`min=`、主键唯一性从 tag 读出、印进 CSV 规则行，**从未执行**——重复 id 进 JSON、生成的 loader 静默保留最后一行；必填空格、解析错误行列、`-force`、跳过标题/类型/规则行四条行为无测试 | `validateRows`（生成期校验，`ref=` 留给 loader）；`csv_rules_test.go` 七条 | 五处回退各自变红；codegen 全量绿 | T-35 |
 | U-0032 | 2026-09-06 | roost-codegen `internal/protocol` 解析器校验 | C2 | 六条结构校验回退全部全绿（重复 struct、未导出类型、重复字段号、req/resp id 相等、枚举首值 0、枚举重复值名）；2.8k 行的包只有 4 条测试。"req id == resp id"是死分支（`RespID` 直接取 id）——观察，不补 | `validation_test.go` 表驱动五条，每条只破坏一处合法定义 | 补后五处回退变红；包绿 | — |
