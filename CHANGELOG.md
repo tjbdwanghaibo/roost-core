@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **gap map 工具**（与 roost-core 同一份拷贝）：`scripts/gapmap/revertsample.py`、`scripts/gapmap.sh`、`nightly-gapmap` 工作流。
+
 ### Fixed
 
 - **两条运行时承诺补上测试**（收敛单元 U-0028，C2）。对 skill 包的注释承诺做临时回退：`RestoreRuntime` 改走
