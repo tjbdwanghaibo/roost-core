@@ -146,3 +146,78 @@ func TestRealCompetingFencedCommitsAdmitAtMostOne(t *testing.T) {
 		t.Fatalf("the current fence at the right version was refused: %v", err)
 	}
 }
+
+func deleteCommit(tx byte, id int64, kind entity.EntityKind, base uint64, fence uint64) entity.RemoteCommit {
+	var txID entity.RemoteTransactionID
+	txID[15] = tx
+	return entity.RemoteCommit{
+		TransactionID: txID, EntityID: id, Kind: kind, Delete: true, BaseVersion: base, NextVersion: base + 1,
+		MarkerEpoch: 1, RouteEpoch: 1, LockFence: fence, Schema: 1, Codec: 1,
+		Deletes: []entity.RemoteDataDelete{{Database: "game", Collection: "players", ID: id}},
+	}
+}
+
+// Invariant 3, delete does not resurrect: after a delete commit lands, a
+// write that a previous owner sends late — right base version, LOWER fence —
+// must not bring the entity back. Only the current fence may write again,
+// and that is an explicit re-create, not a resurrection. The tombstone is the
+// meta document's `_deleted` under the same version/fence predicate as every
+// other commit, so this is the fence discipline applied to the delete path on
+// a real replica set.
+func TestRealDeleteIsNotResurrectedByAStaleFence(t *testing.T) {
+	committer, client, database := realCommitter(t)
+	ctx := context.Background()
+	const kind entity.EntityKind = 196
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(993, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := committer.CommitRemote(ctx, fencedCommit(11, id, kind, 0, 5, "alive")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A new owner (fence 9) deletes.
+	if _, err := committer.CommitRemote(ctx, deleteCommit(12, id, kind, 1, 9)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var meta struct {
+		Version uint64 `bson:"_ver"`
+		Deleted bool   `bson:"_deleted"`
+		Fence   uint64 `bson:"_lock_fence"`
+	}
+	readMeta := func() {
+		t.Helper()
+		if err := client.Database(database).Collection(remoteMetaCollection).FindOne(ctx, bson.M{"_id": id}, &meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readMeta()
+	if !meta.Deleted || meta.Version != 2 || meta.Fence != 9 {
+		t.Fatalf("after delete meta=%+v, want deleted at version 2 with fence 9", meta)
+	}
+	if n, err := client.Database("game").Collection("players").CountDocuments(ctx, bson.M{"_id": id}); err != nil || n != 0 {
+		t.Fatalf("data document survived the delete: n=%d err=%v", n, err)
+	}
+
+	// The previous owner's late write: right base version, stale fence 5.
+	if _, err := committer.CommitRemote(ctx, fencedCommit(13, id, kind, 2, 5, "resurrected")); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+		t.Fatalf("a stale-fence write after delete returned %v, want ErrRemoteVersionConflict", err)
+	}
+	readMeta()
+	if !meta.Deleted || meta.Version != 2 {
+		t.Fatalf("stale write resurrected the entity: meta=%+v", meta)
+	}
+	if n, _ := client.Database("game").Collection("players").CountDocuments(ctx, bson.M{"_id": id}); n != 0 {
+		t.Fatalf("stale write recreated the data document (%d)", n)
+	}
+
+	// The current fence re-creates deliberately: allowed, and it is a new
+	// version, not the old document coming back.
+	if _, err := committer.CommitRemote(ctx, fencedCommit(14, id, kind, 2, 9, "recreated")); err != nil {
+		t.Fatalf("re-create by the current fence was refused: %v", err)
+	}
+	readMeta()
+	if meta.Deleted || meta.Version != 3 {
+		t.Fatalf("re-create meta=%+v, want live at version 3", meta)
+	}
+}
