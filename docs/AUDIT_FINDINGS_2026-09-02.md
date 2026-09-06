@@ -1,5 +1,7 @@
 # core / kit 全量审核记录（2026-09-02）
 
+> **历史文档**：写于仓库改名之前，文中 `cube-core` / `cube-kit` 即今天的 `roost-core` / `roost-kit`，`core/sync`、`core/replica` 等路径已分别成为 `syncbus`、`mirror`。结论与后续处置见 [ROADMAP](ROADMAP.md) 与 [收敛账本](history/ledger.md)；本文不再随代码更新。
+
 本文是一次面向发布的全量审核的**最终记录**，不是过程日志。它按"发现"组织：
 每条发现在一处写完机制、触发路径、实证、修复和回归测试，读者不需要按轮次拼接。
 方法论、覆盖范围账本和穷举扫描的负面结果放在后半部分。

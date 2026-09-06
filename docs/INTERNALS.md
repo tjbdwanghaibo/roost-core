@@ -109,8 +109,8 @@ Skill compiler 严格解析配置，验证引用和预算，输出不可变 Prog
 | 实体与锁 | `entity/`、`lock/`、`worker/` |
 | 事务/WAL 契约 | `nest/`、[Nest WAL](../NEST_TRANSACTION_WAL.md) |
 | 数据引擎契约 | `dataengine/`；生产实现见 roost-kit `dataengine/` 与 `nestwal/` |
-| Remote | `entity/remote*`、`ownerroute/`、`replica/`、[Remote 文档](../REMOTE_ENTITY.md) |
+| Remote | `entity/remote*`、`ownerroute/`、`mirror/`（副本同步）、[Remote 文档](../REMOTE_ENTITY.md) |
 | Saga | `saga/`、[Saga 文档](../SAGA.md) |
-| 同步 | `entitysync/`、`sync/`、`syncstream/`、`replication/`、`lockstep/` |
+| 同步 | `entitysync/`、`syncbus/`、`syncstream/`、`statesync/`、`lockstep/` |
 | 中间件实现 | roost-kit 对应同名目录 |
 | 项目与代码生成 | roost-codegen `internal/roost` 与各 generator |

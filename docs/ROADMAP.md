@@ -22,7 +22,7 @@ Roost 当前进入稳定化阶段。后续主线只接受三类工作：已复�
 | M5 Saga/JetStream 终态 | 已验证 | `kit/saga` Stop 先 drain 并等待 `Closed()`；`kit/nats` permanent/Term 分类与 MaxDeliver 指标 | Stop 不等 `Closed()` → `TestDrainSubscriptionsWaitsForConsumerClosure` 红；永不判定 terminal → `TestJetStreamTerminalClassification` 红 |
 | M6 Etcd election/watch 终态 | 已验证 | `LeaderChan` 复用、`ErrElectionNoLeader` 可 `errors.Is`、watcher `Done()/Err()`、compaction 处理 | 每次 Campaign 换 leaderCh → `TestElectionFirstCampaignKeepsPreCampaignLeaderChannel` 红；忽略 compaction → `TestWatcherReadyReportsCompactedStartRevision` 红 |
 | M7 Redis best-effort 锁 | 已验证（U-0012 补 4 条测试） | `kit/redis/lock.go` TTL < 1ms 报 `ErrDistLockConfig`、uncertain 状态、watchdog 代际 | TTL<1ms、SETNX/Release 回复丢失的 uncertain 态、per-acquisition token 此前均无测试守卫；现回退任一处都有 `TestDistLock*` 变红。`Extend(newTTL)` 语义与文档一致性未单独验证 |
-| M8 适配层输入与 panic 边界 | 已验证（U-0012 补 2 条、修 1 条） | `kit/nats` 拒绝 nil handler / 空 subject 并 recover；`kit/mongo` 未知 WriteModel 带 index 报错，`stringifyID(nil)` 返回空串 | nil handler、未知 WriteModel 此前无守卫；`TestInvokeNatsHandlerContainsPanic` 原为空断言，改为断言 panic 计数；`stringifyID(nil)` 原有测试红 |
+| M8 适配层输入与 panic 边界 | 已验证（U-0012 补 2 条、修 1 条） | `kit/nats` 拒绝 nil handler / 空 subject 并 recover；`kit/mongo` 未知 WriteModel 带 index 报错，`stringifyID(nil)` 返回空串 | nil handler、未知 WriteModel 此前无守卫；`TestInvokeNatsHandlerContainsAndReportsPanic` 原为空断言，改为断言 panic 计数；`stringifyID(nil)` 原有测试红 |
 | M9 Lifecycle cleanup | 已验证 | `core/lifecycle` `EmitAll` + `errors.Join` | `EmitAll` 首错即停 → `TestEmitAllContinuesAfterFailure` 红 |
 
 ## P0：发布前必须关闭

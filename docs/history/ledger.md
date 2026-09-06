@@ -316,7 +316,9 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 ## 7. 方向一进度：运行时观察与文档复审
 
-**运行时观察（2026-09-06，kit）**：statslog 本来就每分钟把 goroutine / 堆 / 实体按 category、kind 的数量写进 JSONL，但只在文件里。现在每次采集同步发布 gauge（`runtime.goroutines`、`runtime.heap_alloc_bytes`、`runtime.heap_sys_bytes`、`runtime.sys_bytes`、`runtime.num_gc`、`entity.count`、`entity.count_by_category{category}`、`entity.count_by_kind{kind}`），ops `/metrics` 与 Grafana 直接可见；ops 新增 `GET /statsz` 返回当前一次观察的 JSON（未装配 statslog 时 404 并说明）。**边界**：内存以进程堆为观察量，实体自身占用没有分配追踪无法归属，实体侧给数量——有意的取舍。**待做**：`observability/` 的 Grafana 面板加这组 gauge；文档细节复审未开始。
+**运行时观察（2026-09-06，kit）**：statslog 本来就每分钟把 goroutine / 堆 / 实体按 category、kind 的数量写进 JSONL，但只在文件里。现在每次采集同步发布 gauge（`runtime.goroutines`、`runtime.heap_alloc_bytes`、`runtime.heap_sys_bytes`、`runtime.sys_bytes`、`runtime.num_gc`、`entity.count`、`entity.count_by_category{category}`、`entity.count_by_kind{kind}`），ops `/metrics` 与 Grafana 直接可见；ops 新增 `GET /statsz` 返回当前一次观察的 JSON（未装配 statslog 时 404 并说明）。**边界**：内存以进程堆为观察量，实体自身占用没有分配追踪无法归属，实体侧给数量——有意的取舍。**Grafana**（2026-09-06）：总览加"进程运行时"一行六个面板。
+
+**文档细节复审 第一轮（2026-09-06，core `docs/`）**：脚本化——抽出 13 篇文档里所有反引号标识符（Go 名、路径、配置键），对五仓源码索引核对存在性，再人工判读。真漂移 5 处、已修：INTERNALS 的包表用了改名前的 `replica/`、`sync/`、`replication/`（现 `mirror/`、`syncbus/`、`statesync/`）；STATIC_REGISTRATION 把 nest handler 的生成位置写成旧布局 `game/bootstrap/nest.go`（现 `internal/registry/nest_gen.go`）；ROADMAP M8 行引用了改名前的测试名；两篇 2026-09-01/02 的历史文档满是 `cube-*` 路径，加了"历史文档"头注而非逐处改写。误报类型：环境变量名、示例占位（`CHANGE_ME`、`Xxx`）、JSON 字段名、标准库标识符——下一轮把这些加入白名单后扫 kit / codegen / service 的 docs 与 README。
 
 **发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
 

@@ -1,5 +1,7 @@
 # Core/Kit Feature 逻辑复评与整体修改方案
 
+> **历史文档**：写于仓库改名之前，文中 `cube-core` / `cube-kit` 即今天的 `roost-core` / `roost-kit`，`core/sync`、`core/replica` 等路径已分别成为 `syncbus`、`mirror`。结论与后续处置见 [ROADMAP](ROADMAP.md) 与 [收敛账本](history/ledger.md)；本文不再随代码更新。
+
 > 日期：2026-09-01  
 > 范围：`cube-core` 与 `cube-kit` 中“core 定义契约、kit 提供实现”的框架能力  
 > 不包含：停止维护的 `cube`、用户自行处理的 checkpoint/WAL 重复 snapshot（原 P1-5）、业务 handler 异步 Context 设计变更

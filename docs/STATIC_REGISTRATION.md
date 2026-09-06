@@ -8,7 +8,7 @@ handler、路由）目前一半由 codegen 生成、一半靠手写聚合，而�
 
 | 注册类 | 叶子函数 | 聚合器 | 调用点 |
 | --- | --- | --- | --- |
-| nest handler | 生成 | **生成** `game/bootstrap/nest.go` | 生成的 bootstrap |
+| nest handler | 生成 | **生成** `internal/registry/nest_gen.go`（旧布局 `game/bootstrap/nest.go` 由 `roost generate` 迁移） | 生成的 registry |
 | entity | 生成 `RegisterEntity()` | **手写**（业务仓里 15 个包手工列举） | 手写的业务 mod |
 | component | **手写**，且命名不统一 | **手写**（40+ 个包手工列举） | 同上 |
 | config table | 生成 `RegisterGeneratedConfigData()` | 手写包一层 + 自己的 `sync.Once` | 生成的 bootstrap（部分） |
