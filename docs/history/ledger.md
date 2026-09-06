@@ -53,13 +53,13 @@
 | core | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app/buildinfo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `bus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） | 09-02 | 09-02 | 09-06 脚本扫 | 09-02 | 09-06 脚本扫 | 09-02 |
 | core | `cache` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `clock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `dataengine` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `entity` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `entitysync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -209,6 +209,10 @@
 | ~~B-07~~ | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | **已完成 → U-0004～U-0008、U-0016～U-0020**：12 包全部过了一遍 C2（承诺回退法），其中 8 包各有修复或补测。原记录： service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
 | B-14 | `core/bus/reliable.go` `requeueMsgID`、`kit/saga` `commandDigest` / 完成摘要：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | 今天的结构体都是纯值字段、不会失败；一旦加了 `any` / 函数字段，全部摘要退化为同一个值 → 去重误判。低优先，改成返回错误或在摘要里混入 ID |
 | ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
+| B-16 | core `configdata` 定义校验与 auto 表 cfg 标签规则（回退 45 条 34 条全绿：重复 key、空名 / 空文件、类型不匹配、嵌入字段 cfg 标签、json 名冲突…） | C2 | 回退采样 | 与 T-35 同类：约束存在但无测试钉住，回归会让重复行静默覆盖 |
+| B-17 | core `nest` Cast 辅助函数与管理器守卫（回退 45 条 44 条全绿：类型不匹配、实体缺失、无上下文、已停止） | C2 | 回退采样 | 多为同形状守卫，一张表驱动测试即可覆盖大半 |
+| B-18 | core `saga`（34/40）、`mirror` 信封校验（13/14：内外 topic / 版本不一致、未知 op）、`entitysync`（7/9） | C2 | 回退采样 | mirror 的信封规则是跨进程线协议，优先 |
+| B-19 | kit `nestwal`（37/40）、`remoteentity`（37/40）、`saga`（37/40）、`redis`（20/25）守卫 | C2 | 回退采样 | 其中相当部分是 nil / 配置守卫；先按"实质承诺"筛一遍再开单元 |
 
 ## 5. 单元日志
 
@@ -216,6 +220,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0044 | 2026-09-06 | roost-core `dataengine` 准入校验（`ValidateMutation` / `ValidateCommitRecord` / `LeaseFence`） | C2 | 脚本回退 27 条守卫 20 条全绿：十二条形状规则、远端提交与头部交叉校验、效果 / 回执 / 围栏回执定位、围栏六字段——只有"版本连续"与"patch 不回落"两条有测试 | `validate_promises_test.go` 四条（30 个子用例） | 五处守卫回退各红（加括号后）；复测 27 条剩 8 条全绿、全是 nil 守卫 | — |
+| U-0043 | 2026-09-06 | roost-core `bus` RPC 信封解码 / 生命周期 / 死信能力 | C2 | 脚本回退 32 条守卫 28 条全绿（首轮，含 `\|\|` 条件的假阴性）；实质缺口：信封版本 / 失败无错误体 / 成功无载荷三条线协议规则、module / name 必填、停止后注册、无传输调用、无死信存储 | `promises_test.go` 五条 | 版本检查与必填检查回退红；复测 32 条剩 14 条全绿、全是 nil 守卫 | — |
 | U-0042 | 2026-09-06 | roost-kit `dataengine` × NATS 半开（故障矩阵第三切片）+ `nats` 客户端 | 故障矩阵 / C5 | `timeout` toxic 下发布有界失败、恰好一次成立；但客户端从 gossip 学到成员真实端口、重连**绕开代理**（`reconnected url=…:14222`）——没有"只走配置 URL"的开关；另：U-0037 的 `waitFor` 与 integration 文件重名，v1.12.4 的 integration 构建红而未被发现（盯错了工作流） | `TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce`；`options_discovered_test.go` | 半开测试对真实环境两次通过（7.8s / 12.8s）；不开 `ignore_discovered_servers` 时日志可见绕开 | T-41、T-42 |
 | U-0041 | 2026-09-06 | roost-codegen `internal/dao` 生成器层守卫 | C2 | 抽样回退 4 条：redis DAO 未实现 mode / 缺 key / 缺 key 类型、Mongo DAO 未知 dbscope 去掉后全绿（解析层 tag 陷阱早有测试）——两组测试之间那一层 | `gen_promises_test.go` 两条（按错误文本 + DAO 名） | 四处回退各红 | — |
 | U-0040 | 2026-09-06 | roost-codegen `internal/webroute` 标记解析 | C2 / C5 | 十二处拒绝只有两条测试（"signature"、"duplicate"）；拼错键被接受后报 `unsupported method ""`，缺键同样含混 | `promises_test.go` 四条（十一种坏标记按文本、raw 路由类型化请求、三种签名缺陷、同目录混包） | 四处守卫回退（两新两旧）对应用例各红 | T-40 |
@@ -360,4 +366,24 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **第三切片（2026-09-06，NATS 半开）**：`timeout` toxic（timeout=0）黑洞化三个代理的下行——连接不断、字节不回，是与 latency / reset_peer 都不同的失败形态：客户端既拿不到 ack 也拿不到错误。测试钉住三件事：提交 + 投影不受影响（2.5s 内）；outbox 的发布**有界失败**而非永远挂住（`PublishFailures ≥ 1`——来自 ping 超时 → EOF）；恢复后恰好一次（broker 可能已存下未 ack 的发布，靠 `Msg-Id = effect ID` 去重兜住）。**首跑暴露夹具缺陷**：nats.go 从 INFO gossip 学到成员真实端口（14222–14224），重连时绕开代理——之前两条 NATS 测试也是这样"痊愈"的，故障注入的保真度打折。补 kit 层配置 `nats.ignore_discovered_servers`（代理、NAT 部署同样需要），代理夹具自动开启后重连落在 24223（仍是代理）。四个不变量的 NATS 侧现在覆盖 latency / reset / 半开三种形态。**下一切片**：Redis 半开对 `Acquire`（现有两条是"回复被吞"，形态相同，可能只需参数化）；JetStream RPC（bus/jetstream_rpc）在半开下的 call_timeout。
 
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
+
+## 9. 脚本化承诺回退（gap map，2026-09-06）
+
+**方法**：`revertsample.py` 对包内每条"`if <cond> {` 且下一行 `return … err`"的守卫，把条件改成 `(<cond>) && false`（**必须加括号**：首轮用 `<cond> && false` 只中和了 `a || b` 的最后一个析取项，把 bus 的重启拒绝误判为无覆盖），跑包测试；仍绿 = 该守卫没有任何测试钉住。每包上限 40–45 条，先到先取，nil 守卫也计入（判读时剔除）。
+
+| 包 | 采样 | 无覆盖 | 判读 |
+| --- | --- | --- | --- |
+| core `bus` | 32 | 28 → **14**（U-0043 后） | 剩余全是 nil 守卫 |
+| core `dataengine` | 27 | 20 → **8**（U-0044 后） | 剩余全是 nil / loader 空资源守卫 |
+| core `configdata` | 45 | 34 | 实质缺口多：定义校验、auto 表 cfg 标签规则十余条（B-16） |
+| core `nest` | 45 | 44 | Cast 辅助函数同形状守卫（B-17） |
+| core `saga` | 40 | 34 | B-18 |
+| core `mirror` | 14 | 13 | 信封线协议规则（B-18，优先） |
+| core `entitysync` | 9 | 7 | 多为参数守卫 |
+| kit `redis` | 25 | 20 | 含配置 / nil 守卫（B-19） |
+| kit `nestwal` | 40 | 37 | B-19 |
+| kit `remoteentity` | 40 | 37 | B-19 |
+| kit `saga` | 40 | 37 | B-19 |
+
+**读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 
