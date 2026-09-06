@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **security 会话令牌的每一种伪造与畸形形态钉住**（U-0068，C2，B-22）。nightly gap map 里 `security` 5/5 无覆盖；此前只有
+  往返、错玩家、过期三条。签发：玩家 0 / 空密钥拒绝；校验：空密钥、分段数不对、payload / 签名不是 base64、**用别的密钥签名**、
+  **签名后改 payload**、payload 字段数不对、玩家 id 非数字 / 为零、过期时间非数字 / 非正、空 nonce、已过期、他人令牌。
+  夹具用包内 `sign` 造"签名正确但 payload 违规"的令牌，让 payload 规则成为唯一拒绝理由；玩家 id 规则要用 `expectPlayerID=0`
+  校验，否则被"期望玩家不符"掩盖。`session_token_promises_test.go` 一条（15 变异）；回退六处守卫各红。
 - **statesync 增量帧编解码的结构规则与尺寸上限逐条钉住**（U-0067，C2，B-22）。nightly gap map 里 `statesync` 5/5 无覆盖，
   此前只有往返测试。`validateDeltaFrame` 十八条：元数据为零、未知帧类型、全量帧带基线、增量帧无基线 / 基线不早于 tick、
   无效对象引用、非法对象操作、重复对象、全量帧含非 create、create 无原型、remove 带组件、组件无类型 / 非法操作 / 重复、

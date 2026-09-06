@@ -98,7 +98,7 @@
 | core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `security` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `security` | 09-02 | 09-06 U-0068（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `syncbus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
 | core | `syncstream` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -215,7 +215,7 @@
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
-| B-22 | core 首份 nightly gap map 里整片无覆盖的包：`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | `entity` → U-0065、`statesync` → U-0067 已完成；下一个 `security`（鉴权拒绝）与 `syncbus` |
+| B-22 | core 首份 nightly gap map 里整片无覆盖的包：`syncbus`（nil / 配置守卫，低）、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | `entity` → U-0065、`statesync` → U-0067、`security` → U-0068 已完成；下一个 `ownerroute` / `migration` |
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 
 ## 5. 单元日志
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0068 | 2026-09-06 | roost-core `security` 会话令牌（B-22） | C2 | nightly `security` 5/5；伪造（异密钥、签后改 payload）与畸形 payload 规则无测试；payload 的玩家 id 规则被"期望玩家不符"掩盖——需 `expectPlayerID=0` 才测得到 | `session_token_promises_test.go` 一条（15 变异） | 六处守卫回退各红 | — |
 | U-0067 | 2026-09-06 | roost-core `statesync` 增量帧编解码（B-22） | C2 | nightly `statesync` 5/5；线格式两侧的结构与尺寸规则整段无测试；**方法坑五**：`if _, ok := m[k]; ok {` 这类带初始化语句的守卫，`(cond) && false` 整体中和会编译失败、`grep "--- FAIL"` 计 0 被误读为绿——必须 `if init; (cond) && false` | `codec_promises_test.go` 两条 | 九处守卫回退各红 | — |
 | U-0066 | 2026-09-06 | roost-skill `combatcomponent` 资源命令 / 费用支付 | C2 | 本地 gap map 18/20；负扣减、超池、负结果、溢出是"凭空造资源"级别的守卫 | `resource_promises_test.go` 两条 | 四处守卫回退各红 | — |
 | U-0065 | 2026-09-06 | roost-core `entity` `RemoteCommit.Validate`（B-22 首项） | C2 | nightly gap map `entity` 5/5；远端提交校验是不变量宿主却整段无测试；快照键有效性依赖实体 id 编码 kind——夹具首版用裸 id 被"invalid snapshot"拒绝 | `remote_commit_promises_test.go` 一条（25 变异） | 七处守卫回退各红 | — |
