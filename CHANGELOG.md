@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **skillsync 应用器的准入与记录规则逐条钉住**（U-0064，C2）。本地 gap map 显示 `skillsync` 20 条采样 17 条无覆盖。`NewApplier`：
+  schema 为 0、schema 不在支持区间；`Apply` 准入：epoch 为 0、报文 schema 不受支持、受支持但异版本却无迁移器、空 topic /
+  零序号、首个报文不是全量、全量报文带基序号；记录层：记录 schema 与报文不一致、manifest topic 里装了 state 记录、
+  manifest 摘要与其 plan 不符——用 projector + history 铸出合法报文再单点变异，让被测规则成为唯一拒绝理由。
+  `applier_promises_test.go` 三条；回退九处守卫各红。
 - **skillcompose 的合同构建与校验规则逐条钉住**（U-0063，C2）。本地 gap map 显示 `skillcompose` 20 条采样守卫 19 条无覆盖。
   `BuildContract`：无来源、空权威 / 策略 id、负上限（策略侧与调用方侧）、来源缺 id / 摘要、重复来源、空特征、负生命期 /
   目标数；`ValidateContract`：版本、权威、策略、无来源、负预算、来源缺摘要 / 重复、授权指向未知来源 / 空特征 / 重复 /
