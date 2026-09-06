@@ -164,7 +164,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | skill | `combat` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | skill | `combatcomponent` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| skill | `skill` | — | 09-06 U-0028（回退验证 7 条，3 洞） | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `skill` | — | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | skill | `skillcompose` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 | skill | `skillsync` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
 
@@ -177,14 +177,14 @@
 | codegen | `internal/cfggen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/dao` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/entity` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/errcode` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/eventgen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/nest` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/protocol` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/registry` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/tablegen` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
@@ -213,8 +213,10 @@
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
+| U-0031 | 2026-09-06 | roost-kit `remoteentity` `MongoCommitter` 删除路径（不变量 ③） | C8 | 0 缺陷：删除提交后旧 fence 的迟到写入被 `ErrRemoteVersionConflict` 拒绝、tombstone 与数据文档都不复现；当前 fence 的写入允许且为新版本（显式重建） | `TestRealDeleteIsNotResurrectedByAStaleFence`（真实副本集，`integration` 标签） | 本地 0.22s 绿；kit CI integration 绿。四个不变量至此各有至少一条真实依赖上的测试 | — |
+| U-0030 | 2026-09-06 | roost-codegen `internal/registry`、`internal/errcode`（生成器包首格） | C2 | 五条承诺回退：未知 phase、方法上的标记两条有测试红；**无法解析的源文件静默跳过**（会让聚合少注册）、**返回 error 的注册函数在生成的 `RegisterAll` 里不检查**（编译仍过、失败不可见）、**重复错码不报错** 三条全绿 | `registry/promises_test.go` 两条、`errcode/promises_test.go` 一条 | 补后三处回退变红；两包绿 | — |
 | U-0029 | 2026-09-06 | roost-codegen `renderCompose`（启动门禁首跑触发） | C4 | 1：`deploy/dev/docker-compose.yaml` 用 `mongo:27017` 初始化副本集成员，而服务配置在宿主机拨 `127.0.0.1:27017`；驱动发现成员地址后解析 `mongo` 失败 → 任何带 dataengine 的进程在开发机上 `ReplicaSetNoPrimary`。两处字面量一个事实 | `TestDevComposeReplicaSetMemberIsTheAddressTheConfigDials` 把成员地址与配置拨的地址钉在一起 | 门禁首跑：mail 起来（不用 Mongo）、game 停在 ReplicaSetNoPrimary；成员改 `127.0.0.1:27017` 后 released / source-head 两个 full 场景 game 起来；minimum 场景仍红——kit v1.12.0 还带 U-0025 的依赖缺陷，把 kit 下限抬到 v1.12.2 后六格全绿。门禁两跑抓两处，值回票价 | T-32 |
-| U-0028 | 2026-09-06 | roost-skill `skill`（首格） | C2 | 三条注释承诺回退：跨 owner 能力枚举拒绝（已有测试红）；`RestoreRuntime` 改走 `NewRuntime` 快进+压缩路径（会删检查点后的事件）全绿；asset cache 等待中的 `Acquire` 去掉预留引用（首个 Release 逐出并卸载）全绿 | `promises_test.go` 两条：压缩型 MemoryHost 检查点后追加事件再恢复；门控 loader 制造"加载中 + 等待 + 首个 Release" | 补后两处回退变红；`-race` 绿。第二、三批再回退四条：cast window 表达式钳入 [min,max]、cooldown 写点记录器、`commit_tick ≤ windup_ticks_min`——均有测试红；**保留上限逐出仍被引用的已完成 cast**（去掉 `castEvictableLocked` 守卫）全绿 → 补 `TestReferencedCompletedCastsSurviveTheRetentionBound`。七条中三处洞、四条已覆盖 | — |
+| U-0028 | 2026-09-06 | roost-skill `skill`（首格） | C2 | 三条注释承诺回退：跨 owner 能力枚举拒绝（已有测试红）；`RestoreRuntime` 改走 `NewRuntime` 快进+压缩路径（会删检查点后的事件）全绿；asset cache 等待中的 `Acquire` 去掉预留引用（首个 Release 逐出并卸载）全绿 | `promises_test.go` 两条：压缩型 MemoryHost 检查点后追加事件再恢复；门控 loader 制造"加载中 + 等待 + 首个 Release" | 补后两处回退变红；`-race` 绿。第二、三批再回退四条：cast window 表达式钳入 [min,max]、cooldown 写点记录器、`commit_tick ≤ windup_ticks_min`——均有测试红；**保留上限逐出仍被引用的已完成 cast**（去掉 `castEvictableLocked` 守卫）全绿 → 补 `TestReferencedCompletedCastsSurviveTheRetentionBound`。第四批四条：版本号、presentation 游标过期、pending 任务先挂起三条红；**检查点校验和不匹配必须拒绝恢复**去掉比对全绿 → 补 `TestRestoreRefusesACheckpointWhosePayloadWasTampered`。十一条中四处洞 | — |
 | U-0027 | 2026-09-06 | roost-kit `nestwal` `TestWALCloseDrainsAdmittedAppends`（v1.12.2 tag Windows 首跑红） | C2 | 1：测试前置条件"全部 append 已接纳"只等"队列非空"；慢机器上 Close 抢在 31 个 goroutine 到达 `Append` 之前，它们得到的 `ErrClosed` 合法——测的是调度不是排空。且 `Stats.Queued` 在写入协程取走一批后归零，无法表达"全部接纳" | `Stats` 新增 `Admitted`（接纳计数，`Admitted − Appended` = 在途量）；测试等到 `Admitted == 32` 再 Close，否则 Fatal 说明前置条件不成立 | 用 `Queued < total` 作前置条件 5s 内从未满足（证明旧统计不可用）；改 `Admitted` 后 `-count=20 -race` 绿；tag 重跑绿 | — |
 | U-0026 | 2026-09-06 | roost-codegen `add lifecycle`（game 模板 World + Player 触发） | C2 | 1：每个 Entity 的 lifecycle 文件都声明包级 `FromRegistry`，第二个 Entity 起同包重复声明、编译不过。从未有测试在一个工程里加两个 lifecycle | `TestGameTemplateScaffoldsWorldAndPlayer`：真建模板工程，go/parser 扫 lifecycle 包无重复顶层声明，且含 `PlayerFromRegistry` / `WorldFromRegistry` / `EnsureWorld` | 改为 `<Entity>FromRegistry` 后模板工程 build / vet / `generate --check` 通过；文档与 help 同改。已生成工程的文件是业务所有，不会被改写 | — |
 | U-0025 | 2026-09-06 | roost-kit `dataengine` / `saga` / `remoteentity` Mod 依赖声明（模板 game 进程首次启动触发） | C4 | 3：`DependsOn` 写了 `mods.ModHealth`（Registry 内建项，非 Mod）与 `mods.ModNatsJetStream`（nats Mod 的 capability，非 Mod）；app 按 Mod 名解析 → `unknown mod dependency "health"`。**默认生成的工程（mods 含 nest → dataengine）一个都起不来**；kit 自己的集成测试手工 Init/Provide、不经 app 排序，所以从未发现。与 U-0024 同一类：capability 名当 Mod 名 | kit 根目录 `TestEveryModDependencyNamesAKitMod`：构造全部 14 个 kit Mod，依赖名 ⊆ Mod 名集合 | 回退（stash 三处修复）测试报 5 条；修后绿；kit 全量绿。模板 game 进程对真实 Mongo 副本集 + NATS 集群 + Redis 连续两次启动 `service init` 通过、进程存活（本地环境需清空 JetStream store，否则旧 stream 预留容量触发 "insufficient storage"——环境问题，非缺陷） | T-31 |
@@ -326,7 +328,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 ## 8. 故障矩阵（toxiproxy）
 
-**第一切片（2026-09-06，kit）**：隔离环境脚本在有 `toxiproxy-server` 时为三个 NATS 节点各起代理（24222–24224，API 18474），导出代理 URL；`heal` 清 toxic。两条集成测试：3s 延迟下提交与投影 2.5s 内完成（提交点是 WAL + Mongo，总线不在同步路径）、延迟清除后效果恰好一次；reset_peer 下提交仍被接纳、outbox 保留、恢复后恰好一次。本地对真实环境两条各 0.7s 通过。`nightly-fault-matrix` 工作流每日 03:00（Asia/Shanghai）以 `ROOST_IT_TOXIPROXY=1` 跑整套。**边界**：Mongo 不代理——副本集发现把驱动引到成员各自地址，代理会被绕开；Mongo 侧的故障仍由 `fault mongo-primary`（进程级）覆盖。**第二切片（2026-09-06）**：隔离 Redis 节点（16379，`--set-proc-title no` 让脚本能按命令行认领自己的进程——没有它 `down` 中途拒绝"外来" pid、留下孤儿 mongod / nats，这是本切片踩到的第一个坑）+ toxiproxy 代理（26379）。两条锁测试：`Release` 回复被吞 → uncertain、拒绝再 Acquire、恢复后值守卫删除收敛且不误删他人；`SETNX` 回复被吞 → 不重试、收敛后 key 已释放。U-0012 的契约第一次由真实丢包驱动。nightly 以 `ROOST_IT_TOXIPROXY=1` 跑通。**下一切片**：NATS `timeout`（半开）对 JetStream 发布确认；Mongo 侧只能进程级；四个不变量对照表——① 成功不早于提交点（NATS 延迟 ✓）、② 不确定即围栏（Redis 丢回复 ✓）、③ 删除防复活（待：remote entity 删除 + 网络重置）、④ 准入即执行（NATS 重置 ✓）。
+**第一切片（2026-09-06，kit）**：隔离环境脚本在有 `toxiproxy-server` 时为三个 NATS 节点各起代理（24222–24224，API 18474），导出代理 URL；`heal` 清 toxic。两条集成测试：3s 延迟下提交与投影 2.5s 内完成（提交点是 WAL + Mongo，总线不在同步路径）、延迟清除后效果恰好一次；reset_peer 下提交仍被接纳、outbox 保留、恢复后恰好一次。本地对真实环境两条各 0.7s 通过。`nightly-fault-matrix` 工作流每日 03:00（Asia/Shanghai）以 `ROOST_IT_TOXIPROXY=1` 跑整套。**边界**：Mongo 不代理——副本集发现把驱动引到成员各自地址，代理会被绕开；Mongo 侧的故障仍由 `fault mongo-primary`（进程级）覆盖。**第二切片（2026-09-06）**：隔离 Redis 节点（16379，`--set-proc-title no` 让脚本能按命令行认领自己的进程——没有它 `down` 中途拒绝"外来" pid、留下孤儿 mongod / nats，这是本切片踩到的第一个坑）+ toxiproxy 代理（26379）。两条锁测试：`Release` 回复被吞 → uncertain、拒绝再 Acquire、恢复后值守卫删除收敛且不误删他人；`SETNX` 回复被吞 → 不重试、收敛后 key 已释放。U-0012 的契约第一次由真实丢包驱动。nightly 以 `ROOST_IT_TOXIPROXY=1` 跑通。**下一切片**：NATS `timeout`（半开）对 JetStream 发布确认；Mongo 侧只能进程级；四个不变量对照表——① 成功不早于提交点（NATS 延迟 ✓）、② 不确定即围栏（Redis 丢回复 ✓）、③ 删除防复活（待：remote entity 删除 + 网络重置）、④ 准入即执行（NATS 重置 ✓）——③ 已由 U-0031 在真实 Mongo 上补齐（存储层；网络层的"删除 + 重置"对 Mongo 走不了代理，进程级 `fault mongo-primary` 已覆盖故障转移）。
 
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
