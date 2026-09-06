@@ -26,6 +26,7 @@ type NatsMod struct {
 	bus       *bus.Bus
 	codec     bus.Codec
 	cfg       *fnats.Config
+	extra     clientOptions
 }
 
 // NewNatsMod creates a NatsMod with an optional codec.
@@ -46,11 +47,14 @@ func (m *NatsMod) Init(cfg *viper.Viper) error {
 		url = "nats://localhost:4222"
 	}
 	m.cfg = fnats.DefaultConfig(url)
+	// nats.ignore_discovered_servers: stay on the configured URLs instead of
+	// following cluster gossip — for proxies, NAT, and fault injection.
+	m.extra = clientOptions{ignoreDiscoveredServers: cfg.GetBool("nats.ignore_discovered_servers")}
 	return nil
 }
 
 func (m *NatsMod) Provide(r *app.Registry) error {
-	client, err := newNatsClient(m.cfg)
+	client, err := newNatsClient(m.cfg, m.extra)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,18 @@ import (
 	gonats "github.com/nats-io/nats.go"
 )
 
-func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState) []gonats.Option {
+// clientOptions are the kit-level knobs that are not part of the core
+// fnats.Config contract.
+type clientOptions struct {
+	// ignoreDiscoveredServers keeps the client on the URLs it was configured
+	// with. By default nats.go learns every cluster member's advertised
+	// address from INFO gossip and reconnects to whichever answers — which is
+	// right in a flat network and wrong behind a proxy, NAT, or a fault
+	// injector: the client silently escapes the path the operator configured.
+	ignoreDiscoveredServers bool
+}
+
+func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra clientOptions) []gonats.Option {
 	opts := []gonats.Option{
 		gonats.ReconnectWait(cfg.ReconnectWait),
 		gonats.MaxReconnects(cfg.MaxReconnects),
@@ -31,6 +42,9 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState) []gonats.Opt
 			}
 			slog.Error("nats: async error", "subject", subject, "err", err)
 		}),
+	}
+	if extra.ignoreDiscoveredServers {
+		opts = append(opts, gonats.IgnoreDiscoveredServers())
 	}
 	return opts
 }

@@ -36,12 +36,12 @@ func (s *natsLifecycleState) expectedDisconnect() bool {
 	return s != nil && (s.draining.Load() || s.closing.Load())
 }
 
-func newNatsClient(cfg *fnats.Config) (*natsClient, error) {
+func newNatsClient(cfg *fnats.Config, extra clientOptions) (*natsClient, error) {
 	if cfg == nil || strings.TrimSpace(cfg.URL) == "" {
 		return nil, fmt.Errorf("nats: configuration and URL are required")
 	}
 	state := &natsLifecycleState{}
-	opts := buildNatsOptions(cfg, state)
+	opts := buildNatsOptions(cfg, state, extra)
 	conn, err := gonats.Connect(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: connect %s: %w", cfg.URL, err)
