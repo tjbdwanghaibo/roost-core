@@ -113,7 +113,7 @@
 | kit | `（根：CI 工作流）` | — | — | — | 09-04 U-0001 | — | — | — | — |
 | kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 | — | — | — | — | — | — |
 | kit | `actionflow` | 09-02 | 09-06 U-0077（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `dataengine`（U-0025：C4 09-06） | 09-02 | 09-06 U-0078（回退 4 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
 | kit | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0083 | 2026-09-06 | roost-kit `ai` 行为树注册表 / 文档解析器 | C2 | kit gap map 16/20；原 fail-fast 测试只看错误类别，任一规则丢失都被邻居兜住 | `tree_parser_promises_test.go` 两条（3 + 11 用例，带 JSON 路径） | 五处守卫回退各红 | — |
 | U-0082 | 2026-09-06 | roost-kit `syncstream` 订阅端尺寸上限 / 分片规则 | C2 | kit gap map 14/20；订阅端是同步总线上的信任边界，用真实 Publisher 铸信封再变异 | `subscribe_promises_test.go` 一条（7 子用例） | 五处守卫回退各红 | — |
 | U-0081 | 2026-09-06 | roost-kit `spatial` 兴趣管理器配置 / 边界 | C2 | kit gap map 12/20；配置错误会让盒运算溢出或滞回失效 | `interest_promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0080 | 2026-09-06 | roost-kit `nettransport` 会话注册 / 批量准入上限 | C2 | kit gap map 17/20；上限在触碰队列前拒绝、压线放行 | `admission_promises_test.go` 两条 | 四处守卫回退各红 | — |
@@ -394,6 +395,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **第二轮（2026-09-06，kit / skill / service / codegen 共 26 篇）**：加白名单后 275 个可疑项，逐个核对源码：绝大多数是生成工程的相对路径、文件名、标记（`//roost:*`）、示例名（`ItemTableFrom` 是 `<表名>TableFrom` 的示例、`BagSender` 是 `New<Handler>Sender` 的示例）。真漂移 1 处、已修：skill 的 visual-sync 指南把发布器写成 `kitroom.PublisherWithOptions`，实际是 `roost-kit/syncstream.NewPublisherWithOptions`（room 包没有它）。历史性提法（`global.ActivityService → activity.Service`、`cube.skill/v2 → roost.skill/v2`）是迁移说明，保留。结论：五仓文档标识符层面的漂移在两轮后基本清零；剩下的复审要靠人读语义，而非脚本。
 
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
+
+**发布（2026-09-06 第五轮）**：core v1.12.1（v1.12.0 之后 73 个提交：U-0043～U-0076 的测试基线、gap map 工具，无 API 变化）→ codegen 清单 core v1.12.1 → codegen v1.13.12。tag 工作流按名核对：core ci ✓、codegen ci ✓、codegen framework-release（结果见下一条记录）。
 
 **发布（2026-09-06 第四轮）**：kit v1.12.6（Redis 客户端 ctx 截止期 U-0061、`nats.ignore_discovered_servers`、两个故障切片、gap map 工具）→ codegen 清单 kit v1.12.6 → codegen v1.13.11。tag 工作流按名核对：kit ci ✓、codegen ci ✓、codegen framework-release ✓。
 
