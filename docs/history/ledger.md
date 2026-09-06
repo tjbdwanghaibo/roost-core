@@ -162,11 +162,11 @@
 
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| skill | `combat` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| skill | `combatcomponent` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| skill | `skill` | — | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| skill | `skillcompose` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
-| skill | `skillsync` | — | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 | 未审 |
+| skill | `combat` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `combatcomponent` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skillcompose` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skillsync` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
 ### roost-codegen（16 包）
 
@@ -315,6 +315,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 - **C5（errcheck `-blank -ignoretests`）**：service 零条。kit 60 余处 `_ =`，逐条判读：`nestwal/codec.go` 的 `binary.Write` 写 `bytes.Buffer`（不可能失败）、`recover()`、关停路径的 `Close/Stop/Shutdown`、`SetDeadline` 复位、`remoteentity` 的 `unlockObserved`（内部已 `recordReleaseFailure` 计数）、错误路径上仅用于改善报错文本的 `refreshMarked`、有注释说明的 `RenewRemoteSnapshotInterest`、`entity_delete.go` 的 `Abort/Indeterminate`（之后紧跟 `runtime.fail` / `closeBatch` 上报）——都是**有意为之且有观测**。真洞两处：`nats/jetstream.go` 四处结算（U-0036）、`dataengine/outbox_worker.go` 的 `RunOnce`（U-0037）。存疑一处未动：`saga` 的 `commandDigest` / 完成摘要用 `json.Marshal(c)` 丢错——`Command` 是纯值字段，Marshal 不会失败，但若将来加了 `any` 字段会让全部命令摘要相同、去重误判；记入待开 C5。
 - **C7（`Lock()` 后无紧随 `defer Unlock()`）**：service 零处非 defer 锁。kit 160 余处，全部在同函数内配对释放（多为条带锁批量加锁 + 一个 defer 逆序解锁、或返回解锁闭包）；无真洞。
 - **C1（持锁区域内的 ctx 调用）**：service 零处。kit 两处命中：`room_broadcast.go` 条带 flush 锁内 `coordinator.DistributeBatch(ctx)`——进程内协调器、按设计串行化每条带的帧；`ownership.go` 每实体 `ownershipMu` 内做分布式锁释放——每实体互斥、就是写路径的设计。均记"看过、无问题"。
+- **core / skill 同套扫描（同日）**：errcheck——core 26 处、skill 15 处 `_ =`，逐条判读全部有意：关停路径、`bytes.Buffer`/hasher 写入、纯值结构体的 `json.Marshal` 摘要、错误路径的二次清理（skill 五处 `_ = stopProcesses(cast, true)` 都在"停止已报错后强制清场"）、`ensureAmmoRecharge` 里被丢的 `scheduleSystem` 错误不可达（`compile_shape` 已校验 `rechargeTicks > 0`）、reliable bus 的 inbox "failed" 标记失败时 key 仍是 SetNX 写下的 "processing"（去重不受影响）。C7——core 3 处、skill 1 处非 defer 锁全是"批量条带加锁 + 一个 defer 逆序解锁"。C1——core 7 处命中：statesync 每会话 `sendMu` 内发包（保序设计）、jetstream_rpc 启动期 `lifeMu` 内订阅（一次性）、configdata `s.mu` 内 `build/commit(ctx)`（`s.mu` 只有两个 Reload 路径持有，读者走 `s.current.Load()`，锁只串行化重载）。**四仓三类扫描零真洞新增**；矩阵上 core / skill 的 C1 / C5 / C7 列从"未审"改为"09-06 脚本扫"。
 - **方法结论**：三类脚本扫描对 service 全清零，说明 service 这一层的 C1 / C5 / C7 可以在矩阵上从"未审"改为"09-06 脚本扫"（12 包）；kit 的真洞集中在"失败→重试"的结算/轮询循环——失败本身被正确处理（重投/重轮询），但**不可见**，这是 C5 在成熟代码里的典型形态。
 
 ## 6. 方向二进度：game 模板
