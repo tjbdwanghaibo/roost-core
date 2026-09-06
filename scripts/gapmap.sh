@@ -18,8 +18,15 @@ fi
   echo "Guards whose neutralization leaves the package tests green. Sampled up to ${max} per package."
   python3 scripts/gapmap/revertsample.py --max "$max" "${pkgs[@]}"
 } | tee gapmap-report.md
-if [[ -n "$(git status --short)" ]]; then
-  echo "gapmap: working tree is not clean after sampling — a neutralized guard left a side effect:" >&2
-  git status --short >&2
-  git checkout -- . && git clean -fdq
+# Restore only TRACKED files the sampler may have left modified. Never `git
+# clean`: untracked files belong to whoever is working in the tree (a test
+# being written alongside the run was deleted this way once).
+if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+  echo "gapmap: tracked files left modified after sampling — a neutralized guard had a side effect; restoring:" >&2
+  git status --short --untracked-files=no >&2
+  git checkout -- .
+fi
+if [[ -n "$(git status --short | grep '^??')" ]]; then
+  echo "gapmap: note — untracked files present (left alone):" >&2
+  git status --short | grep '^??' >&2
 fi

@@ -185,7 +185,7 @@
 | codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0087 | 2026-09-06 | roost-codegen `internal/protocol` 取值与引用规则 | C2 | codegen 本地 gap map 15/20（U-0032 钉的是结构规则）；**工具坑**：`gapmap.sh` 收尾用 `git clean -fdq` 把采样期间新写的测试文件删了——只该还原已跟踪文件，五仓已改 | `definition_promises_test.go` 一条 | 六处守卫回退各红 | — |
 | U-0086 | 2026-09-06 | roost-kit `etcd` 本地镜像配置 | C2 | kit gap map 18/20；空前缀会 watch 整个键空间 | `local_mirror_promises_test.go` 一条（用 6 方法的空转客户端替身） | 三处守卫回退各红 | — |
 | U-0085 | 2026-09-06 | roost-skill `skill` 内存宿主时间单调 / 支付 | C2 | skill gap map 17/20；参照宿主的拒绝是真实宿主被对照的契约 | `memory_host_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0084 | 2026-09-06 | roost-kit `mongo/mongotest` 替身拒绝契约 | C2 | kit gap map 16/20；替身的拒绝就是绝大多数单元测试实际锻炼的契约。**流程坑**：首次提交 fcdaab0 的测试没编译就推了——提交链没有以 `go test` 结果为门，kit ci 红一轮，86def54 修复 | `contract_promises_test.go` 一条 | 三处守卫回退各红 | — |
@@ -474,6 +475,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **回退脚本的第五个坑（2026-09-06 第六轮）**：带初始化语句的守卫（`if _, ok := m[k]; ok {`）不能整体套括号——`if (_, ok := …; ok) && false` 编译不过，`go test` 输出里没有 `--- FAIL`，按行数统计会记成 0 条红、误读为"已覆盖"。人工回退用 `if init; (cond) && false`；采样脚本本身已这么做，且把编译失败记为 `skip` 而不是绿。**统计红行时要同时数 `build failed`。**
 
 **kit（2026-09-06 第七轮，本地 `gapmap.sh --max 20`，25 包）**：358 条采样 275 条无覆盖。整片：`actionflow` 20/20（→ U-0077）、`room` 20/20（多为 topic / subjectID 参数守卫）、`dataengine` 19/20（`entity_repository` 的聚合装载完整性：解码 id 不符、重复 DAO 资源、文档数不为 1、远端无版本包——**优先**）、`etcd` 18/20、`nats` 17/20、`nettransport` 17/20、`mongo/mongotest` 16/20、`saga` 16/20、`ai` 16/20、`redis` 15/20、`remoteentity` 15/20、`nestwal` 14/20、`syncstream` 14/20、`spatial` 12/20、`mongo` 8/8。已开过单元的包仍然高，是因为采样按文件顺序取前 20 条、多数是 nil / 配置守卫；nightly 报告到后按实质筛。
+
+**codegen（2026-09-06 第八轮，本地 `gapmap.sh --max 20`，14 包）**：175 条采样 67 条无覆盖——`protocol` 15/20（→ U-0087）、`internal/roost` 15/20（工程脚手架的参数守卫）、`nest` 11/20（处理器接收者 / target 规则）、`cfggen` 7/20（bean 字段重复 / 导出名冲突）、`entity` 7/14；已收口的包接近 0（registry 0/10、errcode 0/1、attribute 1/10、webroute 1/13、servicerpc 2/20）。**工具坑六**：`gapmap.sh` 收尾的 `git clean -fdq` 会删掉采样期间新建的未跟踪文件——现只还原已跟踪文件。
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 
