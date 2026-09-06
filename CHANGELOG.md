@@ -6,6 +6,12 @@
 
 ### Changed（测试质量）
 
+- **nest 锁组迁移请求的守卫钉住**（U-0062，C2，B-20 收尾）：加入 / 移动到组 0、getter 不认识的实体、一次迁移在途时的第二次
+  请求（移动或离开）各自拒绝，且被拒绝的请求不在实体上留下 pending 标记。`group_transition_promises_test.go` 一条；
+  回退三处守卫各红。
+- **gap map 工具入库**：`scripts/gapmap/revertsample.py`（承诺回退采样器，带括号中和、按行号改、超时记 HANG）、
+  `scripts/gapmap.sh`（对每个有测试的包采样并写 `gapmap-report.md`）、`nightly-gapmap` 工作流（每日 03:30 Asia/Shanghai，
+  报告进 job summary 与 artifact，**从不阻塞**）。kit / service 携带同一份拷贝。
 - **saga 引擎的状态机边界钉住**（U-0052，C2，B-20 第一项）。复测后剩余的十二条实质规则：重复注册定义、启动未知定义版本、
   启动请求的业务键 / 载荷上限、`List` 上限 1000、`Resume` 的 id 形状与"清除截止期又给截止期"互斥、截止期已过、只有
   Failed / ManualRequired 可恢复（Pending / Completed 报 `status N cannot resume`）、定义已卸载、恢复后新化身进入补偿；

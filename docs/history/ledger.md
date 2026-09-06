@@ -85,7 +85,7 @@
 | core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -129,7 +129,7 @@
 | kit | `nestwal` | 09-02 | 09-06 U-0027 / 09-06 U-0048（回退 40 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
 | kit | `remoteentity` | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -213,7 +213,7 @@
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
-| B-20 | 回退复测后剩余的实质守卫：core `nest` group_transition 四条与 `CheckContainAllLock` 死锁风险 | C2 | 第 9 节复测 | saga 引擎 → U-0052、nestwal 损坏检测 → U-0053 已完成 |
+| ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 
 ## 5. 单元日志
@@ -222,6 +222,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0062 | 2026-09-06 | roost-core `nest` 锁组迁移请求守卫（B-20 收尾） | C2 | 组 0、未知实体、迁移在途的第二次请求三条无测试 | `group_transition_promises_test.go` 一条 | 三处守卫回退各红（两处同文本 `groupID == 0`，按行号回退） | — |
+| U-0061 | 2026-09-06 | roost-kit `redis` 客户端 ctx 截止期（故障矩阵第四切片发现） | C8 | go-redis 默认 `ContextTimeoutEnabled=false`：3s 注入延迟下 500ms 预算的 `Acquire` 等满 2s ReadTimeout；快路径（连接错误）尊重 ctx、慢路径（等回复）不尊重 | `client_deadline_test.go`；`TestToxicRedisLatencyKeepsAcquireWithinItsDeadline`（501ms 返回） | 关掉选项单元测试红、集成测试红（首跑即红） | T-43 |
 | U-0060 | 2026-09-06 | roost-service `rank` `decodeEntry` 严格解码 | C2 | 解码失败必须是错误而非零分（零分写回即覆盖真实分数） | `member_promises_test.go` 一条（5 种坏成员） | 字段数守卫回退红 | — |
 | U-0059 | 2026-09-06 | roost-service `global` 迁移 / 租约 / 分页守卫 | C2 | 回退 33 条 19 条全绿；**方法坑**：回退脚本按文本替换命中第一处——`ReleaseLease` 的 "incarnation is required" 与 `RenewLease` 同文本，首轮回退的是后者、误判前者无覆盖；按行号回退后红 | `guards_promises_test.go` 两条 | 五处守卫回退各红 | — |
 | U-0058 | 2026-09-06 | roost-service `account` 生成的 RPC 胶水（servicerpc 模板，九服务同源） | C2 | 三条模板守卫在九个 `*_rpc_gen.go` 里各自全绿；在 account 钉一次即覆盖模板 | `rpc_glue_promises_test.go` 两条 | 两处守卫回退各红 | — |
@@ -387,6 +389,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第三切片（2026-09-06，NATS 半开）**：`timeout` toxic（timeout=0）黑洞化三个代理的下行——连接不断、字节不回，是与 latency / reset_peer 都不同的失败形态：客户端既拿不到 ack 也拿不到错误。测试钉住三件事：提交 + 投影不受影响（2.5s 内）；outbox 的发布**有界失败**而非永远挂住（`PublishFailures ≥ 1`——来自 ping 超时 → EOF）；恢复后恰好一次（broker 可能已存下未 ack 的发布，靠 `Msg-Id = effect ID` 去重兜住）。**首跑暴露夹具缺陷**：nats.go 从 INFO gossip 学到成员真实端口（14222–14224），重连时绕开代理——之前两条 NATS 测试也是这样"痊愈"的，故障注入的保真度打折。补 kit 层配置 `nats.ignore_discovered_servers`（代理、NAT 部署同样需要），代理夹具自动开启后重连落在 24223（仍是代理）。四个不变量的 NATS 侧现在覆盖 latency / reset / 半开三种形态。**下一切片**：Redis 半开对 `Acquire`（现有两条是"回复被吞"，形态相同，可能只需参数化）；JetStream RPC（bus/jetstream_rpc）在半开下的 call_timeout。
 
+**第四切片（2026-09-06，Redis 延迟）**：`latency` toxic 3s 下带 500ms 预算的 `Acquire` **等了 2.0s** 才返回——go-redis 默认不把 ctx 截止期带到网络上（`ContextTimeoutEnabled=false`），只看 `ReadTimeout`；锁后面的每个处理器跟着停 2s。这是故障矩阵直接抓到的第二个运行时缺陷（第一个是 NATS 客户端绕开代理）。修复后 501ms 返回，原有两条丢回复测试也从 2.0s 缩到 0.7s（它们的 700ms 预算此前同样没被尊重）。Redis 半开（`timeout` toxic）与"回复被吞"同形态，第二切片已覆盖，不另开。**下一切片**：JetStream RPC（bus/jetstream_rpc）在 NATS 半开下的 `call_timeout` 是否同样被尊重——同一类问题在另一条路径上。
+
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
 ## 9. 脚本化承诺回退（gap map，2026-09-06）
@@ -424,6 +428,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | `servicemods` | 7 | 2 | — |
 
 **回退脚本的第四个坑（2026-09-06 第五轮）**：按文本替换只命中第一处。同一包里同文本的守卫（global 的 `RenewLease` / `ReleaseLease` 都写 `if incarnation == ""`）会让回退落在别的函数上、把被测那条误判为无覆盖。人工回退要**按行号**；采样脚本本身是按行号改的，不受影响。
+
+**工具入库（2026-09-06 第六轮）**：采样器进 `roost-core/scripts/gapmap/`（kit / service 同拷贝），`scripts/gapmap.sh` 对每个有测试的包采样并写 `gapmap-report.md`，`nightly-gapmap` 工作流每日跑、报告进 job summary，不阻塞。本节的数字此后以 nightly 报告为准，人工只做判读。
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 

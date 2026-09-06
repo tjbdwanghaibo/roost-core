@@ -5,3 +5,4 @@
 # Never commit it: it would silently redirect every consumer to local source.
 go.work
 go.work.sum
+gapmap-report.md
