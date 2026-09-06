@@ -159,7 +159,7 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 
 ## 6. roost-kit 传输边界
 
-同步发送使用 `PublisherWithOptions` 设置：
+同步发送使用 `roost-kit/syncstream` 的 `NewPublisherWithOptions` 设置：
 
 - `ExpectedObserver`：防止服务端路由代码把另一 observer 的包发进当前通道；
 - `MaxPayloadBytes`：在 JSON envelope 前拒绝超大业务 payload；
@@ -319,7 +319,7 @@ outbox, _ := skillsync.NewOutbox(skillsync.OutboxOptions{
     MaxPublishBatch: 512,
 })
 
-publisher, _ := kitroom.NewPublisherWithOptions(bus, kitroom.PublisherOptions{
+publisher, _ := syncstream.NewPublisherWithOptions(bus, syncstream.PublisherOptions{
     RequireConfirmation: true,
     CompressionThreshold: 4 << 10,
     MaxFrameBytes: 256 << 10,
