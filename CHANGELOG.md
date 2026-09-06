@@ -6,6 +6,12 @@
 
 ### Changed（测试质量）
 
+- **nest 的 Cast 类型契约、getter 数量契约、引擎单次生命周期与回滚事务的关闭 / 可比较性守卫钉住**（U-0047，C2）。回退采样
+  45 条守卫 44 条全绿。`CastTargetOne/Two/Three` 要错类型时返回 `ErrCastTypeMismatch` 并带 id 与实际类型（此前断言失败会
+  把零值实体交给处理器）；getter 返回数量与目标数不等是契约破坏而非"缺几个"；空目标、零 id 定位到下标；`NewEngine` 无
+  getter 拒绝启动、`Shutdown` 后 `Start` 返回 `ErrNestStopped`；`RollbackTx` 提交后拒绝 undo / participant / mutation，
+  undo owner / token / participant 必须可比较，participant 去重，混用新旧身份字段拒绝。`promises_test.go` 四条；回退五处
+  守卫各红。
 - **mirror 的信封线协议规则逐条钉住**（U-0045，C2）。回退采样 14 条守卫 13 条全绿。订阅侧：nil 消息、零 key、外层 / 内层
   topic 不一致、内层版本不一致、未知 op、载荷解不开——每条按错误文本断言且 store 收不到任何东西；旧发布者的省略形态
   （内层不带 topic / key / version / op、空载荷即删除）由外层消息补齐；发布侧：异 topic、零 key、未知 op、未初始化。

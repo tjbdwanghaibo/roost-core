@@ -85,7 +85,7 @@
 | core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -210,7 +210,7 @@
 | B-14 | `core/bus/reliable.go` `requeueMsgID`、`kit/saga` `commandDigest` / 完成摘要：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | 今天的结构体都是纯值字段、不会失败；一旦加了 `any` / 函数字段，全部摘要退化为同一个值 → 去重误判。低优先，改成返回错误或在摘要里混入 ID |
 | ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 | ~~B-16~~ | core `configdata` 定义校验与 auto 表 cfg 标签规则 | C2 | 回退采样 | **已完成 → U-0046** |
-| B-17 | core `nest` Cast 辅助函数与管理器守卫（回退 45 条 44 条全绿：类型不匹配、实体缺失、无上下文、已停止） | C2 | 回退采样 | 多为同形状守卫，一张表驱动测试即可覆盖大半 |
+| ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | B-18 | core `saga`（34/40）、`entitysync`（7/9） | C2 | 回退采样 | mirror 信封部分**已完成 → U-0045**；saga / entitysync 待开 |
 | B-19 | kit `nestwal`（37/40）、`remoteentity`（37/40）、`saga`（37/40）、`redis`（20/25）守卫 | C2 | 回退采样 | 其中相当部分是 nil / 配置守卫；先按"实质承诺"筛一遍再开单元 |
 
@@ -220,6 +220,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0047 | 2026-09-06 | roost-core `nest` Cast / 引擎生命周期 / RollbackTx | C2 | 回退 45 条 44 条全绿；Cast 类型断言失败与 getter 数量不等两条是"处理器拿到零值实体"级别的契约 | `promises_test.go` 四条 | 五处守卫回退各红（类型断言那条以去掉 `ok` 检查的方式回退） | — |
 | U-0046 | 2026-09-06 | roost-core `configdata` 定义校验 / auto 表标签规则 | C2 | 回退 45 条 34 条全绿；原 `TestRegisterAutoTableTagMistakesFailAtRegistration` 只断言 `err != nil`（"只要有错就算通过"）；重复 key 无测试 | `promises_test.go` 三条（重复 key 定位、七处定义缺口 + 三处类型不匹配 + 注册 nil、十四条标签规则按文本） | 五处守卫回退各红 | — |
 | U-0045 | 2026-09-06 | roost-core `mirror` 信封线协议（订阅 / 发布两侧） | C2 | 回退 14 条 13 条全绿：外层 / 内层 topic、内层版本、未知 op、零 key 等线协议规则只有"伪造内层 key"一条测试 | `promises_test.go` 三条（七种坏消息 store 零写入；外层补齐内层；发布侧四种拒绝） | 四处守卫回退各红 | — |
 | U-0044 | 2026-09-06 | roost-core `dataengine` 准入校验（`ValidateMutation` / `ValidateCommitRecord` / `LeaseFence`） | C2 | 脚本回退 27 条守卫 20 条全绿：十二条形状规则、远端提交与头部交叉校验、效果 / 回执 / 围栏回执定位、围栏六字段——只有"版本连续"与"patch 不回落"两条有测试 | `validate_promises_test.go` 四条（30 个子用例） | 五处守卫回退各红（加括号后）；复测 27 条剩 8 条全绿、全是 nil 守卫 | — |
@@ -378,7 +379,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | core `bus` | 32 | 28 → **14**（U-0043 后） | 剩余全是 nil 守卫 |
 | core `dataengine` | 27 | 20 → **8**（U-0044 后） | 剩余全是 nil / loader 空资源守卫 |
 | core `configdata` | 45 | 34 → **U-0046 后待复测** | 定义校验、auto 表 cfg 标签规则十余条已钉住 |
-| core `nest` | 45 | 44 | Cast 辅助函数同形状守卫（B-17） |
+| core `nest` | 45 | 44 → **U-0047 后待复测** | Cast / 生命周期 / RollbackTx 已钉住 |
 | core `saga` | 40 | 34 | B-18 |
 | core `mirror` | 14 | 13 → **U-0045 后待复测** | 信封线协议规则已钉住 |
 | core `entitysync` | 9 | 7 | 多为参数守卫 |
