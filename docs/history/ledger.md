@@ -213,6 +213,7 @@
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
+| B-20 | 回退复测后剩余的实质守卫：core `saga` 引擎 Start / Resume / Query / ForceCompensate / Complete 十二条状态与参数规则；kit `nestwal` 段连续性与帧损坏检测；core `nest` group_transition 与 `CheckContainAllLock` | C2 | 第 9 节复测 | saga 引擎那组最值钱（状态机边界）；nestwal 损坏检测需要构造坏段文件 |
 
 ## 5. 单元日志
 
@@ -366,6 +367,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **本轮小结（2026-09-06 第三轮，"脚本扫描 + 生成器收口"）**：换方法——对 service / kit / core / skill 四仓做三类脚本扫描（errcheck `-blank`、非 defer 锁、持锁 ctx 调用），四仓合计约 100 处 `_ =`、170 处非 defer 锁、9 处持锁 ctx 调用，逐条判读后**运行时真洞两处**（U-0036 JetStream 结算失败不可见、U-0037 outbox 认领循环失败不可见），其余都是有意且有观测的丢弃或"批量条带加锁 + defer 逆序解锁"。经验：成熟代码里的 C5 不再是"吞掉后走错分支"，而是"失败被正确处理（重投 / 重轮询）但**不可见**"——修法是计数 + 只打转折日志，而不是每次失败一行。生成器侧收口：eventgen（U-0038）、entity（U-0039）、webroute（U-0040）三个解析器都存在"看得见的问题不出声"（跳过坏文件、丢掉未挂接标记、接受拼错的键），dao 生成器层四处守卫无测试（U-0041）；至此 codegen 16 个包全部至少过了一遍承诺回退法。文档复审第三轮（指标名）修 2 处。发布：kit v1.12.4、codegen v1.13.8（含 tablegen 执行约束）、v1.13.9（含四个生成器单元）。C3 包级可变状态扫描：service 2 处、kit 1 处，全是只读查表。
 
+**本轮小结（2026-09-06 第四轮，"gap map 收口"）**：按第 9 节的地图开了七个 C2 单元——core `mirror`（U-0045）、`configdata`（U-0046）、`nest`（U-0047）、`saga`（U-0050），kit `nestwal`（U-0048）、`remoteentity`（U-0049）、`saga`（U-0051）——每个都是"回退采样 → 按错误文本写表驱动测试 → 逐守卫回退验证"。复测：七个包的无覆盖守卫合计 236 → 141，其中 configdata 34→9、saga 34→15、mirror 13→4 基本收口；nest / nestwal / remoteentity / kit saga 剩余的一半以上是 nil 守卫。**三个方法教训**：① `a || b` 条件回退必须整体加括号，否则假阴性（首轮 bus 误判）；② 巨型单条件（`Command.Validate` 17 个子句）要按子句回退，整条中和没有意义；③ 夹具必须让"只有被测规则能拒绝"——kit saga 的"缺 id / 异 topic"首版用 `{}` 载荷，被载荷解码失败掩盖、回退绿，换成能独立通过的 start 载荷才真正钉住；同类还有 remoteentity `mongo_committer` 的 tx 复用检查（被前置同类检查掩盖，属冗余互掩而非缺口）。回退法的副作用：回退"空目录"守卫时 nestwal 的 Open 真在包目录下建了 `"  "`，复测脚本每次跑完要 `git status` 核对。
+
 ## 8. 故障矩阵（toxiproxy）
 
 **第一切片（2026-09-06，kit）**：隔离环境脚本在有 `toxiproxy-server` 时为三个 NATS 节点各起代理（24222–24224，API 18474），导出代理 URL；`heal` 清 toxic。两条集成测试：3s 延迟下提交与投影 2.5s 内完成（提交点是 WAL + Mongo，总线不在同步路径）、延迟清除后效果恰好一次；reset_peer 下提交仍被接纳、outbox 保留、恢复后恰好一次。本地对真实环境两条各 0.7s 通过。`nightly-fault-matrix` 工作流每日 03:00（Asia/Shanghai）以 `ROOST_IT_TOXIPROXY=1` 跑整套。**边界**：Mongo 不代理——副本集发现把驱动引到成员各自地址，代理会被绕开；Mongo 侧的故障仍由 `fault mongo-primary`（进程级）覆盖。**第二切片（2026-09-06）**：隔离 Redis 节点（16379，`--set-proc-title no` 让脚本能按命令行认领自己的进程——没有它 `down` 中途拒绝"外来" pid、留下孤儿 mongod / nats，这是本切片踩到的第一个坑）+ toxiproxy 代理（26379）。两条锁测试：`Release` 回复被吞 → uncertain、拒绝再 Acquire、恢复后值守卫删除收敛且不误删他人；`SETNX` 回复被吞 → 不重试、收敛后 key 已释放。U-0012 的契约第一次由真实丢包驱动。nightly 以 `ROOST_IT_TOXIPROXY=1` 跑通。**下一切片**：NATS `timeout`（半开）对 JetStream 发布确认；Mongo 侧只能进程级；四个不变量对照表——① 成功不早于提交点（NATS 延迟 ✓）、② 不确定即围栏（Redis 丢回复 ✓）、③ 删除防复活（待：remote entity 删除 + 网络重置）、④ 准入即执行（NATS 重置 ✓）——③ 已由 U-0031 在真实 Mongo 上补齐（存储层；网络层的"删除 + 重置"对 Mongo 走不了代理，进程级 `fault mongo-primary` 已覆盖故障转移）。
@@ -382,15 +385,15 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | --- | --- | --- | --- |
 | core `bus` | 32 | 28 → **14**（U-0043 后） | 剩余全是 nil 守卫 |
 | core `dataengine` | 27 | 20 → **8**（U-0044 后） | 剩余全是 nil / loader 空资源守卫 |
-| core `configdata` | 45 | 34 → **U-0046 后待复测** | 定义校验、auto 表 cfg 标签规则十余条已钉住 |
-| core `nest` | 45 | 44 → **U-0047 后待复测** | Cast / 生命周期 / RollbackTx 已钉住 |
-| core `saga` | 40 | 34 → **U-0050 后待复测** | 选项 / 校验 / 编解码已钉住 |
-| core `mirror` | 14 | 13 → **U-0045 后待复测** | 信封线协议规则已钉住 |
+| core `configdata` | 45 | 34 → **9**（U-0046 后复测） | 剩余：panic 转错误、空数据目录、一处并列丢弃分支——低价值 |
+| core `nest` | 45 | 44 → **30**（U-0047 后复测） | 剩余多为 nil 守卫与 CastTwo / Three 的第二、三位；实质：group_transition 四条、`CheckContainAllLock` 死锁风险、participant 可比较（B-20） |
+| core `saga` | 40 | 34 → **15**（U-0050 后复测） | 剩余实质：引擎 Start / Resume / Query / ForceCompensate / Complete 的十二条状态与参数规则（B-20，优先） |
+| core `mirror` | 14 | 13 → **4**（U-0045 后复测） | 剩余：`PublishDelete` 零 key、发布侧 op（两处 nil 守卫） |
 | core `entitysync` | 9 | 7 | 多为参数守卫 |
 | kit `redis` | 25 | 20 | 含配置 / nil 守卫（B-19） |
-| kit `nestwal` | 40 | 37 → **U-0048 后待复测** | 选项 / 编解码 / Ack / 健康 / 检查点已钉住 |
-| kit `remoteentity` | 40 | 37 → **U-0049 后待复测** | 批次生命周期 / 准入 / Mod sid 已钉住 |
-| kit `saga` | 40 | 37 → **U-0051 后待复测** | 配置拒绝 / 入站解码已钉住 |
+| kit `nestwal` | 40 | 37 → **23**（U-0048 后复测） | 剩余实质：段文件不连续 / 早于检查点、帧魔数 / CRC / 长度三条损坏检测、committer 重试区间（B-20） |
+| kit `remoteentity` | 40 | 37 → **31**（U-0049 后复测） | 剩余多为 nil / 配置守卫与 ownership 的实体种类校验 |
+| kit `saga` | 40 | 37 → **29**（U-0051 后复测） | 剩余：completion 消费者配置（与 nest-start 同形）、step inbox claim 状态、L2 快照 CAS 响应 |
 | kit `room` | 40（实跑 10） | 9 | 前 9 条全绿、多为 subjectID / roomID 为零的参数守卫；第 10 条（`room_broadcast.go:478` 的 ctx 取消 → 返回）去掉后整包测试**挂起** >600s——守卫是循环退出条件，算被覆盖；脚本首版遇超时中止整包，现改为记 HANG 继续 |
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
