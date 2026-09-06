@@ -6,6 +6,12 @@
 
 ### Changed（测试质量）
 
+- **statesync 增量帧编解码的结构规则与尺寸上限逐条钉住**（U-0067，C2，B-22）。nightly gap map 里 `statesync` 5/5 无覆盖，
+  此前只有往返测试。`validateDeltaFrame` 十八条：元数据为零、未知帧类型、全量帧带基线、增量帧无基线 / 基线不早于 tick、
+  无效对象引用、非法对象操作、重复对象、全量帧含非 create、create 无原型、remove 带组件、组件无类型 / 非法操作 / 重复、
+  create 里删组件、set 无 schema、remove 带载荷；编解码两侧的 `MaxFrameBytes`、解码侧空数据 / `MaxComponentBytes` / 截断 /
+  尾随字节 / 魔数 / 协议版本 / 保留位。`codec_promises_test.go` 两条；回退九处守卫各红（两处带初始化语句的守卫需要
+  `if init; (cond) && false` 形式，首轮的中和方式编译不过、误记为绿）。
 - **entity 的 `RemoteCommit.Validate` 二十五条规则逐条钉住**（U-0065，C2，B-22 首项）。首份 nightly gap map 里 `entity` 5/5
   无覆盖。远端提交是不变量①～④的宿主：身份三要素、版本连续、两个所有权 epoch、更新 / 删除的互斥形状、每条数据变更与
   提交头的实体 / 版本一致、重复变更 / 删除、快照的键 / 版本 / epoch / schema / 数据 / 校验和 / 重复、失效键的归属与重复。
