@@ -45,11 +45,17 @@ type realFixture struct {
 
 func newRealFixture(t *testing.T) *realFixture {
 	t.Helper()
+	return newRealFixtureWithNATS(t, os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"))
+}
+
+// newRealFixtureWithNATS is newRealFixture reaching NATS through natsURL —
+// the toxiproxy addresses when a test injects network faults.
+func newRealFixtureWithNATS(t *testing.T, natsURL string) *realFixture {
+	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
 	}
 	mongoURI := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
-	natsURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if mongoURI == "" || natsURL == "" {
 		t.Fatal("isolated integration environment variables are incomplete")
 	}
