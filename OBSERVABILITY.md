@@ -55,7 +55,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位 |
 | `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
 | `failurelog_degraded_total{namespace,op}` | Counter | 原子 Lua 脚本失败降级为非原子回退（增长需关注：优先确认 Redis 允许 EVAL） |
-| `metrics.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
+| `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
 
 ### 跨服实体（kit/remote_entity）
 
