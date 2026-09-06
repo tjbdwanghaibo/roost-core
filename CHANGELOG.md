@@ -6,6 +6,9 @@
 
 ### Changed（测试质量）
 
+- **combatcomponent 的资源命令与费用支付守卫钉住**（U-0066，C2）。本地 gap map 显示 `combatcomponent` 20 条采样 18 条无覆盖。
+  资源命令：负数扣减、超出池子、set 到负值、未知操作、未映射句柄、无战斗组件的实体——每条拒绝之后属性基值与修订号不变；
+  费用支付：负费用、总额溢出 int64、无组件实体——拒绝在任何扣减之前。`resource_promises_test.go` 两条；回退四处守卫各红。
 - **skillsync 应用器的准入与记录规则逐条钉住**（U-0064，C2）。本地 gap map 显示 `skillsync` 20 条采样 17 条无覆盖。`NewApplier`：
   schema 为 0、schema 不在支持区间；`Apply` 准入：epoch 为 0、报文 schema 不受支持、受支持但异版本却无迁移器、空 topic /
   零序号、首个报文不是全量、全量报文带基序号；记录层：记录 schema 与报文不一致、manifest topic 里装了 state 记录、
