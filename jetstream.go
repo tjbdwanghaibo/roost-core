@@ -73,28 +73,44 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
 		wrapped := jetStreamMsg(msg)
-		err := invokeJetStreamHandler(handlerCtx, handler, wrapped)
-		if err != nil {
-			if reason := terminalReason(err, cfg.MaxDeliver, wrapped.NumDelivered); reason != "" {
-				slog.Error("nats jetstream: terminating failed delivery", "subject", wrapped.Subject, "stream", wrapped.Stream, "consumer", wrapped.Consumer, "stream_sequence", wrapped.StreamSeq, "deliveries", wrapped.NumDelivered, "reason", reason, "err", err)
-				metrics.IncCounter("nats.jetstream.terminal.total", metrics.Labels{"reason": reason}, 1)
-				_ = msg.Term()
-				return
-			}
-			if delay := nakBackoff(cfg, wrapped.NumDelivered); delay > 0 {
-				_ = msg.NakWithDelay(delay)
-			} else {
-				_ = msg.Nak()
-			}
-			return
-		}
-		_ = msg.Ack()
+		settleJetStreamDelivery(msg, wrapped, cfg, invokeJetStreamHandler(handlerCtx, handler, wrapped))
 	})
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
+}
+
+// settleJetStreamDelivery acknowledges, redelivers, or terminates one delivery
+// according to the handler outcome. A settle call that fails is not fatal —
+// the broker redelivers after AckWait, which is exactly the at-least-once
+// contract — but it must be visible: a broken ack path (closed connection,
+// consumer deleted underneath us) looks identical to "the handler keeps
+// failing" if the error is dropped, and the redelivery loop it produces has
+// no other symptom.
+func settleJetStreamDelivery(msg gojs.Msg, wrapped *fnats.JetStreamMsg, cfg fnats.JetStreamConsumerConfig, handlerErr error) {
+	op := "ack"
+	var settleErr error
+	switch {
+	case handlerErr == nil:
+		settleErr = msg.Ack()
+	default:
+		if reason := terminalReason(handlerErr, cfg.MaxDeliver, wrapped.NumDelivered); reason != "" {
+			slog.Error("nats jetstream: terminating failed delivery", "subject", wrapped.Subject, "stream", wrapped.Stream, "consumer", wrapped.Consumer, "stream_sequence", wrapped.StreamSeq, "deliveries", wrapped.NumDelivered, "reason", reason, "err", handlerErr)
+			metrics.IncCounter("nats.jetstream.terminal.total", metrics.Labels{"reason": reason}, 1)
+			op, settleErr = "term", msg.Term()
+		} else if delay := nakBackoff(cfg, wrapped.NumDelivered); delay > 0 {
+			op, settleErr = "nak_delay", msg.NakWithDelay(delay)
+		} else {
+			op, settleErr = "nak", msg.Nak()
+		}
+	}
+	if settleErr == nil {
+		return
+	}
+	metrics.IncCounter("nats.jetstream.settle_failures.total", metrics.Labels{"op": op}, 1)
+	slog.Warn("nats jetstream: settling delivery failed; broker will redeliver after ack wait", "op", op, "subject", wrapped.Subject, "stream", wrapped.Stream, "consumer", wrapped.Consumer, "stream_sequence", wrapped.StreamSeq, "deliveries", wrapped.NumDelivered, "err", settleErr)
 }
 
 func terminalReason(err error, maxDeliver int, deliveries uint64) string {
