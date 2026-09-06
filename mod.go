@@ -428,8 +428,15 @@ func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 	if err := runtime.Outbox.RefreshBacklog(ctx); err != nil {
 		slog.Warn("dataengine: outbox backlog probe failed during health check", "err", err)
 	}
-	walStats, projectorStats, outboxStats := runtime.WAL.Stats(), runtime.Projector.Stats(), runtime.Outbox.Stats()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wal_unacked=%d wal_oldest=%s projection_failures=%d outbox_pending=%d outbox_oldest=%s publish_failures=%d fatal_projection_conflicts=%d", projectorStats.WALUnacked, walStats.OldestUnackedAge, projectorStats.ProjectionFailures, outboxStats.Pending, outboxStats.OldestAge, outboxStats.PublishFailures, projectorStats.FatalProjectionConflicts)}
+	return health.Result{Status: health.StatusOK, Message: dataEngineHealthMessage(runtime.WAL.Stats(), runtime.Projector.Stats(), runtime.Outbox.Stats())}
+}
+
+// dataEngineHealthMessage is the one line an operator reads first. Both sides
+// of the outbox are on it: publish failures (the bus) and store failures (the
+// claim / ack / nack round-trips to Mongo) — a store that is down looks like a
+// healthy worker with a growing backlog otherwise.
+func dataEngineHealthMessage(walStats nestwal.Stats, projectorStats ProjectorStats, outboxStats OutboxWorkerStats) string {
+	return fmt.Sprintf("wal_unacked=%d wal_oldest=%s projection_failures=%d outbox_pending=%d outbox_oldest=%s publish_failures=%d store_failures=%d fatal_projection_conflicts=%d", projectorStats.WALUnacked, walStats.OldestUnackedAge, projectorStats.ProjectionFailures, outboxStats.Pending, outboxStats.OldestAge, outboxStats.PublishFailures, outboxStats.StoreFailures, projectorStats.FatalProjectionConflicts)
 }
 
 var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)

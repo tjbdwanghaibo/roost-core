@@ -20,6 +20,7 @@ type projectorOutboxFake struct {
 	records    map[coredata.TransactionID]coredata.CommitRecord
 	pending    map[string]OutboxItem
 	projectErr error
+	claimErr   error
 }
 
 func newProjectorOutboxFake() *projectorOutboxFake {
@@ -95,6 +96,9 @@ func (store *projectorBatchStore) ProjectBatch(_ context.Context, records []core
 func (store *projectorOutboxFake) Claim(_ context.Context, owner string, _ time.Time, limit int, _ time.Duration) ([]OutboxItem, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.claimErr != nil {
+		return nil, store.claimErr
+	}
 	items := make([]OutboxItem, 0, limit)
 	for id, item := range store.pending {
 		if item.Lease.Owner != "" {

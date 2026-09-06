@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,7 @@ type OutboxWorker struct {
 	published        atomic.Uint64
 	publishFailures  atomic.Uint64
 	storeFailures    atomic.Uint64
+	failing          atomic.Bool
 	pending          atomic.Int64
 	oldestAgeNanos   atomic.Int64
 	backlogSampledAt atomic.Int64
@@ -235,7 +237,11 @@ func (worker *OutboxWorker) run(ctx context.Context) {
 			ticker := time.NewTicker(worker.opts.PollInterval)
 			defer ticker.Stop()
 			for {
-				_, _ = worker.RunOnce(ctx)
+				if _, err := worker.RunOnce(ctx); err != nil {
+					worker.noteRunFailure(ctx, err)
+				} else {
+					worker.noteRunRecovered()
+				}
 				select {
 				case <-ctx.Done():
 					return
@@ -263,6 +269,26 @@ func (worker *OutboxWorker) Close(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// noteRunFailure records a failed poll. Counters carry the volume; the log
+// carries only the transition — one line when a failure streak starts and one
+// when it ends — because at poll-interval cadence a per-failure line is noise
+// that hides the one thing an operator needs: since when, and until when.
+// A poll cut short by shutdown is not a failure.
+func (worker *OutboxWorker) noteRunFailure(ctx context.Context, err error) {
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return
+	}
+	if worker.failing.CompareAndSwap(false, true) {
+		slog.Warn("dataengine: outbox claim loop failing; effects stay queued until the store answers again", "owner", worker.opts.Owner, "err", err)
+	}
+}
+
+func (worker *OutboxWorker) noteRunRecovered() {
+	if worker.failing.CompareAndSwap(true, false) {
+		slog.Info("dataengine: outbox claim loop recovered", "owner", worker.opts.Owner, "store_failures", worker.storeFailures.Load())
 	}
 }
 
