@@ -135,9 +135,9 @@
 | kit | `room` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-06 U-0051（回退 40 条） | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `servicerpc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `spatial` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `spatial` | 09-02 | 09-06 U-0081（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `statslog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `syncstream` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
+| kit | `syncstream` | 09-02 | 09-06 U-0082（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
 | kit | `versionstore` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 
 ### roost-service（12 包 + CI 工作流）
@@ -224,6 +224,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0082 | 2026-09-06 | roost-kit `syncstream` 订阅端尺寸上限 / 分片规则 | C2 | kit gap map 14/20；订阅端是同步总线上的信任边界，用真实 Publisher 铸信封再变异 | `subscribe_promises_test.go` 一条（7 子用例） | 五处守卫回退各红 | — |
+| U-0081 | 2026-09-06 | roost-kit `spatial` 兴趣管理器配置 / 边界 | C2 | kit gap map 12/20；配置错误会让盒运算溢出或滞回失效 | `interest_promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0080 | 2026-09-06 | roost-kit `nettransport` 会话注册 / 批量准入上限 | C2 | kit gap map 17/20；上限在触碰队列前拒绝、压线放行 | `admission_promises_test.go` 两条 | 四处守卫回退各红 | — |
 | U-0079 | 2026-09-06 | roost-kit `nats` 客户端错误翻译 / 参数校验 | C2 | kit gap map 17/20；翻译错会让调用方走错分支 | `client_promises_test.go` 两条 | 五处守卫回退各红 | — |
 | U-0078 | 2026-09-06 | roost-kit `dataengine` 聚合装载完整性 | C2 | kit gap map 19/20；装载是"坏存储答案变活实体"的唯一入口，五种损坏形态无测试 | `entity_repository_promises_test.go` 一条（5 子用例） | 四处守卫回退各红 | — |
@@ -406,6 +408,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **本轮小结（2026-09-06 第五轮，"B-20 / B-21 收口"）**：九个 C2 单元——core `saga` 引擎状态机（U-0052）、kit `nestwal` 损坏检测（U-0053）、service `mail`（U-0054）、`platform`（U-0055）、`session`（U-0056）、`match`（U-0057）、生成 RPC 胶水（U-0058，在 account 钉一次覆盖九服务同一模板）、`global`（U-0059）、`rank`（U-0060）。回退采样脚本首次跑完 service 12 包（第 9 节 service 表）：手工承诺回退过的包仍有 16–32 条无覆盖守卫，说明手工回退每包只看了几条。三处方法坑：`decodeStepCommand` 类的"两条规则同一句错误文本"要收紧断言；帧头字段被 CRC 覆盖时改字段后要**重算 CRC**；人工回退必须按行号（同文本守卫命中第一处）。B-21 全部完成；B-20 只剩 core `nest` group_transition 四条。
 
 **本轮小结（2026-09-06 第六轮，"工具入库 + 故障矩阵抓到第二个运行时缺陷"）**：① gap map 采样器入库（core / kit / service / skill 四仓同一份），`nightly-gapmap` 工作流首跑成功（core 35 包 1.5 分钟，112/146 @max=5），第 9 节的数字此后由 nightly 产出；② 故障矩阵第四切片（Redis 延迟）首跑抓到 **U-0061**：kit Redis 客户端不把 ctx 截止期带到网络上，500ms 预算等满 2s——修复后 501ms；kit v1.12.6 / codegen v1.13.11 发布，tag CI 按名核对均绿；③ 六个 C2 单元：core `nest` group_transition（U-0062，B-20 收尾）、skill `skillcompose`（U-0063）、`skillsync`（U-0064）、`combatcomponent`（U-0066），core `entity` `RemoteCommit.Validate` 二十五条（U-0065，B-22 首项）。方法：变异后**重算摘要 / CRC**（skillcompose、nestwal）与"用生产构造器造夹具"（Redis toxic 夹具改用 kit 自己的客户端构造器，否则夹具的选项和生产不一致，测出来的是夹具）。
+
+**本轮小结（2026-09-06 第七轮，"B-22 收口 + kit 全包地图"）**：十四个 C2 单元——core `migration`（U-0069）、`admin`（U-0070）、`hotcode`（U-0071）、`ownerroute`（U-0072）、`robot`（U-0073）、`syncstream` 文件日志（U-0074）、`webroute`（U-0075）、`cache` 读穿透策略（U-0076）；kit `actionflow`（U-0077）、`dataengine` 聚合装载（U-0078）、`nats` 客户端（U-0079）、`nettransport` 准入（U-0080）、`spatial`（U-0081）、`syncstream` 订阅端（U-0082）。B-22 全部完成。故障矩阵第五切片：JetStream RPC 半开下 502ms 返回——与 U-0061 对照，同类问题 Redis 客户端错、JetStream 发布对；矩阵本轮收口。kit 全包本地 gap map（358 条 275 无覆盖）入第 9 节；gap map 工具补进 codegen，五仓齐。方法：多包小守卫按"一包一单元"合并成一次提交；`Record` 类锁外 / 锁内双份检查一律记冗余不记缺口。
 
 ## 8. 故障矩阵（toxiproxy）
 
