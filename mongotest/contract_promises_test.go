@@ -17,7 +17,7 @@ import (
 // duplicate key.
 func TestFakeCollectionRefusalsMatchTheDriverContract(t *testing.T) {
 	ctx := context.Background()
-	coll := NewClient().Database("game").Collection("heroes")
+	coll := NewClient().Database("game").Collection("heroes").(*Collection)
 	if err := coll.Seed(bson.M{"_id": int64(1), "name": "a", "version": int64(1)}); err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestFakeCollectionRefusalsMatchTheDriverContract(t *testing.T) {
 	if err := coll.FindOneAndUpdate(ctx, bson.M{"_id": int64(9)}, bson.M{"$set": bson.M{"name": "x"}}, &out); !errors.Is(err, fmongo.ErrNotFound) {
 		t.Fatalf("FindOneAndUpdate miss without upsert = %v", err)
 	}
-	if err := coll.FindOneAndUpdate(ctx, bson.M{"_id": int64(9)}, bson.M{"$set": bson.M{"name": "x"}}, &out, fmongo.FindOneAndUpdateOption{Upsert: true}); err != nil {
+	if err := coll.FindOneAndUpdate(ctx, bson.M{"_id": int64(9)}, bson.M{"$set": bson.M{"name": "x"}}, &out, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true}); err != nil {
 		t.Fatalf("FindOneAndUpdate miss with upsert = %v", err)
 	}
 	if _, found := coll.Lookup(int64(9)); !found {
