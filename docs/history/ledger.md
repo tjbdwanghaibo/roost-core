@@ -97,7 +97,7 @@
 | core | `robot/session` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `saga` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `security` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `statesync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `syncbus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
@@ -211,7 +211,7 @@
 | ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 | ~~B-16~~ | core `configdata` 定义校验与 auto 表 cfg 标签规则 | C2 | 回退采样 | **已完成 → U-0046** |
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
-| B-18 | core `saga`（34/40）、`entitysync`（7/9） | C2 | 回退采样 | mirror 信封部分**已完成 → U-0045**；saga / entitysync 待开 |
+| B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `saga`（37/40）、`redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049 已完成；saga / redis 待开 |
 
 ## 5. 单元日志
@@ -220,6 +220,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0050 | 2026-09-06 | roost-core `saga` 引擎选项 / Command / Completion / 效果编解码 | C2 | 回退 40 条 34 条全绿；`Command.Validate` 是一条 17 子句的 `\|\|`——回退法要按子句做，整条中和没有意义 | `promises_test.go` 四条（11 条选项规则、17 + 8 个子句、编解码拒绝） | 六处回退各红（两处为子句级） | — |
 | U-0049 | 2026-09-06 | roost-kit `remoteentity` 写批次生命周期 / 准入 / Mod sid | C2 | 回退 40 条 37 条全绿；二次 finalize、commit 早于 finalize 属于"WAL 已拿到提交后改写"级别；`mongo_committer` 的 tx 复用检查是冗余互掩（已有测试） | `promises_test.go` 三条 | 五处守卫回退各红 | — |
 | U-0048 | 2026-09-06 | roost-kit `nestwal` 选项 / 编解码 / Ack 围栏 / 健康阈值 / 检查点解码 | C2 | 回退 40 条 37 条全绿；其中 Ack 越尾拒绝、检查点校验和、durability 校验属于持久路径的正确性守卫 | `promises_test.go` 五条 | 七处守卫回退各红（回退"空目录"守卫时 Open 真在包目录下建了 `"  "` 目录——回退法的副作用，已清理） | — |
 | U-0047 | 2026-09-06 | roost-core `nest` Cast / 引擎生命周期 / RollbackTx | C2 | 回退 45 条 44 条全绿；Cast 类型断言失败与 getter 数量不等两条是"处理器拿到零值实体"级别的契约 | `promises_test.go` 四条 | 五处守卫回退各红（类型断言那条以去掉 `ok` 检查的方式回退） | — |
@@ -382,7 +383,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | core `dataengine` | 27 | 20 → **8**（U-0044 后） | 剩余全是 nil / loader 空资源守卫 |
 | core `configdata` | 45 | 34 → **U-0046 后待复测** | 定义校验、auto 表 cfg 标签规则十余条已钉住 |
 | core `nest` | 45 | 44 → **U-0047 后待复测** | Cast / 生命周期 / RollbackTx 已钉住 |
-| core `saga` | 40 | 34 | B-18 |
+| core `saga` | 40 | 34 → **U-0050 后待复测** | 选项 / 校验 / 编解码已钉住 |
 | core `mirror` | 14 | 13 → **U-0045 后待复测** | 信封线协议规则已钉住 |
 | core `entitysync` | 9 | 7 | 多为参数守卫 |
 | kit `redis` | 25 | 20 | 含配置 / nil 守卫（B-19） |

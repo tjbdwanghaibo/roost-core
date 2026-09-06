@@ -6,6 +6,11 @@
 
 ### Changed（测试质量）
 
+- **saga 的引擎选项预算、Command / Completion 校验与 start / completion 效果编解码逐条钉住**（U-0050，C2）。回退采样 40 条
+  守卫 34 条全绿。`NewEngine` 十一条跨参数规则各自按报错里的字段名断言（原先只有 publisher batch 一条且只看 `err != nil`）；
+  `Command.Validate` 的十七个子句、`Completion.Validate` 的八个子句各用单字段变异钉住——一条巨型 `||` 条件里任一子句丢失只
+  让对应用例变红；`NewStartEffect` / `DecodeStartEffect` / `DecodeCompletionEffect` 对空载荷、未来版本、六种坏请求、失败校验
+  的拒绝。`promises_test.go` 四条；回退六处（含两处子句级）各红。
 - **nest 的 Cast 类型契约、getter 数量契约、引擎单次生命周期与回滚事务的关闭 / 可比较性守卫钉住**（U-0047，C2）。回退采样
   45 条守卫 44 条全绿。`CastTargetOne/Two/Three` 要错类型时返回 `ErrCastTypeMismatch` 并带 id 与实际类型（此前断言失败会
   把零值实体交给处理器）；getter 返回数量与目标数不等是契约破坏而非"缺几个"；空目标、零 id 定位到下标；`NewEngine` 无
