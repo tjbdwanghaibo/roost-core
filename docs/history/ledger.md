@@ -124,7 +124,7 @@
 | kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo/mongotest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `nats` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-06 U-0036 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
+| kit | `nats` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-06 U-0036 / U-0042 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal` | 09-02 | 09-06 U-0027 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
 | kit | `nettransport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -208,7 +208,7 @@
 | ~~B-13~~ | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | **已完成**（09-05）：service v1.5.1（tag CI 首跑 rank 并发测试偶发 `lost 8 compare-and-swaps` → 测试按契约重试 ErrConflict，重跑绿）→ codegen 清单 kit v1.12.1 / skill v1.10.3 / service v1.5.1 → codegen v1.13.1（release 的 consumer-acceptance 首次真正跑 actionlint，报出生成 release 工作流的 SC2251/SC2035）→ 修模板 → codegen v1.13.2：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿。原记录： kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
 | ~~B-07~~ | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | **已完成 → U-0004～U-0008、U-0016～U-0020**：12 包全部过了一遍 C2（承诺回退法），其中 8 包各有修复或补测。原记录： service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
 | B-14 | `core/bus/reliable.go` `requeueMsgID`、`kit/saga` `commandDigest` / 完成摘要：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | 今天的结构体都是纯值字段、不会失败；一旦加了 `any` / 函数字段，全部摘要退化为同一个值 → 去重误判。低优先，改成返回错误或在摘要里混入 ID |
-| B-15 | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
+| ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 
 ## 5. 单元日志
 
@@ -216,6 +216,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0042 | 2026-09-06 | roost-kit `dataengine` × NATS 半开（故障矩阵第三切片）+ `nats` 客户端 | 故障矩阵 / C5 | `timeout` toxic 下发布有界失败、恰好一次成立；但客户端从 gossip 学到成员真实端口、重连**绕开代理**（`reconnected url=…:14222`）——没有"只走配置 URL"的开关；另：U-0037 的 `waitFor` 与 integration 文件重名，v1.12.4 的 integration 构建红而未被发现（盯错了工作流） | `TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce`；`options_discovered_test.go` | 半开测试对真实环境两次通过（7.8s / 12.8s）；不开 `ignore_discovered_servers` 时日志可见绕开 | T-41、T-42 |
 | U-0041 | 2026-09-06 | roost-codegen `internal/dao` 生成器层守卫 | C2 | 抽样回退 4 条：redis DAO 未实现 mode / 缺 key / 缺 key 类型、Mongo DAO 未知 dbscope 去掉后全绿（解析层 tag 陷阱早有测试）——两组测试之间那一层 | `gen_promises_test.go` 两条（按错误文本 + DAO 名） | 四处回退各红 | — |
 | U-0040 | 2026-09-06 | roost-codegen `internal/webroute` 标记解析 | C2 / C5 | 十二处拒绝只有两条测试（"signature"、"duplicate"）；拼错键被接受后报 `unsupported method ""`，缺键同样含混 | `promises_test.go` 四条（十一种坏标记按文本、raw 路由类型化请求、三种签名缺陷、同目录混包） | 四处守卫回退（两新两旧）对应用例各红 | T-40 |
 | U-0039 | 2026-09-06 | roost-codegen `internal/entity` 标记解析 | C5 | 未挂接的 `//roost:entity` 静默消失（0 实体、0 错）；坏键 / 裸词等同于没写；`remote=bogus`、`lifetime=forever`、`sync=ture` 回落默认 | `marker_promises_test.go` 六条（两条未挂接、坏键、坏值、六种合法写法放行） | 三处守卫各自回退 → 对应测试红 | T-39 |
@@ -346,6 +347,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
 
+**发布（2026-09-06 第三轮）**：kit v1.12.4 → **ci 红而当时没发现**：U-0037 的测试辅助函数 `waitFor` 与 `//go:build integration` 文件里的同名函数重复，只有带 tag 的构建能看见；本地 `go test` / pretag 不带 tag 全绿，而盯 CI 时按"main 上最新一次运行"取到的是 `codeql` 工作流、不是 `ci`（两个工作流都由 push 触发，`gh run list --limit 1` 取到哪个看时序）。修复：改名、pretag 加 `go vet -tags integration ./...`、**看 CI 一律 `--workflow ci`**。v1.12.4 不改写，补丁 v1.12.5，codegen 清单跟进（T-41）。codegen v1.13.9 的 ci / framework-release 按工作流名核对，均绿。
+
 **发布（2026-09-06 第二轮）**：kit v1.12.3（gauge / `/statsz` / `Stats.Admitted`）、service v1.5.3 → **tag CI 红**：`tool` 指令升级后 go.sum 残留两行未 tidy，本地 pretag 不查这一项 → 补 tidy、五仓 pretag 全部加"tidy 校验"、service v1.5.4；codegen 清单 kit v1.12.3 / service v1.5.4 → codegen v1.13.6、v1.13.7。教训记入 T-33。
 
 **本轮小结（2026-09-06 第三轮，"脚本扫描 + 生成器收口"）**：换方法——对 service / kit / core / skill 四仓做三类脚本扫描（errcheck `-blank`、非 defer 锁、持锁 ctx 调用），四仓合计约 100 处 `_ =`、170 处非 defer 锁、9 处持锁 ctx 调用，逐条判读后**运行时真洞两处**（U-0036 JetStream 结算失败不可见、U-0037 outbox 认领循环失败不可见），其余都是有意且有观测的丢弃或"批量条带加锁 + defer 逆序解锁"。经验：成熟代码里的 C5 不再是"吞掉后走错分支"，而是"失败被正确处理（重投 / 重轮询）但**不可见**"——修法是计数 + 只打转折日志，而不是每次失败一行。生成器侧收口：eventgen（U-0038）、entity（U-0039）、webroute（U-0040）三个解析器都存在"看得见的问题不出声"（跳过坏文件、丢掉未挂接标记、接受拼错的键），dao 生成器层四处守卫无测试（U-0041）；至此 codegen 16 个包全部至少过了一遍承诺回退法。文档复审第三轮（指标名）修 2 处。发布：kit v1.12.4、codegen v1.13.8（含 tablegen 执行约束）、v1.13.9（含四个生成器单元）。C3 包级可变状态扫描：service 2 处、kit 1 处，全是只读查表。
@@ -353,6 +356,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 ## 8. 故障矩阵（toxiproxy）
 
 **第一切片（2026-09-06，kit）**：隔离环境脚本在有 `toxiproxy-server` 时为三个 NATS 节点各起代理（24222–24224，API 18474），导出代理 URL；`heal` 清 toxic。两条集成测试：3s 延迟下提交与投影 2.5s 内完成（提交点是 WAL + Mongo，总线不在同步路径）、延迟清除后效果恰好一次；reset_peer 下提交仍被接纳、outbox 保留、恢复后恰好一次。本地对真实环境两条各 0.7s 通过。`nightly-fault-matrix` 工作流每日 03:00（Asia/Shanghai）以 `ROOST_IT_TOXIPROXY=1` 跑整套。**边界**：Mongo 不代理——副本集发现把驱动引到成员各自地址，代理会被绕开；Mongo 侧的故障仍由 `fault mongo-primary`（进程级）覆盖。**第二切片（2026-09-06）**：隔离 Redis 节点（16379，`--set-proc-title no` 让脚本能按命令行认领自己的进程——没有它 `down` 中途拒绝"外来" pid、留下孤儿 mongod / nats，这是本切片踩到的第一个坑）+ toxiproxy 代理（26379）。两条锁测试：`Release` 回复被吞 → uncertain、拒绝再 Acquire、恢复后值守卫删除收敛且不误删他人；`SETNX` 回复被吞 → 不重试、收敛后 key 已释放。U-0012 的契约第一次由真实丢包驱动。nightly 以 `ROOST_IT_TOXIPROXY=1` 跑通。**下一切片**：NATS `timeout`（半开）对 JetStream 发布确认；Mongo 侧只能进程级；四个不变量对照表——① 成功不早于提交点（NATS 延迟 ✓）、② 不确定即围栏（Redis 丢回复 ✓）、③ 删除防复活（待：remote entity 删除 + 网络重置）、④ 准入即执行（NATS 重置 ✓）——③ 已由 U-0031 在真实 Mongo 上补齐（存储层；网络层的"删除 + 重置"对 Mongo 走不了代理，进程级 `fault mongo-primary` 已覆盖故障转移）。
+
+**第三切片（2026-09-06，NATS 半开）**：`timeout` toxic（timeout=0）黑洞化三个代理的下行——连接不断、字节不回，是与 latency / reset_peer 都不同的失败形态：客户端既拿不到 ack 也拿不到错误。测试钉住三件事：提交 + 投影不受影响（2.5s 内）；outbox 的发布**有界失败**而非永远挂住（`PublishFailures ≥ 1`——来自 ping 超时 → EOF）；恢复后恰好一次（broker 可能已存下未 ack 的发布，靠 `Msg-Id = effect ID` 去重兜住）。**首跑暴露夹具缺陷**：nats.go 从 INFO gossip 学到成员真实端口（14222–14224），重连时绕开代理——之前两条 NATS 测试也是这样"痊愈"的，故障注入的保真度打折。补 kit 层配置 `nats.ignore_discovered_servers`（代理、NAT 部署同样需要），代理夹具自动开启后重连落在 24223（仍是代理）。四个不变量的 NATS 侧现在覆盖 latency / reset / 半开三种形态。**下一切片**：Redis 半开对 `Acquire`（现有两条是"回复被吞"，形态相同，可能只需参数化）；JetStream RPC（bus/jetstream_rpc）在半开下的 call_timeout。
 
 **待做切片**：⑤ 发布：service v1.5.2 → codegen v1.13.3 已完成；kit v1.12.2（U-0025，tag CI Windows 首跑红为 U-0027 的测试前置条件问题，重跑绿）→ codegen 清单 kit v1.12.2 → codegen v1.13.4 已打（结果见 CI）；⑥ **启动门禁**（2026-09-06 落地，codegen 4f8db77）：framework-compat 的 full 场景用生成工程自带的 `deploy/dev/docker-compose.yaml` 起 Redis / Mongo 副本集 / NATS，依次真启动 `mail`、`game`，要求到达 `service init` 且存活。首跑即抓到 U-0029（副本集成员地址），第二跑证明 kit 下限必须是 v1.12.2。codegen v1.13.5 带门禁与两处修复发布。
 
