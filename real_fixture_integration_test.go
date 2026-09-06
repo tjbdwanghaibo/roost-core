@@ -82,6 +82,9 @@ func newRealFixtureWithNATS(t *testing.T, natsURL string) *realFixture {
 	cfg.Set("mongo.connect_timeout", 5*time.Second)
 	cfg.Set("mongo.transaction_timeout", 15*time.Second)
 	cfg.Set("nats.url", natsURL)
+	// Proxied runs must stay on the proxy: without this the client learns the
+	// real member ports from INFO gossip and the fault injector is bypassed.
+	cfg.Set("nats.ignore_discovered_servers", os.Getenv("ROOST_DATAENGINE_IT_NATS_PROXIED_URL") != "" && natsURL == os.Getenv("ROOST_DATAENGINE_IT_NATS_PROXIED_URL"))
 	cfg.Set("dataengine.database", fx.database)
 	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())

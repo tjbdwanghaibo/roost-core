@@ -48,7 +48,7 @@ func captureLogs(t *testing.T) *recordingHandler {
 	return handler
 }
 
-func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string) {
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -78,7 +78,7 @@ func TestOutboxWorkerLogsStoreFailureStreakOnceAndItsRecovery(t *testing.T) {
 	worker.Start(context.Background())
 	t.Cleanup(func() { _ = worker.Close(context.Background()) })
 
-	waitFor(t, 2*time.Second, func() bool { return worker.Stats().StoreFailures >= 5 }, "five failed polls")
+	waitUntil(t, 2*time.Second, func() bool { return worker.Stats().StoreFailures >= 5 }, "five failed polls")
 	if got := logs.matching(slog.LevelWarn, "outbox claim loop failing"); got != 1 {
 		t.Fatalf("warn lines after a failure streak = %d, want exactly 1", got)
 	}
@@ -86,7 +86,7 @@ func TestOutboxWorkerLogsStoreFailureStreakOnceAndItsRecovery(t *testing.T) {
 	store.mu.Lock()
 	store.claimErr = nil
 	store.mu.Unlock()
-	waitFor(t, 2*time.Second, func() bool { return logs.matching(slog.LevelInfo, "outbox claim loop recovered") == 1 }, "recovery line")
+	waitUntil(t, 2*time.Second, func() bool { return logs.matching(slog.LevelInfo, "outbox claim loop recovered") == 1 }, "recovery line")
 	failuresAtRecovery := worker.Stats().StoreFailures
 	time.Sleep(20 * time.Millisecond)
 	if got := logs.matching(slog.LevelWarn, "outbox claim loop failing"); got != 1 {

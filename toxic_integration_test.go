@@ -172,3 +172,59 @@ func TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce(t *testing.T) {
 		t.Fatalf("effect deliveries=%d, want exactly 1", got)
 	}
 }
+
+// Half-open: the `timeout` toxic with timeout=0 holds every NATS connection
+// open but never lets a byte come back downstream. Unlike reset_peer, the
+// client sees no error at all — its PUB goes out and the acknowledgement
+// simply never arrives. This is the failure shape that turns "retry" into
+// "hang": the publish must return within a bounded time (not block the
+// worker forever), the commit must be unaffected (bus is not on the durable
+// path), and once the network heals the effect is delivered exactly once —
+// even though the broker may have stored the un-acked publish, because the
+// outbox publishes with the effect ID as Msg-Id and the stream de-duplicates.
+func TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce(t *testing.T) {
+	proxy, natsURL := toxiproxyEnv(t)
+	fx := newRealFixtureWithNATS(t, natsURL)
+	defer fx.close()
+	handled := subscribeEffects(t, fx, "halfopen-consumer", "halfopen")
+
+	proxy.addToxic(t, "halfopen", "timeout", map[string]any{"timeout": 0})
+	record := realRecord(43, []coredata.Mutation{
+		realPut(t, fx.database, "toxic_players", 703, 0, 1, bson.M{"name": "halfopen"}),
+	})
+	record.Effects = []coredata.Effect{{ID: "effect-toxic-43", Topic: "halfopen", Payload: []byte("payload")}}
+	started := time.Now()
+	ticket, err := fx.runtime.Projector.CommitSystem(fx.context(), record)
+	if err != nil {
+		t.Fatalf("commit failed while NATS was half-open: %v", err)
+	}
+	if err := coredata.WaitProjection(fx.context(), ticket); err != nil {
+		t.Fatalf("projection was coupled to the bus: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2500*time.Millisecond {
+		t.Fatalf("commit+projection took %s while NATS was half-open; the bus is not on the durable path", elapsed)
+	}
+	assertDocumentVersion(t, fx, "toxic_players", 703, 1)
+
+	// The worker's publish must fail within a bounded time rather than wait
+	// for an acknowledgement that will never come; a hung publisher would
+	// show neither a publish failure nor a delivery.
+	waitFor(t, 20*time.Second, "a bounded publish failure while the ack path is black-holed", func() bool {
+		return fx.runtime.Outbox.Stats().PublishFailures >= 1
+	})
+	if got := collectionCount(fx, outboxCollection); got != 1 {
+		t.Fatalf("outbox items=%d while half-open, want the effect retained", got)
+	}
+	if got := handled.Load(); got != 0 {
+		t.Fatalf("effect handled %d times before the network healed", got)
+	}
+
+	proxy.reset(t)
+	waitFor(t, 30*time.Second, "outbox replay after the network healed", func() bool {
+		return collectionCount(fx, outboxCollection) == 0 && handled.Load() >= 1
+	})
+	time.Sleep(2 * time.Second) // give a duplicate every chance to show up
+	if got := handled.Load(); got != 1 {
+		t.Fatalf("effect deliveries=%d, want exactly 1 (Msg-Id de-duplication after the un-acked publish)", got)
+	}
+}
