@@ -6,6 +6,9 @@
 
 ### Changed（测试质量）
 
+- **robot 的 action / scenario 注册表与 spec 文档规则按文本钉住**（U-0073，C2，B-22 收尾）。nil / 空名 / 归一化后重名的 action
+  与 scenario 各自拒绝；spec 的六种坏文档（原 `TestSpecRejectsBrokenDocuments` 只断言"有错"）现在各对应一条错误文本。
+  两个 `promises_test.go`；回退六处守卫各红。
 - **migration 的路径规划规则钉住**（U-0069，C2，B-22）。本地 gap map `migration` 20/20 无覆盖。实体与 DAO 两套注册表：
   版本区间非法（负数、不前进）、apply 为空、同一起点重复注册、**降级拒绝**、**跨过目标的步骤拒绝**（并断言拒绝时版本停在最后
   一个完整步骤之后）、路径缺失、DAO 集合为空。一次被静默接受的降级或跨越会改写文档版本号而不跑对应代码。

@@ -89,11 +89,11 @@
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `robot/action` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/action` | 09-02 | 09-06 U-0073（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/loadtest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/protocol` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/runner` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `robot/scenario` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot/scenario` | 09-02 | 09-06 U-0073（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/session` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -215,7 +215,7 @@
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
-| B-22 | core 首份 nightly gap map 里整片无覆盖的包：`syncbus`（nil / 配置守卫，低）、`failurelog`（5 条全是空 key）、`etcd`（4 条 nil）、`robot/*` | C2 | nightly-gapmap 34029785123 | entity / statesync / security / migration / admin / hotcode / ownerroute 七包已完成（U-0065～U-0072）；剩余按实质筛后只有 robot/* 值得看 |
+| ~~B-22~~ | core 首份 nightly gap map 里整片无覆盖的包 | C2 | nightly-gapmap 34029785123 | **已完成 → U-0065～U-0073**（entity / statesync / security / migration / admin / hotcode / ownerroute / robot）；剩余 `syncbus`、`failurelog`、`etcd`、`robot/loadtest` 按实质筛后只有 nil / 空 key 守卫，不开单元 |
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 
 ## 5. 单元日志
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0073 | 2026-09-06 | roost-core `robot/action`、`robot/scenario` 注册表与 spec（B-22 收尾） | C2 | 三个 robot 包 5/5 无覆盖；spec 原测试"只要有错就算通过" | 两个 `promises_test.go` | 六处守卫回退各红 | — |
 | U-0072 | 2026-09-06 | roost-core `ownerroute` 路由守卫（B-22） | C2 | 9/9 无覆盖；非法键与无属主路由两条会让命令落到本地执行器 | `promises_test.go` 一条 | 两处守卫回退各红 | — |
 | U-0071 | 2026-09-06 | roost-core `hotcode` 补丁点注册（B-22） | C2 | 10/11 无覆盖；重复补丁点让 Replace 二义 | `promises_test.go` 一条 | 两处守卫回退各红 | — |
 | U-0070 | 2026-09-06 | roost-core `admin` 命令与元数据注册（B-22） | C2 | 8/8 无覆盖；无名命令 = 注册 / 执行"空" | `promises_test.go` 一条 | 三处守卫回退各红 | — |
