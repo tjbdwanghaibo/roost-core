@@ -166,7 +166,7 @@
 | skill | `combatcomponent` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| skill | `skillsync` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
 ### roost-codegen（16 包）
 
@@ -216,7 +216,7 @@
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | B-22 | core 首份 nightly gap map 里整片无覆盖的包：`entity`（实体与远端协议——不变量①～④的宿主，**优先**）、`statesync`、`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | 先按"实质承诺"筛（`entity` 的 `RemoteCommit.Validate`、`statesync` 的帧校验、`security` 的鉴权拒绝优先），nil 守卫不算 |
-| B-23 | skill 首份 gap map：`combatcomponent` 18/20、`skill` 17/20、`skillsync` 17/20 | C2 | gapmap 本地跑 | skillcompose **已完成 → U-0063**；skillsync 的 applier 报文规则（epoch / schema / 形状 / 在途）优先 |
+| B-23 | skill 首份 gap map：`combatcomponent` 18/20、`skill` 17/20 | C2 | gapmap 本地跑 | skillcompose → U-0063、skillsync → U-0064 已完成；combatcomponent 的资源扣减守卫（负数 / 不足 / 溢出）优先 |
 
 ## 5. 单元日志
 
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0064 | 2026-09-06 | roost-skill `skillsync` 应用器准入 / 记录规则 | C2 | 本地 gap map 17/20 无覆盖；准入规则是复制体视图不被污染的最后一道门 | `applier_promises_test.go` 三条 | 九处守卫回退各红 | — |
 | U-0063 | 2026-09-06 | roost-skill `skillcompose` 合同构建 / 校验 | C2 | 本地 gap map 19/20 无覆盖；`ValidateContract` 的每条规则都藏在"摘要不符"后面——变异后必须重算摘要才测得到；builder 的"重复来源"被 validate 的同类检查掩盖（冗余） | `contract_promises_test.go` 两条（9 + 20 个变异） | 十处回退九处红、一处冗余 | — |
 | U-0062 | 2026-09-06 | roost-core `nest` 锁组迁移请求守卫（B-20 收尾） | C2 | 组 0、未知实体、迁移在途的第二次请求三条无测试 | `group_transition_promises_test.go` 一条 | 三处守卫回退各红（两处同文本 `groupID == 0`，按行号回退） | — |
 | U-0061 | 2026-09-06 | roost-kit `redis` 客户端 ctx 截止期（故障矩阵第四切片发现） | C8 | go-redis 默认 `ContextTimeoutEnabled=false`：3s 注入延迟下 500ms 预算的 `Acquire` 等满 2s ReadTimeout；快路径（连接错误）尊重 ctx、慢路径（等回复）不尊重 | `client_deadline_test.go`；`TestToxicRedisLatencyKeepsAcquireWithinItsDeadline`（501ms 返回） | 关掉选项单元测试红、集成测试红（首跑即红） | T-43 |
@@ -376,7 +377,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 
 **第三轮（2026-09-06，指标名）**：脚本化——从五仓所有 `.md`（不含 CHANGELOG / history）抽出反引号里"点分小写"的指标样名字，与源码里 `metrics.IncCounter/SetGauge/AddGauge/Observe*` 的字面量名（88 个，无一处动态拼名）比对；Grafana 看板 38 个 PromQL 指标名全部能对到源码。真漂移 2 处、已修：TROUBLESHOOTING T-06 写的 `entity.total` / `entity.by_category` 从来不是 gauge 名（是 statslog 记录的 JSON 字段），gauge 是 `entity.count` / `entity.count_by_category{category}`；OBSERVABILITY 的指标表把基数丢弃计数器写成 `metrics.series.dropped`，源码是 `obs.series.dropped`（同文档第 106 条的 Prometheus 名 `obs_series_dropped_total` 是对的——同一份文档两处不一致）。附带 C6 扫描：`SetGauge/AddGauge` 常量值 5 处全是合法的开关 / 进出计数（`manager.started` 停止置 0、`robot.loadtest.active` 1/0），无常量指标；没有只在测试里出现的指标名。
 
-**发布（2026-09-06 第四轮）**：kit v1.12.6（Redis 客户端 ctx 截止期 U-0061、`nats.ignore_discovered_servers`、两个故障切片、gap map 工具）→ codegen 清单 kit v1.12.6 → codegen v1.13.11。tag 工作流按名核对（结果见下一条记录）。
+**发布（2026-09-06 第四轮）**：kit v1.12.6（Redis 客户端 ctx 截止期 U-0061、`nats.ignore_discovered_servers`、两个故障切片、gap map 工具）→ codegen 清单 kit v1.12.6 → codegen v1.13.11。tag 工作流按名核对：kit ci ✓、codegen ci ✓、codegen framework-release ✓。
 
 **发布（2026-09-06 第三轮）**：kit v1.12.4 → **ci 红而当时没发现**：U-0037 的测试辅助函数 `waitFor` 与 `//go:build integration` 文件里的同名函数重复，只有带 tag 的构建能看见；本地 `go test` / pretag 不带 tag 全绿，而盯 CI 时按"main 上最新一次运行"取到的是 `codeql` 工作流、不是 `ci`（两个工作流都由 push 触发，`gh run list --limit 1` 取到哪个看时序）。修复：改名、pretag 加 `go vet -tags integration ./...`、**看 CI 一律 `--workflow ci`**。v1.12.4 不改写，补丁 v1.12.5，codegen 清单跟进（T-41）。codegen v1.13.9 的 ci / framework-release 按工作流名核对，均绿。
 
