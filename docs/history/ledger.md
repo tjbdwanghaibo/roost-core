@@ -150,9 +150,9 @@
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `match` | 09-06 脚本扫 | 09-04 U-0008 | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
-| service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
 | service | `servicemods` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
@@ -214,6 +214,7 @@
 | B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | B-20 | 回退复测后剩余的实质守卫：core `nest` group_transition 四条与 `CheckContainAllLock` 死锁风险 | C2 | 第 9 节复测 | saga 引擎 → U-0052、nestwal 损坏检测 → U-0053 已完成 |
+| B-21 | service 回退采样剩余：`session`（32/40）、`account`（19/30）、`global`（19/33）、`match`（21/38）、`rank`（16/32）；`mail` / `platform` 的请求参数守卫（playerID ≤ 0、空 id、"vanished during commit"） | C2 | 第 9 节 service 表 | service 的 C2 此前按"承诺回退法"手工过了 12 包（U-0004～U-0020），脚本化采样仍找出这么多——手工回退只看了每包几条 |
 
 ## 5. 单元日志
 
@@ -221,6 +222,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0055 | 2026-09-06 | roost-service `platform` Order / Credential / Verified 校验 | C2 | 回退 39 条 32 条全绿；金额非正（免费送货）与空 secret（被替换实现接受的形状）两条安全守卫无测试 | `validate_promises_test.go` 两条 | 三处守卫回退各红 | — |
+| U-0054 | 2026-09-06 | roost-service `mail` Envelope 校验 | C2 | 回退 40 条 32 条全绿；信封校验整段无测试 | `validate_promises_test.go` 一条（12 子用例） | 三处守卫回退各红 | — |
 | U-0053 | 2026-09-06 | roost-kit `nestwal` 目录布局 / 帧头损坏检测 | C2 | 复测剩余里的段不连续、起始段 > 1 无确认、帧魔数 / 头 CRC / 长度三字段；魔数与长度被头 CRC 覆盖——测试改字段后必须重算 CRC 才能钉住该规则（首版"魔数"用例回退绿） | `corruption_promises_test.go` 两条 | 五处守卫回退各红 | — |
 | U-0052 | 2026-09-06 | roost-core `saga` 引擎 Register / Start / List / Resume / Compensate / Complete | C2 | 复测剩余 15 条中的 12 条实质规则；夹具用不跑协调循环的引擎 + 直接落库的记录 | `engine_promises_test.go` 三条 | 十一处守卫回退各红 | — |
 | U-0051 | 2026-09-06 | roost-kit `saga` 消费者配置 / 入站解码 | C2 | 回退 40 条 37 条全绿；首版"缺 id / 异 topic"用例被载荷解码失败掩盖（回退绿）——换成能独立通过的 start 载荷后才真正钉住；超大帧守卫是纵深防御（去掉后 JSON 解码仍拒绝） | `promises_test.go` 四条 | 六处守卫回退各红；一处冗余保留 | — |
@@ -397,6 +400,21 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | kit `remoteentity` | 40 | 37 → **31**（U-0049 后复测） | 剩余多为 nil / 配置守卫与 ownership 的实体种类校验 |
 | kit `saga` | 40 | 37 → **29**（U-0051 后复测） | 剩余：completion 消费者配置（与 nest-start 同形）、step inbox claim 状态、L2 快照 CAS 响应 |
 | kit `room` | 40（实跑 10） | 9 | 前 9 条全绿、多为 subjectID / roomID 为零的参数守卫；第 10 条（`room_broadcast.go:478` 的 ctx 取消 → 返回）去掉后整包测试**挂起** >600s——守卫是循环退出条件，算被覆盖；脚本首版遇超时中止整包，现改为记 HANG 继续 |
+
+**service（2026-09-06 第五轮补跑）**
+
+| 包 | 采样 | 无覆盖 | 判读 |
+| --- | --- | --- | --- |
+| `mail` | 40 | 32 → **U-0054 钉 12 条** | 剩余：请求参数守卫、"vanished during commit" |
+| `platform` | 39 | 32 → **U-0055 钉 14 条** | 剩余：请求参数守卫、admin 的"not recorded" |
+| `session` | 40 | 32 | B-21 |
+| `match` | 38 | 21 | B-21 |
+| `account` | 30 | 19 | B-21 |
+| `global` | 33 | 19 | B-21 |
+| `rank` | 32 | 16 | B-21 |
+| `chat` | 40 | 9 | U-0007 / U-0022 时已密 |
+| `directory` | 15 | 7 | 多为 nil 守卫 |
+| `servicemods` | 7 | 2 | — |
 
 **读法**：矩阵里 core 的 454 格"09-02"是当日**通读式**基线，不是回退验证——这张表说明基线包里守卫级的测试缺口普遍在 70–95%。生成器包（codegen）经过 U-0030～U-0041 已收口；运行时包的守卫缺口是下一阶段的主战场，且比生成器更值钱（守卫直接对应不变量 ①～④ 的准入）。
 
