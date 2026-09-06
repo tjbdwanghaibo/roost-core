@@ -163,7 +163,7 @@
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | skill | `combat` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| skill | `combatcomponent` | 09-06 脚本扫 | 未审 | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| skill | `combatcomponent` | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
@@ -216,7 +216,7 @@
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | B-22 | core 首份 nightly gap map 里整片无覆盖的包：`statesync`、`syncbus`、`security`、`ownerroute`、`migration`、`failurelog`、`admin`、`hotcode`、`etcd`、`robot/*` | C2 | nightly-gapmap 34029785123 | `entity` **已完成 → U-0065**；下一个 `statesync`（帧校验）与 `security`（鉴权拒绝） |
-| B-23 | skill 首份 gap map：`combatcomponent` 18/20、`skill` 17/20 | C2 | gapmap 本地跑 | skillcompose → U-0063、skillsync → U-0064 已完成；combatcomponent 的资源扣减守卫（负数 / 不足 / 溢出）优先 |
+| ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 
 ## 5. 单元日志
 
@@ -224,6 +224,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0066 | 2026-09-06 | roost-skill `combatcomponent` 资源命令 / 费用支付 | C2 | 本地 gap map 18/20；负扣减、超池、负结果、溢出是"凭空造资源"级别的守卫 | `resource_promises_test.go` 两条 | 四处守卫回退各红 | — |
 | U-0065 | 2026-09-06 | roost-core `entity` `RemoteCommit.Validate`（B-22 首项） | C2 | nightly gap map `entity` 5/5；远端提交校验是不变量宿主却整段无测试；快照键有效性依赖实体 id 编码 kind——夹具首版用裸 id 被"invalid snapshot"拒绝 | `remote_commit_promises_test.go` 一条（25 变异） | 七处守卫回退各红 | — |
 | U-0064 | 2026-09-06 | roost-skill `skillsync` 应用器准入 / 记录规则 | C2 | 本地 gap map 17/20 无覆盖；准入规则是复制体视图不被污染的最后一道门 | `applier_promises_test.go` 三条 | 九处守卫回退各红 | — |
 | U-0063 | 2026-09-06 | roost-skill `skillcompose` 合同构建 / 校验 | C2 | 本地 gap map 19/20 无覆盖；`ValidateContract` 的每条规则都藏在"摘要不符"后面——变异后必须重算摘要才测得到；builder 的"重复来源"被 validate 的同类检查掩盖（冗余） | `contract_promises_test.go` 两条（9 + 20 个变异） | 十处回退九处红、一处冗余 | — |
@@ -389,6 +390,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **本轮小结（2026-09-06 第四轮，"gap map 收口"）**：按第 9 节的地图开了七个 C2 单元——core `mirror`（U-0045）、`configdata`（U-0046）、`nest`（U-0047）、`saga`（U-0050），kit `nestwal`（U-0048）、`remoteentity`（U-0049）、`saga`（U-0051）——每个都是"回退采样 → 按错误文本写表驱动测试 → 逐守卫回退验证"。复测：七个包的无覆盖守卫合计 236 → 141，其中 configdata 34→9、saga 34→15、mirror 13→4 基本收口；nest / nestwal / remoteentity / kit saga 剩余的一半以上是 nil 守卫。**三个方法教训**：① `a || b` 条件回退必须整体加括号，否则假阴性（首轮 bus 误判）；② 巨型单条件（`Command.Validate` 17 个子句）要按子句回退，整条中和没有意义；③ 夹具必须让"只有被测规则能拒绝"——kit saga 的"缺 id / 异 topic"首版用 `{}` 载荷，被载荷解码失败掩盖、回退绿，换成能独立通过的 start 载荷才真正钉住；同类还有 remoteentity `mongo_committer` 的 tx 复用检查（被前置同类检查掩盖，属冗余互掩而非缺口）。回退法的副作用：回退"空目录"守卫时 nestwal 的 Open 真在包目录下建了 `"  "`，复测脚本每次跑完要 `git status` 核对。
 
 **本轮小结（2026-09-06 第五轮，"B-20 / B-21 收口"）**：九个 C2 单元——core `saga` 引擎状态机（U-0052）、kit `nestwal` 损坏检测（U-0053）、service `mail`（U-0054）、`platform`（U-0055）、`session`（U-0056）、`match`（U-0057）、生成 RPC 胶水（U-0058，在 account 钉一次覆盖九服务同一模板）、`global`（U-0059）、`rank`（U-0060）。回退采样脚本首次跑完 service 12 包（第 9 节 service 表）：手工承诺回退过的包仍有 16–32 条无覆盖守卫，说明手工回退每包只看了几条。三处方法坑：`decodeStepCommand` 类的"两条规则同一句错误文本"要收紧断言；帧头字段被 CRC 覆盖时改字段后要**重算 CRC**；人工回退必须按行号（同文本守卫命中第一处）。B-21 全部完成；B-20 只剩 core `nest` group_transition 四条。
+
+**本轮小结（2026-09-06 第六轮，"工具入库 + 故障矩阵抓到第二个运行时缺陷"）**：① gap map 采样器入库（core / kit / service / skill 四仓同一份），`nightly-gapmap` 工作流首跑成功（core 35 包 1.5 分钟，112/146 @max=5），第 9 节的数字此后由 nightly 产出；② 故障矩阵第四切片（Redis 延迟）首跑抓到 **U-0061**：kit Redis 客户端不把 ctx 截止期带到网络上，500ms 预算等满 2s——修复后 501ms；kit v1.12.6 / codegen v1.13.11 发布，tag CI 按名核对均绿；③ 六个 C2 单元：core `nest` group_transition（U-0062，B-20 收尾）、skill `skillcompose`（U-0063）、`skillsync`（U-0064）、`combatcomponent`（U-0066），core `entity` `RemoteCommit.Validate` 二十五条（U-0065，B-22 首项）。方法：变异后**重算摘要 / CRC**（skillcompose、nestwal）与"用生产构造器造夹具"（Redis toxic 夹具改用 kit 自己的客户端构造器，否则夹具的选项和生产不一致，测出来的是夹具）。
 
 ## 8. 故障矩阵（toxiproxy）
 
