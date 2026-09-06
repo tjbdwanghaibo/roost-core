@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Changed（测试质量）
+
+- **skillcompose 的合同构建与校验规则逐条钉住**（U-0063，C2）。本地 gap map 显示 `skillcompose` 20 条采样守卫 19 条无覆盖。
+  `BuildContract`：无来源、空权威 / 策略 id、负上限（策略侧与调用方侧）、来源缺 id / 摘要、重复来源、空特征、负生命期 /
+  目标数；`ValidateContract`：版本、权威、策略、无来源、负预算、来源缺摘要 / 重复、授权指向未知来源 / 空特征 / 重复 /
+  无变换 / 空变换 / 重复变换、义务指向未知来源 / 空键 / 重复、包与约束的空键 / 重复、摘要不符——每个变异之后**重算摘要**，
+  让被测规则成为唯一能拒绝的规则（否则全部被"摘要不符"掩盖）。`contract_promises_test.go` 两条；回退十处守卫各红。
+
 ### Added
 
 - **gap map 工具**（与 roost-core 同一份拷贝）：`scripts/gapmap/revertsample.py`、`scripts/gapmap.sh`、`nightly-gapmap` 工作流。
