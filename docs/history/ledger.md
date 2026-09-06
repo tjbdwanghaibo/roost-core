@@ -152,7 +152,7 @@
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `match` | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
 | service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
@@ -226,6 +226,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0096 | 2026-09-06 | roost-service `mail` Send 的账本竞态分支 | C2 | 账本认领输给并发者 + 对方行消失 / 指向缺失邮件 / 邮件 id 占用；用嵌入真实内存 store 的替身只覆写 Create / Get 制造竞态；roost-skill 的 CI 工作流名是 `production-gates`（按 `ci` 找会 404，误报为红） | `send_race_promises_test.go` 一条 | 三处守卫回退各红 | — |
 | U-0095 | 2026-09-06 | roost-kit `room` 同步总线 / 信封汇参数守卫 | C2 | kit gap map 20 条参数守卫；"不触网"用计数替身断言；`syncbus.Handler` 带 error 返回 | `guards_promises_test.go` 两条 | 二十处守卫回退各红 | — |
 | U-0094 | 2026-09-06 | roost-skill `skill` 执行器程序结构不变量 | C2 | skill gap map；对编译产物白盒篡改（初始相位 / 根表 / 操作表 / 编译期上限）；三处守卫回退后是 panic 而非错误，守卫的价值在于把越界变成 `ErrProgramInvariant`；skill id 不能含空格（`NORMALIZE_INVALID_IDENTIFIER`） | `executor_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0093 | 2026-09-06 | roost-kit `remoteentity` 所有权标记 / 兴趣注册 / 后端参数规则 | C2 | kit gap map；本地拒绝用计数 Eval 替身证明"不落 Redis"；zsh 里 `for x in $var` 不分词（要用数组或 `${=var}`），首轮回退全被当成一个 spec | `guards_promises_test.go` 三条 | 八处守卫回退各红 | — |
