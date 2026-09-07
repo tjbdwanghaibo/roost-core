@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`security.RateLimiter` 的令牌桶改用 `golang.org/x/time/rate`**。公开 API 不变（`RateLimitConfig` / `Allow` / `AllowN` / `Stats` / `GC`），
+  变的是桶的算术：补充从"每个 Interval 一次性加 Refill 个"变为连续补充（Refill/Interval 匀速，突发上限 Capacity），与 x/time/rate 一致；
+  `n > Capacity` 的请求仍然直接拒绝且不消耗。保留的是 x/time/rate 没有的部分：按 key 分桶、MaxKeys 上限、空闲驱逐与 Stats。
+  新增依赖 `golang.org/x/time`（kit 已间接依赖同版本）。测试新增连续补充与超额请求两条（在旧实现上确认变红）。
+
 ### Fixed
 
 - **`scripts/gapmap.sh` 收尾不再 `git clean`**：采样后只还原被改动的**已跟踪**文件；未跟踪文件（比如正在写的测试）原样保留并提示。

@@ -1,8 +1,11 @@
 package security
 
 import (
+	"math"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type RateLimitKey struct {
@@ -51,11 +54,18 @@ type RateLimitStats struct {
 	Evicted          uint64
 }
 
+// RateLimiter is a keyed token bucket. The bucket arithmetic is
+// golang.org/x/time/rate (continuous refill: Refill tokens spread evenly over
+// Interval, burst Capacity); what this type adds is the part x/time/rate does
+// not have — one bucket per key with a bounded key set, idle eviction and
+// stats, so attacker-controlled key cardinality cannot grow memory.
 type RateLimiter struct {
-	cfg RateLimitConfig
-	mu  sync.Mutex
-	bkt map[RateLimitKey]*bucket
-	now func() time.Time
+	cfg   RateLimitConfig
+	limit rate.Limit
+	burst int
+	mu    sync.Mutex
+	bkt   map[RateLimitKey]*bucket
+	now   func() time.Time
 
 	lastSweep        time.Time
 	capacityRejected uint64
@@ -63,18 +73,29 @@ type RateLimiter struct {
 }
 
 type bucket struct {
-	tokens   int64
-	at       time.Time
+	limiter  *rate.Limiter
 	lastSeen time.Time
 }
 
 func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 	cfg = cfg.Normalize()
 	return &RateLimiter{
-		cfg: cfg,
-		bkt: make(map[RateLimitKey]*bucket),
-		now: time.Now,
+		cfg:   cfg,
+		limit: rate.Limit(float64(cfg.Refill) / cfg.Interval.Seconds()),
+		burst: clampInt(cfg.Capacity),
+		bkt:   make(map[RateLimitKey]*bucket),
+		now:   time.Now,
 	}
+}
+
+func clampInt(v int64) int {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < 0 {
+		return 0
+	}
+	return int(v)
 }
 
 func (l *RateLimiter) Allow(key RateLimitKey) bool {
@@ -107,16 +128,16 @@ func (l *RateLimiter) AllowN(key RateLimitKey, n int64) bool {
 			l.capacityRejected++
 			return false
 		}
-		b = &bucket{tokens: l.cfg.Capacity, at: now, lastSeen: now}
+		b = &bucket{limiter: rate.NewLimiter(l.limit, l.burst), lastSeen: now}
 		l.bkt[key] = b
 	}
 	b.lastSeen = now
-	l.refill(b, now)
-	if b.tokens < n {
+	if n > int64(l.burst) {
+		// x/time/rate reports false for n > burst too; say so without
+		// consuming anything, exactly as the hand-rolled bucket did.
 		return false
 	}
-	b.tokens -= n
-	return true
+	return b.limiter.AllowN(now, int(n))
 }
 
 func (l *RateLimiter) Stats() RateLimitStats {
@@ -163,24 +184,4 @@ func (l *RateLimiter) gcLocked(cutoff time.Time) int {
 		}
 	}
 	return removed
-}
-
-func (l *RateLimiter) refill(b *bucket, now time.Time) {
-	if b == nil {
-		return
-	}
-	if b.at.IsZero() {
-		b.at = now
-	}
-	elapsed := now.Sub(b.at)
-	if elapsed < l.cfg.Interval {
-		return
-	}
-	steps := int64(elapsed / l.cfg.Interval)
-	add := steps * l.cfg.Refill
-	b.tokens += add
-	if b.tokens > l.cfg.Capacity {
-		b.tokens = l.cfg.Capacity
-	}
-	b.at = b.at.Add(time.Duration(steps) * l.cfg.Interval)
 }
