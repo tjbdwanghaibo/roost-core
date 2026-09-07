@@ -11,6 +11,10 @@
 
 ### Changed（测试质量）
 
+- **cache ref_hmap 补丁路径解析与 JSON 存储的写规则钉住**（U-0102，C2，B-24 第四项）。nightly gap map 里 `cache` 20 条采样 15 条无覆盖。
+  补丁路径：空段、未知字段、末段非标量、中途穿过非结构体字段、空计划——各自以 `ErrRefHMapUnsupported` 拒绝并点名路径，`Patch` 走同一
+  解析器故坏路径不落一笔；嵌套深度超过 `MaxDepth` 在建布局时以 `ErrRefHMapMaxDepth` 拒绝；`RedisJSONStore` 的过期写 `ErrStaleWrite`
+  与 key 函数缺失。`ref_hmap_patch_promises_test.go` 三条；回退八处守卫各红。
 - **entity 种类 / 类别注册与创建参数归一化规则钉住**（U-0099，C2，B-24 首项）。nightly gap map 里 `entity` 20 条采样 19 条无覆盖。
   注册：kind 为 none、category 为 none / 超掩码（`ErrInvalidCategory`）、同 kind 改 category（拒绝且不改动已注册值）、同对幂等；
   解析：未注册 kind → `ErrInvalidEntityID`；`NormalizeID`：nil 参数、kind 与构建器不一致、category 与注册不一致、load 无 id、
