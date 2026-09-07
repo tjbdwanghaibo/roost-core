@@ -152,7 +152,7 @@
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 未审 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
-| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `match` | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） | 未审 | 未审 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 未审 |
 | service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） / 09-06 U-0097（回退 4 条） | 未审 | 未审 | 09-05 U-0018 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
@@ -219,7 +219,8 @@
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | ~~B-22~~ | core 首份 nightly gap map 里整片无覆盖的包 | C2 | nightly-gapmap 34029785123 | **已完成 → U-0065～U-0073**（entity / statesync / security / migration / admin / hotcode / ownerroute / robot）；剩余 `syncbus`、`failurelog`、`etcd`、`robot/loadtest` 按实质筛后只有 nil / 空 key 守卫，不开单元 |
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
-| B-24 | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | entity → U-0099、actionflow → U-0100、dataengine → U-0101、cache → U-0102 已完成；剩 service `mail` 请求参数守卫（低优先） |
+| ~~B-24~~ | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | **已完成**：entity → U-0099、actionflow → U-0100、dataengine → U-0101、cache → U-0102、mail → U-0103（09-07 一天内） |
+| B-25 | 12 个服务包的 `*_rpc_gen.go` 装配守卫在 nightly 报告里各占 8～10 行 GREEN（同一 servicerpc 模板） | C2 / 工具 | nightly 09-07 | U-0103 已在 `mail` 钉一份；要么在 roost-codegen `servicerpc` 加生成物编译 + 装配测试一次覆盖，要么让采样器按文件名跳过 `*_gen.go`。低优先 |
 
 ## 5. 单元日志
 
@@ -227,6 +228,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0103 | 2026-09-07 | roost-service `mail` 生成传输层装配拒绝 / Redis 存储参数守卫 | C2 | B-24 尾项（nightly 16/20，8 条在 `*_rpc_gen.go`，12 个服务共用模板）；`if init; cond {` 形式按文本中和；"缺 handler / 数不符"是字面量表的构造性守卫 | `wiring_promises_test.go` 两条 | 16 处回退 13 红、2 构造性、1 冗余 | — |
 | U-0102 | 2026-09-07 | roost-core `cache` ref_hmap 补丁路径 / JSON 存储写规则 | C2 | B-24 第四项（nightly 15/20）；`refHMapField` 是值类型不能与 nil 比较，用 `node` 判空 | `ref_hmap_patch_promises_test.go` 三条 | 八处守卫回退各红 | — |
 | U-0101 | 2026-09-07 | roost-kit `dataengine` 仓库装载路径其余拒绝 | C2 | B-24 第三项（nightly 15/20）；"DAO 不实现装载接口"用同名不同签名的方法遮蔽来构造；迁移三次冲突一条需 SystemCommitter 替身，留待 MigrationRunner 单元 | `entity_repository_load_promises_test.go` 一条 | 七处守卫回退各红 | — |
 | U-0100 | 2026-09-07 | roost-kit `actionflow` 重入检测 / 运行器守卫 | C2 | B-24 第二项（nightly 17/20）；重入从 Start / Tick / Cancel / 过渡钩子四处触发；区分"重复守卫"要靠副作用断言（被换掉的动作 Start 不得被调用）；macOS 没有 `timeout` 二进制——首轮回退全 0 是命令不存在，用 `go test -timeout` | `reentrancy_promises_test.go` 三条 | 17 处回退 13 红、4 处防御性重复 | — |
@@ -439,6 +441,8 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 **本轮小结（2026-09-06 第八轮，"发布 + 五仓地图补齐"）**：core v1.12.1（73 个提交的测试基线）→ codegen v1.13.12，tag CI 按名核对全绿。六个 C2 单元：kit `ai` 行为树（U-0083）、`mongo/mongotest` 替身契约（U-0084）、skill 内存宿主（U-0085）、kit `etcd` 本地镜像（U-0086）、codegen `protocol` 取值 / 引用规则（U-0087）、`nest` 接收者 / target（U-0088）。codegen 本地 gap map 跑完（175 条 67 无覆盖），五仓地图齐。**两个流程 / 工具坑**：① U-0084 首次提交没编译就推了——提交链必须以 `go test` 为门（已写入第 1 节规则）；② `gapmap.sh` 收尾的 `git clean -fdq` 删掉了采样期间新写的测试——只还原已跟踪文件（五仓已改）。**明天起**：五仓 nightly-gapmap 首次按 `max=20` 自动出报告，B-24 从报告里选。
 
 **本轮小结（2026-09-06 第九轮，"按五仓地图收尾 C2"）**：十个 C2 单元 U-0089…U-0098——codegen `internal/roost`（add 参数守卫 14 条）、`cfggen`（字段级规则 9 条）、`entity`（managed 基类 / 参数重复）；kit `saga`（步骤消费者配置 + Replay 身份 9 条）、`remoteentity`（标记 / 兴趣 / 后端 8 条）、`room`（同步总线 / 信封汇 20 条）；skill 执行器结构不变量（4 条，3 处回退是 panic）；service `mail` / `platform` / `account` 的"世界在脚下变了"分支（账本竞态、订单竞态、提交尾部；3 + 4 + 3 条）。全部绿→回退红，无缺陷修复。**工具坑三个**：zsh `for x in $var` 不分词；跨行 `if` 要按文本中和；roost-skill 的工作流叫 `production-gates`（按 `ci` 找不到会被误报为红）。
+
+**本轮小结（2026-09-07 第十轮，"nightly 首日选单 B-24"）**：五仓 nightly gap map 首次自动出报告（core 112→? 见各仓 job summary），按无覆盖数选单 B-24 五项一天内全部完成：core `entity` 注册 / NormalizeID（U-0099，16 条）、kit `actionflow` 重入（U-0100，17 条）、kit `dataengine` 装载（U-0101，7 条）、core `cache` 补丁路径（U-0102，8 条）、service `mail` 装配 / Redis（U-0103，16 条）。仍无运行时缺陷。**新坑**：macOS 没有 `timeout` 二进制（首轮回退全 0 是命令不存在）；`EntityKind` 是 uint8 而掩码 255，两处"超掩码"守卫不可达；生成的 `*_rpc_gen.go` 守卫会在 12 个服务包重复出现（B-25）。
 
 ## 8. 故障矩阵（toxiproxy）
 
