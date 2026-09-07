@@ -11,6 +11,12 @@
 
 ### Changed（测试质量）
 
+- **entity 种类 / 类别注册与创建参数归一化规则钉住**（U-0099，C2，B-24 首项）。nightly gap map 里 `entity` 20 条采样 19 条无覆盖。
+  注册：kind 为 none、category 为 none / 超掩码（`ErrInvalidCategory`）、同 kind 改 category（拒绝且不改动已注册值）、同对幂等；
+  解析：未注册 kind → `ErrInvalidEntityID`；`NormalizeID`：nil 参数、kind 与构建器不一致、category 与注册不一致、load 无 id、
+  create 无 id → `ErrIDGeneratorRequired`、UniqueID 归一成完整 id；`resolveEntityBuilder` 的三条。`kind_registration_promises_test.go`
+  四条；回退 16 处守卫 13 红，3 处不红：`uint64(kind) > EntityKindMask` 两处对 uint8 的 kind 不可达（掩码就是 255），
+  `NormalizeID` 的"kind 为 none"与下游 `ResolveEntityKindCategory` 同文案冗余。
 - **webroute 注册器的五种拒绝按文本钉住**（U-0075，C2）：无 handler、空 / 相对路径、PUT 与未知方法、重复路由、nil 注册器；
   方法与路径先归一化再校验。原测试只断言"有错"。`promises_test.go` 一条；回退三处守卫各红。
 - **cache 读穿透的远端失败策略钉住**（U-0076，C2 / C8）。`IgnoreRemoteError` 是"L2 故障是否也是读者的故障"的唯一开关：默认

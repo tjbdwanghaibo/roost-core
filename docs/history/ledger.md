@@ -62,7 +62,7 @@
 | core | `configdata` | 09-02 | 09-06 U-0046（回退 45 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `entitysync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -219,6 +219,7 @@
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | ~~B-22~~ | core 首份 nightly gap map 里整片无覆盖的包 | C2 | nightly-gapmap 34029785123 | **已完成 → U-0065～U-0073**（entity / statesync / security / migration / admin / hotcode / ownerroute / robot）；剩余 `syncbus`、`failurelog`、`etcd`、`robot/loadtest` 按实质筛后只有 nil / 空 key 守卫，不开单元 |
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
+| B-24 | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | entity → U-0099 已完成；其余按序推进 |
 
 ## 5. 单元日志
 
@@ -226,6 +227,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
+| U-0099 | 2026-09-07 | roost-core `entity` 种类 / 类别注册与 NormalizeID | C2 | B-24 首项（nightly 19/20）；`EntityKind` 是 uint8 而掩码是 255，两处"超掩码"守卫不可达；NormalizeID 的 none 守卫与下游同文案冗余 | `kind_registration_promises_test.go` 四条 | 16 处回退 13 红、2 不可达、1 冗余 | — |
 | U-0098 | 2026-09-06 | roost-service `account` CreateRole 提交尾部异常 | C2 | 槽位行消失 / player id 占用 / 分配器返回 0，三条都要"什么都不留下、同名重试成功"；替身只让第一次 Slots.Update 见不到行，回滚用的 Delete 不受影响 | `create_role_race_promises_test.go` 两条 | 三处守卫回退各红 | — |
 | U-0097 | 2026-09-06 | roost-service `platform` 回调 / 投递的订单竞态分支 | C2 | 插入输给并发者 + 行消失 / 载荷不同、认领后行消失（标记投递前 / 记录失败前）；"第 N 次 Update 让行消失"替身；跨行 `if` 条件要按文本中和 | `order_race_promises_test.go` 一条 | 四处守卫回退各红 | — |
 | U-0096 | 2026-09-06 | roost-service `mail` Send 的账本竞态分支 | C2 | 账本认领输给并发者 + 对方行消失 / 指向缺失邮件 / 邮件 id 占用；用嵌入真实内存 store 的替身只覆写 Create / Get 制造竞态；roost-skill 的 CI 工作流名是 `production-gates`（按 `ci` 找会 404，误报为红） | `send_race_promises_test.go` 一条 | 三处守卫回退各红 | — |
