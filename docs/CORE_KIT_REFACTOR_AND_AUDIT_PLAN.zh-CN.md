@@ -1,6 +1,6 @@
 # Roost Core / Kit 实现下沉与缺陷收敛统一实施方案
 
-状态：M-00 五仓直接构建/单测基线通过，M-00a 消费方对齐完成；M-01 已开始依赖边界保护，生成流程/真实集成仍待验证；尚未迁移实现。最新结果见 [M-00a 续跑记录](history/M-00a_SOURCE_HEAD_ALIGNMENT.md)，首轮见 [M-00 基线记录](history/M-00_BASELINE.md)。
+状态：M-00a 已记录五仓及三个嵌套模块直接构建/vet/单测通过，消费方对齐与 Core 依赖边界保护已提交；M-00/M-01 完整验收未完成，M-02 未开始。本次复跑两项保护测试在工具链标准库解析阶段失败，未获得新的通过证据。当前提交集合及证据边界见 [09-08 提交复核](history/COMMIT_REVIEW_2026-09-08.md)，既有基线见 [M-00a 续跑记录](history/M-00a_SOURCE_HEAD_ALIGNMENT.md)。
 
 目标读者：框架维护者、接手本任务的开发者或 Agent。
 
@@ -21,15 +21,16 @@
 
 历史交接记载 U-0001～U-0103、29 个带代码修复单元、B-14/B-18/B-19/B-25 开放，以及 87 个未审格。这些只是该交接时间点的快照；开始执行时重新核对账本、代码和 CI，不把历史绿灯当作当前通过。
 
-### 1.1 本次已核对的本地事实
+### 1.1 本次已核对的本地事实（2026-09-08 提交复核）
 
 - 本机目录为 `cube-core`、`cube-kit`、`cube-skill`、`cube-codegen`，但 go.mod 模块名已经是 `github.com/tjbdwanghaibo/roost-*`。文档和 API 使用 Roost 名称，不改写正确的本地路径。
-- Core、Kit、Codegen 的 go 指令为 1.27.0；Skill 为 1.25.0。执行前仍须重新读取全部模块的 go/toolchain 指令。
-- 当前顶层目录未见独立 Service 仓库；必须定位或准备它，不能假定 galaxy/planet 就是 Roost Service。
-- Core 的 `examples/go.mod` 存在已有修改，本方案不覆盖、不回退它。
+- 五个主模块及 Core examples、Skill examples、Skill integration/sync-e2e 的 go 指令均为 1.27.0。
+- Service 已定位于 `D:/whb_s/roost-service`，HEAD `2e18010`；不以 galaxy/planet 替代。
+- Core `e4aeef8` 已提交 `examples/go.mod` 的 Go 1.27.0 对齐；不再属于待保留的未提交修改。本次编辑文档前五仓工作树均干净。
+- Skill `fe23185` 已对齐根模块及嵌套模块的 Roost import/require，移除嵌套模块本地 replace，并新增 `TestFrameworkModuleIdentity`。Core `4757b10` 已新增 `TestCoreDependencyBoundary`，覆盖根模块测试及非当前 build tag 文件的直接 import，主动跳过嵌套模块。
 - Codegen 的依赖解析实现包含显式 `GOWORK=off`。外层建 go.work 不代表其内部子进程也使用本地源码，必须纳入 M-00/M-01 验证。
 
-以上是文件检查，不是编译、测试或运行验收。
+外部 workspace 当前包含上述八个模块。历史通过结果沿用 M-00a 的明确范围；提交存在、静态检查和历史日志均不能替代当前 HEAD 的运行验收。09-08 复跑的环境失败及未验证项见提交复核记录。
 
 ## 2. 与历史流程的冲突处理
 
@@ -116,7 +117,7 @@ Core 可以依赖通用第三方驱动；不为保持“纯接口层”把实现
 
 ## 5. 分步批次与门禁
 
-所有批次初始为“未开始”。M-00 不通过，不进入代码迁移。
+当前：M-00a 消费方对齐完成；M-00 直接基线已有通过记录但完整验收待补；M-01 仅依赖边界保护已落地，其他设计及生成验证待完成；M-02～M-09 未开始。允许继续 M-01 的前置设计与验证；M-00/M-01 完整门禁未通过，不进入实现迁移。
 
 | 批次 | 内容 | 前置 | 完成条件 |
 | --- | --- | --- | --- |
@@ -151,7 +152,7 @@ Core 可以依赖通用第三方驱动；不为保持“纯接口层”把实现
 - 定义有限的构造、依赖注入、封存、运行、关闭接口；Start 部分失败须释放已取得资源。
 - Core 接受已解析配置；Kit 只转换配置，避免业务规则两处校验而漂移。
 - Core 使用的严格 Mongo 测试替身迁入合适的 Core 测试支撑包或独立测试模块；不能把 Kit import 带进 Core 测试。
-- 新增可执行依赖边界检查，覆盖普通测试和 integration 构建；不得只 grep 生产文件。
+- 已在 Core `4757b10` 新增可执行直接 import 边界检查，含测试及非当前 build tag 文件；仍需结合实际依赖解析、integration 构建和嵌套消费者验收，不能把 AST 扫描等同于这些门禁全部完成。
 - 对 Codegen 建立真实 source-head 生成测试通路：显式临时 workspace，列出本地模块解析位置；如实现不支持，独立工具子批修正并补测试，不能只改文档声称支持。
 - 保留正常发布模式的行为，dev 路径的临时 workspace 不写进可发布模块。
 
@@ -285,7 +286,7 @@ go vet -tags integration ./...
 
 ## 9. 批次交接模板
 
-每批在本节追加以下记录；初始所有 M 批次未开始。
+每批按以下模板记录；现有记录见 M-00、M-00a 及 [09-08 提交复核](history/COMMIT_REVIEW_2026-09-08.md)，当前状态以第 5 节为准。
 
 ```text
 批次：M-xx / 子批编号
@@ -323,4 +324,4 @@ go vet -tags integration ./...
 
 首轮交付：依赖和迁移清单、真实基线、边界检查、Remote Entity 下沉、历史回归保留、确认 Bug 的修复证据、五仓消费验证及未完成项。
 
-当前下一步：继续 M-01，验证并设计 Codegen 内部 source-head 通路，补生成工程和真实依赖门禁；Service 与 Skill 身份阻塞已解除。详见 [续跑记录](history/M-00a_SOURCE_HEAD_ALIGNMENT.md)；不提前移动实现、不重跑整套历史采样、不自动发布。
+当前下一步：先查清本次 Go 1.27 工具链无法解析 `go/parser` 的环境问题，复跑 Core 边界与 Skill 身份检查；随后继续 M-01 的 Codegen source-head 通路及生成工程验收、真实依赖准备。Service 定位与 Skill 身份对齐不重复实施。详见 [提交复核](history/COMMIT_REVIEW_2026-09-08.md)；不提前移动实现、不重跑整套历史采样、不自动发布。

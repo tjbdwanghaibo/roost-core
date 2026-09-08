@@ -1,6 +1,7 @@
 # M-00：本机迁移前基线
 
 状态：本页保留首轮快照；Service 定位与 Skill 对齐已在后续解除，最新结果见 [M-00a 续跑记录](M-00a_SOURCE_HEAD_ALIGNMENT.md)。未执行实现迁移。
+后续提交和当前复核结果见 [09-08 提交复核](COMMIT_REVIEW_2026-09-08.md)。下文的阻塞、源码集合及下一步均为首轮历史状态，不作为当前执行清单。
 关联：[统一方案](../CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)。
 
 ## 1. 环境和源码集合
