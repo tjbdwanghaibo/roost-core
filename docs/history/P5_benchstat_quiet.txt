@@ -1,0 +1,271 @@
+goos: darwin
+goarch: arm64
+pkg: pkg/dataengine
+cpu: Apple M5
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  sec/op  │  sec/op  vs base  │
+MongoProjectionMatrix/single_cas-10  4.109µ ±  1%  4.761µ ±  6%  +15.86% (p=0.000 n=10)
+MongoProjectionMatrix/single_with_outbox-10  2.948m ±  4%  2.874m ±  3%  ~ (p=0.481 n=10)
+MongoProjectionMatrix/four_document_transaction-10  828.8µ ±  1%  832.5µ ±  4%  ~ (p=0.796 n=10)
+MongoProjectionMatrix/batch_256_independent-10  1.689m ±  0%  1.656m ± 35%  ~ (p=0.143 n=10)
+MongoProjectionConflictMatrix/conflict_1_percent-10  4.224µ ±  3%  5.266µ ± 17%  +24.66% (p=0.000 n=10)
+MongoProjectionConflictMatrix/conflict_10_percent-10  4.070µ ±  0%  4.165µ ± 10%  +2.32% (p=0.000 n=10)
+ProjectionSegmentPlanner/special_every_0-10  11.29µ ±  1%  10.29µ ±  8%  -8.87% (p=0.000 n=10)
+ProjectionSegmentPlanner/special_every_100-10  11.97µ ±  1%  11.58µ ± 14%  ~ (p=0.481 n=10)
+ProjectionSegmentPlanner/special_every_10-10  14.36µ ±  1%  13.65µ ±  0%  -4.98% (p=0.000 n=10)
+ProjectionSegmentPlanner/special_every_1-10  17.81µ ±  7%  19.62µ ±  4%  +10.17% (p=0.001 n=10)
+ProjectorWALReplayAckMatrix/ordinary_only-10  10.095m ±  3%  9.286m ± 15%  -8.02% (p=0.043 n=10)
+ProjectorWALReplayAckMatrix/special_1_percent-10  43.92m ±  5%  42.28m ±  3%  -3.73% (p=0.019 n=10)
+ProjectorWALReplayAckMatrix/special_10_percent-10  416.4m ±  3%  420.8m ±  1%  ~ (p=0.684 n=10)
+ProjectorWALReplayAckMatrix/all_special-10  2.103 ±  1%  2.103 ±  1%  ~ (p=0.796 n=10)
+ProjectorAdmissionMatrix/async/writers_1-10  12.27m ±  4%  12.42m ±  1%  ~ (p=0.247 n=10)
+ProjectorAdmissionMatrix/async/writers_8-10  1.425m ± 14%  1.388m ±  6%  ~ (p=0.529 n=10)
+ProjectorAdmissionMatrix/async/writers_32-10  661.0µ ± 12%  664.0µ ± 26%  ~ (p=0.796 n=10)
+ProjectorAdmissionMatrix/strict/writers_1-10  12.31m ±  2%  12.26m ±  2%  ~ (p=0.353 n=10)
+ProjectorAdmissionMatrix/strict/writers_8-10  1.546m ±  5%  1.467m ±  5%  -5.10% (p=0.002 n=10)
+ProjectorAdmissionMatrix/strict/writers_32-10  697.2µ ± 61%  675.4µ ±  5%  ~ (p=0.143 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_1-10  12.33m ±  1%  12.46m ±  4%  ~ (p=0.280 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_8-10  1.545m ±  3%  1.648m ± 53%  ~ (p=0.143 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_32-10  744.7µ ±  8%  699.1µ ± 82%  ~ (p=0.436 n=10)
+geomean  812.9µ  815.4µ  +0.31%
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  B/op  │  B/op  vs base  │
+MongoProjectionMatrix/single_cas-10  7.077Ki ±  0%  7.081Ki ±  0%  +0.06% (p=0.000 n=10)
+MongoProjectionMatrix/single_with_outbox-10  5.392Mi ±  0%  5.392Mi ±  0%  -0.01% (p=0.000 n=10)
+MongoProjectionMatrix/four_document_transaction-10  1.948Mi ±  0%  1.947Mi ±  0%  -0.02% (p=0.000 n=10)
+MongoProjectionMatrix/batch_256_independent-10  2.720Mi ±  0%  2.714Mi ±  0%  -0.24% (p=0.009 n=10)
+MongoProjectionConflictMatrix/conflict_1_percent-10  7.034Ki ±  0%  7.037Ki ±  0%  +0.05% (p=0.000 n=10)
+MongoProjectionConflictMatrix/conflict_10_percent-10  6.758Ki ±  0%  6.761Ki ±  0%  +0.04% (p=0.000 n=10)
+ProjectionSegmentPlanner/special_every_0-10  64.00 ±  0%  64.00 ±  0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_100-10  3.828Ki ±  0%  3.828Ki ±  0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_10-10  31.83Ki ±  0%  31.83Ki ±  0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_1-10  119.8Ki ±  0%  119.8Ki ±  0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/ordinary_only-10  287.4Ki ±  0%  287.2Ki ±  0%  -0.09% (p=0.012 n=10)
+ProjectorWALReplayAckMatrix/special_1_percent-10  299.4Ki ±  0%  299.1Ki ±  0%  -0.11% (p=0.022 n=10)
+ProjectorWALReplayAckMatrix/special_10_percent-10  424.3Ki ±  0%  424.3Ki ±  0%  ~ (p=0.269 n=10)
+ProjectorWALReplayAckMatrix/all_special-10  910.7Ki ±  0%  910.7Ki ±  0%  ~ (p=0.420 n=10)
+ProjectorAdmissionMatrix/async/writers_1-10  243.9Ki ±  0%  243.9Ki ±  0%  ~ (p=0.446 n=10)
+ProjectorAdmissionMatrix/async/writers_8-10  57.99Ki ± 34%  62.12Ki ± 23%  ~ (p=0.579 n=10)
+ProjectorAdmissionMatrix/async/writers_32-10  25.15Ki ± 54%  23.44Ki ± 41%  ~ (p=0.684 n=10)
+ProjectorAdmissionMatrix/strict/writers_1-10  244.0Ki ±  1%  243.9Ki ±  0%  ~ (p=0.565 n=10)
+ProjectorAdmissionMatrix/strict/writers_8-10  63.55Ki ± 19%  67.58Ki ± 40%  ~ (p=0.529 n=10)
+ProjectorAdmissionMatrix/strict/writers_32-10  28.44Ki ± 44%  24.80Ki ± 41%  ~ (p=0.631 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_1-10  194.3Ki ±  0%  194.2Ki ±  0%  ~ (p=0.323 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_8-10  56.01Ki ± 29%  58.59Ki ± 21%  ~ (p=0.739 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_32-10  26.43Ki ± 25%  28.06Ki ± 39%  ~ (p=0.796 n=10)
+geomean  75.18Ki  75.26Ki  +0.10%
+¹ all samples are equal
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  allocs/op  │  allocs/op  vs base  │
+MongoProjectionMatrix/single_cas-10  119.0 ± 0%  119.0 ± 0%  ~ (p=1.000 n=10) ¹
+MongoProjectionMatrix/single_with_outbox-10  30.30k ± 0%  30.30k ± 0%  -0.00% (p=0.000 n=10)
+MongoProjectionMatrix/four_document_transaction-10  10.59k ± 0%  10.59k ± 0%  -0.01% (p=0.000 n=10)
+MongoProjectionMatrix/batch_256_independent-10  31.87k ± 0%  31.89k ± 0%  +0.05% (p=0.045 n=10)
+MongoProjectionConflictMatrix/conflict_1_percent-10  117.0 ± 0%  117.0 ± 0%  ~ (p=1.000 n=10) ¹
+MongoProjectionConflictMatrix/conflict_10_percent-10  113.0 ± 0%  113.0 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_0-10  1.000 ± 0%  1.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_100-10  6.000 ± 0%  6.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_10-10  9.000 ± 0%  9.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectionSegmentPlanner/special_every_1-10  11.00 ± 0%  11.00 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/ordinary_only-10  8.891k ± 0%  8.887k ± 0%  -0.04% (p=0.018 n=10)
+ProjectorWALReplayAckMatrix/special_1_percent-10  9.018k ± 0%  9.014k ± 0%  -0.04% (p=0.007 n=10)
+ProjectorWALReplayAckMatrix/special_10_percent-10  10.40k ± 0%  10.40k ± 0%  ~ (p=0.465 n=10)
+ProjectorWALReplayAckMatrix/all_special-10  17.18k ± 0%  17.18k ± 0%  ~ (p=0.628 n=10)
+ProjectorAdmissionMatrix/async/writers_1-10  170.0 ± 0%  170.0 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorAdmissionMatrix/async/writers_8-10  41.00 ± 2%  40.00 ± 2%  ~ (p=0.370 n=10)
+ProjectorAdmissionMatrix/async/writers_32-10  38.00 ± 0%  38.00 ± 3%  ~ (p=0.076 n=10)
+ProjectorAdmissionMatrix/strict/writers_1-10  170.0 ± 1%  170.0 ± 0%  ~ (p=1.000 n=10)
+ProjectorAdmissionMatrix/strict/writers_8-10  41.00 ± 0%  41.00 ± 2%  ~ (p=0.263 n=10)
+ProjectorAdmissionMatrix/strict/writers_32-10  38.00 ± 5%  38.00 ± 0%  ~ (p=0.511 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_1-10  143.0 ± 1%  143.0 ± 1%  ~ (p=1.000 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_8-10  44.00 ± 2%  44.00 ± 5%  ~ (p=0.536 n=10)
+ProjectorAdmissionMatrix/pipelined/writers_32-10  40.00 ± 0%  40.00 ± 7%  ~ (p=0.458 n=10)
+geomean  231.5  231.2  -0.11%
+¹ all samples are equal
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  acks/op  │  acks/op  vs base  │
+ProjectorWALReplayAckMatrix/ordinary_only-10  1.000 ± 0%  1.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10  5.000 ± 0%  5.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_10_percent-10  51.00 ± 0%  51.00 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/all_special-10  256.0 ± 0%  256.0 ± 0%  ~ (p=1.000 n=10) ¹
+geomean  15.98  15.98  +0.00%
+¹ all samples are equal
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  batch_calls/op  │  batch_calls/op  vs base  │
+ProjectorWALReplayAckMatrix/ordinary_only-10  1.000 ± 0%  1.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10  3.000 ± 0%  3.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_10_percent-10  26.00 ± 0%  26.00 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/all_special-10  0.000 ± 0%  0.000 ± 0%  ~ (p=1.000 n=10) ¹
+geomean  ²  +0.00%  ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  project_calls/op  │  project_calls/op  vs base  │
+ProjectorWALReplayAckMatrix/ordinary_only-10  0.000 ± 0%  0.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10  2.000 ± 0%  2.000 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/special_10_percent-10  25.00 ± 0%  25.00 ± 0%  ~ (p=1.000 n=10) ¹
+ProjectorWALReplayAckMatrix/all_special-10  256.0 ± 0%  256.0 ± 0%  ~ (p=1.000 n=10) ¹
+geomean  ²  +0.00%  ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+pkg: pkg/nestwal
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  sec/op  │  sec/op  vs base  │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10  637.5n ± 1%  701.2n ± 3%  +9.99% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10  755.2n ± 1%  827.8n ± 5%  +9.60% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10  2.043µ ± 0%  2.311µ ± 5%  +13.12% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10  2.173µ ± 1%  2.436µ ± 2%  +12.08% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10  4.203µ ± 0%  5.463µ ± 3%  +29.98% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10  4.436µ ± 4%  5.795µ ± 3%  +30.62% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10  17.49µ ± 2%  21.38µ ± 4%  +22.28% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10  17.81µ ± 1%  21.25µ ± 1%  +19.28% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10  13.97µ ± 3%  14.42µ ± 5%  +3.21% (p=0.015 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10  14.14µ ± 2%  14.88µ ± 4%  +5.28% (p=0.002 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10  51.02µ ± 3%  53.07µ ± 3%  +4.02% (p=0.019 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10  52.56µ ± 3%  52.34µ ± 4%  ~ (p=0.436 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10  558.2n ± 1%  562.2n ± 2%  ~ (p=0.110 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10  676.8n ± 1%  679.5n ± 1%  +0.41% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10  1.706µ ± 0%  1.730µ ± 0%  +1.41% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10  1.833µ ± 1%  1.859µ ± 0%  +1.42% (p=0.002 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10  1.354µ ± 2%  1.369µ ± 1%  +1.11% (p=0.022 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10  1.487µ ± 0%  1.514µ ± 0%  +1.78% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10  4.917µ ± 1%  4.995µ ± 1%  +1.59% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10  5.093µ ± 5%  5.247µ ± 5%  ~ (p=0.139 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10  4.253µ ± 1%  4.270µ ± 6%  ~ (p=0.190 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10  4.366µ ± 1%  4.327µ ± 1%  -0.90% (p=0.043 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10  16.10µ ± 2%  16.27µ ± 1%  ~ (p=0.190 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10  16.58µ ± 1%  16.53µ ± 1%  ~ (p=0.436 n=10)
+WALAppendAsyncParallel-10  107.6µ ± 4%  110.0µ ± 4%  ~ (p=0.739 n=10)
+WALAppendV2AsyncParallel-10  106.3µ ± 4%  108.1µ ± 3%  ~ (p=0.436 n=10)
+WALAppendStrict-10  4.100m ± 2%  4.154m ± 2%  ~ (p=0.579 n=10)
+WALAppendStrictParallel-10  432.0µ ± 3%  432.3µ ± 3%  ~ (p=0.739 n=10)
+geomean  8.205µ  8.693µ  +5.95%
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  record_bytes  │  record_bytes  vs base  │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10  1.152k ± 0%  1.152k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10  1.207k ± 0%  1.207k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10  4.467k ± 0%  4.467k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10  4.522k ± 0%  4.522k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10  16.51k ± 0%  16.51k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10  16.57k ± 0%  16.57k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10  65.91k ± 0%  65.91k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10  65.96k ± 0%  65.96k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10  65.66k ± 0%  65.66k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10  65.72k ± 0%  65.72k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10  262.5k ± 0%  262.5k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10  262.6k ± 0%  262.6k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10  147.0 ± 0%  147.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10  202.0 ± 0%  202.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10  447.0 ± 0%  447.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10  502.0 ± 0%  502.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10  245.0 ± 0%  245.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10  300.0 ± 0%  300.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10  839.0 ± 0%  839.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10  894.0 ± 0%  894.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10  581.0 ± 0%  581.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10  636.0 ± 0%  636.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10  2.183k ± 0%  2.183k ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10  2.238k ± 0%  2.238k ± 0%  ~ (p=1.000 n=10) ¹
+geomean  3.421k  3.421k  +0.00%
+¹ all samples are equal
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  B/op  │  B/op  vs base  │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10  3.625Ki ±  0%  3.625Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10  3.758Ki ±  0%  3.758Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10  14.08Ki ±  0%  14.08Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10  14.21Ki ±  0%  14.21Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10  50.38Ki ±  0%  50.38Ki ±  0%  ~ (p=0.070 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10  50.51Ki ±  0%  50.51Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10  201.3Ki ±  0%  201.3Ki ±  0%  -0.00% (p=0.011 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10  201.5Ki ±  0%  201.5Ki ±  0%  -0.00% (p=0.003 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10  200.4Ki ±  0%  200.4Ki ±  0%  -0.00% (p=0.003 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10  200.5Ki ±  0%  200.5Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10  777.3Ki ±  0%  777.3Ki ±  0%  -0.00% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10  777.5Ki ±  0%  777.5Ki ±  0%  -0.00% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10  760.0 ±  0%  760.0 ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10  952.0 ±  0%  952.0 ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10  2.586Ki ±  0%  2.586Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10  2.773Ki ±  0%  2.773Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10  2.367Ki ±  0%  2.367Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10  2.555Ki ±  0%  2.555Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10  9.023Ki ±  0%  9.023Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10  9.273Ki ±  0%  9.273Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10  8.398Ki ±  0%  8.398Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10  8.586Ki ±  0%  8.586Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10  33.15Ki ±  0%  33.15Ki ±  0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10  33.27Ki ±  0%  33.27Ki ±  0%  ~ (p=1.000 n=10) ¹
+WALAppendAsyncParallel-10  15.58Ki ± 17%  18.32Ki ± 25%  ~ (p=0.190 n=10)
+WALAppendV2AsyncParallel-10  16.08Ki ± 24%  16.62Ki ± 42%  ~ (p=0.529 n=10)
+WALAppendStrict-10  141.4Ki ± 43%  151.3Ki ± 19%  ~ (p=0.393 n=10)
+WALAppendStrictParallel-10  30.70Ki ± 29%  31.93Ki ± 17%  ~ (p=0.853 n=10)
+geomean  19.58Ki  19.79Ki  +1.09%
+¹ all samples are equal
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  allocs/op  │  allocs/op  vs base  │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10  23.00 ± 0%  23.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10  31.00 ± 0%  31.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10  62.00 ± 0%  62.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10  70.00 ± 0%  70.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10  23.00 ± 0%  23.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10  31.00 ± 0%  31.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10  62.00 ± 0%  62.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10  70.00 ± 0%  70.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10  23.00 ± 0%  23.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10  31.00 ± 0%  31.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10  62.00 ± 0%  62.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10  70.00 ± 0%  70.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10  31.00 ± 0%  31.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10  39.00 ± 0%  39.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10  94.00 ± 0%  94.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10  102.0 ± 0%  102.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10  65.00 ± 0%  65.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10  73.00 ± 0%  73.00 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10  230.0 ± 0%  230.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10  238.0 ± 0%  238.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10  165.0 ± 0%  165.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10  173.0 ± 0%  173.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10  630.0 ± 0%  630.0 ± 0%  ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10  638.0 ± 0%  638.0 ± 0%  ~ (p=1.000 n=10) ¹
+WALAppendAsyncParallel-10  24.00 ± 0%  24.00 ± 0%  ~ (p=1.000 n=10) ¹
+WALAppendV2AsyncParallel-10  28.00 ± 0%  28.00 ± 0%  ~ (p=1.000 n=10) ¹
+WALAppendStrict-10  39.00 ± 0%  39.00 ± 0%  ~ (p=1.000 n=10) ¹
+WALAppendStrictParallel-10  24.00 ± 0%  24.00 ± 0%  ~ (p=1.000 n=10) ¹
+geomean  65.25  65.25  +0.00%
+¹ all samples are equal
+
+pkg: pkg/saga
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  sec/op  │  sec/op  vs base  │
+DataEngineStepReservation/new_command-10  2.096m ± 2%  2.670m ± 6%  +27.43% (p=0.000 n=10)
+DataEngineStepReservation/duplicate_active_claim-10  4.231µ ± 9%  4.397µ ± 1%  ~ (p=0.118 n=10)
+NewID-10  15.16n ± 7%
+MemoryStoreApply-10  87.05n ± 3%
+geomean  94.16µ  1.984µ  +15.08%
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  B/op  │  B/op  vs base  │
+DataEngineStepReservation/new_command-10  3.478Mi ± 0%  3.478Mi ± 0%  -0.01% (p=0.000 n=10)
+DataEngineStepReservation/duplicate_active_claim-10  5.285Ki ± 0%  5.285Ki ± 0%  ~ (p=0.269 n=10)
+NewID-10  32.00 ± 0%
+MemoryStoreApply-10  0.000 ± 0%
+geomean  137.2Ki  -0.01%  ¹
+¹ summaries must be >0 to compute geomean
+
+  │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/before.norm.txt │ /private/tmp/claude-502/-Users-whb-roost/e0074892-2d32-4bf4-ac56-9f66d1b9015f/scratchpad/perf-quiet/after.norm.txt │
+  │  allocs/op  │  allocs/op  vs base  │
+DataEngineStepReservation/new_command-10  20.15k ± 0%  20.14k ± 0%  -0.00% (p=0.000 n=10)
+DataEngineStepReservation/duplicate_active_claim-10  97.00 ± 0%  97.00 ± 0%  ~ (p=1.000 n=10) ¹
+NewID-10  1.000 ± 0%
+MemoryStoreApply-10  0.000 ± 0%
+geomean  1.398k  -0.00%  ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

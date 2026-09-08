@@ -37,6 +37,25 @@ codegen `upgrade-compat`：用 v1.11.0 与 v1.12.1 的 roost 生成历史工程 
 
 单项里有 ±12% 的双向波动（`MongoProjectionMatrix/single_cas` +12%、`MongoProjectionConflictMatrix/conflict_10_percent` -24%、`ProjectorWALReplayAckMatrix/ordinary_only` +12%），`ProjectorAdmissionMatrix/async/writers_1` 的分配 +12～16%。代码逐字节相同、只改了包路径，且两轮测量期间机器都在跑 CI 观察与 go 编译，判定为噪声；未发现系统性退化。P6 发版后在安静机器上再各跑一轮归档。
 
+### 4.1 安静机器复测与归因（2026-09-08 晚，Unity 已关，机器无其他负载）
+
+同一套基准，`-count=10`，先跑 kit main（`/tmp/roost-kit-main` 工作树）再跑 core `consolidation`，全文 [P5_benchstat_quiet.txt](P5_benchstat_quiet.txt)。
+
+| 维度 | geomean 变化 |
+| --- | --- |
+| sec/op | +0.31% |
+| B/op | +0.10% |
+| allocs/op | -0.11% |
+
+总体持平，但 nestwal 的 `RecordEncodingMatrix` 一组系统性变慢 +10～33%（置信区间 ±1～3%，p=0.000），分配与字节数完全相同。归因过程：
+
+1. 源码逐文件 diff（去掉 import 路径文本）：nestwal 与其依赖的 core 包（dataengine / entity / nest 自 v1.12.0 起无非测试改动）**完全相同**；依赖版本（mongo-driver、klauspost、x/sys）相同；`-gcflags=-m` 内联决策 1383 条相同。
+2. 交错 A/B（kit main ↔ core，各三轮）：差距稳定复现，排除时序漂移。
+3. 测试二进制：kit 12.4 MB，core 23.5 MB。`go tool nm -size` 显示多出来的是 crypto/TLS、net、nats.go、Mongo SCRAM 的 stringprep 表——**契约包 `core/mongo` / `core/nats` 合入驱动实现后（D2），任何只 import 契约的包都把驱动链接进来**。
+4. `GOGC=off` 下差距消失（±，p=0.39）：多出来的全局表与根对象让每次 GC 标记更贵，分配密集的编码基准因此变慢；这不是编码代码本身的退化。
+
+**结论**：对生产二进制没有影响——游戏服务器本来就链接 Mongo / NATS / Redis 驱动，GC 根集合与收敛前一致；变慢只出现在"只引契约、不引驱动"的二进制（单包测试、工具、极小服务）上。这是 D2"契约与实现同包"的一个此前没量化的代价，记为 **B-26**：若要消除，把四个客户端的驱动实现下沉到子包（`core/mongo/driver` 等），契约包保持轻依赖；这会再改一次 import 路径，**做要在 v1.14.0 发版前做**。
+
 ## 5. 故障矩阵与真实环境
 
 - kit CI `integration` job 在新路径上跑通隔离 Mongo 副本集 + NATS JetStream 集群的 Mod 级集成（dataengine real / failover / toxic、saga、remoteentity、nats JetStream RPC toxic）——这是故障矩阵五切片中依赖 Mod 装配的部分。
@@ -48,8 +67,8 @@ core README / docs 导航 / 用户指南 / 排障 / 技能文档、kit README �
 
 ## 7. 未验证项 / 风险（进 P6 清单）
 
-1. core 侧 Redis toxic 套件未运行（§5）。
-2. 性能在安静机器上的复测（§4）。
+1. ~~core 侧 Redis toxic 套件未运行~~（已补：本机隔离环境全绿，并挂进 kit 环境脚本与 CI integration 作业，kit CI 绿）。
+2. ~~性能在安静机器上的复测~~（已完成，见 §4.1；引出 B-26）。
 3. framework-compat minimum / released lane 与 release-smoke 只能在正式 tag 后验证；发版当天先发 codegen v1.15.0（业务工程要靠它的升级器），再 core v1.14.0、kit v1.13.0，然后去掉三处 Transitional pin 并看全部 lane。
 4. P3b：kit Mod 仍是编排者，`Assemble*` 下沉未做。
 5. roost-skill / roost-service 仓库归档、README 置顶指向。
