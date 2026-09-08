@@ -1,4 +1,4 @@
-package dataengine
+package engine
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-kit/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 type recordingHandler struct {
@@ -133,7 +133,7 @@ func TestOutboxWorkerDoesNotReportShutdownAsAStoreFailure(t *testing.T) {
 // it; store failures — the claim/ack/nack side, i.e. Mongo — were not, even
 // though saga's health line reports both.
 func TestDataEngineHealthMessageReportsStoreFailures(t *testing.T) {
-	message := dataEngineHealthMessage(nestwal.Stats{}, ProjectorStats{}, OutboxWorkerStats{StoreFailures: 7, PublishFailures: 2})
+	message := HealthMessage(nestwal.Stats{}, ProjectorStats{}, OutboxWorkerStats{StoreFailures: 7, PublishFailures: 2})
 	if !strings.Contains(message, "publish_failures=2") || !strings.Contains(message, "store_failures=7") {
 		t.Fatalf("health message %q must report both publish and store failures", message)
 	}
