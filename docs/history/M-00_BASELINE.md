@@ -1,87 +1,60 @@
-# M-00：本机迁移前基线
+# M-00：迁移前基线（合并版，2026-09-08）
 
-状态：本页保留首轮快照；Service 定位与 Skill 对齐已在后续解除，最新结果见 [M-00a 续跑记录](M-00a_SOURCE_HEAD_ALIGNMENT.md)。未执行实现迁移。
-后续提交和当前复核结果见 [09-08 提交复核](COMMIT_REVIEW_2026-09-08.md)。下文的阻塞、源码集合及下一步均为首轮历史状态，不作为当前执行清单。
-关联：[统一方案](../CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)。
+本页把另一台机器上产出的三份记录（首轮基线、M-00a 消费方对齐续跑、09-08 提交复核）合成一份，只保留**可移植的事实**。三份原文保留在同目录（[M-00a](M-00a_SOURCE_HEAD_ALIGNMENT.md)、[提交复核](COMMIT_REVIEW_2026-09-08.md)），开头已标"已合并"；它们里的 `D:/` 路径、`cube-*` 本地目录名、Windows 入口 Go 1.24 与 `go/parser is not in std` 故障属于那台机器的环境，不是仓库状态。
 
-## 1. 环境和源码集合
+执行入口：[收敛方案](../ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)；方法论：[统一实施方案](../CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)。
 
-本机共同父目录：`D:/whb_s`。入口 Go 为 windows/amd64 1.24.0，GOTOOLCHAIN=auto；进入 Core 后自动选用已可用的 Go 1.27.0，未修改全局 Go 配置。
+## 1. 源码集合（origin/main，2026-09-08）
 
-| 模块 | 本地目录 | HEAD |
-| --- | --- | --- |
-| Core | cube-core | 57d4514eef25784753a7aee2882d5ebd0a77babe |
-| Kit | cube-kit | c3426f23d02267e620fc71323f8d446c1bc14ac9 |
-| Skill | cube-skill | 24ac8a9cba17291a76e5641d5dfa73730ec67397 |
-| Codegen | cube-codegen | 16e0c68d848cae5cbfeba047fd7a6a1b8787c837 |
-| Service | 未定位 | 未验证 |
-
-Core 已有 examples/go.mod 的 go 指令修改保留；统一方案及其导航修改也保留。其他三仓执行前后工作树干净。没有 pull、提交、推送或发版。
-
-创建隔离的本地工作区文件 `.roost-refactor-baseline/go.work`（位于共同父目录下，不属于任何框架仓库），仅包含四个已定位模块。通过进程级 `GOWORK=D:/whb_s/.roost-refactor-baseline/go.work` 指定，不创建/覆盖共同父目录 go.work。
-
-Service 搜索范围：当前工作区模块，以及 D:/project、D:/dd、D:/tjbdw、C:/Users/tjbdw 的有限深度同名目录。未找到不等于整台机器不存在。cube、galaxy、planet 的 module 均不是 roost-service，不作替代。
-
-## 2. 实际验证结果
-
-日志位于本机 `D:/whb_s/.roost-refactor-baseline/logs/`，未作为跨机器证据制品提交。
-
-| 操作 | Core | Kit | Skill | Codegen |
+| 模块 | 模块路径 | HEAD | go 指令 | 嵌套模块 |
 | --- | --- | --- | --- | --- |
-| go list -m all | 0 | 0 | 0 | 0 |
-| go build ./... && go vet ./... | 0 | 0 | 1，build 阻塞，vet 未执行 | 0 |
-| go test -count=1 -timeout 90s ./... | 0 | 0 | 1 | 0 |
+| core | github.com/tjbdwanghaibo/roost-core | `03a5709` | 1.27.0 | `examples/`（go 1.27.0，`e4aeef8` 起） |
+| kit | github.com/tjbdwanghaibo/roost-kit | `d674e37` | 1.27.0 | — |
+| skill | github.com/tjbdwanghaibo/roost-skill | `a7dd376` | 1.27.0 | `examples/`、`integration/sync-e2e/`（均 replace 到自身工作树） |
+| service | github.com/tjbdwanghaibo/roost-service | `9f2bb30` | 1.27.0 | `examples/split/` |
+| codegen | github.com/tjbdwanghaibo/roost-codegen | `b11af80` | 1.27.0 | — |
 
-额外：
+最新 tag：core v1.13.0、kit v1.12.6、skill v1.10.3、service v1.5.4、codegen v1.14.0，tag CI 全绿。codegen 清单 `ci/framework-release.yaml` 与之一致。
 
-- Core `go test -count=1 ./entity ./nest ./redis ./mongo`：退出 0。
-- Kit `go test -count=1 ./remoteentity`：退出 0。
-- Kit `go vet -tags integration ./remoteentity && go test -race -count=1 ./remoteentity`：退出 0。
-- 根模块 `./...` 不覆盖嵌套 go.mod（Core examples、Skill examples、Skill integration/sync-e2e）；这些尚未验收。
-- 未运行真实 Mongo/NATS/Redis/etcd 集成、故障矩阵、生成工程真启动或性能测试。
-- PATH 检查只找到 redis-cli 和 gcc，未找到 docker、mongosh、nats-server、etcdctl；不据此推断其他位置没有安装，真实环境待准备。
+模块身份：五仓 go.mod 与全部 Go 文件**没有** `cube-*` 引用。另一台机器记录的 ENV-01（"Skill 仍依赖 cube-core v1.8.0"）是其 Skill 检出停在 `24ac8a9`（09-02）造成的，不是仓库问题；其未推送提交 `fe23185` 作废。
 
-## 3. 当前阻塞，不得伪装成迁移引入的 Bug
+## 2. 依赖事实
 
-### ENV-01：Skill 仍消费不同模块身份
+- core 直接依赖：chi、viper、mongo-driver v2、x/net、x/time、yaml。
+- kit 直接依赖：core、nats.go、go-redis v9、etcd client/api v3、quic-go、kcp-go、viper、mongo-driver。
+- skill 直接依赖：core、mongo-driver；对 kit 仅 2 处测试 import（syncstream）。
+- service 直接依赖：core、kit（versionstore 54 处、mods 34、servicerpc 9、redis 5）、viper。
+- kit 内部 import 图：几乎所有包只依赖 `mods`；`dataengine → nestwal`、`saga → nats, nestwal`、`room / lockstep / robot → nettransport`；测试依赖 `mongo/mongotest`。
+- 15 个 core / kit 同名包（actionflow ai configdata dataengine etcd gateway lock lockstep mongo nats nest redis robot saga syncstream）合并到 core 同名包**不产生 import 环**（逐包按传递依赖核对）。
+- codegen 运行时不 import 其他四仓；模板里以字符串引用 8 个 kit 包路径、`roost-skill/skill`、`roost-service/servicemetrics`。
+- codegen 生成流程内部 `GOWORK=off` 是刻意的（生成工程必须可发布、不带 replace）。source-head 验证由 codegen 的 `framework-compat` 工作流承担：生成工程 → 临时 go.work 挂 core / kit / skill 源码 → 编译测试 → 校验无 replace → dev compose 真实启动；每日 03:17 与 push 触发，可指定三仓 ref。
 
-Skill 根 module 名虽为 roost-skill，但 go.mod 仍 require cube-core v1.8.0；combatcomponent、skillsync 及嵌套 examples/integration 中仍有 cube-core/cube-kit import。外层 workspace 的 roost-core 不会替换另一个模块身份的 cube-core。
+## 3. 本机（macOS）与 CI 的验证结果
 
-当前 build 直接失败：`no required module provides package github.com/tjbdwanghaibo/cube-core/dataengine`。skillsync 测试虽绿，不能证明它消费的是当前 Roost Core。这不是一处 import 的孤立问题，不能添加旧模块依赖来让它假绿。
+| 项 | 结果 |
+| --- | --- |
+| 五仓 main CI（Linux） | 上述 HEAD 全绿 |
+| core `TestCoreDependencyBoundary`（`4757b10` 引入，AST 扫根模块全部 Go 文件含测试与非当前 build tag，禁 kit / skill / service / codegen / cube-*） | 本机 macOS 通过；Linux CI 通过 |
+| 五仓 nightly-gapmap（09-07 03:30，max=20） | core 197/382、kit 191/358、service 116/204、skill 35/83、codegen 36/175 无覆盖/采样；09-08 起采样器跳过 `*_gen.go` |
+| 真实 Mongo / NATS / Redis / etcd 故障矩阵 | 五个 toxiproxy 切片存在（kit `scripts/integration`，账本第 8 节），本轮未重跑 |
+| 生成工程真实启动 | 由 `framework-compat` 每日跑，最近一次绿 |
+| 性能基线 | 未采集；收敛方案 P5 要求迁移前后同机对比，迁移前那一轮在 P1 前采 |
 
-下一处理：独立的消费方对齐子批，枚举根模块与嵌套模块的 import/API 差异，统一到当前 Roost 依赖，运行测试并验证 go list 的实际解析。属于 M 前置结构调整，不混入单包 U 修复。
+另一台机器上 Windows 工具链 `go/parser is not in std` 的失败是环境问题，不作为任何模块的阻塞记录。
 
-### ENV-02：Service source-head 未定位
+## 4. 在途改动的处置（与收敛方案 §6 一致）
 
-需提供或准备真实 Service 工作树；没有它，不能完成五仓基线及生成 game 模板的服务消费验收。未自动 clone 未确认的仓库。
+- 统一实施方案：方法论沿用；架构边界按收敛方案改写；M 编号保留并映射到 P2 ①～⑨。
+- `TestCoreDependencyBoundary`：保留，P1 改规则（不再禁 skill / service）。
+- `fe23185`：不推送。
+- TOOL-01：非问题。
+- mongotest 归属：P2 ② 迁入 core。
+- B-25：已完成（五仓采样器跳过 `*_gen.go`）。
+- U / B / T 编号继续；矩阵不因搬迁改格。
 
-### TOOL-01：Codegen 内部关闭 workspace
+## 5. 未验证项（进入 P5 前必须补）
 
-`internal/roost/dependencies.go`：`runDependencyCommand` 显式设置 GOWORK=off；依赖更新调用 go get 查询版本，随后 tidy。普通生成也可调用此 tidy 路径。外部四仓测试成功不代表生成流程已使用本地 source-head。
-
-下一处理：在 M-01 设计明确的 dev 解析通路及生成测试，不直接删除发布隔离。还需检查生成器子进程、临时工程、Makefile、go tool 调用的完整上下文。
-
-## 4. 首批静态依赖发现
-
-| 能力 | 当前 Kit 内部依赖 | 迁移前处理 |
-| --- | --- | --- |
-| remoteentity 生产实现 | remote_entity_mod.go → kit/mods；其余本次 import 扫描主要依赖 Core | Mod 留 Kit；公共构造及生命周期接口待设计 |
-| remoteentity 单测 | mongo_committer_test.go → kit/mongo/mongotest | 先解决严格测试支撑归属，禁止 Core 测试反向依赖 Kit |
-| remoteentity 集成 | mongo_committer_integration_test.go → kit/mongo | 拆 Core 存储集成与 Kit 装配测试 |
-| dataengine | runtime/projector/mod → kit/nestwal；mod → kit/mods | WAL 先行，Mod 留 Kit；测试也有 mongotest 依赖 |
-| saga | command_consumer/jetstream/nest_start_consumer → kit/nats；nest_start_consumer → kit/nestwal | 客户端或必要能力子批前移，不能机械搬文件 |
-
-这只是 import 级初扫，尚不是全部函数、锁或行为审计；Core 全量依赖边界（含测试标签）需在 M-01 加可执行检查。
-
-## 5. 历史工作的使用方式
-
-已完整阅读 ledger 与 HANDOFF。保留原 U/B/T 状态，不将本次基线编译等同于 C1–C8 审计完成，也不更新任何格子的“已审”。本机历史修复是否齐全须按对应测试与当前文件继续核对，不能仅凭交接中的提交/tag 结论。
-
-## 6. 下一步
-
-1. 定位 Service 工作树；准备真实依赖环境。
-2. 开消费方依赖对齐子批修正 ENV-01，先审查全部旧模块引用，不引入兼容 alias。
-3. 重跑五仓及嵌套模块基线。
-4. 完成 Codegen dev 解析设计后再进入 M-01/M-02。
-
-停止点：M-00 尚未通过，不移动 Remote Entity，不对外宣称五仓全绿。
+- 迁移前性能基线（P1 前采）。
+- 故障矩阵五切片在新路径上的重跑（P3 门禁）。
+- `framework-compat` 对 `consolidation` 分支 / alpha 的运行（P4 门禁）。
+- 生成工程 `roost upgrade --consolidate` 的端到端（P4 门禁）。

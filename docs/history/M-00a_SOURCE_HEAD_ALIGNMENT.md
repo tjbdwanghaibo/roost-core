@@ -1,5 +1,7 @@
 # M-00a：消费方对齐与五仓基线续跑
 
+> **已合并**：可移植的事实已并入 [M-00_BASELINE.md](M-00_BASELINE.md)（合并版）；本页保留原文，其中的机器路径、目录名与 Windows 工具链故障不是仓库状态。ENV-01 系另一机器 Skill 检出过期所致，`fe23185` 作废。
+
 关联：[M-00 初轮](M-00_BASELINE.md)、[统一方案](../CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)。
 
 > 本页保留 M-00a 执行时的结果。后续 Core `4757b10` 已提交边界保护及本记录，`e4aeef8` 已提交 examples 的 Go 版本修改；当前提交集合与本次复跑限制见 [09-08 提交复核](COMMIT_REVIEW_2026-09-08.md)。下文“未提交”仅指当时状态。

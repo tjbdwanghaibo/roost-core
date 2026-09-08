@@ -1,5 +1,7 @@
 # 2026-09-08：五仓最近提交与实施状态复核
 
+> **已合并**：可移植的事实已并入 [M-00_BASELINE.md](M-00_BASELINE.md)（合并版）；本页保留原文，其中的机器路径、目录名与 Windows 工具链故障不是仓库状态。ENV-01 系另一机器 Skill 检出过期所致，`fe23185` 作废。
+
 关联：[统一实施方案](../CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)、[M-00a](M-00a_SOURCE_HEAD_ALIGNMENT.md)、[缺陷账本](ledger.md)。
 
 本次读取本地五仓最近各 6 次提交、变更文件及相关源码，核对 M-00a 文档、外部 workspace 和已有日志。未 pull、未查询远端 CI、未推送或发布；本次交付仅为文档更新。以下 HEAD 为编辑前快照，五仓当时工作树均干净。
