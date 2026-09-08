@@ -3,11 +3,9 @@ package saga
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	"testing"
 	"time"
-
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
 // U-0092 (C2): the step consumers mirror the Nest-start consumer's refusals
@@ -25,9 +23,9 @@ func TestSubscribeMongoStepRefusesEachUnsafeConfig(t *testing.T) {
 		{"topic with wildcard", func(c *StepConsumerConfig) { c.Topic = "reserve.>" }, "invalid step consumer configuration"},
 		{"max deliver above broker cap", func(c *StepConsumerConfig) { c.MaxDeliver = 1_000_001 }, "unsafe step consumer limits"},
 		{"max ack pending above broker cap", func(c *StepConsumerConfig) { c.MaxAckPending = 65_537 }, "unsafe step consumer limits"},
-		{"nak backoff above a day", func(c *StepConsumerConfig) { c.NakBackoffMin, c.NakBackoffMax = time.Second, 25 * time.Hour }, "unsafe step consumer limits"},
+		{"nak backoff above a day", func(c *StepConsumerConfig) { c.NakBackoffMin, c.NakBackoffMax = time.Second, 25*time.Hour }, "unsafe step consumer limits"},
 	}
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) { return coresaga.Completion{}, nil }
+	handler := func(context.Context, Command) (Completion, error) { return Completion{}, nil }
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &startJetStream{}
@@ -42,7 +40,7 @@ func TestSubscribeMongoStepRefusesEachUnsafeConfig(t *testing.T) {
 			cfg := valid
 			tc.mutate(&cfg)
 			_, err = SubscribeMongoStep(context.Background(), client, transport, inbox, cfg, handler)
-			expectErr(t, err, tc.want)
+			expectKitErr(t, err, tc.want)
 			if client.handler != nil {
 				t.Fatal("a refused config must not subscribe")
 			}
@@ -69,7 +67,7 @@ func TestSubscribeMongoStepRefusesEachUnsafeConfig(t *testing.T) {
 			return err
 		},
 	} {
-		t.Run(name, func(t *testing.T) { expectErr(t, call(), "invalid step consumer configuration") })
+		t.Run(name, func(t *testing.T) { expectKitErr(t, call(), "invalid step consumer configuration") })
 	}
 	if _, err := SubscribeMongoStep(context.Background(), client, transport, inbox, valid, handler); err != nil {
 		t.Fatalf("valid config refused: %v", err)
@@ -85,7 +83,7 @@ func TestSubscribeDataEngineStepRefusesEachUnsafeConfig(t *testing.T) {
 		}
 		return inbox
 	}
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) { return coresaga.Completion{}, nil }
+	handler := func(context.Context, Command) (Completion, error) { return Completion{}, nil }
 	cases := []struct {
 		name   string
 		mutate func(*StepConsumerConfig)
@@ -103,7 +101,7 @@ func TestSubscribeDataEngineStepRefusesEachUnsafeConfig(t *testing.T) {
 			cfg := valid
 			tc.mutate(&cfg)
 			_, err := SubscribeDataEngineStep(context.Background(), client, transport, newInbox(t), cfg, handler)
-			expectErr(t, err, tc.want)
+			expectKitErr(t, err, tc.want)
 			if client.handler != nil {
 				t.Fatal("a refused config must not subscribe")
 			}
@@ -136,11 +134,11 @@ func TestMongoCommandInboxReplayRefusesForeignReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) {
-		return coresaga.Completion{Success: true, Data: []byte("ok")}, nil
+	handler := func(context.Context, Command) (Completion, error) {
+		return Completion{Success: true, Data: []byte("ok")}, nil
 	}
 	now := time.Now()
-	command := coresaga.Command{ID: "one", IdempotencyKey: "op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-3", Step: 0, StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("a"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
+	command := Command{ID: "one", IdempotencyKey: "op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-3", Step: 0, StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("a"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
 	if _, _, err := inbox.Handle(context.Background(), command, handler); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +148,7 @@ func TestMongoCommandInboxReplayRefusesForeignReceipt(t *testing.T) {
 	}
 	foreign := command
 	foreign.Payload = []byte("different")
-	if _, _, err := inbox.Replay(context.Background(), foreign); !errors.Is(err, coresaga.ErrIdentityConflict) {
+	if _, _, err := inbox.Replay(context.Background(), foreign); !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("replay with a foreign digest err = %v, want ErrIdentityConflict", err)
 	}
 	unknown := command
@@ -159,10 +157,10 @@ func TestMongoCommandInboxReplayRefusesForeignReceipt(t *testing.T) {
 		t.Fatalf("replay of an unknown command = %v, %v; want not found without error", found, err)
 	}
 	var nilInbox *MongoCommandInbox
-	if _, _, err := nilInbox.Replay(context.Background(), command); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, _, err := nilInbox.Replay(context.Background(), command); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("nil inbox replay err = %v", err)
 	}
-	if _, _, err := nilInbox.Handle(context.Background(), command, handler); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, _, err := nilInbox.Handle(context.Background(), command, handler); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("nil inbox handle err = %v", err)
 	}
 }

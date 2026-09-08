@@ -9,9 +9,8 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
-	"github.com/tjbdwanghaibo/roost-kit/nestwal"
+	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 // NestStartConsumerConfig configures the shared durable consumer which turns
@@ -30,7 +29,7 @@ type NestStartConsumerConfig struct {
 }
 
 type Starter interface {
-	StartSaga(context.Context, coresaga.StartRequest) (coresaga.Record, error)
+	StartSaga(context.Context, StartRequest) (Record, error)
 }
 
 func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config NestStartConsumerConfig, starter Starter) (fnats.IJetStreamSubscription, error) {
@@ -68,7 +67,7 @@ func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config Ne
 		Stream:        config.Stream,
 		Name:          config.Durable,
 		Durable:       config.Durable,
-		FilterSubject: config.EffectPrefix + "." + coresaga.StartEffectTopic,
+		FilterSubject: config.EffectPrefix + "." + StartEffectTopic,
 		DeliverPolicy: fnats.JetStreamDeliverAll,
 		AckWait:       config.AckWait,
 		MaxDeliver:    config.MaxDeliver,
@@ -88,19 +87,19 @@ func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config Ne
 
 func handleNestStart(ctx context.Context, message *fnats.JetStreamMsg, starter Starter) error {
 	if message == nil || starter == nil {
-		return kitnats.Permanent(coresaga.ErrInvalidRecord)
+		return kitnats.Permanent(ErrInvalidRecord)
 	}
 	if len(message.Data) > maxWireEnvelopeBytes {
-		return kitnats.Permanent(coresaga.ErrInvalidRecord)
+		return kitnats.Permanent(ErrInvalidRecord)
 	}
 	var envelope nestwal.EffectEnvelope
 	if err := json.Unmarshal(message.Data, &envelope); err != nil {
 		return kitnats.Permanent(err)
 	}
-	if envelope.EffectID == "" || envelope.Topic != coresaga.StartEffectTopic {
-		return kitnats.Permanent(coresaga.ErrInvalidRecord)
+	if envelope.EffectID == "" || envelope.Topic != StartEffectTopic {
+		return kitnats.Permanent(ErrInvalidRecord)
 	}
-	request, err := coresaga.DecodeStartEffect(envelope.Payload)
+	request, err := DecodeStartEffect(envelope.Payload)
 	if err != nil {
 		return kitnats.Permanent(err)
 	}
@@ -108,7 +107,7 @@ func handleNestStart(ctx context.Context, message *fnats.JetStreamMsg, starter S
 	return err
 }
 
-var _ Starter = (*coresaga.Engine)(nil)
+var _ Starter = (*Engine)(nil)
 
 func logConsumerError(kind string, message *fnats.JetStreamMsg, err error) {
 	if message == nil {

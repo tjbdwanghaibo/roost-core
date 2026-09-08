@@ -3,12 +3,10 @@ package saga
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 )
 
 func TestMongoCommandInboxExecutesStepOnceForMessageRedelivery(t *testing.T) {
@@ -18,12 +16,12 @@ func TestMongoCommandInboxExecutesStepOnceForMessageRedelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int32
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) {
+	handler := func(context.Context, Command) (Completion, error) {
 		calls.Add(1)
-		return coresaga.Completion{Success: true, Data: []byte("reserved")}, nil
+		return Completion{Success: true, Data: []byte("reserved")}, nil
 	}
 	now := time.Now()
-	command := coresaga.Command{ID: "delivery-1", IdempotencyKey: "saga:forward:0", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Step: 0, StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("input"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
+	command := Command{ID: "delivery-1", IdempotencyKey: "saga:forward:0", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Step: 0, StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("input"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
 	first, duplicate, err := inbox.Handle(context.Background(), command, handler)
 	if err != nil {
 		t.Fatal(err)
@@ -47,15 +45,15 @@ func TestMongoCommandInboxAllowsNewSagaAttempt(t *testing.T) {
 	client := newInboxMongoFake()
 	inbox, _ := NewMongoCommandInbox(client, "game", "")
 	var calls atomic.Int32
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) {
+	handler := func(context.Context, Command) (Completion, error) {
 		attempt := calls.Add(1)
 		if attempt == 1 {
-			return coresaga.Completion{Retryable: true, Error: "busy"}, nil
+			return Completion{Retryable: true, Error: "busy"}, nil
 		}
-		return coresaga.Completion{Success: true}, nil
+		return Completion{Success: true}, nil
 	}
 	now := time.Now()
-	command := coresaga.Command{ID: "attempt-1", IdempotencyKey: "stable-op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-2", Step: 0, StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "reserve", CreatedAt: now, DeadlineAt: now.Add(time.Second)}
+	command := Command{ID: "attempt-1", IdempotencyKey: "stable-op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-2", Step: 0, StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "reserve", CreatedAt: now, DeadlineAt: now.Add(time.Second)}
 	first, _, err := inbox.Handle(context.Background(), command, handler)
 	if err != nil || !first.Retryable {
 		t.Fatalf("first=%+v err=%v", first, err)
@@ -74,22 +72,22 @@ func TestMongoCommandInboxAllowsNewSagaAttempt(t *testing.T) {
 func TestMongoCommandInboxRejectsCommandIDReuse(t *testing.T) {
 	client := newInboxMongoFake()
 	inbox, _ := NewMongoCommandInbox(client, "game", "")
-	handler := func(context.Context, coresaga.Command) (coresaga.Completion, error) {
-		return coresaga.Completion{Success: true}, nil
+	handler := func(context.Context, Command) (Completion, error) {
+		return Completion{Success: true}, nil
 	}
 	now := time.Now()
-	command := coresaga.Command{ID: "one", IdempotencyKey: "op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-3", Step: 0, StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("a"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
+	command := Command{ID: "one", IdempotencyKey: "op", SagaID: "saga", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-3", Step: 0, StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "reserve", Payload: []byte("a"), CreatedAt: now, DeadlineAt: now.Add(time.Second)}
 	if _, _, err := inbox.Handle(context.Background(), command, handler); err != nil {
 		t.Fatal(err)
 	}
 	command.Payload = []byte("different")
-	if _, _, err := inbox.Handle(context.Background(), command, handler); !errors.Is(err, coresaga.ErrIdentityConflict) {
+	if _, _, err := inbox.Handle(context.Background(), command, handler); !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestStorageDigestsUseStableOperationIdentity(t *testing.T) {
-	one := coresaga.Completion{CommandID: "delivery-1", IdempotencyKey: "op", SagaID: "saga", Success: true, Data: []byte("x"), CompletedAt: time.Now()}
+	one := Completion{CommandID: "delivery-1", IdempotencyKey: "op", SagaID: "saga", Success: true, Data: []byte("x"), CompletedAt: time.Now()}
 	two := one
 	two.CompletedAt = two.CompletedAt.Add(time.Hour)
 	if string(completionDigest(one)) != string(completionDigest(two)) {

@@ -9,17 +9,16 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func dataEngineCommand(id, operation string, payload string) coresaga.Command {
+func dataEngineCommand(id, operation string, payload string) Command {
 	now := time.Now().UTC()
-	return coresaga.Command{
+	return Command{
 		ID: id, IdempotencyKey: operation, SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1,
-		BusinessKey: "r-1", StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1,
+		BusinessKey: "r-1", StepName: "reserve", Phase: PhaseForward, Attempt: 1,
 		Topic: "rally.reserve", Payload: []byte(payload), CreatedAt: now, DeadlineAt: now.Add(time.Minute),
 	}
 }
@@ -96,7 +95,7 @@ func TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt(t *testin
 	}
 	conflict := command
 	conflict.Payload = []byte("different")
-	if _, err := inbox.Reserve(context.Background(), conflict); !errors.Is(err, coresaga.ErrIdentityConflict) {
+	if _, err := inbox.Reserve(context.Background(), conflict); !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("conflict err=%v", err)
 	}
 	newAttempt := command
@@ -114,8 +113,8 @@ func TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim(t *test
 	if _, err := inbox.Reserve(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	completion := coresaga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: time.Now().UTC()}
-	effect, _ := coresaga.NewCompletionEffect(completion)
+	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: time.Now().UTC()}
+	effect, _ := NewCompletionEffect(completion)
 	if err := inboxReceipts(client).Seed(dataEngineReceipt{
 		ID: dataEngineStepNamespace + "/" + command.ID, Digest: commandDigest(command), Payload: effect.Payload,
 	}); err != nil {
@@ -236,7 +235,7 @@ func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
 
 	// A completed claim must stop matching: the status value is shared with
 	// the projector precisely so this transition is respected.
-	completion := coresaga.Completion{
+	completion := Completion{
 		CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID,
 		Success: true, CompletedAt: now,
 	}

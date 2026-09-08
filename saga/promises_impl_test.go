@@ -9,11 +9,10 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
-func expectErr(t *testing.T, err error, want string) {
+func expectKitErr(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %v, want it to contain %q", err, want)
@@ -44,7 +43,7 @@ func TestSubscribeNestStartsRefusesEachUnsafeConfig(t *testing.T) {
 			cfg := valid
 			tc.mutate(&cfg)
 			_, err := SubscribeNestStarts(context.Background(), client, cfg, &startCapture{})
-			expectErr(t, err, tc.want)
+			expectKitErr(t, err, tc.want)
 			if client.handler != nil {
 				t.Fatal("a refused config must not subscribe")
 			}
@@ -60,8 +59,8 @@ func TestSubscribeNestStartsRefusesEachUnsafeConfig(t *testing.T) {
 // never a command handed to a step handler.
 func TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes(t *testing.T) {
 	now := time.Now()
-	good := coresaga.Command{ID: "c-1", IdempotencyKey: "k-1", SagaID: "s", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "b", StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "rally.reserve", DeadlineAt: now.Add(time.Second), CreatedAt: now}
-	encode := func(t *testing.T, version uint16, command coresaga.Command) []byte {
+	good := Command{ID: "c-1", IdempotencyKey: "k-1", SagaID: "s", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "b", StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "rally.reserve", DeadlineAt: now.Add(time.Second), CreatedAt: now}
+	encode := func(t *testing.T, version uint16, command Command) []byte {
 		t.Helper()
 		raw, err := json.Marshal(commandEnvelope{Version: version, Command: command})
 		if err != nil {
@@ -69,21 +68,21 @@ func TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes(t *testing.
 		}
 		return raw
 	}
-	if got, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, coresaga.WireVersion, good)}); err != nil || got.ID != "c-1" {
+	if got, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, WireVersion, good)}); err != nil || got.ID != "c-1" {
 		t.Fatalf("valid envelope: %+v, %v", got, err)
 	}
-	if _, err := decodeStepCommand(nil); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, err := decodeStepCommand(nil); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("nil message = %v", err)
 	}
-	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: make([]byte, maxWireEnvelopeBytes+1)}); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: make([]byte, maxWireEnvelopeBytes+1)}); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("oversized frame = %v", err)
 	}
-	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, coresaga.WireVersion+1, good)}); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, WireVersion+1, good)}); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("foreign wire version = %v", err)
 	}
 	broken := good
 	broken.Attempt = 0
-	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, coresaga.WireVersion, broken)}); !errors.Is(err, coresaga.ErrInvalidRecord) {
+	if _, err := decodeStepCommand(&fnats.JetStreamMsg{Data: encode(t, WireVersion, broken)}); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("invalid command = %v", err)
 	}
 }
@@ -102,15 +101,15 @@ func TestHandleNestStartRefusesEachMalformedEnvelopePermanently(t *testing.T) {
 	}
 	// A start payload that would be accepted on its own, so that only the
 	// envelope-level rule under test can be the reason for the refusal.
-	effect, err := coresaga.NewStartEffect(coresaga.StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-9"})
+	effect, err := NewStartEffect(StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := map[string][]byte{
 		"oversized frame":   make([]byte, maxWireEnvelopeBytes+1),
-		"missing effect id": encode(t, nestwal.EffectEnvelope{Topic: coresaga.StartEffectTopic, Payload: effect.Payload}),
+		"missing effect id": encode(t, nestwal.EffectEnvelope{Topic: StartEffectTopic, Payload: effect.Payload}),
 		"foreign topic":     encode(t, nestwal.EffectEnvelope{EffectID: effect.ID, Topic: "other", Payload: effect.Payload}),
-		"undecodable start": encode(t, nestwal.EffectEnvelope{EffectID: effect.ID, Topic: coresaga.StartEffectTopic, Payload: []byte(`{"version":99}`)}),
+		"undecodable start": encode(t, nestwal.EffectEnvelope{EffectID: effect.ID, Topic: StartEffectTopic, Payload: []byte(`{"version":99}`)}),
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -140,6 +139,6 @@ func TestMongoCommandInboxRefusesUnrepresentableReceiptTTL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectErr(t, inbox.EnsureInfrastructure(context.Background()), "invalid receipt ttl")
+		expectKitErr(t, inbox.EnsureInfrastructure(context.Background()), "invalid receipt ttl")
 	}
 }

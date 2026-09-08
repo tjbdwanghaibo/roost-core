@@ -7,17 +7,16 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 type startCapture struct {
-	requests []coresaga.StartRequest
+	requests []StartRequest
 }
 
-func (s *startCapture) StartSaga(_ context.Context, request coresaga.StartRequest) (coresaga.Record, error) {
+func (s *startCapture) StartSaga(_ context.Context, request StartRequest) (Record, error) {
 	s.requests = append(s.requests, request)
-	return coresaga.Record{}, nil
+	return Record{}, nil
 }
 
 type startJetStream struct {
@@ -59,7 +58,7 @@ func TestSubscribeNestStartsUsesSharedDurableAndDecodesIntent(t *testing.T) {
 	if client.config.FilterSubject != "roost.effect.saga.start" || client.config.Durable != "game-saga-start" || client.config.MaxAckPending != 256 || client.config.MaxDeliver != 25_000 || client.config.NakBackoffMin <= 0 {
 		t.Fatalf("consumer config=%+v", client.config)
 	}
-	effect, err := coresaga.NewStartEffect(coresaga.StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Data: []byte("state")})
+	effect, err := NewStartEffect(StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Data: []byte("state")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +92,7 @@ func TestJetStreamPublisherUsesVersionedEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	command := coresaga.Command{ID: "s:1:0:1", IdempotencyKey: "s:1:0", SagaID: "s", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Step: 0, StepName: "reserve", Phase: coresaga.PhaseForward, Attempt: 1, Topic: "rally.reserve", DeadlineAt: now.Add(time.Second), CreatedAt: now}
+	command := Command{ID: "s:1:0:1", IdempotencyKey: "s:1:0", SagaID: "s", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Step: 0, StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "rally.reserve", DeadlineAt: now.Add(time.Second), CreatedAt: now}
 	if err := publisher.PublishSagaCommand(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +100,7 @@ func TestJetStreamPublisherUsesVersionedEnvelope(t *testing.T) {
 	if err := json.Unmarshal(client.data, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Version != coresaga.WireVersion || envelope.Command.ID != command.ID || client.msgID != command.ID || client.subject != "roost.saga.command.rally.reserve" {
+	if envelope.Version != WireVersion || envelope.Command.ID != command.ID || client.msgID != command.ID || client.subject != "roost.saga.command.rally.reserve" {
 		t.Fatalf("envelope=%+v subject=%s msgID=%s", envelope, client.subject, client.msgID)
 	}
 }

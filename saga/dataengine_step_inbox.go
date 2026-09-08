@@ -9,7 +9,6 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -40,7 +39,7 @@ type DataEngineStepInbox struct {
 type Reservation struct {
 	Token      uint64
 	Duplicate  bool
-	Completion coresaga.Completion
+	Completion Completion
 	commandID  string
 	owner      string
 	digest     []byte
@@ -102,7 +101,7 @@ func NewDataEngineStepInbox(client fmongo.IMongo, database string, options DataE
 
 func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) error {
 	if inbox == nil || inbox.client == nil {
-		return coresaga.ErrInvalidRecord
+		return ErrInvalidRecord
 	}
 	return inbox.claims().EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_expired"},
@@ -113,9 +112,9 @@ func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) erro
 
 // Bind is called from inside the native Nest handler. The inbox owns the
 // validated receipt retention policy; core Saga only binds the supplied time.
-func (inbox *DataEngineStepInbox) Bind(command coresaga.Command, reservations ...Reservation) error {
+func (inbox *DataEngineStepInbox) Bind(command Command, reservations ...Reservation) error {
 	if inbox == nil || inbox.options.ReceiptTTL <= 0 {
-		return coresaga.ErrInvalidRecord
+		return ErrInvalidRecord
 	}
 	if len(reservations) != 1 || reservations[0].Token == 0 || reservations[0].Duplicate {
 		return fmt.Errorf("saga dataengine inbox: an active reservation is required")
@@ -130,12 +129,12 @@ func (inbox *DataEngineStepInbox) Bind(command coresaga.Command, reservations ..
 		DocumentID: dataEngineStepNamespace + "/" + command.ID,
 		Owner:      reservation.owner, Token: reservation.Token, Digest: append([]byte(nil), digest...),
 	}
-	return coresaga.BindCommand(command, inbox.now().UTC().Add(inbox.options.ReceiptTTL), fence)
+	return BindCommand(command, inbox.now().UTC().Add(inbox.options.ReceiptTTL), fence)
 }
 
-func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command coresaga.Command) (Reservation, error) {
+func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command Command) (Reservation, error) {
 	if inbox == nil || inbox.client == nil {
-		return Reservation{}, coresaga.ErrInvalidRecord
+		return Reservation{}, ErrInvalidRecord
 	}
 	if err := command.Validate(); err != nil {
 		return Reservation{}, err
@@ -191,14 +190,14 @@ func (inbox *DataEngineStepInbox) reserveInTransaction(ctx context.Context, comm
 		return Reservation{}, err
 	}
 	if !bytes.Equal(claim.Digest, digest) {
-		return Reservation{}, coresaga.ErrIdentityConflict
+		return Reservation{}, ErrIdentityConflict
 	}
 	if claim.Status == claimStatusCompleted {
-		completion, err := coresaga.DecodeCompletionEffect(claim.Completion)
+		completion, err := DecodeCompletionEffect(claim.Completion)
 		return Reservation{Token: claim.LeaseToken, Duplicate: true, Completion: completion}, err
 	}
 	if claim.Status != claimStatusPending {
-		return Reservation{}, coresaga.ErrConflict
+		return Reservation{}, ErrConflict
 	}
 	if claim.LeaseUntil.After(now) {
 		return Reservation{Token: claim.LeaseToken, Duplicate: true}, nil
@@ -222,44 +221,44 @@ func (inbox *DataEngineStepInbox) activeReservation(commandID string, digest []b
 	}
 }
 
-func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command coresaga.Command) (coresaga.Completion, bool, error) {
+func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command Command) (Completion, bool, error) {
 	if inbox == nil || inbox.client == nil {
-		return coresaga.Completion{}, false, coresaga.ErrInvalidRecord
+		return Completion{}, false, ErrInvalidRecord
 	}
 	if err := command.Validate(); err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	completion, found, err := inbox.readReceipt(ctx, command.ID, commandDigest(command))
 	if err != nil || !found {
 		return completion, found, err
 	}
 	if err := inbox.markCompleted(ctx, command.ID, completion); err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	return completion, true, nil
 }
 
-func (inbox *DataEngineStepInbox) readReceipt(ctx context.Context, commandID string, digest []byte) (coresaga.Completion, bool, error) {
+func (inbox *DataEngineStepInbox) readReceipt(ctx context.Context, commandID string, digest []byte) (Completion, bool, error) {
 	var receipt dataEngineReceipt
 	err := inbox.receipts().FindOne(ctx, bson.M{"_id": dataEngineStepNamespace + "/" + commandID}, &receipt)
 	if errors.Is(err, fmongo.ErrNotFound) {
-		return coresaga.Completion{}, false, nil
+		return Completion{}, false, nil
 	}
 	if err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	if !bytes.Equal(receipt.Digest, digest) {
-		return coresaga.Completion{}, false, coresaga.ErrIdentityConflict
+		return Completion{}, false, ErrIdentityConflict
 	}
-	completion, err := coresaga.DecodeCompletionEffect(receipt.Payload)
+	completion, err := DecodeCompletionEffect(receipt.Payload)
 	if err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	return completion, true, nil
 }
 
-func (inbox *DataEngineStepInbox) markCompleted(ctx context.Context, commandID string, completion coresaga.Completion) error {
-	effect, err := coresaga.NewCompletionEffect(completion)
+func (inbox *DataEngineStepInbox) markCompleted(ctx context.Context, commandID string, completion Completion) error {
+	effect, err := NewCompletionEffect(completion)
 	if err != nil {
 		return err
 	}
@@ -279,7 +278,7 @@ func (inbox *DataEngineStepInbox) markCompleted(ctx context.Context, commandID s
 	return nil
 }
 
-func (inbox *DataEngineStepInbox) waitReplay(ctx context.Context, command coresaga.Command) (coresaga.Completion, error) {
+func (inbox *DataEngineStepInbox) waitReplay(ctx context.Context, command Command) (Completion, error) {
 	ticker := time.NewTicker(inbox.options.PollInterval)
 	defer ticker.Stop()
 	for {
@@ -289,7 +288,7 @@ func (inbox *DataEngineStepInbox) waitReplay(ctx context.Context, command coresa
 		}
 		select {
 		case <-ctx.Done():
-			return coresaga.Completion{}, ctx.Err()
+			return Completion{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}

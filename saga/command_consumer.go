@@ -12,8 +12,7 @@ import (
 
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
+	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -21,7 +20,7 @@ import (
 // MongoDB through the supplied context. Network calls and other irreversible
 // side effects must be emitted through a transactional outbox because the
 // MongoDB driver is allowed to invoke a transaction callback again.
-type StepHandler func(context.Context, coresaga.Command) (coresaga.Completion, error)
+type StepHandler func(context.Context, Command) (Completion, error)
 
 type MongoCommandInbox struct {
 	client               fmongo.IMongo
@@ -55,20 +54,20 @@ func (i *MongoCommandInbox) EnsureInfrastructure(ctx context.Context) error {
 	return i.collectionRef().EnsureIndexes(ctx, []fmongo.IndexModel{{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: int32(ttl)}})
 }
 
-func (i *MongoCommandInbox) Handle(ctx context.Context, command coresaga.Command, handler StepHandler) (coresaga.Completion, bool, error) {
+func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler StepHandler) (Completion, bool, error) {
 	if i == nil || i.client == nil || handler == nil {
-		return coresaga.Completion{}, false, coresaga.ErrInvalidRecord
+		return Completion{}, false, ErrInvalidRecord
 	}
 	if err := command.Validate(); err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	digest := commandDigest(command)
 	session, err := i.client.StartSession(ctx)
 	if err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	defer session.EndSession(ctx)
-	var completion coresaga.Completion
+	var completion Completion
 	duplicate := false
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
 		duplicate = false
@@ -76,7 +75,7 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command coresaga.Command
 		findErr := i.collectionRef().FindOne(txCtx, bson.M{"_id": command.ID}, &receipt)
 		if findErr == nil {
 			if !bytes.Equal(receipt.Digest, digest) {
-				return coresaga.ErrIdentityConflict
+				return ErrIdentityConflict
 			}
 			if err := json.Unmarshal(receipt.Completion, &completion); err != nil {
 				return err
@@ -120,7 +119,7 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command coresaga.Command
 			return updateErr
 		}
 		if updated == nil || updated.MatchedCount != 1 {
-			return coresaga.ErrConflict
+			return ErrConflict
 		}
 		return nil
 	})
@@ -134,24 +133,24 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command coresaga.Command
 		}
 	}
 	if err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	// A redelivery has a new delivery ID but the same idempotent operation.
 	completion.CommandID = command.ID
 	return completion, duplicate, nil
 }
 
-func (i *MongoCommandInbox) readReceipt(ctx context.Context, commandID string, digest []byte) (coresaga.Completion, error) {
+func (i *MongoCommandInbox) readReceipt(ctx context.Context, commandID string, digest []byte) (Completion, error) {
 	var receipt commandReceiptDoc
 	if err := i.collectionRef().FindOne(ctx, bson.M{"_id": commandID}, &receipt); err != nil {
-		return coresaga.Completion{}, err
+		return Completion{}, err
 	}
 	if !bytes.Equal(receipt.Digest, digest) || len(receipt.Completion) == 0 {
-		return coresaga.Completion{}, coresaga.ErrIdentityConflict
+		return Completion{}, ErrIdentityConflict
 	}
-	var completion coresaga.Completion
+	var completion Completion
 	if err := json.Unmarshal(receipt.Completion, &completion); err != nil {
-		return coresaga.Completion{}, err
+		return Completion{}, err
 	}
 	return completion, nil
 }
@@ -159,16 +158,16 @@ func (i *MongoCommandInbox) readReceipt(ctx context.Context, commandID string, d
 // Replay returns a completion already committed for this exact command. It
 // never invokes business code and is used to finish publishing after a step
 // attempt deadline has elapsed.
-func (i *MongoCommandInbox) Replay(ctx context.Context, command coresaga.Command) (coresaga.Completion, bool, error) {
+func (i *MongoCommandInbox) Replay(ctx context.Context, command Command) (Completion, bool, error) {
 	if i == nil || i.client == nil {
-		return coresaga.Completion{}, false, coresaga.ErrInvalidRecord
+		return Completion{}, false, ErrInvalidRecord
 	}
 	completion, err := i.readReceipt(ctx, command.ID, commandDigest(command))
 	if errors.Is(err, fmongo.ErrNotFound) {
-		return coresaga.Completion{}, false, nil
+		return Completion{}, false, nil
 	}
 	if err != nil {
-		return coresaga.Completion{}, false, err
+		return Completion{}, false, err
 	}
 	return completion, true, nil
 }
@@ -210,18 +209,18 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 	subject := transport.prefix + ".command." + strings.Trim(config.Topic, ".")
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		if message == nil {
-			return kitnats.Permanent(coresaga.ErrInvalidRecord)
+			return kitnats.Permanent(ErrInvalidRecord)
 		}
 		if len(message.Data) > maxWireEnvelopeBytes {
-			return kitnats.Permanent(coresaga.ErrInvalidRecord)
+			return kitnats.Permanent(ErrInvalidRecord)
 		}
 		var envelope commandEnvelope
 		if err := json.Unmarshal(message.Data, &envelope); err != nil {
 			logConsumerError("step decode", message, err)
 			return kitnats.Permanent(err)
 		}
-		if envelope.Version != coresaga.WireVersion {
-			return kitnats.Permanent(coresaga.ErrInvalidRecord)
+		if envelope.Version != WireVersion {
+			return kitnats.Permanent(ErrInvalidRecord)
 		}
 		command := envelope.Command
 		if err := command.Validate(); err != nil {
@@ -268,7 +267,7 @@ func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetS
 // SubscribeDataEngineStep coordinates duplicate deliveries, but never
 // publishes the completion directly. A native handler must execute its Nest
 // transaction with inbox.Bind(command, reservation) and
-// coresaga.EmitCompletion; obtain reservation explicitly with
+// EmitCompletion; obtain reservation explicitly with
 // ReservationFromContext(ctx). This
 // consumer acknowledges only after the authoritative Data Engine receipt is
 // projected and replayable.
@@ -342,16 +341,16 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 	})
 }
 
-func decodeStepCommand(message *fnats.JetStreamMsg) (coresaga.Command, error) {
+func decodeStepCommand(message *fnats.JetStreamMsg) (Command, error) {
 	if message == nil || len(message.Data) > maxWireEnvelopeBytes {
-		return coresaga.Command{}, coresaga.ErrInvalidRecord
+		return Command{}, ErrInvalidRecord
 	}
 	var envelope commandEnvelope
 	if err := json.Unmarshal(message.Data, &envelope); err != nil {
-		return coresaga.Command{}, err
+		return Command{}, err
 	}
-	if envelope.Version != coresaga.WireVersion || envelope.Command.Validate() != nil {
-		return coresaga.Command{}, coresaga.ErrInvalidRecord
+	if envelope.Version != WireVersion || envelope.Command.Validate() != nil {
+		return Command{}, ErrInvalidRecord
 	}
 	return envelope.Command, nil
 }
@@ -366,7 +365,7 @@ type commandReceiptDoc struct {
 func (i *MongoCommandInbox) collectionRef() fmongo.ICollection {
 	return i.client.Database(i.database).Collection(i.collection)
 }
-func commandDigest(c coresaga.Command) []byte {
+func commandDigest(c Command) []byte {
 	raw, _ := json.Marshal(c)
 	sum := sha256.Sum256(raw)
 	return sum[:]
