@@ -3,12 +3,10 @@ package lockstep
 import (
 	"context"
 	"errors"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/tjbdwanghaibo/roost-core/lockstep"
-	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type recordingTransport struct {
@@ -41,10 +39,10 @@ func (t *recordingTransport) SendReliable(_ context.Context, session corestate.S
 	return nil
 }
 
-func newTestRoom(t *testing.T, transport *recordingTransport, onDesync func(lockstep.DesyncVerdict)) *Room {
+func newTestRoom(t *testing.T, transport *recordingTransport, onDesync func(DesyncVerdict)) *Room {
 	t.Helper()
 	room, err := NewRoom(RoomConfig{
-		Sequencer:          lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}, MaxInputBytes: 16},
+		Sequencer:          SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 16},
 		RedundancyDepth:    3,
 		CatchupBatchFrames: 10,
 		Datagrams:          transport,
@@ -57,11 +55,11 @@ func newTestRoom(t *testing.T, transport *recordingTransport, onDesync func(lock
 	return room
 }
 
-func decodeAll(t *testing.T, packets [][]byte) map[lockstep.FrameID]lockstep.Frame {
+func decodeAll(t *testing.T, packets [][]byte) map[FrameID]Frame {
 	t.Helper()
-	frames := make(map[lockstep.FrameID]lockstep.Frame)
+	frames := make(map[FrameID]Frame)
 	for _, packet := range packets {
-		decoded, err := lockstep.DecodeBroadcast(packet)
+		decoded, err := DecodeBroadcast(packet)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +79,7 @@ func TestRoomTickBroadcastsRedundantFrames(t *testing.T) {
 	if err := room.Attach(2, 102); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.Attach(9, 109); !errors.Is(err, lockstep.ErrPlayerUnknown) {
+	if err := room.Attach(9, 109); !errors.Is(err, ErrPlayerUnknown) {
 		t.Fatalf("unknown seat attached: %v", err)
 	}
 	if _, err := room.SubmitInput(1, 1, []byte{0x11}); err != nil {
@@ -161,7 +159,7 @@ func TestRoomCatchupPagesHistoryThenGoesLive(t *testing.T) {
 			received[id] = frame
 		}
 	}
-	for id := lockstep.FrameID(1); id <= 29; id++ {
+	for id := FrameID(1); id <= 29; id++ {
 		if _, ok := received[id]; !ok {
 			t.Fatalf("frame %d missing after catch-up + live", id)
 		}
@@ -174,7 +172,7 @@ func TestRoomCatchupPagesHistoryThenGoesLive(t *testing.T) {
 func TestRoomCatchupRequiresReliableLane(t *testing.T) {
 	transport := newRecordingTransport()
 	room, err := NewRoom(RoomConfig{
-		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1}, MaxInputBytes: 16},
+		Sequencer: SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 16},
 		Datagrams: transport,
 	})
 	if err != nil {
@@ -194,12 +192,12 @@ func TestRoomCatchupRequiresReliableLane(t *testing.T) {
 
 func TestRoomDesyncVerdictSetSemantics(t *testing.T) {
 	transport := newRecordingTransport()
-	var verdicts []lockstep.DesyncVerdict
+	var verdicts []DesyncVerdict
 	room, err := NewRoom(RoomConfig{
-		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2, 3, 4}, MaxInputBytes: 16},
+		Sequencer: SequencerConfig{Players: []PlayerID{1, 2, 3, 4}, MaxInputBytes: 16},
 		// HashQuorum unset: derived majority-of-seats = 3.
 		Datagrams: transport,
-		OnDesync:  func(v lockstep.DesyncVerdict) { verdicts = append(verdicts, v) },
+		OnDesync:  func(v DesyncVerdict) { verdicts = append(verdicts, v) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +209,7 @@ func TestRoomDesyncVerdictSetSemantics(t *testing.T) {
 		}
 	}
 	// Reports are validated: forged seats and future frames are refused.
-	if err := room.ReportHash(99, 15, 0xAA); !errors.Is(err, lockstep.ErrPlayerUnknown) {
+	if err := room.ReportHash(99, 15, 0xAA); !errors.Is(err, ErrPlayerUnknown) {
 		t.Fatalf("forged seat accepted: %v", err)
 	}
 	if err := room.ReportHash(1, 9999, 0xAA); !errors.Is(err, ErrHashFrameInvalid) {
@@ -228,7 +226,7 @@ func TestRoomDesyncVerdictSetSemantics(t *testing.T) {
 	// The fourth agreeing report seals the majority; the dissenter is the
 	// outlier.
 	_ = room.ReportHash(4, 15, 0xAA)
-	if len(verdicts) != 1 || !reflect.DeepEqual(verdicts[0].Outliers, []lockstep.PlayerID{3}) {
+	if len(verdicts) != 1 || !reflect.DeepEqual(verdicts[0].Outliers, []PlayerID{3}) {
 		t.Fatalf("verdicts = %+v", verdicts)
 	}
 	// Re-reporting an already-surfaced ruling must not re-fire.
@@ -272,14 +270,14 @@ func (nullTransport) SendReliable(context.Context, corestate.SessionID, []byte) 
 
 func BenchmarkRoomTickTenPlayers(b *testing.B) {
 	room, err := NewRoom(RoomConfig{
-		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, SubmitWindow: 4, MaxInputBytes: 16},
+		Sequencer: SequencerConfig{Players: []PlayerID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, SubmitWindow: 4, MaxInputBytes: 16},
 		Datagrams: nullTransport{},
 		Reliable:  nullTransport{},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	for player := lockstep.PlayerID(1); player <= 10; player++ {
+	for player := PlayerID(1); player <= 10; player++ {
 		if err := room.Attach(player, corestate.SessionID(player)); err != nil {
 			b.Fatal(err)
 		}
@@ -290,7 +288,7 @@ func BenchmarkRoomTickTenPlayers(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		frame := room.NextFrame()
-		for player := lockstep.PlayerID(1); player <= 10; player++ {
+		for player := PlayerID(1); player <= 10; player++ {
 			if _, err := room.SubmitInput(player, frame, payload); err != nil {
 				b.Fatal(err)
 			}
@@ -306,7 +304,7 @@ func TestRoomBudgetValidationRejectsOversizedConfig(t *testing.T) {
 	// Default MaxInputBytes (1024) × depth 3 blows the 1232-byte datagram
 	// budget: a single full-payload client would black out the whole room.
 	_, err := NewRoom(RoomConfig{
-		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}},
+		Sequencer: SequencerConfig{Players: []PlayerID{1, 2}},
 		Datagrams: transport,
 	})
 	if !errors.Is(err, ErrRoomConfigInvalid) {
@@ -314,7 +312,7 @@ func TestRoomBudgetValidationRejectsOversizedConfig(t *testing.T) {
 	}
 	// A generous custom datagram bound admits it again.
 	if _, err := NewRoom(RoomConfig{
-		Sequencer:        lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}},
+		Sequencer:        SequencerConfig{Players: []PlayerID{1, 2}},
 		MaxDatagramBytes: 1 << 20,
 		Datagrams:        transport,
 	}); err != nil {
@@ -365,7 +363,7 @@ func TestRoomSessionExclusivityAndIdempotentReattach(t *testing.T) {
 func TestRoomCatchupBoundsAndRetryBudget(t *testing.T) {
 	transport := newRecordingTransport()
 	room, err := NewRoom(RoomConfig{
-		Sequencer:          lockstep.SequencerConfig{Players: []lockstep.PlayerID{1}, MaxInputBytes: 16},
+		Sequencer:          SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 16},
 		CatchupBatchFrames: 4,
 		CatchupMaxFailures: 2,
 		Datagrams:          transport,

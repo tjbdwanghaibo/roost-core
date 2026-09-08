@@ -23,12 +23,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-
-	"github.com/tjbdwanghaibo/roost-core/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/nettransport"
 	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
-	"github.com/tjbdwanghaibo/roost-kit/nettransport"
+	"sort"
 )
 
 var (
@@ -50,9 +48,9 @@ const DefaultMaxDatagramBytes = 1232
 type RoomConfig struct {
 	// Sequencer fixes the seat set, submit window and per-input payload cap
 	// (see roost-core/lockstep).
-	Sequencer lockstep.SequencerConfig
+	Sequencer SequencerConfig
 	// RedundancyDepth is how many recent frames each broadcast datagram
-	// carries (normalized via lockstep.NormalizeRedundancyDepth: <= 0
+	// carries (normalized via NormalizeRedundancyDepth: <= 0
 	// selects 3, MaxBroadcastFrames is the ceiling). Depth N heals up to
 	// N-1 consecutive lost datagrams without retransmission.
 	RedundancyDepth int
@@ -69,7 +67,7 @@ type RoomConfig struct {
 	HashQuorum int
 	// CatchupBatchFrames is how many history frames one catching-up session
 	// receives per tick over the reliable lane (<= 0 selects 32; capped at
-	// lockstep.MaxBroadcastFrames). The per-tick cap is the rate limit that
+	// MaxBroadcastFrames). The per-tick cap is the rate limit that
 	// keeps a 10s reconnect from flooding the link in one burst.
 	CatchupBatchFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
@@ -87,55 +85,55 @@ type RoomConfig struct {
 	// OnDesync is invoked whenever a keyframe ruling gains outliers that
 	// were not surfaced before (set difference, not cardinality — an
 	// equal-size flip of the outlier set fires too). Nil ignores verdicts.
-	OnDesync func(lockstep.DesyncVerdict)
+	OnDesync func(DesyncVerdict)
 }
 
 // catchupState is one session's paging cursor.
 type catchupState struct {
-	next     lockstep.FrameID
+	next     FrameID
 	failures int
 }
 
 // Room is one match's server-side lockstep state.
 type Room struct {
-	sequencer    *lockstep.Sequencer
-	history      *lockstep.History
-	encoder      *lockstep.RedundantEncoder
-	detector     *lockstep.DesyncDetector
+	sequencer    *Sequencer
+	history      *History
+	encoder      *RedundantEncoder
+	detector     *DesyncDetector
 	datagrams    nettransport.DatagramSender
 	reliable     nettransport.ReliableSender
-	onDesync     func(lockstep.DesyncVerdict)
+	onDesync     func(DesyncVerdict)
 	catchupBatch int
 	catchupMax   int
 	closed       bool
 	// sessions binds attached seats to their transport session.
-	sessions map[lockstep.PlayerID]corestate.SessionID
+	sessions map[PlayerID]corestate.SessionID
 	// spectators are receive-only sessions: they get live broadcasts and
 	// may catch up, but hold no seat and submit nothing.
 	spectators map[corestate.SessionID]struct{}
 	// sessionOwners tracks which receiver (seat or spectator) holds each
 	// session id, so one session can never serve two receivers.
-	sessionOwners map[corestate.SessionID]lockstep.PlayerID // spectators use ownerSpectator
+	sessionOwners map[corestate.SessionID]PlayerID // spectators use ownerSpectator
 	// catchups holds each catching-up session's paging state.
 	catchups map[corestate.SessionID]*catchupState
 	// ruled tracks the outliers already surfaced per judged frame, so
 	// OnDesync fires exactly on set growth/change, not cardinality change.
-	ruled map[lockstep.FrameID]map[lockstep.PlayerID]struct{}
+	ruled map[FrameID]map[PlayerID]struct{}
 }
 
 // ownerSpectator marks a session owned by a spectator in sessionOwners.
-const ownerSpectator lockstep.PlayerID = -1
+const ownerSpectator PlayerID = -1
 
 // NewRoom builds a lockstep room for one match.
 func NewRoom(config RoomConfig) (*Room, error) {
 	if config.Datagrams == nil {
 		return nil, fmt.Errorf("%w: datagram sender is required", ErrRoomConfigInvalid)
 	}
-	sequencer, err := lockstep.NewSequencer(config.Sequencer)
+	sequencer, err := NewSequencer(config.Sequencer)
 	if err != nil {
 		return nil, err
 	}
-	depth := lockstep.NormalizeRedundancyDepth(config.RedundancyDepth)
+	depth := NormalizeRedundancyDepth(config.RedundancyDepth)
 	maxDatagram := config.MaxDatagramBytes
 	if maxDatagram == 0 {
 		maxDatagram = DefaultMaxDatagramBytes
@@ -156,8 +154,8 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	if batch <= 0 {
 		batch = 32
 	}
-	if batch > lockstep.MaxBroadcastFrames {
-		batch = lockstep.MaxBroadcastFrames
+	if batch > MaxBroadcastFrames {
+		batch = MaxBroadcastFrames
 	}
 	maxFailures := config.CatchupMaxFailures
 	if maxFailures <= 0 {
@@ -169,19 +167,19 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	}
 	return &Room{
 		sequencer:     sequencer,
-		history:       lockstep.NewHistory(),
-		encoder:       lockstep.NewRedundantEncoder(depth),
-		detector:      lockstep.NewDesyncDetector(quorum),
+		history:       NewHistory(),
+		encoder:       NewRedundantEncoder(depth),
+		detector:      NewDesyncDetector(quorum),
 		datagrams:     config.Datagrams,
 		reliable:      config.Reliable,
 		onDesync:      config.OnDesync,
 		catchupBatch:  batch,
 		catchupMax:    maxFailures,
-		sessions:      make(map[lockstep.PlayerID]corestate.SessionID),
+		sessions:      make(map[PlayerID]corestate.SessionID),
 		spectators:    make(map[corestate.SessionID]struct{}),
-		sessionOwners: make(map[corestate.SessionID]lockstep.PlayerID),
+		sessionOwners: make(map[corestate.SessionID]PlayerID),
 		catchups:      make(map[corestate.SessionID]*catchupState),
-		ruled:         make(map[lockstep.FrameID]map[lockstep.PlayerID]struct{}),
+		ruled:         make(map[FrameID]map[PlayerID]struct{}),
 	}, nil
 }
 
@@ -191,12 +189,12 @@ func NewRoom(config RoomConfig) (*Room, error) {
 // (reconnect) replaces the previous one and drops its catch-up. A session
 // already serving another seat or a spectator is refused — two receivers on
 // one session would double-send and cross-cancel each other's catch-up.
-func (r *Room) Attach(player lockstep.PlayerID, session corestate.SessionID) error {
+func (r *Room) Attach(player PlayerID, session corestate.SessionID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
 	if !r.sequencer.KnownPlayer(player) {
-		return lockstep.ErrPlayerUnknown
+		return ErrPlayerUnknown
 	}
 	if owner, bound := r.sessionOwners[session]; bound && owner != player {
 		return ErrSessionInUse
@@ -216,7 +214,7 @@ func (r *Room) Attach(player lockstep.PlayerID, session corestate.SessionID) err
 // Detach unbinds a seat (disconnect). The seat stays in the match — its
 // inputs simply stop arriving, which optimistic frame locking already
 // tolerates as empty inputs.
-func (r *Room) Detach(player lockstep.PlayerID) {
+func (r *Room) Detach(player PlayerID) {
 	if session, attached := r.sessions[player]; attached {
 		delete(r.catchups, session)
 		delete(r.sessionOwners, session)
@@ -248,36 +246,36 @@ func (r *Room) DetachSpectator(session corestate.SessionID) {
 }
 
 // NextFrame is the id the next Tick will cut.
-func (r *Room) NextFrame() lockstep.FrameID { return r.sequencer.NextFrame() }
+func (r *Room) NextFrame() FrameID { return r.sequencer.NextFrame() }
 
 // SubmitInput feeds one player's input into the sequencer and returns the
 // frame it was folded into. Late inputs (frame already cut) are folded
-// forward and metered as lockstep.input.late.total; rejected inputs are
-// metered as lockstep.input.rejected.total{reason} — the first signal of a
+// forward and metered as input.late.total; rejected inputs are
+// metered as input.rejected.total{reason} — the first signal of a
 // malicious or version-skewed client.
-func (r *Room) SubmitInput(player lockstep.PlayerID, frame lockstep.FrameID, payload []byte) (lockstep.FrameID, error) {
+func (r *Room) SubmitInput(player PlayerID, frame FrameID, payload []byte) (FrameID, error) {
 	if r.closed {
 		return 0, ErrRoomClosed
 	}
 	late := frame != 0 && frame < r.sequencer.NextFrame()
 	folded, err := r.sequencer.SubmitInput(player, frame, payload)
 	if err != nil {
-		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": rejectReason(err)}, 1)
+		metrics.IncCounter("input.rejected.total", metrics.Labels{"reason": rejectReason(err)}, 1)
 		return 0, err
 	}
 	if late {
-		metrics.IncCounter("lockstep.input.late.total", nil, 1)
+		metrics.IncCounter("input.late.total", nil, 1)
 	}
 	return folded, nil
 }
 
 func rejectReason(err error) string {
 	switch {
-	case errors.Is(err, lockstep.ErrPlayerUnknown):
+	case errors.Is(err, ErrPlayerUnknown):
 		return "unknown_player"
-	case errors.Is(err, lockstep.ErrFrameTooEarly):
+	case errors.Is(err, ErrFrameTooEarly):
 		return "too_early"
-	case errors.Is(err, lockstep.ErrPayloadTooBig):
+	case errors.Is(err, ErrPayloadTooBig):
 		return "payload_too_big"
 	default:
 		return "other"
@@ -290,14 +288,14 @@ func rejectReason(err error) string {
 // lane. Broadcast errors don't stop the frame — the frame is cut and
 // history is authoritative regardless of delivery — but they are joined and
 // returned so the caller can drop dead sessions.
-func (r *Room) Tick(ctx context.Context) (lockstep.Frame, error) {
+func (r *Room) Tick(ctx context.Context) (Frame, error) {
 	if r.closed {
-		return lockstep.Frame{}, ErrRoomClosed
+		return Frame{}, ErrRoomClosed
 	}
 	frame := r.sequencer.Advance()
 	r.history.Append(frame)
 	packet := r.encoder.Push(frame)
-	metrics.IncCounter("lockstep.frame.total", nil, 1)
+	metrics.IncCounter("frame.total", nil, 1)
 
 	var errs []error
 	for _, receiver := range r.broadcastOrder() {
@@ -315,7 +313,7 @@ func (r *Room) Tick(ctx context.Context) (lockstep.Frame, error) {
 }
 
 type broadcastReceiver struct {
-	owner   lockstep.PlayerID
+	owner   PlayerID
 	session corestate.SessionID
 }
 
@@ -324,7 +322,7 @@ type broadcastReceiver struct {
 // order reproducible.
 func (r *Room) broadcastOrder() []broadcastReceiver {
 	receivers := make([]broadcastReceiver, 0, len(r.sessions)+len(r.spectators))
-	players := make([]lockstep.PlayerID, 0, len(r.sessions))
+	players := make([]PlayerID, 0, len(r.sessions))
 	for player := range r.sessions {
 		players = append(players, player)
 	}
@@ -350,7 +348,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
 // forward past history the client is still missing.
-func (r *Room) StartCatchup(player lockstep.PlayerID, from lockstep.FrameID) error {
+func (r *Room) StartCatchup(player PlayerID, from FrameID) error {
 	session, attached := r.sessions[player]
 	if !attached {
 		return ErrPlayerDetached
@@ -359,14 +357,14 @@ func (r *Room) StartCatchup(player lockstep.PlayerID, from lockstep.FrameID) err
 }
 
 // SpectatorCatchup begins paging history to an attached spectator session.
-func (r *Room) SpectatorCatchup(session corestate.SessionID, from lockstep.FrameID) error {
+func (r *Room) SpectatorCatchup(session corestate.SessionID, from FrameID) error {
 	if _, ok := r.spectators[session]; !ok {
 		return ErrPlayerDetached
 	}
 	return r.startCatchup(session, from)
 }
 
-func (r *Room) startCatchup(session corestate.SessionID, from lockstep.FrameID) error {
+func (r *Room) startCatchup(session corestate.SessionID, from FrameID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -387,7 +385,7 @@ func (r *Room) startCatchup(session corestate.SessionID, from lockstep.FrameID) 
 }
 
 // CatchingUp reports whether the player's session is still paging history.
-func (r *Room) CatchingUp(player lockstep.PlayerID) bool {
+func (r *Room) CatchingUp(player PlayerID) bool {
 	session, attached := r.sessions[player]
 	if !attached {
 		return false
@@ -420,7 +418,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 			delete(r.catchups, session) // caught up: live broadcasts take over
 			continue
 		}
-		if err := r.reliable.SendReliable(ctx, session, lockstep.EncodeBroadcast(page)); err != nil {
+		if err := r.reliable.SendReliable(ctx, session, EncodeBroadcast(page)); err != nil {
 			state.failures++
 			if state.failures >= r.catchupMax {
 				delete(r.catchups, session)
@@ -431,7 +429,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 			continue
 		}
 		state.failures = 0
-		metrics.IncCounter("lockstep.catchup.frames.total", nil, int64(len(page)))
+		metrics.IncCounter("catchup.frames.total", nil, int64(len(page)))
 		next := page[len(page)-1].ID + 1
 		if next > r.history.Latest() {
 			delete(r.catchups, session)
@@ -447,17 +445,17 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 // cannot inflate detector state with forged seats or future frames. Once a
 // hash gains quorum agreeing reports the ruling runs; OnDesync fires
 // whenever the outlier SET changes (new members counted in
-// lockstep.desync.total), not merely when it grows in size.
-func (r *Room) ReportHash(player lockstep.PlayerID, frame lockstep.FrameID, hash uint64) error {
+// desync.total), not merely when it grows in size.
+func (r *Room) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
 	if !r.sequencer.KnownPlayer(player) {
-		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": "hash_unknown_player"}, 1)
-		return lockstep.ErrPlayerUnknown
+		metrics.IncCounter("input.rejected.total", metrics.Labels{"reason": "hash_unknown_player"}, 1)
+		return ErrPlayerUnknown
 	}
 	if frame == 0 || frame > r.history.Latest() {
-		metrics.IncCounter("lockstep.input.rejected.total", metrics.Labels{"reason": "hash_invalid_frame"}, 1)
+		metrics.IncCounter("input.rejected.total", metrics.Labels{"reason": "hash_invalid_frame"}, 1)
 		return fmt.Errorf("%w: frame %d, latest %d", ErrHashFrameInvalid, frame, r.history.Latest())
 	}
 	verdict, ready := r.detector.Report(player, frame, hash)
@@ -476,13 +474,13 @@ func (r *Room) ReportHash(player lockstep.PlayerID, frame lockstep.FrameID, hash
 	if !changed {
 		return nil
 	}
-	next := make(map[lockstep.PlayerID]struct{}, len(verdict.Outliers))
+	next := make(map[PlayerID]struct{}, len(verdict.Outliers))
 	for _, outlier := range verdict.Outliers {
 		next[outlier] = struct{}{}
 	}
 	r.ruled[frame] = next
 	if newOutliers > 0 {
-		metrics.IncCounter("lockstep.desync.total", nil, int64(newOutliers))
+		metrics.IncCounter("desync.total", nil, int64(newOutliers))
 	}
 	if r.onDesync != nil {
 		r.onDesync(verdict)
@@ -493,7 +491,7 @@ func (r *Room) ReportHash(player lockstep.PlayerID, frame lockstep.FrameID, hash
 // TrimHashReports drops hash-report state for frames before the given id
 // (already judged and acted on). Trimmed frames are tombstoned in the
 // detector: late reports cannot rebuild a forgeable report set for them.
-func (r *Room) TrimHashReports(before lockstep.FrameID) {
+func (r *Room) TrimHashReports(before FrameID) {
 	r.detector.Trim(before)
 	for frame := range r.ruled {
 		if frame < before {
@@ -505,23 +503,23 @@ func (r *Room) TrimHashReports(before lockstep.FrameID) {
 // TrimHistory drops stored frames before keep, bounding memory for long
 // matches that do not need the full replay. Catch-ups older than keep are
 // abandoned on their next pump with ErrCatchupUnservable.
-func (r *Room) TrimHistory(keep lockstep.FrameID) {
+func (r *Room) TrimHistory(keep FrameID) {
 	r.history.TrimBefore(keep)
 }
 
 // History exposes the match's frame history (catch-up source and replay
 // artifact). The returned structure is single-owner state: use it only from
 // the same serial handler that drives the Room, and do not mutate frames.
-func (r *Room) History() *lockstep.History { return r.history }
+func (r *Room) History() *History { return r.history }
 
 // Close ends the match: all receivers and pending catch-ups are released
 // and every subsequent operation fails with ErrRoomClosed. One Room serves
 // exactly one match — do not reuse it.
 func (r *Room) Close() {
 	r.closed = true
-	r.sessions = make(map[lockstep.PlayerID]corestate.SessionID)
+	r.sessions = make(map[PlayerID]corestate.SessionID)
 	r.spectators = make(map[corestate.SessionID]struct{})
-	r.sessionOwners = make(map[corestate.SessionID]lockstep.PlayerID)
+	r.sessionOwners = make(map[corestate.SessionID]PlayerID)
 	r.catchups = make(map[corestate.SessionID]*catchupState)
-	r.ruled = make(map[lockstep.FrameID]map[lockstep.PlayerID]struct{})
+	r.ruled = make(map[FrameID]map[PlayerID]struct{})
 }
