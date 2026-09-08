@@ -9,10 +9,8 @@ package gateway
 import (
 	"context"
 	"errors"
-	"time"
-
-	coregateway "github.com/tjbdwanghaibo/roost-core/gateway"
 	"github.com/tjbdwanghaibo/roost-core/security"
+	"time"
 )
 
 var (
@@ -25,15 +23,15 @@ var (
 // principal checks here are a defense-in-depth backstop for the limit key and
 // therefore run regardless of whether a limiter is configured, so disabling
 // rate limiting can never widen the authentication surface.
-func RateLimit(limiter *security.RateLimiter) coregateway.Middleware {
-	return func(next coregateway.Endpoint) coregateway.Endpoint {
-		return coregateway.EndpointFunc(func(ctx context.Context, session coregateway.Session, request coregateway.Request) (any, error) {
+func RateLimit(limiter *security.RateLimiter) Middleware {
+	return func(next Endpoint) Endpoint {
+		return EndpointFunc(func(ctx context.Context, session Session, request Request) (any, error) {
 			if session == nil {
-				return nil, coregateway.ErrUnauthenticated
+				return nil, ErrUnauthenticated
 			}
 			principal := session.Principal()
 			if !principal.Authenticated() {
-				return nil, coregateway.ErrUnauthenticated
+				return nil, ErrUnauthenticated
 			}
 			if limiter != nil && !limiter.Allow(security.RateLimitKey{OwnerID: principal.PlayerID, Action: request.MessageID}) {
 				return nil, ErrRateLimited
@@ -45,9 +43,9 @@ func RateLimit(limiter *security.RateLimiter) coregateway.Middleware {
 
 // Timeout adds a boundary deadline only when the caller did not already set a
 // stricter deadline.
-func Timeout(timeout time.Duration) coregateway.Middleware {
-	return func(next coregateway.Endpoint) coregateway.Endpoint {
-		return coregateway.EndpointFunc(func(ctx context.Context, session coregateway.Session, request coregateway.Request) (any, error) {
+func Timeout(timeout time.Duration) Middleware {
+	return func(next Endpoint) Endpoint {
+		return EndpointFunc(func(ctx context.Context, session Session, request Request) (any, error) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
@@ -66,9 +64,9 @@ func Timeout(timeout time.Duration) coregateway.Middleware {
 
 // Recover converts a boundary panic to an error and reports it without
 // exposing panic details to the transport response.
-func Recover(report func(context.Context, any)) coregateway.Middleware {
-	return func(next coregateway.Endpoint) coregateway.Endpoint {
-		return coregateway.EndpointFunc(func(ctx context.Context, session coregateway.Session, request coregateway.Request) (ret any, err error) {
+func Recover(report func(context.Context, any)) Middleware {
+	return func(next Endpoint) Endpoint {
+		return EndpointFunc(func(ctx context.Context, session Session, request Request) (ret any, err error) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					if report != nil {
