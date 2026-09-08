@@ -229,7 +229,7 @@
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 | ~~B-24~~ | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | **已完成**：entity → U-0099、actionflow → U-0100、dataengine → U-0101、cache → U-0102、mail → U-0103（09-07 一天内） |
 | ~~B-25~~ | 12 个服务包的 `*_rpc_gen.go` 装配守卫在 nightly 报告里各占 8～10 行 GREEN（同一 servicerpc 模板） | C2 / 工具 | nightly 09-07 | **已完成**（09-08）：五仓采样器跳过 `*_gen.go`，只统计并在报告里单列；生成物行为验证归 `framework-compat` / 收敛后的模板测试 |
-| ~~B-26~~ | D2 把驱动合进契约包：只 import `core/mongo` / `core/nats` / `core/redis` / `core/etcd` 契约的二进制也链接了驱动（nestwal 测试二进制 12.4→23.5 MB，GC 根变多，分配密集基准 +10～33%，`GOGC=off` 差距消失） | 架构 | P5 安静基准归因 | **已完成**（09-08，方案 B）：驱动实现下沉 `core/{mongo,nats,redis,etcd}/driver`（core `f9ab135` / alpha.5，kit `5392efc` / alpha.2，codegen `16efd4a`），契约包保持轻依赖，新增 `TestCoreContractsDoNotLinkDrivers`；nestwal 测试二进制回到 12.4 MB。记录见 `P5_acceptance.md` §4.2 |
+| ~~B-26~~ | D2 把驱动合进契约包：只 import `core/mongo` / `core/nats` / `core/redis` / `core/etcd` 契约的二进制也链接了驱动（nestwal 测试二进制 12.4→23.5 MB，GC 根变多，分配密集基准 +10～33%，`GOGC=off` 差距消失） | 架构 | P5 安静基准归因 | **已完成**（09-08，方案 B）：驱动实现下沉 `core/{mongo,nats,redis,etcd}/driver`（core `f9ab135` / alpha.5，kit `5392efc` / alpha.2，codegen `16efd4a`），契约包保持轻依赖，新增 `TestCoreContractsDoNotLinkDrivers`；nestwal 测试二进制回到 12.4 MB。记录见 `P5_acceptance.md` §4.2；正式版安静基准（§4.3）确认编码基准由 +10～33% 转为 -6～-11%，关闭 |
 
 ## 5. 单元日志
 

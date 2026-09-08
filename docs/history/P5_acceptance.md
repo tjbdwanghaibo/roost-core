@@ -63,6 +63,20 @@ codegen `upgrade-compat`：用 v1.11.0 与 v1.12.1 的 roost 生成历史工程 
 - codegen `16efd4a`：映射表四个 split 条目改指 `core/<pkg>/driver`；升级器对 `renames` 里 `to: core` 的契约级符号（`nats.Permanent`）回指契约包，复用文件已有的契约 import，否则加 `<pkg>contract` 别名；过渡期 pin 升到 alpha.5 / alpha.2。`source-head-check.sh full` 本地通过。
 - 验证：nestwal 测试二进制 23.5 MB → **12.4 MB**（与 kit main 一致）；core / kit `consolidation` CI 绿。`RecordEncodingMatrix` 的 GC 根来源已不存在，正式的安静基准归档放到 P6 发版后与 §4 一并重跑。
 
+### 4.3 正式版安静基准归档（2026-09-08 晚，发版后）
+
+同一套基准，kit **v1.12.6**（收敛前最后正式版，`git worktree add /tmp/roost-kit-main v1.12.6`）对 core **main**（v1.14.0 + U-0104～U-0107，这三个包无非测试改动），`GOWORK=off`，`-count=5 -timeout 0`，**kit → core → kit → core 交错两轮**合并成每侧 10 样本，`caffeinate -i` 脱离会话运行（四段各 24～34 分钟）。机器条件：Unity / IDE 未跑，但 CorpLink 系统扩展常驻约一核（load average 2～4），比 §4.1 略吵；交错抵消时序漂移。全文 [P5_benchstat_release.txt](P5_benchstat_release.txt)。
+
+| 包 | sec/op geomean | B/op geomean | allocs/op geomean |
+| --- | --- | --- | --- |
+| dataengine/engine | +2.40% | +1.68% | +0.06% |
+| nestwal | **-3.28%** | -0.01% | 0 |
+| saga | -5.17% | +0.09% | 0 |
+
+- §4.1 里系统性变慢 +10～33% 的 `RecordEncodingMatrix` 现在全部**变快**：16 组里 15 组 -6～-11%（p ≤ 0.04），分配与字节完全相同——B-26 的 GC 根来源确认消除，**B-26 关闭**。
+- 单项 |Δ| > 5% 且 p < 0.05 的只剩 `ProjectorAdmissionMatrix/async/writers_32` +10.18%（p=0.015）；该基准两侧置信区间本来就 ±12～26%（§4.1 同款），且同组 writers_1 / writers_8 与 strict / pipelined 变体无同向变化，判定为噪声。dataengine 的 +2.40% 由它和 `MongoProjectionMatrix/single_cas` 等 µs 级项贡献，无系统性来源（代码逐字节相同）。
+- 结论：迁移后无系统性退化；收敛前后性能持平，编码路径因契约包不再链接驱动而略快。
+
 ## 5. 故障矩阵与真实环境
 
 - kit CI `integration` job 在新路径上跑通隔离 Mongo 副本集 + NATS JetStream 集群的 Mod 级集成（dataengine real / failover / toxic、saga、remoteentity、nats JetStream RPC toxic）——这是故障矩阵五切片中依赖 Mod 装配的部分。

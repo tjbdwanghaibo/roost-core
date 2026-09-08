@@ -6,6 +6,11 @@
 
 ### Added
 
+- **P3b：装配下沉——六个包新增 `Assemble*`**，kit Mod 只剩配置解析、能力注册与生命周期转交（[记录](docs/history/P3b_mods.md)）。
+  `redis/driver.Assemble`（客户端 + 同连接池的锁工厂）、`etcd/driver.Assemble`（客户端 + 发现 + 选举，`Ping` / `Start` / `Close` 取代 Mod 里的 `Raw().Status`）、
+  `nats/driver.Assemble`（连接 + JetStream + RPC，`Close` 停 RPC 并限时 drain）、`dataengine/engine.Assemble`（Mongo 存储与远端投影绑定；`Start` 内含 WAL → projector → outbox → runtime 的构造与链式回滚）、
+  `saga.Assemble`（存储 / 传输 / 引擎 + 定义注册；`Start` / `Stop` 内含两个 durable 消费者与引擎循环的 drain-then-stop）、`remoteentity.Assemble`（锁工厂 / Manager / 后端 / 归属存储；`Start(ctx, bus)` 内含 Validate → BindSync → Seal → EnsureRemoteStorage → RecoverOutbox → StartFinalizer 与回滚）。
+  全部为新增导出，既有 API 不变。`scripts/perf/dataengine.sh` 从 kit 搬来并改到 core 包路径。
 - M-01：新增 Core 依赖边界测试，扫描根模块全部 Go import（含测试和非当前 build tag 文件），拒绝 Kit/Skill/Service/Codegen 反向依赖与其他框架模块身份；嵌套模块作为独立消费者验收。
 
 ### Changed
