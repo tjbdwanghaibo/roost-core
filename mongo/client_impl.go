@@ -74,7 +74,7 @@ func (c *Client) StartSession(ctx context.Context) (ISession, error) {
 		SetWriteConcern(wc)}, nil
 }
 
-func (c *Client) validateDeployment(ctx context.Context) error {
+func (c *Client) ValidateDeployment(ctx context.Context) error {
 	if c == nil || c.cli == nil {
 		return fmt.Errorf("mongo: client is not initialized")
 	}

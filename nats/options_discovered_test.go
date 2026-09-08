@@ -26,7 +26,7 @@ func TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection(t *testing.T) 
 	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{})); got.IgnoreDiscoveredServers {
 		t.Fatal("discovered servers must be followed by default")
 	}
-	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{ignoreDiscoveredServers: true})); !got.IgnoreDiscoveredServers {
+	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{IgnoreDiscoveredServers: true})); !got.IgnoreDiscoveredServers {
 		t.Fatal("nats.ignore_discovered_servers=true did not reach the connection options")
 	}
 }

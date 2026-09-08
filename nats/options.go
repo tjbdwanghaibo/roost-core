@@ -9,12 +9,12 @@ import (
 // ClientOptions are the kit-level knobs that are not part of the core
 // Config contract.
 type ClientOptions struct {
-	// ignoreDiscoveredServers keeps the client on the URLs it was configured
+	// IgnoreDiscoveredServers keeps the client on the URLs it was configured
 	// with. By default nats.go learns every cluster member's advertised
 	// address from INFO gossip and reconnects to whichever answers — which is
 	// right in a flat network and wrong behind a proxy, NAT, or a fault
 	// injector: the client silently escapes the path the operator configured.
-	ignoreDiscoveredServers bool
+	IgnoreDiscoveredServers bool
 }
 
 func buildNatsOptions(cfg *Config, state *natsLifecycleState, extra ClientOptions) []gonats.Option {
@@ -42,7 +42,7 @@ func buildNatsOptions(cfg *Config, state *natsLifecycleState, extra ClientOption
 			slog.Error("nats: async error", "subject", subject, "err", err)
 		}),
 	}
-	if extra.ignoreDiscoveredServers {
+	if extra.IgnoreDiscoveredServers {
 		opts = append(opts, gonats.IgnoreDiscoveredServers())
 	}
 	return opts

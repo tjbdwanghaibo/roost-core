@@ -14,6 +14,16 @@ type Client struct {
 	rdb goredis.UniversalClient
 }
 
+// Raw exposes the underlying go-redis client for assembly code (lock
+// factories, health probes) that needs the driver handle; business code
+// should stay on IRedis.
+func (c *Client) Raw() goredis.UniversalClient {
+	if c == nil {
+		return nil
+	}
+	return c.rdb
+}
+
 // NewClient builds a client from a configuration, outside the Mod lifecycle.
 //
 // Production wiring goes through RedisMod, which owns config parsing, the

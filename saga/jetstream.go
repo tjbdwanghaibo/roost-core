@@ -18,6 +18,15 @@ type JetStreamPublisher struct {
 	prefix string
 }
 
+// Client returns the JetStream client the publisher was built on, so the Mod
+// can hand the same connection to consumers.
+func (p *JetStreamPublisher) Client() fnats.IJetStream {
+	if p == nil {
+		return nil
+	}
+	return p.client
+}
+
 type CompletionConsumerConfig struct {
 	Stream, Durable, SubjectPrefix string
 	AckWait                        time.Duration
