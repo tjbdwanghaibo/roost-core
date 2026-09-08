@@ -1250,9 +1250,15 @@ func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
 	if ret != "ok" {
 		t.Fatalf("ret = %v, want ok", ret)
 	}
+	// The worker answers RetChan before it records dispatch_done, so the
+	// reply can race the last counter: wait for it instead of reading once.
 	for _, event := range []string{"enqueue", "dispatch_start", "dispatch_done"} {
-		if !hasNestTraceCounter(event, name.String(), "ok") {
-			t.Fatalf("missing nest trace event %q in metrics: %+v", event, metrics.Snapshot())
+		deadline := time.Now().Add(2 * time.Second)
+		for !hasNestTraceCounter(event, name.String(), "ok") {
+			if time.Now().After(deadline) {
+				t.Fatalf("missing nest trace event %q in metrics: %+v", event, metrics.Snapshot())
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 }
