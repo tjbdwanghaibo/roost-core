@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math"
 	"time"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 var (
@@ -17,27 +15,27 @@ var (
 
 type MissionRunnerHooks struct {
 	Now          func() time.Time
-	Context      func(time.Time) *coreflow.MissionContext
-	ClearActions func(int64, coreflow.ActionReason) error
+	Context      func(time.Time) *MissionContext
+	ClearActions func(int64, ActionReason) error
 	OnState      func(bool)
-	OnChanged    func(coreflow.MissionInfo)
-	OnEnded      func(coreflow.Mission, coreflow.ActionReason)
+	OnChanged    func(MissionInfo)
+	OnEnded      func(Mission, ActionReason)
 	OnError      func(error)
 }
 
 type MissionRunnerConfig struct {
 	Registry    *Registry
-	DefaultKind coreflow.MissionKind
+	DefaultKind MissionKind
 	Hooks       MissionRunnerHooks
 }
 
 type MissionRunner struct {
 	registry    *Registry
-	defaultKind coreflow.MissionKind
+	defaultKind MissionKind
 	hooks       MissionRunnerHooks
 	nextID      int64
-	cur         coreflow.Mission
-	lastInfo    coreflow.MissionInfo
+	cur         Mission
+	lastInfo    MissionInfo
 	ending      bool
 	starting    bool
 	lastEndTime time.Time
@@ -47,10 +45,10 @@ func NewMissionRunner(config MissionRunnerConfig) (*MissionRunner, error) {
 	if config.Registry == nil {
 		return nil, ErrMissionBuilderNotFound
 	}
-	return &MissionRunner{registry: config.Registry, defaultKind: config.DefaultKind, hooks: config.Hooks, lastInfo: coreflow.MissionInfo{CurrentStep: -1}}, nil
+	return &MissionRunner{registry: config.Registry, defaultKind: config.DefaultKind, hooks: config.Hooks, lastInfo: MissionInfo{CurrentStep: -1}}, nil
 }
 
-func (r *MissionRunner) StartMission(kind coreflow.MissionKind, param any) error {
+func (r *MissionRunner) StartMission(kind MissionKind, param any) error {
 	if r == nil || r.starting || r.ending {
 		return ErrReentrantMutation
 	}
@@ -79,13 +77,13 @@ func (r *MissionRunner) StartMission(kind coreflow.MissionKind, param any) error
 		return err
 	}
 	if r.cur != nil {
-		r.EndCurMission(coreflow.NewActionReason("replaced by next mission"))
+		r.EndCurMission(NewActionReason("replaced by next mission"))
 		if r.cur != nil {
 			return ErrReentrantMutation
 		}
 	}
 	r.nextID++
-	if setter, ok := next.(coreflow.MissionRuntimeSetter); ok {
+	if setter, ok := next.(MissionRuntimeSetter); ok {
 		setter.SetRuntime(r.nextID, r)
 	}
 	r.cur = next
@@ -104,7 +102,7 @@ func (r *MissionRunner) StartMission(kind coreflow.MissionKind, param any) error
 	}
 	if startErr != nil {
 		r.ending = true
-		reason := coreflow.NewActionErrorReason(startErr)
+		reason := NewActionErrorReason(startErr)
 		endErr := callMissionEnd(next, ctx, reason)
 		r.ending = false
 		r.lastInfo = next.MissionInfo()
@@ -126,20 +124,20 @@ func (r *MissionRunner) CancelMission(reason string) error {
 	if reason == "" {
 		reason = "canceled"
 	}
-	r.EndCurMission(coreflow.NewActionReason(reason))
+	r.EndCurMission(NewActionReason(reason))
 	return nil
 }
 
 func (r *MissionRunner) InMission() bool {
-	return r != nil && r.cur != nil && r.cur.Status() == coreflow.MissionStatusRunning
+	return r != nil && r.cur != nil && r.cur.Status() == MissionStatusRunning
 }
-func (r *MissionRunner) CurrentAction() coreflow.ActionKind {
+func (r *MissionRunner) CurrentAction() ActionKind {
 	if r == nil || r.cur == nil {
 		return 0
 	}
 	return r.cur.MissionInfo().CurrentAction
 }
-func (r *MissionRunner) CurMission() coreflow.Mission {
+func (r *MissionRunner) CurMission() Mission {
 	if r == nil {
 		return nil
 	}
@@ -151,9 +149,9 @@ func (r *MissionRunner) CurrentMissionID() int64 {
 	}
 	return r.cur.ID()
 }
-func (r *MissionRunner) MissionInfo() coreflow.MissionInfo {
+func (r *MissionRunner) MissionInfo() MissionInfo {
 	if r == nil {
-		return coreflow.MissionInfo{CurrentStep: -1}
+		return MissionInfo{CurrentStep: -1}
 	}
 	if r.cur != nil {
 		return r.cur.MissionInfo()
@@ -161,7 +159,7 @@ func (r *MissionRunner) MissionInfo() coreflow.MissionInfo {
 	return r.lastInfo
 }
 
-func (r *MissionRunner) OnActionEnd(actionID int64, kind coreflow.ActionKind, reason coreflow.ActionReason) {
+func (r *MissionRunner) OnActionEnd(actionID int64, kind ActionKind, reason ActionReason) {
 	if r == nil || r.cur == nil || r.ending {
 		return
 	}
@@ -169,7 +167,7 @@ func (r *MissionRunner) OnActionEnd(actionID int64, kind coreflow.ActionKind, re
 	if err := callMissionActionEnd(cur, r.context(r.now()), actionID, kind, reason); err != nil {
 		r.report(err)
 		if r.cur == cur {
-			r.EndCurMission(coreflow.NewActionErrorReason(err))
+			r.EndCurMission(NewActionErrorReason(err))
 		}
 		return
 	}
@@ -178,7 +176,7 @@ func (r *MissionRunner) OnActionEnd(actionID int64, kind coreflow.ActionKind, re
 	}
 }
 
-func (r *MissionRunner) EndCurMission(reason coreflow.ActionReason) {
+func (r *MissionRunner) EndCurMission(reason ActionReason) {
 	if r == nil || r.cur == nil || r.ending {
 		return
 	}
@@ -211,7 +209,7 @@ func (r *MissionRunner) Tick(now time.Time) {
 	if err := callMissionTick(cur, r.context(now), now); err != nil {
 		r.report(err)
 		if r.cur == cur {
-			r.EndCurMission(coreflow.NewActionErrorReason(err))
+			r.EndCurMission(NewActionErrorReason(err))
 		}
 		return
 	}
@@ -222,7 +220,7 @@ func (r *MissionRunner) Tick(now time.Time) {
 
 func (r *MissionRunner) Reset() {
 	r.cur = nil
-	r.lastInfo = coreflow.MissionInfo{CurrentStep: -1}
+	r.lastInfo = MissionInfo{CurrentStep: -1}
 	r.ending = false
 	r.starting = false
 }
@@ -251,16 +249,16 @@ func (r *MissionRunner) now() time.Time {
 	}
 	return time.Now()
 }
-func (r *MissionRunner) context(now time.Time) (ctx *coreflow.MissionContext) {
+func (r *MissionRunner) context(now time.Time) (ctx *MissionContext) {
 	if now.IsZero() {
 		now = r.now()
 	}
-	ctx = &coreflow.MissionContext{Manager: r, Now: now}
+	ctx = &MissionContext{Manager: r, Now: now}
 	if r.hooks.Context != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				r.report(fmt.Errorf("taskflow: mission context hook panic: %v", recovered))
-				ctx = &coreflow.MissionContext{Manager: r, Now: now}
+				ctx = &MissionContext{Manager: r, Now: now}
 			}
 		}()
 		if candidate := r.hooks.Context(now); candidate != nil {
@@ -276,13 +274,13 @@ func (r *MissionRunner) state(active bool) {
 		r.hooks.OnState(active)
 	}
 }
-func (r *MissionRunner) changed(info coreflow.MissionInfo) {
+func (r *MissionRunner) changed(info MissionInfo) {
 	if r.hooks.OnChanged != nil {
 		defer r.recoverHook("changed")
 		r.hooks.OnChanged(info)
 	}
 }
-func (r *MissionRunner) ended(mission coreflow.Mission, reason coreflow.ActionReason) {
+func (r *MissionRunner) ended(mission Mission, reason ActionReason) {
 	if r.hooks.OnEnded != nil {
 		defer r.recoverHook("ended")
 		r.hooks.OnEnded(mission, reason)
@@ -295,7 +293,7 @@ func (r *MissionRunner) report(err error) {
 	}
 }
 
-func (r *MissionRunner) clearActions(missionID int64, reason coreflow.ActionReason) (err error) {
+func (r *MissionRunner) clearActions(missionID int64, reason ActionReason) (err error) {
 	if r.hooks.ClearActions == nil {
 		return nil
 	}
@@ -313,25 +311,25 @@ func (r *MissionRunner) recoverHook(name string) {
 	}
 }
 
-func callMissionStart(m coreflow.Mission, ctx *coreflow.MissionContext, param any) (err error) {
+func callMissionStart(m Mission, ctx *MissionContext, param any) (err error) {
 	defer recoverMissionPanic("start", &err)
 	return m.Start(ctx, param)
 }
-func callMissionCanReplace(m coreflow.Mission, kind coreflow.MissionKind, param any) (allowed bool, err error) {
+func callMissionCanReplace(m Mission, kind MissionKind, param any) (allowed bool, err error) {
 	defer recoverMissionPanic("can replace", &err)
 	return m.CanReplaceBy(kind, param), nil
 }
-func callMissionTick(m coreflow.Mission, ctx *coreflow.MissionContext, now time.Time) (err error) {
+func callMissionTick(m Mission, ctx *MissionContext, now time.Time) (err error) {
 	defer recoverMissionPanic("tick", &err)
 	m.Tick(ctx, now)
 	return nil
 }
-func callMissionActionEnd(m coreflow.Mission, ctx *coreflow.MissionContext, id int64, kind coreflow.ActionKind, reason coreflow.ActionReason) (err error) {
+func callMissionActionEnd(m Mission, ctx *MissionContext, id int64, kind ActionKind, reason ActionReason) (err error) {
 	defer recoverMissionPanic("action end", &err)
 	m.OnActionEnd(ctx, id, kind, reason)
 	return nil
 }
-func callMissionEnd(m coreflow.Mission, ctx *coreflow.MissionContext, reason coreflow.ActionReason) (err error) {
+func callMissionEnd(m Mission, ctx *MissionContext, reason ActionReason) (err error) {
 	defer recoverMissionPanic("end", &err)
 	m.End(ctx, reason)
 	return nil

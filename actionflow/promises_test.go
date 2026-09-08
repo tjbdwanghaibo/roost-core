@@ -4,18 +4,16 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 type stickyMission struct{ runnerTestMission }
 
-func (*stickyMission) CanReplaceBy(coreflow.MissionKind, any) bool { return false }
+func (*stickyMission) CanReplaceBy(MissionKind, any) bool { return false }
 
 // A frozen action group is one the owner has deliberately parked (a scene
 // transition, a disconnect); nothing may start in it until Recover.
 func TestActionRunnerRefusesToStartInAFrozenGroup(t *testing.T) {
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
 	runner.Freeze(1)
@@ -44,10 +42,10 @@ func TestMissionRunnerRefusesUnknownKindAndUnreplaceableMission(t *testing.T) {
 	registry := NewRegistry()
 	sticky := &stickyMission{runnerTestMission{kind: 1}}
 	built := 0
-	if err := registry.RegisterMission(1, func() coreflow.Mission { return sticky }); err != nil {
+	if err := registry.RegisterMission(1, func() Mission { return sticky }); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.RegisterMission(2, func() coreflow.Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
+	if err := registry.RegisterMission(2, func() Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
 		t.Fatal(err)
 	}
 	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry})

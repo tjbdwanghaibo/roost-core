@@ -5,8 +5,6 @@ import (
 	"math"
 	"testing"
 	"time"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 // reentrantAction calls back into the runner from inside one of its own
@@ -29,22 +27,22 @@ func (a *reentrantAction) reenter(where string) {
 	_, a.innerErr = a.runner.Start(1, a.next, 0, time.Now())
 }
 
-func (a *reentrantAction) Start(ctx *coreflow.ActionContext) error {
+func (a *reentrantAction) Start(ctx *ActionContext) error {
 	a.reenter("start")
 	return a.runnerTestAction.Start(ctx)
 }
 
-func (a *reentrantAction) Tick(ctx *coreflow.ActionContext) (bool, coreflow.ActionResult) {
+func (a *reentrantAction) Tick(ctx *ActionContext) (bool, ActionResult) {
 	a.reenter("tick")
 	return a.runnerTestAction.Tick(ctx)
 }
 
-func (a *reentrantAction) Cancel(ctx *coreflow.ActionContext, reason string) {
+func (a *reentrantAction) Cancel(ctx *ActionContext, reason string) {
 	a.reenter("cancel")
 	a.runnerTestAction.Cancel(ctx, reason)
 }
 
-// newReentrancyRunner accepts any coreflow.Action as the build parameter so a
+// newReentrancyRunner accepts any Action as the build parameter so a
 // reentrant action and a plain one can share a kind.
 func newReentrancyRunner(t *testing.T, hooks ...ActionRunnerHooks) *ActionRunner {
 	t.Helper()
@@ -53,8 +51,8 @@ func newReentrancyRunner(t *testing.T, hooks ...ActionRunnerHooks) *ActionRunner
 		hook = hooks[0]
 	}
 	registry := NewRegistry()
-	if err := registry.RegisterAction(1, func(param any) (coreflow.Action, error) {
-		action, ok := param.(coreflow.Action)
+	if err := registry.RegisterAction(1, func(param any) (Action, error) {
+		action, ok := param.(Action)
 		if !ok {
 			return nil, errors.New("invalid action")
 		}
@@ -64,7 +62,7 @@ func newReentrancyRunner(t *testing.T, hooks ...ActionRunnerHooks) *ActionRunner
 	}
 	runner, err := NewActionRunner(ActionRunnerConfig{
 		Registry:     registry,
-		GroupForKind: func(coreflow.ActionKind) (coreflow.ActionGroup, bool) { return 1, true },
+		GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true },
 		Hooks:        hook,
 	})
 	if err != nil {
@@ -127,16 +125,16 @@ func TestActionRunnerReportsReentrantMutationFromEachCallback(t *testing.T) {
 
 func TestActionRunnerRefusesInvalidConfigUnknownGroupsAndExhaustedIDs(t *testing.T) {
 	registry := NewRegistry()
-	if _, err := NewActionRunner(ActionRunnerConfig{GroupForKind: func(coreflow.ActionKind) (coreflow.ActionGroup, bool) { return 1, true }}); !errors.Is(err, ErrActionGroupInvalid) {
+	if _, err := NewActionRunner(ActionRunnerConfig{GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true }}); !errors.Is(err, ErrActionGroupInvalid) {
 		t.Fatalf("runner without registry = %v", err)
 	}
 	if _, err := NewActionRunner(ActionRunnerConfig{Registry: registry}); !errors.Is(err, ErrActionGroupInvalid) {
 		t.Fatalf("runner without group resolver = %v", err)
 	}
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
-	runner.groupForKind = func(kind coreflow.ActionKind) (coreflow.ActionGroup, bool) { return 1, kind == 1 }
+	runner.groupForKind = func(kind ActionKind) (ActionGroup, bool) { return 1, kind == 1 }
 	if _, err := runner.Start(2, &runnerTestAction{}, 0, time.Now()); !errors.Is(err, ErrActionGroupInvalid) {
 		t.Fatalf("Start with an unknown group = %v", err)
 	}
@@ -159,7 +157,7 @@ type reentrantMission struct {
 	innerErr error
 }
 
-func (m *reentrantMission) Start(ctx *coreflow.MissionContext, param any) error {
+func (m *reentrantMission) Start(ctx *MissionContext, param any) error {
 	m.innerErr = m.runner.StartMission(2, nil)
 	return m.runnerTestMission.Start(ctx, param)
 }
@@ -174,11 +172,11 @@ func TestMissionRunnerRefusesReentrantStartExhaustedIDsAndIdleCancel(t *testing.
 		t.Fatal(err)
 	}
 	mission := &reentrantMission{runnerTestMission: runnerTestMission{kind: 1}, runner: runner}
-	if err := registry.RegisterMission(1, func() coreflow.Mission { return mission }); err != nil {
+	if err := registry.RegisterMission(1, func() Mission { return mission }); err != nil {
 		t.Fatal(err)
 	}
 	built := 0
-	if err := registry.RegisterMission(2, func() coreflow.Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
+	if err := registry.RegisterMission(2, func() Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.CancelMission("nothing"); !errors.Is(err, ErrMissionNotRunning) {
@@ -197,14 +195,14 @@ func TestMissionRunnerRefusesReentrantStartExhaustedIDsAndIdleCancel(t *testing.
 	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionIDExhausted) || built != 0 {
 		t.Fatalf("StartMission with exhausted ids = %v built=%d", err, built)
 	}
-	plan := coreflow.MissionPlan{Steps: []coreflow.MissionStep{{Action: 1}}}
+	plan := MissionPlan{Steps: []MissionStep{{Action: 1}}}
 	if _, err := PlanFrom(plan); err != nil {
 		t.Fatalf("fixture plan must be valid so the context guard is the only refuser: %v", err)
 	}
 	if err := NewPlanMission(3).Start(nil, plan); !errors.Is(err, ErrMissionPlanInvalid) {
 		t.Fatalf("PlanMission.Start without a context = %v", err)
 	}
-	if err := NewPlanMission(3).Start(&coreflow.MissionContext{}, plan); !errors.Is(err, ErrMissionPlanInvalid) {
+	if err := NewPlanMission(3).Start(&MissionContext{}, plan); !errors.Is(err, ErrMissionPlanInvalid) {
 		t.Fatalf("PlanMission.Start without an action list = %v", err)
 	}
 }

@@ -7,8 +7,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 var (
@@ -21,25 +19,25 @@ var (
 type ActionSnapshot struct {
 	ID        int64
 	MissionID int64
-	Kind      coreflow.ActionKind
-	Group     coreflow.ActionGroup
-	Action    coreflow.Action
+	Kind      ActionKind
+	Group     ActionGroup
+	Action    Action
 }
 
 type ActionRunnerHooks struct {
 	// PopulateContext is the allocation-free context hook. Context remains for
 	// compatibility and is copied into runner-owned callback-scoped storage.
-	PopulateContext func(*coreflow.ActionContext, time.Time)
-	Context         func(time.Time) *coreflow.ActionContext
+	PopulateContext func(*ActionContext, time.Time)
+	Context         func(time.Time) *ActionContext
 	OnQueued        func(ActionSnapshot)
 	OnTransition    func(ActionSnapshot, bool)
-	OnEnded         func(ActionSnapshot, coreflow.ActionReason)
+	OnEnded         func(ActionSnapshot, ActionReason)
 	OnError         func(error)
 }
 
 type ActionRunnerConfig struct {
 	Registry     *Registry
-	GroupForKind func(coreflow.ActionKind) (coreflow.ActionGroup, bool)
+	GroupForKind func(ActionKind) (ActionGroup, bool)
 	Hooks        ActionRunnerHooks
 }
 
@@ -54,10 +52,10 @@ type actionGroupState struct {
 // every call with its Entity mutex, including heartbeat-driven Tick calls.
 type ActionRunner struct {
 	registry     *Registry
-	groupForKind func(coreflow.ActionKind) (coreflow.ActionGroup, bool)
+	groupForKind func(ActionKind) (ActionGroup, bool)
 	hooks        ActionRunnerHooks
 	nextID       int64
-	groups       map[coreflow.ActionGroup]*actionGroupState
+	groups       map[ActionGroup]*actionGroupState
 	contextPool  sync.Pool
 }
 
@@ -69,13 +67,13 @@ func NewActionRunner(config ActionRunnerConfig) (*ActionRunner, error) {
 		registry:     config.Registry,
 		groupForKind: config.GroupForKind,
 		hooks:        config.Hooks,
-		groups:       make(map[coreflow.ActionGroup]*actionGroupState),
+		groups:       make(map[ActionGroup]*actionGroupState),
 	}
-	runner.contextPool.New = func() any { return new(coreflow.ActionContext) }
+	runner.contextPool.New = func() any { return new(ActionContext) }
 	return runner, nil
 }
 
-func (r *ActionRunner) Start(kind coreflow.ActionKind, param any, missionID int64, now time.Time) (int64, error) {
+func (r *ActionRunner) Start(kind ActionKind, param any, missionID int64, now time.Time) (int64, error) {
 	group, ok, err := r.resolveGroup(kind)
 	if err != nil {
 		return 0, err
@@ -92,7 +90,7 @@ func (r *ActionRunner) Start(kind coreflow.ActionKind, param any, missionID int6
 		return 0, err
 	}
 	if unit.cur != nil {
-		if err := r.finish(unit, unit.cur, true, coreflow.NewActionReason("replaced by next action"), false); err != nil {
+		if err := r.finish(unit, unit.cur, true, NewActionReason("replaced by next action"), false); err != nil {
 			return 0, err
 		}
 		if unit.cur != nil {
@@ -105,7 +103,7 @@ func (r *ActionRunner) Start(kind coreflow.ActionKind, param any, missionID int6
 	return entry.ID, nil
 }
 
-func (r *ActionRunner) Enqueue(kind coreflow.ActionKind, param any, missionID int64) (int64, error) {
+func (r *ActionRunner) Enqueue(kind ActionKind, param any, missionID int64) (int64, error) {
 	group, ok, err := r.resolveGroup(kind)
 	if err != nil {
 		return 0, err
@@ -128,7 +126,7 @@ func (r *ActionRunner) Enqueue(kind coreflow.ActionKind, param any, missionID in
 	return entry.ID, nil
 }
 
-func (r *ActionRunner) Current(group coreflow.ActionGroup) coreflow.Action {
+func (r *ActionRunner) Current(group ActionGroup) Action {
 	unit := r.groups[group]
 	if unit == nil || unit.cur == nil {
 		return nil
@@ -136,7 +134,7 @@ func (r *ActionRunner) Current(group coreflow.ActionGroup) coreflow.Action {
 	return unit.cur.Action
 }
 
-func (r *ActionRunner) CurrentSnapshot(group coreflow.ActionGroup) (ActionSnapshot, bool) {
+func (r *ActionRunner) CurrentSnapshot(group ActionGroup) (ActionSnapshot, bool) {
 	unit := r.groups[group]
 	if unit == nil || unit.cur == nil {
 		return ActionSnapshot{}, false
@@ -144,7 +142,7 @@ func (r *ActionRunner) CurrentSnapshot(group coreflow.ActionGroup) (ActionSnapsh
 	return unit.cur.ActionSnapshot, true
 }
 
-func (r *ActionRunner) QueueLength(group coreflow.ActionGroup) int {
+func (r *ActionRunner) QueueLength(group ActionGroup) int {
 	unit := r.groups[group]
 	if unit == nil {
 		return 0
@@ -152,7 +150,7 @@ func (r *ActionRunner) QueueLength(group coreflow.ActionGroup) int {
 	return len(unit.next)
 }
 
-func (r *ActionRunner) Pending(group coreflow.ActionGroup) []ActionSnapshot {
+func (r *ActionRunner) Pending(group ActionGroup) []ActionSnapshot {
 	unit := r.groups[group]
 	if unit == nil || len(unit.next) == 0 {
 		return nil
@@ -166,7 +164,7 @@ func (r *ActionRunner) Pending(group coreflow.ActionGroup) []ActionSnapshot {
 	return pending
 }
 
-func (r *ActionRunner) Update(group coreflow.ActionGroup, fn func(coreflow.Action) error) error {
+func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 	if fn == nil {
 		return nil
 	}
@@ -177,7 +175,7 @@ func (r *ActionRunner) Update(group coreflow.ActionGroup, fn func(coreflow.Actio
 	return fn(unit.cur.Action)
 }
 
-func (r *ActionRunner) Tick(group coreflow.ActionGroup, now time.Time) error {
+func (r *ActionRunner) Tick(group ActionGroup, now time.Time) error {
 	unit := r.groups[group]
 	if unit == nil || unit.frozen || unit.cur == nil || unit.cur.Action == nil {
 		return nil
@@ -185,7 +183,7 @@ func (r *ActionRunner) Tick(group coreflow.ActionGroup, now time.Time) error {
 	entry := unit.cur
 	done, result, err := r.callTick(entry.Action, now)
 	if err != nil {
-		result = coreflow.ActionResult{Status: coreflow.ActionStatusFailed, Reason: err.Error()}
+		result = ActionResult{Status: ActionStatusFailed, Reason: err.Error()}
 		done = true
 		r.report(err)
 	}
@@ -195,13 +193,13 @@ func (r *ActionRunner) Tick(group coreflow.ActionGroup, now time.Time) error {
 	if !done {
 		return nil
 	}
-	if result.Status == coreflow.ActionStatusIdle {
-		result.Status = coreflow.ActionStatusSuccess
+	if result.Status == ActionStatusIdle {
+		result.Status = ActionStatusSuccess
 	}
-	return r.finish(unit, entry, false, coreflow.NewActionResultReason(result), true)
+	return r.finish(unit, entry, false, NewActionResultReason(result), true)
 }
 
-func (r *ActionRunner) End(group coreflow.ActionGroup, force bool, reason coreflow.ActionReason) error {
+func (r *ActionRunner) End(group ActionGroup, force bool, reason ActionReason) error {
 	unit := r.groups[group]
 	if unit == nil || unit.cur == nil {
 		return nil
@@ -209,7 +207,7 @@ func (r *ActionRunner) End(group coreflow.ActionGroup, force bool, reason corefl
 	return r.finish(unit, unit.cur, force, reason, true)
 }
 
-func (r *ActionRunner) EndAll(force bool, reason coreflow.ActionReason) error {
+func (r *ActionRunner) EndAll(force bool, reason ActionReason) error {
 	var errs []error
 	for _, unit := range r.orderedGroups() {
 		if unit.cur != nil {
@@ -228,7 +226,7 @@ func (r *ActionRunner) ClearQueue() {
 	}
 }
 
-func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason coreflow.ActionReason) error {
+func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionReason) error {
 	if missionID == 0 {
 		return nil
 	}
@@ -253,13 +251,13 @@ func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason coreflo
 	return errors.Join(errs...)
 }
 
-func (r *ActionRunner) Freeze(group coreflow.ActionGroup) { r.group(group).frozen = true }
-func (r *ActionRunner) Frozen(group coreflow.ActionGroup) bool {
+func (r *ActionRunner) Freeze(group ActionGroup) { r.group(group).frozen = true }
+func (r *ActionRunner) Frozen(group ActionGroup) bool {
 	unit := r.groups[group]
 	return unit != nil && unit.frozen
 }
 
-func (r *ActionRunner) Recover(group coreflow.ActionGroup, now time.Time) error {
+func (r *ActionRunner) Recover(group ActionGroup, now time.Time) error {
 	unit := r.group(group)
 	unit.frozen = false
 	if unit.cur == nil {
@@ -268,7 +266,7 @@ func (r *ActionRunner) Recover(group coreflow.ActionGroup, now time.Time) error 
 	return nil
 }
 
-func (r *ActionRunner) build(kind coreflow.ActionKind, param any, missionID int64, group coreflow.ActionGroup) (*actionEntry, error) {
+func (r *ActionRunner) build(kind ActionKind, param any, missionID int64, group ActionGroup) (*actionEntry, error) {
 	if r.nextID == math.MaxInt64 {
 		return nil, ErrActionIDExhausted
 	}
@@ -281,7 +279,7 @@ func (r *ActionRunner) build(kind coreflow.ActionKind, param any, missionID int6
 	return entry, nil
 }
 
-func (r *ActionRunner) resolveGroup(kind coreflow.ActionKind) (group coreflow.ActionGroup, ok bool, err error) {
+func (r *ActionRunner) resolveGroup(kind ActionKind) (group ActionGroup, ok bool, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("taskflow: group resolver panic for kind %d: %v", kind, recovered)
@@ -312,7 +310,7 @@ func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now tim
 	r.transition(entry, false)
 	err = errors.Join(err, cancelErr)
 	if queued {
-		reason := coreflow.NewActionErrorReason(err)
+		reason := NewActionErrorReason(err)
 		r.ended(entry, reason)
 		r.report(fmt.Errorf("taskflow: queued action %d start: %w", entry.ID, err))
 		return errors.Join(err, r.startNext(unit, now))
@@ -320,14 +318,14 @@ func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now tim
 	return err
 }
 
-func (r *ActionRunner) finish(unit *actionGroupState, entry *actionEntry, cancel bool, reason coreflow.ActionReason, startNext bool) error {
+func (r *ActionRunner) finish(unit *actionGroupState, entry *actionEntry, cancel bool, reason ActionReason, startNext bool) error {
 	if unit == nil || entry == nil || unit.cur != entry {
 		return nil
 	}
 	var err error
 	if cancel && entry.Action != nil {
-		if reason.Result.Status == coreflow.ActionStatusIdle {
-			reason.Result = coreflow.ActionResult{Status: coreflow.ActionStatusCanceled, Reason: reason.Message}
+		if reason.Result.Status == ActionStatusIdle {
+			reason.Result = ActionResult{Status: ActionStatusCanceled, Reason: reason.Message}
 		}
 		err = r.callCancel(entry.Action, time.Time{}, reason.Message)
 	}
@@ -356,7 +354,7 @@ func (r *ActionRunner) startNext(unit *actionGroupState, now time.Time) error {
 	return nil
 }
 
-func (r *ActionRunner) group(group coreflow.ActionGroup) *actionGroupState {
+func (r *ActionRunner) group(group ActionGroup) *actionGroupState {
 	unit := r.groups[group]
 	if unit == nil {
 		unit = &actionGroupState{}
@@ -366,7 +364,7 @@ func (r *ActionRunner) group(group coreflow.ActionGroup) *actionGroupState {
 }
 
 func (r *ActionRunner) orderedGroups() []*actionGroupState {
-	keys := make([]coreflow.ActionGroup, 0, len(r.groups))
+	keys := make([]ActionGroup, 0, len(r.groups))
 	for group := range r.groups {
 		keys = append(keys, group)
 	}
@@ -378,17 +376,17 @@ func (r *ActionRunner) orderedGroups() []*actionGroupState {
 	return groups
 }
 
-func (r *ActionRunner) acquireContext(now time.Time) (ctx *coreflow.ActionContext) {
+func (r *ActionRunner) acquireContext(now time.Time) (ctx *ActionContext) {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	ctx = r.contextPool.Get().(*coreflow.ActionContext)
-	*ctx = coreflow.ActionContext{Now: now}
+	ctx = r.contextPool.Get().(*ActionContext)
+	*ctx = ActionContext{Now: now}
 	if r.hooks.PopulateContext != nil || r.hooks.Context != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				r.report(fmt.Errorf("taskflow: action context hook panic: %v", recovered))
-				*ctx = coreflow.ActionContext{Now: now}
+				*ctx = ActionContext{Now: now}
 			}
 		}()
 		if r.hooks.PopulateContext != nil {
@@ -400,27 +398,27 @@ func (r *ActionRunner) acquireContext(now time.Time) (ctx *coreflow.ActionContex
 	return ctx
 }
 
-func (r *ActionRunner) releaseContext(ctx *coreflow.ActionContext) {
+func (r *ActionRunner) releaseContext(ctx *ActionContext) {
 	if ctx == nil {
 		return
 	}
-	*ctx = coreflow.ActionContext{}
+	*ctx = ActionContext{}
 	r.contextPool.Put(ctx)
 }
 
-func (r *ActionRunner) callStart(action coreflow.Action, now time.Time) error {
+func (r *ActionRunner) callStart(action Action, now time.Time) error {
 	ctx := r.acquireContext(now)
 	defer r.releaseContext(ctx)
 	return callActionStart(action, ctx)
 }
 
-func (r *ActionRunner) callTick(action coreflow.Action, now time.Time) (bool, coreflow.ActionResult, error) {
+func (r *ActionRunner) callTick(action Action, now time.Time) (bool, ActionResult, error) {
 	ctx := r.acquireContext(now)
 	defer r.releaseContext(ctx)
 	return callActionTick(action, ctx)
 }
 
-func (r *ActionRunner) callCancel(action coreflow.Action, now time.Time, reason string) error {
+func (r *ActionRunner) callCancel(action Action, now time.Time, reason string) error {
 	ctx := r.acquireContext(now)
 	defer r.releaseContext(ctx)
 	return callActionCancel(action, ctx, reason)
@@ -446,7 +444,7 @@ func (r *ActionRunner) queued(entry *actionEntry) {
 		r.hooks.OnQueued(entry.ActionSnapshot)
 	}
 }
-func (r *ActionRunner) ended(entry *actionEntry, reason coreflow.ActionReason) {
+func (r *ActionRunner) ended(entry *actionEntry, reason ActionReason) {
 	if r.hooks.OnEnded != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -463,16 +461,16 @@ func (r *ActionRunner) report(err error) {
 	}
 }
 
-func callActionStart(action coreflow.Action, ctx *coreflow.ActionContext) (err error) {
+func callActionStart(action Action, ctx *ActionContext) (err error) {
 	defer recoverActionPanic("start", &err)
 	return action.Start(ctx)
 }
-func callActionTick(action coreflow.Action, ctx *coreflow.ActionContext) (done bool, result coreflow.ActionResult, err error) {
+func callActionTick(action Action, ctx *ActionContext) (done bool, result ActionResult, err error) {
 	defer recoverActionPanic("tick", &err)
 	done, result = action.Tick(ctx)
 	return done, result, nil
 }
-func callActionCancel(action coreflow.Action, ctx *coreflow.ActionContext, reason string) (err error) {
+func callActionCancel(action Action, ctx *ActionContext, reason string) (err error) {
 	defer recoverActionPanic("cancel", &err)
 	action.Cancel(ctx, reason)
 	return nil

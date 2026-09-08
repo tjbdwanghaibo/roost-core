@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 var (
@@ -18,22 +16,22 @@ var (
 	ErrMissionBuilderNotFound  = errors.New("taskflow: mission builder not found")
 )
 
-type ActionBuilder func(param any) (coreflow.Action, error)
-type MissionBuilder func() coreflow.Mission
+type ActionBuilder func(param any) (Action, error)
+type MissionBuilder func() Mission
 
 // Registry is instance-scoped and can be sealed after process bootstrap.
 // This avoids hidden mutable global registration during tests and hot reloads.
 type Registry struct {
 	mu       sync.RWMutex
 	sealed   bool
-	actions  map[coreflow.ActionKind]ActionBuilder
-	missions map[coreflow.MissionKind]MissionBuilder
+	actions  map[ActionKind]ActionBuilder
+	missions map[MissionKind]MissionBuilder
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		actions:  make(map[coreflow.ActionKind]ActionBuilder),
-		missions: make(map[coreflow.MissionKind]MissionBuilder),
+		actions:  make(map[ActionKind]ActionBuilder),
+		missions: make(map[MissionKind]MissionBuilder),
 	}
 }
 
@@ -46,7 +44,7 @@ func (r *Registry) Seal() {
 	r.mu.Unlock()
 }
 
-func (r *Registry) RegisterAction(kind coreflow.ActionKind, builder ActionBuilder) error {
+func (r *Registry) RegisterAction(kind ActionKind, builder ActionBuilder) error {
 	if r == nil || kind == 0 {
 		return ErrKindInvalid
 	}
@@ -65,7 +63,7 @@ func (r *Registry) RegisterAction(kind coreflow.ActionKind, builder ActionBuilde
 	return nil
 }
 
-func (r *Registry) RegisterMission(kind coreflow.MissionKind, builder MissionBuilder) error {
+func (r *Registry) RegisterMission(kind MissionKind, builder MissionBuilder) error {
 	if r == nil || kind == 0 {
 		return ErrKindInvalid
 	}
@@ -84,7 +82,7 @@ func (r *Registry) RegisterMission(kind coreflow.MissionKind, builder MissionBui
 	return nil
 }
 
-func (r *Registry) BuildAction(kind coreflow.ActionKind, param any) (action coreflow.Action, err error) {
+func (r *Registry) BuildAction(kind ActionKind, param any) (action Action, err error) {
 	if r == nil {
 		return nil, ErrActionBuilderNotFound
 	}
@@ -107,7 +105,7 @@ func (r *Registry) BuildAction(kind coreflow.ActionKind, param any) (action core
 	return action, err
 }
 
-func (r *Registry) BuildMission(kind coreflow.MissionKind) (mission coreflow.Mission, err error) {
+func (r *Registry) BuildMission(kind MissionKind) (mission Mission, err error) {
 	if r == nil {
 		return nil, ErrMissionBuilderNotFound
 	}

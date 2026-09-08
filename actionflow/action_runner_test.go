@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
 )
 
 type runnerTestAction struct {
@@ -18,23 +16,23 @@ type runnerTestAction struct {
 	cancels     int
 }
 
-func (*runnerTestAction) Kind() coreflow.ActionKind { return 1 }
-func (a *runnerTestAction) Start(*coreflow.ActionContext) error {
+func (*runnerTestAction) Kind() ActionKind { return 1 }
+func (a *runnerTestAction) Start(*ActionContext) error {
 	a.starts++
 	return a.startErr
 }
-func (a *runnerTestAction) Tick(*coreflow.ActionContext) (bool, coreflow.ActionResult) {
+func (a *runnerTestAction) Tick(*ActionContext) (bool, ActionResult) {
 	if a.panicOnTick {
 		panic("tick failed")
 	}
-	return a.done, coreflow.ActionResult{Status: coreflow.ActionStatusSuccess}
+	return a.done, ActionResult{Status: ActionStatusSuccess}
 }
-func (a *runnerTestAction) Cancel(*coreflow.ActionContext, string) { a.cancels++ }
+func (a *runnerTestAction) Cancel(*ActionContext, string) { a.cancels++ }
 
-func newRunnerForTest(t *testing.T, ended *[]coreflow.ActionReason, reported *[]error) *ActionRunner {
+func newRunnerForTest(t *testing.T, ended *[]ActionReason, reported *[]error) *ActionRunner {
 	t.Helper()
 	registry := NewRegistry()
-	if err := registry.RegisterAction(1, func(param any) (coreflow.Action, error) {
+	if err := registry.RegisterAction(1, func(param any) (Action, error) {
 		action, ok := param.(*runnerTestAction)
 		if !ok {
 			return nil, errors.New("invalid action")
@@ -45,11 +43,11 @@ func newRunnerForTest(t *testing.T, ended *[]coreflow.ActionReason, reported *[]
 	}
 	runner, err := NewActionRunner(ActionRunnerConfig{
 		Registry: registry,
-		GroupForKind: func(coreflow.ActionKind) (coreflow.ActionGroup, bool) {
+		GroupForKind: func(ActionKind) (ActionGroup, bool) {
 			return 1, true
 		},
 		Hooks: ActionRunnerHooks{
-			OnEnded: func(_ ActionSnapshot, reason coreflow.ActionReason) {
+			OnEnded: func(_ ActionSnapshot, reason ActionReason) {
 				*ended = append(*ended, reason)
 			},
 			OnError: func(err error) { *reported = append(*reported, err) },
@@ -62,7 +60,7 @@ func newRunnerForTest(t *testing.T, ended *[]coreflow.ActionReason, reported *[]
 }
 
 func TestActionRunnerExplicitStartPrecedesQueue(t *testing.T) {
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
 	old := &runnerTestAction{label: "old"}
@@ -83,7 +81,7 @@ func TestActionRunnerExplicitStartPrecedesQueue(t *testing.T) {
 	if queued.starts != 0 || replacement.starts != 1 || old.cancels != 1 {
 		t.Fatalf("unexpected lifecycle: queued starts=%d replacement starts=%d old cancels=%d", queued.starts, replacement.starts, old.cancels)
 	}
-	if len(ended) != 1 || ended[0].Result.Status != coreflow.ActionStatusCanceled {
+	if len(ended) != 1 || ended[0].Result.Status != ActionStatusCanceled {
 		t.Fatalf("replacement reason must be canceled: %+v", ended)
 	}
 	if err := runner.Tick(1, time.Now()); err != nil {
@@ -98,7 +96,7 @@ func TestActionRunnerExplicitStartPrecedesQueue(t *testing.T) {
 }
 
 func TestActionRunnerEnqueueStartsIdleGroup(t *testing.T) {
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
 	action := &runnerTestAction{label: "queued"}
@@ -112,7 +110,7 @@ func TestActionRunnerEnqueueStartsIdleGroup(t *testing.T) {
 }
 
 func TestActionRunnerQueuedStartFailureContinuesQueue(t *testing.T) {
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
 	runner.Freeze(1)
@@ -130,13 +128,13 @@ func TestActionRunnerQueuedStartFailureContinuesQueue(t *testing.T) {
 	if runner.Current(1) != next || failed.cancels != 1 || next.starts != 1 {
 		t.Fatalf("queue did not continue: current=%v failed cancels=%d next starts=%d", runner.Current(1), failed.cancels, next.starts)
 	}
-	if len(ended) != 1 || ended[0].Result.Status != coreflow.ActionStatusFailed || len(reported) != 1 {
+	if len(ended) != 1 || ended[0].Result.Status != ActionStatusFailed || len(reported) != 1 {
 		t.Fatalf("failed queue item was not observed: ended=%+v reported=%v", ended, reported)
 	}
 }
 
 func TestActionRunnerRecoversTickPanic(t *testing.T) {
-	var ended []coreflow.ActionReason
+	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
 	action := &runnerTestAction{panicOnTick: true}
@@ -149,7 +147,7 @@ func TestActionRunnerRecoversTickPanic(t *testing.T) {
 	if runner.Current(1) != nil {
 		t.Fatal("panicking action must be removed")
 	}
-	if len(ended) != 1 || ended[0].Result.Status != coreflow.ActionStatusFailed {
+	if len(ended) != 1 || ended[0].Result.Status != ActionStatusFailed {
 		t.Fatalf("panic must end as failure: %+v", ended)
 	}
 	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "tick panic") {
@@ -159,11 +157,11 @@ func TestActionRunnerRecoversTickPanic(t *testing.T) {
 
 func TestRegistrySealAndBuilderPanic(t *testing.T) {
 	registry := NewRegistry()
-	if err := registry.RegisterAction(1, func(any) (coreflow.Action, error) { panic("builder") }); err != nil {
+	if err := registry.RegisterAction(1, func(any) (Action, error) { panic("builder") }); err != nil {
 		t.Fatal(err)
 	}
 	registry.Seal()
-	if err := registry.RegisterMission(1, func() coreflow.Mission { return nil }); !errors.Is(err, ErrRegistrySealed) {
+	if err := registry.RegisterMission(1, func() Mission { return nil }); !errors.Is(err, ErrRegistrySealed) {
 		t.Fatalf("register after seal: %v", err)
 	}
 	if _, err := registry.BuildAction(1, nil); err == nil || !strings.Contains(err.Error(), "builder") {
@@ -174,12 +172,12 @@ func TestRegistrySealAndBuilderPanic(t *testing.T) {
 func BenchmarkActionRunnerTick(b *testing.B) {
 	registry := NewRegistry()
 	action := &runnerTestAction{}
-	if err := registry.RegisterAction(1, func(any) (coreflow.Action, error) { return action, nil }); err != nil {
+	if err := registry.RegisterAction(1, func(any) (Action, error) { return action, nil }); err != nil {
 		b.Fatal(err)
 	}
 	runner, err := NewActionRunner(ActionRunnerConfig{
 		Registry: registry,
-		GroupForKind: func(coreflow.ActionKind) (coreflow.ActionGroup, bool) {
+		GroupForKind: func(ActionKind) (ActionGroup, bool) {
 			return 1, true
 		},
 	})
@@ -201,14 +199,14 @@ func BenchmarkActionRunnerTick(b *testing.B) {
 
 func BenchmarkActionRunnerLifecycle(b *testing.B) {
 	registry := NewRegistry()
-	if err := registry.RegisterAction(1, func(any) (coreflow.Action, error) {
+	if err := registry.RegisterAction(1, func(any) (Action, error) {
 		return &runnerTestAction{done: true}, nil
 	}); err != nil {
 		b.Fatal(err)
 	}
 	runner, err := NewActionRunner(ActionRunnerConfig{
 		Registry: registry,
-		GroupForKind: func(coreflow.ActionKind) (coreflow.ActionGroup, bool) {
+		GroupForKind: func(ActionKind) (ActionGroup, bool) {
 			return 1, true
 		},
 	})
