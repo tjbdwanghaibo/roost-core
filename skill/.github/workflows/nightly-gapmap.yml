@@ -1,0 +1,38 @@
+name: nightly-gapmap
+
+# The promise-revert gap map: for every `if <cond> { return err }` guard,
+# neutralize it and see whether any test goes red. Guards that stay green have
+# no test. This never blocks anything — it publishes a report so the ledger's
+# 第 9 节 can be refreshed from data instead of by hand.
+on:
+  schedule:
+    - cron: "30 19 * * *" # 03:30 Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      max:
+        description: guards sampled per package
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  gapmap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: sample every package
+        run: scripts/gapmap.sh --max "${{ github.event.inputs.max || '20' }}"
+      - name: publish summary
+        if: always()
+        run: cat gapmap-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: gapmap-report
+          path: gapmap-report.md

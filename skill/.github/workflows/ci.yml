@@ -1,0 +1,103 @@
+name: production-gates
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - run: go vet ./...
+      - if: runner.os == 'Linux'
+        run: go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
+      - run: go test ./... -count=1
+      - if: runner.os == 'Linux'
+        run: go test -race ./... -count=1
+      - if: runner.os == 'Linux'
+        run: go test ./skill -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 10s
+      - if: runner.os == 'Linux'
+        run: go test ./skill -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 10s
+      - run: go test ./... -run '^$' -bench . -benchmem -count=1
+
+  sync-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: roost-skill
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: roost-skill/integration/sync-e2e/go.mod
+          cache-dependency-path: |
+            roost-skill/go.sum
+            roost-skill/integration/sync-e2e/go.sum
+      - working-directory: roost-skill/integration/sync-e2e
+        run: go test -race ./... -count=1
+      - working-directory: roost-skill/examples
+        run: go test ./... -count=1
+
+  release-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The module path must resolve as a real repository, and a version tag
+      # must match the module's major suffix — the two failure modes that made
+      # v1.4.0-era roost-skill uninstallable (module pointed at a nonexistent
+      # repo, and a v1 tag on a /v2 module path).
+      - name: module path resolves
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          base=$(echo "$mod" | sed -E 's#/v[0-9]+$##')
+          echo "module: $mod (repo: $base)"
+          git ls-remote "https://${base}.git" HEAD
+      - name: stable skill package only
+        run: |
+          test -d skill
+          test ! -e skillv2
+          # --exclude-dir=.github: this very step spells the pattern out, so the
+          # workflow file matched its own check and every tag since v1.10.0 was red.
+          if grep -R --exclude-dir=.github "roost-skill/skillv2\|\bskillv2\." --include='*.go' --include='*.yml' --include='*.yaml' .; then
+            echo "legacy skillv2 Go API reference found"
+            exit 1
+          fi
+      # Docs referencing a pinned dependency version must match go.mod —
+      # stale version references in docs were previously only caught by
+      # manual review.
+      - name: docs versions match go.mod
+        run: |
+          for dep in roost-core roost-kit; do
+            want=$(grep -E "github.com/tjbdwanghaibo/${dep} v" go.mod integration/sync-e2e/go.mod 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | head -1)
+            [ -z "$want" ] && continue
+            stale=$(grep -rhoE "${dep} v[0-9]+\.[0-9]+\.[0-9]+" docs/ README.md 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | grep -vx "$want" || true)
+            if [ -n "$stale" ]; then
+              echo "docs reference ${dep} ${stale} but go.mod pins ${want}"
+              grep -rn "${dep} v[0-9]" docs/ README.md | grep -v "$want" || true
+              exit 1
+            fi
+          done
+      - name: tag matches module major
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          tag=${GITHUB_REF#refs/tags/}
+          major=$(echo "$tag" | sed -E 's#^v([0-9]+)\..*#\1#')
+          suffix=$(echo "$mod" | grep -oE '/v[0-9]+$' | tr -d '/v' || true)
+          if [ "$major" -ge 2 ]; then want="$major"; else want=""; fi
+          if [ "${suffix:-}" != "${want}" ]; then
+            echo "tag $tag requires module suffix '/v${want}' but go.mod has '${suffix:+/v$suffix}'"
+            exit 1
+          fi
