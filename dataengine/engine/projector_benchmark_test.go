@@ -112,7 +112,7 @@ func BenchmarkProjectorWALReplayAckMatrix(b *testing.B) {
 				}
 
 				b.StartTimer()
-				processed, replayErr := projector.replayPass(context.Background())
+				processed, replayErr := projector.ReplayPass(context.Background())
 				b.StopTimer()
 				if replayErr != nil || processed != recordCount {
 					b.Fatalf("processed=%d err=%v", processed, replayErr)

@@ -230,7 +230,7 @@ func (projector *Projector) Flush(ctx context.Context) error {
 		return err
 	}
 	for {
-		processed, err := projector.replayPass(ctx)
+		processed, err := projector.ReplayPass(ctx)
 		if err != nil {
 			projector.recordFailure(err)
 			return err
@@ -242,7 +242,7 @@ func (projector *Projector) Flush(ctx context.Context) error {
 	}
 }
 
-func (projector *Projector) replayPass(ctx context.Context) (int, error) {
+func (projector *Projector) ReplayPass(ctx context.Context) (int, error) {
 	projector.replayMu.Lock()
 	defer projector.replayMu.Unlock()
 	records := make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
@@ -347,7 +347,7 @@ func (projector *Projector) run() {
 	defer close(projector.done)
 	backoff := projector.opts.RetryMin
 	for {
-		processed, err := projector.replayPass(projector.ctx)
+		processed, err := projector.ReplayPass(projector.ctx)
 		if errors.Is(err, errProjectorTransactionHeld) {
 			backoff = projector.opts.RetryMin
 			if !projector.wait(projector.opts.RetryMin) {

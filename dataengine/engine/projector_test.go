@@ -354,7 +354,7 @@ func TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure(t *testi
 		}
 	}
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) || processed != 2 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -432,7 +432,7 @@ func TestProjectorKeepsSingleOrdinarySegmentsOnProjectFastPath(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, true), projectorRecord(3, false)}
 	store := &recordingSegmentStore{}
 	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if err != nil || processed != 3 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -452,7 +452,7 @@ func TestProjectorSplitsOrdinaryBatchAtLogicalByteLimit(t *testing.T) {
 	store := &recordingSegmentStore{}
 	limit := projectionRecordLogicalBytes(records[0]) + projectionRecordLogicalBytes(records[1])
 	projector, wal := stoppedProjectorWithRecords(t, store, records, limit)
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if err != nil || processed != 4 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -476,7 +476,7 @@ func TestProjectorStopsAfterSegmentAckFailure(t *testing.T) {
 	}
 	ackErr := errors.New("checkpoint unavailable")
 	projector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, ackErr) || processed != 2 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -514,7 +514,7 @@ func TestProjectorProjectionOnlyStoreExecutesAndAcknowledgesOrdinaryRecordsOneAt
 		return ack(ctx, fence)
 	}
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if err != nil || processed != len(records) {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -561,7 +561,7 @@ func TestProjectorProjectionOnlyStoreStopsBeforeSecondOrdinaryRecordWhenFirstAck
 		return ackErr
 	}
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, ackErr) || processed != 1 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -598,7 +598,7 @@ func TestProjectorProjectionOnlyStoreAcknowledgesFirstOrdinaryRecordBeforeSecond
 		return ack(ctx, fence)
 	}
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) || processed != 1 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -620,14 +620,14 @@ func TestProjectorTransientSpecialFailureRecoversFromAcknowledgedOrdinaryPrefix(
 	store := &recordingSegmentStore{failID: records[2].ID}
 	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) || processed != 2 {
 		t.Fatalf("first replay processed=%d err=%v", processed, err)
 	}
 	assertWALReplayIDs(t, wal, []coredata.TransactionID{records[2].ID, records[3].ID})
 
 	store.failID = coredata.TransactionID{}
-	processed, err = projector.replayPass(context.Background())
+	processed, err = projector.ReplayPass(context.Background())
 	if err != nil || processed != 2 {
 		t.Fatalf("recovery replay processed=%d err=%v", processed, err)
 	}
@@ -646,7 +646,7 @@ func TestProjectorBatchUnsupportedDoesNotFallbackOrRunLaterSegment(t *testing.T)
 	store := &recordingSegmentStore{batchErr: errProjectionBatchUnsupported}
 	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, errProjectionBatchUnsupported) || processed != 0 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -667,7 +667,7 @@ func TestProjectorAckFailureOverridesHeldReplaySentinel(t *testing.T) {
 	ackErr := errors.New("checkpoint unavailable behind held transaction")
 	projector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, ackErr) || errors.Is(err, errProjectorTransactionHeld) || processed != 2 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
@@ -711,7 +711,7 @@ func TestProjectorFallsBackToPerRecordWhenBatchDefers(t *testing.T) {
 	store := &deferringBatchStore{deferBatch: true}
 	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
 
-	processed, err := projector.replayPass(context.Background())
+	processed, err := projector.ReplayPass(context.Background())
 	if err != nil {
 		t.Fatalf("deferral must not fail the pass: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestProjectorPerRecordFallbackStillFencesRealConflict(t *testing.T) {
 	}
 	projector, wal := stoppedProjectorWithRecords(t, store, records, 4<<20)
 
-	if _, err := projector.replayPass(context.Background()); !errors.Is(err, ErrProjectionConflict) {
+	if _, err := projector.ReplayPass(context.Background()); !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("err=%v, want ErrProjectionConflict", err)
 	}
 	if projector.Stats().FatalProjectionConflicts != 1 {
