@@ -1,6 +1,6 @@
 module github.com/tjbdwanghaibo/roost-core/examples
 
-go 1.25.0
+go 1.27.0
 
 require github.com/tjbdwanghaibo/roost-core v1.10.0
 
