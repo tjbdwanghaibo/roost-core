@@ -10,6 +10,7 @@
 
 ### Changed（测试质量）
 
+- **gap map 采样器跳过 `*_gen.go`**（B-25）：生成文件是同一模板在每个包的实例，其守卫在模板所在处钉一次即可；采样器现在只统计不采样，并在包级与总计里报告跳过的守卫数。
 - **执行器的程序结构不变量钉住**（U-0094，C2）：初始相位越界、相位无 enter 根（`ErrAsyncFlowNotScheduled`）、根操作为空 / 越界、
   repeat 次数超过编译期上限，`Start` 各自以 `ErrProgramInvariant` 拒绝而不是越界 panic；拒绝后无活动施法、留存的施法状态为 CastFailed。
   `executor_promises_test.go` 一条（对编译产物做白盒篡改）；回退四处守卫各红（三处为 panic）。

@@ -26,12 +26,25 @@ import os, re, subprocess, sys
 GUARD = re.compile(r'^(\s*)if (.+) \{\s*$')
 ERRORISH = re.compile(r'fmt\.Errorf|errors\.New|\bErr[A-Z]\w*|errors\.Join|, err$|\berr\b')
 
+# Generated files (*_gen.go) are one template instantiated per package; their
+# guards are pinned once where the template lives, so sampling them in every
+# package only repeats the same rows. They are counted and reported, not sampled.
+GEN_SKIPPED = {}
+
 def guards_in(pkgdir):
     out = []
     for f in sorted(os.listdir(pkgdir)):
         if not f.endswith('.go') or f.endswith('_test.go'):
             continue
         p = os.path.join(pkgdir, f)
+        if f.endswith('_gen.go'):
+            GEN_SKIPPED[pkgdir] = GEN_SKIPPED.get(pkgdir, 0) + len(_guards_in_file(p))
+            continue
+        out.extend(_guards_in_file(p))
+    return out
+
+def _guards_in_file(p):
+        out = []
         lines = open(p, encoding='utf-8').read().split('\n')
         for i, l in enumerate(lines):
             m = GUARD.match(l)
@@ -44,7 +57,7 @@ def guards_in(pkgdir):
             if cond == 'err != nil' or (cond.endswith('err != nil') and ':=' in cond):
                 continue  # plain error propagation, not a promise of this package
             out.append((p, i, m.group(1), m.group(2), nxt))
-    return out
+        return out
 
 def neutralize(indent, cond):
     if '; ' in cond and (':=' in cond.split('; ')[0] or '=' in cond.split('; ')[0]):
@@ -95,16 +108,21 @@ def main(argv):
         if not os.path.isdir(pkg):
             continue
         guards, rows, green = sample(pkg, maxn, timeout)
+        gen = GEN_SKIPPED.get(pkg, 0)
         if not guards:
+            if gen:
+                print(f"\n### `{pkg}` — 0 / 0 guards have no test (generated: {gen} guards in *_gen.go not sampled)\n")
             continue
         total_g += len(guards); total_green += green
-        print(f"\n### `{pkg}` — {green} / {len(guards)} guards have no test\n")
+        gen_note = f" (generated: {gen} guards in *_gen.go not sampled)" if gen else ""
+        print(f"\n### `{pkg}` — {green} / {len(guards)} guards have no test{gen_note}\n")
         print("| result | guard | condition | returns |\n| --- | --- | --- | --- |")
         for res, where, cond, nxt in rows:
             if res == 'GREEN':
                 print(f"| **{res}** | `{where}` | `{cond}` | `{nxt}` |")
         sys.stdout.flush()
-    print(f"\n**Total: {total_green} / {total_g} sampled guards have no test.**")
+    total_gen = sum(GEN_SKIPPED.values())
+    print(f"\n**Total: {total_green} / {total_g} sampled guards have no test.**" + (f" Generated files: {total_gen} guards in *_gen.go not sampled (pinned once at the template)." if total_gen else ""))
     return 0
 
 if __name__ == '__main__':
