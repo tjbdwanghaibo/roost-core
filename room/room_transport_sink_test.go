@@ -8,8 +8,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	coreentitysync "github.com/tjbdwanghaibo/roost-core/entitysync"
+	kit "github.com/tjbdwanghaibo/roost-core/nettransport"
 	core "github.com/tjbdwanghaibo/roost-core/statesync"
-	kit "github.com/tjbdwanghaibo/roost-kit/nettransport"
 )
 
 type recordingAtomicTransport struct {
