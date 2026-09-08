@@ -1,6 +1,6 @@
 # Roost 收敛方案：五仓合三仓，实现下沉 Core
 
-状态：方案已定（2026-09-08），P0 开工。维护者决定：**不用 /v2 模块路径，直接使用最终路径**；**全部由本机完成**。文中"v2"仅指"收敛后的形态"，不是模块路径。关联：[统一实施方案](CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)（方法论沿用）、[09-08 复核](history/PLAN_REVIEW_2026-09-08.md)（事实修正）、[账本](history/ledger.md)、[交接](history/HANDOFF_2026-09-07.md)。
+状态（2026-09-08 晚）：P0～P4 完成，P5 进行中；记录见 `docs/history/P2-*.md`、`P3_kit.md`、`P4_codegen.md`。三仓 `consolidation` 分支：core `8689c7f`+、kit `b8e25c2`+、codegen `52690fe`+；预发布 core `v1.14.0-alpha.4`、kit `v1.13.0-alpha.1`。维护者决定：**不用 /v2 模块路径，直接使用最终路径**；**全部由本机完成**。文中"v2"仅指"收敛后的形态"，不是模块路径。关联：[统一实施方案](CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)（方法论沿用）、[09-08 复核](history/PLAN_REVIEW_2026-09-08.md)（事实修正）、[账本](history/ledger.md)、[交接](history/HANDOFF_2026-09-07.md)。
 
 ## 0. 决定
 
@@ -51,7 +51,7 @@ roost-core (v1.14+)                roost-kit (v1.13+)               roost-codege
 
 | 原 kit 包 | 去向 | 说明 |
 | --- | --- | --- |
-| actionflow ai configdata dataengine etcd gateway lock lockstep mongo nats nest redis robot saga syncstream | `core/<同名>` | 合入同名契约包。`*_mod.go` **不搬**，留 kit |
+| actionflow ai configdata dataengine etcd gateway lock lockstep mongo nats nest redis robot saga syncstream | `core/<同名>` | 合入同名契约包。`*_mod.go` **不搬**，留 kit。**B-26 修正**：mongo / nats / redis / etcd 的驱动实现最终落在 `core/<x>/driver`（package `driver`），契约包只保留接口、错误、选项，避免只引契约的二进制链接驱动；dataengine 实现落 `core/dataengine/engine`（避免与 nest / nestwal 成环） |
 | nestwal | `core/nestwal` | dataengine、saga 的前置 |
 | remoteentity | `core/remoteentity` | M-02 试点对象；`remote_entity_mod.go` 留 kit |
 | room lockstep nettransport spatial | `core/room` `…/lockstep` `…/nettransport` `…/spatial` | room / lockstep 依赖 nettransport，同批 |

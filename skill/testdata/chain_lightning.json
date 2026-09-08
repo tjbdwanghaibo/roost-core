@@ -1,0 +1,18 @@
+{
+  "schema": "roost.skill/v2",
+  "id": "skill.fixture.chain_lightning",
+  "name": "Chain Lightning",
+  "description": "Damages a bounded chain of selected enemy entities.",
+  "activation": {"type": "active", "policy": {"mode": "tap"}},
+  "input_schema": {"type": "entity"},
+  "cooldown_ticks": 0,
+  "costs": [],
+  "memory": {},
+  "initial_phase": "cast",
+  "phases": [{"id": "cast", "timeout_ticks": 0, "on": {"enter": {"flow": "sequence", "steps": [
+    {"flow": "select", "select": {"from": "$input.target", "kind": "entity", "shape": {"type": "chain", "hop_range": 10, "max_targets": 2, "allow_repeat": false, "hop_interval_ticks": 0}, "filters": [{"type": "alive"}], "order": {"by": "stable_id", "direction": "asc"}, "limit": 2},
+     "consume": {"mode": "each", "as": "target", "do": {"flow": "effect", "effect": {"type": "damage", "target": "$local.target", "amount": 4, "damage_type": "magic", "element": "neutral"}}},
+     "on_empty": {"flow": "finish", "reason": "no_target"}},
+    {"flow": "finish", "reason": "chain_complete"}
+  ]}}}] 
+}

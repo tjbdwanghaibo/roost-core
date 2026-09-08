@@ -3,7 +3,7 @@ name: security
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, consolidation]
 
 concurrency:
   group: security-${{ github.ref }}

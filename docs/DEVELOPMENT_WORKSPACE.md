@@ -8,7 +8,7 @@ workspace 解决研发效率，module/tag 证明外部用户可安装和复现�
 在五个仓库的共同父目录创建不提交的 `go.work`：
 
 ```bash
-go work init ./roost-core ./roost-kit ./roost-skill ./roost-service ./roost-codegen
+go work init ./roost-core ./roost-kit ./roost-codegen
 ```
 
 每个仓库应忽略 `go.work`/`go.work.sum`。业务仓库需要联调时，用 `go work use
