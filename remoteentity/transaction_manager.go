@@ -103,7 +103,7 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 	return state
 }
 
-func (m *Manager) startRemoteFinalizer() {
+func (m *Manager) StartFinalizer() {
 	if m == nil || m.remote == nil {
 		return
 	}
@@ -289,11 +289,11 @@ func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteW
 	return nil
 }
 
-func (m *Manager) stopRemoteFinalizer(ctx context.Context) error {
+func (m *Manager) StopFinalizer(ctx context.Context) error {
 	if m == nil || m.remote == nil {
 		return nil
 	}
-	m.startRemoteFinalizer()
+	m.StartFinalizer()
 	m.remote.retryMu.Lock()
 	m.remote.stopping = true
 	m.remote.finalizeCancel()
@@ -406,7 +406,7 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 	return receipts, nil
 }
 
-func (m *Manager) recoverRemoteOutbox(ctx context.Context) error {
+func (m *Manager) RecoverOutbox(ctx context.Context) error {
 	outbox := m.backend
 	for {
 		pending, err := outbox.PendingRemoteCommits(ctx, 256)

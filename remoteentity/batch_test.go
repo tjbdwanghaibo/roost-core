@@ -239,7 +239,7 @@ func TestRemoteWriteBatchMemoryCommitPublishesImmutableSnapshot(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
@@ -282,7 +282,7 @@ func TestRemoteWriteBatchAsyncRetainsGateUntilWALApply(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
@@ -351,7 +351,7 @@ func TestTransferRemoteOwnershipFencesPreviousOwner(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	markers := newMockMarkerStore()
 	mgr.SetOwnershipStore(markers)
@@ -386,7 +386,7 @@ func TestRemoteWriteBatchRollsBackEarlierFrozenEntityOnBuildFailure(t *testing.T
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
@@ -422,7 +422,7 @@ func TestOwnerRoutedWriteUsesMarkerHotCache(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	markers := newMockMarkerStore()
 	mgr.SetOwnershipStore(markers)
@@ -456,7 +456,7 @@ func TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
@@ -523,13 +523,13 @@ func TestMemoryCommitPublishFailureQueriesStatusAndReconciles(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	syncer := &flakySnapshotSyncer{}
-	mgr.setSyncer(syncer)
+	mgr.SetSyncer(syncer)
 	live := newTestRemoteEntity(1408, 1, kind)
 	live.dirty.dirty = true
 	loader.add(live)
@@ -588,7 +588,7 @@ func TestRemoteTrackingAndFlushWaitersAreBounded(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = mgr.stopRemoteFinalizer(ctx)
+		_ = mgr.StopFinalizer(ctx)
 	})
 	first := remoteTestTxID(21)
 	second := remoteTestTxID(22)
@@ -634,7 +634,7 @@ func TestRemoteFinalizerStopCancelsLongRetryImmediately(t *testing.T) {
 	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	mgr.SetBackend(newRemoteTestLoader())
-	mgr.startRemoteFinalizer()
+	mgr.StartFinalizer()
 	if !mgr.reserveRemoteFinalizeSlot() {
 		t.Fatal("reserve finalizer slot")
 	}
@@ -651,7 +651,7 @@ func TestRemoteFinalizerStopCancelsLongRetryImmediately(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if err := mgr.stopRemoteFinalizer(ctx); err != nil {
+	if err := mgr.StopFinalizer(ctx); err != nil {
 		t.Fatalf("stop should cancel retry immediately: %v", err)
 	}
 	if got := len(mgr.remote.finalizeSlots); got != 0 {
@@ -687,8 +687,8 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	syncer := &flakySnapshotSyncer{}
-	mgr.setSyncer(syncer)
-	mgr.startRemoteFinalizer()
+	mgr.SetSyncer(syncer)
+	mgr.StartFinalizer()
 	if !mgr.reserveRemoteFinalizeSlot() {
 		t.Fatal("reserve finalizer slot")
 	}
@@ -714,7 +714,7 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := mgr.stopRemoteFinalizer(ctx); err != nil {
+	if err := mgr.StopFinalizer(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

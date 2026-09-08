@@ -56,10 +56,10 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 	if m == nil || m.cfg == nil {
 		return nil, entity.ErrRemoteWriteCapabilityDisabled
 	}
-	if fatal := m.fatalError(); fatal != nil {
+	if fatal := m.FatalError(); fatal != nil {
 		return nil, errors.Join(entity.ErrRemoteFenced, fatal)
 	}
-	m.startRemoteFinalizer()
+	m.StartFinalizer()
 	ordered, err := entity.ValidateRemoteWriteBatchIDs(ids)
 	if err != nil {
 		return nil, err

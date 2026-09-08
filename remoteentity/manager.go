@@ -44,7 +44,7 @@ type Manager struct {
 	onFatal         func(error)
 }
 
-func (m *Manager) setFatalHandler(handler func(error)) {
+func (m *Manager) SetFatalHandler(handler func(error)) {
 	if m == nil {
 		return
 	}
@@ -68,7 +68,7 @@ func (m *Manager) recordReleaseFailure(err error) {
 	}
 }
 
-func (m *Manager) fatalError() error {
+func (m *Manager) FatalError() error {
 	if m == nil {
 		return entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -77,7 +77,7 @@ func (m *Manager) fatalError() error {
 	return m.fatalErr
 }
 
-func (m *Manager) wrapperCount() int {
+func (m *Manager) WrapperCount() int {
 	if m == nil {
 		return 0
 	}
@@ -261,7 +261,7 @@ func (m *Manager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
 	m.ownershipStore = store
 }
 
-func (m *Manager) setSyncer(syncer remoteSyncTransport) {
+func (m *Manager) SetSyncer(syncer remoteSyncTransport) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sealed {
@@ -270,13 +270,13 @@ func (m *Manager) setSyncer(syncer remoteSyncTransport) {
 	m.syncer = syncer
 }
 
-func (m *Manager) sealDependencies() {
+func (m *Manager) SealDependencies() {
 	m.mu.Lock()
 	m.sealed = true
 	m.mu.Unlock()
 }
 
-func (m *Manager) validateDependencies() error {
+func (m *Manager) ValidateDependencies() error {
 	if m == nil || m.cfg == nil || m.lockFactory == nil {
 		return fmt.Errorf("remote_entity: manager is not initialized")
 	}

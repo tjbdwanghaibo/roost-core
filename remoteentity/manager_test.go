@@ -264,8 +264,8 @@ func TestWrapperCapacityEvictsIdleEntry(t *testing.T) {
 		t.Fatal("idle wrapper was not evicted")
 	}
 	defer second.release()
-	if _, ok := mgr.get(firstID); ok || mgr.wrapperCount() != 1 {
-		t.Fatalf("wrapper eviction failed: count=%d", mgr.wrapperCount())
+	if _, ok := mgr.get(firstID); ok || mgr.WrapperCount() != 1 {
+		t.Fatalf("wrapper eviction failed: count=%d", mgr.WrapperCount())
 	}
 }
 
