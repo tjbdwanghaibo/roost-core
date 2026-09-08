@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 func TestProfileExtractionIsStableAndUsesInspectorFacts(t *testing.T) {

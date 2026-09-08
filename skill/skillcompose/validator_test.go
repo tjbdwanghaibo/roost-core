@@ -3,7 +3,7 @@ package skillcompose
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 func TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow(t *testing.T) {

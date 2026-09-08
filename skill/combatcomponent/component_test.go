@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 const combatTestKind entity.EntityKind = 246

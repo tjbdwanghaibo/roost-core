@@ -21,7 +21,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 // CollectionName is the default persistence collection for combat state.

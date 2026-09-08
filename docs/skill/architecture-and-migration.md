@@ -83,16 +83,16 @@ cast commit 后产生。因此客户端永远不会先看到一个被权威层�
 这是三个仓库的原子设计变更，但版本发布必须按依赖方向进行：
 
 1. 发布 `roost-core`（v1.10.0；包含 `syncstream`，模块路径自此为 `roost-core`）。
-2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-skill`（核心 API 固定在 `/skill`；wire schema 仍独立使用 `roost.skill/v2`）。
+2. 发布 Go 模块 `github.com/tjbdwanghaibo/roost-core/skill`（核心 API 固定在 `/skill`；wire schema 仍独立使用 `roost.skill/v2`）。
 3. 发布/确认 `roost-kit`（v1.10.0）transport adapter。
 4. 具体游戏升级 roost-skill/roost-kit，替换旧导入路径：
 
 ```text
 github.com/tjbdwanghaibo/cube/game/gameplay/skill
-=> github.com/tjbdwanghaibo/roost-skill/skill
+=> github.com/tjbdwanghaibo/roost-core/skill
 
 github.com/tjbdwanghaibo/cube/game/gameplay/skillcompose
-=> github.com/tjbdwanghaibo/roost-skill/skillcompose
+=> github.com/tjbdwanghaibo/roost-core/skillcompose
 ```
 
 从 `/skillv2` 到 `/skill` 是源码 API 的破坏性升级，但不改变当前 wire、checkpoint 或

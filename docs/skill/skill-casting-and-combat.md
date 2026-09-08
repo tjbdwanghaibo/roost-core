@@ -5,7 +5,7 @@
 ## 迁移说明（必读）
 
 - **编译器语义修订升级为 `skillv2-compiler-2`。** 新增的 `concurrent`、`global_cooldown_ticks`、窗口表达式字段进入 gameplay digest，同一定义在新旧版本编译出的 digest 不同。v1.2.x 产生的 checkpoint、回放记录与 skillcompose 契约在新版本下**无法解析**（会得到明确错误而非静默失败）：升级时需要全量重编译技能定义、丢弃旧 checkpoint（或先在旧版本完成排空）并重签契约。
-- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `roost.skill/v2`，技能定义 JSON 不受影响。
+- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-core/skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `roost.skill/v2`，技能定义 JSON 不受影响。
 
 ## 施法互斥与全局冷却
 

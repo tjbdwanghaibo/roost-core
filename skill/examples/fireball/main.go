@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	skill "github.com/tjbdwanghaibo/roost-skill/skill"
+	skill "github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 const fireballJSON = `{

@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 // AttributeModifierBuffID is the reserved buff definition id carrying

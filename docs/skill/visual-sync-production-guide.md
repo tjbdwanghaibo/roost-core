@@ -353,7 +353,7 @@ go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
 发布顺序为 `roost-core`（当时 v1.10.0）→ `roost-skill` → `roost-kit`（当时 v1.10.0）→ 业务服务/客户端。
-`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-skill`。生产模块只依赖
+`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-core/skill`。生产模块只依赖
 语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
 临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 var ErrVisibilityEvaluatorRequired = errors.New("skillsync: entity visibility evaluator is required")

@@ -6,9 +6,9 @@ import (
 	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 // Resolver locates the combat component for a skill entity id. The entity

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 func main() {

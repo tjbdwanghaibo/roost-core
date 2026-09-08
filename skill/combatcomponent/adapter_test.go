@@ -5,9 +5,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 type mapResolver map[skill.EntityID]*CombatComponent

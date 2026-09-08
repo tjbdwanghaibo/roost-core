@@ -5,7 +5,7 @@
 // schema is roost.skill/v2 (renamed from cube.skill/v2 in v1.10.0, before any
 // data existed under the old name) and the compiler semantics revision is
 // skillv2-compiler-2; neither value is the Go package version. Applications
-// should import github.com/tjbdwanghaibo/roost-skill/skill and persist the wire
+// should import github.com/tjbdwanghaibo/roost-core/skill and persist the wire
 // and compiler identities emitted by the package instead of deriving them from
 // its import path.
 //

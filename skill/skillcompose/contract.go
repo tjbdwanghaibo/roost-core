@@ -1,6 +1,6 @@
 package skillcompose
 
-import "github.com/tjbdwanghaibo/roost-skill/skill"
+import "github.com/tjbdwanghaibo/roost-core/skill"
 
 type SkillCompositionContract struct {
 	Version     string                  `json:"version"`

@@ -3,7 +3,7 @@
 roost-skill 对业务暴露唯一稳定核心包：
 
 ```go
-import "github.com/tjbdwanghaibo/roost-skill/skill"
+import "github.com/tjbdwanghaibo/roost-core/skill"
 ```
 
 不再提供 `/skillv2` Go 包或兼容别名。Go API 名称与持久协议版本解耦：
@@ -13,7 +13,7 @@ import "github.com/tjbdwanghaibo/roost-skill/skill"
 | Go import | `roost-skill/skill` | 业务编译期依赖，保持稳定 |
 | JSON schema | `roost.skill/v2` | 技能定义 wire 格式，必须写入定义 |
 | compiler semantics | `skillv2-compiler-2` | gameplay digest、checkpoint、回放和契约校验 |
-| module | `github.com/tjbdwanghaibo/roost-skill` | Go module，沿 v1.x tag 发布 |
+| module | `github.com/tjbdwanghaibo/roost-core/skill` | Go module，沿 v1.x tag 发布 |
 
 不要根据 import path 推断 schema，也不要自行改写 compiler semantics。
 

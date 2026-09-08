@@ -2,8 +2,8 @@
 
 **roost-skill 是一个 2D 权威（server-authoritative）ARPG 技能框架：JSON 技能定义经过编译器的静态证明，成为不可变 Program，由确定性 Runtime 在单一世界边界接口（Host）之上执行——全程 int64 定点数学、位一致回放。**
 
-- Go 模块：`github.com/tjbdwanghaibo/roost-skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
-- 稳定 Go API：`github.com/tjbdwanghaibo/roost-skill/skill`；不再把 wire 版本写进目录名，也不保留 `/skillv2` 兼容包
+- Go 模块：`github.com/tjbdwanghaibo/roost-core/skill`（自 `v1.5.0` 起可直接 `go get`；不使用 `/v2` major 路径，版本沿 v1.x tag 线演进）
+- 稳定 Go API：`github.com/tjbdwanghaibo/roost-core/skill`；不再把 wire 版本写进目录名，也不保留 `/skillv2` 兼容包
 - 当前 wire/语义线：JSON schema **`roost.skill/v2`**；编译器语义修订 **`skillv2-compiler-2`**，两者与 Go import 独立演进
 - 依赖基线：`roost-core v1.12.0`；对具体游戏服务器、渲染器、传输层零依赖
 
@@ -42,7 +42,7 @@
 ```bash
 mkdir skill-demo && cd skill-demo
 go mod init skill-demo
-go get github.com/tjbdwanghaibo/roost-skill@latest
+go get github.com/tjbdwanghaibo/roost-core/skill@latest
 ```
 
 ### A. 只用 combat 电池：属性 + buff + 一次伤害解析
@@ -55,7 +55,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 )
 
 func main() {
@@ -109,7 +109,7 @@ package main
 import (
 	"fmt"
 
-	skill "github.com/tjbdwanghaibo/roost-skill/skill"
+	skill "github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 const fireballJSON = `{

@@ -6,9 +6,9 @@ import (
 	"time"
 
 	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
-	streamadapter "github.com/tjbdwanghaibo/roost-kit/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
-	"github.com/tjbdwanghaibo/roost-skill/skillsync"
+	streamadapter "github.com/tjbdwanghaibo/roost-core/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill/skillsync"
 )
 
 // TestProtocolSoak is opt-in so normal CI remains fast. Production release CI

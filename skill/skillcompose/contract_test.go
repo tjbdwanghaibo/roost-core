@@ -1,7 +1,7 @@
 package skillcompose
 
 import (
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 	"strings"
 	"testing"
 )

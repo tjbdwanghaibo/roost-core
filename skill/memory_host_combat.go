@@ -1,6 +1,6 @@
 package skill
 
-import "github.com/tjbdwanghaibo/roost-skill/combat"
+import "github.com/tjbdwanghaibo/roost-core/skill/combat"
 
 // MemoryHost delegates all combat arithmetic to the combat package so the
 // reference host and production hosts run the same twelve-stage pipeline.

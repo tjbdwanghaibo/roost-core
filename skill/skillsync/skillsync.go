@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/syncstream"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 const (

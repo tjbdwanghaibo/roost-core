@@ -3,7 +3,7 @@
 本次升级只保留一个核心 Go 包：
 
 ```text
-github.com/tjbdwanghaibo/roost-skill/skill
+github.com/tjbdwanghaibo/roost-core/skill
 ```
 
 旧 `/skillv2` 包、转发别名和双包兼容层均不保留。这样避免同一进程同时出现两套
@@ -18,7 +18,7 @@ github.com/tjbdwanghaibo/roost-skill/skill
 | JSON schema | `cube.skill/v2` | `roost.skill/v2`（v1.10.0 起；当时尚无旧数据，无需迁移） | 否 |
 | compiler semantics | `skillv2-compiler-2` | 保持不变 | 否 |
 | checkpoint/wire/outbox | 当前格式 | 保持不变 | 不需要格式迁移 |
-| Go module | `github.com/tjbdwanghaibo/roost-skill` | 保持不变 | 否 |
+| Go module | `github.com/tjbdwanghaibo/roost-core/skill` | 保持不变 | 否 |
 
 协议身份保留是有意设计：`v2` 描述 wire/checkpoint 语义，不再污染稳定 Go API 名称。
 
@@ -33,8 +33,8 @@ rg -n "roost-skill/skillv2|\bskillv2\." .
 机械替换：
 
 ```text
-github.com/tjbdwanghaibo/roost-skill/skillv2
-=> github.com/tjbdwanghaibo/roost-skill/skill
+github.com/tjbdwanghaibo/roost-core/skillv2
+=> github.com/tjbdwanghaibo/roost-core/skill
 
 skillv2.SomeType
 => skill.SomeType
@@ -51,7 +51,7 @@ make generate
 
 ```powershell
 $env:GOWORK = "off"
-go get github.com/tjbdwanghaibo/roost-skill@latest
+go get github.com/tjbdwanghaibo/roost-core/skill@latest
 go mod tidy
 Remove-Item Env:GOWORK
 ```

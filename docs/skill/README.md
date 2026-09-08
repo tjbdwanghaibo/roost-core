@@ -1,7 +1,7 @@
 # roost-skill 文档导航
 
 本文档目录按使用角色组织。Go 的稳定核心包路径是
-`github.com/tjbdwanghaibo/roost-skill/skill`；JSON wire schema
+`github.com/tjbdwanghaibo/roost-core/skill`；JSON wire schema
 `roost.skill/v2` 和编译器语义 `skillv2-compiler-2` 是独立的持久协议版本，
 不会再体现在 Go 目录名中。
 
@@ -26,7 +26,7 @@
 
 ## 文档事实来源
 
-- Go API：源码注释与 `go doc github.com/tjbdwanghaibo/roost-skill/skill`
+- Go API：源码注释与 `go doc github.com/tjbdwanghaibo/roost-core/skill`
 - JSON 字段：`skill/wire_*.go`、严格 parser 和 `skill/testdata/*.json`
 - 运行语义：`skill/runtime*.go`、`skill/host*.go` 与验收测试
 - 生产约束：`production-readiness.md` 和 CI；README 只提供入口，不覆盖这些门槛

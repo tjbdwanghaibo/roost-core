@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 var (

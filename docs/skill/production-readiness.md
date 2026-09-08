@@ -5,7 +5,7 @@ This document defines the supported production path for `skill`,
 are intentionally rejected; migrate by draining the old runtime/outbox before
 deploying this version. Follow the
 [stable package migration runbook](breaking-upgrade-skill-package.md). The Go
-module is `github.com/tjbdwanghaibo/roost-skill` and therefore follows normal
+module is `github.com/tjbdwanghaibo/roost-core/skill` and therefore follows normal
 v1.x semantic-version tags; the wire schema version is independent.
 
 ## Runtime limits

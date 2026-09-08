@@ -10,7 +10,7 @@ import (
 var promptJSONFence = regexp.MustCompile("(?s)```json\\s*(\\{.*?\\})\\s*```")
 
 func TestPromptContractsDescribeCanonicalSkillV2(t *testing.T) {
-	system := mustReadPrompt(t, "../docs/ai-skill-system-prompt.md")
+	system := mustReadPrompt(t, "../docs/skill/ai-skill-system-prompt.md")
 	for _, required := range []string{
 		"roost.skill/v2", "Direct Root", "Skill, Phase, Flow, Select, Effect", "fixed Motion pipeline", "Numeric", "input_schema",
 		"Attribute", "snapshot", "Gameplay Tag", "Gameplay Element", "CastWindow", "EventFilter", "ProcPolicy", "Area", "enter", "leave",
@@ -20,7 +20,7 @@ func TestPromptContractsDescribeCanonicalSkillV2(t *testing.T) {
 			t.Fatalf("system prompt misses %q", required)
 		}
 	}
-	user := mustReadPrompt(t, "../docs/ai-skill-user-prompt.md")
+	user := mustReadPrompt(t, "../docs/skill/ai-skill-user-prompt.md")
 	if strings.Count(user, "%s") != 1 || strings.Contains(user, "{{USER_SKILL_DESCRIPTION}}") {
 		t.Fatalf("user prompt must contain exactly one %%s and no legacy placeholder: %q", user)
 	}
