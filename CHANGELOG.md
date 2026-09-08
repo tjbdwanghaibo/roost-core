@@ -22,6 +22,7 @@
 
 ### Changed（测试质量）
 
+- **gap map 采样器跳过 `*_gen.go`**（B-25）：生成文件是同一模板在每个包的实例，其守卫在模板所在处钉一次即可；采样器现在只统计不采样，并在包级与总计里报告跳过的守卫数。
 - **cache ref_hmap 补丁路径解析与 JSON 存储的写规则钉住**（U-0102，C2，B-24 第四项）。nightly gap map 里 `cache` 20 条采样 15 条无覆盖。
   补丁路径：空段、未知字段、末段非标量、中途穿过非结构体字段、空计划——各自以 `ErrRefHMapUnsupported` 拒绝并点名路径，`Patch` 走同一
   解析器故坏路径不落一笔；嵌套深度超过 `MaxDepth` 在建布局时以 `ErrRefHMapMaxDepth` 拒绝；`RedisJSONStore` 的过期写 `ErrStaleWrite`

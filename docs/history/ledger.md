@@ -226,7 +226,7 @@
 | ~~B-22~~ | core 首份 nightly gap map 里整片无覆盖的包 | C2 | nightly-gapmap 34029785123 | **已完成 → U-0065～U-0073**（entity / statesync / security / migration / admin / hotcode / ownerroute / robot）；剩余 `syncbus`、`failurelog`、`etcd`、`robot/loadtest` 按实质筛后只有 nil / 空 key 守卫，不开单元 |
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 | ~~B-24~~ | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | **已完成**：entity → U-0099、actionflow → U-0100、dataengine → U-0101、cache → U-0102、mail → U-0103（09-07 一天内） |
-| B-25 | 12 个服务包的 `*_rpc_gen.go` 装配守卫在 nightly 报告里各占 8～10 行 GREEN（同一 servicerpc 模板） | C2 / 工具 | nightly 09-07 | U-0103 已在 `mail` 钉一份；要么在 roost-codegen `servicerpc` 加生成物编译 + 装配测试一次覆盖，要么让采样器按文件名跳过 `*_gen.go`。低优先 |
+| ~~B-25~~ | 12 个服务包的 `*_rpc_gen.go` 装配守卫在 nightly 报告里各占 8～10 行 GREEN（同一 servicerpc 模板） | C2 / 工具 | nightly 09-07 | **已完成**（09-08）：五仓采样器跳过 `*_gen.go`，只统计并在报告里单列；生成物行为验证归 `framework-compat` / 收敛后的模板测试 |
 
 ## 5. 单元日志
 
