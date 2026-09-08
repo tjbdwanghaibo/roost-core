@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 )
 
 func newEffectInboxTest(t *testing.T, ttl time.Duration) (*MongoEffectInbox, *mongotest.Client, *mongotest.Collection) {
