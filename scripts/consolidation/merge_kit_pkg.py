@@ -56,7 +56,10 @@ def main(argv):
     for f in moved:
         s = open(f, encoding='utf-8').read(); orig = s
         for alias in aliases:
+            # aliased or bare self-import of the package we are merging into
             s = re.sub(rf'^\s*{alias} "{re.escape(corepath)}"\n', '', s, flags=re.M)
+            if alias == os.path.basename(target):
+                s = re.sub(rf'^\s*"{re.escape(corepath)}"\n', '', s, flags=re.M)
             s = re.sub(rf'\b{alias}\.', '', s)
         for old, new in replace:
             s = s.replace(old, new)
