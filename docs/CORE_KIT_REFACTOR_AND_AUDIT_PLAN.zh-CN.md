@@ -1,6 +1,6 @@
 # Roost Core / Kit 实现下沉与缺陷收敛统一实施方案
 
-状态：M-00 已开始，局部基线通过，五仓门禁阻塞；尚未迁移实现。实际结果见 [M-00 基线记录](history/M-00_BASELINE.md)。
+状态：M-00 五仓直接构建/单测基线通过，M-00a 消费方对齐完成；M-01 已开始依赖边界保护，生成流程/真实集成仍待验证；尚未迁移实现。最新结果见 [M-00a 续跑记录](history/M-00a_SOURCE_HEAD_ALIGNMENT.md)，首轮见 [M-00 基线记录](history/M-00_BASELINE.md)。
 
 目标读者：框架维护者、接手本任务的开发者或 Agent。
 
@@ -323,4 +323,4 @@ go vet -tags integration ./...
 
 首轮交付：依赖和迁移清单、真实基线、边界检查、Remote Entity 下沉、历史回归保留、确认 Bug 的修复证据、五仓消费验证及未完成项。
 
-当前下一步：解除 M-00 前置阻塞（定位 Roost Service、对齐 Skill 的模块依赖身份），再复测五仓及生成器 source-head 通路。详见 [基线记录](history/M-00_BASELINE.md)；不移动实现、不重跑整套历史采样、不自动发布。
+当前下一步：继续 M-01，验证并设计 Codegen 内部 source-head 通路，补生成工程和真实依赖门禁；Service 与 Skill 身份阻塞已解除。详见 [续跑记录](history/M-00a_SOURCE_HEAD_ALIGNMENT.md)；不提前移动实现、不重跑整套历史采样、不自动发布。

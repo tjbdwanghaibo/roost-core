@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- M-01：新增 Core 依赖边界测试，扫描根模块全部 Go import（含测试和非当前 build tag 文件），拒绝 Kit/Skill/Service/Codegen 反向依赖与其他框架模块身份；嵌套模块作为独立消费者验收。
+
 ### Changed
 
 - **`security.RateLimiter` 的令牌桶改用 `golang.org/x/time/rate`**。公开 API 不变（`RateLimitConfig` / `Allow` / `AllowN` / `Stats` / `GC`），

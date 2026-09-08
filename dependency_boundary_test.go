@@ -1,0 +1,87 @@
+package roostcore_test
+
+import (
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// Parse all root-module source files, including tests and inactive build tags.
+// Nested modules are separate consumers, not part of Core's dependency layer.
+func TestCoreDependencyBoundary(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			if path != "." {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				} else if !os.IsNotExist(err) {
+					return err
+				}
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, spec := range file.Imports {
+			name, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			if forbiddenCoreImport(name) {
+				t.Errorf("%s: forbidden Core dependency %s", path, name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func forbiddenCoreImport(name string) bool {
+	const owner = "github.com/tjbdwanghaibo/"
+	if strings.HasPrefix(name, owner+"cube-") {
+		return true
+	}
+	for _, module := range []string{"roost-kit", "roost-skill", "roost-service", "roost-codegen"} {
+		if name == owner+module || strings.HasPrefix(name, owner+module+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestForbiddenCoreImport(t *testing.T) {
+	for _, name := range []string{
+		"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest",
+		"github.com/tjbdwanghaibo/roost-service",
+		"github.com/tjbdwanghaibo/roost-skill/skill",
+		"github.com/tjbdwanghaibo/roost-codegen/cmd/roost",
+		"github.com/tjbdwanghaibo/cube-core/entity",
+	} {
+		if !forbiddenCoreImport(name) {
+			t.Errorf("accepted forbidden import %s", name)
+		}
+	}
+	for _, name := range []string{"context", "github.com/tjbdwanghaibo/roost-core/entity", "go.mongodb.org/mongo-driver/v2/mongo"} {
+		if forbiddenCoreImport(name) {
+			t.Errorf("rejected allowed import %s", name)
+		}
+	}
+}
