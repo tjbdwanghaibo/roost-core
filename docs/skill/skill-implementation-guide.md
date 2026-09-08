@@ -290,7 +290,7 @@ Host command/result 和 revision。这样通常不需要在整条链路中盲目
 7. `presentation_recovery.go`、`presentation_asset_cache.go`：持续表现恢复、可信目录、
    preload/fallback/ref-count/unload；
 8. `roost-core/syncstream`：Epoch、WAL/checkpoint、ACK 裁剪、replay/full fallback 和生命周期；
-9. `roost-kit/syncstream`：确认发布、gzip、分片、SHA-256、有界重组和背压。
+9. `roost-core/syncstream`：确认发布、gzip、分片、SHA-256、有界重组和背压。
 
 建议按四个小实验验证自己确实理解了实现：
 

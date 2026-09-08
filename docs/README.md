@@ -1,6 +1,6 @@
 # Roost 文档中心
 
-Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `roost-core`、`roost-kit`、`roost-skill`、`roost-service` 组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
+Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `roost-core`（契约 + 实现 + 技能系统）与 `roost-kit`（装配层 + 通用服务）组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
 
 ## 第一级：完全新手
 
@@ -33,8 +33,8 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 - [生产就绪清单](../PRODUCTION_READINESS.md)
 - [框架综合评估](../ROOST_FRAMEWORK_ASSESSMENT.md)
 - [roost-kit 组件与实现](https://github.com/tjbdwanghaibo/roost-kit/blob/main/README.md)
-- [roost-skill 技能系统](https://github.com/tjbdwanghaibo/roost-skill/blob/main/README.md)
-- [roost-service 通用服务](https://github.com/tjbdwanghaibo/roost-service/blob/main/README.md)
+- [技能系统（core/skill）](skill/README.md)
+- [通用服务（kit/service）](https://github.com/tjbdwanghaibo/roost-kit/blob/main/service/README.md)
 - [roost-codegen 生成器](https://github.com/tjbdwanghaibo/roost-codegen/blob/main/README.md)
 
 ## 版本基线

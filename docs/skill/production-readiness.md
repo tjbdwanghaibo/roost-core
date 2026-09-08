@@ -1,4 +1,4 @@
-# roost-skill 生产基线
+# 技能系统（roost-core/skill）生产基线
 
 This document defines the supported production path for `skill`,
 `skillcompose`, and `skillsync`. Legacy checkpoint and packet-only outbox files

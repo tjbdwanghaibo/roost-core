@@ -1,6 +1,6 @@
 # 稳定 Skill API 与最小接入
 
-roost-skill 对业务暴露唯一稳定核心包：
+技能系统（roost-core/skill）对业务暴露唯一稳定核心包：
 
 ```go
 import "github.com/tjbdwanghaibo/roost-core/skill"
@@ -10,7 +10,7 @@ import "github.com/tjbdwanghaibo/roost-core/skill"
 
 | 身份 | 当前值 | 用途 |
 | --- | --- | --- |
-| Go import | `roost-skill/skill` | 业务编译期依赖，保持稳定 |
+| Go import | `github.com/tjbdwanghaibo/roost-core/skill` | 业务编译期依赖，保持稳定 |
 | JSON schema | `roost.skill/v2` | 技能定义 wire 格式，必须写入定义 |
 | compiler semantics | `skillv2-compiler-2` | gameplay digest、checkpoint、回放和契约校验 |
 | module | `github.com/tjbdwanghaibo/roost-core/skill` | Go module，沿 v1.x tag 发布 |

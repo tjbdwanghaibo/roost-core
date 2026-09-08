@@ -1,4 +1,4 @@
-# roost-skill 文档导航
+# 技能系统（roost-core/skill，原 roost-skill）文档导航
 
 本文档目录按使用角色组织。Go 的稳定核心包路径是
 `github.com/tjbdwanghaibo/roost-core/skill`；JSON wire schema
