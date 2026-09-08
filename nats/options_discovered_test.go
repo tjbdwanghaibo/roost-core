@@ -3,8 +3,6 @@ package nats
 import (
 	"testing"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-
 	gonats "github.com/nats-io/nats.go"
 )
 
@@ -24,7 +22,7 @@ func applyOptions(t *testing.T, opts []gonats.Option) gonats.Options {
 // Default behaviour stays as before so flat-network deployments keep failover
 // through discovery.
 func TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection(t *testing.T) {
-	cfg := fnats.DefaultConfig("nats://127.0.0.1:24222")
+	cfg := DefaultConfig("nats://127.0.0.1:24222")
 	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, clientOptions{})); got.IgnoreDiscoveredServers {
 		t.Fatal("discovered servers must be followed by default")
 	}

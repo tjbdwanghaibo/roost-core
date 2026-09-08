@@ -7,12 +7,11 @@ import (
 
 	gonats "github.com/nats-io/nats.go"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 func TestNatsClientNilBoundaryFailsClosed(t *testing.T) {
 	var client *natsClient
-	if err := client.Publish("topic", nil); !errors.Is(err, fnats.ErrClosed) {
+	if err := client.Publish("topic", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Publish error=%v, want ErrClosed", err)
 	}
 	client.Close()
@@ -26,7 +25,7 @@ func TestNatsClientNilBoundaryFailsClosed(t *testing.T) {
 // is the observable.
 func TestInvokeNatsHandlerContainsAndReportsPanic(t *testing.T) {
 	before := panicCounter()
-	invokeNatsHandler(func(*fnats.Msg) { panic("boom") }, &fnats.Msg{Subject: "test"})
+	invokeNatsHandler(func(*Msg) { panic("boom") }, &Msg{Subject: "test"})
 	if got := panicCounter() - before; got != 1 {
 		t.Fatalf("handler_panic counter moved by %d, want 1: the panic was swallowed without being reported", got)
 	}
@@ -50,10 +49,10 @@ func TestSubscriptionValidationRejectsANilHandler(t *testing.T) {
 	if err := client.validateSubscription("subject", "", nil); err == nil || !strings.Contains(err.Error(), "handler") {
 		t.Fatalf("nil handler accepted: %v", err)
 	}
-	if err := client.validateSubscription("", "", func(*fnats.Msg) {}); err == nil {
+	if err := client.validateSubscription("", "", func(*Msg) {}); err == nil {
 		t.Fatal("empty subject accepted")
 	}
-	if err := client.validateSubscription("subject", "queue", func(*fnats.Msg) {}); err != nil {
+	if err := client.validateSubscription("subject", "queue", func(*Msg) {}); err != nil {
 		t.Fatalf("a valid subscription was refused: %v", err)
 	}
 }

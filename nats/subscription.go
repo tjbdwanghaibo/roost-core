@@ -1,12 +1,10 @@
 package nats
 
 import (
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-
 	gonats "github.com/nats-io/nats.go"
 )
 
-// subscription wraps gonats.Subscription to implement fnats.ISubscription.
+// subscription wraps gonats.Subscription to implement ISubscription.
 type subscription struct {
 	sub *gonats.Subscription
 }
@@ -19,4 +17,4 @@ func (s *subscription) IsValid() bool {
 	return s.sub.IsValid()
 }
 
-var _ fnats.ISubscription = (*subscription)(nil)
+var _ ISubscription = (*subscription)(nil)

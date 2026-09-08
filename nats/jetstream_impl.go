@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
@@ -29,7 +28,7 @@ func newJetStreamClient(client *natsClient) (*jetStreamClient, error) {
 	return &jetStreamClient{js: js}, nil
 }
 
-func (c *jetStreamClient) EnsureStream(ctx context.Context, cfg fnats.JetStreamConfig) error {
+func (c *jetStreamClient) EnsureStream(ctx context.Context, cfg JetStreamConfig) error {
 	if c == nil || c.js == nil {
 		return errors.New("nats jetstream: not initialized")
 	}
@@ -37,9 +36,9 @@ func (c *jetStreamClient) EnsureStream(ctx context.Context, cfg fnats.JetStreamC
 	return err
 }
 
-func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
+func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts JetStreamPublishOptions) (JetStreamPublishAck, error) {
 	if c == nil || c.js == nil {
-		return fnats.JetStreamPublishAck{}, errors.New("nats jetstream: not initialized")
+		return JetStreamPublishAck{}, errors.New("nats jetstream: not initialized")
 	}
 	publishOpts := make([]gojs.PublishOpt, 0, 1)
 	if opts.MsgID != "" {
@@ -47,19 +46,19 @@ func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []by
 	}
 	ack, err := c.js.Publish(ctx, subject, data, publishOpts...)
 	if err != nil {
-		return fnats.JetStreamPublishAck{}, err
+		return JetStreamPublishAck{}, err
 	}
 	if ack == nil {
-		return fnats.JetStreamPublishAck{}, nil
+		return JetStreamPublishAck{}, nil
 	}
-	return fnats.JetStreamPublishAck{
+	return JetStreamPublishAck{
 		Stream:    ack.Stream,
 		Sequence:  ack.Sequence,
 		Duplicate: ack.Duplicate,
 	}, nil
 }
 
-func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamConsumerConfig, handler fnats.JetStreamHandler) (fnats.IJetStreamSubscription, error) {
+func (c *jetStreamClient) Subscribe(ctx context.Context, cfg JetStreamConsumerConfig, handler JetStreamHandler) (IJetStreamSubscription, error) {
 	if c == nil || c.js == nil {
 		return nil, errors.New("nats jetstream: not initialized")
 	}
@@ -89,7 +88,7 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 // consumer deleted underneath us) looks identical to "the handler keeps
 // failing" if the error is dropped, and the redelivery loop it produces has
 // no other symptom.
-func settleJetStreamDelivery(msg gojs.Msg, wrapped *fnats.JetStreamMsg, cfg fnats.JetStreamConsumerConfig, handlerErr error) {
+func settleJetStreamDelivery(msg gojs.Msg, wrapped *JetStreamMsg, cfg JetStreamConsumerConfig, handlerErr error) {
 	op := "ack"
 	var settleErr error
 	switch {
@@ -114,7 +113,7 @@ func settleJetStreamDelivery(msg gojs.Msg, wrapped *fnats.JetStreamMsg, cfg fnat
 }
 
 func terminalReason(err error, maxDeliver int, deliveries uint64) string {
-	if isPermanent(err) {
+	if IsPermanent(err) {
 		return "permanent"
 	}
 	if err != nil && maxDeliver > 0 && deliveries >= uint64(maxDeliver) {
@@ -123,7 +122,7 @@ func terminalReason(err error, maxDeliver int, deliveries uint64) string {
 	return ""
 }
 
-func invokeJetStreamHandler(ctx context.Context, handler fnats.JetStreamHandler, msg *fnats.JetStreamMsg) (err error) {
+func invokeJetStreamHandler(ctx context.Context, handler JetStreamHandler, msg *JetStreamMsg) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("nats jetstream: handler panic: %v", recovered)
@@ -132,7 +131,7 @@ func invokeJetStreamHandler(ctx context.Context, handler fnats.JetStreamHandler,
 	return handler(ctx, msg)
 }
 
-func nakBackoff(config fnats.JetStreamConsumerConfig, deliveries uint64) time.Duration {
+func nakBackoff(config JetStreamConsumerConfig, deliveries uint64) time.Duration {
 	minimum, maximum := config.NakBackoffMin, config.NakBackoffMax
 	if minimum <= 0 {
 		return 0
@@ -153,7 +152,7 @@ func nakBackoff(config fnats.JetStreamConsumerConfig, deliveries uint64) time.Du
 	return delay
 }
 
-func toJetStreamStreamConfig(cfg fnats.JetStreamConfig) gojs.StreamConfig {
+func toJetStreamStreamConfig(cfg JetStreamConfig) gojs.StreamConfig {
 	return gojs.StreamConfig{
 		Name:       cfg.Name,
 		Subjects:   append([]string(nil), cfg.Subjects...),
@@ -165,7 +164,7 @@ func toJetStreamStreamConfig(cfg fnats.JetStreamConfig) gojs.StreamConfig {
 	}
 }
 
-func toJetStreamConsumerConfig(cfg fnats.JetStreamConsumerConfig) gojs.ConsumerConfig {
+func toJetStreamConsumerConfig(cfg JetStreamConsumerConfig) gojs.ConsumerConfig {
 	name := cfg.Name
 	if name == "" {
 		name = cfg.Durable
@@ -186,26 +185,26 @@ func toJetStreamConsumerConfig(cfg fnats.JetStreamConsumerConfig) gojs.ConsumerC
 	}
 }
 
-func toJetStreamStorage(storage fnats.JetStreamStorage) gojs.StorageType {
+func toJetStreamStorage(storage JetStreamStorage) gojs.StorageType {
 	switch storage {
-	case fnats.JetStreamStorageMemory:
+	case JetStreamStorageMemory:
 		return gojs.MemoryStorage
 	default:
 		return gojs.FileStorage
 	}
 }
 
-func toJetStreamDeliverPolicy(policy fnats.JetStreamDeliverPolicy) gojs.DeliverPolicy {
+func toJetStreamDeliverPolicy(policy JetStreamDeliverPolicy) gojs.DeliverPolicy {
 	switch policy {
-	case fnats.JetStreamDeliverNew:
+	case JetStreamDeliverNew:
 		return gojs.DeliverNewPolicy
 	default:
 		return gojs.DeliverAllPolicy
 	}
 }
 
-func jetStreamMsg(msg gojs.Msg) *fnats.JetStreamMsg {
-	wrapped := &fnats.JetStreamMsg{
+func jetStreamMsg(msg gojs.Msg) *JetStreamMsg {
+	wrapped := &JetStreamMsg{
 		Subject: msg.Subject(),
 		Data:    append([]byte(nil), msg.Data()...),
 	}
@@ -278,4 +277,4 @@ func (s *jetStreamSubscription) Closed() <-chan struct{} {
 	return s.cc.Closed()
 }
 
-var _ fnats.IJetStream = (*jetStreamClient)(nil)
+var _ IJetStream = (*jetStreamClient)(nil)

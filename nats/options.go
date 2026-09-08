@@ -1,14 +1,13 @@
 package nats
 
 import (
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
 
 	gonats "github.com/nats-io/nats.go"
 )
 
 // clientOptions are the kit-level knobs that are not part of the core
-// fnats.Config contract.
+// Config contract.
 type clientOptions struct {
 	// ignoreDiscoveredServers keeps the client on the URLs it was configured
 	// with. By default nats.go learns every cluster member's advertised
@@ -18,7 +17,7 @@ type clientOptions struct {
 	ignoreDiscoveredServers bool
 }
 
-func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra clientOptions) []gonats.Option {
+func buildNatsOptions(cfg *Config, state *natsLifecycleState, extra clientOptions) []gonats.Option {
 	opts := []gonats.Option{
 		gonats.ReconnectWait(cfg.ReconnectWait),
 		gonats.MaxReconnects(cfg.MaxReconnects),
@@ -49,7 +48,7 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra client
 	return opts
 }
 
-func handleNatsDisconnect(state *natsLifecycleState, cfg *fnats.Config, err error) {
+func handleNatsDisconnect(state *natsLifecycleState, cfg *Config, err error) {
 	if state != nil && state.expectedDisconnect() || err == nil {
 		slog.Info("nats: disconnected", "err", err)
 	} else {

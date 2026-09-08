@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-
 	gonats "github.com/nats-io/nats.go"
 )
 
@@ -17,10 +15,10 @@ import (
 func TestClientTranslatesEachTransportErrorToItsSentinel(t *testing.T) {
 	c := &natsClient{}
 	cases := map[error]error{
-		gonats.ErrTimeout:            fnats.ErrTimeout,
-		gonats.ErrNoResponders:       fnats.ErrNoResponders,
-		gonats.ErrConnectionClosed:   fnats.ErrClosed,
-		gonats.ErrConnectionDraining: fnats.ErrClosed,
+		gonats.ErrTimeout:            ErrTimeout,
+		gonats.ErrNoResponders:       ErrNoResponders,
+		gonats.ErrConnectionClosed:   ErrClosed,
+		gonats.ErrConnectionDraining: ErrClosed,
 	}
 	for in, want := range cases {
 		if got := c.wrapError(in); !errors.Is(got, want) {
@@ -38,10 +36,10 @@ func TestClientTranslatesEachTransportErrorToItsSentinel(t *testing.T) {
 // connection reports ErrClosed rather than panicking.
 func TestClientRefusesInvalidSubjectsQueuesAndHandlers(t *testing.T) {
 	var closed *natsClient
-	if err := closed.validateSubject("roost.x"); !errors.Is(err, fnats.ErrClosed) {
+	if err := closed.validateSubject("roost.x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("nil client = %v", err)
 	}
-	if err := (&natsClient{}).validateSubject("roost.x"); !errors.Is(err, fnats.ErrClosed) {
+	if err := (&natsClient{}).validateSubject("roost.x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("client without connection = %v", err)
 	}
 	c := &natsClient{conn: &gonats.Conn{}}
@@ -50,7 +48,7 @@ func TestClientRefusesInvalidSubjectsQueuesAndHandlers(t *testing.T) {
 			t.Fatalf("subject %q = %v", subject, err)
 		}
 	}
-	handler := func(*fnats.Msg) {}
+	handler := func(*Msg) {}
 	if err := c.validateSubscription("roost.x", "", nil); err == nil || !strings.Contains(err.Error(), "handler is nil") {
 		t.Fatalf("nil handler = %v", err)
 	}

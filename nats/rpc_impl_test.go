@@ -3,7 +3,6 @@ package nats
 import (
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/worker"
 	"sync"
 	"sync/atomic"
@@ -46,8 +45,8 @@ func TestRpcClientStopCancelsPendingCalls(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, fnats.ErrCancelled) {
-			t.Fatalf("callback err = %v, want %v", err, fnats.ErrCancelled)
+		if !errors.Is(err, ErrCancelled) {
+			t.Fatalf("callback err = %v, want %v", err, ErrCancelled)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for cancelled callback")
@@ -80,15 +79,15 @@ func TestRpcClientDispatchCallbackCompletesWhenPoolRejects(t *testing.T) {
 	}
 
 	done := make(chan error, 2)
-	task := &rpcTask{cb: func(_ []byte, err error) { done <- err }, err: fnats.ErrTimeout}
+	task := &rpcTask{cb: func(_ []byte, err error) { done <- err }, err: ErrTimeout}
 	r.dispatchCallback(1, task)
 	// A later defensive release must not duplicate the callback.
 	task.OnRelease()
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, fnats.ErrTimeout) {
-			t.Fatalf("callback err = %v, want %v", err, fnats.ErrTimeout)
+		if !errors.Is(err, ErrTimeout) {
+			t.Fatalf("callback err = %v, want %v", err, ErrTimeout)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for rejected callback")
@@ -114,8 +113,8 @@ func TestRpcClientCallAsyncAfterStopCancelsImmediately(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, fnats.ErrCancelled) {
-			t.Fatalf("callback err = %v, want %v", err, fnats.ErrCancelled)
+		if !errors.Is(err, ErrCancelled) {
+			t.Fatalf("callback err = %v, want %v", err, ErrCancelled)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for cancelled callback")
@@ -127,17 +126,17 @@ func TestRpcClientPendingHasSingleTerminalWinner(t *testing.T) {
 	done := make(chan error, 2)
 	r.pending.Store(int64(11), &pendingCall{cb: func(_ []byte, err error) { done <- err }})
 
-	if !r.finishPending(11, nil, fnats.ErrTimeout) {
+	if !r.finishPending(11, nil, ErrTimeout) {
 		t.Fatal("first terminal transition did not claim pending call")
 	}
-	if r.finishPending(11, nil, fnats.ErrCancelled) {
+	if r.finishPending(11, nil, ErrCancelled) {
 		t.Fatal("second terminal transition claimed completed call")
 	}
 	r.Stop()
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, fnats.ErrTimeout) {
+		if !errors.Is(err, ErrTimeout) {
 			t.Fatalf("callback err = %v, want timeout winner", err)
 		}
 	case <-time.After(time.Second):
@@ -173,8 +172,8 @@ func TestRpcClientCancelsOneHundredThousandPendingExactlyOnce(t *testing.T) {
 		r.pending.Store(int64(i+1), &pendingCall{
 			startedAt: time.Now(),
 			cb: func(_ []byte, err error) {
-				if !errors.Is(err, fnats.ErrCancelled) {
-					t.Errorf("callback[%d] err = %v, want %v", index, err, fnats.ErrCancelled)
+				if !errors.Is(err, ErrCancelled) {
+					t.Errorf("callback[%d] err = %v, want %v", index, err, ErrCancelled)
 				}
 				counts[index].Add(1)
 			},

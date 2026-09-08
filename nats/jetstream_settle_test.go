@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
@@ -67,7 +66,7 @@ func swapRegistry(t *testing.T) *metrics.Registry {
 // is broken".
 func TestJetStreamSettleFailureIsCountedPerOperation(t *testing.T) {
 	registry := swapRegistry(t)
-	cfg := fnats.JetStreamConsumerConfig{MaxDeliver: 3}
+	cfg := JetStreamConsumerConfig{MaxDeliver: 3}
 
 	ackFail := &settleMsg{ackErr: errors.New("nats: connection closed")}
 	settleJetStreamDelivery(ackFail, jetStreamMsg(ackFail), cfg, nil)
@@ -85,7 +84,7 @@ func TestJetStreamSettleFailureIsCountedPerOperation(t *testing.T) {
 	}
 
 	termFail := &settleMsg{termErr: errors.New("nats: timeout")}
-	settleJetStreamDelivery(termFail, jetStreamMsg(termFail), cfg, fnats.Permanent(errors.New("poison")))
+	settleJetStreamDelivery(termFail, jetStreamMsg(termFail), cfg, Permanent(errors.New("poison")))
 	if got, ok := counterValue(t, registry, "nats.jetstream.settle_failures.total", metrics.Labels{"op": "term"}); !ok || got != 1 {
 		t.Fatalf("term failure counter = %d (%v), want 1", got, ok)
 	}
@@ -97,7 +96,7 @@ func TestJetStreamSettleFailureIsCountedPerOperation(t *testing.T) {
 // The counter is a failure counter: a clean settle must not touch it.
 func TestJetStreamSettleSuccessLeavesFailureCounterUntouched(t *testing.T) {
 	registry := swapRegistry(t)
-	cfg := fnats.JetStreamConsumerConfig{}
+	cfg := JetStreamConsumerConfig{}
 	ok := &settleMsg{}
 	settleJetStreamDelivery(ok, jetStreamMsg(ok), cfg, nil)
 	settleJetStreamDelivery(ok, jetStreamMsg(ok), cfg, errors.New("transient"))

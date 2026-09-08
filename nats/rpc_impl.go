@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/worker"
 	"log/slog"
 	"math"
@@ -16,10 +15,10 @@ import (
 	gonats "github.com/nats-io/nats.go"
 )
 
-// rpcClient implements fnats.IRpc using the underlying natsClient.
+// rpcClient implements IRpc using the underlying natsClient.
 type rpcClient struct {
 	client *natsClient
-	policy fnats.RetryPolicy
+	policy RetryPolicy
 
 	// async RPC state
 	pending   sync.Map // sessionId → *pendingCall
@@ -29,7 +28,7 @@ type rpcClient struct {
 }
 
 type pendingCall struct {
-	cb        fnats.RpcCallback
+	cb        RpcCallback
 	startedAt time.Time
 
 	mu       sync.Mutex
@@ -73,7 +72,7 @@ func (p *pendingCall) closeResources() {
 
 // rpcTask carries an async callback execution for the worker pool.
 type rpcTask struct {
-	cb   fnats.RpcCallback
+	cb   RpcCallback
 	resp []byte
 	err  error
 	// arrivals is both the exactly-once guard and the observation of it.
@@ -110,7 +109,7 @@ func (t *rpcTask) complete() {
 // The once guard makes the normal handler + release path exactly-once.
 func (t *rpcTask) OnRelease() { t.complete() }
 
-func newRpcClient(client *natsClient, policy fnats.RetryPolicy, cbWorkerNum int) *rpcClient {
+func newRpcClient(client *natsClient, policy RetryPolicy, cbWorkerNum int) *rpcClient {
 	if cbWorkerNum <= 0 {
 		cbWorkerNum = 4
 	}
@@ -139,7 +138,7 @@ func (r *rpcClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 			wait := r.nextInterval(attempt - 1)
 			select {
 			case <-ctx.Done():
-				return nil, fnats.ErrCancelled
+				return nil, ErrCancelled
 			case <-time.After(wait):
 			}
 		}
@@ -169,10 +168,10 @@ func (r *rpcClient) CallWithTimeout(subject string, req []byte, timeout time.Dur
 	return r.Call(ctx, subject, req)
 }
 
-func (r *rpcClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) {
+func (r *rpcClient) CallAsync(subject string, req []byte, cb RpcCallback) {
 	if r.stopped.Load() {
 		if cb != nil {
-			cb(nil, fnats.ErrCancelled)
+			cb(nil, ErrCancelled)
 		}
 		return
 	}
@@ -198,10 +197,10 @@ func (r *rpcClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	metrics.IncCounter("nats.rpc.started.total", nil, 1)
 	metrics.AddGauge("nats.rpc.pending", nil, 1)
 	pc.setTimer(time.AfterFunc(5*time.Second, func() {
-		r.finishPending(sid, nil, fnats.ErrTimeout)
+		r.finishPending(sid, nil, ErrTimeout)
 	}))
 	if r.stopped.Load() {
-		r.finishPending(sid, nil, fnats.ErrCancelled)
+		r.finishPending(sid, nil, ErrCancelled)
 		return
 	}
 
@@ -222,7 +221,7 @@ func (r *rpcClient) Stop() {
 
 	r.pending.Range(func(key, value any) bool {
 		if sid, ok := key.(int64); ok {
-			r.finishPending(sid, nil, fnats.ErrCancelled)
+			r.finishPending(sid, nil, ErrCancelled)
 		}
 		return true
 	})
@@ -269,7 +268,7 @@ func (r *rpcClient) dispatchCallback(key int64, task *rpcTask) {
 }
 
 func (r *rpcClient) isRetryable(err error) bool {
-	return err == fnats.ErrTimeout || err == fnats.ErrNoResponders
+	return err == ErrTimeout || err == ErrNoResponders
 }
 
 func (r *rpcClient) nextInterval(attempt int) time.Duration {
@@ -285,4 +284,4 @@ func (r *rpcClient) nextInterval(attempt int) time.Duration {
 	return interval
 }
 
-var _ fnats.IRpc = (*rpcClient)(nil)
+var _ IRpc = (*rpcClient)(nil)

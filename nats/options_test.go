@@ -3,7 +3,6 @@ package nats
 import (
 	"bytes"
 	"errors"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -19,7 +18,7 @@ func TestHandleNatsDisconnectLogsExpectedCloseAsInfo(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
 	var called atomic.Bool
-	cfg := fnats.DefaultConfig("nats://test")
+	cfg := DefaultConfig("nats://test")
 	cfg.OnDisconnect = func(error) { called.Store(true) }
 	state := &natsLifecycleState{}
 	state.draining.Store(true)
@@ -44,7 +43,7 @@ func TestHandleNatsDisconnectLogsUnexpectedErrorAsError(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
-	handleNatsDisconnect(&natsLifecycleState{}, fnats.DefaultConfig("nats://test"), errNatsDisconnectForTest)
+	handleNatsDisconnect(&natsLifecycleState{}, DefaultConfig("nats://test"), errNatsDisconnectForTest)
 
 	if !strings.Contains(buf.String(), `"level":"ERROR"`) {
 		t.Fatalf("expected unexpected disconnect to log ERROR, got %s", buf.String())

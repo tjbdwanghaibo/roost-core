@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
 
@@ -33,9 +31,9 @@ func TestJetStreamTerminalClassification(t *testing.T) {
 }
 
 func TestInvokeJetStreamHandlerContainsPanic(t *testing.T) {
-	err := invokeJetStreamHandler(context.Background(), func(context.Context, *fnats.JetStreamMsg) error {
+	err := invokeJetStreamHandler(context.Background(), func(context.Context, *JetStreamMsg) error {
 		panic("boom")
-	}, &fnats.JetStreamMsg{})
+	}, &JetStreamMsg{})
 	if err == nil || !strings.Contains(err.Error(), "panic: boom") {
 		t.Fatalf("panic was not contained: %v", err)
 	}
@@ -63,10 +61,10 @@ func (c *fakeConsumeContext) Drain() {
 func (c *fakeConsumeContext) Closed() <-chan struct{} { return c.closed }
 
 func TestJetStreamStreamConfigMapping(t *testing.T) {
-	got := toJetStreamStreamConfig(fnats.JetStreamConfig{
+	got := toJetStreamStreamConfig(JetStreamConfig{
 		Name:       "ROOST_DOMAIN_EVENTS",
 		Subjects:   []string{"roost.domain.>"},
-		Storage:    fnats.JetStreamStorageMemory,
+		Storage:    JetStreamStorageMemory,
 		MaxAge:     time.Hour,
 		Duplicates: time.Minute,
 		Replicas:   2,
@@ -85,11 +83,11 @@ func TestJetStreamStreamConfigMapping(t *testing.T) {
 }
 
 func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
-	got := toJetStreamConsumerConfig(fnats.JetStreamConsumerConfig{
+	got := toJetStreamConsumerConfig(JetStreamConsumerConfig{
 		Name:          "task-progress",
 		Durable:       "task-progress",
 		FilterSubject: "roost.domain.battle.settled",
-		DeliverPolicy: fnats.JetStreamDeliverNew,
+		DeliverPolicy: JetStreamDeliverNew,
 		AckWait:       3 * time.Second,
 		MaxDeliver:    5,
 		MaxAckPending: 128,
@@ -110,13 +108,13 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 }
 
 func TestJetStreamNakBackoffIsBounded(t *testing.T) {
-	config := fnats.JetStreamConsumerConfig{NakBackoffMin: 250 * time.Millisecond, NakBackoffMax: 5 * time.Second}
+	config := JetStreamConsumerConfig{NakBackoffMin: 250 * time.Millisecond, NakBackoffMax: 5 * time.Second}
 	for deliveries, want := range map[uint64]time.Duration{1: 250 * time.Millisecond, 2: 500 * time.Millisecond, 3: time.Second, 10: 5 * time.Second} {
 		if got := nakBackoff(config, deliveries); got != want {
 			t.Fatalf("deliveries=%d got=%s want=%s", deliveries, got, want)
 		}
 	}
-	if got := nakBackoff(fnats.JetStreamConsumerConfig{}, 10); got != 0 {
+	if got := nakBackoff(JetStreamConsumerConfig{}, 10); got != 0 {
 		t.Fatalf("zero config backoff=%s", got)
 	}
 }

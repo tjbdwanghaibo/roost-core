@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 
 	gonats "github.com/nats-io/nats.go"
 )
@@ -20,10 +19,10 @@ const (
 	publishRetryWait = 20 * time.Millisecond
 )
 
-// natsClient implements fnats.IClient by wrapping nats-io/nats.go.
+// natsClient implements IClient by wrapping nats-io/nats.go.
 type natsClient struct {
 	conn  *gonats.Conn
-	cfg   *fnats.Config
+	cfg   *Config
 	state *natsLifecycleState
 }
 
@@ -36,7 +35,7 @@ func (s *natsLifecycleState) expectedDisconnect() bool {
 	return s != nil && (s.draining.Load() || s.closing.Load())
 }
 
-func newNatsClient(cfg *fnats.Config, extra clientOptions) (*natsClient, error) {
+func newNatsClient(cfg *Config, extra clientOptions) (*natsClient, error) {
 	if cfg == nil || strings.TrimSpace(cfg.URL) == "" {
 		return nil, fmt.Errorf("nats: configuration and URL are required")
 	}
@@ -89,22 +88,22 @@ func (c *natsClient) requestWithContext(ctx context.Context, subject string, dat
 	msg, err := c.conn.RequestWithContext(ctx, subject, data)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fnats.ErrTimeout
+			return nil, ErrTimeout
 		}
 		if ctx.Err() != nil {
-			return nil, fnats.ErrCancelled
+			return nil, ErrCancelled
 		}
 		return nil, c.wrapError(err)
 	}
 	return msg.Data, nil
 }
 
-func (c *natsClient) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+func (c *natsClient) Subscribe(subject string, handler MsgHandler) (ISubscription, error) {
 	if err := c.validateSubscription(subject, "", handler); err != nil {
 		return nil, err
 	}
 	sub, err := c.conn.Subscribe(subject, func(msg *gonats.Msg) {
-		invokeNatsHandler(handler, &fnats.Msg{
+		invokeNatsHandler(handler, &Msg{
 			Subject: msg.Subject,
 			Reply:   msg.Reply,
 			Data:    append([]byte(nil), msg.Data...),
@@ -116,7 +115,7 @@ func (c *natsClient) Subscribe(subject string, handler fnats.MsgHandler) (fnats.
 	return &subscription{sub: sub}, nil
 }
 
-func (c *natsClient) QueueSubscribe(subject string, queue string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+func (c *natsClient) QueueSubscribe(subject string, queue string, handler MsgHandler) (ISubscription, error) {
 	if err := c.validateSubscription(subject, queue, handler); err != nil {
 		return nil, err
 	}
@@ -124,7 +123,7 @@ func (c *natsClient) QueueSubscribe(subject string, queue string, handler fnats.
 		return nil, fmt.Errorf("nats: queue is required")
 	}
 	sub, err := c.conn.QueueSubscribe(subject, queue, func(msg *gonats.Msg) {
-		invokeNatsHandler(handler, &fnats.Msg{
+		invokeNatsHandler(handler, &Msg{
 			Subject: msg.Subject,
 			Reply:   msg.Reply,
 			Data:    append([]byte(nil), msg.Data...),
@@ -190,13 +189,13 @@ func (c *natsClient) Connected() bool {
 
 func (c *natsClient) wrapError(err error) error {
 	if err == gonats.ErrTimeout {
-		return fnats.ErrTimeout
+		return ErrTimeout
 	}
 	if err == gonats.ErrNoResponders {
-		return fnats.ErrNoResponders
+		return ErrNoResponders
 	}
 	if err == gonats.ErrConnectionClosed || err == gonats.ErrConnectionDraining {
-		return fnats.ErrClosed
+		return ErrClosed
 	}
 	return err
 }
@@ -211,7 +210,7 @@ func (c *natsClient) natsConn() *gonats.Conn {
 
 func (c *natsClient) validateSubject(subject string) error {
 	if c == nil || c.conn == nil {
-		return fnats.ErrClosed
+		return ErrClosed
 	}
 	if strings.TrimSpace(subject) == "" || strings.TrimSpace(subject) != subject {
 		return fmt.Errorf("nats: invalid subject %q", subject)
@@ -219,7 +218,7 @@ func (c *natsClient) validateSubject(subject string) error {
 	return nil
 }
 
-func (c *natsClient) validateSubscription(subject, queue string, handler fnats.MsgHandler) error {
+func (c *natsClient) validateSubscription(subject, queue string, handler MsgHandler) error {
 	if err := c.validateSubject(subject); err != nil {
 		return err
 	}
@@ -232,7 +231,7 @@ func (c *natsClient) validateSubscription(subject, queue string, handler fnats.M
 	return nil
 }
 
-func invokeNatsHandler(handler fnats.MsgHandler, msg *fnats.Msg) {
+func invokeNatsHandler(handler MsgHandler, msg *Msg) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			subject := ""
@@ -246,4 +245,4 @@ func invokeNatsHandler(handler fnats.MsgHandler, msg *fnats.Msg) {
 	handler(msg)
 }
 
-var _ fnats.IClient = (*natsClient)(nil)
+var _ IClient = (*natsClient)(nil)
