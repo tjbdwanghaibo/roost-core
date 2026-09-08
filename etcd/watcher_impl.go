@@ -4,16 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"sync"
 )
 
-// watcher implements fetcd.IWatcher by wrapping clientv3 watch channel.
+// watcher implements IWatcher by wrapping clientv3 watch channel.
 type watcher struct {
-	eventCh   chan *fetcd.WatchEvent
+	eventCh   chan *WatchEvent
 	cancel    context.CancelFunc
 	done      chan struct{}
 	ready     chan struct{}
@@ -24,7 +22,7 @@ type watcher struct {
 }
 
 func newWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.CancelFunc) *watcher {
-	eventCh := make(chan *fetcd.WatchEvent, 64)
+	eventCh := make(chan *WatchEvent, 64)
 	if cancel == nil {
 		watchCtx, derivedCancel := context.WithCancel(ctx)
 		ctx = watchCtx
@@ -42,7 +40,7 @@ func newWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.Canc
 
 func (w *watcher) Ready() <-chan struct{} { return w.ready }
 
-func (w *watcher) EventChan() <-chan *fetcd.WatchEvent {
+func (w *watcher) EventChan() <-chan *WatchEvent {
 	return w.eventCh
 }
 
@@ -85,17 +83,17 @@ func (w *watcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 		case resp, ok := <-wch:
 			if !ok {
 				if ctx.Err() == nil {
-					w.setError(fetcd.ErrWatchClosed)
+					w.setError(ErrWatchClosed)
 				}
 				return
 			}
 			if resp.Canceled {
 				if resp.CompactRevision != 0 {
-					w.setError(fmt.Errorf("%w: %d", fetcd.ErrWatchCompacted, resp.CompactRevision))
+					w.setError(fmt.Errorf("%w: %d", ErrWatchCompacted, resp.CompactRevision))
 				} else if err := resp.Err(); err != nil {
-					w.setError(fmt.Errorf("%w: %w", fetcd.ErrWatchCanceled, err))
+					w.setError(fmt.Errorf("%w: %w", ErrWatchCanceled, err))
 				} else {
-					w.setError(fetcd.ErrWatchCanceled)
+					w.setError(ErrWatchCanceled)
 				}
 				w.signalReady()
 				return
@@ -107,15 +105,15 @@ func (w *watcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 			}
 			w.signalReady()
 			for _, ev := range resp.Events {
-				event := &fetcd.WatchEvent{}
+				event := &WatchEvent{}
 				if ev.Kv != nil {
 					event.KV = convertMvccKV(ev.Kv)
 				}
 				switch ev.Type {
 				case mvccpb.PUT:
-					event.Type = fetcd.EventPut
+					event.Type = EventPut
 				case mvccpb.DELETE:
-					event.Type = fetcd.EventDelete
+					event.Type = EventDelete
 				}
 				if ev.PrevKv != nil {
 					event.PrevKV = convertMvccKV(ev.PrevKv)
@@ -134,8 +132,8 @@ func (w *watcher) signalReady() {
 	w.readyOnce.Do(func() { close(w.ready) })
 }
 
-func convertMvccKV(kv *mvccpb.KeyValue) *fetcd.KV {
-	return &fetcd.KV{
+func convertMvccKV(kv *mvccpb.KeyValue) *KV {
+	return &KV{
 		Key:            string(kv.Key),
 		Value:          string(kv.Value),
 		CreateRevision: kv.CreateRevision,
@@ -145,6 +143,6 @@ func convertMvccKV(kv *mvccpb.KeyValue) *fetcd.KV {
 	}
 }
 
-var _ fetcd.IWatcher = (*watcher)(nil)
-var _ fetcd.IWatcherError = (*watcher)(nil)
-var _ fetcd.IWatcherReady = (*watcher)(nil)
+var _ IWatcher = (*watcher)(nil)
+var _ IWatcherError = (*watcher)(nil)
+var _ IWatcherReady = (*watcher)(nil)

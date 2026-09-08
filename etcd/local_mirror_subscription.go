@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
-
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 )
 
 type mirrorInternalChange[T any] struct {
-	kind     fetcd.LocalMirrorChangeType
+	kind     LocalMirrorChangeType
 	key      string
 	entry    *localMirrorItem[T]
 	previous *localMirrorItem[T]
@@ -19,7 +17,7 @@ type mirrorInternalChange[T any] struct {
 
 type mirrorSubscription[T any] struct {
 	id       uint64
-	handler  fetcd.LocalMirrorHandler[T]
+	handler  LocalMirrorHandler[T]
 	clone    func(T) (T, error)
 	capacity int
 	onDone   func(uint64)
@@ -38,9 +36,9 @@ type mirrorSubscription[T any] struct {
 	stopped  bool
 }
 
-func (m *localMirror[T]) Subscribe(ctx context.Context, handler fetcd.LocalMirrorHandler[T], options fetcd.LocalMirrorSubscribeOptions) (fetcd.IWatchSubscription, error) {
+func (m *localMirror[T]) Subscribe(ctx context.Context, handler LocalMirrorHandler[T], options LocalMirrorSubscribeOptions) (IWatchSubscription, error) {
 	if handler == nil {
-		return nil, fmt.Errorf("%w: handler is nil", fetcd.ErrMirrorInvalidSubscriber)
+		return nil, fmt.Errorf("%w: handler is nil", ErrMirrorInvalidSubscriber)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -53,14 +51,14 @@ func (m *localMirror[T]) Subscribe(ctx context.Context, handler fetcd.LocalMirro
 		capacity = defaultMirrorSubscriberQueue
 	}
 	if capacity < 0 || capacity > maxMirrorSubscriberQueue {
-		return nil, fmt.Errorf("%w: queue capacity must be between 1 and %d", fetcd.ErrMirrorInvalidConfig, maxMirrorSubscriberQueue)
+		return nil, fmt.Errorf("%w: queue capacity must be between 1 and %d", ErrMirrorInvalidConfig, maxMirrorSubscriberQueue)
 	}
 
 	m.callbackMu.Lock()
 	defer m.callbackMu.Unlock()
 	select {
 	case <-m.ctx.Done():
-		return nil, fetcd.ErrMirrorClosed
+		return nil, ErrMirrorClosed
 	default:
 	}
 
@@ -85,7 +83,7 @@ func (m *localMirror[T]) Subscribe(ctx context.Context, handler fetcd.LocalMirro
 		revision := m.revision
 		m.mu.RUnlock()
 		subscription.queue[0] = mirrorInternalChange[T]{
-			kind: fetcd.LocalMirrorSnapshot, snapshot: items, revision: revision,
+			kind: LocalMirrorSnapshot, snapshot: items, revision: revision,
 		}
 		subscription.count = 1
 	}
@@ -162,7 +160,7 @@ func (s *mirrorSubscription[T]) enqueue(change mirrorInternalChange[T]) bool {
 	}
 	if s.count >= s.capacity {
 		s.mu.Unlock()
-		s.stop(fetcd.ErrMirrorSubscriberSlow)
+		s.stop(ErrMirrorSubscriberSlow)
 		return false
 	}
 	tail := (s.head + s.count) % s.capacity
@@ -196,7 +194,7 @@ func (s *mirrorSubscription[T]) monitor(callerCtx context.Context, mirrorDone <-
 	case <-callerCtx.Done():
 		s.stop(callerCtx.Err())
 	case <-mirrorDone:
-		s.stop(fetcd.ErrMirrorClosed)
+		s.stop(ErrMirrorClosed)
 	case <-s.done:
 	}
 }
@@ -243,8 +241,8 @@ func (s *mirrorSubscription[T]) next() (mirrorInternalChange[T], bool) {
 	return change, true
 }
 
-func (s *mirrorSubscription[T]) cloneChange(change mirrorInternalChange[T]) (fetcd.LocalMirrorChange[T], error) {
-	out := fetcd.LocalMirrorChange[T]{Type: change.kind, Key: change.key, Revision: change.revision}
+func (s *mirrorSubscription[T]) cloneChange(change mirrorInternalChange[T]) (LocalMirrorChange[T], error) {
+	out := LocalMirrorChange[T]{Type: change.kind, Key: change.key, Revision: change.revision}
 	if change.entry != nil {
 		entry, err := s.cloneEntry(*change.entry)
 		if err != nil {
@@ -272,24 +270,24 @@ func (s *mirrorSubscription[T]) cloneChange(change mirrorInternalChange[T]) (fet
 	return out, nil
 }
 
-func (s *mirrorSubscription[T]) cloneEntry(item localMirrorItem[T]) (fetcd.LocalMirrorEntry[T], error) {
+func (s *mirrorSubscription[T]) cloneEntry(item localMirrorItem[T]) (LocalMirrorEntry[T], error) {
 	value, err := s.clone(item.value)
 	if err != nil {
-		return fetcd.LocalMirrorEntry[T]{}, fmt.Errorf("etcd local mirror: clone callback value %q: %w", item.kv.Key, err)
+		return LocalMirrorEntry[T]{}, fmt.Errorf("etcd local mirror: clone callback value %q: %w", item.kv.Key, err)
 	}
-	return fetcd.LocalMirrorEntry[T]{
+	return LocalMirrorEntry[T]{
 		Key: item.kv.Key, Value: value, CreateRevision: item.kv.CreateRevision,
 		ModRevision: item.kv.ModRevision, Version: item.kv.Version, Lease: item.kv.Lease,
 	}, nil
 }
 
-func invokeMirrorHandler[T any](ctx context.Context, handler fetcd.LocalMirrorHandler[T], change fetcd.LocalMirrorChange[T]) (err error) {
+func invokeMirrorHandler[T any](ctx context.Context, handler LocalMirrorHandler[T], change LocalMirrorChange[T]) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: %v", fetcd.ErrWatchCallbackPanic, recovered)
+			err = fmt.Errorf("%w: %v", ErrWatchCallbackPanic, recovered)
 		}
 	}()
 	return handler(ctx, change)
 }
 
-var _ fetcd.IWatchSubscription = (*mirrorSubscription[any])(nil)
+var _ IWatchSubscription = (*mirrorSubscription[any])(nil)

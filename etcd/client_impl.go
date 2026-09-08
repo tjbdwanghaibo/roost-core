@@ -3,18 +3,17 @@ package etcd
 import (
 	"context"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// etcdClient implements fetcd.IEtcd by wrapping clientv3.Client.
+// etcdClient implements IEtcd by wrapping clientv3.Client.
 type etcdClient struct {
 	cli *clientv3.Client
 }
 
-func newEtcdClient(cfg *fetcd.Config) (*etcdClient, error) {
+func newEtcdClient(cfg *Config) (*etcdClient, error) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Endpoints,
 		DialTimeout: cfg.DialTimeout,
@@ -29,18 +28,18 @@ func newEtcdClient(cfg *fetcd.Config) (*etcdClient, error) {
 
 // --- KV ---
 
-func (c *etcdClient) Get(ctx context.Context, key string) (*fetcd.KV, error) {
+func (c *etcdClient) Get(ctx context.Context, key string) (*KV, error) {
 	resp, err := c.cli.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	if len(resp.Kvs) == 0 {
-		return nil, fetcd.ErrKeyNotFound
+		return nil, ErrKeyNotFound
 	}
 	return convertKV((*mvccpb.KeyValue)(resp.Kvs[0])), nil
 }
 
-func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*fetcd.KV, error) {
+func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*KV, error) {
 	snapshot, err := c.GetPrefixSnapshot(ctx, prefix)
 	if err != nil {
 		return nil, err
@@ -48,16 +47,16 @@ func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*fetcd
 	return snapshot.KVs, nil
 }
 
-func (c *etcdClient) GetPrefixSnapshot(ctx context.Context, prefix string) (*fetcd.PrefixSnapshot, error) {
+func (c *etcdClient) GetPrefixSnapshot(ctx context.Context, prefix string) (*PrefixSnapshot, error) {
 	resp, err := c.cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
-	kvs := make([]*fetcd.KV, len(resp.Kvs))
+	kvs := make([]*KV, len(resp.Kvs))
 	for i, kv := range resp.Kvs {
 		kvs[i] = convertKV((*mvccpb.KeyValue)(kv))
 	}
-	return &fetcd.PrefixSnapshot{KVs: kvs, Revision: resp.Header.Revision}, nil
+	return &PrefixSnapshot{KVs: kvs, Revision: resp.Header.Revision}, nil
 }
 
 func (c *etcdClient) Put(ctx context.Context, key, value string) error {
@@ -85,7 +84,7 @@ func (c *etcdClient) DeleteWithPrefix(ctx context.Context, prefix string) (int64
 
 // --- Txn ---
 
-func (c *etcdClient) Txn(ctx context.Context, cmp fetcd.Cmp, onSuccess, onFailure []fetcd.Op) (*fetcd.TxnResponse, error) {
+func (c *etcdClient) Txn(ctx context.Context, cmp Cmp, onSuccess, onFailure []Op) (*TxnResponse, error) {
 	etcdCmp := buildCmp(cmp)
 	successOps := buildOps(onSuccess)
 	failureOps := buildOps(onFailure)
@@ -102,7 +101,7 @@ func (c *etcdClient) Txn(ctx context.Context, cmp fetcd.Cmp, onSuccess, onFailur
 	if err != nil {
 		return nil, err
 	}
-	return &fetcd.TxnResponse{
+	return &TxnResponse{
 		Succeeded: resp.Succeeded,
 		Revision:  resp.Header.Revision,
 	}, nil
@@ -141,14 +140,14 @@ func (c *etcdClient) Revoke(ctx context.Context, leaseID int64) error {
 
 // --- Watch ---
 
-func (c *etcdClient) Watch(ctx context.Context, key string, opts ...fetcd.WatchOption) fetcd.IWatcher {
+func (c *etcdClient) Watch(ctx context.Context, key string, opts ...WatchOption) IWatcher {
 	watchOpts := buildWatchOpts(opts)
 	watchCtx, cancel := context.WithCancel(ctx)
 	wch := c.cli.Watch(watchCtx, key, watchOpts...)
 	return newWatcher(watchCtx, wch, cancel)
 }
 
-func (c *etcdClient) WatchPrefix(ctx context.Context, prefix string, opts ...fetcd.WatchOption) fetcd.IWatcher {
+func (c *etcdClient) WatchPrefix(ctx context.Context, prefix string, opts ...WatchOption) IWatcher {
 	watchOpts := buildWatchOpts(opts)
 	watchOpts = append(watchOpts, clientv3.WithPrefix())
 	watchCtx, cancel := context.WithCancel(ctx)
@@ -164,8 +163,8 @@ func (c *etcdClient) Close() error {
 
 // --- helpers ---
 
-func convertKV(kv *mvccpb.KeyValue) *fetcd.KV {
-	return &fetcd.KV{
+func convertKV(kv *mvccpb.KeyValue) *KV {
+	return &KV{
 		Key:            string(kv.Key),
 		Value:          string(kv.Value),
 		CreateRevision: kv.CreateRevision,
@@ -175,56 +174,56 @@ func convertKV(kv *mvccpb.KeyValue) *fetcd.KV {
 	}
 }
 
-func buildCmp(cmp fetcd.Cmp) clientv3.Cmp {
+func buildCmp(cmp Cmp) clientv3.Cmp {
 	var result clientv3.Cmp
 	switch cmp.Target {
-	case fetcd.CmpVersion:
+	case CmpVersion:
 		result = clientv3.Compare(clientv3.Version(cmp.Key), cmpOpStr(cmp.Op), cmp.Value)
-	case fetcd.CmpCreateRevision:
+	case CmpCreateRevision:
 		result = clientv3.Compare(clientv3.CreateRevision(cmp.Key), cmpOpStr(cmp.Op), cmp.Value)
-	case fetcd.CmpModRevision:
+	case CmpModRevision:
 		result = clientv3.Compare(clientv3.ModRevision(cmp.Key), cmpOpStr(cmp.Op), cmp.Value)
-	case fetcd.CmpValue:
+	case CmpValue:
 		result = clientv3.Compare(clientv3.Value(cmp.Key), cmpOpStr(cmp.Op), cmp.Value)
 	}
 	return result
 }
 
-func cmpOpStr(op fetcd.CmpOp) string {
+func cmpOpStr(op CmpOp) string {
 	switch op {
-	case fetcd.CmpEqual:
+	case CmpEqual:
 		return "="
-	case fetcd.CmpNotEqual:
+	case CmpNotEqual:
 		return "!="
-	case fetcd.CmpLess:
+	case CmpLess:
 		return "<"
-	case fetcd.CmpGreater:
+	case CmpGreater:
 		return ">"
 	}
 	return "="
 }
 
-func buildOps(ops []fetcd.Op) []clientv3.Op {
+func buildOps(ops []Op) []clientv3.Op {
 	if len(ops) == 0 {
 		return nil
 	}
 	result := make([]clientv3.Op, len(ops))
 	for i, op := range ops {
 		switch op.Type {
-		case fetcd.OpPut:
+		case OpPut:
 			if op.Lease != 0 {
 				result[i] = clientv3.OpPut(op.Key, op.Value, clientv3.WithLease(clientv3.LeaseID(op.Lease)))
 			} else {
 				result[i] = clientv3.OpPut(op.Key, op.Value)
 			}
-		case fetcd.OpDelete:
+		case OpDelete:
 			result[i] = clientv3.OpDelete(op.Key)
 		}
 	}
 	return result
 }
 
-func buildWatchOpts(opts []fetcd.WatchOption) []clientv3.OpOption {
+func buildWatchOpts(opts []WatchOption) []clientv3.OpOption {
 	var result []clientv3.OpOption
 	for _, opt := range opts {
 		if opt.WithPrevKV {
@@ -240,5 +239,5 @@ func buildWatchOpts(opts []fetcd.WatchOption) []clientv3.OpOption {
 	return result
 }
 
-var _ fetcd.IEtcd = (*etcdClient)(nil)
-var _ fetcd.IPrefixSnapshotReader = (*etcdClient)(nil)
+var _ IEtcd = (*etcdClient)(nil)
+var _ IPrefixSnapshotReader = (*etcdClient)(nil)

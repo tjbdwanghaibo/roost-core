@@ -3,11 +3,9 @@ package etcd
 import (
 	"context"
 	"errors"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"testing"
 	"time"
-
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestWatcherReadyWaitsForServerResponse(t *testing.T) {
@@ -48,7 +46,7 @@ func TestWatcherReadyReportsCompactedStartRevision(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("watch event channel did not close after compaction")
 	}
-	if err := w.WatchError(); !errors.Is(err, fetcd.ErrWatchCompacted) {
+	if err := w.WatchError(); !errors.Is(err, ErrWatchCompacted) {
 		t.Fatalf("WatchError=%v, want ErrWatchCompacted", err)
 	}
 }
@@ -63,7 +61,7 @@ func TestWatcherReadyReportsUnexpectedChannelClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("closed watch did not unblock readiness waiters")
 	}
-	if err := w.WatchError(); !errors.Is(err, fetcd.ErrWatchClosed) {
+	if err := w.WatchError(); !errors.Is(err, ErrWatchClosed) {
 		t.Fatalf("WatchError=%v, want ErrWatchClosed", err)
 	}
 }

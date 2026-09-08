@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"log/slog"
 	"sync"
 	"time"
@@ -19,7 +18,7 @@ const (
 	defaultDiscoveryRetryMaxInterval = 30 * time.Second
 )
 
-// discovery implements fetcd.IDiscovery.
+// discovery implements IDiscovery.
 type discovery struct {
 	cli     *clientv3.Client
 	prefix  string
@@ -33,7 +32,7 @@ type discovery struct {
 	keepaliveCancel  context.CancelFunc
 	loopCancel       context.CancelFunc
 	loopDone         chan struct{}
-	registerOnce     func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error)
+	registerOnce     func(context.Context, *ServiceInfo) (discoveryRegistration, error)
 	revokeLease      func(context.Context, clientv3.LeaseID) error
 	retryMinInterval time.Duration
 	retryMaxInterval time.Duration
@@ -59,7 +58,7 @@ func newDiscovery(cli *clientv3.Client, prefix string, ttl int64) *discovery {
 	return d
 }
 
-func (d *discovery) Register(ctx context.Context, info *fetcd.ServiceInfo) error {
+func (d *discovery) Register(ctx context.Context, info *ServiceInfo) error {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()
 	if d.hasRegistration() {
@@ -88,7 +87,7 @@ func (d *discovery) Register(ctx context.Context, info *fetcd.ServiceInfo) error
 	return nil
 }
 
-func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *fetcd.ServiceInfo) (discoveryRegistration, error) {
+func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *ServiceInfo) (discoveryRegistration, error) {
 	// Grant lease
 	resp, err := d.cli.Grant(ctx, d.ttl)
 	if err != nil {
@@ -133,7 +132,7 @@ func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *fetcd.Servic
 	return discoveryRegistration{leaseID: resp.ID, key: key, keepaliveDone: done, cancel: cancel}, nil
 }
 
-func (d *discovery) registrationLoop(ctx context.Context, info *fetcd.ServiceInfo, reg discoveryRegistration, done chan<- struct{}) {
+func (d *discovery) registrationLoop(ctx context.Context, info *ServiceInfo, reg discoveryRegistration, done chan<- struct{}) {
 	defer close(done)
 	d.logRegistered(reg)
 	for {
@@ -339,15 +338,15 @@ func (d *discovery) nextBackoff(cur time.Duration) time.Duration {
 	return next
 }
 
-func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*fetcd.ServiceInfo, error) {
+func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*ServiceInfo, error) {
 	prefix := d.prefix + serviceType + "/"
 	resp, err := d.cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
-	infos := make([]*fetcd.ServiceInfo, 0, len(resp.Kvs))
+	infos := make([]*ServiceInfo, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
-		info := &fetcd.ServiceInfo{}
+		info := &ServiceInfo{}
 		if err := json.Unmarshal(kv.Value, info); err != nil {
 			slog.Warn("etcd discovery: unmarshal failed", "key", string(kv.Key), "err", err)
 			continue
@@ -357,7 +356,7 @@ func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*fetcd.
 	return infos, nil
 }
 
-func (d *discovery) WatchService(ctx context.Context, serviceType string) fetcd.IServiceWatcher {
+func (d *discovery) WatchService(ctx context.Context, serviceType string) IServiceWatcher {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -367,11 +366,11 @@ func (d *discovery) WatchService(ctx context.Context, serviceType string) fetcd.
 	return newServiceWatcher(watchCtx, wch, cancel)
 }
 
-var _ fetcd.IDiscovery = (*discovery)(nil)
+var _ IDiscovery = (*discovery)(nil)
 
-// serviceWatcher implements fetcd.IServiceWatcher.
+// serviceWatcher implements IServiceWatcher.
 type serviceWatcher struct {
-	eventCh chan *fetcd.ServiceEvent
+	eventCh chan *ServiceEvent
 	cancel  context.CancelFunc
 	done    chan struct{}
 	once    sync.Once
@@ -380,7 +379,7 @@ type serviceWatcher struct {
 }
 
 func newServiceWatcher(ctx context.Context, wch clientv3.WatchChan, cancel context.CancelFunc) *serviceWatcher {
-	eventCh := make(chan *fetcd.ServiceEvent, 32)
+	eventCh := make(chan *ServiceEvent, 32)
 	if ctx == nil || cancel == nil {
 		ctx, cancel = context.WithCancel(context.Background())
 	}
@@ -389,7 +388,7 @@ func newServiceWatcher(ctx context.Context, wch clientv3.WatchChan, cancel conte
 	return sw
 }
 
-func (sw *serviceWatcher) EventChan() <-chan *fetcd.ServiceEvent {
+func (sw *serviceWatcher) EventChan() <-chan *ServiceEvent {
 	return sw.eventCh
 }
 
@@ -444,19 +443,19 @@ func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 				return
 			}
 			for _, ev := range resp.Events {
-				event := &fetcd.ServiceEvent{}
+				event := &ServiceEvent{}
 				switch ev.Type {
 				case mvccpb.PUT:
-					event.Type = fetcd.EventPut
-					info := &fetcd.ServiceInfo{}
+					event.Type = EventPut
+					info := &ServiceInfo{}
 					if err := json.Unmarshal(ev.Kv.Value, info); err == nil {
 						event.Info = info
 					}
 				case mvccpb.DELETE:
-					event.Type = fetcd.EventDelete
+					event.Type = EventDelete
 					// Try to decode from PrevKv
 					if ev.PrevKv != nil {
-						info := &fetcd.ServiceInfo{}
+						info := &ServiceInfo{}
 						if err := json.Unmarshal(ev.PrevKv.Value, info); err == nil {
 							event.Info = info
 						}
@@ -474,4 +473,4 @@ func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 	}
 }
 
-var _ fetcd.IServiceWatcher = (*serviceWatcher)(nil)
+var _ IServiceWatcher = (*serviceWatcher)(nil)

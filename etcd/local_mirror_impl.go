@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 )
 
 const (
@@ -20,27 +18,27 @@ const (
 )
 
 type mirrorClient interface {
-	GetPrefixSnapshot(ctx context.Context, prefix string) (*fetcd.PrefixSnapshot, error)
-	WatchPrefix(ctx context.Context, prefix string, opts ...fetcd.WatchOption) fetcd.IWatcher
+	GetPrefixSnapshot(ctx context.Context, prefix string) (*PrefixSnapshot, error)
+	WatchPrefix(ctx context.Context, prefix string, opts ...WatchOption) IWatcher
 	Put(ctx context.Context, key, value string) error
 	PutWithLease(ctx context.Context, key, value string, leaseID int64) error
 	Delete(ctx context.Context, key string) error
-	Txn(ctx context.Context, cmp fetcd.Cmp, onSuccess, onFailure []fetcd.Op) (*fetcd.TxnResponse, error)
+	Txn(ctx context.Context, cmp Cmp, onSuccess, onFailure []Op) (*TxnResponse, error)
 }
 
 type mirrorClientAdapter struct {
-	fetcd.IEtcd
-	fetcd.IPrefixSnapshotReader
+	IEtcd
+	IPrefixSnapshotReader
 }
 
 type localMirrorItem[T any] struct {
 	value T
-	kv    fetcd.KV
+	kv    KV
 }
 
 type localMirror[T any] struct {
 	client mirrorClient
-	cfg    fetcd.LocalMirrorConfig[T]
+	cfg    LocalMirrorConfig[T]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -61,11 +59,11 @@ type localMirror[T any] struct {
 
 // NewLocalMirror creates a typed local mirror backed by a consistent etcd
 // prefix snapshot and a watch starting at snapshot.Revision+1.
-func NewLocalMirror[T any](ctx context.Context, client fetcd.IEtcd, cfg fetcd.LocalMirrorConfig[T]) (fetcd.ILocalMirror[T], error) {
+func NewLocalMirror[T any](ctx context.Context, client IEtcd, cfg LocalMirrorConfig[T]) (ILocalMirror[T], error) {
 	if client == nil {
 		return nil, errors.New("etcd local mirror: client is nil")
 	}
-	snapshotReader, ok := client.(fetcd.IPrefixSnapshotReader)
+	snapshotReader, ok := client.(IPrefixSnapshotReader)
 	if !ok {
 		return nil, errors.New("etcd local mirror: client does not support revisioned prefix snapshots")
 	}
@@ -74,8 +72,8 @@ func NewLocalMirror[T any](ctx context.Context, client fetcd.IEtcd, cfg fetcd.Lo
 
 // JSONLocalMirrorConfig returns a production-safe JSON codec. Each read is a
 // deep copy, including nested maps, slices, and pointers.
-func JSONLocalMirrorConfig[T any](prefix string) fetcd.LocalMirrorConfig[T] {
-	return fetcd.LocalMirrorConfig[T]{
+func JSONLocalMirrorConfig[T any](prefix string) LocalMirrorConfig[T] {
+	return LocalMirrorConfig[T]{
 		Prefix: prefix,
 		Decode: func(_ string, value string) (T, error) {
 			var out T
@@ -98,15 +96,15 @@ func JSONLocalMirrorConfig[T any](prefix string) fetcd.LocalMirrorConfig[T] {
 	}
 }
 
-func newLocalMirror[T any](ctx context.Context, client mirrorClient, cfg fetcd.LocalMirrorConfig[T]) (*localMirror[T], error) {
+func newLocalMirror[T any](ctx context.Context, client mirrorClient, cfg LocalMirrorConfig[T]) (*localMirror[T], error) {
 	if client == nil {
 		return nil, errors.New("etcd local mirror: client is nil")
 	}
 	if cfg.Prefix == "" {
-		return nil, fmt.Errorf("%w: prefix is empty", fetcd.ErrMirrorInvalidConfig)
+		return nil, fmt.Errorf("%w: prefix is empty", ErrMirrorInvalidConfig)
 	}
 	if cfg.Decode == nil || cfg.Encode == nil || cfg.Clone == nil {
-		return nil, fmt.Errorf("%w: Decode, Encode, and Clone are required", fetcd.ErrMirrorInvalidConfig)
+		return nil, fmt.Errorf("%w: Decode, Encode, and Clone are required", ErrMirrorInvalidConfig)
 	}
 	if cfg.RetryMinInterval <= 0 {
 		cfg.RetryMinInterval = defaultMirrorRetryMin
@@ -115,7 +113,7 @@ func newLocalMirror[T any](ctx context.Context, client mirrorClient, cfg fetcd.L
 		cfg.RetryMaxInterval = defaultMirrorRetryMax
 	}
 	if cfg.RetryMaxInterval < cfg.RetryMinInterval {
-		return nil, fmt.Errorf("%w: retry max interval is smaller than retry min interval", fetcd.ErrMirrorInvalidConfig)
+		return nil, fmt.Errorf("%w: retry max interval is smaller than retry min interval", ErrMirrorInvalidConfig)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -144,9 +142,9 @@ func (m *localMirror[T]) Get(key string) (T, bool, error) {
 	return entry.Value, ok, err
 }
 
-func (m *localMirror[T]) GetEntry(key string) (fetcd.LocalMirrorEntry[T], bool, error) {
+func (m *localMirror[T]) GetEntry(key string) (LocalMirrorEntry[T], bool, error) {
 	if err := m.validateKey(key); err != nil {
-		var zero fetcd.LocalMirrorEntry[T]
+		var zero LocalMirrorEntry[T]
 		return zero, false, err
 	}
 	m.mu.RLock()
@@ -154,15 +152,15 @@ func (m *localMirror[T]) GetEntry(key string) (fetcd.LocalMirrorEntry[T], bool, 
 	stateErr := m.readStateErrorLocked()
 	m.mu.RUnlock()
 	if !ok {
-		var zero fetcd.LocalMirrorEntry[T]
+		var zero LocalMirrorEntry[T]
 		return zero, false, stateErr
 	}
 	value, err := m.cfg.Clone(item.value)
 	if err != nil {
-		var zero fetcd.LocalMirrorEntry[T]
+		var zero LocalMirrorEntry[T]
 		return zero, false, fmt.Errorf("etcd local mirror: clone %q: %w", key, err)
 	}
-	return fetcd.LocalMirrorEntry[T]{
+	return LocalMirrorEntry[T]{
 		Key:            item.kv.Key,
 		Value:          value,
 		CreateRevision: item.kv.CreateRevision,
@@ -203,10 +201,10 @@ func (m *localMirror[T]) LastError() error {
 	return m.lastError
 }
 
-func (m *localMirror[T]) Status() fetcd.LocalMirrorStatus {
+func (m *localMirror[T]) Status() LocalMirrorStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return fetcd.LocalMirrorStatus{Revision: m.revision, Synced: m.synced, LastError: m.lastError}
+	return LocalMirrorStatus{Revision: m.revision, Synced: m.synced, LastError: m.lastError}
 }
 
 func (m *localMirror[T]) WaitForSync(ctx context.Context) error {
@@ -225,22 +223,22 @@ func (m *localMirror[T]) WaitForSync(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-m.done:
-			return fetcd.ErrMirrorClosed
+			return ErrMirrorClosed
 		case <-stateCh:
 		}
 	}
 }
 
 func (m *localMirror[T]) Publish(ctx context.Context, key string, value T) error {
-	return m.PublishWithOptions(ctx, key, value, fetcd.LocalMirrorPublishOptions{})
+	return m.PublishWithOptions(ctx, key, value, LocalMirrorPublishOptions{})
 }
 
-func (m *localMirror[T]) PublishWithOptions(ctx context.Context, key string, value T, options fetcd.LocalMirrorPublishOptions) error {
+func (m *localMirror[T]) PublishWithOptions(ctx context.Context, key string, value T, options LocalMirrorPublishOptions) error {
 	if err := m.validateWrite(ctx, key); err != nil {
 		return err
 	}
 	if options.LeaseID < 0 {
-		return fmt.Errorf("%w: lease id is negative", fetcd.ErrMirrorInvalidConfig)
+		return fmt.Errorf("%w: lease id is negative", ErrMirrorInvalidConfig)
 	}
 	encoded, err := m.encode(value)
 	if err != nil {
@@ -260,38 +258,38 @@ func (m *localMirror[T]) Delete(ctx context.Context, key string) error {
 }
 
 func (m *localMirror[T]) PublishIfRevision(ctx context.Context, key string, expectedRevision int64, value T) (bool, error) {
-	return m.PublishIfRevisionWithOptions(ctx, key, expectedRevision, value, fetcd.LocalMirrorPublishOptions{})
+	return m.PublishIfRevisionWithOptions(ctx, key, expectedRevision, value, LocalMirrorPublishOptions{})
 }
 
-func (m *localMirror[T]) PublishIfRevisionWithOptions(ctx context.Context, key string, expectedRevision int64, value T, options fetcd.LocalMirrorPublishOptions) (bool, error) {
+func (m *localMirror[T]) PublishIfRevisionWithOptions(ctx context.Context, key string, expectedRevision int64, value T, options LocalMirrorPublishOptions) (bool, error) {
 	if err := m.validateRevisionWrite(ctx, key, expectedRevision); err != nil {
 		return false, err
 	}
 	if options.LeaseID < 0 {
-		return false, fmt.Errorf("%w: lease id is negative", fetcd.ErrMirrorInvalidConfig)
+		return false, fmt.Errorf("%w: lease id is negative", ErrMirrorInvalidConfig)
 	}
 	encoded, err := m.encode(value)
 	if err != nil {
 		return false, err
 	}
-	return m.compareAndApply(ctx, key, expectedRevision, fetcd.Op{Type: fetcd.OpPut, Key: key, Value: encoded, Lease: options.LeaseID})
+	return m.compareAndApply(ctx, key, expectedRevision, Op{Type: OpPut, Key: key, Value: encoded, Lease: options.LeaseID})
 }
 
 func (m *localMirror[T]) DeleteIfRevision(ctx context.Context, key string, expectedRevision int64) (bool, error) {
 	if err := m.validateRevisionWrite(ctx, key, expectedRevision); err != nil {
 		return false, err
 	}
-	return m.compareAndApply(ctx, key, expectedRevision, fetcd.Op{Type: fetcd.OpDelete, Key: key})
+	return m.compareAndApply(ctx, key, expectedRevision, Op{Type: OpDelete, Key: key})
 }
 
-func (m *localMirror[T]) compareAndApply(ctx context.Context, key string, expectedRevision int64, op fetcd.Op) (bool, error) {
-	target := fetcd.CmpModRevision
+func (m *localMirror[T]) compareAndApply(ctx context.Context, key string, expectedRevision int64, op Op) (bool, error) {
+	target := CmpModRevision
 	if expectedRevision == 0 {
-		target = fetcd.CmpVersion
+		target = CmpVersion
 	}
-	resp, err := m.client.Txn(ctx, fetcd.Cmp{
-		Key: key, Target: target, Op: fetcd.CmpEqual, Value: expectedRevision,
-	}, []fetcd.Op{op}, nil)
+	resp, err := m.client.Txn(ctx, Cmp{
+		Key: key, Target: target, Op: CmpEqual, Value: expectedRevision,
+	}, []Op{op}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -322,9 +320,9 @@ func (m *localMirror[T]) validateWrite(ctx context.Context, key string) error {
 	}
 	select {
 	case <-m.ctx.Done():
-		return fetcd.ErrMirrorClosed
+		return ErrMirrorClosed
 	case <-m.done:
-		return fetcd.ErrMirrorClosed
+		return ErrMirrorClosed
 	default:
 	}
 	return nil
@@ -332,7 +330,7 @@ func (m *localMirror[T]) validateWrite(ctx context.Context, key string) error {
 
 func (m *localMirror[T]) validateKey(key string) error {
 	if !strings.HasPrefix(key, m.cfg.Prefix) {
-		return fmt.Errorf("%w: key %q prefix %q", fetcd.ErrMirrorKeyOutsidePrefix, key, m.cfg.Prefix)
+		return fmt.Errorf("%w: key %q prefix %q", ErrMirrorKeyOutsidePrefix, key, m.cfg.Prefix)
 	}
 	return nil
 }
@@ -354,8 +352,8 @@ func (m *localMirror[T]) Close() error {
 
 func (m *localMirror[T]) run() {
 	defer func() {
-		m.setStatus(false, fetcd.ErrMirrorClosed)
-		m.stopSubscriptions(fetcd.ErrMirrorClosed)
+		m.setStatus(false, ErrMirrorClosed)
+		m.stopSubscriptions(ErrMirrorClosed)
 		close(m.done)
 	}()
 	backoff := m.cfg.RetryMinInterval
@@ -364,7 +362,7 @@ func (m *localMirror[T]) run() {
 			return
 		}
 		revision := m.Revision()
-		watcher := m.client.WatchPrefix(m.ctx, m.cfg.Prefix, fetcd.WatchOption{WithRevision: revision + 1, CreatedNotify: true})
+		watcher := m.client.WatchPrefix(m.ctx, m.cfg.Prefix, WatchOption{WithRevision: revision + 1, CreatedNotify: true})
 		if watcher == nil {
 			m.setStatus(false, errors.New("etcd local mirror: client returned nil watcher"))
 		} else {
@@ -376,13 +374,13 @@ func (m *localMirror[T]) run() {
 				_ = watcher.Close()
 				return
 			}
-			if watchErr, ok := watcher.(fetcd.IWatcherError); ok && watchErr.WatchError() != nil {
+			if watchErr, ok := watcher.(IWatcherError); ok && watchErr.WatchError() != nil {
 				m.setStatus(false, watchErr.WatchError())
 				_ = watcher.Close()
 			} else {
 				m.setStatus(true, nil)
 				err := m.consume(watcher)
-				if watchErr, ok := watcher.(fetcd.IWatcherError); ok && watchErr.WatchError() != nil {
+				if watchErr, ok := watcher.(IWatcherError); ok && watchErr.WatchError() != nil {
 					err = watchErr.WatchError()
 				}
 				_ = watcher.Close()
@@ -412,8 +410,8 @@ func (m *localMirror[T]) run() {
 	}
 }
 
-func (m *localMirror[T]) waitWatcherReady(watcher fetcd.IWatcher) bool {
-	ready, ok := watcher.(fetcd.IWatcherReady)
+func (m *localMirror[T]) waitWatcherReady(watcher IWatcher) bool {
+	ready, ok := watcher.(IWatcherReady)
 	if !ok {
 		return true
 	}
@@ -425,7 +423,7 @@ func (m *localMirror[T]) waitWatcherReady(watcher fetcd.IWatcher) bool {
 	}
 }
 
-func (m *localMirror[T]) consume(watcher fetcd.IWatcher) error {
+func (m *localMirror[T]) consume(watcher IWatcher) error {
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -441,7 +439,7 @@ func (m *localMirror[T]) consume(watcher fetcd.IWatcher) error {
 	}
 }
 
-func (m *localMirror[T]) apply(event *fetcd.WatchEvent) error {
+func (m *localMirror[T]) apply(event *WatchEvent) error {
 	if event == nil || event.KV == nil {
 		return errors.New("etcd local mirror: watch event has no KV")
 	}
@@ -456,7 +454,7 @@ func (m *localMirror[T]) apply(event *fetcd.WatchEvent) error {
 		return nil
 	}
 	var item localMirrorItem[T]
-	if event.Type == fetcd.EventPut {
+	if event.Type == EventPut {
 		value, err := m.decode(kv)
 		if err != nil {
 			return err
@@ -472,9 +470,9 @@ func (m *localMirror[T]) apply(event *fetcd.WatchEvent) error {
 	}
 	previous, existed := m.items[kv.Key]
 	switch event.Type {
-	case fetcd.EventPut:
+	case EventPut:
 		m.items[kv.Key] = item
-	case fetcd.EventDelete:
+	case EventDelete:
 		delete(m.items, kv.Key)
 	default:
 		m.mu.Unlock()
@@ -492,12 +490,12 @@ func (m *localMirror[T]) apply(event *fetcd.WatchEvent) error {
 		previousCopy := previous
 		change.previous = &previousCopy
 	}
-	if event.Type == fetcd.EventPut {
+	if event.Type == EventPut {
 		itemCopy := item
-		change.kind = fetcd.LocalMirrorPut
+		change.kind = LocalMirrorPut
 		change.entry = &itemCopy
 	} else {
-		change.kind = fetcd.LocalMirrorDelete
+		change.kind = LocalMirrorDelete
 	}
 	m.dispatchLocked(change)
 	return nil
@@ -538,14 +536,14 @@ func (m *localMirror[T]) reload() error {
 	m.lastError = nil
 	m.mu.Unlock()
 	m.dispatchLocked(mirrorInternalChange[T]{
-		kind:     fetcd.LocalMirrorSnapshot,
+		kind:     LocalMirrorSnapshot,
 		snapshot: cloneInternalItems(items),
 		revision: snapshot.Revision,
 	})
 	return nil
 }
 
-func (m *localMirror[T]) decode(kv fetcd.KV) (T, error) {
+func (m *localMirror[T]) decode(kv KV) (T, error) {
 	value, err := m.cfg.Decode(kv.Key, kv.Value)
 	if err != nil {
 		var zero T
@@ -578,7 +576,7 @@ func (m *localMirror[T]) readStateErrorLocked() error {
 	if m.lastError != nil {
 		return m.lastError
 	}
-	return fetcd.ErrMirrorNotSynced
+	return ErrMirrorNotSynced
 }
 
 func (m *localMirror[T]) waitRetry(delay time.Duration) bool {
@@ -600,5 +598,5 @@ func nextMirrorBackoff(current, max time.Duration) time.Duration {
 	return next
 }
 
-var _ fetcd.ILocalMirror[any] = (*localMirror[any])(nil)
-var _ fetcd.ILocalMirrorSubscriber[any] = (*localMirror[any])(nil)
+var _ ILocalMirror[any] = (*localMirror[any])(nil)
+var _ ILocalMirrorSubscriber[any] = (*localMirror[any])(nil)

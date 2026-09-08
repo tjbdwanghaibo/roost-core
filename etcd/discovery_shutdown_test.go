@@ -3,7 +3,6 @@ package etcd
 import (
 	"context"
 	"errors"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +39,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 	firstLost := make(chan struct{})
 	secondLost := make(chan struct{})
 	registeredAgain := make(chan struct{})
-	d.registerOnce = func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error) {
+	d.registerOnce = func(context.Context, *ServiceInfo) (discoveryRegistration, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		attempts++
@@ -55,7 +54,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 		}
 	}
 
-	if err := d.Register(context.Background(), &fetcd.ServiceInfo{ServiceType: "game", Sid: 1}); err != nil {
+	if err := d.Register(context.Background(), &ServiceInfo{ServiceType: "game", Sid: 1}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	close(firstLost)
@@ -80,12 +79,12 @@ func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
 
 	lost := make(chan struct{})
 	calls := make(chan struct{}, 2)
-	d.registerOnce = func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error) {
+	d.registerOnce = func(context.Context, *ServiceInfo) (discoveryRegistration, error) {
 		calls <- struct{}{}
 		return discoveryRegistration{leaseID: clientv3.LeaseID(201), key: "/roost/game/1", keepaliveDone: lost}, nil
 	}
 
-	if err := d.Register(context.Background(), &fetcd.ServiceInfo{ServiceType: "game", Sid: 1}); err != nil {
+	if err := d.Register(context.Background(), &ServiceInfo{ServiceType: "game", Sid: 1}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	_ = d.Deregister(context.Background())
@@ -108,7 +107,7 @@ func TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration(t *tes
 	d := newDiscovery(nil, "/roost/", 5)
 	keepaliveDone := make(chan struct{})
 	calls := 0
-	d.registerOnce = func(context.Context, *fetcd.ServiceInfo) (discoveryRegistration, error) {
+	d.registerOnce = func(context.Context, *ServiceInfo) (discoveryRegistration, error) {
 		calls++
 		return discoveryRegistration{
 			leaseID:       clientv3.LeaseID(301),
@@ -117,7 +116,7 @@ func TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration(t *tes
 			cancel:        func() {},
 		}, nil
 	}
-	info := &fetcd.ServiceInfo{ServiceType: "game", Sid: 1}
+	info := &ServiceInfo{ServiceType: "game", Sid: 1}
 	if err := d.Register(context.Background(), info); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}

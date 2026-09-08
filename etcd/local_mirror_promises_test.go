@@ -6,32 +6,30 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 )
 
 type idleMirrorClient struct{}
 
-func (idleMirrorClient) GetPrefixSnapshot(context.Context, string) (*fetcd.PrefixSnapshot, error) {
-	return &fetcd.PrefixSnapshot{}, nil
+func (idleMirrorClient) GetPrefixSnapshot(context.Context, string) (*PrefixSnapshot, error) {
+	return &PrefixSnapshot{}, nil
 }
-func (idleMirrorClient) WatchPrefix(context.Context, string, ...fetcd.WatchOption) fetcd.IWatcher {
-	return idleWatcher{events: make(chan *fetcd.WatchEvent)}
+func (idleMirrorClient) WatchPrefix(context.Context, string, ...WatchOption) IWatcher {
+	return idleWatcher{events: make(chan *WatchEvent)}
 }
 func (idleMirrorClient) Put(context.Context, string, string) error                 { return nil }
 func (idleMirrorClient) PutWithLease(context.Context, string, string, int64) error { return nil }
 func (idleMirrorClient) Delete(context.Context, string) error                      { return nil }
-func (idleMirrorClient) Txn(context.Context, fetcd.Cmp, []fetcd.Op, []fetcd.Op) (*fetcd.TxnResponse, error) {
-	return &fetcd.TxnResponse{}, nil
+func (idleMirrorClient) Txn(context.Context, Cmp, []Op, []Op) (*TxnResponse, error) {
+	return &TxnResponse{}, nil
 }
 
-type idleWatcher struct{ events chan *fetcd.WatchEvent }
+type idleWatcher struct{ events chan *WatchEvent }
 
-func (w idleWatcher) EventChan() <-chan *fetcd.WatchEvent { return w.events }
-func (w idleWatcher) Close() error                        { return nil }
+func (w idleWatcher) EventChan() <-chan *WatchEvent { return w.events }
+func (w idleWatcher) Close() error                  { return nil }
 
-func mirrorConfig() fetcd.LocalMirrorConfig[string] {
-	return fetcd.LocalMirrorConfig[string]{
+func mirrorConfig() LocalMirrorConfig[string] {
+	return LocalMirrorConfig[string]{
 		Prefix: "/roost/test/",
 		Decode: func(_, value string) (string, error) { return value, nil },
 		Encode: func(value string) (string, error) { return value, nil },
@@ -50,14 +48,14 @@ func TestNewLocalMirrorRefusesEachInvalidConfig(t *testing.T) {
 	}
 	cases := []struct {
 		name   string
-		mutate func(*fetcd.LocalMirrorConfig[string])
+		mutate func(*LocalMirrorConfig[string])
 		text   string
 	}{
-		{"empty prefix", func(c *fetcd.LocalMirrorConfig[string]) { c.Prefix = "" }, "prefix is empty"},
-		{"no decoder", func(c *fetcd.LocalMirrorConfig[string]) { c.Decode = nil }, "Decode, Encode, and Clone are required"},
-		{"no encoder", func(c *fetcd.LocalMirrorConfig[string]) { c.Encode = nil }, "Decode, Encode, and Clone are required"},
-		{"no clone", func(c *fetcd.LocalMirrorConfig[string]) { c.Clone = nil }, "Decode, Encode, and Clone are required"},
-		{"retry max below min", func(c *fetcd.LocalMirrorConfig[string]) {
+		{"empty prefix", func(c *LocalMirrorConfig[string]) { c.Prefix = "" }, "prefix is empty"},
+		{"no decoder", func(c *LocalMirrorConfig[string]) { c.Decode = nil }, "Decode, Encode, and Clone are required"},
+		{"no encoder", func(c *LocalMirrorConfig[string]) { c.Encode = nil }, "Decode, Encode, and Clone are required"},
+		{"no clone", func(c *LocalMirrorConfig[string]) { c.Clone = nil }, "Decode, Encode, and Clone are required"},
+		{"retry max below min", func(c *LocalMirrorConfig[string]) {
 			c.RetryMinInterval, c.RetryMaxInterval = time.Second, time.Millisecond
 		}, "retry max interval is smaller than retry min interval"},
 	}
@@ -66,7 +64,7 @@ func TestNewLocalMirrorRefusesEachInvalidConfig(t *testing.T) {
 			cfg := mirrorConfig()
 			tc.mutate(&cfg)
 			_, err := newLocalMirror[string](ctx, idleMirrorClient{}, cfg)
-			if !errors.Is(err, fetcd.ErrMirrorInvalidConfig) || !strings.Contains(err.Error(), tc.text) {
+			if !errors.Is(err, ErrMirrorInvalidConfig) || !strings.Contains(err.Error(), tc.text) {
 				t.Fatalf("newLocalMirror = %v, want ErrMirrorInvalidConfig containing %q", err, tc.text)
 			}
 		})

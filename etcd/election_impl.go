@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"sync"
 	"sync/atomic"
 
@@ -12,7 +11,7 @@ import (
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
-// electionFactory implements fetcd.IElectionFactory.
+// electionFactory implements IElectionFactory.
 type electionFactory struct {
 	cli *clientv3.Client
 }
@@ -21,7 +20,7 @@ func newElectionFactory(cli *clientv3.Client) *electionFactory {
 	return &electionFactory{cli: cli}
 }
 
-func (f *electionFactory) NewElection(prefix string) fetcd.IElection {
+func (f *electionFactory) NewElection(prefix string) IElection {
 	e := &election{
 		cli:      f.cli,
 		prefix:   prefix,
@@ -31,9 +30,9 @@ func (f *electionFactory) NewElection(prefix string) fetcd.IElection {
 	return e
 }
 
-var _ fetcd.IElectionFactory = (*electionFactory)(nil)
+var _ IElectionFactory = (*electionFactory)(nil)
 
-// election implements fetcd.IElection using concurrency.Election.
+// election implements IElection using concurrency.Election.
 type election struct {
 	cli      *clientv3.Client
 	prefix   string
@@ -97,7 +96,7 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	if !e.campaign {
 		e.mu.Unlock()
 		_ = session.Close()
-		return fetcd.ErrNotLeader
+		return ErrNotLeader
 	}
 	e.session = session
 	e.elect = elect
@@ -114,7 +113,7 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	if e.session != session || !e.campaign {
 		e.mu.Unlock()
 		_ = session.Close()
-		return fetcd.ErrNotLeader
+		return ErrNotLeader
 	}
 	// Publish the fencing token before the leadership flag: a caller that
 	// observes IsLeader must be able to read the token of that term.
@@ -138,7 +137,7 @@ func (e *election) Resign(ctx context.Context) error {
 	active := e.campaign
 	e.mu.Unlock()
 	if !active || elect == nil || session == nil {
-		return fetcd.ErrNotLeader
+		return ErrNotLeader
 	}
 	err := elect.Resign(ctx)
 	closeErr := session.Close()
@@ -154,14 +153,14 @@ func (e *election) Leader(ctx context.Context) (string, error) {
 	elect := e.elect
 	e.mu.Unlock()
 	if elect == nil {
-		return "", fetcd.ErrElectionNoLeader
+		return "", ErrElectionNoLeader
 	}
 	resp, err := elect.Leader(ctx)
 	if err != nil {
-		return "", errors.Join(fetcd.ErrElectionNoLeader, err)
+		return "", errors.Join(ErrElectionNoLeader, err)
 	}
 	if len(resp.Kvs) == 0 {
-		return "", fetcd.ErrElectionNoLeader
+		return "", ErrElectionNoLeader
 	}
 	return string(resp.Kvs[0].Value), nil
 }
@@ -170,7 +169,7 @@ func (e *election) IsLeader() bool {
 	return e.isLeader.Load()
 }
 
-// Fence implements fetcd.IFencedElection: the campaign key's CreateRevision,
+// Fence implements IFencedElection: the campaign key's CreateRevision,
 // monotonic across leadership changes of the prefix. Leadership-sensitive
 // writes should carry it and reject older tokens, which closes the inherent
 // IsLeader stale window (lease expired server-side, client not yet aware).
@@ -203,5 +202,5 @@ func (e *election) finish(session electionSession) {
 	}
 }
 
-var _ fetcd.IElection = (*election)(nil)
-var _ fetcd.IFencedElection = (*election)(nil)
+var _ IElection = (*election)(nil)
+var _ IFencedElection = (*election)(nil)
