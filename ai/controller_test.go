@@ -8,7 +8,6 @@ import (
 	"time"
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
-	coreai "github.com/tjbdwanghaibo/roost-core/ai"
 )
 
 type controllerTestStrategy struct {
@@ -18,15 +17,15 @@ type controllerTestStrategy struct {
 	tickCount int
 }
 
-func (s *controllerTestStrategy) Name() string                    { return s.name }
-func (s *controllerTestStrategy) Init(*coreai.Context) error      { return s.initErr }
-func (s *controllerTestStrategy) Tick(*coreai.Context, time.Time) { s.tickCount++ }
-func (*controllerTestStrategy) OnActionEnd(*coreai.Context, int64, coreflow.ActionKind, coreflow.ActionReason) {
+func (s *controllerTestStrategy) Name() string             { return s.name }
+func (s *controllerTestStrategy) Init(*Context) error      { return s.initErr }
+func (s *controllerTestStrategy) Tick(*Context, time.Time) { s.tickCount++ }
+func (*controllerTestStrategy) OnActionEnd(*Context, int64, coreflow.ActionKind, coreflow.ActionReason) {
 }
-func (*controllerTestStrategy) OnMissionEnd(*coreai.Context, coreflow.Mission, coreflow.ActionReason) {
+func (*controllerTestStrategy) OnMissionEnd(*Context, coreflow.Mission, coreflow.ActionReason) {
 }
-func (*controllerTestStrategy) CanStopByNext(coreai.Strategy) bool { return true }
-func (s *controllerTestStrategy) Stop(*coreai.Context, string)     { s.stopCount++ }
+func (*controllerTestStrategy) CanStopByNext(Strategy) bool { return true }
+func (s *controllerTestStrategy) Stop(*Context, string)     { s.stopCount++ }
 
 func TestControllerFailedInitKeepsPreviousStrategy(t *testing.T) {
 	endedActions := 0

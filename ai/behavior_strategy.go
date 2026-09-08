@@ -4,7 +4,6 @@ import (
 	"time"
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
-	coreai "github.com/tjbdwanghaibo/roost-core/ai"
 )
 
 // ActionEnd is one taskflow action completion delivered to the tree on the
@@ -19,7 +18,7 @@ type ActionEnd struct {
 // tree runs as a strategy: the core AI context (owner entity, action list),
 // the business data block, and the deterministic tick clock.
 type BehaviorContext[C any] struct {
-	Core    *coreai.Context
+	Core    *Context
 	Data    *C
 	NowTick int64
 	// actionEnds holds the completions that arrived since the previous tick;
@@ -50,12 +49,12 @@ type BehaviorStrategyOptions[C any] struct {
 	// when the tree contains time-based nodes; a nil source reads as 0.
 	NowTick func() int64
 	// CanStop answers Strategy.CanStopByNext; nil always allows replacement.
-	CanStop func(next coreai.Strategy) bool
+	CanStop func(next Strategy) bool
 	// OnResult observes each completed tree evaluation (Success/Failure).
 	OnResult func(Status)
 }
 
-// BehaviorStrategy runs a behavior tree as a coreai.Strategy, closing the
+// BehaviorStrategy runs a behavior tree as a Strategy, closing the
 // gap between the tree skeleton and the Controller/taskflow execution flow:
 // Tick drives the tree, action/mission completions are buffered and handed
 // to the next tick's context, and a finished tree resets so the next tick
@@ -75,7 +74,7 @@ func NewBehaviorStrategy[C any](root Node[BehaviorContext[C]], options BehaviorS
 
 func (s *BehaviorStrategy[C]) Name() string { return s.options.Name }
 
-func (s *BehaviorStrategy[C]) Init(*coreai.Context) error {
+func (s *BehaviorStrategy[C]) Init(*Context) error {
 	if s.root != nil {
 		s.root.Reset()
 	}
@@ -83,7 +82,7 @@ func (s *BehaviorStrategy[C]) Init(*coreai.Context) error {
 	return nil
 }
 
-func (s *BehaviorStrategy[C]) Tick(ctx *coreai.Context, _ time.Time) {
+func (s *BehaviorStrategy[C]) Tick(ctx *Context, _ time.Time) {
 	if s.root == nil {
 		// No tree consumes completions; drop them or they accumulate forever.
 		s.pending = nil
@@ -103,14 +102,14 @@ func (s *BehaviorStrategy[C]) Tick(ctx *coreai.Context, _ time.Time) {
 	}
 }
 
-func (s *BehaviorStrategy[C]) OnActionEnd(_ *coreai.Context, actionID int64, kind coreflow.ActionKind, reason coreflow.ActionReason) {
+func (s *BehaviorStrategy[C]) OnActionEnd(_ *Context, actionID int64, kind coreflow.ActionKind, reason coreflow.ActionReason) {
 	s.pending = append(s.pending, ActionEnd{ID: actionID, Kind: kind, Reason: reason})
 }
 
-func (s *BehaviorStrategy[C]) OnMissionEnd(*coreai.Context, coreflow.Mission, coreflow.ActionReason) {
+func (s *BehaviorStrategy[C]) OnMissionEnd(*Context, coreflow.Mission, coreflow.ActionReason) {
 }
 
-func (s *BehaviorStrategy[C]) CanStopByNext(next coreai.Strategy) bool {
+func (s *BehaviorStrategy[C]) CanStopByNext(next Strategy) bool {
 	if s.options.CanStop != nil {
 		return s.options.CanStop(next)
 	}
@@ -119,7 +118,7 @@ func (s *BehaviorStrategy[C]) CanStopByNext(next coreai.Strategy) bool {
 
 // Stop resets the tree. Ending outstanding actions stays with the
 // Controller's EndActions hook, which already runs on strategy replacement.
-func (s *BehaviorStrategy[C]) Stop(*coreai.Context, string) {
+func (s *BehaviorStrategy[C]) Stop(*Context, string) {
 	if s.root != nil {
 		s.root.Reset()
 	}

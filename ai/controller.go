@@ -7,7 +7,6 @@ import (
 	"time"
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
-	coreai "github.com/tjbdwanghaibo/roost-core/ai"
 )
 
 var (
@@ -18,9 +17,9 @@ var (
 
 type ControllerHooks struct {
 	Now        func() time.Time
-	Context    func(time.Time) *coreai.Context
+	Context    func(time.Time) *Context
 	EndActions func(coreflow.ActionReason)
-	OnChanged  func(previous, current coreai.Strategy)
+	OnChanged  func(previous, current Strategy)
 	OnError    func(error)
 }
 
@@ -29,14 +28,14 @@ type ControllerHooks struct {
 // Calls are externally serialized by the owning Entity mutex.
 type Controller struct {
 	hooks     ControllerHooks
-	strategy  coreai.Strategy
+	strategy  Strategy
 	frozen    bool
 	switching bool
 }
 
 func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks: hooks} }
 
-func (c *Controller) SetStrategy(next coreai.Strategy) error {
+func (c *Controller) SetStrategy(next Strategy) error {
 	if c == nil {
 		return ErrStrategyInit
 	}
@@ -76,7 +75,7 @@ func (c *Controller) SetStrategy(next coreai.Strategy) error {
 	return nil
 }
 
-func (c *Controller) Strategy() coreai.Strategy {
+func (c *Controller) Strategy() Strategy {
 	if c == nil {
 		return nil
 	}
@@ -154,16 +153,16 @@ func (c *Controller) now() time.Time {
 	}
 	return time.Now()
 }
-func (c *Controller) context(now time.Time) (ctx *coreai.Context) {
+func (c *Controller) context(now time.Time) (ctx *Context) {
 	if now.IsZero() {
 		now = c.now()
 	}
-	ctx = &coreai.Context{Now: now}
+	ctx = &Context{Now: now}
 	if c.hooks.Context != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				c.report(fmt.Errorf("ai: context hook panic: %v", recovered))
-				ctx = &coreai.Context{Now: now}
+				ctx = &Context{Now: now}
 			}
 		}()
 		if candidate := c.hooks.Context(now); candidate != nil {
@@ -189,7 +188,7 @@ func (c *Controller) endActions(reason coreflow.ActionReason) (err error) {
 	return nil
 }
 
-func (c *Controller) changed(previous, current coreai.Strategy) {
+func (c *Controller) changed(previous, current Strategy) {
 	if c.hooks.OnChanged == nil {
 		return
 	}
@@ -201,7 +200,7 @@ func (c *Controller) changed(previous, current coreai.Strategy) {
 	c.hooks.OnChanged(previous, current)
 }
 
-func sameStrategy(left, right coreai.Strategy) bool {
+func sameStrategy(left, right Strategy) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -209,7 +208,7 @@ func sameStrategy(left, right coreai.Strategy) bool {
 	return lv.Type() == rv.Type() && lv.Type().Comparable() && lv.Interface() == rv.Interface()
 }
 
-func strategyName(strategy coreai.Strategy) (name string) {
+func strategyName(strategy Strategy) (name string) {
 	if strategy == nil {
 		return "<nil>"
 	}
@@ -221,40 +220,40 @@ func strategyName(strategy coreai.Strategy) (name string) {
 	return strategy.Name()
 }
 
-func callStrategyInit(strategy coreai.Strategy, ctx *coreai.Context) (err error) {
+func callStrategyInit(strategy Strategy, ctx *Context) (err error) {
 	if strategy == nil {
 		return nil
 	}
 	defer recoverStrategyPanic("init", &err)
 	return strategy.Init(ctx)
 }
-func callStrategyCanStop(strategy, next coreai.Strategy) (allowed bool, err error) {
+func callStrategyCanStop(strategy, next Strategy) (allowed bool, err error) {
 	if strategy == nil {
 		return true, nil
 	}
 	defer recoverStrategyPanic("can stop", &err)
 	return strategy.CanStopByNext(next), nil
 }
-func callStrategyTick(strategy coreai.Strategy, ctx *coreai.Context, now time.Time) (err error) {
+func callStrategyTick(strategy Strategy, ctx *Context, now time.Time) (err error) {
 	defer recoverStrategyPanic("tick", &err)
 	strategy.Tick(ctx, now)
 	return nil
 }
-func callStrategyActionEnd(strategy coreai.Strategy, ctx *coreai.Context, id int64, kind coreflow.ActionKind, reason coreflow.ActionReason) (err error) {
+func callStrategyActionEnd(strategy Strategy, ctx *Context, id int64, kind coreflow.ActionKind, reason coreflow.ActionReason) (err error) {
 	defer recoverStrategyPanic("action end", &err)
 	strategy.OnActionEnd(ctx, id, kind, reason)
 	return nil
 }
-func callStrategyMissionEnd(strategy coreai.Strategy, ctx *coreai.Context, mission coreflow.Mission, reason coreflow.ActionReason) (err error) {
+func callStrategyMissionEnd(strategy Strategy, ctx *Context, mission coreflow.Mission, reason coreflow.ActionReason) (err error) {
 	defer recoverStrategyPanic("mission end", &err)
 	strategy.OnMissionEnd(ctx, mission, reason)
 	return nil
 }
-func callStrategyStop(strategy coreai.Strategy, ctx *coreai.Context, reason string) (err error) {
+func callStrategyStop(strategy Strategy, ctx *Context, reason string) (err error) {
 	if strategy == nil {
 		return nil
 	}
-	stoppable, ok := strategy.(coreai.StoppableStrategy)
+	stoppable, ok := strategy.(StoppableStrategy)
 	if !ok {
 		return nil
 	}

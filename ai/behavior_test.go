@@ -9,7 +9,6 @@ import (
 	"time"
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/actionflow"
-	coreai "github.com/tjbdwanghaibo/roost-core/ai"
 )
 
 type treeData struct {
@@ -279,7 +278,7 @@ func TestBehaviorStrategyDeterministicDecisions(t *testing.T) {
 		}
 		for tick = 1; tick <= 40; tick++ {
 			data.hp -= 3
-			strategy.Tick(&coreai.Context{}, time.Time{})
+			strategy.Tick(&Context{}, time.Time{})
 		}
 		return data.log
 	}
@@ -315,7 +314,7 @@ func TestBehaviorStrategyNilRootDropsPendingCompletions(t *testing.T) {
 	strategy := NewBehaviorStrategy[treeData](nil, BehaviorStrategyOptions[treeData]{})
 	for i := 0; i < 100; i++ {
 		strategy.OnActionEnd(nil, int64(i), coreflow.ActionKind(1), coreflow.NewActionReason("done"))
-		strategy.Tick(&coreai.Context{}, time.Time{})
+		strategy.Tick(&Context{}, time.Time{})
 	}
 	if len(strategy.pending) != 0 {
 		t.Fatalf("pending grew to %d", len(strategy.pending))
