@@ -6,8 +6,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // MGet's contract has three parts a unit test cannot establish, because they
@@ -18,13 +16,13 @@ import (
 //
 //	docker run --rm -p 6379:6379 redis:7
 //	ROOST_REDIS_TEST_ADDR=127.0.0.1:6379 go test ./redis/ -run MGet
-func mgetClient(t *testing.T) (fredis.IRedis, string) {
+func mgetClient(t *testing.T) (IRedis, string) {
 	t.Helper()
 	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
 	if addr == "" {
 		t.Skip("ROOST_REDIS_TEST_ADDR is not set")
 	}
-	client, err := NewClient(fredis.DefaultConfig(addr))
+	client, err := NewClient(DefaultConfig(addr))
 	if err != nil {
 		t.Fatalf("connect %s: %v", addr, err)
 	}

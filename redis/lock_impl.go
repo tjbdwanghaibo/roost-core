@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -30,12 +28,12 @@ else
 end`
 )
 
-// distLockFactory implements fredis.IDistLockFactory.
+// distLockFactory implements IDistLockFactory.
 type distLockFactory struct {
 	rdb goredis.UniversalClient
 }
 
-// Contract boundary: the locks in this file implement fredis.IDistLock —
+// Contract boundary: the locks in this file implement IDistLock —
 // value-guarded mutual exclusion WITHOUT a fencing token. A holder whose TTL
 // expires (GC pause, network stall) keeps executing without knowing the lock
 // is gone, so a second holder can run concurrently for that window. Use them
@@ -48,16 +46,16 @@ func newDistLockFactory(rdb goredis.UniversalClient) *distLockFactory {
 	return &distLockFactory{rdb: rdb}
 }
 
-func (f *distLockFactory) NewLock(key string, ttl time.Duration) fredis.IDistLock {
+func (f *distLockFactory) NewLock(key string, ttl time.Duration) IDistLock {
 	if f == nil {
 		return &distLock{key: key, ttl: ttl}
 	}
 	return &distLock{rdb: f.rdb, key: key, ttl: ttl}
 }
 
-var _ fredis.IDistLockFactory = (*distLockFactory)(nil)
+var _ IDistLockFactory = (*distLockFactory)(nil)
 
-// distLock implements fredis.IDistLock.
+// distLock implements IDistLock.
 type distLock struct {
 	rdb goredis.UniversalClient
 	key string
@@ -127,7 +125,7 @@ func (l *distLock) Release(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.state == distLockIdle || l.value == "" {
-		return fredis.ErrLockNotHeld
+		return ErrLockNotHeld
 	}
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
@@ -137,7 +135,7 @@ func (l *distLock) Release(ctx context.Context) error {
 	l.state = distLockIdle
 	l.value = ""
 	if result == 0 {
-		return fredis.ErrLockNotHeld
+		return ErrLockNotHeld
 	}
 	return nil
 }
@@ -152,7 +150,7 @@ func (l *distLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.state == distLockIdle || l.value == "" {
-		return false, fredis.ErrLockNotHeld
+		return false, ErrLockNotHeld
 	}
 	result, err := l.rdb.Eval(ctx, extendLockScript, []string{l.key}, l.value, ttl.Milliseconds()).Int64()
 	if err != nil {
@@ -168,7 +166,7 @@ func (l *distLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) 
 	return true, nil
 }
 
-var _ fredis.IDistLock = (*distLock)(nil)
+var _ IDistLock = (*distLock)(nil)
 
 func generateLockValue() string {
 	return rand.Text()
@@ -184,7 +182,7 @@ func generateLockValue() string {
 // can still race a new holder's downstream writes. Operations that must fence
 // stale holders belong on IVersionedLock instead.
 type AutoExtendLock struct {
-	inner    fredis.IDistLock
+	inner    IDistLock
 	ttl      time.Duration
 	interval time.Duration
 	opMu     sync.Mutex
@@ -198,7 +196,7 @@ type AutoExtendLock struct {
 
 // NewAutoExtendLock wraps lock, which must have been created with the given
 // ttl. extendInterval <= 0 defaults to ttl/3.
-func NewAutoExtendLock(lock fredis.IDistLock, ttl time.Duration, extendInterval time.Duration) *AutoExtendLock {
+func NewAutoExtendLock(lock IDistLock, ttl time.Duration, extendInterval time.Duration) *AutoExtendLock {
 	var initErr error
 	if lock == nil {
 		initErr = errors.Join(initErr, fmt.Errorf("redis: auto extend lock is nil"))
@@ -273,7 +271,7 @@ func (l *AutoExtendLock) watch(ctx context.Context, done chan struct{}) {
 			// Authoritative server answer: the lease is not held anymore.
 			// Stop extending and make the loss observable instead of
 			// fighting the new holder.
-			l.recordLost(fredis.ErrLockNotHeld)
+			l.recordLost(ErrLockNotHeld)
 			return
 		}
 		// Transient failure (network, timeout): the last successful renewal
@@ -334,4 +332,4 @@ func (l *AutoExtendLock) Extend(ctx context.Context, ttl time.Duration) (bool, e
 	return l.inner.Extend(ctx, ttl)
 }
 
-var _ fredis.IDistLock = (*AutoExtendLock)(nil)
+var _ IDistLock = (*AutoExtendLock)(nil)

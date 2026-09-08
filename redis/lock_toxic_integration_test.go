@@ -13,7 +13,6 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 type toxiproxyClient struct{ base string }
@@ -63,7 +62,7 @@ func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 	// Built through the kit's own constructor so the fixture carries the
 	// production client options (context deadlines on the wire included),
 	// not a hand-rolled approximation of them.
-	rdb := newRedisClient(&fredis.Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
+	rdb := newRedisClient(&Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
 	t.Cleanup(func() { _ = rdb.Close() })
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("proxied redis: %v", err)
@@ -113,7 +112,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 	}
 	// Reconcile: a value-guarded delete that only removes our own token.
 	err = lock.Release(ctx)
-	if err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
+	if err != nil && !errors.Is(err, ErrLockNotHeld) {
 		t.Fatalf("reconciling Release after heal: %v", err)
 	}
 	if otherOK {
@@ -154,7 +153,7 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 		t.Fatalf("re-Acquire after a lost SETNX reply: ok=%v err=%v, want ErrDistLockStateUncertain", ok, err)
 	}
 	proxy.do(t, http.MethodPost, "/reset", nil)
-	if err := lock.Release(ctx); err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
+	if err := lock.Release(ctx); err != nil && !errors.Is(err, ErrLockNotHeld) {
 		t.Fatalf("reconciling Release: %v", err)
 	}
 	if held, err := rdb.Exists(ctx, "toxic:acquire").Result(); err != nil || held != 0 {
@@ -199,7 +198,7 @@ func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
 	if ok, err := lock.Acquire(ctx); ok && err == nil {
 		t.Log("Acquire after heal succeeded directly: the timed-out SETNX had not reached Redis")
 	} else if errors.Is(err, ErrDistLockStateUncertain) {
-		if err := lock.Release(ctx); err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
+		if err := lock.Release(ctx); err != nil && !errors.Is(err, ErrLockNotHeld) {
 			t.Fatalf("reconciling Release after heal: %v", err)
 		}
 		if ok, err := lock.Acquire(ctx); err != nil || !ok {

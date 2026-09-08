@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // fakeDistLock counts extensions and can start refusing them, modeling a
@@ -35,7 +33,7 @@ func (f *fakeDistLock) Release(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.held {
-		return fredis.ErrLockNotHeld
+		return ErrLockNotHeld
 	}
 	f.held = false
 	return nil
@@ -145,11 +143,11 @@ func TestAutoExtendLockSurfacesLostLease(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if !errors.Is(lock.Err(), fredis.ErrLockNotHeld) {
+	if !errors.Is(lock.Err(), ErrLockNotHeld) {
 		t.Fatalf("err=%v, want ErrLockNotHeld cause", lock.Err())
 	}
 	// Release after loss reports the inner state honestly.
-	if err := lock.Release(context.Background()); !errors.Is(err, fredis.ErrLockNotHeld) {
+	if err := lock.Release(context.Background()); !errors.Is(err, ErrLockNotHeld) {
 		t.Fatalf("release after loss err=%v", err)
 	}
 }

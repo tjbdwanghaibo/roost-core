@@ -9,7 +9,6 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 func TestDistLockExpiryAndReacquireIntegration(t *testing.T) {
@@ -49,7 +48,7 @@ func TestDistLockExpiryAndReacquireIntegration(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := first.Release(ctx); !errors.Is(err, rediscore.ErrLockNotHeld) {
+	if err := first.Release(ctx); !errors.Is(err, ErrLockNotHeld) {
 		t.Fatalf("stale release error=%v, want ErrLockNotHeld", err)
 	}
 	owner, err := client.Get(ctx, key).Result()

@@ -7,10 +7,9 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
-// redisClient implements fredis.IRedis by wrapping go-redis.
+// redisClient implements IRedis by wrapping go-redis.
 type redisClient struct {
 	rdb goredis.UniversalClient
 }
@@ -22,7 +21,7 @@ type redisClient struct {
 // registry: integration tests that must exercise real Redis semantics
 // (Lua scripts, pipelines, WATCH) that an in-memory double reimplements
 // rather than executes, and one-off operational tools. Callers own Close.
-func NewClient(cfg *fredis.Config) (fredis.IRedis, error) {
+func NewClient(cfg *Config) (IRedis, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("redis: configuration is required")
 	}
@@ -32,7 +31,7 @@ func NewClient(cfg *fredis.Config) (fredis.IRedis, error) {
 	return newRedisClient(cfg), nil
 }
 
-func newRedisClient(cfg *fredis.Config) *redisClient {
+func newRedisClient(cfg *Config) *redisClient {
 	var rdb goredis.UniversalClient
 	if cfg.IsCluster() {
 		rdb = goredis.NewClusterClient(&goredis.ClusterOptions{
@@ -73,7 +72,7 @@ func newRedisClient(cfg *fredis.Config) *redisClient {
 func (c *redisClient) Get(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.Get(ctx, key).Bytes()
 	if err == goredis.Nil {
-		return nil, fredis.ErrNil
+		return nil, ErrNil
 	}
 	return val, err
 }
@@ -161,7 +160,7 @@ func (c *redisClient) IncrBy(ctx context.Context, key string, value int64) (int6
 func (c *redisClient) HGet(ctx context.Context, key, field string) ([]byte, error) {
 	val, err := c.rdb.HGet(ctx, key, field).Bytes()
 	if err == goredis.Nil {
-		return nil, fredis.ErrNil
+		return nil, ErrNil
 	}
 	return val, err
 }
@@ -195,7 +194,7 @@ func (c *redisClient) RPush(ctx context.Context, key string, values ...any) (int
 func (c *redisClient) LPop(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.LPop(ctx, key).Bytes()
 	if err == goredis.Nil {
-		return nil, fredis.ErrNil
+		return nil, ErrNil
 	}
 	return val, err
 }
@@ -203,7 +202,7 @@ func (c *redisClient) LPop(ctx context.Context, key string) ([]byte, error) {
 func (c *redisClient) RPop(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.RPop(ctx, key).Bytes()
 	if err == goredis.Nil {
-		return nil, fredis.ErrNil
+		return nil, ErrNil
 	}
 	return val, err
 }
@@ -216,20 +215,20 @@ func (c *redisClient) LRange(ctx context.Context, key string, start, stop int64)
 	return c.rdb.LRange(ctx, key, start, stop).Result()
 }
 
-// LTrim implements fredis.ListTrimmer: in-place trim without the DEL+RPUSH
+// LTrim implements ListTrimmer: in-place trim without the DEL+RPUSH
 // loss window of the emulated fallback.
 func (c *redisClient) LTrim(ctx context.Context, key string, start, stop int64) error {
 	return c.rdb.LTrim(ctx, key, start, stop).Err()
 }
 
-// LRem implements fredis.ListRemover.
+// LRem implements ListRemover.
 func (c *redisClient) LRem(ctx context.Context, key string, count int64, value any) (int64, error) {
 	return c.rdb.LRem(ctx, key, count, value).Result()
 }
 
 // --- Sorted Set ---
 
-func (c *redisClient) ZAdd(ctx context.Context, key string, members ...fredis.Z) (int64, error) {
+func (c *redisClient) ZAdd(ctx context.Context, key string, members ...Z) (int64, error) {
 	zs := make([]goredis.Z, len(members))
 	for i, m := range members {
 		zs[i] = goredis.Z{Score: m.Score, Member: m.Member}
@@ -244,7 +243,7 @@ func (c *redisClient) ZRem(ctx context.Context, key string, members ...any) (int
 func (c *redisClient) ZScore(ctx context.Context, key string, member string) (float64, error) {
 	score, err := c.rdb.ZScore(ctx, key, member).Result()
 	if err == goredis.Nil {
-		return 0, fredis.ErrNil
+		return 0, ErrNil
 	}
 	return score, err
 }
@@ -252,7 +251,7 @@ func (c *redisClient) ZScore(ctx context.Context, key string, member string) (fl
 func (c *redisClient) ZRank(ctx context.Context, key string, member string) (int64, error) {
 	rank, err := c.rdb.ZRank(ctx, key, member).Result()
 	if err == goredis.Nil {
-		return 0, fredis.ErrNil
+		return 0, ErrNil
 	}
 	return rank, err
 }
@@ -260,12 +259,12 @@ func (c *redisClient) ZRank(ctx context.Context, key string, member string) (int
 func (c *redisClient) ZRevRank(ctx context.Context, key string, member string) (int64, error) {
 	rank, err := c.rdb.ZRevRank(ctx, key, member).Result()
 	if err == goredis.Nil {
-		return 0, fredis.ErrNil
+		return 0, ErrNil
 	}
 	return rank, err
 }
 
-func (c *redisClient) ZRangeWithScores(ctx context.Context, key string, start, stop int64) ([]fredis.Z, error) {
+func (c *redisClient) ZRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
 	result, err := c.rdb.ZRangeWithScores(ctx, key, start, stop).Result()
 	if err != nil {
 		return nil, err
@@ -273,7 +272,7 @@ func (c *redisClient) ZRangeWithScores(ctx context.Context, key string, start, s
 	return convertZSlice(result), nil
 }
 
-func (c *redisClient) ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]fredis.Z, error) {
+func (c *redisClient) ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
 	result, err := c.rdb.ZRevRangeWithScores(ctx, key, start, stop).Result()
 	if err != nil {
 		return nil, err
@@ -305,7 +304,7 @@ func (c *redisClient) SIsMember(ctx context.Context, key string, member any) (bo
 
 // --- Pipeline / Script ---
 
-func (c *redisClient) Pipeline() fredis.IPipeline {
+func (c *redisClient) Pipeline() IPipeline {
 	return newPipeline(c.rdb.Pipeline())
 }
 
@@ -322,7 +321,7 @@ func (c *redisClient) EvalSha(ctx context.Context, sha string, keys []string, ar
 // safely provide this through go-redis's keyless-command routing, so it is
 // rejected instead of silently weakening the durability contract.
 func (c *redisClient) EvalDurable(ctx context.Context, script string, keys []string, numLocal, numReplicas int, timeout time.Duration, args ...any) (any, int64, int64, error) {
-	results, local, replicas, err := c.EvalBatchDurable(ctx, script, []fredis.EvalCall{{Keys: keys, Args: args}}, numLocal, numReplicas, timeout)
+	results, local, replicas, err := c.EvalBatchDurable(ctx, script, []EvalCall{{Keys: keys, Args: args}}, numLocal, numReplicas, timeout)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -332,7 +331,7 @@ func (c *redisClient) EvalDurable(ctx context.Context, script string, keys []str
 	return results[0], local, replicas, nil
 }
 
-func (c *redisClient) EvalBatchDurable(ctx context.Context, script string, calls []fredis.EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
+func (c *redisClient) EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
 	if len(calls) == 0 {
 		return nil, 0, 0, nil
 	}
@@ -384,7 +383,7 @@ func (c *redisClient) Publish(ctx context.Context, channel string, message any) 
 	return c.rdb.Publish(ctx, channel, message).Err()
 }
 
-func (c *redisClient) Subscribe(ctx context.Context, channels ...string) fredis.IPubSub {
+func (c *redisClient) Subscribe(ctx context.Context, channels ...string) IPubSub {
 	return newPubSub(c.rdb.Subscribe(ctx, channels...))
 }
 
@@ -400,14 +399,14 @@ func (c *redisClient) Close() error {
 
 // --- helpers ---
 
-func convertZSlice(zs []goredis.Z) []fredis.Z {
-	result := make([]fredis.Z, len(zs))
+func convertZSlice(zs []goredis.Z) []Z {
+	result := make([]Z, len(zs))
 	for i, z := range zs {
 		member := ""
 		if s, ok := z.Member.(string); ok {
 			member = s
 		}
-		result[i] = fredis.Z{Score: z.Score, Member: member}
+		result[i] = Z{Score: z.Score, Member: member}
 	}
 	return result
 }
@@ -432,8 +431,8 @@ func redisInteger(value any) (int64, error) {
 	}
 }
 
-var _ fredis.IRedis = (*redisClient)(nil)
-var _ fredis.DurableEvaler = (*redisClient)(nil)
-var _ fredis.DurableBatchEvaler = (*redisClient)(nil)
-var _ fredis.ListTrimmer = (*redisClient)(nil)
-var _ fredis.ListRemover = (*redisClient)(nil)
+var _ IRedis = (*redisClient)(nil)
+var _ DurableEvaler = (*redisClient)(nil)
+var _ DurableBatchEvaler = (*redisClient)(nil)
+var _ ListTrimmer = (*redisClient)(nil)
+var _ ListRemover = (*redisClient)(nil)

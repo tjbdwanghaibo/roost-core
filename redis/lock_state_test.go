@@ -9,7 +9,6 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 // scriptedRedis stands in for the UniversalClient for the two commands distLock
@@ -134,7 +133,7 @@ func TestDistLockUncertainStateBlocksReuseUntilReleaseReconciles(t *testing.T) {
 			switch {
 			case applied && err != nil:
 				t.Fatalf("release of a lease the server did grant: %v", err)
-			case !applied && !errors.Is(err, fredis.ErrLockNotHeld):
+			case !applied && !errors.Is(err, ErrLockNotHeld):
 				t.Fatalf("release of a lease that never reached the server: %v, want ErrLockNotHeld", err)
 			}
 			if owner := redis.owner("k"); owner != "" {

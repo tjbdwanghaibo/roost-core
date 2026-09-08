@@ -1,7 +1,6 @@
 package redis
 
 import (
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"sync"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -9,7 +8,7 @@ import (
 
 type pubSub struct {
 	ps   *goredis.PubSub
-	ch   <-chan *fredis.PubSubMessage
+	ch   <-chan *PubSubMessage
 	done chan struct{}
 	once sync.Once
 }
@@ -17,7 +16,7 @@ type pubSub struct {
 func newPubSub(ps *goredis.PubSub) *pubSub {
 	goCh := ps.Channel()
 	// Convert go-redis channel to framework channel
-	msgCh := make(chan *fredis.PubSubMessage, cap(goCh))
+	msgCh := make(chan *PubSubMessage, cap(goCh))
 	done := make(chan struct{})
 	go func() {
 		defer close(msgCh)
@@ -30,7 +29,7 @@ func newPubSub(ps *goredis.PubSub) *pubSub {
 					return
 				}
 				select {
-				case msgCh <- &fredis.PubSubMessage{
+				case msgCh <- &PubSubMessage{
 					Channel: msg.Channel,
 					Payload: msg.Payload,
 				}:
@@ -43,7 +42,7 @@ func newPubSub(ps *goredis.PubSub) *pubSub {
 	return &pubSub{ps: ps, ch: msgCh, done: done}
 }
 
-func (p *pubSub) Channel() <-chan *fredis.PubSubMessage {
+func (p *pubSub) Channel() <-chan *PubSubMessage {
 	return p.ch
 }
 
@@ -56,4 +55,4 @@ func (p *pubSub) Close() error {
 	return err
 }
 
-var _ fredis.IPubSub = (*pubSub)(nil)
+var _ IPubSub = (*pubSub)(nil)
