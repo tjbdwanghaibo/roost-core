@@ -12,6 +12,8 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 
 ## 第三级：框架维护者与生产负责人
 
+- [Core/Kit 实现下沉与缺陷收敛统一实施方案](CORE_KIT_REFACTOR_AND_AUDIT_PLAN.zh-CN.md)：迁移批次、历史审计衔接、测试门禁及跨仓验收。
+
 - [实现原理与不变量](INTERNALS.md)：生命周期、锁、事务、WAL/Data Engine、远程实体、Saga、实时同步及失败语义。
 - [生产部署手册](DEPLOYMENT.md)：Shell/systemd、Docker、Kubernetes、发布、回滚、备份、容量与故障演练。
 - [薄弱点与路线图](ROADMAP.md)：哪些是发布阻断项，哪些是增强项，哪些不应进入框架核心。
