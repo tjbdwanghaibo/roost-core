@@ -1,21 +1,18 @@
 package syncstream
 
-type MetricSink interface {
-	Gauge(name string, value float64, labels map[string]string)
-}
-type HealthOptions struct {
+type PublisherHealthOptions struct {
 	MaxFailures     uint64
 	MaxBackpressure uint64
 }
-type HealthStatus struct {
+type PublisherHealthStatus struct {
 	Healthy   bool
 	Reason    string
 	Publisher PublisherMetrics
 	Buffered  BufferedPublisherMetrics
 }
 
-func Health(publisher *Publisher, buffered *BufferedPublisher, options HealthOptions) HealthStatus {
-	status := HealthStatus{Healthy: true}
+func Health(publisher *Publisher, buffered *BufferedPublisher, options PublisherHealthOptions) PublisherHealthStatus {
+	status := PublisherHealthStatus{Healthy: true}
 	if publisher != nil {
 		status.Publisher = publisher.Metrics()
 	}
@@ -35,7 +32,7 @@ func ExportMetrics(sink MetricSink, labels map[string]string, publisher *Publish
 	if sink == nil {
 		return
 	}
-	status := Health(publisher, buffered, HealthOptions{})
+	status := Health(publisher, buffered, PublisherHealthOptions{})
 	sink.Gauge("roost_sync_packets_published", float64(status.Publisher.Published), labels)
 	sink.Gauge("roost_sync_frames_published", float64(status.Publisher.Frames), labels)
 	sink.Gauge("roost_sync_publish_failures", float64(status.Publisher.Failures+status.Buffered.Failures), labels)

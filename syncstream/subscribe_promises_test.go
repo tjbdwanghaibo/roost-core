@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 // mintEnvelope publishes one packet through a real Publisher and returns the
@@ -18,7 +17,7 @@ func mintEnvelope(t *testing.T, payload []byte) *coresyncbus.SyncMsg {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Publish(corestream.Packet{Stream: corestream.Stream{Topic: "state", Key: 1}, Epoch: 1, Sequence: 1, Full: true, Payload: payload}); err != nil {
+	if err := publisher.Publish(Packet{Stream: Stream{Topic: "state", Key: 1}, Epoch: 1, Sequence: 1, Full: true, Payload: payload}); err != nil {
 		t.Fatal(err)
 	}
 	if captured.last == nil {
@@ -34,7 +33,7 @@ func TestSubscribeRefusesEachOversizedOrMalformedEnvelope(t *testing.T) {
 	deliver := func(t *testing.T, options SubscribeOptions, mutate func(*coresyncbus.SyncMsg)) error {
 		t.Helper()
 		bus := &memoryBus{}
-		if _, err := SubscribeWithOptions(bus, "state", options, func(corestream.Packet) error { return nil }); err != nil {
+		if _, err := SubscribeWithOptions(bus, "state", options, func(Packet) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 		msg := mintEnvelope(t, []byte("payload-0123456789"))

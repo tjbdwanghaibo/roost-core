@@ -10,7 +10,6 @@ import (
 	"time"
 
 	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func TestPublisherAndSubscriberRoundTrip(t *testing.T) {
@@ -19,16 +18,16 @@ func TestPublisherAndSubscriberRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var received corestream.Packet
-	if _, err := Subscribe(bus, "skill.presentation", func(packet corestream.Packet) error {
+	var received Packet
+	if _, err := Subscribe(bus, "skill.presentation", func(packet Packet) error {
 		received = packet
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	packet := corestream.Packet{
-		Observer: corestream.Observer{ID: 5, Scope: "match"},
-		Stream:   corestream.Stream{Topic: "skill.presentation", Key: 7},
+	packet := Packet{
+		Observer: Observer{ID: 5, Scope: "match"},
+		Stream:   Stream{Topic: "skill.presentation", Key: 7},
 		Epoch:    1, Sequence: 3, BaseSequence: 2, SchemaVersion: 1, Payload: []byte("payload"),
 	}
 	if err := publisher.Publish(packet); err != nil {
@@ -45,7 +44,7 @@ func BenchmarkCompressedFragmentedPublish(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	packet := corestream.Packet{Stream: corestream.Stream{Topic: "state", Key: 1}, Epoch: 1, Sequence: 1, SchemaVersion: 1, Payload: bytes.Repeat([]byte("runtime-state-"), 256)}
+	packet := Packet{Stream: Stream{Topic: "state", Key: 1}, Epoch: 1, Sequence: 1, SchemaVersion: 1, Payload: bytes.Repeat([]byte("runtime-state-"), 256)}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
@@ -57,12 +56,12 @@ func BenchmarkCompressedFragmentedPublish(b *testing.B) {
 
 func TestSubscriberRejectsEnvelopeMismatch(t *testing.T) {
 	bus := &memoryBus{}
-	_, err := Subscribe(bus, "state", func(corestream.Packet) error { return nil })
+	_, err := Subscribe(bus, "state", func(Packet) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	publisher, _ := NewPublisher(bus, 1, nil)
-	packet := corestream.Packet{Stream: corestream.Stream{Topic: "other", Key: 1}, Epoch: 1, Sequence: 1}
+	packet := Packet{Stream: Stream{Topic: "other", Key: 1}, Epoch: 1, Sequence: 1}
 	payloadBus := &capturingPublisher{}
 	encoder, _ := NewPublisher(payloadBus, 1, nil)
 	if err := encoder.Publish(packet); err != nil {
@@ -80,7 +79,7 @@ func TestEnqueueReportsPublishErrors(t *testing.T) {
 	bus := &capturingPublisher{err: want}
 	var got error
 	publisher, _ := NewPublisher(bus, 1, func(err error) { got = err })
-	publisher.Enqueue(corestream.Packet{Stream: corestream.Stream{Topic: "state"}, Epoch: 1})
+	publisher.Enqueue(Packet{Stream: Stream{Topic: "state"}, Epoch: 1})
 	if !errors.Is(got, want) {
 		t.Fatalf("reported error = %v", got)
 	}
@@ -88,22 +87,22 @@ func TestEnqueueReportsPublishErrors(t *testing.T) {
 
 func TestObserverAndPayloadGuards(t *testing.T) {
 	bus := &memoryBus{}
-	observer := corestream.Observer{ID: 7, Scope: "match"}
+	observer := Observer{ID: 7, Scope: "match"}
 	publisher, err := NewPublisherWithOptions(bus, PublisherOptions{ExpectedObserver: &observer, MaxPayloadBytes: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Publish(corestream.Packet{Observer: corestream.Observer{ID: 8}, Stream: corestream.Stream{Topic: "state"}, Epoch: 1}); !errors.Is(err, ErrObserverMismatch) {
+	if err := publisher.Publish(Packet{Observer: Observer{ID: 8}, Stream: Stream{Topic: "state"}, Epoch: 1}); !errors.Is(err, ErrObserverMismatch) {
 		t.Fatalf("publisher observer error = %v", err)
 	}
-	if err := publisher.Publish(corestream.Packet{Observer: observer, Stream: corestream.Stream{Topic: "state"}, Epoch: 1, Payload: []byte("large")}); !errors.Is(err, ErrPayloadTooLarge) {
+	if err := publisher.Publish(Packet{Observer: observer, Stream: Stream{Topic: "state"}, Epoch: 1, Payload: []byte("large")}); !errors.Is(err, ErrPayloadTooLarge) {
 		t.Fatalf("publisher payload error = %v", err)
 	}
 
-	if _, err := SubscribeWithOptions(bus, "state", SubscribeOptions{ExpectedObserver: &observer, MaxPayloadBytes: 4}, func(corestream.Packet) error { return nil }); err != nil {
+	if _, err := SubscribeWithOptions(bus, "state", SubscribeOptions{ExpectedObserver: &observer, MaxPayloadBytes: 4}, func(Packet) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	foreign := corestream.Packet{Observer: corestream.Observer{ID: 9}, Stream: corestream.Stream{Topic: "state"}, Sequence: 1}
+	foreign := Packet{Observer: Observer{ID: 9}, Stream: Stream{Topic: "state"}, Sequence: 1}
 	payload, err := json.Marshal(foreign)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +117,7 @@ type blockingPublisher struct {
 	release chan struct{}
 }
 
-func (publisher *blockingPublisher) Publish(corestream.Packet) error {
+func (publisher *blockingPublisher) Publish(Packet) error {
 	select {
 	case publisher.started <- struct{}{}:
 	default:
@@ -133,7 +132,7 @@ func TestBufferedPublisherSignalsBackpressureAndDrains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.TryEnqueue(corestream.Packet{Sequence: 1}); err != nil {
+	if err := publisher.TryEnqueue(Packet{Sequence: 1}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -141,10 +140,10 @@ func TestBufferedPublisherSignalsBackpressureAndDrains(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker did not start")
 	}
-	if err := publisher.TryEnqueue(corestream.Packet{Sequence: 2}); err != nil {
+	if err := publisher.TryEnqueue(Packet{Sequence: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.TryEnqueue(corestream.Packet{Sequence: 3}); !errors.Is(err, ErrBackpressure) {
+	if err := publisher.TryEnqueue(Packet{Sequence: 3}); !errors.Is(err, ErrBackpressure) {
 		t.Fatalf("backpressure error = %v", err)
 	}
 	close(downstream.release)
@@ -157,7 +156,7 @@ func TestBufferedPublisherSignalsBackpressureAndDrains(t *testing.T) {
 	if metrics.Queued != 2 || metrics.Published != 2 || metrics.Backpressure != 1 {
 		t.Fatalf("metrics = %#v", metrics)
 	}
-	if err := publisher.TryEnqueue(corestream.Packet{}); !errors.Is(err, ErrPublisherClosed) {
+	if err := publisher.TryEnqueue(Packet{}); !errors.Is(err, ErrPublisherClosed) {
 		t.Fatalf("closed error = %v", err)
 	}
 }
@@ -168,7 +167,7 @@ func TestPublisherFragmentsCompressesAndSubscriberReassemblesOutOfOrder(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	packet := corestream.Packet{Observer: corestream.Observer{ID: 4}, Stream: corestream.Stream{Topic: "state", Key: 8}, Epoch: 7, Sequence: 1, Full: true, Payload: bytes.Repeat([]byte("payload-"), 64)}
+	packet := Packet{Observer: Observer{ID: 4}, Stream: Stream{Topic: "state", Key: 8}, Epoch: 7, Sequence: 1, Full: true, Payload: bytes.Repeat([]byte("payload-"), 64)}
 	if err := publisher.Publish(packet); err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +175,8 @@ func TestPublisherFragmentsCompressesAndSubscriberReassemblesOutOfOrder(t *testi
 		t.Fatalf("frame count = %d", len(frames.messages))
 	}
 	bus := &memoryBus{}
-	var received corestream.Packet
-	if _, err := SubscribeWithOptions(bus, "state", SubscribeOptions{RequireChecksum: true, MaxEnvelopeBytes: 32, MaxAssemblyBytes: 1 << 20, MaxDecodedBytes: 1 << 20}, func(value corestream.Packet) error { received = value; return nil }); err != nil {
+	var received Packet
+	if _, err := SubscribeWithOptions(bus, "state", SubscribeOptions{RequireChecksum: true, MaxEnvelopeBytes: 32, MaxAssemblyBytes: 1 << 20, MaxDecodedBytes: 1 << 20}, func(value Packet) error { received = value; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	for index := len(frames.messages) - 1; index >= 0; index-- {
@@ -196,13 +195,13 @@ func TestPublisherFragmentsCompressesAndSubscriberReassemblesOutOfOrder(t *testi
 func TestSubscriberRejectsChecksumMismatch(t *testing.T) {
 	frames := &framePublisher{}
 	publisher, _ := NewPublisherWithOptions(frames, PublisherOptions{MaxFrameBytes: 4096})
-	packet := corestream.Packet{Stream: corestream.Stream{Topic: "state"}, Epoch: 1, Sequence: 1, Payload: []byte("payload")}
+	packet := Packet{Stream: Stream{Topic: "state"}, Epoch: 1, Sequence: 1, Payload: []byte("payload")}
 	if err := publisher.Publish(packet); err != nil {
 		t.Fatal(err)
 	}
 	frames.messages[0].Checksum = strings.Repeat("0", 64)
 	bus := &memoryBus{}
-	_, _ = SubscribeWithOptions(bus, "state", SubscribeOptions{RequireChecksum: true}, func(corestream.Packet) error { return nil })
+	_, _ = SubscribeWithOptions(bus, "state", SubscribeOptions{RequireChecksum: true}, func(Packet) error { return nil })
 	if err := bus.Publish(frames.messages[0]); !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("checksum error = %v", err)
 	}
@@ -217,7 +216,7 @@ func TestConfirmedPublisherCapabilityIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Publish(corestream.Packet{Stream: corestream.Stream{Topic: "state"}, Epoch: 1, Sequence: 1}); err != nil || bus.confirmed != 1 {
+	if err := publisher.Publish(Packet{Stream: Stream{Topic: "state"}, Epoch: 1, Sequence: 1}); err != nil || bus.confirmed != 1 {
 		t.Fatalf("confirmed=%d err=%v", bus.confirmed, err)
 	}
 }
@@ -281,7 +280,7 @@ func (publisher *capturingPublisher) Publish(message *coresyncbus.SyncMsg) error
 // stream position.
 func TestFramesCarryDistinctDeliveryIDsAcrossPartsAndPublishers(t *testing.T) {
 	frames := &framePublisher{}
-	packet := corestream.Packet{Stream: corestream.Stream{Topic: "state", Key: 8}, Epoch: 7, Sequence: 1, Payload: bytes.Repeat([]byte("payload-"), 8)}
+	packet := Packet{Stream: Stream{Topic: "state", Key: 8}, Epoch: 7, Sequence: 1, Payload: bytes.Repeat([]byte("payload-"), 8)}
 	first, err := NewPublisherWithOptions(frames, PublisherOptions{FromSID: 3, MaxFrameBytes: 16})
 	if err != nil {
 		t.Fatal(err)

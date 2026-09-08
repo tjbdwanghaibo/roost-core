@@ -19,7 +19,6 @@ import (
 	"time"
 
 	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 var (
@@ -30,7 +29,6 @@ var (
 	ErrEpochRequired          = errors.New("syncstream adapter: packet epoch is required")
 	ErrEnvelopeMismatch       = errors.New("syncstream adapter: transport and packet envelopes differ")
 	ErrObserverMismatch       = errors.New("syncstream adapter: packet observer mismatch")
-	ErrPayloadTooLarge        = errors.New("syncstream adapter: payload exceeds configured limit")
 	ErrBackpressure           = errors.New("syncstream adapter: publish queue is full")
 	ErrPublisherClosed        = errors.New("syncstream adapter: publisher is closed")
 	ErrConfirmationRequired   = errors.New("syncstream adapter: transport does not provide publish confirmation")
@@ -53,7 +51,7 @@ type Publisher struct {
 	confirmed            ConfirmedSyncPublisher
 	fromSid              int32
 	onError              ErrorHandler
-	expectedObserver     *corestream.Observer
+	expectedObserver     *Observer
 	maxPayloadBytes      int
 	compressionThreshold int
 	maxFrameBytes        int
@@ -66,7 +64,7 @@ type Publisher struct {
 type PublisherOptions struct {
 	FromSID              int32
 	OnError              ErrorHandler
-	ExpectedObserver     *corestream.Observer
+	ExpectedObserver     *Observer
 	MaxPayloadBytes      int
 	CompressionThreshold int
 	MaxFrameBytes        int
@@ -98,7 +96,7 @@ func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOption
 	if options.RequireConfirmation && confirmed == nil {
 		return nil, ErrConfirmationRequired
 	}
-	var observer *corestream.Observer
+	var observer *Observer
 	if options.ExpectedObserver != nil {
 		value := *options.ExpectedObserver
 		observer = &value
@@ -106,7 +104,7 @@ func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOption
 	return &Publisher{bus: bus, ids: coresyncbus.NewDeliveryIDs("stream"), confirmed: confirmed, fromSid: options.FromSID, onError: options.OnError, expectedObserver: observer, maxPayloadBytes: options.MaxPayloadBytes, compressionThreshold: options.CompressionThreshold, maxFrameBytes: options.MaxFrameBytes, requireConfirmation: options.RequireConfirmation}, nil
 }
 
-func (publisher *Publisher) Publish(packet corestream.Packet) error {
+func (publisher *Publisher) Publish(packet Packet) error {
 	if publisher == nil || publisher.bus == nil {
 		return ErrPublisherRequired
 	}
@@ -195,21 +193,21 @@ func encodePayload(raw []byte, threshold int) ([]byte, string, error) {
 	return result, "gzip", nil
 }
 
-func (publisher *Publisher) Enqueue(packet corestream.Packet) {
+func (publisher *Publisher) Enqueue(packet Packet) {
 	if err := publisher.Publish(packet); err != nil && publisher.onError != nil {
 		publisher.onError(err)
 	}
 }
-func (publisher *Publisher) EnqueueBatch(packets []corestream.Packet) {
+func (publisher *Publisher) EnqueueBatch(packets []Packet) {
 	for _, packet := range packets {
 		publisher.Enqueue(packet)
 	}
 }
 
-type Handler func(corestream.Packet) error
+type Handler func(Packet) error
 
 type SubscribeOptions struct {
-	ExpectedObserver *corestream.Observer
+	ExpectedObserver *Observer
 	MaxEnvelopeBytes int
 	MaxPayloadBytes  int
 	MaxAssemblyBytes int
@@ -222,7 +220,7 @@ type SubscribeOptions struct {
 func Subscribe(bus coresyncbus.ISubscriber, topic string, handler Handler) (func(), error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{}, handler)
 }
-func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer corestream.Observer, handler Handler) (func(), error) {
+func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer Observer, handler Handler) (func(), error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{ExpectedObserver: &observer}, handler)
 }
 
@@ -375,8 +373,8 @@ func (assembler *reassembler) decode(encoded []byte, encoding, checksum string) 
 	return decoded, true, nil
 }
 
-func decodePacket(data []byte, message *coresyncbus.SyncMsg, options SubscribeOptions) (corestream.Packet, error) {
-	var packet corestream.Packet
+func decodePacket(data []byte, message *coresyncbus.SyncMsg, options SubscribeOptions) (Packet, error) {
+	var packet Packet
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&packet); err != nil {
@@ -410,7 +408,7 @@ func (publisher *Publisher) Metrics() PublisherMetrics {
 	return PublisherMetrics{Published: publisher.published.Load(), Frames: publisher.frames.Load(), Failures: publisher.failures.Load()}
 }
 
-type PacketPublisher interface{ Publish(corestream.Packet) error }
+type PacketPublisher interface{ Publish(Packet) error }
 type BufferedPublisherOptions struct {
 	Capacity    int
 	MaxAttempts int
@@ -431,7 +429,7 @@ type BufferedPublisherMetrics struct {
 type BufferedPublisher struct {
 	mutex       sync.RWMutex
 	publisher   PacketPublisher
-	queue       chan corestream.Packet
+	queue       chan Packet
 	maxAttempts int
 	retryDelay  time.Duration
 	onError     ErrorHandler
@@ -454,13 +452,13 @@ func NewBufferedPublisher(publisher PacketPublisher, options BufferedPublisherOp
 	if options.MaxAttempts <= 0 {
 		options.MaxAttempts = 1
 	}
-	buffered := &BufferedPublisher{publisher: publisher, queue: make(chan corestream.Packet, options.Capacity), maxAttempts: options.MaxAttempts, retryDelay: options.RetryDelay, onError: options.OnError}
+	buffered := &BufferedPublisher{publisher: publisher, queue: make(chan Packet, options.Capacity), maxAttempts: options.MaxAttempts, retryDelay: options.RetryDelay, onError: options.OnError}
 	buffered.wait.Add(1)
 	go buffered.run()
 	return buffered, nil
 }
 
-func (publisher *BufferedPublisher) Publish(packet corestream.Packet) error {
+func (publisher *BufferedPublisher) Publish(packet Packet) error {
 	if publisher == nil {
 		return ErrPublisherRequired
 	}
@@ -474,7 +472,7 @@ func (publisher *BufferedPublisher) Publish(packet corestream.Packet) error {
 	return publisher.publishWithRetry(packet)
 }
 
-func (publisher *BufferedPublisher) TryEnqueue(packet corestream.Packet) error {
+func (publisher *BufferedPublisher) TryEnqueue(packet Packet) error {
 	if publisher == nil {
 		return ErrPublisherRequired
 	}
@@ -493,7 +491,7 @@ func (publisher *BufferedPublisher) TryEnqueue(packet corestream.Packet) error {
 	}
 }
 
-func (publisher *BufferedPublisher) publishWithRetry(packet corestream.Packet) error {
+func (publisher *BufferedPublisher) publishWithRetry(packet Packet) error {
 	var err error
 	for attempt := 0; attempt < publisher.maxAttempts; attempt++ {
 		err = publisher.publisher.Publish(packet)
@@ -545,5 +543,5 @@ func (publisher *BufferedPublisher) Metrics() BufferedPublisherMetrics {
 	return BufferedPublisherMetrics{Queued: publisher.queued.Load(), Published: publisher.published.Load(), Failures: publisher.failures.Load(), Backpressure: publisher.pressure.Load(), Synchronous: publisher.synchronous.Load()}
 }
 
-var _ corestream.Sink = (*Publisher)(nil)
-var _ corestream.BatchSink = (*Publisher)(nil)
+var _ Sink = (*Publisher)(nil)
+var _ BatchSink = (*Publisher)(nil)
