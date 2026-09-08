@@ -49,6 +49,8 @@
 
 ## 3. 覆盖矩阵
 
+> **新位置**（2026-09-08 收敛）：下表的 kit 行里 nestwal、nats、redis、mongo(+mongotest)、etcd、remoteentity、dataengine（→ `core/dataengine/engine`）、saga、room、lockstep、nettransport、spatial、actionflow、ai、gateway、versionstore、servicerpc、robot、syncstream 的实现已搬到 roost-core 同名包；roost-skill 五包在 `core/skill/…`；roost-service 十二包在 `kit/service/…`。搬迁不算新审计，历史行不改；权威映射见 roost-codegen `internal/roost/migration/consolidation_imports.yaml`。
+
 格子 = 最近一次完成单元的日期（+ 单元号）。`09-02` 表示该包在 2026-09-02 全量审计中被覆盖过一轮；`未审` 表示从未按本协议审过；`—` 表示该包不存在此类风险面。
 `cmd/*` 主程序、`examples/*`、`integration` 测试专用包不入账。
 
