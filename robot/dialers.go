@@ -18,7 +18,7 @@ import (
 
 	quic "github.com/quic-go/quic-go"
 
-	"github.com/tjbdwanghaibo/roost-kit/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/nettransport"
 )
 
 // KCPDialerConfig shapes the KCP client dialer. Encryption and FEC are

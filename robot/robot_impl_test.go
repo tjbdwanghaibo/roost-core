@@ -17,8 +17,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 
-	"github.com/tjbdwanghaibo/roost-kit/nettransport"
-	kitrobot "github.com/tjbdwanghaibo/roost-kit/robot"
+	"github.com/tjbdwanghaibo/roost-core/nettransport"
+	kitrobot "github.com/tjbdwanghaibo/roost-core/robot"
 )
 
 func echoPackets(conn transport.Conn) {
