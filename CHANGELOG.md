@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- **saga / bus 的身份摘要不再丢弃 `json.Marshal` 错误**（U-0107，C5，B-14；T-44）。`commandDigest` / `completionDigest` / `DeadLetterEntry.requeueMsgID`
+  改为返回错误：无法序列化的命令 / 回执 / 死信条目此前全部退化成 sha256(nil) 这一个摘要，同一个 ID 带不同载荷再来时被当成重投递、返回别人的完成结果。
+  这不是理论风险——`Command` 含 `time.Time`，年份超出 [0,9999] 时 Marshal 报错而 `Validate` 只要求非零，红测试对着 mongotest 替身不需要放宽任何生产入参。
+  现在 `MongoCommandInbox.Handle / Replay`、`DataEngineStepInbox.Bind / Reserve / Replay` 以 `ErrInvalidRecord` 拒绝，`MongoStore.Apply / CompletionRecorded` 在开事务前拒绝，
+  `Bus.RequeueDeadLetters` 不发布该条目。`digest_promises_test.go` 三条（两条在修复前变红）、bus 一条护栏。不改 `Validate`。
 - **nest 组迁移承诺测试去抖**（U-0047 的测试）：CI 的 `-race` 下工作线程会在第二个请求发出前完成第一个 join，"pending 时拒绝第二个请求"偶发失败。
   测试现在先持有实体锁再发第一个请求，让 pending 成为确定状态；不改运行时代码。
 - **`scripts/gapmap.sh` 收尾不再 `git clean`**：采样后只还原被改动的**已跟踪**文件；未跟踪文件（比如正在写的测试）原样保留并提示。

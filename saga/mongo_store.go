@@ -174,7 +174,11 @@ func (s *MongoStore) CompletionRecorded(ctx context.Context, completion Completi
 	if err != nil {
 		return false, err
 	}
-	if !bytes.Equal(existing.Digest, completionDigest(completion)) {
+	digest, err := completionDigest(completion)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(existing.Digest, digest) {
 		return false, ErrIdentityConflict
 	}
 	return true, nil
@@ -227,6 +231,14 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 		}
 		return ApplyApplied, nil
 	}
+	var receiptDigest []byte
+	if request.Receipt != nil {
+		digest, err := completionDigest(*request.Receipt)
+		if err != nil {
+			return 0, err
+		}
+		receiptDigest = digest
+	}
 	session, err := s.client.StartSession(ctx)
 	if err != nil {
 		return 0, err
@@ -238,7 +250,7 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 		// transaction error; never leak an outcome from an earlier attempt.
 		outcome = ApplyApplied
 		if request.Receipt != nil {
-			digest := completionDigest(*request.Receipt)
+			digest := receiptDigest
 			var existing completionDoc
 			findErr := s.completions().FindOne(txCtx, bson.M{"_id": request.Receipt.CommandID}, &existing)
 			if findErr == nil {
@@ -278,7 +290,7 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 			}
 		}
 		if request.Receipt != nil {
-			if _, insertErr := s.completions().InsertOne(txCtx, completionDoc{ID: request.Receipt.CommandID, Digest: completionDigest(*request.Receipt), CreatedAt: request.Receipt.CompletedAt}); insertErr != nil {
+			if _, insertErr := s.completions().InsertOne(txCtx, completionDoc{ID: request.Receipt.CommandID, Digest: receiptDigest, CreatedAt: request.Receipt.CompletedAt}); insertErr != nil {
 				return insertErr
 			}
 		}
@@ -488,7 +500,7 @@ func mapNotFound(err error) error {
 	}
 	return err
 }
-func completionDigest(c Completion) []byte {
+func completionDigest(c Completion) ([]byte, error) {
 	stable := struct {
 		Command   string `json:"command_id"`
 		Key       string `json:"idempotency_key"`
@@ -498,9 +510,12 @@ func completionDigest(c Completion) []byte {
 		Data      []byte `json:"data"`
 		Error     string `json:"error"`
 	}{c.CommandID, c.IdempotencyKey, c.SagaID, c.Success, c.Retryable, c.Data, c.Error}
-	raw, _ := json.Marshal(stable)
+	raw, err := json.Marshal(stable)
+	if err != nil {
+		return nil, fmt.Errorf("%w: completion digest: %v", ErrInvalidRecord, err)
+	}
 	sum := sha256.Sum256(raw)
-	return sum[:]
+	return sum[:], nil
 }
 
 var _ Store = (*MongoStore)(nil)

@@ -63,7 +63,7 @@
 | core | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app/buildinfo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） | 09-02 | 09-02 | 09-06 脚本扫 | 09-02 | 09-06 脚本扫 | 09-02 |
+| core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） | 09-02 | 09-02 | 09-08 U-0107（requeueMsgID，护栏） | 09-02 | 09-06 脚本扫 | 09-02 |
 | core | `cache` | 09-02 | 09-06 U-0076（回退 2 条） / 09-07 U-0102（回退 8 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0076
 | core | `clock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -107,7 +107,7 @@
 | core | `robot/session` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） | 09-02 | 09-02 | 09-08 U-0107（修复，回退 2 红） | 09-02 | 09-02 | 09-02 |
 | core | `security` | 09-02 | 09-06 U-0068（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `syncbus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
@@ -217,7 +217,7 @@
 | ~~B-12~~ | roost-codegen CI 三处债 | 流程 | 09-05 CI 巡检（v1.12.1 起即红） | **已完成 → U-0015**：登记的三处之外，逐轮推进又暴露四处（compose 短语法卷、minimum 集与生成器下限脱节、upgrade-compat 历史版本写 cube-* 路径、kustomize 祖先布局）加 Dockerfile Go 版本，共八处，四条工作流全绿。原登记：① `quality` 的 actionlint/shellcheck 对 `release.yml` 第 50/114/196 行报 SC2251/SC2035；② `generated-project-release-smoke` 的 shellcheck 对生成的 `deploy/*/*.sh` 报 SC1007（`CDPATH= cd`）/SC2194；③ `framework-release` 的 consumer-acceptance 在生成工程目录里跑 actionlint，因非 git 仓库报 "no project was found"。三处都不是本轮改动引入；本轮的清单修复让 ③ 前面的 gate 首次通过 |
 | ~~B-13~~ | 发布清单与最新 tag 的错位 | 发布链 | 09-05 | **已完成**（09-05）：service v1.5.1（tag CI 首跑 rank 并发测试偶发 `lost 8 compare-and-swaps` → 测试按契约重试 ErrConflict，重跑绿）→ codegen 清单 kit v1.12.1 / skill v1.10.3 / service v1.5.1 → codegen v1.13.1（release 的 consumer-acceptance 首次真正跑 actionlint，报出生成 release 工作流的 SC2251/SC2035）→ 修模板 → codegen v1.13.2：gate / consumer-acceptance / binary-smoke ×3 / publish 全绿。原记录： kit v1.12.0 / skill v1.10.1 的 tag CI 因既有问题红，修复后补打了 kit v1.12.1、skill v1.10.2；codegen `ci/framework-release.yaml` 仍指向 v1.12.0 / v1.10.1（有效 tag，`framework verify` 通过）。下一周期发布时对齐并顺带 service / codegen 补丁版 |
 | ~~B-07~~ | `service/*` × C2 全部 12 包 | C2 | 选单元规则 | **已完成 → U-0004～U-0008、U-0016～U-0020**：12 包全部过了一遍 C2（承诺回退法），其中 8 包各有修复或补测。原记录： service 的替身是自写的 `fake_redis_test.go` / `fake_envelopes_test.go`；09-02 产出最多的一类先做 |
-| B-14 | `core/bus/reliable.go` `requeueMsgID`、`kit/saga` `commandDigest` / 完成摘要：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | 今天的结构体都是纯值字段、不会失败；一旦加了 `any` / 函数字段，全部摘要退化为同一个值 → 去重误判。低优先，改成返回错误或在摘要里混入 ID |
+| ~~B-14~~ | `core/bus/reliable.go` `requeueMsgID`、`core/saga` `commandDigest` / `completionDigest`：`json.Marshal` 的错误被丢 | C5 | U-0036 扫描 | **已完成 → U-0107**："纯值字段不会失败"不成立——`Command` 含 `time.Time`，年份越界即失败而 `Validate` 放行，红测试无需放宽入参；三个摘要函数改为返回错误，入口以 `ErrInvalidRecord` 拒绝（T-44）。`completionDigest` / `requeueMsgID` 当前确实不可失败，同步改签名作护栏。随 P3b 的 core v1.15.0 发版 |
 | ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 | ~~B-16~~ | core `configdata` 定义校验与 auto 表 cfg 标签规则 | C2 | 回退采样 | **已完成 → U-0046** |
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
@@ -235,6 +235,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0107 | 2026-09-08 | roost-core `saga` 命令 / 回执摘要、`bus` 死信重投递 ID 的 `json.Marshal` 丢错（B-14） | C5 | 1：`commandDigest` 对年份 10000 的 `DeadlineAt`（`Validate` 放行）返回 sha256(nil)，同一 ID 不同载荷被判重投递、返回别人的完成结果——对着 mongotest 替身复现；`completionDigest`（手写 stable 结构）与 `requeueMsgID`（纯值）当前不可失败，同步改签名 | `saga/digest_promises_test.go` 三条、`bus/promises_test.go` 一条护栏 | 临时恢复 `raw, _ :=`：两条 saga 测试红；修复：三个摘要函数返回错误，六个入口拒绝、`Apply` 在开事务前拒绝 | T-44 |
 | U-0106 | 2026-09-08 | roost-core `redis` 契约包 `CompareAndSet` 命令与回复形状守卫（B-19 契约部分） | C2 | 2/2 无覆盖；用只记录调用次数的 `ScriptRunner` 替身证明拒绝发生在发脚本之前 | `cas_promises_test.go` 两条 | 两处守卫回退各红 | — |
 | U-0105 | 2026-09-08 | roost-core `redis/driver` 客户端 / pipeline / 分布式锁守卫（B-19） | C2 | 19/24 无覆盖。`EvalBatchDurable` 需要 `*goredis.Client` 独占连接，接口替身走不到 WAITAOF 解析——写了一个按命令名回放 RESP 的假服务端（`Protocol: 2`、`DisableIdentity`），对照用例先证明握手与正常回复可用；锁未持有的 Release 单看"别人的锁没被删"分不出门口守卫与脚本值守卫（首轮回退 0 红），改为让服务端对脚本报错，门口守卫成为唯一拒绝者；`EvalDurable` 的 `len(results) != 1` 是断言，不可达 | `client_promises_test.go` 四条、`lock_promises_test.go` 四条 | 19 处回退 18 红、1 处不可达 | — |
 | U-0104 | 2026-09-08 | roost-core `entitysync` 订阅协调器入口守卫（B-18） | C2 | 本机重跑采样 7/9 无覆盖，与账本一致；全部为参数 / nil 守卫。`admitEnvelopes` 的 `sink == nil` 三处前门已各自检查，公开 API 不可达（冗余），在包内直接钉；nil 协调器用 `var c *SubscriptionCoordinator` 调方法 | `subscription_promises_test.go` 四条 | 七处守卫回退各红（2～3 条测试） | — |

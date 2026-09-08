@@ -273,10 +273,15 @@ func (e DeadLetterEntry) toNatsMsg(newMsgID string) *nats.NatsMsg {
 	}
 }
 
-func (e DeadLetterEntry) requeueMsgID() string {
+func (e DeadLetterEntry) requeueMsgID() (string, error) {
 	// The ID must remain stable when publish succeeds but DLQ deletion fails;
-	// otherwise an operator retry bypasses inbox deduplication.
-	raw, _ := json.Marshal(e)
+	// otherwise an operator retry bypasses inbox deduplication. An entry that
+	// cannot be marshalled has no stable ID: refuse rather than publish every
+	// such entry under the digest of nil (B-14).
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return "", err
+	}
 	digest := sha256.Sum256(raw)
-	return "requeue:" + hex.EncodeToString(digest[:16])
+	return "requeue:" + hex.EncodeToString(digest[:16]), nil
 }

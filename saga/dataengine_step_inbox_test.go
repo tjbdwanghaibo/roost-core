@@ -36,7 +36,7 @@ func TestDataEngineStepBindCarriesExplicitReservationFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := dataEngineCommand("command-fenced", "operation-fenced", "payload")
-	reservation := inbox.activeReservation(command.ID, commandDigest(command), 9)
+	reservation := inbox.activeReservation(command.ID, mustCommandDigest(t, command), 9)
 	ctx := withReservation(context.Background(), reservation)
 	extracted, ok := ReservationFromContext(ctx)
 	if !ok || extracted.Token != reservation.Token {
@@ -53,7 +53,7 @@ func TestDataEngineStepBindCarriesExplicitReservationFence(t *testing.T) {
 		t.Fatalf("receipts=%+v", committer.record.Receipts)
 	}
 	fence, control, err := coredata.DecodeLeaseFenceReceipt(committer.record.Receipts[0])
-	if err != nil || !control || fence.Owner != "worker-1" || fence.Token != 9 || fence.DocumentID != "saga-step/command-fenced" || !bytes.Equal(fence.Digest, commandDigest(command)) {
+	if err != nil || !control || fence.Owner != "worker-1" || fence.Token != 9 || fence.DocumentID != "saga-step/command-fenced" || !bytes.Equal(fence.Digest, mustCommandDigest(t, command)) {
 		t.Fatalf("fence=%+v control=%t err=%v", fence, control, err)
 	}
 }
@@ -65,7 +65,7 @@ func TestDataEngineStepBindRejectsReservationFromAnotherCommand(t *testing.T) {
 	}
 	reserved := dataEngineCommand("command-a", "operation-a", "payload-a")
 	other := dataEngineCommand("command-b", "operation-b", "payload-b")
-	reservation := inbox.activeReservation(reserved.ID, commandDigest(reserved), 1)
+	reservation := inbox.activeReservation(reserved.ID, mustCommandDigest(t, reserved), 1)
 	committer := &stepFenceCommitter{}
 	_, err = corenest.RunIsolatedTransaction(context.Background(), committer, "saga-fence-test", func() (any, error) {
 		return nil, inbox.Bind(other, reservation)
@@ -116,7 +116,7 @@ func TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim(t *test
 	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: time.Now().UTC()}
 	effect, _ := NewCompletionEffect(completion)
 	if err := inboxReceipts(client).Seed(dataEngineReceipt{
-		ID: dataEngineStepNamespace + "/" + command.ID, Digest: commandDigest(command), Payload: effect.Payload,
+		ID: dataEngineStepNamespace + "/" + command.ID, Digest: mustCommandDigest(t, command), Payload: effect.Payload,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -90,18 +90,36 @@ func TestStorageDigestsUseStableOperationIdentity(t *testing.T) {
 	one := Completion{CommandID: "delivery-1", IdempotencyKey: "op", SagaID: "saga", Success: true, Data: []byte("x"), CompletedAt: time.Now()}
 	two := one
 	two.CompletedAt = two.CompletedAt.Add(time.Hour)
-	if string(completionDigest(one)) != string(completionDigest(two)) {
+	if string(mustCompletionDigest(t, one)) != string(mustCompletionDigest(t, two)) {
 		t.Fatal("completion timestamp changed identity")
 	}
 	two.CommandID = "delivery-2"
-	if string(completionDigest(one)) == string(completionDigest(two)) {
+	if string(mustCompletionDigest(t, one)) == string(mustCompletionDigest(t, two)) {
 		t.Fatal("different command IDs shared a receipt identity")
 	}
 	two = one
 	two.Data = []byte("y")
-	if string(completionDigest(one)) == string(completionDigest(two)) {
+	if string(mustCompletionDigest(t, one)) == string(mustCompletionDigest(t, two)) {
 		t.Fatal("business result did not change identity")
 	}
 }
 
 func newInboxMongoFake() *mongotest.Client { return mongotest.NewClient() }
+
+func mustCompletionDigest(t *testing.T, c Completion) []byte {
+	t.Helper()
+	digest, err := completionDigest(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+func mustCommandDigest(t *testing.T, c Command) []byte {
+	t.Helper()
+	digest, err := commandDigest(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}

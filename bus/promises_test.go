@@ -141,3 +141,25 @@ func TestBusDeadLetterOperationsRefuseWithoutACapableStore(t *testing.T) {
 		t.Fatalf("PurgeDeadLetters = %d, %v", n, err)
 	}
 }
+
+// U-0107（B-14）：重投递 ID 是死信条目的摘要。它必须对同一条目稳定（发布成功
+// 但删除失败后，运维重试不能绕过收件箱去重），对不同条目不同，并且在条目
+// 无法序列化时报错而不是把所有条目都发到 sha256(nil) 这一个 ID 下。当前的
+// DeadLetterEntry 全是纯值字段、不会序列化失败，所以最后一条只能作为护栏。
+func TestDeadLetterRequeueIDIsStableAndDistinct(t *testing.T) {
+	entry := DeadLetterEntry{MsgID: "m-1", FromSid: 1, ToSid: 2, ToModule: "mail", MsgName: "Changed", Attempt: 3, Reason: "handler panic", Payload: []byte("p"), CreatedAt: 10, FailedAt: 20}
+	first, err := entry.requeueMsgID()
+	if err != nil || !strings.HasPrefix(first, "requeue:") {
+		t.Fatalf("requeueMsgID = (%q, %v)", first, err)
+	}
+	again, _ := entry.requeueMsgID()
+	if again != first {
+		t.Fatalf("requeue id changed between calls: %q vs %q", first, again)
+	}
+	other := entry
+	other.Payload = []byte("q")
+	otherID, _ := other.requeueMsgID()
+	if otherID == first {
+		t.Fatal("entries with different payloads shared one requeue id")
+	}
+}

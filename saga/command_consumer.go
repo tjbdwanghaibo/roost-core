@@ -61,7 +61,10 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 	if err := command.Validate(); err != nil {
 		return Completion{}, false, err
 	}
-	digest := commandDigest(command)
+	digest, err := commandDigest(command)
+	if err != nil {
+		return Completion{}, false, err
+	}
 	session, err := i.client.StartSession(ctx)
 	if err != nil {
 		return Completion{}, false, err
@@ -162,7 +165,11 @@ func (i *MongoCommandInbox) Replay(ctx context.Context, command Command) (Comple
 	if i == nil || i.client == nil {
 		return Completion{}, false, ErrInvalidRecord
 	}
-	completion, err := i.readReceipt(ctx, command.ID, commandDigest(command))
+	digest, err := commandDigest(command)
+	if err != nil {
+		return Completion{}, false, err
+	}
+	completion, err := i.readReceipt(ctx, command.ID, digest)
 	if errors.Is(err, fmongo.ErrNotFound) {
 		return Completion{}, false, nil
 	}
@@ -365,8 +372,15 @@ type commandReceiptDoc struct {
 func (i *MongoCommandInbox) collectionRef() fmongo.ICollection {
 	return i.client.Database(i.database).Collection(i.collection)
 }
-func commandDigest(c Command) []byte {
-	raw, _ := json.Marshal(c)
+// commandDigest is the identity the inbox compares on redelivery. A command
+// that cannot be marshalled has no identity: returning an error here is what
+// keeps every such command from collapsing onto sha256(nil) and being mistaken
+// for a redelivery of any other (B-14).
+func commandDigest(c Command) ([]byte, error) {
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("%w: command digest: %v", ErrInvalidRecord, err)
+	}
 	sum := sha256.Sum256(raw)
-	return sum[:]
+	return sum[:], nil
 }

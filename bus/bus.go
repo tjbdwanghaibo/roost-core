@@ -161,7 +161,11 @@ func (b *Bus) RequeueDeadLetters(ctx context.Context, query DeadLetterQuery) (in
 		if err := ctx.Err(); err != nil {
 			return requeued, err
 		}
-		msg := entry.toNatsMsg(entry.requeueMsgID())
+		msgID, err := entry.requeueMsgID()
+		if err != nil {
+			return requeued, fmt.Errorf("bus: dead letter %s requeue id: %w", entry.MsgID, err)
+		}
+		msg := entry.toNatsMsg(msgID)
 		raw, err := b.codec.Marshal(msg)
 		if err != nil {
 			return requeued, fmt.Errorf("bus: marshal dead letter %s: %w", entry.MsgID, err)

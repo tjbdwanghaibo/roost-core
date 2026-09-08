@@ -120,7 +120,10 @@ func (inbox *DataEngineStepInbox) Bind(command Command, reservations ...Reservat
 		return fmt.Errorf("saga dataengine inbox: an active reservation is required")
 	}
 	reservation := reservations[0]
-	digest := commandDigest(command)
+	digest, err := commandDigest(command)
+	if err != nil {
+		return err
+	}
 	if reservation.commandID != command.ID || reservation.owner != inbox.options.Owner || !bytes.Equal(reservation.digest, digest) {
 		return fmt.Errorf("saga dataengine inbox: reservation does not match command identity")
 	}
@@ -142,7 +145,10 @@ func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command Command) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	digest := commandDigest(command)
+	digest, err := commandDigest(command)
+	if err != nil {
+		return Reservation{}, err
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		session, err := inbox.client.StartSession(ctx)
 		if err != nil {
@@ -228,7 +234,11 @@ func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command Command) (
 	if err := command.Validate(); err != nil {
 		return Completion{}, false, err
 	}
-	completion, found, err := inbox.readReceipt(ctx, command.ID, commandDigest(command))
+	digest, err := commandDigest(command)
+	if err != nil {
+		return Completion{}, false, err
+	}
+	completion, found, err := inbox.readReceipt(ctx, command.ID, digest)
 	if err != nil || !found {
 		return completion, found, err
 	}
