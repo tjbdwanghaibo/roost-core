@@ -9,8 +9,8 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// redisClient implements IRedis by wrapping go-redis.
-type redisClient struct {
+// Client implements IRedis by wrapping go-redis.
+type Client struct {
 	rdb goredis.UniversalClient
 }
 
@@ -28,10 +28,10 @@ func NewClient(cfg *Config) (IRedis, error) {
 	if cfg.Addr == "" && !cfg.IsCluster() {
 		return nil, fmt.Errorf("redis: addr or cluster addrs are required")
 	}
-	return newRedisClient(cfg), nil
+	return NewRedisClient(cfg), nil
 }
 
-func newRedisClient(cfg *Config) *redisClient {
+func NewRedisClient(cfg *Config) *Client {
 	var rdb goredis.UniversalClient
 	if cfg.IsCluster() {
 		rdb = goredis.NewClusterClient(&goredis.ClusterOptions{
@@ -64,12 +64,12 @@ func newRedisClient(cfg *Config) *redisClient {
 			ContextTimeoutEnabled: true,
 		})
 	}
-	return &redisClient{rdb: rdb}
+	return &Client{rdb: rdb}
 }
 
 // --- String/KV ---
 
-func (c *redisClient) Get(ctx context.Context, key string) ([]byte, error) {
+func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.Get(ctx, key).Bytes()
 	if err == goredis.Nil {
 		return nil, ErrNil
@@ -91,7 +91,7 @@ func (c *redisClient) Get(ctx context.Context, key string) ([]byte, error) {
 // element rather than dropped. Dropping it would shorten the result, and a
 // short result is indistinguishable from a truncated read — which is the
 // silent-loss failure this shape exists to make detectable.
-func (c *redisClient) MGet(ctx context.Context, keys ...string) ([][]byte, error) {
+func (c *Client) MGet(ctx context.Context, keys ...string) ([][]byte, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -123,41 +123,41 @@ func (c *redisClient) MGet(ctx context.Context, keys ...string) ([][]byte, error
 	return out, nil
 }
 
-func (c *redisClient) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
+func (c *Client) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
 	return c.rdb.Set(ctx, key, value, expiration).Err()
 }
 
-func (c *redisClient) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
+func (c *Client) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
 	return c.rdb.SetNX(ctx, key, value, expiration).Result()
 }
 
-func (c *redisClient) Del(ctx context.Context, keys ...string) (int64, error) {
+func (c *Client) Del(ctx context.Context, keys ...string) (int64, error) {
 	return c.rdb.Del(ctx, keys...).Result()
 }
 
-func (c *redisClient) Exists(ctx context.Context, keys ...string) (int64, error) {
+func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	return c.rdb.Exists(ctx, keys...).Result()
 }
 
-func (c *redisClient) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
+func (c *Client) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
 	return c.rdb.Expire(ctx, key, expiration).Result()
 }
 
-func (c *redisClient) TTL(ctx context.Context, key string) (time.Duration, error) {
+func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
 	return c.rdb.TTL(ctx, key).Result()
 }
 
-func (c *redisClient) Incr(ctx context.Context, key string) (int64, error) {
+func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	return c.rdb.Incr(ctx, key).Result()
 }
 
-func (c *redisClient) IncrBy(ctx context.Context, key string, value int64) (int64, error) {
+func (c *Client) IncrBy(ctx context.Context, key string, value int64) (int64, error) {
 	return c.rdb.IncrBy(ctx, key, value).Result()
 }
 
 // --- Hash ---
 
-func (c *redisClient) HGet(ctx context.Context, key, field string) ([]byte, error) {
+func (c *Client) HGet(ctx context.Context, key, field string) ([]byte, error) {
 	val, err := c.rdb.HGet(ctx, key, field).Bytes()
 	if err == goredis.Nil {
 		return nil, ErrNil
@@ -165,33 +165,33 @@ func (c *redisClient) HGet(ctx context.Context, key, field string) ([]byte, erro
 	return val, err
 }
 
-func (c *redisClient) HSet(ctx context.Context, key string, values ...any) error {
+func (c *Client) HSet(ctx context.Context, key string, values ...any) error {
 	return c.rdb.HSet(ctx, key, values...).Err()
 }
 
-func (c *redisClient) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, error) {
 	return c.rdb.HGetAll(ctx, key).Result()
 }
 
-func (c *redisClient) HDel(ctx context.Context, key string, fields ...string) (int64, error) {
+func (c *Client) HDel(ctx context.Context, key string, fields ...string) (int64, error) {
 	return c.rdb.HDel(ctx, key, fields...).Result()
 }
 
-func (c *redisClient) HExists(ctx context.Context, key, field string) (bool, error) {
+func (c *Client) HExists(ctx context.Context, key, field string) (bool, error) {
 	return c.rdb.HExists(ctx, key, field).Result()
 }
 
 // --- List ---
 
-func (c *redisClient) LPush(ctx context.Context, key string, values ...any) (int64, error) {
+func (c *Client) LPush(ctx context.Context, key string, values ...any) (int64, error) {
 	return c.rdb.LPush(ctx, key, values...).Result()
 }
 
-func (c *redisClient) RPush(ctx context.Context, key string, values ...any) (int64, error) {
+func (c *Client) RPush(ctx context.Context, key string, values ...any) (int64, error) {
 	return c.rdb.RPush(ctx, key, values...).Result()
 }
 
-func (c *redisClient) LPop(ctx context.Context, key string) ([]byte, error) {
+func (c *Client) LPop(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.LPop(ctx, key).Bytes()
 	if err == goredis.Nil {
 		return nil, ErrNil
@@ -199,7 +199,7 @@ func (c *redisClient) LPop(ctx context.Context, key string) ([]byte, error) {
 	return val, err
 }
 
-func (c *redisClient) RPop(ctx context.Context, key string) ([]byte, error) {
+func (c *Client) RPop(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.rdb.RPop(ctx, key).Bytes()
 	if err == goredis.Nil {
 		return nil, ErrNil
@@ -207,28 +207,28 @@ func (c *redisClient) RPop(ctx context.Context, key string) ([]byte, error) {
 	return val, err
 }
 
-func (c *redisClient) LLen(ctx context.Context, key string) (int64, error) {
+func (c *Client) LLen(ctx context.Context, key string) (int64, error) {
 	return c.rdb.LLen(ctx, key).Result()
 }
 
-func (c *redisClient) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+func (c *Client) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
 	return c.rdb.LRange(ctx, key, start, stop).Result()
 }
 
 // LTrim implements ListTrimmer: in-place trim without the DEL+RPUSH
 // loss window of the emulated fallback.
-func (c *redisClient) LTrim(ctx context.Context, key string, start, stop int64) error {
+func (c *Client) LTrim(ctx context.Context, key string, start, stop int64) error {
 	return c.rdb.LTrim(ctx, key, start, stop).Err()
 }
 
 // LRem implements ListRemover.
-func (c *redisClient) LRem(ctx context.Context, key string, count int64, value any) (int64, error) {
+func (c *Client) LRem(ctx context.Context, key string, count int64, value any) (int64, error) {
 	return c.rdb.LRem(ctx, key, count, value).Result()
 }
 
 // --- Sorted Set ---
 
-func (c *redisClient) ZAdd(ctx context.Context, key string, members ...Z) (int64, error) {
+func (c *Client) ZAdd(ctx context.Context, key string, members ...Z) (int64, error) {
 	zs := make([]goredis.Z, len(members))
 	for i, m := range members {
 		zs[i] = goredis.Z{Score: m.Score, Member: m.Member}
@@ -236,11 +236,11 @@ func (c *redisClient) ZAdd(ctx context.Context, key string, members ...Z) (int64
 	return c.rdb.ZAdd(ctx, key, zs...).Result()
 }
 
-func (c *redisClient) ZRem(ctx context.Context, key string, members ...any) (int64, error) {
+func (c *Client) ZRem(ctx context.Context, key string, members ...any) (int64, error) {
 	return c.rdb.ZRem(ctx, key, members...).Result()
 }
 
-func (c *redisClient) ZScore(ctx context.Context, key string, member string) (float64, error) {
+func (c *Client) ZScore(ctx context.Context, key string, member string) (float64, error) {
 	score, err := c.rdb.ZScore(ctx, key, member).Result()
 	if err == goredis.Nil {
 		return 0, ErrNil
@@ -248,7 +248,7 @@ func (c *redisClient) ZScore(ctx context.Context, key string, member string) (fl
 	return score, err
 }
 
-func (c *redisClient) ZRank(ctx context.Context, key string, member string) (int64, error) {
+func (c *Client) ZRank(ctx context.Context, key string, member string) (int64, error) {
 	rank, err := c.rdb.ZRank(ctx, key, member).Result()
 	if err == goredis.Nil {
 		return 0, ErrNil
@@ -256,7 +256,7 @@ func (c *redisClient) ZRank(ctx context.Context, key string, member string) (int
 	return rank, err
 }
 
-func (c *redisClient) ZRevRank(ctx context.Context, key string, member string) (int64, error) {
+func (c *Client) ZRevRank(ctx context.Context, key string, member string) (int64, error) {
 	rank, err := c.rdb.ZRevRank(ctx, key, member).Result()
 	if err == goredis.Nil {
 		return 0, ErrNil
@@ -264,7 +264,7 @@ func (c *redisClient) ZRevRank(ctx context.Context, key string, member string) (
 	return rank, err
 }
 
-func (c *redisClient) ZRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
+func (c *Client) ZRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
 	result, err := c.rdb.ZRangeWithScores(ctx, key, start, stop).Result()
 	if err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (c *redisClient) ZRangeWithScores(ctx context.Context, key string, start, s
 	return convertZSlice(result), nil
 }
 
-func (c *redisClient) ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
+func (c *Client) ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]Z, error) {
 	result, err := c.rdb.ZRevRangeWithScores(ctx, key, start, stop).Result()
 	if err != nil {
 		return nil, err
@@ -280,39 +280,39 @@ func (c *redisClient) ZRevRangeWithScores(ctx context.Context, key string, start
 	return convertZSlice(result), nil
 }
 
-func (c *redisClient) ZCard(ctx context.Context, key string) (int64, error) {
+func (c *Client) ZCard(ctx context.Context, key string) (int64, error) {
 	return c.rdb.ZCard(ctx, key).Result()
 }
 
 // --- Set ---
 
-func (c *redisClient) SAdd(ctx context.Context, key string, members ...any) (int64, error) {
+func (c *Client) SAdd(ctx context.Context, key string, members ...any) (int64, error) {
 	return c.rdb.SAdd(ctx, key, members...).Result()
 }
 
-func (c *redisClient) SRem(ctx context.Context, key string, members ...any) (int64, error) {
+func (c *Client) SRem(ctx context.Context, key string, members ...any) (int64, error) {
 	return c.rdb.SRem(ctx, key, members...).Result()
 }
 
-func (c *redisClient) SMembers(ctx context.Context, key string) ([]string, error) {
+func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return c.rdb.SMembers(ctx, key).Result()
 }
 
-func (c *redisClient) SIsMember(ctx context.Context, key string, member any) (bool, error) {
+func (c *Client) SIsMember(ctx context.Context, key string, member any) (bool, error) {
 	return c.rdb.SIsMember(ctx, key, member).Result()
 }
 
 // --- Pipeline / Script ---
 
-func (c *redisClient) Pipeline() IPipeline {
+func (c *Client) Pipeline() IPipeline {
 	return newPipeline(c.rdb.Pipeline())
 }
 
-func (c *redisClient) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	return c.rdb.Eval(ctx, script, keys, args...).Result()
 }
 
-func (c *redisClient) EvalSha(ctx context.Context, sha string, keys []string, args ...any) (any, error) {
+func (c *Client) EvalSha(ctx context.Context, sha string, keys []string, args ...any) (any, error) {
 	return c.rdb.EvalSha(ctx, sha, keys, args...).Result()
 }
 
@@ -320,7 +320,7 @@ func (c *redisClient) EvalSha(ctx context.Context, sha string, keys []string, ar
 // offset produced by the immediately preceding script. Redis Cluster cannot
 // safely provide this through go-redis's keyless-command routing, so it is
 // rejected instead of silently weakening the durability contract.
-func (c *redisClient) EvalDurable(ctx context.Context, script string, keys []string, numLocal, numReplicas int, timeout time.Duration, args ...any) (any, int64, int64, error) {
+func (c *Client) EvalDurable(ctx context.Context, script string, keys []string, numLocal, numReplicas int, timeout time.Duration, args ...any) (any, int64, int64, error) {
 	results, local, replicas, err := c.EvalBatchDurable(ctx, script, []EvalCall{{Keys: keys, Args: args}}, numLocal, numReplicas, timeout)
 	if err != nil {
 		return nil, 0, 0, err
@@ -331,7 +331,7 @@ func (c *redisClient) EvalDurable(ctx context.Context, script string, keys []str
 	return results[0], local, replicas, nil
 }
 
-func (c *redisClient) EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
+func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
 	if len(calls) == 0 {
 		return nil, 0, 0, nil
 	}
@@ -379,21 +379,21 @@ func (c *redisClient) EvalBatchDurable(ctx context.Context, script string, calls
 
 // --- PubSub ---
 
-func (c *redisClient) Publish(ctx context.Context, channel string, message any) error {
+func (c *Client) Publish(ctx context.Context, channel string, message any) error {
 	return c.rdb.Publish(ctx, channel, message).Err()
 }
 
-func (c *redisClient) Subscribe(ctx context.Context, channels ...string) IPubSub {
+func (c *Client) Subscribe(ctx context.Context, channels ...string) IPubSub {
 	return newPubSub(c.rdb.Subscribe(ctx, channels...))
 }
 
 // --- Connection ---
 
-func (c *redisClient) Ping(ctx context.Context) error {
+func (c *Client) Ping(ctx context.Context) error {
 	return c.rdb.Ping(ctx).Err()
 }
 
-func (c *redisClient) Close() error {
+func (c *Client) Close() error {
 	return c.rdb.Close()
 }
 
@@ -431,8 +431,8 @@ func redisInteger(value any) (int64, error) {
 	}
 }
 
-var _ IRedis = (*redisClient)(nil)
-var _ DurableEvaler = (*redisClient)(nil)
-var _ DurableBatchEvaler = (*redisClient)(nil)
-var _ ListTrimmer = (*redisClient)(nil)
-var _ ListRemover = (*redisClient)(nil)
+var _ IRedis = (*Client)(nil)
+var _ DurableEvaler = (*Client)(nil)
+var _ DurableBatchEvaler = (*Client)(nil)
+var _ ListTrimmer = (*Client)(nil)
+var _ ListRemover = (*Client)(nil)

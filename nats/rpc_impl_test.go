@@ -21,7 +21,7 @@ func metricValue(t *testing.T, registry *metrics.Registry, name string) int64 {
 }
 
 func TestRpcClientStopCancelsPendingCalls(t *testing.T) {
-	r := &rpcClient{}
+	r := &RPCClient{}
 	r.pool = worker.NewPool[*rpcTask](worker.PoolConfig{
 		Name:      "rpc_test",
 		WorkerNum: 1,
@@ -68,7 +68,7 @@ func TestRpcClientDispatchCallbackCompletesWhenPoolRejects(t *testing.T) {
 	// An unstarted pool rejects admission. Regression: Dispatch used to call
 	// OnRelease on this path, but rpcTask.OnRelease was empty, silently losing
 	// the RPC terminal callback.
-	r := &rpcClient{
+	r := &RPCClient{
 		pool: worker.NewPool[*rpcTask](worker.PoolConfig{
 			Name:      "rpc_rejected",
 			WorkerNum: 1,
@@ -103,7 +103,7 @@ func TestRpcClientDispatchCallbackCompletesWhenPoolRejects(t *testing.T) {
 }
 
 func TestRpcClientCallAsyncAfterStopCancelsImmediately(t *testing.T) {
-	r := &rpcClient{}
+	r := &RPCClient{}
 	r.stopped.Store(true)
 
 	done := make(chan error, 1)
@@ -122,7 +122,7 @@ func TestRpcClientCallAsyncAfterStopCancelsImmediately(t *testing.T) {
 }
 
 func TestRpcClientPendingHasSingleTerminalWinner(t *testing.T) {
-	r := &rpcClient{}
+	r := &RPCClient{}
 	done := make(chan error, 2)
 	r.pending.Store(int64(11), &pendingCall{cb: func(_ []byte, err error) { done <- err }})
 
@@ -156,7 +156,7 @@ func TestRpcClientCancelsOneHundredThousandPendingExactlyOnce(t *testing.T) {
 	metrics.SetDefaultRegistry(registry)
 	t.Cleanup(func() { metrics.SetDefaultRegistry(previousRegistry) })
 
-	r := &rpcClient{}
+	r := &RPCClient{}
 	r.pool = worker.NewPool[*rpcTask](worker.PoolConfig{
 		Name:      "rpc_100k_cancel",
 		WorkerNum: 8,

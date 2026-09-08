@@ -10,7 +10,7 @@ import (
 )
 
 func TestNatsClientNilBoundaryFailsClosed(t *testing.T) {
-	var client *natsClient
+	var client *Client
 	if err := client.Publish("topic", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Publish error=%v, want ErrClosed", err)
 	}
@@ -45,7 +45,7 @@ func panicCounter() int64 {
 // this one existed — the nil-boundary test above covers a nil client, not a
 // nil callback.
 func TestSubscriptionValidationRejectsANilHandler(t *testing.T) {
-	client := &natsClient{conn: &gonats.Conn{}}
+	client := &Client{conn: &gonats.Conn{}}
 	if err := client.validateSubscription("subject", "", nil); err == nil || !strings.Contains(err.Error(), "handler") {
 		t.Fatalf("nil handler accepted: %v", err)
 	}

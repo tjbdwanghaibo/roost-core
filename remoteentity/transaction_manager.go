@@ -65,7 +65,7 @@ type deferredRemoteClose struct {
 	attempt int
 }
 
-func newRemoteState(mgr *remoteEntityManager, cfg *Config, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *remoteState {
+func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *remoteState {
 	finalizeCtx, finalizeCancel := context.WithCancel(context.Background())
 	capacity := cfg.AsyncFinalizeCapacity
 	if capacity <= 0 {
@@ -103,7 +103,7 @@ func newRemoteState(mgr *remoteEntityManager, cfg *Config, snapshotL2 ...cache.S
 	return state
 }
 
-func (m *remoteEntityManager) startRemoteFinalizer() {
+func (m *Manager) startRemoteFinalizer() {
 	if m == nil || m.remote == nil {
 		return
 	}
@@ -114,7 +114,7 @@ func (m *remoteEntityManager) startRemoteFinalizer() {
 	m.remote.finalizeOnce.Do(func() { go m.runRemoteFinalizers(m.remote, workers) })
 }
 
-func (m *remoteEntityManager) reserveRemoteFinalizeSlot() bool {
+func (m *Manager) reserveRemoteFinalizeSlot() bool {
 	if m == nil || m.remote == nil {
 		return false
 	}
@@ -126,7 +126,7 @@ func (m *remoteEntityManager) reserveRemoteFinalizeSlot() bool {
 	}
 }
 
-func (m *remoteEntityManager) releaseRemoteFinalizeSlot() {
+func (m *Manager) releaseRemoteFinalizeSlot() {
 	if m == nil || m.remote == nil {
 		return
 	}
@@ -136,7 +136,7 @@ func (m *remoteEntityManager) releaseRemoteFinalizeSlot() {
 	}
 }
 
-func (m *remoteEntityManager) deferRemoteClose(item deferredRemoteClose) error {
+func (m *Manager) deferRemoteClose(item deferredRemoteClose) error {
 	select {
 	case m.remote.finalizeQueue <- item:
 		return nil
@@ -145,7 +145,7 @@ func (m *remoteEntityManager) deferRemoteClose(item deferredRemoteClose) error {
 	}
 }
 
-func (m *remoteEntityManager) runRemoteFinalizers(state *remoteState, workers int) {
+func (m *Manager) runRemoteFinalizers(state *remoteState, workers int) {
 	state.finalizeWG.Add(workers)
 	for range workers {
 		go m.runRemoteFinalizerWorker(state)
@@ -171,7 +171,7 @@ func (m *remoteEntityManager) runRemoteFinalizers(state *remoteState, workers in
 	}
 }
 
-func (m *remoteEntityManager) runRemoteFinalizerWorker(state *remoteState) {
+func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
 	defer state.finalizeWG.Done()
 	for {
 		select {
@@ -194,7 +194,7 @@ func (m *remoteEntityManager) runRemoteFinalizerWorker(state *remoteState) {
 	}
 }
 
-func (m *remoteEntityManager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
+func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
 	status, err := m.RemoteCommitStatus(state.finalizeCtx, item.txID)
 	if err == nil && status.State == entity.RemoteCommitApplied {
 		err = m.publishAppliedRemoteTransaction(state.finalizeCtx, status)
@@ -269,7 +269,7 @@ func (m *remoteEntityManager) processDeferredRemoteClose(state *remoteState, ite
 	}()
 }
 
-func (m *remoteEntityManager) reconcileRemoteEntries(ctx context.Context, entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {
+func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {
 	byEntity := make(map[int64]entity.RemoteCommitReceipt, len(receipts))
 	for _, receipt := range receipts {
 		byEntity[receipt.EntityID] = receipt
@@ -289,7 +289,7 @@ func (m *remoteEntityManager) reconcileRemoteEntries(ctx context.Context, entrie
 	return nil
 }
 
-func (m *remoteEntityManager) stopRemoteFinalizer(ctx context.Context) error {
+func (m *Manager) stopRemoteFinalizer(ctx context.Context) error {
 	if m == nil || m.remote == nil {
 		return nil
 	}
@@ -306,7 +306,7 @@ func (m *remoteEntityManager) stopRemoteFinalizer(ctx context.Context) error {
 	}
 }
 
-func (m *remoteEntityManager) releaseRemoteEntries(parent context.Context, entries []*remoteWriteEntry) error {
+func (m *Manager) releaseRemoteEntries(parent context.Context, entries []*remoteWriteEntry) error {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -335,13 +335,13 @@ func (m *remoteEntityManager) releaseRemoteEntries(parent context.Context, entri
 	return joined
 }
 
-func (m *remoteEntityManager) releaseRemoteEntriesObserved(parent context.Context, entries []*remoteWriteEntry) {
+func (m *Manager) releaseRemoteEntriesObserved(parent context.Context, entries []*remoteWriteEntry) {
 	if err := m.releaseRemoteEntries(parent, entries); err != nil {
 		m.recordReleaseFailure(err)
 	}
 }
 
-func (m *remoteEntityManager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTransactionID, commits []entity.RemoteCommit) (receipts []entity.RemoteCommitReceipt, err error) {
+func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTransactionID, commits []entity.RemoteCommit) (receipts []entity.RemoteCommitReceipt, err error) {
 	started := time.Now()
 	defer func() {
 		result := "ok"
@@ -406,7 +406,7 @@ func (m *remoteEntityManager) ApplyRemoteCommits(ctx context.Context, txID entit
 	return receipts, nil
 }
 
-func (m *remoteEntityManager) recoverRemoteOutbox(ctx context.Context) error {
+func (m *Manager) recoverRemoteOutbox(ctx context.Context) error {
 	outbox := m.backend
 	for {
 		pending, err := outbox.PendingRemoteCommits(ctx, 256)
@@ -427,7 +427,7 @@ func (m *remoteEntityManager) recoverRemoteOutbox(ctx context.Context) error {
 	}
 }
 
-func (m *remoteEntityManager) publishAppliedRemoteTransaction(ctx context.Context, status entity.RemoteCommitStatus) error {
+func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status entity.RemoteCommitStatus) error {
 	if status.State != entity.RemoteCommitApplied || status.TransactionID.IsZero() || len(status.Commits) == 0 || len(status.Commits) != len(status.Receipts) {
 		return fmt.Errorf("remote_entity: corrupt commit outbox transaction %s", status.TransactionID)
 	}
@@ -454,7 +454,7 @@ func (m *remoteEntityManager) publishAppliedRemoteTransaction(ctx context.Contex
 	return nil
 }
 
-func (m *remoteEntityManager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (snapshot entity.RemoteSnapshotEnvelope, found bool, err error) {
+func (m *Manager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (snapshot entity.RemoteSnapshotEnvelope, found bool, err error) {
 	started := time.Now()
 	defer func() {
 		result := "hit"
@@ -508,13 +508,13 @@ func remoteConsistencyLabel(consistency entity.RemoteReadConsistency) string {
 	}
 }
 
-var _ entity.RemoteSnapshotInterestManager = (*remoteEntityManager)(nil)
+var _ entity.RemoteSnapshotInterestManager = (*Manager)(nil)
 
 type remoteInterestPublisher interface {
 	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
 }
 
-func (m *remoteEntityManager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
 	if m == nil || m.remote == nil || !key.Valid() {
 		return entity.ErrRemoteRejected
 	}
@@ -557,7 +557,7 @@ func (m *remoteEntityManager) RenewRemoteSnapshotInterest(ctx context.Context, k
 	return nil
 }
 
-func (m *remoteEntityManager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+func (m *Manager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
 	if m == nil || m.remote == nil || !key.Valid() {
 		return entity.ErrRemoteRejected
 	}
@@ -575,7 +575,7 @@ func (m *remoteEntityManager) ReleaseRemoteSnapshotInterest(ctx context.Context,
 	return nil
 }
 
-func (m *remoteEntityManager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
+func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
 	if receipt.TransactionID != commit.TransactionID || receipt.EntityID != commit.EntityID || receipt.StateVersion != commit.NextVersion || receipt.MarkerEpoch != commit.MarkerEpoch || receipt.LockFence != commit.LockFence || receipt.RouteEpoch != commit.RouteEpoch {
 		return fmt.Errorf("remote_entity: invalid commit receipt for %d", commit.EntityID)
 	}
@@ -640,14 +640,14 @@ func (m *remoteEntityManager) afterRemoteCommit(ctx context.Context, commit enti
 	return nil
 }
 
-func (m *remoteEntityManager) snapshotPublisher() (entity.IRemoteSnapshotPublisher, bool) {
+func (m *Manager) snapshotPublisher() (entity.IRemoteSnapshotPublisher, bool) {
 	if publisher, ok := m.syncer.(entity.IRemoteSnapshotPublisher); ok {
 		return publisher, true
 	}
 	return nil, false
 }
 
-func (m *remoteEntityManager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
+func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
 	if m == nil || m.remote == nil || id.IsZero() {
 		return entity.ErrRemoteRejected
 	}
@@ -668,7 +668,7 @@ func (m *remoteEntityManager) trackRemoteTransaction(id entity.RemoteTransaction
 	return nil
 }
 
-func (m *remoteEntityManager) evictOldestClosedRemoteTransactionLocked() {
+func (m *Manager) evictOldestClosedRemoteTransactionLocked() {
 	var oldestID entity.RemoteTransactionID
 	oldestAt := int64(^uint64(0) >> 1)
 	found := false
@@ -682,7 +682,7 @@ func (m *remoteEntityManager) evictOldestClosedRemoteTransactionLocked() {
 	}
 }
 
-func (m *remoteEntityManager) pruneRemoteTransactionsLocked(now int64) {
+func (m *Manager) pruneRemoteTransactionsLocked(now int64) {
 	if m.remote.txTTL <= 0 {
 		return
 	}
@@ -694,7 +694,7 @@ func (m *remoteEntityManager) pruneRemoteTransactionsLocked(now int64) {
 	}
 }
 
-func (m *remoteEntityManager) completeRemoteTransaction(id entity.RemoteTransactionID, status entity.RemoteCommitStatus) {
+func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, status entity.RemoteCommitStatus) {
 	if m == nil || m.remote == nil || id.IsZero() {
 		return
 	}
@@ -725,7 +725,7 @@ func (m *remoteEntityManager) completeRemoteTransaction(id entity.RemoteTransact
 	m.remote.txMu.Unlock()
 }
 
-func (m *remoteEntityManager) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt int64) {
+func (m *Manager) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt int64) {
 	if m == nil || m.remote == nil {
 		return
 	}
@@ -737,7 +737,7 @@ func (m *remoteEntityManager) rollbackLocalInterest(key entity.RemoteSnapshotKey
 	m.remote.localInterestMu.Unlock()
 }
 
-func (m *remoteEntityManager) pruneLocalInterestsLocked(now int64) {
+func (m *Manager) pruneLocalInterestsLocked(now int64) {
 	for key, expiresAt := range m.remote.localInterests {
 		if expiresAt <= now {
 			delete(m.remote.localInterests, key)
@@ -746,7 +746,7 @@ func (m *remoteEntityManager) pruneLocalInterestsLocked(now int64) {
 	}
 }
 
-func (m *remoteEntityManager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
+func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -786,7 +786,7 @@ func remoteStatusError(status entity.RemoteCommitStatus) error {
 	}
 }
 
-func (m *remoteEntityManager) RemoteCommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
+func (m *Manager) RemoteCommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
 	if m == nil || m.remote == nil || id.IsZero() {
 		return entity.RemoteCommitStatus{}, entity.ErrRemoteRejected
 	}
@@ -810,12 +810,12 @@ func (m *remoteEntityManager) RemoteCommitStatus(ctx context.Context, id entity.
 	return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown}, nil
 }
 
-func (m *remoteEntityManager) FlushRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) error {
+func (m *Manager) FlushRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) error {
 	_, err := m.waitRemoteTransaction(ctx, id)
 	return err
 }
 
-func (m *remoteEntityManager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {
+func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {
 	if minVersion == 0 {
 		return nil
 	}
@@ -844,7 +844,7 @@ func (m *remoteEntityManager) FlushRemoteEntity(ctx context.Context, id int64, m
 	}
 }
 
-func (m *remoteEntityManager) FlushRemoteAll(ctx context.Context) error {
+func (m *Manager) FlushRemoteAll(ctx context.Context) error {
 	m.remote.txMu.Lock()
 	ids := make([]entity.RemoteTransactionID, 0, len(m.remote.txs))
 	for id, tracker := range m.remote.txs {
@@ -861,7 +861,7 @@ func (m *remoteEntityManager) FlushRemoteAll(ctx context.Context) error {
 	return nil
 }
 
-func (m *remoteEntityManager) notifyRemoteVersion(id int64, version uint64) {
+func (m *Manager) notifyRemoteVersion(id int64, version uint64) {
 	m.remote.versionMu.Lock()
 	if _, exists := m.remote.versions[id]; !exists {
 		m.remote.versionOrder = append(m.remote.versionOrder, id)
@@ -897,7 +897,7 @@ func (m *remoteEntityManager) notifyRemoteVersion(id int64, version uint64) {
 	m.remote.versionMu.Unlock()
 }
 
-func (m *remoteEntityManager) removeRemoteVersionWaiter(id int64, done chan struct{}) {
+func (m *Manager) removeRemoteVersionWaiter(id int64, done chan struct{}) {
 	m.remote.versionMu.Lock()
 	waiters := m.remote.waiters[id]
 	for i := range waiters {
@@ -915,7 +915,7 @@ func (m *remoteEntityManager) removeRemoteVersionWaiter(id int64, done chan stru
 	m.remote.versionMu.Unlock()
 }
 
-func (m *remoteEntityManager) quarantineEntries(entries []*remoteWriteEntry, cause error) error {
+func (m *Manager) quarantineEntries(entries []*remoteWriteEntry, cause error) error {
 	var joined error
 	for _, entry := range entries {
 		if entry == nil || entry.entity == nil {
@@ -947,7 +947,7 @@ func (m *remoteEntityManager) quarantineEntries(entries []*remoteWriteEntry, cau
 	return nil
 }
 
-func (m *remoteEntityManager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
+func (m *Manager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
 	for _, entry := range entries {
 		if entry == nil || entry.entity == nil || !entry.finalized || entry.entity.GetMutex() == nil {
 			continue
@@ -960,6 +960,6 @@ func (m *remoteEntityManager) rollbackRemoteEntries(entries []*remoteWriteEntry)
 	}
 }
 
-var _ entity.RemoteWriteBatchManager = (*remoteEntityManager)(nil)
-var _ entity.RemoteCommitApplier = (*remoteEntityManager)(nil)
-var _ entity.RemoteSnapshotReader = (*remoteEntityManager)(nil)
+var _ entity.RemoteWriteBatchManager = (*Manager)(nil)
+var _ entity.RemoteCommitApplier = (*Manager)(nil)
+var _ entity.RemoteSnapshotReader = (*Manager)(nil)

@@ -77,7 +77,7 @@ type redisMarker struct {
 
 var _ entity.IRemoteEntityOwnershipStore = (*redisMarker)(nil)
 
-func newRedisMarker(redis fredis.IRedis, key string) *redisMarker {
+func NewRedisMarker(redis fredis.IRedis, key string) *redisMarker {
 	return newRedisMarkerForEval(redis, key)
 }
 

@@ -25,17 +25,17 @@ type Runtime struct {
 	remoteManager    entity.IRemoteEntityManager
 	onFatal          func(error)
 	ready            atomic.Bool
-	pipelined        pipelinedRuntimeConfig
+	pipelined        PipelinedRuntimeConfig
 }
 
-type pipelinedRuntimeConfig struct {
+type PipelinedRuntimeConfig struct {
 	Allowlist     []string
 	Async         bool
 	AsyncWorkers  int
 	AsyncQueueCap int
 }
 
-func newRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbox *OutboxWorker, access *entity.ManagerAccess, remoteManager entity.IRemoteEntityManager, onFatal func(error), pipelined pipelinedRuntimeConfig) (*Runtime, error) {
+func NewRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbox *OutboxWorker, access *entity.ManagerAccess, remoteManager entity.IRemoteEntityManager, onFatal func(error), pipelined PipelinedRuntimeConfig) (*Runtime, error) {
 	if store == nil || wal == nil || projector == nil || outbox == nil || access == nil || access.Manager() == nil {
 		return nil, errors.New("dataengine runtime: store, WAL, projector, outbox and entity access are required")
 	}

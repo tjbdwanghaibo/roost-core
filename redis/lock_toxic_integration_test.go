@@ -62,7 +62,7 @@ func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 	// Built through the kit's own constructor so the fixture carries the
 	// production client options (context deadlines on the wire included),
 	// not a hand-rolled approximation of them.
-	rdb := newRedisClient(&Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
+	rdb := NewRedisClient(&Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
 	t.Cleanup(func() { _ = rdb.Close() })
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("proxied redis: %v", err)
@@ -81,7 +81,7 @@ func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *testing.T) {
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
-	factory := newDistLockFactory(rdb)
+	factory := NewDistLockFactory(rdb)
 	lock := factory.NewLock("toxic:lock", 5*time.Second)
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)
@@ -139,7 +139,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
-	lock := newDistLockFactory(rdb).NewLock("toxic:acquire", 5*time.Second)
+	lock := NewDistLockFactory(rdb).NewLock("toxic:acquire", 5*time.Second)
 	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
 		"name": "blackhole", "type": "timeout", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"timeout": 0},
 	})
@@ -173,7 +173,7 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
-	factory := newDistLockFactory(rdb)
+	factory := NewDistLockFactory(rdb)
 	lock := factory.NewLock("toxic:slow", 5*time.Second)
 
 	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{

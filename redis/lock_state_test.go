@@ -76,7 +76,7 @@ func (r *scriptedRedis) owner(key string) string {
 // error, never a lock that lasts forever. Reverting the check made no test red
 // before this one existed.
 func TestDistLockRefusesATTLBelowOneMillisecond(t *testing.T) {
-	factory := newDistLockFactory(newScriptedRedis())
+	factory := NewDistLockFactory(newScriptedRedis())
 	for _, ttl := range []time.Duration{0, -time.Second, 500 * time.Microsecond} {
 		lock := factory.NewLock("k", ttl)
 		if ok, err := lock.Acquire(context.Background()); ok || !errors.Is(err, ErrDistLockConfig) {
@@ -92,7 +92,7 @@ func TestDistLockRefusesATTLBelowOneMillisecond(t *testing.T) {
 // from an earlier acquisition cannot present the current one's identity.
 func TestDistLockOwnerTokenIsPerAcquisition(t *testing.T) {
 	redis := newScriptedRedis()
-	lock := newDistLockFactory(redis).NewLock("k", time.Second)
+	lock := NewDistLockFactory(redis).NewLock("k", time.Second)
 	ctx := context.Background()
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)
@@ -120,7 +120,7 @@ func TestDistLockUncertainStateBlocksReuseUntilReleaseReconciles(t *testing.T) {
 		t.Run(fmt.Sprintf("applied=%v", applied), func(t *testing.T) {
 			redis := newScriptedRedis()
 			redis.loseNextSetNX, redis.applyBeforeLosing = true, applied
-			lock := newDistLockFactory(redis).NewLock("k", time.Second)
+			lock := NewDistLockFactory(redis).NewLock("k", time.Second)
 			ctx := context.Background()
 
 			if ok, err := lock.Acquire(ctx); ok || err == nil {
@@ -150,7 +150,7 @@ func TestDistLockUncertainStateBlocksReuseUntilReleaseReconciles(t *testing.T) {
 // be gone, so the object stays unusable until a later Release settles it.
 func TestDistLockReleaseErrorLeavesTheLockUncertain(t *testing.T) {
 	redis := newScriptedRedis()
-	lock := newDistLockFactory(redis).NewLock("k", time.Second)
+	lock := NewDistLockFactory(redis).NewLock("k", time.Second)
 	ctx := context.Background()
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)

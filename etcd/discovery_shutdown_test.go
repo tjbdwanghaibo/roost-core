@@ -11,7 +11,7 @@ import (
 )
 
 func TestDiscoverySuppressesLeaseLostWarningAfterDeregister(t *testing.T) {
-	d := newDiscovery(nil, "/roost/", 5)
+	d := NewDiscovery(nil, "/roost/", 5)
 	d.key = "/roost/game/1"
 	d.markStopping()
 
@@ -21,7 +21,7 @@ func TestDiscoverySuppressesLeaseLostWarningAfterDeregister(t *testing.T) {
 }
 
 func TestDiscoveryWarnsWhenLeaseLostUnexpectedly(t *testing.T) {
-	d := newDiscovery(nil, "/roost/", 5)
+	d := NewDiscovery(nil, "/roost/", 5)
 	d.key = "/roost/game/1"
 
 	if !d.shouldWarnLeaseLost() {
@@ -30,7 +30,7 @@ func TestDiscoveryWarnsWhenLeaseLostUnexpectedly(t *testing.T) {
 }
 
 func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
-	d := newDiscovery(nil, "/roost/", 5)
+	d := NewDiscovery(nil, "/roost/", 5)
 	d.retryMinInterval = time.Millisecond
 	d.retryMaxInterval = time.Millisecond
 
@@ -62,7 +62,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 	select {
 	case <-registeredAgain:
 	case <-time.After(15 * time.Second):
-		t.Fatal("expected discovery to register again after lease loss")
+		t.Fatal("expected Discovery to register again after lease loss")
 	}
 
 	if got := d.currentLeaseID(); got != clientv3.LeaseID(102) {
@@ -73,7 +73,7 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 }
 
 func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
-	d := newDiscovery(nil, "/roost/", 5)
+	d := NewDiscovery(nil, "/roost/", 5)
 	d.retryMinInterval = time.Millisecond
 	d.retryMaxInterval = time.Millisecond
 
@@ -104,7 +104,7 @@ func TestDiscoveryDoesNotReregisterAfterDeregister(t *testing.T) {
 }
 
 func TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration(t *testing.T) {
-	d := newDiscovery(nil, "/roost/", 5)
+	d := NewDiscovery(nil, "/roost/", 5)
 	keepaliveDone := make(chan struct{})
 	calls := 0
 	d.registerOnce = func(context.Context, *ServiceInfo) (discoveryRegistration, error) {

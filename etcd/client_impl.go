@@ -8,12 +8,12 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// etcdClient implements IEtcd by wrapping clientv3.Client.
-type etcdClient struct {
+// Client implements IEtcd by wrapping clientv3.Client.
+type Client struct {
 	cli *clientv3.Client
 }
 
-func newEtcdClient(cfg *Config) (*etcdClient, error) {
+func NewClient(cfg *Config) (*Client, error) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Endpoints,
 		DialTimeout: cfg.DialTimeout,
@@ -23,12 +23,12 @@ func newEtcdClient(cfg *Config) (*etcdClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("etcd: connect: %w", err)
 	}
-	return &etcdClient{cli: cli}, nil
+	return &Client{cli: cli}, nil
 }
 
 // --- KV ---
 
-func (c *etcdClient) Get(ctx context.Context, key string) (*KV, error) {
+func (c *Client) Get(ctx context.Context, key string) (*KV, error) {
 	resp, err := c.cli.Get(ctx, key)
 	if err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func (c *etcdClient) Get(ctx context.Context, key string) (*KV, error) {
 	return convertKV((*mvccpb.KeyValue)(resp.Kvs[0])), nil
 }
 
-func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*KV, error) {
+func (c *Client) GetWithPrefix(ctx context.Context, prefix string) ([]*KV, error) {
 	snapshot, err := c.GetPrefixSnapshot(ctx, prefix)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func (c *etcdClient) GetWithPrefix(ctx context.Context, prefix string) ([]*KV, e
 	return snapshot.KVs, nil
 }
 
-func (c *etcdClient) GetPrefixSnapshot(ctx context.Context, prefix string) (*PrefixSnapshot, error) {
+func (c *Client) GetPrefixSnapshot(ctx context.Context, prefix string) (*PrefixSnapshot, error) {
 	resp, err := c.cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
@@ -59,22 +59,22 @@ func (c *etcdClient) GetPrefixSnapshot(ctx context.Context, prefix string) (*Pre
 	return &PrefixSnapshot{KVs: kvs, Revision: resp.Header.Revision}, nil
 }
 
-func (c *etcdClient) Put(ctx context.Context, key, value string) error {
+func (c *Client) Put(ctx context.Context, key, value string) error {
 	_, err := c.cli.Put(ctx, key, value)
 	return err
 }
 
-func (c *etcdClient) PutWithLease(ctx context.Context, key, value string, leaseID int64) error {
+func (c *Client) PutWithLease(ctx context.Context, key, value string, leaseID int64) error {
 	_, err := c.cli.Put(ctx, key, value, clientv3.WithLease(clientv3.LeaseID(leaseID)))
 	return err
 }
 
-func (c *etcdClient) Delete(ctx context.Context, key string) error {
+func (c *Client) Delete(ctx context.Context, key string) error {
 	_, err := c.cli.Delete(ctx, key)
 	return err
 }
 
-func (c *etcdClient) DeleteWithPrefix(ctx context.Context, prefix string) (int64, error) {
+func (c *Client) DeleteWithPrefix(ctx context.Context, prefix string) (int64, error) {
 	resp, err := c.cli.Delete(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return 0, err
@@ -84,7 +84,7 @@ func (c *etcdClient) DeleteWithPrefix(ctx context.Context, prefix string) (int64
 
 // --- Txn ---
 
-func (c *etcdClient) Txn(ctx context.Context, cmp Cmp, onSuccess, onFailure []Op) (*TxnResponse, error) {
+func (c *Client) Txn(ctx context.Context, cmp Cmp, onSuccess, onFailure []Op) (*TxnResponse, error) {
 	etcdCmp := buildCmp(cmp)
 	successOps := buildOps(onSuccess)
 	failureOps := buildOps(onFailure)
@@ -109,7 +109,7 @@ func (c *etcdClient) Txn(ctx context.Context, cmp Cmp, onSuccess, onFailure []Op
 
 // --- Lease ---
 
-func (c *etcdClient) Grant(ctx context.Context, ttl int64) (int64, error) {
+func (c *Client) Grant(ctx context.Context, ttl int64) (int64, error) {
 	resp, err := c.cli.Grant(ctx, ttl)
 	if err != nil {
 		return 0, err
@@ -117,7 +117,7 @@ func (c *etcdClient) Grant(ctx context.Context, ttl int64) (int64, error) {
 	return int64(resp.ID), nil
 }
 
-func (c *etcdClient) KeepAlive(ctx context.Context, leaseID int64) (<-chan struct{}, error) {
+func (c *Client) KeepAlive(ctx context.Context, leaseID int64) (<-chan struct{}, error) {
 	ch, err := c.cli.KeepAlive(ctx, clientv3.LeaseID(leaseID))
 	if err != nil {
 		return nil, err
@@ -133,21 +133,21 @@ func (c *etcdClient) KeepAlive(ctx context.Context, leaseID int64) (<-chan struc
 	return lostCh, nil
 }
 
-func (c *etcdClient) Revoke(ctx context.Context, leaseID int64) error {
+func (c *Client) Revoke(ctx context.Context, leaseID int64) error {
 	_, err := c.cli.Revoke(ctx, clientv3.LeaseID(leaseID))
 	return err
 }
 
 // --- Watch ---
 
-func (c *etcdClient) Watch(ctx context.Context, key string, opts ...WatchOption) IWatcher {
+func (c *Client) Watch(ctx context.Context, key string, opts ...WatchOption) IWatcher {
 	watchOpts := buildWatchOpts(opts)
 	watchCtx, cancel := context.WithCancel(ctx)
 	wch := c.cli.Watch(watchCtx, key, watchOpts...)
 	return newWatcher(watchCtx, wch, cancel)
 }
 
-func (c *etcdClient) WatchPrefix(ctx context.Context, prefix string, opts ...WatchOption) IWatcher {
+func (c *Client) WatchPrefix(ctx context.Context, prefix string, opts ...WatchOption) IWatcher {
 	watchOpts := buildWatchOpts(opts)
 	watchOpts = append(watchOpts, clientv3.WithPrefix())
 	watchCtx, cancel := context.WithCancel(ctx)
@@ -157,7 +157,7 @@ func (c *etcdClient) WatchPrefix(ctx context.Context, prefix string, opts ...Wat
 
 // --- Connection ---
 
-func (c *etcdClient) Close() error {
+func (c *Client) Close() error {
 	return c.cli.Close()
 }
 
@@ -239,5 +239,5 @@ func buildWatchOpts(opts []WatchOption) []clientv3.OpOption {
 	return result
 }
 
-var _ IEtcd = (*etcdClient)(nil)
-var _ IPrefixSnapshotReader = (*etcdClient)(nil)
+var _ IEtcd = (*Client)(nil)
+var _ IPrefixSnapshotReader = (*Client)(nil)

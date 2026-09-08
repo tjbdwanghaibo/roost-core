@@ -10,16 +10,16 @@ import (
 	"hash/fnv"
 )
 
-const syncTopicRemoteSnapshot = "remote_entity_snapshot"
+const SyncTopicSnapshot = "remote_entity_snapshot"
 
 // remoteSyncer publishes immutable snapshots and renewable interests.
 type remoteSyncer struct {
 	snapshotRep *mirror.Replicator
 	interestRep *mirror.Replicator
-	mgr         *remoteEntityManager
+	mgr         *Manager
 }
 
-func newRemoteSyncer(snapshot *mirror.Replicator) *remoteSyncer {
+func NewSyncer(snapshot *mirror.Replicator) *remoteSyncer {
 	return &remoteSyncer{snapshotRep: snapshot}
 }
 
@@ -87,9 +87,9 @@ func remoteSnapshotReplicaKey(key entity.RemoteSnapshotKey) int64 {
 	return result
 }
 
-type remoteSnapshotReplicaStore struct{ mgr *remoteEntityManager }
+type SnapshotReplicaStore struct{ mgr *Manager }
 
-func (s remoteSnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envelope) error {
+func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envelope) error {
 	if s.mgr == nil || s.mgr.remote == nil || len(env.Payload) == 0 {
 		return nil
 	}

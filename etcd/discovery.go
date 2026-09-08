@@ -2,7 +2,7 @@ package etcd
 
 import "context"
 
-// IDiscovery provides service registration and discovery.
+// IDiscovery provides service registration and Discovery.
 type IDiscovery interface {
 	// Register registers this service instance with a TTL lease.
 	// Kept alive automatically until Deregister or context cancellation.

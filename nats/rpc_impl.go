@@ -15,9 +15,9 @@ import (
 	gonats "github.com/nats-io/nats.go"
 )
 
-// rpcClient implements IRpc using the underlying natsClient.
-type rpcClient struct {
-	client *natsClient
+// RPCClient implements IRpc using the underlying Client.
+type RPCClient struct {
+	client *Client
 	policy RetryPolicy
 
 	// async RPC state
@@ -109,11 +109,11 @@ func (t *rpcTask) complete() {
 // The once guard makes the normal handler + release path exactly-once.
 func (t *rpcTask) OnRelease() { t.complete() }
 
-func newRpcClient(client *natsClient, policy RetryPolicy, cbWorkerNum int) *rpcClient {
+func NewRPCClient(client *Client, policy RetryPolicy, cbWorkerNum int) *RPCClient {
 	if cbWorkerNum <= 0 {
 		cbWorkerNum = 4
 	}
-	rc := &rpcClient{
+	rc := &RPCClient{
 		client: client,
 		policy: policy,
 	}
@@ -128,7 +128,7 @@ func newRpcClient(client *natsClient, policy RetryPolicy, cbWorkerNum int) *rpcC
 	return rc
 }
 
-func (r *rpcClient) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
+func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -162,13 +162,13 @@ func (r *rpcClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 	return nil, fmt.Errorf("rpc: %s failed after %d attempts: %w", subject, r.policy.MaxAttempts, lastErr)
 }
 
-func (r *rpcClient) CallWithTimeout(subject string, req []byte, timeout time.Duration) ([]byte, error) {
+func (r *RPCClient) CallWithTimeout(subject string, req []byte, timeout time.Duration) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return r.Call(ctx, subject, req)
 }
 
-func (r *rpcClient) CallAsync(subject string, req []byte, cb RpcCallback) {
+func (r *RPCClient) CallAsync(subject string, req []byte, cb RpcCallback) {
 	if r.stopped.Load() {
 		if cb != nil {
 			cb(nil, ErrCancelled)
@@ -210,11 +210,11 @@ func (r *rpcClient) CallAsync(subject string, req []byte, cb RpcCallback) {
 	}
 }
 
-func (r *rpcClient) Reply(replySubject string, resp []byte) error {
+func (r *RPCClient) Reply(replySubject string, resp []byte) error {
 	return r.client.Publish(replySubject, resp)
 }
 
-func (r *rpcClient) Stop() {
+func (r *RPCClient) Stop() {
 	if !r.stopped.CompareAndSwap(false, true) {
 		return
 	}
@@ -234,7 +234,7 @@ func (r *rpcClient) Stop() {
 // finishPending is the only terminal transition after a call enters pending.
 // LoadAndDelete elects exactly one winner among reply, timeout, publish error,
 // and Stop; losers perform no callback or resource cleanup a second time.
-func (r *rpcClient) finishPending(sid int64, resp []byte, err error) bool {
+func (r *RPCClient) finishPending(sid int64, resp []byte, err error) bool {
 	value, ok := r.pending.LoadAndDelete(sid)
 	if !ok {
 		return false
@@ -253,7 +253,7 @@ func (r *rpcClient) finishPending(sid int64, resp []byte, err error) bool {
 	return true
 }
 
-func (r *rpcClient) dispatchCallback(key int64, task *rpcTask) {
+func (r *RPCClient) dispatchCallback(key int64, task *rpcTask) {
 	if r.pool == nil {
 		task.OnRelease()
 		return
@@ -267,11 +267,11 @@ func (r *rpcClient) dispatchCallback(key int64, task *rpcTask) {
 	}
 }
 
-func (r *rpcClient) isRetryable(err error) bool {
+func (r *RPCClient) isRetryable(err error) bool {
 	return err == ErrTimeout || err == ErrNoResponders
 }
 
-func (r *rpcClient) nextInterval(attempt int) time.Duration {
+func (r *RPCClient) nextInterval(attempt int) time.Duration {
 	interval := time.Duration(float64(r.policy.BaseInterval) * math.Pow(r.policy.Multiplier, float64(attempt)))
 	if interval > r.policy.MaxInterval {
 		interval = r.policy.MaxInterval
@@ -284,4 +284,4 @@ func (r *rpcClient) nextInterval(attempt int) time.Duration {
 	return interval
 }
 
-var _ IRpc = (*rpcClient)(nil)
+var _ IRpc = (*RPCClient)(nil)

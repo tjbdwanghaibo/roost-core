@@ -20,16 +20,16 @@ type remoteSyncTransport interface {
 	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
 }
 
-// remoteEntityManager is the single transaction/snapshot implementation.
+// Manager is the single transaction/snapshot implementation.
 // Wrappers are private coordination cells and are not exposed as an alternate
 // persistence API.
-type remoteEntityManager struct {
+type Manager struct {
 	mu          sync.RWMutex
 	wrappers    map[int64]*remoteEntityWrapper
 	creating    map[int64]*remoteWrapperCreate
 	lockFactory redis.IVersionedLockFactory
 	// lockFactoryErr is set when the factory hands out locks without a fence;
-	// see newRemoteEntityManager. A manager carrying it creates no wrappers.
+	// see NewManager. A manager carrying it creates no wrappers.
 	lockFactoryErr  error
 	lockFactoryWarn sync.Once
 	backend         entity.IRemoteEntityBackend
@@ -44,7 +44,7 @@ type remoteEntityManager struct {
 	onFatal         func(error)
 }
 
-func (m *remoteEntityManager) setFatalHandler(handler func(error)) {
+func (m *Manager) setFatalHandler(handler func(error)) {
 	if m == nil {
 		return
 	}
@@ -53,7 +53,7 @@ func (m *remoteEntityManager) setFatalHandler(handler func(error)) {
 	m.fatalMu.Unlock()
 }
 
-func (m *remoteEntityManager) recordReleaseFailure(err error) {
+func (m *Manager) recordReleaseFailure(err error) {
 	if m == nil || err == nil {
 		return
 	}
@@ -68,7 +68,7 @@ func (m *remoteEntityManager) recordReleaseFailure(err error) {
 	}
 }
 
-func (m *remoteEntityManager) fatalError() error {
+func (m *Manager) fatalError() error {
 	if m == nil {
 		return entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -77,7 +77,7 @@ func (m *remoteEntityManager) fatalError() error {
 	return m.fatalErr
 }
 
-func (m *remoteEntityManager) wrapperCount() int {
+func (m *Manager) wrapperCount() int {
 	if m == nil {
 		return 0
 	}
@@ -91,10 +91,10 @@ type remoteWrapperCreate struct {
 	wrapper *remoteEntityWrapper
 }
 
-var _ entity.IRemoteEntityManager = (*remoteEntityManager)(nil)
+var _ entity.IRemoteEntityManager = (*Manager)(nil)
 
-func newRemoteEntityManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid int32, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *remoteEntityManager {
-	mgr := &remoteEntityManager{
+func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid int32, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *Manager {
+	mgr := &Manager{
 		wrappers:    make(map[int64]*remoteEntityWrapper),
 		creating:    make(map[int64]*remoteWrapperCreate),
 		lockFactory: lockFactory,
@@ -123,14 +123,14 @@ func newRemoteEntityManager(lockFactory redis.IVersionedLockFactory, cfg *Config
 // LockFactoryError reports why this manager will create no wrappers, or nil.
 // The Mod turns it into a Provide failure so a misconfigured deployment stops
 // at startup instead of refusing every shared operation.
-func (m *remoteEntityManager) LockFactoryError() error {
+func (m *Manager) LockFactoryError() error {
 	if m == nil {
 		return nil
 	}
 	return m.lockFactoryErr
 }
 
-func (m *remoteEntityManager) getOrCreate(id int64, category entity.EntityCategory, kind entity.EntityKind) *remoteEntityWrapper {
+func (m *Manager) getOrCreate(id int64, category entity.EntityCategory, kind entity.EntityKind) *remoteEntityWrapper {
 	meta := resolveRemoteWrapperID(id, category, kind)
 	if meta.FullID == 0 || m == nil || m.lockFactory == nil || m.cfg == nil {
 		return nil
@@ -199,7 +199,7 @@ func (m *remoteEntityManager) getOrCreate(id int64, category entity.EntityCatego
 	return created
 }
 
-func (m *remoteEntityManager) pruneWrappersLocked(now time.Time) {
+func (m *Manager) pruneWrappersLocked(now time.Time) {
 	if m == nil || m.cfg == nil || len(m.wrappers) == 0 {
 		return
 	}
@@ -236,14 +236,14 @@ func resolveRemoteWrapperID(id int64, category entity.EntityCategory, kind entit
 	return meta
 }
 
-func (m *remoteEntityManager) get(id int64) (*remoteEntityWrapper, bool) {
+func (m *Manager) get(id int64) (*remoteEntityWrapper, bool) {
 	m.mu.RLock()
 	w, ok := m.wrappers[id]
 	m.mu.RUnlock()
 	return w, ok
 }
 
-func (m *remoteEntityManager) SetBackend(backend entity.IRemoteEntityBackend) {
+func (m *Manager) SetBackend(backend entity.IRemoteEntityBackend) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sealed {
@@ -252,7 +252,7 @@ func (m *remoteEntityManager) SetBackend(backend entity.IRemoteEntityBackend) {
 	m.backend = backend
 }
 
-func (m *remoteEntityManager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
+func (m *Manager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sealed {
@@ -261,7 +261,7 @@ func (m *remoteEntityManager) SetOwnershipStore(store entity.IRemoteEntityOwners
 	m.ownershipStore = store
 }
 
-func (m *remoteEntityManager) setSyncer(syncer remoteSyncTransport) {
+func (m *Manager) setSyncer(syncer remoteSyncTransport) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sealed {
@@ -270,13 +270,13 @@ func (m *remoteEntityManager) setSyncer(syncer remoteSyncTransport) {
 	m.syncer = syncer
 }
 
-func (m *remoteEntityManager) sealDependencies() {
+func (m *Manager) sealDependencies() {
 	m.mu.Lock()
 	m.sealed = true
 	m.mu.Unlock()
 }
 
-func (m *remoteEntityManager) validateDependencies() error {
+func (m *Manager) validateDependencies() error {
 	if m == nil || m.cfg == nil || m.lockFactory == nil {
 		return fmt.Errorf("remote_entity: manager is not initialized")
 	}

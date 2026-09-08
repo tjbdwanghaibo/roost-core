@@ -218,7 +218,7 @@ func (d *testRemoteDao) Dirty() entity.IDirty                     { return d.dir
 func (d *testRemoteDao) CleanDirty()                              { d.dirty.SelfClean() }
 
 func TestManagerCoalescesConcurrentWrapperCreation(t *testing.T) {
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	markers := newMockMarkerStore()
 	mgr.SetOwnershipStore(markers)
 	id := testRemoteFullIDWithKind(1301, 1, 1)
@@ -250,7 +250,7 @@ func TestWrapperCapacityEvictsIdleEntry(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WrapperCapacity = 1
 	cfg.WrapperIdleTTL = time.Hour
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	firstID := testRemoteFullIDWithKind(2301, 1, 1)
 	secondID := testRemoteFullIDWithKind(2302, 1, 1)
@@ -347,7 +347,7 @@ func (unfencedLockFactory) NewVersionedLock(int64, redis.VersionedLockOptions) r
 // fail-closed, but late, noisy, and indistinguishable from a real fence
 // conflict in the metrics. FEATURE_LOGIC §4.2 item 7.
 func TestManagerRefusesALockFactoryWithoutFences(t *testing.T) {
-	mgr := newRemoteEntityManager(unfencedLockFactory{}, DefaultConfig(), 1000)
+	mgr := NewManager(unfencedLockFactory{}, DefaultConfig(), 1000)
 	if err := mgr.LockFactoryError(); err == nil {
 		t.Fatal("a factory of unfenced locks was accepted at construction")
 	}
@@ -355,7 +355,7 @@ func TestManagerRefusesALockFactoryWithoutFences(t *testing.T) {
 		w.release()
 		t.Fatal("a wrapper was created over an unfenced lock; every shared operation on it would be refused at run time")
 	}
-	fenced := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	fenced := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	if err := fenced.LockFactoryError(); err != nil {
 		t.Fatalf("a fenced factory was refused: %v", err)
 	}

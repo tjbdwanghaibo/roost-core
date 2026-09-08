@@ -22,7 +22,7 @@ type remoteWriteEntry struct {
 }
 
 type remoteWriteBatch struct {
-	mgr     *remoteEntityManager
+	mgr     *Manager
 	entries []*remoteWriteEntry
 	ids     []int64
 
@@ -38,7 +38,7 @@ type remoteWriteBatch struct {
 
 var _ entity.RemoteWriteBatch = (*remoteWriteBatch)(nil)
 
-func (m *remoteEntityManager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ entity.RemoteWriteBatch, err error) {
+func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ entity.RemoteWriteBatch, err error) {
 	started := time.Now()
 	batchClass := "single"
 	if len(ids) > 1 {

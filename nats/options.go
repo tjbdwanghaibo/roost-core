@@ -6,9 +6,9 @@ import (
 	gonats "github.com/nats-io/nats.go"
 )
 
-// clientOptions are the kit-level knobs that are not part of the core
+// ClientOptions are the kit-level knobs that are not part of the core
 // Config contract.
-type clientOptions struct {
+type ClientOptions struct {
 	// ignoreDiscoveredServers keeps the client on the URLs it was configured
 	// with. By default nats.go learns every cluster member's advertised
 	// address from INFO gossip and reconnects to whichever answers — which is
@@ -17,7 +17,7 @@ type clientOptions struct {
 	ignoreDiscoveredServers bool
 }
 
-func buildNatsOptions(cfg *Config, state *natsLifecycleState, extra clientOptions) []gonats.Option {
+func buildNatsOptions(cfg *Config, state *natsLifecycleState, extra ClientOptions) []gonats.Option {
 	opts := []gonats.Option{
 		gonats.ReconnectWait(cfg.ReconnectWait),
 		gonats.MaxReconnects(cfg.MaxReconnects),

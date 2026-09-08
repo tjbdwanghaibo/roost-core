@@ -111,7 +111,7 @@ func (intent batchDeleteIntent) RemoteDeleteRequested(id int64) bool { return in
 func TestRemoteWriteBatchUsesExplicitDeleteIntentBeforeEntityRemoval(t *testing.T) {
 	const kind entity.EntityKind = 119
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
@@ -211,7 +211,7 @@ func remoteTestTxID(value byte) entity.RemoteTransactionID {
 func TestRemoteWriteBatchUsesTransactionLocalChangeParticipantWithoutDirtyState(t *testing.T) {
 	const kind entity.EntityKind = 120
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
@@ -235,7 +235,7 @@ func TestRemoteWriteBatchMemoryCommitPublishesImmutableSnapshot(t *testing.T) {
 	const kind entity.EntityKind = 121
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	cfg := DefaultConfig()
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -278,7 +278,7 @@ func TestRemoteWriteBatchAsyncRetainsGateUntilWALApply(t *testing.T) {
 	const kind entity.EntityKind = 122
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	cfg := DefaultConfig()
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -347,7 +347,7 @@ func TestRemoteWriteBatchAsyncRetainsGateUntilWALApply(t *testing.T) {
 func TestTransferRemoteOwnershipFencesPreviousOwner(t *testing.T) {
 	const kind entity.EntityKind = 123
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -382,7 +382,7 @@ func TestTransferRemoteOwnershipFencesPreviousOwner(t *testing.T) {
 func TestRemoteWriteBatchRollsBackEarlierFrozenEntityOnBuildFailure(t *testing.T) {
 	const kind entity.EntityKind = 124
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -418,7 +418,7 @@ func TestOwnerRoutedWriteUsesMarkerHotCache(t *testing.T) {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	cfg := DefaultConfig()
 	cfg.MarkerCacheTTL = time.Minute
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -452,7 +452,7 @@ func TestOwnerRoutedWriteUsesMarkerHotCache(t *testing.T) {
 func TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown(t *testing.T) {
 	const kind entity.EntityKind = 130
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -519,7 +519,7 @@ func TestMemoryCommitPublishFailureQueriesStatusAndReconciles(t *testing.T) {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	cfg := DefaultConfig()
 	cfg.FinalizeRetryInterval = time.Millisecond
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -584,7 +584,7 @@ func TestRemoteTrackingAndFlushWaitersAreBounded(t *testing.T) {
 	cfg.TransactionTrackLimit = 1
 	cfg.TransactionTrackTTL = time.Hour
 	cfg.SnapshotMaxWaiters = 1
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -631,7 +631,7 @@ func TestRemoteTrackingAndFlushWaitersAreBounded(t *testing.T) {
 func TestRemoteFinalizerStopCancelsLongRetryImmediately(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.FinalizeRetryInterval = time.Hour
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	mgr.SetBackend(newRemoteTestLoader())
 	mgr.startRemoteFinalizer()
@@ -683,7 +683,7 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 	}
 	cfg := DefaultConfig()
 	cfg.FinalizeRetryInterval = time.Millisecond
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	syncer := &flakySnapshotSyncer{}

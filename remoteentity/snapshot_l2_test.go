@@ -78,7 +78,7 @@ func TestRemoteSnapshotL2RejectsDelayedPublisher(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
-	store := newRemoteSnapshotL2Store(newSnapshotRedisFake(), time.Minute)
+	store := NewSnapshotL2Store(newSnapshotRedisFake(), time.Minute)
 	newer := entity.RemoteSnapshotEnvelope{Key: key, StateVersion: 8, BaseVersion: 7, MarkerEpoch: 4, RouteEpoch: 2, Schema: 1, Full: true, Payload: entity.CopyFrozenRemoteSnapshotPayload([]byte("new"))}
 	if err := store.Set(context.Background(), newer); err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestRemoteSnapshotL2RejectsSameVersionDifferentContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
-	store := newRemoteSnapshotL2Store(newSnapshotRedisFake(), time.Minute)
+	store := NewSnapshotL2Store(newSnapshotRedisFake(), time.Minute)
 	value := entity.RemoteSnapshotEnvelope{Key: key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Full: true, Payload: entity.CopyFrozenRemoteSnapshotPayload([]byte("a"))}
 	if err := store.Set(context.Background(), value); err != nil {
 		t.Fatal(err)

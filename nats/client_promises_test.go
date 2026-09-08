@@ -13,7 +13,7 @@ import (
 // their generic-error path (retry a timeout that was a closed connection, or
 // give up on a "no responders" that a retry would have served).
 func TestClientTranslatesEachTransportErrorToItsSentinel(t *testing.T) {
-	c := &natsClient{}
+	c := &Client{}
 	cases := map[error]error{
 		gonats.ErrTimeout:            ErrTimeout,
 		gonats.ErrNoResponders:       ErrNoResponders,
@@ -35,14 +35,14 @@ func TestClientTranslatesEachTransportErrorToItsSentinel(t *testing.T) {
 // or empty subject would silently subscribe to nothing, and a client with no
 // connection reports ErrClosed rather than panicking.
 func TestClientRefusesInvalidSubjectsQueuesAndHandlers(t *testing.T) {
-	var closed *natsClient
+	var closed *Client
 	if err := closed.validateSubject("roost.x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("nil client = %v", err)
 	}
-	if err := (&natsClient{}).validateSubject("roost.x"); !errors.Is(err, ErrClosed) {
+	if err := (&Client{}).validateSubject("roost.x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("client without connection = %v", err)
 	}
-	c := &natsClient{conn: &gonats.Conn{}}
+	c := &Client{conn: &gonats.Conn{}}
 	for _, subject := range []string{"", "  ", " roost.x", "roost.x "} {
 		if err := c.validateSubject(subject); err == nil || !strings.Contains(err.Error(), "invalid subject") {
 			t.Fatalf("subject %q = %v", subject, err)

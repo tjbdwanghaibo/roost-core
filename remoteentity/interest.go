@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/mirror"
 )
 
-const syncTopicRemoteInterest = "remote_entity_interest"
+const SyncTopicInterest = "remote_entity_interest"
 
 type remoteInterestRegistry struct {
 	mu      sync.Mutex
@@ -140,9 +140,9 @@ type remoteInterestWire struct {
 	Interest entity.RemoteSnapshotInterest `json:"interest"`
 }
 
-type remoteInterestReplicaStore struct{ mgr *remoteEntityManager }
+type InterestReplicaStore struct{ mgr *Manager }
 
-func (s remoteInterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelope) error {
+func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelope) error {
 	if s.mgr == nil || s.mgr.remote == nil || len(env.Payload) == 0 {
 		return nil
 	}

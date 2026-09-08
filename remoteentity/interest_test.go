@@ -53,7 +53,7 @@ func TestLocalInterestCapacityPrunesExpiredAndCoalescesConcurrentRenewal(t *test
 	cfg := DefaultConfig()
 	cfg.SnapshotInterestKeys = 1
 	cfg.SnapshotInterestTTL = time.Minute
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), cfg, 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	first := entity.RemoteSnapshotKey{EntityID: firstID, Kind: kind, Scope: 1}
 	second := entity.RemoteSnapshotKey{EntityID: secondID, Kind: kind, Scope: 1}
 	if err := mgr.RenewRemoteSnapshotInterest(context.Background(), first); err != nil {

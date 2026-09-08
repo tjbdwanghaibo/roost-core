@@ -432,7 +432,7 @@ type versionedLockFactory struct {
 
 var _ fredis.IVersionedLockFactory = (*versionedLockFactory)(nil)
 
-func newVersionedLockFactory(redis fredis.IRedis) *versionedLockFactory {
+func NewVersionedLockFactory(redis fredis.IRedis) *versionedLockFactory {
 	return &versionedLockFactory{redis: redis}
 }
 

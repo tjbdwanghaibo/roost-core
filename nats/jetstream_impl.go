@@ -13,11 +13,11 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
 
-type jetStreamClient struct {
+type JetStreamClient struct {
 	js gojs.JetStream
 }
 
-func newJetStreamClient(client *natsClient) (*jetStreamClient, error) {
+func NewJetStreamClient(client *Client) (*JetStreamClient, error) {
 	if client == nil || client.natsConn() == nil {
 		return nil, errors.New("nats jetstream: client is nil")
 	}
@@ -25,10 +25,10 @@ func newJetStreamClient(client *natsClient) (*jetStreamClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &jetStreamClient{js: js}, nil
+	return &JetStreamClient{js: js}, nil
 }
 
-func (c *jetStreamClient) EnsureStream(ctx context.Context, cfg JetStreamConfig) error {
+func (c *JetStreamClient) EnsureStream(ctx context.Context, cfg JetStreamConfig) error {
 	if c == nil || c.js == nil {
 		return errors.New("nats jetstream: not initialized")
 	}
@@ -36,7 +36,7 @@ func (c *jetStreamClient) EnsureStream(ctx context.Context, cfg JetStreamConfig)
 	return err
 }
 
-func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts JetStreamPublishOptions) (JetStreamPublishAck, error) {
+func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts JetStreamPublishOptions) (JetStreamPublishAck, error) {
 	if c == nil || c.js == nil {
 		return JetStreamPublishAck{}, errors.New("nats jetstream: not initialized")
 	}
@@ -58,7 +58,7 @@ func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []by
 	}, nil
 }
 
-func (c *jetStreamClient) Subscribe(ctx context.Context, cfg JetStreamConsumerConfig, handler JetStreamHandler) (IJetStreamSubscription, error) {
+func (c *JetStreamClient) Subscribe(ctx context.Context, cfg JetStreamConsumerConfig, handler JetStreamHandler) (IJetStreamSubscription, error) {
 	if c == nil || c.js == nil {
 		return nil, errors.New("nats jetstream: not initialized")
 	}
@@ -277,4 +277,4 @@ func (s *jetStreamSubscription) Closed() <-chan struct{} {
 	return s.cc.Closed()
 }
 
-var _ IJetStream = (*jetStreamClient)(nil)
+var _ IJetStream = (*JetStreamClient)(nil)

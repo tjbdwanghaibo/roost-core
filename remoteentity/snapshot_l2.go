@@ -58,7 +58,7 @@ type remoteSnapshotRedis interface {
 	Del(context.Context, ...string) (int64, error)
 }
 
-func newRemoteSnapshotL2Store(redis remoteSnapshotRedis, ttl time.Duration) *remoteSnapshotL2Store {
+func NewSnapshotL2Store(redis remoteSnapshotRedis, ttl time.Duration) *remoteSnapshotL2Store {
 	return &remoteSnapshotL2Store{redis: redis, ttl: ttl}
 }
 

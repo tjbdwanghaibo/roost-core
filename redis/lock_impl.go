@@ -28,8 +28,8 @@ else
 end`
 )
 
-// distLockFactory implements IDistLockFactory.
-type distLockFactory struct {
+// DistLockFactory implements IDistLockFactory.
+type DistLockFactory struct {
 	rdb goredis.UniversalClient
 }
 
@@ -42,18 +42,18 @@ type distLockFactory struct {
 // entity ownership, anything a store must be able to reject stale writers
 // for — use remote_entity's versionedLock (fence counter outlives the TTL,
 // stores compare fences) or etcd's IFencedElection.
-func newDistLockFactory(rdb goredis.UniversalClient) *distLockFactory {
-	return &distLockFactory{rdb: rdb}
+func NewDistLockFactory(rdb goredis.UniversalClient) *DistLockFactory {
+	return &DistLockFactory{rdb: rdb}
 }
 
-func (f *distLockFactory) NewLock(key string, ttl time.Duration) IDistLock {
+func (f *DistLockFactory) NewLock(key string, ttl time.Duration) IDistLock {
 	if f == nil {
 		return &distLock{key: key, ttl: ttl}
 	}
 	return &distLock{rdb: f.rdb, key: key, ttl: ttl}
 }
 
-var _ IDistLockFactory = (*distLockFactory)(nil)
+var _ IDistLockFactory = (*DistLockFactory)(nil)
 
 // distLock implements IDistLock.
 type distLock struct {

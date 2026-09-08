@@ -26,7 +26,7 @@ type remoteEntityWrapper struct {
 	markerMu    sync.RWMutex
 	ownershipMu sync.RWMutex
 	writeGate   chan struct{}
-	mgr         *remoteEntityManager
+	mgr         *Manager
 	refs        atomic.Int64
 	lastUsed    atomic.Int64
 }
@@ -38,7 +38,7 @@ const (
 	markerShared
 )
 
-func newRemoteEntityWrapper(id int64, category entity.EntityCategory, kind entity.EntityKind, rMu redis.IVersionedLock, mgr *remoteEntityManager) *remoteEntityWrapper {
+func newRemoteEntityWrapper(id int64, category entity.EntityCategory, kind entity.EntityKind, rMu redis.IVersionedLock, mgr *Manager) *remoteEntityWrapper {
 	meta := resolveRemoteWrapperID(id, category, kind)
 	w := &remoteEntityWrapper{
 		id: meta.FullID, category: meta.Category, kind: meta.Kind,

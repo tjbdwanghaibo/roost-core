@@ -13,15 +13,15 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
-// mongoClient implements IMongo by wrapping mongo-driver v2.
-type mongoClient struct {
+// Client implements IMongo by wrapping mongo-driver v2.
+type Client struct {
 	cli               *mongo.Client
 	policy            IndexMigrationPolicy
 	txnTimeout        time.Duration
 	requireReplicaSet bool
 }
 
-func newMongoClient(cfg *Config, policy IndexMigrationPolicy) (*mongoClient, error) {
+func NewClient(cfg *Config, policy IndexMigrationPolicy) (*Client, error) {
 	wc := writeconcern.Majority()
 	journal := true
 	wc.Journal = &journal
@@ -42,19 +42,19 @@ func newMongoClient(cfg *Config, policy IndexMigrationPolicy) (*mongoClient, err
 	if err != nil {
 		return nil, fmt.Errorf("mongo: connect: %w", err)
 	}
-	return &mongoClient{cli: cli, policy: policy, txnTimeout: cfg.TransactionTimeout, requireReplicaSet: cfg.RequireReplicaSet}, nil
+	return &Client{cli: cli, policy: policy, txnTimeout: cfg.TransactionTimeout, requireReplicaSet: cfg.RequireReplicaSet}, nil
 }
 
-func (c *mongoClient) Database(name string) IDatabase {
+func (c *Client) Database(name string) IDatabase {
 	return newDatabase(c.cli.Database(name), c.policy)
 }
 
-func (c *mongoClient) DatabaseForSid(prefix string, sid int32) IDatabase {
+func (c *Client) DatabaseForSid(prefix string, sid int32) IDatabase {
 	name := fmt.Sprintf("%s_%d", prefix, sid)
 	return newDatabase(c.cli.Database(name), c.policy)
 }
 
-func (c *mongoClient) StartSession(ctx context.Context) (ISession, error) {
+func (c *Client) StartSession(ctx context.Context) (ISession, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -74,7 +74,7 @@ func (c *mongoClient) StartSession(ctx context.Context) (ISession, error) {
 		SetWriteConcern(wc)}, nil
 }
 
-func (c *mongoClient) validateDeployment(ctx context.Context) error {
+func (c *Client) validateDeployment(ctx context.Context) error {
 	if c == nil || c.cli == nil {
 		return fmt.Errorf("mongo: client is not initialized")
 	}
@@ -95,12 +95,12 @@ func (c *mongoClient) validateDeployment(ctx context.Context) error {
 	return nil
 }
 
-func (c *mongoClient) Ping(ctx context.Context) error {
+func (c *Client) Ping(ctx context.Context) error {
 	return c.cli.Ping(ctx, nil)
 }
 
-func (c *mongoClient) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) error {
 	return c.cli.Disconnect(ctx)
 }
 
-var _ IMongo = (*mongoClient)(nil)
+var _ IMongo = (*Client)(nil)

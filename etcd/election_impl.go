@@ -11,16 +11,16 @@ import (
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
-// electionFactory implements IElectionFactory.
-type electionFactory struct {
+// ElectionFactory implements IElectionFactory.
+type ElectionFactory struct {
 	cli *clientv3.Client
 }
 
-func newElectionFactory(cli *clientv3.Client) *electionFactory {
-	return &electionFactory{cli: cli}
+func NewElectionFactory(cli *clientv3.Client) *ElectionFactory {
+	return &ElectionFactory{cli: cli}
 }
 
-func (f *electionFactory) NewElection(prefix string) IElection {
+func (f *ElectionFactory) NewElection(prefix string) IElection {
 	e := &election{
 		cli:      f.cli,
 		prefix:   prefix,
@@ -30,7 +30,7 @@ func (f *electionFactory) NewElection(prefix string) IElection {
 	return e
 }
 
-var _ IElectionFactory = (*electionFactory)(nil)
+var _ IElectionFactory = (*ElectionFactory)(nil)
 
 // election implements IElection using concurrency.Election.
 type election struct {

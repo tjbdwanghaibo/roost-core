@@ -8,9 +8,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
-var _ entity.RemoteOwnershipManager = (*remoteEntityManager)(nil)
+var _ entity.RemoteOwnershipManager = (*Manager)(nil)
 
-func (m *remoteEntityManager) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
+func (m *Manager) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
 	if m == nil || m.ownershipStore == nil {
 		return entity.RemoteEntityMarkerLease{}, false, entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -26,7 +26,7 @@ func (m *remoteEntityManager) GetRemoteOwnership(ctx context.Context, id int64) 
 // ClaimRemoteOwnership atomically creates the first local ownership
 // generation. It is idempotent for this server and fails closed when another
 // server won the claim.
-func (m *remoteEntityManager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
+func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, false)
 	if err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
@@ -56,7 +56,7 @@ func (m *remoteEntityManager) ClaimRemoteOwnership(ctx context.Context, id int64
 	return next, nil
 }
 
-func (m *remoteEntityManager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
+func (m *Manager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, false)
 	if err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
@@ -81,7 +81,7 @@ func (m *remoteEntityManager) EnterRemoteSharedMode(ctx context.Context, id int6
 	return next, nil
 }
 
-func (m *remoteEntityManager) LeaveRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
+func (m *Manager) LeaveRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, true)
 	if err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
@@ -108,7 +108,7 @@ func (m *remoteEntityManager) LeaveRemoteSharedMode(ctx context.Context, id int6
 
 // TransferRemoteOwnership drains admitted local writes and, for shared mode,
 // holds the distributed entity lock while advancing marker and route epochs.
-func (m *remoteEntityManager) TransferRemoteOwnership(ctx context.Context, id int64, newOwnerSID int32) (entity.RemoteEntityMarkerLease, error) {
+func (m *Manager) TransferRemoteOwnership(ctx context.Context, id int64, newOwnerSID int32) (entity.RemoteEntityMarkerLease, error) {
 	if newOwnerSID == 0 || m == nil || newOwnerSID == m.localSid {
 		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: invalid ownership transfer", entity.ErrRemoteOwnerTransition)
 	}
@@ -139,7 +139,7 @@ func (m *remoteEntityManager) TransferRemoteOwnership(ctx context.Context, id in
 // beginOwnershipTransition serializes with local write admission. When
 // lockShared is true it also acquires the distributed lock if the observed
 // state is shared, then refreshes ownership under that lock before returning.
-func (m *remoteEntityManager) beginOwnershipTransition(parent context.Context, id int64, lockShared bool) (*remoteEntityWrapper, context.Context, func(), error) {
+func (m *Manager) beginOwnershipTransition(parent context.Context, id int64, lockShared bool) (*remoteEntityWrapper, context.Context, func(), error) {
 	if m == nil || m.ownershipStore == nil || m.localSid == 0 {
 		return nil, nil, nil, entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -190,7 +190,7 @@ func (m *remoteEntityManager) beginOwnershipTransition(parent context.Context, i
 	return wrapper, ctx, release, nil
 }
 
-func (m *remoteEntityManager) ownershipContext(parent context.Context) (context.Context, context.CancelFunc) {
+func (m *Manager) ownershipContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -220,7 +220,7 @@ func ownershipFenceError(id int64, lease entity.RemoteEntityMarkerLease) error {
 	return fmt.Errorf("%w: entity=%d owner=%d marker=%d route=%d shared=%t", entity.ErrRemoteFenced, id, lease.OwnerSid, lease.MarkerEpoch, lease.RouteEpoch, lease.Shared)
 }
 
-func (m *remoteEntityManager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEntityWrapper, lease entity.RemoteEntityMarkerLease, target entity.RemoteOwnershipState) error {
+func (m *Manager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEntityWrapper, lease entity.RemoteEntityMarkerLease, target entity.RemoteOwnershipState) error {
 	live := wrapper.lookupLocalEntity()
 	if live == nil {
 		var err error
@@ -254,7 +254,7 @@ func (m *remoteEntityManager) transitionLiveOwnership(ctx context.Context, wrapp
 	return nil
 }
 
-func (m *remoteEntityManager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityWrapper, lease entity.RemoteEntityMarkerLease, state entity.RemoteOwnershipState, excludeSID int32) error {
+func (m *Manager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityWrapper, lease entity.RemoteEntityMarkerLease, state entity.RemoteOwnershipState, excludeSID int32) error {
 	live := wrapper.lookupLocalEntity()
 	if live == nil {
 		var err error
@@ -284,7 +284,7 @@ func (m *remoteEntityManager) applyLiveOwnership(ctx context.Context, wrapper *r
 	return nil
 }
 
-func (m *remoteEntityManager) restoreOwnershipAfterTransitionFailure(live entity.IThreadSafeRemoteEntity, lease entity.RemoteEntityMarkerLease) error {
+func (m *Manager) restoreOwnershipAfterTransitionFailure(live entity.IThreadSafeRemoteEntity, lease entity.RemoteEntityMarkerLease) error {
 	if live == nil || live.GetMutex() == nil {
 		return nil
 	}

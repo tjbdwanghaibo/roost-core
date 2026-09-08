@@ -14,16 +14,16 @@ func TestConcurrentOwnershipClaimElectsExactlyOneOwner(t *testing.T) {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id := testRemoteFullIDWithKind(1412, 1, kind)
 	store := newMockMarkerStore()
-	first := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	second := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 2000)
+	first := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	second := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 2000)
 	first.SetOwnershipStore(store)
 	second.SetOwnershipStore(store)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
-	for _, mgr := range []*remoteEntityManager{first, second} {
+	for _, mgr := range []*Manager{first, second} {
 		wg.Add(1)
-		go func(m *remoteEntityManager) {
+		go func(m *Manager) {
 			defer wg.Done()
 			_, err := m.ClaimRemoteOwnership(context.Background(), id)
 			errs <- err
@@ -55,7 +55,7 @@ func TestOwnershipModeTransitionsAdvanceMarkerEpoch(t *testing.T) {
 	const kind entity.EntityKind = 133
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id := testRemoteFullIDWithKind(1413, 1, kind)
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 
 	claimed, err := mgr.ClaimRemoteOwnership(context.Background(), id)

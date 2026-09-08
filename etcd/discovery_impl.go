@@ -18,8 +18,8 @@ const (
 	defaultDiscoveryRetryMaxInterval = 30 * time.Second
 )
 
-// discovery implements IDiscovery.
-type discovery struct {
+// Discovery implements IDiscovery.
+type Discovery struct {
 	cli     *clientv3.Client
 	prefix  string
 	ttl     int64
@@ -45,8 +45,8 @@ type discoveryRegistration struct {
 	cancel        context.CancelFunc
 }
 
-func newDiscovery(cli *clientv3.Client, prefix string, ttl int64) *discovery {
-	d := &discovery{
+func NewDiscovery(cli *clientv3.Client, prefix string, ttl int64) *Discovery {
+	d := &Discovery{
 		cli:              cli,
 		prefix:           prefix,
 		ttl:              ttl,
@@ -58,11 +58,11 @@ func newDiscovery(cli *clientv3.Client, prefix string, ttl int64) *discovery {
 	return d
 }
 
-func (d *discovery) Register(ctx context.Context, info *ServiceInfo) error {
+func (d *Discovery) Register(ctx context.Context, info *ServiceInfo) error {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()
 	if d.hasRegistration() {
-		return fmt.Errorf("etcd discovery: service is already registered")
+		return fmt.Errorf("etcd Discovery: service is already registered")
 	}
 	d.markActive()
 	if ctx == nil {
@@ -79,7 +79,7 @@ func (d *discovery) Register(ctx context.Context, info *ServiceInfo) error {
 		reg.cancel()
 		<-reg.keepaliveDone
 		if err := d.revokeLease(ctx, reg.leaseID); err != nil {
-			return fmt.Errorf("etcd discovery: revoke cancelled registration: %w", err)
+			return fmt.Errorf("etcd Discovery: revoke cancelled registration: %w", err)
 		}
 		return context.Canceled
 	}
@@ -87,25 +87,25 @@ func (d *discovery) Register(ctx context.Context, info *ServiceInfo) error {
 	return nil
 }
 
-func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *ServiceInfo) (discoveryRegistration, error) {
+func (d *Discovery) registerOnceWithEtcd(ctx context.Context, info *ServiceInfo) (discoveryRegistration, error) {
 	// Grant lease
 	resp, err := d.cli.Grant(ctx, d.ttl)
 	if err != nil {
-		return discoveryRegistration{}, fmt.Errorf("etcd discovery: grant lease: %w", err)
+		return discoveryRegistration{}, fmt.Errorf("etcd Discovery: grant lease: %w", err)
 	}
 
 	// Build key and value
 	key := fmt.Sprintf("%s%s/%d", d.prefix, info.ServiceType, info.Sid)
 	value, err := json.Marshal(info)
 	if err != nil {
-		return discoveryRegistration{}, fmt.Errorf("etcd discovery: marshal info: %w", err)
+		return discoveryRegistration{}, fmt.Errorf("etcd Discovery: marshal info: %w", err)
 	}
 
 	// Put with lease
 	_, err = d.cli.Put(ctx, key, string(value), clientv3.WithLease(resp.ID))
 	if err != nil {
 		return discoveryRegistration{}, errors.Join(
-			fmt.Errorf("etcd discovery: put: %w", err),
+			fmt.Errorf("etcd Discovery: put: %w", err),
 			d.revokeSetupLease(resp.ID),
 		)
 	}
@@ -116,7 +116,7 @@ func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *ServiceInfo)
 	if err != nil {
 		cancel()
 		return discoveryRegistration{}, errors.Join(
-			fmt.Errorf("etcd discovery: keepalive: %w", err),
+			fmt.Errorf("etcd Discovery: keepalive: %w", err),
 			d.revokeSetupLease(resp.ID),
 		)
 	}
@@ -132,21 +132,21 @@ func (d *discovery) registerOnceWithEtcd(ctx context.Context, info *ServiceInfo)
 	return discoveryRegistration{leaseID: resp.ID, key: key, keepaliveDone: done, cancel: cancel}, nil
 }
 
-func (d *discovery) registrationLoop(ctx context.Context, info *ServiceInfo, reg discoveryRegistration, done chan<- struct{}) {
+func (d *Discovery) registrationLoop(ctx context.Context, info *ServiceInfo, reg discoveryRegistration, done chan<- struct{}) {
 	defer close(done)
 	d.logRegistered(reg)
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("etcd discovery: keepalive stopped", "key", d.currentKey())
+			slog.Debug("etcd Discovery: keepalive stopped", "key", d.currentKey())
 			return
 		case <-reg.keepaliveDone:
 		}
 		if !d.shouldWarnLeaseLost() {
-			slog.Debug("etcd discovery: keepalive stopped", "key", d.currentKey())
+			slog.Debug("etcd Discovery: keepalive stopped", "key", d.currentKey())
 			return
 		}
-		slog.Warn("etcd discovery: lease lost", "key", d.currentKey())
+		slog.Warn("etcd Discovery: lease lost", "key", d.currentKey())
 
 		backoff := d.retryMinInterval
 		for {
@@ -160,17 +160,17 @@ func (d *discovery) registrationLoop(ctx context.Context, info *ServiceInfo, reg
 				reg = next
 				break
 			}
-			slog.Warn("etcd discovery: register retry failed", "key", d.currentKey(), "err", err, "backoff", backoff)
+			slog.Warn("etcd Discovery: register retry failed", "key", d.currentKey(), "err", err, "backoff", backoff)
 			backoff = d.nextBackoff(backoff)
 		}
 	}
 }
 
-func (d *discovery) logRegistered(reg discoveryRegistration) {
-	slog.Info("etcd discovery: registered", "key", reg.key, "lease", reg.leaseID)
+func (d *Discovery) logRegistered(reg discoveryRegistration) {
+	slog.Info("etcd Discovery: registered", "key", reg.key, "lease", reg.leaseID)
 }
 
-func (d *discovery) Deregister(ctx context.Context) error {
+func (d *Discovery) Deregister(ctx context.Context) error {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()
 	if ctx == nil {
@@ -189,23 +189,23 @@ func (d *discovery) Deregister(ctx context.Context) error {
 	// Revoke lease (automatically deletes all keys attached to it)
 	err := d.revokeLease(ctx, leaseID)
 	if err != nil {
-		return fmt.Errorf("etcd discovery: revoke: %w", err)
+		return fmt.Errorf("etcd Discovery: revoke: %w", err)
 	}
-	slog.Info("etcd discovery: deregistered", "key", d.currentKey())
+	slog.Info("etcd Discovery: deregistered", "key", d.currentKey())
 	d.clearRegistration()
 	return nil
 }
 
-func (d *discovery) revokeSetupLease(leaseID clientv3.LeaseID) error {
+func (d *Discovery) revokeSetupLease(leaseID clientv3.LeaseID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := d.revokeLease(ctx, leaseID); err != nil {
-		return fmt.Errorf("etcd discovery: revoke setup lease: %w", err)
+		return fmt.Errorf("etcd Discovery: revoke setup lease: %w", err)
 	}
 	return nil
 }
 
-func (d *discovery) revokeLeaseWithEtcd(ctx context.Context, leaseID clientv3.LeaseID) error {
+func (d *Discovery) revokeLeaseWithEtcd(ctx context.Context, leaseID clientv3.LeaseID) error {
 	if d.cli == nil {
 		return nil
 	}
@@ -213,25 +213,25 @@ func (d *discovery) revokeLeaseWithEtcd(ctx context.Context, leaseID clientv3.Le
 	return err
 }
 
-func (d *discovery) markActive() {
+func (d *Discovery) markActive() {
 	d.mu.Lock()
 	d.stopping = false
 	d.mu.Unlock()
 }
 
-func (d *discovery) markStopping() {
+func (d *Discovery) markStopping() {
 	d.mu.Lock()
 	d.stopping = true
 	d.mu.Unlock()
 }
 
-func (d *discovery) shouldWarnLeaseLost() bool {
+func (d *Discovery) shouldWarnLeaseLost() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return !d.stopping
 }
 
-func (d *discovery) setRegistration(reg discoveryRegistration, loopCancel context.CancelFunc, loopDone chan struct{}) bool {
+func (d *Discovery) setRegistration(reg discoveryRegistration, loopCancel context.CancelFunc, loopDone chan struct{}) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stopping {
@@ -245,13 +245,13 @@ func (d *discovery) setRegistration(reg discoveryRegistration, loopCancel contex
 	return true
 }
 
-func (d *discovery) hasRegistration() bool {
+func (d *Discovery) hasRegistration() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.leaseID != 0 || d.loopDone != nil
 }
 
-func (d *discovery) setCurrentRegistration(reg discoveryRegistration) {
+func (d *Discovery) setCurrentRegistration(reg discoveryRegistration) {
 	d.mu.Lock()
 	d.leaseID = reg.leaseID
 	d.key = reg.key
@@ -259,7 +259,7 @@ func (d *discovery) setCurrentRegistration(reg discoveryRegistration) {
 	d.mu.Unlock()
 }
 
-func (d *discovery) clearRegistration() {
+func (d *Discovery) clearRegistration() {
 	d.mu.Lock()
 	d.leaseID = 0
 	d.key = ""
@@ -267,19 +267,19 @@ func (d *discovery) clearRegistration() {
 	d.mu.Unlock()
 }
 
-func (d *discovery) currentLeaseID() clientv3.LeaseID {
+func (d *Discovery) currentLeaseID() clientv3.LeaseID {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.leaseID
 }
 
-func (d *discovery) currentKey() string {
+func (d *Discovery) currentKey() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.key
 }
 
-func (d *discovery) cancelLoop() {
+func (d *Discovery) cancelLoop() {
 	d.mu.Lock()
 	cancel := d.loopCancel
 	d.loopCancel = nil
@@ -289,7 +289,7 @@ func (d *discovery) cancelLoop() {
 	}
 }
 
-func (d *discovery) cancelKeepalive() {
+func (d *Discovery) cancelKeepalive() {
 	d.mu.Lock()
 	cancel := d.keepaliveCancel
 	d.keepaliveCancel = nil
@@ -299,7 +299,7 @@ func (d *discovery) cancelKeepalive() {
 	}
 }
 
-func (d *discovery) waitLoopDone() {
+func (d *Discovery) waitLoopDone() {
 	d.mu.Lock()
 	done := d.loopDone
 	d.loopDone = nil
@@ -309,7 +309,7 @@ func (d *discovery) waitLoopDone() {
 	}
 }
 
-func (d *discovery) waitRetry(ctx context.Context, delay time.Duration) bool {
+func (d *Discovery) waitRetry(ctx context.Context, delay time.Duration) bool {
 	if delay <= 0 {
 		delay = defaultDiscoveryRetryMinInterval
 	}
@@ -323,7 +323,7 @@ func (d *discovery) waitRetry(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (d *discovery) nextBackoff(cur time.Duration) time.Duration {
+func (d *Discovery) nextBackoff(cur time.Duration) time.Duration {
 	if cur <= 0 {
 		cur = d.retryMinInterval
 	}
@@ -338,7 +338,7 @@ func (d *discovery) nextBackoff(cur time.Duration) time.Duration {
 	return next
 }
 
-func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*ServiceInfo, error) {
+func (d *Discovery) Discover(ctx context.Context, serviceType string) ([]*ServiceInfo, error) {
 	prefix := d.prefix + serviceType + "/"
 	resp, err := d.cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
@@ -348,7 +348,7 @@ func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*Servic
 	for _, kv := range resp.Kvs {
 		info := &ServiceInfo{}
 		if err := json.Unmarshal(kv.Value, info); err != nil {
-			slog.Warn("etcd discovery: unmarshal failed", "key", string(kv.Key), "err", err)
+			slog.Warn("etcd Discovery: unmarshal failed", "key", string(kv.Key), "err", err)
 			continue
 		}
 		infos = append(infos, info)
@@ -356,7 +356,7 @@ func (d *discovery) Discover(ctx context.Context, serviceType string) ([]*Servic
 	return infos, nil
 }
 
-func (d *discovery) WatchService(ctx context.Context, serviceType string) IServiceWatcher {
+func (d *Discovery) WatchService(ctx context.Context, serviceType string) IServiceWatcher {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -366,7 +366,7 @@ func (d *discovery) WatchService(ctx context.Context, serviceType string) IServi
 	return newServiceWatcher(watchCtx, wch, cancel)
 }
 
-var _ IDiscovery = (*discovery)(nil)
+var _ IDiscovery = (*Discovery)(nil)
 
 // serviceWatcher implements IServiceWatcher.
 type serviceWatcher struct {
@@ -432,13 +432,13 @@ func (sw *serviceWatcher) loop(ctx context.Context, wch clientv3.WatchChan) {
 		case resp, ok := <-wch:
 			if !ok {
 				if ctx.Err() == nil {
-					sw.setErr(errors.New("etcd discovery: watch channel closed unexpectedly"))
+					sw.setErr(errors.New("etcd Discovery: watch channel closed unexpectedly"))
 				}
 				return
 			}
 			if err := resp.Err(); err != nil {
 				if ctx.Err() == nil {
-					sw.setErr(fmt.Errorf("etcd discovery: watch failed: %w", err))
+					sw.setErr(fmt.Errorf("etcd Discovery: watch failed: %w", err))
 				}
 				return
 			}

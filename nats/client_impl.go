@@ -19,8 +19,8 @@ const (
 	publishRetryWait = 20 * time.Millisecond
 )
 
-// natsClient implements IClient by wrapping nats-io/nats.go.
-type natsClient struct {
+// Client implements IClient by wrapping nats-io/nats.go.
+type Client struct {
 	conn  *gonats.Conn
 	cfg   *Config
 	state *natsLifecycleState
@@ -35,7 +35,7 @@ func (s *natsLifecycleState) expectedDisconnect() bool {
 	return s != nil && (s.draining.Load() || s.closing.Load())
 }
 
-func newNatsClient(cfg *Config, extra clientOptions) (*natsClient, error) {
+func NewClient(cfg *Config, extra ClientOptions) (*Client, error) {
 	if cfg == nil || strings.TrimSpace(cfg.URL) == "" {
 		return nil, fmt.Errorf("nats: configuration and URL are required")
 	}
@@ -46,10 +46,10 @@ func newNatsClient(cfg *Config, extra clientOptions) (*natsClient, error) {
 		return nil, fmt.Errorf("nats: connect %s: %w", cfg.URL, err)
 	}
 	slog.Info("nats: connected", "url", cfg.URL)
-	return &natsClient{conn: conn, cfg: cfg, state: state}, nil
+	return &Client{conn: conn, cfg: cfg, state: state}, nil
 }
 
-func (c *natsClient) Publish(subject string, data []byte) error {
+func (c *Client) Publish(subject string, data []byte) error {
 	if err := c.validateSubject(subject); err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func (c *natsClient) Publish(subject string, data []byte) error {
 	return fmt.Errorf("nats: publish to %s failed after %d retries: %w", subject, publishRetries, err)
 }
 
-func (c *natsClient) Request(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+func (c *Client) Request(subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	if err := c.validateSubject(subject); err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (c *natsClient) Request(subject string, data []byte, timeout time.Duration)
 	return msg.Data, nil
 }
 
-func (c *natsClient) requestWithContext(ctx context.Context, subject string, data []byte) ([]byte, error) {
+func (c *Client) requestWithContext(ctx context.Context, subject string, data []byte) ([]byte, error) {
 	if err := c.validateSubject(subject); err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func (c *natsClient) requestWithContext(ctx context.Context, subject string, dat
 	return msg.Data, nil
 }
 
-func (c *natsClient) Subscribe(subject string, handler MsgHandler) (ISubscription, error) {
+func (c *Client) Subscribe(subject string, handler MsgHandler) (ISubscription, error) {
 	if err := c.validateSubscription(subject, "", handler); err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (c *natsClient) Subscribe(subject string, handler MsgHandler) (ISubscriptio
 	return &subscription{sub: sub}, nil
 }
 
-func (c *natsClient) QueueSubscribe(subject string, queue string, handler MsgHandler) (ISubscription, error) {
+func (c *Client) QueueSubscribe(subject string, queue string, handler MsgHandler) (ISubscription, error) {
 	if err := c.validateSubscription(subject, queue, handler); err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (c *natsClient) QueueSubscribe(subject string, queue string, handler MsgHan
 	return &subscription{sub: sub}, nil
 }
 
-func (c *natsClient) Drain() error {
+func (c *Client) Drain() error {
 	ctx := context.Background()
 	cancel := func() {}
 	if c != nil && c.cfg != nil && c.cfg.DrainTimeout > 0 {
@@ -145,7 +145,7 @@ func (c *natsClient) Drain() error {
 	return c.DrainWithContext(ctx)
 }
 
-func (c *natsClient) DrainWithContext(ctx context.Context) error {
+func (c *Client) DrainWithContext(ctx context.Context) error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
@@ -171,7 +171,7 @@ func (c *natsClient) DrainWithContext(ctx context.Context) error {
 	return nil
 }
 
-func (c *natsClient) Close() {
+func (c *Client) Close() {
 	if c == nil {
 		return
 	}
@@ -183,11 +183,11 @@ func (c *natsClient) Close() {
 	}
 }
 
-func (c *natsClient) Connected() bool {
+func (c *Client) Connected() bool {
 	return c != nil && c.conn != nil && c.conn.IsConnected()
 }
 
-func (c *natsClient) wrapError(err error) error {
+func (c *Client) wrapError(err error) error {
 	if err == gonats.ErrTimeout {
 		return ErrTimeout
 	}
@@ -200,15 +200,15 @@ func (c *natsClient) wrapError(err error) error {
 	return err
 }
 
-// conn returns the underlying gonats.Conn (for rpcClient internal use).
-func (c *natsClient) natsConn() *gonats.Conn {
+// conn returns the underlying gonats.Conn (for RPCClient internal use).
+func (c *Client) natsConn() *gonats.Conn {
 	if c == nil {
 		return nil
 	}
 	return c.conn
 }
 
-func (c *natsClient) validateSubject(subject string) error {
+func (c *Client) validateSubject(subject string) error {
 	if c == nil || c.conn == nil {
 		return ErrClosed
 	}
@@ -218,7 +218,7 @@ func (c *natsClient) validateSubject(subject string) error {
 	return nil
 }
 
-func (c *natsClient) validateSubscription(subject, queue string, handler MsgHandler) error {
+func (c *Client) validateSubscription(subject, queue string, handler MsgHandler) error {
 	if err := c.validateSubject(subject); err != nil {
 		return err
 	}
@@ -245,4 +245,4 @@ func invokeNatsHandler(handler MsgHandler, msg *Msg) {
 	handler(msg)
 }
 
-var _ IClient = (*natsClient)(nil)
+var _ IClient = (*Client)(nil)

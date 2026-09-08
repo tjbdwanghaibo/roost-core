@@ -23,10 +23,10 @@ func applyOptions(t *testing.T, opts []gonats.Option) gonats.Options {
 // through discovery.
 func TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection(t *testing.T) {
 	cfg := DefaultConfig("nats://127.0.0.1:24222")
-	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, clientOptions{})); got.IgnoreDiscoveredServers {
+	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{})); got.IgnoreDiscoveredServers {
 		t.Fatal("discovered servers must be followed by default")
 	}
-	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, clientOptions{ignoreDiscoveredServers: true})); !got.IgnoreDiscoveredServers {
+	if got := applyOptions(t, buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{ignoreDiscoveredServers: true})); !got.IgnoreDiscoveredServers {
 		t.Fatal("nats.ignore_discovered_servers=true did not reach the connection options")
 	}
 }

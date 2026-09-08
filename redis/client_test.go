@@ -42,7 +42,7 @@ func TestRedisIntegerRejectsInvalidWAITAOFReplyValue(t *testing.T) {
 func TestEvalDurableRejectsClusterTopologyBeforeIO(t *testing.T) {
 	cluster := goredis.NewClusterClient(&goredis.ClusterOptions{Addrs: []string{"127.0.0.1:1"}})
 	defer func() { _ = cluster.Close() }()
-	client := &redisClient{rdb: cluster}
+	client := &Client{rdb: cluster}
 
 	_, _, _, err := client.EvalDurable(context.Background(), "return 1", []string{"{probe}:key"}, 1, 0, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {

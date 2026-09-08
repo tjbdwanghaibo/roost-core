@@ -9,10 +9,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
-func batchHarness(t *testing.T, kind entity.EntityKind, ids ...int64) (*remoteEntityManager, []int64) {
+func batchHarness(t *testing.T, kind entity.EntityKind, ids ...int64) (*Manager, []int64) {
 	t.Helper()
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := newRemoteEntityManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	loader := newRemoteTestLoader()
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())

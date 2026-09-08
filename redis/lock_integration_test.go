@@ -25,7 +25,7 @@ func TestDistLockExpiryAndReacquireIntegration(t *testing.T) {
 	key := "roost:test:distlock:" + rand.Text()
 	defer client.Del(ctx, key)
 
-	factory := newDistLockFactory(client)
+	factory := NewDistLockFactory(client)
 	first := factory.NewLock(key, 80*time.Millisecond).(*distLock)
 	second := factory.NewLock(key, time.Second).(*distLock)
 	if ok, err := first.Acquire(ctx); err != nil || !ok {
