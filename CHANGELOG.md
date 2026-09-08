@@ -24,6 +24,11 @@
 
 ### Changed（测试质量）
 
+- **entitysync 订阅协调器的入口守卫钉住**（U-0104，C2，B-18）。gap map `entitysync` 9 条采样 7 条无覆盖。
+  Subscribe / Unsubscribe：nil 协调器、空 SubscriberRef、只有种类没有身份 → `ErrSubscriberInvalid`；nil 状态、主体 0 → `ErrSubscriptionSubject`，
+  被拒绝的调用不留下任何成员、不碰已有订阅；FlushSubject 的同一组主体守卫；nil `ReliableEnvelopeSinkFunc` 与 `admitEnvelopes` 的 nil 汇
+  → `ErrEnvelopeSinkRequired` 而不是调用 nil（后者从公开 API 不可达——三处前门已各自检查 sink——直接钉包内函数）。
+  `subscription_promises_test.go` 四条；回退七处守卫各红。不改运行时代码。
 - **gap map 采样器跳过 `*_gen.go`**（B-25）：生成文件是同一模板在每个包的实例，其守卫在模板所在处钉一次即可；采样器现在只统计不采样，并在包级与总计里报告跳过的守卫数。
 - **cache ref_hmap 补丁路径解析与 JSON 存储的写规则钉住**（U-0102，C2，B-24 第四项）。nightly gap map 里 `cache` 20 条采样 15 条无覆盖。
   补丁路径：空段、未知字段、末段非标量、中途穿过非结构体字段、空计划——各自以 `ErrRefHMapUnsupported` 拒绝并点名路径，`Patch` 走同一

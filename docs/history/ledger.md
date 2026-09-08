@@ -71,7 +71,7 @@
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `entitysync` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `entitysync` | 09-02 | 09-08 U-0104（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `etcd` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `event` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -221,7 +221,7 @@
 | ~~B-15~~ | 故障矩阵第三切片：NATS `timeout` toxic（半开）对 JetStream 发布确认 / RPC 等待 | 故障矩阵 | 第 8 节 | **已完成 → U-0042**（同时补 `nats.ignore_discovered_servers`）。原备注： 现有两条 NATS 测试覆盖 latency 与 reset_peer；半开连接是另一种失败形态（发布方拿不到 ack 也拿不到错误） |
 | ~~B-16~~ | core `configdata` 定义校验与 auto 表 cfg 标签规则 | C2 | 回退采样 | **已完成 → U-0046** |
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
-| B-18 | core `entitysync`（7/9）| C2 | 回退采样 | mirror → U-0045、saga → U-0050 已完成；entitysync 多为参数守卫，低优先 |
+| ~~B-18~~ | core `entitysync`（7/9）| C2 | 回退采样 | **已完成 → U-0104**：七条全是入口参数守卫（Subscribe / Unsubscribe / FlushSubject 的 subscriber / subject、两处 nil 信封汇），一份 `subscription_promises_test.go` 回退各红；`admitEnvelopes` 的 nil 汇从公开 API 不可达（前门冗余），直接钉包内函数 |
 | B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
@@ -235,6 +235,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0104 | 2026-09-08 | roost-core `entitysync` 订阅协调器入口守卫（B-18） | C2 | 本机重跑采样 7/9 无覆盖，与账本一致；全部为参数 / nil 守卫。`admitEnvelopes` 的 `sink == nil` 三处前门已各自检查，公开 API 不可达（冗余），在包内直接钉；nil 协调器用 `var c *SubscriptionCoordinator` 调方法 | `subscription_promises_test.go` 四条 | 七处守卫回退各红（2～3 条测试） | — |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |
 | U-0103 | 2026-09-07 | roost-service `mail` 生成传输层装配拒绝 / Redis 存储参数守卫 | C2 | B-24 尾项（nightly 16/20，8 条在 `*_rpc_gen.go`，12 个服务共用模板）；`if init; cond {` 形式按文本中和；"缺 handler / 数不符"是字面量表的构造性守卫 | `wiring_promises_test.go` 两条 | 16 处回退 13 红、2 构造性、1 冗余 | — |
