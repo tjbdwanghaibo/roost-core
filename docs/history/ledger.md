@@ -49,7 +49,7 @@
 
 ## 3. 覆盖矩阵
 
-> **新位置**（2026-09-08 收敛）：下表的 kit 行里 nestwal、nats、redis、mongo(+mongotest)、etcd、remoteentity、dataengine（→ `core/dataengine/engine`）、saga、room、lockstep、nettransport、spatial、actionflow、ai、gateway、versionstore、servicerpc、robot、syncstream 的实现已搬到 roost-core 同名包；roost-skill 五包在 `core/skill/…`；roost-service 十二包在 `kit/service/…`。搬迁不算新审计，历史行不改；权威映射见 roost-codegen `internal/roost/migration/consolidation_imports.yaml`。
+> **新位置**（2026-09-08 收敛）：下表的 kit 行里 nestwal、nats、redis、mongo(+mongotest)、etcd、remoteentity、dataengine（→ `core/dataengine/engine`）、saga、room、lockstep、nettransport、spatial、actionflow、ai、gateway、versionstore、servicerpc、robot、syncstream 的实现已搬到 roost-core 同名包（mongo / nats / redis / etcd 的驱动实现在 `core/<x>/driver` 子包，契约仍在 `core/<x>`）；roost-skill 五包在 `core/skill/…`；roost-service 十二包在 `kit/service/…`。搬迁不算新审计，历史行不改；权威映射见 roost-codegen `internal/roost/migration/consolidation_imports.yaml`。
 
 格子 = 最近一次完成单元的日期（+ 单元号）。`09-02` 表示该包在 2026-09-02 全量审计中被覆盖过一轮；`未审` 表示从未按本协议审过；`—` 表示该包不存在此类风险面。
 `cmd/*` 主程序、`examples/*`、`integration` 测试专用包不入账。
@@ -229,7 +229,7 @@
 | ~~B-23~~ | skill 首份 gap map | C2 | gapmap 本地跑 | **已完成 → U-0063 / U-0064 / U-0066**；`skill` 包（executor 的程序不变量、memory_host）17/20 留待 nightly 报告后按实质筛 |
 | ~~B-24~~ | 五仓 nightly gap map 首日（2026-09-07，max=20）选单：core `entity` 19/20、kit `actionflow` 17/20（重入 `ErrReentrantMutation`）、kit `dataengine` 15/20（仓库迁移 / 解码 id 校验）、core `cache` 15/20（ref_hmap 补丁路径）、service `mail` 16/20（多为请求参数守卫，低优先） | C2 | nightly 报告 | **已完成**：entity → U-0099、actionflow → U-0100、dataengine → U-0101、cache → U-0102、mail → U-0103（09-07 一天内） |
 | ~~B-25~~ | 12 个服务包的 `*_rpc_gen.go` 装配守卫在 nightly 报告里各占 8～10 行 GREEN（同一 servicerpc 模板） | C2 / 工具 | nightly 09-07 | **已完成**（09-08）：五仓采样器跳过 `*_gen.go`，只统计并在报告里单列；生成物行为验证归 `framework-compat` / 收敛后的模板测试 |
-| B-26 | D2 把驱动合进契约包：只 import `core/mongo` / `core/nats` / `core/redis` / `core/etcd` 契约的二进制也链接了驱动（nestwal 测试二进制 12.4→23.5 MB，GC 根变多，分配密集基准 +10～33%，`GOGC=off` 差距消失） | 架构 | P5 安静基准归因 | 生产二进制无影响；若要消除，驱动实现下沉 `core/<x>/driver` 子包、契约包保持轻依赖，需在 v1.14.0 发版前做（再改一次路径）。待维护者决定 |
+| ~~B-26~~ | D2 把驱动合进契约包：只 import `core/mongo` / `core/nats` / `core/redis` / `core/etcd` 契约的二进制也链接了驱动（nestwal 测试二进制 12.4→23.5 MB，GC 根变多，分配密集基准 +10～33%，`GOGC=off` 差距消失） | 架构 | P5 安静基准归因 | **已完成**（09-08，方案 B）：驱动实现下沉 `core/{mongo,nats,redis,etcd}/driver`（core `f9ab135` / alpha.5，kit `5392efc` / alpha.2，codegen `16efd4a`），契约包保持轻依赖，新增 `TestCoreContractsDoNotLinkDrivers`；nestwal 测试二进制回到 12.4 MB。记录见 `P5_acceptance.md` §4.2 |
 
 ## 5. 单元日志
 

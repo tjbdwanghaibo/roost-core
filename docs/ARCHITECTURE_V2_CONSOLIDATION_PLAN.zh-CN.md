@@ -51,7 +51,7 @@ roost-core (v1.14+)                roost-kit (v1.13+)               roost-codege
 
 | 原 kit 包 | 去向 | 说明 |
 | --- | --- | --- |
-| actionflow ai configdata dataengine etcd gateway lock lockstep mongo nats nest redis robot saga syncstream | `core/<同名>` | 合入同名契约包。`*_mod.go` **不搬**，留 kit |
+| actionflow ai configdata dataengine etcd gateway lock lockstep mongo nats nest redis robot saga syncstream | `core/<同名>` | 合入同名契约包。`*_mod.go` **不搬**，留 kit。**B-26 修正**：mongo / nats / redis / etcd 的驱动实现最终落在 `core/<x>/driver`（package `driver`），契约包只保留接口、错误、选项，避免只引契约的二进制链接驱动；dataengine 实现落 `core/dataengine/engine`（避免与 nest / nestwal 成环） |
 | nestwal | `core/nestwal` | dataengine、saga 的前置 |
 | remoteentity | `core/remoteentity` | M-02 试点对象；`remote_entity_mod.go` 留 kit |
 | room lockstep nettransport spatial | `core/room` `…/lockstep` `…/nettransport` `…/spatial` | room / lockstep 依赖 nettransport，同批 |

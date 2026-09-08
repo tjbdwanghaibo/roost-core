@@ -56,6 +56,13 @@ codegen `upgrade-compat`：用 v1.11.0 与 v1.12.1 的 roost 生成历史工程 
 
 **结论**：对生产二进制没有影响——游戏服务器本来就链接 Mongo / NATS / Redis 驱动，GC 根集合与收敛前一致；变慢只出现在"只引契约、不引驱动"的二进制（单包测试、工具、极小服务）上。这是 D2"契约与实现同包"的一个此前没量化的代价，记为 **B-26**：若要消除，把四个客户端的驱动实现下沉到子包（`core/mongo/driver` 等），契约包保持轻依赖；这会再改一次 import 路径，**做要在 v1.14.0 发版前做**。
 
+### 4.2 B-26 实施结果（2026-09-08，方案 B）
+
+- core `f9ab135`（tag `v1.14.0-alpha.5`）：`scripts/consolidation/split_driver.py` 把 mongo / nats / redis / etcd 的实现文件搬到 `core/<pkg>/driver`（package `driver`），契约标识符用 `fmongo` / `fnats` / `fredis` / `fetcd` 别名限定；契约包只剩接口、错误、选项。新增边界测试 `TestCoreContractsDoNotLinkDrivers`：core 内非测试、非 driver 的文件不得 import 四个 driver 子包。
+- kit `5392efc`（tag `v1.13.0-alpha.2`）：Mod 与 Mod 级测试改从 `<pkg>/driver` 取实现符号，契约符号仍走 `core/<pkg>`；go.mod → core alpha.5。
+- codegen `16efd4a`：映射表四个 split 条目改指 `core/<pkg>/driver`；升级器对 `renames` 里 `to: core` 的契约级符号（`nats.Permanent`）回指契约包，复用文件已有的契约 import，否则加 `<pkg>contract` 别名；过渡期 pin 升到 alpha.5 / alpha.2。`source-head-check.sh full` 本地通过。
+- 验证：nestwal 测试二进制 23.5 MB → **12.4 MB**（与 kit main 一致）；core / kit `consolidation` CI 绿。`RecordEncodingMatrix` 的 GC 根来源已不存在，正式的安静基准归档放到 P6 发版后与 §4 一并重跑。
+
 ## 5. 故障矩阵与真实环境
 
 - kit CI `integration` job 在新路径上跑通隔离 Mongo 副本集 + NATS JetStream 集群的 Mod 级集成（dataengine real / failover / toxic、saga、remoteentity、nats JetStream RPC toxic）——这是故障矩阵五切片中依赖 Mod 装配的部分。
@@ -68,7 +75,7 @@ core README / docs 导航 / 用户指南 / 排障 / 技能文档、kit README �
 ## 7. 未验证项 / 风险（进 P6 清单）
 
 1. ~~core 侧 Redis toxic 套件未运行~~（已补：本机隔离环境全绿，并挂进 kit 环境脚本与 CI integration 作业，kit CI 绿）。
-2. ~~性能在安静机器上的复测~~（已完成，见 §4.1；引出 B-26）。
+2. ~~性能在安静机器上的复测~~（已完成，见 §4.1；引出 B-26，已按方案 B 实施，见 §4.2）。
 3. framework-compat minimum / released lane 与 release-smoke 只能在正式 tag 后验证；发版当天先发 codegen v1.15.0（业务工程要靠它的升级器），再 core v1.14.0、kit v1.13.0，然后去掉三处 Transitional pin 并看全部 lane。
 4. P3b：kit Mod 仍是编排者，`Assemble*` 下沉未做。
 5. roost-skill / roost-service 仓库归档、README 置顶指向。
