@@ -97,7 +97,7 @@
 | core | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `redis` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `redis` | 09-02 | 09-08 U-0105 / U-0106（回退 20 条，含 `driver`） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/action` | 09-02 | 09-06 U-0073（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/loadtest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -222,7 +222,7 @@
 | ~~B-16~~ | core `configdata` 定义校验与 auto 表 cfg 标签规则 | C2 | 回退采样 | **已完成 → U-0046** |
 | ~~B-17~~ | core `nest` Cast 辅助函数与管理器守卫 | C2 | 回退采样 | **已完成 → U-0047** |
 | ~~B-18~~ | core `entitysync`（7/9）| C2 | 回退采样 | **已完成 → U-0104**：七条全是入口参数守卫（Subscribe / Unsubscribe / FlushSubject 的 subscriber / subject、两处 nil 信封汇），一份 `subscription_promises_test.go` 回退各红；`admitEnvelopes` 的 nil 汇从公开 API 不可达（前门冗余），直接钉包内函数 |
-| B-19 | kit `redis`（20/25）守卫 | C2 | 回退采样 | nestwal → U-0048、remoteentity → U-0049、saga → U-0051 已完成；redis 多为配置 / nil 守卫，低优先 |
+| ~~B-19~~ | kit `redis`（20/25）守卫（新位置 core `redis` + `redis/driver`） | C2 | 回退采样 | **已完成 → U-0105 / U-0106**：本机重采 driver 19/24、契约 2/2；实质项（ErrNil 映射 ×7、WAITAOF 回复形状、整数溢出、pipeline Nil 容忍、锁未持有的 Release / Extend、AutoExtend 失败不起看门狗、CAS 命令与回复形状）与 nil / 配置守卫一并钉住；21 处回退 20 红、1 处断言不可达 |
 | ~~B-20~~ | 回退复测后剩余的实质守卫 | C2 | 第 9 节复测 | **已完成 → U-0052 / U-0053 / U-0062** |
 | ~~B-21~~ | service 回退采样剩余 | C2 | 第 9 节 service 表 | **已完成 → U-0054～U-0060**：mail / platform / session / match / 胶水 / global / rank 各一单元；剩余的是请求参数守卫（playerID ≤ 0 之类）、"vanished during commit" 与需要 Redis 的脚本返回形状守卫，低优先 |
 | ~~B-22~~ | core 首份 nightly gap map 里整片无覆盖的包 | C2 | nightly-gapmap 34029785123 | **已完成 → U-0065～U-0073**（entity / statesync / security / migration / admin / hotcode / ownerroute / robot）；剩余 `syncbus`、`failurelog`、`etcd`、`robot/loadtest` 按实质筛后只有 nil / 空 key 守卫，不开单元 |
@@ -235,6 +235,8 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0106 | 2026-09-08 | roost-core `redis` 契约包 `CompareAndSet` 命令与回复形状守卫（B-19 契约部分） | C2 | 2/2 无覆盖；用只记录调用次数的 `ScriptRunner` 替身证明拒绝发生在发脚本之前 | `cas_promises_test.go` 两条 | 两处守卫回退各红 | — |
+| U-0105 | 2026-09-08 | roost-core `redis/driver` 客户端 / pipeline / 分布式锁守卫（B-19） | C2 | 19/24 无覆盖。`EvalBatchDurable` 需要 `*goredis.Client` 独占连接，接口替身走不到 WAITAOF 解析——写了一个按命令名回放 RESP 的假服务端（`Protocol: 2`、`DisableIdentity`），对照用例先证明握手与正常回复可用；锁未持有的 Release 单看"别人的锁没被删"分不出门口守卫与脚本值守卫（首轮回退 0 红），改为让服务端对脚本报错，门口守卫成为唯一拒绝者；`EvalDurable` 的 `len(results) != 1` 是断言，不可达 | `client_promises_test.go` 四条、`lock_promises_test.go` 四条 | 19 处回退 18 红、1 处不可达 | — |
 | U-0104 | 2026-09-08 | roost-core `entitysync` 订阅协调器入口守卫（B-18） | C2 | 本机重跑采样 7/9 无覆盖，与账本一致；全部为参数 / nil 守卫。`admitEnvelopes` 的 `sink == nil` 三处前门已各自检查，公开 API 不可达（冗余），在包内直接钉；nil 协调器用 `var c *SubscriptionCoordinator` 调方法 | `subscription_promises_test.go` 四条 | 七处守卫回退各红（2～3 条测试） | — |
 | U-0001 | 2026-09-04 | roost-kit `.github/workflows/ci.yml` | C4 | 1：基准步骤仍写 `./sync`，包已在 v1.10.0 改名 `room`，该步每次失败而 `go test ./...` 绿 | `TestCIWorkflowPackagePathsExist`（kit 根） | 修复前运行为红（`ci.yml references ./sync`），修复后绿；基准命令本地按 CI 原样跑通 | T-08 |
 | U-0035 | 2026-09-06 | roost-codegen `internal/nest` 解析器（remote tag / 接收者） | C2 | 八条回退：三条已有测试红；"重复 alias"两处检查互为冗余（任去一处仍红）；缺快照类型、未知 `k=v` 选项、重复快照类型、同文件混用接收者四条全绿 | `promises_test.go` 四条 | 四处回退变红；包绿 | — |

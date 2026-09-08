@@ -24,6 +24,14 @@
 
 ### Changed（测试质量）
 
+- **redis 驱动与契约包的守卫钉住**（U-0105 / U-0106，C2，B-19）。gap map `redis/driver` 24 条采样 19 条、`redis` 2 条采样 2 条无覆盖。
+  驱动：七个读接口（Get / HGet / LPop / RPop / ZScore / ZRank / ZRevRank）把 go-redis 的 `redis.Nil` 映射为契约 `ErrNil`、传输错误原样透传；
+  `EvalDurable` 对形状不对的 WAITAOF 回复报错（用一个照本宣科的 RESP 假服务端对着真实 go-redis 连接跑）；`redisInteger` 拒绝超出 int64 的无符号值；
+  pipeline `Exec` 容忍 `redis.Nil`、上抛真正的错误；分布式锁未持有时 Release / Extend 在发出脚本之前以 `ErrLockNotHeld` 拒绝（不多打往返、不翻成 uncertain）、
+  nil 客户端 / 低于 1ms 的 TTL 以 `ErrDistLockConfig` 拒绝；`AutoExtendLock` 在 Acquire 失败时不启动看门狗、nil 接收者报错。
+  契约：`CompareAndSet` 对 nil 客户端 / 空 key / nil Next 在发脚本之前拒绝，对非二元组回复报错。
+  `client_promises_test.go` 四条、`lock_promises_test.go` 四条、`cas_promises_test.go` 两条；回退 21 处守卫 20 红，
+  1 处不红：`EvalDurable` 的 `len(results) != 1` 是对 `EvalBatchDurable` 的断言（成功时结果数恒等于调用数），不可达。不改运行时代码。
 - **entitysync 订阅协调器的入口守卫钉住**（U-0104，C2，B-18）。gap map `entitysync` 9 条采样 7 条无覆盖。
   Subscribe / Unsubscribe：nil 协调器、空 SubscriberRef、只有种类没有身份 → `ErrSubscriberInvalid`；nil 状态、主体 0 → `ErrSubscriptionSubject`，
   被拒绝的调用不留下任何成员、不碰已有订阅；FlushSubject 的同一组主体守卫；nil `ReliableEnvelopeSinkFunc` 与 `admitEnvelopes` 的 nil 汇
