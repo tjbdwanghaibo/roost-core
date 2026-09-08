@@ -45,8 +45,17 @@ func TestGroupTransitionRequestsRefuseZeroGroupsUnknownEntitiesAndOverlaps(t *te
 		t.Fatal("refused requests must not leave a transition pending on the entity")
 	}
 
+	// Hold the entity's lock so the dispatched transition cannot complete:
+	// under the race detector the worker otherwise finishes the join before
+	// the second request is issued, and "pending" is no longer observable.
+	mu := ent.GetMutex()
+	mu.Lock()
+	t.Cleanup(mu.Unlock)
 	if err := mgr.RequestJoinEntityLockGroup(id, 5); err != nil {
 		t.Fatalf("first join request: %v", err)
+	}
+	if !ent.Base().GroupTransitionPending() {
+		t.Fatal("the first join must be pending while the entity lock is held")
 	}
 	if err := mgr.RequestMoveEntityLockGroup(id, 6); !errors.Is(err, ErrEntityGroupTransitionPending) {
 		t.Fatalf("second request while the first is pending = %v", err)
