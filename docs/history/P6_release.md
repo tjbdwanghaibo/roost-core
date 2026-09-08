@@ -44,7 +44,7 @@
 
 ## 6. 遗留
 
-- 发版后安静基准归档（`P5_acceptance.md` §4，B-26 后重跑）。
-- P3b：kit Mod 瘦身（`Assemble*` 下沉 core）。
-- B-14 / B-18 / B-19。
+- ~~发版后安静基准归档~~（09-08 完成，`P5_acceptance.md` §4.3，B-26 关闭）。
+- ~~P3b：kit Mod 瘦身~~（09-08 完成，`P3b_mods.md`；09-09 发 core v1.15.0 / kit v1.14.0 / codegen v1.15.1）。
+- ~~B-14 / B-18 / B-19~~（U-0107 / U-0104 / U-0105+U-0106）。
 - 升级器映射表里 `renames` 的 `to: core` 语义现已区分"契约包"与"driver 子包"（`nats.Permanent`），其他拆分包若日后出现类似契约级符号，加进 `renames` 即可。

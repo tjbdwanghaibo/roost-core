@@ -2,7 +2,7 @@
 
 关联：[P6_release.md](P6_release.md) §6、[P5_acceptance.md](P5_acceptance.md) §4、[P3_kit.md](P3_kit.md) §1.1、[账本](ledger.md) §4（B-14 / B-18 / B-19）、[v2 收敛方案](../ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md) §6。
 
-状态：**执行中**（2026-09-08 决定：B-14 不单发补丁，修复合 main 后随 P3b 的 core v1.15.0 发版）。本机核对（2026-09-08）：三仓 main 干净，core `212afb7` / kit `e6163c5` / codegen `d24a6d1`；正式 tag core v1.14.0 / kit v1.13.0 / codegen v1.15.0；go.work 只含三仓；本机有 docker CLI（brew），但执行时守护进程未运行、未找到运行时（Docker Desktop / colima / OrbStack 均无），需要先起 daemon 才能跑故障矩阵与 Mod 级集成；benchstat 已 `go install` 到 `$(go env GOPATH)/bin`；`/tmp/roost-kit-main` 工作树已不存在。
+状态：**五项全部完成**（2026-09-09 发版收尾；2026-09-08 决定：B-14 不单发补丁，修复合 main 后随 P3b 的 core v1.15.0 发版）。本机核对（2026-09-08）：三仓 main 干净，core `212afb7` / kit `e6163c5` / codegen `d24a6d1`；正式 tag core v1.14.0 / kit v1.13.0 / codegen v1.15.0；go.work 只含三仓；本机有 docker CLI（brew），但执行时守护进程未运行、未找到运行时（Docker Desktop / colima / OrbStack 均无），需要先起 daemon 才能跑故障矩阵与 Mod 级集成；benchstat 已 `go install` 到 `$(go env GOPATH)/bin`；`/tmp/roost-kit-main` 工作树已不存在。
 
 ## 0. 顺序与分轨
 
@@ -14,7 +14,7 @@
 | 2 | ~~B-19 redis（U-0105 / U-0106）~~ 完成 `d25c088` | U / C2 | 否 | 否 | 1 个会话 |
 | 3 | ~~B-14 摘要丢错（U-0107）~~ 完成（合 main，待随 P3b 发版） | U / C5 | 是（core） | 不单发；随 P3b core v1.15.0 | 1 个会话 |
 | 4 | ~~安静基准归档~~ 完成（`P5_acceptance.md` §4.3，实际四段 95 分钟） | 测量 | 否（补脚本） | 否 | 机器空闲 1～1.5 小时，人工 20 分钟 |
-| 5 | P3b Mod 瘦身：代码完成（core `f928bb2` / `v1.15.0-alpha.1`，kit `17b6ea6`），发版待 CI 与决定，见 [P3b_mods.md](P3b_mods.md) | M | 是（core + kit） | core v1.15.0 → kit v1.14.0 → codegen 清单 | 实际一个会话（三批合一） |
+| 5 | ~~P3b Mod 瘦身~~ 完成并发版（core v1.15.0 / kit v1.14.0 / codegen v1.15.1，2026-09-09），见 [P3b_mods.md](P3b_mods.md) | M | 是（core + kit） | core v1.15.0 → kit v1.14.0 → codegen 清单 | 实际一个会话（三批合一） |
 
 理由：1、2 只加测试，先把两个 B 项关掉、账本干净；3 是唯一的 bug 修复，单独走补丁线，不和 P3b 的 API 变动混在一个版本里；4 放在 3 之后、机器空闲时段（午休或过夜，`caffeinate -i`），因为 B-26 之后代码没再动过 nestwal / dataengine / saga，何时跑结果一样；5 最大，最后做，且它的 core 发版顺带把 3 的修复带进 minor。
 

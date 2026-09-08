@@ -1,7 +1,7 @@
 # P3b：kit Mod 瘦身（`Assemble*` 下沉 core）
 
 批次：P3b（[执行方案](POST_RELEASE_PLAN_2026-09-08.md) §5；P3 §1.1 末记下的后续）
-状态：**代码完成，core 已打 `v1.15.0-alpha.1`，kit 已切换；正式发版待做**（2026-09-08）
+状态：**完成并发版**（2026-09-09：core v1.15.0 → kit v1.14.0 → codegen v1.15.1）
 前置：P6 已发版（core v1.14.0 / kit v1.13.0 / codegen v1.15.0）；U-0104～U-0107 已合 core main
 
 ## 1. 完成定义与做法
@@ -59,4 +59,6 @@ room / mongo 本来就薄（只调已导出构造器、不碰 `Raw()`），不�
 - kit main `17b6ea6`（go.mod → core `v1.15.0-alpha.1`）：`ci` 六个作业全绿（released-core ubuntu / windows、local-core-source、integration、service-redis、release-hygiene）。
 - codegen：本地 `source-head-check.sh full` 对两仓工作树通过；CI 的 `framework-compat` source-head lane 会在下次 push / 每日 03:17 用 main 源码跑。
 
-**正式发版待做**（顺序同 P6）：core `scripts/pretag.sh v1.15.0` → tag（含 U-0107 的 B-14 修复与本批 Assemble*）→ kit go.mod 升 v1.15.0、`pretag.sh v1.14.0` → tag → codegen `ci/framework-release.yaml` 清单改 core v1.15.0 / kit v1.14.0、`scripts/source-head-check.sh` 默认 pin 同步、`pretag.sh v1.15.1` → tag → 看 `framework-release` 与 `framework-compat` 六条 lane。
+**正式发版（2026-09-09，顺序同 P6）**：core `v1.15.0` → `16dbc96`（tag CI 绿）；kit go.mod → core v1.15.0（`af9204e`，main CI 六作业绿）→ `v1.14.0`（tag CI 绿）；codegen 清单 core v1.15.0 / kit v1.14.0、source-head 默认 pin 同步（`a4c9e93`，ci / upgrade-compat / security / framework-compat 六 lane 全绿）→ `v1.15.1`（framework-release 34292627212 全绿，GitHub Release 8 个资产）。proxy 的 kit `@v/list` 在发版后约半小时内尚未列出 v1.14.0，但精确版本可解析，release-smoke / framework-compat 均未受影响。
+
+原计划步骤：core `scripts/pretag.sh v1.15.0` → tag（含 U-0107 的 B-14 修复与本批 Assemble*）→ kit go.mod 升 v1.15.0、`pretag.sh v1.14.0` → tag → codegen `ci/framework-release.yaml` 清单改 core v1.15.0 / kit v1.14.0、`scripts/source-head-check.sh` 默认 pin 同步、`pretag.sh v1.15.1` → tag → 看 `framework-release` 与 `framework-compat` 六条 lane。
