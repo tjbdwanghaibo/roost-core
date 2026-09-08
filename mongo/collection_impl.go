@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// collection implements fmongo.ICollection.
+// collection implements ICollection.
 type collection struct {
 	coll   *mongo.Collection
 	policy IndexMigrationPolicy
@@ -55,7 +54,7 @@ func (c *collection) FindOne(ctx context.Context, filter any, result any) error 
 	return nil
 }
 
-func (c *collection) Find(ctx context.Context, filter any, results any, opts ...fmongo.FindOption) error {
+func (c *collection) Find(ctx context.Context, filter any, results any, opts ...FindOption) error {
 	findOpts := options.Find()
 	for _, opt := range opts {
 		if opt.Sort != nil {
@@ -78,7 +77,7 @@ func (c *collection) Find(ctx context.Context, filter any, results any, opts ...
 	return wrapError(cursor.All(ctx, results))
 }
 
-func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
+func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...FindOption) error {
 	if consume == nil {
 		return fmt.Errorf("mongo: nil stream consumer")
 	}
@@ -111,7 +110,7 @@ func (c *collection) StreamFind(ctx context.Context, filter any, consume func([]
 	return wrapError(cursor.Err())
 }
 
-func (c *collection) UpdateOne(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+func (c *collection) UpdateOne(ctx context.Context, filter any, update any) (*UpdateResult, error) {
 	result, err := c.coll.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return nil, wrapError(err)
@@ -119,7 +118,7 @@ func (c *collection) UpdateOne(ctx context.Context, filter any, update any) (*fm
 	return convertUpdateResult(result), nil
 }
 
-func (c *collection) UpdateMany(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+func (c *collection) UpdateMany(ctx context.Context, filter any, update any) (*UpdateResult, error) {
 	result, err := c.coll.UpdateMany(ctx, filter, update)
 	if err != nil {
 		return nil, wrapError(err)
@@ -127,12 +126,12 @@ func (c *collection) UpdateMany(ctx context.Context, filter any, update any) (*f
 	return convertUpdateResult(result), nil
 }
 
-func (c *collection) ReplaceOne(ctx context.Context, filter any, replacement any) (*fmongo.UpdateResult, error) {
+func (c *collection) ReplaceOne(ctx context.Context, filter any, replacement any) (*UpdateResult, error) {
 	result, err := c.coll.ReplaceOne(ctx, filter, replacement)
 	if err != nil {
 		return nil, wrapError(err)
 	}
-	return &fmongo.UpdateResult{
+	return &UpdateResult{
 		MatchedCount:  result.MatchedCount,
 		ModifiedCount: result.ModifiedCount,
 		UpsertedCount: result.UpsertedCount,
@@ -158,7 +157,7 @@ func (c *collection) DeleteMany(ctx context.Context, filter any) (int64, error) 
 
 // --- FindAndModify ---
 
-func (c *collection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) error {
+func (c *collection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...FindOneAndUpdateOption) error {
 	foOpts := options.FindOneAndUpdate()
 	for _, opt := range opts {
 		if opt.Upsert {
@@ -201,25 +200,25 @@ func (c *collection) Aggregate(ctx context.Context, pipeline any, results any) e
 
 // --- Bulk ---
 
-func (c *collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
+func (c *collection) BulkWrite(ctx context.Context, models []WriteModel) (*BulkWriteResult, error) {
 	writeModels := make([]mongo.WriteModel, len(models))
 	for i, m := range models {
 		switch m.Type {
-		case fmongo.WriteModelInsertOne:
+		case WriteModelInsertOne:
 			writeModels[i] = mongo.NewInsertOneModel().SetDocument(m.Document)
-		case fmongo.WriteModelUpdateOne:
+		case WriteModelUpdateOne:
 			wm := mongo.NewUpdateOneModel().SetFilter(m.Filter).SetUpdate(m.Update)
 			if m.Upsert {
 				wm.SetUpsert(true)
 			}
 			writeModels[i] = wm
-		case fmongo.WriteModelReplaceOne:
+		case WriteModelReplaceOne:
 			wm := mongo.NewReplaceOneModel().SetFilter(m.Filter).SetReplacement(m.Document)
 			if m.Upsert {
 				wm.SetUpsert(true)
 			}
 			writeModels[i] = wm
-		case fmongo.WriteModelDeleteOne:
+		case WriteModelDeleteOne:
 			writeModels[i] = mongo.NewDeleteOneModel().SetFilter(m.Filter)
 		default:
 			return nil, fmt.Errorf("mongo: unsupported bulk write model type %d at index %d", m.Type, i)
@@ -230,7 +229,7 @@ func (c *collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) 
 	if err != nil {
 		return nil, wrapError(err)
 	}
-	return &fmongo.BulkWriteResult{
+	return &BulkWriteResult{
 		InsertedCount: result.InsertedCount,
 		MatchedCount:  result.MatchedCount,
 		ModifiedCount: result.ModifiedCount,
@@ -241,7 +240,7 @@ func (c *collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) 
 
 // --- Index ---
 
-func (c *collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexModel) error {
+func (c *collection) EnsureIndexes(ctx context.Context, indexes []IndexModel) error {
 	if len(indexes) == 0 {
 		return nil
 	}
@@ -253,7 +252,7 @@ func (c *collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexMo
 	return nil
 }
 
-func (c *collection) ensureIndex(ctx context.Context, idx fmongo.IndexModel) error {
+func (c *collection) ensureIndex(ctx context.Context, idx IndexModel) error {
 	model := mongoIndexModel(idx)
 	_, err := c.coll.Indexes().CreateOne(ctx, model)
 	if err == nil {
@@ -269,21 +268,21 @@ func (c *collection) ensureIndex(ctx context.Context, idx fmongo.IndexModel) err
 	return err
 }
 
-func shouldRecreateIndexOnConflict(idx fmongo.IndexModel, policy IndexMigrationPolicy) bool {
+func shouldRecreateIndexOnConflict(idx IndexModel, policy IndexMigrationPolicy) bool {
 	if !policy.AllowRecreate {
 		return false
 	}
 	switch idx.ConflictPolicy {
-	case fmongo.IndexConflictRecreate:
+	case IndexConflictRecreate:
 		return true
-	case fmongo.IndexConflictFail:
+	case IndexConflictFail:
 		return false
 	default:
 		return idx.RecreateOnConflict
 	}
 }
 
-func mongoIndexModel(idx fmongo.IndexModel) mongo.IndexModel {
+func mongoIndexModel(idx IndexModel) mongo.IndexModel {
 	model := mongo.IndexModel{
 		Keys: idx.Keys,
 	}
@@ -333,8 +332,8 @@ func isIndexNotFound(err error) bool {
 
 // --- helpers ---
 
-func convertUpdateResult(r *mongo.UpdateResult) *fmongo.UpdateResult {
-	return &fmongo.UpdateResult{
+func convertUpdateResult(r *mongo.UpdateResult) *UpdateResult {
+	return &UpdateResult{
 		MatchedCount:  r.MatchedCount,
 		ModifiedCount: r.ModifiedCount,
 		UpsertedCount: r.UpsertedCount,
@@ -354,10 +353,10 @@ func wrapError(err error) error {
 		return nil
 	}
 	if err == mongo.ErrNoDocuments {
-		return fmongo.ErrNotFound
+		return ErrNotFound
 	}
 	if mongo.IsDuplicateKeyError(err) {
-		return fmongo.ErrDuplicateKey
+		return ErrDuplicateKey
 	}
 	return err
 }
@@ -365,5 +364,5 @@ func wrapError(err error) error {
 // bson is imported for potential use by index keys
 var _ = bson.D{}
 
-var _ fmongo.ICollection = (*collection)(nil)
-var _ fmongo.IStreamingCollection = (*collection)(nil)
+var _ ICollection = (*collection)(nil)
+var _ IStreamingCollection = (*collection)(nil)

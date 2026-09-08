@@ -8,7 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// session implements fmongo.ISession.
+// session implements ISession.
 type session struct {
 	sess    *mongo.Session
 	timeout time.Duration

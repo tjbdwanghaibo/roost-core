@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -15,7 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
-// mongoClient implements fmongo.IMongo by wrapping mongo-driver v2.
+// mongoClient implements IMongo by wrapping mongo-driver v2.
 type mongoClient struct {
 	cli               *mongo.Client
 	policy            IndexMigrationPolicy
@@ -23,7 +21,7 @@ type mongoClient struct {
 	requireReplicaSet bool
 }
 
-func newMongoClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*mongoClient, error) {
+func newMongoClient(cfg *Config, policy IndexMigrationPolicy) (*mongoClient, error) {
 	wc := writeconcern.Majority()
 	journal := true
 	wc.Journal = &journal
@@ -47,16 +45,16 @@ func newMongoClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*mongoClie
 	return &mongoClient{cli: cli, policy: policy, txnTimeout: cfg.TransactionTimeout, requireReplicaSet: cfg.RequireReplicaSet}, nil
 }
 
-func (c *mongoClient) Database(name string) fmongo.IDatabase {
+func (c *mongoClient) Database(name string) IDatabase {
 	return newDatabase(c.cli.Database(name), c.policy)
 }
 
-func (c *mongoClient) DatabaseForSid(prefix string, sid int32) fmongo.IDatabase {
+func (c *mongoClient) DatabaseForSid(prefix string, sid int32) IDatabase {
 	name := fmt.Sprintf("%s_%d", prefix, sid)
 	return newDatabase(c.cli.Database(name), c.policy)
 }
 
-func (c *mongoClient) StartSession(ctx context.Context) (fmongo.ISession, error) {
+func (c *mongoClient) StartSession(ctx context.Context) (ISession, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -105,4 +103,4 @@ func (c *mongoClient) Close(ctx context.Context) error {
 	return c.cli.Disconnect(ctx)
 }
 
-var _ fmongo.IMongo = (*mongoClient)(nil)
+var _ IMongo = (*mongoClient)(nil)

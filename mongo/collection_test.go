@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-
 	drivermongo "go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -46,7 +44,7 @@ func TestIsIndexNotFound(t *testing.T) {
 }
 
 func TestIndexConflictPolicyRequiresExplicitAutoRecreate(t *testing.T) {
-	idx := fmongo.IndexModel{Name: "idx_player", ConflictPolicy: fmongo.IndexConflictRecreate}
+	idx := IndexModel{Name: "idx_player", ConflictPolicy: IndexConflictRecreate}
 	if shouldRecreateIndexOnConflict(idx, IndexMigrationPolicy{}) {
 		t.Fatal("index conflict should not recreate without explicit migration policy")
 	}
@@ -56,21 +54,21 @@ func TestIndexConflictPolicyRequiresExplicitAutoRecreate(t *testing.T) {
 }
 
 func TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry(t *testing.T) {
-	relative := resolveIndexOptions(t, fmongo.IndexModel{TTL: 60})
+	relative := resolveIndexOptions(t, IndexModel{TTL: 60})
 	if relative.ExpireAfterSeconds == nil || *relative.ExpireAfterSeconds != 60 {
 		t.Fatalf("relative ttl=%v, want 60", relative.ExpireAfterSeconds)
 	}
-	absolute := resolveIndexOptions(t, fmongo.IndexModel{ExpireAt: true})
+	absolute := resolveIndexOptions(t, IndexModel{ExpireAt: true})
 	if absolute.ExpireAfterSeconds == nil || *absolute.ExpireAfterSeconds != 0 {
 		t.Fatalf("absolute ttl=%v, want 0", absolute.ExpireAfterSeconds)
 	}
-	none := resolveIndexOptions(t, fmongo.IndexModel{})
+	none := resolveIndexOptions(t, IndexModel{})
 	if none.ExpireAfterSeconds != nil {
 		t.Fatalf("unset ttl=%v, want nil", none.ExpireAfterSeconds)
 	}
 }
 
-func resolveIndexOptions(t *testing.T, idx fmongo.IndexModel) options.IndexOptions {
+func resolveIndexOptions(t *testing.T, idx IndexModel) options.IndexOptions {
 	t.Helper()
 	var resolved options.IndexOptions
 	for _, apply := range mongoIndexModel(idx).Options.List() {
@@ -97,9 +95,9 @@ func TestStringifyIDDoesNotExposeNilSentinel(t *testing.T) {
 // no test red before this one existed.
 func TestBulkWriteRefusesAnUnknownModelTypeBeforeReachingTheDriver(t *testing.T) {
 	c := &collection{}
-	_, err := c.BulkWrite(context.Background(), []fmongo.WriteModel{
-		{Type: fmongo.WriteModelInsertOne, Document: map[string]any{"a": 1}},
-		{Type: fmongo.WriteModelType(99)},
+	_, err := c.BulkWrite(context.Background(), []WriteModel{
+		{Type: WriteModelInsertOne, Document: map[string]any{"a": 1}},
+		{Type: WriteModelType(99)},
 	})
 	if err == nil {
 		t.Fatal("an unknown write model type was accepted")
