@@ -5,6 +5,7 @@
 目标读者：框架维护者、接手本任务的开发者或 Agent。
 
 > 2026-09-08 复核：方法论沿用；四处事实修正（Skill 检出过期、source-head 通路已存在于 `framework-compat`、机器细节、推送规则）与架构方向 A / B / C 待决见 [PLAN_REVIEW_2026-09-08](history/PLAN_REVIEW_2026-09-08.md)。在其 §2 决定前不动实现文件。
+> 2026-09-08 决定：方向定为全量下沉并五仓合三仓（skill → core、service → kit），版本走 v2 模块路径；分阶段方案、包映射表与在途改动处置见 [ARCHITECTURE_V2_CONSOLIDATION_PLAN](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。本文的 M 批次编号保留、内容映射到该方案的 P2 ①～⑨。
 
 ## 1. 目标与事实来源
 

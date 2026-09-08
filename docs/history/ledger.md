@@ -7,6 +7,7 @@
 > M-00a 消费方对齐及五仓基线见 [续跑记录](M-00a_SOURCE_HEAD_ALIGNMENT.md)；这是迁移前置结构工作，不计为新增 U 单元或覆盖矩阵审计。
 > 2026-09-08 五仓最近提交已复核，见 [提交与实施状态更新](COMMIT_REVIEW_2026-09-08.md)。本次仅更新文档，不新增 U/T、不关闭 B 项、不刷新覆盖矩阵；历史测试通过与本次工具链环境失败分别记录。
 > 对统一方案的复核与后续工作清单见 [PLAN_REVIEW_2026-09-08](PLAN_REVIEW_2026-09-08.md)：Skill 另一机器检出过期（main 无 cube-* 引用）、source-head 通路已在 codegen `framework-compat`、架构方向 A / B / C 待定。
+> 架构方向已定：五仓合三仓、实现下沉 core/v2，见 [v2 收敛方案](../ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。U 编号继续；搬迁不算新审计；第 3 节将按映射表加"v2 位置"列。
 
 ## 1. 工作单元协议
 
