@@ -88,10 +88,10 @@ func TestRemoteInterestRegistryRejectsUnusableInterest(t *testing.T) {
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
 	future := time.Now().Add(time.Second).UnixNano()
 	cases := map[string]entity.RemoteSnapshotInterest{
-		"consumer zero": {ConsumerSID: 0, Key: key, ExpiresAt: future},
+		"consumer zero":     {ConsumerSID: 0, Key: key, ExpiresAt: future},
 		"key kind mismatch": {ConsumerSID: 7, Key: entity.RemoteSnapshotKey{EntityID: id, Kind: kind + 1, Scope: 1}, ExpiresAt: future},
-		"key raw id": {ConsumerSID: 7, Key: entity.RemoteSnapshotKey{EntityID: 1904, Kind: kind, Scope: 1}, ExpiresAt: future},
-		"already expired": {ConsumerSID: 7, Key: key, ExpiresAt: time.Now().Add(-time.Millisecond).UnixNano()},
+		"key raw id":        {ConsumerSID: 7, Key: entity.RemoteSnapshotKey{EntityID: 1904, Kind: kind, Scope: 1}, ExpiresAt: future},
+		"already expired":   {ConsumerSID: 7, Key: key, ExpiresAt: time.Now().Add(-time.Millisecond).UnixNano()},
 	}
 	for name, interest := range cases {
 		t.Run(name, func(t *testing.T) {

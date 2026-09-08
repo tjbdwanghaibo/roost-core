@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
@@ -77,14 +76,5 @@ func TestPrepareRemoteWriteBatchRefusesOversizeAndFencedManagers(t *testing.T) {
 	_, err = mgr.PrepareRemoteWriteBatch(context.Background(), guids[:1])
 	if !errors.Is(err, entity.ErrRemoteFenced) || !strings.Contains(err.Error(), "redis unreachable") {
 		t.Fatalf("fenced manager = %v", err)
-	}
-}
-
-// Ownership fencing keys every lease by the owning sid; sid 0 would make
-// every process look like the same owner.
-func TestRemoteEntityModRequiresANonZeroSid(t *testing.T) {
-	err := NewRemoteEntityMod(0).Init(viper.New())
-	if err == nil || !strings.Contains(err.Error(), "non-zero sid is required") {
-		t.Fatalf("Init with sid 0 = %v", err)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 )
 
 func newRemoteMongoFake() *mongotest.Client { return mongotest.NewClient() }
