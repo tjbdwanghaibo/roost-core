@@ -50,7 +50,7 @@ func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest
 }
 
 func markerCollection(client *mongotest.Client) *mongotest.Collection {
-	return client.Collection(testDatabase, transactionCollection)
+	return client.Collection(testDatabase, TransactionCollection)
 }
 
 // seedHero installs the document an exact-version mutation expects to find.
@@ -87,7 +87,7 @@ func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
 	if err := store.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	receipts := client.Collection(testDatabase, receiptCollection)
+	receipts := client.Collection(testDatabase, ReceiptCollection)
 	if len(receipts.Indexes) != 1 {
 		t.Fatalf("receipt indexes=%d, want 1", len(receipts.Indexes))
 	}
@@ -97,7 +97,7 @@ func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
 	}
 	// The outbox claim path and the effect-id uniqueness both depend on their
 	// index existing; assert them rather than trusting the call went through.
-	outbox := client.Collection(testDatabase, outboxCollection)
+	outbox := client.Collection(testDatabase, OutboxCollection)
 	if !outbox.HasIndex("available_at", "lease_until") || !outbox.HasIndex("effect_id") {
 		t.Fatalf("outbox indexes=%+v", outbox.Indexes)
 	}
@@ -245,7 +245,7 @@ func TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken(t *testing.T) {
 				t.Fatalf("applied=%v want=%v (document=%v)", applied, tc.apply, doc)
 			}
 			// A lease fence is a precondition, never a business receipt.
-			if receipts := client.Collection(testDatabase, receiptCollection).Len(); receipts != 0 {
+			if receipts := client.Collection(testDatabase, ReceiptCollection).Len(); receipts != 0 {
 				t.Fatalf("lease fence leaked into receipt collection (%d docs)", receipts)
 			}
 		})
@@ -627,8 +627,8 @@ func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing
 	if client.Sessions() != 1 {
 		t.Fatalf("sessions=%d, want 1", client.Sessions())
 	}
-	if client.Collection(testDatabase, outboxCollection).Len() != 1 ||
-		client.Collection(testDatabase, receiptCollection).Len() != 1 ||
+	if client.Collection(testDatabase, OutboxCollection).Len() != 1 ||
+		client.Collection(testDatabase, ReceiptCollection).Len() != 1 ||
 		markerCollection(client).Len() != 1 {
 		t.Fatal("transaction did not stage effect, receipt, and transaction identity")
 	}
@@ -636,7 +636,7 @@ func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing
 	if err := store.Project(context.Background(), record); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if client.Collection(testDatabase, outboxCollection).Len() != 1 || client.Collection(testDatabase, receiptCollection).Len() != 1 {
+	if client.Collection(testDatabase, OutboxCollection).Len() != 1 || client.Collection(testDatabase, ReceiptCollection).Len() != 1 {
 		t.Fatal("replay staged duplicates")
 	}
 }
@@ -651,7 +651,7 @@ func TestMongoStoreReceiptIdentityIncludesCompletionPayload(t *testing.T) {
 	if err := store.stageReceipt(context.Background(), "tx-1", receipt); err != nil {
 		t.Fatalf("identical receipt replay: %v", err)
 	}
-	if client.Collection(testDatabase, receiptCollection).Len() != 1 {
+	if client.Collection(testDatabase, ReceiptCollection).Len() != 1 {
 		t.Fatal("identical receipt replay inserted a duplicate")
 	}
 	// Same identity, different completion payload: an identity conflict.
@@ -671,7 +671,7 @@ func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
 	if err := store.stageEffect(context.Background(), "tx-1", effect); err != nil {
 		t.Fatalf("identical effect replay: %v", err)
 	}
-	if client.Collection(testDatabase, outboxCollection).Len() != 1 {
+	if client.Collection(testDatabase, OutboxCollection).Len() != 1 {
 		t.Fatal("identical effect replay staged a duplicate")
 	}
 	// The same effect id under a different transaction is a WAL identity bug.

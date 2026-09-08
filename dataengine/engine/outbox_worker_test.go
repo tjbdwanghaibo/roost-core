@@ -135,7 +135,7 @@ func TestOutboxInfrastructureIndexesCoverClaimAndBacklogQueries(t *testing.T) {
 	if err := store.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	outbox := client.Collection(testDatabase, outboxCollection)
+	outbox := client.Collection(testDatabase, OutboxCollection)
 	for _, fields := range [][]string{
 		{"available_at", "lease_until"},
 		{"effect_id"},

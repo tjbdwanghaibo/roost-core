@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	transactionCollection = "_dataengine_transactions"
-	outboxCollection      = "_dataengine_outbox"
-	receiptCollection     = "_dataengine_receipts"
+	TransactionCollection = "_dataengine_transactions"
+	OutboxCollection      = "_dataengine_outbox"
+	ReceiptCollection     = "_dataengine_receipts"
 )
 
 var (
@@ -98,17 +98,17 @@ func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 		return err
 	}
 	db := store.client.Database(store.cfg.DefaultDatabase)
-	if err := db.Collection(transactionCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
+	if err := db.Collection(TransactionCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
 		Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: transactionTTL,
 	}}); err != nil {
 		return err
 	}
-	if err := db.Collection(receiptCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
+	if err := db.Collection(ReceiptCollection).EnsureIndexes(ctx, []fmongo.IndexModel{{
 		Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", ExpireAt: true, RecreateOnConflict: true,
 	}}); err != nil {
 		return err
 	}
-	return db.Collection(outboxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
+	return db.Collection(OutboxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "available_at", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_due"},
 		{Keys: bson.D{{Key: "effect_id", Value: 1}}, Name: "uniq_effect", Unique: true},
 		// The backlog probe reads the oldest staged effect. Without this the
@@ -275,7 +275,7 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 		for i := range records {
 			ids = append(ids, records[i].ID.String())
 		}
-		transactionColl := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection)
+		transactionColl := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection)
 		var existing []transactionDocument
 		if err := transactionColl.Find(txCtx, bson.M{"_id": bson.M{"$in": ids}}, &existing, fmongo.FindOption{BatchSize: int32(min(len(ids), 4096))}); err != nil {
 			return err
@@ -551,7 +551,7 @@ type transactionDocument struct {
 }
 
 func (store *MongoStore) insertTransactionMarker(ctx context.Context, document transactionDocument) error {
-	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection).InsertOne(ctx, document)
+	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection).InsertOne(ctx, document)
 	if !errors.Is(err, fmongo.ErrDuplicateKey) {
 		return err
 	}
@@ -599,7 +599,7 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 
 func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, bool, error) {
 	var stored transactionDocument
-	err := store.client.Database(store.cfg.DefaultDatabase).Collection(transactionCollection).FindOne(ctx, bson.M{"_id": txID}, &stored)
+	err := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection).FindOne(ctx, bson.M{"_id": txID}, &stored)
 	if errors.Is(err, fmongo.ErrNotFound) {
 		return false, false, nil
 	}
@@ -633,12 +633,12 @@ func (store *MongoStore) stageReceipt(ctx context.Context, txID string, receipt 
 		TransactionID: txID, Digest: append([]byte(nil), receipt.Digest...), Payload: append([]byte(nil), receipt.Payload...),
 		ExpiresAt: expiresAt, CreatedAt: store.now().UTC(),
 	}
-	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(receiptCollection).InsertOne(ctx, doc)
+	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(ReceiptCollection).InsertOne(ctx, doc)
 	if !errors.Is(err, fmongo.ErrDuplicateKey) {
 		return err
 	}
 	var stored receiptDocument
-	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(receiptCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
+	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(ReceiptCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
 		return errors.Join(err, findErr)
 	}
 	if !bytes.Equal(stored.Digest, doc.Digest) || !bytes.Equal(stored.Payload, doc.Payload) {
@@ -674,12 +674,12 @@ func (store *MongoStore) stageEffect(ctx context.Context, txID string, effect co
 		Payload: append([]byte(nil), effect.Payload...), Headers: cloneHeaders(effect.Headers),
 		AvailableAt: availableAt, CreatedAt: store.now().UTC(),
 	}
-	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(outboxCollection).InsertOne(ctx, doc)
+	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(OutboxCollection).InsertOne(ctx, doc)
 	if !errors.Is(err, fmongo.ErrDuplicateKey) {
 		return err
 	}
 	var stored outboxDocument
-	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(outboxCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
+	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(OutboxCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
 		return errors.Join(err, findErr)
 	}
 	if stored.TransactionID != txID || stored.Topic != effect.Topic {

@@ -17,7 +17,7 @@ func newOutboxStoreTest(t *testing.T) (*MongoOutboxStore, *mongotest.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, client.Collection(testDatabase, outboxCollection)
+	return store, client.Collection(testDatabase, OutboxCollection)
 }
 
 func seedOutboxEffect(t *testing.T, outbox *mongotest.Collection, id string, availableAt, createdAt time.Time, token int64) {

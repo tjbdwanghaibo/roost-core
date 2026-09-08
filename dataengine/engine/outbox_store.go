@@ -51,7 +51,7 @@ func NewMongoOutboxStore(store *MongoStore) (*MongoOutboxStore, error) {
 }
 
 func (store *MongoOutboxStore) collection() fmongo.ICollection {
-	return store.store.client.Database(store.store.cfg.DefaultDatabase).Collection(outboxCollection)
+	return store.store.client.Database(store.store.cfg.DefaultDatabase).Collection(OutboxCollection)
 }
 
 func (store *MongoOutboxStore) Claim(ctx context.Context, owner string, now time.Time, limit int, leaseDuration time.Duration) ([]OutboxItem, error) {
