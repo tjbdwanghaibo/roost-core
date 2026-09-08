@@ -3,7 +3,7 @@
 """Merge one roost-kit package into roost-core with history (consolidation P2).
 
   merge_kit_pkg.py <pkg> [--alias fnats,rediscore] [--exclude f1,f2] [--delete f3]
-                   [--replace old=new ...] [--target core/subdir]
+                   [--replace old=new ...] [--target core/subdir] [--package newname]
 
 Steps: git subtree split in ../roost-kit -> git subtree add into core staging/<pkg>
 -> move files into <target> (clashing names get an _impl suffix; excluded Mod glue
@@ -19,7 +19,7 @@ def sh(cmd, cwd=None, check=True):
     return r
 
 def main(argv):
-    pkg = argv[0]; aliases = []; exclude = []; delete = []; replace = []; target = None
+    pkg = argv[0]; aliases = []; exclude = []; delete = []; replace = []; target = None; newpkg = None
     it = iter(argv[1:])
     for a in it:
         if a == '--alias': aliases += next(it).split(',')
@@ -27,6 +27,7 @@ def main(argv):
         elif a == '--delete': delete = next(it).split(',')
         elif a == '--replace': replace.append(next(it).split('=', 1))
         elif a == '--target': target = next(it)
+        elif a == '--package': newpkg = next(it)
     target = target or pkg
     core = os.getcwd(); kit = os.path.abspath(os.path.join(core, '..', 'roost-kit'))
     branch = f'split/{pkg.replace("/", "-")}'
@@ -59,6 +60,8 @@ def main(argv):
             s = re.sub(rf'\b{alias}\.', '', s)
         for old, new in replace:
             s = s.replace(old, new)
+        if newpkg:
+            s = re.sub(r'^package (\w+?)(_test)?$', lambda m: f'package {newpkg}{m.group(2) or ""}', s, count=1, flags=re.M)
         if s != orig:
             open(f, 'w', encoding='utf-8').write(s)
     sh(['gofmt', '-w'] + moved, cwd=core)
