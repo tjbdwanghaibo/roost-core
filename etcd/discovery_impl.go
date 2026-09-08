@@ -45,6 +45,20 @@ type discoveryRegistration struct {
 	cancel        context.CancelFunc
 }
 
+// SetRetryIntervals bounds the registration retry backoff. Zero keeps the
+// default; the Mod reads both values from configuration.
+func (d *Discovery) SetRetryIntervals(minInterval, maxInterval time.Duration) {
+	if d == nil {
+		return
+	}
+	if minInterval > 0 {
+		d.retryMinInterval = minInterval
+	}
+	if maxInterval > 0 {
+		d.retryMaxInterval = maxInterval
+	}
+}
+
 func NewDiscovery(cli *clientv3.Client, prefix string, ttl int64) *Discovery {
 	d := &Discovery{
 		cli:              cli,

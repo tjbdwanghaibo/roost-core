@@ -13,6 +13,15 @@ type Client struct {
 	cli *clientv3.Client
 }
 
+// Raw exposes the underlying etcd client for assembly code (discovery,
+// elections, health probes); business code should stay on IEtcd.
+func (c *Client) Raw() *clientv3.Client {
+	if c == nil {
+		return nil
+	}
+	return c.cli
+}
+
 func NewClient(cfg *Config) (*Client, error) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Endpoints,
