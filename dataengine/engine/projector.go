@@ -242,6 +242,17 @@ func (projector *Projector) Flush(ctx context.Context) error {
 	}
 }
 
+// OverrideAck replaces the checkpoint acknowledgement hook. It exists for
+// integration harnesses that inject a failure after the Mongo write succeeded
+// (the "projection landed, checkpoint lost" restart scenario); production
+// assembly never calls it.
+func (projector *Projector) OverrideAck(ack func(context.Context, corenest.CommitFence) error) {
+	if projector == nil || ack == nil {
+		return
+	}
+	projector.ack = ack
+}
+
 func (projector *Projector) ReplayPass(ctx context.Context) (int, error) {
 	projector.replayMu.Lock()
 	defer projector.replayMu.Unlock()
