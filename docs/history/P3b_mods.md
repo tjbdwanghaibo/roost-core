@@ -51,8 +51,12 @@ room / mongo 本来就薄（只调已导出构造器、不碰 `Raw()`），不�
 | core `-race`：redis/driver、etcd/driver、nats/driver、dataengine/engine、saga、remoteentity | 全绿 |
 | kit（go.work 指本地 core）`go build ./... && go vet ./... && go vet -tags integration ./... && go test -count=1 ./...` | 全绿（含新护栏 `TestKitModsDoNotReachForRawDriverHandles`、`TestEveryModDependencyNamesAKitMod`、dataengine Mod 级 Provide → Start → Stop 测试） |
 | codegen `scripts/source-head-check.sh full <core> <kit>` | full OK（game 模板 + access player + transport tcp + skill + saga 的 planet 工程对本地两仓源码 build / vet / test） |
-| Mod 级真实集成（`dataengine-env.sh test` 五切片） | **未跑**：本机 docker daemon 未运行。以 kit CI `integration` / `service-redis` 作业为门禁，结果见 §5 |
+| Mod 级真实集成（`dataengine-env.sh test` 五切片） | 本机 docker daemon 未运行，未在本机跑；kit CI `integration`（隔离 Mongo 副本集 + NATS 集群，dataengine real / failover / toxic、saga、remoteentity、nats JetStream RPC toxic）与 `service-redis`（12 个服务，-race）作业**全绿**（run 34241871800；首跑 integration 在安装 nats-server 时下载 500，重跑绿） |
 
-## 5. 发版（待做）
+## 5. CI 与发版
 
-core `v1.15.0-alpha.1` → kit go.mod 指 alpha → kit CI 全绿 → core `v1.15.0`（含 U-0107 的 B-14 修复）→ kit `v1.14.0` → codegen `ci/framework-release.yaml` 清单 + `scripts/source-head-check.sh` 默认 pin → codegen `v1.15.1` → `framework-compat` 六条 lane。
+- core main `f928bb2`：`ci` 全绿（linux-quality 含 -race、vet integration、windows、release-hygiene）。
+- kit main `17b6ea6`（go.mod → core `v1.15.0-alpha.1`）：`ci` 六个作业全绿（released-core ubuntu / windows、local-core-source、integration、service-redis、release-hygiene）。
+- codegen：本地 `source-head-check.sh full` 对两仓工作树通过；CI 的 `framework-compat` source-head lane 会在下次 push / 每日 03:17 用 main 源码跑。
+
+**正式发版待做**（顺序同 P6）：core `scripts/pretag.sh v1.15.0` → tag（含 U-0107 的 B-14 修复与本批 Assemble*）→ kit go.mod 升 v1.15.0、`pretag.sh v1.14.0` → tag → codegen `ci/framework-release.yaml` 清单改 core v1.15.0 / kit v1.14.0、`scripts/source-head-check.sh` 默认 pin 同步、`pretag.sh v1.15.1` → tag → 看 `framework-release` 与 `framework-compat` 六条 lane。
