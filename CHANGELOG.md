@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **nats/driver 请求上下文翻译、RPC 重试判定与 JetStream 客户端入口的守卫钉住**（U-0135，C2）。nightly gap map core `nats/driver` 18 条 9 条无覆盖。
+  已到期 / 已取消的上下文分别翻译成 `ErrTimeout` / `ErrCancelled`；`QueueSubscribe` 缺队列名在触达连接前拒绝；`Call` 对不可重试错误立刻返回、不做退避（可重试的超时确实进入下一轮）；JetStream 客户端对 nil 客户端 / 未初始化 / nil 处理器各报其错。
+  `guards_promises_test.go` 三条；回退 9 处全红，包内 18 条守卫无一无覆盖。
 - **skill 执行器流程控制与内存宿主读取 / 伤害目录的守卫钉住**（U-0134，C2）。nightly gap map core `skill` 20 条 9 条无覆盖。
   分支条件求出非布尔值报 `ErrRuntimeTypeMismatch`；重复体出错或提前 finish 终止循环并原样交回（同步循环与调度回来的单次迭代各一份，后者不再排下一轮）；查询指向表外选择器、迭代任务局部槽 / 迭代数越界报 `ErrProgramInvariant`；
   内存宿主资源 / 位置 / 属性读取对未知实体报 `ErrEntityNotFound`，伤害命令在目录声明了别的公式策略时报 `ErrCombatPolicyUnsupported`、伤害类型未声明时报 `ErrCombatHandleInvalid` 且血量不变。
