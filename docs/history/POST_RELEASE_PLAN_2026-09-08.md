@@ -25,8 +25,8 @@
 | 1 本机 Mod 级真实集成 | **未做**：brew 只装了 docker CLI，无 daemon；等运行时（Docker Desktop cask 或 colima）起来后跑 `dataengine-env.sh test` 五切片，补进 `P3b_mods.md` §4 |
 | 2 118 个未审格 | **完成**：`classscan.py` 首轮扫过 117 格（service / skill / codegen），无真洞，四条观察 O-1～O-4 记账本 §9 |
 | 3 nightly 高位包 | **完成**：U-0108～U-0116 九个包（core nestwal / dataengine/engine / nest / robot/action / mongotest；kit dataengine Mod / service/session；codegen protocol / nest） |
-| 4 C5 / C8 深挖 | **开始**：U-0117（skillsync Put / PutBatch 一致性，C8）；C5 本轮 errcheck 扫 codegen 无真洞。周节拍继续：候选见 §9 观察 O-2（account / platform 会话校验双实现）与交接 §4.3 的故障切片 |
-| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；codegen entity 模板守卫 → 需生成物自带 `*_gen_test.go`（access 模板已有先例）或 source-head 工程里的守卫测试，未做；死守卫清理（actionflow 四处、entity 两处）→ 待决定 |
+| 4 C5 / C8 深挖 | **开始**：U-0117（skillsync Put / PutBatch 一致性，C8）；C5 本轮 errcheck 扫 codegen 无真洞；O-2 复核为薄包装，关闭。周节拍继续：交接 §4.3 的 C5 grep 与故障切片（等 daemon） |
+| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity 模板守卫 → 需生成物自带 `*_gen_test.go`（access 模板已有先例）或 source-head 工程里的守卫测试，未做；死守卫清理（actionflow 四处、entity 两处）→ 待决定 |
 | 6 升级器符号改名表 | **完成**：codegen `23c5964` 删除 `renames`，只映射包路径；三处符号由编译器指出，T-45 给改法 |
 
 ## 1. B-18：core `entitysync`（U-0104，C2）

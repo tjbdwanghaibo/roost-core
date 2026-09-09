@@ -196,7 +196,7 @@
 | codegen | `internal/project` | — | 09-09 脚本扫（nightly 1/2） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） / 09-09 U-0115（回退 8 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 09-09 脚本扫 | 09-06 U-0030 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） / 09-09 U-0118（16 处字面量→常量） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/servicerpc` | — | 09-09 脚本扫（nightly 2/20） | — | 09-05 U-0024 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/tablegen` | — | 09-06 U-0033（回退 5 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 U-0033 | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/webroute` | — | 09-06 U-0040（回退 4 条，2 洞） | — | 09-09 脚本扫 | 09-06 U-0040 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0118 | 2026-09-09 | roost-codegen `internal/roost` 与五个生成器的默认路径字面量（classscan O-1） | C4 | 编排层 16 处字面量与生成器 flag 默认值 / 生成 import 后缀各写一份 | `literal_coupling_test.go`：AST 扫编排层字面量，与生成器导出常量相等即红 | 修前 16 处红、导出常量并引用后绿；生成物不变（golden 测试绿） | — |
 | U-0117 | 2026-09-09 | roost-core `skill/skillsync` Outbox Put / PutBatch 准入一致性（classscan O-4） | C8 | 两条路径各算一遍上限，今天一致但无测试钉住 | `outbox_batch_consistency_promises_test.go` 六个用例 | 变异验证：PutBatch 总量 `>`→`>=`、每流上限 +1，各红 | — |
 | U-0116 | 2026-09-09 | roost-codegen `internal/nest` 远端别名 / 模块发现 | C2 | nightly 8/20。5 条不可达或冗余：`empty module path`（TrimSpace 顺序）、多接收者（语法）、error 后非 error（前一条前置）、结构体级别名检查（文件级聚合前置）、模板内 `nestClient` 守卫（生成物，归"生成 + 编译 + 运行"基建） | `guards_promises_test.go` 两条 | 8 处回退 3 红、5 不可达 / 冗余 | — |
 | U-0115 | 2026-09-09 | roost-codegen `internal/protocol` 标记解析 / 定义不变量 / bootstrap | C2 | nightly 8/20。req / resp id 不等与枚举两条从解析器构造不出（解析器总是让 RespID = id），直接对 `validateDefinitions` 构造 Definitions | `guards_promises_test.go` 三条 | 8 处回退各红 | — |
@@ -537,7 +538,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | 类 | 启发式 | 范围 | 候选 | 判读 |
 | --- | --- | --- | --- | --- |
 | C3 回调外累积状态 | 包级可变变量（`var x = make/map/[]/&/new/sync.Map/atomic`）；`.Range/ForEach/Walk/Subscribe/Watch/On*(func` 回调体内 `append/++/+=/[k]=` | kit service 10 包、core skill 4 包 | 1：`service/mail/types.go` `codeBySentinel`（只读查表，供测试对照） | 无 |
-| C4 跨包字面量耦合 | 同仓两个以上包共用的字面量（含 `._:/-` 或全大写；剔除格式串、含空格、噪声词） | service + skill；codegen 16 包 | service：全是 import 路径（噪声）、各服务自己的 JSON 字段名、指标拒绝标签 `bad_token` / `not_owner`（约定词汇）、`validate_session`（account 与 platform 各报一次同名操作）；codegen：`./protocol/def`、`./protocol/player_bind`、`/game/player_agent`、`/protocol/pb`、`./db`、`./db/def`、`./event`、`./event/def`、`./configs/schema`、`./game/protocol_handlers`、`docs/generated/errcode.csv` 在各生成器与 `internal/roost` 编排层各写一份 | **观察 O-1**：codegen 生成器默认路径与编排层重复字面量（11 个），应由生成器导出常量、编排层引用；改动是重构，不在单元里做。`validate_session` 记 O-2：account / platform 两个服务各自实现会话校验并各报同名指标，属重复实现候选 |
+| C4 跨包字面量耦合 | 同仓两个以上包共用的字面量（含 `._:/-` 或全大写；剔除格式串、含空格、噪声词） | service + skill；codegen 16 包 | service：全是 import 路径（噪声）、各服务自己的 JSON 字段名、指标拒绝标签 `bad_token` / `not_owner`（约定词汇）、`validate_session`（account 与 platform 各报一次同名操作）；codegen：`./protocol/def`、`./protocol/player_bind`、`/game/player_agent`、`/protocol/pb`、`./db`、`./db/def`、`./event`、`./event/def`、`./configs/schema`、`./game/protocol_handlers`、`docs/generated/errcode.csv` 在各生成器与 `internal/roost` 编排层各写一份 | **观察 O-1 → U-0118 已改**：生成器导出默认路径常量，编排层与模板引用，AST 测试守住。`validate_session`（O-2）复核：account / platform 的 ValidateSession 都只是 core `security.VerifySessionToken` 的薄包装（account 多一步读 role），共享的只是指标标签，**不是双实现，关闭** |
 | C5 静默吞错 | errcheck `-blank -ignoretests` + 脚本的空白赋值匹配 | codegen 16 包 | 62 条：`fmt.Fprintf(stdout…)`；关停 / 清理路径的 `Close/Remove`；正则命中后的 `ParseInt`、解析器给出的 tag 的 `Unquote`、纯值结构的 `MarshalIndent`；`marker.Cut` 在 `marker.Has` 之后；cfggen `fieldByName` / `indexSpec` 丢错的四处都在同函数早先已校验（387 / 403 行）；`render.go` 四处 `resolveMods` 丢错——`LoadManifest` 已 `Validate`（含 `resolveMods`），渲染时不可能再失败 | 无真洞。**观察 O-3**：`render.go` 依赖"渲染前一定校验过"这个隐含前提，若将来有绕过 `LoadManifest` 的入口会静默少装 Mod |
 | C6 常量指标 | 喂字面量的 gauge / observe；只会回答 OK 的健康检查文件 | service + skill | 0 | 无 |
 | C7 释放无 defer | `Lock()` 后两行内无 `defer Unlock`；`Open/Create/Listen` 八行内无 `Close` | codegen 16 包 | 11 条，全部在 `internal/roost/render_access.go` / `render_player_tcp.go` 的**模板文本**里（生成到业务工程的 TCP 服务器）：每处 Lock 都在同作用域配对 Unlock（短临界区、提前解锁）；`net.Listen` 在 Stop 路径 Close | 无真洞 |
