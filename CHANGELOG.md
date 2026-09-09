@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **combatcomponent 宿主适配器 / 状态桥 / 持久化 DAO 的守卫钉住**（U-0130，C2）。nightly gap map core `skill/combatcomponent` 20 条 11 条无覆盖。
+  事务外自开的分离事务开不起来（无 Committer）时 Apply / PayCosts / StatusBridge.Apply 交回错误而不是对 nil 结果做类型断言，且状态与修订号不变；读请求 / 费用支付对无战斗组件的实体与无属性映射的资源报具体错误且不动底值；
+  `RestorePersisted` 拒绝落盘 id 与 DAO id 不符的文档、`Migrate` 只认 1 → 2（legacy JSON 可装入）、已有版本的 DAO 对掩码无字段的补丁拒绝而非生成空 `$set`；修改目录里查不到策略的 buff 实例报错。
+  `guards_promises_test.go` 四条；回退 11 处全红。
 - **etcd/driver 选举与本地镜像的入口守卫钉住**（U-0129，C2）。nightly gap map core `etcd/driver` 20 条 12 条无覆盖。
   未参选 / 会话已丢时 `Resign` 报 `ErrNotLeader`，无选举对象或后端无 leader 键时 `Leader` 报 `ErrElectionNoLeader`（有键时返回其值，主动 Resign 放弃领导权）；
   `NewLocalMirror` 拒绝 nil 客户端与不支持带修订号前缀快照的客户端；负 lease id、负期望修订号、nil 发布上下文在触达 etcd 前拒绝且不留下 Put / Txn；事务 nil 响应报错而非当失败；watch 关闭以 "watch closed" 记入 LastError。

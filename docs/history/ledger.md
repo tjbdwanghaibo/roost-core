@@ -174,7 +174,7 @@
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | skill | `combat` | 09-06 脚本扫 | 09-09 脚本扫（nightly 0/3） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
-| skill | `combatcomponent` | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
+| skill | `combatcomponent`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） / 09-09 U-0130（回退 11 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） / 09-06 U-0094（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0117（变异 2 红） |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0130 | 2026-09-09 | roost-core `skill/combatcomponent` 分离事务 nil 结果 / 读与支付准入 / 持久化 DAO / 无策略 buff | C2 | nightly 11/20：三处 `value == nil` 是分离事务失败后的唯一防线（失效即 nil 类型断言 panic），用 nil Committer 触发；`PrepareMutation` 无字段掩码只在 DAO 已有版本时可达（version 0 走整文档 Put） | `guards_promises_test.go` 四条 | 11 处回退全红 | — |
 | U-0129 | 2026-09-09 | roost-core `etcd/driver` 选举 Resign / Leader、本地镜像写入参数与 watch 关闭 | C2 | nightly 12/20：`local_mirror.go:433`（watch closed）与 `apply` 的 nil 事件错误在流程上等价，只差文本，用一小时重试间隔冻结 LastError 才能钉住；`client.go:46` 需真实 etcd（并入 §0.1 项 1 真机清单） | `guards_promises_test.go` 四条 | 12 处回退 11 红、1 待真机 | — |
 | U-0128 | 2026-09-09 | roost-core `remoteentity` `Assemble` 依赖 / 写批次准入 | C2 | nightly 12/20：P3b 新增的 `Assemble` 五条拒绝零覆盖；finalize 槽位耗尽的 `ErrRemoteOverloaded` 此前无测试。`batch.go:73`（无后端）失效后 ownership 层返回同一哨兵，只有"不留下包装器"能把它钉红。守卫失效会让准入卡在写门 / nil 通道，测试一律带期限 ctx（采样器默认每条等 600s） | `assemble_admission_promises_test.go` 两条 | 12 处回退全红 | — |
 | U-0127 | 2026-09-09 | roost-core `syncstream` `Import` 校验簇 / 其余入口 | C2 | U-0126 全包采样：`Import` 十几条自洽校验只有"断链"一条被测过，其余零覆盖；每条以哨兵拒绝且原子（被拒不改 History）。另 BufferedPublisher nil / 关闭、`Recover` 无提供者、适配器拖尾内容 | `import_guards_promises_test.go` 四条（16 子用例） | 22 处回退全红；全包 56 条 0 无覆盖 | — |
