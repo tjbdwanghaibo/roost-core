@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **statesync 帧编解码的计数 / 大小上限守卫钉住**（U-0139，C2）。nightly gap map core `statesync` 20 条 7 条无覆盖。
+  编码侧：65536 个对象拒绝而不是 uint16 回绕成"空帧"、帧大小上限在组件级也生效、`MaxObjects*2` 在编码侧拒绝；解码侧：头部声称的对象数 / 组件数 / 载荷长度在分配与读取之前按上限拒绝，答案是"超限"而不是"截断"。
+  `codec_limits_promises_test.go` 两条；回退 7 处 6 红，`codec.go:44`（单对象 65536 个组件）因组件 TypeID 非零且唯一最多 65535 个、校验器先以重复拒绝，从编码路径到不了，记不可达保留。
 - **cache 分层读 / 读穿透的失败与未命中传播、Redis 存储键校验、ref-hmap 旧版本拒绝的守卫钉住**（U-0138，C2）。nightly gap map core `cache` 20 条 8 条无覆盖。
   分层读把远端错误原样上抛、远端未命中不回填零值；读穿透在 L1 出错时不去 load，loader 未命中 / 出错时不写 L2 / L1，`Set` 在 L2 失败且未设 `IgnoreRemoteError` 时报错且不写 L1（宽松模式写入）；
   Redis hash / raw 存储无 key 函数拒绝写、hash 键或字段为空报 `ErrInvalidKey`（均不触达 Redis）；ref-hmap 的 Stale 判定拒绝旧版本且不改写已存值。
