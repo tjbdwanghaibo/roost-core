@@ -18,10 +18,10 @@ docker compose version
 
 ## 2. 安装并生成项目
 
-安装当前发布组合里的 codegen（版本以 roost-codegen `ci/framework-release.yaml` 为准，2026-09-09 为 codegen v1.15.3 / core v1.15.1 / kit v1.14.2）：
+安装当前发布组合里的 codegen（版本以 roost-codegen `ci/framework-release.yaml` 为准，2026-09-09 为 codegen v1.15.4 / core v1.15.2 / kit v1.14.3）：
 
 ```bash
-go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.15.3
+go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.15.4
 roost project new planet \
   -module example.com/planet \
   -services game,gate \

@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- **dataengine Assembly 停机没完成不再忘掉 Runtime**（U-0159，C8；RR-20260909-03，T-54）。`Shutdown` 的 context 先到期、outbox worker 还在退出时，此前无论结果都把 runtime 置 nil，重试看到 nil 直接答成功。现在只有 `Runtime.Shutdown` 返回 nil 才释放引用；`Runtime.Shutdown` 记住已停下的组件（projector / outbox 各一位），重试只等还没停的，projector 的 flush 只尝试一次（关掉之后没有可 flush 的，记录留在 WAL 下次启动重放）。`assembly_shutdown_promises_test.go` 修前红。修复记录见 `docs/bugfix/RR-20260909-03.md`。
+- **接入文档版本快照与三仓措辞收尾**（U-0161；RR-20260909-01 残留）。Quickstart / README 的当前组合改为 core v1.15.2 / kit v1.14.3 / codegen v1.15.4，DEVELOPMENT_WORKSPACE 的"五个仓库 / 四仓"改为三仓，STATIC_REGISTRATION 的 once 守卫命名跟随 codegen v1.15.5 的生成形状。
 - **cache 读穿透的等待名额在跟随者取消后归还**（U-0155，C2；RR-20260908-02，T-51）。`MaxWaitersPerKey` 此前计的是本次 load 期间累计进过门的次数：跟随者因取消 / 超时离开时 `waiters` 不减，慢后端叠加短超时重试会在首个 load 结束前一直以 `ErrLoadWaitersExceeded` 拒绝健康请求。现在取消路径在同一把锁下减回，且只对仍是当前 load 的 call 减（新一轮 load 不被误扣）。`read_through_waiters_promises_test.go` 修前红，真满额仍拒绝。修复记录见 `docs/bugfix/RR-20260908-02.md`。
 - **接入文档与三仓发布组合一致**（U-0157；RR-20260909-01）。Quickstart 从固定 codegen v1.7.0 改为引用发布清单（当前 v1.15.3），`project new` 示例补上必填的 `-module`；`docs/README.md` 版本基线与 `DEVELOPMENT_WORKSPACE.md` 发布顺序改为三仓。
 - **dataengine 流水线提交落盘后立刻唤醒投影，不再等 IdlePoll**（U-0146，C8；T-49）。`Projector.Commit`（严格）在同步落盘后 `signal()`，而 `Enqueue`（流水线）拿到票就返回、票完成时无人唤醒；事务释放触发的那次 ReplayPass 通常早于 fsync、什么也没看到，于是一批流水线提交的尾巴要等到 `IdlePoll`（默认 1 秒）才落 Mongo。

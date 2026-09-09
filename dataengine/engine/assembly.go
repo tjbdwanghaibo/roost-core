@@ -146,8 +146,17 @@ func (a *Assembly) Runtime() *Runtime {
 	return a.runtime
 }
 
-// Shutdown stops the runtime (projector first, then outbox) and forgets it.
-// It is idempotent: a second call, or a call before Start, does nothing.
+// Shutdown stops the runtime (projector first, then outbox) and, once that
+// has completed, forgets it. A call before Start, or after a completed
+// shutdown, does nothing.
+//
+// "Completed" is the point: when ctx runs out while a worker is still
+// draining, Shutdown reports the error and KEEPS the runtime, so a retry waits
+// on the same components. Forgetting it on any outcome let the retry find nil
+// and answer success while the outbox worker was still active — a caller that
+// then released the underlying connections would pull them from under a live
+// worker (RR-20260909-03). Runtime.Shutdown remembers which components have
+// stopped, so the retry does not re-flush or re-close what is already down.
 func (a *Assembly) Shutdown(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -158,13 +167,15 @@ func (a *Assembly) Shutdown(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
-	err := runtime.Shutdown(ctx)
+	if err := runtime.Shutdown(ctx); err != nil {
+		return err
+	}
 	a.runtimeMu.Lock()
 	if a.runtime == runtime {
 		a.runtime = nil
 	}
 	a.runtimeMu.Unlock()
-	return err
+	return nil
 }
 
 // jetStreamOutboxPublisher publishes staged effects to JetStream under the

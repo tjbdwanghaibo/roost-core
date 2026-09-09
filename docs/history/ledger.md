@@ -70,7 +70,7 @@
 | core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `configdata` | 09-02 | 09-06 U-0046（回退 45 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-09 U-0159（修复） |
 | core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `entitysync` | 09-02 | 09-08 U-0104（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -167,7 +167,7 @@
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） / 09-09 U-0150 / 09-09 U-0152 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
 | service | `servicemods` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
-| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） / 09-09 U-0114（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0154（修复） |
+| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） / 09-09 U-0114（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0154（修复） / 09-09 U-0158（修复） |
 
 ### roost-skill（5 包）
 
@@ -187,7 +187,7 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/genutil` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -236,6 +236,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0161 | 2026-09-09 | roost-core 接入文档（RR-20260909-01 残留） | 文档 | Quickstart / README 版本快照落后一版；DEVELOPMENT_WORKSPACE 仍"五个仓库 / 四仓"；STATIC_REGISTRATION 的 once 守卫名随 U-0160 更新 | 无（文档） | — | `docs/bugfix/RR-20260909-01.md` |
+| U-0160 | 2026-09-09 | roost-codegen `internal/entity` 同包多实体（RR-20260909-04） | C2 | 每个生成文件都声明包级 `registerEntityOnce` / `RegisterEntity`，两实体同包生成成功、消费者 redeclared。修法：每实体 `register<Name>Entity` + 同名 once；包级 `RegisterEntity`（带 `//roost:register`）只进按名排序的第一个实体文件、调用所有兄弟；`generate` 保留为单实体包装，`main` 传 siblings | `multi_entity_package_promises_test.go`（解析生成物的包级声明，重名即失败） | 修前红（redeclared ×2、RegisterEntity ×2）；修后 codegen 全绿，fixture 重生成 | T-55 · `docs/bugfix/RR-20260909-04.md` |
+| U-0159 | 2026-09-09 | roost-core `dataengine/engine` Assembly 停机重试（RR-20260909-03） | C8 | `Assembly.Shutdown` 无论结果都置空 runtime，重试见 nil 答成功而 worker 仍在跑。修法：只有 `Runtime.Shutdown` 返回 nil 才释放；`Runtime.Shutdown` 加互斥与两位完成标记，重试只等未停组件，flush 只尝试一次 | `assembly_shutdown_promises_test.go`（真实 OutboxWorker 卡在 Claim；取消 ctx → 保留 runtime；限时重试 → 仍报错仍保留；放行后重试 → nil 且 Runtime()==nil；再调幂等） | 修前红（Runtime()=nil after incomplete shutdown）；修后 engine 全绿含 -race | T-54 · `docs/bugfix/RR-20260909-03.md` |
+| U-0158 | 2026-09-09 | roost-kit `service/session` 撞键撤回 ABA（RR-20260909-02） | C8 | U-0154 的撤回先删 run 再按版本删 claim；run 一没，同 owner 新 Enter 清孤立 claim 建新 claim，删后重建版本回 1，落败者把新 claim 删了。修法：先用带 run-id 校验的 `releaseClaim` 释放 claim 再删 run——claim 指向的 run 还 open 时没人能合法替换它；删掉只比版本的 `releaseClaimIfCurrent` | `enter_collision_cleanup_promises_test.go`（Runs / Claims 两个 Delete 都挂钩，第一次删除后同 owner 立刻重入） | 修前红（claim 丢、第三次 Enter 成功）；修后 session 全绿含 -race | T-53 · `docs/bugfix/RR-20260909-02.md` |
 | U-0157 | 2026-09-09 | roost-core 接入文档（RR-20260909-01） | 文档 | Quickstart 固定 codegen v1.7.0 且 `project new` 缺必填 `-module`，当前 CLI 直接 exit 1；README 版本基线仍列五仓。改为引用发布清单、补 `-module`、三仓顺序 | 无（文档） | — | `docs/bugfix/RR-20260909-01.md` |
 | U-0156 | 2026-09-09 | roost-codegen `internal/roost` consolidate 单行 import 混合分流（RR-20260908-03） | C2 | 新 ImportSpec 文本无条件塞在第一个 spec 之后，默认外面有 `import (...)`；单行 import 得到顶层裸露 spec，format 失败、文件升级失败。修法：找到第一个 import 所在声明，无括号则另起一个括号声明 | `consolidate_single_import_promises_test.go` | 修前红（`expected declaration, found coreredis`）；修后 internal/roost 全绿 | T-52 · `docs/bugfix/RR-20260908-03.md` |
 | U-0155 | 2026-09-09 | roost-core `cache` 读穿透等待名额（RR-20260908-02） | C2 | 跟随者取消离开不减 `waiters`，上限变成累计入场次数。修法：取消路径同锁下减回，且仅当 `s.calls[key]` 仍是本 call | `read_through_waiters_promises_test.go`（含真满额仍拒绝） | 修前红（第二个跟随者被拒）；修后 cache 全绿 | T-51 · `docs/bugfix/RR-20260908-02.md` |

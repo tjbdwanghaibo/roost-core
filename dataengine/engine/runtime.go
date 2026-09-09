@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -26,6 +27,12 @@ type Runtime struct {
 	onFatal          func(error)
 	ready            atomic.Bool
 	pipelined        PipelinedRuntimeConfig
+
+	// shutdownMu serializes Shutdown and guards the two completion marks, so
+	// a retried shutdown only waits on what has not stopped yet.
+	shutdownMu      sync.Mutex
+	projectorClosed bool
+	outboxClosed    bool
 }
 
 type PipelinedRuntimeConfig struct {
@@ -112,10 +119,19 @@ func (runtime *Runtime) Flush(ctx context.Context) error {
 	return runtime.Projector.Flush(ctx)
 }
 
+// Shutdown stops the projector, then the outbox worker. It may be called again
+// after an incomplete attempt (a bounded ctx that ran out): each component is
+// marked stopped once its Close has returned nil, and a retry only waits on
+// the ones still running. The flush that precedes the projector's close is
+// attempted once — after the projector is closed there is nothing left to
+// flush, and the records it could not make visible stay durable in the WAL
+// for the next start.
 func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
+	runtime.shutdownMu.Lock()
+	defer runtime.shutdownMu.Unlock()
 	runtime.ready.Store(false)
 	if runtime.unregisterDelete != nil {
 		runtime.unregisterDelete()
@@ -129,12 +145,20 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	// First make every admitted WAL record visible, then stop new outbox claims;
 	// already staged effects remain durable in Mongo for the next start.
 	var projectorErr error
-	if runtime.Projector != nil {
-		projectorErr = runtime.Projector.Shutdown(ctx)
+	if runtime.Projector != nil && !runtime.projectorClosed {
+		flushErr := runtime.Projector.Flush(ctx)
+		closeErr := runtime.Projector.Close(ctx)
+		if closeErr == nil {
+			runtime.projectorClosed = true
+		}
+		projectorErr = errors.Join(flushErr, closeErr)
 	}
 	var outboxErr error
-	if runtime.Outbox != nil {
+	if runtime.Outbox != nil && !runtime.outboxClosed {
 		outboxErr = runtime.Outbox.Close(ctx)
+		if outboxErr == nil {
+			runtime.outboxClosed = true
+		}
 	}
 	return errors.Join(projectorErr, outboxErr)
 }

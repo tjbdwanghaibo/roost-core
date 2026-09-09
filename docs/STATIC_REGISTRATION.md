@@ -119,7 +119,7 @@ func RegisterAll() error {
 ## 迁移风险
 
 **比看起来低，而且原因是可验证的**：每个生成的叶子函数都自带自己的 `sync.Once`
-（`registerEntityOnce.Do(...)`）。因此一个项目同时留着旧手写聚合器和新生成聚合器
+（`register<Name>EntityOnce.Do(...)`；同包多个实体时各有一份，包级 `RegisterEntity` 只生成一个）。因此一个项目同时留着旧手写聚合器和新生成聚合器
 时，只会注册一次而不是两次。这点关键，因为 `entity.RegisterEntityBuilder` 对同
 kind 重复注册是**直接 panic** 的——但它只被叶子调用，而叶子是幂等的。
 

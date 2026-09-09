@@ -5,7 +5,7 @@ workspace 解决研发效率，module/tag 证明外部用户可安装和复现�
 
 ## 研发模式：go.work
 
-在五个仓库的共同父目录创建不提交的 `go.work`：
+在三个仓库的共同父目录创建不提交的 `go.work`：
 
 ```bash
 go work init ./roost-core ./roost-kit ./roost-codegen
@@ -37,7 +37,7 @@ go vet ./...
 ```
 
 并发、WAL、Remote Entity、Saga 变更还要对对应包运行 `go test -race`。Codegen 生成的
-consumer 应加入临时 workspace 后编译，证明模板与四仓 source-head 同代。
+consumer 应加入临时 workspace 后编译，证明模板与三仓 source-head 同代。
 
 ## 打 tag 前：scripts/pretag.sh
 
@@ -55,7 +55,7 @@ go: ...@v2.0.0: invalid version: module contains a go.mod file,
 so module path must match major version (".../roost-core/v2")
 ```
 
-四仓各有一份相同的脚本，在创建 tag 之前检查五件事：
+三仓各有一份相同的脚本，在创建 tag 之前检查五件事：
 
 1. **tag 的 major 与 module 路径后缀一致**。Go 对 v2+ 要求路径带 `/vN`；不一致的 tag
    谁都选不到。这是上面那个事故的直接成因。
