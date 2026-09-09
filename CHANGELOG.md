@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **remoteentity `Assemble` 依赖校验与写批次准入的守卫钉住**（U-0128，C2）。nightly gap map core `remoteentity` 20 条 12 条无覆盖。
+  `Assemble` 五种缺失依赖（无 Redis、sid 为零、按 Loader 建后端却无 Mongo、既无 Loader 也无 Backend、Backend 不支持调用方持有的原子事务）各报明确错误，`Start` 拒绝未装配 / 无总线；
+  `PrepareRemoteWriteBatch` 对 nil / 无配置管理器、未设后端（且不留下包装器）报 `ErrRemoteWriteCapabilityDisabled`，finalize 槽位耗尽报 `ErrRemoteOverloaded` 且批次 Close 后归还；nil 包装器 / nil 批次的 beginWrite / Commit 不 panic。
+  `assemble_admission_promises_test.go` 两条；回退 12 处全红。守卫失效时准入会卡在写门 / nil 通道上，测试全部用带期限的 ctx，避免采样器每条等满 10 分钟。
 - **syncstream `Import` 自洽校验簇与其余入口守卫钉住**（U-0127，C2）。U-0126 全包采样余下 22 条无覆盖。
   `Import` 十六种不自洽快照（版本、无 epoch、超 MaxStreams、无 topic、重复流、acked 越过 latest、有 latest 无包未全确认、包身份 / epoch / schema 不符、载荷超限、首个 delta 基线错、schema 跃迁无 full、full 带基线、latest 与包不符、无 schema）各报对应哨兵且被拒后 History 不变；
   `Save` / `Restore` 无存储、`Append` 无 topic 不建流、异 epoch 确认不落账、需要全量而无提供者、`BufferedPublisher` nil / 关闭后不再转发、适配器拒绝拖尾 JSON。
