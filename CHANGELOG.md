@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **lockstep 房间 / 序列器配置、旁观者会话互斥与关闭后拒绝的守卫钉住**（U-0137，C2）。nightly gap map core `lockstep` 20 条 8 条无覆盖。
+  无数据报发送器不能建房，序列器拒绝空座位表与重复座位；座位占用的会话不能再挂为旁观者（旁观者重复挂接幂等）、未挂接的旁观者不能追帧；关闭后拒绝挂接旁观者与哈希上报。
+  `guards_promises_test.go` 三条；回退 8 处 7 红，`startCatchup` 的 closed 检查在 `Close` 清空全部表后从两个调用方都到不了（先撞 `ErrPlayerDetached`），记不可达保留。
 - **app 反向停机 / 生命周期事件 / Mod 排序 / 能力批量注册的守卫钉住**（U-0136，C2）。nightly gap map core `app` 12 条 9 条无覆盖。
   停机上下文已结束时立刻带 ctx 错误返回、不再进入任何 Mod 的 Stop；`emitLifecycle` 对 nil app / 无 registry / lifecycle 能力缺失或类型不对报错；`sortMods` 拒绝 nil 条目、空名、重名；`ValidateServiceConfig(nil)` 拒绝；`RegisterBatch` 对空名与批内重名整批拒绝且不发布任何一项。
   `guards_promises_test.go` 四条；回退 9 处全红（停机那条因 Stop 跑在 goroutine 里，用"返回后 50ms 内未进入"钉住）。

@@ -88,7 +88,7 @@
 | core | `index` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `lifecycle` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `lockstep` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `lockstep` | 09-02 | 09-02 / 09-09 U-0137（回退 7 条，1 不可达） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `log` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `metrics` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `migration` | 09-02 | 09-06 U-0069（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0137 | 2026-09-09 | roost-core `lockstep` 配置拒绝 / 旁观者会话互斥 / 关闭后拒绝 | C2 | nightly 8/20：座位会话挂成旁观者的互斥（room.go:231）此前只测了反向；`room.go:368` 在 `Close` 清空 sessions / spectators 后不可达（调用方先报 ErrPlayerDetached），保留不删 | `guards_promises_test.go` 三条 | 8 处回退 7 红、1 不可达 | — |
 | U-0136 | 2026-09-09 | roost-core `app` 反向停机 / 生命周期事件 / Mod 排序 / 能力注册 | C2 | nightly 9/12：`stopModsReverseWithContext` 的 ctx 早退失效后 Mod 仍会在 goroutine 里被停，同步读标志看不到——采样器第一轮仍绿；改为"返回后 50ms 内未进入"才钉住。其余为入口守卫 | `guards_promises_test.go` 四条 | 9 处回退全红（417 手工回退验证） | — |
 | U-0135 | 2026-09-09 | roost-core `nats/driver` 请求上下文翻译 / RPC 不可重试判定 / JetStream 入口 | C2 | nightly 9/18：gonats 对已结束的上下文先返回 `ctx.Err()` 不碰连接，零值 `*gonats.Conn` 即可触发翻译分支；`isRetryable` 失效会让校验错误也退避 MaxAttempts 次，用"错误文本不含 failed after 且耗时小于一个退避间隔"钉住 | `guards_promises_test.go` 三条 | 9 处回退全红；全包 18 条 0 无覆盖 | — |
 | U-0134 | 2026-09-09 | roost-core `skill` 执行器流程控制 / 内存宿主读取与伤害目录 | C2 | nightly 9/20：重复体的错误与 finish 传播（183 / 277）此前无测试——失效后循环会吞掉错误继续跑；调度回来的迭代任务用手工 `castInstance` 直接调 `executeRepeatIteration` 才能到达；分支非布尔条件用编译后改写 `branchOperation.condition` 为 int 字面量制造（类型检查在编译期挡住了正常路径） | `executor_flow_promises_test.go` 三条 | 9 处回退全红 | — |
