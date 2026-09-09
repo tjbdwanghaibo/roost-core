@@ -15,6 +15,7 @@
 
 ### Changed
 
+- **entity guard 的两处锁序校验共用一个实现**：`CheckContainAllLock` / `CheckContainAllIDs` 只差输入形态（实体 / ID），各自重复着"算最大已锁分组 + 逐个判分组"的逻辑；抽成 `maxLockedGroup` 与 `mayLock`，两个公开方法只剩输入遍历。行为不变，entity / nest 测试绿。
 - **`security.RateLimiter` 的令牌桶改用 `golang.org/x/time/rate`**。公开 API 不变（`RateLimitConfig` / `Allow` / `AllowN` / `Stats` / `GC`），
   变的是桶的算术：补充从"每个 Interval 一次性加 Refill 个"变为连续补充（Refill/Interval 匀速，突发上限 Capacity），与 x/time/rate 一致；
   `n > Capacity` 的请求仍然直接拒绝且不消耗。保留的是 x/time/rate 没有的部分：按 key 分桶、MaxKeys 上限、空闲驱逐与 Stats。

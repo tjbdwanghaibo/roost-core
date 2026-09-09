@@ -244,25 +244,11 @@ func (e *EntityGuard) CheckContainAllLock(es []IThreadSafeEntity) bool {
 	if len(es) == 0 || len(e.eMap) == 0 {
 		return true
 	}
-
-	maxLockedGroup := -1
-	for k := range e.eMap {
-		group := GetEntityGroup(k)
-		if group > maxLockedGroup {
-			maxLockedGroup = group
-		}
-	}
-
+	maxLockedGroup := e.maxLockedGroup()
 	for _, en := range es {
-		guid := en.GUId()
-		if _, exist := e.eMap[guid]; exist {
-			continue
+		if !e.mayLock(en.GUId(), maxLockedGroup) {
+			return false
 		}
-		requiredGroup := GetEntityGroup(guid)
-		if requiredGroup > maxLockedGroup {
-			continue
-		}
-		return false
 	}
 	return true
 }
@@ -274,21 +260,34 @@ func (e *EntityGuard) CheckContainAllIDs(ids []int64) bool {
 	if len(ids) == 0 || len(e.eMap) == 0 {
 		return true
 	}
+	maxLockedGroup := e.maxLockedGroup()
+	for _, id := range ids {
+		if !e.mayLock(id, maxLockedGroup) {
+			return false
+		}
+	}
+	return true
+}
+
+// maxLockedGroup is the highest application group among the locks this guard
+// holds, or -1 when it holds none.
+func (e *EntityGuard) maxLockedGroup() int {
 	maxLockedGroup := -1
 	for id := range e.eMap {
 		if group := GetEntityGroup(id); group > maxLockedGroup {
 			maxLockedGroup = group
 		}
 	}
-	for _, id := range ids {
-		if _, exists := e.eMap[id]; exists {
-			continue
-		}
-		if GetEntityGroup(id) <= maxLockedGroup {
-			return false
-		}
+	return maxLockedGroup
+}
+
+// mayLock reports whether acquiring id now keeps the lock order: it is already
+// held, or it belongs to a later group than everything held so far.
+func (e *EntityGuard) mayLock(id int64, maxLockedGroup int) bool {
+	if _, held := e.eMap[id]; held {
+		return true
 	}
-	return true
+	return GetEntityGroup(id) > maxLockedGroup
 }
 
 func (e *EntityGuard) AppendPostRelease(f func()) {
