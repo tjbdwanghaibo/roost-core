@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **robot/action 注册表、内建动作与 RegisterCall 的守卫钉住**（U-0111，C2）。nightly gap map `robot/action` 20 条采样 15 条无覆盖。
+  nil 注册表的 Register / Run、未注册动作点名（含已注册列表）、已带 `robot action ` 前缀的错误不再包一层；`wait_push` 缺 `msg` 参数；`RegisterCall` 缺协议注册表、请求类型不是结构体、
+  未连接时 "session not connected"、与别的动作共用 msg id 但声明了别的响应类型时 "unexpected response type"、参数转不成 int / uint（负数）/ float / bool 各自点名字段。
+  `guards_promises_test.go` 三条；回退 15 处守卫 13 红，2 处不红：`wait_push` 的 `s == nil` 与 `Session.WaitPush` 的 nil 接收者同为 `ErrClosed`（冗余）；`assignScalar` 的 `!CanSet` 对只挑导出字段的 `callFieldsOf` 不可达。
 - **nest Cast 辅助与 DispatchBroadcast 的守卫钉住**（U-0110，C2）。nightly gap map `nest` 20 条采样 13 条无覆盖。
   CastMulti：有派发消息无守卫作用域、有作用域无派发消息（各自隔离，此前一条测试同时缺两者）、消息无 getter、目标 id 为 0（门口文案 `index=0 id=0`，不是归一化错误）、
   getter 找不到实体（点名 index）、getter 返回的实体 id 与请求不一致导致锁序反转（`ErrCastDeadlockRisk`，用替换实体的 getter 构造）；CastTwo / CastThree 第二、三位类型不匹配各报 `ErrCastTypeMismatch`；
