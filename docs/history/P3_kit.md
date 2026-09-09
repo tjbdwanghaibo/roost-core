@@ -46,7 +46,7 @@
 ## 4. 未验证项 / 风险
 
 - 故障矩阵五切片（`scripts/integration/dataengine-env.sh test`）在新路径上尚未重跑——P5 前必须做（需要本机 docker 或 CI integration job）。
-- Mod 编排逻辑仍在 kit（见 1.1 末），P3b 待做。
+- Mod 编排逻辑仍在 kit（见 1.1 末），P3b 待做。→ 2026-09-08 完成，见 [P3b_mods.md](P3b_mods.md)。
 - `_impl` 后缀文件名、`engine` 包名对业务工程的影响由 P4 升级器与 golden 用例覆盖。
 
 ## 5. 下一步唯一动作
