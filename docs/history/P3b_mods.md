@@ -51,7 +51,7 @@ room / mongo 本来就薄（只调已导出构造器、不碰 `Raw()`），不�
 | core `-race`：redis/driver、etcd/driver、nats/driver、dataengine/engine、saga、remoteentity | 全绿 |
 | kit（go.work 指本地 core）`go build ./... && go vet ./... && go vet -tags integration ./... && go test -count=1 ./...` | 全绿（含新护栏 `TestKitModsDoNotReachForRawDriverHandles`、`TestEveryModDependencyNamesAKitMod`、dataengine Mod 级 Provide → Start → Stop 测试） |
 | codegen `scripts/source-head-check.sh full <core> <kit>` | full OK（game 模板 + access player + transport tcp + skill + saga 的 planet 工程对本地两仓源码 build / vet / test） |
-| Mod 级真实集成（`dataengine-env.sh test` 五切片） | 本机 docker daemon 未运行，未在本机跑；kit CI `integration`（隔离 Mongo 副本集 + NATS 集群，dataengine real / failover / toxic、saga、remoteentity、nats JetStream RPC toxic）与 `service-redis`（12 个服务，-race）作业**全绿**（run 34241871800；首跑 integration 在安装 nats-server 时下载 500，重跑绿） |
+| Mod 级真实集成（`dataengine-env.sh test` 五切片） | 本机已跑（2026-09-09，U-0153）：`reset` 后 fresh 环境整套 `dataengine-env.sh test` 绿——kit dataengine real / failover / toxic、nats JetStream RPC toxic + 真机守卫、core redis + redis/driver 故障套件（脚本此前漏跑该包，已修）+ etcd/driver + mongo/driver。此前 kit CI `integration` 与 `service-redis` 作业已全绿（run 34241871800）。本机环境靠 brew 二进制，不依赖 docker |
 
 ## 5. CI 与发版
 

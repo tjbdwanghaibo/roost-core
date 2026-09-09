@@ -10,7 +10,7 @@
 
 | 序 | 项 | 轨 | 改代码 | 发版 | 估时 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | ~~B-18 entitysync（U-0104）~~ 完成 `4d22881` | U / C2 | 否 | 否 | 半个会话；真机时顺带补 core `etcd/driver/client.go:46`（Get 无键 → ErrKeyNotFound，U-0129 无法替身）与 `mongo/driver` 三条（client.go:90 / 93 副本集与逻辑会话、collection.go:262 索引冲突，U-0148） |
+| 1 | ~~B-18 entitysync（U-0104）~~ 完成 `4d22881` | U / C2 | 否 | 否 | 半个会话；真机五条已由 U-0153 处理 |
 | 2 | ~~B-19 redis（U-0105 / U-0106）~~ 完成 `d25c088` | U / C2 | 否 | 否 | 1 个会话 |
 | 3 | ~~B-14 摘要丢错（U-0107）~~ 完成（合 main，待随 P3b 发版） | U / C5 | 是（core） | 不单发；随 P3b core v1.15.0 | 1 个会话 |
 | 4 | ~~安静基准归档~~ 完成（`P5_acceptance.md` §4.3，实际四段 95 分钟） | 测量 | 否（补脚本） | 否 | 机器空闲 1～1.5 小时，人工 20 分钟 |
@@ -22,7 +22,7 @@
 
 | 项 | 状态 |
 | --- | --- |
-| 1 本机 Mod 级真实集成 | **未做**：brew 只装了 docker CLI，无 daemon；等运行时（Docker Desktop cask 或 colima）起来后跑 `dataengine-env.sh test` 五切片，补进 `P3b_mods.md` §4 |
+| 1 本机 Mod 级真实集成 | **完成（2026-09-09）**：集成环境其实靠 brew 二进制而非 docker（此前判断有误）。`reset` 后 fresh 环境整套 `dataengine-env.sh test` 绿：kit dataengine（real / failover / toxic）与 nats（JetStream RPC toxic + U-0153 真机守卫）、core redis + redis/driver 故障套件 + etcd/driver + mongo/driver。五条真机守卫 U-0153 全部钉住（93 记不可达）。修了两个基建问题：toxic RPC 跨轮主题重叠、脚本 core 段漏跑 redis/driver |
 | 2 118 个未审格 | **完成**：`classscan.py` 首轮扫过 117 格（service / skill / codegen），无真洞，四条观察 O-1～O-4 记账本 §9 |
 | 3 nightly 高位包 | **完成**：U-0108～U-0116 九个包（core nestwal / dataengine/engine / nest / robot/action / mongotest；kit dataengine Mod / service/session；codegen protocol / nest）；第二批 **完成**：U-0126～U-0143（core syncstream ×2 / remoteentity / etcd/driver / skill/combatcomponent / nettransport / bus / skillcompose（复核） / skill / nats/driver / app / lockstep / cache / statesync；kit service/mail / match / account / platform），昨夜报告 ≥7/20 的包全部处理；第三批 **完成**：U-0147～U-0151 五个批次单元把三仓余下的 nil / 参数守卫全部过完（48 包，约 300 条，红 ≈ 280）。剩余未红者分类：真机 5 条（etcd client.go:46、mongo/driver ×3、kit nats Mod Provide）、不可测 1 条（hotcode 需真插件）、留待 5 条已由 U-0152 处理：4 条钉红，roost add.go:299 记防御性包装（补钉 rollbackSync 检查分支）；其余冗余 / 不可达 / 防御均已在各单元行注明 |
 | 4 C5 / C8 深挖 | **进行中**：C8 → U-0117；C5 grep 扫 core / kit 后台循环 → U-0120 / U-0121 / U-0122（计数，T-47）、顺带发现并修了 U-0119（activity sweep 组是桩，T-46）。故障切片等 daemon |

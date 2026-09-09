@@ -36,6 +36,8 @@
 
 ### Changed（测试质量）
 
+- **etcd / mongo 驱动的真机守卫测试**（U-0153，C2，`-tags integration`）。etcd/driver 自起单节点 etcd（PATH 上无 etcd 时明确 skip）：Get 不存在的键是 `ErrKeyNotFound`；mongo/driver 对集成环境的副本集验证部署校验放行、同名索引定义冲突在无迁移策略时原样上抛、有策略时丢弃重建，并自起单机 mongod 验证 production 模式拒绝单机。
+  单机 mongod 8.0 也报告 `logicalSessionTimeoutMinutes`，所以 `client.go:93` 对受支持的服务端不可达，测试只记录探测结果。随 roost-kit `scripts/integration/dataengine-env.sh test` 的 core 段运行。
 - **nil / 参数守卫收尾第三批：ownerroute、hotcode、migration、versionstore、mirror、spatial、robot/scenario、log、configdata、httpclient、nats、webroute**（U-0149，C2）。十二个包各一条 `*_promises_test.go`，共 107 条守卫回退 103 红；
   `hotcode/plugin.go:46` 需要真的 .so 插件（不可测）、`versionstore/redis_store.go:234` 只在读与 CAS 之间被改写时可达（竞态防御）、spatial 212 / 223 互为双份。configdata 的 json 名打平检查有两条镜像分支，要让带 cfg 标签的嵌入字段分别先到 / 后到各一例。
   actionflow 余三条沿用 U-0125 结论（冗余 / 不可达），`redis/driver/client.go:339`（单条 EvalBatchDurable 返回非 1 个结果）为防御性守卫，均保留。
