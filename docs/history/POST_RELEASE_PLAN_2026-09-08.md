@@ -29,6 +29,8 @@
 | 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity / nest sender 模板守卫 → U-0124 生成物自带 `*_gen_wire_test.go` / `*_nest_gen_test.go`；死守卫清理 → U-0123：entity 四处不可达守卫已删；actionflow 四处复核为可达未测，保留并转 C2 候选 |
 | 6 升级器符号改名表 | **完成**：codegen `23c5964` 删除 `renames`，只映射包路径；三处符号由编译器指出，T-45 给改法 |
 
+**2026-09-09 第二次发版**：kit v1.14.1（tag CI integration 首跑遇 Mongo 选主抖动，重跑绿）→ codegen v1.15.2（framework-release 全绿，8 个资产）。core 未发版：v1.15.0 之后只有测试、文档与 U-0123 的死代码删除。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：
