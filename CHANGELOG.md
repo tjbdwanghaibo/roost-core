@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **etcd/driver 选举与本地镜像的入口守卫钉住**（U-0129，C2）。nightly gap map core `etcd/driver` 20 条 12 条无覆盖。
+  未参选 / 会话已丢时 `Resign` 报 `ErrNotLeader`，无选举对象或后端无 leader 键时 `Leader` 报 `ErrElectionNoLeader`（有键时返回其值，主动 Resign 放弃领导权）；
+  `NewLocalMirror` 拒绝 nil 客户端与不支持带修订号前缀快照的客户端；负 lease id、负期望修订号、nil 发布上下文在触达 etcd 前拒绝且不留下 Put / Txn；事务 nil 响应报错而非当失败；watch 关闭以 "watch closed" 记入 LastError。
+  `guards_promises_test.go` 四条；回退 12 处 11 红，`client.go:46`（Get 无键 → ErrKeyNotFound）包着 `*clientv3.Client` 无法替身，留给真机集成。
 - **remoteentity `Assemble` 依赖校验与写批次准入的守卫钉住**（U-0128，C2）。nightly gap map core `remoteentity` 20 条 12 条无覆盖。
   `Assemble` 五种缺失依赖（无 Redis、sid 为零、按 Loader 建后端却无 Mongo、既无 Loader 也无 Backend、Backend 不支持调用方持有的原子事务）各报明确错误，`Start` 拒绝未装配 / 无总线；
   `PrepareRemoteWriteBatch` 对 nil / 无配置管理器、未设后端（且不留下包装器）报 `ErrRemoteWriteCapabilityDisabled`，finalize 槽位耗尽报 `ErrRemoteOverloaded` 且批次 Close 后归还；nil 包装器 / nil 批次的 beginWrite / Commit 不 panic。

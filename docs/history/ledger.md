@@ -127,7 +127,7 @@
 | kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） / 09-09 U-0113（Mod，回退 8 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
-| kit | `etcd` | 09-02 | 09-06 U-0086（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `etcd`（新位置 core/etcd/driver） | 09-02 | 09-06 U-0086（回退 3 条） / 09-09 U-0129（回退 11 条，1 待真机） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lockstep` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0129 | 2026-09-09 | roost-core `etcd/driver` 选举 Resign / Leader、本地镜像写入参数与 watch 关闭 | C2 | nightly 12/20：`local_mirror.go:433`（watch closed）与 `apply` 的 nil 事件错误在流程上等价，只差文本，用一小时重试间隔冻结 LastError 才能钉住；`client.go:46` 需真实 etcd（并入 §0.1 项 1 真机清单） | `guards_promises_test.go` 四条 | 12 处回退 11 红、1 待真机 | — |
 | U-0128 | 2026-09-09 | roost-core `remoteentity` `Assemble` 依赖 / 写批次准入 | C2 | nightly 12/20：P3b 新增的 `Assemble` 五条拒绝零覆盖；finalize 槽位耗尽的 `ErrRemoteOverloaded` 此前无测试。`batch.go:73`（无后端）失效后 ownership 层返回同一哨兵，只有"不留下包装器"能把它钉红。守卫失效会让准入卡在写门 / nil 通道，测试一律带期限 ctx（采样器默认每条等 600s） | `assemble_admission_promises_test.go` 两条 | 12 处回退全红 | — |
 | U-0127 | 2026-09-09 | roost-core `syncstream` `Import` 校验簇 / 其余入口 | C2 | U-0126 全包采样：`Import` 十几条自洽校验只有"断链"一条被测过，其余零覆盖；每条以哨兵拒绝且原子（被拒不改 History）。另 BufferedPublisher nil / 关闭、`Recover` 无提供者、适配器拖尾内容 | `import_guards_promises_test.go` 四条（16 子用例） | 22 处回退全红；全包 56 条 0 无覆盖 | — |
 | U-0126 | 2026-09-09 | roost-core `syncstream` WAL 回放一致性 / 入口依赖 | C2 | nightly 12/20：`replayHistoryMutation` 四条（版本、epoch、追加序号、确认目标）是恢复路径上唯一能查出"WAL 不属于这个检查点"的地方，此前零覆盖；余八条为构造器 / 入口 nil 守卫。全包采样 56 条另有 22 条无覆盖，`Import` 校验簇 12 条转 U-0127 | `wal_replay_promises_test.go` 两条（7 子用例 + 对照续写） | 12 处回退全红 | — |
