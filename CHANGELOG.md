@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **actionflow 任务计划归一化与运行器钩子重入的守卫钉住**（U-0125，C2）。classscan 后本地采样 `actionflow` 25 条 9 条无覆盖。
+  `NormalizePlan` 拒绝无步骤、起点越界、动作为 none、后继越界，`PlanFrom` 拒绝 nil 指针与非计划参数；`startStep` 越界索引；
+  `OnChanged` 钩子在启动途中结束任务时 `StartMission` 报 `ErrReentrantMutation` 且当前任务为空；构建器交出 nil 动作 → `ErrBuilderNil`。
+  `plan_guards_promises_test.go` 四条；回退 9 处守卫 6 红，3 处不红且**保留**：`action_runner` 96 与 `finish` 内的同一重入判定重复、293 与 `registry.BuildAction` 的 nil 检查重复、`mission_runner` 81 在 ending 标志下不可达。
 - **删掉 entity 里四处不可达的 kind 掩码守卫**（U-0123，死代码清理）。`EntityKind` 是 uint8、`EntityKindBits` 是 8，`uint64(kind) > EntityKindMask` 永远为假
   （`ResolveEntityKindCategory`、`registerEntityKindDefinitionLocked`、`BuildEntityID`、`makeEntityID`）。`ErrInvalidEntityKind` 保留为导出符号。
   U-0100 记的 actionflow 四处"防御性重复"复核后**保留**：三处是 finish / EndCurMission / 状态钩子之后的重入检查（钩子可达，只是没测到），一处是 start 的 nil 构建器守卫（注册表返回 nil 动作时可达）——它们是 C2 缺口，不是死代码。

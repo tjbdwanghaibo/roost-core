@@ -123,7 +123,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | kit | `（根：CI 工作流）` | — | — | — | 09-04 U-0001 | — | — | — | — |
 | kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 | — | — | — | — | — | — |
-| kit | `actionflow` | 09-02 | 09-06 U-0077（回退 3 条） / 09-07 U-0100（回退 17 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `actionflow`（新位置 core） | 09-02 | 09-06 U-0077（回退 3 条） / 09-07 U-0100（回退 17 条） / 09-09 U-0125（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） / 09-09 U-0113（Mod，回退 8 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0125 | 2026-09-09 | roost-core `actionflow` 计划归一化 / 钩子重入 / nil 构建器 | C2 | U-0123 复核 actionflow 四处时顺带采样：plan.go 五条无覆盖；mission_runner 92 只有 OnState / OnChanged 钩子调 EndCurMission 才到（StartMission 被 starting 标志挡住）；96 / 293 / 81 为冗余或不可达，保留不删 | `plan_guards_promises_test.go` 四条 | 9 处回退 6 红、2 冗余、1 不可达 | — |
 | U-0124 | 2026-09-09 | roost-codegen `internal/entity` / `internal/nest` 模板内守卫（HANDOFF §4.4、B-25 选项 b 的实体 / sender 部分） | C2（生成物） | 模板字符串里的守卫（entity 五条、nest sender 一条）任何仓内测试都触不到；解法是让生成器顺带产出配套 `_test.go`（access 模板已有先例），在业务工程里跑。未变更运行也补生成；实体退出远端托管时删过期文件 | `guard_tests_promises_test.go`、`sender_guard_test_promises_test.go`；`source-head-check.sh full` 对本地两仓通过 | 生成器层：断言配套文件内容与增删；守卫本体的回退只能在业务工程里做 | — |
 | U-0123 | 2026-09-09 | roost-core `entity` 死守卫清理（HANDOFF §4.4 / U-0099 清单） | 清理 | 四处 `uint64(kind) > EntityKindMask` 对 uint8 不可达，删除；actionflow 四处（action_runner 96 / 293、mission_runner 81 / 92）复核为可达但未测的钩子重入 / nil 构建器守卫，**不删**，转为 C2 候选 | 既有 `kind_registration_promises_test.go` 全绿 | 删除不可达分支无测试可红（本质上不可达） | — |
 | U-0122 | 2026-09-09 | roost-kit `service/chat` Prune 失败计数（O-5） | C5 | chat 的 Metrics 其实就是 `servicemetrics.Reporter`、存储层已有 Sink——O-5 "无指标汇" 判读有误；Prune 的非冲突失败此前不计数 | `prune_failure_promises_test.go` 一条（冲突仍计 conflict:prune） | 去掉 `Dropped("prune.failed")` 即红 | T-47 |
