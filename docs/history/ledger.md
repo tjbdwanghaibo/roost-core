@@ -134,7 +134,7 @@
 | kit | `manager` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mods` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `mongo` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `mongo/mongotest` | 09-02 | 09-06 U-0084（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `mongo/mongotest`（新位置 core） | 09-02 | 09-06 U-0084（回退 3 条） / 09-09 U-0112（回退 12 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nats` | 09-02 | 09-05 U-0012 / 09-06 U-0079（回退 5 条） | 09-02 | 09-02 | 09-06 U-0036 / U-0042 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal`（新位置 core） | 09-02 | 09-06 U-0027 / 09-06 U-0048（回退 40 条） / 09-09 U-0108（回退 14 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0112 | 2026-09-09 | roost-core `mongo/mongotest` 替身契约拒绝 | C2 | nightly 13/20。替换 upsert 只有 BulkWrite 的 ReplaceOne 模型能到；`FindOneAndReplace` 无选项。数字 / 字符串比较经 `$gt` 过滤与 `Sort` 两条路都能到 | `guards_promises_test.go` 三条 | 13 处回退 12 红、1 冗余 | — |
 | U-0111 | 2026-09-09 | roost-core `robot/action` 注册表 / 内建 / RegisterCall 守卫 | C2 | nightly 15/20。"unexpected response type" 靠两个动作共用 msg id、后注册者声明别的响应类型构造（解码器以先注册者为准）；转换失败要连着真实会话才到得了（session 检查在前），复用 call_test 的回声服务端 | `guards_promises_test.go` 三条 | 15 处回退 13 红、1 冗余、1 不可达 | — |
 | U-0110 | 2026-09-09 | roost-core `nest` Cast 辅助 / DispatchBroadcast | C2 | nightly 13/20。`CheckContainAllIDs` 与 `CheckContainAllLock` 都按 GUId 判组，只有 getter 返回"别的实体"时两者才分叉——用替换实体的 getter 构造锁序反转；`id=0` 守卫与 `NormalizeFullID` 同错误类型、只差文案后缀，断言收紧到后缀 | `cast_promises_test.go` 三条 | 13 处回退 9 红、3 冗余（CastMulti 前置）、1 不可达 | — |
 | U-0109 | 2026-09-09 | roost-core `dataengine/engine` 装配 / 删除准入 / 迁移收敛 | C2 | nightly 14/20。方法坑：`RunIsolatedTransaction` 的事务体可能跑在别的 goroutine，`t.Fatalf` 放在里面会被 Goexit 吞掉、首轮回退 0 红——断言必须放事务外；`admitLocalEntityDelete` 的无准备器守卫在事务外，与 `deferEntityDelete` 里的那条不是同一处。迁移三次冲突用 `phantomSystemCommitter`（提交即完成、不写库）构造，关闭 HANDOFF §4.4 / 统一方案 §6 的"MigrationRunner 三次冲突需 SystemCommitter 替身" | 三个 `*_promises_test.go` 七条 | 14 处回退 13 红、1 处不可达 | — |

@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **mongotest 替身的契约拒绝钉住**（U-0112，C2）。nightly gap map `mongo/mongotest` 20 条采样 13 条无覆盖。
+  find-and-modify 未命中要求 after 镜像仍是 `ErrNotFound`、upsert 要求 before 镜像时插入但报 `ErrNotFound`；upsert / 替换 upsert（BulkWrite ReplaceOne）落到已有 `_id` → `ErrDuplicateKey` 且不覆盖；
+  替换改 `_id`、nil 文档、无 `_id` 文档 → `ErrUnsupported`；`$and` 假分支不匹配无错、错分支上抛；`$exists` 非布尔、数字与字符串比大小（过滤与排序）、非 `$replaceWith` 的管道阶段都大声失败。
+  `guards_promises_test.go` 三条；回退 13 处守卫 12 红，1 处不红：FindOneAndUpdate 未命中不 upsert 的早退与随后 "无 before 镜像" 的拒绝同为 `ErrNotFound`（冗余）。
 - **robot/action 注册表、内建动作与 RegisterCall 的守卫钉住**（U-0111，C2）。nightly gap map `robot/action` 20 条采样 15 条无覆盖。
   nil 注册表的 Register / Run、未注册动作点名（含已注册列表）、已带 `robot action ` 前缀的错误不再包一层；`wait_push` 缺 `msg` 参数；`RegisterCall` 缺协议注册表、请求类型不是结构体、
   未连接时 "session not connected"、与别的动作共用 msg id 但声明了别的响应类型时 "unexpected response type"、参数转不成 int / uint（负数）/ float / bool 各自点名字段。
