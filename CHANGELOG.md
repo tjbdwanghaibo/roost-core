@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **skill 执行器流程控制与内存宿主读取 / 伤害目录的守卫钉住**（U-0134，C2）。nightly gap map core `skill` 20 条 9 条无覆盖。
+  分支条件求出非布尔值报 `ErrRuntimeTypeMismatch`；重复体出错或提前 finish 终止循环并原样交回（同步循环与调度回来的单次迭代各一份，后者不再排下一轮）；查询指向表外选择器、迭代任务局部槽 / 迭代数越界报 `ErrProgramInvariant`；
+  内存宿主资源 / 位置 / 属性读取对未知实体报 `ErrEntityNotFound`，伤害命令在目录声明了别的公式策略时报 `ErrCombatPolicyUnsupported`、伤害类型未声明时报 `ErrCombatHandleInvalid` 且血量不变。
+  `executor_flow_promises_test.go` 三条；回退 9 处全红。
 - **skillcompose `BuildContract` 九处前置检查复核为冗余**（U-0133，C2 复核）。nightly gap map core `skill/skillcompose` 20 条 9 条无覆盖，全部是 `BuildContract` 里对空权威 / 空策略 / 空来源 / 重复来源 / 空特性 / 预算溢出 / 生命期溢出的早退；
   U-0063 已对每条输入有测试，守卫失效后末尾 `ValidateContract` 的同一规则仍以 `ErrContractInvalid` 拒绝——是双份而非缺口。保留早退（避免对无效输入算规范摘要），不另加测试。
 - **bus 死信重投前置条件与管理命令 / nil 总线入口的守卫钉住**（U-0132，C2）。nightly gap map core `bus` 20 条 10 条无覆盖。
