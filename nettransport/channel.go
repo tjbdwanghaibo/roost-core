@@ -647,11 +647,6 @@ func signal(channel chan struct{}) {
 	}
 }
 
-func validateDatagramBatch(packets [][]byte, config AsyncTransportConfig) error {
-	_, err := inspectDatagramBatch(packets, config)
-	return err
-}
-
 func validateAndCopyDatagramBatch(packets [][]byte, config AsyncTransportConfig, destination *[][]byte) (uint64, error) {
 	if len(packets) == 0 || len(packets) > config.MaxDatagramsPerFrame {
 		return 0, ErrInvalidDatagramBatch

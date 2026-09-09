@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **nettransport 会话状态准入与控制面的守卫钉住**（U-0131，C2）。nightly gap map core `nettransport` 20 条 10 条无覆盖。
+  `AdmitBatch` 对未注册、排空中（RemoveSession 后下游仍在发）、已失败（可靠通道出错）的会话分别报 `ErrSessionNotRegistered` / `AdmissionError{ErrSessionNotRegistered}` / `ErrSessionFailed`（带下游原因）且不入队；nil 传输报 `ErrTransportClosed`；
+  控制面：无目标不能构造，nil 面 / 零会话拒绝，业务载荷在 UDP 处理器里是 `ErrInvalidControl`、在 `TryHandle` 里是 (false, nil)，`ServeUDP` 缺任一方拒绝。
+  `session_state_promises_test.go` 两条；回退 10 处 9 红，`inspectDatagramBatch` 的批量上限被 `validateAndCopyDatagramBatch` 同一条件先挡住，记冗余保留；无调用方的 `validateDatagramBatch` 删除。
 - **combatcomponent 宿主适配器 / 状态桥 / 持久化 DAO 的守卫钉住**（U-0130，C2）。nightly gap map core `skill/combatcomponent` 20 条 11 条无覆盖。
   事务外自开的分离事务开不起来（无 Committer）时 Apply / PayCosts / StatusBridge.Apply 交回错误而不是对 nil 结果做类型断言，且状态与修订号不变；读请求 / 费用支付对无战斗组件的实体与无属性映射的资源报具体错误且不动底值；
   `RestorePersisted` 拒绝落盘 id 与 DAO id 不符的文档、`Migrate` 只认 1 → 2（legacy JSON 可装入）、已有版本的 DAO 对掩码无字段的补丁拒绝而非生成空 `$set`；修改目录里查不到策略的 buff 实例报错。

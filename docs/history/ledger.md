@@ -138,7 +138,7 @@
 | kit | `nats` | 09-02 | 09-05 U-0012 / 09-06 U-0079（回退 5 条） | 09-02 | 09-02 | 09-06 U-0036 / U-0042 | 09-06 U-0036 | 09-06 脚本扫 | 09-02 |
 | kit | `nest` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `nestwal`（新位置 core） | 09-02 | 09-06 U-0027 / 09-06 U-0048（回退 40 条） / 09-09 U-0108（回退 14 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-05 U-0013 |
-| kit | `nettransport` | 09-02 | 09-06 U-0080（回退 4 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `nettransport`（新位置 core） | 09-02 | 09-06 U-0080（回退 4 条） / 09-09 U-0131（回退 9 条，1 冗余） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
 | kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0131 | 2026-09-09 | roost-core `nettransport` 会话状态准入 / 控制面 | C2 | nightly 10/20：失败态（`queue.failure`）只在"另一条通道仍卡在下游"时可从 AdmitBatch 观察到（两工人都退出会立刻摘表），用忽略 ctx 的数据报替身把会话钉在表里；`inspectDatagramBatch` 上限与调用方 656 行同条件（冗余），`validateDatagramBatch` 无调用方已删 | `session_state_promises_test.go` 两条 | 10 处回退 9 红、1 冗余 | — |
 | U-0130 | 2026-09-09 | roost-core `skill/combatcomponent` 分离事务 nil 结果 / 读与支付准入 / 持久化 DAO / 无策略 buff | C2 | nightly 11/20：三处 `value == nil` 是分离事务失败后的唯一防线（失效即 nil 类型断言 panic），用 nil Committer 触发；`PrepareMutation` 无字段掩码只在 DAO 已有版本时可达（version 0 走整文档 Put） | `guards_promises_test.go` 四条 | 11 处回退全红 | — |
 | U-0129 | 2026-09-09 | roost-core `etcd/driver` 选举 Resign / Leader、本地镜像写入参数与 watch 关闭 | C2 | nightly 12/20：`local_mirror.go:433`（watch closed）与 `apply` 的 nil 事件错误在流程上等价，只差文本，用一小时重试间隔冻结 LastError 才能钉住；`client.go:46` 需真实 etcd（并入 §0.1 项 1 真机清单） | `guards_promises_test.go` 四条 | 12 处回退 11 红、1 待真机 | — |
 | U-0128 | 2026-09-09 | roost-core `remoteentity` `Assemble` 依赖 / 写批次准入 | C2 | nightly 12/20：P3b 新增的 `Assemble` 五条拒绝零覆盖；finalize 槽位耗尽的 `ErrRemoteOverloaded` 此前无测试。`batch.go:73`（无后端）失效后 ownership 层返回同一哨兵，只有"不留下包装器"能把它钉红。守卫失效会让准入卡在写门 / nil 通道，测试一律带期限 ctx（采样器默认每条等 600s） | `assemble_admission_promises_test.go` 两条 | 12 处回退全红 | — |
