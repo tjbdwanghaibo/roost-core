@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **cache 分层读 / 读穿透的失败与未命中传播、Redis 存储键校验、ref-hmap 旧版本拒绝的守卫钉住**（U-0138，C2）。nightly gap map core `cache` 20 条 8 条无覆盖。
+  分层读把远端错误原样上抛、远端未命中不回填零值；读穿透在 L1 出错时不去 load，loader 未命中 / 出错时不写 L2 / L1，`Set` 在 L2 失败且未设 `IgnoreRemoteError` 时报错且不写 L1（宽松模式写入）；
+  Redis hash / raw 存储无 key 函数拒绝写、hash 键或字段为空报 `ErrInvalidKey`（均不触达 Redis）；ref-hmap 的 Stale 判定拒绝旧版本且不改写已存值。
+  `guards_promises_test.go` 四条；回退 8 处全红，采样 20 条无一无覆盖。
 - **lockstep 房间 / 序列器配置、旁观者会话互斥与关闭后拒绝的守卫钉住**（U-0137，C2）。nightly gap map core `lockstep` 20 条 8 条无覆盖。
   无数据报发送器不能建房，序列器拒绝空座位表与重复座位；座位占用的会话不能再挂为旁观者（旁观者重复挂接幂等）、未挂接的旁观者不能追帧；关闭后拒绝挂接旁观者与哈希上报。
   `guards_promises_test.go` 三条；回退 8 处 7 红，`startCatchup` 的 closed 检查在 `Close` 清空全部表后从两个调用方都到不了（先撞 `ErrPlayerDetached`），记不可达保留。
