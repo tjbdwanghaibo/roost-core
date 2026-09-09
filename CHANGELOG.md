@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **nestwal 编解码的版本守卫、条目上限与截断处理钉住**（U-0108，C2）。nightly gap map `nestwal` 20 条采样 14 条无覆盖。
+  v1 写法拒绝回执、延迟生效效果、无远端提交的非 put 变更（三条各自独立触达，同一记录 v2 可写）；unset 路径与效果头超过 `maxEntryCount` 报错；
+  v1 / v2 记录在每一个截断点解码都必须报错且不 panic（读侧 9 处字段错误分支）。`codec_promises_test.go` 三条；回退 14 处守卫各红。
 - **redis 驱动与契约包的守卫钉住**（U-0105 / U-0106，C2，B-19）。gap map `redis/driver` 24 条采样 19 条、`redis` 2 条采样 2 条无覆盖。
   驱动：七个读接口（Get / HGet / LPop / RPop / ZScore / ZRank / ZRevRank）把 go-redis 的 `redis.Nil` 映射为契约 `ErrNil`、传输错误原样透传；
   `EvalDurable` 对形状不对的 WAITAOF 回复报错（用一个照本宣科的 RESP 假服务端对着真实 go-redis 连接跑）；`redisInteger` 拒绝超出 int64 的无符号值；
