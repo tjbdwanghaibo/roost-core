@@ -36,6 +36,9 @@
 
 ### Changed（测试质量）
 
+- **nil / 参数守卫收尾第三批：ownerroute、hotcode、migration、versionstore、mirror、spatial、robot/scenario、log、configdata、httpclient、nats、webroute**（U-0149，C2）。十二个包各一条 `*_promises_test.go`，共 107 条守卫回退 103 红；
+  `hotcode/plugin.go:46` 需要真的 .so 插件（不可测）、`versionstore/redis_store.go:234` 只在读与 CAS 之间被改写时可达（竞态防御）、spatial 212 / 223 互为双份。configdata 的 json 名打平检查有两条镜像分支，要让带 cfg 标签的嵌入字段分别先到 / 后到各一例。
+  actionflow 余三条沿用 U-0125 结论（冗余 / 不可达），`redis/driver/client.go:339`（单条 EvalBatchDurable 返回非 1 个结果）为防御性守卫，均保留。
 - **nil / 参数守卫收尾第二批：robot/loadtest、ai、dataengine、mongo/driver、entity、saga、skill/skillsync**（U-0148，C2）。七个包各一条 `*_promises_test.go`，共 62 条守卫回退 55 红；
   3 处留真机（mongo/driver 的副本集 / 逻辑会话 / 索引冲突需要真实 hello 与索引响应），1 处防御（saga 同事务内回执消失），3 处与下游同哨兵记冗余（ai 谓词深度与 parseNode 同文本、dataengine 围栏回执与 `LeaseFence.Validate` 同哨兵、entity `NormalizeID` 的 none 检查与 `ResolveEntityKindCategory` 同文本）。saga 的异版本信封守卫要装一条合法命令才能钉住（零命令会被 `Validate` 以同哨兵接住）。
 - **nil / 参数守卫收尾第一批：failurelog、robot、syncbus、servicerpc、lifecycle、admin、etcd、worker、goroutine**（U-0147，C2）。九个小包各一条 `*_promises_test.go`，共 40 条守卫回退 37 红；
