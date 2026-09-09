@@ -26,7 +26,7 @@
 | 2 118 个未审格 | **完成**：`classscan.py` 首轮扫过 117 格（service / skill / codegen），无真洞，四条观察 O-1～O-4 记账本 §9 |
 | 3 nightly 高位包 | **完成**：U-0108～U-0116 九个包（core nestwal / dataengine/engine / nest / robot/action / mongotest；kit dataengine Mod / service/session；codegen protocol / nest） |
 | 4 C5 / C8 深挖 | **进行中**：C8 → U-0117；C5 grep 扫 core / kit 后台循环 → U-0120 / U-0121 / U-0122（计数，T-47）、顺带发现并修了 U-0119（activity sweep 组是桩，T-46）。故障切片等 daemon |
-| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity 模板守卫 → 需生成物自带 `*_gen_test.go`（access 模板已有先例）或 source-head 工程里的守卫测试，未做；死守卫清理（actionflow 四处、entity 两处）→ 待决定 |
+| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity 模板守卫 → 需生成物自带 `*_gen_test.go`（access 模板已有先例）或 source-head 工程里的守卫测试，未做；死守卫清理 → U-0123：entity 四处不可达守卫已删；actionflow 四处复核为可达未测，保留并转 C2 候选 |
 | 6 升级器符号改名表 | **完成**：codegen `23c5964` 删除 `renames`，只映射包路径；三处符号由编译器指出，T-45 给改法 |
 
 ## 1. B-18：core `entitysync`（U-0104，C2）

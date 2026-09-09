@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0123 | 2026-09-09 | roost-core `entity` 死守卫清理（HANDOFF §4.4 / U-0099 清单） | 清理 | 四处 `uint64(kind) > EntityKindMask` 对 uint8 不可达，删除；actionflow 四处（action_runner 96 / 293、mission_runner 81 / 92）复核为可达但未测的钩子重入 / nil 构建器守卫，**不删**，转为 C2 候选 | 既有 `kind_registration_promises_test.go` 全绿 | 删除不可达分支无测试可红（本质上不可达） | — |
 | U-0122 | 2026-09-09 | roost-kit `service/chat` Prune 失败计数（O-5） | C5 | chat 的 Metrics 其实就是 `servicemetrics.Reporter`、存储层已有 Sink——O-5 "无指标汇" 判读有误；Prune 的非冲突失败此前不计数 | `prune_failure_promises_test.go` 一条（冲突仍计 conflict:prune） | 去掉 `Dropped("prune.failed")` 即红 | T-47 |
 | U-0121 | 2026-09-09 | roost-kit `service/match` 过期 sweep 失败计数 | C5 | classscan C5 扫描（"报错只打日志就 continue"）：`store.Sweep` 失败只被循环记日志，成功才报 `ticket.expired` | `sweep_failure_promises_test.go` 一条（Update 失败的状态存储） | 去掉 `Dropped("sweep.failed")` 即红 | T-47 |
 | U-0120 | 2026-09-09 | roost-kit `service/global/activity` 后台 sweep 三处失败计数 | C5 | 同上：AdvanceExpired / DueDispatches / 派发尝试失败只打日志 | `sweep_failures_promises_test.go` 一条（Get 失败的 Windows 存储，两次 sweep 计 2） | 去掉 `Dropped("sweep.advance_failed")` 即红 | T-47 |

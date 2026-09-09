@@ -113,9 +113,8 @@ func ResolveEntityKindCategory(kind EntityKind) (EntityCategory, error) {
 	if kind == EntityKindNone {
 		return EntityCategoryNone, fmt.Errorf("entity kind must not be none")
 	}
-	if uint64(kind) > EntityKindMask {
-		return EntityCategoryNone, ErrInvalidEntityKind
-	}
+	// EntityKind is uint8 and EntityKindBits is 8: every value fits the mask, so
+	// there is no "kind above the mask" case to refuse (U-0099 / U-0123).
 	category, ok := EntityCategoryOfKind(kind)
 	if !ok {
 		return EntityCategoryNone, fmt.Errorf("%w: kind %d category is not registered", ErrInvalidEntityID, kind)
@@ -140,9 +139,6 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	category := def.Category
 	if kind == EntityKindNone {
 		return fmt.Errorf("entity kind must not be none")
-	}
-	if uint64(kind) > EntityKindMask {
-		return ErrInvalidEntityKind
 	}
 	if category == EntityCategoryNone {
 		return fmt.Errorf("entity category must not be none for kind %d", kind)

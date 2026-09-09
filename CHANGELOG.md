@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **删掉 entity 里四处不可达的 kind 掩码守卫**（U-0123，死代码清理）。`EntityKind` 是 uint8、`EntityKindBits` 是 8，`uint64(kind) > EntityKindMask` 永远为假
+  （`ResolveEntityKindCategory`、`registerEntityKindDefinitionLocked`、`BuildEntityID`、`makeEntityID`）。`ErrInvalidEntityKind` 保留为导出符号。
+  U-0100 记的 actionflow 四处"防御性重复"复核后**保留**：三处是 finish / EndCurMission / 状态钩子之后的重入检查（钩子可达，只是没测到），一处是 start 的 nil 构建器守卫（注册表返回 nil 动作时可达）——它们是 C2 缺口，不是死代码。
 - **skillsync Outbox 的 Put 与 PutBatch 准入判决一致性钉住**（U-0117，C8，classscan 观察 O-4）。两条路径各自实现总量 / 每流上限 / 重复判断；
   表驱动：同一批数据包顺序 Put 与一次 PutBatch 要么都接受且待发数量与字节数相同，要么以同一个哨兵拒绝且被拒的批不留半批（含"恰好到上限"与"批内重复"）。
   `outbox_batch_consistency_promises_test.go` 一条；把 PutBatch 的总量或每流边界各挪一位，测试即红。

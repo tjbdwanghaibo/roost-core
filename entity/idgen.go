@@ -155,9 +155,6 @@ func buildEntityIDWithCategory(uniqueID int64, category EntityCategory, kind Ent
 	if category == EntityCategoryNone {
 		return 0, fmt.Errorf("%w: category is none", ErrInvalidEntityID)
 	}
-	if uint64(kind) > EntityKindMask {
-		return 0, ErrInvalidEntityKind
-	}
 	if kind == EntityKindNone {
 		return 0, fmt.Errorf("%w: kind is none", ErrInvalidEntityID)
 	}
@@ -168,9 +165,7 @@ func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remo
 	if uint64(category) > EntityCategoryMask {
 		panic(ErrInvalidCategory)
 	}
-	if uint64(kind) > EntityKindMask {
-		panic(ErrInvalidEntityKind)
-	}
+	// kind is uint8 and always within EntityKindMask (8 bits); no check needed.
 	id := ((uint64(uniqueID) & UniqueIDMask) << UniqueIDShift) |
 		((uint64(kind) & EntityKindMask) << EntityKindShift) |
 		(uint64(category) & EntityCategoryMask)
