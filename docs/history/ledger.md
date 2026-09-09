@@ -177,7 +177,7 @@
 | skill | `combatcomponent` | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） / 09-06 U-0094（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
-| skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
+| skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0117（变异 2 红） |
 
 ### roost-codegen（16 包）
 
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0117 | 2026-09-09 | roost-core `skill/skillsync` Outbox Put / PutBatch 准入一致性（classscan O-4） | C8 | 两条路径各算一遍上限，今天一致但无测试钉住 | `outbox_batch_consistency_promises_test.go` 六个用例 | 变异验证：PutBatch 总量 `>`→`>=`、每流上限 +1，各红 | — |
 | U-0116 | 2026-09-09 | roost-codegen `internal/nest` 远端别名 / 模块发现 | C2 | nightly 8/20。5 条不可达或冗余：`empty module path`（TrimSpace 顺序）、多接收者（语法）、error 后非 error（前一条前置）、结构体级别名检查（文件级聚合前置）、模板内 `nestClient` 守卫（生成物，归"生成 + 编译 + 运行"基建） | `guards_promises_test.go` 两条 | 8 处回退 3 红、5 不可达 / 冗余 | — |
 | U-0115 | 2026-09-09 | roost-codegen `internal/protocol` 标记解析 / 定义不变量 / bootstrap | C2 | nightly 8/20。req / resp id 不等与枚举两条从解析器构造不出（解析器总是让 RespID = id），直接对 `validateDefinitions` 构造 Definitions | `guards_promises_test.go` 三条 | 8 处回退各红 | — |
 | U-0114 | 2026-09-09 | roost-kit `service/session` 入口守卫 / run 中途消失 | C2 | nightly 10/20。resolve 与 markReleased 的 `!found` 只在 Get 与 Update 之间 run 被删时到达——用计数"放过前 N 次 Update、之后报未找到"的 RunStore 包装分别构造两处 | `guards_promises_test.go` 五条 | 10 处回退各红 | — |
@@ -540,7 +541,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | C5 静默吞错 | errcheck `-blank -ignoretests` + 脚本的空白赋值匹配 | codegen 16 包 | 62 条：`fmt.Fprintf(stdout…)`；关停 / 清理路径的 `Close/Remove`；正则命中后的 `ParseInt`、解析器给出的 tag 的 `Unquote`、纯值结构的 `MarshalIndent`；`marker.Cut` 在 `marker.Has` 之后；cfggen `fieldByName` / `indexSpec` 丢错的四处都在同函数早先已校验（387 / 403 行）；`render.go` 四处 `resolveMods` 丢错——`LoadManifest` 已 `Validate`（含 `resolveMods`），渲染时不可能再失败 | 无真洞。**观察 O-3**：`render.go` 依赖"渲染前一定校验过"这个隐含前提，若将来有绕过 `LoadManifest` 的入口会静默少装 Mod |
 | C6 常量指标 | 喂字面量的 gauge / observe；只会回答 OK 的健康检查文件 | service + skill | 0 | 无 |
 | C7 释放无 defer | `Lock()` 后两行内无 `defer Unlock`；`Open/Create/Listen` 八行内无 `Close` | codegen 16 包 | 11 条，全部在 `internal/roost/render_access.go` / `render_player_tcp.go` 的**模板文本**里（生成到业务工程的 TCP 服务器）：每处 Lock 都在同作用域配对 Unlock（短临界区、提前解锁）；`net.Listen` 在 Stop 路径 Close | 无真洞 |
-| C8 快慢路径不对称 | 同包函数名成对（`X`/`XBatch`、`X`/`XLocked`、`tryX`/`X` 等） | 三仓目标包 | `chat` Register/MustRegister、`mail` Get/GetMany（absent 与解码错误处理一致）、`mail` deliver/deliverDirect（不同层，非对）、`skillsync` Put/PutBatch、codegen dao 模板 Marshal/MarshalSync、roost Add/runAdd、Generate/runGenerate（CLI 包装） | **观察 O-4 → 候选 C8 单元**：`skillsync.Outbox` 的 `Put` 与 `PutBatch` 各自实现一遍容量 / 每流上限 / 最老待发年龄的判断（`capacityError` 只在 Put 用全，PutBatch 自己再算总量），目前一致；应写"N 次 Put 与 PutBatch(N) 对同一输入判决相同"的表驱动测试钉住 |
+| C8 快慢路径不对称 | 同包函数名成对（`X`/`XBatch`、`X`/`XLocked`、`tryX`/`X` 等） | 三仓目标包 | `chat` Register/MustRegister、`mail` Get/GetMany（absent 与解码错误处理一致）、`mail` deliver/deliverDirect（不同层，非对）、`skillsync` Put/PutBatch、codegen dao 模板 Marshal/MarshalSync、roost Add/runAdd、Generate/runGenerate（CLI 包装） | **观察 O-4 → U-0117 已钉**：`skillsync.Outbox` 的 `Put` 与 `PutBatch` 各自实现一遍容量 / 每流上限 / 最老待发年龄的判断（`capacityError` 只在 Put 用全，PutBatch 自己再算总量），目前一致；应写"N 次 Put 与 PutBatch(N) 对同一输入判决相同"的表驱动测试钉住 |
 | C2（5 格） | nightly 采样数 | skill/combat、codegen genutil / marker / project / servicerpc | combat 0/3、genutil 与 marker 无守卫可采、project 1/2、servicerpc 2/20 | project / servicerpc 的剩余 GREEN 留给 nightly 节拍 |
 
 **方法坑**：字面量扫描会把 `import "encoding/hex"` 这类 import 路径当字面量，占了 service / skill 共享字面量的一半以上——下一版应跳过 import 块；`RunIsolatedTransaction` 类的启发式对 C3 太弱（回调体只看 600 字节），本轮 C3 的"零命中"要按"没有明显的包级累积"理解。

@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **skillsync Outbox 的 Put 与 PutBatch 准入判决一致性钉住**（U-0117，C8，classscan 观察 O-4）。两条路径各自实现总量 / 每流上限 / 重复判断；
+  表驱动：同一批数据包顺序 Put 与一次 PutBatch 要么都接受且待发数量与字节数相同，要么以同一个哨兵拒绝且被拒的批不留半批（含"恰好到上限"与"批内重复"）。
+  `outbox_batch_consistency_promises_test.go` 一条；把 PutBatch 的总量或每流边界各挪一位，测试即红。
 - **gap map 新增 `classscan.py`**（三仓同一份拷贝）：给账本 C3 / C4 / C5 / C6 / C7 / C8 各一条可重复的启发式扫描，只列候选不下结论。首轮扫掉 117 个"未审"格（service 10 包、skill 5 包、codegen 16 包），
   无真洞，记四条观察（codegen 生成器默认路径与编排层重复字面量、account / platform 各自实现会话校验、render 依赖"渲染前已校验"、skillsync Put / PutBatch 双实现）。记录见账本 §9。
 - **mongotest 替身的契约拒绝钉住**（U-0112，C2）。nightly gap map `mongo/mongotest` 20 条采样 13 条无覆盖。
