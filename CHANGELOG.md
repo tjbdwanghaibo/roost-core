@@ -34,6 +34,11 @@
 
 ### Changed（测试质量）
 
+- **nest Cast 辅助与 DispatchBroadcast 的守卫钉住**（U-0110，C2）。nightly gap map `nest` 20 条采样 13 条无覆盖。
+  CastMulti：有派发消息无守卫作用域、有作用域无派发消息（各自隔离，此前一条测试同时缺两者）、消息无 getter、目标 id 为 0（门口文案 `index=0 id=0`，不是归一化错误）、
+  getter 找不到实体（点名 index）、getter 返回的实体 id 与请求不一致导致锁序反转（`ErrCastDeadlockRisk`，用替换实体的 getter 构造）；CastTwo / CastThree 第二、三位类型不匹配各报 `ErrCastTypeMismatch`；
+  `DispatchBroadcast` 空 id 列表 → `ErrInvalidMessage`。`cast_promises_test.go` 三条；回退 13 处守卫 9 红，4 处不红：CastTargetOne / CastTwo / CastThree 的 `len(es) != N || es[i] == nil` 三处被 CastMulti 的
+  数量与 nil 检查前置（冗余），`prepareCastRemoteEntities` 的 "requires an active Nest dispatch" 在 CastMulti 已检查消息后不可达。
 - **dataengine/engine 装配、删除准入与迁移收敛守卫钉住**（U-0109，C2）。nightly gap map `dataengine/engine` 20 条采样 14 条无覆盖（7 条在 P3b 新增的 `Assemble`）。
   `Assemble` 对缺 access / mongo / jetstream、远端投影只给一半、manager 不能应用远端提交各自点名拒绝，`Start` 拒绝未装配对象；outbox 发布器拒绝无 id / 无 topic / 无客户端的效果且不发到 JetStream；
   删除准入：运行时未配置、事务内无生成准备器或远端目标未声明、事务外无准备器、远端写能力缺失 / 批次为空 / 批次拒绝——全部 Immediate + 错误、不提交任何记录；

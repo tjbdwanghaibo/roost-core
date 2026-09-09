@@ -96,7 +96,7 @@
 | core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `mongo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nats` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-08 U-0105 / U-0106（回退 20 条，含 `driver`） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0110 | 2026-09-09 | roost-core `nest` Cast 辅助 / DispatchBroadcast | C2 | nightly 13/20。`CheckContainAllIDs` 与 `CheckContainAllLock` 都按 GUId 判组，只有 getter 返回"别的实体"时两者才分叉——用替换实体的 getter 构造锁序反转；`id=0` 守卫与 `NormalizeFullID` 同错误类型、只差文案后缀，断言收紧到后缀 | `cast_promises_test.go` 三条 | 13 处回退 9 红、3 冗余（CastMulti 前置）、1 不可达 | — |
 | U-0109 | 2026-09-09 | roost-core `dataengine/engine` 装配 / 删除准入 / 迁移收敛 | C2 | nightly 14/20。方法坑：`RunIsolatedTransaction` 的事务体可能跑在别的 goroutine，`t.Fatalf` 放在里面会被 Goexit 吞掉、首轮回退 0 红——断言必须放事务外；`admitLocalEntityDelete` 的无准备器守卫在事务外，与 `deferEntityDelete` 里的那条不是同一处。迁移三次冲突用 `phantomSystemCommitter`（提交即完成、不写库）构造，关闭 HANDOFF §4.4 / 统一方案 §6 的"MigrationRunner 三次冲突需 SystemCommitter 替身" | 三个 `*_promises_test.go` 七条 | 14 处回退 13 红、1 处不可达 | — |
 | U-0108 | 2026-09-09 | roost-core `nestwal` 编解码：v1 版本守卫、条目上限、读侧截断 | C2 | nightly 14/20。已有的 "patch 在 v1 下被拒" 测试其实先撞上回执守卫，三条 v1 守卫要各自隔离；unset 路径夹具必须是合法字段名（canonicalize 先于计数）；截断测试逐字节遍历两种版本、同时断言不 panic | `codec_promises_test.go` 三条 | 14 处守卫回退各红 | — |
 | U-0107 | 2026-09-08 | roost-core `saga` 命令 / 回执摘要、`bus` 死信重投递 ID 的 `json.Marshal` 丢错（B-14） | C5 | 1：`commandDigest` 对年份 10000 的 `DeadlineAt`（`Validate` 放行）返回 sha256(nil)，同一 ID 不同载荷被判重投递、返回别人的完成结果——对着 mongotest 替身复现；`completionDigest`（手写 stable 结构）与 `requeueMsgID`（纯值）当前不可失败，同步改签名 | `saga/digest_promises_test.go` 三条、`bus/promises_test.go` 一条护栏 | 临时恢复 `raw, _ :=`：两条 saga 测试红；修复：三个摘要函数返回错误，六个入口拒绝、`Apply` 在开事务前拒绝 | T-44 |
