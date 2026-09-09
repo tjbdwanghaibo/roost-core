@@ -126,7 +126,7 @@
 | kit | `actionflow`（新位置 core） | 09-02 | 09-06 U-0077（回退 3 条） / 09-07 U-0100（回退 17 条） / 09-09 U-0125（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） / 09-09 U-0113（Mod，回退 8 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
+| kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） / 09-09 U-0113（Mod，回退 8 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 / 09-09 U-0146（Enqueue 落盘后唤醒，修复） |
 | kit | `etcd`（新位置 core/etcd/driver） | 09-02 | 09-06 U-0086（回退 3 条） / 09-09 U-0129（回退 11 条，1 待真机） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0146 | 2026-09-09 | roost-core `dataengine/engine` Projector Commit / Enqueue 两条提交路径 | C8 | 严格路径落盘后 `signal()`，流水线路径票完成时无人唤醒；释放触发的 ReplayPass 早于 fsync 后循环睡 `IdlePoll`（1s）。修复：票完成即 `signal()`。方法坑：`admit()` 会 hold 事务直到 `TransactionReleased`，测试必须像 nest 一样在提交后释放；用 `BatchDelay=200ms` 让释放确定性地早于落盘 | `pipelined_projection_promises_test.go` 两条 | 修前第一条红（Committed 1 / Projected 0，500ms 未投影）；修后 ×3 绿，整包绿 | T-49 |
 | U-0145 | 2026-09-09 | roost-kit `service/mail` 信封单读 / 批读一致（classscan C8 记录） | C8 | `Get` 把"键在但值为空"折叠成不存在，`GetMany` 对同一值报解码错误。测试第一版没红：redis 替身用 `append([]byte(nil), …)` 拷贝把空值混成了 nil——替身的保真度是先决条件，改 `bytes.Clone` 后才现形 | `get_consistency_promises_test.go`（5 种存储形状 × 两条路） | 修前 `m-empty` 一例红；修后全绿，其余 mail 测试不受影响 | T-48 |
 | U-0144 | 2026-09-09 | roost-codegen `internal/entity` 模板余下两条守卫复核（U-0124 遗留） | C2（复核） | `gen.go:348`（快照 DAO 不实现 ApplySync）：DAO 模板恒生成 `ApplySync`；`gen.go:531`（空远端变更）：DAO 模板的 `MarshalPersist` 永远返回整文档、序列化失败 panic 而非返回空。两条对生成 DAO 均不可达，只在实体定义引用手写 DAO 类型时才有意义——保留为防御，不进生成配套测试 | 无 | 不可达（生成物） | — |
 | U-0143 | 2026-09-09 | roost-kit `service/platform` 未记录订单拒绝 / 空输入 / 解析器非正 id | C2 | nightly 7/20：三处"订单未记录"在 Update 闭包内、此前只测了已记录订单的状态机；解析器非正 id 用返回 0 / -5 的 PlayerResolverFunc 钉住 | `order_guards_promises_test.go` 三条 | 7 处回退全红；采样 20 条 0 无覆盖 | — |

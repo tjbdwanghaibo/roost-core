@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- **dataengine 流水线提交落盘后立刻唤醒投影，不再等 IdlePoll**（U-0146，C8；T-49）。`Projector.Commit`（严格）在同步落盘后 `signal()`，而 `Enqueue`（流水线）拿到票就返回、票完成时无人唤醒；事务释放触发的那次 ReplayPass 通常早于 fsync、什么也没看到，于是一批流水线提交的尾巴要等到 `IdlePoll`（默认 1 秒）才落 Mongo。
+  现在 `Enqueue` 在票完成时 `signal()`。`pipelined_projection_promises_test.go` 两条：落盘后 500ms 内必须投影（BatchDelay 200ms 保证释放早于落盘，修前红）；两条路径对超大记录同样拒绝且不留下准入 / 不计提交。
 - **saga / bus 的身份摘要不再丢弃 `json.Marshal` 错误**（U-0107，C5，B-14；T-44）。`commandDigest` / `completionDigest` / `DeadLetterEntry.requeueMsgID`
   改为返回错误：无法序列化的命令 / 回执 / 死信条目此前全部退化成 sha256(nil) 这一个摘要，同一个 ID 带不同载荷再来时被当成重投递、返回别人的完成结果。
   这不是理论风险——`Command` 含 `time.Time`，年份超出 [0,9999] 时 Marshal 报错而 `Validate` 只要求非零，红测试对着 mongotest 替身不需要放宽任何生产入参。

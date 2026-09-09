@@ -199,7 +199,20 @@ func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitR
 		return nil, err
 	}
 	projector.committed.Add(1)
+	// Commit kicks the replay loop right after its synchronous append. A
+	// pipelined record becomes durable later, so the kick has to wait for the
+	// ticket: the transaction's release usually arrives before the fsync, and
+	// a loop woken then finds nothing to replay and sleeps for IdlePoll.
+	go projector.signalWhenDurable(ticket)
 	return ticket, nil
+}
+
+func (projector *Projector) signalWhenDurable(ticket corenest.CommitTicket) {
+	select {
+	case <-ticket.Done():
+		projector.signal()
+	case <-projector.ctx.Done():
+	}
 }
 
 func (projector *Projector) DurableLSN() uint64 {

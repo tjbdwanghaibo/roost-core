@@ -40,7 +40,7 @@ func ensureDeleteGuardKinds() {
 // bareDeleteEntity persists but has no generated PrepareDelete.
 type bareDeleteEntity struct{ *entity.EntityBase }
 
-func (value *bareDeleteEntity) Base() *entity.EntityBase        { return value.EntityBase }
+func (value *bareDeleteEntity) Base() *entity.EntityBase       { return value.EntityBase }
 func (*bareDeleteEntity) OnDestroy(entity.EntityDestroyReason) {}
 
 func newRemoteDeleteEntity(id int64) *deleteTestEntity {
