@@ -65,7 +65,7 @@
 | core | `app` | 09-02 | 09-02 / 09-09 U-0136（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app/buildinfo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） / 09-09 U-0132（回退 7 条，3 冗余） | 09-02 | 09-02 | 09-08 U-0107（requeueMsgID，护栏） | 09-02 | 09-06 脚本扫 | 09-02 |
-| core | `cache` | 09-02 | 09-06 U-0076（回退 2 条） / 09-07 U-0102（回退 8 条） / 09-09 U-0138（回退 8 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0076
+| core | `cache` | 09-02 | 09-06 U-0076（回退 2 条） / 09-07 U-0102（回退 8 条） / 09-09 U-0138（回退 8 条） / 09-09 U-0155（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0076
 | core | `clock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `configdata` | 09-02 | 09-06 U-0046（回退 45 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -167,7 +167,7 @@
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） / 09-09 U-0150 / 09-09 U-0152 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
 | service | `servicemods` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
-| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） / 09-09 U-0114（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
+| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） / 09-09 U-0114（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0154（修复） |
 
 ### roost-skill（5 包）
 
@@ -196,7 +196,7 @@
 | codegen | `internal/project` | — | 09-09 脚本扫（nightly 1/2） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） / 09-09 U-0115（回退 8 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 09-09 脚本扫 | 09-06 U-0030 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） / 09-09 U-0151 / 09-09 U-0152 | — | 09-05 U-0015 / 09-06 U-0029（dev compose） / 09-09 U-0118（16 处字面量→常量） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） / 09-09 U-0151 / 09-09 U-0152 / 09-09 U-0156（修复） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） / 09-09 U-0118（16 处字面量→常量） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/servicerpc` | — | 09-09 脚本扫（nightly 2/20） / 09-09 U-0151 | — | 09-05 U-0024 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/tablegen` | — | 09-06 U-0033（回退 5 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 U-0033 | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/webroute` | — | 09-06 U-0040（回退 4 条，2 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0040 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -236,6 +236,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0157 | 2026-09-09 | roost-core 接入文档（RR-20260909-01） | 文档 | Quickstart 固定 codegen v1.7.0 且 `project new` 缺必填 `-module`，当前 CLI 直接 exit 1；README 版本基线仍列五仓。改为引用发布清单、补 `-module`、三仓顺序 | 无（文档） | — | `docs/bugfix/RR-20260909-01.md` |
+| U-0156 | 2026-09-09 | roost-codegen `internal/roost` consolidate 单行 import 混合分流（RR-20260908-03） | C2 | 新 ImportSpec 文本无条件塞在第一个 spec 之后，默认外面有 `import (...)`；单行 import 得到顶层裸露 spec，format 失败、文件升级失败。修法：找到第一个 import 所在声明，无括号则另起一个括号声明 | `consolidate_single_import_promises_test.go` | 修前红（`expected declaration, found coreredis`）；修后 internal/roost 全绿 | T-52 · `docs/bugfix/RR-20260908-03.md` |
+| U-0155 | 2026-09-09 | roost-core `cache` 读穿透等待名额（RR-20260908-02） | C2 | 跟随者取消离开不减 `waiters`，上限变成累计入场次数。修法：取消路径同锁下减回，且仅当 `s.calls[key]` 仍是本 call | `read_through_waiters_promises_test.go`（含真满额仍拒绝） | 修前红（第二个跟随者被拒）；修后 cache 全绿 | T-51 · `docs/bugfix/RR-20260908-02.md` |
+| U-0154 | 2026-09-09 | roost-kit `service/session` Enter 跨 owner RequestID 竞争（RR-20260908-01，方案 B） | C8 | claim 串行化 owner，账本才是 RequestID 的仲裁点，但账本 Create 的 created=false 被丢弃。修法：账本写入改 `Update` CAS；撞键且 owner 不同 → 撤回本次 run（版本删）与 claim（版本删，不匹配视为已被替换）并以 ErrRequestInvalid 拒绝，计 `request_owner_collision`；owner 相同 → 撤回后按重放返回。既有"账本写失败"测试的替身补 Update | `enter_ledger_collision_promises_test.go`（审查附录屏障账本） | 修前红（两 owner 都成功）；修后 session 全绿含 -race | T-50 · `docs/bugfix/RR-20260908-01.md` |
 | U-0153 | 2026-09-09 | 五条真机守卫（core etcd/driver client.go:46、mongo/driver client.go:90 / 93、collection.go:262；kit nats_mod.go:64 / 110） | C2（真机） | 本机集成环境靠 brew 二进制（mongod / nats-server / redis / etcd / toxiproxy），不需要 docker——此前一直误以为 daemon 是阻塞项。etcd 与单机 mongod 由测试自起；副本集与 NATS 用 env.sh。mongod 8.0 单机也报告 logicalSessionTimeoutMinutes，`client.go:93` 对受支持版本不可达。顺带发现两个基建问题：toxic RPC 测试跨轮主题重叠（持久化环境下第二轮必败）、脚本 core 段只跑 `./redis` 而故障套件在 `redis/driver`（搬迁后漏改，Redis 切片一直未在该命令里执行） | core `real_etcd_promises_test.go`、`real_mongo_promises_test.go`；kit `nats_mod_real_promises_test.go`（均 `-tags integration`） | 5 处手工回退各红（带标签跑）；93 记不可达；fresh 环境整套 `dataengine-env.sh test` 绿，含 redis/driver 故障套件 | — |
 | U-0152 | 2026-09-09 | U-0150 / U-0151 留待的五条守卫（kit rank 211 / 224、split 78、manager 131；codegen add.go:299） | C2 | 四条可钉：Lua 形状用覆写 Eval 的替身按脚本返回；split 的 `grantToInventory` 是示例桩、改包级变量后可替换；manager 用 Start 里置 stopping 且 StopWithContext 失败的管理器。`add.go:299` 只在 SyncProject 执行期间清单被并发改写或 I/O 故障时可达（rollbackSync 的两条失败分支各自已有直接测试，本轮补上"回滚前不可检查"那条） | rank `lua_shape_promises_test.go`、split `cancel_failure_promises_test.go`、manager `abort_promises_test.go`、roost `rollback_inspect_promises_test.go` | 4 处回退红（采样器）；rollbackSync 检查分支手工回退红；299 防御性包装 | — |
 | U-0151 | 2026-09-09 | roost-codegen 八个包 nil / 参数守卫收尾（dao / servicerpc / eventgen / tablegen / attribute / webroute / project / cfggen） | C2（批次） | 本地重采样清单，全部入口 / 解析守卫。`internal/roost/add.go:57 / 73` 既有测试按文本覆盖但失效后同步阶段同文本（冗余）；`add.go:299` 留待。三仓 nil / 参数守卫至此收尾：U-0147～U-0151 共 5 批 48 包、约 300 条守卫，红 ≈ 280，其余为真机（5）/ 不可测（1）/ 留待（5）/ 冗余 / 不可达 | 八个包各一条 `*_promises_test.go` | 13 处回退全红 | — |

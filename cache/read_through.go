@@ -101,6 +101,14 @@ func (s *ReadThroughStore[K, V]) load(ctx context.Context, key K) (V, bool, erro
 		case <-call.done:
 			return call.value, call.ok, call.err
 		case <-ctx.Done():
+			// Give the slot back: the limit counts live followers, not entries.
+			// Only if this is still the same load — a finished load is gone from
+			// the map, and a newer one for the key must not be debited.
+			s.mu.Lock()
+			if s.calls[key] == call {
+				call.waiters--
+			}
+			s.mu.Unlock()
 			var zero V
 			return zero, false, ctx.Err()
 		}

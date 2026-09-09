@@ -18,15 +18,18 @@ docker compose version
 
 ## 2. 安装并生成项目
 
-`roost-codegen v1.7.0` 发布后执行：
+安装当前发布组合里的 codegen（版本以 roost-codegen `ci/framework-release.yaml` 为准，2026-09-09 为 codegen v1.15.3 / core v1.15.1 / kit v1.14.2）：
 
 ```bash
-go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.7.0
+go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.15.3
 roost project new planet \
+  -module example.com/planet \
   -services game,gate \
   -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest
 cd planet
 ```
+
+`-module` 是必填项：生成的 import 路径要指向你自己的仓库，CLI 不会替你猜。
 
 生成目录中的关键内容：
 

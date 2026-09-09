@@ -1,6 +1,6 @@
 # 多仓研发与发布
 
-Roost 研发期以五仓 source-head 联调为主，正式稳定后再固定发布版本。两种模式必须隔离：
+Roost 研发期以三仓 source-head 联调为主，正式稳定后再固定发布版本。两种模式必须隔离：
 workspace 解决研发效率，module/tag 证明外部用户可安装和复现。
 
 ## 研发模式：go.work
@@ -77,7 +77,7 @@ GOWORK=off go test ./...
 GOWORK=off go vet ./...
 ```
 
-Windows PowerShell 使用 `$env:GOWORK='off'`。发布顺序固定为 core → kit → skill → service →
+Windows PowerShell 使用 `$env:GOWORK='off'`。发布顺序固定为 core → kit →
 codegen；后一层只能引用已经存在的正式 tag。每层发布后再执行 pure-tag 生成工程 smoke。
 以下内容一律阻断 tag：
 

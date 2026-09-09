@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- **cache 读穿透的等待名额在跟随者取消后归还**（U-0155，C2；RR-20260908-02，T-51）。`MaxWaitersPerKey` 此前计的是本次 load 期间累计进过门的次数：跟随者因取消 / 超时离开时 `waiters` 不减，慢后端叠加短超时重试会在首个 load 结束前一直以 `ErrLoadWaitersExceeded` 拒绝健康请求。现在取消路径在同一把锁下减回，且只对仍是当前 load 的 call 减（新一轮 load 不被误扣）。`read_through_waiters_promises_test.go` 修前红，真满额仍拒绝。修复记录见 `docs/bugfix/RR-20260908-02.md`。
+- **接入文档与三仓发布组合一致**（U-0157；RR-20260909-01）。Quickstart 从固定 codegen v1.7.0 改为引用发布清单（当前 v1.15.3），`project new` 示例补上必填的 `-module`；`docs/README.md` 版本基线与 `DEVELOPMENT_WORKSPACE.md` 发布顺序改为三仓。
 - **dataengine 流水线提交落盘后立刻唤醒投影，不再等 IdlePoll**（U-0146，C8；T-49）。`Projector.Commit`（严格）在同步落盘后 `signal()`，而 `Enqueue`（流水线）拿到票就返回、票完成时无人唤醒；事务释放触发的那次 ReplayPass 通常早于 fsync、什么也没看到，于是一批流水线提交的尾巴要等到 `IdlePoll`（默认 1 秒）才落 Mongo。
   现在 `Enqueue` 在票完成时 `signal()`。`pipelined_projection_promises_test.go` 两条：落盘后 500ms 内必须投影（BatchDelay 200ms 保证释放早于落盘，修前红）；两条路径对超大记录同样拒绝且不留下准入 / 不计提交。
 - **saga / bus 的身份摘要不再丢弃 `json.Marshal` 错误**（U-0107，C5，B-14；T-44）。`commandDigest` / `completionDigest` / `DeadLetterEntry.requeueMsgID`
