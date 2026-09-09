@@ -2,9 +2,11 @@ package saga
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -39,10 +41,20 @@ func TestAssembleAndStepConsumerRefuseMissingPartsAndForeignEnvelopes(t *testing
 	if js.handler == nil {
 		t.Fatal("subscription did not install a handler")
 	}
+	// 异版本信封里放一条完全合法的命令：没有版本守卫它会被当作正常命令执行。
+	now := time.Now().UTC()
+	valid := Command{ID: "cmd-1", IdempotencyKey: "idem-1", SagaID: "saga1", SagaType: "order", DefinitionVersion: 1, BusinessKey: "bk-1", StepName: "charge", Phase: PhaseForward, Attempt: 1, Topic: "charge", DeadlineAt: now.Add(time.Hour), CreatedAt: now}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("fixture command invalid: %v", err)
+	}
+	foreign, err := json.Marshal(commandEnvelope{Version: WireVersion + 1, Command: valid})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]*fnats.JetStreamMsg{
 		"nil message":     nil,
 		"oversized":       {Data: make([]byte, maxWireEnvelopeBytes+1)},
-		"foreign version": {Data: []byte(`{"version":99}`)},
+		"foreign version": {Data: foreign},
 	}
 	for name, message := range cases {
 		err := js.handler(ctx, message)
