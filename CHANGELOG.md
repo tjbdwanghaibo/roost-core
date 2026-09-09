@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **syncstream `Import` 自洽校验簇与其余入口守卫钉住**（U-0127，C2）。U-0126 全包采样余下 22 条无覆盖。
+  `Import` 十六种不自洽快照（版本、无 epoch、超 MaxStreams、无 topic、重复流、acked 越过 latest、有 latest 无包未全确认、包身份 / epoch / schema 不符、载荷超限、首个 delta 基线错、schema 跃迁无 full、full 带基线、latest 与包不符、无 schema）各报对应哨兵且被拒后 History 不变；
+  `Save` / `Restore` 无存储、`Append` 无 topic 不建流、异 epoch 确认不落账、需要全量而无提供者、`BufferedPublisher` nil / 关闭后不再转发、适配器拒绝拖尾 JSON。
+  `import_guards_promises_test.go` 四条；回退 22 处全红，包内 56 条守卫无一无覆盖。
 - **syncstream WAL 回放与入口依赖的守卫钉住**（U-0126，C2）。nightly gap map core `syncstream` 20 条 12 条无覆盖。
   检查点之后的 WAL 行必须与检查点相接：异代格式、另一 epoch、追加跳号 / 重号、确认未知流 / 越过 latest、未知种类七种都以 `ErrInvalidSnapshot` 拒绝整次 `Load`，相接的续写被回放；
   `NewFileHistoryJournal` 空目录、nil 日志的 Record / Load / Checkpoint、`NewHistoryWithJournal(nil)`、无日志或 nil History 的 `Checkpoint`、nil 总线的 Publisher / Subscribe、nil handler 各报对应哨兵，被拒的 Subscribe 不装 handler。

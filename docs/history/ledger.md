@@ -112,7 +112,7 @@
 | core | `security` | 09-02 | 09-06 U-0068（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `syncbus` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
-| core | `syncstream` | 09-02 | 09-06 U-0074（回退 4 条） / 09-09 U-0126（回退 12 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `syncstream` | 09-02 | 09-06 U-0074（回退 4 条） / 09-09 U-0126（回退 12 条） / 09-09 U-0127（回退 22 条，全包 56 条清零） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `timer` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `webroute` | 09-02 | 09-06 U-0075（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `worker` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0127 | 2026-09-09 | roost-core `syncstream` `Import` 校验簇 / 其余入口 | C2 | U-0126 全包采样：`Import` 十几条自洽校验只有"断链"一条被测过，其余零覆盖；每条以哨兵拒绝且原子（被拒不改 History）。另 BufferedPublisher nil / 关闭、`Recover` 无提供者、适配器拖尾内容 | `import_guards_promises_test.go` 四条（16 子用例） | 22 处回退全红；全包 56 条 0 无覆盖 | — |
 | U-0126 | 2026-09-09 | roost-core `syncstream` WAL 回放一致性 / 入口依赖 | C2 | nightly 12/20：`replayHistoryMutation` 四条（版本、epoch、追加序号、确认目标）是恢复路径上唯一能查出"WAL 不属于这个检查点"的地方，此前零覆盖；余八条为构造器 / 入口 nil 守卫。全包采样 56 条另有 22 条无覆盖，`Import` 校验簇 12 条转 U-0127 | `wal_replay_promises_test.go` 两条（7 子用例 + 对照续写） | 12 处回退全红 | — |
 | U-0125 | 2026-09-09 | roost-core `actionflow` 计划归一化 / 钩子重入 / nil 构建器 | C2 | U-0123 复核 actionflow 四处时顺带采样：plan.go 五条无覆盖；mission_runner 92 只有 OnState / OnChanged 钩子调 EndCurMission 才到（StartMission 被 starting 标志挡住）；96 / 293 / 81 为冗余或不可达，保留不删 | `plan_guards_promises_test.go` 四条 | 9 处回退 6 红、2 冗余、1 不可达 | — |
 | U-0124 | 2026-09-09 | roost-codegen `internal/entity` / `internal/nest` 模板内守卫（HANDOFF §4.4、B-25 选项 b 的实体 / sender 部分） | C2（生成物） | 模板字符串里的守卫（entity 五条、nest sender 一条）任何仓内测试都触不到；解法是让生成器顺带产出配套 `_test.go`（access 模板已有先例），在业务工程里跑。未变更运行也补生成；实体退出远端托管时删过期文件 | `guard_tests_promises_test.go`、`sender_guard_test_promises_test.go`；`source-head-check.sh full` 对本地两仓通过 | 生成器层：断言配套文件内容与增删；守卫本体的回退只能在业务工程里做 | — |
