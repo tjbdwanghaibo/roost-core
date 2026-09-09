@@ -34,6 +34,12 @@
 
 ### Changed（测试质量）
 
+- **dataengine/engine 装配、删除准入与迁移收敛守卫钉住**（U-0109，C2）。nightly gap map `dataengine/engine` 20 条采样 14 条无覆盖（7 条在 P3b 新增的 `Assemble`）。
+  `Assemble` 对缺 access / mongo / jetstream、远端投影只给一半、manager 不能应用远端提交各自点名拒绝，`Start` 拒绝未装配对象；outbox 发布器拒绝无 id / 无 topic / 无客户端的效果且不发到 JetStream；
+  删除准入：运行时未配置、事务内无生成准备器或远端目标未声明、事务外无准备器、远端写能力缺失 / 批次为空 / 批次拒绝——全部 Immediate + 错误、不提交任何记录；
+  装载迁移三次仍不收敛以 `ErrMigrationConflict` 放弃（用"提交即投影完成但什么都不写"的 SystemCommitter 替身，U-0101 留下的那条）。
+  `assembly_promises_test.go` 两条、`entity_delete_promises_test.go` 四条、`entity_repository_migration_promises_test.go` 一条；回退 14 处守卫 13 红，
+  1 处不红：`admitLocalEntityDelete` 事务体内 `tx == nil` 在 `RunIsolatedTransaction` 下不可达。
 - **nestwal 编解码的版本守卫、条目上限与截断处理钉住**（U-0108，C2）。nightly gap map `nestwal` 20 条采样 14 条无覆盖。
   v1 写法拒绝回执、延迟生效效果、无远端提交的非 put 变更（三条各自独立触达，同一记录 v2 可写）；unset 路径与效果头超过 `maxEntryCount` 报错；
   v1 / v2 记录在每一个截断点解码都必须报错且不 panic（读侧 9 处字段错误分支）。`codec_promises_test.go` 三条；回退 14 处守卫各红。
