@@ -34,6 +34,9 @@
 
 ### Changed（测试质量）
 
+- **app 反向停机 / 生命周期事件 / Mod 排序 / 能力批量注册的守卫钉住**（U-0136，C2）。nightly gap map core `app` 12 条 9 条无覆盖。
+  停机上下文已结束时立刻带 ctx 错误返回、不再进入任何 Mod 的 Stop；`emitLifecycle` 对 nil app / 无 registry / lifecycle 能力缺失或类型不对报错；`sortMods` 拒绝 nil 条目、空名、重名；`ValidateServiceConfig(nil)` 拒绝；`RegisterBatch` 对空名与批内重名整批拒绝且不发布任何一项。
+  `guards_promises_test.go` 四条；回退 9 处全红（停机那条因 Stop 跑在 goroutine 里，用"返回后 50ms 内未进入"钉住）。
 - **nats/driver 请求上下文翻译、RPC 重试判定与 JetStream 客户端入口的守卫钉住**（U-0135，C2）。nightly gap map core `nats/driver` 18 条 9 条无覆盖。
   已到期 / 已取消的上下文分别翻译成 `ErrTimeout` / `ErrCancelled`；`QueueSubscribe` 缺队列名在触达连接前拒绝；`Call` 对不可重试错误立刻返回、不做退避（可重试的超时确实进入下一轮）；JetStream 客户端对 nil 客户端 / 未初始化 / nil 处理器各报其错。
   `guards_promises_test.go` 三条；回退 9 处全红，包内 18 条守卫无一无覆盖。
