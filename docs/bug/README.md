@@ -5,10 +5,10 @@
 
 | 编号 | 优先级 | 仓库 | 问题 | 状态 |
 | --- | --- | --- | --- | --- |
-| RR-20260908-01 | P2 | kit | Session 忽略幂等账本 Create 的竞争失败 | 已修复（U-0154，未发版）→ [bugfix](../bugfix/RR-20260908-01.md) |
-| RR-20260908-02 | P2 | core | ReadThrough 取消等待不归还名额 | 已修复（U-0155，未发版）→ [bugfix](../bugfix/RR-20260908-02.md) |
-| RR-20260908-03 | P2 | codegen | 单行 import 包拆分产生非法 Go 语法 | 已修复（U-0156，未发版）→ [bugfix](../bugfix/RR-20260908-03.md) |
-| RR-20260909-01 | P2 | core/docs | 当前接入指南的版本与必需参数不一致 | 已修复（U-0157）→ [bugfix](../bugfix/RR-20260909-01.md) |
+| RR-20260908-01 | P2 | kit | Session 忽略幂等账本 Create 的竞争失败 | 已修复（U-0154，kit v1.14.3）→ [bugfix](../bugfix/RR-20260908-01.md) |
+| RR-20260908-02 | P2 | core | ReadThrough 取消等待不归还名额 | 已修复（U-0155，core v1.15.2）→ [bugfix](../bugfix/RR-20260908-02.md) |
+| RR-20260908-03 | P2 | codegen | 单行 import 包拆分产生非法 Go 语法 | 已修复（U-0156，codegen v1.15.4）→ [bugfix](../bugfix/RR-20260908-03.md) |
+| RR-20260909-01 | P2 | core/docs | 当前接入指南的版本与必需参数不一致 | 已修复（U-0157，core v1.15.2）→ [bugfix](../bugfix/RR-20260909-01.md) |
 
 [问题详情](REVIEW-2026-09-08.md) · [复现附录](REPRO-2026-09-08.md) ·
 [学习与验证记录](../review/REVIEW-2026-09-08.md)。

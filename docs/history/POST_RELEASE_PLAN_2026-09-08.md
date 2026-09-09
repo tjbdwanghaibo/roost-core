@@ -37,6 +37,12 @@ core v1.15.1（U-0146 流水线提交落盘即唤醒投影，T-49；U-0126～U-0
 
 **一处失误**：kit 的 `go get roost-core@v1.15.1` 因 goproxy.cn 的 sumdb 暂时 404 失败，管道里的 `tail` 掩盖了退出码，回退分支没跑，kit v1.14.2 的 go.mod 仍 pin core v1.15.0，tag 已推不重打；kit 的修复不依赖 core v1.15.1，消费方按清单同时取两者即可，CHANGELOG 已更正说明，下次 kit 发版再升 pin。教训：发版脚本里的每一步不要接管道，或开 `pipefail`。
 
+## 0.3 第三次发版（2026-09-09 傍晚）：docs/bug 四项 RR 的修复
+
+core v1.15.2（U-0155 cache 等待名额归还，T-51；U-0157 接入文档）→ kit v1.14.3（U-0154 session Enter 账本 CAS，T-50；go.mod pin 升到 core v1.15.2，补上 v1.14.2 漏掉的那次）→ codegen v1.15.4（U-0156 consolidate 单行 import，T-52；清单 core v1.15.2 / kit v1.14.3）。修复记录见 [../bugfix/](../bugfix/README.md)。三条 tag 的 `ci` 全绿（core 34329421732、kit 34329677953、codegen 34330142658）。
+
+kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo` 绕开 goproxy.cn 的 sumdb 延迟，并开了 `pipefail`；CHANGELOG 的依赖说明因脚本里一处断言失败没随 tag 提交，随后补在 main。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：
