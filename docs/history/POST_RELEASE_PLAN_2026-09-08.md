@@ -26,7 +26,7 @@
 | 2 118 个未审格 | **完成**：`classscan.py` 首轮扫过 117 格（service / skill / codegen），无真洞，四条观察 O-1～O-4 记账本 §9 |
 | 3 nightly 高位包 | **完成**：U-0108～U-0116 九个包（core nestwal / dataengine/engine / nest / robot/action / mongotest；kit dataengine Mod / service/session；codegen protocol / nest）；第二批 **完成**：U-0126～U-0143（core syncstream ×2 / remoteentity / etcd/driver / skill/combatcomponent / nettransport / bus / skillcompose（复核） / skill / nats/driver / app / lockstep / cache / statesync；kit service/mail / match / account / platform），昨夜报告 ≥7/20 的包全部处理；4 条真机待补（etcd client.go:46）、其余未红者均已记冗余 / 不可达 |
 | 4 C5 / C8 深挖 | **进行中**：C8 → U-0117；C5 grep 扫 core / kit 后台循环 → U-0120 / U-0121 / U-0122（计数，T-47）、顺带发现并修了 U-0119（activity sweep 组是桩，T-46）。故障切片等 daemon |
-| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity / nest sender 模板守卫 → U-0124 生成物自带 `*_gen_wire_test.go` / `*_nest_gen_test.go`；死守卫清理 → U-0123：entity 四处不可达守卫已删；actionflow 四处复核：一处可达未测 → U-0125 钉住，三处冗余 / 不可达保留 |
+| 5 顺手观察 | MigrationRunner 三次冲突 → U-0109 已钉；O-1 路径字面量 → U-0118 已改；codegen entity / nest sender 模板守卫 → U-0124 生成物自带 `*_gen_wire_test.go` / `*_nest_gen_test.go`，余两条 U-0144 复核为对生成 DAO 不可达；死守卫清理 → U-0123：entity 四处不可达守卫已删；actionflow 四处复核：一处可达未测 → U-0125 钉住，三处冗余 / 不可达保留 |
 | 6 升级器符号改名表 | **完成**：codegen `23c5964` 删除 `renames`，只映射包路径；三处符号由编译器指出，T-45 给改法 |
 
 **2026-09-09 第二次发版**：kit v1.14.1（tag CI integration 首跑遇 Mongo 选主抖动，重跑绿）→ codegen v1.15.2（framework-release 全绿，8 个资产）。core 未发版：v1.15.0 之后只有测试、文档与 U-0123 的死代码删除。

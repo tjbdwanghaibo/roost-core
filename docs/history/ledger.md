@@ -187,7 +187,7 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/genutil` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0144 | 2026-09-09 | roost-codegen `internal/entity` 模板余下两条守卫复核（U-0124 遗留） | C2（复核） | `gen.go:348`（快照 DAO 不实现 ApplySync）：DAO 模板恒生成 `ApplySync`；`gen.go:531`（空远端变更）：DAO 模板的 `MarshalPersist` 永远返回整文档、序列化失败 panic 而非返回空。两条对生成 DAO 均不可达，只在实体定义引用手写 DAO 类型时才有意义——保留为防御，不进生成配套测试 | 无 | 不可达（生成物） | — |
 | U-0143 | 2026-09-09 | roost-kit `service/platform` 未记录订单拒绝 / 空输入 / 解析器非正 id | C2 | nightly 7/20：三处"订单未记录"在 Update 闭包内、此前只测了已记录订单的状态机；解析器非正 id 用返回 0 / -5 的 PlayerResolverFunc 钉住 | `order_guards_promises_test.go` 三条 | 7 处回退全红；采样 20 条 0 无覆盖 | — |
 | U-0142 | 2026-09-09 | roost-kit `service/account` SelectRole 竞态拒绝 / 会话与档案的角色缺失 / 入口校验 | C2 | nightly 8/20：`SelectRole` Update 闭包内的两条（角色消失、换主）只有在 Get 与 CAS 之间换掉状态才可达，用替换闭包入参的 Roles 替身钉住（与 U-0114 session 同法）；`ValidateSession` 需自签一个无角色玩家的 token | `role_guards_promises_test.go` 三条 | 8 处回退全红；采样 20 条 0 无覆盖 | — |
 | U-0141 | 2026-09-09 | roost-kit `service/match` 读取未命中 / 错误传播、Cancel / Commit 兜底 | C2 | nightly 8/20：四处 `err != nil \|\| !found` 失效后会把存储错误当空队列吞掉，用返回错误的状态替身钉住；`Commit` 的"同主体两票"只有直接注入损坏状态才可达（Enqueue 本身禁止），是对旧数据的兜底；263 与 268 同哨兵（冗余） | `read_guards_promises_test.go` 四条 | 8 处回退 7 红、1 冗余 | — |
