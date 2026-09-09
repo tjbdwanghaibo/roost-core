@@ -126,7 +126,7 @@
 | kit | `actionflow` | 09-02 | 09-06 U-0077（回退 3 条） / 09-07 U-0100（回退 17 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
+| kit | `dataengine`（U-0025：C4 09-06；实现新位置 core `dataengine/engine`） | 09-02 | 09-06 U-0078（回退 4 条） / 09-07 U-0101（回退 7 条） / 09-09 U-0109（回退 13 条） / 09-09 U-0113（Mod，回退 8 条） | 09-02 | 09-02 | 09-06 U-0037 | 09-02 | 09-06 脚本扫 | 09-06 U-0037 |
 | kit | `etcd` | 09-02 | 09-06 U-0086（回退 3 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `gateway` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -167,7 +167,7 @@
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
 | service | `servicemods` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
-| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
+| service | `session` | 09-06 脚本扫 | 09-05 U-0017（回退验证） / 09-06 U-0056（回退 40 条） / 09-09 U-0114（回退 10 条） | 未审 | 未审 | 09-06 脚本扫 | 未审 | 09-06 脚本扫 | 未审 |
 
 ### roost-skill（5 包）
 
@@ -192,9 +192,9 @@
 | codegen | `internal/eventgen` | — | 09-06 U-0038 | — | 未审 | 09-06 U-0038 | — | 未审 | 未审 |
 | codegen | `internal/genutil` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/marker` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） / 09-09 U-0116（回退 3 条，5 不可达 / 冗余） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/project` | — | 未审 | — | 未审 | 未审 | — | 未审 | 未审 |
-| codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） | — | 未审 | 未审 | — | 未审 | 未审 |
+| codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） / 09-09 U-0115（回退 8 条） | — | 未审 | 未审 | — | 未审 | 未审 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 未审 | 09-06 U-0030 | — | 未审 | 未审 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） | 未审 | — | 未审 | 未审 |
 | codegen | `internal/servicerpc` | — | 未审 | — | 09-05 U-0024 | 未审 | — | 未审 | 未审 |
@@ -236,6 +236,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0116 | 2026-09-09 | roost-codegen `internal/nest` 远端别名 / 模块发现 | C2 | nightly 8/20。5 条不可达或冗余：`empty module path`（TrimSpace 顺序）、多接收者（语法）、error 后非 error（前一条前置）、结构体级别名检查（文件级聚合前置）、模板内 `nestClient` 守卫（生成物，归"生成 + 编译 + 运行"基建） | `guards_promises_test.go` 两条 | 8 处回退 3 红、5 不可达 / 冗余 | — |
+| U-0115 | 2026-09-09 | roost-codegen `internal/protocol` 标记解析 / 定义不变量 / bootstrap | C2 | nightly 8/20。req / resp id 不等与枚举两条从解析器构造不出（解析器总是让 RespID = id），直接对 `validateDefinitions` 构造 Definitions | `guards_promises_test.go` 三条 | 8 处回退各红 | — |
+| U-0114 | 2026-09-09 | roost-kit `service/session` 入口守卫 / run 中途消失 | C2 | nightly 10/20。resolve 与 markReleased 的 `!found` 只在 Get 与 Update 之间 run 被删时到达——用计数"放过前 N 次 Update、之后报未找到"的 RunStore 包装分别构造两处 | `guards_promises_test.go` 五条 | 10 处回退各红 | — |
+| U-0113 | 2026-09-09 | roost-kit `dataengine` Mod 能力查找 / 生命周期 | C2 | nightly 10/10（P3b 后 Mod 的全部职责）。健康注册表是 registry 内建，"缺 health" 不可达；实体访问守卫与 core Assemble 同文案冗余 | `mod_promises_test.go` 两条 | 10 处回退 8 红、1 冗余、1 不可达 | — |
 | U-0112 | 2026-09-09 | roost-core `mongo/mongotest` 替身契约拒绝 | C2 | nightly 13/20。替换 upsert 只有 BulkWrite 的 ReplaceOne 模型能到；`FindOneAndReplace` 无选项。数字 / 字符串比较经 `$gt` 过滤与 `Sort` 两条路都能到 | `guards_promises_test.go` 三条 | 13 处回退 12 红、1 冗余 | — |
 | U-0111 | 2026-09-09 | roost-core `robot/action` 注册表 / 内建 / RegisterCall 守卫 | C2 | nightly 15/20。"unexpected response type" 靠两个动作共用 msg id、后注册者声明别的响应类型构造（解码器以先注册者为准）；转换失败要连着真实会话才到得了（session 检查在前），复用 call_test 的回声服务端 | `guards_promises_test.go` 三条 | 15 处回退 13 红、1 冗余、1 不可达 | — |
 | U-0110 | 2026-09-09 | roost-core `nest` Cast 辅助 / DispatchBroadcast | C2 | nightly 13/20。`CheckContainAllIDs` 与 `CheckContainAllLock` 都按 GUId 判组，只有 getter 返回"别的实体"时两者才分叉——用替换实体的 getter 构造锁序反转；`id=0` 守卫与 `NormalizeFullID` 同错误类型、只差文案后缀，断言收紧到后缀 | `cast_promises_test.go` 三条 | 13 处回退 9 红、3 冗余（CastMulti 前置）、1 不可达 | — |
