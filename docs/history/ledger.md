@@ -176,7 +176,7 @@
 | skill | `combat` | 09-06 脚本扫 | 09-09 脚本扫（nightly 0/3） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `combatcomponent`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） / 09-09 U-0130（回退 11 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skill` | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） / 09-06 U-0094（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
-| skill | `skillcompose` | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
+| skill | `skillcompose`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） / 09-09 U-0133（9 处复核冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0117（变异 2 红） |
 
 ### roost-codegen（16 包）
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0133 | 2026-09-09 | roost-core `skill/skillcompose` `BuildContract` 前置检查复核 | C2（复核） | nightly 9/20 全在 `BuildContract` 的早退里；U-0063 每条输入都有测试，采样器把守卫改成 `&& false` 后 `ValidateContract`（14 条规则）仍以同一哨兵拒绝，故 GREEN 是双份不是缺口。不删：早退省掉对无效输入算规范摘要 | 无新测试（U-0063 的 `contract_promises_test.go` 即是） | 9 处均由校验器接住 | — |
 | U-0132 | 2026-09-09 | roost-core `bus` 死信重投前置 / 管理命令注册 / nil 总线 | C2 | nightly 10/20：只会清桶的存储上部分重投若不拒绝会把未选中的死信一起清掉，此前零覆盖；nil 总线的 JetStream 守卫要传非 nil js 才不被下一条同哨兵接住。564 / 612 / JetStream 186 三份 stopping 检查互掩，103 与 `ensureJetStreamRPCStreams` 同哨兵——记冗余 | `dead_letter_admission_promises_test.go` 两条 | 10 处回退 7 红、3 冗余 | — |
 | U-0131 | 2026-09-09 | roost-core `nettransport` 会话状态准入 / 控制面 | C2 | nightly 10/20：失败态（`queue.failure`）只在"另一条通道仍卡在下游"时可从 AdmitBatch 观察到（两工人都退出会立刻摘表），用忽略 ctx 的数据报替身把会话钉在表里；`inspectDatagramBatch` 上限与调用方 656 行同条件（冗余），`validateDatagramBatch` 无调用方已删 | `session_state_promises_test.go` 两条 | 10 处回退 9 红、1 冗余 | — |
 | U-0130 | 2026-09-09 | roost-core `skill/combatcomponent` 分离事务 nil 结果 / 读与支付准入 / 持久化 DAO / 无策略 buff | C2 | nightly 11/20：三处 `value == nil` 是分离事务失败后的唯一防线（失效即 nil 类型断言 panic），用 nil Committer 触发；`PrepareMutation` 无字段掩码只在 DAO 已有版本时可达（version 0 走整文档 Put） | `guards_promises_test.go` 四条 | 11 处回退全红 | — |

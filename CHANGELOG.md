@@ -34,6 +34,8 @@
 
 ### Changed（测试质量）
 
+- **skillcompose `BuildContract` 九处前置检查复核为冗余**（U-0133，C2 复核）。nightly gap map core `skill/skillcompose` 20 条 9 条无覆盖，全部是 `BuildContract` 里对空权威 / 空策略 / 空来源 / 重复来源 / 空特性 / 预算溢出 / 生命期溢出的早退；
+  U-0063 已对每条输入有测试，守卫失效后末尾 `ValidateContract` 的同一规则仍以 `ErrContractInvalid` 拒绝——是双份而非缺口。保留早退（避免对无效输入算规范摘要），不另加测试。
 - **bus 死信重投前置条件与管理命令 / nil 总线入口的守卫钉住**（U-0132，C2）。nightly gap map core `bus` 20 条 10 条无覆盖。
   无 NATS 客户端时 `RequeueDeadLetters` 报"客户端为空"且不动死信；存储只会整桶清除时，带 Limit 的部分重投在发布选中项后、清桶前停下并报"不支持部分删除"（未选中的死信保住），整桶重投照常；
   `RegisterAdminCommands` 缺注册表 / 缺总线各报其错且不留半注册；nil 总线的 `Handle` / `HandleRpc` / `EnableJetStreamRPC`（传真 JetStream 替身）报错不 panic。
