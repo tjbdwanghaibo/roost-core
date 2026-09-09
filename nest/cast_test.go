@@ -199,6 +199,33 @@ func TestCastRejectsInvalidTargetID(t *testing.T) {
 	}
 }
 
+// A remote-managed entity that the dispatch declared is already Guarded when a
+// handler casts to it; the cast reuses that lock and must not refuse it. This
+// is the only way a cast ever reaches a remote-managed entity — the gate never
+// acquires one itself (see refuseUndeclaredRemoteTargets).
+func TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch(t *testing.T) {
+	withCastGroupFunc(t)
+	getter := newMockGetter()
+	bindCastGetter(t, getter)
+
+	remoteID := mustBuildCastID(t, 301, castOtherCategory, nestRemoteManagedKind)
+	remote := newMockEntityWithKind(remoteID, castOtherCategory, nestRemoteManagedKind)
+	getter.Add(remote)
+
+	_, release := entity.NewGuardScope("cast_declared_remote_test")
+	defer release()
+	if !entity.GetEntityGuard().RequireEntity(remote) {
+		t.Fatal("lock the declared remote entity")
+	}
+	got, err := CastTargetOne[*mockEntity](NewCastTarget(remoteID))
+	if err != nil {
+		t.Fatalf("cast to a declared remote entity = %v, want nil", err)
+	}
+	if got != remote {
+		t.Fatalf("cast returned %p, want the guarded entity %p", got, remote)
+	}
+}
+
 func TestCastRejectsDynamicRemoteManagedEntity(t *testing.T) {
 	getter := newMockGetter()
 

@@ -378,7 +378,6 @@ func requeueNestDispatch(mgr *NestMgr, msg *Msg, reason string) bool {
 	}
 	next := msg.Clone()
 	next.RefCount = 0
-	next.RemoteReleases = nil
 	next.PendingRequeues = msg.PendingRequeues + 1
 	msg.RetChan = nil
 	metrics.IncCounter("nest.dispatch.requeue.total", metrics.Labels{

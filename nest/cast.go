@@ -132,17 +132,8 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		return nil, fmt.Errorf("%w: ids=%v", ErrCastDeadlockRisk, ids)
 	}
 
-	remoteRelease, err := prepareCastRemoteEntities(guard, metas)
-	if err != nil {
+	if err := refuseUndeclaredRemoteTargets(guard, metas); err != nil {
 		return nil, err
-	}
-	prepared := remoteRelease != nil
-	if prepared {
-		defer func() {
-			if remoteRelease != nil {
-				remoteRelease()
-			}
-		}()
 	}
 
 	es, err := getter.GetMany(nestBaseContext(), ids, categories)
@@ -182,11 +173,6 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		e.UnTouch()
 		lockedNow = append(lockedNow, e)
 	}
-	if prepared {
-		release := remoteRelease
-		remoteRelease = nil
-		currentNestDispatchMsg().addRemoteRelease(release)
-	}
 	return es, nil
 }
 
@@ -204,9 +190,37 @@ func releaseCastEntities(guard *entity.EntityGuard, es []entity.IThreadSafeEntit
 	}
 }
 
-func prepareCastRemoteEntities(guard *entity.EntityGuard, metas []entity.EntityIDMeta) (entity.RemoteEntityRelease, error) {
-	remoteIDs := make([]int64, 0, len(metas))
-	seen := make(map[int64]struct{}, len(metas))
+// refuseUndeclaredRemoteTargets is the remote-entity gate of a cast. It never
+// acquires anything; it only decides whether the cast may proceed.
+//
+// A remote-managed entity is written under a distributed ownership guard, and
+// that guard is taken BEFORE the dispatch runs: the message declares its remote
+// targets as RemoteAccess, prepareRemoteWriteBatch locks them in lock order and
+// hands them to the guard scope, so by the time a handler casts to one of them
+// the entity is already Guarded and the cast just reuses it. Taking a
+// distributed lock in the middle of a handler — while local entity locks are
+// already held, with the caller's deadline unknown — is exactly the lock-order
+// and timeout hazard the declaration step exists to avoid, so a remote target
+// that was not declared is refused rather than locked on the spot.
+//
+// Consequently there are only three outcomes:
+//   - every remote-managed target is already held by this dispatch (or there is
+//     none): nil, the cast continues on local locks only;
+//   - an undeclared remote-managed target outside any dispatch: an error naming
+//     the missing dispatch, since there is no message to have declared it on;
+//   - an undeclared remote-managed target inside a dispatch:
+//     ErrRemoteWriteCapabilityDisabled with "must be declared before dispatch".
+//
+// This used to return an entity.RemoteEntityRelease as well, and CastMulti
+// carried plumbing (Msg.RemoteReleases, a deferred release, releaseRemoteEntities
+// at dispatch end) for a release that this function could never produce. That
+// dead channel was removed on 2026-09-09; if dynamic remote casting is ever
+// wanted, it needs a real design for lock order and deadlines, not a hook.
+//
+// Only remote-MANAGED kinds are gated (shouldPrepareRemoteID): a remote-capable
+// kind that is not managed by this service is an ordinary local entity here.
+func refuseUndeclaredRemoteTargets(guard *entity.EntityGuard, metas []entity.EntityIDMeta) error {
+	undeclared := 0
 	for _, meta := range metas {
 		if !shouldPrepareRemoteID(meta) {
 			continue
@@ -214,17 +228,13 @@ func prepareCastRemoteEntities(guard *entity.EntityGuard, metas []entity.EntityI
 		if guard.Guarded(meta.FullID) {
 			continue
 		}
-		if _, ok := seen[meta.FullID]; ok {
-			continue
-		}
-		seen[meta.FullID] = struct{}{}
-		remoteIDs = append(remoteIDs, meta.FullID)
+		undeclared++
 	}
-	if len(remoteIDs) == 0 {
-		return nil, nil
+	if undeclared == 0 {
+		return nil
 	}
 	if currentNestDispatchMsg() == nil {
-		return nil, fmt.Errorf("remote entity cast requires an active Nest dispatch")
+		return fmt.Errorf("remote entity cast requires an active Nest dispatch")
 	}
-	return nil, fmt.Errorf("%w: remote targets must be declared before dispatch", entity.ErrRemoteWriteCapabilityDisabled)
+	return fmt.Errorf("%w: remote targets must be declared before dispatch", entity.ErrRemoteWriteCapabilityDisabled)
 }

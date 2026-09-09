@@ -11,27 +11,6 @@ import (
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
-func (m *Msg) addRemoteRelease(release entity.RemoteEntityRelease) {
-	if m != nil && release != nil {
-		m.RemoteReleases = append(m.RemoteReleases, release)
-	}
-}
-
-func (m *Msg) releaseRemoteEntities() error {
-	if m == nil || len(m.RemoteReleases) == 0 {
-		return nil
-	}
-	releases := m.RemoteReleases
-	m.RemoteReleases = nil
-	var joined error
-	for i := len(releases) - 1; i >= 0; i-- {
-		if releases[i] != nil {
-			joined = errors.Join(joined, releases[i]())
-		}
-	}
-	return joined
-}
-
 func (m *Msg) setRemoteWriteBatch(batch entity.RemoteWriteBatch) {
 	if m != nil {
 		m.RemoteWriteBatch = batch
@@ -192,7 +171,6 @@ func (t MsgType) String() string {
 // Msg is the internal message routed through the nest worker pool.
 type Msg struct {
 	RetChan             chan any
-	RemoteReleases      []entity.RemoteEntityRelease
 	RemoteWriteBatch    entity.RemoteWriteBatch
 	Name                string
 	Tids                []int64
@@ -259,7 +237,6 @@ func (m *Msg) Clone() *Msg {
 		RetChan:         m.RetChan,
 		Cost:            m.Cost,
 		HasRemote:       m.HasRemote,
-		RemoteReleases:  slices.Clone(m.RemoteReleases),
 		Context:         m.Context.Clone(),
 		GroupTransition: m.GroupTransition,
 		getter:          m.getter,

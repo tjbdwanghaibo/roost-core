@@ -223,9 +223,6 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 			}
 			slog.Error("nest dispatch panic", "err", err)
 		}
-		if releaseErr := msg.releaseRemoteEntities(); releaseErr != nil {
-			err = errors.Join(err, fmt.Errorf("nest: release remote entities: %w", releaseErr))
-		}
 		releaseGuardScope()
 		msg.runAfterUnlock()
 		commitCtx := context.Background()

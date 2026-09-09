@@ -15,10 +15,6 @@ var (
 	ErrRemoteReleaseIncomplete = errors.New("remote entity release is incomplete")
 )
 
-// RemoteEntityRelease closes guards acquired for one dispatch. It remains a
-// small internal carrier used by Nest; persistence is owned by RemoteWriteBatch.
-type RemoteEntityRelease func() error
-
 // IRemoteEntityLoader materializes authoritative entities for the write path.
 // Persistence is performed exclusively through IRemoteAtomicBatchCommitter;
 // loaders must never expose an independent save/delete path.
