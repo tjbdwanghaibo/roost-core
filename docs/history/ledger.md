@@ -64,7 +64,7 @@
 | core | `ai` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `app/buildinfo` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） | 09-02 | 09-02 | 09-08 U-0107（requeueMsgID，护栏） | 09-02 | 09-06 脚本扫 | 09-02 |
+| core | `bus` | 09-06 脚本扫 | 09-06 U-0043（回退 32 条） / 09-09 U-0132（回退 7 条，3 冗余） | 09-02 | 09-02 | 09-08 U-0107（requeueMsgID，护栏） | 09-02 | 09-06 脚本扫 | 09-02 |
 | core | `cache` | 09-02 | 09-06 U-0076（回退 2 条） / 09-07 U-0102（回退 8 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0076
 | core | `clock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `cmd/glsvet` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0132 | 2026-09-09 | roost-core `bus` 死信重投前置 / 管理命令注册 / nil 总线 | C2 | nightly 10/20：只会清桶的存储上部分重投若不拒绝会把未选中的死信一起清掉，此前零覆盖；nil 总线的 JetStream 守卫要传非 nil js 才不被下一条同哨兵接住。564 / 612 / JetStream 186 三份 stopping 检查互掩，103 与 `ensureJetStreamRPCStreams` 同哨兵——记冗余 | `dead_letter_admission_promises_test.go` 两条 | 10 处回退 7 红、3 冗余 | — |
 | U-0131 | 2026-09-09 | roost-core `nettransport` 会话状态准入 / 控制面 | C2 | nightly 10/20：失败态（`queue.failure`）只在"另一条通道仍卡在下游"时可从 AdmitBatch 观察到（两工人都退出会立刻摘表），用忽略 ctx 的数据报替身把会话钉在表里；`inspectDatagramBatch` 上限与调用方 656 行同条件（冗余），`validateDatagramBatch` 无调用方已删 | `session_state_promises_test.go` 两条 | 10 处回退 9 红、1 冗余 | — |
 | U-0130 | 2026-09-09 | roost-core `skill/combatcomponent` 分离事务 nil 结果 / 读与支付准入 / 持久化 DAO / 无策略 buff | C2 | nightly 11/20：三处 `value == nil` 是分离事务失败后的唯一防线（失效即 nil 类型断言 panic），用 nil Committer 触发；`PrepareMutation` 无字段掩码只在 DAO 已有版本时可达（version 0 走整文档 Put） | `guards_promises_test.go` 四条 | 11 处回退全红 | — |
 | U-0129 | 2026-09-09 | roost-core `etcd/driver` 选举 Resign / Leader、本地镜像写入参数与 watch 关闭 | C2 | nightly 12/20：`local_mirror.go:433`（watch closed）与 `apply` 的 nil 事件错误在流程上等价，只差文本，用一小时重试间隔冻结 LastError 才能钉住；`client.go:46` 需真实 etcd（并入 §0.1 项 1 真机清单） | `guards_promises_test.go` 四条 | 12 处回退 11 红、1 待真机 | — |
