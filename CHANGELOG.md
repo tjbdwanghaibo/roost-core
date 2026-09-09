@@ -34,6 +34,8 @@
 
 ### Changed（测试质量）
 
+- **gap map 新增 `classscan.py`**（三仓同一份拷贝）：给账本 C3 / C4 / C5 / C6 / C7 / C8 各一条可重复的启发式扫描，只列候选不下结论。首轮扫掉 117 个"未审"格（service 10 包、skill 5 包、codegen 16 包），
+  无真洞，记四条观察（codegen 生成器默认路径与编排层重复字面量、account / platform 各自实现会话校验、render 依赖"渲染前已校验"、skillsync Put / PutBatch 双实现）。记录见账本 §9。
 - **mongotest 替身的契约拒绝钉住**（U-0112，C2）。nightly gap map `mongo/mongotest` 20 条采样 13 条无覆盖。
   find-and-modify 未命中要求 after 镜像仍是 `ErrNotFound`、upsert 要求 before 镜像时插入但报 `ErrNotFound`；upsert / 替换 upsert（BulkWrite ReplaceOne）落到已有 `_id` → `ErrDuplicateKey` 且不覆盖；
   替换改 `_id`、nil 文档、无 `_id` 文档 → `ErrUnsupported`；`$and` 假分支不匹配无错、错分支上抛；`$exists` 非布尔、数字与字符串比大小（过滤与排序）、非 `$replaceWith` 的管道阶段都大声失败。
