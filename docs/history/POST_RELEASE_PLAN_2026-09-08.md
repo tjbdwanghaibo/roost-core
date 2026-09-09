@@ -31,6 +31,12 @@
 
 **2026-09-09 第二次发版**：kit v1.14.1（tag CI integration 首跑遇 Mongo 选主抖动，重跑绿）→ codegen v1.15.2（framework-release 全绿，8 个资产）。core 未发版：v1.15.0 之后只有测试、文档与 U-0123 的死代码删除。
 
+## 0.2 第二次发版（2026-09-09 下午）
+
+core v1.15.1（U-0146 流水线提交落盘即唤醒投影，T-49；U-0126～U-0139 测试）→ kit v1.14.2（U-0145 mail Get / GetMany 同判，T-48；U-0140～U-0143 测试）→ codegen v1.15.3（清单 core v1.15.1 / kit v1.14.2，source-head 默认 pin 同步）。三条 tag 的 `ci` 全绿（core 34318141953、kit 34318197054、codegen 34318266369）。
+
+**一处失误**：kit 的 `go get roost-core@v1.15.1` 因 goproxy.cn 的 sumdb 暂时 404 失败，管道里的 `tail` 掩盖了退出码，回退分支没跑，kit v1.14.2 的 go.mod 仍 pin core v1.15.0，tag 已推不重打；kit 的修复不依赖 core v1.15.1，消费方按清单同时取两者即可，CHANGELOG 已更正说明，下次 kit 发版再升 pin。教训：发版脚本里的每一步不要接管道，或开 `pipefail`。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：

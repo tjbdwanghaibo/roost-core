@@ -36,6 +36,8 @@
 
 ### Changed（测试质量）
 
+- **nil / 参数守卫收尾第一批：failurelog、robot、syncbus、servicerpc、lifecycle、admin、etcd、worker、goroutine**（U-0147，C2）。九个小包各一条 `*_promises_test.go`，共 40 条守卫回退 37 红；
+  `servicerpc/client.go:189` 由两个选择器自身的空表守卫接住、`etcd/local_mirror.go:151` 与其后的类型断言同哨兵（均记冗余），`worker/pool.go:140` 在 workerNum == len(workers) 下不可达。亲和选择器的空表守卫要用带 Key 的选择器才能钉住（零值回落到轮询选择器的同一条守卫；失效后是取模除零）。
 - **statesync 帧编解码的计数 / 大小上限守卫钉住**（U-0139，C2）。nightly gap map core `statesync` 20 条 7 条无覆盖。
   编码侧：65536 个对象拒绝而不是 uint16 回绕成"空帧"、帧大小上限在组件级也生效、`MaxObjects*2` 在编码侧拒绝；解码侧：头部声称的对象数 / 组件数 / 载荷长度在分配与读取之前按上限拒绝，答案是"超限"而不是"截断"。
   `codec_limits_promises_test.go` 两条；回退 7 处 6 红，`codec.go:44`（单对象 65536 个组件）因组件 TypeID 非零且唯一最多 65535 个、校验器先以重复拒绝，从编码路径到不了，记不可达保留。
