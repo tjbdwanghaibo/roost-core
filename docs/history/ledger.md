@@ -187,12 +187,12 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/genutil` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/marker` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） / 09-09 U-0116（回退 3 条，5 不可达 / 冗余） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） / 09-09 U-0116（回退 3 条，5 不可达 / 冗余） / 09-09 U-0124（模板守卫 → 生成配套测试） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/project` | — | 09-09 脚本扫（nightly 1/2） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） / 09-09 U-0115（回退 8 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 09-09 脚本扫 | 09-06 U-0030 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -236,6 +236,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0124 | 2026-09-09 | roost-codegen `internal/entity` / `internal/nest` 模板内守卫（HANDOFF §4.4、B-25 选项 b 的实体 / sender 部分） | C2（生成物） | 模板字符串里的守卫（entity 五条、nest sender 一条）任何仓内测试都触不到；解法是让生成器顺带产出配套 `_test.go`（access 模板已有先例），在业务工程里跑。未变更运行也补生成；实体退出远端托管时删过期文件 | `guard_tests_promises_test.go`、`sender_guard_test_promises_test.go`；`source-head-check.sh full` 对本地两仓通过 | 生成器层：断言配套文件内容与增删；守卫本体的回退只能在业务工程里做 | — |
 | U-0123 | 2026-09-09 | roost-core `entity` 死守卫清理（HANDOFF §4.4 / U-0099 清单） | 清理 | 四处 `uint64(kind) > EntityKindMask` 对 uint8 不可达，删除；actionflow 四处（action_runner 96 / 293、mission_runner 81 / 92）复核为可达但未测的钩子重入 / nil 构建器守卫，**不删**，转为 C2 候选 | 既有 `kind_registration_promises_test.go` 全绿 | 删除不可达分支无测试可红（本质上不可达） | — |
 | U-0122 | 2026-09-09 | roost-kit `service/chat` Prune 失败计数（O-5） | C5 | chat 的 Metrics 其实就是 `servicemetrics.Reporter`、存储层已有 Sink——O-5 "无指标汇" 判读有误；Prune 的非冲突失败此前不计数 | `prune_failure_promises_test.go` 一条（冲突仍计 conflict:prune） | 去掉 `Dropped("prune.failed")` 即红 | T-47 |
 | U-0121 | 2026-09-09 | roost-kit `service/match` 过期 sweep 失败计数 | C5 | classscan C5 扫描（"报错只打日志就 continue"）：`store.Sweep` 失败只被循环记日志，成功才报 `ticket.expired` | `sweep_failure_promises_test.go` 一条（Update 失败的状态存储） | 去掉 `Dropped("sweep.failed")` 即红 | T-47 |
