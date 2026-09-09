@@ -372,6 +372,7 @@ type commandReceiptDoc struct {
 func (i *MongoCommandInbox) collectionRef() fmongo.ICollection {
 	return i.client.Database(i.database).Collection(i.collection)
 }
+
 // commandDigest is the identity the inbox compares on redelivery. A command
 // that cannot be marshalled has no identity: returning an error here is what
 // keeps every such command from collapsing onto sha256(nil) and being mistaken

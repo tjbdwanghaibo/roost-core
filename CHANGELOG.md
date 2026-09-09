@@ -36,6 +36,8 @@
 
 ### Changed（测试质量）
 
+- **nil / 参数守卫收尾第二批：robot/loadtest、ai、dataengine、mongo/driver、entity、saga、skill/skillsync**（U-0148，C2）。七个包各一条 `*_promises_test.go`，共 62 条守卫回退 55 红；
+  3 处留真机（mongo/driver 的副本集 / 逻辑会话 / 索引冲突需要真实 hello 与索引响应），1 处防御（saga 同事务内回执消失），3 处与下游同哨兵记冗余（ai 谓词深度与 parseNode 同文本、dataengine 围栏回执与 `LeaseFence.Validate` 同哨兵、entity `NormalizeID` 的 none 检查与 `ResolveEntityKindCategory` 同文本）。saga 的异版本信封守卫要装一条合法命令才能钉住（零命令会被 `Validate` 以同哨兵接住）。
 - **nil / 参数守卫收尾第一批：failurelog、robot、syncbus、servicerpc、lifecycle、admin、etcd、worker、goroutine**（U-0147，C2）。九个小包各一条 `*_promises_test.go`，共 40 条守卫回退 37 红；
   `servicerpc/client.go:189` 由两个选择器自身的空表守卫接住、`etcd/local_mirror.go:151` 与其后的类型断言同哨兵（均记冗余），`worker/pool.go:140` 在 workerNum == len(workers) 下不可达。亲和选择器的空表守卫要用带 Key 的选择器才能钉住（零值回落到轮询选择器的同一条守卫；失效后是取模除零）。
 - **statesync 帧编解码的计数 / 大小上限守卫钉住**（U-0139，C2）。nightly gap map core `statesync` 20 条 7 条无覆盖。
