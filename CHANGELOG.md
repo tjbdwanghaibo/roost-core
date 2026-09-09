@@ -34,6 +34,10 @@
 
 ### Changed（测试质量）
 
+- **syncstream WAL 回放与入口依赖的守卫钉住**（U-0126，C2）。nightly gap map core `syncstream` 20 条 12 条无覆盖。
+  检查点之后的 WAL 行必须与检查点相接：异代格式、另一 epoch、追加跳号 / 重号、确认未知流 / 越过 latest、未知种类七种都以 `ErrInvalidSnapshot` 拒绝整次 `Load`，相接的续写被回放；
+  `NewFileHistoryJournal` 空目录、nil 日志的 Record / Load / Checkpoint、`NewHistoryWithJournal(nil)`、无日志或 nil History 的 `Checkpoint`、nil 总线的 Publisher / Subscribe、nil handler 各报对应哨兵，被拒的 Subscribe 不装 handler。
+  `wal_replay_promises_test.go` 两条；回退 12 处守卫全红。全包采样另见 22 条无覆盖（`Import` 快照自洽校验一簇 12 条），转 U-0127。
 - **actionflow 任务计划归一化与运行器钩子重入的守卫钉住**（U-0125，C2）。classscan 后本地采样 `actionflow` 25 条 9 条无覆盖。
   `NormalizePlan` 拒绝无步骤、起点越界、动作为 none、后继越界，`PlanFrom` 拒绝 nil 指针与非计划参数；`startStep` 越界索引；
   `OnChanged` 钩子在启动途中结束任务时 `StartMission` 报 `ErrReentrantMutation` 且当前任务为空；构建器交出 nil 动作 → `ErrBuilderNil`。
