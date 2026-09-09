@@ -160,9 +160,9 @@
 | service | `chat` | 09-06 脚本扫 | 09-04 U-0007 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） | 09-05 U-0016 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 09-09 脚本扫 |
-| service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0119（sweep 组来源，修复） | 09-06 脚本扫 | 09-09 脚本扫 |
+| service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） | 09-05 U-0020（回调内重置，无问题） | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0120（sweep 失败计数，修复） | 09-09 脚本扫 / 09-09 U-0119（sweep 组来源，修复） | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `mail` | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
-| service | `match` | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 |
+| service | `match` | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0121（sweep 失败计数，修复） | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `platform` | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） / 09-06 U-0097（回退 4 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-05 U-0018 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
@@ -236,6 +236,8 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0121 | 2026-09-09 | roost-kit `service/match` 过期 sweep 失败计数 | C5 | classscan C5 扫描（"报错只打日志就 continue"）：`store.Sweep` 失败只被循环记日志，成功才报 `ticket.expired` | `sweep_failure_promises_test.go` 一条（Update 失败的状态存储） | 去掉 `Dropped("sweep.failed")` 即红 | T-47 |
+| U-0120 | 2026-09-09 | roost-kit `service/global/activity` 后台 sweep 三处失败计数 | C5 | 同上：AdvanceExpired / DueDispatches / 派发尝试失败只打日志 | `sweep_failures_promises_test.go` 一条（Get 失败的 Windows 存储，两次 sweep 计 2） | 去掉 `Dropped("sweep.advance_failed")` 即红 | T-47 |
 | U-0119 | 2026-09-09 | roost-kit `service/global/activity` 后台 sweep 的组来源 | C6（配置无执行者，同 U-0022） | classscan C5 扫描顺带看到 `sweepGroups()` 返回 nil 且无配置入口：宽限窗口从未在后台兑现。修复：`Config.SweepGroups` / `activity.sweep_groups`、未配置启动告警；`SweepInterval` 保留为常量、新增 `sweepEvery` 变量供测试缩短 | `sweep_loop_promises_test.go` 两条 + `TestModReadsSweepGroups` | 修前红（5s 内未推进）；桩换回去再红 | T-46 |
 | U-0118 | 2026-09-09 | roost-codegen `internal/roost` 与五个生成器的默认路径字面量（classscan O-1） | C4 | 编排层 16 处字面量与生成器 flag 默认值 / 生成 import 后缀各写一份 | `literal_coupling_test.go`：AST 扫编排层字面量，与生成器导出常量相等即红 | 修前 16 处红、导出常量并引用后绿；生成物不变（golden 测试绿） | — |
 | U-0117 | 2026-09-09 | roost-core `skill/skillsync` Outbox Put / PutBatch 准入一致性（classscan O-4） | C8 | 两条路径各算一遍上限，今天一致但无测试钉住 | `outbox_batch_consistency_promises_test.go` 六个用例 | 变异验证：PutBatch 总量 `>`→`>=`、每流上限 +1，各红 | — |
@@ -545,5 +547,7 @@ U-0021 的设计选择：撤销而非"向前修复"。角色记录尚未交给�
 | C7 释放无 defer | `Lock()` 后两行内无 `defer Unlock`；`Open/Create/Listen` 八行内无 `Close` | codegen 16 包 | 11 条，全部在 `internal/roost/render_access.go` / `render_player_tcp.go` 的**模板文本**里（生成到业务工程的 TCP 服务器）：每处 Lock 都在同作用域配对 Unlock（短临界区、提前解锁）；`net.Listen` 在 Stop 路径 Close | 无真洞 |
 | C8 快慢路径不对称 | 同包函数名成对（`X`/`XBatch`、`X`/`XLocked`、`tryX`/`X` 等） | 三仓目标包 | `chat` Register/MustRegister、`mail` Get/GetMany（absent 与解码错误处理一致）、`mail` deliver/deliverDirect（不同层，非对）、`skillsync` Put/PutBatch、codegen dao 模板 Marshal/MarshalSync、roost Add/runAdd、Generate/runGenerate（CLI 包装） | **观察 O-4 → U-0117 已钉**：`skillsync.Outbox` 的 `Put` 与 `PutBatch` 各自实现一遍容量 / 每流上限 / 最老待发年龄的判断（`capacityError` 只在 Put 用全，PutBatch 自己再算总量），目前一致；应写"N 次 Put 与 PutBatch(N) 对同一输入判决相同"的表驱动测试钉住 |
 | C2（5 格） | nightly 采样数 | skill/combat、codegen genutil / marker / project / servicerpc | combat 0/3、genutil 与 marker 无守卫可采、project 1/2、servicerpc 2/20 | project / servicerpc 的剩余 GREEN 留给 nightly 节拍 |
+
+**C5 深挖（同日，交接 §4.3 的 grep 形态：`if err != nil { 日志; continue/return }` 且无计数）**：core + kit 命中 8 处——bus RPC 失败编码失败 / httpserver 返回 400 / statslog 把错误写进输出，三处有意；kit 三个服务的后台循环（chat prune、match sweep、activity advance / due / dispatch）失败只打日志，其中 match、activity 有指标汇 → U-0121 / U-0120 计数；chat 没有 servicemetrics 汇，记 **观察 O-5**：给 chat 服务接 Reporter 后再补同款计数。顺带发现 activity 的 sweep 组是返回 nil 的桩 → U-0119。
 
 **方法坑**：字面量扫描会把 `import "encoding/hex"` 这类 import 路径当字面量，占了 service / skill 共享字面量的一半以上——下一版应跳过 import 块；`RunIsolatedTransaction` 类的启发式对 C3 太弱（回调体只看 600 字节），本轮 C3 的"零命中"要按"没有明显的包级累积"理解。
