@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // EntityBuilderFunc creates an entity from params.
@@ -27,18 +28,39 @@ type EntityBuilderParam struct {
 
 // --- Global entity factory registry ---
 
+// entityKindEntry is the whole record the framework keeps for one kind. It is
+// immutable once published: every update stores a fresh copy, so a lock-free
+// reader always observes one self-consistent record instead of three maps that
+// could be read between two writes.
+type entityKindEntry struct {
+	category EntityCategory
+	policy   RemotePolicy
+	builder  *EntityBuilderParam // nil until RegisterEntityBuilder runs
+}
+
+// The registry is keyed by EntityKind, which is a uint8, so it is a fixed
+// array rather than a map and a read is one atomic load with no lock.
+//
+// That matters because the lock-ordering path reads it WHILE entity mutexes
+// are held: cmpGuidFunc calls GetEntityGroup twice per comparison when sorting
+// entities to lock, maxLockedGroup calls it once per already-held lock, and
+// broadcast bucketing calls it once per id. Taking a registry lock there costs
+// a mutex per query and, worse, creates an "entity mutex then registry lock"
+// acquisition edge that lets a registration stall lock-order decisions (M-01).
 var (
-	factoryMu          sync.RWMutex
-	factoryByKind      = make(map[EntityKind]*EntityBuilderParam)
-	kindCategoryByKind = make(map[EntityKind]EntityCategory)
-	kindPolicyByKind   = make(map[EntityKind]RemotePolicy)
+	registryMu  sync.Mutex // writers only; readers are lock-free
+	kindEntries [1 << EntityKindBits]atomic.Pointer[entityKindEntry]
 )
+
+func kindEntryOf(kind EntityKind) *entityKindEntry {
+	return kindEntries[kind].Load()
+}
 
 // RegisterEntityBuilder registers a builder for a concrete entity kind.
 // Call from the service bootstrap path. Panics on duplicate.
 func RegisterEntityBuilder(param *EntityBuilderParam) {
-	factoryMu.Lock()
-	defer factoryMu.Unlock()
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if param.Kind == EntityKindNone {
 		panic("entity builder kind must not be none")
 	}
@@ -50,15 +72,20 @@ func RegisterEntityBuilder(param *EntityBuilderParam) {
 	}); err != nil {
 		panic(err)
 	}
-	if _, exists := factoryByKind[param.Kind]; exists {
+	// registerEntityKindDefinitionLocked has just created or validated the
+	// entry, so it exists.
+	entry := kindEntryOf(param.Kind)
+	if entry.builder != nil {
 		panic(fmt.Sprintf("duplicate entity builder for kind %d", param.Kind))
 	}
-	factoryByKind[param.Kind] = param
+	next := *entry
+	next.builder = param
+	kindEntries[param.Kind].Store(&next)
 }
 
 func RegisterEntityKindCategory(kind EntityKind, category EntityCategory) error {
-	factoryMu.Lock()
-	defer factoryMu.Unlock()
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	return registerEntityKindCategoryLocked(kind, category)
 }
 
@@ -69,8 +96,8 @@ func MustRegisterEntityKindCategory(kind EntityKind, category EntityCategory) {
 }
 
 func RegisterEntityKindCategories(defs ...EntityKindCategory) error {
-	factoryMu.Lock()
-	defer factoryMu.Unlock()
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	for _, def := range defs {
 		if err := registerEntityKindCategoryLocked(def.Kind, def.Category); err != nil {
 			return err
@@ -86,8 +113,8 @@ func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
 }
 
 func RegisterEntityKindDefs(defs ...EntityKindDef) error {
-	factoryMu.Lock()
-	defer factoryMu.Unlock()
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	for _, def := range defs {
 		if err := registerEntityKindDefinitionLocked(def); err != nil {
 			return err
@@ -103,10 +130,10 @@ func MustRegisterEntityKindDefs(defs ...EntityKindDef) {
 }
 
 func EntityCategoryOfKind(kind EntityKind) (EntityCategory, bool) {
-	factoryMu.RLock()
-	defer factoryMu.RUnlock()
-	category, ok := kindCategoryByKind[kind]
-	return category, ok
+	if entry := kindEntryOf(kind); entry != nil {
+		return entry.category, true
+	}
+	return EntityCategoryNone, false
 }
 
 func ResolveEntityKindCategory(kind EntityKind) (EntityCategory, error) {
@@ -146,68 +173,68 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	if uint64(category) > EntityCategoryMask {
 		return ErrInvalidCategory
 	}
-	if existing, ok := kindCategoryByKind[kind]; ok {
-		if existing != category {
-			return fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing, category)
-		}
-	} else {
-		kindCategoryByKind[kind] = category
+	existing := kindEntryOf(kind)
+	if existing == nil {
+		kindEntries[kind].Store(&entityKindEntry{category: category, policy: def.RemotePolicy})
+		return nil
 	}
-	if existing, ok := kindPolicyByKind[kind]; ok {
-		switch {
-		case existing == def.RemotePolicy:
-			return nil
-		case existing == RemotePolicyNone && def.RemotePolicy != RemotePolicyNone:
-			kindPolicyByKind[kind] = def.RemotePolicy
-			return nil
-		case existing != RemotePolicyNone && def.RemotePolicy == RemotePolicyNone:
-			return nil
-		default:
-			return fmt.Errorf("entity kind %d remote policy mismatch: registered=%d new=%d", kind, existing, def.RemotePolicy)
-		}
+	if existing.category != category {
+		return fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing.category, category)
 	}
-	kindPolicyByKind[kind] = def.RemotePolicy
-	return nil
+	// A category-only registration carries policy none, so none is an "unknown
+	// yet" value that a later definition may fill in. The reverse is a partial
+	// re-declaration, not a downgrade request, so it is ignored rather than
+	// refused. Anything else is two sources disagreeing.
+	switch {
+	case existing.policy == def.RemotePolicy:
+		return nil
+	case existing.policy == RemotePolicyNone:
+		next := *existing
+		next.policy = def.RemotePolicy
+		kindEntries[kind].Store(&next)
+		return nil
+	case def.RemotePolicy == RemotePolicyNone:
+		return nil
+	default:
+		return fmt.Errorf("entity kind %d remote policy mismatch: registered=%d new=%d", kind, existing.policy, def.RemotePolicy)
+	}
 }
 
 // GetEntityBuilderParam retrieves the registered builder for an entity kind.
 func GetEntityBuilderParam(kind EntityKind) *EntityBuilderParam {
-	factoryMu.RLock()
-	defer factoryMu.RUnlock()
-	return factoryByKind[kind]
+	if entry := kindEntryOf(kind); entry != nil {
+		return entry.builder
+	}
+	return nil
 }
 
 // GetAllEntityBuilders returns all registered builders.
 func GetAllEntityBuilders() []*EntityBuilderParam {
-	factoryMu.RLock()
-	defer factoryMu.RUnlock()
-	result := make([]*EntityBuilderParam, 0, len(factoryByKind))
-	for _, p := range factoryByKind {
-		result = append(result, p)
+	result := make([]*EntityBuilderParam, 0, 16)
+	for i := range kindEntries {
+		if entry := kindEntries[i].Load(); entry != nil && entry.builder != nil {
+			result = append(result, entry.builder)
+		}
 	}
 	return result
 }
 
 func ResetEntityRegistryForTest() {
-	factoryMu.Lock()
-	defer factoryMu.Unlock()
-	factoryByKind = make(map[EntityKind]*EntityBuilderParam)
-	kindCategoryByKind = make(map[EntityKind]EntityCategory)
-	kindPolicyByKind = make(map[EntityKind]RemotePolicy)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for i := range kindEntries {
+		kindEntries[i].Store(nil)
+	}
 }
 
 func GetEntityKindRemotePolicy(kind EntityKind) RemotePolicy {
-	factoryMu.RLock()
-	policy, ok := kindPolicyByKind[kind]
-	factoryMu.RUnlock()
-	if ok {
-		return policy
+	// The builder shares this entry, so "no entry" also means "no builder":
+	// the old fallback through GetEntityBuilderParam could never fire, because
+	// RegisterEntityBuilder declares the kind before it stores the builder.
+	if entry := kindEntryOf(kind); entry != nil {
+		return entry.policy
 	}
-	bp := GetEntityBuilderParam(kind)
-	if bp == nil {
-		return RemotePolicyNone
-	}
-	return bp.RemotePolicy
+	return RemotePolicyNone
 }
 
 func IsEntityKindRemoteCapable(kind EntityKind) bool {

@@ -15,6 +15,8 @@
 
 ### Changed
 
+- **entity kind 注册表改为按 kind 的无锁定长表**(M-01,重构)。`factoryByKind` / `kindCategoryByKind` / `kindPolicyByKind` 三张 map 合成一条发布后不可变的 `entityKindEntry`,存在 `[256]atomic.Pointer` 里;`EntityKind` 是 uint8,所以读取是一次原子载入,不再取锁。动因是锁序热路径 `GetEntityGroup` 会在**已持有实体互斥**时查这张表(排序比较器每次比较两次、`maxLockedGroup` 每个已持有锁一次、广播分桶每个 id 一次),旧实现在那里取读写锁,既有每次查询的开销,也形成"先持实体互斥再取注册表锁"的获取边,让注册期的写锁能挡住锁序判断。
+  写入语义逐条保留,含 category 冲突报错、policy 从 none 升级、反向部分声明被忽略、重复 builder panic;`GetEntityKindRemotePolicy` 里那条永远不可能触发的 builder 回落随结构消失;`factoryMu` 更名 `registryMu` 并降为只串行化写入的 `Mutex`。公开 API 的答案不变。`kind_registry_promises_test.go` 的无锁承诺修前红。实施记录与后续三步方案见 `docs/bugfix/M-01-entity-kind-registry.md`。
 - **nest cast 的远程实体门禁改名为 `refuseUndeclaredRemoteTargets` 并删掉从未走通的 release 通道**。原 `prepareCastRemoteEntities` 声明返回 `entity.RemoteEntityRelease`，但对任何未声明的远程托管目标都只会报错、从不产生 release；`CastMulti` 里的 `prepared` / defer release / `addRemoteRelease`，`Msg.RemoteReleases` 字段及其 Clone、requeue 清零、dispatch 收尾的 `releaseRemoteEntities`，都是为这个不可能出现的值服务的死链，一并删除。门禁语义不变：远程托管实体必须在 dispatch 前以 RemoteAccess 声明并被预锁，cast 只复用已持有的锁，未声明即 `ErrRemoteWriteCapabilityDisabled`；函数注释写明了三种出口与为什么不在 handler 中途拿分布式锁。新增 `TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch` 钉住"已声明即复用"这条唯一通路。
 - **entity guard 的两处锁序校验共用一个实现**：`CheckContainAllLock` / `CheckContainAllIDs` 只差输入形态（实体 / ID），各自重复着"算最大已锁分组 + 逐个判分组"的逻辑；抽成 `maxLockedGroup` 与 `mayLock`，两个公开方法只剩输入遍历。行为不变，entity / nest 测试绿。
 - **`security.RateLimiter` 的令牌桶改用 `golang.org/x/time/rate`**。公开 API 不变（`RateLimitConfig` / `Allow` / `AllowN` / `Stats` / `GC`），
