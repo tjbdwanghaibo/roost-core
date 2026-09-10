@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-11 | 八项修复独立验收；Mail 墓碑、事务 TTL | 八项原触发通过；新 Mail P2/P3 各一项 | [运行](REVIEW-2026-09-11.md)、[问题](../bug/REVIEW-2026-09-11.md)、[复现](../bug/REPRO-2026-09-11.md) |
 | 2026-09-10 第三轮 | M-01～M-05、Remote 等待者、Skill 恢复、Mail 重试 | 新 3 P2 / 1 P3；含两个新增生成消费者编译缺陷 | [运行](REVIEW-2026-09-10-03.md)、[注册生成实现](IMPLEMENTATION-CATEGORY-REGISTRY-AND-GENERATION.md)、[恢复重放实现](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)、[问题](../bug/REVIEW-2026-09-10-03.md) |
 | 2026-09-10 第二轮 | Remote 预分派、Mail 淘汰与重投 | 3 包 race 通过；新 P2：淘汰后重投生成新发奖 token | [运行](REVIEW-2026-09-10-02.md)、[实现](IMPLEMENTATION-REMOTE-PREPARE-AND-FINALIZE.md)、[问题](../bug/REVIEW-2026-09-10-02.md) |
 | 2026-09-10 | Match 过期、Room 生命周期、Skill 取消 | 3 包 race 通过，2 个新增行为验收通过；1 个低频 P3 | [运行记录](REVIEW-2026-09-10.md)、[实现学习](IMPLEMENTATION-ROOM-AND-SKILL-SCHEDULING.md)、[问题](../bug/REVIEW-2026-09-10.md) |

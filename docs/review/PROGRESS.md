@@ -1,8 +1,23 @@
 # Roost Review 跨轮进度
 
-最后更新：2026-09-10。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+最后更新：2026-09-11。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
-## 收尾同步与下一轮优先项
+## 2026-09-11 当前进度
+
+Core `e22e815934293d3bc25a84f37338f9576f9d5c4d`，Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓已同步；上轮收尾待验收四项及新到四项，共八项原触发独立验收通过。下方 09-10 表格及未验收描述保留历史，当前状态以本节为准。
+
+| 范围/入口 | 本轮证据 | 状态与限制 | 下轮入口 |
+| --- | --- | --- | --- |
+| core/room 构造；kit/match Enqueue | 原 overlay 与 race 包通过，U-0163/0164 已验收 | 已验证部分场景；无真实后端压力 | 派生默认值、终态请求保留 |
+| core/remoteentity tracked/wait/prune | 原容量交错与新增 TTL 清理等待者通过，U-0168 已验收 | 已验证部分场景；真实 finalizer 停机交接尚未验 | StopFinalizer 与晚到 batch Close |
+| core/skill checkpoint/restore/retention | 原双 Host 端到端淘汰测试及取消场景通过，U-0169 已验收 | 已验证部分场景；旧快照缺完成顺序仍退化；RootEvent/ProcLedger 未验 | 非单调合法事件输入与恢复后的保留行为 |
+| kit/mail evict/SettledClaims/clone | 原短序列与 race 包通过，U-0165 原触发已验收；新增两项独立失败 | 已验证部分场景；新 P2 RR-20260911-01、P3 RR-20260911-02；仅本地替身 | 墓碑期限、迟到 Commit、副本所有权 |
+| codegen/entity parse/run、registry aliases | U-0162/0166/0167 已验收；真实 CLI 保护已有输出，四个消费者编译通过 | 已验证部分场景；源码 HEAD，非发布 tag | 更多别名/标记组合及真实 bootstrap |
+| category 改值与旧 ID/存储键迁移 | 本轮未新增动态验证 | 待复核，不以先前源码观察作确认 bug | 真实存储键、混合版本消费者 |
+
+[运行记录](REVIEW-2026-09-11.md)、[新增问题](../bug/REVIEW-2026-09-11.md)、[复现](../bug/REPRO-2026-09-11.md)、[机制更新](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)。下轮从本节 SHA 获取增量，先看新 RR 的 bugfix，再按表中入口轮转。图谱仍为 09-08 generation，当前证据依赖源码补证，不宣称最新图谱完整覆盖。
+
+## 收尾同步与下一轮优先项（09-10 历史）
 
 提交前收到 U-0162～U-0165，已同步 Core `b2ae333685803846d75cf71e91e1412e6eaccad9`、Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`、Codegen `655b2de00f9b77e45086e72431c13cec94c2f336`。作者标记 RR-20260909-05/06、RR-20260910-01/02 已修复；本轮实测截止在下方基线，新到修复尚未独立验收。下一轮首先以原复现验收这四项，并补 Mail 墓碑上限先于信封过期耗尽的边界；之后再按第三轮表轮转。当前检出/下轮增量起点用本节 SHA，历史实测基线不要替换。
 

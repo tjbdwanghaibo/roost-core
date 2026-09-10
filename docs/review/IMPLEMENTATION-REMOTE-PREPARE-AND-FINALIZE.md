@@ -29,3 +29,7 @@ Batch 的 Commit 按 Durability 分支处理：直接 Apply、异步返回推定
 ## 第三轮补充：完成等待者与缓存保留
 
 Core f3eaad9b38f87b2873e6f35b517b4ad993aed680 已独立复现完成 tracker 被淘汰后等待者 panic（RR-20260910-03）。上文描述的是第二轮历史基线，不代表此边界已安全。通知和结果生命周期的分析见[恢复与重放](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)，验证见[第三轮记录](REVIEW-2026-09-10-03.md)。
+
+## 2026-09-11 等待生命周期验收
+
+Core e22e815934293d3bc25a84f37338f9576f9d5c4d 的 U-0168 已通过原容量淘汰复现与新增 TTL 清理复现。等待者持有 tracker 引用，map 清理不再丢掉活动等待结果；[当前机制](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)和[验收记录](REVIEW-2026-09-11.md)补充这一点。finalizer 停机与晚到 batch Close 的资源交接仍待独立验证。
