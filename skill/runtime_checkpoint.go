@@ -56,18 +56,25 @@ type checkpointProgramRef struct {
 }
 
 type runtimeCheckpointPayload struct {
-	WorldRevision         WorldRevision             `json:"world_revision"`
-	Authority             AuthorityIdentity         `json:"authority"`
-	MatchSeed             [32]byte                  `json:"match_seed"`
-	SemanticsRevision     string                    `json:"semantics_revision"`
-	MaxPassivePerTick     int                       `json:"max_passive_per_tick"`
-	MaxOwned              int                       `json:"max_owned"`
-	MaxOwnedPerOwner      int                       `json:"max_owned_per_owner"`
-	MaxOwnedPerProgram    int                       `json:"max_owned_per_program"`
-	MaxOwnedPerTemplate   int                       `json:"max_owned_per_template"`
-	MaxActiveCasts        int                       `json:"max_active_casts"`
-	MaxAbilities          int                       `json:"max_abilities"`
-	CompletedCastLimit    int                       `json:"completed_cast_limit"`
+	WorldRevision       WorldRevision     `json:"world_revision"`
+	Authority           AuthorityIdentity `json:"authority"`
+	MatchSeed           [32]byte          `json:"match_seed"`
+	SemanticsRevision   string            `json:"semantics_revision"`
+	MaxPassivePerTick   int               `json:"max_passive_per_tick"`
+	MaxOwned            int               `json:"max_owned"`
+	MaxOwnedPerOwner    int               `json:"max_owned_per_owner"`
+	MaxOwnedPerProgram  int               `json:"max_owned_per_program"`
+	MaxOwnedPerTemplate int               `json:"max_owned_per_template"`
+	MaxActiveCasts      int               `json:"max_active_casts"`
+	MaxAbilities        int               `json:"max_abilities"`
+	CompletedCastLimit  int               `json:"completed_cast_limit"`
+	// CompletedCastOrder is the completion order of the terminal casts, which
+	// pruneCompletedCastsLocked evicts from the head. Casts are serialized in
+	// id order, so rebuilding the queue from them replaced "oldest completion"
+	// with "lowest id" and made retention diverge across a restore
+	// (RR-20260910-04). Absent in checkpoints written before this field, and
+	// restore then falls back to id order — what it did all along.
+	CompletedCastOrder    []CastID                  `json:"completed_cast_order,omitempty"`
 	RootEventLimit        int                       `json:"root_event_limit"`
 	MaxProcLedgerEntries  int                       `json:"max_proc_ledger_entries"`
 	CurrentTick           Tick                      `json:"current_tick"`
@@ -550,6 +557,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
 	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedProcesses, MaxOwnedPerOwner: runtime.options.MaxOwnedProcessesPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedProcessesPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedProcessesPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextProcessID: runtime.nextProcessID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p.CompletedCastOrder = append([]CastID(nil), runtime.completedCastOrder...)
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
 		castIDs = append(castIDs, int(id))
@@ -776,6 +784,32 @@ func checkpointScheduledTask(task scheduledTask) (checkpointTask, error) {
 	return w, nil
 }
 
+// restoreCompletedCastOrder rebuilds the completion queue from the checkpoint.
+//
+// The recorded order wins, filtered to the casts that actually came back
+// terminal, so a stale or hand-edited order cannot resurrect or duplicate an
+// entry. Anything terminal the order does not mention is appended in id order:
+// that covers a checkpoint written before the field existed, and keeps the
+// result deterministic either way.
+func restoreCompletedCastOrder(recorded []CastID, completed map[CastID]bool, casts []checkpointCast) []CastID {
+	order := make([]CastID, 0, len(completed))
+	placed := make(map[CastID]bool, len(completed))
+	for _, id := range recorded {
+		if completed[id] && !placed[id] {
+			order = append(order, id)
+			placed[id] = true
+		}
+	}
+	// p.Casts is serialized in id order, so this append is id-ordered too.
+	for _, item := range casts {
+		if completed[item.ID] && !placed[item.ID] {
+			order = append(order, item.ID)
+			placed[item.ID] = true
+		}
+	}
+	return order
+}
+
 func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, resolver ProgramResolver) error {
 	runtime.currentTick = p.CurrentTick
 	runtime.eventCursor = p.EventCursor
@@ -794,6 +828,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	runtime.stateEventDropped = p.StateEventDropped
 	runtime.stateMutationSequence = p.StateMutationSequence
 	runtime.stateMutationDropped = p.StateMutationDropped
+	completed := make(map[CastID]bool, len(p.Casts))
 	for _, item := range p.Casts {
 		if item.ID == 0 || item.ID > p.NextCastID || runtime.casts[item.ID] != nil {
 			return ErrCheckpointCorrupt
@@ -824,11 +859,12 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 		runtime.casts[item.ID] = &castInstance{id: item.ID, program: program, caster: item.Caster, primaryTarget: item.PrimaryTarget, inputs: inputs, memory: memory, locals: locals, snapshots: snapshots, status: item.Status, currentPhase: item.CurrentPhase, visibleRevision: item.VisibleRevision, failure: item.Failure, randomKey: item.RandomKey, randomInvocations: random, eventContext: restoreCheckpointEvent(item.EventContext), phaseToken: item.PhaseToken, pendingTasks: item.PendingTasks, logicalFinished: item.LogicalFinished, areaCallbackFinish: item.AreaCallbackFinish, windowStage: item.WindowStage, startTick: item.StartTick, committed: item.Committed, costsPaid: item.CostsPaid, cooldownStarted: item.CooldownStarted, pulseIndex: item.PulseIndex, releaseReason: item.ReleaseReason, stock: item.Stock, maxStock: item.MaxStock, windowStartTick: item.WindowStartTick, pendingRootEvent: item.PendingRootEvent, policyActive: item.PolicyActive, cooldownOwner: item.CooldownOwner, ability: item.Ability, abilityFinished: item.AbilityFinished}
 		if item.Status == CastFinished || item.Status == CastFailed {
-			runtime.completedCastOrder = append(runtime.completedCastOrder, item.ID)
+			completed[item.ID] = true
 		} else {
 			runtime.activeCastCount++
 		}
 	}
+	runtime.completedCastOrder = restoreCompletedCastOrder(p.CompletedCastOrder, completed, p.Casts)
 	var err error
 	runtime.processes, err = restoreCheckpointProcesses(p.Processes, resolver, p.Authority, p.SemanticsRevision, p.NextProcessID)
 	if err != nil {

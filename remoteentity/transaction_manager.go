@@ -648,8 +648,22 @@ func (m *Manager) snapshotPublisher() (entity.IRemoteSnapshotPublisher, bool) {
 }
 
 func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
+	_, err := m.trackedRemoteTransaction(id)
+	return err
+}
+
+// trackedRemoteTransaction admits the transaction and hands back its tracker.
+//
+// A caller that is going to WAIT must keep this pointer rather than looking the
+// id up again: capacity admission evicts the oldest CLOSED record, which is
+// exactly the record a waiter is being woken by, so between close(done) and the
+// waiter reacquiring txMu the map entry can be gone. Re-reading the map there
+// dereferenced nil, inside the txMu critical section, so the deferred Unlock
+// never ran and every later tracker call blocked on it (RR-20260910-03).
+// Eviction only drops the index; the object stays alive for whoever holds it.
+func (m *Manager) trackedRemoteTransaction(id entity.RemoteTransactionID) (*remoteTransactionTracker, error) {
 	if m == nil || m.remote == nil || id.IsZero() {
-		return entity.ErrRemoteRejected
+		return nil, entity.ErrRemoteRejected
 	}
 	m.remote.txMu.Lock()
 	defer m.remote.txMu.Unlock()
@@ -660,12 +674,12 @@ func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
 				m.evictOldestClosedRemoteTransactionLocked()
 			}
 			if len(m.remote.txs) >= m.remote.txCapacity {
-				return entity.ErrRemoteOverloaded
+				return nil, entity.ErrRemoteOverloaded
 			}
 		}
 		m.remote.txs[id] = &remoteTransactionTracker{done: make(chan struct{}), status: entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitAdmitted}}
 	}
-	return nil
+	return m.remote.txs[id], nil
 }
 
 func (m *Manager) evictOldestClosedRemoteTransactionLocked() {
@@ -750,11 +764,11 @@ func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTra
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := m.trackRemoteTransaction(id); err != nil {
+	tracker, err := m.trackedRemoteTransaction(id)
+	if err != nil {
 		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: err.Error()}, err
 	}
 	m.remote.txMu.Lock()
-	tracker := m.remote.txs[id]
 	done := tracker.done
 	status := tracker.status.Clone()
 	closed := tracker.closed
@@ -764,8 +778,11 @@ func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTra
 	}
 	select {
 	case <-done:
+		// Read through the tracker this call is holding, not through the map:
+		// the record may have been evicted while this goroutine was parked.
+		// Still under txMu, because completeRemoteTransaction writes status.
 		m.remote.txMu.Lock()
-		status = m.remote.txs[id].status.Clone()
+		status = tracker.status.Clone()
 		m.remote.txMu.Unlock()
 		return status, remoteStatusError(status)
 	case <-ctx.Done():

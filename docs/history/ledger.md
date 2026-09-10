@@ -142,7 +142,7 @@
 | kit | `nettransport`（新位置 core） | 09-02 | 09-06 U-0080（回退 4 条） / 09-09 U-0131（回退 9 条，1 冗余） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 / 09-09 U-0150 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
-| kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
+| kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 / 09-10 U-0168（修复） |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 / 09-06 U-0095（回退 20 条） / 09-09 U-0150 / 09-10 U-0163（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-06 U-0051（回退 40 条） / 09-06 U-0092（回退 9 条） | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -176,7 +176,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | skill | `combat` | 09-06 脚本扫 | 09-09 脚本扫（nightly 0/3） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `combatcomponent`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0066（回退 4 条） / 09-09 U-0130（回退 11 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
-| skill | `skill`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） / 09-06 U-0094（回退 4 条） / 09-09 U-0134（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
+| skill | `skill`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0028（回退验证 11 条，4 洞） / 09-06 U-0085（回退 4 条） / 09-06 U-0094（回退 4 条） / 09-09 U-0134（回退 9 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-10 U-0169（修复） |
 | skill | `skillcompose`（新位置 core/skill） | 09-06 脚本扫 | 09-06 U-0063（回退 10 条） / 09-09 U-0133（9 处复核冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | skill | `skillsync` | 09-06 脚本扫 | 09-06 U-0064（回退 9 条） / 09-09 U-0148 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0117（变异 2 红） |
 
@@ -188,7 +188,7 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） / 09-10 U-0162（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） / 09-10 U-0162（修复） / 09-10 U-0166（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/genutil` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -196,7 +196,7 @@
 | codegen | `internal/nest` | — | 09-06 U-0035（回退 8 条，4 洞） / 09-06 U-0088（回退 3 条） / 09-09 U-0116（回退 3 条，5 不可达 / 冗余） / 09-09 U-0124（模板守卫 → 生成配套测试） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/project` | — | 09-09 脚本扫（nightly 1/2） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/protocol` | — | 09-06 U-0032（回退 6 条，5 洞） / 09-06 U-0087（回退 6 条） / 09-09 U-0115（回退 8 条） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） | — | 09-09 脚本扫 | 09-06 U-0030 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/registry` | — | 09-06 U-0030（回退 4 条，2 洞） / 09-10 U-0167（修复） | — | 09-09 脚本扫 | 09-06 U-0030 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/roost` | — | 09-05 U-0015（部署模板）/ 09-06 U-0026（lifecycle）/ 09-06 U-0089（add 参数守卫，回退 14 条 12 红 2 冗余） / 09-09 U-0151 / 09-09 U-0152 / 09-09 U-0156（修复） | — | 09-05 U-0015 / 09-06 U-0029（dev compose） / 09-09 U-0118（16 处字面量→常量） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/servicerpc` | — | 09-09 脚本扫（nightly 2/20） / 09-09 U-0151 | — | 09-05 U-0024 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/tablegen` | — | 09-06 U-0033（回退 5 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 U-0033 | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -237,6 +237,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0169 | 2026-09-10 | roost-core `skill` 快照的完成顺序(RR-20260910-04,P3) | C8 | `completedCastOrder` 按完成顺序、淘汰从队头走,而快照按 ID 序列化 casts、恢复按这个顺序重建,"最旧完成"被换成"最小 ID"。修法:payload 增 `CompletedCastOrder`(拷贝而非引用),恢复抽成纯函数 `restoreCompletedCastOrder`,记录顺序优先并过滤到确实恢复成终态的 cast,漏掉的按 ID 追加(同时是旧快照的兼容路径) | `completed_order_checkpoint_promises_test.go` 三组(序列化侧、纯函数表驱动、真实 pruner 的后果) | 回退序列化与恢复后 `the payload carries completion order [], want [2 1]` 变红;修后 skill 含 -race 全绿 | T-63 · `docs/bugfix/RR-20260910-04.md` |
+| U-0168 | 2026-09-10 | roost-core `remoteentity` 事务等待者与容量淘汰(RR-20260910-03) | C8 | 等待者唤醒后重新查 map 取状态,而准入的容量淘汰恰好挑"最旧的已关闭"记录 —— 正是刚把它唤醒的那条;nil 解引用发生在 txMu 临界区,Unlock 不执行,之后所有事务跟踪被锁挡死。修法:新增 `trackedRemoteTransaction` 返回 tracker,等待者全程用已持有的指针读,不再查表 | `transaction_wait_eviction_promises_test.go`(用 select 进入时求值所有操作数的性质做屏障,固定"已取得 done、未读终态"的时刻) | 修前红(`the waiter panicked instead of answering: nil pointer dereference`);修后 remoteentity 含 -race 全绿 | T-62 · `docs/bugfix/RR-20260910-03.md` |
+| U-0167 | 2026-09-10 | roost-codegen `internal/registry` 固定导入名的别名保留(RR-20260910-06,M-05 回归) | C2 | M-05 让模板无条件导入 core entity,但别名分配器的保留集仍是 registry/sync/fmt/err;业务包路径以 /entity 结尾时被分到同名别名,生成物两个 entity。修法:抽成具名清单 `aggregateReservedNames` 并加入 entity,注释写明须与模板 import 块同步 | `entity_alias_promises_test.go`(三个包分别以 entity/fmt/sync 结尾,解析后断言名字不重复、指向正确、调用仍在) | 修前红(`import name "entity" is used by both …`);修后 codegen 全仓绿 | T-61 · `docs/bugfix/RR-20260910-06.md` |
+| U-0166 | 2026-09-10 | roost-codegen `internal/entity` category 的 import 收集(RR-20260910-05,M-05 回归) | C2 | `collectEntityImports` 收了 EntityKind / SyncTopic / packer / component / dao,漏了 M-05 新增的 category;category 指向业务包常量时生成物用了该包却没导入,消费者 `undefined: view`。M-05 的测试只用 core 常量,恰好绕过。修法:`add(ent.Category)` | `category_import_promises_test.go`(解析生成物,要求每个 `pkg.Sel` 限定名都有 import,而不是只找字符串) | 修前红(`generated wiring qualifies [view] without importing it`);修后 codegen 全仓绿 | T-60 · `docs/bugfix/RR-20260910-05.md` |
 | U-0165 | 2026-09-10 | roost-kit `service/mail` 领取身份与容量淘汰(RR-20260910-02) | C8 | evict 丢整条终态 Entry、deliver 把"条目不在"当"从未投递",已领取邮件被淘汰后重投变回未读并铸出第二个 token。修法:展示保留与领取身份保留分开,淘汰带 token 的条目时留 `SettledClaim` 墓碑(键在 token 不在 Status,覆盖领取后又删除的路径),墓碑有独立上限按最旧先挤;deliver 不复活、ReserveClaim 答 ErrAlreadyClaimed、CommitClaim 带原 token 仍幂等 | `claim_identity_promises_test.go` 四条(含"从未领取的仍应复活"与墓碑收界) | 修前红(`resurrected with a new delivery key: first="token-1" replay="token-2"`);修后 mail 含 -race 全绿 | T-59 · `docs/bugfix/RR-20260910-02.md` |
 | U-0164 | 2026-09-10 | roost-kit `service/match` Enqueue 重放归属(RR-20260909-05) | C8 | 重放只按 requestID 查,不校验票归属,异归属玩家拿到别人的票且自己没进队;读取侧 `Ticket` 一直调 `validateOwnership`。修法:重放分支复用同一个 `validateOwnership`,不匹配计 `request_subject_mismatch` 并拒绝,不改键空间 | `enqueue_request_owner_promises_test.go` | 修前红(异归属重放返回 owner 的票);修后 match 含 -race 全绿 | T-58 · `docs/bugfix/RR-20260909-05.md` |
 | U-0163 | 2026-09-10 | roost-core `room` 派生扫描周期(RR-20260910-01,P3) | C2 | `SweepInterval` 默认值 `min(IdleTTL/2, 30s)` 是整数除法,IdleTTL < 2ns 推出 0,而构造器接受该 TTL,`Start` 里 `NewTicker(0)` 在后台 goroutine panic。修法:派生值取下限 `time.Nanosecond`,显式值不改写 | `sweep_interval_promises_test.go`(五个 TTL 各自构造 + 真 Start/Close) | 修前红(`accepted positive IdleTTL 1ns but derived SweepInterval=0s`);修后 room 含 -race 全绿 | T-57 · `docs/bugfix/RR-20260910-01.md` |
