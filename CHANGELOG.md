@@ -25,8 +25,6 @@
 
 ### Changed
 
-- **`category=` 进实体标记并直接进生成物;生成的聚合注册末尾校验 entity 注册表**(M-05;前置 M-01～M-04)。生成的接线原来写 `entity.MustEntityCategoryOfKind(kind)`,一次运行期查表、查不到就 panic,于是"业务文件里手写的 `MustRegisterEntityKindCategory` 必须先跑"成了隐式前置,而这个顺序只由手写聚合文件的第一行保证。category 是 kind 的静态事实,标记里写清楚就能直接生成,前置随之消失。取值要求是导出标识符可带包限定,`category=1` / `category="player"` 这类写法在生成器就报错。没写 `category=` 时仍生成运行期查表,未迁移的工程不受影响。
-  `roost add entity` 的实体文件不再手写注册,category 写在标记上;`roost add lifecycle` 生成的两处 `<pkg>.EntityCategory<Name>` 引用(M-04 删掉了那个常量,会让工程编译不过)改为 `entity.MustEntityCategoryOfKind(<pkg>.EntityKind<Name>)`。`registry.RegisterAll()` 是工程里唯一知道"注册结束了"的时点,聚合末尾因此调 `entity.ValidateEntityRegistry()` 并包装其错误,一次列出所有不一致;模板的 `fmt` 与 `roost-core/entity` 两个 import 变成无条件。实施记录见 roost-core `docs/bugfix/M-05-marker-owns-the-category.md`。
 - **category 离开 EntityID,注册表成为唯一权威**(M-02,重构;前置 M-01)。`ResolveEntityID` 与 `GetEntityGroup` 改为"从 ID 取 kind、再查注册表"拿 category,只有本进程不认识的 kind 才回落去读 ID 的低两位;注册表不再拒绝超出该字段宽度的 category。动因是目标形态要"category 的值就是锁序"、需要五档,而那两位加上 `EntityCategoryNone` 只剩三个可用值。
   **无数据迁移**:`makeEntityID` 仍然写 `category & EntityCategoryMask`,那两位降为无人读取的历史填充,只为让改动前后铸出的 ID 位级一致。`NormalizeFullID` 删掉一处自证的 category 对账(`meta.Category` 现在就来自注册表,只可能相等),`GetEntityCategoryFromID` 标记 Deprecated。没有删除任何导出符号,v1 消费方完全兼容。`category_taxonomy_promises_test.go` 修前红。实施记录见 `docs/bugfix/M-02-category-leaves-the-id.md`。
 - **entity kind 注册表改为按 kind 的无锁定长表**(M-01,重构)。`factoryByKind` / `kindCategoryByKind` / `kindPolicyByKind` 三张 map 合成一条发布后不可变的 `entityKindEntry`,存在 `[256]atomic.Pointer` 里;`EntityKind` 是 uint8,所以读取是一次原子载入,不再取锁。动因是锁序热路径 `GetEntityGroup` 会在**已持有实体互斥**时查这张表(排序比较器每次比较两次、`maxLockedGroup` 每个已持有锁一次、广播分桶每个 id 一次),旧实现在那里取读写锁,既有每次查询的开销,也形成"先持实体互斥再取注册表锁"的获取边,让注册期的写锁能挡住锁序判断。
