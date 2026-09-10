@@ -6,6 +6,8 @@
 
 ### Added
 
+- **entity category 的声明式锁序**(M-03,重构;前置 M-01 / M-02)。新增 `EntityCategoryRemote`、`EntityCategoryDef`、`RegisterEntityCategories` / `MustRegisterEntityCategories`、`EntityCategoryName`、`ValidateEntityRegistry`。应用声明 category 之后,**category 的值就是锁序**,低的先锁,没有单独的 order 字段;`EntityCategoryRemote` 固定最低,因为"远程托管实体最先加锁"是唯一有物理依据的排序约束,持着本地互斥去等分布式锁会把那把锁挡过一次网络往返。
+  锁序在注册期派生进 `[256]atomic.Uint32`,`GetEntityGroup` 一次原子载入即可;managed 的 kind 即便被声明在别的 category 也强制按 remote 档排,同时 `ValidateEntityRegistry` 把这个声明报成错误。未声明 category 的应用完全走原路径,行为一字不变。`ValidateEntityRegistry` 目前只校验不封表,封表那一半留给生成器接管注册的那一步。实施记录与采用前提见 `docs/bugfix/M-03-category-lock-order.md`。
 - **P3b：装配下沉——六个包新增 `Assemble*`**，kit Mod 只剩配置解析、能力注册与生命周期转交（[记录](docs/history/P3b_mods.md)）。
   `redis/driver.Assemble`（客户端 + 同连接池的锁工厂）、`etcd/driver.Assemble`（客户端 + 发现 + 选举，`Ping` / `Start` / `Close` 取代 Mod 里的 `Raw().Status`）、
   `nats/driver.Assemble`（连接 + JetStream + RPC，`Close` 停 RPC 并限时 drain）、`dataengine/engine.Assemble`（Mongo 存储与远端投影绑定；`Start` 内含 WAL → projector → outbox → runtime 的构造与链式回滚）、

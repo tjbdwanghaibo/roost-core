@@ -21,8 +21,21 @@ const (
 // If nil, all non-remote entities fall into EntityGroupOther.
 var GetEntityGroupFunc func(category EntityCategory) int
 
-// GetEntityGroup extracts entity group from GUId for lock ordering.
+// GetEntityGroup is the lock rank of an entity id, lower acquired first.
+//
+// When the application has declared its categories the rank IS the category's
+// value, derived per kind at registration time and read here with a single
+// atomic load. Otherwise the legacy path below decides: remote-capable ids
+// rank first and GetEntityGroupFunc maps the category. Both scales are only
+// ever compared against each other, and one process uses one path.
 func GetEntityGroup(guid int64) int {
+	kind := GetEntityKindFromID(guid)
+	if rank, ok := lockRankOf(kind); ok {
+		return rank
+	}
+	if rank, ok := unknownKindLockRank(guid); ok {
+		return rank
+	}
 	if IsRemoteCapableEntityID(guid) {
 		return EntityGroupRemote
 	}
@@ -30,7 +43,7 @@ func GetEntityGroup(guid int64) int {
 		// The registry answers what this kind's category is; the ID's legacy
 		// two-bit field is consulted only for a kind this process does not
 		// link, where there is nothing better to go on (M-02).
-		category, known := EntityCategoryOfKind(GetEntityKindFromID(guid))
+		category, known := EntityCategoryOfKind(kind)
 		if !known {
 			category = GetEntityCategoryFromID(guid)
 		}

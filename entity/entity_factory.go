@@ -173,6 +173,7 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	existing := kindEntryOf(kind)
 	if existing == nil {
 		kindEntries[kind].Store(&entityKindEntry{category: category, policy: def.RemotePolicy})
+		refreshLockRankLocked(kind)
 		return nil
 	}
 	if existing.category != category {
@@ -189,6 +190,7 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 		next := *existing
 		next.policy = def.RemotePolicy
 		kindEntries[kind].Store(&next)
+		refreshLockRankLocked(kind)
 		return nil
 	case def.RemotePolicy == RemotePolicyNone:
 		return nil
@@ -221,6 +223,7 @@ func ResetEntityRegistryForTest() {
 	defer registryMu.Unlock()
 	for i := range kindEntries {
 		kindEntries[i].Store(nil)
+		lockRankByKind[i].Store(0)
 	}
 }
 
