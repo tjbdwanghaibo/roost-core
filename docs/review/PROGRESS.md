@@ -2,6 +2,24 @@
 
 最后更新：2026-09-10。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 收尾同步与下一轮优先项
+
+提交前收到 U-0162～U-0165，已同步 Core `b2ae333685803846d75cf71e91e1412e6eaccad9`、Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`、Codegen `655b2de00f9b77e45086e72431c13cec94c2f336`。作者标记 RR-20260909-05/06、RR-20260910-01/02 已修复；本轮实测截止在下方基线，新到修复尚未独立验收。下一轮首先以原复现验收这四项，并补 Mail 墓碑上限先于信封过期耗尽的边界；之后再按第三轮表轮转。当前检出/下轮增量起点用本节 SHA，历史实测基线不要替换。
+
+## 2026-09-10 第三轮增量（实测基线）
+
+Core `f3eaad9b38f87b2873e6f35b517b4ad993aed680`，Kit `c4e7cef1029fb6326fa88b84c622f059bc62c0c4`，Codegen `8c38eeb2a183c1519f8a28e102133282e29c9670`。已快进新增 M-01～M-05，Kit 无新增；下方各轮表保留历史基线。
+
+| 范围/入口 | 新增证据 | 状态与限制 | 下一入口 |
+| --- | --- | --- | --- |
+| core/entity factory、idgen/resolver、category_order、guard；nest | 注册表权威和派生锁序，entity/nest race 通过 | 已验证部分场景；图谱旧代，源码补证；无混合版本迁移测试 | 旧 ID 与 category 改值后的实际存储键 |
+| codegen/entity parse/gen、registry gen、roost add/workflow | 相关三包通过；三个消费者一绿两红 | 已验证部分场景；RR-20260910-05/06，M-05 新增 | 修复验收、别名/标记组合、真实 bootstrap |
+| core/remoteentity transaction_manager | 等待/完成/容量淘汰；包 race 通过，独立淘汰复现 panic | 已验证部分场景；RR-20260910-03；没有真实后端故障 | 等待者生命周期修复、finalizer 停机交接 |
+| core/skill checkpoint、retention、Cancel、process | 包 race；独立 Host 恢复保留顺序失败；取消恢复与停止失败重试通过 | 已验证部分场景；RR-20260910-04 仅历史诊断差异 | 完成顺序修复、RootEvent/ProcLedger 保留恢复 |
+| kit/mail Send、Deliver、回执与领取 | 包及回执补写/部分广播重试 race 通过 | 已验证部分场景；仍有 RR-20260910-02 淘汰边界；MemoryStore | 资产幂等期限、异步投递确认与重放 |
+
+[运行记录](REVIEW-2026-09-10-03.md)、[生成机制](IMPLEMENTATION-CATEGORY-REGISTRY-AND-GENERATION.md)、[恢复重放机制](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)、[复现](../bug/REPRO-2026-09-10-03.md)。本节旧问题状态只描述实测快照；提交前新到 U 系修复及续跑 SHA 以页首收尾同步节为准，先独立验收，再做增量与上述未验证入口。上一段审批额度中断未执行的命令已在本轮重新验证，未以未执行结果计入进度。
+
 ## 2026-09-10 第二轮增量
 
 Core 76664a51be77bdeb79a62cf344d5cee0ecc15daa，Kit c4e7cef1029fb6326fa88b84c622f059bc62c0c4，Codegen aa072edb35a0b97d234e0155142e36295c5f21d1；pull 均无新提交。

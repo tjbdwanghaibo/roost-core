@@ -25,3 +25,7 @@ Batch 的 Commit 按 Durability 分支处理：直接 Apply、异步返回推定
 `nest/remote_access.go` 在 handler 前收集 RemoteAccess 声明，校验 alias、引用、模式和一致性，解析快照后核对实体/种类/scope/route epoch，再校验版本/时效。Required 失败中止，optional 失败跳过；成功快照放入当前上下文，Remote[T] 按 alias 与类型读取。
 
 只读快照和 managed remote 写批次解决不同需求。调用方不能把取得快照当作取得写租约，也不能把应用层函数返回理解为所有持久化级别都已完成。下轮继续检查 finalizer 队列耗尽/停止、真实锁租约超时和快照发布重试。
+
+## 第三轮补充：完成等待者与缓存保留
+
+Core f3eaad9b38f87b2873e6f35b517b4ad993aed680 已独立复现完成 tracker 被淘汰后等待者 panic（RR-20260910-03）。上文描述的是第二轮历史基线，不代表此边界已安全。通知和结果生命周期的分析见[恢复与重放](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)，验证见[第三轮记录](REVIEW-2026-09-10-03.md)。
