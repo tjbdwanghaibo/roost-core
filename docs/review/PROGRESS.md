@@ -2,6 +2,18 @@
 
 最后更新：2026-09-10。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-10 第二轮增量
+
+Core 76664a51be77bdeb79a62cf344d5cee0ecc15daa，Kit c4e7cef1029fb6326fa88b84c622f059bc62c0c4，Codegen aa072edb35a0b97d234e0155142e36295c5f21d1；pull 均无新提交。
+
+| 范围 | 入口与证据 | 状态/限制 | 后续 |
+| --- | --- | --- | --- |
+| core/nest、remoteentity | 预声明、prepare、Finalize/Commit/Abort/Close、快照预加载；两包 race 通过，部分 prepare 失败后再准入通过 | 已验证部分场景；仅替身后端 | finalizer 停止/队列、真实故障 |
+| kit/service/mail | Deliver/evict 与领取链组合；包 race 通过，新淘汰重投复现失败 | 已验证部分场景；新增 P2 RR-20260910-02；未连接资产服务 | 去重记录保留、部分 fanout 恢复 |
+| codegen | 同步与旧问题记录核对 | 待复核，本轮未新增源码阅读 | 等待显式输出修复验收 |
+
+[第二轮运行记录](REVIEW-2026-09-10-02.md)及[远程实现学习](IMPLEMENTATION-REMOTE-PREPARE-AND-FINALIZE.md)。RR-20260909-05/06、RR-20260910-01 无新修复；连同本轮新问题均留待复核。下方为此前证据。
+
 ## 2026-09-10 增量进度
 
 三仓 pull 均无新增：Core 8ea815930b4b32bf59cb4a894e50782687046e0d（相对第四轮仅文档变化），Kit/Codegen 与下方相同。下方第四轮表保留历史证据。

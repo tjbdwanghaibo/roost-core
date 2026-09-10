@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-10 第二轮 | Remote 预分派、Mail 淘汰与重投 | 3 包 race 通过；新 P2：淘汰后重投生成新发奖 token | [运行](REVIEW-2026-09-10-02.md)、[实现](IMPLEMENTATION-REMOTE-PREPARE-AND-FINALIZE.md)、[问题](../bug/REVIEW-2026-09-10-02.md) |
 | 2026-09-10 | Match 过期、Room 生命周期、Skill 取消 | 3 包 race 通过，2 个新增行为验收通过；1 个低频 P3 | [运行记录](REVIEW-2026-09-10.md)、[实现学习](IMPLEMENTATION-ROOM-AND-SKILL-SCHEDULING.md)、[问题](../bug/REVIEW-2026-09-10.md) |
 | 2026-09-09 第四轮 | 三项修复验收；Guard/Cast、Mail、Match、Entity 输出 | 8 个相关包 race 通过；新增 2 个 P2；建立进度与机制文档 | [学习与验证](REVIEW-2026-09-09-04.md)、[问题](../bug/REVIEW-2026-09-09-04.md) |
 | 2026-09-09 第三轮 | Data Engine/Saga 生命周期、Entity 消费者生成 | 新增 2 个 P2；相关基线测试通过，独立复现失败 | [学习与验证](REVIEW-2026-09-09-03.md)、[问题](../bug/REVIEW-2026-09-09-03.md) |
