@@ -12,6 +12,8 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 
 ## 第三级：框架维护者与生产负责人
 
+- [2026-09-10 Room/Skill/Match 审查](review/REVIEW-2026-09-10.md)：生命周期、取消与过期验证，附实现学习和复现。
+
 - [持续代码 Review 与学习记录](review/README.md)：三仓最新基线、审查范围、验证和下一轮入口。
 - [Review 跨轮进度](review/PROGRESS.md)：模块证据、源码基线、验证限制与后续范围。
 - [第四轮扩大审查](review/REVIEW-2026-09-09-04.md)：三项修复独立验收、Match 与 Entity 输出新问题及实现学习。

@@ -1,8 +1,21 @@
 # Roost Review 跨轮进度
 
-最后更新：2026-09-09 第四轮。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+最后更新：2026-09-10。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
-## 当前源码基线
+## 2026-09-10 增量进度
+
+三仓 pull 均无新增：Core 8ea815930b4b32bf59cb4a894e50782687046e0d（相对第四轮仅文档变化），Kit/Codegen 与下方相同。下方第四轮表保留历史证据。
+
+| 模块 | 本轮入口与验证 | 状态与限制 | 下轮入口 |
+| --- | --- | --- | --- |
+| core/room | RoomManager Create/Get/Remove/Close/expireIdle；Broadcaster Close/Stop；包 race 通过 | 已验证部分场景；新 P3 RR-20260910-01；真实下游未验 | 退休重试与下游故障 |
+| core/skill | scheduler、Cancel；包 race 及取消 wait 后不触发伤害测试通过 | 已验证部分场景；未覆盖取消失败/宿主重入 | checkpoint 与取消失败 |
+| kit/service/match | Sweep/expireLockedLimit/QueueLength；包 race 及过期重新入队测试通过 | 已验证部分场景；RR-20260909-05 仍未修复 | 历史状态保留容量与后端故障 |
+| codegen/internal/entity | 核对 SHA/bugfix，无新提交或修复记录 | 待复核；RR-20260909-06 仍未修复；本轮未重复生成实验 | 修复后独立验收 |
+
+证据：[本轮运行记录](REVIEW-2026-09-10.md)、[Room/Skill 实现学习](IMPLEMENTATION-ROOM-AND-SKILL-SCHEDULING.md)。下一轮先读未关闭问题的 bugfix，再转 Remote Entity/Mail 回执；Room 的实现位于 core/room，不能沿用 kit/service/room。
+
+## 第四轮源码基线（历史）
 
 - Core：`1f7bb5425a8b82c774bac9bbf40048f44ea3de99`。
 - Kit：`c4e7cef1029fb6326fa88b84c622f059bc62c0c4`。
