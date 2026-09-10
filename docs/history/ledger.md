@@ -144,7 +144,7 @@
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
 | kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| kit | `room` | 09-02 | 09-02 / 09-06 U-0095（回退 20 条） / 09-09 U-0150 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `room` | 09-02 | 09-02 / 09-06 U-0095（回退 20 条） / 09-09 U-0150 / 09-10 U-0163（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-06 U-0051（回退 40 条） / 09-06 U-0092（回退 9 条） | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `servicerpc` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `spatial` | 09-02 | 09-06 U-0081（回退 3 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -162,8 +162,8 @@
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） / 09-09 U-0150 | 09-05 U-0016 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） / 09-09 U-0150 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） / 09-09 U-0150 | 09-05 U-0020（回调内重置，无问题） | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0120（sweep 失败计数，修复） | 09-09 脚本扫 / 09-09 U-0119（sweep 组来源，修复） | 09-06 脚本扫 | 09-09 脚本扫 |
-| service | `mail`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） / 09-09 U-0140（回退 7 条，2 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0145（Get / GetMany 同判，修复） |
-| service | `match`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） / 09-09 U-0141（回退 7 条，1 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0121（sweep 失败计数，修复） | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 |
+| service | `mail`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） / 09-09 U-0140（回退 7 条，2 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0145（Get / GetMany 同判，修复） / 09-10 U-0165（修复） |
+| service | `match`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） / 09-09 U-0141（回退 7 条，1 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0121（sweep 失败计数，修复） | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 / 09-10 U-0164（修复） |
 | service | `platform`（新位置 kit/service） | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） / 09-06 U-0097（回退 4 条） / 09-09 U-0143（回退 7 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-05 U-0018 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） / 09-09 U-0150 / 09-09 U-0152 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `servicemetrics` | 09-06 脚本扫 | 09-05 U-0020（全读） | — | — | 09-05 U-0020 | — | 09-06 脚本扫 | — |
@@ -188,7 +188,7 @@
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） / 09-10 U-0162（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/genutil` | — | 09-09 脚本扫（nightly 无守卫可采） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -237,6 +237,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0165 | 2026-09-10 | roost-kit `service/mail` 领取身份与容量淘汰(RR-20260910-02) | C8 | evict 丢整条终态 Entry、deliver 把"条目不在"当"从未投递",已领取邮件被淘汰后重投变回未读并铸出第二个 token。修法:展示保留与领取身份保留分开,淘汰带 token 的条目时留 `SettledClaim` 墓碑(键在 token 不在 Status,覆盖领取后又删除的路径),墓碑有独立上限按最旧先挤;deliver 不复活、ReserveClaim 答 ErrAlreadyClaimed、CommitClaim 带原 token 仍幂等 | `claim_identity_promises_test.go` 四条(含"从未领取的仍应复活"与墓碑收界) | 修前红(`resurrected with a new delivery key: first="token-1" replay="token-2"`);修后 mail 含 -race 全绿 | T-59 · `docs/bugfix/RR-20260910-02.md` |
+| U-0164 | 2026-09-10 | roost-kit `service/match` Enqueue 重放归属(RR-20260909-05) | C8 | 重放只按 requestID 查,不校验票归属,异归属玩家拿到别人的票且自己没进队;读取侧 `Ticket` 一直调 `validateOwnership`。修法:重放分支复用同一个 `validateOwnership`,不匹配计 `request_subject_mismatch` 并拒绝,不改键空间 | `enqueue_request_owner_promises_test.go` | 修前红(异归属重放返回 owner 的票);修后 match 含 -race 全绿 | T-58 · `docs/bugfix/RR-20260909-05.md` |
+| U-0163 | 2026-09-10 | roost-core `room` 派生扫描周期(RR-20260910-01,P3) | C2 | `SweepInterval` 默认值 `min(IdleTTL/2, 30s)` 是整数除法,IdleTTL < 2ns 推出 0,而构造器接受该 TTL,`Start` 里 `NewTicker(0)` 在后台 goroutine panic。修法:派生值取下限 `time.Nanosecond`,显式值不改写 | `sweep_interval_promises_test.go`(五个 TTL 各自构造 + 真 Start/Close) | 修前红(`accepted positive IdleTTL 1ns but derived SweepInterval=0s`);修后 room 含 -race 全绿 | T-57 · `docs/bugfix/RR-20260910-01.md` |
+| U-0162 | 2026-09-10 | roost-codegen `internal/entity` 显式 -output 与多实体(RR-20260909-06) | C2 | 生成循环对每个实体都用同一个 `-output`,后者覆盖前者连同守卫测试,exit 0 而消费者报 `undefined: RegisterEntity`。修法:写文件之前拒绝,报错点出目录、实体数与实体名并说明拿掉 `-output`;单实体照旧 | `output_multi_entity_promises_test.go` | 修前红(两次 `generated:` 同一路径);修后 codegen 全仓绿 | T-56 · `docs/bugfix/RR-20260909-06.md` |
 | U-0161 | 2026-09-09 | roost-core 接入文档（RR-20260909-01 残留） | 文档 | Quickstart / README 版本快照落后一版；DEVELOPMENT_WORKSPACE 仍"五个仓库 / 四仓"；STATIC_REGISTRATION 的 once 守卫名随 U-0160 更新 | 无（文档） | — | `docs/bugfix/RR-20260909-01.md` |
 | U-0160 | 2026-09-09 | roost-codegen `internal/entity` 同包多实体（RR-20260909-04） | C2 | 每个生成文件都声明包级 `registerEntityOnce` / `RegisterEntity`，两实体同包生成成功、消费者 redeclared。修法：每实体 `register<Name>Entity` + 同名 once；包级 `RegisterEntity`（带 `//roost:register`）只进按名排序的第一个实体文件、调用所有兄弟；`generate` 保留为单实体包装，`main` 传 siblings | `multi_entity_package_promises_test.go`（解析生成物的包级声明，重名即失败） | 修前红（redeclared ×2、RegisterEntity ×2）；修后 codegen 全绿，fixture 重生成 | T-55 · `docs/bugfix/RR-20260909-04.md` |
 | U-0159 | 2026-09-09 | roost-core `dataengine/engine` Assembly 停机重试（RR-20260909-03） | C8 | `Assembly.Shutdown` 无论结果都置空 runtime，重试见 nil 答成功而 worker 仍在跑。修法：只有 `Runtime.Shutdown` 返回 nil 才释放；`Runtime.Shutdown` 加互斥与两位完成标记，重试只等未停组件，flush 只尝试一次 | `assembly_shutdown_promises_test.go`（真实 OutboxWorker 卡在 Claim；取消 ctx → 保留 runtime；限时重试 → 仍报错仍保留；放行后重试 → nil 且 Runtime()==nil；再调幂等） | 修前红（Runtime()=nil after incomplete shutdown）；修后 engine 全绿含 -race | T-54 · `docs/bugfix/RR-20260909-03.md` |

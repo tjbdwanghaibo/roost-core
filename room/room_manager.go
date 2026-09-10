@@ -104,7 +104,14 @@ func NewRoomManager(config RoomManagerConfig) (*RoomManager, error) {
 		config.IdleTTL = 5 * time.Minute
 	}
 	if config.SweepInterval <= 0 {
-		config.SweepInterval = min(config.IdleTTL/2, 30*time.Second)
+		// Half the idle TTL, capped, but never zero: IdleTTL/2 is integer
+		// division, so any valid TTL below 2ns derives 0 and run's
+		// time.NewTicker(0) panics in a background goroutine — a config that
+		// constructs and starts cleanly and then takes the process down
+		// (RR-20260910-01). The TTL itself is legal; only "half of it" is
+		// unrepresentable at that scale, so the derived value is floored
+		// rather than the TTL refused.
+		config.SweepInterval = max(min(config.IdleTTL/2, 30*time.Second), time.Nanosecond)
 	}
 	if config.CloseTimeout <= 0 {
 		config.CloseTimeout = 5 * time.Second

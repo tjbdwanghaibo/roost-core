@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- **room 的默认扫描周期不再被极短 IdleTTL 推成零**(U-0163,C2;RR-20260910-01,T-57)。`SweepInterval` 留零时按 `min(IdleTTL/2, 30s)` 推导,而 `IdleTTL` 是整数纳秒:任何小于 2ns 的有效正值除以 2 都得 0,构造器却接受了这个 TTL,`Start` 里的 `time.NewTicker(0)` 随后在后台 goroutine panic —— 一个构造成功、启动也成功、然后把进程带走的配置。现在派生值取下限 `time.Nanosecond`;TTL 本身合法,只是"一半"在这个量级上无法表示,所以是给派生结果收界而不是拒绝输入,显式给的正 `SweepInterval` 一字不改。`sweep_interval_promises_test.go` 修前红。修复记录见 `docs/bugfix/RR-20260910-01.md`。
 - **dataengine Assembly 停机没完成不再忘掉 Runtime**（U-0159，C8；RR-20260909-03，T-54）。`Shutdown` 的 context 先到期、outbox worker 还在退出时，此前无论结果都把 runtime 置 nil，重试看到 nil 直接答成功。现在只有 `Runtime.Shutdown` 返回 nil 才释放引用；`Runtime.Shutdown` 记住已停下的组件（projector / outbox 各一位），重试只等还没停的，projector 的 flush 只尝试一次（关掉之后没有可 flush 的，记录留在 WAL 下次启动重放）。`assembly_shutdown_promises_test.go` 修前红。修复记录见 `docs/bugfix/RR-20260909-03.md`。
 - **接入文档版本快照与三仓措辞收尾**（U-0161；RR-20260909-01 残留）。Quickstart / README 的当前组合改为 core v1.15.2 / kit v1.14.3 / codegen v1.15.4，DEVELOPMENT_WORKSPACE 的"五个仓库 / 四仓"改为三仓，STATIC_REGISTRATION 的 once 守卫命名跟随 codegen v1.15.5 的生成形状。
 - **cache 读穿透的等待名额在跟随者取消后归还**（U-0155，C2；RR-20260908-02，T-51）。`MaxWaitersPerKey` 此前计的是本次 load 期间累计进过门的次数：跟随者因取消 / 超时离开时 `waiters` 不减，慢后端叠加短超时重试会在首个 load 结束前一直以 `ErrLoadWaitersExceeded` 拒绝健康请求。现在取消路径在同一把锁下减回，且只对仍是当前 load 的 call 减（新一轮 load 不被误扣）。`read_through_waiters_promises_test.go` 修前红，真满额仍拒绝。修复记录见 `docs/bugfix/RR-20260908-02.md`。
