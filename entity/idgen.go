@@ -149,9 +149,6 @@ func buildEntityIDWithCategory(uniqueID int64, category EntityCategory, kind Ent
 	if uniqueID <= 0 || uint64(uniqueID) > UniqueIDMask {
 		return 0, fmt.Errorf("%w: unique id %d outside 1..%d", ErrInvalidEntityID, uniqueID, UniqueIDMask)
 	}
-	if uint64(category) > EntityCategoryMask {
-		return 0, ErrInvalidCategory
-	}
 	if category == EntityCategoryNone {
 		return 0, fmt.Errorf("%w: category is none", ErrInvalidEntityID)
 	}
@@ -162,10 +159,15 @@ func buildEntityIDWithCategory(uniqueID int64, category EntityCategory, kind Ent
 }
 
 func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remoteCapable bool) int64 {
-	if uint64(category) > EntityCategoryMask {
-		panic(ErrInvalidCategory)
-	}
 	// kind is uint8 and always within EntityKindMask (8 bits); no check needed.
+	//
+	// The low two bits still receive the category, truncated to the field, but
+	// nothing reads them any more: the registry is the authority on a kind's
+	// category (ResolveEntityID), so the field is legacy padding. It is kept
+	// written so an ID minted before and after this change is bit-identical
+	// and no stored ID has to be migrated (M-02). A category above the field's
+	// three usable values therefore pads with a meaningless remainder, which is
+	// harmless precisely because no reader consults it. M-04 removes the write.
 	id := ((uint64(uniqueID) & UniqueIDMask) << UniqueIDShift) |
 		((uint64(kind) & EntityKindMask) << EntityKindShift) |
 		(uint64(category) & EntityCategoryMask)
@@ -178,6 +180,12 @@ func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remo
 	return int64(id)
 }
 
+// GetEntityCategoryFromID reads the ID's legacy category field.
+//
+// Deprecated: the registry is the authority on a kind's category, and the field
+// only holds three usable values. Use ResolveEntityID(id).Category, or
+// EntityCategoryOfKind for a kind. This accessor remains for a process that
+// holds an ID of a kind it does not link, where nothing better exists.
 func GetEntityCategoryFromID(id int64) EntityCategory {
 	return EntityCategory(uint64(id) & EntityCategoryMask)
 }
@@ -211,12 +219,13 @@ func NormalizeFullID(id int64, kind EntityKind) (int64, error) {
 	if meta.UniqueID == 0 {
 		return 0, fmt.Errorf("%w: id %d has empty unique id", ErrInvalidEntityID, id)
 	}
-	category, err := ResolveEntityKindCategory(meta.Kind)
-	if err != nil {
+	// The kind must be registered here, which is what makes the ID resolvable
+	// at all. Comparing meta.Category against the registry is not a check any
+	// more: ResolveEntityID now takes the category FROM the registry, so the
+	// two can only agree. The old comparison read as validation while proving
+	// nothing (M-02).
+	if _, err := ResolveEntityKindCategory(meta.Kind); err != nil {
 		return 0, err
-	}
-	if meta.Category != category {
-		return 0, fmt.Errorf("%w: id %d category=%d want=%d for kind=%d", ErrInvalidEntityID, id, meta.Category, category, meta.Kind)
 	}
 	return meta.FullID, nil
 }

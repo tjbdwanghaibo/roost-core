@@ -27,7 +27,13 @@ func GetEntityGroup(guid int64) int {
 		return EntityGroupRemote
 	}
 	if GetEntityGroupFunc != nil {
-		category := GetEntityCategoryFromID(guid)
+		// The registry answers what this kind's category is; the ID's legacy
+		// two-bit field is consulted only for a kind this process does not
+		// link, where there is nothing better to go on (M-02).
+		category, known := EntityCategoryOfKind(GetEntityKindFromID(guid))
+		if !known {
+			category = GetEntityCategoryFromID(guid)
+		}
 		return GetEntityGroupFunc(category)
 	}
 	return EntityGroupOther

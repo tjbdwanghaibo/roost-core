@@ -20,8 +20,17 @@ func TestRegisterEntityKindCategoryRefusesEachInvalidPair(t *testing.T) {
 	const kind EntityKind = 201
 	expectErrContains(t, RegisterEntityKindCategory(EntityKindNone, 1), "entity kind must not be none")
 	expectErrContains(t, RegisterEntityKindCategory(kind, EntityCategoryNone), "entity category must not be none for kind 201")
-	if err := RegisterEntityKindCategory(kind, EntityCategory(EntityCategoryMask+1)); !errors.Is(err, ErrInvalidCategory) {
-		t.Fatalf("category above the mask err = %v, want ErrInvalidCategory", err)
+	// A category above the ID's two-bit field used to be refused. M-02 made the
+	// registry the authority on a kind's category and demoted that field to
+	// legacy padding, so the bound is gone: the target taxonomy needs five
+	// categories and the field can express three. Checked on its own kind so
+	// the pair rules below still run against a fresh one.
+	const aboveField EntityKind = 231
+	if err := RegisterEntityKindCategory(aboveField, EntityCategory(EntityCategoryMask)+1); err != nil {
+		t.Fatalf("category above the legacy field must now be accepted: %v", err)
+	}
+	if got, ok := EntityCategoryOfKind(aboveField); !ok || got != EntityCategory(EntityCategoryMask)+1 {
+		t.Fatalf("EntityCategoryOfKind = (%d, %v) after registering above the field", got, ok)
 	}
 	if _, ok := EntityCategoryOfKind(kind); ok {
 		t.Fatal("a refused registration left the kind registered")

@@ -170,9 +170,6 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	if category == EntityCategoryNone {
 		return fmt.Errorf("entity category must not be none for kind %d", kind)
 	}
-	if uint64(category) > EntityCategoryMask {
-		return ErrInvalidCategory
-	}
 	existing := kindEntryOf(kind)
 	if existing == nil {
 		kindEntries[kind].Store(&entityKindEntry{category: category, policy: def.RemotePolicy})

@@ -15,10 +15,9 @@ import (
 //
 // 新实现按 kind 用定长数组加原子指针,读取只是一次载入,与写入完全不相干。
 func TestKindRegistryReadsDoNotBlockOnRegistrationWrites(t *testing.T) {
-	t.Cleanup(ResetEntityRegistryForTest)
-	ResetEntityRegistryForTest()
-
-	const kind EntityKind = 7
+	// The package's init registers shared test kinds, so this test must not
+	// reset the registry; it uses kind values nothing else claims.
+	const kind EntityKind = 151
 	const category EntityCategory = 2
 	MustRegisterEntityKindDefs(EntityKindDef{Kind: kind, Category: category, RemotePolicy: RemotePolicyManaged})
 
@@ -72,13 +71,12 @@ func TestKindRegistryReadsDoNotBlockOnRegistrationWrites(t *testing.T) {
 // category, policy and builder identity per kind, the reconciliation rules for
 // a second registration, and the full builder listing.
 func TestKindRegistryKeepsItsRegistrationRules(t *testing.T) {
-	t.Cleanup(ResetEntityRegistryForTest)
-	ResetEntityRegistryForTest()
-
+	// No reset here either: the package's init registers shared kinds that
+	// later tests need, and reset clears every slot.
 	const (
-		plain    EntityKind = 11
-		upgraded EntityKind = 12
-		built    EntityKind = 13
+		plain    EntityKind = 152
+		upgraded EntityKind = 153
+		built    EntityKind = 154
 	)
 
 	// A category-only registration leaves the policy at none.
@@ -113,7 +111,7 @@ func TestKindRegistryKeepsItsRegistrationRules(t *testing.T) {
 	if err := RegisterEntityKindDefs(EntityKindDef{Kind: EntityKindNone, Category: 1}); err == nil {
 		t.Fatal("kind none must be refused")
 	}
-	if err := RegisterEntityKindDefs(EntityKindDef{Kind: 14, Category: EntityCategoryNone}); err == nil {
+	if err := RegisterEntityKindDefs(EntityKindDef{Kind: 155, Category: EntityCategoryNone}); err == nil {
 		t.Fatal("category none must be refused")
 	}
 
@@ -130,21 +128,14 @@ func TestKindRegistryKeepsItsRegistrationRules(t *testing.T) {
 	if got, ok := EntityCategoryOfKind(built); !ok || got != 3 {
 		t.Fatalf("a builder registration must declare the category, got (%d, %v)", got, ok)
 	}
-	all := GetAllEntityBuilders()
-	if len(all) != 1 || all[0] != param {
-		t.Fatalf("GetAllEntityBuilders = %v, want exactly the one registered builder", all)
+	listed := 0
+	for _, candidate := range GetAllEntityBuilders() {
+		if candidate == param {
+			listed++
+		}
 	}
-
-	// Reset clears every slot.
-	ResetEntityRegistryForTest()
-	if got, ok := EntityCategoryOfKind(built); ok {
-		t.Fatalf("reset left kind %d registered with category %d", built, got)
-	}
-	if got := GetEntityBuilderParam(built); got != nil {
-		t.Fatalf("reset left a builder for kind %d", built)
-	}
-	if got := GetAllEntityBuilders(); len(got) != 0 {
-		t.Fatalf("reset left %d builders", len(got))
+	if listed != 1 {
+		t.Fatalf("GetAllEntityBuilders listed the registered builder %d times, want once", listed)
 	}
 }
 
