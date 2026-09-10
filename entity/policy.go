@@ -2,22 +2,31 @@ package entity
 
 import "fmt"
 
-// RemotePolicy describes how an entity kind participates in cross-server
-// routing/ownership. Remote-capable only means the ID carries the remote bit;
-// remote-managed means the remote_entity module may load, lock, save, and sync
-// the entity through IThreadSafeRemoteEntity.
+// RemotePolicy describes who owns an entity kind's write path across servers.
+//
+// Managed means the remote_entity module may load, lock, save and sync the
+// entity through IThreadSafeRemoteEntity, behind a distributed ownership guard.
+// Mirror means this process keeps a local read-only replica of state some other
+// service owns. Both are remote-capable, which is what puts the remote bit in
+// the ID so a process holding only an ID knows the entity may live elsewhere.
+//
+// There used to be a third value, Capable, meaning "remote-addressable but not
+// managed here". Its only effect was to put the kind in the first lock rank,
+// and lock order now comes from the kind's category, so the value said nothing
+// the category does not (M-04).
 type RemotePolicy uint8
 
 const (
 	RemotePolicyNone RemotePolicy = iota
-	RemotePolicyCapable
 	RemotePolicyManaged
 	RemotePolicyMirror
 )
 
+// RemoteCapable reports whether the kind is remote-addressable at all, which is
+// what the ID's remote bit records.
 func (p RemotePolicy) RemoteCapable() bool {
 	switch p {
-	case RemotePolicyCapable, RemotePolicyManaged, RemotePolicyMirror:
+	case RemotePolicyManaged, RemotePolicyMirror:
 		return true
 	default:
 		return false

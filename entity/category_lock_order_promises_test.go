@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// M-03 · 声明了 category 之后,category 的值就是锁序,不再需要 GetEntityGroupFunc,
-// 而远程托管实体恒定排在最前。
+// M-03 · category 的值就是锁序,而远程托管实体恒定排在最前。声明 category 只是给它们
+// 起名字,好让日志、报错和 ValidateEntityRegistry 能说"world"而不是"2"。
 //
 // 最前这一条不是业务约定而是物理约束:远程托管实体在 dispatch 顶层要拿分布式所有权锁,
 // 持着本地互斥去等一次网络往返会把那把锁挡在整条路径上。其余档位之间怎么排都只是业务约定。
@@ -85,38 +85,6 @@ func TestRegisteredCategoriesMakeTheCategoryValueTheLockOrder(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "175") {
 		t.Errorf("seal error does not name the offending kind: %v", err)
-	}
-}
-
-// An application that has not declared its categories keeps the legacy
-// mapping hook untouched, so this change cannot move an existing deployment.
-func TestUndeclaredCategoriesKeepTheLegacyGroupHook(t *testing.T) {
-	t.Cleanup(resetEntityCategoriesForTest)
-	resetEntityCategoriesForTest()
-
-	const kind EntityKind = 176
-	MustRegisterEntityKindCategory(kind, 2)
-	id, err := BuildEntityID(9, kind)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	previous := GetEntityGroupFunc
-	t.Cleanup(func() { GetEntityGroupFunc = previous })
-
-	GetEntityGroupFunc = nil
-	if got := GetEntityGroup(id); got != EntityGroupOther {
-		t.Fatalf("with no hook and no declared categories, group = %d, want the legacy default %d", got, EntityGroupOther)
-	}
-
-	GetEntityGroupFunc = func(category EntityCategory) int {
-		if category == 2 {
-			return EntityGroupAlliance
-		}
-		return EntityGroupOther
-	}
-	if got := GetEntityGroup(id); got != EntityGroupAlliance {
-		t.Fatalf("with the legacy hook, group = %d, want %d", got, EntityGroupAlliance)
 	}
 }
 

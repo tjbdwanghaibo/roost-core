@@ -9,7 +9,7 @@ import (
 //
 // 锁序热路径会读这张表:排序比较器 cmpGuidFunc 每次比较调两次 GetEntityGroup,
 // maxLockedGroup 对每个已持有的锁调一次,广播分桶每个 id 调一次。而
-// GetEntityGroup 走 IsRemoteCapableEntityID 再走 GetEntityKindRemotePolicy,
+// GetEntityGroup 当时走 IsRemoteCapableEntityID 再走 GetEntityKindRemotePolicy,
 // 旧实现在这里取注册表的读写锁,于是"持有实体互斥"与"取注册表锁"之间形成一条
 // 获取边;注册期的写锁会把正在做锁序判断的 goroutine 全部挡住。
 //
@@ -56,8 +56,8 @@ func TestKindRegistryReadsDoNotBlockOnRegistrationWrites(t *testing.T) {
 		if r.policy != RemotePolicyManaged {
 			t.Fatalf("GetEntityKindRemotePolicy = %d, want managed", r.policy)
 		}
-		if r.group != EntityGroupRemote {
-			t.Fatalf("GetEntityGroup = %d, want remote group %d", r.group, EntityGroupRemote)
+		if r.group != int(EntityCategoryRemote) {
+			t.Fatalf("GetEntityGroup = %d, want the remote rank %d", r.group, EntityCategoryRemote)
 		}
 		if r.builder != nil {
 			t.Fatalf("GetEntityBuilderParam = %v, want nil for a kind with no builder", r.builder)

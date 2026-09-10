@@ -9,8 +9,7 @@ import (
 // EntityCategoryRemote is the framework-reserved category for kinds whose
 // authoritative state lives behind a distributed ownership guard.
 //
-// Once an application declares its categories (RegisterEntityCategories), a
-// category's VALUE is its lock rank, acquired lowest first. Remote is fixed at
+// A category's VALUE is its lock rank, acquired lowest first. Remote is fixed at
 // the bottom because that one rank has a physical reason rather than a
 // business convention: a remote-managed entity's ownership lock is taken at
 // the top of a dispatch, and acquiring it while a local entity mutex is
@@ -18,9 +17,37 @@ import (
 // every other user of that entity behind one backend hiccup.
 //
 // Application categories therefore start at EntityCategoryRemote + 1, numbered
-// in the order they must be locked. An application that has NOT declared its
-// categories is unaffected by any of this and keeps using GetEntityGroupFunc.
+// in the order they must be locked.
 const EntityCategoryRemote EntityCategory = 1
+
+// The recommended taxonomy. Values are lock ranks, acquired lowest first, and
+// the ordering below is the one the framework is designed around:
+//
+//	Remote        distributed ownership; must be first, see above
+//	World         world/scene objects, contended between many players
+//	PlayerScoped  a player's outward representation, taken before the player
+//	Player        the player entity itself
+//	Other         anything else
+//
+// They are constants, not a requirement: category is a full uint8 now, so a
+// project may insert its own values between these or continue past Other. What
+// IS a requirement is that remote-managed kinds sit in EntityCategoryRemote,
+// which ValidateEntityRegistry checks.
+const (
+	EntityCategoryWorld        EntityCategory = EntityCategoryRemote + 1
+	EntityCategoryPlayerScoped EntityCategory = EntityCategoryRemote + 2
+	EntityCategoryPlayer       EntityCategory = EntityCategoryRemote + 3
+	EntityCategoryOther        EntityCategory = EntityCategoryRemote + 4
+)
+
+// EntityCategoryUnknown is the rank given to an id whose kind this process does
+// not link, and is reserved: no kind may be registered in it.
+//
+// Ranking last is the conservative answer. A rank is only ever compared, and
+// holding the last rank permits acquiring nothing further, so an id the process
+// cannot reason about can never be the reason another acquisition is refused
+// out of order.
+const EntityCategoryUnknown EntityCategory = 255
 
 // EntityCategoryDef declares one category.
 //
@@ -50,9 +77,9 @@ var (
 	lockRankByKind [1 << EntityKindBits]atomic.Uint32
 )
 
-// RegisterEntityCategories declares the application's categories and, with
-// them, the lock order. Declaring any category switches lock-order decisions
-// from GetEntityGroupFunc to the declared values.
+// RegisterEntityCategories names the application's categories so logs, errors
+// and ValidateEntityRegistry can talk about them. It does not establish the
+// lock order: a category's value is its rank whether or not it is named here.
 func RegisterEntityCategories(defs ...EntityCategoryDef) error {
 	if len(defs) == 0 {
 		return fmt.Errorf("entity: no categories to register")
@@ -72,6 +99,9 @@ func RegisterEntityCategories(defs ...EntityCategoryDef) error {
 	for _, def := range defs {
 		if def.Category == EntityCategoryNone {
 			return fmt.Errorf("entity: category must not be none")
+		}
+		if def.Category == EntityCategoryUnknown {
+			return fmt.Errorf("entity: category %d is reserved for kinds this process does not link", EntityCategoryUnknown)
 		}
 		if existing, ok := next.names[def.Category]; ok && existing != def.Name {
 			return fmt.Errorf("entity: category %d already declared as %q, new name %q", def.Category, existing, def.Name)
@@ -107,17 +137,30 @@ func EntityCategoryName(category EntityCategory) string {
 			return name
 		}
 	}
+	if name, ok := recommendedCategoryNames[category]; ok {
+		return name
+	}
 	return fmt.Sprintf("%d", category)
 }
 
+// recommendedCategoryNames makes diagnostics readable without a declaration.
+// It is only a fallback for EntityCategoryName; it does not declare anything,
+// so ValidateEntityRegistry's set-level checks stay opt-in.
+var recommendedCategoryNames = map[EntityCategory]string{
+	EntityCategoryRemote:       "remote",
+	EntityCategoryWorld:        "world",
+	EntityCategoryPlayerScoped: "player_scoped",
+	EntityCategoryPlayer:       "player",
+	EntityCategoryOther:        "other",
+	EntityCategoryUnknown:      "unknown",
+}
+
 // refreshLockRankLocked derives one kind's lock rank. Callers hold registryMu.
+//
+// Declaring categories is not a precondition: the rank is the category the kind
+// was registered with, whether or not the application also gave that category a
+// name. Declaring only adds names and lets ValidateEntityRegistry check the set.
 func refreshLockRankLocked(kind EntityKind) {
-	if taxonomy.Load() == nil {
-		// No taxonomy: the legacy hook decides, and a stored rank would
-		// silently take precedence over it.
-		lockRankByKind[kind].Store(0)
-		return
-	}
 	entry := kindEntryOf(kind)
 	if entry == nil {
 		lockRankByKind[kind].Store(0)
@@ -142,20 +185,6 @@ func lockRankOf(kind EntityKind) (int, bool) {
 	return 0, false
 }
 
-// unknownKindLockRank is the rank for an ID whose kind this process does not
-// link. A cross-server ID that carries the remote bit is ranked with remote;
-// anything else is ranked last.
-func unknownKindLockRank(guid int64) (int, bool) {
-	declared := taxonomy.Load()
-	if declared == nil {
-		return 0, false
-	}
-	if GetEntityRemoteFromID(guid) {
-		return int(EntityCategoryRemote), true
-	}
-	return int(declared.max), true
-}
-
 // ValidateEntityRegistry checks the registry against the declared taxonomy and
 // reports every problem it finds at once. Call it at the end of bootstrap.
 //
@@ -163,24 +192,24 @@ func unknownKindLockRank(guid int64) (int, bool) {
 // planned seal belongs with the step that makes the generator the only writer;
 // until then a late registration is legal and this function can be called again.
 //
-// With no taxonomy declared there is nothing to check and it returns nil.
+// Declaring categories is optional: without it the set-level checks are
+// skipped, but the per-kind invariants are still enforced.
 func ValidateEntityRegistry() error {
 	declared := taxonomy.Load()
-	if declared == nil {
-		return nil
-	}
 
 	var problems []error
-	minDeclared := EntityCategory(0)
-	for category := range declared.names {
-		if minDeclared == 0 || category < minDeclared {
-			minDeclared = category
+	if declared != nil {
+		minDeclared := EntityCategory(0)
+		for category := range declared.names {
+			if minDeclared == 0 || category < minDeclared {
+				minDeclared = category
+			}
 		}
-	}
-	if _, ok := declared.names[EntityCategoryRemote]; !ok {
-		problems = append(problems, fmt.Errorf("category %d (remote) is not declared, so nothing pins the rank that must be acquired first", EntityCategoryRemote))
-	} else if minDeclared != EntityCategoryRemote {
-		problems = append(problems, fmt.Errorf("category %d (%s) ranks before remote; remote must be the lowest declared category", minDeclared, EntityCategoryName(minDeclared)))
+		if _, ok := declared.names[EntityCategoryRemote]; !ok {
+			problems = append(problems, fmt.Errorf("category %d (remote) is not declared, so nothing pins the rank that must be acquired first", EntityCategoryRemote))
+		} else if minDeclared != EntityCategoryRemote {
+			problems = append(problems, fmt.Errorf("category %d (%s) ranks before remote; remote must be the lowest declared category", minDeclared, EntityCategoryName(minDeclared)))
+		}
 	}
 
 	for kind := 0; kind < len(lockRankByKind); kind++ {
@@ -188,8 +217,13 @@ func ValidateEntityRegistry() error {
 		if entry == nil {
 			continue
 		}
-		if _, ok := declared.names[entry.category]; !ok {
-			problems = append(problems, fmt.Errorf("kind %d is in category %d, which is not declared", kind, entry.category))
+		if entry.category == EntityCategoryUnknown {
+			problems = append(problems, fmt.Errorf("kind %d is in category %d, which is reserved for kinds this process does not link", kind, EntityCategoryUnknown))
+		}
+		if declared != nil {
+			if _, ok := declared.names[entry.category]; !ok {
+				problems = append(problems, fmt.Errorf("kind %d is in category %d, which is not declared", kind, entry.category))
+			}
 		}
 		if entry.policy.RemoteManaged() && entry.category != EntityCategoryRemote {
 			problems = append(problems, fmt.Errorf("kind %d is remote-managed but declared in category %d (%s); it must be in category %d (remote), which is the rank acquired first",

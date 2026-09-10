@@ -30,16 +30,18 @@ const (
 )
 
 func init() {
+	// Remote-capable but not managed. RemotePolicyCapable used to say this;
+	// Mirror says it now, and says something real besides: a local read-only
+	// replica of state another service owns (M-04).
 	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
-		Category:     entity.EntityCategory(3),
+		Category:     entity.EntityCategoryRemote,
 		Kind:         nestRemoteCapableKind,
-		RemotePolicy: entity.RemotePolicyCapable,
+		RemotePolicy: entity.RemotePolicyMirror,
 		NoPersist:    true,
 		Builder:      func(*entity.EntityCreateParam) (entity.IThreadSafeEntity, error) { return nil, nil },
-		Lifetime:     entity.EntityLifetimeRuntimeRebuild,
 	})
 	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
-		Category:     entity.EntityCategory(3),
+		Category:     entity.EntityCategoryRemote,
 		Kind:         nestRemoteManagedKind,
 		RemotePolicy: entity.RemotePolicyManaged,
 		NoPersist:    true,
@@ -585,7 +587,7 @@ func TestNestRemoteAccessPreloadsSnapshotBeforeHandler(t *testing.T) {
 	e := newMockEntity(id, entity.EntityCategory(1))
 	getter.Add(e)
 
-	refID := mustBuildCastID(t, 7201, entity.EntityCategory(3), nestRemoteManagedKind)
+	refID := mustBuildCastID(t, 7201, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	ref := entity.RemoteViewRef{EntityID: refID, Kind: nestRemoteManagedKind, Version: 20}
 	resolver := &testRemoteSnapshotResolver{}
 
@@ -649,7 +651,7 @@ func TestNestRemoteKeyAndRemoteAccessTTL(t *testing.T) {
 	e := newMockEntity(id, entity.EntityCategory(1))
 	getter.Add(e)
 
-	refID := mustBuildCastID(t, 7302, entity.EntityCategory(3), nestRemoteManagedKind)
+	refID := mustBuildCastID(t, 7302, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	ref := entity.RemoteViewRef{EntityID: refID, Kind: nestRemoteManagedKind, Version: 31}
 	resolver := &testRemoteSnapshotResolver{}
 
@@ -1420,8 +1422,10 @@ func TestDispatcherStoppedReturnsErrorForSyncMessage(t *testing.T) {
 }
 
 func TestShouldPrepareRemoteIDUsesRemotePolicyByKind(t *testing.T) {
-	category := entity.EntityCategory(3)
-	remoteManagedID := mustBuildCastID(t, 1, category, nestRemoteManagedKind)
+	// The remote kinds are registered in EntityCategoryRemote; nestUnknownKind
+	// is deliberately never registered, so it may take any category here.
+	const localCategory = entity.EntityCategoryRemote + 2
+	remoteManagedID := mustBuildCastID(t, 1, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	if !shouldPrepareRemoteID(entity.ResolveEntityID(remoteManagedID)) {
 		t.Fatal("remote-managed id should prepare remote entity")
 	}
@@ -1431,17 +1435,17 @@ func TestShouldPrepareRemoteIDUsesRemotePolicyByKind(t *testing.T) {
 		t.Fatal("remote-managed kind should prepare even when an input id missed the remote bit")
 	}
 
-	remoteCapableID := mustBuildCastID(t, 1, category, nestRemoteCapableKind)
+	remoteCapableID := mustBuildCastID(t, 1, entity.EntityCategoryRemote, nestRemoteCapableKind)
 	if shouldPrepareRemoteID(entity.ResolveEntityID(remoteCapableID)) {
 		t.Fatal("remote-capable but unmanaged kind should not use remote prepare")
 	}
 
-	remoteUnknownKindID := int64(uint64(mustBuildCastID(t, 1, category, nestUnknownKind)) | (entity.EntityRemoteMask << entity.EntityRemoteShift))
+	remoteUnknownKindID := int64(uint64(mustBuildCastID(t, 1, localCategory, nestUnknownKind)) | (entity.EntityRemoteMask << entity.EntityRemoteShift))
 	if shouldPrepareRemoteID(entity.ResolveEntityID(remoteUnknownKindID)) {
 		t.Fatal("remote bit without remote-managed kind should not prepare remote entity")
 	}
 
-	categoryOnlyID := mustBuildCastID(t, 1, category, entity.EntityKindNone)
+	categoryOnlyID := mustBuildCastID(t, 1, localCategory, entity.EntityKindNone)
 	if shouldPrepareRemoteID(entity.ResolveEntityID(categoryOnlyID)) {
 		t.Fatal("category must not imply remote entity")
 	}
@@ -1449,7 +1453,7 @@ func TestShouldPrepareRemoteIDUsesRemotePolicyByKind(t *testing.T) {
 
 func TestEntityKindRemoteCapability(t *testing.T) {
 	if !entity.IsEntityKindRemoteCapable(nestRemoteCapableKind) {
-		t.Fatal("remote=capable kind should be remote-capable")
+		t.Fatal("remote=mirror kind should be remote-capable")
 	}
 	if !entity.IsEntityKindRemoteCapable(nestRemoteManagedKind) {
 		t.Fatal("remote=managed kind should be remote-capable")

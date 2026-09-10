@@ -6,50 +6,26 @@ import (
 	"sync"
 )
 
-// Entity group constants for lock ordering (deadlock prevention).
-const (
-	// Remote is first because top-level dispatch acquires remote ownership and
-	// distributed locks before any local entity mutex.
-	EntityGroupRemote = iota
-	EntityGroupPlayer
-	EntityGroupAlliance
-	EntityGroupOther
-	EntityGroupCnt
-)
-
-// GetEntityGroupFunc is the application-level hook that maps an EntityCategory to an entity group.
-// If nil, all non-remote entities fall into EntityGroupOther.
-var GetEntityGroupFunc func(category EntityCategory) int
-
-// GetEntityGroup is the lock rank of an entity id, lower acquired first.
+// GetEntityGroup is the lock rank of an entity id, acquired lowest first.
 //
-// When the application has declared its categories the rank IS the category's
-// value, derived per kind at registration time and read here with a single
-// atomic load. Otherwise the legacy path below decides: remote-capable ids
-// rank first and GetEntityGroupFunc maps the category. Both scales are only
-// ever compared against each other, and one process uses one path.
+// The rank is the kind's category, derived once at registration and read here
+// with a single atomic load. Deriving it from the id alone is a requirement,
+// not a convenience: nest often holds nothing but an int64. The id carries the
+// kind, and the registry turns a kind into its category, so no application hook
+// is involved any more.
+//
+// EntityCategoryRemote is the lowest rank and remote-managed kinds are pinned
+// to it; see that constant for why that one ordering is a physical constraint
+// rather than a business convention. A kind this process does not link ranks
+// with remote when its id carries the remote bit, and last otherwise.
 func GetEntityGroup(guid int64) int {
-	kind := GetEntityKindFromID(guid)
-	if rank, ok := lockRankOf(kind); ok {
+	if rank, ok := lockRankOf(GetEntityKindFromID(guid)); ok {
 		return rank
 	}
-	if rank, ok := unknownKindLockRank(guid); ok {
-		return rank
+	if GetEntityRemoteFromID(guid) {
+		return int(EntityCategoryRemote)
 	}
-	if IsRemoteCapableEntityID(guid) {
-		return EntityGroupRemote
-	}
-	if GetEntityGroupFunc != nil {
-		// The registry answers what this kind's category is; the ID's legacy
-		// two-bit field is consulted only for a kind this process does not
-		// link, where there is nothing better to go on (M-02).
-		category, known := EntityCategoryOfKind(kind)
-		if !known {
-			category = GetEntityCategoryFromID(guid)
-		}
-		return GetEntityGroupFunc(category)
-	}
-	return EntityGroupOther
+	return int(EntityCategoryUnknown)
 }
 
 type entityReleaseHook struct {

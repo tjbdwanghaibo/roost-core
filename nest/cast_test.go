@@ -8,9 +8,11 @@ import (
 )
 
 const (
-	castPlayerCategory   entity.EntityCategory = 1
-	castAllianceCategory entity.EntityCategory = 2
-	castOtherCategory    entity.EntityCategory = 3
+	// Values are lock ranks, lowest first, and EntityCategoryRemote owns 1,
+	// so the local categories start above it and keep their relative order.
+	castPlayerCategory   entity.EntityCategory = entity.EntityCategoryRemote + 1
+	castAllianceCategory entity.EntityCategory = entity.EntityCategoryRemote + 2
+	castOtherCategory    entity.EntityCategory = entity.EntityCategoryRemote + 3
 	castPlayerKind       entity.EntityKind     = 11
 	castAllianceKind     entity.EntityKind     = 12
 	castOtherKind        entity.EntityKind     = 13
@@ -33,22 +35,18 @@ func mustBuildCastID(t *testing.T, uniqueID int64, category entity.EntityCategor
 	return id
 }
 
+// withCastGroupFunc used to install the application hook that mapped a category
+// to a lock rank. The rank is now the category's value, so nothing has to be
+// installed; the categories are only named, which is what makes a failing
+// ordering assertion readable.
 func withCastGroupFunc(t *testing.T) {
 	t.Helper()
-	old := entity.GetEntityGroupFunc
-	entity.GetEntityGroupFunc = func(category entity.EntityCategory) int {
-		switch category {
-		case castPlayerCategory:
-			return entity.EntityGroupPlayer
-		case castAllianceCategory:
-			return entity.EntityGroupAlliance
-		default:
-			return entity.EntityGroupOther
-		}
-	}
-	t.Cleanup(func() {
-		entity.GetEntityGroupFunc = old
-	})
+	entity.MustRegisterEntityCategories(
+		entity.EntityCategoryDef{Category: entity.EntityCategoryRemote, Name: "remote"},
+		entity.EntityCategoryDef{Category: castPlayerCategory, Name: "player"},
+		entity.EntityCategoryDef{Category: castAllianceCategory, Name: "alliance"},
+		entity.EntityCategoryDef{Category: castOtherCategory, Name: "other"},
+	)
 }
 
 func bindCastGetter(t *testing.T, getter entity.Getter) {
@@ -171,7 +169,7 @@ func TestCastRejectsRemoteAfterLocalBeforePreparingDistributedLock(t *testing.T)
 	bindCastGetter(t, getter)
 
 	playerID := mustBuildCastID(t, 401, castPlayerCategory, castPlayerKind)
-	remoteID := mustBuildCastID(t, 402, castOtherCategory, nestRemoteManagedKind)
+	remoteID := mustBuildCastID(t, 402, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	player := newMockEntityWithKind(playerID, castPlayerCategory, castPlayerKind)
 	getter.Add(player)
 
@@ -208,8 +206,8 @@ func TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch(t *testing.T) {
 	getter := newMockGetter()
 	bindCastGetter(t, getter)
 
-	remoteID := mustBuildCastID(t, 301, castOtherCategory, nestRemoteManagedKind)
-	remote := newMockEntityWithKind(remoteID, castOtherCategory, nestRemoteManagedKind)
+	remoteID := mustBuildCastID(t, 301, entity.EntityCategoryRemote, nestRemoteManagedKind)
+	remote := newMockEntityWithKind(remoteID, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	getter.Add(remote)
 
 	_, release := entity.NewGuardScope("cast_declared_remote_test")
@@ -229,8 +227,7 @@ func TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch(t *testing.T) {
 func TestCastRejectsDynamicRemoteManagedEntity(t *testing.T) {
 	getter := newMockGetter()
 
-	category := castOtherCategory
-	remoteID := mustBuildCastID(t, 300, category, nestRemoteManagedKind)
+	remoteID := mustBuildCastID(t, 300, entity.EntityCategoryRemote, nestRemoteManagedKind)
 
 	msg := &Msg{getter: getter}
 	releaseCurrent := pushCurrentNestDispatchMsg(msg)
