@@ -2,6 +2,18 @@
 
 最后更新：2026-09-11。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-11 第二轮最新进度：Remote / Nest
+
+Core `31ffe275645ae04f5376c748feb31aa0422b6e6d`；Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无变化，跳过已审且未变的正常链路，本轮专项未重验 Mail。
+
+| 范围 | 证据与状态 | 后续及限制 |
+| --- | --- | --- |
+| Remote Close / StopFinalizer | 当前源码、图谱补证、race 复现失败；RR-20260911-03 未修复 | 已验证部分场景；等待修复后复测，未验真实后端清理 |
+| Nest delayed Request / Shutdown | 有效 handler 的 race 复现失败；RR-20260911-04 未修复 | 已验证部分场景；内部 requeue 停机待测 |
+| completion / tracker 性能 | 选定两包 race 通过；锁等待和满容量微基准完成 | 模拟场景单次 Windows 样本；Linux 热点、慢 ticket/回调、txMu 争用未验 |
+
+[运行记录](REVIEW-2026-09-11-02.md) · [问题](../bug/REVIEW-2026-09-11-02.md) · [复现](../bug/REPRO-2026-09-11-02.md) · [实现与性能](IMPLEMENTATION-REMOTE-NEST-LIFECYCLE-AND-PERFORMANCE.md)。已从中断处完成本轮有界范围，未确认中断原因。下方为历史快照。
+
 ## 2026-09-11 当前进度
 
 Core `e22e815934293d3bc25a84f37338f9576f9d5c4d`，Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓已同步；上轮收尾待验收四项及新到四项，共八项原触发独立验收通过。下方 09-10 表格及未验收描述保留历史，当前状态以本节为准。

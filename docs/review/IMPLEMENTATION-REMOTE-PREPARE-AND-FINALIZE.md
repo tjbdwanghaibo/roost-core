@@ -33,3 +33,5 @@ Core f3eaad9b38f87b2873e6f35b517b4ad993aed680 已独立复现完成 tracker 被�
 ## 2026-09-11 等待生命周期验收
 
 Core e22e815934293d3bc25a84f37338f9576f9d5c4d 的 U-0168 已通过原容量淘汰复现与新增 TTL 清理复现。等待者持有 tracker 引用，map 清理不再丢掉活动等待结果；[当前机制](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)和[验收记录](REVIEW-2026-09-11.md)补充这一点。finalizer 停机与晚到 batch Close 的资源交接仍待独立验证。
+
+2026-09-11 专项续审：正常链路源码未变；晚到 Close 与停止交接已复现问题，见[生命周期与性能补充](IMPLEMENTATION-REMOTE-NEST-LIFECYCLE-AND-PERFORMANCE.md)。
