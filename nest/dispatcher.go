@@ -199,7 +199,25 @@ func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 		m.delayDone = nil
 	}
 	m.mu.Unlock()
+	// The delay pump has exited, and taking the queue under m.mu made this
+	// snapshot exclusive: a message is either here or was already popped, never
+	// both. So answering here is the only reply this message will ever get, and
+	// it has to happen — an accepted synchronous request that is merely
+	// recycled leaves its caller waiting for its own timeout, with the failure
+	// reported as a cancellation instead of "the nest stopped"
+	// (RR-20260911-04). The admission path has always answered
+	// ErrNestStopped; this is the same answer for a message that got in
+	// before the stop.
 	for dm := range delayed {
+		if dm.msg != nil && dm.msg.RetChan != nil {
+			// Buffered with room for exactly this one value (GenSyncMsg), so
+			// the send cannot block, and clearing it keeps the reply at most
+			// once even if the message is reused.
+			dm.msg.RetChan <- ErrNestStopped
+			dm.msg.RetChan = nil
+		} else if dm.msg != nil {
+			logAsyncDispatchFailure(dm.msg, ErrNestStopped)
+		}
 		recycleMsg(dm.msg)
 	}
 

@@ -97,7 +97,7 @@
 | core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `mongo` | 09-02 | 09-02 / 09-09 U-0153（真机） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nats` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 / 09-11 U-0172（修复） | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-08 U-0105 / U-0106（回退 20 条，含 `driver`） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -142,7 +142,7 @@
 | kit | `nettransport`（新位置 core） | 09-02 | 09-06 U-0080（回退 4 条） / 09-09 U-0131（回退 9 条，1 冗余） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ops` | 09-02 | 09-02 / 09-09 U-0150 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `redis` | 09-02 | 09-05 U-0012 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-06 U-0061
-| kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 / 09-10 U-0168（修复） |
+| kit | `remoteentity`（新位置 core） | 09-02 | 09-05 U-0023（真实 Mongo） / 09-06 U-0049（回退 40 条） / 09-06 U-0093（回退 8 条） / 09-09 U-0128（回退 12 条） | 09-02 | 09-04 U-0011 / 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-05 U-0023 / 09-10 U-0168（修复） / 09-11 U-0173（修复） |
 | kit | `robot` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `room` | 09-02 | 09-02 / 09-06 U-0095（回退 20 条） / 09-09 U-0150 / 09-10 U-0163（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `saga` | 09-02 | 09-06 U-0051（回退 40 条） / 09-06 U-0092（回退 9 条） | 09-02 | 09-06 U-0025 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -162,7 +162,7 @@
 | service | `directory` | 09-06 脚本扫 | 09-05 U-0016（全包扫描） / 09-09 U-0150 | 09-05 U-0016 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `global` | 09-06 脚本扫 | 09-05 U-0019（回退验证） / 09-06 U-0059（回退 33 条） / 09-09 U-0150 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-05 U-0019 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `global/activity` | 09-06 脚本扫 | 09-05 U-0020（回退验证） / 09-09 U-0150 | 09-05 U-0020（回调内重置，无问题） | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0120（sweep 失败计数，修复） | 09-09 脚本扫 / 09-09 U-0119（sweep 组来源，修复） | 09-06 脚本扫 | 09-09 脚本扫 |
-| service | `mail`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） / 09-09 U-0140（回退 7 条，2 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0145（Get / GetMany 同判，修复） / 09-10 U-0165（修复） |
+| service | `mail`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0006 / 09-06 U-0054（回退 40 条） / 09-06 U-0096（回退 3 条） / 09-07 U-0103（回退 16 条） / 09-09 U-0140（回退 7 条，2 冗余） / 09-11 U-0170（修复） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 / 09-09 U-0145（Get / GetMany 同判，修复） / 09-10 U-0165（修复） / 09-11 U-0171（修复） |
 | service | `match`（新位置 kit/service） | 09-06 脚本扫 | 09-04 U-0008 / 09-06 U-0057（回退 38 条） / 09-09 U-0141（回退 7 条，1 冗余） | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 / 09-09 U-0121（sweep 失败计数，修复） | 09-05 U-0022 | 09-06 脚本扫 | 09-09 脚本扫 / 09-10 U-0164（修复） |
 | service | `platform`（新位置 kit/service） | 09-06 脚本扫 | 09-05 U-0018（回退验证） / 09-06 U-0055（回退 40 条） / 09-06 U-0097（回退 4 条） / 09-09 U-0143（回退 7 条） | 09-09 脚本扫 | 09-09 脚本扫 | 09-05 U-0018 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
 | service | `rank` | 09-06 脚本扫 | 09-04 U-0004 / 09-06 U-0060（回退 32 条） / 09-09 U-0150 / 09-09 U-0152 | 09-09 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 | 09-06 脚本扫 | 09-09 脚本扫 |
@@ -237,6 +237,10 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0173 | 2026-09-11 | roost-core `remoteentity` 停止与外部交接的准入屏障(RR-20260911-03) | C8 | `deferRemoteClose` 靠 select 分支退出,队列可写与 ctx 已关闭同时就绪时 Go 随机选,停止完成后仍可能交接给没人排空的队列,`batch.Close` 据此不再自清,entries / writeGate / ownership 读锁 / finalize slot 全留下。修法:接入重试路径已有的同一道屏障 —— `retryMu` 下判 `stopping`、未停止则 `retryWG.Add` 再发送,drain 在 `retryWG.Wait` 之后 | `finalizer_stop_handoff_promises_test.go`(停止后 64 次必须全拒;停止前的交接必须被接受且已排空) | 修前红(64 次里 33 次被接受);修后 remoteentity 含 -race 全绿 | T-67 · `docs/bugfix/RR-20260911-03.md` |
+| U-0172 | 2026-09-11 | roost-core `nest` 停机对延迟同步请求的回复(RR-20260911-04) | C5 | `OnDestroyWithContext` 回收延迟队列时直接 `recycleMsg`,不向 `RetChan` 发终态,已被接受的请求退化成取消 / 超时;而入场被拒的路径一直答 `ErrNestStopped`。修法:回收前发同一个错误并置 nil(通道容量 1,不阻塞;队列在 `m.mu` 下整体取走,与延迟泵的弹出互斥,所以最多一次) | `delayed_shutdown_promises_test.go`(同步消息必须拿到 ErrNestStopped;异步消息不得阻塞或 panic) | 修前红(`the accepted request got no answer at all`);修后 nest 含 -race 全绿 | T-66 · `docs/bugfix/RR-20260911-04.md` |
+| U-0171 | 2026-09-11 | roost-kit `service/mail` 领取身份的保留期限(RR-20260911-01,U-0165 残余) | C8 | U-0165 用条数给墓碑收界,并论证"ReserveClaim 拒绝过期信封所以够用"——该论证错误:计数保证不了时间期限。修法:`Entry` 记 `ClaimEnvelopeExpiresAtUnix`(ReserveClaim 从信封抄),墓碑带上它并按信封可领取窗口老化;没有窗口的旧记录才按计数淘汰;保留后仍超界则以新的 `ErrClaimHistoryFull` 拒绝投递而不是遗忘 | `settled_claim_retention_promises_test.go` 两条 + 改写 U-0165 的计数测试 | 修前红(信封仍有效时墓碑被挤掉、铸出第二个 token);修后 mail 含 -race 全绿 | T-65 · `docs/bugfix/RR-20260911-01.md` |
+| U-0170 | 2026-09-11 | roost-kit `service/mail` 读取副本的所有权(RR-20260911-02,U-0165 遗漏) | C2 | `clone` 的 `out := m` 只复制 map 头,Entries 后面深拷贝了、U-0165 新增的 `SettledClaims` 没有,于是 `Service.Mailbox` 的返回值与存储共享,改它就绕过 `Store.Update` 改到了权威状态。修法:补上逐项拷贝,注释点明 map 头与内容的区别 | `settled_claim_retention_promises_test.go` 的 `TestMailboxSnapshotDoesNotShareTheSettledClaims` | 修前红(`mutating the returned mailbox deleted the stored settled claim`);修后 mail 含 -race 全绿 | T-64 · `docs/bugfix/RR-20260911-02.md` |
 | U-0169 | 2026-09-10 | roost-core `skill` 快照的完成顺序(RR-20260910-04,P3) | C8 | `completedCastOrder` 按完成顺序、淘汰从队头走,而快照按 ID 序列化 casts、恢复按这个顺序重建,"最旧完成"被换成"最小 ID"。修法:payload 增 `CompletedCastOrder`(拷贝而非引用),恢复抽成纯函数 `restoreCompletedCastOrder`,记录顺序优先并过滤到确实恢复成终态的 cast,漏掉的按 ID 追加(同时是旧快照的兼容路径) | `completed_order_checkpoint_promises_test.go` 三组(序列化侧、纯函数表驱动、真实 pruner 的后果) | 回退序列化与恢复后 `the payload carries completion order [], want [2 1]` 变红;修后 skill 含 -race 全绿 | T-63 · `docs/bugfix/RR-20260910-04.md` |
 | U-0168 | 2026-09-10 | roost-core `remoteentity` 事务等待者与容量淘汰(RR-20260910-03) | C8 | 等待者唤醒后重新查 map 取状态,而准入的容量淘汰恰好挑"最旧的已关闭"记录 —— 正是刚把它唤醒的那条;nil 解引用发生在 txMu 临界区,Unlock 不执行,之后所有事务跟踪被锁挡死。修法:新增 `trackedRemoteTransaction` 返回 tracker,等待者全程用已持有的指针读,不再查表 | `transaction_wait_eviction_promises_test.go`(用 select 进入时求值所有操作数的性质做屏障,固定"已取得 done、未读终态"的时刻) | 修前红(`the waiter panicked instead of answering: nil pointer dereference`);修后 remoteentity 含 -race 全绿 | T-62 · `docs/bugfix/RR-20260910-03.md` |
 | U-0167 | 2026-09-10 | roost-codegen `internal/registry` 固定导入名的别名保留(RR-20260910-06,M-05 回归) | C2 | M-05 让模板无条件导入 core entity,但别名分配器的保留集仍是 registry/sync/fmt/err;业务包路径以 /entity 结尾时被分到同名别名,生成物两个 entity。修法:抽成具名清单 `aggregateReservedNames` 并加入 entity,注释写明须与模板 import 块同步 | `entity_alias_promises_test.go`(三个包分别以 entity/fmt/sync 结尾,解析后断言名字不重复、指向正确、调用仍在) | 修前红(`import name "entity" is used by both …`);修后 codegen 全仓绿 | T-61 · `docs/bugfix/RR-20260910-06.md` |

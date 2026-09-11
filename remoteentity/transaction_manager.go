@@ -136,12 +136,40 @@ func (m *Manager) releaseRemoteFinalizeSlot() {
 	}
 }
 
+// deferRemoteClose hands one deferred close to the finalizers, or refuses so
+// the caller cleans up synchronously. Exactly one of the two, ever.
+//
+// The refusal has to be decided under the SAME barrier the stop uses, not by a
+// select race. finalizeCtx.Done being ready does not stop the select from
+// picking a queue that still has room, so after the stop had completed a
+// handoff could still be accepted into a queue nobody drains any more — and
+// batch.Close, told the handoff succeeded, dropped its entries, writeGate,
+// ownership read lock and finalize slot on the floor, with finalizeOnce
+// preventing any restart that might have collected them (RR-20260911-03).
+//
+// Registering on retryWG before releasing retryMu is what makes it safe:
+// runRemoteFinalizers waits on retryWG before its final drain, so a sender
+// admitted here is always drained, and StopFinalizer sets stopping under the
+// same lock, so no sender is admitted after it.
 func (m *Manager) deferRemoteClose(item deferredRemoteClose) error {
+	state := m.remote
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		if err := state.finalizeCtx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	defer state.retryWG.Done()
+
 	select {
-	case m.remote.finalizeQueue <- item:
+	case state.finalizeQueue <- item:
 		return nil
-	case <-m.remote.finalizeCtx.Done():
-		return m.remote.finalizeCtx.Err()
+	case <-state.finalizeCtx.Done():
+		return state.finalizeCtx.Err()
 	}
 }
 
