@@ -2,6 +2,19 @@
 
 最后更新：2026-09-11。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-11 第三轮最新进度
+
+Core `4e8f5ece714a848d8b3981333cba22d4e970f57e`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓已同步；U-0170～0173 原触发独立验收通过，旧无期限墓碑的兼容风险仍按 bugfix 披露。下方第二轮及更早结论为历史快照。
+
+| 范围/入口 | 实测与问题 | 证据状态、限制与后续 |
+| --- | --- | --- |
+| remoteentity deferRemoteClose / StopFinalizer / batch.Close | 原 64 batch 通过，新增 Close/Stop 并发通过，包 race 通过；RR-20260911-03 已验收 | 已验证部分场景；真实分布式锁释放、慢后端待验 |
+| nest Request / requeue / Dispatcher stop | 原显式 delay 通过；真实内部重排 Request 停机及停止后重排回复通过，包 race 通过；RR-20260911-04 已验收 | 已验证部分场景；慢 completion ticket/回调与 Linux 压力未验 |
+| kit/mail clone / retention / Deliver | RR-20260911-01/02 原触发通过，包 race 通过；新拒绝原子性失败，对照通过 | 已验证部分场景；新 P3 RR-20260911-05，MemoryStore 范围；优先修复后复跑 |
+| codegen | 同步无增量，未重复源码消费者实验 | 本轮无新增覆盖 |
+
+[运行记录](REVIEW-2026-09-11-03.md) · [问题](../bug/REVIEW-2026-09-11-03.md) · [复现](../bug/REPRO-2026-09-11-03.md) · [实现学习](IMPLEMENTATION-MAIL-RETENTION-AND-ATOMIC-REFUSAL.md)。继续入口：先验新拒绝原子性，再轮转慢持久化完成或真实后端停机；本轮未重跑性能基准。
+
 ## 2026-09-11 第二轮最新进度：Remote / Nest
 
 Core `31ffe275645ae04f5376c748feb31aa0422b6e6d`；Kit `4e69d2adf2ac02d33a25b263d2d2f2378ba81401`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无变化，跳过已审且未变的正常链路，本轮专项未重验 Mail。

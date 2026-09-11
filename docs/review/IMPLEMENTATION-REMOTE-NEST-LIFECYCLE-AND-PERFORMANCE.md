@@ -1,5 +1,7 @@
 # Remote Entity 与 Nest：生命周期和性能学习
 
+最新补充（09-11 第三轮）：Core 4e8f5ec 的 U-0172/0173 已独立验收。外部 Close 现在在 retryMu 下检查 stopping 并加入 retryWG；Nest 停机回收延迟消息前回复 ErrNestStopped。真实 batch 的停止后/停止中关闭、Nest 内部重排停机与停止后重排均通过，见[验收记录](REVIEW-2026-09-11-03.md)。以下缺陷描述与微基准保留为旧基线历史，本轮未重新测性能。
+
 源码基线 Core `31ffe275645ae04f5376c748feb31aa0422b6e6d`。本文区分现有源码机制、已测行为与建议；不代表建议已经实现。正常 prepare/finalize 过程见[已有学习文档](IMPLEMENTATION-REMOTE-PREPARE-AND-FINALIZE.md)。
 
 ## Remote 的资源交接

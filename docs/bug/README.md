@@ -5,10 +5,11 @@
 
 | 编号 | 优先级 | 仓库 | 问题 | 状态 |
 | --- | --- | --- | --- | --- |
-| RR-20260911-03 | P2 | core | finalizer 停止后晚到 Close 遗留资源 | 已修复(U-0173,未发版)→ [bugfix](../bugfix/RR-20260911-03.md) · [第二轮](REVIEW-2026-09-11-02.md) |
-| RR-20260911-04 | P2 | core | Nest 停机遗漏延迟同步请求回复 | 已修复(U-0172,未发版)→ [bugfix](../bugfix/RR-20260911-04.md) · [第二轮](REVIEW-2026-09-11-02.md) |
-| RR-20260911-01 | P2 | kit | 墓碑计数淘汰早于信封过期，再铸领取 token | 已修复(U-0171,未发版)→ [bugfix](../bugfix/RR-20260911-01.md) · [2026-09-11](REVIEW-2026-09-11.md) |
-| RR-20260911-02 | P3 | kit | Mailbox 返回的 SettledClaims map 与内存存储共享 | 已修复(U-0170,未发版)→ [bugfix](../bugfix/RR-20260911-02.md) · [2026-09-11](REVIEW-2026-09-11.md) |
+| RR-20260911-05 | P3 | kit | 拒绝投递仍修改 MemoryStore 邮箱，计数与条目不一致 | 未修复 → [第三轮](REVIEW-2026-09-11-03.md) |
+| RR-20260911-03 | P2 | core | finalizer 停止后晚到 Close 遗留资源 | 已修复(U-0173,未发版)→ [bugfix](../bugfix/RR-20260911-03.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-04 | P2 | core | Nest 停机遗漏延迟同步请求回复 | 已修复(U-0172,未发版)→ [bugfix](../bugfix/RR-20260911-04.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-01 | P2 | kit | 墓碑计数淘汰早于信封过期，再铸领取 token | 已修复(U-0171,未发版)→ [bugfix](../bugfix/RR-20260911-01.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-02 | P3 | kit | Mailbox 返回的 SettledClaims map 与内存存储共享 | 已修复(U-0170,未发版)→ [bugfix](../bugfix/RR-20260911-02.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
 | RR-20260910-03 | P2 | core | 完成事务 tracker 淘汰导致等待者 panic | 已修复(U-0168,未发版)→ [bugfix](../bugfix/RR-20260910-03.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
 | RR-20260910-05 | P2 | codegen | category 外包常量遗漏生成 import（M-05） | 已修复(U-0166,未发版)→ [bugfix](../bugfix/RR-20260910-05.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
 | RR-20260910-06 | P2 | codegen | 聚合注册固定 entity 导入与业务别名冲突（M-05） | 已修复(U-0167,未发版)→ [bugfix](../bugfix/RR-20260910-06.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |

@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-11 第三轮 | 四项修复、Remote/Nest 停机交错、Mail 拒绝原子性 | 四项验收通过；新 P3 一项 | [运行](REVIEW-2026-09-11-03.md)、[实现](IMPLEMENTATION-MAIL-RETENTION-AND-ATOMIC-REFUSAL.md)、[问题](../bug/REVIEW-2026-09-11-03.md) |
 | 2026-09-11 第二轮 | Remote / Nest 停机与性能 | 新两个 P2 已复现 | [运行](REVIEW-2026-09-11-02.md)、[实现](IMPLEMENTATION-REMOTE-NEST-LIFECYCLE-AND-PERFORMANCE.md)、[问题](../bug/REVIEW-2026-09-11-02.md) |
 | 2026-09-11 | 八项修复独立验收；Mail 墓碑、事务 TTL | 八项原触发通过；新 Mail P2/P3 各一项 | [运行](REVIEW-2026-09-11.md)、[问题](../bug/REVIEW-2026-09-11.md)、[复现](../bug/REPRO-2026-09-11.md) |
 | 2026-09-10 第三轮 | M-01～M-05、Remote 等待者、Skill 恢复、Mail 重试 | 新 3 P2 / 1 P3；含两个新增生成消费者编译缺陷 | [运行](REVIEW-2026-09-10-03.md)、[注册生成实现](IMPLEMENTATION-CATEGORY-REGISTRY-AND-GENERATION.md)、[恢复重放实现](IMPLEMENTATION-CHECKPOINT-AND-REPLAY.md)、[问题](../bug/REVIEW-2026-09-10-03.md) |
