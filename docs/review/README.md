@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-11 第四轮 | completion 慢确认、回调 panic、Shutdown 重试 | 新 P2；慢完成重试通过；旧 Mail P3 仍复现 | [运行](REVIEW-2026-09-11-04.md)、[实现](IMPLEMENTATION-COMPLETION-FAILURE-AND-SHUTDOWN.md)、[问题](../bug/REVIEW-2026-09-11-04.md) |
 | 2026-09-11 第三轮 | 四项修复、Remote/Nest 停机交错、Mail 拒绝原子性 | 四项验收通过；新 P3 一项 | [运行](REVIEW-2026-09-11-03.md)、[实现](IMPLEMENTATION-MAIL-RETENTION-AND-ATOMIC-REFUSAL.md)、[问题](../bug/REVIEW-2026-09-11-03.md) |
 | 2026-09-11 第二轮 | Remote / Nest 停机与性能 | 新两个 P2 已复现 | [运行](REVIEW-2026-09-11-02.md)、[实现](IMPLEMENTATION-REMOTE-NEST-LIFECYCLE-AND-PERFORMANCE.md)、[问题](../bug/REVIEW-2026-09-11-02.md) |
 | 2026-09-11 | 八项修复独立验收；Mail 墓碑、事务 TTL | 八项原触发通过；新 Mail P2/P3 各一项 | [运行](REVIEW-2026-09-11.md)、[问题](../bug/REVIEW-2026-09-11.md)、[复现](../bug/REPRO-2026-09-11.md) |

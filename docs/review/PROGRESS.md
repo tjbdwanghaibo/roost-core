@@ -2,6 +2,20 @@
 
 最后更新：2026-09-11。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-11 第四轮最新进度
+
+Core `dd1f270c1f044022df37a887f6510e8e26b90dab`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无增量，下方为历史快照。
+
+| 范围 | 实际证据与状态 | 下一入口/限制 |
+| --- | --- | --- |
+| kit/mail 容量拒绝 | RR-20260911-05 原 race 复现仍失败，无新修复 | 维持 P3；MemoryStore 限定 |
+| nest completion / RollbackTx.Commit / worker.SafeFunc | 新增回调 panic race 复现失败，RR-20260911-06 P2；nest/worker 包 race 通过 | 已验证部分场景；优先修复回复/释放必达，饱和回退异常待验 |
+| Nest Shutdown 重复等待 | 慢 ticket、慢 AfterCommit 两组均通过；两次短超时后仍正常收尾，释放一次 | 已验证模拟场景；真实 fsync、Linux 压力未验 |
+| nestwal/projector held/release | 图谱定位并读取当前实现，通知丢失会阻挡 held 记录的推断 | 源码已读；真实 WAL/投影端到端待验 |
+| codegen | 无源码增量，未重复审查 | 本轮无新增覆盖 |
+
+[运行记录](REVIEW-2026-09-11-04.md) · [问题](../bug/REVIEW-2026-09-11-04.md) · [复现](../bug/REPRO-2026-09-11-04.md) · [实现学习](IMPLEMENTATION-COMPLETION-FAILURE-AND-SHUTDOWN.md)。下轮先看 RR-20260911-05/06 的 bugfix，再继续饱和回退/真实后端收尾。
+
 ## 2026-09-11 第三轮最新进度
 
 Core `4e8f5ece714a848d8b3981333cba22d4e970f57e`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓已同步；U-0170～0173 原触发独立验收通过，旧无期限墓碑的兼容风险仍按 bugfix 披露。下方第二轮及更早结论为历史快照。
