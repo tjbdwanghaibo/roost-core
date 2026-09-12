@@ -31,3 +31,5 @@ NestMgr.Shutdown 第一次调用设置 stopped 并启动后台清理，后台先
 建议把框架必需通知从业务回调队列中分离，并在 completion 层统一处理 worker 与 pump 回退的异常。明确定义已持久化而副作用失败的回复语义；继续执行其他业务回调还是中断并隔离，需要契约决定，但不能默默漏掉释放和请求终态。
 
 业务应让 AfterCommit 有界，外部效果使用可重试、幂等的持久化记录。调用方超时不代表事务未持久化；不要把超时后的盲目重试当成回滚替代品。本轮只验证现有接口与替身 committer，真实 WAL/projector 的 held 清理、进程崩溃恢复与饱和回退 panic 仍待实验。
+
+09-12 补证：饱和回退 panic 已在隔离子进程确认退出 2；正常对照通过。真实 WAL 分别验证了 held 队首阻塞及释放/重开恢复，见[本轮记录](REVIEW-2026-09-12.md)和[WAL 学习](IMPLEMENTATION-WAL-ADMISSION-DURABILITY-AND-SHUTDOWN.md)。上文未验证描述保留为 09-11 历史，真实 Nest→WAL 全链路仍待整合。

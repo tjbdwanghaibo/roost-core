@@ -1,6 +1,23 @@
 # Roost Review 跨轮进度
 
-最后更新：2026-09-11。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+最后更新：2026-09-12。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+
+## 2026-09-12 最新进度：饱和回退与真实 WAL
+
+Core `c9e853e08c91d498b65d6f1d6e4dd35d39726a51`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无增量；下方历史快照不代表当前覆盖终点。
+
+| 范围 | 本轮证据 | 状态/后续 |
+| --- | --- | --- |
+| kit/mail RR-20260911-05 | 原 race 仍失败，无修复记录 | 仍未修复，MemoryStore 范围 |
+| nest completion 饱和回退 | 原 RR-20260911-06 仍复现；正常子进程通过，panic 子进程退出 2 | 已验证组件饱和崩溃；继续原编号，待修复统一异常边界 |
+| nestwal Enqueue/held/replay/Ack | 真实文件：held 队首挡住后继，补释放推进两条，Ack 重开后保持 | 已验证部分场景；外部 applier/publisher 为替身 |
+| nestwal Close/reopen | 已持久化但未释放的两条记录，关闭重开后恢复 | 已验证正常关闭重开；非断电/强杀验证 |
+| nestwal Shutdown/Flush/replayMu | 后台 apply 期间短 context 不使 Shutdown 按时返回 | 新 P2 RR-20260912-01；并发 Flush/超时后重试待扩展 |
+| nestwal Sync/collectBatch | Sync 返回成功时 ticket 尚未写入；同配置 Close 对照通过 | 新 P2 RR-20260912-02；默认窗口概率和高并发准入待验 |
+| nest/nestwal/worker 基线 | 三包完整 race 通过 | 不能代替上述失败边界验证 |
+| codegen | 无增量，仅同步 | 本轮无新增覆盖 |
+
+[运行记录](REVIEW-2026-09-12.md) · [问题](../bug/REVIEW-2026-09-12.md) · [复现](../bug/REPRO-2026-09-12.md) · [实现学习](IMPLEMENTATION-WAL-ADMISSION-DURABILITY-AND-SHUTDOWN.md)。下一轮先复核四个未关闭问题，再继续真实 Nest→WAL 释放整合、projector 取消协调与 Ack 失败恢复。
 
 ## 2026-09-11 第四轮最新进度
 
