@@ -2,6 +2,19 @@
 
 最后更新：2026-09-12。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-12 第二轮最新进度：RemotePolicy Mirror
+
+Core `ef44d770fc231896187b6e6b104d10ffa965bb01`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。本轮按用户要求聚焦 Mirror，三仓同步无增量。
+
+| 范围 | 实际证据 | 状态/下一入口 |
+| --- | --- | --- |
+| Mirror policy / factory / Nest / codegen | 当前源码确认只有声明，没有自动只读/订阅；相关生成器测试通过 | 已读接入路径；Mirror 生成消费者写能力待实测 |
+| RemoteSnapshotCache 作为 Mirror 基础 | 临时 race：Mirror kind 可接入、旧 upsert 保护、读出隔离通过；Delete 后旧值可再入 | 原语部分验证；版本墓碑为方案必需项 |
+| Replicator / Remote sync / interest / entitysync | 关键源码及五包 race 通过 | 基础可复用；首次加载水位、真实重投/L2/停机交错待验 |
+| 只读实现方案 | 核心 reader、轻量 kit 装配、codegen 封口；P0–P3 分阶段 | 仅文档，未实施 |
+
+[运行](REVIEW-2026-09-12-02.md) · [实现及方案](IMPLEMENTATION-REMOTE-POLICY-MIRROR.md) · [观察](../bug/REVIEW-2026-09-12-02.md)。旧 RR 状态未变，历史进度保留。
+
 ## 2026-09-12 最新进度：饱和回退与真实 WAL
 
 Core `c9e853e08c91d498b65d6f1d6e4dd35d39726a51`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无增量；下方历史快照不代表当前覆盖终点。
