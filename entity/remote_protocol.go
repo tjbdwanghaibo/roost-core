@@ -488,6 +488,12 @@ type RemoteSnapshotInterest struct {
 	ConsumerSID int32
 	Key         RemoteSnapshotKey
 	ExpiresAt   int64
+	// Generation orders one consumer's renewals and releases for a key. It is
+	// assigned by the publisher, only ever advances, and a release cancels a
+	// lease only if its generation is not older than the lease's. ExpiresAt
+	// cannot play this role: a legitimate release is published BEFORE the
+	// lease it withdraws would have expired (RR-20260913-02).
+	Generation uint64
 }
 
 type RemoteSnapshotInterestManager interface {

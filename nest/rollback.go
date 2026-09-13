@@ -374,9 +374,9 @@ func (tx *RollbackTx) Rollback() error {
 	return errors.Join(errs...)
 }
 
-func (tx *RollbackTx) Commit() {
+func (tx *RollbackTx) Commit() error {
 	if tx == nil || tx.state != rollbackTxOpen {
-		return
+		return nil
 	}
 	tx.state = rollbackTxCommitted
 	admitted := tx.afterAdmission
@@ -394,29 +394,52 @@ func (tx *RollbackTx) Commit() {
 	tx.receipts = nil
 	tx.receiptDigests = nil
 	tx.deleteIntents = nil
+	// Every callback runs, whatever the previous one did. Commit has
+	// already marked the transaction committed and the durable fact is not
+	// coming back; a business hook that panics must not cancel the
+	// framework's own obligations queued behind it — the
+	// TransactionReleased notification is one of these callbacks, and the
+	// caller's reply depends on this function returning (RR-20260911-06).
+	// The panic is reported, not swallowed: the caller learns that the
+	// transaction is durable but its after-commit work failed.
+	var failed error
 	for _, fn := range admitted {
-		if fn != nil {
-			fn()
-		}
+		failed = errors.Join(failed, runCommitCallback(fn))
 	}
 	if len(tx.commits) == 0 {
-		return
+		return failed
 	}
 	if msg := currentNestDispatchMsg(); msg != nil && msg.RemoteWriteBatch != nil {
 		msg.addPostRemoteCommit(tx.commits...)
-		return
+		return failed
 	}
 	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
+		// The guard's post-release runner already isolates each callback.
 		for _, fn := range tx.commits {
 			scope.Guard().AppendPostRelease(fn)
 		}
-		return
+		return failed
 	}
 	for _, fn := range tx.commits {
-		if fn != nil {
-			fn()
-		}
+		failed = errors.Join(failed, runCommitCallback(fn))
 	}
+	return failed
+}
+
+// runCommitCallback runs one after-commit callback inside its own recovery
+// boundary and turns a panic into ErrAfterCommitFailed.
+func runCommitCallback(fn func()) (err error) {
+	if fn == nil {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", ErrAfterCommitFailed, r)
+			slog.Error("nest after-commit callback panic", "err", r)
+		}
+	}()
+	fn()
+	return nil
 }
 
 // abandon closes an indeterminate transaction without executing rollback or
@@ -769,7 +792,9 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 					return
 				}
 			}
-			tx.Commit()
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = commitErr
+			}
 			return
 		}
 		if commitErr := tx.durableCommit(commitCtx, committer); commitErr != nil {
@@ -801,7 +826,9 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 			}
 		}
-		tx.Commit()
+		if commitErr := tx.Commit(); commitErr != nil {
+			err = commitErr
+		}
 	}()
 	return withRollbackTx(tx, call)
 }

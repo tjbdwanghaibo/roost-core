@@ -144,7 +144,16 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 				return zero, false, err
 			}
 		} else if ok {
-			s.setLocal(ctx, value)
+			// Backfilling is a write like any other and goes through the same
+			// Stale / Conflict rule as a publish. If L1 meanwhile took a
+			// DIFFERENT value for this same version, L1 is what this process
+			// has already handed out; the L2 copy does not get to silently
+			// replace it, and the caller sees what L1 holds (RR-20260913-06).
+			if err := s.setLocal(ctx, value); errors.Is(err, ErrConflictingWrite) {
+				if current, held, getErr := s.local.Get(ctx, key); getErr == nil && held {
+					return current, true, nil
+				}
+			}
 			return value, true, nil
 		}
 	}

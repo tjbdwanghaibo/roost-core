@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -157,7 +158,11 @@ func (p *completionPump) run() {
 			// delivered. complete waits for its entity predecessor, so
 			// ordering holds here too; the cost is pump head-of-line delay
 			// while the pool is saturated.
-			complete(err)
+			//
+			// Inside the same recovery boundary the worker gives it: this
+			// goroutine is the pump itself, and a panic that escaped here
+			// took the process down (RR-20260911-06, 09-12 实测).
+			goroutine.SafeFunc(func() { complete(err) })
 		}
 	}
 }
@@ -231,7 +236,19 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 			}
 			return
 		}
-		tx.Commit()
+		if commitErr := tx.Commit(); commitErr != nil {
+			// Durable, but a callback panicked. The reply must say exactly
+			// that: not the handler's return value (the after-commit work
+			// did not all happen) and not silence (the caller would wait
+			// out its own timeout for a transaction that succeeded).
+			metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "completion_failed"}, 1)
+			if retChan != nil {
+				retChan <- commitErr
+			} else {
+				slog.Error("nest pipelined completion after-commit failed", "handler", handler, "err", commitErr)
+			}
+			return
+		}
 		metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "ok"}, 1)
 		if retChan != nil {
 			retChan <- ret

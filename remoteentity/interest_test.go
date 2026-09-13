@@ -33,7 +33,7 @@ func TestRemoteInterestRegistryIsScopedAndExpires(t *testing.T) {
 	if registry.interested(otherPolicy) {
 		t.Fatal("expired interest was retained")
 	}
-	registry.release(key, 1001)
+	registry.release(key, 1001, 0)
 	if registry.interested(key) {
 		t.Fatal("released interest was retained")
 	}
@@ -118,11 +118,11 @@ func TestRemoteInterestRegistryHasHardCapacityLimits(t *testing.T) {
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != entity.ErrRemoteOverloaded {
 		t.Fatalf("key capacity error = %v, want %v", err, entity.ErrRemoteOverloaded)
 	}
-	registry.release(key, 2)
+	registry.release(key, 2, 0)
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != entity.ErrRemoteOverloaded {
 		t.Fatalf("key limit must remain enforced, got %v", err)
 	}
-	registry.release(key, 1)
+	registry.release(key, 1, 0)
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != nil {
 		t.Fatalf("capacity was not released: %v", err)
 	}
