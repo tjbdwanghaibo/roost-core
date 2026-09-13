@@ -207,6 +207,22 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	if remote, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok {
 		state := remote.RemoteOwnershipState()
 		switch state {
+		case entity.RemoteOwnershipRecovering:
+			// Frozen by an ownership transition whose outcome was unknown
+			// (U-0188). Reaching this line means the marker — invalidated
+			// at freeze time — was re-read from the authority above and it
+			// still names this node, so the copy is ours again.
+			thaw := entity.RemoteOwnershipLocalOwned
+			if marked {
+				thaw = entity.RemoteOwnershipShared
+			}
+			if err := remote.TransitionRemoteOwnership(thaw); err != nil {
+				if distLocked {
+					_ = w.unlockObserved(ctx, w.rMu.Version())
+				}
+				release()
+				return nil, fmt.Errorf("%w: entity=%d state=%s: %v", entity.ErrRemoteOwnerTransition, w.id, state, err)
+			}
 		case entity.RemoteOwnershipDraining, entity.RemoteOwnershipFenced, entity.RemoteOwnershipQuarantined:
 			if distLocked {
 				_ = w.unlockObserved(ctx, w.rMu.Version())

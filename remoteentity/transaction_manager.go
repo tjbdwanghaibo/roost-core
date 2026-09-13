@@ -677,7 +677,10 @@ func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCom
 		}
 	}
 	for _, key := range commit.Invalidations {
-		if err := m.remote.cache.Delete(ctx, key); err != nil {
+		// Same rule as the replica side (U-0187): the local copy is deleted
+		// at the commit's version so a concurrent older publish for the key
+		// cannot repopulate it behind this commit.
+		if err := m.remote.cache.DeleteAtVersion(ctx, key, commit.NextVersion); err != nil {
 			return err
 		}
 		if publisher, ok := m.snapshotPublisher(); ok {

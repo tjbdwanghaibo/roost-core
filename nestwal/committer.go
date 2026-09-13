@@ -109,15 +109,22 @@ type Committer struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	flushMu sync.Mutex
-	// replayMu makes a replay pass — read from the ack fence, apply, publish,
+	// flushSem and replaySem are one-slot semaphores, not mutexes, so the
+	// wait for ownership honours the caller's context (U-0186, RR-20260912-01).
+	// With sync.Mutex a Flush/Shutdown carrying a deadline blocked inside
+	// Lock while the background pass sat in a slow applier: that pass runs
+	// on the committer's own context, which only the later Close cancels, so
+	// the caller's deadline could not interrupt the wait.
+	//
+	// replaySem makes a replay pass — read from the ack fence, apply, publish,
 	// ack — one unit. The WAL serializes only the read; without this, a pass
 	// that starts after another's read has returned but before its ack landed
 	// re-reads the same records and applies them again. The applier contract
 	// tolerates that (at-least-once, idempotent), but the run loop and an
 	// active Flush overlapping in that window is pure waste and a race worth
 	// closing rather than documenting.
-	replayMu          sync.Mutex
+	flushSem          chan struct{}
+	replaySem         chan struct{}
 	heldMu            sync.RWMutex
 	held              map[corenest.TransactionID]struct{}
 	errMu             sync.RWMutex
@@ -172,6 +179,8 @@ func NewCommitter(wal *WAL, applier MutationApplier, publisher EffectPublisher, 
 		cancel:            cancel,
 		kick:              make(chan struct{}, 1),
 		done:              make(chan struct{}),
+		flushSem:          make(chan struct{}, 1),
+		replaySem:         make(chan struct{}, 1),
 		held:              make(map[corenest.TransactionID]struct{}),
 		pendingReceiptSet: make(map[corenest.TransactionID]struct{}),
 	}
@@ -239,8 +248,10 @@ func (c *Committer) Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	c.flushMu.Lock()
-	defer c.flushMu.Unlock()
+	if err := acquireSlot(ctx, c.flushSem); err != nil {
+		return err
+	}
+	defer func() { <-c.flushSem }()
 	if err := c.wal.Sync(ctx); err != nil {
 		return err
 	}
@@ -377,8 +388,10 @@ func (c *Committer) run() {
 }
 
 func (c *Committer) replayPass(ctx context.Context) (int, error) {
-	c.replayMu.Lock()
-	defer c.replayMu.Unlock()
+	if err := acquireSlot(ctx, c.replaySem); err != nil {
+		return 0, err
+	}
+	defer func() { <-c.replaySem }()
 	// Receipt deletion is off the commit hot path, but every failed deletion is
 	// retained in a bounded retry set and retried on each replay pass.
 	_ = c.retryReceiptCleanup(ctx)
@@ -496,6 +509,17 @@ func (c *Committer) flushReceiptCleanup(ctx context.Context) error {
 		if err := c.retryReceiptCleanup(ctx); err != nil {
 			return err
 		}
+	}
+}
+
+// acquireSlot takes the single slot of sem or gives up when ctx ends. The
+// slot is released by receiving from sem.
+func acquireSlot(ctx context.Context, sem chan struct{}) error {
+	select {
+	case sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

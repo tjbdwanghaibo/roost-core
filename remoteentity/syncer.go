@@ -102,7 +102,16 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		return err
 	}
 	if wire.Delete {
-		return s.mgr.remote.cache.Delete(ctx, wire.Key)
+		// The delete carries the version of the commit that removed the
+		// snapshot (DeleteRemoteSnapshot publishes it as env.Version). Apply
+		// it at that version so it neither clears a newer snapshot delivered
+		// first nor lets an older one delivered later resurrect the key
+		// (U-0187, RR-20260913-01). A version-less delete stays a plain
+		// invalidation for compatibility with older publishers.
+		if env.Version <= 0 {
+			return s.mgr.remote.cache.Delete(ctx, wire.Key)
+		}
+		return s.mgr.remote.cache.DeleteAtVersion(ctx, wire.Key, uint64(env.Version))
 	}
 	err := s.mgr.remote.cache.ApplyUpdate(ctx, wire.Update)
 	if errors.Is(err, entity.ErrRemoteSnapshotGap) || errors.Is(err, entity.ErrRemoteSnapshotEpochMismatch) || errors.Is(err, entity.ErrRemoteSnapshotSchemaMismatch) {

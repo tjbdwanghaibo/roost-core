@@ -107,6 +107,11 @@ type RemoteSnapshotCacheConfig struct {
 	LoadTimeout        time.Duration
 	MaxWaiters         int
 	MaxConcurrentLoads int
+	// TombstoneTTL bounds how long a versioned delete keeps fencing older
+	// snapshots for its key (U-0187, RR-20260913-01). Defaults to TTL: a
+	// snapshot older than the delete can only arrive late through the same
+	// replay window the cache entries themselves live in.
+	TombstoneTTL time.Duration
 }
 
 // RemoteSnapshotCache is the entity-specific adapter over core/cache. Epoch,
@@ -130,7 +135,26 @@ type RemoteSnapshotCache struct {
 	loads       map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall
 	loadSlots   chan struct{}
 	loadTimeout time.Duration
+
+	// tombstones remembers, per key, the newest version a delete was applied
+	// at. Delete and Publish for one key serialize on the same publish shard
+	// lock, so "delete at v" is ordered against every write of that key
+	// (U-0187, RR-20260913-01): a later-arriving snapshot with version <= v
+	// is the past and is dropped; a newer one clears the tombstone.
+	tombMu       sync.Mutex
+	tombstones   map[RemoteSnapshotKey]remoteSnapshotTombstone
+	tombstoneTTL time.Duration
 }
+
+type remoteSnapshotTombstone struct {
+	version uint64
+	until   int64 // unix nanos; the tombstone stops fencing after this
+}
+
+// remoteSnapshotTombstoneSweepAt is the map size at which an insert also
+// sweeps expired tombstones; the bound is time, never a count (a tombstone
+// must live through its window, see U-0165's lesson).
+const remoteSnapshotTombstoneSweepAt = 1024
 
 type remoteVersionWaiter struct {
 	min  uint64
@@ -172,6 +196,12 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 	if cfg.MaxConcurrentLoads <= 0 {
 		cfg.MaxConcurrentLoads = 128
 	}
+	if cfg.TombstoneTTL <= 0 {
+		cfg.TombstoneTTL = cfg.TTL
+	}
+	if cfg.TombstoneTTL <= 0 {
+		cfg.TombstoneTTL = 30 * time.Second
+	}
 	storeCfg := cache.StoreConfig[RemoteSnapshotKey, RemoteSnapshotEnvelope]{
 		KeyOf: func(value RemoteSnapshotEnvelope) RemoteSnapshotKey { return value.Key },
 		Stale: func(old, next RemoteSnapshotEnvelope) bool {
@@ -210,6 +240,9 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		loads:       make(map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall),
 		loadSlots:   make(chan struct{}, cfg.MaxConcurrentLoads),
 		loadTimeout: cfg.LoadTimeout,
+
+		tombstones:   make(map[RemoteSnapshotKey]remoteSnapshotTombstone),
+		tombstoneTTL: cfg.TombstoneTTL,
 	}
 }
 
@@ -368,6 +401,11 @@ func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapsh
 	lock := &c.publishMu[remoteSnapshotPublishShard(snapshot.Key)]
 	lock.Lock()
 	defer lock.Unlock()
+	if c.deletedAtOrAfter(snapshot.Key, snapshot.StateVersion, time.Now()) {
+		// A delete newer than this snapshot already went through: the
+		// snapshot is the past, exactly like losing the version CAS below.
+		return nil
+	}
 	current, ok, err := c.local.Get(ctx, snapshot.Key)
 	if err != nil {
 		return err
@@ -459,11 +497,77 @@ func (c *RemoteSnapshotCache) ApplyUpdate(ctx context.Context, update RemoteSnap
 	})
 }
 
+// Delete is the unversioned invalidation primitive: it drops the key from L1
+// and L2 and leaves no fence, so a late older snapshot may repopulate it.
+// Replication and commit paths must use DeleteAtVersion.
 func (c *RemoteSnapshotCache) Delete(ctx context.Context, key RemoteSnapshotKey) error {
 	if c == nil || c.layered == nil {
 		return nil
 	}
 	return c.layered.Delete(ctx, key)
+}
+
+// DeleteAtVersion applies a delete that happened at version. It is ordered
+// against Publish by the publish shard lock (U-0187, RR-20260913-01):
+//
+//   - a cached snapshot newer than version survives — the delete is the
+//     past relative to what L1 holds (delete v2 delivered after full v3);
+//   - otherwise the key is dropped and a tombstone at version fences every
+//     snapshot with StateVersion <= version for TombstoneTTL (delete v2
+//     delivered before full v1 keeps the key deleted).
+//
+// A snapshot newer than the tombstone clears it on the way in.
+func (c *RemoteSnapshotCache) DeleteAtVersion(ctx context.Context, key RemoteSnapshotKey, version uint64) error {
+	if c == nil || c.layered == nil {
+		return nil
+	}
+	lock := &c.publishMu[remoteSnapshotPublishShard(key)]
+	lock.Lock()
+	defer lock.Unlock()
+	current, ok, err := c.local.Get(ctx, key)
+	if err != nil {
+		return err
+	}
+	if ok && current.StateVersion > version {
+		return nil
+	}
+	c.rememberTombstone(key, version, time.Now())
+	return c.layered.Delete(ctx, key)
+}
+
+// rememberTombstone records a delete at version; a newer existing tombstone
+// is kept. Caller holds the key's publish shard lock.
+func (c *RemoteSnapshotCache) rememberTombstone(key RemoteSnapshotKey, version uint64, now time.Time) {
+	c.tombMu.Lock()
+	defer c.tombMu.Unlock()
+	if len(c.tombstones) >= remoteSnapshotTombstoneSweepAt {
+		for k, t := range c.tombstones {
+			if now.UnixNano() > t.until {
+				delete(c.tombstones, k)
+			}
+		}
+	}
+	if prev, ok := c.tombstones[key]; ok && prev.version > version && now.UnixNano() <= prev.until {
+		return
+	}
+	c.tombstones[key] = remoteSnapshotTombstone{version: version, until: now.Add(c.tombstoneTTL).UnixNano()}
+}
+
+// deletedAtOrAfter reports whether a live tombstone fences a write at
+// version. A write newer than the tombstone removes it: the key is alive
+// again from that version on. Caller holds the key's publish shard lock.
+func (c *RemoteSnapshotCache) deletedAtOrAfter(key RemoteSnapshotKey, version uint64, now time.Time) bool {
+	c.tombMu.Lock()
+	defer c.tombMu.Unlock()
+	t, ok := c.tombstones[key]
+	if !ok {
+		return false
+	}
+	if now.UnixNano() > t.until || version > t.version {
+		delete(c.tombstones, key)
+		return false
+	}
+	return true
 }
 
 func (c *RemoteSnapshotCache) WaitForVersion(ctx context.Context, key RemoteSnapshotKey, minVersion uint64) error {

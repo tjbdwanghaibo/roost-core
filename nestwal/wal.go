@@ -164,6 +164,10 @@ type appendRequest struct {
 	reserved    bool // capacity admitted by Enqueue; never rejected here
 	lsn         uint64
 	done        chan appendResult
+	// barrier marks a Sync barrier (U-0185, RR-20260912-02): it carries no
+	// frame, ends the batch it lands in, and is answered only after every
+	// request queued ahead of it has been written (or failed terminally).
+	barrier bool
 }
 
 // walTicket implements corenest.CommitTicket. err is written before done is
@@ -561,8 +565,16 @@ func (w *WAL) Replay(ctx context.Context, consume func(corenest.CommitFence, cor
 	return nil
 }
 
-// Sync forces all accepted asynchronous appends to stable storage. Append
-// already waits for the physical write, so no queue barrier is required.
+// Sync forces all accepted asynchronous appends to stable storage: every
+// Enqueue that returned a ticket before Sync was called is durable when Sync
+// returns nil. Append already waits for the physical write, but a ticketed
+// record may still sit in appendCh or in a batch the writer is collecting
+// (BatchDelay window), and fsync of the active file cannot cover bytes that
+// were never written. Sync therefore pushes a barrier request through the
+// queue first (U-0185, RR-20260912-02): FIFO order guarantees the writer has
+// written everything admitted ahead of it by the time it answers, and only
+// then is the active file synced. The wait honours ctx; a cancelled Sync is
+// harmless because it changes nothing the next Sync would not redo.
 func (w *WAL) Sync(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -573,12 +585,61 @@ func (w *WAL) Sync(ctx context.Context) error {
 	if terminal := w.terminal(); terminal != nil {
 		return terminal
 	}
+	if err := w.awaitWriteBarrier(ctx); err != nil {
+		return err
+	}
 	if err := w.syncActive(); err != nil {
 		err = errors.Join(corenest.ErrCommitIndeterminate, err)
 		w.setTerminal(err)
 		return err
 	}
 	return nil
+}
+
+// awaitWriteBarrier queues a barrier and waits for the writer to answer it.
+// The boundary snapshot under enqueueMu is exact for tickets: every LSN <=
+// nextLSN is already in appendCh, so when durableLSN already covers nextLSN
+// and the queue is empty there is nothing to wait for and the round trip is
+// skipped. Otherwise the barrier goes through the same FIFO as the records.
+// After Close the writer is gone and the queue is fully drained, so the
+// barrier is vacuously satisfied; returning here instead of blocking on a
+// send nobody receives keeps Sync idempotent after shutdown.
+func (w *WAL) awaitWriteBarrier(ctx context.Context) error {
+	w.enqueueMu.Lock()
+	boundary := w.nextLSN
+	w.enqueueMu.Unlock()
+	if w.durableLSN.Load() >= boundary && len(w.appendCh) == 0 {
+		return nil
+	}
+	req := appendRequest{barrier: true, done: make(chan appendResult, 1)}
+	w.lifecycleMu.RLock()
+	closed := w.closed
+	w.lifecycleMu.RUnlock()
+	if closed {
+		return nil
+	}
+	select {
+	case w.appendCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.doneCh:
+		return nil
+	}
+	select {
+	case result := <-req.done:
+		return result.err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.doneCh:
+		// The writer only exits after drainAndClose answered every queued
+		// request, so a pending reply is already buffered.
+		select {
+		case result := <-req.done:
+			return result.err
+		default:
+			return nil
+		}
+	}
 }
 
 func (w *WAL) Stats() Stats {
@@ -726,6 +787,11 @@ func (w *WAL) collectBatch(first appendRequest) []appendRequest {
 		case req := <-w.appendCh:
 			batch = append(batch, req)
 			bytesTotal += len(req.frame)
+			if req.barrier {
+				// A Sync is waiting: close the batch now instead of letting
+				// the barrier sit out the rest of BatchDelay.
+				return batch
+			}
 		case <-timer.C:
 			return batch
 		case <-w.closeCh:
@@ -735,9 +801,35 @@ func (w *WAL) collectBatch(first appendRequest) []appendRequest {
 	return batch
 }
 
+// processBatch writes the records of one batch and then answers any Sync
+// barriers collected with them. Barriers are answered last so that "barrier
+// replied" implies "everything queued ahead of it is written" (or the WAL
+// has gone terminal, in which case the barrier carries that error).
 func (w *WAL) processBatch(batch []appendRequest) {
 	if len(batch) == 0 {
 		return
+	}
+	var barriers []appendRequest
+	records := batch[:0]
+	for i := range batch {
+		if batch[i].barrier {
+			barriers = append(barriers, batch[i])
+			continue
+		}
+		records = append(records, batch[i])
+	}
+	err := w.processRecords(records)
+	for i := range barriers {
+		barriers[i].done <- appendResult{err: err}
+	}
+}
+
+// processRecords returns the terminal error that failed the batch, if any.
+// Capacity rejections of unreserved requests are not durability failures and
+// do not surface here.
+func (w *WAL) processRecords(batch []appendRequest) error {
+	if len(batch) == 0 {
+		return w.terminal()
 	}
 	if terminal := w.terminal(); terminal != nil {
 		for i := range batch {
@@ -747,7 +839,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		// have missed the setTerminal sweep; its record lands here, so fail
 		// the pending set again rather than leave the waiter blocked.
 		w.failPendingTickets(terminal)
-		return
+		return terminal
 	}
 	// Reserved (ticketed) requests were capacity-admitted in Enqueue and can
 	// no longer be rejected: their callers already released entity locks on
@@ -776,7 +868,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		}
 		batch = kept
 		if len(batch) == 0 {
-			return
+			return nil
 		}
 	}
 	// The reservation's job ends once the batch is committed to the write
@@ -840,7 +932,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 		for i := range batch {
 			batch[i].done <- appendResult{err: err}
 		}
-		return
+		return err
 	}
 	bytes := int64(0)
 	for i := range batch {
@@ -855,6 +947,7 @@ func (w *WAL) processBatch(batch []appendRequest) {
 	metrics.IncCounter("nestwal.append.total", nil, int64(len(batch)))
 	metrics.IncCounter("nestwal.bytes.total", nil, bytes)
 	metrics.SetGauge("nestwal.disk.bytes", nil, w.diskBytes.Load())
+	return nil
 }
 
 func (w *WAL) drainAndClose() {

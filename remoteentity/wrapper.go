@@ -87,6 +87,18 @@ func (w *remoteEntityWrapper) setOwnership(lease entity.RemoteEntityMarkerLease,
 	w.markerAt.Store(time.Now().UnixNano())
 }
 
+// invalidateMarker forgets the cached lease so the next admission must ask
+// the authority (ensureMarker treats markerUnknown as "refresh now"). Used
+// when an ownership CAS ended with an unknown outcome (U-0188): a hot marker
+// that predates the CAS is exactly the thing that must not be trusted.
+func (w *remoteEntityWrapper) invalidateMarker() {
+	if w == nil {
+		return
+	}
+	w.marker.Store(markerUnknown)
+	w.markerAt.Store(0)
+}
+
 func (w *remoteEntityWrapper) attachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Lock()
 	w.e = e

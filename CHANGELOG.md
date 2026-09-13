@@ -38,6 +38,13 @@
 
 ### Fixed
 
+- **WAL Sync 写屏障、Committer 可取消的停机等待、快照版本化删除与所有权转移的不确定态**(U-0185～U-0188;RR-20260912-01/02、RR-20260913-01/09;T-79～T-82)。
+  `WAL.Sync` 先往写队列放一个屏障请求、收到答复再 fsync,返回 nil 即覆盖调用前所有已 Enqueue 的 ticket(此前只 fsync 文件,BatchDelay 窗口内的记录不在其中)。
+  `Committer` 的 `flushMu` / `replayMu` 换成一格信号量,`Flush` / `Shutdown` 等待 replay 所有权时随调用方 ctx 取消。
+  `RemoteSnapshotCache.DeleteAtVersion` 与 `Publish` 共用分片锁,比缓存新的删除不动、否则留 `TombstoneTTL`(默认 = 缓存 TTL)内的墓碑挡住更旧的快照;复制接收与提交后失效都按版本删。
+  `TransferRemoteOwnership` 在 `TransferExpected` 出错后失效本地 marker 并用独立有界 ctx 重查权威:未变才恢复,已转移按成功 fence,查不到则 live 进 `Recovering` 冻结,直到下一次权威读成功才解冻。
+  测试:`sync_barrier_promises_test.go`、`shutdown_deadline_promises_test.go`、`snapshot_delete_order_promises_test.go`、`snapshot_delete_version_promises_test.go`、`ownership_transfer_indeterminate_promises_test.go`;
+  记录:`docs/bugfix/RR-20260912-02.md`、`RR-20260912-01.md`、`RR-20260913-01.md`、`RR-20260913-09.md`。
 - **远程快照一致性、兴趣订阅代际与提交回调的异常控制流**(U-0180～U-0181、U-0183～U-0184;RR-20260913-02/05/06、RR-20260911-06;T-74/75/77/78)。`entity` 冷 L1 发布时先有界地问 L2 一次,同版本不同内容即 `ErrRemoteVersionConflict` 且不落写,L2 读失败仍按故障降级(此前 `IgnoreRemoteError` 把一致性错误当可用性错误吞掉,L1=B/L2=A 而发布方收到成功)。`cache` 新增 `StoreConfig.Conflict` 钩子与 `ErrConflictingWrite`,在 `AtomicLocalStore` 分片锁下与 `Stale` 一并判,L2 回填遇冲突不再覆盖已发布的同版本值。`remoteentity` 的兴趣 renew / release 带只增 `Generation`(计数器从时钟播种,重启复用 SID 不倒退),release 只删不落后的 lease,迟到的旧 release 不再取消新 renewal。`nest` 的 `Commit()` 改为返回 `error`,每个 AfterCommit 回调各自 recover、panic 记为 `ErrAfterCommitFailed` 但后续回调(含 TransactionReleased)继续执行;异步完成按该错误回复并计 `async_total{result="completion_failed"}`,饱和内联回退包进 `goroutine.SafeFunc`,不再让业务 panic 逃出泵 goroutine 带走进程。
   另补 U-0175(RR-20260913-08)的复核残留:`LoadAuthoritative` 的权威原值与 Publish 后的 L1 值各判一次 `Expired`,过期即 miss 且不进缓存;同版本相同内容但更晚的 `ExpiresAt` 允许前移。各条记录见 `docs/bugfix/`;仍未修的四项与原因见 `docs/bugfix/README.md` 末尾。
 - **远程快照与所有权协议的六处边界**(U-0174～U-0179;RR-20260913-03/04/07/08/10/11,T-68～T-73)。`entity`:合并加载的等待名额在跟随者取消后归还(与 `cache` 的 U-0155 同一个错误,entity 自建了第二份合并逻辑);信封自己的 `ExpiresAt` 参与读取准入,过期即视为未命中,Monotonic 按契约回权威。`remoteentity`:L2 的同版本冲突比较纳入 schema 与 codec(checksum 只覆盖 payload 字节,换个 schema 就能改掉同一份字节的解释方式);L2 的 marker / route / version 改为精确十进制比较并逐字存储(Lua 数值是 float64,超过 2^53 相邻 uint64 会塌成同一个值,旧版本被接受、版本回退);marker lease 的 epoch 由脚本按十进制逐位加一并在写前校验可表示范围(原来拼接 Lua 数值,10^14 被 `%.14g` 渲染成 `1e+14` 并已落盘,此后不可解析);接收侧交叉校验 payload 身份与信封(只改 payload 里的 Scope 就能写进另一个 scope 的缓存)。

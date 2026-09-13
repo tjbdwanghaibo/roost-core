@@ -126,14 +126,73 @@ func (m *Manager) TransferRemoteOwnership(ctx context.Context, id int64, newOwne
 	}
 	next, err := m.ownershipStore.TransferExpected(ctx, wrapper.id, expected, newOwnerSID)
 	if err != nil {
-		restoreErr := m.restoreOwnershipAfterTransitionFailure(wrapper.attachedEntity(), expected)
-		return entity.RemoteEntityMarkerLease{}, errors.Join(fmt.Errorf("remote_entity: transfer %d: %w", wrapper.id, err), restoreErr)
+		return m.settleIndeterminateTransfer(wrapper, expected, newOwnerSID, err)
 	}
 	wrapper.applyOwnership(next)
 	if err := m.applyLiveOwnership(ctx, wrapper, next, entity.RemoteOwnershipFenced, newOwnerSID); err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
 	}
 	return next, nil
+}
+
+// settleIndeterminateTransfer decides what a failed TransferExpected means.
+// An error from the store is not "the CAS did not run": the script may have
+// moved the owner and only the reply was lost (RR-20260913-09). Treating it
+// as a no-op restored local ownership while the hot marker (trusted for
+// MarkerCacheTTL) still named us, and the next PrepareRemoteWriteBatch
+// admitted a writer the authority had already replaced (U-0188).
+//
+// So: forget the cached marker, ask the authority again on an independent
+// bounded context (the caller's may already be the thing that failed), and
+// let the answer decide —
+//
+//   - authority unchanged: proven no-op, restore local ownership;
+//   - authority names the new owner: the transfer happened, finish it as a
+//     success (fence the local copy, return the new lease);
+//   - authority names someone else / nothing: fence, report the fence;
+//   - authority unreachable: freeze the live entity in Recovering with the
+//     marker unknown. Nothing is admitted until a later authoritative read
+//     succeeds (batch admission thaws Recovering only after such a read).
+func (m *Manager) settleIndeterminateTransfer(wrapper *remoteEntityWrapper, expected entity.RemoteEntityMarkerLease, newOwnerSID int32, cause error) (entity.RemoteEntityMarkerLease, error) {
+	transferErr := fmt.Errorf("remote_entity: transfer %d: %w", wrapper.id, cause)
+	wrapper.invalidateMarker()
+	recheckCtx, cancel := context.WithTimeout(context.Background(), m.cfg.OpTimeout)
+	defer cancel()
+	if err := wrapper.refreshMarked(recheckCtx); err != nil {
+		wrapper.invalidateMarker()
+		freezeErr := transitionAttachedLive(wrapper.attachedEntity(), entity.RemoteOwnershipRecovering)
+		return entity.RemoteEntityMarkerLease{}, errors.Join(transferErr,
+			fmt.Errorf("%w: ownership of %d is unknown until the authority answers: %v", entity.ErrRemoteOwnerTransition, wrapper.id, err),
+			freezeErr)
+	}
+	current, found := wrapper.cachedOwnership()
+	switch {
+	case found && current == expected:
+		restoreErr := m.restoreOwnershipAfterTransitionFailure(wrapper.attachedEntity(), expected)
+		return entity.RemoteEntityMarkerLease{}, errors.Join(transferErr, restoreErr)
+	case found && current.OwnerSid == newOwnerSID:
+		if err := m.applyLiveOwnership(recheckCtx, wrapper, current, entity.RemoteOwnershipFenced, newOwnerSID); err != nil {
+			return entity.RemoteEntityMarkerLease{}, errors.Join(transferErr, err)
+		}
+		return current, nil
+	default:
+		fenceErr := transitionAttachedLive(wrapper.attachedEntity(), entity.RemoteOwnershipFenced)
+		if found {
+			fenceErr = m.applyLiveOwnership(recheckCtx, wrapper, current, entity.RemoteOwnershipFenced, current.OwnerSid)
+		}
+		return entity.RemoteEntityMarkerLease{}, errors.Join(transferErr, ownershipFenceError(wrapper.id, current), fenceErr)
+	}
+}
+
+// transitionAttachedLive moves an already-loaded live entity to state under
+// its own mutex; a nil entity is nothing to move.
+func transitionAttachedLive(live entity.IThreadSafeRemoteEntity, state entity.RemoteOwnershipState) error {
+	if live == nil || live.GetMutex() == nil {
+		return nil
+	}
+	live.GetMutex().Lock()
+	defer live.GetMutex().Unlock()
+	return live.TransitionRemoteOwnership(state)
 }
 
 // beginOwnershipTransition serializes with local write admission. When
@@ -238,7 +297,11 @@ func (m *Manager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEn
 	if !ok {
 		return nil
 	}
-	if remote.RemoteOwnershipState() == entity.RemoteOwnershipUnknown {
+	switch remote.RemoteOwnershipState() {
+	case entity.RemoteOwnershipUnknown, entity.RemoteOwnershipRecovering:
+		// Unknown: first contact. Recovering: frozen by an indeterminate
+		// transition (U-0188); beginOwnershipTransition re-read the authority
+		// and lease names us again, so thaw before moving on.
 		initial := entity.RemoteOwnershipLocalOwned
 		if lease.Shared {
 			initial = entity.RemoteOwnershipShared
