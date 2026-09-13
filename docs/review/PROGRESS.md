@@ -2,6 +2,22 @@
 
 最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-13 第二轮最新进度：L1/L2 一致性
+
+Core `2724442d886d9bb3ee5617d7ded814ce0f5267cc`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。无源码增量，无新修复。
+
+| 范围 | 实际证据 | 状态/下一入口 |
+| --- | --- | --- |
+| L2 冲突→ReadThrough→L1 | 真实组合吞冲突；网络降级对照通过 | RR-05，错误分类待修 |
+| L2 读响应与 Publish 交错 | 屏障验证同版本回填覆盖 | RR-06，统一 apply 边界待修 |
+| L2 schema/codec 规则 | schema 实测接受；本地拒绝；Lua 源码比较核对 | RR-07，真实 Redis/codec/数值域待验 |
+| 快照 ExpiresAt | 已过期仍命中 | RR-08，绝对期限与 TTL 组合待修 |
+| 权威回填失败后重试 | 下次读成功，未遗留失败 call | 部分场景通过；后台恢复未验 |
+| entity/cache/remoteentity | 三包完整 race 通过 | 非全链路无问题证明 |
+| kit/codegen | 仅同步，无新增行为覆盖 | 保留后续轮转 |
+
+[运行](REVIEW-2026-09-13-02.md) · [问题](../bug/REVIEW-2026-09-13-02.md) · [实现学习](IMPLEMENTATION-REMOTE-L1-L2-CONSISTENCY.md)。
+
 ## 2026-09-13 最新进度：Remote 复制与恢复
 
 Core `617738b1cb61f8a4f35f6d5e8365d2f525a08b0b`，Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`；三仓同步无增量。旧 bug 与 Mirror 方案未修/未实施。
