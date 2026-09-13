@@ -1,5 +1,7 @@
 # RemotePolicy Mirror 实施交接
 
+收尾同步：首次推送因远端前进被拒，已正常 merge `06fdd2dc319856c6645ddfb79eba6c4171f681c0`。该提交新增 U-0180/0181/0183/0184 和 U-0175 补充修复，涉及 RR-20260913-02/05/06/08、RR-20260911-06。以上测试仍对应原审查 SHA；新修复待下一轮独立验收，旧状态描述是历史快照。保留远端源码和 bugfix 说明，未将其当作本轮已验证。
+
 后续验收细化：[生命周期实测](IMPLEMENTATION-MIRROR-LIFECYCLE.md)，第 3–4 步需覆盖在途工作和旧回调隔离。
 
 2026-09-13，基线 Core `d7832e8249a4b8dca123fa7e28268fa05e78118a`，Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`。**本文是待实施方案；没有新增运行时 API，也没有修复代码。** 现有能力与源码依据见[机制说明](IMPLEMENTATION-REMOTE-POLICY-MIRROR.md)，本轮范围见[运行记录](REVIEW-2026-09-13-05.md)。
