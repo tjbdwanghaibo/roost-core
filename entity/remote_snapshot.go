@@ -217,33 +217,55 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		// "value" includes how its bytes are read (RR-20260913-06).
 		Conflict: remoteSnapshotSameVersionConflict,
 	}
+	c := &RemoteSnapshotCache{
+		tombstones:   make(map[RemoteSnapshotKey]remoteSnapshotTombstone),
+		tombstoneTTL: cfg.TombstoneTTL,
+	}
+	// The delete watermark is part of the same L1 admission rule: an L2
+	// backfill captured before a DeleteAtVersion must not land after it
+	// (RR-20260913-01 复核). Evaluated under the L1 shard lock; tombMu nests
+	// inside it and is never held while taking a shard lock.
+	storeCfg.Superseded = func(next RemoteSnapshotEnvelope) bool {
+		return c.deletedAtOrAfter(next.Key, next.StateVersion, time.Now())
+	}
 	local := cache.NewAtomicLocalStore(cache.AtomicLocalConfig[RemoteSnapshotKey, RemoteSnapshotEnvelope]{
 		StoreConfig: storeCfg, Shards: cfg.Shards, MaxEntries: cfg.MaxEntries,
 		MaxBytes: cfg.MaxBytes, DefaultTTL: cfg.TTL,
 		SizeOf: func(value RemoteSnapshotEnvelope) int64 { return int64(value.Payload.Len() + 96) },
 	})
-	return &RemoteSnapshotCache{
-		local: local,
-		l2:    l2,
-		layered: cache.NewReadThroughStore(local, l2, nil, storeCfg, cache.ReadThroughOptions{
-			LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters,
-			// Publish holds a publish shard lock across the L2 write (single
-			// point publish is what makes the version CAS meaningful), so the
-			// L2 call has to be bounded or an unresponsive Redis pins that
-			// shard for every entity hashing to it. IgnoreRemoteError already
-			// makes the degraded outcome the right one: skip L2, keep L1.
-			RemoteTimeout: cfg.LoadTimeout, IgnoreRemoteError: true,
-		}),
-		waiters:     make(map[RemoteSnapshotKey][]remoteVersionWaiter),
-		maxWaiters:  cfg.MaxWaiters,
-		loader:      loader,
-		loads:       make(map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall),
-		loadSlots:   make(chan struct{}, cfg.MaxConcurrentLoads),
-		loadTimeout: cfg.LoadTimeout,
+	c.local = local
+	c.l2 = l2
+	c.layered = cache.NewReadThroughStore(local, l2, nil, storeCfg, cache.ReadThroughOptions{
+		LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters,
+		// Publish holds a publish shard lock across the L2 write (single
+		// point publish is what makes the version CAS meaningful), so the
+		// L2 call has to be bounded or an unresponsive Redis pins that
+		// shard for every entity hashing to it. IgnoreRemoteError already
+		// makes the degraded outcome the right one: skip L2, keep L1 — for
+		// outages. A version-conflict verdict from L2 is not an outage and
+		// must reach the publisher (RR-20260913-05 复核): the cold-L1
+		// pre-check in Publish only finds conflicts early, the L2 CAS is
+		// the atomic boundary and its answer is the one that counts.
+		RemoteTimeout: cfg.LoadTimeout, IgnoreRemoteError: true,
+		FatalRemoteError: func(err error) bool {
+			return errors.Is(err, ErrRemoteVersionConflict) || errors.Is(err, cache.ErrConflictingWrite)
+		},
+	})
+	c.waiters = make(map[RemoteSnapshotKey][]remoteVersionWaiter)
+	c.maxWaiters = cfg.MaxWaiters
+	c.loader = loader
+	c.loads = make(map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall)
+	c.loadSlots = make(chan struct{}, cfg.MaxConcurrentLoads)
+	c.loadTimeout = cfg.LoadTimeout
+	return c
+}
 
-		tombstones:   make(map[RemoteSnapshotKey]remoteSnapshotTombstone),
-		tombstoneTTL: cfg.TombstoneTTL,
-	}
+// RemoteSnapshotVersionedDeleter is the optional L2 capability behind
+// DeleteAtVersion: delete only if the stored snapshot is not newer than
+// version, compared atomically on the L2 side. An L2 without it is deleted
+// unconditionally, which is the pre-U-0187 behaviour for that layer.
+type RemoteSnapshotVersionedDeleter interface {
+	DeleteAtVersion(ctx context.Context, key RemoteSnapshotKey, version uint64) error
 }
 
 func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
@@ -532,7 +554,19 @@ func (c *RemoteSnapshotCache) DeleteAtVersion(ctx context.Context, key RemoteSna
 		return nil
 	}
 	c.rememberTombstone(key, version, time.Now())
-	return c.layered.Delete(ctx, key)
+	deleter, versioned := c.l2.(RemoteSnapshotVersionedDeleter)
+	if !versioned {
+		return c.layered.Delete(ctx, key)
+	}
+	// L2 is shared: an L1 that knows nothing about the key says nothing
+	// about what L2 holds, so the version comparison has to happen there
+	// (RR-20260913-01 复核: cold L1, L2 at v3, delete v2 must keep v3). The
+	// call is bounded like every other L2 write and an outage degrades the
+	// same way ReadThrough.Delete does — L1 is still dropped.
+	remoteCtx, cancel := context.WithTimeout(ctx, c.loadTimeout)
+	_ = deleter.DeleteAtVersion(remoteCtx, key, version)
+	cancel()
+	return c.local.Delete(ctx, key)
 }
 
 // rememberTombstone records a delete at version; a newer existing tombstone

@@ -172,6 +172,10 @@ func (s *AtomicLocalStore[K, V]) SetWithTTL(_ context.Context, value V, ttl time
 	shard := s.shard(key)
 	shard.mu.Lock()
 	old, exists := shard.items[key]
+	if s.cfg.Superseded != nil && s.cfg.Superseded(value) {
+		shard.mu.Unlock()
+		return ErrStaleWrite
+	}
 	if exists && s.cfg.Stale != nil && s.cfg.Stale(old.value, value) {
 		shard.mu.Unlock()
 		return ErrStaleWrite

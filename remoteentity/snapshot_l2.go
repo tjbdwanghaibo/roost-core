@@ -12,7 +12,8 @@ import (
 	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
-const remoteSnapshotL2CAS = `
+// remoteSnapshotL2Lua holds the helpers every L2 script shares.
+const remoteSnapshotL2Lua = `
 -- Versions, marker epochs and route epochs are uint64 on the Go side. Lua
 -- numbers are float64, so tonumber collapses adjacent values above 2^53 and
 -- the ordering this CAS exists to enforce silently breaks (RR-20260913-10).
@@ -31,7 +32,9 @@ local function cmp(a, b)
   if a == b then return 0 end
   if a < b then return -1 else return 1 end
 end
-local oldMarker = redis.call("HGET", KEYS[1], "marker") or "0"
+`
+
+const remoteSnapshotL2CAS = remoteSnapshotL2Lua + `local oldMarker = redis.call("HGET", KEYS[1], "marker") or "0"
 local oldRoute = redis.call("HGET", KEYS[1], "route") or "0"
 local oldVersion = redis.call("HGET", KEYS[1], "version") or "0"
 local oldChecksum = redis.call("HGET", KEYS[1], "checksum") or ""
@@ -53,6 +56,17 @@ redis.call("HSET", KEYS[1], "marker", ARGV[1], "route", ARGV[2], "version", ARGV
   "checksum", ARGV[4], "schema", ARGV[7], "codec", ARGV[8], "data", ARGV[5])
 local ttl = tonumber(ARGV[6])
 if ttl and ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
+return 1
+`
+
+// remoteSnapshotL2DeleteAtVersion deletes the key unless it holds a
+// snapshot newer than ARGV[1]. Compared as an exact decimal string like the
+// CAS above; a delete is ordered against the versions of one key only, so
+// epochs are not part of it (U-0187 复核补修, RR-20260913-01).
+const remoteSnapshotL2DeleteAtVersion = remoteSnapshotL2Lua + `
+local stored = redis.call("HGET", KEYS[1], "version")
+if stored and cmp(stored, ARGV[1]) > 0 then return 0 end
+redis.call("DEL", KEYS[1])
 return 1
 `
 
@@ -165,6 +179,19 @@ func (s *remoteSnapshotL2Store) Delete(ctx context.Context, key entity.RemoteSna
 	_, err := s.redis.Del(ctx, remoteSnapshotL2Key(key))
 	return err
 }
+
+// DeleteAtVersion implements entity.RemoteSnapshotVersionedDeleter: the
+// comparison and the delete run in one script, so a newer snapshot that lands
+// between "read version" and "DEL" cannot be lost.
+func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.RemoteSnapshotKey, version uint64) error {
+	if s == nil || s.redis == nil || !key.Valid() {
+		return nil
+	}
+	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{remoteSnapshotL2Key(key)}, strconv.FormatUint(version, 10))
+	return err
+}
+
+var _ entity.RemoteSnapshotVersionedDeleter = (*remoteSnapshotL2Store)(nil)
 
 func remoteSnapshotL2Key(key entity.RemoteSnapshotKey) string {
 	return fmt.Sprintf("remote_entity:snapshot:%d:%d:%d:%d:%d", key.Tenant, key.Kind, key.EntityID, key.Scope, key.Policy)

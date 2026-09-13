@@ -591,19 +591,58 @@ func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.Re
 	return nil
 }
 
+// interestGenerationClock is the process-wide high-water mark of every
+// interest generation issued by any Manager in this process. A Manager seeds
+// strictly above it, so two instances created within the same clock tick (a
+// restart harness, coarse clocks on Windows — RR-20260913-02 复核) cannot
+// both start at the same UnixNano and re-issue each other's generations. It
+// does not survive the process; across restarts the clock is the guarantee.
+var interestGenerationClock atomic.Uint64
+
+// interestGenerationNow is the clock behind the seed; a variable so tests can
+// freeze it and prove the ordering does not depend on nanosecond resolution.
+var interestGenerationNow = func() uint64 { return uint64(time.Now().UnixNano()) }
+
+// seedInterestGeneration returns a seed above both now and every generation
+// already issued in this process, and records it as issued.
+func seedInterestGeneration(now uint64) uint64 {
+	for {
+		last := interestGenerationClock.Load()
+		next := now
+		if next <= last {
+			next = last + 1
+		}
+		if interestGenerationClock.CompareAndSwap(last, next) {
+			return next
+		}
+	}
+}
+
+// noteInterestGenerationIssued raises the process-wide high-water mark.
+func noteInterestGenerationIssued(generation uint64) {
+	for {
+		last := interestGenerationClock.Load()
+		if generation <= last || interestGenerationClock.CompareAndSwap(last, generation) {
+			return
+		}
+	}
+}
+
 // nextInterestGeneration issues the next generation for this consumer's
 // interest messages. The first call seeds from the clock (see the field).
 func (m *Manager) nextInterestGeneration() uint64 {
 	for {
 		current := m.remote.interestGeneration.Load()
 		if current == 0 {
-			seed := uint64(time.Now().UnixNano())
+			seed := seedInterestGeneration(interestGenerationNow())
 			if !m.remote.interestGeneration.CompareAndSwap(0, seed) {
 				continue
 			}
 			current = seed
 		}
-		return m.remote.interestGeneration.Add(1)
+		generation := m.remote.interestGeneration.Add(1)
+		noteInterestGenerationIssued(generation)
+		return generation
 	}
 }
 

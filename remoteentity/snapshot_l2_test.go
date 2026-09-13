@@ -32,15 +32,10 @@ func (f *snapshotRedisFake) HGet(_ context.Context, key, field string) ([]byte, 
 	return append([]byte(nil), value...), nil
 }
 
-func (f *snapshotRedisFake) Eval(_ context.Context, _ string, keys []string, args ...any) (any, error) {
+func (f *snapshotRedisFake) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	fields := f.values[keys[0]]
-	if fields == nil {
-		fields = make(map[string][]byte)
-		f.values[keys[0]] = fields
-	}
-	// Mirrors the script exactly: ordered fields are compared as decimal
+	// Mirrors the scripts exactly: ordered fields are compared as decimal
 	// strings and stored verbatim, and the same-version check covers schema
 	// and codec as well as the payload checksum.
 	norm := func(v string) string {
@@ -61,6 +56,19 @@ func (f *snapshotRedisFake) Eval(_ context.Context, _ string, keys []string, arg
 		return strings.Compare(a, b)
 	}
 	arg := func(value any) string { return fmt.Sprint(value) }
+	if script == remoteSnapshotL2DeleteAtVersion {
+		existing, held := f.values[keys[0]]
+		if held && cmp(string(existing["version"]), arg(args[0])) > 0 {
+			return int64(0), nil
+		}
+		delete(f.values, keys[0])
+		return int64(1), nil
+	}
+	fields := f.values[keys[0]]
+	if fields == nil {
+		fields = make(map[string][]byte)
+		f.values[keys[0]] = fields
+	}
 	oldMarker, oldRoute, oldVersion := string(fields["marker"]), string(fields["route"]), string(fields["version"])
 	marker, route, version := arg(args[0]), arg(args[1]), arg(args[2])
 	markerCmp, routeCmp := cmp(marker, oldMarker), cmp(route, oldRoute)

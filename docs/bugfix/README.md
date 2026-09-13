@@ -65,3 +65,11 @@
 | RR-20260912-02 | 有序屏障 / LSN 水位 | Sync 往 appendCh 放 `barrier` 请求,收批即答,答后再 fsync(U-0185) |
 
 未修复清单为空。EnterShared / LeaveShared 的同类失败恢复(审查留给后续验收)尚未纳入。
+
+### 第七轮复核后的补修(不新编号,记在原 RR 记录末尾)
+
+| 原 RR | 归属 U | 残余 | 补修 |
+| --- | --- | --- | --- |
+| RR-20260913-01 | U-0187 | 在途 L2 回填越过墓碑;冷 L1 的旧删除清掉较新的 L2 | `StoreConfig.Superseded` 让三条 L1 写入口共用删除水位;L2 新增 `DeleteAtVersion` 脚本 |
+| RR-20260913-05 | U-0180 | 预检查之后的 L2.Set 冲突仍被 IgnoreRemoteError 吞掉 | `ReadThroughOptions.FatalRemoteError` 分类,冲突不降级 |
+| RR-20260913-02 | U-0184 | 同一时钟刻度创建的两个 Manager 代际不递增(Windows 实测) | 进程级代际高水位,播种取 `max(now, 已发出+1)` |

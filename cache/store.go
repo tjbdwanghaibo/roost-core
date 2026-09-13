@@ -62,6 +62,14 @@ type StoreConfig[K comparable, V any] struct {
 	// that writes the local store — publish, loader fill, L2 backfill —
 	// enforces one rule (RR-20260913-06). Optional.
 	Conflict func(old, next V) bool
+	// Superseded reports that next is already behind something the store
+	// cannot see in its own entries — typically a delete recorded at a
+	// newer version. Unlike Stale it is asked even when the key is absent,
+	// because that is exactly the state a delete leaves behind. Checked
+	// under the same lock as Stale and Conflict, so publish, loader fill and
+	// L2 backfill share one admission rule (RR-20260913-01 复核). Refused
+	// writes return ErrStaleWrite. Optional.
+	Superseded func(next V) bool
 }
 
 func (c StoreConfig[K, V]) keyOf(value V) (K, error) {

@@ -38,6 +38,12 @@
 
 ### Fixed
 
+- **第七轮复核残余补修:删除水位覆盖全部 L1 写入口、L2 按版本删除、L2 冲突不降级、代际播种进程级单调**(归 U-0187 / U-0180 / U-0184;RR-20260913-01/05/02;T-74、T-81 更新)。
+  `cache.StoreConfig.Superseded`(键不存在也判、与 Stale/Conflict 同锁)让 publish / loader fill / L2 回填共用删除水位,`ReadThrough.loadOne` 回填被拒时返回 L1 现值或 miss;
+  `cache.ReadThroughOptions.FatalRemoteError` 分类出 IgnoreRemoteError 不得吞的错误,entity 配置为版本冲突;
+  新增 `entity.RemoteSnapshotVersionedDeleter`,`remoteSnapshotL2Store.DeleteAtVersion` 用共享的精确十进制比较脚本只删不比自己新的;
+  interest 代际播种取 `max(now, 本进程已发出+1)`。
+  测试:`snapshot_delete_l2_promises_test.go`、`snapshot_l2_delete_promises_test.go`、`interest_generation_seed_promises_test.go`;记录见各 RR 文件末尾的"复核后的补修"。
 - **WAL Sync 写屏障、Committer 可取消的停机等待、快照版本化删除与所有权转移的不确定态**(U-0185～U-0188;RR-20260912-01/02、RR-20260913-01/09;T-79～T-82)。
   `WAL.Sync` 先往写队列放一个屏障请求、收到答复再 fsync,返回 nil 即覆盖调用前所有已 Enqueue 的 ticket(此前只 fsync 文件,BatchDelay 窗口内的记录不在其中)。
   `Committer` 的 `flushMu` / `replayMu` 换成一格信号量,`Flush` / `Shutdown` 等待 replay 所有权时随调用方 ctx 取消。

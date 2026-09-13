@@ -61,6 +61,18 @@ func (f *l2Fake) Delete(_ context.Context, key RemoteSnapshotKey) error {
 	return nil
 }
 
+// DeleteAtVersion mirrors the real L2's versioned delete (U-0187 复核补修):
+// a stored snapshot newer than version survives.
+func (f *l2Fake) DeleteAtVersion(_ context.Context, key RemoteSnapshotKey, version uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if current, ok := f.values[key]; ok && current.StateVersion > version {
+		return nil
+	}
+	delete(f.values, key)
+	return nil
+}
+
 var _ cache.Store[RemoteSnapshotKey, RemoteSnapshotEnvelope] = (*l2Fake)(nil)
 
 func l2ConflictKey(t *testing.T, kind EntityKind, unique int64) RemoteSnapshotKey {

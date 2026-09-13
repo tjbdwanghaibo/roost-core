@@ -27,6 +27,13 @@ type ReadThroughOptions struct {
 	// when the caller's own context carries a deadline.
 	RemoteTimeout     time.Duration
 	IgnoreRemoteError bool
+	// FatalRemoteError classifies L2 errors that IgnoreRemoteError must NOT
+	// degrade around. IgnoreRemoteError exists for outages — L2 unreachable,
+	// keep L1 usable. A remote store can also answer with a consistency
+	// verdict (this version already holds a different value); treating that
+	// as an outage writes the rejected value into L1 and reports success
+	// (RR-20260913-05 复核). Optional; nil means every error is an outage.
+	FatalRemoteError func(error) bool
 }
 
 type ReadThroughStats struct {
@@ -149,10 +156,20 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 			// DIFFERENT value for this same version, L1 is what this process
 			// has already handed out; the L2 copy does not get to silently
 			// replace it, and the caller sees what L1 holds (RR-20260913-06).
-			if err := s.setLocal(ctx, value); errors.Is(err, ErrConflictingWrite) {
+			switch err := s.setLocal(ctx, value); {
+			case errors.Is(err, ErrConflictingWrite):
 				if current, held, getErr := s.local.Get(ctx, key); getErr == nil && held {
 					return current, true, nil
 				}
+			case errors.Is(err, ErrStaleWrite):
+				// L1 refused the backfill as superseded (a delete recorded at a
+				// newer version while this read was in flight, RR-20260913-01
+				// 复核). The captured L2 value is the past: hand out what L1
+				// holds, or a miss — never the value L1 just refused.
+				if current, held, getErr := s.local.Get(ctx, key); getErr == nil && held {
+					return current, true, nil
+				}
+				return zero, false, nil
 			}
 			return value, true, nil
 		}
@@ -166,7 +183,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		return value, ok, err
 	}
 	if s.remote != nil {
-		if err := s.remote.Set(ctx, value); err != nil && !s.opts.IgnoreRemoteError {
+		if err := s.remote.Set(ctx, value); err != nil && !s.degradable(err) {
 			return zero, false, err
 		}
 	}
@@ -174,6 +191,15 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		return zero, false, err
 	}
 	return value, true, nil
+}
+
+// degradable reports whether an L2 error may be absorbed under
+// IgnoreRemoteError: outages yes, consistency verdicts never.
+func (s *ReadThroughStore[K, V]) degradable(err error) bool {
+	if !s.opts.IgnoreRemoteError {
+		return false
+	}
+	return s.opts.FatalRemoteError == nil || !s.opts.FatalRemoteError(err)
 }
 
 func (s *ReadThroughStore[K, V]) Set(ctx context.Context, value V) error {
@@ -194,7 +220,7 @@ func (s *ReadThroughStore[K, V]) Set(ctx context.Context, value V) error {
 		err := s.remote.Set(remoteCtx, value)
 		if err != nil {
 			s.remoteError.Add(1)
-			if !s.opts.IgnoreRemoteError {
+			if !s.degradable(err) {
 				return err
 			}
 		}
