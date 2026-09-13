@@ -15,9 +15,18 @@ import (
 
 const SyncTopicInterest = "remote_entity_interest"
 
+// interestLease is what the registry keeps per consumer: when the lease ends
+// and which renewal established it. A release only cancels a lease whose
+// generation it is not older than, so a release that arrives after a newer
+// renewal — reordered on the wire, or replayed — leaves that renewal alone.
+type interestLease struct {
+	expiresAt  int64
+	generation uint64
+}
+
 type remoteInterestRegistry struct {
 	mu      sync.Mutex
-	entries map[entity.RemoteSnapshotKey]map[int32]int64
+	entries map[entity.RemoteSnapshotKey]map[int32]interestLease
 	total   int
 	maxKeys int
 	maxSubs int
@@ -32,7 +41,7 @@ func newRemoteInterestRegistry(limits ...int) *remoteInterestRegistry {
 		maxSubs = limits[1]
 	}
 	return &remoteInterestRegistry{
-		entries: make(map[entity.RemoteSnapshotKey]map[int32]int64),
+		entries: make(map[entity.RemoteSnapshotKey]map[int32]interestLease),
 		maxKeys: maxKeys,
 		maxSubs: maxSubs,
 	}
@@ -56,11 +65,19 @@ func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInt
 	consumers := r.entries[interest.Key]
 	if consumers != nil {
 		if current, exists := consumers[interest.ConsumerSID]; exists {
-			if remainingThreshold > 0 && current-now > remainingThreshold.Nanoseconds() {
+			if interest.Generation < current.generation {
+				// A renewal older than the lease on record: reordered or
+				// replayed. It must not move the lease in either direction.
 				return false, nil
 			}
-			if interest.ExpiresAt > current {
-				consumers[interest.ConsumerSID] = interest.ExpiresAt
+			if remainingThreshold > 0 && current.expiresAt-now > remainingThreshold.Nanoseconds() {
+				return false, nil
+			}
+			if interest.ExpiresAt > current.expiresAt || interest.Generation > current.generation {
+				consumers[interest.ConsumerSID] = interestLease{
+					expiresAt:  max(interest.ExpiresAt, current.expiresAt),
+					generation: interest.Generation,
+				}
 			}
 			return true, nil
 		}
@@ -74,21 +91,26 @@ func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInt
 		return false, entity.ErrRemoteOverloaded
 	}
 	if consumers == nil {
-		consumers = make(map[int32]int64)
+		consumers = make(map[int32]interestLease)
 		r.entries[interest.Key] = consumers
 	}
-	consumers[interest.ConsumerSID] = interest.ExpiresAt
+	consumers[interest.ConsumerSID] = interestLease{expiresAt: interest.ExpiresAt, generation: interest.Generation}
 	r.total++
 	return true, nil
 }
 
-func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerSID int32) {
+// release withdraws one consumer's lease, but only if the release is not
+// older than the renewal that established it. A stale release used to delete
+// whatever was there, so a renewal that overtook it on the wire was silently
+// cancelled and the publisher's interest filter stopped sending updates the
+// consumer still expected (RR-20260913-02).
+func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerSID int32, generation uint64) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	consumers := r.entries[key]
-	if _, exists := consumers[consumerSID]; exists {
+	if current, exists := consumers[consumerSID]; exists && generation >= current.generation {
 		delete(consumers, consumerSID)
 		r.total--
 	}
@@ -105,8 +127,8 @@ func (r *remoteInterestRegistry) interested(key entity.RemoteSnapshotKey) bool {
 	now := time.Now().UnixNano()
 	r.mu.Lock()
 	consumers := r.entries[key]
-	for sid, expiresAt := range consumers {
-		if expiresAt <= now {
+	for sid, lease := range consumers {
+		if lease.expiresAt <= now {
 			delete(consumers, sid)
 			r.total--
 			continue
@@ -123,8 +145,8 @@ func (r *remoteInterestRegistry) interested(key entity.RemoteSnapshotKey) bool {
 
 func (r *remoteInterestRegistry) pruneExpiredLocked(now int64) {
 	for key, consumers := range r.entries {
-		for sid, expiresAt := range consumers {
-			if expiresAt <= now {
+		for sid, lease := range consumers {
+			if lease.expiresAt <= now {
 				delete(consumers, sid)
 				r.total--
 			}
@@ -151,7 +173,7 @@ func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelop
 		return err
 	}
 	if wire.Release {
-		s.mgr.remote.interests.release(wire.Interest.Key, wire.Interest.ConsumerSID)
+		s.mgr.remote.interests.release(wire.Interest.Key, wire.Interest.ConsumerSID, wire.Interest.Generation)
 	} else {
 		if err := s.mgr.remote.interests.renew(wire.Interest); err != nil {
 			return err

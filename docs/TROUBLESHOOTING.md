@@ -66,6 +66,11 @@
 | T-70 | 同一版本的快照在不同进程解码结果不同 | core ≤ v1.15.2 的 L2 CAS 只比 checksum,而 checksum 只覆盖 payload 字节,schema / codec 可以被同版本改掉 | 本地缓存拒绝而 L2 接受同一次发布 | 升级 core 并让所有发布方同时升级 |
 | T-71 | 版本号超过 2^53 之后,较旧的快照写入被接受、版本回退;或真正更新的版本被判为同版本冲突 | core ≤ v1.15.2 的 L2 脚本用 Lua 的 `tonumber` 比较,Lua 数值是 float64 | 版本量级在 9007199254740992 附近 | 升级 core;迁移或导入大版本号前先升级 |
 | T-72 | `GetOwnership` 报 `invalid marker lease "shared:1001:1e+14:1"`,且此后一直失败 | core ≤ v1.15.2 的 marker 脚本拼接 Lua 数值,Lua 5.1 用 `%.14g` 渲染,10^14 变成科学计数法并已写入 Redis | lease 字符串里出现 `e+` | 升级 core;已损坏的记录要人工改回十进制或重新 claim |
+| T-74 | 同一快照版本,本进程 L1 与 Redis L2 内容不同,而发布返回成功 | core ≤ v1.15.2 对 L2 的 `ErrRemoteVersionConflict` 与网络错误一视同仁地降级 | 冷 L1 进程发布时 L2 已有同版本不同内容 | 升级 core(冷 L1 发布先问 L2 一次,冲突即报错);排查两边发布方谁写了不同内容 |
+| T-75 | 刚发布的快照被"读一次"后变回旧内容 | core ≤ v1.15.2 的 L2 回填直接覆盖 L1,不做同版本内容校验 | 读与发布并发、L2 仍是旧内容 | 升级 core(`Conflict` 钩子在分片锁下把关,回填不覆盖) |
+| T-76 | MemoryStore 上被拒的投递之后,邮箱 `Unread` 与实际未读条目数不一致,墓碑越过上限 | kit ≤ v1.14.3 的 mail Update 回调直接改共享 map 再返回 save=false | 仅 MemoryStore;Redis 每次解码新对象 | 升级 kit(回调先 clone) |
+| T-77 | 事务已持久化(WAL LSN 前进、状态已变)但调用方收到超时/取消;或 completion 饱和时进程直接退出 | core ≤ v1.15.2 的 `Commit` 一个业务 AfterCommit panic 就跳过后续回调与回复;饱和内联回退无恢复边界 | 日志有 `after-commit callback panic`;`async_total{result="completion_failed"}`(新) | 升级 core;业务按幂等重试;回复里的 `ErrAfterCommitFailed` 表示"已提交但收尾失败",不要当回滚处理 |
+| T-78 | 某消费者续租了兴趣,却收不到后续快照更新,本地又认为兴趣有效 | core ≤ v1.15.2 的兴趣 release 按 key/SID 无条件删,迟到的旧 release 取消了新 renewal | 网络重排或重放时出现;下一次成功续租可恢复 | 升级 core(renew/release 带只增代际);混合部署期旧版本消息代际为 0,偏向保留兴趣 |
 | T-73 | 一条快照消息按某个 scope 路由,却改动了另一个 scope 的缓存 | core ≤ v1.15.2 的 `ApplyReplica` 不校验 payload 里的 key / version 与信封是否一致 | 需要发布方有缺陷或能写内部 topic | 升级 core(不一致即拒绝,不落写) |
 | T-67 | `StopFinalizer` 成功返回后再 `Close` 批次,`Close` 返回 nil 但 writeGate、ownership 读锁与 finalize slot 没有释放 | core ≤ v1.15.2 的 `deferRemoteClose` 靠 select 分支退出,而队列可写与 ctx 已关闭同时就绪时 Go 随机选,交接给了没人排空的队列 | 停止后遗留的 slot 数不固定;`finalizeOnce` 使重启无法收拾 | 升级 core;旧版本先排空所有 batch 再停 finalizer |
 | T-63 | 从 checkpoint 恢复后,`InspectCast` 能查到的已完成技能与恢复前不是同一批 | core ≤ v1.15.2 的快照按 ID 序列化 casts,恢复时按这个顺序重建完成队列,而淘汰是从"最旧完成"的队头走 | 创建顺序与完成顺序交错、且完成数超过 `CompletedCastLimit` 时才出现 | 升级 core 后重新生成 checkpoint;旧快照恢复后退化为按 ID 顺序,与旧行为一致 |

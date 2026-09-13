@@ -112,6 +112,10 @@ type RemoteSnapshotCacheConfig struct {
 // RemoteSnapshotCache is the entity-specific adapter over core/cache. Epoch,
 // scope, and minimum-version rules stay here instead of polluting cache.Store.
 type RemoteSnapshotCache struct {
+	// l2 is kept alongside layered so Publish can ask L2 directly before it
+	// writes: ReadThrough treats every L2 error as degradable, which is right
+	// for an outage and wrong for a version conflict (RR-20260913-05).
+	l2      cache.Store[RemoteSnapshotKey, RemoteSnapshotEnvelope]
 	local   *cache.AtomicLocalStore[RemoteSnapshotKey, RemoteSnapshotEnvelope]
 	layered *cache.ReadThroughStore[RemoteSnapshotKey, RemoteSnapshotEnvelope]
 
@@ -178,6 +182,10 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		},
 		ValidateKey:   func(key RemoteSnapshotKey) bool { return key.Valid() },
 		ValidateValue: func(value RemoteSnapshotEnvelope) error { return value.Valid() },
+		// One rule for every write into L1 — publish, loader fill and L2
+		// backfill alike: the same version must be the same value, where
+		// "value" includes how its bytes are read (RR-20260913-06).
+		Conflict: remoteSnapshotSameVersionConflict,
 	}
 	local := cache.NewAtomicLocalStore(cache.AtomicLocalConfig[RemoteSnapshotKey, RemoteSnapshotEnvelope]{
 		StoreConfig: storeCfg, Shards: cfg.Shards, MaxEntries: cfg.MaxEntries,
@@ -186,6 +194,7 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 	})
 	return &RemoteSnapshotCache{
 		local: local,
+		l2:    l2,
 		layered: cache.NewReadThroughStore(local, l2, nil, storeCfg, cache.ReadThroughOptions{
 			LocalTTL: cfg.TTL, LoadTimeout: cfg.LoadTimeout, MaxWaitersPerKey: cfg.MaxWaiters,
 			// Publish holds a publish shard lock across the L2 write (single
@@ -233,11 +242,36 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	if snapshot.StateVersion < minVersion {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
+	// Every outward read shares one post-condition: never a snapshot past
+	// its own deadline. The authority's raw answer and whatever L1 keeps
+	// after Publish both have to pass it (RR-20260913-08 复核: the first fix
+	// only covered the cached hit). An expired authoritative answer is a
+	// miss, and is not cached — nothing could ever read it.
+	now := time.Now()
+	if snapshot.Expired(now) {
+		return RemoteSnapshotEnvelope{}, false, nil
+	}
 	if err := c.Publish(loadCtx, snapshot); err != nil {
 		return RemoteSnapshotEnvelope{}, false, err
 	}
 	stored, found, err := c.local.Get(loadCtx, key)
-	return stored.Clone(), found, err
+	if err != nil || !found {
+		return stored.Clone(), found, err
+	}
+	if stored.Expired(now) {
+		return RemoteSnapshotEnvelope{}, false, nil
+	}
+	return stored.Clone(), true, nil
+}
+
+// remoteSnapshotSameVersionConflict reports that next claims old's version
+// but is not the same value. Caller has established the epochs and version
+// match.
+func remoteSnapshotSameVersionConflict(old, next RemoteSnapshotEnvelope) bool {
+	if old.MarkerEpoch != next.MarkerEpoch || old.RouteEpoch != next.RouteEpoch || old.StateVersion != next.StateVersion {
+		return false
+	}
+	return old.Schema != next.Schema || old.Codec != next.Codec || old.Checksum != next.Checksum
 }
 
 func (c *RemoteSnapshotCache) Get(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
@@ -334,13 +368,36 @@ func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapsh
 	lock := &c.publishMu[remoteSnapshotPublishShard(snapshot.Key)]
 	lock.Lock()
 	defer lock.Unlock()
-	if current, ok, err := c.local.Get(ctx, snapshot.Key); err != nil {
+	current, ok, err := c.local.Get(ctx, snapshot.Key)
+	if err != nil {
 		return err
-	} else if ok && current.MarkerEpoch == snapshot.MarkerEpoch && current.RouteEpoch == snapshot.RouteEpoch && current.StateVersion == snapshot.StateVersion {
-		if current.Schema != snapshot.Schema || current.Codec != snapshot.Codec || current.Checksum != snapshot.Checksum {
+	}
+	if ok && current.MarkerEpoch == snapshot.MarkerEpoch && current.RouteEpoch == snapshot.RouteEpoch && current.StateVersion == snapshot.StateVersion {
+		if remoteSnapshotSameVersionConflict(current, snapshot) {
 			return fmt.Errorf("%w: same snapshot version has different content", ErrRemoteVersionConflict)
 		}
-		return nil
+		// Same value. Only its expiry metadata can legitimately move, and only
+		// forward: a fresher deadline from the authority must replace a copy
+		// that has since expired, or an expired L1 entry pins the key at
+		// "expired" for that version forever (RR-20260913-08 复核).
+		if snapshot.ExpiresAt <= current.ExpiresAt {
+			return nil
+		}
+	}
+	if !ok && c.l2 != nil {
+		// L1 knows nothing about this key, so the only place a same-version
+		// value can already exist is L2. Ask it before writing: a conflict
+		// there is a consistency error and must surface, whereas the write
+		// path below treats every L2 error as an outage to degrade around.
+		// An L2 read error IS an outage and is ignored here on purpose.
+		remoteCtx, cancel := context.WithTimeout(ctx, c.loadTimeout)
+		stored, held, getErr := c.l2.Get(remoteCtx, snapshot.Key)
+		cancel()
+		if getErr == nil && held &&
+			stored.MarkerEpoch == snapshot.MarkerEpoch && stored.RouteEpoch == snapshot.RouteEpoch && stored.StateVersion == snapshot.StateVersion &&
+			remoteSnapshotSameVersionConflict(stored, snapshot) {
+			return fmt.Errorf("%w: L2 holds the same snapshot version with different content", ErrRemoteVersionConflict)
+		}
 	}
 	if err := c.layered.Set(ctx, snapshot); err != nil {
 		// Losing to a newer snapshot is the intended outcome here, not a

@@ -26,8 +26,13 @@ type remoteVersionWaiter struct {
 }
 
 type remoteState struct {
-	cache                 *entity.RemoteSnapshotCache
-	interests             *remoteInterestRegistry
+	cache     *entity.RemoteSnapshotCache
+	interests *remoteInterestRegistry
+	// interestGeneration stamps this consumer's renewals and releases. Seeded
+	// from the clock so a restart that reuses the SID starts above anything
+	// the previous process could have issued, instead of at zero where an
+	// old release in flight would outrank every new renewal.
+	interestGeneration    atomic.Uint64
 	localInterestMu       sync.Mutex
 	localInterestLocks    [64]sync.Mutex
 	localInterests        map[entity.RemoteSnapshotKey]int64
@@ -72,14 +77,15 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 		capacity = 4096
 	}
 	state := &remoteState{
-		txs:                   make(map[entity.RemoteTransactionID]*remoteTransactionTracker),
-		txCapacity:            cfg.TransactionTrackLimit,
-		txTTL:                 cfg.TransactionTrackTTL,
-		versions:              make(map[int64]uint64),
-		maxVersions:           cfg.SnapshotCacheEntries,
-		waiters:               make(map[int64][]remoteVersionWaiter),
-		maxWaiters:            cfg.SnapshotMaxWaiters,
-		interests:             newRemoteInterestRegistry(cfg.SnapshotInterestKeys, cfg.SnapshotInterestSubs),
+		txs:         make(map[entity.RemoteTransactionID]*remoteTransactionTracker),
+		txCapacity:  cfg.TransactionTrackLimit,
+		txTTL:       cfg.TransactionTrackTTL,
+		versions:    make(map[int64]uint64),
+		maxVersions: cfg.SnapshotCacheEntries,
+		waiters:     make(map[int64][]remoteVersionWaiter),
+		maxWaiters:  cfg.SnapshotMaxWaiters,
+		interests:   newRemoteInterestRegistry(cfg.SnapshotInterestKeys, cfg.SnapshotInterestSubs),
+		// (interestGeneration is seeded right after construction, below.)
 		localInterests:        make(map[entity.RemoteSnapshotKey]int64),
 		localInterestCapacity: cfg.SnapshotInterestKeys,
 		finalizeCtx:           finalizeCtx, finalizeCancel: finalizeCancel,
@@ -548,7 +554,7 @@ func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.Re
 	}
 	ttl := m.cfg.SnapshotInterestTTL
 	now := time.Now().UnixNano()
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: now + ttl.Nanoseconds()}
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: m.nextInterestGeneration()}
 	stripe := &m.remote.localInterestLocks[uint64(key.EntityID)%uint64(len(m.remote.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
@@ -585,18 +591,34 @@ func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.Re
 	return nil
 }
 
+// nextInterestGeneration issues the next generation for this consumer's
+// interest messages. The first call seeds from the clock (see the field).
+func (m *Manager) nextInterestGeneration() uint64 {
+	for {
+		current := m.remote.interestGeneration.Load()
+		if current == 0 {
+			seed := uint64(time.Now().UnixNano())
+			if !m.remote.interestGeneration.CompareAndSwap(0, seed) {
+				continue
+			}
+			current = seed
+		}
+		return m.remote.interestGeneration.Add(1)
+	}
+}
+
 func (m *Manager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
 	if m == nil || m.remote == nil || !key.Valid() {
 		return entity.ErrRemoteRejected
 	}
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: time.Now().UnixNano()}
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: m.nextInterestGeneration()}
 	stripe := &m.remote.localInterestLocks[uint64(key.EntityID)%uint64(len(m.remote.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
 	m.remote.localInterestMu.Lock()
 	delete(m.remote.localInterests, key)
 	m.remote.localInterestMu.Unlock()
-	m.remote.interests.release(key, m.localSid)
+	m.remote.interests.release(key, m.localSid, interest.Generation)
 	if publisher, ok := m.syncer.(remoteInterestPublisher); ok {
 		return publisher.PublishRemoteInterest(ctx, interest, true)
 	}
@@ -774,7 +796,9 @@ func (m *Manager) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt 
 	m.remote.localInterestMu.Lock()
 	if m.remote.localInterests[key] == expiresAt {
 		delete(m.remote.localInterests, key)
-		m.remote.interests.release(key, m.localSid)
+		// This process withdrawing its own lease locally: no message was
+		// reordered, so the latest generation it issued is the right stamp.
+		m.remote.interests.release(key, m.localSid, m.remote.interestGeneration.Load())
 	}
 	m.remote.localInterestMu.Unlock()
 }
@@ -783,7 +807,7 @@ func (m *Manager) pruneLocalInterestsLocked(now int64) {
 	for key, expiresAt := range m.remote.localInterests {
 		if expiresAt <= now {
 			delete(m.remote.localInterests, key)
-			m.remote.interests.release(key, m.localSid)
+			m.remote.interests.release(key, m.localSid, m.remote.interestGeneration.Load())
 		}
 	}
 }

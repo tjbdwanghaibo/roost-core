@@ -20,6 +20,10 @@ var (
 	// a newer value is the intended outcome tolerate it explicitly with
 	// errors.Is.
 	ErrStaleWrite = errors.New("cache: write refused as stale")
+	// ErrConflictingWrite reports a write that claims an existing version with
+	// a different value. Unlike ErrStaleWrite it is never silently absorbed: a
+	// stale write is merely late, a conflicting write is wrong.
+	ErrConflictingWrite = errors.New("cache: conflicting write for the same version")
 )
 
 type Store[K comparable, V any] interface {
@@ -51,6 +55,13 @@ type StoreConfig[K comparable, V any] struct {
 	Stale         StaleFunc[V]
 	ValidateKey   ValidateKeyFunc[K]
 	ValidateValue ValidateValueFunc[V]
+	// Conflict reports that next claims the SAME version as old but is a
+	// different value — a consistency violation, not an ordering question.
+	// Stale answers "is next older"; Conflict answers "is next a lie about
+	// this version". Checked under the same lock as Stale, so every path
+	// that writes the local store — publish, loader fill, L2 backfill —
+	// enforces one rule (RR-20260913-06). Optional.
+	Conflict func(old, next V) bool
 }
 
 func (c StoreConfig[K, V]) keyOf(value V) (K, error) {

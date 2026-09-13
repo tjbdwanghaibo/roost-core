@@ -36,11 +36,16 @@ var (
 	ErrInvalidEntityLockGroup         = errors.New("nest: invalid entity lock group")
 	ErrRollbackUnsupported            = errors.New("nest: rollback is not supported by all participants")
 	ErrRollbackFailed                 = errors.New("nest: rollback failed")
-	ErrTransactionClosed              = errors.New("nest: transaction is already closed")
-	ErrCommitterRequired              = errors.New("nest: durable transaction committer is required")
-	ErrDurableRemoteWriteUnsupported  = errors.New("nest: durable remote write requires a lease-aware WAL committer")
-	ErrRemoteBroadcastUnsupported     = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
-	ErrCommitRejected                 = errors.New("nest: transaction commit rejected")
+	// ErrAfterCommitFailed reports that a transaction is durable but one of its
+	// after-commit callbacks panicked. The committed state stands; what failed
+	// is work that ran after it, and the caller needs to know the difference
+	// from a rollback (RR-20260911-06).
+	ErrAfterCommitFailed             = errors.New("nest: transaction committed but after-commit work failed")
+	ErrTransactionClosed             = errors.New("nest: transaction is already closed")
+	ErrCommitterRequired             = errors.New("nest: durable transaction committer is required")
+	ErrDurableRemoteWriteUnsupported = errors.New("nest: durable remote write requires a lease-aware WAL committer")
+	ErrRemoteBroadcastUnsupported    = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
+	ErrCommitRejected                = errors.New("nest: transaction commit rejected")
 	// ErrPipelinedCommitterRequired means a handler declared
 	// DurabilityPipelined but the configured committer does not implement
 	// PipelinedTransactionCommitter. This is a deployment configuration error
