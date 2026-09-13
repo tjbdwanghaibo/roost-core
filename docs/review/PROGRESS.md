@@ -2,6 +2,20 @@
 
 最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-13 第四轮最新进度：六项修复验收
+
+Core 已从 `74af2af` 快进到 `e4f07b06cea450dfc4ab22ca8e3f7f39db22b81a`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`、Codegen `cacd627b70991c5d0e38545866610db78e695b53` 无增量。
+
+| 范围 | 实际证据 | 状态/下轮 |
+| --- | --- | --- |
+| RR-03 payload / RR-04 waiter | 原复现均通过，gap 正向通过 | 已修复并独立验收，非全包无问题 |
+| RR-07 schema / RR-10 大版本 / RR-11 epoch | 原真实 Redis 复现均通过；codec/max uint64/四类溢出不写通过 | 已修复并独立验收；未测集群 failover |
+| RR-08 expiry | 原 Cached 通过；Monotonic/Linearizable 权威返回及同版本回填失败 | 部分修复，继续原编号，优先统一 read 出口 |
+| entity/remoteentity/cache/redis/mirror | 五包完整 race 通过 | 不代替三个新失败断言 |
+| 所有权未知结果/L2 apply | 本轮因新增修复优先验收，未继续扩展 | 仍待设计与修复 |
+
+[运行](REVIEW-2026-09-13-04.md) · [验收](../bug/REVIEW-2026-09-13-04.md) · [机制更新](IMPLEMENTATION-REMOTE-L1-L2-CONSISTENCY.md)。临时 Redis 已关闭；历史状态保留在下方各轮快照。
+
 ## 2026-09-13 第三轮最新进度：真实 Redis 与未知结果
 
 Core `18a3790c463011050e4f05a5878d300c6144fdfe`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`；同步无增量，无新修复。

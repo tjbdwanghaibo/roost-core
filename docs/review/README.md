@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-13 第四轮 | 六项修复、真实 Redis 上限与 expiry 返回路径 | 五项验收通过，一项部分修复 | [运行](REVIEW-2026-09-13-04.md)、[验收](../bug/REVIEW-2026-09-13-04.md)、[复现](../bug/REPRO-2026-09-13-04.md) |
 | 2026-09-13 第三轮 | 真实 Redis/Lua、owner 转移回复丢失、计数域 | 新 P2/P3×2；旧两项真实补证；十个场景 | [运行](REVIEW-2026-09-13-03.md)、[实现](IMPLEMENTATION-REMOTE-REDIS-UNCERTAIN-OUTCOMES.md)、[问题](../bug/REVIEW-2026-09-13-03.md)、[复现](../bug/REPRO-2026-09-13-03.md) |
 | 2026-09-13 第二轮 | L1/L2 冲突、回填交错、绝对过期与加载恢复 | 四项新 P2，八个临时场景，三包 race 通过 | [运行](REVIEW-2026-09-13-02.md)、[实现](IMPLEMENTATION-REMOTE-L1-L2-CONSISTENCY.md)、[问题](../bug/REVIEW-2026-09-13-02.md)、[复现](../bug/REPRO-2026-09-13-02.md) |
 | 2026-09-13 | Remote 接收删除/兴趣/身份、加载取消、总线语义 | 四项新 P2；七个临时场景；七包 race 基线通过 | [运行](REVIEW-2026-09-13.md)、[实现](IMPLEMENTATION-REMOTE-REPLICA-ORDERING-AND-RECOVERY.md)、[问题](../bug/REVIEW-2026-09-13.md)、[复现](../bug/REPRO-2026-09-13.md) |

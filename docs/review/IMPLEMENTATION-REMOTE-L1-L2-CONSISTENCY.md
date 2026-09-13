@@ -1,5 +1,11 @@
 # Remote 快照 L1/L2：组合后的正确性边界
 
+## 09-13 第四轮更新：有效期检查必须覆盖提前返回
+
+Core `e4f07b06cea450dfc4ab22ca8e3f7f39db22b81a` 的 U-0175 为普通缓存读增加 expiry 检查，原 Cached 复现通过。但 Linearizable 直接返回 LoadAuthoritative，Monotonic miss 直接返回 loadMonotonic；loader 返回结果与最后读回 L1 的结果均可能绕过新增检查。新增三场景见[验收](../bug/REVIEW-2026-09-13-04.md)。
+
+因此 read 的公共后置条件应覆盖所有出口，而不是只在一条命中分支检查。Publish 同版本去重还可能保留旧 ExpiresAt；无论是否允许同版本续期，都不能以成功返回过期旧值处理。L2 schema 修复及大计数脚本已在真实 Redis 通过，错误降级与统一 apply 设计仍未实施。下方为最初审查基线的历史机制说明。
+
 审查日期 2026-09-13，Core `2724442d886d9bb3ee5617d7ded814ce0f5267cc`。解释现有机制和实测，修复方向尚未实施。见[问题](../bug/REVIEW-2026-09-13-02.md)、[运行](REVIEW-2026-09-13-02.md)。
 
 ## 三条入站路径
