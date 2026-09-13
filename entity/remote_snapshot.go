@@ -254,6 +254,16 @@ func (c *RemoteSnapshotCache) Get(ctx context.Context, key RemoteSnapshotKey, co
 	if err != nil {
 		return snapshot, ok, err
 	}
+	if ok && snapshot.Expired(time.Now()) {
+		// The container TTL says how long this machine keeps a copy; the
+		// envelope's ExpiresAt says how long the DATA is worth anything.
+		// Availability is governed by whichever comes first, so an envelope
+		// past its own deadline is a miss no matter how much cache TTL is
+		// left — serving it returned a snapshot that declared itself expired
+		// (RR-20260913-08). Monotonic then refills from the authority below,
+		// which is the contract; Cached answers "not found".
+		snapshot, ok = RemoteSnapshotEnvelope{}, false
+	}
 	if !ok {
 		if consistency == RemoteReadMonotonic {
 			return c.loadMonotonic(ctx, key, minVersion)
@@ -289,6 +299,18 @@ func (c *RemoteSnapshotCache) loadMonotonic(ctx context.Context, key RemoteSnaps
 		case <-call.done:
 			return call.snapshot.Clone(), call.ok, call.err
 		case <-ctx.Done():
+			// Give the slot back. maxWaiters counts who is WAITING, not who
+			// has ever waited during this load: a follower that times out and
+			// retries used to consume a slot permanently, so a slow authority
+			// refused healthy readers with ErrRemoteOverloaded until the first
+			// load finished (RR-20260913-04). Only decrement while this is
+			// still the current call for the key, or a later generation's
+			// count would be charged for a departure that was not its own.
+			c.loadMu.Lock()
+			if c.loads[callKey] == call {
+				call.waiters--
+			}
+			c.loadMu.Unlock()
 			return RemoteSnapshotEnvelope{}, false, ctx.Err()
 		}
 	}

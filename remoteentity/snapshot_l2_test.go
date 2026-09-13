@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,23 +40,49 @@ func (f *snapshotRedisFake) Eval(_ context.Context, _ string, keys []string, arg
 		fields = make(map[string][]byte)
 		f.values[keys[0]] = fields
 	}
-	parse := func(value any) uint64 {
-		parsed, _ := strconv.ParseUint(fmt.Sprint(value), 10, 64)
-		return parsed
+	// Mirrors the script exactly: ordered fields are compared as decimal
+	// strings and stored verbatim, and the same-version check covers schema
+	// and codec as well as the payload checksum.
+	norm := func(v string) string {
+		trimmed := strings.TrimLeft(v, "0")
+		if trimmed == "" {
+			return "0"
+		}
+		return trimmed
 	}
-	oldMarker, oldRoute, oldVersion := parse(string(fields["marker"])), parse(string(fields["route"])), parse(string(fields["version"]))
-	marker, route, version := parse(args[0]), parse(args[1]), parse(args[2])
-	if marker < oldMarker || route < oldRoute || (marker == oldMarker && route == oldRoute && version < oldVersion) {
+	cmp := func(a, b string) int {
+		a, b = norm(a), norm(b)
+		if len(a) != len(b) {
+			if len(a) < len(b) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	}
+	arg := func(value any) string { return fmt.Sprint(value) }
+	oldMarker, oldRoute, oldVersion := string(fields["marker"]), string(fields["route"]), string(fields["version"])
+	marker, route, version := arg(args[0]), arg(args[1]), arg(args[2])
+	markerCmp, routeCmp := cmp(marker, oldMarker), cmp(route, oldRoute)
+	if markerCmp < 0 || routeCmp < 0 {
 		return int64(0), nil
 	}
-	checksum := fmt.Sprint(args[3])
-	if marker == oldMarker && route == oldRoute && version == oldVersion && len(fields["checksum"]) > 0 && string(fields["checksum"]) != checksum {
+	sameEpoch := markerCmp == 0 && routeCmp == 0
+	versionCmp := cmp(version, oldVersion)
+	if sameEpoch && versionCmp < 0 {
+		return int64(0), nil
+	}
+	checksum, schema, codec := arg(args[3]), arg(args[6]), arg(args[7])
+	if sameEpoch && versionCmp == 0 && len(fields["checksum"]) > 0 &&
+		(string(fields["checksum"]) != checksum || string(fields["schema"]) != schema || string(fields["codec"]) != codec) {
 		return int64(-1), nil
 	}
-	fields["marker"] = []byte(strconv.FormatUint(marker, 10))
-	fields["route"] = []byte(strconv.FormatUint(route, 10))
-	fields["version"] = []byte(strconv.FormatUint(version, 10))
+	fields["marker"] = []byte(marker)
+	fields["route"] = []byte(route)
+	fields["version"] = []byte(version)
 	fields["checksum"] = []byte(checksum)
+	fields["schema"] = []byte(schema)
+	fields["codec"] = []byte(codec)
 	fields["data"] = append([]byte(nil), args[4].([]byte)...)
 	return int64(1), nil
 }

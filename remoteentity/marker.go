@@ -22,22 +22,53 @@ local value = "local:" .. ARGV[2] .. ":1:1"
 redis.call("HSET", KEYS[1], ARGV[1], value)
 return value
 `
-	ownershipEnterSharedScript = `
+	// ownershipDecimalInc adds one to a decimal string without ever turning it
+	// into a Lua number.
+	//
+	// The scripts used to write `.. ((tonumber(x) or 0) + 1)`, which
+	// concatenates a Lua NUMBER, and Lua 5.1 renders numbers with "%.14g":
+	// 10^14 came out as "1e+14". parseMarkerLease only accepts decimal uint64,
+	// so the read failed — AFTER Redis had already stored the unreadable
+	// record, which is the opposite of refusing bad input (RR-20260913-11).
+	// Returning nil past uint64 means the caller refuses before persisting.
+	ownershipDecimalInc = `
+local function incdec(v)
+  if not v or v == "" then v = "0" end
+  v = string.gsub(v, "^0+", "")
+  if v == "" then v = "0" end
+  local out = {}
+  local carry = 1
+  for i = #v, 1, -1 do
+    local d = string.byte(v, i) - 48 + carry
+    if d >= 10 then d = d - 10 carry = 1 else carry = 0 end
+    out[i] = string.char(48 + d)
+  end
+  local s = table.concat(out)
+  if carry == 1 then s = "1" .. s end
+  if #s > 20 or (#s == 20 and s > "18446744073709551615") then return nil end
+  return s
+end
+`
+	ownershipEnterSharedScript = ownershipDecimalInc + `
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 local expected = ARGV[2]
 if not current or current ~= expected then return "" end
 local mode, owner, currentFence, currentRoute = string.match(current, "^(%a+):(-?%d+):(%d+):(%d+)$")
 if mode ~= "local" then return "" end
-local value = "shared:" .. owner .. ":" .. ((tonumber(currentFence) or 0) + 1) .. ":" .. currentRoute
+local nextFence = incdec(currentFence)
+if not nextFence then return "" end
+local value = "shared:" .. owner .. ":" .. nextFence .. ":" .. currentRoute
 redis.call("HSET", KEYS[1], ARGV[1], value)
 return value
 `
-	ownershipLeaveSharedScript = `
+	ownershipLeaveSharedScript = ownershipDecimalInc + `
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 if current == ARGV[2] then
   local mode, owner, currentFence, currentRoute = string.match(current, "^(%a+):(-?%d+):(%d+):(%d+)$")
   if mode ~= "shared" then return "" end
-  local value = "local:" .. owner .. ":" .. ((tonumber(currentFence) or 0) + 1) .. ":" .. currentRoute
+  local nextFence = incdec(currentFence)
+  if not nextFence then return "" end
+  local value = "local:" .. owner .. ":" .. nextFence .. ":" .. currentRoute
   redis.call("HSET", KEYS[1], ARGV[1], value)
   return value
 end
@@ -48,13 +79,14 @@ local current = redis.call("HGET", KEYS[1], ARGV[1])
 if not current then return "" end
 return current
 `
-	ownershipTransferScript = `
+	ownershipTransferScript = ownershipDecimalInc + `
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 if current ~= ARGV[2] then return "" end
 local mode, _, currentMarker, currentRoute = string.match(current, "^(%a+):(-?%d+):(%d+):(%d+)$")
 if not mode then return "" end
-local marker = (tonumber(currentMarker) or 0) + 1
-local route = (tonumber(currentRoute) or 0) + 1
+local marker = incdec(currentMarker)
+local route = incdec(currentRoute)
+if not marker or not route then return "" end
 local value = mode .. ":" .. ARGV[3] .. ":" .. marker .. ":" .. route
 redis.call("HSET", KEYS[1], ARGV[1], value)
 return value

@@ -51,9 +51,11 @@ func (s *markerEvalStub) Eval(_ context.Context, script string, _ []string, args
 		if err != nil || lease.Shared {
 			return "", nil
 		}
-		lease.MarkerEpoch++
 		lease.Shared = true
-		value := formatMarkerLease(lease)
+		value := markerLeaseAsLuaWould(lease, incMarkerEpochAsLuaWould(lease.MarkerEpoch))
+		if value == "" {
+			return "", nil
+		}
 		s.values[field] = value
 		return value, nil
 	case ownershipLeaveSharedScript:
@@ -64,14 +66,39 @@ func (s *markerEvalStub) Eval(_ context.Context, script string, _ []string, args
 		if err != nil || !lease.Shared {
 			return "", nil
 		}
-		lease.MarkerEpoch++
 		lease.Shared = false
-		value := formatMarkerLease(lease)
+		value := markerLeaseAsLuaWould(lease, incMarkerEpochAsLuaWould(lease.MarkerEpoch))
+		if value == "" {
+			return "", nil
+		}
 		s.values[field] = value
 		return value, nil
 	default:
 		return nil, errors.New("unexpected script")
 	}
+}
+
+// markerLeaseAsLuaWould models how the script builds the new lease string.
+//
+// The script used to concatenate a Lua NUMBER, and Lua 5.1 renders numbers
+// with "%.14g", so 10^14 came out as "1e+14" and Go could no longer read the
+// record back — after it had been written (RR-20260913-11). The script now
+// increments the decimal digits itself and refuses anything past uint64, so
+// this double does the same; an empty result models that refusal.
+func markerLeaseAsLuaWould(lease entity.RemoteEntityMarkerLease, nextEpoch uint64) string {
+	if nextEpoch == 0 {
+		return ""
+	}
+	lease.MarkerEpoch = nextEpoch
+	return formatMarkerLease(lease)
+}
+
+// incMarkerEpochAsLuaWould is the script's incdec: exact, and nil past uint64.
+func incMarkerEpochAsLuaWould(value uint64) uint64 {
+	if value == ^uint64(0) {
+		return 0
+	}
+	return value + 1
 }
 
 func mustParseMarkerOwner(raw string) int32 {

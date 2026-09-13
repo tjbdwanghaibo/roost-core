@@ -61,6 +61,12 @@
 | T-64 | 读了一次 `Service.Mailbox` 并改了返回值之后,存储里的领取记录跟着变了 | kit v1.14.3 之后的 `Mailbox.clone` 没有拷贝 U-0165 新增的 `SettledClaims`,`out := m` 只复制 map 头 | 只在进程内 MemoryStore 上确认;Redis 每次解码新对象 | 升级 kit;在此之前不要修改 `Mailbox` 读取结果 |
 | T-65 | 一封早已领取的附件邮件重新可领并拿到新 token,而信封还没过期 | kit v1.14.3 的墓碑按条数收界,计数保证不了时间期限:同一信封生命周期内有 `MaxSettledClaims` 条更新的已领取邮件被淘汰,它就被挤掉了 | 邮箱 `Evicted` 很大而墓碑数恰好在上限 | 升级 kit(墓碑改为按信封可领取窗口保留,挤不下时以 `ErrClaimHistoryFull` 拒绝投递);发奖侧不要只靠 token 去重 |
 | T-66 | 停机期间带 delay 的同步 Request 既没有结果也没有错误,最后报成取消或超时 | core ≤ v1.15.2 的 `Dispatcher.OnDestroyWithContext` 回收延迟队列时不向 `RetChan` 发终态 | Shutdown 返回成功,而调用方在自己的超时后才失败 | 升级 core;旧版本停机前先等延迟队列排空 |
+| T-68 | 权威快照后端变慢时,读请求持续报 `ErrRemoteOverloaded`,而并发数远低于 MaxWaiters | core ≤ v1.15.2 的 `loadMonotonic` 在跟随者取消时不归还名额,上限变成"本次加载累计入场次数" | 首个加载结束后自行恢复 | 升级 core;临时调大 MaxWaiters 或拉长调用方超时 |
+| T-69 | 读到的远程快照 `Expired(now)` 为真却被当作命中返回 | core ≤ v1.15.2 的 `Get` 只看容器 TTL,不看信封自己的 `ExpiresAt` | 只影响显式设置了 `ExpiresAt` 的快照 | 升级 core(过期即视为未命中,Monotonic 会回权威) |
+| T-70 | 同一版本的快照在不同进程解码结果不同 | core ≤ v1.15.2 的 L2 CAS 只比 checksum,而 checksum 只覆盖 payload 字节,schema / codec 可以被同版本改掉 | 本地缓存拒绝而 L2 接受同一次发布 | 升级 core 并让所有发布方同时升级 |
+| T-71 | 版本号超过 2^53 之后,较旧的快照写入被接受、版本回退;或真正更新的版本被判为同版本冲突 | core ≤ v1.15.2 的 L2 脚本用 Lua 的 `tonumber` 比较,Lua 数值是 float64 | 版本量级在 9007199254740992 附近 | 升级 core;迁移或导入大版本号前先升级 |
+| T-72 | `GetOwnership` 报 `invalid marker lease "shared:1001:1e+14:1"`,且此后一直失败 | core ≤ v1.15.2 的 marker 脚本拼接 Lua 数值,Lua 5.1 用 `%.14g` 渲染,10^14 变成科学计数法并已写入 Redis | lease 字符串里出现 `e+` | 升级 core;已损坏的记录要人工改回十进制或重新 claim |
+| T-73 | 一条快照消息按某个 scope 路由,却改动了另一个 scope 的缓存 | core ≤ v1.15.2 的 `ApplyReplica` 不校验 payload 里的 key / version 与信封是否一致 | 需要发布方有缺陷或能写内部 topic | 升级 core(不一致即拒绝,不落写) |
 | T-67 | `StopFinalizer` 成功返回后再 `Close` 批次,`Close` 返回 nil 但 writeGate、ownership 读锁与 finalize slot 没有释放 | core ≤ v1.15.2 的 `deferRemoteClose` 靠 select 分支退出,而队列可写与 ctx 已关闭同时就绪时 Go 随机选,交接给了没人排空的队列 | 停止后遗留的 slot 数不固定;`finalizeOnce` 使重启无法收拾 | 升级 core;旧版本先排空所有 batch 再停 finalizer |
 | T-63 | 从 checkpoint 恢复后,`InspectCast` 能查到的已完成技能与恢复前不是同一批 | core ≤ v1.15.2 的快照按 ID 序列化 casts,恢复时按这个顺序重建完成队列,而淘汰是从"最旧完成"的队头走 | 创建顺序与完成顺序交错、且完成数超过 `CompletedCastLimit` 时才出现 | 升级 core 后重新生成 checkpoint;旧快照恢复后退化为按 ID 顺序,与旧行为一致 |
 | T-59 | 已领取过的有附件邮件重新变成未读并可再次领取,`ReserveClaim` 返回一个新 token | kit ≤ v1.14.3 的容量淘汰把终态 Entry 连同 claim token 整条删除,而重复投递把"条目不在"当成"从未投递" | 指标 `refused:reserve_claim:already_claimed`(新);邮箱 `Evicted` 在增长 | 升级 kit(淘汰改留极小墓碑,墓碑有自己的上限);发奖侧不要只依赖 token 去重,同时校验业务幂等键 |

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/mirror"
 	"hash/fnv"
@@ -97,6 +98,9 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 	if err := json.Unmarshal(env.Payload, &wire); err != nil {
 		return err
 	}
+	if err := validateSnapshotWireIdentity(env, wire); err != nil {
+		return err
+	}
 	if wire.Delete {
 		return s.mgr.remote.cache.Delete(ctx, wire.Key)
 	}
@@ -106,6 +110,39 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		return loadErr
 	}
 	return err
+}
+
+// validateSnapshotWireIdentity binds the payload's own identity to the
+// envelope that routed it.
+//
+// The generic Replicator checks the outer SyncMsg against mirror.Envelope, but
+// this third layer — wire.Key, wire.Update.Key and Update.StateVersion — was
+// never cross-checked against either. A message could therefore declare one
+// key for routing and ordering and write a different view: changing only
+// Update.Key.Scope in the payload applied to the other scope's cache and
+// returned nil (RR-20260913-03). Ordering, deduplication and the write must
+// all name the same thing or the message is malformed.
+//
+// This is protocol integrity, not authorization: who may publish on the
+// internal topic stays a transport and service-identity question.
+func validateSnapshotWireIdentity(env mirror.Envelope, wire remoteSnapshotWire) error {
+	if !wire.Key.Valid() {
+		return fmt.Errorf("remote_entity: snapshot message has an invalid key")
+	}
+	if env.Key != remoteSnapshotReplicaKey(wire.Key) {
+		return fmt.Errorf("remote_entity: snapshot message key %d does not match its payload", env.Key)
+	}
+	if wire.Delete {
+		return nil
+	}
+	if wire.Update.Key != wire.Key {
+		return fmt.Errorf("remote_entity: snapshot payload key does not match the message key")
+	}
+	if env.Version < 0 || uint64(env.Version) != wire.Update.StateVersion {
+		return fmt.Errorf("remote_entity: snapshot message version %d does not match payload version %d",
+			env.Version, wire.Update.StateVersion)
+	}
+	return nil
 }
 
 var _ entity.IRemoteSnapshotPublisher = (*remoteSyncer)(nil)

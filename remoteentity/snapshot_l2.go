@@ -13,17 +13,44 @@ import (
 )
 
 const remoteSnapshotL2CAS = `
-local oldMarker = tonumber(redis.call("HGET", KEYS[1], "marker") or "0")
-local oldRoute = tonumber(redis.call("HGET", KEYS[1], "route") or "0")
-local oldVersion = tonumber(redis.call("HGET", KEYS[1], "version") or "0")
+-- Versions, marker epochs and route epochs are uint64 on the Go side. Lua
+-- numbers are float64, so tonumber collapses adjacent values above 2^53 and
+-- the ordering this CAS exists to enforce silently breaks (RR-20260913-10).
+-- Everything ordered is therefore compared as an exact decimal string and
+-- stored verbatim; only the TTL, which is small and ordered against nothing,
+-- still goes through tonumber.
+local function norm(v)
+  if not v or v == "" then return "0" end
+  local trimmed = string.gsub(v, "^0+", "")
+  if trimmed == "" then return "0" end
+  return trimmed
+end
+local function cmp(a, b)
+  a, b = norm(a), norm(b)
+  if #a ~= #b then if #a < #b then return -1 else return 1 end end
+  if a == b then return 0 end
+  if a < b then return -1 else return 1 end
+end
+local oldMarker = redis.call("HGET", KEYS[1], "marker") or "0"
+local oldRoute = redis.call("HGET", KEYS[1], "route") or "0"
+local oldVersion = redis.call("HGET", KEYS[1], "version") or "0"
 local oldChecksum = redis.call("HGET", KEYS[1], "checksum") or ""
-local marker = tonumber(ARGV[1])
-local route = tonumber(ARGV[2])
-local version = tonumber(ARGV[3])
-if marker < oldMarker or route < oldRoute then return 0 end
-if marker == oldMarker and route == oldRoute and version < oldVersion then return 0 end
-if marker == oldMarker and route == oldRoute and version == oldVersion and oldChecksum ~= "" and oldChecksum ~= ARGV[4] then return -1 end
-redis.call("HSET", KEYS[1], "marker", marker, "route", route, "version", version, "checksum", ARGV[4], "data", ARGV[5])
+local oldSchema = redis.call("HGET", KEYS[1], "schema") or ""
+local oldCodec = redis.call("HGET", KEYS[1], "codec") or ""
+local markerCmp = cmp(ARGV[1], oldMarker)
+local routeCmp = cmp(ARGV[2], oldRoute)
+if markerCmp < 0 or routeCmp < 0 then return 0 end
+local sameEpoch = markerCmp == 0 and routeCmp == 0
+local versionCmp = cmp(ARGV[3], oldVersion)
+if sameEpoch and versionCmp < 0 then return 0 end
+-- Same version must mean the same VALUE, and the value includes how its bytes
+-- are read: checksum covers the payload only, so schema and codec have to be
+-- compared too or one version's bytes can change interpretation
+-- (RR-20260913-07). The local cache has always compared all three.
+if sameEpoch and versionCmp == 0 and oldChecksum ~= "" and
+   (oldChecksum ~= ARGV[4] or oldSchema ~= ARGV[7] or oldCodec ~= ARGV[8]) then return -1 end
+redis.call("HSET", KEYS[1], "marker", ARGV[1], "route", ARGV[2], "version", ARGV[3],
+  "checksum", ARGV[4], "schema", ARGV[7], "codec", ARGV[8], "data", ARGV[5])
 local ttl = tonumber(ARGV[6])
 if ttl and ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
 return 1
@@ -113,7 +140,8 @@ func (s *remoteSnapshotL2Store) Set(ctx context.Context, value entity.RemoteSnap
 	}
 	ttlMillis := s.ttl.Milliseconds()
 	result, err := s.redis.Eval(ctx, remoteSnapshotL2CAS, []string{remoteSnapshotL2Key(value.Key)},
-		value.MarkerEpoch, value.RouteEpoch, value.StateVersion, value.Checksum, raw, ttlMillis)
+		value.MarkerEpoch, value.RouteEpoch, value.StateVersion, value.Checksum, raw, ttlMillis,
+		value.Schema, value.Codec)
 	if err != nil {
 		return err
 	}
