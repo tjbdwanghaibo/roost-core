@@ -1,5 +1,7 @@
 # Roost Review 跨轮进度
 
+收尾独立验收：合并作者修复 `885ff4f585508b7f157b89419f83d05bf0a7b5d8`（U-0189，Enter/Leave 共用未知结果恢复），解决文档索引冲突时保留两个 RR 与作者说明。原触发按新契约适配：权威确认切换成功允许返回 nil，发送前失败仍必须报错；核心 live 模式和写准入断言保留。四个模式场景及 Leave 连续三次写准入均 PASS（overlay 1.656s）。RR-12/13 现均已独立验收，旧失败证据保留；未验证真实 Redis/跨进程。最终统计：24 轮、16 篇机制文档、36 RR，索引 36 已修复、0 未修复；不是全仓审完。
+
 第十轮：已完成 24 份运行记录、16 篇机制文档，RR 共 36（34 标修复、2 未修复），口径见[统计](PROGRESS-SNAPSHOT-2026-09-13.md)。Core `7be357c`，Kit/Codegen 同第九轮，pull 无增量。LeaveShared 后续三次准入出现 P2 RR-13；remoteentity race 包通过，状态为已验证部分场景。WAL 交错仍待验证，图谱旧代、无本轮真实 Redis。下轮 RR-12/13、WAL 和真实模式切换。[运行](REVIEW-2026-09-13-10.md)。
 
 第九轮：Core `99be1ebc6191cf3e64acb22e39a8c439d7f3eea6`；Kit/Codegen 同第八轮，三仓 pull 无增量。ownership Enter/Leave 四个可控场景：Enter 丢回复出现 P2 RR-12，其余含两个对照及 Leave 观察；已验证部分场景。WAL Close/Sync 源码已读，交错未验证；图谱旧代、无真实 Redis。下轮 RR-12 修复、Leave 恢复、真实 Redis 和 WAL writer 屏障。[运行](REVIEW-2026-09-13-09.md)。

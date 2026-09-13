@@ -1,5 +1,7 @@
 # Remote Redis：执行成功与调用成功的区别
 
+收尾独立验收：合并作者修复 `885ff4f585508b7f157b89419f83d05bf0a7b5d8`（U-0189，Enter/Leave 共用未知结果恢复），解决文档索引冲突时保留两个 RR 与作者说明。原触发按新契约适配：权威确认切换成功允许返回 nil，发送前失败仍必须报错；核心 live 模式和写准入断言保留。四个模式场景及 Leave 连续三次写准入均 PASS（overlay 1.656s）。RR-12/13 现均已独立验收，旧失败证据保留；未验证真实 Redis/跨进程。最终统计：24 轮、16 篇机制文档、36 RR，索引 36 已修复、0 未修复；不是全仓审完。
+
 第十轮 Core `7be357c`：LeaveShared 第一次准入拒绝并非恢复完成；第二、三次已持有权威独占 lease，却从 live Shared 直接转 LocalOwned，被状态机拒绝。未知结果恢复既要避免错误放行，也要让后续请求能沿合法状态路径收敛。不要随意放开直接迁移边来绕过 draining。[源码与三次尝试证据](REVIEW-2026-09-13-10.md)。
 
 第九轮 Core `99be1eb`：相同未知结果原则必须逐入口核验。EnterRemoteSharedMode 的错误分支仍恢复旧 lease，实测权威 shared / 本地 local_owned 且写准入成功；Leave 的同类实验拒绝写入，不能合并报成双路径绕过。复用 Transfer 的独立重查骨架时，目标应为 Shared/LocalOwned 与新版本，不应直接复用更换 OwnerSID 的判断。WAL 同样要区分关闭发起与 drain 完成，本轮该交错仅源码阅读。[证据](REVIEW-2026-09-13-09.md)。
