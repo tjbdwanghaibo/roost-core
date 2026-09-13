@@ -40,6 +40,7 @@
 | RR-20260912-01 | core | Committer Flush / Shutdown 等 replay 所有权时不可取消 | U-0186 | [RR-20260912-01.md](RR-20260912-01.md) |
 | RR-20260913-01 | core | Remote 快照删除无版本屏障,迟到删除清新值 / 旧值复活 | U-0187 | [RR-20260913-01.md](RR-20260913-01.md) |
 | RR-20260913-09 | core | Transfer 回复丢失被当成没执行,旧 owner 恢复可写 | U-0188 | [RR-20260913-09.md](RR-20260913-09.md) |
+| RR-20260913-12 | core | EnterShared / LeaveShared 回复丢失被当成没执行,恢复旧模式放行独占写 | U-0189 | [RR-20260913-12.md](RR-20260913-12.md) |
 
 重构类改动(不对应任何 RR,不关闭任何 RR)另记,编号 M-:
 
@@ -64,7 +65,7 @@
 | RR-20260912-01 | 可取消的锁等待 | `flushMu` / `replayMu` 换成一格信号量,`select` 上 ctx(U-0186) |
 | RR-20260912-02 | 有序屏障 / LSN 水位 | Sync 往 appendCh 放 `barrier` 请求,收批即答,答后再 fsync(U-0185) |
 
-未修复清单为空。EnterShared / LeaveShared 的同类失败恢复(审查留给后续验收)尚未纳入。
+未修复清单为空。EnterShared / LeaveShared 的同类失败恢复第九轮登记为 RR-20260913-12,已由 U-0189 收敛(骨架参数化)。
 
 ### 第七轮复核后的补修(不新编号,记在原 RR 记录末尾)
 
