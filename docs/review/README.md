@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-13 第三轮 | 真实 Redis/Lua、owner 转移回复丢失、计数域 | 新 P2/P3×2；旧两项真实补证；十个场景 | [运行](REVIEW-2026-09-13-03.md)、[实现](IMPLEMENTATION-REMOTE-REDIS-UNCERTAIN-OUTCOMES.md)、[问题](../bug/REVIEW-2026-09-13-03.md)、[复现](../bug/REPRO-2026-09-13-03.md) |
 | 2026-09-13 第二轮 | L1/L2 冲突、回填交错、绝对过期与加载恢复 | 四项新 P2，八个临时场景，三包 race 通过 | [运行](REVIEW-2026-09-13-02.md)、[实现](IMPLEMENTATION-REMOTE-L1-L2-CONSISTENCY.md)、[问题](../bug/REVIEW-2026-09-13-02.md)、[复现](../bug/REPRO-2026-09-13-02.md) |
 | 2026-09-13 | Remote 接收删除/兴趣/身份、加载取消、总线语义 | 四项新 P2；七个临时场景；七包 race 基线通过 | [运行](REVIEW-2026-09-13.md)、[实现](IMPLEMENTATION-REMOTE-REPLICA-ORDERING-AND-RECOVERY.md)、[问题](../bug/REVIEW-2026-09-13.md)、[复现](../bug/REPRO-2026-09-13.md) |
 | 2026-09-12 第二轮 | RemotePolicy Mirror 与已有缓存/副本工具 | 尚无完整只读运行时；原语验证与复用方案完成 | [运行](REVIEW-2026-09-12-02.md)、[实现及方案](IMPLEMENTATION-REMOTE-POLICY-MIRROR.md)、[观察](../bug/REVIEW-2026-09-12-02.md) |

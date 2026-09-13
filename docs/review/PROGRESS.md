@@ -2,6 +2,21 @@
 
 最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-13 第三轮最新进度：真实 Redis 与未知结果
+
+Core `18a3790c463011050e4f05a5878d300c6144fdfe`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`；同步无增量，无新修复。
+
+| 范围 | 实际证据 | 状态/下一入口 |
+| --- | --- | --- |
+| Transfer 未知结果 | 真 Lua 成功后丢回复，旧 owner 仍准入；发送前失败对照通过 | RR-09 P2；真实 commit fencing、其他模式切换待验 |
+| L2 大版本 | 真 Lua 两条边界失败 | RR-10 P3；精确域与迁移策略待定 |
+| marker 大 epoch | 写入科学计数法，后续不可读 | RR-11 P3；Leave/Transfer 同类路径待验 |
+| 旧 RR-05/07 | 真实 Redis 复现 | 仍未修；升级证据而非重复编号 |
+| Redis 正常并发/切换 | 32 snapshot 发布最大值、PTTL、唯一 claim、stale CAS 通过 | 有界真实后端验证，非 HA/性能验证 |
+| remoteentity/entity/redis | 三包 race 基线通过 | 不覆盖未知结果业务提交 |
+
+[运行](REVIEW-2026-09-13-03.md) · [问题](../bug/REVIEW-2026-09-13-03.md) · [机制](IMPLEMENTATION-REMOTE-REDIS-UNCERTAIN-OUTCOMES.md)。临时实例已关闭，真实 Mongo/订阅恢复仍待继续。
+
 ## 2026-09-13 第二轮最新进度：L1/L2 一致性
 
 Core `2724442d886d9bb3ee5617d7ded814ce0f5267cc`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。无源码增量，无新修复。
