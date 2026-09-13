@@ -1,5 +1,7 @@
 # Remote 快照 L1/L2：组合后的正确性边界
 
+第七轮（Core `76c6bac`）：实际 Set 错误分类不能被提前 Get 取代；删除墓碑须覆盖 ReadThrough 回填，冷 L1 不能无条件删除新 L2。预检查增加一次 L2 RTT，未实测性能。[机制与交错](REVIEW-2026-09-13-07.md)。
+
 ## 09-13 第四轮更新：有效期检查必须覆盖提前返回
 
 Core `e4f07b06cea450dfc4ab22ca8e3f7f39db22b81a` 的 U-0175 为普通缓存读增加 expiry 检查，原 Cached 复现通过。但 Linearizable 直接返回 LoadAuthoritative，Monotonic miss 直接返回 loadMonotonic；loader 返回结果与最后读回 L1 的结果均可能绕过新增检查。新增三场景见[验收](../bug/REVIEW-2026-09-13-04.md)。

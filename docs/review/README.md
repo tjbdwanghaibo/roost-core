@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[第七轮运行](REVIEW-2026-09-13-07.md) · [问题](../bug/REVIEW-2026-09-13-07.md) · [复现](../bug/REPRO-2026-09-13-07.md)。
+
 [09-13 第六轮运行](REVIEW-2026-09-13-06.md) · [生命周期机制](IMPLEMENTATION-MIRROR-LIFECYCLE.md) · [测试源码](../bug/REVIEW-2026-09-13-06.md)。
 
 [09-13 第五轮：Mirror 实施就绪审查](REVIEW-2026-09-13-05.md) · [实施交接与六步验收](PLAN-REMOTE-POLICY-MIRROR.md)。

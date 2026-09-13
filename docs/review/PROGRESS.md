@@ -1,5 +1,7 @@
 # Roost Review 跨轮进度
 
+第七轮：Core `76c6bac305c9c0408aa2966ad0ae05779dd50047`，Kit `ac1a8801604bde4b7ec5ed60104502c542602ed0`，Codegen 同第六轮。entity/remoteentity/cache 已验证部分场景：RR-08、RR-06 原/适配复现通过，RR-01/05 部分修复；RR-02 原场景通过但 Windows 重启代际测试两次失败。nest/nestwal/mail 仅包回归，原故障独立验收未完成。图谱旧代，无本轮真实后端。下轮先 Transfer/WAL/完成链/Mail 原复现。[运行](REVIEW-2026-09-13-07.md)。
+
 收尾同步：首次推送因远端前进被拒，已正常 merge `06fdd2dc319856c6645ddfb79eba6c4171f681c0`。该提交新增 U-0180/0181/0183/0184 和 U-0175 补充修复，涉及 RR-20260913-02/05/06/08、RR-20260911-06。以上测试仍对应原审查 SHA；新修复待下一轮独立验收，旧状态描述是历史快照。保留远端源码和 bugfix 说明，未将其当作本轮已验证。
 
 2026-09-13 第六轮：Core `d1b14b99a9fcf9ed4029966ac55372407b5a52a4`；Kit/Codegen 同第五轮，三仓 pull 无变化。mirror/envelope.go 与 syncbus/sync.go 已源码补证；三个生命周期场景及两包 race 通过，状态为已验证部分场景。旧 bug 未关闭，无新增 RR；图谱旧代，未测真实 broker。下一入口：实际总线解绑与回调完成。[运行](REVIEW-2026-09-13-06.md) · [机制](IMPLEMENTATION-MIRROR-LIFECYCLE.md)。

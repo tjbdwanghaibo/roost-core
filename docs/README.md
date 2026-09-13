@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[第七轮修复验收](review/REVIEW-2026-09-13-07.md)：过期与回填通过，删除/L2 冲突仍有残余。
+
 [09-13 第六轮 Mirror 生命周期验证](review/REVIEW-2026-09-13-06.md)：停机、旧回调与失败重试。
 
 [Mirror 实施交接](review/PLAN-REMOTE-POLICY-MIRROR.md)：复用现有工具的模块分工、协议选择、六步实施与验收。
