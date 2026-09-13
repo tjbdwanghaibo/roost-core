@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[第九轮共享模式审查](review/REVIEW-2026-09-13-09.md)：新增 P2 EnterShared 回复丢失后独占写准入。
+
 [第八轮修复验收](review/REVIEW-2026-09-13-08.md)：L2 残余、真实 Redis Transfer、真实 WAL、Mail、回调子进程通过。
 
 [第七轮修复验收](review/REVIEW-2026-09-13-07.md)：过期与回填通过，删除/L2 冲突仍有残余。

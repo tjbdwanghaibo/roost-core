@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[第九轮运行](REVIEW-2026-09-13-09.md) · [问题](../bug/REVIEW-2026-09-13-09.md) · [复现](../bug/REPRO-2026-09-13-09.md)。
+
 [第八轮运行](REVIEW-2026-09-13-08.md) · [验收与复跑](../bug/REVIEW-2026-09-13-08.md) · [修复机制学习](IMPLEMENTATION-REPAIR-ACCEPTANCE.md)。
 
 [第七轮运行](REVIEW-2026-09-13-07.md) · [问题](../bug/REVIEW-2026-09-13-07.md) · [复现](../bug/REPRO-2026-09-13-07.md)。

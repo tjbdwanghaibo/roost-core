@@ -1,5 +1,7 @@
 # Remote Redis：执行成功与调用成功的区别
 
+第九轮 Core `99be1eb`：相同未知结果原则必须逐入口核验。EnterRemoteSharedMode 的错误分支仍恢复旧 lease，实测权威 shared / 本地 local_owned 且写准入成功；Leave 的同类实验拒绝写入，不能合并报成双路径绕过。复用 Transfer 的独立重查骨架时，目标应为 Shared/LocalOwned 与新版本，不应直接复用更换 OwnerSID 的判断。WAL 同样要区分关闭发起与 drain 完成，本轮该交错仅源码阅读。[证据](REVIEW-2026-09-13-09.md)。
+
 2026-09-13，Core `18a3790c463011050e4f05a5878d300c6144fdfe`。现有实现学习及本轮验证；建议均未实施。关联[问题](../bug/REVIEW-2026-09-13-03.md)、[运行](REVIEW-2026-09-13-03.md)。
 
 ## 当前 ownership 转移链
