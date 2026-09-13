@@ -2,6 +2,19 @@
 
 最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
+## 2026-09-13 第五轮：Mirror 实施交接
+
+Core `d7832e8249a4b8dca123fa7e28268fa05e78118a`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`；Codegen `cacd627b70991c5d0e38545866610db78e695b53`。三仓 pull 无变化。
+
+| 范围 | 本轮证据/状态 | 下一步 |
+| --- | --- | --- |
+| remoteentity ReadRemoteSnapshot/BindSync | 图谱定位与 stale coverage 后源码补证；已读直接权威出口和未启动 replicator 所有权；无新增运行测试 | 抽取共享 client 时统一准入与关闭语义 |
+| Mirror 设计 | 已写六步实施交接；明确代际、墓碑、首载边界；尚未实施 | reader/expiry，再删除与兴趣协议 |
+| 修复状态 | 沿用第四轮五项通过、RR-08 部分修复；无新源码 | 有增量后复测；不重复登记 |
+| kit/codegen | 同步和方案分工，无新增源码覆盖 | 装配与真实生成消费者验收 |
+
+[运行记录](REVIEW-2026-09-13-05.md) · [实施交接](PLAN-REMOTE-POLICY-MIRROR.md)。本轮未新增 Go/Redis 测试，历史验收见下方；图谱旧代限制仍在。
+
 ## 2026-09-13 第四轮最新进度：六项修复验收
 
 Core 已从 `74af2af` 快进到 `e4f07b06cea450dfc4ab22ca8e3f7f39db22b81a`；Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`、Codegen `cacd627b70991c5d0e38545866610db78e695b53` 无增量。

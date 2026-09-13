@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[Mirror 实施交接](review/PLAN-REMOTE-POLICY-MIRROR.md)：复用现有工具的模块分工、协议选择、六步实施与验收。
+
 Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `roost-core`（契约 + 实现 + 技能系统）与 `roost-kit`（装配层 + 通用服务）组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
 
 ## 第一级：完全新手

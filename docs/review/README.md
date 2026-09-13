@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-13 第五轮：Mirror 实施就绪审查](REVIEW-2026-09-13-05.md) · [实施交接与六步验收](PLAN-REMOTE-POLICY-MIRROR.md)。
+
 每轮先获取 core、kit、codegen 最新代码，再审查和记录，默认不修改代码。
 长期流程由个人 skill `roost-review` 执行，可用 `$roost-review` 或“继续 Roost review”调用。
 
