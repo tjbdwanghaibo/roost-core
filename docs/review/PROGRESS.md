@@ -1,6 +1,22 @@
 # Roost Review 跨轮进度
 
-最后更新：2026-09-12。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
+
+## 2026-09-13 最新进度：Remote 复制与恢复
+
+Core `617738b1cb61f8a4f35f6d5e8365d2f525a08b0b`，Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`；三仓同步无增量。旧 bug 与 Mirror 方案未修/未实施。
+
+| 范围 | 已验证 | 状态与下一入口 |
+| --- | --- | --- |
+| Remote 发布→Replicator→SnapshotReplicaStore | 两种删除乱序失败；upsert 乱序及顺序删除通过 | RR-20260913-01；真实 L2/重投待验 |
+| Interest 发布/接收 | 旧 release 撤销新 renew；顺序对照通过 | RR-20260913-02；generation 与重启 SID 待验 |
+| Remote payload 身份 | scope 与外层不一致仍写入 | RR-20260913-03；其他字段/interest 身份待验 |
+| delta gap → 权威 loader | full v3 回填一次通过 | 部分场景；失败重试/迁移待验 |
+| RemoteSnapshotCache 合并读 | 取消后空闲名额仍被拒绝 | RR-20260913-04；Manager fallback 放大待验 |
+| room NATS/JetStream wrappers | 源码确认无版本过滤、错误不重试；七包 race 基线通过 | 已读接口边界，未跑真实网络 |
+| kit/codegen | kit room 装配源码，codegen 仅同步 | 不计为新增全仓覆盖 |
+
+[运行](REVIEW-2026-09-13.md) · [问题及限制](../bug/REVIEW-2026-09-13.md) · [实现学习](IMPLEMENTATION-REMOTE-REPLICA-ORDERING-AND-RECOVERY.md)。
 
 ## 2026-09-12 第二轮最新进度：RemotePolicy Mirror
 

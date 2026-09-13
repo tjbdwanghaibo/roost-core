@@ -9,6 +9,7 @@
 
 | 日期 | 范围 | 结论 | 文档 |
 | --- | --- | --- | --- |
+| 2026-09-13 | Remote 接收删除/兴趣/身份、加载取消、总线语义 | 四项新 P2；七个临时场景；七包 race 基线通过 | [运行](REVIEW-2026-09-13.md)、[实现](IMPLEMENTATION-REMOTE-REPLICA-ORDERING-AND-RECOVERY.md)、[问题](../bug/REVIEW-2026-09-13.md)、[复现](../bug/REPRO-2026-09-13.md) |
 | 2026-09-12 第二轮 | RemotePolicy Mirror 与已有缓存/副本工具 | 尚无完整只读运行时；原语验证与复用方案完成 | [运行](REVIEW-2026-09-12-02.md)、[实现及方案](IMPLEMENTATION-REMOTE-POLICY-MIRROR.md)、[观察](../bug/REVIEW-2026-09-12-02.md) |
 | 2026-09-12 | 饱和回退子进程；真实 WAL 释放、Ack/重开、Shutdown/Sync | 新两个 P2；旧 panic 崩溃风险实测确认；三个正向 WAL 场景通过 | [运行](REVIEW-2026-09-12.md)、[实现](IMPLEMENTATION-WAL-ADMISSION-DURABILITY-AND-SHUTDOWN.md)、[问题](../bug/REVIEW-2026-09-12.md) |
 | 2026-09-11 第四轮 | completion 慢确认、回调 panic、Shutdown 重试 | 新 P2；慢完成重试通过；旧 Mail P3 仍复现 | [运行](REVIEW-2026-09-11-04.md)、[实现](IMPLEMENTATION-COMPLETION-FAILURE-AND-SHUTDOWN.md)、[问题](../bug/REVIEW-2026-09-11-04.md) |

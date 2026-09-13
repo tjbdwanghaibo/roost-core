@@ -12,6 +12,8 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 
 ## 第三级：框架维护者与生产负责人
 
+- [09-13 Remote 接收与恢复审查](review/REVIEW-2026-09-13.md)：删除顺序、订阅代际、payload 身份与快照加载取消，四项新问题和完整复现。
+
 - [RemotePolicy Mirror 审查与实现方案](review/IMPLEMENTATION-REMOTE-POLICY-MIRROR.md)：现有工具复用、只读边界、首次加载、墓碑与断线恢复，尚未实施。
 
 - [09-12 扩展审查](review/REVIEW-2026-09-12.md)：completion 饱和崩溃与真实 WAL 截止时间、持久化屏障和恢复验证。
