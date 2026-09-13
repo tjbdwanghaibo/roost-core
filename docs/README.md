@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[第八轮修复验收](review/REVIEW-2026-09-13-08.md)：L2 残余、真实 Redis Transfer、真实 WAL、Mail、回调子进程通过。
+
 [第七轮修复验收](review/REVIEW-2026-09-13-07.md)：过期与回填通过，删除/L2 冲突仍有残余。
 
 [09-13 第六轮 Mirror 生命周期验证](review/REVIEW-2026-09-13-06.md)：停机、旧回调与失败重试。

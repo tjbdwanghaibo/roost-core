@@ -1,5 +1,7 @@
 # WAL：准入、持久化、投影和停止的边界
 
+第八轮补证：FIFO 写屏障与可取消等待修复的五个真实文件场景通过。该结果不覆盖 fsync 卡死和 Sync/Close 并发，见[机制学习](IMPLEMENTATION-REPAIR-ACCEPTANCE.md)与[运行](REVIEW-2026-09-13-08.md)。
+
 基线 Core `c9e853e08c91d498b65d6f1d6e4dd35d39726a51`。本轮读取 nestwal 实现并用真实临时文件验证，外部投影和发布仍是替身。相关问题见[09-12 报告](../bug/REVIEW-2026-09-12.md)。
 
 ## 不能混淆的四个阶段
