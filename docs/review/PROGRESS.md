@@ -1,5 +1,7 @@
 # Roost Review 跨轮进度
 
+2026-09-13 第六轮：Core `d1b14b99a9fcf9ed4029966ac55372407b5a52a4`；Kit/Codegen 同第五轮，三仓 pull 无变化。mirror/envelope.go 与 syncbus/sync.go 已源码补证；三个生命周期场景及两包 race 通过，状态为已验证部分场景。旧 bug 未关闭，无新增 RR；图谱旧代，未测真实 broker。下一入口：实际总线解绑与回调完成。[运行](REVIEW-2026-09-13-06.md) · [机制](IMPLEMENTATION-MIRROR-LIFECYCLE.md)。
+
 最后更新：2026-09-13。状态描述证据深度，不表示整个包已审完，不使用覆盖百分比。
 
 ## 2026-09-13 第五轮：Mirror 实施交接

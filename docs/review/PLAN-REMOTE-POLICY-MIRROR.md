@@ -1,5 +1,7 @@
 # RemotePolicy Mirror 实施交接
 
+后续验收细化：[生命周期实测](IMPLEMENTATION-MIRROR-LIFECYCLE.md)，第 3–4 步需覆盖在途工作和旧回调隔离。
+
 2026-09-13，基线 Core `d7832e8249a4b8dca123fa7e28268fa05e78118a`，Kit `3855c71f5aaaf5ca4b7091ae17bf8cb0e6943b79`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`。**本文是待实施方案；没有新增运行时 API，也没有修复代码。** 现有能力与源码依据见[机制说明](IMPLEMENTATION-REMOTE-POLICY-MIRROR.md)，本轮范围见[运行记录](REVIEW-2026-09-13-05.md)。
 
 ## 推荐第一版
