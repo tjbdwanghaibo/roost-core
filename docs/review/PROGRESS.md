@@ -1,5 +1,7 @@
 # Roost Review 跨轮进度
 
+第十轮：已完成 24 份运行记录、16 篇机制文档，RR 共 36（34 标修复、2 未修复），口径见[统计](PROGRESS-SNAPSHOT-2026-09-13.md)。Core `7be357c`，Kit/Codegen 同第九轮，pull 无增量。LeaveShared 后续三次准入出现 P2 RR-13；remoteentity race 包通过，状态为已验证部分场景。WAL 交错仍待验证，图谱旧代、无本轮真实 Redis。下轮 RR-12/13、WAL 和真实模式切换。[运行](REVIEW-2026-09-13-10.md)。
+
 第九轮：Core `99be1ebc6191cf3e64acb22e39a8c439d7f3eea6`；Kit/Codegen 同第八轮，三仓 pull 无增量。ownership Enter/Leave 四个可控场景：Enter 丢回复出现 P2 RR-12，其余含两个对照及 Leave 观察；已验证部分场景。WAL Close/Sync 源码已读，交错未验证；图谱旧代、无真实 Redis。下轮 RR-12 修复、Leave 恢复、真实 Redis 和 WAL writer 屏障。[运行](REVIEW-2026-09-13-09.md)。
 
 第八轮：Core `66f65e258bc5655d929e54300dc9a18377ff7e3b`，Kit `ac1a8801604bde4b7ec5ed60104502c542602ed0`，Codegen `cacd627b70991c5d0e38545866610db78e695b53`。状态：已验证部分场景。RR-01/05 第七轮残余、RR-02 同进程代际、RR-09 真实 Redis、两个 WAL 原故障、Mail 原拒绝、Nest 回复释放及饱和子进程通过；五个 Core 包 race 通过。图谱旧代，未验跨节点墓碑、跨进程回拨、Linux failover。下轮：EnterShared/LeaveShared 未知结果、共享 L2 重放、Sync/Close 交错。[明细](REVIEW-2026-09-13-08.md)。

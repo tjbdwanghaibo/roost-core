@@ -1,5 +1,7 @@
 # RemotePolicy Mirror 实施交接
 
+第十轮补充：[RR-13 LeaveShared 重试无法收敛](../bug/REVIEW-2026-09-13-10.md) 与 RR-12 并列为动态 owner 模式依赖。读取设计本身不替代 owner 的合法恢复路径；进度统计不将 Mirror 方案算作已实现。
+
 第九轮新增依赖风险：[RR-20260913-12](../bug/REVIEW-2026-09-13-09.md)，owner EnterShared 已执行但回复丢失后仍可独占写准入。使用动态共享模式的 owner 上线前需验收此路径；不推翻此前 Transfer 修复。
 
 第八轮验收更新：第七轮 L2 残余、同进程代际、Transfer、WAL、回调与 Mail 原故障已通过，见[运行记录](REVIEW-2026-09-13-08.md)。跨节点删除水位、TTL 与重放窗口、跨进程时钟回拨仍需协议证明；Mirror 方案尚未实施。
