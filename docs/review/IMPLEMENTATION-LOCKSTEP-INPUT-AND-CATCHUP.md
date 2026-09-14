@@ -1,5 +1,9 @@
 # Lockstep：输入身份、权威帧与追帧收敛
 
+第五轮 Core `a1245fd`：U-0197 将 accepted 改为每座位固定 129 槽，期限外既不查也不写，原资源上限测试通过。可靠追帧在真实 TCP 写后适配器报错时重发旧页，Assembler 去重，7 帧仅应用一次；取消一次发送后也可续跑。
+
+新的消费者边界 RR-09：Assembler 已释放整个批次，Bot.apply 的模拟/发送回调中途返回错误却未保存尾帧或隔离实例，后续重传被去重而新帧继续应用。必须分离接收游标与模拟完成游标；出站失败不应吞掉未模拟的帧。Simulate 可能部分修改状态，不能笼统重跑；最小安全选择是终止实例并显式恢复，支持重试则需分阶段保存待应用/待发送任务。hasher 也要与成功模拟边界一致，不能先 Fold 后把失败当成成功应用。[第五轮结果与复现](REVIEW-2026-09-14-05.md)。
+
 第四轮 Core `30a6b5b`：原四项已验收，当前实现先按 accepted[player][original] 去重，拒绝 batch=1、负座位、超 MaxFrameInputs。accepted 仅在 Advance 修剪，两次 Tick 间可被大量不同旧身份撑大，新增 RR-08；超过 ReplayHorizon 的重传仍允许再次折入，不能当作无限幂等。真实 UDP 回环 24 帧（主动丢弃两个已收到包）恢复通过。两个 100x 微基准约 8.4—8.8 μs/op，但包含提交/切帧，且发送器为空实现，不能推算生产吞吐。[本轮证据与限制](REVIEW-2026-09-14-04.md) · [覆盖清单](LOCKSTEP-AND-SYNC-COVERAGE.md)。以下保留第三轮基线。
 
 2026-09-14，Core `a1455fb63903e5f1e4d1e7741ed13d52533bebf9`。已读 sequencer、room、history、assembler、wire、desync，十个测试叶子及包 race；部分场景验证。

@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-14 第五轮](REVIEW-2026-09-14-05.md)：去重环验收、真实 TCP 追帧、新 Bot 跳帧问题 · [问题](../bug/REVIEW-2026-09-14-05.md) · [复现](../bug/REPRO-2026-09-14-05.md)。
+
 [09-14 第四轮 lockstep 续审](REVIEW-2026-09-14-04.md) · [内存边界问题](../bug/REVIEW-2026-09-14-04.md) · [复现](../bug/REPRO-2026-09-14-04.md) · [lockstep / sync 覆盖与优先级](LOCKSTEP-AND-SYNC-COVERAGE.md)。
 
 [09-14 第三轮 lockstep](REVIEW-2026-09-14-03.md) · [四项问题](../bug/REVIEW-2026-09-14-03.md) · [复现](../bug/REPRO-2026-09-14-03.md) · [输入与追帧机制](IMPLEMENTATION-LOCKSTEP-INPUT-AND-CATCHUP.md)。

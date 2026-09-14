@@ -1,5 +1,7 @@
 # Roost Review 跨轮进度
 
+2026-09-14 第五轮：29 份运行记录、18 篇机制文档、45 RR（44 标修复、1 未修复）。Core `a1245fd`，Kit `7030c5f`，Codegen `cacd627`。RR-08 原上限验证通过；新增 RR-09：LockstepBot 回调错误后继续成功处理却跳帧，三处错误复现。真实 TCP 重投、取消恢复、原 UDP/期限/内存五场景通过；lockstep/robot race 通过。[运行](REVIEW-2026-09-14-05.md) · [问题](../bug/REVIEW-2026-09-14-05.md)。消费者错误恢复已从待查变成确认问题；sync 继续按已确认顺序排在 lockstep 后。
+
 2026-09-14 第四轮：28 份运行记录、18 篇机制文档、44 RR（43 标修复、1 未修复）。Core `30a6b5b`，Kit `7030c5f`，Codegen `cacd627`。lockstep RR-04..07 原十叶子全过；新 RR-08 去重身份表准入上限失败。真实本机 UDP 24 帧冗余恢复通过、超期限重放边界确认、lockstep/robot race 通过，补两项有界微基准。[运行](REVIEW-2026-09-14-04.md) · [覆盖与优先级](LOCKSTEP-AND-SYNC-COVERAGE.md)。
 
 当前六个 lockstep 生产文件已阅读，风险验证未全部完成；robot 消费者已读但错误恢复待专项。用户确认 lockstep 之后按 statesync → entitysync → syncstream/syncbus；sync 只有历史部分覆盖，本轮盘点不计新增正确性验证。下一入口：RR-08、重放期限与消费者恢复，再依清单推进；不以全包 race 通过宣告完成。
