@@ -52,6 +52,12 @@
 | RR-20260914-08 | core | lockstep 去重身份表准入无上限,只靠 Advance 回收(U-0193 引入) | U-0197 | [RR-20260914-08.md](RR-20260914-08.md) |
 | RR-20260914-09 | core | LockstepBot 把接收游标当应用游标,回调失败后丢失批次尾帧 | U-0198 | [RR-20260914-09.md](RR-20260914-09.md) |
 
+用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
+
+| 编号 | 仓库 | 问题 | 记录 |
+| --- | --- | --- | --- |
+| U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
+
 重构类改动(不对应任何 RR,不关闭任何 RR)另记,编号 M-:
 
 | 编号 | 仓库 | 改了什么 | 记录 |

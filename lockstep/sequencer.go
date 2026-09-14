@@ -211,22 +211,29 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 	if len(payload) > s.maxInput {
 		return 0, ErrPayloadTooBig
 	}
-	// Identity first: an original (player, frame) already taken is a
-	// retransmission, whatever frame it would fold into now. Answer with
-	// the frame it went into and change nothing (U-0193).
 	original := frame
-	remembered := original >= s.replayFloor()
-	if remembered {
-		if slot := s.slot(player, original); slot != nil && slot.target != 0 && slot.original == original {
-			return slot.target, nil
-		}
-	}
 	folded := frame < s.next
 	if folded {
 		frame = s.next
 	}
 	if frame > s.next+s.window {
 		return 0, ErrFrameTooEarly
+	}
+	// Identity, and only now: the ring is indexed by the id the client
+	// asked for, so it must not be touched before that id has been judged
+	// (U-0199). Nothing is lost by waiting — every remembered original
+	// satisfied original <= next+window when it was written, next only
+	// grows and window is fixed at construction, so an original the check
+	// above refuses can never have an identity here.
+	//
+	// An original already taken is a retransmission, whatever frame it
+	// would fold into now: answer with the frame it went into and change
+	// nothing (U-0193).
+	remembered := original >= s.replayFloor()
+	if remembered {
+		if slot := s.slot(player, original); slot.target != 0 && slot.original == original {
+			return slot.target, nil
+		}
 	}
 	inputs := s.pending[frame]
 	if inputs == nil {
@@ -259,6 +266,15 @@ func (s *Sequencer) replayFloor() FrameID {
 	return s.next - ReplayHorizon
 }
 
+// replaySlotIndex maps an original frame id to its ring cell. The modulo
+// runs in the FrameID domain on purpose: FrameID is uint32 and the id comes
+// straight from the client, so converting to int first would wrap to a
+// NEGATIVE index on a platform whose int is 32 bits (GOARCH=386/arm) and
+// panic on the indexing — taking the room's goroutine with it (U-0199).
+func replaySlotIndex(original FrameID) int {
+	return int(original % FrameID(replayWindowSize))
+}
+
 // slot returns the seat's ring cell for original, allocating the ring on
 // first use. A seat that never submits costs nothing.
 func (s *Sequencer) slot(player PlayerID, original FrameID) *replaySlot {
@@ -267,7 +283,7 @@ func (s *Sequencer) slot(player PlayerID, original FrameID) *replaySlot {
 		ring = make([]replaySlot, replayWindowSize)
 		s.accepted[player] = ring
 	}
-	return &ring[int(original)%replayWindowSize]
+	return &ring[replaySlotIndex(original)]
 }
 
 // remember records that original was folded into target. inHorizon is the

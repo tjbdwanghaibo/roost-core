@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- **lockstep `SubmitInput` 先校验再去重**(U-0199,C8;T-93;用户复审提出,无 RR)。身份环是按客户端给的 `uint32` 帧号寻址的,而寻址排在窗口检查之前:一个必然被 `ErrFrameTooEarly` 拒绝的极大帧号照样给该座位分配了 129 槽的环;更要紧的是 `int(original) % replayWindowSize` 在 `int` 为 32 位的平台(GOARCH=386/arm)上溢出成负下标(`int32(4e9)%129 = -24`),索引即 panic,而 Room 是单 goroutine 驱动的。
+  现在折叠与窗口检查前移、身份查找后移(等价:任何被记住的 original 恒满足 `original <= next+window`,`next` 只增而 `window` 构造后固定,所以越窗的 original 不可能有身份记录),新增 `replaySlotIndex` 在 `FrameID` 域取模,对任意 uint32 都落在环内。测试 `submit_validation_promises_test.go`;记录 `docs/bugfix/U-0199-submit-input-validation-order.md`。
 - **LockstepBot 区分"已收到"与"已应用",回调失败不再丢批次尾帧**(U-0198,C8;RR-20260914-09;T-92)。Assembler 一次释放整个连续批次、游标立刻前移,而 `apply` 中途失败时既不保留剩余帧也不停用 Bot:重传被去重丢弃,后续新帧照常返回成功,模拟却少了尾帧。
   现在按失败点分开——`Simulate` 失败无法判断模拟推进了多少,Bot 进入 terminal(新 `ErrLockstepBotTerminal`、`Terminal()`),此后所有入口拒绝,由宿主重建;`SubmitInput` / `ReportHash` 失败只保留该帧与它未完成的那一步(连同已产出的 payload / hash),下次调用从那一步续做,不重跑已成功的 `Simulate`、不重新调用生产者。
   保留量由新配置 `MaxPendingApply`(默认 256)收界,超出转 terminal;跨调用保留的帧会复制 payload,不再别名 `HandleFrames` 调用方的缓冲区。新增 `PendingApply()`。测试 `lockstep_apply_promises_test.go`;记录 `docs/bugfix/RR-20260914-09.md`。
