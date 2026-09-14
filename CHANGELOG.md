@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- **`WAL.Sync` 在关闭进行中不再提前成功**(U-0190;C8;RR-20260914-01;T-84)。U-0185 的屏障把 `closed`(Close 已发起)当成 `doneCh`(writer 已排空):writer 持有未写批次时发起 Close,Sync 返回 nil 而 ticket 未完成。现在关闭进行中的 Sync 照常送屏障、按 ctx 等 writer 排空,排空后返回 WAL 的终止状态;干净关闭后仍是幂等 nil。测试 `sync_closing_promises_test.go`;记录 `docs/bugfix/RR-20260914-01.md`。
 - **EnterShared / LeaveShared 的不确定结果与 Transfer 共用一套收尾**(U-0189;C8;RR-20260913-12;T-83)。
   `EnterSharedExpected` / `LeaveSharedExpected` 出错后不再一律恢复旧模式:失效本地 marker,用独立有界 ctx 重查权威;权威未变才恢复,权威已切到目标模式按成功同步 live 与 lease 并返回 nil,权威仍是我们但另一种 lease 则同步到权威所示模式并报错,查不到则经 Fenced 进 `Recovering` 冻结直到下一次权威读成功。
   `settleIndeterminateTransfer` 泛化为 `settleIndeterminateOwnership`。同一修复覆盖 RR-20260913-13(Leave 恢复后普通写重试卡在 `shared -> local_owned` 非法迁移),测试补连续三次准入。测试 `ownership_mode_indeterminate_promises_test.go`;记录 `docs/bugfix/RR-20260913-12.md`。

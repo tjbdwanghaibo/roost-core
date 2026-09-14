@@ -57,6 +57,11 @@ type Options struct {
 	// OnFatal fences the hosting process when a physical write or fsync has an
 	// indeterminate outcome. It must initiate shutdown rather than retry writes.
 	OnFatal func(error)
+	// beforeProcessBatch, when set by a package test, runs between
+	// collectBatch and processBatch so a test can hold the writer at the one
+	// point where it owns a collected batch and no lock (U-0190). Nil in
+	// production.
+	beforeProcessBatch func()
 }
 
 func DefaultOptions(dir string) Options {
@@ -601,9 +606,17 @@ func (w *WAL) Sync(ctx context.Context) error {
 // nextLSN is already in appendCh, so when durableLSN already covers nextLSN
 // and the queue is empty there is nothing to wait for and the round trip is
 // skipped. Otherwise the barrier goes through the same FIFO as the records.
-// After Close the writer is gone and the queue is fully drained, so the
-// barrier is vacuously satisfied; returning here instead of blocking on a
-// send nobody receives keeps Sync idempotent after shutdown.
+//
+// Closing is two events, not one: `closed` is set when Close is called and
+// only stops admission; doneCh closes when the writer has drained every
+// queued request and synced. Between them the writer may still own a batch
+// it has not written, so the barrier is NOT vacuously satisfied there
+// (RR-20260914-01 — the first version returned nil on `closed`). Sending the
+// barrier is still right while closing: drainAndClose answers everything in
+// the queue. Only once doneCh is closed is the barrier satisfied by
+// construction, and then the WAL's terminal state is the answer — a failed
+// final sync must not read as success. That keeps Sync idempotent after a
+// clean shutdown without letting it run ahead of the drain.
 func (w *WAL) awaitWriteBarrier(ctx context.Context) error {
 	w.enqueueMu.Lock()
 	boundary := w.nextLSN
@@ -612,18 +625,12 @@ func (w *WAL) awaitWriteBarrier(ctx context.Context) error {
 		return nil
 	}
 	req := appendRequest{barrier: true, done: make(chan appendResult, 1)}
-	w.lifecycleMu.RLock()
-	closed := w.closed
-	w.lifecycleMu.RUnlock()
-	if closed {
-		return nil
-	}
 	select {
 	case w.appendCh <- req:
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.doneCh:
-		return nil
+		return w.terminal()
 	}
 	select {
 	case result := <-req.done:
@@ -637,7 +644,7 @@ func (w *WAL) awaitWriteBarrier(ctx context.Context) error {
 		case result := <-req.done:
 			return result.err
 		default:
-			return nil
+			return w.terminal()
 		}
 	}
 }
@@ -764,7 +771,11 @@ func (w *WAL) writerLoop() {
 	for {
 		select {
 		case first := <-w.appendCh:
-			w.processBatch(w.collectBatch(first))
+			batch := w.collectBatch(first)
+			if w.opts.beforeProcessBatch != nil {
+				w.opts.beforeProcessBatch()
+			}
+			w.processBatch(batch)
 		case <-ticker.C:
 			if err := w.syncActive(); err != nil {
 				w.setTerminal(errors.Join(corenest.ErrCommitIndeterminate, err))
