@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[第八轮 LOD、历史与提交交接](REVIEW-2026-09-14-08.md) · [新问题](../bug/REVIEW-2026-09-14-08.md) · [独立复现](../bug/REPRO-2026-09-14-08.md)。
+
 [第七轮：恢复屏障与分片重组](REVIEW-2026-09-14-07.md) · [两项新问题](../bug/REVIEW-2026-09-14-07.md) · [复现](../bug/REPRO-2026-09-14-07.md)。
 
 [第六轮](REVIEW-2026-09-14-06.md) · [StateSync 机制](IMPLEMENTATION-STATESYNC-BASELINE-AND-ACK.md) · [U-0199 漏审复盘](POSTMORTEM-LOCKSTEP-U0199.md)。

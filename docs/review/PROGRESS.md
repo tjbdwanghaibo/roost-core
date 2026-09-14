@@ -1,5 +1,15 @@
 # Roost Review 跨轮进度
 
+第八轮：32 份运行记录、19 篇机制文档、49 RR（45 标修复、4 未修复）。Core 215fffa，Kit 7030c5f，Codegen cacd627。用户声明未修复，RR-10..12 跳过复核；新增 RR-13：LOD 错相发送使组件冻结。七叶子六通过一失败，statesync race 通过。[运行](REVIEW-2026-09-14-08.md)。
+
+| 新增范围 | 不变量/证据 | 状态与下轮入口 |
+| --- | --- | --- |
+| statesync lod.go | 限频后的更新活性；奇数发送失败，逐帧/全量对照通过 | RR-13 未修复；继续删除/schema/生命周期 |
+| statesync ring/session | 会话历史淘汰后全量回退、旧 ACK 拒绝 | 部分场景通过；全局环与会话历史独立 |
+| PreparedFrame | ForceFull/新提交/Abort 后旧提交均拒绝 | 受控先后通过；真实同时发送未验证 |
+
+下一入口：投影生命周期、客户端应用/重组恢复，之后 entitysync → syncstream/syncbus；旧问题未修复时继续新内容。
+
 第七轮：31 份运行记录、19 篇机制文档、48 RR（45 标修复、3 未修复）。Core a123605，Kit 7030c5f，Codegen cacd627。用户声明 RR-10 未修复，本轮跳过复核；新增 RR-11（ForceFull 旧 ACK）、RR-12（单片帧长限制）。九个独立叶子六通过三失败，statesync race 通过。下一入口：LOD/更新频率、历史淘汰和恢复交接，再 entitysync → syncstream/syncbus。[运行](REVIEW-2026-09-14-07.md)。
 
 | 当前范围 | 入口/不变量 | 证据与状态 | 未覆盖/下一步 |

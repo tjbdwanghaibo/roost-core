@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[第八轮 StateSync LOD 续审](review/REVIEW-2026-09-14-08.md)：新增错相发送导致组件冻结；历史淘汰与 PreparedFrame 边界通过，旧问题未复核。
+
 [第七轮 StateSync 续审](review/REVIEW-2026-09-14-07.md)：旧问题保持未修复，新增 ForceFull/旧 ACK 与单片限制问题，进度及机制已更新。
 
 [第六轮：StateSync 与 Lockstep 漏审复盘](review/REVIEW-2026-09-14-06.md)。RR-09 已验收，RR-10 待修复；下文保留历史时点状态。
