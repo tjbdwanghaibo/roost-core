@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- **activity 的窗口条目有 opening / 确认两段生命周期,派发从持久的 Delivering 索引重试**(U-0191、U-0192,C8;RR-20260914-02/03,T-85、T-86)。
+  `OpenActivity` 先进 `Window.Opening`(带 AdmittedAt),`Activities.Create` 之后 `confirmWindow` 在一个 CAS 里无条件挪进 `Keys`;sweep 对 opening 条目:记录存在就代为确认,缺失只有超过新配置 `OpeningGrace`(默认 1 分钟)才回收,且回收只删仍在 opening 的——与 OpenActivity 交错不再把正在建的活动删出窗口。
+  完成的活动退出 `Keys` 时同 CAS 进入 `Window.Delivering`(不占 `MaxPendingActivities`),`sweepGroup` 每轮从 `DeliveringActivities`(排序 + 每组游标轮转)出发 DueDispatches→AttemptDispatch,`RetireDelivered` 先 `ensureDispatches` 兜底、全部 dispatch 终态才退出;此前只对本轮刚到期完成的活动派发,notify 收齐完成、heal、退避重试都没有入口。
+  新增计数 `sweep.delivering_read_failed` / `sweep.retire_failed`。Redis 记录新字段 `omitempty`,老记录零迁移。测试 `open_window_lifecycle_promises_test.go`、`dispatch_rediscovery_promises_test.go`;记录 `roost-core/docs/bugfix/RR-20260914-02.md`、`RR-20260914-03.md`。
 - **mail 的 Update 回调先 clone 再改**(U-0182,C2;RR-20260911-05,T-76,P3)。回调拿到的 `Mailbox` 是结构体浅拷贝,`Entries` / `SettledClaims` 两张 map 仍指向存储对象;`Deliver` 先 insert、再 evict、最后才做容量拒绝,回调返回 `save=false` 加错误时 MemoryStore 不保存新结构体,但 map 上的修改已经发生 —— `Unread` 与 `Version` 维持旧值,条目和墓碑却多了一个。`match` 的每个 Update 回调第一行都是 `current = current.clone()`,mail 的五个回调现在一致。仅 MemoryStore 受影响,Redis 每次解码新对象。`atomic_refusal_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260911-05.md`。
 - **mail 的领取身份按信封的可领取窗口保留,不再按条数**(U-0171,C8;RR-20260911-01,T-65)。U-0165 用条数给墓碑收界,并论证"`ReserveClaim` 本来就拒绝过期信封,所以墓碑只需活得比信封长"——**这个论证是错的**:计数上限保证不了任何时间期限,被挤掉的时刻只取决于后面来了多少条。信封还有一周有效期时,只要再有 `MaxSettledClaims` 条更新的已领取邮件被淘汰,原来那条就被挤掉,邮件重投后又能领出一个新 token。
   现在 `Entry` 记下 `ClaimEnvelopeExpiresAtUnix`(`ReserveClaim` 从信封抄,那里本来就持有它),墓碑带着它、按"这封邮件再也领不了"来老化;U-0165 写下的没有窗口的旧记录才按计数淘汰。保留之后仍然超界时,投递以新增的 `ErrClaimHistoryFull`(码 590115)被拒绝并计 `refused:deliver:claim_history_full`,而不是悄悄忘掉一条身份 —— 拒绝可见,遗忘不可见,这与 `full()` 对"腾不出位置"的处理是同一个态度。`settled_claim_retention_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260911-01.md`。

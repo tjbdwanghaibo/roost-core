@@ -93,28 +93,48 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 		slog.Info("activity server: aggregation finished by grace window",
 			"group_id", groupID, "activity_id", activity.Key.ActivityID,
 			"phase", activity.Key.Phase, "status", activity.Status)
-		due, err := service.DueDispatches(ctx, activity.Key, DispatchBatch)
+	}
+	// Retries come from the persistent Delivering index, not from this
+	// round's completions (U-0192, RR-20260914-03): an activity completed by
+	// its last notify, one healed from an earlier failed dispatch create, and
+	// one whose backoff elapsed since the previous tick all have to be found
+	// again here. Each stays listed until RetireDelivered sees every dispatch
+	// terminal.
+	delivering, err := service.DeliveringActivities(ctx, groupID, SweepBatch)
+	if err != nil {
+		service.report.Dropped("sweep.delivering_read_failed", 1)
+		slog.Error("activity server: reading delivering activities failed",
+			"group_id", groupID, "err", err)
+		return
+	}
+	for _, key := range delivering {
+		due, err := service.DueDispatches(ctx, key, DispatchBatch)
 		if err != nil {
 			service.report.Dropped("sweep.due_read_failed", 1)
 			slog.Error("activity server: reading due dispatches failed",
-				"activity_id", activity.Key.ActivityID, "err", err)
+				"activity_id", key.ActivityID, "err", err)
 			continue
 		}
 		for _, dispatch := range due {
-			_, err := service.AttemptDispatch(ctx, activity.Key, dispatch.GameSID)
+			_, err := service.AttemptDispatch(ctx, key, dispatch.GameSID)
 			switch {
 			case errors.Is(err, ErrDispatchNotDue):
 				// The backoff has not elapsed. Not an error.
 			case errors.Is(err, ErrDispatchExhausted):
 				slog.Error("activity server: dispatch attempts exhausted; a game server will "+
-					"not receive this result", "activity_id", activity.Key.ActivityID,
+					"not receive this result", "activity_id", key.ActivityID,
 					"game_sid", dispatch.GameSID)
 			case err != nil:
 				service.report.Dropped("dispatch.attempt_failed", 1)
 				slog.Error("activity server: dispatch attempt failed",
-					"activity_id", activity.Key.ActivityID,
+					"activity_id", key.ActivityID,
 					"game_sid", dispatch.GameSID, "err", err)
 			}
+		}
+		if _, err := service.RetireDelivered(ctx, key); err != nil {
+			service.report.Dropped("sweep.retire_failed", 1)
+			slog.Error("activity server: retiring delivered activity failed",
+				"activity_id", key.ActivityID, "err", err)
 		}
 	}
 }

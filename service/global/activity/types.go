@@ -735,14 +735,55 @@ func (d Dispatch) clone() Dispatch {
 // never be swept and would sit at its grace deadline forever.
 type Window struct {
 	GroupID string `json:"group_id"`
-	Keys    []Key  `json:"keys,omitempty"`
+	// Keys are the confirmed entries: OpenActivity confirmed the key after
+	// Activities.Create returned, so an entry here whose activity is missing
+	// is one whose record is genuinely gone.
+	Keys []Key `json:"keys,omitempty"`
+	// Opening are entries admitted before their Activities.Create has been
+	// confirmed (U-0191, RR-20260914-02). A sweep that finds no activity for
+	// one of these cannot tell "not created yet" from "never will be"; it
+	// only reclaims the entry once it is older than Config.OpeningGrace, and
+	// only if it is still here — the confirm that follows Create moves it to
+	// Keys under the same compare-and-set, so a late reclaim finds nothing.
+	Opening []OpeningEntry `json:"opening,omitempty"`
+	// Delivering are complete activities whose dispatches are not all
+	// terminal yet (U-0192, RR-20260914-03). They left Keys — the aggregation
+	// is over — but the sweep must keep finding them until every dispatch is
+	// acked or exhausted, or a retry that misses one sweep tick is lost. The
+	// list does not count against MaxPendingActivities.
+	Delivering []Key `json:"delivering,omitempty"`
 	// RefusedOpens counts opens rejected because the window was full — the
 	// backlog signal an operator needs to see before it turns into a stall.
 	RefusedOpens uint64 `json:"refused_opens"`
 }
 
+// OpeningEntry is a window entry whose activity record is not yet confirmed.
+type OpeningEntry struct {
+	Key            Key   `json:"key"`
+	AdmittedAtUnix int64 `json:"admitted_at_unix"`
+}
+
+// contains reports whether key holds a pending slot: confirmed or opening.
 func (w Window) contains(key Key) bool {
 	for _, existing := range w.Keys {
+		if existing == key {
+			return true
+		}
+	}
+	return w.openingIndex(key) >= 0
+}
+
+func (w Window) openingIndex(key Key) int {
+	for i, entry := range w.Opening {
+		if entry.Key == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func (w Window) delivering(key Key) bool {
+	for _, existing := range w.Delivering {
 		if existing == key {
 			return true
 		}
@@ -750,11 +791,22 @@ func (w Window) contains(key Key) bool {
 	return false
 }
 
+// pending is the slot count MaxPendingActivities bounds.
+func (w Window) pending() int { return len(w.Keys) + len(w.Opening) }
+
 func (w Window) clone() Window {
 	out := w
 	if len(w.Keys) > 0 {
 		out.Keys = make([]Key, len(w.Keys))
 		copy(out.Keys, w.Keys)
+	}
+	if len(w.Opening) > 0 {
+		out.Opening = make([]OpeningEntry, len(w.Opening))
+		copy(out.Opening, w.Opening)
+	}
+	if len(w.Delivering) > 0 {
+		out.Delivering = make([]Key, len(w.Delivering))
+		copy(out.Delivering, w.Delivering)
 	}
 	return out
 }
