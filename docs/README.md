@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-14 扩展审查](review/REVIEW-2026-09-14.md) · [未收敛工作表](review/OPEN-QUESTIONS.md)：WAL 关闭新问题、跨实例删除与真实共享模式恢复。
+
 [Review 进度统计](review/PROGRESS-SNAPSHOT-2026-09-13.md) · [第十轮 LeaveShared 恢复审查](review/REVIEW-2026-09-13-10.md)。
 
 [第九轮共享模式审查](review/REVIEW-2026-09-13-09.md)：新增 P2 EnterShared 回复丢失后独占写准入。

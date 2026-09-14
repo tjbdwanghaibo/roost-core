@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-14 运行](REVIEW-2026-09-14.md) · [问题](../bug/REVIEW-2026-09-14.md) · [复现](../bug/REPRO-2026-09-14.md) · [未收敛工作表](OPEN-QUESTIONS.md)。
+
 [进度统计](PROGRESS-SNAPSHOT-2026-09-13.md)：24 轮、36 RR；[第十轮运行](REVIEW-2026-09-13-10.md)、[问题](../bug/REVIEW-2026-09-13-10.md)。
 
 [第九轮运行](REVIEW-2026-09-13-09.md) · [问题](../bug/REVIEW-2026-09-13-09.md) · [复现](../bug/REPRO-2026-09-13-09.md)。
