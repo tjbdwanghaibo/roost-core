@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-14 第四轮 lockstep 续审](REVIEW-2026-09-14-04.md) · [内存边界问题](../bug/REVIEW-2026-09-14-04.md) · [复现](../bug/REPRO-2026-09-14-04.md) · [lockstep / sync 覆盖与优先级](LOCKSTEP-AND-SYNC-COVERAGE.md)。
+
 [09-14 第三轮 lockstep](REVIEW-2026-09-14-03.md) · [四项问题](../bug/REVIEW-2026-09-14-03.md) · [复现](../bug/REPRO-2026-09-14-03.md) · [输入与追帧机制](IMPLEMENTATION-LOCKSTEP-INPUT-AND-CATCHUP.md)。
 
 [09-14 第二轮](REVIEW-2026-09-14-02.md)：WAL 修复验收、Activity 两个 P2 · [问题](../bug/REVIEW-2026-09-14-02.md) · [复现](../bug/REPRO-2026-09-14-02.md) · [Activity 机制](IMPLEMENTATION-ACTIVITY-WINDOW-AND-DISPATCH.md)。累计 26 轮、39 RR，详见 [进度](PROGRESS.md)。

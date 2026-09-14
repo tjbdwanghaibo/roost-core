@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[Lockstep 与 Sync 审查状态](review/LOCKSTEP-AND-SYNC-COVERAGE.md)：先补 lockstep，再 statesync → entitysync → syncstream/syncbus；[第四轮结果](review/REVIEW-2026-09-14-04.md)。
+
 [09-14 lockstep 专项](review/REVIEW-2026-09-14-03.md)：重传身份、追帧收敛、座位与协议配置；[实现学习](review/IMPLEMENTATION-LOCKSTEP-INPUT-AND-CATCHUP.md)。
 
 [09-14 第二轮审查](review/REVIEW-2026-09-14-02.md)：WAL 关闭修复验收，Activity 窗口与派发两个新 P2；[实现学习](review/IMPLEMENTATION-ACTIVITY-WINDOW-AND-DISPATCH.md)。

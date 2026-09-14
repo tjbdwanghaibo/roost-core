@@ -1,5 +1,9 @@
 # Roost Review 跨轮进度
 
+2026-09-14 第四轮：28 份运行记录、18 篇机制文档、44 RR（43 标修复、1 未修复）。Core `30a6b5b`，Kit `7030c5f`，Codegen `cacd627`。lockstep RR-04..07 原十叶子全过；新 RR-08 去重身份表准入上限失败。真实本机 UDP 24 帧冗余恢复通过、超期限重放边界确认、lockstep/robot race 通过，补两项有界微基准。[运行](REVIEW-2026-09-14-04.md) · [覆盖与优先级](LOCKSTEP-AND-SYNC-COVERAGE.md)。
+
+当前六个 lockstep 生产文件已阅读，风险验证未全部完成；robot 消费者已读但错误恢复待专项。用户确认 lockstep 之后按 statesync → entitysync → syncstream/syncbus；sync 只有历史部分覆盖，本轮盘点不计新增正确性验证。下一入口：RR-08、重放期限与消费者恢复，再依清单推进；不以全包 race 通过宣告完成。
+
 2026-09-14 第三轮（lockstep）：累计 27 份运行记录、18 篇机制文档、43 RR（39 标修复、4 未修复）。Core `a1455fb`，Kit `7030c5f`，Codegen `cacd627`。Activity RR-02/03 原五个测试叶子全通过；lockstep 十个叶子中五失败对应四项新 RR、五通过；两个相关包 race 通过。[运行](REVIEW-2026-09-14-03.md) · [问题](../bug/REVIEW-2026-09-14-03.md) · [机制](IMPLEMENTATION-LOCKSTEP-INPUT-AND-CATCHUP.md)。
 
 | 范围 | 新增证据 | 状态/下一入口 |

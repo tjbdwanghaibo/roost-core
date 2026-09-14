@@ -1,5 +1,7 @@
 # Lockstep：输入身份、权威帧与追帧收敛
 
+第四轮 Core `30a6b5b`：原四项已验收，当前实现先按 accepted[player][original] 去重，拒绝 batch=1、负座位、超 MaxFrameInputs。accepted 仅在 Advance 修剪，两次 Tick 间可被大量不同旧身份撑大，新增 RR-08；超过 ReplayHorizon 的重传仍允许再次折入，不能当作无限幂等。真实 UDP 回环 24 帧（主动丢弃两个已收到包）恢复通过。两个 100x 微基准约 8.4—8.8 μs/op，但包含提交/切帧，且发送器为空实现，不能推算生产吞吐。[本轮证据与限制](REVIEW-2026-09-14-04.md) · [覆盖清单](LOCKSTEP-AND-SYNC-COVERAGE.md)。以下保留第三轮基线。
+
 2026-09-14，Core `a1455fb63903e5f1e4d1e7741ed13d52533bebf9`。已读 sequencer、room、history、assembler、wire、desync，十个测试叶子及包 race；部分场景验证。
 
 ## 数据流与责任
