@@ -1,5 +1,7 @@
 # WAL：准入、持久化、投影和停止的边界
 
+09-14 第二轮 Core `84b2a4a`：U-0190 删除 closed 早返回，关闭中继续等待屏障/doneCh，并传播 terminal。原交错复跑通过；新增 Close 取消后重试通过；用非 strict Append 保留待同步数据、关闭真实句柄后，最终 Close 报错且 Sync 返回 ErrCommitIndeterminate。注意 Enqueue 的请求强制 requireSync=true，已成功 ticket 不应因后续关闭错误改判失败。此轮未验证 fsync 阻塞、物理掉电，见[运行与复现](REVIEW-2026-09-14-02.md)。以下为历史基线。
+
 09-14 Core `50859c5`：Close 发起时置 closed，writer 退出才关闭 doneCh；awaitWriteBarrier 看到 closed 就返回 nil，混淆准入停止与持久化完成。收批后调度屏障实测 Sync 提前成功、ticket 未完成；open 超时和真正关闭后 Sync 对照通过。修复应等待完成并传播错误，不能靠延迟猜测。[RR-20260914-01](../bug/REVIEW-2026-09-14.md)。
 
 第八轮补证：FIFO 写屏障与可取消等待修复的五个真实文件场景通过。该结果不覆盖 fsync 卡死和 Sync/Close 并发，见[机制学习](IMPLEMENTATION-REPAIR-ACCEPTANCE.md)与[运行](REVIEW-2026-09-13-08.md)。

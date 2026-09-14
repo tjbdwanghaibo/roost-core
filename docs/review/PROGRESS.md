@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+2026-09-14 第二轮：累计 26 份运行记录、17 篇机制文档、39 RR（37 标修复、2 未修复）。Core `84b2a4a`，Kit `ac1a880`，Codegen `cacd627`。WAL U-0190 原关闭交错及新增取消重试/最终同步失败传播通过；Activity 新增两个 P2（窗口创建交接丢索引、派发跨轮扫描遗漏）。[运行](REVIEW-2026-09-14-02.md) · [问题](../bug/REVIEW-2026-09-14-02.md)。
+
+| 本轮范围 | 入口与不变量 | 证据/状态 | 下一入口 |
+| --- | --- | --- | --- |
+| Core nestwal/wal.go | awaitWriteBarrier、Sync、Close、syncAndCloseActive | 原触发及独立错误/取消边界通过，包 race 通过；部分场景验证 | fsync 阻塞、真实物理故障及 shutdown 调用链 |
+| Kit service/global/activity | OpenActivity/admitToWindow/AdvanceExpired/pruneWindow | RR-20260914-02 可复现；正常到期对照通过 | 带代际创建意图、延迟 prune 与失败恢复 |
+| Kit service/global/activity | ensureDispatches/sweepGroup/DueDispatches/AttemptDispatch/AckDispatch | RR-20260914-03 三条完成路径复现；显式重试及 ACK 对照通过；包 race 通过 | 独立派发索引、reopen、公平性和实际发送 |
+| Codegen | 同步 main | 本轮无新增源码覆盖 | 消费者与模板轮转 |
+
+机制新增：[Activity 窗口与派发](IMPLEMENTATION-ACTIVITY-WINDOW-AND-DISPATCH.md)。图谱旧代，源码补证；Activity 使用 MemoryStore，未验真实 Redis/网络交付。以下条目保留各轮当时状态。
+
 2026-09-14：累计 25 份运行记录、16 篇机制文档、37 RR（36 标修复、1 未修复），另有[六项未收敛工作](OPEN-QUESTIONS.md)。Core `50859c5`，Kit/Codegen 无变化。本轮十个专项场景：WAL 三个（关闭中失败，两个对照通过），真实 Redis 跨缓存边界一个及模式恢复六个；四包 race 通过。已验证部分场景，不是全仓收敛。下一轮 RR-20260914-01、WAL 错误/取消、跨节点水位。[运行](REVIEW-2026-09-14.md)。
 
 收尾独立验收：合并作者修复 `885ff4f585508b7f157b89419f83d05bf0a7b5d8`（U-0189，Enter/Leave 共用未知结果恢复），解决文档索引冲突时保留两个 RR 与作者说明。原触发按新契约适配：权威确认切换成功允许返回 nil，发送前失败仍必须报错；核心 live 模式和写准入断言保留。四个模式场景及 Leave 连续三次写准入均 PASS（overlay 1.656s）。RR-12/13 现均已独立验收，旧失败证据保留；未验证真实 Redis/跨进程。最终统计：24 轮、16 篇机制文档、36 RR，索引 36 已修复、0 未修复；不是全仓审完。

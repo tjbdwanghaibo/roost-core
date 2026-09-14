@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-14 第二轮](REVIEW-2026-09-14-02.md)：WAL 修复验收、Activity 两个 P2 · [问题](../bug/REVIEW-2026-09-14-02.md) · [复现](../bug/REPRO-2026-09-14-02.md) · [Activity 机制](IMPLEMENTATION-ACTIVITY-WINDOW-AND-DISPATCH.md)。累计 26 轮、39 RR，详见 [进度](PROGRESS.md)。
+
 [09-14 运行](REVIEW-2026-09-14.md) · [问题](../bug/REVIEW-2026-09-14.md) · [复现](../bug/REPRO-2026-09-14.md) · [未收敛工作表](OPEN-QUESTIONS.md)。
 
 [进度统计](PROGRESS-SNAPSHOT-2026-09-13.md)：24 轮、36 RR；[第十轮运行](REVIEW-2026-09-13-10.md)、[问题](../bug/REVIEW-2026-09-13-10.md)。

@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-14 第二轮审查](review/REVIEW-2026-09-14-02.md)：WAL 关闭修复验收，Activity 窗口与派发两个新 P2；[实现学习](review/IMPLEMENTATION-ACTIVITY-WINDOW-AND-DISPATCH.md)。
+
 [09-14 扩展审查](review/REVIEW-2026-09-14.md) · [未收敛工作表](review/OPEN-QUESTIONS.md)：WAL 关闭新问题、跨实例删除与真实共享模式恢复。
 
 [Review 进度统计](review/PROGRESS-SNAPSHOT-2026-09-13.md) · [第十轮 LeaveShared 恢复审查](review/REVIEW-2026-09-13-10.md)。
