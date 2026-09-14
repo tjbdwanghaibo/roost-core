@@ -1,5 +1,14 @@
 # Roost Review 跨轮进度
 
+第七轮：31 份运行记录、19 篇机制文档、48 RR（45 标修复、3 未修复）。Core a123605，Kit 7030c5f，Codegen cacd627。用户声明 RR-10 未修复，本轮跳过复核；新增 RR-11（ForceFull 旧 ACK）、RR-12（单片帧长限制）。九个独立叶子六通过三失败，statesync race 通过。下一入口：LOD/更新频率、历史淘汰和恢复交接，再 entitysync → syncstream/syncbus。[运行](REVIEW-2026-09-14-07.md)。
+
+| 当前范围 | 入口/不变量 | 证据与状态 | 未覆盖/下一步 |
+| --- | --- | --- | --- |
+| statesync session/control | ForceFull、Acknowledge、HandleControl | 四场景两失败两对照；RR-11 未修复 | 并发 ForceFull/Commit、重连恢复 |
+| statesync datagram | push/Expire、单多片一致性、冲突清理 | 五场景四通过一失败；RR-12 未修复 | 真网络、客户端应用链、空片/畸形片 |
+| statesync projection/history | 前轮 RR-10 保留 | 用户声明未修复，未再验收 | LOD、历史淘汰 |
+| Kit/Codegen | pull main | 无增量，无新增源码审查 | 按既定轮转继续 |
+
 第六轮：30 份运行记录、19 篇机制文档、46 RR（45 标修复、1 未修复），另有用户发现 U-0199。Core 2c5469e，Kit 7030c5f，Codegen cacd627。RR-09 已验收；U-0199 修前/后对照确认校验顺序漏审；statesync 新 RR-10。下一入口：RR-10、ForceFull/旧 ACK、分片重组，再 entitysync → syncstream/syncbus。Lockstep 回绕、业务模拟/快照恢复仍待查。[运行](REVIEW-2026-09-14-06.md) · [漏审复盘](POSTMORTEM-LOCKSTEP-U0199.md)。以下保留历史时点状态。
 
 2026-09-14 第五轮：29 份运行记录、18 篇机制文档、45 RR（44 标修复、1 未修复）。Core `a1245fd`，Kit `7030c5f`，Codegen `cacd627`。RR-08 原上限验证通过；新增 RR-09：LockstepBot 回调错误后继续成功处理却跳帧，三处错误复现。真实 TCP 重投、取消恢复、原 UDP/期限/内存五场景通过；lockstep/robot race 通过。[运行](REVIEW-2026-09-14-05.md) · [问题](../bug/REVIEW-2026-09-14-05.md)。消费者错误恢复已从待查变成确认问题；sync 继续按已确认顺序排在 lockstep 后。

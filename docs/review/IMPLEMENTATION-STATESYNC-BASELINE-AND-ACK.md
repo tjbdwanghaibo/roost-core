@@ -1,5 +1,9 @@
 # StateSync：发送承诺与 ACK 基线
 
+第七轮（Core a123605）：ForceFull/旧 ACK 的待查项已证实为 RR-11；直接 ACK 和 wire ACK 均可清除服务端恢复意图，有序 ControlResync 拒绝旧 ACK 的对照通过。恢复代际不能只用于拒绝 PreparedFrame 提交，还需保护待履行的恢复要求。[本轮证据](REVIEW-2026-09-14-07.md)。以下保留第六轮机制描述和当时状态。
+
+重组机制补充：assemblyKey 包含 session、room、epoch、tick、sequence；多片准入受全局/单会话条数限制，内容冲突、超长、完成时删除。TTL 以创建时间计，不因重复片刷新；显式 Expire 和多片 Push 执行扫描。逆序/重复、超时后重传、冲突删除三个专项通过。每次多片扫描带来 O(inflight) 工作，尚未做吞吐测试。单片快路径跳过 inflight 表，同时遗漏 MaxFrameBytes，形成 RR-12；DecodeFrame 仍有长度检查，不将重组层失守夸大为全链解码绕过。
+
 审查 Core `2c5469e`；本轮 statesync 与初始 `2c89f3d` 相同。本页区分现有机制和建议。
 
 Publish 将快照放入 ring；PrepareLatest 读取 Latest，SessionState.prepare 在锁内生成 sequence，复制 previous 与 ACK 基线，再运行会话投影、BuildDelta、编码和分片。PreparedFrame 保存投影视图及提交凭证。
