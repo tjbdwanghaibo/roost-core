@@ -139,8 +139,12 @@ func TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned(t *testing.T)
 	if err != nil || next.Shared || live.RemoteOwnershipState() != entity.RemoteOwnershipLocalOwned {
 		t.Fatalf("leave-shared applied but reported err=%v next=%+v state=%s", err, next, live.RemoteOwnershipState())
 	}
-	if err := probeAdmission(t, mgr, live); err != nil {
-		t.Fatalf("local-owned admission after recovery: %v", err)
+	// RR-20260913-13:旧实现把 live 恢复成 shared,后续普通写第一次因刷新后非 shared 被拒,
+	// 第二、三次卡在 `shared -> local_owned` 非法迁移上永远不恢复。连续三次准入都必须成功。
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := probeAdmission(t, mgr, live); err != nil {
+			t.Fatalf("attempt %d: repeated admission did not recover after authoritative refresh: %v (live=%s)", attempt, err, live.RemoteOwnershipState())
+		}
 	}
 }
 

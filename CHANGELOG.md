@@ -40,7 +40,7 @@
 
 - **EnterShared / LeaveShared 的不确定结果与 Transfer 共用一套收尾**(U-0189;C8;RR-20260913-12;T-83)。
   `EnterSharedExpected` / `LeaveSharedExpected` 出错后不再一律恢复旧模式:失效本地 marker,用独立有界 ctx 重查权威;权威未变才恢复,权威已切到目标模式按成功同步 live 与 lease 并返回 nil,权威仍是我们但另一种 lease 则同步到权威所示模式并报错,查不到则经 Fenced 进 `Recovering` 冻结直到下一次权威读成功。
-  `settleIndeterminateTransfer` 泛化为 `settleIndeterminateOwnership`。测试 `ownership_mode_indeterminate_promises_test.go`;记录 `docs/bugfix/RR-20260913-12.md`。
+  `settleIndeterminateTransfer` 泛化为 `settleIndeterminateOwnership`。同一修复覆盖 RR-20260913-13(Leave 恢复后普通写重试卡在 `shared -> local_owned` 非法迁移),测试补连续三次准入。测试 `ownership_mode_indeterminate_promises_test.go`;记录 `docs/bugfix/RR-20260913-12.md`。
 - **第七轮复核残余补修:删除水位覆盖全部 L1 写入口、L2 按版本删除、L2 冲突不降级、代际播种进程级单调**(归 U-0187 / U-0180 / U-0184;RR-20260913-01/05/02;T-74、T-81 更新)。
   `cache.StoreConfig.Superseded`(键不存在也判、与 Stale/Conflict 同锁)让 publish / loader fill / L2 回填共用删除水位,`ReadThrough.loadOne` 回填被拒时返回 L1 现值或 miss;
   `cache.ReadThroughOptions.FatalRemoteError` 分类出 IgnoreRemoteError 不得吞的错误,entity 配置为版本冲突;
