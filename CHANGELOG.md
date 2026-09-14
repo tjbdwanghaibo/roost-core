@@ -38,6 +38,10 @@
 
 ### Fixed
 
+- **lockstep:输入重传幂等、追帧配置必须收敛、座位号非负且对齐 wire 条数上限**(U-0193～U-0196;C8 / C8 / C8 / C4;RR-20260914-04～07;T-87～T-90)。
+  `Sequencer` 记每玩家 `ReplayHorizon`(64 帧)内的原始帧号身份,已入帧输入的迟到重传返回当初折入的帧号、不再入帧(此前折进下一帧,一次性操作执行两次);乱序未来帧与"显式输入覆盖迟到占位"不变。
+  `NewRoom` 拒绝 `CatchupBatchFrames=1`(每 tick 产一帧,净补帧速度必须为正,否则永不切回 live)。`NewSequencer` 拒绝负座位(-1 是旁观者哨兵)和多于 `MaxFrameInputs` 的座位(否则生成自己的解码器拒绝的帧)。
+  测试 `input_replay_promises_test.go`、`catchup_rate_promises_test.go`、`seat_identity_promises_test.go`;记录 `docs/bugfix/RR-20260914-04.md`～`07.md`。
 - **`WAL.Sync` 在关闭进行中不再提前成功**(U-0190;C8;RR-20260914-01;T-84)。U-0185 的屏障把 `closed`(Close 已发起)当成 `doneCh`(writer 已排空):writer 持有未写批次时发起 Close,Sync 返回 nil 而 ticket 未完成。现在关闭进行中的 Sync 照常送屏障、按 ctx 等 writer 排空,排空后返回 WAL 的终止状态;干净关闭后仍是幂等 nil。测试 `sync_closing_promises_test.go`;记录 `docs/bugfix/RR-20260914-01.md`。
 - **EnterShared / LeaveShared 的不确定结果与 Transfer 共用一套收尾**(U-0189;C8;RR-20260913-12;T-83)。
   `EnterSharedExpected` / `LeaveSharedExpected` 出错后不再一律恢复旧模式:失效本地 marker,用独立有界 ctx 重查权威;权威未变才恢复,权威已切到目标模式按成功同步 live 与 lease 并返回 nil,权威仍是我们但另一种 lease 则同步到权威所示模式并报错,查不到则经 Fenced 进 `Recovering` 冻结直到下一次权威读成功。

@@ -65,6 +65,13 @@ const MaxInputPayloadBytes = 1024
 // (window+1) × players × payload, purely configuration-amplified.
 const MaxSubmitWindow = 64
 
+// ReplayHorizon is how many frames behind the next uncut frame a player's
+// original input frame ids stay remembered (U-0193, RR-20260914-04). A
+// retransmission of an input already folded into a frame within this
+// horizon is idempotent; one older than the horizon is indistinguishable
+// from a first arrival and folds like one. Memory is players × horizon ids.
+const ReplayHorizon FrameID = MaxSubmitWindow
+
 // SequencerConfig shapes a match's sequencer.
 type SequencerConfig struct {
 	// Players fixes the seat set for the match.
@@ -89,6 +96,13 @@ type Sequencer struct {
 	maxInput int
 	next     FrameID
 	pending  map[FrameID]map[PlayerID]pendingInput
+	// accepted remembers, per player, which ORIGINAL frame ids have been
+	// taken and which frame each was folded into. The pending map only
+	// deduplicates within the target frame and is deleted when that frame
+	// is cut, so before this a retransmission of an input already in frame
+	// N was re-folded into frame N+1 and executed twice (RR-20260914-04).
+	// Pruned by Advance to ReplayHorizon behind next.
+	accepted map[PlayerID]map[FrameID]FrameID
 }
 
 // pendingInput remembers whether the payload arrived by late-folding: a
@@ -117,8 +131,21 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 	if maxInput < 0 || maxInput > MaxInputPayloadBytes {
 		return nil, fmt.Errorf("%w: max input bytes %d outside (0, %d]", ErrConfigInvalid, maxInput, MaxInputPayloadBytes)
 	}
+	if len(config.Players) > MaxFrameInputs {
+		// A frame can carry at most MaxFrameInputs inputs on the wire; a
+		// room with more seats than that emits frames its own decoder
+		// rejects (RR-20260914-07). The byte budget in NewRoom does not
+		// cover this — tiny payloads fit any number of seats.
+		return nil, fmt.Errorf("%w: %d players exceeds the wire limit of %d inputs per frame", ErrConfigInvalid, len(config.Players), MaxFrameInputs)
+	}
 	players := make(map[PlayerID]struct{}, len(config.Players))
 	for _, player := range config.Players {
+		if player < 0 {
+			// Negative ids are not seats: the room keeps a reserved
+			// negative value for spectator ownership, and a seat there
+			// would let one session be both (RR-20260914-06).
+			return nil, fmt.Errorf("%w: player id %d is negative", ErrConfigInvalid, player)
+		}
 		if _, duplicate := players[player]; duplicate {
 			return nil, fmt.Errorf("%w: duplicate player %d", ErrConfigInvalid, player)
 		}
@@ -130,6 +157,7 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 		maxInput: maxInput,
 		next:     1,
 		pending:  make(map[FrameID]map[PlayerID]pendingInput),
+		accepted: make(map[PlayerID]map[FrameID]FrameID),
 	}, nil
 }
 
@@ -161,6 +189,13 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 	if len(payload) > s.maxInput {
 		return 0, ErrPayloadTooBig
 	}
+	// Identity first: an original (player, frame) already taken is a
+	// retransmission, whatever frame it would fold into now. Answer with
+	// the frame it went into and change nothing (U-0193).
+	if target, seen := s.accepted[player][frame]; seen {
+		return target, nil
+	}
+	original := frame
 	folded := frame < s.next
 	if folded {
 		frame = s.next
@@ -175,12 +210,26 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 	}
 	if existing, submitted := inputs[player]; submitted {
 		if !existing.folded || folded {
+			// Lost to what the frame already holds. Still an accepted
+			// identity: its retransmission must not fold into a later
+			// frame either.
+			s.remember(player, original, frame)
 			return frame, nil
 		}
 		// fallthrough: explicit input overwrites a folded placeholder
 	}
 	inputs[player] = pendingInput{payload: append([]byte(nil), payload...), folded: folded}
+	s.remember(player, original, frame)
 	return frame, nil
+}
+
+func (s *Sequencer) remember(player PlayerID, original, target FrameID) {
+	seen := s.accepted[player]
+	if seen == nil {
+		seen = make(map[FrameID]FrameID)
+		s.accepted[player] = seen
+	}
+	seen[original] = target
 }
 
 // Advance cuts the next frame from whatever has arrived (optimistic frame
@@ -208,5 +257,17 @@ func (s *Sequencer) Advance() Frame {
 		delete(s.pending, s.next)
 	}
 	s.next++
+	// Forget identities older than the replay horizon; the map stays at
+	// most players × ReplayHorizon entries.
+	if s.next > ReplayHorizon {
+		floor := s.next - ReplayHorizon
+		for _, seen := range s.accepted {
+			for original := range seen {
+				if original < floor {
+					delete(seen, original)
+				}
+			}
+		}
+	}
 	return frame
 }

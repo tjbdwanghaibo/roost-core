@@ -79,6 +79,10 @@
 | T-84 | 停机时 `Flush` / `Sync` 立刻成功,但随后 `Close` 还在跑、刚 Enqueue 的 ticket 未 Done | core ≤ v1.15.2(含 U-0185 之后、v1.15.3 之前)把 Close 发起当成排空完成 | 只在 Close 与 Sync 并发、writer 恰好持有未写批次时出现 | 升级 core(关闭进行中的 Sync 等 writer 排空,按 ctx 超时;关闭完成后仍幂等) |
 | T-85 | 跨服活动成功打开、首个 game 已通知,宽限期过了却一直 collecting,`PendingActivities` 里没有它 | kit ≤ v1.14.3 的窗口条目先进后建记录,sweep 把"有条目无记录"一律当死条目删,与 OpenActivity 交错时删掉了正在建的 | 只在 sweep 恰好落在 admit 与 Create 之间时出现;活动记录存在但窗口没有 key | 升级 kit(窗口条目分 opening / 确认,回收只删超过 `OpeningGrace` 且仍在 opening 的);临时:管理端重新 notify 不会修,需要把 key 补回窗口 |
 | T-86 | 活动已完成,game 的 dispatch 长期 pending 且 due,Attempts 停在 0 或 1 不再增长 | kit ≤ v1.14.3 的 sweep 只对本轮刚到期完成的活动派发,完成后出窗口就再也不扫 | 由最后一个 notify 完成、或首次派发 Create 失败、或退避到期的重试,都命中 | 升级 kit(`Window.Delivering` 持久索引,每轮 sweep 从它重试,全部终态才退出);临时:显式调 `DueDispatches` → `AttemptDispatch` |
+| T-87 | lockstep 里一次性操作(开火 / 技能)被执行两次,两帧都带同一个玩家的同一输入 | core ≤ v1.15.2 的 Sequencer 只在目标帧内去重,切帧后重传按迟到折入下一帧 | 客户端 datagram 冗余重传跨过了切帧;帧 N 与 N+1 有同一玩家相同 payload | 升级 core(每玩家 64 帧内的原始帧号身份表,重传幂等) |
+| T-88 | 重连的会话一直在追帧,`CatchingUp` 不结束,收不到 live 帧 | core ≤ v1.15.2 接受 `CatchupBatchFrames=1`,每 tick 产一帧补一帧,积压不变 | 追帧页数持续增长而 next 与 head 差值恒定 | 升级 core(NewRoom 拒绝 1);配置改为 >= 2 |
+| T-89 | 同一个 session 既是座位又是旁观者,广播发两份,旁观者 detach 清掉了座位的追帧 | core ≤ v1.15.2 允许座位号 -1,与旁观者哨兵撞值 | 房间配置里出现负座位 | 升级 core(负座位在创建时拒绝);座位号用非负值 |
+| T-90 | 房间正常 Tick,客户端解码报 `frame encoding corrupt: input count N`(N > 256) | core ≤ v1.15.2 只按字节预算校验座位数,没对齐 wire 的 MaxFrameInputs | 座位数超过 256 且 datagram 上限调大 | 升级 core(创建时拒绝);超过 256 座位需要协议升级 |
 | T-73 | 一条快照消息按某个 scope 路由,却改动了另一个 scope 的缓存 | core ≤ v1.15.2 的 `ApplyReplica` 不校验 payload 里的 key / version 与信封是否一致 | 需要发布方有缺陷或能写内部 topic | 升级 core(不一致即拒绝,不落写) |
 | T-67 | `StopFinalizer` 成功返回后再 `Close` 批次,`Close` 返回 nil 但 writeGate、ownership 读锁与 finalize slot 没有释放 | core ≤ v1.15.2 的 `deferRemoteClose` 靠 select 分支退出,而队列可写与 ctx 已关闭同时就绪时 Go 随机选,交接给了没人排空的队列 | 停止后遗留的 slot 数不固定;`finalizeOnce` 使重启无法收拾 | 升级 core;旧版本先排空所有 batch 再停 finalizer |
 | T-63 | 从 checkpoint 恢复后,`InspectCast` 能查到的已完成技能与恢复前不是同一批 | core ≤ v1.15.2 的快照按 ID 序列化 casts,恢复时按这个顺序重建完成队列,而淘汰是从"最旧完成"的队头走 | 创建顺序与完成顺序交错、且完成数超过 `CompletedCastLimit` 时才出现 | 升级 core 后重新生成 checkpoint;旧快照恢复后退化为按 ID 顺序,与旧行为一致 |

@@ -67,8 +67,11 @@ type RoomConfig struct {
 	HashQuorum int
 	// CatchupBatchFrames is how many history frames one catching-up session
 	// receives per tick over the reliable lane (<= 0 selects 32; capped at
-	// MaxBroadcastFrames). The per-tick cap is the rate limit that
-	// keeps a 10s reconnect from flooding the link in one burst.
+	// MaxBroadcastFrames; 1 is refused). The per-tick cap is the rate limit
+	// that keeps a 10s reconnect from flooding the link in one burst — but
+	// every tick also cuts one new frame, so a batch of 1 pages exactly as
+	// fast as the head moves and the backlog never closes (RR-20260914-05).
+	// The net catch-up rate is batch-1 frames per tick; it must be positive.
 	CatchupBatchFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
 	// reliable-lane send failures (<= 0 selects 8) instead of pinning the
@@ -153,6 +156,9 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	batch := config.CatchupBatchFrames
 	if batch <= 0 {
 		batch = 32
+	}
+	if batch == 1 {
+		return nil, fmt.Errorf("%w: catch-up batch of 1 frame per tick can never overtake the head (one frame is cut per tick); use >= 2", ErrRoomConfigInvalid)
 	}
 	if batch > MaxBroadcastFrames {
 		batch = MaxBroadcastFrames
