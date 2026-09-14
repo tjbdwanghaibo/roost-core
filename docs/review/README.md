@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[第六轮](REVIEW-2026-09-14-06.md) · [StateSync 机制](IMPLEMENTATION-STATESYNC-BASELINE-AND-ACK.md) · [U-0199 漏审复盘](POSTMORTEM-LOCKSTEP-U0199.md)。
+
 [09-14 第五轮](REVIEW-2026-09-14-05.md)：去重环验收、真实 TCP 追帧、新 Bot 跳帧问题 · [问题](../bug/REVIEW-2026-09-14-05.md) · [复现](../bug/REPRO-2026-09-14-05.md)。
 
 [09-14 第四轮 lockstep 续审](REVIEW-2026-09-14-04.md) · [内存边界问题](../bug/REVIEW-2026-09-14-04.md) · [复现](../bug/REPRO-2026-09-14-04.md) · [lockstep / sync 覆盖与优先级](LOCKSTEP-AND-SYNC-COVERAGE.md)。

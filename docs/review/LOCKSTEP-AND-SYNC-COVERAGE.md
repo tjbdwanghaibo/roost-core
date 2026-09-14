@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+第六轮更新（Core 2c5469e）：RR-09 已验收；用户发现 U-0199 已复核，校验顺序与平台边界漏审见[复盘](POSTMORTEM-LOCKSTEP-U0199.md)。有界审查已转入 statesync，投影/ACK 已验证部分场景并新增 RR-10，下一入口为恢复屏障与分片重组。Lockstep 不标完整收敛，回绕/业务恢复保留缺口。以下是此前时点记录。
+
 更新：2026-09-14 第五轮，Core `a1245fd`。用户顺序：先补完 lockstep，再优先未完成的 sync，随后回到通用 Roost review。
 
 第五轮增量：RR-08 固定身份环原触发通过；真实 TCP 写后报错的追帧重投与取消恢复通过。消费者 Simulate/SubmitInput/ReportHash 三种中断后跳帧已确认 RR-09，下一轮优先验收。仍未完成生产网络拥塞、真实模拟/快照恢复；sync 尚未新展开。[第五轮证据](REVIEW-2026-09-14-05.md)。

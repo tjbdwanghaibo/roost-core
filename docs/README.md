@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[第六轮：StateSync 与 Lockstep 漏审复盘](review/REVIEW-2026-09-14-06.md)。RR-09 已验收，RR-10 待修复；下文保留历史时点状态。
+
 [第五轮 LockstepBot 与可靠追帧](review/REVIEW-2026-09-14-05.md)：输入身份上限已验收，消费者错误后跳帧待修复。
 
 [Lockstep 与 Sync 审查状态](review/LOCKSTEP-AND-SYNC-COVERAGE.md)：先补 lockstep，再 statesync → entitysync → syncstream/syncbus；[第四轮结果](review/REVIEW-2026-09-14-04.md)。
