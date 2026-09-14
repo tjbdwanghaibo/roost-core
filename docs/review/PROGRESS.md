@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+2026-09-14 第三轮（lockstep）：累计 27 份运行记录、18 篇机制文档、43 RR（39 标修复、4 未修复）。Core `a1455fb`，Kit `7030c5f`，Codegen `cacd627`。Activity RR-02/03 原五个测试叶子全通过；lockstep 十个叶子中五失败对应四项新 RR、五通过；两个相关包 race 通过。[运行](REVIEW-2026-09-14-03.md) · [问题](../bug/REVIEW-2026-09-14-03.md) · [机制](IMPLEMENTATION-LOCKSTEP-INPUT-AND-CATCHUP.md)。
+
+| 范围 | 新增证据 | 状态/下一入口 |
+| --- | --- | --- |
+| lockstep sequencer | 按时与首次迟到输入跨帧重传重复入帧；显式覆盖对照通过 | RR-04 未修复；原身份/乱序窗口 |
+| lockstep room/history | batch=1 不收敛，batch=2 通过；重绑、裁剪、发送失败、关闭对照通过 | RR-05 未修复；真实链路与快照 |
+| lockstep room/wire | -1 会话碰撞、257 输入不能解码 | RR-06/07 未修复；配置协议统一 |
+| lockstep assembler/desync | 满缓冲补洞、重复下行、裁剪屏障通过 | 部分场景；未验客户端模拟 |
+| Activity | RR-02/03 原 overlay、包 race 通过 | 原触发验收；reopen/发送/容量边界保留 |
+
+本轮无真实网络、压测或客户端确定性证明。以下条目保留历史时点状态。
+
 2026-09-14 第二轮：累计 26 份运行记录、17 篇机制文档、39 RR（37 标修复、2 未修复）。Core `84b2a4a`，Kit `ac1a880`，Codegen `cacd627`。WAL U-0190 原关闭交错及新增取消重试/最终同步失败传播通过；Activity 新增两个 P2（窗口创建交接丢索引、派发跨轮扫描遗漏）。[运行](REVIEW-2026-09-14-02.md) · [问题](../bug/REVIEW-2026-09-14-02.md)。
 
 | 本轮范围 | 入口与不变量 | 证据/状态 | 下一入口 |
