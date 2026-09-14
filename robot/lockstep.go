@@ -44,6 +44,40 @@ type LockstepBotConfig struct {
 	// MaxBuffer bounds the assembler's out-of-order window (<= 0 selects
 	// the assembler default).
 	MaxBuffer int
+	// MaxPendingApply bounds the frames the bot keeps waiting for a sink
+	// that is failing (<= 0 selects 256). Past it the bot turns terminal
+	// rather than growing: a sink that has refused output for hundreds of
+	// frames is not a transient failure (U-0198, RR-20260914-09).
+	MaxPendingApply int
+}
+
+// ErrLockstepBotTerminal marks a bot that must not be used again: its
+// simulation and the authoritative frame stream have diverged, or the sink
+// has failed for longer than the bot is willing to buffer. Rebuild the bot
+// (or restore it from a snapshot) instead of retrying.
+var ErrLockstepBotTerminal = errors.New("robot lockstep: bot is terminal")
+
+// applyStep is how far one frame got through apply. It exists because the
+// three steps have different recovery rules: a rejected Simulate cannot be
+// re-run (the simulation may have advanced part of the way), while a failed
+// send can simply be sent again.
+type applyStep uint8
+
+const (
+	stepSimulate applyStep = iota
+	stepInput
+	stepHash
+)
+
+// applyCursor is where the drain loop resumes inside the first pending
+// frame, plus the output it already produced for that frame — so a retry
+// re-sends the same bytes instead of asking the producer again.
+type applyCursor struct {
+	step       applyStep
+	payload    []byte
+	hasPayload bool
+	hash       uint64
+	hasHash    bool
 }
 
 // LockstepBotStats counts what the bot did — assertions for regression
@@ -69,6 +103,21 @@ type LockstepBot struct {
 	// catchupFrom dedups catch-up requests: while one is outstanding for
 	// this frame, further unhealable-gap errors stay quiet.
 	catchupFrom lockstep.FrameID
+
+	// pending holds frames the assembler has released but apply has not
+	// finished with, and cursor is where the first of them stopped. The
+	// assembler's cursor says "delivered to the consumer"; it is not the
+	// same as "applied to the simulation", and treating it as such dropped
+	// the tail of a batch whose apply failed part way (RR-20260914-09).
+	pending []lockstep.Frame
+	cursor  applyCursor
+	// owned counts the leading pending frames whose payloads are the bot's
+	// own copies. HandleFrames takes the caller's frames, so anything kept
+	// past the call has to stop pointing at memory the caller may reuse.
+	owned      int
+	maxPending int
+	// terminal, once set, is returned by every entry point.
+	terminal error
 }
 
 // NewLockstepBot builds a bot expecting frame 1 first.
@@ -79,10 +128,15 @@ func NewLockstepBot(cfg LockstepBotConfig) (*LockstepBot, error) {
 	if cfg.KeyframeInterval <= 0 {
 		cfg.KeyframeInterval = 30
 	}
+	maxPending := cfg.MaxPendingApply
+	if maxPending <= 0 {
+		maxPending = 256
+	}
 	return &LockstepBot{
-		cfg:       cfg,
-		assembler: lockstep.NewFrameAssembler(cfg.MaxBuffer),
-		hasher:    NewFrameHasher(),
+		cfg:        cfg,
+		assembler:  lockstep.NewFrameAssembler(cfg.MaxBuffer),
+		hasher:     NewFrameHasher(),
+		maxPending: maxPending,
 	}, nil
 }
 
@@ -90,6 +144,9 @@ func NewLockstepBot(cfg LockstepBotConfig) (*LockstepBot, error) {
 // that became releasable are applied in order; an unhealable gap triggers
 // one catch-up request per gap instead of failing the bot.
 func (b *LockstepBot) HandleBroadcast(packet []byte) error {
+	if b.terminal != nil {
+		return b.terminal
+	}
 	frames, err := b.assembler.Ingest(packet)
 	if applyErr := b.apply(frames); applyErr != nil {
 		return applyErr
@@ -102,6 +159,9 @@ func (b *LockstepBot) HandleBroadcast(packet []byte) error {
 
 // HandleFrames is HandleBroadcast for already-decoded frames.
 func (b *LockstepBot) HandleFrames(frames []lockstep.Frame) error {
+	if b.terminal != nil {
+		return b.terminal
+	}
 	released, err := b.assembler.IngestFrames(frames)
 	if applyErr := b.apply(released); applyErr != nil {
 		return applyErr
@@ -112,36 +172,113 @@ func (b *LockstepBot) HandleFrames(frames []lockstep.Frame) error {
 	return nil
 }
 
+// apply drains newly released frames on top of whatever a previous call
+// left unfinished. Each frame walks simulate → input → hash, and the cursor
+// remembers which of those steps a failure interrupted, so a resumed frame
+// never repeats a step that already succeeded.
 func (b *LockstepBot) apply(frames []lockstep.Frame) error {
-	for _, frame := range frames {
-		b.hasher.Fold(frame)
-		if b.cfg.Simulate != nil {
-			if err := b.cfg.Simulate(frame); err != nil {
-				return fmt.Errorf("robot lockstep: simulate frame %d: %w", frame.ID, err)
-			}
-		}
-		b.stats.FramesApplied++
-		if b.cfg.Input != nil {
-			if payload := b.cfg.Input(frame.ID + 1); payload != nil {
-				if err := b.cfg.Sink.SubmitInput(frame.ID+1, payload); err != nil {
-					return fmt.Errorf("robot lockstep: submit input for frame %d: %w", frame.ID+1, err)
+	b.pending = append(b.pending, frames...)
+	defer func() { b.stats.DuplicatesDropped = b.assembler.Duplicates() }()
+	for len(b.pending) > 0 {
+		frame := b.pending[0]
+		if b.cursor.step == stepSimulate {
+			b.hasher.Fold(frame)
+			if b.cfg.Simulate != nil {
+				if err := b.cfg.Simulate(frame); err != nil {
+					// A rejected frame may have moved the simulation part of
+					// the way; the bot cannot know how far, and re-running it
+					// would apply those effects twice. There is no honest
+					// recovery here, so stop for good rather than continue
+					// against a stream the simulation no longer matches.
+					return b.fail(fmt.Errorf("%w: simulate frame %d: %w", ErrLockstepBotTerminal, frame.ID, err))
 				}
-				b.stats.InputsSubmitted++
 			}
+			b.stats.FramesApplied++
+			b.cursor.step = stepInput
+		}
+		if b.cursor.step == stepInput {
+			if b.cfg.Input != nil {
+				if !b.cursor.hasPayload {
+					b.cursor.payload = b.cfg.Input(frame.ID + 1)
+					b.cursor.hasPayload = true
+				}
+				if b.cursor.payload != nil {
+					if err := b.cfg.Sink.SubmitInput(frame.ID+1, b.cursor.payload); err != nil {
+						// The frame IS simulated; only the outbound send
+						// failed. Keep the frame and this step, and let the
+						// next call try the send again.
+						return b.retain(fmt.Errorf("robot lockstep: submit input for frame %d: %w", frame.ID+1, err))
+					}
+					b.stats.InputsSubmitted++
+				}
+			}
+			b.cursor.step = stepHash
 		}
 		if frame.ID%b.cfg.KeyframeInterval == 0 {
-			hash := b.hasher.Sum()
-			if b.cfg.Hash != nil {
-				hash = b.cfg.Hash(frame.ID)
+			if !b.cursor.hasHash {
+				b.cursor.hash = b.hasher.Sum()
+				if b.cfg.Hash != nil {
+					b.cursor.hash = b.cfg.Hash(frame.ID)
+				}
+				b.cursor.hasHash = true
 			}
-			if err := b.cfg.Sink.ReportHash(frame.ID, hash); err != nil {
-				return fmt.Errorf("robot lockstep: report hash for frame %d: %w", frame.ID, err)
+			if err := b.cfg.Sink.ReportHash(frame.ID, b.cursor.hash); err != nil {
+				return b.retain(fmt.Errorf("robot lockstep: report hash for frame %d: %w", frame.ID, err))
 			}
 			b.stats.HashesReported++
 		}
+		b.pending = b.pending[1:]
+		if b.owned > 0 {
+			b.owned--
+		}
+		b.cursor = applyCursor{}
 	}
-	b.stats.DuplicatesDropped = b.assembler.Duplicates()
+	b.pending, b.owned = nil, 0
 	return nil
+}
+
+// retain keeps the unfinished frames for the next call. Everything still
+// pending becomes the bot's own memory, because HandleFrames' caller owns
+// the payloads it passed and may reuse them. A sink that keeps failing past
+// MaxPendingApply is not transient any more: the bot turns terminal instead
+// of buffering without end.
+func (b *LockstepBot) retain(cause error) error {
+	if len(b.pending) > b.maxPending {
+		return b.fail(fmt.Errorf("%w: %d frames waiting to be applied exceeds %d; the sink keeps failing: %w",
+			ErrLockstepBotTerminal, len(b.pending), b.maxPending, cause))
+	}
+	for i := b.owned; i < len(b.pending); i++ {
+		b.pending[i] = cloneFrame(b.pending[i])
+	}
+	b.owned = len(b.pending)
+	if b.cursor.hasPayload && b.cursor.payload != nil {
+		b.cursor.payload = append([]byte(nil), b.cursor.payload...)
+	}
+	return cause
+}
+
+// fail makes the bot terminal and drops the work it can no longer finish.
+func (b *LockstepBot) fail(err error) error {
+	b.terminal = err
+	b.pending, b.owned, b.cursor = nil, 0, applyCursor{}
+	return err
+}
+
+// cloneFrame copies a frame's input payloads so the bot can keep it past
+// the call that delivered it.
+func cloneFrame(frame lockstep.Frame) lockstep.Frame {
+	if len(frame.Inputs) == 0 {
+		return frame
+	}
+	inputs := make([]lockstep.Input, len(frame.Inputs))
+	copy(inputs, frame.Inputs)
+	for i := range inputs {
+		if len(inputs[i].Payload) > 0 {
+			inputs[i].Payload = append([]byte(nil), inputs[i].Payload...)
+		}
+	}
+	frame.Inputs = inputs
+	return frame
 }
 
 func (b *LockstepBot) requestCatchup(cause error) error {
@@ -159,6 +296,14 @@ func (b *LockstepBot) requestCatchup(cause error) error {
 
 // Next is the frame id the bot is waiting for.
 func (b *LockstepBot) Next() lockstep.FrameID { return b.assembler.Next() }
+
+// Terminal reports why the bot stopped, or nil while it is usable. A
+// terminal bot refuses every further broadcast and frame.
+func (b *LockstepBot) Terminal() error { return b.terminal }
+
+// PendingApply is how many released frames are waiting for a sink that
+// failed. Zero in the normal case.
+func (b *LockstepBot) PendingApply() int { return len(b.pending) }
 
 // Stats snapshots the bot's counters.
 func (b *LockstepBot) Stats() LockstepBotStats { return b.stats }

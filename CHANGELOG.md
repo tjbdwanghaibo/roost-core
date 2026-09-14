@@ -38,6 +38,9 @@
 
 ### Fixed
 
+- **LockstepBot 区分"已收到"与"已应用",回调失败不再丢批次尾帧**(U-0198,C8;RR-20260914-09;T-92)。Assembler 一次释放整个连续批次、游标立刻前移,而 `apply` 中途失败时既不保留剩余帧也不停用 Bot:重传被去重丢弃,后续新帧照常返回成功,模拟却少了尾帧。
+  现在按失败点分开——`Simulate` 失败无法判断模拟推进了多少,Bot 进入 terminal(新 `ErrLockstepBotTerminal`、`Terminal()`),此后所有入口拒绝,由宿主重建;`SubmitInput` / `ReportHash` 失败只保留该帧与它未完成的那一步(连同已产出的 payload / hash),下次调用从那一步续做,不重跑已成功的 `Simulate`、不重新调用生产者。
+  保留量由新配置 `MaxPendingApply`(默认 256)收界,超出转 terminal;跨调用保留的帧会复制 payload,不再别名 `HandleFrames` 调用方的缓冲区。新增 `PendingApply()`。测试 `lockstep_apply_promises_test.go`;记录 `docs/bugfix/RR-20260914-09.md`。
 - **lockstep 去重身份表准入即有界**(U-0197,C8;RR-20260914-08;T-91)。U-0193 的 `accepted` 对所有过去的原帧号照单全收、只靠 `Advance` 按期限清理,两次 tick 之间灌入大量不同旧帧号会让它线性增长(实测 4096 条),下一次 Advance 还要遍历回收。
   改为每座位一个 `ReplayHorizon + MaxSubmitWindow + 1`(129)槽的固定环,按原帧号取模定位——任一时刻的合法原帧号两两不撞槽;超期限的原帧号既不查也不记(不记同时挡住"用很旧的帧号挤掉有效身份"),`Advance` 不再做清理遍历。超期限重传仍按首次折入,与 U-0193 一致。
   同机基准 `BenchmarkRoomTickTenPlayers` 从 7.0–12.7µs/op 降到 2.6–3.2µs/op(本机快照,不推算生产吞吐)。测试 `replay_window_promises_test.go`;记录 `docs/bugfix/RR-20260914-08.md`。

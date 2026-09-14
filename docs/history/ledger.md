@@ -100,7 +100,7 @@
 | core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 / 09-11 U-0172（修复） / 09-13 U-0183（修复） | 09-02 | 09-02 | 09-02 |
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-08 U-0105 / U-0106（回退 20 条，含 `driver`） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `robot` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `robot` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-14 U-0198（修复） |
 | core | `robot/action` | 09-02 | 09-06 U-0073（回退 6 条） / 09-09 U-0111（回退 13 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/loadtest` | 09-02 | 09-02 / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/protocol` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -237,6 +237,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0198 | 2026-09-14 | roost-core `robot` LockstepBot 的应用游标与失败契约(RR-20260914-09) | C8 | Assembler 一次释放整批、next 立刻越过,apply 中途失败既不保留剩余帧也不停用 Bot:重传被去重丢弃,后续新帧照常成功而模拟漏了尾帧(实测 applied=[1,3])。修法:按失败点分开——Simulate 失败无法判断推进了多少,置 terminal 并在每个入口拒绝;SubmitInput / ReportHash 失败只保留帧与那一步(连同已产出的 payload / hash),下次从该步继续,不重跑 Simulate;保留量由 `MaxPendingApply`(默认 256)收界,超出转 terminal;跨调用保留的帧复制 payload,不别名调用方内存 | `lockstep_apply_promises_test.go`(两个出站注入点恢复后 applied=[1,2,3] 且无重复、Simulate 失败 terminal、永久失败有上界、保留帧不别名) | 修前红(`continued successfully after failure but simulation skipped frames: applied=[1 3] next=4`);修后 robot 与 core 全仓含 -race 全绿 | T-92 · `docs/bugfix/RR-20260914-09.md` |
 | U-0197 | 2026-09-14 | roost-core `lockstep` 去重身份的准入上界(RR-20260914-08,U-0193 引入) | C8 | 准入无条件记身份,只有 Advance 按期限清理:两次 Tick 之间灌不同旧帧号,pending 仍一帧而 accepted 线性增长(实测 4096),下次 Advance 还要遍历。修法:每座位固定 129 槽(ReplayHorizon+MaxSubmitWindow+1)的环,按 original 取模定位——期限内的合法帧号两两不撞槽;超期限的既不查也不记(不记还挡住了"用旧帧号挤掉有效身份");Advance 的清理遍历整段删除 | `replay_window_promises_test.go`(灌 4096 旧帧号后上界与幂等、同槽超期限不挤掉身份、超期限重放仍折入) | 修前红(`one seat before the next tick: accepted=4096 bounded_window=129`);修后 lockstep 与 core 全仓含 -race 全绿;同机 RoomTickTenPlayers 7.0–12.7µs → 2.6–3.2µs | T-91 · `docs/bugfix/RR-20260914-08.md` |
 | U-0196 | 2026-09-14 | roost-core `lockstep` 座位数与 wire 条数上限对齐(RR-20260914-07,P3) | C4 | 配置只校验字节预算,257 座位 × 1B 放得进 8192B datagram;Tick 成功而 `DecodeBroadcast` 报 `input count 257`。修法:`NewSequencer` 拒绝 `len(Players) > MaxFrameInputs` | `seat_identity_promises_test.go`(257 拒绝、256 满员可解码) | 修前红(`accepted room emits undecodable frame: … input count 257`);修后 -race 全绿 | T-90 · `docs/bugfix/RR-20260914-07.md` |
 | U-0195 | 2026-09-14 | roost-core `lockstep` 座位号与旁观者哨兵的值域(RR-20260914-06,P3) | C8 | Sequencer 接受 Players={-1},而 Room 用 -1 标旁观者:同一 session 同时是座位 -1 和旁观者。修法:`NewSequencer` 拒绝负座位(生产无负座位用法) | 同上文件 `TestRoomPromiseNegativeSeatIsRefused` | 修前红(`same session accepted as seat -1 and spectator: <nil>`);修后 -race 全绿 | T-89 · `docs/bugfix/RR-20260914-06.md` |
