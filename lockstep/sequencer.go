@@ -69,8 +69,24 @@ const MaxSubmitWindow = 64
 // original input frame ids stay remembered (U-0193, RR-20260914-04). A
 // retransmission of an input already folded into a frame within this
 // horizon is idempotent; one older than the horizon is indistinguishable
-// from a first arrival and folds like one. Memory is players × horizon ids.
+// from a first arrival and folds like one.
 const ReplayHorizon FrameID = MaxSubmitWindow
+
+// replayWindowSize is the number of distinct original frame ids that can be
+// legal at one instant: ReplayHorizon behind next, next itself, and the
+// submit window ahead of it. It is the ring's capacity, which makes the
+// dedup memory bounded at ADMISSION rather than at the next Advance
+// (U-0197, RR-20260914-08) — a client submitting thousands of distinct old
+// frame ids between two ticks grows nothing. Because every legal original
+// is within this span of every other, no two of them share a slot.
+const replayWindowSize = int(ReplayHorizon) + MaxSubmitWindow + 1
+
+// replaySlot is one ring cell. target is zero on an empty cell: a
+// remembered target is always at least next, and next starts at 1.
+type replaySlot struct {
+	original FrameID
+	target   FrameID
+}
 
 // SequencerConfig shapes a match's sequencer.
 type SequencerConfig struct {
@@ -99,10 +115,16 @@ type Sequencer struct {
 	// accepted remembers, per player, which ORIGINAL frame ids have been
 	// taken and which frame each was folded into. The pending map only
 	// deduplicates within the target frame and is deleted when that frame
-	// is cut, so before this a retransmission of an input already in frame
+	// is cut, so without this a retransmission of an input already in frame
 	// N was re-folded into frame N+1 and executed twice (RR-20260914-04).
-	// Pruned by Advance to ReplayHorizon behind next.
-	accepted map[PlayerID]map[FrameID]FrameID
+	//
+	// Each seat's ring holds replayWindowSize slots indexed by original id
+	// modulo that size, allocated on the seat's first input. Ids outside
+	// the horizon are neither read nor written, so an entry left behind by
+	// a long-cut frame is never trusted and is simply overwritten by the
+	// id that eventually maps onto it — no eviction pass, and no growth
+	// between ticks (RR-20260914-08).
+	accepted map[PlayerID][]replaySlot
 }
 
 // pendingInput remembers whether the payload arrived by late-folding: a
@@ -157,7 +179,7 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 		maxInput: maxInput,
 		next:     1,
 		pending:  make(map[FrameID]map[PlayerID]pendingInput),
-		accepted: make(map[PlayerID]map[FrameID]FrameID),
+		accepted: make(map[PlayerID][]replaySlot, len(players)),
 	}, nil
 }
 
@@ -192,10 +214,13 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 	// Identity first: an original (player, frame) already taken is a
 	// retransmission, whatever frame it would fold into now. Answer with
 	// the frame it went into and change nothing (U-0193).
-	if target, seen := s.accepted[player][frame]; seen {
-		return target, nil
-	}
 	original := frame
+	remembered := original >= s.replayFloor()
+	if remembered {
+		if slot := s.slot(player, original); slot != nil && slot.target != 0 && slot.original == original {
+			return slot.target, nil
+		}
+	}
 	folded := frame < s.next
 	if folded {
 		frame = s.next
@@ -213,23 +238,45 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 			// Lost to what the frame already holds. Still an accepted
 			// identity: its retransmission must not fold into a later
 			// frame either.
-			s.remember(player, original, frame)
+			s.remember(player, original, frame, remembered)
 			return frame, nil
 		}
 		// fallthrough: explicit input overwrites a folded placeholder
 	}
 	inputs[player] = pendingInput{payload: append([]byte(nil), payload...), folded: folded}
-	s.remember(player, original, frame)
+	s.remember(player, original, frame, remembered)
 	return frame, nil
 }
 
-func (s *Sequencer) remember(player PlayerID, original, target FrameID) {
-	seen := s.accepted[player]
-	if seen == nil {
-		seen = make(map[FrameID]FrameID)
-		s.accepted[player] = seen
+// replayFloor is the oldest original id still inside the replay horizon.
+// Anything below it is treated as a first arrival: not looked up, and not
+// written — writing it would let a client evict a live identity by
+// submitting a very old id that lands on the same slot.
+func (s *Sequencer) replayFloor() FrameID {
+	if s.next <= ReplayHorizon {
+		return 0
 	}
-	seen[original] = target
+	return s.next - ReplayHorizon
+}
+
+// slot returns the seat's ring cell for original, allocating the ring on
+// first use. A seat that never submits costs nothing.
+func (s *Sequencer) slot(player PlayerID, original FrameID) *replaySlot {
+	ring := s.accepted[player]
+	if ring == nil {
+		ring = make([]replaySlot, replayWindowSize)
+		s.accepted[player] = ring
+	}
+	return &ring[int(original)%replayWindowSize]
+}
+
+// remember records that original was folded into target. inHorizon is the
+// caller's floor check, taken before the fold moved frame.
+func (s *Sequencer) remember(player PlayerID, original, target FrameID, inHorizon bool) {
+	if !inHorizon {
+		return
+	}
+	*s.slot(player, original) = replaySlot{original: original, target: target}
 }
 
 // Advance cuts the next frame from whatever has arrived (optimistic frame
@@ -257,17 +304,8 @@ func (s *Sequencer) Advance() Frame {
 		delete(s.pending, s.next)
 	}
 	s.next++
-	// Forget identities older than the replay horizon; the map stays at
-	// most players × ReplayHorizon entries.
-	if s.next > ReplayHorizon {
-		floor := s.next - ReplayHorizon
-		for _, seen := range s.accepted {
-			for original := range seen {
-				if original < floor {
-					delete(seen, original)
-				}
-			}
-		}
-	}
+	// No eviction pass: the ring is fixed-capacity and replayFloor decides
+	// what is still trusted, so advancing the frame retires stale
+	// identities for free (U-0197).
 	return frame
 }

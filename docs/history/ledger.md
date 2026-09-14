@@ -89,7 +89,7 @@
 | core | `index` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `lifecycle` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `lock` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `lockstep` | 09-02 | 09-02 / 09-09 U-0137（回退 7 条，1 不可达） | 09-02 | 09-02 / 09-14 U-0196（修复） | 09-02 | 09-02 | 09-02 | 09-02 / 09-14 U-0193、U-0194、U-0195（修复） |
+| core | `lockstep` | 09-02 | 09-02 / 09-09 U-0137（回退 7 条，1 不可达） | 09-02 | 09-02 / 09-14 U-0196（修复） | 09-02 | 09-02 | 09-02 | 09-02 / 09-14 U-0193、U-0194、U-0195（修复） / 09-14 U-0197（修复） |
 | core | `log` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `metrics` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `migration` | 09-02 | 09-06 U-0069（回退 5 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -237,6 +237,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0197 | 2026-09-14 | roost-core `lockstep` 去重身份的准入上界(RR-20260914-08,U-0193 引入) | C8 | 准入无条件记身份,只有 Advance 按期限清理:两次 Tick 之间灌不同旧帧号,pending 仍一帧而 accepted 线性增长(实测 4096),下次 Advance 还要遍历。修法:每座位固定 129 槽(ReplayHorizon+MaxSubmitWindow+1)的环,按 original 取模定位——期限内的合法帧号两两不撞槽;超期限的既不查也不记(不记还挡住了"用旧帧号挤掉有效身份");Advance 的清理遍历整段删除 | `replay_window_promises_test.go`(灌 4096 旧帧号后上界与幂等、同槽超期限不挤掉身份、超期限重放仍折入) | 修前红(`one seat before the next tick: accepted=4096 bounded_window=129`);修后 lockstep 与 core 全仓含 -race 全绿;同机 RoomTickTenPlayers 7.0–12.7µs → 2.6–3.2µs | T-91 · `docs/bugfix/RR-20260914-08.md` |
 | U-0196 | 2026-09-14 | roost-core `lockstep` 座位数与 wire 条数上限对齐(RR-20260914-07,P3) | C4 | 配置只校验字节预算,257 座位 × 1B 放得进 8192B datagram;Tick 成功而 `DecodeBroadcast` 报 `input count 257`。修法:`NewSequencer` 拒绝 `len(Players) > MaxFrameInputs` | `seat_identity_promises_test.go`(257 拒绝、256 满员可解码) | 修前红(`accepted room emits undecodable frame: … input count 257`);修后 -race 全绿 | T-90 · `docs/bugfix/RR-20260914-07.md` |
 | U-0195 | 2026-09-14 | roost-core `lockstep` 座位号与旁观者哨兵的值域(RR-20260914-06,P3) | C8 | Sequencer 接受 Players={-1},而 Room 用 -1 标旁观者:同一 session 同时是座位 -1 和旁观者。修法:`NewSequencer` 拒绝负座位(生产无负座位用法) | 同上文件 `TestRoomPromiseNegativeSeatIsRefused` | 修前红(`same session accepted as seat -1 and spectator: <nil>`);修后 -race 全绿 | T-89 · `docs/bugfix/RR-20260914-06.md` |
 | U-0194 | 2026-09-14 | roost-core `lockstep` 追帧净速度(RR-20260914-05) | C8 | CatchupBatchFrames=1 被接受,每 tick 产一帧补一帧,积压恒定,`CatchingUp` 永不结束、live 被跳过。修法:`NewRoom` 拒绝 1(净速度 batch-1 必须为正),`<= 0` 仍默认 32 | `catchup_rate_promises_test.go`(1 拒绝;2 落后 5 帧 20 轮收敛) | 修前红(`batch=1 never closes backlog: next=21 head=25 reliable_pages=20`);修后 -race 全绿 | T-88 · `docs/bugfix/RR-20260914-05.md` |

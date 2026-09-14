@@ -49,6 +49,7 @@
 | RR-20260914-05 | core | lockstep CatchupBatchFrames=1 净补帧速度为 0,永不切回 live | U-0194 | [RR-20260914-05.md](RR-20260914-05.md) |
 | RR-20260914-06 | core | lockstep 座位 -1 与旁观者哨兵碰撞 | U-0195 | [RR-20260914-06.md](RR-20260914-06.md) |
 | RR-20260914-07 | core | lockstep 座位数未对齐 wire 的 MaxFrameInputs | U-0196 | [RR-20260914-07.md](RR-20260914-07.md) |
+| RR-20260914-08 | core | lockstep 去重身份表准入无上限,只靠 Advance 回收(U-0193 引入) | U-0197 | [RR-20260914-08.md](RR-20260914-08.md) |
 
 重构类改动(不对应任何 RR,不关闭任何 RR)另记,编号 M-:
 

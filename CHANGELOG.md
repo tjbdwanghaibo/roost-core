@@ -38,6 +38,9 @@
 
 ### Fixed
 
+- **lockstep 去重身份表准入即有界**(U-0197,C8;RR-20260914-08;T-91)。U-0193 的 `accepted` 对所有过去的原帧号照单全收、只靠 `Advance` 按期限清理,两次 tick 之间灌入大量不同旧帧号会让它线性增长(实测 4096 条),下一次 Advance 还要遍历回收。
+  改为每座位一个 `ReplayHorizon + MaxSubmitWindow + 1`(129)槽的固定环,按原帧号取模定位——任一时刻的合法原帧号两两不撞槽;超期限的原帧号既不查也不记(不记同时挡住"用很旧的帧号挤掉有效身份"),`Advance` 不再做清理遍历。超期限重传仍按首次折入,与 U-0193 一致。
+  同机基准 `BenchmarkRoomTickTenPlayers` 从 7.0–12.7µs/op 降到 2.6–3.2µs/op(本机快照,不推算生产吞吐)。测试 `replay_window_promises_test.go`;记录 `docs/bugfix/RR-20260914-08.md`。
 - **lockstep:输入重传幂等、追帧配置必须收敛、座位号非负且对齐 wire 条数上限**(U-0193～U-0196;C8 / C8 / C8 / C4;RR-20260914-04～07;T-87～T-90)。
   `Sequencer` 记每玩家 `ReplayHorizon`(64 帧)内的原始帧号身份,已入帧输入的迟到重传返回当初折入的帧号、不再入帧(此前折进下一帧,一次性操作执行两次);乱序未来帧与"显式输入覆盖迟到占位"不变。
   `NewRoom` 拒绝 `CatchupBatchFrames=1`(每 tick 产一帧,净补帧速度必须为正,否则永不切回 live)。`NewSequencer` 拒绝负座位(-1 是旁观者哨兵)和多于 `MaxFrameInputs` 的座位(否则生成自己的解码器拒绝的帧)。
