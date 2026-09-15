@@ -30,6 +30,18 @@ type SessionState struct {
 	generation  uint64
 	committed   uint32
 	controlSeq  uint32
+	// pinned* is the view this session's current tick was FIRST projected
+	// into (U-0205, RR-20260915-02). Every later prepare of the same tick
+	// reuses it, so two PreparedFrames of one tick can never carry
+	// different views — whichever the transport delivers and whichever
+	// commits, the client holds the same bytes the ACK will refer to.
+	// U-0200 fixed the view at first commit; that left the window between
+	// two prepares and the first commit, where a divergent second frame
+	// could already be on the wire. Replaced on the next tick, cleared on
+	// Close: one snapshot per session.
+	pinnedTick uint32
+	pinnedView Snapshot
+	pinned     bool
 }
 
 func (s *SessionState) handleControl(message ControlMessage, latestPublished uint32) error {
@@ -189,6 +201,9 @@ func (s *SessionState) prepare(targetTick uint32) (prepareResult, error) {
 	if committed, ok := s.sent[targetTick]; ok {
 		clone := committed.Clone()
 		result.frozen = &clone
+	} else if s.pinned && s.pinnedTick == targetTick {
+		clone := s.pinnedView.Clone()
+		result.frozen = &clone
 	}
 	if !s.forceFull && s.ackTick != 0 && s.ackTick < targetTick {
 		if base, ok := s.sent[s.ackTick]; ok {
@@ -219,6 +234,14 @@ func (s *SessionState) commitPrepared(snapshot Snapshot, sequence uint32, genera
 	// the later one must not overwrite what the ACK will refer to (U-0200).
 	// Same view twice is idempotent.
 	if existing, ok := s.sent[snapshot.Tick]; ok && !snapshotEqual(existing, snapshot) {
+		// Unreachable through PrepareLatest since U-0205 pins the view at
+		// first projection; kept for frames built some other way. If it
+		// ever fires, the divergent frame may already have been delivered,
+		// so this tick is no longer a baseline anyone can trust: recover
+		// with a full frame of a new generation instead of letting a later
+		// zero-change delta paper over the split (RR-20260915-02).
+		s.forceFull = true
+		s.generation++
 		return ErrPreparedFrameStale
 	}
 	s.committed = sequence
@@ -240,6 +263,20 @@ func (s *SessionState) commitPrepared(snapshot Snapshot, sequence uint32, genera
 	return nil
 }
 
+// pinView records the first projection of a tick so later prepares of the
+// same tick reuse it (see pinned*). Called by prepareLatest under the
+// session's sendMu, which serializes prepares per session.
+func (s *SessionState) pinView(snapshot Snapshot) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if !s.closed && (!s.pinned || s.pinnedTick != snapshot.Tick) {
+		s.pinnedTick, s.pinnedView, s.pinned = snapshot.Tick, snapshot.Clone(), true
+	}
+	s.mu.Unlock()
+}
+
 func (s *SessionState) Close() {
 	if s == nil {
 		return
@@ -248,6 +285,7 @@ func (s *SessionState) Close() {
 	s.closed = true
 	clear(s.sent)
 	s.sentOrder = nil
+	s.pinned, s.pinnedView = false, Snapshot{}
 	s.mu.Unlock()
 }
 

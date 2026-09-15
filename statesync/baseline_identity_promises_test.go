@@ -1,9 +1,6 @@
 package statesync
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
 // U-0200 · C8 · RR-20260914-10:一个 tick 对一个会话只能有一个视图。`sent` 按 tick 建键,
 // 而同一 tick 可以被重新投影并再次提交(兴趣变化),第二次覆盖 sent[tick];ACK 只说"tick 1",
@@ -60,9 +57,10 @@ func TestPrepareLatestPromiseFreezesATicksViewAtFirstCommit(t *testing.T) {
 	}
 }
 
-// 并发准备:两个视图都在提交之前准备好。第一个提交冻结视图,第二个(不同内容)必须按 stale 拒绝,
-// 而不是覆盖。同内容的重复提交仍然幂等。
-func TestCommitPromiseRejectsADifferentViewOfAnAlreadySentTick(t *testing.T) {
+// 并发准备:两次准备都在提交之前。U-0200 时这里断言"第二份不同视图提交时 stale";U-0205 之后契约更强——
+// 第二次准备本身就拿到第一次投影钉住的视图,两份字节相同,提交幂等(分叉提交的拒绝 + 恢复见
+// pinned_view_promises_test.go,只能绕过 PrepareLatest 直接构造)。
+func TestCommitPromiseOverlappingPreparesCommitTheSameView(t *testing.T) {
 	show := false
 	r := NewReplicator(ReplicatorConfig{Projector: ProjectorFunc(func(_ SessionInfo, s Snapshot) (Snapshot, error) {
 		if !show {
@@ -83,15 +81,18 @@ func TestCommitPromiseRejectsADifferentViewOfAnAlreadySentTick(t *testing.T) {
 		t.Fatal(err)
 	}
 	show = true
-	second, err := r.PrepareLatest(10) // 不同视图,尚未提交
+	second, err := r.PrepareLatest(10) // 投影已变,但同一 tick:必须拿到第一次的视图
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := len(second.Frame.Objects); got != 1 {
+		t.Fatalf("second prepare of the same tick re-projected instead of reusing the pinned view: objects in frame=%d want 1", got)
 	}
 	if err := first.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := second.Commit(); !errors.Is(err, ErrPreparedFrameStale) {
-		t.Fatalf("a different view of an already-sent tick was committed over the first: %v", err)
+	if err := second.Commit(); err != nil {
+		t.Fatalf("same view twice must commit idempotently: %v", err)
 	}
 	// 冻结后再准备同 tick:复用第一版视图,提交幂等。
 	again, err := r.PrepareLatest(10)

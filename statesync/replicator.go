@@ -230,7 +230,8 @@ func (r *Replicator) ForceFull(id SessionID) error {
 
 // SetQualityTier updates the network quality input consumed by a
 // ContextProjector. Tier meanings are application-defined and do not alter the
-// wire protocol. The next projection observes the new value immediately.
+// wire protocol. The next projection of a NEW tick observes the new value; a
+// tick already projected for the session keeps its pinned view (U-0205).
 func (r *Replicator) SetQualityTier(id SessionID, tier uint8) error {
 	if !r.begin() {
 		return ErrReplicatorClosed
@@ -283,8 +284,9 @@ func (r *Replicator) prepareLatest(state *SessionState) (*PreparedFrame, error) 
 		return nil, err
 	}
 	if prep.frozen != nil {
-		// This tick already went out to this session: send the same view
-		// again rather than a fresh projection of it (U-0200).
+		// This tick was already projected for this session (committed, or
+		// merely prepared — U-0200 / U-0205): send the same view again
+		// rather than a fresh projection of it.
 		current = *prep.frozen
 	} else {
 		current, err = r.projectAndNormalize(ProjectionContext{
@@ -293,6 +295,7 @@ func (r *Replicator) prepareLatest(state *SessionState) (*PreparedFrame, error) 
 		if err != nil {
 			return nil, err
 		}
+		state.pinView(current)
 	}
 	frame, err := BuildDelta(prep.base, current)
 	if err != nil {
