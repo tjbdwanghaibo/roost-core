@@ -55,6 +55,7 @@
 | RR-20260914-11 | core | statesync ACK 路径清 forceFull,旧发送的 ACK 取消恢复意图 | U-0201 | [RR-20260914-11.md](RR-20260914-11.md) |
 | RR-20260914-12 | core | statesync 单片重组绕过 MaxFrameBytes | U-0202 | [RR-20260914-12.md](RR-20260914-12.md) |
 | RR-20260914-13 | core | statesync LOD 按绝对 tick 采样,错相发送的组件永远保留旧值 | U-0203 | [RR-20260914-13.md](RR-20260914-13.md) |
+| RR-20260915-01 | core | statesync ApplyDelta 每步用最终存量上限检查暂存 map,满容量替换看 ID 排序决定成败 | U-0204 | [RR-20260915-01.md](RR-20260915-01.md) |
 
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 

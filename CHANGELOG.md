@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- **statesync `ApplyDelta` 的上限只约束最终集合**(U-0204,C8;RR-20260915-01;T-98)。此前每一步操作后就用 `MaxObjects` / `MaxComponentsPerObject` 检查暂存集合,满容量替换(先 Create 新标识、后 Remove 旧标识)被误拒,成败取决于标识排序;而 `NewSnapshot` 校验的是最终集合、解码侧允许每帧 2× 操作数。现在循环内改为 2× 过程上界(最终合法的帧暂存至多 base + creates ≤ 2×Max),循环后再对最终集合按上限拒绝;对象与组件两层同形。测试 `replacement_capacity_promises_test.go`;记录 `docs/bugfix/RR-20260915-01.md`。
 - **statesync:一个 tick 一个视图、ForceFull 不被旧 ACK 取消、单片重组守 MaxFrameBytes、LOD 刷新与发送相位无关**(U-0200～U-0203,C8;RR-20260914-10～13;T-94～T-97)。
   `prepare` 发现该 tick 已对本会话提交过就复用已发送的视图(同 tick 的兴趣变化延到下一 tick),`commitPrepared` 对同 tick 的不同视图按 `ErrPreparedFrameStale` 拒绝——迟到的 ACK 不再绑到被覆盖的基线;`prepare` 的 8 值返回改为 `prepareResult`。
   两个 ACK 入口不再清 `forceFull`,恢复意图只由当前 generation 的全量帧提交释放。`Reassembler` 单片快路径加同一个 `MaxFrameBytes` 比较。`LODProjector.refreshDue` 改为"本次发送与上次已提交发送是否跨过采样点",每区间至多一次、逐 tick 发送时与旧规则逐点等价。

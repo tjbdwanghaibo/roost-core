@@ -107,6 +107,18 @@ func setComponentDelta(component ComponentState) ComponentDelta {
 	}
 }
 
+// ApplyDelta replays a frame onto base and returns the resulting snapshot.
+//
+// Limits apply to the RESULT, not to every intermediate step. A frame is an
+// ordered merge by identity (diffObjects), so a replacement at full capacity
+// — MaxObjects=1, object 2 out and object 1 in — is emitted as Create(1)
+// then Remove(2). Checking the stock limit after the create refused a frame
+// whose before and after snapshots were both legal, and whether it failed
+// depended on which ID sorted first (RR-20260915-01, U-0204). The temporary
+// working set is still bounded: a frame whose final set fits holds at most
+// base (<= Max) plus its creates (<= Max, since created refs cannot also be
+// removed in the same frame), so the in-flight cap is 2x the stock limit —
+// the same factor the codec allows for operations per frame.
 func ApplyDelta(base *Snapshot, frame DeltaFrame, limits Limits) (Snapshot, error) {
 	limits = normalizeLimits(limits)
 	if err := frame.SnapshotMeta.validate(); err != nil {
@@ -164,9 +176,12 @@ func ApplyDelta(base *Snapshot, frame DeltaFrame, limits Limits) (Snapshot, erro
 		default:
 			return Snapshot{}, fmt.Errorf("%w: unknown object operation %d", ErrInvalidFrame, delta.Operation)
 		}
-		if len(objects) > limits.MaxObjects {
+		if len(objects) > limits.MaxObjects*2 {
 			return Snapshot{}, ErrObjectLimit
 		}
+	}
+	if len(objects) > limits.MaxObjects {
+		return Snapshot{}, ErrObjectLimit
 	}
 
 	result := make([]ObjectState, 0, len(objects))
@@ -200,9 +215,14 @@ func applyComponentDeltas(base []ComponentState, deltas []ComponentDelta, limits
 		default:
 			return nil, fmt.Errorf("%w: unknown component operation %d", ErrInvalidFrame, delta.Operation)
 		}
-		if len(components) > limits.MaxComponentsPerObject {
+		// Same shape as the object loop: in-flight cap 2x, final set checked
+		// once the whole ordered merge has been replayed (U-0204).
+		if len(components) > limits.MaxComponentsPerObject*2 {
 			return nil, ErrComponentLimit
 		}
+	}
+	if len(components) > limits.MaxComponentsPerObject {
+		return nil, ErrComponentLimit
 	}
 	out := make([]ComponentState, 0, len(components))
 	for _, component := range components {

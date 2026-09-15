@@ -111,7 +111,7 @@
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-08 U-0107（修复，回退 2 红） | 09-02 | 09-02 | 09-02 |
 | core | `security` | 09-02 | 09-06 U-0068（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） / 09-09 U-0139（回退 6 条，1 不可达） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-15 U-0200、U-0201、U-0202、U-0203（修复） |
+| core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） / 09-09 U-0139（回退 6 条，1 不可达） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-15 U-0200、U-0201、U-0202、U-0203（修复） / 09-15 U-0204（修复） |
 | core | `syncbus` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
 | core | `syncstream` | 09-02 | 09-06 U-0074（回退 4 条） / 09-09 U-0126（回退 12 条） / 09-09 U-0127（回退 22 条，全包 56 条清零） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `timer` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -237,6 +237,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0204 | 2026-09-15 | roost-core `statesync` ApplyDelta 上限的作用对象(RR-20260915-01) | C8 | NewSnapshot 校验最终集合、diff 有序合并且解码允许 2× 操作数,ApplyDelta 却每步用最终存量上限查暂存 map:MaxObjects=1 时 2→1 先 Create 后 Remove 即 ErrObjectLimit,2→3 却成功;组件层同形。修法:循环内改为 2× 过程上界(最终合法的帧暂存 ≤ base+creates ≤ 2×Max),循环后再对最终集合按 Max 拒绝;对象与组件一起改 | `replacement_capacity_promises_test.go`(审查六叶子完整编解码回环 DeepEqual;最终超限仍拒) | 修前红(`valid before/after snapshots rejected: … object limit exceeded operations=[Create 1, Remove 2]`);修后 statesync 与 core 全仓含 -race 全绿 | T-98 · `docs/bugfix/RR-20260915-01.md` |
 | U-0203 | 2026-09-15 | roost-core `statesync` LOD 限频刷新的相位(RR-20260914-13) | C8 | `refreshDue` 按绝对 tick 取模采样,只在奇数 tick 发送的会话永远踩不到 interval=2 的偶数采样点,普通组件首次全量后一直保留旧值(client tick=9 normal=1)。修法:"本次发送与上次已提交发送是否跨过采样点"(`tick/interval != previousTick/interval`),每区间至多一次、与相位无关、逐 tick 发送时与旧规则逐点等价;Previous 是已提交的投影,Abort 不消耗刷新 | `lod_phase_promises_test.go`(逐 tick / 奇数 tick / 奇数 tick 全量;逐 tick 子例断言 tick 9 仍保留 8) | 修前红(`client at tick=9 normal=1 want >=8`);修后 -race 全绿 | T-97 · `docs/bugfix/RR-20260914-13.md` |
 | U-0202 | 2026-09-15 | roost-core `statesync` 重组的单片快路径(RR-20260914-12,P3) | C8 | `ChunkCount==1` 直接返回,绕过多片路径的 MaxFrameBytes 累计检查:同一 400B 载荷两片被拒、单片放行。修法:快路径加同一比较 | `reassembly_limit_promises_test.go`(两片 / 单片都拒且无 inflight;恰好等于上限放行) | 修前红(`datagram=1200 chunks=1 accepted=true bytes=400`);修后 -race 全绿 | T-96 · `docs/bugfix/RR-20260914-12.md` |
 | U-0201 | 2026-09-15 | roost-core `statesync` ForceFull 与 ACK 水位的解耦(RR-20260914-11) | C8 | 两个 ACK 入口推进 ackTick 时无条件清 forceFull:ForceFull 之前发出的帧的 ACK 迟到就取消了恢复,下一帧仍是 delta。修法:删掉 ACK 路径的清除;释放点唯一化为 commitPrepared 里当前 generation 的全量帧提交(本来就有,且 ForceFull 会 generation++) | `recovery_intent_promises_test.go`(四子例 + 全量提交后回到 delta) | 修前红(`ForceFull lost: kind=2 base=1`);修后 -race 全绿,无旧测试依赖 ACK 清标志 | T-95 · `docs/bugfix/RR-20260914-11.md` |

@@ -90,6 +90,7 @@
 | T-95 | 调了 `ForceFull` / 收到 Resync,下一帧却还是 delta | core ≤ v1.15.2 的两个 ACK 入口在推进水位时把 forceFull 清掉,ForceFull 之前发出的帧的 ACK 迟到即取消恢复 | ACK 到达时间晚于 ForceFull 调用 | 升级 core(ACK 只推进水位,恢复意图由当前 generation 的全量帧提交释放) |
 | T-96 | 接收端 `MaxFrameBytes` 调小后,单片帧仍被 Reassembler 放行,只有分片帧被拒 | core ≤ v1.15.2 的单片快路径不做帧大小检查 | 仅 `MaxFrameBytes` 小于单片可容纳载荷时出现;后续 `DecodeFrame` 仍会拒绝 | 升级 core(单片与多片同一判据) |
 | T-97 | 限频(LOD MaxRateHz)组件在某些会话上长期不更新,ACK 正常,权威值早已变化 | core ≤ v1.15.2 按绝对 tick 取模采样,会话的发送相位与采样点错开就永远不刷新 | 会话不是每个 tick 都发送(降频 / 错开批次 / 跳过采样点) | 升级 core(按"自上次已提交发送是否跨过采样点"刷新,与相位无关) |
+| T-98 | 客户端 `ApplyDelta` 报 `object limit exceeded` / `component limit exceeded`,但前后两份权威快照都在上限之内;换一个 ID / TypeID 就不报 | core ≤ v1.15.2 的 ApplyDelta 在每一步操作后用最终存量上限检查暂存集合,满容量替换先 Create 后 Remove 即被拒 | 对象数或组件数恰好在上限,且替换进来的标识比替换出去的小(先创建后删除) | 升级 core(上限只约束最终集合,过程上界 2×);未升级前调大上限或避免满容量替换 |
 | T-73 | 一条快照消息按某个 scope 路由,却改动了另一个 scope 的缓存 | core ≤ v1.15.2 的 `ApplyReplica` 不校验 payload 里的 key / version 与信封是否一致 | 需要发布方有缺陷或能写内部 topic | 升级 core(不一致即拒绝,不落写) |
 | T-67 | `StopFinalizer` 成功返回后再 `Close` 批次,`Close` 返回 nil 但 writeGate、ownership 读锁与 finalize slot 没有释放 | core ≤ v1.15.2 的 `deferRemoteClose` 靠 select 分支退出,而队列可写与 ctx 已关闭同时就绪时 Go 随机选,交接给了没人排空的队列 | 停止后遗留的 slot 数不固定;`finalizeOnce` 使重启无法收拾 | 升级 core;旧版本先排空所有 batch 再停 finalizer |
 | T-63 | 从 checkpoint 恢复后,`InspectCast` 能查到的已完成技能与恢复前不是同一批 | core ≤ v1.15.2 的快照按 ID 序列化 casts,恢复时按这个顺序重建完成队列,而淘汰是从"最旧完成"的队头走 | 创建顺序与完成顺序交错、且完成数超过 `CompletedCastLimit` 时才出现 | 升级 core 后重新生成 checkpoint;旧快照恢复后退化为按 ID 顺序,与旧行为一致 |
