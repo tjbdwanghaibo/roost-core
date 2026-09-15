@@ -1,5 +1,12 @@
 # Roost Review 跨轮进度
 
+09-16：41 份运行记录、24 篇机制文档、59 RR（非覆盖率）。Core b4bf09e，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧核验；journal 故障/syncbus 新 28 场景，26 通过、2 失败确认 RR-20260916-01：写/发布结果不确定后继续使用旧内存状态。原源码两包 race 通过。[运行](REVIEW-2026-09-16.md)。
+
+| 新范围 | 证据与限制 | 下一入口 |
+| --- | --- | --- |
+| Journal 错误语义 | 八场景六过两失败，临时注入非真实断电 | 生产恢复协议、多实例目录所有权保留 |
+| PatchSyncer/DeliveryIDs | 二十场景通过，重复/旧版本交 Apply 符合契约 | 真实 JetStream/NATS 确认、重连与应用恢复 |
+
 09-15 第八轮：40 份运行记录、23 篇机制文档、58 RR（非覆盖率）。Core 6cef240，Kit 7030c5f，Codegen cacd627。用户声明没有修复，跳过旧核验；新 29 场景 23 通过、6 失败确认 RR-20260915-08/09：持久化 Import/Restore 未替换 journal、Recover 提交过期捕获。现有 syncstream race 通过。[运行](REVIEW-2026-09-15-08.md)。
 
 | 新范围 | 状态/限制 | 下一入口 |

@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-16 Journal 故障与 SyncBus](review/REVIEW-2026-09-16.md)：28 新场景，记录不确定错误处理问题和 PatchSyncer 交付契约。
+
 [09-15 第八轮 History 快照交接](review/REVIEW-2026-09-15-08.md)：29 新场景，持久化替换与 Recover 并发捕获问题，附验证代码和方案。
 
 [09-15 第七轮 History/ACK/Journal](review/REVIEW-2026-09-15-07.md)：20 新场景，确认流身份复用和 WAL 半尾续写问题，附复现与方案。

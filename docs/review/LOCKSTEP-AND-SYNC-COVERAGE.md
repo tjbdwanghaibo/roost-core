@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-16：journal 故障注入 + syncbus Patch/Delivery 新 28 场景，26 通过、2 失败，新 RR-20260916-01。下一入口真实 JetStream/NATS 确认、重连和订阅关闭，保留 journal 真实故障/多实例及其他消费链缺口。旧问题按用户声明跳过。[运行](REVIEW-2026-09-16.md)。
+
 09-15 第八轮：History Import/Restore/Recover/checkpoint 新 29 场景，23 通过、6 失败，新 RR-20260915-08/09。旧问题按用户声明跳过；下一入口 journal 同步/发布失败语义及 syncbus 业务恢复，保留其他未查缺口。[运行](REVIEW-2026-09-15-08.md)。
 
 09-15 第七轮：syncstream History/ACK/journal 新 20 场景 16 通过、4 失败，新 RR-20260915-06/07。下一入口 Recover 并发快照、Import/Restore 与 journal、checkpoint 边界；旧修复跳过，保留 room/state 消费链缺口，不标整包完成。[运行](REVIEW-2026-09-15-07.md)。
