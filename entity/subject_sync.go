@@ -169,6 +169,13 @@ type SubjectSyncUpdate struct {
 	Full        bool
 	Reason      uint32
 	Payload     FrozenSyncPayload
+	// CommitLSN is the owning entity's newest pipelined-commit LSN at the
+	// moment the payload was captured, read under the same entity lock the
+	// commit path stamps it with — so it names exactly the commits this
+	// payload can contain. Delivery gates compare it against the durable
+	// watermark; checking LastCommitLSN separately before capturing would
+	// leave a window for a commit to land in between (U-0206).
+	CommitLSN uint64
 }
 
 type subjectSyncLockFunc func(func() error) error
@@ -447,6 +454,7 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 		reason = SyncFullReasonDirty
 	}
 	generation := s.dirtyGeneration
+	commitLSN := s.lastCommitLSN.Load() // under the entity lock: consistent with the content
 	s.mu.Unlock()
 
 	updates := make([]SubjectSyncUpdate, 0, len(profiles))
@@ -466,7 +474,7 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 			SubjectID: subjectID, Namespace: namespace, SubjectKind: subjectKind,
 			Profile: profile, Version: version,
 			BaseVersion: baseVersion, Mask: mask, Full: full, Reason: reason,
-			Payload: payload,
+			Payload: payload, CommitLSN: commitLSN,
 		})
 	}
 
@@ -500,6 +508,7 @@ func (s *SubjectSyncState) CaptureSnapshot(profiles []SyncProfile, reason uint32
 		namespace := s.namespace
 		subjectKind := s.subjectKind
 		version := s.version
+		commitLSN := s.lastCommitLSN.Load() // under the entity lock: consistent with the content
 		s.mu.Unlock()
 		if packer == nil {
 			return ErrSubjectSyncPacker
@@ -514,6 +523,7 @@ func (s *SubjectSyncState) CaptureSnapshot(profiles []SyncProfile, reason uint32
 				SubjectID: subjectID, Namespace: namespace, SubjectKind: subjectKind,
 				Profile: profile, Version: version,
 				BaseVersion: version, Full: true, Reason: reason, Payload: payload,
+				CommitLSN: commitLSN,
 			})
 		}
 		return nil

@@ -73,7 +73,7 @@
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-09 U-0159（修复） |
 | core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） / 09-09 U-0148 / 09-13 U-0174（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-13 U-0175（修复） / 09-13 U-0180（修复） / 09-13 U-0187（修复） |
-| core | `entitysync` | 09-02 | 09-08 U-0104（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| core | `entitysync` | 09-02 | 09-08 U-0104（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-15 U-0206（修复） |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `etcd` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `event` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -237,6 +237,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0206 | 2026-09-15 | roost-core `entitysync` + `entity` 持久化水位门槛覆盖全部出口(RR-20260915-03) | C8 | 门槛只在 FlushSubject,且是 check-then-prepare;Subscribe(含 profile 切换)与 Prepare→Distribute 直接准入未落盘状态。修法:`SubjectSyncUpdate.CommitLSN` 在实体锁内随内容一起捕获(与 nest 锁内盖 LSN 同一把锁),协调器按 update 的 LSN 判:Subscribe 推迟则回滚到原订阅并返回 `ErrDurabilityDeferred`,DistributeBatch 任一推迟整批 abort 保持 dirty,FlushSubject 把推迟映射回 nil | `durability_gate_promises_test.go`(审查五叶子;推迟可重试、原订阅保留、状态仍 dirty、水位追上后成功) | 修前红(`non-durable LSN=7 watermark=0 escaped via subscribe: batches=1`);修后 entity / entitysync 与 core 全仓含 -race 全绿 | T-100 · `docs/bugfix/RR-20260915-03.md` |
 | U-0205 | 2026-09-15 | roost-core `statesync` 同 tick 视图在第一次投影时钉住(RR-20260915-02,U-0200 残余窗口) | C8 | U-0200 在提交时冻结,两次准备都早于第一次提交时第二份不同视图可能已交付;Commit 被拒后 ACK 仍绑到第一份,下一 tick 投影回到第一份即零变化 delta,客户端永远多 / 少一个对象且无错误可触发 resync(我原记录的"幂等收敛"被反例推翻)。修法:`prepareLatest` 投影后 `pinView`,同 tick 后续 prepare 复用(sendMu 串行保证无抢钉);`commitPrepared` 的分叉分支触发时 forceFull + generation++ 兜底 | `pinned_view_promises_test.go`(审查三子例;直接对 SessionState 提交分叉视图断言进入恢复态) | 修前红(`stale commit followed by successful delta: objects=2 want=1 changes=0`);修后 statesync 与 core 全仓含 -race 全绿 | T-99 · `docs/bugfix/RR-20260915-02.md` |
 | U-0204 | 2026-09-15 | roost-core `statesync` ApplyDelta 上限的作用对象(RR-20260915-01) | C8 | NewSnapshot 校验最终集合、diff 有序合并且解码允许 2× 操作数,ApplyDelta 却每步用最终存量上限查暂存 map:MaxObjects=1 时 2→1 先 Create 后 Remove 即 ErrObjectLimit,2→3 却成功;组件层同形。修法:循环内改为 2× 过程上界(最终合法的帧暂存 ≤ base+creates ≤ 2×Max),循环后再对最终集合按 Max 拒绝;对象与组件一起改 | `replacement_capacity_promises_test.go`(审查六叶子完整编解码回环 DeepEqual;最终超限仍拒) | 修前红(`valid before/after snapshots rejected: … object limit exceeded operations=[Create 1, Remove 2]`);修后 statesync 与 core 全仓含 -race 全绿 | T-98 · `docs/bugfix/RR-20260915-01.md` |
 | U-0203 | 2026-09-15 | roost-core `statesync` LOD 限频刷新的相位(RR-20260914-13) | C8 | `refreshDue` 按绝对 tick 取模采样,只在奇数 tick 发送的会话永远踩不到 interval=2 的偶数采样点,普通组件首次全量后一直保留旧值(client tick=9 normal=1)。修法:"本次发送与上次已提交发送是否跨过采样点"(`tick/interval != previousTick/interval`),每区间至多一次、与相位无关、逐 tick 发送时与旧规则逐点等价;Previous 是已提交的投影,Abort 不消耗刷新 | `lod_phase_promises_test.go`(逐 tick / 奇数 tick / 奇数 tick 全量;逐 tick 子例断言 tick 9 仍保留 8) | 修前红(`client at tick=9 normal=1 want >=8`);修后 -race 全绿 | T-97 · `docs/bugfix/RR-20260914-13.md` |

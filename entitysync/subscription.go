@@ -21,6 +21,12 @@ var (
 	ErrSubscriptionState       = errors.New("entitysync: invalid subscription state")
 	ErrPreparedProfilesMissing = errors.New("entitysync: prepared update is missing a subscribed profile")
 	ErrCoordinatorClosed       = errors.New("entitysync: subscription coordinator is closed")
+	// ErrDurabilityDeferred means the content to deliver was captured at a
+	// commit LSN the durable watermark has not reached. Nothing was sent
+	// and nothing was consumed: an existing subscription stays as it was,
+	// a prepared batch is aborted with its dirty state intact. Retry once
+	// the watermark advances (U-0206).
+	ErrDurabilityDeferred = errors.New("entitysync: content is not durable yet; retry after the watermark advances")
 )
 
 type SubscriberKind uint8
@@ -223,6 +229,15 @@ func (c *SubscriptionCoordinator) Subscribe(ctx context.Context, subscriber Subs
 		}
 		return Subscription{}, err
 	}
+	// The same gate FlushSubject applies, on the same evidence: the
+	// snapshot's own CommitLSN. A subscription (or profile switch) must not
+	// hand out state the log has not made durable (RR-20260915-03). The
+	// previous subscription, if any, stays active.
+	if c.deferredByDurability(snapshots) {
+		c.rollbackSubscription(key, existing, exists)
+		metrics.IncCounter("entitysync_durability_gate_deferred_total", metrics.Labels{"entry": "subscribe"}, 1)
+		return Subscription{}, ErrDurabilityDeferred
+	}
 	envelope := DeliveryEnvelope{Subscriber: subscriber, Kind: EnvelopeSnapshot, Update: snapshots[0]}
 	if err := admitEnvelopes(ctx, sink, []DeliveryEnvelope{envelope}); err != nil {
 		c.rollbackSubscription(key, existing, exists)
@@ -343,6 +358,14 @@ func (c *SubscriptionCoordinator) DistributeBatch(ctx context.Context, prepared 
 		if len(updates) == 0 || updates[0].SubjectID == 0 {
 			abortPreparedBatch(prepared, ErrSubscriptionSubject)
 			return ErrSubscriptionSubject
+		}
+		// Whole batch or nothing (RR-20260915-03): one subject captured past
+		// the durable watermark defers the entire batch, every prepared
+		// state keeps its dirty bits, and the next tick tries again.
+		if c.deferredByDurability(updates) {
+			abortPreparedBatch(prepared, ErrDurabilityDeferred)
+			metrics.IncCounter("entitysync_durability_gate_deferred_total", metrics.Labels{"entry": "distribute"}, 1)
+			return ErrDurabilityDeferred
 		}
 		subjectID := updates[0].SubjectID
 		if _, duplicate := subjects[subjectID]; duplicate {
@@ -500,7 +523,33 @@ func (c *SubscriptionCoordinator) FlushSubject(ctx context.Context, state *entit
 	if err != nil {
 		return err
 	}
-	return c.Distribute(ctx, prepared)
+	if err := c.Distribute(ctx, prepared); err != nil {
+		if errors.Is(err, ErrDurabilityDeferred) {
+			// The pre-check above raced with a commit that landed between it
+			// and Prepare; Distribute judged the captured LSN itself. Same
+			// contract as the pre-check: skip, keep dirty, retry next tick.
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// deferredByDurability reports whether any update was captured at a commit
+// LSN the installed durable watermark has not reached. No gate installed
+// means nothing is deferred.
+func (c *SubscriptionCoordinator) deferredByDurability(updates []entity.SubjectSyncUpdate) bool {
+	watermark := c.durableWatermark.Load()
+	if watermark == nil {
+		return false
+	}
+	durable := (*watermark)()
+	for _, update := range updates {
+		if update.CommitLSN > durable {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *SubscriptionCoordinator) Get(subscriber SubscriberRef, subjectID int64) (Subscription, bool) {
