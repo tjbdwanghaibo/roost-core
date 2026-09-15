@@ -305,20 +305,26 @@ func (s *RoomTransportSink) AdmitRoomFrames(ctx context.Context, frames []RoomFr
 		outbound = append(outbound, out)
 	}
 	events, err := s.admitWithSlowConsumerPolicy(ctx, outbound, plans, routeSubscribers)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	for key, state := range plans {
-		if _, dead := s.deadSessions[key.session]; !dead && !s.closed {
-			s.rooms[key] = state
+	if err == nil {
+		s.mu.Lock()
+		for key, state := range plans {
+			if _, dead := s.deadSessions[key.session]; !dead && !s.closed {
+				s.rooms[key] = state
+			}
 		}
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
+	// Evictions are irrevocable side effects: the transport baseline is
+	// gone, the session is dead here and removed from the transport. They
+	// happened whether or not the remaining routes were admitted, so the
+	// room must hear about them on both outcomes — a failed remainder keeps
+	// its plans and dirty state for the retry, but a retry skips dead
+	// routes and can never regenerate the notice (RR-20260915-04, U-0207).
+	// Dispatched after the room locks are released, as before.
 	unlockRooms()
 	unlockRooms = nil
 	s.dispatchSlowConsumers(events)
-	return nil
+	return err
 }
 
 func (s *RoomTransportSink) admitWithSlowConsumerPolicy(ctx context.Context, outbound []kit.OutboundFrame, plans map[roomSessionKey]*roomObjectRefs, routeSubscribers map[roomSessionKey]coreentitysync.SubscriberRef) ([]RoomSlowConsumer, error) {
@@ -330,7 +336,10 @@ func (s *RoomTransportSink) admitWithSlowConsumerPolicy(ctx context.Context, out
 		}
 		var admission kit.AdmissionError
 		if s.config.SlowConsumerPolicy != SlowConsumerEvict || !errors.As(err, &admission) || !errors.Is(err, kit.ErrReliableBackpressure) || admission.Session == 0 {
-			return nil, err
+			// Not an eviction: the batch failed. The evictions accumulated in
+			// earlier iterations still happened and travel back with the
+			// error (U-0207).
+			return events, err
 		}
 		filtered := outbound[:0]
 		for _, item := range outbound {
