@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-15 第六轮：room 生命周期 + syncstream 分片/发布新 24 场景，22 通过、2 失败确认 RR-20260915-05。syncbus 错误不重试是明确契约。下一入口 History/ACK/epoch/journal 与应用恢复；保留 room 旧回调/跨 room 剔除、statesync 外部恢复缺口。旧修复跳过，未标整包完成。[运行](REVIEW-2026-09-15-06.md)。
+
 09-15 第五轮：room → RoomTransportSink → AsyncTransport 新增 21 场景，19 通过、2 失败确认 RR-20260915-04；旧修复跳过。下一入口跨 room session/释放/回调关闭，再 syncstream/syncbus。保留 statesync 真实消费者恢复缺口，不标整包完成。[运行](REVIEW-2026-09-15-05.md)。
 
 09-15 第四轮：entitysync 失败重试/profile/批次/关闭/分片取消新增 17 场景通过，无新增确定 RR，旧修复跳过验收。下一入口真实 sink 原子准入、room.flushStateBatch，再 syncstream/syncbus；保留 statesync 外部客户端和运输恢复缺口，不标任何整包完成。[运行](REVIEW-2026-09-15-04.md)。

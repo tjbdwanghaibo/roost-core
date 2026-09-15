@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+09-15 第六轮：38 份运行记录、22 篇机制文档、54 RR（非覆盖率）。Core b58e280，Kit 7030c5f，Codegen cacd627。旧修复跳过；新增 24 场景 22 通过、2 失败确认 RR-20260915-05：SetDownstream 未迁移慢消费者回调。相关三包 race 通过。[运行](REVIEW-2026-09-15-06.md)。
+
+| 新增范围 | 状态与限制 | 下一入口 |
+| --- | --- | --- |
+| room downstream/共享 session/释放 | 回调迁移新 RR；清理范围、Close 重试与两种在途释放通过 | 旧事件、session ID 重用与跨 room 并发剔除保留 |
+| syncstream publisher/reassembler/buffer | 14 场景通过；未做真实 broker/恢复 | History/ACK/epoch/journal |
+| syncbus handler 契约 | 明确错误不重试，JetStream 包装源码一致 | 去重与应用 ACK/重放责任 |
+
 09-15 第五轮：37 份运行记录、21 篇机制文档、53 RR（非覆盖率）。Core 4537a6d，Kit 7030c5f，Codegen cacd627。旧修复跳过验收；room/真实 sink/AsyncTransport 新增 21 场景，19 通过、2 失败确认 RR-20260915-04：剔除后剩余批次失败丢通知，重试后旧订阅不清理。相关两包 race 通过。[运行](REVIEW-2026-09-15-05.md)。
 
 | 新增范围 | 状态与证据限制 | 下一入口 |

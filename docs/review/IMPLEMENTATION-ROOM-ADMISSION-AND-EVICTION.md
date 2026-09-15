@@ -1,5 +1,9 @@
 # Room：分层准入、dirty 重试和连接剔除
 
+09-15 第六轮补充（Core b58e280）：SetDownstream 只换引用，没有迁移构造时注册的慢消费者回调。首次订阅前更换真实 sink 也会出现新 sink 剔除后 room 仍保留订阅，新增 RR-20260915-05。回调注册与 unregister 句柄属于 downstream 生命周期所有权，切换时需处理注册失败回滚、同实例幂等和旧事件隔离。[本轮证据](REVIEW-2026-09-15-06.md)。
+
+两 room × 两 session 的 scoped release/ResetRoom/ReleaseSession/Close 四场景通过；阻塞回调的 Close 超时后可重试通过。ReleaseRoomSubscriber、ReleaseSession 与在途准入交错两个对照通过：等准入完成再删除基线。上述不覆盖跨 room 并发剔除及数值 session ID 重用后的旧回调。
+
 审查 Core 4537a6d；[运行证据](REVIEW-2026-09-15-05.md)。以下区分当前机制和修复建议。
 
 RoomBroadcaster.flushDirty 取出 dirty IDs，flushStateBatch 按稳定分片顺序锁定并 Prepare。已经准备成功的集合交给 SubscriptionCoordinator.DistributeBatch；结束后任何 PendingDirty 主体重新入队。准备失败的主体单独记错与重试，其余准备成功的主体仍可交付，所以调用方不能把一次 tick 当跨所有实体的数据库事务。
