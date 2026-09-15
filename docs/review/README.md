@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-15 第七轮 History/Journal](REVIEW-2026-09-15-07.md) · [机制](IMPLEMENTATION-SYNCSTREAM-HISTORY-AND-JOURNAL.md) · [两个新问题](../bug/REVIEW-2026-09-15-07.md) · [20 场景](../bug/REPRO-2026-09-15-07.md)。
+
 [09-15 第六轮生命周期与分片](REVIEW-2026-09-15-06.md) · [SyncStream 机制](IMPLEMENTATION-SYNCSTREAM-FRAGMENTS-AND-DELIVERY.md) · [新问题](../bug/REVIEW-2026-09-15-06.md) · [24 场景](../bug/REPRO-2026-09-15-06.md)。
 
 [09-15 第五轮 Room 传输审查](REVIEW-2026-09-15-05.md) · [准入与剔除机制](IMPLEMENTATION-ROOM-ADMISSION-AND-EVICTION.md) · [新问题](../bug/REVIEW-2026-09-15-05.md) · [21 场景代码](../bug/REPRO-2026-09-15-05.md)。

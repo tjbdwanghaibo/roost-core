@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+09-15 第七轮：39 份运行记录、23 篇机制文档、56 RR（非覆盖率）。Core 4622463，Kit 7030c5f，Codegen cacd627。旧修复跳过；History/ACK/journal 新 20 场景 16 通过、4 失败确认 RR-20260915-06/07：清理后身份复用、半条 WAL 恢复后续写损坏。现有 syncstream race 通过。[运行](REVIEW-2026-09-15-07.md)。
+
+| 新增范围 | 状态与限制 | 下一入口 |
+| --- | --- | --- |
+| History 清理/ACK/Resync | 三种清理触发同身份问题；Rotate 对照通过 | Recover 并发快照与身份高水位 |
+| journal 拒绝与文件恢复 | 六种拒绝原子性通过；半尾续写新 RR | Import/Restore 持久化、Record/Checkpoint 边界 |
+| syncbus 应用恢复 | 本轮没有新增实现验证 | 后续去重和 ACK/重放接入 |
+
 09-15 第六轮：38 份运行记录、22 篇机制文档、54 RR（非覆盖率）。Core b58e280，Kit 7030c5f，Codegen cacd627。旧修复跳过；新增 24 场景 22 通过、2 失败确认 RR-20260915-05：SetDownstream 未迁移慢消费者回调。相关三包 race 通过。[运行](REVIEW-2026-09-15-06.md)。
 
 | 新增范围 | 状态与限制 | 下一入口 |

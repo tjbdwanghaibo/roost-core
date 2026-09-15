@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-15 第七轮 History/ACK/Journal](review/REVIEW-2026-09-15-07.md)：20 新场景，确认流身份复用和 WAL 半尾续写问题，附复现与方案。
+
 [09-15 第六轮生命周期与 SyncStream](review/REVIEW-2026-09-15-06.md)：24 新场景，确认 downstream 回调迁移问题，记录分片和业务交付语义。
 
 [09-15 第五轮 Room 传输审查](review/REVIEW-2026-09-15-05.md)：21 新场景，确认剔除通知丢失问题，附准入机制和修复方向。
