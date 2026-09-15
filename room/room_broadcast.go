@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	stdsync "sync"
 	"sync/atomic"
@@ -139,6 +140,37 @@ func (s *RoomEnvelopeSink) SetDownstream(downstream ReliableRoomFrameSink) {
 	s.downstream = downstream
 	s.mu.Unlock()
 	s.admitMu.Unlock()
+}
+
+// currentDownstream is the sink frames are admitted to right now.
+func (s *RoomEnvelopeSink) currentDownstream() ReliableRoomFrameSink {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.downstream
+}
+
+// sameRoomFrameSink reports whether two sinks are the same instance without
+// panicking on non-comparable dynamic types (a func-typed sink, say).
+func sameRoomFrameSink(a, b ReliableRoomFrameSink) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// roomSlowConsumerLifecycle is what a downstream offers when it evicts slow
+// consumers itself: the room registers to hear about evictions so it can
+// drop the membership and quota of a connection the transport already gave
+// up on. RoomTransportSink implements it.
+type roomSlowConsumerLifecycle interface {
+	RegisterRoomSlowConsumerHandler(int64, func(context.Context, RoomSlowConsumer)) (func(), error)
 }
 
 func (s *RoomEnvelopeSink) RegisterSubject(roomID, subjectID int64) error {
@@ -424,9 +456,7 @@ func NewRoomBroadcaster(roomID int64, downstream ReliableRoomFrameSink, configs 
 		retiring: make(map[int64]struct{}),
 		budget:   config.budget, onActivity: config.onActivity,
 	}
-	if lifecycle, ok := downstream.(interface {
-		RegisterRoomSlowConsumerHandler(int64, func(context.Context, RoomSlowConsumer)) (func(), error)
-	}); ok {
+	if lifecycle, ok := downstream.(roomSlowConsumerLifecycle); ok {
 		unregister, err := lifecycle.RegisterRoomSlowConsumerHandler(roomID, replication.handleSlowConsumer)
 		if err != nil {
 			return nil, err
@@ -522,7 +552,28 @@ func (r *RoomBroadcaster) SetDownstream(downstream ReliableRoomFrameSink) error 
 	if r.isStopped() {
 		return ErrRoomBroadcasterStopped
 	}
+	if sameRoomFrameSink(r.envelopeSink.currentDownstream(), downstream) {
+		return nil // same instance: nothing to hand over, and no double registration
+	}
+	// Replacing the downstream is a lifecycle handover, not a pointer swap
+	// (RR-20260915-05, U-0208). The room's slow-consumer handler lives in
+	// the sink that evicts, so it has to move with the frames: register on
+	// the new sink first — a refusal keeps the old sink and its handler in
+	// place — then switch admission, take over the unregister, and only then
+	// release the old registration.
+	var unregister func()
+	if lifecycle, ok := downstream.(roomSlowConsumerLifecycle); ok {
+		next, err := lifecycle.RegisterRoomSlowConsumerHandler(r.roomID, r.handleSlowConsumer)
+		if err != nil {
+			return fmt.Errorf("room: downstream handover: %w", err)
+		}
+		unregister = next
+	}
 	r.envelopeSink.SetDownstream(downstream)
+	if r.unregisterSlowConsumer != nil {
+		r.unregisterSlowConsumer()
+	}
+	r.unregisterSlowConsumer = unregister
 	return nil
 }
 
