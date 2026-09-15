@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-15 第五轮 Room 传输审查](REVIEW-2026-09-15-05.md) · [准入与剔除机制](IMPLEMENTATION-ROOM-ADMISSION-AND-EVICTION.md) · [新问题](../bug/REVIEW-2026-09-15-05.md) · [21 场景代码](../bug/REPRO-2026-09-15-05.md)。
+
 [09-15 第四轮失败与生命周期](REVIEW-2026-09-15-04.md) · [观察项](../bug/REVIEW-2026-09-15-04.md) · [17 场景代码](../bug/REPRO-2026-09-15-04.md)。
 
 [09-15 第三轮 EntitySync](REVIEW-2026-09-15-03.md) · [订阅与持久化机制](IMPLEMENTATION-ENTITYSYNC-SUBSCRIPTION-AND-DURABILITY.md) · [问题](../bug/REVIEW-2026-09-15-03.md) · [复现](../bug/REPRO-2026-09-15-03.md)。

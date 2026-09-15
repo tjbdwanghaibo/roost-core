@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+09-15 第五轮：37 份运行记录、21 篇机制文档、53 RR（非覆盖率）。Core 4537a6d，Kit 7030c5f，Codegen cacd627。旧修复跳过验收；room/真实 sink/AsyncTransport 新增 21 场景，19 通过、2 失败确认 RR-20260915-04：剔除后剩余批次失败丢通知，重试后旧订阅不清理。相关两包 race 通过。[运行](REVIEW-2026-09-15-05.md)。
+
+| 新增范围 | 状态与证据限制 | 下一入口 |
+| --- | --- | --- |
+| RoomBroadcaster dirty/退役、RoomEnvelopeSink 序号 | 五个失败/交接场景通过；tick 非全主体事务 | 生命周期与在途 flush |
+| RoomTransportSink 基线与剔除 | 八个参数/基线场景通过；剔除三场景一过两失败 | 跨 room 共享 session、释放和通知关闭 |
+| AsyncTransport.AdmitBatch | 五个队列原子性场景通过，未测真实网络 | 然后 syncstream/syncbus |
+
 09-15 第四轮：36 份运行记录、20 篇机制文档、52 RR（记录计数，不是覆盖率）。Core b205653，Kit 7030c5f，Codegen cacd627。旧修复跳过验收；entitysync 失败/重试、profile 交接、批次 dirty 与生命周期新增 17 叶子全部通过，相关两包 race 通过；分片取消阻塞列观察项，无新增确定 RR。[运行](REVIEW-2026-09-15-04.md)。
 
 | 新增范围 | 状态与限制 | 下一入口 |
