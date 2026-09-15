@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-15 第三轮：保留 statesync 外部客户端/真实运输恢复缺口，转入 entitysync 新内容；订阅与持久化水位五场景三失败两通过，新增 RR-20260915-03。旧修复未核验，下一入口 profile/失败重试与生命周期，再 syncstream/syncbus。[运行](REVIEW-2026-09-15-03.md)。
+
 09-15 第二轮：五项旧 statesync 原触发已验收（24 场景通过），重叠准备的接收后收敛检查新增 RR-20260915-02。不能由 stale 拒绝推导客户端已恢复。继续运输/恢复交接，再 entitysync → syncstream/syncbus。[运行](REVIEW-2026-09-15-02.md)。
 
 09-15：statesync 生命周期六场景两失败四通过，新增 RR-20260915-01；旧修复未验收。下一入口消费者/恢复与业务 schema，再 entitysync → syncstream/syncbus，不标整包完成。[运行](REVIEW-2026-09-15.md)。

@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+09-15 第三轮：35 份运行记录、20 篇机制文档、52 RR。Core faf4631，Kit 7030c5f，Codegen cacd627。用户要求跳过旧修复；本轮转入 entitysync，新增 RR-20260915-03，持久化水位未覆盖新订阅/profile/直接分发。五叶子三失败两通过，entitysync/entity race 通过。[运行](REVIEW-2026-09-15-03.md)。
+
+| 范围 | 新证据/状态 | 下一入口 |
+| --- | --- | --- |
+| statesync 宿主消费链 | 本轮查询未定位完整接入，不作不存在结论 | 外部客户端、别名导入与真实运输恢复缺口保留 |
+| entitysync Subscribe/Distribute/FlushSubject | 水位门槛三入口绕过，确认新 RR | 带版本的持久化准入、profile/失败重试 |
+| entitysync 生命周期 | 源码已读，未专项穷尽 | 取消、sink/关闭和状态交接，之后 syncstream/syncbus |
+
 09-15 第二轮：34 份运行记录、19 篇机制文档、51 RR。Core 9baf2ee，Kit 7030c5f，Codegen cacd627。按用户要求验收 RR-20260914-10..13、RR-20260915-01，原 24 场景全通过；新增 RR-20260915-02：重叠准备已交付视图在 stale 后仍静默分叉。三个新叶子两失败一通过，statesync race 通过。[运行](REVIEW-2026-09-15-02.md)。
 
 | 范围 | 证据/状态 | 下一入口 |
