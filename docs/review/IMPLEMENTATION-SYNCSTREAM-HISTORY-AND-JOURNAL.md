@@ -1,5 +1,11 @@
 # SyncStream：History、ACK 和 Journal 恢复
 
+09-15 第八轮（Core 6cef240）补充：[29 场景证据](REVIEW-2026-09-15-08.md)。持久化 Import/Restore 没有替换 journal，重启旧内容回归或跨 epoch 不能恢复（RR-20260915-08）；Recover 锁外捕获期间若同流被追加或全局 epoch 改变，旧捕获仍以更新身份提交（RR-20260915-09）。这些是独立新触发，旧 RR-06/07 按用户声明跳过复核。
+
+替换方案应先完成候选快照校验，再在互斥边界用现有 journal checkpoint 持久化，最后发布内存；区分构造恢复和在线替换。Recover 应在调用 provider 前后校验不复用的 epoch/流修改代数，失效时拒绝或有界重捕获，避免持 History 锁运行任意业务回调。
+
+三组同一 History 下 Append/Checkpoint 并发重启对照通过，十种非法导入原状态不变，四种合法替换及 store 错误对照通过。没有验证 journal 同步错误、进程崩溃、多实例所有权；成功路径和互斥不能消除落盘结果不确定性。
+
 Core 4622463；[第七轮证据](REVIEW-2026-09-15-07.md)。描述已读实现和建议，不表示修复已实施。
 
 History 将 Observer/Stream 作为复合键。Append 给包设置全局 epoch 和流内递增 sequence；delta 的 BaseSequence 指向旧 latest，Full 的 base 为零。有效 schema 切换需要 Full。载荷克隆后保留，超 MaxPacketsPerStream 时丢最早包。

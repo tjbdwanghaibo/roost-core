@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+09-15 第八轮：40 份运行记录、23 篇机制文档、58 RR（非覆盖率）。Core 6cef240，Kit 7030c5f，Codegen cacd627。用户声明没有修复，跳过旧核验；新 29 场景 23 通过、6 失败确认 RR-20260915-08/09：持久化 Import/Restore 未替换 journal、Recover 提交过期捕获。现有 syncstream race 通过。[运行](REVIEW-2026-09-15-08.md)。
+
+| 新范围 | 状态/限制 | 下一入口 |
+| --- | --- | --- |
+| Import/Restore + journal | 四失败两 checkpoint 对照，新 RR-08 | 原子替换和同步错误歧义 |
+| Recover 快照交接 | 两失败三对照，新 RR-09 | 修改代数与宿主捕获契约 |
+| 校验/并发 checkpoint | 十非法、四合法、store 失败、三并发重启通过 | journal 故障与 syncbus 业务恢复 |
+
 09-15 第七轮：39 份运行记录、23 篇机制文档、56 RR（非覆盖率）。Core 4622463，Kit 7030c5f，Codegen cacd627。旧修复跳过；History/ACK/journal 新 20 场景 16 通过、4 失败确认 RR-20260915-06/07：清理后身份复用、半条 WAL 恢复后续写损坏。现有 syncstream race 通过。[运行](REVIEW-2026-09-15-07.md)。
 
 | 新增范围 | 状态与限制 | 下一入口 |

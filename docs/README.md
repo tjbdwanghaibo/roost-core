@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-15 第八轮 History 快照交接](review/REVIEW-2026-09-15-08.md)：29 新场景，持久化替换与 Recover 并发捕获问题，附验证代码和方案。
+
 [09-15 第七轮 History/ACK/Journal](review/REVIEW-2026-09-15-07.md)：20 新场景，确认流身份复用和 WAL 半尾续写问题，附复现与方案。
 
 [09-15 第六轮生命周期与 SyncStream](review/REVIEW-2026-09-15-06.md)：24 新场景，确认 downstream 回调迁移问题，记录分片和业务交付语义。
