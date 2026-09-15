@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-15 第二轮：五项旧 statesync 原触发已验收（24 场景通过），重叠准备的接收后收敛检查新增 RR-20260915-02。不能由 stale 拒绝推导客户端已恢复。继续运输/恢复交接，再 entitysync → syncstream/syncbus。[运行](REVIEW-2026-09-15-02.md)。
+
 09-15：statesync 生命周期六场景两失败四通过，新增 RR-20260915-01；旧修复未验收。下一入口消费者/恢复与业务 schema，再 entitysync → syncstream/syncbus，不标整包完成。[运行](REVIEW-2026-09-15.md)。
 
 第八轮（Core 215fffa）：LOD/历史/PreparedFrame 七场景六通过一失败，新增 RR-13；旧问题按用户要求跳过复核。下一入口为投影生命周期和客户端恢复交接，再 entitysync → syncstream/syncbus，statesync 不标完成。[运行](REVIEW-2026-09-14-08.md)。

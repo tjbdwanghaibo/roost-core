@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-15 第二轮验收与交付边界](review/REVIEW-2026-09-15-02.md)：五项旧问题原场景通过，新发现 stale 提交后的客户端静默分叉。
+
 [09-15 StateSync 生命周期审查](review/REVIEW-2026-09-15.md)：满容量合法替换被增删顺序误拒，新增问题与对照证据已记录。
 
 [第八轮 StateSync LOD 续审](review/REVIEW-2026-09-14-08.md)：新增错相发送导致组件冻结；历史淘汰与 PreparedFrame 边界通过，旧问题未复核。

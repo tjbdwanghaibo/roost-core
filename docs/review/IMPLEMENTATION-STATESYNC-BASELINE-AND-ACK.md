@@ -1,5 +1,9 @@
 # StateSync：发送承诺与 ACK 基线
 
+09-15 第二轮（Core 9baf2ee）：U-0200..0204 的五个原问题经原 overlay 共 24 场景通过。现有修复冻结已提交 tick 的视图、ACK 不再清恢复标志、单片补长度、LOD 跨区间刷新、delta 最终容量与过程容量分离；仅代表原触发验收。[证据](REVIEW-2026-09-15-02.md)。
+
+新增交付边界 RR-20260915-02：两个 PreparedFrame 都早于首次 Commit 时仍可携带不同视图，第二个已经送达再被 Commit 拒绝，客户端不因此撤销应用。后续 delta 若为零操作，幂等性无法补出缺失操作，也不会抛错触发 resync；多/少对象两个方向都复现，显式全量对照通过。发送许可、基线身份和恢复状态需要在实际交付生命周期内一致，不能只保护服务端 sent 表。
+
 09-15（Core f8ee1eb）生命周期补充：NewSnapshot 校验并排序最终对象/组件集合；diff 按标识有序合并生成增删。较小新 ID 会先创建、后删除旧 ID；ApplyDelta 每步检查最终存量上限，满容量合法替换被拒，登记 RR-20260915-01，对象/组件两层均复现。较大 ID 替换、通用组件 schema 和 archetype 变化对照通过。应统一最终集合容量与临时操作资源预算，不取消边界校验。[本轮证据](REVIEW-2026-09-15.md)。以下为历史时点机制记录。
 
 第八轮（Core 215fffa）：LOD 先执行 upstream 和 selector，再按组件 mask/priority 过滤；未到 refreshDue 时复制上一投影的组件，避免误删。当前 refreshDue 用绝对 tick 取模，奇数 tick 发送配 interval=2 可持续冻结普通组件，已确认为 RR-13。修订设计需要组件刷新时间而非简单 Previous.Tick；准备/Abort/Commit 的资源所有权仍需保持明确。[运行](REVIEW-2026-09-14-08.md)。
