@@ -1,5 +1,7 @@
 # StateSync：发送承诺与 ACK 基线
 
+09-15（Core f8ee1eb）生命周期补充：NewSnapshot 校验并排序最终对象/组件集合；diff 按标识有序合并生成增删。较小新 ID 会先创建、后删除旧 ID；ApplyDelta 每步检查最终存量上限，满容量合法替换被拒，登记 RR-20260915-01，对象/组件两层均复现。较大 ID 替换、通用组件 schema 和 archetype 变化对照通过。应统一最终集合容量与临时操作资源预算，不取消边界校验。[本轮证据](REVIEW-2026-09-15.md)。以下为历史时点机制记录。
+
 第八轮（Core 215fffa）：LOD 先执行 upstream 和 selector，再按组件 mask/priority 过滤；未到 refreshDue 时复制上一投影的组件，避免误删。当前 refreshDue 用绝对 tick 取模，奇数 tick 发送配 interval=2 可持续冻结普通组件，已确认为 RR-13。修订设计需要组件刷新时间而非简单 Previous.Tick；准备/Abort/Commit 的资源所有权仍需保持明确。[运行](REVIEW-2026-09-14-08.md)。
 
 本轮历史与提交边界：全局 SnapshotRing 与每会话 sent 容量独立；sent 淘汰 ACK 基线后 prepare 回到全量，旧 ACK 被拒。ForceFull 使旧 PreparedFrame 失效，新提交先于旧提交、Abort 后提交均拒绝，四个确定性场景通过。环满后平移/重建索引为 O(capacity)，LOD 逐组件找旧值最坏 O(components²)，未做基准测试。以下保留前轮描述与当时状态。

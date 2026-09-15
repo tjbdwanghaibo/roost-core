@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-15 StateSync 生命周期审查](review/REVIEW-2026-09-15.md)：满容量合法替换被增删顺序误拒，新增问题与对照证据已记录。
+
 [第八轮 StateSync LOD 续审](review/REVIEW-2026-09-14-08.md)：新增错相发送导致组件冻结；历史淘汰与 PreparedFrame 边界通过，旧问题未复核。
 
 [第七轮 StateSync 续审](review/REVIEW-2026-09-14-07.md)：旧问题保持未修复，新增 ForceFull/旧 ACK 与单片限制问题，进度及机制已更新。
