@@ -405,10 +405,11 @@ func TestSessionSequenceComparisonsSurviveWraparound(t *testing.T) {
 		sequence:   0xFFFFFFFF,
 		committed:  0xFFFFFFFF,
 	}
-	_, _, _, _, sequence, generation, _, err := session.prepare(1)
+	prep, err := session.prepare(1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sequence, generation := prep.sequence, prep.generation
 	if sequence != 1 {
 		t.Fatalf("prepare skipped-zero wraparound produced sequence %d", sequence)
 	}

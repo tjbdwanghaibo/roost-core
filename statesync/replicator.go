@@ -278,17 +278,23 @@ func (r *Replicator) prepareLatest(state *SessionState) (*PreparedFrame, error) 
 	if !ok {
 		return nil, ErrSnapshotNotFound
 	}
-	info, qualityTier, base, previous, sequence, generation, fullRefresh, err := state.prepare(current.Tick)
+	prep, err := state.prepare(current.Tick)
 	if err != nil {
 		return nil, err
 	}
-	current, err = r.projectAndNormalize(ProjectionContext{
-		Session: info, QualityTier: qualityTier, Previous: previous, FullRefresh: fullRefresh,
-	}, current)
-	if err != nil {
-		return nil, err
+	if prep.frozen != nil {
+		// This tick already went out to this session: send the same view
+		// again rather than a fresh projection of it (U-0200).
+		current = *prep.frozen
+	} else {
+		current, err = r.projectAndNormalize(ProjectionContext{
+			Session: prep.info, QualityTier: prep.qualityTier, Previous: prep.previous, FullRefresh: prep.fullRefresh,
+		}, current)
+		if err != nil {
+			return nil, err
+		}
 	}
-	frame, err := BuildDelta(base, current)
+	frame, err := BuildDelta(prep.base, current)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +302,7 @@ func (r *Replicator) prepareLatest(state *SessionState) (*PreparedFrame, error) 
 	if err != nil {
 		return nil, err
 	}
-	packets, err := FragmentFrame(frame, sequence, encoded, r.maxDatagram, r.limits)
+	packets, err := FragmentFrame(frame, prep.sequence, encoded, r.maxDatagram, r.limits)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +310,7 @@ func (r *Replicator) prepareLatest(state *SessionState) (*PreparedFrame, error) 
 	r.stats.datagrams.Add(uint64(len(packets)))
 	return &PreparedFrame{
 		Frame: frame, Datagrams: packets, state: state, snapshot: current,
-		sequence: sequence, generation: generation, full: frame.Kind == FrameFull,
+		sequence: prep.sequence, generation: prep.generation, full: frame.Kind == FrameFull,
 		onCommit: func() {
 			if frame.Kind == FrameFull {
 				r.stats.fullFrames.Add(1)

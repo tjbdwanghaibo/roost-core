@@ -38,6 +38,10 @@
 
 ### Fixed
 
+- **statesync:一个 tick 一个视图、ForceFull 不被旧 ACK 取消、单片重组守 MaxFrameBytes、LOD 刷新与发送相位无关**(U-0200～U-0203,C8;RR-20260914-10～13;T-94～T-97)。
+  `prepare` 发现该 tick 已对本会话提交过就复用已发送的视图(同 tick 的兴趣变化延到下一 tick),`commitPrepared` 对同 tick 的不同视图按 `ErrPreparedFrameStale` 拒绝——迟到的 ACK 不再绑到被覆盖的基线;`prepare` 的 8 值返回改为 `prepareResult`。
+  两个 ACK 入口不再清 `forceFull`,恢复意图只由当前 generation 的全量帧提交释放。`Reassembler` 单片快路径加同一个 `MaxFrameBytes` 比较。`LODProjector.refreshDue` 改为"本次发送与上次已提交发送是否跨过采样点",每区间至多一次、逐 tick 发送时与旧规则逐点等价。
+  测试 `baseline_identity_promises_test.go`、`recovery_intent_promises_test.go`、`reassembly_limit_promises_test.go`、`lod_phase_promises_test.go`;记录 `docs/bugfix/RR-20260914-10.md`～`13.md`。
 - **lockstep `SubmitInput` 先校验再去重**(U-0199,C8;T-93;用户复审提出,无 RR)。身份环是按客户端给的 `uint32` 帧号寻址的,而寻址排在窗口检查之前:一个必然被 `ErrFrameTooEarly` 拒绝的极大帧号照样给该座位分配了 129 槽的环;更要紧的是 `int(original) % replayWindowSize` 在 `int` 为 32 位的平台(GOARCH=386/arm)上溢出成负下标(`int32(4e9)%129 = -24`),索引即 panic,而 Room 是单 goroutine 驱动的。
   现在折叠与窗口检查前移、身份查找后移(等价:任何被记住的 original 恒满足 `original <= next+window`,`next` 只增而 `window` 构造后固定,所以越窗的 original 不可能有身份记录),新增 `replaySlotIndex` 在 `FrameID` 域取模,对任意 uint32 都落在环内。测试 `submit_validation_promises_test.go`;记录 `docs/bugfix/U-0199-submit-input-validation-order.md`。
 - **LockstepBot 区分"已收到"与"已应用",回调失败不再丢批次尾帧**(U-0198,C8;RR-20260914-09;T-92)。Assembler 一次释放整个连续批次、游标立刻前移,而 `apply` 中途失败时既不保留剩余帧也不停用 Bot:重传被去重丢弃,后续新帧照常返回成功,模拟却少了尾帧。

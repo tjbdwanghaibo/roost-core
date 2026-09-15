@@ -1,6 +1,9 @@
 package statesync
 
-import "sync"
+import (
+	"bytes"
+	"sync"
+)
 
 // sequenceNewer reports whether a is strictly newer than b under serial
 // number arithmetic (RFC 1982). prepare already skips 0 when the counter
@@ -52,7 +55,6 @@ func (s *SessionState) handleControl(message ControlMessage, latestPublished uin
 		}
 		if message.Tick > s.ackTick {
 			s.ackTick = message.Tick
-			s.forceFull = false
 		}
 	case ControlResync:
 		s.forceFull = true
@@ -97,9 +99,14 @@ func (s *SessionState) Acknowledge(tick, latestPublished uint32) error {
 	if _, ok := s.sent[tick]; !ok {
 		return ErrInvalidAck
 	}
+	// An ACK moves the watermark and nothing else. It used to clear
+	// forceFull too, which let the ACK of a frame sent BEFORE ForceFull was
+	// requested cancel the recovery (RR-20260914-11): the client had never
+	// seen a full frame, and the next send was a delta again. The intent is
+	// released in commitPrepared, by the full frame that belongs to the
+	// current generation actually being committed (U-0201).
 	if tick > s.ackTick {
 		s.ackTick = tick
-		s.forceFull = false
 	}
 	return nil
 }
@@ -141,32 +148,58 @@ func (s *SessionState) QualityTier() uint8 {
 	return s.qualityTier
 }
 
-func (s *SessionState) prepare(targetTick uint32) (SessionInfo, uint8, *Snapshot, *Snapshot, uint32, uint64, bool, error) {
+// prepareResult is what one prepare hands to the projection and encoding
+// steps. It is a struct rather than a tuple so the frozen-view rule below
+// has somewhere to live without an eight-value return.
+type prepareResult struct {
+	info        SessionInfo
+	qualityTier uint8
+	base        *Snapshot // delta baseline (nil for a full frame)
+	previous    *Snapshot // last committed projection, for rate-limited holds
+	frozen      *Snapshot // this tick's already-committed view, if any (U-0200)
+	sequence    uint32
+	generation  uint64
+	fullRefresh bool
+}
+
+func (s *SessionState) prepare(targetTick uint32) (prepareResult, error) {
 	if s == nil {
-		return SessionInfo{}, 0, nil, nil, 0, 0, false, ErrSessionNotFound
+		return prepareResult{}, ErrSessionNotFound
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return SessionInfo{}, 0, nil, nil, 0, 0, false, ErrSessionNotFound
+		return prepareResult{}, ErrSessionNotFound
 	}
 	s.sequence++
 	if s.sequence == 0 {
 		s.sequence++
 	}
-	var previous *Snapshot
+	result := prepareResult{info: s.info, qualityTier: s.qualityTier, sequence: s.sequence, generation: s.generation}
 	if latest, ok := s.sent[s.lastSent]; ok {
 		clone := latest.Clone()
-		previous = &clone
+		result.previous = &clone
+	}
+	// One tick, one view (U-0200, RR-20260914-10). `sent` is keyed by tick
+	// and an ACK names only a tick, so if this tick were projected again
+	// (an interest change between two sends of the same tick) the ACK
+	// could not say which view the client holds. Re-preparing a committed
+	// tick therefore reuses the committed view; whatever changed in the
+	// projection lands with the next tick.
+	if committed, ok := s.sent[targetTick]; ok {
+		clone := committed.Clone()
+		result.frozen = &clone
 	}
 	if !s.forceFull && s.ackTick != 0 && s.ackTick < targetTick {
 		if base, ok := s.sent[s.ackTick]; ok {
 			base = base.Clone()
-			return s.info, s.qualityTier, &base, previous, s.sequence, s.generation, false, nil
+			result.base = &base
+			return result, nil
 		}
 		s.forceFull = true
 	}
-	return s.info, s.qualityTier, nil, previous, s.sequence, s.generation, true, nil
+	result.fullRefresh = true
+	return result, nil
 }
 
 func (s *SessionState) commitPrepared(snapshot Snapshot, sequence uint32, generation uint64, full bool) error {
@@ -179,6 +212,13 @@ func (s *SessionState) commitPrepared(snapshot Snapshot, sequence uint32, genera
 		return ErrSessionNotFound
 	}
 	if generation != s.generation || !sequenceNewer(sequence, s.committed) {
+		return ErrPreparedFrameStale
+	}
+	// A tick's view is fixed by its first commit. Two prepares of the same
+	// tick that both ran before either committed can carry different views;
+	// the later one must not overwrite what the ACK will refer to (U-0200).
+	// Same view twice is idempotent.
+	if existing, ok := s.sent[snapshot.Tick]; ok && !snapshotEqual(existing, snapshot) {
 		return ErrPreparedFrameStale
 	}
 	s.committed = sequence
@@ -231,4 +271,34 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		Info: s.info, AckTick: s.ackTick, LastSent: s.lastSent, Sequence: s.sequence,
 		ForceFull: s.forceFull, Closed: s.closed, QualityTier: s.qualityTier,
 	}
+}
+
+// snapshotEqual reports whether two normalized snapshots describe the same
+// view: same meta, same objects (by ref), same archetypes and component
+// bytes. Order-independent so it does not depend on how either was built.
+func snapshotEqual(a, b Snapshot) bool {
+	if a.SnapshotMeta != b.SnapshotMeta || len(a.Objects) != len(b.Objects) {
+		return false
+	}
+	byRef := make(map[ObjectRef]ObjectState, len(b.Objects))
+	for _, object := range b.Objects {
+		byRef[object.Ref] = object
+	}
+	for _, object := range a.Objects {
+		other, ok := byRef[object.Ref]
+		if !ok || other.Archetype != object.Archetype || len(other.Components) != len(object.Components) {
+			return false
+		}
+		byType := make(map[uint16]ComponentState, len(other.Components))
+		for _, component := range other.Components {
+			byType[component.TypeID] = component
+		}
+		for _, component := range object.Components {
+			match, ok := byType[component.TypeID]
+			if !ok || match.SchemaVersion != component.SchemaVersion || !bytes.Equal(match.Data, component.Data) {
+				return false
+			}
+		}
+	}
+	return true
 }

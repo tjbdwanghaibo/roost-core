@@ -211,6 +211,14 @@ func (r *Reassembler) push(session SessionID, packet []byte, now time.Time) ([]b
 		return nil, false, DatagramHeader{}, err
 	}
 	if header.ChunkCount == 1 {
+		// The single-chunk fast path answers the same question the
+		// multi-chunk accumulation below does: is this frame within
+		// MaxFrameBytes? It skipped that check and let a payload through
+		// that the same bytes split in two would have refused
+		// (RR-20260914-12, U-0202).
+		if len(payload) > r.limits.MaxFrameBytes {
+			return nil, false, header, ErrFrameTooLarge
+		}
 		return payload, true, header, nil
 	}
 	key := assemblyKey{session: session, roomID: header.RoomID, epoch: header.Epoch, tick: header.Tick, sequence: header.Sequence}

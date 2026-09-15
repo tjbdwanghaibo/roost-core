@@ -210,7 +210,7 @@ func (projector *LODProjector) ProjectWithContext(context ProjectionContext, sna
 				continue
 			}
 			selected := component
-			if registered && !context.FullRefresh && existed && previousObject.Archetype == object.Archetype && !projector.refreshDue(projected.Tick, schema.Policy, decision) {
+			if registered && !context.FullRefresh && existed && previousObject.Archetype == object.Archetype && !projector.refreshDue(projected.Tick, context.Previous.Tick, schema.Policy, decision) {
 				if old, ok := findLODComponent(previousObject.Components, component.TypeID); ok && old.SchemaVersion == component.SchemaVersion {
 					selected = old
 					projector.stats.componentsHeld.Add(1)
@@ -224,7 +224,18 @@ func (projector *LODProjector) ProjectWithContext(context ProjectionContext, sna
 	return Snapshot{SnapshotMeta: projected.SnapshotMeta, Objects: objects}, nil
 }
 
-func (projector *LODProjector) refreshDue(tick uint32, policy ReplicationPolicy, decision LODDecision) bool {
+// refreshDue decides whether a rate-limited component is re-sampled this
+// send. The rate defines sampling intervals of `interval` ticks; a
+// component refreshes when this send lies in a later interval than the
+// session's previous send — i.e. at least one sampling point was crossed
+// since the value the client holds was taken. That keeps "at most one
+// refresh per interval" and does not depend on which ticks the session
+// happens to send on. The old rule, `tick%interval == 0`, sampled at
+// absolute ticks: a session sending only on odd ticks with interval 2 never
+// landed on one and held the component forever (RR-20260914-13, U-0203).
+// previousTick is the last COMMITTED send, so an aborted or failed send
+// cannot consume the refresh.
+func (projector *LODProjector) refreshDue(tick, previousTick uint32, policy ReplicationPolicy, decision LODDecision) bool {
 	rate := policy.MaxRateHz
 	if policy.Priority < projector.alwaysFreshAtOrAbove && decision.MaxRateHz != 0 && (rate == 0 || decision.MaxRateHz < rate) {
 		rate = decision.MaxRateHz
@@ -233,7 +244,7 @@ func (projector *LODProjector) refreshDue(tick uint32, policy ReplicationPolicy,
 		return true
 	}
 	interval := (uint32(projector.snapshotRateHz) + uint32(rate) - 1) / uint32(rate)
-	return tick%interval == 0
+	return tick/interval != previousTick/interval
 }
 
 func (projector *LODProjector) Stats() LODProjectorStats {

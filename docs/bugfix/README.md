@@ -51,6 +51,10 @@
 | RR-20260914-07 | core | lockstep 座位数未对齐 wire 的 MaxFrameInputs | U-0196 | [RR-20260914-07.md](RR-20260914-07.md) |
 | RR-20260914-08 | core | lockstep 去重身份表准入无上限,只靠 Advance 回收(U-0193 引入) | U-0197 | [RR-20260914-08.md](RR-20260914-08.md) |
 | RR-20260914-09 | core | LockstepBot 把接收游标当应用游标,回调失败后丢失批次尾帧 | U-0198 | [RR-20260914-09.md](RR-20260914-09.md) |
+| RR-20260914-10 | core | statesync 同 tick 重投影覆盖 sent[tick],迟到 ACK 绑错基线 | U-0200 | [RR-20260914-10.md](RR-20260914-10.md) |
+| RR-20260914-11 | core | statesync ACK 路径清 forceFull,旧发送的 ACK 取消恢复意图 | U-0201 | [RR-20260914-11.md](RR-20260914-11.md) |
+| RR-20260914-12 | core | statesync 单片重组绕过 MaxFrameBytes | U-0202 | [RR-20260914-12.md](RR-20260914-12.md) |
+| RR-20260914-13 | core | statesync LOD 按绝对 tick 采样,错相发送的组件永远保留旧值 | U-0203 | [RR-20260914-13.md](RR-20260914-13.md) |
 
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 
