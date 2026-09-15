@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-15 第四轮：entitysync 失败重试/profile/批次/关闭/分片取消新增 17 场景通过，无新增确定 RR，旧修复跳过验收。下一入口真实 sink 原子准入、room.flushStateBatch，再 syncstream/syncbus；保留 statesync 外部客户端和运输恢复缺口，不标任何整包完成。[运行](REVIEW-2026-09-15-04.md)。
+
 09-15 第三轮：保留 statesync 外部客户端/真实运输恢复缺口，转入 entitysync 新内容；订阅与持久化水位五场景三失败两通过，新增 RR-20260915-03。旧修复未核验，下一入口 profile/失败重试与生命周期，再 syncstream/syncbus。[运行](REVIEW-2026-09-15-03.md)。
 
 09-15 第二轮：五项旧 statesync 原触发已验收（24 场景通过），重叠准备的接收后收敛检查新增 RR-20260915-02。不能由 stale 拒绝推导客户端已恢复。继续运输/恢复交接，再 entitysync → syncstream/syncbus。[运行](REVIEW-2026-09-15-02.md)。

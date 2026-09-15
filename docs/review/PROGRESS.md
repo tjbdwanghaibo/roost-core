@@ -1,5 +1,14 @@
 # Roost Review 跨轮进度
 
+09-15 第四轮：36 份运行记录、20 篇机制文档、52 RR（记录计数，不是覆盖率）。Core b205653，Kit 7030c5f，Codegen cacd627。旧修复跳过验收；entitysync 失败/重试、profile 交接、批次 dirty 与生命周期新增 17 叶子全部通过，相关两包 race 通过；分片取消阻塞列观察项，无新增确定 RR。[运行](REVIEW-2026-09-15-04.md)。
+
+| 新增范围 | 状态与限制 | 下一入口 |
+| --- | --- | --- |
+| Subscribe/profile/Unsubscribe/Distribute | 拒绝、panic、取消与重试共 12 场景通过 | 真实 sink 的原子准入与重试归属 |
+| DistributeBatch/生命周期 | 4 个双主体场景通过；不代表并发穷尽 | room 批量 flush 与背压 |
+| 分片并行与取消 | 1 观察通过，同分片取消需等锁释放 | 有界 sink，接着 syncstream/syncbus |
+
+
 09-15 第三轮：35 份运行记录、20 篇机制文档、52 RR。Core faf4631，Kit 7030c5f，Codegen cacd627。用户要求跳过旧修复；本轮转入 entitysync，新增 RR-20260915-03，持久化水位未覆盖新订阅/profile/直接分发。五叶子三失败两通过，entitysync/entity race 通过。[运行](REVIEW-2026-09-15-03.md)。
 
 | 范围 | 新证据/状态 | 下一入口 |
