@@ -45,7 +45,7 @@ handler 形参与协议字段并拒绝对不上的组合，所以两边的文件
 模板保留 `game` 的服务与所需 features；**真正生成一个工程**后逐文件断言契约（含 doctor 的 player-tcp 工作流全 OK、
 非默认服务名落盘正确、仪表盘 JSON 合法）。
 
-## 3. 六批各做了什么（对应 codegen 提交）
+## 3. 九批各做了什么（对应 codegen 提交）
 
 | 批 | 内容 | 提交 |
 | --- | --- | --- |
@@ -54,9 +54,13 @@ handler 形参与协议字段并拒绝对不上的组合，所以两边的文件
 | 3 | 会话票据校验（`session:<id>:<token>` 经 account `ValidateSession`）；升级事件链（`nest.Emit` → JetStream durable + Mongo inbox → `mail.Send`，`RequestID = EffectID`）；服务名占位符；脚手架 run 步骤开 TCP | codegen `b4d55d3`（含 TCP 传输层模板新增 `RegistryBound` 钩子） |
 | 4 | 机器人压测 = 回归测试（`cmd/loadtest`、`loadtest/playertcp` 帧适配器、EnterGame 协议与手写端点）；**首次实跑并发现 `add endpoint` 的实体 id 缺陷** | codegen `f13b0af` |
 | 5 | 跨服务组队（JoinQueue / PollMatch、game 进程内 matchmaker）；World 的真实职责（Stats 组件与 DAO、RecordEnter / RecordMatch / WorldStats） | codegen `99ffcdd` |
-| 6 | 可观测性：Prometheus + Grafana compose、抓取配置、预置仪表盘（按链路分组 18 个面板）、指标 ↔ 链路说明；`cmd/loadtest -metrics-addr` | 见 codegen CHANGELOG |
+| 6 | 可观测性：Prometheus + Grafana compose、抓取配置、预置仪表盘（按链路分组 18 个面板）、指标 ↔ 链路说明；`cmd/loadtest -metrics-addr` | codegen `22bafa9` |
+| 7 | `make loadtest`（Makefile 模板 + `help-make`）；压测真实登录（`-account-nats`：Login → CreateRole → SelectRole，`session:` 握手）；`cmd/accountctl upsert-server`（`UpsertServer` 刻意不在 RPC 上，操作员工具直开 store）；成组推送 `MatchFound`（notify 协议 + `PushPlayer`，场景 `wait_push`） | codegen `959fcc9` |
+| 8 | 实体锁档（Player → `EntityCategoryPlayer`、World → `EntityCategoryWorld`）+ 两实体事务 `AddExp`（`MultiSync_AddExp`，World 累计 `ExpGranted`）；删掉 `player:<id>` 调试凭据；`demo-publish.yml` 把生成工程推到 `demo-generated` 分支 | codegen `53bafdd` |
+| 9 | 真 Grafana 验证（33 条查询 0 错误，No data 逐条可解释）；面板加 `player_tcp_connection_rejected_total{reason}`；600 机器人撞上 `max_connections_per_ip` 的解释 | codegen `678b2d9` |
 
-每一批的细节都在 codegen `CHANGELOG.md` 的 game-demo 条目与 `demo/README.md` 里；本文不重复。
+每一批的细节都在 codegen `CHANGELOG.md` 的 game-demo 条目（"第 N 批"）与 `demo/README.md` 里；本文不重复。
+第 7～9 批对应 §7 的 7.1 / 7.2 / 7.4、7.3 / 7.7、7.6，每小节写了实际做法与验证结果。
 
 ## 4. 验证：CI 侧与实跑侧
 
@@ -215,7 +219,12 @@ matchmaker Commit 后经 `accessplayertcp.Runtime.PushPlayer` 推给每个成员
 - **验证**：实跑，机器人在无轮询下收到推送；game 日志 `player_tcp_push_total` 增长。
 - **边界**：PushPlayer 推给该玩家**所有**会话；同一玩家多连接是否都该收到，写进注释。
 
-### 7.5 kit match `Grouping` 无调用路径
+### 7.5 kit match `Grouping` 无调用路径——**未做，唯一剩余项**
+
+**现状**：`roost-kit/service/match/match_mod.go` 的 `NewMod(grouping Grouping, …)` 接受这个 collaborator，注释说"这是整个匹配策略"；
+`queue_store.go` 里 `cfg.Grouping` 只在 159 行被赋默认值 `FirstComeGrouping{}`，全包（含 `store.go`、`redis_store.go`）没有任何
+`.Group(` 调用；成组完全由调用方 `Candidates → Commit` 驱动。demo 的 `internal/service/<game>/matchmaker.go` 就是这样用的，
+并直接调 `svcmatch.FirstComeGrouping{}.Group`。生成的 `internal/service/match/collaborators.go` 里 `Grouping()` 返回 nil。
 
 - **先登记**：交 review agent 开 RR（现象：`match.Mod` 接受 `Grouping` 并注明"这是整个匹配策略"，`queue_store.go` 里 `cfg.Grouping`
   只在 159 行被赋默认值，无调用；成组由调用方 `Candidates → Commit` 驱动）。
