@@ -49,6 +49,7 @@ kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo`
 - kit：U-0191 / U-0192（activity）、U-0217（**破坏性**：`match.NewMod(reporter)`，删掉无执行者的 Grouping 注入）、account `RegistryBound` 钩子、M-06 kit 半（`service/match`、`service/servicemetrics` 改为 core 的别名包）。
 - codegen：`-template game-demo` 九批、`add endpoint` 实体 id 修复、TCP 传输层 `RegistryBound`、match 不再生成 `Grouping()`。
 - 顺序 core → kit → codegen，各仓 `scripts/pretag.sh` 全绿后打 tag；kit 的 integration 包里一处两参 `NewMod` 是 pretag 的 vet 抓到的（普通 `go test ./...` 因 build tag 跳过它）。
+- 发版验证：对三个 tag 不带 go.work 生成 game-demo 并 build，抓到 codegen v1.15.5 的 U-0218（collaborators 无用 import，match 工程编译不过），当天补 codegen v1.15.6；据此把 framework-compat 的 demo scenario 排入 released。
 - 遗留：ARCH-01 的 session / mail 下沉、ARCH-02 manager、ARCH-04 的生成器拆分（`Matchmaker` RPC 生成文件的 core / kit 归属）；U-0210 的 Kit 默认 Prefix durable 迁移演练（审查 §6）；Windows 截断补修以 CI `windows-compatibility` 为准。
 
 ## 1. B-18：core `entitysync`（U-0104，C2）
