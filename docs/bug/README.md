@@ -36,6 +36,8 @@
 
 [09-13 第六轮生命周期观察](REVIEW-2026-09-13-06.md)：三个测试，无新增确认 RR。
 
+[实现侧待审查候选（Wanted）](WANTED.md)：实现 / bugfix 一侧看到但不该自己拍板的疑点，review 每轮三选一（登记 RR / 判非问题 / 再观察）。当前 1 条：kit match `Grouping` collaborator 无调用路径。
+
 本目录保存只审查、不修改源码的发现。框架范围为 core、kit、codegen。
 历史修复账本仍见 [history/ledger.md](../history/ledger.md)，这里使用独立 RR 编号。
 

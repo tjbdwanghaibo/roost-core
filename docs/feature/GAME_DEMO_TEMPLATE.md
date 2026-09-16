@@ -226,8 +226,8 @@ matchmaker Commit 后经 `accessplayertcp.Runtime.PushPlayer` 推给每个成员
 `.Group(` 调用；成组完全由调用方 `Candidates → Commit` 驱动。demo 的 `internal/service/<game>/matchmaker.go` 就是这样用的，
 并直接调 `svcmatch.FirstComeGrouping{}.Group`。生成的 `internal/service/match/collaborators.go` 里 `Grouping()` 返回 nil。
 
-- **先登记**：交 review agent 开 RR（现象：`match.Mod` 接受 `Grouping` 并注明"这是整个匹配策略"，`queue_store.go` 里 `cfg.Grouping`
-  只在 159 行被赋默认值，无调用；成组由调用方 `Candidates → Commit` 驱动）。
+- **已登记为待审查候选** [`docs/bug/WANTED.md` W-2026-09-16-01](../bug/WANTED.md)，含会红的测试草稿；由 review agent 判定后
+  分配 RR 或判非问题。实现侧在此之前不动码。
 - **两种修法（RR 里定契约后再做）**：A. 服务端驱动——`Enqueue` 末尾在同一次 CAS 里 `Grouping.Group(queue, waiting)`，成组即 `Commit`，
   票据直接以 matched 返回；调用方不再需要 matchmaker 循环，但 `Grouping` 成为热路径、且跨 Redis 键的原子性要论证。
   B. 删掉 collaborator——`NewMod` 去掉 `grouping` 参数，`Grouping` 保留为调用方工具（demo 现在的用法），codegen 的
