@@ -60,6 +60,14 @@ kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo`
 - 顺序 core → kit → codegen，三仓 pretag 全绿；发版验证：对三个 tag 不带 go.work 生成 game-demo，`go get` 显式钉 core / kit（proxy 对 kit 新 tag 有延迟，`project new` 解析到 v1.14.4），build / vet / test 全绿。
 - 遗留：RPC 接口（`Mail` / `Session` / `Matchmaker`）连同传输半进 core 领域包，kit 只留装配半（需 core + kit 各一次发版）；ARCH-04 的 kit README 第 3～4 节逐包核对；U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准。
 
+## 0.6 第六次发版（2026-09-16 夜）：core v1.15.5 / kit v1.14.6 / codegen v1.15.8
+
+- codegen（先于 core 提交、随 codegen tag 发出）：`servicerpc -emit transport|assembly|all`、`-out`，`-dir` 接受 import path（`go list` 在 `-out` 模块上下文解析），文件头记录实际命令。
+- core：M-11——`Mail` / `Session` / `Matchmaker` 接口文件与 `-emit transport` 生成的 `*_rpc_gen.go` 进 `service/{mail,session,match}`；mail 传输测试与 session `Capability` 断言随迁；边界测试绿。
+- kit：依赖 core v1.15.5；删接口文件与 `*_rpc_gen.go`，`alias.go` 追加传输半别名并承载 `go:generate … -dir github.com/tjbdwanghaibo/roost-core/service/<x> -emit assembly -out .`；装配半重生成。
+- 顺序 core → kit → codegen，三仓 pretag 全绿。ARCH-01 / ARCH-02 / ARCH-04 至此全部完成（ARCH-03 无需改动）。
+- 遗留：U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准；其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）的领域仍整体在 kit，不在本轮 ARCH 范围。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：

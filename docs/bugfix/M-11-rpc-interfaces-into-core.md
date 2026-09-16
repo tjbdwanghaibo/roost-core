@@ -23,7 +23,7 @@
 - 测试：kit `service/mail/rpc_test.go` 的传输部分（`Methods` 与接口逐一对照、`RegisterHandlers` 只发布声明的方法、本地 / 总线两种实现行为一致、错误码穿过两种传输、身份参数逐方法核对、handler 原样传递身份）连同 `newTransport` / `spyMail` / `fakeBus` / `invoke` 进 core；session 的 `TestTheOperatorSurfaceIsNotOnTheSessionInterface`（生成的 `Capability` 包装器不满足 `Admin`）进 core。
 - `dependency_boundary_test` 通过（传输半只 import core）；`service/*` `-race` 绿。
 
-## kit 半（等 core v1.15.5）
+## kit 半（已于 2026-09-16 随 core v1.15.5 发版后完成，kit v1.14.6；原计划如下，均已按此做）
 
 1. 删 `mail.go` / `session_rpc.go` / `match_rpc.go` 与三个 `*_rpc_gen.go`；`alias.go` 追加：接口别名（`Mail` / `Session` / `Matchmaker`）、`BusClient`、`NewBusClient`、`RegisterHandlers`、`Capability`、`ServiceType`、`CapabilityName`、`LocalCapabilityName`、`DefaultCallTimeout`、`Method*` 常量与 `Methods`。
 2. 装配半改为从 core 的接口生成：`//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/mail -emit assembly -out .`（放在 `alias.go`）。
