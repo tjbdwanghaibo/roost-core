@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-16 实施交接验收](review/REVIEW-2026-09-16-05.md)：Recover/Grouping 与服务迁移已落实，真实 demo 两种依赖模式通过；新确认 manager 两项生命周期问题，保留 durable 升级待办。
+
 [09-16 修复验收与 Kit 职责实施交接](bug/REVIEW-2026-09-16-04.md)：七份修复记录独立验收、两项新问题、Kit 默认 durable 迁移提醒，以及 Core/Kit/Codegen 分层实施清单。
 
 [09-16 第三轮真实 Broker 审查](review/REVIEW-2026-09-16-03.md)：35 新场景，确认 JetStream 本地广播变分摊及分片无法重组，补真实重连/结算证据。

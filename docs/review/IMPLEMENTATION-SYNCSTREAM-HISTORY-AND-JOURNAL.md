@@ -1,5 +1,7 @@
 # SyncStream：History、ACK 和 Journal 恢复
 
+09-16 第五轮（Core 41d49b9）：Recover 改为比较进程内全局 revision，成功改变流集合/链/ACK/epoch/floor 时推进，Import 不恢复旧 revision。原四个替换边界测试与两个 journal 停止准入场景通过。WAL 半尾改成打开追加句柄前按路径截断，原 20 场景在 Windows 全过；生产 Linux 本轮未独立运行。[验收](REVIEW-2026-09-16-05.md)。
+
 09-16 第四轮（Core 3060817）：当前 Import 先 Checkpoint 新快照后切换内存；sequenceFloor 避免清理后新流复用身份；journal 不确定写入/发布错误使实例停止后续准入。原交接 29 场景通过，清理身份原复现通过；WAL 半尾续写在 Windows 截断失败，Linux 尚待独立验收。Recover 现比较 epoch/existence/latest，可以识别原追加/epoch 变化，但不能识别删除 ABA 或同位置快照替换（新 RR-20260916-04）。位置值不是修改代数，后者必须在成功变更时推进且不能被 Import 重置。[统一证据与方案](../bug/REVIEW-2026-09-16-04.md)。历史下文按各自旧 SHA 阅读。
 
 09-16（Core b4bf09e）补充：RR-20260916-01 使用临时 overlay 注入完整写/发布后的错误，确认继续写入会重复序号或写到旧 generation；写前/发布前明确拒绝可重试，关闭重载后再写的对照通过。错误返回必须区分确定拒绝与副作用不确定，后者应隔离写入并恢复一致起点。[故障证据及平台限制](REVIEW-2026-09-16.md)。旧问题按用户声明未复核。

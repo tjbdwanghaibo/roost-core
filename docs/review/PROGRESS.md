@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+09-16 第五轮：45 份运行记录、26 篇机制文档、65 RR（仅记录计数）。Core 41d49b9、Kit 4830150、Codegen 242b438。复核上次实施交接，新增 RR-20260916-06/07。[运行与逐项验收](REVIEW-2026-09-16-05.md)。
+
+| 范围 | 当前证据与状态 | 下一入口/限制 |
+| --- | --- | --- |
+| Recover / WAL | 原四个 Recover、两个 journal、20 个 History/WAL 叶子全部通过；Windows 半尾失败已修复 | Linux 本轮未独立运行；宿主恢复策略/高并发重试待查 |
+| Core/Kit 服务迁移 | match/mail/session + servicemetrics + RPC 两半归属落实，相关十一包 race 与 Core 边界测试通过 | 其余 Kit 领域未全迁，真实存储/协议端到端未新增验收 |
+| manager Engine | 原测试过；三项独立交错一过两失败，最后 Start/Stop 和首项启动期间 Register 新 RR | RR-06/07 显式状态与所有权交接待修 |
+| Codegen/demo | 当前 CLI 生成真实 demo，发布与源码模式 build/test 通过，源码 generate --check 通过 | Core 三份 RPC 命令头 stale；shellcheck 未安装；非生产部署验收 |
+| durable 升级交接 | 上轮指出的 Kit 默认改名说明仍未补齐 | 旧游标与重放演练仍未完成 |
+
+MCP generation 09-08，迁入文件 not_tracked、旧文件 metadata_changed；已按当前源码补证，不认定整包或全框架 review 完成。
+
 09-16 第四轮：44 份运行记录、25 篇机制文档、63 RR（记录计数，不是覆盖率）。Core 3060817、Kit 527eecd、Codegen 678b2d9。用户明确要求恢复修复验收；七项新 bugfix 定向核验，新增 RR-20260916-04/05。[运行](REVIEW-2026-09-16-04.md) · [统一实施交接](../bug/REVIEW-2026-09-16-04.md)。
 
 | 范围 | 已验证不变量/状态 | 限制与下轮入口 |
