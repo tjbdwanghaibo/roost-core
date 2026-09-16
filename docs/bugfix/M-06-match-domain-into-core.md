@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | 领域(本批已迁) | `Queue` / `Subject` / `Ticket` / `Match` / `TicketState`、errcode 段(550101–550199)与 `Error()`、`Store` 接口、`queueState` 状态机与 `NewStore`、`NewRedisStore`、`Grouping` / `FirstComeGrouping` / `ScoreWindowGrouping`、`Config`,加新增的 `NewMemoryStore` | `roost-core/service/match` |
 | 计数契约(本批已迁) | `servicemetrics.Reporter` / `Sink` / `Wrap` / `Recorder` | `roost-core/servicemetrics` |
-| 装配与传输(留 kit,待下一步) | `Mod`(读配置、取 Redis、注册 capability)、`Server` 与 sweep 循环、`Matchmaker` RPC 接口与生成的 `matchmaker_rpc_gen.go`(wire 类型、handler 表、BusClient、ClientMod——依赖 kit `mods`) | `roost-kit/service/match` |
+| 装配与传输(留 kit) | `Mod`(读配置、取 Redis、注册 capability)、`Server` 与 sweep 循环、`Matchmaker` RPC 接口与生成的 `matchmaker_rpc_gen.go`(wire 类型、handler 表、BusClient、ClientMod——依赖 kit `mods`) | `roost-kit/service/match` |
 
 ## 本批改动(roost-core)
 
@@ -22,7 +22,7 @@
   `enqueue_request_owner_promises_test.go`、`read_guards_promises_test.go`、`sweep_failure_promises_test.go`、`errcode_test.go`。
 - `dependency_boundary_test` 通过:core 不引用 kit。`service/match`、`servicemetrics` `-race` 绿。
 
-## 下一步(kit,**必须等 core v1.15.3 发版后**)
+## kit 半(已于 2026-09-16 随 core v1.15.3 发版后完成,kit v1.14.4;原计划如下,1～4 已做,5 待 ARCH-04)
 
 kit 的 `go.mod` 钉 core v1.15.2,CI 不用 source-head;kit 一旦 import `roost-core/service/match` 就在 v1.15.3 发布前编译不过。
 发版后在 kit 做:

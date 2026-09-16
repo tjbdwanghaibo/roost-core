@@ -43,6 +43,14 @@ core v1.15.2（U-0155 cache 等待名额归还，T-51；U-0157 接入文档）�
 
 kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo` 绕开 goproxy.cn 的 sumdb 延迟，并开了 `pipefail`；CHANGELOG 的依赖说明因脚本里一处断言失败没随 tag 提交，随后补在 main。
 
+## 0.4 第四次发版（2026-09-16）：core v1.15.3 / kit v1.14.4 / codegen v1.15.5
+
+- core：U-0209～U-0216（review 09-15 第七轮至 09-16 第四轮登记的九项，含 U-0211 的 Windows 截断补修）、M-06（`service/match` 与 `servicemetrics` 自 kit 下沉）。
+- kit：U-0191 / U-0192（activity）、U-0217（**破坏性**：`match.NewMod(reporter)`，删掉无执行者的 Grouping 注入）、account `RegistryBound` 钩子、M-06 kit 半（`service/match`、`service/servicemetrics` 改为 core 的别名包）。
+- codegen：`-template game-demo` 九批、`add endpoint` 实体 id 修复、TCP 传输层 `RegistryBound`、match 不再生成 `Grouping()`。
+- 顺序 core → kit → codegen，各仓 `scripts/pretag.sh` 全绿后打 tag；kit 的 integration 包里一处两参 `NewMod` 是 pretag 的 vet 抓到的（普通 `go test ./...` 因 build tag 跳过它）。
+- 遗留：ARCH-01 的 session / mail 下沉、ARCH-02 manager、ARCH-04 的生成器拆分（`Matchmaker` RPC 生成文件的 core / kit 归属）；U-0210 的 Kit 默认 Prefix durable 迁移演练（审查 §6）；Windows 截断补修以 CI `windows-compatibility` 为准。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：

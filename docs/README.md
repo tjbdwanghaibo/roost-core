@@ -128,4 +128,4 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 
 ## 版本基线
 
-当前正式 tag 组合为：`roost-core v1.15.2`、`roost-kit v1.14.3`、`roost-codegen v1.15.4`（2026-09-09；roost-skill / roost-service 已于 2026-09-08 并入 core / kit 并归档）。发布顺序固定为 core → kit → codegen，后一层只能依赖前一层已存在的正式 tag；roost-codegen 的 `ci/framework-release.yaml` 是这组版本的机器可校验记录。正式项目不得依赖 `@latest`、伪版本或本地 `replace`。
+当前正式 tag 组合为：`roost-core v1.15.3`、`roost-kit v1.14.4`、`roost-codegen v1.15.5`（2026-09-16；上一组 v1.15.2 / v1.14.3 / v1.15.4 于 2026-09-09；roost-skill / roost-service 已于 2026-09-08 并入 core / kit 并归档）。kit v1.14.4 含破坏性改动 `match.NewMod(reporter)`，须与 codegen v1.15.5 同版本升级。发布顺序固定为 core → kit → codegen，后一层只能依赖前一层已存在的正式 tag；roost-codegen 的 `ci/framework-release.yaml` 是这组版本的机器可校验记录。正式项目不得依赖 `@latest`、伪版本或本地 `replace`。

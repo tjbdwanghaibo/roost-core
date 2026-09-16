@@ -47,69 +47,69 @@
 
 | 编号 | 优先级 | 仓库 | 问题 | 状态 |
 | --- | --- | --- | --- | --- |
-| RR-20260916-05 | P2 | kit/codegen | Grouping 注入入口未执行，生成契约与实际调用方成组不一致 | 已修复(U-0217,未发版,**破坏性** `NewMod(reporter)`)→ [bugfix](../bugfix/RR-20260916-05.md) · [统一交接](REVIEW-2026-09-16-04.md) |
-| RR-20260916-04 | P2 | core | Recover 删除 ABA / 同位置 Import 仍接受旧捕获 | 已修复(U-0216,未发版)→ [bugfix](../bugfix/RR-20260916-04.md);原 RR-09 触发已通过 → [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-05 | P2 | kit/codegen | Grouping 注入入口未执行，生成契约与实际调用方成组不一致 | 已修复(U-0217,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5,**破坏性** `NewMod(reporter)`)→ [bugfix](../bugfix/RR-20260916-05.md) · [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-04 | P2 | core | Recover 删除 ABA / 同位置 Import 仍接受旧捕获 | 已修复(U-0216,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260916-04.md);原 RR-09 触发已通过 → [统一交接](REVIEW-2026-09-16-04.md) |
 | RR-20260916-03 | P2 | core | JetStream 同 bus/topic 多个本地订阅竞争持久消费者,广播变分摊 | U-0209；原真实广播/分片触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-03.md) |
 | RR-20260916-02 | P2 | core | 不同 Prefix 共用 Stream 时持久消费者身份冲突 | U-0210 命名隔离通过；Kit 默认迁移/共享 Stream 限制保留 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-02.md) |
 | RR-20260916-01 | P2 | core | journal 写入/发布结果不确定后继续写入 | U-0212；不确定错误后停止准入两项独立通过，权限对照 Skip → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-01.md) |
 | RR-20260915-09 | P2 | core | Recover 将过期捕获提交为更新的 Full | U-0214 原交错通过；删除/Import 新触发另记 RR-04 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-09.md) |
 | RR-20260915-08 | P2 | core | Import/Restore 绕过绑定 journal 的持久化替换 | U-0213；原持久化替换独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-08.md) |
-| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 已修复(U-0211 + Windows 截断补修,未发版;Linux 由 CI linux-quality 持续验收,Windows 以 CI windows-compatibility 为准)→ [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-07.md) |
+| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 已修复(U-0211 + Windows 截断补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5;Linux 由 CI linux-quality 持续验收,Windows 以 CI windows-compatibility 为准)→ [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-07.md) |
 | RR-20260915-06 | P2 | core | 流清理后重建复用旧 ACK 身份 | U-0215；原三种清理触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-06.md) |
-| RR-20260915-05 | P2 | core | room SetDownstream 未迁移慢消费者回调,替换后剔除不清理订阅 | 已修复(U-0208,未发版)→ [bugfix](../bugfix/RR-20260915-05.md) · [第六轮](REVIEW-2026-09-15-06.md) |
-| RR-20260915-04 | P2 | core | room 慢连接剔除后剩余批次失败,剔除通知丢失,重试后仍保留订阅 | 已修复(U-0207,未发版)→ [bugfix](../bugfix/RR-20260915-04.md) · [第五轮](REVIEW-2026-09-15-05.md) |
-| RR-20260915-03 | P2 | core | entitysync 订阅快照与直接分发绕过持久化水位 | 已修复(U-0206,未发版)→ [bugfix](../bugfix/RR-20260915-03.md) · [第三轮](REVIEW-2026-09-15-03.md) |
-| RR-20260915-02 | P2 | core | 重叠准备视图已交付后 Commit stale，后续 delta 仍静默分叉 | 已修复(U-0205,未发版)→ [bugfix](../bugfix/RR-20260915-02.md) · [第二轮](REVIEW-2026-09-15-02.md)，关联 RR-20260914-10 |
-| RR-20260915-01 | P2 | core | 满容量对象/组件替换因先创建后删除被误拒 | 已修复(U-0204,未发版)→ [bugfix](../bugfix/RR-20260915-01.md) · [09-15](REVIEW-2026-09-15.md) |
-| RR-20260914-13 | P2 | core | LOD 绝对 tick 采样使错相发送的组件持续保留旧值 | 已修复(U-0203,未发版)→ [bugfix](../bugfix/RR-20260914-13.md) · [第八轮](REVIEW-2026-09-14-08.md) |
-| RR-20260914-11 | P2 | core | ForceFull 被旧发送 ACK 取消 | 已修复(U-0201,未发版)→ [bugfix](../bugfix/RR-20260914-11.md) · [第七轮](REVIEW-2026-09-14-07.md) |
-| RR-20260914-12 | P3 | core | 单片重组绕过 MaxFrameBytes | 已修复(U-0202,未发版)→ [bugfix](../bugfix/RR-20260914-12.md) · [第七轮](REVIEW-2026-09-14-07.md) |
-| RR-20260914-10 | P2 | core | 同 tick 投影覆盖使延迟 ACK 绑定错误基线，后续 delta 静默漏对象 | 已修复(U-0200,未发版)→ [bugfix](../bugfix/RR-20260914-10.md) · [第六轮](REVIEW-2026-09-14-06.md) |
-| RR-20260914-09 | P2 | core | LockstepBot 回调失败后继续处理成功但丢失批次尾帧 | 已修复(U-0198,未发版)→ [bugfix](../bugfix/RR-20260914-09.md) · [第五轮](REVIEW-2026-09-14-05.md) |
-| RR-20260914-08 | P2 | core | lockstep 去重身份表在两次 Tick 间没有窗口上限 | 已修复(U-0197,未发版)→ [bugfix](../bugfix/RR-20260914-08.md) · [第四轮](REVIEW-2026-09-14-04.md) |
-| RR-20260914-04 | P2 | core | lockstep 已入帧输入迟到重传再次入帧 | 已修复(U-0193,未发版)→ [bugfix](../bugfix/RR-20260914-04.md) · [第三轮](REVIEW-2026-09-14-03.md) |
-| RR-20260914-05 | P2 | core | lockstep 每 tick 补一帧无法追上帧头 | 已修复(U-0194,未发版)→ [bugfix](../bugfix/RR-20260914-05.md) · [第三轮](REVIEW-2026-09-14-03.md) |
-| RR-20260914-06 | P3 | core | lockstep 座位 -1 与旁观者标记碰撞 | 已修复(U-0195,未发版)→ [bugfix](../bugfix/RR-20260914-06.md) · [第三轮](REVIEW-2026-09-14-03.md) |
-| RR-20260914-07 | P3 | core | lockstep 超协议座位数配置生成不可解码帧 | 已修复(U-0196,未发版)→ [bugfix](../bugfix/RR-20260914-07.md) · [第三轮](REVIEW-2026-09-14-03.md) |
-| RR-20260914-03 | P2 | kit | Activity 派发仅扫描本轮新完成，后续重试与其他完成路径被遗漏 | 已修复(U-0192,未发版)→ [bugfix](../bugfix/RR-20260914-03.md) · [第二轮](REVIEW-2026-09-14-02.md) |
-| RR-20260914-02 | P2 | kit | OpenActivity 与 sweep 交错丢失活动窗口索引 | 已修复(U-0191,未发版)→ [bugfix](../bugfix/RR-20260914-02.md) · [第二轮](REVIEW-2026-09-14-02.md) |
-| RR-20260914-01 | P2 | core | Close 尚未排空时 Sync 提前报告持久化成功 | 已修复(U-0190,未发版)，原交错及错误/取消边界复测通过 → [第二轮](../review/REVIEW-2026-09-14-02.md) · [bugfix](../bugfix/RR-20260914-01.md) · [09-14 原报告](REVIEW-2026-09-14.md) |
-| RR-20260913-13 | P2 | core | LeaveShared 回复丢失后普通写重试卡在非法状态迁移 | 已修复（U-0189 同时解决，未发版），三次准入独立通过 → [第十轮](../review/REVIEW-2026-09-13-10.md) |
-| RR-20260913-12 | P2 | core | EnterShared 执行后丢回复恢复独占写准入 | 已修复(U-0189,未发版)→ [bugfix](../bugfix/RR-20260913-12.md) · [第九轮](REVIEW-2026-09-13-09.md) · [第十轮独立通过](../review/REVIEW-2026-09-13-10.md) |
-| RR-20260913-09 | P2 | core | Transfer 回复丢失后恢复旧 owner 并允许写准入 | 已修复(U-0188,未发版)→ [bugfix](../bugfix/RR-20260913-09.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260913-10 | P3 | core | Redis Lua 大版本浮点舍入破坏顺序 | 已修复(U-0177,未发版)→ [bugfix](../bugfix/RR-20260913-10.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
-| RR-20260913-11 | P3 | core | 大 epoch 转科学计数法并持久化不可读 marker | 已修复(U-0178,未发版)→ [bugfix](../bugfix/RR-20260913-11.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
-| RR-20260913-05 | P2 | core | L2 内容冲突被吞掉，L1/L2 同版本分叉 | 已修复(U-0180 + 第七轮残余补修,未发版)→ [bugfix](../bugfix/RR-20260913-05.md) · [第二轮](REVIEW-2026-09-13-02.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260913-06 | P2 | core | L2 回填绕过同版本冲突检查 | 已修复(U-0181,未发版)→ [bugfix](../bugfix/RR-20260913-06.md) · [09-13 第二轮](REVIEW-2026-09-13-02.md) · [第七轮适配复现通过](../review/REVIEW-2026-09-13-07.md) |
-| RR-20260913-07 | P2 | core | L2 CAS 遗漏 schema/codec 冲突比较 | 已修复(U-0176,未发版)→ [bugfix](../bugfix/RR-20260913-07.md) · [第二轮](REVIEW-2026-09-13-02.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
+| RR-20260915-05 | P2 | core | room SetDownstream 未迁移慢消费者回调,替换后剔除不清理订阅 | 已修复(U-0208,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260915-05.md) · [第六轮](REVIEW-2026-09-15-06.md) |
+| RR-20260915-04 | P2 | core | room 慢连接剔除后剩余批次失败,剔除通知丢失,重试后仍保留订阅 | 已修复(U-0207,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260915-04.md) · [第五轮](REVIEW-2026-09-15-05.md) |
+| RR-20260915-03 | P2 | core | entitysync 订阅快照与直接分发绕过持久化水位 | 已修复(U-0206,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260915-03.md) · [第三轮](REVIEW-2026-09-15-03.md) |
+| RR-20260915-02 | P2 | core | 重叠准备视图已交付后 Commit stale，后续 delta 仍静默分叉 | 已修复(U-0205,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260915-02.md) · [第二轮](REVIEW-2026-09-15-02.md)，关联 RR-20260914-10 |
+| RR-20260915-01 | P2 | core | 满容量对象/组件替换因先创建后删除被误拒 | 已修复(U-0204,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260915-01.md) · [09-15](REVIEW-2026-09-15.md) |
+| RR-20260914-13 | P2 | core | LOD 绝对 tick 采样使错相发送的组件持续保留旧值 | 已修复(U-0203,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-13.md) · [第八轮](REVIEW-2026-09-14-08.md) |
+| RR-20260914-11 | P2 | core | ForceFull 被旧发送 ACK 取消 | 已修复(U-0201,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-11.md) · [第七轮](REVIEW-2026-09-14-07.md) |
+| RR-20260914-12 | P3 | core | 单片重组绕过 MaxFrameBytes | 已修复(U-0202,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-12.md) · [第七轮](REVIEW-2026-09-14-07.md) |
+| RR-20260914-10 | P2 | core | 同 tick 投影覆盖使延迟 ACK 绑定错误基线，后续 delta 静默漏对象 | 已修复(U-0200,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-10.md) · [第六轮](REVIEW-2026-09-14-06.md) |
+| RR-20260914-09 | P2 | core | LockstepBot 回调失败后继续处理成功但丢失批次尾帧 | 已修复(U-0198,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-09.md) · [第五轮](REVIEW-2026-09-14-05.md) |
+| RR-20260914-08 | P2 | core | lockstep 去重身份表在两次 Tick 间没有窗口上限 | 已修复(U-0197,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-08.md) · [第四轮](REVIEW-2026-09-14-04.md) |
+| RR-20260914-04 | P2 | core | lockstep 已入帧输入迟到重传再次入帧 | 已修复(U-0193,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-04.md) · [第三轮](REVIEW-2026-09-14-03.md) |
+| RR-20260914-05 | P2 | core | lockstep 每 tick 补一帧无法追上帧头 | 已修复(U-0194,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-05.md) · [第三轮](REVIEW-2026-09-14-03.md) |
+| RR-20260914-06 | P3 | core | lockstep 座位 -1 与旁观者标记碰撞 | 已修复(U-0195,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-06.md) · [第三轮](REVIEW-2026-09-14-03.md) |
+| RR-20260914-07 | P3 | core | lockstep 超协议座位数配置生成不可解码帧 | 已修复(U-0196,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-07.md) · [第三轮](REVIEW-2026-09-14-03.md) |
+| RR-20260914-03 | P2 | kit | Activity 派发仅扫描本轮新完成，后续重试与其他完成路径被遗漏 | 已修复(U-0192,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-03.md) · [第二轮](REVIEW-2026-09-14-02.md) |
+| RR-20260914-02 | P2 | kit | OpenActivity 与 sweep 交错丢失活动窗口索引 | 已修复(U-0191,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260914-02.md) · [第二轮](REVIEW-2026-09-14-02.md) |
+| RR-20260914-01 | P2 | core | Close 尚未排空时 Sync 提前报告持久化成功 | 已修复(U-0190,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)，原交错及错误/取消边界复测通过 → [第二轮](../review/REVIEW-2026-09-14-02.md) · [bugfix](../bugfix/RR-20260914-01.md) · [09-14 原报告](REVIEW-2026-09-14.md) |
+| RR-20260913-13 | P2 | core | LeaveShared 回复丢失后普通写重试卡在非法状态迁移 | 已修复（U-0189 同时解决，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5），三次准入独立通过 → [第十轮](../review/REVIEW-2026-09-13-10.md) |
+| RR-20260913-12 | P2 | core | EnterShared 执行后丢回复恢复独占写准入 | 已修复(U-0189,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-12.md) · [第九轮](REVIEW-2026-09-13-09.md) · [第十轮独立通过](../review/REVIEW-2026-09-13-10.md) |
+| RR-20260913-09 | P2 | core | Transfer 回复丢失后恢复旧 owner 并允许写准入 | 已修复(U-0188,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-09.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260913-10 | P3 | core | Redis Lua 大版本浮点舍入破坏顺序 | 已修复(U-0177,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-10.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
+| RR-20260913-11 | P3 | core | 大 epoch 转科学计数法并持久化不可读 marker | 已修复(U-0178,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-11.md) · [09-13 第三轮](REVIEW-2026-09-13-03.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
+| RR-20260913-05 | P2 | core | L2 内容冲突被吞掉，L1/L2 同版本分叉 | 已修复(U-0180 + 第七轮残余补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-05.md) · [第二轮](REVIEW-2026-09-13-02.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260913-06 | P2 | core | L2 回填绕过同版本冲突检查 | 已修复(U-0181,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-06.md) · [09-13 第二轮](REVIEW-2026-09-13-02.md) · [第七轮适配复现通过](../review/REVIEW-2026-09-13-07.md) |
+| RR-20260913-07 | P2 | core | L2 CAS 遗漏 schema/codec 冲突比较 | 已修复(U-0176,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-07.md) · [第二轮](REVIEW-2026-09-13-02.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
 | RR-20260913-08 | P2 | core | 快照 ExpiresAt 未参与缓存读取准入 | U-0175 补修已独立验收：三个历史残余通过 → [第七轮](../review/REVIEW-2026-09-13-07.md) · [bugfix](../bugfix/RR-20260913-08.md) |
-| RR-20260913-01 | P2 | core | Remote 删除无版本屏障，旧删除清新值/旧值复活 | 已修复(U-0187 + 第七轮残余补修,未发版)→ [bugfix](../bugfix/RR-20260913-01.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260913-02 | P2 | core | 旧兴趣释放取消重新订阅 | 已修复(U-0184 + 同刻度播种补修,未发版)→ [bugfix](../bugfix/RR-20260913-02.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮观察](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260913-03 | P2 | core | Remote payload scope 未与信封身份绑定 | 已修复(U-0179,未发版)→ [bugfix](../bugfix/RR-20260913-03.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
-| RR-20260913-04 | P2 | core | 快照加载跟随者取消后不归还等待名额 | 已修复(U-0174,未发版)→ [bugfix](../bugfix/RR-20260913-04.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
-| RR-20260912-01 | P2 | core | nestwal Shutdown 等待后台重放锁时忽略截止时间 | 已修复(U-0186,未发版)→ [bugfix](../bugfix/RR-20260912-01.md) · [09-12](REVIEW-2026-09-12.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260912-02 | P2 | core | WAL.Sync 成功返回时已准入 ticket 仍未写入 | 已修复(U-0185,未发版)→ [bugfix](../bugfix/RR-20260912-02.md) · [09-12](REVIEW-2026-09-12.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260911-06 | P2 | core | 异步 AfterCommit panic 遗漏回复/释放；饱和回退可崩溃 | 已修复(U-0183,未发版)→ [bugfix](../bugfix/RR-20260911-06.md) · [第四轮](REVIEW-2026-09-11-04.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260911-05 | P3 | kit | 拒绝投递仍修改 MemoryStore 邮箱，计数与条目不一致 | 已修复(U-0182,未发版)→ [bugfix](../bugfix/RR-20260911-05.md) · [第三轮](REVIEW-2026-09-11-03.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
-| RR-20260911-03 | P2 | core | finalizer 停止后晚到 Close 遗留资源 | 已修复(U-0173,未发版)→ [bugfix](../bugfix/RR-20260911-03.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
-| RR-20260911-04 | P2 | core | Nest 停机遗漏延迟同步请求回复 | 已修复(U-0172,未发版)→ [bugfix](../bugfix/RR-20260911-04.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
-| RR-20260911-01 | P2 | kit | 墓碑计数淘汰早于信封过期，再铸领取 token | 已修复(U-0171,未发版)→ [bugfix](../bugfix/RR-20260911-01.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
-| RR-20260911-02 | P3 | kit | Mailbox 返回的 SettledClaims map 与内存存储共享 | 已修复(U-0170,未发版)→ [bugfix](../bugfix/RR-20260911-02.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
-| RR-20260910-03 | P2 | core | 完成事务 tracker 淘汰导致等待者 panic | 已修复(U-0168,未发版)→ [bugfix](../bugfix/RR-20260910-03.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260910-05 | P2 | codegen | category 外包常量遗漏生成 import（M-05） | 已修复(U-0166,未发版)→ [bugfix](../bugfix/RR-20260910-05.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260910-06 | P2 | codegen | 聚合注册固定 entity 导入与业务别名冲突（M-05） | 已修复(U-0167,未发版)→ [bugfix](../bugfix/RR-20260910-06.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260910-04 | P3 | core | Checkpoint 恢复改变完成历史淘汰顺序 | 已修复(U-0169,未发版)→ [bugfix](../bugfix/RR-20260910-04.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260910-02 | P2 | kit | 已领取邮件淘汰后重投生成新发奖 token | 已修复(U-0165,未发版)→ [bugfix](../bugfix/RR-20260910-02.md) · [第二轮](REVIEW-2026-09-10-02.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260910-01 | P3 | core | 极短 IdleTTL 推导出零扫描周期 | 已修复(U-0163,未发版)→ [bugfix](../bugfix/RR-20260910-01.md) · [2026-09-10](REVIEW-2026-09-10.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260909-05 | P2 | kit | Match Enqueue 请求重放未校验 Subject 归属 | 已修复(U-0164,未发版)→ [bugfix](../bugfix/RR-20260909-05.md) · [第四轮](REVIEW-2026-09-09-04.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
-| RR-20260909-06 | P2 | codegen | 多 Entity 显式 -output 静默覆盖产物 | 已修复(U-0162,未发版)→ [bugfix](../bugfix/RR-20260909-06.md) · [第四轮](REVIEW-2026-09-09-04.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260913-01 | P2 | core | Remote 删除无版本屏障，旧删除清新值/旧值复活 | 已修复(U-0187 + 第七轮残余补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-01.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260913-02 | P2 | core | 旧兴趣释放取消重新订阅 | 已修复(U-0184 + 同刻度播种补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-02.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮观察](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260913-03 | P2 | core | Remote payload scope 未与信封身份绑定 | 已修复(U-0179,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-03.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
+| RR-20260913-04 | P2 | core | 快照加载跟随者取消后不归还等待名额 | 已修复(U-0174,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-04.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
+| RR-20260912-01 | P2 | core | nestwal Shutdown 等待后台重放锁时忽略截止时间 | 已修复(U-0186,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260912-01.md) · [09-12](REVIEW-2026-09-12.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260912-02 | P2 | core | WAL.Sync 成功返回时已准入 ticket 仍未写入 | 已修复(U-0185,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260912-02.md) · [09-12](REVIEW-2026-09-12.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260911-06 | P2 | core | 异步 AfterCommit panic 遗漏回复/释放；饱和回退可崩溃 | 已修复(U-0183,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-06.md) · [第四轮](REVIEW-2026-09-11-04.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260911-05 | P3 | kit | 拒绝投递仍修改 MemoryStore 邮箱，计数与条目不一致 | 已修复(U-0182,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-05.md) · [第三轮](REVIEW-2026-09-11-03.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260911-03 | P2 | core | finalizer 停止后晚到 Close 遗留资源 | 已修复(U-0173,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-03.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-04 | P2 | core | Nest 停机遗漏延迟同步请求回复 | 已修复(U-0172,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-04.md) · [第二轮](REVIEW-2026-09-11-02.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-01 | P2 | kit | 墓碑计数淘汰早于信封过期，再铸领取 token | 已修复(U-0171,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-01.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260911-02 | P3 | kit | Mailbox 返回的 SettledClaims map 与内存存储共享 | 已修复(U-0170,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260911-02.md) · [2026-09-11](REVIEW-2026-09-11.md) · [第三轮独立验收](../review/REVIEW-2026-09-11-03.md) |
+| RR-20260910-03 | P2 | core | 完成事务 tracker 淘汰导致等待者 panic | 已修复(U-0168,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-03.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260910-05 | P2 | codegen | category 外包常量遗漏生成 import（M-05） | 已修复(U-0166,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-05.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260910-06 | P2 | codegen | 聚合注册固定 entity 导入与业务别名冲突（M-05） | 已修复(U-0167,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-06.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260910-04 | P3 | core | Checkpoint 恢复改变完成历史淘汰顺序 | 已修复(U-0169,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-04.md) · [第三轮](REVIEW-2026-09-10-03.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260910-02 | P2 | kit | 已领取邮件淘汰后重投生成新发奖 token | 已修复(U-0165,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-02.md) · [第二轮](REVIEW-2026-09-10-02.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260910-01 | P3 | core | 极短 IdleTTL 推导出零扫描周期 | 已修复(U-0163,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260910-01.md) · [2026-09-10](REVIEW-2026-09-10.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260909-05 | P2 | kit | Match Enqueue 请求重放未校验 Subject 归属 | 已修复(U-0164,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260909-05.md) · [第四轮](REVIEW-2026-09-09-04.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
+| RR-20260909-06 | P2 | codegen | 多 Entity 显式 -output 静默覆盖产物 | 已修复(U-0162,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260909-06.md) · [第四轮](REVIEW-2026-09-09-04.md) · [09-11 原触发独立验收通过](../review/REVIEW-2026-09-11.md) |
 | RR-20260908-01 | P2 | kit | Session 忽略幂等账本 Create 的竞争失败 | 已修复（U-0154，kit v1.14.3）→ [bugfix](../bugfix/RR-20260908-01.md) |
 | RR-20260908-02 | P2 | core | ReadThrough 取消等待不归还名额 | 已修复（U-0155，core v1.15.2）→ [bugfix](../bugfix/RR-20260908-02.md) |
 | RR-20260908-03 | P2 | codegen | 单行 import 包拆分产生非法 Go 语法 | 已修复（U-0156，codegen v1.15.4）→ [bugfix](../bugfix/RR-20260908-03.md) |
 | RR-20260909-01 | P2 | core/docs | 当前接入指南的版本与必需参数不一致 | 已修复（U-0157，core v1.15.2）→ [bugfix](../bugfix/RR-20260909-01.md) |
-| RR-20260909-02 | P2 | kit | Session 冲突清理误删重新取得的 claim（ABA） | 已修复（U-0158，未发版）→ [bugfix](../bugfix/RR-20260909-02.md) · [第二轮复核](REVIEW-2026-09-09-02.md) |
-| RR-20260909-03 | P2 | core | Assembly 停机未完成即遗失 Runtime，重试虚报成功 | 已修复（U-0159，未发版）→ [bugfix](../bugfix/RR-20260909-03.md) · [第三轮](REVIEW-2026-09-09-03.md) |
-| RR-20260909-04 | P2 | codegen | 同包多个 Entity 生成重名注册符号，消费者无法编译 | 已修复（U-0160，未发版）→ [bugfix](../bugfix/RR-20260909-04.md) · [第三轮](REVIEW-2026-09-09-03.md) |
+| RR-20260909-02 | P2 | kit | Session 冲突清理误删重新取得的 claim（ABA） | 已修复（U-0158，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-02.md) · [第二轮复核](REVIEW-2026-09-09-02.md) |
+| RR-20260909-03 | P2 | core | Assembly 停机未完成即遗失 Runtime，重试虚报成功 | 已修复（U-0159，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-03.md) · [第三轮](REVIEW-2026-09-09-03.md) |
+| RR-20260909-04 | P2 | codegen | 同包多个 Entity 生成重名注册符号，消费者无法编译 | 已修复（U-0160，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-04.md) · [第三轮](REVIEW-2026-09-09-03.md) |
 
 [问题详情](REVIEW-2026-09-08.md) · [复现附录](REPRO-2026-09-08.md) ·
 [学习与验证记录](../review/REVIEW-2026-09-08.md)。
