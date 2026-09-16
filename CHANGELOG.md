@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **依赖 core v1.15.3；match 领域实现与 `servicemetrics` 改为 roost-core 的别名包**（M-06 kit 半，ARCH-01 第一批）。`service/match` 只剩 Mod、sweep 循环、`Matchmaker` RPC 接口与生成的传输文件；`Queue` / `Ticket` / `Store` / `Config` / `Grouping` / 错误码与 sentinel / `NewRedisStore` / `Error` / `Code` 全部是 `roost-core/service/match` 同名类型与同一指针的别名，`errors.Is` 与类型断言不受影响；新增 `NewMemoryStore(cfg)`。`NewStore` 不再导出（参数是 core 未导出的队列状态类型，包外本来就调不到）。`service/servicemetrics` 同理别名到 `roost-core/servicemetrics`。领域测试随实现迁到 core；kit 保留 sweep 循环与契约测试。记录 roost-core `docs/bugfix/M-06-match-domain-into-core.md`。
+
 ### Fixed
 
 - **match：删掉没有执行者的 `Grouping` 注入参数**（U-0217，C2；RR-20260916-05，T-111，源自实现侧候选 W-2026-09-16-01）。**破坏性**：`NewMod(grouping, reporter)` → `NewMod(reporter)`，`Config.Grouping` 删除；`Grouping` 接口与 `FirstComeGrouping` / `ScoreWindowGrouping` 保留为调用方工具。此前该参数从构造函数一路存进 Config，store 里没有任何路径读它——Enqueue 只入队、Commit 提交指定票、Sweep 只清过期票，成组完全由调用方 Candidates → Grouping → Commit 驱动，项目注入的策略静默失效。审查明确这不是"Enqueue 必须自动成组"，是签名说了实现没做的话；把策略塞进可重试的存储 CAS 回调会带来重复执行与事务窗口延迟，故不采用。codegen 同版本不再生成 `Grouping()` collaborator。`grouping_contract_promises_test.go` 修前红；记录 roost-core `docs/bugfix/RR-20260916-05.md`。

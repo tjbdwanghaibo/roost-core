@@ -67,7 +67,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | --- | --- | --- | --- |
 | `directory/` | 唯一键预留的两阶段提交原语（**注意：同 owner 幂等，因此不是互斥锁**——需要"只准一次尝试"用 `versionstore.Create`） | 21 | 6 |
 | `rank/` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 | 35 | 8 |
-| `match/` | 匹配：入队、分组、原子成组提交、超时执行。整个队列状态在一个版本化条目里，成组提交是一次 CAS | 29 | 10 |
+| `match/` | 匹配：Mod、sweep 循环、`Matchmaker` RPC 与生成传输；**领域实现（队列状态机、原子成组提交、Redis store、Grouping）在 roost-core/service/match**，此处别名（M-06） | 29 | 10 |
 | `account/` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** | 32 | 11 |
 | `global/` | 跨服路由绑定（epoch CAS 迁移）、游戏服租约（incarnation fence） | 26 | 13† |
 | `global/activity/` | 跨服活动协调：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 | 47 | 13† |
@@ -75,7 +75,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | `mail/` | 邮件：信封、按玩家的已读/领取状态、把附件恰好交付一次的三段式领取。**claim token 由服务端生成且对同一封邮件恒定**——重试换不出新的幂等键 | 82 | 20 |
 | `platform/` | 渠道边缘：凭证换会话、支付回调换恰好一次发货。**验签是必要而不充分的**，订单是仅插入的持久记录 | 51 | 21 |
 | `session/` | 有界 run 原语（从副本服务中抽出）：幂等 Enter、每 owner 一个活 run、资源恰好释放一次、截止时间真的被读 | 48 | 20 |
-| `servicemetrics/` | 全仓共享的上报 seam 与测试用 `Recorder` | 8 | 3 |
+| `servicemetrics/` | 全仓共享的上报 seam 与测试用 `Recorder`——**实现已在 roost-core/servicemetrics**，此处是别名包（M-06） | 8 | 3 |
 | `servicemods/` | capability 名字表与各 Mod 共用的配置读取 | 12 | — |
 | `integration/` | 跨服务的真实后端测试：十个包在一个活 Redis 上装起来跑通、key 命名空间不冲突、以及**整套 Mod 生命周期端到端** | 67 真实 Redis | 30 |
 

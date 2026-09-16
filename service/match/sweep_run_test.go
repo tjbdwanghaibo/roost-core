@@ -7,8 +7,23 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
+
+// newStore builds the in-process store the sweep tests drive. The domain and
+// its own tests live in roost-core/service/match (M-06); what this package
+// tests is the loop around it.
+func newStore(t *testing.T, options ...func(*Config)) (Store, struct{}) {
+	t.Helper()
+	cfg := Config{}
+	for _, option := range options {
+		option(&cfg)
+	}
+	store, err := NewMemoryStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, struct{}{}
+}
 
 // sweepRecorder wraps a real store and records which queues the background
 // loop asked it to sweep.
@@ -93,8 +108,8 @@ func TestSweepQueuesConfigurationFailsClosed(t *testing.T) {
 	if err != nil || len(queues) != 2 || queues[1] != (Queue{Mode: "casual", GroupSize: 4, Partition: "eu"}) {
 		t.Fatalf("parsed %+v err=%v", queues, err)
 	}
-	if _, err := NewStore(versionstore.NewMemoryStore[string, queueState](), Config{SweepQueues: []Queue{{Mode: "ranked", GroupSize: 1}}}); err == nil {
-		t.Fatal("NewStore accepted an invalid sweep queue")
+	if _, err := NewMemoryStore(Config{SweepQueues: []Queue{{Mode: "ranked", GroupSize: 1}}}); err == nil {
+		t.Fatal("NewMemoryStore accepted an invalid sweep queue")
 	}
 	cfg := viper.New()
 	cfg.Set("match.key_prefix", "roost:match")
