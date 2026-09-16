@@ -72,9 +72,9 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | `global/` | 跨服路由绑定（epoch CAS 迁移）、游戏服租约（incarnation fence） | 26 | 13† |
 | `global/activity/` | 跨服活动协调：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 | 47 | 13† |
 | `chat/` | 频道消息：发布/历史/保留。`PublishRequest` 里**没有**发送者或可信字段；系统消息只能经 `PublishSystem` + 服务端签发的 `SystemToken` | 39 | 8 |
-| `mail/` | 邮件：信封、按玩家的已读/领取状态、把附件恰好交付一次的三段式领取。**claim token 由服务端生成且对同一封邮件恒定**——重试换不出新的幂等键 | 82 | 20 |
+| `mail/` | 邮件：Mod、`Mail` RPC 与生成传输、server run；**领域实现（信封、邮箱状态机、三段式领取、Redis stores、错误码段）在 roost-core/service/mail**，此处别名（M-07）。claim token 由服务端生成且对同一封邮件恒定——重试换不出新的幂等键 | 6 | 4 |
 | `platform/` | 渠道边缘：凭证换会话、支付回调换恰好一次发货。**验签是必要而不充分的**，订单是仅插入的持久记录 | 51 | 21 |
-| `session/` | 有界 run 原语（从副本服务中抽出）：幂等 Enter、每 owner 一个活 run、资源恰好释放一次、截止时间真的被读 | 48 | 20 |
+| `session/` | 有界 run 原语：Mod、`Session` RPC 与生成传输、server run；**领域实现（幂等 Enter、每 owner 一个活 run、资源恰好释放一次、Admin 操作面、Redis stores）在 roost-core/service/session**，此处别名（M-08） | 6 | 3 |
 | `servicemetrics/` | 全仓共享的上报 seam 与测试用 `Recorder`——**实现已在 roost-core/servicemetrics**，此处是别名包（M-06） | 8 | 3 |
 | `servicemods/` | capability 名字表与各 Mod 共用的配置读取 | 12 | — |
 | `integration/` | 跨服务的真实后端测试：十个包在一个活 Redis 上装起来跑通、key 命名空间不冲突、以及**整套 Mod 生命周期端到端** | 67 真实 Redis | 30 |

@@ -24,7 +24,7 @@
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
 | `room/` | 状态帧同步的房间侧：`RoomMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一）、`RoomManager`（多房间宿主：两级容量预算 + 空闲 GC）、`RoomFrame` 合帧（50ms）、`RoomTransportSink`（编码到 statesync 线格式：snapshot 走可靠、delta 走 latest-only datagram，慢消费者驱逐）。**房间组件是库类型，需业务自行装配，装 RoomMod 不等于有房间同步** | NATS/JetStream（bus）+ `nettransport`（房间帧传输） | 实时房间状态同步 |
-| `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 的生命周期。按 `DependsOn` 依赖序启动、逆序停止；启动失败回滚已启动的（**失败的那个不 Stop**——它没启动完，Stop 得处理半构造对象，清理是 `Start` 自己的责任）；启动中收到 shutdown 会**中止**启动而不是与之赛跑；`Start` 后 `Register` 直接报错。无依赖 manager 之间保持注册序，**每次进程一致** | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
+| `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 生命周期的 **Mod 包装**——Mod 名 `mods.ModManager`、capability 登记、Mod 形状的 Stop / StopWithContext。引擎（按 `DependsOn` 稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、启动中收到 shutdown 中止启动、`Start` 后 `Register` 报错）**在 roost-core/manager.Engine**（M-09） | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
 | `lock/` | 进程内锁管理器（per-id 可重入互斥，同 id 同实例）——与 `redis.IDistLock`/`IVersionedLock` 是进程内 vs 跨进程的不同层，不参与"分布式锁二选一" | 无 | 进程内互斥 |
 | `ops/` | 运维 HTTP：`/healthz`（存活，恒 200）、`/readyz`（ready 位 + 依赖健康，503 语义）、`/metrics`（Prometheus 文本，**不鉴权**）、`/admin/*`（token 双通道鉴权，关闭时 404 隐藏）。**默认关闭（`ops.enabled`），默认只监听 127.0.0.1** | HTTP | 探针、指标抓取与运维命令 |
 | `configdata/` | 配置快照热更：首次 Load 失败即启动失败；reload 带 rollback 语义并打 `configdata.reload.total{result}` 指标。依赖 roost-core `configdata.DefaultRegistry()` 全局注册表（业务表类型须先注册） | 本地文件 | 配置表热更 |

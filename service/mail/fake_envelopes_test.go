@@ -34,7 +34,7 @@ func (f *fakeEnvelopes) Create(_ context.Context, envelope Envelope) (bool, erro
 	if _, exists := f.items[envelope.ID]; exists {
 		return false, nil
 	}
-	f.items[envelope.ID] = envelope.clone()
+	f.items[envelope.ID] = cloneEnvelope(envelope)
 	return true, nil
 }
 
@@ -46,7 +46,7 @@ func (f *fakeEnvelopes) Get(_ context.Context, id string) (Envelope, bool, error
 	if !ok {
 		return Envelope{}, false, nil
 	}
-	return envelope.clone(), true, nil
+	return cloneEnvelope(envelope), true, nil
 }
 
 func (f *fakeEnvelopes) GetMany(_ context.Context, ids []string) (map[string]Envelope, error) {
@@ -59,7 +59,7 @@ func (f *fakeEnvelopes) GetMany(_ context.Context, ids []string) (map[string]Env
 	out := make(map[string]Envelope, len(ids))
 	for _, id := range ids {
 		if envelope, ok := f.items[id]; ok {
-			out[id] = envelope.clone()
+			out[id] = cloneEnvelope(envelope)
 		}
 	}
 	return out, nil
@@ -86,3 +86,12 @@ func (f *fakeEnvelopes) resetCounts() {
 }
 
 var _ EnvelopeStore = (*fakeEnvelopes)(nil)
+
+// cloneEnvelope mirrors the domain's unexported Envelope.clone: the two
+// slices are the only shared state.
+func cloneEnvelope(e Envelope) Envelope {
+	out := e
+	out.Recipients = append([]int64(nil), e.Recipients...)
+	out.Attachment = append([]byte(nil), e.Attachment...)
+	return out
+}
