@@ -9,7 +9,11 @@
 package match
 
 import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	core "github.com/tjbdwanghaibo/roost-core/service/match"
+	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
@@ -90,3 +94,45 @@ func Error(err error) (int32, string) { return core.Error(err) }
 
 // Code is the client code of err.
 func Code(err error) int32 { return core.Code(err) }
+
+// --- RPC 接口与传输半（M-11）---
+//
+// The Matchmaker interface and its transport half (wire types, handler table,
+// BusClient, Capability wrapper, capability names) live in roost-core with the
+// domain. The assembly half below is generated from that interface:
+//
+//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/match -emit assembly -out .
+
+type (
+	Matchmaker = core.Matchmaker
+	BusClient  = core.BusClient
+)
+
+const (
+	ServiceType         = core.ServiceType
+	CapabilityName      = core.CapabilityName
+	LocalCapabilityName = core.LocalCapabilityName
+	DefaultCallTimeout  = core.DefaultCallTimeout
+
+	MethodEnqueue     = core.MethodEnqueue
+	MethodCancel      = core.MethodCancel
+	MethodTicket      = core.MethodTicket
+	MethodCandidates  = core.MethodCandidates
+	MethodCommit      = core.MethodCommit
+	MethodMatch       = core.MethodMatch
+	MethodQueueLength = core.MethodQueueLength
+)
+
+// Methods lists the RPC method names; see roost-core/service/match.Methods.
+var Methods = core.Methods
+
+// NewBusClient returns the remote Matchmaker; see roost-core/service/match.NewBusClient.
+func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	return core.NewBusClient(b, serviceType, timeout, opts...)
+}
+
+// RegisterHandlers publishes the Matchmaker handlers on the bus; see roost-core/service/match.RegisterHandlers.
+func RegisterHandlers(b bus.IBus, service Matchmaker) error { return core.RegisterHandlers(b, service) }
+
+// Capability wraps a Matchmaker for registration; see roost-core/service/match.Capability.
+func Capability(service Matchmaker) Matchmaker { return core.Capability(service) }

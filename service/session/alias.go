@@ -9,7 +9,11 @@
 package session
 
 import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	core "github.com/tjbdwanghaibo/roost-core/service/session"
+	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
@@ -90,3 +94,44 @@ func Error(err error) (int32, string) { return core.Error(err) }
 
 // Code returns the errcode carried by err.
 func Code(err error) int32 { return core.Code(err) }
+
+// --- RPC 接口与传输半（M-11）---
+//
+// The Session interface and its transport half (wire types, handler table,
+// BusClient, Capability wrapper, capability names) live in roost-core with the
+// domain. The assembly half below is generated from that interface:
+//
+//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/session -emit assembly -out .
+
+type (
+	Session   = core.Session
+	BusClient = core.BusClient
+)
+
+const (
+	ServiceType         = core.ServiceType
+	CapabilityName      = core.CapabilityName
+	LocalCapabilityName = core.LocalCapabilityName
+	DefaultCallTimeout  = core.DefaultCallTimeout
+
+	MethodEnter   = core.MethodEnter
+	MethodAttach  = core.MethodAttach
+	MethodFinish  = core.MethodFinish
+	MethodLeave   = core.MethodLeave
+	MethodGet     = core.MethodGet
+	MethodCurrent = core.MethodCurrent
+)
+
+// Methods lists the RPC method names; see roost-core/service/session.Methods.
+var Methods = core.Methods
+
+// NewBusClient returns the remote Session; see roost-core/service/session.NewBusClient.
+func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	return core.NewBusClient(b, serviceType, timeout, opts...)
+}
+
+// RegisterHandlers publishes the Session handlers on the bus; see roost-core/service/session.RegisterHandlers.
+func RegisterHandlers(b bus.IBus, service Session) error { return core.RegisterHandlers(b, service) }
+
+// Capability wraps a Session for registration; see roost-core/service/session.Capability.
+func Capability(service Session) Session { return core.Capability(service) }

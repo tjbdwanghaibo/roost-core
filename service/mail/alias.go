@@ -10,9 +10,13 @@
 package mail
 
 import (
+	"time"
+
 	core "github.com/tjbdwanghaibo/roost-core/service/mail"
 
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
 type (
@@ -107,3 +111,46 @@ func Error(err error) (int32, string) { return core.Error(err) }
 
 // Code returns the errcode carried by err.
 func Code(err error) int32 { return core.Code(err) }
+
+// --- RPC 接口与传输半（M-11）---
+//
+// The Mail interface and its transport half (wire types, handler table,
+// BusClient, Capability wrapper, capability names) live in roost-core with the
+// domain. The assembly half below is generated from that interface:
+//
+//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/mail -emit assembly -out .
+
+type (
+	Mail      = core.Mail
+	BusClient = core.BusClient
+)
+
+const (
+	ServiceType         = core.ServiceType
+	CapabilityName      = core.CapabilityName
+	LocalCapabilityName = core.LocalCapabilityName
+	DefaultCallTimeout  = core.DefaultCallTimeout
+
+	MethodSend         = core.MethodSend
+	MethodList         = core.MethodList
+	MethodSummary      = core.MethodSummary
+	MethodMarkRead     = core.MethodMarkRead
+	MethodDelete       = core.MethodDelete
+	MethodReserveClaim = core.MethodReserveClaim
+	MethodCommitClaim  = core.MethodCommitClaim
+	MethodCancelClaim  = core.MethodCancelClaim
+)
+
+// Methods lists the RPC method names; see roost-core/service/mail.Methods.
+var Methods = core.Methods
+
+// NewBusClient returns the remote Mail; see roost-core/service/mail.NewBusClient.
+func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	return core.NewBusClient(b, serviceType, timeout, opts...)
+}
+
+// RegisterHandlers publishes the Mail handlers on the bus; see roost-core/service/mail.RegisterHandlers.
+func RegisterHandlers(b bus.IBus, service Mail) error { return core.RegisterHandlers(b, service) }
+
+// Capability wraps a Mail for registration; see roost-core/service/mail.Capability.
+func Capability(service Mail) Mail { return core.Capability(service) }

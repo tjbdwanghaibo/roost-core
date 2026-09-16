@@ -9,7 +9,7 @@
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/session -emit assembly -out .
 
 package session
 
