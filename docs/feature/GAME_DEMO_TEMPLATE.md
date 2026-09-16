@@ -123,12 +123,18 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
 
 ## 7. 剩余工作与实施方法（按价值排）
 
+> 2026-09-16 第七批已完成 7.1、7.2、7.4（codegen 见 CHANGELOG"第七批"）。7.2 的实际做法与原计划有一处重要不同，见该小节开头。
+> 剩余：7.3（条件性）、7.5（先登记 RR）、7.6（需要 docker）、7.7。
+
 每一项都写成"改哪里 → 先红什么测试 → 怎么验证 → 边界"，可以各自独立开工；顺序建议 1 → 2 → 4 → 3 → 5 → 6 → 7。
 通用规则沿用前六批：demo 的文件全部是业务所有、写在 `roost-codegen/demo/**`（`.tmpl`）、步骤进 `demoScaffoldSteps`、
 断言进 `TestDemoTemplateGeneratesABuildableWritePath`；改到生成器模板的，先在既有测试里加一个会红的片段断言；
 每项结束跑 §4 的 CI 侧命令，涉及运行时行为的再跑实跑侧。
 
-### 7.1 `make loadtest`（codegen Makefile 模板）
+### 7.1 `make loadtest`（codegen Makefile 模板）——已完成
+
+做法与下文一致：`render.go` 加 `loadtest:` 目标与 `LOADTEST_ENDPOINT / COUNT / METRICS_ADDR / ARGS` 变量，`test -d cmd/loadtest` 守卫；
+`cli.go` 的 `help-make` 同步；`TestGeneratedMakefileHasLoadtestTarget` 修前红。
 
 - **改哪里**：`roost-codegen/internal/roost/render.go` 的 Makefile 模板（`run:` 在 599 行附近、`dev-logs:` 在 683 行附近），
   在 `.PHONY` 列表与 `run` 之后加：
@@ -146,7 +152,14 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
 - **边界**：Makefile 是生成物，改模板后 `project sync` 会回写到所有工程——这是想要的；`deploy_hygiene_test.go` 会扫 Makefile，
   看它对新目标有没有意见。
 
-### 7.2 压测走真实登录（account Login → CreateRole → SelectRole）
+### 7.2 压测走真实登录（account Login → CreateRole → SelectRole）——已完成，一处与计划不同
+
+**`UpsertServer` 刻意不在 account 的 RPC 接口上**（`account_rpc.go` 头注释：登记 / 开关服务器是控制面写入，game 进程无权做），
+所以"game 在 Init 里登记自己"是错的，已改为操作员工具 `cmd/accountctl upsert-server`：用 Redis 凭据直接打开 account 的 store
+（`svcaccount.NewRedisStores` + `svcaccount.New`，collaborators 用工程自己的）写服务器记录，环境准备时跑一次。
+`cmd/loadtest -account-nats` 在压测进程里 `natsdriver.Assemble` + `bus.New` + `svcaccount.NewBusClient`，每个机器人
+Login → CreateRole → SelectRole，以 `session:<id>:<token>` 握手；每次运行用新 open id。实跑：10/10 成功，account Redis 里 10 个角色，
+game 无 `session ticket rejected`。`player:<id>` 分支仍保留（不给 `-account-nats` 时用），删除留待下一批。
 
 - **改哪里**：`demo/cmd/loadtest/main.go.tmpl`。加 flag `-account-nats nats://127.0.0.1:4222`（空则保持 `player:<id>` 捷径）、
   `-server-id 1000`。有值时：
@@ -180,7 +193,11 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
 - **边界**：只有在加入"一个 handler 同时锁 Player 与 World"的示例时才值得做（比如 `RecordEnter` 改成在 EnterGame 的同一事务里锁两者）；
   否则保持 Other 并在注释里说明即可。若做，顺带演示 `nest.pipelined.allowlist` 与 `nest_handler_lock_hold` 面板的对比。
 
-### 7.4 PollMatch 改推送
+### 7.4 PollMatch 改推送——已完成
+
+`MatchFound`（10100）是 notify 形式的 `//roost:msg`（无请求、一个返回类型），生成的 bind 注册编码器、bootstrap 自动调用；
+matchmaker Commit 后经 `accessplayertcp.Runtime.PushPlayer` 推给每个成员；场景用 `selector{wait_push(msg 10100, 10s) → retry{poll_match}}`，
+轮询退为兜底。实跑：`player_tcp_push_total` = 机器人数。
 
 - **事实**：生成的 TCP 传输层有 `Runtime.PushPlayer(ctx, playerID, messageID, value)` / `PushSession(ctx, sessionID, …)`，
   推送帧 `flags=flagServerPush, sequence=0`；robot 侧 `playertcp.Conn` 已把 seq 0 的帧交给 `WaitPush`。协议侧需要一个
