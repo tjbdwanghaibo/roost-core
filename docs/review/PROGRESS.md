@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+09-16 第四轮：44 份运行记录、25 篇机制文档、63 RR（记录计数，不是覆盖率）。Core 3060817、Kit 527eecd、Codegen 678b2d9。用户明确要求恢复修复验收；七项新 bugfix 定向核验，新增 RR-20260916-04/05。[运行](REVIEW-2026-09-16-04.md) · [统一实施交接](../bug/REVIEW-2026-09-16-04.md)。
+
+| 范围 | 已验证不变量/状态 | 限制与下轮入口 |
+| --- | --- | --- |
+| History Import/Recover、清理身份 | 原交接 29 场景全过；清理三触发/Rotate 对照过；新 Recover 删除 ABA、同位置 Import 两触发失败 | RR-04 修改代数待实施；宿主捕获契约未穷尽 |
+| WAL 尾部与 fail-stop | 原 20 场景 19 过，半尾截断 Windows 拒绝；Sync/Publish 后报错两项停止准入通过 | Linux 半尾续写待验；只读目录对照 Skip；非真实断电 |
+| JetStream fanout/Prefix | 五项真实本地广播/分片复现通过；命名隔离通过，Kit 默认 durable 改名已确认 | 原 RR-03 触发验收通过；迁移演练与共享 Stream 所有权仍待处理 |
+| Kit match → codegen/demo | 无效 Grouping 注入确认 RR-05；实际为调用方 Candidates→Group→Commit | 契约收敛待实施，完整 demo 尚未审完 |
+| Kit 核心职责样本 | session/mail/match、manager 属实现；dataengine/saga 装配作迁移样板 | ARCH-01..04 仅方案；非 Kit 全目录穷尽 |
+
+相关 Core/Kit 原 race 测试结果及失败详见交接文档。MCP generation 09-08，过期片段/新未跟踪文件均以源码补证；不将任何整包标为完成，其他旧 RR 状态不变。
+
 09-16 第三轮：43 份运行记录、25 篇机制文档、61 RR（仅记录计数）。Core 21e0a6c，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧验收；真实 NATS v2.11.9 单节点新 35 场景，32 通过、3 失败确认 RR-20260916-03。Core 三包、Kit 两包原有 race 测试通过。[运行](REVIEW-2026-09-16-03.md)。
 
 | 新增覆盖 | 已验证不变量/状态 | 限制和下一入口 |

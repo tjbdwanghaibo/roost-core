@@ -1,5 +1,7 @@
 # JetStream SyncBus：命名空间、确认与停止
 
+09-16 第四轮（Core 3060817、Kit 527eecd）：当前一个 topic 共用底层消费者，本地 handlers 在锁内取快照、锁外依次调用，消息副本与 panic 隔离；最后退订者释放底层订阅。原真实广播/分片五场景全部通过。Prefix 进入非默认 durable 身份；仅 Core 默认 roost.sync 保留旧名，Kit 默认 roost.room 会改名，旧 ACK 游标不会自动继承。共享 Stream 的 Subjects/MsgID 所有权仍是声明限制，不能用名称分离证明共享配置安全。[验收和升级方案](../bug/REVIEW-2026-09-16-04.md)。旧基线分析保留在下文。
+
 ## 09-16 第三轮补充：真实消费与本地广播
 
 本节基线 Core `21e0a6c`、Kit `7030c5f`；下文此前基线记录保留。[35 场景运行与限制](REVIEW-2026-09-16-03.md)。本轮用独立 NATS server v2.11.9 单节点文件存储验证了发布确认、ID 去重及窗口到期、ACK/NAK/Term、durable 续接、进程重启和连接恢复的有界场景。真实集群、断电及 TCP 半开未验证。

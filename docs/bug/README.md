@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+09-16 第四轮：[统一实施交接](REVIEW-2026-09-16-04.md) 新增 RR-20260916-04/05（均 P2）：Recover 删除/同位置替换绕过校验、匹配策略注入无效。七项新 bugfix 已定向验收；原触发通过、Windows 未验证分支和迁移限制分别记录。此前 Kit 职责问题作为 ARCH-01..04 实施清单，不计入功能 bug 数。
+
 09-16 第三轮：新增 [RR-20260916-03](REVIEW-2026-09-16-03.md)，P2，JetStream 同一 bus/topic 多个本地订阅竞争持久消费者，普通消息分摊、分片无法重组。真实 server 35 场景，32 通过/3 失败；旧问题按用户声明跳过核验。
 
 09-16 第二轮：新增 [RR-20260916-02](REVIEW-2026-09-16-02.md)，P2，不同 Prefix 共用 Stream/topic/SID 时持久消费者身份冲突。32 场景 31 通过、1 失败，Stop/在途 Subscribe 列观察项。用户声明未修复，本轮跳过旧核验。
@@ -36,7 +38,7 @@
 
 [09-13 第六轮生命周期观察](REVIEW-2026-09-13-06.md)：三个测试，无新增确认 RR。
 
-[实现侧待审查候选（Wanted）](WANTED.md)：实现 / bugfix 一侧看到但不该自己拍板的疑点，review 每轮三选一（登记 RR / 判非问题 / 再观察）。当前 1 条：kit match `Grouping` collaborator 无调用路径。
+[实现侧待审查候选（Wanted）](WANTED.md)：实现 / bugfix 一侧看到但不该自己拍板的疑点，review 每轮三选一（登记 RR / 判非问题 / 再观察）。W-2026-09-16-01 已转 RR-20260916-05，当前无待分流候选。
 
 本目录保存只审查、不修改源码的发现。框架范围为 core、kit、codegen。
 历史修复账本仍见 [history/ledger.md](../history/ledger.md)，这里使用独立 RR 编号。
@@ -45,13 +47,15 @@
 
 | 编号 | 优先级 | 仓库 | 问题 | 状态 |
 | --- | --- | --- | --- | --- |
-| RR-20260916-03 | P2 | core | JetStream 同 bus/topic 多个本地订阅竞争持久消费者,广播变分摊 | 已修复(U-0209,未发版)→ [bugfix](../bugfix/RR-20260916-03.md) · [09-16 第三轮](REVIEW-2026-09-16-03.md) |
-| RR-20260916-02 | P2 | core | 不同 Prefix 共用 Stream 时持久消费者身份冲突 | 已修复(U-0210,未发版;默认 Prefix 名字不变)→ [bugfix](../bugfix/RR-20260916-02.md) · [09-16 第二轮](REVIEW-2026-09-16-02.md) |
-| RR-20260916-01 | P2 | core | journal 写入/发布结果不确定后继续写入 | 已修复(U-0212,fail-stop;未发版)→ [bugfix](../bugfix/RR-20260916-01.md) · [09-16](REVIEW-2026-09-16.md) |
-| RR-20260915-09 | P2 | core | Recover 将过期捕获提交为更新的 Full | 已修复(U-0214,未发版)→ [bugfix](../bugfix/RR-20260915-09.md) · [第八轮](REVIEW-2026-09-15-08.md) |
-| RR-20260915-08 | P2 | core | Import/Restore 绕过绑定 journal 的持久化替换 | 已修复(U-0213,未发版)→ [bugfix](../bugfix/RR-20260915-08.md) · [第八轮](REVIEW-2026-09-15-08.md) |
-| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 已修复(U-0211,未发版)→ [bugfix](../bugfix/RR-20260915-07.md) · [第七轮](REVIEW-2026-09-15-07.md) |
-| RR-20260915-06 | P2 | core | 流清理后重建复用旧 ACK 身份 | 已修复(U-0215,序号地板;未发版)→ [bugfix](../bugfix/RR-20260915-06.md) · [第七轮](REVIEW-2026-09-15-07.md) |
+| RR-20260916-05 | P2 | kit/codegen | Grouping 注入入口未执行，生成契约与实际调用方成组不一致 | 未修复 → [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-04 | P2 | core | Recover 删除 ABA / 同位置 Import 仍接受旧捕获 | 未修复；原 RR-09 触发已通过 → [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-03 | P2 | core | JetStream 同 bus/topic 多个本地订阅竞争持久消费者,广播变分摊 | U-0209；原真实广播/分片触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-03.md) |
+| RR-20260916-02 | P2 | core | 不同 Prefix 共用 Stream 时持久消费者身份冲突 | U-0210 命名隔离通过；Kit 默认迁移/共享 Stream 限制保留 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-02.md) |
+| RR-20260916-01 | P2 | core | journal 写入/发布结果不确定后继续写入 | U-0212；不确定错误后停止准入两项独立通过，权限对照 Skip → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-01.md) |
+| RR-20260915-09 | P2 | core | Recover 将过期捕获提交为更新的 Full | U-0214 原交错通过；删除/Import 新触发另记 RR-04 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-09.md) |
+| RR-20260915-08 | P2 | core | Import/Restore 绕过绑定 journal 的持久化替换 | U-0213；原持久化替换独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-08.md) |
+| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 作者 U-0211；Windows 截断失败，Linux 待独立验收 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-07.md) |
+| RR-20260915-06 | P2 | core | 流清理后重建复用旧 ACK 身份 | U-0215；原三种清理触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-06.md) |
 | RR-20260915-05 | P2 | core | room SetDownstream 未迁移慢消费者回调,替换后剔除不清理订阅 | 已修复(U-0208,未发版)→ [bugfix](../bugfix/RR-20260915-05.md) · [第六轮](REVIEW-2026-09-15-06.md) |
 | RR-20260915-04 | P2 | core | room 慢连接剔除后剩余批次失败,剔除通知丢失,重试后仍保留订阅 | 已修复(U-0207,未发版)→ [bugfix](../bugfix/RR-20260915-04.md) · [第五轮](REVIEW-2026-09-15-05.md) |
 | RR-20260915-03 | P2 | core | entitysync 订阅快照与直接分发绕过持久化水位 | 已修复(U-0206,未发版)→ [bugfix](../bugfix/RR-20260915-03.md) · [第三轮](REVIEW-2026-09-15-03.md) |
