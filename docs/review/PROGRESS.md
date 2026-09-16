@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+09-16 第二轮：42 份运行记录、25 篇机制文档、60 RR（记录计数，非覆盖率）。Core 1143f61，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧核验；JetStream/NATS 新 32 场景，31 通过、1 失败确认 RR-20260916-02。原源码 room/nats driver race 通过。[运行](REVIEW-2026-09-16-02.md)。
+
+| 新范围 | 已验证不变量、状态与限制 | 下一入口 |
+| --- | --- | --- |
+| room/jetstream_syncbus.go 命名空间与发布 | 消费者 Prefix 冲突新 RR；SID/topic/Stream 对照、所有权/context/ID 等部分通过；非真实 broker | Stream 所有权、真实服务端配置与确认超时 |
+| Subscribe/Stop、接收包装 | 幂等/重试/过滤/错误契约受控验证；Stop 越过在途创建为观察项 | 上层关闭顺序、终态契约和真实重连 |
+| nats/driver/jetstream.go 结算 | ACK/NAK/Term/延迟/panic/结算错误十场景通过；没有证明重投必达 | 服务端 redelivery、应用 Apply 恢复 |
+| room/nats_syncbus.go 与普通 driver 发布入口 | 当前源码已读，普通发布无持久确认；未做网络专项 | 真实连接中断与可恢复传输对比 |
+
+本轮图谱 generation 仍为 09-08，相关路径 metadata_changed，已以当前源码补证；不标任何整包完成，旧 journal/room/statesync 缺口保留。
+
 09-16：41 份运行记录、24 篇机制文档、59 RR（非覆盖率）。Core b4bf09e，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧核验；journal 故障/syncbus 新 28 场景，26 通过、2 失败确认 RR-20260916-01：写/发布结果不确定后继续使用旧内存状态。原源码两包 race 通过。[运行](REVIEW-2026-09-16.md)。
 
 | 新范围 | 证据与限制 | 下一入口 |

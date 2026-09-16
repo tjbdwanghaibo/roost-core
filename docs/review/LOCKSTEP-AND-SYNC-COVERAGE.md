@@ -1,5 +1,7 @@
 # Lockstep 与 Sync：覆盖状态及后续优先级
 
+09-16 第二轮：JetStream/NATS 适配及结算新增 32 场景，31 通过、1 失败，新 RR-20260916-02（跨 Prefix 的消费者身份冲突）；Stop/在途 Subscribe 为已观察、契约待明确。旧问题跳过核验。真实 broker 配置/确认超时/重连和应用恢复仍未完成，继续作为下一入口；保留既有 Lockstep/StateSync/Journal 缺口。[运行](REVIEW-2026-09-16-02.md)。
+
 09-16：journal 故障注入 + syncbus Patch/Delivery 新 28 场景，26 通过、2 失败，新 RR-20260916-01。下一入口真实 JetStream/NATS 确认、重连和订阅关闭，保留 journal 真实故障/多实例及其他消费链缺口。旧问题按用户声明跳过。[运行](REVIEW-2026-09-16.md)。
 
 09-15 第八轮：History Import/Restore/Recover/checkpoint 新 29 场景，23 通过、6 失败，新 RR-20260915-08/09。旧问题按用户声明跳过；下一入口 journal 同步/发布失败语义及 syncbus 业务恢复，保留其他未查缺口。[运行](REVIEW-2026-09-15-08.md)。
