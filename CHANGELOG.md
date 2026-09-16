@@ -13,6 +13,8 @@
 
 ### Added
 
+- **`service/match` 与 `servicemetrics`：match 领域实现与服务计数契约从 roost-kit 下沉 core**（M-06，ARCH-01 第一批；来源 `docs/bug/REVIEW-2026-09-16-04.md` §7）。`Queue` / `Subject` / `Ticket` / `Match`、errcode 段 550101–550199 与 `Error()`、`Store` 接口、票据状态机 `NewStore`、`NewRedisStore`、`Grouping` / `FirstComeGrouping` / `ScoreWindowGrouping`、`Config` 原样迁入，新增 `NewMemoryStore(cfg)`；`servicemetrics.Reporter` / `Sink` / `Wrap` / `Recorder` 迁入。行为、持久化 key、JSON 字段、错误码、RPC 方法名全部不变；核心不引用 kit（`dependency_boundary_test`）。kit 侧的 `service/match` / `service/servicemetrics` 在 core v1.15.3 发版后改为别名包并删掉重复实现，步骤见 `docs/bugfix/M-06-match-domain-into-core.md`。
+
 - **推荐的 entity category 分类常量**(M-04)。`EntityCategoryWorld` / `PlayerScoped` / `Player` / `Other` 接在 `EntityCategoryRemote` 之后,值即锁序;`EntityCategoryUnknown`(255)保留给本进程不认识的 kind,任何 kind 都不得注册进去。它们是常量不是要求 —— category 现在是完整 uint8,项目可以插值或在 Other 之后继续;唯一的要求是远程托管的 kind 必须在 `EntityCategoryRemote`,由 `ValidateEntityRegistry` 校验。`EntityCategoryName` 对这几个值内置了名字,不声明也能打出可读日志。
 - **entity category 的声明式锁序**(M-03,重构;前置 M-01 / M-02)。新增 `EntityCategoryRemote`、`EntityCategoryDef`、`RegisterEntityCategories` / `MustRegisterEntityCategories`、`EntityCategoryName`、`ValidateEntityRegistry`。应用声明 category 之后,**category 的值就是锁序**,低的先锁,没有单独的 order 字段;`EntityCategoryRemote` 固定最低,因为"远程托管实体最先加锁"是唯一有物理依据的排序约束,持着本地互斥去等分布式锁会把那把锁挡过一次网络往返。
   锁序在注册期派生进 `[256]atomic.Uint32`,`GetEntityGroup` 一次原子载入即可;managed 的 kind 即便被声明在别的 category 也强制按 remote 档排,同时 `ValidateEntityRegistry` 把这个声明报成错误。未声明 category 的应用完全走原路径,行为一字不变。`ValidateEntityRegistry` 目前只校验不封表,封表那一半留给生成器接管注册的那一步。实施记录与采用前提见 `docs/bugfix/M-03-category-lock-order.md`。

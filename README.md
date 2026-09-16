@@ -39,6 +39,7 @@
 | `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 三档：`mongo`/`nats` 纯接口（实现全在 kit）；`redis`/`etcd` 接口 + 核心实现（Lua `CompareAndSet`、`WatchCallback`、LocalMirror 契约）；`cache`/`httpclient`/`httpserver` 是完整实现（8 种缓存 store、HMAC 签名客户端、chi 之上的生产 HTTP 引擎——core 对 chi 的依赖是唯一例外） | 缓存选型见实现细节第 13 条；连接装配由 `roost-kit` 的 Mod 提供 |
 | `health`、`metrics`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer 无分位数；histogram 17 桶指数分布带 p50–p99 与 Prometheus `_bucket` 导出）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
 | `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照（原子热更/回滚/内容 hash/请求一致性；三条接入通道：手写 TableDef、`cfg` tag 自动注册 `RegisterAutoTable`、外部生成聚合 `RegisterExternalTables`——配置定义可全量生成，见实现细节第 17 条） | 接入层契约 |
+| `service/match`、`servicemetrics` | 通用服务的**领域实现**（第一批：匹配——队列 / 票据 / 原子 Commit 的状态机、Redis store、`Grouping` 策略接口与两个实现、错误码段）与服务计数契约 `Reporter`；Mod、RPC 传输与 ClientMod 在 roost-kit 装配（M-06） | 自己的匹配服务进程；或在游戏进程里写 matchmaker（Candidates → Grouping → Commit） |
 | `robot` | 机器人（模拟客户端）框架：统一包协议 transport（TCP/WS 内置，KCP/QUIC 在 kit）、seq 匹配会话、`RegisterCall` 泛型零样板动作、行为树场景（Go 组合子 + 可选 YAML）、三种压测执行器（pool/looping/arrival-rate）+ SLO 阈值裁决与 Markdown 报告 | 模拟客户端逻辑回归、压测（见实现细节第 18 条） |
 | `timer`、`clock`、`safemap`、`index`、`fctx` | 时间任务、逻辑时间、并发安全 map、二级索引查询、请求上下文（`fctx` = framework context，与标准库 `context` 区分） | 通用工具 |
 
