@@ -319,7 +319,7 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 | `ModEntityRuntime`（`entity.runtime`） | nest Mod 顺带注册（已存在则不覆盖） | entity getter（statslog 消费） |
 | `ModSaga`（`saga`） | saga Mod | `*coresaga.Engine` |
 | `ModConfigData`（`config_data`） | configdata Mod | `*fconfigdata.Store` |
-| `ModManager`（`manager`） | manager Mod | `*manager.ManagerMod` |
+| `ModManager`（`manager`） | manager Mod | `*manager.ManagerMod`（包装 roost-core/manager.Engine） |
 | `ModRoom`（`room`） | room Mod | `fsyncbus.ISyncBus` |
 
 其余（`ModRedis`/`ModRedisLock`/`ModMongo`/`ModNats`/`ModNatsJetStream`/`ModNatsRpc`/`ModBus`/`ModEtcd`/`ModEtcdDiscov`/`ModEtcdElection`/`ModLock`/`ModOps`/`ModStatsLog`/`ModRemoteEntity`）与直觉一致，注册者即同名 Mod。
@@ -373,22 +373,22 @@ publisher 再按 EffectID 至少一次投递。NATS 停机只增加 outbox backl
 
 ## 4. 关键实现细节
 
-每条都给出源文件指引，读代码时可对照。
+每条都给出源文件指引，读代码时可对照。自 2026-09 起大部分实现已迁入 roost-core，路径以 `roost-core/` / `roost-kit/` 前缀标明所在仓（ARCH-04）；kit 里留下的是 Mod 装配、配置读取与 capability 登记。
 
-### nestwal：WAL 与提交
+### nestwal（roost-core）：WAL 与提交
 
-- **双 CRC frame**（`nestwal/wal.go` `encodeFrame`/`scanFramesFrom`）：20 字节 frame 头含 payload CRC32 和头自身 CRC32。头 CRC 保证长度字段可信（否则一个损坏的 length 会让扫描越界误判），payload CRC 保证内容可信。
-- **torn-tail 截断**（`wal.go` `openActive` → `scanFramesEnd`）：重开时以 `allowTornTail=true` 扫到最后一个完整 frame，`Truncate` 掉尾部残缺字节——断电时最后一笔未 fsync 的写入被安全丢弃，且只可能丢“未向调用方确认”的后缀。
-- **group commit**（`wal.go` `writerLoop`/`collectBatch`/`processBatch`）：单写线程聚批，一次 `write` + 一次 `fsync` 摊薄毫秒级 fsync 成本；`GroupCommitInterval` 定时器兜底刷新异步写。
-- **Enqueue ticket 与唯一拒绝点**（`wal.go` `Enqueue`）：Pipelined 的 `Enqueue` 在实体锁内被调用，因此把**一切可拒绝检查**（编码、大小、容量预约 `reservedBytes`、terminal 状态、队列准入）同步做完；`enqueueMu` 让 LSN 分配与入队原子，保证 LSN 序 = 物理日志序。入队成功后调用方即可解锁——之后唯一可能的失败是 ticket 上的 `ErrCommitIndeterminate`。`processBatch` 对已预约请求**永不拒绝**（调用方已凭准入放弃了回滚权）。
-- **为什么 watermark 必须先于唤醒发布**（`wal.go` `resolveDurableLocked`）：ticket resolve 是一个承诺——“`DurableLSN` 已覆盖你的记录”。外化闸门在 `Done()` 触发后立刻读水位线，若先 `close(done)` 再推水位线，等待者会读到旧水位线而再次阻塞甚至误判未持久化。因此先 `durableLSN.Store(upto)`，再逐个 `close(ticket.done)`。
-- **ack fence 是合法扫描起点**（`wal.go` `Replay`）：ack fence 记录的是某个 frame 的**结束偏移**，天然落在 frame 边界上，所以重放可以跳过已确认的 segment 和 fence 所在 segment 的已确认前缀（`scanFramesFrom(file, segment, ack.Offset, ...)`），不必每轮从头读全量并重新校验 CRC。
-- **ack 检查点：双 slot + generation + 目录 fsync**（`nestwal/checkpoint.go`）：`ack-0.chk`/`ack-1.chk` 按 `generation & 1` 交替写，写入走 tmp 文件 → fsync → rename → `syncDirectory`。加载时取 CRC 合法者中 generation 最大的一个：任何时刻允许一个 slot 是 torn 的，另一个 slot 在替换者持久化前不会被碰。ack 丢失最多导致重复重放（幂等吸收），绝不会跳过记录。
-- **fsync 不确定 ⇒ 熔断而非重试**（`wal.go` `Options.OnFatal` 注释、`setTerminal`；`dataengine/mod.go` `onFatal`）：fsync 报错后，内核可能已经丢弃了 dirty page 却清掉了错误标记，重试的 fsync 会“成功”但数据并没有落盘——写入结果从此不可知。所以任何物理写/fsync 失败都被包装为 `corenest.ErrCommitIndeterminate` 并置 terminal：拒绝一切后续写入、以该错误 resolve 所有 pending ticket，并经 `OnFatal` 熔断进程（Data Engine Mod 会 `NestMgr.Fence` + `app.RuntimeFailure.Fail`）。重启后由重放从最后一个 ack 恢复出唯一可信的历史。
-- **单写者锁与容量健康**：`writer.lock` 文件锁防止双进程写同一目录（`lock_unix.go`）；`MaxDiskBytes`/`MaxUnackedAge` 超限时 `Healthy()` 报错，接入 health 后表现为实例不健康而不是静默膨胀。
-- **落库与 outbox**（`dataengine/projector.go`、`mongo_store.go`、`outbox_worker.go`）：重放循环在事务仍被 Entity 锁持有时让路（`TransactionReleased` 唤醒）；普通 mutation、Remote commit、receipt 和 effect staging 按需要进入同一个 Mongo session transaction。WAL ACK 在 projection 后推进，outbox publisher 独立 claim/lease/retry，JetStream MsgID 去重只是热路径优化。
+- **双 CRC frame**（`roost-core/nestwal/wal.go` `encodeFrame`/`scanFramesFrom`）：20 字节 frame 头含 payload CRC32 和头自身 CRC32。头 CRC 保证长度字段可信（否则一个损坏的 length 会让扫描越界误判），payload CRC 保证内容可信。
+- **torn-tail 截断**（`roost-core/nestwal/wal.go` `openActive` → `scanFramesEnd`）：重开时以 `allowTornTail=true` 扫到最后一个完整 frame，`Truncate` 掉尾部残缺字节——断电时最后一笔未 fsync 的写入被安全丢弃，且只可能丢“未向调用方确认”的后缀。
+- **group commit**（`roost-core/nestwal/wal.go` `writerLoop`/`collectBatch`/`processBatch`）：单写线程聚批，一次 `write` + 一次 `fsync` 摊薄毫秒级 fsync 成本；`GroupCommitInterval` 定时器兜底刷新异步写。
+- **Enqueue ticket 与唯一拒绝点**（`roost-core/nestwal/wal.go` `Enqueue`）：Pipelined 的 `Enqueue` 在实体锁内被调用，因此把**一切可拒绝检查**（编码、大小、容量预约 `reservedBytes`、terminal 状态、队列准入）同步做完；`enqueueMu` 让 LSN 分配与入队原子，保证 LSN 序 = 物理日志序。入队成功后调用方即可解锁——之后唯一可能的失败是 ticket 上的 `ErrCommitIndeterminate`。`processBatch` 对已预约请求**永不拒绝**（调用方已凭准入放弃了回滚权）。
+- **为什么 watermark 必须先于唤醒发布**（`roost-core/nestwal/wal.go` `resolveDurableLocked`）：ticket resolve 是一个承诺——“`DurableLSN` 已覆盖你的记录”。外化闸门在 `Done()` 触发后立刻读水位线，若先 `close(done)` 再推水位线，等待者会读到旧水位线而再次阻塞甚至误判未持久化。因此先 `durableLSN.Store(upto)`，再逐个 `close(ticket.done)`。
+- **ack fence 是合法扫描起点**（`roost-core/nestwal/wal.go` `Replay`）：ack fence 记录的是某个 frame 的**结束偏移**，天然落在 frame 边界上，所以重放可以跳过已确认的 segment 和 fence 所在 segment 的已确认前缀（`scanFramesFrom(file, segment, ack.Offset, ...)`），不必每轮从头读全量并重新校验 CRC。
+- **ack 检查点：双 slot + generation + 目录 fsync**（`roost-core/nestwal/checkpoint.go`）：`ack-0.chk`/`ack-1.chk` 按 `generation & 1` 交替写，写入走 tmp 文件 → fsync → rename → `syncDirectory`。加载时取 CRC 合法者中 generation 最大的一个：任何时刻允许一个 slot 是 torn 的，另一个 slot 在替换者持久化前不会被碰。ack 丢失最多导致重复重放（幂等吸收），绝不会跳过记录。
+- **fsync 不确定 ⇒ 熔断而非重试**（`roost-core/nestwal/wal.go` `Options.OnFatal` 注释、`setTerminal`；`roost-kit/dataengine/mod.go` `onFatal`）：fsync 报错后，内核可能已经丢弃了 dirty page 却清掉了错误标记，重试的 fsync 会“成功”但数据并没有落盘——写入结果从此不可知。所以任何物理写/fsync 失败都被包装为 `corenest.ErrCommitIndeterminate` 并置 terminal：拒绝一切后续写入、以该错误 resolve 所有 pending ticket，并经 `OnFatal` 熔断进程（Data Engine Mod 会 `NestMgr.Fence` + `app.RuntimeFailure.Fail`）。重启后由重放从最后一个 ack 恢复出唯一可信的历史。
+- **单写者锁与容量健康**：`writer.lock` 文件锁防止双进程写同一目录（`roost-core/nestwal/lock_unix.go`）；`MaxDiskBytes`/`MaxUnackedAge` 超限时 `Healthy()` 报错，接入 health 后表现为实例不健康而不是静默膨胀。
+- **落库与 outbox**（`roost-core/dataengine/engine/projector.go`、`roost-core/dataengine/engine/mongo_store.go`、`roost-core/dataengine/engine/`（outbox publisher））：重放循环在事务仍被 Entity 锁持有时让路（`TransactionReleased` 唤醒）；普通 mutation、Remote commit、receipt 和 effect staging 按需要进入同一个 Mongo session transaction。WAL ACK 在 projection 后推进，outbox publisher 独立 claim/lease/retry，JetStream MsgID 去重只是热路径优化。
 
-### Data Engine：唯一数据引擎
+### Data Engine（引擎在 roost-core/dataengine/engine，Mod 在 roost-kit/dataengine）：唯一数据引擎
 
 原 Checkpoint 的聚合冷加载、schema migration 和字段级 patch 已由 Data Engine 的
 `EntityRepository`、`MigrationRunner`、`Tracker`/`MutationParticipant` 接管。所有业务
@@ -401,7 +401,7 @@ admitter 接管。本地与 Remote Entity 都先把删除写入当前/隔离的 
 Remote 路径使用显式 delete intent，并继续经过 ownership marker、lock fence、route epoch。
 只有 admission 成功才完成内存移除；rollback 保持实体存活，结果不确定则触发 fail-stop。
 
-### 分布式锁与选主
+### 分布式锁与选主（实现均在 roost-core：redis / remoteentity / etcd；kit 只装配 Mod）
 
 **先做二选一**（两套锁并存是刻意的分层，不是重复实现）：
 
@@ -410,17 +410,17 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
 | 可容忍偶发双执行的互斥（缓存预热、可去重任务、优化性串行化） | `redis.IDistLock`（可套 `AutoExtendLock`） | 轻量；但**无栅栏**——TTL 过期后旧持有者不自知，存在双执行窗口 |
 | 正确性互斥（实体所有权、存储必须能拒绝旧持有者的写） | `remoteentity` 的 `versionedLock` / `etcd.IFencedElection` | fence 计数器独立于 TTL 永不回退，下游按 fence 单调性 CAS 拒旧 |
 
-判据一句话：**如果"锁过期后旧持有者又写了一笔"会造成数据损坏，就必须用带 fence 的那套**；`redis/lock.go` 的包注释里写有同样的契约边界。
+判据一句话：**如果"锁过期后旧持有者又写了一笔"会造成数据损坏，就必须用带 fence 的那套**；`roost-core/redis/lock.go` 的包注释里写有同样的契约边界。
 
-- **普通 Redis 锁状态机与 `AutoExtendLock` 的 TTL 预算重试**（`redis/lock.go`）：每次 acquisition 都生成新 owner token；`SetNX`/释放响应丢失后进入 `uncertain`，在值保护释放完成前拒绝重获，避免旧命令作用于新一代。非法 TTL、空 client/key、重复 Acquire 均 fail-closed。watchdog 每次续期调用都被限时（`extendCtx` 超时 = 续期间隔），瞬时错误不会立即判丢；只有续期间隔超过 TTL 才置 `Err()`，服务器明确答复“不再持有”则立即停止。它仍**不带栅栏**：需要防旧持有者脏写时用 `IVersionedLock`。
-- **`versionedLock` 的 fence 与 TTL 分离**（`remote_entity/versioned_lock_lua.go`）：fence 来自独立的 `key:fence` 计数器（`INCR`），**永不过期、不共享锁 hash 的 TTL**——若 fence 随锁一起过期，计数器归零后新持有者会拿到更小的 fence，栅栏失效。锁本体是带 TTL 的 hash（owner/version），下游写路径按 fence 单调性做 CAS 拒绝旧持有者。
-- **幂等 unlock**（`versioned_lock_lua.go` `versionedUnlockLua`）：unlock 的应答可能丢失，重试时若发现 `version == 本次要写的新版本`，证明先前那次 unlock 已生效，返回 2（成功）而非 NotOwned——依赖“unlock 版本按 key 单调唯一”的接口契约。
-- **versioned lock 的代际与幂等释放**（`remote_entity/versioned_lock.go`）：每次 acquisition 使用新 owner token；每次 `UnlockWithRetry` 使用固定 operation ID，Redis 保存 `last_unlock` 收据。响应丢失后的同一次重试可判成功，但“业务版本恰好相等”不再被误当作释放证明，旧代命令也不能匹配新代 owner。`AutoAsyncTouch` 每次把剩余 PTTL 加 `AsyncTouchExtend`，但封顶 `2*TTL`。
-- **选主 fence**（`etcd/election.go`）：`Fence()` 返回本候选者 campaign key 的 **CreateRevision**，它随 prefix 的每次领导权更替单调递增。`IsLeader()` 存在固有 stale 窗口（lease 已在服务端过期、客户端未感知），所以领导权敏感写必须携带 fence token 并在存储侧拒绝旧 token。实现上 fence 先于 `isLeader` 标志发布：观察到 `IsLeader==true` 的调用方一定能读到本任期的 token。
+- **普通 Redis 锁状态机与 `AutoExtendLock` 的 TTL 预算重试**（`roost-core/redis/lock.go`）：每次 acquisition 都生成新 owner token；`SetNX`/释放响应丢失后进入 `uncertain`，在值保护释放完成前拒绝重获，避免旧命令作用于新一代。非法 TTL、空 client/key、重复 Acquire 均 fail-closed。watchdog 每次续期调用都被限时（`extendCtx` 超时 = 续期间隔），瞬时错误不会立即判丢；只有续期间隔超过 TTL 才置 `Err()`，服务器明确答复“不再持有”则立即停止。它仍**不带栅栏**：需要防旧持有者脏写时用 `IVersionedLock`。
+- **`versionedLock` 的 fence 与 TTL 分离**（`roost-core/remoteentity/versioned_lock_lua.go`）：fence 来自独立的 `key:fence` 计数器（`INCR`），**永不过期、不共享锁 hash 的 TTL**——若 fence 随锁一起过期，计数器归零后新持有者会拿到更小的 fence，栅栏失效。锁本体是带 TTL 的 hash（owner/version），下游写路径按 fence 单调性做 CAS 拒绝旧持有者。
+- **幂等 unlock**（`roost-core/remoteentity/versioned_lock_lua.go` `versionedUnlockLua`）：unlock 的应答可能丢失，重试时若发现 `version == 本次要写的新版本`，证明先前那次 unlock 已生效，返回 2（成功）而非 NotOwned——依赖“unlock 版本按 key 单调唯一”的接口契约。
+- **versioned lock 的代际与幂等释放**（`roost-core/remoteentity/versioned_lock.go`）：每次 acquisition 使用新 owner token；每次 `UnlockWithRetry` 使用固定 operation ID，Redis 保存 `last_unlock` 收据。响应丢失后的同一次重试可判成功，但“业务版本恰好相等”不再被误当作释放证明，旧代命令也不能匹配新代 owner。`AutoAsyncTouch` 每次把剩余 PTTL 加 `AsyncTouchExtend`，但封顶 `2*TTL`。
+- **选主 fence**（`roost-core/etcd/election.go`）：`Fence()` 返回本候选者 campaign key 的 **CreateRevision**，它随 prefix 的每次领导权更替单调递增。`IsLeader()` 存在固有 stale 窗口（lease 已在服务端过期、客户端未感知），所以领导权敏感写必须携带 fence token 并在存储侧拒绝旧 token。实现上 fence 先于 `isLeader` 标志发布：观察到 `IsLeader==true` 的调用方一定能读到本任期的 token。
 
-### replication：帧复制网络层
+### nettransport（roost-core，原 kit replication）：帧复制网络层
 
-- **`AsyncTransport` 是心脏**（`replication/async_transport.go`）：每个 session 起**两个独立 worker**（datagram / reliable 分离，可靠流卡顿不阻塞状态帧）。datagram 通道是 **latest-only 合帧、键是 stream**：同一 stream 的新帧整体替换未发出的旧帧并计入 `DatagramFramesDropped`，不同 stream 各自保留最新。`AdmitBatch` 是原子准入：先锁外校验+拷贝（调用方可安全复用发送缓冲），再按 session id 升序加锁做容量与状态检查——全接受或全拒绝；`AdmissionError` 携带肇事 session，上层据此驱逐慢消费者后重试其余接收者。
+- **`AsyncTransport` 是心脏**（`roost-core/nettransport/channel.go`（`AsyncTransport`））：每个 session 起**两个独立 worker**（datagram / reliable 分离，可靠流卡顿不阻塞状态帧）。datagram 通道是 **latest-only 合帧、键是 stream**：同一 stream 的新帧整体替换未发出的旧帧并计入 `DatagramFramesDropped`，不同 stream 各自保留最新。`AdmitBatch` 是原子准入：先锁外校验+拷贝（调用方可安全复用发送缓冲），再按 session id 升序加锁做容量与状态检查——全接受或全拒绝；`AdmissionError` 携带肇事 session，上层据此驱逐慢消费者后重试其余接收者。
 - **两条通道失败语义不对称**：reliable 发送失败把该 session lane 永久置为 `ErrSessionFailed`（worker 退出）；datagram 失败只上报，下一帧继续。**`Close(ctx)` 是有界优雅 drain，`RemoveSession` 是立即取消丢队列**——房间下线要 drain 必须用 Close。`ErrorHandler` 必须迅速返回（panic 被吞并计数，但阻塞会卡住该 session lane）。
 - **三个 transport 的能力矩阵**：
 
@@ -433,18 +433,18 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
   | 流控旋钮 | 仅包上限（默认 1232 = IPv6 最小 MTU 减头） | 窗口/nodelay/fastresend/限速/DSCP 全套 | 委托 quic-go |
 
   选型：只要一条不可靠下行 → UDP（最轻）；同一条 UDP 链路上跑不可靠 + 可靠（lockstep 实时帧 + 追帧）→ KCP（旋钮多、CPU 轻）或 QUIC（443 穿透 + 连接迁移）；异构组合 → `CompositeTransport`。**状态帧**的队列/合帧/原子准入统一由 `AsyncTransport` 提供，`ControlPlane` 在业务层之下终结 ACK/resync 控制报文。**lockstep 的输入帧例外**：其 datagram 通道必须直连裸 transport——`AsyncTransport` 的 latest-only 合帧对每帧不可替代的输入帧意味着拥塞折叠即永久丢帧（见 lockstep 包注释）。
-- **AEAD UDP**（`replication/udp_crypto.go`、`udp_transport.go`）：AES-GCM per-session；`SendSalt`/`ReceiveSalt` 每个方向独立且构造时强制不相等（同 key 双向复用同一 nonce 空间会灾难性破坏 GCM）；nonce = salt(4B) + 单调 sequence(8B)，序列号耗尽即拒发；接收端 64 包位图防重放窗口；**地址迁移只在 AEAD 验证通过之后**（`Open` 成功且 `isCurrentRoute`）才生效，未认证的包改不了路由。UDP `Serve` 单飞、handler 返回 error 会终止整个接收循环（业务 handler 必须自行吞掉可恢复错误）。
+- **AEAD UDP**（`roost-core/nettransport/udp_crypto.go`、`roost-core/nettransport/udp_transport.go`）：AES-GCM per-session；`SendSalt`/`ReceiveSalt` 每个方向独立且构造时强制不相等（同 key 双向复用同一 nonce 空间会灾难性破坏 GCM）；nonce = salt(4B) + 单调 sequence(8B)，序列号耗尽即拒发；接收端 64 包位图防重放窗口；**地址迁移只在 AEAD 验证通过之后**（`Open` 成功且 `isCurrentRoute`）才生效，未认证的包改不了路由。UDP `Serve` 单飞、handler 返回 error 会终止整个接收循环（业务 handler 必须自行吞掉可恢复错误）。
 
-### sync：状态帧的房间链路（四个角色）
+### room（roost-core；kit 只装配 RoomMod）：状态帧的房间链路（四个角色）
 
 装配关系：`RoomManager`（多房间宿主）→ `RoomFrame` 合帧（50ms）→ `RoomTransportSink`（编码 + 原子下发）→ `nettransport.Channel`。**`RoomMod` 只提供 `ISyncBus`（服务间消息面），房间组件是库类型需业务自行装配。**
 
-- **NATS vs JetStream 的持久性不同，但 Sync handler 契约一致**（`room/nats_syncbus.go`、`jetstream_syncbus.go`）：纯 NATS 是至多一次、无确认、**故意不实现 `PublishConfirmed`**；JetStream 有 durable 与发布确认。`ISyncBus` 的 handler error 只记录、**不重试**，因此 JetStream 适配器也会 ACK handler error 和坏 wire，避免同一 handler 在两种 transport 下产生不同外部语义。去重优先使用独立 `MessageID`；旧 core 滚动升级期间才回退到 Topic/Key/Version/FromSid/Part 元组。durable 名称带原 topic 的稳定 hash，规避清洗/截断碰撞。
-- **`RoomManager`**（`room/room_manager.go`）：每房 + 全局两级容量预算（原子 CAS 预约）；空闲房间 GC 只回收"零主体、零订阅者、零未完成 retire"且超 `IdleTTL` 的房间——**有未完成 retire 的房间永不被 GC**；关闭超时会回滚 closing 标记下轮重试。
-- **`RoomTransportSink`**（`room/room_transport_sink.go`）：**snapshot/leave 帧走可靠有序通道；纯 delta 走分片 latest-only datagram**。每 (room, session) 维护紧凑 ObjectRef 分配器（带 generation 复用）；**delta 必须在 snapshot 之后**（无 baseline 直接报 `ErrRoomSubjectBaseline`）。会改 ObjectRef 的帧在克隆上计算、`AdmitBatch` 成功后才写回——传输失败不污染 ref 表。慢消费者策略两档：`SlowConsumerEvict` 只在可靠通道背压时驱逐该 session 并重试其余（回调走有界 worker 池 + 按 (room,session) 合并 + panic 计数），其他错误一律整批失败。公开线格式（`RRF1`/`RSU1` 魔数）与 `DecodeRoomWireFrame` 等解码 API 供客户端使用；线上序号会回绕，接收端按 epoch 判续。
-- **`RoomBroadcaster`**（`room/room_broadcast.go`）：`ReliableRoomFrameSink` 的契约是**原子接受整个 slice**——返回 nil 即责任移交，返回 error 则一帧都不能留。帧号与 per-(room,subscriber) session sequence **只在下游接受整批后才推进**（丢包检测/重放的实现依据）。单 subject 的 prepare 失败不拖垮整批（错误累计 + 重新入脏）。若下游实现了慢消费者回调注册，房间层自动接线：被驱逐的 session 自动清订阅。
+- **NATS vs JetStream 的持久性不同，但 Sync handler 契约一致**（`roost-core/room/nats_syncbus.go`、`roost-core/room/jetstream_syncbus.go`）：纯 NATS 是至多一次、无确认、**故意不实现 `PublishConfirmed`**；JetStream 有 durable 与发布确认。`ISyncBus` 的 handler error 只记录、**不重试**，因此 JetStream 适配器也会 ACK handler error 和坏 wire，避免同一 handler 在两种 transport 下产生不同外部语义。去重优先使用独立 `MessageID`；旧 core 滚动升级期间才回退到 Topic/Key/Version/FromSid/Part 元组。durable 名称带原 topic 的稳定 hash，规避清洗/截断碰撞。
+- **`RoomManager`**（`roost-core/room/room_manager.go`）：每房 + 全局两级容量预算（原子 CAS 预约）；空闲房间 GC 只回收"零主体、零订阅者、零未完成 retire"且超 `IdleTTL` 的房间——**有未完成 retire 的房间永不被 GC**；关闭超时会回滚 closing 标记下轮重试。
+- **`RoomTransportSink`**（`roost-core/room/room_transport_sink.go`）：**snapshot/leave 帧走可靠有序通道；纯 delta 走分片 latest-only datagram**。每 (room, session) 维护紧凑 ObjectRef 分配器（带 generation 复用）；**delta 必须在 snapshot 之后**（无 baseline 直接报 `ErrRoomSubjectBaseline`）。会改 ObjectRef 的帧在克隆上计算、`AdmitBatch` 成功后才写回——传输失败不污染 ref 表。慢消费者策略两档：`SlowConsumerEvict` 只在可靠通道背压时驱逐该 session 并重试其余（回调走有界 worker 池 + 按 (room,session) 合并 + panic 计数），其他错误一律整批失败。公开线格式（`RRF1`/`RSU1` 魔数）与 `DecodeRoomWireFrame` 等解码 API 供客户端使用；线上序号会回绕，接收端按 epoch 判续。
+- **`RoomBroadcaster`**（`roost-core/room/room_broadcast.go`）：`ReliableRoomFrameSink` 的契约是**原子接受整个 slice**——返回 nil 即责任移交，返回 error 则一帧都不能留。帧号与 per-(room,subscriber) session sequence **只在下游接受整批后才推进**（丢包检测/重放的实现依据）。单 subject 的 prepare 失败不拖垮整批（错误累计 + 重新入脏）。若下游实现了慢消费者回调注册，房间层自动接线：被驱逐的 session 自动清订阅。
 
-### syncstream：observer 维度的包流
+### syncstream（roost-core）：observer 维度的包流
 
 与 sync/room_* 的分工：**syncstream 跑在 `ISyncBus` 上（服务↔服务）；room_* 跑在 replication transport 上（服务→客户端）**。
 
@@ -452,69 +452,71 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
 - **压缩阈值触发**（默认走 gzip BestSpeed，编码器池化，>1MiB 的 buffer 不归还池）；**校验和算在压缩前的 JSON 上**，每个分片带同一 checksum 供重组后整体校验。
 - **分片非原子**：逐片发布，中途失败会留下已发布的前若干片——接收端靠有界重组 + `AssemblyTTL`（默认 30s）自然丢弃残片。重组 key 含 encoding 与 checksum，不同次发布不互相污染。边界默认：MaxChunks 256、MaxAssemblyBytes 8MiB、MaxDecodedBytes 同（防解压炸弹）。
 - **`BufferedPublisher` 的两个入口语义分离**：`Publish` = 同步 + 重试；`TryEnqueue` = 有界异步，满则 `ErrBackpressure`。**队列准入 ≠ broker 确认**。
-- `observability.go` 导出 5 个 `roost_sync_*` gauge + `Health()`。
+- `roost-core/syncstream/observability_impl.go` 导出 5 个 `roost_sync_*` gauge + `Health()`。
 
-### remote_entity：跨服实体（Mod 装配与所有权）
+### remoteentity：跨服实体（Mod 在 roost-kit/remoteentity，所有权实现在 roost-core/remoteentity）
 
 - **Mod 注册三个 capability**：`ModRemoteEntity`、`ModRemoteEntityAtomicStore`（nestwal 消费）、**`ModRedisVLock`（全应用的 versioned lock 工厂出自这里，不是 redis Mod）**。硬前置：sid 非 0（所有权 fencing 的前提）。`Start` 序列：绑 sync 双 replicator（snapshot + interest 两个 topic）→ 封存依赖 → 建存储 → **启动期重放未发布的已提交事务（outbox 恢复）** → 启动 finalizer；任一步失败回滚已启动的 replicator。health 在容量耗尽（interest 键/活跃事务达上限）时也报 fail。
-- **所有权状态机**（`remote_entity/marker.go`）：一个 Redis hash + 5 段 Lua CAS，租约编码 `mode:owner:marker:route`，mode ∈ {local, shared}；enter/leave shared 与 transfer 都递增 marker（transfer 还递增 route）。**关键契约：ownership 缺失永远不被解释为本地租约**——Redis 数据丢失不会被误读成"我拥有它"。
+- **所有权状态机**（`roost-core/remoteentity/marker.go`）：一个 Redis hash + 5 段 Lua CAS，租约编码 `mode:owner:marker:route`，mode ∈ {local, shared}；enter/leave shared 与 transfer 都递增 marker（transfer 还递增 route）。**关键契约：ownership 缺失永远不被解释为本地租约**——Redis 数据丢失不会被误读成"我拥有它"。
 - **两级快照缓存**：进程内 L1 + Redis L2；L2 的 CAS 顺序是 **(marker, route, version) 三元组 + checksum**——延迟的发布者不能覆盖更新的所有权 epoch 或状态版本；同 epoch 同 version 但 checksum 不同返回分歧信号。
 - **MongoCommitter 的幂等契约**：事务按 `RemoteTransactionID` + 批 digest 判重——同 id 不同 commits 拒绝（"transaction id reused"），同 id 同 digest 直接返回已存储的 receipts。实体 CAS 元数据、DAO 文档、不可变快照、幂等状态在**一个 Mongo 事务**里提交。
 
-### saga：exactly-once 步骤与 nest 启动通道
+### saga（引擎在 roost-core/saga，Mod 在 roost-kit/saga）：exactly-once 步骤与 nest 启动通道
 
-- **Mongo store 的 lease fencing**（`saga/mongo_store.go`）：任务领取用 `FindOneAndUpdate` 带 `version` + `lease_until <= now` 的 CAS，`$inc lease_token` 使过期实例的后续提交被 owner+token 过滤。状态落库走 `Apply(ctx, ApplyRequest)`：无 outbox/收据时是不开事务的快路径（一次 CAS ReplaceOne）；事务路径在**一个 Mongo 事务**里同落 saga 状态、outbox 命令、completion 收据与 `CloseOperation`（driver 可能重跑事务回调，outcome 在回调开头重置）。重复完成通过收据 digest 幂等判定。
-- **`MongoCommandInbox` 先占位再执行**（`saga/command_consumer.go`）：在同一个 Mongo 事务里先 `InsertOne` 收据占住 `_id = command.ID`——**用唯一索引把并发重投序列化在业务写之前**；handler 失败与占位一起回滚；撞 duplicate-key 时等对方提交后读回收据重放，**绝不重跑 handler**。命令过 `DeadlineAt` 后不开始新业务，只补发已提交的完成。
+- **Mongo store 的 lease fencing**（`roost-core/saga/mongo_store.go`）：任务领取用 `FindOneAndUpdate` 带 `version` + `lease_until <= now` 的 CAS，`$inc lease_token` 使过期实例的后续提交被 owner+token 过滤。状态落库走 `Apply(ctx, ApplyRequest)`：无 outbox/收据时是不开事务的快路径（一次 CAS ReplaceOne）；事务路径在**一个 Mongo 事务**里同落 saga 状态、outbox 命令、completion 收据与 `CloseOperation`（driver 可能重跑事务回调，outcome 在回调开头重置）。重复完成通过收据 digest 幂等判定。
+- **`MongoCommandInbox` 先占位再执行**（`roost-core/saga/command_consumer.go`）：在同一个 Mongo 事务里先 `InsertOne` 收据占住 `_id = command.ID`——**用唯一索引把并发重投序列化在业务写之前**；handler 失败与占位一起回滚；撞 duplicate-key 时等对方提交后读回收据重放，**绝不重跑 handler**。命令过 `DeadlineAt` 后不开始新业务，只补发已提交的完成。
 - **`DataEngineStepInbox` 的显式 reservation fence**：`SubscribeDataEngineStep` 只在同步 handler context 中附加 reservation；业务必须用 `ReservationFromContext(ctx)` 取出后作为 Nest 参数显式传递，并在 Nest handler 内调用 `inbox.Bind(command, reservation)`。Mongo projection 在同一事务中校验 owner、lease token、command digest、`pending` 和 `lease_until > now`；旧 worker 晚到时写 skipped marker 并 ACK，不应用业务/Remote mutation 或 effect。异步任务不得依赖该 context。
 - **`StepHandler` 契约**：只能通过传入的事务 ctx 改 Mongo；网络调用等不可逆副作用必须走事务性 outbox（driver 允许重跑事务回调）。
-- **nest-effect 启动通道**（`saga/nest_start_consumer.go`）：业务在 Nest 事务里 `EmitStart` 一条 start effect，nestwal 重放投递到 `ROOST_EFFECTS` 流，saga 协调者的 durable 消费者解码后 `StartSaga`——"事务里声明一句 effect 就拉起 saga"。所有协调者副本必须共用同一个 Durable。envelope 带 wire version（未知版本拒收）与 8MiB 上限；subject 校验拒绝通配符注入。
+- **nest-effect 启动通道**（`roost-core/saga/nest_start_consumer.go`）：业务在 Nest 事务里 `EmitStart` 一条 start effect，nestwal 重放投递到 `ROOST_EFFECTS` 流，saga 协调者的 durable 消费者解码后 `StartSaga`——"事务里声明一句 effect 就拉起 saga"。所有协调者副本必须共用同一个 Durable。envelope 带 wire version（未知版本拒收）与 8MiB 上限；subject 校验拒绝通配符注入。
 
-### 基础设施细节（redis / mongo / nats / etcd / taskflow / ops / statslog / configdata / gateway）
+### 基础设施细节（redis / mongo / nats / etcd / actionflow / gateway 的实现在 roost-core；ops / statslog / configdata 的 Mod 在 kit）
 
-- **redis `EvalDurable`/`EvalBatchDurable`**（`redis/client.go`）：用 `client.Conn()` 钉死一条物理连接，pipeline 把 Lua 脚本与 `WAITAOF` 一起发——`WAITAOF` 观察到的复制偏移必然覆盖前面的脚本；批量版把 fsync 成本摊到整批。**Cluster 直接在 IO 之前拒绝**（无 key 命令的路由无法保证同分片）。`goredis.Nil` 统一映射为 `fredis.ErrNil`；pipeline 的 future 只能读一次，pipeline 对象可复用。
-- **mongo 的持久性前提是硬编码的**（`mongo/client.go`）：写关注 majority+journal、读关注 majority、事务读关注 snapshot，业务无法通过配置放松。启动预检跑 `hello`：无逻辑会话（不支持事务）直接启动失败；`require_replica_set=true` 额外拒绝非副本集/非 mongos。索引冲突迁移是双开关（全局 `mongo.index.allow_recreate` **且** 单索引 `ConflictPolicy`），默认绝不 drop 生产索引。易踩坑：`InsertOne`/`BulkWrite` 返回的 ID 是 `fmt.Sprintf("%v")` 字符串化（ObjectID 会变成 `ObjectID("...")` 形态）；`WithTransaction` 的回调可能被 driver 重试多次，非幂等回调即错误。
-- **nats 的 Drain、Stop 与失败终态**（`nats/jetstream.go`）：`Stop` 立刻 cancel handler ctx；`Drain` 先排空缓冲消息、等订阅关闭**之后**才 cancel。Saga 停机先等待两个 durable consumer 的 `Closed()`，再 cancel runCtx；超时会强制 Stop 并返回 deadline。消费错误默认 Nak 指数退避；显式 permanent 错误或到达 MaxDeliver 时 `Term`，同时记录结构化错误和 `nats.jetstream.terminal.total`。callback panic 被适配边界捕获并计数。AckPolicy 强制 explicit。
-- **etcd 本地镜像的一致性**（`etcd/local_mirror.go`）：构造期先做带 Revision 的一致性前缀快照，watch 从 `Revision+1` 起——不漏事件；watch 断开后必先重新快照才重建 watch，且有 revision 回退检测（拒绝被回滚的集群）。订阅隔离：慢订阅者（队列满）单独以 `ErrMirrorSubscriberSlow` 踢除、handler panic 容器化为错误终止该订阅——都不影响 mirror 与其他订阅者。读路径返回深拷贝并附带"当前是否可信"的状态错误；CAS 写 `PublishIfRevision(0)` 表示"要求键不存在"。服务注册在 keepalive 丢失后指数退避自动重注册，`Deregister` 先标记停机再注销（正常停机不打 lease-lost 告警）。**选主的反直觉不变量**：选出后 campaign ctx 被取消不丢领导权（见 `election_test.go`）。
-- **taskflow 的无锁契约**（`taskflow/action_runner.go`）：所有调用（含 Tick）必须由持实体锁的一方串行化——包内刻意无锁。钩子在回调里改动当前 action 会被检出为一等错误 `ErrReentrantMutation`（不是静默错乱）；钩子与 action 回调全部 panic-safe。`ActionContext` 走 `sync.Pool`，**action 内不得保留 ctx 指针**。`Start` 抢占当前 action、`Enqueue` 只入队；队列中某项启动失败不阻塞后续。`MissionRunner` 的任务替换先问 `CanReplaceBy`；start 失败做完整清理。`PlanMission` 会复制 steps 并回填默认跳转，入参 plan 不被修改。
-- **ops 的安全面**（`ops/ops_mod.go`）：`/healthz` 恒 200（liveness）、`/readyz` = ready 位 && 依赖健康（readiness，503 语义）——K8s 探针要分开配。**`/metrics` 不鉴权**，默认绑 127.0.0.1 是唯一防护，改 0.0.0.0 等于公开指标。admin 鉴权双通道（`X-Admin-Token` 或 Bearer），关闭时端点返回 404 隐藏存在性；`dev-` 前缀 token 未显式允许即启动失败；执行命令自动补 `Source = ops:<service>:<sid>` 供审计。
-- **statslog 的窗口语义**（`statslog/statslog.go`）：nest 处理量双报（本窗口增量 + 累计），计数器回退（进程重启）时返回当前值不产生负数；provider panic 被捕获成 `{"error":"panic:..."}` 记录而不是打断统计线程；同名 provider 覆盖后旧反注册闭包失效（ABA 防护）；`StopWithContext` 有界——卡住的 provider 不会挂死停服。
-- **configdata**（`configdata/configdata.go`）：依赖 roost-core `configdata.DefaultRegistry()` 全局注册表（业务表类型须在 Mod 装配前注册，Mod 无自定义 registry 注入点）；reload 指标 `configdata.reload.total{result=ok|rollback}` + gauge `configdata.version`；反注册按逆序执行。
-- **gateway 中间件的三条硬契约**（`gateway/middleware.go`）：`RateLimit` 的鉴权兜底不可绕过——**limiter 为 nil 时仍检查 principal**（关掉限流不能扩大认证面；曾有此回归，见 `middleware_test.go` 注释），限流 key 是玩家 × 消息号；`Timeout` 只收紧不放松（调用方已有更严 deadline 时透传）；`Recover` 统一返回 `ErrEndpointPanic` 不泄漏 panic 细节（明细走 report 回调）。链式顺序：鉴权在 `RateLimit` 之前。
+- **redis `EvalDurable`/`EvalBatchDurable`**（`roost-core/redis/driver/client.go`）：用 `client.Conn()` 钉死一条物理连接，pipeline 把 Lua 脚本与 `WAITAOF` 一起发——`WAITAOF` 观察到的复制偏移必然覆盖前面的脚本；批量版把 fsync 成本摊到整批。**Cluster 直接在 IO 之前拒绝**（无 key 命令的路由无法保证同分片）。`goredis.Nil` 统一映射为 `fredis.ErrNil`；pipeline 的 future 只能读一次，pipeline 对象可复用。
+- **mongo 的持久性前提是硬编码的**（`roost-core/mongo/driver/client.go`）：写关注 majority+journal、读关注 majority、事务读关注 snapshot，业务无法通过配置放松。启动预检跑 `hello`：无逻辑会话（不支持事务）直接启动失败；`require_replica_set=true` 额外拒绝非副本集/非 mongos。索引冲突迁移是双开关（全局 `mongo.index.allow_recreate` **且** 单索引 `ConflictPolicy`），默认绝不 drop 生产索引。易踩坑：`InsertOne`/`BulkWrite` 返回的 ID 是 `fmt.Sprintf("%v")` 字符串化（ObjectID 会变成 `ObjectID("...")` 形态）；`WithTransaction` 的回调可能被 driver 重试多次，非幂等回调即错误。
+- **nats 的 Drain、Stop 与失败终态**（`roost-core/nats/driver/jetstream.go`）：`Stop` 立刻 cancel handler ctx；`Drain` 先排空缓冲消息、等订阅关闭**之后**才 cancel。Saga 停机先等待两个 durable consumer 的 `Closed()`，再 cancel runCtx；超时会强制 Stop 并返回 deadline。消费错误默认 Nak 指数退避；显式 permanent 错误或到达 MaxDeliver 时 `Term`，同时记录结构化错误和 `nats.jetstream.terminal.total`。callback panic 被适配边界捕获并计数。AckPolicy 强制 explicit。
+- **etcd 本地镜像的一致性**（`roost-core/etcd/driver/local_mirror.go`）：构造期先做带 Revision 的一致性前缀快照，watch 从 `Revision+1` 起——不漏事件；watch 断开后必先重新快照才重建 watch，且有 revision 回退检测（拒绝被回滚的集群）。订阅隔离：慢订阅者（队列满）单独以 `ErrMirrorSubscriberSlow` 踢除、handler panic 容器化为错误终止该订阅——都不影响 mirror 与其他订阅者。读路径返回深拷贝并附带"当前是否可信"的状态错误；CAS 写 `PublishIfRevision(0)` 表示"要求键不存在"。服务注册在 keepalive 丢失后指数退避自动重注册，`Deregister` 先标记停机再注销（正常停机不打 lease-lost 告警）。**选主的反直觉不变量**：选出后 campaign ctx 被取消不丢领导权（见 `election_test.go`）。
+- **actionflow（原 taskflow）的无锁契约**（`roost-core/actionflow/action_runner.go`）：所有调用（含 Tick）必须由持实体锁的一方串行化——包内刻意无锁。钩子在回调里改动当前 action 会被检出为一等错误 `ErrReentrantMutation`（不是静默错乱）；钩子与 action 回调全部 panic-safe。`ActionContext` 走 `sync.Pool`，**action 内不得保留 ctx 指针**。`Start` 抢占当前 action、`Enqueue` 只入队；队列中某项启动失败不阻塞后续。`MissionRunner` 的任务替换先问 `CanReplaceBy`；start 失败做完整清理。`PlanMission` 会复制 steps 并回填默认跳转，入参 plan 不被修改。
+- **ops 的安全面**（`roost-kit/ops/ops_mod.go`）：`/healthz` 恒 200（liveness）、`/readyz` = ready 位 && 依赖健康（readiness，503 语义）——K8s 探针要分开配。**`/metrics` 不鉴权**，默认绑 127.0.0.1 是唯一防护，改 0.0.0.0 等于公开指标。admin 鉴权双通道（`X-Admin-Token` 或 Bearer），关闭时端点返回 404 隐藏存在性；`dev-` 前缀 token 未显式允许即启动失败；执行命令自动补 `Source = ops:<service>:<sid>` 供审计。
+- **statslog 的窗口语义**（`roost-kit/statslog/statslog.go`）：nest 处理量双报（本窗口增量 + 累计），计数器回退（进程重启）时返回当前值不产生负数；provider panic 被捕获成 `{"error":"panic:..."}` 记录而不是打断统计线程；同名 provider 覆盖后旧反注册闭包失效（ABA 防护）；`StopWithContext` 有界——卡住的 provider 不会挂死停服。
+- **configdata**（`roost-kit/configdata/configdata.go`）：依赖 roost-core `configdata.DefaultRegistry()` 全局注册表（业务表类型须在 Mod 装配前注册，Mod 无自定义 registry 注入点）；reload 指标 `configdata.reload.total{result=ok|rollback}` + gauge `configdata.version`；反注册按逆序执行。
+- **gateway 中间件的三条硬契约**（`roost-core/gateway/middleware.go`）：`RateLimit` 的鉴权兜底不可绕过——**limiter 为 nil 时仍检查 principal**（关掉限流不能扩大认证面；曾有此回归，见 `roost-core/gateway/middleware_test.go` 注释），限流 key 是玩家 × 消息号；`Timeout` 只收紧不放松（调用方已有更严 deadline 时透传）；`Recover` 统一返回 `ErrEndpointPanic` 不泄漏 panic 细节（明细走 report 回调）。链式顺序：鉴权在 `RateLimit` 之前。
 
-### 并发定位一览
+### 并发定位一览（组件均在 roost-core）
 
 | 组件 | 定位 |
 | --- | --- |
-| `lockstep.Room`、`taskflow.ActionRunner/MissionRunner` | **单所有者无锁**，由实体串行 handler 驱动 |
+| `lockstep.Room`、`actionflow.ActionRunner/MissionRunner` | **单所有者无锁**，由实体串行 handler 驱动 |
 | `ai.Controller` | 外部（实体锁）串行化，自身不加锁；`Blackboard` 自带锁 |
 | `spatial.InterestManager` | 非并发安全（场景私有） |
 | `spatial.InterestCluster` | 单锁并发安全（多房间 handler 并行 tick） |
-| `replication.AsyncTransport` | 每 session 双 worker；AdmitBatch 按 session id 升序加锁 |
-| `sync.RoomTransportSink` | 256 条 room 锁条带（升序获取） |
+| `nettransport.AsyncTransport` | 每 session 双 worker；AdmitBatch 按 session id 升序加锁 |
+| `room.RoomTransportSink` | 256 条 room 锁条带（升序获取） |
 | `room.RoomBroadcaster` | 64 条 subject flush 锁条带 + 独立脏集合锁；准入由 `admitMu` 串行 |
 
-### 玩法与实时组件
+### 玩法与实时组件（均在 roost-core）
 
-- **spatial 的增量兴趣管理**（`spatial/interest.go`、`interest_cluster.go`）：`InterestManager` 在 BlockIndex 之上做九宫格订阅——observer 订阅其离开半径覆盖的块，实体移动只重评估受影响邻域；进出用**双半径滞回**（EnterRadius < LeaveRadius，边界震荡零事件）；距离带直接映射 entitysync 的 SyncProfile LOD；MaxVisible 是防广播风暴闸门（近似 top-N 语义）。`InterestCluster` 把多房间拼成一个共享坐标平面：贴边 observer 被**镜像**进邻房（接缝无视野盲区），Flush 输出**净变化**（每 (observer,subject) 维护房间→距离带表，对外只发与上次发射状态的差异）——因此跨界迁移是 make-before-break 且**下游订阅零闪断**。并发定位：Manager 非并发安全（场景私有）、Cluster 单锁并发安全（多房间 handler 并行 tick）；基准 4 房 × 1000 subjects 全移动 + 100 observers ≈ 0.34ms/tick。
-- **ai 的树到执行流闭环**（`ai/behavior_strategy.go`、`nodes.go`、`wire.go`）：`BehaviorStrategy` 把行为树装进 Controller（完成的树自动 Reset、动作完成事件缓冲到下一 tick 的上下文）；`TaskflowAction` 叶子发起 taskflow 动作并等待 `OnActionEnd`，被高优先级分支打断时经 `OnInterrupt` 收尾——"树决策、taskflow 执行"成为标准写法。计时节点（cooldown/time_limit）只读注入的 tick 时钟、随机节点只用注入掷点——权威侧决策可复现。`ParseTree` 严格装配 JSON 树（未知字段/节点/元数违规当场拒绝，诊断带 `$.root.children[0]` 式 path），复合节点内建、condition/action 叶子经 `Registry` 注册；配合 `Controller.SetStrategy` 的事务性替换，坏 JSON 永远不会顶掉在跑的策略。
+- **spatial 的增量兴趣管理**（`roost-core/spatial/interest.go`、`roost-core/spatial/interest_cluster.go`）：`InterestManager` 在 BlockIndex 之上做九宫格订阅——observer 订阅其离开半径覆盖的块，实体移动只重评估受影响邻域；进出用**双半径滞回**（EnterRadius < LeaveRadius，边界震荡零事件）；距离带直接映射 entitysync 的 SyncProfile LOD；MaxVisible 是防广播风暴闸门（近似 top-N 语义）。`InterestCluster` 把多房间拼成一个共享坐标平面：贴边 observer 被**镜像**进邻房（接缝无视野盲区），Flush 输出**净变化**（每 (observer,subject) 维护房间→距离带表，对外只发与上次发射状态的差异）——因此跨界迁移是 make-before-break 且**下游订阅零闪断**。并发定位：Manager 非并发安全（场景私有）、Cluster 单锁并发安全（多房间 handler 并行 tick）；基准 4 房 × 1000 subjects 全移动 + 100 observers ≈ 0.34ms/tick。
+- **ai 的树到执行流闭环**（`roost-core/ai/behavior_strategy.go`、`roost-core/ai/nodes.go`、`roost-core/ai/tree.go` / `tree_parser.go`（原 wire.go））：`BehaviorStrategy` 把行为树装进 Controller（完成的树自动 Reset、动作完成事件缓冲到下一 tick 的上下文）；`TaskflowAction` 叶子发起 taskflow 动作并等待 `OnActionEnd`，被高优先级分支打断时经 `OnInterrupt` 收尾——"树决策、taskflow 执行"成为标准写法。计时节点（cooldown/time_limit）只读注入的 tick 时钟、随机节点只用注入掷点——权威侧决策可复现。`ParseTree` 严格装配 JSON 树（未知字段/节点/元数违规当场拒绝，诊断带 `$.root.children[0]` 式 path），复合节点内建、condition/action 叶子经 `Registry` 注册；配合 `Controller.SetStrategy` 的事务性替换，坏 JSON 永远不会顶掉在跑的策略。
 - **gateway 的定位声明**（包 doc）：中间件集合（限流/鉴权守卫），**不是网关服务器**。
-- **lockstep 的双通道分工**（`lockstep/room.go`）：`Room.Tick` 切帧 → 记历史 → `RedundantEncoder` 封包（携带最近 N 帧）→ 对每个附着 session 走 **datagram** 通道（AEAD UDP）——丢包由后继报文的冗余修复，永不重传（重传回来的实时帧已过期）；`StartCatchup` 的重连追帧走 **可靠** 通道（KCP/QUIC），每 tick 最多 `CatchupBatchFrames` 帧分页限速，追上帧头后自动切回实时广播（追帧期间不发实时包，避免双份下行）。可靠通道选型：KCP 默认（高丢包下延迟低 30-40%、CPU 轻），QUIC 备选（连接迁移 + UDP 443 穿透，CPU 较重）——两者都已在 `replication/` 落地，一个 `ReliableSender` 接口互换。迟到输入折入下一帧并计 `lockstep.input.late.total`（针对当前帧的显式输入会覆盖折入的过期输入），非法输入计 `lockstep.input.rejected.total{reason}`；掉线座位不移出比赛（乐观帧锁定天然把缺席当空输入），重连 = `Attach` 换 session（同 session 重复 Attach 幂等且保留追帧游标；session 被其他座位/观战者占用则拒绝）+ `StartCatchup`（追帧连续失败超预算自动放弃并在 Tick 错误中显式说明，历史被 Trim 出缺口时同样放弃）。**构造期预算校验**：`冗余深度 × 座位数 × MaxInputBytes` 超出 datagram 包上限（默认 1232）直接拒绝配置——单个满载客户端永远打不黑整房间下行。哈希裁决按"同意组 ≥ quorum"出结论（默认 quorum = 座位过半，串谋少数抢先上报无法误伤诚实玩家），`OnDesync` 只在离群**集合**变化时回调；`ReportHash` 校验座位与帧号上界，Trim 过的帧墓碑化。观战者走 `AttachSpectator`/`SpectatorCatchup`（只收不发、不占座位）。一个 Room 只服务一局，结束调 `Close()`。
+- **lockstep 的双通道分工**（`roost-core/lockstep/room.go`）：`Room.Tick` 切帧 → 记历史 → `RedundantEncoder` 封包（携带最近 N 帧）→ 对每个附着 session 走 **datagram** 通道（AEAD UDP）——丢包由后继报文的冗余修复，永不重传（重传回来的实时帧已过期）；`StartCatchup` 的重连追帧走 **可靠** 通道（KCP/QUIC），每 tick 最多 `CatchupBatchFrames` 帧分页限速，追上帧头后自动切回实时广播（追帧期间不发实时包，避免双份下行）。可靠通道选型：KCP 默认（高丢包下延迟低 30-40%、CPU 轻），QUIC 备选（连接迁移 + UDP 443 穿透，CPU 较重）——两者都已在 `replication/` 落地，一个 `ReliableSender` 接口互换。迟到输入折入下一帧并计 `lockstep.input.late.total`（针对当前帧的显式输入会覆盖折入的过期输入），非法输入计 `lockstep.input.rejected.total{reason}`；掉线座位不移出比赛（乐观帧锁定天然把缺席当空输入），重连 = `Attach` 换 session（同 session 重复 Attach 幂等且保留追帧游标；session 被其他座位/观战者占用则拒绝）+ `StartCatchup`（追帧连续失败超预算自动放弃并在 Tick 错误中显式说明，历史被 Trim 出缺口时同样放弃）。**构造期预算校验**：`冗余深度 × 座位数 × MaxInputBytes` 超出 datagram 包上限（默认 1232）直接拒绝配置——单个满载客户端永远打不黑整房间下行。哈希裁决按"同意组 ≥ quorum"出结论（默认 quorum = 座位过半，串谋少数抢先上报无法误伤诚实玩家），`OnDesync` 只在离群**集合**变化时回调；`ReportHash` 校验座位与帧号上界，Trim 过的帧墓碑化。观战者走 `AttachSpectator`/`SpectatorCatchup`（只收不发、不占座位）。一个 Room 只服务一局，结束调 `Close()`。
 
 ---
 
 ## 5. 学习路径
+
+路径按 2026-09 的仓归属标注：`roost-core/…` 在 roost-core 仓，其余是本仓文件（ARCH-04）。
 
 按下面的顺序读源码与测试，每步都可 `go test ./<pkg>/` 验证认知：
 
 1. **框架心智模型**：`roost-core` 仓库 `README.md` + `RUNTIME_EXECUTION_MODEL.md`，然后读本仓库 `mods/name.go` 和任意一个小 Mod（如 `lock/lock_mod.go`）理解四阶段生命周期。
 2. **WAL 设计文档**：`roost-core/NEST_TRANSACTION_WAL.md` → `NEST_PIPELINED_COMMIT.md`（中文，含 Strict/Pipelined 语义对比与正确性论证）。
 3. **nestwal 主线**（本仓库核心，建议精读）：
-   - `nestwal/wal.go`（帧格式、group commit、Enqueue/ticket、terminal 熔断）→ `nestwal/checkpoint.go`（双 slot ack）→ `dataengine/projector.go`（事务 projection 与 ack）。
-   - 测试按价值排序：**`crash_test.go`**（真实子进程 `SIGKILL` 验证崩溃后 durable 前缀完整）、`pipelined_test.go`（ticket 语义）、`wal_test.go`（torn tail、ack、rotate）、`dataengine/fatal_fence_test.go`（熔断到 Nest/RuntimeFailure 的传导）、`nestwal/backlog_integration_test.go`（100k backlog 恢复）。
-4. **Data Engine 主线**：`dataengine/projector.go` → `mongo_store.go` → `entity_repository.go` → `migration.go` → `outbox_worker.go`。
-5. **锁与选主**：`redis/lock.go` + `lock_test.go` → `remote_entity/versioned_lock.go`、`versioned_lock_lua.go` + `versioned_lock_unlock_test.go` → `etcd/election.go` + `election_test.go`（含"campaign ctx 取消不丢领导权"这条反直觉不变量）。
-6. **横向扩展**：`saga/mongo_store.go`（lease CAS）+ **`saga/command_consumer_test.go`**（重投只执行一次 = exactly-once step 的规格）→ `remote_entity/transaction_manager.go`（跨服事务追踪）→ `replication/udp_crypto.go`、`udp_transport.go` → `room/room_broadcast.go`（状态帧）→ `lockstep/room.go` + `room_test.go`（输入帧：追帧限速、断线重连、裁决回调的用例即文档）→ `spatial/`、`ai/`、`taskflow/action_runner_test.go`（抢占/队列/重入检测）。
-7. **语义即测试的推荐清单**：`etcd/local_mirror_test.go`（原子快照、慢订阅隔离、panic 隔离、CAS）、`nats/jetstream_test.go`（Drain 与 Stop 的语义差）、`gateway/middleware_test.go`（带回归原因注释的鉴权兜底）、`ops/ops_mod_test.go`（5 个测试 = 该包完整规格）、`mongo/collection_test.go`（"默认绝不 drop 生产索引"）。
+   - `roost-core/nestwal/wal.go`（帧格式、group commit、Enqueue/ticket、terminal 熔断）→ `roost-core/nestwal/checkpoint.go`（双 slot ack）→ `roost-core/dataengine/engine/projector.go`（事务 projection 与 ack）。
+   - 测试按价值排序：**`roost-core/nestwal/crash_test.go`**（真实子进程 `SIGKILL` 验证崩溃后 durable 前缀完整）、`roost-core/nestwal/pipelined_test.go`（ticket 语义）、`roost-core/nestwal/wal_test.go`（torn tail、ack、rotate）、`dataengine/fatal_fence_test.go`（熔断到 Nest/RuntimeFailure 的传导）、`roost-core/nestwal/` 的 backlog 集成测试（100k backlog 恢复）。
+4. **Data Engine 主线**：`roost-core/dataengine/engine/projector.go` → `roost-core/dataengine/engine/mongo_store.go` → `roost-core/dataengine/engine/entity_repository.go` → `roost-core/dataengine/migration.go` → `roost-core/dataengine/engine/outbox_worker.go`。
+5. **锁与选主**：`roost-core/redis/lock.go` + `roost-core/redis/driver/lock_test.go` → `roost-core/remoteentity/versioned_lock.go`、`roost-core/remoteentity/versioned_lock_lua.go` + `roost-core/remoteentity/versioned_lock_unlock_test.go` → `roost-core/etcd/election.go` + `roost-core/etcd/driver/election_test.go`（含"campaign ctx 取消不丢领导权"这条反直觉不变量）。
+6. **横向扩展**：`roost-core/saga/mongo_store.go`（lease CAS）+ **`roost-core/saga/command_consumer_test.go`**（重投只执行一次 = exactly-once step 的规格）→ `roost-core/remoteentity/transaction_manager.go`（跨服事务追踪）→ `roost-core/nettransport/udp_crypto.go`、`roost-core/nettransport/udp_transport.go` → `roost-core/room/room_broadcast.go`（状态帧）→ `roost-core/lockstep/room.go` + `roost-core/lockstep/room_test.go`（输入帧：追帧限速、断线重连、裁决回调的用例即文档）→ `spatial/`、`ai/`、`roost-core/actionflow/action_runner_test.go`（抢占/队列/重入检测）。
+7. **语义即测试的推荐清单**：`roost-core/etcd/driver/local_mirror_test.go`（原子快照、慢订阅隔离、panic 隔离、CAS）、`roost-core/nats/driver/jetstream_test.go`（Drain 与 Stop 的语义差）、`roost-core/gateway/middleware_test.go`（带回归原因注释的鉴权兜底）、`ops/ops_mod_test.go`（5 个测试 = 该包完整规格）、`roost-core/mongo/driver/collection_test.go`（"默认绝不 drop 生产索引"）。
 
 ---
 
