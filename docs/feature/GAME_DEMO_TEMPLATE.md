@@ -124,7 +124,7 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
 ## 7. 剩余工作与实施方法（按价值排）
 
 > 2026-09-16 第七批完成 7.1、7.2、7.4，第八批完成 7.3、7.7 并删掉了 `player:<id>` 调试凭据（codegen CHANGELOG"第七批 / 第八批"）。
-> 7.2 的实际做法与原计划有一处重要不同，见该小节开头。剩余：7.5（先登记 RR）、7.6（需要 docker）。
+> 7.2 的实际做法与原计划有一处重要不同，见该小节开头。7.6 已在本机 docker 里打开过真 Grafana（见该小节）。剩余：7.5（先登记 RR）。
 
 每一项都写成"改哪里 → 先红什么测试 → 怎么验证 → 边界"，可以各自独立开工；顺序建议 1 → 2 → 4 → 3 → 5 → 6 → 7。
 通用规则沿用前六批：demo 的文件全部是业务所有、写在 `roost-codegen/demo/**`（`.tmpl`）、步骤进 `demoScaffoldSteps`、
@@ -226,7 +226,20 @@ matchmaker Commit 后经 `accessplayertcp.Runtime.PushPlayer` 推给每个成员
 - **先红**：A 需要 `queue_store` 的 promise test "两张票入队后第二张返回 matched"；B 需要 codegen 对 `internal/service/match/collaborators.go`
   的断言不再含 `Grouping`。
 
-### 7.6 在真 Grafana 里打开仪表盘
+### 7.6 在真 Grafana 里打开仪表盘——已完成
+
+用生成工程里的 `deploy/dev/observability/docker-compose.yaml` 原样起 Prometheus + Grafana（本地加了一个匿名 Viewer 的 override
+只为让浏览器免登录看图，不在发布物里），四进程 + 六轮 20 机器人 + 一轮 600 机器人。结果：数据源与仪表盘 "Roost game-demo" 自动
+预置；33 条查询 **0 条 PromQL 错误**，14 条有数据、19 条 No data 且每一条都能解释（错误计数器为零不存在、`bus_rpc_*` 只在
+JetStream RPC 路径、robot 的 `rate()` 需要两次抓取而一场压测不到 1 秒、Nest 队列 gauge 由 statslog 每分钟一次写入）；
+`histogram_quantile` 的 `le` 已是秒、Duration 平均值面板算法正确。浏览器截图确认玩家接入 / Nest / WAL 三行有曲线。
+
+两个顺带发现：
+- **600 机器人只成功 128**：`player_access.tcp.max_connections_per_ip` 默认 128，机器人全来自 127.0.0.1，超出的连接握手前被关，
+  机器人侧报 `connect: auth send: robot session: closed`，server 侧 `player_tcp_connection_rejected_total{reason="per_ip"}=472`。
+  不是缺陷，是上限在工作；已把该计数加进仪表盘并写进两处 README。压更大要调高配置。
+- 本机 9100 被另一个 roost game 进程占着（`___1game`，非本会话所起），Prometheus 在我改端口前抓了它一分钟，仪表盘的 handler
+  图例里因此混进了别的工程的 handler 名——共享机器上抓取端口要先 `lsof` 看一眼。
 
 - 有 docker 的机器：`docker compose -f deploy/dev/observability/docker-compose.yaml up -d`，三进程 ops 端口 9100–9102 与
   `-metrics-addr 127.0.0.1:9300` 起着，看六个 row 是否都有数据；重点核 `histogram_quantile` 面板的 `le` 单位（导出器给的是秒）与
