@@ -13,6 +13,8 @@
 
 ### Added
 
+- **`service/mail` 与 `service/session`：mail、session 领域实现从 roost-kit 下沉 core**（M-07 / M-08，ARCH-01 第二、三批；来源 `docs/bug/REVIEW-2026-09-16-04.md` §7）。mail：`Envelope` / `Entry` / `Mailbox` / `Claim` 等类型、邮箱状态机（已读 / 删除 / 三段式领取 / 淘汰）、`EnvelopeStore` / `MailboxStore` / `SendLedger` 接口、`Service` 与 `New`、`NewRedisStores` / `NewRedisEnvelopes`、errcode 段与 `Error()`；session：`Run` / `State` / `Claim` / `LedgerEntry` 等类型、`Service` 与 `New`（幂等 Enter、每 owner 一个活 run、资源恰好释放一次）、`Admin` 操作面、`NewRedisStores`、errcode 段与 `Error()`。行为、Redis key、JSON 字段、错误码、RPC 方法名全部不变；领域测试随迁；核心不引用 kit（`dependency_boundary_test`）。`Mail` / `Session` RPC 接口、生成传输、Mod 留在 kit；kit 侧改别名包并删重复实现等 core v1.15.4 发版后做，步骤见 `docs/bugfix/M-07-mail-domain-into-core.md`、`M-08-session-domain-into-core.md`。
+
 - **`service/match` 与 `servicemetrics`：match 领域实现与服务计数契约从 roost-kit 下沉 core**（M-06，ARCH-01 第一批；来源 `docs/bug/REVIEW-2026-09-16-04.md` §7）。`Queue` / `Subject` / `Ticket` / `Match`、errcode 段 550101–550199 与 `Error()`、`Store` 接口、票据状态机 `NewStore`、`NewRedisStore`、`Grouping` / `FirstComeGrouping` / `ScoreWindowGrouping`、`Config` 原样迁入，新增 `NewMemoryStore(cfg)`；`servicemetrics.Reporter` / `Sink` / `Wrap` / `Recorder` 迁入。行为、持久化 key、JSON 字段、错误码、RPC 方法名全部不变；核心不引用 kit（`dependency_boundary_test`）。kit 侧的 `service/match` / `service/servicemetrics` 在 core v1.15.3 发版后改为别名包并删掉重复实现，步骤见 `docs/bugfix/M-06-match-domain-into-core.md`。
 
 - **推荐的 entity category 分类常量**(M-04)。`EntityCategoryWorld` / `PlayerScoped` / `Player` / `Other` 接在 `EntityCategoryRemote` 之后,值即锁序;`EntityCategoryUnknown`(255)保留给本进程不认识的 kind,任何 kind 都不得注册进去。它们是常量不是要求 —— category 现在是完整 uint8,项目可以插值或在 Other 之后继续;唯一的要求是远程托管的 kind 必须在 `EntityCategoryRemote`,由 `ValidateEntityRegistry` 校验。`EntityCategoryName` 对这几个值内置了名字,不声明也能打出可读日志。
