@@ -15,13 +15,15 @@ import (
 
 // Mod wires a match Store into an app and registers it as a capability.
 //
-// Grouping is a constructor argument because "which candidates form a match"
-// is the whole of a game's matchmaking policy. A nil Grouping selects
-// FirstComeGrouping, which is a real strategy rather than a stand-in, so the
-// default is honest.
+// It takes no matchmaking policy. The store holds the queue and makes Commit
+// atomic; deciding which waiting tickets form a match is the caller's job —
+// a matchmaker in the game process reads Candidates, applies a Grouping and
+// Commits. An earlier version accepted a Grouping here and in Config and
+// then never executed it, so a project that injected its own policy got the
+// caller's pairing anyway (U-0217, RR-20260916-05). A parameter the code
+// cannot honour is worse than none.
 type Mod struct {
-	grouping Grouping
-	metrics  servicemetrics.Reporter
+	metrics servicemetrics.Reporter
 
 	prefix    string
 	ticketTTL time.Duration
@@ -56,9 +58,10 @@ func parseSweepQueues(entries []string) ([]Queue, error) {
 	return queues, nil
 }
 
-// NewMod returns a match Mod. grouping may be nil for FirstComeGrouping.
-func NewMod(grouping Grouping, reporter servicemetrics.Reporter) *Mod {
-	return &Mod{grouping: grouping, metrics: reporter}
+// NewMod returns a match Mod. Matchmaking policy is not a parameter: drive
+// it from a matchmaker with Candidates → Grouping → Commit.
+func NewMod(reporter servicemetrics.Reporter) *Mod {
+	return &Mod{metrics: reporter}
 }
 
 // Name implements app.Mod.
@@ -98,7 +101,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		return err
 	}
 	store, err := NewRedisStore(client, m.prefix, Config{
-		TicketTTL: m.ticketTTL, Grouping: m.grouping, Metrics: m.metrics, SweepQueues: m.sweep,
+		TicketTTL: m.ticketTTL, Metrics: m.metrics, SweepQueues: m.sweep,
 	})
 	if err != nil {
 		return fmt.Errorf("match mod: %w", err)

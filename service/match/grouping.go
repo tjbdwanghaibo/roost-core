@@ -5,20 +5,11 @@ import (
 	"sort"
 )
 
-// Grouping decides which candidates form a match.
-//
-// This is the seam the plan calls for: what is generic here is the queue, the
-// state machine, the deadline and the atomicity of the commit. How players are
-// paired — rating windows, team balance, party keeping — is game policy, so it
-// is an interface with a deliberately dull default rather than a half-finished
-// rating system.
-//
-// The implementation this replaces got this backwards: it advertised
-// score-adjacent and score-balanced algorithms, but always took the head of
-// the queue and only reordered members *within* the already-chosen group. The
-// algorithm choice could not influence who was matched with whom, so
-// score-based matchmaking was effectively unimplemented while appearing
-// configurable.
+// Grouping decides which waiting tickets form a match. It is the caller's
+// tool: a matchmaker reads Candidates, asks a Grouping for a group, and
+// Commits it. The store does not run it — Enqueue only queues, Commit only
+// commits the tickets it is given — so a policy lives where it can be retried,
+// observed and cancelled outside the storage CAS (RR-20260916-05).
 type Grouping interface {
 	// Group selects exactly queue.GroupSize tickets from candidates, or
 	// reports that no group can be formed yet. candidates are waiting,

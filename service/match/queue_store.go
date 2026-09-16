@@ -113,9 +113,6 @@ type Config struct {
 	// minted identical ids — and an "idempotent" enqueue could hand back
 	// another player's ticket.
 	NewID func() (string, error)
-	// Grouping selects which candidates form a match; nil means
-	// FirstComeGrouping.
-	Grouping Grouping
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation. Queue depth and expiry counts are the two signals
 	// the implementation this replaces had no way to emit, which is why its
@@ -155,9 +152,6 @@ func NewStore(state versionstore.Store[string, queueState], cfg Config) (Store, 
 	}
 	if cfg.NewID == nil {
 		cfg.NewID = randomID
-	}
-	if cfg.Grouping == nil {
-		cfg.Grouping = FirstComeGrouping{}
 	}
 	return &queueStore{state: state, cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }

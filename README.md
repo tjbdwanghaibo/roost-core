@@ -1,12 +1,12 @@
 # roost-kit
 
-`roost-kit`（仓库目录名 `roost-kit`，Go 模块 `github.com/tjbdwanghaibo/roost-kit`）是 roost 框架的**中间件组件层**：它把 Redis、MongoDB、NATS/JetStream、etcd、本地磁盘 WAL 等具体基础设施实现为 `roost-core` 定义的稳定接口与 `app.Mod` 生命周期组件，业务服务只需按需装配。
+`roost-kit`（仓库目录名 `roost-kit`，Go 模块 `github.com/tjbdwanghaibo/roost-kit`）是 roost 框架的**装配层**：核心实现在 `roost-core`（引擎、契约、领域算法、基础设施客户端），`roost-kit` 负责把它们装成 `app.Mod`——读配置、取依赖、注册 capability、接生命周期与健康 / 日志——并提供通用服务（account / mail / match / chat / session / global）的服务器与客户端接入。三层的分工是：**Core 核心实现，Kit 装配与使用便利，Codegen 代码生成**；Kit 里目前仍持有的领域实现（通用服务的状态机与存储）正按 roost-core `docs/bug/REVIEW-2026-09-16-04.md` 第 7 节的 ARCH-01..04 分批下沉，本 README 的组件表以当前目录为准。
 
 三级阅读路径：完全新手从 [Roost 五分钟快速开始](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/QUICKSTART.md) 开始；熟练开发者阅读 [完整使用说明](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/USER_GUIDE.md) 后按本 README 查具体 Mod；框架维护者阅读 [实现原理](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/INTERNALS.md)、[生产部署](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/DEPLOYMENT.md) 与本 README 的实现章节。
 
 ```text
 业务服务（游戏服 / world 服 / 自定义服务）
-  └─> roost-kit   具体基础设施 Mod（本仓库）
+  └─> roost-kit   装配层：把 core 的实现装成 app.Mod，并接入通用服务（本仓库）
         └─> roost-core   Mod 生命周期、app.Registry、稳定接口与 Nest 执行引擎
 ```
 
@@ -17,32 +17,21 @@
 | 组件 | 解决什么问题 | 外部设施 | 何时用 |
 | --- | --- | --- | --- |
 | `dataengine/` | 统一的 Nest 事务持久化：本地 WAL、Put/Patch/Delete Mongo CAS projection、receipt/effect outbox、聚合 load、schema migration、Saga native step 与 Remote commit | 本地独占磁盘 + MongoDB replica set + NATS JetStream | 新服务与完成迁移的 Entity 服务 |
-| `nestwal/` | WAL frame、group commit、v1/v2 reader/writer 与 ack watermark；作为 Data Engine 的物理日志库，不再独立装配为应用 Mod | 本地磁盘 | Data Engine WAL 底层 |
 | `nest/` | 装配实例级 core Nest 引擎，并从 Data Engine 取得唯一 transaction committer | 无 | 所有 Nest 服务 |
 | `redis/` | Redis 客户端、pipeline、pub/sub、分布式锁（`SetNX`）与 `AutoExtendLock` 自动续期包装；`EvalDurable`/`EvalBatchDurable` 保留为通用 durable Lua 能力 | Redis | 缓存、去重、可容忍双写的互斥 |
 | `mongo/` | MongoDB 客户端、collection、session/事务封装。写关注硬编码 majority+journal、事务读关注 snapshot；**启动预检拒绝无逻辑会话的部署（单机 mongod 起不来），`require_replica_set` 可再收紧**；索引冲突重建需全局与单索引双开关 | MongoDB（副本集或分片集） | 一切持久化 |
 | `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
-| `remote_entity/` | 跨服务实体的原子事务（Mongo 单事务提交 + digest 幂等收据）、不可变快照分发（进程内 L1 + Redis L2，(marker,route,version) 三元 CAS）、local/shared 所有权状态机（Redis Lua CAS）、`IVersionedLock`（栅栏 + 版本）——**全应用的 `ModRedisVLock` capability 由本 Mod 注册** | Redis + NATS（sync）+ MongoDB | 跨服实体所有权与远程提交 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
 | `room/` | 状态帧同步的房间侧：`RoomMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一）、`RoomManager`（多房间宿主：两级容量预算 + 空闲 GC）、`RoomFrame` 合帧（50ms）、`RoomTransportSink`（编码到 statesync 线格式：snapshot 走可靠、delta 走 latest-only datagram，慢消费者驱逐）。**房间组件是库类型，需业务自行装配，装 RoomMod 不等于有房间同步** | NATS/JetStream（bus）+ `nettransport`（房间帧传输） | 实时房间状态同步 |
-| `syncstream/` | observer 维度的包流（跑在 `ISyncBus` 上，服务↔服务）：分片重组（有界 + TTL）、阈值压缩（checksum 算在压缩前）、发布确认能力探测（JetStream 有 / 纯 NATS 故意没有）、`BufferedPublisher`（准入 ≠ 确认）、5 个 `roost_sync_*` gauge | NATS/JetStream | 跨服务的有序状态流 |
-| `replication/` | 帧复制网络层：**`AsyncTransport`（每 session 双 worker、latest-only 合帧、原子批准入）是心脏**；QUIC/KCP/UDP 三个 transport（能力矩阵见 §4）、`CompositeTransport` 拼装异构双通道、`ControlPlane` 终结 ACK/resync 控制报文；UDP 为 per-session AEAD 加密 + 防重放 | 无（自带网络协议栈） | 实时帧下发（客户端连接） |
-| `lockstep/` | 帧同步（输入帧）房间层：`Room` 绑定 roost-core/lockstep 的 Sequencer/历史/冗余编码/裁决器到传输——切帧经 datagram 通道冗余广播（丢包不重传）、追帧经可靠通道按 tick 限速分页、关键帧哈希裁决回调 + 全套指标。**non-goals：不跑模拟（客户端确定性执行）、不做帧内容校验（输入 payload 对框架不透明）** | 无（注入 `nettransport` 的 Datagram/Reliable sender） | 客户端确定性模拟的实时对战房间（与 `room/` 状态帧二选一） |
-| `gateway/` | 接入层中间件：限流、超时、panic 隔离 | 无 | 玩家接入链路 |
-| `spatial/` | 整数网格地形、四方向 A*、ID-only 块索引，以及**增量兴趣管理**：`InterestManager`（进出滞回、距离带 LOD、可见上限）与 `InterestCluster`（共享坐标平面上的多房间无缝拼接：边界镜像、跨界迁移零闪断）。**non-goals：无 Z 轴/navmesh；跨进程 handover 不在此层**（见包注释） | 无 | 场景服的寻路、AOI 与可见性增量（下游接 entitysync 订阅） |
-| `ai/` | 行为树：节点库（组合/装饰/确定性 tick 计时/注入式随机）、`BehaviorStrategy`（树 → roost-core Strategy 桥）、`TaskflowAction`（树驱动 taskflow 动作的标准叶子）、`ParseTree`（严格 JSON 树装配，fail-fast + path 诊断）。**non-goals：无编辑器格式/utility/GOAP/跨 agent 调度** | 无 | 怪物/NPC 决策层，配表驱动行为 |
-| `actionflow/` | roost-core actionflow 契约的执行器：`ActionRunner`（按 ActionGroup 分槽的"当前 + 队列"执行、组冻结、重入检测一等错误、钩子全 panic-safe）、`MissionRunner`（单任务 + `CanReplaceBy` 仲裁替换）、`PlanMission`（配表式步骤机）、可封存的实例级 `Registry`。**刻意无锁：所有调用须由实体锁串行化** | 无 | 实体内的动作/任务状态机（AI 与玩法的执行层） |
-| `versionstore/` | 版本化状态的契约（**契约里没有无条件写**：`Update` 是唯一变更途径并自带 CAS 重试 + 指数退避抖动；`Create` 是独立的仅插入路径）+ Redis 与内存实现。比较版本不比较值；版本由存储侧分配、按 key 单调、跨副本可比；版本 0 表示不存在而非跳过检查 | 无 | 任何"读-改-写"的共享状态 |
-| `servicerpc/` | 服务间 RPC 客户端：类型化调用、etcd 实例选择、lightweight/JetStream 传输选择、稳定响应状态约定。`KeyAffinityPicker` 把同一 key 固定路由到同一实例（round-robin 会把同一逻辑 key 的连续操作发到不同副本，使进程内互斥失效） | etcd（可选） | 任何跨服务调用 |
-| `mongo/mongotest/` | 求值 filter 的内存 MongoDB。不支持的构造返回 `ErrUnsupported` 而非静默匹配；标量走真实 bson 往返；`WithTransaction` 快照回滚 | 无 | 测试中替代真实 Mongo |
 | `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 的生命周期。按 `DependsOn` 依赖序启动、逆序停止；启动失败回滚已启动的（**失败的那个不 Stop**——它没启动完，Stop 得处理半构造对象，清理是 `Start` 自己的责任）；启动中收到 shutdown 会**中止**启动而不是与之赛跑；`Start` 后 `Register` 直接报错。无依赖 manager 之间保持注册序，**每次进程一致** | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
 | `lock/` | 进程内锁管理器（per-id 可重入互斥，同 id 同实例）——与 `redis.IDistLock`/`IVersionedLock` 是进程内 vs 跨进程的不同层，不参与"分布式锁二选一" | 无 | 进程内互斥 |
-| `robot/` | core `robot` 机器人框架的 kit 侧：KCP/QUIC 客户端拨号（`RegisterKCPDialer`/`RegisterQUICDialer`，经 core `transport.RegisterDialer` 挂载，复用 `nettransport.DialKCP/DialQUIC`）；`LockstepBot`（帧装配 + 输入提交 + 关键帧哈希上报 + 每 gap 一次追帧请求，出站经业务注入的 `LockstepSink`）——desync 回归测试与 lockstep 压测的客户端半场 | 无（网络栈复用 `nettransport`） | 模拟客户端逻辑、压测（尤其 lockstep 房间） |
 | `ops/` | 运维 HTTP：`/healthz`（存活，恒 200）、`/readyz`（ready 位 + 依赖健康，503 语义）、`/metrics`（Prometheus 文本，**不鉴权**）、`/admin/*`（token 双通道鉴权，关闭时 404 隐藏）。**默认关闭（`ops.enabled`），默认只监听 127.0.0.1** | HTTP | 探针、指标抓取与运维命令 |
 | `configdata/` | 配置快照热更：首次 Load 失败即启动失败；reload 带 rollback 语义并打 `configdata.reload.total{result}` 指标。依赖 roost-core `configdata.DefaultRegistry()` 全局注册表（业务表类型须先注册） | 本地文件 | 配置表热更 |
 | `statslog/` | 周期统计 JSONL（每行一个 `StatsRecord`，每次 flush 都 fsync）：runtime + 自动富化 nest/entity 统计（装了对应 Mod 才有）、业务 provider 扩展点（panic 被捕获成记录）、窗口增量 + 累计双报。**默认关闭（`stats_log.enabled`）；entity 统计是 O(N) 全量扫描，interval 勿设太小** | 本地文件 | 周期运行时统计 |
 | `mods/` | 全部 capability 名称常量（`mods.ModRedis`、`mods.ModDataEngine`…），含对 core `app.*` 常量的再导出；常量 → 注册者 → 实际类型见 §3.3 | 无 | 业务从 Registry 取依赖时使用 |
+
+以下能力**已在 roost-core**（收敛已合回 main，Kit 不再持有实现，只在 Mod 里装配）：`nestwal`（Data Engine 的 WAL）、`remoteentity`、`syncstream` / `syncbus` / `statesync`、`lockstep`、`gateway`、`spatial`、`ai` / `actionflow`、`versionstore`、`servicerpc`、`mongo/mongotest`、`robot`（kit 侧只剩 KCP/QUIC 拨号已随 nettransport 归 core）。用法见各自的 core 包注释与 [roost-core README](https://github.com/tjbdwanghaibo/roost-core/blob/main/README.md)。
 
 ---
 

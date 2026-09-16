@@ -99,7 +99,7 @@ func TestSweepQueuesConfigurationFailsClosed(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("match.key_prefix", "roost:match")
 	cfg.Set("match.sweep_queues", []string{"ranked:oops"})
-	if err := NewMod(nil, nil).Init(cfg); err == nil {
+	if err := NewMod(nil).Init(cfg); err == nil {
 		t.Fatal("Init accepted a malformed match.sweep_queues entry")
 	}
 }

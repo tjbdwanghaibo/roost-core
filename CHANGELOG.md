@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **match：删掉没有执行者的 `Grouping` 注入参数**（U-0217，C2；RR-20260916-05，T-111，源自实现侧候选 W-2026-09-16-01）。**破坏性**：`NewMod(grouping, reporter)` → `NewMod(reporter)`，`Config.Grouping` 删除；`Grouping` 接口与 `FirstComeGrouping` / `ScoreWindowGrouping` 保留为调用方工具。此前该参数从构造函数一路存进 Config，store 里没有任何路径读它——Enqueue 只入队、Commit 提交指定票、Sweep 只清过期票，成组完全由调用方 Candidates → Grouping → Commit 驱动，项目注入的策略静默失效。审查明确这不是"Enqueue 必须自动成组"，是签名说了实现没做的话；把策略塞进可重试的存储 CAS 回调会带来重复执行与事务窗口延迟，故不采用。codegen 同版本不再生成 `Grouping()` collaborator。`grouping_contract_promises_test.go` 修前红；记录 roost-core `docs/bugfix/RR-20260916-05.md`。
+
 - **activity 的窗口条目有 opening / 确认两段生命周期,派发从持久的 Delivering 索引重试**(U-0191、U-0192,C8;RR-20260914-02/03,T-85、T-86)。
   `OpenActivity` 先进 `Window.Opening`(带 AdmittedAt),`Activities.Create` 之后 `confirmWindow` 在一个 CAS 里无条件挪进 `Keys`;sweep 对 opening 条目:记录存在就代为确认,缺失只有超过新配置 `OpeningGrace`(默认 1 分钟)才回收,且回收只删仍在 opening 的——与 OpenActivity 交错不再把正在建的活动删出窗口。
   完成的活动退出 `Keys` 时同 CAS 进入 `Window.Delivering`(不占 `MaxPendingActivities`),`sweepGroup` 每轮从 `DeliveringActivities`(排序 + 每组游标轮转)出发 DueDispatches→AttemptDispatch,`RetireDelivered` 先 `ensureDispatches` 兜底、全部 dispatch 终态才退出;此前只对本轮刚到期完成的活动派发,notify 收齐完成、heal、退避重试都没有入口。
