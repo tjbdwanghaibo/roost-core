@@ -39,6 +39,22 @@ type FileHistoryJournal struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 	closeErr  error
+	// truncateTo, when >= 0, is the byte length of the last complete record
+	// in the current WAL as found by Load. Recovery ignores an unterminated
+	// tail (it was never committed), but the bytes are still on disk and
+	// O_APPEND would glue the next record onto them, producing a line the
+	// next recovery cannot decode (RR-20260915-07). The first append after
+	// recovery truncates to this offset under the journal's exclusive
+	// ownership, then syncs, then appends (U-0211).
+	truncateTo int64
+	// failure is set when a write or checkpoint publish ended with an
+	// indeterminate outcome. See ErrHistoryJournalFailed (U-0212).
+	failure error
+	// syncFile / publish are the durability primitives, held as fields so a
+	// test can make them report failure AFTER the real operation succeeded —
+	// the only way to exercise "side effect done, caller told otherwise".
+	syncFile func(*os.File) error
+	publish  func(from, to, directory string) error
 }
 
 type fileCheckpoint struct {
@@ -63,7 +79,18 @@ func NewFileHistoryJournal(directory string, initialEpoch uint64) (*FileHistoryJ
 	if initialEpoch == 0 {
 		initialEpoch = newEpoch()
 	}
-	return &FileHistoryJournal{directory: absolute, initialEpoch: initialEpoch, generation: 1}, nil
+	return &FileHistoryJournal{
+		directory: absolute, initialEpoch: initialEpoch, generation: 1, truncateTo: -1,
+		syncFile: (*os.File).Sync, publish: durableReplace,
+	}, nil
+}
+
+// failed reports the indeterminate-outcome state, wrapping its cause.
+func (journal *FileHistoryJournal) failed() error {
+	if journal.failure == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrHistoryJournalFailed, journal.failure)
 }
 
 func (journal *FileHistoryJournal) checkpointPath(generation uint64) string {
@@ -85,6 +112,7 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 	if err != nil {
 		return HistorySnapshot{}, err
 	}
+	journal.truncateTo = -1
 	if len(generations) == 0 {
 		journal.generation = 1
 		snapshot := HistorySnapshot{Version: HistorySnapshotVersion, Epoch: journal.initialEpoch}
@@ -94,8 +122,12 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 				// randomly generated epoch before the first checkpoint.
 				snapshot.Epoch = 0
 			}
-			if replayErr := replayWAL(journal.walPath(1), &snapshot); replayErr != nil {
+			valid, replayErr := replayWAL(journal.walPath(1), &snapshot)
+			if replayErr != nil {
 				return HistorySnapshot{}, replayErr
+			}
+			if valid < info.Size() {
+				journal.truncateTo = valid
 			}
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return HistorySnapshot{}, statErr
@@ -104,11 +136,14 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 	}
 
 	generation := generations[0]
-	snapshot, err := journal.loadGeneration(generation)
+	snapshot, valid, err := journal.loadGeneration(generation)
 	if err != nil {
 		return HistorySnapshot{}, fmt.Errorf("syncstream: newest history generation %d is invalid: %w", generation, err)
 	}
 	journal.generation = generation
+	if info, statErr := os.Stat(journal.walPath(generation)); statErr == nil && valid < info.Size() {
+		journal.truncateTo = valid
+	}
 	return snapshot, nil
 }
 
@@ -130,51 +165,58 @@ func (journal *FileHistoryJournal) checkpointGenerations() ([]uint64, error) {
 	return result, nil
 }
 
-func (journal *FileHistoryJournal) loadGeneration(generation uint64) (HistorySnapshot, error) {
+func (journal *FileHistoryJournal) loadGeneration(generation uint64) (HistorySnapshot, int64, error) {
 	data, err := os.ReadFile(journal.checkpointPath(generation))
 	if err != nil {
-		return HistorySnapshot{}, err
+		return HistorySnapshot{}, 0, err
 	}
 	var checkpoint fileCheckpoint
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
-		return HistorySnapshot{}, err
+		return HistorySnapshot{}, 0, err
 	}
 	if checkpoint.Generation != generation {
-		return HistorySnapshot{}, ErrInvalidSnapshot
+		return HistorySnapshot{}, 0, ErrInvalidSnapshot
 	}
-	if err := replayWAL(journal.walPath(generation), &checkpoint.Snapshot); err != nil {
-		return HistorySnapshot{}, err
+	valid, err := replayWAL(journal.walPath(generation), &checkpoint.Snapshot)
+	if err != nil {
+		return HistorySnapshot{}, 0, err
 	}
-	return checkpoint.Snapshot, nil
+	return checkpoint.Snapshot, valid, nil
 }
 
-func replayWAL(path string, snapshot *HistorySnapshot) error {
+// replayWAL applies every complete record and returns the byte length of the
+// file up to and including the last complete record. An unterminated tail
+// was never durably committed and is skipped; a complete line that does not
+// decode is corruption and is refused.
+func replayWAL(path string, snapshot *HistorySnapshot) (int64, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("syncstream: WAL generation missing: %w", err)
+		return 0, fmt.Errorf("syncstream: WAL generation missing: %w", err)
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer file.Close()
 
 	reader := bufio.NewReader(file)
+	var valid int64
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 && (readErr == nil || line[len(line)-1] == '\n') {
 			var mutation HistoryMutation
 			if err := json.Unmarshal(line, &mutation); err != nil {
-				return fmt.Errorf("syncstream: decode WAL: %w", err)
+				return valid, fmt.Errorf("syncstream: decode WAL: %w", err)
 			}
 			if err := replayHistoryMutation(snapshot, mutation); err != nil {
-				return err
+				return valid, err
 			}
+			valid += int64(len(line))
 		}
 		if errors.Is(readErr, io.EOF) {
-			return nil // an unterminated tail was never durably committed
+			return valid, nil // an unterminated tail was never durably committed
 		}
 		if readErr != nil {
-			return readErr
+			return valid, readErr
 		}
 	}
 }
@@ -185,6 +227,12 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 	}
 	if mutation.Version != HistoryMutationVersion {
 		return ErrInvalidSnapshot
+	}
+	journal.mutex.Lock()
+	failed := journal.failed()
+	journal.mutex.Unlock()
+	if failed != nil {
+		return failed
 	}
 	data, err := json.Marshal(mutation)
 	if err != nil {
@@ -233,6 +281,9 @@ func (journal *FileHistoryJournal) Record(mutation HistoryMutation) error {
 func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
+	if failed := journal.failed(); failed != nil {
+		return failed
+	}
 	if journal.walFile == nil {
 		path := journal.walPath(journal.generation)
 		_, statErr := os.Stat(path)
@@ -250,12 +301,36 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 				return err
 			}
 		}
+		if journal.truncateTo >= 0 {
+			// Drop the unterminated tail recovery skipped before anything is
+			// appended behind it (U-0211). Truncate works on the descriptor
+			// regardless of O_APPEND; the next write lands at the new end.
+			if err := file.Truncate(journal.truncateTo); err != nil {
+				_ = file.Close()
+				return err
+			}
+			if err := journal.syncFile(file); err != nil {
+				_ = file.Close()
+				return err
+			}
+			journal.truncateTo = -1
+		}
 		journal.walFile = file
 	}
+	// From the first byte written the outcome is indeterminate on error:
+	// part of the batch may be durable, all of it, or none. The in-memory
+	// History rolled its mutation back, so retrying would write the same
+	// sequence twice and the next Load would refuse the WAL (RR-20260916-01).
+	// Stop the journal instead; a reopen replays what is actually there.
 	if _, err := journal.walFile.Write(batch); err != nil {
-		return err
+		journal.failure = err
+		return journal.failed()
 	}
-	return journal.walFile.Sync()
+	if err := journal.syncFile(journal.walFile); err != nil {
+		journal.failure = err
+		return journal.failed()
+	}
+	return nil
 }
 
 func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
@@ -264,6 +339,9 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	}
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
+	if failed := journal.failed(); failed != nil {
+		return failed
+	}
 
 	next := journal.generation + 1
 	wal, err := os.OpenFile(journal.walPath(next), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -319,11 +397,20 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := durableReplace(temporaryName, journal.checkpointPath(next), journal.directory); err != nil {
-		return err
+	// Everything above happens on files nothing reads yet and is safe to
+	// retry. Publication is the one step whose failure is ambiguous: on
+	// Linux the rename may have landed with only the directory sync failing,
+	// so the new generation could already be the one the next Load picks
+	// while this process still appends to the old WAL. Stop here too
+	// (RR-20260916-01, U-0212).
+	if err := journal.publish(temporaryName, journal.checkpointPath(next), journal.directory); err != nil {
+		journal.failure = err
+		removeTemporary = false // the temporary may already be the checkpoint
+		return journal.failed()
 	}
 	removeTemporary = false
 	journal.generation = next
+	journal.truncateTo = -1
 	if journal.walFile != nil {
 		_ = journal.walFile.Close()
 		journal.walFile = nil
@@ -380,7 +467,7 @@ func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) 
 		return ErrInvalidSnapshot
 	}
 	if mutation.Kind == HistoryMutationRotateEpoch {
-		snapshot.Epoch, snapshot.Streams = mutation.Epoch, nil
+		snapshot.Epoch, snapshot.Streams, snapshot.SequenceFloor = mutation.Epoch, nil, 0
 		return nil
 	}
 	if snapshot.Epoch == 0 {
@@ -405,10 +492,25 @@ func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) 
 			index = len(snapshot.Streams) - 1
 		}
 		value := &snapshot.Streams[index]
-		if mutation.Packet.Sequence != value.Latest+1 {
+		// A stream's first record fixes where it starts (a re-created
+		// identity continues above the epoch's sequence floor, U-0215);
+		// every later record must be exactly the next sequence.
+		if value.Latest != 0 || len(value.Packets) > 0 {
+			if mutation.Packet.Sequence != value.Latest+1 {
+				return ErrInvalidSnapshot
+			}
+		} else if mutation.Packet.Sequence == 0 {
 			return ErrInvalidSnapshot
+		} else {
+			// First record of a (re-)created stream: everything below it
+			// belongs to the epoch's floor, not to this stream (mirrors
+			// appendLocked's acked = floor).
+			value.Acked = mutation.Packet.Sequence - 1
 		}
 		value.Latest = mutation.Packet.Sequence
+		if mutation.Packet.Sequence > snapshot.SequenceFloor {
+			snapshot.SequenceFloor = mutation.Packet.Sequence
+		}
 		value.Schema = mutation.Packet.SchemaVersion
 		value.Packets = append(value.Packets, mutation.Packet.Clone())
 	case HistoryMutationAcknowledge:

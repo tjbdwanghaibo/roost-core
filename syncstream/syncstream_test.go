@@ -95,12 +95,26 @@ func TestFullPacketRepairsTruncatedHistory(t *testing.T) {
 }
 
 func TestObserverStreamsAreIsolated(t *testing.T) {
+	// Each observer's stream is its own contiguous chain that advances only
+	// with its own appends. Since U-0215 a stream's FIRST sequence is above
+	// every sequence the epoch has handed out (so a cleaned-up identity can
+	// never reuse one), so b starts above a — but a's later appends do not
+	// move b, and b's own chain stays contiguous.
 	history := NewHistory(HistoryOptions{})
 	stream := Stream{Topic: "state", Key: 7}
-	a, _ := history.Append(Packet{Observer: Observer{ID: 1}, Stream: stream})
-	b, _ := history.Append(Packet{Observer: Observer{ID: 2}, Stream: stream})
-	if a.Sequence != 1 || b.Sequence != 1 {
-		t.Fatalf("observer sequences leaked: a=%d b=%d", a.Sequence, b.Sequence)
+	a1, _ := history.Append(Packet{Observer: Observer{ID: 1}, Stream: stream})
+	b1, _ := history.Append(Packet{Observer: Observer{ID: 2}, Stream: stream})
+	a2, _ := history.Append(Packet{Observer: Observer{ID: 1}, Stream: stream})
+	a3, _ := history.Append(Packet{Observer: Observer{ID: 1}, Stream: stream})
+	b2, _ := history.Append(Packet{Observer: Observer{ID: 2}, Stream: stream})
+	if a2.Sequence != a1.Sequence+1 || a3.Sequence != a2.Sequence+1 || b2.Sequence != b1.Sequence+1 {
+		t.Fatalf("a stream's chain is not contiguous: a=%d,%d,%d b=%d,%d", a1.Sequence, a2.Sequence, a3.Sequence, b1.Sequence, b2.Sequence)
+	}
+	if a1.Sequence != 1 || b1.Sequence <= a1.Sequence {
+		t.Fatalf("first sequences: a=%d want 1, b=%d want > a", a1.Sequence, b1.Sequence)
+	}
+	if history.Status(Observer{ID: 2}, stream).LatestSequence != b2.Sequence || history.Status(Observer{ID: 1}, stream).LatestSequence != a3.Sequence {
+		t.Fatal("observer status leaked across observers")
 	}
 }
 

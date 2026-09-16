@@ -128,12 +128,12 @@ func TestJetStreamSyncUnsubscribeRemovesTrackedSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bus.subs) != 1 {
-		t.Fatalf("tracked subscriptions=%d, want 1", len(bus.subs))
+	if len(bus.topics) != 1 {
+		t.Fatalf("tracked topics=%d, want 1", len(bus.topics))
 	}
 	unsub()
-	if len(bus.subs) != 0 {
-		t.Fatalf("tracked subscriptions=%d, want 0", len(bus.subs))
+	if len(bus.topics) != 0 {
+		t.Fatalf("tracked topics=%d, want 0", len(bus.topics))
 	}
 }
 
@@ -185,8 +185,8 @@ func (f *fakeJetStream) deliver(subject string, data []byte) error {
 }
 
 func TestDurableSyncNameAvoidsSanitizationCollision(t *testing.T) {
-	left := durableSyncName("player.public", 7)
-	right := durableSyncName("player/public", 7)
+	left := durableSyncName(defaultJetStreamSyncPrefix, "player.public", 7)
+	right := durableSyncName(defaultJetStreamSyncPrefix, "player/public", 7)
 	if left == right {
 		t.Fatalf("durable names collide: %q", left)
 	}

@@ -96,9 +96,12 @@ func TestApplierValidatesChainObserverAndManifestDependency(t *testing.T) {
 	if _, err := applier.Apply(missing); !errors.Is(err, ErrManifestMissing) {
 		t.Fatalf("missing manifest error = %v", err)
 	}
+	// One past the applied packet, expressed relative to it: since U-0215 a
+	// stream's first sequence is above the epoch's floor, so "skips one"
+	// cannot be written as a literal.
 	gap := presentation.Clone()
-	gap.Sequence = 3
-	gap.BaseSequence = 2
+	gap.Sequence = presentation.Sequence + 2
+	gap.BaseSequence = presentation.Sequence + 1
 	if _, err := applier.Apply(gap); !errors.Is(err, ErrSequenceGap) {
 		t.Fatalf("gap error = %v", err)
 	}

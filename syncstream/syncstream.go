@@ -26,6 +26,16 @@ var (
 	ErrHistoryStoreRequired         = errors.New("syncstream: history store is required")
 	ErrHistoryJournalRequired       = errors.New("syncstream: history journal is required")
 	ErrHistoryJournalClosed         = errors.New("syncstream: history journal is closed")
+	// ErrHistoryJournalFailed marks a journal whose last write or checkpoint
+	// ended with an indeterminate outcome — bytes may be on disk, a
+	// checkpoint may be published — so its in-memory view of the log is no
+	// longer trustworthy. It refuses further Record/Checkpoint; reopen the
+	// journal to recover from what is actually durable (U-0212).
+	ErrHistoryJournalFailed = errors.New("syncstream: history journal failed with an indeterminate outcome; reopen to recover")
+	// ErrRecoverStale means the snapshot a provider captured for Recover was
+	// overtaken (a newer packet, or an epoch rotation) before it could be
+	// committed. Nothing was appended; the caller may retry (U-0214).
+	ErrRecoverStale = errors.New("syncstream: recovered snapshot is stale; retry")
 )
 
 const HistorySnapshotVersion uint32 = 1
@@ -106,6 +116,14 @@ type History struct {
 	epoch   uint64
 	journal HistoryJournal
 	streams map[streamKey]*streamState
+	// sequenceFloor is the highest sequence assigned to ANY stream in the
+	// current epoch. A stream created (or re-created after DeleteStream /
+	// DeleteObserver / SweepIdle) starts above it, so an identity that is
+	// cleaned up and reused never hands out a sequence it used before — an
+	// old consumer's ACK or Resync for epoch/sequence cannot be mistaken for
+	// having consumed the new content (U-0215, RR-20260915-06). Reset by
+	// RotateEpoch, which is the explicit global invalidation.
+	sequenceFloor uint64
 }
 
 type streamKey struct {
@@ -146,6 +164,47 @@ func (history *History) Append(packet Packet) (Packet, error) {
 	}
 	history.mutex.Lock()
 	defer history.mutex.Unlock()
+	return history.appendLocked(packet)
+}
+
+// streamObservation is what Recover records before calling the provider and
+// checks again before committing (U-0214).
+type streamObservation struct {
+	epoch  uint64
+	exists bool
+	latest uint64
+}
+
+func (history *History) observe(key streamKey) streamObservation {
+	history.mutex.RLock()
+	defer history.mutex.RUnlock()
+	state := history.streams[key]
+	observation := streamObservation{epoch: history.epoch, exists: state != nil}
+	if state != nil {
+		observation.latest = state.latest
+	}
+	return observation
+}
+
+// appendIfUnchanged commits packet only if the stream is exactly as it was
+// observed; otherwise nothing is written and ErrRecoverStale is returned.
+func (history *History) appendIfUnchanged(packet Packet, observed streamObservation) (Packet, error) {
+	if packet.Stream.Topic == "" {
+		return Packet{}, ErrTopicRequired
+	}
+	if history.options.MaxPayloadBytes > 0 && len(packet.Payload) > history.options.MaxPayloadBytes {
+		return Packet{}, ErrPayloadTooLarge
+	}
+	history.mutex.Lock()
+	defer history.mutex.Unlock()
+	state := history.streams[streamKey{Observer: packet.Observer, Stream: packet.Stream}]
+	if history.epoch != observed.epoch || (state != nil) != observed.exists || (state != nil && state.latest != observed.latest) {
+		return Packet{}, ErrRecoverStale
+	}
+	return history.appendLocked(packet)
+}
+
+func (history *History) appendLocked(packet Packet) (Packet, error) {
 	key := streamKey{Observer: packet.Observer, Stream: packet.Stream}
 	state := history.streams[key]
 	created := false
@@ -153,7 +212,12 @@ func (history *History) Append(packet Packet) (Packet, error) {
 		if history.options.MaxStreams > 0 && len(history.streams) >= history.options.MaxStreams {
 			return Packet{}, ErrStreamLimit
 		}
-		state = &streamState{}
+		// A new (or re-created) stream continues above every sequence this
+		// epoch has handed out, see sequenceFloor. acked starts there too:
+		// nothing below the floor was ever this stream's, so Pending stays
+		// "packets since creation" and an ACK for a pre-creation sequence is
+		// a no-op rather than progress.
+		state = &streamState{latest: history.sequenceFloor, acked: history.sequenceFloor}
 		history.streams[key] = state
 		created = true
 	}
@@ -161,11 +225,15 @@ func (history *History) Append(packet Packet) (Packet, error) {
 		packet.SchemaVersion = history.options.SchemaVersion
 	}
 	packet.Epoch = history.epoch
-	if state.latest > 0 && packet.SchemaVersion != state.schema && !packet.Full {
+	if !created && packet.SchemaVersion != state.schema && !packet.Full {
 		return Packet{}, ErrSchemaTransitionRequiresFull
 	}
 	packet.Sequence = state.latest + 1
-	if packet.Full {
+	if packet.Full || created {
+		// A stream's first packet starts a chain: it has no predecessor in
+		// this stream, so its base is 0 even when its sequence starts above
+		// the epoch's floor (U-0215). Pointing it at the floor would name a
+		// packet this stream never had.
 		packet.BaseSequence = 0
 	} else {
 		packet.BaseSequence = state.latest
@@ -180,6 +248,9 @@ func (history *History) Append(packet Packet) (Packet, error) {
 		}
 	}
 	state.latest = packet.Sequence
+	if packet.Sequence > history.sequenceFloor {
+		history.sequenceFloor = packet.Sequence
+	}
 	state.schema = packet.SchemaVersion
 	state.activity = time.Now().UnixNano()
 	state.items = append(state.items, packet)
@@ -280,6 +351,14 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 	if provider == nil {
 		return result, ErrSnapshotProviderRequired
 	}
+	// The provider runs outside History's lock (see SnapshotProvider), so
+	// the stream can move while it captures. Record what the capture is a
+	// snapshot OF before calling it, and commit only if that is still the
+	// state of the stream — a newer Full or an epoch rotation in between
+	// would otherwise get the OLD capture stamped with a newer sequence, and
+	// a receiver applying it by sequence would roll back (U-0214,
+	// RR-20260915-09).
+	observed := history.observe(streamKey{Observer: request.Observer, Stream: request.Stream})
 	packet, err := provider.Snapshot(request)
 	if err != nil {
 		return result, err
@@ -290,7 +369,7 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 	if request.SchemaVersion != 0 {
 		packet.SchemaVersion = request.SchemaVersion
 	}
-	packet, err = history.Append(packet)
+	packet, err = history.appendIfUnchanged(packet, observed)
 	if err != nil {
 		return result, err
 	}
@@ -417,6 +496,11 @@ type HistorySnapshot struct {
 	Version uint32
 	Epoch   uint64
 	Streams []HistoryStreamSnapshot
+	// SequenceFloor persists History.sequenceFloor so a cleaned-up identity
+	// does not reuse sequences across a restart either (U-0215). Zero in
+	// snapshots written before the field existed; Import then derives it
+	// from the streams present.
+	SequenceFloor uint64 `json:",omitempty"`
 }
 
 type HistoryStreamSnapshot struct {
@@ -438,8 +522,12 @@ func (history *History) Export() HistorySnapshot {
 }
 
 func (history *History) exportLocked() HistorySnapshot {
-	result := HistorySnapshot{Version: HistorySnapshotVersion, Epoch: history.epoch, Streams: make([]HistoryStreamSnapshot, 0, len(history.streams))}
-	for key, state := range history.streams {
+	return exportStreams(history.epoch, history.sequenceFloor, history.streams)
+}
+
+func exportStreams(epoch, sequenceFloor uint64, streams map[streamKey]*streamState) HistorySnapshot {
+	result := HistorySnapshot{Version: HistorySnapshotVersion, Epoch: epoch, SequenceFloor: sequenceFloor, Streams: make([]HistoryStreamSnapshot, 0, len(streams))}
+	for key, state := range streams {
 		stream := HistoryStreamSnapshot{
 			Observer:             key.Observer,
 			Stream:               key.Stream,
@@ -479,6 +567,14 @@ func (history *History) exportLocked() HistorySnapshot {
 }
 
 // Import atomically replaces history after validating the complete snapshot.
+//
+// On a History bound to a journal the replacement is published through the
+// journal (a checkpoint of the validated snapshot) BEFORE memory switches
+// (U-0213, RR-20260915-08): replacing only memory left the WAL describing the
+// old state, so the next restart either resurrected the old snapshot or
+// refused a WAL that mixed epochs. A failed publish leaves memory unchanged.
+// NewHistoryWithJournal imports before the journal is attached, so loading
+// does not write.
 func (history *History) Import(snapshot HistorySnapshot) error {
 	if snapshot.Version != HistorySnapshotVersion {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidSnapshot, snapshot.Version)
@@ -518,7 +614,10 @@ func (history *History) Import(snapshot HistorySnapshot) error {
 				return ErrPayloadTooLarge
 			}
 			if packetIndex == 0 {
-				if !packet.Full && packet.BaseSequence+1 != packet.Sequence {
+				// The first retained packet is either a chain start (base 0,
+				// at whatever sequence the stream began — U-0215) or the
+				// continuation of packets that were pruned or dropped.
+				if !packet.Full && packet.BaseSequence != 0 && packet.BaseSequence+1 != packet.Sequence {
 					return fmt.Errorf("%w: invalid first packet base", ErrInvalidSnapshot)
 				}
 			} else {
@@ -550,10 +649,22 @@ func (history *History) Import(snapshot HistorySnapshot) error {
 		}
 		streams[key] = state
 	}
+	floor := snapshot.SequenceFloor
+	for _, state := range streams {
+		if state.latest > floor {
+			floor = state.latest
+		}
+	}
 	history.mutex.Lock()
+	defer history.mutex.Unlock()
+	if history.journal != nil {
+		if err := history.journal.Checkpoint(exportStreams(snapshot.Epoch, floor, streams)); err != nil {
+			return err
+		}
+	}
 	history.streams = streams
 	history.epoch = snapshot.Epoch
-	history.mutex.Unlock()
+	history.sequenceFloor = floor
 	return nil
 }
 

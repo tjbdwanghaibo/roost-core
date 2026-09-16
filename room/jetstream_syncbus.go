@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -77,12 +78,36 @@ type jetStreamSyncBus struct {
 	js  fnats.IJetStream
 	cfg JetStreamSyncConfig
 
-	mu   sync.Mutex
-	subs []*syncSubscription
+	// mu guards topics and is held across the underlying Subscribe of a
+	// topic's first subscriber, so concurrent first subscribers cannot both
+	// create the consumer and Stop cannot race a creation in flight.
+	mu     sync.Mutex
+	topics map[string]*topicFanout
 }
 
-type syncSubscription struct {
-	sub fnats.IJetStreamSubscription
+// topicFanout is one topic's single durable consumer plus every local
+// handler registered on it (U-0209, RR-20260916-03). ISyncBus.Subscribe is
+// broadcast: the plain NATS bus gives every local subscriber every message.
+// A durable JetStream consumer is a work queue — two Consume calls on the
+// same consumer name split the stream between them — so one underlying
+// subscription per topic fans out locally instead of one per Subscribe.
+type topicFanout struct {
+	sub      fnats.IJetStreamSubscription
+	handlers map[uint64]fsyncbus.Handler
+	nextID   uint64
+}
+
+func (f *topicFanout) snapshot() []fsyncbus.Handler {
+	ids := make([]uint64, 0, len(f.handlers))
+	for id := range f.handlers {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := make([]fsyncbus.Handler, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, f.handlers[id])
+	}
+	return out
 }
 
 func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStreamSyncConfig) (*jetStreamSyncBus, error) {
@@ -106,7 +131,7 @@ func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStream
 	}); err != nil {
 		return nil, fmt.Errorf("jetstream sync: ensure stream: %w", err)
 	}
-	return &jetStreamSyncBus{js: js, cfg: cfg}, nil
+	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout)}, nil
 }
 
 func (b *jetStreamSyncBus) Publish(msg *fsyncbus.SyncMsg) error {
@@ -155,56 +180,88 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 		return nil, fmt.Errorf("jetstream sync: handler is nil")
 	}
 	cfg := b.cfg
-	name := durableSyncName(topic, cfg.LocalSid)
-	ctx, cancel := context.WithTimeout(fctx.BaseContext(), cfg.SetupTimeout)
-	defer cancel()
-	sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
-		Stream:        cfg.Stream,
-		Name:          name,
-		Durable:       name,
-		FilterSubject: b.subject(topic),
-		DeliverPolicy: fnats.JetStreamDeliverAll,
-		AckWait:       cfg.AckWait,
-		MaxDeliver:    cfg.MaxDeliver,
-	}, func(_ context.Context, raw *fnats.JetStreamMsg) error {
-		if raw == nil {
-			return nil
-		}
-		var msg fsyncbus.SyncMsg
-		if err := json.Unmarshal(raw.Data, &msg); err != nil {
-			slog.Warn("jetstream sync: unmarshal failed", "topic", topic, "err", err)
-			return nil
-		}
-		if msg.FromSid == cfg.LocalSid {
-			return nil
-		}
-		if err := handler(&msg); err != nil {
-			slog.Warn("jetstream sync: handler error", "topic", topic, "key", msg.Key, "version", msg.Version, "err", err)
-			return nil
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	entry := &syncSubscription{sub: sub}
 	b.mu.Lock()
-	b.subs = append(b.subs, entry)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	fanout := b.topics[topic]
+	if fanout == nil {
+		// First local subscriber: create the topic's one durable consumer.
+		// Its handler dispatches to whatever handlers are registered at
+		// delivery time, so later subscribers only need to register.
+		fanout = &topicFanout{handlers: make(map[uint64]fsyncbus.Handler)}
+		name := durableSyncName(cfg.Prefix, topic, cfg.LocalSid)
+		ctx, cancel := context.WithTimeout(fctx.BaseContext(), cfg.SetupTimeout)
+		defer cancel()
+		sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
+			Stream:        cfg.Stream,
+			Name:          name,
+			Durable:       name,
+			FilterSubject: b.subject(topic),
+			DeliverPolicy: fnats.JetStreamDeliverAll,
+			AckWait:       cfg.AckWait,
+			MaxDeliver:    cfg.MaxDeliver,
+		}, func(_ context.Context, raw *fnats.JetStreamMsg) error {
+			if raw == nil {
+				return nil
+			}
+			var msg fsyncbus.SyncMsg
+			if err := json.Unmarshal(raw.Data, &msg); err != nil {
+				slog.Warn("jetstream sync: unmarshal failed", "topic", topic, "err", err)
+				return nil
+			}
+			if msg.FromSid == cfg.LocalSid {
+				return nil
+			}
+			b.mu.Lock()
+			handlers := fanout.snapshot()
+			b.mu.Unlock()
+			for _, h := range handlers {
+				// Each handler owns its copy: the plain bus hands every
+				// subscriber its own message and a handler may mutate it.
+				own := msg
+				own.Data = append([]byte(nil), msg.Data...)
+				b.invoke(topic, h, &own)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		fanout.sub = sub
+		b.topics[topic] = fanout
+	}
+	fanout.nextID++
+	id := fanout.nextID
+	fanout.handlers[id] = handler
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			sub.Stop()
 			b.mu.Lock()
-			for i, candidate := range b.subs {
-				if candidate == entry {
-					b.subs = append(b.subs[:i], b.subs[i+1:]...)
-					break
-				}
+			delete(fanout.handlers, id)
+			var stop fnats.IJetStreamSubscription
+			if len(fanout.handlers) == 0 && b.topics[topic] == fanout {
+				delete(b.topics, topic)
+				stop = fanout.sub
 			}
 			b.mu.Unlock()
+			if stop != nil {
+				stop.Stop() // the last local subscriber releases the shared consumer
+			}
 		})
 	}, nil
+}
+
+// invoke runs one local handler with the bus's existing error contract (log
+// and continue) plus panic isolation, so one subscriber cannot take the
+// delivery away from its siblings.
+func (b *jetStreamSyncBus) invoke(topic string, handler fsyncbus.Handler, msg *fsyncbus.SyncMsg) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("jetstream sync: handler panic", "topic", topic, "key", msg.Key, "version", msg.Version, "panic", recovered)
+		}
+	}()
+	if err := handler(msg); err != nil {
+		slog.Warn("jetstream sync: handler error", "topic", topic, "key", msg.Key, "version", msg.Version, "err", err)
+	}
 }
 
 func (b *jetStreamSyncBus) Stop() {
@@ -212,13 +269,16 @@ func (b *jetStreamSyncBus) Stop() {
 		return
 	}
 	b.mu.Lock()
-	subs := append([]*syncSubscription(nil), b.subs...)
-	b.subs = nil
-	b.mu.Unlock()
-	for _, entry := range subs {
-		if entry != nil && entry.sub != nil {
-			entry.sub.Stop()
+	subs := make([]fnats.IJetStreamSubscription, 0, len(b.topics))
+	for _, fanout := range b.topics {
+		if fanout != nil && fanout.sub != nil {
+			subs = append(subs, fanout.sub)
 		}
+	}
+	b.topics = make(map[string]*topicFanout)
+	b.mu.Unlock()
+	for _, sub := range subs {
+		sub.Stop()
 	}
 }
 
@@ -244,14 +304,26 @@ func syncMsgID(msg *fsyncbus.SyncMsg) string {
 	return fmt.Sprintf("room:%s:%d:%d:%d:%d", msg.Topic, msg.Key, msg.Version, msg.FromSid, msg.Part)
 }
 
-func durableSyncName(topic string, sid int32) string {
-	raw := fmt.Sprintf("%s\x00%d", topic, sid)
-	hash := sha256.Sum256([]byte(raw))
-	prefix := sanitizeSyncName(fmt.Sprintf("sync_%s_%d", topic, sid))
-	if len(prefix) > 180 {
-		prefix = prefix[:180]
+// durableSyncName is the consumer identity for one (prefix, topic, sid). The
+// hash covers the FULL subject the consumer filters on whenever the prefix is
+// not the default: two buses on one Stream with different prefixes used to
+// collapse onto one durable name with two different FilterSubjects
+// (U-0210, RR-20260916-02). The default prefix keeps the pre-U-0210 input
+// byte for byte, so deployed consumers keep their ACK cursors across the
+// upgrade — renaming them would orphan the cursor and replay the retained
+// stream into every default deployment.
+func durableSyncName(prefix, topic string, sid int32) string {
+	identity := topic
+	if prefix != defaultJetStreamSyncPrefix {
+		identity = prefix + "." + topic
 	}
-	return fmt.Sprintf("%s_%x", strings.TrimRight(prefix, "_"), hash[:8])
+	raw := fmt.Sprintf("%s\x00%d", identity, sid)
+	hash := sha256.Sum256([]byte(raw))
+	readable := sanitizeSyncName(fmt.Sprintf("sync_%s_%d", topic, sid))
+	if len(readable) > 180 {
+		readable = readable[:180]
+	}
+	return fmt.Sprintf("%s_%x", strings.TrimRight(readable, "_"), hash[:8])
 }
 
 // PublishConfirmed satisfies syncstream's confirmation capability. JetStream

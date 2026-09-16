@@ -114,6 +114,7 @@ func (history *History) RotateEpoch(epoch uint64) error {
 	}
 	history.epoch = epoch
 	history.streams = make(map[streamKey]*streamState)
+	history.sequenceFloor = 0 // a new epoch is the explicit reset of every chain
 	return nil
 }
 

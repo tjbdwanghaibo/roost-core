@@ -205,7 +205,10 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 		if packet.BaseSequence != 0 {
 			return packet, ApplyResult{}, ErrPacketShape
 		}
-	} else if (current.epoch != 0 && (packet.BaseSequence != current.sequence || packet.Sequence != current.sequence+1)) || (current.epoch == 0 && (packet.BaseSequence != 0 || packet.Sequence != 1)) {
+		// A chain start is identified by BaseSequence 0, not by the absolute
+		// sequence: since U-0215 a stream's first sequence is above every
+		// sequence its epoch has handed out, so it is not necessarily 1.
+	} else if (current.epoch != 0 && (packet.BaseSequence != current.sequence || packet.Sequence != current.sequence+1)) || (current.epoch == 0 && packet.BaseSequence != 0) {
 		return packet, ApplyResult{}, fmt.Errorf("%w: current=%d base=%d sequence=%d", ErrSequenceGap, current.sequence, packet.BaseSequence, packet.Sequence)
 	}
 	applier.inflight[packet.Stream] = struct{}{}

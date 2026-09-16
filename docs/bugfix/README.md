@@ -60,6 +60,13 @@
 | RR-20260915-03 | core | entitysync 持久化水位门槛只在 FlushSubject,订阅快照 / profile 切换 / 直接分发绕过 | U-0206 | [RR-20260915-03.md](RR-20260915-03.md) |
 | RR-20260915-04 | core | room 慢连接剔除通知绑在批次结果上,剩余批次失败即丢失,room 保留失效订阅 | U-0207 | [RR-20260915-04.md](RR-20260915-04.md) |
 | RR-20260915-05 | core | room SetDownstream 只换指针不迁移慢消费者回调,替换后剔除不清理订阅 | U-0208 | [RR-20260915-05.md](RR-20260915-05.md) |
+| RR-20260915-06 | core | syncstream 清理后重建的流从序号 1 重来,旧 ACK / Resync 吞掉新内容 | U-0215 | [RR-20260915-06.md](RR-20260915-06.md) |
+| RR-20260915-07 | core | syncstream 恢复时忽略的半条 WAL 尾部未截断,续写后下次启动不可读 | U-0211 | [RR-20260915-07.md](RR-20260915-07.md) |
+| RR-20260915-08 | core | syncstream 绑定 journal 的 Import / Restore 只换内存不发布 | U-0213 | [RR-20260915-08.md](RR-20260915-08.md) |
+| RR-20260915-09 | core | syncstream Recover 把过期捕获提交为更新的 Full | U-0214 | [RR-20260915-09.md](RR-20260915-09.md) |
+| RR-20260916-01 | core | syncstream journal 写入 / 发布结果不确定后继续写,重复序号或丢追加 | U-0212 | [RR-20260916-01.md](RR-20260916-01.md) |
+| RR-20260916-02 | core | room JetStream 持久消费者身份不含 Prefix,共用 Stream 时撞名 | U-0210 | [RR-20260916-02.md](RR-20260916-02.md) |
+| RR-20260916-03 | core | room JetStream 同 topic 多个本地订阅竞争同一消费者,广播变分摊 | U-0209 | [RR-20260916-03.md](RR-20260916-03.md) |
 
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 
