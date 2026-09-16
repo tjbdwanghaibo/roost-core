@@ -96,7 +96,7 @@ func serviceMods(t *testing.T) []app.Mod {
 		global.NewMod(nil),
 		activity.NewMod(nil),
 		mail.NewMod(nil, nil),
-		match.NewMod(nil, nil),
+		match.NewMod(nil),
 		platform.NewMod(
 			platform.VerifierFunc(func(_ context.Context, c platform.Credential) (platform.Verified, error) {
 				return platform.Verified{Channel: c.Channel, OpenID: c.OpenID}, nil
