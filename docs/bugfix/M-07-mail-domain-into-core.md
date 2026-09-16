@@ -20,7 +20,7 @@
 - 留在 kit 的测试：`mail_mod_test.go`、`rpc_test.go`、`wiring_promises_test.go`（断言 Mod / Server / 生成传输）。
 - `dependency_boundary_test` 通过；`service/mail` `-race` 绿。
 
-## kit 半（等 core v1.15.4 发版后做；kit go.mod 钉 core，CI 不用 source-head）
+## kit 半（已于 2026-09-16 随 core v1.15.4 发版后完成，kit v1.14.5；原计划如下，均已按此做）
 
 1. 删掉五个领域文件与随迁的测试，加 `alias.go`：类型别名（`Audience`、`Status`、`Envelope`、`Item`、`Entry`、`Mailbox`、`Claim`、`SettledClaim`、
    `SendRequest`、`SentRecord`、`Page`、`Summary`、`Config`、`Service`、`Deliverer`、`DelivererFunc`、`EnvelopeStore`、`MailboxStore`、`SendLedger`、
@@ -35,3 +35,9 @@
 
 - 不改 `Mail` 方法名、subject、errcode、Redis key；不在 core 放 `app.Mod`。
 - 生成文件的 wire / handler / BusClient 与 ClientMod / Server 的拆分归 ARCH-04。
+
+## 实际做法与计划的差异
+
+- `NewRedisEnvelopes` 未在 kit 别名：其参数类型 `envelopeClient` 未导出，kit 内也没有调用方（`mail_mod.go` 只用 `NewRedisStores`）。
+- kit 的 `fake_envelopes_test.go` 留下作为 Mod / 传输测试的替身，其中 `Envelope.clone()` 改为本地 `cloneEnvelope`（同样只深拷两个切片）。
+- `TestRedisStoresRefuseInvalidConfigAndEmptyIDs` 原在 kit 的 `wiring_promises_test.go`，断言的是 store，一并搬进 core（`redis_guards_promises_test.go`）。

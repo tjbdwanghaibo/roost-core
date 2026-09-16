@@ -52,6 +52,14 @@ kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo`
 - 发版验证：对三个 tag 不带 go.work 生成 game-demo 并 build，抓到 codegen v1.15.5 的 U-0218（collaborators 无用 import，match 工程编译不过），当天补 codegen v1.15.6；据此把 framework-compat 的 demo scenario 排入 released。
 - 遗留：ARCH-01 的 session / mail 下沉、ARCH-02 manager、ARCH-04 的生成器拆分（`Matchmaker` RPC 生成文件的 core / kit 归属）；U-0210 的 Kit 默认 Prefix durable 迁移演练（审查 §6）；Windows 截断补修以 CI `windows-compatibility` 为准。
 
+## 0.5 第五次发版（2026-09-16 晚）：core v1.15.4 / kit v1.14.5 / codegen v1.15.7
+
+- core：M-07（`service/mail`）、M-08（`service/session`）、M-09（`manager` 引擎）自 kit 下沉，领域测试随迁；`app/manager.go` 注释指向引擎。
+- kit：依赖 core v1.15.4；`service/mail` / `service/session` 改别名包（精简 harness 留给 Mod / 传输测试），`manager.ManagerMod` 改为 `coremanager.Engine` 的包装（公开方法集不变，sentinel 同指针）；全部 9 个 `//roost:rpc` 传输用拆分后的生成器重生成为两半（M-10）。
+- codegen：`servicerpc` 生成传输拆成 `<iface>_rpc_gen.go`（只依赖 core）与 `<iface>_rpc_assembly_gen.go`（Server / OwnerCapabilities / ClientMod，依赖 kit mods）；发布组合钉到 v1.15.4 / v1.14.5 / v1.15.7。
+- 顺序 core → kit → codegen，三仓 pretag 全绿；发版验证：对三个 tag 不带 go.work 生成 game-demo，`go get` 显式钉 core / kit（proxy 对 kit 新 tag 有延迟，`project new` 解析到 v1.14.4），build / vet / test 全绿。
+- 遗留：RPC 接口（`Mail` / `Session` / `Matchmaker`）连同传输半进 core 领域包，kit 只留装配半（需 core + kit 各一次发版）；ARCH-04 的 kit README 第 3～4 节逐包核对；U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：

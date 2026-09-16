@@ -20,7 +20,7 @@
 - 留在 kit 的测试：`session_mod_test.go`。
 - `dependency_boundary_test` 通过；`service/session` `-race` 绿。
 
-## kit 半（等 core v1.15.4 发版后做）
+## kit 半（已于 2026-09-16 随 core v1.15.4 发版后完成，kit v1.14.5；原计划如下，均已按此做）
 
 1. 删掉四个领域文件与随迁测试（`admin_test.go` 只保留 `TestTheOperatorSurfaceIsNotOnTheSessionInterface`），加 `alias.go`：类型别名
    （`State`、`Resource`、`Run`、`Claim`、`LedgerEntry`、`EnterRequest`、`Config`、`Service`、`Releaser`、`ReleaserFunc`、`RunStore`、`ClaimStore`、

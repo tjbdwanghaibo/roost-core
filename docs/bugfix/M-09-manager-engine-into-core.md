@@ -24,7 +24,7 @@
 - `app/manager.go` 的注释从 "managed by ManagerMod" 改为指向引擎。
 - `dependency_boundary_test` 通过；`manager`、`app` `-race` 绿。
 
-## kit 半（等 core v1.15.4 发版后做）
+## kit 半（已于 2026-09-16 随 core v1.15.4 发版后完成，kit v1.14.5；原计划如下，均已按此做）
 
 1. `roost-kit/manager/manager_mod.go` 改成包装：`type ManagerMod struct{ engine *coremanager.Engine }`；`var ErrManagerRegisterAfterStart = coremanager.ErrRegisterAfterStart`
    （同一指针，`errors.Is` 不变）；`Register` / `MustRegister` / `Managers` / `Manager` / `Start` 转发；`Provide(r)`：nil 检查 → `engine.Provide(r)` → `r.Register(mods.ModManager, m)`；
