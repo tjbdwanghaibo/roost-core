@@ -104,6 +104,10 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 - [多仓研发与发布](DEVELOPMENT_WORKSPACE.md)：go.work source-head 联调、`GOWORK=off` 发布门禁与版本顺序。
 - [收敛覆盖账本](history/ledger.md)：bug 收敛的工作单元协议、包 × 缺陷类覆盖矩阵、待开单元与单元日志。
 
+## 功能实施记录
+
+- [game-demo 参考实现](feature/GAME_DEMO_TEMPLATE.md)：`-template game-demo` 六批实施的交接文档——机制、链路、验证命令、实跑步骤、发现并修掉的框架问题、环境陷阱、剩余工作。
+
 ## 专题文档
 
 - [Nest 事务 WAL](../NEST_TRANSACTION_WAL.md)
