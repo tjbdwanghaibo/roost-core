@@ -26,6 +26,7 @@
 | 模块 | 解决什么问题 | 何时用 |
 | --- | --- | --- |
 | `app` | `Mod`/`Service` 生命周期、类型安全的 capability `Registry`、配置生产门禁、运行期 fail-stop | 装配任何服务的入口 |
+| `manager` | 一个 Service 的内存单例 manager 的生命周期引擎：按 `DependsOn` 的稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、关停可中止进行中的启动、Stop 幂等（M-09）；kit 的 `ManagerMod` 是它的 Mod 包装 | 自己装配 manager 集合，或写与 kit 无关的服务进程 |
 | `entity` | 实体 = `EntityBase` + 组件 + DAO 的组合；`EntityManager`/`Getter`；实体锁与 guard 作用域；远程实体元数据 | 定义所有业务对象 |
 | `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
 | `dataengine` | `Tracker`、Put/Patch/Delete mutation、聚合 Load、schema migration、Saga/Remote commit 契约 | Entity 状态统一进入 Nest transaction 与 kit Data Engine WAL |
