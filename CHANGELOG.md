@@ -8,8 +8,6 @@
 
 - **全部 `//roost:rpc` 传输用拆分后的 servicerpc 重生成**（M-10，ARCH-04；roost-codegen 未发版，走 go.work 本地生成器）。每个服务包的 `<iface>_rpc_gen.go` 现在只含 wire 类型、handler 表、`BusClient`、capability 包装与名字（只依赖 roost-core），`Server` / `OwnerCapabilities` / `ClientMod` 移到同包新文件 `<iface>_rpc_assembly_gen.go`（唯一 import `roost-kit/mods` 的生成文件）。符号集、subject、capability 名不变，调用方无感；为 M-06～M-08 之后把 RPC 接口连同传输半搬进 core 领域包铺路。记录：`roost-core/docs/bugfix/M-10-servicerpc-split.md`。
 
-### Changed
-
 - **依赖 core v1.15.3；match 领域实现与 `servicemetrics` 改为 roost-core 的别名包**（M-06 kit 半，ARCH-01 第一批）。`service/match` 只剩 Mod、sweep 循环、`Matchmaker` RPC 接口与生成的传输文件；`Queue` / `Ticket` / `Store` / `Config` / `Grouping` / 错误码与 sentinel / `NewRedisStore` / `Error` / `Code` 全部是 `roost-core/service/match` 同名类型与同一指针的别名，`errors.Is` 与类型断言不受影响；新增 `NewMemoryStore(cfg)`。`NewStore` 不再导出（参数是 core 未导出的队列状态类型，包外本来就调不到）。`service/servicemetrics` 同理别名到 `roost-core/servicemetrics`。领域测试随实现迁到 core；kit 保留 sweep 循环与契约测试。记录 roost-core `docs/bugfix/M-06-match-domain-into-core.md`。
 
 ### Fixed
