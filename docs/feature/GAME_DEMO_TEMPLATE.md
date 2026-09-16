@@ -121,23 +121,103 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
   直方图桶是进程生命期累积的，看一场压测请限定时间窗。计数器第一次递增前不存在，仪表盘 "No data" 的错误面板是好消息。
 - 在 `/Users/whb/roost` 根下有 go.work，`go test ./...` 若 cwd 被重置到根会报 "directory prefix . does not contain main module"，用子 shell `(cd roost-codegen && GOWORK=off go test ./...)`。
 
-## 7. 还没做的（按价值排）
+## 7. 剩余工作与实施方法（按价值排）
 
-1. **`make loadtest` 目标。** Makefile 是生成物（`Code generated`），demo 不能改它；要在 codegen 的 Makefile 模板里加一个
-   `loadtest:` 目标（当 `cmd/loadtest` 存在时，或无条件 `go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT)`），
-   并同步 `render_docs.go` 里的 Makefile 说明。现在用 `go run ./cmd/loadtest`。
-2. **压测走真实登录。** 机器人现在用 `player:<id>` 调试凭据。真实路径是 account 的 `Login → CreateRole → SelectRole` 拿票据，
-   再以 `session:<id>:<token>` 握手。account 的 RPC 是 bus 上的 typed 客户端，机器人进程可以起一个 `svcaccount.NewBusClient` 直接调；
-   demo verifier 认 `demo` 渠道的 `demo:<open_id>` 凭据。做完后 `player:<id>` 分支可以删。
-3. **实体锁档。** 两个实体都在 `entity.EntityCategoryOther`（生成的安全默认："持有它之后什么都锁不了"）。demo 里 Player 与 World
-   从不互相叠锁，所以没问题；一旦有 handler 同时锁两者，需要把 World 挪到 `EntityCategoryWorld`、Player 到 `EntityCategoryPlayer`。
-   这是教学点，应该在 `game/entities/*/entity.go` 的注释里说清（现在只有生成器的通用注释）。
-4. **PollMatch 改推送。** 现在客户端轮询；生成的 TCP 传输层有 `Runtime.PushPlayer / PushSession`，matchmaker 成组后可以主动推。
-5. **kit match `Grouping` 无调用路径**——交 review agent 登记；修法二选一：store 的 Enqueue 尾部试成组（服务端驱动），
-   或删掉这个 collaborator、把 `Grouping` 挪成调用方工具（demo 现在的用法）。
-6. Grafana 仪表盘只验证了 JSON 合法与指标名存在，没在真 Grafana 里打开过（本机无 docker）。第一次打开时检查
-   `histogram_quantile` 面板的 `le` 标签为秒（导出器已是秒）。
-7. 一个可以直接 clone 来读的完整工程：让 CI 把 `-template game-demo` 的产物推到独立仓 / 分支，不要手工维护第二份代码。
+每一项都写成"改哪里 → 先红什么测试 → 怎么验证 → 边界"，可以各自独立开工；顺序建议 1 → 2 → 4 → 3 → 5 → 6 → 7。
+通用规则沿用前六批：demo 的文件全部是业务所有、写在 `roost-codegen/demo/**`（`.tmpl`）、步骤进 `demoScaffoldSteps`、
+断言进 `TestDemoTemplateGeneratesABuildableWritePath`；改到生成器模板的，先在既有测试里加一个会红的片段断言；
+每项结束跑 §4 的 CI 侧命令，涉及运行时行为的再跑实跑侧。
+
+### 7.1 `make loadtest`（codegen Makefile 模板）
+
+- **改哪里**：`roost-codegen/internal/roost/render.go` 的 Makefile 模板（`run:` 在 599 行附近、`dev-logs:` 在 683 行附近），
+  在 `.PHONY` 列表与 `run` 之后加：
+  ```make
+  LOADTEST_ENDPOINT ?= 127.0.0.1:7000
+  LOADTEST_COUNT ?= 10
+  loadtest:
+  	@test -d cmd/loadtest || { echo "cmd/loadtest not present; generate with -template game-demo or add your own"; exit 1; }
+  	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT) -metrics-addr 127.0.0.1:9300
+  ```
+  `test -d` 守卫让 `game` 模板（没有 cmd/loadtest）也能保留同一份 Makefile。同步 `render_docs.go` / `render_workflow_docs.go`
+  里列 Makefile 目标的段落，和 `help.go` 若有目标清单。
+- **先红**：`roost_test.go` 里已有对 Makefile 内容的断言（103、196、628 行附近），加 `"loadtest:"`、`"LOADTEST_ENDPOINT"`。
+- **验证**：生成 game-demo 工程后 `make loadtest`（服务起着）与 `make -n loadtest`；生成 game 工程后 `make loadtest` 应给出那句提示并非零退出。
+- **边界**：Makefile 是生成物，改模板后 `project sync` 会回写到所有工程——这是想要的；`deploy_hygiene_test.go` 会扫 Makefile，
+  看它对新目标有没有意见。
+
+### 7.2 压测走真实登录（account Login → CreateRole → SelectRole）
+
+- **改哪里**：`demo/cmd/loadtest/main.go.tmpl`。加 flag `-account-nats nats://127.0.0.1:4222`（空则保持 `player:<id>` 捷径）、
+  `-server-id 1000`。有值时：
+  1. 起一条 NATS 连接与 bus（参照 kit `nats` mod 的装配：`natsdriver` 客户端 + `bus.New(client, rpc, nil, bus.Config{SvcType:"loadtest", Sid:…})`；
+     或更省事——在 loadtest 进程里直接用 `app` 装配 `kitnats.NewNatsMod(nil)` + `svcaccount.NewClientMod()`，从 registry 取 `svcaccount.Accounts`），
+     `svcaccount.NewBusClient(bus, "", 0)` 得到 `Accounts`。
+  2. `runner.WithAuthProvider`：对每个机器人按 `rb.PlayerID` 派生 open id（如 `robot-<PlayerID>`），依次
+     `Login(ctx, Identity{Channel:"demo", OpenID, Credential:"demo:"+OpenID})` → `CreateRole(ctx, account.ID, serverID, name)`
+     （`ErrNameTaken` / 已有角色时改为读账号角色列表——看 `Accounts` 接口有没有 Roles 读法；没有就先 SelectRole 用已知 PlayerID）→
+     `SelectRole(ctx, account.ID, role.PlayerID)` → `playertcp.AuthPacket("session:" + PlayerID + ":" + session.Token)`。
+     注意此时机器人的业务 PlayerID 是 **account 分配的**（Redis INCR，从 100001 起），不再是 `-first-player-id + i`；
+     把它写回 `rb.Blackboard`，并用 `runner.WithIdentityProvider` 只提供 open id 的序号。
+  3. account 进程要起：`config.account.smoke.yaml`（redis 16379、nats、独立 prefix、`session_secret` 随便填非空）。
+- **先红**：`demo_test.go` 断言 `cmd/loadtest/main.go` 含 `svcaccount.NewBusClient(` 与 `"session:"`；auth.go 的 `player:` 分支保留到实跑通过后再删，
+  删时同步 `TestDemoTemplateGeneratesABuildableWritePath` 里对 `demoTokenPrefix` 的断言。
+- **验证**：四进程（account / game / mail / match）实跑，`-account-nats` 给值，10 个机器人成功；Redis 里出现 `roost:planet:account:*` 角色与
+  会话，game 日志无 `session ticket rejected`。
+- **边界**：SelectRole 的票据有 `session_ttl`（默认 30m），压测时长超过它要重新 SelectRole；account 的 `NameRules` 拒绝空白名，角色名用
+  `robot_<n>`。
+
+### 7.3 实体锁档（Player / World 分档）
+
+- **事实**：`entity.EntityCategory` 有 `Remote(1) / World(2) / PlayerScoped(3) / Player(4) / Other(5)`，锁按档从低到高获取；
+  **档位编进实体 id**（`idgen.go` 的 `EntityCategoryBits`），所以改一个 kind 的 category 会改它所有实体的 id——已落库的 Player / World
+  文档 `_id` 全部失配，等于一次数据迁移。demo 里 Player 与 World 从不互相叠锁，所以现在的 Other 没有正确性问题。
+- **改哪里**：`demo/game/entities/player/entity.go.tmpl` 与 `world/entity.go.tmpl`（目前这两个文件由 `add entity` 生成、demo 未覆盖；
+  要覆盖就把 `//roost:entity … category=entity.EntityCategoryPlayer` / `EntityCategoryWorld` 写进去，并把生成器的通用注释换成 demo 的
+  一段：为什么分档、什么时候必须分、改档等于迁移）。
+- **先红**：`demo_test.go` 断言两个 entity.go 的 category 标记。
+- **验证**：生成 → build；实跑前**清空** `game.player` / `game.world` 与 WAL 目录（旧 id 不再匹配），再跑 loadtest。
+- **边界**：只有在加入"一个 handler 同时锁 Player 与 World"的示例时才值得做（比如 `RecordEnter` 改成在 EnterGame 的同一事务里锁两者）；
+  否则保持 Other 并在注释里说明即可。若做，顺带演示 `nest.pipelined.allowlist` 与 `nest_handler_lock_hold` 面板的对比。
+
+### 7.4 PollMatch 改推送
+
+- **事实**：生成的 TCP 传输层有 `Runtime.PushPlayer(ctx, playerID, messageID, value)` / `PushSession(ctx, sessionID, …)`，
+  推送帧 `flags=flagServerPush, sequence=0`；robot 侧 `playertcp.Conn` 已把 seq 0 的帧交给 `WaitPush`。协议侧需要一个
+  `//roost:push` 消息（看 `internal/protocol` 的 push 标记语法，`protocol_manifest.json` 里有 pushes 段）。
+- **改哪里**：`demo/protocol/def/match_found.go.tmpl`（push 消息 `MatchFoundPush{MatchID, Members}`，id 10100）；
+  `internal/service/game/matchmaker.go.tmpl` 在 Commit 成功后取传输层 Runtime（`app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)`）
+  对每个 member `PushPlayer`；推送失败（玩家已下线）只记日志——ticket 里仍有 match_id，PollMatch 保留作为兜底。
+  loadtest 场景把 `retry{wait; poll_match}` 换成 `action: wait_push, param: {msg: 10100, timeout: 10s}`（内建动作 `runWaitPush`）。
+- **先红**：`demo_test.go` 断言 matchmaker 含 `PushPlayer(` 且场景含 `wait_push`。
+- **验证**：实跑，机器人在无轮询下收到推送；game 日志 `player_tcp_push_total` 增长。
+- **边界**：PushPlayer 推给该玩家**所有**会话；同一玩家多连接是否都该收到，写进注释。
+
+### 7.5 kit match `Grouping` 无调用路径
+
+- **先登记**：交 review agent 开 RR（现象：`match.Mod` 接受 `Grouping` 并注明"这是整个匹配策略"，`queue_store.go` 里 `cfg.Grouping`
+  只在 159 行被赋默认值，无调用；成组由调用方 `Candidates → Commit` 驱动）。
+- **两种修法（RR 里定契约后再做）**：A. 服务端驱动——`Enqueue` 末尾在同一次 CAS 里 `Grouping.Group(queue, waiting)`，成组即 `Commit`，
+  票据直接以 matched 返回；调用方不再需要 matchmaker 循环，但 `Grouping` 成为热路径、且跨 Redis 键的原子性要论证。
+  B. 删掉 collaborator——`NewMod` 去掉 `grouping` 参数，`Grouping` 保留为调用方工具（demo 现在的用法），codegen 的
+  `framework_services.go` 里 match collaborators 模板同步删 `Grouping()`。B 更小，也更诚实。
+- **先红**：A 需要 `queue_store` 的 promise test "两张票入队后第二张返回 matched"；B 需要 codegen 对 `internal/service/match/collaborators.go`
+  的断言不再含 `Grouping`。
+
+### 7.6 在真 Grafana 里打开仪表盘
+
+- 有 docker 的机器：`docker compose -f deploy/dev/observability/docker-compose.yaml up -d`，三进程 ops 端口 9100–9102 与
+  `-metrics-addr 127.0.0.1:9300` 起着，看六个 row 是否都有数据；重点核 `histogram_quantile` 面板的 `le` 单位（导出器给的是秒）与
+  Duration 平均值面板（`_sum_nanos / _count / 1e6`）。改动只在 `demo/deploy/dev/observability/grafana/dashboards/roost-demo.json.tmpl`。
+- 若想让 CI 也校验 PromQL：`promtool` 没有离线 PromQL 语法检查，但可以在 `demo_test.go` 里用 `github.com/prometheus/prometheus/promql/parser`
+  ——这会给 codegen 加一个重依赖，**不建议**；退而求其次是现在的做法（JSON 合法 + 查询非空 + 指标名对照实跑输出）。
+
+### 7.7 一个可以直接 clone 来读的完整工程
+
+- 在 `roost-codegen/.github/workflows/` 加一个 `demo-publish.yml`：在 `framework-compat` 的 `demo × source-head` 绿之后，
+  把生成产物（去掉 go.work）推到 `tjbdwanghaibo/roost-demo` 仓的 `main`（或本仓 `demo-generated` 分支），提交信息带 codegen SHA。
+  只读、不接受 PR；README 顶部写"由 codegen 生成，改动请回到 roost-codegen/demo"。
+- **不要**手工维护第二份代码——core `examples/` 就是这么烂掉的。
 
 ## 8. 相关文件速查
 
