@@ -6,6 +6,12 @@
 // forgotten in the transport — the failure this generator exists to make
 // impossible rather than merely detectable.
 //
+// This file is the transport half and depends on roost-core only. The
+// assembly half — Server, OwnerCapabilities, ClientMod, which need
+// roost-kit/mods for the Mod and capability names — is rank_rpc_assembly_gen.go
+// beside it. The split is what lets an interface move into a core domain
+// package and take its wire types, handler table and BusClient along (M-10).
+//
 // Regenerate with:
 //
 //	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
@@ -15,14 +21,11 @@ package rank
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
 )
 
 // ServiceType is the bus service type Rank answers on. The client and
@@ -430,43 +433,6 @@ func (c capability) Size(ctx context.Context, board Board) (int64, error) {
 // capability's dynamic type is the same whichever process published it.
 func Capability(service Rank) Rank { return capability{inner: service} }
 
-// OwnerCapabilities is what the owning Mod registers: the interface every
-// consumer looks up, plus the owner-only name the Server looks up.
-//
-// Returned together so the two cannot be published apart. A process that
-// registered the first and not the second would serve requests it cannot
-// answer locally; one that registered the second and not the first would own a
-// service nothing can find.
-//
-// The two hold DIFFERENT values, and the asymmetry is the point:
-//
-//   - CapabilityName holds the wrapper, so a consumer cannot bind to the
-//     implementation type and then break on the day this service moves out.
-//     This is the name every consumer uses.
-//   - LocalCapabilityName holds the implementation ITSELF, unwrapped. It is
-//     the owning process's handle on its own service, and the Server's run
-//     hook needs it: the periodic work a service owns — sweeping expired
-//     entries, retrying a failed delivery, pruning retained messages — is
-//     deliberately NOT on the cross-process interface, so the hook has to
-//     reach the concrete type to call it.
-//
-// Registering the wrapper under both names is what the first version did, and
-// it made every run hook that reaches an owner-only method fail: four services
-// returned an error from Serve and could not start, and one asserted lazily
-// inside a ticker and panicked thirty seconds in. Nothing caught it because
-// nothing called Serve — only Init, which is the half that worked.
-//
-// This does not weaken the consumer guarantee. LocalCapabilityName exists only
-// in the owning process; a consumer that looked it up to get the concrete type
-// would find nothing at all in a split deployment, which fails loudly at
-// lookup rather than quietly at the type assertion.
-func OwnerCapabilities(service Rank) []mods.Capability {
-	return []mods.Capability{
-		{Name: CapabilityName, Value: Capability(service)},
-		{Name: LocalCapabilityName, Value: service},
-	}
-}
-
 // --- capability name ---
 
 // CapabilityName is the registry key both Mods publish under.
@@ -493,211 +459,6 @@ const CapabilityName app.ModName = "service.rank"
 // implementation is a proxy for it, and a proxy that a wrapper, a test double
 // or a future in-process forwarder each break differently.
 const LocalCapabilityName app.ModName = "service.rank.local"
-
-// --- server ---
-
-// Server is the app.Service for a process that runs Rank on its own.
-//
-// Mod and Service are different concepts, not alternatives, and the generated
-// split reflects that:
-//
-//	Mod:     Init(cfg) / Provide(registry) / Start() / Stop()
-//	         PUTS capabilities into the registry. A process has many.
-//	Service: Init(registry) / Serve(ctx) / Shutdown(ctx)
-//	         TAKES capabilities out and then blocks. A process has exactly one.
-//
-// The app runs every Mod's Init, Provide and Start, and only then the
-// Service's Init and Serve — so a Mod cannot block and a Service cannot be
-// looked up by another process. A service that owns its own process needs
-// both.
-type Server struct {
-	service Rank
-	bus     bus.IBus
-}
-
-// NewServer returns this service's app.Service.
-func NewServer() *Server { return &Server{} }
-
-// Name implements app.Service.
-func (s *Server) Name() app.ServiceName { return app.ServiceName(ServiceType) }
-
-// Service returns the local implementation, for the run hook.
-func (s *Server) Service() Rank { return s.service }
-
-// Init takes what this process needs out of the registry and publishes the
-// handlers.
-//
-// The handlers are registered HERE rather than in the Mod, and that is the
-// decision that makes this process the owner: a Mod that registered them would
-// publish this service's handlers in any process that happened to load it.
-//
-// It also refuses to run on a bus client. A process that serves Rank
-// over the bus while holding only a client to Rank would forward every
-// request to itself, and it would look like it was working until the first
-// call.
-func (s *Server) Init(r *app.Registry) error {
-	service, ok := app.Lookup[Rank](r, LocalCapabilityName)
-	if !ok || service == nil {
-		if _, remote := app.Lookup[Rank](r, CapabilityName); remote {
-			return fmt.Errorf("rank server: %q is published but %q is not, so this "+
-				"process holds a client to Rank rather than the implementation — it would "+
-				"forward every request to itself. Use rank.NewMod() here and "+
-				"rank.NewClientMod() in the processes that call it",
-				CapabilityName, LocalCapabilityName)
-		}
-		return fmt.Errorf("rank server: capability %q not found; add rank.NewMod()",
-			LocalCapabilityName)
-	}
-	busClient, ok := app.Lookup[bus.IBus](r, mods.ModBus)
-	if !ok || busClient == nil {
-		return fmt.Errorf("rank server: capability %q not found; a process that serves "+
-			"Rank needs a bus", mods.ModBus)
-	}
-	s.service, s.bus = service, busClient
-	if err := RegisterHandlers(busClient, service); err != nil {
-		return fmt.Errorf("rank server: %w", err)
-	}
-	slog.Info("rank server: handlers registered", "methods", len(Methods))
-	return nil
-}
-
-// Serve blocks until the process is shutting down, running whatever periodic
-// work this service has.
-//
-// The work itself is NOT generated: it calls run, which the author writes in a
-// hand-written file. That is deliberate on both counts.
-//
-// It is here rather than in a Mod because every Mod in this design starts no
-// goroutine — "how often does this deployment sweep" is a deployment decision,
-// and a loop a Mod starts silently is a loop nobody can see failing. Serve has
-// a context, has shutdown semantics, and its failure is the process's failure.
-//
-// And run is required even for a service with nothing periodic to do, rather
-// than defaulted to a blocking no-op. Writing
-//
-//	func (s *Server) run(ctx context.Context) error { <-ctx.Done(); return nil }
-//
-// states "nothing periodic" in three lines. A generated default would answer
-// the question by not asking it.
-func (s *Server) Serve(ctx context.Context) error { return s.run(ctx) }
-
-// Shutdown implements app.Service.
-//
-// Nothing is drained here: every operation this service exposes is
-// synchronous, and the stores belong to the Mod that built them. A service
-// that needs to drain should do it at the end of run, where the context that
-// asked it to stop is in scope.
-func (s *Server) Shutdown(context.Context) error { return nil }
-
-var _ app.Service = (*Server)(nil)
-
-// --- client mod ---
-
-// ClientMod publishes a REMOTE Rank capability, for the processes that
-// call this service without owning it.
-//
-// It registers the same capability name and the same interface type the owning
-// Mod does, which is the whole point: business logic looks up
-// app.Lookup[Rank] and is identical whether the service runs beside it or
-// in another process. Choosing between the two Mods is the deployment
-// decision, made once in a process's wiring, and no consumer sees it.
-//
-// They are mutually exclusive by construction: both publish CapabilityName, so
-// the registry refuses the second. A process cannot end up holding both a
-// local service and a client to itself with the winner decided by registration
-// order.
-type ClientMod struct {
-	options []servicerpc.Option
-
-	serviceType string
-	timeout     time.Duration
-	client      *BusClient
-}
-
-// NewClientMod returns a client Mod.
-//
-// options are passed to servicerpc: a deployment that needs a particular
-// transport supplies it here, because that is a property of how this
-// deployment routes rather than of the service.
-func NewClientMod(options ...servicerpc.Option) *ClientMod {
-	return &ClientMod{options: append([]servicerpc.Option(nil), options...)}
-}
-
-// Name implements app.Mod.
-func (m *ClientMod) Name() app.ModName { return CapabilityName }
-
-// DependsOn implements app.ModDependencyProvider.
-//
-// It names the Mod that publishes the bus — kit's NATS mod — not the bus
-// capability. app resolves dependencies by Mod NAME, so a ClientMod that
-// depended on mods.ModBus ("bus", a capability nobody is named after) could
-// never be assembled in a real process: "unknown mod dependency \"bus\"".
-// That shipped in every generated client until a generated game template
-// tried to start (roost-codegen U-0024).
-func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
-
-// Init reads configuration.
-//
-//	rank:
-//	  service_type: rank   # optional, defaults to ServiceType
-//	  call_timeout: 3s                 # optional, defaults to DefaultCallTimeout
-//
-// It reads no key prefix and no store settings, because a client has no store.
-// A process that only calls this service therefore cannot be misconfigured
-// with a prefix that disagrees with the owner's — it has no prefix to get
-// wrong.
-func (m *ClientMod) Init(cfg *viper.Viper) error {
-	m.serviceType = cfg.GetString("rank.service_type")
-	if m.serviceType == "" {
-		m.serviceType = ServiceType
-	}
-	// Read inline rather than through a shared helper, so the generated
-	// transport depends on nothing but roost-core and roost-kit and works in
-	// any repository.
-	//
-	// A negative value is refused rather than clamped: a caller that wrote -1
-	// meant something, and silently reading it as the default hides the
-	// mistake.
-	m.timeout = DefaultCallTimeout
-	if cfg.IsSet("rank.call_timeout") {
-		timeout := cfg.GetDuration("rank.call_timeout")
-		if timeout < 0 {
-			return fmt.Errorf("rank client mod: rank.call_timeout must not be "+
-				"negative, got %s", timeout)
-		}
-		if timeout > 0 {
-			m.timeout = timeout
-		}
-	}
-	return nil
-}
-
-// Provide builds the client and registers it.
-func (m *ClientMod) Provide(r *app.Registry) error {
-	busClient, ok := app.Lookup[bus.IBus](r, mods.ModBus)
-	if !ok || busClient == nil {
-		return fmt.Errorf("rank client mod: capability %q not found; a process that calls "+
-			"Rank needs a bus", mods.ModBus)
-	}
-	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.options...)
-	if err != nil {
-		return fmt.Errorf("rank client mod: %w", err)
-	}
-	m.client = client
-	// Registered through Capability, so the dynamic type satisfies Rank
-	// and nothing else. A consumer that asserted on *BusClient would break in
-	// the process that owns this service.
-	return mods.RegisterAll(r, mods.Capability{Name: m.Name(), Value: Capability(client)})
-}
-
-// Start implements app.Mod. Nothing to start: the client holds no goroutine
-// and the bus's lifecycle belongs to the bus Mod.
-func (m *ClientMod) Start() error { return nil }
-
-// Stop implements app.Mod. Nothing to stop, for the same reason.
-func (m *ClientMod) Stop() {}
-
-var _ app.Mod = (*ClientMod)(nil)
 
 var (
 	_ Rank = (*BusClient)(nil)
