@@ -123,8 +123,8 @@ mail 的 Redis `box:<id>` 与 `send:<EffectID>`、match 的 `queue:duel:2:defaul
 
 ## 7. 剩余工作与实施方法（按价值排）
 
-> 2026-09-16 第七批已完成 7.1、7.2、7.4（codegen 见 CHANGELOG"第七批"）。7.2 的实际做法与原计划有一处重要不同，见该小节开头。
-> 剩余：7.3（条件性）、7.5（先登记 RR）、7.6（需要 docker）、7.7。
+> 2026-09-16 第七批完成 7.1、7.2、7.4，第八批完成 7.3、7.7 并删掉了 `player:<id>` 调试凭据（codegen CHANGELOG"第七批 / 第八批"）。
+> 7.2 的实际做法与原计划有一处重要不同，见该小节开头。剩余：7.5（先登记 RR）、7.6（需要 docker）。
 
 每一项都写成"改哪里 → 先红什么测试 → 怎么验证 → 边界"，可以各自独立开工；顺序建议 1 → 2 → 4 → 3 → 5 → 6 → 7。
 通用规则沿用前六批：demo 的文件全部是业务所有、写在 `roost-codegen/demo/**`（`.tmpl`）、步骤进 `demoScaffoldSteps`、
@@ -180,7 +180,12 @@ game 无 `session ticket rejected`。`player:<id>` 分支仍保留（不给 `-ac
 - **边界**：SelectRole 的票据有 `session_ttl`（默认 30m），压测时长超过它要重新 SelectRole；account 的 `NameRules` 拒绝空白名，角色名用
   `robot_<n>`。
 
-### 7.3 实体锁档（Player / World 分档）
+### 7.3 实体锁档（Player / World 分档）——已完成
+
+demo 覆盖两个 `entity.go`：Player → `EntityCategoryPlayer`、World → `EntityCategoryWorld`，注释写清"档位即锁序、档位编进 id、
+改档等于迁移"。同时把 `AddExp` 改成两实体事务 `handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount)`：
+World 累计 `ExpGranted`，两处变更同一条 WAL 记录，Nest 按档位先锁 World 再锁 Player；Sender 变为 `MultiSync_AddExp`，端点手写
+（`add endpoint` 只接单实体）。实跑前清掉了旧的 `game.player` / `game.world`（旧 id 不再匹配），10/10 成功，`db.world.exp_granted` 随每轮增长。
 
 - **事实**：`entity.EntityCategory` 有 `Remote(1) / World(2) / PlayerScoped(3) / Player(4) / Other(5)`，锁按档从低到高获取；
   **档位编进实体 id**（`idgen.go` 的 `EntityCategoryBits`），所以改一个 kind 的 category 会改它所有实体的 id——已落库的 Player / World
@@ -229,7 +234,12 @@ matchmaker Commit 后经 `accessplayertcp.Runtime.PushPlayer` 推给每个成员
 - 若想让 CI 也校验 PromQL：`promtool` 没有离线 PromQL 语法检查，但可以在 `demo_test.go` 里用 `github.com/prometheus/prometheus/promql/parser`
   ——这会给 codegen 加一个重依赖，**不建议**；退而求其次是现在的做法（JSON 合法 + 查询非空 + 指标名对照实跑输出）。
 
-### 7.7 一个可以直接 clone 来读的完整工程
+### 7.7 一个可以直接 clone 来读的完整工程——已完成（首次运行待 GitHub 侧确认）
+
+`.github/workflows/demo-publish.yml`：main 上 `demo/**`、`internal/**`、`cmd/**` 有变更时，按 source-head 生成工程，
+build / vet / test / `generate --check` / `id check` 通过后 force-push 到本仓 `demo-generated` 分支，带 `GENERATED.md` 写明
+codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA（`TestRepositoryWorkflowsAreValidAndPinned`）。
+本地无法执行 GitHub Actions，第一次运行结果要到 Actions 页看；若 `contents: write` 被组织策略禁止，改为 PAT secret。
 
 - 在 `roost-codegen/.github/workflows/` 加一个 `demo-publish.yml`：在 `framework-compat` 的 `demo × source-head` 绿之后，
   把生成产物（去掉 go.work）推到 `tjbdwanghaibo/roost-demo` 仓的 `main`（或本仓 `demo-generated` 分支），提交信息带 codegen SHA。
