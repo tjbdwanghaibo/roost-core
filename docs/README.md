@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-16 第三轮真实 Broker 审查](review/REVIEW-2026-09-16-03.md)：35 新场景，确认 JetStream 本地广播变分摊及分片无法重组，补真实重连/结算证据。
+
 [09-16 第二轮 JetStream/NATS](review/REVIEW-2026-09-16-02.md)：32 新场景，Prefix 消费者身份冲突、停止交接观察，附确认/结算机制与复现。
 
 [09-16 Journal 故障与 SyncBus](review/REVIEW-2026-09-16.md)：28 新场景，记录不确定错误处理问题和 PatchSyncer 交付契约。

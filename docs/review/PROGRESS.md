@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+09-16 第三轮：43 份运行记录、25 篇机制文档、61 RR（仅记录计数）。Core 21e0a6c，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧验收；真实 NATS v2.11.9 单节点新 35 场景，32 通过、3 失败确认 RR-20260916-03。Core 三包、Kit 两包原有 race 测试通过。[运行](REVIEW-2026-09-16-03.md)。
+
+| 新增覆盖 | 已验证不变量/状态 | 限制和下一入口 |
+| --- | --- | --- |
+| room JetStream Subscribe → driver Consume → syncstream reassembler | 同 bus/topic 双订阅新 RR，消息分摊、两种分片均未重组；普通 NATS/不同 SID/单接收者对照通过 | observer 过滤组合、半包重启与业务快照恢复 |
+| NATS driver 发布、结算、重连、Drain | 真实 ACK/去重/进程重启、重投/终止/续接、请求映射/队列/排空等部分通过 | 单节点 Windows，非集群 failover/断电/TCP 半开 |
+| syncstream 不确定确认与 Apply | 人为丢弃成功返回后重试，业务 Packet 重复；Apply 错误符合不重试包装契约 | 应用幂等、水位、长期离线恢复未收敛 |
+| Kit room/nats mod | 当前装配/停止源码已读，原有两包测试通过 | 完整 App 依赖排序、关闭期间注册待查 |
+
+本轮图谱 generation 09-08、证据路径 metadata_changed，已用当前源码补证。未验收旧 Prefix 问题或重跑旧复现。下一轮优先新 receiver/observer/恢复路径，再轮转 bus/RPC 重放；既有 journal/Lockstep/StateSync 缺口保留。
+
 09-16 第二轮：42 份运行记录、25 篇机制文档、60 RR（记录计数，非覆盖率）。Core 1143f61，Kit 7030c5f，Codegen cacd627。用户未修复，跳过旧核验；JetStream/NATS 新 32 场景，31 通过、1 失败确认 RR-20260916-02。原源码 room/nats driver race 通过。[运行](REVIEW-2026-09-16-02.md)。
 
 | 新范围 | 已验证不变量、状态与限制 | 下一入口 |

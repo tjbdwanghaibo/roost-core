@@ -1,5 +1,19 @@
 # JetStream SyncBus：命名空间、确认与停止
 
+## 09-16 第三轮补充：真实消费与本地广播
+
+本节基线 Core `21e0a6c`、Kit `7030c5f`；下文此前基线记录保留。[35 场景运行与限制](REVIEW-2026-09-16-03.md)。本轮用独立 NATS server v2.11.9 单节点文件存储验证了发布确认、ID 去重及窗口到期、ACK/NAK/Term、durable 续接、进程重启和连接恢复的有界场景。真实集群、断电及 TCP 半开未验证。
+
+同一 Stream/Durable 的多个 Consume 是竞争者。本地对同一 JetStreamSyncBus/topic 两次 Subscribe 会建立这样的竞争关系，结果为 12 条消息分摊成 6/6；普通 NATS 对照为 12/12。两个独立 syncstream reassembler 随后只收到部分分片，identity 51 片、gzip 18 片全部确认/结算后，两边仍都没有 Packet。[RR-20260916-03](../bug/REVIEW-2026-09-16-03.md) 是本地广播问题；只把 Prefix 加入名称无法解决它。
+
+建议保留稳定 broker 消费者，在 bus 内维护 topic 到底层订阅及本地 handler 注册表的映射，复用现有 IJetStream/订阅对象、mutex 和 once；锁内取得 handler 快照、锁外调用。单个取消移除一个 handler，最后一个取消才释放底层消费者。并发初始化、失败回滚、消息克隆、panic 隔离和 Stop 交错应一起定义，避免广播修复又引入共享可变数据或资源泄漏。此为实施方向，尚未修改实现。
+
+确认的三个层次需要分别判断：发布返回成功说明这次 broker 发布调用成功；consumer ACK 表示这次投递被结算；业务完整 Packet/状态是否应用还取决于重组及 handler。真实重启实验中旧消息再次投递后仍能继续收到新消息，业务须容忍重复。人为在真实发布成功后返回一次错误，BufferedPublisher 重试生成新 delivery ID，接收端收到两次同一 Packet；broker 去重不能替代应用序号/epoch 或业务幂等。
+
+Kit RoomMod 的停止优先选择上下文 stopper，否则调用 Stop；NatsMod 先停止业务 bus 再关闭 Assembly。当前只验证相关包既有测试，尚未验证完整 App 的依赖排序、关闭期间注册和半包恢复。已有 syncstream 历史/ACK/恢复工具可作为业务接入基础，但必须明确应用成功水位及恢复触发，不能因本轮 broker 测试通过就视旧缺口已收敛。
+
+## 此前源码机制记录
+
 基线 Core `1143f61ee79fb22ac54ce0c0d87dc5927c2806f0`；[运行与证据限制](REVIEW-2026-09-16-02.md)。以下区分当前源码行为与建议，不代表修复已实施。
 
 ## 数据流与责任边界

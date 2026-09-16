@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-16 第三轮真实 Broker](REVIEW-2026-09-16-03.md) · [本地扇出新问题](../bug/REVIEW-2026-09-16-03.md) · [35 场景完整代码](../bug/REPRO-2026-09-16-03.md) · [机制补充](IMPLEMENTATION-JETSTREAM-SYNCBUS-AND-LIFECYCLE.md)。
+
 [09-16 第二轮 JetStream/NATS](REVIEW-2026-09-16-02.md) · [确认与生命周期机制](IMPLEMENTATION-JETSTREAM-SYNCBUS-AND-LIFECYCLE.md) · [新问题及观察](../bug/REVIEW-2026-09-16-02.md) · [32 场景代码](../bug/REPRO-2026-09-16-02.md)。
 
 [09-16 Journal 故障与 SyncBus](REVIEW-2026-09-16.md) · [Patch/Delivery 机制](IMPLEMENTATION-SYNCBUS-PATCH-AND-DELIVERY.md) · [新问题](../bug/REVIEW-2026-09-16.md) · [28 场景](../bug/REPRO-2026-09-16.md)。
