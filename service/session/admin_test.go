@@ -348,5 +348,13 @@ func TestAStuckResourceBlocksTheOwnerUntilForced(t *testing.T) {
 	}
 }
 
-// TestTheOperatorSurfaceIsNotOnTheSessionInterface（Admin 不上总线）留在 roost-kit/service/session：
-// 它断言的是生成的 Capability 包装器（传输层），领域包里没有这个符号（M-08）。
+// Admin is deliberately not on the bus: the capability published to other
+// processes (the generated wrapper) must not satisfy the operator surface.
+func TestTheOperatorSurfaceIsNotOnTheSessionInterface(t *testing.T) {
+	var asSession any = Capability(&Service{})
+	if _, ok := asSession.(Admin); ok {
+		t.Fatal("the capability published to other processes satisfies Admin; a caller over the " +
+			"bus could declare a resource gone, which is a claim about the outside world that " +
+			"this service cannot verify")
+	}
+}
