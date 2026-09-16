@@ -124,6 +124,19 @@ type History struct {
 	// having consumed the new content (U-0215, RR-20260915-06). Reset by
 	// RotateEpoch, which is the explicit global invalidation.
 	sequenceFloor uint64
+	// revision is the in-process mutation generation: every operation that
+	// successfully changes the stream set, a stream's chain, an ACK, the
+	// epoch or the floor advances it under the write lock. Recover captures
+	// it before running the provider and commits only if it is unchanged.
+	// It is deliberately not the protocol's Epoch/Sequence and not compared
+	// by position: two histories can be at the same epoch, existence and
+	// latest with different contents (Append then DeleteStream; Import of a
+	// same-position snapshot), which is exactly what the position check
+	// accepted (U-0216, RR-20260916-04). Global rather than per-stream: it
+	// conservatively rejects a capture when an unrelated stream moved, which
+	// costs a retry, never a wrong commit. It is never persisted and never
+	// taken from a snapshot.
+	revision uint64
 }
 
 type streamKey struct {
@@ -168,26 +181,20 @@ func (history *History) Append(packet Packet) (Packet, error) {
 }
 
 // streamObservation is what Recover records before calling the provider and
-// checks again before committing (U-0214).
+// checks again before committing (U-0214): the mutation revision, which
+// changes on every committed mutation, not the stream's position (U-0216).
 type streamObservation struct {
-	epoch  uint64
-	exists bool
-	latest uint64
+	revision uint64
 }
 
-func (history *History) observe(key streamKey) streamObservation {
+func (history *History) observe() streamObservation {
 	history.mutex.RLock()
 	defer history.mutex.RUnlock()
-	state := history.streams[key]
-	observation := streamObservation{epoch: history.epoch, exists: state != nil}
-	if state != nil {
-		observation.latest = state.latest
-	}
-	return observation
+	return streamObservation{revision: history.revision}
 }
 
-// appendIfUnchanged commits packet only if the stream is exactly as it was
-// observed; otherwise nothing is written and ErrRecoverStale is returned.
+// appendIfUnchanged commits packet only if nothing was committed since the
+// observation; otherwise nothing is written and ErrRecoverStale is returned.
 func (history *History) appendIfUnchanged(packet Packet, observed streamObservation) (Packet, error) {
 	if packet.Stream.Topic == "" {
 		return Packet{}, ErrTopicRequired
@@ -197,8 +204,7 @@ func (history *History) appendIfUnchanged(packet Packet, observed streamObservat
 	}
 	history.mutex.Lock()
 	defer history.mutex.Unlock()
-	state := history.streams[streamKey{Observer: packet.Observer, Stream: packet.Stream}]
-	if history.epoch != observed.epoch || (state != nil) != observed.exists || (state != nil && state.latest != observed.latest) {
+	if history.revision != observed.revision {
 		return Packet{}, ErrRecoverStale
 	}
 	return history.appendLocked(packet)
@@ -259,6 +265,7 @@ func (history *History) appendLocked(packet Packet) (Packet, error) {
 		state.items = state.items[:history.options.MaxPacketsPerStream]
 		state.dropped += uint64(overflow)
 	}
+	history.revision++
 	return packet.Clone(), nil
 }
 
@@ -291,6 +298,7 @@ func (history *History) AcknowledgeEpoch(observer Observer, stream Stream, epoch
 			}
 		}
 		state.acked = sequence
+		history.revision++
 		if history.options.PruneAcknowledged {
 			pruned := 0
 			for pruned < len(state.items) && state.items[pruned].Sequence <= sequence {
@@ -352,13 +360,14 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 		return result, ErrSnapshotProviderRequired
 	}
 	// The provider runs outside History's lock (see SnapshotProvider), so
-	// the stream can move while it captures. Record what the capture is a
-	// snapshot OF before calling it, and commit only if that is still the
-	// state of the stream — a newer Full or an epoch rotation in between
-	// would otherwise get the OLD capture stamped with a newer sequence, and
-	// a receiver applying it by sequence would roll back (U-0214,
-	// RR-20260915-09).
-	observed := history.observe(streamKey{Observer: request.Observer, Stream: request.Stream})
+	// the stream can move while it captures. Record the history's mutation
+	// revision before calling it, and commit only if nothing was committed
+	// in between — a newer Full or an epoch rotation (U-0214, RR-20260915-09),
+	// and equally an Append-then-Delete or a same-position Import that leave
+	// the stream's position unchanged (U-0216, RR-20260916-04), would
+	// otherwise get the OLD capture stamped with a newer sequence, and a
+	// receiver applying it by sequence would roll back.
+	observed := history.observe()
 	packet, err := provider.Snapshot(request)
 	if err != nil {
 		return result, err
@@ -665,6 +674,7 @@ func (history *History) Import(snapshot HistorySnapshot) error {
 	history.streams = streams
 	history.epoch = snapshot.Epoch
 	history.sequenceFloor = floor
+	history.revision++ // a snapshot replaces content; it never carries the revision (U-0216)
 	return nil
 }
 

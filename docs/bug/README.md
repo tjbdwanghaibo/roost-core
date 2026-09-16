@@ -47,14 +47,14 @@
 
 | 编号 | 优先级 | 仓库 | 问题 | 状态 |
 | --- | --- | --- | --- | --- |
-| RR-20260916-05 | P2 | kit/codegen | Grouping 注入入口未执行，生成契约与实际调用方成组不一致 | 未修复 → [统一交接](REVIEW-2026-09-16-04.md) |
-| RR-20260916-04 | P2 | core | Recover 删除 ABA / 同位置 Import 仍接受旧捕获 | 未修复；原 RR-09 触发已通过 → [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-05 | P2 | kit/codegen | Grouping 注入入口未执行，生成契约与实际调用方成组不一致 | 已修复(U-0217,未发版,**破坏性** `NewMod(reporter)`)→ [bugfix](../bugfix/RR-20260916-05.md) · [统一交接](REVIEW-2026-09-16-04.md) |
+| RR-20260916-04 | P2 | core | Recover 删除 ABA / 同位置 Import 仍接受旧捕获 | 已修复(U-0216,未发版)→ [bugfix](../bugfix/RR-20260916-04.md);原 RR-09 触发已通过 → [统一交接](REVIEW-2026-09-16-04.md) |
 | RR-20260916-03 | P2 | core | JetStream 同 bus/topic 多个本地订阅竞争持久消费者,广播变分摊 | U-0209；原真实广播/分片触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-03.md) |
 | RR-20260916-02 | P2 | core | 不同 Prefix 共用 Stream 时持久消费者身份冲突 | U-0210 命名隔离通过；Kit 默认迁移/共享 Stream 限制保留 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-02.md) |
 | RR-20260916-01 | P2 | core | journal 写入/发布结果不确定后继续写入 | U-0212；不确定错误后停止准入两项独立通过，权限对照 Skip → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260916-01.md) |
 | RR-20260915-09 | P2 | core | Recover 将过期捕获提交为更新的 Full | U-0214 原交错通过；删除/Import 新触发另记 RR-04 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-09.md) |
 | RR-20260915-08 | P2 | core | Import/Restore 绕过绑定 journal 的持久化替换 | U-0213；原持久化替换独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-08.md) |
-| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 作者 U-0211；Windows 截断失败，Linux 待独立验收 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-07.md) |
+| RR-20260915-07 | P2 | core | 忽略 WAL 半条尾记录后续写污染日志 | 已修复(U-0211 + Windows 截断补修,未发版;Linux 由 CI linux-quality 持续验收,Windows 以 CI windows-compatibility 为准)→ [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-07.md) |
 | RR-20260915-06 | P2 | core | 流清理后重建复用旧 ACK 身份 | U-0215；原三种清理触发独立通过 → [验收](REVIEW-2026-09-16-04.md) · [bugfix](../bugfix/RR-20260915-06.md) |
 | RR-20260915-05 | P2 | core | room SetDownstream 未迁移慢消费者回调,替换后剔除不清理订阅 | 已修复(U-0208,未发版)→ [bugfix](../bugfix/RR-20260915-05.md) · [第六轮](REVIEW-2026-09-15-06.md) |
 | RR-20260915-04 | P2 | core | room 慢连接剔除后剩余批次失败,剔除通知丢失,重试后仍保留订阅 | 已修复(U-0207,未发版)→ [bugfix](../bugfix/RR-20260915-04.md) · [第五轮](REVIEW-2026-09-15-05.md) |
@@ -174,3 +174,5 @@ RR-20260909-01 的主要修复已落实，当前版本快照及少量仓数措�
 2026-09-15 第六轮:RR-20260915-05 已修复(U-0208,SetDownstream 改为生命周期交接;索引表补了该行);未修复清单为空。
 
 2026-09-16:第七轮起登记但未进表的七项(RR-20260915-06～09、RR-20260916-01～03)全部修复(U-0209～U-0215),表行已补;未修复清单为空。
+
+2026-09-16 晚:第四轮的 RR-20260916-04(Recover 修改代数)、RR-20260916-05(删掉无执行者的 Grouping 注入,kit 破坏性 + codegen 同步)修复,U-0216 / U-0217;ARCH-01..04 按交接分批,第一批见 [bugfix/README.md](../bugfix/README.md) 的 ARCH 表。未修复清单为空。

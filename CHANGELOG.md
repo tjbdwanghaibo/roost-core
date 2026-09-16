@@ -38,6 +38,9 @@
 
 ### Fixed
 
+- **syncstream Recover 的一致性判据从"位置"换成"修改代数"**(U-0216,C8;RR-20260916-04,T-110)。U-0214 在 provider 前后比较 epoch / 流是否存在 / latest,但 Append 后 DeleteStream、同 epoch 同 latest 的 Import 都能让位置回到原值而内容已变,旧捕获照样以更高序号提交。现在 `History` 维护进程内单调的 `revision`,每个成功改变流集合 / 链 / ACK / epoch / 序号地板的写锁路径推进它,`Recover` 前后只比这个代数;不持久化、不从快照带入。全局代数会因无关流的并发修改保守返回 `ErrRecoverStale`,代价是一次重试。`recover_replacement_promises_test.go`;记录 `docs/bugfix/RR-20260916-04.md`。
+- **syncstream WAL 半尾截断在 Windows 上被拒(U-0211 复核补修,RR-20260915-07)**。补修原来在 `O_APPEND` 句柄上 `Truncate`,Windows 的 `FILE_APPEND_DATA` 句柄不能 `SetEndOfFile`,CI `windows-compatibility` 红。截断改为打开追加句柄之前按路径 `os.Truncate`,文件不存在时只重置标记;追加前仍先 fsync。Linux / macOS 行为不变。
+
 - **JetStream 同步总线:同 topic 本地扇出,持久消费者身份含 Prefix**(U-0209、U-0210,C8;RR-20260916-03/02;T-103、T-104)。同一总线对同一 topic 的多次 Subscribe 曾各自用同名持久消费者 Consume,服务端按工作队列分摊、分片流无法重组;现在一个 topic 一个底层订阅 + 本地 handler 注册表(各自消息副本、panic 隔离、最后一位退订才停底层)。`durableSyncName` 对非默认 Prefix 把完整 subject 散列进身份,默认 Prefix 的名字逐字不变(已部署消费者游标不受影响);不同 Prefix 共用 Stream 的 Subjects 所有权仍未解决,部署上请各用一个 Stream。测试 `jetstream_fanout_promises_test.go`、`jetstream_durable_identity_promises_test.go`;记录 `docs/bugfix/RR-20260916-03.md`、`RR-20260916-02.md`。
 - **syncstream History / journal 五处一致性修复**(U-0211～U-0215;C5 / C5 / C8 / C8 / C8;RR-20260915-06～09、RR-20260916-01;T-105～T-109)。
   WAL 恢复时忽略的半条尾部在首次续写前截断并 fsync;journal 的 Write / Sync / 发布出错即 fail-stop(新 `ErrHistoryJournalFailed`,重开 journal 恢复),副作用之前的失败仍可重试;绑定 journal 的 `Import` / `Restore` 先经 `Checkpoint` 发布再切换内存;`Recover` 在调用 provider 前观察、提交前核对,过期捕获返回新 `ErrRecoverStale`。

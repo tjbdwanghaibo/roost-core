@@ -67,6 +67,8 @@
 | RR-20260916-01 | core | syncstream journal 写入 / 发布结果不确定后继续写,重复序号或丢追加 | U-0212 | [RR-20260916-01.md](RR-20260916-01.md) |
 | RR-20260916-02 | core | room JetStream 持久消费者身份不含 Prefix,共用 Stream 时撞名 | U-0210 | [RR-20260916-02.md](RR-20260916-02.md) |
 | RR-20260916-03 | core | room JetStream 同 topic 多个本地订阅竞争同一消费者,广播变分摊 | U-0209 | [RR-20260916-03.md](RR-20260916-03.md) |
+| RR-20260916-04 | core | syncstream Recover 的位置核对识别不出删除 ABA / 同位置 Import,旧捕获仍被提交 | U-0216 | [RR-20260916-04.md](RR-20260916-04.md) |
+| RR-20260916-05 | kit + codegen | match 的 Grouping 注入参数无执行者;**破坏性**:`NewMod(reporter)`,codegen 不再生成 `Grouping()` | U-0217 | [RR-20260916-05.md](RR-20260916-05.md) |
 
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 
@@ -106,3 +108,16 @@
 | RR-20260913-01 | U-0187 | 在途 L2 回填越过墓碑;冷 L1 的旧删除清掉较新的 L2 | `StoreConfig.Superseded` 让三条 L1 写入口共用删除水位;L2 新增 `DeleteAtVersion` 脚本 |
 | RR-20260913-05 | U-0180 | 预检查之后的 L2.Set 冲突仍被 IgnoreRemoteError 吞掉 | `ReadThroughOptions.FatalRemoteError` 分类,冲突不降级 |
 | RR-20260913-02 | U-0184 | 同一时钟刻度创建的两个 Manager 代际不递增(Windows 实测) | 进程级代际高水位,播种取 `max(now, 已发出+1)` |
+| RR-20260915-07 | U-0211 | Windows 上 `O_APPEND` 句柄的 `Truncate` 被拒(Access is denied),CI windows-compatibility 红 | 截断改为开追加句柄前按路径 `os.Truncate`;Linux 由 CI linux-quality 持续验收 |
+
+## ARCH：Kit 职责边界收敛（来源 `docs/bug/REVIEW-2026-09-16-04.md` §7,不占 U / M 编号,不进覆盖矩阵）
+
+目标:**Core 核心实现,Kit 装配与使用便利,Codegen 代码生成**。Core 不反向依赖 Kit;同一职责只保留一份实现;迁移不顺便改行为。
+
+| 任务 | 内容 | 状态 |
+| --- | --- | --- |
+| ARCH-04 | 文档与生成器对齐:kit README 自述与组件表按当前目录;codegen 不再生成旧职责下的接口引用 | **第一步已做（2026-09-16）**:kit README 改为"装配层"自述,删掉 13 行已迁入 core 的包（nestwal / remote_entity / syncstream / replication / lockstep / gateway / spatial / ai / actionflow / versionstore / servicerpc / mongo/mongotest / robot）并加"已在 roost-core"说明;codegen 随 U-0217 删掉 `Grouping()` collaborator。**未做**:逐包核对 kit README 第 3～4 节的实现细节描述是否仍指向 kit 内代码;codegen 生成的服务导入 / RPC 引用逐项对照 |
+| ARCH-01 | 通用服务领域实现下沉 core:session（Enter 幂等 / 归属 / 会话状态机）、mail（CommitClaim）、match（票据状态、Grouping 与 ScoreWindow） | 未做。先从 match 开始:列出纯契约（`Queue` / `Subject` / `Ticket` / `Match` / `Store` 接口 / `Grouping`）、实现（`queue_store.go`）、Mod / 配置（`match_mod.go`、`redis_store.go`）、生成文件（`matchmaker_rpc_gen.go`）与外部依赖（`versionstore`、`servicemetrics`）；`servicemetrics.Reporter` 契约需先在 core 安放。Kit 侧以类型别名过渡,持久化 key / JSON 字段 / 错误码 / RPC 方法名不变。验收:kit 全套 + codegen 生成工程编译 + `go list -deps` 证明 core 不依赖 kit |
+| ARCH-02 | manager 生命周期引擎（排序 / 状态 / 失败回滚 / 停止协调）迁 core | 未做。单独一批:保留启动失败仅回滚成功者、依赖错误诊断、关闭交接与稳定顺序;不换成语义不同的 `TopologicalSortCache` |
+| ARCH-03 | 已正确的装配（dataengine / saga 的 Mod 调 core `Assemble` 并转发生命周期）作为迁移样板 | 无需改动,作为 ARCH-01 / 02 的形状参照 |
+

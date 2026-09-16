@@ -291,6 +291,18 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 		if statErr != nil && !created {
 			return statErr
 		}
+		if journal.truncateTo >= 0 && !created {
+			// Drop the unterminated tail recovery skipped before anything is
+			// appended behind it (U-0211). Done by path, before the append
+			// handle exists: Windows refuses SetEndOfFile on a handle opened
+			// for FILE_APPEND_DATA only ("Access is denied"), which is what
+			// O_APPEND|O_WRONLY maps to there — the CI windows-compatibility
+			// job caught it (review 09-16 第四轮). os.Truncate opens its own
+			// write handle and works on every platform.
+			if err := os.Truncate(path, journal.truncateTo); err != nil {
+				return err
+			}
+		}
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			return err
@@ -302,13 +314,8 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 			}
 		}
 		if journal.truncateTo >= 0 {
-			// Drop the unterminated tail recovery skipped before anything is
-			// appended behind it (U-0211). Truncate works on the descriptor
-			// regardless of O_APPEND; the next write lands at the new end.
-			if err := file.Truncate(journal.truncateTo); err != nil {
-				_ = file.Close()
-				return err
-			}
+			// The truncation (or the fresh file replacing a vanished one) is
+			// made durable before the first byte is appended behind it.
 			if err := journal.syncFile(file); err != nil {
 				_ = file.Close()
 				return err

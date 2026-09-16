@@ -115,6 +115,7 @@ func (history *History) RotateEpoch(epoch uint64) error {
 	history.epoch = epoch
 	history.streams = make(map[streamKey]*streamState)
 	history.sequenceFloor = 0 // a new epoch is the explicit reset of every chain
+	history.revision++
 	return nil
 }
 
@@ -131,6 +132,7 @@ func (history *History) DeleteStream(observer Observer, stream Stream) error {
 		}
 	}
 	delete(history.streams, key)
+	history.revision++
 	return nil
 }
 
@@ -156,6 +158,7 @@ func (history *History) DeleteObserver(observer Observer) (int, error) {
 			delete(history.streams, key)
 		}
 	}
+	history.revision++
 	return count, nil
 }
 
@@ -185,6 +188,9 @@ func (history *History) SweepIdle(now time.Time) (int, error) {
 	}
 	for _, key := range keys {
 		delete(history.streams, key)
+	}
+	if len(keys) > 0 {
+		history.revision++
 	}
 	return len(keys), nil
 }
