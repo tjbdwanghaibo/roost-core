@@ -268,6 +268,24 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   只读、不接受 PR；README 顶部写"由 codegen 生成，改动请回到 roost-codegen/demo"。
 - **不要**手工维护第二份代码——core `examples/` 就是这么烂掉的。
 
+## 9. 第十批（2026-09-17）：让 game / game-demo 直接跑起来，五个服务都可用
+
+目标是 `roost project new … -template game-demo` 之后不改任何东西就能起来、`doctor` 全绿、每个托管服务都被链路真实调用。
+
+- **一条命令起全部进程**：codegen 受控的 `deploy/dev/run.sh` + `make dev-run / dev-stop / dev-status / dev-smoke`。顺序 account → chat → mail → match → game，
+  每个进程等 `/readyz`；有 `cmd/accountctl` 的工程顺手 `upsert-server -sid`。前置条件是每个服务本机配置有自己的 ops 端口（`opsPort`：业务服务按名从 9100 起，
+  托管服务接在后面），此前五份配置都监听 9100。生产配置不变（统一 9100，一容器一进程）。
+- **chat 进链路**：`internal/service/chat/collaborators.go`（策略写成决定、`text` 类型、`GrantSystem`）、`game/chatroom/`（频道 / 文本校验 / 每进程 presence）、
+  协议 SendChat 10006 / ChatHistory 10007 / 推送 ChatMessage 10101、EnterGame 经 PublishSystem 公告登录并扇出、机器人脚本 send_chat → wait_push → chat_history。
+  控制器经接口 + capability 名懒查 TCP Runtime（直接 import `internal/access/player/tcp` 是环：它 import 协议绑定，绑定 import 控制器）。
+- **doctor 全绿**：account 演示 Verifier 的报错文案含 "is not configured"，被 doctor 的桩标记误判；改文案。这是启发式标记的代价，测试里把四个 collaborators 都对着标记断言了一遍。
+- **实跑发现的 bug**：机器人 transport 只按序号识别响应，服务端推送也带会话序号（同起点 1），世界频道推送恰好带着在途请求的号就被当成响应
+  （`response msg mismatch: got 10101 want 10000`）。改成按帧头 server-push 标志分类。此前只有 MatchFound 一种推送且只在 wait_push 期间到，所以没暴露。
+- **实跑环境**：本机 27017 / 4222 / 6379 被不带 replSet 的 mongod、没开 JetStream 的 nats-server 占着，Docker 默认端口路径没法在这台机器验证；用 kit 隔离环境
+  （`sed` 五份配置指向 27117-27119 / 14222 / 16379，ops 改 920x，nats.prefix 独立）跑通：五个进程 `run.sh start` 全部 ready，6 个机器人全链路通过。
+  连续两轮间隔 < 60s 会有一个机器人 `ticket still waiting`（上一轮失败者的票被这一轮配走），是 match 的正确行为，README 写明了。
+- **未做**：mail 的客户端协议（列邮件 / 领附件）——升级奖励邮件目前没有附件，客户端也看不到邮箱；session 服务未托管进 game 模板；多 game 进程的 chat 扇出应改订阅流。
+
 ## 8. 相关文件速查
 
 - 源码：`roost-codegen/demo/**`（`.tmpl`）、`roost-codegen/demo/README.md`（对新人的解释，按链路写）
