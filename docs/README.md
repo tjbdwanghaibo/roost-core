@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-17 第三轮新增 Feature 审查](review/REVIEW-2026-09-17-03.md)：副本重复/错误发奖 P1、DAO 嵌套通知、attribute 契约、Saga 完成订阅、battle 宽限期五项新问题；Wanted 分流、完整复现与实施建议已归档。
+
 [09-17 第二轮 Wanted 与修复验收](review/REVIEW-2026-09-17-02.md)：六服务及 directory 的 ARCH-05 交接、platform 自动重试新问题、匹配键升级限制。
 
 [09-17 匹配新边界审查](review/REVIEW-2026-09-17.md)：新增队列键碰撞、分数计算溢出、内存结果共享三个问题，附最小复现与匹配机制学习文档；用户未修复，本轮跳过旧问题验收。

@@ -6,33 +6,6 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## W-2026-09-17-03：attribute 生成器的输出依赖"所在包需提供"的七个类型，而 attribute feature 的脚手架不提供它们
-
-- **位置**：roost-codegen `internal/attribute/gen.go`（生成物引用 `AttrID` / `AttrValue` / `AttributeMeta` / `AttributeProfile`，容器访问器还引用
-  `Snapshot` / `Container` / `Selector`，都不带包名）；`internal/roost/render.go:138-160`（feature `attribute` 的脚手架只写 `package attribute` 一行的 `doc.go`）；
-  `docs/CODEGEN_REFERENCE.zh-CN.md` §11 只说"所在包需提供框架约定的 … 类型"。roost-core / roost-kit 里没有任何包定义这些类型。
-- **现象**：`features` 加 `attribute` → 写一个 `//roost:attribute` profile → `make generate` 生成 `gen_*_attribute.go` → 编译失败（`undefined: AttrID` 等）。
-  没有一个可以 import 的权威定义，也没有一份写在文档里的接口签名可以照抄；attribute 生成器在全部三仓里零消费者（codegen 自己的测试只看生成文本）。
-- **为什么可疑 / 为什么不顺手改**：这是"生成器承诺了一份契约，但契约在哪里没人写"（C4 跨包契约不一致），修法要先定：这些类型是进 roost-core
-  （新包 `attribute`，生成物 import 它）、还是由脚手架的 `doc.go` 生成一份默认定义（每工程一份，可改）、还是生成器自己在 `gen_*_attribute.go` 里带上。
-  三种选择对 core 的 API 面和生成工程的自由度影响不同，需要 review 定；实施侧本轮做 demo 时因此**没有**接 attribute（原计划 B8）。
-- **候选修法**：A. core 新包 `attribute` 放这七个类型 + `AttributeProfile` 接口，生成物 import；B. 脚手架在 `game/gameplay/attribute/doc.go`
-  生成默认定义并标"应用拥有"；C. 生成器每个 profile 文件自带私有别名（多 profile 会重复定义，需去重）。我倾向 A（与 dataengine.DirtyHook 同一模式）。
-- **会红的测试草稿**：生成工程 `-features …,attribute`，写 `//roost:attribute index=1 max=4 type P struct{HP int64}`，`make generate && go build ./...`——现在红。
-- **来源**：2026-09-17 实施 game-demo B8（attribute 演示）时发现。
-
-## W-2026-09-17-02：dao 嵌套里的嵌套（map / slice / struct 字段的元素）从存储解码后没有 dirty 传播接线
-
-- **位置**：roost-codegen `internal/dao/template_nested.go`——`Set<Field>` 对 Kind 2（map）只 `s.<f>.Set(key, val)`、Kind 3（struct）只 `s.<f> = v`，
-  以及 U-0224 新增的 `set<Field>RawMap`，都没有对元素调用 `SetNotify`；对照 `template_dao.go` 的 DAO 层：`setXRawMap` / `SetX` 对每个嵌套值
-  `val.SetNotify(func() { d.markXKeyDirty(key, val) })`（:266、:323、:342）。
-- **现象**：`hero.GetEquips(1).GetGems(2).SetLevel(3)`——改的是嵌套里的嵌套，`GemInfo.Mark()` 的 notify 为 nil，`EquipInfo` 与 `HeroDao` 都不知道，
-  这次变更不进 dirty、不进事务 patch。用 golden 的 `EquipInfo.gems: map[int32]*GemInfo` 就能写出会红的测试。
-- **为什么可疑 / 为什么不顺手改**：嵌套 struct 模板从一开始就只把自己的字段变更 `Mark()` 给父级，第二层往下从未接线——是"承诺无实现"（C2）
-  还是"嵌套只支持一层"的未写明限制，需要 review 定；接线要决定 notify 闭包捕获什么（`s.Mark` 即可，父链自然递归），以及 slice 元素的处理。
-- **候选修法**：嵌套模板对 Kind 3 字段与 Kind 2 / Kind 1 的元素在 Set 与 RawMap 恢复时 `SetNotify(s.Mark)`；DAO 层 `Init` 已对第一层做了同样的事。
-- **来源**：U-0224 修 BSON 表示时发现（`docs/bugfix/U-0224-dao-nested-bson.md` 未做一节）。
-
 ## 已分流记录（W-2026-09-16-01 已分流）
 
 W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-04.md)，不再属于待审表。确认的是策略注入承诺无效；原草稿预设 Enqueue/Sweep 自动成组，与当前 Store 契约不符，不直接作为修复测试。建议保留调用方驱动，移除无效 Mod/Config/codegen 注入入口。具体实施与验收以链接文档为准。
@@ -63,26 +36,8 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
 - **来源**：game-demo 第五批实施时发现（roost-core `docs/feature/GAME_DEMO_TEMPLATE.md` §7.5）；demo 的
   `internal/service/<game>/matchmaker.go` 直接调 `svcmatch.FirstComeGrouping{}.Group`，是这个接口目前唯一的使用方式。
 
-## W-2026-09-17-04：原生 Nest saga 步骤的完成效果没有消费者
-
-- **位置**：roost-core `saga/nest.go` `NewCompletionEffect`（Topic `saga.result.<sagaID>`，经 Nest 事务的 Data Engine outbox 发到
-  `<dataengine.effects.subject_prefix>.saga.result.<id>`，即 `ROOST_EFFECTS` 流的 `roost.effect.saga.result.*`）；
-  `saga/assembly.go` `Start` 只订阅 `SubscribeCompletions`（`ROOST_SAGA` 流、`<saga.subject_prefix>.result.>`）与
-  `SubscribeNestStarts`（`ROOST_EFFECTS` 流、`<effect_prefix>.saga.start`）。`grep -rn CompletionEffectTopicPrefix` 只有发送方与回执解码。
-- **现象**：按 `SubscribeDataEngineStep` 的文档做一个原生步骤（`inbox.Bind(command, reservation)` + `saga.EmitCompletion` 在 Nest 事务里），
-  消费者 `waitReplay` 等到 Data Engine 回执后 ack，但协调器永远收不到完成——它订的是另一条流的另一个前缀。saga 停在 waiting，
-  按超时重发，重发又被 inbox 判重放回执（不重跑），协调器仍收不到。
-- **为何可疑**：`SubscribeDataEngineStep` 的注释说"acknowledges only after the authoritative Data Engine receipt is projected and replayable"，
-  隐含"之后完成会到协调器"；`nest_atomic_test.go` 只断言 CommitRecord 里有那条 effect，没有端到端。start 效果有专门的
-  `SubscribeNestStarts`，result 效果没有对称的 `SubscribeNestCompletions`。
-- **会红的测试草稿**：在 `assembly_test.go` 的 fake JetStream 上 `Assemble` + `Start`，往 `ROOST_EFFECTS` 流投一条
-  `roost.effect.saga.result.<id>` 的 completion 效果载荷（`NewCompletionEffect` 产出的 Payload），断言 `engine.Get(id).Status` 离开 waiting；
-  当前没有订阅，断言不成立。
-- **候选修法**：A. `Assembly.Start` 加第三个持久消费者：`Starts.Stream` 上过滤 `<EffectPrefix>.saga.result.>`，解 `completionEffectPayload`
-  后走 `engine.Complete`（与 `SubscribeCompletions` 同一处理，只是解包不同）；B. 让 `EmitCompletion` 的效果 Topic 直接落到 saga 流——
-  不可行，outbox 的 subject 前缀是全局的。A 更像 start 那一侧已经做的事。
-- **来源**：game-demo 送礼 saga（第十批）选步骤实现方式时发现；demo 因此用了 `SubscribeMongoStep`，并把"Nest 提交与 inbox 回执不原子"写成边界。
-\n\n## W-2026-09-17-05：实体状态同步（room 广播 + entitysync 订阅）没有装配入口，框架里一个使用方都没有
+## W-2026-09-17-05：实体状态同步（room 广播 + entitysync 订阅）没有装配入口，框架里一个使用方都没有
+**09-17 第三轮复核：继续观察。** `EntityBase.Sync()` 是公开入口，`RoomManager.Create` / `RoomBroadcaster.RegisterSubject` 可组合，且 broadcaster 已拥有自己的 SubscriptionCoordinator。因此下方候选的“没有任何公开路径”不是本轮结论，也不建议再建第二个 coordinator。仍缺真实生成实体→房间→会话→sink 的运行证据，先补例子及锁/持久化水位/卸载关闭验证，再定 Kit 装配。见 [审查及修正](REVIEW-2026-09-17-03.md) 与 [机制](../review/IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。以下保留实现侧原始候选。
 
 - **位置**：`roost-core/room`（`NewRoomManager` / `NewRoomBroadcaster` / `NewRoomTransportSink` / `RoomBroadcaster.RegisterSubject`）、
   `roost-core/entitysync`（`NewSubscriptionCoordinator`）、`roost-core/entity/subject_sync.go`（`SubjectSyncState`、`SubjectSyncPacker`）。
@@ -128,3 +83,56 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
   各包 Redis key / errcode 段 / RPC 方法名不变；每包各需 core + kit 一次发版（可以攒一批）。
 - **复现 / 验收草稿**：`go list -deps ./service/<x> | grep roost-kit` 在 core 为空；kit 全套；codegen 生成工程（framework services 引用的是 kit 别名）编译。
 - **来源**：2026-09-16 ARCH-01～04 收尾时的遗留项（`docs/history/POST_RELEASE_PLAN_2026-09-08.md` §0.6）。
+
+## 09-17 第三轮已分流：Wanted-02 / 03 / 04
+
+Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（attribute 契约），Wanted-04 → RR-20260917-07（原生 Saga 完成订阅）。全部未修复；[确认问题与实施交接](REVIEW-2026-09-17-03.md) · [完整复现](REPRO-2026-09-17-03.md)。以下仅归档原始候选，不再属于待审表。
+
+### W-2026-09-17-02：dao 嵌套里的嵌套（map / slice / struct 字段的元素）从存储解码后没有 dirty 传播接线
+
+- **位置**：roost-codegen `internal/dao/template_nested.go`——`Set<Field>` 对 Kind 2（map）只 `s.<f>.Set(key, val)`、Kind 3（struct）只 `s.<f> = v`，
+  以及 U-0224 新增的 `set<Field>RawMap`，都没有对元素调用 `SetNotify`；对照 `template_dao.go` 的 DAO 层：`setXRawMap` / `SetX` 对每个嵌套值
+  `val.SetNotify(func() { d.markXKeyDirty(key, val) })`（:266、:323、:342）。
+- **现象**：`hero.GetEquips(1).GetGems(2).SetLevel(3)`——改的是嵌套里的嵌套，`GemInfo.Mark()` 的 notify 为 nil，`EquipInfo` 与 `HeroDao` 都不知道，
+  这次变更不进 dirty、不进事务 patch。用 golden 的 `EquipInfo.gems: map[int32]*GemInfo` 就能写出会红的测试。
+- **为什么可疑 / 为什么不顺手改**：嵌套 struct 模板从一开始就只把自己的字段变更 `Mark()` 给父级，第二层往下从未接线——是"承诺无实现"（C2）
+  还是"嵌套只支持一层"的未写明限制，需要 review 定；接线要决定 notify 闭包捕获什么（`s.Mark` 即可，父链自然递归），以及 slice 元素的处理。
+- **候选修法**：嵌套模板对 Kind 3 字段与 Kind 2 / Kind 1 的元素在 Set 与 RawMap 恢复时 `SetNotify(s.Mark)`；DAO 层 `Init` 已对第一层做了同样的事。
+- **来源**：U-0224 修 BSON 表示时发现（`docs/bugfix/U-0224-dao-nested-bson.md` 未做一节）。
+
+
+### W-2026-09-17-03：attribute 生成器的输出依赖"所在包需提供"的七个类型，而 attribute feature 的脚手架不提供它们
+
+- **位置**：roost-codegen `internal/attribute/gen.go`（生成物引用 `AttrID` / `AttrValue` / `AttributeMeta` / `AttributeProfile`，容器访问器还引用
+  `Snapshot` / `Container` / `Selector`，都不带包名）；`internal/roost/render.go:138-160`（feature `attribute` 的脚手架只写 `package attribute` 一行的 `doc.go`）；
+  `docs/CODEGEN_REFERENCE.zh-CN.md` §11 只说"所在包需提供框架约定的 … 类型"。roost-core / roost-kit 里没有任何包定义这些类型。
+- **现象**：`features` 加 `attribute` → 写一个 `//roost:attribute` profile → `make generate` 生成 `gen_*_attribute.go` → 编译失败（`undefined: AttrID` 等）。
+  没有一个可以 import 的权威定义，也没有一份写在文档里的接口签名可以照抄；attribute 生成器在全部三仓里零消费者（codegen 自己的测试只看生成文本）。
+- **为什么可疑 / 为什么不顺手改**：这是"生成器承诺了一份契约，但契约在哪里没人写"（C4 跨包契约不一致），修法要先定：这些类型是进 roost-core
+  （新包 `attribute`，生成物 import 它）、还是由脚手架的 `doc.go` 生成一份默认定义（每工程一份，可改）、还是生成器自己在 `gen_*_attribute.go` 里带上。
+  三种选择对 core 的 API 面和生成工程的自由度影响不同，需要 review 定；实施侧本轮做 demo 时因此**没有**接 attribute（原计划 B8）。
+- **候选修法**：A. core 新包 `attribute` 放这七个类型 + `AttributeProfile` 接口，生成物 import；B. 脚手架在 `game/gameplay/attribute/doc.go`
+  生成默认定义并标"应用拥有"；C. 生成器每个 profile 文件自带私有别名（多 profile 会重复定义，需去重）。我倾向 A（与 dataengine.DirtyHook 同一模式）。
+- **会红的测试草稿**：生成工程 `-features …,attribute`，写 `//roost:attribute index=1 max=4 type P struct{HP int64}`，`make generate && go build ./...`——现在红。
+- **来源**：2026-09-17 实施 game-demo B8（attribute 演示）时发现。
+
+
+### W-2026-09-17-04：原生 Nest saga 步骤的完成效果没有消费者
+
+- **位置**：roost-core `saga/nest.go` `NewCompletionEffect`（Topic `saga.result.<sagaID>`，经 Nest 事务的 Data Engine outbox 发到
+  `<dataengine.effects.subject_prefix>.saga.result.<id>`，即 `ROOST_EFFECTS` 流的 `roost.effect.saga.result.*`）；
+  `saga/assembly.go` `Start` 只订阅 `SubscribeCompletions`（`ROOST_SAGA` 流、`<saga.subject_prefix>.result.>`）与
+  `SubscribeNestStarts`（`ROOST_EFFECTS` 流、`<effect_prefix>.saga.start`）。`grep -rn CompletionEffectTopicPrefix` 只有发送方与回执解码。
+- **现象**：按 `SubscribeDataEngineStep` 的文档做一个原生步骤（`inbox.Bind(command, reservation)` + `saga.EmitCompletion` 在 Nest 事务里），
+  消费者 `waitReplay` 等到 Data Engine 回执后 ack，但协调器永远收不到完成——它订的是另一条流的另一个前缀。saga 停在 waiting，
+  按超时重发，重发又被 inbox 判重放回执（不重跑），协调器仍收不到。
+- **为何可疑**：`SubscribeDataEngineStep` 的注释说"acknowledges only after the authoritative Data Engine receipt is projected and replayable"，
+  隐含"之后完成会到协调器"；`nest_atomic_test.go` 只断言 CommitRecord 里有那条 effect，没有端到端。start 效果有专门的
+  `SubscribeNestStarts`，result 效果没有对称的 `SubscribeNestCompletions`。
+- **会红的测试草稿**：在 `assembly_test.go` 的 fake JetStream 上 `Assemble` + `Start`，往 `ROOST_EFFECTS` 流投一条
+  `roost.effect.saga.result.<id>` 的 completion 效果载荷（`NewCompletionEffect` 产出的 Payload），断言 `engine.Get(id).Status` 离开 waiting；
+  当前没有订阅，断言不成立。
+- **候选修法**：A. `Assembly.Start` 加第三个持久消费者：`Starts.Stream` 上过滤 `<EffectPrefix>.saga.result.>`，解 `completionEffectPayload`
+  后走 `engine.Complete`（与 `SubscribeCompletions` 同一处理，只是解包不同）；B. 让 `EmitCompletion` 的效果 Topic 直接落到 saga 流——
+  不可行，outbox 的 subject 前缀是全局的。A 更像 start 那一侧已经做的事。
+- **来源**：game-demo 送礼 saga（第十批）选步骤实现方式时发现；demo 因此用了 `SubscribeMongoStep`，并把"Nest 提交与 inbox 回执不原子"写成边界。

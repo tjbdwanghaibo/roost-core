@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+09-17 第三轮（09-18 完成文档收尾）：48 份运行记录、29 篇机制文档、74 RR（记录计数，非覆盖率）。Core dc1aab1（后续 1af903e 仅文档）/ Kit 55f3a35 / Codegen 2e09c16。[运行](REVIEW-2026-09-17-03.md) · [五项问题](../bug/REVIEW-2026-09-17-03.md) · [跨层契约机制](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。
+
+| 范围 | 已验证/状态 | 限制与下一入口 |
+| --- | --- | --- |
+| DAO BSON / nested dirty | 原 codec 三项过；通知四叶子一过三失败，RR-05 | struct/slice、解绑、真实事务 patch/rollback 待查 |
+| attribute feature | CLI 成功、消费编译缺公共类型，RR-06 | Core runtime 与本地访问器契约待实施 |
+| Saga U-0225 / 原生完成 | 原 race 过；订阅三叶子二过一失败，RR-07 | fake JS；原生 inbox/outbox/真实 broker 未端到端 |
+| dungeon 奖励 | 生成 Controller + Core Session 五叶子二过三失败，P1 RR-08 | 派发替身；事务内 RunID 去重待实施 |
+| battle 宽限期 | 实际 run/Room 两叶子一过一失败，RR-09 | 未连 TCP；开帧状态机待修 |
+| Wanted-05 statesync | 公开组合入口已读，broadcaster 自有 coordinator；再观察 | 下一轮优先真实生成实体→room→sink、持久化水位与关闭 |
+| cfggen / 新 demo | runtime 四项过；demo generate/build/编译检查过 | GM/聊天/榜单等尚未逐项行为验收；生产故障/性能未测 |
+
+新增行为 14 叶子 6 过/8 失败，attribute 编译失败另计。Wanted-02/03/04 已分流，原文保留。图谱仍 09-08 旧代，相关过期/未跟踪路径已源码补证；没有认定整包完成。前轮 platform RR-04、历史匹配键升级和 ARCH-05 状态不变。
+
 09-17 第二轮：47 份运行记录、28 篇机制文档、69 RR（记录计数，非覆盖率）。实际测试 Core 6fb36e7 / Kit 4830150 / Codegen 242b438；收尾时新远端 feature 另在第三轮审查。[运行](REVIEW-2026-09-17-02.md)。
 
 | 范围 | 已验证/状态 | 限制与下一入口 |
