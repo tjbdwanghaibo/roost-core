@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-17 第二轮 Wanted 与修复验收](review/REVIEW-2026-09-17-02.md)：六服务及 directory 的 ARCH-05 交接、platform 自动重试新问题、匹配键升级限制。
+
 [09-17 匹配新边界审查](review/REVIEW-2026-09-17.md)：新增队列键碰撞、分数计算溢出、内存结果共享三个问题，附最小复现与匹配机制学习文档；用户未修复，本轮跳过旧问题验收。
 
 [09-16 实施交接验收](review/REVIEW-2026-09-16-05.md)：Recover/Grouping 与服务迁移已落实，真实 demo 两种依赖模式通过；新确认 manager 两项生命周期问题，保留 durable 升级待办。

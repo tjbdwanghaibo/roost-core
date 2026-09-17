@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-17 第二轮 Wanted/验收](REVIEW-2026-09-17-02.md) · [问题](../bug/REVIEW-2026-09-17-02.md) · [23 场景源码](../bug/REPRO-2026-09-17-02.md) · [ARCH-05 七包边界](IMPLEMENTATION-SERVICE-PLACEMENT-AND-RECOVERY.md)。
+
 [09-17 匹配身份与边界](REVIEW-2026-09-17.md) · [三个新问题](../bug/REVIEW-2026-09-17.md) · [三个最小复现](../bug/REPRO-2026-09-17.md) · [匹配身份、所有权与配对机制](IMPLEMENTATION-MATCH-IDENTITY-OWNERSHIP-AND-GROUPING.md)。用户未修复，本轮跳过旧验收。
 
 [09-16 第五轮交接落实情况](REVIEW-2026-09-16-05.md) · [manager 两项新问题与复现](../bug/REVIEW-2026-09-16-05.md) · [服务与生命周期分层机制](IMPLEMENTATION-CORE-KIT-SERVICE-AND-MANAGER.md)。
