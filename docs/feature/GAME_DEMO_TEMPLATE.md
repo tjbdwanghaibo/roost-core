@@ -284,7 +284,10 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
 - **实跑环境**：本机 27017 / 4222 / 6379 被不带 replSet 的 mongod、没开 JetStream 的 nats-server 占着，Docker 默认端口路径没法在这台机器验证；用 kit 隔离环境
   （`sed` 五份配置指向 27117-27119 / 14222 / 16379，ops 改 920x，nats.prefix 独立）跑通：五个进程 `run.sh start` 全部 ready，6 个机器人全链路通过。
   连续两轮间隔 < 60s 会有一个机器人 `ticket still waiting`（上一轮失败者的票被这一轮配走），是 match 的正确行为，README 写明了。
-- **未做**：mail 的客户端协议（列邮件 / 领附件）——升级奖励邮件目前没有附件，客户端也看不到邮箱；session 服务未托管进 game 模板；多 game 进程的 chat 扇出应改订阅流。
+- **mail 的客户端一半**（同批第二段）：升级奖励邮件带附件（`game/rewards/`，发件方与领取方共用编码），协议 ListMail 10008（含 `Claimable`）/ ClaimMail 10009
+  （ReserveClaim → Sync_AddItem → CommitClaim，失败 CancelClaim）；机器人 add_exp 后 `retry × 20 { wait 250ms; list_mail }` 再 `claim_mail` 断言背包计数。
+  边界写在 README：demo 没把 claim token 带进 Nest 事务，进程死在 grant 与 commit 之间会重发一叠。场景变长（两条异步链）后机器人 p95 默认阈值 2s → 3s。
+- **未做**：session 服务未托管进 game 模板；多 game 进程的 chat 扇出应改订阅流；claim token 进 Nest 事务的幂等。
 
 ## 8. 相关文件速查
 
