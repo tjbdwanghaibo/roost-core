@@ -295,6 +295,9 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
 - **dao golden 过真实编解码器的 CI 门**（`scripts/dao-golden-runtime.sh`）：U-0224 那类"文本对、编码错"的缺陷此后在 CI 红。
 - **demo 场景在 CI 真跑**（C11）：framework-compat 的 demo cell 现在 compose 起基础设施 → 生成的 `run.sh start` 起六进程 → `loadtest -count 6` 走完整条链 → stop；此前只编译。
 - **`roost add rpc`**（B5）：工程自己的跨进程服务一条命令到装配——接口 / 实现 / owner Mod / 两半 / 清单 `rpcs` 与 `uses_rpcs` / bootstrap；full 场景 CI 编译 `Guild`。
+- **C14 / D16**：生成工程带 `.gitattributes`（生成文本钉 LF），`generate --check` 与 `servicerpc -check` 容忍 CRLF 检出；`project next` 完成必做链后列出未用的能力（rpc / saga / attribute / skill / webroute / cfggen）。
+- **B7 技能目录**：`add skill Fireball` + 契约写明的 JSON，game `Init` 用 roost-core/skill 编译目录 fail-fast，`SkillCatalog` 10012 列 id 与 warning 数；技能执行刻意不进 demo。
+- **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
 

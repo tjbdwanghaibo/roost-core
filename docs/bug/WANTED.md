@@ -26,6 +26,21 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现 / 验收草稿**：`go list -deps ./service/<x> | grep roost-kit` 在 core 为空；kit 全套；codegen 生成工程（framework services 引用的是 kit 别名）编译。
 - **来源**：2026-09-16 ARCH-01～04 收尾时的遗留项（`docs/history/POST_RELEASE_PLAN_2026-09-08.md` §0.6）。
 
+## W-2026-09-17-03：attribute 生成器的输出依赖"所在包需提供"的七个类型，而 attribute feature 的脚手架不提供它们
+
+- **位置**：roost-codegen `internal/attribute/gen.go`（生成物引用 `AttrID` / `AttrValue` / `AttributeMeta` / `AttributeProfile`，容器访问器还引用
+  `Snapshot` / `Container` / `Selector`，都不带包名）；`internal/roost/render.go:138-160`（feature `attribute` 的脚手架只写 `package attribute` 一行的 `doc.go`）；
+  `docs/CODEGEN_REFERENCE.zh-CN.md` §11 只说"所在包需提供框架约定的 … 类型"。roost-core / roost-kit 里没有任何包定义这些类型。
+- **现象**：`features` 加 `attribute` → 写一个 `//roost:attribute` profile → `make generate` 生成 `gen_*_attribute.go` → 编译失败（`undefined: AttrID` 等）。
+  没有一个可以 import 的权威定义，也没有一份写在文档里的接口签名可以照抄；attribute 生成器在全部三仓里零消费者（codegen 自己的测试只看生成文本）。
+- **为什么可疑 / 为什么不顺手改**：这是"生成器承诺了一份契约，但契约在哪里没人写"（C4 跨包契约不一致），修法要先定：这些类型是进 roost-core
+  （新包 `attribute`，生成物 import 它）、还是由脚手架的 `doc.go` 生成一份默认定义（每工程一份，可改）、还是生成器自己在 `gen_*_attribute.go` 里带上。
+  三种选择对 core 的 API 面和生成工程的自由度影响不同，需要 review 定；实施侧本轮做 demo 时因此**没有**接 attribute（原计划 B8）。
+- **候选修法**：A. core 新包 `attribute` 放这七个类型 + `AttributeProfile` 接口，生成物 import；B. 脚手架在 `game/gameplay/attribute/doc.go`
+  生成默认定义并标"应用拥有"；C. 生成器每个 profile 文件自带私有别名（多 profile 会重复定义，需去重）。我倾向 A（与 dataengine.DirtyHook 同一模式）。
+- **会红的测试草稿**：生成工程 `-features …,attribute`，写 `//roost:attribute index=1 max=4 type P struct{HP int64}`，`make generate && go build ./...`——现在红。
+- **来源**：2026-09-17 实施 game-demo B8（attribute 演示）时发现。
+
 ## W-2026-09-17-02：dao 嵌套里的嵌套（map / slice / struct 字段的元素）从存储解码后没有 dirty 传播接线
 
 - **位置**：roost-codegen `internal/dao/template_nested.go`——`Set<Field>` 对 Kind 2（map）只 `s.<f>.Set(key, val)`、Kind 3（struct）只 `s.<f> = v`，
