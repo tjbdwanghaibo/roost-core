@@ -103,3 +103,25 @@ C2：模板承诺"嵌套 struct 带 dirty 传播、随父 DAO 持久化"，但�
 
 测试：`nested_bson_promises_test.go` 新增 `TestTheDaoDocumentCarriesNestedWireFormsNotMarshalers`（断言 DAO 文档里是 `d.pos.bsonDoc()` /
 `daoMapDocs(…, equipInfoPtrBSONDoc)` 而不再是 `d.pos`）；golden 全部重生成；真实驱动往返 `TestHeroDaoRoundTrip` 通过。
+
+## 为什么之前没发现（以及补的门）
+
+四层都没有把生成物"跑起来"：
+
+1. **codegen 的测试只比对文本**。`golden_test.go` 逐字节比对生成源码，`parse_test.go` 用 `go/parser` 断言结构（甚至有一条
+   `assertStructFieldsUnexported` 专门断言"字段必须未导出"——这是刻意的设计，但没有人接着问"那它怎么序列化"）。生成物在 codegen 里
+   **从不编译、从不编码**：codegen 对运行时零依赖（`go.mod` 只有 yaml），`testdata/` 又对 go 工具不可见，所以连"引用了 bson 却没实现
+   Marshaler"这种能被编译器或驱动暴露的事都无从发生。
+2. **demo 没有嵌套 struct**。game-demo 的 Player 是标量 + `map[int64]int32`，World 是两个计数器；framework-compat 的 demo scenario 与
+   实跑压测都真编译、真落库、真重启核对，但覆盖不到嵌套字段这条路。
+3. **core / kit 没有消费者**。core 的 dataengine 测试用手写 DAO 替身；kit 没有用生成嵌套 struct 的地方；`DirtyHook` 全仓只有一处定义。
+4. **审计矩阵的盲区**。`internal/dao` 那行：09-06 U-0041 是"生成器层守卫"（redis mode / key、dbscope 校验），09-09 是脚本扫；覆盖矩阵的八个
+   缺陷类里没有"生成物对第三方运行时契约是否成立"这一类——问题不在 Go 语义里（代码合法、测试全绿），在 mongo-driver 的反射规则里
+   （未导出字段不可见、导出的空内嵌 struct 编成空子文档）。
+
+一句话：**这是"生成器生成了什么"与"编解码器读到了什么"两个契约之间的缝**，而所有已有测试都站在第一个契约这一侧。
+
+补的门（roost-codegen `scripts/dao-golden-runtime.sh`，ci.yml Linux 一步）：把 dao golden 放进临时模块，钉当前 roost-core pin 与
+mongo-driver v2，跑 `internal/dao/testdata/runtime/roundtrip_test.go`——提交文档与回滚快照往返、`dirtyhook` 不入文档、nil 指针元素保留
+null。它站在第二个契约那一侧；模板改坏编码形状会在 CI 红，而不是在某个业务的 Mongo 里静默丢字段。仍未做：给 demo 的 Player 加一个嵌套
+字段让压测也覆盖（W-2026-09-17-02 接线补上之后一起做更合适）。

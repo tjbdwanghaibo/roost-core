@@ -290,7 +290,11 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
 - **session 托管进 game 模板**（同批第三段）：`frameworkCatalog` 加 `session`（`Release()` / `Metrics()` collaborators，默认拒绝），game / game-demo 现在托管五个服务；
   demo 的 `Release()` 是日志 + nil（副本不占外部资源），协议 EnterDungeon 10010 / FinishDungeon 10011（Finish 后经 AddExp 两实体事务发 100 exp）。
   实跑：六进程 `run.sh` 全 ready，6 / 20 机器人全链路通过（登录 → 聊天 → 道具 → 升级 → 领邮件 → 副本 → 匹配 → 世界计数）。
-- **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）。
+- **ranked 队列**（A4）：`game/matchmaking.Pools()`——duel 按到达、ranked 按等级（`ScoreWindowGrouping` 窗口 5 / +5 每秒 / 上限 50，U-0222 修过溢出后的第一个使用方）；
+  `PlayerLevel` 读 handler 在 Player 锁内取等级作 Score；JoinQueue / PollMatch 带 mode；机器人 duel 之后再排 ranked。
+- **dao golden 过真实编解码器的 CI 门**（`scripts/dao-golden-runtime.sh`）：U-0224 那类"文本对、编码错"的缺陷此后在 CI 红。
+- **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
+  给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
 
 ## 8. 相关文件速查
 
