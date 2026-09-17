@@ -302,6 +302,15 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   命令用与端点相同的 Nest Sender / mail 客户端，所以 GM 加的经验升级同样发奖励邮件。实跑发现并修：`player_id` 只收唯一 id 时，运维从 Mongo 拿到的 `_id`（完整实体 id）
   被再包一层成了不存在的实体；现在 `MatchEntityID` 识别完整 id、`GetUniqueIDFromEntityID` 还原邮件收件人，两种形式都收。实跑：加道具落库、加 300 exp 升 2 → 5 级且 World `exp_granted` 500 → 800、
   邮件同 trace 两次同一 `mail_id`、无 token 401、坏载荷 `command invalid`、超叠加上限按 `bag_full` 拒绝。
+- **B9 saga 送礼**（`roost add saga GiftItem -service game -steps debit,deliver` 的第一个真实使用方）：`SendGift`（10013）在发送方 Player 的 Nest 事务里
+  检查背包并 `saga.EmitStart`（start 意图与事务同一条 WAL 记录，saga id = 发送方 + 会话 + 帧序号，重发同帧不重开）；`internal/service/<game>/gift_saga.go`
+  四个步骤消费者（`SubscribeMongoStep`）：debit = `GiftDebit` Nest 事务（`Bag.RemoveItem`，新 errcode `item_short`），补偿 = 既有 `AddItem`；deliver = 查 Player 集合确认
+  收件人进过游戏后 `mail.Send` 带附件（RequestID = 命令 IdempotencyKey）；`GiftStatus`（10014）经 `mods.ModSaga` 的 Engine 读记录（未到 / 非本人 = `unknown`）。
+  机器人：送给自己 → 轮询 `gift_status` 到终态 → `expect_gift completed` → 领邮件；再送给玩家 1（从未进游戏）→ `expect_gift compensated`。GM 加 `gm.saga.get` / `gm.saga.list`。
+  边界写在文件头：Nest 提交与 inbox 回执不原子（同 claim token 那条）；原生路径的完成效果没人消费（W-2026-09-17-04）。
+  实跑发现两个框架问题：**core saga 补偿版本 +2**（U-0225，Mongo 存储上任何步骤拒绝都进不了补偿——修后 6 completed + 6 compensated）；
+  **`add mod` / `add saga` 不给已生成的配置补段**（后加的 saga 用默认 8 GiB 建流，隔离环境起不来，配置里没有 saga 段可改）——codegen 现在按缺失的顶层键追加两份配置。
+  机器人 p95 阈值默认 5s → 10s（四条异步链，成本落在 4s 桶边）。framework-compat 的 released × demo 暂时排除到 core v1.15.6 发版。
 - **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。

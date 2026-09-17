@@ -82,3 +82,23 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
      的 match collaborators 模板同步删 `Grouping()`。改动更小，也让签名与行为一致。
 - **来源**：game-demo 第五批实施时发现（roost-core `docs/feature/GAME_DEMO_TEMPLATE.md` §7.5）；demo 的
   `internal/service/<game>/matchmaker.go` 直接调 `svcmatch.FirstComeGrouping{}.Group`，是这个接口目前唯一的使用方式。
+
+## W-2026-09-17-04：原生 Nest saga 步骤的完成效果没有消费者
+
+- **位置**：roost-core `saga/nest.go` `NewCompletionEffect`（Topic `saga.result.<sagaID>`，经 Nest 事务的 Data Engine outbox 发到
+  `<dataengine.effects.subject_prefix>.saga.result.<id>`，即 `ROOST_EFFECTS` 流的 `roost.effect.saga.result.*`）；
+  `saga/assembly.go` `Start` 只订阅 `SubscribeCompletions`（`ROOST_SAGA` 流、`<saga.subject_prefix>.result.>`）与
+  `SubscribeNestStarts`（`ROOST_EFFECTS` 流、`<effect_prefix>.saga.start`）。`grep -rn CompletionEffectTopicPrefix` 只有发送方与回执解码。
+- **现象**：按 `SubscribeDataEngineStep` 的文档做一个原生步骤（`inbox.Bind(command, reservation)` + `saga.EmitCompletion` 在 Nest 事务里），
+  消费者 `waitReplay` 等到 Data Engine 回执后 ack，但协调器永远收不到完成——它订的是另一条流的另一个前缀。saga 停在 waiting，
+  按超时重发，重发又被 inbox 判重放回执（不重跑），协调器仍收不到。
+- **为何可疑**：`SubscribeDataEngineStep` 的注释说"acknowledges only after the authoritative Data Engine receipt is projected and replayable"，
+  隐含"之后完成会到协调器"；`nest_atomic_test.go` 只断言 CommitRecord 里有那条 effect，没有端到端。start 效果有专门的
+  `SubscribeNestStarts`，result 效果没有对称的 `SubscribeNestCompletions`。
+- **会红的测试草稿**：在 `assembly_test.go` 的 fake JetStream 上 `Assemble` + `Start`，往 `ROOST_EFFECTS` 流投一条
+  `roost.effect.saga.result.<id>` 的 completion 效果载荷（`NewCompletionEffect` 产出的 Payload），断言 `engine.Get(id).Status` 离开 waiting；
+  当前没有订阅，断言不成立。
+- **候选修法**：A. `Assembly.Start` 加第三个持久消费者：`Starts.Stream` 上过滤 `<EffectPrefix>.saga.result.>`，解 `completionEffectPayload`
+  后走 `engine.Complete`（与 `SubscribeCompletions` 同一处理，只是解包不同）；B. 让 `EmitCompletion` 的效果 Topic 直接落到 saga 流——
+  不可行，outbox 的 subject 前缀是全局的。A 更像 start 那一侧已经做的事。
+- **来源**：game-demo 送礼 saga（第十批）选步骤实现方式时发现；demo 因此用了 `SubscribeMongoStep`，并把"Nest 提交与 inbox 回执不原子"写成边界。

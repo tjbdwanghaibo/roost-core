@@ -623,7 +623,7 @@ func (e *Engine) applyCompletion(record Record, definition Definition, result Co
 			after.CompletedSteps = record.Step + 1
 			after.Step++
 			if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) {
-				return e.beginCompensation(after, "saga deadline exceeded after step completion", now)
+				return compensationState(after, "saga deadline exceeded after step completion", now)
 			}
 			if after.Step >= len(definition.Steps) {
 				after.Status = StatusCompleted
@@ -652,14 +652,27 @@ func (e *Engine) applyCompletion(record Record, definition Definition, result Co
 			after.NextRunAt = time.Time{}
 			return after
 		}
-		return e.beginCompensation(after, result.Error, now)
+		return compensationState(after, result.Error, now)
 	}
-	return e.retryOrCompensate(after, definition, result.Error, now)
+	return e.retryState(after, definition, result.Error, now)
 }
 
+// retryOrCompensate is the transition from a record as stored (the claim
+// loop's timeout path): one version step, then the retry-or-compensate
+// decision. applyCompletion, which has already advanced the version, calls
+// retryState directly (U-0225, see beginCompensation).
 func (e *Engine) retryOrCompensate(record Record, definition Definition, reason string, now time.Time) Record {
 	after := record.Clone()
-	after.Version = max(after.Version, record.Version+1)
+	after.Version = record.Version + 1
+	return e.retryState(after, definition, reason, now)
+}
+
+// retryState schedules another attempt of the current step while attempts
+// remain, and otherwise moves to compensation (or manual_required when the
+// failing step was itself a compensation). after's version is already
+// advanced by the caller.
+func (e *Engine) retryState(after Record, definition Definition, reason string, now time.Time) Record {
+	record := after
 	after.UpdatedAt = now
 	after.LastError = reason
 	after.CommandID = ""
@@ -685,12 +698,26 @@ func (e *Engine) retryOrCompensate(record Record, definition Definition, reason 
 		after.NextRunAt = time.Time{}
 		return after
 	}
-	return e.beginCompensation(after, reason, now)
+	return compensationState(after, reason, now)
 }
 
+// beginCompensation is the transition from a record as stored: it advances
+// the version once and then turns the record into its compensation state.
+// Callers that have already advanced the version (applyCompletion,
+// retryOrCompensate) use compensationState directly — beginCompensation on
+// an already-advanced clone produced expected+2, which MongoStore.Apply
+// rejects as an invalid record, so no step refusal or exhausted retry ever
+// reached compensation on Mongo (U-0225; the memory store used in tests only
+// compares the current version and never saw it).
 func (e *Engine) beginCompensation(record Record, reason string, now time.Time) Record {
 	after := record.Clone()
-	after.Version = max(after.Version, record.Version+1)
+	after.Version = record.Version + 1
+	return compensationState(after, reason, now)
+}
+
+// compensationState fills in the compensation (or terminal failure) state on
+// a record whose version the caller has already advanced.
+func compensationState(after Record, reason string, now time.Time) Record {
 	after.UpdatedAt = now
 	after.LastError = reason
 	after.Attempt = 0

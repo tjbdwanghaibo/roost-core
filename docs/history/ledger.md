@@ -109,7 +109,7 @@
 | core | `robot/session` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot/transport` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `safemap` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-08 U-0107（修复，回退 2 红） | 09-02 | 09-02 | 09-02 |
+| core | `saga` | 09-02 | 09-06 U-0050（回退 40 条） / 09-09 U-0148 / 09-17 U-0225（修复） | 09-02 | 09-02 | 09-08 U-0107（修复，回退 2 红） | 09-02 | 09-02 | 09-02 |
 | core | `security` | 09-02 | 09-06 U-0068（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `statesync` | 09-02 | 09-06 U-0067（回退 9 条） / 09-09 U-0139（回退 6 条，1 不可达） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-15 U-0200、U-0201、U-0202、U-0203（修复） / 09-15 U-0204（修复） / 09-15 U-0205（修复） |
 | core | `syncbus` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
@@ -239,6 +239,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0225 | 2026-09-17 | roost-core `saga`：步骤不可重试失败 / 重试用尽后，进补偿的记录版本 +2，MongoStore.Apply 只收 +1，saga 卡在 waiting（game-demo 实跑发现，无 RR） | C2 | applyCompletion / retryOrCompensate 各加一次版本再交给 beginCompensation 又加一次；内存 store 只比对当前版本所以单测一直绿。修法：拆成"加一次版本"入口 + 纯状态函数（compensationState / retryState），已加版的调用方直接用后者 | `compensation_version_promises_test.go` | 修前红（`Complete rejected a valid step refusal: saga: invalid record`、`version 7 → 9, want 8`）；修后 saga `-race` 全绿，实跑 6 completed + 6 compensated | T-119 · `docs/bugfix/U-0225-saga-compensation-version.md` |
 | U-0224 | 2026-09-17 | roost-codegen `internal/dao`：生成的嵌套 struct 无 BSON 表示，落库只剩 `{"dirtyhook": {}}`（用户复审提出，无 RR） | C2 | 嵌套字段未导出且无 MarshalBSON，反射编码只见导出的内嵌 DirtyHook；数据未存、回滚快照与同步同丢。修法：DirtyHook 打 `bson:"-" json:"-"`，每个嵌套类型生成值接收者 MarshalBSON / 指针接收者 UnmarshalBSON（私有 wire struct，snake_case 键，map 经 raw 辅助） 09-17 复核补修：Marshaler 路每个嵌套值多一次 []byte 与装箱（HeroDao 82 allocs），改为 wire 形式直接进父 DAO 文档反射内联编码（63 allocs，下界 33） | `nested_bson_promises_test.go` | 修前红（`lacks "func (s Position) MarshalBSON…"`）；修后 dao 全绿，真实驱动 probe 往返 `{"pos":{"x":3,"y":4}}` | T-118 · `docs/bugfix/U-0224-dao-nested-bson.md` |
 | U-0223 | 2026-09-17 | roost-core `service/match`：内存 Store 输入 / 返回切片与存储共享（RR-20260917-03） | C2 | 按值存取的 Ticket / Match 里 Payload、Members、TicketIDs 是浅复制，改返回值即改存储。修法：`Subject` / `Ticket` / `Match` 的 `clone` 在 Enqueue 输入与六个返回边界深复制 | `result_ownership_promises_test.go` | 修前红（`Commit's returned match aliases the store…`）；修后 `-race` 绿 | T-117 · `docs/bugfix/RR-20260917-03.md` |
 | U-0222 | 2026-09-17 | roost-core `service/match`：ScoreWindow 距离 / 窗口 int64 溢出（RR-20260917-02） | C2 | `absInt64(a-b)` 回绕、`abs(MinInt64)` 为负；窗口乘加溢出后 cap 失效。修法：`scoreDistance` 无符号差、窗口 uint64 饱和乘加后 cap、负配置报 `ErrQueueInvalid`（行为变化） | `score_window_overflow_promises_test.go` | 修前红（`zero vs MinInt64 … formed=true`）；修后绿 | T-116 · `docs/bugfix/RR-20260917-02.md` |

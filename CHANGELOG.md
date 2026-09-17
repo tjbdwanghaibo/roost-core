@@ -46,6 +46,7 @@
 
 ### Fixed
 
+- **saga：步骤拒绝 / 重试用尽后的补偿在 Mongo 存储上落不下去**（U-0225，C2；game-demo 实跑发现，无 RR，T-119）。`applyCompletion` / `retryOrCompensate` 先给记录版本 +1，再交给 `beginCompensation`，后者又 +1；`MongoStore.Apply` 只接受 expected+1，于是每一个不可重试的步骤失败、每一次重试用尽都被拒为 `saga: invalid record`，saga 卡在 waiting、步骤按超时反复重发同一个拒绝。内存 store 只比对当前版本，单测一直绿。现在"加一次版本"与"填状态"拆开（`compensationState` / `retryState`），已加版的调用方直接填状态。显式 `Compensate` 与 deadline 路径本来就只加一次，不受影响。测试 `saga/compensation_version_promises_test.go`（Mongo 存储版引擎 + 两条纯函数版本步长）。记录 `docs/bugfix/U-0225-saga-compensation-version.md`。
 - **manager：Start 成功后的交接在状态锁下判定，Stop 与最后一个 Start 交错不再漏清理**（U-0219，C2；RR-20260916-06，T-113）。旧引擎只在下一轮循环顶部检查关停，Stop 取走空的 started 后 Start 把刚成功的管理器追加并返回 nil。现在 stopping 已置时 Start 路径自己 `stopOne` 并返回 `start aborted by shutdown`（回滚失败一起 Join）。测试 `stop_during_last_start_promises_test.go`。记录 `docs/bugfix/RR-20260916-06.md`。
 - **manager：Start 取快照即关闭 Register**（U-0220，C2；RR-20260916-07，T-114）。旧判据 `started != nil` 在首个管理器慢 Start 期间为假，晚到者被接纳却永不启动 / 停止；新增 `starting` 状态，Register 按它返回 `ErrRegisterAfterStart`。测试 `register_during_start_promises_test.go`。记录 `docs/bugfix/RR-20260916-07.md`。
 - **service/match：`Queue.Key` 单射**（U-0221，C2；RR-20260917-01，T-115）。Mode / Partition 里的 `%`、`:` 转义（先 `%`），不含它们的键逐字节不变、零迁移；Candidates 跳过、Commit 拒绝 `ticket.Queue != queue` 的票。曾含 `%` 的 Mode / Partition 键会变。测试 `queue_key_collision_promises_test.go`。记录 `docs/bugfix/RR-20260917-01.md`。
