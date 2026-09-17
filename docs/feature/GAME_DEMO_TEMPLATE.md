@@ -311,6 +311,15 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   实跑发现两个框架问题：**core saga 补偿版本 +2**（U-0225，Mongo 存储上任何步骤拒绝都进不了补偿——修后 6 completed + 6 compensated）；
   **`add mod` / `add saga` 不给已生成的配置补段**（后加的 saga 用默认 8 GiB 建流，隔离环境起不来，配置里没有 saga 段可改）——codegen 现在按缺失的顶层键追加两份配置。
   机器人 p95 阈值默认 5s → 10s（四条异步链，成本落在 4s 桶边）。framework-compat 的 released × demo 暂时排除到 core v1.15.6 发版。
+- **B10 实时战斗：lockstep 帧同步**（`roost-core/lockstep` 的第一个使用方）：匹配成功后，形成比赛的 game 进程开一个 `lockstep.Room`
+  （`internal/service/<game>/battle.go`，一条 goroutine 独占房间——Room 内部没有锁；端点把命令投进 channel），两名玩家打满 45 帧 / 30 Hz。
+  线是 demo 已有的 player TCP：广播 = 推送 `BattleFrame`（10102，包里带冗余帧），输入 = 请求 `BattleInput`（10015，一条消息同时带
+  本帧输入、关键帧哈希、补发请求）；`game/battle` 是两端共享的契约（帧预算、输入编码、座位、确定性模拟与哈希）。机器人用
+  `roost-core/robot` 的 `LockstepBot` 跑真客户端。实跑：6 机器人全过，每个应用满 45 帧，无 desync。
+  **两处实现级结论值得记住**：(1) 房间切完最后一帧要留收尾窗口——客户端只有应用了关键帧才报得出那一帧的哈希，切完就关会正好拒掉
+  desync 裁决需要的那批报告（第一版就是这样，`report hash for frame 45: battle not found`）；(2) 推送处理器不能就地应用帧——
+  应用一帧要在同一条会话上发输入，在读循环里做会把读循环堵死在自己的响应上（第一版只应用了 1 帧就停了）。
+  边界：房间是进程内状态，多 game 进程部署要把战斗做成自己的服务、按 match id 寻址。
 - **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。

@@ -102,3 +102,25 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
   后走 `engine.Complete`（与 `SubscribeCompletions` 同一处理，只是解包不同）；B. 让 `EmitCompletion` 的效果 Topic 直接落到 saga 流——
   不可行，outbox 的 subject 前缀是全局的。A 更像 start 那一侧已经做的事。
 - **来源**：game-demo 送礼 saga（第十批）选步骤实现方式时发现；demo 因此用了 `SubscribeMongoStep`，并把"Nest 提交与 inbox 回执不原子"写成边界。
+\n\n## W-2026-09-17-05：实体状态同步（room 广播 + entitysync 订阅）没有装配入口，框架里一个使用方都没有
+
+- **位置**：`roost-core/room`（`NewRoomManager` / `NewRoomBroadcaster` / `NewRoomTransportSink` / `RoomBroadcaster.RegisterSubject`）、
+  `roost-core/entitysync`（`NewSubscriptionCoordinator`）、`roost-core/entity/subject_sync.go`（`SubjectSyncState`、`SubjectSyncPacker`）。
+  `grep -rn "RoomManager\|RoomBroadcaster\|SubscriptionCoordinator" --include='*.go' roost-kit roost-codegen` 在两个仓里零命中（本轮 core HEAD）；
+  `RegisterSubject` 的调用方只有 core 自己的测试。
+- **现象**：这条链的两端都在：codegen 的实体生成器支持 `sync=true` + `subjectPacker`（`internal/entity/gen.go` 的 `SubjectPackerFactory`），
+  codegen 也会在工程带 `nettransport-*` feature 时生成 `transport.NewRoomSink(async, resolve)`（`internal/roost/render.go`）。
+  中间那段没有：没有谁建 `RoomBroadcaster` / `RoomManager`、把实体的 `SubjectSyncState` 注册进去、把订阅接到会话上。
+  kit 的 `room.RoomMod` 只发布 `ISyncBus`（跨进程的房间总线），与广播栈无关。
+- **为何可疑**：`RoomTransportSink` 的构造被 codegen 生成出来却没有任何东西能喂它（它要 `RoomBroadcaster` 当上游）；
+  `RoomManager` 的预算 / 空闲清扫 / 优雅关闭是成套的产品级功能，却没有任何装配路径；实体侧的 `subjectPacker` 标记生成了工厂，
+  但没有消费者会调用它。三处各自都有测试，合起来没有一条端到端路径——这正是 U-0224（dao 嵌套 BSON）那一类"每一段都对、连起来没人走过"的形状。
+- **会红的测试草稿**：在生成工程里（或 core 的一个 example 里）：建 `RoomManager` → `Create(roomID)` → 对一个 `sync=true` 的实体
+  `RegisterSubject(state)` → `Subscribe(sessionRef, subjectID, profile)` → 改实体并 `FlushSubject` → 断言 `RoomTransportSink` 的下游
+  收到了该会话的一帧。现在写不出来，因为没有任何公开路径把"生成的实体"接到"房间"上——缺的就是这一段。
+- **候选修法**：A. kit 出一个 `statesync` Mod：持 `RoomManager` + `SubscriptionCoordinator`，发布一个"把实体注册进房间 / 订阅 / 退订"的
+  capability，codegen 在 `sync=true` 的实体生成注册代码（与 nest 的 syncsender 同形）。B. 先只补一个 core `examples/roomsync`，
+  把端到端串起来当活文档，装配层等有真实需求再定。C. 判定这条路是留给具体游戏自己装配的，那就在 `room` / `entitysync` 的包注释里
+  写明"这三段谁负责接"，并给 `NewRoomSink` 的生成加一句说明。
+- **来源**：game-demo 第十一批做 B10（实时）时选型发现。demo 最终走了 `lockstep`（帧同步）那条路——它的服务端 `Room` 与客户端
+  `robot.LockstepBot` 都是完整的，业务只需接线，两小时就跑通了；状态同步这条路相比之下没有入口。
