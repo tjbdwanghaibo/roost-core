@@ -320,6 +320,12 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   desync 裁决需要的那批报告（第一版就是这样，`report hash for frame 45: battle not found`）；(2) 推送处理器不能就地应用帧——
   应用一帧要在同一条会话上发输入，在读循环里做会把读循环堵死在自己的响应上（第一版只应用了 1 帧就停了）。
   边界：房间是进程内状态，多 game 进程部署要把战斗做成自己的服务、按 match id 寻址。
+- **D15《数据流：六条路径》**（codegen `docs/DATA_FLOW.zh-CN.md`）：按路径而不是按功能组织——同步写、事件链、跨服务 bus 调用、saga、帧同步、配置快照，
+  每条给出谁保证原子性、幂等键、失败后谁重试，外加"一次请求经过的边界清单"与排错入口。内容都是本轮实跑得到的结论。
+- **C13 cfggen 过真实配置运行时的 CI 门**（codegen `scripts/cfggen-golden-runtime.sh`）：cfggen 此前只有文本比对，与 U-0224 之前的 dao 同一个盲区。
+  临时模块 + 当前 core pin 跑 roundtrip：主键 / bean 切片 / 二级索引 / 关键字字段 / 全局 / 快照身份 / ref 悬空拒绝且不动现役快照 / required 拒绝 / 热更发布。
+  验证过它会红：把生成的 json 名去掉下划线（编译与注册都正常、数据读不出来）四条全红。**cfggen 刻意没有进 demo**——
+  demo 已经用 `//roost:table` + CSV 那条配置管线，同一个工程里并存两套配置定义方式是教学负担；`project next` 的进阶提示里指出 cfggen 的存在与命令。
 - **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
