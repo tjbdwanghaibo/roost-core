@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/spf13/viper v1.21.0
-	github.com/tjbdwanghaibo/roost-core v1.15.5
+	github.com/tjbdwanghaibo/roost-core v1.15.6
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 )
 
