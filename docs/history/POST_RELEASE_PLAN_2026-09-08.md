@@ -68,6 +68,22 @@ kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo`
 - 顺序 core → kit → codegen，三仓 pretag 全绿。ARCH-01 / ARCH-02 / ARCH-04 至此全部完成（ARCH-03 无需改动）。
 - 遗留：U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准；其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）的领域仍整体在 kit，不在本轮 ARCH 范围。
 
+## 0.7 第七次发版（2026-09-17）：core v1.15.6 / kit v1.14.7 / codegen v1.15.9
+
+- core：U-0225——saga 步骤给出不可重试失败（或重试用尽）后，进补偿的记录版本被加了两次，`MongoStore.Apply` 只接受 expected+1，
+  于是 Mongo 存储上任何补偿都落不下去，saga 卡在 waiting、步骤按超时反复重发同一个拒绝；内存 store 只比对当前版本，单测一直绿。
+  拆成"加一次版本"入口（`beginCompensation` / `retryOrCompensate`）与纯状态函数（`compensationState` / `retryState`）。
+  同版本一并发出的还有 U-0219～U-0223（manager 交接、match Queue 键碰撞 / ScoreWindow 溢出 / 内存 Store 切片共享）与 U-0224 的记录。
+- kit：只升 core pin（`saga.Mod` 只做装配与转发，本仓无代码改动）。
+- codegen：game-demo 第十批的剩余部分——B6 GM 运维面（admin 命令表四条 + `gm.saga.get` / `gm.saga.list`，`player_id` 收唯一 id 或完整实体 id）、
+  B9 送礼 saga（`add saga` 的第一个真实使用方：`SendGift` 在 Nest 事务里 `EmitStart`，四个 `SubscribeMongoStep` 步骤，`GiftStatus` 读协调器记录，
+  机器人走完成路与补偿路）；通用修复：`add mod` / `add saga` 现在给已生成的配置补上新 Mod 的段（此前后加的 saga 用默认 8 GiB 建流、
+  隔离环境起不来且配置里无段可改）；`add saga` 骨架改用非废弃的 `SubscribeMongoStep`。
+- 顺序 core → kit → codegen，三仓 pretag 全绿。发版验证：对三个 tag 不带 go.work 生成 game-demo（kit 需显式 `go get` v1.14.7，proxy 对新 tag 有延迟），
+  六进程 `run.sh start` 全 ready，6 机器人全链路通过，saga 记录 6 completed + 6 compensated。framework-compat 的 released × demo 单元格随本次发版恢复。
+- 遗留：W-2026-09-17-04（原生 Nest saga 步骤的完成效果落在 `ROOST_EFFECTS`，协调器只订 `ROOST_SAGA`，无人消费）待 review 判定；
+  W-2026-09-17-01～03 同样待判；U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：
