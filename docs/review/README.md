@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-17 匹配身份与边界](REVIEW-2026-09-17.md) · [三个新问题](../bug/REVIEW-2026-09-17.md) · [三个最小复现](../bug/REPRO-2026-09-17.md) · [匹配身份、所有权与配对机制](IMPLEMENTATION-MATCH-IDENTITY-OWNERSHIP-AND-GROUPING.md)。用户未修复，本轮跳过旧验收。
+
 [09-16 第五轮交接落实情况](REVIEW-2026-09-16-05.md) · [manager 两项新问题与复现](../bug/REVIEW-2026-09-16-05.md) · [服务与生命周期分层机制](IMPLEMENTATION-CORE-KIT-SERVICE-AND-MANAGER.md)。
 
 [09-16 第四轮验收](REVIEW-2026-09-16-04.md) · [统一实施交接（七项验收、两项新问题与 Kit 分层）](../bug/REVIEW-2026-09-16-04.md)。
