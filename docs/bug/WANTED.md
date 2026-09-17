@@ -6,7 +6,27 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## 已分流记录（当前无待审查候选）
+## W-2026-09-17-01：其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）是否按 M-06～M-11 的形状下沉 core
+
+- **位置**：roost-kit `4830150`，`service/account`（`Accounts`，`account_rpc.go:41`）、`service/chat`（`Messaging`，`chat_rpc.go:66`）、
+  `service/global`（`Routing`，`global_rpc.go:45`）、`service/global/activity`（`Coordinator`，`activity_rpc.go:39`）、
+  `service/platform`（`Platform`，`platform_rpc.go:46`）、`service/rank`（`Rank`，`rank.go:23`）。六个包的领域文件
+  （types / service / store / redis_store / identity / admin / member）目前只 import core 与 kit 的 `mods`、`service/servicemetrics`（后者已是 core 别名）；
+  account 另有 `service/directory`。
+- **现象**：ARCH-01 点名的 session / mail / match 已按"领域实现 + RPC 接口 + 传输半进 core，kit 留 Mod / 装配半 / 别名"的形状完成
+  （M-06～M-11，core v1.15.5 / kit v1.14.6 / codegen v1.15.8）。剩下六个服务仍整体在 kit：领域规则（账号身份与目录、聊天频道与保留、全局路由、
+  活动窗口协调、平台身份、排行榜）和 Mod 混在同一包里，与 core README"核心实现在 core、kit 只装配"的自述不一致。
+- **为什么可疑 / 为什么不自己拍板**：这是职责归属（ARCH 类）而不是缺陷；review 的 ARCH-01 只点名三个，并写明"没有穷尽盘点 Kit 全目录"、
+  "statslog 一类运行时统计与接入便利逻辑可以保留在 Kit"。六个里哪些算"通用服务领域"（大概率：rank、chat、activity）、哪些算"接入便利 / 平台胶水"
+  （可能：platform、account 的目录部分、global 路由）需要 review 定，避免为了对称把不该下沉的也下沉。account 的 `RegistryBound` 钩子
+  （U-0217 同批加的 collaborator 绑定）与 `service/directory` 依赖也要先定去向。
+- **候选修法**：按 M-07/M-08 + M-11 的模板逐包做——core 得领域文件 + 接口 + `-emit transport`，kit 留 Mod / server run + `alias.go`
+  + `-emit assembly -dir github.com/tjbdwanghaibo/roost-core/service/<x> -out .`；每包一个 M 编号；判为"留 kit"的只在 kit README 写明理由。
+  各包 Redis key / errcode 段 / RPC 方法名不变；每包各需 core + kit 一次发版（可以攒一批）。
+- **复现 / 验收草稿**：`go list -deps ./service/<x> | grep roost-kit` 在 core 为空；kit 全套；codegen 生成工程（framework services 引用的是 kit 别名）编译。
+- **来源**：2026-09-16 ARCH-01～04 收尾时的遗留项（`docs/history/POST_RELEASE_PLAN_2026-09-08.md` §0.6）。
+
+## 已分流记录（W-2026-09-16-01 已分流）
 
 W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-04.md)，不再属于待审表。确认的是策略注入承诺无效；原草稿预设 Enqueue/Sweep 自动成组，与当前 Store 契约不符，不直接作为修复测试。建议保留调用方驱动，移除无效 Mod/Config/codegen 注入入口。具体实施与验收以链接文档为准。
 
