@@ -297,6 +297,11 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
 - **`roost add rpc`**（B5）：工程自己的跨进程服务一条命令到装配——接口 / 实现 / owner Mod / 两半 / 清单 `rpcs` 与 `uses_rpcs` / bootstrap；full 场景 CI 编译 `Guild`。
 - **C14 / D16**：生成工程带 `.gitattributes`（生成文本钉 LF），`generate --check` 与 `servicerpc -check` 容忍 CRLF 检出；`project next` 完成必做链后列出未用的能力（rpc / saga / attribute / skill / webroute / cfggen）。
 - **B7 技能目录**：`add skill Fireball` + 契约写明的 JSON，game `Init` 用 roost-core/skill 编译目录 fail-fast，`SkillCatalog` 10012 列 id 与 warning 数；技能执行刻意不进 demo。
+- **B6 GM 运维面**：`internal/service/game/gm.go` 在 app 的 admin 命令表（`app.ModAdmin`）注册 `gm.player.add_item` / `gm.player.add_exp` / `gm.mail.send`（奖励附件、`trace_id` 幂等）/ `gm.world.stats`，
+  ops 经 `/admin/commands` `/admin/execute` 端出、`X-Admin-Token` 鉴权；开发配置开 admin（dev token），生产示例关（`config check --production` 也拒绝 dev token）。
+  命令用与端点相同的 Nest Sender / mail 客户端，所以 GM 加的经验升级同样发奖励邮件。实跑发现并修：`player_id` 只收唯一 id 时，运维从 Mongo 拿到的 `_id`（完整实体 id）
+  被再包一层成了不存在的实体；现在 `MatchEntityID` 识别完整 id、`GetUniqueIDFromEntityID` 还原邮件收件人，两种形式都收。实跑：加道具落库、加 300 exp 升 2 → 5 级且 World `exp_granted` 500 → 800、
+  邮件同 trace 两次同一 `mail_id`、无 token 401、坏载荷 `command invalid`、超叠加上限按 `bag_full` 拒绝。
 - **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
