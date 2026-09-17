@@ -286,8 +286,11 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   连续两轮间隔 < 60s 会有一个机器人 `ticket still waiting`（上一轮失败者的票被这一轮配走），是 match 的正确行为，README 写明了。
 - **mail 的客户端一半**（同批第二段）：升级奖励邮件带附件（`game/rewards/`，发件方与领取方共用编码），协议 ListMail 10008（含 `Claimable`）/ ClaimMail 10009
   （ReserveClaim → Sync_AddItem → CommitClaim，失败 CancelClaim）；机器人 add_exp 后 `retry × 20 { wait 250ms; list_mail }` 再 `claim_mail` 断言背包计数。
-  边界写在 README：demo 没把 claim token 带进 Nest 事务，进程死在 grant 与 commit 之间会重发一叠。场景变长（两条异步链）后机器人 p95 默认阈值 2s → 3s。
-- **未做**：session 服务未托管进 game 模板；多 game 进程的 chat 扇出应改订阅流；claim token 进 Nest 事务的幂等。
+  边界写在 README：demo 没把 claim token 带进 Nest 事务，进程死在 grant 与 commit 之间会重发一叠。场景变长（两条异步链、三个跨服务调用）后机器人 p95 默认阈值 2s → 5s（回归界限不是 SLO；成本直方图是 2 的幂桶，20 机器人同机实跑 p95 落在 3s 桶边）。
+- **session 托管进 game 模板**（同批第三段）：`frameworkCatalog` 加 `session`（`Release()` / `Metrics()` collaborators，默认拒绝），game / game-demo 现在托管五个服务；
+  demo 的 `Release()` 是日志 + nil（副本不占外部资源），协议 EnterDungeon 10010 / FinishDungeon 10011（Finish 后经 AddExp 两实体事务发 100 exp）。
+  实跑：六进程 `run.sh` 全 ready，6 / 20 机器人全链路通过（登录 → 聊天 → 道具 → 升级 → 领邮件 → 副本 → 匹配 → 世界计数）。
+- **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）。
 
 ## 8. 相关文件速查
 
