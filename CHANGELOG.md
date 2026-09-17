@@ -46,6 +46,13 @@
 
 ### Fixed
 
+- **manager：Start 成功后的交接在状态锁下判定，Stop 与最后一个 Start 交错不再漏清理**（U-0219，C2；RR-20260916-06，T-113）。旧引擎只在下一轮循环顶部检查关停，Stop 取走空的 started 后 Start 把刚成功的管理器追加并返回 nil。现在 stopping 已置时 Start 路径自己 `stopOne` 并返回 `start aborted by shutdown`（回滚失败一起 Join）。测试 `stop_during_last_start_promises_test.go`。记录 `docs/bugfix/RR-20260916-06.md`。
+- **manager：Start 取快照即关闭 Register**（U-0220，C2；RR-20260916-07，T-114）。旧判据 `started != nil` 在首个管理器慢 Start 期间为假，晚到者被接纳却永不启动 / 停止；新增 `starting` 状态，Register 按它返回 `ErrRegisterAfterStart`。测试 `register_during_start_promises_test.go`。记录 `docs/bugfix/RR-20260916-07.md`。
+- **service/match：`Queue.Key` 单射**（U-0221，C2；RR-20260917-01，T-115）。Mode / Partition 里的 `%`、`:` 转义（先 `%`），不含它们的键逐字节不变、零迁移；Candidates 跳过、Commit 拒绝 `ticket.Queue != queue` 的票。曾含 `%` 的 Mode / Partition 键会变。测试 `queue_key_collision_promises_test.go`。记录 `docs/bugfix/RR-20260917-01.md`。
+- **service/match：ScoreWindow 距离与窗口无溢出**（U-0222，C2；RR-20260917-02，T-116）。`scoreDistance` 用无符号差，窗口 uint64 饱和乘加后 cap；**行为变化**：`InitialWindow` / `WidenPerSecond` / `MaxWindow` 为负返回 `ErrQueueInvalid`。测试 `score_window_overflow_promises_test.go`。记录 `docs/bugfix/RR-20260917-02.md`。
+- **service/match：内存 Store 在边界深复制**（U-0223，C2；RR-20260917-03，T-117）。Enqueue 的输入 Subject 与 Ticket / Candidates / Commit / Match 的返回值不再与存储共享 Payload / Members / TicketIDs。测试 `result_ownership_promises_test.go`。记录 `docs/bugfix/RR-20260917-03.md`。
+- **service/{mail,session,match} 的 transport 生成文件头改为稳定的 `-dir . -emit transport`**（审查 09-16 第五轮观察项）：M-11 首次生成时写入了实施机器的绝对路径，按包内 directive `-check` 会失败；已从各包目录重生成，正文不变。
+
 - **syncstream Recover 的一致性判据从"位置"换成"修改代数"**(U-0216,C8;RR-20260916-04,T-110)。U-0214 在 provider 前后比较 epoch / 流是否存在 / latest,但 Append 后 DeleteStream、同 epoch 同 latest 的 Import 都能让位置回到原值而内容已变,旧捕获照样以更高序号提交。现在 `History` 维护进程内单调的 `revision`,每个成功改变流集合 / 链 / ACK / epoch / 序号地板的写锁路径推进它,`Recover` 前后只比这个代数;不持久化、不从快照带入。全局代数会因无关流的并发修改保守返回 `ErrRecoverStale`,代价是一次重试。`recover_replacement_promises_test.go`;记录 `docs/bugfix/RR-20260916-04.md`。
 - **syncstream WAL 半尾截断在 Windows 上被拒(U-0211 复核补修,RR-20260915-07)**。补修原来在 `O_APPEND` 句柄上 `Truncate`,Windows 的 `FILE_APPEND_DATA` 句柄不能 `SetEndOfFile`,CI `windows-compatibility` 红。截断改为打开追加句柄之前按路径 `os.Truncate`,文件不存在时只重置标记;追加前仍先 fsync。Linux / macOS 行为不变。
 

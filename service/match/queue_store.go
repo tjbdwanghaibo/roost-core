@@ -222,7 +222,9 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 		}
 
 		ticket := Ticket{
-			ID: id, Queue: queue, Subject: subject, State: TicketWaiting,
+			// The caller keeps its Subject; the store keeps its own copy of the
+			// payload (RR-20260917-03).
+			ID: id, Queue: queue, Subject: subject.clone(), State: TicketWaiting,
 			RequestID: requestID, CreatedAtUnix: now.Unix(),
 			ExpiresAtUnix: now.Add(s.cfg.TicketTTL).Unix(),
 		}
@@ -251,7 +253,7 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 	if length, err := s.QueueLength(ctx, queue); err == nil {
 		s.report.Depth("queue."+queue.Key(), int64(length))
 	}
-	return result, nil
+	return result.clone(), nil
 }
 
 func (s *queueStore) Cancel(ctx context.Context, queue Queue, ticketID string, subject Subject) (Ticket, error) {
@@ -299,7 +301,7 @@ func (s *queueStore) Cancel(ctx context.Context, queue Queue, ticketID string, s
 	if err != nil {
 		return Ticket{}, err
 	}
-	return result, nil
+	return result.clone(), nil
 }
 
 func (s *queueStore) Ticket(ctx context.Context, queue Queue, ticketID string, subject Subject) (Ticket, bool, error) {
@@ -325,7 +327,7 @@ func (s *queueStore) Ticket(ctx context.Context, queue Queue, ticketID string, s
 	if ticket.Expired(s.cfg.Now()) {
 		ticket.State = TicketExpired
 	}
-	return ticket, true, nil
+	return ticket.clone(), true, nil
 }
 
 func (s *queueStore) Candidates(ctx context.Context, queue Queue, limit int) ([]Ticket, error) {
@@ -348,7 +350,13 @@ func (s *queueStore) Candidates(ctx context.Context, queue Queue, limit int) ([]
 		if !ok || ticket.State != TicketWaiting || ticket.Expired(now) {
 			continue
 		}
-		out = append(out, ticket)
+		// Defence in depth behind the injective Key (RR-20260917-01): a
+		// ticket that says it belongs to another queue is never a candidate
+		// here, whatever key it was stored under.
+		if ticket.Queue != queue {
+			continue
+		}
+		out = append(out, ticket.clone())
 		if len(out) == limit {
 			break
 		}
@@ -398,6 +406,11 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 			if !ok {
 				return current, false, fmt.Errorf("%w: %s", ErrTicketMissing, id)
 			}
+			// A ticket of another queue is "not in this queue", even if the
+			// two ever shared storage (RR-20260917-01).
+			if ticket.Queue != queue {
+				return current, false, fmt.Errorf("%w: %s belongs to queue %s", ErrTicketMissing, id, ticket.Queue.Key())
+			}
 			if ticket.State != TicketWaiting {
 				return current, false, fmt.Errorf("%w: %s is %s", ErrConflict, id, ticket.State)
 			}
@@ -407,7 +420,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 				return current, false, fmt.Errorf("%w: subject %s appears twice", ErrTicketInvalid, ticket.Subject.Key())
 			}
 			subjects[ticket.Subject.Key()] = true
-			members = append(members, ticket.Subject)
+			members = append(members, ticket.Subject.clone())
 		}
 
 		match := Match{
@@ -431,7 +444,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 		return Match{}, err
 	}
 	s.report.Accepted("commit")
-	return result, nil
+	return result.clone(), nil
 }
 
 func (s *queueStore) Match(ctx context.Context, queue Queue, matchID string) (Match, bool, error) {
@@ -445,7 +458,7 @@ func (s *queueStore) Match(ctx context.Context, queue Queue, matchID string) (Ma
 	state := current.Value
 	state.init()
 	match, ok := state.Matches[matchID]
-	return match, ok, nil
+	return match.clone(), ok, nil
 }
 
 func (s *queueStore) Sweep(ctx context.Context, queue Queue, limit int) (int, error) {

@@ -34,3 +34,7 @@
 
 - 其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）的领域不在 core，接口与两半仍整体在 kit。
 - 不改任何 subject / 方法名 / capability 名。
+
+## 更正（2026-09-17）
+
+- core 三份 `*_rpc_gen.go` 首次是用 `-dir /Users/whb/roost/roost-core/service/<x>` 生成的，文件头记录了绝对路径，按包内 directive（`-dir . -emit transport`）跑 `-check` 会报 STALE（审查 09-16 第五轮观察项）。已从各包目录 `go generate` 重生成，正文逐字节相同，只有命令头变化。教训：生成命令要从接口包目录、按 directive 原样跑。

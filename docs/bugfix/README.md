@@ -69,6 +69,11 @@
 | RR-20260916-03 | core | room JetStream 同 topic 多个本地订阅竞争同一消费者,广播变分摊 | U-0209 | [RR-20260916-03.md](RR-20260916-03.md) |
 | RR-20260916-04 | core | syncstream Recover 的位置核对识别不出删除 ABA / 同位置 Import,旧捕获仍被提交 | U-0216 | [RR-20260916-04.md](RR-20260916-04.md) |
 | RR-20260916-05 | kit + codegen | match 的 Grouping 注入参数无执行者;**破坏性**:`NewMod(reporter)`,codegen 不再生成 `Grouping()` | U-0217 | [RR-20260916-05.md](RR-20260916-05.md) |
+| RR-20260916-06 | core | manager：最后一个管理器启动期间 Stop，成功启动者漏清理（交接不在同一把锁下） | U-0219 | [RR-20260916-06.md](RR-20260916-06.md) |
+| RR-20260916-07 | core | manager：首个管理器启动期间 Register 被接纳，新对象永不启动也不停止 | U-0220 | [RR-20260916-07.md](RR-20260916-07.md) |
+| RR-20260917-01 | core | match：合法 Queue 键碰撞（Mode / Partition 含冒号），跨队列读票与成组 | U-0221 | [RR-20260917-01.md](RR-20260917-01.md) |
+| RR-20260917-02 | core | match：ScoreWindow 距离 / 窗口 int64 溢出，远端成组、cap 失效 | U-0222 | [RR-20260917-02.md](RR-20260917-02.md) |
+| RR-20260917-03 | core | match：内存 Store 输入 / 返回切片与存储共享 | U-0223 | [RR-20260917-03.md](RR-20260917-03.md) |
 
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 

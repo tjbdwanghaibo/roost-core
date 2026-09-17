@@ -38,6 +38,7 @@ package match
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/errcode"
@@ -173,8 +174,30 @@ func (q Queue) Validate() error {
 // servicerpc.WithAffinityKey routes every operation on one queue to one
 // instance, so the compare-and-set below contends with itself rather than
 // with a different replica reading the same head.
+//
+// The rendering is injective: Mode and Partition are opaque strings that may
+// themselves contain ':', and {Mode "a:2", GroupSize 3, Partition "x"} and
+// {Mode "a", GroupSize 2, Partition "3:x"} both used to render as "a:2:3:x" —
+// two valid pools sharing one queueState, so Candidates read across them and
+// Commit took a three-player ticket into a two-player match (RR-20260917-01).
+// The two free fields are escaped so a ':' inside them can no longer be read
+// as the separator. A key without ':' or '%' in either field is byte-for-byte
+// what it was, so no deployed key moves; a queue whose Mode or Partition did
+// contain one of them was colliding before and gets its own key now (tickets
+// under the old shared key are not migrated — they were never unambiguously
+// this queue's).
 func (q Queue) Key() string {
-	return fmt.Sprintf("%s:%d:%s", q.Mode, q.GroupSize, q.Partition)
+	return fmt.Sprintf("%s:%d:%s", escapeKeyField(q.Mode), q.GroupSize, escapeKeyField(q.Partition))
+}
+
+// escapeKeyField makes a free-form field safe to join with ':'. '%' is the
+// escape character and is escaped first, so the mapping is injective.
+func escapeKeyField(field string) string {
+	if !strings.ContainsAny(field, ":%") {
+		return field
+	}
+	field = strings.ReplaceAll(field, "%", "%25")
+	return strings.ReplaceAll(field, ":", "%3A")
 }
 
 // TicketState is where a ticket is in its lifecycle.
@@ -281,4 +304,37 @@ func Error(err error) (int32, string) {
 func Code(err error) int32 {
 	code, _ := Error(err)
 	return code
+}
+
+// clone deep-copies the one reference field, Payload. The memory store hands
+// values back and forth by copy, and a []byte inside a copied struct is still
+// the same bytes: a caller that edited a returned Payload — or its own input
+// after Enqueue — was editing the store (RR-20260917-03).
+func (s Subject) clone() Subject {
+	if s.Payload != nil {
+		s.Payload = append([]byte(nil), s.Payload...)
+	}
+	return s
+}
+
+// clone deep-copies a ticket at the store boundary; see Subject.clone.
+func (t Ticket) clone() Ticket {
+	t.Subject = t.Subject.clone()
+	return t
+}
+
+// clone deep-copies a match at the store boundary: Members (each with its
+// Payload) and TicketIDs are the fields a caller could otherwise write through.
+func (m Match) clone() Match {
+	if m.Members != nil {
+		members := make([]Subject, len(m.Members))
+		for i, member := range m.Members {
+			members[i] = member.clone()
+		}
+		m.Members = members
+	}
+	if m.TicketIDs != nil {
+		m.TicketIDs = append([]string(nil), m.TicketIDs...)
+	}
+	return m
 }

@@ -42,6 +42,12 @@ type Engine struct {
 	managers []app.IManager
 	started  []app.IManager
 	registry *app.Registry
+	// starting is set the moment Start takes its snapshot of managers and
+	// never cleared: from then on the set is closed. It is a separate flag
+	// because started stays nil until the FIRST manager finishes, and a
+	// Register that slipped in during that first Start was accepted into a
+	// list nobody would ever start or stop (RR-20260916-07).
+	starting bool
 	stopping bool
 }
 
@@ -56,7 +62,7 @@ func NewEngine(managers ...app.IManager) *Engine {
 func (e *Engine) Register(manager app.IManager) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.started != nil {
+	if e.starting || e.started != nil {
 		return fmt.Errorf("%w: %q", ErrRegisterAfterStart, managerName(manager))
 	}
 	e.managers = append(e.managers, manager)
@@ -114,6 +120,7 @@ func (e *Engine) Start() error {
 	e.mu.Lock()
 	registry := e.registry
 	pending := append([]app.IManager(nil), e.managers...)
+	e.starting = true
 	e.mu.Unlock()
 
 	// A manager's only handle on the rest of the service is the registry it
@@ -156,10 +163,24 @@ func (e *Engine) Start() error {
 		metrics.ObserveHistogram("manager.start.duration", metrics.Labels{"manager": manager.Name()}, elapsed)
 		slog.Info("manager started", "name", manager.Name(), "elapsed", elapsed)
 
+		// Hand-over happens under the state lock: either this manager joins
+		// started (and Stop will find it there), or Stop has already drained
+		// started and this path owns the cleanup. The loop-top check alone is
+		// not enough — for the LAST manager there is no next iteration, so a
+		// Stop that landed while it was starting used to leave it running
+		// with Start reporting success (RR-20260916-06).
 		e.mu.Lock()
+		if e.stopping {
+			e.mu.Unlock()
+			if stopErr := stopOne(fctx.BaseContext(), manager); stopErr != nil {
+				return fmt.Errorf("manager: start aborted by shutdown, rollback: %w", stopErr)
+			}
+			return fmt.Errorf("manager: start aborted by shutdown")
+		}
 		e.started = append(e.started, manager)
+		count := len(e.started)
 		e.mu.Unlock()
-		metrics.SetGauge("manager.started", nil, int64(e.startedCount()))
+		metrics.SetGauge("manager.started", nil, int64(count))
 	}
 	return nil
 }
@@ -190,30 +211,31 @@ func (e *Engine) stopStarted(ctx context.Context) error {
 
 	var joined error
 	for i := len(started) - 1; i >= 0; i-- {
-		manager := started[i]
-		slog.Info("manager stop", "name", manager.Name())
-		if stopper, ok := manager.(app.IManagerStopperWithContext); ok {
-			if err := stopper.StopWithContext(ctx); err != nil {
-				joined = errors.Join(joined, fmt.Errorf("manager %s stop: %w", manager.Name(), err))
-			}
-			continue
-		}
-		manager.Stop()
+		joined = errors.Join(joined, stopOne(ctx, started[i]))
 	}
 	metrics.SetGauge("manager.started", nil, 0)
 	return joined
+}
+
+// stopOne stops a single manager, preferring the bounded hook. It is shared
+// by the reverse-order drain and by a Start that finished after Stop had
+// already drained (RR-20260916-06), so both paths stop a manager the same way.
+func stopOne(ctx context.Context, manager app.IManager) error {
+	slog.Info("manager stop", "name", manager.Name())
+	if stopper, ok := manager.(app.IManagerStopperWithContext); ok {
+		if err := stopper.StopWithContext(ctx); err != nil {
+			return fmt.Errorf("manager %s stop: %w", manager.Name(), err)
+		}
+		return nil
+	}
+	manager.Stop()
+	return nil
 }
 
 func (e *Engine) stopRequested() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.stopping
-}
-
-func (e *Engine) startedCount() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.started)
 }
 
 func managerName(manager app.IManager) string {

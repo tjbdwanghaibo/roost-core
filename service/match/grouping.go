@@ -2,6 +2,7 @@ package match
 
 import (
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -55,6 +56,12 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 	if g.NowUnix == nil {
 		return nil, false, fmt.Errorf("%w: score window grouping needs a clock", ErrQueueInvalid)
 	}
+	// The window is a distance, and a distance is not negative. Refusing here
+	// is what lets the arithmetic below stay in uint64 (RR-20260917-02).
+	if g.InitialWindow < 0 || g.WidenPerSecond < 0 || g.MaxWindow < 0 {
+		return nil, false, fmt.Errorf("%w: score window, widening and cap must not be negative (got %d, %d, %d)",
+			ErrQueueInvalid, g.InitialWindow, g.WidenPerSecond, g.MaxWindow)
+	}
 	if len(candidates) < queue.GroupSize {
 		return nil, false, nil
 	}
@@ -63,16 +70,14 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 	anchor := candidates[0]
 	waited := g.NowUnix() - anchor.CreatedAtUnix
 	if waited < 0 {
+		// A clock that went backwards has not made anyone wait longer.
 		waited = 0
 	}
-	window := g.InitialWindow + g.WidenPerSecond*waited
-	if g.MaxWindow > 0 && window > g.MaxWindow {
-		window = g.MaxWindow
-	}
+	window := g.window(uint64(waited))
 
 	within := make([]Ticket, 0, len(candidates))
 	for _, candidate := range candidates {
-		if absInt64(candidate.Subject.Score-anchor.Subject.Score) <= window {
+		if scoreDistance(candidate.Subject.Score, anchor.Subject.Score) <= window {
 			within = append(within, candidate)
 		}
 	}
@@ -80,10 +85,11 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 		return nil, false, nil
 	}
 	// Closest scores to the anchor first, ties by arrival order so the result
-	// is deterministic.
+	// is deterministic. The same distance function as the filter, so what is
+	// admitted and how it is ranked cannot disagree.
 	sort.SliceStable(within, func(i, j int) bool {
-		di := absInt64(within[i].Subject.Score - anchor.Subject.Score)
-		dj := absInt64(within[j].Subject.Score - anchor.Subject.Score)
+		di := scoreDistance(within[i].Subject.Score, anchor.Subject.Score)
+		dj := scoreDistance(within[j].Subject.Score, anchor.Subject.Score)
 		if di != dj {
 			return di < dj
 		}
@@ -92,11 +98,44 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 	return within[:queue.GroupSize], true, nil
 }
 
-func absInt64(value int64) int64 {
-	if value < 0 {
-		return -value
+// window is InitialWindow + WidenPerSecond*waited, saturating, then capped.
+//
+// Score is an int64 whose meaning belongs to the caller, so the API cannot
+// assume "reasonable" magnitudes: with signed arithmetic a large
+// InitialWindow plus a little widening wrapped negative and the cap compared
+// against garbage, and a large WidenPerSecond wrapped the product
+// (RR-20260917-02). Saturation is the right answer for a window: past
+// math.MaxUint64 everything is inside anyway, and the cap applies after.
+func (g ScoreWindowGrouping) window(waited uint64) uint64 {
+	window := uint64(g.InitialWindow)
+	widen := uint64(g.WidenPerSecond)
+	if widen > 0 && waited > 0 {
+		grow := widen * waited
+		if grow/widen != waited {
+			grow = math.MaxUint64
+		}
+		if window > math.MaxUint64-grow {
+			window = math.MaxUint64
+		} else {
+			window += grow
+		}
 	}
-	return value
+	if g.MaxWindow > 0 && window > uint64(g.MaxWindow) {
+		window = uint64(g.MaxWindow)
+	}
+	return window
+}
+
+// scoreDistance is |a-b| for any two int64 scores, without overflow: the
+// difference of two int64 values always fits in a uint64, and two's
+// complement subtraction of the unsigned images yields exactly it once the
+// larger operand is on the left. absInt64(a-b) did not: a-b wrapped for
+// operands of opposite sign far apart, and abs(math.MinInt64) is negative.
+func scoreDistance(a, b int64) uint64 {
+	if a >= b {
+		return uint64(a) - uint64(b)
+	}
+	return uint64(b) - uint64(a)
 }
 
 var (
