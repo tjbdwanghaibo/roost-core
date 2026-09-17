@@ -293,6 +293,8 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
 - **ranked 队列**（A4）：`game/matchmaking.Pools()`——duel 按到达、ranked 按等级（`ScoreWindowGrouping` 窗口 5 / +5 每秒 / 上限 50，U-0222 修过溢出后的第一个使用方）；
   `PlayerLevel` 读 handler 在 Player 锁内取等级作 Score；JoinQueue / PollMatch 带 mode；机器人 duel 之后再排 ranked。
 - **dao golden 过真实编解码器的 CI 门**（`scripts/dao-golden-runtime.sh`）：U-0224 那类"文本对、编码错"的缺陷此后在 CI 红。
+- **demo 场景在 CI 真跑**（C11）：framework-compat 的 demo cell 现在 compose 起基础设施 → 生成的 `run.sh start` 起六进程 → `loadtest -count 6` 走完整条链 → stop；此前只编译。
+- **`roost add rpc`**（B5）：工程自己的跨进程服务一条命令到装配——接口 / 实现 / owner Mod / 两半 / 清单 `rpcs` 与 `uses_rpcs` / bootstrap；full 场景 CI 编译 `Guild`。
 - **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
   给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
 
