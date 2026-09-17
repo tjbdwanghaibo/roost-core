@@ -189,7 +189,7 @@
 | codegen | `（根：CI 工作流 + ci/）` | — | — | — | 09-05 U-0015 | — | — | — | — |
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 / 09-17 U-0224（修复） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） / 09-10 U-0162（修复） / 09-10 U-0166（修复） | — | 09-09 脚本扫 | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -239,6 +239,7 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0224 | 2026-09-17 | roost-codegen `internal/dao`：生成的嵌套 struct 无 BSON 表示，落库只剩 `{"dirtyhook": {}}`（用户复审提出，无 RR） | C2 | 嵌套字段未导出且无 MarshalBSON，反射编码只见导出的内嵌 DirtyHook；数据未存、回滚快照与同步同丢。修法：DirtyHook 打 `bson:"-" json:"-"`，每个嵌套类型生成值接收者 MarshalBSON / 指针接收者 UnmarshalBSON（私有 wire struct，snake_case 键，map 经 raw 辅助） | `nested_bson_promises_test.go` | 修前红（`lacks "func (s Position) MarshalBSON…"`）；修后 dao 全绿，真实驱动 probe 往返 `{"pos":{"x":3,"y":4}}` | T-118 · `docs/bugfix/U-0224-dao-nested-bson.md` |
 | U-0223 | 2026-09-17 | roost-core `service/match`：内存 Store 输入 / 返回切片与存储共享（RR-20260917-03） | C2 | 按值存取的 Ticket / Match 里 Payload、Members、TicketIDs 是浅复制，改返回值即改存储。修法：`Subject` / `Ticket` / `Match` 的 `clone` 在 Enqueue 输入与六个返回边界深复制 | `result_ownership_promises_test.go` | 修前红（`Commit's returned match aliases the store…`）；修后 `-race` 绿 | T-117 · `docs/bugfix/RR-20260917-03.md` |
 | U-0222 | 2026-09-17 | roost-core `service/match`：ScoreWindow 距离 / 窗口 int64 溢出（RR-20260917-02） | C2 | `absInt64(a-b)` 回绕、`abs(MinInt64)` 为负；窗口乘加溢出后 cap 失效。修法：`scoreDistance` 无符号差、窗口 uint64 饱和乘加后 cap、负配置报 `ErrQueueInvalid`（行为变化） | `score_window_overflow_promises_test.go` | 修前红（`zero vs MinInt64 … formed=true`）；修后绿 | T-116 · `docs/bugfix/RR-20260917-02.md` |
 | U-0221 | 2026-09-17 | roost-core `service/match`：合法 Queue 键碰撞（RR-20260917-01） | C2 | `Key()` 冒号拼接非单射，`{a:2,3,x}` 与 `{a,2,3:x}` 共用 queueState。修法：Mode / Partition 转义 `%`、`:`（纯键逐字节不变，零迁移）；Candidates / Commit 校验票的队列归属 | `queue_key_collision_promises_test.go` | 修前红（`two valid queues share key "a:2:3:x"`）；修后绿 | T-115 · `docs/bugfix/RR-20260917-01.md` |
