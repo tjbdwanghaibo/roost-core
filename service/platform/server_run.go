@@ -41,12 +41,30 @@ func (s *Server) run(ctx context.Context) error {
 		// paid orders quietly stop being delivered.
 		return fmt.Errorf("platform server: the local capability is not a *Service, so no paid order is being retried")
 	}
+	// Say once, at start, which mode this process is in. A deployment that
+	// expects recovery and sees "off" has forgotten to wire its index; the
+	// old loop called a private method that always returned nil, so the
+	// difference was invisible (RR-20260917-04).
+	if service.BackgroundRetryEnabled() {
+		slog.Info("platform server: retrying paid orders from the configured pending index",
+			"interval", RetryInterval, "batch", RetryBatch)
+	} else {
+		slog.Info("platform server: background delivery retry is off; no pending-order source is configured",
+			"how", "set platform.Config.Pending (Mod.WithPendingOrders)")
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			for _, orderID := range s.retryOrders() {
+			orderIDs, err := service.pendingOrderIDs(ctx)
+			if err != nil {
+				// The index is the deployment's to fix; one failing read must
+				// not end the loop for every other order.
+				slog.Error("platform server: pending order index failed; retrying next tick", "err", err)
+				continue
+			}
+			for _, orderID := range orderIDs {
 				receipt, err := service.AttemptDelivery(ctx, orderID)
 				switch {
 				case errors.Is(err, ErrDeliveryHeld):
@@ -73,9 +91,9 @@ func (s *Server) run(ctx context.Context) error {
 	}
 }
 
-// retryOrders is the set of order ids this process retries.
-//
-// Empty by default, deliberately: enumerating pending orders would be an
-// unbounded scan, and a deployment that cares about retrying knows how to name
-// the orders it is waiting on.
-func (s *Server) retryOrders() []string { return nil }
+// The orders this process retries come from the deployment's own pending
+// index (platform.Config.Pending, wired through Mod.WithPendingOrders): see
+// Service.pendingOrderIDs. There is deliberately no default — enumerating
+// pending orders would be the unbounded scan this package refuses — but
+// "none configured" is now stated at start rather than mimed by a private
+// method that returned nil (RR-20260917-04).

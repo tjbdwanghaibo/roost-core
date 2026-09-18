@@ -31,6 +31,7 @@ type Mod struct {
 	verifier Verifier
 	players  PlayerResolver
 	deliver  Deliverer
+	pending  PendingOrders
 	metrics  servicemetrics.Reporter
 
 	prefix        string
@@ -45,6 +46,19 @@ type Mod struct {
 // NewMod returns a platform Mod. All three collaborators are required.
 func NewMod(verifier Verifier, players PlayerResolver, deliver Deliverer, reporter servicemetrics.Reporter) *Mod {
 	return &Mod{verifier: verifier, players: players, deliver: deliver, metrics: reporter}
+}
+
+// WithPendingOrders gives the Server's background loop a source of
+// paid-but-undelivered orders to retry. Optional and separate from NewMod on
+// purpose: the three constructor collaborators have no safe default, while
+// this one has a defensible "none" — a deployment whose channel re-delivers
+// callbacks does not need it. What it must not be is invisible, so a Server
+// without it says so at start (RR-20260917-04).
+func (m *Mod) WithPendingOrders(pending PendingOrders) *Mod {
+	if m != nil {
+		m.pending = pending
+	}
+	return m
 }
 
 // Name implements app.Mod.
@@ -123,7 +137,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		return fmt.Errorf("platform mod: %w", err)
 	}
 	service, err := New(Config{
-		Orders: orders, Deliver: m.deliver, Verifier: m.verifier, Players: m.players,
+		Orders: orders, Deliver: m.deliver, Verifier: m.verifier, Players: m.players, Pending: m.pending,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL,
 		PaymentSecret:    m.paymentSecret,
 		DeliveryAttempts: m.attempts, DeliveryBackoff: m.backoff,

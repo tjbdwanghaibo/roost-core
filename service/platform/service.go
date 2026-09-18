@@ -49,6 +49,18 @@ func (f DelivererFunc) Deliver(ctx context.Context, order Order) error { return 
 type Config struct {
 	// Orders holds the durable order records.
 	Orders OrderStore
+	// Pending names the paid orders this deployment is still waiting to
+	// deliver, so the Server's background loop has something to retry.
+	// Optional and deliberately not defaulted: enumerating every order on a
+	// timer is the unbounded scan this package refuses to do, and only the
+	// deployment knows what index it keeps.
+	//
+	// Leaving it nil turns background recovery OFF — a real choice for a
+	// deployment whose channel re-delivers callbacks, and one the service
+	// states rather than mimes: the loop used to call a private method that
+	// always returned nil, so a recoverable failure could hang forever with
+	// nothing in the logs (RR-20260917-04).
+	Pending PendingOrders
 	// Deliver grants the goods. Required.
 	Deliver Deliverer
 
@@ -87,8 +99,33 @@ type Config struct {
 	Metrics servicemetrics.Reporter
 }
 
+// PendingOrders is the deployment's index of paid-but-undelivered orders.
+//
+// The contract is bounded and fallible on purpose: limit is how many ids the
+// caller can use this tick (so the source pages rather than loading
+// everything), and an error is reported and retried next tick rather than
+// taking the process down. Ids the service has already settled may appear —
+// the loop skips them and says so, which is the signal that the index needs
+// to retire them.
+type PendingOrders interface {
+	PendingOrders(ctx context.Context, limit int) ([]string, error)
+}
+
+// PendingOrdersFunc adapts a function to PendingOrders.
+type PendingOrdersFunc func(context.Context, int) ([]string, error)
+
+// PendingOrders implements PendingOrders.
+func (f PendingOrdersFunc) PendingOrders(ctx context.Context, limit int) ([]string, error) {
+	return f(ctx, limit)
+}
+
 // Defaults.
 const (
+	// RetryBatch is how many pending orders one tick asks for. The bound is
+	// the point: a deployment with a large backlog pages through it instead
+	// of building one giant slice per tick.
+	RetryBatch = 128
+
 	DefaultSessionTTL      = 30 * time.Minute
 	DefaultDeliveryBackoff = 5 * time.Second
 
@@ -615,3 +652,18 @@ func truncate(text string, limit int) string {
 	}
 	return text[:limit]
 }
+
+// pendingOrderIDs asks the deployment's index for the orders to retry this
+// tick. No source configured is not an error: it is background recovery
+// switched off, which BackgroundRetryEnabled reports.
+func (s *Service) pendingOrderIDs(ctx context.Context) ([]string, error) {
+	if s == nil || s.cfg.Pending == nil {
+		return nil, nil
+	}
+	return s.cfg.Pending.PendingOrders(ctx, RetryBatch)
+}
+
+// BackgroundRetryEnabled reports whether this service has a source of paid
+// orders to retry. A deployment that expects recovery and reads false here
+// has forgotten to wire its index.
+func (s *Service) BackgroundRetryEnabled() bool { return s != nil && s.cfg.Pending != nil }
