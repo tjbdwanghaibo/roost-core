@@ -342,7 +342,7 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 > 当场就红。零覆盖的地方就是缺陷能长期活着的地方。第 1、2、3 条已于第十二批实施（§9.3）。
 
 覆盖现状（2026-09-18 晚，实施第十二批之后）：kit 的 9 个真实服务 demo 用了 6 个（account / chat / mail / match / rank / session），
-**platform、global+activity 仍零使用**，directory 只被 account 间接用；core 这边 game-facing 的包里
+**global+activity 仍零使用**（platform 于第十五批接入），directory 只被 account 间接用；core 这边 game-facing 的包里
 **spatial、remoteentity、ownerroute、mirror、ai、actionflow、timer、migration 仍没有任何直接使用**。
 
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
@@ -351,8 +351,7 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 4. ~~spatial（AOI / 兴趣管理）+ 一张地图~~ — 第十三批三批全部完成（§9.4）。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
    真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
-6. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、
-   终态退休）还没有范例。
+6. ~~platform 待发货索引的参考实现~~ — 第十五批完成，见 §9.7。
 7. ~~`core/migration`（数据版本迁移）~~ — 第十四批完成，见 §9.5.2。
 8. ~~给 demo Player 加一个嵌套 struct 字段~~ — 第十四批完成，见 §9.5.1。
 9. **timer / global+activity / featureflag / hotcode**：运维与限时玩法面，现在完全空白。
@@ -407,6 +406,73 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
   Mongo step inbox 12 条且全是 deliver（命令 id 的步位是 `:1:`）。
 - **没做**：载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场；deliver 那条仍是两次提交；
   没有做"进程在 Nest 提交与 ack 之间被杀"的故障注入测试——证据是接线与回执，不是崩溃演练。
+
+
+### 9.7 第十五批（2026-09-19）：支付订单走通两个进程，以及 U-0234 留下的那个索引
+
+platform 是 kit 仅剩的两个零使用服务之一，而 U-0234 在修"后台重试没有候选来源"时明确把**索引本身**留给了部署：
+持久段、重启续接、分页公平性、终态退休。这一批把它实现出来，并且不是凭空实现——它必须支撑一条真的支付链路。
+
+#### 9.7.1 一条付费订单的全程
+
+`Purchase` 端点 → 游戏进程签一份回调（**demo 在扮演支付渠道**，真实工程里这把密钥游戏进程不该有，端点注释里写清了）
+→ `platform.HandleCallback` 在 platform 进程里验签、按 order id **只插不改**地登记、然后调用部署的 deliverer
+→ deliverer 把**已解析好的**发货内容（item id 与数量，不是 product id）写成一条 Redis 里的 grant
+→ 游戏进程把 grant 抽干：一个 Nest 事务把道具加进背包、**把 order id 写进同一条 WAL 记录**，提交之后才删 grant。
+
+几处是刻意的：
+
+- **platform 进程碰不到 Entity**，它只有 Redis 和总线。所以 deliverer 能做的"已发货"只能是**把欠什么写成持久记录**；
+  它返回 nil 的那一刻，这笔账已经不依赖任何一个进程还活着。如果它改成推一条消息就返回，推完到发放之间崩一次，
+  就会留下一笔服务认为已完成、玩家没收到的订单。
+- **先提交事务、后删 grant**。反过来（先删）任何一次崩溃都会吞掉一笔已付款的发货；这个顺序下崩溃只会让 grant 被再读一次，
+  而第二次读会在账本里撞上同一个 order id，什么都不发。这是 dungeon 清关、邮件附件之后**同一形状的第三例**。
+- **准入判据与清理判据是同一个数**：`paid_at + purchase.ClaimRetentionSeconds`。过期的 grant 是**带错误码的拒绝**
+  （`purchase_expired`），不是悄悄发放——账本已经忘了它，悄悄发放就是第二次发放（RR-20260918-05 的教训）。
+- **加字段不需要迁移**：`PurchaseClaims` 是新 map，BSON 解码给零值，所以 `schema=` 仍是 2。需要迁移的是**形状**变化。
+- 掉线时买的东西在下次登录时结算（`EnterGame` 里抽一次），platform 进程不需要知道玩家在不在线、在哪个进程。
+
+#### 9.7.2 索引：四件事，外加"退休由谁决定"
+
+`pendingIndex` 是 platform 进程里的一个 Redis sorted set，与订单记录同前缀：
+
+- **重启续接**：内存里的索引意味着进程死时正在等的订单永远在等。
+- **分页**：`PendingOrders(ctx, limit)` 只取 `ZRangeWithScores(0, limit-1)`，其余的下一 tick 再说。
+- **公平**：score 是"这笔订单下次值得一试的时刻"。deliverer 拿到的是**已认领**的订单，服务此前已经把
+  `NextAttemptAtUnix` 推到本次退避之后，所以反复失败的那笔是在往后挪自己，挡不住排在它后面的。
+  score 未到的条目直接停止扫描——集合按 score 排序，第一个没到期的后面不会有到期的。
+- **退休**：索引**不自己判断**订单是否结束，而是在读的时候问服务（`Order(ctx, id)`），终态或查无此单才 `ZREM`。
+  发货侧做不了这个判断——订单还能以 exhausted 或被运维 settled 结束，两者都不经过 deliverer，
+  盯着自己的写入来退休的索引恰好会留住那些人已经处理过的单。读不出来的订单**保留**：
+  对已发货的订单多试一次是空操作，把没发货的退休掉是一笔再也没人看的付款。
+
+为此 kit 补了一个接缝：`platform.RegistryBound`（与 `account.RegistryBound` 同形，kit v1.14.10）。collaborator 由
+bootstrap 在 app 之前构造，构造函数里拿不到 registry；索引要的 Redis 客户端和 key 前缀都只有 registry 给得了。
+服务自身的 capability 在 `Provide` 返回之后才发布，所以索引**留住 registry、首次使用时再查**。
+
+#### 9.7.3 测试与实跑
+
+- 索引的四条承诺对着 map 替身测（`internal/service/platform/pending_index_test.go` 六条）：分页且最旧优先、
+  反复失败不饿死后面的、退避未到不给出、三种终态与"查无此单"都退休、读不出来的保留、未绑定时报错而不是"没有待办"。
+  把 Redis 客户端窄化成三个方法的接口，就是为了这个替身写得出来。
+- 账本的重放方向客户端造不出来（客户端没法重发同一个帧序号），所以对着真实生成的 handler 测
+  （`game/handler/grant_purchase_test.go` 三条）：同一 order 抽两次只发一次、过期拒绝且边界属于可领取的一侧、
+  缺 order id 或缺付款时刻直接拒。
+- 机器人：`purchase` 断言背包**真的涨了**（发货失败但回包成功是这里最容易漏的失败），`purchase_again`
+  断言第二次是**另一笔订单**、又涨了一次——这条会抓到按玩家或按商品去重的账本。
+- 实跑（8 进程 + 2 机器人，全绿）：Mongo 里 `purchase_claims` 两条、`items.1001 = 21`；
+  Redis 里四笔订单 `state: delivered`、grants 哈希已清空；**下一次 30 秒 tick 之后 pending zset 归零**——
+  这一条只有实跑能证明，它走的是"进程内延迟查 capability"那条路。
+
+#### 9.7.4 顺带修掉的生成缺口
+
+给 catalog 加 platform 时发现两处，都属于"生成出来的工程起不来"：
+
+- platform 的配置块没有 `session_secret` / `payment_secret`，而 Mod 在 `Init` 里对空值直接拒绝——
+  account 的块早就按 `CHANGE_ME` 发了，platform 漏了。
+- `NewMod(...)` 之外的可选协作者没有生成入口。加 `frameworkServiceSpec.ModChain`，
+  于是 `svcplatform.NewMod(...).WithPendingOrders(servicePlatform.Pending())` 是生成的，
+  默认 collaborators 文件里也有一个返回 nil 的 `Pending()`（"没有索引"是合法选择，但不能是隐形的）。
 
 ## 8. 相关文件速查
 
