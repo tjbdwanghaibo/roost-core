@@ -6,6 +6,65 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-05：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界
+
+- **位置**：roost-core `spatial/interest.go:60`（`InterestConfig.validate`：只校验 `EnterRadius > 0`、`LeaveRadius >= EnterRadius`、
+  `LeaveRadius < 2^62`、`Bands` 递增）、`:276`（`resubscribe` 用 `±LeaveRadius` 的盒子取格）、
+  `spatial/block_index.go:29-41`（`NewBlockIndex` 只拦**整张地图**的格数 `MaxBlockCount = 1<<20`，且**预分配**全部 `*indexBlock`）。
+- **现象**：一个观察者订阅的格数是 `(⌈2·LeaveRadius/BlockSize⌉+1)²`，没有任何一处检查这个比值。
+  `LeaveRadius=150, BlockSize=150` 是 9 格（教科书九宫格）；`LeaveRadius=1000, BlockSize=100` 是 441 格；
+  `LeaveRadius=5000, BlockSize=10` 是约 10⁶ 格——等于每个观察者订阅整张图，配置合法、构造成功、不报错。
+  每格是**两处 map 条目**（`observer.blocks` 与 `blockObservers[block]`），而且观察者每移动一次 `resubscribe` 就要对这个集合做一次差分。
+- **为什么可疑 / 为什么不自己拍板**：这是"配错了不报错、只是慢慢变慢"的那类参数——增量 AOI 的全部收益（主体移动只惊动一格的订阅者）
+  在比值失衡时被观察者侧的差分成本吃光，而没有任何信号告诉部署方。对照：cube 的 `BlockAOI` 拦的是**单个观察者的窗口面积**
+  （`view.SceneConfig.MaxAOIArea`，默认 `BlockSize² × 1024`，`validateObserverRect` 超了直接 `ErrAOIRectTooLarge`），
+  roost 拦的是整图格数——两道闸防的不是同一件事。修法有几种取舍：硬上限（拒绝构造）、软上限（构造时告警）、
+  或按 `LeaveRadius` 推荐/推导 `BlockSize`（等于把九宫格的惯例写进框架）。选哪条是契约，不是缺陷修复。
+- **复现**：`NewInterestManager(InterestConfig{Bounds: 1e6×1e6, BlockSize: 10, EnterRadius: 4900, LeaveRadius: 5000})` 成功返回；
+  `AddObserver` 一个观察者后数 `len(observer.blocks)`。
+- **来源**：game-demo 第十三批准备 AOI 接线时对照 cube `BlockAOI` 发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.4.2）。
+
+## W-2026-09-18-06：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约，"订阅自己"也没有归属
+
+- **位置**：roost-core `spatial/interest.go:392`（`evaluatePair` 第一行 `if observer.id == subject { return }`——自观察靠**同一个 id 空间**判定）；
+  `entitysync/subscription.go:42`（`SubscriberRef{Kind, ID, Sid, Key}`）与 `:178`（`Subscribe(ctx, subscriber, state, profile)`，
+  主体由 `state.SubjectID()` 给出，那是**完整 entity id**）；消费侧 roost-codegen `demo/internal/service/game/scene.go`
+  （`SubscriberRef{ID: playerID}` 用的是 **unique id**，因为 `RoomSessionResolver` 要把它映成 SessionID）。
+- **现象**：`InterestEvent{Observer, Subject}` 要直接喂进 `room.Subscribe`，但两端的 id 空间在现有代码里**已经不一致**：
+  订阅者用 unique id（如 100971），主体用完整 entity id（如 103402500）。原样接线的话 `observer.id == subject` 永远不成立，
+  于是玩家会"观察自己"——今天这恰好是 demo 想要的结果，但它是靠两个 id 空间不一致这个**巧合**成立的，改一次 id 生成或
+  换一次 SubscriberRef 的取值就会翻转，而且翻转时没有任何测试会红。
+- **为什么可疑 / 为什么不自己拍板**：`spatial` 用一个 id 空间同时表示 observer 与 subject 并据此判自观察；`entitysync` 用两个
+  不同性质的 id。两层都没写下"接线时谁负责换算"。而且"一个玩家要不要订阅自己的主体"其实**不是 AOI 问题**
+  （永远看得见自己，跟距离无关，也不该被 `MaxVisible` 挤掉），却因为共用 id 空间而被卷进了 AOI 的判定里。
+  候选修法至少三条：(a) 约定 AOI 内部一律用 entity id，发事件时由桥接层换算成 `SubscriberRef`，自观察由 `spatial` 正确排除，
+  "订阅自己"在 AOI 之外显式做；(b) 让 `SubscriberRef` 也用 entity id，由 resolver 负责换 SessionID；
+  (c) 给 `InterestManager` 加一个显式的"自观察策略"配置，不再靠 id 相等推断。(a) 是实现侧倾向的那条，但它把一条约定放在
+  谁都没有强制的位置上，值得 review 决定要不要落成框架里的类型或断言。
+- **复现**：按当前 demo 的取值构造一次桥接，断言玩家不会收到自己的 Enter——会失败。
+- **来源**：game-demo 第十三批设计 AOI → 订阅桥接时发现（§9.4.2）。
+
+## W-2026-09-18-07："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里
+
+- **位置**：roost-core `spatial/interest.go`（subject = 一个 `int64` + 一个 `Point`，包对"实体"一无所知；
+  observer/subject 是**角色**不是类型，同一个 id 可以两者都是、都不是——`:184` 的注释只写了
+  "An id may be both an observer and a subject; it never observes itself"）；对照 `entity/subject_sync.go`
+  与 `entitysync`/`room`（那里的 subject 是 `SubjectSyncState`，由 `EntityBase.EnableSync` 建、挂在实体上，
+  带 Namespace / SubjectKind / packer）。
+- **现象**：两件事没有任何文档写下来：
+  (1) **同名不同物**——`spatial` 的 subject 是"某个 id 扮演的可被看见的角色"（可以是刷新点、音源、触发区，完全不必是实体），
+  `entitysync` 的 subject 是"实体的可复制面"。接线的人很容易以为是一回事。
+  (2) **AOI 的点不是实体的 pos**——观察者的点是**视点**（可以是摄像机、载具、被观战的目标、滞后的插值点），
+  主体的点是**被看见的位置**（可以量化、可以降频、隐身单位甚至可以是假点）。框架从不要求它们等于任何 DAO 字段；
+  demo 把两者都喂成 DAO 的 pos 是一个**决定**，不是约束。
+- **为什么可疑**：这类"只在实现者脑子里的契约"的代价是滞后的——第一个做观战 / 载具 / 摄像机分离的人会先把
+  `MoveObserver` 接到角色位置上，然后发现改不动；而 `subject` 的双关会让人以为 AOI 里只能放实体。
+  两处都不是缺陷，是**文档与命名的契约**，所以不自己改。
+- **候选修法**：给 `spatial` 的包注释加一段"subject / observer 是角色，点是 AOI 的输入而不是某个权威字段的镜像"；
+  或者更强一点，把 `spatial` 里的 `subject` 改名（`target` / `visible`）以免与 entitysync 的 subject 混淆——
+  改名是破坏性的，取舍归 review。
+- **来源**：game-demo 第十三批（§9.4.2）。与 W-2026-09-18-06 同源，可一并分流。
+
 ## W-2026-09-18-02：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
 
 - **位置**：roost-codegen `internal/dao/template_dao.go`（`{{fieldMaskName $.Dao.Name .Name}}` 生成 `varietyDaoFieldSyncOnly`

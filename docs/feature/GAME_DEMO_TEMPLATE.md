@@ -535,8 +535,16 @@ InterestBandChanged  → room.Subscribe(...新 profile...)   // 已核实：同�
 ```
 
 `internal/service/<game>/scene.go` 里"所有人订阅所有人"的两个循环随之删掉，这是这批的主要收益。
-**前置依赖**：分带（LOD）只有在 packer 真按 profile 裁剪字段时才有意义，而生成的字段掩码常量是 DAO 包私有的
-（W-2026-09-18-02）；所以要么等 review 定掩码词汇表，要么第二批先用单带、把分带留到之后。
+**开工前要等 review 定的四条**（都已进 `docs/bug/WANTED.md`）：
+
+| 编号 | 要定什么 | 不定会怎样 |
+| --- | --- | --- |
+| W-2026-09-18-02 | 生成的同步字段掩码常量是 DAO 包私有的，packer 没法按字段裁剪 | 分带（LOD）没有意义，第二批只能先用单带 |
+| W-2026-09-18-05 | `InterestConfig` 对"一个观察者订阅多少格"没有上界 | `LeaveRadius/BlockSize` 配失衡时增量 AOI 的收益被差分成本吃光，且无任何信号 |
+| W-2026-09-18-06 | AOI 的 id 空间与 `SubscriberRef` / `subjectID` 的换算归谁，"订阅自己"归谁 | 现状靠两个 id 空间不一致这个巧合达成自订阅，翻转时没有测试会红 |
+| W-2026-09-18-07 | "subject" 跨两层同名不同物；AOI 的点是视点/被看见位置，不是实体 pos | 做观战 / 载具 / 摄像机分离时才发现接错了地方 |
+
+其中只有 W-05 会挡住"能不能上线"，其余三条挡的是"接成什么形状"。实现侧的倾向已写在各条的候选修法里。
 另外这批要把两个"scene"合并——地图 Scene 实体持 AOI，`internal/service/<game>/scene.go` 退化成复制桥接。
 滞回必须钉进测试：在边界上来回微动**不**产生 Enter/Leave 抖动，这正是 roost 比 cube 多出来的部分。
 
