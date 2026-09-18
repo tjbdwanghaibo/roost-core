@@ -82,6 +82,9 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0243 | codegen | 生成的接入层不通知会话关闭，空闲世界里断线成员永远留着（RR-20260918-06） | [RR-20260918-06.md](RR-20260918-06.md) |
+| U-0242 | codegen | 运行期实体 id 由进程本地计数器发号，多实例碰撞（RR-20260918-09） | [RR-20260918-09.md](RR-20260918-09.md) |
+| U-0241 | core+codegen | 邮件账本按固定 31 天清理，而 send_ttl 只要求为正数；账本先忘、信封还可领（RR-20260918-05） | [RR-20260918-05.md](RR-20260918-05.md) |
 | U-0240 | core | `spatial.InterestConfig` 对单个观察者订阅的格数没有上界，合法配置可登记 40,401 格（RR-20260918-08） | [RR-20260918-08.md](RR-20260918-08.md) |
 | U-0239 | codegen | `syncTopic` 的裸标识符被静默当成字面量，实体订阅到常量的名字（RR-20260918-07） | [RR-20260918-07.md](RR-20260918-07.md) |
 | U-0238 | codegen | 顶层 DAO 容器换掉成员后不解绑旧值，游离对象能以原 key 写回持久化补丁（RR-20260918-10） | [RR-20260918-10.md](RR-20260918-10.md) |

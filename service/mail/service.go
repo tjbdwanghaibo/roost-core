@@ -648,6 +648,17 @@ type Claim struct {
 	Attempts int32
 	// DeadlineUnix is when another reservation may be taken.
 	DeadlineUnix int64
+	// ExpiresAtUnix is when this mail stops being claimable at all — the
+	// envelope's own expiry, not the reservation's lease.
+	//
+	// It is here because a delivery side that dedupes on Token has to know
+	// how long that identity must outlive the claim, and it cannot work it
+	// out: the sender's TTL is another service's configuration, and binding
+	// asset correctness to a configuration means a legal change to that
+	// configuration re-opens a double grant (RR-20260918-05). After this
+	// moment the mail cannot be reserved at all, so a dedupe record keyed on
+	// it may be forgotten — and not one moment sooner.
+	ExpiresAtUnix int64
 }
 
 // ReserveClaim takes the delivery reservation for one mail's attachment and
@@ -774,6 +785,10 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 			Attachment:   append([]byte(nil), envelope.Attachment...),
 			Attempts:     entry.ClaimAttempts,
 			DeadlineUnix: entry.ClaimDeadlineUnix,
+			// From the envelope, not from the reservation: it is when the
+			// mail stops being claimable at all, which is the bound a
+			// delivery side's dedupe record has to outlive.
+			ExpiresAtUnix: envelope.ExpiresAtUnix,
 		}
 		return current, true, nil
 	})

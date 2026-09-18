@@ -7,6 +7,12 @@
 
 ### Fixed
 
+- **`mail.Claim` 交出信封的过期时刻**（U-0241，C4，RR-20260918-05，T-135，**P1**）。领取的预留此前只带租约
+  `DeadlineUnix`，而一个按 Token 去重的发放侧必须知道这个身份要活到什么时候——它自己算不出来：发送方的 TTL 是
+  另一个服务的**配置**，把资产正确性绑在配置上，意味着一次合法的配置改动就重新打开一次重复发奖，且没有测试会红
+  （game-demo 的账本固定留 31 天并论证"长于 `send_ttl` 720h"，而 `send_ttl` 只要求为正数）。
+  `Claim.ExpiresAtUnix` 取自信封，是"这封邮件彻底不可领"的那一刻——去重记录可以在此之后遗忘，一刻都不能更早。
+  测试：`service/mail/claim_expiry_promises_test.go`。记录：`docs/bugfix/RR-20260918-05.md`。
 - **`spatial.InterestConfig` 增加单观察者订阅预算**（U-0240，C6，RR-20260918-08，T-134，**行为变化**）。
   此前只校验半径与分带，而 `BlockIndex` 拦的是**整图**格数——两道闸防的不是同一件事。一个观察者订阅的格数是
   `(⌈2·LeaveRadius/BlockSize⌉+1)²`，`Bounds 10000×10000 / BlockSize 10 / LeaveRadius 1000` 是合法配置、
