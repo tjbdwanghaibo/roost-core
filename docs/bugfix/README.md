@@ -82,6 +82,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0227 | codegen | handler 半的生成文件 import 了只被返回类型用到的包，`imported and not used`（实施 RR-20260917-08 时发现） | [U-0227-nest-return-type-imports.md](U-0227-nest-return-type-imports.md) |
 | U-0225 | core | saga 步骤拒绝 / 重试用尽后进补偿的记录版本被加了两次，MongoStore.Apply 只收 expected+1，saga 永远卡在 waiting（game-demo 实跑发现） | [U-0225-saga-compensation-version.md](U-0225-saga-compensation-version.md) |
 
 重构类改动(不对应任何 RR,不关闭任何 RR)另记,编号 M-:
