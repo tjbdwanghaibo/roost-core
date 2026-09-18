@@ -326,9 +326,32 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   临时模块 + 当前 core pin 跑 roundtrip：主键 / bean 切片 / 二级索引 / 关键字字段 / 全局 / 快照身份 / ref 悬空拒绝且不动现役快照 / required 拒绝 / 热更发布。
   验证过它会红：把生成的 json 名去掉下划线（编译与注册都正常、数据读不出来）四条全红。**cfggen 刻意没有进 demo**——
   demo 已经用 `//roost:table` + CSV 那条配置管线，同一个工程里并存两套配置定义方式是教学负担；`project next` 的进阶提示里指出 cfggen 的存在与命令。
-- **B8 attribute 没做**：生成器输出依赖"所在包需提供"的七个基础类型，框架里没有定义、脚手架也不生成——先交 review 定契约（W-2026-09-17-03）。
-- **未做**：多 game 进程的 chat 扇出应改订阅流；claim token / run id 进 Nest 事务的"恰好一次"；session 进程的 sweep owner 列表（默认懒解决）；
-  给 demo Player 加嵌套字段让压测覆盖嵌套持久化（等 W-2026-09-17-02 判定后一起做）。
+- **B8 attribute 已完成**（09-18，随 U-0230 / RR-20260917-06）：W-2026-09-17-03 被 review 判为 RR，修法是把属性系统的**框架半**放进
+  roost-core 新增的 `attribute` 包（`Meta` / `Profile` / `Selector` / `Snapshot` / `Container`），生成器改出包级访问器
+  （`<Name>Of` / `<Name>In` / `<Name>Live`，不再给 Snapshot / Container 挂方法——Go 不允许给外包类型定义方法，这正是"只加 alias"走不通的原因），
+  脚手架给启用该 feature 的工程写 codegen 受控的 `game/gameplay/attribute/runtime.go`。demo 随之用上它：`game/gameplay/attribute/combat.go`
+  三个属性、一个派生公式（`_Power`）、`LevelUp` / `ForLevel`，随工程生成 `combat_test.go`。`dirtyMask uint64` 约定在生成期报错。
+
+**ABCD 计划至此全部完成（16 / 16）**：A1–A4、B5 rpc、B6 GM、B7 技能、B8 attribute、B9 saga、B10 lockstep、
+C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文档、D16 进阶引导。
+
+### 9.1 计划外仍然开着的事（按价值排）
+
+1. **恰好一次的两个半成品**。dungeon 清关奖励已经做成"权威状态 + 同事务账本"（U-0226），可以照抄；
+   `ClaimMail` 的 claim token 仍没有进 Nest 事务（`ReserveClaim → Sync_AddItem → CommitClaim` 三步，中间崩溃会重发一叠）。
+   把 mail 的 claim 也做成账本式，demo 就有两处同形的范例。
+2. **saga 的原生路径进 demo**。core v1.15.7 起 Assembly 自带原生完成消费者（U-0231），送礼 saga 的 debit / refund 步骤
+   可以从 `SubscribeMongoStep` 换成 `SubscribeDataEngineStep` + `inbox.Bind`，把"Nest 提交与 inbox 回执不原子"那条边界真正关掉。
+3. **给 demo Player 加一个嵌套 struct 字段**。W-2026-09-17-02 已判为 RR-20260917-05 并修复（U-0232），
+   现在加嵌套字段能让压测覆盖嵌套持久化与两层脏传播，且有运行时门兜底。
+4. **attribute 接进持久化与同步**。demo 的 `Combat` 目前只在内存里：既没有进 Player 的 DAO，也没有接 `sync=true` 的实体复制。
+   接上之后才是"属性系统"的完整形状；`Container` 的**层间合成**（base + buff → final）也留在这里一起定。
+5. **多 game 进程**：chat 世界频道扇出目前按每进程 presence（多进程时只覆盖本进程的玩家），应改订阅流；
+   battle 的房间是进程内状态，多进程要把战斗做成自己的服务、按 match id 寻址。
+6. **Wanted-05 的接入样例**：生成实体 → room → session → sink 的可执行样例仍待产品化（review 09-18 已确认手动路线可行，八场景通过）。
+7. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、终态退休）还没有范例。
+8. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile` 在类型叫
+   `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
 
 ## 8. 相关文件速查
 
