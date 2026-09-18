@@ -22,6 +22,56 @@ type AssemblyConfig struct {
 	Stream      fnats.JetStreamConfig
 	Completions CompletionConsumerConfig
 	Starts      NestStartConsumerConfig
+	// NestResults is the consumer for native Nest steps' completion effects.
+	// Left zero it is derived from Starts (same effect stream and prefix,
+	// its own durable), because a deployment that has native steps and a
+	// deployment that does not are configured the same way — the effects
+	// simply never arrive in the second one (RR-20260917-07).
+	NestResults NestCompletionConsumerConfig
+}
+
+// nestResultsConfig fills NestResults from Starts where it is empty, so an
+// AssemblyConfig written before this consumer existed still gets it.
+func (c AssemblyConfig) nestResultsConfig() NestCompletionConsumerConfig {
+	config := c.NestResults
+	if config.Stream == "" {
+		config.Stream = c.Starts.Stream
+	}
+	if config.EffectPrefix == "" {
+		config.EffectPrefix = c.Starts.EffectPrefix
+	}
+	if config.Durable == "" {
+		config.Durable = defaultNestResultDurable(c.Starts.Durable)
+	}
+	if config.AckWait == 0 {
+		config.AckWait = c.Starts.AckWait
+	}
+	if config.ProcessTimeout == 0 {
+		config.ProcessTimeout = c.Starts.ProcessTimeout
+	}
+	if config.MaxDeliver == 0 {
+		config.MaxDeliver = c.Starts.MaxDeliver
+	}
+	if config.MaxAckPending == 0 {
+		config.MaxAckPending = c.Starts.MaxAckPending
+	}
+	if config.NakBackoffMin == 0 {
+		config.NakBackoffMin = c.Starts.NakBackoffMin
+	}
+	if config.NakBackoffMax == 0 {
+		config.NakBackoffMax = c.Starts.NakBackoffMax
+	}
+	return config
+}
+
+// defaultNestResultDurable derives a durable that cannot collide with the
+// start consumer's: two consumers sharing one durable share one cursor, and
+// each message would reach only one of them.
+func defaultNestResultDurable(startDurable string) string {
+	if startDurable == "" {
+		return "roost-saga-nest-result"
+	}
+	return startDurable + "-result"
 }
 
 // Assembly owns the Saga runtime's construction and lifecycle: store,
@@ -39,6 +89,7 @@ type Assembly struct {
 	stateMu     sync.RWMutex
 	resultSub   fnats.IJetStreamSubscription
 	startSub    fnats.IJetStreamSubscription
+	nestResults fnats.IJetStreamSubscription
 	cancel      context.CancelFunc
 	done        chan struct{}
 	errMu       sync.RWMutex
@@ -110,9 +161,20 @@ func (a *Assembly) Start(ctx context.Context) error {
 		runCancel()
 		return fmt.Errorf("saga: subscribe Nest starts: %w", err)
 	}
+	// The third consumer: completions a native Nest step committed as an
+	// effect. Without it those results reach nobody and the saga waits out
+	// every timeout (RR-20260917-07). A failure here tears down the two that
+	// already started, like every other partial start.
+	nestResultSub, err := SubscribeNestCompletions(runCtx, jetStream, a.cfg.nestResultsConfig(), a.Engine)
+	if err != nil {
+		startSub.Drain()
+		resultSub.Drain()
+		runCancel()
+		return fmt.Errorf("saga: subscribe Nest completions: %w", err)
+	}
 	done := make(chan struct{})
 	a.stateMu.Lock()
-	a.cancel, a.resultSub, a.startSub, a.done = runCancel, resultSub, startSub, done
+	a.cancel, a.resultSub, a.startSub, a.nestResults, a.done = runCancel, resultSub, startSub, nestResultSub, done
 	a.stateMu.Unlock()
 	a.errMu.Lock()
 	a.runErr = nil
@@ -145,9 +207,9 @@ func (a *Assembly) Stop(ctx context.Context) error {
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
 	a.stateMu.RLock()
-	resultSub, startSub, runCancel, done := a.resultSub, a.startSub, a.cancel, a.done
+	resultSub, startSub, nestResultSub, runCancel, done := a.resultSub, a.startSub, a.nestResults, a.cancel, a.done
 	a.stateMu.RUnlock()
-	subs := []fnats.IJetStreamSubscription{resultSub, startSub}
+	subs := []fnats.IJetStreamSubscription{resultSub, startSub, nestResultSub}
 	if err := drainSubscriptions(ctx, subs); err != nil {
 		for _, sub := range subs {
 			if sub != nil {
@@ -160,7 +222,7 @@ func (a *Assembly) Stop(ctx context.Context) error {
 		return err
 	}
 	a.stateMu.Lock()
-	a.resultSub, a.startSub, a.cancel = nil, nil, nil
+	a.resultSub, a.startSub, a.nestResults, a.cancel = nil, nil, nil, nil
 	a.stateMu.Unlock()
 	if runCancel != nil {
 		runCancel()

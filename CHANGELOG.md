@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 
+### Fixed
+
+- **saga：原生 Nest 步骤的完成效果现在有人消费**（U-0231，C4；RR-20260917-07，Wanted-04 转入，T-125）。`EmitCompletion` 把完成结果作为 Nest effect 提交，所以它经 Data Engine 的 outbox 到达**效果流**的 `<effect_prefix>.saga.result.<sagaID>`，而 `Assembly.Start` 只订了 `<saga_prefix>.result.>` 与 `<effect_prefix>.saga.start`——原生完成不匹配任何默认消费者，saga 停在 waiting 直到 deadline 补偿。新增对称的 `SubscribeNestCompletions` 与 `AssemblyConfig.NestResults`（留空时从 `Starts` 派生，durable 默认 `<start durable>-result`：共用 durable 就是共用游标）；第三条订阅失败会 Drain 掉前两条，`Stop` 一并排空。`ErrNotWaiting` / `ErrNotFound` / `ErrInvalidRecord` / `ErrDefinitionMissing` 判为 Permanent——`Complete` 对已记录的回执幂等，一条陈旧消息不该堵住消费者。测试 `saga/nest_completion_promises_test.go`（记录型 JetStream 替身，非真实 broker）。记录 `docs/bugfix/RR-20260917-07.md`。
+
 ### Added
 
 - **新增 `attribute` 包：属性系统的框架半**（U-0230，C4；RR-20260917-06，T-124）。`AttrID` / `AttrValue` / `Meta` / `Profile`（生成的 profile 实现的接口）/ `Selector`（层）/ `Snapshot`（Profile 是副本，读者改不动容器里的那份）/ `Container`（Install / Live / Snapshot / Apply / Dirty / ClearDirty / Remove / Layers，并发安全）。roost-codegen 的 attribute 生成器此前引用这七个名字而三仓都不提供，整条 feature 生成出来就编译不过；生成器同时改成产出包级访问器，所以工程侧这些名字可以直接是本包类型的别名。`Container` 只负责按层存放与快照，**不做层间合成**——合成规则各游戏不同。测试 `attribute/container_promises_test.go`。记录 `docs/bugfix/RR-20260917-06.md`。
