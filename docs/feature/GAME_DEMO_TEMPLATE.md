@@ -348,16 +348,13 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
 2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
 3. ~~rank 服务~~ — 第十二批完成，见 §9.3.3。
-4. **spatial（AOI / 兴趣管理）+ 一张地图**。分三批，第十三批做掉第一批（地图与移动，§9.4.1）与
-   第二批（AOI 接管订阅，§9.4.2）；**仍欠第三批（object refresh 刷怪，§9.4.3）**。
+4. ~~spatial（AOI / 兴趣管理）+ 一张地图~~ — 第十三批三批全部完成（§9.4）。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
    真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
 6. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、
    终态退休）还没有范例。
-7. **`core/migration`（数据版本迁移）**：demo 从没演示过"DAO 加了字段，老文档怎么办"，而框架有现成的
-   `DataVersion` / `RunFrom`。真实项目第一个月就会撞上。
-8. **给 demo Player 加一个嵌套 struct 字段**：U-0236 又一次证明嵌套那条路径的缺陷只有 dao 运行时门看得见；
-   demo 加一个字段，压测也能覆盖两层脏传播。
+7. ~~`core/migration`（数据版本迁移）~~ — 第十四批完成，见 §9.5.2。
+8. ~~给 demo Player 加一个嵌套 struct 字段~~ — 第十四批完成，见 §9.5.1。
 9. **timer / global+activity / featureflag / hotcode**：运维与限时玩法面，现在完全空白。
 10. **ai / actionflow**：NPC 行为，最偏"游戏内容"的一档。
 11. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile`
@@ -597,3 +594,46 @@ cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里
 - 新端点 `Move`(10017)，新 GM 命令 `gm.scene.population` / `gm.scene.kill`，新错误码 `scene_position`(100013)。
 - 新配置表 `spawn`；item 表加 `attack` / `hp` 两列（第十二批）。
 - 机器人：`move`、`move_out_of_bounds`，`scene_expect` 加 `subjects` 参数。
+
+### 9.6 第十四批（2026-09-19）：装备栏（嵌套字段）与数据版本迁移
+
+两条接在一起做：加一个嵌套字段本身就是一次真实的 schema 变更，于是迁移有了不是编造出来的主题。
+
+#### 9.6.1 装备栏：demo 的第一个嵌套 DAO 字段（§9.1 第 8 条）
+
+- **为什么值得做**：U-0236、U-0238 两个 P1 都住在"嵌套里再嵌套"那条路径上，而**生成的工程里一个使用方都没有**——
+  只有生成器自己的运行时门看得见。加一个字段，demo 的测试与实跑就都覆盖它。
+- **形状**：`PlayerDao.Equipment`（嵌套 struct）→ `Slots map[int32]*GearPiece`（嵌套里的指针 map），
+  正是那两条缺陷的形状。`game/equipment` 定槽位与"什么能穿"，`EquipmentComponent` 是唯一写入口。
+- **穿装备是一个事务**：从背包取出、穿上、把换下来的放回背包——三件事一起提交，否则崩在中间要么丢件要么复制件。
+  属性的 Gear 层随之改成**从穿戴集算**而不是从整个背包算（背着一把剑不该让人变强）。
+- **它立刻抓到一条新缺陷**：见 §9.6.3。
+- 测试：`equipment_component_test.go` 四条（两级下的改动落库、换下的件不再落库、回滚后所有权双向归位）；
+  机器人加 `equip`，`scene_expect` 要求 `equipment` 出现在复制载荷里。
+  实跑：Mongo 里 `equipment.slots.1 = {item_id: 2001, level: 1}`、`_schema: 2`、背包里那把剑已扣除。
+
+#### 9.6.2 数据版本迁移（§9.1 第 7 条）
+
+- **先补一个生成器缺口**：`<Dao>SchemaVersion` 此前在模板里**写死为 1**，于是生成的 `Migrate` 里
+  `from` 与 `target` 恒等——框架整套迁移机制（`migration.RegisterDAO` + `RestorePersisted` 的版本分支）
+  **没有任何生成的工程能触发**。`//roost:dao` 加 `schema=N`（省略为 1，0 与非数字拒绝）。
+- **主题是真实的结构变更**：v1 把武器存成 Player 上的扁平 `weapon_id`，v2 存成 `equipment` 子文档按槽位键。
+  这正是零值覆盖不了的那种——**加字段不需要迁移**（BSON 解码给零值），改形状才需要。
+- **注册是显式的**，不是 `init()`：一个因为包恰好被链接进来而运行的迁移，是没人决定要运行的迁移。
+  服务 `Init` 的第一件事就是注册，晚于它的注册会让最初几次装载漏掉。
+- **步骤只能读老版本真的有的东西**，且要接受老文档里数字的各种 Go 类型（驱动与写它的那个 build 决定）。
+- 测试六条：三条测变换本身（带武器、没武器、三种数字类型），三条测**接线**——
+  `RestorePersisted` 在 v1 文档上真的会跑、在当前版本上不跑、比自己新的版本拒绝装载。
+  "一个正确但从不被调用的步骤"才是这里真正的失败模式。
+- **边界**：补丁只写 DAO 认识的字段，所以老文档里的 `weapon_id` 不会被 unset，会作为遗留键留在文档里；
+  要清掉得靠一次性的离线脚本，demo 没做。
+
+#### 9.6.3 顺带抓到的缺陷：U-0245
+
+加完嵌套字段，`equipment_component_test.go` 立刻红了两条。根因是 `Init()`（接嵌套回调）**只在装载路径上被调用**，
+`New<Dao>()` 不调——于是**新建**的实体在第一次存盘前，所有穿过嵌套值的写入都不标脏、不落库、不报错。
+
+三个条件凑齐才藏住它：运行时门的每个 harness 都自己调了 `Init()`；顶层 Kind 3 的 setter 在赋值后自己会绑
+（所以"先 Set 再改"是好的）；而 demo 此前没有嵌套字段。掉进坑里的恰恰是组件的正常写法——**只穿过嵌套值改**。
+
+这条正好印证第 8 条的判据：**零覆盖的地方就是缺陷能长期活着的地方**。记录见 `docs/bugfix/U-0245-fresh-dao-nested-wiring.md`。

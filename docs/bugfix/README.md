@@ -82,6 +82,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0245 | codegen | 新建的 DAO 不接嵌套回调，第一次存盘前的嵌套写入悄悄丢掉（加 demo 嵌套字段时自查） | [U-0245-fresh-dao-nested-wiring.md](U-0245-fresh-dao-nested-wiring.md) |
 | U-0244 | codegen | spawner 从 `fctx.RuntimeConfig()` 读 sid，configdata 覆盖该槽位后 sid 为 0，工程起不来（自查，已随 v1.15.11 发出） | [U-0244-spawner-sid-source.md](U-0244-spawner-sid-source.md) |
 | U-0243 | codegen | 生成的接入层不通知会话关闭，空闲世界里断线成员永远留着（RR-20260918-06） | [RR-20260918-06.md](RR-20260918-06.md) |
 | U-0242 | codegen | 运行期实体 id 由进程本地计数器发号，多实例碰撞（RR-20260918-09） | [RR-20260918-09.md](RR-20260918-09.md) |
