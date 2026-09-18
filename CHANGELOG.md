@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.14.9] - 2026-09-18
+
 ### Changed
 
 - 依赖 core v1.15.8：`mail.Claim` 多出 `ExpiresAtUnix`（信封的过期时刻，不是预留租约），
