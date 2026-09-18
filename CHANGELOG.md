@@ -10,6 +10,8 @@
 
 ### Changed
 
+- **依赖 core v1.15.7**：带来 `attribute` 运行时（属性系统的框架半）、saga 原生完成消费者与 room 的持久化水位入口。本仓的 saga 配置键与 platform 待发货索引都需要它。
+
 - **saga Mod 读原生完成消费者的配置**（随 core U-0231 / RR-20260917-07）：`saga.result_effect_durable` 与
   `result_effect_ack_wait` / `process_timeout` / `max_deliver` / `max_ack_pending` / `nak_backoff_min` / `nak_backoff_max`，
   流与前缀缺省回落到 `start_effect_*`。原生 Nest 步骤（`SubscribeDataEngineStep` + `EmitCompletion`）的完成结果
