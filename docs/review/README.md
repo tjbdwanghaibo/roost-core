@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-18 第二轮修复验收与K1进度](REVIEW-2026-09-18-02.md)：8项旧RR原触发通过；独立46场景38过8失败，确认[两个新问题](../bug/REVIEW-2026-09-18-02.md)。[完整复现](../bug/REPRO-2026-09-18-02.md) · [回滚关系与幂等寿命机制](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。K1局部14场景已执行，K1/K2/K3均不标整体完成。
+
 [核心功能分类与优先级](CORE-FUNCTION-CLASSIFICATION.md)：八个运行时功能域，Kit/Codegen 横向接入必查，按核心不变量而非文件数安排后续审查。
 
 [审查覆盖统计与口径](COVERAGE-2026-09-18.md) · [逐文件清单](coverage/FILES.csv) · [引用证据](coverage/EVIDENCE.csv) · [复算脚本](coverage/measure.ps1)。区分文档触达、局部源码证据、整文件完成和行为场景覆盖。

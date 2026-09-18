@@ -63,3 +63,21 @@ Core 6e09124 / Kit 55f3a35 / Codegen 2e09c16，[本轮证据](REVIEW-2026-09-18.
 pipelined 模式需要明确配置链：committer.DurableLSN → RoomManagerConfig → RoomBroadcaster 内部 coordinator.SetDurableWatermark。当前此链缺失。单独 coordinator 有屏障不代表上层房间装配有屏障，再创建一个平行 coordinator 也无效。建议构造时安装、启动前验证，复用捕获 LSN、推迟发送和保留 dirty 的现有实现。LSN 10/建模水位 9 的房间三入口均提前准入，直接 coordinator 实际安装水位的对照先阻止后恢复；真实 group commit/断电仍待验证。
 
 Kit 可提供配置和生命周期便利，但核心规则留 Core、字段生成契约留 Codegen。先补参数传递及消费测试，再决定是否需要新 Mod。profile payload 共用、批量编码已有实现，本轮没有吞吐、内存分配或尾延迟压测结论。
+
+## 8. 09-18 第二轮：修复后，回滚必须恢复运行时关系
+
+当前基线 Core abb7b80 / Kit 399f175 / Codegen ffff2a1；以下补充更新前文的旧状态描述，不删除历史推理。[本轮验收](REVIEW-2026-09-18-02.md)覆盖8项RR原触发及两项补修。attribute runtime、Saga原生结果订阅、entity sync生成配置、Room水位入口已经提供并通过本轮有界验证。
+
+K1 当前调用链是生成 nested setter → child.SetNotify(parent.Mark) → DAO mark字段/键 → Nest MarkPersist → MutationParticipant → committer。业务字段值和 callback 是两个不同状态：前者进 BSON，后者刻意不序列化，却决定下次变更能否进入事务。
+
+`RecordUndoToken` 按 owner/field/token 保存第一次修改的逆操作；`Rollback` 先将事务置 rolledBack，再按反序执行。`captureDao` 在 RollbackUndo 下只兜底恢复 dirty tracker。它不知道某个生成 nested setter 对哪个 child 做了 SetNotify，因此不能自动恢复关系。当前 nestedTemplate 只恢复 old 字段，造成恢复对象丢通知、已丢弃对象仍通知。独立真实 DAO 测试已经证实“回滚后业务修改成功、内存值变化、commit记录为0”。RR-20260918-03 的修复应由生成代码对自己建立的绑定负责，复用 Nest 的事务边界，不要求 Core DirtyHook 猜测所有权。
+
+好的 undo 除了恢复数值，还要恢复可达对象、回调归属与资源生命周期；清理当前关系和重建旧关系应是同一逆操作。内部恢复助手不能调用公开 setter，因为事务已经关闭，二次登记或标持久修改不是撤销。map/slice/pointer 分支应共享同一种归属契约，多次替换和重叠 children 要有明确语义。性能上，当前 map/slice 整体替换本来就遍历旧/新成员；绑定恢复可沿这条 O(old+new) 路径实现，不应为了恢复 hook 每次做 BSON 序列化。未运行基准，此处是源码复杂度分析与方案建议。
+
+## 9. 09-18 第二轮：幂等身份的寿命不能猜测
+
+U-0226 选择 Player.DAO.DungeonClaims + 奖励在同一 Nest 多实体事务提交，避免 read-then-write 与“先标已领、后发奖”的窗口，这个设计方向和原五场景验收均成立。新的问题在清理依据：Codegen dungeon 注释把 session.run_ttl 当成存储TTL，但 Core RedisStores 的 Runs/Claims 无TTL，Kit把run_ttl交给Service运行期限。成功终态重放在deadline判断之前返回，4小时后仍可能到达发奖分支。
+
+因此安全去重清理需要先有权威的“此身份今后不可能再被接受”的证据；单凭claim时间或数量不足。可以选有截止时间的领奖契约，或保留持久领取身份/压缩水位，必须同时决定晚到的首次领取、历史存档与重启恢复如何处理。RR-20260918-04 用真实生成Controller/Nest/DAO验证了旧Run清理后再领。不要仅修正文案或延长常数，优先复用现有事务和DAO，把跨服务的时间/身份契约定义完整。
+
+本轮新增范围仍是K1通知/回滚与修复相关资产边界。K2的真实WAL/Mongo恢复、K3的owner/mirror未新增验证。下一入口为顶层DAO Set/Del/Init到nested的生命周期交接，随后补panic、提交拒绝、多次修改及关闭结算；不能把14个K1局部场景执行完当成K1全域完成。
