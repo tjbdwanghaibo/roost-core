@@ -32,6 +32,11 @@ type RoomManagerConfig struct {
 	IdleTTL               time.Duration
 	SweepInterval         time.Duration
 	CloseTimeout          time.Duration
+	// DurableWatermark is the pipelined-commit watermark every room this
+	// manager creates gates on. A deployment names it once here rather than
+	// per room; nil is the synchronous-commit case, which has nothing to
+	// wait for (RR-20260918-02).
+	DurableWatermark func() uint64
 }
 
 type RoomManager struct {
@@ -170,7 +175,8 @@ func (m *RoomManager) Create(roomID int64) (*RoomBroadcaster, error) {
 	entry.lastActivity.Store(time.Now().UnixNano())
 	room, err := NewRoomBroadcaster(roomID, m.config.Downstream, RoomBroadcasterConfig{
 		MaxSubjects: m.config.MaxSubjectsPerRoom, MaxSubscribers: m.config.MaxSubscribersPerRoom,
-		budget: m.budget, onActivity: func() { entry.lastActivity.Store(time.Now().UnixNano()) },
+		DurableWatermark: m.config.DurableWatermark,
+		budget:           m.budget, onActivity: func() { entry.lastActivity.Store(time.Now().UnixNano()) },
 	})
 	if err != nil {
 		return nil, err

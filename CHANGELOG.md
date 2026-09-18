@@ -7,6 +7,7 @@
 
 ### Fixed
 
+- **room：房间可以接入 pipelined 提交的持久化水位了**（U-0233，C4；RR-20260918-02，T-127）。`EntityBase.LastCommitLSN` 的契约是尚未达到 durable 水位的内容不外发，`SubscriptionCoordinator.SetDurableWatermark` 早就在，但 `RoomBroadcaster` 自建并私有持有 coordinator，而房间与管理器的配置都没有水位源字段、内部也不安装——走默认房间链的 pipelined 部署因此拿不到这道屏障，首次订阅快照、单体 flush、批量 flush 三条路径都会把尚未持久的内容发出去。新增 `RoomBroadcasterConfig.DurableWatermark` 与 `RoomManagerConfig.DurableWatermark`（部署写一次，管理器传给它创建的每个房间），在房间可被订阅、可启动 worker **之前**装进内部 coordinator；nil 仍是无门，正是同步持久提交的情形。没有暴露 coordinator 本身——那是把可变裸指针交出去。测试 `room/durable_watermark_promises_test.go`（受控水位模型 + 记录型 sink，非真实 WAL group-commit）。记录 `docs/bugfix/RR-20260918-02.md`。
 - **saga：原生 Nest 步骤的完成效果现在有人消费**（U-0231，C4；RR-20260917-07，Wanted-04 转入，T-125）。`EmitCompletion` 把完成结果作为 Nest effect 提交，所以它经 Data Engine 的 outbox 到达**效果流**的 `<effect_prefix>.saga.result.<sagaID>`，而 `Assembly.Start` 只订了 `<saga_prefix>.result.>` 与 `<effect_prefix>.saga.start`——原生完成不匹配任何默认消费者，saga 停在 waiting 直到 deadline 补偿。新增对称的 `SubscribeNestCompletions` 与 `AssemblyConfig.NestResults`（留空时从 `Starts` 派生，durable 默认 `<start durable>-result`：共用 durable 就是共用游标）；第三条订阅失败会 Drain 掉前两条，`Stop` 一并排空。`ErrNotWaiting` / `ErrNotFound` / `ErrInvalidRecord` / `ErrDefinitionMissing` 判为 Permanent——`Complete` 对已记录的回执幂等，一条陈旧消息不该堵住消费者。测试 `saga/nest_completion_promises_test.go`（记录型 JetStream 替身，非真实 broker）。记录 `docs/bugfix/RR-20260917-07.md`。
 
 ### Added

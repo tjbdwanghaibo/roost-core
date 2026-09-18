@@ -82,6 +82,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0233 | core | RoomBroadcaster 私有持有 coordinator，房间层没有接入持久化水位的入口（RR-20260918-02） | [RR-20260918-02.md](RR-20260918-02.md) |
 | U-0232 | codegen | 嵌套 DAO 的第二层 child 变更不通知父级，改动进不了 patch（RR-20260917-05，Wanted-02 转入） | [RR-20260917-05.md](RR-20260917-05.md) |
 | U-0231 | core | 默认 Saga Assembly 不订阅原生 Nest 完成效果，saga 永远 waiting（RR-20260917-07，Wanted-04 转入） | [RR-20260917-07.md](RR-20260917-07.md) |
 | U-0230 | core+codegen | attribute feature 只有生成器、没有运行时契约，生成物引用七个无人提供的类型（RR-20260917-06，Wanted-03 转入） | [RR-20260917-06.md](RR-20260917-06.md) |

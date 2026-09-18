@@ -423,8 +423,20 @@ type RoomBroadcaster struct {
 type RoomBroadcasterConfig struct {
 	MaxSubjects    int
 	MaxSubscribers int
-	budget         *roomResourceBudget
-	onActivity     func()
+	// DurableWatermark is the pipelined-commit watermark source, typically
+	// PipelinedTransactionCommitter.DurableLSN. The room installs it into
+	// the coordinator it owns, so content whose newest commit is not durable
+	// yet is held back on every path (subscription snapshot, single-subject
+	// flush, batch flush) and retried once the watermark reaches it.
+	//
+	// Nil means no gate, which is right for a deployment that commits
+	// synchronously — and wrong for a pipelined one, which had no way to
+	// install it at all: the coordinator has had SetDurableWatermark all
+	// along, but the room created it privately and never offered the source
+	// (RR-20260918-02).
+	DurableWatermark func() uint64
+	budget           *roomResourceBudget
+	onActivity       func()
 }
 
 func NewRoomBroadcaster(roomID int64, downstream ReliableRoomFrameSink, configs ...RoomBroadcasterConfig) (*RoomBroadcaster, error) {
@@ -439,6 +451,7 @@ func NewRoomBroadcaster(roomID int64, downstream ReliableRoomFrameSink, configs 
 	if len(configs) > 0 {
 		config.budget = configs[0].budget
 		config.onActivity = configs[0].onActivity
+		config.DurableWatermark = configs[0].DurableWatermark
 		if configs[0].MaxSubjects > 0 {
 			config.MaxSubjects = configs[0].MaxSubjects
 		}
@@ -455,6 +468,11 @@ func NewRoomBroadcaster(roomID int64, downstream ReliableRoomFrameSink, configs 
 		dirty:    make(map[int64]struct{}),
 		retiring: make(map[int64]struct{}),
 		budget:   config.budget, onActivity: config.onActivity,
+	}
+	// Installed before the room can be subscribed to or started, so no path
+	// can slip content out ungated.
+	if config.DurableWatermark != nil {
+		replication.coordinator.SetDurableWatermark(config.DurableWatermark)
 	}
 	if lifecycle, ok := downstream.(roomSlowConsumerLifecycle); ok {
 		unregister, err := lifecycle.RegisterRoomSlowConsumerHandler(roomID, replication.handleSlowConsumer)
