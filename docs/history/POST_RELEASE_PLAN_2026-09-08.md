@@ -84,6 +84,27 @@ kit 的依赖升级这次用 `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo`
 - 遗留：W-2026-09-17-04（原生 Nest saga 步骤的完成效果落在 `ROOST_EFFECTS`，协调器只订 `ROOST_SAGA`，无人消费）待 review 判定；
   W-2026-09-17-01～03 同样待判；U-0210 的 Kit 默认 Prefix durable 迁移演练；Windows 截断补修以 CI `windows-compatibility` 为准。
 
+## 0.8 第八次发版（2026-09-18）：core v1.15.7 / kit v1.14.8 / codegen v1.15.10
+
+一轮 bugfix 把 review 登记的**全部八条**未修复项收敛掉（09-17 第三轮五项 + 09-18 两项 + 09-17 第二轮的 platform 一项），
+外加实施中自己撞上的一条生成器缺陷。
+
+- core：U-0230 新增 `attribute` 包（属性系统的框架半：Meta / Profile / Selector / Snapshot / Container）；
+  U-0231 Assembly 补第三个消费者，原生 Nest 步骤的完成效果此前无人消费、saga 永远 waiting；
+  U-0233 房间与管理器配置接入 pipelined 提交的持久化水位（coordinator 一直有能力，没有入口）。
+- kit：U-0234 platform 后台重试的候选来源做成显式可选 collaborator（`PendingOrders`，有界 + 可报错，
+  经 `Mod.WithPendingOrders`）；saga Mod 读原生完成消费者的配置键；依赖 core v1.15.7。
+- codegen：U-0226（P1）FinishDungeon 按权威 `run.State` 判定 + run id 账本；U-0227 nest handler 半不再 import
+  只被返回类型用到的包；U-0228 battle 宽限期改独立计时器；U-0229 `sync=true` 生成物只写 Core 真有的字段；
+  U-0230 生成器改出包级访问器 + 脚手架 runtime.go + **B8**（demo 用上 attribute profile）；U-0232 嵌套 DAO 第二层脏传播。
+- 新增三条运行时门（entity sync / attribute / dao 脏传播用例），都针对"文本对、语义错"这类盲区。
+- 顺序 core → kit → codegen，三仓 pretag 全绿。发版验证：对三个 tag 不带 go.work 生成 game-demo（kit 显式 go get），
+  build / vet / test 全绿（含随工程生成的 dungeon、attribute、battle 三组测试）；隔离环境实跑 6 机器人全过、
+  saga 6 completed + 6 compensated、dungeon claim 账本落库、game 日志 0 条 ERROR。
+  framework-compat 的 released × demo 单元格随本次发版恢复。
+- 遗留：Wanted-05 的"生成实体 → room → session → sink 可执行接入样例"仍待产品化；attribute 的层间合成未做；
+  platform 待发货索引本身（持久段、重启续接、分页公平性）是部署的。
+
 ## 1. B-18：core `entitysync`（U-0104，C2）
 
 本机重跑采样（`revertsample.py --max 30 ./entitysync`）：**7 / 9 无覆盖**，与账本一致。七条全部是入口参数守卫，三种错误：

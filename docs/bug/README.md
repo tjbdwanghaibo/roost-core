@@ -4,22 +4,22 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260918-01 | P2 | sync=true 实体生成物与 Core 配置不兼容 | 已修复（U-0229，未发版）→ [bugfix](../bugfix/RR-20260918-01.md) |
-| RR-20260918-02 | P2 | RoomBroadcaster 隐藏的 coordinator 无法接入持久化水位 | 已修复（U-0233，未发版）→ [bugfix](../bugfix/RR-20260918-02.md) |
+| RR-20260918-01 | P2 | sync=true 实体生成物与 Core 配置不兼容 | 已修复（U-0229，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260918-01.md) |
+| RR-20260918-02 | P2 | RoomBroadcaster 隐藏的 coordinator 无法接入持久化水位 | 已修复（U-0233，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260918-02.md) |
 
-09-17 第三轮：[新增 feature 与 Wanted 审查](REVIEW-2026-09-17-03.md) · [完整复现](REPRO-2026-09-17-03.md)。新增五项，**09-18 已全部修复（未发版）**：
+09-17 第三轮：[新增 feature 与 Wanted 审查](REVIEW-2026-09-17-03.md) · [完整复现](REPRO-2026-09-17-03.md)。新增五项，**09-18 已全部修复（core v1.15.7 / kit v1.14.8 / codegen v1.15.10）**：
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260917-08 | P1 | dungeon 重放/failed/expired 仍派发经验奖励 | 已修复（U-0226，未发版）→ [bugfix](../bugfix/RR-20260917-08.md) |
-| RR-20260917-05 | P2 | nested DAO 第二层 child 变更不通知父级（Wanted-02） | 已修复（U-0232，未发版）→ [bugfix](../bugfix/RR-20260917-05.md) |
-| RR-20260917-06 | P2 | attribute feature 缺可使用的公共运行时契约（Wanted-03） | 已修复（U-0230，未发版）→ [bugfix](../bugfix/RR-20260917-06.md) |
-| RR-20260917-07 | P2 | 默认 Saga Assembly 不订阅原生 Nest 完成效果（Wanted-04） | 已修复（U-0231，未发版）→ [bugfix](../bugfix/RR-20260917-07.md) |
-| RR-20260917-09 | P3 | battle demo 宽限期不触发开帧 | 已修复（U-0228，未发版）→ [bugfix](../bugfix/RR-20260917-09.md) |
+| RR-20260917-08 | P1 | dungeon 重放/failed/expired 仍派发经验奖励 | 已修复（U-0226，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-08.md) |
+| RR-20260917-05 | P2 | nested DAO 第二层 child 变更不通知父级（Wanted-02） | 已修复（U-0232，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-05.md) |
+| RR-20260917-06 | P2 | attribute feature 缺可使用的公共运行时契约（Wanted-03） | 已修复（U-0230，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-06.md) |
+| RR-20260917-07 | P2 | 默认 Saga Assembly 不订阅原生 Nest 完成效果（Wanted-04） | 已修复（U-0231，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-07.md) |
+| RR-20260917-09 | P3 | battle demo 宽限期不触发开帧 | 已修复（U-0228，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-09.md) |
 
 U-0224 原 BSON 三项、U-0225 所在 Saga 现有 race 测试通过；不代表通知与接线契约已收敛。Wanted-05 保留观察并修正“没有公开路径”的前提，暂不登记 RR。
 
-09-17 第二轮：[验收与新问题](REVIEW-2026-09-17-02.md)。RR-20260916-06/07、RR-20260917-02/03 原触发独立通过；RR-20260917-01 新键隔离通过，但历史键迁移四场景失败，升级仍待收敛。新增 **RR-20260917-04，P2，Kit platform 后台订单重试候选固定为空**——已修复（U-0234，未发版）→ [bugfix](../bugfix/RR-20260917-04.md)。Wanted-01 转 [ARCH-05 实施交接](../review/IMPLEMENTATION-SERVICE-PLACEMENT-AND-RECOVERY.md)，不另计功能 RR。以下历史时点与作者修复标记保留，最新独立结论以此轮为准。
+09-17 第二轮：[验收与新问题](REVIEW-2026-09-17-02.md)。RR-20260916-06/07、RR-20260917-02/03 原触发独立通过；RR-20260917-01 新键隔离通过，但历史键迁移四场景失败，升级仍待收敛。新增 **RR-20260917-04，P2，Kit platform 后台订单重试候选固定为空**——已修复（U-0234，core v1.15.7 / kit v1.14.8 / codegen v1.15.10）→ [bugfix](../bugfix/RR-20260917-04.md)。Wanted-01 转 [ARCH-05 实施交接](../review/IMPLEMENTATION-SERVICE-PLACEMENT-AND-RECOVERY.md)，不另计功能 RR。以下历史时点与作者修复标记保留，最新独立结论以此轮为准。
 
 09-17：用户声明未修复，本轮跳过旧问题复核，原状态不变。新增 [三个匹配问题](REVIEW-2026-09-17.md)，附 [最小复现](REPRO-2026-09-17.md)。34 个新场景 20 通过、14 个行为失败，归为以下三个根因。
 
