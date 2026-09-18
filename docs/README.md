@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-18 状态同步接入与总体进度](review/REVIEW-2026-09-18.md)：Wanted-05 已分流，新增生成配置不兼容与房间持久化屏障接线两个 P2；旧问题按用户未修复声明跳过验收。
+
 [09-17 第三轮新增 Feature 审查](review/REVIEW-2026-09-17-03.md)：副本重复/错误发奖 P1、DAO 嵌套通知、attribute 契约、Saga 完成订阅、battle 宽限期五项新问题；Wanted 分流、完整复现与实施建议已归档。
 
 [09-17 第二轮 Wanted 与修复验收](review/REVIEW-2026-09-17-02.md)：六服务及 directory 的 ARCH-05 交接、platform 自动重试新问题、匹配键升级限制。

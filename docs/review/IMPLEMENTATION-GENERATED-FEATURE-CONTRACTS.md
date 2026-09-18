@@ -51,3 +51,15 @@ Core EntityBase.Sync 暴露 SubjectSyncState，实体设置同步状态时绑定
 本轮完整生成 demo 的 build 和编译检查通过，但奖励重试和 battle grace 均失败；DAO 原 runtime 通过但递归 dirty 失败；普通 Saga 完成匹配但原生完成不匹配。这说明下一批测试最值得投入的是“一个组件成功返回后，下游是否得到同一种承诺”。
 
 建议实施优先级：副本奖励 P1 → DAO 通知/原生 Saga 接线 → attribute 权威契约 → battle grace → 状态同步接入样例。保留各原有测试门，并增加真实消费运行和失败恢复场景。未测的并发、真实网络、生产负载与 Linux 部署必须继续单列，不能用生成文件数量或测试数量充当覆盖率。
+
+## 7. 09-18 补充：公开组合能力与生成入口契约
+
+Core 6e09124 / Kit 55f3a35 / Codegen 2e09c16，[本轮证据](REVIEW-2026-09-18.md)。本节推进第 5 节的观察，不改写历史事实。实际消费工程确认 sync=true 仍生成 FlushPolicy/SyncFlushOnEntityRelease 和 SubjectPackerFactory，而 Core 当前只接受 Enabled/Topic/PackerFactory；必须先收敛 Codegen→Core 契约。
+
+隔离此问题后，实际 sync=false 生成类可走 RegisterEntity → BuildEntity（使用完整 BuildEntityID）→ EnableSync（业务 SubjectSyncPacker）→ Sync() → RoomManager.Start/Create → RegisterSubject → Subscribe。初始快照、MarkSyncDirty 后 FlushSubject/FlushDirty、profile、退订/退休、关闭和准入失败重试八场景通过真实 RoomTransportSink 编码/重组/解码。最终 AtomicBatchTransport 是记录替身，不证明客户端应用成功。
+
+所有权：实体拥有内容和受实体锁保护的 packer，业务修改需持有实体 mutex；RoomManager 拥有房间和预算；RoomBroadcaster 拥有 coordinator；RoomTransportSink 拥有传输基线和回调 worker。宿主先关闭 manager，再关闭 sink，实体寿命另行管理。八场景检查 leave 和预算回收，但不含真实 EntityManager 并发卸载。
+
+pipelined 模式需要明确配置链：committer.DurableLSN → RoomManagerConfig → RoomBroadcaster 内部 coordinator.SetDurableWatermark。当前此链缺失。单独 coordinator 有屏障不代表上层房间装配有屏障，再创建一个平行 coordinator 也无效。建议构造时安装、启动前验证，复用捕获 LSN、推迟发送和保留 dirty 的现有实现。LSN 10/建模水位 9 的房间三入口均提前准入，直接 coordinator 实际安装水位的对照先阻止后恢复；真实 group commit/断电仍待验证。
+
+Kit 可提供配置和生命周期便利，但核心规则留 Core、字段生成契约留 Codegen。先补参数传递及消费测试，再决定是否需要新 Mod。profile payload 共用、批量编码已有实现，本轮没有吞吐、内存分配或尾延迟压测结论。

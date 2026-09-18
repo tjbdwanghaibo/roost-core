@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-18 消费链与总体进度](REVIEW-2026-09-18.md) · [两个新 P2](../bug/REVIEW-2026-09-18.md) · [完整复现](../bug/REPRO-2026-09-18.md) · [机制补充](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。旧问题跳过验收；Wanted-05 已明确分流。
+
 [09-17 第三轮新增 Feature / Wanted](REVIEW-2026-09-17-03.md) · [五项问题及实施交接](../bug/REVIEW-2026-09-17-03.md) · [完整复现](../bug/REPRO-2026-09-17-03.md) · [跨层契约机制](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。状态同步接入保留观察。
 
 [09-17 第二轮 Wanted/验收](REVIEW-2026-09-17-02.md) · [问题](../bug/REVIEW-2026-09-17-02.md) · [23 场景源码](../bug/REPRO-2026-09-17-02.md) · [ARCH-05 七包边界](IMPLEMENTATION-SERVICE-PLACEMENT-AND-RECOVERY.md)。
