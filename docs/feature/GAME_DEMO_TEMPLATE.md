@@ -364,6 +364,8 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
   第二次发放在账本上撞到自己、什么也不做，回的还是同一组数字。
 - **账本的界是时间**：保留期必须长于游戏能发出的最长邮件（生成配置 `mail.send_ttl` 720h，demo 的邮件 7 天），取 31 天；
   清理在写入口做。论证写在 `game/rewards`。发邮件很多的游戏应改成"commit 成功后即忘"或把账本放到邮件那侧——写在注释里。
+  **这条论证成立但属于"押在别的服务的存储策略上"那一类**（信封确实按 Redis key TTL 过期）；同批写的 dungeon 版本
+  押的那条 TTL 压根不存在，被审查打回成 RR-20260918-04，修法见 §9.2.3。邮件这条要不要改成同形，写进了 `docs/bug/WANTED.md`。
 - **测试**：随工程生成 `game/handler/claim_mail_reward_test.go`——真实 handler 跑在真实 Nest 事务里
   （一个只发一个实体的 Getter + 记录型 committer + 工程自己的配置数据，不需要 Mongo）。这也是"怎么测一个 handler"的范例。
   红：在生成工程里去掉账本判断 → `the replayed claim reported a fresh grant` / `the bag holds 2 after a replay`。
@@ -404,3 +406,17 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 - CI：`roost-codegen/.github/workflows/framework-compat.yml`（`demo` scenario）
 - kit：`roost-kit/service/account/identity.go`（`RegistryBound`）、`account_mod.go`（`bindCollaborators`）
 - 生成工程内：`demo/README.md` 复制进去的说明、`deploy/dev/observability/README.md`（指标 ↔ 链路）
+
+#### 9.2.3 清关奖励的领取窗口（RR-20260918-04 修正 §9.2.1 同批的 dungeon 版本）
+
+- **被推翻的是什么**：U-0226 的账本保留期（4h）论证为"`session.run_ttl` 30m 一到 run 就没了，重放到不了奖励路径"。
+  session 的 Runs / Claims **没有存储 TTL**，`run_ttl` 管的是 run 能开多久；succeeded 的 run 永远可以再 Finish 一次。
+  于是另一笔领取清掉旧记录之后，重放旧 run 再发一次奖励——两次合法清关付出 300。
+- **改成什么**：账本存 run 的**结算时刻**（`run.FinishedAtUnix`，session 服务盖的章，不是 `time.Now()`、不是请求里的东西），
+  准入与清理共用 `dungeon.ClaimWindowClosed(resolvedAt, now)`。于是"记录被清掉 ⟺ 该 run 的领取被拒"，
+  不再引用任何别的服务的存储行为。准入检查放在**付款的那个事务里**，是所有入口共同的咽喉。
+- **不把重复发奖换成静默漏奖**：过窗口回 `dungeon_claim_window`(100012) 并在端点打 Warn（玩家、run、结算时刻），
+  补发是运营口径。一条"有名字的拒绝"是这个方案能成立的前提。
+- **旧数据**：老记录存的是领取时刻 ≥ 结算时刻，按新读法只会更晚过期，不会更早——不需要迁移。
+- **教训（写给下一次给账本收界的人）**：给"记住一批东西"的结构定界，判据必须是这个结构自己能证明的事实；
+  引用别的服务"会忘掉"，要先确认那条遗忘**真实存在**、且不会被一行配置改掉。清理谓词与准入谓词必须是同一个函数。

@@ -6,6 +6,24 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-01：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形
+
+- **位置**：roost-codegen `demo/game/rewards/rewards.go.tmpl`（`ClaimRetentionSeconds = 31 天`、`ClaimExpired(claimedAt, nowUnix)`）
+  与 `demo/game/entities/player/bag_component.go.tmpl:104-120`（`ClaimMailReward` 按领取时刻清理）。
+- **现象**：保留期的论证是"31 天 > `mail.send_ttl`(720h)，信封过期后拿不到预留、没有发放路径"。本轮核对过，这条**成立**——
+  与 RR-20260918-04 的关键区别是它依赖的那条 TTL 真实存在（`roost-kit/service/mail/server_run.go` 明写
+  "envelopes expire by Redis key ttl"），而 session 的 Runs/Claims 根本没有 TTL。
+- **为什么仍然可疑 / 为什么不自己拍板**：它仍属于"把自己的正确性押在别的服务的存储策略上"这一类论证。
+  运营把 `mail.send_ttl` 调到 31 天以上，或者 mail 换一种保留实现，这条链就静默断开，而没有任何测试会红——
+  U-0226 就是这样被打回的（那次是论证的前提压根不存在，这次是前提存在但可被配置改掉）。是否要改成与副本同形，
+  是契约选择，不是缺陷修复。
+- **候选修法**：账本存邮件自己的发送时刻（`mail.Envelope` 的时间，已经在领取路径上拿得到），准入与清理共用
+  `rewards.ClaimWindowClosed(sentAt, now)`，于是"记录被清掉 ⟺ 该邮件的领取被拒"，不再引用 `mail.send_ttl`。
+  代价：窗口过期的首次领取要变成一条有名字的拒绝（副本那边是 `dungeon_claim_window`），运营口径要跟着定。
+- **会红的测试草稿**：在生成工程的 `game/handler/claim_mail_reward_test.go` 里，先记一条 `sentAt = now - 窗口 - 1` 的领取，
+  再用一条新邮件触发清理，然后重放第一封——当前实现会再发一叠，新契约下应拒。
+- **来源**：修 RR-20260918-04 时对照检查两条同形账本发现（`docs/bugfix/RR-20260918-04.md` 的"未做 / 边界"）。
+
 ## 已分流记录（W-2026-09-16-01 已分流）
 
 W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-04.md)，不再属于待审表。确认的是策略注入承诺无效；原草稿预设 Enqueue/Sweep 自动成组，与当前 Store 契约不符，不直接作为修复测试。建议保留调用方驱动，移除无效 Mod/Config/codegen 注入入口。具体实施与验收以链接文档为准。
