@@ -82,6 +82,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0236 | codegen | 嵌套 child 的通知归属散写在各 setter 分支，undo 不搬 callback、`*Child` 不解绑旧值；回滚后恢复的 child 漏出持久化链（RR-20260918-03） | [RR-20260918-03.md](RR-20260918-03.md) |
 | U-0235 | codegen | attribute 的 runtime.go 文件头自造标记，doctor 判成应用自有文件、project-templates 整项失败（自查发现，已随 v1.15.10 发出） | [U-0235-attribute-runtime-header.md](U-0235-attribute-runtime-header.md) |
 | U-0234 | kit | platform 后台重试的候选来源固定为空，可恢复的发货失败长期挂起（RR-20260917-04） | [RR-20260917-04.md](RR-20260917-04.md) |
 | U-0233 | core | RoomBroadcaster 私有持有 coordinator，房间层没有接入持久化水位的入口（RR-20260918-02） | [RR-20260918-02.md](RR-20260918-02.md) |
