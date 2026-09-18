@@ -6,6 +6,23 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-11：`fctx.RuntimeConfig()` 是一个无所有权约定的 `any` 槽位，两个写入者会互相覆盖
+
+- **位置**：roost-core `fctx/context.go:163`（`SetRuntimeConfig(config any)` / `RuntimeConfig() any`）；
+  写入者有两个——`app/app.go:133`（进程的 `*viper.Viper`）与 `configdata/configdata.go:858,868`（发布/回滚时写入
+  `*configdata.Snapshot`）。
+- **现象**：名字与签名都暗示"进程的运行期配置"，实际语义是"最后一个写入者留下的东西"。消费者做类型断言，
+  断言失败就静默拿到零值。U-0244 就是这样：demo 的 spawner 从这里读 sid，configdata 发布快照之后断言失败、
+  sid 为 0，而 U-0242 的启动校验正确地拒绝了它——**整个 game 进程起不来**，而三仓全套单测、生成工程全包测试与
+  doctor 全部是绿的。
+- **为什么可疑 / 为什么不自己拍板**：这是框架的一个公开入口，两个框架自己的包对它有不同的用法，而没有任何一处
+  写明谁拥有它。改动方向有取舍：(a) 拆成两个具名槽位（`ProcessConfig` 与 `ActiveConfigData`），语义清楚但是破坏性改名；
+  (b) 保留单槽位但改成类型化的 setter/getter 对，让第二个写入者在编译期就撞上；(c) 只加文档说明"这里放的是配置数据快照"，
+  并让所有需要进程配置的人走 `app.Registry.Config()`。实现侧倾向 (c) + 给 `app.Registry.Config()` 在文档里点名，
+  但这是框架契约，归 review。
+- **复现**：起一个带 configdata 的进程，在服务 `Init` 里对 `fctx.RuntimeConfig()` 断言 `*viper.Viper`——失败。
+- **来源**：发版验证时自查（`docs/bugfix/U-0244-spawner-sid-source.md`）。
+
 ## 09-18 第三轮分流结果
 
 本轮 10 条候选已全部判定，当前没有未分流的 09-18 Wanted。完整依据见[问题与实施方向](REVIEW-2026-09-18-03.md)、[独立复现](REPRO-2026-09-18-03.md)和[运行记录](../review/REVIEW-2026-09-18-03.md)。
