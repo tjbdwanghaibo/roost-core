@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[审查覆盖统计与口径](COVERAGE-2026-09-18.md) · [逐文件清单](coverage/FILES.csv) · [引用证据](coverage/EVIDENCE.csv) · [复算脚本](coverage/measure.ps1)。区分文档触达、局部源码证据、整文件完成和行为场景覆盖。
+
 [09-18 消费链与总体进度](REVIEW-2026-09-18.md) · [两个新 P2](../bug/REVIEW-2026-09-18.md) · [完整复现](../bug/REPRO-2026-09-18.md) · [机制补充](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。旧问题跳过验收；Wanted-05 已明确分流。
 
 [09-17 第三轮新增 Feature / Wanted](REVIEW-2026-09-17-03.md) · [五项问题及实施交接](../bug/REVIEW-2026-09-17-03.md) · [完整复现](../bug/REPRO-2026-09-17-03.md) · [跨层契约机制](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。状态同步接入保留观察。

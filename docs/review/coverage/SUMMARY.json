@@ -1,0 +1,115 @@
+{
+  "summary": [
+    {
+      "referenced_file_lines": 36783.0,
+      "confirmed_partial": 7,
+      "confirmed_partial_percent": 1.33,
+      "repo": "core",
+      "files": 526,
+      "referenced": 103,
+      "reference_percent": 19.58,
+      "physical_lines": 113276.0
+    },
+    {
+      "referenced_file_lines": 4347.0,
+      "confirmed_partial": 0,
+      "confirmed_partial_percent": 0.0,
+      "repo": "kit",
+      "files": 76,
+      "referenced": 14,
+      "reference_percent": 18.42,
+      "physical_lines": 14793.0
+    },
+    {
+      "referenced_file_lines": 6995.0,
+      "confirmed_partial": 3,
+      "confirmed_partial_percent": 3.09,
+      "repo": "codegen",
+      "files": 97,
+      "referenced": 14,
+      "reference_percent": 14.43,
+      "physical_lines": 28446.0
+    }
+  ],
+  "heads": {
+    "codegen": "2e09c169a354b61edc357cb78665c5d18a1dc199",
+    "core": "dbbf132a0da74093b5936c73dfc0edb9bcff034e",
+    "kit": "55f3a35b32ea97ccac8459fd1efe2515049f91e3"
+  },
+  "documents": 126,
+  "files": 1483,
+  "strata": [
+    {
+      "stratum": "primary",
+      "files": 526,
+      "physical_lines": 113276.0,
+      "repo": "core"
+    },
+    {
+      "stratum": "generated",
+      "files": 3,
+      "physical_lines": 1574.0,
+      "repo": "core"
+    },
+    {
+      "stratum": "example_demo",
+      "files": 10,
+      "physical_lines": 788.0,
+      "repo": "core"
+    },
+    {
+      "stratum": "test_fixture",
+      "files": 466,
+      "physical_lines": 75655.0,
+      "repo": "core"
+    },
+    {
+      "stratum": "primary",
+      "files": 76,
+      "physical_lines": 14793.0,
+      "repo": "kit"
+    },
+    {
+      "stratum": "generated",
+      "files": 15,
+      "physical_lines": 5413.0,
+      "repo": "kit"
+    },
+    {
+      "stratum": "example_demo",
+      "files": 4,
+      "physical_lines": 275.0,
+      "repo": "kit"
+    },
+    {
+      "stratum": "test_fixture",
+      "files": 101,
+      "physical_lines": 18133.0,
+      "repo": "kit"
+    },
+    {
+      "stratum": "primary",
+      "files": 97,
+      "physical_lines": 28446.0,
+      "repo": "codegen"
+    },
+    {
+      "stratum": "generated",
+      "files": 0,
+      "physical_lines": null,
+      "repo": "codegen"
+    },
+    {
+      "stratum": "example_demo",
+      "files": 82,
+      "physical_lines": 5462.0,
+      "repo": "codegen"
+    },
+    {
+      "stratum": "test_fixture",
+      "files": 103,
+      "physical_lines": 14697.0,
+      "repo": "codegen"
+    }
+  ]
+}
