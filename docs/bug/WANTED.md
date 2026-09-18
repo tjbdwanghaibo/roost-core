@@ -44,6 +44,13 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
 > W-04 → RR-20260917-07（已修，U-0231）、W-05 → RR-20260918-01/02（均已修，U-0229 / U-0233）。W-01 转 ARCH-05 实施交接。
 > 以下条目保留原文供追溯，不再是待判定项。
 
+> 09-18 晚交付待审：game-demo 把两条写在注释里的"恰好一次"边界实施掉了（codegen `697ae18` 邮件领取账本、
+> `0731db9` 送礼 saga 原生步骤 + `add saga` 生成 topic 常量）。**这两条不是疑点，是已实施的改动，登记在此只为交给 review 审查**：
+> 做法、边界、实跑证据见 `docs/feature/GAME_DEMO_TEMPLATE.md` §9.2。值得重点看的三处：
+> (1) 邮件账本按时间清理，保留期 31 天 > `mail.send_ttl` 720h 的论证是否成立；
+> (2) 原生步骤在"业务拒绝"时提交一个只含回执与失败完成结果的事务（无变更），这是否是 saga 契约期望的形状；
+> (3) `LeaseDuration`(2m) 与消费者 `AckWait`(30s) 的关系，以及原生 inbox 用 Data Engine 的库而非 saga 库是否正确。
+
 ## W-2026-09-17-01 原始候选：其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）是否按 M-06～M-11 的形状下沉 core
 
 - **位置**：roost-kit `4830150`，`service/account`（`Accounts`，`account_rpc.go:41`）、`service/chat`（`Messaging`，`chat_rpc.go:66`）、

@@ -337,11 +337,8 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 
 ### 9.1 计划外仍然开着的事（按价值排）
 
-1. **恰好一次的两个半成品**。dungeon 清关奖励已经做成"权威状态 + 同事务账本"（U-0226），可以照抄；
-   `ClaimMail` 的 claim token 仍没有进 Nest 事务（`ReserveClaim → Sync_AddItem → CommitClaim` 三步，中间崩溃会重发一叠）。
-   把 mail 的 claim 也做成账本式，demo 就有两处同形的范例。
-2. **saga 的原生路径进 demo**。core v1.15.7 起 Assembly 自带原生完成消费者（U-0231），送礼 saga 的 debit / refund 步骤
-   可以从 `SubscribeMongoStep` 换成 `SubscribeDataEngineStep` + `inbox.Bind`，把"Nest 提交与 inbox 回执不原子"那条边界真正关掉。
+> 2026-09-18 晚：第 1、2 条已实施（codegen `697ae18` / `0731db9`），做法与边界见 §9.2，**待 review 审查**。
+
 3. **给 demo Player 加一个嵌套 struct 字段**。W-2026-09-17-02 已判为 RR-20260917-05 并修复（U-0232），
    现在加嵌套字段能让压测覆盖嵌套持久化与两层脏传播，且有运行时门兜底。
 4. **attribute 接进持久化与同步**。demo 的 `Combat` 目前只在内存里：既没有进 Player 的 DAO，也没有接 `sync=true` 的实体复制。
@@ -352,6 +349,52 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 7. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、终态退休）还没有范例。
 8. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile` 在类型叫
    `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
+
+### 9.2 第十一批（2026-09-18 晚）：把两条写在注释里的边界真正关掉
+
+两条都是"范例已经有了，只差照着做"的收尾，实施后 demo 里"恰好一次"的形状统一了。**交 review 审查**。
+
+#### 9.2.1 邮件附件的领取（§9.1 第 1 条）
+
+- **问题**：`ClaimMail` 是 `ReserveClaim → Sync_AddItem → CommitClaim` 三步。三步不可能合成一个事务（邮件在另一个进程），
+  所以窗口是真的：发放成功、`CommitClaim` 丢失、预留到期、重试用同一个 token 再预留一次。邮件服务只能把它算作重复**尝试**
+  ——它无从知道游戏发没发——于是玩家拿到第二叠。
+- **做法**：与 dungeon 清关奖励同形。中间那一步换成 `ClaimMailReward` 事务：邮件 id 与道具进同一条 WAL 记录
+  （`db/def/player.go` 的 `MailClaims` 账本、`Bag.ClaimMailReward`、errcode `mail_claim`(100011)）。
+  第二次发放在账本上撞到自己、什么也不做，回的还是同一组数字。
+- **账本的界是时间**：保留期必须长于游戏能发出的最长邮件（生成配置 `mail.send_ttl` 720h，demo 的邮件 7 天），取 31 天；
+  清理在写入口做。论证写在 `game/rewards`。发邮件很多的游戏应改成"commit 成功后即忘"或把账本放到邮件那侧——写在注释里。
+- **测试**：随工程生成 `game/handler/claim_mail_reward_test.go`——真实 handler 跑在真实 Nest 事务里
+  （一个只发一个实体的 Getter + 记录型 committer + 工程自己的配置数据，不需要 Mongo）。这也是"怎么测一个 handler"的范例。
+  红：在生成工程里去掉账本判断 → `the replayed claim reported a fresh grant` / `the bag holds 2 after a replay`。
+  机器人加 `claim_mail_replay`（邮件服务先拒，所以它证明的是"任何路径都不会再发一次"）。
+- **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失
+  （账本挡的是重复**发放**，不是重复尝试）。
+
+#### 9.2.2 送礼 saga 的原生步骤（§9.1 第 2 条）
+
+- **问题**：debit / refund 的业务是 Nest 事务，却跑在 `SubscribeMongoStep` 上——Nest 提交与 inbox 回执是两次提交，
+  中间崩溃会让重投再扣一次。这条边界一直写在文件头。
+- **做法**：这两步改走 `saga.SubscribeDataEngineStep`，handler 在自己的事务里 `inbox.Bind(command, reservation)` +
+  `saga.EmitCompletion(...)`（carrier 是 `game/gift` 的 `NativeStep` 与它的 `Complete(success, reason)`）。
+  背包变更、命令回执、完成结果因此是同一条 WAL 记录；消费者不发布任何东西，它等回执被投影出来再 ack。
+  补偿从"借用 `AddItem`"改成自己的 `GiftRefund` handler——给 `AddItem` 加 saga 身份会让每个端点都背上它没有的步骤。
+- **deliver 刻意留在 Mongo inbox**：它的业务是一次 bus 调用，没有事务可绑；第二层幂等是 mail 服务的 `RequestID` 去重。
+  **这条分界是规则**：原生路径给"业务本来就经 Nest 提交"的步骤用；拿它包一次跨服务调用，等于把回执绑在一个并不包含
+  那次副作用的事务上。
+- **业务拒绝也提交**（不动数据，只写回执与失败的完成结果）：协调器听不到的拒绝会让 saga 空等到 deadline。
+  只有基础设施错误返回 error，回滚并让投递退避重试。
+- **生成器补齐**：`roost add saga` 现在生成 `Topic<Step>` / `Topic<Step>Compensation` 常量。此前只有绑定 Mongo inbox 的
+  `Subscribe*` 助手，想走原生路径只能自己重复 topic 字符串——durable 与 filter 会漂。
+- **前提与陷阱**：需要 core ≥ v1.15.7（协调器直到那一版才有原生完成效果的消费者，U-0231）；
+  `DataEngineStepInboxOptions.LeaseDuration` 必须长于消费者的 `AckWait`（demo 取 2 分钟 vs 30 秒），
+  否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令——消费者会当场拒绝这种配置；
+  原生 inbox 的 database 是 **Data Engine 的**（`game`），不是 saga 的，因为它绑的回执是那个库上的租约栅栏。
+- **实跑证据**：6 机器人全过、saga 6 completed + 6 compensated、0 条 ERROR；Mongo 里 `saga-step` 回执 18 条
+  （6 自赠 debit + 6 失败 debit + 6 refund，都带 payload）、`_dataengine_inbox_claims` 18 条、
+  Mongo step inbox 12 条且全是 deliver（命令 id 的步位是 `:1:`）。
+- **没做**：载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场；deliver 那条仍是两次提交；
+  没有做"进程在 Nest 提交与 ack 之间被杀"的故障注入测试——证据是接线与回执，不是崩溃演练。
 
 ## 8. 相关文件速查
 
