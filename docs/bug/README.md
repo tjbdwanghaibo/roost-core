@@ -1,16 +1,21 @@
 # Roost Review 问题索引
 
-09-18：用户声明没有修复，全部旧 RR 跳过修复验收，原状态不变。新增 [RR-20260918-01/02（均 P2 未修复）](REVIEW-2026-09-18.md)：sync=true 生成配置与 Core 不兼容；房间内部 coordinator 缺 durable 水位接线。Wanted-05 已分流；公开手动接入八场景通过，不能等同自动/生产端到端通过。[完整复现](REPRO-2026-09-18.md)。
+09-18：用户声明没有修复，全部旧 RR 跳过修复验收，原状态不变。新增 [RR-20260918-01/02](REVIEW-2026-09-18.md)：sync=true 生成配置与 Core 不兼容；房间内部 coordinator 缺 durable 水位接线。Wanted-05 已分流；公开手动接入八场景通过，不能等同自动/生产端到端通过。[完整复现](REPRO-2026-09-18.md)。
+
+| 编号 | 等级 | 问题 | 状态 |
+| --- | --- | --- | --- |
+| RR-20260918-01 | P2 | sync=true 实体生成物与 Core 配置不兼容 | 已修复（U-0229，未发版）→ [bugfix](../bugfix/RR-20260918-01.md) |
+| RR-20260918-02 | P2 | RoomBroadcaster 隐藏的 coordinator 无法接入持久化水位 | 未修复 |
 
 09-17 第三轮：[新增 feature 与 Wanted 审查](REVIEW-2026-09-17-03.md) · [完整复现](REPRO-2026-09-17-03.md)。新增五项，均未修复：
 
-| 编号 | 等级 | 问题 |
-| --- | --- | --- |
+| 编号 | 等级 | 问题 | 状态 |
+| --- | --- | --- | --- |
 | RR-20260917-08 | P1 | dungeon 重放/failed/expired 仍派发经验奖励 | 已修复（U-0226，未发版）→ [bugfix](../bugfix/RR-20260917-08.md) |
 | RR-20260917-05 | P2 | nested DAO 第二层 child 变更不通知父级（Wanted-02） |
 | RR-20260917-06 | P2 | attribute feature 缺可使用的公共运行时契约（Wanted-03） |
 | RR-20260917-07 | P2 | 默认 Saga Assembly 不订阅原生 Nest 完成效果（Wanted-04） |
-| RR-20260917-09 | P3 | battle demo 宽限期不触发开帧 |
+| RR-20260917-09 | P3 | battle demo 宽限期不触发开帧 | 已修复（U-0228，未发版）→ [bugfix](../bugfix/RR-20260917-09.md) |
 
 U-0224 原 BSON 三项、U-0225 所在 Saga 现有 race 测试通过；不代表通知与接线契约已收敛。Wanted-05 保留观察并修正“没有公开路径”的前提，暂不登记 RR。
 
