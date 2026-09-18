@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 
+### Added
+
+- **新增 `attribute` 包：属性系统的框架半**（U-0230，C4；RR-20260917-06，T-124）。`AttrID` / `AttrValue` / `Meta` / `Profile`（生成的 profile 实现的接口）/ `Selector`（层）/ `Snapshot`（Profile 是副本，读者改不动容器里的那份）/ `Container`（Install / Live / Snapshot / Apply / Dirty / ClearDirty / Remove / Layers，并发安全）。roost-codegen 的 attribute 生成器此前引用这七个名字而三仓都不提供，整条 feature 生成出来就编译不过；生成器同时改成产出包级访问器，所以工程侧这些名字可以直接是本包类型的别名。`Container` 只负责按层存放与快照，**不做层间合成**——合成规则各游戏不同。测试 `attribute/container_promises_test.go`。记录 `docs/bugfix/RR-20260917-06.md`。
+
 ### Removed
 
 - **`RemotePolicyCapable`、`GetEntityGroupFunc`、`EntityGroupRemote` / `Player` / `Alliance` / `Other` / `Cnt` 删除**(M-04,**破坏性**;前置 M-01～M-03)。Capable 的全部作用是把 kind 放进第一个锁档,而锁档现在就是 kind 的 category,所以它说不出 category 说不了的事;`GetEntityGroupFunc` 是把 category 映射成锁档的应用钩子,值即锁档之后不需要映射,顺带去掉一个消费方在管理器启停时反复赋值与置 nil 的包级可写变量;`EntityGroup*` 那套 0 到 3 的标度没有对应物,`EntityGroupCnt` 本就无人使用。

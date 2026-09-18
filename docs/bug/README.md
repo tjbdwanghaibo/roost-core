@@ -13,7 +13,7 @@
 | --- | --- | --- | --- |
 | RR-20260917-08 | P1 | dungeon 重放/failed/expired 仍派发经验奖励 | 已修复（U-0226，未发版）→ [bugfix](../bugfix/RR-20260917-08.md) |
 | RR-20260917-05 | P2 | nested DAO 第二层 child 变更不通知父级（Wanted-02） |
-| RR-20260917-06 | P2 | attribute feature 缺可使用的公共运行时契约（Wanted-03） |
+| RR-20260917-06 | P2 | attribute feature 缺可使用的公共运行时契约（Wanted-03） | 已修复（U-0230，未发版）→ [bugfix](../bugfix/RR-20260917-06.md) |
 | RR-20260917-07 | P2 | 默认 Saga Assembly 不订阅原生 Nest 完成效果（Wanted-04） |
 | RR-20260917-09 | P3 | battle demo 宽限期不触发开帧 | 已修复（U-0228，未发版）→ [bugfix](../bugfix/RR-20260917-09.md) |
 
