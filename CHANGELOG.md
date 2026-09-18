@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **platform 的协作者也能拿到注册表了**（`platform.RegistryBound`，与 `account.RegistryBound` 同形）。collaborator 在 app 存在之前就被 bootstrap 构造出来交给 `NewMod` / `WithPendingOrders`，构造函数里拿不到 registry；而 U-0234 留给部署实现的待发货索引恰恰需要——它的条目要和订单记录放在同一个 Redis 里，退休一条之前还要把订单读回来看是不是终态。`Mod.Provide` 现在先给四个协作者（verifier / players / deliverer / pending）里实现了 `BindRegistry(*app.Registry) error` 的那些绑定注册表，再构造订单存储：绑定失败直接让进程起不来，错误信息点名是哪个协作者（Redis 查找的那条错误做不到这件事）。服务自身的 capability 在 `Provide` 返回之后才发布，所以需要它的协作者应当留住 registry、首次使用时再查。测试 `service/platform/registry_bound_promises_test.go`。
+
 ## [v1.14.9] - 2026-09-18
 
 ### Changed

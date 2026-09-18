@@ -128,6 +128,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 
 // Provide builds the service and registers it.
 func (m *Mod) Provide(r *app.Registry) error {
+	// Collaborators bind first: the ones that implement RegistryBound are
+	// exactly the ones that go on to look capabilities up, and their error
+	// names the collaborator, which the Redis lookup below cannot.
+	if err := bindCollaborators(r, m.verifier, m.players, m.deliver, m.pending); err != nil {
+		return fmt.Errorf("platform mod: %w", err)
+	}
 	client, err := mods.Redis(r)
 	if err != nil {
 		return err
@@ -151,6 +157,31 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// apart: the interface consumers look up, and the owner-only name the
 	// Server looks up to know this process holds the implementation.
 	return mods.RegisterAll(r, OwnerCapabilities(service)...)
+}
+
+// bindCollaborators hands the registry to every collaborator that asked for
+// one (RegistryBound). The names match the ones Init's "required" error uses,
+// so an operator reading logs sees one vocabulary.
+func bindCollaborators(r *app.Registry, verifier Verifier, players PlayerResolver, deliver Deliverer, pending PendingOrders) error {
+	collaborators := []struct {
+		name  string
+		value any
+	}{
+		{"identity verifier", verifier},
+		{"player resolver", players},
+		{"recharge deliverer", deliver},
+		{"pending order index", pending},
+	}
+	for _, collaborator := range collaborators {
+		bound, ok := collaborator.value.(RegistryBound)
+		if !ok {
+			continue
+		}
+		if err := bound.BindRegistry(r); err != nil {
+			return fmt.Errorf("bind %s: %w", collaborator.name, err)
+		}
+	}
+	return nil
 }
 
 // Start implements app.Mod.
