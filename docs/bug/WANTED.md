@@ -6,6 +6,29 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-08：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定
+
+- **位置**：roost-core `spatial/interest.go`（空间来源，事件形如 `{Observer, Subject, Enter/Leave/BandChanged, Band}`）；
+  `entitysync/subscription.go:178`（`Subscribe` 是幂等的"设定"语义：同键同 profile 直接返回，不同 profile 做切换并重发快照）；
+  消费侧 roost-codegen `demo/internal/service/game/scene.go`。
+- **背景**：用户建议把"一个玩家永远订阅自己"从 AOI 的特例改成**一类关系**（自己 / 好友 / 同联盟），底层做成通用的
+  "兴趣来源"：空间是一个来源，社会关系是另一个来源，都产出同样形状的 Enter/Leave，汇总后才落到 `room.Subscribe`。
+  实现侧同意这个方向，它正好绕开了 `spatial` 拒绝自观察（`evaluatePair` 第一行 `observer.id == subject` 直接返回）
+  与"必须订阅自己"之间的冲突。
+- **现象 / 它强制的东西**：一旦有两个来源，**同一对 (observer, subject) 可能同时被多个来源命中**（我的队友正好站在我旁边）。
+  于是汇总层必须按来源计数：第一个来源命中才 `Subscribe`，**最后一个**来源撤销才 `Unsubscribe`。少了这一步，
+  队友走远时空间来源发 Leave，会把关系来源仍然需要的订阅退掉——而且这种 bug 只在"两个来源重叠又分开"的时序里出现。
+- **要 review 定的两件事**：
+  1. **档位合并规则**。来源对 profile 不一致时（空间说"远处，低档"，关系说"队友，全量"）取哪个？
+     实现侧默认"取最高保真"（band 最小者胜），但这是产品决定——它意味着一个同盟成员在地图另一头也会收到全量状态，带宽照付。
+     与 W-2026-09-18-02（字段掩码常量包私有）连着：档位不能裁字段之前，这条规则实际上没有可观察的差别。
+  2. **关系数据从哪来**。好友 / 同联盟几乎一定是别的服务的数据，而 kit 现在没有好友服务；demo 打算先用**已有的**两种关系
+     （自己、匹配成队的队友，后者由 matchmaker 填、散场清），把 feed 的形状留出来。要不要为此加一个 kit 服务、
+     或者约定"关系来源由游戏自己喂、框架只认事件"，归 review。
+- **是否该进 core**：汇总层（多来源 → 一份订阅 + 引用计数 + 档位合并）本身与游戏无关，可能属于 `entitysync`。
+  实现侧先在 demo 里落一版，跑通了再提；不想在没有第二个使用方之前就把它定成框架 API。
+- **来源**：用户在第十三批第二批设计讨论中提出（§9.4.2）。
+
 ## W-2026-09-18-05：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界
 
 - **位置**：roost-core `spatial/interest.go:60`（`InterestConfig.validate`：只校验 `EnterRadius > 0`、`LeaveRadius >= EnterRadius`、
@@ -24,7 +47,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   `AddObserver` 一个观察者后数 `len(observer.blocks)`。
 - **来源**：game-demo 第十三批准备 AOI 接线时对照 cube `BlockAOI` 发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.4.2）。
 
-## W-2026-09-18-06：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约，"订阅自己"也没有归属
+## W-2026-09-18-06：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约（**id 空间部分用户已定**）
 
 - **位置**：roost-core `spatial/interest.go:392`（`evaluatePair` 第一行 `if observer.id == subject { return }`——自观察靠**同一个 id 空间**判定）；
   `entitysync/subscription.go:42`（`SubscriberRef{Kind, ID, Sid, Key}`）与 `:178`（`Subscribe(ctx, subscriber, state, profile)`，
@@ -42,6 +65,12 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   (c) 给 `InterestManager` 加一个显式的"自观察策略"配置，不再靠 id 相等推断。(a) 是实现侧倾向的那条，但它把一条约定放在
   谁都没有强制的位置上，值得 review 决定要不要落成框架里的类型或断言。
 - **复现**：按当前 demo 的取值构造一次桥接，断言玩家不会收到自己的 Enter——会失败。
+- **用户已定（2026-09-18）**：**全程用 entity id**，不转 unique id——entity id 跨 kind 全局唯一（它把 unique id、kind、
+  category 打包进一个 int64），而 unique id 只在 kind 内唯一，按它做索引会让 Player 42 与 Monster 42 相撞。
+  转换塌进 `RoomSessionResolver` 一处（那正是这个 collaborator 存在的理由）。**仍需 review 判的是**：要不要把这条约定
+  落成框架里的类型或断言，而不是只写在注释里——现在没有任何东西阻止下一个人把 unique id 塞进 `SubscriberRef.ID`。
+- **"订阅自己"另有去向**：用户建议把它做成一类**关系**（自己 / 好友 / 同联盟），而不是 AOI 的特例，见
+  W-2026-09-18-08。
 - **来源**：game-demo 第十三批设计 AOI → 订阅桥接时发现（§9.4.2）。
 
 ## W-2026-09-18-07："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里

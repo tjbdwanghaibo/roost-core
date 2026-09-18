@@ -348,8 +348,8 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
 2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
 3. ~~rank 服务~~ — 第十二批完成，见 §9.3.3。
-4. **spatial（AOI / 兴趣管理）+ 一张地图**。分三批，第十三批做掉第一批（地图与移动，§9.4.1）；
-   **仍欠第二批（AOI 接管订阅）与第三批（object refresh 刷怪）**，见 §9.4 的收尾说明。
+4. **spatial（AOI / 兴趣管理）+ 一张地图**。分三批，第十三批做掉第一批（地图与移动，§9.4.1）与
+   第二批（AOI 接管订阅，§9.4.2）；**仍欠第三批（object refresh 刷怪，§9.4.3）**。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
    真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
 6. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、
@@ -523,30 +523,30 @@ cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里
   机器人 `move` + `move_out_of_bounds`（越界必须被拒，且答复带玩家仍然所在的位置）。
 - 实跑：6 机器人全过、0 ERROR，Mongo 里 `pos_x: 501`（从出生点 500 走了一步）、`scene_id` 是场景的完整实体 id。
 
-#### 9.4.2 第二批（未做）：AOI 接管订阅
+#### 9.4.2 第二批：AOI 接管订阅（已完成）
 
-`spatial.InterestManager` 包成一个 system（自带锁：它明确不并发安全）。入场 `AddObserver` + `AddSubject`，
-移动 `MoveObserver` + `MoveSubject`，每 tick `Flush()` 得到增量事件，然后：
+把"谁该收到谁的状态"从"所有人订阅所有人"换成兴趣系统回答。两处用户拍板改变了做法：**全程用 entity id**、
+**"订阅自己"做成一类关系而不是特例**。
 
-```
-InterestEnter        → room.Subscribe(observer, subject, SyncProfile{LOD: band})
-InterestLeave        → room.Unsubscribe(observer, subject)
-InterestBandChanged  → room.Subscribe(...新 profile...)   // 已核实：同键不同 profile 会做一次切换并重发快照
-```
-
-`internal/service/<game>/scene.go` 里"所有人订阅所有人"的两个循环随之删掉，这是这批的主要收益。
-**开工前要等 review 定的四条**（都已进 `docs/bug/WANTED.md`）：
-
-| 编号 | 要定什么 | 不定会怎样 |
-| --- | --- | --- |
-| W-2026-09-18-02 | 生成的同步字段掩码常量是 DAO 包私有的，packer 没法按字段裁剪 | 分带（LOD）没有意义，第二批只能先用单带 |
-| W-2026-09-18-05 | `InterestConfig` 对"一个观察者订阅多少格"没有上界 | `LeaveRadius/BlockSize` 配失衡时增量 AOI 的收益被差分成本吃光，且无任何信号 |
-| W-2026-09-18-06 | AOI 的 id 空间与 `SubscriberRef` / `subjectID` 的换算归谁，"订阅自己"归谁 | 现状靠两个 id 空间不一致这个巧合达成自订阅，翻转时没有测试会红 |
-| W-2026-09-18-07 | "subject" 跨两层同名不同物；AOI 的点是视点/被看见位置，不是实体 pos | 做观战 / 载具 / 摄像机分离时才发现接错了地方 |
-
-其中只有 W-05 会挡住"能不能上线"，其余三条挡的是"接成什么形状"。实现侧的倾向已写在各条的候选修法里。
-另外这批要把两个"scene"合并——地图 Scene 实体持 AOI，`internal/service/<game>/scene.go` 退化成复制桥接。
-滞回必须钉进测试：在边界上来回微动**不**产生 Enter/Leave 抖动，这正是 roost 比 cube 多出来的部分。
+- **每一种理由都是同一种来源**：`spatial.InterestManager`（距离）、`self`（永远看得见自己）、`team`（匹配成队）
+  都实现 `scene.Source`，产出同一个 `spatial.InterestEvent`。关系来源是 `RelationSource`——集合驱动，
+  谁拥有这段关系谁推进来，它把差分变成 Enter/Leave。好友 / 同盟是同一个类型换一个 feed，这就是它不叫 TeamSource 的原因。
+- **汇总层按来源计数**：第一个来源命中才 Subscribe，**最后一个**来源撤销才 Unsubscribe。这是有了第二个来源之后被强制的东西——
+  一对 (观察者, 主体) 可能被多个来源同时持有（队友正好站在旁边），少了引用计数，队友走出视野会把关系来源仍然需要的订阅退掉，
+  而这个 bug 只在"两个来源重叠又分开"的时序里出现。档位合并取最高保真（band 最小者胜），即关系压过距离。
+- **"订阅自己"因此不再是特判**：`spatial` 的 `evaluatePair` 第一行就拒绝自观察，而"我永远看得见自己"本来也不是距离的事。
+  做成最退化的那种关系之后，桥接里一行特判都没有。
+- **id 空间**：全程 entity id（跨 kind 唯一），转成传输会话只在 `RoomSessionResolver` 一处。demo 跨这条边界只有两个地方：
+  resolver（entity id → 会话）与 `SetTeam`（匹配给的 player id → entity id）。
+- **`internal/service/<game>/scene.go` 退化成复制桥接**：不再决定谁订阅谁，只把兴趣系统交回的 `[]SubscriptionChange`
+  说给 room 听。加一种关系不会碰到这个文件。
+- **参数**：进圈 120 / 出圈 150 / 格边长 150。格数是 `(⌈2·出圈/格边⌉+1)²`，格子远小于视野不会让 AOI 更准
+  （半径判定本来就精确），只会让观察者每动一步的簿记成倍增加；框架不强制这个比值（W-2026-09-18-05），所以写在注释里。
+- **分带暂时只一档**：档位要能裁字段才有意义，而生成的字段掩码常量是 DAO 包私有的（W-2026-09-18-02）。
+  汇总层已经带 band，那天到了是一次配置改动。
+- 测试：`game/scene/runtime/interest_test.go` 五条——自己经关系订阅、距离进出、**边界抖动不产生任何事件**（滞回，
+  roost 比 cube 多出来的那部分）、关系在距离撤销后仍保住订阅、离场双向释放。实跑 6 机器人全过、0 ERROR、无 scene 告警。
+- **未做**：多房间（`spatial.InterestCluster`）；非玩家主体的入口（`Show`/`MoveShown`/`Hide`）已留好，第三批的怪用。
 
 #### 9.4.3 第三批（未做）：object refresh（刷怪）
 
