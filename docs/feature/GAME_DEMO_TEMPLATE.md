@@ -548,8 +548,52 @@ cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里
   roost 比 cube 多出来的那部分）、关系在距离撤销后仍保住订阅、离场双向释放。实跑 6 机器人全过、0 ERROR、无 scene 告警。
 - **未做**：多房间（`spatial.InterestCluster`）；非玩家主体的入口（`Show`/`MoveShown`/`Hide`）已留好，第三批的怪用。
 
-#### 9.4.3 第三批（未做）：object refresh（刷怪）
+#### 9.4.3 第三批：object refresh（刷怪）（已完成）
 
-照 cube `RefreshManager` 的骨架但只做必须的三件事：按组维持存活数、死亡后按延迟排队重生、落点经 `Place` 选。
-需要一个 `Monster` 实体（`noPersist`、`sync=true`，证明 AOI 与复制对非玩家主体一视同仁）与一张 `spawn` 配置表
-（数量与延迟是配置不是代码，和 item 的 `attack` 同一条理由）。cube 那版 751 行里大半是统计与多入口，demo 不需要。
+照 cube `RefreshManager` 的骨架，但只做必须的三件事：按组维持存活数、死亡后按延迟排队重生、落点经 `Place` 选。
+
+- **`Monster` 实体**（kind 4，`noPersist=true lifetime=ephemeral`，`sync=true`）：证明 AOI 与复制对非玩家主体一视同仁——
+  它作为"只被看、不看"的 subject 进兴趣系统（`Show`/`Hide`），其余一整条链路（room、packer、线上格式）与 Player 同一份代码。
+- **`MonsterDao` 每个字段都是 `nopersist,sync`**：不存，但复制。这是为了让"位置住在 DAO 里、经组件读写"这条规则
+  对所有实体一致——否则 demo 里会有两种位置权威。代价与取舍记在 W-2026-09-18-09。
+- **刷新策略是配置**（`configs/schema/spawn.go` + `spawn.csv`：组、模板、数量、血量、中心点、半径、重生秒数）。
+  表在每次 `Due` 时读，不缓存——热更下一 tick 生效。
+- **系统只说"该生成什么"，装配层去建**：`Refresh.Due(now)` 返回 `[]SpawnRequest`，
+  `internal/service/<game>/spawner.go` 建实体、放位置、注册进 room 与 AOI，然后才 `Spawned` 回报。
+  与兴趣系统"只产出订阅变更、不直接调 room"是同一个形状，也正好避开包环（建实体要 lifecycle，lifecycle 要实体包，
+  实体包持有 runtime）。
+- **数的是"被告知存在的"而不是"被请求过的"**：一次失败的创建会在下一次 `Due` 里重新出现；
+  若按请求扣减，进程余下的时间里都会少一只而且没人会说。
+- 测试：`game/scene/runtime/refresh_test.go` 四条——新场景一次要满、未回报的请求会再来一次、死亡要等表里的延迟、
+  落点可站且分散。实跑：GM `gm.scene.population` 报 3 只，`gm.scene.kill` 后 3→2，20 秒（表里的值）后回到 3 且是**新 id**；
+  6 机器人全过，`scene_expect` 要求至少 2 个 subject（自己 + 一只怪）。
+- **未做**：怪不动（没有 AI / actionflow，位置写好就不再变）；战斗只有 GM 的"杀掉"，没有玩家可发起的伤害；
+  id 由进程本地计数器生成，第二个进程会撞（W-2026-09-18-10）。
+
+### 9.5 第十三批的遗留：拿不准的、与既有约束冲突的、新加的
+
+**与既有约束冲突（已在 WANTED 登记，等 review）**
+
+| 冲突 | 现在怎么处理的 | 条目 |
+| --- | --- | --- |
+| "位置权威在 DAO" vs 无持久化的怪 | 给它一个全 `nopersist,sync` 的 DAO，规则对所有实体一致 | W-09 |
+| "全程 entity id" vs 运行期实体没有 id 分配器 | 进程本地计数器 + 基数，单进程正确 | W-10 |
+| "system 是纯状态机、不自带 goroutine"（第一批定的） vs 刷新需要计时器 | 系统仍是状态机（`Due(now)` 要传时间进去），**计时器在装配层**（`spawner.go` 的 ticker） | 无（本批内自洽，但值得 review 确认这条分界） |
+| AOI 分带 vs packer 不能按字段裁剪 | 只用一档，汇总层已带 band | W-02 |
+
+**拿不准的**
+
+- **档位合并取"最高保真"**（关系压过距离）是实现侧默认，不是产品决定——同盟成员在地图另一头也收全量状态，带宽照付（W-08）。
+- **`InterestConfig` 没有订阅规模上界**，demo 靠注释里的"格边长 ≈ 视野半径"约束自己（W-05）。
+- **`spatial` 的 subject / observer 与 entitysync 的 subject 同名不同物**，AOI 的点也不是实体 pos——两处都只写在注释里（W-07）。
+- **怪的 `Hide` 与 room 的 `RetireSubject` 之间没有事务**：先告诉 AOI 再退 room，中间崩溃会留下一个 room 还持有、
+  但没人订阅的 subject。单进程 + 进程退出即清空的前提下无害，多进程要重新看。
+
+**新加的能力（供 review 一并看）**
+
+- `game/scene`：契约包（Terrain / PathFind / Interest / Relations / Refresh / SubscriptionChange / SpawnRequest）。
+- `game/scene/runtime`：五个 system（terrain、path_find、interest、refresh，加组合本身），各自带锁。
+- `game/entities/scene`：Scene 实体（无 DAO）；`game/entities/monster`：Monster 实体（全 nopersist 的 DAO）。
+- 新端点 `Move`(10017)，新 GM 命令 `gm.scene.population` / `gm.scene.kill`，新错误码 `scene_position`(100013)。
+- 新配置表 `spawn`；item 表加 `attack` / `hp` 两列（第十二批）。
+- 机器人：`move`、`move_out_of_bounds`，`scene_expect` 加 `subjects` 参数。

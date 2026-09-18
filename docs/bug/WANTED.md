@@ -6,6 +6,31 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-09：怪物没有 DAO 的话"位置权威在 DAO"这条就不成立——demo 的解法是给它一个全 nopersist 的 DAO
+
+- **位置**：roost-codegen `demo/db/def/monster.go`（`MonsterDao` 的四个字段全是 `dao:"nopersist,sync"`）、
+  `demo/game/entities/monster/entity.go`（`noPersist=true lifetime=ephemeral`）。
+- **与已有约束的冲突**：用户定的规则是"位置权威在 DAO 里，其他都不做缓存，改位置和读位置最终都走到 entity 的 component"。
+  一个刷出来的怪没有任何要持久化的东西，按字面理解它不该有 DAO——那样它的位置就只能放在组件的普通字段里，
+  于是 demo 里会出现**两种位置权威**，而第一段要同时处理玩家和怪的代码就会挑错一种。
+- **实现侧的解法**：给它一个 DAO，但每个字段都是 `nopersist,sync`——不存，但复制。于是"位置住在 DAO 里、经组件读写"
+  对所有实体一致，packer 也还是同一个形状（`MarshalSync(mask)` 进出）。代价是生成器会为它产出一个 `monsters` 集合名
+  与一整套持久化代码路径，而那条路径永远不会写任何东西。
+- **要 review 判的**：(a) 这个解法是否是想要的（还是宁可承认"无持久化实体的位置放组件里"是另一种合法形状）；
+  (b) 如果是，`//roost:dao` 是否该支持一个"无集合"的声明，让全 nopersist 的 DAO 不必编造一个 Mongo 集合名。
+- **来源**：game-demo 第十三批第三批实施时撞上（§9.4.3）。
+
+## W-2026-09-18-10：刷出来的实体 id 由进程本地计数器生成，第二个进程会撞
+
+- **位置**：roost-codegen `demo/internal/service/game/spawner.go`（`monsterUniqueIDBase` + `mintID()`，一个进程内自增）。
+- **现象**：怪物是 `noPersist` 的运行期实体，没有账号服务那样的 id 分配器给它发号。demo 用"基数 + 进程内自增"，
+  单进程正确、两个进程就会铸出同样的 id——而 entity id 是全局身份，撞了之后 room 的 subject、AOI 的 subject 与
+  Nest 的实体寻址会同时指错。
+- **为什么不自己拍板**：这与"多 game 进程"那条（§9.1 第 5 条）是同一个问题的两面。候选做法至少三种：
+  按 sid 给运行期实体划分 id 段（最省，但要定段宽）、用 account 已有的 Redis `INCR` 分配器（多一次跨服务调用，
+  而刷怪在热路径上）、或者让运行期实体的 id 里带上进程标识（改 id 布局，破坏性最大）。
+- **来源**：game-demo 第十三批第三批（§9.4.3）。实现侧已在文件头注明这是单进程限制。
+
 ## W-2026-09-18-08：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定
 
 - **位置**：roost-core `spatial/interest.go`（空间来源，事件形如 `{Observer, Subject, Enter/Leave/BandChanged, Band}`）；
