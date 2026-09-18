@@ -40,7 +40,11 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
 
 不单列功能 bug；已转 [ARCH-05 七包迁移交接](../review/IMPLEMENTATION-SERVICE-PLACEMENT-AND-RECOVERY.md)。六个服务的领域实现迁 Core，directory 先迁，Kit 保留装配；尚未实施。审查另发现 [RR-20260917-04](REVIEW-2026-09-17-02.md)。下面保留来源，不再属于待审候选。
 
-### W-2026-09-17-01 原始候选：其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）是否按 M-06～M-11 的形状下沉 core
+#> 09-18 分流结果：W-2026-09-17-02 → RR-20260917-05（已修，U-0232）、W-03 → RR-20260917-06（已修，U-0230，attribute 运行时进 core）、
+> W-04 → RR-20260917-07（已修，U-0231）、W-05 → RR-20260918-01/02（均已修，U-0229 / U-0233）。W-01 转 ARCH-05 实施交接。
+> 以下条目保留原文供追溯，不再是待判定项。
+
+## W-2026-09-17-01 原始候选：其余六个 kit RPC 服务（account / chat / global / activity / platform / rank）是否按 M-06～M-11 的形状下沉 core
 
 - **位置**：roost-kit `4830150`，`service/account`（`Accounts`，`account_rpc.go:41`）、`service/chat`（`Messaging`，`chat_rpc.go:66`）、
   `service/global`（`Routing`，`global_rpc.go:45`）、`service/global/activity`（`Coordinator`，`activity_rpc.go:39`）、
