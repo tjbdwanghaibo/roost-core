@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 依赖 core v1.15.8：`mail.Claim` 多出 `ExpiresAtUnix`（信封的过期时刻，不是预留租约），
+  `spatial.InterestConfig` 多出 `MaxObserverBlocks` 预算，`dataengine` 多出 `SyncFieldMeta`。
+  kit 侧没有代码改动；mail 的别名自动带上新字段。
+
 ### Fixed
 
 - **platform：后台重试终于有候选来源了**（U-0234，C4；RR-20260917-04，T-128）。支付回调记下订单、首次发货临时失败、渠道不再回调，部署依赖 `Server` 的后台重试——但 `retryOrders()` 固定返回 `nil`，方法未导出、`Server`（生成代码，不能加字段）/ `Mod` / `Config` 都没有注入点，注释里的"由部署提供订单列表"从未实现。一次可恢复的故障因此长期挂起，日志里还没有任何痕迹。新增可选 collaborator `PendingOrders`（`PendingOrders(ctx, limit) ([]string, error)`：**有界**——limit 是这一 tick 能用多少，来源自己分页；**可报错**——读失败记日志、下一 tick 再来，不结束循环），经 `Mod.WithPendingOrders(...)` 到 `Config.Pending`；`RetryBatch = 128`。与 `NewMod` 的三个必填协作者分开：那三个没有安全默认，这一个有可辩护的"没有"——但不能是静默的，所以 `Server` 启动时会说明自己处于哪种模式。索引本身（持久段、重启续接、分页公平性、终态退休）仍是部署的。测试 `service/platform/pending_orders_promises_test.go`，含端到端"回调失败 → 渠道不再回调 → 从索引取到 → 重试成功发货"。记录 `roost-core/docs/bugfix/RR-20260917-04.md`。
