@@ -6,6 +6,53 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-18-02：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
+
+- **位置**：roost-codegen `internal/dao/template_dao.go`（`{{fieldMaskName $.Dao.Name .Name}}` 生成 `varietyDaoFieldSyncOnly`
+  一类**未导出**常量，见 `internal/dao/testdata/golden/gen_variety_dao.go:59-63`）；消费侧的形状见
+  `entity.SubjectSyncPacker.PackSubjectDelta(profile, mask)`（roost-core `entity/subject_sync.go:95`）。
+- **现象**：`PackSubjectDelta` 拿到的是 DAO 攒出来的脏掩码，而 packer 通常写在实体包（`game/entities/<x>`）而不是 DAO 包。
+  它没法写 `if mask & PlayerDaoFieldLevel != 0`——那个常量在 `db` 包里未导出。game-demo 的 packer 因此只能整体转交给
+  `dao.MarshalSync(mask)`（掩码不透明地进、不透明地出），这恰好可行；但凡项目要把状态打成自己的客户端协议（多数项目都要），
+  就必须知道哪个 bit 是哪个字段，而现在拿不到。
+- **为什么可疑 / 为什么不自己拍板**：这是"跨包契约缺一半"（C4 一类）——框架把掩码交出来，却不交出读懂它的词汇表。
+  但补法有好几种取舍：导出常量（污染 DAO 包的公开面、字段改名即破坏兼容）、生成一个 `FieldMaskByName(string) uint64`
+  的查表函数（多一层、但可演进）、或生成一个 `<Dao>SyncFields() []FieldMeta`（和 attribute 的 Meta 同形，最贵也最完整）。
+  选哪条要 review 定。
+- **复现**：在生成工程里新建一个包，写 `if mask & db.PlayerDaoFieldLevel != 0`——编译不过（未导出）。
+- **来源**：第十二批给 game-demo 接实体同步时发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.3.1）。
+
+## W-2026-09-18-03：生成的接入层没有会话关闭回调，所有"谁还在线"的东西只能靠推送失败懒清理
+
+- **位置**：roost-codegen 生成的 `internal/access/player/tcp/server_gen.go`（`Runtime` 只导出 `PushPlayer` / `PushSession` /
+  `ActiveSessions`，`internal/roost/render_player_tcp.go` 是模板）；使用方 game-demo 的 `game/chatroom` presence
+  与新加的 `internal/service/<game>/scene.go`。
+- **现象**：连接断开时没有任何通知。chat 的 presence 只在"推送失败"时把玩家摘掉；scene 同样，且额外要在玩家入场时按
+  `ActiveSessions` 扫一遍陈旧成员——否则新玩家订阅到一个早就断线的主体上，失败日志出现在**别人**的入场路径里
+  （实跑日志里确实是这样：`scene: peer did not subscribe to the newcomer ... session not found`）。
+- **为什么可疑**：凡是维护"在线集合"的东西都要各自发明一遍懒清理，而懒清理的触发点在错误路径上——正确性还在，
+  但错误归属和可观测性都是错的。框架侧已经知道会话什么时候关（`server_gen.go` 里 `session.Close(gateway.ErrSessionClosed)`
+  就在那儿），只是没往外发。
+- **候选修法**：生成的 Runtime 加一个 `OnSessionClosed(func(playerID int64, sessionID string))` 注册点（多播、在关闭路径上调用），
+  或发一条 app 事件让感兴趣的服务订阅。要定的是"多播回调"还是"事件"，以及回调在哪个 goroutine 上跑（关闭路径上直接调
+  会让一个慢回调拖住连接清理）。
+- **复现**：起 demo，杀掉一个机器人进程，观察 `scene` / presence 什么时候才把它摘掉——直到下一次有人向它推送为止。
+- **来源**：第十二批（§9.3.1）。
+
+## W-2026-09-18-04：`//roost:entity` 的 syncTopic 只认带包名的常量，裸标识符被静默当成字面量
+
+- **位置**：roost-codegen `internal/entity/gen.go:225` `syncTopicExpr` → `isConstExpr`（要求含 `.` 且点后首字母大写）。
+- **现象**：`syncTopic=SyncTopicPlayer`（同包常量）生成出来的是 `Topic: "SyncTopicPlayer"`——**常量的名字**，不是它的值。
+  写 `syncTopic=clientsync.PlayerTopic` 才会被当成常量引用。codegen 自己的 fixture
+  （`internal/entity/testdata/player.go:103`）就是前一种写法，所以生成物里也是 `Topic: "SyncTopicPlayer"`。
+- **为什么可疑**：标记的值看起来是个 Go 标识符，实现却按"不带点就是字面量"分流，两种意图在语法上无法区分，
+  且错的那种不会报错、只会安静地把 topic 写成一个没人想要的字符串。demo 已改用字面量 `syncTopic=player` 绕开。
+- **候选修法**：要么让裸的首字母大写标识符也算常量引用（可能破坏把 `Foo` 当字面量用的既有工程），
+  要么在解析时拒绝"看起来像标识符但不是限定名"的值并要求显式引号，要么保持现状但在标记文档里写死"只接受字面量或限定常量"。
+  三条取舍不同，交 review 定。
+- **复现**：`roost add entity X -sync` 类路径上给 syncTopic 传一个同包常量名，看生成物里的 `Topic:`。
+- **来源**：第十二批（§9.3.1）。
+
 ## W-2026-09-18-01：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形
 
 - **位置**：roost-codegen `demo/game/rewards/rewards.go.tmpl`（`ClaimRetentionSeconds = 31 天`、`ClaimExpired(claimedAt, nowUnix)`）

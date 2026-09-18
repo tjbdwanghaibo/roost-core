@@ -337,18 +337,32 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 
 ### 9.1 计划外仍然开着的事（按价值排）
 
-> 2026-09-18 晚：第 1、2 条已实施（codegen `697ae18` / `0731db9`），做法与边界见 §9.2，**待 review 审查**。
+> 2026-09-18 晚重排。判据变了：先看**整块框架能力在 demo 里有没有任何可执行使用方**——RR-20260918-01（`sync=true` 的生成物
+> 根本编译不过）是 review 用三份 fixture 才发现的，而 demo 里只要有一个 `sync=true` 的实体，`make generate && go build`
+> 当场就红。零覆盖的地方就是缺陷能长期活着的地方。第 1、2、3 条已于第十二批实施（§9.3）。
 
-3. **给 demo Player 加一个嵌套 struct 字段**。W-2026-09-17-02 已判为 RR-20260917-05 并修复（U-0232），
-   现在加嵌套字段能让压测覆盖嵌套持久化与两层脏传播，且有运行时门兜底。
-4. **attribute 接进持久化与同步**。demo 的 `Combat` 目前只在内存里：既没有进 Player 的 DAO，也没有接 `sync=true` 的实体复制。
-   接上之后才是"属性系统"的完整形状；`Container` 的**层间合成**（base + buff → final）也留在这里一起定。
-5. **多 game 进程**：chat 世界频道扇出目前按每进程 presence（多进程时只覆盖本进程的玩家），应改订阅流；
-   battle 的房间是进程内状态，多进程要把战斗做成自己的服务、按 match id 寻址。
-6. **Wanted-05 的接入样例**：生成实体 → room → session → sink 的可执行样例仍待产品化（review 09-18 已确认手动路线可行，八场景通过）。
-7. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、终态退休）还没有范例。
-8. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile` 在类型叫
-   `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
+覆盖现状（2026-09-18 晚，实施第十二批之后）：kit 的 9 个真实服务 demo 用了 6 个（account / chat / mail / match / rank / session），
+**platform、global+activity 仍零使用**，directory 只被 account 间接用；core 这边 game-facing 的包里
+**spatial、remoteentity、ownerroute、mirror、ai、actionflow、timer、migration 仍没有任何直接使用**。
+
+1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
+2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
+3. ~~rank 服务~~ — 第十二批完成，见 §9.3.3。
+4. **spatial（AOI / 兴趣管理）+ 一张地图**。进场景、移动、看得见谁——大世界的骨架。现在的 scene 是"所有人订阅所有人"
+   （O(n²)，只因为 demo 世界只有几个机器人才站得住），AOI 应该插在 `Subscribe` / `Unsubscribe` 前面，scene 的其余部分不变。
+   这条也是"零覆盖"里最大的一块。
+5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
+   真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
+6. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、
+   终态退休）还没有范例。
+7. **`core/migration`（数据版本迁移）**：demo 从没演示过"DAO 加了字段，老文档怎么办"，而框架有现成的
+   `DataVersion` / `RunFrom`。真实项目第一个月就会撞上。
+8. **给 demo Player 加一个嵌套 struct 字段**：U-0236 又一次证明嵌套那条路径的缺陷只有 dao 运行时门看得见；
+   demo 加一个字段，压测也能覆盖两层脏传播。
+9. **timer / global+activity / featureflag / hotcode**：运维与限时玩法面，现在完全空白。
+10. **ai / actionflow**：NPC 行为，最偏"游戏内容"的一档。
+11. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile`
+    在类型叫 `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
 
 ### 9.2 第十一批（2026-09-18 晚）：把两条写在注释里的边界真正关掉
 
@@ -420,3 +434,62 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 - **旧数据**：老记录存的是领取时刻 ≥ 结算时刻，按新读法只会更晚过期，不会更早——不需要迁移。
 - **教训（写给下一次给账本收界的人）**：给"记住一批东西"的结构定界，判据必须是这个结构自己能证明的事实；
   引用别的服务"会忘掉"，要先确认那条遗忘**真实存在**、且不会被一行配置改掉。清理谓词与准入谓词必须是同一个函数。
+
+### 9.3 第十二批（2026-09-18 晚）：把三块零覆盖的框架能力接进 demo
+
+选这三条的判据见 §9.1 的按语：它们是"框架里有、demo 里一行使用方都没有"的能力，而今天的 RR-20260918-01 正说明这种
+地方缺陷能活多久。三条都只加 demo，不改框架。
+
+#### 9.3.1 实体同步：Player 成为复制主体，scene 是它的调度器（§9.1 第 1 条）
+
+- **缺什么**：`sync=true`、`entitysync`、`room` 的订阅/水位这一整条"服务端权威状态推给客户端"的主路径，demo 一次都没走过；
+  此前只有战斗内的 lockstep 帧同步和手写推送。
+- **做法**：四块，每块都是框架现成的——
+  `Player.Sync()`（主体：版本、脏掩码、packer）→ `room.RoomBroadcaster`（调度：谁订阅了谁、什么时候 flush）→
+  `room.RoomTransportSink`（编码：信封 → 每会话的线帧）→ `AtomicBatchTransport`（通道：demo 的 TCP 推送）。
+  `internal/service/<game>/scene.go` 是这四块的装配；`game/entities/player/sync_packer.go` 是 packer。
+- **写入侧不是自动的**：把 DAO 标脏和把**主体**标脏是两件事，`Player.PublishSyncDirty()` 是游戏决定第二件何时发生的地方
+  （一次变更一次调用 = 一条 delta，而不是每个 setter 一条）。这也是为什么复制不能做成"有人调了 setter"的副作用——
+  它是"一次已提交的变更"的副作用。
+- **payload 用 DAO 自己的同步文档**（`MarshalSync(mask)`，与 `ApplySync` 成对）。掩码从生成的 setter 来、原样回到生成的
+  marshaller，两端都不需要知道哪个 bit 是哪个字段——因为**生成的字段掩码常量是 DAO 包私有的**，别的包里的 packer 根本
+  没法按字段裁剪。这条已写进 WANTED 交 review。
+- **水位**：`kit/dataengine.Mod.DurableLSN()` 装进 `RoomManagerConfig.DurableWatermark`——U-0233（RR-20260918-02）
+  加的那个入口的第一个真实使用方。
+- **边界（写在文件头）**：没有兴趣管理，所有人订阅所有人，O(n²)，只因为 demo 世界只有几个机器人；AOI 应该插在
+  Subscribe/Unsubscribe 前面而 scene 其余部分不变。生成的接入层**没有会话关闭回调**，所以"谁还在线"只能靠推送失败懒清理
+  + 入场时按 `ActiveSessions` 扫一遍（chat presence 有同样的问题）——这条也进了 WANTED。
+- **测试**：随工程生成 `internal/service/game/scene_test.go`——一个玩家经真实 Nest 事务改了 DAO，另一个玩家的线上收到可解码的
+  delta（reliable 快照整帧、delta 走分片重组，与 UDP 客户端同一套代码）。去掉 `PublishSyncDirty` 即红。
+  机器人加 `scene_watch` / `scene_expect`：真客户端解码、合并、断言。**注册推送解码器不是可选的记账**——漏了它推送到了也解不出来，
+  第一次实跑就是这么红的。
+
+#### 9.3.2 attribute 接进持久化与同步，层间合成定死（§9.1 第 2 条）
+
+- **缺什么**：`game/gameplay/attribute` 此前只在内存里、谁也没用它；`Container` 的层怎么合成没定。
+- **层**：`Base`（玩家自己的值，持久化 + 复制）、`Gear`（背包的投影，进程内）、`Final`（合成视图）。
+  `game/entities/player/attribute_component.go` 是容器的归属地，`OnInitFinish` 是填充它的时机（生成的 builder 先挂 DAO 再初始化组件）。
+- **合成规则**：`Final = Base + Gear`（逐属性相加），**然后**才 `Update()` 重算派生属性。两件事随之而来：派生属性只算一次、
+  且是在合成后的输入上算的（把各层自己的 Power 相加 = 把两个各用一半输入算出来的评分加起来，那不是 power 的意思）；
+  合成是层的纯函数，所以 Final 永远不落库。
+- **两种存储意图各用一次**：`AttrBase` 是 `persist,sync`，`AttrFinal` 是 `nopersist,sync`——能从已存的东西推出来的值不存，
+  存了就是第二个真相、会和第一个打架；但它是客户端要画的东西，所以照样复制。
+- **配置数据进属性**：item 表加 `attack` / `hp` 两列，Gear 层是背包按配置求和——改剑的攻击是一次表编辑 + 热更，不是一次构建。
+- **测试**：`game/entities/player/attribute_component_test.go` 断言合成规则与两个意图。
+  一条诚实的记录：这个公式下"各层评分相加"与"合成后再算"数值上恰好相等（基础 HP 恒为除数的倍数、余数不会进位），
+  所以断言写的是规则本身而不是"≠ 相加"，并在测试里写明为什么——造数据去凑出差异是本末倒置。
+- **实跑证据**：Mongo 里 `attr_base: {1:120, 2:14, 3:40}`（等级 2 的 HP/攻击/战力），**没有 `attr_final`**；
+  而机器人的 `scene_expect` 要求 `attr_final` 必须到达——只存在于线上、从不落库的那个视图确实被复制了。
+
+#### 9.3.3 rank 服务进链路（§9.1 第 3 条）
+
+- **缺什么**：kit 的 rank 服务零使用方。
+- **做法**：`frameworkCatalog` 加 `rank`，game / game-demo 模板自动托管它（ops 端口 9105，session 顺延 9106）。
+  `game/ranking/ranking.go` 是游戏这侧的决定：哪个榜、一分是什么、什么让提交可重试。
+- **幂等键与领奖账本同源**：清关提交用 `UpdateAdd`（本身**不**可重放）+ requestID = `clear:<run id>`——和奖励账本键的是
+  同一个 run 身份。一次清关只发一次奖、只记一分，两件事同源不是巧合。
+- **提交故意不以 `result.Claimed` 为条件**：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况。
+- **边界**：提交在事务**外**（榜在另一个服务），两者不原子；崩在中间会留下"已发奖但没记分"，这是可恢复的方向，
+  重试这个端点会因幂等键只记一次。
+- **实跑证据**：12 个玩家（两轮机器人）每人恰好 1 分，而每个玩家都调了 `finish_dungeon` 与 `finish_dungeon_replay`
+  两次提交——幂等键生效。机器人 `rank_top` 断言自己在榜上且自己的值为 1。
