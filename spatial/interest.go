@@ -2,6 +2,7 @@ package spatial
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 )
 
@@ -9,6 +10,12 @@ import (
 var (
 	ErrInterestConfig  = errors.New("spatial: invalid interest config")
 	ErrInterestUnknown = errors.New("spatial: unknown interest id")
+	// ErrInterestBudget: one observer's leave-radius box would cover more
+	// blocks than the configuration allows. It is a refusal at construction
+	// because the cost it guards is invisible at run time — nothing fails,
+	// the manager just gets slower in proportion to a ratio nobody looked at
+	// (RR-20260918-08).
+	ErrInterestBudget = errors.New("spatial: one observer would subscribe to more blocks than the budget allows")
 )
 
 // InterestEventKind classifies one visibility transition.
@@ -46,6 +53,18 @@ type InterestConfig struct {
 	// subject's band is the first edge its distance fits under (subjects
 	// beyond the last edge use len(Bands)). Empty means a single band 0.
 	Bands []int64
+	// MaxObserverBlocks caps how many blocks ONE observer may subscribe to.
+	// The count is (⌈2·LeaveRadius/BlockSize⌉+1)² — the leave-radius box
+	// discretized — and it is the cost of every observer move, twice over
+	// (the observer's own block set and the reverse table). Zero takes
+	// DefaultMaxObserverBlocks; a deployment that really wants a wide view
+	// names a bigger number rather than discovering the cost in production.
+	//
+	// It is deliberately separate from MaxVisible: that one bounds how many
+	// SUBJECTS an observer ends up seeing, this one bounds the index work
+	// done to find them. A small view over a fine grid is cheap by the first
+	// measure and expensive by this one.
+	MaxObserverBlocks int
 	// MaxVisible, when positive, caps an observer's visible set: an entering
 	// subject closer than the current farthest evicts it, a farther one is
 	// ignored. This is a broadcast-storm gate with approximate semantics —
@@ -58,6 +77,12 @@ type InterestConfig struct {
 // never wrap (at ± (radius+1) must stay well inside int64).
 const maxInterestRadius = int64(1) << 62
 
+// DefaultMaxObserverBlocks is the budget when the configuration does not name
+// one. It is generous for the shape this index is built for — a block about
+// the size of the view radius gives nine to sixteen — and still refuses the
+// configurations that quietly turn an incremental AOI into a full-map scan.
+const DefaultMaxObserverBlocks = 1024
+
 func (c InterestConfig) validate() error {
 	if c.EnterRadius <= 0 || c.LeaveRadius < c.EnterRadius || c.LeaveRadius >= maxInterestRadius {
 		return ErrInterestConfig
@@ -67,7 +92,54 @@ func (c InterestConfig) validate() error {
 			return ErrInterestConfig
 		}
 	}
+	if c.BlockSize <= 0 {
+		// Not this check's business: NewBlockIndex refuses it, and reporting
+		// a budget for a grid that cannot exist would hide the real reason.
+		return nil
+	}
+	budget := c.MaxObserverBlocks
+	if budget <= 0 {
+		budget = DefaultMaxObserverBlocks
+	}
+	if worst := c.worstObserverBlocks(); worst > int64(budget) {
+		return fmt.Errorf("%w: leave radius %d over block size %d covers %d blocks, budget is %d",
+			ErrInterestBudget, c.LeaveRadius, c.BlockSize, worst, budget)
+	}
 	return nil
+}
+
+// worstObserverBlocks is the largest number of blocks one observer's box can
+// cover, computed rather than sampled: a check that only fired once a badly
+// placed observer arrived would pass every start-up check and refuse in
+// production. The arithmetic saturates, so a radius near the int64 ceiling
+// answers "enormous" instead of wrapping to "small".
+func (c InterestConfig) worstObserverBlocks() int64 {
+	blockSize := c.BlockSize
+	span := saturatingAdd(saturatingAdd(c.LeaveRadius, c.LeaveRadius), 1)
+	perSide := saturatingAdd(divideCeil(span, blockSize), 1)
+	// The box is also clipped by the map, so a small world cannot be made
+	// expensive by an enormous radius.
+	if bounded := c.boundedSides(blockSize); bounded > 0 && perSide > bounded {
+		perSide = bounded
+	}
+	if perSide >= 1<<31 {
+		return int64(1) << 62
+	}
+	return perSide * perSide
+}
+
+func (c InterestConfig) boundedSides(blockSize int64) int64 {
+	bounds := NormalizeRect(c.Bounds)
+	width, widthOK := safeSpan(bounds.Min.X, bounds.Max.X)
+	height, heightOK := safeSpan(bounds.Min.Y, bounds.Max.Y)
+	if !widthOK || !heightOK || width <= 0 || height <= 0 {
+		return 0
+	}
+	longest := width
+	if height > longest {
+		longest = height
+	}
+	return divideCeil(longest, blockSize)
 }
 
 type interestObserver struct {
