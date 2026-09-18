@@ -348,9 +348,8 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
 2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
 3. ~~rank 服务~~ — 第十二批完成，见 §9.3.3。
-4. **spatial（AOI / 兴趣管理）+ 一张地图**。进场景、移动、看得见谁——大世界的骨架。现在的 scene 是"所有人订阅所有人"
-   （O(n²)，只因为 demo 世界只有几个机器人才站得住），AOI 应该插在 `Subscribe` / `Unsubscribe` 前面，scene 的其余部分不变。
-   这条也是"零覆盖"里最大的一块。
+4. **spatial（AOI / 兴趣管理）+ 一张地图**。分三批，第十三批做掉第一批（地图与移动，§9.4.1）；
+   **仍欠第二批（AOI 接管订阅）与第三批（object refresh 刷怪）**，见 §9.4 的收尾说明。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
    真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
 6. **platform 待发货索引的参考实现**：U-0234 给了接入点（`PendingOrders`），索引本身（持久段、重启续接、分页公平性、
@@ -493,3 +492,56 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
   重试这个端点会因幂等键只记一次。
 - **实跑证据**：12 个玩家（两轮机器人）每人恰好 1 分，而每个玩家都调了 `finish_dungeon` 与 `finish_dungeon_replay`
   两次提交——幂等键生效。机器人 `rank_top` 断言自己在榜上且自己的值为 1。
+
+### 9.4 第十三批（2026-09-18 晚）：地图，按 cube 的 scene 组合形状
+
+参考 cube 的 `game/entities/scene`：**组合形状照搬，同步逻辑不参考**（roost 用第十二批那条 subject → room 的规则）。
+cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里全都有，而且多出滞回、距离分带与 `MaxVisible`，
+所以框架侧一行不用加——要写的是组合、`FindPlace`（spatial 没有）、以及 AOI 事件到订阅的桥接。
+
+两处由用户拍板的设计：Scene **是**一个实体，但 runtime 的各个 system 线程安全（内部锁），实体按接口导出它们；
+位置权威在 DAO，别处不缓存，读写都落到组件。
+
+#### 9.4.1 第一批：地图与移动（已完成）
+
+- `game/scene`（契约）/ `game/scene/runtime`（system 实现）/ `game/entities/scene`（实体）三层分开，
+  互不成环——system 需要的那点实体能力由契约包里的 `scene.Entity` 接口给出（当前只有 `ID()`）。
+- `System` 生命周期是 `Name/Init(ctx)/Start/Stop`，按序启动、逆序停止，`New` 里先把所有 `Init` 跑完再 `Start`，
+  于是一个 system 可以在 Init 时持有列表里靠后者的指针。启动失败逆序回卷已启动的部分。
+- **锁的归属**：system 自带锁，不借实体锁。理由写在 terrain 的文件头——地形查询来自端点 / 计时器 / 将来的 AOI tick，
+  让它们排队等实体锁等于把地图变成整个场景的瓶颈；实体锁排的是实体**状态**的事务顺序，那是另一个问题。
+- **位置**：`PosX` / `PosY` / `SceneID` 在 Player DAO 上（`persist,sync`），`MapComponent` 是唯一的门。
+  于是移动没有单独的广播——它走第十二批那条复制链（机器人的 `scene_expect` 现在要求 `pos_x` 到达）。
+  AOI 将来那份 id→坐标是**索引不是缓存**：只由这一条写入路径更新，永远不被当作"X 在哪"的答案读。
+- **移动是两实体事务**（Scene rank 2 → Player rank 4，`durability=async`），因为"玩家记录的位置"和"地图交出去的地面"
+  必须一致。地形判断留在 `MapComponent.MoveTo` 里（唯一写入路径），handler 不重复判一遍。
+- **玩家不占地**：用 `Walkable` 而不是 `Occupy`（cube 的 `AddToMap` 有 `checkObstacle` 开关，是同一个选择）。
+  好处是断线没有残留占位要回收——而 demo 恰恰没有断连回调（W-2026-09-18-03）。占位留给墙与将来的怪。
+- **`Place` 向外一圈圈找**最近可站点：地图每次重建，玩家记住的位置可能不再可用，登录不该因此失败。这是 spatial 里没有、
+  cube 有（`FindPlace`）、写在 demo 侧的那块。
+- 测试：`game/scene/runtime/runtime_test.go`（边界、占位、最近可站点、穿不过墙、停止后回错而不是 panic）；
+  机器人 `move` + `move_out_of_bounds`（越界必须被拒，且答复带玩家仍然所在的位置）。
+- 实跑：6 机器人全过、0 ERROR，Mongo 里 `pos_x: 501`（从出生点 500 走了一步）、`scene_id` 是场景的完整实体 id。
+
+#### 9.4.2 第二批（未做）：AOI 接管订阅
+
+`spatial.InterestManager` 包成一个 system（自带锁：它明确不并发安全）。入场 `AddObserver` + `AddSubject`，
+移动 `MoveObserver` + `MoveSubject`，每 tick `Flush()` 得到增量事件，然后：
+
+```
+InterestEnter        → room.Subscribe(observer, subject, SyncProfile{LOD: band})
+InterestLeave        → room.Unsubscribe(observer, subject)
+InterestBandChanged  → room.Subscribe(...新 profile...)   // 已核实：同键不同 profile 会做一次切换并重发快照
+```
+
+`internal/service/<game>/scene.go` 里"所有人订阅所有人"的两个循环随之删掉，这是这批的主要收益。
+**前置依赖**：分带（LOD）只有在 packer 真按 profile 裁剪字段时才有意义，而生成的字段掩码常量是 DAO 包私有的
+（W-2026-09-18-02）；所以要么等 review 定掩码词汇表，要么第二批先用单带、把分带留到之后。
+另外这批要把两个"scene"合并——地图 Scene 实体持 AOI，`internal/service/<game>/scene.go` 退化成复制桥接。
+滞回必须钉进测试：在边界上来回微动**不**产生 Enter/Leave 抖动，这正是 roost 比 cube 多出来的部分。
+
+#### 9.4.3 第三批（未做）：object refresh（刷怪）
+
+照 cube `RefreshManager` 的骨架但只做必须的三件事：按组维持存活数、死亡后按延迟排队重生、落点经 `Place` 选。
+需要一个 `Monster` 实体（`noPersist`、`sync=true`，证明 AOI 与复制对非玩家主体一视同仁）与一张 `spawn` 配置表
+（数量与延迟是配置不是代码，和 item 的 `attack` 同一条理由）。cube 那版 751 行里大半是统计与多入口，demo 不需要。
