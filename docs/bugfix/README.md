@@ -116,6 +116,7 @@
 | M-10 | codegen + kit（codegen v1.15.7 / kit v1.14.5 已发） | `servicerpc` 生成传输拆成 `<iface>_rpc_gen.go`（只依赖 core）与 `<iface>_rpc_assembly_gen.go`（Server / OwnerCapabilities / ClientMod，依赖 kit mods）；kit 全部 RPC 接口已重生成 | [M-10-servicerpc-split.md](M-10-servicerpc-split.md) |
 | M-11 | codegen + core + kit（core v1.15.5 / kit v1.14.6 / codegen v1.15.8 已发） | `Mail` / `Session` / `Matchmaker` RPC 接口连同传输半（`*_rpc_gen.go`）进 `roost-core/service/*`；codegen `servicerpc` 加 `-emit` / `-out`，kit 从 core 的接口生成装配半 | [M-11-rpc-interfaces-into-core.md](M-11-rpc-interfaces-into-core.md) |
 | M-05 | codegen | `category=` 进实体标记并直接进生成物,拆掉运行期查表的隐式前置;生成的聚合注册末尾调 `ValidateEntityRegistry` | [M-05-marker-owns-the-category.md](M-05-marker-owns-the-category.md) |
+| M-12 | core+codegen | 生成的同步字段词汇表（ARCH-06，承接 W-2026-09-18-02） | [ARCH-06-sync-field-vocabulary.md](ARCH-06-sync-field-vocabulary.md) |
 
 写法约定：**问题**（一句话）→ **根因**（指向具体行）→ **方案选择**（列出考虑过的方案与取舍）→
 **改动**（文件与要点）→ **证明**（红测试名、修前失败文本、修后结果）→ **未做 / 边界**。

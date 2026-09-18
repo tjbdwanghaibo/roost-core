@@ -164,3 +164,48 @@ func CloneCommitRecord(record CommitRecord) CommitRecord {
 	}
 	return record
 }
+
+// SyncFieldMeta names one replicated field of a DAO.
+//
+// It exists because a game with its own client protocol has to decide what a
+// dirty mask means, and the generated per-field bit constants are private to
+// the DAO's package — a packer written anywhere else can pass the mask
+// through to MarshalSync but cannot look inside it (ARCH-06, from
+// W-2026-09-18-02). This is the vocabulary: read-only, generated next to the
+// masks it describes, so the two cannot drift.
+//
+// Bit is stable only within ONE generated schema. Adding a field renumbers
+// nothing, but removing or reordering one does — so a value that outlives the
+// build (a stored projection, a client's cached layout) must be keyed by Name
+// or WireName, never by Bit. Nothing here is an ABI.
+type SyncFieldMeta struct {
+	// Name is the Go field name on the DAO definition.
+	Name string
+	// WireName is the field's name in the document (its bson key), which is
+	// also what MarshalSync writes.
+	WireName string
+	// Bit is the mask bit the generated setters raise for this field.
+	Bit uint64
+}
+
+// SyncFieldByName looks one field up in a generated table. It is a helper
+// rather than a method so the generated code stays a plain slice.
+func SyncFieldByName(fields []SyncFieldMeta, name string) (SyncFieldMeta, bool) {
+	for _, field := range fields {
+		if field.Name == name || field.WireName == name {
+			return field, true
+		}
+	}
+	return SyncFieldMeta{}, false
+}
+
+// SyncFieldsOf returns the fields a mask names, in declaration order.
+func SyncFieldsOf(fields []SyncFieldMeta, mask uint64) []SyncFieldMeta {
+	var named []SyncFieldMeta
+	for _, field := range fields {
+		if mask&field.Bit != 0 {
+			named = append(named, field)
+		}
+	}
+	return named
+}

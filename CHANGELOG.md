@@ -26,6 +26,12 @@
 
 ### Added
 
+- **`dataengine.SyncFieldMeta`：生成的同步字段词汇表**（M-12 / ARCH-06，承接 W-2026-09-18-02）。
+  每字段的掩码常量是 DAO 包私有的，所以一个写在别处的 packer 能把掩码交给 `MarshalSync` 却看不进去——
+  这对默认 packer 没有缺陷（掩码不透明地进出），对要打自己客户端协议的项目则是缺一份词汇表。
+  类型与 `SyncFieldByName` / `SyncFieldsOf` 两个只读助手在框架侧，表由 codegen 生成在掩码旁边，两者不会漂。
+  **bit 只在同一份生成产物内稳定**，跨越构建的东西按 Name / WireName 键——注释里写明了，因为导出内部常量
+  等于承诺一个跨版本 ABI。记录：`docs/bugfix/ARCH-06-sync-field-vocabulary.md`。
 - **新增 `attribute` 包：属性系统的框架半**（U-0230，C4；RR-20260917-06，T-124）。`AttrID` / `AttrValue` / `Meta` / `Profile`（生成的 profile 实现的接口）/ `Selector`（层）/ `Snapshot`（Profile 是副本，读者改不动容器里的那份）/ `Container`（Install / Live / Snapshot / Apply / Dirty / ClearDirty / Remove / Layers，并发安全）。roost-codegen 的 attribute 生成器此前引用这七个名字而三仓都不提供，整条 feature 生成出来就编译不过；生成器同时改成产出包级访问器，所以工程侧这些名字可以直接是本包类型的别名。`Container` 只负责按层存放与快照，**不做层间合成**——合成规则各游戏不同。测试 `attribute/container_promises_test.go`。记录 `docs/bugfix/RR-20260917-06.md`。
 
 ### Removed
