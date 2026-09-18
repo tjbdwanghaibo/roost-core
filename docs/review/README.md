@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-18 第三轮修复验收、Wanted 分流与K1续审](REVIEW-2026-09-18-03.md)：RR-03/04 原根因独立通过；10条 Wanted 全部分流；新增[3个P1、3个P2](../bug/REVIEW-2026-09-18-03.md)及[复现](../bug/REPRO-2026-09-18-03.md)。[Scene 兴趣/身份/生命周期机制](IMPLEMENTATION-SCENE-INTEREST-IDENTITY-AND-LIFECYCLE.md) · [生成契约补充](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。
+
 [09-18 第二轮修复验收与K1进度](REVIEW-2026-09-18-02.md)：8项旧RR原触发通过；独立46场景38过8失败，确认[两个新问题](../bug/REVIEW-2026-09-18-02.md)。[完整复现](../bug/REPRO-2026-09-18-02.md) · [回滚关系与幂等寿命机制](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。K1局部14场景已执行，K1/K2/K3均不标整体完成。
 
 [核心功能分类与优先级](CORE-FUNCTION-CLASSIFICATION.md)：八个运行时功能域，Kit/Codegen 横向接入必查，按核心不变量而非文件数安排后续审查。

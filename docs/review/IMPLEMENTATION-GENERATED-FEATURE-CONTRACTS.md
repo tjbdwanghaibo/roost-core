@@ -81,3 +81,11 @@ U-0226 选择 Player.DAO.DungeonClaims + 奖励在同一 Nest 多实体事务提
 因此安全去重清理需要先有权威的“此身份今后不可能再被接受”的证据；单凭claim时间或数量不足。可以选有截止时间的领奖契约，或保留持久领取身份/压缩水位，必须同时决定晚到的首次领取、历史存档与重启恢复如何处理。RR-20260918-04 用真实生成Controller/Nest/DAO验证了旧Run清理后再领。不要仅修正文案或延长常数，优先复用现有事务和DAO，把跨服务的时间/身份契约定义完整。
 
 本轮新增范围仍是K1通知/回滚与修复相关资产边界。K2的真实WAL/Mongo恢复、K3的owner/mirror未新增验证。下一入口为顶层DAO Set/Del/Init到nested的生命周期交接，随后补panic、提交拒绝、多次修改及关闭结算；不能把14个K1局部场景执行完当成K1全域完成。
+
+## 10. 09-18 第三轮：顶层容器也必须转移 callback 所有权
+
+Codegen `c73bc12` 已修好 nested 内部字段替换/undo，但顶层 DAO map 是另一份模板。`SetEquips(key,new)` 给 new 绑定 `markEquipsKeyDirty`，没有解绑 old；undo 恢复 old 并调用 `Init`，没有解绑被丢弃的 new。真实生成 DAO 的四场景中，提交后的 old 与回滚后的 new 都还能生成 CommitRecord，见 RR-20260918-10。
+
+callback 是运行时所有权，不是序列化字段。容器替换的原子语义应包含三步：解绑离开容器的值、改变容器内容、绑定进入容器的值；undo 执行相反的所有权转移。Set/Del/raw hydrate/Init 应复用 helper，避免每个分支各自漏一半。别名 child 若允许同时出现在多个 key，需要引用计数或明确拒绝，否则单一 `SetNotify` 本身无法表达多父所有权。
+
+ARCH-06 承接 W-2026-09-18-02：默认 packer 把 mask 直接交给 `MarshalSync(mask)` 时没有功能缺陷；自定义客户端协议缺少稳定字段词汇表。建议生成只读 `SyncFieldMeta{Name,Bit,WireName}` 与 lookup，声明 bit 只在同一生成 schema 内稳定。不要直接导出内部常量并暗示跨版本 ABI。该项尚未实施，不计 RR。

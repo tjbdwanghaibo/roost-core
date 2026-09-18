@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+09-18 第三轮最新停点：[运行/验收/Wanted](REVIEW-2026-09-18-03.md)。Core 9a97d7e / Kit 399f175 / Codegen c73bc12；RR-03/04 修复原根因独立通过，10 条 Wanted 全部分流，K1 顶层 DAO map 另确认所有权问题。独立 22 叶子 15 通过、7 行为失败；累计 **51 份运行记录、30 篇机制文档、84 个不同 RR**，不是代码覆盖率或未修复数。
+
+| 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
+| --- | --- | --- |
+| K1 实体/事务 | 当前 DAO template/golden 重新生成；顶层 map committed old/new、rollback old/new 四场景，2过2失败，RR-10 | 继续同 key 多次 Set/Del、nil/alias child；panic、commit拒绝、关闭结算；实体加载/释放和串行调度仍未整体完成 |
+| K2 数据/恢复 | RR-03 修复后 10 个归属/Commit 叶子；顶层游离值真实产生 CommitRecord | 未解码 stale patch；无真实 WAL/Mongo/断电恢复新增验证，K1 后继续 |
+| K3 跨服/权威 | scene/entity ID 边界与运行期 monster ID 已读，两个 spawner 碰撞转 RR-09 | owner/fence/epoch、迁移/镜像/墓碑未新增；K1/K2 后继续 |
+| 横向 Codegen/Kit | RR-04 三叶子通过；mail、TCP lifecycle、syncTopic、AOI、scene relation/identity 分流 | RR-05..09 待实施；真实多进程/连接风暴/性能未测 |
+
+Wanted 当前无活动待判项。W-02 转 ARCH-06；W-06/07/08/09 分别按完整 entity ID、文档契约、demo source-refcount、全 nopersist DAO 收敛。[Scene 机制](IMPLEMENTATION-SCENE-INTEREST-IDENTITY-AND-LIFECYCLE.md)与[生成契约](IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)已记录事实和方案。图谱仍为 09-08 旧代，关键路径经 coverage 后全部回读当前源码；没有将局部场景外推为整域完成。
+
 09-18 第二轮最新停点：[运行/验收/证据](REVIEW-2026-09-18-02.md)。Core abb7b80 / Kit 399f175 / Codegen ffff2a1；用户已修复，本轮8项旧RR原触发通过，另确认RR-20260918-03/04（新归属/保留期根因）。独立46场景38通过8行为失败；累计**50份运行记录、29篇机制文档、78个不同RR**，不是覆盖率或当前未修复数。
 
 | 当前域 | 新增阅读与执行范围 | 未完成及下一步 |

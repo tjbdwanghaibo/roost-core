@@ -6,7 +6,26 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## W-2026-09-18-09：怪物没有 DAO 的话"位置权威在 DAO"这条就不成立——demo 的解法是给它一个全 nopersist 的 DAO
+## 09-18 第三轮分流结果
+
+本轮 10 条候选已全部判定，当前没有未分流的 09-18 Wanted。完整依据见[问题与实施方向](REVIEW-2026-09-18-03.md)、[独立复现](REPRO-2026-09-18-03.md)和[运行记录](../review/REVIEW-2026-09-18-03.md)。
+
+| Wanted | 分流 |
+| --- | --- |
+| W-01 邮件账本寿命 | → RR-20260918-05，P1 |
+| W-02 私有同步字段 mask | → ARCH-06，实现稳定字段元数据；不是默认 packer 的功能 bug |
+| W-03 会话关闭回调 | → RR-20260918-06，P2 |
+| W-04 syncTopic 裸标识符 | → RR-20260918-07，P2 |
+| W-05 单观察者 AOI 预算 | → RR-20260918-08，P2 |
+| W-06 ID 空间 | 用户决定的完整 entity ID 与当前 bridge 一致；补契约测试，不改 Core 泛型 SubscriberRef |
+| W-07 subject/Point 语义 | 文档契约，不改破坏性 API；已写入 scene 机制文档 |
+| W-08 多来源兴趣 | 接受 demo 的 source-refcount + 最高保真策略；关系 feed 留在游戏侧，暂不提升 Core API |
+| W-09 全 nopersist Monster DAO | 接受；统一同步权威的收益高于冗余 collection 元数据，不新增无集合语法 |
+| W-10 进程本地怪物 ID | → RR-20260918-09，P1 |
+
+以下保留原始候选供追溯，均不再属于活动待判项。
+
+### W-2026-09-18-09 原始候选：怪物没有 DAO 的话"位置权威在 DAO"这条就不成立——demo 的解法是给它一个全 nopersist 的 DAO
 
 - **位置**：roost-codegen `demo/db/def/monster.go`（`MonsterDao` 的四个字段全是 `dao:"nopersist,sync"`）、
   `demo/game/entities/monster/entity.go`（`noPersist=true lifetime=ephemeral`）。
@@ -20,7 +39,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   (b) 如果是，`//roost:dao` 是否该支持一个"无集合"的声明，让全 nopersist 的 DAO 不必编造一个 Mongo 集合名。
 - **来源**：game-demo 第十三批第三批实施时撞上（§9.4.3）。
 
-## W-2026-09-18-10：刷出来的实体 id 由进程本地计数器生成，第二个进程会撞
+### W-2026-09-18-10 原始候选：刷出来的实体 id 由进程本地计数器生成，第二个进程会撞
 
 - **位置**：roost-codegen `demo/internal/service/game/spawner.go`（`monsterUniqueIDBase` + `mintID()`，一个进程内自增）。
 - **现象**：怪物是 `noPersist` 的运行期实体，没有账号服务那样的 id 分配器给它发号。demo 用"基数 + 进程内自增"，
@@ -31,7 +50,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   而刷怪在热路径上）、或者让运行期实体的 id 里带上进程标识（改 id 布局，破坏性最大）。
 - **来源**：game-demo 第十三批第三批（§9.4.3）。实现侧已在文件头注明这是单进程限制。
 
-## W-2026-09-18-08：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定
+### W-2026-09-18-08 原始候选：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定
 
 - **位置**：roost-core `spatial/interest.go`（空间来源，事件形如 `{Observer, Subject, Enter/Leave/BandChanged, Band}`）；
   `entitysync/subscription.go:178`（`Subscribe` 是幂等的"设定"语义：同键同 profile 直接返回，不同 profile 做切换并重发快照）；
@@ -54,7 +73,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   实现侧先在 demo 里落一版，跑通了再提；不想在没有第二个使用方之前就把它定成框架 API。
 - **来源**：用户在第十三批第二批设计讨论中提出（§9.4.2）。
 
-## W-2026-09-18-05：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界
+### W-2026-09-18-05 原始候选：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界
 
 - **位置**：roost-core `spatial/interest.go:60`（`InterestConfig.validate`：只校验 `EnterRadius > 0`、`LeaveRadius >= EnterRadius`、
   `LeaveRadius < 2^62`、`Bands` 递增）、`:276`（`resubscribe` 用 `±LeaveRadius` 的盒子取格）、
@@ -72,7 +91,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   `AddObserver` 一个观察者后数 `len(observer.blocks)`。
 - **来源**：game-demo 第十三批准备 AOI 接线时对照 cube `BlockAOI` 发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.4.2）。
 
-## W-2026-09-18-06：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约（**id 空间部分用户已定**）
+### W-2026-09-18-06 原始候选：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约（**id 空间部分用户已定**）
 
 - **位置**：roost-core `spatial/interest.go:392`（`evaluatePair` 第一行 `if observer.id == subject { return }`——自观察靠**同一个 id 空间**判定）；
   `entitysync/subscription.go:42`（`SubscriberRef{Kind, ID, Sid, Key}`）与 `:178`（`Subscribe(ctx, subscriber, state, profile)`，
@@ -98,7 +117,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   W-2026-09-18-08。
 - **来源**：game-demo 第十三批设计 AOI → 订阅桥接时发现（§9.4.2）。
 
-## W-2026-09-18-07："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里
+### W-2026-09-18-07 原始候选："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里
 
 - **位置**：roost-core `spatial/interest.go`（subject = 一个 `int64` + 一个 `Point`，包对"实体"一无所知；
   observer/subject 是**角色**不是类型，同一个 id 可以两者都是、都不是——`:184` 的注释只写了
@@ -119,7 +138,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   改名是破坏性的，取舍归 review。
 - **来源**：game-demo 第十三批（§9.4.2）。与 W-2026-09-18-06 同源，可一并分流。
 
-## W-2026-09-18-02：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
+### W-2026-09-18-02 原始候选：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
 
 - **位置**：roost-codegen `internal/dao/template_dao.go`（`{{fieldMaskName $.Dao.Name .Name}}` 生成 `varietyDaoFieldSyncOnly`
   一类**未导出**常量，见 `internal/dao/testdata/golden/gen_variety_dao.go:59-63`）；消费侧的形状见
@@ -135,7 +154,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：在生成工程里新建一个包，写 `if mask & db.PlayerDaoFieldLevel != 0`——编译不过（未导出）。
 - **来源**：第十二批给 game-demo 接实体同步时发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.3.1）。
 
-## W-2026-09-18-03：生成的接入层没有会话关闭回调，所有"谁还在线"的东西只能靠推送失败懒清理
+### W-2026-09-18-03 原始候选：生成的接入层没有会话关闭回调，所有"谁还在线"的东西只能靠推送失败懒清理
 
 - **位置**：roost-codegen 生成的 `internal/access/player/tcp/server_gen.go`（`Runtime` 只导出 `PushPlayer` / `PushSession` /
   `ActiveSessions`，`internal/roost/render_player_tcp.go` 是模板）；使用方 game-demo 的 `game/chatroom` presence
@@ -152,7 +171,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：起 demo，杀掉一个机器人进程，观察 `scene` / presence 什么时候才把它摘掉——直到下一次有人向它推送为止。
 - **来源**：第十二批（§9.3.1）。
 
-## W-2026-09-18-04：`//roost:entity` 的 syncTopic 只认带包名的常量，裸标识符被静默当成字面量
+### W-2026-09-18-04 原始候选：`//roost:entity` 的 syncTopic 只认带包名的常量，裸标识符被静默当成字面量
 
 - **位置**：roost-codegen `internal/entity/gen.go:225` `syncTopicExpr` → `isConstExpr`（要求含 `.` 且点后首字母大写）。
 - **现象**：`syncTopic=SyncTopicPlayer`（同包常量）生成出来的是 `Topic: "SyncTopicPlayer"`——**常量的名字**，不是它的值。
@@ -166,7 +185,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：`roost add entity X -sync` 类路径上给 syncTopic 传一个同包常量名，看生成物里的 `Topic:`。
 - **来源**：第十二批（§9.3.1）。
 
-## W-2026-09-18-01：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形
+### W-2026-09-18-01 原始候选：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形
 
 - **位置**：roost-codegen `demo/game/rewards/rewards.go.tmpl`（`ClaimRetentionSeconds = 31 天`、`ClaimExpired(claimedAt, nowUnix)`）
   与 `demo/game/entities/player/bag_component.go.tmpl:104-120`（`ClaimMailReward` 按领取时刻清理）。
