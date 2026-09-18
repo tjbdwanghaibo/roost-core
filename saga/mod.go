@@ -88,6 +88,22 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			NakBackoffMin:  durationDefault(cfg.GetDuration("saga.result_nak_backoff_min"), 250*time.Millisecond),
 			NakBackoffMax:  durationDefault(cfg.GetDuration("saga.result_nak_backoff_max"), 30*time.Second),
 		},
+		// Native Nest steps commit their completion as an effect, so it
+		// arrives on the effect stream rather than the saga stream. Its
+		// consumer shares the start consumer's stream and prefix and takes
+		// its own durable; core derives the rest when these are empty
+		// (RR-20260917-07).
+		NestResults: coresaga.NestCompletionConsumerConfig{
+			Stream:         stringDefault(cfg.GetString("saga.result_effect_stream"), stringDefault(cfg.GetString("saga.start_effect_stream"), "ROOST_EFFECTS")),
+			Durable:        cfg.GetString("saga.result_effect_durable"),
+			EffectPrefix:   stringDefault(cfg.GetString("saga.result_effect_prefix"), stringDefault(cfg.GetString("saga.start_effect_prefix"), "roost.effect")),
+			AckWait:        durationDefault(cfg.GetDuration("saga.result_effect_ack_wait"), 30*time.Second),
+			ProcessTimeout: durationDefault(cfg.GetDuration("saga.result_effect_process_timeout"), defaults.StoreTimeout),
+			MaxDeliver:     intDefault(cfg.GetInt("saga.result_effect_max_deliver"), 25_000),
+			MaxAckPending:  intDefault(cfg.GetInt("saga.result_effect_max_ack_pending"), 256),
+			NakBackoffMin:  durationDefault(cfg.GetDuration("saga.result_effect_nak_backoff_min"), 250*time.Millisecond),
+			NakBackoffMax:  durationDefault(cfg.GetDuration("saga.result_effect_nak_backoff_max"), 30*time.Second),
+		},
 		Starts: coresaga.NestStartConsumerConfig{
 			Stream:         stringDefault(cfg.GetString("saga.start_effect_stream"), "ROOST_EFFECTS"),
 			Durable:        stringDefault(cfg.GetString("saga.start_effect_durable"), "roost-saga-start"),

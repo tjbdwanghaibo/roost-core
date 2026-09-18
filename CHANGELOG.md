@@ -6,6 +6,11 @@
 
 ### Changed
 
+- **saga Mod 读原生完成消费者的配置**（随 core U-0231 / RR-20260917-07）：`saga.result_effect_durable` 与
+  `result_effect_ack_wait` / `process_timeout` / `max_deliver` / `max_ack_pending` / `nak_backoff_min` / `nak_backoff_max`，
+  流与前缀缺省回落到 `start_effect_*`。原生 Nest 步骤（`SubscribeDataEngineStep` + `EmitCompletion`）的完成结果
+  此前没有任何默认消费者；core 的 Assembly 现在自带第三条订阅，本仓只是把配置接上去。**需要 core ≥ v1.15.7。**
+
 - **依赖 core v1.15.6**：core 的 saga 协调器修好了"步骤拒绝 / 重试用尽后补偿落不到 Mongo 存储"（U-0225）。`saga.Mod` 只是装配与转发，本仓无代码改动；用 `saga` Mod 且步骤会返回不可重试失败的工程必须升到这一版，否则 saga 卡在 waiting。
 
 - **依赖 core v1.15.5；`Mail` / `Session` / `Matchmaker` RPC 接口与传输半改为 roost-core 的别名，装配半从 core 的接口生成**（M-11 kit 半，ARCH-01 / ARCH-04 收尾）。`service/mail` / `service/session` / `service/match` 删掉接口文件与 `*_rpc_gen.go`；`alias.go` 追加接口、`BusClient` / `NewBusClient` / `RegisterHandlers` / `Capability`、`ServiceType` / `CapabilityName` / `LocalCapabilityName` / `DefaultCallTimeout` / `Method*` / `Methods` 的别名；`*_rpc_assembly_gen.go` 由 `servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/<x> -emit assembly -out .` 生成（go:generate 在 `alias.go`）。mail 的传输测试与 session 的 `Capability` 断言随传输半迁到 core，kit 的 `rpc_test.go` 只剩 Mod / Server 形状。subject、方法名、capability 名不变；生成工程引用的 `mail.Mail` / `svcmatch.Matchmaker` / `svcmatch.CapabilityName` 仍是 kit 路径。记录：`roost-core/docs/bugfix/M-11-rpc-interfaces-into-core.md`。
