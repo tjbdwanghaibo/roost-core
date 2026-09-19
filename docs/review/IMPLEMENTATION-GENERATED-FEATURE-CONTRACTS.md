@@ -89,3 +89,56 @@ Codegen `c73bc12` 已修好 nested 内部字段替换/undo，但顶层 DAO map �
 callback 是运行时所有权，不是序列化字段。容器替换的原子语义应包含三步：解绑离开容器的值、改变容器内容、绑定进入容器的值；undo 执行相反的所有权转移。Set/Del/raw hydrate/Init 应复用 helper，避免每个分支各自漏一半。别名 child 若允许同时出现在多个 key，需要引用计数或明确拒绝，否则单一 `SetNotify` 本身无法表达多父所有权。
 
 ARCH-06 承接 W-2026-09-18-02：默认 packer 把 mask 直接交给 `MarshalSync(mask)` 时没有功能缺陷；自定义客户端协议缺少稳定字段词汇表。建议生成只读 `SyncFieldMeta{Name,Bit,WireName}` 与 lookup，声明 bit 只在同一生成 schema 内稳定。不要直接导出内部常量并暗示跨版本 ABI。该项尚未实施，不计 RR。
+
+## 2026-09-19：DAO 所有权是唯一父关系，不只是一个 callback
+
+RR-20260918-10 的 map/slice 修复证明“离开容器必须解绑”，本轮把同一不变量推到两个尚未覆盖的形状：
+
+- 顶层 `*Nested` setter 仍只绑定新值，不解绑 old；rollback 也不解绑被丢弃的 new；
+- 同一 nested 指针放进两个 key 时，`SetNotify` 的单槽让后一次绑定覆盖前一次，最终只持久化最后一个 key。
+
+因此生成 DAO 的正确模型应明确为**可变持久化对象图是一棵唯一父树**。一个 child 的所有权不是“它有 callback”，而是
+`(owner token, notify)` 二元关系：bind 必须拒绝不同 owner 重复占有，unbind 只能释放匹配 token 的 owner。普通替换和 undo
+都使用同一组 bind/unbind helper；map key、slice 字段、pointer 字段只是 owner token 的不同组成部分。
+
+U-0245 又补上所有权的起点：`New<Dao>()` 必须在返回前把零值 nested 接好，不能等第一次 hydrate。否则组件通过 getter 修改新实体时，
+整条父链从未建立。当前 `e12a4d3` 构造函数调用 `Init()` 的独立验证通过；这不替代替换时的解绑和 alias 拒绝，三者分别是
+“初始拥有”“转移拥有”“禁止多父”。
+
+仅给 `SetNotify` 改成 callback 切片会把模型变成共享可变图：一个修改可能触发多个聚合根、多个事务和不同锁域，无法再说明谁负责回滚。
+若未来确实需要共享，应把 child 变成独立 Entity/值对象引用，而不是让 DAO nested 暗中多父持久化。
+
+## 2026-09-19：异步生命周期源要隔离每个订阅者
+
+有界队列解决了“慢订阅者阻塞 socket cleanup”，但没有解决 panic：共享 dispatcher 直接调用订阅者时，一个 panic 会越过 goroutine
+并终止进程。安全派发边界必须逐个调用、逐个 recover、逐个计数，然后继续同批其他订阅者与后续事件。这个约束与 Core 的 bus、
+Nest、configdata、room 和 etcd callback 边界一致。
+
+事件允许丢弃时，消费方还必须有对账路径。scene 已保留 `ActiveSessions` 检查；chat presence 也要订阅同一中立会话契约，并保留
+入口或周期对账。生命周期事件负责低延迟收敛，对账负责从丢事件、重启和晚订阅中恢复。
+
+## 2026-09-19：付费交接要区分“订单已记录、欠货已持久、玩家已履约”
+
+game-demo 第十五批把支付链分成 platform 与 game 两个进程。当前三段事实分别是：
+
+1. Kit OrderStore 记录付款、attempt 与 delivered；
+2. platform collaborator 把解析后的 grant 写进玩家 Redis hash；
+3. game Nest 事务把 claim id 与物品一起写进 Player，之后删除 grant。
+
+第 2→3 段的方向正确：先提交物品再删 grant，崩溃只会重读，Player claim 账本把重读变成空操作。第 1→2 段仍缺同等级的原子性：
+订单 `Create` 与 pending ZSet 是两次写，而且 ZSet 只在 deliverer 内补写。两次写之间退出，或 ZADD 自己失败，会留下有订单、无 grant、无索引的状态。
+后台循环只从索引取 id，因此“订单是持久的”不能推出“后台能找到它”。
+
+优先复用 Core Redis 脚本能力，为 platform 的 Redis OrderStore 提供“插入版本化订单 + ZADD 待办”的同槽原子操作；订单状态变成终态时的退休可延后，
+因为多读终态是安全浪费，漏登记非终态是永久漏发。若 Cluster 模式要求同槽，order key 与 pending key 必须共享 hash tag，并把这个约束放入构造校验。
+在原子 store 落地前增加 `Pending.Track` 只能缩小窗口，应在文档中明确是过渡方案。
+
+待办扫描也要隔离单项失败。先解析一次本地 platform capability；对某个 order 的解码/读取错误，保留该索引项、记录身份并继续后面的候选，
+不能返回空整页。若保持 `PendingOrders(ids,error)` 接口，Server 应处理已返回的部分 ids；若部署实现自行吞掉单项错误，则必须有指标和死信/运维查询，
+否则“继续”会变成静默遗忘。分页公平测试必须同时包含 score 后移与坏记录两类干扰。
+
+最后，`delivered` 目前只表示“grant 已持久”，不表示玩家已经拿到物品。固定 30 天后拒绝并删除未领取 grant，会把一笔已付款订单变成：
+平台显示 delivered、欠货记录消失、Player 没有物品。短期宁可不清理 PurchaseClaims 和未领取 grant；完整模型应增加幂等履约确认：Nest 提交后通知 platform
+把订单推进到 fulfilled，再删除 grant。归档/压缩只能在这个权威终态之后发生。延长常数不能修复没有终态证据的问题。
+
+对应问题为 RR-20260919-04/05/06；正向全包测试仍保留，但新增门应注入 create 后退出、索引写失败、单键损坏、玩家长期离线与背包长期拒绝。

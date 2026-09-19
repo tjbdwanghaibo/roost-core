@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+09-19 最新停点：[运行/验收/K1/platform](REVIEW-2026-09-19.md)。Core 1947faa / Kit 5116f2a / Codegen 7297f92；U-0245、game-demo 第十四批装备/迁移与第十五批支付正向门通过，RR-06 因 chat presence 未接线改为部分修复。K1 新 11 叶子 8 过 3 失败，生命周期另 1 叶子失败；batch15 又确认订单/索引非原子、坏单阻塞整页、未履约 grant 过期删除，合计 RR-20260919-01..06 六个 P1。W-11 转 ARCH-07。累计 **52 份运行记录、31 篇机制文档、90 个不同 RR**，不是代码覆盖率或当前未修复数。
+
+| 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
+| --- | --- | --- |
+| K1 实体/事务 | 顶层 map 同 key 多写三形状、nil、commit拒绝、panic均过；顶层 pointer 4叶子2失败；map alias 1失败 | 先修 pointer 所有权与唯一父约束；再继续实体加载/释放、串行 mailbox、关闭结算和持久化完成交接 |
+| K2 数据/恢复 | 三个失败均用真实 CommitRecord，alias 解码 BSON 确认只写 `equips.2` | 无真实 Mongo/WAL/断电新增验证；K1 收敛后继续 schema、提交不确定性与恢复 |
+| K3 跨服/权威 | 本轮无新 owner/fence/mirror 行为验证；运行期 ID 修复验收通过 | K1/K2 后继续 owner/fence/epoch、迁移、mirror、墓碑与防复活 |
+| 横向 Codegen/Kit | 7297f92 新生成 demo 全包通过；U-0245、装备/迁移正向通过；platform 支付链与 pending 索引逐段审查，新增 3 个支付恢复 P1 | 订单与索引原子化；坏项隔离；付费履约确认后再清理；修 callback/presence；真实 Redis 多进程故障仍未测 |
+
+图谱仍是 09-08 generation，最新 DAO/TCP/platform/purchase 模板未进入图；聚合 coverage 后已逐一回读源码。下一轮用户若没有修复，跳过上述验收并直接进入 K1 下一入口；若有修复，先验六个新 RR 和 RR-06 剩余部分。
+
 09-18 第三轮最新停点：[运行/验收/Wanted](REVIEW-2026-09-18-03.md)。Core 9a97d7e / Kit 399f175 / Codegen c73bc12；RR-03/04 修复原根因独立通过，10 条 Wanted 全部分流，K1 顶层 DAO map 另确认所有权问题。独立 22 叶子 15 通过、7 行为失败；累计 **51 份运行记录、30 篇机制文档、84 个不同 RR**，不是代码覆盖率或未修复数。
 
 | 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
