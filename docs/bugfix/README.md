@@ -75,6 +75,11 @@
 | RR-20260917-02 | core | match：ScoreWindow 距离 / 窗口 int64 溢出，远端成组、cap 失效 | U-0222 | [RR-20260917-02.md](RR-20260917-02.md) |
 | RR-20260917-03 | core | match：内存 Store 输入 / 返回切片与存储共享 | U-0223 | [RR-20260917-03.md](RR-20260917-03.md) |
 
+| RR-20260919-01 | codegen | 顶层 nested 指针字段替换 / 回滚后没有解绑离开的对象，游离对象仍能提交该字段 | U-0249 | [RR-20260919-01.md](RR-20260919-01.md) |
+| RR-20260919-03 | codegen | 会话关闭的订阅者 panic 逃出派发 goroutine，整个 game 进程崩溃 | U-0247 | [RR-20260919-03.md](RR-20260919-03.md) |
+| RR-20260919-05 | codegen | 待发货索引里一条读不出来的订单让整页失败，后面的健康订单永远拿不到重试 | U-0248 | [RR-20260919-05.md](RR-20260919-05.md) |
+| RR-20260919-06 | codegen | 未领取的付费 grant 固定 30 天后被拒绝并删除，而订单早已 delivered，形成永久少发货 | U-0251 | [RR-20260919-06.md](RR-20260919-06.md) |
+
 用户复审 / 自查直接发现、没有 RR 编号的修复另记,编号沿用账本单元:
 
 | 编号 | 仓库 | 问题 | 记录 |
@@ -82,6 +87,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0250 | codegen | handler 参数名写成 `_` 时生成的 sender 声明并传递空白名，工程编译不过（修 RR-20260919-06 时撞上） | [U-0250-nest-blank-parameter-name.md](U-0250-nest-blank-parameter-name.md) |
 | U-0246 | codegen | DAO 字段名小写之后是 Go 关键字（`Type` → `type`），生成物编译不过，错误指向临时文件（加 demo 计时器节点时自查） | [U-0246-dao-keyword-field-names.md](U-0246-dao-keyword-field-names.md) |
 | U-0245 | codegen | 新建的 DAO 不接嵌套回调，第一次存盘前的嵌套写入悄悄丢掉（加 demo 嵌套字段时自查） | [U-0245-fresh-dao-nested-wiring.md](U-0245-fresh-dao-nested-wiring.md) |
 | U-0244 | codegen | spawner 从 `fctx.RuntimeConfig()` 读 sid，configdata 覆盖该槽位后 sid 为 0，工程起不来（自查，已随 v1.15.11 发出） | [U-0244-spawner-sid-source.md](U-0244-spawner-sid-source.md) |
@@ -156,3 +162,20 @@
 | ARCH-02 | manager 生命周期引擎（排序 / 状态 / 失败回滚 / 停止协调）迁 core | **core 半已做（M-09，2026-09-16）**：`roost-core/manager`（`Order` + `Engine`），24 条测试随迁，语义原样（不用 `TopologicalSortCache` / `lifecycle.ManagerGroup`）；kit `ManagerMod` 已随 kit v1.14.5 改为引擎包装（公开方法集不变，sentinel 同指针）。**ARCH-02 完成**。原计划：单独一批:保留启动失败仅回滚成功者、依赖错误诊断、关闭交接与稳定顺序;不换成语义不同的 `TopologicalSortCache` |
 | ARCH-03 | 已正确的装配（dataengine / saga 的 Mod 调 core `Assemble` 并转发生命周期）作为迁移样板 | 无需改动,作为 ARCH-01 / 02 的形状参照 |
 
+## 2026-09-19 这一轮没有修的两条，以及要先定什么
+
+- **RR-20260919-02（map 中的 nested 别名只持久化最后一个 key）**：同一个 `*Nested` 放进两个 key，
+  通知是单槽的，后绑的赢，数据库里只更新最后一个。修法要先定**契约**而不是补一处扫描：
+  审查建议的"唯一父所有权 + owner token"意味着 `bind(owner, notify)` 在已有不同 owner 时要**失败**，
+  而 setter 是无返回值的——失败只能是 panic（对"一个值同时放两处"这种调用方 bug 是可辩护的，
+  但 panic 发生在事务里，要和 Nest 的回滚语义对齐），或者是"静默克隆"（改变了调用方以为的别名语义）。
+  另一条路是把通知改成多订阅，那等于允许一个对象被多个聚合根共同持久化，回滚、锁序和提交顺序都要重新论证。
+  三选一要定下来再动手，且验收必须覆盖同 map 两 key、跨字段、跨 DAO、解绑后重绑，
+  以及"失败前没有产生部分 mutation"。
+- **RR-20260919-04（订单与待办索引不是一个原子事实）**：`Orders.Create` 成功之后、deliverer 之前
+  进程退出，或者 `ZADD` 失败，就会留下一笔后台循环永远枚举不到的已付款订单。
+  真正的修法在 **kit**：给 platform 一个自带二级索引的 Redis OrderStore，把"写订单 + 入待办集合"
+  收进同一个 Lua/CAS 写。部署侧的 deliverer 补写索引只能缩小窗口，而现在的注释把
+  "渠道会重投 callback" 当兜底——服务契约同时允许调用方在订单已记录时确认接收，两者不能共同构成恢复保证。
+  在 kit 定下这个 store 的形状（键布局、索引条目的生命周期、与 `versionstore` 的关系）之前，
+  demo 这半改什么都是权宜。

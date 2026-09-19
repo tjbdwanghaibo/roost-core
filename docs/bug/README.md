@@ -4,12 +4,12 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260919-01 | P1 | 顶层 DAO nested pointer 替换/回滚后，离开字段的对象仍能生成持久化提交 | 未修复 |
-| RR-20260919-02 | P1 | 同一个 nested 指针占两个 map key 时，修改只持久化最后绑定的 key | 未修复 |
-| RR-20260919-03 | P1 | 会话关闭订阅者 panic 穿出生命周期 goroutine，终止 game 进程 | 未修复 |
-| RR-20260919-04 | P1 | 已持久化订单与 pending ZSet 分两次写，失败后后台无法枚举 | 未修复 |
-| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 未修复 |
-| RR-20260919-06 | P1 | 未履约付费 grant 固定 30 天后被拒绝删除，订单仍显示 delivered | 未修复 |
+| RR-20260919-01 | P1 | 顶层 DAO nested pointer 替换/回滚后，离开字段的对象仍能生成持久化提交 | 已修复（U-0249，未发版）→ [bugfix](../bugfix/RR-20260919-01.md) |
+| RR-20260919-02 | P1 | 同一个 nested 指针占两个 map key 时，修改只持久化最后绑定的 key | 未修复（需先定 nested 别名的所有权契约，见 [bugfix README](../bugfix/README.md)） |
+| RR-20260919-03 | P1 | 会话关闭订阅者 panic 穿出生命周期 goroutine，终止 game 进程 | 已修复（U-0247，未发版）→ [bugfix](../bugfix/RR-20260919-03.md) |
+| RR-20260919-04 | P1 | 已持久化订单与 pending ZSet 分两次写，失败后后台无法枚举 | 未修复（需先在 kit 定带二级索引的 platform OrderStore，见 [bugfix README](../bugfix/README.md)） |
+| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 已修复（U-0248，未发版）→ [bugfix](../bugfix/RR-20260919-05.md) |
+| RR-20260919-06 | P1 | 未履约付费 grant 固定 30 天后被拒绝删除，订单仍显示 delivered | 已修复（U-0251，未发版）→ [bugfix](../bugfix/RR-20260919-06.md) |
 
 W-2026-09-18-11 已转 ARCH-07，不计功能 RR；配置所有权方案见[运行期配置所有权](../review/IMPLEMENTATION-RUNTIME-CONFIG-OWNERSHIP.md)。
 
@@ -18,7 +18,7 @@ W-2026-09-18-11 已转 ARCH-07，不计功能 RR；配置所有权方案见[运�
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
 | RR-20260918-05 | P1 | 邮件去重账本固定 31 天，合法的更长 `send_ttl` 让旧邮件再次发奖 | 已修复（U-0241，core v1.15.8 / kit v1.14.9 / codegen v1.15.11）→ [bugfix](../bugfix/RR-20260918-05.md) |
-| RR-20260918-06 | P2 | 会话关闭没有生命周期事件，scene/presence 无后续流量时保留离线成员 | **部分修复**：scene 已验收，chat presence 未接线（U-0243，codegen v1.15.11）→ [bugfix](../bugfix/RR-20260918-06.md) |
+| RR-20260918-06 | P2 | 会话关闭没有生命周期事件，scene/presence 无后续流量时保留离线成员 | 已修复（U-0243 + 09-19 残余补修：chat presence 也订阅同一个源，未发版）→ [bugfix](../bugfix/RR-20260918-06.md) |
 | RR-20260918-07 | P2 | syncTopic 裸同包常量被静默生成成常量名字符串 | 已修复（U-0239，core v1.15.8 / kit v1.14.9 / codegen v1.15.11）→ [bugfix](../bugfix/RR-20260918-07.md) |
 | RR-20260918-08 | P2 | 单观察者 AOI block 数无预算，合法配置可登记 40,401 格 | 已修复（U-0240，core v1.15.8 / kit v1.14.9 / codegen v1.15.11）→ [bugfix](../bugfix/RR-20260918-08.md) |
 | RR-20260918-09 | P1 | 怪物运行期 ID 进程本地发号，多 game 实例碰撞 | 已修复（U-0242，codegen v1.15.11；启动修复见 U-0244 / v1.15.12）→ [bugfix](../bugfix/RR-20260918-09.md) |
