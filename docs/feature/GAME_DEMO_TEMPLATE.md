@@ -351,6 +351,12 @@ kit 的真实服务至此全部有使用方（platform 第十五批、global 与
 4. ~~spatial（AOI / 兴趣管理）+ 一张地图~~ — 第十三批三批全部完成（§9.4）。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
    真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
+   **2026-09-19 第一批做到一半，见 §9.10**：Guild（`remote=managed`）写完并通过生成 / 编译 / 单测，
+   但实跑提交阶段撞上 core 的一条缺陷（负的 state version 转 uint64 后 BSON 写不进去，而且会让进程之后再也起不来），
+   已记入 `docs/bug/WANTED.md` 的 W-2026-09-19-01 交审查定契约；代码暂存未合入。
+   同一轮还确认了第二件事：**当前 demo 跑两个 game 进程本来就不安全**——玩家寻址的 Nest 调用没有按所有者路由
+   （两个进程都订阅 `svc.game.all`），saga / 效果消费者共用 durable，于是两个进程会同时改同一个 Player，
+   dataengine 以 `fatal projection version conflict` 退出。这正是这一条要引入 `ownerroute` 的原因。
 6. ~~platform 待发货索引的参考实现~~ — 第十五批完成，见 §9.7。
 7. ~~`core/migration`（数据版本迁移）~~ — 第十四批完成，见 §9.5.2。
 8. ~~给 demo Player 加一个嵌套 struct 字段~~ — 第十四批完成，见 §9.5.1。
@@ -578,6 +584,64 @@ kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，ki
 改回 true → 全绿。编辑 `configs/data/feature_flag.json` 把 `monster_spawn` 关掉 → `gm.config.reload`
 → 日志 `feature flags published count=3 off=[monster_spawn] version=2`；随后 `gm.scene.kill` 杀掉一只，
 六秒后 `alive` 停在 2 不再回补——**关掉的是补刷，不是活着的怪**，与注释里写的边界一致。
+
+
+### 9.10 第十八批（2026-09-19，未合入）：远端实体的第一个使用方，以及它撞到的两堵墙
+
+§9.1 第 5 条的第一批。目标不是一次做完多进程，而是先给 `remoteentity` 一个**真实使用方**——
+按既定判据，零覆盖的地方就是缺陷能长期活着的地方。
+
+#### 9.10.1 选 Guild 而不是改 Player
+
+把 Player 改成远端托管会牵动 demo 的一切（同步主体、场景、生命周期、刷怪）。Guild 是新的：
+一个玩家名单，天然被不同进程上的玩家共同修改，正是远端托管要解决的形状；生成器的 testdata 里本来
+就有一个 Guild fixture，说明这也是框架作者设想的例子。
+
+写完的东西：`GuildDao`（名字 + 成员 map）、`Guild` 实体（`remote=managed`，`EntityCategoryRemote`——
+远端托管的 kind **必须**排在第一位，因为分布式锁在 dispatch 顶部获取，在任何本地 mutex 之后再取它
+就等于把本地锁拿着跨网络）、`RosterComponent`（found / join / snapshot）、三个 handler
+（其中 JoinGuild 同时锁远端 guild 与本地 player）、三个端点、四个错误码、机器人动作，以及
+`deploy/dev/second-game.sh`（第二个 game 进程：自己的 sid / ops 端口 / 客户端端口 / **自己的 WAL 目录**——
+共用 WAL 目录会被 `nestwal: directory is already locked` 正确拒绝）。
+
+生成、编译、生成工程全量单测都通过。
+
+#### 9.10.2 第一堵墙：远端提交写不进 Mongo（→ W-2026-09-19-01）
+
+实跑时 `FoundGuild` 的提交阶段报
+
+```
+dataengine mongo: remote projection: cannot marshal type bson.M to a BSON Document:
+12630717602282170696 overflows int64
+```
+
+那个数正好是 `uint64(负的 int64)`。`remoteentity/batch.go` 的 `BaseVersion: uint64(stateVersion)`
+对负数没有设防，而 `applyCommit` 把这些 uint64 直接放进 `bson.M`。更要命的是**之后进程再也起不来**：
+启动时的投影恢复会重放这条 WAL 记录，每次都在同一处失败退出，只能删 WAL。
+
+三处都需要先定契约（新建远端聚合的版本语义、uint64 在 BSON 里的编码、投影恢复遇到必然失败的记录怎么办），
+所以没有自己动手改，写进了 Wanted 交审查。demo 侧的实现暂存未合入。
+
+#### 9.10.3 第二堵墙：两个 game 进程现在本来就不安全
+
+顺带把"两个进程"真跑了一次，结果是第一个进程**直接退出**：
+
+```
+dataengine fatal storage outcome: ... fatal projection version conflict: game/player/102437892 expected=6 next=7 stored=7
+```
+
+原因不在远端实体，而在 demo 自己：玩家寻址的 Nest 调用没有按所有者路由——两个进程都订阅
+`svc.game.all`，saga 步骤与效果消费者共用 JetStream durable——于是同一个 Player 会被两个进程同时加载和写入，
+而 Player 不是远端托管的，没有任何围栏。
+
+这正是 §9.1 第 5 条说的"要引入 `ownerroute`"：**远端托管解决的是被共享的对象，按所有者路由解决的是
+被独占的对象**，多进程需要两者。第一批的收获是把这句话变成了一次可复现的失败，而不是一句设计判断。
+
+#### 9.10.4 下一批的顺序
+
+1. W-2026-09-19-01 有结论 → 合入 Guild（单进程即可验收：分布式锁、fenced 提交、恢复）。
+2. `ownerroute`：玩家寻址的调用路由到持有者；saga / 效果消费者按所有者分区。
+3. 两个 game 进程的实跑：一个 guild 被两个进程写，机器人只连其中一个。
 
 ## 8. 相关文件速查
 

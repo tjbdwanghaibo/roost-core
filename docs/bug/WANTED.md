@@ -6,6 +6,49 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-19-01 远端实体第一次真被使用就写不进去：负的 state version 变成 uint64
+
+- **位置**：roost-core `remoteentity/mongo_committer.go:184-210`（`applyCommit`，把 `commit.BaseVersion` /
+  `NextVersion` / `MarkerEpoch` / `RouteEpoch` / `LockFence` 直接放进 `bson.M`）；
+  产生 version 的一侧在 `remoteentity/batch.go:254`（`BaseVersion: uint64(stateVersion)`）。
+  基线 core `v1.15.11`。
+- **现象**：给 game-demo 加一个 `remote=managed` 的 Guild（第一个真实使用方），端点创建聚合后跑一次
+  两实体事务（guild + player），提交阶段报：
+
+  ```
+  dataengine mongo: remote projection: cannot marshal type bson.M to a BSON Document:
+  12630717602282170696 overflows int64
+  ```
+
+  `18446744073709551616 - 12630717602282170696 = 5816026471427380920`，也就是说这个值是
+  **`uint64(负的 int64)`**。此后进程再也起不来：启动时的投影恢复会重放这条 WAL 记录，每次都失败退出
+  （`mod dataengine start: ... startup projection recovery: ... overflows int64`），只能删 WAL 目录。
+- **为什么可疑**：
+  1. `uint64(stateVersion)` 没有对负数设防。一个"还没持久化过"的聚合如果用负数当哨兵，
+     转成 uint64 就是 1.2e19，Mongo 驱动拒绝，而**拒绝发生在事务里、事后每次恢复都重演**——
+     可恢复性比那一次失败更要命。
+  2. 三个 fence 字段（`MarkerEpoch` / `RouteEpoch` / `LockFence`）都是 `uint64` 并且都直接进 `bson.M`。
+     epoch 与 fence 目前来自 Redis 的递增计数，短期不会越界；但类型上它们**都能**越界，
+     而越界一次就是同样的"进程再也起不来"。
+  3. `remoteentity`、`ownerroute`、`mirror` 三个包在 09-19 之前没有任何生成工程的使用方
+     （见 `docs/feature/GAME_DEMO_TEMPLATE.md` §9.1 第 5 条），这条正是"零覆盖的地方就是缺陷能长期活着的地方"。
+- **复现**：`roost project new … -template game-demo` 之上加一个 `remote=managed` 的实体
+  （本轮的实现已存好，见下），用生成的 lifecycle `Create` 造聚合，再发一次带它的 Nest 事务。
+  单进程即可复现，不需要两个 game 进程。
+- **候选修法（都需要先定契约，故未动手）**：
+  - 版本这一侧：`stateVersion` 为负时应当**在进入提交路径之前**拒绝并说清原因，而不是转成 uint64；
+    或者明确"新建的远端聚合 BaseVersion = 0"的语义，并让 `Create` 走一条远端感知的路径。
+  - 存储这一侧：`applyCommit` 把 uint64 写进 BSON 之前要么转成 int64 位模式（并在读回时转回），
+    要么用 Decimal128 / 十进制字符串；无论选哪个，**写出去的编码必须和读回来的解码是同一个决定**，
+    而且要覆盖"历史文档已经是另一种编码"的迁移。
+  - 恢复这一侧：一条投影恢复时必然失败的记录会让进程永远起不来。是否该有"毒丸记录"隔离
+    （记下来、跳过、报警）是一个独立的可用性决定。
+- **本轮为什么没有自己修**：三处都要先定契约（新建远端聚合的语义、uint64 在 BSON 里的编码、毒丸记录的处置），
+  而且都在零覆盖的核心路径上——赶出来的修法下一轮多半会被打回。demo 侧的 Guild 实现（DAO / 实体 / 组件 /
+  三个 handler / 端点 / 机器人动作 / 第二个 game 进程的启动脚本）已写完并验证过"生成、编译、单测全绿"，
+  暂存在会话 scratchpad 的 `guild-batch18-*`，等这条有结论后接着做。
+- **来源**：实施 §9.1 第 5 条（多 game 进程）第一批时自查。
+
 ## W-2026-09-18-11 分流结论：→ ARCH-07 配置所有权
 
 - **位置**：roost-core `fctx/context.go:163`（`SetRuntimeConfig(config any)` / `RuntimeConfig() any`）；
