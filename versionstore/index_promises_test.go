@@ -126,3 +126,92 @@ func TestAStoreWithoutAnIndexSaysSo(t *testing.T) {
 		t.Fatal("a store with no index answered an index read with an empty list")
 	}
 }
+
+// RR-20260919-10：一个存储常常需要**每个所有者一份**待办清单，而不是一份全局的。
+//
+// activity 的 dispatch 就是这个形状：一个游戏服要问的是"欠我的有哪些"，
+// 而不是"欠所有人的有哪些里哪些是我的"——后者要么是全局扫描，要么是按活动 id
+// 去猜。索引键因此要能由值算出来。
+//
+// 约束是明确的：键只能取值里**不会变**的部分，因为一次写只会碰它当时算出来的
+// 那个键；键变了，旧键上的条目就成了孤儿。
+
+type ownedRecord struct {
+	Owner   string `json:"owner"`
+	Pending bool   `json:"pending"`
+	Due     int64  `json:"due"`
+}
+
+func TestAPerOwnerIndexKeepsOwnersApart(t *testing.T) {
+	client := newFakeRedis()
+	store, err := NewRedisStore(client, RedisConfig[string, ownedRecord]{
+		Prefix: "test:owned:",
+		KeyOf:  func(key string) string { return key },
+		Codec:  JSONCodec[ownedRecord]{},
+		Index: &RedisIndex[ownedRecord]{
+			KeyOf: func(value ownedRecord) string { return "test:owed:" + value.Owner },
+			Entry: func(value ownedRecord) (float64, bool) { return float64(value.Due), value.Pending },
+		},
+	})
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	ctx := context.Background()
+	for key, record := range map[string]ownedRecord{
+		"a-1": {Owner: "a", Pending: true, Due: 100},
+		"a-2": {Owner: "a", Pending: true, Due: 200},
+		"b-1": {Owner: "b", Pending: true, Due: 150},
+	} {
+		if _, _, err := store.Create(ctx, key, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	owedA, err := store.IndexDueIn(ctx, "test:owed:a", 1000, 10)
+	if err != nil {
+		t.Fatalf("read a: %v", err)
+	}
+	if len(owedA) != 2 || owedA[0] != "a-1" || owedA[1] != "a-2" {
+		t.Fatalf("owner a is owed %v, want its own two, oldest first", owedA)
+	}
+	owedB, _ := store.IndexDueIn(ctx, "test:owed:b", 1000, 10)
+	if len(owedB) != 1 || owedB[0] != "b-1" {
+		t.Fatalf("owner b is owed %v, want only its own", owedB)
+	}
+
+	// Finishing one owner's record leaves the other's alone.
+	if _, _, err := store.Update(ctx, "a-1", func(current ownedRecord, _ bool) (ownedRecord, bool, error) {
+		current.Pending = false
+		return current, true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if owed, _ := store.IndexDueIn(ctx, "test:owed:a", 1000, 10); len(owed) != 1 || owed[0] != "a-2" {
+		t.Fatalf("owner a is owed %v after one was finished, want the other one", owed)
+	}
+	if owed, _ := store.IndexDueIn(ctx, "test:owed:b", 1000, 10); len(owed) != 1 {
+		t.Fatalf("owner b's index was disturbed: %v", owed)
+	}
+}
+
+// Exactly one of Key / KeyOf: a store that says both, or neither, is a
+// configuration nobody can read.
+func TestAnIndexNeedsExactlyOneKeyForm(t *testing.T) {
+	client := newFakeRedis()
+	for name, index := range map[string]*RedisIndex[ownedRecord]{
+		"neither": {Entry: func(ownedRecord) (float64, bool) { return 0, true }},
+		"both": {
+			Key:   "test:owed",
+			KeyOf: func(ownedRecord) string { return "test:owed:x" },
+			Entry: func(ownedRecord) (float64, bool) { return 0, true },
+		},
+	} {
+		_, err := NewRedisStore(client, RedisConfig[string, ownedRecord]{
+			Prefix: "test:owned:", KeyOf: func(key string) string { return key },
+			Codec: JSONCodec[ownedRecord]{}, Index: index,
+		})
+		if err == nil {
+			t.Errorf("%s: an index with an unclear key form was accepted", name)
+		}
+	}
+}

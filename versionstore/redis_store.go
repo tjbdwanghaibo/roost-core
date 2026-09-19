@@ -67,8 +67,27 @@ type RedisConfig[K comparable, T any] struct {
 // rather than a copy of the keyspace: a value the reader has nothing to do
 // with is retired from it by the write that made it so.
 type RedisIndex[T any] struct {
-	Key   string
+	// Key is the one sorted set every value is indexed in. Exactly one of Key
+	// and KeyOf is set.
+	Key string
+	// KeyOf returns the sorted set ONE value belongs in, for the shape where
+	// the work list is per owner rather than global — "what is owed to game
+	// server 3" is a bounded question, "everything owed, filtered" is not
+	// (RR-20260919-10).
+	//
+	// It must depend only on parts of the value that never change: a write
+	// touches the key it computes NOW, so a value whose index key moved
+	// leaves its old entry behind with nothing to retire it.
+	KeyOf func(T) string
 	Entry func(T) (score float64, include bool)
+}
+
+// indexKeyFor is the sorted set one value belongs in.
+func (index *RedisIndex[T]) indexKeyFor(value T) string {
+	if index.KeyOf != nil {
+		return index.KeyOf(value)
+	}
+	return index.Key
 }
 
 // RedisStore keeps versioned values as a framed envelope "<version>\n<payload>"
@@ -104,8 +123,9 @@ func NewRedisStore[K comparable, T any](client RedisClient, cfg RedisConfig[K, T
 		cfg.Sleep = time.Sleep
 	}
 	if cfg.Index != nil {
-		if strings.TrimSpace(cfg.Index.Key) == "" {
-			return nil, fmt.Errorf("versionstore: index key is required")
+		fixed := strings.TrimSpace(cfg.Index.Key) != ""
+		if fixed == (cfg.Index.KeyOf != nil) {
+			return nil, fmt.Errorf("versionstore: an index needs exactly one of Key (one set for every value) and KeyOf (one set per owner)")
 		}
 		if cfg.Index.Entry == nil {
 			return nil, fmt.Errorf("versionstore: index entry func is required")
@@ -125,8 +145,12 @@ func (s *RedisStore[K, T]) indexEntry(key K, value T) *fredis.CompareAndSetIndex
 		return nil
 	}
 	score, include := s.cfg.Index.Entry(value)
+	indexKey := s.cfg.Index.indexKeyFor(value)
+	if indexKey == "" {
+		return nil
+	}
 	return &fredis.CompareAndSetIndex{
-		Key: s.cfg.Index.Key, Member: member, Score: score, Remove: !include,
+		Key: indexKey, Member: member, Score: score, Remove: !include,
 	}
 }
 
@@ -142,10 +166,24 @@ func (s *RedisStore[K, T]) IndexDue(ctx context.Context, maxScore float64, limit
 	if s.cfg.Index == nil {
 		return nil, fmt.Errorf("versionstore: this store has no index")
 	}
+	if s.cfg.Index.KeyOf != nil {
+		return nil, fmt.Errorf("versionstore: this store indexes per owner; read one owner's set with IndexDueIn")
+	}
+	return s.IndexDueIn(ctx, s.cfg.Index.Key, maxScore, limit)
+}
+
+// IndexDueIn reads one named index set, for a store whose index is per owner.
+func (s *RedisStore[K, T]) IndexDueIn(ctx context.Context, indexKey string, maxScore float64, limit int) ([]string, error) {
+	if s.cfg.Index == nil {
+		return nil, fmt.Errorf("versionstore: this store has no index")
+	}
+	if strings.TrimSpace(indexKey) == "" {
+		return nil, fmt.Errorf("versionstore: index key is empty")
+	}
 	if limit <= 0 {
 		return nil, nil
 	}
-	raw, err := s.client.Eval(ctx, indexDueScript, []string{s.cfg.Index.Key},
+	raw, err := s.client.Eval(ctx, indexDueScript, []string{indexKey},
 		strconv.FormatFloat(maxScore, 'f', -1, 64), strconv.Itoa(limit))
 	if err != nil {
 		return nil, err
@@ -184,11 +222,25 @@ func (s *RedisStore[K, T]) IndexRemove(ctx context.Context, key K) (bool, error)
 	if s.cfg.Index == nil {
 		return false, fmt.Errorf("versionstore: this store has no index")
 	}
+	if s.cfg.Index.KeyOf != nil {
+		return false, fmt.Errorf("versionstore: this store indexes per owner; name the set with IndexRemoveIn")
+	}
+	return s.IndexRemoveIn(ctx, s.cfg.Index.Key, key)
+}
+
+// IndexRemoveIn drops one member from a named index set.
+func (s *RedisStore[K, T]) IndexRemoveIn(ctx context.Context, indexKey string, key K) (bool, error) {
+	if s.cfg.Index == nil {
+		return false, fmt.Errorf("versionstore: this store has no index")
+	}
+	if strings.TrimSpace(indexKey) == "" {
+		return false, fmt.Errorf("versionstore: index key is empty")
+	}
 	member := s.cfg.KeyOf(key)
 	if member == "" {
 		return false, ErrKeyEmpty
 	}
-	raw, err := s.client.Eval(ctx, indexRemoveScript, []string{s.cfg.Index.Key}, member)
+	raw, err := s.client.Eval(ctx, indexRemoveScript, []string{indexKey}, member)
 	if err != nil {
 		return false, err
 	}
@@ -347,8 +399,11 @@ func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T
 	// window observable rather than silent.
 	var retire *fredis.CompareAndSetIndex
 	if s.cfg.Index != nil {
-		if member := s.cfg.KeyOf(key); member != "" {
-			retire = &fredis.CompareAndSetIndex{Key: s.cfg.Index.Key, Member: member, Remove: true}
+		// The set this value is in comes from the value itself when the index
+		// is per owner, which is why the read above is needed before the
+		// delete rather than only for the version compare.
+		if member, indexKey := s.cfg.KeyOf(key), s.cfg.Index.indexKeyFor(current.Value); member != "" && indexKey != "" {
+			retire = &fredis.CompareAndSetIndex{Key: indexKey, Member: member, Remove: true}
 		}
 	}
 	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
