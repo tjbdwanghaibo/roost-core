@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [v1.14.14] - 2026-09-19
+
+### Changed
+
+- core 依赖升到 v1.15.12（`saga.StepConsumerConfig.Admit`：步骤消费者在认领命令之前先问
+  "这台机器该执行吗"）。kit 自身没有行为变化。
+
 ## [v1.14.13] - 2026-09-19
 
 ### Fixed
