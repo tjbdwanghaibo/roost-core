@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+09-19 第二轮最新停点：[运行/K1/Activity](REVIEW-2026-09-19-02.md)。Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`；RR-01/03/06 与 chat presence 原触发通过，RR-05 的分页残余另列 RR-07。K1 新增实体 load、Nest 缺失实体与 worker 串行关闭的有界审查；activity 新 feature 发现交付断链。累计 **53 份运行记录、32 篇机制文档、94 个不同 RR**，不是代码覆盖率或当前未修复数。
+
+| 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
+| --- | --- | --- |
+| K1 实体/事务 | ManagerAccess/Repository 双层 singleflight；Nest single/broadcast/multi 对照；worker safeHandle/Close；四包 race 与两个临时红测 | RR-08/09；继续 leader context、loader generation、在途 load 的 Shutdown handoff、删除/重载交错 |
+| K2 数据/恢复 | 随实体加载读 repository restore 与 Runtime Shutdown 顺序；未新增真实 store 场景 | K1 收敛后继续提交不确定性、WAL/投影关闭和恢复 |
+| K3 跨服/权威 | load 入向追到 remoteentity，未新增 owner/fence 行为测试 | K1/K2 后继续迁移、mirror、墓碑与防复活 |
+| 横向 Codegen/Kit | RR-01/03/05/06 与 chat 接线验收；platform 分页残余；activity Delivering/dispatch/ACK 与 game runner | RR-07/10；实现按 game owed 枚举与真实领取后再验多窗口离线/重启/ACK 丢失 |
+
+三个 codebase-memory watcher 在重启后在线并对齐当前 Git；Codegen 已显式 full reindex。关键路径 coverage 显示 checkout 后 metadata_changed，均已回读当前源码。下一轮默认从 K1 的 load 生命周期继续，不把包测试通过外推为整域完成。
+
 09-19 最新停点：[运行/验收/K1/platform](REVIEW-2026-09-19.md)。Core 1947faa / Kit 5116f2a / Codegen 7297f92；U-0245、game-demo 第十四批装备/迁移与第十五批支付正向门通过，RR-06 因 chat presence 未接线改为部分修复。K1 新 11 叶子 8 过 3 失败，生命周期另 1 叶子失败；batch15 又确认订单/索引非原子、坏单阻塞整页、未履约 grant 过期删除，合计 RR-20260919-01..06 六个 P1。W-11 转 ARCH-07。累计 **52 份运行记录、31 篇机制文档、90 个不同 RR**，不是代码覆盖率或当前未修复数。
 
 | 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |

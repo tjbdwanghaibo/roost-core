@@ -1,5 +1,14 @@
 # Roost Review 问题索引
 
+09-19 第二轮：重启并同步到 Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`。新确认 **3 个 P1、1 个 P2**：pending 分页坏项饥饿、loader panic 污染 singleflight、Nest 缺失实体 nil 分派、activity 尝试预算与真实交付断链。[问题与实施方向](REVIEW-2026-09-19-02.md) · [复现记录](REPRO-2026-09-19-02.md) · [运行与限制](../review/REVIEW-2026-09-19-02.md)。
+
+| 编号 | 等级 | 问题 | 状态 |
+| --- | --- | --- | --- |
+| RR-20260919-07 | P1 | pending 先按 limit 截页再过滤，最老坏记录可永久饿死后继健康订单 | 未修复 |
+| RR-20260919-08 | P1 | 实体加载 panic 不清理 flight，同实体后续请求永久等待 | 未修复 |
+| RR-20260919-09 | P2 | Nest single/broadcast 对缺失实体 nil 调 Touch，广播中止后续 id | 未修复 |
+| RR-20260919-10 | P1 | activity sweep 消耗 attempt 却不交付，game 只查两个窗口导致旧奖励义务不可见 | 未修复 |
+
 09-19：同步并验收最新修复。RR-20260918-05/07/08/09/10、U-0245 与 ARCH-06 的定向门通过；RR-20260918-06 更正为 **部分修复**（scene 已完成，chat presence 未接线）。K1/生命周期确认 3 个 P1；继续审查 Kit `5116f2a` / Codegen `7297f92` 的 platform 支付链，又确认 3 个恢复与履约 P1，合计 **6 个 P1**：[问题与实施方向](REVIEW-2026-09-19.md) · [复现记录](REPRO-2026-09-19.md) · [运行与限制](../review/REVIEW-2026-09-19.md)。
 
 | 编号 | 等级 | 问题 | 状态 |
@@ -8,7 +17,7 @@
 | RR-20260919-02 | P1 | 同一个 nested 指针占两个 map key 时，修改只持久化最后绑定的 key | 未修复（需先定 nested 别名的所有权契约，见 [bugfix README](../bugfix/README.md)） |
 | RR-20260919-03 | P1 | 会话关闭订阅者 panic 穿出生命周期 goroutine，终止 game 进程 | 已修复（U-0247，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-03.md) |
 | RR-20260919-04 | P1 | 已持久化订单与 pending ZSet 分两次写，失败后后台无法枚举 | 未修复（需先在 kit 定带二级索引的 platform OrderStore，见 [bugfix README](../bugfix/README.md)） |
-| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 已修复（U-0248，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-05.md) |
+| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 原触发已修复（U-0248，codegen v1.15.15）；分页残余见 RR-20260919-07 → [bugfix](../bugfix/RR-20260919-05.md) |
 | RR-20260919-06 | P1 | 未履约付费 grant 固定 30 天后被拒绝删除，订单仍显示 delivered | 已修复（U-0251，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-06.md) |
 
 W-2026-09-18-11 已转 ARCH-07，不计功能 RR；配置所有权方案见[运行期配置所有权](../review/IMPLEMENTATION-RUNTIME-CONFIG-OWNERSHIP.md)。
