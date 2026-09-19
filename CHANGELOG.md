@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **步骤消费者可以在认领之前拒绝一条命令**（`saga.StepConsumerConfig.Admit`）。一个 durable 被
+  一个服务的所有进程共享，命令因此投给"闲着的"进程而不是"持有这个对象的"进程；而两个步骤消费者都是
+  **先 `Reserve` 再调 handler**，所以"这台机器不该执行"写在 handler 里已经太晚——错误的进程先拿走了
+  租约，真正的持有者反而执行不了，消息在消费者之间空转。game-demo 的两进程实跑里 16 个礼物 saga 产生了
+  248 次投递、24 条卡住（GAME_DEMO_TEMPLATE §9.11.3）。`Admit` 排在 `SubscribeDataEngineStep` 的
+  `Reserve` 和 `SubscribeMongoStep` 的 `Handle` 之前，返回错误就原样 nak、不留任何痕迹，消息再次投给
+  durable 的任意消费者。**约束**：它必须便宜、无副作用，而且不能在所有进程上都拒绝——没有进程接受的
+  命令会一直重投到 `MaxDeliver`。nil 接受一切，单进程部署无需改动。
+  测试 `saga/step_admission_promises_test.go`。
+
 ## [v1.15.11] - 2026-09-19
 
 ### Added

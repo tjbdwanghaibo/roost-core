@@ -186,6 +186,27 @@ type StepConsumerConfig struct {
 	MaxAckPending          int
 	NakBackoffMin          time.Duration
 	NakBackoffMax          time.Duration
+
+	// Admit decides whether THIS process may run the command, and it is asked
+	// before the consumer takes anything for it.
+	//
+	// The question exists because one durable is shared by every process of a
+	// service: a command about some object is delivered to whichever consumer
+	// is free, not to the one that owns the object. A process that may not
+	// touch that object has to say so — and it has to say so before the
+	// inbox reserves the command, because a reservation is a lease under this
+	// process's name. Refusing inside the handler is too late: the rightful
+	// owner then finds the command claimed by somebody else and cannot run it
+	// until the lease expires, while the message bounces between consumers.
+	//
+	// A non-nil error is returned to the delivery unchanged, so the message is
+	// nak'd with the consumer's backoff and offered again — to any consumer,
+	// including the one that may run it. Admit must therefore be cheap, free
+	// of side effects, and it must not refuse everywhere: a command no process
+	// admits is redelivered until MaxDeliver.
+	//
+	// nil admits everything, which is what a single-process deployment wants.
+	Admit func(context.Context, Command) error
 }
 
 func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
@@ -248,6 +269,11 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 				logConsumerError("stale step completion replay", message, err)
 			}
 			return err
+		}
+		if config.Admit != nil {
+			if err := config.Admit(messageCtx, command); err != nil {
+				return err
+			}
 		}
 		processCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
 		completion, _, err := inbox.Handle(processCtx, command, handler)
@@ -322,6 +348,11 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 				return nil
 			}
 			return context.DeadlineExceeded
+		}
+		if config.Admit != nil {
+			if err := config.Admit(messageCtx, command); err != nil {
+				return err
+			}
 		}
 		processCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
 		defer cancel()
