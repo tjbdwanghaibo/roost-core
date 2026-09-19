@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -121,6 +122,18 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			return fmt.Errorf("platform mod: platform.delivery_attempts must be positive, got %d", attempts)
 		}
 	}
+	// The order and its index entry are written by one script, and one script
+	// can only be atomic across two keys if both keys hash to the same slot.
+	// On a single Redis that is free; on a cluster it requires a hash tag in
+	// the prefix — `{...}` around the part the order keys and the index share.
+	// Refused here rather than discovered as a CROSSSLOT error on the first
+	// callback, or, worse, as an index that is only usually right
+	// (RR-20260919-04).
+	if strings.TrimSpace(cfg.GetString("redis.cluster_addrs")) != "" && !strings.Contains(prefix, "{") {
+		return fmt.Errorf("platform mod: this process talks to a Redis cluster and platform.key_prefix (%q) has no hash tag; "+
+			"the order keys and the pending index are written together and must share a slot — "+
+			"use something like \"{roost:platform}\" so both land in one", prefix)
+	}
 	m.prefix, m.sessionSecret, m.paymentSecret = prefix, sessionSecret, paymentSecret
 	m.sessionTTL, m.attempts, m.backoff = sessionTTL, attempts, backoff
 	return nil
@@ -142,8 +155,17 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("platform mod: %w", err)
 	}
+	// The store keeps its own pending index, in the same write as the order
+	// (RR-20260919-04), so background retry is ON by default and a deployment
+	// no longer has to supply an index to get recovery. WithPendingOrders
+	// still wins: a deployment whose orders live somewhere else, or that wants
+	// retry off, says so explicitly.
+	pending := m.pending
+	if pending == nil {
+		pending = orders
+	}
 	service, err := New(Config{
-		Orders: orders, Deliver: m.deliver, Verifier: m.verifier, Players: m.players, Pending: m.pending,
+		Orders: orders, Deliver: m.deliver, Verifier: m.verifier, Players: m.players, Pending: pending,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL,
 		PaymentSecret:    m.paymentSecret,
 		DeliveryAttempts: m.attempts, DeliveryBackoff: m.backoff,

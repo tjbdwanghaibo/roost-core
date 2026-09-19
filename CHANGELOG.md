@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [v1.14.11] - 2026-09-19
+
+### Fixed
+
+- **platform 的订单存储自带待办索引，索引和订单是同一次写**（U-0253，C4；RR-20260919-04，T-147，**P1**）。
+  U-0234 把索引留给部署，而部署只能在订单写完**之后**写它：`Create` 成功、进程退出或 `ZADD` 失败，
+  就留下一笔后台循环永远枚举不到的已付款订单——而服务契约同时允许调用方在订单已记录时就向渠道确认接收，
+  所以"渠道会重投"兜不住。现在 `NewRedisOrders` 返回的 `*RedisOrders` 带着索引
+  （score = `NextAttemptAtUnix`，回落到付款时刻；`include = !Terminal()`），由 core 的双 key CAS 脚本
+  在**同一次写**里维护；它同时实现 `OrderStore` 与 `PendingOrders`，`Mod.Provide` 在部署没给索引时用它，
+  于是**后台重试默认是开的**。`WithPendingOrders` 仍然优先，"关掉后台重试"依然是看得见的选择。
+  顺带消掉 RR-20260919-05/07 那一类：读索引不再逐条查订单，一条坏记录没有机会挡住整页。
+  **Redis Cluster**：两个 key 同一个脚本要求同槽，`Mod.Init` 在配了 `redis.cluster_addrs` 而
+  `platform.key_prefix` 没有 hash tag 时拒绝启动并给出改法。单机部署键名不变。
+  **升级不会回填已有订单**——旧部署要跑一次 `SCAN <prefix>:order:*`，把非终态的 `ZADD` 进 `<prefix>:pending`。
+  测试 `service/platform/pending_index_promises_test.go`（对真 Redis，`ROOST_REDIS_TEST_ADDR`）。
+  记录 `roost-core/docs/bugfix/RR-20260919-04.md`。
+
+### Changed
+
+- **依赖 core v1.15.9**：`versionstore.RedisConfig.Index` 与 `redis.CompareAndSetCommand.Index`，
+  上面那条就是它的第一个使用方。
+
 ## [v1.14.10] - 2026-09-19
 
 ### Added
