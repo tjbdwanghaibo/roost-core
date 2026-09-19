@@ -123,7 +123,31 @@ func (o *RedisOrders) PendingOrders(ctx context.Context, limit int) ([]string, e
 	return o.store.IndexDue(ctx, float64(o.now().Unix()), limit)
 }
 
+// RetirePending drops an index entry whose order is not there.
+//
+// It exists for one case and should be used for no other: the index names an
+// order that has no record — the two steps of a delete crossed a crash, or an
+// operator removed a key. Such a member is read on every page, refused by
+// AttemptDelivery as "not recorded", and stays; with a small batch it is the
+// whole batch, every tick, forever (RR-20260919-07). Retiring it is safe
+// precisely because there is nothing to deliver.
+func (o *RedisOrders) RetirePending(ctx context.Context, orderID string) error {
+	if o == nil || orderID == "" {
+		return nil
+	}
+	_, err := o.store.IndexRemove(ctx, orderID)
+	return err
+}
+
 var (
-	_ OrderStore    = (*RedisOrders)(nil)
-	_ PendingOrders = (*RedisOrders)(nil)
+	_ OrderStore     = (*RedisOrders)(nil)
+	_ PendingOrders  = (*RedisOrders)(nil)
+	_ PendingRetirer = (*RedisOrders)(nil)
 )
+
+// PendingRetirer is implemented by an index that can drop an entry naming an
+// order that does not exist. The Server uses it when AttemptDelivery reports
+// exactly that; an index that cannot do it simply keeps the entry.
+type PendingRetirer interface {
+	RetirePending(ctx context.Context, orderID string) error
+}

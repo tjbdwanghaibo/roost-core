@@ -219,3 +219,39 @@ func TestAClusterWithoutAHashTagIsRefused(t *testing.T) {
 		t.Errorf("a single-node deployment was refused: %v", err)
 	}
 }
+
+// RR-20260919-07：一条读不出来 / 已经不存在的成员不能永久占住页里的一个槽。
+//
+// 索引进了存储之后，读的时候不再逐条查订单，所以"一条坏记录让整页失败"没有了。
+// 剩下的那一半是：一个**没有订单记录**的成员（删除的两步之间崩过一次）会被每一
+// 页读到、每一次都得到 ErrOrderInvalid，然后继续留在集合里——limit 有多小，
+// 它就占掉多大比例的预算。所以循环遇到"这个 id 根本没有订单"时要把它退休掉。
+func TestAnIndexEntryWithNoOrderIsRetiredIntegration(t *testing.T) {
+	orders, client, prefix := redisOrdersForTest(t)
+	ctx := context.Background()
+	now := time.Now().Unix()
+
+	// A ghost: in the index, no record behind it.
+	if err := client.ZAdd(ctx, PendingIndexKey(prefix), goredis.Z{Score: float64(now - 60), Member: "ghost"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := orders.Create(ctx, "real", storedOrder("real", now)); err != nil {
+		t.Fatal(err)
+	}
+	// The ghost is older, so it comes first — and with a small batch it would
+	// be the whole batch, every tick, forever.
+	if pending, _ := orders.PendingOrders(ctx, 1); len(pending) != 1 || pending[0] != "ghost" {
+		t.Fatalf("pending = %v, want the ghost first (that is the shape of the problem)", pending)
+	}
+
+	if err := orders.RetirePending(ctx, "ghost"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	pending, err := orders.PendingOrders(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0] != "real" {
+		t.Fatalf("pending = %v, want the real order once the ghost is retired", pending)
+	}
+}

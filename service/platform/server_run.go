@@ -80,6 +80,21 @@ func (s *Server) run(ctx context.Context) error {
 				case errors.Is(err, ErrDeliveryExpired):
 					slog.Error("platform server: delivery attempts exhausted; a paid order will not be delivered",
 						"order_id", orderID)
+				case errors.Is(err, ErrOrderInvalid):
+					// The index names an order that is not there. It would be
+					// read on every page and refused every time, and with a
+					// small batch it would be the whole batch, forever
+					// (RR-20260919-07). Retiring it is safe exactly because
+					// there is nothing to deliver; an index that cannot retire
+					// keeps it, and the log is then the operator's signal.
+					slog.Error("platform server: an indexed order has no record; retiring the index entry",
+						"order_id", orderID, "err", err)
+					if retirer, ok := service.cfg.Pending.(PendingRetirer); ok {
+						if retireErr := retirer.RetirePending(ctx, orderID); retireErr != nil {
+							slog.Error("platform server: index entry not retired",
+								"order_id", orderID, "err", retireErr)
+						}
+					}
 				case err != nil:
 					slog.Error("platform server: delivery attempt failed",
 						"order_id", orderID, "err", err)

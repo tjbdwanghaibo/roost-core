@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [v1.14.12] - 2026-09-19
+
+### Fixed
+
+- **没有订单记录的待办索引条目会被退休**（U-0256，C5；RR-20260919-07，T-150，**P1**）。
+  一个指向不存在订单的成员（删除的两步之间崩过一次，或被手工删过 key）score 最老、永远排在页首，
+  每一页都读到它、每次被 `AttemptDelivery` 以 `ErrOrderInvalid` 拒绝，然后继续留着——`limit` 越小
+  它占的比例越大。`*RedisOrders` 新增 `RetirePending`（走 core 的 `IndexRemove`，只动索引不动值），
+  Server 的循环在那个分支调用它；索引做不到退休就保留条目，日志是运维的信号。
+  **只在"订单不存在"这一种情形退休**——退休一个还在的订单会把真实的待办藏起来。
+  测试对真 Redis（`TestAnIndexEntryWithNoOrderIsRetiredIntegration`）。
+
+### Changed
+
+- **依赖 core v1.15.10**：共享加载的 defer 收尾（一次 loader panic 不再让实体永久加载不了）、
+  缺失实体在 Nest single / broadcast 处的 nil 契约、`versionstore.IndexRemove`。
+  前两条对本仓没有代码影响，但它们修的是 kit 服务也会走的路径。
+
 ## [v1.14.11] - 2026-09-19
 
 ### Fixed
