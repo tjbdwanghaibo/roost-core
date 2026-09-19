@@ -2,7 +2,6 @@ package activity
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -26,6 +25,15 @@ const (
 	SweepBatch    = 64
 	DispatchBatch = 64
 )
+
+// staleDispatchAfter is how long a result may wait for its game server before
+// the sweep says so on every tick. It is deliberately much longer than a
+// restart: the point is to surface "this server has not come back", not to
+// warn about a deploy.
+const staleDispatchAfter = 10 * time.Minute
+
+// nowUnix is the service's clock, which tests move.
+func nowUnix(service *Service) int64 { return service.cfg.Now().Unix() }
 
 // sweepEvery is SweepInterval as a variable so tests can shorten the tick.
 var sweepEvery = SweepInterval
@@ -108,6 +116,14 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 		return
 	}
 	for _, key := range delivering {
+		// The sweep OBSERVES the outstanding deliveries; it does not attempt
+		// them (RR-20260919-10). It used to call AttemptDispatch here, which
+		// spends one of the delivery budget's attempts and returns the
+		// payload — and there is no transport on this side, so the payload
+		// went nowhere. Five ticks later a game server that had simply been
+		// down found its result exhausted, never delivered. An attempt is
+		// spent when somebody TAKES the payload, which is the game's own
+		// AttemptDispatch call after OwedDispatches told it what is waiting.
 		due, err := service.DueDispatches(ctx, key, DispatchBatch)
 		if err != nil {
 			service.report.Dropped("sweep.due_read_failed", 1)
@@ -116,19 +132,14 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 			continue
 		}
 		for _, dispatch := range due {
-			_, err := service.AttemptDispatch(ctx, key, dispatch.GameSID)
-			switch {
-			case errors.Is(err, ErrDispatchNotDue):
-				// The backoff has not elapsed. Not an error.
-			case errors.Is(err, ErrDispatchExhausted):
-				slog.Error("activity server: dispatch attempts exhausted; a game server will "+
-					"not receive this result", "activity_id", key.ActivityID,
-					"game_sid", dispatch.GameSID)
-			case err != nil:
-				service.report.Dropped("dispatch.attempt_failed", 1)
-				slog.Error("activity server: dispatch attempt failed",
-					"activity_id", key.ActivityID,
-					"game_sid", dispatch.GameSID, "err", err)
+			// Aging deliveries are the thing an operator needs to see: a
+			// result nobody has taken is a reward nobody received.
+			age := nowUnix(service) - dispatch.CreatedAtUnix
+			if age >= int64(staleDispatchAfter/time.Second) {
+				service.report.Dropped("dispatch.stale", 1)
+				slog.Warn("activity server: a result has been waiting for a game server",
+					"activity_id", key.ActivityID, "game_sid", dispatch.GameSID,
+					"age_seconds", age, "attempts", dispatch.Attempts)
 			}
 		}
 		if _, err := service.RetireDelivered(ctx, key); err != nil {

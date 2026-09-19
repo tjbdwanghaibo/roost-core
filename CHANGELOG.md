@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [v1.14.13] - 2026-09-19
+
+### Fixed
+
+- **activity 的结果交付终于形成闭环**（U-0257，C4；RR-20260919-10，T-151，**P1**）。两半都缺：
+  服务端 sweep 调 `AttemptDispatch` 只是**消耗一次交付预算**并把 payload 丢掉——这一侧根本没有传输，
+  于是一个只是暂时掉线的游戏服，五个 tick 之后发现自己的结果已经 exhausted、一次都没收到；
+  而游戏端只能按本地时钟猜"当前 / 上一窗口"两个 activity id 去查，离线超过一个窗口，
+  旧的义务就仍然持久存在却永远查不到。
+  现在：dispatch 存储带一个**按 (组, 游戏服) 的 owed 索引**（与 dispatch 同一次 Redis 写，
+  score 是下次值得取的时刻，终态那次写就退休条目）；新增 RPC `OwedDispatches(groupID, gameSID, limit)`
+  让游戏按游标排空、不必知道 activity id；`AttemptDispatch` 从"服务自用"移到 RPC 上——
+  **取走 payload 的人是游戏，所以尝试次数由它来花**；sweep 只保留推进过期、补建 dispatch、
+  退休终态，并对等待超过 10 分钟的结果按 tick 报 `dispatch.stale`。
+  **行为变化**：`Coordinator` 多两个方法（生成的传输随之更新）；旧的"sweep 会重试交付"不再成立，
+  编码它的两条测试改成断言新的不变量（跨轮仍能找到 + 预算没被空耗）。
+  测试 `service/global/activity/owed_dispatch_promises_test.go`。记录 `roost-core/docs/bugfix/RR-20260919-10.md`。
+
+### Changed
+
+- **依赖 core v1.15.11**：`versionstore.RedisIndex.KeyOf`（每个所有者一份待办清单）与
+  `IndexDueIn` / `IndexRemoveIn`，上面那个 owed 索引就是它的第一个使用方。
+
 ## [v1.14.12] - 2026-09-19
 
 ### Fixed

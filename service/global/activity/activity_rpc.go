@@ -9,13 +9,22 @@ import "context"
 // Coordinator is the cross-process contract: what ANOTHER process may ask of
 // the activity coordination service.
 //
-// Five of the fourteen Service methods are not here, in two groups.
+// Five of the Service methods are not here, in two groups.
 //
-// AdvanceExpired, DueDispatches and AttemptDispatch are the owning process's
-// own periodic work: back-stopping an aggregation whose grace window closed,
-// and retrying a dispatch whose delivery failed. They are what the Server's
-// run hook drives. Exposing them would let any process on the bus advance
-// activities it does not own, on a cadence nobody configured.
+// AdvanceExpired and DueDispatches are the owning process's own periodic work:
+// back-stopping an aggregation whose grace window closed, and enumerating what
+// is outstanding for metrics. They are what the Server's run hook drives.
+// Exposing them would let any process on the bus advance activities it does
+// not own, on a cadence nobody configured.
+//
+// AttemptDispatch USED to be in that group, and moving it out is the whole of
+// RR-20260919-10. It was the sweep that called it — which spends one of the
+// delivery budget's attempts and returns the payload — and there is no
+// transport on the service side, so the payload went nowhere and a game that
+// was merely down found its result "retried" into exhausted. The taker is the
+// game, so the game is who calls it: an attempt is now spent exactly when
+// somebody takes the payload. It carries the caller's own gameSID, the same
+// trust model NotifyPhase already has.
 //
 // NotifyAudits and AuditOverflow are the diagnostic surface: why was this
 // game's notification refused, and how many audits were dropped. They answer
@@ -82,10 +91,39 @@ type Coordinator interface {
 	//roost:rpc affinity=key.Group()
 	Reservation(ctx context.Context, key Key, participantID string, requestID string) (reservation ProgressReservation, found bool, err error)
 
+	// OwedDispatches lists the activities whose result this game server still
+	// owes an ack for, due now, oldest first.
+	//
+	// It is the entry point a game server drains on start and on a timer, and
+	// it exists because the alternative is guessing: before it, a game had to
+	// compute activity ids from its own clock and look each one up, which
+	// stops working the moment it is down longer than one window — the
+	// obligation stays recorded and becomes permanently unreachable
+	// (RR-20260919-10).
+	//
+	// The index is per (group, game), so this routes by group like every
+	// other call about an activity — a game that belongs to several groups
+	// drains each of them, and it knows which ones it belongs to because a
+	// binding is how it got there.
+	//
+	//roost:rpc affinity=groupID
+	OwedDispatches(ctx context.Context, groupID string, gameSID int32, limit int) (keys []Key, err error)
+
 	// LookupDispatch reads the result delivery owed to one game server.
 	//
 	//roost:rpc affinity=key.Group()
 	LookupDispatch(ctx context.Context, key Key, gameSID int32) (dispatch Dispatch, found bool, err error)
+
+	// AttemptDispatch takes the result owed to one game server and spends one
+	// of the delivery attempts.
+	//
+	// It returns the payload and the ack token. A caller that loses the reply
+	// asks again: the attempt is spent either way (that is what makes the
+	// budget a budget), but the result is unchanged and the token is the
+	// same, so nothing is delivered twice.
+	//
+	//roost:rpc affinity=key.Group()
+	AttemptDispatch(ctx context.Context, key Key, gameSID int32) (dispatch Dispatch, err error)
 
 	// AckDispatch is a game server confirming it applied the result. The
 	// token is required, so an ack cannot be forged from the activity key

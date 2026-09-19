@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -1186,6 +1187,55 @@ func (s *Service) LookupDispatch(ctx context.Context, key Key, gameSID int32) (D
 // DueDispatches lists the deliveries for one activity that may be attempted
 // now, bounded. The scan is over the activity's expected set, which is itself
 // bounded by MaxExpectedGames, so this needs no index of its own.
+// OwedDispatchIndex is implemented by a dispatch store that can answer "what
+// is owed to this game server", cheaply and bounded.
+//
+// It is an optional capability rather than part of the Store contract because
+// only a backend with a secondary index can do it — and the alternative, which
+// is what the game had to do before, is to GUESS activity ids from its own
+// clock and look each one up. That works until a game is down longer than a
+// window, and then the obligation is still recorded and permanently
+// unreachable (RR-20260919-10).
+type OwedDispatchIndex interface {
+	// OwedDispatches returns up to limit dispatch keys owed to gameSID in
+	// groupID that are pending and due at nowUnix, oldest first.
+	OwedDispatches(ctx context.Context, groupID string, gameSID int32, nowUnix int64, limit int) ([]DispatchKey, error)
+}
+
+// OwedDispatches lists the activities whose result this game server still owes
+// an ack for, oldest first.
+//
+// It is how a game finds work it did not know about: no activity id, no clock
+// arithmetic, no assumption about how long it was away. The keys come back;
+// taking the payload is AttemptDispatch, which is also where an attempt is
+// spent — so a result is only ever charged an attempt when somebody actually
+// took it.
+func (s *Service) OwedDispatches(ctx context.Context, groupID string, gameSID int32, limit int) ([]Key, error) {
+	if strings.TrimSpace(groupID) == "" {
+		return nil, fmt.Errorf("%w: group id is empty", ErrInvalid)
+	}
+	if gameSID <= 0 {
+		return nil, fmt.Errorf("%w: game sid must be positive, got %d", ErrInvalid, gameSID)
+	}
+	if err := validateLimit(limit); err != nil {
+		return nil, err
+	}
+	index, ok := s.cfg.Dispatches.(OwedDispatchIndex)
+	if !ok {
+		return nil, fmt.Errorf("%w: this deployment's dispatch store keeps no per-game index, "+
+			"so what a game server is owed cannot be enumerated; use NewRedisStores", ErrUnsupported)
+	}
+	keys, err := index.OwedDispatches(ctx, groupID, gameSID, s.cfg.Now().Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Key, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key.Activity)
+	}
+	return out, nil
+}
+
 func (s *Service) DueDispatches(ctx context.Context, key Key, limit int) ([]Dispatch, error) {
 	if err := key.Validate(); err != nil {
 		return nil, err

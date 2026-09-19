@@ -43,7 +43,9 @@ const (
 	MethodApplyProgress     = "activity.ApplyProgress"
 	MethodLookupParticipant = "activity.LookupParticipant"
 	MethodReservation       = "activity.Reservation"
+	MethodOwedDispatches    = "activity.OwedDispatches"
 	MethodLookupDispatch    = "activity.LookupDispatch"
+	MethodAttemptDispatch   = "activity.AttemptDispatch"
 	MethodAckDispatch       = "activity.AckDispatch"
 )
 
@@ -59,7 +61,9 @@ var Methods = []string{
 	MethodApplyProgress,
 	MethodLookupParticipant,
 	MethodReservation,
+	MethodOwedDispatches,
 	MethodLookupDispatch,
+	MethodAttemptDispatch,
 	MethodAckDispatch,
 }
 
@@ -215,6 +219,24 @@ type rpcReservationResponse struct {
 	Found       bool                `json:"found"`
 }
 
+// rpcOwedDispatchesRequest is the OwedDispatches request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcOwedDispatchesRequest struct {
+	GroupID string `json:"group_id"`
+	GameSID int32  `json:"game_sid"`
+	Limit   int    `json:"limit"`
+}
+
+// rpcOwedDispatchesResponse is the OwedDispatches response on the wire.
+type rpcOwedDispatchesResponse struct {
+	rpcStatus
+	Keys []Key `json:"keys"`
+}
+
 // rpcLookupDispatchRequest is the LookupDispatch request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -231,6 +253,23 @@ type rpcLookupDispatchResponse struct {
 	rpcStatus
 	Dispatch Dispatch `json:"dispatch"`
 	Found    bool     `json:"found"`
+}
+
+// rpcAttemptDispatchRequest is the AttemptDispatch request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcAttemptDispatchRequest struct {
+	Key     Key   `json:"key"`
+	GameSID int32 `json:"game_sid"`
+}
+
+// rpcAttemptDispatchResponse is the AttemptDispatch response on the wire.
+type rpcAttemptDispatchResponse struct {
+	rpcStatus
+	Dispatch Dispatch `json:"dispatch"`
 }
 
 // rpcAckDispatchRequest is the AckDispatch request on the wire.
@@ -323,6 +362,14 @@ func RegisterHandlers(b bus.IBus, service Coordinator) error {
 			reservation, found, err := service.Reservation(ctx.Context(), wire.Key, wire.ParticipantID, wire.RequestID)
 			return rpcReservationResponse{rpcStatus: statusOf(err), Reservation: reservation, Found: found}, nil
 		},
+		MethodOwedDispatches: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcOwedDispatchesRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcOwedDispatchesResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			keys, err := service.OwedDispatches(ctx.Context(), wire.GroupID, wire.GameSID, wire.Limit)
+			return rpcOwedDispatchesResponse{rpcStatus: statusOf(err), Keys: keys}, nil
+		},
 		MethodLookupDispatch: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcLookupDispatchRequest
 			if err := ctx.Decode(&wire); err != nil {
@@ -330,6 +377,14 @@ func RegisterHandlers(b bus.IBus, service Coordinator) error {
 			}
 			dispatch, found, err := service.LookupDispatch(ctx.Context(), wire.Key, wire.GameSID)
 			return rpcLookupDispatchResponse{rpcStatus: statusOf(err), Dispatch: dispatch, Found: found}, nil
+		},
+		MethodAttemptDispatch: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcAttemptDispatchRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcAttemptDispatchResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			dispatch, err := service.AttemptDispatch(ctx.Context(), wire.Key, wire.GameSID)
+			return rpcAttemptDispatchResponse{rpcStatus: statusOf(err), Dispatch: dispatch}, nil
 		},
 		MethodAckDispatch: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcAckDispatchRequest
@@ -524,6 +579,35 @@ func (c *BusClient) Reservation(ctx context.Context, key Key, participantID stri
 	return resp.Reservation, resp.Found, err
 }
 
+// OwedDispatches lists the activities whose result this game server still
+// owes an ack for, due now, oldest first.
+//
+// It is the entry point a game server drains on start and on a timer, and
+// it exists because the alternative is guessing: before it, a game had to
+// compute activity ids from its own clock and look each one up, which
+// stops working the moment it is down longer than one window — the
+// obligation stays recorded and becomes permanently unreachable
+// (RR-20260919-10).
+//
+// The index is per (group, game), so this routes by group like every
+// other call about an activity — a game that belongs to several groups
+// drains each of them, and it knows which ones it belongs to because a
+// binding is how it got there.
+//
+// OwedDispatches implements Coordinator.
+func (c *BusClient) OwedDispatches(ctx context.Context, groupID string, gameSID int32, limit int) ([]Key, error) {
+	// Routed by groupID: every call carrying the same key reaches the
+	// same instance, so contention on that key stays in one process.
+	ctx = servicerpc.WithAffinityKey(ctx, groupID)
+	var resp rpcOwedDispatchesResponse
+	err := c.call(ctx, MethodOwedDispatches, rpcOwedDispatchesRequest{
+		GroupID: groupID,
+		GameSID: gameSID,
+		Limit:   limit,
+	}, &resp)
+	return resp.Keys, err
+}
+
 // LookupDispatch reads the result delivery owed to one game server.
 //
 // LookupDispatch implements Coordinator.
@@ -537,6 +621,27 @@ func (c *BusClient) LookupDispatch(ctx context.Context, key Key, gameSID int32) 
 		GameSID: gameSID,
 	}, &resp)
 	return resp.Dispatch, resp.Found, err
+}
+
+// AttemptDispatch takes the result owed to one game server and spends one
+// of the delivery attempts.
+//
+// It returns the payload and the ack token. A caller that loses the reply
+// asks again: the attempt is spent either way (that is what makes the
+// budget a budget), but the result is unchanged and the token is the
+// same, so nothing is delivered twice.
+//
+// AttemptDispatch implements Coordinator.
+func (c *BusClient) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (Dispatch, error) {
+	// Routed by key.Group(): every call carrying the same key reaches the
+	// same instance, so contention on that key stays in one process.
+	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
+	var resp rpcAttemptDispatchResponse
+	err := c.call(ctx, MethodAttemptDispatch, rpcAttemptDispatchRequest{
+		Key:     key,
+		GameSID: gameSID,
+	}, &resp)
+	return resp.Dispatch, err
 }
 
 // AckDispatch is a game server confirming it applied the result. The
@@ -607,8 +712,16 @@ func (c capability) Reservation(ctx context.Context, key Key, participantID stri
 	return c.inner.Reservation(ctx, key, participantID, requestID)
 }
 
+func (c capability) OwedDispatches(ctx context.Context, groupID string, gameSID int32, limit int) ([]Key, error) {
+	return c.inner.OwedDispatches(ctx, groupID, gameSID, limit)
+}
+
 func (c capability) LookupDispatch(ctx context.Context, key Key, gameSID int32) (Dispatch, bool, error) {
 	return c.inner.LookupDispatch(ctx, key, gameSID)
+}
+
+func (c capability) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (Dispatch, error) {
+	return c.inner.AttemptDispatch(ctx, key, gameSID)
 }
 
 func (c capability) AckDispatch(ctx context.Context, key Key, gameSID int32, token string) (Dispatch, error) {

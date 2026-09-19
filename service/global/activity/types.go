@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/errcode"
@@ -87,6 +88,10 @@ const (
 	// surface in admin.go.
 	CodeNotResolvable     int32 = 620116
 	CodeAdminNoteRequired int32 = 620117
+	// CodeUnsupported reports a capability this deployment's stores do not
+	// have — the per-game owed index is the first (RR-20260919-10). It is a
+	// deployment fact, not a request error, so it is worth its own code.
+	CodeUnsupported int32 = 620118
 )
 
 var (
@@ -142,6 +147,11 @@ var (
 	// ErrConflict is what compare-and-set exhaustion under contention reaches
 	// a caller as. It is retryable, which is why it is not CodeInternal.
 	ErrConflict = errcode.Define(CodeConflict, "activity: conflict", "")
+
+	// ErrUnsupported reports that this deployment's stores cannot answer the
+	// question — not that the answer is empty. A game server told "you are
+	// owed nothing" when the truth is "nobody can tell you" would stop asking.
+	ErrUnsupported = errcode.Define(CodeUnsupported, "activity: this deployment's stores do not support this", "")
 
 	// ErrNotResolvable reports a dispatch that is not in a state an operator
 	// may change. It is what refuses reopening an ACKED dispatch, which would
@@ -646,6 +656,32 @@ type DispatchKey struct {
 }
 
 func (k DispatchKey) String() string { return fmt.Sprintf("%s/%d", k.Activity, k.GameSID) }
+
+// ParseDispatchKey reads back what String rendered.
+//
+// The owed index stores rendered keys, so reading it means parsing them. Key
+// components are already forbidden from containing the separator (Validate),
+// which is what makes this unambiguous — the same rule that keeps two
+// different keys from rendering to one store key.
+func ParseDispatchKey(rendered string) (DispatchKey, error) {
+	parts := strings.Split(rendered, "/")
+	if len(parts) != 4 {
+		return DispatchKey{}, fmt.Errorf("%w: dispatch key %q has %d parts, want group/activity/phase/game",
+			ErrInvalid, rendered, len(parts))
+	}
+	gameSID, err := strconv.ParseInt(parts[3], 10, 32)
+	if err != nil || gameSID <= 0 {
+		return DispatchKey{}, fmt.Errorf("%w: dispatch key %q has no game sid", ErrInvalid, rendered)
+	}
+	key := DispatchKey{
+		Activity: Key{GroupID: parts[0], ActivityID: parts[1], Phase: Phase(parts[2])},
+		GameSID:  int32(gameSID),
+	}
+	if err := key.Activity.Validate(); err != nil {
+		return DispatchKey{}, err
+	}
+	return key, nil
+}
 
 // DispatchState is where a delivery is.
 //
