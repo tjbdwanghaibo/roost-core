@@ -77,6 +77,7 @@
 
 | RR-20260919-01 | codegen | 顶层 nested 指针字段替换 / 回滚后没有解绑离开的对象，游离对象仍能提交该字段 | U-0249 | [RR-20260919-01.md](RR-20260919-01.md) |
 | RR-20260919-07 | core+kit | 没有订单的索引条目永远排在页首、占住每一页的槽位 | U-0256 | [RR-20260919-07.md](RR-20260919-07.md) |
+| RR-20260919-10 | core+kit+codegen | activity 的 dispatch 没有交付者：sweep 空耗尝试次数、游戏端只能猜两个窗口 | U-0257 | [RR-20260919-10.md](RR-20260919-10.md) |
 | RR-20260919-08 | core | 两层共享加载没有 defer 收尾，一次 loader panic 让该实体永久加载不了 | U-0254 | [RR-20260919-08.md](RR-20260919-08.md) |
 | RR-20260919-09 | core | 缺失实体 `(nil,nil)` 在 single / broadcast 处被解引用；broadcast 还会中止后续实体 | U-0255 | [RR-20260919-09.md](RR-20260919-09.md) |
 | RR-20260919-02 | codegen | 同一个 nested 指针占两个字段 / key 时通知是单槽的，只有最后一个会落库 | U-0252 | [RR-20260919-02.md](RR-20260919-02.md) |
@@ -173,13 +174,7 @@ RR-20260919-02 与 RR-20260919-04 在同一天的第二轮里收敛：前者定�
 当场 panic（U-0252），后者把索引搬进存储、与值同一个 Lua 写（U-0253）。当时写下的"要先定什么"
 就是这两个决定，记录在各自的方案一节里。
 
-## 2026-09-19 第二轮没有修的一条
+## 2026-09-19 第二轮那一条也修了
 
-- **RR-20260919-10（activity 的 dispatch 没有形成真正的交付闭环）**：服务端 sweep 只消耗尝试次数、
-  不交付（链上根本没有传输），游戏端又只按本地时钟猜"当前 / 上一窗口"两个 activity id——
-  离线超过一个窗口，旧的 owed dispatch 就再也查不到，而它的 attempts 还在被 sweep 消耗到 exhausted。
-  修法要在 **kit 加一个 RPC**（按 gameSID 的有界待交付索引 + `DueDispatchesForGame(cursor, limit)`，
-  **游戏真正拿到 payload 时才消耗一次尝试**），再把 demo 的 runner 改成按游标排空、不再猜 id，
-  同时把 sweep 的职责收回到"推进过期、补建缺失 dispatch、退休终态、报指标"。
-  这是一次接口改动加一次 demo 改写，验收还要覆盖离线多窗口、重启、分页、领取回复丢失、
-  settle 前后崩溃、ACK 丢失、并发 runner 与人工 reopen——不在这一轮里赶。
+RR-20260919-10 在同一天收敛（U-0257）：owed 索引 + `OwedDispatches` RPC + `AttemptDispatch` 交给取走
+payload 的一方 + sweep 收回本分。当时写下的"要先在 kit 加一个按 gameSID 的待交付 RPC"就是这次做的事。

@@ -7,7 +7,7 @@
 | RR-20260919-07 | P1 | pending 先按 limit 截页再过滤，最老坏记录可永久饿死后继健康订单 | 已修复（U-0253 去掉逐条读 + U-0256 退休没有订单的条目，core v1.15.10 / kit v1.14.12）→ [bugfix](../bugfix/RR-20260919-07.md) |
 | RR-20260919-08 | P1 | 实体加载 panic 不清理 flight，同实体后续请求永久等待 | 已修复（U-0254，core v1.15.10）→ [bugfix](../bugfix/RR-20260919-08.md) |
 | RR-20260919-09 | P2 | Nest single/broadcast 对缺失实体 nil 调 Touch，广播中止后续 id | 已修复（U-0255，core v1.15.10）→ [bugfix](../bugfix/RR-20260919-09.md) |
-| RR-20260919-10 | P1 | activity sweep 消耗 attempt 却不交付，game 只查两个窗口导致旧奖励义务不可见 | 未修复（要在 kit 加按 gameSID 的待交付 RPC，见 [bugfix README](../bugfix/README.md) 末尾） |
+| RR-20260919-10 | P1 | activity sweep 消耗 attempt 却不交付，game 只查两个窗口导致旧奖励义务不可见 | 已修复（U-0257，core v1.15.11 / kit v1.14.13 / codegen v1.15.18）→ [bugfix](../bugfix/RR-20260919-10.md) |
 
 09-19：同步并验收最新修复。RR-20260918-05/07/08/09/10、U-0245 与 ARCH-06 的定向门通过；RR-20260918-06 更正为 **部分修复**（scene 已完成，chat presence 未接线）。K1/生命周期确认 3 个 P1；继续审查 Kit `5116f2a` / Codegen `7297f92` 的 platform 支付链，又确认 3 个恢复与履约 P1，合计 **6 个 P1**：[问题与实施方向](REVIEW-2026-09-19.md) · [复现记录](REPRO-2026-09-19.md) · [运行与限制](../review/REVIEW-2026-09-19.md)。
 
