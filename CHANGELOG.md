@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.12] - 2026-09-19
+
 ### Added
 
 - **步骤消费者可以在认领之前拒绝一条命令**（`saga.StepConsumerConfig.Admit`）。一个 durable 被
