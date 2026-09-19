@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v1.15.9] - 2026-09-19
+
+### Added
+
+- **版本化存储可以自带一个二级索引，索引和值是同一次写**（U-0253，C4；RR-20260919-04，T-147，**P1**）。
+  `redis.CompareAndSetCommand.Index`（member / score / remove）走一个双 key 脚本：**compare 通过之后**
+  才 `ZADD` / `ZREM`，没通过就一个字节都不动；score 以十进制字符串传给 Lua，不让它去解析 Go 的浮点序列化。
+  `versionstore.RedisConfig.Index`（`Key` + `Entry(T) (score, include)`）让 `Create` / `Update` / `Delete`
+  自动维护它，新增 `(*RedisStore).IndexDue(maxScore, limit)` 按分数从低到高读一页。
+  `include` 是关键：索引是**待办清单**而不是键空间的副本——值变成终态的那一次写就把条目退休掉。
+  存在的理由：调用方在存储外面维护这样一个索引，必然是两次写，中间崩一次就留下一条谁也枚举不到的记录
+  （对 platform 来说是一笔后台永远找不到的已付款订单）。语义对着**真 Redis** 验证
+  （`redis/cas_index_promises_test.go`，`ROOST_REDIS_TEST_ADDR`），因为 Go 替身里的"同一次写"是假的。
+  **多 key 脚本要求两个 key 同槽**：Redis Cluster 部署需要在前缀里放 hash tag，调用方选键布局、调用方负责。
+
 ## [v1.15.8] - 2026-09-18
 
 

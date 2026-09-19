@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
@@ -49,6 +50,25 @@ type RedisConfig[K comparable, T any] struct {
 	RetryBackoff time.Duration
 	// Sleep is the delay function; nil means time.Sleep. Test seam.
 	Sleep func(time.Duration)
+	// Index, when set, is a durable index of the entries a reader has work
+	// for, maintained in the SAME write as the value.
+	//
+	// A caller that keeps such an index outside the store has two writes and
+	// therefore a window: the record lands, the process dies, and the record
+	// is in no index — for a paid order that means a payment no background
+	// loop can ever find (RR-20260919-04). Inside the store it is one script:
+	// the entry moves if and only if the compare-and-set applies.
+	Index *RedisIndex[T]
+}
+
+// RedisIndex describes the sorted-set index a store maintains beside its
+// values. The score is what a reader pages by — typically when the entry is
+// next worth looking at — and include is what makes the index a WORK LIST
+// rather than a copy of the keyspace: a value the reader has nothing to do
+// with is retired from it by the write that made it so.
+type RedisIndex[T any] struct {
+	Key   string
+	Entry func(T) (score float64, include bool)
 }
 
 // RedisStore keeps versioned values as a framed envelope "<version>\n<payload>"
@@ -83,8 +103,80 @@ func NewRedisStore[K comparable, T any](client RedisClient, cfg RedisConfig[K, T
 	if cfg.Sleep == nil {
 		cfg.Sleep = time.Sleep
 	}
+	if cfg.Index != nil {
+		if strings.TrimSpace(cfg.Index.Key) == "" {
+			return nil, fmt.Errorf("versionstore: index key is required")
+		}
+		if cfg.Index.Entry == nil {
+			return nil, fmt.Errorf("versionstore: index entry func is required")
+		}
+	}
 	return &RedisStore[K, T]{client: client, cfg: cfg}, nil
 }
+
+// indexEntry is the index side of one write. A store without an index returns
+// nil and the script stays single-key.
+func (s *RedisStore[K, T]) indexEntry(key K, value T) *fredis.CompareAndSetIndex {
+	if s.cfg.Index == nil {
+		return nil
+	}
+	member := s.cfg.KeyOf(key)
+	if member == "" {
+		return nil
+	}
+	score, include := s.cfg.Index.Entry(value)
+	return &fredis.CompareAndSetIndex{
+		Key: s.cfg.Index.Key, Member: member, Score: score, Remove: !include,
+	}
+}
+
+// IndexDue returns up to limit indexed keys whose score is at or below
+// maxScore, lowest first.
+//
+// Lowest first is the fairness property: an entry whose work failed moves its
+// own score forward, so it cannot sit at the head of every page and starve
+// what is queued behind it. The limit is the caller's batch, not a page
+// cursor — the next call starts from the lowest score again, which is what a
+// retry loop wants.
+func (s *RedisStore[K, T]) IndexDue(ctx context.Context, maxScore float64, limit int) ([]string, error) {
+	if s.cfg.Index == nil {
+		return nil, fmt.Errorf("versionstore: this store has no index")
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	raw, err := s.client.Eval(ctx, indexDueScript, []string{s.cfg.Index.Key},
+		strconv.FormatFloat(maxScore, 'f', -1, 64), strconv.Itoa(limit))
+	if err != nil {
+		return nil, err
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, converted := raw.([]interface{}); converted {
+			items = typed
+		} else if raw == nil {
+			return nil, nil
+		} else {
+			return nil, fmt.Errorf("versionstore: unexpected index reply %T", raw)
+		}
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		switch typed := item.(type) {
+		case string:
+			out = append(out, typed)
+		case []byte:
+			out = append(out, string(typed))
+		default:
+			return nil, fmt.Errorf("versionstore: unexpected index member %T", item)
+		}
+	}
+	return out, nil
+}
+
+const indexDueScript = `
+return redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
+`
 
 func (s *RedisStore[K, T]) key(key K) (string, error) {
 	rendered := s.cfg.KeyOf(key)
@@ -157,6 +249,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		}
 		result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
 			Key: redisKey, Expected: expected, Next: envelope, TTL: s.cfg.TTL,
+			Index: s.indexEntry(key, next),
 		})
 		if err != nil {
 			return Versioned[T]{}, false, err
@@ -192,6 +285,7 @@ func (s *RedisStore[K, T]) Create(ctx context.Context, key K, value T) (Versione
 	}
 	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
 		Key: redisKey, Expected: nil, Next: envelope, TTL: s.cfg.TTL,
+		Index: s.indexEntry(key, value),
 	})
 	if err != nil {
 		return Versioned[T]{}, false, err
@@ -225,8 +319,15 @@ func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T
 	// conditional delete: swap to a sentinel only if unchanged, then remove.
 	// Doing it in one step would need a dedicated script; the swap makes the
 	// window observable rather than silent.
+	var retire *fredis.CompareAndSetIndex
+	if s.cfg.Index != nil {
+		if member := s.cfg.KeyOf(key); member != "" {
+			retire = &fredis.CompareAndSetIndex{Key: s.cfg.Index.Key, Member: member, Remove: true}
+		}
+	}
 	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
 		Key: redisKey, Expected: raw, Next: deleteSentinel, TTL: time.Second,
+		Index: retire,
 	})
 	if err != nil {
 		return err

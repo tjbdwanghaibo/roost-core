@@ -152,7 +152,7 @@
 | kit | `spatial` | 09-02 | 09-06 U-0081（回退 3 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 / 09-18 U-0240（修复） | 09-02 | 09-02 |
 | kit | `statslog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `syncstream` | 09-02 | 09-06 U-0082（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
-| kit | `versionstore` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `versionstore` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 / 09-19 U-0253（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 
 ### roost-service（12 包 + CI 工作流）
 
@@ -189,7 +189,7 @@
 | codegen | `（根：CI 工作流 + ci/）` | — | — | — | 09-05 U-0015 | — | — | — | — |
 | codegen | `internal/attribute` | — | 09-06 U-0034（回退 9 条，9 洞） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/cfggen` | — | 09-06 U-0034（回退 8 条，3 洞）/ 09-06 U-0090（回退 9 条） / 09-09 U-0151 | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
-| codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 / 09-17 U-0224（修复） / 09-19 U-0245（修复） / 09-19 U-0246（修复） / 09-19 U-0249（修复） | — | 09-09 脚本扫 / 09-18 U-0236（修复） / 09-18 U-0238（修复） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
+| codegen | `internal/dao` | — | 09-06 U-0041（回退 4 条，4 洞；解析层原有覆盖） / 09-09 U-0151 / 09-17 U-0224（修复） / 09-19 U-0245（修复） / 09-19 U-0246（修复） / 09-19 U-0249（修复） / 09-19 U-0252（修复） | — | 09-09 脚本扫 / 09-18 U-0236（修复） / 09-18 U-0238（修复） | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/entity` | — | 09-06 U-0039 / 09-06 U-0091（回退 2 条） / 09-09 U-0124（模板守卫 → 生成配套测试） / 09-09 U-0144（余 2 条复核不可达） / 09-09 U-0160（修复） / 09-10 U-0162（修复） / 09-10 U-0166（修复） | — | 09-09 脚本扫 / 09-18 U-0239（修复） | 09-06 U-0039 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/errcode` | — | 09-06 U-0030（回退 1 条，1 洞） | — | 09-09 脚本扫 | 09-09 脚本扫 | — | 09-09 脚本扫 | 09-09 脚本扫 |
 | codegen | `internal/eventgen` | — | 09-06 U-0038 / 09-09 U-0151 | — | 09-09 脚本扫 | 09-06 U-0038 | — | 09-09 脚本扫 | 09-09 脚本扫 |
@@ -239,6 +239,8 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0253 | 2026-09-19 | roost-core `redis` / `versionstore` + roost-kit `service/platform` + roost-codegen `demo`：订单先持久化、待办索引由部署侧后写；两次写之间进程退出或 `ZADD` 失败，就留下一笔后台循环永远枚举不到的已付款订单（RR-20260919-04，P1） | C4 | 索引被放在了写不到同一个地方的一侧——部署侧只能在订单写完之后写索引。修法：`CompareAndSetCommand.Index` + 双 key 脚本（compare 通过才动索引），`versionstore.RedisConfig.Index` 让三条写入路径自动维护、`IndexDue` 按分数读；kit 的 `RedisOrders` 同时是 OrderStore 与 PendingOrders，后台重试默认开；cluster 无 hash tag 时拒绝启动 | `redis/cas_index_promises_test.go` 与 kit 的 `pending_index_promises_test.go`（都对真 Redis）、`versionstore/index_promises_test.go` | 修前：订单持久、索引为空、`PendingOrders(128)` 返回空列表；修后"记录订单就是进索引"，终态三种都退休，退避移动分数 | T-147 · `docs/bugfix/RR-20260919-04.md` |
+| U-0252 | 2026-09-19 | roost-codegen `internal/dao`：同一个 nested 指针放进两个字段 / key 时，单槽通知只保留最后一次绑定，第一处从此不再落库——内存里两份相等，磁盘上少一次更新（RR-20260919-02，P1） | C2 | 单槽之下任何不失败的选择都在某一侧静默错误。修法：唯一父所有权——每个 nested 值带 `dirtyOwner{holder, field, key}`，`bindDirty` 遇到不同 owner 就 panic（写任何东西之前），`unbindDirty` 只释放自己那条 | `testdata/runtime/ownership_test.go` 的 `TestANestedValueHasOneParentAtATime`（四种形状）+ 移动 / 重绑两条防误伤 | 修前四条都是"被接受了"；修后 panic 且点名类型，移动（先 Del 再 Set）与重绑仍然合法，demo 装备路径不受影响 | T-146 · `docs/bugfix/RR-20260919-02.md` |
 | U-0251 | 2026-09-19 | roost-codegen `demo`：未领取的付费 grant 固定 30 天后被 `handlerGrantPurchase` 拒绝，drain 随后照样 `HDEL`；而 platform 在 grant 落 Redis 时就把订单标成 delivered——订单已结算、grant 没了、账本也忘了，玩家永远收不到已付款的东西（RR-20260919-06，P1） | C4 | 把邮件那条"准入判据 = 清理判据"照搬到付费资产上，而付费订单**没有**信封过期那样的权威终止时刻。规则应当是：付费资产的去重记录不能早于"履约已确认"被丢弃。修法：取消 grant 过期与账本清理（账本只增），收界要靠幂等的"已履约"回报，本轮未做 | `game/handler/grant_purchase_test.go` 的 `TestAnOldPaidGrantIsStillHonoured`（替换了把旧行为当契约的那一条） | 修前那条测试把"过期拒绝"断言为成功；改写后一年前付款的 grant 仍发货、十年后重放仍被账本挡住 | T-145 · `docs/bugfix/RR-20260919-06.md` |
 | U-0250 | 2026-09-19 | roost-codegen `internal/nest`：handler 参数名写成 `_`（合法 Go）时，生成的 sender 声明并**传递**这个空白名，`cannot use _ as value or type`，四处全在生成文件里 | C2 | 解析阶段直接用 AST 的参数名；对 handler 自己的签名对，对要声明并转发同名形参的生成物不对。参数在 wire 上是位置化的，名字只是代码生成的细节。修法：`usableParamName` 把 `_` 换成 `arg<index>`，一处改、三套模板都对 | `internal/nest/blank_param_promises_test.go` | 修前红（生成物里出现 `_ int64` 与 `, _)`）；修后生成工程 build 与全量测试通过 | T-144 · `docs/bugfix/U-0250-nest-blank-parameter-name.md` |
 | U-0249 | 2026-09-19 | roost-codegen `internal/dao`：顶层**单个 nested 指针**字段替换 / 回滚后没有解绑离开的对象，游离对象仍能把自己的内容提交到它已经不在的字段（RR-20260919-01，P1） | C2 | 同一条所有权不变量的第三个分支：U-0236 修了嵌套内部、U-0238 修了顶层 map/slice，Kind 3 的单指针分支没跟上。修法：生成 `bind<F>` / `unbind<F>`（只搬通知，不标脏不记 undo），setter 与 undo 都按"解绑当前 → 替换 → 绑定新当前"执行 | `testdata/runtime/ownership_test.go` 的 `TestTopLevelPointerFieldOwnership`（四叶子）与 `TestClearingAPointerFieldDetachesTheValue` | 修前红两叶子 + 置 nil 一条（与审查复现一致）；修后 golden 文本门与运行时门全绿 | T-143 · `docs/bugfix/RR-20260919-01.md` |

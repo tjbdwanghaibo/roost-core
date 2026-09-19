@@ -4,7 +4,7 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260919-07 | P1 | pending 先按 limit 截页再过滤，最老坏记录可永久饿死后继健康订单 | 未修复 |
+| RR-20260919-07 | P1 | pending 先按 limit 截页再过滤，最老坏记录可永久饿死后继健康订单 | 已修复（随 U-0253：部署侧索引删除，kit 的索引由存储维护、读时不再逐条查订单）→ [bugfix](../bugfix/RR-20260919-04.md) |
 | RR-20260919-08 | P1 | 实体加载 panic 不清理 flight，同实体后续请求永久等待 | 未修复 |
 | RR-20260919-09 | P2 | Nest single/broadcast 对缺失实体 nil 调 Touch，广播中止后续 id | 未修复 |
 | RR-20260919-10 | P1 | activity sweep 消耗 attempt 却不交付，game 只查两个窗口导致旧奖励义务不可见 | 未修复 |
@@ -14,10 +14,10 @@
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
 | RR-20260919-01 | P1 | 顶层 DAO nested pointer 替换/回滚后，离开字段的对象仍能生成持久化提交 | 已修复（U-0249，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-01.md) |
-| RR-20260919-02 | P1 | 同一个 nested 指针占两个 map key 时，修改只持久化最后绑定的 key | 未修复（需先定 nested 别名的所有权契约，见 [bugfix README](../bugfix/README.md)） |
+| RR-20260919-02 | P1 | 同一个 nested 指针占两个 map key 时，修改只持久化最后绑定的 key | 已修复（U-0252，codegen v1.15.16）→ [bugfix](../bugfix/RR-20260919-02.md) |
 | RR-20260919-03 | P1 | 会话关闭订阅者 panic 穿出生命周期 goroutine，终止 game 进程 | 已修复（U-0247，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-03.md) |
-| RR-20260919-04 | P1 | 已持久化订单与 pending ZSet 分两次写，失败后后台无法枚举 | 未修复（需先在 kit 定带二级索引的 platform OrderStore，见 [bugfix README](../bugfix/README.md)） |
-| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 原触发已修复（U-0248，codegen v1.15.15）；分页残余见 RR-20260919-07 → [bugfix](../bugfix/RR-20260919-05.md) |
+| RR-20260919-04 | P1 | 已持久化订单与 pending ZSet 分两次写，失败后后台无法枚举 | 已修复（U-0253，core v1.15.9 / kit v1.14.11 / codegen v1.15.16）→ [bugfix](../bugfix/RR-20260919-04.md) |
+| RR-20260919-05 | P1 | 一条不可读订单使 pending 整页失败，健康订单被饿死 | 已修复（U-0248，codegen v1.15.15）；分页残余（RR-20260919-07）随 U-0253 一并消失——索引进了存储，读的时候不再逐条查订单 → [bugfix](../bugfix/RR-20260919-05.md) |
 | RR-20260919-06 | P1 | 未履约付费 grant 固定 30 天后被拒绝删除，订单仍显示 delivered | 已修复（U-0251，codegen v1.15.15）→ [bugfix](../bugfix/RR-20260919-06.md) |
 
 W-2026-09-18-11 已转 ARCH-07，不计功能 RR；配置所有权方案见[运行期配置所有权](../review/IMPLEMENTATION-RUNTIME-CONFIG-OWNERSHIP.md)。
