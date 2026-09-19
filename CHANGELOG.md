@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [v1.15.10] - 2026-09-19
+
+### Fixed
+
+- **一次 loader panic 不再让这个实体永远加载不了**（U-0254，C7；RR-20260919-08，T-148，**P1**）。
+  `entity.ManagerAccess` 与 `dataengine/engine.EntityRepository` 的共享加载都把"删 flight +
+  `close(done)`"写在加载之后、没有 defer；loader / store / builder / 解码 / `OnInitFinish` 里的一次
+  panic 会跳过这两步，留下一个永不关闭的 flight。进程还活着（Nest 顶层会 recover），但这个 fullID
+  从此不可用——后来的每个请求都等到自己的 ctx 超时，而且**重试永远进不了 loader**。
+  两层都改成 defer 收尾（写入稳定结果 → 删 flight → close(done)）；panic 变成带原因的稳定错误交给
+  waiter（他们在别的 goroutine 上，在那里重新 panic 等于让他们替别人把进程带走），leader 继续 panic。
+- **缺失实体在 single / broadcast 分派处不再被解引用**（U-0255，C8；RR-20260919-09，T-149）。
+  生产 getter 对缺失返回 `(nil,nil)`；single 因此返回 runtime nil pointer 而不是 `ErrEntityNotFound`，
+  broadcast 的逐实体 recovery 在 `Touch` 之后，一个缺失 id 会**中止排在它后面的所有实体**。
+  同包的 multi / multiGroup 早就是 `e != nil && e.Touch()`。测试用生产形状的替身——现有 mock 对缺失
+  返回 error，恰好掩盖了这件事。
+- **索引里没有记录的成员可以退休**（U-0256，C5；RR-20260919-07，T-150，**P1**）。
+  新增 `(*RedisStore).IndexRemove(key)`：只动索引、不动值，给"条目指向的值不在了"这一种情形
+  （删除的两步之间崩过一次）。这样的成员 score 最老、永远排在页首，会被每一页读到、每次被拒、
+  然后继续留着——`limit` 越小占比越大。kit 的 platform 用它在 `ErrOrderInvalid` 分支退休条目。
+
+
 ## [v1.15.9] - 2026-09-19
 
 ### Added

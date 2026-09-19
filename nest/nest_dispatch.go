@@ -690,7 +690,14 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	if err != nil {
 		return nil, err
 	}
-	if !e.Touch() {
+	// The production getter reports "no such entity" as (nil, nil): the
+	// manager missed and there was no loader, or the loader legitimately
+	// found nothing. Touching that is a nil dereference, and what the caller
+	// then sees is whatever the top-level recovery made of it rather than
+	// ErrEntityNotFound — "this entity does not exist" and "the framework
+	// broke" become the same answer (RR-20260919-09). multi and multiGroup in
+	// this file already check; these two did not.
+	if e == nil || !e.Touch() {
 		return nil, ErrEntityNotFound
 	}
 	defer e.UnTouch()
@@ -966,7 +973,11 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 		if err != nil {
 			continue
 		}
-		if !e.Touch() {
+		// Skip, do not dereference: the per-entity recovery below starts
+		// AFTER Touch, so a nil here escaped to the whole dispatch's recovery
+		// and every entity after this one was silently dropped
+		// (RR-20260919-09).
+		if e == nil || !e.Touch() {
 			continue
 		}
 		if !guard.RequireEntity(e) {

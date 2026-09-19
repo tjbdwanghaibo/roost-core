@@ -72,7 +72,7 @@
 | core | `configdata` | 09-02 | 09-06 U-0046（回退 45 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `container` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `dataengine` | 09-02 | 09-06 U-0044（回退 27 条） / 09-09 U-0148 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-09 U-0159（修复） |
-| core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） / 09-09 U-0148 / 09-13 U-0174（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-13 U-0175（修复） / 09-13 U-0180（修复） / 09-13 U-0187（修复） |
+| core | `entity` | 09-02 | 09-06 U-0065（回退 7 条） / 09-07 U-0099（回退 16 条） / 09-09 U-0148 / 09-13 U-0174（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-19 U-0254（修复） | 09-02 / 09-13 U-0175（修复） / 09-13 U-0180（修复） / 09-13 U-0187（修复） |
 | core | `entitysync` | 09-02 | 09-08 U-0104（回退 7 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-15 U-0206（修复） |
 | core | `errcode` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `etcd` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -97,7 +97,7 @@
 | core | `misc` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `mongo` | 09-02 | 09-02 / 09-09 U-0153（真机） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `nats` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
-| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 / 09-11 U-0172（修复） / 09-13 U-0183（修复） | 09-02 | 09-02 | 09-02 |
+| core | `nest` | 09-02 | 09-06 U-0047（回退 45 条） / U-0062 / 09-09 U-0110（回退 9 条） | 09-02 | 09-02 | 09-02 / 09-11 U-0172（修复） / 09-13 U-0183（修复） | 09-02 | 09-02 | 09-02 / 09-19 U-0255（修复） |
 | core | `ownerroute` | 09-02 | 09-06 U-0072（回退 2 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `redis` | 09-02 | 09-08 U-0105 / U-0106（回退 20 条，含 `driver`） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | core | `robot` | 09-02 | 09-02 / 09-09 U-0147 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 / 09-14 U-0198（修复） |
@@ -152,7 +152,7 @@
 | kit | `spatial` | 09-02 | 09-06 U-0081（回退 3 条） / 09-09 U-0149 | 09-02 | 09-02 | 09-02 | 09-02 / 09-18 U-0240（修复） | 09-02 | 09-02 |
 | kit | `statslog` | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `syncstream` | 09-02 | 09-06 U-0082（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-04 U-0009 |
-| kit | `versionstore` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 / 09-19 U-0253（修复） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
+| kit | `versionstore` | 09-02 | 09-02 / 09-09 U-0149 | 09-02 / 09-19 U-0253（修复） | 09-02 | 09-02 / 09-19 U-0256（修复） | 09-02 | 09-02 | 09-02 |
 
 ### roost-service（12 包 + CI 工作流）
 
@@ -239,6 +239,9 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0256 | 2026-09-19 | roost-core `versionstore` + roost-kit `service/platform`：索引里一个没有订单记录的成员会被每一页读到、每次被拒、然后继续留着；它的 score 最老，所以永远排在页首，limit 越小占比越大（RR-20260919-07，P1） | C5 | "这个条目永远不会有结果"是可判定的终局，而循环把它当普通失败：记日志、下一条。修法：`IndexRemove`（只动索引不动值）+ kit 的 `RetirePending`，循环在 `ErrOrderInvalid` 分支退休它；只在"订单不存在"这一种情形退休 | kit `pending_index_promises_test.go` 的 `TestAnIndexEntryWithNoOrderIsRetiredIntegration`（真 Redis） | 修前 `PendingOrders(1)` 永远只给出 ghost；退休之后同样的调用给出真实订单 | T-150 · `docs/bugfix/RR-20260919-07.md` |
+| U-0255 | 2026-09-19 | roost-core `nest`：生产 getter 对缺失实体返回 `(nil,nil)`，single / broadcast 只看 err 就 `Touch()`——single 返回 runtime nil pointer 而不是 `ErrEntityNotFound`，broadcast 的逐实体 recovery 在 Touch 之后，一个缺失 id 会中止后面所有实体（RR-20260919-09，P2） | C8 | 同包的 multi / multiGroup 已经是 `e != nil && e.Touch()`，契约清楚、这两条漏了；现有 mock getter 对缺失返回 error，恰好掩盖了生产契约 | `nest/missing_entity_promises_test.go`（替身用生产形状：缺失返回 `(nil,nil)`） | 修前 single 是 nil 解引用、broadcast 把缺失放第一个时后面的实体一次都没跑；修后 ErrEntityNotFound / 跳过并继续 | T-149 · `docs/bugfix/RR-20260919-09.md` |
+| U-0254 | 2026-09-19 | roost-core `entity` + `dataengine/engine`：两层共享加载把"删 flight + close(done)"写在加载之后、没有 defer；loader 下面任何一次 panic 都会留下一个永不关闭的 flight，该实体从此加载不了，重试也进不了 loader（RR-20260919-08，P1） | C7 | 共享加载天然是"注册 → 做任意深的用户代码 → 结束"，结束必须无条件。修法：两层各加 defer，顺序是写入稳定结果 → 删 flight → close(done)；panic 转成带原因的错误给 waiter，leader 继续 panic | `entity/load_flight_promises_test.go`、`dataengine/engine/entity_repository_flight_promises_test.go` | 修前红四条（flight 残留、waiter 被自己的 deadline 放行）；仓库那两条用 git stash 单独验红 | T-148 · `docs/bugfix/RR-20260919-08.md` |
 | U-0253 | 2026-09-19 | roost-core `redis` / `versionstore` + roost-kit `service/platform` + roost-codegen `demo`：订单先持久化、待办索引由部署侧后写；两次写之间进程退出或 `ZADD` 失败，就留下一笔后台循环永远枚举不到的已付款订单（RR-20260919-04，P1） | C4 | 索引被放在了写不到同一个地方的一侧——部署侧只能在订单写完之后写索引。修法：`CompareAndSetCommand.Index` + 双 key 脚本（compare 通过才动索引），`versionstore.RedisConfig.Index` 让三条写入路径自动维护、`IndexDue` 按分数读；kit 的 `RedisOrders` 同时是 OrderStore 与 PendingOrders，后台重试默认开；cluster 无 hash tag 时拒绝启动 | `redis/cas_index_promises_test.go` 与 kit 的 `pending_index_promises_test.go`（都对真 Redis）、`versionstore/index_promises_test.go` | 修前：订单持久、索引为空、`PendingOrders(128)` 返回空列表；修后"记录订单就是进索引"，终态三种都退休，退避移动分数 | T-147 · `docs/bugfix/RR-20260919-04.md` |
 | U-0252 | 2026-09-19 | roost-codegen `internal/dao`：同一个 nested 指针放进两个字段 / key 时，单槽通知只保留最后一次绑定，第一处从此不再落库——内存里两份相等，磁盘上少一次更新（RR-20260919-02，P1） | C2 | 单槽之下任何不失败的选择都在某一侧静默错误。修法：唯一父所有权——每个 nested 值带 `dirtyOwner{holder, field, key}`，`bindDirty` 遇到不同 owner 就 panic（写任何东西之前），`unbindDirty` 只释放自己那条 | `testdata/runtime/ownership_test.go` 的 `TestANestedValueHasOneParentAtATime`（四种形状）+ 移动 / 重绑两条防误伤 | 修前四条都是"被接受了"；修后 panic 且点名类型，移动（先 Del 再 Set）与重绑仍然合法，demo 装备路径不受影响 | T-146 · `docs/bugfix/RR-20260919-02.md` |
 | U-0251 | 2026-09-19 | roost-codegen `demo`：未领取的付费 grant 固定 30 天后被 `handlerGrantPurchase` 拒绝，drain 随后照样 `HDEL`；而 platform 在 grant 落 Redis 时就把订单标成 delivered——订单已结算、grant 没了、账本也忘了，玩家永远收不到已付款的东西（RR-20260919-06，P1） | C4 | 把邮件那条"准入判据 = 清理判据"照搬到付费资产上，而付费订单**没有**信封过期那样的权威终止时刻。规则应当是：付费资产的去重记录不能早于"履约已确认"被丢弃。修法：取消 grant 过期与账本清理（账本只增），收界要靠幂等的"已履约"回报，本轮未做 | `game/handler/grant_purchase_test.go` 的 `TestAnOldPaidGrantIsStillHonoured`（替换了把旧行为当契约的那一条） | 修前那条测试把"过期拒绝"断言为成功；改写后一年前付款的 grant 仍发货、十年后重放仍被账本挡住 | T-145 · `docs/bugfix/RR-20260919-06.md` |

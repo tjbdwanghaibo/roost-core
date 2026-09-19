@@ -81,11 +81,30 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 	repository.flights[fullID] = flight
 	repository.flightMu.Unlock()
 
+	// Finishing the flight is a defer for the same reason it is in
+	// entity.ManagerAccess (RR-20260919-08): a panic under loadAggregate —
+	// a decoder, a migration step, an OnInitFinish — would otherwise leave a
+	// flight nobody closes, and every later load of that aggregate would wait
+	// on it until its own context expired. The repository is reachable
+	// directly, not only through Nest, so recovering at the Nest boundary
+	// does not cover this.
+	settled := false
+	defer func() {
+		if !settled {
+			flight.value, flight.err = nil, fmt.Errorf(
+				"entity repository: loading aggregate %d panicked: %v", fullID, recover())
+		}
+		repository.flightMu.Lock()
+		delete(repository.flights, fullID)
+		close(flight.done)
+		repository.flightMu.Unlock()
+		if !settled {
+			panic(flight.err)
+		}
+	}()
+
 	flight.value, flight.err = repository.loadAggregate(ctx, fullID, kind)
-	repository.flightMu.Lock()
-	delete(repository.flights, fullID)
-	close(flight.done)
-	repository.flightMu.Unlock()
+	settled = true
 	return flight.value, flight.err
 }
 

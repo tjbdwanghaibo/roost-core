@@ -174,6 +174,32 @@ func (s *RedisStore[K, T]) IndexDue(ctx context.Context, maxScore float64, limit
 	return out, nil
 }
 
+// IndexRemove drops one member from the index without touching its value.
+//
+// It is for entries that name a value which is not there — the only case in
+// which the index and the keyspace can legitimately disagree, and one a reader
+// would otherwise carry on every page forever. Removing an entry whose value
+// DOES exist would hide live work, so callers must establish absence first.
+func (s *RedisStore[K, T]) IndexRemove(ctx context.Context, key K) (bool, error) {
+	if s.cfg.Index == nil {
+		return false, fmt.Errorf("versionstore: this store has no index")
+	}
+	member := s.cfg.KeyOf(key)
+	if member == "" {
+		return false, ErrKeyEmpty
+	}
+	raw, err := s.client.Eval(ctx, indexRemoveScript, []string{s.cfg.Index.Key}, member)
+	if err != nil {
+		return false, err
+	}
+	removed, _ := raw.(int64)
+	return removed > 0, nil
+}
+
+const indexRemoveScript = `
+return redis.call("ZREM", KEYS[1], ARGV[1])
+`
+
 const indexDueScript = `
 return redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
 `

@@ -112,6 +112,15 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 // the flight is removed before done closes, so a retry after a failure
 // starts a fresh load. A waiter whose own context is cancelled stops waiting
 // without affecting the in-flight load.
+//
+// Finishing the flight is a DEFER, and that is the load-bearing part
+// (RR-20260919-08). A panic anywhere under LoadEntity — the store, the
+// builder, a decoder, an OnInitFinish — used to skip the removal and the
+// close, leaving a flight nobody would ever finish: the process survived
+// (Nest recovers handler panics) but every later request for that entity
+// waited on a channel that never closed and got back its own deadline, and
+// the retry never reached the loader because a load "was already in flight".
+// One entity became permanently unavailable, quietly.
 func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64, kind EntityKind, loader AggregateLoader) (IThreadSafeEntity, error) {
 	access.flightMu.Lock()
 	if flight, ok := access.flights[fullID]; ok {
@@ -129,11 +138,29 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	}
 	access.flights[fullID] = flight
 	access.flightMu.Unlock()
+
+	settled := false
+	defer func() {
+		if !settled {
+			// The load is unwinding through a panic. The waiters get a real
+			// error rather than the leader's panic — they are on their own
+			// goroutines and re-panicking there would take the process down
+			// for something they did not do — and the leader keeps panicking,
+			// because a caller whose load blew up must not be told it worked.
+			flight.value, flight.err = nil, fmt.Errorf(
+				"entity manager access: loading entity %d panicked: %v", fullID, recover())
+		}
+		access.flightMu.Lock()
+		delete(access.flights, fullID)
+		access.flightMu.Unlock()
+		close(flight.done)
+		if !settled {
+			panic(flight.err)
+		}
+	}()
+
 	flight.value, flight.err = loader.LoadEntity(ctx, fullID, kind)
-	access.flightMu.Lock()
-	delete(access.flights, fullID)
-	access.flightMu.Unlock()
-	close(flight.done)
+	settled = true
 	return flight.value, flight.err
 }
 
