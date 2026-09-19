@@ -343,7 +343,7 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 
 覆盖现状（2026-09-18 晚，实施第十二批之后）：kit 的 9 个真实服务 demo 用了 6 个（account / chat / mail / match / rank / session），
 kit 的真实服务至此全部有使用方（platform 第十五批、global 与 activity 第十六批），directory 仍只被 account 间接用；core 这边 game-facing 的包里
-**remoteentity、ownerroute、mirror、ai、actionflow 仍没有任何直接使用**（spatial 第十三批、migration 第十四批、timer 第十六批已接入）。
+**remoteentity、ownerroute、mirror、ai、actionflow 仍没有任何直接使用**（spatial 第十三批、migration 第十四批、timer 第十六批、featureflag 与 hotcode 第十七批已接入）。
 
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
 2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
@@ -354,7 +354,7 @@ kit 的真实服务至此全部有使用方（platform 第十五批、global 与
 6. ~~platform 待发货索引的参考实现~~ — 第十五批完成，见 §9.7。
 7. ~~`core/migration`（数据版本迁移）~~ — 第十四批完成，见 §9.5.2。
 8. ~~给 demo Player 加一个嵌套 struct 字段~~ — 第十四批完成，见 §9.5.1。
-9. **featureflag / hotcode**：运维面剩下的两块（timer 与 global+activity 于第十五、十六批接入，见 §9.8）。
+9. ~~featureflag / hotcode~~ — 第十七批完成，见 §9.9。
 10. **ai / actionflow**：NPC 行为，最偏"游戏内容"的一档。
 11. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile`
     在类型叫 `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
@@ -535,6 +535,49 @@ kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，ki
 
 又一次同一个判据：**零覆盖的地方就是缺陷能长期活着的地方**——`Type` 是个再自然不过的字段名，
 而在此之前没有任何生成工程用过它。
+
+
+### 9.9 第十七批（2026-09-19）：运维面——开关与热补丁
+
+两个零覆盖的 core 包，合起来是"不发版也能改一点东西"的那一面：`featureflag`（开关）与 `hotcode`（补丁点）。
+
+#### 9.9.1 开关的源是配置表，不是常量
+
+- **形状**：`configs/table/feature_flag.csv` 是源，`featureflag.DefaultStore()` 是游戏读的内存态，
+  `internal/service/<game>/flags.go` 是连接两者的唯一一处：启动时发布一次，
+  之后挂在**配置存储自己的 reload 钩子**（`AddReloadListener` 的 `AfterApply`）上，每次 reload 重新发布。
+- **启动就要发布**，而不是等第一次 reload：incident 期间重启的进程必须带着运维留下的开关起来，
+  而不是全开。
+- **Replace 而不是 merge**：表是源，所以表里删掉的开关要消失，而不是停在最后一次的值上。
+  代价是 GM 的临时覆盖会被下一次 reload 冲掉——这条写进了命令描述里，并在日志里 WARN 一行：
+  两个源静默打架比一个源糟糕得多。
+- **缺表时拒绝发布**：把"快照里没有这张表"读成"所有开关都关"，会在一次配置失误里把商店关掉。
+  拒绝发布保留上一批开关并报错。
+- **开关只能在入口读**。三个开关各自说清了边界：`purchase` 关掉只拒绝新购买——平台已经记下的订单
+  照常结算；`monster_spawn` 关掉只停止补刷——活着的怪不动；`activity` 关掉只停止开新窗口——
+  已经开的窗口照样结算。**在事务中间读开关会留下两条路径都不会产生的状态**，这句话写在 `game/flags` 的包注释里。
+- 新增 GM：`gm.flag.list`（带 note——运维凌晨三点看到一个关着的开关，要能判断打开它安不安全）、
+  `gm.flag.set`（本进程、临时）、`gm.config.reload`（编辑表之后让它生效的那一步，此前 demo 没有任何入口）。
+
+#### 9.9.2 补丁点：能换的函数，和不能换的函数
+
+- **形状**：`rewards.LevelUpReward` 走 `hotcode.Resolve(点名, 原函数)`；点在服务 `Init` 里**显式注册**
+  （`installPatchPoints`），不是在各自文件的 `init()` 里——"这个函数可以在运行时被替换、revert 会精确回到它"
+  是一句运维承诺，它的全集应该能在一个地方读完。
+- **判据写下来了**：函数必须**每次调用自成一体**。补丁是在两次调用之间换的，所以任何"两个版本要对
+  同一份在途状态达成一致"的函数都不能做成补丁点。奖励表这种"读一个等级、返回一个值"的正合适。
+- **fallback 不是摆设**：没有注册补丁点的进程（测试、工具、没装的服务）必须照常工作。
+  测试的第一条就是它——如果 Resolve 在没注册时返回零值，那"能热补丁"的代价就是"平时也可能坏"。
+- 框架侧本来就把每个 Nest handler 注册成了补丁点（`hotcode.list` 里能看到 `nest.handler.*`），
+  demo 补的是**领域函数**这一类；`hotcode.RegisterAdminCommands` 把 list / revert / load_plugin
+  挂到同一个 admin 注册表上，与 GM 命令共用 token 与审计。
+
+#### 9.9.3 实跑
+
+`gm.flag.set purchase=false` → 机器人的 purchase 步骤当场拿到编码拒绝（`600101`），run 变红；
+改回 true → 全绿。编辑 `configs/data/feature_flag.json` 把 `monster_spawn` 关掉 → `gm.config.reload`
+→ 日志 `feature flags published count=3 off=[monster_spawn] version=2`；随后 `gm.scene.kill` 杀掉一只，
+六秒后 `alive` 停在 2 不再回补——**关掉的是补刷，不是活着的怪**，与注释里写的边界一致。
 
 ## 8. 相关文件速查
 
