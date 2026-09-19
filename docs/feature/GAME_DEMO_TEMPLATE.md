@@ -342,8 +342,8 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 > 当场就红。零覆盖的地方就是缺陷能长期活着的地方。第 1、2、3 条已于第十二批实施（§9.3）。
 
 覆盖现状（2026-09-18 晚，实施第十二批之后）：kit 的 9 个真实服务 demo 用了 6 个（account / chat / mail / match / rank / session），
-**global+activity 仍零使用**（platform 于第十五批接入），directory 只被 account 间接用；core 这边 game-facing 的包里
-**spatial、remoteentity、ownerroute、mirror、ai、actionflow、timer、migration 仍没有任何直接使用**。
+kit 的真实服务至此全部有使用方（platform 第十五批、global 与 activity 第十六批），directory 仍只被 account 间接用；core 这边 game-facing 的包里
+**remoteentity、ownerroute、mirror、ai、actionflow 仍没有任何直接使用**（spatial 第十三批、migration 第十四批、timer 第十六批已接入）。
 
 1. ~~实体同步（`sync=true` / entitysync）~~ — 第十二批完成，见 §9.3.1。
 2. ~~attribute 接进持久化与同步 + `Container` 层间合成~~ — 第十二批完成，见 §9.3.2。
@@ -354,7 +354,7 @@ C11 CI 实跑门、C12、C13 cfggen 运行时门、C14 CRLF、D15 数据流文�
 6. ~~platform 待发货索引的参考实现~~ — 第十五批完成，见 §9.7。
 7. ~~`core/migration`（数据版本迁移）~~ — 第十四批完成，见 §9.5.2。
 8. ~~给 demo Player 加一个嵌套 struct 字段~~ — 第十四批完成，见 §9.5.1。
-9. **timer / global+activity / featureflag / hotcode**：运维与限时玩法面，现在完全空白。
+9. **featureflag / hotcode**：运维面剩下的两块（timer 与 global+activity 于第十五、十六批接入，见 §9.8）。
 10. **ai / actionflow**：NPC 行为，最偏"游戏内容"的一档。
 11. **小账**：`session` 进程的 sweep owner 列表（默认懒解决）；attribute 生成的构造函数名 `New<TypeName>Profile`
     在类型叫 `XxxProfile` 时会得到 `NewXxxProfileProfile`；dao 的同一 child 被多父级共享时 `SetNotify` 后接线的赢。
@@ -473,6 +473,68 @@ bootstrap 在 app 之前构造，构造函数里拿不到 registry；索引要�
 - `NewMod(...)` 之外的可选协作者没有生成入口。加 `frameworkServiceSpec.ModChain`，
   于是 `svcplatform.NewMod(...).WithPendingOrders(servicePlatform.Pending())` 是生成的，
   默认 collaborators 文件里也有一个返回 nil 的 `Pending()`（"没有索引"是合法选择，但不能是隐形的）。
+
+
+### 9.8 第十六批（2026-09-19）：限时活动——World 的持久计时器与跨服聚合
+
+一条链子把两个零覆盖的东西串起来：core 的 `timer`（实体自己的定时器，没有任何生成工程用过）与
+kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，kit 最后两个零使用服务）。
+串起来才有意义——活动需要一个"到点关闭"的截止时刻，而截止时刻需要活过重启。
+
+#### 9.8.1 World 的计时器堆（core `timer`）
+
+- **形状**：`WorldDao.Timers map[int64]*TimerNode` + `TimerSeed`，`TimerComponent` 在 `OnInitFinish`
+  里用它重建 `timer.Scheduler`，scheduler 的 change hook 反过来写 DAO。没有"保存定时器"这一步——
+  加一个、烧掉一个、删一个，都落在**当时那个事务**里。
+- **三件事和 `time.AfterFunc` 不同**：活过重启（19:58 部署，20:00 的截止依然在）；
+  在锁内触发（handler 改的东西和节点的删除是同一条 WAL 记录）；**handler 不做 I/O**——
+  它记一条 effect 就返回，跨进程调用由 outbox 消费者在锁外做。
+- **handler 的返回值就是重试**：0 表示"烧掉我"，非 0 表示"这么久之后再来"。Emit 失败时返回 30s，
+  于是窗口晚关而不是永远不关——一个只会 log 的 handler 会把唯一能关窗口的东西丢掉。
+- **时钟被钉住**：`Tick(now)` 与 `ScheduleActivityPhase(..., now)` 都带着自己的时刻，进来先
+  `SetClock`。否则一个截止时刻的 `End` 取决于**锁是什么时候拿到的**，而不是取决于安排它的那一 tick。
+  这条是写测试时发现的：第一版测试用假时钟安排、真时钟计算 End，于是"还没到期"的 tick 把它烧了。
+- 测试三条，核心那条是**重启**：第一个 World 安排截止时刻 → 取它会存下的文档 → 新 DAO `RestorePersisted`
+  → 用 `EntityCreateParam.Dao` 建第二个 World → 未到期的 tick 什么都不写、到期的 tick 烧掉它并带出 effect。
+  安排它的那个进程恰恰是不在了的那个，所以这一半只有测试能演。
+
+#### 9.8.2 活动：谁说"结束了"，谁说"值多少"（kit `global` + `activity`）
+
+- **职责切得很干净**：coordinator 只聚合 —— 收集"服务器 N 到达 close 阶段"，在**每个预期服务器都报到**
+  或宽限期过后说"收齐了"，然后给每个服务器发一份 result dispatch。它不知道道具、不知道玩家。
+  什么叫一分、结算发什么，全在 `game/activity` 和游戏进程里。
+- **窗口 id 由时钟算出来**（`race-<窗口起点>`），不是谁分配的。于是组里每台服务器对同一个窗口算出同一个 id，
+  中途重启的服务器**重新加入它本来就在贡献的那个活动**，不需要任何人告诉它。
+- **租约来自 `global`**：进程启动 `Bind`（只插不改，第二次起冲突就是围栏）+ `AcquireLease`，循环里续约，
+  停机时归还。活动的预期集合取自 `LiveGames(候选集)`——**没起来的服务器不能被等**，否则每个窗口都要等到宽限期。
+- **贡献的幂等锚是 dungeon run id**，和清关奖励用的是同一个：重投的贡献被 coordinator 的 reservation 挡掉，
+  而不是记两次。机器人断言的是精确的 1（清关一次 + 重放一次），不是"至少 1"。
+- **结算的顺序是 邮件 → 记录 → ack**，每一步都能重复：邮件按 (活动, 玩家) 幂等；World 上的记录让整张榜
+  只读一次；ack 放最后，所以中间任何一次崩溃都让 dispatch 保持 pending、整段重来。
+  先 ack 的那个顺序，崩一次就是所有人的奖励没了而且没有任何记录说欠过。
+- **榜是游戏自己的**：coordinator 没有"列出参与者"的接口（对聚合做枚举是无界的），所以贡献时顺手
+  `ZADD` 一条到 Redis，结算只读前 `PaidRanks` 名。结算的成本因此不随参与人数增长。
+- **远端错误要按 code 认**：`Bind` 的"已绑定"在总线上回来是 `remote.570110`，不是 `global.ErrConflict`，
+  `errors.Is` 永远不匹配——写成 `errors.Is` 就是"第一次能起、第二次起不来"。实跑第二次启动时当场看到。
+
+#### 9.8.3 实跑（10 进程）
+
+`race-1789781400` 开窗 → 两个机器人各清一次关（含一次重放）→ `activity_standing` 读到精确的 1/1 →
+09:35:01（截止 1789781700）计时器触发 → effect → `NotifyPhase` → `status=complete` →
+下一个窗口自动开 → `settled paid=2 reason=collected`；Mongo 里 `settled_activities` 一条、
+计时器堆里换成了下一个窗口的节点、seed 递增；两封结算邮件在邮箱里；"settled" 只出现一次。
+`gm.activity.close` 也走同一条路把当前窗口提前关掉（提前关等于提前结束，之后到下个窗口开始之前的清关不计分，
+命令描述里写了）。
+
+#### 9.8.4 顺带抓到的缺陷：U-0246
+
+`TimerNode.Type` 这个字段让 dao 生成器整个崩了：私有名是 `type`，不是合法 Go，错误
+（`expected '}', found 'type'`）指向一个临时生成文件，跟"你有个字段叫 Type"之间毫无提示。
+只有**关键字**会坏（`String`、`Len` 这种预声明标识符是合法的）。修法只改私有名（`typeValue`），
+访问器、BSON 键、脏位常量都保持原拼写。记录见 `docs/bugfix/U-0246-dao-keyword-field-names.md`。
+
+又一次同一个判据：**零覆盖的地方就是缺陷能长期活着的地方**——`Type` 是个再自然不过的字段名，
+而在此之前没有任何生成工程用过它。
 
 ## 8. 相关文件速查
 
