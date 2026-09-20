@@ -88,7 +88,7 @@ jobs:
             # manifest edit, so it goes through sync).
             "${RUNNER_TEMP}/roost" add rpc Guild -service game
             sed -i 's/^    gate:$/    gate:\n        uses_rpcs:\n            - guild/' roost.yaml
-            "${RUNNER_TEMP}/roost" project sync
+            "${RUNNER_TEMP}/roost" project sync --skip-deps
             # Pure-version scenarios exercise the transactional generate+tidy
             # path here. Source-head is compiled through go.work below because
             # its APIs may intentionally not exist in the latest tag yet.
