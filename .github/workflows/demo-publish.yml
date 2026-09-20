@@ -51,6 +51,11 @@ jobs:
           	${GITHUB_WORKSPACE}
           )
           W
+          # The generated go.mod names the release this tree belongs to, which
+          # the proxy and the checksum database may not have indexed yet right
+          # after a tag is pushed. The workspace is what supplies the framework
+          # here, so the requirement goes before anything resolves.
+          go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core
           go build ./...
           go vet ./...
           go test ./...
