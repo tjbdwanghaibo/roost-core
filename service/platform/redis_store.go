@@ -140,9 +140,10 @@ func (o *RedisOrders) RetirePending(ctx context.Context, orderID string) error {
 }
 
 var (
-	_ OrderStore     = (*RedisOrders)(nil)
-	_ PendingOrders  = (*RedisOrders)(nil)
-	_ PendingRetirer = (*RedisOrders)(nil)
+	_ OrderStore      = (*RedisOrders)(nil)
+	_ PendingOrders   = (*RedisOrders)(nil)
+	_ PendingRetirer  = (*RedisOrders)(nil)
+	_ PendingDeferrer = (*RedisOrders)(nil)
 )
 
 // PendingRetirer is implemented by an index that can drop an entry naming an
@@ -150,4 +151,15 @@ var (
 // exactly that; an index that cannot do it simply keeps the entry.
 type PendingRetirer interface {
 	RetirePending(ctx context.Context, orderID string) error
+}
+
+// DeferPending pushes an entry's next attempt forward. It is what the Server
+// does with a record that cannot be decoded: retiring it would hide a real
+// order, and leaving it alone lets it hold the front of every page.
+func (o *RedisOrders) DeferPending(ctx context.Context, orderID string, notBefore time.Time) error {
+	if o == nil || orderID == "" {
+		return nil
+	}
+	_, err := o.store.IndexDefer(ctx, orderID, float64(notBefore.Unix()))
+	return err
 }

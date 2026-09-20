@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
 // RetryInterval is how often the platform process retries deliveries that
@@ -57,12 +59,23 @@ func (s *Server) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			service.retryPendingOnce(ctx)
+		}
+	}
+}
+
+// retryPendingOnce is one pass of the retry loop: read a page of the pending
+// index and attempt each order on it. It is a method so a test can drive one
+// pass without a ticker.
+func (service *Service) retryPendingOnce(ctx context.Context) {
+	{
+		{
 			orderIDs, err := service.pendingOrderIDs(ctx)
 			if err != nil {
 				// The index is the deployment's to fix; one failing read must
 				// not end the loop for every other order.
 				slog.Error("platform server: pending order index failed; retrying next tick", "err", err)
-				continue
+				return
 			}
 			for _, orderID := range orderIDs {
 				receipt, err := service.AttemptDelivery(ctx, orderID)
@@ -95,6 +108,26 @@ func (s *Server) run(ctx context.Context) error {
 								"order_id", orderID, "err", retireErr)
 						}
 					}
+				case errors.Is(err, versionstore.ErrMalformedRecord):
+					// The order's bytes do not decode, and they will not decode
+					// on the next tick either. Left alone it keeps its place at
+					// the head of the page: with a batch of 128, 128 such
+					// records are the whole batch, forever, and the healthy
+					// orders behind them are never even read (RR-20260920-05).
+					//
+					// It is NOT retired — unlike an index entry with no order,
+					// this one names a real record that somebody has to look
+					// at. It is pushed back instead, so it keeps its place in
+					// the queue without keeping its place at the front, and it
+					// stays visible to whoever goes looking.
+					slog.Error("platform server: an indexed order cannot be decoded; deferring it so it stops blocking the page",
+						"order_id", orderID, "defer", PoisonedRetryDelay, "err", err)
+					if deferrer, ok := service.cfg.Pending.(PendingDeferrer); ok {
+						if deferErr := deferrer.DeferPending(ctx, orderID, service.cfg.Now().Add(PoisonedRetryDelay)); deferErr != nil {
+							slog.Error("platform server: index entry not deferred; it will be read again next tick",
+								"order_id", orderID, "err", deferErr)
+						}
+					}
 				case err != nil:
 					slog.Error("platform server: delivery attempt failed",
 						"order_id", orderID, "err", err)
@@ -104,6 +137,21 @@ func (s *Server) run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// PoisonedRetryDelay is how far a record that cannot be decoded is pushed
+// back. Long enough that it stops crowding the page, short enough that a
+// deployment which fixes the record (a codec rollback, a manual repair) sees
+// it retried without a restart.
+const PoisonedRetryDelay = 15 * time.Minute
+
+// PendingDeferrer is implemented by an index that can push an entry's next
+// attempt time forward. The Server uses it for records that cannot be
+// decoded: they must not be retired — something has to look at them — but
+// they must not hold the front of the queue either. An index that cannot
+// defer keeps the entry where it is, and the log is then the only signal.
+type PendingDeferrer interface {
+	DeferPending(ctx context.Context, orderID string, notBefore time.Time) error
 }
 
 // The orders this process retries come from the deployment's own pending

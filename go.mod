@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/spf13/viper v1.21.0
-	github.com/tjbdwanghaibo/roost-core v1.15.14
+	github.com/tjbdwanghaibo/roost-core v1.15.17
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 )
 

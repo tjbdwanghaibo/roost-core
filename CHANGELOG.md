@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v1.14.16] - 2026-09-20
+
+### Fixed
+
+- **读不回来的订单不再永久占住重试页**（U-0262，C5；RR-20260920-05，T-156）。`PendingOrders` 每次返回索引里最老的一批 due id；不可解码的记录只被记一条日志，score 不变也不离开，于是每一轮都回到队头。128 个更老的坏成员就是整页，排在后面的健康订单永远进不了 `AttemptDelivery`。
+  现在它们被**推后** `PoisonedRetryDelay`（15 分钟）而不是退休——与 U-0256（索引条目没有订单）的区别在于：这里的记录**是真的**，退休等于把一笔可能已付款的订单从唯一的恢复入口里抹掉。
+  - 新接口 `PendingDeferrer`，`RedisOrders` 实现它（需 core ≥ v1.15.17 的 `versionstore.IndexDefer`）。
+  - 分类依据是 `versionstore.ErrMalformedRecord`（core ≥ v1.15.16），不是错误文本：一次 Redis 抖动不应该把健康订单一起推后 15 分钟。
+  - 重试循环的一趟抽成 `Service.retryPendingOnce`，一趟可以被直接驱动。
+  测试 `poison_pending_promises_test.go`（128 坏 + 1 好，变异验证过）。
+
+### Changed
+
+- core 依赖升到 v1.15.17。
+
 ## [v1.14.15] - 2026-09-20
 
 ### Changed
