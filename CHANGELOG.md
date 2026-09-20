@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.18] - 2026-09-20
+
 ### Fixed
 
 - **`SmallSafeMap` 不再被写成空文档**（U-0265，C2；RR-20260920-07，T-159）。`MarshalBSONValue` 的签名是 `(bson.Type, []byte, error)`，而驱动的 `ValueMarshaler` 要 `(byte, []byte, error)`；`bson.Type` 是 `type Type byte`——**定义类型，不是别名**，所以接口从未被实现、方法被静默忽略，类型退回默认结构体编码器，而它的字段全是未导出的。
