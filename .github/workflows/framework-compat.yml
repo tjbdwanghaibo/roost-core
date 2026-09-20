@@ -70,7 +70,7 @@ jobs:
             # game to them, so the full scenario compiles roost-kit/service too.
             template_args=(-template game)
           fi
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
+          "${RUNNER_TEMP}/roost" project new planet -skip-deps -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
           if [ "$SCENARIO" = full ]; then
             cd "${RUNNER_TEMP}/planet"
             "${RUNNER_TEMP}/roost" add access player --service gate

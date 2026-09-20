@@ -45,7 +45,7 @@ jobs:
           # must rewrite their imports (--consolidate) before the version bump.
           core=latest; kit=latest
           "${RUNNER_TEMP}/roost-current" project upgrade --root . --consolidate --dry-run -core "$core" -kit "$kit" -codegen latest
-          "${RUNNER_TEMP}/roost-current" project upgrade --root . --consolidate -core "$core" -kit "$kit" -codegen latest
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --consolidate --skip-deps -core "$core" -kit "$kit" -codegen latest
           sha256sum -c "${RUNNER_TEMP}/business.before"
           if grep -qE 'roost-skill|roost-service|roost-kit|roost-codegen' go.mod; then echo "go.mod still requires a folded-in module"; exit 1; fi
           # The rewritten project imports roost-core/kit/…, which exists in
@@ -62,5 +62,5 @@ jobs:
           go test ./...
           go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
           cp roost.yaml "${RUNNER_TEMP}/roost.before"
-          "${RUNNER_TEMP}/roost-current" project upgrade --root . -core "$core" -kit "$kit" -codegen latest
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --skip-deps -core "$core" -kit "$kit" -codegen latest
           cmp roost.yaml "${RUNNER_TEMP}/roost.before"

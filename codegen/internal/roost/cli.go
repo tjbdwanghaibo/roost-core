@@ -102,6 +102,11 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		services := fs.String("services", "game", "comma-separated services")
 		mods := fs.String("mods", "", "comma-separated service Kit mods")
 		features := fs.String("features", "", "comma-separated features")
+		// Same reason as `project upgrade --skip-deps`: during a boundary
+		// migration the generated imports are correct before any release
+		// carries them, so file generation and dependency resolution have to
+		// be separable (三仓合一仓 P4).
+		newSkipDeps := fs.Bool("skip-deps", false, "write the project but do not resolve framework dependencies")
 		core := fs.String("roost-core-version", "", "roost-core version")
 		kit := fs.String("roost-kit-version", "", "roost-kit version")
 		skill := fs.String("roost-skill-version", "", "roost-skill version")
@@ -127,7 +132,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		}
 		printSyncResult(stdout, result)
 		fmt.Fprintf(stdout, "project files ready: %s\n", target)
-		if err := UpdateFrameworkDependencies(target, manifest, stdout, stderr); err != nil {
+		if *newSkipDeps {
+			fmt.Fprintln(stdout, "new: --skip-deps, framework dependencies not resolved")
+		} else if err := UpdateFrameworkDependencies(target, manifest, stdout, stderr); err != nil {
 			return fmt.Errorf("project files created at %s but framework resolution failed; after connectivity recovers run roost project deps --root %s: %w", target, target, err)
 		}
 		fmt.Fprintf(stdout, "project ready: %s\n", target)
@@ -145,7 +152,15 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		skill := fs.String("skill", "", "removed: skill ships inside roost-core since v1.14.0")
 		serviceVersion := fs.String("service", "", "removed: the services ship inside roost-kit since v1.13.0")
 		codegen := fs.String("codegen", "", "new codegen version")
-		consolidate := fs.Bool("consolidate", false, "rewrite imports from roost-skill / roost-service / roost-kit implementation packages to their consolidated locations (core v1.14.0 / kit v1.13.0)")
+		consolidate := fs.Bool("consolidate", false, "rewrite imports from roost-skill / roost-service / roost-kit implementation packages to their consolidated locations (core v1.14.0 / kit v1.13.0), and from roost-kit / roost-codegen into roost-core (core v1.16.0)")
+		// A boundary migration has a window in which the version it rewrites
+		// TO is not published yet: the imports are correct and no proxy can
+		// resolve them. Resolving dependencies then fails and takes the whole
+		// command with it, although the rewrite itself succeeded. This flag
+		// separates the two so that the rewrite can be verified against a
+		// checkout (go.work) before the boundary release exists — which is how
+		// upgrade-compat proves the migration (三仓合一仓 P4).
+		skipDeps := fs.Bool("skip-deps", false, "rewrite and sync files but do not resolve framework dependencies (for a boundary whose release is not published yet)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -153,9 +168,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("unexpected arguments %q", fs.Args())
 		}
 		allowed := map[string][]string{
-			"sync": {"root"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
+			"sync": {"root", "skip-deps"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
 			"next": {"root", "workflow"}, "deps": {"root"},
-			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen", "consolidate"},
+			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen", "consolidate", "skip-deps"},
 		}
 		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
@@ -174,7 +189,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if err != nil {
 				return err
 			}
-			if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
+			if *skipDeps {
+				fmt.Fprintln(stdout, "sync: --skip-deps, framework dependencies not resolved")
+			} else if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
 				return fmt.Errorf("project files synchronized but framework resolution failed: %w", err)
 			}
 			printSyncResult(stdout, result)
@@ -233,7 +250,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if err != nil {
 				return err
 			}
-			if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
+			if *skipDeps {
+				fmt.Fprintln(stdout, "upgrade: --skip-deps, framework dependencies not resolved")
+			} else if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
 				return fmt.Errorf("project upgraded but framework resolution failed: %w", err)
 			}
 			printSyncResult(stdout, result)
