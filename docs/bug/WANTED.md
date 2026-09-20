@@ -6,6 +6,38 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-04 进程重启后，远端实体的一次 dispatch 等了 79 秒
+
+- **位置**：`roost-core/remoteentity`（`versioned_lock` / `Assembly` 的 `OpTimeout` 使用路径）与
+  `roost-core/nest` 的 dispatch 等待。基线：core `v1.15.17`、codegen 第十八批（Guild）。
+- **现象**：单进程。跑一轮机器人（建了公会）→ `run.sh stop game` → `run.sh start game` → 立刻再跑一轮：
+  `found_guild` 失败，而服务端的 slow dispatch 记录显示这一次 `handlerFoundGuild` 的耗时是
+
+  ```text
+  slow dispatch  handler=handlerFoundGuild  cost_ms=79031
+  ```
+
+  而配置里 `remote_entity.lock_ttl = 15s`、`op_timeout = 3s`。**79 秒既不是租约也不是超时。**
+- **为何可疑**：
+  1. 冷启动（数据库、控制库、Redis 全空）时同一个 handler 稳定在 **~200ms** 完成；连跑三轮都是 200ms 量级。
+  2. 只有“前一个化身刚死”这一种情形会出现这个等待；等足够久（实测 ~20s）之后一切正常。
+  3. 给客户端加上重试（20 次、每次前等 1 秒）之后，**整个 dispatch 的耗时从 3s 变成 79s**——
+     这说明重试并没有各自超时返回，而是**堆在同一把锁后面**；等待者越多，释放越晚。
+  4. `op_timeout` 看上去没有约束住这段等待：3 秒的配置下出现了 79 秒的 dispatch。
+- **为何不自己改**：三个候选根因的修法完全不同，而手上的证据不足以区分：
+  （a）**锁泄漏**——超时返回的那一次事务没有释放它已经拿到的锁，后续等待者全部排队；
+  （b）**等待不受 `op_timeout` 约束**——超时只盖在某一段操作上，锁等待在它之外；
+  （c）**前任的锁没有被 fence 回收**——versioned lock 有 epoch，理论上新化身可以抢占而不是等到期。
+- **会红的测试草稿**：core 侧，一个 remote-managed 实体：进程 A 拿锁并在提交中途被杀（或直接丢弃 Assembly），
+  进程 B 启动后对同一实体发 N 个并发事务；断言（i）每一个都在 `op_timeout` 内返回（成功或可重试拒绝），
+  （ii）总耗时不随 N 增长。现在第二条应该会红。
+- **候选修法**：先定一条契约——“一次远端事务的**总**等待不得超过 `op_timeout`，包括锁等待”，
+  然后按根因选：超时路径上无条件释锁（a）、把锁等待放进同一个 deadline（b）、
+  或者允许新化身按 epoch 抢占死化身的锁（c）。
+- **影响范围**：只影响 remote-managed 实体（demo 里就是 Guild），而且只在**进程刚重启**的窗口内。
+  普通运行（冷启动、连跑三轮）全绿，所以第十八批照常合入，这一条单独交审查。
+- **来源**：第十八批合入时的验收实跑。
+
 ## W-2026-09-20-03 `SmallSafeMap` 的 BSON 自定义编码从来没生效，它会被写成空文档
 
 - **位置**：`roost-core/safemap/small.go:121-133`（`MarshalBSONValue` / `UnmarshalBSONValue`）。
