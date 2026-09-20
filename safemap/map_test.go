@@ -12,6 +12,11 @@ func TestSmallSafeMapContract(t *testing.T) {
 	exerciseMap(t, NewSmallSafeMap[int64, string](2))
 }
 
+// Calling the two methods by hand, which is what this test does, is NOT
+// enough on its own: it passed for as long as the signature did not match the
+// driver's interface, because a direct call does not care whether bson ever
+// dispatches to it (RR-20260920-07). The round trip through bson.Marshal
+// lives in bson_promises_test.go; this one stays for the type code.
 func TestSmallSafeMapBSONV2RoundTrip(t *testing.T) {
 	source := NewSmallSafeMap[string, int](2)
 	source.Set("alpha", 1)
@@ -20,8 +25,8 @@ func TestSmallSafeMapBSONV2RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if typeCode != bson.TypeEmbeddedDocument {
-		t.Fatalf("BSON type = %v, want embedded document", typeCode)
+	if bson.Type(typeCode) != bson.TypeEmbeddedDocument {
+		t.Fatalf("BSON type = %v, want embedded document", bson.Type(typeCode))
 	}
 	restored := NewSmallSafeMap[string, int](0)
 	if err := restored.UnmarshalBSONValue(typeCode, data); err != nil {

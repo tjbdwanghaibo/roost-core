@@ -104,23 +104,30 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	if w == nil || w.mgr == nil {
 		return nil, entity.ErrRemoteRejected
 	}
-	gateStarted := time.Now()
-	select {
-	case w.writeGate <- struct{}{}:
-		metrics.ObserveDuration("remote_entity.remote.write_gate_wait", nil, time.Since(gateStarted))
-	case <-parent.Done():
-		return nil, parent.Err()
-	}
-	w.ownershipMu.RLock()
-	release := func() {
-		w.ownershipMu.RUnlock()
-		<-w.writeGate
-	}
+	// OpTimeout is the budget for the WHOLE operation, and the queue is part
+	// of it. It used to be applied after the gate below, which left the wait
+	// bounded only by the caller: N writers on one entity then made the last
+	// one wait for all the others, and a configured 3s budget coexisted with
+	// a 79s dispatch (RR-20260920-08). The lock path in ownership.go already
+	// sets its deadline before waiting; this is the same rule, not a new one.
 	ctx := parent
 	var cancel context.CancelFunc
 	if _, ok := ctx.Deadline(); !ok {
 		ctx, cancel = context.WithTimeout(ctx, w.mgr.cfg.OpTimeout)
 		defer cancel()
+	}
+	gateStarted := time.Now()
+	select {
+	case w.writeGate <- struct{}{}:
+		metrics.ObserveDuration("remote_entity.remote.write_gate_wait", nil, time.Since(gateStarted))
+	case <-ctx.Done():
+		metrics.IncCounter("remote_entity_write_gate_timeout_total", nil, 1)
+		return nil, ctx.Err()
+	}
+	w.ownershipMu.RLock()
+	release := func() {
+		w.ownershipMu.RUnlock()
+		<-w.writeGate
 	}
 	if err := w.ensureMarker(ctx); err != nil {
 		release()

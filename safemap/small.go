@@ -118,17 +118,32 @@ func (m *SmallSafeMap[K, V]) SetRawMap(src map[K]V) {
 	}
 }
 
-func (m *SmallSafeMap[K, V]) MarshalBSONValue() (bson.Type, []byte, error) {
-	return bson.MarshalValue(m.RawMap())
+// The signature takes a plain byte, not bson.Type, and that is not a style
+// choice: the driver's ValueMarshaler is declared as (byte, []byte, error),
+// while bson.Type is a DEFINED type over byte rather than an alias. A method
+// returning bson.Type compiles, does not implement the interface, and is
+// silently never called — the value then goes through the default struct
+// encoder, and every field here is unexported, so the map used to serialize
+// as an empty document with nothing reporting it (RR-20260920-07).
+func (m *SmallSafeMap[K, V]) MarshalBSONValue() (byte, []byte, error) {
+	typ, data, err := bson.MarshalValue(m.RawMap())
+	return byte(typ), data, err
 }
 
-func (m *SmallSafeMap[K, V]) UnmarshalBSONValue(t bson.Type, data []byte) error {
+func (m *SmallSafeMap[K, V]) UnmarshalBSONValue(typ byte, data []byte) error {
 	var raw map[K]V
-	if err := bson.UnmarshalValue(t, data, &raw); err != nil {
+	if err := bson.UnmarshalValue(bson.Type(typ), data, &raw); err != nil {
 		return err
 	}
 	m.SetRawMap(raw)
 	return nil
 }
 
-var _ IMap[int64, int64] = (*SmallSafeMap[int64, int64])(nil)
+var (
+	_ IMap[int64, int64] = (*SmallSafeMap[int64, int64])(nil)
+	// The assertions are the guard: a signature that drifts from the driver's
+	// interface fails here, at compile time, instead of turning a document
+	// into {} at run time.
+	_ bson.ValueMarshaler   = (*SmallSafeMap[int64, int64])(nil)
+	_ bson.ValueUnmarshaler = (*SmallSafeMap[int64, int64])(nil)
+)

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`SmallSafeMap` 不再被写成空文档**（U-0265，C2；RR-20260920-07，T-159）。`MarshalBSONValue` 的签名是 `(bson.Type, []byte, error)`，而驱动的 `ValueMarshaler` 要 `(byte, []byte, error)`；`bson.Type` 是 `type Type byte`——**定义类型，不是别名**，所以接口从未被实现、方法被静默忽略，类型退回默认结构体编码器，而它的字段全是未导出的。
+  修复的**主体是两条编译期断言**（`var _ bson.ValueMarshaler / ValueUnmarshaler = …`），不只是改签名：同样的坑 U-0261 刚踩过一次，两次都靠人眼发现。存量数据不受影响——这个类型从来没成功写进过 Mongo。
+- **远端写的预算现在覆盖排队**（U-0266，C8；RR-20260920-08，T-160）。`beginWrite` 先在每实体一格的写闸上 `select`（只看调用方 ctx），拿到闸之后才套 `OpTimeout`；排队因此没有上界（调用方无 deadline 时是**无限**等待），配置 3 秒的 `op_timeout` 与一次 79 秒的 dispatch 可以同时为真。
+  同包的加锁路径已经是“先设 deadline 再排队”，所以这是一处遗漏而不是取舍。**契约写死**：`OpTimeout` 是一次远端写的**总**预算，包含本地排队；超出返回 `context.DeadlineExceeded`（可重试）。新增计数器 `remote_entity_write_gate_timeout_total`。
+
 ## [v1.15.17] - 2026-09-20
 
 ### Added
