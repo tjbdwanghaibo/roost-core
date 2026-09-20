@@ -1,5 +1,7 @@
 # roost-kit
 
+> **维护线冻结（2026-09-20 起）**：本仓正在并入 roost-core（`core/kit/`），`main` 只收 Bug 修复，其余改动进 `consolidation-v3` 分支。方案见 roost-core [三仓合一仓](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
+
 `roost-kit`（仓库目录名 `roost-kit`，Go 模块 `github.com/tjbdwanghaibo/roost-kit`）是 roost 框架的**装配层**：核心实现在 `roost-core`（引擎、契约、领域算法、基础设施客户端），`roost-kit` 负责把它们装成 `app.Mod`——读配置、取依赖、注册 capability、接生命周期与健康 / 日志——并提供通用服务（account / mail / match / chat / session / global）的服务器与客户端接入。三层的分工是：**Core 核心实现，Kit 装配与使用便利，Codegen 代码生成**；Kit 里目前仍持有的领域实现（通用服务的状态机与存储）正按 roost-core `docs/bug/REVIEW-2026-09-16-04.md` 第 7 节的 ARCH-01..04 分批下沉，本 README 的组件表以当前目录为准。
 
 三级阅读路径：完全新手从 [Roost 五分钟快速开始](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/QUICKSTART.md) 开始；熟练开发者阅读 [完整使用说明](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/USER_GUIDE.md) 后按本 README 查具体 Mod；框架维护者阅读 [实现原理](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/INTERNALS.md)、[生产部署](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/DEPLOYMENT.md) 与本 README 的实现章节。
