@@ -1,6 +1,6 @@
 # Roost 收敛第二步：三仓合一仓
 
-状态（2026-09-20）：**P0–P3 完成，内容已全部搬入 core；P4 未开始**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
+状态（2026-09-20）：**P0–P4 完成，只剩 P5（验收与发布）**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
 方案见 [ARCHITECTURE_V2_CONSOLIDATION_PLAN](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)，
 方法论、门禁与机器这一轮**逐条沿用**。执行手册是个人 skill `roost-consolidate`。
 
@@ -55,7 +55,7 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
 | **P1 骨架与护栏** ✅ | `dependency_boundary_test.go` 改成目录前缀规则并**先于搬迁**生效；CI 按包组拆 job；core 预加将要用到的依赖（已核对：无新增）；tag `v1.16.0-alpha.1` | 已达成：反向 import 探针确实变红；`TestCoreContractsDoNotLinkDrivers` 按层豁免 kit；CI 四分片由 `go list` 计算（本地核对 82 包 → 20/21/21/20 无重复全覆盖）；`v1.16.0-alpha.1` 已发，实测可 `go get` 并编译 |
 | **P2 kit 搬入** ✅ | `git subtree` 把 roost-kit 带历史搬进 `core/kit/`；批量前缀改 import；kit 的测试随代码走 | 已达成：93 个 Go 文件前缀改写，go.mod 一行没动（kit 的四个直接依赖 core 全有）；build / vet / vet -tags integration / glsvet / test / test -race 全绿；kit 的 service-redis job 搬进 core 的 ci.yml |
 | **P3 codegen 与 demo 搬入** ✅ | 同法搬进 `core/codegen/` 与 `core/demo/`；模板里的 import 字符串批量改成单模块路径；golden / testdata 重生成；改掉 `demo/embed.go` 里"codegen 故意不依赖它生成的运行时"那段（合仓后不成立） | 已达成：生成 game-demo 工程 → go.work 指向源码 → **编译通过、生成工程自己的测试全绿**。`dev compose` 真实启动留到 P5 与故障矩阵一起做 |
-| **P4 升级器** | `consolidation_imports.yaml` 升 schema 2：加第二段边界（core v1.16.0）与两条前缀规则；loader 支持前缀段；`upgrade --consolidate` 与 `deps-update` 跨界自动改写 | `--check` 对 golden 工程零差异；对一个真实工程改写后编译通过；每条规则至少一个 golden 覆盖 |
+| **P4 升级器** ✅ | `consolidation_imports.yaml` 升 schema 2：加第二段边界（core v1.16.0）与两条前缀规则；loader 支持前缀段；`upgrade --consolidate` 与 `deps-update` 跨界自动改写 | 已达成：每条前缀规则一条用例；顺序测试有变异验证（前缀提前跑就红）；用已发布的 codegen v1.15.31 生成老布局工程 → `--consolidate` → go.work 指向 checkout → build / vet 通过；`--dry-run` 与二次运行都证明幂等。framework-compat / upgrade-compat 已接回自动触发 |
 | **P5 验收与发布** | `source-head-check.sh`；故障矩阵；性能对比（同机三轮，>5% 退化要归因）；文档与 TROUBLESHOOTING 路径更新；发 **core v1.16.0**；kit / codegen 发最终版、README 置顶"已并入 core"、仓库 archive | 三仓 CI 绿；`roost new` 出来的工程**只依赖 core**；旧 tag 仍可 pin |
 
 ## 3.1 P1 的两处发现（记下来，因为它们正是"护栏先行"的收益）
@@ -81,6 +81,21 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
 
 还有两处真实的行为改动，不是路径问题：生成的 go.mod 与 `roost project deps` 都只写一个 require，
 因为 `roost-core/kit` 是**包路径不是模块路径**，向 `go get` 要它等于要一个不存在的模块。
+
+## 3.3 P4 的一个结论：合仓之后"用旧框架编译新生成器的产物"不再成立
+
+`framework-compat` 原来有三格依赖集：minimum（钉生成器下限）、released（钉最新发布）、
+source-head（指向源码）。合仓之后前两格**结构上不可能通过**：生成器产出的 import
+（`roost-core/kit/...`）只存在于和它同一个版本的 core 里，而 minimum / released 装的是更老的发布。
+
+这不是配置问题，是"生成器与框架同版本发布"这个决定的直接后果，也是它的代价之一：
+**再也不能用一个旧框架去验证新生成器**。能验证的只剩两条，本轮都已接回自动触发：
+
+- `framework-compat` 的 source-head：当前生成器 + 当前 checkout；
+- `upgrade-compat`：**已发布**的老生成器造出的老工程，被当前升级器改写后能否编译。
+
+minimum / released 两格在 P5 发布 v1.16.0 之后恢复，届时"最低支持版本"的含义变成
+"这个生成器所属的那个 core 版本"。
 
 ## 4. 与上一轮不同的地方
 
