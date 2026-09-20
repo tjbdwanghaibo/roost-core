@@ -466,3 +466,57 @@ func isRedisMiss(err error) bool {
 }
 
 var _ Store[string, int] = (*RedisStore[string, int])(nil)
+
+// IndexDefer pushes an existing index entry's score forward without touching
+// the value. It reports whether the entry was there to move.
+//
+// It exists for the one case a value-based update cannot serve: a record that
+// cannot be DECODED still has an index entry, and that entry sorts to the
+// front of every page until something moves it. Removing it would hide a real
+// record that somebody has to look at; rewriting the value is impossible,
+// because the value is what cannot be read. Moving the entry is the only
+// action left that neither loses it nor lets it block the queue
+// (RR-20260920-05).
+//
+// Deferring an entry that is not in the set does NOT create one: the index is
+// a view of records that exist, and a caller that defers something absent is
+// telling you the two have already diverged.
+func (s *RedisStore[K, T]) IndexDefer(ctx context.Context, key K, score float64) (bool, error) {
+	if s.cfg.Index == nil {
+		return false, fmt.Errorf("versionstore: this store has no index")
+	}
+	if s.cfg.Index.KeyOf != nil {
+		return false, fmt.Errorf("versionstore: this store indexes per owner; name the set with IndexDeferIn")
+	}
+	return s.IndexDeferIn(ctx, s.cfg.Index.Key, key, score)
+}
+
+// IndexDeferIn is IndexDefer against a named index set.
+func (s *RedisStore[K, T]) IndexDeferIn(ctx context.Context, indexKey string, key K, score float64) (bool, error) {
+	if s.cfg.Index == nil {
+		return false, fmt.Errorf("versionstore: this store has no index")
+	}
+	if strings.TrimSpace(indexKey) == "" {
+		return false, fmt.Errorf("versionstore: index key is empty")
+	}
+	member := s.cfg.KeyOf(key)
+	if member == "" {
+		return false, ErrKeyEmpty
+	}
+	raw, err := s.client.Eval(ctx, indexDeferScript, []string{indexKey}, member, strconv.FormatFloat(score, 'f', -1, 64))
+	if err != nil {
+		return false, err
+	}
+	moved, _ := raw.(int64)
+	return moved == 1, nil
+}
+
+// ZADD XX is the whole point: update the score of a member that is there,
+// and add nothing if it is not.
+const indexDeferScript = `
+if redis.call("ZSCORE", KEYS[1], ARGV[1]) == false then
+  return 0
+end
+redis.call("ZADD", KEYS[1], ARGV[2], ARGV[1])
+return 1
+`
