@@ -17,7 +17,7 @@
 - [核心概念](#核心概念)
 - [关键实现细节（进阶）](#关键实现细节进阶)
 - [学习路径](#学习路径)
-- [与 roost-kit / roost-codegen 的关系](#与-roost-kit--roost-codegen-的关系)
+- [一个仓库里的四层](#一个仓库里的四层)
 - [开发与验证](#开发与验证)
 - [深入文档索引](#深入文档索引)
 
@@ -487,28 +487,33 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 11. **编排与装配**：`saga/engine.go` + `SAGA.md`（`saga/engine_test.go` 开头的 `memoryStore` 与 `TestStoreContract*` 是 Store 实现者的必读规格）→ `bus/bus.go` + `bus/bus_lifecycle_test.go`（生命周期与 subject 布局的权威文档）→ `app/app.go`、`app/registry.go` + `app/example_test.go`（shared/service-specific mod 分层的完整装配样例）。
 12. **语义即测试的推荐清单**：`worker/worker_test.go`（"接纳即执行"不变量的回归，注释写明了原缺陷）、`webroute/route_test.go`（生成路由运行时的完整用法说明书）、`configdata/configdata_test.go`（reload/DryRun/Rollback/listener 回滚）、`etcd/watch_callback_test.go`（无损背压 vs LocalMirror 订阅隔离的选型依据）、`bus/reliable_test.go`（去重按 consumer、DLQ requeue 语义）。
 
-## 与 roost-kit / roost-codegen 的关系
+## 一个仓库里的四层
 
 ```text
-业务服务（roost-codegen 生成的项目骨架 + 手写玩法）
-  ├── roost-core     契约 + 实现（本仓库）：Nest、Data Engine（dataengine/engine + nestwal 物理 WAL）、
-  │                  Saga、Remote Entity、Redis / Mongo / NATS / etcd 客户端、房间与网络同步、
-  │                  以及 skill/ 下的技能编译器与权威战斗运行时（原 roost-skill）
-  └── roost-kit      接入层：项目配置解析、依赖装配（各能力的 *Mod）、应用生命周期与运维入口，
-                     以及 service/ 下的通用游戏服务（原 roost-service：账号、邮件、匹配、聊天…）
+业务服务（roost project new 生成的骨架 + 手写玩法）
+  └── roost-core     一个 Go 模块，四个顶层目录
+      ├── <core 包>  契约 + 实现：Nest、Data Engine（dataengine/engine + nestwal 物理 WAL）、
+      │              Saga、Remote Entity、Redis / Mongo / NATS / etcd 客户端、房间与网络同步、
+      │              以及 skill/ 下的技能编译器与权威战斗运行时
+      ├── kit/       接入层：项目配置解析、依赖装配（各能力的 *Mod）、应用生命周期与运维入口，
+      │              以及 kit/service/ 下的通用游戏服务（账号、邮件、匹配、聊天…）
+      ├── codegen/   项目生成器 + 代码生成器 + 升级器（CLI 在 codegen/cmd/roost）
+      └── demo/      game-demo 模板：一条可运行的完整业务链，按生成后的路径原样存放
 ```
 
-> 2026-09 起五仓合并为三仓（core / kit / codegen）。roost-skill 与 roost-service 仓库已归档；旧 import 路径用
-> `roost project upgrade --consolidate` 一次改写。方案与映射表见 [docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md](docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。
+**依赖方向由测试钉住**（`dependency_boundary_test.go`）：core 的包不得 import `kit/`、`codegen/`、`demo/`；
+kit 可以用 core；codegen 独立于它生成的那个运行时。合仓前这条规则由 Go 模块边界免费保证，现在由目录前缀判定。
 
-- **roost-core（本仓库）**：框架运行时——契约、默认实现与技能系统。业务代码 import 这里的包用能力；驱动依赖（mongo-driver、go-redis、nats.go、etcd client）由 core 承担。
-- **roost-kit**：每个 Mod 实现 `app.Mod` 生命周期，把项目配置翻译成 core 配置并把 core 组件注册进 `app.Registry`；不重复实现事务、锁、状态机；`service/` 提供可托管的通用游戏服务。
-- **roost-codegen**：项目生成器 + 代码生成器 + 升级器。它生成工厂、回滚快照、setter 级 inverse undo、`PrepareMutation` 与字段级 BSON patch。
+> **2026-09 两步收敛**：先五仓合三仓（roost-skill / roost-service 并入，core v1.14.0），
+> 再三仓合一仓（roost-kit / roost-codegen 并入，**core v1.16.0**）。两个旧仓库已归档，旧 tag 仍可 pin。
+> 跨任一边界的工程用 `roost project upgrade --consolidate` 一次改写 import；
+> 方案见 [三仓合一仓](docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)、
+> [五仓合三仓](docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。
 
-本地联调多仓库时在共同父目录建 `go.work`（不要提交到任何仓库）：
+安装 CLI：
 
 ```bash
-go work init ./roost-core ./roost-kit ./roost-codegen
+go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
 
 当前开发、发布隔离和版本收口规则见 [多仓研发与发布](docs/DEVELOPMENT_WORKSPACE.md)。
