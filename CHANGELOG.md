@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [v1.15.14] - 2026-09-20
+
+### Fixed
+
+- **普通 room delta 不再走会被覆盖的 latest-only 通道**（U-0260，C8；RR-20260920-02，T-154，**P1**）。一次 delta 是“相对上一帧的改动”，不是“最新的完整状态”；`RoomBroadcaster.flushStateBatch` 在入队成功后就提交了这一批、清掉 dirty，而 `AsyncTransport` 同 stream 只留最后一帧。第二帧不是第一帧的超集，于是第一帧独有的字段对那个客户端**永久**消失，服务端全程无错误。实跑：16 个客户端同场景时每轮 2~6 个永远收不到自己的 `pos_x` / `equipment`，40 秒后仍未到达。
+  普通 delta 改走**可靠通道**：队列上限和 slow-consumer 驱逐把背压**说出来**，而不是安静地少发一个字段。
+  新增 `RoomTransportSinkConfig.LatestOnlyDeltas`（默认 false）保留 datagram 路径：打开它是一个**声明**——那些帧必须是自包含的最新状态，或者被下一帧替掉不会丢任何东西。
+  **行为变化**：默认部署的 delta 从 datagram 改为 reliable；慢消费者从“静默丢帧”变成`ErrReliableBackpressure` + 房间保留 dirty 重试（或按策略驱逐）。客户端无需改动，两条通道本来就都要处理。
+  测试：`room/delta_durability_promises_test.go`（含一条行为级：连续两帧 delta 的内容都要到达下游）；`TestRoomTransportSinkRoutesLifecycleAndState` 编码的是被推翻的旧契约，改成断言新不变量。
+
 ## [v1.15.13] - 2026-09-20
 
 ### Added
