@@ -47,6 +47,13 @@ type consolidationMap struct {
 	Keep    []string                    `yaml:"keep"`
 	Skill   []struct{ From, To string } `yaml:"skill"`
 	Service []struct{ From, To string } `yaml:"service"`
+	// SingleModule is the second stage: three repositories to one. kit and
+	// codegen stop being modules, so it needs no per-package table.
+	SingleModule struct {
+		Boundary       struct{ Core string }       `yaml:"boundary"`
+		RemovedModules []string                    `yaml:"removed_modules"`
+		Prefix         []struct{ From, To string } `yaml:"prefix"`
+	} `yaml:"single_module"`
 }
 
 // relocation is what the map says about one old import path.
@@ -84,6 +91,24 @@ func loadConsolidationMap() (map[string]relocation, consolidationMap, error) {
 	return table, m, nil
 }
 
+// singleModulePath applies the three-to-one prefixes to an import path and
+// reports whether it moved.
+//
+// It runs on the RESULT of the first stage, never on the raw import: stage one
+// moved most of kit's implementation into core proper, and prefixing first
+// would send those packages to roost-core/kit/<pkg>, where they do not live.
+func singleModulePath(p string, m consolidationMap) (string, bool) {
+	for _, rule := range m.SingleModule.Prefix {
+		if p == rule.From {
+			return rule.To, true
+		}
+		if strings.HasPrefix(p, rule.From+"/") {
+			return rule.To + strings.TrimPrefix(p, rule.From), true
+		}
+	}
+	return p, false
+}
+
 // ConsolidateResult summarises what the rewrite touched.
 type ConsolidateResult struct {
 	Files      []string // Go files whose imports were rewritten
@@ -116,7 +141,7 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 		if !strings.HasSuffix(p, ".go") {
 			return nil
 		}
-		changed, unresolved, err := consolidateFile(p, table, m.RemovedModules, dryRun)
+		changed, unresolved, err := consolidateFile(p, table, m, dryRun)
 		if err != nil {
 			return fmt.Errorf("%s: %w", p, err)
 		}
@@ -168,7 +193,7 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 // selector: symbols the map lists as staying in kit keep the old import, every
 // other symbol moves to the core path; a file using both ends up with both
 // imports.
-func consolidateFile(p string, table map[string]relocation, removed []string, dryRun bool) (bool, []string, error) {
+func consolidateFile(p string, table map[string]relocation, m consolidationMap, dryRun bool) (bool, []string, error) {
 	src, err := os.ReadFile(p)
 	if err != nil {
 		return false, nil, err
@@ -210,14 +235,34 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 			return false, nil, err
 		}
 		rel, mapped := table[oldPath]
+		switch {
+		case mapped:
+			// Stage one knows this package. Stage two then applies to where it
+			// LANDED: a package that stayed in kit moves again, one that went
+			// to core proper is already home.
+			if moved, ok := singleModulePath(rel.to, m); ok {
+				rel.to = moved
+			}
+		default:
+			// Not in stage one's table: either untouched by the first
+			// consolidation, or under a module the second stage relocates
+			// wholesale.
+			if moved, ok := singleModulePath(oldPath, m); ok {
+				rel = relocation{to: moved}
+				mapped = true
+			}
+		}
 		if !mapped {
-			for _, mod := range removed {
+			for _, mod := range append(append([]string(nil), m.RemovedModules...), m.SingleModule.RemovedModules...) {
 				if oldPath == mod || strings.HasPrefix(oldPath, mod+"/") {
 					unresolved = append(unresolved, oldPath)
 				}
 			}
 			continue
 		}
+		// Where a split package's kept symbols live after stage two. For an
+		// unsplit package this equals the old path and nothing uses it.
+		keptPath, keptMoved := singleModulePath(oldPath, m)
 		// The name this file uses to refer to the package.
 		alias := path.Base(oldPath)
 		if imp.Name != nil {
@@ -255,9 +300,17 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.Pos()).Offset, alias + " "})
 			}
 		case len(coreUses) == 0:
-			// Only Mod glue used: the kit import stays as it is.
+			// Only Mod glue used: the kit import stays — but stage two moves
+			// the place it stayed in.
+			if keptMoved {
+				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset, strconv.Quote(keptPath)})
+			}
 		default:
-			// Mixed: kit import stays, moved symbols get a second import.
+			// Mixed: kit import stays (at its stage-two location), moved
+			// symbols get a second import.
+			if keptMoved {
+				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset, strconv.Quote(keptPath)})
+			}
 			coreAlias := fresh("core" + path.Base(oldPath))
 			extraImports = append(extraImports, coreAlias+" "+strconv.Quote(rel.to))
 			for _, sel := range coreUses {
@@ -315,10 +368,13 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 	return true, unresolved, os.WriteFile(p, formatted, 0o644)
 }
 
-var consolidateRequireLine = regexp.MustCompile(`(?m)^\s*github\.com/tjbdwanghaibo/(roost-skill|roost-service)\s+\S+[^\n]*\n`)
+var consolidateRequireLine = regexp.MustCompile(`(?m)^\s*github\.com/tjbdwanghaibo/(roost-skill|roost-service|roost-kit|roost-codegen)\s+\S+[^\n]*\n`)
 
-// consolidateGoMod drops the folded-in modules from go.mod. It deliberately
-// leaves the core / kit versions alone: the caller's dependency resolution
+// consolidateGoMod drops the folded-in modules from go.mod — roost-skill and
+// roost-service from the first stage, roost-kit and roost-codegen from the
+// second. After the rewrite no import names them, so the requires are dead.
+//
+// It deliberately leaves the core version alone: the caller's dependency resolution
 // (`go get` with the manifest's policy) moves them, and writing a boundary
 // release that is not published yet would make that very `go get` fail
 // ("unknown revision"). A project whose imports were rewritten but whose
@@ -332,7 +388,7 @@ func consolidateGoMod(goMod string, _ consolidationMap, dryRun bool) (bool, erro
 		return false, err
 	}
 	text := consolidateRequireLine.ReplaceAllString(string(raw), "")
-	text = regexp.MustCompile(`(?m)^require github\.com/tjbdwanghaibo/(roost-skill|roost-service)\s+\S+[^\n]*\n`).ReplaceAllString(text, "")
+	text = regexp.MustCompile(`(?m)^require github\.com/tjbdwanghaibo/(roost-skill|roost-service|roost-kit|roost-codegen)\s+\S+[^\n]*\n`).ReplaceAllString(text, "")
 	if text == string(raw) {
 		return false, nil
 	}
@@ -372,5 +428,10 @@ func needsConsolidation(root string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(raw), "github.com/tjbdwanghaibo/roost-skill") || strings.Contains(string(raw), "github.com/tjbdwanghaibo/roost-service")
+	for _, module := range []string{"roost-skill", "roost-service", "roost-kit", "roost-codegen"} {
+		if strings.Contains(string(raw), "github.com/tjbdwanghaibo/"+module) {
+			return true
+		}
+	}
+	return false
 }

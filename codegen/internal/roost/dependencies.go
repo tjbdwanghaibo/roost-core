@@ -111,9 +111,10 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 		return fmt.Errorf("framework dependencies require go.mod: %w", err)
 	}
 	if needsConsolidation(absRoot) {
-		// Crossing the consolidation boundary (core v1.14.0 / kit v1.13.0)
-		// without rewriting imports would leave the project pointing at
-		// modules that no longer exist. Rewrite first, then resolve.
+		// Crossing either consolidation boundary without rewriting imports
+		// would leave the project pointing at modules that no longer exist:
+		// core v1.14.0 folded roost-skill / roost-service in, core v1.16.0
+		// folded roost-kit and roost-codegen in. Rewrite first, then resolve.
 		fmt.Fprintln(stdout, "framework dependencies: project predates the consolidation; rewriting imports first")
 		if _, err := ConsolidateProject(absRoot, false, stdout); err != nil {
 			return fmt.Errorf("consolidate project before resolving dependencies: %w", err)

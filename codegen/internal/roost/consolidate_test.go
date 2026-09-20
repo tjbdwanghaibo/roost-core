@@ -70,7 +70,9 @@ var (
 	_ = servicemods.ModMail
 )
 `)
-	untouched := writeProjectFile(t, root, "internal/fresh/fresh.go", `package fresh
+	// Stage one left this file alone (mods stayed in kit); stage two moves it,
+	// because kit itself is no longer a module (三仓合一仓).
+	staged := writeProjectFile(t, root, "internal/fresh/fresh.go", `package fresh
 
 import (
 	"github.com/tjbdwanghaibo/roost-core/skill"
@@ -82,26 +84,25 @@ var (
 	_ = kitmods.ModBus
 )
 `)
-	before, _ := os.ReadFile(untouched)
 
 	var stdout bytes.Buffer
 	result, err := ConsolidateProject(root, false, &stdout)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 1 || result.Files[0] != "internal/wiring/wiring.go" || !result.GoMod || !result.Manifest {
+	if len(result.Files) != 2 || result.Files[0] != "internal/fresh/fresh.go" || result.Files[1] != "internal/wiring/wiring.go" || !result.GoMod || !result.Manifest {
 		t.Fatalf("result = %+v", result)
 	}
 	rewritten, _ := os.ReadFile(mixed)
 	for _, want := range []string{
 		`dataengine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"`, // package name changes: keep the identifier
-		`kitredis "github.com/tjbdwanghaibo/roost-kit/redis"`,                // Mod glue stays
+		`kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"`,           // Mod glue stays in kit — and kit itself moved
 		`coreredis "github.com/tjbdwanghaibo/roost-core/redis/driver"`,       // moved symbols get a second import (driver subpackage)
 		`_ = coreredis.NewClient`,
 		`_ = kitredis.NewRedisMod`,
 		`"github.com/tjbdwanghaibo/roost-core/syncstream"`,
-		`syncstream.HealthOptions{}`,                            // no symbol table: the compiler reports the new name
-		`servicemods "github.com/tjbdwanghaibo/roost-kit/mods"`, // folded package: keep the identifier
+		`syncstream.HealthOptions{}`,                                 // no symbol table: the compiler reports the new name
+		`servicemods "github.com/tjbdwanghaibo/roost-core/kit/mods"`, // folded package: keep the identifier
 		`"github.com/tjbdwanghaibo/roost-core/skill"`,
 		`kitnats "github.com/tjbdwanghaibo/roost-core/nats/driver"`, // whole import moves to the driver
 		`_ = kitnats.Permanent`,                                     // contract symbol: left for the compiler, no second import is invented
@@ -111,16 +112,24 @@ var (
 			t.Errorf("rewritten file missing %q:\n%s", want, rewritten)
 		}
 	}
-	for _, bad := range []string{"roost-skill", "roost-service", "roost-kit/dataengine", "roost-kit/syncstream", "natscontract", "PublisherHealthOptions"} {
+	for _, bad := range []string{"roost-skill", "roost-service", "roost-kit/dataengine", "roost-kit/syncstream", "natscontract", "PublisherHealthOptions",
+		// After stage two nothing may still name the kit module.
+		"tjbdwanghaibo/roost-kit"} {
 		if strings.Contains(string(rewritten), bad) {
 			t.Errorf("rewritten file still mentions %q:\n%s", bad, rewritten)
 		}
 	}
-	if after, _ := os.ReadFile(untouched); !bytes.Equal(before, after) {
-		t.Fatalf("a file already on the new layout was modified:\n%s", after)
+	// Stage two moved this one: its only pre-consolidation import was the Mod
+	// glue package, which stage one left in kit.
+	staged4, _ := os.ReadFile(staged)
+	if !strings.Contains(string(staged4), `kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"`) {
+		t.Errorf("the kit-only file was not moved to the single module:\n%s", staged4)
+	}
+	if !strings.Contains(string(staged4), `"github.com/tjbdwanghaibo/roost-core/skill"`) {
+		t.Errorf("a path already on the final layout was disturbed:\n%s", staged4)
 	}
 	goMod, _ := os.ReadFile(filepath.Join(root, "go.mod"))
-	for _, bad := range []string{"roost-skill", "roost-service"} {
+	for _, bad := range []string{"roost-skill", "roost-service", "roost-kit"} {
 		if strings.Contains(string(goMod), bad) {
 			t.Errorf("go.mod still requires %s:\n%s", bad, goMod)
 		}
@@ -128,10 +137,8 @@ var (
 	// Versions are left to the dependency resolution step: writing an
 	// unpublished boundary release here would break the very go get that
 	// follows (upgrade-compat caught exactly that).
-	for _, want := range []string{"roost-core v1.12.0", "roost-kit v1.12.6"} {
-		if !strings.Contains(string(goMod), want) {
-			t.Errorf("go.mod versions must be untouched (%q):\n%s", want, goMod)
-		}
+	if want := "roost-core v1.12.0"; !strings.Contains(string(goMod), want) {
+		t.Errorf("go.mod versions must be untouched (%q):\n%s", want, goMod)
 	}
 	manifest, err := LoadManifest(root)
 	if err != nil {
@@ -140,7 +147,7 @@ var (
 	if manifest.Versions.Skill != "" || manifest.Versions.Service != "" {
 		t.Fatalf("manifest kept the removed module policies: %+v", manifest.Versions)
 	}
-	if !strings.Contains(stdout.String(), "rewrote 1 Go file(s), go.mod, roost.yaml") {
+	if !strings.Contains(stdout.String(), "rewrote 2 Go file(s), go.mod, roost.yaml") {
 		t.Fatalf("report = %q", stdout.String())
 	}
 
@@ -202,8 +209,8 @@ func TestConsolidationMapMatchesTheGeneratorFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, pair := range []struct {
-		name              string
-		boundary, floor   string
+		name            string
+		boundary, floor string
 	}{
 		{"core", m.Boundary.Core, minimumVersions.Core},
 		{"kit", m.Boundary.Kit, minimumVersions.Kit},

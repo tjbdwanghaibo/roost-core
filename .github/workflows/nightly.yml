@@ -2,7 +2,7 @@
 # 它检查的东西（生成器版本下限、升级器历史、release shell 卫生）仍然由
 # codegen/internal/roost/deploy_hygiene_test.go 逐条断言，所以文件不能删。
 # 但它的作业还是跨仓形态（clone roost-kit、三仓 go.work、-roost-kit-version），
-# 合仓之后这些步骤要重写，属于 P4（升级器）与 P5（发布）。在那之前只保留手动触发，
+# 合仓之后这些步骤要重写，属于 P5（发布与归档）。在那之前只保留手动触发，
 # 不在每次 push 上跑一个必然失败的门禁。
 #   方案：docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md
 name: nightly

@@ -1,23 +1,16 @@
-# ⚠️ 三仓合一仓搬迁中（P3）：本工作流从 roost-codegen 原样搬来，内容未改——
-# 它检查的东西（生成器版本下限、升级器历史、release shell 卫生）仍然由
-# codegen/internal/roost/deploy_hygiene_test.go 逐条断言，所以文件不能删。
-# 但它的作业还是跨仓形态（clone roost-kit、三仓 go.work、-roost-kit-version），
-# 合仓之后这些步骤要重写，属于 P4（升级器）与 P5（发布）。在那之前只保留手动触发，
-# 不在每次 push 上跑一个必然失败的门禁。
-#   方案：docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md
+# 生成物兼容矩阵。三仓合一仓之后只剩一个框架模块，所以：
+#   * source-head：工作区指向本 checkout（不再 clone 第二个仓）；
+#   * minimum / released：这两格要求**已发布**的框架能编译当前生成器的产物，
+#     而当前生成器产出的 import 只存在于尚未发布的 core v1.16.0 里。矩阵暂时
+#     只留 source-head，两格在 P5 发布边界版本之后恢复；下面 version_args 那行
+#     仍然是生成器下限的唯一副本，deploy_hygiene_test 逐字比对它。
 name: framework-compat
 
 on:
+  push:
+    branches: [main, master, consolidation-v3]
+  pull_request:
   workflow_dispatch:
-    inputs:
-      core_ref:
-        description: roost-core ref for the source-head candidate set
-        required: false
-        default: main
-      kit_ref:
-        description: roost-kit ref for the source-head candidate set
-        required: false
-        default: main
 
 concurrency:
   group: framework-compat-${{ github.ref }}
@@ -31,18 +24,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dependency-set: [minimum, released, source-head]
+        # minimum / released 在 P5 恢复（见文件顶部）
+        dependency-set: [source-head]
         scenario: [minimal, full, demo]
         consumer-go: ["1.27.x"]
-        exclude:
-          # The demo template needs core >= v1.15.7 / kit >= v1.14.8: entity
-          # categories, account.RegistryBound, match.NewMod(reporter), the
-          # gift saga's step refusal → compensation (U-0225) and the attribute
-          # runtime (roost-core/attribute, U-0230). The minimum set pins older
-          # tags on purpose; released and source-head both carry it (verified
-          # 2026-09-18, no go.work).
-          - scenario: demo
-            dependency-set: minimum
+        # 原来这里有一条 exclude：demo 场景与 minimum 组合不成立（demo 模板需要
+        # core >= v1.15.7 / kit >= v1.14.8，而 minimum 故意钉更老的 tag）。
+        # minimum 这一格现在不在矩阵里，exclude 一并移走；P5 恢复 minimum 时
+        # 要把它一起放回来。
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -52,7 +41,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: build current generator
-        run: go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+        run: go build -o "${RUNNER_TEMP}/roost" ./codegen/cmd/roost
       - name: generate scenario
         env:
           SET: ${{ matrix.dependency-set }}
@@ -110,18 +99,11 @@ jobs:
       - name: use current framework source through a temporary workspace
         if: matrix.dependency-set == 'source-head'
         working-directory: ${{ runner.temp }}/planet
-        env:
-          CORE_REF: ${{ inputs.core_ref || 'main' }}
-          KIT_REF: ${{ inputs.kit_ref || 'main' }}
         run: |
-          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
-          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"
-          git -C "${RUNNER_TEMP}/roost-core" fetch --depth=1 origin "$CORE_REF"
-          git -C "${RUNNER_TEMP}/roost-core" checkout --detach FETCH_HEAD
-          git -C "${RUNNER_TEMP}/roost-kit" fetch --depth=1 origin "$KIT_REF"
-          git -C "${RUNNER_TEMP}/roost-kit" checkout --detach FETCH_HEAD
+          # One module: the workspace points at this checkout, and there is no
+          # second repository to clone (三仓合一仓 P4).
           cd "${RUNNER_TEMP}"
-          go work init ./planet ./roost-core ./roost-kit
+          go work init ./planet "$GITHUB_WORKSPACE"
           # The workspace go directive must be at least every member's own.
           # It used to be pinned DOWN to 1.25.0, because the framework runtime
           # modules supported a lower consumer lane than codegen did. They no

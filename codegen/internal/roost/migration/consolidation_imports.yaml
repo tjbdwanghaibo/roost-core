@@ -14,7 +14,7 @@
 # file is identified by CONTENT (a type with Provide/Init methods), not by name:
 # it is `*_mod.go` in most packages but `mod.go` in dataengine/saga and
 # `configdata.go` / `statslog.go` there. Refreshed again at P3 from what actually stays.
-schema: 1
+schema: 2
 boundary:
   # First versions that ship the consolidated layout. Crossing them requires
   # the rewrite below; older tags keep the old layout forever.
@@ -24,6 +24,28 @@ boundary:
 removed_modules:
   - github.com/tjbdwanghaibo/roost-skill
   - github.com/tjbdwanghaibo/roost-service
+
+# Second stage: three repositories to one (core v1.16.0). kit and codegen stop
+# being modules and become directories inside roost-core, so this stage needs
+# no per-package table — two prefixes cover everything that is left.
+#
+# ORDER MATTERS. The stage above moved most of kit's implementation packages
+# into core PROPER (roost-kit/dataengine → roost-core/dataengine), and only what
+# stayed behind — the Mod glue and service/ — is what this stage relocates
+# (roost-kit/service/mail → roost-core/kit/service/mail). Applying the prefix
+# first would send dataengine to roost-core/kit/dataengine, where it does not
+# live. The rewriter therefore resolves stage one and prefixes the RESULT.
+single_module:
+  boundary:
+    core: v1.16.0
+  removed_modules:
+    - github.com/tjbdwanghaibo/roost-kit
+    - github.com/tjbdwanghaibo/roost-codegen
+  prefix:
+    - from: github.com/tjbdwanghaibo/roost-kit
+      to: github.com/tjbdwanghaibo/roost-core/kit
+    - from: github.com/tjbdwanghaibo/roost-codegen
+      to: github.com/tjbdwanghaibo/roost-core/codegen
 # Split packages: the implementation moves to roost-core/<pkg>; the Mod glue
 # (kit_keeps) stays in roost-kit/<pkg>. A file that uses both needs both imports.
 split:
