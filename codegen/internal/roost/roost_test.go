@@ -1346,13 +1346,14 @@ func TestBootstrapWiresDataEngineWithEntityAccess(t *testing.T) {
 func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
 	goMod := renderGoMod(m)
-	for _, want := range []string{
-		"github.com/tjbdwanghaibo/roost-core " + minimumVersions.Core,
-		"github.com/tjbdwanghaibo/roost-core/kit " + minimumVersions.Kit,
-	} {
-		if !strings.Contains(goMod, want) {
-			t.Errorf("go.mod missing %q:\n%s", want, goMod)
-		}
+	if want := "github.com/tjbdwanghaibo/roost-core " + minimumVersions.Core; !strings.Contains(goMod, want) {
+		t.Errorf("go.mod missing %q:\n%s", want, goMod)
+	}
+	// And exactly one framework module: kit is a package path inside
+	// roost-core since the consolidation, so a require for it would name a
+	// module that does not exist (三仓合一仓 P3).
+	if strings.Contains(goMod, "roost-core/kit "+minimumVersions.Kit) || strings.Contains(goMod, "roost-kit ") {
+		t.Errorf("go.mod requires kit as a module of its own:\n%s", goMod)
 	}
 	if strings.Contains(goMod, "replace ") {
 		t.Fatalf("generated release go.mod contains replace directive:\n%s", goMod)
