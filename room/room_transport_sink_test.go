@@ -108,22 +108,16 @@ func TestRoomTransportSinkRoutesLifecycleAndState(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	// A delta goes on the RELIABLE lane now. It used to be fragmented onto
+	// latest-only datagrams, and that was the bug: a delta carries only what
+	// changed, so a frame replaced there is a change nobody produces again
+	// (RR-20260920-02). The content assertion below is unchanged — only the
+	// lane it arrives on is.
 	second := transport.batches[1][0]
-	if len(second.Datagrams) == 0 || len(second.Reliable) != 0 {
-		t.Fatalf("delta was not routed to datagram lane: %+v", second)
+	if len(second.Reliable) == 0 || len(second.Datagrams) != 0 {
+		t.Fatalf("delta was not routed to the lane that keeps it: %+v", second)
 	}
-	reassembler := core.NewReassembler(core.DefaultLimits(), time.Second)
-	var wire []byte
-	for _, packet := range second.Datagrams {
-		payload, complete, _, pushErr := reassembler.PushFor(9, packet, time.Now())
-		if pushErr != nil {
-			t.Fatal(pushErr)
-		}
-		if complete {
-			wire = payload
-		}
-	}
-	_, _, decoded, err = DecodeRoomWireFrame(wire, core.DefaultLimits())
+	_, _, decoded, err = DecodeRoomWireFrame(second.Reliable, core.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

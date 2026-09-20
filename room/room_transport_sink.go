@@ -61,6 +61,24 @@ type RoomTransportSinkConfig struct {
 	ComponentTypeID        uint16
 	ComponentSchemaVersion uint16
 	Archetype              uint16
+	// LatestOnlyDeltas puts ordinary state deltas on the transport's
+	// latest-only datagram lane, where a frame still waiting to be sent is
+	// REPLACED by the next one for the same stream.
+	//
+	// It is off by default, and turning it on is a statement about the
+	// frames: that each one is a self-contained latest state, or that
+	// replacing one with the next cannot lose anything. A room delta is
+	// neither — it carries only the fields that changed, and the room commits
+	// the batch and clears dirty as soon as the transport accepts it, so a
+	// replaced frame is a change nobody will produce again. With sixteen
+	// clients in one scene that showed up as a player's own pos_x or
+	// equipment never arriving, permanently, with no error anywhere
+	// (RR-20260920-02).
+	//
+	// Left off, deltas go on the reliable lane, where the queue bound and the
+	// slow-consumer policy say out loud what the datagram lane used to do
+	// quietly.
+	LatestOnlyDeltas       bool
 	SlowConsumerPolicy     SlowConsumerPolicy
 	OnSlowConsumer         func(context.Context, RoomSlowConsumer)
 	CallbackWorkers        int
@@ -83,8 +101,10 @@ const (
 )
 
 // RoomTransportSink encodes receiver-specific room frames onto the common
-// replication wire format. Snapshot/leave frames use the reliable ordered
-// lane; state-only deltas use fragmented latest-only datagrams.
+// replication wire format. Everything uses the reliable ordered lane, because
+// a room delta carries only what changed and cannot survive being replaced;
+// LatestOnlyDeltas opts state deltas back onto fragmented datagrams for a
+// deployment whose frames are self-contained (RR-20260920-02).
 type RoomTransportSink struct {
 	mu                    stdsync.RWMutex
 	roomLocks             [roomTransportLockStripes]stdsync.Mutex
@@ -293,7 +313,7 @@ func (s *RoomTransportSink) AdmitRoomFrames(ctx context.Context, frames []RoomFr
 			return err
 		}
 		out := kit.OutboundFrame{Session: key.session}
-		if reliable {
+		if reliable || !s.config.LatestOnlyDeltas {
 			out.Reliable = encoded
 		} else {
 			sequence := nonzeroSequence(frame.SessionSequence)
