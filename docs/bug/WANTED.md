@@ -6,7 +6,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## W-2026-09-20-04 进程重启后，远端实体的一次 dispatch 等了 79 秒
+## W-2026-09-20-04 已分流：→ RR-20260920-08（根因是 `OpTimeout` 不覆盖写闸排队，不是锁泄漏）
 
 - **位置**：`roost-core/remoteentity`（`versioned_lock` / `Assembly` 的 `OpTimeout` 使用路径）与
   `roost-core/nest` 的 dispatch 等待。基线：core `v1.15.17`、codegen 第十八批（Guild）。
@@ -38,7 +38,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   普通运行（冷启动、连跑三轮）全绿，所以第十八批照常合入，这一条单独交审查。
 - **来源**：第十八批合入时的验收实跑。
 
-## W-2026-09-20-03 `SmallSafeMap` 的 BSON 自定义编码从来没生效，它会被写成空文档
+## W-2026-09-20-03 已分流：→ RR-20260920-07
 
 - **位置**：`roost-core/safemap/small.go:121-133`（`MarshalBSONValue` / `UnmarshalBSONValue`）。
   基线：core `v1.15.14`，mongo-driver `v2.6.0`。
@@ -67,7 +67,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **来源**：U-0261 的实现过程。我自己先把签名写成了 `bson.Type`，编译通过、测试照旧红，
   查到驱动接口才发现；回头一看，仓里原有的那一处是同样的写法。
 
-## W-2026-09-20-02 自己的订阅在投递，却从来不带位置那一组字段
+## W-2026-09-20-02 已分流：→ RR-20260920-06（候选根因 a（LOD 筛字段）被排除，packer 忽略 profile）
 
 - **位置**：`roost-core/entitysync`（`SubscriptionCoordinator` 的 prepared batch / content version）、
   `roost-core/room`（`flushStateBatch` 的 dirty 取用与按订阅者分发）、
