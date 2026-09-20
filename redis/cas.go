@@ -202,3 +202,41 @@ func parseCASBytes(raw any) ([]byte, error) {
 		return nil, fmt.Errorf("redis cas: invalid current value %T", raw)
 	}
 }
+
+// compareAndDeleteScript removes a key only while it still holds the value
+// the caller last saw. The compare and the delete are one round trip because
+// the gap between them is the whole problem: a lease that expires there is
+// taken by somebody else, and the delete that follows removes THEIR key.
+const compareAndDeleteScript = `
+local current = redis.call("GET", KEYS[1])
+if current == false or current ~= ARGV[1] then
+  return {0, current}
+end
+redis.call("DEL", KEYS[1])
+return {1, current}
+`
+
+// CompareAndDelete deletes Key if and only if it currently holds Expected.
+//
+// It is the other half of CompareAndSet for owner-style keys: CompareAndSet
+// covers "extend what is mine" (compare, then write the same value with a new
+// TTL), and this covers "give up what is mine". Applied reports whether the
+// delete happened; Current is what was there when it did not, so a caller can
+// tell "somebody else owns it now" from "it was already gone" (Current nil).
+//
+// Expected must be non-nil: deleting a key whose value you have not compared
+// is just DEL, and calling it through here would suggest a guarantee that is
+// not being asked for.
+func CompareAndDelete(ctx context.Context, client ScriptRunner, key string, expected []byte) (CompareAndSetResult, error) {
+	if client == nil || key == "" || expected == nil {
+		return CompareAndSetResult{}, ErrCASInvalidCommand
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ret, err := client.Eval(ctx, compareAndDeleteScript, []string{key}, string(expected))
+	if err != nil {
+		return CompareAndSetResult{}, err
+	}
+	return parseCompareAndSetResult(ret)
+}
