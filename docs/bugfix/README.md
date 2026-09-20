@@ -95,6 +95,8 @@
 
 | 编号 | 仓库 | 问题 | 记录 |
 | --- | --- | --- | --- |
+| U-0263 | kit | U-0257 加的 owed 索引是一个新键空间却没登记，`TestPerPackageKeyNamespacesDoNotCollide` 红（CI 发现） | [U-0263-activity-owed-namespace.md](U-0263-activity-owed-namespace.md) |
+| U-0264 | codegen | 声明的框架版本下限是假的：生成物在 core v1.14.0 / kit v1.13.0 上编译不过（CI 发现） | [U-0264-generator-version-floor.md](U-0264-generator-version-floor.md) |
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
