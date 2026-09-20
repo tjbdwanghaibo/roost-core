@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fconfigdata "github.com/tjbdwanghaibo/roost-core/configdata"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 func newProvidedConfigDataMod(t *testing.T, cfg *viper.Viper) (*Mod, *app.Registry) {

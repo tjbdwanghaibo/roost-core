@@ -208,7 +208,7 @@ func frameworkImportAliases(file *ast.File) map[string]bool {
 	for _, spec := range file.Imports {
 		path := strings.Trim(spec.Path.Value, "\"")
 		if !strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/") &&
-			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-kit/") &&
+			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/kit/") &&
 			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-skill/") {
 			continue
 		}

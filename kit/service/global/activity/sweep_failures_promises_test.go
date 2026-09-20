@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // U-0120 · C5（静默吞错）· classscan C5 扫描。

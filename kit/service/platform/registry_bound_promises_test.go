@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // Collaborators are built before the app exists — bootstrap constructs them

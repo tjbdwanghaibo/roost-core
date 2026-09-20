@@ -11,7 +11,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // Mod parses configuration, looks up the Mongo and JetStream capabilities,

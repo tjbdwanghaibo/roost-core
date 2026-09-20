@@ -1,4 +1,4 @@
-package kit_test
+package roostcore_test
 
 import (
 	"os"

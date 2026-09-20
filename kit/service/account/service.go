@@ -11,9 +11,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/security"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/directory"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/directory"
 )
 
 // Config wires a Service. Every field without a safe default is required, and

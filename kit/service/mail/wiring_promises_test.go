@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	kitmods "github.com/tjbdwanghaibo/roost-kit/mods"
+	kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 func expectWiringErr(t *testing.T, err error, want string) {

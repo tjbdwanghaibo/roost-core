@@ -11,7 +11,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 type modJetStream struct{ streams int }

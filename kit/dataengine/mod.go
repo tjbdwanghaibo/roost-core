@@ -19,7 +19,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // Mod parses configuration, looks up the Mongo / JetStream / Remote Entity

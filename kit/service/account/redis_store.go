@@ -8,7 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/directory"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/directory"
 )
 
 // RedisStores are the four stores this package needs, over Redis, plus the

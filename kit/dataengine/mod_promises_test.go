@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // U-0113 · C2（空洞测试）· nightly gap map kit `dataengine` 10/10。

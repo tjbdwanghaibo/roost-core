@@ -8,9 +8,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/redis/driver"
-	kitmods "github.com/tjbdwanghaibo/roost-kit/mods"
+	kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 )
 
 // The same consumer code resolves in both deployments.

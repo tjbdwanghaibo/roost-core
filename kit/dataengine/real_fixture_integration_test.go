@@ -19,9 +19,9 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
-	kitmongo "github.com/tjbdwanghaibo/roost-kit/mongo"
-	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"
+	kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

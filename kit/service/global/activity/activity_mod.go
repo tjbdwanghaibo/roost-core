@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // Mod wires the activity coordination service into an app and registers it as

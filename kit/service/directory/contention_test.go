@@ -7,7 +7,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // contendedStore is a versionstore.Store whose Update loses its first

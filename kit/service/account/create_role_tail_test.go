@@ -8,8 +8,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/directory"
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/directory"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // namesFailingCommitOnce is a directory whose first Commit is lost — the

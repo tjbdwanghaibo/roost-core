@@ -9,7 +9,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	coreroom "github.com/tjbdwanghaibo/roost-core/room"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"log/slog"
 	"strings"
 	"time"

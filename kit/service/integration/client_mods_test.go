@@ -5,17 +5,17 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
-	kitmods "github.com/tjbdwanghaibo/roost-kit/mods"
+	kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/account"
-	"github.com/tjbdwanghaibo/roost-kit/service/chat"
-	"github.com/tjbdwanghaibo/roost-kit/service/global"
-	"github.com/tjbdwanghaibo/roost-kit/service/global/activity"
-	"github.com/tjbdwanghaibo/roost-kit/service/mail"
-	"github.com/tjbdwanghaibo/roost-kit/service/match"
-	"github.com/tjbdwanghaibo/roost-kit/service/platform"
-	"github.com/tjbdwanghaibo/roost-kit/service/rank"
-	"github.com/tjbdwanghaibo/roost-kit/service/session"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/account"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/chat"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/global"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/match"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/platform"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/rank"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/session"
 )
 
 // app resolves a Mod's DependsOn by Mod NAME. The generated ClientMods used

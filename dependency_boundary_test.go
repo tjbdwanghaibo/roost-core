@@ -255,6 +255,8 @@ func TestModuleLayer(t *testing.T) {
 
 func TestForbiddenCoreImport(t *testing.T) {
 	for _, name := range []string{
+		// 旧模块路径仍然要被拒绝：合仓之后它是"某个文件漏改了 import"的信号。
+		// 新位置 github.com/tjbdwanghaibo/roost-core/kit/... 由 layerViolation 管。
 		"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest",
 		"github.com/tjbdwanghaibo/roost-service",
 		"github.com/tjbdwanghaibo/roost-skill/skill",

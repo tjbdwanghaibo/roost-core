@@ -5,7 +5,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 )
 
 // GameProcess wires a process that CALLS mail without owning it.

@@ -81,7 +81,7 @@ func TestForbiddenKitImport(t *testing.T) {
 			t.Errorf("accepted forbidden import %s", name)
 		}
 	}
-	for _, name := range []string{"context", "github.com/tjbdwanghaibo/roost-core/redis", "github.com/tjbdwanghaibo/roost-kit/mods", "github.com/redis/go-redis/v9"} {
+	for _, name := range []string{"context", "github.com/tjbdwanghaibo/roost-core/redis", "github.com/tjbdwanghaibo/roost-core/kit/mods", "github.com/redis/go-redis/v9"} {
 		if forbiddenKitImport(name) {
 			t.Errorf("rejected allowed import %s", name)
 		}

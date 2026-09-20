@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // U-0150 · C2 · gap map kit `ops` 6/7：开了管理端口却没有 token 不能 Init；Provide 拒绝 nil 注册表与缺健康 /

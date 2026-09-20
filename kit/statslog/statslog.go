@@ -16,7 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/worker"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
 	"github.com/spf13/viper"
 )

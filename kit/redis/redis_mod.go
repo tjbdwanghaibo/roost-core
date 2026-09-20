@@ -7,7 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/health"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"log/slog"
 	"strings"
 	"time"

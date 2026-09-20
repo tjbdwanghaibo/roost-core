@@ -9,7 +9,7 @@ import (
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
 	"github.com/spf13/viper"
 )

@@ -23,7 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // OwnerCapabilities is what the owning Mod registers: the interface every

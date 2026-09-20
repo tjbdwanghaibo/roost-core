@@ -8,7 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // contendedLeases loses its first compare-and-set on every Update: the mutate

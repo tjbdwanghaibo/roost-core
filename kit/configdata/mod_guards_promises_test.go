@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // U-0150 · C2 · gap map kit `configdata` 3/3：Provide 对缺指标 / 生命周期能力的注册表拒绝；未 Init 就 Start 拒绝。

@@ -6,7 +6,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 )
 
 // RewardFlow is business logic that uses mail.

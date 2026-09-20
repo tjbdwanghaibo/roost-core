@@ -11,7 +11,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"log/slog"
 	"strings"
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // U-0150 · C2 · gap map kit `room` 3/3：Provide 对缺健康能力的注册表、缺 NATS 客户端的注册表拒绝。

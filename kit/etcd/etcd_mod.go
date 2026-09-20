@@ -7,7 +7,7 @@ import (
 	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	etcddriver "github.com/tjbdwanghaibo/roost-core/etcd/driver"
 	"github.com/tjbdwanghaibo/roost-core/health"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"log/slog"
 	"strings"
 	"time"

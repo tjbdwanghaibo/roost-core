@@ -73,7 +73,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
