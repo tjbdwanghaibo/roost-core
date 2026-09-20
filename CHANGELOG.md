@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.13] - 2026-09-20
+
 ### Added
 
 - **`redis.CompareAndDelete`**：只在 key 仍然持有调用方上次看到的值时删除它（RR-20260920-03 的使能件）。
