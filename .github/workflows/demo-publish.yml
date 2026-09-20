@@ -1,10 +1,3 @@
-# ⚠️ 三仓合一仓搬迁中（P3）：本工作流从 roost-codegen 原样搬来，内容未改——
-# 它检查的东西（生成器版本下限、升级器历史、release shell 卫生）仍然由
-# codegen/internal/roost/deploy_hygiene_test.go 逐条断言，所以文件不能删。
-# 但它的作业还是跨仓形态（clone roost-kit、三仓 go.work、-roost-kit-version），
-# 合仓之后这些步骤要重写，属于 P5（发布与归档）。在那之前只保留手动触发，
-# 不在每次 push 上跑一个必然失败的门禁。
-#   方案：docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md
 # Publishes the project `roost project new … -template game-demo` generates to
 # the `demo-generated` branch of this repository, so there is a complete,
 # read-only tree to clone and read without running the generator. It is a
@@ -17,6 +10,8 @@
 name: demo-publish
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -41,10 +36,11 @@ jobs:
           GOFLAGS: -mod=mod
         run: |
           set -euo pipefail
-          go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
-          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
-          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" \
+          # One module: the generator, the templates and the runtime are all in
+          # this checkout, so nothing is cloned and the workspace has one member
+          # besides the project (三仓合一仓 P5).
+          go build -o "${RUNNER_TEMP}/roost" ./codegen/cmd/roost
+          "${RUNNER_TEMP}/roost" project new planet -skip-deps -module example.com/planet -out "${RUNNER_TEMP}/planet" \
             -mods configdata,mongo,nats,dataengine,nest -template game-demo
           cd "${RUNNER_TEMP}/planet"
           cat > go.work <<W
@@ -52,8 +48,7 @@ jobs:
 
           use (
           	.
-          	${RUNNER_TEMP}/roost-core
-          	${RUNNER_TEMP}/roost-kit
+          	${GITHUB_WORKSPACE}
           )
           W
           go build ./...
@@ -66,24 +61,22 @@ jobs:
         run: |
           set -euo pipefail
           SRC_SHA="$(git rev-parse --short HEAD)"
-          CORE_SHA="$(git -C "${RUNNER_TEMP}/roost-core" rev-parse --short HEAD)"
-          KIT_SHA="$(git -C "${RUNNER_TEMP}/roost-kit" rev-parse --short HEAD)"
           cd "${RUNNER_TEMP}/planet"
           cat > GENERATED.md <<M
           # Generated — do not edit here
 
           This tree is the output of \`roost project new planet -module example.com/planet -mods configdata,mongo,nats,dataengine,nest -template game-demo\`
-          from roost-codegen ${SRC_SHA}, built against roost-core ${CORE_SHA} and roost-kit ${KIT_SHA} (source head).
-          It exists to be cloned and read. Changes belong in roost-codegen/demo (the templates) or roost-codegen/internal/roost (the scaffold);
+          from roost-core ${SRC_SHA} (source head).
+          It exists to be cloned and read. Changes belong in roost-core/demo (the templates) or roost-core/codegen/internal/roost (the scaffold);
           the next publish overwrites this branch.
 
-          To build it yourself, add a go.work pointing at roost-core and roost-kit checkouts: the wiring codegen HEAD emits needs their main branches.
+          To build it yourself, add a go.work pointing at a roost-core checkout: the wiring HEAD emits may need its main branch.
           M
           git init -q -b demo-generated
-          git config user.name "roost-codegen[bot]"
-          git config user.email "roost-codegen@users.noreply.github.com"
+          git config user.name "roost-core[bot]"
+          git config user.email "roost-core@users.noreply.github.com"
           git add -A
-          git commit -q -m "demo-generated: roost-codegen ${SRC_SHA} · core ${CORE_SHA} · kit ${KIT_SHA}"
+          git commit -q -m "demo-generated: roost-core ${SRC_SHA}"
           git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" demo-generated:demo-generated
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

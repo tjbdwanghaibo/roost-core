@@ -1,9 +1,9 @@
 # 生成物兼容矩阵。三仓合一仓之后只剩一个框架模块，所以：
 #   * source-head：工作区指向本 checkout（不再 clone 第二个仓）；
-#   * minimum / released：这两格要求**已发布**的框架能编译当前生成器的产物，
-#     而当前生成器产出的 import 只存在于尚未发布的 core v1.16.0 里。矩阵暂时
-#     只留 source-head，两格在 P5 发布边界版本之后恢复；下面 version_args 那行
-#     仍然是生成器下限的唯一副本，deploy_hygiene_test 逐字比对它。
+#   * minimum / released：v1.16.0 发布之后恢复。它们要求**已发布**的框架能编译
+#     当前生成器的产物——合仓当天这不成立（产物的 import 只在未发布的版本里），
+#     现在成立了。下面 version_args 那行仍是生成器下限的唯一副本，
+#     deploy_hygiene_test 逐字比对它。
 name: framework-compat
 
 on:
@@ -24,14 +24,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # minimum / released 在 P5 恢复（见文件顶部）
-        dependency-set: [source-head]
+        dependency-set: [minimum, released, source-head]
         scenario: [minimal, full, demo]
         consumer-go: ["1.27.x"]
-        # 原来这里有一条 exclude：demo 场景与 minimum 组合不成立（demo 模板需要
-        # core >= v1.15.7 / kit >= v1.14.8，而 minimum 故意钉更老的 tag）。
-        # minimum 这一格现在不在矩阵里，exclude 一并移走；P5 恢复 minimum 时
-        # 要把它一起放回来。
+        # 合仓前这里有一条 exclude：demo 场景与 minimum 组合不成立，因为
+        # minimum 故意钉比 demo 模板所需更老的 tag。现在下限就是合仓那个版本，
+        # 它当然带着 demo 需要的一切，所以这条 exclude 没有了。
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -67,10 +65,15 @@ jobs:
             mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate
             # The game template hosts account / mail / match / chat and wires
-            # game to them, so the full scenario compiles roost-kit/service too.
+            # game to them, so the full scenario compiles kit/service too.
             template_args=(-template game)
           fi
-          "${RUNNER_TEMP}/roost" project new planet -skip-deps -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
+          # 只有 source-head 要 --skip-deps：它编译的是 checkout，产物的 import
+          # 可能还没进任何发布。minimum / released 要的恰恰相反——让依赖真的
+          # 从 proxy 解析出来。
+          skip_args=()
+          if [ "$SET" = source-head ]; then skip_args=(-skip-deps); fi
+          "${RUNNER_TEMP}/roost" project new planet "${skip_args[@]}" -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
           if [ "$SCENARIO" = full ]; then
             cd "${RUNNER_TEMP}/planet"
             "${RUNNER_TEMP}/roost" add access player --service gate
@@ -88,7 +91,7 @@ jobs:
             # manifest edit, so it goes through sync).
             "${RUNNER_TEMP}/roost" add rpc Guild -service game
             sed -i 's/^    gate:$/    gate:\n        uses_rpcs:\n            - guild/' roost.yaml
-            "${RUNNER_TEMP}/roost" project sync --skip-deps
+            "${RUNNER_TEMP}/roost" project sync "${skip_args[@]}"
             # Pure-version scenarios exercise the transactional generate+tidy
             # path here. Source-head is compiled through go.work below because
             # its APIs may intentionally not exist in the latest tag yet.
