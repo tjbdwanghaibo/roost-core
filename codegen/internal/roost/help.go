@@ -104,15 +104,14 @@ make codegen-up`,
 	{
 		Name: "framework-release", Aliases: []string{"framework", "release-train", "framework-lock"},
 		Summary: "校验 core、kit、skill 精确发布集合并生成不可变框架锁",
-		Usage: `roost framework verify --manifest ci/framework-release.yaml --expected-codegen v1.10.0 --lock framework-lock.json
+		Usage: `roost framework verify --manifest codegen/ci/framework-release.yaml --expected-release v1.16.0 --lock framework-lock.json
 roost framework verify --github-output "$GITHUB_OUTPUT"`,
-		Configuration: `ci/framework-release.yaml 只能使用 vMAJOR.MINOR.PATCH，不能使用 latest 或伪版本。verify 从 Go module proxy 获取三个已发布模块，校验 module path、checksum、replace 和框架内部伪版本依赖，然后生成 framework-lock.json。codegen release workflow 只有在完整生成项目兼容矩阵通过后才进入受保护 framework-release Environment。`,
-		Example: `schema: 1
-codegen: v1.10.0
-framework: {core: v1.9.1, kit: v1.9.2, skill: v1.9.1}
+		Configuration: `codegen/ci/framework-release.yaml 只能使用 vMAJOR.MINOR.PATCH，不能使用 latest 或伪版本。三仓合一仓之后它只有一行 release：一个模块一个版本。verify 从 Go module proxy 获取那一个已发布模块，校验 module path、checksum、replace 和框架内部伪版本依赖，然后生成 framework-lock.json；scripts/pretag.sh 在打 tag 之前先比对清单与要发的版本。release workflow 只有在完整生成项目兼容矩阵通过后才进入受保护 framework-release Environment。`,
+		Example: `schema: 3
+release: v1.16.0
 consumer_go: [1.27.x]
 
-roost framework verify --expected-codegen v1.10.0`,
+roost framework verify --expected-release v1.16.0`,
 	},
 	{
 		Name: "generate", Aliases: []string{"gen"},

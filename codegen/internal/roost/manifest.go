@@ -39,8 +39,17 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 //
 // The game-demo template needs more than this (it tracks the current release
 // set) and is excluded from that cell on purpose.
+// minimumVersions is the lowest framework this generator's output compiles
+// against — and since the consolidation it is ONE number.
+//
+// Core rose to v1.16.0 because that is the first release carrying kit/ and
+// codegen/ inside roost-core: everything this generator emits imports
+// roost-core/kit/…, which no earlier tag has. Kit and Codegen stay as fields
+// because a project's roost.yaml still carries versions.kit / versions.codegen
+// and must keep validating; they no longer name modules of their own, so they
+// stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.15.7",
+	Core:    "v1.16.0",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }

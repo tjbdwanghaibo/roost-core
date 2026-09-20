@@ -16,19 +16,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// FrameworkReleaseManifest declares the release being promoted.
+//
+// Schema 3 has ONE version because the framework is one module: kit and the
+// generator ship inside roost-core (kit/, codegen/). Schema 2 listed codegen
+// separately from framework.core / framework.kit, and keeping three numbers in
+// step was itself a source of failure — the codegen field drifted from the tag
+// and took ten releases' worth of this gate with it (U-0270).
 type FrameworkReleaseManifest struct {
-	Schema     int                         `yaml:"schema"`
-	Codegen    string                      `yaml:"codegen"`
-	Framework  FrameworkReleaseVersionSpec `yaml:"framework"`
-	ConsumerGo []string                    `yaml:"consumer_go"`
-}
-
-// FrameworkReleaseVersionSpec names the two framework runtime modules. Schema 2
-// dropped skill and service: since the consolidation they ship inside core
-// (roost-core/skill) and kit (roost-kit/service).
-type FrameworkReleaseVersionSpec struct {
-	Core string `yaml:"core" json:"core"`
-	Kit  string `yaml:"kit" json:"kit"`
+	Schema     int      `yaml:"schema"`
+	Release    string   `yaml:"release"`
+	ConsumerGo []string `yaml:"consumer_go"`
 }
 
 type FrameworkModuleLock struct {
@@ -39,11 +37,10 @@ type FrameworkModuleLock struct {
 }
 
 type FrameworkReleaseLock struct {
-	Schema     int                         `json:"schema"`
-	Codegen    string                      `json:"codegen"`
-	Framework  FrameworkReleaseVersionSpec `json:"framework"`
-	ConsumerGo []string                    `json:"consumer_go"`
-	Modules    []FrameworkModuleLock       `json:"modules"`
+	Schema     int                   `json:"schema"`
+	Release    string                `json:"release"`
+	ConsumerGo []string              `json:"consumer_go"`
+	Modules    []FrameworkModuleLock `json:"modules"`
 }
 
 type moduleDownload struct {
@@ -55,7 +52,7 @@ type moduleDownload struct {
 	Error    *struct{ Err string }
 }
 
-var internalPseudoVersion = regexp.MustCompile(`github\.com/tjbdwanghaibo/(?:roost-core|roost-kit)\s+v\d+\.\d+\.\d+-0\.\d{14}-[0-9a-f]{12}`)
+var internalPseudoVersion = regexp.MustCompile(`github\.com/tjbdwanghaibo/roost-core\s+v\d+\.\d+\.\d+-0\.\d{14}-[0-9a-f]{12}`)
 var goModReplaceDirective = regexp.MustCompile(`(?m)^[\t ]*replace(?:[\t ]|\()`)
 var consumerGoVersion = regexp.MustCompile(`^1\.(\d+)\.x$`)
 
@@ -78,15 +75,11 @@ func LoadFrameworkReleaseManifest(path string) (FrameworkReleaseManifest, error)
 
 func (m FrameworkReleaseManifest) Validate() error {
 	var joined error
-	if m.Schema != 2 {
-		joined = errors.Join(joined, fmt.Errorf("unsupported framework release schema %d (schema 2 lists core and kit only)", m.Schema))
+	if m.Schema != 3 {
+		joined = errors.Join(joined, fmt.Errorf("unsupported framework release schema %d (schema 3 names one module)", m.Schema))
 	}
-	for _, version := range []struct{ name, value string }{
-		{"codegen", m.Codegen}, {"core", m.Framework.Core}, {"kit", m.Framework.Kit},
-	} {
-		if _, _, _, ok := releaseVersion(version.value); !ok {
-			joined = errors.Join(joined, fmt.Errorf("%s must be an exact vMAJOR.MINOR.PATCH release; got %q", version.name, version.value))
-		}
+	if _, _, _, ok := releaseVersion(m.Release); !ok {
+		joined = errors.Join(joined, fmt.Errorf("release must be an exact vMAJOR.MINOR.PATCH release; got %q", m.Release))
 	}
 	seenGo := make(map[string]bool, len(m.ConsumerGo))
 	if len(m.ConsumerGo) == 0 {
@@ -107,19 +100,18 @@ func (m FrameworkReleaseManifest) Validate() error {
 	return joined
 }
 
-func VerifyFrameworkRelease(manifestPath, expectedCodegen, lockPath, githubOutput string, stdout io.Writer) error {
+func VerifyFrameworkRelease(manifestPath, expectedRelease, lockPath, githubOutput string, stdout io.Writer) error {
 	manifest, err := LoadFrameworkReleaseManifest(manifestPath)
 	if err != nil {
 		return err
 	}
-	if expectedCodegen != "" && manifest.Codegen != expectedCodegen {
-		return fmt.Errorf("framework release codegen %s does not match release tag %s", manifest.Codegen, expectedCodegen)
+	if expectedRelease != "" && manifest.Release != expectedRelease {
+		return fmt.Errorf("framework release %s does not match release tag %s", manifest.Release, expectedRelease)
 	}
 	modules := []struct{ path, version string }{
-		{"github.com/tjbdwanghaibo/roost-core", manifest.Framework.Core},
-		{"github.com/tjbdwanghaibo/roost-core/kit", manifest.Framework.Kit},
+		{"github.com/tjbdwanghaibo/roost-core", manifest.Release},
 	}
-	lock := FrameworkReleaseLock{Schema: 2, Codegen: manifest.Codegen, Framework: manifest.Framework, ConsumerGo: append([]string(nil), manifest.ConsumerGo...)}
+	lock := FrameworkReleaseLock{Schema: 3, Release: manifest.Release, ConsumerGo: append([]string(nil), manifest.ConsumerGo...)}
 	for _, module := range modules {
 		download, downloadErr := downloadFrameworkModule(module.path, module.version)
 		if downloadErr != nil {
@@ -152,7 +144,7 @@ func VerifyFrameworkRelease(manifestPath, expectedCodegen, lockPath, githubOutpu
 			return err
 		}
 	}
-	fmt.Fprintf(stdout, "framework release verified: codegen=%s core=%s kit=%s\n", manifest.Codegen, manifest.Framework.Core, manifest.Framework.Kit)
+	fmt.Fprintf(stdout, "framework release verified: %s\n", manifest.Release)
 	return nil
 }
 
@@ -199,9 +191,7 @@ func appendFrameworkGitHubOutput(path string, manifest FrameworkReleaseManifest)
 		return fmt.Errorf("encode consumer Go matrix: %w", err)
 	}
 	values := []string{
-		"codegen=" + manifest.Codegen,
-		"core=" + manifest.Framework.Core,
-		"kit=" + manifest.Framework.Kit,
+		"release=" + manifest.Release,
 		"consumer_go=" + strings.Join(manifest.ConsumerGo, ","),
 		"consumer_go_json=" + string(consumerGoJSON),
 	}

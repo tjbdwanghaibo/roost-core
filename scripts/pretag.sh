@@ -60,7 +60,24 @@ if [[ -n "$(git status --porcelain)" ]]; then
   fail "working tree is not clean"
 fi
 
-# 4. It must build and test with the workspace off — the workspace hides
+# 4. The framework release manifest must name the version being released.
+#    The release workflow verifies it against the tag it was triggered by, so a
+#    manifest that drifts turns the protected gate red AFTER the tag is pushed —
+#    silently, because the tag itself is perfectly usable and the only thing
+#    missing is the lock the gate produces. It drifted for ten releases in
+#    roost-codegen before this check existed (U-0270); the check moved here with
+#    the release when the three repositories became one.
+manifest="codegen/ci/framework-release.yaml"
+if [[ -f "$manifest" ]]; then
+  declared=$(awk '/^release:/{print $2; exit}' "$manifest")
+  [[ -n "$declared" ]] || fail "$manifest has no release: field"
+  if [[ "$declared" != "$version" ]]; then
+    fail "$manifest says release: $declared but this release is $version; the release workflow compares the two and fails the framework gate once the tag is pushed"
+  fi
+  echo "pretag: framework release manifest names $declared"
+fi
+
+# 5. It must build and test with the workspace off — the workspace hides
 #    exactly the dependency mistakes a consumer would hit.
 echo "pretag: building with GOWORK=off"
 GOWORK=off go build ./... >/dev/null

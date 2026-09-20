@@ -1,30 +1,28 @@
 #!/usr/bin/env bash
 # Local mirror of the framework-compat "source-head" lane: generate a project
 # with the roost CLI built from this checkout, then compile and test it against
-# the roost-core / roost-kit WORKING TREES through a temporary go.work, and
-# check the generated go.mod stayed publishable (no replace directives).
+# this WORKING TREE through a temporary go.work, and check the generated go.mod
+# stayed publishable (no replace directives).
 #
-#   scripts/source-head-check.sh [minimal|full] [core-dir] [kit-dir]
+#   codegen/scripts/source-head-check.sh [minimal|full]
 #
-# Bootstrap resolution inside `project new` runs with GOWORK=off against the
-# module proxy; it pins the released consolidated layout by default, override
-# with ROOST_CORE_PIN / ROOST_KIT_PIN (pre-releases work too). Set ROOST_KEEP=1 to
-# keep the temporary directory for inspection.
+# One module since the consolidation, so there is no second working tree to
+# point at and no framework version to pin: generation runs with --skip-deps
+# (the imports it writes may only exist in this tree, not in any release) and
+# the workspace supplies the framework. Set ROOST_KEEP=1 to keep the temporary
+# directory for inspection.
 set -euo pipefail
 
 scenario="${1:-minimal}"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-core_dir="$(cd "${2:-$repo_root/../roost-core}" && pwd)"
-kit_dir="$(cd "${3:-$repo_root/../roost-kit}" && pwd)"
-core_pin="${ROOST_CORE_PIN:-v1.15.18}"
-kit_pin="${ROOST_KIT_PIN:-v1.14.17}"
+# codegen/scripts/… → the module root is two levels up.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/roost-source-head.XXXXXX")"
 cleanup() { if [[ "${ROOST_KEEP:-0}" != 1 ]]; then rm -rf "$work"; else echo "kept: $work"; fi; }
 trap cleanup EXIT
 
 echo "source-head-check: building roost CLI from $repo_root"
-(cd "$repo_root" && GOWORK=off go build -o "$work/roost" ./cmd/roost)
+(cd "$repo_root" && GOWORK=off go build -o "$work/roost" ./codegen/cmd/roost)
 
 mods=configdata
 services=game
@@ -35,10 +33,9 @@ if [[ "$scenario" == full ]]; then
   template_args=(-template game)
 fi
 
-echo "source-head-check: generating planet ($scenario) pinned to core $core_pin / kit $kit_pin"
-GOWORK=off "$work/roost" project new planet -module example.com/planet -out "$work/planet" \
-  -mods "$mods" -services "$services" \
-  -roost-core-version "$core_pin" -roost-kit-version "$kit_pin" -codegen-version latest ${template_args[@]+"${template_args[@]}"}
+echo "source-head-check: generating planet ($scenario) against this working tree"
+GOWORK=off "$work/roost" project new planet -skip-deps -module example.com/planet -out "$work/planet" \
+  -mods "$mods" -services "$services" ${template_args[@]+"${template_args[@]}"}
 if [[ "$scenario" == full ]]; then
   (cd "$work/planet" && GOWORK=off "$work/roost" add access player --service gate \
     && GOWORK=off "$work/roost" add transport tcp --service gate \
@@ -51,9 +48,17 @@ if grep -qE '^[[:space:]]*replace[[:space:](]' "$work/planet/go.mod"; then
   exit 1
 fi
 
-echo "source-head-check: compiling planet against working trees $core_dir and $kit_dir"
-(cd "$work" && go work init ./planet "$core_dir" "$kit_dir" && go work edit -go=1.27.0)
+echo "source-head-check: compiling planet against the working tree $repo_root"
+(cd "$work" && go work init ./planet "$repo_root" && go work edit -go=1.27.0)
 export GOWORK="$work/go.work"
+# --skip-deps skipped `go mod tidy`, and tidy is what upgrades the pre-split
+# google.golang.org/genproto that etcd's old requirement drags in; left alone,
+# it and the split googleapis/{api,rpc} modules provide the same package and
+# every build fails with "ambiguous import". tidy cannot run (it ignores the
+# workspace and the framework version may be unpublished), so do that one piece
+# of its work explicitly.
+(cd "$work/planet" && go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core \
+  && GOFLAGS=-mod=mod go get google.golang.org/genproto@latest >/dev/null)
 (cd "$work/planet" && go build ./... && go vet ./... && go test -count=1 ./... 2>&1 | { grep -v "no test files" || true; })
 (cd "$work/planet" && go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...)
 echo "source-head-check: $scenario OK"

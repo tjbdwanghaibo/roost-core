@@ -10,7 +10,7 @@ import (
 
 func TestFrameworkReleaseManifestStrictValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "framework-release.yaml")
-	valid := []byte("schema: 2\ncodegen: v1.15.0\nframework: {core: v1.14.0, kit: v1.13.0}\nconsumer_go: [1.25.x, 1.26.x]\n")
+	valid := []byte("schema: 3\nrelease: v1.16.0\nconsumer_go: [1.25.x, 1.26.x]\n")
 	if err := os.WriteFile(path, valid, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -18,19 +18,21 @@ func TestFrameworkReleaseManifestStrictValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Framework.Kit != "v1.13.0" || len(manifest.ConsumerGo) != 2 {
+	if manifest.Release != "v1.16.0" || len(manifest.ConsumerGo) != 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 	for name, raw := range map[string][]byte{
-		"unknown":  bytes.Replace(valid, []byte("schema: 2"), []byte("schema: 2\nunknown: true"), 1),
-		"latest":   bytes.Replace(valid, []byte("core: v1.14.0"), []byte("core: latest"), 1),
+		"unknown":  bytes.Replace(valid, []byte("schema: 3"), []byte("schema: 3\nunknown: true"), 1),
+		"latest":   bytes.Replace(valid, []byte("release: v1.16.0"), []byte("release: latest"), 1),
 		"go":       bytes.Replace(valid, []byte("1.26.x"), []byte("1.26.0"), 1),
 		"old-go":   bytes.Replace(valid, []byte("1.26.x"), []byte("1.24.x"), 1),
 		"empty-go": bytes.Replace(valid, []byte("[1.25.x, 1.26.x]"), []byte("[]"), 1),
-		// schema 1 still listed skill and service; the folded-in modules must not
-		// be declared any more, and the old schema number is refused outright.
-		"schema-1":       bytes.Replace(valid, []byte("schema: 2"), []byte("schema: 1"), 1),
-		"legacy-modules": bytes.Replace(valid, []byte("kit: v1.13.0}"), []byte("kit: v1.13.0, skill: v1.10.3}"), 1),
+		// Schema 2 named three versions (codegen + framework.core/kit). One
+		// module has one version, and the old shape is refused outright rather
+		// than half-read — the codegen field drifting from the tag is what took
+		// ten releases' worth of this gate down (U-0270).
+		"schema-2":       bytes.Replace(valid, []byte("schema: 3"), []byte("schema: 2"), 1),
+		"legacy-modules": bytes.Replace(valid, []byte("release: v1.16.0"), []byte("release: v1.16.0\nframework: {core: v1.15.18}"), 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0o644); err != nil {
@@ -71,7 +73,7 @@ func TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies(t *testing.T) {
 }
 
 func TestFrameworkGitHubOutputAndBuildVersion(t *testing.T) {
-	manifest := FrameworkReleaseManifest{Codegen: "v1.10.0", Framework: FrameworkReleaseVersionSpec{Core: "v1.9.1", Kit: "v1.9.2"}, ConsumerGo: []string{"1.25.x", "1.26.x"}}
+	manifest := FrameworkReleaseManifest{Schema: 3, Release: "v1.10.0", ConsumerGo: []string{"1.25.x", "1.26.x"}}
 	path := filepath.Join(t.TempDir(), "github", "output")
 	if err := appendFrameworkGitHubOutput(path, manifest); err != nil {
 		t.Fatal(err)
@@ -80,7 +82,7 @@ func TestFrameworkGitHubOutputAndBuildVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"codegen=v1.10.0", "core=v1.9.1", "kit=v1.9.2", "consumer_go=1.25.x,1.26.x", `consumer_go_json=["1.25.x","1.26.x"]`} {
+	for _, want := range []string{"release=v1.10.0", "consumer_go=1.25.x,1.26.x", `consumer_go_json=["1.25.x","1.26.x"]`} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("GitHub output missing %q: %s", want, raw)
 		}

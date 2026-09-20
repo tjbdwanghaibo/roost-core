@@ -49,7 +49,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.15.7 -roost-kit-version v1.14.8 -codegen-version v1.15.0)
+            version_args=(-roost-core-version v1.16.0 -roost-kit-version v1.14.8 -codegen-version v1.15.0)
           fi
           mods=configdata
           services=game
@@ -104,6 +104,11 @@ jobs:
           # second repository to clone (三仓合一仓 P4).
           cd "${RUNNER_TEMP}"
           go work init ./planet "$GITHUB_WORKSPACE"
+          # The generated go.mod pins the generator's floor, which during a
+          # boundary migration nobody has published yet; `go get` resolves the
+          # whole graph and would fail on it, and the workspace is what supplies
+          # the framework anyway — so that requirement goes first.
+          #
           # `project new --skip-deps` skipped `go mod tidy`, and tidy is what
           # normally upgrades the pre-split google.golang.org/genproto that
           # etcd's old requirement drags in. Left alone, the monolith and the
@@ -111,7 +116,7 @@ jobs:
           # and every build fails with "ambiguous import". The workspace cannot
           # resolve it (tidy ignores go.work), so do that one piece of tidy's
           # work explicitly — it needs no unpublished release.
-          (cd planet && GOFLAGS=-mod=mod go get google.golang.org/genproto@latest)
+          (cd planet && go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core && GOFLAGS=-mod=mod go get google.golang.org/genproto@latest)
           # The workspace go directive must be at least every member's own.
           # It used to be pinned DOWN to 1.25.0, because the framework runtime
           # modules supported a lower consumer lane than codegen did. They no

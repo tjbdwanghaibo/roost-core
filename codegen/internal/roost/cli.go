@@ -69,12 +69,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 
 func runFramework(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "verify" {
-		return errors.New("usage: roost framework verify [--manifest path] [--expected-codegen version] [--lock path] [--github-output path]")
+		return errors.New("usage: roost framework verify [--manifest path] [--expected-release version] [--lock path] [--github-output path]")
 	}
 	fs := flag.NewFlagSet("framework verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	manifest := fs.String("manifest", "ci/framework-release.yaml", "framework release manifest")
-	expected := fs.String("expected-codegen", "", "required codegen version, normally the release tag")
+	expected := fs.String("expected-release", "", "required release version, normally the tag being published")
 	lock := fs.String("lock", "framework-lock.json", "output lock file; empty disables it")
 	githubOutput := fs.String("github-output", "", "optional GitHub Actions output file")
 	if err := fs.Parse(args[1:]); err != nil {

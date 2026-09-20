@@ -1,10 +1,7 @@
-# ⚠️ 三仓合一仓搬迁中（P3）：本工作流从 roost-codegen 原样搬来，内容未改——
-# 它检查的东西（生成器版本下限、升级器历史、release shell 卫生）仍然由
-# codegen/internal/roost/deploy_hygiene_test.go 逐条断言，所以文件不能删。
-# 但它的作业还是跨仓形态（clone roost-kit、三仓 go.work、-roost-kit-version），
-# 合仓之后这些步骤要重写，属于 P5（发布与归档）。在那之前只保留手动触发，
-# 不在每次 push 上跑一个必然失败的门禁。
-#   方案：docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md
+# 发布闸。三仓合一仓之后这是 roost-core 唯一的发布链：一个模块、一个 tag、
+# 一个版本号。清单 codegen/ci/framework-release.yaml 只剩一行 release，
+# scripts/pretag.sh 在打 tag 之前比对它，这里在 tag 之后再比对一次——它曾经
+# 漂了十个版本而没人发现（U-0270）。
 name: framework-release
 
 on:
@@ -27,9 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      version: ${{ steps.release.outputs.codegen }}
-      core: ${{ steps.release.outputs.core }}
-      kit: ${{ steps.release.outputs.kit }}
+      version: ${{ steps.release.outputs.release }}
       consumer_go: ${{ steps.release.outputs.consumer_go_json }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -61,7 +56,7 @@ jobs:
         id: release
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.value }}
-        run: go run ./cmd/roost framework verify --manifest ci/framework-release.yaml --expected-codegen "$RELEASE_TAG" --lock framework-lock.json --github-output "$GITHUB_OUTPUT"
+        run: go run ./codegen/cmd/roost framework verify --manifest codegen/ci/framework-release.yaml --expected-release "$RELEASE_TAG" --lock framework-lock.json --github-output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: framework-lock
@@ -83,14 +78,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+      - run: go build -o "${RUNNER_TEMP}/roost" ./codegen/cmd/roost
       - name: generate exact full consumer
         env:
-          CORE: ${{ needs.gate.outputs.core }}
-          KIT: ${{ needs.gate.outputs.kit }}
-          CODEGEN: ${{ needs.gate.outputs.version }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$CORE" -roost-kit-version "$KIT" -codegen-version "$CODEGEN"
+          # One module, one version: the generated project requires roost-core
+          # and nothing else (三仓合一仓 P5).
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$VERSION"
           cd "${RUNNER_TEMP}/planet"
           "${RUNNER_TEMP}/roost" add access player --service gate
           "${RUNNER_TEMP}/roost" add transport tcp
@@ -145,7 +140,7 @@ jobs:
         run: |
           suffix=
           if [ "$RUNNER_OS" = Windows ]; then suffix=.exe; fi
-          go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-codegen/internal/roost.buildVersion=$VERSION" -o "${RUNNER_TEMP}/roost${suffix}" ./cmd/roost
+          go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/codegen/internal/roost.buildVersion=$VERSION" -o "${RUNNER_TEMP}/roost${suffix}" ./codegen/cmd/roost
           "${RUNNER_TEMP}/roost${suffix}" version | grep -F "$VERSION"
           "${RUNNER_TEMP}/roost${suffix}" help framework-release
 
@@ -183,7 +178,7 @@ jobs:
             if [ "$os" = windows ]; then suffix=.exe; fi
             output="dist/build/$target"
             mkdir -p "$output"
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-codegen/internal/roost.buildVersion=$VERSION" -o "$output/roost${suffix}" ./cmd/roost
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/codegen/internal/roost.buildVersion=$VERSION" -o "$output/roost${suffix}" ./codegen/cmd/roost
             if [ "$os" = windows ]; then
               (cd "$output" && zip -q "../../roost-${VERSION}-${target}.zip" "roost.exe")
             else
