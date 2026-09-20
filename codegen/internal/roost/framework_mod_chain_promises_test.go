@@ -58,7 +58,7 @@ func TestAServiceNestedUnderAnotherIsHostable(t *testing.T) {
 	}
 	generated := renderBootstrap(m)
 	for _, want := range []string{
-		`svcactivity "github.com/tjbdwanghaibo/roost-kit/service/global/activity"`,
+		`svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"`,
 		"svcactivity.NewMod(serviceActivity.Metrics())",
 		"svcglobal.NewMod(serviceGlobal.Metrics())",
 	} {

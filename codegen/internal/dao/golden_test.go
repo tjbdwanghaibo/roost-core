@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite golden files")

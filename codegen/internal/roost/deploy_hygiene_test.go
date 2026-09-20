@@ -106,7 +106,7 @@ func TestDeployScriptsCarryNoKnownShellcheckFindings(t *testing.T) {
 // ("versions.core requires >= <floor> or latest; got v1.8.0") instead of
 // testing anything. Two literals in two files, one fact: pin them together.
 func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "framework-compat.yml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "framework-compat.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
 // upgraded in CI. The upgrade matrix must start at the first release that
 // emitted roost-* paths.
 func TestUpgradeCompatHistoryStartsAtTheRoostModulePaths(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "upgrade-compat.yml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "upgrade-compat.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestUpgradeCompatHistoryStartsAtTheRoostModulePaths(t *testing.T) {
 // release.yml reports nothing and the step continues, so the hygiene it
 // implements never fails. Bare `*.tar.gz` globs are SC2035.
 func TestReleaseWorkflowShellHasNoBareNegationsOrGlobs(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "release.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestSyncRemovesTheLegacyKubernetesBase(t *testing.T) {
 // while the framework needed 1.27, every generated project's image build
 // failed at `go mod download` with "go.mod requires go >= 1.27.0".
 func TestGeneratedGoVersionMatchesTheGeneratorsOwn(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}

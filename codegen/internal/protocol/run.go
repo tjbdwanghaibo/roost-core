@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
 )
 
 // Default project layout the protocol generator reads and writes, and the two

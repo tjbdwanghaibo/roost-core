@@ -3,7 +3,7 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"go/format"
 	"os"
 	"path/filepath"

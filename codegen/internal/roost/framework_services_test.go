@@ -120,7 +120,7 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 	if gomod := string(plan["go.mod"].Body); strings.Contains(gomod, "roost-service") {
 		t.Errorf("go.mod must not require the folded-in roost-service module:\n%s", gomod)
 	}
-	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-kit/service/servicemetrics") {
+	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-core/kit/service/servicemetrics") {
 		t.Errorf("frameworkdeps does not retain the kit services:\n%s", deps)
 	}
 	mailConfig := string(plan["configs/service/config.mail.yaml"].Body)

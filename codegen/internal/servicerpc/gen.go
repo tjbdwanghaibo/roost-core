@@ -42,7 +42,7 @@ const (
 
 // DefaultRegenerate is the command the generated headers cite when the
 // generator ran with no flags but -dir .
-const DefaultRegenerate = "go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir ."
+const DefaultRegenerate = "go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir ."
 
 // Options steers Generate; the zero value is HalfAll with DefaultRegenerate.
 type Options struct {

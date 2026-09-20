@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/roost"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/roost"
 )
 
 func main() {

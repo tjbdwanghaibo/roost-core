@@ -35,6 +35,16 @@ func TestLegacyCheckpointWritePathIsAbsent(t *testing.T) {
 			if path != root && filepath.Base(path) == ".git" {
 				return filepath.SkipDir
 			}
+			// The generator and its samples are not the runtime. codegen names
+			// these symbols as MARKER STRINGS it must recognise in a business
+			// project's source, and its testdata holds generated samples;
+			// neither is a legacy write path in Core. Skipping them is what
+			// keeps this test about the thing it is named after
+			// (三仓合一仓 P3).
+			switch filepath.Base(path) {
+			case "codegen", "testdata":
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {

@@ -126,9 +126,13 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 
 	ctx, cancel := context.WithTimeout(context.Background(), dependencyUpdateTimeout)
 	defer cancel()
+	// One module. kit lives at roost-core/kit/ since the consolidation, which
+	// is a PACKAGE path, not a module path — asking `go get` for it would be
+	// asking for a module that does not exist. The generator's blanket path
+	// rewrite produced exactly that for a moment; the version a project pins
+	// for kit is now the core version (三仓合一仓 P3).
 	queries := []string{
 		"github.com/tjbdwanghaibo/roost-core@" + normalizedVersionPolicy(manifest.Versions.Core),
-		"github.com/tjbdwanghaibo/roost-kit@" + normalizedVersionPolicy(manifest.Versions.Kit),
 	}
 	if err := run(ctx, absRoot, stdout, stderr, append([]string{"get"}, queries...)...); err != nil {
 		return rollbackDependencyUpdate(snapshots, fmt.Errorf("resolve framework dependencies: %w", err))

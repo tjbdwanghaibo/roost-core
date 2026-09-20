@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/webroute"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute"
 )
 
 func main() {

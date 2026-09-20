@@ -1308,9 +1308,9 @@ func TestBootstrapImportsTransitiveDataEngineDependencies(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nest"}, []string{"nest"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/roost-kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/roost-kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/roost-kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 	} {
 		if !strings.Contains(bootstrap, want) {
@@ -1328,9 +1328,9 @@ func TestBootstrapWiresDataEngineWithEntityAccess(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"dataengine", "nest"}, []string{"entity", "nest", "dao"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/roost-kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/roost-kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/roost-kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 		"kitnest.NewMod(EntityAccess)",
 	} {
@@ -1348,7 +1348,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	goMod := renderGoMod(m)
 	for _, want := range []string{
 		"github.com/tjbdwanghaibo/roost-core " + minimumVersions.Core,
-		"github.com/tjbdwanghaibo/roost-kit " + minimumVersions.Kit,
+		"github.com/tjbdwanghaibo/roost-core/kit " + minimumVersions.Kit,
 	} {
 		if !strings.Contains(goMod, want) {
 			t.Errorf("go.mod missing %q:\n%s", want, goMod)
@@ -1459,7 +1459,7 @@ func assertWorkflowActionsPinned(t *testing.T, path string, body []byte) {
 }
 
 func TestRepositoryWorkflowsAreValidAndPinned(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "..", ".github", "workflows", "*.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

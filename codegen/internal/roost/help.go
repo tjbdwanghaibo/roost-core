@@ -23,7 +23,7 @@ var helpTopics = []helpTopic{
 		Summary:       "检查本机工具、PATH 与当前 roost-codegen 版本",
 		Usage:         "roost version\nroost env doctor",
 		Configuration: "go 和 git 是必需项；make 和 docker 在使用生成 Makefile、开发依赖或容器部署时需要。检查失败会直接指出缺少的 PATH 工具。",
-		Example:       "go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest\nroost version\nroost env doctor",
+		Example:       "go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest\nroost version\nroost env doctor",
 	},
 	{
 		Name: "beginner", Aliases: []string{"start", "quickstart", "newbie"},
@@ -79,8 +79,8 @@ roost project next
 roost project new planet -module example.com/planet -mods configdata,mongo,nats,dataengine,nest -template game-demo
 
 # 旧项目执行一次，升级后即可使用 make project-upgrade
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -codegen latest
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest`,
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -codegen latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest`,
 	},
 	{
 		Name: "versions", Aliases: []string{"deps", "dependency", "dependencies", "project-deps", "roost-up", "codegen-up"},
@@ -90,7 +90,7 @@ make deps-update
 make roost-up
 make codegen-up
 roost project upgrade -core latest -kit latest -skill latest -codegen latest`,
-		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen),
+		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen),
 		Example: `versions:
   core: latest
   kit: latest
@@ -204,7 +204,7 @@ services:
 		Name: "dao", Aliases: []string{"database"},
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
 		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
 		Example: `//roost:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
@@ -236,7 +236,7 @@ type Player struct {
 	{
 		Name: "nest", Aliases: []string{"handler", "sender"},
 		Summary:       "生成 Entity 加锁调度、Sender、回滚和 durability 接入",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/nest@latest -dir ./game [-sender=true] [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest@latest -dir ./game [-sender=true] [-force]`,
 		Configuration: `handler 使用 //roost:nest；rollback=state|undo，durability=memory|async|strict，可加 sync。Entity 接口参数是锁目标，多个目标按全局顺序加锁。Remote read 放在带 remote tag 的 RemoteViewRef 字段。`,
 		Example: `//roost:nest rollback=undo durability=strict
 func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
@@ -246,7 +246,7 @@ func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
 	{
 		Name: "protocol", Aliases: []string{"proto", "protobuf"},
 		Summary:       "生成 Proto、PB Go、消息 ID、binding、handler、robot registry 和 manifest",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@latest -def ./protocol/def -proto ./protocol/proto -pb ./protocol/pb -msgid ./protocol/msgid -bind ./protocol/player_bind -handlers ./game/protocol_handlers`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest -def ./protocol/def -proto ./protocol/proto -pb ./protocol/pb -msgid ./protocol/msgid -bind ./protocol/player_bind -handlers ./game/protocol_handlers`,
 		Configuration: `文件使用 //roost:proto package=<proto-package> go_package=<go-import;alias>；接口使用 //roost:protocol group=<group> handler=<name>；方法使用 //roost:msg id=<id>。支持 request/response、client push、server notify 和反向 proto 导入。`,
 		Example: `//roost:protocol group=game handler=player
 type GameProtocol interface {
@@ -257,7 +257,7 @@ type GameProtocol interface {
 	{
 		Name: "cfggen", Aliases: []string{"configgen", "config-data"},
 		Summary:       "从 YAML schema 生成强类型配置表、对象、bean、索引和引用校验",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated`,
 		Configuration: `schema 支持 package、beans、tables、globals；字段支持 type、key、index、ref、required、skipempty。运行时通过 RegisterGeneratedConfigData 注册到 roost-core/configdata。`,
 		Example: `package: generated
 tables:
@@ -270,7 +270,7 @@ tables:
 	{
 		Name: "tablegen", Aliases: []string{"table", "csv"},
 		Summary:       "从 Go metadata 生成配置类型、CSV 模板并转换/校验 JSON",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/tablegen@latest -meta ./configs/schema [-out dir] [-csv-template dir] [-csv dir -json dir] [-check] [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen@latest -meta ./configs/schema [-out dir] [-csv-template dir] [-csv dir -json dir] [-check] [-force]`,
 		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title/required/unique/ref tag 描述。`,
 		Example: `//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
@@ -281,7 +281,7 @@ type Monster struct {
 	{
 		Name: "eventgen", Aliases: []string{"event", "events"},
 		Summary:       "生成事件类型、Type 方法以及接收者订阅/分发代码",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/eventgen@latest -def ./event/def -out ./event -pkg event -game ./game -eventpkg <module>/event [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/eventgen@latest -def ./event/def -out ./event -pkg event -game ./game -eventpkg <module>/event [-force]`,
 		Configuration: `定义目录中 Event 前缀 struct 会进入生成。业务接收者实现 DealEventXxx(*event.EventXxx)；签名不匹配在生成期失败。`,
 		Example: `type EventPlayerLevelUp struct { PlayerID int64; Level int32 }
 
@@ -290,7 +290,7 @@ func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}`,
 	{
 		Name: "attribute", Aliases: []string{"attr", "attributes"},
 		Summary:       "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/attribute@latest -dir ./game/attribute [-output file] [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/attribute [-output file] [-force]`,
 		Configuration: `profile 使用 //roost:attribute index=<start> max=<count>；字段可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
 		Example: `//roost:attribute index=1 max=64
 type PlayerProfile struct { HP int64; Attack int64; Power int64 }
@@ -302,7 +302,7 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 	{
 		Name: "webroute", Aliases: []string{"web", "http"},
 		Summary:       "生成类型化 HTTP route 注册、请求解码和响应映射",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/webroute@latest -dir ./service/web [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute@latest -dir ./service/web [-force]`,
 		Configuration: `handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest。重复 method/path、非法模式和错误签名会失败。`,
 		Example: `//roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
@@ -312,7 +312,7 @@ func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResp
 	{
 		Name: "errcode", Aliases: []string{"error", "errors"},
 		Summary:       "扫描错误码定义、检查冲突并导出 CSV",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/errcode@latest -root . -out docs/generated/errcode.csv`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/errcode@latest -root . -out docs/generated/errcode.csv`,
 		Configuration: `扫描 errcode.Define(code, name, message) 常量调用；code/name 重复或非常量参数会失败。编号空间由 roost.yaml 的 ids.errcode 管理。`,
 		Example: `var ErrItemNotFound = errcode.Define(100001, "item_not_found", "item not found")
 

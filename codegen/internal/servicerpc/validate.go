@@ -5,7 +5,7 @@ import (
 	"go/ast"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 )
 
 // buildService turns one annotated interface into a Service, refusing

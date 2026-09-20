@@ -35,11 +35,11 @@ func TestTransportHalfImportsCoreOnlyAndAssemblyHalfOwnsTheMods(t *testing.T) {
 		return paths
 	}
 	for _, path := range imports(transport.Name) {
-		if strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-kit") {
+		if strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/kit") {
 			t.Fatalf("the transport half imports %s; an interface that moves into a core domain package would drag kit along", path)
 		}
 	}
-	if !slices.Contains(imports(assembly.Name), "github.com/tjbdwanghaibo/roost-kit/mods") {
+	if !slices.Contains(imports(assembly.Name), "github.com/tjbdwanghaibo/roost-core/kit/mods") {
 		t.Fatal("the assembly half does not import roost-kit/mods, so OwnerCapabilities / ClientMod cannot name the Mods")
 	}
 

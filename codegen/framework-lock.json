@@ -18,7 +18,7 @@
       "go_mod_sum": "h1:IG/cSCMGVAJsWQpGet9hsi3RONTCfaBvyeFnmkjPjVY="
     },
     {
-      "path": "github.com/tjbdwanghaibo/roost-kit",
+      "path": "github.com/tjbdwanghaibo/roost-core/kit",
       "version": "v1.12.2",
       "sum": "h1:NmFRkId1x78nW06BfEWuCzQWV8myjkHM6D3Qvtxk2jc=",
       "go_mod_sum": "h1:OUCQiloVed4m03mKSFiwFWxAoWjaARJtLBF8s04p4PM="

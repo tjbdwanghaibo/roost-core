@@ -134,7 +134,7 @@ func Run(args []string, stdout io.Writer) error {
 // flags as given, so a file generated from another package's interface
 // records where that interface is.
 func regenerateCommand(dir, out string, half Half) string {
-	cmd := "go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir " + dir
+	cmd := "go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir " + dir
 	if half != HalfAll {
 		cmd += " -emit " + string(half)
 	}

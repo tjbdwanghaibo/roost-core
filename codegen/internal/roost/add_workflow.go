@@ -3,7 +3,7 @@ package roost
 import (
 	"bytes"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -53,7 +53,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	{{PERSISTENCE_IMPORT}}
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	%s %q
 )
 

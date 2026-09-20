@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -28,7 +28,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
 )
 
 const ()

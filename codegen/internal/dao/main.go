@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
 )
 
 // Default locations of the DAO definitions and the generated package inside a

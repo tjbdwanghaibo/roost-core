@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 	"go/format"
 	"path/filepath"
 	"sort"

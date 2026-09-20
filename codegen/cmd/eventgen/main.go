@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/eventgen"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/eventgen"
 )
 
 func main() {

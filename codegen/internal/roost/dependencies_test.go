@@ -57,6 +57,8 @@ func TestFrameworkDependencyUpdateStagesAndCommitsOnlyModuleFiles(t *testing.T) 
 	}
 }
 
+// Every direct framework module in one `go get` — which after the
+// consolidation is exactly one module.
 func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.T) {
 	root := t.TempDir()
 	goMod := []byte("module example.com/planet\n\ngo 1.25\n")
@@ -75,12 +77,10 @@ func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.
 	if err := updateFrameworkDependencies(root, manifest, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
+	// One module since the consolidation: kit is a package path inside
+	// roost-core, so there is nothing else to resolve alongside it.
 	want := [][]string{
-		{
-			"get",
-			"github.com/tjbdwanghaibo/roost-core@latest",
-			"github.com/tjbdwanghaibo/roost-kit@latest",
-		},
+		{"get", "github.com/tjbdwanghaibo/roost-core@latest"},
 		{"mod", "tidy"},
 	}
 	if !reflect.DeepEqual(commands, want) {
@@ -97,6 +97,8 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 	// Pinned versions at the generator floor: the policy refuses anything
 	// below it, because the code this generator emits does not compile there.
 	manifest.Versions.Core = minimumVersions.Core
+	// Versions.Kit is still a field in roost.yaml and still read by projects
+	// that predate the consolidation; it no longer names a module of its own.
 	manifest.Versions.Kit = minimumVersions.Kit
 	var get []string
 	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
@@ -109,10 +111,13 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(get, " ")
-	for _, want := range []string{"roost-core@" + minimumVersions.Core, "roost-kit@" + minimumVersions.Kit} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("go get command missing %q: %v", want, get)
-		}
+	if want := "roost-core@" + minimumVersions.Core; !strings.Contains(joined, want) {
+		t.Fatalf("go get command missing %q: %v", want, get)
+	}
+	// And it must NOT ask for a module that does not exist: after the
+	// consolidation kit is a package path inside roost-core.
+	if strings.Contains(joined, "roost-core/kit@") || strings.Contains(joined, "roost-kit@") {
+		t.Fatalf("go get asked for kit as a module of its own: %v", get)
 	}
 }
 

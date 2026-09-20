@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 )
 
 const generatorVersion = "v2"

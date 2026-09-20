@@ -54,7 +54,7 @@ func (spec frameworkServiceSpec) ImportPath() string {
 
 // frameworkServiceModule is the import root of the hosted services; since the
 // consolidation they live in roost-kit/service/<name>.
-const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-kit/service"
+const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-core/kit/service"
 
 var frameworkCatalog = map[string]frameworkServiceSpec{
 	"account": {
@@ -368,7 +368,7 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	if needsStrings {
 		imports = append(imports, `"strings"`)
 	}
-	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"`)
+	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"`)
 	// The service package is imported only when the collaborators body
 	// references it. A body that supplies nothing but Metrics() — match, since
 	// U-0217 removed its Grouping() — would otherwise ship an unused import,

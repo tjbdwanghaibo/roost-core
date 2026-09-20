@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
 
 // rpcDir is where a project's own cross-process services live: one package
@@ -138,7 +138,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 // ErrRequestInvalid is what the generated handlers answer a request they
 // cannot decode with. The code is allocated from the manifest's errcode space
@@ -207,7 +207,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // Mod is the owner side of this rpc inside a business process. It publishes

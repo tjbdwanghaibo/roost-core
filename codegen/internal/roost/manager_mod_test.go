@@ -45,7 +45,7 @@ func TestBootstrapWiresManagerModPerService(t *testing.T) {
 	rendered := renderBootstrap(manifest)
 
 	for _, want := range []string{
-		`kitmanager "github.com/tjbdwanghaibo/roost-kit/manager"`,
+		`kitmanager "github.com/tjbdwanghaibo/roost-core/kit/manager"`,
 		"kitmanager.NewManagerMod(serviceGame.Managers()...)",
 		"kitmanager.NewManagerMod(serviceGate.Managers()...)",
 	} {

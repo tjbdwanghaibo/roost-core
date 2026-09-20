@@ -65,7 +65,7 @@ func optionalNextHints(root string, m Manifest) []optionalHint {
 	}
 	if _, err := os.Stat(filepath.Join(root, "configs", "schema", "cfg.yaml")); os.IsNotExist(err) {
 		hints = append(hints, optionalHint{
-			Command: "write configs/schema/cfg.yaml, then go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta configs/schema/cfg.yaml -out configs/cfg (see roost help cfggen)",
+			Command: "write configs/schema/cfg.yaml, then go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen -meta configs/schema/cfg.yaml -out configs/cfg (see roost help cfggen)",
 			Why:     "tables, objects and beans declared in one YAML with keys, indexes and references, bound to typed accessors — the meta-first alternative to //roost:table",
 		})
 	}

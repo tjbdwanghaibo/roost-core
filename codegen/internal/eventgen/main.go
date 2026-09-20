@@ -20,7 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
 )
 
 // Default locations of the event definitions and the generated package inside a

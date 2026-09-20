@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/attribute"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute"
 )
 
 func main() {

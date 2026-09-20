@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
 
 func main() {

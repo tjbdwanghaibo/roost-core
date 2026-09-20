@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"

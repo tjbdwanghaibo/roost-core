@@ -22,6 +22,15 @@ func TestCoreDependencyBoundary(t *testing.T) {
 			if entry.Name() == ".git" || entry.Name() == "vendor" {
 				return filepath.SkipDir
 			}
+			// testdata is not this module's code. The Go tool does not build
+			// it, and under codegen/ it is generated OUTPUT plus the
+			// round-trip suites that compile that output against the real
+			// runtime — imports there are the generator's product, not its
+			// dependencies. A stale path in a golden file is caught by the
+			// golden comparison itself, which is the check that owns it.
+			if entry.Name() == "testdata" {
+				return filepath.SkipDir
+			}
 			if path != "." {
 				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
 					return filepath.SkipDir

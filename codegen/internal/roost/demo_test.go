@@ -21,7 +21,7 @@ func TestDemoEmbedCoversEveryFile(t *testing.T) {
 	}
 	sort.Strings(embedded)
 
-	root := filepath.Join("..", "..", "demo")
+	root := filepath.Join("..", "..", "..", "demo")
 	var onDisk []string
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".tmpl") {

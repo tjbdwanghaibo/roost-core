@@ -117,7 +117,7 @@ func VerifyFrameworkRelease(manifestPath, expectedCodegen, lockPath, githubOutpu
 	}
 	modules := []struct{ path, version string }{
 		{"github.com/tjbdwanghaibo/roost-core", manifest.Framework.Core},
-		{"github.com/tjbdwanghaibo/roost-kit", manifest.Framework.Kit},
+		{"github.com/tjbdwanghaibo/roost-core/kit", manifest.Framework.Kit},
 	}
 	lock := FrameworkReleaseLock{Schema: 2, Codegen: manifest.Codegen, Framework: manifest.Framework, ConsumerGo: append([]string(nil), manifest.ConsumerGo...)}
 	for _, module := range modules {

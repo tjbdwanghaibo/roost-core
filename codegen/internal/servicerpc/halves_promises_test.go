@@ -33,7 +33,7 @@ func TestEitherHalfCanBeEmittedAloneIntoAnotherDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assembly half not written into -out: %v", err)
 	}
-	want := "//\tgo run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir " + src + " -emit assembly -out " + out
+	want := "//\tgo run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir " + src + " -emit assembly -out " + out
 	if !strings.Contains(string(assembly), want) {
 		t.Fatalf("the assembly header does not record how it was produced; want %q in:\n%s", want, firstLines(string(assembly), 16))
 	}
@@ -77,7 +77,7 @@ func TestDirAcceptsAnImportPathResolvedInTheOutModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := resolveDir("github.com/tjbdwanghaibo/roost-codegen/internal/servicerpc", here)
+	resolved, err := resolveDir("github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc", here)
 	if err != nil {
 		t.Fatal(err)
 	}

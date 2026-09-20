@@ -1,0 +1,296 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	world "{{MODULE}}/game/entities/world"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	migrations "{{MODULE}}/db/migrations"
+	"{{MODULE}}/game/skills"
+	accessplayer "{{MODULE}}/internal/access/player"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+)
+
+// Service is the game server. It owns this process's World, the consumers
+// that turn committed effects into work (level-ups into reward mail), the
+// matchmaker that turns waiting tickets into matches, the gift saga's step
+// consumers, and the lockstep rooms those matches play in.
+type Service struct {
+	world          *world.World
+	levelUpMail    fnats.IJetStreamSubscription
+	stopMatchmaker func()
+	stopGiftSaga   func()
+	battles        *battleManager
+	scene          *Scene
+	stopSpawner    func()
+	spawner        *spawner
+	owners         *PlayerOwners
+	stopFlags      func()
+	stopPresence   func()
+	activity       *ActivityRunner
+	stopActivity   func()
+	activityPhase  fnats.IJetStreamSubscription
+}
+
+func New() *Service                    { return &Service{} }
+func (*Service) Name() app.ServiceName { return app.ServiceName("{{GAME_SERVICE}}") }
+
+// Init runs after every Mod has started, so the Entity runtime, JetStream,
+// Mongo and the mail client are all up. The World — this process's one
+// singleton Entity — is created or loaded here, before any request is
+// served; then the effect consumer subscribes, so a level-up committed while
+// this process was down is delivered as soon as it is back.
+func (s *Service) Init(registry *app.Registry) error {
+	// Migrations before anything can load a document: a Player written by an
+	// older build is upgraded on its way into the Entity, and a step that
+	// registered late would let the first few loads through unmigrated.
+	if err := migrations.Register(); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	// The skill catalog first: a definition that does not compile must stop
+	// the process here, not surface as an error on the first client request.
+	// Warnings are kept for the operator to see; a release check can refuse them.
+	catalog, err := skills.CompileAll(skill.DefaultCompileEnvironment())
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: skill catalog: %w", err)
+	}
+	warnings := 0
+	for _, diagnostics := range catalog.Diagnostics {
+		warnings += len(diagnostics)
+	}
+	slog.Info("skill catalog compiled", "skills", len(catalog.Programs), "warnings", warnings)
+	value, err := lifecycle.EnsureWorld(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.world = value
+	// The map, before anything can put a player on it. A scene is built from
+	// configuration on every start (noPersist), so this is a build, not a
+	// load.
+	area, err := lifecycle.EnsureWorldScene(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	subscription, err := startLevelUpMailer(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.levelUpMail = subscription
+	// The battle manager before the matchmaker: a match that forms opens a
+	// lockstep room through it, so it must be published and reachable first.
+	battles, err := newBattleManager(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := registry.Register(BattleCapability, battles); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish battle manager: %w", err)
+	}
+	s.battles = battles
+	// The scene before anything that can make a player visible: EnterGame
+	// joins it, and a join before Start would have no room to join.
+	scene, err := NewScene(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := scene.Start(context.Background()); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	// The replication bridge asks the Scene Entity's interest system who
+	// should be subscribed, so it has to know which scene it is replicating.
+	scene.SetArea(area)
+	if err := registry.Register(SceneCapability, scene); err != nil {
+		_ = scene.Close(context.Background())
+		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)
+	}
+	s.scene = scene
+	// The spawner last among the scene's users: it needs both the entity and
+	// the bridge, and it starts producing subjects immediately.
+	stopSpawner, spawn, err := startSpawner(context.Background(), registry, area, scene)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopSpawner, s.spawner = stopSpawner, spawn
+	// Who owns which player, published BEFORE the consumers that ask it. The
+	// matchmaker and the gift saga's steps both look this capability up once,
+	// when they start, and either of them finding nothing there runs
+	// unguarded — which is exactly the two-process corruption the table
+	// exists to prevent, and it fails silently. Started below, once
+	// everything that uses it is wired.
+	owners, err := NewPlayerOwners(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	// What to drop when a lease ends, installed before the table is published
+	// so that no login can arrive without it. Disconnecting a player stops
+	// this process being asked to do anything for them; it does not make the
+	// copy in memory match a document another process is now writing, and
+	// nothing reloads a resident entity. The lease and the copy therefore end
+	// together (RR-20260920-09). The scene is above, because dropping a
+	// player means taking them off it first.
+	players, err := lifecycle.PlayerFromRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: player lifecycle for eviction: %w", err)
+	}
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil || access.Manager() == nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so a lease could never drop its player")
+	}
+	owners.Evict(playerEvictor{scene: scene, players: players, manager: access.Manager()})
+	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
+	}
+	// The same table, under the access boundary's optional gate name: from
+	// here every player request is checked before it reaches a handler, so a
+	// process whose lease has lapsed stops acting on that player everywhere
+	// at once (RR-20260920-04).
+	if err := registry.Register(accessplayer.WriteGateCapability, accessplayer.WriteGate(owners)); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish player write gate: %w", err)
+	}
+	s.owners = owners
+	stop, err := startMatchmaker(context.Background(), registry, battles, scene)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopMatchmaker = stop
+	// The gift saga's step consumers (gift_saga.go): the saga Mod has
+	// started, so the stream exists and the coordinator is running.
+	stopGift, err := startGiftSaga(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopGiftSaga = stopGift
+	// The paid-order drain: the game side of the platform service's handover
+	// (purchase_drain.go). Published rather than started — it runs when a
+	// player is in hand, not on a timer.
+	drain, err := NewPurchaseDrain(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := registry.Register(PurchaseCapability, drain); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
+	}
+	// The kill switches, before anything they gate: a process that comes up
+	// during an incident must come up with the store closed if that is how
+	// the operator left it (flags.go).
+	stopFlags, err := installFeatureFlags(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopFlags = stopFlags
+	// What may be hot-patched, registered before anything can be patched.
+	if err := installPatchPoints(); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	// Chat presence follows the same session-close source the scene does:
+	// without it an offline player stays in the world channel's recipient set
+	// until some later push to them happens to fail (presence.go).
+	stopPresence, err := watchPresence(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopPresence = stopPresence
+	// The transport is up by now, so the owners can fence: a player this
+	// process can no longer prove it owns gets disconnected rather than
+	// served (RR-20260920-04).
+	if runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && runtime != nil {
+		owners.Fence(runtime)
+	}
+	owners.Start(context.Background())
+	// The timed server-wide event: this server's lease, the World's timer
+	// heap and the coordinator loop (activity.go). After the scene, because
+	// the settlement mails players who are already in the world, and before
+	// the GM commands, which can close a window by hand.
+	runner, stopActivity, err := startActivity(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.activity, s.stopActivity = runner, stopActivity
+	if err := registry.Register(ActivityCapability, runner); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish activity runner: %w", err)
+	}
+	phase, err := startActivityPhaseConsumer(context.Background(), registry, runner)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.activityPhase = phase
+	// The operator surface: GM commands on the admin registry the ops Mod
+	// serves (gm.go). Registered last, when everything they call is up.
+	if err := registerGMCommands(registry, s.spawner, s.activity); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	return nil
+}
+
+// World is this process's World. It is set in Init and never nil afterwards.
+func (s *Service) World() *world.World { return s.world }
+
+func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+
+// Shutdown drains the consumer: in-flight effects finish or are redelivered
+// to the next process holding the durable; nothing is lost either way.
+func (s *Service) Shutdown(context.Context) error {
+	if s.stopMatchmaker != nil {
+		s.stopMatchmaker()
+		s.stopMatchmaker = nil
+	}
+	if s.stopGiftSaga != nil {
+		s.stopGiftSaga()
+		s.stopGiftSaga = nil
+	}
+	// After the matchmaker, so no new battle is opened while rooms close.
+	if s.battles != nil {
+		s.battles.Close()
+		s.battles = nil
+	}
+	if s.levelUpMail != nil {
+		s.levelUpMail.Drain()
+		s.levelUpMail = nil
+	}
+	if s.stopPresence != nil {
+		s.stopPresence()
+		s.stopPresence = nil
+	}
+	if s.stopFlags != nil {
+		s.stopFlags()
+		s.stopFlags = nil
+	}
+	if s.owners != nil {
+		s.owners.Stop()
+		s.owners = nil
+	}
+	// The activity loops before the consumer that feeds them, so nothing is
+	// still opening a window while the phase subscription drains.
+	if s.stopActivity != nil {
+		s.stopActivity()
+		s.stopActivity = nil
+	}
+	if s.activityPhase != nil {
+		s.activityPhase.Drain()
+		s.activityPhase = nil
+	}
+	// The spawner before the scene: it takes its population down, and the
+	// room has to still be there to hear about it.
+	if s.stopSpawner != nil {
+		s.stopSpawner()
+		s.stopSpawner = nil
+	}
+	// The scene last among the fan-out paths: closing it stops the
+	// replication loop and the transport sink, and anything still preparing
+	// a frame finishes first.
+	if s.scene != nil {
+		if err := s.scene.Close(context.Background()); err != nil {
+			slog.Warn("scene did not close cleanly", "err", err)
+		}
+		s.scene = nil
+	}
+	return nil
+}
+
+var _ app.Service = (*Service)(nil)

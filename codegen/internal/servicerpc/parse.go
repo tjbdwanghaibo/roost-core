@@ -25,7 +25,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 )
 
 // markerKind is the source marker this generator reads: //roost:rpc.

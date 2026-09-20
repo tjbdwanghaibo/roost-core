@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/dao"
-	codeerr "github.com/tjbdwanghaibo/roost-codegen/internal/errcode"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/eventgen"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/tablegen"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
+	codeerr "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/eventgen"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 )
 
 // U-0118 (C4, classscan O-1): the orchestrator used to repeat every generator's

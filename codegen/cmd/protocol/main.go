@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 )
 
 func main() {

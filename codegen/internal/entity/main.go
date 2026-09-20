@@ -23,7 +23,7 @@ package entity
 import (
 	"flag"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"io"
 	"os"
 	"path/filepath"

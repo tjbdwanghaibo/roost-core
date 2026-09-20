@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjbdwanghaibo/roost-codegen/internal/dao"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
 )
 
 func main() {

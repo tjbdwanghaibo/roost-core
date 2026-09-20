@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-codegen/demo"
+	"github.com/tjbdwanghaibo/roost-core/demo"
 )
 
 // demoModulePlaceholder is replaced with the project's module path.
