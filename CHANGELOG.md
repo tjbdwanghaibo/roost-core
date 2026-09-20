@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- core pin 升到 v1.15.18（U-0265 `SmallSafeMap` 的 BSON 编码、U-0266 `OpTimeout` 覆盖写闸排队）。
+
 ## [v1.14.17] - 2026-09-20
 
 ### Fixed
