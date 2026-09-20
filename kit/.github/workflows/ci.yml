@@ -1,0 +1,237 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: roost-core ref used by local-source integration
+        required: false
+        default: main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  released-core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - if: runner.os == 'Linux'
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: go mod tidy
+      - run: git diff --exit-code -- go.mod go.sum
+      - run: go test ./...
+      - if: runner.os == 'Linux'
+        run: go vet ./...
+        # The integration suite (dataengine/nestwal/saga crash + failover) is
+        # build-tagged, so it is excluded from `go vet ./...`, `go build ./...`
+        # and `go test ./...` alike — it can rot silently. Vetting it here keeps
+        # it compiling on every platform; RUNNING it needs real Mongo + NATS and
+        # is the `integration` job below.
+      - if: runner.os == 'Linux'
+        name: vet integration-tagged tests
+        run: go vet -tags integration ./...
+      - if: runner.os == 'Linux'
+        run: go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
+      - if: runner.os == 'Linux'
+        run: go test -race ./...
+      - if: runner.os == 'Linux'
+        run: go test -run '^$' -bench 'Benchmark(RoomReplicationFlush100Subscribers|RoomTransportSinkAdmit100Subscribers|RoomReplicationGlobalFrame100x100)$' -benchtime=1s ./room
+      - if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  local-core-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: roost-kit
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tjbdwanghaibo/roost-core
+          ref: ${{ inputs.core_ref || 'main' }}
+          path: roost-core
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: roost-kit/go.mod
+          cache-dependency-path: |
+            roost-kit/go.sum
+            roost-core/go.sum
+      - working-directory: roost-kit
+        run: go mod edit -replace github.com/tjbdwanghaibo/roost-core=../roost-core
+      - working-directory: roost-kit
+        run: go mod verify
+      - working-directory: roost-kit
+        run: go test ./...
+      - working-directory: roost-kit
+        run: go vet ./...
+      - working-directory: roost-kit
+        run: go run ../roost-core/cmd/glsvet ./...
+      - working-directory: roost-kit
+        run: go test -race ./...
+
+  # The game services (kit/service) keep their Redis-backed suites build-tagged;
+  # they skip without REDIS_ADDR, so this job sets it, runs them and fails on a
+  # skip. -p 1: the suites share one Redis and service/integration measures the
+  # whole keyspace before/after.
+  service-redis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      REDIS_ADDR: 127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: integration-tagged service tests on Redis
+        run: |
+          set -o pipefail
+          go test -tags integration -count=1 -p 1 -json ./service/... | tee test.json \
+            | jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Action + "\t" + .Package'
+      - name: failing test output (on failure)
+        if: failure()
+        run: jq -r 'select(.Action=="output") | .Output' test.json | grep -vE '^(=== RUN|--- PASS|PASS|ok )' | tail -200
+      - name: no Redis test was skipped
+        run: |
+          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR"))) | .Package + " " + .Test' test.json | sort -u)
+          if [ -n "$skipped" ]; then
+            echo "these tests skipped because REDIS_ADDR was unset — the job must run them:"
+            echo "$skipped"
+            exit 1
+          fi
+      - name: race on the Redis-backed service suites
+        run: go test -tags integration -count=1 -p 1 -race ./service/integration/ ./service/mail/ ./service/rank/
+
+  # Runs the build-tagged integration suite against real, isolated Mongo and
+  # NATS nodes — the same script a developer runs locally. Until this job
+  # existed the suite was only vetted (AUDIT F8): eight test files that could
+  # rot for months while every other check stayed green. Versions are pinned to
+  # what the suite is developed against; bump them deliberately.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NATS_SERVER_VERSION: v2.14.5
+      MONGODB_SERIES: "8.0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install mongod + mongosh
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://www.mongodb.org/static/pgp/server-${MONGODB_SERIES}.asc" \
+            | sudo gpg --dearmor -o "/usr/share/keyrings/mongodb-server-${MONGODB_SERIES}.gpg"
+          echo "deb [signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_SERIES}.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/${MONGODB_SERIES} multiverse" \
+            | sudo tee "/etc/apt/sources.list.d/mongodb-org-${MONGODB_SERIES}.list" >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org-server mongodb-mongosh redis-server redis-tools jq netcat-openbsd
+          mongod --version | head -1
+          mongosh --version
+      - name: install nats-server
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/nats-server-${NATS_SERVER_VERSION}-linux-amd64.tar.gz" | tar -xz
+          sudo install -m 0755 "nats-server-${NATS_SERVER_VERSION}-linux-amd64/nats-server" /usr/local/bin/nats-server
+          nats-server --version
+      - name: environment script self-test
+        run: scripts/integration/dataengine_env_test.sh
+      - name: check out roost-core for its Redis fault suites
+        # The suites moved to core with the redis client; the env script runs
+        # them from ROOST_CORE_DIR against the same isolated Redis + toxiproxy.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tjbdwanghaibo/roost-core
+          ref: ${{ inputs.core_ref || 'main' }}
+          path: roost-core-checkout
+      - name: integration-tagged tests on isolated Mongo replica set + NATS JetStream cluster (+ core Redis fault suites)
+        run: scripts/integration/dataengine-env.sh test
+        env:
+          ROOST_CORE_DIR: ${{ github.workspace }}/roost-core-checkout
+      - name: node status (on failure)
+        if: failure()
+        run: scripts/integration/dataengine-env.sh status || true
+      - name: tear down
+        if: always()
+        run: scripts/integration/dataengine-env.sh down || true
+
+  release-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: root module has no local replace
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "release module must not contain replace directives"
+            grep -nE '^[[:space:]]*replace([[:space:]]|\()' go.mod
+            exit 1
+          fi
+      # Scoped to the framework's own modules. Third-party indirect
+      # pseudo-versions (viper -> locafero -> sourcegraph/conc) are not ours to
+      # tag and made every kit tag since v1.11.3 fail this step; the property
+      # the step exists for is that a kit tag never depends on an unreleased
+      # roost-core / roost-skill / roost-service.
+      - name: tagged release uses tagged framework dependencies
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if grep -Eq 'tjbdwanghaibo/roost-[a-z]+ v[0-9]+\.[0-9]+\.[0-9]+-0\.[0-9]{14}-[0-9a-f]{12}' go.mod; then
+            echo "tagged releases must not depend on framework pseudo-versions"
+            grep -nE 'tjbdwanghaibo/roost-[a-z]+ v[0-9]+\.[0-9]+\.[0-9]+-0\.[0-9]{14}-[0-9a-f]{12}' go.mod
+            exit 1
+          fi
+      # The module path must resolve as a real repository, and a version tag
+      # must match the module's major suffix — the two failure modes that made
+      # v1.4.0-era roost-skill uninstallable (module pointed at a nonexistent
+      # repo, and a v1 tag on a /v2 module path).
+      - name: module path resolves
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          base=$(echo "$mod" | sed -E 's#/v[0-9]+$##')
+          echo "module: $mod (repo: $base)"
+          git ls-remote "https://${base}.git" HEAD
+      - name: tag matches module major
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          tag=${GITHUB_REF#refs/tags/}
+          major=$(echo "$tag" | sed -E 's#^v([0-9]+)\..*#\1#')
+          suffix=$(echo "$mod" | grep -oE '/v[0-9]+$' | tr -d '/v' || true)
+          if [ "$major" -ge 2 ]; then want="$major"; else want=""; fi
+          if [ "${suffix:-}" != "${want}" ]; then
+            echo "tag $tag requires module suffix '/v${want}' but go.mod has '${suffix:+/v$suffix}'"
+            exit 1
+          fi
