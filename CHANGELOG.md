@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.14.17] - 2026-09-20
+
 ### Fixed
 
 - **owed 索引的键空间登记补上**（U-0263，C4，T-157；CI 发现，无 RR）。U-0257 加的`<prefix>:owed:<group>:<sid>` 是一个新的键空间，但没有登记进 `service/integration` 的 `everyNamespace`，于是带 `-tags integration` 的 CI 格子红在“key … does not fall under a declared namespace”。守卫按设计生效，漏的是登记。
