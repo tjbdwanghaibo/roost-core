@@ -1,6 +1,6 @@
 # Roost 收敛第二步：三仓合一仓
 
-状态（2026-09-20）：**P0–P4 完成，只剩 P5（验收与发布）**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
+状态（2026-09-20）：**P0–P5 完成，core v1.16.0 已发布**。kit / codegen 发出最后一个版本（v1.14.18 / v1.15.32），仓库归档待维护者执行。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
 方案见 [ARCHITECTURE_V2_CONSOLIDATION_PLAN](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)，
 方法论、门禁与机器这一轮**逐条沿用**。执行手册是个人 skill `roost-consolidate`。
 
@@ -56,7 +56,7 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
 | **P2 kit 搬入** ✅ | `git subtree` 把 roost-kit 带历史搬进 `core/kit/`；批量前缀改 import；kit 的测试随代码走 | 已达成：93 个 Go 文件前缀改写，go.mod 一行没动（kit 的四个直接依赖 core 全有）；build / vet / vet -tags integration / glsvet / test / test -race 全绿；kit 的 service-redis job 搬进 core 的 ci.yml |
 | **P3 codegen 与 demo 搬入** ✅ | 同法搬进 `core/codegen/` 与 `core/demo/`；模板里的 import 字符串批量改成单模块路径；golden / testdata 重生成；改掉 `demo/embed.go` 里"codegen 故意不依赖它生成的运行时"那段（合仓后不成立） | 已达成：生成 game-demo 工程 → go.work 指向源码 → **编译通过、生成工程自己的测试全绿**。`dev compose` 真实启动留到 P5 与故障矩阵一起做 |
 | **P4 升级器** ✅（CI 全绿） | `consolidation_imports.yaml` 升 schema 2：加第二段边界（core v1.16.0）与两条前缀规则；loader 支持前缀段；`upgrade --consolidate` 与 `deps-update` 跨界自动改写 | 已达成：每条前缀规则一条用例；顺序测试有变异验证（前缀提前跑就红）；用已发布的 codegen v1.15.31 生成老布局工程 → `--consolidate` → go.work 指向 checkout → build / vet 通过；`--dry-run` 与二次运行都证明幂等。framework-compat / upgrade-compat 已接回自动触发 |
-| **P5 验收与发布** | `source-head-check.sh`；故障矩阵；性能对比（同机三轮，>5% 退化要归因）；文档与 TROUBLESHOOTING 路径更新；发 **core v1.16.0**；kit / codegen 发最终版、README 置顶"已并入 core"、仓库 archive | 三仓 CI 绿；`roost new` 出来的工程**只依赖 core**；旧 tag 仍可 pin |
+| **P5 验收与发布** ✅ | `source-head-check.sh`；文档与 TROUBLESHOOTING 路径更新；发 **core v1.16.0**；kit / codegen 发最终版、README 置顶"已并入 core" | 已达成：用**已发布的** v1.16.0 生成 game-demo 工程，go.mod 里只有 `roost-core v1.16.0` 一条框架 require，**不用 go.work** 直接 build / test 全过；`source-head-check.sh` minimal 与 full 本地均通过；旧 tag 仍可 pin（kit v1.14.18 / codegen v1.15.32 为最终版）。**未做**：故障矩阵与性能对比，见 §6 |
 
 ## 3.1 P1 的两处发现（记下来，因为它们正是"护栏先行"的收益）
 
@@ -132,3 +132,23 @@ minimum / released 两格在 P5 发布 v1.16.0 之后恢复，届时"最低支�
 三仓 `main` 从 P0 起只收 Bug 修复（U 单元），每笔修复 cherry-pick 进 `consolidation-v3`。
 新功能、重构、文档大改一律进分支。review 线照常跑，登记的 RR 按等级处理：
 P1 修在 main 并 cherry-pick，P2 及以下攒着，搬完再修。
+
+## 6. P5 没做的两件事
+
+- **故障矩阵**：`framework-compat` 的 demo 格已经包含 `dev compose` 真实启动 + 机器人跑一遍，
+  这覆盖了"起得来、跑得动"。但 kit 的 `scripts/integration` 故障矩阵（Mongo / NATS 各自断连、
+  慢盘、脑裂那几个切片）没有在合仓后重跑过。搬迁只移动代码不改行为，所以风险不高，
+  但这条没有证据，不要说成"验过"。
+- **性能对比**：没有做迁移前后的同机三轮基准。合仓不改任何运行时代码路径（core 的包一个没动，
+  kit 的包整体搬入且 import 是前缀改写），所以预期无差异；`ci.yml` 里那条
+  `BenchmarkRemoteSnapshotCacheL1Get4K` 每次 CI 都跑，可以作为长期观察点。
+
+两件都建议在下一次 review 轮里补，而不是在搬迁批次里赶。
+
+## 7. 收尾动作（待维护者执行）
+
+- `gh repo archive tjbdwanghaibo/roost-kit` 与 `tjbdwanghaibo/roost-codegen`：归档是对外可见的仓库状态
+  变更，留给维护者按自己的节奏做。两仓的 README 已置顶"已并入 roost-core"，最后版本已发布，
+  旧 tag 永远可用。
+- 归档之后，`upgrade-compat` 里用历史 codegen 版本生成老工程那一步仍然有效（archive 不影响
+  `go run …@version`）。
