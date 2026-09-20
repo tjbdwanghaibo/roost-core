@@ -4,9 +4,9 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260920-06 | P1 | 被拒绝的 subscribe 被丢弃且**永不重试**：兴趣系统在发出变更前就把 pair 标成已订阅，而重发只在 band 变化时发生 | 未修复 |
-| RR-20260920-07 | P2 | `SmallSafeMap` 的 `MarshalBSONValue` 签名不符合驱动接口，方法从未生效，该类型被写成空文档 | 已修复（U-0265，未发版）→ [bugfix](../bugfix/RR-20260920-07.md) |
-| RR-20260920-08 | P2 | `OpTimeout` 不约束每实体写闸的排队，一次远端写的总耗时可以是配置值的几十倍 | 已修复（U-0266，未发版）→ [bugfix](../bugfix/RR-20260920-08.md) |
+| RR-20260920-06 | P1 | 被拒绝的 subscribe 被丢弃且**永不重试**：兴趣系统在发出变更前就把 pair 标成已订阅，而重发只在 band 变化时发生 | 已修复（U-0267，未发版）→ [bugfix](../bugfix/RR-20260920-06.md) |
+| RR-20260920-07 | P2 | `SmallSafeMap` 的 `MarshalBSONValue` 签名不符合驱动接口，方法从未生效，该类型被写成空文档 | 已修复（U-0265，core v1.15.18）→ [bugfix](../bugfix/RR-20260920-07.md) |
+| RR-20260920-08 | P2 | `OpTimeout` 不约束每实体写闸的排队，一次远端写的总耗时可以是配置值的几十倍 | 已修复（U-0266，core v1.15.18）→ [bugfix](../bugfix/RR-20260920-08.md) |
 
 09-20：同步到 Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`，验收 09-19 第二轮六项修复并继续实时同步、remote-managed、玩家所有权与支付恢复链。新增 **4 个 P1、1 个 P2**：[问题与实施方向](REVIEW-2026-09-20.md) · [独立复现](REPRO-2026-09-20.md) · [运行与限制](../review/REVIEW-2026-09-20.md) · [机制交接](../review/IMPLEMENTATION-DELTA-TRANSPORT-AND-LEASE-FENCING.md)。两个活动 Wanted 均已分流。
 
