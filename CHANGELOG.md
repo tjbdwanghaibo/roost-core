@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [v1.15.15] - 2026-09-20
+
+### Fixed
+
+- **BSON 装不下的那一半散列空间**（U-0261，C8；RR-20260920-01，T-155，**P1**）。snapshot 的 `Checksum uint64` 原样进 BSON，而 BSON 没有无符号 64 位整数：CRC64 高位为 1 的那一半载荷写不进去（`… overflows int64`），而这条 WAL 记录会在**每次启动恢复**时同样失败一次——进程从此起不来。
+  按字段语义分开定编码：
+  - `checksum` 只做相等比较 → 新类型 `entity.RemoteChecksum`，存**定长 8 字节**，保住全 64 位域；读取兼容历史的 int64 / int32 / double / 缺失。
+  - `version` / `epoch` / `fence` 要参与 Mongo 比较（快照读 `$gte`、版本 CAS）→ 保持数字，域截到 `MaxInt64`，超出者在**写入任何东西之前**被拒绝（`ErrRemoteRejected`）。
+  **API 变化**：`RemoteSnapshotChecksum` 返回 `entity.RemoteChecksum`，`RemoteSnapshotRecord` / `RemoteSnapshotEnvelope` / `RemoteSnapshot` 的 `Checksum` 字段随之改型（底层仍是 `uint64`）。
+  **未做**：已经存在的毒丸 WAL 记录没有隔离流程，仍需删 WAL。
+  测试：`remoteentity/snapshot_encoding_promises_test.go`（含“上下半区各一个普通载荷”的行为用例与旧格式兼容）。
+  记录：`docs/bugfix/RR-20260920-01.md`。这条修完第十八批（Guild，远端托管实体）的阻塞解除。
+
 ## [v1.15.14] - 2026-09-20
 
 ### Fixed
