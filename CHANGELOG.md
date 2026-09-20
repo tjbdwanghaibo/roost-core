@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [v1.16.0] - 2026-09-20
+
+### Changed
+
+- **三仓合一仓：roost-kit 与 roost-codegen 并入 roost-core**。框架从此是一个仓库、一个 Go 模块、一个 tag。业务工程只依赖 `github.com/tjbdwanghaibo/roost-core`。
+  - **布局**：`kit/`（装配层 + `kit/service/` 的 12 个通用服务）、`codegen/`（生成器，CLI 在 `codegen/cmd/roost`）、`demo/`（game-demo 模板）各是 core 根目录下的一个顶层目录，带完整历史搬入。core 自己的包一个没动。
+  - **升级方式（破坏性）**：`roost project upgrade --consolidate`（先 `--dry-run` 预览）。它两段一起做：先按包表把上一轮五仓合三仓留下的旧路径搬到 core 本体，再把仍在 kit 的那部分前缀改成 `roost-core/kit/`，并从 go.mod 删掉 `roost-kit` / `roost-codegen` 的 require。**顺序不能反**——`roost-kit/dataengine` 属于第一段（它在 core 本体），前缀先跑会把它送进 `roost-core/kit/dataengine`，那里没有这个包。
+  - **旧 tag 仍可 pin**：没升级的工程不受影响。roost-kit / roost-codegen 两个仓库发最后一个版本后归档。
+  - **依赖方向**：core 的包不得 import `kit/`、`codegen/`、`demo/`；kit 可以用 core；codegen 独立于它生成的那个运行时。合仓前这条由 Go 模块边界免费保证，现在由 `dependency_boundary_test.go` 的目录前缀规则钉住，并且是在搬动任何代码**之前**就位的。
+  - **合仓不新增任何直接依赖**：codegen 只依赖 `gopkg.in/yaml.v3`，kit 的四个直接依赖 core 原本就有。
+  - **生成器下限抬到 v1.16.0**：它产出的每个 import 都在这个版本之后才存在。
+  - **CLI 安装路径变了**：`go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest`。
+  - **新增 `--skip-deps`**（`project new` / `sync` / `upgrade`）：边界迁移有一段窗口——改写出来的 import 已经正确，而没有任何 proxy 能解析它们。这个开关把"改写文件"和"解析依赖"分开。
+  - **发布清单收拢成 schema 3**：一个模块一个版本（`release:` 一行）。schema 2 的三个版本号里，codegen 那一行曾经漂了十个版本并把受保护的发布闸一起带红（U-0270）；漂移检查随发布一起搬进 `scripts/pretag.sh`。
+  - CI：测试按 `go list` 分片成四格（不写包名清单，手写清单是第二个要记住每个新包的地方）；kit 的 Redis 集成 job 与 codegen 的四个门禁都搬了过来。
+  - 方案、逐阶段门禁与三处"路径即数据"的教训：[docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md](docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
+
 ## [v1.15.18] - 2026-09-20
 
 ### Fixed
