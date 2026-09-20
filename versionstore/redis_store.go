@@ -443,18 +443,20 @@ func (s *RedisStore[K, T]) encodeEnvelope(value T, version uint64) ([]byte, erro
 func (s *RedisStore[K, T]) decodeEnvelope(raw []byte) (Versioned[T], error) {
 	index := bytes.IndexByte(raw, '\n')
 	if index <= 0 {
-		return Versioned[T]{}, fmt.Errorf("versionstore: malformed envelope")
+		return Versioned[T]{}, fmt.Errorf("%w: no version separator", ErrMalformedRecord)
 	}
 	version, err := strconv.ParseUint(string(raw[:index]), 10, 64)
 	if err != nil {
-		return Versioned[T]{}, fmt.Errorf("versionstore: malformed envelope version: %w", err)
+		return Versioned[T]{}, fmt.Errorf("%w: version is not a number: %v", ErrMalformedRecord, err)
 	}
 	if version == 0 {
-		return Versioned[T]{}, fmt.Errorf("versionstore: envelope version is zero")
+		return Versioned[T]{}, fmt.Errorf("%w: version is zero", ErrMalformedRecord)
 	}
 	value, err := s.cfg.Codec.Decode(raw[index+1:])
 	if err != nil {
-		return Versioned[T]{}, err
+		// The codec's own error is kept as the cause; what is added is the
+		// classification, so a caller does not have to guess from the text.
+		return Versioned[T]{}, fmt.Errorf("%w: %v", ErrMalformedRecord, err)
 	}
 	return Versioned[T]{Value: value, Version: version}, nil
 }

@@ -44,6 +44,15 @@ var (
 	ErrAborted = errors.New("versionstore: update aborted")
 
 	ErrCodecNil = errors.New("versionstore: codec is nil")
+	// ErrMalformedRecord marks a stored record that cannot be read back.
+	//
+	// It exists so a caller can tell this apart from an infrastructure
+	// failure, because the two need opposite responses: a timeout is worth
+	// retrying immediately, while a record whose bytes do not decode will
+	// fail the same way forever. A retry loop that cannot tell them apart
+	// either gives up on transient errors or lets one unreadable record
+	// occupy the head of its queue for good (RR-20260920-05).
+	ErrMalformedRecord = errors.New("versionstore: record cannot be decoded")
 	ErrKeyEmpty = errors.New("versionstore: key is empty")
 )
 
