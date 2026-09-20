@@ -100,6 +100,7 @@
 
 | 编号 | 仓库 | 问题 | 记录 |
 | --- | --- | --- | --- |
+| U-0270 | codegen | 发布清单里的 codegen 版本停在 v1.15.19，受保护的 framework-release 闸自 v1.15.22 起连红十次，`framework-lock.json` 十个版本没有产出（进度盘点对照 CI 发现） | [U-0270-framework-release-version-drift.md](U-0270-framework-release-version-drift.md) |
 | U-0263 | kit | U-0257 加的 owed 索引是一个新键空间却没登记，`TestPerPackageKeyNamespacesDoNotCollide` 红（CI 发现） | [U-0263-activity-owed-namespace.md](U-0263-activity-owed-namespace.md) |
 | U-0264 | codegen | 声明的框架版本下限是假的：生成物在 core v1.14.0 / kit v1.13.0 上编译不过（CI 发现） | [U-0264-generator-version-floor.md](U-0264-generator-version-floor.md) |
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
