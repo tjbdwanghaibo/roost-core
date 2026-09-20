@@ -6,6 +6,42 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-02 自己的订阅在投递，却从来不带位置那一组字段
+
+- **位置**：`roost-core/entitysync`（`SubscriptionCoordinator` 的 prepared batch / content version）、
+  `roost-core/room`（`flushStateBatch` 的 dirty 取用与按订阅者分发）、
+  `roost-core/entity` 的 `SubjectSyncState` / `SubjectSyncPacker`，以及生成工程的
+  `game/scene/runtime/interest.go`（LOD band 与 `SyncProfile`）。基线：core `v1.15.14`（已含 U-0260）。
+- **现象**：干净进程、单进程、`-count 16`，每轮稳定 3/16 失败：
+
+  ```text
+  scene_expect: after 40s ... "pos_x" never arrived;
+  own fields=[_id attr_base attr_final exp items level] own_updates=6 other_updates=104
+  ```
+
+  注意三件事放在一起才是线索：
+  1. `own_updates=6~7`——这个客户端**确实**收到了关于自己 subject 的更新，订阅是活的；
+  2. 收到的字段里始终没有 `pos_x` / `pos_y` / `scene_id`（有时也没有 `equipment`），
+     而 `level` / `exp` / `attr_*` / `items` 都在——丢的是**成组的**，不是随机的；
+  3. `other_updates≈100`，客户端看得见 16 个 subject——同一条会话、同一条通道一直在正常收别人的帧。
+- **为何可疑**：
+  - 服务端全程零 `WARN`/`ERROR`，`handlerEnterScene` / `handlerMovePlayer` / `handlerEquipItem`
+    的 `result="ok"` 计数等于机器人数；事务都提交了。
+  - 40 秒后仍未到达，帧数不再增长——不是慢。
+  - U-0260 修掉的 latest-only 覆盖已经不在链路上（客户端 `deltas=0`，全走可靠通道），
+    所以这是**另一条**。
+  - "同一个 subject 的一组字段对某一个订阅者永久不出现，而其他订阅者正常" 有两个
+    自然候选：（a）该订阅者的 profile / LOD band 把这组字段筛掉了；（b）该订阅者的
+    baseline 在没有收到那一帧的情况下被推进了（prepared batch 已提交 / content version 已前进）。
+    两者的修法完全不同，而我手上的证据不足以区分，所以没有自己动手。
+- **会红的测试草稿**：core 侧：一个房间 16 个 subject，每个 subject 也是观察者（自己订阅自己）；
+  先全量快照，再让**所有** subject 在同一个 tick 改一个字段并 flush；断言每个观察者都收到了
+  **自己那个** subject 的这次改动。若不红，再把 LOD band 加进来（观察者与自己的 band）。
+- **候选修法**：先定一条契约——"一个观察者对自己的 subject 永远是最高细节"（如果是 (a)）；
+  或者"推进订阅 baseline 必须与该订阅者真的收到那一帧绑定"（如果是 (b)）。
+- **来源**：U-0260 修完之后的验收实跑。它把原来混在一起的两条分开了：
+  传输层覆盖（已修）与这一条。
+
 ## W-2026-09-20-01 已分流：→ RR-20260920-02
 
 **Review 结论（2026-09-20）**：确认 P1。`RoomTransportSink` 把普通 delta 送入 datagram；`AsyncTransport` 对同 stream 采用 latest-only，现有阻塞测试明确证明中间帧会被覆盖；而 entitysync 已在 admission 成功时提交 dirty。后一 delta 不是前一 delta 的超集，被覆盖帧独有的 `pos_x/equipment` 不会重现，也没有 ACK/resync。这一跨层契约完整解释下方 16 客户端实跑，已登记 [RR-20260920-02](REVIEW-2026-09-20.md)，本项不再属于活动 Wanted。以下保留原始候选。
