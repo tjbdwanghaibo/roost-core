@@ -6,7 +6,11 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## W-2026-09-20-01 16 个玩家同场景时，部分客户端永久收不到"自己"的某一次状态变化
+## W-2026-09-20-01 已分流：→ RR-20260920-02
+
+**Review 结论（2026-09-20）**：确认 P1。`RoomTransportSink` 把普通 delta 送入 datagram；`AsyncTransport` 对同 stream 采用 latest-only，现有阻塞测试明确证明中间帧会被覆盖；而 entitysync 已在 admission 成功时提交 dirty。后一 delta 不是前一 delta 的超集，被覆盖帧独有的 `pos_x/equipment` 不会重现，也没有 ACK/resync。这一跨层契约完整解释下方 16 客户端实跑，已登记 [RR-20260920-02](REVIEW-2026-09-20.md)，本项不再属于活动 Wanted。以下保留原始候选。
+
+### 原始候选：16 个玩家同场景时，部分客户端永久收不到"自己"的某一次状态变化
 
 - **位置**：`roost-core/statesync`（`Replicator` 的准备 / 提交与 `Reassembler`）、`roost-core/room`
   （`RoomBroadcaster.flush` / `flushStateBatch`、`RoomTransportSink` 的准入）、`roost-core/entitysync`
@@ -53,7 +57,11 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   "场景断言要求视野里正好 2 个主体"——`subjects: 2` 其实是下限，真正的失败在错误文本的后半句
   （`"pos_x" never arrived`）。记在这里也是为了这条教训：**这两轮的验收都因此漏掉了一个真实的丢数据缺陷**。
 
-## W-2026-09-19-01 远端实体第一次真被使用就写不进去：负的 state version 变成 uint64
+## W-2026-09-19-01 已分流：→ RR-20260920-01（根因更正）
+
+**Review 结论（2026-09-20）**：确认 P1，但“负 state version 转 uint64”不是根因；`batch.go` 和 `SetEntityVersion` 已把负值归零。用原错误值放入 `snapshot.Checksum uint64` 可稳定得到完全相同的 Mongo driver 溢出，且 checksum 的高位为 1 是正常散列空间。已登记 [RR-20260920-01](REVIEW-2026-09-20.md)，要求 checksum 与需要数值比较的 version/fence 分开编码，并在 WAL admission 前校验。以下保留原始候选供追溯。
+
+### 原始候选：远端实体第一次真被使用就写不进去
 
 - **位置**：roost-core `remoteentity/mongo_committer.go:184-210`（`applyCommit`，把 `commit.BaseVersion` /
   `NextVersion` / `MarkerEpoch` / `RouteEpoch` / `LockFence` 直接放进 `bson.M`）；

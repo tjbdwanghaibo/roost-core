@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-20 修复验收、实时同步与所有权续审](review/REVIEW-2026-09-20.md)：两个活动 Wanted 完成分流，确认 datagram 增量永久丢字段、Remote BSON uint64、player owner ABA/失主双写及 pending poison 前缀五项问题；附复现、进度和实施交接。未修改源码。
+
 [09-19 第二轮实体加载与活动交接审查](review/REVIEW-2026-09-19-02.md)：新确认 singleflight panic 污染、Nest 缺失实体、pending 分页饥饿与 activity 交付断链；附复现、进度和基于现有框架原语的实施方案。未修改源码。
 
 [09-18 第三轮修复验收、Wanted 分流与K1续审](review/REVIEW-2026-09-18-03.md)：RR-03/04 原根因通过；10条 Wanted 已收敛，新增6项问题与独立复现；补充 scene 兴趣/身份/生命周期和生成 DAO 所有权机制。未改源码。

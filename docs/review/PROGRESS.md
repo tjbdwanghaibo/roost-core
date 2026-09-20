@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+09-20 最新停点：[运行/验收/同步/所有权](REVIEW-2026-09-20.md)。Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`；RR-20260919-02/04/07/08/09/10 原触发通过，两个活动 Wanted 分流，新增 RR-20260920-01..05（4 个 P1、1 个 P2）。累计 **54 份运行记录、33 篇机制文档、99 个不同 RR**，不是代码覆盖率或当前未修复数。
+
+| 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
+| --- | --- | --- |
+| K1 实体/事务 | nested 唯一父、两层 load flight、Nest nil 验收；player owner token/lease/write admission 逐层审查 | RR-03/04；用 incarnation + Lua compare，租约无法证明时 fail-closed 并 drain/unload |
+| K2 数据/恢复 | versionstore 原子二级索引通过；remote BSON uint64/WAL 毒丸、platform poison prefix | RR-01/05；定编码和迁移、pre-WAL 校验、quarantine/repair，补真实 Mongo/Redis 重启 |
+| K3 跨服/权威 | remote-managed Wanted 更正根因；SID 与进程实例身份边界收敛 | owner fence 完成后继续迁移、mirror、墓碑与防复活 |
+| 实时同步 | room→entitysync→transport 完整调用链；现有阻塞测试证明 latest-only 覆盖 | RR-02；先 reliable 修正确性，再做 ACK baseline/coalesce，重跑 16/32 客户端 |
+| 横向 Codegen/Kit | activity owed、订单原子索引验收；playerroute/scene/platform 新模板精读 | 老数据索引回填；真实双实例 owner、支付 poison、网络背压未测 |
+
+本轮 24 个关键路径均经图谱 discovery/trace/coverage 后回读当前源码；`.tmpl` 用源码补证。全局 18.74% 仍是 09-18 历史文档路径触达基线，本轮不换算新的审完百分比。下一轮若用户未修复，直接从 K1 的 handler/in-flight transaction 与 K3 owner fence 后续继续；若已修复，优先验五个新 RR。
+
 09-19 第二轮最新停点：[运行/K1/Activity](REVIEW-2026-09-19-02.md)。Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`；RR-01/03/06 与 chat presence 原触发通过，RR-05 的分页残余另列 RR-07。K1 新增实体 load、Nest 缺失实体与 worker 串行关闭的有界审查；activity 新 feature 发现交付断链。累计 **53 份运行记录、32 篇机制文档、94 个不同 RR**，不是代码覆盖率或当前未修复数。
 
 | 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |

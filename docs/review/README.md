@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-20 修复验收、实时同步与所有权续审](REVIEW-2026-09-20.md)：Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`；六项新修复原触发通过，两个 Wanted 完成分流，新增[4个P1、1个P2](../bug/REVIEW-2026-09-20.md)，附[复现](../bug/REPRO-2026-09-20.md)和[增量传输、租约 fencing 与持久化类型边界](IMPLEMENTATION-DELTA-TRANSPORT-AND-LEASE-FENCING.md)。
+
 [09-19 第二轮：实体加载、Nest 分派与 Activity 交接](REVIEW-2026-09-19-02.md)：Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`；新确认[3个P1、1个P2](../bug/REVIEW-2026-09-19-02.md)，附[复现与证据](../bug/REPRO-2026-09-19-02.md)及[实体加载与活动交接机制](IMPLEMENTATION-ENTITY-LOAD-AND-ACTIVITY-HANDOFF.md)。
 
 [09-19 新修复验收、K1 与 platform 支付续审](REVIEW-2026-09-19.md)：最终同步 Core `1947faa` / Kit `5116f2a` / Codegen `7297f92`；装备/迁移/U-0245 与支付正向门通过，RR-06 更正为部分修复；新增[6个P1](../bug/REVIEW-2026-09-19.md)及[复现](../bug/REPRO-2026-09-19.md)。后三项是订单/索引非原子、坏单阻塞整页和未履约 grant 过期删除。W-11 转 [ARCH-07 运行期配置所有权](IMPLEMENTATION-RUNTIME-CONFIG-OWNERSHIP.md)。

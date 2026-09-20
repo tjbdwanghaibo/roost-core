@@ -1,5 +1,15 @@
 # Roost Review 问题索引
 
+09-20：同步到 Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`，验收 09-19 第二轮六项修复并继续实时同步、remote-managed、玩家所有权与支付恢复链。新增 **4 个 P1、1 个 P2**：[问题与实施方向](REVIEW-2026-09-20.md) · [独立复现](REPRO-2026-09-20.md) · [运行与限制](../review/REVIEW-2026-09-20.md) · [机制交接](../review/IMPLEMENTATION-DELTA-TRANSPORT-AND-LEASE-FENCING.md)。两个活动 Wanted 均已分流。
+
+| 编号 | 等级 | 问题 | 状态 |
+| --- | --- | --- | --- |
+| RR-20260920-01 | P1 | Remote snapshot checksum 的完整 uint64 直接写 BSON，高位为 1 时提交及 WAL 恢复失败 | 未修复 |
+| RR-20260920-02 | P1 | latest-only datagram 覆盖已经提交 dirty 的 room delta，独有字段永久丢失 | 未修复 |
+| RR-20260920-03 | P1 | player owner 的 GET→EXPIRE/DEL 非原子，旧 owner 可续期或删除新租约 | 未修复 |
+| RR-20260920-04 | P1 | owner 租约失效不 fence resident Player 的写入，允许两个进程同时写 | 未修复 |
+| RR-20260920-05 | P2 | 不可解码 pending 不隔离，128 个最老 poison 条目可占满重试页 | 未修复 |
+
 09-19 第二轮：重启并同步到 Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`。新确认 **3 个 P1、1 个 P2**：pending 分页坏项饥饿、loader panic 污染 singleflight、Nest 缺失实体 nil 分派、activity 尝试预算与真实交付断链。[问题与实施方向](REVIEW-2026-09-19-02.md) · [复现记录](REPRO-2026-09-19-02.md) · [运行与限制](../review/REVIEW-2026-09-19-02.md)。
 
 | 编号 | 等级 | 问题 | 状态 |

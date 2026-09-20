@@ -2,6 +2,12 @@
 
 基线：Core `a2e8fa0`、Kit `5116f2a`、Codegen `fde74d1`。本文解释当前实现和实施边界；建议部分尚未实现。
 
+## 2026-09-20 验收回顾
+
+当前 Core `8c589a6` 已让两层 loader 的 leader 在 panic 时完成 flight、唤醒 waiter 并清理 map，RR-20260919-08 原触发通过；Nest single/broadcast 也显式处理 nil entity，RR-09 原触发通过。首 caller context 驱动共享 load、Shutdown generation 与真实 store 在途恢复仍是后续审查范围，不因原 bugfix 通过而关闭。
+
+当前 Core/Kit/Codegen 已实现 `(group, gameSID)` owed index、RPC `AttemptDispatch` 与 game runner drain；attempt 在领取 payload 时消耗，sweeper 不再假装交付，RR-10 原触发通过。老部署升级后仍需回填 owed index；离线多窗口、ACK 回复丢失和双 runner 的真实 Redis/NATS 故障矩阵尚未重跑。
+
 ## 实体冷加载的两层 singleflight
 
 `entity.ManagerAccess.Get` 先查共享 `EntityManager`，未命中时读取当前 loader，再按 fullID 进入 `loadEntityShared`。它让同一实体的并发请求共享一次 loader 调用。Dataengine 的 `EntityRepository.LoadEntity` 自己又做一层同样的 singleflight，然后执行 builder 查找、持久 DAO 读取、schema migration、RestorePersisted、实体创建和 manager 发布。
