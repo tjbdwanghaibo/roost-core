@@ -6,6 +6,53 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-01 16 个玩家同场景时，部分客户端永久收不到"自己"的某一次状态变化
+
+- **位置**：`roost-core/statesync`（`Replicator` 的准备 / 提交与 `Reassembler`）、`roost-core/room`
+  （`RoomBroadcaster.flush` / `flushStateBatch`、`RoomTransportSink` 的准入）、`roost-core/entitysync`
+  （`SubscriptionCoordinator` 的帧准入），以及生成工程的 `internal/service/<game>/scene.go`（`sceneLane.AdmitBatch`）
+  与 `cmd/loadtest`（`sceneWatcher.consume`）。基线：core `v1.15.12`、codegen `v1.15.21` 生成的 game-demo 工程，
+  **单进程**即可复现（与多进程所有权无关）。
+- **现象**：`make dev-run` 起一套，`go run ./cmd/loadtest -count 16`（同一个 scene，同一个出生点）。
+  每轮 16 个机器人里有 **2～6 个**在 `scene_expect` 失败：
+
+  ```
+  scene_expect: after 10s the client knows 16 subjects (want 2) and 49 frames; "pos_x" never arrived
+  scene_expect: after 10s the client knows 16 subjects (want 2) and 48 frames; "equipment" never arrived
+  ```
+
+  断言的是**这个客户端自己**的 subject。丢的永远是 `pos_x` 或 `equipment`——即这次场景里对自己状态的
+  最后两次改动（`move` 与 `equip_item`）。`count=4` / `count=8` 稳定不复现，`count=16` 每轮复现。
+- **为何可疑**（这几条合起来才是这条目的价值）：
+  1. **服务端认为全部成功**：`nest_dispatch_total{handler="handlerMovePlayer",result="ok"}` 与
+     `handlerEquipItem{result="ok"}` 都等于机器人数（66/66 三轮累计），`result="error"` 的 66 次正是场景里
+     故意越界的那一次 move。事务都提交了。
+  2. **没有任何告警**：整轮 game 进程日志里 `level=WARN|ERROR` 计数为 0，`scene: push to player` 0 次，
+     `admission failed` 0 次。既没有推送失败，也没有准入拒绝。
+  3. **不是慢，是丢**：把场景里的 `timeout: 10s` 改成 `40s` 重跑，同样 4/16 失败，
+     文本变成 `after 40s ... "pos_x" never arrived`，帧数不变（~50）。**40 秒之后那次改动仍然没有到达，
+     也没有任何机制重发它**——delta 不重复，于是这一个字段对这个客户端永久缺失。
+  4. 客户端不是静默吞掉：`sceneWatcher.consume` 对 `Reassembler.PushFor` 和解码的错误都会写 `watcher.failure`，
+     失败文本里会带出来；这几轮没有出现，说明不是重组报错，而是**这一帧根本没到**（或到了但不含该 subject）。
+  5. 丢的总是"最后一次改动"这一点很有指向性：玩家此后就空闲了，没有下一次 delta 把它带上。
+     也就是说，链路上任何一次"丢掉一帧就不再补"的地方都能造成这个结果，而 `RoomFrame` 明明带了
+     `SessionSequence`（注释写着 "suitable for loss detection and replay"）——**没有任何一端在用它做丢失检测**。
+- **会红的测试草稿**：core 侧，建一个房间，注册 N=16 个 subject，每个 subject 都有一个订阅者（同一个 sink），
+  在同一个 tick 让全部 16 个 subject 变脏并 flush；断言每个订阅者都收到了**自己那个 subject**的这次变化。
+  把 sink 做成"按订阅者分片、每片有界队列"以模拟负载，逐步加压到复现。若 core 侧不红，就在生成工程里
+  用 16 个真客户端复现（上面的命令即可，脚本化在 `cmd/loadtest`）。
+- **候选修法**（都需要先定契约，所以没有自己动手）：
+  A. **丢失检测**：客户端按 `SessionSequence` 发现缺口就请求一次全量（resync），服务端提供该入口。
+     这条最符合现有 wire 的设计意图（那个字段就是为它准备的），但要定"谁发现、向谁要、要多少"。
+  B. **服务端不丢**：找到那个"丢一帧"的点（房间 flush 的批准入 / lane 的分片 / 订阅者的背压）并改成
+     "保留 dirty、下一 tick 重试"。`sceneLane.AdmitBatch` 的注释已经宣称是这个语义
+     （"the room keeps the subject dirty and retries"），需要核对它在每条出口上是否真的成立。
+  C. **周期性对账**：每个订阅者每 N 秒收一次自己 subject 的全量。最省事，但把"正确性"换成了"最终一致的延迟"，
+     而且 N 就是丢字段的可见时长。
+- **来源**：第二十批之后复盘"16 机器人为什么一直有红"时查出来的。此前两轮我把这条失败误读成
+  "场景断言要求视野里正好 2 个主体"——`subjects: 2` 其实是下限，真正的失败在错误文本的后半句
+  （`"pos_x" never arrived`）。记在这里也是为了这条教训：**这两轮的验收都因此漏掉了一个真实的丢数据缺陷**。
+
 ## W-2026-09-19-01 远端实体第一次真被使用就写不进去：负的 state version 变成 uint64
 
 - **位置**：roost-core `remoteentity/mongo_committer.go:184-210`（`applyCommit`，把 `commit.BaseVersion` /
