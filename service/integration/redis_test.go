@@ -662,6 +662,10 @@ var everyNamespace = []string{
 	// they sat under the global prefix and nothing drove them.
 	":activity:act:", ":activity:part:", ":activity:req:",
 	":activity:audit:", ":activity:disp:", ":activity:win:",
+	// The per-(group, game) owed index, added with U-0257 so a game server can
+	// enumerate what it is still owed. It arrived without a line here, and
+	// this guard is exactly what noticed.
+	":activity:owed:",
 	":mail:env:", ":mail:box:", ":mail:send:",
 	":match:queue:",
 	":platform:order:",
