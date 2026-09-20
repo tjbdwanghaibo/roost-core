@@ -104,6 +104,14 @@ jobs:
           # second repository to clone (三仓合一仓 P4).
           cd "${RUNNER_TEMP}"
           go work init ./planet "$GITHUB_WORKSPACE"
+          # `project new --skip-deps` skipped `go mod tidy`, and tidy is what
+          # normally upgrades the pre-split google.golang.org/genproto that
+          # etcd's old requirement drags in. Left alone, the monolith and the
+          # split googleapis/{api,rpc} modules both provide the same package
+          # and every build fails with "ambiguous import". The workspace cannot
+          # resolve it (tidy ignores go.work), so do that one piece of tidy's
+          # work explicitly — it needs no unpublished release.
+          (cd planet && GOFLAGS=-mod=mod go get google.golang.org/genproto@latest)
           # The workspace go directive must be at least every member's own.
           # It used to be pinned DOWN to 1.25.0, because the framework runtime
           # modules supported a lower consumer lane than codegen did. They no
