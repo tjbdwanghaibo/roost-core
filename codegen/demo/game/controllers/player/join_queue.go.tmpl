@@ -1,0 +1,60 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/matchmaking"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+)
+
+// HandleJoinQueue enqueues the player with the match service — a typed call
+// into another process over the bus, made from the endpoint with no Entity
+// lock held (the ranked queue reads the level first, in its own Nest call). The frame sequence is the idempotency key: a client retrying
+// the same frame gets the same ticket, a new frame after a match gets a new
+// one. The match service's own coded errors (already queued, queue invalid)
+// pass through ClientError like any other.
+func (controller *Controller) HandleJoinQueue(context *player_agent.Context, request *pb.JoinQueueRequest) (*pb.JoinQueueResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("join_queue endpoint: context and request are required")
+	}
+	queue, ok := matchmaking.QueueFor(request.Mode)
+	if !ok {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: mode %q", svcmatch.ErrQueueInvalid, request.Mode))
+		return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
+	}
+	// The ranked queue scores a ticket by the player's level, read under the
+	// Player's lock through a Nest read handler; the duel queue needs no score.
+	var score int64
+	if queue == matchmaking.RankedQueue {
+		entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return nil, fmt.Errorf("join_queue endpoint: %w", err)
+		}
+		level, err := syncsender.NewPlayerLevelSender(controller.NestClient()).Sync_PlayerLevel(context.Context(), entityID)
+		if err != nil {
+			code, reason := errcode.ClientError(err)
+			if code == errcode.CodeInternal {
+				slog.Error("join_queue: level read failed", "player_id", context.PlayerID, "err", err)
+			}
+			return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
+		}
+		score = int64(level)
+	}
+	requestID := fmt.Sprintf("join:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	ticket, err := controller.Matcher().Enqueue(context.Context(), queue, matchmaking.PlayerSubject(context.PlayerID, score), requestID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("join_queue failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.JoinQueueResponse{TicketID: ticket.ID, State: string(ticket.State)}, nil
+}

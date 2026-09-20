@@ -1,0 +1,14 @@
+package handler
+
+import world "{{MODULE}}/game/entities/world"
+
+// handlerRecordEnter is called by the EnterGame endpoint after the Player is
+// loaded: the World counts the login. Player and World are different Entities
+// with different lock categories, so this is a second, separate Nest call —
+// never a World mutation from inside the Player's handler.
+//
+//roost:nest rollback=undo durability=strict
+func handlerRecordEnter(target world.IStatsEntity) error {
+	target.StatsComp().RecordEnter()
+	return nil
+}

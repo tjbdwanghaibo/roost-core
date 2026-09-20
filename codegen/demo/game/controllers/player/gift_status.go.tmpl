@@ -1,0 +1,53 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/gift"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+)
+
+// giftStatusUnknown is the status for a saga the coordinator has not
+// recorded yet, or one that is not the asking player's. The two are
+// deliberately indistinguishable to the client.
+const giftStatusUnknown = "unknown"
+
+// HandleGiftStatus reads the saga record from the coordinator (the saga Mod
+// publishes its Engine under mods.ModSaga; this process hosts it). Only the
+// sender may look: the state names the sender, and anything else reads as
+// unknown. A record that is not there yet is not an error — the start
+// intent travels through the outbox and the coordinator's consumer, so the
+// first poll after SendGift usually finds nothing.
+func (controller *Controller) HandleGiftStatus(context *player_agent.Context, request *pb.GiftStatusRequest) (*pb.GiftStatusResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("gift_status endpoint: context and request are required")
+	}
+	engine, ok := app.Lookup[*saga.Engine](controller.registry, mods.ModSaga)
+	if !ok || engine == nil {
+		return nil, fmt.Errorf("gift_status endpoint: capability %q not found; the saga mod is not assembled", mods.ModSaga)
+	}
+	if request.SagaID == "" {
+		return &pb.GiftStatusResponse{Status: giftStatusUnknown}, nil
+	}
+	record, err := engine.Get(context.Context(), request.SagaID)
+	if err != nil {
+		if errors.Is(err, saga.ErrNotFound) {
+			return &pb.GiftStatusResponse{Status: giftStatusUnknown}, nil
+		}
+		code, reason := errcode.ClientError(err)
+		slog.Error("gift_status: saga read failed", "player_id", context.PlayerID, "saga_id", request.SagaID, "err", err)
+		return &pb.GiftStatusResponse{Code: code, Reason: reason}, nil
+	}
+	state, err := gift.Decode(record.Data)
+	if err != nil || state.From != context.PlayerID {
+		return &pb.GiftStatusResponse{Status: giftStatusUnknown}, nil
+	}
+	return &pb.GiftStatusResponse{Status: record.Status.String(), Step: int32(record.Step), LastError: record.LastError}, nil
+}

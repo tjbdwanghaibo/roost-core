@@ -1,0 +1,41 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/gift"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleSendGift starts the gift saga through the StartGift transaction on
+// the sender's Player: the item check happens under the Player's lock and
+// the saga start intent is committed in the same WAL record, so a gift is
+// either started durably or refused — never started for items the player
+// did not have. The saga id is the sender, session and frame sequence, so a
+// client retrying the frame does not start a second saga. What happens next
+// is asynchronous; the client polls GiftStatus.
+func (controller *Controller) HandleSendGift(context *player_agent.Context, request *pb.SendGiftRequest) (*pb.SendGiftResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("send_gift endpoint: context and request are required")
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("send_gift endpoint: %w", err)
+	}
+	sagaID := gift.SagaID(context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	started, err := syncsender.NewStartGiftSender(controller.NestClient()).Sync_StartGift(context.Context(), entityID, context.PlayerID, request.ToPlayerID, request.ItemID, request.Count, sagaID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("send_gift failed", "player_id", context.PlayerID, "to", request.ToPlayerID, "item_id", request.ItemID, "err", err)
+		}
+		return &pb.SendGiftResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.SendGiftResponse{SagaID: started}, nil
+}

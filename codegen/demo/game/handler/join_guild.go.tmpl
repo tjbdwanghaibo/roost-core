@@ -1,0 +1,37 @@
+package handler
+
+import (
+	guild "{{MODULE}}/game/entities/guild"
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerJoinGuild adds a player to a guild.
+//
+// This is the demo's one operation that genuinely crosses processes: the
+// player is on whatever process their connection landed on, and the guild is
+// wherever it currently is. Nest prepares the remote entity first — a
+// versioned distributed lock, a load from the authoritative store — and then
+// runs this handler with both entities held, exactly as it would with two
+// local ones. The handler cannot tell the difference, and that is the point
+// of remote-managed entities.
+//
+// What it MUST still respect is that the two writes belong together: the
+// roster and the player's own GuildID are one fact in two places, so they are
+// written in one transaction and rolled back together.
+//
+//roost:nest rollback=undo durability=strict
+func handlerJoinGuild(target guild.IRosterEntity, member player.IProfileEntity, playerID int64, nowUnix int64) (guild.Info, error) {
+	roster := target.RosterComp()
+	if existing := member.ProfileComp().GuildID(); existing != 0 && existing != target.ID() {
+		// Already in another guild. Leaving is a separate operation with its
+		// own consequences; joining must not perform it silently.
+		return guild.Info{}, errcode.Wrap(apperrors.ErrGuildExists, nil, "guild_id", existing)
+	}
+	if _, err := roster.Join(playerID, nowUnix); err != nil {
+		return guild.Info{}, err
+	}
+	member.ProfileComp().SetGuild(target.ID())
+	return roster.Snapshot(), nil
+}

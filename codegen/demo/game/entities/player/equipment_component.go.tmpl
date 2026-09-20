@@ -1,0 +1,119 @@
+package player
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/equipment"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+//roost:component type=2005
+const CompTypeEquipment entity.ComponentType = 2005
+
+// EquipmentComponent is what the player is wearing.
+//
+// It is the demo's one NESTED write path: `Equipment` is a struct inside the
+// DAO and `Slots` is a map of pointers inside that struct, so a change to a
+// worn piece has to travel two links before it reaches the persist patch.
+// Nobody writes those links — the generated code does — and two P1 defects
+// (U-0236, U-0238) were exactly them being written wrong.
+type EquipmentComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IEquipmentEntity is the narrow lock-safe view for Nest handlers.
+type IEquipmentEntity interface {
+	entity.IThreadSafeEntity
+	EquipmentComp() *EquipmentComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeEquipment, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("equipment component: owner %T is not *Player", owner)
+		}
+		return &EquipmentComponent{owner: typed}, nil
+	})
+}
+
+func (component *EquipmentComponent) Name() string { return "equipment" }
+
+func (component *EquipmentComponent) Owner() *Player { return component.owner }
+
+// Worn returns what is in a slot.
+func (component *EquipmentComponent) Worn(slot int32) (int64, int32, bool) {
+	piece, ok := component.owner.Dao().GetEquipment().GetSlots(slot)
+	if !ok || piece == nil {
+		return 0, 0, false
+	}
+	return piece.GetItemID(), piece.GetLevel(), true
+}
+
+// RangeWorn visits every worn piece.
+func (component *EquipmentComponent) RangeWorn(visit func(slot int32, itemID int64, level int32) bool) {
+	component.owner.Dao().GetEquipment().RangeSlots(func(slot int32, piece *db.GearPiece) bool {
+		if piece == nil {
+			return true
+		}
+		return visit(slot, piece.GetItemID(), piece.GetLevel())
+	})
+}
+
+// Equip puts an item in the slot its kind belongs to and returns what came
+// off. The caller has already taken the item out of the bag; this component
+// only owns what is worn.
+//
+// The whole map is rewritten rather than the one entry patched because
+// `SetSlots` is the nested struct's setter — and going through it is what
+// transfers the callback ownership of the pieces that leave and the ones that
+// arrive. Reaching into the returned map would change values the DAO still
+// believes it owns.
+func (component *EquipmentComponent) Equip(itemID int64, level int32) (int32, int64, error) {
+	slot, wearable := equipment.SlotFor(itemID)
+	if !wearable {
+		return 0, 0, errcode.Wrap(apperrors.ErrItemUnknown, nil, "item_id", itemID)
+	}
+	worn := component.snapshot()
+	previous := int64(0)
+	if existing, ok := worn[slot]; ok && existing != nil {
+		previous = existing.GetItemID()
+	}
+	piece := &db.GearPiece{}
+	piece.SetItemID(itemID)
+	piece.SetLevel(level)
+	worn[slot] = piece
+	component.owner.Dao().GetEquipment().SetSlots(worn)
+	component.owner.PublishSyncDirty()
+	return slot, previous, nil
+}
+
+// Unequip empties a slot and returns what was in it.
+func (component *EquipmentComponent) Unequip(slot int32) (int64, bool) {
+	worn := component.snapshot()
+	piece, ok := worn[slot]
+	if !ok || piece == nil {
+		return 0, false
+	}
+	delete(worn, slot)
+	component.owner.Dao().GetEquipment().SetSlots(worn)
+	component.owner.PublishSyncDirty()
+	return piece.GetItemID(), true
+}
+
+// snapshot copies the map out so the setter receives a value the DAO does not
+// already hold. The generated setter rebuilds the map and re-binds every
+// piece; handing it the live map would have it rebuild from something it is
+// simultaneously replacing.
+func (component *EquipmentComponent) snapshot() map[int32]*db.GearPiece {
+	worn := make(map[int32]*db.GearPiece, len(equipment.Slots()))
+	component.owner.Dao().GetEquipment().RangeSlots(func(slot int32, piece *db.GearPiece) bool {
+		worn[slot] = piece
+		return true
+	})
+	return worn
+}

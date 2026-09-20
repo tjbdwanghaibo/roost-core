@@ -1,0 +1,186 @@
+package world
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// A deadline that does not survive a restart is not a deadline.
+//
+// The World's timer heap lives in memory and is written through to the DAO by
+// the scheduler's change hook, so these assert the two halves that make it a
+// durable schedule: arming one writes it, and an entity rebuilt from that
+// document fires it. The second half is the one nothing else covers — the
+// process that armed the timer is precisely the one that is gone.
+
+type worldCommitter struct{ records []dataengine.CommitRecord }
+
+func (c *worldCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+const testWorldUniqueID = int64(9001)
+
+func newWorld(t *testing.T) *World {
+	t.Helper()
+	RegisterEntity()
+	id, err := entity.BuildEntityID(testWorldUniqueID, EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindWorld, Id: id})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	return built.(*World)
+}
+
+// restartWorld is the load path in miniature: take what the first World would
+// have stored, hand it to a fresh DAO, and build a second World on it.
+func restartWorld(t *testing.T, previous *World) *World {
+	t.Helper()
+	restored := db.NewWorldDao()
+	if err := restored.RestorePersisted(previous.Dao().Marshal(), db.WorldDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore the stored world: %v", err)
+	}
+	id, err := entity.BuildEntityID(testWorldUniqueID, EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{
+		Kind: EntityKindWorld, Id: id,
+		Dao: map[string]entity.DaoInterface{"world": restored},
+	})
+	if err != nil {
+		t.Fatalf("rebuild world: %v", err)
+	}
+	return built.(*World)
+}
+
+func TestArmingADeadlineWritesIt(t *testing.T) {
+	subject := newWorld(t)
+	committer := &worldCommitter{}
+	now := time.Unix(1_800_000_000, 0)
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
+		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1800000000", now.Add(time.Minute), now); !armed {
+			t.Error("the first arm reported that it changed nothing")
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("arming a deadline produced %d commit records, want 1: the heap and the transaction that armed it are one record", len(committer.records))
+	}
+	if got := subject.Dao().TimersLen(); got != 1 {
+		t.Fatalf("the World stores %d timer nodes, want 1", got)
+	}
+	if subject.Dao().GetTimerSeed() <= 0 {
+		t.Error("the node id seed was not stored; a restart could mint an id a stored node already has")
+	}
+
+	// Arming the same window again must not add a second node: every process
+	// that loads this World tries to arm the window it computed from the
+	// clock, and they all compute the same one.
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_again", func() (any, error) {
+		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1800000000", now.Add(time.Minute), now); armed {
+			t.Error("arming the same window twice armed a second deadline")
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm again: %v", err)
+	}
+	if got := subject.Dao().TimersLen(); got != 1 {
+		t.Fatalf("the World stores %d timer nodes after a repeat arm, want 1", got)
+	}
+}
+
+// The process that armed the deadline is gone; the deadline is not.
+func TestADeadlineSurvivesARestartAndFires(t *testing.T) {
+	first := newWorld(t)
+	committer := &worldCommitter{}
+	now := time.Unix(1_800_000_000, 0)
+	const activityID = "race-1800000000"
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
+		first.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	restarted := restartWorld(t, first)
+	if _, armed := restarted.TimerComp().PendingActivityPhase(activityID); !armed {
+		t.Fatal("the restarted World has no deadline; a stored node was not rebuilt into the heap")
+	}
+
+	// Before it is due, nothing happens and nothing is written.
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "early_tick", func() (any, error) {
+		if remaining := restarted.TimerComp().Tick(now.Add(30 * time.Second)); remaining != 1 {
+			t.Errorf("an early tick left %d nodes, want the deadline still armed", remaining)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("early tick: %v", err)
+	}
+	if len(committer.records) != 0 {
+		t.Errorf("a tick that fired nothing wrote %d commit records", len(committer.records))
+	}
+
+	// Due: it fires, records its effect and retires — in one record.
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+		if remaining := restarted.TimerComp().Tick(now.Add(2 * time.Minute)); remaining != 0 {
+			t.Errorf("the deadline fired but %d nodes remain", remaining)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("firing produced %d commit records, want 1", len(committer.records))
+	}
+	if effects := committer.records[0].Effects; len(effects) != 1 {
+		t.Fatalf("the firing record carries %d effects, want the phase notification", len(effects))
+	} else if effects[0].Topic != "activity.phase_due" {
+		t.Errorf("the effect is %q", effects[0].Topic)
+	}
+	if restarted.Dao().TimersLen() != 0 {
+		t.Error("the fired node is still stored; it would fire again after the next restart")
+	}
+}
+
+// A deadline already in the past when the process starts still fires, rather
+// than being refused for being late: the window it closes is the one nobody
+// closed while the process was down.
+func TestADeadlineThatIsAlreadyPastStillFires(t *testing.T) {
+	subject := newWorld(t)
+	committer := &worldCommitter{}
+	now := time.Unix(1_800_000_000, 0)
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_late", func() (any, error) {
+		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1799999000", now.Add(-time.Hour), now); !armed {
+			t.Fatal("a deadline in the past was refused instead of armed")
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+		if remaining := subject.TimerComp().Tick(now); remaining != 0 {
+			t.Errorf("the overdue deadline did not fire: %d nodes remain", remaining)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+}

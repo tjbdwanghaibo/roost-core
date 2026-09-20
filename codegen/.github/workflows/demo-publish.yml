@@ -1,0 +1,89 @@
+# Publishes the project `roost project new … -template game-demo` generates to
+# the `demo-generated` branch of this repository, so there is a complete,
+# read-only tree to clone and read without running the generator. It is a
+# derived artifact: changes go to demo/ and internal/roost, never to that
+# branch. The branch is force-pushed on every run; its history is not meant to
+# be kept.
+#
+# Built against core/kit main (source-head), like the framework-compat demo
+# scenario, because codegen HEAD emits wiring the released tags do not have.
+name: demo-publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "demo/**"
+      - "internal/**"
+      - "cmd/**"
+      - ".github/workflows/demo-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: demo-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.27.x"
+          cache: true
+      - name: Generate the demo project against framework source head
+        env:
+          GOFLAGS: -mod=mod
+        run: |
+          set -euo pipefail
+          go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
+          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" \
+            -mods configdata,mongo,nats,dataengine,nest -template game-demo
+          cd "${RUNNER_TEMP}/planet"
+          cat > go.work <<W
+          go 1.27.0
+
+          use (
+          	.
+          	${RUNNER_TEMP}/roost-core
+          	${RUNNER_TEMP}/roost-kit
+          )
+          W
+          go build ./...
+          go vet ./...
+          go test ./...
+          "${RUNNER_TEMP}/roost" generate --check
+          "${RUNNER_TEMP}/roost" id check
+          rm -f go.work go.work.sum
+      - name: Push the generated tree to demo-generated
+        run: |
+          set -euo pipefail
+          SRC_SHA="$(git rev-parse --short HEAD)"
+          CORE_SHA="$(git -C "${RUNNER_TEMP}/roost-core" rev-parse --short HEAD)"
+          KIT_SHA="$(git -C "${RUNNER_TEMP}/roost-kit" rev-parse --short HEAD)"
+          cd "${RUNNER_TEMP}/planet"
+          cat > GENERATED.md <<M
+          # Generated — do not edit here
+
+          This tree is the output of \`roost project new planet -module example.com/planet -mods configdata,mongo,nats,dataengine,nest -template game-demo\`
+          from roost-codegen ${SRC_SHA}, built against roost-core ${CORE_SHA} and roost-kit ${KIT_SHA} (source head).
+          It exists to be cloned and read. Changes belong in roost-codegen/demo (the templates) or roost-codegen/internal/roost (the scaffold);
+          the next publish overwrites this branch.
+
+          To build it yourself, add a go.work pointing at roost-core and roost-kit checkouts: the wiring codegen HEAD emits needs their main branches.
+          M
+          git init -q -b demo-generated
+          git config user.name "roost-codegen[bot]"
+          git config user.email "roost-codegen@users.noreply.github.com"
+          git add -A
+          git commit -q -m "demo-generated: roost-codegen ${SRC_SHA} · core ${CORE_SHA} · kit ${KIT_SHA}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" demo-generated:demo-generated
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

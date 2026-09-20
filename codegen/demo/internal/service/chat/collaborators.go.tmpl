@@ -1,0 +1,87 @@
+// Package Chat supplies the collaborators the chat service needs from this
+// project. The game-demo template wrote this file once; roost-codegen will
+// not overwrite it.
+package Chat
+
+import (
+	"context"
+	"fmt"
+
+	"{{MODULE}}/game/chatroom"
+	"github.com/tjbdwanghaibo/roost-kit/service/chat"
+	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
+)
+
+// Policy decides who may publish to and read from a channel.
+//
+// The demo's rule is deliberately small: the world channel and 1:1 private
+// conversations are open to every authenticated player; groups are refused
+// because the demo has none (a real game grants them from its guild / party
+// membership); the system channel is publish-refused here and served by the
+// privileged path only. What matters is that every refusal is a decision
+// written down, not a default: the generated stub refused everything.
+func Policy() chat.ChannelPolicy {
+	allow := func(_ context.Context, who chat.Sender, ch chat.Channel) error {
+		switch ch.Kind {
+		case chat.ChannelWorld:
+			if ch.Target != chatroom.WorldChannelTarget {
+				return fmt.Errorf("world %d does not exist (the demo has world %d)", ch.Target, chatroom.WorldChannelTarget)
+			}
+			return nil
+		case chat.ChannelPrivate:
+			if ch.Target == who.RoleID {
+				return fmt.Errorf("a private channel needs a peer other than the sender")
+			}
+			return nil
+		case chat.ChannelGroup:
+			return fmt.Errorf("the demo has no groups; grant group channels from party or guild membership")
+		default:
+			return fmt.Errorf("channel kind %q is not open to players", ch.Kind)
+		}
+	}
+	return chat.PolicyFuncs{
+		Publish: allow,
+		Read: func(ctx context.Context, viewer chat.Sender, ch chat.Channel) error {
+			if ch.Kind == chat.ChannelSystem {
+				// System broadcasts are readable by everyone; only publishing is privileged.
+				return nil
+			}
+			return allow(ctx, viewer, ch)
+		},
+	}
+}
+
+// Bodies registers the message body types this game allows: one, plain text,
+// validated by the same function the game's endpoint uses before the call.
+func Bodies() *chat.BodyRegistry {
+	registry := chat.NewBodyRegistry()
+	registry.MustRegister(chatroom.TypeText, chat.BodySpec{
+		Validator: chat.BodyValidatorFunc(chatroom.ValidateText),
+		MaxBytes:  chatroom.MaxTextBytes,
+	})
+	return registry
+}
+
+// System authenticates the privileged entry point (PublishSystem) from
+// transport identity.
+//
+// The demo grants it unconditionally, and that is a statement about the
+// deployment, not about trust in general: the chat service is reached only
+// over the internal NATS bus, which no client can address — the player's
+// only way in is the game's TCP endpoint, and no endpoint forwards to
+// PublishSystem. A deployment whose bus is reachable from anything less
+// trusted must replace this with a check of the caller's identity (mTLS peer,
+// a service credential carried in ctx) before granting.
+func System() chat.SystemAuthenticator {
+	return chat.SystemAuthenticatorFunc(func(context.Context) (chat.SystemToken, error) {
+		return chat.GrantSystem(), nil
+	})
+}
+
+// Rules are the channel kinds and their scoping: the service defaults (world
+// / group shared, private pair-scoped, system privileged), unchanged.
+func Rules() []chat.ChannelRule { return chat.DefaultChannelRules() }
+
+// Metrics receives the service's counters. nil means no reporting and never
+// fails an operation; wire the project's servicemetrics.Reporter here.
+func Metrics() servicemetrics.Reporter { return nil }

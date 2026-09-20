@@ -1,0 +1,91 @@
+package dbdef
+
+//roost:dao coll=player db=game schema=2
+type PlayerDao struct {
+	Name  string          `bson:"name" dao:"persist,sync"`
+	Level int32           `bson:"level" dao:"persist,sync"`
+	Exp   int64           `bson:"exp" dao:"persist,sync"`
+	Gold  int64           `bson:"gold" dao:"persist,sync"`
+	Items map[int64]int32 `bson:"items" dao:"persist,sync,map=fast"`
+	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
+	// run id -> the run's resolution time. The claim transaction records the
+	// run here and pays only when it is the one that recorded it. Entries
+	// are pruned by the same window that decides whether a claim is still
+	// admissible; see game/dungeon for why those have to be one number
+	// (RR-20260918-04).
+	// PosX / PosY are where the player is, and this is the ONLY place that
+	// answers that. The scene's AOI keeps an index of positions so it can
+	// answer "who is near whom" without walking every player, but an index is
+	// not a second authority: it is written from the one path that writes
+	// these fields (MapComponent.MoveTo) and never read as the answer to
+	// "where is X". Persisted, so a player logs back in where they left; and
+	// synced, so moving is replicated by the same pipeline as everything else
+	// — no separate movement broadcast.
+	PosX int64 `bson:"pos_x" dao:"persist,sync"`
+	PosY int64 `bson:"pos_y" dao:"persist,sync"`
+	// SceneID is which scene the player is in, 0 for nowhere.
+	SceneID int64 `bson:"scene_id" dao:"persist,sync"`
+	// Equipment is what the player is wearing. It is the demo's one NESTED
+	// struct — a struct inside the DAO, holding a map of pointers to another
+	// struct — and it is here on purpose: two P1 defects (U-0236, U-0238)
+	// lived in exactly that path and only the dao runtime gate could see
+	// them, because nothing the demo generated had a nested field. Now the
+	// live run covers it too.
+	Equipment Equipment `bson:"equipment" dao:"persist,sync"`
+	// AttrBase is the player's own attribute values: what they are with
+	// nothing applied. AttrID -> value, the bulk form the framework's
+	// Profile exports and loads (game/entities/player/attribute_component.go).
+	// Persisted AND replicated: it is state the server owns and the client
+	// renders.
+	AttrBase map[int32]int64 `bson:"attr_base" dao:"persist,sync,map=fast"`
+	// AttrFinal is the composed view — base plus every layer — and it is
+	// deliberately `nopersist,sync`: storing a value that is derivable from
+	// what is already stored buys nothing and creates a second truth that can
+	// disagree with the first. It is recomputed when the entity loads, and
+	// replicated because it is what a client draws.
+	AttrFinal map[int32]int64 `bson:"attr_final" dao:"nopersist,sync,map=fast"`
+	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
+	// MailClaims is the same ledger for mail attachments: mail id → the
+	// MAIL's expiry, as the mail service reported it with the reservation. It closes the window the three-step claim leaves open —
+	// reserve and grant succeed, the commit is lost, and the retry would
+	// grant a second stack (see game/controllers/player/claim_mail.go).
+	MailClaims map[string]int64 `bson:"mail_claims" dao:"persist,map=fast"`
+	// PurchaseClaims is the same ledger for paid orders: order id -> the
+	// moment after which that grant can no longer be claimed (payment time
+	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
+	// another process and records a grant there; this is what makes the game
+	// side of that handover exactly-once, because the id lands in the same
+	// WAL record as the items.
+	//
+	// Adding a field needs no migration step: BSON decode gives an absent map
+	// its zero value, so a document written by the previous build loads as a
+	// player who has claimed nothing. What needs a step is a change of SHAPE
+	// (see db/migrations/player.go), which is why schema= is still 2.
+	PurchaseClaims map[string]int64 `bson:"purchase_claims" dao:"persist,map=fast"`
+	// GuildID is the guild this player belongs to, or 0.
+	//
+	// The roster lives on the guild — which is a remote-managed entity owned
+	// by whichever process holds its lock — and this is the player's own copy
+	// of one fact from it. Two places for one fact is normally the thing to
+	// avoid; it is right here because the alternative is taking a distributed
+	// lock every time the game wants to know whether a player has a guild.
+	// The rule that keeps them from drifting: both are written in the SAME
+	// transaction (game/handler/join_guild.go), which is possible precisely
+	// because Nest can lock a remote entity and a local one together.
+	GuildID int64 `bson:"guild_id" dao:"persist,sync"`
+}
+
+// Equipment is a nested struct: the generator gives it its own dirty
+// propagation, so changing a gear piece marks the Player without anyone
+// writing the link.
+type Equipment struct {
+	// Slots is slot id -> the piece worn there. Nested inside a nested
+	// struct, which is the shape whose ownership transfer U-0236 fixed.
+	Slots map[int32]*GearPiece
+}
+
+// GearPiece is one worn item.
+type GearPiece struct {
+	ItemID int64
+	Level  int32
+}

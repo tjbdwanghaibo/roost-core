@@ -1,0 +1,191 @@
+package player
+
+import (
+	"fmt"
+
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	generated "{{MODULE}}/configs/generated"
+	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+//roost:component type=2003
+const CompTypeAttribute entity.ComponentType = 2003
+
+// Gear is the layer the bag contributes: every item the player holds adds its
+// configured attack. Base and Final are the framework's two named layers;
+// this is the demo's one game-specific layer, and naming it here is the whole
+// of "deciding what the layers mean".
+var Gear = coreattr.Selector{Layer: "gear"}
+
+// AttributeComponent owns the player's attribute container.
+//
+// The composition rule, which is the part a project has to decide for itself:
+//
+//	Final = Base + Gear, per attribute, then Update()
+//
+// Two things follow from writing it that way. Derived attributes are computed
+// ONCE, on the composed values — composing the layers' own Power would add up
+// two ratings that were each derived from half the inputs, which is not what
+// "power" means. And the composition is a pure function of the layers, so it
+// can be redone at any time: that is why Final is never persisted.
+//
+// What the demo does not model: a layer that expires. A real buff layer needs
+// a clock and a sweep, and the honest place for that is a component method
+// called from a tick, not a lazy check inside a getter.
+type AttributeComponent struct {
+	entity.ComponentBase
+	owner     *Player
+	container *coreattr.Container
+}
+
+// IAttributeEntity is the narrow lock-safe view for Nest handlers.
+type IAttributeEntity interface {
+	entity.IThreadSafeEntity
+	AttributeComp() *AttributeComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeAttribute, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("attribute component: owner %T is not *Player", owner)
+		}
+		return &AttributeComponent{owner: typed, container: coreattr.NewContainer()}, nil
+	})
+}
+
+func (component *AttributeComponent) Name() string { return "attribute" }
+
+func (component *AttributeComponent) Owner() *Player { return component.owner }
+
+// OnInitFinish is where the container is filled, and it runs at exactly the
+// right moment: the generated builder attaches the DAO before it initializes
+// components, so the stored values are already here. A new player has none
+// and starts from the level curve.
+func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, isCreate bool) error {
+	dao := component.owner.Dao()
+	base := &gameattr.Combat{}
+	if isCreate || dao.AttrBaseLen() == 0 {
+		base = gameattr.ForLevel(dao.GetLevel())
+	} else {
+		values := make(map[coreattr.AttrID]coreattr.AttrValue, dao.AttrBaseLen())
+		dao.RangeAttrBase(func(id int32, value int64) bool {
+			values[coreattr.AttrID(id)] = coreattr.AttrValue(value)
+			return true
+		})
+		base.LoadValues(values)
+	}
+	component.container.Install(coreattr.Base, base)
+	component.container.Install(Gear, &gameattr.Combat{})
+	component.recompose()
+	return nil
+}
+
+// Container is the layered view, for callers holding the entity lock.
+func (component *AttributeComponent) Container() *coreattr.Container {
+	return component.container
+}
+
+// Final is a copy of the composed profile: safe to read after the lock is
+// released, which a snapshot is exactly for.
+func (component *AttributeComponent) Final() (*gameattr.Combat, bool) {
+	return gameattr.CombatIn(component.container, coreattr.Final)
+}
+
+// LevelUp raises the base layer and recomposes. It is the attribute half of
+// ProfileComponent.AddExp: the level is the DAO's, the numbers that follow
+// from it are the container's.
+func (component *AttributeComponent) LevelUp(levels int32) {
+	if levels <= 0 {
+		return
+	}
+	base, ok := gameattr.CombatLive(component.container, coreattr.Base)
+	if !ok {
+		return
+	}
+	base.LevelUp(levels)
+	component.recompose()
+	component.persist()
+}
+
+// RefreshGear recomputes the gear layer from what the player is WEARING.
+// Called after the equipment changes: the layer is a projection of the worn
+// set, so it is rebuilt rather than patched — a patch would need to know what
+// was worn before.
+func (component *AttributeComponent) RefreshGear() {
+	gear, ok := gameattr.CombatLive(component.container, Gear)
+	if !ok {
+		return
+	}
+	attack, hp := int64(0), int64(0)
+	// From what is WORN, not from the whole bag: carrying a sword in the bag
+	// should not make a player stronger, and the earlier version of this
+	// counted every stack (there was nowhere else to read equipment from).
+	component.owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
+		item, found := generated.ItemByID(itemID)
+		if !found {
+			return true
+		}
+		attack += item.Attack * int64(level)
+		hp += item.HP * int64(level)
+		return true
+	})
+	if gear.Attack == attack && gear.HP == hp {
+		return
+	}
+	gear.SetAttack(attack)
+	gear.SetHP(hp)
+	gear.Update()
+	component.recompose()
+	component.persist()
+}
+
+// recompose rebuilds Final from every other layer.
+func (component *AttributeComponent) recompose() {
+	sum := make(map[coreattr.AttrID]coreattr.AttrValue)
+	for _, selector := range component.container.Layers() {
+		if selector == coreattr.Final {
+			continue
+		}
+		profile, ok := component.container.Live(selector)
+		if !ok {
+			continue
+		}
+		values := make(map[coreattr.AttrID]coreattr.AttrValue)
+		profile.ExportValues(values)
+		for id, value := range values {
+			// Derived attributes are recomputed below from the composed
+			// inputs, so a layer's own derived value is deliberately ignored.
+			if meta, ok := profile.MetaByID(id); ok && meta.Derived {
+				continue
+			}
+			sum[id] += value
+		}
+	}
+	final := &gameattr.Combat{}
+	final.LoadValues(sum)
+	component.container.Install(coreattr.Final, final)
+}
+
+// persist writes the two layers the DAO carries and hands the change to the
+// replication subject. Base is stored and replicated; Final is replicated
+// only (the DAO field is nopersist), which is why one call does both.
+func (component *AttributeComponent) persist() {
+	dao := component.owner.Dao()
+	if base, ok := gameattr.CombatLive(component.container, coreattr.Base); ok {
+		writeAttrMap(base, dao.SetAttrBase)
+	}
+	if final, ok := gameattr.CombatLive(component.container, coreattr.Final); ok {
+		writeAttrMap(final, dao.SetAttrFinal)
+	}
+	component.owner.PublishSyncDirty()
+}
+
+func writeAttrMap(profile coreattr.Profile, set func(int32, int64)) {
+	values := make(map[coreattr.AttrID]coreattr.AttrValue)
+	profile.ExportValues(values)
+	for id, value := range values {
+		set(int32(id), int64(value))
+	}
+}

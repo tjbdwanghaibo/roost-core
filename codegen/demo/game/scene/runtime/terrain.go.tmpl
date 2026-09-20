@@ -1,0 +1,120 @@
+package sceneruntime
+
+import (
+	"fmt"
+	"sync"
+
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// TerrainSystem is the map. It wraps roost-core/spatial's GridTerrain and adds
+// the one thing this runtime requires of every system: its own lock.
+//
+// Why the lock and not the Entity's: a terrain query has no business taking
+// the Scene Entity's lock. Callers arrive from endpoints, from a spawner's
+// timer and from the AOI tick, and the honest cost of letting all of them ask
+// "can I stand here" is one mutex around a grid read — not an entity-wide
+// serialization that would make the map a bottleneck for everything else the
+// scene does.
+type TerrainSystem struct {
+	mu   sync.RWMutex
+	grid *spatial.GridTerrain
+}
+
+func (t *TerrainSystem) Name() string { return SystemNameTerrain }
+
+func (t *TerrainSystem) Init(ctx *Context) error {
+	grid, err := spatial.NewGridTerrain(ctx.Config.Width, ctx.Config.Height)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.grid = grid
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *TerrainSystem) Start() error { return nil }
+
+func (t *TerrainSystem) Stop(entity.EntityDestroyReason) {
+	t.mu.Lock()
+	if t.grid != nil {
+		t.grid.Clear()
+	}
+	t.grid = nil
+	t.mu.Unlock()
+}
+
+func (t *TerrainSystem) Bounds() spatial.Rect {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.grid == nil {
+		return spatial.Rect{}
+	}
+	return t.grid.Bounds()
+}
+
+func (t *TerrainSystem) Walkable(point spatial.Point) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.grid == nil {
+		return false
+	}
+	return t.grid.InBounds(point) && !t.grid.Blocked(point)
+}
+
+func (t *TerrainSystem) Occupy(point spatial.Point) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.grid == nil {
+		return fmt.Errorf("scene terrain: stopped")
+	}
+	return t.grid.TryBlock(point)
+}
+
+func (t *TerrainSystem) Release(point spatial.Point) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.grid == nil {
+		return
+	}
+	_ = t.grid.SetBlocked(point, false)
+}
+
+// MoveOccupied takes the destination and gives back the origin as one step:
+// spatial's TryMoveBlock leaves the origin held when the destination is
+// refused, so a failed move cannot lose the object's own ground.
+func (t *TerrainSystem) MoveOccupied(from, to spatial.Point) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.grid == nil {
+		return fmt.Errorf("scene terrain: stopped")
+	}
+	return t.grid.TryMoveBlock(from, to)
+}
+
+// blocked is the pathfinder's view of this terrain, taken under the same
+// lock. spatial.FindPath calls it for every candidate point, so the adapter
+// holds the read lock for the whole search rather than per point.
+type terrainSnapshot struct{ grid *spatial.GridTerrain }
+
+func (s terrainSnapshot) InBounds(point spatial.Point) bool {
+	return s.grid != nil && s.grid.InBounds(point)
+}
+
+func (s terrainSnapshot) Blocked(point spatial.Point) bool {
+	return s.grid == nil || s.grid.Blocked(point)
+}
+
+func (t *TerrainSystem) withSearchView(fn func(spatial.Terrain) error) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.grid == nil {
+		return fmt.Errorf("scene terrain: stopped")
+	}
+	return fn(terrainSnapshot{grid: t.grid})
+}
+
+var _ scene.Terrain = (*TerrainSystem)(nil)

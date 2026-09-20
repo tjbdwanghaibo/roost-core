@@ -1,0 +1,444 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"{{MODULE}}/game/chatroom"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/purchase"
+	"{{MODULE}}/game/runtimeid"
+	"{{MODULE}}/game/skills"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+	svcplatform "github.com/tjbdwanghaibo/roost-kit/service/platform"
+	svcactivity "github.com/tjbdwanghaibo/roost-kit/service/global/activity"
+	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
+	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
+)
+
+// Controller hosts the player protocol endpoints. It holds what an endpoint
+// may reach for: the Nest client, for everything that touches a locked
+// Entity; the Player lifecycle, for the one operation that happens before
+// there is an Entity to lock; the match and chat service clients, typed
+// servicerpc interfaces to other processes; the set of players online in this
+// process, for chat fan-out; and this process's World id.
+type Controller struct {
+	registry   *app.Registry
+	nestClient corenest.Client
+	players    *lifecycle.PlayerLifecycle
+	guilds     *lifecycle.GuildLifecycle
+	matcher    svcmatch.Matchmaker
+	messaging  svcchat.Messaging
+	mailer     svcmail.Mail
+	sessions   svcsession.Session
+	ranking    svcrank.Rank
+	payments   svcplatform.Platform
+	purchases  atomic.Pointer[purchaseDrainer]
+	activities atomic.Pointer[activityRunner]
+	owners     atomic.Pointer[playerOwners]
+	presence   *chatroom.Presence
+	transport  atomic.Pointer[pushTransport]
+	battles    atomic.Pointer[battleRouter]
+	scene      atomic.Pointer[sceneJoiner]
+	worldID    int64
+	sceneID    int64
+	// paymentSecret is the demo's stand-in for a payment provider's signing
+	// key. A real game process does not hold one (see the purchase endpoint).
+	paymentSecret string
+	// serverSID and ids are what this process needs to mint ids for things it
+	// creates: a guild, like a monster, gets an id with this process's sid in
+	// it, so two processes founding at the same moment cannot collide.
+	serverSID int32
+	ids       *runtimeid.Allocator
+
+	// The skill catalog, compiled from game/skills/*.json on first use.
+	skillsOnce   sync.Once
+	skillCatalog *skills.Catalog
+	skillErr     error
+}
+
+// battleRouter is the slice of the game service's battle manager the
+// endpoints use: one call, plain parameters. It is an interface here, and
+// looked up by capability name, for the same reason pushTransport is — the
+// service package imports the controller, not the other way round.
+type battleRouter interface {
+	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
+}
+
+// sceneJoiner is the slice of the scene an endpoint needs: put this player's
+// Entity into the replicated world. Looked up by capability name for the same
+// reason as the battle manager — the service package imports this one.
+type sceneJoiner interface {
+	Join(ctx context.Context, subject *player.Player, at spatial.Point) error
+	Moved(ctx context.Context, subjectID int64, to spatial.Point)
+	Leave(ctx context.Context, subjectID int64)
+}
+
+// playerOwners is the slice of the game service's ownership table an endpoint
+// uses: claim this player for this process at login. Looked up by capability
+// name for the same reason the scene is.
+type playerOwners interface {
+	Claim(ctx context.Context, playerID int64) (bool, error)
+	OwnerSID(ctx context.Context, playerID int64) (int32, error)
+}
+
+// activityRunner is the slice of the game service's activity runner the
+// endpoints use: where a player stands, and one contribution. Looked up by
+// capability name for the same reason the scene is.
+type activityRunner interface {
+	Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error)
+	Contribute(ctx context.Context, playerID int64, runID string) (svcactivity.Participant, error)
+	Settled(ctx context.Context, activityID string) (bool, error)
+}
+
+// purchaseDrainer is the slice of the game service's paid-order drain an
+// endpoint uses: settle whatever the platform service has recorded for this
+// player. Looked up by capability name for the same reason the scene is.
+type purchaseDrainer interface {
+	DrainPlayer(ctx context.Context, playerID int64) ([]purchase.Settlement, error)
+}
+
+// pushTransport is the slice of the player TCP Runtime the endpoints use.
+// It is an interface here, and the capability is looked up by name, because
+// the transport package imports the protocol binding that constructs this
+// controller — importing it back would be an import cycle.
+type pushTransport interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+// playerTCPCapability is internal/access/player/tcp's Name: the capability
+// the transport Mod publishes its Runtime under.
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// battleCapability is what internal/service/<game> publishes its battle
+// manager under (BattleCapability there). It is registered in the service's
+// Init, which runs after this controller is constructed, so the lookup is
+// lazy like the transport's.
+const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
+
+// sceneCapability is what internal/service/<game> publishes its scene under
+// (SceneCapability there).
+const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
+
+// purchaseCapability is what internal/service/<game> publishes its paid-order
+// drain under (PurchaseCapability there).
+const purchaseCapability app.ModName = "{{GAME_SERVICE}}.purchases"
+
+// activityCapability is what internal/service/<game> publishes its activity
+// runner under (ActivityCapability there).
+const activityCapability app.ModName = "{{GAME_SERVICE}}.activity"
+
+// playerOwnerCapability is what internal/service/<game> publishes its player
+// ownership table under (PlayerOwnerCapability there).
+const playerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
+
+// FromRegistry is what the generated protocol binding calls once per
+// process; keep its signature.
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("player controller: app registry is required")
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("player controller: nest client is unavailable")
+	}
+	players, err := lifecycle.PlayerFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	guilds, err := lifecycle.GuildFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	// The same capabilities internal/service/<game>'s generated Match() and
+	// Chat() accessors return; looked up here directly so this package does
+	// not import the service package.
+	matcher, ok := app.Lookup[svcmatch.Matchmaker](registry, svcmatch.CapabilityName)
+	if !ok || matcher == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list match under services.<game>.uses", svcmatch.CapabilityName)
+	}
+	messaging, ok := app.Lookup[svcchat.Messaging](registry, svcchat.CapabilityName)
+	if !ok || messaging == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list chat under services.<game>.uses", svcchat.CapabilityName)
+	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list mail under services.<game>.uses", svcmail.CapabilityName)
+	}
+	sessions, ok := app.Lookup[svcsession.Session](registry, svcsession.CapabilityName)
+	if !ok || sessions == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
+	}
+	ranking, ok := app.Lookup[svcrank.Rank](registry, svcrank.CapabilityName)
+	if !ok || ranking == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list rank under services.<game>.uses", svcrank.CapabilityName)
+	}
+	// The demo plays the payment provider, so this process needs the secret
+	// the platform service checks callbacks with. Refused here rather than at
+	// the first purchase: an empty secret turns every callback into an
+	// invalid-signature refusal, which reads as an attack rather than as a
+	// missing configuration key.
+	paymentSecret := registry.Config().GetString("platform.payment_secret")
+	if paymentSecret == "" {
+		return nil, fmt.Errorf("player controller: platform.payment_secret is empty; the demo signs its own payment callbacks with it")
+	}
+	payments, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
+	if !ok || payments == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
+	}
+	// The sid comes from the registry's config, not from the runtime-config
+	// slot: that slot holds whatever wrote to it last, and the config-data Mod
+	// overwrites it with its snapshot (U-0244).
+	serverSID := int32(registry.Config().GetInt("sid"))
+	ids, err := runtimeid.New(serverSID)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	worldID, err := lifecycle.WorldID(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	sceneID, err := entity.BuildEntityID(lifecycle.WorldSceneUniqueID, sceneentity.EntityKindScene)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	return &Controller{
+		registry: registry, nestClient: client, players: players, guilds: guilds,
+		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
+		payments: payments, paymentSecret: paymentSecret,
+		serverSID: serverSID, ids: ids,
+		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
+	}, nil
+}
+
+func (controller *Controller) NestClient() corenest.Client {
+	if controller == nil {
+		return nil
+	}
+	return controller.nestClient
+}
+
+// Players is the create/load boundary for Player Entities.
+func (controller *Controller) Players() *lifecycle.PlayerLifecycle {
+	if controller == nil {
+		return nil
+	}
+	return controller.players
+}
+
+// Matcher is the match service, reached over the bus.
+func (controller *Controller) Matcher() svcmatch.Matchmaker {
+	if controller == nil {
+		return nil
+	}
+	return controller.matcher
+}
+
+// Messaging is the chat service, reached over the bus.
+func (controller *Controller) Messaging() svcchat.Messaging {
+	if controller == nil {
+		return nil
+	}
+	return controller.messaging
+}
+
+// Mailer is the mail service, reached over the bus.
+func (controller *Controller) Mailer() svcmail.Mail {
+	if controller == nil {
+		return nil
+	}
+	return controller.mailer
+}
+
+// Sessions is the session service (bounded runs), reached over the bus.
+func (controller *Controller) Sessions() svcsession.Session {
+	if controller == nil {
+		return nil
+	}
+	return controller.sessions
+}
+
+// Presence is the set of players online in this process.
+func (controller *Controller) Presence() *chatroom.Presence {
+	if controller == nil {
+		return nil
+	}
+	return controller.presence
+}
+
+// Transport is the push side of the player connection. It is looked up
+// lazily: the binding constructs the controller while Mods are still being
+// provided, and the transport Mod may publish its Runtime after this one.
+func (controller *Controller) Transport() (pushTransport, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if runtime := controller.transport.Load(); runtime != nil {
+		return *runtime, nil
+	}
+	runtime, ok := app.Lookup[pushTransport](controller.registry, playerTCPCapability)
+	if !ok || runtime == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the player tcp transport is not assembled", playerTCPCapability)
+	}
+	controller.transport.Store(&runtime)
+	return runtime, nil
+}
+
+// Battles is the battle manager, looked up lazily: the service registers it
+// in Init, after the protocol binding has built this controller.
+func (controller *Controller) Battles() (battleRouter, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if router := controller.battles.Load(); router != nil {
+		return *router, nil
+	}
+	router, ok := app.Lookup[battleRouter](controller.registry, battleCapability)
+	if !ok || router == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the battle manager is not running", battleCapability)
+	}
+	controller.battles.Store(&router)
+	return router, nil
+}
+
+// Ranking is the leaderboard service.
+func (controller *Controller) Ranking() svcrank.Rank {
+	if controller == nil {
+		return nil
+	}
+	return controller.ranking
+}
+
+// Scene is the replicated world, looked up lazily like the battle manager.
+func (controller *Controller) Scene() (sceneJoiner, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if joiner := controller.scene.Load(); joiner != nil {
+		return *joiner, nil
+	}
+	joiner, ok := app.Lookup[sceneJoiner](controller.registry, sceneCapability)
+	if !ok || joiner == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the scene is not running", sceneCapability)
+	}
+	controller.scene.Store(&joiner)
+	return joiner, nil
+}
+
+// Payments is the platform service: the process that owns paid orders.
+func (controller *Controller) Payments() svcplatform.Platform {
+	if controller == nil {
+		return nil
+	}
+	return controller.payments
+}
+
+// Guilds is the guild lifecycle: creating the aggregate a guild's
+// distributed lock will later be taken on.
+func (controller *Controller) Guilds() (*lifecycle.GuildLifecycle, error) {
+	if controller == nil || controller.guilds == nil {
+		return nil, errors.New("player controller: guild lifecycle is unavailable")
+	}
+	return controller.guilds, nil
+}
+
+// ServerSID is this process's id. It is in a few answers so that a two-process
+// run shows which one served the call.
+func (controller *Controller) ServerSID() int32 {
+	if controller == nil {
+		return 0
+	}
+	return controller.serverSID
+}
+
+// RuntimeIDs mints ids for objects this process creates at run time.
+func (controller *Controller) RuntimeIDs() (*runtimeid.Allocator, error) {
+	if controller == nil || controller.ids == nil {
+		return nil, errors.New("player controller: runtime id allocator is unavailable")
+	}
+	return controller.ids, nil
+}
+
+// PaymentSecret is what this process signs simulated provider callbacks with.
+func (controller *Controller) PaymentSecret() string {
+	if controller == nil {
+		return ""
+	}
+	return controller.paymentSecret
+}
+
+// Purchases is the paid-order drain, looked up lazily like the scene.
+func (controller *Controller) Purchases() (purchaseDrainer, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if drain := controller.purchases.Load(); drain != nil {
+		return *drain, nil
+	}
+	drain, ok := app.Lookup[purchaseDrainer](controller.registry, purchaseCapability)
+	if !ok || drain == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the purchase drain is not running", purchaseCapability)
+	}
+	controller.purchases.Store(&drain)
+	return drain, nil
+}
+
+// PlayerOwners is the ownership table, looked up lazily like the scene.
+func (controller *Controller) PlayerOwners() (playerOwners, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if owners := controller.owners.Load(); owners != nil {
+		return *owners, nil
+	}
+	owners, ok := app.Lookup[playerOwners](controller.registry, playerOwnerCapability)
+	if !ok || owners == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; player ownership is not published", playerOwnerCapability)
+	}
+	controller.owners.Store(&owners)
+	return owners, nil
+}
+
+// Activities is the timed server-wide event, looked up lazily like the scene.
+func (controller *Controller) Activities() (activityRunner, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if runner := controller.activities.Load(); runner != nil {
+		return *runner, nil
+	}
+	runner, ok := app.Lookup[activityRunner](controller.registry, activityCapability)
+	if !ok || runner == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the activity runner is not running", activityCapability)
+	}
+	controller.activities.Store(&runner)
+	return runner, nil
+}
+
+// WorldSceneID is the full entity id of the one map this process runs.
+func (controller *Controller) WorldSceneID() int64 {
+	if controller == nil {
+		return 0
+	}
+	return controller.sceneID
+}
+
+// WorldID is the full entity id of this process's World.
+func (controller *Controller) WorldID() int64 {
+	if controller == nil {
+		return 0
+	}
+	return controller.worldID
+}

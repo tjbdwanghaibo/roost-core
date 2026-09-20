@@ -1,0 +1,579 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/chatroom"
+	player "{{MODULE}}/game/entities/player"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	world "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/room"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// What this asserts is the whole claim of sync=true: a change made on the
+// server, through the ordinary DAO setters, reaches ANOTHER player's client
+// as a decodable delta — without anyone writing a push for it.
+//
+// The only stand-in is the socket. The subject, the room, the wire encoding
+// and the client-side decode are the real framework, which is the point: a
+// test that packed its own payload would prove nothing about the pipeline
+// that carries it.
+
+// sceneRecorder stands in for the player TCP Runtime, keeping what each
+// player would have received.
+type sceneRecorder struct {
+	mu      sync.Mutex
+	pushes  map[int64][]*pb.EntitySyncPush
+	offline map[int64]bool
+	closed  []func(accessplayertcp.SessionClosed)
+}
+
+func newSceneRecorder() *sceneRecorder {
+	return &sceneRecorder{pushes: make(map[int64][]*pb.EntitySyncPush)}
+}
+
+func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
+	if messageID != msgid.MsgEntitySync {
+		return nil
+	}
+	push, ok := value.(*pb.EntitySyncPush)
+	if !ok {
+		return nil
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.pushes[playerID] = append(recorder.pushes[playerID], push)
+	return nil
+}
+
+// Every recorded player counts as connected unless a test says otherwise.
+func (recorder *sceneRecorder) ActiveSessions(playerID int64) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.offline[playerID] {
+		return 0
+	}
+	return 1
+}
+
+// OnSessionClosed is the access layer's session lifecycle source, stood in
+// for: the test closes a session by calling the subscriber directly.
+func (recorder *sceneRecorder) OnSessionClosed(fn func(accessplayertcp.SessionClosed)) func() {
+	recorder.mu.Lock()
+	recorder.closed = append(recorder.closed, fn)
+	recorder.mu.Unlock()
+	return func() {}
+}
+
+func (recorder *sceneRecorder) close(playerID int64) {
+	recorder.mu.Lock()
+	if recorder.offline == nil {
+		recorder.offline = make(map[int64]bool)
+	}
+	recorder.offline[playerID] = true
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: playerID, SessionID: "gone"})
+	}
+}
+
+func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	taken := recorder.pushes[playerID]
+	delete(recorder.pushes, playerID)
+	return taken
+}
+
+// decodeSceneFrames turns what one player received into the subject updates
+// it carries. Reliable frames (snapshots, removals) decode directly; delta
+// fragments go through statesync's Reassembler, exactly as a UDP client would
+// do it.
+func decodeSceneFrames(t *testing.T, playerID int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+	t.Helper()
+	out := make(map[int64]bson.M)
+	reassembler := corestate.NewReassembler(corestate.DefaultLimits(), time.Second)
+	for _, push := range pushes {
+		raw := push.Payload
+		if push.Datagram {
+			complete, done, _, err := reassembler.PushFor(corestate.SessionID(playerID), push.Payload, time.Now())
+			if err != nil {
+				t.Fatalf("reassemble: %v", err)
+			}
+			if !done {
+				continue
+			}
+			raw = complete
+		}
+		_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode wire frame: %v", err)
+		}
+		for _, object := range frame.Objects {
+			for _, component := range object.Components {
+				update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+				if err != nil {
+					t.Fatalf("decode subject update: %v", err)
+				}
+				payload := update.Payload.BytesCopy()
+				if len(payload) == 0 {
+					continue
+				}
+				var document bson.M
+				if err := bson.Unmarshal(payload, &document); err != nil {
+					t.Fatalf("decode player sync payload: %v", err)
+				}
+				out[update.SubjectID] = document
+			}
+		}
+	}
+	return out
+}
+
+// newSceneArea builds the Scene Entity the bridge replicates. The interest
+// system lives there, so a bridge without one has nobody to ask.
+func newSceneArea(t *testing.T) *sceneentity.Scene {
+	t.Helper()
+	sceneentity.RegisterEntity()
+	id, err := entity.BuildEntityID(1, sceneentity.EntityKindScene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: sceneentity.EntityKindScene, Id: id})
+	if err != nil {
+		t.Fatalf("build scene: %v", err)
+	}
+	area, ok := built.(*sceneentity.Scene)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	t.Cleanup(func() { area.OnDestroy(entity.DestroyReasonCommon) })
+	return area
+}
+
+func newScenePlayer(t *testing.T, uniqueID int64) *player.Player {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(uniqueID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player %d: %v", uniqueID, err)
+	}
+	value, ok := built.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	return value
+}
+
+func newSceneWorld(t *testing.T) *world.World {
+	t.Helper()
+	world.RegisterEntity()
+	id, err := entity.BuildEntityID(1, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: id})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	return built.(*world.World)
+}
+
+// sceneCommitter keeps what a transaction would have written instead of
+// writing it: this test is about what goes out on the wire, not what lands in
+// Mongo.
+type sceneCommitter struct{}
+
+func (sceneCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nest.Client {
+	t.Helper()
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(sceneGetter(entities)),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return engine
+}
+
+type sceneGetter map[int64]entity.IThreadSafeEntity
+
+func (g sceneGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9001)
+		moverID   = int64(9002)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	// Close enough to see each other: the enter radius is 120.
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatalf("watcher joins: %v", err)
+	}
+	if err := scene.Join(ctx, mover, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatalf("mover joins: %v", err)
+	}
+	if scene.Members() != 2 {
+		t.Fatalf("the scene holds %d members, want 2", scene.Members())
+	}
+	// Joining already produced snapshots; this test is about what a CHANGE
+	// produces, so start from a clean slate.
+	recorder.take(watcherID)
+
+	// An ordinary server-side mutation, through the real AddExp transaction.
+	// It has to be a transaction: the generated persist setters refuse to run
+	// outside one, which is also why replication cannot be a side effect of
+	// "someone called a setter" — it is a side effect of a committed change.
+	// Nothing in the handler knows about replication.
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		watcher.ID(): watcher, mover.ID(): mover, counters.ID(): counters,
+	})
+	gained, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250)
+	if err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if gained == 0 {
+		t.Fatal("the mutation did not level the player up, so the delta would be exp only")
+	}
+	if !mover.Sync().PendingDirty() {
+		t.Fatal("the subject was not marked dirty; PublishSyncDirty did not reach it")
+	}
+
+	if err := scene.room.FlushDirty(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[mover.ID()]
+	if !ok {
+		t.Fatalf("the watcher received no update for subject %d; got %v", mover.ID(), updates)
+	}
+	// The delta carries the fields the mask named — the ones AddExp changed.
+	if _, ok := document["level"]; !ok {
+		t.Errorf("the delta does not carry the level that changed: %v", document)
+	}
+	if _, ok := document["exp"]; !ok {
+		t.Errorf("the delta does not carry the exp that changed: %v", document)
+	}
+	// And not the ones it did not: a delta is not a snapshot.
+	if _, ok := document["items"]; ok {
+		t.Errorf("the delta carries a field the mutation never touched: %v", document)
+	}
+}
+
+// A player who leaves stops being replicated, and the others are told the
+// object is gone rather than left with a stale copy of it.
+func TestSceneRetiresASubjectOnLeave(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	watcher := newScenePlayer(t, 9101)
+	leaver := newScenePlayer(t, 9102)
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scene.Join(ctx, leaver, spatial.Point{X: 510, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(9101)
+
+	scene.Leave(ctx, leaver.ID())
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a leave, want 1", scene.Members())
+	}
+	if len(recorder.take(9101)) == 0 {
+		t.Error("the watcher was not told the leaver's object is gone")
+	}
+}
+
+// A player who disconnects while nothing else is happening must leave the
+// scene anyway. Before the access layer published session closes, the only
+// thing that noticed was a failed push — which never happens if nobody is
+// pushing, so an idle world kept its ghosts (RR-20260918-06).
+func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	scene.watchSessions(recorder)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const goneID = int64(9301)
+	subject := newScenePlayer(t, goneID)
+	if err := scene.Join(ctx, subject, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a join, want 1", scene.Members())
+	}
+
+	recorder.close(goneID)
+
+	// The removal runs on its own goroutine so the lifecycle source is never
+	// held by a subscriber.
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if members := scene.Members(); members != 0 {
+		t.Fatalf("the scene still holds %d members two seconds after the session closed, with no traffic to notice it", members)
+	}
+}
+
+// The id-space contract, pinned rather than commented.
+//
+// The interest system, the room's subjects and the subscriber refs this
+// bridge builds all carry the **full entity id** — the id that is unique
+// across kinds, as opposed to a unique id, which is only unique within one
+// (a Player 42 and a Monster 42 share it). Core's SubscriberRef stays
+// general: it also addresses servers and groups, so the framework cannot
+// assume every ref holds an entity id. This bridge can, and the one place
+// that leaves that space is the session resolver (W-2026-09-18-06).
+func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const uniqueID = int64(9401)
+	subject := newScenePlayer(t, uniqueID)
+	if err := scene.Join(ctx, subject, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The subject the room holds is the entity id, not the unique id.
+	if subject.ID() == uniqueID {
+		t.Fatal("this player's entity id equals its unique id, so this test cannot tell the two spaces apart")
+	}
+	subscribers := scene.room.Subscribers(subject.ID())
+	if len(subscribers) == 0 {
+		t.Fatal("the player is not subscribed to its own subject")
+	}
+	for _, subscription := range subscribers {
+		if subscription.Subscriber.ID != subject.ID() {
+			t.Errorf("a subscriber ref carries %d; every id this bridge builds is the full entity id (%d)",
+				subscription.Subscriber.ID, subject.ID())
+		}
+	}
+	// And the one place that leaves the entity id space is the resolver, on
+	// its way to a transport session.
+	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
+		t.Fatalf("the resolver's translation gives %d, want the player id %d", got, uniqueID)
+	}
+}
+
+// The other half of the same source: chat presence.
+//
+// The first round of RR-20260918-06 wired the scene and left presence to the
+// lazy path — the chat push removes a player when a push to them fails and
+// they have no sessions left. In a quiet world nothing pushes, so an offline
+// player stayed in the world channel's recipient set indefinitely. The 09-19
+// review called that a partial fix, correctly.
+func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
+	recorder := &sceneRecorder{}
+	presence := chatroom.DefaultPresence()
+	const playerID = int64(4242)
+	presence.Add(playerID)
+	t.Cleanup(func() { presence.Remove(playerID) })
+
+	unsubscribe := subscribePresence(recorder, recorder)
+	defer unsubscribe()
+
+	recorder.close(playerID)
+	if presenceHolds(presence, playerID) {
+		t.Fatal("the player is still in the world channel's recipient set after their last session closed")
+	}
+
+	// A player with another connection still up stays: one closed session is
+	// not one offline player.
+	const stillOnline = int64(4243)
+	presence.Add(stillOnline)
+	t.Cleanup(func() { presence.Remove(stillOnline) })
+	recorder.mu.Lock()
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
+	}
+	if !presenceHolds(presence, stillOnline) {
+		t.Fatal("a player with another live connection was removed from the world channel")
+	}
+}
+
+func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
+	for _, id := range presence.Snapshot() {
+		if id == playerID {
+			return true
+		}
+	}
+	return false
+}
+
+// U-0267 · C5 · RR-20260920-06：房间拒绝的 subscribe 必须重发。
+//
+// The matchmaker forms a team before every member has reached the scene. The
+// team source claims the pair at once, so the subscribe for the member who
+// has not joined yet is sent for a subject the room does not hold, and fails.
+// The interest system marked that pair subscribed BEFORE the room was called
+// and only re-emits on a band change — so once the member does join, nothing
+// mentions the pair again and the teammate stays invisible for the rest of
+// the session.
+func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9101)
+		laterID   = int64(9102)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	later := newScenePlayer(t, laterID)
+
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 100, Y: 100}); err != nil {
+		t.Fatalf("watcher joins: %v", err)
+	}
+
+	// The team forms while the second member is still loading. The two are
+	// far enough apart that distance never claims the pair: being teammates
+	// is the only reason these two should see each other.
+	scene.SetTeam([]int64{watcherID, laterID})
+	recorder.take(watcherID)
+
+	// The teammate arrives. This is the tick that has to make good on the
+	// subscribe the room refused a moment ago.
+	if err := scene.Join(ctx, later, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatalf("teammate joins: %v", err)
+	}
+
+	subscribed := false
+	for _, subscription := range scene.room.Subscribers(later.ID()) {
+		if subscription.Subscriber.ID == watcher.ID() {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		t.Fatalf("the watcher is not subscribed to teammate %d after the teammate joined: %v",
+			later.ID(), scene.room.Subscribers(later.ID()))
+	}
+
+	// And what arrives is the teammate's whole state, not the tail of a
+	// stream the watcher missed the beginning of: a retried subscribe takes
+	// the same path as a first one, so it captures a snapshot.
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[later.ID()]
+	if !ok {
+		t.Fatalf("the watcher received nothing for teammate %d; got %v", later.ID(), updates)
+	}
+	for _, field := range []string{"_id", "level", "exp"} {
+		if _, ok := document[field]; !ok {
+			t.Errorf("the retried subscribe delivered %q-less state, so it was not a snapshot: %v", field, document)
+		}
+	}
+}

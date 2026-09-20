@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "codegen": "v1.13.5",
+  "framework": {
+    "core": "v1.12.0",
+    "kit": "v1.12.2",
+    "skill": "v1.10.3",
+    "service": "v1.5.2"
+  },
+  "consumer_go": [
+    "1.27.x"
+  ],
+  "modules": [
+    {
+      "path": "github.com/tjbdwanghaibo/roost-core",
+      "version": "v1.12.0",
+      "sum": "h1:cBW93B0gF1i0wTAc4fCdNtmkrYEStzWHsQ6WupI1PLU=",
+      "go_mod_sum": "h1:IG/cSCMGVAJsWQpGet9hsi3RONTCfaBvyeFnmkjPjVY="
+    },
+    {
+      "path": "github.com/tjbdwanghaibo/roost-kit",
+      "version": "v1.12.2",
+      "sum": "h1:NmFRkId1x78nW06BfEWuCzQWV8myjkHM6D3Qvtxk2jc=",
+      "go_mod_sum": "h1:OUCQiloVed4m03mKSFiwFWxAoWjaARJtLBF8s04p4PM="
+    },
+    {
+      "path": "github.com/tjbdwanghaibo/roost-skill",
+      "version": "v1.10.3",
+      "sum": "h1:6q00QnfUtqUiZNzRIiM82+7jR7aRmtqR8pK+nsp72I8=",
+      "go_mod_sum": "h1:KHR2MErMrbMKdHktfbHsDrBiU8IRTigt/b2VMY7jgvk="
+    },
+    {
+      "path": "github.com/tjbdwanghaibo/roost-service",
+      "version": "v1.5.2",
+      "sum": "h1:OCnZnxdfTRru5D4MMuAhOmlqZmbz0gSe4pMGVmagLDc=",
+      "go_mod_sum": "h1:lN1NffdIdPo35LDtQBsdU5RnAX5fsnZVh/pmdfopMvM="
+    }
+  ]
+}

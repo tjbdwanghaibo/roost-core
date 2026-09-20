@@ -1,0 +1,44 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
+)
+
+// The spawner needs this process's server id, and it must come from the
+// process's own configuration — the registry's.
+//
+// This test exists because the obvious-looking alternative is wrong in a way
+// no unit test would catch: `fctx.RuntimeConfig()` looks like "the process
+// config" and is actually "whatever was set last", which the config-data Mod
+// overwrites with its active snapshot. Reading it there gives sid 0, the
+// spawner refuses to start, and the whole game process fails to boot — while
+// every package's tests stay green.
+func TestTheSpawnerReadsTheSidFromTheProcessConfiguration(t *testing.T) {
+	config := viper.New()
+	config.Set("sid", 1000)
+	registry := app.NewRegistry(config)
+
+	// Whatever else has claimed the runtime-config slot must not matter.
+	fctx.SetRuntimeConfig("something else entirely")
+	t.Cleanup(func() { fctx.SetRuntimeConfig(nil) })
+
+	if got := processSid(registry); got != 1000 {
+		t.Fatalf("processSid = %d, want the configured 1000; a process that does not know its sid cannot mint ids that are unique across servers", got)
+	}
+}
+
+// And a process with no usable sid must fail loudly rather than mint colliding
+// ids: the refusal is the feature.
+func TestAMissingSidIsRefusedRatherThanDefaulted(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	if got := processSid(registry); got != 0 {
+		t.Fatalf("processSid = %d with no configured sid, want 0 so the allocator refuses", got)
+	}
+	if got := processSid(nil); got != 0 {
+		t.Fatalf("processSid(nil) = %d, want 0", got)
+	}
+}

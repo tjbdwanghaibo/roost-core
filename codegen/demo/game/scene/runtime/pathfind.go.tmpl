@@ -1,0 +1,89 @@
+package sceneruntime
+
+import (
+	"fmt"
+
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// maxPathVisited bounds a search. A* over an open field is cheap; A* toward a
+// goal walled off from the start is a full sweep of the map, and a request
+// that can make the server do that is a request that will be sent in a loop.
+const maxPathVisited = 4096
+
+// maxPlaceRings bounds the outward search for a free point. Past this the
+// answer is "the area is full", which the caller can act on — unlike a search
+// that eventually succeeds a hundred units away from where the player meant
+// to be.
+const maxPlaceRings = 16
+
+// PathFindSystem answers routing questions. It holds no state of its own: the
+// terrain is the state, and this system's lock is the terrain's read lock,
+// taken for the duration of one search so the grid cannot change underneath
+// A*.
+type PathFindSystem struct {
+	terrain *TerrainSystem
+}
+
+func (p *PathFindSystem) Name() string { return SystemNamePathFind }
+
+func (p *PathFindSystem) Init(ctx *Context) error {
+	p.terrain = ctx.Runtime.terrain
+	if p.terrain == nil {
+		return fmt.Errorf("scene pathfind: terrain system is required")
+	}
+	return nil
+}
+
+func (p *PathFindSystem) Start() error { return nil }
+
+func (p *PathFindSystem) Stop(entity.EntityDestroyReason) { p.terrain = nil }
+
+func (p *PathFindSystem) Path(from, to spatial.Point) ([]spatial.Point, error) {
+	if p.terrain == nil {
+		return nil, fmt.Errorf("scene pathfind: stopped")
+	}
+	var path []spatial.Point
+	err := p.terrain.withSearchView(func(view spatial.Terrain) error {
+		found, err := spatial.FindPath(view, from, to, spatial.PathOptions{MaxVisited: maxPathVisited})
+		if err != nil {
+			return err
+		}
+		path = found
+		return nil
+	})
+	return path, err
+}
+
+// Place searches outward in square rings from preferred and returns the first
+// walkable point. Rings rather than a scan: the nearest free point is what a
+// caller means by "put me near here", and a scan would answer with whatever
+// the iteration order happened to reach first.
+func (p *PathFindSystem) Place(preferred spatial.Point) (spatial.Point, error) {
+	if p.terrain == nil {
+		return spatial.Point{}, fmt.Errorf("scene pathfind: stopped")
+	}
+	if p.terrain.Walkable(preferred) {
+		return preferred, nil
+	}
+	for ring := int64(1); ring <= maxPlaceRings; ring++ {
+		for dx := -ring; dx <= ring; dx++ {
+			for dy := -ring; dy <= ring; dy++ {
+				// Only the ring's edge: the inside was covered by the
+				// previous rounds.
+				if dx != -ring && dx != ring && dy != -ring && dy != ring {
+					continue
+				}
+				candidate := spatial.Point{X: preferred.X + dx, Y: preferred.Y + dy}
+				if p.terrain.Walkable(candidate) {
+					return candidate, nil
+				}
+			}
+		}
+	}
+	return spatial.Point{}, fmt.Errorf("scene pathfind: no free point within %d of (%d,%d)", maxPlaceRings, preferred.X, preferred.Y)
+}
+
+var _ scene.PathFind = (*PathFindSystem)(nil)

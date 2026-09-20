@@ -1,0 +1,169 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - if: runner.os == 'Linux'
+        name: validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: go mod tidy
+      - run: git diff --exit-code -- go.mod go.sum
+      - run: go test ./...
+      - if: runner.os == 'Linux'
+        run: go vet ./...
+      - if: runner.os == 'Linux'
+        run: go test -race ./internal/nest ./internal/project ./internal/protocol ./internal/roost
+      - if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - if: runner.os == 'Linux'
+        # The dao goldens are text; this compiles them against roost-core and
+        # pushes them through the real BSON codec (U-0224 was invisible to text).
+        name: dao goldens through the real codec
+        run: sh scripts/dao-golden-runtime.sh
+      - if: runner.os == 'Linux'
+        # The attribute feature is two halves (roost-core/attribute and this
+        # generator) and nothing checked that they fit: the generated code
+        # named types nobody shipped. Skips itself until the pinned core
+        # carries the package.
+        name: attribute profile through the real attribute runtime
+        run: sh scripts/attribute-runtime.sh
+      - if: runner.os == 'Linux'
+        # Same exposure again for the entity generator's sync wiring: it named
+        # a field and a constant Core does not have, and every text test
+        # stayed green while no sync=true project could build.
+        name: sync entity through the real entity runtime
+        run: sh scripts/entity-sync-runtime.sh
+      - if: runner.os == 'Linux'
+        # Same exposure, same gate for cfggen: its json tags, key types, index
+        # and ref metadata are only ever compared as text here. This loads
+        # real data through roost-core/configdata.
+        name: cfggen output through the real config runtime
+        run: sh scripts/cfggen-golden-runtime.sh
+
+  generated-project-release-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build current CLI and generate project
+        run: |
+          go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods configdata
+      - name: generate explicit first business workflow
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          "${RUNNER_TEMP}/roost" add access player --service game
+          "${RUNNER_TEMP}/roost" add transport tcp
+          "${RUNNER_TEMP}/roost" add entity Player
+          "${RUNNER_TEMP}/roost" add component Profile --entity Player
+          "${RUNNER_TEMP}/roost" add dao Player --entity Player
+          "${RUNNER_TEMP}/roost" add handler RenamePlayer --entity Player --component Profile
+          "${RUNNER_TEMP}/roost" add protocol RenamePlayer --group game --handler player
+          "${RUNNER_TEMP}/roost" add lifecycle Player --service game
+          "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
+          "${RUNNER_TEMP}/roost" add skill Fireball
+          "${RUNNER_TEMP}/roost" generate
+          # Application-owned fields and method bodies are validated by the
+          # internal workflow tests. This release smoke verifies that all
+          # generated skeletons compile against published framework releases.
+          "${RUNNER_TEMP}/roost" project doctor --strict=false
+      - name: reject replace directives
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "generated project must not contain replace directives"
+            exit 1
+          fi
+      - name: resolve and compile published framework versions
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          GOWORK=off go mod tidy
+          GOWORK=off go mod verify
+          GOWORK=off go test ./...
+          GOWORK=off go vet ./...
+      - name: validate deployment shell scripts
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          for script in deploy/shell/*.sh; do
+            sh -n "$script"
+          done
+          shellcheck deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh
+      - name: validate generated compose and kubernetes manifests
+        working-directory: ${{ runner.temp }}/planet
+        env:
+          ROOST_IMAGE: ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          ROOST_CONFIG_ROOT: ${{ runner.temp }}/planet/configs/service
+        run: |
+          docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+          kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"
+          kubectl kustomize deploy/k8s/overlays/production > "${RUNNER_TEMP}/production.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/staging.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/production.yaml"
+      - name: build production container
+        working-directory: ${{ runner.temp }}/planet
+        run: docker build --build-arg VERSION=ci -t planet:ci .
+
+  release-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: root module has no local replace
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "release module must not contain replace directives"
+            grep -nE '^[[:space:]]*replace([[:space:]]|\()' go.mod
+            exit 1
+          fi
+      # The module path must resolve as a real repository, and a version tag
+      # must match the module's major suffix — the two failure modes that made
+      # v1.4.0-era roost-skill uninstallable (module pointed at a nonexistent
+      # repo, and a v1 tag on a /v2 module path).
+      - name: module path resolves
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          base=$(echo "$mod" | sed -E 's#/v[0-9]+$##')
+          echo "module: $mod (repo: $base)"
+          git ls-remote "https://${base}.git" HEAD
+      - name: tag matches module major
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mod=$(head -1 go.mod | awk '{print $2}')
+          tag=${GITHUB_REF#refs/tags/}
+          major=$(echo "$tag" | sed -E 's#^v([0-9]+)\..*#\1#')
+          suffix=$(echo "$mod" | grep -oE '/v[0-9]+$' | tr -d '/v' || true)
+          if [ "$major" -ge 2 ]; then want="$major"; else want=""; fi
+          if [ "${suffix:-}" != "${want}" ]; then
+            echo "tag $tag requires module suffix '/v${want}' but go.mod has '${suffix:+/v$suffix}'"
+            exit 1
+          fi

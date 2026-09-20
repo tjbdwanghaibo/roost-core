@@ -1,0 +1,10 @@
+schema: 2
+codegen: v1.15.31
+framework:
+  core: v1.15.18
+  kit: v1.14.17
+consumer_go:
+  # 只剩 1.27.x：roost-core / roost-kit / roost-codegen 的 go 指令都是 1.27.0，
+  # Go 1.25.x 和 1.26.x 的工具链构建不了它们，所以那两条 lane 不是"没测"而是
+  # "不可能通过"。留着它们等于让 release 矩阵红着。
+  - 1.27.x

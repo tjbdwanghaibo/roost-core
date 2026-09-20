@@ -1,0 +1,40 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
+)
+
+// DungeonKind is the one run kind the demo opens; a real game has one per
+// instanced activity and reads the deadline from its table.
+const DungeonKind = "dungeon"
+
+// HandleEnterDungeon opens a run with the session service — a typed call
+// into another process, no Entity lock held. The service enforces "one live
+// run per owner" and the idempotency of the request id, so a retried frame
+// returns the same run and a second dungeon while one is open is a coded
+// refusal (ErrAlreadyRunning).
+func (controller *Controller) HandleEnterDungeon(context *player_agent.Context, request *pb.EnterDungeonRequest) (*pb.EnterDungeonResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_dungeon endpoint: context and request are required")
+	}
+	kind := request.Kind
+	if kind == "" {
+		kind = DungeonKind
+	}
+	requestID := fmt.Sprintf("enter_dungeon:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	run, err := controller.Sessions().Enter(context.Context(), context.PlayerID, svcsession.EnterRequest{Kind: kind, RequestID: requestID})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_dungeon failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterDungeonResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EnterDungeonResponse{RunID: run.ID, State: string(run.State), DeadlineUnix: run.DeadlineUnix}, nil
+}

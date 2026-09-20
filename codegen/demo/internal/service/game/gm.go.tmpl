@@ -1,0 +1,503 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	gameactivity "{{MODULE}}/game/activity"
+	guild "{{MODULE}}/game/entities/guild"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/rewards"
+	"github.com/tjbdwanghaibo/roost-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/hotcode"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
+)
+
+// GM commands: the operator surface of the game process.
+//
+// They ride on the admin command registry the app publishes (app.ModAdmin)
+// and the ops Mod serves over HTTP — GET /admin/commands lists them, POST
+// /admin/execute runs one — behind ops.admin_enabled and an admin token
+// (X-Admin-Token or Bearer). Nothing here is reachable from a player
+// connection: the player protocol has no route to the registry, and the ops
+// listener binds 127.0.0.1 unless a deployment says otherwise.
+//
+// Every command does what the game does: the same Nest Senders the endpoints
+// use, the same mail client, the saga Engine the coordinator runs on. A GM grant is a transaction on the Player like
+// any other, so it shows up in the WAL, the dirty tracking and the effects
+// (a gm.player.add_exp that levels the player up sends the reward mail).
+//
+// The dev config enables admin with a dev-token; config check --production
+// refuses dev tokens, so a production deployment has to mint a real one.
+const (
+	gmAddItem   = "gm.player.add_item"
+	gmAddExp    = "gm.player.add_exp"
+	gmMailSend  = "gm.mail.send"
+	gmWorldStat = "gm.world.stats"
+	gmSagaGet   = "gm.saga.get"
+	gmSagaList  = "gm.saga.list"
+	gmScenePop  = "gm.scene.population"
+	gmSceneKill = "gm.scene.kill"
+	gmActClose  = "gm.activity.close"
+	gmFlagList  = "gm.flag.list"
+	gmFlagSet   = "gm.flag.set"
+	gmCfgReload = "gm.config.reload"
+	gmGuildInfo = "gm.guild.info"
+	gmGuildJoin = "gm.guild.join"
+)
+
+type gmGuildPayload struct {
+	GuildID  int64 `json:"guild_id"`
+	PlayerID int64 `json:"player_id,omitempty"`
+}
+
+type gmConfigReloadPayload struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type gmFlagSetPayload struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Note    string `json:"note,omitempty"`
+}
+
+type gmSceneKillPayload struct {
+	MonsterID int64 `json:"monster_id"`
+}
+
+type gmSagaGetPayload struct {
+	ID string `json:"id"`
+}
+
+type gmSagaListPayload struct {
+	Type   string `json:"type,omitempty"`
+	Status string `json:"status,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// gmSagaStatuses is the operator's spelling of a saga status; the same words
+// Status.String() prints.
+var gmSagaStatuses = map[string]saga.Status{
+	"pending": saga.StatusPending, "waiting": saga.StatusWaiting, "compensating": saga.StatusCompensating,
+	"completed": saga.StatusCompleted, "compensated": saga.StatusCompensated, "failed": saga.StatusFailed,
+	"manual_required": saga.StatusManualRequired,
+}
+
+// gmSagaRecord is how a saga record reads in a command result.
+func gmSagaRecord(record saga.Record) map[string]any {
+	return map[string]any{
+		"id": record.ID, "type": record.Type, "business_key": record.BusinessKey,
+		"status": record.Status.String(), "phase": record.Phase.String(), "step": record.Step, "completed_steps": record.CompletedSteps,
+		"attempt": record.Attempt, "last_error": record.LastError, "data": string(record.Data),
+		"next_run_at": record.NextRunAt, "updated_at": record.UpdatedAt,
+	}
+}
+
+type gmAddItemPayload struct {
+	PlayerID int64 `json:"player_id"`
+	ItemID   int64 `json:"item_id"`
+	Count    int32 `json:"count"`
+}
+
+type gmAddExpPayload struct {
+	PlayerID int64 `json:"player_id"`
+	Amount   int64 `json:"amount"`
+}
+
+type gmMailSendPayload struct {
+	PlayerID int64  `json:"player_id"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+	ItemID   int64  `json:"item_id,omitempty"`
+	Count    int32  `json:"count,omitempty"`
+}
+
+// registerGMCommands is called from Init, after every Mod has started.
+func registerGMCommands(registry *app.Registry, spawn *spawner, activity *ActivityRunner) error {
+	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
+	if !ok || commands == nil {
+		return fmt.Errorf("gm: admin registry %q is unavailable", mods.ModAdmin)
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return fmt.Errorf("gm: nest client is unavailable")
+	}
+	mailer, err := Mail(registry)
+	if err != nil {
+		return fmt.Errorf("gm: %w", err)
+	}
+	sagas, ok := app.Lookup[*saga.Engine](registry, mods.ModSaga)
+	if !ok || sagas == nil {
+		return fmt.Errorf("gm: saga engine %q is unavailable", mods.ModSaga)
+	}
+	worldID, err := lifecycle.WorldID(registry)
+	if err != nil {
+		return fmt.Errorf("gm: %w", err)
+	}
+	// Which process answered. It is in the guild results because that is the
+	// one thing a remote-managed entity makes observable, and an operator
+	// running the same command on two processes should see it change.
+	localSID := int32(registry.Config().GetInt("sid"))
+	// player_id is whichever id the operator has at hand: the unique id the
+	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
+	// full entity id Mongo stores as the Player document's _id. The two
+	// differ by the kind/category bits, so a full id passed where a unique
+	// id is expected gets re-wrapped into an id that no Player has
+	// ("entity aggregate not found: entity=105765670916" for _id 103286788).
+	// MatchEntityID recognises a well-formed Player entity id; anything else
+	// is taken as the unique id.
+	playerIDs := func(raw int64) (uniqueID, entityID int64, err error) {
+		if raw <= 0 {
+			return 0, 0, fmt.Errorf("%w: player_id is required", admin.ErrCommandInvalid)
+		}
+		if entity.MatchEntityID(raw, player.EntityKindPlayer) {
+			return entity.GetUniqueIDFromEntityID(raw), raw, nil
+		}
+		entityID, err = entity.BuildEntityID(raw, player.EntityKindPlayer)
+		if err != nil {
+			return 0, 0, fmt.Errorf("%w: player_id %d: %v", admin.ErrCommandInvalid, raw, err)
+		}
+		return raw, entityID, nil
+	}
+	definitions := []admin.CommandDef{
+		{
+			Name:        gmAddItem,
+			Description: "grant an item to a player's bag: {player_id, item_id, count}; player_id is the unique id or the Player document _id; the same transaction the AddItem endpoint runs",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmAddItemPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				playerID, entityID, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				count, err := syncsender.NewAddItemSender(nestClient).Sync_AddItem(ctx, entityID, payload.ItemID, payload.Count)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"player_id": playerID, "entity_id": entityID, "item_id": payload.ItemID, "count": count}}, nil
+			},
+		},
+		{
+			Name:        gmAddExp,
+			Description: "grant exp to a player: {player_id, amount}; a level-up sends the reward mail like any other",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmAddExpPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				playerID, entityID, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				gained, err := syncsender.NewAddExpSender(nestClient).MultiSync_AddExp(ctx, entityID, worldID, payload.Amount)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"player_id": playerID, "entity_id": entityID, "levels_gained": gained}}, nil
+			},
+		},
+		{
+			Name:        gmMailSend,
+			Description: "send a mail to a player: {player_id, subject, body, item_id?, count?}; item_id/count attach a reward the player claims through ClaimMail",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmMailSendPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.Subject == "" {
+					return admin.Result{}, fmt.Errorf("%w: subject is required", admin.ErrCommandInvalid)
+				}
+				// Mail is addressed by the unique id, whichever form came in.
+				playerID, _, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				request := svcmail.SendRequest{
+					Audience: svcmail.AudienceDirect, Recipients: []int64{playerID},
+					Subject: payload.Subject, Body: payload.Body, ExpiresInSeconds: levelUpMailExpiresIn,
+					// Idempotent per trace: an operator retrying the same
+					// command (same trace id) does not send twice.
+					RequestID: gmRequestID(cmd),
+				}
+				if payload.ItemID != 0 {
+					attachment, err := rewards.Encode(rewards.Reward{ItemID: payload.ItemID, Count: payload.Count})
+					if err != nil {
+						return admin.Result{}, fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
+					}
+					request.Attachment = attachment
+				}
+				envelope, err := mailer.Send(ctx, request)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"mail_id": envelope.ID, "recipients": envelope.Recipients}}, nil
+			},
+		},
+		{
+			Name:        gmSagaGet,
+			Description: "read one saga record: {id}; the gift saga's id is what SendGift returned",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSagaGetPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.ID == "" {
+					return admin.Result{}, fmt.Errorf("%w: id is required", admin.ErrCommandInvalid)
+				}
+				record, err := sagas.Get(ctx, payload.ID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: gmSagaRecord(record)}, nil
+			},
+		},
+		{
+			Name:        gmSagaList,
+			Description: "list saga records: {type?, status?, limit?}; status is one of pending, waiting, compensating, completed, compensated, failed, manual_required — the last is what needs an operator",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSagaListPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				query := saga.Query{Type: payload.Type, Limit: payload.Limit}
+				if query.Limit <= 0 || query.Limit > 200 {
+					query.Limit = 50
+				}
+				if payload.Status != "" {
+					status, ok := gmSagaStatuses[payload.Status]
+					if !ok {
+						return admin.Result{}, fmt.Errorf("%w: unknown status %q", admin.ErrCommandInvalid, payload.Status)
+					}
+					query.Statuses = []saga.Status{status}
+				}
+				records, err := sagas.List(ctx, query)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				listed := make([]map[string]any, 0, len(records))
+				for _, record := range records {
+					listed = append(listed, gmSagaRecord(record))
+				}
+				return admin.Result{Data: map[string]any{"count": len(listed), "sagas": listed}}, nil
+			},
+		},
+		{
+			Name:        gmWorldStat,
+			Description: "read the World's counters (players entered, matches formed, exp granted)",
+			Handler: func(ctx context.Context, _ admin.Command) (admin.Result, error) {
+				stats, err := syncsender.NewWorldStatsSender(nestClient).Sync_WorldStats(ctx, worldID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"players_entered": stats.PlayersEntered, "matches_formed": stats.MatchesFormed, "exp_granted": stats.ExpGranted,
+				}}, nil
+			},
+		},
+		{
+			Name:        gmScenePop,
+			Description: "list the monsters the scene currently holds",
+			Handler: func(_ context.Context, _ admin.Command) (admin.Result, error) {
+				if spawn == nil {
+					return admin.Result{}, fmt.Errorf("gm: the spawner is not running")
+				}
+				return admin.Result{Data: map[string]any{"alive": spawn.Count(), "ids": spawn.IDs()}}, nil
+			},
+		},
+		{
+			Name:        gmSceneKill,
+			Description: "remove one monster; the scene refills the slot after the table's respawn delay",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				if spawn == nil {
+					return admin.Result{}, fmt.Errorf("gm: the spawner is not running")
+				}
+				payload, err := admin.DecodePayload[gmSceneKillPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if err := spawn.Kill(ctx, payload.MonsterID); err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"killed": payload.MonsterID, "alive": spawn.Count()}}, nil
+			},
+		},
+		{
+			Name: gmActClose,
+			Description: "close the current activity window now: reports this server's phase to the coordinator, " +
+				"which settles once every expected server has reported or the grace window expires. " +
+				"The window's id is still current by the clock afterwards, so clears until the next window starts " +
+				"contribute to nothing — closing early ends the event early, for everyone. No payload.",
+			Handler: func(ctx context.Context, _ admin.Command) (admin.Result, error) {
+				if activity == nil {
+					return admin.Result{}, fmt.Errorf("gm: the activity runner is not running")
+				}
+				// The same call the World's timer effect makes, which is the
+				// point of exposing it: an operator closing a window early
+				// takes the path the deadline takes, rather than a second one
+				// that could behave differently.
+				activityID := gameactivity.ID(time.Now().Unix())
+				if err := activity.NotifyPhaseDue(ctx, activityID); err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"activity_id": activityID}}, nil
+			},
+		},
+		{
+			Name: gmGuildInfo,
+			Description: "read a guild through its distributed lock: {guild_id}. " +
+				"Run it on two different game processes and watch served_by change — " +
+				"a remote-managed entity is owned by whoever holds the lock, for as long as they hold it.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmGuildPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if !entity.MatchEntityID(payload.GuildID, guild.EntityKindGuild) {
+					return admin.Result{}, fmt.Errorf("%w: %d is not a guild id", admin.ErrCommandInvalid, payload.GuildID)
+				}
+				info, err := syncsender.NewGuildInfoSender(nestClient).Sync_GuildInfo(ctx, payload.GuildID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"guild_id": info.GuildID, "name": info.Name, "members": info.Members,
+					"founder_id": info.FounderID, "served_by": localSID,
+				}}, nil
+			},
+		},
+		{
+			Name: gmGuildJoin,
+			Description: "put a player into a guild from THIS process: {guild_id, player_id}. " +
+				"It is the cross-process write: the guild may have been founded on another process, " +
+				"and this one takes its lock, loads it, writes the roster and the player's own copy in one transaction.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmGuildPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if !entity.MatchEntityID(payload.GuildID, guild.EntityKindGuild) {
+					return admin.Result{}, fmt.Errorf("%w: %d is not a guild id", admin.ErrCommandInvalid, payload.GuildID)
+				}
+				playerID, entityID, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				info, err := syncsender.NewJoinGuildSender(nestClient).
+					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID, time.Now().Unix())
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"guild_id": info.GuildID, "members": info.Members,
+					"player_id": playerID, "served_by": localSID,
+				}}, nil
+			},
+		},
+		{
+			Name: gmCfgReload,
+			Description: "reload config data in THIS process: {reason?}. Rebuilds every table from configs/data, " +
+				"which is also how a kill switch edited in configs/table/featureflag.csv takes effect. " +
+				"A table that fails validation leaves the previous snapshot in place.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmConfigReloadPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				store, ok := app.Lookup[*configdata.Store](registry, mods.ModConfigData)
+				if !ok || store == nil {
+					return admin.Result{}, fmt.Errorf("gm: config data store %q is unavailable", mods.ModConfigData)
+				}
+				reason := payload.Reason
+				if reason == "" {
+					reason = "gm"
+				}
+				snapshot, err := store.ReloadWithReason(ctx, reason)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"reason": reason, "version": snapshot.Version,
+					"flags": featureflag.DefaultStore().Version(),
+				}}, nil
+			},
+		},
+		{
+			Name:        gmFlagList,
+			Description: "list the kill switches this process is running with: {} — name, enabled, note, and the store's version",
+			Handler: func(context.Context, admin.Command) (admin.Result, error) {
+				snapshot := featureflag.DefaultStore().Snapshot()
+				rows := make([]map[string]any, 0, len(snapshot))
+				for _, flag := range snapshot {
+					rows = append(rows, map[string]any{"name": flag.Name, "enabled": flag.Enabled, "note": flag.Note})
+				}
+				return admin.Result{Data: map[string]any{
+					"version": featureflag.DefaultStore().Version(), "flags": rows,
+				}}, nil
+			},
+		},
+		{
+			Name: gmFlagSet,
+			Description: "flip one kill switch in THIS process now: {name, enabled, note?}. " +
+				"It is not written back to the table, so the next config reload overwrites it — " +
+				"to make it stick, edit configs/table/featureflag.csv and reload.",
+			Handler: func(_ context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmFlagSetPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.Name == "" {
+					return admin.Result{}, fmt.Errorf("%w: name is required", admin.ErrCommandInvalid)
+				}
+				featureflag.DefaultStore().Set(featureflag.Flag{
+					Name: payload.Name, Enabled: payload.Enabled, Note: payload.Note,
+				})
+				// Loud on purpose: a switch flipped by hand, in one process,
+				// that a reload will undo is exactly the thing an incident
+				// review needs to find in the log.
+				slog.Warn("gm: feature flag overridden in this process only",
+					"flag", payload.Name, "enabled", payload.Enabled,
+					"version", featureflag.DefaultStore().Version())
+				return admin.Result{Data: map[string]any{
+					"name": payload.Name, "enabled": payload.Enabled,
+					"version": featureflag.DefaultStore().Version(),
+					"note":    "this process only; the next config reload restores the table's value",
+				}}, nil
+			},
+		},
+	}
+	// The hot-code patch points get their own commands from the framework:
+	// list / revert / load-plugin, with the same admin token and audit as
+	// everything else here (hotcode.RegisterAdminCommands).
+	if err := hotcode.RegisterAdminCommands(commands); err != nil {
+		return fmt.Errorf("gm: register hotcode commands: %w", err)
+	}
+	for _, definition := range definitions {
+		if err := commands.Register(definition); err != nil {
+			return fmt.Errorf("gm: register %s: %w", definition.Name, err)
+		}
+	}
+	return nil
+}
+
+// gmRequestID is the mail idempotency key for a GM send: the trace id when
+// the operator supplied one, else a fresh key (a retry without a trace id is
+// a second mail, which is what "no idempotency key" has to mean).
+func gmRequestID(cmd admin.Command) string {
+	if cmd.TraceID != "" {
+		return "gm:" + cmd.TraceID
+	}
+	return fmt.Sprintf("gm:%s:%d", cmd.Name, cmd.CreatedAt)
+}

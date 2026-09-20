@@ -1,0 +1,24 @@
+//go:build protocoldef
+
+package protocoldef
+
+// BattleFramePush carries one lockstep broadcast packet: the frames the room
+// has cut, most recent last, encoded by roost-core/lockstep. The packet
+// holds the last few frames rather than only the newest one, so a client
+// that missed a push heals from the next one without asking for anything —
+// that redundancy is why lockstep tolerates a lossy lane. The demo pushes it
+// over the player's TCP connection; a UDP or KCP deployment sends the same
+// bytes as a datagram.
+//
+// A client decodes it with lockstep.FrameAssembler (roost-core/robot's
+// LockstepBot does exactly that) and applies the frames in order.
+type BattleFramePush struct {
+	BattleID string `pb:"1"`
+	Packet   []byte `pb:"2"`
+}
+
+//roost:protocol group=game handler=player
+type BattleFrameProtocol interface {
+	//roost:msg id=10102
+	BattleFrame() BattleFramePush
+}

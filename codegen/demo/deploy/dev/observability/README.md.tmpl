@@ -1,0 +1,32 @@
+# 可观测性：demo 的指标从哪里来、看什么
+
+每个 roost 进程都在 `ops.addr`（`configs/service/config.<service>.yaml`）上以 Prometheus 文本格式暴露同一个进程内注册表：
+`GET /metrics`。没有 exporter sidecar；`cmd/loadtest -metrics-addr 127.0.0.1:9300` 让压测进程也暴露一份，机器人侧的直方图就在那里。
+
+```bash
+docker compose -f deploy/dev/observability/docker-compose.yaml up -d
+# game / mail / match 在宿主机上跑（ops 端口：{{GAME_SERVICE}} 9100，account 9101，activity 9102，chat 9103，global 9104，mail 9105，match 9106，platform 9107，rank 9108，session 9109——生成的配置已按此分配，`make dev-run` 直接可用），压测加 -metrics-addr 127.0.0.1:9300
+open http://127.0.0.1:3000        # admin / admin，仪表盘 "Roost game-demo" 已预置
+```
+
+## 指标 ↔ 链路
+
+| 链路上的一步 | 指标（Prometheus 名） | 看什么 |
+| --- | --- | --- |
+| TCP 握手与帧 | `player_tcp_connections`、`player_tcp_connection_rejected_total{reason}`、`player_tcp_auth_failure_total`、`player_tcp_frame_error_total` | 握手失败与坏帧是客户端问题；rejected 是连接上限（`max_connections` / `max_connections_per_ip`，后者默认 128）在握手前关掉的连接——压测机器人全从一个 IP 来，`-count` 超过它就大面积失败 |
+| 端点分发 | `player_tcp_dispatch_duration_{count,sum_nanos,max_nanos}`、`player_tcp_dispatch_error_total` | **dispatch error 非零 = 有端点把业务错误当 error 返回了**，它应当变成响应里的 Code（见 `game/controllers/player/*.go`） |
+| Nest 分发 | `nest_dispatch_total{handler,result,type}`、`nest_dispatch_cost_*`、`nest_dispatch_queue_len` | 每个 handler 的速率与结果；result 不是 ok 的就是业务错误码或 Nest 拒绝 |
+| 实体锁 | `nest_handler_lock_hold_*{handler}`、`nest_handler_lock_hold_slow_total`、`nest_dispatch_requeue_total` | strict 事务在锁内等 fsync，锁时长 ≈ 业务 + fsync；requeue 是锁冲突 |
+| WAL 落库 | `nestwal_append_total` / `nestwal_batch_total`（合批放大率）、`nestwal_fsync_duration_*`、`nestwal_disk_bytes`、`nestwal_pending_tickets`、`nestwal_reject_total` | fsync 时延是锁内成本的来源；reject 非零是容量事故 |
+| 升级 effect → 邮件 | `nats_jetstream_terminal_total{subject}` | 消费者重试 20 次仍失败（比如 mail 没起）会计入这里，非零即事故 |
+| 配置表 | `configdata_version`、`configdata_reload_total` | 热更后版本 +1；请求内读到的是钉住的快照 |
+| game → match / mail | `bus_rpc_call_total`（发出）、`bus_rpc_request_total`（服务端答）、`bus_rpc_pending`、`bus_dispatch_duration_*` | 三个进程各自的 job 标签把发起方和应答方分开；**`bus_rpc_*` 只在 JetStream 可靠 RPC 路径（`nats.reliable.enabled`）上计数**，默认轻量 request/reply 下该面板 No data 是正常的 |
+| 机器人 | `robot_runner_scenario_total{result}`、`robot_runner_scenario_cost_bucket`、`robot_session_call_bucket{msg}`、`robot_runner_online` | 只有这里有真正的直方图；单次调用 p95 按消息 id 区分 |
+
+## 几条规则（来自 roost-core `OBSERVABILITY.md`）
+
+- 点号分层的名字导出时点号变下划线，计数器自动带 `_total`；Duration 类导出 `_count / _sum_nanos / _max_nanos / _last_nanos`，
+  平均时延 = `rate(_sum_nanos) / rate(_count) / 1e6` 毫秒——Duration **没有分位数**，要分位数用 Histogram（机器人那组就是）。
+- 直方图桶是进程生命期累积的：看一场压测请把时间窗限定在它运行的区间，或者重启压测进程。
+- label 基数有界：handler 名、result、msg id 可以；玩家 id 永远不出现在 label 里。
+- 计数器在第一次递增前不存在：仪表盘上 "No data" 的错误面板是好消息。

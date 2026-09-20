@@ -1,0 +1,76 @@
+package player
+
+import (
+	"context"
+	"log/slog"
+
+	"{{MODULE}}/game/chatroom"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+)
+
+// toPush is the one place a chat service Message becomes the wire shape: the
+// push and the history response use the same struct, so a client renders
+// both with one code path.
+func toPush(message svcchat.Message) pb.ChatMessagePush {
+	return pb.ChatMessagePush{
+		Kind:     string(message.Channel.Kind),
+		Target:   message.Channel.Target,
+		Seq:      int64(message.Seq),
+		FromID:   message.From.RoleID,
+		FromName: message.From.Name,
+		Text:     string(message.Body),
+		System:   message.Origin == svcchat.OriginSystem,
+	}
+}
+
+// deliver pushes a stored message to the players who should see it: every
+// online player for the world channel, the two parties for a private one.
+// The chat service is the record; the push is a shortcut. A player whose
+// session is gone drops out of presence, and a player who missed a push reads
+// it back through ChatHistory — which is why every delivery carries Seq.
+func (controller *Controller) deliver(ctx context.Context, message svcchat.Message) {
+	var recipients []int64
+	switch message.Channel.Kind {
+	case svcchat.ChannelWorld, svcchat.ChannelSystem:
+		recipients = controller.Presence().Snapshot()
+	case svcchat.ChannelPrivate:
+		recipients = []int64{message.From.RoleID, message.Channel.Target}
+	default:
+		return
+	}
+	transport, err := controller.Transport()
+	if err != nil {
+		slog.Debug("chat: no transport to deliver through", "err", err)
+		return
+	}
+	push := toPush(message)
+	for _, playerID := range recipients {
+		if playerID == 0 {
+			continue
+		}
+		if err := transport.PushPlayer(ctx, playerID, msgid.MsgChatMessage, &push); err != nil {
+			if transport.ActiveSessions(playerID) == 0 {
+				controller.Presence().Remove(playerID)
+			}
+			slog.Debug("chat: push not delivered", "player_id", playerID, "seq", message.Seq, "err", err)
+		}
+	}
+}
+
+// channelOf maps the wire (kind, target) onto the chat service's Channel,
+// admitting only the kinds the demo's policy grants; anything else is a
+// coded refusal at the boundary rather than a bus round trip.
+func channelOf(kind string, target int64) (svcchat.Channel, bool) {
+	switch svcchat.ChannelKind(kind) {
+	case svcchat.ChannelWorld:
+		return chatroom.WorldChannel, true
+	case svcchat.ChannelPrivate:
+		return chatroom.PrivateChannel(target), true
+	case svcchat.ChannelSystem:
+		return svcchat.Channel{Kind: svcchat.ChannelSystem}, true
+	default:
+		return svcchat.Channel{}, false
+	}
+}

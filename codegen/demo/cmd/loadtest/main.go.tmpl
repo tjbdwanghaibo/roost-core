@@ -1,0 +1,1244 @@
+// Command loadtest drives this project's player TCP listener with robots.
+//
+//	go run ./cmd/accountctl upsert-server -sid 1000        # once: account must know the server
+//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222
+//
+// It is a load test and the demo's regression test in one: every robot logs
+// in through the account service, creates or loads its Player, adds an item,
+// levels up, queues for a duel until the matchmaker pairs it, reads the
+// World's counters, and the run fails on any non-zero response code or on a
+// threshold breach. Use an even -count: duels need pairs. The runner, scenario tree, action registry and threshold
+// gate are roost-core/robot; this file only registers the project's messages
+// and the transport that speaks the generated server's frame.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"{{MODULE}}/game/battle"
+	"{{MODULE}}/loadtest/playertcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/bus"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/room"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	svcaccount "github.com/tjbdwanghaibo/roost-kit/service/account"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+const profileName = "demo"
+
+func main() {
+	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
+	count := flag.Int("count", 10, "robot population")
+	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
+	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
+	scenarioName := flag.String("scenario", "demo", "scenario to run")
+	firstPlayerID := flag.Int64("first-player-id", 900_000, "provisional id for robot i before the account service allocates its real one")
+	maxErrorRate := flag.Float64("max-error-rate", 0, "threshold: failed robots / finished robots")
+	// The scenario deliberately waits for matchmaking (poll every 250ms while
+	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
+	// hundred milliseconds is the floor, not a regression.
+	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget, and the cost histogram has power-of-two buckets — a healthy run lands in the 8s bucket, so the bound is the next one")
+	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
+	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
+	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
+	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
+	flag.Parse()
+
+	if *metricsAddr != "" {
+		go serveMetrics(*metricsAddr)
+	}
+
+	login, err := newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+		os.Exit(1)
+	}
+	defer login.Close()
+
+	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95, login); err != nil {
+		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64, login *accountLogin) error {
+	playertcp.MustRegister()
+
+	protocols := protocol.NewRegistry(pbCodec{})
+	actions := action.NewRegistry()
+	scenarios := scenario.NewRegistry()
+	registerCalls(actions, protocols)
+	registerPushes(protocols)
+	if err := loadScenarios(scenarios, scenarioDir); err != nil {
+		return err
+	}
+
+	manager := loadtest.New(loadtest.Config{
+		Profiles: map[string]loadtest.Profile{
+			profileName: {
+				Run: runner.Config{
+					Executor: runner.ExecutorPool,
+					Count:    count,
+					Scenario: scenarioName,
+					Duration: duration,
+					Transport: transport.Config{
+						Type:     playertcp.TransportType,
+						Endpoint: endpoint,
+					},
+				},
+				Thresholds: []loadtest.Threshold{
+					{Metric: "error_rate", Max: maxErrorRate},
+					{Metric: "p95", Max: maxP95},
+				},
+			},
+		},
+		RunnerOptions: []runner.Option{
+			runner.WithActionRegistry(actions),
+			runner.WithScenarioRegistry(scenarios),
+			runner.WithProtocolRegistry(protocols),
+			runner.WithIdentityProvider(func(index int) (int64, error) {
+				return firstPlayerID + int64(index), nil
+			}),
+			// The handshake credential is a session ticket the account
+			// service minted for this robot's role — the same path a real
+			// client takes; see internal/access/player/tcp/auth.go.
+			runner.WithAuthProvider(login.authPacket),
+		},
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	started, err := manager.Start(ctx, loadtest.StartRequest{Profile: profileName})
+	if err != nil {
+		return err
+	}
+	snapshot, err := waitForRun(ctx, manager, started.RunID)
+	if err != nil {
+		return err
+	}
+	report, _ := json.MarshalIndent(snapshot, "", "  ")
+	fmt.Println(string(report))
+	if snapshot.State != loadtest.StateFinished {
+		return fmt.Errorf("run %s ended %s (%s)", snapshot.RunID, snapshot.State, snapshot.StopReason)
+	}
+	return nil
+}
+
+// accountLogin is the real credential path: the robot process talks to the
+// account service over the bus exactly the way a login server would, and
+// hands the resulting ticket to the game's TCP handshake. Each run uses fresh
+// open ids (the run nonce is part of the id), because an account may hold one
+// role per server and there is no role listing to recover an old PlayerID.
+type accountLogin struct {
+	bus      *bus.Bus
+	accounts svcaccount.Accounts
+	serverID int32
+	nonce    string
+}
+
+func newAccountLogin(url, prefix string, serverID int32) (*accountLogin, error) {
+	assembly, err := natsdriver.Assemble(fnats.DefaultConfig(url), natsdriver.ClientOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("account login: connect %s: %w", url, err)
+	}
+	b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{SvcType: "loadtest", Prefix: prefix, WorkerNum: 2, QueueCap: 256})
+	if err := b.Start(); err != nil {
+		return nil, fmt.Errorf("account login: start bus: %w", err)
+	}
+	client, err := svcaccount.NewBusClient(b, "", 0)
+	if err != nil {
+		b.Stop()
+		return nil, fmt.Errorf("account login: %w", err)
+	}
+	return &accountLogin{bus: b, accounts: client, serverID: serverID, nonce: strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)}, nil
+}
+
+func (login *accountLogin) Close() {
+	if login != nil && login.bus != nil {
+		login.bus.Stop()
+	}
+}
+
+// authPacket runs Login → CreateRole → SelectRole for one robot. The demo
+// verifier accepts channel "demo" with credential "demo:<open_id>"; a real
+// channel would hand out a platform token here. The role's PlayerID — the
+// one the account service allocated — replaces the robot's provisional id.
+func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	openID := fmt.Sprintf("robot-%s-%d", login.nonce, rb.ID)
+	account, err := login.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		return nil, fmt.Errorf("account login: %w", err)
+	}
+	role, err := login.accounts.CreateRole(ctx, account.ID, login.serverID, "robot_"+login.nonce+"_"+strconv.Itoa(rb.ID))
+	if err != nil {
+		return nil, fmt.Errorf("account create role: %w", err)
+	}
+	session, err := login.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		return nil, fmt.Errorf("account select role: %w", err)
+	}
+	rb.PlayerID = role.PlayerID
+	rb.Blackboard.Set("player_id", role.PlayerID)
+	// Every robot founds its own guild. A literal name in the scenario would
+	// make the demo runnable exactly once against a given database: the
+	// second run would collide on the name and fail with guild_exists, which
+	// says nothing about the code under test.
+	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", role.PlayerID))
+	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)), nil
+}
+
+// serveMetrics exposes the robot-side registry — the only place the scenario
+// and per-call histograms live — the same way every roost process does.
+func serveMetrics(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write(metrics.PrometheusText(metrics.Snapshot()))
+	})
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "loadtest: metrics endpoint: %v\n", err)
+	}
+}
+
+// registerCalls turns the project's request/response pairs into actions a
+// scenario can name. Request fields fill from the scenario param (snake_case
+// of the json tag) or the blackboard. The generated pb types carry no
+// GetCode(), so each call checks Code itself: a coded failure from the server
+// is a failed robot, which is what makes this a regression test.
+func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
+	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game", msgid.MsgEnterGame,
+		action.OnResp(func(_ *robot.Context, resp *pb.EnterGameResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+	action.MustRegisterCall[pb.AddItemRequest, pb.AddItemResponse](actions, protocols, "add_item", msgid.MsgAddItem,
+		action.OnResp(func(_ *robot.Context, resp *pb.AddItemResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+	action.MustRegisterCall[pb.AddExpRequest, pb.AddExpResponse](actions, protocols, "add_exp", msgid.MsgAddExp,
+		action.OnResp(func(_ *robot.Context, resp *pb.AddExpResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+	// join_queue remembers the ticket on the blackboard under the name
+	// poll_match's request field resolves to (ticket_id).
+	action.MustRegisterCall[pb.JoinQueueRequest, pb.JoinQueueResponse](actions, protocols, "join_queue", msgid.MsgJoinQueue,
+		action.OnResp(func(rb *robot.Context, resp *pb.JoinQueueResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rb.Blackboard.Set("ticket_id", resp.TicketID)
+			return nil
+		}))
+	// poll_match fails while the ticket is still waiting, so a Retry node
+	// around it is the wait-for-match loop.
+	action.MustRegisterCall[pb.PollMatchRequest, pb.PollMatchResponse](actions, protocols, "poll_match", msgid.MsgPollMatch,
+		action.OnResp(func(rb *robot.Context, resp *pb.PollMatchResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "matched" {
+				return fmt.Errorf("ticket still %s", resp.State)
+			}
+			rb.Blackboard.Set("match_id", resp.MatchID)
+			// The members, in the order the match service returned them:
+			// that order is the lockstep seat order, so the battle action
+			// can work out which seat this robot holds.
+			rb.Blackboard.Set("match_members", append([]int64(nil), resp.Members...))
+			return nil
+		}))
+	// send_chat publishes through the chat service; the world channel fans
+	// the stored line back to every online robot, including the sender, so
+	// the scenario can wait for its own push (msg 10101).
+	action.MustRegisterCall[pb.SendChatRequest, pb.SendChatResponse](actions, protocols, "send_chat", msgid.MsgSendChat,
+		action.OnResp(func(rb *robot.Context, resp *pb.SendChatResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.Seq <= 0 {
+				return fmt.Errorf("chat message stored without a sequence")
+			}
+			rb.Blackboard.Set("chat_seq", resp.Seq)
+			return nil
+		}))
+	// chat_history is the reconnect path: reading back must return at least
+	// the line this robot just sent (the login announcement is there too).
+	action.MustRegisterCall[pb.ChatHistoryRequest, pb.ChatHistoryResponse](actions, protocols, "chat_history", msgid.MsgChatHistory,
+		action.OnResp(func(_ *robot.Context, resp *pb.ChatHistoryResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if len(resp.Messages) == 0 {
+				return fmt.Errorf("chat history came back empty after a publish")
+			}
+			return nil
+		}))
+	// list_mail fails until the level-up reward has arrived (the effect chain
+	// is asynchronous: WAL → outbox → JetStream → consumer → mail.Send), so a
+	// Retry node around it is the wait; the first claimable mail's id goes on
+	// the blackboard under claim_mail's request field (mail_id).
+	action.MustRegisterCall[pb.ListMailRequest, pb.ListMailResponse](actions, protocols, "list_mail", msgid.MsgListMail,
+		action.OnResp(func(rb *robot.Context, resp *pb.ListMailResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			for _, mail := range resp.Mails {
+				if mail.Claimable && mail.HasAttachment {
+					rb.Blackboard.Set("mail_id", mail.MailID)
+					return nil
+				}
+			}
+			return fmt.Errorf("no claimable mail yet (%d in the box)", len(resp.Mails))
+		}))
+	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail", msgid.MsgClaimMail,
+		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.ItemID <= 0 || resp.Count <= 0 || resp.BagCount < resp.Count {
+				return fmt.Errorf("claim granted nothing: item=%d count=%d bag=%d", resp.ItemID, resp.Count, resp.BagCount)
+			}
+			// Remember what the bag holds so a replay can be judged.
+			rb.Blackboard.Set("claimed_bag_count", int64(resp.BagCount))
+			return nil
+		}))
+	// The same claim again. The mail service refuses a mail it has already
+	// committed (a coded answer), and if it ever lets one through, the
+	// Player's ledger makes the grant a no-op — either way the bag must not
+	// grow. Without the ledger the second grant is a second stack, which is
+	// the window a lost CommitClaim opens.
+	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail_replay", msgid.MsgClaimMail,
+		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
+			raw, _ := rb.Blackboard.Get("claimed_bag_count")
+			before, _ := raw.(int64)
+			if resp.Code != 0 {
+				// A coded refusal is the expected answer for a mail the
+				// service has already committed.
+				return nil
+			}
+			if int64(resp.BagCount) > before {
+				return fmt.Errorf("replayed claim granted again: bag %d → %d", before, resp.BagCount)
+			}
+			return nil
+		}))
+	// enter_dungeon opens a run with the session service and remembers its
+	// id for finish_dungeon (request field run_id).
+	// send_gift starts the gift saga and remembers its id for gift_status
+	// (request field saga_id). send_gift_self is the same call with the
+	// recipient taken from the blackboard's player_id: a robot knows no
+	// other robot's id, and a gift to oneself still crosses both domains
+	// (Bag debit, then a mail to claim).
+	giftStarted := action.OnResp(func(rb *robot.Context, resp *pb.SendGiftResponse) error {
+		if err := coded(resp.Code, resp.Reason); err != nil {
+			return err
+		}
+		if resp.SagaID == "" {
+			return fmt.Errorf("send_gift returned no saga id")
+		}
+		rb.Blackboard.Set("saga_id", resp.SagaID)
+		return nil
+	})
+	action.MustRegisterCall[pb.SendGiftRequest, pb.SendGiftResponse](actions, protocols, "send_gift", msgid.MsgSendGift, giftStarted)
+	action.MustRegisterCall[pb.SendGiftRequest, pb.SendGiftResponse](actions, protocols, "send_gift_self", msgid.MsgSendGift, giftStarted,
+		action.MapField[pb.SendGiftResponse]("ToPlayerID", "player_id"))
+	// gift_status fails while the saga is still running, so a retry node
+	// polls it; once terminal, the status goes on the blackboard for
+	// expect_gift to judge (a step's own OnResp cannot see scenario params).
+	action.MustRegisterCall[pb.GiftStatusRequest, pb.GiftStatusResponse](actions, protocols, "gift_status", msgid.MsgGiftStatus,
+		action.OnResp(func(rb *robot.Context, resp *pb.GiftStatusResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			switch resp.Status {
+			case "completed", "compensated", "failed", "manual_required":
+				rb.Blackboard.Set("gift_status", resp.Status)
+				rb.Blackboard.Set("gift_error", resp.LastError)
+				return nil
+			}
+			return fmt.Errorf("gift saga still %s (step %d)", resp.Status, resp.Step)
+		}))
+	actions.MustRegister(action.Func{ActionName: "expect_gift", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		want := action.ParamsOf(rb, param).String("status", "completed")
+		got, _ := rb.Blackboard.Get("gift_status")
+		if got != want {
+			lastError, _ := rb.Blackboard.Get("gift_error")
+			return fmt.Errorf("gift saga ended %v, want %s (last error: %v)", got, want, lastError)
+		}
+		return nil
+	}})
+	// move: one step on the map. The response carries the position the
+	// server settled on — a refused move answers with where the player still
+	// is, so a client snaps back instead of drifting.
+	action.MustRegisterCall[pb.MoveRequest, pb.MoveResponse](actions, protocols, "move", msgid.MsgMove,
+		action.OnResp(func(rb *robot.Context, resp *pb.MoveResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rb.Blackboard.Set("pos_x", resp.X)
+			rb.Blackboard.Set("pos_y", resp.Y)
+			return nil
+		}))
+	// The same move onto a point outside the map. The server must refuse it,
+	// and a demo whose map accepts anything is a demo that proves nothing
+	// about terrain.
+	action.MustRegisterCall[pb.MoveRequest, pb.MoveResponse](actions, protocols, "move_out_of_bounds", msgid.MsgMove,
+		action.OnResp(func(rb *robot.Context, resp *pb.MoveResponse) error {
+			if resp.Code == 0 {
+				return fmt.Errorf("a move to a point outside the map was accepted: (%d,%d)", resp.X, resp.Y)
+			}
+			raw, _ := rb.Blackboard.Get("pos_x")
+			if before, ok := raw.(int64); ok && resp.X != before {
+				return fmt.Errorf("a refused move answered with x=%d, want the position the player still has (%d)", resp.X, before)
+			}
+			return nil
+		}))
+	// equip: wear the sword the scenario granted. The response says which
+	// slot it went in — the client does not choose, because a slot is a
+	// property of the item.
+	action.MustRegisterCall[pb.EquipRequest, pb.EquipResponse](actions, protocols, "equip", msgid.MsgEquip,
+		action.OnResp(func(rb *robot.Context, resp *pb.EquipResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.Slot == 0 {
+				return fmt.Errorf("the item was equipped into slot 0")
+			}
+			rb.Blackboard.Set("equipped_slot", int64(resp.Slot))
+			return nil
+		}))
+	// activity_standing: the server-wide window this robot is contributing
+	// to. The clear above counted exactly one point — and the REPLAY of that
+	// clear counted none, because the coordinator deduplicates on the run id
+	// — so the assertion is an exact 1, not "at least 1". An off-by-one here
+	// is a contribution being counted twice across a service boundary, which
+	// is precisely what the reservation is for.
+	action.MustRegisterCall[pb.ActivityStandingRequest, pb.ActivityStandingResponse](actions, protocols, "activity_standing", msgid.MsgActivityStanding,
+		action.OnResp(func(rb *robot.Context, resp *pb.ActivityStandingResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.ActivityID == "" {
+				return fmt.Errorf("no activity window is open")
+			}
+			if resp.ClosesAtUnix <= 0 {
+				return fmt.Errorf("window %s has no close deadline", resp.ActivityID)
+			}
+			if resp.Score != 1 || resp.Progress != 1 {
+				return fmt.Errorf("window %s counted score=%d progress=%d for one dungeon clear (and its replay), want 1/1",
+					resp.ActivityID, resp.Score, resp.Progress)
+			}
+			rb.Blackboard.Set("activity_id", resp.ActivityID)
+			return nil
+		}))
+	// found_guild / guild_info: the demo's one entity that does not belong to
+	// this process.
+	//
+	// From the client's side it looks like every other endpoint, which is the
+	// claim being tested: the guild id carries the remote bit, so the
+	// transaction behind it took a distributed lock, loaded the guild from the
+	// authoritative store and wrote it back fenced — and none of that reaches
+	// the wire. What the response does carry is which process served the call
+	// (`served_by`), because in a two-process run that is the only visible
+	// difference, and the demo's second-game.sh exists to make it visible.
+	action.MustRegisterCall[pb.FoundGuildRequest, pb.GuildResponse](actions, protocols, "found_guild", msgid.MsgFoundGuild,
+		action.MapField[pb.GuildResponse]("Name", "guild_name"),
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.GuildID == 0 {
+				return fmt.Errorf("the guild was founded with no id")
+			}
+			if resp.Members != 1 {
+				return fmt.Errorf("a new guild has %d members, want its founder", resp.Members)
+			}
+			if resp.ServedBySID == 0 {
+				return fmt.Errorf("the answer does not say which process served it")
+			}
+			rb.Blackboard.Set("guild_id", resp.GuildID)
+			return nil
+		}))
+	// guild_info with no id reads "the guild I am in" — the player's own copy
+	// of that one fact, which is why it costs a local lock and not a
+	// distributed one. It has to agree with what founding returned.
+	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "guild_info", msgid.MsgGuildInfo,
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			raw, _ := rb.Blackboard.Get("guild_id")
+			founded, _ := raw.(int64)
+			if founded != 0 && resp.GuildID != founded {
+				return fmt.Errorf("the player's own copy says guild %d, the one they founded is %d",
+					resp.GuildID, founded)
+			}
+			if resp.Members < 1 {
+				return fmt.Errorf("guild %d reports %d members", resp.GuildID, resp.Members)
+			}
+			return nil
+		}))
+	// purchase: a paid order end to end, across two processes. The endpoint
+	// signs a callback (the demo plays the payment provider), the platform
+	// service records and delivers the order, the grant lands in Redis and
+	// the game drains it into the bag under the Player's lock.
+	//
+	// What is asserted is the part that is easy to get wrong: the bag count
+	// has to MOVE by the product's count. A purchase that answers success
+	// without the goods arriving — because the drain silently failed, or
+	// because the grant was deleted before the transaction committed — would
+	// otherwise look exactly like a working one.
+	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase", msgid.MsgPurchase,
+		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.OrderID == "" {
+				return fmt.Errorf("the purchase produced no order id")
+			}
+			if !resp.Delivered {
+				return fmt.Errorf("order %s was recorded but not delivered", resp.OrderID)
+			}
+			if resp.BagCount < resp.Count {
+				return fmt.Errorf("order %s delivered %d of item %d but the bag holds %d",
+					resp.OrderID, resp.Count, resp.ItemID, resp.BagCount)
+			}
+			rb.Blackboard.Set("purchase_bag_count", int64(resp.BagCount))
+			rb.Blackboard.Set("purchase_order_id", resp.OrderID)
+			return nil
+		}))
+	// purchase_again: buying the same product a second time is a SECOND
+	// ORDER — the order id is derived from the frame sequence, so this is not
+	// a replay and it must be paid. The assertion is the one that would catch
+	// a ledger keyed on something coarser than the order (a product, a
+	// player): the bag has to move by the product's count again.
+	//
+	// The replay direction — the same order id granted twice — cannot be
+	// reached from a client, because a client cannot resend a frame sequence.
+	// It is asserted against the real handler in game/handler/
+	// grant_purchase_test.go instead, which is where that window lives.
+	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase_again", msgid.MsgPurchase,
+		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rawCount, _ := rb.Blackboard.Get("purchase_bag_count")
+			first, _ := rawCount.(int64)
+			rawOrder, _ := rb.Blackboard.Get("purchase_order_id")
+			if previous, _ := rawOrder.(string); previous == resp.OrderID {
+				return fmt.Errorf("two purchases produced the same order id %q", resp.OrderID)
+			}
+			if int64(resp.BagCount) != first+int64(resp.Count) {
+				return fmt.Errorf("a second order for %d of item %d moved the bag from %d to %d",
+					resp.Count, resp.ItemID, first, resp.BagCount)
+			}
+			return nil
+		}))
+	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
+	// robot must be ON the board — and its own value must be exactly 1 no
+	// matter how many times it replayed the finish, which is what the
+	// idempotent submit promises.
+	action.MustRegisterCall[pb.RankTopRequest, pb.RankTopResponse](actions, protocols, "rank_top", msgid.MsgRankTop,
+		action.OnResp(func(rb *robot.Context, resp *pb.RankTopResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rawPlayer, _ := rb.Blackboard.Get("player_id")
+			playerID, _ := rawPlayer.(int64)
+			if resp.MyRank <= 0 {
+				return fmt.Errorf("player %d cleared a dungeon but is not on the board (total %d)", playerID, resp.Total)
+			}
+			for _, entry := range resp.Entries {
+				if entry.PlayerID == playerID && entry.Value != 1 {
+					return fmt.Errorf("player %d counted %d clears for one run", playerID, entry.Value)
+				}
+			}
+			return nil
+		}))
+	// battle: the lockstep half. The scenario reaches it with match_id on
+	// the blackboard (join_queue → the matchmaker's MatchFound push), and
+	// this action runs a real client of roost-core/lockstep for the length
+	// of one battle: it feeds every BattleFrame push into a LockstepBot,
+	// the bot applies the frames to the demo simulation in order, and the
+	// bot's sink sends this client's input (and its keyframe hashes) back
+	// through the BattleInput request. The run fails if the bot turns
+	// terminal (a gap it could not heal, a simulation that diverged) or if
+	// the battle does not reach its frame budget in time.
+	actions.MustRegister(action.Func{ActionName: "battle", Handle: runBattle})
+	// scene_watch / scene_expect are the client half of sync=true. The watch
+	// installs a push capture and decodes every state frame the server sends
+	// this client — reliable snapshots whole, deltas reassembled from their
+	// fragments — exactly as a real client would. The expect judges what
+	// arrived at the end of the run, so the two are separate actions: a
+	// capture installed after the change has already been pushed sees
+	// nothing.
+	actions.MustRegister(action.Func{ActionName: "scene_watch", Handle: watchScene})
+	actions.MustRegister(action.Func{ActionName: "scene_expect", Handle: expectScene})
+	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
+		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.RunID == "" || resp.State != "open" {
+				return fmt.Errorf("dungeon run not opened: id=%q state=%q", resp.RunID, resp.State)
+			}
+			rb.Blackboard.Set("run_id", resp.RunID)
+			return nil
+		}))
+	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon", msgid.MsgFinishDungeon,
+		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "succeeded" || resp.ExpGranted <= 0 {
+				return fmt.Errorf("dungeon not resolved as a clear: state=%q exp=%d", resp.State, resp.ExpGranted)
+			}
+			return nil
+		}))
+	// The same call again, on the same run id. Finish is idempotent, so the
+	// service answers with the run as it stands — and the reward must not be
+	// paid a second time. A demo that pays here lets a client replay one
+	// frame for unlimited experience (RR-20260917-08).
+	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon_replay", msgid.MsgFinishDungeon,
+		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "succeeded" {
+				return fmt.Errorf("replayed finish did not answer with the run as it stands: state=%q", resp.State)
+			}
+			if resp.ExpGranted != 0 || resp.LevelsGained != 0 {
+				return fmt.Errorf("replayed finish was paid again: exp=%d levels=%d", resp.ExpGranted, resp.LevelsGained)
+			}
+			return nil
+		}))
+	// skill_catalog: the server compiled game/skills/*.json at startup and
+	// lists the ids; the demo ships one, and a warning-free compile is part
+	// of the regression.
+	action.MustRegisterCall[pb.SkillCatalogRequest, pb.SkillCatalogResponse](actions, protocols, "skill_catalog", msgid.MsgSkillCatalog,
+		action.OnResp(func(_ *robot.Context, resp *pb.SkillCatalogResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if len(resp.Skills) == 0 || !strings.HasPrefix(resp.Skills[0], "skill.") {
+				return fmt.Errorf("skill catalog is empty or malformed: %v", resp.Skills)
+			}
+			if resp.Warnings != 0 {
+				return fmt.Errorf("skill catalog compiled with %d warnings", resp.Warnings)
+			}
+			return nil
+		}))
+	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
+		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.PlayersEntered <= 0 || resp.MatchesFormed <= 0 {
+				return fmt.Errorf("world counters not moving: entered=%d matches=%d", resp.PlayersEntered, resp.MatchesFormed)
+			}
+			return nil
+		}))
+}
+
+// registerPushes lets the session decode server pushes the scenario waits on.
+func registerPushes(protocols *protocol.Registry) {
+	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
+	protocols.MustRegisterDecoder(msgid.MsgChatMessage, protocol.DecodeTyped(msgid.MsgChatMessage, pb.UnmarshalChatMessagePush))
+	protocols.MustRegisterDecoder(msgid.MsgBattleFrame, protocol.DecodeTyped(msgid.MsgBattleFrame, pb.UnmarshalBattleFramePush))
+	// The scene's state frames. A push whose id has no decoder is dropped
+	// before any capture sees it, so registering it is not optional bookkeeping.
+	protocols.MustRegisterDecoder(msgid.MsgEntitySync, protocol.DecodeTyped(msgid.MsgEntitySync, pb.UnmarshalEntitySyncPush))
+	// BattleInput is sent by the battle action, not by a registered call, so
+	// its codec entries are installed here: the request encoder and the
+	// response decoder both route through pbCodec like every other message.
+	protocols.MustRegisterEncoder(msgid.MsgBattleInput, func(value any) ([]byte, error) { return pbCodec{}.Marshal(value) })
+	protocols.MustRegisterDecoder(msgid.MsgBattleInput, protocol.DecodeTyped(msgid.MsgBattleInput, pb.UnmarshalBattleInputResponse))
+}
+
+func coded(code int32, reason string) error {
+	if code == 0 {
+		return nil
+	}
+	return fmt.Errorf("response code %d: %s", code, reason)
+}
+
+// loadScenarios registers every YAML file in dir.
+func loadScenarios(registry *scenario.Registry, dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("no scenario files in %s", dir)
+	}
+	sort.Strings(files)
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		if err := scenario.RegisterSpec(registry, raw); err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	return nil
+}
+
+func waitForRun(ctx context.Context, manager *loadtest.Manager, runID string) (loadtest.RunSnapshot, error) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, run := range manager.History(loadtest.HistoryRequest{Limit: 10}).Runs {
+			if run.RunID == runID {
+				return run, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			_, _ = manager.Stop(context.Background(), loadtest.StopRequest{RunID: runID, Reason: "interrupted"})
+			return loadtest.RunSnapshot{}, errors.New("interrupted")
+		case <-ticker.C:
+		}
+	}
+}
+
+// pbCodec routes the robot's generic Marshal/Unmarshal to the generated,
+// typed pb functions. Only the messages the scenarios use are listed; a new
+// call needs a case here — the compiler cannot check it, the first run does.
+type pbCodec struct{}
+
+func (pbCodec) Marshal(value any) ([]byte, error) {
+	switch message := value.(type) {
+	case *pb.EnterGameRequest:
+		return pb.MarshalEnterGameRequest(message)
+	case *pb.AddItemRequest:
+		return pb.MarshalAddItemRequest(message)
+	case *pb.AddExpRequest:
+		return pb.MarshalAddExpRequest(message)
+	case *pb.JoinQueueRequest:
+		return pb.MarshalJoinQueueRequest(message)
+	case *pb.PollMatchRequest:
+		return pb.MarshalPollMatchRequest(message)
+	case *pb.WorldStatsRequest:
+		return pb.MarshalWorldStatsRequest(message)
+	case *pb.SendChatRequest:
+		return pb.MarshalSendChatRequest(message)
+	case *pb.ChatHistoryRequest:
+		return pb.MarshalChatHistoryRequest(message)
+	case *pb.ListMailRequest:
+		return pb.MarshalListMailRequest(message)
+	case *pb.ClaimMailRequest:
+		return pb.MarshalClaimMailRequest(message)
+	case *pb.EnterDungeonRequest:
+		return pb.MarshalEnterDungeonRequest(message)
+	case *pb.FinishDungeonRequest:
+		return pb.MarshalFinishDungeonRequest(message)
+	case *pb.SkillCatalogRequest:
+		return pb.MarshalSkillCatalogRequest(message)
+	case *pb.SendGiftRequest:
+		return pb.MarshalSendGiftRequest(message)
+	case *pb.GiftStatusRequest:
+		return pb.MarshalGiftStatusRequest(message)
+	case *pb.BattleInputRequest:
+		return pb.MarshalBattleInputRequest(message)
+	case *pb.RankTopRequest:
+		return pb.MarshalRankTopRequest(message)
+	case *pb.MoveRequest:
+		return pb.MarshalMoveRequest(message)
+	case *pb.EquipRequest:
+		return pb.MarshalEquipRequest(message)
+	case *pb.PurchaseRequest:
+		return pb.MarshalPurchaseRequest(message)
+	case *pb.ActivityStandingRequest:
+		return pb.MarshalActivityStandingRequest(message)
+	case *pb.FoundGuildRequest:
+		return pb.MarshalFoundGuildRequest(message)
+	case *pb.JoinGuildRequest:
+		return pb.MarshalJoinGuildRequest(message)
+	case *pb.GuildInfoRequest:
+		return pb.MarshalGuildInfoRequest(message)
+	default:
+		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
+	}
+}
+
+func (pbCodec) Unmarshal(data []byte, target any) error {
+	switch message := target.(type) {
+	case *pb.EnterGameResponse:
+		decoded, err := pb.UnmarshalEnterGameResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.AddItemResponse:
+		decoded, err := pb.UnmarshalAddItemResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.AddExpResponse:
+		decoded, err := pb.UnmarshalAddExpResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.JoinQueueResponse:
+		decoded, err := pb.UnmarshalJoinQueueResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.PollMatchResponse:
+		decoded, err := pb.UnmarshalPollMatchResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.WorldStatsResponse:
+		decoded, err := pb.UnmarshalWorldStatsResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SendChatResponse:
+		decoded, err := pb.UnmarshalSendChatResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ChatHistoryResponse:
+		decoded, err := pb.UnmarshalChatHistoryResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ListMailResponse:
+		decoded, err := pb.UnmarshalListMailResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ClaimMailResponse:
+		decoded, err := pb.UnmarshalClaimMailResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.EnterDungeonResponse:
+		decoded, err := pb.UnmarshalEnterDungeonResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.FinishDungeonResponse:
+		decoded, err := pb.UnmarshalFinishDungeonResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SkillCatalogResponse:
+		decoded, err := pb.UnmarshalSkillCatalogResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SendGiftResponse:
+		decoded, err := pb.UnmarshalSendGiftResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.GiftStatusResponse:
+		decoded, err := pb.UnmarshalGiftStatusResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.BattleInputResponse:
+		decoded, err := pb.UnmarshalBattleInputResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.RankTopResponse:
+		decoded, err := pb.UnmarshalRankTopResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.MoveResponse:
+		decoded, err := pb.UnmarshalMoveResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.EquipResponse:
+		decoded, err := pb.UnmarshalEquipResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.PurchaseResponse:
+		decoded, err := pb.UnmarshalPurchaseResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ActivityStandingResponse:
+		decoded, err := pb.UnmarshalActivityStandingResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.GuildResponse:
+		decoded, err := pb.UnmarshalGuildResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	default:
+		return fmt.Errorf("pb codec: no unmarshal for %T", target)
+	}
+	return nil
+}
+
+
+// battleSink is the LockstepBot's outbound half: one BattleInput request
+// carries an input, a keyframe hash report or a catch-up request, so all
+// three of the sink's methods are the same call with different fields set.
+// The bot calls them from whatever goroutine is applying frames; the robot
+// session is safe for concurrent calls.
+type battleSink struct {
+	ctx      context.Context
+	session  *session.Session
+	battleID string
+	// state is this client's simulation. The bot applies frames into it and
+	// samples its hash at keyframes; the server never sends state, which is
+	// the whole point of lockstep.
+	state *battle.State
+	seats []lockstep.PlayerID
+}
+
+func (sink *battleSink) send(request *pb.BattleInputRequest) error {
+	message, err := sink.session.Call(sink.ctx, msgid.MsgBattleInput, msgid.MsgBattleInput, request)
+	if err != nil {
+		return err
+	}
+	response, ok := message.Value.(*pb.BattleInputResponse)
+	if !ok {
+		return fmt.Errorf("battle: unexpected response %T", message.Value)
+	}
+	return coded(response.Code, response.Reason)
+}
+
+func (sink *battleSink) SubmitInput(frame lockstep.FrameID, payload []byte) error {
+	// The battle's length is part of the contract both sides read, so the
+	// client stops at the last frame rather than being refused for a room
+	// that has just closed.
+	if battle.Over(frame) {
+		return nil
+	}
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, Frame: uint32(frame), Payload: payload})
+}
+
+func (sink *battleSink) ReportHash(frame lockstep.FrameID, hash uint64) error {
+	if battle.Over(frame) {
+		return nil
+	}
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, HashFrame: uint32(frame), Hash: hash})
+}
+
+func (sink *battleSink) RequestCatchup(from lockstep.FrameID) error {
+	// Frames ride on the player's TCP connection here, so a gap means the
+	// server dropped one, not the network. Ask for history anyway: the room
+	// pages it over the same lane, and a demo that hid this would hide the
+	// one thing catch-up exists for.
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, CatchupFrom: uint32(from)})
+}
+
+// runBattle plays one lockstep battle to its frame budget.
+//
+// Params: "frames" (how many applied frames to wait for, default the
+// contract's budget), "timeout" (default 15s). The battle id is the match id
+// join_queue/poll_match left on the blackboard.
+func runBattle(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	want := lockstep.FrameID(params.Int64("frames", int64(battle.Frames)))
+	timeout := params.Duration("timeout", 15*time.Second)
+	raw, ok := rb.Blackboard.Get("match_id")
+	battleID, _ := raw.(string)
+	if !ok || battleID == "" {
+		return errors.New("battle: no match_id on the blackboard; join_queue must run first")
+	}
+	rawMembers, _ := rb.Blackboard.Get("match_members")
+	members, _ := rawMembers.([]int64)
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	// The seat is this robot's index among the members, the same mapping the
+	// game service made when it opened the room. A robot that cannot find
+	// itself in the match has no business submitting inputs.
+	seat := lockstep.PlayerID(0)
+	for index, member := range members {
+		if member == playerID {
+			seat = battle.Seat(index)
+			break
+		}
+	}
+	if seat == 0 {
+		return fmt.Errorf("battle: player %d is not among the %d members of match %s", playerID, len(members), battleID)
+	}
+	robotSession := rb.Session()
+	if robotSession == nil {
+		return session.ErrClosed
+	}
+	battleCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	sink := &battleSink{ctx: battleCtx, session: robotSession, battleID: battleID, state: battle.NewState(), seats: battle.Seats(len(members))}
+	// A tiny deterministic input: everyone walks right one unit per frame.
+	// Deterministic on purpose — two clients that apply the same frames must
+	// reach the same state, and the keyframe hashes prove they did.
+	bot, err := robot.NewLockstepBot(robot.LockstepBotConfig{
+		Player:           seat,
+		Sink:             sink,
+		Simulate:         func(frame lockstep.Frame) error { return sink.state.Apply(frame) },
+		Input:            func(lockstep.FrameID) []byte { return battle.Encode(battle.Input{DX: 1}) },
+		Hash:             func(lockstep.FrameID) uint64 { return sink.state.Hash(sink.seats) },
+		KeyframeInterval: battle.KeyframeInterval,
+	})
+	if err != nil {
+		return fmt.Errorf("battle: %w", err)
+	}
+	// The push handler only hands the packet over: it runs on the session's
+	// read loop, and applying a frame sends this seat's next input on the
+	// same session — doing that here would block the reader against its own
+	// response. The loop below owns the bot. A full queue drops the packet,
+	// which is exactly what a lossy lane does: the next packet carries the
+	// frame again (redundancy), and a gap too wide for that asks the room
+	// for history.
+	packets := make(chan []byte, 256)
+	if err := rb.EnsurePushCapture("battle:"+battleID, msgid.MsgBattleFrame, func(message *session.Message) {
+		push, ok := message.Value.(*pb.BattleFramePush)
+		if !ok || push.BattleID != battleID {
+			return
+		}
+		select {
+		case packets <- push.Packet:
+		default:
+		}
+	}); err != nil {
+		return fmt.Errorf("battle: capture frames: %w", err)
+	}
+	// The first input opens the room: it starts cutting frames once a seat
+	// has spoken, so nobody waits on an opponent who never connected.
+	if err := sink.SubmitInput(bot.Next(), battle.Encode(battle.Input{DX: 1})); err != nil {
+		return fmt.Errorf("battle: first input: %w", err)
+	}
+	for {
+		select {
+		case packet := <-packets:
+			// Applying a frame runs the simulation, sends this seat's input
+			// for the next one and, at a keyframe, its state hash.
+			if err := bot.HandleBroadcast(packet); err != nil {
+				return fmt.Errorf("battle: apply frame: %w", err)
+			}
+			if terminal := bot.Terminal(); terminal != nil {
+				return fmt.Errorf("battle: bot is terminal: %w", terminal)
+			}
+			// Next is the frame the bot is waiting for, so it has applied
+			// everything below it.
+			if bot.Next() > want {
+				stats := bot.Stats()
+				rb.Blackboard.Set("battle_frames", int64(bot.Next()-1))
+				rb.Blackboard.Set("battle_catchups", int64(stats.CatchupsRequested))
+				return nil
+			}
+		case <-battleCtx.Done():
+			return fmt.Errorf("battle: applied %d of %d frames before the deadline", bot.Next()-1, want)
+		}
+	}
+}
+
+// sceneWatcher is a client-side view of the replicated world: subject id →
+// the fields this client has been told about. It is what a real client would
+// feed into its rendering state.
+type sceneWatcher struct {
+	mu          sync.Mutex
+	reassembler *corestate.Reassembler
+	session     corestate.SessionID
+	subjects    map[int64]bson.M
+	frames      int
+	deltas      int
+	failure     error
+}
+
+func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	raw := push.Payload
+	if push.Datagram {
+		complete, done, _, err := watcher.reassembler.PushFor(watcher.session, push.Payload, time.Now())
+		if err != nil {
+			watcher.failure = fmt.Errorf("reassemble state frame: %w", err)
+			return
+		}
+		if !done {
+			return
+		}
+		raw = complete
+		watcher.deltas++
+	}
+	_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+	if err != nil {
+		watcher.failure = fmt.Errorf("decode state frame: %w", err)
+		return
+	}
+	watcher.frames++
+	for _, object := range frame.Objects {
+		for _, component := range object.Components {
+			update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+			if err != nil {
+				watcher.failure = fmt.Errorf("decode subject update: %w", err)
+				return
+			}
+			payload := update.Payload.BytesCopy()
+			if len(payload) == 0 {
+				continue
+			}
+			var document bson.M
+			if err := bson.Unmarshal(payload, &document); err != nil {
+				watcher.failure = fmt.Errorf("decode player state: %w", err)
+				return
+			}
+			// A delta carries only what changed, so the client MERGES it into
+			// what it already knows. Replacing would make every delta look
+			// like a state with three fields missing.
+			known := watcher.subjects[update.SubjectID]
+			if known == nil {
+				known = bson.M{}
+				watcher.subjects[update.SubjectID] = known
+			}
+			for key, value := range document {
+				known[key] = value
+			}
+		}
+	}
+}
+
+// watchScene installs the capture. Params: none.
+func watchScene(_ context.Context, rb *robot.Context, _ any) error {
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	watcher := &sceneWatcher{
+		reassembler: corestate.NewReassembler(corestate.DefaultLimits(), 5*time.Second),
+		session:     corestate.SessionID(playerID),
+		subjects:    make(map[int64]bson.M),
+	}
+	rb.Blackboard.Set("scene_watcher", watcher)
+	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, func(message *session.Message) {
+		push, ok := message.Value.(*pb.EntitySyncPush)
+		if !ok {
+			return
+		}
+		watcher.consume(push)
+	}); err != nil {
+		return fmt.Errorf("scene_watch: capture state frames: %w", err)
+	}
+	return nil
+}
+
+// expectScene judges what arrived. Params: "fields" (comma separated, each
+// must have been replicated for this client's own subject), "timeout".
+func expectScene(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	timeout := params.Duration("timeout", 10*time.Second)
+	wanted := strings.Split(params.String("fields", "level"), ",")
+	wantSubjects := int(params.Int64("subjects", 1))
+	raw, _ := rb.Blackboard.Get("scene_watcher")
+	watcher, ok := raw.(*sceneWatcher)
+	if !ok || watcher == nil {
+		return errors.New("scene_expect: no watcher on the blackboard; scene_watch must run first")
+	}
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	deadline := time.After(timeout)
+	for {
+		watcher.mu.Lock()
+		failure, subjects := watcher.failure, len(watcher.subjects)
+		missing := ""
+		if failure == nil && subjects > 0 {
+			// The fields are about THIS client, so they have to arrive on
+			// this client's own subject. Accepting them from any subject
+			// made the check pass on a peer's data — with several robots
+			// running, somebody else's equipment satisfied a client that
+			// had not equipped anything yet, and the scenario went green
+			// while the thing it tests had not happened.
+			own := bson.M(nil)
+			for subjectID, document := range watcher.subjects {
+				if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
+					own = document
+					break
+				}
+			}
+			if own == nil {
+				missing = "this client's own subject"
+			} else {
+				for _, field := range wanted {
+					field = strings.TrimSpace(field)
+					if field == "" {
+						continue
+					}
+					if _, ok := own[field]; !ok {
+						missing = field
+						break
+					}
+				}
+			}
+		}
+		watcher.mu.Unlock()
+		if failure != nil {
+			return failure
+		}
+		if subjects >= wantSubjects && missing == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			watcher.mu.Lock()
+			defer watcher.mu.Unlock()
+			return fmt.Errorf("scene_expect: after %s the client knows %d subjects (want %d) and %d frames; %q never arrived", timeout, len(watcher.subjects), wantSubjects, watcher.frames, missing)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}

@@ -1,0 +1,274 @@
+# One robot's life: connect and hand over the credential, make sure the Player
+# exists, chat on the world channel and read it back, add an item, earn
+# exp (the reward mail it sends is then listed and claimed), gift an item to
+# itself through the saga and claim it back, watch a gift to nobody get
+# compensated, clear a dungeon run,
+# queue for a duel and then a ranked match, earn enough exp to level up (which sends a reward mail
+# through the effect chain), queue for a duel until matched, read the World's
+# counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
+# names; a value can also come from the robot's blackboard.
+#
+# The same file is the demo's regression test: `go run ./cmd/loadtest` fails
+# when any step returns a non-zero code or the thresholds are exceeded.
+scenarios:
+  - name: demo
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        # The scene: from here the server replicates this client's own state
+        # and every other online player's, as versioned deltas. Installed
+        # right after the login that joined it — a capture installed later
+        # would miss the frames the changes below produce. scene_expect at the
+        # end judges what arrived.
+        - action: scene_watch
+        # The server compiled its skill catalog at startup; list it.
+        - action: skill_catalog
+        # Chat: say hello on the world channel (a bus call into the chat
+        # service). The game fans the stored line back as a push (msg 10101)
+        # to every online player, the sender included — but it pushes before
+        # it answers, so the robot's own copy can land before wait_push is
+        # listening and be dropped as an unsolicited push. Hence the selector:
+        # a push within half a second (its own, or another robot's), or move
+        # on; chat_history is the check that the line is there either way
+        # (the reconnect path). The wait is short because it counts toward
+        # the scenario cost the p95 threshold judges.
+        - action: send_chat
+          param:
+            kind: world
+            target: 1
+            text: hello from a robot
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10101
+                timeout: 500ms
+            - wait: 10ms
+        - action: chat_history
+          param:
+            kind: world
+            target: 1
+            limit: 20
+        - action: add_item
+          param:
+            item_id: 1001
+            count: 1
+        - action: add_exp
+          param:
+            amount: 150
+        # The level-up sent a reward mail through the effect chain
+        # (asynchronous, usually well under a second). Poll the mailbox until
+        # it is there, then claim the attachment into the Bag: the mail
+        # service's exactly-once claim around one Nest transaction.
+        - retry:
+            times: 20
+            node:
+              sequence:
+                - wait: 250ms
+                - action: list_mail
+                  param:
+                    limit: 20
+        - action: claim_mail
+        # Claim the same mail again. The mail service refuses a committed
+        # mail, and the Player's ledger makes the grant a no-op if one ever
+        # gets through — the bag must not grow either way.
+        - action: claim_mail_replay
+        # A gift to oneself: the saga debits the Bag (step 1), then mails
+        # the item (step 2) — two transaction domains, one durable
+        # operation. The saga starts asynchronously (start effect → outbox →
+        # coordinator), so poll its status until terminal, expect it
+        # completed, then the gift mail is in the box: list and claim it,
+        # which puts the item back in the Bag.
+        - action: send_gift_self
+          param:
+            item_id: 1001
+            count: 1
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: gift_status
+        - action: expect_gift
+          param:
+            status: completed
+        - retry:
+            times: 20
+            node:
+              sequence:
+                - wait: 250ms
+                - action: list_mail
+                  param:
+                    limit: 20
+        - action: claim_mail
+        # The compensation path: player 1 has never entered the game, so the
+        # deliver step refuses, and the coordinator runs debit's
+        # compensation — the item is back in the Bag, the saga ends
+        # compensated. The second claim above left the Bag at one potion,
+        # which this round-trip leaves untouched.
+        - action: send_gift
+          param:
+            to_player_id: 1
+            item_id: 1001
+            count: 1
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: gift_status
+        - action: expect_gift
+          param:
+            status: compensated
+        # A dungeon run with the session service: open it (one live run per
+        # player, idempotent per frame), then resolve it as a clear — which
+        # grants exp through the same AddExp transaction and releases what
+        # the run held.
+        - action: enter_dungeon
+          param:
+            kind: dungeon
+        - action: finish_dungeon
+          param:
+            success: true
+        # Replay the same finish. The session service answers idempotently
+        # (the run comes back as it stands), and the clear must not be paid
+        # twice — the reward transaction records the run id, so a second
+        # attempt grants nothing.
+        - action: finish_dungeon_replay
+          param:
+            success: true
+        # The dungeon clear moved this player's exp and level through an
+        # ordinary Nest transaction. Nobody wrote a push for it: the entity's
+        # sync subject produced a delta, the scene's room framed it, and the
+        # client decoded it. If this fails, replication is not carrying real
+        # state changes — the rest of the run would not notice.
+        # Wear the sword. The item was granted by add_item above; equipping
+        # takes it out of the bag and puts it on in ONE transaction, and the
+        # attribute layer follows the worn set — so this is also what makes
+        # the replicated attr_final move.
+        - action: add_item
+          param:
+            item_id: 2001
+            count: 1
+        - action: equip
+          param:
+            item_id: 2001
+        # The server-wide window: the clear above contributed one point to it,
+        # and the replayed clear contributed none. Both halves are asserted in
+        # the action, because "the replay was free" is only visible as an
+        # exact count.
+        - action: activity_standing
+        # The guild: an entity that belongs to no process in particular.
+        # Founding takes its distributed lock; reading "my guild" does not,
+        # because the player keeps a copy of that one fact — and the two have
+        # to agree, which is what the second step checks.
+        # Founding takes the guild's distributed lock. It is idempotent per
+        # (player, name), so the client may repeat it: a lost reply replays
+        # the same answer instead of minting a second guild.
+        #
+        # There is no retry wrapper here on purpose. The one temporary answer
+        # this endpoint gives — guild_busy (100020), while a restarted
+        # process waits out its predecessor's lock lease — is not something a
+        # tight client loop fixes: measured, the dispatch itself waits far
+        # longer than the lease (W-2026-09-20-04). Wrapping it would hide that
+        # behind a slow, green run.
+        - action: found_guild
+        - action: guild_info
+        # A paid order, across the platform process: the endpoint signs a
+        # callback, the platform service records and delivers it, the grant
+        # lands in Redis and the game drains it into the bag. Then a second
+        # order for the same product — a different order id, so it is paid
+        # again and the bag moves again.
+        - action: purchase
+          param:
+            product_id: potion_pack
+        - action: purchase_again
+          param:
+            product_id: potion_pack
+        # The map: one step, then a step off the edge of the world. The
+        # second one must be refused — and must answer with the position the
+        # player still has.
+        - action: move
+          param:
+            x: 501
+            y: 500
+        - action: move_out_of_bounds
+          param:
+            x: 100000
+            y: 100000
+        - action: scene_expect
+          param:
+            # Everything below is asserted on THIS client's own subject, so
+            # every action that produces one of these fields has to have run
+            # already — hence this step sits after the clear, the equip and
+            # the move rather than in the middle of them.
+            #
+            # Two subjects at least: this client's own state and one of the
+            # monsters the scene spawned near the spawn point. Monsters go
+            # through the same AOI and the same wire as players — if the
+            # pipeline had a special case for "not a player", this is where it
+            # would show.
+            subjects: 2
+            # attr_final is the composed attribute view: it is never stored
+            # (the DAO field is nopersist) and only exists on the wire, so
+            # asking for it here is what proves the attribute container is
+            # actually wired into replication rather than just into Mongo.
+            fields: level,exp,attr_base,attr_final,pos_x,equipment
+            timeout: 10s
+        # The leaderboard. The clear was counted through the rank service with
+        # the run id as the request id, so the replay above did not count a
+        # second time — the board is where that shows.
+        - action: rank_top
+          param:
+            limit: 10
+        # Matchmaking: join the duel queue, then poll until the game's
+        # matchmaker has paired this robot with another one. The ticket id
+        # comes from the blackboard, where join_queue's OnResp put it.
+        - action: join_queue
+          param:
+            mode: duel
+        # The matchmaker pushes MatchFound (msg 10100) to both players; wait
+        # for it. If the push was missed (10s), fall back to polling the
+        # ticket — the ticket carries the match id either way.
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10100
+                timeout: 10s
+            - retry:
+                times: 20
+                node:
+                  sequence:
+                    - wait: 250ms
+                    - action: poll_match
+        # Read the ticket once more whichever way the match arrived: the
+        # response carries the match id and the member order, and the battle
+        # needs both (the push only wakes the robot up).
+        - action: poll_match
+        # The lockstep battle: this robot runs a real client of
+        # roost-core/lockstep for the length of one match. Every BattleFrame
+        # push (10102) is fed to the bot, the bot applies the frames to the
+        # demo simulation in order and answers with this seat's input for the
+        # next frame plus a hash every keyframe. Both seats must agree on
+        # those hashes or the room rules a desync and the run fails.
+        - action: battle
+        # Ranked: the same dance on the level-scored queue. Every robot is
+        # at the same level here, so the window is trivially satisfied; the
+        # point is that the second queue and its ScoreWindow policy run.
+        - action: join_queue
+          param:
+            mode: ranked
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10100
+                timeout: 10s
+            - retry:
+                times: 20
+                node:
+                  sequence:
+                    - wait: 250ms
+                    - action: poll_match
+                      param:
+                        mode: ranked
+        - action: world_stats

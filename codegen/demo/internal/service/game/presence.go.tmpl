@@ -1,0 +1,54 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"log/slog"
+
+	"{{MODULE}}/game/chatroom"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"github.com/tjbdwanghaibo/roost-core/app"
+)
+
+// watchPresence takes a player out of the world channel's recipient set when
+// their last connection closes.
+//
+// It is the second consumer of the session-close source, and the reason that
+// source exists. Before it, presence was only ever cleaned up lazily — the
+// chat push path removes a player when a push to them fails and they have no
+// sessions left — and in a quiet world nothing pushes, so an offline player
+// stayed in the set indefinitely (RR-20260918-06; the first round wired the
+// scene and left this half, which the 09-19 review correctly called a partial
+// fix).
+//
+// The handler does the least possible on the shared dispatcher goroutine: one
+// map delete, no I/O. A player with another connection still up is still here.
+func watchPresence(registry *app.Registry) (func(), error) {
+	runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || runtime == nil {
+		// The listener is off in this process (a headless worker); there are
+		// no sessions to watch and nothing to clean up.
+		return func() {}, nil
+	}
+	return subscribePresence(runtime, runtime), nil
+}
+
+// presenceSessions is what the subscriber needs to know besides the event: is
+// this player still connected somewhere else. Separate from sessionSource so a
+// test can close a session without a socket, the same seam the scene uses.
+type presenceSessions interface {
+	ActiveSessions(playerID int64) int
+}
+
+func subscribePresence(source sessionSource, sessions presenceSessions) func() {
+	if source == nil {
+		return func() {}
+	}
+	presence := chatroom.DefaultPresence()
+	return source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+		if sessions != nil && sessions.ActiveSessions(event.PlayerID) > 0 {
+			// Another connection of the same player is still up.
+			return
+		}
+		presence.Remove(event.PlayerID)
+		slog.Debug("presence: player left the world channel", "player_id", event.PlayerID)
+	})
+}

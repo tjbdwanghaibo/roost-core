@@ -1,0 +1,17 @@
+{
+  "schema": "roost.skill/v2",
+  "id": "skill.{{PROJECT}}.fireball",
+  "name": "Fireball",
+  "description": "The demo's one skill: a tap-activated cast that finishes immediately. It exists so the project compiles a real skill catalog at startup (roost-core/skill's strict Parse + Compile) and lists it to the client; effects, costs and targeting are what a game adds here.",
+  "activation": {"type": "active", "policy": {"mode": "tap"}},
+  "input_schema": {"type": "none"},
+  "cooldown_ticks": 30,
+  "costs": [],
+  "memory": {},
+  "initial_phase": "cast",
+  "phases": [{
+    "id": "cast",
+    "timeout_ticks": 0,
+    "on": {"enter": {"flow": "finish", "reason": "done"}}
+  }]
+}

@@ -1,0 +1,135 @@
+package sceneruntime
+
+import (
+	"fmt"
+
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// The scene runtime is a composition of named systems, each with the same
+// lifecycle. The shape matters more than any one system: adding AOI, spawning
+// or instancing later means adding a system to the list below and an accessor
+// on the Scene Entity, not restructuring anything.
+//
+// Order is part of the contract. Systems start in list order, so a system may
+// use anything declared before it, and stop in reverse, so the ones that hand
+// out notifications are still alive while the ones that produce them shut
+// down.
+
+// System is the lifecycle every scene system implements.
+type System interface {
+	// Name is what this system is called in logs and errors.
+	Name() string
+	// Init wires collaborators. It runs for every system before any Start,
+	// so a system may hold a pointer to one later in the list.
+	Init(ctx *Context) error
+	Start() error
+	Stop(reason entity.EntityDestroyReason)
+}
+
+// Context is what Init hands to a system.
+type Context struct {
+	Runtime *Runtime
+	Scene   scene.Entity
+	Config  scene.Config
+}
+
+const (
+	SystemNameTerrain  = "terrain"
+	SystemNamePathFind = "path_find"
+	SystemNameInterest = "interest"
+	SystemNameRefresh  = "refresh"
+)
+
+// Runtime owns the systems and nothing else. It is created by the Scene
+// Entity in OnInitFinish and stopped in OnDestroy.
+type Runtime struct {
+	ctx *Context
+
+	terrain  *TerrainSystem
+	pathFind *PathFindSystem
+	interest *InterestSystem
+	refresh  *RefreshSystem
+
+	systems []System
+}
+
+func New(owner scene.Entity, config scene.Config) (*Runtime, error) {
+	if owner == nil {
+		return nil, fmt.Errorf("scene runtime: owner is required")
+	}
+	runtime := &Runtime{}
+	runtime.ctx = &Context{Runtime: runtime, Scene: owner, Config: config.Normalize()}
+
+	runtime.terrain = &TerrainSystem{}
+	runtime.pathFind = &PathFindSystem{}
+	runtime.interest = &InterestSystem{}
+	runtime.refresh = &RefreshSystem{}
+	// Refresh last, so it stops first: the assembly drains what it spawned
+	// while the interest system is still alive to say they left.
+	runtime.systems = []System{runtime.terrain, runtime.pathFind, runtime.interest, runtime.refresh}
+
+	for _, system := range runtime.systems {
+		if err := system.Init(runtime.ctx); err != nil {
+			return nil, fmt.Errorf("scene runtime: init %s: %w", system.Name(), err)
+		}
+	}
+	return runtime, nil
+}
+
+func (r *Runtime) Start() error {
+	if r == nil {
+		return fmt.Errorf("scene runtime: nil")
+	}
+	for index, system := range r.systems {
+		if err := system.Start(); err != nil {
+			// Unwind what did start, newest first.
+			for i := index - 1; i >= 0; i-- {
+				r.systems[i].Stop(entity.DestroyReasonCommon)
+			}
+			return fmt.Errorf("scene runtime: start %s: %w", system.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) Stop(reason entity.EntityDestroyReason) {
+	if r == nil {
+		return
+	}
+	for i := len(r.systems) - 1; i >= 0; i-- {
+		r.systems[i].Stop(reason)
+	}
+}
+
+// Terrain and PathFind are the runtime's exported systems. They return the
+// contract interfaces, not the implementations: what a caller may do with a
+// system is what game/scene declares.
+func (r *Runtime) Terrain() scene.Terrain {
+	if r == nil {
+		return nil
+	}
+	return r.terrain
+}
+
+func (r *Runtime) PathFind() scene.PathFind {
+	if r == nil {
+		return nil
+	}
+	return r.pathFind
+}
+
+func (r *Runtime) Interest() scene.Interest {
+	if r == nil {
+		return nil
+	}
+	return r.interest
+}
+
+func (r *Runtime) Refresh() scene.Refresh {
+	if r == nil {
+		return nil
+	}
+	return r.refresh
+}

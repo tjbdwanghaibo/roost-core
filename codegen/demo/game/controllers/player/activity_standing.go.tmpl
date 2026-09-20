@@ -1,0 +1,56 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	gameactivity "{{MODULE}}/game/activity"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleActivityStanding reports the current window and this player's place
+// in it.
+//
+// Two different sources, deliberately not merged: the coordinator owns the
+// aggregation (status, this player's score) and this server owns whether the
+// settlement was paid. A server that reported the phase is not a server that
+// has paid — the coordinator is still waiting on the others — so a client
+// that read "complete" from the coordinator and drew "your reward is in your
+// mailbox" would be wrong for as long as the grace window lasts.
+func (controller *Controller) HandleActivityStanding(context *player_agent.Context, request *pb.ActivityStandingRequest) (*pb.ActivityStandingResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("activity_standing endpoint: context and request are required")
+	}
+	runner, err := controller.Activities()
+	if err != nil {
+		return nil, fmt.Errorf("activity_standing endpoint: %w", err)
+	}
+	activityID, state, participant, err := runner.Standing(context.Context(), context.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("activity_standing failed", "player_id", context.PlayerID, "activity_id", activityID, "err", err)
+		}
+		return &pb.ActivityStandingResponse{Code: code, Reason: reason, ActivityID: activityID}, nil
+	}
+	settled, err := runner.Settled(context.Context(), activityID)
+	if err != nil {
+		// The aggregation is the answer the player asked for; whether the
+		// payout already ran is an extra. Reporting the standing without it
+		// beats failing the whole read.
+		slog.Warn("activity_standing: settlement flag unavailable", "activity_id", activityID, "err", err)
+	}
+	response := &pb.ActivityStandingResponse{
+		ActivityID: activityID,
+		Status:     string(state.Status),
+		Score:      participant.Score,
+		Progress:   participant.Progress,
+		Settled:    settled,
+	}
+	if closeAt, ok := gameactivity.CloseAt(activityID); ok {
+		response.ClosesAtUnix = closeAt.Unix()
+	}
+	return response, nil
+}

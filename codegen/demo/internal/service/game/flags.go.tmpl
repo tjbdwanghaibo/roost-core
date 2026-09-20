@@ -1,0 +1,134 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/rewards"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/hotcode"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+)
+
+// The kill switches, and where they come from.
+//
+// `featureflag` is an in-memory store the game reads on a hot path; the
+// SOURCE is the config table, because "should the store be open right now" is
+// an operational question whose answer has to change without a deploy. This
+// file is the one place that connects the two, in both directions that matter:
+//
+//   - at startup, so a process that comes up during an incident comes up with
+//     the switches as the operator left them, not with everything on;
+//   - on every config reload, so editing the table and reloading is the normal
+//     way to flip one.
+//
+// A GM command can also flip one (gm.flag.set) for the case where editing a
+// file is too slow. That write is deliberately NOT written back to the table:
+// the next reload overwrites it, and an operator who wants it to stick edits
+// the table. Saying so is the whole point — a switch whose two sources
+// silently disagree is worse than one source.
+const flagsReloadHook = "{{GAME_SERVICE}}.featureflags"
+
+// installFeatureFlags publishes the table's flags and keeps them current. It
+// returns the unsubscribe, so a service that shuts down stops listening.
+func installFeatureFlags(registry *app.Registry) (func(), error) {
+	store, ok := app.Lookup[*configdata.Store](registry, mods.ModConfigData)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("{{GAME_SERVICE}}: capability %q not found; the kill switches live in config data", mods.ModConfigData)
+	}
+	if err := publishFeatureFlags(store.Current()); err != nil {
+		return nil, err
+	}
+	// A reload republishes, on the config store's OWN hook rather than a
+	// generic lifecycle event: AfterApply runs once the new snapshot is
+	// committed and carries the reason, so the log line says why the switches
+	// changed. A rollback needs no handler — the store republishes the
+	// snapshot it rolled back to through the same hook.
+	unsubscribe := store.AddReloadListener(configdata.ReloadHook{
+		HookName: flagsReloadHook,
+		AfterApply: func(_ context.Context, event configdata.ReloadEvent) error {
+			if err := publishFeatureFlags(store.Current()); err != nil {
+				// Refusing here fails the reload, which is right: a config
+				// change that cannot be turned into switches must not be
+				// half-applied.
+				return fmt.Errorf("{{GAME_SERVICE}}: feature flags after reload (%s): %w", event.Reason, err)
+			}
+			return nil
+		},
+	})
+	return unsubscribe, nil
+}
+
+// publishFeatureFlags replaces the store with what the table says.
+//
+// Replace, not merge: the table is the source, so a flag deleted from it must
+// disappear rather than linger at whatever it was last set to. That also means
+// a GM override is lost on reload, which is the documented trade (see above).
+func publishFeatureFlags(snapshot *configdata.Snapshot) error {
+	table, ok := generated.FeatureFlagTableFrom(snapshot)
+	if !ok {
+		// No table in this snapshot is a real possibility (a project that
+		// removed the file), and it must not read as "every switch is off" —
+		// that would take the store down on a config mistake. Refusing to
+		// publish leaves the previous set in place and says so.
+		return fmt.Errorf("{{GAME_SERVICE}}: the featureflag table is not in the active config snapshot")
+	}
+	rows := table.Rows()
+	published := make([]featureflag.Flag, 0, len(rows))
+	for _, row := range rows {
+		published = append(published, featureflag.Flag{Name: row.Name, Enabled: row.Enabled, Note: row.Note})
+	}
+	featureflag.DefaultStore().Replace(published)
+	// One line per publish, with the OFF ones named: an operator reading the
+	// log after a restart should not have to query anything to know what is
+	// switched off.
+	var off []string
+	for _, flag := range published {
+		if !flag.Enabled {
+			off = append(off, flag.Name)
+		}
+	}
+	slog.Info("feature flags published", "count", len(published), "off", off,
+		"version", featureflag.DefaultStore().Version())
+	// A flag the code reads but the table does not define is worth saying
+	// once: it reads as off, and that is almost never what somebody meant.
+	for _, name := range flags.All() {
+		if _, defined := table.Get(name); !defined {
+			slog.Warn("feature flag is read by the game but not defined in the table; it reads as off",
+				"flag", name)
+		}
+	}
+	return nil
+}
+
+// installPatchPoints registers what this process allows to be hot-patched.
+//
+// Registration is explicit and happens once, here, rather than in an init()
+// next to each function: a patch point is an operational promise — "this can
+// be replaced at runtime, and reverting restores exactly this" — and the set
+// of them is something an operator should be able to read in one place. The
+// GM surface lists them (hotcode's own admin commands, registered in gm.go).
+//
+// The rule for adding one: the function must stand alone per call. A patch
+// swaps it between calls, so anything whose two versions would have to agree
+// about state already in flight does not belong here.
+func installPatchPoints() error {
+	points := map[string]any{
+		// The level-up reward: the table is wrong in production, the fix is
+		// three lines, and the deploy is an hour. Each call reads a level and
+		// returns a value, so swapping the function between calls is safe.
+		rewards.LevelUpPatchPoint: rewards.OriginalLevelUpReward,
+	}
+	for name, fn := range points {
+		if err := hotcode.Register(name, fn); err != nil {
+			return fmt.Errorf("{{GAME_SERVICE}}: patch point %s: %w", name, err)
+		}
+	}
+	slog.Info("hot-code patch points registered", "count", len(points))
+	return nil
+}

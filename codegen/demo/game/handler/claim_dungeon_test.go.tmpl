@@ -1,0 +1,144 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"{{MODULE}}/game/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	world "{{MODULE}}/game/entities/world"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// The clear reward is paid at most once per run, and the ledger that promises
+// it is bounded. Those two only hold together if forgetting a record and
+// refusing a claim are the same condition — otherwise there is a moment when
+// the run is forgotten but still payable, and the player collects twice
+// (RR-20260918-04: a run succeeded, four hours later another run's claim
+// pruned its record, and replaying the first paid a second 100 exp).
+//
+// Same harness idea as claim_mail_reward_test.go, with two entities: the
+// reward transaction touches the Player and the World's counter.
+
+type multiEntityGetter map[int64]entity.IThreadSafeEntity
+
+func (g multiEntityGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g multiEntityGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Client) {
+	t.Helper()
+	player.RegisterEntity()
+	world.RegisterEntity()
+	RegisterClaimDungeonNestHandlers()
+
+	playerID, err := entity.BuildEntityID(4242, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldID, err := entity.BuildEntityID(1, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtPlayer, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: playerID})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	builtWorld, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: worldID})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	subject, ok := builtPlayer.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", builtPlayer)
+	}
+	counters, ok := builtWorld.(*world.World)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", builtWorld)
+	}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(multiEntityGetter{playerID: builtPlayer, worldID: builtWorld}),
+		nest.NestOptionWithTransactionCommitter(&recordingCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return subject, counters, engine
+}
+
+func TestDungeonClearIsPaidOnce(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const now int64 = 1_800_000_000
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	first, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-1", dungeon.ClearExp, now, now)
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if !first.Claimed || first.ExpGranted != dungeon.ClearExp {
+		t.Fatalf("first claim = %+v, want the clear's exp granted", first)
+	}
+	replay, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-1", dungeon.ClearExp, now, now)
+	if err != nil {
+		t.Fatalf("replayed claim: %v", err)
+	}
+	if replay.Claimed || replay.ExpGranted != 0 {
+		t.Fatalf("replayed claim = %+v, want nothing granted", replay)
+	}
+}
+
+// The scenario the review reproduced: an old run's record is pruned by a
+// later claim, and the old run is then replayed. The ledger no longer
+// remembers it — the window has to be what refuses it.
+func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const first int64 = 1_800_000_000
+	// Far enough past the first run's resolution that its record may be
+	// dropped — which is exactly when it must also stop being payable.
+	later := first + dungeon.ClaimWindowSeconds + 1
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first); err != nil {
+		t.Fatalf("the first run's claim: %v", err)
+	}
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "new-run", dungeon.ClearExp, later, later); err != nil {
+		t.Fatalf("the second run's claim: %v", err)
+	}
+	if subject.ProfileComp().DungeonRunClaimed("old-run") {
+		t.Fatal("the old run's record was not pruned; this test is no longer about what it says it is")
+	}
+
+	// The replay. Two legitimate clears happened, so the player is owed
+	// exactly two rewards.
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, later); err == nil {
+		t.Fatal("replaying a run whose record was pruned was accepted; it pays a third time")
+	}
+	// The World's counter is the total actually paid out; the Player's own
+	// exp is consumed by level-ups and cannot be summed.
+	if got, want := counters.StatsComp().Snapshot().ExpGranted, 2*dungeon.ClearExp; got != want {
+		t.Fatalf("%d exp was paid out for two clears and one replay, want %d", got, want)
+	}
+}

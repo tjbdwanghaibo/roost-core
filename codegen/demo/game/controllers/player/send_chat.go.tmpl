@@ -1,0 +1,45 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/chatroom"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+)
+
+// HandleSendChat publishes a line through the chat service — a typed call
+// into another process, no Entity lock involved — then fans the stored
+// message out to the connected players. The sender is the authenticated
+// player, never a request field; the frame sequence is the idempotency key.
+func (controller *Controller) HandleSendChat(context *player_agent.Context, request *pb.SendChatRequest) (*pb.SendChatResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("send_chat endpoint: context and request are required")
+	}
+	channel, ok := channelOf(request.Kind, request.Target)
+	if !ok || channel.Kind == svcchat.ChannelSystem {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: kind %q is not one a player may publish to", svcchat.ErrChannelInvalid, request.Kind))
+		return &pb.SendChatResponse{Code: code, Reason: reason}, nil
+	}
+	body := []byte(request.Text)
+	if err := chatroom.ValidateText(body); err != nil {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: %v", svcchat.ErrMessageInvalid, err))
+		return &pb.SendChatResponse{Code: code, Reason: reason}, nil
+	}
+	requestID := fmt.Sprintf("chat:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	message, err := controller.Messaging().Publish(context.Context(), chatroom.PlayerSender(context.PlayerID), svcchat.PublishRequest{
+		Channel: channel, Type: chatroom.TypeText, Body: body, RequestID: requestID,
+	})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("send_chat failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.SendChatResponse{Code: code, Reason: reason}, nil
+	}
+	controller.deliver(context.Context(), message)
+	return &pb.SendChatResponse{Seq: int64(message.Seq)}, nil
+}

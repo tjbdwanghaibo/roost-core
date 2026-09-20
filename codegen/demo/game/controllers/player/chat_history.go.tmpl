@@ -1,0 +1,45 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/chatroom"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+)
+
+// HandleChatHistory pages a channel forwards from a cursor. It is the
+// reconnect path: a client that missed pushes asks for everything after the
+// last Seq it saw. The chat service checks the viewer's read permission.
+func (controller *Controller) HandleChatHistory(context *player_agent.Context, request *pb.ChatHistoryRequest) (*pb.ChatHistoryResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("chat_history endpoint: context and request are required")
+	}
+	channel, ok := channelOf(request.Kind, request.Target)
+	if !ok {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: kind %q", svcchat.ErrChannelInvalid, request.Kind))
+		return &pb.ChatHistoryResponse{Code: code, Reason: reason}, nil
+	}
+	if request.AfterSeq < 0 {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: after_seq must not be negative", svcchat.ErrRequestInvalid))
+		return &pb.ChatHistoryResponse{Code: code, Reason: reason}, nil
+	}
+	page, err := controller.Messaging().History(context.Context(), chatroom.PlayerSender(context.PlayerID), svcchat.HistoryQuery{
+		Channel: channel, AfterSeq: uint64(request.AfterSeq), Limit: int(request.Limit),
+	})
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("chat_history failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ChatHistoryResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.ChatHistoryResponse{NextCursor: int64(page.NextCursor), HasMore: page.HasMore}
+	for _, message := range page.Messages {
+		response.Messages = append(response.Messages, toPush(message))
+	}
+	return response, nil
+}

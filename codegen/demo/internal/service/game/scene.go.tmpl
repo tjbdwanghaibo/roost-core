@@ -1,0 +1,523 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	gamescene "{{MODULE}}/game/scene"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	coreentitysync "github.com/tjbdwanghaibo/roost-core/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/room"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+)
+
+// The scene is the demo's server-authoritative replication: every online
+// player is a SUBJECT whose state the server owns, and every online player is
+// a SUBSCRIBER who receives the others' changes. It is the other half of the
+// entity's `sync=true` — the entity produces versioned deltas, the scene
+// decides who gets them and puts them on the wire.
+//
+// Four pieces, each from the framework:
+//
+//	Player.Sync()            the subject: version, dirty mask, packer
+//	room.RoomBroadcaster     the scheduler: who is subscribed, when to flush
+//	room.RoomTransportSink   the encoder: envelopes → wire frames per session
+//	AtomicBatchTransport     the lane: this demo's TCP push (sceneLane below)
+//
+// Who is subscribed to whom is NOT decided here. The Scene Entity's interest
+// system decides it — distance, plus the social relationships the game has —
+// and hands back subscription changes; this file only says them to the room.
+// That split is why adding a relationship (a friends list, an alliance) never
+// touches this file.
+const (
+	// sceneRoomID is the single room this process replicates. Sharding the
+	// world into several rooms is a matter of choosing the id here.
+	sceneRoomID int64 = 1
+	// sceneReplicationInterval is how often the room turns dirty subjects
+	// into frames. It is a batching window, not a latency budget: a change
+	// is visible to everyone within one interval.
+	sceneReplicationInterval = 200 * time.Millisecond
+)
+
+// SceneCapability is the name the scene is published under, so an endpoint
+// can reach it without importing this package.
+const SceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
+
+// Scene holds the room and who is in it.
+type Scene struct {
+	sink    *room.RoomTransportSink
+	manager *room.RoomManager
+	room    *room.RoomBroadcaster
+
+	sessions scenePusher
+	// unsubscribe releases this bridge's session-close subscription.
+	unsubscribe func()
+
+	// area is the Scene Entity whose interest system decides the
+	// subscriptions. Set once, after the entity exists.
+	area atomic.Pointer[sceneentity.Scene]
+
+	mu      sync.Mutex
+	members map[int64]struct{} // subject (entity) ids currently replicated
+}
+
+// sceneLane adapts the framework's atomic batch transport to the demo's
+// player push. The room hands over complete frames per session; the demo's
+// session id IS the player id (the access layer mints it that way), so a
+// frame is one push.
+//
+// AdmitBatch is all-or-nothing by contract: the room commits its sequence
+// numbers and dirty state only after this returns nil. Pushing half a batch
+// and returning nil would tell the room the other half was delivered.
+type sceneLane struct {
+	transport scenePusher
+	scene     *Scene
+}
+
+// scenePusher is the slice of the player TCP Runtime the scene needs — the
+// same shape the battle rooms use. It is an interface so a test can watch the
+// frames without a socket.
+type scenePusher interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+// sessionSource is the access layer's session lifecycle source. It is an
+// interface so a test can close a session without a socket, and it is
+// separate from scenePusher because a deployment could plausibly have one
+// without the other.
+type sessionSource interface {
+	OnSessionClosed(func(accessplayertcp.SessionClosed)) func()
+}
+
+func (lane sceneLane) AdmitBatch(ctx context.Context, frames []nettransport.OutboundFrame) error {
+	for _, frame := range frames {
+		playerID := int64(frame.Session)
+		// Snapshots and leaves arrive reliable; deltas arrive as datagram
+		// fragments of one frame. The demo has a single ordered lane, so it
+		// pushes the fragments in order and the client reassembles them with
+		// statesync's Reassembler — the same code a UDP client would run.
+		messages := make([][]byte, 0, len(frame.Datagrams)+1)
+		if len(frame.Reliable) > 0 {
+			messages = append(messages, frame.Reliable)
+		}
+		messages = append(messages, frame.Datagrams...)
+		for _, payload := range messages {
+			push := &pb.EntitySyncPush{Datagram: len(frame.Reliable) == 0, Payload: payload}
+			if err := lane.transport.PushPlayer(ctx, playerID, msgid.MsgEntitySync, push); err != nil {
+				// The player is gone. Drop them from the scene so the room
+				// stops preparing frames nobody reads — the same lazy
+				// cleanup the chat presence uses, because this demo has no
+				// disconnect hook. Returning the error is what makes the
+				// batch atomic: the room keeps the subject dirty and retries.
+				lane.scene.dropAsync(playerID)
+				return fmt.Errorf("scene: push to player %d: %w", playerID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// NewScene assembles the room and its lane from the process's capabilities.
+func NewScene(registry *app.Registry) (*Scene, error) {
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return nil, errors.New("scene: player tcp runtime is unavailable")
+	}
+	var watermark func() uint64
+	if source, ok := app.Lookup[interface{ DurableLSN() uint64 }](registry, mods.ModDataEngine); ok && source != nil {
+		watermark = source.DurableLSN
+	} else {
+		slog.Warn("scene: no data engine watermark; replication will not wait for durability")
+	}
+	scene, err := newScene(transport, watermark)
+	if err != nil {
+		return nil, err
+	}
+	// The connection telling us it is gone beats waiting to fail a push to
+	// it: a player who logs off while nothing is happening used to stay in
+	// the scene until somebody else's frame tried to reach them
+	// (RR-20260918-06).
+	scene.watchSessions(transport)
+	return scene, nil
+}
+
+// watchSessions subscribes to connection closes. The handler does the least
+// possible on that goroutine — it is shared with every other subscriber — so
+// the actual removal runs on its own.
+func (bridge *Scene) watchSessions(source sessionSource) {
+	if bridge == nil || source == nil {
+		return
+	}
+	bridge.unsubscribe = source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+		if bridge.sessions.ActiveSessions(event.PlayerID) > 0 {
+			// Another connection of the same player is still up; the player
+			// is still here.
+			return
+		}
+		subjectID, err := coreentity.BuildEntityID(event.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			bridge.Leave(ctx, subjectID)
+		}()
+	})
+}
+
+func newScene(transport scenePusher, watermark func() uint64) (*Scene, error) {
+	scene := &Scene{members: make(map[int64]struct{}), sessions: transport}
+	lane := sceneLane{transport: transport, scene: scene}
+
+	sink, err := room.NewRoomTransportSink(room.RoomTransportSinkConfig{
+		Transport: lane,
+		// The subscriber ref carries the observer's ENTITY id — the same id
+		// space the subjects and the interest system use. This is the one
+		// place that translates it into a transport session, which in this
+		// demo is the player id the entity id carries. A deployment with real
+		// session ids resolves them here instead; that is why this is a
+		// collaborator and not a cast.
+		Sessions: room.RoomSessionResolverFunc(func(_ context.Context, subscriber coreentitysync.SubscriberRef) (corestate.SessionID, error) {
+			return corestate.SessionID(coreentity.GetUniqueIDFromEntityID(subscriber.ID)), nil
+		}),
+		// FailBatch, not Evict: a push that fails here is a disconnected
+		// player, and this demo would rather retry the batch and let the
+		// lane's own cleanup remove them than have the sink silently drop
+		// subscriptions.
+		SlowConsumerPolicy: room.SlowConsumerFailBatch,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scene: transport sink: %w", err)
+	}
+
+	// The durability gate. A pipelined deployment acknowledges a transaction
+	// before its WAL record is durable, so content can be newer than what
+	// survives a crash; externalizing it would let a client see state the
+	// server can still lose. The Data Engine names the watermark and the room
+	// holds content back until it reaches the commit that produced it
+	// (RR-20260918-02 — this entry point exists because it was missing).
+	manager, err := room.NewRoomManager(room.RoomManagerConfig{
+		Downstream:          sink,
+		ReplicationInterval: sceneReplicationInterval,
+		SweepInterval:       time.Minute,
+		DurableWatermark:    watermark,
+	})
+	if err != nil {
+		_ = sink.Close(context.Background())
+		return nil, fmt.Errorf("scene: room manager: %w", err)
+	}
+	scene.sink, scene.manager = sink, manager
+	return scene, nil
+}
+
+// Start brings the room up. It is separate from NewScene so a process that
+// failed later in assembly never leaves a replication loop running.
+func (bridge *Scene) Start(ctx context.Context) error {
+	if bridge == nil {
+		return errors.New("scene: nil")
+	}
+	if err := bridge.manager.Start(ctx); err != nil {
+		return fmt.Errorf("scene: start room manager: %w", err)
+	}
+	created, err := bridge.manager.Create(sceneRoomID)
+	if err != nil {
+		return fmt.Errorf("scene: create room: %w", err)
+	}
+	bridge.room = created
+	return nil
+}
+
+func (bridge *Scene) Close(ctx context.Context) error {
+	if bridge == nil {
+		return nil
+	}
+	if bridge.unsubscribe != nil {
+		bridge.unsubscribe()
+		bridge.unsubscribe = nil
+	}
+	managerErr := bridge.manager.Close(ctx)
+	sinkErr := bridge.sink.Close(ctx)
+	return errors.Join(managerErr, sinkErr)
+}
+
+// Join registers the player as a replicated subject and puts it into the
+// scene's interest system. It does NOT subscribe anybody: the interest system
+// answers that on the next tick, from the sources it has.
+//
+// Order matters. The subject is registered with the room before it can be
+// subscribed to, because Subscribe delivers a snapshot from the subject's
+// current state — subscribing to a subject the room does not know is an
+// error, not an empty snapshot that fills in later.
+func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatial.Point) error {
+	if bridge == nil || bridge.room == nil {
+		return errors.New("scene: not started")
+	}
+	area := bridge.area.Load()
+	if subject == nil || area == nil {
+		return errors.New("scene: join needs a player and a started scene")
+	}
+	// Sweep first. The generated access layer has no "this connection is
+	// gone" callback, so a player who disconnected is still a member here
+	// until something notices — and what notices is a failed push to them,
+	// which happens while the room is preparing a frame FOR someone else.
+	// Checking who still has a session, at the one moment a player is
+	// arriving, keeps that from being the newcomer's problem.
+	bridge.sweep(ctx)
+
+	subjectID := subject.ID()
+	if err := bridge.room.RegisterSubject(subject.Sync()); err != nil && !errors.Is(err, room.ErrRoomSubjectAlreadyExists) {
+		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
+	}
+	bridge.mu.Lock()
+	bridge.members[subjectID] = struct{}{}
+	bridge.mu.Unlock()
+
+	if err := area.Interest().Enter(subjectID, at); err != nil {
+		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
+	}
+	// Apply immediately rather than waiting for the tick: the newcomer's own
+	// snapshot is what its client draws first, and a fifth of a second of
+	// empty screen is a fifth of a second nobody has to spend.
+	bridge.applyChanges(ctx, area.Interest().Tick())
+	return nil
+}
+
+// Moved tells the interest system where a player is now. It is called after
+// the move transaction committed — the DAO is the authority and the index
+// follows it, never the other way round.
+func (bridge *Scene) Moved(ctx context.Context, subjectID int64, to spatial.Point) {
+	if bridge == nil {
+		return
+	}
+	area := bridge.area.Load()
+	if area == nil || area.Interest() == nil {
+		return
+	}
+	if err := area.Interest().Move(subjectID, to); err != nil {
+		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
+		return
+	}
+	bridge.applyChanges(ctx, area.Interest().Tick())
+}
+
+// applyChanges says the interest system's answer to the room.
+//
+// A failed subscribe goes BACK to the interest system rather than into a log
+// line alone. The system counted the pair as subscribed when it emitted the
+// change, and it re-emits only when the band moves — so a refusal it is not
+// told about is a subscription nobody has, retried by nobody, for as long as
+// the pair is held (RR-20260920-06). Told, it queues the pair and the next
+// tick says it again. An unsubscribe that fails needs no such treatment: the
+// pair is gone from the system either way, and the room drops subscriptions
+// to a retired subject on its own.
+func (bridge *Scene) applyChanges(ctx context.Context, changes []gamescene.SubscriptionChange) {
+	var interest gamescene.Interest
+	if area := bridge.area.Load(); area != nil {
+		interest = area.Interest()
+	}
+	for _, change := range changes {
+		// The subscriber ref carries the OBSERVER'S ENTITY ID, the same id
+		// space the subject uses. An entity id is unique across kinds; a
+		// unique id is only unique within one, so an interest set keyed by it
+		// would collide a Player 42 with a Monster 42. Translating to a
+		// transport session happens once, in the session resolver.
+		observer := coreentitysync.SubscriberRef{Kind: coreentitysync.SubscriberKindPlayer, ID: change.Observer}
+		if !change.Subscribe {
+			if err := bridge.room.Unsubscribe(ctx, observer, change.Subject); err != nil {
+				slog.Debug("scene: unsubscribe", "observer", change.Observer, "subject", change.Subject, "err", err)
+			}
+			continue
+		}
+		if _, err := bridge.room.Subscribe(ctx, observer, change.Subject, change.Profile); err != nil {
+			// The first refusal is the one worth reading. A refusal that
+			// keeps coming back is a room that is full or a durability gate
+			// that has not opened, and one line per pair per tick would bury
+			// the line that says so.
+			if change.Retry {
+				slog.Debug("scene: subscribe still refused", "observer", change.Observer, "subject", change.Subject, "err", err)
+			} else {
+				slog.Warn("scene: subscribe", "observer", change.Observer, "subject", change.Subject, "err", err)
+			}
+			if interest != nil {
+				interest.SubscribeFailed(change.Observer, change.Subject)
+			}
+		}
+	}
+}
+
+// Leave takes a player out of the interest system and off the room. The
+// interest system produces the Leave events for everyone who could see them,
+// so the unsubscribes come from the same place the subscribes did — this
+// method does not have to remember who was watching.
+//
+// RetireSubject is what tells the others the object is gone (an ObjectRemove
+// on the wire) rather than simply going quiet.
+func (bridge *Scene) Leave(ctx context.Context, subjectID int64) {
+	if bridge == nil || bridge.room == nil {
+		return
+	}
+	bridge.mu.Lock()
+	_, present := bridge.members[subjectID]
+	delete(bridge.members, subjectID)
+	bridge.mu.Unlock()
+	if !present {
+		return
+	}
+	if area := bridge.area.Load(); area != nil && area.Interest() != nil {
+		if err := area.Interest().Leave(subjectID); err != nil {
+			slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
+		}
+		bridge.applyChanges(ctx, area.Interest().Tick())
+	}
+	if err := bridge.room.RetireSubject(ctx, subjectID); err != nil {
+		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
+	}
+	if err := bridge.room.UnregisterSubject(subjectID); err != nil {
+		slog.Debug("scene: subject not unregistered", "subject_id", subjectID, "err", err)
+	}
+}
+
+// ShowSubject registers something that is seen but does not see: a monster, a
+// dropped item. It is the Join path without the observer half — and without
+// the membership bookkeeping, because these are not sessions that can go away
+// on their own.
+func (bridge *Scene) ShowSubject(ctx context.Context, state *coreentity.SubjectSyncState, subjectID int64, at spatial.Point) error {
+	if bridge == nil || bridge.room == nil {
+		return errors.New("scene: not started")
+	}
+	area := bridge.area.Load()
+	if area == nil || area.Interest() == nil {
+		return errors.New("scene: no area")
+	}
+	if err := bridge.room.RegisterSubject(state); err != nil && !errors.Is(err, room.ErrRoomSubjectAlreadyExists) {
+		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
+	}
+	if err := area.Interest().Show(subjectID, at); err != nil {
+		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
+	}
+	bridge.applyChanges(ctx, area.Interest().Tick())
+	return nil
+}
+
+// HideSubject is the reverse: the thing is gone, everyone watching is told,
+// and the room stops holding it.
+func (bridge *Scene) HideSubject(ctx context.Context, subjectID int64) {
+	if bridge == nil || bridge.room == nil {
+		return
+	}
+	if area := bridge.area.Load(); area != nil && area.Interest() != nil {
+		if err := area.Interest().Hide(subjectID); err != nil {
+			slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
+		}
+		bridge.applyChanges(ctx, area.Interest().Tick())
+	}
+	if err := bridge.room.RetireSubject(ctx, subjectID); err != nil {
+		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
+	}
+	if err := bridge.room.UnregisterSubject(subjectID); err != nil {
+		slog.Debug("scene: subject not unregistered", "subject_id", subjectID, "err", err)
+	}
+}
+
+// SetTeam makes a formed match a relationship: each member is interested in
+// the others wherever they are. Player ids in, entity ids out — the interest
+// system keys on the id that is unique across kinds, and this is one of the
+// two places the demo crosses that boundary (the other is the session
+// resolver, in the other direction).
+func (bridge *Scene) SetTeam(members []int64) {
+	if bridge == nil {
+		return
+	}
+	area := bridge.area.Load()
+	if area == nil || area.Interest() == nil {
+		return
+	}
+	subjects := make([]int64, 0, len(members))
+	for _, member := range members {
+		subjectID, err := coreentity.BuildEntityID(member, player.EntityKindPlayer)
+		if err != nil {
+			continue
+		}
+		subjects = append(subjects, subjectID)
+	}
+	for index, observer := range subjects {
+		peers := make([]int64, 0, len(subjects)-1)
+		for other, subject := range subjects {
+			if other != index {
+				peers = append(peers, subject)
+			}
+		}
+		area.Interest().Team().Set(observer, peers)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	bridge.applyChanges(ctx, area.Interest().Tick())
+}
+
+// SetArea names the Scene Entity this process replicates. It is separate from
+// Start because the entity is created by the service's Init, after the
+// replication assembly exists.
+func (bridge *Scene) SetArea(area *sceneentity.Scene) { bridge.area.Store(area) }
+
+// sweep removes members whose connection is gone. It is the demo's stand-in
+// for a disconnect hook: honest, cheap at this scale, and wrong at a real
+// one — a production access layer publishes session close and this becomes an
+// event handler.
+func (bridge *Scene) sweep(ctx context.Context) {
+	bridge.mu.Lock()
+	candidates := make([]int64, 0, len(bridge.members))
+	for subjectID := range bridge.members {
+		candidates = append(candidates, subjectID)
+	}
+	bridge.mu.Unlock()
+	for _, subjectID := range candidates {
+		if bridge.sessions.ActiveSessions(coreentity.GetUniqueIDFromEntityID(subjectID)) == 0 {
+			bridge.Leave(ctx, subjectID)
+		}
+	}
+}
+
+// dropAsync removes a player whose push failed. The lane knows the transport
+// session, which in this demo is the player id; the subject is that player's
+// Player entity.
+//
+// It runs in its own goroutine because it is called from inside the room's
+// own flush, and Leave takes the room's locks.
+func (bridge *Scene) dropAsync(playerID int64) {
+	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		bridge.Leave(ctx, subjectID)
+	}()
+}
+
+// Members reports who the scene currently replicates; the GM command and the
+// tests read it.
+func (bridge *Scene) Members() int {
+	if bridge == nil {
+		return 0
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	return len(bridge.members)
+}

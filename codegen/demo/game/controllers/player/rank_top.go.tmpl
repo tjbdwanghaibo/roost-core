@@ -1,0 +1,51 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/ranking"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleRankTop reads the top of the clears board plus this player's own rank.
+//
+// Two reads, not one: a page is the board's head and says nothing about a
+// player who is not on it, and "where am I" is the question a client actually
+// asks. They are separate calls on purpose — the service returns Rank and
+// Score from the same read, so each answer is self-consistent even though the
+// two can be a moment apart.
+func (controller *Controller) HandleRankTop(context *player_agent.Context, request *pb.RankTopRequest) (*pb.RankTopResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("rank_top endpoint: context and request are required")
+	}
+	limit := int(request.Limit)
+	if limit <= 0 || limit > ranking.PageSize {
+		limit = ranking.PageSize
+	}
+	board := ranking.ClearsBoard()
+	page, err := controller.Ranking().Page(context.Context(), board, 0, limit)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("rank_top failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.RankTopResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.RankTopResponse{Total: page.Total}
+	for _, entry := range page.Entries {
+		response.Entries = append(response.Entries, pb.RankTopEntry{
+			Rank: entry.Rank, PlayerID: entry.Score.OwnerID, Value: entry.Score.Value,
+		})
+	}
+	// Not being on the board is not an error: a player who has cleared
+	// nothing has no entry, and MyRank stays zero.
+	if entry, found, err := controller.Ranking().Rank(context.Context(), board, context.PlayerID); err != nil {
+		slog.Warn("rank_top: own rank unavailable", "player_id", context.PlayerID, "err", err)
+	} else if found {
+		response.MyRank = entry.Rank
+	}
+	return response, nil
+}

@@ -1,0 +1,47 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/purchase"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerGrantPurchase puts a paid order's goods in the bag, at most once per
+// order.
+//
+// It is the third instance of one shape — dungeon clear, mail attachment,
+// paid order — with one difference that is the whole of RR-20260919-06: this
+// one never expires.
+//
+// The dungeon clear and the mail attachment each have an authoritative moment
+// after which no replay can reach the grant path (the run's retention, the
+// envelope's expiry), so their ledgers may be pruned on exactly that moment. A
+// paid order has no such moment. The platform service marked it delivered when
+// the grant became durable, so refusing the grant later does not send the
+// player back to the payment — it means a paid order that is settled on one
+// side and refused on the other, permanently. A player who does not log in for
+// a month is not a replay.
+//
+// So the grant is always claimable and the ledger is never pruned. What would
+// bound the ledger is a second authoritative fact (an idempotent "fulfilled"
+// reported back to the platform service), not a timer; game/purchase says so
+// at length.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGrantPurchase(target player.IBagEntity, orderID string, itemID int64, count int32, paidAtUnix int64, _ int64) (purchase.GrantResult, error) {
+	if orderID == "" || paidAtUnix <= 0 {
+		return purchase.GrantResult{}, errcode.Wrap(apperrors.ErrPurchaseGrant, nil, "order_id", orderID, "paid_at_unix", paidAtUnix)
+	}
+	bag := target.BagComp()
+	if !bag.ClaimPurchase(orderID, paidAtUnix) {
+		// Already granted. Not an error: the drain deletes the grant on this
+		// answer exactly as it does on a fresh one.
+		return purchase.GrantResult{BagCount: bag.ItemCount(itemID)}, nil
+	}
+	held, err := bag.AddItem(itemID, count)
+	if err != nil {
+		return purchase.GrantResult{}, err
+	}
+	return purchase.GrantResult{Granted: true, BagCount: held}, nil
+}

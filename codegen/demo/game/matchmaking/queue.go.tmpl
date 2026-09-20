@@ -1,0 +1,69 @@
+// Package matchmaking is what this game says to the match service: which
+// queues exist, how a player is named in them, and which grouping policy each
+// queue uses. The match service holds the queues and makes Commit atomic;
+// who forms a match with whom is decided here, in the game process.
+package matchmaking
+
+import (
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+)
+
+// DuelQueue pairs players in arrival order: the simplest policy, and the one
+// with a bounded worst-case wait.
+var DuelQueue = svcmatch.Queue{Mode: "duel", GroupSize: 2, Partition: "default"}
+
+// RankedQueue pairs players by level. A ticket's Score is the player's level
+// when it joined; ScoreWindowGrouping matches the oldest waiting player with
+// the closest levels inside a window that widens with their wait, so a lone
+// outlier eventually plays instead of starving.
+var RankedQueue = svcmatch.Queue{Mode: "ranked", GroupSize: 2, Partition: "default"}
+
+// Ranked window: levels within 5 match immediately; the window widens by 5
+// per second the oldest player has waited, up to 50. Levels, not a rating —
+// the demo's Player has no rating; a real game puts its MMR in Score.
+const (
+	rankedInitialWindow int64 = 5
+	rankedWidenPerSec   int64 = 5
+	rankedMaxWindow     int64 = 50
+)
+
+// Pool is a queue together with the grouping policy the matchmaker applies
+// to it.
+type Pool struct {
+	Queue    svcmatch.Queue
+	Grouping svcmatch.Grouping
+}
+
+// Pools lists every queue the matchmaker sweeps. now feeds the ranked window
+// (how long the oldest candidate has waited).
+func Pools(now func() int64) []Pool {
+	return []Pool{
+		{Queue: DuelQueue, Grouping: svcmatch.FirstComeGrouping{}},
+		{Queue: RankedQueue, Grouping: svcmatch.ScoreWindowGrouping{
+			InitialWindow: rankedInitialWindow, WidenPerSecond: rankedWidenPerSec, MaxWindow: rankedMaxWindow, NowUnix: now,
+		}},
+	}
+}
+
+// QueueFor maps a client's mode string onto a queue; an empty mode is the
+// duel queue, anything unknown is refused at the endpoint.
+func QueueFor(mode string) (svcmatch.Queue, bool) {
+	switch mode {
+	case "", DuelQueue.Mode:
+		return DuelQueue, true
+	case RankedQueue.Mode:
+		return RankedQueue, true
+	default:
+		return svcmatch.Queue{}, false
+	}
+}
+
+// SubjectKindPlayer is how a player is named to the match service; the kind
+// is opaque to it.
+const SubjectKindPlayer svcmatch.SubjectKind = "player"
+
+// PlayerSubject names a player in a queue. Score is what RankedQueue ranks
+// on; DuelQueue ignores it.
+func PlayerSubject(playerID int64, score int64) svcmatch.Subject {
+	return svcmatch.Subject{Kind: SubjectKindPlayer, ID: playerID, Score: score}
+}

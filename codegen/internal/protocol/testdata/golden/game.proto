@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package test.protocol;
+
+option go_package = "example.com/game/protocol/pb;pb";
+
+// roost:source=go_def
+message PingRequest {
+  int64 client_time = 1;
+}
+
+// roost:source=go_def
+message PingResponse {
+  int64 server_time = 1;
+}
+

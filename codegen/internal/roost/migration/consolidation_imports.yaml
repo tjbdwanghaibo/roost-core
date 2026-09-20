@@ -1,0 +1,151 @@
+# Package relocation map for the Roost consolidation (five repos -> three).
+#
+# This file is the single source of truth for:
+#   * the migration batches (what moves where),
+#   * `roost upgrade --consolidate` (import rewriting in business projects),
+#   * the ledger's "new location" column.
+# It maps PACKAGE PATHS only. There is deliberately no per-symbol rename table:
+# the few symbols whose home or name changed in the merge (core/nats.Permanent
+# stays in the contract package; kit/syncstream.HealthOptions / HealthStatus are
+# core/syncstream.PublisherHealthOptions / PublisherHealthStatus) are left for
+# the compiler to point out after the rewrite — see roost-core TROUBLESHOOTING T-45.
+# Draft written at P0 from docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md §2;
+# `kit_keeps` = exported symbols of the Mod glue file that stays in kit. The glue
+# file is identified by CONTENT (a type with Provide/Init methods), not by name:
+# it is `*_mod.go` in most packages but `mod.go` in dataengine/saga and
+# `configdata.go` / `statslog.go` there. Refreshed again at P3 from what actually stays.
+schema: 1
+boundary:
+  # First versions that ship the consolidated layout. Crossing them requires
+  # the rewrite below; older tags keep the old layout forever.
+  core: v1.14.0
+  kit: v1.13.0
+  codegen: v1.15.0
+removed_modules:
+  - github.com/tjbdwanghaibo/roost-skill
+  - github.com/tjbdwanghaibo/roost-service
+# Split packages: the implementation moves to roost-core/<pkg>; the Mod glue
+# (kit_keeps) stays in roost-kit/<pkg>. A file that uses both needs both imports.
+split:
+  - kit: github.com/tjbdwanghaibo/roost-kit/actionflow
+    core: github.com/tjbdwanghaibo/roost-core/actionflow
+    kit_keeps: []
+  - kit: github.com/tjbdwanghaibo/roost-kit/ai
+    core: github.com/tjbdwanghaibo/roost-core/ai
+    kit_keeps: []
+  - kit: github.com/tjbdwanghaibo/roost-kit/dataengine
+    # The contract package core/dataengine is imported by core/nest and core/nestwal,
+    # which the implementation itself imports: merging would cycle. The implementation
+    # therefore lives in the subpackage `engine` (package name engine). P2-④.
+    core: github.com/tjbdwanghaibo/roost-core/dataengine/engine
+    package: engine
+    kit_keeps: ['Mod', 'ModOption', 'NewMod', 'WithEntityAccess', 'WithRemoteProjection']
+  - kit: github.com/tjbdwanghaibo/roost-kit/etcd
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/etcd stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/etcd/driver
+    package: driver
+    kit_keeps: ['EtcdMod', 'NewEtcdMod']
+  - kit: github.com/tjbdwanghaibo/roost-kit/gateway
+    core: github.com/tjbdwanghaibo/roost-core/gateway
+    kit_keeps: []
+  - kit: github.com/tjbdwanghaibo/roost-kit/lockstep
+    core: github.com/tjbdwanghaibo/roost-core/lockstep
+    kit_keeps: []
+  - kit: github.com/tjbdwanghaibo/roost-kit/mongo
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/mongo stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/mongo/driver
+    package: driver
+    kit_keeps: ['MongoMod', 'NewMongoMod']
+  - kit: github.com/tjbdwanghaibo/roost-kit/nats
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/nats stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/nats/driver
+    package: driver
+    kit_keeps: ['NatsMod', 'NewNatsMod']
+  - kit: github.com/tjbdwanghaibo/roost-kit/redis
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/redis stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/redis/driver
+    package: driver
+    kit_keeps: ['NewRedisMod', 'RedisMod']
+  - kit: github.com/tjbdwanghaibo/roost-kit/robot
+    core: github.com/tjbdwanghaibo/roost-core/robot
+    kit_keeps: []
+  - kit: github.com/tjbdwanghaibo/roost-kit/saga
+    core: github.com/tjbdwanghaibo/roost-core/saga
+    kit_keeps: ['CombineDefinitions', 'Mod', 'NewMod']
+  - kit: github.com/tjbdwanghaibo/roost-kit/syncstream
+    core: github.com/tjbdwanghaibo/roost-core/syncstream
+    kit_keeps: []
+# Whole packages that move from roost-kit to roost-core (Mod glue, if any, stays).
+move:
+  - from: github.com/tjbdwanghaibo/roost-kit/nestwal
+    to: github.com/tjbdwanghaibo/roost-core/nestwal
+  - from: github.com/tjbdwanghaibo/roost-kit/remoteentity
+    to: github.com/tjbdwanghaibo/roost-core/remoteentity
+    kit_keeps: ['ModOption', 'NewRemoteEntityMod', 'RemoteEntityMod', 'WithBackend', 'WithMongoStorage']
+  - from: github.com/tjbdwanghaibo/roost-kit/room
+    to: github.com/tjbdwanghaibo/roost-core/room
+    kit_keeps: ['NewRoomMod', 'RoomMod']
+  - from: github.com/tjbdwanghaibo/roost-kit/nettransport
+    to: github.com/tjbdwanghaibo/roost-core/nettransport
+  - from: github.com/tjbdwanghaibo/roost-kit/spatial
+    to: github.com/tjbdwanghaibo/roost-core/spatial
+  - from: github.com/tjbdwanghaibo/roost-kit/versionstore
+    to: github.com/tjbdwanghaibo/roost-core/versionstore
+  - from: github.com/tjbdwanghaibo/roost-kit/servicerpc
+    to: github.com/tjbdwanghaibo/roost-core/servicerpc
+  - from: github.com/tjbdwanghaibo/roost-kit/mongo/mongotest
+    to: github.com/tjbdwanghaibo/roost-core/mongo/mongotest
+# Packages that stay in roost-kit unchanged.
+keep:
+  # nest and lock in kit are Mod glue only (nest_mod.go / lock_mod.go + tests); nothing to sink.
+  - github.com/tjbdwanghaibo/roost-kit/nest
+  - github.com/tjbdwanghaibo/roost-kit/lock
+  # configdata and statslog are one file each: the Mod plus project-config translation
+  # (configdata) / stats providers wired to the Mod (statslog). Assembly-layer by definition.
+  - github.com/tjbdwanghaibo/roost-kit/configdata
+  - github.com/tjbdwanghaibo/roost-kit/statslog
+  - github.com/tjbdwanghaibo/roost-kit/manager
+  - github.com/tjbdwanghaibo/roost-kit/mods
+  - github.com/tjbdwanghaibo/roost-kit/ops
+# roost-skill -> roost-core/skill/...
+skill:
+  - from: github.com/tjbdwanghaibo/roost-skill/skill
+    to: github.com/tjbdwanghaibo/roost-core/skill
+  - from: github.com/tjbdwanghaibo/roost-skill/combat
+    to: github.com/tjbdwanghaibo/roost-core/skill/combat
+  - from: github.com/tjbdwanghaibo/roost-skill/combatcomponent
+    to: github.com/tjbdwanghaibo/roost-core/skill/combatcomponent
+  - from: github.com/tjbdwanghaibo/roost-skill/skillcompose
+    to: github.com/tjbdwanghaibo/roost-core/skill/skillcompose
+  - from: github.com/tjbdwanghaibo/roost-skill/skillsync
+    to: github.com/tjbdwanghaibo/roost-core/skill/skillsync
+# roost-service -> roost-kit/service/...; servicemods constants fold into roost-kit/mods.
+service:
+  - from: github.com/tjbdwanghaibo/roost-service/servicemods
+    to: github.com/tjbdwanghaibo/roost-kit/mods
+  - from: github.com/tjbdwanghaibo/roost-service/servicemetrics
+    to: github.com/tjbdwanghaibo/roost-kit/service/servicemetrics
+  - from: github.com/tjbdwanghaibo/roost-service/account
+    to: github.com/tjbdwanghaibo/roost-kit/service/account
+  - from: github.com/tjbdwanghaibo/roost-service/chat
+    to: github.com/tjbdwanghaibo/roost-kit/service/chat
+  - from: github.com/tjbdwanghaibo/roost-service/directory
+    to: github.com/tjbdwanghaibo/roost-kit/service/directory
+  - from: github.com/tjbdwanghaibo/roost-service/global
+    to: github.com/tjbdwanghaibo/roost-kit/service/global
+  - from: github.com/tjbdwanghaibo/roost-service/global/activity
+    to: github.com/tjbdwanghaibo/roost-kit/service/global/activity
+  - from: github.com/tjbdwanghaibo/roost-service/mail
+    to: github.com/tjbdwanghaibo/roost-kit/service/mail
+  - from: github.com/tjbdwanghaibo/roost-service/match
+    to: github.com/tjbdwanghaibo/roost-kit/service/match
+  - from: github.com/tjbdwanghaibo/roost-service/platform
+    to: github.com/tjbdwanghaibo/roost-kit/service/platform
+  - from: github.com/tjbdwanghaibo/roost-service/rank
+    to: github.com/tjbdwanghaibo/roost-kit/service/rank
+  - from: github.com/tjbdwanghaibo/roost-service/session
+    to: github.com/tjbdwanghaibo/roost-kit/service/session

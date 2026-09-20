@@ -1,0 +1,68 @@
+package player
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// PlayerSyncCodec identifies the payload format on the wire. A client that
+// does not know this number must not guess at the bytes; changing the format
+// means changing this number, and the subject's SchemaVersion decides whether
+// a client gets a resync.
+const PlayerSyncCodec uint16 = 1
+
+// NewPlayerSyncPacker is the factory named by the entity's subjectPacker
+// marker. Its signature is Core's: the framework hands the built Entity in and
+// expects the packer that serializes it.
+func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Player)
+	return playerSyncPacker{player: owner}
+}
+
+// playerSyncPacker serializes the Player's synced fields.
+//
+// The payload is the DAO's own sync document (`MarshalSync`), which is the
+// pair of `ApplySync` on the receiving side — the format the framework
+// already defines for "these fields of this entity changed". A game with its
+// own client protocol packs its own message here instead; what it needs and
+// this demo cannot do is name individual fields, because the generated field
+// mask constants are package-private to the DAO (recorded in WANTED). Working
+// mask-opaque is what keeps this demo honest: the mask comes from the
+// generated setters and goes straight back into the generated marshaller,
+// and neither side needs to know which bit means what.
+//
+// Packers run while the owning Entity mutex is held (Core calls them from
+// Prepare under the entity lock), so they must not lock anything else and
+// must not block.
+type playerSyncPacker struct{ player *Player }
+
+// A snapshot is what a brand-new subscriber gets, and what a resync produces:
+// every synced field, not only the dirty ones.
+func (packer playerSyncPacker) PackSubjectSnapshot(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(dataengine.AllFields)
+}
+
+// A delta carries exactly the fields the mask names. The mask is the one the
+// generated setters accumulated, handed over by Player.PublishSyncDirty.
+func (packer playerSyncPacker) PackSubjectDelta(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(mask)
+}
+
+func (packer playerSyncPacker) pack(mask uint64) (entity.FrozenSyncPayload, error) {
+	if packer.player == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("player sync packer: no entity")
+	}
+	// MarshalSync returns nil when the mask names nothing this DAO syncs. An
+	// empty payload is a legitimate answer (the subject was marked for a
+	// field that is not replicated); returning an error here would fail the
+	// whole prepare for every profile.
+	raw := packer.player.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	// TakeFrozenSyncPayload transfers ownership: MarshalSync just built these
+	// bytes and nobody else holds them, so there is nothing to copy.
+	return entity.TakeFrozenSyncPayload(PlayerSyncCodec, raw), nil
+}

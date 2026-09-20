@@ -1,0 +1,130 @@
+// Package activity is what this game means by a timed, server-wide event.
+//
+// The activity service coordinates the PHASE: it collects "server N reached
+// close" from every expected game server and says when the set is complete
+// (or when the grace window closed without them all). It deliberately does
+// not know what an activity is worth — what a point is, what settlement pays,
+// who may contribute — and that is what lives here.
+package activity
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	svcactivity "github.com/tjbdwanghaibo/roost-kit/service/global/activity"
+)
+
+// GroupID is the coordination group this deployment's game servers belong to.
+// A group's pending window is one versioned entry, so every activity in a
+// group commits through the same compare-and-set — which is why the service
+// routes a group's traffic to one instance, and why a deployment that wants
+// independent throughput uses more than one group.
+const GroupID = "{{PROJECT}}"
+
+const (
+	// WindowSeconds is how long one window lasts. Short in this demo so a
+	// developer can watch a whole cycle; a real event runs for hours.
+	WindowSeconds int64 = 300
+	// ProgressPerClear is what one dungeon clear contributes.
+	ProgressPerClear int64 = 1
+	// PaidRanks is how many ranks the settlement pays, and therefore how much
+	// of the board it reads. Settlement is bounded by this rather than by the
+	// number of participants: a settlement that enumerates everyone gets
+	// slower every event.
+	PaidRanks int = 10
+)
+
+// WindowStart is the start of the window nowUnix falls in.
+func WindowStart(nowUnix int64) int64 { return nowUnix - nowUnix%WindowSeconds }
+
+// ID names the window nowUnix falls in.
+//
+// It is DERIVED from the window's start rather than assigned, so every game
+// server in the group computes the same id for the same window without anyone
+// handing it out. That is what lets a server that restarted mid-window rejoin
+// the activity it was already contributing to.
+func ID(nowUnix int64) string {
+	return "race-" + strconv.FormatInt(WindowStart(nowUnix), 10)
+}
+
+// StartOf recovers a window's start from its id. It is the inverse of ID, so a
+// stored id — in a timer node, in the World's settled set — can be placed in
+// time without a second field that could disagree with it.
+func StartOf(activityID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(activityID, "race-")
+	if !ok {
+		return 0, false
+	}
+	start, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || start <= 0 {
+		return 0, false
+	}
+	return start, true
+}
+
+// CloseAt is when the window's close phase is due.
+func CloseAt(activityID string) (time.Time, bool) {
+	start, ok := StartOf(activityID)
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Unix(start+WindowSeconds, 0), true
+}
+
+// Key is the aggregation key for one activity's close phase. Only one phase is
+// used here; a game with a separate settlement round opens settle the same way.
+func Key(activityID string) svcactivity.Key {
+	return svcactivity.Key{GroupID: GroupID, ActivityID: activityID, Phase: svcactivity.PhaseClose}
+}
+
+// ProgressRequestID is the idempotency key for one contribution.
+//
+// It is the dungeon RUN id, the same anchor the clear reward uses: the run is
+// what the player did, so a redelivered contribution for a run that already
+// counted is refused by the coordinator's reservation instead of counted
+// twice. A key derived from the moment of the call would make every retry a
+// new contribution.
+func ProgressRequestID(runID string) string { return "clear:" + runID }
+
+// Reward is what a rank on the final board is paid, as a mail attachment.
+type Reward struct {
+	ItemID int64
+	Count  int32
+}
+
+var rewards = []Reward{
+	{ItemID: 2001, Count: 1},
+	{ItemID: 1001, Count: 5},
+	{ItemID: 1001, Count: 2},
+}
+
+// RewardFor is what rank pays; ranks are 1-based and a rank past the table
+// pays the tail entry.
+func RewardFor(rank int) (Reward, bool) {
+	if rank <= 0 {
+		return Reward{}, false
+	}
+	if rank > len(rewards) {
+		return rewards[len(rewards)-1], true
+	}
+	return rewards[rank-1], true
+}
+
+// BoardKey is the Redis sorted set this game keeps of its own contributors,
+// scored by their coordinator-side score.
+//
+// The coordinator has no "list participants" call, deliberately — an
+// enumeration over an aggregation is unbounded. So the game keeps the index it
+// needs, and it keeps it as a board, because that is also the shape
+// settlement reads: the top PaidRanks, not everyone.
+func BoardKey(prefix, activityID string) string {
+	return prefix + ":board:" + activityID
+}
+
+// MailRequestID makes one settlement mail per (activity, player), so a
+// redelivered dispatch mails once.
+func MailRequestID(activityID string, playerID int64) string {
+	return fmt.Sprintf("activity:%s:%d", activityID, playerID)
+}

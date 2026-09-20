@@ -1,0 +1,38 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "7 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deep-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzValidModulePath$' -fuzztime=30s
+      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzManifestDecode$' -fuzztime=30s
+      - run: go test ./internal/roost -run '^$' -bench '^BenchmarkRenderProject$' -benchmem -count=5 > benchmark.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-quality-${{ github.run_id }}
+          path: |
+            coverage.out
+            benchmark.txt
+          if-no-files-found: error
+          retention-days: 30

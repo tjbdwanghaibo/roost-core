@@ -1,0 +1,110 @@
+// Package chatroom is the game's side of the chat contract: which channels
+// exist, what a text message is, who is online to receive one. The chat
+// service is generic — it stores per-channel sequences and enforces the
+// policy this project hands it — so everything game-specific about chat is
+// here, imported by both the game process (endpoints) and the chat process
+// (collaborators), which is how the two agree on the message type name.
+package chatroom
+
+import (
+	"fmt"
+	"sync"
+	"unicode/utf8"
+
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+)
+
+// TypeText is the one message type the demo registers with the chat
+// service's BodyRegistry: UTF-8 text, at most MaxTextBytes.
+const TypeText svcchat.MessageType = "text"
+
+// MaxTextBytes bounds a chat line. The service caps bodies at its own
+// MaxBodyBytes; this is the game's tighter limit.
+const MaxTextBytes = 256
+
+// WorldChannelTarget is the world channel's target: the demo has one world.
+// A game with zones would put the zone id here.
+const WorldChannelTarget int64 = 1
+
+// SystemActor is the label a system message carries in history, so an audit
+// can say which part of the game spoke.
+const SystemActor = "game"
+
+// WorldChannel is where every player talks; EnterGame announces logins here.
+var WorldChannel = svcchat.Channel{Kind: svcchat.ChannelWorld, Target: WorldChannelTarget}
+
+// PrivateChannel is the 1:1 conversation with peer, as addressed by the sender.
+func PrivateChannel(peer int64) svcchat.Channel {
+	return svcchat.Channel{Kind: svcchat.ChannelPrivate, Target: peer}
+}
+
+// PlayerSender names a player to the chat service. The name is a display
+// snapshot; the demo has no profile lookup on this path and uses the id.
+func PlayerSender(playerID int64) svcchat.Sender {
+	return svcchat.Sender{RoleID: playerID, Name: fmt.Sprintf("player-%d", playerID)}
+}
+
+// ValidateText is the body validator both processes use: the chat service
+// runs it on publish (through the BodyRegistry), the endpoint runs it before
+// the bus call so a bad line is refused without a round trip.
+func ValidateText(body []byte) error {
+	if len(body) == 0 {
+		return fmt.Errorf("text is empty")
+	}
+	if len(body) > MaxTextBytes {
+		return fmt.Errorf("text is %d bytes, limit %d", len(body), MaxTextBytes)
+	}
+	if !utf8.Valid(body) {
+		return fmt.Errorf("text is not valid utf-8")
+	}
+	return nil
+}
+
+// Presence is the set of players this process currently considers online:
+// added when EnterGame succeeds, dropped when a push finds no session. It is
+// what world-channel fan-out iterates. It is per process on purpose — the
+// demo runs one game process; a game with several would subscribe to the
+// chat service's stream (or a room bus) instead of fanning out from memory.
+type Presence struct {
+	mu      sync.RWMutex
+	players map[int64]struct{}
+}
+
+func NewPresence() *Presence { return &Presence{players: map[int64]struct{}{}} }
+
+// processPresence is this process's world-channel recipient set.
+//
+// It is a package-level singleton because there is exactly one per process and
+// two things need it: the endpoints, which add a player on login and fan chat
+// out to it, and the game service, which removes a player when their last
+// connection closes (RR-20260918-06). Before that second consumer existed the
+// set lived in the controller, and an offline player stayed in it until some
+// later push to them happened to fail — which never happens in a quiet world.
+var processPresence = NewPresence()
+
+// DefaultPresence is the set both of them use.
+func DefaultPresence() *Presence { return processPresence }
+
+func (p *Presence) Add(playerID int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.players[playerID] = struct{}{}
+}
+
+func (p *Presence) Remove(playerID int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.players, playerID)
+}
+
+// Snapshot returns the online ids; a copy, so fan-out can push without
+// holding the lock across network writes.
+func (p *Presence) Snapshot() []int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]int64, 0, len(p.players))
+	for id := range p.players {
+		out = append(out, id)
+	}
+	return out
+}

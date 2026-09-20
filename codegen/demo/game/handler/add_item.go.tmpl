@@ -1,0 +1,17 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerAddItem is the demo's one write transaction: Nest locks the Player,
+// runs this body, and commits the DAO patch durably. Returning an error rolls
+// back every mutator called here (rollback=undo), so a partially applied
+// reward is not a state the store can reach.
+//
+// The first return value travels back through the generated Sender; the
+// parameters after the entity become the Sender's and the endpoint's, and
+// must match the protocol request's fields by name.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAddItem(target player.IBagEntity, itemID int64, count int32) (int32, error) {
+	return target.BagComp().AddItem(itemID, count)
+}

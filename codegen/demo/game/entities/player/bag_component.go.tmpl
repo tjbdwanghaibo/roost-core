@@ -1,0 +1,170 @@
+package player
+
+import (
+	"fmt"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/rewards"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+//roost:component type=2001
+const CompTypeBag entity.ComponentType = 2001
+
+// BagComponent owns Player gameplay logic. Persistent or replicated state should
+// be changed through generated DAO methods so dirty tracking remains correct.
+type BagComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IBagEntity is the narrow lock-safe view for Nest handlers using this
+// component. The generated Entity wire implements the getter.
+type IBagEntity interface {
+	entity.IThreadSafeEntity
+	BagComp() *BagComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeBag, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("bag component: owner %T is not *Player", owner)
+		}
+		return &BagComponent{owner: typed}, nil
+	})
+}
+
+func (component *BagComponent) Name() string { return "bag" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *BagComponent) Owner() *Player { return component.owner }
+
+// Add business methods below. Do not add mutexes here: Nest enters business
+// handlers only after locking the owning Entity.
+
+// AddItem adds count of itemID to the bag and returns the new amount.
+//
+// Three things it shows:
+//
+//   - Validation reads the item table through the generated accessor. The
+//     framework pins one config snapshot to the request, so a hot reload
+//     landing mid-handler cannot make two reads disagree.
+//   - Failures are coded errors from internal/errors. The endpoint turns the
+//     code into the response; a plain error would reach the client as
+//     "server error" and close the connection.
+//   - State moves only through the generated DAO mutators, so dirty tracking,
+//     the Nest undo log and the persist patch all see it. Never assign to DAO
+//     storage directly.
+func (component *BagComponent) AddItem(itemID int64, count int32) (int32, error) {
+	if count <= 0 {
+		return 0, errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
+	}
+	item, ok := generated.ItemByID(itemID)
+	if !ok {
+		return 0, errcode.Wrap(apperrors.ErrItemUnknown, nil, "item_id", itemID)
+	}
+	dao := component.Owner().Dao()
+	current, _ := dao.GetItems(itemID)
+	if item.MaxStack > 0 && current+count > item.MaxStack {
+		return 0, errcode.Wrap(apperrors.ErrBagFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", item.MaxStack)
+	}
+	dao.SetItems(itemID, current+count)
+	component.Owner().PublishSyncDirty()
+	return current + count, nil
+}
+
+// RemoveItem takes count of itemID out of the bag and returns what is left.
+// Not having enough is a coded failure (item_short), the same shape AddItem
+// gives for a full stack: the caller decides what it means (the gift saga
+// turns it into a failed saga with nothing to compensate).
+func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, error) {
+	if count <= 0 {
+		return 0, errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
+	}
+	dao := component.Owner().Dao()
+	current, _ := dao.GetItems(itemID)
+	if current < count {
+		return 0, errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", itemID, "have", current, "want", count)
+	}
+	dao.SetItems(itemID, current-count)
+	component.Owner().PublishSyncDirty()
+	return current - count, nil
+}
+
+// ClaimMailReward records that this mail's attachment has been granted and
+// reports whether this call is the one that recorded it. A second call for
+// the same mail returns false and changes nothing — that is what makes the
+// grant exactly-once even when the mail service's commit is lost, because the
+// record lands in the same Nest transaction as the items.
+//
+// The value stored is the MAIL's expiry, handed over by the mail service with
+// the reservation. That is the moment after which no replay can reach this
+// path at all, so it is exactly when the record may be forgotten — and the
+// pruning below uses the same number, so "the record is gone" and "a replay
+// is impossible" are one fact rather than two that can drift
+// (game/rewards explains why the previous fixed retention could not hold).
+//
+// Pruning is on the write path, so the ledger is bounded without a sweeper.
+func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, nowUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetMailClaims(mailID); claimed {
+		return false
+	}
+	var stale []string
+	dao.RangeMailClaims(func(key string, recordedExpiry int64) bool {
+		if rewards.ClaimWindowClosed(recordedExpiry, nowUnix) {
+			stale = append(stale, key)
+		}
+		return true
+	})
+	for _, key := range stale {
+		dao.DelMailClaims(key)
+	}
+	dao.SetMailClaims(mailID, expiresAtUnix)
+	return true
+}
+
+// ClaimPurchase records that a paid order's grant has been taken and reports
+// whether this call is the one that recorded it. A second call for the same
+// order returns false and changes nothing.
+//
+// It is the mail ledger's shape, and it is the one ledger here that is NEVER
+// pruned (RR-20260919-06). The mail ledger may forget an entry the moment the
+// envelope expires, because after that no replay can reach the grant path. A
+// paid order has no such moment: the platform service marked it delivered when
+// the grant became durable, so forgetting the order id does not close the
+// path — it reopens it, and the next drain of a grant that outlived the ledger
+// pays a second time. Dropping the entry instead of the grant is the same
+// mistake from the other side: a player who has not logged in for a month
+// would find a paid order settled on one side and refused on the other.
+//
+// The value stored is the payment moment, kept for audit rather than for
+// pruning. What would bound this map is an idempotent "fulfilled" reported
+// back to the platform service, after which an entry could be compacted
+// because nothing can produce that grant again; game/purchase says so at
+// length.
+func (component *BagComponent) ClaimPurchase(orderID string, paidAtUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetPurchaseClaims(orderID); claimed {
+		return false
+	}
+	dao.SetPurchaseClaims(orderID, paidAtUnix)
+	return true
+}
+
+// MailRewardClaimed reports whether a mail's attachment has already been
+// granted. It is a read for callers holding the lock; the claim itself must
+// go through ClaimMailReward, inside the transaction that grants.
+func (component *BagComponent) MailRewardClaimed(mailID string) bool {
+	_, claimed := component.Owner().Dao().GetMailClaims(mailID)
+	return claimed
+}
+
+// ItemCount is the current amount held for itemID.
+func (component *BagComponent) ItemCount(itemID int64) int32 {
+	count, _ := component.Owner().Dao().GetItems(itemID)
+	return count
+}

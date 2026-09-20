@@ -1,0 +1,34 @@
+# The meta file the runtime gate generates from. It is deliberately the
+# awkward shapes, not the pretty ones: a bean inside a slice, a secondary
+# index, a cross-table ref, a required field, a keyword-named field, and a
+# global. Everything here must survive the real configdata runtime, not just
+# gofmt.
+package: cfg
+beans:
+  - name: DropItem
+    fields:
+      - { name: item_id, type: int32 }
+      - { name: weight,  type: int32 }
+tables:
+  - name: drop
+    key: id
+    comment: drop groups
+    fields:
+      - { name: id,    type: int32 }
+      - { name: items, type: "[]DropItem" }
+  - name: monster
+    key: id
+    comment: monsters
+    fields:
+      - { name: id,       type: int32 }
+      - { name: name,     type: string }
+      - { name: scene_id, type: int32, index: true }
+      - { name: drop_id,  type: int32, ref: drop, required: true }
+      # "range" is a Go keyword: the generated accessor parameters and struct
+      # field must still compile.
+      - { name: range,    type: int32 }
+globals:
+  - name: world
+    fields:
+      - { name: width,  type: int32 }
+      - { name: height, type: int32 }

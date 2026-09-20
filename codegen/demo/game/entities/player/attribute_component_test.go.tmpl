@@ -1,0 +1,139 @@
+package player
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// attributeCommitter keeps nothing: this test is about the container, not
+// about what reaches storage.
+type attributeCommitter struct{}
+
+func (attributeCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+// The attribute system's claim in this project is the composition rule:
+// Final = Base + Gear, with the derived attribute computed once over the
+// composed inputs. These assert that rule and the two storage intents that
+// follow from it — Base is stored, Final is not.
+
+func newAttributePlayer(t *testing.T, uniqueID int64) *Player {
+	t.Helper()
+	RegisterEntity()
+	// The gear layer reads the item table, so a test that touches it needs
+	// the project's own config data.
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+
+	id, err := entity.BuildEntityID(uniqueID, EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	return built.(*Player)
+}
+
+func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
+	subject := newAttributePlayer(t, 7001)
+	component := subject.AttributeComp()
+
+	base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
+	if !ok {
+		t.Fatal("the base layer was not installed at init")
+	}
+	final, ok := component.Final()
+	if !ok {
+		t.Fatal("the final layer was not composed at init")
+	}
+	// With an empty bag the gear layer contributes nothing, so Final is Base.
+	if final.Attack != base.Attack || final.HP != base.HP {
+		t.Fatalf("final = HP %d attack %d, want the base HP %d attack %d", final.HP, final.Attack, base.HP, base.Attack)
+	}
+
+	// The Iron Sword is the one item the table gives an attack.
+	const ironSword = int64(2001)
+	item, found := generated.ItemByID(ironSword)
+	if !found || item.Attack <= 0 {
+		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
+	}
+	gear, ok := gameattr.CombatLive(component.Container(), Gear)
+	if !ok {
+		t.Fatal("the gear layer was not installed at init")
+	}
+	// Worn, not carried. The gear layer is a projection of the EQUIPMENT, so
+	// a sword in the bag changes nothing — which is the point of moving it
+	// there. Through the real methods in a real transaction, because the
+	// generated persist setters refuse to run outside one.
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "carry", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		// Inside the transaction: RefreshGear writes the attribute maps, and
+		// the generated persist setters refuse to run outside one.
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("grant the sword: %v", err)
+	}
+	if carried, _ := gameattr.CombatLive(component.Container(), Gear); carried.Attack != 0 {
+		t.Fatalf("carrying the sword raised the gear layer to attack %d; only wearing it should", carried.Attack)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip the sword: %v", err)
+	}
+
+	if gear.Attack != item.Attack {
+		t.Fatalf("the gear layer holds attack %d, want the item's %d", gear.Attack, item.Attack)
+	}
+	final, _ = component.Final()
+	if want := base.Attack + item.Attack; final.Attack != want {
+		t.Fatalf("composed attack = %d, want base %d + gear %d", final.Attack, base.Attack, item.Attack)
+	}
+	if want := base.HP + item.HP; final.HP != want {
+		t.Fatalf("composed HP = %d, want base %d + gear %d", final.HP, base.HP, item.HP)
+	}
+	// Power is derived. Composing the layers' own Power would add two
+	// ratings each computed from half the inputs; the rule is to compose the
+	// inputs and derive once.
+	if want := final.Attack*2 + final.HP/10; final.Power != want {
+		t.Fatalf("composed power = %d, want %d derived from the composed inputs", final.Power, want)
+	}
+	// A note for whoever changes the formula: with THIS one the sum of the
+	// layers' own ratings happens to equal the composed rating, because the
+	// base HP is always a multiple of the divisor and nothing rounds away.
+	// That is a property of the numbers, not of the design — the rule is
+	// "compose the inputs, derive once", and the moment a formula stops
+	// being linear in its inputs (a cap, a curve, a product) the two answers
+	// diverge and only this one is right. The assertion above is the rule;
+	// this comment is why it is not written as "≠ the sum".
+	if final.Power == base.Power {
+		t.Error("the composed power did not move when the gear layer arrived")
+	}
+}
+

@@ -1,0 +1,16 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// handlerPlayerPosition reads where the player is, under the Player's lock.
+// It exists because a refused move has to answer with the position the player
+// still has — and "still has" is a question only the authority can answer.
+// There is no cached copy to read instead, by design.
+//
+//roost:nest
+func handlerPlayerPosition(target player.IMapEntity) (spatial.Point, error) {
+	return target.MapComp().Pos(), nil
+}

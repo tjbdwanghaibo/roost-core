@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"time"
+
+	world "{{MODULE}}/game/entities/world"
+)
+
+// handlerTickWorldTimers drives the World's timer heap.
+//
+// The tick comes from a process ticker, but the FIRING happens here, inside
+// the World's Nest lock: whatever a timer handler changes, and the removal of
+// the node that fired, land in one WAL record. A scheduler ticked outside the
+// lock would have to write back afterwards, and the window between the two
+// writes is where a timer fires twice after a crash.
+//
+// It returns how many nodes are still armed, which is what the caller logs
+// and what a test asserts.
+//
+//roost:nest rollback=undo durability=strict
+func handlerTickWorldTimers(target world.ITimerEntity, nowUnixMilli int64) (int32, error) {
+	return int32(target.TimerComp().Tick(time.UnixMilli(nowUnixMilli))), nil
+}

@@ -1,0 +1,22 @@
+package handler
+
+import (
+	"time"
+
+	world "{{MODULE}}/game/entities/world"
+)
+
+// handlerArmActivity arms the close deadline for one activity window and
+// reports whether this call armed it.
+//
+// Every game process that has this World tries to arm the current window at
+// startup, and the window's id is derived from the clock rather than handed
+// out, so they all try to arm the same one. The component refuses a second
+// node for an activity that already has one — otherwise a process that
+// restarts ten times leaves ten nodes, all firing the same phase.
+//
+//roost:nest rollback=undo durability=strict
+func handlerArmActivity(target world.ITimerEntity, activityID string, closeAtUnix int64, nowUnix int64) (bool, error) {
+	_, armed := target.TimerComp().ScheduleActivityPhase(activityID, time.Unix(closeAtUnix, 0), time.Unix(nowUnix, 0))
+	return armed, nil
+}

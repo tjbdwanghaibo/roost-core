@@ -1,0 +1,16 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerPlayerGuild reads the player's own copy of which guild they are in.
+//
+// It exists so that "which guild am I in" costs a local lock instead of a
+// distributed one. The copy is written in the same transaction as the roster
+// it comes from (join_guild.go), which is what makes reading it here sound.
+//
+//roost:nest rollback=undo durability=strict
+func handlerPlayerGuild(target player.IProfileEntity) (int64, error) {
+	return target.ProfileComp().GuildID(), nil
+}

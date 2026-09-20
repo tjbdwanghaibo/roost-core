@@ -1,0 +1,48 @@
+package ranking
+
+import (
+	"fmt"
+
+	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
+)
+
+// Package ranking is the game's side of the rank service: which boards exist,
+// what a point means, and what makes a submit safe to retry.
+//
+// The rank service ranks numbers; it has no opinion about what they count.
+// Deciding that is this file's whole job, and the decisions worth reading are
+// the last two.
+
+// ClearsBoardID counts cleared dungeon runs. Global scope, one season for
+// now: a season boundary is an operator action (the service deliberately
+// keeps Reset off the bus) and the demo has no calendar.
+const (
+	ClearsBoardID = "clears"
+	CurrentSeason = int64(1)
+)
+
+func ClearsBoard() svcrank.Board {
+	return svcrank.Board{ID: ClearsBoardID, Scope: svcrank.ScopeGlobal, Season: CurrentSeason}
+}
+
+// ClearRequestID is what makes the submit idempotent, and it is built from
+// the same run id the reward ledger keys on. That is not a coincidence: a
+// clear is paid once and counted once, and both facts key on the identity the
+// session service minted for the run. UpdateAdd is NOT replay-safe on its
+// own — the service deduplicates against this id, so a retried FinishDungeon
+// adds one point, not two.
+func ClearRequestID(runID string) string {
+	return fmt.Sprintf("clear:%s", runID)
+}
+
+// ClearScore is one clear. Tie is left zero on purpose: the store fills it
+// with the submit time, so players on the same number of clears are ordered
+// by who got there first.
+func ClearScore(playerID int64) svcrank.Score {
+	return svcrank.Score{OwnerID: playerID, Value: 1}
+}
+
+// PageSize is what the demo's endpoint reads. The service caps a page;
+// "the whole board" is not an option the API offers, which is the right
+// default for something that grows with the player base.
+const PageSize = 10

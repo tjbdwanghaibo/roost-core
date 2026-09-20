@@ -1,0 +1,153 @@
+package battle
+
+import (
+	"encoding/binary"
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+)
+
+// Package battle is the game's side of the lockstep contract: how long a
+// battle runs, how fast it ticks, what one input means on the wire, and how
+// a match's members map onto lockstep seats.
+//
+// Lockstep is the other half of the framework's realtime story. Nest is
+// authoritative-server state: the client asks, the server decides, the
+// result is persisted. Lockstep is deterministic simulation: the server
+// sequences everyone's inputs into numbered frames and broadcasts the
+// frames; every client runs the same simulation on the same inputs and
+// arrives at the same state without the server sending any state at all.
+// One process owns a battle's room (it is single-goroutine state), so the
+// demo starts the room in the game process that formed the match.
+
+const (
+	// TickRate is how often the room cuts a frame. 30 Hz is a common
+	// action-game cadence; the frame id is the only clock the simulation has.
+	TickRate = 30 * time.Millisecond
+	// Frames is how long one demo battle lasts, in frames. Short on purpose:
+	// the robots' scenario cost is a regression threshold.
+	Frames = 45
+	// KeyframeInterval is how often a client reports its simulation hash.
+	// The room judges a keyframe once a quorum of seats agrees, and the
+	// seats that disagree are the desync verdict. 15 frames at 30 Hz is
+	// twice a second — often enough that a battle this short is judged
+	// twice.
+	KeyframeInterval = 15
+	// SubmitWindow is how far ahead of the next uncut frame an input may
+	// target. 2 frames at 30 Hz absorbs ~66ms of jitter; beyond that the
+	// input is refused rather than buffered.
+	SubmitWindow = 2
+	// MaxInputBytes bounds one input payload. A demo input is 2 bytes; the
+	// cap is what the room multiplies by seats and redundancy depth when it
+	// checks that a broadcast packet fits one datagram.
+	MaxInputBytes = 8
+	// RedundancyDepth is how many recent frames each broadcast packet
+	// carries,
+	// so a lost packet is healed by its successors instead of a
+	// retransmission. The demo pushes frames over TCP, where nothing is
+	// lost — depth 3 is what a UDP deployment would use, kept here so the
+	// packet on the wire is the real one.
+	RedundancyDepth = 3
+	// CatchupBatchFrames is how many history frames a reconnecting session
+	// receives per tick. Must be > 1: every tick also cuts a new frame, so
+	// a batch of 1 never closes the gap.
+	CatchupBatchFrames = 8
+	// MaxDatagramBytes is the packet bound the room checks its worst case
+	// against (depth × seats × payload + overhead).
+	MaxDatagramBytes = lockstep.DefaultMaxDatagramBytes
+)
+
+// Over reports whether a frame id is past the battle's budget. Both sides
+// know the budget, so both stop at the same frame: the room stops cutting,
+// and a client stops submitting instead of being refused for a battle that
+// has just ended. A game whose battles end on a condition rather than a
+// frame count sends the verdict explicitly — the room's last frame is not
+// self-describing.
+func Over(frame lockstep.FrameID) bool { return frame > Frames }
+
+// Input is what one player does in one frame. A real game would carry a
+// movement vector, a button mask and a sequence number; the demo carries a
+// direction, which is enough to make two clients' simulations disagree if
+// the wire ever drops or reorders an input.
+type Input struct {
+	DX int8
+	DY int8
+}
+
+// Encode renders an input as the frame payload.
+func Encode(input Input) []byte { return []byte{byte(input.DX), byte(input.DY)} }
+
+// Decode reads a frame payload back. A payload the server did not produce
+// is a client bug, not a panic.
+func Decode(payload []byte) (Input, error) {
+	if len(payload) != 2 {
+		return Input{}, fmt.Errorf("battle: input payload is %d bytes, want 2", len(payload))
+	}
+	return Input{DX: int8(payload[0]), DY: int8(payload[1])}, nil
+}
+
+// Seat is a lockstep seat index. Seats are 1..N in the order the match
+// service returned the members, so they are stable for everyone who reads
+// the same match, and small enough to ride in a frame's input list.
+func Seat(index int) lockstep.PlayerID { return lockstep.PlayerID(index + 1) }
+
+// Seats builds the seat set for a match of n members.
+func Seats(n int) []lockstep.PlayerID {
+	seats := make([]lockstep.PlayerID, 0, n)
+	for index := 0; index < n; index++ {
+		seats = append(seats, Seat(index))
+	}
+	return seats
+}
+
+// State is the demo's deterministic simulation: every seat's position,
+// advanced by the inputs of one frame. Both server and client could run it;
+// in lockstep only the clients do, which is the point — the server never
+// sends a position.
+type State struct {
+	X map[lockstep.PlayerID]int64
+	Y map[lockstep.PlayerID]int64
+}
+
+func NewState() *State {
+	return &State{X: make(map[lockstep.PlayerID]int64), Y: make(map[lockstep.PlayerID]int64)}
+}
+
+// Apply advances the simulation by one frame. Iteration order does not
+// matter here because each input touches only its own seat; a simulation
+// where inputs interact must iterate frame.Inputs, which the sequencer
+// already sorted by seat.
+func (state *State) Apply(frame lockstep.Frame) error {
+	for _, input := range frame.Inputs {
+		move, err := Decode(input.Payload)
+		if err != nil {
+			return err
+		}
+		state.X[input.Player] += int64(move.DX)
+		state.Y[input.Player] += int64(move.DY)
+	}
+	return nil
+}
+
+// Hash is what a client reports at a keyframe: a fold of every seat's
+// position, seats in ascending order so two clients that agree on the state
+// cannot disagree on the hash.
+func (state *State) Hash(seats []lockstep.PlayerID) uint64 {
+	// FNV-1a over the positions, seat by seat.
+	const offset64, prime64 = uint64(14695981039346656037), uint64(1099511628211)
+	sum := offset64
+	fold := func(value int64) {
+		var buffer [8]byte
+		binary.LittleEndian.PutUint64(buffer[:], uint64(value))
+		for _, b := range buffer {
+			sum = (sum ^ uint64(b)) * prime64
+		}
+	}
+	for _, seat := range seats {
+		fold(int64(seat))
+		fold(state.X[seat])
+		fold(state.Y[seat])
+	}
+	return sum
+}
