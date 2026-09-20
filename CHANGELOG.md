@@ -8,7 +8,7 @@
 
 ### Changed
 
-- core 依赖升到 v1.15.14（；普通 room delta 改走可靠通道）。kit 自身没有行为变化。
+- core 依赖升到 v1.15.14（`redis.CompareAndDelete`；普通 room delta 改走可靠通道）。kit 自身没有行为变化。
 
 ## [v1.14.14] - 2026-09-19
 
