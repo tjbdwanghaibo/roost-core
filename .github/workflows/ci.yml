@@ -29,15 +29,51 @@ jobs:
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
-      - run: go test ./...
       - run: go vet ./...
       - run: go run ./cmd/glsvet ./...
         # integration-tagged tests (redis toxiproxy suites) are excluded from
         # `go test ./...`; vetting them keeps the build-tagged files compiling.
       - run: go vet -tags integration ./...
-      - run: go test -race ./...
       - run: go test -run '^$' -bench BenchmarkRemoteSnapshotCacheL1Get4K -benchtime=1s ./entity
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  # The test suite runs in shards because the single job that used to run it
+  # will not hold the merged module: kit and codegen are about to move in
+  # (ARCHITECTURE_V3_SINGLE_MODULE_PLAN P1) and Core's test time roughly
+  # doubles.
+  #
+  # The shards are computed from `go list`, not written down. A hand-kept list
+  # of package groups is a second place to remember every new package, and it
+  # drifts silently the first time somebody forgets — the C4 shape this
+  # repository has been bitten by often enough. Modulo over the listing gives a
+  # disjoint cover of every package by construction.
+  linux-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: shard ${{ matrix.shard }} of 4
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          packages=$(go list ./... | awk -v shard="$SHARD" 'NR % 4 == shard')
+          if [ -z "$packages" ]; then
+            echo "shard $SHARD covers no packages"
+            exit 0
+          fi
+          echo "$packages"
+          # shellcheck disable=SC2086
+          go test $packages
+          # shellcheck disable=SC2086
+          go test -race $packages
 
   windows-compatibility:
     runs-on: windows-latest
