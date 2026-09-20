@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**[三仓合一仓：kit 与 codegen 并入 core](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)**（2026-09-20 起，P0）：四个决定已拍板，三仓 `main` 冻结为维护线。
+
 [09-20 修复验收、实时同步与所有权续审](review/REVIEW-2026-09-20.md)：两个活动 Wanted 完成分流，确认 datagram 增量永久丢字段、Remote BSON uint64、player owner ABA/失主双写及 pending poison 前缀五项问题；附复现、进度和实施交接。未修改源码。
 
 [09-19 第二轮实体加载与活动交接审查](review/REVIEW-2026-09-19-02.md)：新确认 singleflight panic 污染、Nest 缺失实体、pending 分页饥饿与 activity 交付断链；附复现、进度和基于现有框架原语的实施方案。未修改源码。
