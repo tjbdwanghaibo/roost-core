@@ -1,0 +1,38 @@
+package handler
+
+import (
+	guild "{{MODULE}}/game/entities/guild"
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerFoundGuild creates a guild and puts its founder in it.
+//
+// Two entities, and the lock order is the reason this handler's parameters
+// are in this order: the GUILD is remote-managed (category rank 1), so its
+// distributed lock is acquired at the top of the dispatch, before any local
+// mutex. Nest does that from the declared targets; writing them the other way
+// round would be refused rather than silently reordered.
+//
+// Founding is insert-only on the guild's own state — `Found` refuses a guild
+// that already has a name — so two processes racing to found the same id
+// produce one guild and one coded refusal, not two halves of one.
+//
+//roost:nest rollback=undo durability=strict
+func handlerFoundGuild(target guild.IRosterEntity, member player.IProfileEntity, name string, founderID int64, nowUnix int64) (guild.Info, error) {
+	if founderID <= 0 {
+		return guild.Info{}, errcode.Wrap(apperrors.ErrGuildName, nil, "founder_id", founderID)
+	}
+	if existing := member.ProfileComp().GuildID(); existing != 0 {
+		return guild.Info{}, errcode.Wrap(apperrors.ErrGuildExists, nil, "guild_id", existing)
+	}
+	roster := target.RosterComp()
+	if err := roster.Found(name, founderID, nowUnix); err != nil {
+		return guild.Info{}, err
+	}
+	// The player's copy of the one fact, written in the same transaction as
+	// the roster it comes from. That is what keeps the two from drifting.
+	member.ProfileComp().SetGuild(target.ID())
+	return roster.Snapshot(), nil
+}

@@ -1,0 +1,406 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"{{MODULE}}/game/battle"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+)
+
+// The lockstep half of the demo: when the matchmaker forms a duel, this
+// process opens a lockstep room for it, the two clients submit one input per
+// frame, and the room broadcasts numbered frames until the battle's frame
+// budget runs out.
+//
+// What the framework owns (roost-core/lockstep): sequencing inputs into
+// frames with a bounded submit window and per-seat replay protection,
+// packing the last few frames into every broadcast packet so a lost one
+// heals without a retransmission, paging history to a reconnecting session,
+// and judging keyframe hash reports into a desync verdict.
+//
+// What this file owns: the room's lifetime, the serial loop that drives it,
+// and the wire. `lockstep.Room` is single-owner state — no locks inside —
+// so every call into it happens on one goroutine here; endpoints hand work
+// over through a channel instead of calling the room directly.
+//
+// The wire is deliberately the demo's existing player TCP connection:
+// broadcasts go out as an ordinary server push (msg 10102) and inputs come
+// back as ordinary requests (10015). Lockstep does not require a datagram
+// lane — it requires that frames arrive; the redundancy in the packet is
+// what makes a lossy lane work, and a UDP/KCP deployment swaps this adapter
+// for the nettransport one without touching the room.
+// BattleCapability is the name the battle manager is published under, so the
+// player endpoints can reach it without importing this package (they are
+// imported BY it, through the protocol binding — the same cycle the push
+// transport is looked up around).
+const BattleCapability app.ModName = "{{GAME_SERVICE}}.battle"
+
+const (
+	// battleCommandBuffer bounds the per-battle command queue. A client
+	// spraying inputs cannot grow it: past the bound the endpoint gets a
+	// coded busy error, which is the backpressure a lockstep input deserves
+	// (the frame it targeted will have been cut by the time it drains).
+	battleCommandBuffer = 256
+	// battleStartGrace is how long a room waits for its seats to send their
+	// first input before it starts cutting frames anyway. It is its own
+	// timer: a client that never arrives must not stall the others, and an
+	// absent seat's frames are simply empty (optimistic frame locking).
+	// Waiting for a command to arrive before starting made this constant a
+	// lie — with nobody typing, no frame was ever cut (RR-20260917-09).
+	battleStartGrace = 2 * time.Second
+	// battleMaxLifetime is the absolute cap on one room, distinct from the
+	// grace: it bounds the whole life (grace + every frame + the drain
+	// window + slack), so a room whose ticker or clients misbehave still
+	// releases its goroutine. In a healthy battle the frame budget ends the
+	// room long before this.
+	battleMaxLifetime = battleStartGrace + 4*time.Second + time.Duration(battle.Frames)*battle.TickRate
+	// battleDrainWindow keeps the room answering after its last frame is
+	// cut. A client reports the hash it sampled at a keyframe only once it
+	// has applied that frame, so the last keyframe's reports always arrive
+	// after the simulation is over — a room that closed on the last tick
+	// would refuse exactly the reports its desync verdict needs. Results
+	// and anti-cheat checks live in this window too.
+	battleDrainWindow = 2 * time.Second
+)
+
+// battlePusher is the slice of the player TCP Runtime a battle needs: one
+// push to one player. It is an interface so the room's broadcast lane can be
+// watched in a test without a listener, and so a deployment can put battles
+// behind a different transport without touching the room.
+type battlePusher interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+}
+
+// battleManager owns every battle room in this process.
+type battleManager struct {
+	transport battlePusher
+
+	mu     sync.Mutex
+	rooms  map[string]*battleRoom
+	closed bool
+	wg     sync.WaitGroup
+}
+
+// battleRoom is one match's room plus the goroutine that owns it.
+type battleRoom struct {
+	id       string
+	seats    map[int64]lockstep.PlayerID // player id → seat
+	commands chan battleCommand
+	// stop asks the room's goroutine to end (shutdown); done is closed by
+	// that goroutine when it has. The commands channel is never closed:
+	// endpoints may still be writing to it while shutdown runs.
+	stop chan struct{}
+	done chan struct{}
+	// cut counts the frames this room has cut. It is read by tests and by
+	// anything that wants a room's progress without touching the room.
+	cut atomic.Int64
+}
+
+// battleCommand is one piece of work for the room's goroutine. reply is
+// buffered by the sender, so the loop never blocks on a caller that left.
+type battleCommand struct {
+	seat        lockstep.PlayerID
+	frame       lockstep.FrameID
+	payload     []byte
+	hashFrame   lockstep.FrameID
+	hash        uint64
+	catchupFrom lockstep.FrameID
+	catchup     bool
+	reply       chan error
+}
+
+// battleSender is the room's transport adapter: the lockstep session id is
+// the player id, so a broadcast is a push to that player's sessions.
+type battleSender struct {
+	battleID  string
+	transport battlePusher
+}
+
+func (sender battleSender) SendDatagram(ctx context.Context, session corestate.SessionID, packet []byte) error {
+	return sender.push(ctx, session, packet)
+}
+
+func (sender battleSender) SendReliable(ctx context.Context, session corestate.SessionID, packet []byte) error {
+	return sender.push(ctx, session, packet)
+}
+
+func (sender battleSender) push(ctx context.Context, session corestate.SessionID, packet []byte) error {
+	if sender.transport == nil {
+		return errors.New("battle: player tcp runtime is unavailable")
+	}
+	// A player who went offline mid-battle is not an error the room should
+	// abandon the frame for: the other seats still get it, and this one
+	// catches up (or the battle ends without them).
+	err := sender.transport.PushPlayer(ctx, int64(session), msgid.MsgBattleFrame, &pb.BattleFramePush{BattleID: sender.battleID, Packet: packet})
+	if err != nil {
+		slog.Debug("battle: frame not delivered", "battle_id", sender.battleID, "player_id", int64(session), "err", err)
+	}
+	return nil
+}
+
+func newBattleManager(registry *app.Registry) (*battleManager, error) {
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return nil, errors.New("battle: player tcp runtime is unavailable")
+	}
+	return &battleManager{transport: transport, rooms: make(map[string]*battleRoom)}, nil
+}
+
+// battleFrameBudget is what a room cuts before it drains; it is here so the
+// lifetime cap and the tests read the same number the contract declares.
+var battleFrameBudget = battle.Frames
+
+// Open starts a room for a formed match. It is called from the matchmaker
+// after Commit, once per match; a second call for the same id is ignored, so
+// a retried Commit or a second process reading the same match cannot open
+// two rooms.
+func (manager *battleManager) Open(battleID string, members []int64) error {
+	if manager == nil {
+		return errors.New("battle: manager is nil")
+	}
+	if battleID == "" || len(members) == 0 {
+		return fmt.Errorf("battle: match %q has no members", battleID)
+	}
+	manager.mu.Lock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return errors.New("battle: manager is shutting down")
+	}
+	if _, exists := manager.rooms[battleID]; exists {
+		manager.mu.Unlock()
+		return nil
+	}
+	seats := make(map[int64]lockstep.PlayerID, len(members))
+	for index, member := range members {
+		seats[member] = battle.Seat(index)
+	}
+	room, err := lockstep.NewRoom(lockstep.RoomConfig{
+		Sequencer: lockstep.SequencerConfig{
+			Players:      battle.Seats(len(members)),
+			SubmitWindow: battle.SubmitWindow,
+			MaxInputBytes: battle.MaxInputBytes,
+		},
+		RedundancyDepth:    battle.RedundancyDepth,
+		MaxDatagramBytes:   battle.MaxDatagramBytes,
+		CatchupBatchFrames: battle.CatchupBatchFrames,
+		Datagrams:          battleSender{battleID: battleID, transport: manager.transport},
+		Reliable:           battleSender{battleID: battleID, transport: manager.transport},
+		OnDesync: func(verdict lockstep.DesyncVerdict) {
+			// A verdict is the framework telling the game that some seat's
+			// simulation no longer matches the quorum's. A real game kicks
+			// or resyncs; the demo records it, and the robots fail if it
+			// ever happens on a run where every client is honest.
+			slog.Error("battle: desync verdict", "battle_id", battleID, "frame", verdict.Frame, "outliers", verdict.Outliers)
+		},
+	})
+	if err != nil {
+		manager.mu.Unlock()
+		return fmt.Errorf("battle: open %s: %w", battleID, err)
+	}
+	// The session id is the player id: the room hands it back to the sender
+	// adapter untouched, which is all it is for.
+	for member, seat := range seats {
+		if err := room.Attach(seat, corestate.SessionID(member)); err != nil {
+			room.Close()
+			manager.mu.Unlock()
+			return fmt.Errorf("battle: attach player %d to %s: %w", member, battleID, err)
+		}
+	}
+	managed := &battleRoom{id: battleID, seats: seats, commands: make(chan battleCommand, battleCommandBuffer), stop: make(chan struct{}), done: make(chan struct{})}
+	manager.rooms[battleID] = managed
+	manager.wg.Add(1)
+	manager.mu.Unlock()
+	go manager.run(managed, room)
+	slog.Info("battle: room open", "battle_id", battleID, "seats", len(seats), "frames", battle.Frames)
+	return nil
+}
+
+// run is the room's single owner. Everything that touches the lockstep room
+// happens here: commands from endpoints, and one Tick per interval.
+func (manager *battleManager) run(managed *battleRoom, room *lockstep.Room) {
+	defer manager.wg.Done()
+	defer close(managed.done)
+	defer room.Close()
+	defer manager.forget(managed.id)
+
+	ticker := time.NewTicker(battle.TickRate)
+	defer ticker.Stop()
+	ctx := context.Background()
+	// Two independent timers, two different jobs: grace decides WHEN frames
+	// start, lifetime decides when the room gives up whatever happened.
+	grace := time.NewTimer(battleStartGrace)
+	defer grace.Stop()
+	lifetime := time.NewTimer(battleMaxLifetime)
+	defer lifetime.Stop()
+	started := false
+	cut := 0
+	for cut < battle.Frames {
+		select {
+		case <-managed.stop:
+			slog.Info("battle: room stopped", "battle_id", managed.id, "frames_cut", cut)
+			return
+		case command := <-managed.commands:
+			// The first input opens the battle early: the clients are here,
+			// so there is no reason to wait out the grace.
+			started = true
+			command.reply <- manager.apply(ctx, room, command)
+		case <-grace.C:
+			// Nobody spoke within the grace. Start anyway — the seats that
+			// are missing contribute empty frames, and the ones that arrive
+			// late catch up from history.
+			if !started {
+				started = true
+				slog.Info("battle: starting without a first input", "battle_id", managed.id, "grace", battleStartGrace)
+			}
+		case <-ticker.C:
+			if !started {
+				continue
+			}
+			if _, err := room.Tick(ctx); err != nil {
+				// Tick joins the per-receiver send errors; the adapter
+				// already swallows an offline player, so anything here is
+				// worth seeing.
+				slog.Warn("battle: tick", "battle_id", managed.id, "frame", cut, "err", err)
+			}
+			cut++
+			managed.cut.Store(int64(cut))
+		case <-lifetime.C:
+			slog.Info("battle: room reached its maximum lifetime", "battle_id", managed.id, "frames_cut", cut)
+			return
+		}
+	}
+	// The simulation is over; the room is not. Keep answering (hash reports
+	// for the last keyframe, a late catch-up) until the drain window ends.
+	drain := time.NewTimer(battleDrainWindow)
+	defer drain.Stop()
+	for {
+		select {
+		case <-managed.stop:
+			slog.Info("battle: room stopped while draining", "battle_id", managed.id, "frames_cut", cut)
+			return
+		case command := <-managed.commands:
+			command.reply <- manager.apply(ctx, room, command)
+		case <-drain.C:
+			slog.Info("battle: room finished", "battle_id", managed.id, "frames_cut", cut)
+			return
+		}
+	}
+}
+
+// apply runs one command against the room. It is only ever called from run.
+func (manager *battleManager) apply(ctx context.Context, room *lockstep.Room, command battleCommand) error {
+	if command.catchup {
+		return room.StartCatchup(command.seat, command.catchupFrom)
+	}
+	var joined error
+	if len(command.payload) > 0 {
+		if _, err := room.SubmitInput(command.seat, command.frame, command.payload); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	if command.hashFrame > 0 {
+		if err := room.ReportHash(command.seat, command.hashFrame, command.hash); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	_ = ctx
+	return joined
+}
+
+// SubmitBattleInput is the endpoint's entry point: one client's per-frame
+// message (input, optional keyframe hash report, optional catch-up
+// request). Plain parameters, because the caller is the player controller in
+// another package — it holds this manager through an interface it declares
+// itself, not through this package's types.
+func (manager *battleManager) SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error {
+	return manager.submit(ctx, battleID, playerID, battleCommand{
+		frame:       lockstep.FrameID(frame),
+		payload:     payload,
+		hashFrame:   lockstep.FrameID(hashFrame),
+		hash:        hash,
+		catchupFrom: lockstep.FrameID(catchupFrom),
+		catchup:     catchupFrom > 0,
+	})
+}
+
+// submit hands one command to the battle's goroutine and waits for its
+// verdict.
+func (manager *battleManager) submit(ctx context.Context, battleID string, playerID int64, command battleCommand) error {
+	if manager == nil {
+		return errors.New("battle: manager is nil")
+	}
+	manager.mu.Lock()
+	managed, exists := manager.rooms[battleID]
+	manager.mu.Unlock()
+	if !exists {
+		return errcode.Wrap(apperrors.ErrBattleNotFound, nil, "battle_id", battleID)
+	}
+	seat, seated := managed.seats[playerID]
+	if !seated {
+		return errcode.Wrap(apperrors.ErrBattleNotSeated, nil, "battle_id", battleID, "player_id", playerID)
+	}
+	command.seat = seat
+	command.reply = make(chan error, 1)
+	// Non-blocking: a full queue means this input is already late, so the
+	// client is told now instead of waiting behind frames that have been cut.
+	select {
+	case managed.commands <- command:
+	default:
+		return errcode.Wrap(apperrors.ErrBattleBusy, nil, "battle_id", battleID)
+	}
+	select {
+	case err := <-command.reply:
+		return err
+	case <-managed.done:
+		// The room ended between the send and the reply: whatever this
+		// input was for is over.
+		return errcode.Wrap(apperrors.ErrBattleNotFound, nil, "battle_id", battleID)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (manager *battleManager) forget(battleID string) {
+	manager.mu.Lock()
+	delete(manager.rooms, battleID)
+	manager.mu.Unlock()
+}
+
+// Close stops every room and waits for their goroutines. Rooms are
+// in-process state: a restart ends the battles it was hosting, which is why
+// a production deployment gives a battle its own process and a way to
+// resume — the framework pages history to a reconnecting session, but only
+// while the room is alive.
+func (manager *battleManager) Close() {
+	if manager == nil {
+		return
+	}
+	manager.mu.Lock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return
+	}
+	manager.closed = true
+	rooms := make([]*battleRoom, 0, len(manager.rooms))
+	for _, managed := range manager.rooms {
+		rooms = append(rooms, managed)
+	}
+	manager.mu.Unlock()
+	for _, managed := range rooms {
+		close(managed.stop)
+	}
+	manager.wg.Wait()
+}

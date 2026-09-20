@@ -1,0 +1,38 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleEquip wears an item the player holds.
+//
+// The endpoint does nothing but address the transaction: which slot the item
+// belongs in, whether the player actually has it, and what comes off are all
+// decided under the Player's lock, because all three can change between a
+// check here and a write there.
+func (controller *Controller) HandleEquip(context *player_agent.Context, request *pb.EquipRequest) (*pb.EquipResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("equip endpoint: context and request are required")
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("equip endpoint: %w", err)
+	}
+	result, err := syncsender.NewEquipItemSender(controller.NestClient()).Sync_EquipItem(context.Context(), entityID, request.ItemID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("equip failed", "player_id", context.PlayerID, "item_id", request.ItemID, "err", err)
+		}
+		return &pb.EquipResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EquipResponse{Slot: result.Slot, Replaced: result.Replaced}, nil
+}

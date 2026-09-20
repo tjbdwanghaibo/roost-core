@@ -1,0 +1,180 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"{{MODULE}}/game/equipment"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// Equipment is the demo's one nested write path — a struct inside the DAO
+// holding a map of pointers to another struct — and these assert the part of
+// it that nothing else in the project does: **a change two levels down has to
+// reach the persist patch, and a piece that came off must stop reaching it.**
+//
+// Both directions were real defects (U-0236, U-0238, both P1), and both were
+// invisible to every generated project because nothing in the demo had a
+// nested field. That is why these live here rather than only in the
+// generator's own runtime gate.
+
+type equipmentCommitter struct{ records []dataengine.CommitRecord }
+
+func (c *equipmentCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+func newEquippedPlayer(t *testing.T) *Player {
+	t.Helper()
+	RegisterEntity()
+	id, err := entity.BuildEntityID(7700, EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	return built.(*Player)
+}
+
+const (
+	ironSwordID = int64(2001)
+	steelSword  = int64(2002)
+)
+
+// Wearing something reaches storage, and so does changing what is worn
+// afterwards — the change is two links away from the DAO and nobody wrote
+// those links by hand.
+func TestAWornPieceReachesThePersistPatch(t *testing.T) {
+	subject := newEquippedPlayer(t)
+	committer := &equipmentCommitter{}
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
+		return nil, err
+	}); err != nil {
+		t.Fatalf("equip: %v", err)
+	}
+	if len(committer.records) == 0 {
+		t.Fatal("wearing a piece produced no commit record")
+	}
+	if itemID, _, worn := subject.EquipmentComp().Worn(equipment.SlotWeapon); !worn || itemID != ironSwordID {
+		t.Fatalf("the weapon slot holds item %d (worn=%v), want %d", itemID, worn, ironSwordID)
+	}
+
+	// Now change the piece itself, two levels down.
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "upgrade", func() (any, error) {
+		piece, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
+		piece.SetLevel(2)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("changing a worn piece produced %d commit records, want 1; the change is two links from the DAO", len(committer.records))
+	}
+	if _, level, _ := subject.EquipmentComp().Worn(equipment.SlotWeapon); level != 2 {
+		t.Fatalf("the piece reports level %d, want 2", level)
+	}
+}
+
+// The piece that came off must stop reporting. A detached value that still
+// marks the DAO writes its own content under a slot it no longer occupies —
+// which is data corruption, not a spurious dirty flag (U-0238).
+func TestAReplacedPieceStopsReachingStorage(t *testing.T) {
+	subject := newEquippedPlayer(t)
+	committer := &equipmentCommitter{}
+
+	var replaced interface{ SetLevel(int32) }
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
+		return nil, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	piece, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
+	replaced = piece
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "swap", func() (any, error) {
+		_, previous, err := subject.EquipmentComp().Equip(steelSword, 1)
+		if err != nil {
+			return nil, err
+		}
+		if previous != ironSwordID {
+			t.Errorf("swapping reported %d coming off, want %d", previous, ironSwordID)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_detached", func() (any, error) {
+		replaced.SetLevel(9)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) != 0 {
+		t.Fatalf("a piece that came off still wrote to storage (%d records); it would write its own content under a slot it no longer occupies", len(committer.records))
+	}
+}
+
+// And a rollback puts the ownership back where it was: the piece that was
+// restored reports again, the one that was discarded does not.
+func TestARolledBackSwapRestoresTheOldPieceAndReleasesTheNew(t *testing.T) {
+	subject := newEquippedPlayer(t)
+	committer := &equipmentCommitter{}
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+		_, _, err := subject.EquipmentComp().Equip(ironSwordID, 1)
+		return nil, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	original, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
+
+	sentinel := errors.New("abort")
+	var discarded interface{ SetLevel(int32) }
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "swap", func() (any, error) {
+		if _, _, err := subject.EquipmentComp().Equip(steelSword, 1); err != nil {
+			return nil, err
+		}
+		piece, _ := subject.Dao().GetEquipment().GetSlots(equipment.SlotWeapon)
+		discarded = piece
+		return nil, sentinel
+	}); !errors.Is(err, sentinel) {
+		t.Fatalf("transaction error = %v, want the sentinel", err)
+	}
+	if itemID, _, _ := subject.EquipmentComp().Worn(equipment.SlotWeapon); itemID != ironSwordID {
+		t.Fatalf("after the rollback the slot holds %d, want the original %d", itemID, ironSwordID)
+	}
+
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_restored", func() (any, error) {
+		original.SetLevel(3)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) == 0 {
+		t.Error("the restored piece no longer reaches storage; a later change to it would be lost silently")
+	}
+
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch_discarded", func() (any, error) {
+		discarded.SetLevel(9)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) != 0 {
+		t.Errorf("the piece the rollback discarded still writes to storage (%d records)", len(committer.records))
+	}
+}

@@ -6,6 +6,32 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-05：活动窗口边界上，刚记下的贡献立刻查不到
+
+- **位置**：生成工程 `internal/service/game/activity.go` 的 `Contribute` 与 `Standing`
+  （模板 `demo/internal/service/game/activity.go.tmpl:309` 与 `:331`），
+  窗口定义在 `game/activity/activity.go` —— `WindowSeconds = 300`，
+  `ID(nowUnix) = "race-" + (nowUnix - nowUnix%300)`。
+- **现象**：`framework-compat` 的 `source-head / demo` 格在 2026-09-20 12:15:01 UTC 失败：
+
+  ```text
+  robot action activity_standing: window race-1789906500 counted score=0 progress=0
+  for one dungeon clear (and its replay), want 1/1
+  ```
+
+  `1789906500` 正好是 12:15:00 UTC，也正好被 300 整除——机器人在上一个窗口
+  （12:14:5x）清的本，在新窗口里读的榜。
+- **为什么可疑**：`Contribute` 与 `Standing` **各自**用 `time.Now()` 现算窗口 id，两次调用之间没有任何
+  东西把读锚定到写入的那个窗口。这不只是测试抖动：一个玩家 12:14:59 清本、12:15:01 打开排行榜，
+  看到的就是 0——他的贡献并没有丢（它在上一个窗口里），但界面上没有任何解释。
+- **会红的测试草稿**：把时钟固定在 `WindowStart(now)+299`，`Contribute` 之后推进 2 秒再 `Standing`，
+  断言"要么读到上一个窗口的成绩，要么明确告诉调用方窗口已滚动"。
+- **候选修法**：(a) `Contribute` 把它落进的 window id 返回给调用方，端点带着它查；
+  (b) `Standing` 在当前窗口为空时回退看上一个窗口并标明；(c) 机器人动作按窗口边界重试。
+  三选一是接口语义问题，不该由搬迁批次拍板。
+- **来源**：三仓合一仓 P4 的 framework-compat 实跑。**与合仓无关**——合仓前 codegen main 上同一格
+  在 10:52 UTC 通过，只是那一次没有跨过窗口边界。
+
 ## W-2026-09-20-04 已分流：→ RR-20260920-08（根因是 `OpTimeout` 不覆盖写闸排队，不是锁泄漏）
 
 - **位置**：`roost-core/remoteentity`（`versioned_lock` / `Assembly` 的 `OpTimeout` 使用路径）与

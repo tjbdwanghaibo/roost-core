@@ -1,0 +1,43 @@
+# ⚠️ 三仓合一仓搬迁中（P3）：本工作流从 roost-codegen 原样搬来，内容未改——
+# 它检查的东西（生成器版本下限、升级器历史、release shell 卫生）仍然由
+# codegen/internal/roost/deploy_hygiene_test.go 逐条断言，所以文件不能删。
+# 但它的作业还是跨仓形态（clone roost-kit、三仓 go.work、-roost-kit-version），
+# 合仓之后这些步骤要重写，属于 P5（发布与归档）。在那之前只保留手动触发，
+# 不在每次 push 上跑一个必然失败的门禁。
+#   方案：docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md
+name: nightly
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deep-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzValidModulePath$' -fuzztime=30s
+      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzManifestDecode$' -fuzztime=30s
+      - run: go test ./internal/roost -run '^$' -bench '^BenchmarkRenderProject$' -benchmem -count=5 > benchmark.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-quality-${{ github.run_id }}
+          path: |
+            coverage.out
+            benchmark.txt
+          if-no-files-found: error
+          retention-days: 30

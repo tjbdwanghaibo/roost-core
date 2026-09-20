@@ -1,0 +1,184 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	guildentity "{{MODULE}}/game/entities/guild"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// The guild endpoints: the demo's one set of operations on an entity that
+// does not belong to this process.
+//
+// Read them against the dungeon or the mail endpoints and the difference is
+// almost invisible — one Nest call, two entity ids, a coded refusal on the
+// way out. That is the claim remote-managed entities make: the handler and
+// the endpoint are written the same way, and the framework turns the id's
+// remote bit into a distributed lock.
+//
+// The one thing the endpoint does have to decide is where a NEW guild's id
+// comes from, and that is the same problem the spawner solved: an id minted
+// from this process's sid, so two processes founding guilds at the same
+// moment cannot mint the same one (game/runtimeid).
+
+func (controller *Controller) HandleFoundGuild(context *player_agent.Context, request *pb.FoundGuildRequest) (*pb.GuildResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("found_guild endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.GuildResponse, error) {
+		// A remote entity's lock is held with a lease, so "I could not take it
+		// in time" is a normal, temporary answer — most often a process that
+		// restarted before its predecessor's lease expired
+		// (remote_entity.lock_ttl). It is a retryable refusal, not a failure,
+		// and calling it an internal error tells the client something is
+		// broken about a situation that clears itself in seconds.
+		if errors.Is(err, corenest.ErrNestTimeout) {
+			err = errcode.Wrap(apperrors.ErrGuildBusy, nil, "stage", stage)
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("found_guild failed", "player_id", context.PlayerID, "stage", stage, "err", err)
+		}
+		return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
+	}
+	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("found_guild endpoint: %w", err)
+	}
+	// Founding is idempotent per (player, name), and it has to be: the
+	// endpoint answers guild_busy for a lock it could not take in time, which
+	// invites a retry — and a retry that minted a second guild, or refused
+	// with "you already have one", would punish the client for doing what it
+	// was told. So the same founding, repeated, replays its own answer.
+	//
+	// The check reads the player's own copy of "which guild am I in", the
+	// same fact guild_info reads, precisely because it takes no distributed
+	// lock: asking the guild would mean locking it to find out whether to
+	// lock it.
+	existing, err := syncsender.NewPlayerGuildSender(controller.NestClient()).Sync_PlayerGuild(context.Context(), playerEntityID)
+	if err != nil {
+		return refuse(err, "existing")
+	}
+	if existing != 0 {
+		info, infoErr := syncsender.NewGuildInfoSender(controller.NestClient()).Sync_GuildInfo(context.Context(), existing)
+		if infoErr != nil {
+			return refuse(infoErr, "existing")
+		}
+		if info.Name == request.Name {
+			// The same request as before: this is the reply that was lost.
+			return controller.guildResponse(info), nil
+		}
+		// A different name is a different request, and the player already has
+		// a guild — that is the real guild_exists.
+		return refuse(errcode.Wrap(apperrors.ErrGuildExists, nil, "guild_id", existing), "existing")
+	}
+	ids, err := controller.RuntimeIDs()
+	if err != nil {
+		return nil, fmt.Errorf("found_guild endpoint: %w", err)
+	}
+	uniqueID, err := ids.Next()
+	if err != nil {
+		return refuse(err, "mint")
+	}
+	// The aggregate has to EXIST before anything can take its lock: a remote
+	// entity is materialized by loading it from the authoritative store, so
+	// "found" is create-then-write, not write-and-hope. The create is local
+	// and unfenced — nobody else can know this id yet, because it was minted
+	// from this process's sid one line ago — and the write that follows is
+	// the fenced one.
+	guilds, err := controller.Guilds()
+	if err != nil {
+		return nil, fmt.Errorf("found_guild endpoint: %w", err)
+	}
+	created, err := guilds.Create(context.Context(), uniqueID)
+	if err != nil {
+		return refuse(err, "create")
+	}
+	guildID := created.ID()
+	info, err := syncsender.NewFoundGuildSender(controller.NestClient()).
+		MultiSync_FoundGuild(context.Context(), guildID, playerEntityID, request.Name, context.PlayerID, time.Now().Unix())
+	if err != nil {
+		return refuse(err, "found")
+	}
+	return controller.guildResponse(info), nil
+}
+
+func (controller *Controller) HandleJoinGuild(context *player_agent.Context, request *pb.JoinGuildRequest) (*pb.GuildResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("join_guild endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.GuildResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("join_guild failed", "player_id", context.PlayerID, "guild_id", request.GuildID, "stage", stage, "err", err)
+		}
+		return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
+	}
+	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("join_guild endpoint: %w", err)
+	}
+	// The guild id arrives from the client, so it is checked against the kind
+	// before it becomes a lock target: an id of the wrong kind would be a
+	// distributed lock taken on something that is not a guild.
+	if !entity.MatchEntityID(request.GuildID, guildentity.EntityKindGuild) {
+		return refuse(errcode.Wrap(apperrors.ErrGuildMissing, nil, "guild_id", request.GuildID), "validate")
+	}
+	info, err := syncsender.NewJoinGuildSender(controller.NestClient()).
+		MultiSync_JoinGuild(context.Context(), request.GuildID, playerID, context.PlayerID, time.Now().Unix())
+	if err != nil {
+		return refuse(err, "join")
+	}
+	return controller.guildResponse(info), nil
+}
+
+func (controller *Controller) HandleGuildInfo(context *player_agent.Context, request *pb.GuildInfoRequest) (*pb.GuildResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("guild_info endpoint: context and request are required")
+	}
+	guildID := request.GuildID
+	if guildID == 0 {
+		// "The one I am in" is a read of the player's own copy, which is the
+		// reason that copy exists: answering it from the guild would mean
+		// taking a distributed lock to find out whether to take one.
+		playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return nil, fmt.Errorf("guild_info endpoint: %w", err)
+		}
+		mine, err := syncsender.NewPlayerGuildSender(controller.NestClient()).Sync_PlayerGuild(context.Context(), playerID)
+		if err != nil {
+			code, reason := errcode.ClientError(err)
+			return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
+		}
+		if mine == 0 {
+			return &pb.GuildResponse{ServedBySID: controller.ServerSID()}, nil
+		}
+		guildID = mine
+	}
+	info, err := syncsender.NewGuildInfoSender(controller.NestClient()).Sync_GuildInfo(context.Context(), guildID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("guild_info failed", "player_id", context.PlayerID, "guild_id", guildID, "err", err)
+		}
+		return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
+	}
+	return controller.guildResponse(info), nil
+}
+
+func (controller *Controller) guildResponse(info guildentity.Info) *pb.GuildResponse {
+	return &pb.GuildResponse{
+		GuildID: info.GuildID, Name: info.Name, Members: info.Members,
+		ServedBySID: controller.ServerSID(),
+	}
+}

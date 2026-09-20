@@ -1,0 +1,254 @@
+package sceneruntime
+
+import (
+	"testing"
+
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// Ids here are plain integers standing in for entity ids; the interest system
+// never interprets them, which is the point of keying on one id space.
+const (
+	watcherID = int64(1001)
+	moverID   = int64(1002)
+)
+
+func newInterest(t *testing.T) scene.Interest {
+	t.Helper()
+	runtime, err := New(testScene{id: 1}, scene.Config{Width: 1000, Height: 1000, BlockSize: 150})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("start runtime: %v", err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+	return runtime.Interest()
+}
+
+// changesFor collapses a tick into "what happened to this pair".
+func changeFor(changes []scene.SubscriptionChange, observer, subject int64) (scene.SubscriptionChange, bool) {
+	for _, change := range changes {
+		if change.Observer == observer && change.Subject == subject {
+			return change, true
+		}
+	}
+	return scene.SubscriptionChange{}, false
+}
+
+// Entering the scene subscribes a player to itself — through the self
+// relation, not through distance. The spatial source refuses to let anything
+// observe itself, so without that relation a client would never receive its
+// own state.
+func TestEnteringSubscribesToYourself(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	change, ok := changeFor(interest.Tick(), watcherID, watcherID)
+	if !ok || !change.Subscribe {
+		t.Fatalf("entering did not subscribe the player to itself: %+v", change)
+	}
+}
+
+// Two players near each other see each other; one walking beyond the leave
+// radius stops being seen.
+func TestDistanceSubscribesAndReleases(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	change, ok := changeFor(interest.Tick(), watcherID, moverID)
+	if !ok || !change.Subscribe {
+		t.Fatalf("a player 20 units away was not subscribed: %+v", change)
+	}
+	// Beyond the leave radius (150).
+	if err := interest.Move(moverID, spatial.Point{X: 700, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	change, ok = changeFor(interest.Tick(), watcherID, moverID)
+	if !ok || change.Subscribe {
+		t.Fatalf("a player 200 units away was not released: %+v", change)
+	}
+}
+
+// The hysteresis. A player sitting exactly between the two radii produces no
+// events at all when it jitters: it is already visible and still inside the
+// leave radius. Without two radii this is a subscribe/unsubscribe pair per
+// step, and every one of them re-sends a snapshot.
+func TestJitteringOnTheBoundaryProducesNothing(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	// Inside the enter radius (120) to become visible.
+	if err := interest.Enter(moverID, spatial.Point{X: 500 + 119, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); !ok || !change.Subscribe {
+		t.Fatalf("the mover never became visible: %+v", change)
+	}
+	// Now walk back and forth across the enter radius but stay inside the
+	// leave radius (150).
+	for _, x := range []int64{125, 140, 121, 149, 130} {
+		if err := interest.Move(moverID, spatial.Point{X: 500 + x, Y: 500}); err != nil {
+			t.Fatal(err)
+		}
+		if change, ok := changeFor(interest.Tick(), watcherID, moverID); ok {
+			t.Fatalf("jittering at %d produced %+v; the leave radius is what stops this", x, change)
+		}
+	}
+}
+
+// The reason the aggregator counts sources: a teammate who is also nearby is
+// held by two of them, and walking out of view must not take the team
+// subscription with it.
+func TestARelationKeepsASubscriptionDistanceDropped(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Team().Set(watcherID, []int64{moverID})
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); !ok || !change.Subscribe {
+		t.Fatalf("the teammate was not subscribed: %+v", change)
+	}
+
+	// Out of sight, still on the team.
+	if err := interest.Move(moverID, spatial.Point{X: 900, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); ok {
+		t.Fatalf("walking out of view released a teammate: %+v", change)
+	}
+
+	// Off the team while still out of sight: now the last source is gone.
+	interest.Team().Set(watcherID, nil)
+	change, ok := changeFor(interest.Tick(), watcherID, moverID)
+	if !ok || change.Subscribe {
+		t.Fatalf("the last source went away and the subscription survived: %+v", change)
+	}
+}
+
+// Leaving releases everything the player held in both directions, without the
+// caller having to remember who was watching.
+func TestLeavingReleasesBothDirections(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Team().Set(watcherID, []int64{moverID})
+	interest.Tick()
+
+	if err := interest.Leave(moverID); err != nil {
+		t.Fatal(err)
+	}
+	changes := interest.Tick()
+	if change, ok := changeFor(changes, watcherID, moverID); !ok || change.Subscribe {
+		t.Fatalf("the watcher still holds the leaver: %+v", change)
+	}
+	if change, ok := changeFor(changes, moverID, moverID); !ok || change.Subscribe {
+		t.Fatalf("the leaver still holds itself: %+v", change)
+	}
+	if change, ok := changeFor(changes, moverID, watcherID); !ok || change.Subscribe {
+		t.Fatalf("the leaver still holds the watcher: %+v", change)
+	}
+}
+
+// A refused subscribe is said again on the next tick, and exactly once: the
+// system counts a pair as subscribed the moment it emits, so the transport's
+// refusal is the only thing that can put the pair back in play
+// (RR-20260920-06).
+func TestARefusedSubscribeIsSaidAgain(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); !ok || !change.Subscribe {
+		t.Fatalf("standing next to each other did not subscribe: %+v", change)
+	}
+	// Nothing about the pair changed, so an ordinary tick has nothing to say.
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); ok {
+		t.Fatalf("an idle tick re-emitted a live subscription: %+v", change)
+	}
+
+	interest.SubscribeFailed(watcherID, moverID)
+	change, ok := changeFor(interest.Tick(), watcherID, moverID)
+	if !ok || !change.Subscribe {
+		t.Fatalf("the refused subscribe was not retried: %+v", change)
+	}
+	if !change.Retry {
+		t.Errorf("a retry is not marked as one, so the caller cannot quiet the repeats: %+v", change)
+	}
+	// And the retry is not a standing order: once said again, the pair is
+	// back to being quiet.
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); ok {
+		t.Fatalf("the retry repeated itself: %+v", change)
+	}
+}
+
+// A pair that left before the refusal arrives is not retried — and does not
+// produce an unsubscribe either, because the transport never took it.
+func TestARefusedSubscribeForAReleasedPairIsDropped(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); !ok || !change.Subscribe {
+		t.Fatalf("standing next to each other did not subscribe: %+v", change)
+	}
+	if err := interest.Leave(moverID); err != nil {
+		t.Fatal(err)
+	}
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); !ok || change.Subscribe {
+		t.Fatalf("leaving did not unsubscribe: %+v", change)
+	}
+	// The refusal is for the subscribe that was emitted before the leave.
+	interest.SubscribeFailed(watcherID, moverID)
+	if change, ok := changeFor(interest.Tick(), watcherID, moverID); ok {
+		t.Fatalf("a pair that left came back: %+v", change)
+	}
+}
+
+// A pair the transport keeps refusing keeps being offered. Capacity is not a
+// verdict on the pair — a room that is full now has room when someone leaves,
+// and the alternative is the very defect this fixes: a subscription that
+// should exist, does not, and nobody ever asks again. What a refusal that
+// repeats gets is a quieter log line, not a shorter life (RR-20260920-06).
+func TestARefusedSubscribeKeepsBeingOffered(t *testing.T) {
+	interest := newInterest(t)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := changeFor(interest.Tick(), watcherID, moverID); !ok {
+		t.Fatal("standing next to each other did not subscribe")
+	}
+	// Neither player moves, so the band never changes: the retry queue is the
+	// only thing that can bring the pair back.
+	for attempt := 1; attempt <= 5; attempt++ {
+		interest.SubscribeFailed(watcherID, moverID)
+		change, ok := changeFor(interest.Tick(), watcherID, moverID)
+		if !ok || !change.Subscribe {
+			t.Fatalf("refusal %d ended the retries: %+v", attempt, change)
+		}
+	}
+}

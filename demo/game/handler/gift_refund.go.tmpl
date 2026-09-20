@@ -1,0 +1,33 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/gift"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerGiftRefund is debit's compensation: put the items back, and record
+// the command and the outcome in the same transaction — the same shape as the
+// debit, because a compensation that runs twice is as wrong as a step that
+// does.
+//
+// It is a separate handler from AddItem rather than a reuse of it: AddItem is
+// a player-facing transaction with no saga identity, and giving it one would
+// make every endpoint carry a step it does not have.
+//
+// A refusal here (the stack filled up while the gift was in flight) is
+// reported as a failed compensation, which is what the coordinator turns into
+// manual_required — an operator decides, because the framework cannot.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step gift.NativeStep) (int32, error) {
+	held, err := target.BagComp().AddItem(itemID, count)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			return 0, err
+		}
+		return 0, step.Complete(false, reason)
+	}
+	return held, step.Complete(true, "")
+}

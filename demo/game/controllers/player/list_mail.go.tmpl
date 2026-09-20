@@ -1,0 +1,36 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleListMail pages the player's mailbox through the mail service — a
+// typed call into another process; the mail service scopes the read to the
+// authenticated player, so there is nothing for the endpoint to check.
+func (controller *Controller) HandleListMail(context *player_agent.Context, request *pb.ListMailRequest) (*pb.ListMailResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("list_mail endpoint: context and request are required")
+	}
+	page, err := controller.Mailer().List(context.Context(), context.PlayerID, request.Cursor, int(request.Limit))
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("list_mail failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ListMailResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.ListMailResponse{NextCursor: page.NextCursor, Unread: page.Unread}
+	for _, item := range page.Items {
+		response.Mails = append(response.Mails, pb.MailEntry{
+			MailID: item.Envelope.ID, Subject: item.Envelope.Subject, Body: item.Envelope.Body,
+			Status: string(item.Status), HasAttachment: len(item.Envelope.Attachment) > 0,
+			Claimable: item.Claimable, ExpiresAtUnix: item.Envelope.ExpiresAtUnix,
+		})
+	}
+	return response, nil
+}

@@ -1,0 +1,218 @@
+# 发布闸。三仓合一仓之后这是 roost-core 唯一的发布链：一个模块、一个 tag、
+# 一个版本号。清单 codegen/ci/framework-release.yaml 只剩一行 release，
+# scripts/pretag.sh 在打 tag 之前比对它，这里在 tag 之后再比对一次——它曾经
+# 漂了十个版本而没人发现（U-0270）。
+name: framework-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable vMAJOR.MINOR.PATCH tag to publish
+        required: true
+        type: string
+
+concurrency:
+  group: framework-release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.release.outputs.release }}
+      consumer_go: ${{ steps.release.outputs.consumer_go_json }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: derive and validate immutable release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag must be vMAJOR.MINOR.PATCH"; exit 1; }
+          git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" >/dev/null
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
+          echo "value=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: repository release hygiene
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then echo "go.mod has a replace directive"; exit 1; fi
+          if grep -Eq 'v[0-9]+\.[0-9]+\.[0-9]+-0\.[0-9]{14}-[0-9a-f]{12}' go.mod; then echo "go.mod depends on a pseudo-version"; exit 1; fi
+          go mod download
+          go mod verify
+          go test ./...
+          go vet ./...
+      - name: lock and verify published framework set
+        id: release
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+        run: go run ./codegen/cmd/roost framework verify --manifest codegen/ci/framework-release.yaml --expected-release "$RELEASE_TAG" --lock framework-lock.json --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: framework-lock
+          path: framework-lock.json
+          if-no-files-found: error
+          retention-days: 30
+
+  consumer-acceptance:
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ${{ fromJSON(needs.gate.outputs.consumer_go) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o "${RUNNER_TEMP}/roost" ./codegen/cmd/roost
+      - name: generate exact full consumer
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          # One module, one version: the generated project requires roost-core
+          # and nothing else (三仓合一仓 P5).
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$VERSION"
+          cd "${RUNNER_TEMP}/planet"
+          "${RUNNER_TEMP}/roost" add access player --service gate
+          "${RUNNER_TEMP}/roost" add transport tcp
+          "${RUNNER_TEMP}/roost" add entity Player
+          "${RUNNER_TEMP}/roost" add component Profile --entity Player
+          "${RUNNER_TEMP}/roost" add dao Player --entity Player
+          "${RUNNER_TEMP}/roost" add handler RenamePlayer --entity Player --component Profile
+          "${RUNNER_TEMP}/roost" add protocol RenamePlayer --group game --handler player
+          "${RUNNER_TEMP}/roost" add lifecycle Player --service game
+          "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
+          "${RUNNER_TEMP}/roost" add skill Fireball
+          "${RUNNER_TEMP}/roost" add saga GuildTransfer -service game -steps debit,credit
+          "${RUNNER_TEMP}/roost" generate
+          "${RUNNER_TEMP}/roost" project doctor --strict=false
+      - name: select consumer Go version
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: ${{ runner.temp }}/planet/go.sum
+      - name: verify exact consumer
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          GOWORK=off go mod tidy
+          GOWORK=off go mod verify
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then echo "consumer go.mod has a replace directive"; exit 1; fi
+          "${RUNNER_TEMP}/roost" generate --check
+          GOWORK=off go test ./...
+          GOWORK=off go vet ./...
+          # actionlint locates the project by its .git directory and exits 3
+          # ("no project was found") in a bare generated tree.
+          git init -q .
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+  binary-smoke:
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build native release binary
+        shell: bash
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          suffix=
+          if [ "$RUNNER_OS" = Windows ]; then suffix=.exe; fi
+          go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/codegen/internal/roost.buildVersion=$VERSION" -o "${RUNNER_TEMP}/roost${suffix}" ./codegen/cmd/roost
+          "${RUNNER_TEMP}/roost${suffix}" version | grep -F "$VERSION"
+          "${RUNNER_TEMP}/roost${suffix}" help framework-release
+
+  publish:
+    needs: [gate, consumer-acceptance, binary-smoke]
+    environment: framework-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.gate.outputs.version }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: framework-lock
+          path: dist
+      - name: build cross-platform immutable CLI archives
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          mkdir -p dist/build
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
+            os=${target%-*}
+            arch=${target#*-}
+            suffix=
+            if [ "$os" = windows ]; then suffix=.exe; fi
+            output="dist/build/$target"
+            mkdir -p "$output"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/codegen/internal/roost.buildVersion=$VERSION" -o "$output/roost${suffix}" ./codegen/cmd/roost
+            if [ "$os" = windows ]; then
+              (cd "$output" && zip -q "../../roost-${VERSION}-${target}.zip" "roost.exe")
+            else
+              tar -C "$output" -czf "dist/roost-${VERSION}-${target}.tar.gz" roost
+            fi
+          done
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: dist/build
+          format: spdx-json
+          output-file: dist/roost-${{ needs.gate.outputs.version }}.spdx.json
+          upload-artifact: false
+      - name: checksum release set
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip ./*.json > SHA256SUMS
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/framework-lock.json
+            dist/*.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: roost-cli-${{ needs.gate.outputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - name: publish immutable CLI and framework lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: gh release create "$VERSION" dist/*.tar.gz dist/*.zip dist/*.json dist/SHA256SUMS --verify-tag --generate-notes

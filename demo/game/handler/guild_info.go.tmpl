@@ -1,0 +1,19 @@
+package handler
+
+import (
+	guild "{{MODULE}}/game/entities/guild"
+)
+
+// handlerGuildInfo reads a guild.
+//
+// It is a read and it still takes the distributed lock, because a
+// remote-managed entity has one owner at a time and reading it anywhere else
+// would be reading a copy with no statement about how old it is. A game that
+// wants cheap, slightly stale reads of a shared object uses a mirror; this
+// demo does not, and saying so is more useful than pretending the read is
+// free.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuildInfo(target guild.IRosterEntity) (guild.Info, error) {
+	return target.RosterComp().Snapshot(), nil
+}

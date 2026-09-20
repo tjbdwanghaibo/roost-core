@@ -1,0 +1,141 @@
+package sceneruntime
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// The spawn table is config data, so a test of the population policy needs the
+// project's own data files — the policy IS the table plus the counting.
+func loadSpawnTable(t *testing.T) {
+	t.Helper()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+}
+
+func newRefresh(t *testing.T) scene.Refresh {
+	t.Helper()
+	loadSpawnTable(t)
+	runtime, err := New(testScene{id: 1}, scene.Config{Width: 1000, Height: 1000, BlockSize: 150})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("start runtime: %v", err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+	return runtime.Refresh()
+}
+
+// A fresh scene wants its whole population at once, and stops asking once it
+// has been told they exist.
+func TestAFreshSceneAsksForItsWholePopulationOnce(t *testing.T) {
+	refresh := newRefresh(t)
+	now := time.Now()
+
+	requests := refresh.Due(now)
+	if len(requests) == 0 {
+		t.Fatal("a fresh scene asked for nothing; the spawn table is empty or unreadable")
+	}
+	for index, request := range requests {
+		refresh.Spawned(request.Group, int64(9000+index))
+	}
+	if again := refresh.Due(now); len(again) != 0 {
+		t.Fatalf("a full scene asked for %d more", len(again))
+	}
+	if alive := refresh.Alive(); len(alive) != len(requests) {
+		t.Fatalf("the system believes %d are alive, want %d", len(alive), len(requests))
+	}
+}
+
+// The counting rule: a spawn that was asked for but never reported does NOT
+// reduce the deficit. A system that decremented on request would run one short
+// for the rest of the process, and nothing would ever say so.
+func TestAnUnreportedSpawnIsAskedForAgain(t *testing.T) {
+	refresh := newRefresh(t)
+	now := time.Now()
+
+	first := refresh.Due(now)
+	if len(first) == 0 {
+		t.Fatal("no requests")
+	}
+	// Report all but one — as if one create failed.
+	for index, request := range first[1:] {
+		refresh.Spawned(request.Group, int64(9100+index))
+	}
+	again := refresh.Due(now)
+	if len(again) != 1 {
+		t.Fatalf("after one failed create the scene asked for %d, want 1", len(again))
+	}
+}
+
+// A death does not refill immediately: the slot waits out the row's respawn
+// delay, and the delay is read from the table.
+func TestADeathRefillsOnlyAfterTheRespawnDelay(t *testing.T) {
+	refresh := newRefresh(t)
+	now := time.Now()
+
+	requests := refresh.Due(now)
+	ids := make([]int64, 0, len(requests))
+	for index, request := range requests {
+		id := int64(9200 + index)
+		refresh.Spawned(request.Group, id)
+		ids = append(ids, id)
+	}
+	refresh.Died(ids[0], now)
+
+	if immediate := refresh.Due(now); len(immediate) != 0 {
+		t.Fatalf("a death refilled immediately: %d requests", len(immediate))
+	}
+	// The demo's table says twenty seconds.
+	if early := refresh.Due(now.Add(19 * time.Second)); len(early) != 0 {
+		t.Fatalf("the slot refilled before the delay elapsed: %d requests", len(early))
+	}
+	late := refresh.Due(now.Add(21 * time.Second))
+	if len(late) != 1 {
+		t.Fatalf("after the delay the scene asked for %d, want 1", len(late))
+	}
+}
+
+// Members are spread around the row's centre rather than stacked on it, and
+// every point they are given is one the terrain accepts.
+func TestSpawnPointsAreWalkableAndSpread(t *testing.T) {
+	loadSpawnTable(t)
+	runtime, err := New(testScene{id: 1}, scene.Config{Width: 1000, Height: 1000, BlockSize: 150})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+
+	requests := runtime.Refresh().Due(time.Now())
+	if len(requests) < 2 {
+		t.Skipf("the spawn table asks for %d members; this test needs at least 2", len(requests))
+	}
+	seen := make(map[int64]int64, len(requests))
+	for _, request := range requests {
+		if !runtime.Terrain().Walkable(request.At) {
+			t.Errorf("spawn point %v is not walkable", request.At)
+		}
+		if other, duplicate := seen[request.At.X]; duplicate && other == request.At.Y {
+			t.Errorf("two members were placed on the same point %v", request.At)
+		}
+		seen[request.At.X] = request.At.Y
+	}
+}

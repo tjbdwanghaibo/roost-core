@@ -1,0 +1,170 @@
+package sceneruntime
+
+import (
+	"sync"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// RefreshSystem keeps the scene's population at what the spawn table says.
+//
+// It counts what it has been TOLD exists (`Spawned`), not what it has asked
+// for. That is the whole difference between a spawner that recovers and one
+// that leaks: a create that failed — the lifecycle refused, the process was
+// shutting down — simply appears again in the next Due, while a system that
+// decremented on request would quietly run one short for the rest of the run.
+//
+// The table is read on every Due rather than cached, so a hot reload of the
+// spawn data takes effect on the next tick. Reading config is a snapshot
+// lookup; caching it would buy nothing and cost the reload.
+type RefreshSystem struct {
+	mu       sync.Mutex
+	pathFind *PathFindSystem
+
+	// alive maps a member to its group; pending is when each group's missing
+	// slots may be refilled.
+	alive   map[int64]int32
+	pending map[int32][]time.Time
+	stopped bool
+}
+
+func (s *RefreshSystem) Name() string { return SystemNameRefresh }
+
+func (s *RefreshSystem) Init(ctx *Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pathFind = ctx.Runtime.pathFind
+	s.alive = make(map[int64]int32)
+	s.pending = make(map[int32][]time.Time)
+	return nil
+}
+
+func (s *RefreshSystem) Start() error { return nil }
+
+func (s *RefreshSystem) Stop(coreentity.EntityDestroyReason) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
+	s.alive = nil
+	s.pending = nil
+}
+
+// Due is the whole policy: for each row of the table, how many members are
+// missing, and of those how many have waited out the respawn delay.
+func (s *RefreshSystem) Due(now time.Time) []scene.SpawnRequest {
+	table, ok := generated.SpawnTableFrom(configdata.ActiveSnapshot())
+	if !ok {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return nil
+	}
+	counts := make(map[int32]int32, len(s.alive))
+	for _, group := range s.alive {
+		counts[group]++
+	}
+	var requests []scene.SpawnRequest
+	for _, row := range table.Rows() {
+		missing := row.Count - counts[row.ID]
+		for index := int32(0); index < missing; index++ {
+			// A slot that is missing because somebody died waits; a slot that
+			// has never been filled (a fresh scene, a raised Count) does not.
+			if !s.readyLocked(row.ID, now) {
+				break
+			}
+			at, err := s.place(spatial.Point{X: row.CenterX, Y: row.CenterY}, row.Radius, int(index))
+			if err != nil {
+				break
+			}
+			requests = append(requests, scene.SpawnRequest{Group: row.ID, Template: row.Template, HP: row.HP, At: at})
+		}
+	}
+	return requests
+}
+
+// readyLocked consumes one elapsed respawn timer for the group, or reports
+// true when the group has no timers waiting (a slot that was never filled).
+func (s *RefreshSystem) readyLocked(group int32, now time.Time) bool {
+	queue := s.pending[group]
+	if len(queue) == 0 {
+		return true
+	}
+	if now.Before(queue[0]) {
+		return false
+	}
+	s.pending[group] = queue[1:]
+	return true
+}
+
+// place spreads members around the row's centre instead of stacking them on
+// it: the offset is deterministic (the index, not a random number) so a test
+// can say where the second one goes.
+func (s *RefreshSystem) place(center spatial.Point, radius int64, index int) (spatial.Point, error) {
+	if radius <= 0 {
+		radius = 1
+	}
+	offsets := []spatial.Point{{}, {X: radius}, {Y: radius}, {X: -radius}, {Y: -radius}}
+	preferred := center
+	if index > 0 && index < len(offsets) {
+		preferred = spatial.Point{X: center.X + offsets[index].X, Y: center.Y + offsets[index].Y}
+	}
+	return s.pathFind.Place(preferred)
+}
+
+func (s *RefreshSystem) Spawned(group int32, id int64) {
+	if id == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	s.alive[id] = group
+}
+
+func (s *RefreshSystem) Died(id int64, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	group, known := s.alive[id]
+	if !known {
+		return
+	}
+	delete(s.alive, id)
+	row, found := spawnRow(group)
+	if !found {
+		return
+	}
+	s.pending[group] = append(s.pending[group], now.Add(time.Duration(row.RespawnSeconds)*time.Second))
+}
+
+func (s *RefreshSystem) Alive() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]int64, 0, len(s.alive))
+	for id := range s.alive {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func spawnRow(group int32) (generated.SpawnCfg, bool) {
+	table, ok := generated.SpawnTableFrom(configdata.ActiveSnapshot())
+	if !ok {
+		var zero generated.SpawnCfg
+		return zero, false
+	}
+	return table.Get(group)
+}
+
+var _ scene.Refresh = (*RefreshSystem)(nil)

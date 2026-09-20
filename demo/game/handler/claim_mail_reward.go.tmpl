@@ -1,0 +1,41 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/rewards"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerClaimMailReward grants a mail attachment into the Bag, at most once
+// per mail.
+//
+// It is the AddItem transaction plus an identity, the same shape the dungeon
+// clear uses (handlerClaimDungeon): the mail id is recorded on the Player in
+// the same WAL record as the items, so "this mail was paid" and "the items
+// are there" are one durable fact. A replay finds the id already recorded and
+// returns Claimed=false without granting again.
+//
+// This is what closes the window the mail service's three-step claim leaves:
+// reserve and grant succeed, the commit is lost, the reservation lapses, and
+// the retry re-reserves under the same token. The mail service counts that as
+// a duplicate attempt — correctly, it cannot know whether the game granted —
+// so the answer has to be on the game's side.
+//
+//roost:nest rollback=undo durability=strict
+func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int64, count int32, expiresAtUnix int64, nowUnix int64) (rewards.ClaimResult, error) {
+	if mailID == "" {
+		return rewards.ClaimResult{}, errcode.Wrap(apperrors.ErrMailClaim, nil, "mail_id", mailID)
+	}
+	bag := target.BagComp()
+	if !bag.ClaimMailReward(mailID, expiresAtUnix, nowUnix) {
+		// Already paid. Not an error: report what the player holds so the
+		// client's answer is the same either way.
+		return rewards.ClaimResult{BagCount: bag.ItemCount(itemID)}, nil
+	}
+	held, err := bag.AddItem(itemID, count)
+	if err != nil {
+		return rewards.ClaimResult{}, err
+	}
+	return rewards.ClaimResult{Claimed: true, BagCount: held}, nil
+}

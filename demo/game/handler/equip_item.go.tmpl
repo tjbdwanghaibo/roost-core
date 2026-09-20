@@ -1,0 +1,46 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/equipment"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerEquipItem moves one item from the bag onto the player, in one
+// transaction.
+//
+// Taking it out of the bag and putting it on have to commit together — a
+// crash between them either loses the item or duplicates it, and both are
+// asset errors. That is the whole reason this is a handler and not two calls
+// from the endpoint.
+//
+// The piece that comes off goes back in the bag in the same record, so the
+// three facts (bag minus one, slot changed, bag plus the old one) are one
+// durable fact.
+//
+//roost:nest rollback=undo durability=strict
+func handlerEquipItem(target player.IPlayerFullEntity, itemID int64) (equipment.Result, error) {
+	slot, wearable := equipment.SlotFor(itemID)
+	if !wearable {
+		return equipment.Result{}, errcode.Wrap(apperrors.ErrItemUnknown, nil, "item_id", itemID)
+	}
+	if _, err := target.BagComp().RemoveItem(itemID, 1); err != nil {
+		return equipment.Result{}, err
+	}
+	_, replaced, err := target.EquipmentComp().Equip(itemID, 1)
+	if err != nil {
+		return equipment.Result{}, err
+	}
+	if replaced != 0 {
+		// What came off goes back in the bag, in this same record.
+		if _, err := target.BagComp().AddItem(replaced, 1); err != nil {
+			return equipment.Result{}, err
+		}
+	}
+	// The attribute layer follows the worn set; recomputing here keeps it in
+	// the transaction that changed it, so a rollback takes the numbers back
+	// with the equipment.
+	target.AttributeComp().RefreshGear()
+	return equipment.Result{Slot: slot, Replaced: replaced}, nil
+}

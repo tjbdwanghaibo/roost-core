@@ -207,8 +207,10 @@ func frameworkImportAliases(file *ast.File) map[string]bool {
 	aliases := make(map[string]bool)
 	for _, spec := range file.Imports {
 		path := strings.Trim(spec.Path.Value, "\"")
+		// kit 合仓之后在 roost-core/kit/ 下，已经被上面那条前缀覆盖，所以这里
+		// 不再单列一条——留着会是一行永远不触发的判断（三仓合一仓 P2）。
+		// roost-skill 是更早一轮合进来之前的旧路径，留作漏改 import 的信号。
 		if !strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-core/") &&
-			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-kit/") &&
 			!strings.HasPrefix(path, "github.com/tjbdwanghaibo/roost-skill/") {
 			continue
 		}

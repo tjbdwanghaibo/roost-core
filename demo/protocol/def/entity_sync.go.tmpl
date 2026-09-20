@@ -1,0 +1,26 @@
+//go:build protocoldef
+
+package protocoldef
+
+// EntitySyncPush carries one server-authoritative state frame for the scene:
+// the players this client is subscribed to, as encoded by roost-core's room
+// transport sink. The demo pushes it over the player's TCP connection; a UDP
+// or KCP deployment sends the same bytes, and the deltas as real datagrams.
+//
+// Two lanes are folded into one message on purpose. Snapshots and removals
+// are reliable frames and arrive whole (Datagram=false). Deltas are fragments
+// of one frame (Datagram=true): a client feeds them to
+// statesync.NewReassembler in arrival order and decodes the frame once it is
+// complete. Both end at room.DecodeRoomWireFrame, then
+// room.DecodeRoomSubjectUpdate per object — the subject id says whose state
+// it is, and the payload is what that entity's packer produced.
+type EntitySyncPush struct {
+	Datagram bool   `pb:"1"`
+	Payload  []byte `pb:"2"`
+}
+
+//roost:protocol group=game handler=player
+type EntitySyncProtocol interface {
+	//roost:msg id=10103
+	EntitySync() EntitySyncPush
+}

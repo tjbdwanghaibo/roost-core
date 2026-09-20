@@ -1,0 +1,121 @@
+package player
+
+import (
+	"fmt"
+
+	gamescene "{{MODULE}}/game/scene"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+//roost:component type=2004
+const CompTypeMap entity.ComponentType = 2004
+
+// MapComponent is where the player is. It is the only door: every read of a
+// position goes through Pos() to the DAO, and every write goes through
+// MoveTo(). Nothing caches a position anywhere else.
+//
+// That rule is worth stating because the obvious shortcut — letting the
+// scene's AOI index answer "where is this player" — creates a second truth
+// that can disagree with the stored one, and the disagreement shows up as a
+// player who is somewhere else after a reconnect. The index exists to answer
+// "who is near whom", which is a question the DAO cannot answer cheaply; it
+// is written from here and never read back as authority.
+type MapComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IMapEntity is the narrow lock-safe view for Nest handlers that move a
+// player.
+type IMapEntity interface {
+	entity.IThreadSafeEntity
+	MapComp() *MapComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeMap, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("map component: owner %T is not *Player", owner)
+		}
+		return &MapComponent{owner: typed}, nil
+	})
+}
+
+func (component *MapComponent) Name() string { return "map" }
+
+func (component *MapComponent) Owner() *Player { return component.owner }
+
+// Pos is the player's position, read from the DAO. Callers hold the entity
+// lock (a Nest handler does by construction).
+func (component *MapComponent) Pos() spatial.Point {
+	dao := component.owner.Dao()
+	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
+}
+
+// SceneID is which scene the player is in, 0 for nowhere.
+func (component *MapComponent) SceneID() int64 { return component.owner.Dao().GetSceneID() }
+
+// InScene reports whether the player is placed on a map.
+func (component *MapComponent) InScene() bool { return component.SceneID() != 0 }
+
+// EnterScene places the player. The caller resolves the point first (through
+// the scene's PathFind.Place, so a remembered position that is now blocked
+// becomes the nearest free one) — this component does not know about scenes,
+// only about what it was told to write.
+func (component *MapComponent) EnterScene(sceneID int64, at spatial.Point) error {
+	if sceneID == 0 {
+		return errcode.Wrap(apperrors.ErrScenePosition, nil, "scene_id", sceneID)
+	}
+	dao := component.owner.Dao()
+	dao.SetSceneID(sceneID)
+	dao.SetPosX(at.X)
+	dao.SetPosY(at.Y)
+	component.owner.PublishSyncDirty()
+	return nil
+}
+
+// LeaveScene takes the player off the map. The position is kept: it is where
+// they will be when they come back.
+func (component *MapComponent) LeaveScene() {
+	component.owner.Dao().SetSceneID(0)
+	component.owner.PublishSyncDirty()
+}
+
+// MoveTo writes a new position, having checked it against the terrain the
+// caller supplies. The check is here rather than at the endpoint because this
+// is the only write path: a move that skipped the check would be a move the
+// map never agreed to.
+//
+// Distance is not checked here. How far a player may travel in one message is
+// a rule about the CLIENT (its tick rate, its input buffering), and a game
+// that cares enforces it where it knows those numbers; a component that
+// invented a limit would be guessing.
+func (component *MapComponent) MoveTo(terrain gamescene.Terrain, to spatial.Point) error {
+	if terrain == nil {
+		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain")
+	}
+	if !component.InScene() {
+		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
+	}
+	from := component.Pos()
+	if from == to {
+		return nil
+	}
+	// Walkable, not Occupy: players do not take the ground they stand on, so
+	// two of them may share a point and nothing has to be released when a
+	// connection drops. Occupancy is for things that really do block — a wall
+	// from the map, a monster a game decides is solid — and the Terrain
+	// interface keeps it for them.
+	if !terrain.Walkable(to) {
+		return errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
+	}
+	dao := component.owner.Dao()
+	dao.SetPosX(to.X)
+	dao.SetPosY(to.Y)
+	component.owner.PublishSyncDirty()
+	return nil
+}

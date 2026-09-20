@@ -1,0 +1,100 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/game/rewards"
+	"{{MODULE}}/protocol/pb"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+)
+
+// HandleClaimMail delivers a mail's attachment into the Bag: the mail
+// service's three-step claim around one Nest transaction.
+//
+//	ReserveClaim          — the mail service hands over the attachment under a
+//	                        token that is the same on every retry of this
+//	                        (player, mail)
+//	Sync_ClaimMailReward  — the grant AND its identity: the mail id is
+//	                        recorded on the Player in the same WAL record as
+//	                        the items
+//	CommitClaim           — the mail is marked claimed; a retry after a lost
+//	                        response commits again with the same token
+//
+// The middle step is what makes this exactly-once. The three calls are not
+// one transaction and cannot be — the mail lives in another process — so the
+// window is real: grant succeeds, commit is lost, the reservation lapses, and
+// a retry re-reserves under the same token. The mail service counts that as a
+// duplicate ATTEMPT, correctly: it cannot know whether the game granted. The
+// game can, and now does — the second grant finds the mail id already in the
+// Player's ledger and changes nothing, so the answer is the same numbers
+// without a second stack.
+//
+// What is still not closed: a crash between ReserveClaim and the grant leaves
+// the mail reserved until the lease lapses (the player waits, nothing is
+// lost), and a lost CommitClaim leaves the mail unclaimed in the mail service
+// until the next claim commits it (the ledger stops the double grant, not the
+// duplicate attempt).
+func (controller *Controller) HandleClaimMail(context *player_agent.Context, request *pb.ClaimMailRequest) (*pb.ClaimMailResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("claim_mail endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.ClaimMailResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("claim_mail failed", "player_id", context.PlayerID, "mail_id", request.MailID, "stage", stage, "err", err)
+		}
+		return &pb.ClaimMailResponse{Code: code, Reason: reason}, nil
+	}
+	ctx := context.Context()
+	claim, err := controller.Mailer().ReserveClaim(ctx, context.PlayerID, request.MailID, "")
+	if err != nil {
+		return refuse(err, "reserve")
+	}
+	reward, err := rewards.Decode(claim.Attachment)
+	if err != nil {
+		// Not this game's reward: give the reservation back so the mail is
+		// not stuck "held" until the lease lapses, and answer with a code.
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
+		}
+		return refuse(fmt.Errorf("%w: %v", svcmail.ErrMailInvalid, err), "decode")
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("claim_mail endpoint: %w", err)
+	}
+	result, err := syncsender.NewClaimMailRewardSender(controller.NestClient()).Sync_ClaimMailReward(ctx, entityID, request.MailID, reward.ItemID, reward.Count, claim.ExpiresAtUnix, time.Now().Unix())
+	if err != nil {
+		// The grant did not happen (the transaction rolled back, ledger entry
+		// included), so the reservation can be released; a full bag is a
+		// coded refusal.
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
+		}
+		return refuse(err, "grant")
+	}
+	if !result.Claimed {
+		// A replay of a claim this player was already paid for. Commit the
+		// mail (that is the step that was lost) and answer with what the
+		// player holds — repeating the grant is exactly what the ledger is
+		// here to prevent.
+		slog.Info("claim_mail: attachment was already granted; committing the mail only",
+			"player_id", context.PlayerID, "mail_id", request.MailID)
+	}
+	if _, err := controller.Mailer().CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
+		// The item is in the Bag; only the bookkeeping failed. Answer
+		// success — the client has its item — and log: the lease lapses and
+		// the next claim of this mail is the duplicate this demo accepts (see
+		// the comment above).
+		slog.Error("claim_mail: granted but not committed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
+	}
+	return &pb.ClaimMailResponse{ItemID: reward.ItemID, Count: reward.Count, BagCount: result.BagCount}, nil
+}

@@ -1,0 +1,47 @@
+package handler
+
+import (
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/gift"
+	apperrors "{{MODULE}}/internal/errors"
+	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+)
+
+// handlerStartGift starts the gift saga from inside the sender's Nest
+// transaction. It changes nothing on the Player: it checks, under the
+// Player's lock, that the items are there, and emits the saga start intent
+// into the same Nest WAL record — the Data Engine outbox delivers it to the
+// saga coordinator (saga.start effect), which then commands the steps. The
+// check is advisory: the items can still be spent before the debit step
+// runs, and then the debit refuses with the same coded error and the saga
+// fails with nothing to compensate. Committing a real reservation here would
+// be the stronger design; the demo keeps the Bag simple.
+//
+// The saga id comes from the endpoint (sender, session, frame sequence): a
+// retried frame reaches the coordinator as the same start and is folded
+// into the existing saga.
+//
+//roost:nest rollback=undo durability=strict
+func handlerStartGift(target player.IBagEntity, fromPlayerID int64, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
+	if count <= 0 {
+		return "", errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
+	}
+	if have := target.BagComp().ItemCount(itemID); have < count {
+		return "", errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", itemID, "have", have, "want", count)
+	}
+	state, err := gift.Encode(gift.State{From: fromPlayerID, To: toPlayerID, ItemID: itemID, Count: count})
+	if err != nil {
+		return "", err
+	}
+	if err := saga.EmitStart(saga.StartRequest{
+		ID: sagaID, Type: giftitem.Type, DefinitionVersion: giftitem.Version, BusinessKey: sagaID,
+		Data: state, DeadlineAt: time.Now().Add(gift.Deadline),
+	}); err != nil {
+		return "", err
+	}
+	return sagaID, nil
+}

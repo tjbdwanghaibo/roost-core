@@ -1,0 +1,136 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/dungeon"
+	"{{MODULE}}/game/ranking"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcrank "github.com/tjbdwanghaibo/roost-core/kit/service/rank"
+	svcsession "github.com/tjbdwanghaibo/roost-core/kit/service/session"
+)
+
+// DungeonClearExp is what a cleared dungeon is worth; the value and the
+// exactly-once rules live in game/dungeon.
+const DungeonClearExp = dungeon.ClearExp
+
+// HandleFinishDungeon resolves the run with the session service and pays for
+// it through the Player + World claim transaction.
+//
+// Two things decide whether this call pays, and neither is the request:
+//
+//   - **The run state the service returned.** Finish is idempotent: a run
+//     that is already terminal comes back as it stands with no error, and a
+//     run past its deadline comes back expired whatever outcome the caller
+//     asked for. So `request.Success` says only what the client wanted;
+//     `run.State == StateSucceeded` is the fact. Judging on the request paid
+//     for failed runs, expired runs and every replay (RR-20260917-08).
+//   - **The claim ledger, and the window it is bounded by.** Two replays can
+//     both see a succeeded run, so the
+//     reward transaction records the run id on the Player and pays only when
+//     it is the transaction that recorded it. Record and payment share one
+//     WAL record, so neither can happen without the other. The ledger is
+//     bounded by the run's own resolution time, and a run past that window is
+//     refused rather than paid — a succeeded run stays succeeded in the
+//     session service forever, so "it can no longer be replayed" was never
+//     something this endpoint could assume (RR-20260918-04).
+//
+// The two calls are still not one transaction: a crash between Finish and
+// the claim leaves a resolved run unpaid. That direction is recoverable — a
+// retry of FinishDungeon returns the same succeeded run and the claim is
+// still unmade, so the client (or an operator) gets the reward on the next
+// attempt. This is the shape a production game wants; what it must add is a
+// retry that is not a client's goodwill.
+func (controller *Controller) HandleFinishDungeon(context *player_agent.Context, request *pb.FinishDungeonRequest) (*pb.FinishDungeonResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("finish_dungeon endpoint: context and request are required")
+	}
+	state, outcome := svcsession.StateFailed, "wiped"
+	if request.Success {
+		state, outcome = svcsession.StateSucceeded, "cleared"
+	}
+	run, err := controller.Sessions().Finish(context.Context(), context.PlayerID, request.RunID, state, outcome)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("finish_dungeon failed", "player_id", context.PlayerID, "run_id", request.RunID, "err", err)
+		}
+		return &pb.FinishDungeonResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.FinishDungeonResponse{State: string(run.State), Outcome: run.Outcome}
+	// Only the run the service says succeeded earns a reward — not the one
+	// the request hoped for.
+	if run.State != svcsession.StateSucceeded {
+		return response, nil
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("finish_dungeon endpoint: %w", err)
+	}
+	// When the run resolved, as the session service recorded it — the number
+	// the reward's deadline is computed from. It is deliberately not
+	// time.Now() and not anything the client sent: a claim window anchored to
+	// a time the game invents is a window the game can be talked out of.
+	resolvedAt := run.FinishedAtUnix
+	if resolvedAt <= 0 {
+		resolvedAt = run.StartedAtUnix
+	}
+	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, time.Now().Unix())
+	if err != nil {
+		// The run is resolved either way; the reward failing is its own
+		// coded answer so the client can tell the two apart.
+		code, reason := errcode.ClientError(err)
+		switch {
+		case code == errcode.CodeInternal:
+			slog.Error("finish_dungeon: clear reward not granted", "player_id", context.PlayerID, "run_id", request.RunID, "err", err)
+		case errors.Is(err, apperrors.ErrDungeonClaimWindow):
+			// A run this old can no longer be paid, and that is a decision
+			// somebody has to be able to see: it is either a replay that
+			// would have been paid twice, or a player who really never
+			// collected. Compensation is an operator's call, by mail
+			// (RR-20260918-04).
+			slog.Warn("finish_dungeon: clear reward window closed", "player_id", context.PlayerID, "run_id", request.RunID, "resolved_at", resolvedAt)
+		}
+		response.Code, response.Reason = code, reason
+		return response, nil
+	}
+	// A replay answers with the run's terminal state and no reward: it was
+	// already paid, and saying so is more useful than repeating the numbers.
+	if result.Claimed {
+		response.ExpGranted, response.LevelsGained = result.ExpGranted, result.LevelsGained
+	}
+	// The leaderboard point. It is OUTSIDE the transaction — the board lives
+	// in another service — so the two are not atomic: a crash here leaves a
+	// paid clear that was never counted. That direction is the recoverable
+	// one, and the submit is idempotent on the run id, so a retry of this
+	// endpoint counts it once whether or not the first attempt got through.
+	// The submit is deliberately not gated on result.Claimed for that reason:
+	// a replay that finds the reward already paid is exactly the case where
+	// the point may still be missing.
+	if _, err := controller.Ranking().Submit(context.Context(), ranking.ClearsBoard(), ranking.ClearScore(context.PlayerID), svcrank.UpdateAdd, ranking.ClearRequestID(run.ID)); err != nil {
+		slog.Warn("finish_dungeon: clear not counted on the board", "player_id", context.PlayerID, "run_id", run.ID, "err", err)
+	}
+	// The same clear also contributes to the current server-wide window, for
+	// the same reason and with the same anchor: the coordinator deduplicates
+	// on the RUN id, so a retried endpoint call contributes once even though
+	// this is a second, separate service call. It is best effort — a window
+	// that missed a point is not a failed dungeon — and it is not gated on
+	// result.Claimed either, because a replay that finds the reward already
+	// paid is exactly when the contribution may still be missing.
+	if runner, runnerErr := controller.Activities(); runnerErr != nil {
+		slog.Warn("finish_dungeon: activity runner unavailable", "player_id", context.PlayerID, "err", runnerErr)
+	} else if _, err := runner.Contribute(context.Context(), context.PlayerID, run.ID); err != nil {
+		slog.Warn("finish_dungeon: clear not contributed to the activity", "player_id", context.PlayerID, "run_id", run.ID, "err", err)
+	}
+	return response, nil
+}

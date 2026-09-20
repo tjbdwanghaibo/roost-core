@@ -1,0 +1,27 @@
+package handler
+
+import (
+	sceneentity "{{MODULE}}/game/entities/scene"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// handlerMovePlayer moves a player one step, in a transaction that holds both
+// the Scene and the Player.
+//
+// Why both: the move changes the Player's stored position AND the ground the
+// Scene hands out (two objects cannot stand on the same point). Those two
+// facts have to agree, so they move together — a rollback takes the ground
+// back with the position. The lock order is the framework's: Scene is a
+// world-ranked kind (rank 2), Player is rank 4, so a transaction that takes
+// both always takes them in that order and cannot deadlock against one that
+// takes them for something else.
+//
+// The terrain check itself is not here: it is in MapComponent.MoveTo, which
+// is the only path that writes a position. A handler that checked the terrain
+// itself would be a second place that has to get it right.
+//
+//roost:nest rollback=undo durability=async
+func handlerMovePlayer(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
+	return target.MapComp().MoveTo(area.Terrain(), spatial.Point{X: x, Y: y})
+}

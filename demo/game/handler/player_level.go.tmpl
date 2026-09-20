@@ -1,0 +1,12 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerPlayerLevel reads the player's level under the Player's lock: a
+// read handler, like WorldStats — the value comes out, the Entity does not.
+// The ranked queue uses it as the ticket's score.
+//
+//roost:nest
+func handlerPlayerLevel(target player.IProfileEntity) (int32, error) {
+	return target.ProfileComp().Level(), nil
+}

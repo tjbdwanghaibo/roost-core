@@ -1,0 +1,18 @@
+package handler
+
+import (
+	world "{{MODULE}}/game/entities/world"
+)
+
+// handlerActivitySettled reports whether this server has paid an activity's
+// settlement.
+//
+// It is a read through the World's lock rather than a flag the runner keeps
+// in memory, and the difference shows after a restart: an in-process flag
+// starts empty, so a player who asks right after a deploy is told their
+// finished event has not paid, while the mail is already in their box.
+//
+//roost:nest rollback=undo durability=strict
+func handlerActivitySettled(target world.IStatsEntity, activityID string) (bool, error) {
+	return target.StatsComp().ActivitySettled(activityID), nil
+}

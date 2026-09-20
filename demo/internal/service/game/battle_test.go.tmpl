@@ -1,0 +1,110 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/battle"
+	"{{MODULE}}/protocol/msgid"
+)
+
+// recordingPusher stands in for the player TCP Runtime: a battle's broadcast
+// lane is one call per receiver, so watching it is enough to see whether the
+// room is cutting frames and to whom.
+type recordingPusher struct {
+	mu      sync.Mutex
+	pushes  map[int64]int
+	message uint32
+}
+
+func newRecordingPusher() *recordingPusher {
+	return &recordingPusher{pushes: make(map[int64]int)}
+}
+
+func (pusher *recordingPusher) PushPlayer(_ context.Context, playerID int64, messageID uint32, _ any) error {
+	pusher.mu.Lock()
+	defer pusher.mu.Unlock()
+	pusher.pushes[playerID]++
+	pusher.message = messageID
+	return nil
+}
+
+func (pusher *recordingPusher) count(playerID int64) int {
+	pusher.mu.Lock()
+	defer pusher.mu.Unlock()
+	return pusher.pushes[playerID]
+}
+
+// A room must start cutting frames after the start grace even if nobody has
+// sent an input: the grace is a promise that a client who never connects does
+// not strand the ones who did. Waiting for a first command instead made the
+// constant a lie — no input meant no frame, ever (RR-20260917-09).
+func TestBattleStartsAfterTheGraceWithoutAnyInput(t *testing.T) {
+	pusher := newRecordingPusher()
+	manager := &battleManager{transport: pusher, rooms: make(map[string]*battleRoom)}
+	t.Cleanup(manager.Close)
+
+	const battleID = "grace-1"
+	members := []int64{101, 102}
+	if err := manager.Open(battleID, members); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	manager.mu.Lock()
+	managed := manager.rooms[battleID]
+	manager.mu.Unlock()
+	if managed == nil {
+		t.Fatal("the room was not registered")
+	}
+
+	// Before the grace elapses nothing is cut: the room is still waiting for
+	// its seats.
+	time.Sleep(battleStartGrace / 2)
+	if cut := managed.cut.Load(); cut != 0 {
+		t.Errorf("the room cut %d frames before the grace elapsed", cut)
+	}
+
+	deadline := time.Now().Add(battleStartGrace + 2*time.Second)
+	for time.Now().Before(deadline) {
+		if managed.cut.Load() > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if cut := managed.cut.Load(); cut == 0 {
+		t.Fatalf("no frame was cut %s after the room opened, although the grace is %s", battleStartGrace+2*time.Second, battleStartGrace)
+	}
+	// Every seat receives the broadcast, not just the one that spoke (none did).
+	for _, member := range members {
+		if pusher.count(member) == 0 {
+			t.Errorf("seat %d received no frame", member)
+		}
+	}
+	if pusher.message != msgid.MsgBattleFrame {
+		t.Errorf("frames went out as message %d, want the battle frame push %d", pusher.message, msgid.MsgBattleFrame)
+	}
+}
+
+// The room ends on its own: the frame budget is the normal exit, and the
+// lifetime cap is the backstop. Neither may outlive the other by much, or a
+// room nobody plays keeps a goroutine.
+func TestBattleRoomEndsWithinItsLifetime(t *testing.T) {
+	manager := &battleManager{transport: newRecordingPusher(), rooms: make(map[string]*battleRoom)}
+	t.Cleanup(manager.Close)
+	const battleID = "lifetime-1"
+	if err := manager.Open(battleID, []int64{201, 202}); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	manager.mu.Lock()
+	managed := manager.rooms[battleID]
+	manager.mu.Unlock()
+	select {
+	case <-managed.done:
+	case <-time.After(battleMaxLifetime + 3*time.Second):
+		t.Fatalf("the room was still running %s after it opened", battleMaxLifetime+3*time.Second)
+	}
+	if cut := managed.cut.Load(); cut != int64(battle.Frames) {
+		t.Errorf("the room ended after %d frames, want the full budget of %d", cut, battle.Frames)
+	}
+}

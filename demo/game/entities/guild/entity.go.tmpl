@@ -1,0 +1,49 @@
+package guild
+
+import (
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindGuild entity.EntityKind = 5
+
+// Guild is the demo's first entity that does NOT belong to one process.
+//
+// Every other entity here is owned by the process that loaded it: a Player is
+// on the process its connection landed on, a Monster is on the process that
+// spawned it, the World is a per-process singleton. A guild cannot be any of
+// those, because the players in it are on different processes and they all
+// have to change the same roster.
+//
+// `remote=managed` is how that is expressed. The kind's ids carry the
+// remote-capable bit, so Nest recognises a transaction that touches one and
+// prepares it through the remote entity manager: a versioned distributed lock
+// (Redis), a load from the authoritative store, the handler under that lock,
+// and a fenced commit. The process that happens to hold the lock is the owner
+// FOR THAT TRANSACTION and for no longer than that.
+//
+// What it costs, said plainly: every transaction on a guild is a distributed
+// lock round trip. That is why the demo puts the roster here and leaves
+// everything a single player does — the bag, the position, the equipment — on
+// the Player, where it is a local lock.
+//
+// Category: EntityCategoryRemote, which is rank 1 — before everything. That is
+// not a choice: a remote-managed kind MUST be in it, and the framework's
+// registry validation refuses anything else. The reason is worth keeping in
+// mind while reading the JoinGuild handler: the distributed lock is taken at
+// the top of the dispatch, and taking it while a local entity mutex was
+// already held would hold that mutex across a network round trip — every other
+// user of that player would then be queued behind one Redis hiccup.
+//
+// So the order in a transaction that touches both is guild, then player, on
+// every process. That is also what keeps two processes joining two players to
+// two guilds from deadlocking.
+//
+//roost:entity id=5 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed
+type Guild struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	roster *RosterComponent `comp:"CompTypeRoster"`
+	dao    *db.GuildDao     `dao:"guild"`
+}

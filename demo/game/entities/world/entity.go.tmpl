@@ -1,0 +1,25 @@
+package world
+
+import (
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindWorld entity.EntityKind = 2
+
+// IWorldEntity is the lock-safe business view used by Nest handlers.
+type IWorldEntity interface{ entity.IThreadSafeEntity }
+
+// EntityCategoryWorld: rank 2, locked before any Player (rank 4) in the same
+// transaction. See game/entities/player/entity.go for why the ranks matter
+// and why they are decided before the first document is persisted.
+//
+//roost:entity id=2 entityKind=EntityKindWorld category=entity.EntityCategoryWorld
+type World struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	stats *StatsComponent `comp:"CompTypeStats"`
+	timer *TimerComponent `comp:"CompTypeTimer"`
+	dao   *db.WorldDao    `dao:"world"`
+}

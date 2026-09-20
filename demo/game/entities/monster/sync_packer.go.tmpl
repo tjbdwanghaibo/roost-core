@@ -1,0 +1,41 @@
+package monster
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// MonsterSyncCodec identifies the payload format on the wire.
+const MonsterSyncCodec uint16 = 2
+
+// NewMonsterSyncPacker is the factory the entity's subjectPacker marker names.
+// It is the Player's packer with a different DAO — which is the point: the
+// replication pipeline does not have a special case for "things that are not
+// players".
+func NewMonsterSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Monster)
+	return monsterSyncPacker{monster: owner}
+}
+
+type monsterSyncPacker struct{ monster *Monster }
+
+func (packer monsterSyncPacker) PackSubjectSnapshot(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(dataengine.AllFields)
+}
+
+func (packer monsterSyncPacker) PackSubjectDelta(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(mask)
+}
+
+func (packer monsterSyncPacker) pack(mask uint64) (entity.FrozenSyncPayload, error) {
+	if packer.monster == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("monster sync packer: no entity")
+	}
+	raw := packer.monster.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(MonsterSyncCodec, raw), nil
+}

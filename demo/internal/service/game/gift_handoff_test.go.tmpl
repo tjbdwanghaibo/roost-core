@@ -1,0 +1,197 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/gift"
+	"{{MODULE}}/game/playerroute"
+	"github.com/tjbdwanghaibo/roost-core/ownerroute"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+)
+
+// The two processes disagree about who owns a player only for as long as a
+// lease takes to lapse, but a step that runs during that window writes a
+// second copy of the Player document and takes a process down. These tests
+// pin the decisions that keep it from happening — none of them needs a Redis,
+// a Mongo or a bus, because the decisions are the point (§9.11, §9.12).
+
+type ownershipStub struct {
+	owner   int32
+	local   int32
+	err     error
+	asked   []int64
+	claimed []int64
+}
+
+func (o *ownershipStub) Owns(_ context.Context, playerID int64) (bool, error) {
+	if o.err != nil {
+		return false, o.err
+	}
+	o.asked = append(o.asked, playerID)
+	if o.owner == 0 {
+		// Nobody owns them: Owns is the claiming question, so it takes them.
+		o.owner = o.local
+		o.claimed = append(o.claimed, playerID)
+	}
+	return o.owner == o.local, nil
+}
+
+func (o *ownershipStub) OwnedHere(_ context.Context, playerID int64) (bool, error) {
+	if o.err != nil {
+		return false, o.err
+	}
+	o.asked = append(o.asked, playerID)
+	return o.owner == o.local, nil
+}
+
+func (o *ownershipStub) OwnerSID(context.Context, int64) (int32, error) { return o.owner, nil }
+
+type recordingTransport struct {
+	sent []int32
+	cmds []*giftStepHandoff
+	err  error
+}
+
+func (t *recordingTransport) Send(_ context.Context, sid int32, cmd *giftStepHandoff) error {
+	if t.err != nil {
+		return t.err
+	}
+	t.sent = append(t.sent, sid)
+	t.cmds = append(t.cmds, cmd)
+	return nil
+}
+
+// routeStub is the resolver half; it reports an unowned player as NOT FOUND,
+// the way the real table does.
+type routeStub struct{ owner int32 }
+
+func (r routeStub) GetRoute(context.Context, int64) (playerroute.Route, bool, error) {
+	return playerroute.Route{SID: r.owner}, r.owner != 0, nil
+}
+
+func giftCommand(t *testing.T, from int64) saga.Command {
+	t.Helper()
+	payload, err := gift.Encode(gift.State{From: from, To: from + 1, ItemID: 1001, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	return saga.Command{
+		ID: "cmd-1", IdempotencyKey: "op-1", SagaID: "saga-1", SagaType: "gift_item", DefinitionVersion: 1,
+		BusinessKey: "gift-1", Step: 0, StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
+		Topic: "debit", Payload: payload, CreatedAt: now, DeadlineAt: now.Add(time.Minute),
+	}
+}
+
+func handoffSteps(t *testing.T, local, owner int32) (giftSteps, *ownershipStub, *recordingTransport) {
+	t.Helper()
+	owners := &ownershipStub{owner: owner, local: local}
+	transport := &recordingTransport{}
+	steps := giftSteps{owners: owners}
+	steps.handoff = &ownerroute.Router[giftStepHandoff, int64, playerroute.Route]{
+		LocalSid:  local,
+		Routes:    routeStub{owner: owner},
+		Transport: transport,
+		Executor:  func(context.Context, *giftStepHandoff) error { return nil },
+		KeyOf:     func(cmd *giftStepHandoff) int64 { return cmd.PlayerID },
+		ValidKey:  func(playerID int64) bool { return playerID > 0 },
+	}
+	return steps, owners, transport
+}
+
+// A step for a player this process owns is admitted, and nothing is sent
+// anywhere: the consumer runs it here.
+func TestAdmitRunsTheOwnersOwnStepWithoutForwarding(t *testing.T) {
+	steps, _, transport := handoffSteps(t, 1000, 1000)
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42)); err != nil {
+		t.Fatalf("the owner was refused its own step: %v", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatalf("the owner forwarded its own step to %v", transport.sent)
+	}
+}
+
+// A step for somebody else's player is refused AND handed over. Both halves
+// matter: the refusal keeps the message until a receipt exists, the handoff
+// starts the work on the owner now.
+func TestAdmitRefusesAndHandsOverAForeignStep(t *testing.T) {
+	steps, _, transport := handoffSteps(t, 1001, 1000)
+	err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42))
+	if err == nil {
+		t.Fatal("a step for another process's player was admitted")
+	}
+	if len(transport.sent) != 1 || transport.sent[0] != 1000 {
+		t.Fatalf("handed over to %v, want the owner sid 1000", transport.sent)
+	}
+	if got := transport.cmds[0]; got.PlayerID != 42 || got.Phase != giftHandoffPhaseDebit {
+		t.Fatalf("handed over %+v", got)
+	}
+}
+
+// A player nobody owns is not claimed by the handoff: the router reports no
+// route and the step is still refused, because claiming an idle player to
+// have somewhere to send a message makes every process own every player.
+func TestAHandoffDoesNotClaimAnUnownedPlayer(t *testing.T) {
+	steps, owners, transport := handoffSteps(t, 1001, 0)
+	owners.owner = 0
+	// Owns claims for the consumer's own question, so this process becomes
+	// the owner and the step is admitted — there is nobody to hand it to.
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42)); err != nil {
+		t.Fatalf("an unowned player's step was refused with nobody to run it: %v", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatalf("an unowned player's step was forwarded to %v", transport.sent)
+	}
+	if len(owners.claimed) != 1 || owners.claimed[0] != 42 {
+		t.Fatalf("the process that took the work did not claim the player: %v", owners.claimed)
+	}
+}
+
+// A handoff that arrives at a process which does not own the player is
+// dropped rather than run: the sender's view of the route was a moment old.
+func TestAHandoffForAPlayerWeDoNotOwnIsDropped(t *testing.T) {
+	steps, _, _ := handoffSteps(t, 1001, 1000)
+	// steps.inbox is nil: reaching the reservation would panic, which is
+	// exactly the assertion — the ownership check comes first.
+	if err := steps.runHandoff(context.Background(), &giftStepHandoff{PlayerID: 42, Phase: giftHandoffPhaseDebit, Command: giftCommand(t, 42)}); err != nil {
+		t.Fatalf("a handoff for a foreign player should be dropped quietly, got %v", err)
+	}
+}
+
+// An unknown phase is refused before the claim, for the same reason admission
+// is: a claim taken for work that cannot be done blocks the command until the
+// lease expires.
+func TestAHandoffWithAnUnknownPhaseIsRefusedBeforeTheClaim(t *testing.T) {
+	steps, _, _ := handoffSteps(t, 1000, 1000)
+	err := steps.runHandoff(context.Background(), &giftStepHandoff{PlayerID: 42, Phase: "deliver", Command: giftCommand(t, 42)})
+	if err == nil {
+		t.Fatal("a handoff naming a phase this process does not run was accepted")
+	}
+	if err := steps.runHandoff(context.Background(), nil); err == nil {
+		t.Fatal("an empty handoff was accepted")
+	}
+}
+
+// A command past its deadline belongs to the coordinator's timeout, not to a
+// new attempt here.
+func TestAHandoffPastItsDeadlineIsNotStarted(t *testing.T) {
+	steps, _, _ := handoffSteps(t, 1000, 1000)
+	command := giftCommand(t, 42)
+	command.DeadlineAt = time.Now().Add(-time.Second)
+	if err := steps.runHandoff(context.Background(), &giftStepHandoff{PlayerID: 42, Phase: giftHandoffPhaseDebit, Command: command}); err != nil {
+		t.Fatalf("an expired handoff should be dropped quietly, got %v", err)
+	}
+}
+
+// Ownership that cannot be read is not an admission: refusing keeps the
+// message, admitting would run the step on a guess.
+func TestAdmitRefusesWhenOwnershipCannotBeRead(t *testing.T) {
+	steps, owners, _ := handoffSteps(t, 1000, 1000)
+	owners.err = errors.New("redis down")
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42)); err == nil {
+		t.Fatal("a step was admitted while ownership was unknown")
+	}
+}

@@ -1,0 +1,32 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// handlerEnterScene puts a player on the map, at the position they left from
+// when that point is still usable and at the nearest free one when it is not.
+//
+// Resolving the point is the scene's job (PathFind.Place searches outward in
+// rings), writing it is the player's: a remembered position can become
+// unusable while the player is away — the map is reloaded from configuration
+// on every start — and a login that failed because the ground changed would
+// be a login nobody can fix.
+//
+//roost:nest rollback=undo durability=async
+func handlerEnterScene(target player.IMapEntity, area sceneentity.ISceneEntity, spawnX int64, spawnY int64) (spatial.Point, error) {
+	preferred := target.MapComp().Pos()
+	if preferred.X == 0 && preferred.Y == 0 {
+		preferred = spatial.Point{X: spawnX, Y: spawnY}
+	}
+	at, err := area.PathFind().Place(preferred)
+	if err != nil {
+		return spatial.Point{}, err
+	}
+	if err := target.MapComp().EnterScene(area.ID(), at); err != nil {
+		return spatial.Point{}, err
+	}
+	return at, nil
+}

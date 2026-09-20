@@ -1,0 +1,87 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/flags"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/featureflag"
+)
+
+// 开关来自配置表，而且**每次 reload 都重新发布**。
+//
+// 三条承诺：启动时就是表里的值（incident 期间重启的进程不能全开着起来）、
+// reload 之后跟着变、表里删掉的开关消失而不是停在旧值上。
+// 第三条是 Replace 而不是 merge 的原因：表是源。
+
+func loadFlagSnapshot(t *testing.T, dir string) *configdata.Snapshot {
+	t.Helper()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, dir)
+	snapshot, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	return snapshot
+}
+
+func TestFlagsComeFromTheTable(t *testing.T) {
+	snapshot := loadFlagSnapshot(t, filepath.Join("..", "..", "..", "configs", "data"))
+	featureflag.DefaultStore().Replace(nil)
+	if err := publishFeatureFlags(snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	// The shipped table has all three on; what matters is that the store now
+	// answers from the table rather than from a default.
+	for _, name := range flags.All() {
+		if !flags.Enabled(name) {
+			t.Errorf("flag %q is off after publishing the shipped table", name)
+		}
+	}
+	if featureflag.DefaultStore().Version() == 0 {
+		t.Error("publishing did not move the store's version")
+	}
+}
+
+// An unknown flag is off: a switch nobody configured must not read as "go
+// ahead", and this is the direction a typo fails in.
+func TestAnUnknownFlagIsOff(t *testing.T) {
+	featureflag.DefaultStore().Replace(nil)
+	if flags.Enabled("no_such_switch") {
+		t.Fatal("a flag nobody defined reads as on")
+	}
+}
+
+// Republishing REPLACES: a flag removed from the table disappears instead of
+// staying at whatever it was.
+func TestRepublishingDropsFlagsTheTableNoLongerHas(t *testing.T) {
+	featureflag.DefaultStore().Replace([]featureflag.Flag{{Name: "retired", Enabled: true}})
+	if !featureflag.Enabled("retired") {
+		t.Fatal("the setup flag did not take")
+	}
+	snapshot := loadFlagSnapshot(t, filepath.Join("..", "..", "..", "configs", "data"))
+	if err := publishFeatureFlags(snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if featureflag.Enabled("retired") {
+		t.Fatal("a flag the table no longer has survived a republish; the table is supposed to be the source")
+	}
+}
+
+// A snapshot without the table is refused rather than published as "every
+// switch is off" — that reading would close the store on a config mistake.
+func TestASnapshotWithoutTheTableIsRefused(t *testing.T) {
+	featureflag.DefaultStore().Replace([]featureflag.Flag{{Name: flags.Purchase, Enabled: true}})
+	if err := publishFeatureFlags(&configdata.Snapshot{}); err == nil {
+		t.Fatal("a snapshot with no featureflag table was published")
+	}
+	if !flags.Enabled(flags.Purchase) {
+		t.Fatal("the refused publish still changed the store; the previous flags must stay")
+	}
+}

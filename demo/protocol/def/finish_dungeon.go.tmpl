@@ -1,0 +1,28 @@
+//go:build protocoldef
+
+package protocoldef
+
+// FinishDungeonRequest resolves the player's run. Success is the game's
+// verdict; the session service records it and releases what the run held.
+type FinishDungeonRequest struct {
+	RunID   string `pb:"1"`
+	Success bool   `pb:"2"`
+}
+
+// FinishDungeonResponse reports the terminal state and the exp a clear was
+// worth (granted through the same AddExp transaction the AddExp endpoint
+// uses, so a clear can level the player up and send the reward mail).
+type FinishDungeonResponse struct {
+	Code         int32  `pb:"1"`
+	Reason       string `pb:"2"`
+	State        string `pb:"3"`
+	Outcome      string `pb:"4"`
+	ExpGranted   int64  `pb:"5"`
+	LevelsGained int32  `pb:"6"`
+}
+
+//roost:protocol group=game handler=player
+type FinishDungeonProtocol interface {
+	//roost:msg id=10011
+	FinishDungeon(FinishDungeonRequest) FinishDungeonResponse
+}

@@ -1,0 +1,49 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+	"sort"
+
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/game/skills"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/skill"
+)
+
+// HandleSkillCatalog lists the skills compiled from game/skills/*.json. The
+// catalog is compiled once per process (the service compiles it again at
+// Init to fail fast; the two agree because both use the same embedded files
+// and the same CompileEnvironment). Skill EXECUTION — a Host over a locked
+// Entity, deterministic ticks, checkpoints — is deliberately not here: see
+// roost help skill.
+func (controller *Controller) HandleSkillCatalog(context *player_agent.Context, request *pb.SkillCatalogRequest) (*pb.SkillCatalogResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("skill_catalog endpoint: context and request are required")
+	}
+	catalog, err := controller.SkillCatalog()
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		slog.Error("skill_catalog failed", "player_id", context.PlayerID, "err", err)
+		return &pb.SkillCatalogResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.SkillCatalogResponse{}
+	for id := range catalog.Programs {
+		response.Skills = append(response.Skills, id)
+	}
+	sort.Strings(response.Skills)
+	for _, diagnostics := range catalog.Diagnostics {
+		response.Warnings += int32(len(diagnostics))
+	}
+	return response, nil
+}
+
+// SkillCatalog compiles the embedded skill definitions once and keeps the
+// result; a compile error is returned on every call rather than cached away.
+func (controller *Controller) SkillCatalog() (*skills.Catalog, error) {
+	controller.skillsOnce.Do(func() {
+		controller.skillCatalog, controller.skillErr = skills.CompileAll(skill.DefaultCompileEnvironment())
+	})
+	return controller.skillCatalog, controller.skillErr
+}

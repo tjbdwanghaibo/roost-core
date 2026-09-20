@@ -1,0 +1,35 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleBattleInput hands one client's per-frame message to the battle room
+// that owns the match. No Entity is locked and nothing is persisted: a
+// lockstep frame is not game state, it is the input everyone will replay.
+// The room lives in this process (see internal/service/<game>/battle.go) and
+// is single-owner state, so the endpoint does not touch it directly — it
+// posts the message to the room's goroutine and waits for the verdict.
+func (controller *Controller) HandleBattleInput(context *player_agent.Context, request *pb.BattleInputRequest) (*pb.BattleInputResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("battle_input endpoint: context and request are required")
+	}
+	battles, err := controller.Battles()
+	if err != nil {
+		return nil, fmt.Errorf("battle_input endpoint: %w", err)
+	}
+	err = battles.SubmitBattleInput(context.Context(), request.BattleID, context.PlayerID, request.Frame, request.Payload, request.HashFrame, request.Hash, request.CatchupFrom)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("battle_input failed", "player_id", context.PlayerID, "battle_id", request.BattleID, "frame", request.Frame, "err", err)
+		}
+		return &pb.BattleInputResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.BattleInputResponse{}, nil
+}

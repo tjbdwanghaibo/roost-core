@@ -1,0 +1,203 @@
+package handler
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// The mail attachment ledger is what makes a claim exactly-once across the
+// window the mail service cannot close: the grant commits, CommitClaim is
+// lost, the reservation lapses and the retry re-reserves under the same
+// token. A client cannot open that window (the mail service refuses a mail it
+// already committed), so it is asserted here — against the real generated
+// handler, in a real Nest transaction.
+//
+// The harness is also the answer to "how do I test a handler without Mongo":
+// a Getter that hands back one entity, a committer that keeps the record
+// instead of writing it, and the project's own config data. Everything else
+// is the real thing.
+
+type singleEntityGetter struct{ value entity.IThreadSafeEntity }
+
+func (g singleEntityGetter) Get(context.Context, int64, entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g.value, nil
+}
+
+func (g singleEntityGetter) GetMany(_ context.Context, ids []int64, _ []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i := range out {
+		out[i] = g.value
+	}
+	return out, nil
+}
+
+// recordingCommitter keeps what a transaction would have written, so a test
+// can look at the mutations instead of a database.
+type recordingCommitter struct{ records []dataengine.CommitRecord }
+
+func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterClaimMailRewardNestHandlers()
+	RegisterGrantPurchaseNestHandlers()
+	// The item table the Bag validates against, loaded from the project's own
+	// data files: the generated accessors read the active snapshot, so a test
+	// that grants an item needs one.
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+
+	id, err := entity.BuildEntityID(4242, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	value, ok := built.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	committer := &recordingCommitter{}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(singleEntityGetter{value: value}),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return value, engine, committer
+}
+
+func TestMailAttachmentIsGrantedOnce(t *testing.T) {
+	subject, client, committer := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	const (
+		manaPotion = int64(1002)
+		mailID     = "mail-1"
+	)
+	ctx := context.Background()
+	sender := syncsender.NewClaimMailRewardSender(client)
+
+	first, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if !first.Claimed || first.BagCount != 1 {
+		t.Fatalf("first claim = %+v, want a granted stack of 1", first)
+	}
+
+	// The replay: the same mail again, exactly what a lost CommitClaim leads
+	// to. Without the ledger this is a second stack.
+	second, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
+	if err != nil {
+		t.Fatalf("replayed claim: %v", err)
+	}
+	if second.Claimed {
+		t.Error("the replayed claim reported a fresh grant")
+	}
+	if second.BagCount != 1 {
+		t.Errorf("the bag holds %d after a replay, want 1", second.BagCount)
+	}
+	if held := subject.BagComp().ItemCount(manaPotion); held != 1 {
+		t.Errorf("the Player holds %d of the item, want 1", held)
+	}
+
+	// A different mail is a different claim.
+	other, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "mail-2", manaPotion, 1, now+3600, now)
+	if err != nil {
+		t.Fatalf("second mail: %v", err)
+	}
+	if !other.Claimed || other.BagCount != 2 {
+		t.Fatalf("second mail = %+v, want a granted stack bringing the bag to 2", other)
+	}
+
+	// Both grants went through a transaction: the ledger entry and the items
+	// are in the same record, which is the whole point.
+	if len(committer.records) < 2 {
+		t.Fatalf("the grants committed %d records", len(committer.records))
+	}
+}
+
+// The ledger is bounded by the MAIL's own expiry, not by a number this game
+// picked. That is the whole of RR-20260918-05: a fixed retention has to be
+// argued against another service's configuration, and `mail.send_ttl` only
+// has to be positive — a deployment that keeps mail for forty days is legal
+// and makes a thirty-one day ledger forget while the envelope is still
+// claimable.
+func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
+	subject, client, _ := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	ctx := context.Background()
+	sender := syncsender.NewClaimMailRewardSender(client)
+
+	// A mail whose envelope expired an hour ago: nothing can reserve it any
+	// more, so remembering that it was granted buys nothing.
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, now-3600, now); err != nil {
+		t.Fatalf("recording the expired mail's claim: %v", err)
+	}
+	// A mail that is still claimable for another forty days — longer than any
+	// retention this game could have invented.
+	stillLive := now + 40*24*60*60
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now); err != nil {
+		t.Fatalf("recording the live mail's claim: %v", err)
+	}
+	if subject.BagComp().MailRewardClaimed("expired") {
+		t.Error("a claim whose mail can no longer be reserved is still held")
+	}
+	if !subject.BagComp().MailRewardClaimed("live") {
+		t.Error("a claim whose mail is still claimable was pruned; a replay would be paid again")
+	}
+
+	// And the replay that the old bound would have allowed: the mail is still
+	// live, so the ledger still refuses.
+	replay, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now+39*24*60*60)
+	if err != nil {
+		t.Fatalf("replaying the live mail: %v", err)
+	}
+	if replay.Claimed {
+		t.Error("a mail still inside its own expiry was granted a second time")
+	}
+}
+
+// A record the service could not place in time is kept rather than forgotten:
+// refusing to forget is the safe direction.
+func TestAClaimWithNoExpiryIsNeverPruned(t *testing.T) {
+	subject, client, _ := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	ctx := context.Background()
+	sender := syncsender.NewClaimMailRewardSender(client)
+
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "no-expiry", 1002, 1, 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, now+60, now+10*365*24*60*60); err != nil {
+		t.Fatal(err)
+	}
+	if !subject.BagComp().MailRewardClaimed("no-expiry") {
+		t.Error("a claim with no expiry was forgotten; it cannot be placed in time, so it must be kept")
+	}
+}

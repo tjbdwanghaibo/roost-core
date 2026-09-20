@@ -1,0 +1,79 @@
+package migrations
+
+import (
+	"testing"
+
+	db "{{MODULE}}/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// The step has to run on the path production actually loads through.
+//
+// Testing the Apply function alone proves the transformation; this proves the
+// wiring — that `RestorePersisted` notices the stored version, runs the chain,
+// and hands the upgraded document to the decoder. A step that is correct and
+// never called is the failure mode worth guarding.
+func TestRestoringAV1DocumentRunsTheStep(t *testing.T) {
+	if err := Register(); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Registration is once per process; a second Register in the same test
+	// binary is the duplicate the registry refuses, which is correct.
+	raw, err := bson.Marshal(bson.M{
+		"_id":       int64(42),
+		"name":      "veteran",
+		"level":     int32(9),
+		"weapon_id": int64(2001),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dao := db.NewPlayerDao()
+	if err := dao.RestorePersisted(raw, 1, 1); err != nil {
+		t.Fatalf("restore a v1 document: %v", err)
+	}
+	piece, worn := dao.GetEquipment().GetSlots(1)
+	if !worn || piece == nil {
+		t.Fatal("the v1 weapon did not survive the load; the step did not run on the path production uses")
+	}
+	if piece.GetItemID() != 2001 {
+		t.Errorf("the restored weapon is item %d, want 2001", piece.GetItemID())
+	}
+	if dao.GetName() != "veteran" || dao.GetLevel() != 9 {
+		t.Errorf("the load disturbed unrelated fields: name=%q level=%d", dao.GetName(), dao.GetLevel())
+	}
+}
+
+// A document already at the current version is loaded untouched — the chain
+// must not run against a shape it was not written for.
+func TestRestoringACurrentDocumentSkipsTheStep(t *testing.T) {
+	raw, err := bson.Marshal(bson.M{
+		"_id":  int64(43),
+		"name": "current",
+		"equipment": bson.M{
+			"slots": bson.M{"1": bson.M{"item_id": int64(2002), "level": int32(3)}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := db.NewPlayerDao()
+	if err := dao.RestorePersisted(raw, db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore a current document: %v", err)
+	}
+	piece, worn := dao.GetEquipment().GetSlots(1)
+	if !worn || piece.GetItemID() != 2002 || piece.GetLevel() != 3 {
+		t.Fatalf("a current document was not loaded as written: %+v", piece)
+	}
+}
+
+// A document from a build NEWER than this one is refused rather than decoded
+// with fields this code does not understand.
+func TestRestoringAFutureDocumentIsRefused(t *testing.T) {
+	raw, _ := bson.Marshal(bson.M{"_id": int64(44)})
+	dao := db.NewPlayerDao()
+	if err := dao.RestorePersisted(raw, db.PlayerDaoSchemaVersion+1, 1); err == nil {
+		t.Fatal("a document written by a newer build was accepted")
+	}
+}

@@ -1,0 +1,35 @@
+package lifecycle
+
+import (
+	"context"
+	"fmt"
+
+	sceneentity "{{MODULE}}/game/entities/scene"
+	gamescene "{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/app"
+)
+
+// WorldSceneUniqueID is the demo's one map. A game with many maps mints an id
+// per map instead; nothing below assumes there is only one except this
+// constant.
+const WorldSceneUniqueID int64 = 1
+
+// EnsureWorldScene creates or loads the scene this process runs. It is called
+// once in the game service's Init, before anything can put a player on a map:
+// a scene is built from configuration (`noPersist`), so "load" here means
+// "build it again", and the id is what makes it the same scene to everyone
+// who names it.
+func EnsureWorldScene(ctx context.Context, registry *app.Registry) (*sceneentity.Scene, error) {
+	lifecycle, err := SceneFromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	value, _, err := lifecycle.GetOrCreate(ctx, WorldSceneUniqueID)
+	if err != nil {
+		return nil, fmt.Errorf("scene: ensure singleton: %w", err)
+	}
+	return value, nil
+}
+
+// WorldSceneConfig is the map every scene in this demo is built from.
+func WorldSceneConfig() gamescene.Config { return gamescene.DefaultConfig() }

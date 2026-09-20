@@ -1,0 +1,19 @@
+package handler
+
+import (
+	world "{{MODULE}}/game/entities/world"
+)
+
+// handlerSettleActivity records that this server paid one activity's
+// settlement, and reports whether this call is the one that recorded it.
+//
+// The order around it matters and is in internal/service/<game>/activity.go:
+// the mails go out first (they are idempotent per activity and player), then
+// this records the payout, then the dispatch is acked. A crash anywhere in
+// that sequence leaves the dispatch unacked, so it is redelivered — and the
+// second pass finds the mails already sent and this record already made.
+//
+//roost:nest rollback=undo durability=strict
+func handlerSettleActivity(target world.IStatsEntity, activityID string, nowUnix int64) (bool, error) {
+	return target.StatsComp().RecordActivitySettled(activityID, nowUnix), nil
+}

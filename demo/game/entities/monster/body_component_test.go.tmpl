@@ -1,0 +1,74 @@
+package monster
+
+import (
+	"context"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// A DAO whose every field is `nopersist,sync` must replicate and must never
+// reach storage. Both halves matter: the first is why a monster can have a
+// DAO at all (so "the position lives in a DAO, read and written through a
+// component" is true for every entity), and the second is why giving it one
+// costs nothing.
+//
+// The gate review asked for: any fully-nopersist DAO must not accidentally
+// register a persistence mutation, and MarshalSync plus dirty propagation
+// must keep working.
+
+type recordingCommitter struct{ records []dataengine.CommitRecord }
+
+func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+func newMonster(t *testing.T) *Monster {
+	t.Helper()
+	RegisterEntity()
+	id, err := entity.BuildEntityID(4242, EntityKindMonster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindMonster, Id: id})
+	if err != nil {
+		t.Fatalf("build monster: %v", err)
+	}
+	return built.(*Monster)
+}
+
+func TestAnEphemeralMonsterReplicatesButNeverPersists(t *testing.T) {
+	subject := newMonster(t)
+	committer := &recordingCommitter{}
+
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "place",
+		func() (any, error) {
+			subject.BodyComp().Place(9001, 30, spatial.Point{X: 10, Y: 20})
+			return nil, nil
+		}); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+
+	// Nothing to store: every mutation this transaction produced must be
+	// empty of persistence work.
+	for _, record := range committer.records {
+		for _, mutation := range record.Mutations {
+			if len(mutation.Data) > 0 || len(mutation.Patch.SetBSON) > 0 || len(mutation.Patch.Unset) > 0 {
+				t.Fatalf("a fully nopersist DAO produced a persistence mutation: %+v", mutation.Patch)
+			}
+		}
+	}
+
+	// But the change is replicated, and the subject knows about it.
+	subject.PublishSyncDirty()
+	if !subject.Sync().PendingDirty() {
+		t.Fatal("placing the monster left the subject clean; nothing would be replicated")
+	}
+	if payload := subject.Dao().MarshalSync(dataengine.AllFields); len(payload) == 0 {
+		t.Fatal("MarshalSync produced nothing for a fully replicated DAO")
+	}
+}
