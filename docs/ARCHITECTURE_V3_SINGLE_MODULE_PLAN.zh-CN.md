@@ -1,6 +1,6 @@
 # Roost 收敛第二步：三仓合一仓
 
-状态（2026-09-20）：**P0 进行中**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
+状态（2026-09-20）：**P0、P1 完成，P2 未开始**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
 方案见 [ARCHITECTURE_V2_CONSOLIDATION_PLAN](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)，
 方法论、门禁与机器这一轮**逐条沿用**。执行手册是个人 skill `roost-consolidate`。
 
@@ -51,12 +51,20 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
 
 | 阶段 | 内容 | 门禁 |
 | --- | --- | --- |
-| **P0 决定与冻结** | 本文 §0 定稿；三仓建 `consolidation-v3` 分支；main 冻结为维护线（只收 Bug 修复，cherry-pick 进分支） | 分支存在且 CI 对其生效；三仓 README 指向本文 |
-| **P1 骨架与护栏** | `dependency_boundary_test.go` 改成目录前缀规则并**先于搬迁**生效；CI 按包组拆 job；core 预加将要用到的依赖（已核对：无新增）；tag `v1.16.0-alpha.1` | boundary 测试绿且能拦住反向 import；alpha 可 `go get` |
+| **P0 决定与冻结** ✅ | 本文 §0 定稿；三仓建 `consolidation-v3` 分支；main 冻结为维护线（只收 Bug 修复，cherry-pick 进分支） | 已达成：三仓分支已推送，八个工作流的 `push` 触发加上该分支；kit / codegen README 置顶冻结公告，core 文档首页指向本文 |
+| **P1 骨架与护栏** ✅ | `dependency_boundary_test.go` 改成目录前缀规则并**先于搬迁**生效；CI 按包组拆 job；core 预加将要用到的依赖（已核对：无新增）；tag `v1.16.0-alpha.1` | 已达成：反向 import 探针确实变红；`TestCoreContractsDoNotLinkDrivers` 按层豁免 kit；CI 四分片由 `go list` 计算（本地核对 82 包 → 20/21/21/20 无重复全覆盖）；`v1.16.0-alpha.1` 已发，实测可 `go get` 并编译 |
 | **P2 kit 搬入** | `git subtree` 把 roost-kit 带历史搬进 `core/kit/`；批量前缀改 import；kit 的测试随代码走 | core 全绿（含 `-tags integration`）；kit 仓在旧路径仍能编译（go.work 指向分支） |
 | **P3 codegen 与 demo 搬入** | 同法搬进 `core/codegen/` 与 `core/demo/`；模板里的 import 字符串批量改成单模块路径；golden / testdata 重生成；改掉 `demo/embed.go` 里"codegen 故意不依赖它生成的运行时"那段（合仓后不成立） | 生成 planet 与 game-demo 两种工程：编译 + `dev compose` 真实启动 |
 | **P4 升级器** | `consolidation_imports.yaml` 升 schema 2：加第二段边界（core v1.16.0）与两条前缀规则；loader 支持前缀段；`upgrade --consolidate` 与 `deps-update` 跨界自动改写 | `--check` 对 golden 工程零差异；对一个真实工程改写后编译通过；每条规则至少一个 golden 覆盖 |
 | **P5 验收与发布** | `source-head-check.sh`；故障矩阵；性能对比（同机三轮，>5% 退化要归因）；文档与 TROUBLESHOOTING 路径更新；发 **core v1.16.0**；kit / codegen 发最终版、README 置顶"已并入 core"、仓库 archive | 三仓 CI 绿；`roost new` 出来的工程**只依赖 core**；旧 tag 仍可 pin |
+
+## 3.1 P1 的两处发现（记下来，因为它们正是"护栏先行"的收益）
+
+1. **`TestCoreContractsDoNotLinkDrivers` 会在 P2 当天炸**。它的注释早就写着"assembly happens in
+   kit's Mods"，而 kit 搬进来之后这个 walker 会扫到每一个 Mod——每个 Mod 都会被一条**自己注释里
+   已经豁免它们**的测试判红。现在按层豁免 kit。这条如果留到搬的那天才发现，很容易被误读成"搬错了"。
+2. **CI 分片不能写包名清单**。手写清单是第二个要记住每个新包的地方，忘一次就静默漂移（C4，本仓
+   U-0263 / U-0264 都是这个形状）。改成 `go list | awk 'NR % 4 == shard'`，无重复全覆盖由构造保证。
 
 ## 4. 与上一轮不同的地方
 
