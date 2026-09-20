@@ -1,6 +1,6 @@
 # Roost 收敛第二步：三仓合一仓
 
-状态（2026-09-20）：**P0、P1 完成，P2 未开始**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
+状态（2026-09-20）：**P0–P3 完成，内容已全部搬入 core；P4 未开始**。上一步"五仓合三仓"（roost-skill / roost-service 并入）于 2026-09-08 完成，
 方案见 [ARCHITECTURE_V2_CONSOLIDATION_PLAN](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)，
 方法论、门禁与机器这一轮**逐条沿用**。执行手册是个人 skill `roost-consolidate`。
 
@@ -53,8 +53,8 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
 | --- | --- | --- |
 | **P0 决定与冻结** ✅ | 本文 §0 定稿；三仓建 `consolidation-v3` 分支；main 冻结为维护线（只收 Bug 修复，cherry-pick 进分支） | 已达成：三仓分支已推送，八个工作流的 `push` 触发加上该分支；kit / codegen README 置顶冻结公告，core 文档首页指向本文 |
 | **P1 骨架与护栏** ✅ | `dependency_boundary_test.go` 改成目录前缀规则并**先于搬迁**生效；CI 按包组拆 job；core 预加将要用到的依赖（已核对：无新增）；tag `v1.16.0-alpha.1` | 已达成：反向 import 探针确实变红；`TestCoreContractsDoNotLinkDrivers` 按层豁免 kit；CI 四分片由 `go list` 计算（本地核对 82 包 → 20/21/21/20 无重复全覆盖）；`v1.16.0-alpha.1` 已发，实测可 `go get` 并编译 |
-| **P2 kit 搬入** | `git subtree` 把 roost-kit 带历史搬进 `core/kit/`；批量前缀改 import；kit 的测试随代码走 | core 全绿（含 `-tags integration`）；kit 仓在旧路径仍能编译（go.work 指向分支） |
-| **P3 codegen 与 demo 搬入** | 同法搬进 `core/codegen/` 与 `core/demo/`；模板里的 import 字符串批量改成单模块路径；golden / testdata 重生成；改掉 `demo/embed.go` 里"codegen 故意不依赖它生成的运行时"那段（合仓后不成立） | 生成 planet 与 game-demo 两种工程：编译 + `dev compose` 真实启动 |
+| **P2 kit 搬入** ✅ | `git subtree` 把 roost-kit 带历史搬进 `core/kit/`；批量前缀改 import；kit 的测试随代码走 | 已达成：93 个 Go 文件前缀改写，go.mod 一行没动（kit 的四个直接依赖 core 全有）；build / vet / vet -tags integration / glsvet / test / test -race 全绿；kit 的 service-redis job 搬进 core 的 ci.yml |
+| **P3 codegen 与 demo 搬入** ✅ | 同法搬进 `core/codegen/` 与 `core/demo/`；模板里的 import 字符串批量改成单模块路径；golden / testdata 重生成；改掉 `demo/embed.go` 里"codegen 故意不依赖它生成的运行时"那段（合仓后不成立） | 已达成：生成 game-demo 工程 → go.work 指向源码 → **编译通过、生成工程自己的测试全绿**。`dev compose` 真实启动留到 P5 与故障矩阵一起做 |
 | **P4 升级器** | `consolidation_imports.yaml` 升 schema 2：加第二段边界（core v1.16.0）与两条前缀规则；loader 支持前缀段；`upgrade --consolidate` 与 `deps-update` 跨界自动改写 | `--check` 对 golden 工程零差异；对一个真实工程改写后编译通过；每条规则至少一个 golden 覆盖 |
 | **P5 验收与发布** | `source-head-check.sh`；故障矩阵；性能对比（同机三轮，>5% 退化要归因）；文档与 TROUBLESHOOTING 路径更新；发 **core v1.16.0**；kit / codegen 发最终版、README 置顶"已并入 core"、仓库 archive | 三仓 CI 绿；`roost new` 出来的工程**只依赖 core**；旧 tag 仍可 pin |
 
@@ -65,6 +65,22 @@ roost-core/                       一个 module：github.com/tjbdwanghaibo/roost
    已经豁免它们**的测试判红。现在按层豁免 kit。这条如果留到搬的那天才发现，很容易被误读成"搬错了"。
 2. **CI 分片不能写包名清单**。手写清单是第二个要记住每个新包的地方，忘一次就静默漂移（C4，本仓
    U-0263 / U-0264 都是这个形状）。改成 `go list | awk 'NR % 4 == shard'`，无重复全覆盖由构造保证。
+
+## 3.2 P2 / P3 的教训：盲改前缀会踩到"路径即数据"
+
+三处，全部由测试当场挡下，逐条记在这里因为它们会在任何一次同类搬迁里重演：
+
+1. **上一轮 5→3 的迁移映射表**（`consolidation_imports.yaml`）与它的固定装置里，旧路径**是数据本身**。
+   把它们一起改掉，等于废掉老工程的升级路径——`roost upgrade --consolidate` 会把
+   `roost-core/kit/X` 映射到 `roost-core/X`，两个方向都错。已完整还原。
+2. **断言里的路径**：core 的 `TestForbiddenCoreImport` 里那条旧模块路径是断言本身（合仓后它是
+   "某个文件漏改 import"的信号）；而 `framework_services_test.go` 里的期望值写的是不带域名的
+   `roost-kit/service/...`，前缀规则反而没盖到，要手工跟上。
+3. **前缀替换会造出死代码**：`roost-core/kit/` 是 `roost-core/` 的子集，glsvet 里那条判断从此
+   永不触发。删掉而不是留着。
+
+还有两处真实的行为改动，不是路径问题：生成的 go.mod 与 `roost project deps` 都只写一个 require，
+因为 `roost-core/kit` 是**包路径不是模块路径**，向 `go get` 要它等于要一个不存在的模块。
 
 ## 4. 与上一轮不同的地方
 
