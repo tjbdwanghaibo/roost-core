@@ -4,7 +4,7 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260920-01 | P1 | Remote snapshot checksum 的完整 uint64 直接写 BSON，高位为 1 时提交及 WAL 恢复失败 | 未修复 |
+| RR-20260920-01 | P1 | Remote snapshot checksum 的完整 uint64 直接写 BSON，高位为 1 时提交及 WAL 恢复失败 | 已修复（U-0261，未发版）→ [bugfix](../bugfix/RR-20260920-01.md) |
 | RR-20260920-02 | P1 | latest-only datagram 覆盖已经提交 dirty 的 room delta，独有字段永久丢失 | 已修复（U-0260，core v1.15.14）→ [bugfix](../bugfix/RR-20260920-02.md) |
 | RR-20260920-03 | P1 | player owner 的 GET→EXPIRE/DEL 非原子，旧 owner 可续期或删除新租约 | 已修复（U-0258，core v1.15.13 / codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-03.md) |
 | RR-20260920-04 | P1 | owner 租约失效不 fence resident Player 的写入，允许两个进程同时写 | 已修复（U-0259，codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-04.md) |

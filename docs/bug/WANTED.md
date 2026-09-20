@@ -6,6 +6,35 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-03 `SmallSafeMap` 的 BSON 自定义编码从来没生效，它会被写成空文档
+
+- **位置**：`roost-core/safemap/small.go:121-133`（`MarshalBSONValue` / `UnmarshalBSONValue`）。
+  基线：core `v1.15.14`，mongo-driver `v2.6.0`。
+- **现象**：驱动的接口是 `MarshalBSONValue() (byte, []byte, error)`，而这两个方法用的是
+  `(bson.Type, []byte, error)`。`bson.Type` 是 `type Type byte`——**定义类型，不是别名**，
+  所以签名不匹配，接口没有被实现，方法被**静默忽略**。类型于是走默认结构体编码器，
+  而它的字段全是未导出的：
+
+  ```text
+  SmallSafeMap encoded as: bson.D{}
+  round trip lost the contents: &safemap.SmallSafeMap[...]{entries:nil}
+  ```
+
+  （一个临时 probe 用例，放两个键进去、marshal、再读回来，稳定复现。）
+- **为何可疑**：签名承诺了自定义编码，实现没有兑现，而失败形态是**静默写空**——
+  没有错误、没有警告。codegen 的 DAO 生成器把**每一个 map 字段**都生成成
+  `*fmap.SmallSafeMap[...]`（`internal/dao/gen.go:356`），所以这个类型离持久化很近。
+- **为何现在没爆**：生成的 DAO 不把整个 map 交给 bson，它自己拼 patch（`items.1001` 那种路径），
+  转换走 `daoMapDocs`。所以目前是**潜伏的**：只要有人把一个 `SmallSafeMap` 直接放进一个要写 Mongo
+  的结构体（或快照载荷），它就会静默变成 `{}`。
+- **会红的测试草稿**：上面那个 probe 就是（放进 `safemap` 包）；建议同时加一条
+  `var _ bson.ValueMarshaler = (*SmallSafeMap[string, int64])(nil)` 类型断言，让签名写错在**编译期**就红。
+- **候选修法**：A. 改成驱动的签名（`byte`）并加上接口断言——最小，但要先确认
+  现在有没有人依赖“它序列化成空”这个事实（比如某个文档里真的不想带上这个字段）；
+  B. 在仓里搜一遍所有 `MarshalBSONValue` 签名（目前只有这一处），并把接口断言当成规矩。
+- **来源**：U-0261 的实现过程。我自己先把签名写成了 `bson.Type`，编译通过、测试照旧红，
+  查到驱动接口才发现；回头一看，仓里原有的那一处是同样的写法。
+
 ## W-2026-09-20-02 自己的订阅在投递，却从来不带位置那一组字段
 
 - **位置**：`roost-core/entitysync`（`SubscriptionCoordinator` 的 prepared batch / content version）、

@@ -86,7 +86,7 @@ type remoteSnapshotL2Value struct {
 	RouteEpoch   uint64                   `json:"route_epoch"`
 	Schema       uint32                   `json:"schema"`
 	Codec        uint16                   `json:"codec"`
-	Checksum     uint64                   `json:"checksum"`
+	Checksum     entity.RemoteChecksum    `json:"checksum"`
 	Full         bool                     `json:"full"`
 	PublishedAt  int64                    `json:"published_at"`
 	ExpiresAt    int64                    `json:"expires_at"`

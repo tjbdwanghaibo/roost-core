@@ -177,7 +177,7 @@ type RemoteSnapshotRecord struct {
 	Codec        uint16
 	Full         bool
 	Data         []byte
-	Checksum     uint64
+	Checksum     RemoteChecksum
 }
 
 func (r RemoteSnapshotRecord) Clone() RemoteSnapshotRecord {
@@ -242,7 +242,7 @@ type RemoteCommit struct {
 	Deletes       []RemoteDataDelete
 	Snapshots     []RemoteSnapshotRecord
 	Invalidations []RemoteSnapshotKey
-	Checksum      uint64
+	Checksum      RemoteChecksum
 }
 
 func (c RemoteCommit) Clone() RemoteCommit {

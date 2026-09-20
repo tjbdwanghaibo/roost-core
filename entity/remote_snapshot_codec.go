@@ -1,10 +1,13 @@
 package entity
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc64"
 	"sync"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 var (
@@ -49,8 +52,59 @@ func applyRemoteSnapshotDelta(schema uint32, base, delta []byte) ([]byte, error)
 
 var remoteSnapshotChecksumTable = crc64.MakeTable(crc64.ECMA)
 
-func RemoteSnapshotChecksum(data []byte) uint64 {
-	return crc64.Checksum(data, remoteSnapshotChecksumTable)
+// RemoteChecksum is a snapshot's CRC64. It is a named type because BSON has
+// no unsigned 64-bit integer and this value uses the WHOLE range: the top bit
+// is set for about half of all payloads, and writing it as a BSON number
+// fails with "overflows int64" for exactly those (RR-20260920-01).
+//
+// Nothing compares or ranges over a checksum, so the storage form is fixed 8
+// bytes, big-endian. Reading also accepts the numeric forms written before
+// this existed, so the snapshots already in a database stay readable.
+type RemoteChecksum uint64
+
+// The signature takes a plain byte, not bson.Type: the driver's ValueMarshaler
+// is declared as (byte, []byte, error), and bson.Type is a DEFINED type over
+// byte rather than an alias — a method returning bson.Type compiles, does not
+// implement the interface, and is silently never called.
+func (c RemoteChecksum) MarshalBSONValue() (byte, []byte, error) {
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], uint64(c))
+	typ, data, err := bson.MarshalValue(bson.Binary{Subtype: bson.TypeBinaryGeneric, Data: raw[:]})
+	return byte(typ), data, err
+}
+
+func (c *RemoteChecksum) UnmarshalBSONValue(typ byte, data []byte) error {
+	t := bson.Type(typ)
+	switch t {
+	case bson.TypeBinary:
+		var binaryValue bson.Binary
+		if err := bson.UnmarshalValue(t, data, &binaryValue); err != nil {
+			return err
+		}
+		if len(binaryValue.Data) != 8 {
+			return fmt.Errorf("entity: remote checksum is %d bytes, want 8", len(binaryValue.Data))
+		}
+		*c = RemoteChecksum(binary.BigEndian.Uint64(binaryValue.Data))
+		return nil
+	case bson.TypeInt64, bson.TypeInt32, bson.TypeDouble:
+		// Written before checksums became bytes; only values below MaxInt64
+		// could have been stored, so this is exact.
+		var numeric int64
+		if err := bson.UnmarshalValue(t, data, &numeric); err != nil {
+			return err
+		}
+		*c = RemoteChecksum(numeric)
+		return nil
+	case bson.TypeNull, bson.TypeUndefined:
+		*c = 0
+		return nil
+	default:
+		return fmt.Errorf("entity: remote checksum has unexpected BSON type %s", t)
+	}
+}
+
+func RemoteSnapshotChecksum(data []byte) RemoteChecksum {
+	return RemoteChecksum(crc64.Checksum(data, remoteSnapshotChecksumTable))
 }
 
 func RegisterRemoteSnapshotDecoder(schema uint32, decode RemoteSnapshotDecodeFunc) error {

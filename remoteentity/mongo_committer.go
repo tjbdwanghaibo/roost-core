@@ -172,6 +172,13 @@ func validateRemoteCommitBatch(commits []entity.RemoteCommit) (entity.RemoteTran
 		if err := commits[i].Validate(); err != nil {
 			return entity.RemoteTransactionID{}, nil, err
 		}
+		// Encodability is part of validity here: a commit whose counters do
+		// not fit a BSON number fails deterministically at projection time,
+		// and by then the record is durable and startup recovery replays it
+		// forever (RR-20260920-01).
+		if err := validateRemoteCommitEncodable(commits[i]); err != nil {
+			return entity.RemoteTransactionID{}, nil, err
+		}
 		if _, exists := seenEntities[commits[i].EntityID]; exists {
 			return entity.RemoteTransactionID{}, nil, fmt.Errorf("%w: duplicate entity %d in transaction", entity.ErrRemoteRejected, commits[i].EntityID)
 		}
@@ -370,7 +377,7 @@ func (s *MongoCommitter) LoadRemoteSnapshot(ctx context.Context, key entity.Remo
 		RouteEpoch   uint64 `bson:"route_epoch"`
 		Schema       uint32 `bson:"schema"`
 		Codec        uint16 `bson:"codec"`
-		Checksum     uint64 `bson:"checksum"`
+		Checksum     entity.RemoteChecksum `bson:"checksum"`
 		Full         bool   `bson:"full"`
 		Data         []byte `bson:"data"`
 	}

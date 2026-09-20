@@ -69,7 +69,7 @@ type RemoteSnapshotEnvelope struct {
 	RouteEpoch   uint64
 	Schema       uint32
 	Codec        uint16
-	Checksum     uint64
+	Checksum     RemoteChecksum
 	Full         bool
 	PublishedAt  int64
 	ExpiresAt    int64
