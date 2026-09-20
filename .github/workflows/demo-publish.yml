@@ -1,17 +1,14 @@
-# Publishes the project `roost project new … -template game-demo` generates to
-# the `demo-generated` branch of this repository, so there is a complete,
-# read-only tree to clone and read without running the generator. It is a
-# derived artifact: changes go to demo/ and internal/roost, never to that
-# branch. The branch is force-pushed on every run; its history is not meant to
-# be kept.
-#
-# Built against core/kit main (source-head), like the framework-compat demo
-# scenario, because codegen HEAD emits wiring the released tags do not have.
+# ⚠️ 只保留手动触发：这条流水线**在合仓之前就没有成功过**（最近 30 次 0 成功）。
+# 它卡在最后一步——GitHub 不允许 Actions 的 token 推送带 .github/workflows/ 的树：
+#   ! [remote rejected] demo-generated -> demo-generated
+#     (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml`
+#      without `workflows` permission)
+# 合仓把它前面的部分修好了（生成、编译、测试、generate --check 现在都过），
+# 但"发布出去的 demo 要不要带它自己的 CI"是产品决定，不该由搬迁批次拍板。
+# 登记为 W-2026-09-20-06，交给审查线。
 name: demo-publish
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

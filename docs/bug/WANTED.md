@@ -6,6 +6,29 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+## W-2026-09-20-06：demo-publish 从未成功过，卡在"带 CI 的树推不上去"
+
+- **位置**：`.github/workflows/demo-publish.yml` 的 "Push the generated tree to demo-generated" 步骤
+  （合仓前在 roost-codegen，同一份）。
+- **现象**：`gh run list --workflow demo-publish --limit 30` 里 **0 次成功**，一直是：
+
+  ```text
+  ! [remote rejected] demo-generated -> demo-generated
+    (refusing to allow a GitHub App to create or update workflow
+     `.github/workflows/ci.yml` without `workflows` permission)
+  ```
+
+  生成工程自带一份 `.github/workflows/`，而 Actions 的 `GITHUB_TOKEN` 不被允许创建或修改
+  workflow 文件。
+- **为什么可疑**：这条流水线的用途是"把生成出来的 demo 推到一个可克隆可阅读的分支"，
+  而它从来没有推成功过——也就是说那个分支上的内容（如果存在）是旧的或根本不存在，
+  却没有任何人收到过信号。三仓合一仓 P5 把它前面的部分修好了（生成、编译、测试、
+  `generate --check` 现在都通过），暴露出后面这一段一直是坏的。
+- **候选修法**：(a) 发布时剔除 `.github/workflows/`，并在 GENERATED.md 里说明"CI 请看模板仓"；
+  (b) 换成带 `workflow` scope 的 PAT；(c) 推到另一个仓库而不是本仓分支。
+  选哪个取决于"发布出去的 demo 要不要带它自己的 CI"——这是产品决定，不是搬迁决定。
+- **来源**：三仓合一仓 P5。触发已改回只手动，免得每次推 main 都红一条。
+
 ## W-2026-09-20-05：活动窗口边界上，刚记下的贡献立刻查不到
 
 - **位置**：生成工程 `internal/service/game/activity.go` 的 `Contribute` 与 `Standing`
