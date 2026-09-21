@@ -6,7 +6,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
-## W-2026-09-20-06：demo-publish 从未成功过，卡在"带 CI 的树推不上去"
+## W-2026-09-20-06 已分流：→ RR-20260921-02
 
 - **位置**：`.github/workflows/demo-publish.yml` 的 "Push the generated tree to demo-generated" 步骤
   （合仓前在 roost-codegen，同一份）。
@@ -29,7 +29,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   选哪个取决于"发布出去的 demo 要不要带它自己的 CI"——这是产品决定，不是搬迁决定。
 - **来源**：三仓合一仓 P5。触发已改回只手动，免得每次推 main 都红一条。
 
-## W-2026-09-20-05：活动窗口边界上，刚记下的贡献立刻查不到
+## W-2026-09-20-05 已分流：→ RR-20260921-01（根因更准：不是「窗口会滚」，而是贡献的窗口 id 没有回传通路）
 
 - **位置**：生成工程 `internal/service/game/activity.go` 的 `Contribute` 与 `Standing`
   （模板 `demo/internal/service/game/activity.go.tmpl:309` 与 `:331`），
