@@ -25,9 +25,11 @@ jobs:
       - run: go mod download
       - run: go mod verify
       - run: go test -race -coverprofile=coverage.out ./...
-      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzValidModulePath$' -fuzztime=30s
-      - run: go test ./internal/roost -run '^$' -fuzz '^FuzzManifestDecode$' -fuzztime=30s
-      - run: go test ./internal/roost -run '^$' -bench '^BenchmarkRenderProject$' -benchmem -count=5 > benchmark.txt
+      # 合仓之后生成器在 codegen/ 下；P5 只改了 ./cmd/roost，漏了这三条
+      # （整体检查时发现，见 ci_paths_test.go 只守 ci.yml 这一个文件）。
+      - run: go test ./codegen/internal/roost -run '^$' -fuzz '^FuzzValidModulePath$' -fuzztime=30s
+      - run: go test ./codegen/internal/roost -run '^$' -fuzz '^FuzzManifestDecode$' -fuzztime=30s
+      - run: go test ./codegen/internal/roost -run '^$' -bench '^BenchmarkRenderProject$' -benchmem -count=5 > benchmark.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nightly-quality-${{ github.run_id }}
