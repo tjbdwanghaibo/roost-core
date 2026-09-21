@@ -67,3 +67,11 @@ pretag: github.com/tjbdwanghaibo/roost-codegen@v1.15.30 is ready to tag
   要补只能为那些版本重打 tag，代价大于收益；v1.15.30 起恢复正常产出。
 - **只防住了 codegen 这一个字段**：`framework.core` / `framework.kit` 与实际 pin 的漂移仍然只有 CI 会发现
   （U-0264 就是那一类）。把"清单 == go.mod 实际 pin"也纳入 pretag 是下一步，本单元没做。
+
+## 更正（2026-09-21）
+
+"未做"里的**"只防住了 codegen 这一个字段"已经不成立**。三仓合一仓（core v1.16.0）把发布清单收敛成
+schema 3：整个文件只剩一行 `release`，`framework.core` / `framework.kit` 两个字段不复存在，
+也就没有"清单与实际 pin 漂移"这回事了。漂移检查本身随发布搬进了 `scripts/pretag.sh`。
+
+仍然成立的是另一条：前十个版本的 lock 补不了（工作流按 tag 检出）。
