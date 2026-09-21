@@ -98,7 +98,7 @@ type playerOwners interface {
 // capability name for the same reason the scene is.
 type activityRunner interface {
 	Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error)
-	Contribute(ctx context.Context, playerID int64, runID string) (svcactivity.Participant, error)
+	Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error)
 	Settled(ctx context.Context, activityID string) (bool, error)
 }
 

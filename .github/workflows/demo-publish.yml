@@ -1,14 +1,8 @@
-# ⚠️ 只保留手动触发：这条流水线**在合仓之前就没有成功过**（最近 30 次 0 成功）。
-# 它卡在最后一步——GitHub 不允许 Actions 的 token 推送带 .github/workflows/ 的树：
-#   ! [remote rejected] demo-generated -> demo-generated
-#     (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml`
-#      without `workflows` permission)
-# 合仓把它前面的部分修好了（生成、编译、测试、generate --check 现在都过），
-# 但"发布出去的 demo 要不要带它自己的 CI"是产品决定，不该由搬迁批次拍板。
-# 登记为 W-2026-09-20-06，交给审查线。
 name: demo-publish
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -75,7 +69,26 @@ jobs:
           the next publish overwrites this branch.
 
           To build it yourself, add a go.work pointing at a roost-core checkout: the wiring HEAD emits may need its main branch.
+
+          ## generated-github/
+
+          A generated project ships its own CI under \`.github/workflows/\`. It is published here as
+          \`generated-github/workflows/\` because a GitHub Actions token is not allowed to push workflow
+          files into a branch — the refusal that kept this pipeline from ever publishing (RR-20260921-02).
+          Rename the directory back after cloning; the templates behind it are in roost-core/demo.
           M
+          # The generated tree carries its own .github/workflows/, and a
+          # GITHUB_TOKEN may not create or update workflow files — that single
+          # refusal is why this pipeline had never published anything
+          # (RR-20260921-02). The workflows are moved aside rather than
+          # deleted: they are part of what a reader wants to see, they are
+          # generated from templates that live in this repository, and
+          # GENERATED.md says where.
+          if [ -d .github/workflows ]; then
+            mkdir -p generated-github
+            mv .github/workflows generated-github/workflows
+            rmdir .github 2>/dev/null || true
+          fi
           git init -q -b demo-generated
           git config user.name "roost-core[bot]"
           git config user.email "roost-core@users.noreply.github.com"

@@ -72,6 +72,11 @@ type ActivityRunner struct {
 	// coordinator's expected set is drawn from the ones that actually hold a
 	// live lease, so an activity does not wait on a server nobody started.
 	candidates []int32
+	// now is the clock every window id is derived from. It is a field so a
+	// test can put a contribution and a lookup on opposite sides of a window
+	// boundary — which is the one case the wall clock makes unreproducible,
+	// and the one that was failing in CI (RR-20260921-01).
+	now func() time.Time
 	// incarnation is this process's lease. A previous holder's incarnation
 	// stops being able to renew, which is what makes "this sid is mine" a
 	// fact rather than a convention.
@@ -115,6 +120,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
 		worldID: worldID, gameSID: gameSID,
 		candidates: candidateSIDs(config.GetIntSlice("activity.game_sids"), gameSID),
+		now:        time.Now,
 	}
 	if runner.prefix == "" {
 		return nil, nil, errors.New("activity: activity.key_prefix is empty; the game reads the coordinator's keyspace to keep its own board beside it")
@@ -301,19 +307,30 @@ func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID str
 	return nil
 }
 
-// Contribute adds one player's progress to the current window.
+// Contribute adds one player's progress to the current window, and says
+// WHICH window it went into.
 //
 // The request id is the dungeon run, so a retried contribution for a run that
 // already counted is refused by the coordinator's reservation rather than
 // counted twice — the same anchor the clear's own reward uses.
-func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, runID string) (svcactivity.Participant, error) {
-	activityID := gameactivity.ID(time.Now().Unix())
+//
+// The returned window id is not a convenience. A window lasts
+// gameactivity.WindowSeconds and both this call and Standing derive their id
+// from the clock at the moment they run, so a contribution at 12:14:59 and a
+// lookup at 12:15:01 are about different windows — and without this value
+// nothing downstream can tell that apart from "the point did not count"
+// (RR-20260921-01). The point is not lost in that case: it stays in the
+// window it landed in and settles with it.
+func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error) {
+	activityID := gameactivity.ID(runner.clock().Unix())
 	participant, err := runner.coordinator.ApplyProgress(ctx,
 		gameactivity.Key(activityID), strconv.FormatInt(playerID, 10),
 		gameactivity.ProgressRequestID(runID),
 		svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
 	if err != nil {
-		return svcactivity.Participant{}, err
+		// The window is reported even on failure: the caller's log line is
+		// worth more when it says which window refused it.
+		return activityID, svcactivity.Participant{}, err
 	}
 	// The board is this server's own index of its contributors, kept because
 	// the coordinator has no enumeration and settlement needs one. The score
@@ -324,12 +341,21 @@ func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, ru
 		slog.Warn("activity: contributor not recorded on the board",
 			"activity_id", activityID, "player_id", playerID, "err", err)
 	}
-	return participant, nil
+	return activityID, participant, nil
+}
+
+// clock is runner.now with a default, so a zero-valued runner in a test does
+// not panic before it can be given one.
+func (runner *ActivityRunner) clock() time.Time {
+	if runner.now == nil {
+		return time.Now()
+	}
+	return runner.now()
 }
 
 // Standing is one player's place in the current window, for the endpoint.
 func (runner *ActivityRunner) Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error) {
-	activityID := gameactivity.ID(time.Now().Unix())
+	activityID := gameactivity.ID(runner.clock().Unix())
 	key := gameactivity.Key(activityID)
 	state, _, err := runner.coordinator.LookupActivity(ctx, key)
 	if err != nil {

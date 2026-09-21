@@ -129,8 +129,15 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 	// paid is exactly when the contribution may still be missing.
 	if runner, runnerErr := controller.Activities(); runnerErr != nil {
 		slog.Warn("finish_dungeon: activity runner unavailable", "player_id", context.PlayerID, "err", runnerErr)
-	} else if _, err := runner.Contribute(context.Context(), context.PlayerID, run.ID); err != nil {
-		slog.Warn("finish_dungeon: clear not contributed to the activity", "player_id", context.PlayerID, "run_id", run.ID, "err", err)
+	} else if activityID, _, err := runner.Contribute(context.Context(), context.PlayerID, run.ID); err != nil {
+		slog.Warn("finish_dungeon: clear not contributed to the activity",
+			"player_id", context.PlayerID, "run_id", run.ID, "activity_id", activityID, "err", err)
+	} else {
+		// Which window took the point. A caller that reads its standing a
+		// moment later may well be looking at the NEXT window; this is what
+		// lets it tell that apart from a point that did not count
+		// (RR-20260921-01).
+		response.ActivityID = activityID
 	}
 	return response, nil
 }

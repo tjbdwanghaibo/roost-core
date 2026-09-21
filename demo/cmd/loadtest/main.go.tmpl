@@ -453,9 +453,28 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			if resp.ClosesAtUnix <= 0 {
 				return fmt.Errorf("window %s has no close deadline", resp.ActivityID)
 			}
-			if resp.Score != 1 || resp.Progress != 1 {
-				return fmt.Errorf("window %s counted score=%d progress=%d for one dungeon clear (and its replay), want 1/1",
-					resp.ActivityID, resp.Score, resp.Progress)
+			raw, _ := rb.Blackboard.Get("contributed_activity_id")
+			contributed, _ := raw.(string)
+			if contributed == "" {
+				return fmt.Errorf("the clear never reported which window took its point")
+			}
+			if resp.ActivityID == contributed {
+				if resp.Score != 1 || resp.Progress != 1 {
+					return fmt.Errorf("window %s counted score=%d progress=%d for one dungeon clear (and its replay), want 1/1",
+						resp.ActivityID, resp.Score, resp.Progress)
+				}
+			} else {
+				// The window rolled between the clear and this call — a
+				// 5-minute boundary, not a miscount. The point stayed in the
+				// window it landed in and settles with it, so what must hold
+				// HERE is the opposite: a fresh window must not have inherited
+				// it. Asserting an exact 1 across a boundary is what made this
+				// gate fail for a reason unrelated to what it tests
+				// (RR-20260921-01).
+				if resp.Score != 0 || resp.Progress != 0 {
+					return fmt.Errorf("window %s is not the one that took the point (%s) yet already counts score=%d progress=%d",
+						resp.ActivityID, contributed, resp.Score, resp.Progress)
+				}
 			}
 			rb.Blackboard.Set("activity_id", resp.ActivityID)
 			return nil
@@ -615,13 +634,22 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			return nil
 		}))
 	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon", msgid.MsgFinishDungeon,
-		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
+		action.OnResp(func(rb *robot.Context, resp *pb.FinishDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
 			if resp.State != "succeeded" || resp.ExpGranted <= 0 {
 				return fmt.Errorf("dungeon not resolved as a clear: state=%q exp=%d", resp.State, resp.ExpGranted)
 			}
+			// Which window took this clear's point. activity_standing below
+			// needs it: a window lasts 5 minutes and the standing endpoint
+			// answers about whichever one is current when it is asked, so
+			// without this the robot would be asserting a count in a window
+			// it never contributed to (RR-20260921-01).
+			if resp.ActivityID == "" {
+				return fmt.Errorf("the clear did not say which activity window took its point")
+			}
+			rb.Blackboard.Set("contributed_activity_id", resp.ActivityID)
 			return nil
 		}))
 	// The same call again, on the same run id. Finish is idempotent, so the

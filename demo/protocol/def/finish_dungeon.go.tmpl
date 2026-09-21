@@ -19,6 +19,14 @@ type FinishDungeonResponse struct {
 	Outcome      string `pb:"4"`
 	ExpGranted   int64  `pb:"5"`
 	LevelsGained int32  `pb:"6"`
+	// ActivityID is the server-wide window this clear's point went into, or
+	// empty when it did not contribute (no runner, or the coordinator refused).
+	//
+	// A window lasts 5 minutes and the standing endpoint reports whichever one
+	// is current when it is ASKED, so a clear at 12:14:59 and a standing at
+	// 12:15:01 are about different windows. Without this field nothing can
+	// tell that apart from "the point did not count" (RR-20260921-01).
+	ActivityID string `pb:"7"`
 }
 
 //roost:protocol group=game handler=player
