@@ -14,7 +14,7 @@
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir . -emit transport
+//	go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir . -emit transport
 
 package session
 

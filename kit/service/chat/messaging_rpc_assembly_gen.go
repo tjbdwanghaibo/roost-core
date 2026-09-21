@@ -9,7 +9,7 @@
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//	go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 package chat
 
@@ -22,8 +22,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
 // OwnerCapabilities is what the owning Mod registers: the interface every

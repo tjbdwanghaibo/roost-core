@@ -4,7 +4,7 @@ import "context"
 
 // The transport for Match is generated from the interface below.
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir . -emit transport
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir . -emit transport
 
 // Matchmaker is the cross-process contract: what ANOTHER process may ask of
 // the match service.

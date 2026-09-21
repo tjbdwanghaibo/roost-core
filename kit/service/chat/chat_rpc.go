@@ -4,7 +4,7 @@ import "context"
 
 // The transport for Messaging is generated from the interface below.
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 // Messaging is the cross-process contract: what ANOTHER process may ask of the
 // chat service.

@@ -14,7 +14,7 @@
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//	go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 package account
 

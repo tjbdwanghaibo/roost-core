@@ -4,7 +4,7 @@ import "context"
 
 // The transport for Coordinator is generated from the interface below.
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 // Coordinator is the cross-process contract: what ANOTHER process may ask of
 // the activity coordination service.

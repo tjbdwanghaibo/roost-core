@@ -101,7 +101,7 @@ func Code(err error) int32 { return core.Code(err) }
 // BusClient, Capability wrapper, capability names) live in roost-core with the
 // domain. The assembly half below is generated from that interface:
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/match -emit assembly -out .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir github.com/tjbdwanghaibo/roost-core/service/match -emit assembly -out .
 
 type (
 	Matchmaker = core.Matchmaker

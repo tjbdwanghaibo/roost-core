@@ -6,7 +6,7 @@ import "context"
 // types, the handler table and the typed client. Regenerate after changing
 // the interface.
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir . -emit transport
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir . -emit transport
 
 // Mail is the cross-process contract: what ANOTHER process may ask of the
 // mail service.

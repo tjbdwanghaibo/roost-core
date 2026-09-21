@@ -4,7 +4,7 @@ import "context"
 
 // The transport for Routing is generated from the interface below.
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 // Routing is the cross-process contract: what ANOTHER process may ask of the
 // routing and lease service.
