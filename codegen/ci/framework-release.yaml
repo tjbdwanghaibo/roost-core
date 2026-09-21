@@ -2,7 +2,7 @@ schema: 3
 # 一个模块一个版本：kit 与生成器都在 roost-core 里（kit/、codegen/）。
 # 这一行必须等于要发的 tag——scripts/pretag.sh 在打 tag 之前比对它，
 # release workflow 在 tag 之后再比对一次（U-0270：它曾经漂了十个版本）。
-release: v1.16.0
+release: v1.16.1
 consumer_go:
   # 只剩 1.27.x：roost-core 的 go 指令是 1.27.0，更低的工具链构建不了它，
   # 那两条 lane 不是"没测"而是"不可能通过"。
