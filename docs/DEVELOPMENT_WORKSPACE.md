@@ -1,102 +1,72 @@
-# 多仓研发与发布
+# 单仓研发与发布
 
-Roost 研发期以三仓 source-head 联调为主，正式稳定后再固定发布版本。两种模式必须隔离：
-workspace 解决研发效率，module/tag 证明外部用户可安装和复现。
+> **2026-09-21 重写。** 本页原来讲"三仓 source-head 联调"：core / kit / codegen 各是一个仓库，
+> 开发期用 `go work init ./roost-core ./roost-kit ./roost-codegen` 把它们挂在一起，发布期再逐个对版本。
+> [三仓合一仓](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)（core v1.16.0）之后这些都没有了：
+> 一个仓库、一个 Go module、一个 tag。旧形态的记录留在
+> [五仓合三仓方案](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md) 与 `docs/history/`。
 
-## 研发模式：go.work
+## 研发：不需要 workspace
 
-在三个仓库的共同父目录创建不提交的 `go.work`：
+框架的四层都在同一个 module 里，改哪一层都是同一次 `go build`：
+
+```text
+roost-core/
+├── <core 包>   运行时：entity、nest、dataengine、room、saga、skill …
+├── kit/        装配层：mods、app 生命周期与运维、service/ 的 12 个通用服务
+├── codegen/    生成器与升级器（CLI 在 codegen/cmd/roost）
+└── demo/       game-demo 模板
+```
 
 ```bash
-go work init ./roost-core ./roost-kit ./roost-codegen
+go build ./...        # 全部四层
+go test ./...         # 115 个包
+go vet ./... && go run ./cmd/glsvet ./...
 ```
 
-每个仓库应忽略 `go.work`/`go.work.sum`。业务仓库需要联调时，用 `go work use
-./your-service` 临时加入。不要用 `go mod edit -replace` 把本地路径写进可发布 module；
-workspace 已经提供相同的源码替换能力，而且不会污染版本元数据。日常联调不运行
-`go work sync`；该命令可能把 workspace 选出的依赖版本写回各仓 `go.mod`，只有明确执行
-跨仓版本收口时才使用并审查 diff。
+**依赖方向由测试钉住**（`dependency_boundary_test.go`）：core 的包不得 import `kit/`、`codegen/`、`demo/`；
+kit 可以用 core；codegen 独立于它生成的那个运行时。合仓之前这条规则由 Go 模块边界免费保证，
+现在由目录前缀判定——所以它是一条**会红的测试**，不是一句约定。
 
-**模块改名过渡期的例外。** workspace 只决定"用哪份代码"，MVS 计算模块图时仍会读取各仓
-`go.mod` 里 require 的那个版本的 `go.mod`。模块路径从 `cube-*` 改为 `roost-*` 后、新 tag 发布前，
-旧 tag 的 `go.mod` 仍声明 `cube-core`，会被拒绝。此时在 go.work 里加**指定版本**的 replace
-（Go 不允许对 workspace 模块做无版本 replace）：
+## 唯一还需要 go.work 的场景：验证还没发布的改动
 
-```
-replace github.com/tjbdwanghaibo/roost-core v1.10.0 => ./roost-core
-replace github.com/tjbdwanghaibo/roost-kit v1.10.0 => ./roost-kit
-```
-
-tag 发布后删除。它只存在于不提交的 go.work 里，不会进入任何可发布 module。
-
-研发验收在同一个 workspace 下运行：
+生成工程依赖的是**已发布**的 core。当你改了运行时或模板、想在发版之前看生成物能不能编译时，
+用一个临时 workspace 把生成工程指到本地 checkout：
 
 ```bash
-go test ./...
-go vet ./...
+roost project new planet -module example.com/planet -out /tmp/planet -skip-deps
+cd /tmp/planet
+go work init . /path/to/roost-core
+go work edit -go=1.27.0
+go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core   # 它指着一个还没发布的版本
+go build ./...
 ```
 
-并发、WAL、Remote Entity、Saga 变更还要对对应包运行 `go test -race`。Codegen 生成的
-consumer 应加入临时 workspace 后编译，证明模板与三仓 source-head 同代。
-
-## 打 tag 前：scripts/pretag.sh
+`-skip-deps` 是必需的：生成物的 import 可能只存在于你本地这棵树里，让 `project new` 去 proxy 解析必然失败。
+这套流程已经脚本化：
 
 ```bash
-./scripts/pretag.sh v1.11.0
+codegen/scripts/source-head-check.sh minimal   # 或 full
 ```
 
-**为什么需要它，而不只是 CI。** 由 tag push 触发的 workflow 运行在 tag **已经存在于
-远端、且已可被 module proxy 缓存之后**。它能报告这个 tag 不可用，但阻止不了。
-roost-core 就这样出现过一个已推送的 `v2.0.0`——module 路径没有 `/v2` 后缀，因此
-任何消费者都选不到它：
+**go.work 永远不提交**（`.gitignore` 里有它）：提交一个 workspace 会让每个消费者被悄悄重定向到本地源码。
 
-```
-go: ...@v2.0.0: invalid version: module contains a go.mod file,
-so module path must match major version (".../roost-core/v2")
-```
-
-三仓各有一份相同的脚本，在创建 tag 之前检查五件事：
-
-1. **tag 的 major 与 module 路径后缀一致**。Go 对 v2+ 要求路径带 `/vN`；不一致的 tag
-   谁都选不到。这是上面那个事故的直接成因。
-2. **tag 不能已存在**（本地或远端）。重打一个已发布的版本比打错版本更糟——proxy
-   已经用那个名字缓存了旧内容。
-3. **`go.mod` 没有 replace**，工作区干净。
-4. **`GOWORK=off` 下能 build / vet / test**。workspace 恰好会隐藏消费者会撞上的
-   那类依赖错误。
-
-版本策略：**沿 v1.x 递增，不做 v2**。真要做 major 版本应当在一次有意的大重构里做，
-并且同时改 module 路径后缀与全部 import——不是为了某一处语义修正。
-
-## 发布模式：GOWORK=off
-
-发布验证必须完全关闭 workspace：
+## 发布：一个 tag
 
 ```bash
-GOWORK=off go test ./...
-GOWORK=off go vet ./...
+./scripts/pretag.sh v1.16.2      # 门禁：主版本、tag 未存在、无 replace、工作树干净、
+                                 # GOWORK=off 下 build/vet/tidy/test、清单版本 == 要打的 tag
+git tag -a v1.16.2 -m "…" && git push origin v1.16.2
 ```
 
-Windows PowerShell 使用 `$env:GOWORK='off'`。发布顺序固定为 core → kit →
-codegen；后一层只能引用已经存在的正式 tag。每层发布后再执行 pure-tag 生成工程 smoke。
-以下内容一律阻断 tag：
+发布清单是 `codegen/ci/framework-release.yaml`，只有一行 `release`。它必须等于要打的 tag：
+`pretag.sh` 在打 tag 之前比对，`release.yml` 在 tag 之后再比对一次并产出 `framework-lock.json`。
+这条检查是有来历的——那个字段曾经漂了十个版本，把受保护的发布闸一起带红而没人发现（U-0270）。
 
-- `go.mod` 含本地 `replace`、pseudo-version 或尚不存在的版本；
-- 只有 source-head workspace 组合能编译，`GOWORK=off` 失败；
-- codegen 的最低版本、模板 import 与实际发布 API 不一致；
-- 发布 workflow 没有显式关闭 workspace。
+发布之后 `go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest` 就是新的 CLI；
+业务工程 `roost project deps` 升到新版本。
 
-研发期尚未发布新 tag 时，Kit/Skill 的 standalone 检查可能因旧 tag 不含新 API 而失败。
-这不阻断 source-head 开发，但它始终是“尚不可发布”的明确信号，不能被改成静默通过。
+## 兼容承诺
 
-## 命名迁移
-
-Core 的并发容器路径已从含义模糊且易与 Go 关键字混淆的 `roost-core/map` 改为
-`roost-core/safemap`；类型名不变，常用 alias 仍可写成 `fmap`。升级 source-head 后重新
-运行 codegen，或把业务 import 改为：
-
-```go
-import fmap "github.com/tjbdwanghaibo/roost-core/safemap"
-```
-
-该路径变化必须跟随下一次正式版本发布，不提供同时维护两套实现的兼容空壳。
+一个仓库只有一个版本号，所以**只有 core 包的改动进兼容承诺**；`demo/` 与 `codegen/` 的改动
+不构成框架行为变化，CHANGELOG 分节标明。判断要不要升级看 CHANGELOG 的分节，不要只看版本号跳了几位。

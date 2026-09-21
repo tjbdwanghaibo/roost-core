@@ -1,6 +1,6 @@
 # Roost 文档中心
 
-**[三仓合一仓：kit 与 codegen 并入 core](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)**（2026-09-20 起，P0）：四个决定已拍板，三仓 `main` 冻结为维护线。
+**[三仓合一仓：kit 与 codegen 并入 core](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)**（2026-09-20 完成，core v1.16.0）：框架只剩一个仓库、一个 Go module、一个 tag；roost-kit 与 roost-codegen 已归档，旧 tag 仍可 pin。跨过这条边界的工程用 `roost project upgrade --consolidate` 改写 import。
 
 [09-20 修复验收、实时同步与所有权续审](review/REVIEW-2026-09-20.md)：两个活动 Wanted 完成分流，确认 datagram 增量永久丢字段、Remote BSON uint64、player owner ABA/失主双写及 pending poison 前缀五项问题；附复现、进度和实施交接。未修改源码。
 
@@ -74,7 +74,7 @@
 
 [Mirror 实施交接](review/PLAN-REMOTE-POLICY-MIRROR.md)：复用现有工具的模块分工、协议选择、六步实施与验收。
 
-Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时由 `roost-core`（契约 + 实现 + 技能系统）与 `roost-kit`（装配层 + 通用服务）组成，项目与样板代码由 `roost-codegen` 生成。文档按阅读者的目标分为三级，没必要从头读到尾。
+Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架，**一个 Go module**：运行时（契约 + 实现 + 技能系统）在仓库根部，装配层与通用服务在 `kit/`，项目与样板代码由 `codegen/` 下的生成器产出（CLI：`go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest`）。文档按阅读者的目标分为三级，没必要从头读到尾。
 
 ## 第一级：完全新手
 
@@ -143,11 +143,26 @@ Roost 是面向 Linux 生产环境的通用 Go 游戏服务器框架。运行时
 - [运行模型](../RUNTIME_EXECUTION_MODEL.md)
 - [生产就绪清单](../PRODUCTION_READINESS.md)
 - [框架综合评估](../ROOST_FRAMEWORK_ASSESSMENT.md)
-- [roost-kit 组件与实现](https://github.com/tjbdwanghaibo/roost-kit/blob/main/README.md)
+- [装配层与 Mod（kit/）](../kit/README.md)
 - [技能系统（core/skill）](skill/README.md)
-- [通用服务（kit/service）](https://github.com/tjbdwanghaibo/roost-kit/blob/main/service/README.md)
-- [roost-codegen 生成器](https://github.com/tjbdwanghaibo/roost-codegen/blob/main/README.md)
+- [通用服务（kit/service/）](../kit/service/README.md)
+- [生成器（codegen/）](../codegen/README.md)
+- [仓库级脚本（scripts/）](../scripts/README.md)
 
 ## 版本基线
 
-当前正式 tag 组合为：`roost-core v1.15.11`、`roost-kit v1.14.13`、`roost-codegen v1.15.19`（2026-09-19 第十六次发版：codegen game-demo 第十七批——运维面（配置表驱动的 featureflag 与 hotcode 补丁点，新增 `gm.flag.*` / `gm.config.reload`），core 与 kit 未变；2026-09-19 第十五次发版：活动结果交付形成闭环（U-0257，P1）——按 (组, 游戏服) 的 owed 索引与 dispatch 同一次写、`OwedDispatches` 上 RPC、`AttemptDispatch` 交给取走 payload 的一方、sweep 收回到推进 / 补建 / 退休 / 报 stale；core 的 `versionstore.RedisIndex` 随之支持按所有者分组。**已有 activity 部署升级后要回填 owed 索引**，做法见 `docs/bugfix/RR-20260919-10.md`；2026-09-19 第十四次发版：审查第二轮的三条——共享加载的 defer 收尾（一次 loader panic 让该实体永久加载不了，P1）、缺失实体在 Nest single / broadcast 处的 nil 契约、待办索引里没有记录的条目可以退休（P1）。**RR-20260919-10（activity dispatch 没有交付闭环）未修**，要先在 kit 加按 gameSID 的待交付 RPC，见 `docs/bugfix/README.md` 末尾；2026-09-19 第十三次发版：09-19 审查剩下的两条 P1——nested 值的唯一父所有权（同一个指针占两处时只有最后一处落库，U-0252），以及订单与待办索引收敛成同一次 Redis 写（U-0253：core 的双 key CAS + versionstore 索引、kit 的 platform 订单存储自带索引并默认开启后台重试、demo 删掉部署侧索引）。**已有 platform 部署升级后要回填索引**，做法见 `docs/bugfix/RR-20260919-04.md`；2026-09-19 第十二次发版：codegen 收敛 09-19 审查的四条 P1（会话关闭订阅者 panic 带走进程、顶层单指针 nested 字段的所有权交接、待发货索引一条坏订单饿死整页、付费 grant 过期删除造成永久少发货），外加 handler 空白参数名与 chat presence 残余补修，以及 game-demo 第十六批（限时活动：World 的持久计时器 + global/activity 跨服聚合）。**RR-20260919-02（nested 别名）与 RR-20260919-04（订单与待办索引不原子）本版未修**，理由与要先定的契约见 `docs/bugfix/README.md` 末尾；2026-09-19 第十一次发版：kit 给 platform 的协作者加 `RegistryBound`（与 account 同形：collaborator 在 app 之前构造，拿不到 registry，而 U-0234 留给部署的待发货索引需要同一个 Redis 并要把订单读回来判终态），codegen 是 game-demo 第十五批——付费订单走通 game / platform 两个进程、待发货索引的参考实现，外加托管服务可选协作者的生成接线与 platform 配置块缺失的两个 secret；2026-09-19 第十次发版：codegen 补丁——U-0245（新建的 DAO 不接嵌套回调，第一次存盘前的嵌套写入悄悄丢掉，数据丢失类）与 game-demo 第十四批（装备栏 / 数据版本迁移 / `schema=N`）；2026-09-18 第九次发版：一轮 bugfix 收敛 review 第三轮登记的全部六条——邮件账本按信封过期时刻而不是固定保留期（P1）、运行期实体 id 带进程 sid（P1）、顶层 DAO 容器的回调所有权（P1）、会话关闭生命周期事件、syncTopic 歧义写法改为拒绝、AOI 单观察者订阅预算；另含 ARCH-06 同步字段词汇表与 game-demo 第十三批（地图 / AOI / 刷怪）。**codegen v1.15.11 有一个启动缺陷**（spawner 从错误的位置读 sid，启用 game-demo 的工程起不来），v1.15.12 修掉，不要用 v1.15.11；2026-09-18 第八次发版：一轮 bugfix 收敛 review 登记的全部八条——attribute 运行时进 core 并让 attribute feature 真正可用（B8 随之完成）、saga 原生完成消费者、room 持久化水位入口、platform 后台重试候选入口、dungeon 奖励幂等（P1）、battle 宽限期、sync=true 生成物、嵌套 DAO 脏传播；2026-09-17 第七次 v1.15.6 / v1.14.7 / v1.15.9：saga 步骤拒绝 / 重试用尽后的补偿能落到 Mongo 存储（U-0225）、U-0219～U-0224 一并随本版发出，codegen 侧是 game-demo 的送礼 saga / GM 运维面 / `add mod` 补配置段；2026-09-16 第六次 v1.15.5 / v1.14.6 / v1.15.8：Mail / Session / Matchmaker RPC 接口与传输半进 core，kit 从 core 接口生成装配半；同日第五次 v1.15.4 / v1.14.5 / v1.15.7：mail / session / manager 下沉 core、生成传输拆两半；v1.15.3 / v1.14.4 / v1.15.6 同日稍早，v1.15.2 / v1.14.3 / v1.15.4 于 2026-09-09；roost-skill / roost-service 已于 2026-09-08 并入 core / kit 并归档）。kit v1.14.4 含破坏性改动 `match.NewMod(reporter)`，须与 codegen v1.15.5 同版本升级。发布顺序固定为 core → kit → codegen，后一层只能依赖前一层已存在的正式 tag；roost-codegen 的 `ci/framework-release.yaml` 是这组版本的机器可校验记录。正式项目不得依赖 `@latest`、伪版本或本地 `replace`。
+**一个模块，一个 tag。** 当前正式版本见仓库根的 [CHANGELOG](../CHANGELOG.md) 顶部；
+机器可校验的记录是 `codegen/ci/framework-release.yaml` 的 `release` 一行，
+`scripts/pretag.sh` 在打 tag 之前比对它，release workflow 在 tag 之后再比对一次。
+
+- 业务工程只 require `github.com/tjbdwanghaibo/roost-core` 一条，CLI 用
+  `go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest`。
+- **只有仓库根部（运行时）的改动进兼容承诺**；`kit/`、`codegen/`、`demo/` 的改动不构成框架行为变化，
+  CHANGELOG 分节标明。要不要升级看分节，不要只看版本号跳了几位。
+- 正式项目不得依赖 `@latest`、伪版本或本地 `replace`。
+- 从 core v1.16.0 之前升上来要先跑 `roost project upgrade --consolidate`（见
+  [三仓合一仓](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)）；更早的 roost-skill / roost-service
+  边界见 [五仓合三仓](ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。
+
+> 这一节原来逐条罗列每次发版的内容，长到没人读、且停在 v1.15.11 不再更新。
+> 发版历史属于 CHANGELOG，这里只留不会过期的规则（2026-09-21 重写）。

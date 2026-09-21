@@ -1,6 +1,6 @@
 # Roost 生产部署手册
 
-本文适用于 Linux。`roost-codegen v1.7.0` 生成 Shell/systemd、Docker 与 Kubernetes/Kustomize 基线。模板是安全起点，不替代组织自己的证书、Secret、网络策略和发布平台。
+本文适用于 Linux。生成器（`codegen/`，CLI `roost`）产出 Shell/systemd、Docker 与 Kubernetes/Kustomize 基线。模板是安全起点，不替代组织自己的证书、Secret、网络策略和发布平台。
 
 ## 1. 部署前置条件
 

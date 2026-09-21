@@ -36,17 +36,17 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 
 ### 第一轮：一次最小施放（30 分钟）
 
-从 [simple_damage.json](../skill/testdata/simple_damage.json) 开始，只做一件事：
+从 [simple_damage.json](../../skill/testdata/simple_damage.json) 开始，只做一件事：
 输入目标，对目标造成物理伤害，然后结束。
 
 按以下顺序跳转：
 
-1. [parse.go](../skill/parse.go) 的 `Parse`：确认 schema、严格对象解码与顶层定义。
-2. [lower.go](../skill/lower.go) 的 `Compile`：它是公开的编译入口。
-3. [runtime.go](../skill/runtime.go) 的 `NewRuntime`、`Activate` 和 `startLocked`：理解 Cast 的创建。
-4. [executor.go](../skill/executor.go)：查看一个 Program operation 如何被执行。
-5. [memory_host_effect.go](../skill/memory_host_effect.go)：以 `MemoryHost` 为例观察伤害如何真正提交。
-6. [acceptance_test.go](../skill/acceptance_test.go)：该测试把 fixture 走完
+1. [parse.go](../../skill/parse.go) 的 `Parse`：确认 schema、严格对象解码与顶层定义。
+2. [lower.go](../../skill/lower.go) 的 `Compile`：它是公开的编译入口。
+3. [runtime.go](../../skill/runtime.go) 的 `NewRuntime`、`Activate` 和 `startLocked`：理解 Cast 的创建。
+4. [executor.go](../../skill/executor.go)：查看一个 Program operation 如何被执行。
+5. [memory_host_effect.go](../../skill/memory_host_effect.go)：以 `MemoryHost` 为例观察伤害如何真正提交。
+6. [acceptance_test.go](../../skill/acceptance_test.go)：该测试把 fixture 走完
    Parse → Compile → Inspect → Activate → Advance → 终态检查。
 
 完成这一轮后，应能回答：伤害量从 JSON 中何时成为强类型值？为什么 Runtime 不需要
@@ -54,7 +54,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 
 ### 第二轮：编译器如何拒绝不安全定义（60 分钟）
 
-阅读 [compile.go](../skill/compile.go)。`compileToArtifactsInternal`
+阅读 [compile.go](../../skill/compile.go)。`compileToArtifactsInternal`
 列出的 Pass 顺序就是当前编译语义的主目录：
 
 1. `normalize`：Wire Definition 转为封闭 IR，并记录源路径。
@@ -79,9 +79,9 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 建议配合阅读：
 
 - `compile_*_test.go`：静态拒绝用例；
-- [compile_environment.go](../skill/compile_environment.go)：默认目录和限制；
-- [canonical_definition.go](../skill/canonical_definition.go)：源定义的稳定摘要；
-- [diagnostic.go](../skill/diagnostic.go)：诊断代码和稳定排序约定。
+- [compile_environment.go](../../skill/compile_environment.go)：默认目录和限制；
+- [canonical_definition.go](../../skill/canonical_definition.go)：源定义的稳定摘要；
+- [diagnostic.go](../../skill/diagnostic.go)：诊断代码和稳定排序约定。
 
 练习：把 `simple_damage.json` 的 `damage_type` 改成不存在的键，再运行对应测试或
 验收测试，观察诊断产生在 authority/capability 边界，而不是在运行时。
@@ -95,10 +95,10 @@ Wire 层与 IR 层回答“用户写了什么”；Program 层回答“Runtime �
 1. `wire_*.go`：JSON 允许的封闭语法。尤其是 `wire_definition.go`、
    `wire_flow.go`、`wire_effect.go`、`wire_input.go`。
 2. `ir*.go` 和 `compile_normalize.go`：标准化后的强类型中间表示。
-3. [lower.go](../skill/lower.go)：把名称解析成 Handle、MemoryIndex、
+3. [lower.go](../../skill/lower.go)：把名称解析成 Handle、MemoryIndex、
    LocalIndex、OperationIndex，并收集 snapshots、random sites、event plans。
 4. `program_*.go`：Program 内部的执行指令和索引布局。
-5. [inspect.go](../skill/inspect.go)：唯一推荐给外部消费者的 Program
+5. [inspect.go](../../skill/inspect.go)：唯一推荐给外部消费者的 Program
    观察面。
 
 关键不变量：Program 是编译结果，Runtime 不应重新解析 DSL 字段或回头查询源 JSON。
@@ -106,7 +106,7 @@ Wire 层与 IR 层回答“用户写了什么”；Program 层回答“Runtime �
 
 ## 3. Runtime：把 Program 变成确定性行为
 
-Runtime 的核心类型位于 [runtime.go](../skill/runtime.go)：
+Runtime 的核心类型位于 [runtime.go](../../skill/runtime.go)：
 
 - `RuntimeOptions`：匹配种子、任务/trace 限制等运行时配置；
 - `CastInput`：主动施放输入的统一载体；
@@ -128,11 +128,11 @@ Activate
 重点文件：
 
 - `runtime_input.go`：位置、目标、双点、拖拽、路径输入的运行时校验与归一化；
-- [runtime_cast_window.go](../skill/runtime_cast_window.go)：windup、
+- [runtime_cast_window.go](../../skill/runtime_cast_window.go)：windup、
   commit、recovery、`Cancel` 和 `Release`；
-- [scheduler.go](../skill/scheduler.go)：`Advance`、稳定排序和任务执行；
+- [scheduler.go](../../skill/scheduler.go)：`Advance`、稳定排序和任务执行；
 - `runtime_dispatch.go`、`runtime_event.go`：phase 事件与 process 信号如何进入 flow；
-- [runtime_proc.go](../skill/runtime_proc.go)：`ActivatePassive` 与
+- [runtime_proc.go](../../skill/runtime_proc.go)：`ActivatePassive` 与
   递归/同根事件保护；
 - `runtime_state.go`、`runtime_ability.go`、`runtime_temporal.go`：状态、能力控制、
   快照等专用操作的运行时桥接。
@@ -158,7 +158,7 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 - 读写持久或共享 State；
 - 读取事件流和世界 revision。
 
-建议先读 [host.go](../skill/host.go)，再读 `host_*.go` 中的命令和
+建议先读 [host.go](../../skill/host.go)，再读 `host_*.go` 中的命令和
 结果类型，最后读 `memory_host*.go`。`MemoryHost` 是可重复的参考实现和测试世界，
 不是生产服务器的替代品。
 
@@ -182,7 +182,7 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 | Temporal/Result | `temporal_rewind`、`effect_result_kill_branch` | `compile_temporal.go`、`runtime_temporal.go`、`runtime_effect_result.go` |
 | Passive proc | `passive_counter`、`passive_proc_guard`、`ammo_on_kill` | `compile_proc.go`、`runtime_proc.go` |
 
-所有 37 个 fixture 位于 [testdata](../skill/testdata)。
+所有 37 个 fixture 位于 [testdata](../../skill/testdata)。
 `acceptance_test.go` 使用目录发现机制：新增 JSON 若没有明确的输入、推进 tick、release
 或 passive 配置，测试会失败。因此 fixture 既是可运行示例，也是变更清单。
 
@@ -192,7 +192,7 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 `Inspect`、`InspectMetrics`、`InspectInputLayout`、`InspectSelections`、
 `InspectEffectResults` 等只读视图消费 Program。
 
-[skillcompose](../skillcompose) 展示了这一原则：
+[skillcompose](../../skill/skillcompose) 展示了这一原则：
 
 1. `profile_extract.go` 从 Inspector 提取 `SkillProfile`；
 2. `contract_builder.go` 将多个 profile 和 caller policy 收紧为 composition contract；
@@ -206,13 +206,13 @@ Inspector 视图，而不是打破包边界。
 
 ### Trace
 
-[trace.go](../skill/trace.go) 维护有界、被动的 `TraceEvent` 缓冲。
+[trace.go](../../skill/trace.go) 维护有界、被动的 `TraceEvent` 缓冲。
 执行路径只记录事件；调用方在安全的外部时机调用 `FlushTrace`，才把缓冲发送给
 `TraceSink`。sink 失败不会反向影响游戏逻辑，也不会丢弃尚未成功发送的事件。
 
 ### Record / Replay
 
-[replay.go](../skill/replay.go) 提供测试与排障适配器：
+[replay.go](../../skill/replay.go) 提供测试与排障适配器：
 
 - `RecordingHost` 保存 Host 调用的顺序、请求调试键、类型化结果、错误和 revision；
 - `ReplayHost` 仅在下一次调用的种类与请求一致时返回已录制结果；

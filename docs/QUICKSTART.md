@@ -4,7 +4,7 @@
 
 ## 1. 准备环境
 
-- Linux 或 WSL2；Go 1.25 及以上。
+- Linux、macOS 或 WSL2；**Go 1.27 及以上**（框架的 `go` 指令是 1.27.0，更低的工具链构建不了它）。
 - Docker + Docker Compose，用于本地 Redis、MongoDB replica set、NATS JetStream 和 etcd。
 - Git。生产部署再准备 systemd 或 Kubernetes，不影响本地开始。
 
@@ -18,10 +18,11 @@ docker compose version
 
 ## 2. 安装并生成项目
 
-安装当前发布组合里的 codegen（版本以 roost-codegen `ci/framework-release.yaml` 为准，2026-09-09 为 codegen v1.15.4 / core v1.15.2 / kit v1.14.3）：
+框架是**一个模块**：运行时、装配层（`kit/`）和生成器（`codegen/`）都在 `roost-core` 里，
+所以只装一个东西、生成的工程也只依赖一个模块。
 
 ```bash
-go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.15.4
+go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 roost project new planet \
   -module example.com/planet \
   -services game,gate \
@@ -30,6 +31,16 @@ cd planet
 ```
 
 `-module` 是必填项：生成的 import 路径要指向你自己的仓库，CLI 不会替你猜。
+
+生成出来的 `go.mod` 里框架只有一行：
+
+```text
+require github.com/tjbdwanghaibo/roost-core v1.16.1
+```
+
+> 从 **core v1.16.0** 之前的版本升上来的工程，import 还指着 `roost-kit` / `roost-codegen`，
+> 先跑一次 `roost project upgrade --consolidate`（加 `--dry-run` 预览）把它们改写过来。
+> 见 [三仓合一仓](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
 
 生成目录中的关键内容：
 
@@ -58,8 +69,6 @@ curl --fail http://127.0.0.1:9100/readyz
 curl --fail http://127.0.0.1:9100/metrics
 ```
 
-`healthz` 表示进程活着；只有 `readyz` 成功才可以接流量。退出使用 `Ctrl+C`，框架会在统一停机期限内按 Service → Nest → Saga → Data Engine projection/outbox/WAL → 中间件的逆依赖方向收敛。
-
 ## 4. 业务代码写在哪里
 
 正常业务路径只有四层：
@@ -69,15 +78,18 @@ curl --fail http://127.0.0.1:9100/metrics
 3. Nest 定位 Entity、排序并加实体锁，然后调用生成包装的 handler。
 4. handler 调用 Component/DAO 的生成方法；方法负责 dirty、undo 和 patch，不直接写私有字段。
 
-先用生成器创建骨架：
+先用生成器创建骨架。顺序是有依赖的——组件和 DAO 都挂在一个 Entity 上，handler 又挂在组件上：
 
 ```bash
-roost add dao hero
 roost add entity hero
-roost add nest add_gold
+roost add dao hero --entity hero
+roost add component stats --entity hero
+roost add handler add_gold --entity hero --component stats
 roost generate
 make ci
 ```
+
+（本页的命令在 v1.16.1 上逐条实跑过：生成 → 四条 add → generate → `go build` → `go test` 全通过。）
 
 不要在 handler 外自行给 Entity 加锁，不要绕过生成的 setter 修改 DAO，不要从业务层直接控制 WAL 或 Mongo transaction。
 
