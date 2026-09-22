@@ -102,9 +102,6 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := scene.Start(context.Background()); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	// The replication bridge asks the Scene Entity's interest system who
-	// should be subscribed, so it has to know which scene it is replicating.
-	scene.SetArea(area)
 	if err := registry.Register(SceneCapability, scene); err != nil {
 		_ = scene.Close(context.Background())
 		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)

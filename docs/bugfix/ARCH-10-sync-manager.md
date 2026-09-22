@@ -1,6 +1,6 @@
 # ARCH-10：实体同步统一为一个 SyncManager，room / AOI 降为组织方式
 
-- 单元：**M-13 已实施（2026-09-22，维护者要求破坏性一次到位，三批合一）**；不占 U，不计缺陷
+- 单元：**M-13 + M-14 已实施（2026-09-22）**；不占 U，不计缺陷
 - 仓库：roost-core `entitysync` + `room`（+ `statesync` 帧头）+ `demo` 模板 `internal/service/game/scene.go.tmpl`
 - 来源：维护者 2026-09-22 提出方向；**合并 ARCH-08（room 同步的分层收敛）与 ARCH-09（非房间的实体复制路径）**，
   两条的候选正文保留在 `docs/bug/WANTED.md` W-2026-09-22-04 / -05 / -06
@@ -111,4 +111,10 @@ Subject 的订阅者表每项：`session → {profile, kind, baseVersion}`，其
 一批做完，见 [M-13](M-13-entitysync-manager.md)。与上文设计的三处出入：三批合一；订阅者表放在 `entitysync.subject` 包装而不是 `entity.SubjectSyncState`（entity 不该知道 session）；
 demo 的会话 = player id。"可以后拍的三点"的落法：全局一个 tick（每房周期取消）；快照随 tick（同步投递取消，"会话 ready"钩子未做）；反向索引不建、不对账，
 会话关闭时遍历 subject 删条目。
+
+## 实施记录（2026-09-22 晚，M-14）
+
+M-13 留下的三点全部落地，见 [M-14](M-14-sync-policy-and-ready.md)："会话 ready 再开始"= `OpenHeldSession / ReadySession` + demo `scene_ready`；
+`syncTopic` 改名 `syncNamespace`，Namespace 是线上唯一分流键；policy 层成为 core 包 `entitysync/policy`（Interest / Room / Direct），
+demo 的 InterestSystem 搬入其中。分层最终是四层：内容（entity）→ 机制（entitysync）→ 组织（policy）→ 应用（scene bridge）。
 

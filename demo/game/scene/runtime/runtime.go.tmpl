@@ -38,7 +38,6 @@ type Context struct {
 const (
 	SystemNameTerrain  = "terrain"
 	SystemNamePathFind = "path_find"
-	SystemNameInterest = "interest"
 	SystemNameRefresh  = "refresh"
 )
 
@@ -49,7 +48,6 @@ type Runtime struct {
 
 	terrain  *TerrainSystem
 	pathFind *PathFindSystem
-	interest *InterestSystem
 	refresh  *RefreshSystem
 
 	systems []System
@@ -64,11 +62,10 @@ func New(owner scene.Entity, config scene.Config) (*Runtime, error) {
 
 	runtime.terrain = &TerrainSystem{}
 	runtime.pathFind = &PathFindSystem{}
-	runtime.interest = &InterestSystem{}
 	runtime.refresh = &RefreshSystem{}
 	// Refresh last, so it stops first: the assembly drains what it spawned
-	// while the interest system is still alive to say they left.
-	runtime.systems = []System{runtime.terrain, runtime.pathFind, runtime.interest, runtime.refresh}
+	// while the map is still alive to release their ground.
+	runtime.systems = []System{runtime.terrain, runtime.pathFind, runtime.refresh}
 
 	for _, system := range runtime.systems {
 		if err := system.Init(runtime.ctx); err != nil {
@@ -118,13 +115,6 @@ func (r *Runtime) PathFind() scene.PathFind {
 		return nil
 	}
 	return r.pathFind
-}
-
-func (r *Runtime) Interest() scene.Interest {
-	if r == nil {
-		return nil
-	}
-	return r.interest
 }
 
 func (r *Runtime) Refresh() scene.Refresh {

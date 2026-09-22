@@ -927,10 +927,11 @@ snapshot）、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 playe
 
 - **缺什么**：`sync=true`、`entitysync`、`room` 的订阅/水位这一整条"服务端权威状态推给客户端"的主路径，demo 一次都没走过；
   此前只有战斗内的 lockstep 帧同步和手写推送。
-- **做法**（2026-09-22 ARCH-10 / M-13 之后）：三块，每块都是框架现成的——
-  `Player.Sync()`（主体：版本、脏掩码、packer）→ `entitysync.Manager`（进程一个：全部主体与会话、订阅表在主体里、每会话每 tick 一帧、水位门槛）→
-  `entitysync.Transport`（通道：demo 的 TCP 推送，`sceneLane`）。`internal/service/<game>/scene.go` 是装配加"谁订谁"的政策（兴趣系统的翻译）；
-  `game/entities/player/sync_packer.go` 是 packer。第十二批时是四块（`room.RoomBroadcaster` + `room.RoomTransportSink`），已删除。
+- **做法**（2026-09-22 ARCH-10 / M-13 / M-14 之后）：四层，每层都是框架现成的——
+  `Player.Sync()`（内容：版本、脏掩码、packer）→ `entitysync.Manager`（机制：全部主体与会话、订阅表在主体里、每会话每 tick 一帧、水位门槛、held/ready）→
+  `entitysync/policy.Interest`（组织：距离 + team 关系源 → 谁订谁，被拒重试）→ `internal/service/<game>/scene.go`（应用：`sceneLane` 把一帧接成一次 TCP 推送、
+  会话生命周期 `enter_game` held → `scene_ready` → 离场、地图尺寸与半径）。`game/entities/player/sync_packer.go` 是 packer。
+  第十二批时是四块（`room.RoomBroadcaster` + `room.RoomTransportSink`）且兴趣聚合在 `game/scene/runtime/interest.go`，均已删除。
 - **写入侧不是自动的**：把 DAO 标脏和把**主体**标脏是两件事，`Player.PublishSyncDirty()` 是游戏决定第二件何时发生的地方
   （一次变更一次调用 = 一条 delta，而不是每个 setter 一条）。这也是为什么复制不能做成"有人调了 setter"的副作用——
   它是"一次已提交的变更"的副作用。

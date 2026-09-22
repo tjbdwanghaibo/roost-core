@@ -1,8 +1,15 @@
 # Entity Sync 生产契约
 
-Entity Sync 只有一套实现（ARCH-10 / M-13，2026-09-22）：Entity 持有 observer-free 的内容状态（`entity.SubjectSyncState`），
-`entitysync.Manager`（进程一个）持有全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一帧。
-room、AOI、直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscribe`。
+Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）：
+
+| 层 | 包 | 职责 |
+| --- | --- | --- |
+| 内容 | `entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareTick` 一次锁内捕获 |
+| 机制 | `entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一帧，门槛，held/ready，两种失败 |
+| 组织 | `entitysync/policy` | 谁订谁：`Interest`（距离 + 关系源）、`Room`（成员全互见）、`Direct`（显式绑定）；只调 Manager 的 `Subscribe / Unsubscribe` |
+| 应用 | 业务（demo 的 scene bridge） | `Transport` 适配、会话生命周期（进场 held → ready → 离场）、地图尺寸 / 半径 / 关系这类只有游戏知道的事 |
+
+每层只知道下一层：entity 不知道 session，Manager 不知道为什么有人订阅，policy 不碰帧与传输，应用不写聚合规则。
 
 ## 写入与锁
 
@@ -30,9 +37,23 @@ LOD、权限和阵营视图通过有限的 `SyncProfile` 表达，不能把 subs
 
 ## 会话
 
-`OpenSession(id)` 之后才能订阅；`CloseSession(id)` 丢会话状态并从每个 subject 删掉它的订阅，不欠任何帧。会话 id 由政策定义
+`OpenSession(id)` 之后才能订阅；`OpenHeldSession(id)` 开一个 **held** 的会话——可订阅、不出帧——`ReadySession(id)` 之后第一帧是新 epoch 的 FrameFull。
+客户端在登录应答之后才装解码器的部署用它消掉首帧竞态（demo：`enter_game` held，客户端发 `scene_ready`）。`HoldSession(id)` 让一个在收帧的会话重新开始（重连、客户端重置）。
+`CloseSession(id)` 丢会话状态并从每个 subject 删掉它的订阅，不欠任何帧。会话 id 由政策定义
 （demo 用 player id，接入层对该玩家的全部连接扇出），只要求稳定、唯一。`Transport` 可选实现 `SessionLifecycle` 以跟随开关。
 Manager **不建**"会话 → subjects"反向索引：这份知识归政策（AOI 的可见集）；关闭会话时遍历 subject 是兜底。
+
+## Namespace
+
+`EntitySyncBuilderParam.Namespace`（codegen 标记 `syncNamespace=`）随该 subject 的每个组件下发，是客户端唯一的分流键——帧头的 RoomID 恒为常量，
+房间与区域是政策不是标签。裸标识符会被 codegen 拒绝（RR-20260918-07）。
+
+## 组织方式（`entitysync/policy`）
+
+- `Interest`：`spatial.InterestManager` + 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
+  band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
+- `Room`：subject 集合 × 成员集合全互见，各自上限，`Close` 退役全部 subject；成员的会话由应用开关。
+- `Direct`：`Bind / Unbind` 一对。
 
 ## 线格式（v2）
 

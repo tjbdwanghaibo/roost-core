@@ -17,11 +17,13 @@ scenarios:
         - action: connect
         - action: enter_game
         # The scene: from here the server replicates this client's own state
-        # and every other online player's, as versioned deltas. Installed
-        # right after the login that joined it — a capture installed later
-        # would miss the frames the changes below produce. scene_expect at the
-        # end judges what arrived.
+        # and every other online player's, as versioned deltas. enter_game
+        # joined it with the session HELD; scene_watch installs the decoder
+        # and scene_ready tells the server it may start — so the first
+        # snapshot cannot land before anyone listens. scene_expect at the end
+        # judges what arrived.
         - action: scene_watch
+        - action: scene_ready
         # The server compiled its skill catalog at startup; list it.
         - action: skill_catalog
         # Chat: say hello on the world channel (a bus call into the chat

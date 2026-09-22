@@ -81,6 +81,8 @@ type battleRouter interface {
 // reason as the battle manager — the service package imports this one.
 type sceneJoiner interface {
 	Join(ctx context.Context, subject *player.Player, at spatial.Point) error
+	// Ready releases the session Join held: the client's decoder is up.
+	Ready(playerID int64) error
 	Moved(ctx context.Context, subjectID int64, to spatial.Point)
 	Leave(ctx context.Context, subjectID int64)
 }

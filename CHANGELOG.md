@@ -6,6 +6,12 @@
 
 ### Changed（破坏性）
 
+- **ARCH-10 收尾：held/ready 会话、`syncTopic` → `syncNamespace`、新包 `entitysync/policy`**（M-14）。`Manager.OpenHeldSession / HoldSession / ReadySession`：
+  held 的会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 新增客户端消息 `scene_ready`（10024），`enter_game` 以 held 开会话，机器人在 `scene_watch` 后发它——
+  首帧竞态消失。`EntitySyncBuilderParam.Topic` 改名 `Namespace`，codegen 标记 `syncTopic=` 改名 `syncNamespace=`（旧键报"已改名"）。
+  demo 模板的 `InterestSystem` / `RelationSource` 搬进 core 成为 `policy.Interest`（直接驱动 Manager，`Apply() []Refusal`），新增 `policy.Room`、`policy.Direct`；
+  demo 删除 `game/scene/runtime/{interest,relations,interest_test}.go`，`scene` 契约去掉 Source / Relations / SubscriptionChange / Interest。
+  记录：`docs/bugfix/M-14-sync-policy-and-ready.md`。
 - **实体同步统一为 `entitysync.Manager`，room 广播器整条退场**（M-13，ARCH-10）。`entitysync.SubscriptionCoordinator`、`room.RoomBroadcaster` /
   `RoomEnvelopeSink` / `RoomTransportSink` / `RoomManager` 全部删除；`room/` 只剩 ISyncBus。新形状：subject 自己持有订阅者表（`session → {profile, kind, baseVersion}`），
   进程一个 `Manager`（`Register/Unregister`、`OpenSession/CloseSession`、`Subscribe/Unsubscribe`、`Flush/Start/Stop`、`Stats/CheckHealth`、`SessionLost` 钩子），

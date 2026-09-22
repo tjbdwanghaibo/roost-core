@@ -621,6 +621,14 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// capture installed after the change has already been pushed sees
 	// nothing.
 	actions.MustRegister(action.Func{ActionName: "scene_watch", Handle: watchScene})
+	// scene_ready: the decoder is installed (scene_watch above), so the
+	// server may start sending. Until this call the session is held and no
+	// frame is produced for it — which is what makes the first snapshot
+	// impossible to miss.
+	action.MustRegisterCall[pb.SceneReadyRequest, pb.SceneReadyResponse](actions, protocols, "scene_ready", msgid.MsgSceneReady,
+		action.OnResp(func(_ *robot.Context, resp *pb.SceneReadyResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
 	actions.MustRegister(action.Func{ActionName: "scene_expect", Handle: expectScene})
 	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
 		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
@@ -792,6 +800,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalFinishDungeonRequest(message)
 	case *pb.SkillCatalogRequest:
 		return pb.MarshalSkillCatalogRequest(message)
+	case *pb.SceneReadyRequest:
+		return pb.MarshalSceneReadyRequest(message)
 	case *pb.SendGiftRequest:
 		return pb.MarshalSendGiftRequest(message)
 	case *pb.GiftStatusRequest:
@@ -895,6 +905,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.SkillCatalogResponse:
 		decoded, err := pb.UnmarshalSkillCatalogResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SceneReadyResponse:
+		decoded, err := pb.UnmarshalSceneReadyResponse(data)
 		if err != nil {
 			return err
 		}

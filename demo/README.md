@@ -226,13 +226,14 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find } 
 ## 服务端权威状态同步：Player 是复制主体，entitysync.Manager 是调度器，scene 是政策
 
 `sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。`entitysync.Manager`（进程一个）拥有全部主体与会话，
-每 tick 给每个会话一帧；scene 只回答谁订谁（兴趣系统），并把 TCP 推送接成 `entitysync.Transport`（ARCH-10 / M-13）。
+每 tick 给每个会话一帧；谁订谁由 roost-core 的 `entitysync/policy.Interest`（距离 + team 关系）决定；scene 只剩应用层的三件事：
+把 TCP 推送接成 `entitysync.Transport`、会话生命周期（`enter_game` 以 held 开会话 → 客户端 `scene_ready` → 离场关会话）、地图尺寸与半径（ARCH-10 / M-13 / M-14）。
 
 ```
 Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏 ─▶ Manager 记 pending
                                                                              │  每 50ms 一 tick
 主体 ─ PrepareTick(packer：delta 给在线者、快照给新订阅者) ─▶ 按会话聚合成一帧 ─▶ sceneLane.Push ─▶ TCP 推送 10103
-客户端：entitysync.DecodeFrame → DecodeSubjectUpdate（每个对象一个主体）→ 合并进本地视图
+客户端：scene_watch 装解码器 → scene_ready（服务端此前 held，不出帧）→ entitysync.DecodeFrame → DecodeSubjectUpdate → 合并进本地视图
 ```
 
 - **写入侧不是自动的**。把 DAO 标脏和把**主体**标脏是两件事：`PublishSyncDirty()` 在一次变更的末尾调一次，
@@ -242,8 +243,8 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   （已登记给 review）。要自己的客户端协议的项目在这里换成自己的消息。
 - **持久化水位**：`kit/dataengine` 的 `DurableLSN` 装进 `entitysync.ManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
   就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；Manager 会压住整个主体直到水位追上。
-- **谁订阅谁不在这里决定**：Scene 实体的兴趣系统决定（距离 + 社会关系），交回一串订阅变更，这个文件只负责说给 Manager 听。
-  加一种关系（好友、同盟）不会碰到这个文件。
+- **谁订阅谁不在这里决定**：`policy.Interest` 决定（距离 + 关系源），并直接说给 Manager；scene 只在 `NewInterest` 里给出地图尺寸、半径和关系名。
+  加一种关系（好友、同盟）= `Relations` 里多一个名字加一处 `Relation(name).Set`。
 - **推送失败只关那个会话**：Manager 把推不到的会话关掉并回调 `SessionLost`，scene 让那个玩家离场；接入层整体不可用是 `ErrRetryLater`，
   tick 重来、不踢人。会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，

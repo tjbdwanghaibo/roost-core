@@ -449,6 +449,8 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **一次锁内捕获**（`PrepareTick`）：给在线者的 delta 与给新订阅者的快照在同一把实体锁内、同一版本上产生；每个不同 profile 只 pack 一次。
 - **编码在副本上**：会话的时钟与 ObjectRef 表只在帧被准入后采纳，重试的 tick 重发同样的帧。
 - **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
+- **held / ready**（`OpenHeldSession / ReadySession`）：会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 用 `scene_ready` 消息触发，消掉"快照抢在客户端解码器之前"的竞态。
+- **组织方式在 `entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Room`（成员全互见）、`Direct`（显式绑定）。它们只调 `Subscribe / Unsubscribe`，不碰帧与传输。
 
 **`RoomMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/room/nats_syncbus.go`、`jetstream_syncbus.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。

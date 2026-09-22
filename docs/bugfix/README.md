@@ -154,6 +154,7 @@
 | M-05 | codegen | `category=` 进实体标记并直接进生成物,拆掉运行期查表的隐式前置;生成的聚合注册末尾调 `ValidateEntityRegistry` | [M-05-marker-owns-the-category.md](M-05-marker-owns-the-category.md) |
 | M-12 | core+codegen | 生成的同步字段词汇表（ARCH-06，承接 W-2026-09-18-02） | [ARCH-06-sync-field-vocabulary.md](ARCH-06-sync-field-vocabulary.md) |
 | M-13 | core + codegen 模板 | 实体同步统一为 `entitysync.Manager`（subject 私有订阅者表、每会话一帧、`ErrRetryLater`/关会话两种失败），删除 coordinator 与 room 广播器 / envelope sink / transport sink / RoomManager，线格式 v2；demo scene 直接持 Manager（ARCH-10，破坏性） | [M-13-entitysync-manager.md](M-13-entitysync-manager.md) |
+| M-14 | core + codegen + demo 模板 | ARCH-10 收尾：held/ready 会话（demo `scene_ready`），`syncTopic` → `syncNamespace`，新包 `entitysync/policy`（Interest / Room / Direct）——demo 的兴趣聚合搬进 core；分层收成内容 / 机制 / 组织 / 应用四层 | [M-14-sync-policy-and-ready.md](M-14-sync-policy-and-ready.md) |
 
 写法约定：**问题**（一句话）→ **根因**（指向具体行）→ **方案选择**（列出考虑过的方案与取舍）→
 **改动**（文件与要点）→ **证明**（红测试名、修前失败文本、修后结果）→ **未做 / 边界**。
@@ -191,7 +192,7 @@
 | ARCH-03 | 已正确的装配（dataengine / saga 的 Mod 调 core `Assemble` 并转发生命周期）作为迁移样板 | 无需改动,作为 ARCH-01 / 02 的形状参照 |
 | ARCH-08 | room 同步的分层收敛（envelope sink 的 roomID 键；coordinator 的边界） | **并入 ARCH-10**（2026-09-22） |
 | ARCH-09 | 非房间的实体复制路径与 `syncTopic` 的去向 | **并入 ARCH-10**（2026-09-22） |
-| ARCH-10 | 实体同步统一为一个 SyncManager：subject 私有订阅者表 + 进程一个 manager + 每会话一个 SessionSink，room / AOI 降为 policy；帧头 Epoch/Tick 改为会话私有、RoomID 改为流常量 | **已实施（M-13，2026-09-22，一批到位，未发版）** → [ARCH-10-sync-manager.md](ARCH-10-sync-manager.md) · [M-13](M-13-entitysync-manager.md) |
+| ARCH-10 | 实体同步统一为一个 SyncManager：subject 私有订阅者表 + 进程一个 manager + 每会话一个 SessionSink，room / AOI 降为 policy；帧头 Epoch/Tick 改为会话私有、RoomID 改为流常量 | **已完成**：M-13（机制，main）+ M-14（policy / ready / namespace，`feature/arch-10-sync-policy` 待 review） → [ARCH-10](ARCH-10-sync-manager.md) · [M-13](M-13-entitysync-manager.md) · [M-14](M-14-sync-policy-and-ready.md) |
 
 ## 2026-09-19 那两条后来也修了
 

@@ -11,7 +11,7 @@ import (
 	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
-	sceneentity "{{MODULE}}/game/entities/scene"
+	gamescene "{{MODULE}}/game/scene"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -181,25 +181,17 @@ func removesIn(t *testing.T, pushes []*pb.EntitySyncPush) int {
 	return removes
 }
 
-// newSceneArea builds the Scene Entity the bridge replicates. The interest
-// system lives there, so a bridge without one has nobody to ask.
-func newSceneArea(t *testing.T) *sceneentity.Scene {
+
+// joinReady is what the login path does end to end: Join (session held) and
+// the client's scene_ready (session released).
+func joinReady(t *testing.T, scene *Scene, ctx context.Context, subject *player.Player, at spatial.Point) {
 	t.Helper()
-	sceneentity.RegisterEntity()
-	id, err := entity.BuildEntityID(1, sceneentity.EntityKindScene)
-	if err != nil {
-		t.Fatal(err)
+	if err := scene.Join(ctx, subject, at); err != nil {
+		t.Fatalf("join %d: %v", subject.ID(), err)
 	}
-	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: sceneentity.EntityKindScene, Id: id})
-	if err != nil {
-		t.Fatalf("build scene: %v", err)
+	if err := scene.Ready(entity.GetUniqueIDFromEntityID(subject.ID())); err != nil {
+		t.Fatalf("ready %d: %v", subject.ID(), err)
 	}
-	area, ok := built.(*sceneentity.Scene)
-	if !ok {
-		t.Fatalf("the generated factory produced %T", built)
-	}
-	t.Cleanup(func() { area.OnDestroy(entity.DestroyReasonCommon) })
-	return area
 }
 
 func newScenePlayer(t *testing.T, uniqueID int64) *player.Player {
@@ -280,11 +272,10 @@ func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []enti
 
 func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -302,12 +293,8 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	watcher := newScenePlayer(t, watcherID)
 	mover := newScenePlayer(t, moverID)
 	// Close enough to see each other: the enter radius is 120.
-	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatalf("watcher joins: %v", err)
-	}
-	if err := scene.Join(ctx, mover, spatial.Point{X: 520, Y: 500}); err != nil {
-		t.Fatalf("mover joins: %v", err)
-	}
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 520, Y: 500})
 	if scene.Members() != 2 {
 		t.Fatalf("the scene holds %d members, want 2", scene.Members())
 	}
@@ -364,11 +351,10 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 // object is gone rather than left with a stale copy of it.
 func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -380,12 +366,8 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	})
 	watcher := newScenePlayer(t, 9101)
 	leaver := newScenePlayer(t, 9102)
-	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	if err := scene.Join(ctx, leaver, spatial.Point{X: 510, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, leaver, spatial.Point{X: 510, Y: 500})
 	if err := scene.Flush(ctx); err != nil {
 		t.Fatalf("flush after joins: %v", err)
 	}
@@ -409,11 +391,10 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 // pushing, so an idle world kept its ghosts (RR-20260918-06).
 func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	scene.watchSessions(recorder)
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
@@ -427,9 +408,7 @@ func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 
 	const goneID = int64(9301)
 	subject := newScenePlayer(t, goneID)
-	if err := scene.Join(ctx, subject, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
+	joinReady(t, scene, ctx, subject, spatial.Point{X: 500, Y: 500})
 	if scene.Members() != 1 {
 		t.Fatalf("the scene holds %d members after a join, want 1", scene.Members())
 	}
@@ -456,11 +435,10 @@ func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 // 承诺：推不到的那个玩家自己离开场景；其余人这一帧照常到达；批次不报错。
 func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -482,9 +460,7 @@ func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 	gone := newScenePlayer(t, goneID)
 	last := newScenePlayer(t, lastID)
 	for i, member := range []*player.Player{first, gone, last} {
-		if err := scene.Join(ctx, member, spatial.Point{X: 500 + int64(i)*10, Y: 500}); err != nil {
-			t.Fatalf("join %d: %v", member.ID(), err)
-		}
+		joinReady(t, scene, ctx, member, spatial.Point{X: 500 + int64(i)*10, Y: 500})
 	}
 	if err := scene.Flush(ctx); err != nil {
 		t.Fatalf("flush after joins: %v", err)
@@ -527,11 +503,10 @@ func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 // out of the scene for it.
 func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -548,12 +523,8 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 	)
 	mover := newScenePlayer(t, moverID)
 	watcher := newScenePlayer(t, watcherID)
-	if err := scene.Join(ctx, mover, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	if err := scene.Join(ctx, watcher, spatial.Point{X: 510, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 510, Y: 500})
 	if err := scene.Flush(ctx); err != nil {
 		t.Fatalf("flush after joins: %v", err)
 	}
@@ -590,11 +561,10 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 // space to the other.
 func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -607,9 +577,7 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 
 	const uniqueID = int64(9401)
 	subject := newScenePlayer(t, uniqueID)
-	if err := scene.Join(ctx, subject, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
+	joinReady(t, scene, ctx, subject, spatial.Point{X: 500, Y: 500})
 
 	// The subject the manager holds is the entity id, not the unique id.
 	if subject.ID() == uniqueID {
@@ -689,11 +657,10 @@ func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
 // the session.
 func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	recorder := newSceneRecorder()
-	scene, err := newScene(recorder, nil)
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
-	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -711,9 +678,7 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	watcher := newScenePlayer(t, watcherID)
 	later := newScenePlayer(t, laterID)
 
-	if err := scene.Join(ctx, watcher, spatial.Point{X: 100, Y: 100}); err != nil {
-		t.Fatalf("watcher joins: %v", err)
-	}
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 100, Y: 100})
 
 	// The team forms while the second member is still loading. The two are
 	// far enough apart that distance never claims the pair: being teammates
@@ -723,9 +688,7 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 
 	// The teammate arrives. This is the tick that has to make good on the
 	// subscribe the room refused a moment ago.
-	if err := scene.Join(ctx, later, spatial.Point{X: 900, Y: 900}); err != nil {
-		t.Fatalf("teammate joins: %v", err)
-	}
+	joinReady(t, scene, ctx, later, spatial.Point{X: 900, Y: 900})
 
 	subscribed := false
 	for _, session := range scene.manager.Subscribers(later.ID()) {
