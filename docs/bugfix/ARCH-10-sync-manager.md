@@ -73,6 +73,35 @@ RR-20260915-04 / -05、RR-20260922-01、U-0278 都长在层与层的缝里。
 - **退役语义**：subject 退役时 remove 搭每个订阅者的下一帧走，若该会话此后再也没有帧（它只订了这一个 subject），remove 也要保证被发出——"有待发内容就出帧"是 SessionSink 的规则，不能只在有 delta 时出帧。
 - **与合仓的排期**：roost-consolidate 仍在进行，本线排在它之后；两者都动 room / entitysync 的话不要同批。
 
+## 09-22 补充（维护者两点，已采纳）
+
+**1. Subject 不保存多份 payload，按需调 packer；但要保存每个 session 的 profile 与 sync kind。**
+
+采纳，附一条硬约束：packer 仍必须**在实体锁内、与版本 / mask / CommitLSN 同一次捕获**里调用（U-0206 的教训："门槛要跟着被判定的东西一起捕获"），
+不能在出帧时按 session 逐个现算——否则同一版本号在两个 session 上可能装着不同内容，或 v9 的帧里带着 v10 的改动。
+落法：tick 时 Subject 在锁内收集本次要发的 **不同 profile 的集合**，每个 profile 调 packer 一次得到 `{version, mask, CommitLSN, payload}`，
+按 profile 记在这一 tick 的临时结构里（今天 `PreparedSubjectSync` 就是这个临时结构，Commit / Abort 之后即丢）；跨 tick 不缓存任何 payload。
+"一百个订阅者同 profile 只 pack 一次"的性能承诺由此保留。
+
+Subject 的订阅者表每项：`session → {profile, kind, baseVersion}`，其中 `kind ∈ {需要快照, 在线(delta), 正在离开(remove)}`——
+这就是今天 coordinator 的 `Subscription{State, Profile, ContentVersion}` 按 subject 切开之后的样子。`baseVersion` 不能省：
+它是这个 session 已确认拥有的版本，delta 的 base 由它决定。**配套规则**：一个 session 的帧没被准入，它要么被剔除（慢消费者），要么 `kind` 退回"需要快照"；
+不允许它带着落后的 baseVersion 留在"在线"态——否则 Subject 要为每个 session 各存一份累计 mask，正是我们不想要的那种多份状态。
+
+**2. Manager 不建 `session → subjects` 反向索引。**
+
+采纳。理由和维护者说的一致，再补两条：
+
+- 出帧只需要 `subject → sessions` 这一个方向（从脏 subject 出发聚合到 session），反向索引对热路径没有用处；
+- "这个 session 看见哪些 subject"这件事**本来就归 policy 持有**：AOI 的 `interestObserver.visible` 就是它，`RemoveObserver`（`spatial/interest.go:305`）会对每个可见 subject 发 Leave；
+  room policy 持有成员表；直接订阅 policy 持有自己的列表。会话关闭时由 policy 撤订阅，manager 不需要第二份。
+
+配套的兜底：Subject 出帧时发现某个 session 的 SessionSink 已关闭，就地删掉该项（惰性回收）。这条兜底覆盖"policy 漏撤"的情形，
+代价是死 session 的条目最多留到该 subject 下一次变化，有界。
+
+订阅者表的键是 **session（连接）**，不是 player：一个 player 可以同时有多条连接（接入层 `playerSessions[playerID]` 是集合，今天 `pushPlayer` 对它们全推），
+让每条连接各有一个 SessionSink、各自订阅，重连就是新 sink + 新 Epoch + policy 重新 Enter。今天 `RoomSessionResolver` 把 subscriber 按 player 解析成一个 session id 的做法随之取消。
+
 ## 未做
 
 本记录只定形状与分批，未写代码。ARCH-08 / ARCH-09 的独立条目关闭，并入本记录。
