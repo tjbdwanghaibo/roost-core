@@ -8,6 +8,50 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
+## W-2026-09-22-04 分流结论：→ ARCH-08（room 同步的分层收敛，A 项）
+
+- **位置**：roost-core `room/room_broadcast.go:85-93`（`roomSubscriberKey{roomID, subscriber}`、`roomFrameGroupKey{roomID, subscriber}`）、
+  `:98-110`（`RoomEnvelopeSink{subjectRooms map[subject]roomID, roomFrames map[roomID]uint64, sessionSequences map[roomSubscriberKey]uint64}`）、
+  `:449`（`NewRoomBroadcaster` 内 `NewRoomEnvelopeSink(downstream)`——全仓唯一构造点，每房一个）。基线 `5b95547`。
+- **现象**：`RoomEnvelopeSink` 每个 `RoomBroadcaster` 私有一个，但它的全部表按 roomID 分片，分组键、序号键都带 roomID；
+  在一个只服务一个房间的对象里这些 roomID 恒等于自身 id。对照 `room_transport_sink.go:137` 的 `roomSessionKey{roomID, session}`：
+  那一层是进程级共享（`RoomManagerConfig.Downstream` 一个实例给所有房间），一个会话可同时在多个房间，ObjectRef 空间与序号必须按 (room, session) 分——**那里的 roomID 是必要的**。
+- **为何可疑**：形状像"进程一个、多房共用"的 fan-in，实际用法是每房一个；同一个事实（哪个 subject 属于哪个房、房间帧号）在 broadcaster 与 envelope sink 各记一份。
+  RR-20260915-04 / -05 / RR-20260922-01 都长在这种"三张表记一个事实"的缝里。
+- **候选修法**：(a) envelope sink 收成每房私有的形状——`subscriber → 序号` 一张表 + 一个帧计数器，roomID 作为构造参数带下去；
+  (b) 反过来把它做成 manager 级共享（一个 downstream 前面一个 envelope sink），让 roomID 键名副其实。二选一。
+- **Review 结论（2026-09-22）**：不是缺陷——没有行为错误、没有触发路径；是结构冗余。不登 RR，转 ARCH-08 A 项，实施时占 M 编号。
+- **来源**：维护者 09-22 复审 room sync 结构时提出（U-0277 / U-0278 之后）。
+
+## W-2026-09-22-05 分流结论：→ ARCH-08（room 同步的分层收敛，B 项）
+
+- **位置**：roost-core `entitysync/subscription.go`（`SubscriptionCoordinator`，725 行）；消费者只有 `room/room_broadcast.go` 与
+  `room/room_transport_sink.go`（`grep -rl roost-core/entitysync --include='*.go' | grep -v _test` 全仓仅此两处）。
+  重复记账：`room_broadcast.go:698-713`（`r.subscribers` 计数给 budget）对 coordinator 的订阅表；`:1181/:1216` 与 coordinator `sortSubscriptions` 各排一次；
+  `unregisterSubject` 跨层问 `coordinator.Subscribers`。基线 `5b95547`。
+- **现象**：coordinator 承担订阅状态机（Pending/Active/Closing + Revision）、每 profile 一次 Prepare 的共享 payload、订阅快照与 ContentVersion、跨 subject 原子批、
+  持久化水位门槛、Leave 信封——逻辑是实的。但它是一个只有一个消费者的独立包，room 在外面又记一层订阅者账，三层（coordinator / room / sink）各有一套"投递失败后状态怎么办"。
+- **为何可疑**：RR-20260922-01 的根因正是这三套政策合起来才成立（coordinator 恢复 Active、room 每 tick 重试、sink/lane 前缀送达）。
+  一个只有单消费者的边界没有换来复用，只换来了要翻译的错误面（`ErrLeaveNotDelivered` 这类）。
+- **候选修法**：(a) 把 coordinator 并回 room 包作为内部类型，订阅表只留一份；(b) 给它第二个消费者——不带 room 概念的"实体直接对会话复制"调度器（见 W-06）。
+- **Review 结论（2026-09-22）**：不是缺陷。不登 RR，转 ARCH-08 B 项；(a)/(b) 的选择与 W-06 绑定，要维护者拍板。
+- **来源**：同 W-04。
+
+## W-2026-09-22-06 分流结论：→ ARCH-09（实体复制的非房间路径与 syncTopic 的去向）
+
+- **位置**：roost-core `entity/subject_sync.go:132-160`（`EntitySyncCreateParam{Topic}` → `entity_base.go:160` 写成 `Namespace`）、
+  `entity/subject_sync.go:106-108,319`（`SubjectSyncDirtyNotifier`，只有 `room.RegisterSubject` 安装）；
+  codegen `internal/entity/gen.go` `syncTopic` 标记（RR-20260918-07 修过其解析）。`SubjectSyncState` 的消费者：`grep -rl` 全仓只有 entity / entitysync / room。
+  `syncbus/`、`mirror/` 走 ISyncBus 做跨进程副本同步，不碰 `SubjectSyncState`。基线 `5b95547`。
+- **现象**：`sync=true` 的实体只得到一个"内容侧状态机 + packer"；调度、订阅、传输全在 room。没注册进任何房间的 `sync=true` 实体：MarkDirty 只是或位、代际加一，
+  永远没人 flush（有界，不泄漏，但什么都不发）。`syncTopic` 变成 `SubjectSyncUpdate.Namespace` 随帧下发，没有任何路由按它分发——目前只是一个名字。
+- **为何可疑**：标记承诺了"按 topic 同步"，实现只在 room 里生效且不看 topic；"非 room 模式"在文档与标记上存在、在代码上不存在。
+  定级低是因为没有触发路径（demo 全部实体都进房间），不是因为后果轻：一个只写 `sync=true` 不进房的项目会静默零复制、零告警。
+- **候选修法**：(a) 补一个不带 room 概念的调度器（实体 → 若干会话，不经 AOI），复用 coordinator——这就是 W-05 的第二个消费者；
+  (b) 明确"复制只经 room"，`syncTopic` 从标记里删掉或改成只作 Namespace 的显式命名；(c) 至少在 `EnableSync` 之后若干 tick 仍无 notifier 时打一条 Warn。
+- **Review 结论（2026-09-22）**：不是缺陷（无触发路径）。不登 RR，转 ARCH-09；(a)/(b) 要维护者拍板，(c) 可作为独立小单元先做。
+- **来源**：同 W-04。
+
 ## W-2026-09-22-03 已处理：→ U-0278（维护者 09-22 拍板直接修，无 RR）
 
 生成工程 `sceneLane.AdmitBatch` 逐个推、遇错整批放弃；`pushPlayer` 无会话不计指标。按失败种类分流后关闭，记录见 [bugfix/U-0278](../bugfix/U-0278-scene-lane-per-session-push.md)。
