@@ -776,7 +776,9 @@ func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID 
 	sessions := make([]*session, 0, len(byPlayer))
 	for _, current := range byPlayer { sessions = append(sessions, current) }
 	server.mu.RUnlock()
-	if len(sessions) == 0 { return fmt.Errorf("%%w: player %%d", ErrSessionNotFound, playerID) }
+	// Counted apart from push errors: a push to a player with no session is the
+	// "who is still addressing a gone player" signal, and it used to leave no trace (U-0278).
+	if len(sessions) == 0 { metrics.IncCounter("player_tcp_push_no_session_total", nil, 1); return fmt.Errorf("%%w: player %%d", ErrSessionNotFound, playerID) }
 	var joined error
 	for _, current := range sessions {
 		if err := current.push(ctx, messageID, payload); err != nil { joined = errors.Join(joined, fmt.Errorf("session %%s: %%w", current.principal.SessionID, err)) }
@@ -790,7 +792,7 @@ func (server *Server) pushSession(ctx context.Context, sessionID string, message
 	server.mu.RLock()
 	current := server.sessions[sessionID]
 	server.mu.RUnlock()
-	if current == nil { return fmt.Errorf("%%w: %%s", ErrSessionNotFound, sessionID) }
+	if current == nil { metrics.IncCounter("player_tcp_push_no_session_total", nil, 1); return fmt.Errorf("%%w: %%s", ErrSessionNotFound, sessionID) }
 	err := current.push(ctx, messageID, payload)
 	if err == nil { metrics.IncCounter("player_tcp_push_total", nil, 1) } else { metrics.IncCounter("player_tcp_push_error_total", nil, 1) }
 	return err

@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **场景 lane 不再让一个推不到的会话拖累同批其他人**（U-0278，C8，W-2026-09-22-03，T-173；codegen 模板）。生成工程的 `sceneLane.AdmitBatch` 此前逐个 `PushPlayer`、第一个失败就 `dropAsync` 并整批返回错误：排在前面的已经推出去（下一 tick 再收一遍），排在后面的一帧没推；接入层整体不可用时也把玩家踢出场景。现在按失败种类分流：`ErrTransportUnavailable` 整批报错让房间重试、不踢人；单个玩家推不到则它自己离开（一条 Info），其余人这一帧照常。`Leave` 不再为"已注销"记日志；生成的接入层对"无会话"的推送计 `player_tcp_push_no_session_total`。`TestAnUnreachablePlayerDoesNotStarveTheOthers`、`TestAnUnavailableTransportKeepsTheBatchAndThePlayers`（`scene_test.go.tmpl`）。记录：`docs/bugfix/U-0278-scene-lane-per-session-push.md`。
 - **一个断线的观察者不再让整个房间的下发停摆**（U-0277，C3，RR-20260922-01，T-172）。`entitysync.Unsubscribe` 与 room 的退役此前以"Leave 信封投递给被撤观察者成功"为前提，投不到就恢复 Active；会话已经不在的观察者因此永远撤不掉，room 每次 flush 都为它生成帧，生成工程的原子传输在它那里整批拒绝，按 id 排在它之后的所有观察者从此收不到任何帧（16 机器人实跑 3–6 个 `pos_x` 永不到达，服务端零告警）。现在撤订阅无条件完成，Leave 尽力投递，投不到用新哨兵 `ErrLeaveNotDelivered`（wrap `ErrEnvelopeAdmission` 与原因）报给调用方；退役照样注销 subject 并把未投递的 Leave 报一次。**行为变化**：`RetireSubject` 不再无限重试、`Stop` 不再因此返回错误。`TestUnsubscribeRemovesTheSubscriptionEvenWhenTheLeaveCannotBeDelivered`、`TestFlushStillReachesTheOthersAfterAnUnreachableObserverIsUnsubscribed`、`TestRetireSubjectCompletesWhenASubscriberIsUnreachable`。记录：`docs/bugfix/RR-20260922-01.md`。
 - **故障矩阵重新有了家，并且跑的是真实列表**（U-0276，C2，RR-20260922-02，T-171）。合仓把 kit 的代码与脚本搬进来了，
   没搬 kit 的 `.github/`，于是 `dataengine-env.sh test` 一天里没有任何 workflow 调用；脚本自己还在跑两个已经没有测试文件的目录

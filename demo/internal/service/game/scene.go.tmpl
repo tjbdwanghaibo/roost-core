@@ -107,26 +107,47 @@ type sessionSource interface {
 func (lane sceneLane) AdmitBatch(ctx context.Context, frames []nettransport.OutboundFrame) error {
 	for _, frame := range frames {
 		playerID := int64(frame.Session)
-		// Snapshots and leaves arrive reliable; deltas arrive as datagram
-		// fragments of one frame. The demo has a single ordered lane, so it
-		// pushes the fragments in order and the client reassembles them with
-		// statesync's Reassembler — the same code a UDP client would run.
-		messages := make([][]byte, 0, len(frame.Datagrams)+1)
-		if len(frame.Reliable) > 0 {
-			messages = append(messages, frame.Reliable)
+		err := lane.pushFrame(ctx, playerID, frame)
+		if err == nil {
+			continue
 		}
-		messages = append(messages, frame.Datagrams...)
-		for _, payload := range messages {
-			push := &pb.EntitySyncPush{Datagram: len(frame.Reliable) == 0, Payload: payload}
-			if err := lane.transport.PushPlayer(ctx, playerID, msgid.MsgEntitySync, push); err != nil {
-				// The player is gone. Drop them from the scene so the room
-				// stops preparing frames nobody reads — the same lazy
-				// cleanup the chat presence uses, because this demo has no
-				// disconnect hook. Returning the error is what makes the
-				// batch atomic: the room keeps the subject dirty and retries.
-				lane.scene.dropAsync(playerID)
-				return fmt.Errorf("scene: push to player %d: %w", playerID, err)
-			}
+		if errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+			// The access layer itself is gone (starting up, shutting down):
+			// nobody can be reached, so this is the batch's failure and not
+			// a player's. Returning it keeps the subject dirty in the room,
+			// which retries on its next tick.
+			return fmt.Errorf("scene: push to player %d: %w", playerID, err)
+		}
+		// One player cannot be reached — their connection is gone, or their
+		// socket will not take the frame. That is their problem alone: they
+		// leave the scene (the same cleanup the session-close hook does, for
+		// the moment before the hook has fired), and everybody else in this
+		// batch still gets their frame. Until U-0278 this returned here: the
+		// frames already pushed were not rolled back and the frames not yet
+		// pushed never went out, so one dead session starved every observer
+		// sorted after it, on every tick (RR-20260922-01). The frame addressed
+		// to the leaver counts as delivered — to a session that no longer
+		// exists, which is where it was going anyway.
+		lane.scene.dropUnreachable(playerID, err)
+	}
+	return nil
+}
+
+// pushFrame hands one room frame to one player. Snapshots and leaves arrive
+// reliable; deltas arrive as datagram fragments of one frame. The demo has a
+// single ordered lane, so it pushes the fragments in order and the client
+// reassembles them with statesync's Reassembler — the same code a UDP client
+// would run.
+func (lane sceneLane) pushFrame(ctx context.Context, playerID int64, frame nettransport.OutboundFrame) error {
+	messages := make([][]byte, 0, len(frame.Datagrams)+1)
+	if len(frame.Reliable) > 0 {
+		messages = append(messages, frame.Reliable)
+	}
+	messages = append(messages, frame.Datagrams...)
+	for _, payload := range messages {
+		push := &pb.EntitySyncPush{Datagram: len(frame.Reliable) == 0, Payload: payload}
+		if err := lane.transport.PushPlayer(ctx, playerID, msgid.MsgEntitySync, push); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -388,7 +409,9 @@ func (bridge *Scene) Leave(ctx context.Context, subjectID int64) {
 	if err := bridge.room.RetireSubject(ctx, subjectID); err != nil {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
 	}
-	if err := bridge.room.UnregisterSubject(subjectID); err != nil {
+	// A completed retirement has already unregistered the subject; only a
+	// refusal for another reason is worth a line.
+	if err := bridge.room.UnregisterSubject(subjectID); err != nil && !errors.Is(err, room.ErrRoomSubjectNotRegistered) {
 		slog.Debug("scene: subject not unregistered", "subject_id", subjectID, "err", err)
 	}
 }
@@ -430,7 +453,9 @@ func (bridge *Scene) HideSubject(ctx context.Context, subjectID int64) {
 	if err := bridge.room.RetireSubject(ctx, subjectID); err != nil {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
 	}
-	if err := bridge.room.UnregisterSubject(subjectID); err != nil {
+	// A completed retirement has already unregistered the subject; only a
+	// refusal for another reason is worth a line.
+	if err := bridge.room.UnregisterSubject(subjectID); err != nil && !errors.Is(err, room.ErrRoomSubjectNotRegistered) {
 		slog.Debug("scene: subject not unregistered", "subject_id", subjectID, "err", err)
 	}
 }
@@ -499,6 +524,26 @@ func (bridge *Scene) sweep(ctx context.Context) {
 //
 // It runs in its own goroutine because it is called from inside the room's
 // own flush, and Leave takes the room's locks.
+// dropUnreachable takes a player whose pushes fail out of the scene, saying so
+// once at Info: a leaver is ordinary churn, not an error, but a scene that
+// silently loses members is how RR-20260922-01 stayed invisible. Leave is
+// idempotent; the membership check only keeps the line from repeating on
+// every tick until the removal has run.
+func (bridge *Scene) dropUnreachable(playerID int64, cause error) {
+	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return
+	}
+	bridge.mu.Lock()
+	_, present := bridge.members[subjectID]
+	bridge.mu.Unlock()
+	if !present {
+		return
+	}
+	slog.Info("scene: player unreachable, leaving the scene", "player_id", playerID, "err", cause)
+	bridge.dropAsync(playerID)
+}
+
 func (bridge *Scene) dropAsync(playerID int64) {
 	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
 	if err != nil {

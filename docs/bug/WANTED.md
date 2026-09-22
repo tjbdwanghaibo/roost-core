@@ -8,14 +8,9 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
-## W-2026-09-22-03：生成工程 `sceneLane.AdmitBatch` 逐个推、遇错整批放弃，一个死会话让同批其后的人收不到；`pushPlayer` 的"无会话"不计指标
+## W-2026-09-22-03 已处理：→ U-0278（维护者 09-22 拍板直接修，无 RR）
 
-- **位置**：codegen 模板 `demo/internal/service/game/scene.go.tmpl` 的 `sceneLane.AdmitBatch`（生成物 `internal/service/game/scene.go:107-131`），`SlowConsumerPolicy: room.SlowConsumerFailBatch`；`demo/internal/access/player/tcp/server_gen.go` 的 `pushPlayer`（`len(sessions)==0` 返回 `ErrSessionNotFound`，不走 `player_tcp_push_error_total`）。基线 core `4d056c5`。
-- **现象**：RR-20260922-01 的第 3 段。room 把一次 flush 的帧按 subscriber id 升序排成一批交给它；它按顺序 `PushPlayer`，第一个失败就 `dropAsync` + `return err`。前面已推出的不回滚（幸存者收到重复帧），后面的一个都没推。U-0277 之后死会话会在会话关闭钩子那一 tick 被撤掉，窗口从"永远"缩成"一个 tick"，但那一 tick 里排在它之后的人仍然少一帧；而且任何一个**活着但推送失败**的会话都会每 tick 饿死其后所有人。
-- **为何可疑**："FailBatch" 在 core 的语义是原子（要么全进要么全不进），这里的实现是"前缀进、后缀不进"——和 `RoomTransportSink.admitWithSlowConsumerPolicy` 对 `AdmissionError{Session}` 的处理方式对不上；同时 `ErrSessionNotFound` 不计指标，运维在 `/metrics` 上看不到任何推送失败。
-- **会红的测试草稿**：`sceneLane` 三个会话 A<B<C，B 的 `PushPlayer` 返回 `ErrSessionNotFound`；`AdmitBatch` 一批 [A,B,C] 之后 C 必须收到（要么全推、要么用 `nettransport.AdmissionError{Session: B}` 报回让 sink 的 Evict 策略生效）。
-- **候选修法**：(a) 跳过死会话继续推，把死会话错误收集后一并返回；(b) 把错误包成 `kit.AdmissionError{Session}` 并把策略切到 `SlowConsumerEvict`，让 sink 剔除并跳过；(c) 或者给 room / coordinator 加不投递的 `EvictSubscriber` 由会话关闭钩子调用（U-0277 方案选择里未采用的那条）。`pushPlayer` 无会话时也计 `player_tcp_push_error_total`（或单独一个计数）。
-- **来源**：U-0277（RR-20260922-01）修复过程。core 侧那半已修；这半是 codegen 模板，按"一个 RR 一个单元"不在 U-0277 里顺手改。
+生成工程 `sceneLane.AdmitBatch` 逐个推、遇错整批放弃；`pushPlayer` 无会话不计指标。按失败种类分流后关闭，记录见 [bugfix/U-0278](../bugfix/U-0278-scene-lane-per-session-push.md)。
 
 ## W-2026-09-22-02：v1.16.1 的进程正常停止后重启，WAL 回放 `mongo: duplicate key`，进程再也起不来
 

@@ -113,6 +113,7 @@
 | U-0199 | core | lockstep `SubmitInput` 先按客户端帧号索引身份环再校验(32 位平台越界 panic + 垃圾帧号分配环) | [U-0199-submit-input-validation-order.md](U-0199-submit-input-validation-order.md) |
 | U-0218 | codegen | 托管服务 collaborators 无条件 import 服务包,U-0217 后 match 工程 "imported and not used"(发版验证发现,v1.15.6 补丁) | [U-0218-collaborators-unused-import.md](U-0218-collaborators-unused-import.md) |
 | U-0224 | codegen | dao 生成的嵌套 struct 无 BSON 表示，落库 / 回滚快照 / 同步只剩 `{"dirtyhook": {}}`；加 `bson:"-" json:"-"` 并生成 MarshalBSON / UnmarshalBSON（用户复审提出） | [U-0224-dao-nested-bson.md](U-0224-dao-nested-bson.md) |
+| U-0278 | core `demo` 模板 + `codegen/internal/roost` | 场景 lane 逐个推、遇错整批放弃：一个推不到的会话让同批其后的观察者少收帧，接入层不可用时还把玩家踢出场景；按失败种类分流，`pushPlayer` 无会话计 `player_tcp_push_no_session_total`（W-2026-09-22-03，维护者拍板） | [U-0278-scene-lane-per-session-push.md](U-0278-scene-lane-per-session-push.md) |
 | U-0250 | codegen | handler 参数名写成 `_` 时生成的 sender 声明并传递空白名，工程编译不过（修 RR-20260919-06 时撞上） | [U-0250-nest-blank-parameter-name.md](U-0250-nest-blank-parameter-name.md) |
 | U-0246 | codegen | DAO 字段名小写之后是 Go 关键字（`Type` → `type`），生成物编译不过，错误指向临时文件（加 demo 计时器节点时自查） | [U-0246-dao-keyword-field-names.md](U-0246-dao-keyword-field-names.md) |
 | U-0245 | codegen | 新建的 DAO 不接嵌套回调，第一次存盘前的嵌套写入悄悄丢掉（加 demo 嵌套字段时自查） | [U-0245-fresh-dao-nested-wiring.md](U-0245-fresh-dao-nested-wiring.md) |

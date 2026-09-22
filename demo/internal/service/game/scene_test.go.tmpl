@@ -2,6 +2,7 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -37,10 +38,12 @@ import (
 // sceneRecorder stands in for the player TCP Runtime, keeping what each
 // player would have received.
 type sceneRecorder struct {
-	mu      sync.Mutex
-	pushes  map[int64][]*pb.EntitySyncPush
-	offline map[int64]bool
-	closed  []func(accessplayertcp.SessionClosed)
+	mu          sync.Mutex
+	pushes      map[int64][]*pb.EntitySyncPush
+	offline     map[int64]bool
+	unreachable map[int64]error // a push to this player fails with this error
+	unavailable bool            // the whole access layer is gone: every push fails
+	closed      []func(accessplayertcp.SessionClosed)
 }
 
 func newSceneRecorder() *sceneRecorder {
@@ -57,8 +60,36 @@ func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, mes
 	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+	if recorder.unavailable {
+		return accessplayertcp.ErrTransportUnavailable
+	}
+	if err := recorder.unreachable[playerID]; err != nil {
+		return err
+	}
 	recorder.pushes[playerID] = append(recorder.pushes[playerID], push)
 	return nil
+}
+
+// disconnect makes one player unreachable the way the real access layer
+// reports it: no session, so every push to them fails. Nobody is told —
+// this is the case the session lifecycle source has NOT fired for yet.
+func (recorder *sceneRecorder) disconnect(playerID int64) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.unreachable == nil {
+		recorder.unreachable = make(map[int64]error)
+	}
+	recorder.unreachable[playerID] = fmt.Errorf("%w: player %d", accessplayertcp.ErrSessionNotFound, playerID)
+	if recorder.offline == nil {
+		recorder.offline = make(map[int64]bool)
+	}
+	recorder.offline[playerID] = true
+}
+
+func (recorder *sceneRecorder) setUnavailable(unavailable bool) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.unavailable = unavailable
 }
 
 // Every recorded player counts as connected unless a test says otherwise.
@@ -400,6 +431,133 @@ func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 	}
 	if members := scene.Members(); members != 0 {
 		t.Fatalf("the scene still holds %d members two seconds after the session closed, with no traffic to notice it", members)
+	}
+}
+
+// U-0278（W-2026-09-22-03）：一个推不到的玩家不能让同一批里排在它后面的人少收帧。
+//
+// 房间把一次 flush 的帧按观察者 id 升序排成一批交给这条 lane。lane 以前逐个推、第一个
+// 失败就整批返回错误——排在前面的已经推出去了（下一 tick 再收一遍），排在后面的一个
+// 都没推。RR-20260922-01 的实跑里，16 个客户端有 13 个从第一个断线者起再没收到任何帧。
+//
+// 承诺：推不到的那个玩家自己离开场景；其余人这一帧照常到达；批次不报错。
+func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	// Three observers of one change, sorted by id: the one in the middle is
+	// the one whose connection has gone.
+	const (
+		firstID = int64(9401)
+		goneID  = int64(9402)
+		lastID  = int64(9403)
+	)
+	first := newScenePlayer(t, firstID)
+	gone := newScenePlayer(t, goneID)
+	last := newScenePlayer(t, lastID)
+	for i, member := range []*player.Player{first, gone, last} {
+		if err := scene.Join(ctx, member, spatial.Point{X: 500 + int64(i)*10, Y: 500}); err != nil {
+			t.Fatalf("join %d: %v", member.ID(), err)
+		}
+	}
+	recorder.take(firstID)
+	recorder.take(goneID)
+	recorder.take(lastID)
+	recorder.disconnect(goneID)
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		first.ID(): first, gone.ID(): gone, last.ID(): last, counters.ID(): counters,
+	})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, first.ID(), counters.ID(), 250); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	flushErr := scene.room.FlushDirty(ctx)
+
+	updates := decodeSceneFrames(t, lastID, recorder.take(lastID))
+	if _, ok := updates[first.ID()]; !ok {
+		t.Fatalf("the observer sorted after the unreachable one received nothing (flush error: %v); got %v", flushErr, updates)
+	}
+	if flushErr != nil {
+		t.Fatalf("one unreachable observer failed the whole batch: %v", flushErr)
+	}
+	// The unreachable player leaves the scene; the removal runs on its own
+	// goroutine.
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("the scene holds %d members two seconds after a push to one of them failed, want 2", members)
+	}
+}
+
+// The other kind of push failure: the access layer itself is gone (starting,
+// stopping). That is nobody's fault in particular, so the batch must fail so
+// the room keeps the subject dirty and retries — and no player may be thrown
+// out of the scene for it.
+func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		moverID   = int64(9501)
+		watcherID = int64(9502)
+	)
+	mover := newScenePlayer(t, moverID)
+	watcher := newScenePlayer(t, watcherID)
+	if err := scene.Join(ctx, mover, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 510, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.setUnavailable(true)
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		mover.ID(): mover, watcher.ID(): watcher, counters.ID(): counters,
+	})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if err := scene.room.FlushDirty(ctx); !errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+		t.Fatalf("flush with the transport gone: %v, want ErrTransportUnavailable so the room retries", err)
+	}
+	if !mover.Sync().PendingDirty() {
+		t.Fatal("the change was dropped: the subject is no longer dirty although nobody received it")
+	}
+	// Give an (incorrect) asynchronous removal time to happen before asserting
+	// that it did not.
+	time.Sleep(100 * time.Millisecond)
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a transport outage threw players out of the scene: members=%d, want 2", members)
 	}
 }
 
