@@ -118,6 +118,9 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 ## W-2026-09-20-02 已分流：→ RR-20260920-06（候选根因 a（LOD 筛字段）被排除，packer 忽略 profile）
 
+> **09-22 更正**：分流到 RR-06 是误归因——RR-06 是查它时顺带发现的另一条真缺陷。U-0267 在位、零 subscribe 拒绝，
+> 真实环境仍 3/16。本条现为 **RR-20260922-01**（P1），正文保留为现场证据；候选 (b) 仍是主嫌疑。
+
 - **位置**：`roost-core/entitysync`（`SubscriptionCoordinator` 的 prepared batch / content version）、
   `roost-core/room`（`flushStateBatch` 的 dirty 取用与按订阅者分发）、
   `roost-core/entity` 的 `SubjectSyncState` / `SubjectSyncPacker`，以及生成工程的
