@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Changed（破坏性）
+
+- **实体同步统一为 `entitysync.Manager`，room 广播器整条退场**（M-13，ARCH-10）。`entitysync.SubscriptionCoordinator`、`room.RoomBroadcaster` /
+  `RoomEnvelopeSink` / `RoomTransportSink` / `RoomManager` 全部删除；`room/` 只剩 ISyncBus。新形状：subject 自己持有订阅者表（`session → {profile, kind, baseVersion}`），
+  进程一个 `Manager`（`Register/Unregister`、`OpenSession/CloseSession`、`Subscribe/Unsubscribe`、`Flush/Start/Stop`、`Stats/CheckHealth`、`SessionLost` 钩子），
+  每 tick 给每个会话**一帧**；传输层只有两种失败——`ErrRetryLater`（整体不可用，tick 作废重来）和其他（该会话关闭）。
+  `entity.SubjectSyncState.PrepareTick` 一次锁内同时捕获 delta 与新订阅者的快照。**线格式 v2**：去掉外层 room 帧头，帧就是 statesync 帧，
+  `Epoch/Tick` 是会话时钟，`RoomID` 恒为 1；datagram 分片通道不再用于实体同步；demo 协议 `EntitySyncPush` 删掉 `Datagram` 字段。
+  生成工程需重生成 `scene.go` / `scene_test.go` / `cmd/loadtest` / `protocol/def/entity_sync.go`；迁移对照见 `docs/bugfix/M-13-entitysync-manager.md`。
+  承诺：`entitysync/manager_promises_test.go` 8 条 + demo `scene_test.go.tmpl`。
+
 ### Fixed
 
 - **场景 lane 不再让一个推不到的会话拖累同批其他人**（U-0278，C8，W-2026-09-22-03，T-173；codegen 模板）。生成工程的 `sceneLane.AdmitBatch` 此前逐个 `PushPlayer`、第一个失败就 `dropAsync` 并整批返回错误：排在前面的已经推出去（下一 tick 再收一遍），排在后面的一帧没推；接入层整体不可用时也把玩家踢出场景。现在按失败种类分流：`ErrTransportUnavailable` 整批报错让房间重试、不踢人；单个玩家推不到则它自己离开（一条 Info），其余人这一帧照常。`Leave` 不再为"已注销"记日志；生成的接入层对"无会话"的推送计 `player_tcp_push_no_session_total`。`TestAnUnreachablePlayerDoesNotStarveTheOthers`、`TestAnUnavailableTransportKeepsTheBatchAndThePlayers`（`scene_test.go.tmpl`）。记录：`docs/bugfix/U-0278-scene-lane-per-session-push.md`。

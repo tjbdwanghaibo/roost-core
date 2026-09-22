@@ -321,8 +321,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if marker := read("game/entities/player/entity.go"); !strings.Contains(marker, "sync=true") || !strings.Contains(marker, "subjectPacker=NewPlayerSyncPacker") {
 		t.Errorf("the demo Player is not a replicated subject, so sync=true has no consumer in the template")
 	}
-	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, "room.NewRoomManager(") || !strings.Contains(scene, "DurableWatermark") || !strings.Contains(scene, "RegisterSubject") {
-		t.Errorf("the scene does not assemble the room, its subjects and the durability gate")
+	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, "entitysync.NewManager(") || !strings.Contains(scene, "DurableWatermark") || !strings.Contains(scene, "manager.Register(") {
+		t.Errorf("the scene does not assemble the sync manager, its subjects and the durability gate")
 	}
 	if packer := read("game/entities/player/sync_packer.go"); !strings.Contains(packer, "PackSubjectDelta") || !strings.Contains(packer, "MarshalSync(mask)") {
 		t.Errorf("the player packer does not turn the DAO's dirty mask into a delta")

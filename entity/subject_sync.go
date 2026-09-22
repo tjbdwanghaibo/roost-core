@@ -392,23 +392,40 @@ func entitySyncLockedInCurrentGuard(entityID int64) bool {
 // Prepare captures one content version for every requested profile. It takes
 // the Entity mutex before the prepare serialization lock, so calls made from an
 // EntityGuard cannot deadlock with an asynchronous prepare waiting for Entity.
+// Prepare captures a delta (or, when the subject is marked fully dirty, a
+// snapshot) for each profile. It is PrepareTick without new subscribers.
 func (s *SubjectSyncState) Prepare(profiles []SyncProfile) (*PreparedSubjectSync, error) {
+	return s.PrepareTick(profiles, nil)
+}
+
+// PrepareTick captures everything one replication tick needs from this
+// subject, under ONE entity lock so version, mask, CommitLSN and every payload
+// describe the same moment: a delta for each of deltaProfiles when the subject
+// is dirty, and a full snapshot for each of snapshotProfiles (the subscribers
+// who have nothing yet). When the subject is dirty the version advances and
+// the snapshots carry the new version — they already contain the dirty
+// changes, so labelling them with the old one would make the next delta's
+// base disagree with what those subscribers hold (ARCH-10). When it is not
+// dirty the snapshots carry the current version and Commit leaves it alone.
+// Nothing to capture at all is ErrSubjectSyncNotDirty.
+func (s *SubjectSyncState) PrepareTick(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	if s == nil {
 		return nil, ErrSubjectSyncClosed
 	}
-	profiles = normalizeSyncProfiles(profiles)
+	deltaProfiles = normalizeSyncProfiles(deltaProfiles)
+	snapshotProfiles = uniqueSyncProfiles(snapshotProfiles)
 	var prepared *PreparedSubjectSync
 	err := s.withEntityLock(func() error {
 		s.prepareMu.Lock()
 		defer s.prepareMu.Unlock()
 		var err error
-		prepared, err = s.prepareLocked(profiles)
+		prepared, err = s.prepareLocked(deltaProfiles, snapshotProfiles)
 		return err
 	})
 	return prepared, err
 }
 
-func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubjectSync, error) {
+func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	s.mu.Lock()
 	if !s.enabled {
 		s.mu.Unlock()
@@ -419,16 +436,14 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 			s.mu.Unlock()
 			return nil, ErrSubjectSyncInFlight
 		}
-		// Escape hatch: the previous prepare was abandoned without
-		// Commit/Abort. Reclaim so the subject does not stall forever; a
-		// late Commit of the abandoned token fails its token check.
 		flog.Error("entity: reclaiming abandoned subject sync prepare",
 			"subject", s.subjectID, "namespace", s.namespace,
 			"token", s.inflightToken, "age", time.Since(s.inflightSince))
 		s.inflightToken = 0
 		s.inflightSince = time.Time{}
 	}
-	if s.dirtyMask == 0 && !s.fullDirty {
+	dirty := s.dirtyMask != 0 || s.fullDirty
+	if !dirty && len(snapshotProfiles) == 0 {
 		s.mu.Unlock()
 		return nil, ErrSubjectSyncNotDirty
 	}
@@ -446,7 +461,10 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 	namespace := s.namespace
 	subjectKind := s.subjectKind
 	baseVersion := s.version
-	version := baseVersion + 1
+	version := baseVersion
+	if dirty {
+		version++
+	}
 	mask := s.dirtyMask
 	full := s.fullDirty
 	reason := s.fullReason
@@ -457,35 +475,49 @@ func (s *SubjectSyncState) prepareLocked(profiles []SyncProfile) (*PreparedSubje
 	commitLSN := s.lastCommitLSN.Load() // under the entity lock: consistent with the content
 	s.mu.Unlock()
 
-	updates := make([]SubjectSyncUpdate, 0, len(profiles))
-	for _, profile := range profiles {
-		var payload FrozenSyncPayload
-		var err error
-		if full {
-			payload, err = packer.PackSubjectSnapshot(profile)
-		} else {
-			payload, err = packer.PackSubjectDelta(profile, mask)
+	var deltas []SubjectSyncUpdate
+	if dirty {
+		deltas = make([]SubjectSyncUpdate, 0, len(deltaProfiles))
+		for _, profile := range deltaProfiles {
+			var payload FrozenSyncPayload
+			var err error
+			if full {
+				payload, err = packer.PackSubjectSnapshot(profile)
+			} else {
+				payload, err = packer.PackSubjectDelta(profile, mask)
+			}
+			if err != nil {
+				s.failPrepare(token, err)
+				return nil, fmt.Errorf("entity: pack subject %d profile %q: %w", subjectID, profile.Key, err)
+			}
+			deltas = append(deltas, SubjectSyncUpdate{
+				SubjectID: subjectID, Namespace: namespace, SubjectKind: subjectKind,
+				Profile: profile, Version: version,
+				BaseVersion: baseVersion, Mask: mask, Full: full, Reason: reason,
+				Payload: payload, CommitLSN: commitLSN,
+			})
 		}
+	}
+	snapshots := make([]SubjectSyncUpdate, 0, len(snapshotProfiles))
+	for _, profile := range snapshotProfiles {
+		payload, err := packer.PackSubjectSnapshot(profile)
 		if err != nil {
 			s.failPrepare(token, err)
-			return nil, fmt.Errorf("entity: pack subject %d profile %q: %w", subjectID, profile.Key, err)
+			return nil, fmt.Errorf("entity: snapshot subject %d profile %q: %w", subjectID, profile.Key, err)
 		}
-		updates = append(updates, SubjectSyncUpdate{
+		snapshots = append(snapshots, SubjectSyncUpdate{
 			SubjectID: subjectID, Namespace: namespace, SubjectKind: subjectKind,
-			Profile: profile, Version: version,
-			BaseVersion: baseVersion, Mask: mask, Full: full, Reason: reason,
-			Payload: payload, CommitLSN: commitLSN,
+			Profile: profile, Version: version, BaseVersion: version,
+			Full: true, Reason: SyncFullReasonResync, Payload: payload, CommitLSN: commitLSN,
 		})
 	}
 
 	return &PreparedSubjectSync{
 		state: s, token: token, generation: generation, baseVersion: baseVersion,
-		version: version, updates: updates,
+		version: version, updates: deltas, snapshots: snapshots,
 	}, nil
 }
 
-// CaptureSnapshot creates subscriber-independent full payloads at the current
-// content version. It never advances version and never consumes dirty state.
 func (s *SubjectSyncState) CaptureSnapshot(profiles []SyncProfile, reason uint32) ([]SubjectSyncUpdate, error) {
 	if s == nil {
 		return nil, ErrSubjectSyncClosed
@@ -597,7 +629,8 @@ type PreparedSubjectSync struct {
 	generation  uint64
 	baseVersion uint64
 	version     uint64
-	updates     []SubjectSyncUpdate
+	updates     []SubjectSyncUpdate // deltas (or full-dirty snapshots) for the subscribers who are up to date
+	snapshots   []SubjectSyncUpdate // full snapshots for the subscribers who have nothing yet
 	finished    atomic.Uint32
 }
 
@@ -613,6 +646,24 @@ func (p *PreparedSubjectSync) Updates() []SubjectSyncUpdate {
 		return nil
 	}
 	return append([]SubjectSyncUpdate(nil), p.updates...)
+}
+
+// Snapshots are the full captures PrepareTick made for new subscribers, one
+// per snapshot profile, at the same version as Updates.
+func (p *PreparedSubjectSync) Snapshots() []SubjectSyncUpdate {
+	if p == nil {
+		return nil
+	}
+	return append([]SubjectSyncUpdate(nil), p.snapshots...)
+}
+
+// BaseVersion is the version the subject had when this was captured; equal to
+// Version when the capture carried no delta.
+func (p *PreparedSubjectSync) BaseVersion() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.baseVersion
 }
 
 func (p *PreparedSubjectSync) Commit() error {
@@ -764,6 +815,15 @@ func (b *PreparedSubjectSyncBatch) abortLocked(cause error) {
 		}
 		item.finished.Store(preparedSubjectSyncFinished)
 	}
+}
+
+// uniqueSyncProfiles is normalizeSyncProfiles without the "empty means
+// default" rule: an empty list stays empty.
+func uniqueSyncProfiles(profiles []SyncProfile) []SyncProfile {
+	if len(profiles) == 0 {
+		return nil
+	}
+	return normalizeSyncProfiles(profiles)
 }
 
 func normalizeSyncProfiles(profiles []SyncProfile) []SyncProfile {

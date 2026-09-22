@@ -199,19 +199,15 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 func renderReplication(m Manifest) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\npackage transport\n\nimport (\n")
-	b.WriteString("\t\"context\"\n")
 	if hasFeature(m, "nettransport-udp") {
 		b.WriteString("\t\"net\"\n")
 	}
-	b.WriteString("\tcoreentitysync \"github.com/tjbdwanghaibo/roost-core/entitysync\"\n")
-	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/roost-core/statesync\"\n")
-	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/roost-core/nettransport\"\n")
-	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/roost-core/room\"\n)\n\n")
+	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/entitysync\"\n")
+	b.WriteString("\tkitnet \"github.com/tjbdwanghaibo/roost-core/nettransport\"\n)\n\n")
 	b.WriteString("func AsyncConfig() kitnet.AsyncTransportConfig { return kitnet.DefaultAsyncTransportConfig() }\n\n")
-	b.WriteString("type SessionResolver func(coreentitysync.SubscriberRef) (corestate.SessionID, error)\n\n")
-	b.WriteString("func NewRoomSink(async *kitnet.AsyncTransport, resolve SessionResolver) (*kitroom.RoomTransportSink, error) {\n")
-	b.WriteString("\tif resolve == nil { return nil, kitroom.ErrRoomSessionResolver }\n")
-	b.WriteString("\treturn kitroom.NewRoomTransportSink(kitroom.RoomTransportSinkConfig{Transport: async, Sessions: kitroom.RoomSessionResolverFunc(func(_ context.Context, subscriber coreentitysync.SubscriberRef) (corestate.SessionID, error) { return resolve(subscriber) })})\n}\n\n")
+	b.WriteString("// NewSyncTransport is the entity sync manager's lane over the async transport's reliable channel:\n")
+	b.WriteString("// one frame per session per tick, backpressure closes the session (entitysync.ManagerConfig.Transport).\n")
+	b.WriteString("func NewSyncTransport(async *kitnet.AsyncTransport) (*entitysync.AsyncTransport, error) {\n\treturn entitysync.NewAsyncTransport(async)\n}\n\n")
 	if hasFeature(m, "nettransport-quic") {
 		b.WriteString("func NewQUIC() (*kitnet.AsyncTransport, *kitnet.QUICTransport, error) {\n\tprotocol := kitnet.NewQUICTransport(kitnet.QUICTransportConfig{})\n\tasync, err := kitnet.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
 	}

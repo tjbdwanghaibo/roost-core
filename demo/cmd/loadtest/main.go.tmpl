@@ -47,7 +47,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
-	"github.com/tjbdwanghaibo/roost-core/room"
+	"github.com/tjbdwanghaibo/roost-core/entitysync"
 	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -1120,32 +1120,18 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 // the fields this client has been told about. It is what a real client would
 // feed into its rendering state.
 type sceneWatcher struct {
-	mu          sync.Mutex
-	reassembler *corestate.Reassembler
-	session     corestate.SessionID
-	subjects    map[int64]bson.M
-	frames      int
-	deltas      int
-	failure     error
+	mu       sync.Mutex
+	subjects map[int64]bson.M
+	frames   int
+	failure  error
 }
 
 func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()
-	raw := push.Payload
-	if push.Datagram {
-		complete, done, _, err := watcher.reassembler.PushFor(watcher.session, push.Payload, time.Now())
-		if err != nil {
-			watcher.failure = fmt.Errorf("reassemble state frame: %w", err)
-			return
-		}
-		if !done {
-			return
-		}
-		raw = complete
-		watcher.deltas++
-	}
-	_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+	// One push is one complete frame for this session: its Epoch/Tick are
+	// the session's own clock, and each object is one subject.
+	frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
 	if err != nil {
 		watcher.failure = fmt.Errorf("decode state frame: %w", err)
 		return
@@ -1153,7 +1139,7 @@ func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
 	watcher.frames++
 	for _, object := range frame.Objects {
 		for _, component := range object.Components {
-			update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
 			if err != nil {
 				watcher.failure = fmt.Errorf("decode subject update: %w", err)
 				return
@@ -1184,13 +1170,7 @@ func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
 
 // watchScene installs the capture. Params: none.
 func watchScene(_ context.Context, rb *robot.Context, _ any) error {
-	rawPlayer, _ := rb.Blackboard.Get("player_id")
-	playerID, _ := rawPlayer.(int64)
-	watcher := &sceneWatcher{
-		reassembler: corestate.NewReassembler(corestate.DefaultLimits(), 5*time.Second),
-		session:     corestate.SessionID(playerID),
-		subjects:    make(map[int64]bson.M),
-	}
+	watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
 	rb.Blackboard.Set("scene_watcher", watcher)
 	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, func(message *session.Message) {
 		push, ok := message.Value.(*pb.EntitySyncPush)

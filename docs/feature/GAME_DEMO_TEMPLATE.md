@@ -927,18 +927,17 @@ snapshot）、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 playe
 
 - **缺什么**：`sync=true`、`entitysync`、`room` 的订阅/水位这一整条"服务端权威状态推给客户端"的主路径，demo 一次都没走过；
   此前只有战斗内的 lockstep 帧同步和手写推送。
-- **做法**：四块，每块都是框架现成的——
-  `Player.Sync()`（主体：版本、脏掩码、packer）→ `room.RoomBroadcaster`（调度：谁订阅了谁、什么时候 flush）→
-  `room.RoomTransportSink`（编码：信封 → 每会话的线帧）→ `AtomicBatchTransport`（通道：demo 的 TCP 推送）。
-  `internal/service/<game>/scene.go` 是这四块的装配；`game/entities/player/sync_packer.go` 是 packer。
+- **做法**（2026-09-22 ARCH-10 / M-13 之后）：三块，每块都是框架现成的——
+  `Player.Sync()`（主体：版本、脏掩码、packer）→ `entitysync.Manager`（进程一个：全部主体与会话、订阅表在主体里、每会话每 tick 一帧、水位门槛）→
+  `entitysync.Transport`（通道：demo 的 TCP 推送，`sceneLane`）。`internal/service/<game>/scene.go` 是装配加"谁订谁"的政策（兴趣系统的翻译）；
+  `game/entities/player/sync_packer.go` 是 packer。第十二批时是四块（`room.RoomBroadcaster` + `room.RoomTransportSink`），已删除。
 - **写入侧不是自动的**：把 DAO 标脏和把**主体**标脏是两件事，`Player.PublishSyncDirty()` 是游戏决定第二件何时发生的地方
   （一次变更一次调用 = 一条 delta，而不是每个 setter 一条）。这也是为什么复制不能做成"有人调了 setter"的副作用——
   它是"一次已提交的变更"的副作用。
 - **payload 用 DAO 自己的同步文档**（`MarshalSync(mask)`，与 `ApplySync` 成对）。掩码从生成的 setter 来、原样回到生成的
   marshaller，两端都不需要知道哪个 bit 是哪个字段——因为**生成的字段掩码常量是 DAO 包私有的**，别的包里的 packer 根本
   没法按字段裁剪。这条已写进 WANTED 交 review。
-- **水位**：`kit/dataengine.Mod.DurableLSN()` 装进 `RoomManagerConfig.DurableWatermark`——U-0233（RR-20260918-02）
-  加的那个入口的第一个真实使用方。
+- **水位**：`kit/dataengine.Mod.DurableLSN()` 装进 `entitysync.ManagerConfig.DurableWatermark`（第十二批时是 `RoomManagerConfig`，U-0233 加的入口）。
 - **边界（写在文件头）**：没有兴趣管理，所有人订阅所有人，O(n²)，只因为 demo 世界只有几个机器人；AOI 应该插在
   Subscribe/Unsubscribe 前面而 scene 其余部分不变。生成的接入层**没有会话关闭回调**，所以"谁还在线"只能靠推送失败懒清理
   + 入场时按 `ActiveSessions` 扫一遍（chat presence 有同样的问题）——这条也进了 WANTED。

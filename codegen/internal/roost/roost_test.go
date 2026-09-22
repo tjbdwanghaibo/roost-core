@@ -1168,7 +1168,7 @@ func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	file, ok := plan["internal/transport/generated.go"]
-	if !ok || !bytes.Contains(file.Body, []byte("func NewQUIC")) || !bytes.Contains(file.Body, []byte("func NewKCP")) || !bytes.Contains(file.Body, []byte("func NewUDP")) || !bytes.Contains(file.Body, []byte("func NewRoomSink")) {
+	if !ok || !bytes.Contains(file.Body, []byte("func NewQUIC")) || !bytes.Contains(file.Body, []byte("func NewKCP")) || !bytes.Contains(file.Body, []byte("func NewUDP")) || !bytes.Contains(file.Body, []byte("func NewSyncTransport")) {
 		t.Fatalf("replication preset missing:\n%s", file.Body)
 	}
 }

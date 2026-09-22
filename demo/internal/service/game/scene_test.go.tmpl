@@ -20,7 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/room"
+	"github.com/tjbdwanghaibo/roost-core/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -133,32 +133,18 @@ func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
 }
 
 // decodeSceneFrames turns what one player received into the subject updates
-// it carries. Reliable frames (snapshots, removals) decode directly; delta
-// fragments go through statesync's Reassembler, exactly as a UDP client would
-// do it.
-func decodeSceneFrames(t *testing.T, playerID int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+// it carries: each push is one frame, each object one subject.
+func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
 	t.Helper()
 	out := make(map[int64]bson.M)
-	reassembler := corestate.NewReassembler(corestate.DefaultLimits(), time.Second)
 	for _, push := range pushes {
-		raw := push.Payload
-		if push.Datagram {
-			complete, done, _, err := reassembler.PushFor(corestate.SessionID(playerID), push.Payload, time.Now())
-			if err != nil {
-				t.Fatalf("reassemble: %v", err)
-			}
-			if !done {
-				continue
-			}
-			raw = complete
-		}
-		_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+		frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
 		if err != nil {
-			t.Fatalf("decode wire frame: %v", err)
+			t.Fatalf("decode frame: %v", err)
 		}
 		for _, object := range frame.Objects {
 			for _, component := range object.Components {
-				update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
 				if err != nil {
 					t.Fatalf("decode subject update: %v", err)
 				}
@@ -175,6 +161,24 @@ func decodeSceneFrames(t *testing.T, playerID int64, pushes []*pb.EntitySyncPush
 		}
 	}
 	return out
+}
+
+// removesIn counts the ObjectRemoves a player received.
+func removesIn(t *testing.T, pushes []*pb.EntitySyncPush) int {
+	t.Helper()
+	removes := 0
+	for _, push := range pushes {
+		frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range frame.Objects {
+			if object.Operation == corestate.ObjectRemove {
+				removes++
+			}
+		}
+	}
+	return removes
 }
 
 // newSceneArea builds the Scene Entity the bridge replicates. The interest
@@ -307,8 +311,11 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	if scene.Members() != 2 {
 		t.Fatalf("the scene holds %d members, want 2", scene.Members())
 	}
-	// Joining already produced snapshots; this test is about what a CHANGE
-	// produces, so start from a clean slate.
+	// Joining owes snapshots on the next tick; this test is about what a
+	// CHANGE produces, so run that tick and start from a clean slate.
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
 	recorder.take(watcherID)
 
 	// An ordinary server-side mutation, through the real AddExp transaction.
@@ -331,7 +338,7 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 		t.Fatal("the subject was not marked dirty; PublishSyncDirty did not reach it")
 	}
 
-	if err := scene.room.FlushDirty(ctx); err != nil {
+	if err := scene.Flush(ctx); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
 
@@ -379,13 +386,19 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	if err := scene.Join(ctx, leaver, spatial.Point{X: 510, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
 	recorder.take(9101)
 
 	scene.Leave(ctx, leaver.ID())
 	if scene.Members() != 1 {
 		t.Fatalf("the scene holds %d members after a leave, want 1", scene.Members())
 	}
-	if len(recorder.take(9101)) == 0 {
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after leave: %v", err)
+	}
+	if removesIn(t, recorder.take(9101)) != 1 {
 		t.Error("the watcher was not told the leaver's object is gone")
 	}
 }
@@ -473,6 +486,9 @@ func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 			t.Fatalf("join %d: %v", member.ID(), err)
 		}
 	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
 	recorder.take(firstID)
 	recorder.take(goneID)
 	recorder.take(lastID)
@@ -485,7 +501,7 @@ func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, first.ID(), counters.ID(), 250); err != nil {
 		t.Fatalf("add exp: %v", err)
 	}
-	flushErr := scene.room.FlushDirty(ctx)
+	flushErr := scene.Flush(ctx)
 
 	updates := decodeSceneFrames(t, lastID, recorder.take(lastID))
 	if _, ok := updates[first.ID()]; !ok {
@@ -494,8 +510,8 @@ func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
 	if flushErr != nil {
 		t.Fatalf("one unreachable observer failed the whole batch: %v", flushErr)
 	}
-	// The unreachable player leaves the scene; the removal runs on its own
-	// goroutine.
+	// The unreachable player's session was closed by the manager, which
+	// tells the scene; the removal runs on its own goroutine.
 	deadline := time.Now().Add(2 * time.Second)
 	for scene.Members() != 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -538,6 +554,9 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 	if err := scene.Join(ctx, watcher, spatial.Point{X: 510, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
 	recorder.setUnavailable(true)
 
 	counters := newSceneWorld(t)
@@ -547,7 +566,7 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
 		t.Fatalf("add exp: %v", err)
 	}
-	if err := scene.room.FlushDirty(ctx); !errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+	if err := scene.Flush(ctx); !errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
 		t.Fatalf("flush with the transport gone: %v, want ErrTransportUnavailable so the room retries", err)
 	}
 	if !mover.Sync().PendingDirty() {
@@ -593,24 +612,23 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The subject the room holds is the entity id, not the unique id.
+	// The subject the manager holds is the entity id, not the unique id.
 	if subject.ID() == uniqueID {
 		t.Fatal("this player's entity id equals its unique id, so this test cannot tell the two spaces apart")
 	}
-	subscribers := scene.room.Subscribers(subject.ID())
+	subscribers := scene.manager.Subscribers(subject.ID())
 	if len(subscribers) == 0 {
 		t.Fatal("the player is not subscribed to its own subject")
 	}
-	for _, subscription := range subscribers {
-		if subscription.Subscriber.ID != subject.ID() {
-			t.Errorf("a subscriber ref carries %d; every id this bridge builds is the full entity id (%d)",
-				subscription.Subscriber.ID, subject.ID())
+	// And the one place that leaves the entity id space is sessionFor, on
+	// its way to a transport session: the session IS the player id.
+	for _, session := range subscribers {
+		if session != entitysync.SessionID(uniqueID) {
+			t.Errorf("a session id is %d; this bridge's sessions are player ids (%d)", session, uniqueID)
 		}
 	}
-	// And the one place that leaves the entity id space is the resolver, on
-	// its way to a transport session.
 	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
-		t.Fatalf("the resolver's translation gives %d, want the player id %d", got, uniqueID)
+		t.Fatalf("the translation gives %d, want the player id %d", got, uniqueID)
 	}
 }
 
@@ -711,14 +729,17 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	}
 
 	subscribed := false
-	for _, subscription := range scene.room.Subscribers(later.ID()) {
-		if subscription.Subscriber.ID == watcher.ID() {
+	for _, session := range scene.manager.Subscribers(later.ID()) {
+		if session == entitysync.SessionID(watcherID) {
 			subscribed = true
 		}
 	}
 	if !subscribed {
 		t.Fatalf("the watcher is not subscribed to teammate %d after the teammate joined: %v",
-			later.ID(), scene.room.Subscribers(later.ID()))
+			later.ID(), scene.manager.Subscribers(later.ID()))
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after the teammate joined: %v", err)
 	}
 
 	// And what arrives is the teammate's whole state, not the tail of a

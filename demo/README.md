@@ -223,17 +223,16 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find } 
   登录不会因为地面变了而失败。
 - 拒绝只有一个码（`scene_position`）：越界、被占、不在地图上共用它——能精确知道哪些点被占的客户端，等于拿到了所有人的位置。
 
-## 服务端权威状态同步：Player 是复制主体，scene 是它的调度器
+## 服务端权威状态同步：Player 是复制主体，entitysync.Manager 是调度器，scene 是政策
 
-`sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。scene 是它的另一半——谁订阅了谁、
-什么时候成帧、往哪条线发。
+`sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。`entitysync.Manager`（进程一个）拥有全部主体与会话，
+每 tick 给每个会话一帧；scene 只回答谁订谁（兴趣系统），并把 TCP 推送接成 `entitysync.Transport`（ARCH-10 / M-13）。
 
 ```
-Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏
-                                                                      │  room 每 200ms
-主体 ─ Prepare(packer) ─▶ entitysync coordinator ─▶ RoomTransportSink ─▶ AdmitBatch ─▶ TCP 推送 10103
-                                                            （快照/离场走 reliable，delta 走分片）
-客户端：分片 → statesync.Reassembler → room.DecodeRoomWireFrame → DecodeRoomSubjectUpdate → 合并进本地视图
+Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏 ─▶ Manager 记 pending
+                                                                             │  每 50ms 一 tick
+主体 ─ PrepareTick(packer：delta 给在线者、快照给新订阅者) ─▶ 按会话聚合成一帧 ─▶ sceneLane.Push ─▶ TCP 推送 10103
+客户端：entitysync.DecodeFrame → DecodeSubjectUpdate（每个对象一个主体）→ 合并进本地视图
 ```
 
 - **写入侧不是自动的**。把 DAO 标脏和把**主体**标脏是两件事：`PublishSyncDirty()` 在一次变更的末尾调一次，
@@ -241,12 +240,12 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **payload 是 DAO 自己的同步文档**（`MarshalSync(mask)`，与 `ApplySync` 成对）。掩码从生成的 setter 来、原样回到生成的
   marshaller，两端都不需要知道哪个 bit 是哪个字段——生成的字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
   （已登记给 review）。要自己的客户端协议的项目在这里换成自己的消息。
-- **持久化水位**：`kit/dataengine` 的 `DurableLSN` 装进 `RoomManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
-  就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；房间会压住它直到水位追上。
-- **谁订阅谁不在这里决定**：Scene 实体的兴趣系统决定（距离 + 社会关系），交回一串订阅变更，这个文件只负责说给 room 听。
+- **持久化水位**：`kit/dataengine` 的 `DurableLSN` 装进 `entitysync.ManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
+  就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；Manager 会压住整个主体直到水位追上。
+- **谁订阅谁不在这里决定**：Scene 实体的兴趣系统决定（距离 + 社会关系），交回一串订阅变更，这个文件只负责说给 Manager 听。
   加一种关系（好友、同盟）不会碰到这个文件。
-- **没有断连回调**：生成的接入层不通知会话关闭，所以"谁还在线"靠两条——推送失败就把人摘掉，以及有人入场时按
-  `ActiveSessions` 扫一遍陈旧成员。chat 的 presence 有同样的问题。
+- **推送失败只关那个会话**：Manager 把推不到的会话关掉并回调 `SessionLost`，scene 让那个玩家离场；接入层整体不可用是 `ErrRetryLater`，
+  tick 重来、不踢人。会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
   否则推送到了也解不出来、静默丢弃。
 

@@ -25,7 +25,7 @@
 | `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
-| `room/` | 状态帧同步的房间侧：`RoomMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一）、`RoomManager`（多房间宿主：两级容量预算 + 空闲 GC）、`RoomFrame` 合帧（50ms）、`RoomTransportSink`（编码到 statesync 线格式：snapshot 走可靠、delta 走 latest-only datagram，慢消费者驱逐）。**房间组件是库类型，需业务自行装配，装 RoomMod 不等于有房间同步** | NATS/JetStream（bus）+ `nettransport`（房间帧传输） | 实时房间状态同步 |
+| `room/` | 服务间状态同步总线：`RoomMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一）。客户端方向的实体同步在 roost-core `entitysync`（`Manager`：subject 私有订阅者表、每会话一帧、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
 | `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 生命周期的 **Mod 包装**——Mod 名 `mods.ModManager`、capability 登记、Mod 形状的 Stop / StopWithContext。引擎（按 `DependsOn` 稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、启动中收到 shutdown 中止启动、`Start` 后 `Register` 报错）**在 roost-core/manager.Engine**（M-09） | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
 | `lock/` | 进程内锁管理器（per-id 可重入互斥，同 id 同实例）——与 `redis.IDistLock`/`IVersionedLock` 是进程内 vs 跨进程的不同层，不参与"分布式锁二选一" | 无 | 进程内互斥 |
 | `ops/` | 运维 HTTP：`/healthz`（存活，恒 200）、`/readyz`（ready 位 + 依赖健康，503 语义）、`/metrics`（Prometheus 文本，**不鉴权**）、`/admin/*`（token 双通道鉴权，关闭时 404 隐藏）。**默认关闭（`ops.enabled`），默认只监听 127.0.0.1** | HTTP | 探针、指标抓取与运维命令 |
@@ -437,14 +437,21 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
   选型：只要一条不可靠下行 → UDP（最轻）；同一条 UDP 链路上跑不可靠 + 可靠（lockstep 实时帧 + 追帧）→ KCP（旋钮多、CPU 轻）或 QUIC（443 穿透 + 连接迁移）；异构组合 → `CompositeTransport`。**状态帧**的队列/合帧/原子准入统一由 `AsyncTransport` 提供，`ControlPlane` 在业务层之下终结 ACK/resync 控制报文。**lockstep 的输入帧例外**：其 datagram 通道必须直连裸 transport——`AsyncTransport` 的 latest-only 合帧对每帧不可替代的输入帧意味着拥塞折叠即永久丢帧（见 lockstep 包注释）。
 - **AEAD UDP**（`roost-core/nettransport/udp_crypto.go`、`roost-core/nettransport/udp_transport.go`）：AES-GCM per-session；`SendSalt`/`ReceiveSalt` 每个方向独立且构造时强制不相等（同 key 双向复用同一 nonce 空间会灾难性破坏 GCM）；nonce = salt(4B) + 单调 sequence(8B)，序列号耗尽即拒发；接收端 64 包位图防重放窗口；**地址迁移只在 AEAD 验证通过之后**（`Open` 成功且 `isCurrentRoute`）才生效，未认证的包改不了路由。UDP `Serve` 单飞、handler 返回 error 会终止整个接收循环（业务 handler 必须自行吞掉可恢复错误）。
 
-### room（roost-core；kit 只装配 RoomMod）：状态帧的房间链路（四个角色）
+### entitysync（roost-core）：实体状态到客户端会话（ARCH-10 / M-13，2026-09-22）
 
-装配关系：`RoomManager`（多房间宿主）→ `RoomFrame` 合帧（50ms）→ `RoomTransportSink`（编码 + 原子下发）→ `nettransport.Channel`。**`RoomMod` 只提供 `ISyncBus`（服务间消息面），房间组件是库类型需业务自行装配。**
+一个机制：`entity.SubjectSyncState` 是内容（版本、脏掩码、packer、CommitLSN），`entitysync.Manager` 一个进程一个，拥有全部 subject 与会话；
+subject 自己持有订阅者表 `session → {profile, kind, baseVersion}`；每 tick 给每个会话**一帧**（statesync 帧，`Epoch/Tick` 是会话时钟）；
+room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscribe`。
 
-- **NATS vs JetStream 的持久性不同，但 Sync handler 契约一致**（`roost-core/room/nats_syncbus.go`、`roost-core/room/jetstream_syncbus.go`）：纯 NATS 是至多一次、无确认、**故意不实现 `PublishConfirmed`**；JetStream 有 durable 与发布确认。`ISyncBus` 的 handler error 只记录、**不重试**，因此 JetStream 适配器也会 ACK handler error 和坏 wire，避免同一 handler 在两种 transport 下产生不同外部语义。去重优先使用独立 `MessageID`；旧 core 滚动升级期间才回退到 Topic/Key/Version/FromSid/Part 元组。durable 名称带原 topic 的稳定 hash，规避清洗/截断碰撞。
-- **`RoomManager`**（`roost-core/room/room_manager.go`）：每房 + 全局两级容量预算（原子 CAS 预约）；空闲房间 GC 只回收"零主体、零订阅者、零未完成 retire"且超 `IdleTTL` 的房间——**有未完成 retire 的房间永不被 GC**；关闭超时会回滚 closing 标记下轮重试。
-- **`RoomTransportSink`**（`roost-core/room/room_transport_sink.go`）：**snapshot/leave 帧走可靠有序通道；纯 delta 走分片 latest-only datagram**。每 (room, session) 维护紧凑 ObjectRef 分配器（带 generation 复用）；**delta 必须在 snapshot 之后**（无 baseline 直接报 `ErrRoomSubjectBaseline`）。会改 ObjectRef 的帧在克隆上计算、`AdmitBatch` 成功后才写回——传输失败不污染 ref 表。慢消费者策略两档：`SlowConsumerEvict` 只在可靠通道背压时驱逐该 session 并重试其余（回调走有界 worker 池 + 按 (room,session) 合并 + panic 计数），其他错误一律整批失败。公开线格式（`RRF1`/`RSU1` 魔数）与 `DecodeRoomWireFrame` 等解码 API 供客户端使用；线上序号会回绕，接收端按 epoch 判续。
-- **`RoomBroadcaster`**（`roost-core/room/room_broadcast.go`）：`ReliableRoomFrameSink` 的契约是**原子接受整个 slice**——返回 nil 即责任移交，返回 error 则一帧都不能留。帧号与 per-(room,subscriber) session sequence **只在下游接受整批后才推进**（丢包检测/重放的实现依据）。单 subject 的 prepare 失败不拖垮整批（错误累计 + 重新入脏）。若下游实现了慢消费者回调注册，房间层自动接线：被驱逐的 session 自动清订阅。
+- **传输只有两种失败**（`entitysync.Transport`）：`ErrRetryLater` = 整体不可用，tick 作废、脏位保留、无人受罚；其他 = 该会话关闭（`SessionLost` 通知政策）。
+  这就是慢消费者策略——不再有 Evict / FailBatch 两套。`AsyncTransport` 适配 nettransport 的可靠通道。
+- **持久化水位**（`ManagerConfig.DurableWatermark`）：按 `CommitLSN` 挡**整个 subject**（快照与 delta 一起），水位过了一起走。
+- **一次锁内捕获**（`PrepareTick`）：给在线者的 delta 与给新订阅者的快照在同一把实体锁内、同一版本上产生；每个不同 profile 只 pack 一次。
+- **编码在副本上**：会话的时钟与 ObjectRef 表只在帧被准入后采纳，重试的 tick 重发同样的帧。
+- **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
+
+**`RoomMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/room/nats_syncbus.go`、`jetstream_syncbus.go`）：
+纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
 
 ### syncstream（roost-core）：observer 维度的包流
 
@@ -492,8 +499,7 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
 | `spatial.InterestManager` | 非并发安全（场景私有） |
 | `spatial.InterestCluster` | 单锁并发安全（多房间 handler 并行 tick） |
 | `nettransport.AsyncTransport` | 每 session 双 worker；AdmitBatch 按 session id 升序加锁 |
-| `room.RoomTransportSink` | 256 条 room 锁条带（升序获取） |
-| `room.RoomBroadcaster` | 64 条 subject flush 锁条带 + 独立脏集合锁；准入由 `admitMu` 串行 |
+| `entitysync.Manager` | 注册表读写锁 + 每 subject 一把锁 + pending 集合锁；tick 由 `flushMu` 串行，会话状态只在 tick 内改 |
 
 ### 玩法与实时组件（均在 roost-core）
 
