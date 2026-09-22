@@ -373,7 +373,11 @@ func TestRoomReplicationQueuesDirtyMarkedBeforeRegistration(t *testing.T) {
 	}
 }
 
-func TestRoomReplicationRetriesRetirementUntilLeaveAdmitted(t *testing.T) {
+// U-0277（RR-20260922-01）改写。旧契约"退役重试到 Leave 投递成功"对一个会话已经
+// 不在的观察者就是永远重试：subject 永远 retiring、订阅永远在。新契约：退役一次完成，
+// 投不到的 Leave 通过返回值上报（ErrLeaveNotDelivered，仍带 ErrRoomFrameAdmission），
+// FlushFailures 计数，subject 立刻注销。
+func TestRoomReplicationRetirementCompletesAndReportsAnUndeliveredLeave(t *testing.T) {
 	recorder := &recordingRoomFrameSink{}
 	room, err := NewRoomBroadcaster(12, recorder)
 	if err != nil {
@@ -389,32 +393,36 @@ func TestRoomReplicationRetriesRetirementUntilLeaveAdmitted(t *testing.T) {
 	}
 	recorder.reset()
 	recorder.setFail(true)
-	if err := room.RetireSubject(context.Background(), 403); !errors.Is(err, ErrRoomFrameAdmission) {
-		t.Fatalf("retire error = %v", err)
+	err = room.RetireSubject(context.Background(), 403)
+	if !errors.Is(err, coreentitysync.ErrLeaveNotDelivered) || !errors.Is(err, ErrRoomFrameAdmission) {
+		t.Fatalf("retire error = %v, want ErrLeaveNotDelivered carrying the admission failure", err)
 	}
-	if stats := room.Stats(); stats.PendingRetirements != 1 {
-		t.Fatalf("retirement was lost: %+v", stats)
+	if stats := room.Stats(); stats.PendingRetirements != 0 || stats.FlushFailures == 0 {
+		t.Fatalf("retirement should be complete and the failure counted: %+v", stats)
 	}
-	if _, err := room.Subscribe(context.Background(), subscriber, 403, entity.SyncProfile{}); !errors.Is(err, ErrRoomSubjectRetiring) {
-		t.Fatalf("subscribe while retiring error = %v", err)
+	if got := room.Subscribers(403); len(got) != 0 {
+		t.Fatalf("subscriptions survived retirement: %+v", got)
 	}
-	recorder.setFail(false)
-	if err := room.FlushDirty(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	frames := recorder.lastBatch()
-	if len(frames) != 1 || len(frames[0].Entries) != 1 || frames[0].Entries[0].Kind != coreentitysync.EnvelopeLeave {
-		t.Fatalf("leave frames = %+v", frames)
-	}
-	if stats := room.Stats(); stats.PendingRetirements != 0 {
-		t.Fatalf("retirement remained queued: %+v", stats)
+	// 已注销：再订阅、再 flush 都只能是"未注册"，而不是"正在退役"。
+	if _, err := room.Subscribe(context.Background(), subscriber, 403, entity.SyncProfile{}); !errors.Is(err, ErrRoomSubjectNotRegistered) {
+		t.Fatalf("subscribe after retirement error = %v", err)
 	}
 	if err := room.FlushSubject(context.Background(), 403); !errors.Is(err, ErrRoomSubjectNotRegistered) {
 		t.Fatalf("retired subject flush error = %v", err)
 	}
+	// 没有留下任何会被下一 tick 重试的东西。
+	recorder.setFail(false)
+	if err := room.FlushDirty(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if frames := recorder.lastBatch(); frames != nil {
+		t.Fatalf("a completed retirement produced frames on a later tick: %+v", frames)
+	}
 }
 
-func TestRoomReplicationStopReturnsFinalAdmissionError(t *testing.T) {
+// U-0277 改写：一个投不到 Leave 的退役不再拖住 Stop。RetireSubject 当场报错，Stop 之后
+// 没有悬着的退役，正常返回。
+func TestRoomReplicationStopIsNotHeldByAnUndeliverableLeave(t *testing.T) {
 	recorder := &recordingRoomFrameSink{}
 	room, err := NewRoomBroadcaster(13, recorder)
 	if err != nil {
@@ -432,16 +440,16 @@ func TestRoomReplicationStopReturnsFinalAdmissionError(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder.setFail(true)
-	if err := room.RetireSubject(context.Background(), 404); err == nil {
-		t.Fatal("retire unexpectedly succeeded")
+	if err := room.RetireSubject(context.Background(), 404); !errors.Is(err, coreentitysync.ErrLeaveNotDelivered) {
+		t.Fatalf("retire error = %v, want ErrLeaveNotDelivered", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := room.Stop(ctx); !errors.Is(err, ErrRoomFrameAdmission) {
-		t.Fatalf("stop error = %v", err)
+	if err := room.Stop(ctx); err != nil {
+		t.Fatalf("stop error = %v, want nil: nothing is left pending", err)
 	}
-	if room.Stats().LastError == "" {
-		t.Fatal("last error was not observable")
+	if stats := room.Stats(); stats.PendingRetirements != 0 || stats.FlushFailures == 0 {
+		t.Fatalf("stats after stop: %+v", stats)
 	}
 }
 

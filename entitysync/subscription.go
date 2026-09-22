@@ -21,6 +21,11 @@ var (
 	ErrSubscriptionState       = errors.New("entitysync: invalid subscription state")
 	ErrPreparedProfilesMissing = errors.New("entitysync: prepared update is missing a subscribed profile")
 	ErrCoordinatorClosed       = errors.New("entitysync: subscription coordinator is closed")
+	// ErrLeaveNotDelivered reports an Unsubscribe that removed the subscription
+	// but could not hand the observer its leave notice. The removal stands
+	// (RR-20260922-01): an observer whose session is gone can never be told,
+	// and keeping it subscribed made the room address frames to it forever.
+	ErrLeaveNotDelivered = errors.New("entitysync: subscription removed but the leave notice was not delivered")
 	// ErrDurabilityDeferred means the content to deliver was captured at a
 	// commit LSN the durable watermark has not reached. Nothing was sent
 	// and nothing was consumed: an existing subscription stays as it was,
@@ -306,18 +311,33 @@ func (c *SubscriptionCoordinator) Unsubscribe(ctx context.Context, subscriber Su
 			Version: current.ContentVersion, BaseVersion: current.ContentVersion,
 		},
 	}
-	if err := admitEnvelopes(ctx, sink, []DeliveryEnvelope{leave}); err != nil {
-		c.restoreActive(key, current)
-		return errors.Join(ErrEnvelopeAdmission, err)
+	// The leave notice is a courtesy to the observer, not a precondition of
+	// the removal. Restoring the subscription when the notice could not be
+	// delivered (the behaviour until U-0277) meant an observer whose session
+	// had gone away stayed subscribed for good: every flush kept addressing
+	// frames to it, an atomic transport rejected each batch at that session,
+	// and everybody sorted after it in the batch never received anything
+	// again (RR-20260922-01). The subscription goes either way; the caller
+	// learns about the undelivered notice through ErrLeaveNotDelivered.
+	deliveryErr := admitEnvelopes(ctx, sink, []DeliveryEnvelope{leave})
+	c.forgetClosing(key, current.Revision)
+	if deliveryErr != nil {
+		return fmt.Errorf("%w: %w: %w", ErrLeaveNotDelivered, ErrEnvelopeAdmission, deliveryErr)
 	}
+	return nil
+}
+
+// forgetClosing completes an Unsubscribe: the subscription is dropped only
+// while it is still the Closing entry this call created, so a Subscribe that
+// raced in behind it (a newer revision) is left alone.
+func (c *SubscriptionCoordinator) forgetClosing(key subscriptionKey, revision uint64) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	latest, ok := c.subscriptions[key]
-	if ok && latest.Revision == current.Revision && latest.State == SubscriptionClosing {
+	if ok && latest.Revision == revision && latest.State == SubscriptionClosing {
 		delete(c.subscriptions, key)
 		c.removeSubjectKeyLocked(key)
 	}
-	c.mu.Unlock()
-	return nil
 }
 
 // Distribute admits all envelopes first and commits Entity content only after

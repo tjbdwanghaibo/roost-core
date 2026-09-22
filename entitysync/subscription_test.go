@@ -122,7 +122,10 @@ func TestSubscriptionAdmissionFailureRollsBack(t *testing.T) {
 	}
 }
 
-func TestSubscriptionUnsubscribeFailureRestoresActive(t *testing.T) {
+// U-0277（RR-20260922-01）改写：旧契约是"Leave 投不到就恢复 Active"，它让断线的
+// 观察者永远留在订阅表里。新契约：订阅一定撤掉，投递失败用 ErrLeaveNotDelivered
+// 带回原因；再撤一次只能是"不存在"。
+func TestSubscriptionUnsubscribeRemovesEvenWhenTheLeaveIsRejected(t *testing.T) {
 	sink := &recordingEnvelopeSink{}
 	coordinator := NewSubscriptionCoordinator(sink)
 	packCount := 0
@@ -133,19 +136,16 @@ func TestSubscriptionUnsubscribeFailureRestoresActive(t *testing.T) {
 	}
 	wantErr := errors.New("leave rejected")
 	sink.rejectErr = wantErr
-	if err := coordinator.Unsubscribe(context.Background(), subscriber, state.SubjectID()); !errors.Is(err, wantErr) {
-		t.Fatalf("Unsubscribe error=%v", err)
+	err := coordinator.Unsubscribe(context.Background(), subscriber, state.SubjectID())
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrLeaveNotDelivered) || !errors.Is(err, ErrEnvelopeAdmission) {
+		t.Fatalf("Unsubscribe error=%v, want ErrLeaveNotDelivered wrapping the admission failure", err)
 	}
-	got, ok := coordinator.Get(subscriber, state.SubjectID())
-	if !ok || got.State != SubscriptionActive {
-		t.Fatalf("subscription not restored: %+v ok=%v", got, ok)
+	if got, ok := coordinator.Get(subscriber, state.SubjectID()); ok {
+		t.Fatalf("subscription survived an Unsubscribe whose leave was rejected: %+v", got)
 	}
 	sink.rejectErr = nil
-	if err := coordinator.Unsubscribe(context.Background(), subscriber, state.SubjectID()); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := coordinator.Get(subscriber, state.SubjectID()); ok {
-		t.Fatal("subscription remained after admitted leave")
+	if err := coordinator.Unsubscribe(context.Background(), subscriber, state.SubjectID()); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("second Unsubscribe error=%v, want ErrSubscriptionNotFound", err)
 	}
 }
 

@@ -14,7 +14,7 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260922-01 | P1 | 16 观察者实跑 3–4 个客户端自己的 `pos_x` 永不到达；wire 级证据把根因收窄到"慢事务后紧接的 move 的字段位在一次 flush 里丢了，版本进、位丢"，与 `handlerFoundGuild` 慢事务强相关。不是 RR-06（零 subscribe 拒绝）。根因未定到行，**按约定不硬修** | 未修复 |
+| RR-20260922-01 | P1 | 16 观察者实跑 3–6 个客户端自己的 `pos_x` 永不到达。**09-22 下午根因定到行**：断线玩家的订阅撤不掉（core `entitysync/subscription.go:300-312` `Unsubscribe` 必须向它投递 Leave，投不到就恢复 Active），room 每次 flush 都为死会话生成帧，生成工程 `sceneLane.AdmitBatch` 逐个推、遇错整批放弃，排在死会话之后的观察者从此收不到任何帧、之前的收重复帧。不是 RR-06、不是迟到、不是脏位丢失 → [REVIEW](REVIEW-2026-09-22.md) | 已修复（U-0277，未发版）→ [bugfix](../bugfix/RR-20260922-01.md) |
 | RR-20260922-02 | P2 | 故障矩阵脚本合仓后烂了三处：两个格子无测试文件、core 侧四套件因路径不存在被跳过且退出码 0、没有任何 workflow 调用它 | 已修复（U-0276，未发版）→ [bugfix](../bugfix/RR-20260922-02.md) |
 | RR-20260922-03 | P2 | `service/mail/redis_integration_test.go` 五个用例没有任何 CI 步骤跑：glob 覆盖不到 `./service/mail`，"no Redis test was skipped"守卫看不见 | 已修复（U-0275，未发版）→ [bugfix](../bugfix/RR-20260922-03.md) |
 

@@ -503,7 +503,7 @@ func (r *RoomBroadcaster) handleSlowConsumer(ctx context.Context, event RoomSlow
 			continue
 		}
 		err := r.Unsubscribe(ctx, subscriber, subjectID)
-		if err != nil && !errors.Is(err, coreentitysync.ErrSubscriptionNotFound) && !errors.Is(err, ErrRoomSubjectNotRegistered) {
+		if err != nil && !errors.Is(err, coreentitysync.ErrSubscriptionNotFound) && !errors.Is(err, ErrRoomSubjectNotRegistered) && !errors.Is(err, coreentitysync.ErrLeaveNotDelivered) {
 			r.setLastError(errors.Join(r.LastError(), fmt.Errorf("room: evict slow subscriber: %w", err)))
 		}
 	}
@@ -764,11 +764,16 @@ func (r *RoomBroadcaster) Unsubscribe(ctx context.Context, subscriber coreentity
 }
 
 func (r *RoomBroadcaster) unsubscribeTracked(ctx context.Context, subscriber coreentitysync.SubscriberRef, subjectID int64) error {
-	if err := r.coordinator.Unsubscribe(ctx, subscriber, subjectID); err != nil {
+	err := r.coordinator.Unsubscribe(ctx, subscriber, subjectID)
+	if err != nil && !errors.Is(err, coreentitysync.ErrLeaveNotDelivered) {
 		return err
 	}
+	// ErrLeaveNotDelivered means the subscription is gone but the observer
+	// could not be told — typically because its session is gone too. The
+	// room's own bookkeeping (budget, sink state) has to follow the removal,
+	// not the notice (RR-20260922-01); the caller still gets the error.
 	r.releaseSubscriber(ctx, subscriber)
-	return nil
+	return err
 }
 
 func (r *RoomBroadcaster) releaseSubscriber(ctx context.Context, subscriber coreentitysync.SubscriberRef) {
@@ -1138,9 +1143,19 @@ func (r *RoomBroadcaster) retryRetirement(ctx context.Context, subjectID int64) 
 		ctx = context.Background()
 	}
 	subscriptions := r.coordinator.Subscribers(subjectID)
-	var retireErrors []error
+	var retireErrors, undelivered []error
 	for _, subscription := range subscriptions {
-		if err := r.unsubscribeTracked(ctx, subscription.Subscriber.Normalize(), subjectID); err != nil && !errors.Is(err, coreentitysync.ErrSubscriptionNotFound) {
+		err := r.unsubscribeTracked(ctx, subscription.Subscriber.Normalize(), subjectID)
+		switch {
+		case err == nil, errors.Is(err, coreentitysync.ErrSubscriptionNotFound):
+		case errors.Is(err, coreentitysync.ErrLeaveNotDelivered):
+			// The subscription is gone; only the notice to that observer
+			// failed. Until U-0277 this kept the subject retiring and the
+			// leave was retried every tick — forever, when the observer's
+			// session had already closed (RR-20260922-01). Retirement
+			// completes; the undelivered notices are reported once, below.
+			undelivered = append(undelivered, err)
+		default:
 			retireErrors = append(retireErrors, err)
 		}
 	}
@@ -1151,7 +1166,7 @@ func (r *RoomBroadcaster) retryRetirement(ctx context.Context, subjectID int64) 
 		return err
 	}
 	r.clearRetiring(subjectID)
-	return nil
+	return errors.Join(undelivered...)
 }
 
 func (r *RoomBroadcaster) subjectOp(subjectID int64) *stdsync.Mutex {

@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **一个断线的观察者不再让整个房间的下发停摆**（U-0277，C3，RR-20260922-01，T-172）。`entitysync.Unsubscribe` 与 room 的退役此前以"Leave 信封投递给被撤观察者成功"为前提，投不到就恢复 Active；会话已经不在的观察者因此永远撤不掉，room 每次 flush 都为它生成帧，生成工程的原子传输在它那里整批拒绝，按 id 排在它之后的所有观察者从此收不到任何帧（16 机器人实跑 3–6 个 `pos_x` 永不到达，服务端零告警）。现在撤订阅无条件完成，Leave 尽力投递，投不到用新哨兵 `ErrLeaveNotDelivered`（wrap `ErrEnvelopeAdmission` 与原因）报给调用方；退役照样注销 subject 并把未投递的 Leave 报一次。**行为变化**：`RetireSubject` 不再无限重试、`Stop` 不再因此返回错误。`TestUnsubscribeRemovesTheSubscriptionEvenWhenTheLeaveCannotBeDelivered`、`TestFlushStillReachesTheOthersAfterAnUnreachableObserverIsUnsubscribed`、`TestRetireSubjectCompletesWhenASubscriberIsUnreachable`。记录：`docs/bugfix/RR-20260922-01.md`。
 - **故障矩阵重新有了家，并且跑的是真实列表**（U-0276，C2，RR-20260922-02，T-171）。合仓把 kit 的代码与脚本搬进来了，
   没搬 kit 的 `.github/`，于是 `dataengine-env.sh test` 一天里没有任何 workflow 调用；脚本自己还在跑两个已经没有测试文件的目录
   （报绿）、并在一个不存在的 `../roost-core` 里找 core 的四个套件（打一行 NOT run 后退出 0）。现在脚本从模块根跑

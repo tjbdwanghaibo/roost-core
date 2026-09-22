@@ -91,6 +91,7 @@
 | RR-20260920-12 | codegen | 撤离的 ctx 预算不覆盖它要等的实体锁，一个忙实体钉住整轮刷新；撤离改成跑到底，预算只限制调用方等多久 | U-0272 | [RR-20260920-12.md](RR-20260920-12.md) |
 | RR-20260921-01 | core `demo` | 贡献落进哪个窗口没有回传通路，机器人只能对读时的窗口下断言；加时钟缝 + 回传窗口 id | U-0273 | [RR-20260921-01.md](RR-20260921-01.md) |
 | RR-20260921-02 | core `.github` | demo-publish 从未发布过：发布的树自带 workflow 文件，token 推不上去；改名 generated-github/ | U-0274 | [RR-20260921-02.md](RR-20260921-02.md) |
+| RR-20260922-01 | core `entitysync` + `room` | 撤订阅以"Leave 投递成功"为前提，断线观察者永远撤不掉，room 每次 flush 都给死会话生成帧、整批被拒，其后所有观察者停摆；改为撤订阅无条件完成、Leave 尽力投递并用 `ErrLeaveNotDelivered` 上报 | U-0277 | [RR-20260922-01.md](RR-20260922-01.md) |
 | RR-20260922-03 | core `.github` | `service/mail` 五个 Redis 集成用例在 CI 的 glob 之外，守卫看不见从没跑过的包；两条命令加 `./service/...`，promise test 把列表钉到文件系统 | U-0275 | [RR-20260922-03.md](RR-20260922-03.md) |
 | RR-20260922-02 | core `kit/scripts` + `.github` | 故障矩阵脚本两格无测试文件、core 侧四套件因 `../roost-core` 不存在被跳过且退出 0、无 workflow 调用；改从模块根跑真实列表，nightly 加回 `fault-matrix` job | U-0276 | [RR-20260922-02.md](RR-20260922-02.md) |
 | RR-20260920-05 | core+kit | 读不回来的订单永久占住重试页，健康订单永远进不了 AttemptDelivery | U-0262 | [RR-20260920-05.md](RR-20260920-05.md) |
