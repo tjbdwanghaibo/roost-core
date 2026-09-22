@@ -15,8 +15,8 @@
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
 | RR-20260922-01 | P1 | 16 观察者实跑 3 个客户端自己的 `pos_x`（另一场 `equipment`）永不到达；已提交的字段变化没送到它自己的订阅者而别人收到了。W-2026-09-20-02 分流到 RR-06 是误归因；根因未定到行，判别实验已列 | 未修复 |
-| RR-20260922-02 | P2 | 故障矩阵脚本合仓后烂了三处：两个格子无测试文件、core 侧四套件因路径不存在被跳过且退出码 0、没有任何 workflow 调用它 | 未修复 |
-| RR-20260922-03 | P2 | `service/mail/redis_integration_test.go` 五个用例没有任何 CI 步骤跑：glob 覆盖不到 `./service/mail`，"no Redis test was skipped"守卫看不见 | 未修复 |
+| RR-20260922-02 | P2 | 故障矩阵脚本合仓后烂了三处：两个格子无测试文件、core 侧四套件因路径不存在被跳过且退出码 0、没有任何 workflow 调用它 | 已修复（U-0276，未发版）→ [bugfix](../bugfix/RR-20260922-02.md) |
+| RR-20260922-03 | P2 | `service/mail/redis_integration_test.go` 五个用例没有任何 CI 步骤跑：glob 覆盖不到 `./service/mail`，"no Redis test was skipped"守卫看不见 | 已修复（U-0275，未发版）→ [bugfix](../bugfix/RR-20260922-03.md) |
 
 09-21 第二轮：Wanted 与未修复 RR 都是 0，于是按 skill §2 的第二张表走 `CARRYOVER.md`，审查链路选在两天里挨了四个单元的 `playerowner.go.tmpl`。新增 **1 个 P1、2 个 P2**——前两条是同一处的两种代价：**归还所有权这件事，既不回头确认自己的决定还成立，也没算清它占住刷新循环多久**。[问题与实施方向](REVIEW-2026-09-21-02.md) · [独立复现](REPRO-2026-09-21-02.md)
 

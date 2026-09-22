@@ -38,3 +38,52 @@ jobs:
             benchmark.txt
           if-no-files-found: error
           retention-days: 30
+
+  # The fault matrix: Mongo primary failover, NATS outage and JetStream leader
+  # failover, toxiproxy half-open / latency / reset, WAL replay under real
+  # services. It lived in roost-kit's own nightly; the subtree merge of
+  # 2026-09-21 brought kit's code and scripts across but not kit's .github,
+  # so for a day the matrix had no CI home and nothing said so
+  # (RR-20260922-02). TestSomeWorkflowRunsTheFaultMatrix now pins this step.
+  fault-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NATS_SERVER_VERSION: v2.14.5
+      MONGODB_SERIES: "8.0"
+      TOXIPROXY_VERSION: v2.12.0
+      ROOST_IT_TOXIPROXY: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install mongod + mongosh
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://www.mongodb.org/static/pgp/server-${MONGODB_SERIES}.asc" \
+            | sudo gpg --dearmor -o "/usr/share/keyrings/mongodb-server-${MONGODB_SERIES}.gpg"
+          echo "deb [signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_SERIES}.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/${MONGODB_SERIES} multiverse" \
+            | sudo tee "/etc/apt/sources.list.d/mongodb-org-${MONGODB_SERIES}.list" >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org-server mongodb-mongosh redis-server redis-tools jq netcat-openbsd
+      - name: install nats-server
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/nats-server-${NATS_SERVER_VERSION}-linux-amd64.tar.gz" | tar -xz
+          sudo install -m 0755 "nats-server-${NATS_SERVER_VERSION}-linux-amd64/nats-server" /usr/local/bin/nats-server
+      - name: install toxiproxy
+        run: |
+          set -euo pipefail
+          curl -fsSL -o toxiproxy-server "https://github.com/Shopify/toxiproxy/releases/download/${TOXIPROXY_VERSION}/toxiproxy-server-linux-amd64"
+          sudo install -m 0755 toxiproxy-server /usr/local/bin/toxiproxy-server
+          toxiproxy-server -version
+      - name: fault matrix (integration suites with toxiproxy required)
+        run: kit/scripts/integration/dataengine-env.sh test
+      - name: node status (on failure)
+        if: failure()
+        run: kit/scripts/integration/dataengine-env.sh status || true
+      - name: tear down
+        if: always()
+        run: kit/scripts/integration/dataengine-env.sh down || true

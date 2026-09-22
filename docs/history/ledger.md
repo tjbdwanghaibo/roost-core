@@ -125,7 +125,7 @@
 | 模块 | 包 | 锁内远端调用 | 空洞测试/宽容替身 | 回调外累积状态 | 跨包字面量耦合 | 静默吞错 | 常量指标 | 释放无 defer | 快慢路径不对称 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | kit | `（根：CI 工作流）` | — | — | — | 09-04 U-0001 | — | — | — | — |
-| kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 | — | — | — | — | — | — |
+| kit | `（scripts/integration 环境脚本）` | — | 09-04 U-0003 / 09-22 U-0276（修复） | — | — | — | — | — | — |
 | kit | `actionflow`（新位置 core） | 09-02 | 09-06 U-0077（回退 3 条） / 09-07 U-0100（回退 17 条） / 09-09 U-0125（回退 6 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `ai` | 09-02 | 09-06 U-0083（回退 5 条） | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
 | kit | `configdata` | 09-02 | 09-02 / 09-09 U-0150 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 | 09-02 |
@@ -239,6 +239,8 @@
 
 | 编号 | 日期 | 目标 | 缺陷类 | 发现 | 测试 | 回退验证 | 定位文档 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| U-0276 | 2026-09-22 | roost-core `kit/scripts/integration` + `.github`：故障矩阵脚本合仓后跑 `./saga ./remoteentity`（无测试文件，报绿）、core 侧四套件因 `../roost-core` 不存在被跳过且退出 0、没有任何 workflow 调用它（RR-20260922-02，P2） | C2 | 合仓只搬了代码没搬"关于代码的元数据"（包列表、路径、调度）。脚本改从模块根跑真实列表；nightly 照搬 kit 旧 `fault-matrix` job；promise test 把列表钉到 `//go:build integration` 文件上。**修好后第一次真跑就红了一格**（`redis/driver` toxiproxy 锁用例）→ W-2026-09-22-01 | `integration_coverage_promises_test.go` 两条 | 修前两条红（漏两包、多两格、有 `ROOST_CORE_DIR`、无 workflow）；本机真实环境完整跑一遍 6 套件 5 绿 1 红 | T-171 · `docs/bugfix/RR-20260922-02.md` |
+| U-0275 | 2026-09-22 | roost-core `.github`：`service/mail` 五个 Redis 集成用例（M-11 下沉 core 后）不在 `service-redis` job 的 `./kit/service/...` 之内，"no Redis test was skipped"守卫只看跑过的包，两周没人跑（RR-20260922-03，P2） | C2 | 手写包列表在包搬家时没跟。两条命令加 `./service/...`；promise test 要求 ci.yml 的 integration `go test` 参数并集覆盖每个读 `REDIS_ADDR` 的包 | `integration_coverage_promises_test.go` 一条 | 变异：两条命令都撤回 → 同一条红（只撤一条不红，因为 race 步骤字面列了 `./service/mail/`，并集仍覆盖——这是对的） | T-170 · `docs/bugfix/RR-20260922-03.md` |
 | U-0274 | 2026-09-21 | roost-core `.github`：demo-publish 从未成功过（最近 30 次 0 成功）——发布的树自带 `.github/workflows/`，而 Actions 的 token 不被允许创建或修改 workflow 文件；`demo-generated` 分支被 README 当作"最新 demo"，却从来没被更新过（RR-20260921-02，P2） | C5 | 三仓合一仓修好了它前面的所有步骤，反而让这最后一段露出来。不删那些 workflow（它们是读者想看的东西），推送前挪成 `generated-github/workflows/`，GENERATED.md 说明原因与恢复方法；PAT 方案要新密钥，未采用 | actionlint；**真正的验收是"流水线成功一次"**，这个条件从未被满足过 | T-169 · `docs/bugfix/RR-20260921-02.md` |
 | U-0273 | 2026-09-21 | roost-core `demo`：`Contribute` 现算窗口 id、用它写 coordinator 与 board，然后只返回不含窗口的 `Participant`；端点连那个返回值也丢掉；`Standing` 再各自算一次。于是机器人只能对"读的时候恰好是哪个窗口"下精确断言，跨 300 秒边界必然红（RR-20260921-01，P2） | C5 | 根因不是"窗口会滚"（那是对的），是信息断在一条没人接的返回值上。加 `now` 时钟缝（否则边界只能等真实时钟，无法测），`Contribute` 返回窗口 id，`FinishDungeonResponse` 带上它，机器人按窗口分支——换了窗口就断言"新窗口不得继承那一点"，抖动的那条路径现在也在检查真实不变量 | 生成工程 `activity_test.go` 一条 | 变异两处各自红：Standing 改回 `time.Now()` → "the window did not roll"；Contribute 不回传 → "reported window \"\"" | T-168 · `docs/bugfix/RR-20260921-01.md` |
 | U-0272 | 2026-09-20 | roost-codegen `demo`：`dropResident` 给撤离套了 `evictBudget` 的 ctx 超时，而终点 `EntityManager.Destroy` 等实体锁时不读 ctx；`Claim` 又是同步的且被 `renew` 调用，于是一个长事务的实体能钉住整轮刷新，别的玩家的租约真的失效（RR-20260920-12，P2） | C8 | 与当天上午的 RR-20260920-08 同形状，被自己在 demo 侧重新引入。修法把"撤离多久"与"调用方等多久"分开：撤离跑在自己的 goroutine 上跑到底，预算只限制等待；超时的调用方没有拿到"副本已清"的事实，照旧 fail-closed。配套按玩家单航班，顺带挡住异步化引入的"旧撤离未完成、新认领已确认" | 生成工程 `playerowner_test.go` 三条 | 变异验证：改回同步调用 → `panic: test timed out after 45s`，即旧形状下预算完全不起作用 | T-166 · `docs/bugfix/RR-20260920-12.md` |

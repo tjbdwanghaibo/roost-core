@@ -3,6 +3,8 @@ set -euo pipefail
 
 script_path="${BASH_SOURCE[0]}"
 repo_root="$(cd "$(dirname "$script_path")/../.." && pwd)"
+# kit/ is a directory of the roost-core module now; go test runs from its root.
+module_root="$(cd "$repo_root/.." && pwd)"
 
 # shellcheck source=lib/common.sh
 source "$repo_root/scripts/integration/lib/common.sh"
@@ -114,30 +116,26 @@ environment_test() {
 	environment_up
 	# shellcheck disable=SC1091
 	source "$ROOST_IT_ROOT/env.sh"
+	# One module since the consolidation (2026-09-21): the assembly-side
+	# suites under kit/ and the driver / redis fault suites that moved to core
+	# with their implementations are all in $module_root. The old version of
+	# this function ran `./dataengine ./saga ./remoteentity ./nats` from kit/
+	# — two of those directories had no test files left, so the matrix
+	# reported two green cells for nothing — and then looked for the core
+	# suites in a sibling `../roost-core` checkout that no longer exists,
+	# printed "NOT run" and exited 0 (RR-20260922-02).
+	#
+	# The package list is pinned to the files on disk by
+	# integration_coverage_promises_test.go: every directory with a
+	# `//go:build integration` test file that keys on ROOST_DATAENGINE_IT,
+	# and nothing else. etcd/driver spawns etcd from PATH and skips loudly
+	# when the binary is absent; mongo/driver spawns its own standalone mongod
+	# (U-0153).
 	(
-		cd "$repo_root"
+		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration ./dataengine ./saga ./remoteentity ./nats -count=1
+			go test -tags=integration ./kit/dataengine ./kit/nats ./redis/... ./etcd/driver ./mongo/driver -count=1
 	)
-	# The Redis fault suites moved to roost-core with the redis client
-	# (consolidation P2-②); run them against the same environment when a
-	# core checkout is at hand (sibling directory by default, ROOST_CORE_DIR
-	# to override). Absent checkout = skipped loudly, never silently green.
-	# etcd/driver and mongo/driver carry the real-service guard tests
-	# (U-0153): mongo/driver reads ROOST_DATAENGINE_IT_MONGO_URI from env.sh
-	# and spawns a standalone mongod itself; etcd/driver spawns etcd from PATH
-	# and skips loudly when the binary is absent.
-	local core_dir="${ROOST_CORE_DIR:-$repo_root/../roost-core}"
-	if [[ -f "$core_dir/go.mod" ]]; then
-		(
-			cd "$core_dir"
-			ROOST_REDIS_TEST_ADDR="$ROOST_DATAENGINE_IT_REDIS_ADDR" \
-				GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-				go test -tags=integration ./redis/... ./etcd/driver ./mongo/driver -count=1
-		)
-	else
-		echo "[roost-it] roost-core checkout not found at $core_dir; core redis fault suites NOT run" >&2
-	fi
 }
 
 case "${1:-}" in

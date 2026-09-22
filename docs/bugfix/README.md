@@ -91,6 +91,8 @@
 | RR-20260920-12 | codegen | 撤离的 ctx 预算不覆盖它要等的实体锁，一个忙实体钉住整轮刷新；撤离改成跑到底，预算只限制调用方等多久 | U-0272 | [RR-20260920-12.md](RR-20260920-12.md) |
 | RR-20260921-01 | core `demo` | 贡献落进哪个窗口没有回传通路，机器人只能对读时的窗口下断言；加时钟缝 + 回传窗口 id | U-0273 | [RR-20260921-01.md](RR-20260921-01.md) |
 | RR-20260921-02 | core `.github` | demo-publish 从未发布过：发布的树自带 workflow 文件，token 推不上去；改名 generated-github/ | U-0274 | [RR-20260921-02.md](RR-20260921-02.md) |
+| RR-20260922-03 | core `.github` | `service/mail` 五个 Redis 集成用例在 CI 的 glob 之外，守卫看不见从没跑过的包；两条命令加 `./service/...`，promise test 把列表钉到文件系统 | U-0275 | [RR-20260922-03.md](RR-20260922-03.md) |
+| RR-20260922-02 | core `kit/scripts` + `.github` | 故障矩阵脚本两格无测试文件、core 侧四套件因 `../roost-core` 不存在被跳过且退出 0、无 workflow 调用；改从模块根跑真实列表，nightly 加回 `fault-matrix` job | U-0276 | [RR-20260922-02.md](RR-20260922-02.md) |
 | RR-20260920-05 | core+kit | 读不回来的订单永久占住重试页，健康订单永远进不了 AttemptDelivery | U-0262 | [RR-20260920-05.md](RR-20260920-05.md) |
 | RR-20260919-08 | core | 两层共享加载没有 defer 收尾，一次 loader panic 让该实体永久加载不了 | U-0254 | [RR-20260919-08.md](RR-20260919-08.md) |
 | RR-20260919-09 | core | 缺失实体 `(nil,nil)` 在 single / broadcast 处被解引用；broadcast 还会中止后续实体 | U-0255 | [RR-20260919-09.md](RR-20260919-09.md) |

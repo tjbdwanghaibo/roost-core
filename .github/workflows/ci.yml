@@ -75,10 +75,16 @@ jobs:
           # shellcheck disable=SC2086
           go test -race $packages
 
-  # The game services (kit/service) keep their Redis-backed suites build-tagged;
-  # they skip without REDIS_ADDR, so this job sets it, runs them and fails on a
-  # skip. -p 1: the suites share one Redis and service/integration measures the
+  # The game services keep their Redis-backed suites build-tagged; they skip
+  # without REDIS_ADDR, so this job sets it, runs them and fails on a skip.
+  # -p 1: the suites share one Redis and service/integration measures the
   # whole keyspace before/after.
+  #
+  # Both halves of a service are listed: the assembly half under kit/service
+  # AND the transport half under service/ (mail's Redis suite moved there with
+  # the M-11 split and was run by nobody for two weeks — the skip guard below
+  # can only see packages this job actually ran; RR-20260922-03).
+  # integration_coverage_promises_test.go pins the list to the files on disk.
   service-redis:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -103,7 +109,7 @@ jobs:
       - name: integration-tagged service tests on Redis
         run: |
           set -o pipefail
-          go test -tags integration -count=1 -p 1 -json ./kit/service/... | tee test.json \
+          go test -tags integration -count=1 -p 1 -json ./kit/service/... ./service/... | tee test.json \
             | jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Action + "\t" + .Package'
       - name: failing test output (on failure)
         if: failure()
@@ -117,7 +123,7 @@ jobs:
             exit 1
           fi
       - name: race on the Redis-backed service suites
-        run: go test -tags integration -count=1 -p 1 -race ./kit/service/integration/ ./kit/service/mail/ ./kit/service/rank/
+        run: go test -tags integration -count=1 -p 1 -race ./kit/service/integration/ ./kit/service/mail/ ./kit/service/rank/ ./service/mail/
 
   windows-compatibility:
     runs-on: windows-latest

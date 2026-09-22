@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **故障矩阵重新有了家，并且跑的是真实列表**（U-0276，C2，RR-20260922-02，T-171）。合仓把 kit 的代码与脚本搬进来了，
+  没搬 kit 的 `.github/`，于是 `dataengine-env.sh test` 一天里没有任何 workflow 调用；脚本自己还在跑两个已经没有测试文件的目录
+  （报绿）、并在一个不存在的 `../roost-core` 里找 core 的四个套件（打一行 NOT run 后退出 0）。现在脚本从模块根跑
+  `./kit/dataengine ./kit/nats ./redis/... ./etcd/driver ./mongo/driver`，nightly 加回 `fault-matrix` job，
+  `TestFaultMatrixScriptNamesEveryFullEnvironmentSuite` / `TestSomeWorkflowRunsTheFaultMatrix` 把列表钉到带
+  `//go:build integration` 的文件上。修好后第一次完整实跑就报出 `redis/driver` 的一格真红（W-2026-09-22-01）。
+  记录：`docs/bugfix/RR-20260922-02.md`。
+- **`service/mail` 的 Redis 集成用例终于有人跑**（U-0275，C2，RR-20260922-03，T-170）。M-11 把 mail 的传输半边下沉到
+  `service/` 之后，`ci.yml` 的 `service-redis` job 仍只跑 `./kit/service/...`，五个 `TestIntegration*` 两周里在 CI 上一次都没跑过，
+  而"no Redis test was skipped"守卫只看它跑过的包。两条命令加 `./service/...`；`TestCIRedisJobRunsEveryRedisIntegrationSuite`
+  要求 job 的参数并集覆盖每个读 `REDIS_ADDR` 的包。记录：`docs/bugfix/RR-20260922-03.md`。
+
 ## [v1.16.1] - 2026-09-21
 
 ### Fixed

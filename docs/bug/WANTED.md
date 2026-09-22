@@ -6,6 +6,66 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 格式：一条一个二级标题，写清位置（仓 / 文件 / 行 / SHA）、现象、为什么觉得可疑、能怎么复现、候选修法（可选）、来源。
 
+
+
+## W-2026-09-22-02：v1.16.1 的进程正常停止后重启，WAL 回放 `mongo: duplicate key`，进程再也起不来
+
+- **位置**：`roost-core/dataengine/engine`（startup projection recovery）与 `dataengine/mongo` 的 remote projection；
+  错误链 `startup projection recovery: dataengine projector: segment first_transaction=80ceb6c8c60c05af00000000000000ba
+  records=1: transaction 80ceb6c8c60c05af00000000000000ba: dataengine mongo: remote projection: mongo: duplicate key`。
+  基线 `00277bd`，生成工程钉 core v1.16.1。
+- **现象**：09-22 两进程实跑的 sid 1000（第二个化身，10:44:42 起、10:51 由 `run.sh stop` **正常停止**，
+  日志末尾 `mod stopped / server stopped`）在 11:17 重启时于 `mod dataengine start` 退出，每次重启都一样。
+  WAL 目录已原样保存：`<scratch>/evidence/wal-dataengine-1000/`（`segment-…0001.wal` 631 KB，最后写入 10:50；
+  `ack-0.chk` / `ack-1.chk` 最后写入 **10:44**——也就是第二个化身整整七分钟没有推进过 ack）。
+- **为何可疑**：
+  1. `game._dataengine_transactions` 与 `game._dataengine_receipts` 里**都没有** `80ceb6c8…ba`——这笔事务没有被记为已提交，
+     回放它却撞了 `_id`：它要插入的文档已经被别的事务写进去了。回放对这种记录不是幂等的。
+  2. RR-20260920-01 / U-0261 的结论是"新记录已不可能成为毒丸，只有旧记录没有隔离流程"（CARRYOVER A1）。
+     这条记录是 v1.16.1 自己写出来的，并且是在**正常停止**之后。A1 的前提不成立了。
+  3. `80ceb6c8c60c05af` 与该库里其他事务的前缀 `77750f86f3b3ab39` 不同——是第二个化身的前缀；`records=1` 说明
+     它是这个化身在这一段里的**第一条**记录。第一条记录 + ack 七分钟不动，指向"化身切换时 WAL / ack / receipt 三者的
+     起点没有对齐"，而不是某一笔业务写坏了。
+- **会红的测试草稿**：起一个 dataengine 运行时 → 写若干事务 → 正常 Shutdown → 用同一 WAL 目录、不同化身前缀再起 →
+  写一笔会插入新文档的事务 → 再正常 Shutdown → 第三次启动必须成功。若能复现，再把"ack 不推进"单独拆出来。
+- **候选修法**：先定契约——回放一条没有 receipt 的插入事务撞 `_id` 时，是"文档已在、视为已应用"（按 digest 比对后跳过）
+  还是"毒丸、隔离并继续"。两者都比"进程起不来"好。
+- **来源**：09-22 RR-20260922-01 的判别实验准备阶段。这条**没有在本轮修**：它不是登记的三条 RR 之一，
+  且需要先定契约。P1 分量（进程死、无出路）。
+
+## W-2026-09-22-01：`redis/driver` 的 toxiproxy 用例 `TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried` 在真实矩阵里 3/4 红
+
+- **位置**：`roost-core/redis/driver/lock_toxic_integration_test.go:151` 与 `:161`；被测 `distLock.Acquire` / `Release`
+  （`redis/driver/lock*.go`）。基线 `00277bd`。
+- **现象**：U-0276 把故障矩阵脚本修好之后第一次完整跑（toxiproxy 在位，所以这条 Toxic 用例第一次真的跑了，
+  而不是像今早手动跑 `./redis/driver` 那样因为没有 `ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR` 而 skip）：
+
+  ```text
+  --- FAIL: TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried (0.11s)
+      lock_toxic_integration_test.go:151: Acquire with a swallowed reply returned ok=false err=<nil>
+  ```
+
+  单独重跑三次：1 绿、2 红，红的是另一行：
+
+  ```text
+      lock_toxic_integration_test.go:161: key still held after reconciliation: exists=1 err=<nil>
+  ```
+
+- **为何可疑**：两种红很可能是**同一个缺陷加一把没清掉的钥匙**。`:161` 说的是：SETNX 的回复被 toxic 吞掉后
+  `Acquire` 报错，随后 `/reset` 恢复网络，`Release` 应当按 token 把**可能已经写进 Redis 的**那把锁删掉——
+  可 `exists=1`，钥匙还在。这把钥匙（TTL 5s）留到下一次运行，下一次的第一步 SETNX 撞上它，
+  `Acquire` 返回 `ok=false err=nil`，就是 `:151` 那一行。所以主嫌疑是**收到不确定结果之后 `Release` 没有走
+  "按 token 删"的和解路径**（也许 state 没被置成 uncertain，`Release` 直接回了 `ErrLockNotHeld`）。
+  这正是这条用例存在的理由（"A lost SETNX reply … reconciliation through Release must free it"），
+  而且 `Release` 那条镜像用例（`TestToxicRedisDroppedReleaseReply…`）是绿的。
+- **会红的测试**：就是它自己，`source /tmp/roost-dataengine-it/env.sh && go test -tags=integration ./redis/driver
+  -run TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried -count=3`。用例本身还有一个次要问题：
+  固定键名 `toxic:acquire` 让相邻两次运行互相污染，把一个缺陷显成两种红——加 `t.Cleanup` 里 `DEL` 或按运行随机键名。
+- **候选修法**：`Acquire` 在 ctx 超时 / 回复丢失时把 `state` 置为 uncertain 并保留 token；`Release` 在 uncertain 态下
+  执行值守护删除（Lua：`if GET==token then DEL`）。先确认现状是哪一步没做到再动手。
+- **来源**：U-0276（RR-20260922-02）修复后的验收实跑。这条不是 RR-02 的一部分——RR-02 修的是"矩阵没跑"，
+  这一条是"矩阵跑了之后发现的"。
+
 ## W-2026-09-20-06 已分流：→ RR-20260921-02
 
 - **位置**：`.github/workflows/demo-publish.yml` 的 "Push the generated tree to demo-generated" 步骤
