@@ -289,7 +289,7 @@ type Player struct {
 }
 ```
 
-产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更和**显式 delete intent**，在 ownership marker/lock fence/route epoch 下冻结完整远端 commit，并只在权威提交确认后推进版本。删除意图不再由 `IsRemoved()` 反推，因此 rollback 不会提前污染内存生命周期。`sync=true` 还可声明 `syncTopic` 与**一个** packer 工厂：`subjectPacker` 是现行写法，`syncPacker` 是旧写法的别名，
+产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更和**显式 delete intent**，在 ownership marker/lock fence/route epoch 下冻结完整远端 commit，并只在权威提交确认后推进版本。删除意图不再由 `IsRemoved()` 反推，因此 rollback 不会提前污染内存生命周期。`sync=true` 还可声明 `syncNamespace` 与**一个** packer 工厂：`subjectPacker` 是现行写法，`syncPacker` 是旧写法的别名，
 两者都落到 Core 的 `entity.EntitySyncBuilderParam.PackerFactory`（签名 `func(entity.IThreadSafeEntity) entity.SubjectSyncPacker`）。
 同时写两个会当场报错——一个字段不能有两个值；没写 `sync=true` 却写了 packer 同样报错。生成物只写 Core 真有的三个字段
 （`Enabled` / `Topic` / `PackerFactory`），并由 `scripts/entity-sync-runtime.sh` 对着钉住的 core 编译 + 构建实体验证（RR-20260918-01）。

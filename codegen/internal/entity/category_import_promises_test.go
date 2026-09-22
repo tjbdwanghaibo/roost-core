@@ -13,7 +13,7 @@ import (
 // U-0166 · C2 · RR-20260910-05：category 引用业务包常量时,生成物必须自己导入那个包。
 //
 // Go 的 import 作用域是单个文件,源文件导入 view 不能替代生成文件导入 view。
-// collectEntityImports 收集了 EntityKind、SyncTopic、packer、component、dao 的限定包,
+// collectEntityImports 收集了 EntityKind、SyncNamespace、packer、component、dao 的限定包,
 // M-05 把 category 加进标记时漏了它:生成成功,消费者编译报 undefined: view。
 //
 // 断言方式是解析生成物、把每一个 pkg.Sel 限定名都要求有对应 import,而不是只找某个字符串 ——

@@ -191,7 +191,7 @@ func TestInitEntitySyncInstallsContentState(t *testing.T) {
 	}
 	bp := &EntityBuilderParam{Sync: EntitySyncBuilderParam{
 		Enabled: true,
-		Topic:   "factory.subject",
+		Namespace:   "factory.subject",
 		PackerFactory: func(IThreadSafeEntity) SubjectSyncPacker {
 			return SubjectSyncPackFunc{
 				Snapshot: func(SyncProfile) (FrozenSyncPayload, error) {

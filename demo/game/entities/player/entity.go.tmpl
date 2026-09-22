@@ -7,12 +7,12 @@ import (
 
 const EntityKindPlayer entity.EntityKind = 1
 
-// SyncTopicPlayer names the subject stream a replicated Player belongs to.
-// The marker below repeats the literal because a marker is not Go: syncTopic
+// SyncNamespacePlayer is the routing key every update of a replicated Player carries on the wire.
+// The marker below repeats the literal because a marker is not Go: syncNamespace
 // takes a topic name or a package-qualified constant, and a bare identifier
 // is refused rather than quoted into the string of its own name
 // (RR-20260918-07).
-const SyncTopicPlayer = "player"
+const SyncNamespacePlayer = "player"
 
 // IPlayerEntity is the lock-safe business view used by Nest handlers.
 type IPlayerEntity interface{ entity.IThreadSafeEntity }
@@ -50,7 +50,7 @@ type IPlayerFullEntity interface {
 // deliberate — a transaction that changed three fields should produce one
 // delta, not three.
 //
-//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer sync=true syncTopic="player" subjectPacker=NewPlayerSyncPacker
+//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker
 type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager

@@ -45,6 +45,12 @@ type session struct {
 	free        []uint16
 	next        uint16
 
+	// held: open, subscribing, but not yet receiving. Nothing is encoded for
+	// a held session; the policy says ReadySession when the client can take
+	// frames (it has installed its decoder), and the first frame after that
+	// is a FrameFull in a fresh epoch.
+	held bool
+
 	framesSent uint64
 }
 
@@ -52,7 +58,7 @@ type session struct {
 // keep it only once the frames were admitted: a transport that asks for a
 // retry must find the session exactly as it was.
 func (s *session) clone() *session {
-	next := &session{id: s.id, epoch: s.epoch, tick: s.tick, next: s.next, framesSent: s.framesSent,
+	next := &session{id: s.id, epoch: s.epoch, tick: s.tick, next: s.next, framesSent: s.framesSent, held: s.held,
 		objects: make(map[int64]core.ObjectRef, len(s.objects)), generations: make(map[uint16]uint16, len(s.generations)),
 		free: append([]uint16(nil), s.free...)}
 	for k, v := range s.objects {

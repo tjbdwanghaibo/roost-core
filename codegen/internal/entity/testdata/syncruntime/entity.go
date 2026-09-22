@@ -10,7 +10,7 @@ import (
 
 const EntityKindAvatar entity.EntityKind = 141
 
-const SyncTopicAvatar = "avatar"
+const SyncNamespaceAvatar = "avatar"
 
 func init() {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: EntityKindAvatar, Category: 4})
@@ -32,7 +32,7 @@ func (avatarPacker) PackSubjectDelta(entity.SyncProfile, uint64) (entity.FrozenS
 	return entity.FrozenSyncPayload{}, nil
 }
 
-//roost:entity entityKind=EntityKindAvatar sync=true syncTopic="avatar" subjectPacker=AvatarPacker
+//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace="avatar" subjectPacker=AvatarPacker
 type Avatar struct {
 	*entity.EntityBase
 	entity.ComponentManager

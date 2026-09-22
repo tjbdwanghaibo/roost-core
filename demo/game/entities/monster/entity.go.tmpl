@@ -7,8 +7,8 @@ import (
 
 const EntityKindMonster entity.EntityKind = 4
 
-// SyncTopicMonster names the subject stream a replicated monster belongs to.
-const SyncTopicMonster = "monster"
+// SyncNamespaceMonster is the routing key every update of a replicated monster carries on the wire.
+const SyncNamespaceMonster = "monster"
 
 // Monster is a thing the scene spawns, replicates and takes away again.
 //
@@ -26,7 +26,7 @@ const SyncTopicMonster = "monster"
 // yet; deciding it now is cheaper than deciding it after the first monster id
 // exists, because the rank is encoded in the id.
 //
-//roost:entity id=4 entityKind=EntityKindMonster category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral sync=true syncTopic="monster" subjectPacker=NewMonsterSyncPacker
+//roost:entity id=4 entityKind=EntityKindMonster category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral sync=true syncNamespace="monster" subjectPacker=NewMonsterSyncPacker
 type Monster struct {
 	*entity.EntityBase
 	entity.ComponentManager

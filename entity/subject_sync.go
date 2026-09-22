@@ -133,21 +133,25 @@ type SubjectSyncCreateParam struct {
 // state contains content only; subscriber membership and delivery live in the
 // entitysync coordinator.
 type EntitySyncCreateParam struct {
-	Enabled    bool
-	EntityID   int64
-	Topic      string
+	Enabled bool
+	EntityID int64
+	// Namespace travels on the wire with every update of this subject and is
+	// the client's routing key ("player", "monster", …). It is the only
+	// grouping the replication layer knows about: rooms and areas are
+	// policies that decide who subscribes, not labels on the frame.
+	Namespace  string
 	EntityKind uint32
 	Packer     SubjectSyncPacker
 }
 
 type EntitySyncBuilderParam struct {
 	Enabled       bool
-	Topic         string
+	Namespace     string
 	PackerFactory func(IThreadSafeEntity) SubjectSyncPacker
 }
 
 func (p EntitySyncBuilderParam) toCreateParam(e IThreadSafeEntity) EntitySyncCreateParam {
-	ret := EntitySyncCreateParam{Enabled: p.Enabled, Topic: p.Topic}
+	ret := EntitySyncCreateParam{Enabled: p.Enabled, Namespace: p.Namespace}
 	if e != nil {
 		ret.EntityID = e.ID()
 		ret.EntityKind = uint32(e.GetEntityKind())

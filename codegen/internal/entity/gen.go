@@ -54,7 +54,7 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 		"deref":              derefType,
 		"ctor":               constructorName,
 		"quote":              quoteString,
-		"syncTopic":          syncTopicExpr,
+		"syncNamespace":      syncNamespaceExpr,
 		"syncPackerFactory":  syncPackerFactoryExpr,
 		"daoCollectionConst": daoCollectionConstExpr,
 		"hasMethod":          hasMethod,
@@ -222,14 +222,14 @@ func syncPackerFactoryExpr(e EntityDef) string {
 	return e.SyncPacker
 }
 
-// syncTopicExpr renders the marker's value. Three spellings reach here, and
-// parse.go has already refused the fourth (a bare identifier, which used to be
-// quoted into the string of its own name — RR-20260918-07):
+// syncNamespaceExpr renders the marker's value. Three spellings reach here,
+// and parse.go has already refused the fourth (a bare identifier, which used
+// to be quoted into the string of its own name — RR-20260918-07):
 //
-//	syncTopic=player               → "player"
-//	syncTopic="Player"             → "Player"      (already a literal)
-//	syncTopic=clientsync.Topic     → clientsync.Topic
-func syncTopicExpr(s string) string {
+//	syncNamespace=player               → "player"
+//	syncNamespace="Player"             → "Player"      (already a literal)
+//	syncNamespace=clientsync.Namespace → clientsync.Namespace
+func syncNamespaceExpr(s string) string {
 	if s == "" {
 		return `""`
 	}
@@ -392,7 +392,7 @@ func register{{.Entity.Name}}Entity() {
 {{- if .Entity.Sync}}
 			Sync: entity.EntitySyncBuilderParam{
 				Enabled: true,
-				Topic:   {{syncTopic .Entity.SyncTopic}},
+				Namespace: {{syncNamespace .Entity.SyncNamespace}},
 {{- if syncPackerFactory .Entity}}
 				PackerFactory: {{syncPackerFactory .Entity}},
 {{- end}}

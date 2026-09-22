@@ -26,7 +26,7 @@ type EntityDef struct {
 	Lifetime        string // entity.EntityLifetime constant expression
 	NoPersist       bool   // EntityBase AutoPersist returns false
 	Sync            bool   // enable entity base sync by default
-	SyncTopic       string // optional sync topic for generated builder
+	SyncNamespace   string // optional sync namespace (the wire routing key) for the generated builder
 	SyncPacker      string // optional entity.EntitySyncBuilderParam.PackerFactory expression
 	SubjectPacker   string // optional observer-free SubjectSyncPacker factory expression
 	Components      []ComponentField
@@ -211,7 +211,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent.NoPersist = parseBoolParam(m.params["noPersist"])
 					ent.Lifetime = parseLifetimeParam(m.params["lifetime"], ent.NoPersist, ent.RemotePolicy)
 					ent.Sync = parseBoolParam(m.params["sync"])
-					ent.SyncTopic = m.params["syncTopic"]
+					ent.SyncNamespace = m.params["syncNamespace"]
 					ent.SyncPacker = m.params["syncPacker"]
 					ent.SubjectPacker = m.params["subjectPacker"]
 					// Core takes exactly one packer factory
@@ -256,7 +256,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 
 // markerKeys is every parameter the entity marker understands. `id` is
 // written by `roost add entity` and consumed by the registry generator.
-var markerKeys = []string{"id", "entityKind", "category", "remote", "noPersist", "lifetime", "sync", "syncTopic", "syncPacker", "subjectPacker"}
+var markerKeys = []string{"id", "entityKind", "category", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker"}
 
 // parseMarkerParams parses key=value pairs and refuses anything else: a typo
 // in a key (`remot=managed`) or a bare flag (`noPersist`) used to be read as
@@ -267,6 +267,12 @@ func parseMarkerParams(s string) (map[string]string, error) {
 		kv := strings.SplitN(p, "=", 2)
 		if len(kv) != 2 || kv[0] == "" {
 			return nil, fmt.Errorf("parameter %q must be key=value (known keys: %s)", p, strings.Join(markerKeys, ", "))
+		}
+		if kv[0] == "syncTopic" {
+			// Renamed with ARCH-10: the value is the wire namespace every
+			// update of the subject carries, and "topic" suggested a bus that
+			// does not exist. A silent alias would hide the rename.
+			return nil, fmt.Errorf("parameter %q was renamed: write syncNamespace=%s", p, kv[1])
 		}
 		if !slices.Contains(markerKeys, kv[0]) {
 			return nil, fmt.Errorf("unknown parameter %q (known keys: %s)", kv[0], strings.Join(markerKeys, ", "))
@@ -291,8 +297,8 @@ func validateMarkerValues(params map[string]string) error {
 	if v, ok := params["category"]; ok && !validCategoryParam(v) {
 		return fmt.Errorf(`category=%q is not a category constant expression (e.g. entity.EntityCategoryOther, view.EntityCategoryPlayer, EntityCategoryWorld)`, v)
 	}
-	if v, ok := params["syncTopic"]; ok {
-		if err := validateSyncTopicParam(v); err != nil {
+	if v, ok := params["syncNamespace"]; ok {
+		if err := validateSyncNamespaceParam(v); err != nil {
 			return err
 		}
 	}
@@ -402,7 +408,7 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 	// source file importing it does not help; omitting it here generated a
 	// file that used the package without importing it (RR-20260910-05).
 	add(ent.Category)
-	add(ent.SyncTopic)
+	add(ent.SyncNamespace)
 	add(ent.SyncPacker)
 	add(ent.SubjectPacker)
 	for _, comp := range ent.Components {
@@ -712,20 +718,21 @@ func exprToString(expr ast.Expr) string {
 	}
 }
 
-// validateSyncTopicParam refuses the one spelling that used to be accepted and
-// silently mean something else.
+// validateSyncNamespaceParam refuses the one spelling that used to be
+// accepted and silently mean something else.
 //
-// syncTopic takes a topic NAME or a package-qualified constant. A bare
+// syncNamespace takes a NAME or a package-qualified constant. A bare
 // identifier is neither: it looks like a Go constant and was written out as
-// the string of its own name, so `syncTopic=SyncTopicPlayer` produced
-// Topic: "SyncTopicPlayer" and the entity subscribed to a topic nobody chose.
-// Nothing failed — not the generator, not the compiler — which is why this is
-// a refusal and not a documentation note (RR-20260918-07).
+// the string of its own name, so `syncNamespace=SyncNamespacePlayer` would
+// produce Namespace: "SyncNamespacePlayer" and every update of the entity
+// would carry a routing key nobody chose. Nothing failed — not the generator,
+// not the compiler — which is why this is a refusal and not a documentation
+// note (RR-20260918-07, then called syncTopic).
 //
 // What still passes: anything that cannot be mistaken for a constant (a
 // lower-case or quoted literal) and anything that unambiguously is one (a
 // qualified name).
-func validateSyncTopicParam(v string) error {
+func validateSyncNamespaceParam(v string) error {
 	value := strings.TrimSpace(v)
 	if value == "" || strings.ContainsAny(value, "\"'`") || strings.Contains(value, ".") {
 		return nil
@@ -739,5 +746,5 @@ func validateSyncTopicParam(v string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf(`syncTopic=%s is ambiguous: a bare identifier is written out as the literal %q, not as the constant's value. Write the topic in quotes (syncTopic="%s"), write it in lower case, or name a package-qualified constant (syncTopic=pkg.%s)`, value, value, value, value)
+	return fmt.Errorf(`syncNamespace=%s is ambiguous: a bare identifier is written out as the literal %q, not as the constant's value. Write the namespace in quotes (syncNamespace="%s"), write it in lower case, or name a package-qualified constant (syncNamespace=pkg.%s)`, value, value, value, value)
 }

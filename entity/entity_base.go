@@ -157,7 +157,7 @@ func (e *EntityBase) EnableSync(param EntitySyncCreateParam) {
 		param.EntityID = e.id
 	}
 	e.SetSyncState(NewSubjectSyncState(SubjectSyncCreateParam{
-		Enabled: param.Enabled, SubjectID: param.EntityID, Namespace: param.Topic,
+		Enabled: param.Enabled, SubjectID: param.EntityID, Namespace: param.Namespace,
 		SubjectKind: param.EntityKind, Packer: param.Packer,
 	}))
 }

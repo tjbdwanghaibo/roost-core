@@ -39,7 +39,7 @@ func registerPlayerEntity() {
 			Lifetime:     entity.EntityLifetimePersistedHotCold,
 			Sync: entity.EntitySyncBuilderParam{
 				Enabled:       true,
-				Topic:         "SyncTopicPlayer",
+				Namespace:     "player",
 				PackerFactory: clientsync.PlayerSubjectPacker,
 			},
 		})

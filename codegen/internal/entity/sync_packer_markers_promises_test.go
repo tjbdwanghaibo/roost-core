@@ -23,9 +23,9 @@ func writeSyncMarkerSource(t *testing.T, dir, name, body string) {
 
 func TestGeneratedSyncBlockOnlyNamesFieldsCoreHas(t *testing.T) {
 	for name, marker := range map[string]string{
-		"current spelling": "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\" subjectPacker=AvatarPacker",
-		"legacy spelling":  "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\" syncPacker=AvatarPacker",
-		"no packer":        "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\"",
+		"current spelling": "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\" subjectPacker=AvatarPacker",
+		"legacy spelling":  "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\" syncPacker=AvatarPacker",
+		"no packer":        "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\"",
 	} {
 		dir := t.TempDir()
 		writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
@@ -33,7 +33,7 @@ func TestGeneratedSyncBlockOnlyNamesFieldsCoreHas(t *testing.T) {
 import "github.com/tjbdwanghaibo/roost-core/entity"
 
 const EntityKindAvatar entity.EntityKind = 141
-const SyncTopicAvatar = "avatar"
+const SyncNamespaceAvatar = "avatar"
 
 func AvatarPacker(entity.IThreadSafeEntity) entity.SubjectSyncPacker { return nil }
 
@@ -60,8 +60,8 @@ type Avatar struct {
 		// gofmt aligns the struct literal, so compare with the padding
 		// collapsed rather than against one exact spelling.
 		collapsed := strings.Join(strings.Fields(generated), " ")
-		if !strings.Contains(collapsed, "Enabled: true") || !strings.Contains(collapsed, `Topic: "avatar"`) {
-			t.Errorf("%s: sync block lost its enabled/topic wiring:\n%s", name, generated)
+		if !strings.Contains(collapsed, "Enabled: true") || !strings.Contains(collapsed, `Namespace: "avatar"`) {
+			t.Errorf("%s: sync block lost its enabled/namespace wiring:\n%s", name, generated)
 		}
 		wantFactory := strings.Contains(marker, "Packer=")
 		if got := strings.Contains(collapsed, "PackerFactory: AvatarPacker"); got != wantFactory {

@@ -290,6 +290,86 @@ func (m *Manager) OpenSession(id SessionID) error {
 	return nil
 }
 
+// OpenHeldSession admits a receiver that is not ready to receive yet: it can
+// be subscribed, but no frame is encoded for it until ReadySession. A client
+// that installs its decoder only after the login answer wants this — the
+// first snapshot must not race the decoder (ARCH-10, "session ready").
+func (m *Manager) OpenHeldSession(id SessionID) error {
+	if err := m.OpenSession(id); err != nil {
+		return err
+	}
+	return m.HoldSession(id)
+}
+
+// HoldSession stops frames to an open session and starts it over: every
+// subscription it holds goes back to "needs a snapshot" and the next frame it
+// gets (after ReadySession) opens a new epoch with a FrameFull. Use it when
+// the receiver has lost its state — a reconnect, a client-side reset.
+func (m *Manager) HoldSession(id SessionID) error {
+	if m == nil {
+		return ErrManagerClosed
+	}
+	m.mu.Lock()
+	sess, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return ErrSessionUnknown
+	}
+	fresh := newSession(id)
+	fresh.epoch = sess.epoch + 1
+	fresh.framesSent = sess.framesSent
+	fresh.held = true
+	m.sessions[id] = fresh
+	subjects := make([]*subject, 0, len(m.subjects))
+	for _, subj := range m.subjects {
+		subjects = append(subjects, subj)
+	}
+	m.mu.Unlock()
+	for _, subj := range subjects {
+		subj.mu.Lock()
+		if sub, subscribed := subj.subscribers[id]; subscribed {
+			switch sub.kind {
+			case kindLeaving:
+				// It was owed a remove; with its state gone there is nothing to remove.
+				delete(subj.subscribers, id)
+			default:
+				sub.kind, sub.baseVersion = kindSnapshot, 0
+			}
+		}
+		subj.mu.Unlock()
+	}
+	return nil
+}
+
+// ReadySession lets frames flow to a held session. Every subject it is
+// subscribed to is scheduled so the snapshots go out on the next tick.
+func (m *Manager) ReadySession(id SessionID) error {
+	if m == nil {
+		return ErrManagerClosed
+	}
+	m.mu.Lock()
+	sess, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return ErrSessionUnknown
+	}
+	sess.held = false
+	subjects := make([]*subject, 0, len(m.subjects))
+	for _, subj := range m.subjects {
+		subjects = append(subjects, subj)
+	}
+	m.mu.Unlock()
+	for _, subj := range subjects {
+		subj.mu.Lock()
+		_, subscribed := subj.subscribers[id]
+		subj.mu.Unlock()
+		if subscribed {
+			m.markPending(subj.id)
+		}
+	}
+	return nil
+}
+
 // CloseSession forgets a receiver: its frame state goes, and every subject
 // drops its subscription without owing it a remove — there is nobody to send
 // one to. The policy that subscribed it is expected to have forgotten it
@@ -422,7 +502,9 @@ func (m *Manager) Unsubscribe(session SessionID, subjectID int64) error {
 	if !ok {
 		return ErrSubscriptionNotFound
 	}
-	if existing.kind == kindSnapshot {
+	if sess := m.session(session); sess == nil || sess.held || existing.kind == kindSnapshot {
+		// Nothing was ever delivered to this session for this subject (or
+		// its state is gone): there is no object to take back.
 		delete(subj.subscribers, session)
 		if subj.retiring && len(subj.subscribers) == 0 {
 			defer m.forget(subjectID)
@@ -514,10 +596,17 @@ func (m *Manager) Flush(ctx context.Context) error {
 			continue
 		}
 		subj.mu.Lock()
-		// Sessions that closed since are pruned here: their entries owe nothing.
+		// Sessions that closed since are pruned here: their entries owe
+		// nothing. Held sessions are skipped for this tick — ReadySession
+		// schedules the subject again when they can receive.
+		held := make(map[SessionID]bool)
 		for sid := range subj.subscribers {
-			if m.session(sid) == nil {
+			sess := m.session(sid)
+			switch {
+			case sess == nil:
 				delete(subj.subscribers, sid)
+			case sess.held:
+				held[sid] = true
 			}
 		}
 		snapshotProfiles := subj.profilesLocked(kindSnapshot)
@@ -543,6 +632,9 @@ func (m *Manager) Flush(ctx context.Context) error {
 				prepared = append(prepared, item)
 				snapshots, deltas := item.Snapshots(), item.Updates()
 				for sid, sub := range subj.subscribers {
+					if held[sid] {
+						continue
+					}
 					switch sub.kind {
 					case kindSnapshot:
 						if update, ok := updateFor(snapshots, sub.profile); ok {
@@ -562,7 +654,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 			}
 		}
 		for sid, sub := range subj.subscribers {
-			if sub.kind == kindLeaving {
+			if sub.kind == kindLeaving && !held[sid] {
 				frames[sid] = append(frames[sid], frameEntry{subjectID: id, kind: entryRemove})
 				settlements[sid] = append(settlements[sid], settlement{subj: subj, remove: true})
 			}
@@ -803,6 +895,7 @@ func (m *Manager) LastError() error {
 type ManagerStats struct {
 	Subjects           int
 	Sessions           int
+	HeldSessions       int
 	Subscriptions      int
 	Pending            int
 	FramesAdmitted     uint64
@@ -822,7 +915,12 @@ func (m *Manager) Stats() ManagerStats {
 	for _, subj := range m.subjects {
 		subjects = append(subjects, subj)
 	}
-	sessions := len(m.sessions)
+	sessions, heldSessions := len(m.sessions), 0
+	for _, sess := range m.sessions {
+		if sess.held {
+			heldSessions++
+		}
+	}
 	m.mu.RUnlock()
 	subscriptions := 0
 	for _, subj := range subjects {
@@ -834,7 +932,7 @@ func (m *Manager) Stats() ManagerStats {
 	pending := len(m.pending)
 	m.pendingMu.Unlock()
 	return ManagerStats{
-		Subjects: len(subjects), Sessions: sessions, Subscriptions: subscriptions, Pending: pending,
+		Subjects: len(subjects), Sessions: sessions, HeldSessions: heldSessions, Subscriptions: subscriptions, Pending: pending,
 		FramesAdmitted: m.framesAdmitted.Load(), SessionsLost: m.sessionsLost.Load(),
 		DurabilityDeferred: m.deferred.Load(), FlushFailures: m.flushFailures.Load(),
 		MaxSubjects: m.config.MaxSubjects, MaxSessions: m.config.MaxSessions,

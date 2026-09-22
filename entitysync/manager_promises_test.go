@@ -467,3 +467,74 @@ func TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit(t *testing.T) {
 		t.Fatalf("a session over its object budget was not closed: %+v", manager.Stats())
 	}
 }
+
+// held 的会话可以订阅但收不到帧；Ready 之后第一帧才是快照。这就是"会话 ready 再开始"：
+// 客户端在登录应答之后才装解码器，快照不能抢在它前面。
+func TestAHeldSessionReceivesNothingUntilItIsReady(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{})
+	packs := 0
+	state := testSubject(t, 3001, &packs)
+	if err := manager.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.OpenHeldSession(1); err != nil {
+		t.Fatal(err)
+	}
+	mustSubscribe(t, manager, 1, 3001, entity.SyncProfile{})
+	state.MarkDirty(1)
+	mustFlush(t, manager)
+	mustFlush(t, manager)
+	if frames := transport.take(1); len(frames) != 0 {
+		t.Fatalf("a held session received %d frame(s)", len(frames))
+	}
+	if manager.Stats().HeldSessions != 1 || manager.Stats().Pending != 0 {
+		t.Fatalf("stats while held: %+v (a held session must not keep the subject pending every tick)", manager.Stats())
+	}
+	if err := manager.ReadySession(1); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, manager)
+	frame := oneFrame(t, transport, 1)
+	if frame.frame.Kind != core.FrameFull || frame.objects[3001] != core.ObjectCreate || !frame.updates[3001].Full {
+		t.Fatalf("the first frame after ready is not a snapshot: %v %+v", frame.frame.Kind, frame.objects)
+	}
+}
+
+// Hold 一个已经在收帧的会话 = 让它重新开始：新 epoch、全部重发快照，中间什么都不发。
+func TestHoldingALiveSessionStartsItOverInANewEpoch(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{})
+	packs := 0
+	state := testSubject(t, 3002, &packs)
+	if err := manager.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	open(t, manager, 1)
+	mustSubscribe(t, manager, 1, 3002, entity.SyncProfile{})
+	mustFlush(t, manager)
+	first := oneFrame(t, transport, 1)
+	state.MarkDirty(1)
+	mustFlush(t, manager)
+	transport.take(1)
+
+	if err := manager.HoldSession(1); err != nil {
+		t.Fatal(err)
+	}
+	state.MarkDirty(2)
+	mustFlush(t, manager)
+	if frames := transport.take(1); len(frames) != 0 {
+		t.Fatalf("a held session received %d frame(s)", len(frames))
+	}
+	if err := manager.ReadySession(1); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, manager)
+	again := oneFrame(t, transport, 1)
+	if again.frame.Kind != core.FrameFull || again.frame.Epoch != first.frame.Epoch+1 || again.objects[3002] != core.ObjectCreate {
+		t.Fatalf("after hold+ready the session did not start over: kind=%v epoch=%d (was %d) objects=%v", again.frame.Kind, again.frame.Epoch, first.frame.Epoch, again.objects)
+	}
+	if state.PendingDirty() {
+		t.Fatal("the subject stayed dirty after the resent snapshot")
+	}
+}

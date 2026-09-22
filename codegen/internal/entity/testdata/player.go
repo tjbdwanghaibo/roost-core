@@ -100,7 +100,7 @@ func init() {
 
 // --- Entity definition (手写) ---
 
-//roost:entity entityKind=EntityKindPlayer sync=true syncTopic="player" subjectPacker=clientsync.PlayerSubjectPacker
+//roost:entity entityKind=EntityKindPlayer sync=true syncNamespace="player" subjectPacker=clientsync.PlayerSubjectPacker
 type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager
@@ -112,4 +112,4 @@ type Player struct {
 	mail   *MailDao         `dao:"mails"`
 }
 
-const SyncTopicPlayer = "player"
+const SyncNamespacePlayer = "player"
