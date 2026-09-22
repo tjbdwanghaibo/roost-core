@@ -12,7 +12,7 @@
 接入层 -> 生成 Sender -> Nest handler -> Entity/Component/DAO
                                       -> Remote Entity/Saga（需要跨域时）
 DAO mutation -> Nest transaction -> Data Engine WAL -> Mongo projection/outbox
-Entity mutation -> entitysync/replication 或 lockstep -> 客户端
+Entity mutation -> entitysync.Manager（每会话一帧）或 lockstep -> 客户端
 ```
 
 ## 2. Service 与 Mod
@@ -29,7 +29,7 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 | 普通实体服 | mongo、nats、dataengine、nest、ops |
 | 跨服实体 | 普通实体服 + sync、remote_entity |
 | 长事务协调器 | mongo、nats、dataengine、saga、ops |
-| 状态同步房间 | nats、sync、replication transport；业务显式装 RoomManager |
+| 状态同步 | player 接入层或 nettransport 作为 `entitysync.Transport`；业务装 `entitysync.Manager`，AOI / room 作为订阅政策 |
 | 确定性帧同步 | lockstep + KCP/QUIC/UDP transport |
 
 ## 3. Entity、Component 与 DAO

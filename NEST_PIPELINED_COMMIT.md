@@ -95,9 +95,10 @@ type PipelinedTransactionCommitter interface {
 新状态；实体启用 subject sync 时 `SubjectSyncState` 同步持有一份副本（避免 FlushSubject 签名
 变更与包依赖环）。
 
-**entitysync**：`SubscriptionCoordinator.SetDurableWatermark(func() uint64)` 注入水位线。
-`FlushSubject` 在 Prepare 前检查 `state.LastCommitLSN() <= watermark()`，不满足则本 tick 跳过、
-dirty 保留、下 tick 重试。fsync 组提交是毫秒级、同步 tick 是几十毫秒级，闸门延迟在噪声水平。
+**entitysync**：`entitysync.ManagerConfig.DurableWatermark`（`func() uint64`）注入水位线。
+`Manager.Flush` 对每个 subject 的捕获（delta 与快照都带 `CommitLSN`，与内容同一把实体锁内取得）判定
+`CommitLSN <= watermark()`，不满足则整个 subject 本 tick 跳过、dirty 与待发快照保留、下 tick 重试。
+fsync 组提交是毫秒级、同步 tick 是几十毫秒级，闸门延迟在噪声水平。
 
 **Data Engine**：Mongo projection 只消费已经进入统一 WAL 的记录，因此不存在独立 Entity
 snapshot 抢先落地的第二条路径。`LastCommitLSN` 只用于约束同步等外化行为，不再驱动旧
@@ -137,7 +138,7 @@ Checkpoint Mod。
 - prod 配置门禁初期要求 pipelined 显式白名单。
 - 装配接线（kit >= 对应版本）：
   - Data Engine Mod 独占 WAL，并在 recovery barrier 完成后提供 committer；
-  - entitysync 闸门一行接线：`coordinator.SetDurableWatermark(runtime.DurableWatermark())`；
+  - entitysync 闸门一行接线：`entitysync.ManagerConfig{DurableWatermark: dataEngineMod.DurableLSN}`；
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
     `nest.pipelined.allowlist` / `nest.pipelined.async` /
     `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`），
@@ -146,7 +147,7 @@ Checkpoint Mod。
   - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
     时长，**Phase 2 的决策输入**：若其占 worker 忙时比例持续偏高且加 worker 无效，才立项
     Phase 2；
-  - `entitysync_flush_gate_deferred_total` —— 同步分发被水位线推迟的次数。
+  - `entitysync_durability_gate_deferred_total` —— 同步分发被水位线推迟的 subject 次数。
 
 ## 10. Phase 2（决策记录：2026-08-25 灰度试点数据）
 
@@ -237,7 +238,7 @@ Phase 2 异步完成经 `NestOptionWithPipelinedAsyncCompletion` 单独开关。
 3. **默认翻转，显式退出**。allowlist 语义反转：新增 `NestOptionWithStrictList`（规划）声明
    仍需 strict 的 handler（跨实体 remote write batch 自动豁免，广播天然无提前放锁），其余
    handler 默认 pipelined。翻转前置条件：≥ 两个发布周期内 slow.total 无新增、回放/对账
-   （entitysync 的 LastCommitLSN 闸门）零分叉。
+   （entitysync 的 CommitLSN 闸门）零分叉。
 4. **收尾**。strict 档保留为逃生舱（配置可回退，无需发版）；文档把"默认即 pipelined"写入
    Host/handler 编写规范——AfterCommit 在完成池上运行、无实体锁、无请求上下文（§10 的契约
    从"选择启用者须知"升级为"默认行为"）。

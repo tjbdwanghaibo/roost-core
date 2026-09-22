@@ -81,11 +81,11 @@ Saga store 原子保存实例状态与 outbox。Coordinator 通过 lease 获取�
 
 ## 9. 状态同步链路
 
-Entity mutation 先产生 sync dirty，再由 entitysync 管理 observer/interest。prepare 阶段构建将要发布的不可变 payload，commit 后才推进版本和 baseline，发送失败不会把未送达数据错误标为已确认。
+Entity mutation 先产生 sync dirty；`entitysync.Manager`（进程一个）在 tick 里对每个 pending subject 在实体锁内 `PrepareTick`——给在线会话的 delta 与给新订阅者的快照同一版本、同一 CommitLSN，每个 profile 一次 pack；commit 后才推进版本，发送失败不会把未送达数据错误标为已确认。
 
-syncstream 提供有序版本流、分片重组、checksum、ACK 和 resync；replication 提供房间 tick、全局 snapshot、delta、LOD、baseline 和传输分类。可靠通道承载基线、关键事件和重同步；latest-only datagram 丢弃过时帧。ControlPlane 校验 room/epoch/tick/sequence/checksum，旧 epoch 与回退序号直接拒绝。
+subject 自己持有订阅者表（session → profile / kind / baseVersion）；捕获按会话聚合成**一帧**（statesync 帧，Epoch/Tick 是会话时钟），在会话状态的副本上编码、准入成功才采纳。传输只有两种失败：`ErrRetryLater`（整体不可用，tick 作废重来）与其他（该会话关闭并回调 `SessionLost`）。持久化门槛按 CommitLSN 挡整个 subject。room、AOI、直接绑定是订阅政策，不是机制的一部分。
 
-RoomManager 对房间数、subject、subscriber、session 队列和空闲时间施加上限。共享 worker 只做有界工作，慢消费者按 session 驱逐，不能阻塞整个房间或全局 transport。
+syncstream 提供服务间的有序版本流、分片重组、checksum、ACK 和 resync，跑在 ISyncBus 上，与客户端方向的实体同步无关。
 
 ## 10. Lockstep 链路
 

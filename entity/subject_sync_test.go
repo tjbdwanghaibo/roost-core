@@ -149,12 +149,18 @@ func TestSubjectSyncSnapshotDoesNotAdvanceVersion(t *testing.T) {
 	if err := prepared.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	snapshots, err := state.CaptureSnapshot([]SyncProfile{{Key: "near"}}, SyncFullReasonResync)
+	// A snapshot for a new subscriber on a clean subject: captured at the
+	// current version, and committing it leaves the version alone.
+	snapshotOnly, err := state.PrepareTick(nil, []SyncProfile{{Key: "near"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshots) != 1 || snapshots[0].Version != 1 || snapshots[0].BaseVersion != 1 || state.Version() != 1 {
-		t.Fatalf("snapshot advanced shared version: snapshot=%+v state=%d", snapshots, state.Version())
+	snapshots := snapshotOnly.Snapshots()
+	if len(snapshotOnly.Updates()) != 0 || len(snapshots) != 1 || snapshots[0].Version != 1 || snapshots[0].BaseVersion != 1 || !snapshots[0].Full {
+		t.Fatalf("snapshot-only capture: updates=%+v snapshots=%+v", snapshotOnly.Updates(), snapshots)
+	}
+	if err := snapshotOnly.Commit(); err != nil || state.Version() != 1 {
+		t.Fatalf("committing a snapshot-only capture moved the version: err=%v version=%d", err, state.Version())
 	}
 }
 

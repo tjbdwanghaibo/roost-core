@@ -31,7 +31,7 @@
 | `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
 | `dataengine` | `Tracker`、Put/Patch/Delete mutation、聚合 Load、schema migration、Saga/Remote commit 契约 | Entity 状态统一进入 Nest transaction 与 kit Data Engine WAL |
 | `lock`、`worker`、`goroutine`、`container`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool；`goroutine` 是协程原语（goroutine-ID、panic 安全包装、MPSC 队列、task pool、并行 map/slice），`container` 是通用容器（分桶表、keymap、对象池、拓扑排序），`misc` 只留跨包小工具（`Hash64` 分片、`Integer` 泛型约束） | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
-| `entitysync`、`syncbus`、`syncstream`、`statesync` | 订阅协调 + prepare/commit 两阶段同步（`entitysync`）、模块间同步总线（`syncbus`）、有序状态流（`syncstream`）、Quake3 风格 delta+LOD 房间状态复制（`statesync`） | 把实体状态推送给客户端或其他服务（状态同步通道） |
+| `entitysync`、`syncbus`、`syncstream`、`statesync` | 实体同步的唯一机制——进程一个 Manager、subject 私有订阅、每会话一帧、prepare/commit 两阶段（`entitysync`）、模块间同步总线（`syncbus`）、有序状态流（`syncstream`）、Quake3 风格 delta+LOD 房间状态复制（`statesync`） | 把实体状态推送给客户端或其他服务（状态同步通道） |
 | `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
 | `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
 | `bus`、`event` | NATS 之上的模块级消息 / 轻量 RPC / **JetStream 持久化 RPC**（`CallReliable`，与轻量 RPC 并存）/ 可靠消费（inbox 去重 + 死信 + `bus.dlq.*` 运维命令）；进程内事件总线（self 同步、他人异步） | 服务间与实体间的异步通信 |
@@ -405,12 +405,12 @@ tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调
 
 生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），fsync 次数从每条降到每批——观察者频繁进出的场景不再被逐条 fsync 地板限速。
 
-### 11. 输入帧同步与状态同步：三条通道的取舍 —— `lockstep/`、`entitysync/`、kit `sync/`
+### 11. 输入帧同步与状态同步：两条通道的取舍 —— `lockstep/`、`entitysync/`
 
-roost 的同步能力是三条并列通道，按"谁跑模拟"划分：
+roost 的同步能力是两条并列通道，按"谁跑模拟"划分：
 
-- **entitysync（core）**：按订阅主体推送字段级 delta + LOD，服务端跑模拟，客户端是显示器。通用状态同步。
-- **kit `room/room_broadcast`**（`RoomBroadcaster`）：entitysync 之上的房间批处理前端——固定 tick（默认 50ms）把房间内全部脏主体合成一个**状态帧**下发。它是状态同步的分支，不是帧同步。
+- **entitysync（core）**：按订阅主体推送字段级 delta + LOD，服务端跑模拟，客户端是显示器。通用状态同步。进程一个 `Manager`，subject 自己持有订阅者，
+  固定 tick（默认 50ms）给每个会话**一帧**（它订阅的全部脏主体）；room / AOI 只是决定谁订谁的政策（ARCH-10）。
 - **lockstep（core）+ kit `lockstep/`**：服务端只裁决**输入帧**——`Sequencer` 乐观帧锁定（到点就切帧，永不等慢客户端；缺席即空输入，迟到折入下一未切帧），模拟由客户端确定性执行（定点数学、注入随机、无墙钟——`roost-skill` 运行时天然满足该契约）。带宽与玩家状态规模无关，回放 = 输入历史，反外挂靠关键帧哈希多数派裁决（`DesyncDetector`）。
 
 lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最近 N 帧（`RedundantEncoder`，深度 N 可修复连续 N−1 个丢包），走不可靠 datagram 通道（AEAD UDP）；追帧/重连走可靠通道（KCP/QUIC），按 tick 限速分页（kit `Room.StartCatchup`）。对实时帧广播用 ARQ 重传是用错工具——重传回来的帧已经过期。
@@ -482,7 +482,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 6. **Guard 与实体管理**：`entity/entity_guard.go`（锁序、guard 作用域、release hook）→ `entity/entity_manager.go`、`entity/manager_access.go` + 对应测试。
 7. **Data Engine 契约**：`dataengine/tracker.go` → `dataengine/mutation.go` → `dataengine/store.go`，再到 kit `dataengine/projector.go`、`mongo_store.go`、`entity_repository.go` 与 `migration.go`。
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
-9. **状态同步**：`entity/subject_sync.go` + `entitysync/subscription.go`（prepare/commit 两阶段）→ `syncstream/syncstream.go` → `replication/`（delta+LOD）→ 文档 `ENTITY_SYNC.md`。
+9. **状态同步**：`entity/subject_sync.go`（`PrepareTick`，prepare/commit 两阶段）→ `entitysync/manager.go`（tick、门槛、每会话一帧）→ `entitysync/session.go` + `wire.go`（ObjectRef、statesync 帧）→ 文档 `ENTITY_SYNC.md`；服务间的有序状态流另见 `syncstream/`。
 10. **帧同步（输入帧）**：`lockstep/sequencer.go`（乐观帧锁定）→ `lockstep/wire.go`（冗余广播编码）→ `lockstep/history.go`、`lockstep/desync.go` → `lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `lockstep/room.go`（房间与传输接线）。
 11. **编排与装配**：`saga/engine.go` + `SAGA.md`（`saga/engine_test.go` 开头的 `memoryStore` 与 `TestStoreContract*` 是 Store 实现者的必读规格）→ `bus/bus.go` + `bus/bus_lifecycle_test.go`（生命周期与 subject 布局的权威文档）→ `app/app.go`、`app/registry.go` + `app/example_test.go`（shared/service-specific mod 分层的完整装配样例）。
 12. **语义即测试的推荐清单**：`worker/worker_test.go`（"接纳即执行"不变量的回归，注释写明了原缺陷）、`webroute/route_test.go`（生成路由运行时的完整用法说明书）、`configdata/configdata_test.go`（reload/DryRun/Rollback/listener 回滚）、`etcd/watch_callback_test.go`（无损背压 vs LocalMirror 订阅隔离的选型依据）、`bus/reliable_test.go`（去重按 consumer、DLQ requeue 语义）。

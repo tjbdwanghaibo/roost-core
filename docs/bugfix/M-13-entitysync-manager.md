@@ -20,6 +20,7 @@ room / AOI 只是决定谁订谁的政策。coordinator、RoomBroadcaster、Room
 | 以上四者的 12 个测试文件 | — | 承诺重新落在 `entitysync/manager_promises_test.go`（8 条）与 demo `scene_test.go.tmpl` |
 | codegen `renderReplication` 的 `NewRoomSink` | — | `NewSyncTransport(async) (*entitysync.AsyncTransport, error)` |
 | 协议 `EntitySyncPush.Datagram` | — | 删除；一帧一条可靠推送，datagram 分片通道不再用于实体同步 |
+| `entity.SubjectSyncState.CaptureSnapshot` | — | 删除；`PrepareTick(nil, profiles)` 是同一件事且与 delta 同一次捕获 |
 
 `room/` 保留 `jetstream_syncbus.go` / `nats_syncbus.go`（服务间 ISyncBus，与本线无关）及其测试。
 
@@ -75,3 +76,4 @@ scene: 日志只有 1 × "player unreachable, leaving the scene"；没有任何 
 - datagram 分片通道从实体同步路径移除；`statesync.Reassembler` 与 nettransport 的 datagram 能力保留给别的用途（lockstep）。
 - `syncTopic` / `Namespace` 现在随每个组件下发且是客户端唯一的分流依据（`RoomID` 已是常量）；标记文档改写留给下一轮。
 - 未发版；生成工程钉的 core v1.16.1 与本仓不兼容，发 core 与 codegen 之前不要 `roost project upgrade`。
+- 文档清理（同日第二笔）：`ENTITY_SYNC.md` 重写，`README.md` §11 / 阅读顺序 9、`NEST_PIPELINED_COMMIT.md`、`OBSERVABILITY.md` 指标表、`PRODUCTION_READINESS.md`、`docs/USER_GUIDE.md`、`docs/INTERNALS.md` §9、`kit/README.md`、`lockstep/sequencer.go` 包注释全部改为新形状；历史记录目录（docs/bug、bugfix、history、review、CHANGELOG）保留原文。

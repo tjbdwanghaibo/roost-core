@@ -455,7 +455,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 
 ### syncstream（roost-core）：observer 维度的包流
 
-与 sync/room_* 的分工：**syncstream 跑在 `ISyncBus` 上（服务↔服务）；room_* 跑在 replication transport 上（服务→客户端）**。
+与 entitysync 的分工：**syncstream 跑在 `ISyncBus` 上（服务↔服务）；entitysync 跑在 `entitysync.Transport` 上（服务→客户端）**。
 
 - **发布确认是构造期硬校验**：`RequireConfirmation=true` 且 bus 未实现 `ConfirmedSyncPublisher` → 构造失败（JetStream 实现该能力，纯 NATS 故意不实现）。
 - **压缩阈值触发**（默认走 gzip BestSpeed，编码器池化，>1MiB 的 buffer 不归还池）；**校验和算在压缩前的 JSON 上**，每个分片带同一 checksum 供重组后整体校验。

@@ -6,9 +6,9 @@
 // satisfies).
 //
 // This is INPUT-frame synchronization (lockstep), not to be confused with
-// the state-frame path: entitysync replicates per-subject state deltas and
-// roost-kit's room/room_broadcast batches them into per-room state frames.
-// A lockstep frame carries only what players pressed.
+// the state-frame path: entitysync replicates per-subject state deltas, one
+// frame per session per tick. A lockstep frame carries only what players
+// pressed.
 //
 // The sequencer implements optimistic frame locking: frames are cut on the
 // host's clock, never waiting for slow clients — a missing input is an empty

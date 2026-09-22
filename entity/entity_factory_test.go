@@ -206,9 +206,13 @@ func TestInitEntitySyncInstallsContentState(t *testing.T) {
 	if state == nil || state.SubjectID() != e.ID() || state.Namespace() != "factory.subject" || state.SubjectKind() != uint32(testEntityKind) {
 		t.Fatalf("subject sync state mismatch: %+v", state)
 	}
-	updates, err := state.CaptureSnapshot(nil, SyncFullReasonResync)
-	if err != nil || len(updates) != 1 || updates[0].Payload.Codec() != 7 {
-		t.Fatalf("subject snapshot updates=%+v err=%v", updates, err)
+	prepared, err := state.PrepareTick(nil, []SyncProfile{{}})
+	if err != nil {
+		t.Fatalf("subject snapshot: %v", err)
+	}
+	defer func() { _ = prepared.Abort() }()
+	if updates := prepared.Snapshots(); len(updates) != 1 || updates[0].Payload.Codec() != 7 {
+		t.Fatalf("subject snapshot updates=%+v", updates)
 	}
 }
 

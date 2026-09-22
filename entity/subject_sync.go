@@ -518,59 +518,6 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 	}, nil
 }
 
-func (s *SubjectSyncState) CaptureSnapshot(profiles []SyncProfile, reason uint32) ([]SubjectSyncUpdate, error) {
-	if s == nil {
-		return nil, ErrSubjectSyncClosed
-	}
-	profiles = normalizeSyncProfiles(profiles)
-	if reason == SyncFullReasonNone {
-		reason = SyncFullReasonResync
-	}
-	var updates []SubjectSyncUpdate
-	err := s.withEntityLock(func() error {
-		s.prepareMu.Lock()
-		defer s.prepareMu.Unlock()
-		s.mu.Lock()
-		if !s.enabled {
-			s.mu.Unlock()
-			return ErrSubjectSyncClosed
-		}
-		packer := s.packer
-		subjectID := s.subjectID
-		namespace := s.namespace
-		subjectKind := s.subjectKind
-		version := s.version
-		commitLSN := s.lastCommitLSN.Load() // under the entity lock: consistent with the content
-		s.mu.Unlock()
-		if packer == nil {
-			return ErrSubjectSyncPacker
-		}
-		updates = make([]SubjectSyncUpdate, 0, len(profiles))
-		for _, profile := range profiles {
-			payload, err := packer.PackSubjectSnapshot(profile)
-			if err != nil {
-				return fmt.Errorf("entity: snapshot subject %d profile %q: %w", subjectID, profile.Key, err)
-			}
-			updates = append(updates, SubjectSyncUpdate{
-				SubjectID: subjectID, Namespace: namespace, SubjectKind: subjectKind,
-				Profile: profile, Version: version,
-				BaseVersion: version, Full: true, Reason: reason, Payload: payload,
-				CommitLSN: commitLSN,
-			})
-		}
-		return nil
-	})
-	if err != nil {
-		s.setSubjectSyncError(err)
-		return nil, err
-	}
-	s.setSubjectSyncError(nil)
-	return updates, nil
-}
-
-// SetLastCommitLSN mirrors EntityBase.SetLastCommitLSN for the sync state.
-// Callers normally go through the entity; this is exported for hosts that
-// manage subject sync states without an EntityBase.
 func (s *SubjectSyncState) SetLastCommitLSN(lsn uint64) {
 	if s == nil {
 		return

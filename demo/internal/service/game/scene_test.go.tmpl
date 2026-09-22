@@ -582,13 +582,12 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 
 // The id-space contract, pinned rather than commented.
 //
-// The interest system, the room's subjects and the subscriber refs this
-// bridge builds all carry the **full entity id** — the id that is unique
-// across kinds, as opposed to a unique id, which is only unique within one
-// (a Player 42 and a Monster 42 share it). Core's SubscriberRef stays
-// general: it also addresses servers and groups, so the framework cannot
-// assume every ref holds an entity id. This bridge can, and the one place
-// that leaves that space is the session resolver (W-2026-09-18-06).
+// The interest system and the manager's subjects carry the **full entity
+// id** — the id that is unique across kinds, as opposed to a unique id, which
+// is only unique within one (a Player 42 and a Monster 42 share it). The
+// manager's sessions are whatever the transport addresses; in this demo that
+// is the player id, and sessionFor is the one place that crosses from one
+// space to the other.
 func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	recorder := newSceneRecorder()
 	scene, err := newScene(recorder, nil)

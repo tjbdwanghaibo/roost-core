@@ -43,7 +43,9 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nestwal.pending.tickets` | Gauge | 未 durable 的 pipelined ticket 数（durable lag 的实体侧读数） |
 | `nestwal.disk.bytes` | Gauge | 段文件占用（回收压力） |
 | `nestwal.reject.total` | Counter | 容量拒绝（labels.reason: queue_full/disk_cap） |
-| `entitysync_flush_gate_deferred_total` | Counter | 同步外化被 durable watermark 推迟的次数 |
+| `entitysync_durability_gate_deferred_total` | Counter | 被 durable watermark 推迟的 subject 捕获次数（整个 subject 本 tick 不发） |
+| `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
+| `entitysync_sessions_lost_total` | Counter | 因推送失败被 Manager 关闭的会话数（`SessionLost` 回调政策） |
 
 ### 缓存与总线（core）
 
