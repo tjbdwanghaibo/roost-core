@@ -2,7 +2,7 @@
 
 > **09-22 第二轮（分流 wanted）**：维护者复审 room sync 结构提出三条，登记 W-2026-09-22-04 / -05 / -06 并当场分流：
 > 全部**非缺陷**，转 ARCH-08（room 同步的分层收敛：envelope sink 的 roomID 键、coordinator 的边界）与 ARCH-09（非房间的实体复制路径与 `syncTopic`），
-> 方向等维护者拍板。无新 RR。[报告](REVIEW-2026-09-22-02.md) · [源码判定](REPRO-2026-09-22-02.md)。
+> 同日维护者拍板：实体同步统一为一个 SyncManager，room / AOI 降为组织方式，ARCH-08 / 09 并入 **[ARCH-10](../bugfix/ARCH-10-sync-manager.md)**（未上线，帧头可改），分三批实施。无新 RR。[报告](REVIEW-2026-09-22-02.md) · [源码判定](REPRO-2026-09-22-02.md)。
 
 > **[遗留清单](CARRYOVER.md)**：`WANTED` 待分流是 0、未修复 RR 是 0，但各 bugfix 记录末尾的"未做"里还有
 > 真正的缺口。09-21 第二轮判掉了 A 类 14 条；09-22 用真实环境跑了 B 类的 B1 / B3 / B5（B5 的结果是

@@ -8,7 +8,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
-## W-2026-09-22-04 分流结论：→ ARCH-08（room 同步的分层收敛，A 项）
+## W-2026-09-22-04 分流结论：→ ARCH-10（原 ARCH-08 A 项，09-22 并入）
 
 - **位置**：roost-core `room/room_broadcast.go:85-93`（`roomSubscriberKey{roomID, subscriber}`、`roomFrameGroupKey{roomID, subscriber}`）、
   `:98-110`（`RoomEnvelopeSink{subjectRooms map[subject]roomID, roomFrames map[roomID]uint64, sessionSequences map[roomSubscriberKey]uint64}`）、
@@ -23,7 +23,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **Review 结论（2026-09-22）**：不是缺陷——没有行为错误、没有触发路径；是结构冗余。不登 RR，转 ARCH-08 A 项，实施时占 M 编号。
 - **来源**：维护者 09-22 复审 room sync 结构时提出（U-0277 / U-0278 之后）。
 
-## W-2026-09-22-05 分流结论：→ ARCH-08（room 同步的分层收敛，B 项）
+## W-2026-09-22-05 分流结论：→ ARCH-10（原 ARCH-08 B 项，09-22 并入）
 
 - **位置**：roost-core `entitysync/subscription.go`（`SubscriptionCoordinator`，725 行）；消费者只有 `room/room_broadcast.go` 与
   `room/room_transport_sink.go`（`grep -rl roost-core/entitysync --include='*.go' | grep -v _test` 全仓仅此两处）。
@@ -37,7 +37,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **Review 结论（2026-09-22）**：不是缺陷。不登 RR，转 ARCH-08 B 项；(a)/(b) 的选择与 W-06 绑定，要维护者拍板。
 - **来源**：同 W-04。
 
-## W-2026-09-22-06 分流结论：→ ARCH-09（实体复制的非房间路径与 syncTopic 的去向）
+## W-2026-09-22-06 分流结论：→ ARCH-10（原 ARCH-09，09-22 并入）
 
 - **位置**：roost-core `entity/subject_sync.go:132-160`（`EntitySyncCreateParam{Topic}` → `entity_base.go:160` 写成 `Namespace`）、
   `entity/subject_sync.go:106-108,319`（`SubjectSyncDirtyNotifier`，只有 `room.RegisterSubject` 安装）；
