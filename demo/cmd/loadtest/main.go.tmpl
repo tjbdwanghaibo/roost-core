@@ -35,7 +35,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
@@ -47,8 +47,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
-	"github.com/tjbdwanghaibo/roost-core/entitysync"
-	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/frame"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -605,7 +605,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}))
 	// battle: the lockstep half. The scenario reaches it with match_id on
 	// the blackboard (join_queue → the matchmaker's MatchFound push), and
-	// this action runs a real client of roost-core/lockstep for the length
+	// this action runs a real client of roost-core/sync/lockstep for the length
 	// of one battle: it feeds every BattleFrame push into a LockstepBot,
 	// the bot applies the frames to the demo simulation in order, and the
 	// bot's sink sends this client's input (and its keyframe hashes) back
@@ -1147,13 +1147,13 @@ func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
 	defer watcher.mu.Unlock()
 	// One push is one complete frame for this session: its Epoch/Tick are
 	// the session's own clock, and each object is one subject.
-	frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
+	decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
 	if err != nil {
 		watcher.failure = fmt.Errorf("decode state frame: %w", err)
 		return
 	}
 	watcher.frames++
-	for _, object := range frame.Objects {
+	for _, object := range decoded.Objects {
 		for _, component := range object.Components {
 			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
 			if err != nil {

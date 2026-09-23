@@ -16,8 +16,8 @@ import (
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/health"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
@@ -178,7 +178,7 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 	// subject, and the demo's packer is mask-opaque (ARCH-06).
 	interest, err := policy.NewInterest(policy.InterestConfig{
 		Manager: manager,
-		Spatial: spatial.InterestConfig{
+		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
 			EnterRadius: sceneEnterRadius,

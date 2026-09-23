@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Changed（破坏性）
+
+- **迁移表第三阶段 `layout:`**（ARCH-12 S3，M-17，2026-09-23）：core 的同步块收进 `sync/`（`entitysync` → `sync/entitysync`、`statesync` → `sync/frame`（包名 `frame`）、`nettransport` → `sync/nettransport`、`lockstep` → `sync/lockstep`、`syncbus` → `sync/syncbus`、`mirror` → `sync/syncbus/mirror`）。`roost project upgrade --consolidate` 跑在前两阶段的结果上改写这些 import；包名变化的补显式别名；`needsConsolidation` 也会扫 Go 文件里的旧 sync 路径。去了前缀的 `frame` 符号由编译器指出（core TROUBLESHOOTING T-175）。
+- 生成的 `internal/transport/generated.go` import `roost-core/sync/nettransport` 与 `roost-core/sync/entitysync`（原 `nettransport` / `entitysync`，别名 `kitnet` 去掉）；渲染函数 `renderReplication` 改名 `renderSyncTransport`。
+- demo 模板（`-template game-demo`）：`scene.go` 的兴趣配置改为 `policy.InterestConfig{AOI: policy.AOIConfig{…}}`（原 `Spatial: spatial.InterestConfig`）；`loadtest` / `scene_test` / `battle` 改用 `sync/frame`、`sync/nettransport`、`sync/lockstep`。
+
+
 ## [v1.15.31] - 2026-09-20
 
 ### Fixed

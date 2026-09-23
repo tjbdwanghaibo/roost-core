@@ -16,8 +16,8 @@ import (
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
-	"github.com/tjbdwanghaibo/roost-core/lockstep"
-	"github.com/tjbdwanghaibo/roost-core/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/sync/nettransport"
 )
 
 // The lockstep half of the demo: when the matchmaker forms a duel, this
@@ -25,7 +25,7 @@ import (
 // frame, and the room broadcasts numbered frames until the battle's frame
 // budget runs out.
 //
-// What the framework owns (roost-core/lockstep): sequencing inputs into
+// What the framework owns (roost-core/sync/lockstep): sequencing inputs into
 // frames with a bounded submit window and per-seat replay protection,
 // packing the last few frames into every broadcast packet so a lost one
 // heals without a retransmission, paging history to a reconnecting session,

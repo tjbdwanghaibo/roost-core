@@ -11,7 +11,7 @@
 ```
 写入侧                                   订阅侧
 ─────────────────────────────           ────────────────────────────────────────
-DAO setter → owner.PublishSyncDirty()    spatial.InterestManager（AOI 格 / 半径 / band）
+DAO setter → owner.PublishSyncDirty()    policy.AOI（AOI 格 / 半径 / band）
   → entity.SubjectSyncState.MarkDirty      → demo InterestSystem.Tick() → []SubscriptionChange
   → dirtyGeneration++ / notifier            → demo Scene.applyChanges
   → room.RoomBroadcaster.markDirty            → room.Subscribe / Unsubscribe
@@ -35,19 +35,20 @@ room.RoomBroadcaster.flushDirty（ReplicationInterval，demo 50ms）
 
 ## 1. 代码目录
 
-### 1.1 core 主链（roost-core/）
+### 1.1 core 主链（roost-core/`sync/`，ARCH-12 S3 之后的布局，2026-09-23）
 
-| 包 / 文件 | 行 | 角色 | 关键类型 / 入口 | 该文件的 promise test |
-| --- | --- | --- | --- | --- |
-| `entity/subject_sync.go` | 791 | 每个 subject 的同步状态机：脏位、代际、Prepare/Commit/Abort、CommitLSN 盖章 | `SubjectSyncState{MarkDirty, Prepare, PendingDirty, SetLastCommitLSN}`、`PreparedSubjectSync{Commit, AbortWithError}`、`PreparedSubjectSyncBatch`、`SubjectSyncPacker/PackFunc`、`SyncProfile`、`SubjectSyncUpdate{Version, BaseVersion, Mask, Full, CommitLSN}` | `remote_commit_promises_test.go`（LSN 盖章在锁内） |
-| `entitysync/subscription.go` | 725 | 订阅协调器：订阅表（Pending/Active/Closing）、快照准入、Leave 信封、批量分发、持久化水位门槛 | `SubscriptionCoordinator{Subscribe, Unsubscribe, DistributeBatch, FlushSubject, SetDurableWatermark, Subscribers}`、`DeliveryEnvelope{Kind: Snapshot/Delta/Leave}`、`ReliableEnvelopeSink`、`ErrDurabilityDeferred`、`ErrLeaveNotDelivered`(U-0277) | `subscription_promises_test.go`(U-0104 入口守卫)、`durability_gate_promises_test.go`(U-0206)、`unreachable_subscriber_promises_test.go`(U-0277) |
-| `room/room_broadcast.go` | 1265 | 房间：subject 注册/退役、订阅入口、脏集与周期 flush、信封 → 帧的分组与排序、慢消费者处理、Stats | `RoomBroadcaster{RegisterSubject, Subscribe, Unsubscribe, RetireSubject, FlushDirty, Start/Stop, Stats}`、`RoomEnvelopeSink.AdmitEnvelopes`(:290-355 分组排序)、`flushStateBatch`(:947)、`retryRetirement`(:1133)、`handleSlowConsumer`(:487)、`RoomBroadcasterConfig.DurableWatermark` | `durable_watermark_promises_test.go`(U-0233)、`downstream_handover_promises_test.go`(U-0208)、`eviction_notice_promises_test.go`(U-0207)、`guards_promises_test.go`、`unreachable_subscriber_promises_test.go`(U-0277) |
-| `room/room_transport_sink.go` | 967 | 帧编码与传输准入：ObjectRef 分配、组件缓存、reliable/datagram 通道选择、SlowConsumerPolicy(Evict/FailBatch)、deadSessions | `RoomTransportSink{AdmitRoomFrames(:236), admitWithSlowConsumerPolicy(:350), ReleaseSession(:670，无调用者), Stats}`、`RoomSessionResolver`、`Encode/DecodeRoomSubjectUpdate`、`DecodeRoomWireFrame` | `delta_durability_promises_test.go`(U-0260)、`eviction_notice_promises_test.go` |
-| `room/room_manager.go` | 475 | 多房间：创建/回收、共享 budget（subjects/subscribers 上限）、复制周期与 sweep、健康检查 | `RoomManager{Create, GetOrCreate, Remove, Stats, CheckHealth}`、`RoomManagerConfig{ReplicationInterval, SweepInterval, DurableWatermark, Max*}` | `sweep_interval_promises_test.go`(U-0163) |
-| `room/jetstream_syncbus.go` / `nats_syncbus.go` | 360 / 89 | 跨进程同步总线（ISyncBus）的两种实现；本地扇出、持久消费者身份 | `NewJetStreamSyncBus`、`topicFanout` | `jetstream_fanout_promises_test.go`(U-0209)、`jetstream_durable_identity_promises_test.go`(U-0210) |
-| `statesync/` | ≈3.3k | 帧格式与客户端半边：`DeltaFrame` 编解码、限额、datagram 分片/重组、LOD 投影、老的 `Replicator`（每会话 sent/ack 基线） | `EncodeFrame/DecodeFrame`、`BuildDelta/ApplyDelta`、`FragmentFrame/Reassembler`、`LODProjector`、`Replicator/SessionState`、`Limits` | `codec_*`、`reassembly_limit_*`、`baseline_identity_*`(U-0200)、`pinned_view_*`(U-0205)、`recovery_intent_*`(U-0201)、`lod_phase_*`(U-0203)、`replacement_capacity_*`(U-0204) |
-| `nettransport/channel.go` / `sender.go` | 706 / 145 | 异步传输：每会话 reliable 队列 + datagram 通道、`AdmitBatch` 原子准入、`AdmissionError{Session}` / `ErrReliableBackpressure`、`RemoveSession` | `AsyncTransport`、`AtomicBatchTransport`、`OutboundFrame{Session, Reliable, Datagrams}` | `admission_promises_test.go`、`session_state_promises_test.go`(U-0131)、`atomic_admission_test.go` |
-| `spatial/interest.go` / `interest_cluster.go` / `block_index.go` | 531 / 453 / 350 | AOI：格索引、观察者/subject 进出与移动、`InterestEvent{Enter/Leave}`、单观察者格数预算 | `InterestManager{AddObserver, MoveObserver, RemoveObserver(:305), Flush}`、`InterestCluster`(多房间)、`InterestConfig` | `observer_budget_promises_test.go`(U-0240)、`interest_promises_test.go`、`guards_promises_test.go` |
+| 包 / 文件 | 角色 | 关键类型 / 入口 |
+| --- | --- | --- |
+| `entity/subject_sync.go` | 内容：每个 subject 的同步状态机（脏位、代际、`PrepareTick`、Commit/Abort、CommitLSN） | `SubjectSyncState`、`PreparedSubjectSync` |
+| `sync/entitysync/` | 机制：进程一个 `Manager`，subject 私有订阅者表，held/ready 会话，每会话一帧，prepare/commit 两阶段，持久化门槛 | `Manager`、`Transport`、`AsyncTransport`、`SessionID`（= `nettransport.SessionID`） |
+| `sync/entitysync/policy/` | 组织：谁订谁 | `Interest`（AOI + 关系源）、`Group`、`Direct`、`RelationSource` |
+| `sync/frame/` | 帧格式：`Frame` 的 `Encode / Decode`、对象 / 组件 delta 类型、`Limits` | `Frame`、`ObjectDelta`、`ComponentDelta`、`ObjectRef`、`Limits` |
+| `sync/nettransport/` | 传输：UDP / KCP / QUIC 会话传输、AEAD、`AsyncTransport` 双 lane、会话与传输契约、datagram 分片头 | `SessionID / SessionInfo`、`Transport`、`AsyncTransport`、`FragmentDatagrams` |
+| `sync/lockstep/` | 帧同步（输入帧）：与状态同步并列 | `Room`、`Sequencer`、`RedundantEncoder` |
+| `sync/syncbus/` + `driver/` + `mirror/` | 服务↔服务总线：契约、NATS / JetStream 实现、副本复制器 | `ISyncBus`、`NewJetStreamSyncBus`、`mirror.Replicator` |
+| `spatial/` | 基建：二维网格几何（`Point / Rect / BlockIndex / Terrain / 寻路`） | 只被 policy 与 demo 用 |
+
+历史（M-13 之前的 `room/`、`entitysync/subscription.go`、`statesync` 的 Replicator）已全部删除，见 [M-13](../bugfix/M-13-entitysync-manager.md)、[M-15](../bugfix/M-15-statesync-dead-code.md)、[M-17](../bugfix/M-17-sync-layout.md)。
 
 ### 1.2 相邻但不在这条链上的（review 时可按需取舍）
 

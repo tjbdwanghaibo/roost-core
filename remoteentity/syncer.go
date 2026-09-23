@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 	"hash/fnv"
 )
 

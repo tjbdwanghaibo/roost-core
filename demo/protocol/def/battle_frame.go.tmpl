@@ -3,7 +3,7 @@
 package protocoldef
 
 // BattleFramePush carries one lockstep broadcast packet: the frames the room
-// has cut, most recent last, encoded by roost-core/lockstep. The packet
+// has cut, most recent last, encoded by roost-core/sync/lockstep. The packet
 // holds the last few frames rather than only the newest one, so a client
 // that missed a push heals from the next one without asking for anything —
 // that redundancy is why lockstep tolerates a lossy lane. The demo pushes it

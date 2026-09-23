@@ -5,8 +5,8 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 | 层 | 包 | 职责 |
 | --- | --- | --- |
 | 内容 | `entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareTick` 一次锁内捕获 |
-| 机制 | `entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一帧，门槛，held/ready，两种失败 |
-| 组织 | `entitysync/policy` | 谁订谁：`Interest`（距离 + 关系源）、`Group`（成员全互见）、`Direct`（显式绑定）；只调 Manager 的 `Subscribe / Unsubscribe` |
+| 机制 | `sync/entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一帧，门槛，held/ready，两种失败 |
+| 组织 | `sync/entitysync/policy` | 谁订谁：`Interest`（距离 + 关系源）、`Group`（成员全互见）、`Direct`（显式绑定）；只调 Manager 的 `Subscribe / Unsubscribe` |
 | 应用 | 业务（demo 的 scene bridge） | `Transport` 适配、会话生命周期（进场 held → ready → 离场）、地图尺寸 / 半径 / 关系这类只有游戏知道的事 |
 
 每层只知道下一层：entity 不知道 session，Manager 不知道为什么有人订阅，policy 不碰帧与传输，应用不写聚合规则。
@@ -46,11 +46,11 @@ Manager **不建**"会话 → subjects"反向索引：这份知识归政策（AO
 ## Namespace
 
 `EntitySyncBuilderParam.Namespace`（codegen 标记 `syncNamespace=`）随该 subject 的每个组件下发，是客户端唯一的分流键——帧头的 RoomID 恒为常量，
-房间与区域是政策不是标签。服务间的同步总线是另一条轴：契约 `syncbus`，实现 `syncbus/driver`，kit 的 `SyncBusMod`。裸标识符会被 codegen 拒绝（RR-20260918-07）。
+房间与区域是政策不是标签。服务间的同步总线是另一条轴：契约 `sync/syncbus`，实现 `sync/syncbus/driver`，kit 的 `SyncBusMod`。裸标识符会被 codegen 拒绝（RR-20260918-07）。
 
-## 组织方式（`entitysync/policy`）
+## 组织方式（`sync/entitysync/policy`）
 
-- `Interest`：`spatial.InterestManager` + 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
+- `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）+ 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
   band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
 - `Group`：subject 集合 × 成员集合全互见，各自上限，`Close` 退役全部 subject；成员的会话由应用开关。不叫 Room：`lockstep.Room` 是战斗房间，而这里只是一个集合。
 - `Direct`：`Bind / Unbind` 一对。

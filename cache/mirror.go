@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/mirror"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 type ReplicaConfig[K comparable, V any] struct {

@@ -171,3 +171,27 @@ service:
     to: github.com/tjbdwanghaibo/roost-kit/service/rank
   - from: github.com/tjbdwanghaibo/roost-service/session
     to: github.com/tjbdwanghaibo/roost-kit/service/session
+
+# Third stage: the sync block gathers under sync/ (ARCH-12 S3, core v1.17.0).
+# Applied to the RESULT of the two stages above. `package` names the new
+# package where it differs from the last path element's old name; symbols of
+# statesync that dropped their Frame prefix (EncodeFrame → frame.Encode,
+# DecodeFrame → frame.Decode, DeltaFrame → frame.Frame, FrameFull / FrameDelta
+# → frame.Full / frame.Delta) are left to the compiler, see TROUBLESHOOTING T-175.
+layout:
+  boundary:
+    core: v1.17.0
+  move:
+    - from: github.com/tjbdwanghaibo/roost-core/entitysync
+      to: github.com/tjbdwanghaibo/roost-core/sync/entitysync
+    - from: github.com/tjbdwanghaibo/roost-core/statesync
+      to: github.com/tjbdwanghaibo/roost-core/sync/frame
+      package: frame
+    - from: github.com/tjbdwanghaibo/roost-core/nettransport
+      to: github.com/tjbdwanghaibo/roost-core/sync/nettransport
+    - from: github.com/tjbdwanghaibo/roost-core/lockstep
+      to: github.com/tjbdwanghaibo/roost-core/sync/lockstep
+    - from: github.com/tjbdwanghaibo/roost-core/syncbus
+      to: github.com/tjbdwanghaibo/roost-core/sync/syncbus
+    - from: github.com/tjbdwanghaibo/roost-core/mirror
+      to: github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror

@@ -20,9 +20,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
-	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"github.com/tjbdwanghaibo/roost-core/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -138,11 +138,11 @@ func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[i
 	t.Helper()
 	out := make(map[int64]bson.M)
 	for _, push := range pushes {
-		frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
 		if err != nil {
 			t.Fatalf("decode frame: %v", err)
 		}
-		for _, object := range frame.Objects {
+		for _, object := range decoded.Objects {
 			for _, component := range object.Components {
 				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
 				if err != nil {
@@ -168,12 +168,12 @@ func removesIn(t *testing.T, pushes []*pb.EntitySyncPush) int {
 	t.Helper()
 	removes := 0
 	for _, push := range pushes {
-		frame, err := entitysync.DecodeFrame(push.Payload, corestate.DefaultLimits())
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
 		if err != nil {
 			t.Fatalf("decode frame: %v", err)
 		}
-		for _, object := range frame.Objects {
-			if object.Operation == corestate.ObjectRemove {
+		for _, object := range decoded.Objects {
+			if object.Operation == frame.ObjectRemove {
 				removes++
 			}
 		}

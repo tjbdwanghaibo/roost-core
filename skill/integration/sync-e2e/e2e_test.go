@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
-	streamadapter "github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-core/skill"
 	"github.com/tjbdwanghaibo/roost-core/skill/skillsync"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
+	corestream "github.com/tjbdwanghaibo/roost-core/syncstream"
+	streamadapter "github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 type confirmedBus struct {

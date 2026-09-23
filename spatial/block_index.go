@@ -31,12 +31,12 @@ func NewBlockIndex(bounds Rect, blockSize int64) (*BlockIndex, error) {
 	if bounds.Empty() || blockSize <= 0 {
 		return nil, ErrInvalidBounds
 	}
-	width, widthOK := safeSpan(bounds.Min.X, bounds.Max.X)
-	height, heightOK := safeSpan(bounds.Min.Y, bounds.Max.Y)
+	width, widthOK := SafeSpan(bounds.Min.X, bounds.Max.X)
+	height, heightOK := SafeSpan(bounds.Min.Y, bounds.Max.Y)
 	if !widthOK || !heightOK {
 		return nil, ErrInvalidBounds
 	}
-	cols, rows := divideCeil(width, blockSize), divideCeil(height, blockSize)
+	cols, rows := DivideCeil(width, blockSize), DivideCeil(height, blockSize)
 	if cols <= 0 || rows <= 0 || cols > MaxBlockCount/rows {
 		return nil, ErrTooManyBlocks
 	}
@@ -172,8 +172,8 @@ func (i *BlockIndex) QueryRadius(center Point, radius int64) []int64 {
 		return nil
 	}
 	return i.QueryRect(Rect{
-		Min: Point{X: saturatingSub(center.X, radius), Y: saturatingSub(center.Y, radius)},
-		Max: Point{X: saturatingAdd(center.X, radius), Y: saturatingAdd(center.Y, radius)},
+		Min: Point{X: SaturatingSub(center.X, radius), Y: SaturatingSub(center.Y, radius)},
+		Max: Point{X: SaturatingAdd(center.X, radius), Y: SaturatingAdd(center.Y, radius)},
 	})
 }
 
@@ -335,9 +335,11 @@ func sortedBlockIndices(blocks map[int64]Rect) []int64 {
 	return indices
 }
 
-func divideCeil(value, by int64) int64 { return 1 + (value-1)/by }
+// DivideCeil is value / by rounded up, for positive operands.
+func DivideCeil(value, by int64) int64 { return 1 + (value-1)/by }
 
-func safeSpan(min, max int64) (int64, bool) {
+// SafeSpan is max - min when that does not overflow, and false when it would.
+func SafeSpan(min, max int64) (int64, bool) {
 	if max <= min {
 		return 0, false
 	}

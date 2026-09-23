@@ -311,7 +311,7 @@ codegen / core / kit 三个 SHA。actions 按仓库规则钉到完整 commit SHA
   实跑发现两个框架问题：**core saga 补偿版本 +2**（U-0225，Mongo 存储上任何步骤拒绝都进不了补偿——修后 6 completed + 6 compensated）；
   **`add mod` / `add saga` 不给已生成的配置补段**（后加的 saga 用默认 8 GiB 建流，隔离环境起不来，配置里没有 saga 段可改）——codegen 现在按缺失的顶层键追加两份配置。
   机器人 p95 阈值默认 5s → 10s（四条异步链，成本落在 4s 桶边）。framework-compat 的 released × demo 暂时排除到 core v1.15.6 发版。
-- **B10 实时战斗：lockstep 帧同步**（`roost-core/lockstep` 的第一个使用方）：匹配成功后，形成比赛的 game 进程开一个 `lockstep.Room`
+- **B10 实时战斗：lockstep 帧同步**（`roost-core/sync/lockstep` 的第一个使用方）：匹配成功后，形成比赛的 game 进程开一个 `lockstep.Room`
   （`internal/service/<game>/battle.go`，一条 goroutine 独占房间——Room 内部没有锁；端点把命令投进 channel），两名玩家打满 45 帧 / 30 Hz。
   线是 demo 已有的 player TCP：广播 = 推送 `BattleFrame`（10102，包里带冗余帧），输入 = 请求 `BattleInput`（10015，一条消息同时带
   本帧输入、关键帧哈希、补发请求）；`game/battle` 是两端共享的契约（帧预算、输入编码、座位、确定性模拟与哈希）。机器人用
@@ -350,7 +350,7 @@ kit 的真实服务至此全部有使用方（platform 第十五批、global 与
 3. ~~rank 服务~~ — 第十二批完成，见 §9.3.3。
 4. ~~spatial（AOI / 兴趣管理）+ 一张地图~~ — 第十三批三批全部完成（§9.4）。
 5. **多 game 进程**：chat 世界频道按每进程 presence、battle 房间是进程内状态、scene 也只覆盖本进程在线的玩家。
-   真做要引入 `remoteentity` / `ownerroute` / `mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
+   真做要引入 `remoteentity` / `ownerroute` / `sync/syncbus/mirror`——三个包都零覆盖，合起来是"跨进程实体所有权"的完整故事。工作量最大。
    **2026-09-19 第一批做到一半，见 §9.10**：Guild（`remote=managed`）写完并通过生成 / 编译 / 单测，
    但实跑提交阶段撞上 core 的一条缺陷（负的 state version 转 uint64 后 BSON 写不进去，而且会让进程之后再也起不来），
    已记入 `docs/bug/WANTED.md` 的 W-2026-09-19-01 交审查定契约；代码暂存未合入。
@@ -925,11 +925,11 @@ snapshot）、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 playe
 
 #### 9.3.1 实体同步：Player 成为复制主体，scene 是它的调度器（§9.1 第 1 条）
 
-- **缺什么**：`sync=true`、`entitysync`、`room` 的订阅/水位这一整条"服务端权威状态推给客户端"的主路径，demo 一次都没走过；
+- **缺什么**：`sync=true`、`entitysync`（今 `sync/entitysync`）、`room` 的订阅/水位这一整条"服务端权威状态推给客户端"的主路径，demo 一次都没走过；
   此前只有战斗内的 lockstep 帧同步和手写推送。
 - **做法**（2026-09-22 ARCH-10 / M-13 / M-14 之后）：四层，每层都是框架现成的——
   `Player.Sync()`（内容：版本、脏掩码、packer）→ `entitysync.Manager`（机制：全部主体与会话、订阅表在主体里、每会话每 tick 一帧、水位门槛、held/ready）→
-  `entitysync/policy.Interest`（组织：距离 + team 关系源 → 谁订谁，被拒重试）→ `internal/service/<game>/scene.go`（应用：`sceneLane` 把一帧接成一次 TCP 推送、
+  `sync/entitysync/policy.Interest`（组织：距离 + team 关系源 → 谁订谁，被拒重试）→ `internal/service/<game>/scene.go`（应用：`sceneLane` 把一帧接成一次 TCP 推送、
   会话生命周期 `enter_game` held → `scene_ready` → 离场、地图尺寸与半径）。`game/entities/player/sync_packer.go` 是 packer。
   第十二批时是四块（`room.RoomBroadcaster` + `room.RoomTransportSink`）且兴趣聚合在 `game/scene/runtime/interest.go`，均已删除。
 - **写入侧不是自动的**：把 DAO 标脏和把**主体**标脏是两件事，`Player.PublishSyncDirty()` 是游戏决定第二件何时发生的地方
@@ -1012,8 +1012,8 @@ cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里
 把"谁该收到谁的状态"从"所有人订阅所有人"换成兴趣系统回答。两处用户拍板改变了做法：**全程用 entity id**、
 **"订阅自己"做成一类关系而不是特例**。
 
-- **每一种理由都是同一种来源**：`spatial.InterestManager`（距离）、`self`（永远看得见自己）、`team`（匹配成队）
-  都实现 `scene.Source`，产出同一个 `spatial.InterestEvent`。关系来源是 `RelationSource`——集合驱动，
+- **每一种理由都是同一种来源**：`policy.AOI`（距离，原 `spatial.InterestManager`）、`self`（永远看得见自己）、`team`（匹配成队）
+  都实现 `scene.Source`，产出同一个 `policy.InterestEvent`。关系来源是 `RelationSource`——集合驱动，
   谁拥有这段关系谁推进来，它把差分变成 Enter/Leave。好友 / 同盟是同一个类型换一个 feed，这就是它不叫 TeamSource 的原因。
 - **汇总层按来源计数**：第一个来源命中才 Subscribe，**最后一个**来源撤销才 Unsubscribe。这是有了第二个来源之后被强制的东西——
   一对 (观察者, 主体) 可能被多个来源同时持有（队友正好站在旁边），少了引用计数，队友走出视野会把关系来源仍然需要的订阅退掉，
@@ -1030,7 +1030,7 @@ cube 的 terrain / pathfind / block AOI 对应的原语 roost-core `spatial` 里
   汇总层已经带 band，那天到了是一次配置改动。
 - 测试：`game/scene/runtime/interest_test.go` 五条——自己经关系订阅、距离进出、**边界抖动不产生任何事件**（滞回，
   roost 比 cube 多出来的那部分）、关系在距离撤销后仍保住订阅、离场双向释放。实跑 6 机器人全过、0 ERROR、无 scene 告警。
-- **未做**：多房间（`spatial.InterestCluster`）；非玩家主体的入口（`Show`/`MoveShown`/`Hide`）已留好，第三批的怪用。
+- **未做**：多房间（`policy.AOICluster`）；非玩家主体的入口（`Show`/`MoveShown`/`Hide`）已留好，第三批的怪用。
 
 #### 9.4.3 第三批：object refresh（刷怪）（已完成）
 

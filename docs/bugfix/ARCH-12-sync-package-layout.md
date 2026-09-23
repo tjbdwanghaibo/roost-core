@@ -128,3 +128,18 @@ S1 → S2 → S3 → S4，然后再做 ARCH-11 的 M-15（多 profile 优先级�
 - dataengine 块：`dataengine`（939）、`dataengine/engine`（3009）、`saga`（3322）、`remoteentity`（4765）、`versionstore`（795）、`kit/dataengine`、`kit/saga`；`remoteentity` 的两半职责与 `entity → cache` 反向依赖是它的首要结构问题
 
 两块各出一份同样格式的盘点表后再定。
+
+## 6. 实施记录（2026-09-23，`feature/arch-10-sync-policy`）
+
+| 步 | 单元 | 结果 |
+| --- | --- | --- |
+| S1 | [M-15](M-15-statesync-dead-code.md) | 删 statesync 老 Replicator 一族与 `nettransport.ControlPlane`，约 −3.9k 行 |
+| S2 | [M-16](M-16-transport-contracts-home.md) | 会话 / 传输契约与分片头归位 nettransport；`FragmentDatagrams` 与帧解耦 |
+| S3 + S4 | [M-17](M-17-sync-layout.md) | 八个目录收进 `sync/`；`statesync` → `sync/frame`；InterestManager 从 `spatial` 搬进 `policy`；文档收口 |
+
+与 §3 的两处偏差：
+
+- **传输包名保留 `nettransport`**（`sync/nettransport`），没有叫 `transport`。两个原因：`entitysync.Transport` 是机制对下游的契约，"网络传输"与它是两个概念，`nettransport` 这个名字把区别说出来了；其次 `transport` 作为局部变量在 entitysync、lockstep、demo 模板里出现几十处，同名包会被遮蔽。
+- **`sync/frame` 的 API 去掉了重复的 Frame 前缀**：`EncodeFrame / DecodeFrame / DeltaFrame / FrameKind / FrameFull / FrameDelta` → `frame.Encode / Decode / Frame / Kind / Full / Delta`。线格式一个字节没变。
+
+维护者追加的一条（S3 一并做）：`spatial` 只留纯空间原语，`InterestManager / InterestCluster`（AOI 观察者索引）搬进 `sync/entitysync/policy`，因为"谁在谁的视野里"是同步的组织问题，不是几何问题。

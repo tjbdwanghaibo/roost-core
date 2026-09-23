@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 )
 
 func TestPublisherAndSubscriberRoundTrip(t *testing.T) {

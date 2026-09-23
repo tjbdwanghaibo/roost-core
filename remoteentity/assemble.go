@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 // AssemblyDeps are the capabilities Remote Entity consumes. Redis is always

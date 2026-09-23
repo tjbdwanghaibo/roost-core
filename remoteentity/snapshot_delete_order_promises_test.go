@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 // U-0187 · C8 · RR-20260913-01：Remote 复制侧的删除要按信封版本应用。

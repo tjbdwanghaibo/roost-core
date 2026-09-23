@@ -226,7 +226,7 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find } 
 ## 服务端权威状态同步：Player 是复制主体，entitysync.Manager 是调度器，scene 是政策
 
 `sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。`entitysync.Manager`（进程一个）拥有全部主体与会话，
-每 tick 给每个会话一帧；谁订谁由 roost-core 的 `entitysync/policy.Interest`（距离 + team 关系）决定；scene 只剩应用层的三件事：
+每 tick 给每个会话一帧；谁订谁由 roost-core 的 `sync/entitysync/policy.Interest`（距离 + team 关系）决定；scene 只剩应用层的三件事：
 把 TCP 推送接成 `entitysync.Transport`、会话生命周期（`enter_game` 以 held 开会话 → 客户端 `scene_ready` → 离场关会话）、地图尺寸与半径（ARCH-10 / M-13 / M-14）。
 
 ```
@@ -295,7 +295,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 "谁该收到谁的状态"由 Scene 实体的兴趣系统回答。它把**每一种理由都做成同一种来源**：
 
 ```
-spatial.InterestManager ─┐
+policy.AOI（距离）      ─┐
 self（永远看得见自己）   ─┼─▶ 汇总（按来源计数 + 档位合并）─▶ []SubscriptionChange ─▶ room.Subscribe/Unsubscribe
 team（匹配成队的队友）   ─┘
 ```
@@ -312,7 +312,7 @@ team（匹配成队的队友）   ─┘
 - **滞回**：进圈 120、出圈 150。在边界上来回微动不产生 Enter/Leave 抖动——每一次抖动都会重发一次快照。
 - **格边长选 150 ≈ 视野半径**：一个观察者订阅的格数是 `(⌈2·出圈半径/格边长⌉+1)²`，格子远小于视野不会让 AOI 更准
   （半径判定本来就是精确的），只会让观察者每动一步的簿记成倍增加。框架不强制这个比值，所以它写在 `interest.go` 的注释里。
-- **没做**：多房间（`spatial.InterestCluster`）、非玩家主体（`Show`/`Hide` 的入口已经留好，第三批的怪会用）。
+- **没做**：多房间（`policy.AOICluster`）、非玩家主体（`Show`/`Hide` 的入口已经留好，第三批的怪会用）。
 
 ## 属性：层、合成，以及两种存储意图
 
@@ -350,7 +350,7 @@ Nest 是"服务器说了算"的状态：客户端请求、服务器改实体、�
 服务器只把所有人的输入排成编号的帧广播出去，每个客户端用同一份输入跑同一套模拟，得到同一份状态，服务器一个字节的状态都不发。
 demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程开一个 `lockstep.Room`，两名玩家打满 45 帧（30 Hz，1.5 秒）。
 
-- **框架给的**（`roost-core/lockstep`）：把输入按提交窗口排进帧、每个座位的重放保护、每个广播包携带最近几帧（丢一个包由后续包自愈，不重传）、
+- **框架给的**（`roost-core/sync/lockstep`）：把输入按提交窗口排进帧、每个座位的重放保护、每个广播包携带最近几帧（丢一个包由后续包自愈，不重传）、
   给掉线重连的会话分页补发历史、把关键帧的哈希报告按法定人数判成 desync 裁决。
 - **工程写的**（`internal/service/<game>/battle.go`）：房间的生命周期、驱动它的那条串行 goroutine、以及线。
   `lockstep.Room` 是单所有者状态（内部没有锁），所以所有调用都在一条 goroutine 上；端点把消息投进 channel，不直接碰房间。

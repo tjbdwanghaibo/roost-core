@@ -2,8 +2,8 @@ package remoteentity
 
 import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 // Stats is the capacity picture the Mod's health check publishes.

@@ -10,7 +10,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 const SyncTopicInterest = "remote_entity_interest"

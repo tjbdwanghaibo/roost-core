@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -54,6 +55,17 @@ type consolidationMap struct {
 		RemovedModules []string                    `yaml:"removed_modules"`
 		Prefix         []struct{ From, To string } `yaml:"prefix"`
 	} `yaml:"single_module"`
+	// Layout is the third stage: packages moving inside core (the sync block
+	// gathering under sync/, ARCH-12). Applied to the result of the two
+	// stages above; `package` is set where the package name changes.
+	Layout struct {
+		Boundary struct{ Core string } `yaml:"boundary"`
+		Move     []struct {
+			From    string `yaml:"from"`
+			To      string `yaml:"to"`
+			Package string `yaml:"package"`
+		} `yaml:"move"`
+	} `yaml:"layout"`
 }
 
 // relocation is what the map says about one old import path.
@@ -107,6 +119,22 @@ func singleModulePath(p string, m consolidationMap) (string, bool) {
 		}
 	}
 	return p, false
+}
+
+// layoutPath applies the third stage (moves inside core) to an import path
+// that the first two stages have already resolved. It returns the new path,
+// the new package name when it differs from the old base, and whether it
+// moved. A subpackage of a moved package moves with it.
+func layoutPath(p string, m consolidationMap) (string, string, bool) {
+	for _, rule := range m.Layout.Move {
+		if p == rule.From {
+			return rule.To, rule.Package, true
+		}
+		if strings.HasPrefix(p, rule.From+"/") {
+			return rule.To + strings.TrimPrefix(p, rule.From), "", true
+		}
+	}
+	return p, "", false
 }
 
 // ConsolidateResult summarises what the rewrite touched.
@@ -252,6 +280,18 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 				mapped = true
 			}
 		}
+		// Stage three moves packages inside core, wherever the path came from.
+		if moved, pkgName, ok := layoutPath(rel.to, m); mapped && ok {
+			rel.to = moved
+			if pkgName != "" {
+				rel.pkgName = pkgName
+			}
+		} else if !mapped {
+			if moved, pkgName, ok := layoutPath(oldPath, m); ok {
+				rel = relocation{to: moved, pkgName: pkgName}
+				mapped = true
+			}
+		}
 		if !mapped {
 			for _, mod := range append(append([]string(nil), m.RemovedModules...), m.SingleModule.RemovedModules...) {
 				if oldPath == mod || strings.HasPrefix(oldPath, mod+"/") {
@@ -263,6 +303,9 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 		// Where a split package's kept symbols live after stage two. For an
 		// unsplit package this equals the old path and nothing uses it.
 		keptPath, keptMoved := singleModulePath(oldPath, m)
+		if moved, _, ok := layoutPath(keptPath, m); ok {
+			keptPath, keptMoved = moved, true
+		}
 		// The name this file uses to refer to the package.
 		alias := path.Base(oldPath)
 		if imp.Name != nil {
@@ -421,8 +464,9 @@ func consolidateManifest(root string, dryRun bool) (bool, error) {
 	return true, os.WriteFile(filepath.Join(root, ManifestName), raw, 0o644)
 }
 
-// needsConsolidation reports whether a project's go.mod still requires the
-// folded-in modules, i.e. whether its imports predate the consolidation.
+// needsConsolidation reports whether a project still predates one of the
+// relocations: its go.mod requires a folded-in module (stages one and two),
+// or one of its Go files imports a pre-layout core path (stage three).
 func needsConsolidation(root string) bool {
 	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -433,5 +477,36 @@ func needsConsolidation(root string) bool {
 			return true
 		}
 	}
-	return false
+	_, m, err := loadConsolidationMap()
+	if err != nil || len(m.Layout.Move) == 0 {
+		return false
+	}
+	found := false
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || found {
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if p != root && (name == ".git" || name == "vendor" || name == "node_modules" || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, rule := range m.Layout.Move {
+			if bytes.Contains(src, []byte(strconv.Quote(rule.From))) || bytes.Contains(src, []byte(`"`+rule.From+`/`)) {
+				found = true
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return found
 }

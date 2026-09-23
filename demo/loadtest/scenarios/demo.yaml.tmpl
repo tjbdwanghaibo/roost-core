@@ -248,7 +248,7 @@ scenarios:
         # needs both (the push only wakes the robot up).
         - action: poll_match
         # The lockstep battle: this robot runs a real client of
-        # roost-core/lockstep for the length of one match. Every BattleFrame
+        # roost-core/sync/lockstep for the length of one match. Every BattleFrame
         # push (10102) is fed to the bot, the bot applies the frames to the
         # demo simulation in order and answers with this seat's input for the
         # next frame plus a hash every keyframe. Both seats must agree on

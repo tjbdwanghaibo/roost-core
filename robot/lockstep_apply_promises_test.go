@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
 )
 
 // U-0198 · C8 · RR-20260914-09:接收游标不是应用游标。HandleBroadcast / HandleFrames 让 Assembler

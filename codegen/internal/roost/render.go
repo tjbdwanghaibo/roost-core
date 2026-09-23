@@ -189,33 +189,33 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 	}
 	if hasFeature(m, "nettransport-quic") || hasFeature(m, "nettransport-kcp") || hasFeature(m, "nettransport-udp") {
-		if err := addGo("internal/transport/generated.go", renderReplication(m), true); err != nil {
+		if err := addGo("internal/transport/generated.go", renderSyncTransport(m), true); err != nil {
 			return nil, err
 		}
 	}
 	return files, nil
 }
 
-func renderReplication(m Manifest) string {
+func renderSyncTransport(m Manifest) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\npackage transport\n\nimport (\n")
 	if hasFeature(m, "nettransport-udp") {
 		b.WriteString("\t\"net\"\n")
 	}
-	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/entitysync\"\n")
-	b.WriteString("\tkitnet \"github.com/tjbdwanghaibo/roost-core/nettransport\"\n)\n\n")
-	b.WriteString("func AsyncConfig() kitnet.AsyncTransportConfig { return kitnet.DefaultAsyncTransportConfig() }\n\n")
+	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/sync/entitysync\"\n")
+	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/sync/nettransport\"\n)\n\n")
+	b.WriteString("func AsyncConfig() nettransport.AsyncTransportConfig { return nettransport.DefaultAsyncTransportConfig() }\n\n")
 	b.WriteString("// NewSyncTransport is the entity sync manager's lane over the async transport's reliable channel:\n")
 	b.WriteString("// one frame per session per tick, backpressure closes the session (entitysync.ManagerConfig.Transport).\n")
-	b.WriteString("func NewSyncTransport(async *kitnet.AsyncTransport) (*entitysync.AsyncTransport, error) {\n\treturn entitysync.NewAsyncTransport(async)\n}\n\n")
+	b.WriteString("func NewSyncTransport(async *nettransport.AsyncTransport) (*entitysync.AsyncTransport, error) {\n\treturn entitysync.NewAsyncTransport(async)\n}\n\n")
 	if hasFeature(m, "nettransport-quic") {
-		b.WriteString("func NewQUIC() (*kitnet.AsyncTransport, *kitnet.QUICTransport, error) {\n\tprotocol := kitnet.NewQUICTransport(kitnet.QUICTransportConfig{})\n\tasync, err := kitnet.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
+		b.WriteString("func NewQUIC() (*nettransport.AsyncTransport, *nettransport.QUICTransport, error) {\n\tprotocol := nettransport.NewQUICTransport(nettransport.QUICTransportConfig{})\n\tasync, err := nettransport.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
 	}
 	if hasFeature(m, "nettransport-kcp") {
-		b.WriteString("func NewKCP() (*kitnet.AsyncTransport, *kitnet.KCPTransport, error) {\n\tprotocol, err := kitnet.NewKCPTransport(kitnet.DefaultKCPTransportConfig())\n\tif err != nil { return nil, nil, err }\n\tasync, err := kitnet.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
+		b.WriteString("func NewKCP() (*nettransport.AsyncTransport, *nettransport.KCPTransport, error) {\n\tprotocol, err := nettransport.NewKCPTransport(nettransport.DefaultKCPTransportConfig())\n\tif err != nil { return nil, nil, err }\n\tasync, err := nettransport.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
 	}
 	if hasFeature(m, "nettransport-udp") {
-		b.WriteString("func NewUDP(conn net.PacketConn, reliable kitnet.ReliableSender) (*kitnet.AsyncTransport, *kitnet.UDPTransport, error) {\n\tprotocol, err := kitnet.NewUDPTransport(kitnet.UDPTransportConfig{PacketConn: conn})\n\tif err != nil { return nil, nil, err }\n\tcomposite := kitnet.CompositeTransport{Datagrams: protocol, Reliable: reliable}\n\tasync, err := kitnet.NewAsyncTransport(composite, AsyncConfig())\n\treturn async, protocol, err\n}\n")
+		b.WriteString("func NewUDP(conn net.PacketConn, reliable nettransport.ReliableSender) (*nettransport.AsyncTransport, *nettransport.UDPTransport, error) {\n\tprotocol, err := nettransport.NewUDPTransport(nettransport.UDPTransportConfig{PacketConn: conn})\n\tif err != nil { return nil, nil, err }\n\tcomposite := nettransport.CompositeTransport{Datagrams: protocol, Reliable: reliable}\n\tasync, err := nettransport.NewAsyncTransport(composite, AsyncConfig())\n\treturn async, protocol, err\n}\n")
 	}
 	return b.String()
 }

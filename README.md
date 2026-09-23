@@ -31,12 +31,12 @@
 | `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
 | `dataengine` | `Tracker`、Put/Patch/Delete mutation、聚合 Load、schema migration、Saga/Remote commit 契约 | Entity 状态统一进入 Nest transaction 与 kit Data Engine WAL |
 | `lock`、`worker`、`goroutine`、`container`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool；`goroutine` 是协程原语（goroutine-ID、panic 安全包装、MPSC 队列、task pool、并行 map/slice），`container` 是通用容器（分桶表、keymap、对象池、拓扑排序），`misc` 只留跨包小工具（`Hash64` 分片、`Integer` 泛型约束） | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
-| `entitysync`、`syncbus`、`syncstream`、`statesync` | 实体同步的唯一机制——进程一个 Manager、subject 私有订阅、每会话一帧、prepare/commit 两阶段（`entitysync`）、模块间同步总线（`syncbus`）、有序状态流（`syncstream`）、Quake3 风格 delta+LOD 房间状态复制（`statesync`） | 把实体状态推送给客户端或其他服务（状态同步通道） |
-| `lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
+| `sync/`：`entitysync`（机制）、`entitysync/policy`（组织）、`frame`（帧格式）、`nettransport`（传输）、`lockstep`（帧同步）、`syncbus` + `syncbus/driver` + `syncbus/mirror`（服务↔服务总线） | **同步块**（ARCH-12，2026-09-23 收进一个目录；`sync/` 本身不是包）。服务→客户端的实体复制是一条轴：进程一个 `Manager`、subject 私有订阅、每会话一帧、prepare/commit 两阶段（`entitysync`），谁订谁由 `policy`（Interest / Group / Direct）决定，`frame` 只是帧格式，`nettransport` 只是传输；服务↔服务的 `ISyncBus` 是另一条轴。`syncstream`（有序持久流）是基建，不在块内 | 实体状态推给客户端；服务间状态同步 |
+| `sync/lockstep` | 帧同步（输入帧）核心：乐观帧锁定 `Sequencer`、帧冗余广播编码、全量帧历史（追帧/回放）、关键帧哈希多数派裁决 | 客户端确定性模拟的实时对战（MOBA/格斗/RTS）；与状态同步互为并列通道，见实现细节第 11 条 |
 | `saga` | 租约驱动的多域业务操作状态机 + transactional outbox，Resume 开启新 incarnation | 跨服务、多阶段、需补偿的业务操作 |
 | `bus`、`event` | NATS 之上的模块级消息 / 轻量 RPC / **JetStream 持久化 RPC**（`CallReliable`，与轻量 RPC 并存）/ 可靠消费（inbox 去重 + 死信 + `bus.dlq.*` 运维命令）；进程内事件总线（self 同步、他人异步） | 服务间与实体间的异步通信 |
 | `actionflow`、`ai` | 实体内行为契约（**不是通信设施**）：动作/任务状态机接口、声明式 `MissionPlan` 步骤图、ActionGroup 分组冻结；AI 策略契约（`CanStopByNext` 抢占仲裁、经 `ActionList` 下达动作）。**core 只有接口，执行器在 roost-kit 的 `actionflow`/`ai` 包** | 实体行为层（怪物/NPC/玩法状态机） |
-| `ownerroute`、`mirror`、`entity`（remote 部分） | 按 owner sid 分派命令的泛型路由器（本地执行 vs 经 bus 转发）；带订阅-应用回环的副本复制器（空 Data 即删除的线格式）；ownership marker + fence + 路由 epoch（epoch 在 `entity`，不在 ownerroute） | 跨服实体读写与命令路由 |
+| `ownerroute`、`sync/syncbus/mirror`、`entity`（remote 部分） | 按 owner sid 分派命令的泛型路由器（本地执行 vs 经 bus 转发）；带订阅-应用回环的副本复制器（空 Data 即删除的线格式）；ownership marker + fence + 路由 epoch（epoch 在 `entity`，不在 ownerroute） | 跨服实体读写与命令路由 |
 | `cache`、`mongo`、`redis`、`nats`、`etcd`、`httpclient`、`httpserver` | 三档：`mongo`/`nats` 纯接口（实现全在 kit）；`redis`/`etcd` 接口 + 核心实现（Lua `CompareAndSet`、`WatchCallback`、LocalMirror 契约）；`cache`/`httpclient`/`httpserver` 是完整实现（8 种缓存 store、HMAC 签名客户端、chi 之上的生产 HTTP 引擎——core 对 chi 的依赖是唯一例外） | 缓存选型见实现细节第 13 条；连接装配由 `roost-kit` 的 Mod 提供 |
 | `health`、`metrics`、`log`、`admin`、`lifecycle`、`security`、`failurelog`、`featureflag`、`hotcode` | 健康检查（degraded 在聚合层等同失败）、指标（counter/gauge/timer 无分位数；histogram 17 桶指数分布带 p50–p99 与 Prometheus `_bucket` 导出）、结构化日志（自动注入 goId/逻辑帧/player + ELog 链式实体日志）、管理命令（含元数据注册表，审批灰度由上层实现）、生命周期钩子 + 泛型 `ManagerGroup` 编排、限流/HMAC 签名/会话令牌、Redis 有界失败记录、布尔开关表、热修补 | 平台能力；**一律用 `app.Lookup` 取实例注册表**（见实现细节第 12 条） |
 | `gateway`、`webroute`、`errcode`、`configdata` | 协议无关的请求边界、生成路由运行时、错误码、配置表快照（原子热更/回滚/内容 hash/请求一致性；三条接入通道：手写 TableDef、`cfg` tag 自动注册 `RegisterAutoTable`、外部生成聚合 `RegisterExternalTables`——配置定义可全量生成，见实现细节第 17 条） | 接入层契约 |
@@ -54,9 +54,9 @@ v1.10.0 把一批只描述"机制"的包名换成描述"职责"的名字。旧�
 
 | 旧包 | 新包 | 为什么改 |
 | --- | --- | --- |
-| `sync` | `syncbus` | 与标准库 `sync` 同名，且它是一条总线，不是同步原语 |
-| `replication` | `statesync` | 它做的是房间状态同步（delta+LOD），不是数据库复制 |
-| `replica` | `mirror` | 它是订阅-应用回环的本地镜像，与 `replication` 无关 |
+| `sync` | `syncbus` | 与标准库 `sync` 同名，且它是一条总线，不是同步原语 |（2026-09-23 起 `sync/` 是收纳同步块的**目录**，目录下没有 Go 文件，不构成叫 `sync` 的包）
+| `replication` | `statesync` → `sync/frame` | 先改成 statesync（它做的是房间状态同步，不是数据库复制）；ARCH-10 后它只剩帧格式，ARCH-12 再改成 `sync/frame` |
+| `replica` | `mirror`（今在 `sync/syncbus/mirror`） | 它是订阅-应用回环的本地镜像，与 `replication` 无关 |
 | `ctx` | `fctx` | 与标准库 `context` 的惯用别名 `ctx` 冲突 |
 | `obs` | `metrics` | 包里只有指标，没有 tracing/logging，`obs` 名不副实 |
 | `query` | `index` | 它是二级索引，不是查询语言 |
@@ -405,7 +405,7 @@ tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调
 
 生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），fsync 次数从每条降到每批——观察者频繁进出的场景不再被逐条 fsync 地板限速。
 
-### 11. 输入帧同步与状态同步：两条通道的取舍 —— `lockstep/`、`entitysync/`
+### 11. 输入帧同步与状态同步：两条通道的取舍 —— `sync/lockstep`、`sync/entitysync`
 
 roost 的同步能力是两条并列通道，按"谁跑模拟"划分：
 
@@ -482,8 +482,8 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 6. **Guard 与实体管理**：`entity/entity_guard.go`（锁序、guard 作用域、release hook）→ `entity/entity_manager.go`、`entity/manager_access.go` + 对应测试。
 7. **Data Engine 契约**：`dataengine/tracker.go` → `dataengine/mutation.go` → `dataengine/store.go`，再到 kit `dataengine/projector.go`、`mongo_store.go`、`entity_repository.go` 与 `migration.go`。
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
-9. **状态同步**：`entity/subject_sync.go`（`PrepareTick`，prepare/commit 两阶段）→ `entitysync/manager.go`（tick、门槛、每会话一帧）→ `entitysync/session.go` + `wire.go`（ObjectRef、statesync 帧）→ 文档 `ENTITY_SYNC.md`；服务间的有序状态流另见 `syncstream/`。
-10. **帧同步（输入帧）**：`lockstep/sequencer.go`（乐观帧锁定）→ `lockstep/wire.go`（冗余广播编码）→ `lockstep/history.go`、`lockstep/desync.go` → `lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `lockstep/room.go`（房间与传输接线）。
+9. **状态同步**：`entity/subject_sync.go`（`PrepareTick`，prepare/commit 两阶段）→ `sync/entitysync/manager.go`（tick、门槛、每会话一帧）→ `sync/entitysync/session.go` + `wire.go`（ObjectRef、frame 帧）→ 文档 `ENTITY_SYNC.md`；服务间的有序状态流另见 `syncstream/`。
+10. **帧同步（输入帧）**：`sync/lockstep/sequencer.go`（乐观帧锁定）→ `sync/lockstep/wire.go`（冗余广播编码）→ `sync/lockstep/history.go`、`sync/lockstep/desync.go` → `sync/lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ kit `sync/lockstep/room.go`（房间与传输接线）。
 11. **编排与装配**：`saga/engine.go` + `SAGA.md`（`saga/engine_test.go` 开头的 `memoryStore` 与 `TestStoreContract*` 是 Store 实现者的必读规格）→ `bus/bus.go` + `bus/bus_lifecycle_test.go`（生命周期与 subject 布局的权威文档）→ `app/app.go`、`app/registry.go` + `app/example_test.go`（shared/service-specific mod 分层的完整装配样例）。
 12. **语义即测试的推荐清单**：`worker/worker_test.go`（"接纳即执行"不变量的回归，注释写明了原缺陷）、`webroute/route_test.go`（生成路由运行时的完整用法说明书）、`configdata/configdata_test.go`（reload/DryRun/Rollback/listener 回滚）、`etcd/watch_callback_test.go`（无损背压 vs LocalMirror 订阅隔离的选型依据）、`bus/reliable_test.go`（去重按 consumer、DLQ requeue 语义）。
 

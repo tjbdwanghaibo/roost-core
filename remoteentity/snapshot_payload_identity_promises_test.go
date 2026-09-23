@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/mirror"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 // U-0179 · C2 · RR-20260913-03：payload 里的身份必须和信封绑定后才准写入。

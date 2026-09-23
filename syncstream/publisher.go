@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 )
 
 var (

@@ -157,6 +157,7 @@
 | M-14 | core + codegen + demo 模板 | ARCH-10 收尾：held/ready 会话（demo `scene_ready`），`syncTopic` → `syncNamespace`，新包 `entitysync/policy`（Interest / Room / Direct）——demo 的兴趣聚合搬进 core；分层收成内容 / 机制 / 组织 / 应用四层 | [M-14-sync-policy-and-ready.md](M-14-sync-policy-and-ready.md) |
 | M-15 | core | ARCH-12 S1：删掉 `statesync` 里 ARCH-10 后零引用的老 Replicator 一族（Replicator / SessionState / LOD / delta / ShadowStore / SnapshotRing / Schema / control / Reassembler）与 `nettransport.ControlPlane`，约 −3.9k 行；修 "replication" 过时注释 | [M-15-statesync-dead-code.md](M-15-statesync-dead-code.md) |
 | M-16 | core + demo 模板 | ARCH-12 S2：`SessionID / SessionInfo`、`Transport` 一族、分片头从 `statesync` 归位到 `nettransport`；分片 API 与帧解耦（`FragmentDatagrams(DatagramMeta, …)`）；`nettransport` 与 `statesync` 互不依赖 | [M-16-transport-contracts-home.md](M-16-transport-contracts-home.md) |
+| M-17 | core + codegen + demo 模板 + 文档 | ARCH-12 S3/S4：同步块收进 `sync/`（entitysync、frame、nettransport、lockstep、syncbus + driver + mirror）；`statesync` → `sync/frame` 并去前缀；`spatial.InterestManager / InterestCluster` → `policy.AOI / AOICluster`（spatial 只剩纯几何）；迁移表第三阶段 `layout:`；T-175 | [M-17-sync-layout.md](M-17-sync-layout.md) |
 
 写法约定：**问题**（一句话）→ **根因**（指向具体行）→ **方案选择**（列出考虑过的方案与取舍）→
 **改动**（文件与要点）→ **证明**（红测试名、修前失败文本、修后结果）→ **未做 / 边界**。

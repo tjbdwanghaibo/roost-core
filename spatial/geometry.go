@@ -1,15 +1,11 @@
 // Package spatial provides game-agnostic two-dimensional integer-grid
-// primitives without entity, scene, protocol, or gameplay dependencies.
+// primitives without entity, scene, protocol, or gameplay dependencies:
+// points and rectangles with overflow-safe arithmetic, a uniform-grid ID
+// index (BlockIndex), a blocked-cell terrain and four-direction grid A*.
 //
-// Scope: a uniform-grid ID index (BlockIndex), four-direction grid A*, and
-// incremental interest management — InterestManager for one room
-// (enter/leave hysteresis, distance bands for LOD, visible-set caps) and
-// InterestCluster for seamless multi-room worlds on a shared coordinate
-// plane (boundary mirroring, blink-free border migration). Cross-room
-// seamlessness is within one process; cross-process handover additionally
-// needs remote-entity ownership fences and subscription replication and is
-// not provided here. There is still no Z axis and no navmesh; object data
-// beyond ids and positions stays with the caller.
+// It is pure geometry. Who can see whom (area of interest) is a question of
+// how entity sync is organized and lives in sync/entitysync/policy (AOI,
+// AOICluster), which builds on the primitives here.
 package spatial
 
 import (
@@ -22,7 +18,8 @@ type Point struct {
 	Y int64
 }
 
-func saturatingAdd(a, b int64) int64 {
+// SaturatingAdd adds without wrapping: the result clamps at the int64 bounds.
+func SaturatingAdd(a, b int64) int64 {
 	sum := a + b
 	if b > 0 && sum < a {
 		return math.MaxInt64
@@ -33,11 +30,12 @@ func saturatingAdd(a, b int64) int64 {
 	return sum
 }
 
-func saturatingSub(a, b int64) int64 {
+// SaturatingSub subtracts without wrapping: the result clamps at the int64 bounds.
+func SaturatingSub(a, b int64) int64 {
 	if b == math.MinInt64 {
-		return saturatingAdd(saturatingAdd(a, math.MaxInt64), 1)
+		return SaturatingAdd(SaturatingAdd(a, math.MaxInt64), 1)
 	}
-	return saturatingAdd(a, -b)
+	return SaturatingAdd(a, -b)
 }
 
 // Rect is half-open: Min is inclusive and Max is exclusive.

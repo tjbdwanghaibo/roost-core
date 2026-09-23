@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 
 	"github.com/spf13/viper"
 )

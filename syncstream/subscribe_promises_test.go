@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	coresyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	coresyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 )
 
 // mintEnvelope publishes one packet through a real Publisher and returns the
