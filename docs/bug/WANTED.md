@@ -8,6 +8,14 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
+## W-2026-09-23-01 datagram lane 没有消费者，是否连 `AsyncTransport` 的 datagram lane 一起退场
+
+- **位置**：roost-core `nettransport/channel.go`（`AsyncTransport` 的 datagram lane：`SendDatagram / SendDatagramBatch`、`inspectDatagramBatch`、latest-only 折叠）、`statesync/datagram.go`（`FragmentFrame`、`InspectDatagram`、42 字节分片头）。基线：M-15。
+- **现象**：datagram lane 的协议是"老 Replicator 把一帧切成带 RoomID/Epoch/Tick 头的分片、latest-only 投递、客户端重组"。M-14 后 entitysync 只走 reliable lane，robot 不再重组，M-15 删掉了 `Reassembler`；`FragmentFrame` 在 core 内只剩测试调用。lockstep 明确不用这条 lane（它自己的冗余广播走裸 UDP sender）。
+- **为何可疑**：一条没有生产者也没有消费者的 lane 仍占 `channel.go` 的一半和三个协议传输的 `SendDatagram` 路径；保留它意味着 S2 要把分片头一起搬进 transport 并维护一个没人说的协议。
+- **候选修法**：(a) 整条删（AsyncTransport 只留 reliable lane；UDP/KCP/QUIC 的原始 `SendDatagram` 留给 lockstep 与将来的 unreliable 状态帧）；(b) 保留但把分片头改成与帧无关的 `DatagramMeta`。S2 先按 (b) 最小化处理，(a) 等 review 拍板。
+- **来源**：ARCH-12 S1（M-15）核对导出符号引用时发现。
+
 ## W-2026-09-22-04 分流结论：→ ARCH-10（原 ARCH-08 A 项，09-22 并入；M-13 已实施：envelope sink 已删除）
 
 - **位置**：roost-core `room/room_broadcast.go:85-93`（`roomSubscriberKey{roomID, subscriber}`、`roomFrameGroupKey{roomID, subscriber}`）、

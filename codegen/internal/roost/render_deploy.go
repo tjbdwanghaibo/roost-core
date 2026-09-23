@@ -656,7 +656,7 @@ func renderImplementationGuide(m Manifest) string {
 
 ## 实时路径
 
-- entitysync 管理 observer 与可见性；replication 生成 snapshot/delta/LOD；syncstream 管理有序流、ACK 与 resync。
+- entitysync 是实体同步的机制（一个 Manager、subject 私有订阅、每会话一帧），entitysync/policy 决定谁订谁，statesync 只是帧格式，nettransport 只是传输。
 - 状态同步和 lockstep 是并列模型：前者服务器下发权威状态，后者广播输入并由客户端确定性模拟。
 - UDP/KCP/QUIC 只改变传输特性，不改变版本、ACK、epoch 和 resync 一致性语义。
 

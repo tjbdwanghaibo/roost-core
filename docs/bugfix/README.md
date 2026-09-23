@@ -155,6 +155,7 @@
 | M-12 | core+codegen | 生成的同步字段词汇表（ARCH-06，承接 W-2026-09-18-02） | [ARCH-06-sync-field-vocabulary.md](ARCH-06-sync-field-vocabulary.md) |
 | M-13 | core + codegen 模板 | 实体同步统一为 `entitysync.Manager`（subject 私有订阅者表、每会话一帧、`ErrRetryLater`/关会话两种失败），删除 coordinator 与 room 广播器 / envelope sink / transport sink / RoomManager，线格式 v2；demo scene 直接持 Manager（ARCH-10，破坏性） | [M-13-entitysync-manager.md](M-13-entitysync-manager.md) |
 | M-14 | core + codegen + demo 模板 | ARCH-10 收尾：held/ready 会话（demo `scene_ready`），`syncTopic` → `syncNamespace`，新包 `entitysync/policy`（Interest / Room / Direct）——demo 的兴趣聚合搬进 core；分层收成内容 / 机制 / 组织 / 应用四层 | [M-14-sync-policy-and-ready.md](M-14-sync-policy-and-ready.md) |
+| M-15 | core | ARCH-12 S1：删掉 `statesync` 里 ARCH-10 后零引用的老 Replicator 一族（Replicator / SessionState / LOD / delta / ShadowStore / SnapshotRing / Schema / control / Reassembler）与 `nettransport.ControlPlane`，约 −3.9k 行；修 "replication" 过时注释 | [M-15-statesync-dead-code.md](M-15-statesync-dead-code.md) |
 
 写法约定：**问题**（一句话）→ **根因**（指向具体行）→ **方案选择**（列出考虑过的方案与取舍）→
 **改动**（文件与要点）→ **证明**（红测试名、修前失败文本、修后结果）→ **未做 / 边界**。

@@ -1,11 +1,8 @@
 package statesync
 
 import (
-	"bytes"
 	"encoding/binary"
 	"hash/crc32"
-	"sync"
-	"time"
 )
 
 const (
@@ -100,10 +97,6 @@ func encodeDatagram(header DatagramHeader, payload []byte) ([]byte, error) {
 	return packet, nil
 }
 
-func DecodeDatagram(packet []byte, limits Limits) (DatagramHeader, []byte, error) {
-	return decodeDatagram(packet, limits, true)
-}
-
 // InspectDatagram validates the complete packet, including checksum, without
 // copying its payload. Transport queues use it to validate frame batches on
 // the hot path.
@@ -153,159 +146,4 @@ func checksumDatagram(packet []byte) uint32 {
 		_, _ = hash.Write(packet[DatagramHeaderSize:])
 	}
 	return hash.Sum32()
-}
-
-type assemblyKey struct {
-	session  SessionID
-	roomID   uint64
-	epoch    uint32
-	tick     uint32
-	sequence uint32
-}
-
-type frameAssembly struct {
-	header   DatagramHeader
-	created  time.Time
-	chunks   [][]byte
-	received int
-	total    int
-}
-
-type Reassembler struct {
-	mu       sync.Mutex
-	limits   Limits
-	ttl      time.Duration
-	inflight map[assemblyKey]*frameAssembly
-}
-
-func NewReassembler(limits Limits, ttl time.Duration) *Reassembler {
-	if ttl <= 0 {
-		ttl = 2 * time.Second
-	}
-	return &Reassembler{limits: normalizeLimits(limits), ttl: ttl, inflight: make(map[assemblyKey]*frameAssembly)}
-}
-
-func (r *Reassembler) Push(packet []byte, now time.Time) ([]byte, bool, DatagramHeader, error) {
-	return r.push(0, packet, now)
-}
-
-// PushFor scopes fragmented frames by authenticated session. Gateways that
-// share one Reassembler across clients must use this method; per-client
-// reassemblers may keep using Push.
-func (r *Reassembler) PushFor(session SessionID, packet []byte, now time.Time) ([]byte, bool, DatagramHeader, error) {
-	if session == 0 {
-		return nil, false, DatagramHeader{}, ErrSessionNotFound
-	}
-	return r.push(session, packet, now)
-}
-
-func (r *Reassembler) push(session SessionID, packet []byte, now time.Time) ([]byte, bool, DatagramHeader, error) {
-	if r == nil {
-		return nil, false, DatagramHeader{}, ErrInvalidDatagram
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-	header, payload, err := DecodeDatagram(packet, r.limits)
-	if err != nil {
-		return nil, false, DatagramHeader{}, err
-	}
-	if header.ChunkCount == 1 {
-		// The single-chunk fast path answers the same question the
-		// multi-chunk accumulation below does: is this frame within
-		// MaxFrameBytes? It skipped that check and let a payload through
-		// that the same bytes split in two would have refused
-		// (RR-20260914-12, U-0202).
-		if len(payload) > r.limits.MaxFrameBytes {
-			return nil, false, header, ErrFrameTooLarge
-		}
-		return payload, true, header, nil
-	}
-	key := assemblyKey{session: session, roomID: header.RoomID, epoch: header.Epoch, tick: header.Tick, sequence: header.Sequence}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.expireLocked(now)
-	assembly := r.inflight[key]
-	if assembly == nil {
-		if len(r.inflight) >= r.limits.MaxInflightFrames {
-			return nil, false, header, ErrReassemblyCapacity
-		}
-		// Per-session admission keeps one peer's never-completing fragments
-		// from occupying the whole shared table; the global cap above bounds
-		// this scan. Session 0 is the dedicated per-client Push path, which
-		// has the table to itself and is limited by the global cap alone.
-		if session != 0 {
-			owned := 0
-			for existing := range r.inflight {
-				if existing.session == session {
-					owned++
-				}
-			}
-			if owned >= r.limits.MaxInflightFramesPerSession {
-				return nil, false, header, ErrReassemblyCapacity
-			}
-		}
-		assembly = &frameAssembly{header: header, created: now, chunks: make([][]byte, int(header.ChunkCount))}
-		r.inflight[key] = assembly
-	} else if assembly.header.ChunkCount != header.ChunkCount || assembly.header.BaseTick != header.BaseTick || assembly.header.Flags != header.Flags {
-		delete(r.inflight, key)
-		return nil, false, header, ErrInvalidDatagram
-	}
-	index := int(header.ChunkIndex)
-	if existing := assembly.chunks[index]; existing != nil {
-		if !bytes.Equal(existing, payload) {
-			delete(r.inflight, key)
-			return nil, false, header, ErrInvalidDatagram
-		}
-		return nil, false, header, nil
-	}
-	if assembly.total+len(payload) > r.limits.MaxFrameBytes {
-		delete(r.inflight, key)
-		return nil, false, header, ErrFrameTooLarge
-	}
-	assembly.chunks[index] = payload
-	assembly.received++
-	assembly.total += len(payload)
-	if assembly.received != len(assembly.chunks) {
-		return nil, false, header, nil
-	}
-	out := make([]byte, 0, assembly.total)
-	for _, chunk := range assembly.chunks {
-		out = append(out, chunk...)
-	}
-	delete(r.inflight, key)
-	return out, true, header, nil
-}
-
-func (r *Reassembler) Expire(now time.Time) int {
-	if r == nil {
-		return 0
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-	r.mu.Lock()
-	removed := r.expireLocked(now)
-	r.mu.Unlock()
-	return removed
-}
-
-func (r *Reassembler) expireLocked(now time.Time) int {
-	removed := 0
-	for key, assembly := range r.inflight {
-		if now.Sub(assembly.created) >= r.ttl {
-			delete(r.inflight, key)
-			removed++
-		}
-	}
-	return removed
-}
-
-func (r *Reassembler) Len() int {
-	if r == nil {
-		return 0
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.inflight)
 }

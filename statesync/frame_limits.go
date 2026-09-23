@@ -6,33 +6,22 @@ import (
 )
 
 const (
-	ProtocolVersion       uint16 = 1
-	DefaultSnapshotRateHz        = 20
-	DefaultMaxDatagram           = 1200
+	ProtocolVersion    uint16 = 1
+	DefaultMaxDatagram        = 1200
 )
 
 var (
-	ErrInvalidObjectRef   = errors.New("replication: invalid object ref")
-	ErrObjectNotFound     = errors.New("replication: object not found")
-	ErrObjectLimit        = errors.New("replication: object limit exceeded")
-	ErrComponentLimit     = errors.New("replication: component limit exceeded")
-	ErrComponentTooLarge  = errors.New("replication: component payload too large")
-	ErrFrameTooLarge      = errors.New("replication: frame payload too large")
-	ErrInvalidFrame       = errors.New("replication: invalid frame")
-	ErrBaselineMismatch   = errors.New("replication: baseline mismatch")
-	ErrSnapshotNotFound   = errors.New("replication: snapshot not found")
-	ErrSessionNotFound    = errors.New("replication: session not found")
-	ErrInvalidAck         = errors.New("replication: invalid acknowledgement")
-	ErrInvalidControl     = errors.New("replication: invalid control message")
-	ErrPreparedFrameStale = errors.New("replication: prepared frame is stale")
-	ErrInvalidDatagram    = errors.New("replication: invalid datagram")
-	ErrChecksumMismatch   = errors.New("replication: checksum mismatch")
-	ErrFragmentLimit      = errors.New("replication: fragment limit exceeded")
-	ErrReassemblyCapacity = errors.New("replication: reassembly capacity exceeded")
-	ErrTransportMissing   = errors.New("replication: transport is not configured")
-	ErrReplicatorClosed   = errors.New("replication: replicator is closed")
-	ErrSchemaFrozen       = errors.New("replication: schema configuration is frozen")
-	ErrInvalidLOD         = errors.New("replication: invalid level of detail configuration")
+	ErrInvalidObjectRef  = errors.New("replication: invalid object ref")
+	ErrObjectLimit       = errors.New("replication: object limit exceeded")
+	ErrComponentLimit    = errors.New("replication: component limit exceeded")
+	ErrComponentTooLarge = errors.New("replication: component payload too large")
+	ErrFrameTooLarge     = errors.New("replication: frame payload too large")
+	ErrInvalidFrame      = errors.New("replication: invalid frame")
+	ErrBaselineMismatch  = errors.New("replication: baseline mismatch")
+	ErrInvalidDatagram   = errors.New("replication: invalid datagram")
+	ErrChecksumMismatch  = errors.New("replication: checksum mismatch")
+	ErrFragmentLimit     = errors.New("replication: fragment limit exceeded")
+	ErrTransportMissing  = errors.New("replication: transport is not configured")
 )
 
 type Limits struct {
@@ -42,24 +31,16 @@ type Limits struct {
 	MaxFrameBytes          int
 	MaxDatagramBytes       int
 	MaxFragments           int
-	MaxInflightFrames      int
-	// MaxInflightFramesPerSession bounds how much of the shared reassembly
-	// table one session may occupy. Without it a single peer sending
-	// never-completing first fragments could hold every inflight slot until
-	// TTL expiry and starve reassembly for all other sessions.
-	MaxInflightFramesPerSession int
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxObjects:                  100,
-		MaxComponentsPerObject:      64,
-		MaxComponentBytes:           64 << 10,
-		MaxFrameBytes:               4 << 20,
-		MaxDatagramBytes:            DefaultMaxDatagram,
-		MaxFragments:                64,
-		MaxInflightFrames:           32,
-		MaxInflightFramesPerSession: 8,
+		MaxObjects:             100,
+		MaxComponentsPerObject: 64,
+		MaxComponentBytes:      64 << 10,
+		MaxFrameBytes:          4 << 20,
+		MaxDatagramBytes:       DefaultMaxDatagram,
+		MaxFragments:           64,
 	}
 }
 
@@ -83,86 +64,7 @@ func normalizeLimits(limits Limits) Limits {
 	if limits.MaxFragments <= 0 {
 		limits.MaxFragments = defaults.MaxFragments
 	}
-	if limits.MaxInflightFrames <= 0 {
-		limits.MaxInflightFrames = defaults.MaxInflightFrames
-	}
-	if limits.MaxInflightFramesPerSession <= 0 {
-		limits.MaxInflightFramesPerSession = defaults.MaxInflightFramesPerSession
-	}
 	return limits
-}
-
-type Lane uint8
-
-const (
-	LaneState Lane = iota + 1
-	LaneLifecycle
-	LaneEvent
-	LaneStatic
-)
-
-type Reliability uint8
-
-const (
-	ReliabilityUnreliableLatest Reliability = iota + 1
-	ReliabilityUnreliableEvent
-	ReliabilityReliableOrdered
-)
-
-type Priority uint8
-
-const (
-	PriorityCosmetic Priority = iota + 1
-	PriorityLow
-	PriorityNormal
-	PriorityHigh
-	PriorityCritical
-)
-
-type Visibility uint8
-
-const (
-	VisibilityPublic Visibility = iota + 1
-	VisibilityOwner
-	VisibilityTeam
-	VisibilitySpectator
-	VisibilityCustom
-)
-
-type CodecType uint8
-
-const (
-	CodecRaw CodecType = iota + 1
-	CodecGeneratedBitset
-	CodecGeneratedDelta
-)
-
-type ReplicationPolicy struct {
-	Lane        Lane
-	Reliability Reliability
-	Priority    Priority
-	MaxRateHz   uint8
-	Visibility  Visibility
-	Codec       CodecType
-}
-
-func (p ReplicationPolicy) validate() error {
-	if p.Lane < LaneState || p.Lane > LaneStatic {
-		return fmt.Errorf("%w: invalid lane %d", ErrInvalidFrame, p.Lane)
-	}
-	if p.Reliability < ReliabilityUnreliableLatest || p.Reliability > ReliabilityReliableOrdered {
-		return fmt.Errorf("%w: invalid reliability %d", ErrInvalidFrame, p.Reliability)
-	}
-	if p.Priority < PriorityCosmetic || p.Priority > PriorityCritical {
-		return fmt.Errorf("%w: invalid priority %d", ErrInvalidFrame, p.Priority)
-	}
-	if p.Visibility < VisibilityPublic || p.Visibility > VisibilityCustom {
-		return fmt.Errorf("%w: invalid visibility %d", ErrInvalidFrame, p.Visibility)
-	}
-	if p.Codec < CodecRaw || p.Codec > CodecGeneratedDelta {
-		return fmt.Errorf("%w: invalid codec %d", ErrInvalidFrame, p.Codec)
-	}
-	return nil
 }
 
 type ObjectRef struct {
@@ -191,23 +93,6 @@ func (m SnapshotMeta) validate() error {
 		return fmt.Errorf("%w: invalid snapshot metadata", ErrInvalidFrame)
 	}
 	return nil
-}
-
-type ComponentState struct {
-	TypeID        uint16
-	SchemaVersion uint16
-	Data          []byte
-}
-
-type ObjectState struct {
-	Ref        ObjectRef
-	Archetype  uint16
-	Components []ComponentState
-}
-
-type Snapshot struct {
-	SnapshotMeta
-	Objects []ObjectState
 }
 
 type FrameKind uint8

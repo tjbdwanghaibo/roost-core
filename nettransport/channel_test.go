@@ -146,33 +146,6 @@ func TestAsyncTransportReliableBackpressureAndIndependentLane(t *testing.T) {
 	}
 }
 
-func TestCoreReplicatorDrivesAsyncSessionLifecycle(t *testing.T) {
-	downstream := core.TransportFunc{
-		Datagram: func(context.Context, core.SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, core.SessionID, []byte) error { return nil },
-	}
-	transport, err := NewAsyncTransport(downstream, DefaultAsyncTransportConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	replicator := core.NewReplicator(core.ReplicatorConfig{Transport: transport})
-	if err := replicator.RegisterSession(core.SessionInfo{ID: 10}); err != nil {
-		t.Fatal(err)
-	}
-	if transport.Stats().ActiveSessions != 1 {
-		t.Fatal("transport session was not registered by core")
-	}
-	if !replicator.RemoveSession(10) || transport.Stats().ActiveSessions != 0 {
-		t.Fatal("transport session was not removed by core")
-	}
-	replicator.Close()
-	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := transport.Close(closeCtx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestAsyncTransportReliableFailureIsTerminalAndHandlerPanicIsContained(t *testing.T) {
 	downstream := &orderedFailureTransport{started: make(chan struct{}), release: make(chan struct{})}
 	config := DefaultAsyncTransportConfig()

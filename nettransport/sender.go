@@ -1,6 +1,8 @@
-// Package replication contains reusable transport-side building blocks for
-// roost-core/replication. Protocol state and delta algorithms stay in core;
-// queueing and concrete network adaptation belong in kit.
+// Package nettransport is the network side of entity sync: the UDP / KCP /
+// QUIC session transports, the AEAD datagram wrapper, and AsyncTransport, the
+// per-session queue with a reliable lane (entitysync frames, backpressure
+// closes the session) and a latest-only datagram lane. Frame contents are
+// opaque bytes here; what a frame means is statesync's and entitysync's job.
 package nettransport
 
 import (

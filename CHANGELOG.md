@@ -6,6 +6,7 @@
 
 ### Changed（破坏性）
 
+- **`statesync` 只剩帧格式**（ARCH-12 S1，M-15，2026-09-23）。删掉 ARCH-10 之后没有调用者的老 `Replicator`、`SessionState`、`LODProjector`、`BuildDelta / ApplyDelta`、`ShadowStore`、`SnapshotRing`、`SchemaRegistry`、控制消息、`Reassembler`，以及 `nettransport.ControlPlane`；`Limits` 去掉 `MaxInflightFrames{,PerSession}`。业务代码只用到的 `EncodeFrame / DecodeFrame`、帧类型、`Limits`、`SessionID`、传输契约全部保留。
 - **`room/` 包退场，`policy.Room` 改名 `Group`**（ARCH-10 命名收尾，2026-09-23）。ISyncBus 的 NATS / JetStream 实现从 `room/` 移到 `syncbus/driver`（契约仍在 `syncbus`）；
   kit 的 `room.RoomMod` 改为 `syncbus.SyncBusMod`，`mods.ModRoom` 改为 `mods.ModSyncBus`（值 `"syncbus"`，配置段 `syncbus:`，codegen 的 `-mods room` 与 roost.yaml 里的 `room` / `sync` 都映射到 `syncbus`）。
   `entitysync/policy.Room` 改名 `Group`：它是"成员全互见的集合"，与 `lockstep.Room`（战斗房间）不是一回事。

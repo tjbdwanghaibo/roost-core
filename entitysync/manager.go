@@ -83,12 +83,6 @@ func (c ManagerConfig) normalized() ManagerConfig {
 	if c.Limits.MaxFragments <= 0 {
 		c.Limits.MaxFragments = defaults.MaxFragments
 	}
-	if c.Limits.MaxInflightFrames <= 0 {
-		c.Limits.MaxInflightFrames = defaults.MaxInflightFrames
-	}
-	if c.Limits.MaxInflightFramesPerSession <= 0 {
-		c.Limits.MaxInflightFramesPerSession = defaults.MaxInflightFramesPerSession
-	}
 	if c.MaxSubjects <= 0 {
 		c.MaxSubjects = DefaultMaxSubjects
 	}

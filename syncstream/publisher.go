@@ -1,6 +1,6 @@
-// Package syncstream adapts roost-core/syncstream packets to roost-kit sync
-// transports with observer isolation, confirmed publishing, compression,
-// fragmentation, checksums, and bounded reassembly.
+// This file is the publishing side: observer isolation, confirmed publishing,
+// compression, fragmentation, checksums and bounded reassembly on top of an
+// ISyncBus.
 package syncstream
 
 import (

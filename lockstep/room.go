@@ -4,7 +4,7 @@
 // broadcasts cut frames to attached sessions over the datagram lane (loss is
 // healed by frame redundancy, never by retransmission), and pages catch-up
 // frames to reconnecting sessions over the reliable lane (KCP, QUIC or the
-// AEAD UDP transport via the replication package's senders).
+// AEAD UDP transport via nettransport's senders).
 //
 // A Room is single-owner state, like the sequencer it wraps: the room
 // entity's serial handler drives Attach/SubmitInput/Tick — no locks, in line
