@@ -9,7 +9,7 @@ roost core 的三块基础之一（另两块：nest 调度、dataengine）。这
 | 服务 → 客户端（实体复制） | `entitysync` | 机制：进程一个 `Manager`，subject 自己持有订阅者，每会话一帧，prepare/commit 两阶段，held/ready 会话，持久化门槛 |
 | | `entitysync/policy` | 组织：谁订谁——`Interest`（AOI + 关系源）、`Group`（全互见）、`Direct`（显式绑定）；只调 `Subscribe / Unsubscribe` |
 | | `frame` | 帧格式：`Frame` 的 `Encode / Decode`、对象 / 组件 delta、`Limits`。不知道会话和传输 |
-| | `nettransport` | 传输：UDP / KCP / QUIC、AEAD、`AsyncTransport`（reliable lane 给 entitysync，datagram lane latest-only）、`SessionID`、分片头。不知道帧里有什么 |
+| | `nettransport` | 传输：UDP / KCP / QUIC、AEAD、`AsyncTransport`（每会话有界 reliable 队列，给 entitysync；只有这一条 lane）、`SessionID`。不可靠 datagram 直接走协议传输的 `DatagramSender`（lockstep 这么用）。不知道帧里有什么 |
 | | `lockstep` | 帧同步（输入帧）：与状态同步并列的另一种模型，共用 `nettransport` |
 | 服务 ↔ 服务（总线） | `syncbus` | `ISyncBus` 契约、`DeliveryIDs`、`PatchSyncer` |
 | | `syncbus/driver` | NATS（至多一次）与 JetStream（持久、确认）实现；kit 的 `SyncBusMod` 二选一装配 |

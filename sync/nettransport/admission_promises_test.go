@@ -13,7 +13,6 @@ func admissionTransport(t *testing.T, mutate func(*AsyncTransportConfig)) *Async
 		Reliable: func(context.Context, SessionID, []byte) error { return nil },
 	}
 	cfg := DefaultAsyncTransportConfig()
-	cfg.AllowOpaqueDatagrams = true // isolate the transport's own limits from frame inspection
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -50,41 +49,38 @@ func TestRegisterSessionRefusesZeroDuplicateOverLimitAndClosed(t *testing.T) {
 	}
 }
 
-// AdmitBatch validates every frame before touching any queue: a frame must
-// name a session and carry exactly one of datagrams / reliable, a reliable
-// message is bounded by MaxReliableBytes, and a datagram batch by count and
-// per-packet size.
-func TestAdmitBatchRefusesEachMalformedFrame(t *testing.T) {
-	transport := admissionTransport(t, func(c *AsyncTransportConfig) {
-		c.MaxReliableBytes = 8
-		c.MaxDatagramsPerFrame = 2
-		c.MaxDatagramBytes = 4
-	})
+// SendReliable validates before touching the queue: a session id, a
+// non-empty payload, and a payload within MaxReliableBytes; a message exactly
+// at the limit is admitted.
+func TestSendReliableRefusesEachMalformedMessage(t *testing.T) {
+	transport := admissionTransport(t, func(c *AsyncTransportConfig) { c.MaxReliableBytes = 8 })
 	if err := transport.RegisterSession(SessionInfo{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 	cases := []struct {
-		name  string
-		frame OutboundFrame
-		want  error
+		name    string
+		session SessionID
+		payload []byte
+		want    error
 	}{
-		{"no session", OutboundFrame{Reliable: []byte("x")}, ErrProtocolConfig},
-		{"neither lane", OutboundFrame{Session: 7}, ErrProtocolConfig},
-		{"both lanes", OutboundFrame{Session: 7, Datagrams: [][]byte{{1}}, Reliable: []byte("x")}, ErrProtocolConfig},
-		{"reliable too big", OutboundFrame{Session: 7, Reliable: make([]byte, 9)}, ErrReliableMessageTooBig},
-		{"too many datagrams", OutboundFrame{Session: 7, Datagrams: [][]byte{{1}, {2}, {3}}}, ErrInvalidDatagramBatch},
-		{"empty datagram", OutboundFrame{Session: 7, Datagrams: [][]byte{{}}}, ErrInvalidDatagramBatch},
-		{"oversized datagram", OutboundFrame{Session: 7, Datagrams: [][]byte{make([]byte, 5)}}, ErrInvalidDatagramBatch},
+		{"no session", 0, []byte("x"), ErrSessionNotRegistered},
+		{"empty payload", 7, nil, ErrProtocolConfig},
+		{"too big", 7, make([]byte, 9), ErrReliableMessageTooBig},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := transport.AdmitBatch(ctx, []OutboundFrame{tc.frame}); !errors.Is(err, tc.want) {
-				t.Fatalf("AdmitBatch = %v, want %v", err, tc.want)
+			if err := transport.SendReliable(ctx, tc.session, tc.payload); !errors.Is(err, tc.want) {
+				t.Fatalf("SendReliable = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	if err := transport.AdmitBatch(ctx, []OutboundFrame{{Session: 7, Reliable: []byte("12345678")}, {Session: 7, Datagrams: [][]byte{{1, 2, 3, 4}, {5}}}}); err != nil {
-		t.Fatalf("frames at the limits must be admitted: %v", err)
+	if err := transport.SendReliable(ctx, 7, []byte("12345678")); err != nil {
+		t.Fatalf("a message at the limit must be admitted: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := transport.SendReliable(cancelled, 7, []byte("x")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendReliable with a cancelled context = %v", err)
 	}
 }

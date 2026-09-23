@@ -43,7 +43,7 @@ room.RoomBroadcaster.flushDirty（ReplicationInterval，demo 50ms）
 | `sync/entitysync/` | 机制：进程一个 `Manager`，subject 私有订阅者表，held/ready 会话，每会话一帧，prepare/commit 两阶段，持久化门槛 | `Manager`、`Transport`、`AsyncTransport`、`SessionID`（= `nettransport.SessionID`） |
 | `sync/entitysync/policy/` | 组织：谁订谁 | `Interest`（AOI + 关系源）、`Group`、`Direct`、`RelationSource` |
 | `sync/frame/` | 帧格式：`Frame` 的 `Encode / Decode`、对象 / 组件 delta 类型、`Limits` | `Frame`、`ObjectDelta`、`ComponentDelta`、`ObjectRef`、`Limits` |
-| `sync/nettransport/` | 传输：UDP / KCP / QUIC 会话传输、AEAD、`AsyncTransport` 双 lane、会话与传输契约、datagram 分片头 | `SessionID / SessionInfo`、`Transport`、`AsyncTransport`、`FragmentDatagrams` |
+| `sync/nettransport/` | 传输：UDP / KCP / QUIC 会话传输、AEAD、`AsyncTransport`（每会话有界 reliable 队列，唯一 lane，M-18）、会话与传输契约 | `SessionID / SessionInfo`、`Transport`、`ReliableSender / DatagramSender`、`AsyncTransport` |
 | `sync/lockstep/` | 帧同步（输入帧）：与状态同步并列 | `Room`、`Sequencer`、`RedundantEncoder` |
 | `sync/syncbus/` + `driver/` + `mirror/` | 服务↔服务总线：契约、NATS / JetStream 实现、副本复制器 | `ISyncBus`、`NewJetStreamSyncBus`、`mirror.Replicator` |
 | `spatial/` | 基建：二维网格几何（`Point / Rect / BlockIndex / Terrain / 寻路`） | 只被 policy 与 demo 用 |
@@ -156,7 +156,7 @@ T-57 · T-78 · T-94 · T-95 · T-97 · T-98 · T-99 · T-100 · T-101 · T-102 
 2. `entitysync/subscription.go:183-340`（Subscribe / Unsubscribe / forgetClosing）→ `:361-500`（DistributeBatch）→ `:528-585`（FlushSubject 与 durability gate）
 3. `room/room_broadcast.go:290-355`（信封 → 帧的分组排序）→ `:924-1030`（flushDirty / flushStateBatch）→ `:1133`（retryRetirement）→ `:487`（handleSlowConsumer）
 4. `room/room_transport_sink.go:236-450`（AdmitRoomFrames + 慢消费者策略）→ `:526-600`（encodeFrame）
-5. `nettransport/channel.go`（AdmitBatch / AdmissionError）
+5. `nettransport/channel.go`（历史：AdmitBatch / AdmissionError，M-18 后只剩 SendReliable）
 6. 生成工程：`internal/service/game/scene.go` 全文（≈520 行）、`game/scene/runtime/interest.go`
 7. 复现材料：`docs/bug/REVIEW-2026-09-22.md` RR-01 一节（含判别实验）、`docs/bug/REPRO-2026-09-22.md` §6–§9、`docs/bugfix/RR-20260922-01.md`
 

@@ -9,42 +9,15 @@ import (
 )
 
 type blockingTransport struct {
-	datagramStarted chan struct{}
-	datagramRelease chan struct{}
 	reliableStarted chan struct{}
 	reliableRelease chan struct{}
 
-	mu        sync.Mutex
-	datagrams [][][]byte
-	reliable  [][]byte
+	mu       sync.Mutex
+	reliable [][]byte
 }
 
 func newBlockingTransport() *blockingTransport {
-	return &blockingTransport{
-		datagramStarted: make(chan struct{}, 8), datagramRelease: make(chan struct{}, 8),
-		reliableStarted: make(chan struct{}, 8), reliableRelease: make(chan struct{}, 8),
-	}
-}
-
-func (transport *blockingTransport) SendDatagram(ctx context.Context, session SessionID, payload []byte) error {
-	return transport.SendDatagramBatch(ctx, session, [][]byte{payload})
-}
-
-func (transport *blockingTransport) SendDatagramBatch(ctx context.Context, _ SessionID, packets [][]byte) error {
-	transport.datagramStarted <- struct{}{}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-transport.datagramRelease:
-	}
-	copyOfPackets := make([][]byte, len(packets))
-	for index := range packets {
-		copyOfPackets[index] = append([]byte(nil), packets[index]...)
-	}
-	transport.mu.Lock()
-	transport.datagrams = append(transport.datagrams, copyOfPackets)
-	transport.mu.Unlock()
-	return nil
+	return &blockingTransport{reliableStarted: make(chan struct{}, 8), reliableRelease: make(chan struct{}, 8)}
 }
 
 func (transport *blockingTransport) SendReliable(ctx context.Context, _ SessionID, payload []byte) error {
@@ -60,52 +33,12 @@ func (transport *blockingTransport) SendReliable(ctx context.Context, _ SessionI
 	return nil
 }
 
-func TestAsyncTransportKeepsLatestCompleteFrame(t *testing.T) {
+// The queue is bounded per session: with one slot, the message in flight
+// plus one queued fill it, the third is refused with ErrReliableBackpressure
+// and nothing already admitted is lost.
+func TestAsyncTransportReliableBackpressureKeepsAdmittedOrder(t *testing.T) {
 	downstream := newBlockingTransport()
 	config := DefaultAsyncTransportConfig()
-	config.AllowOpaqueDatagrams = true
-	config.SendTimeout = time.Second
-	transport, err := NewAsyncTransport(downstream, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := transport.RegisterSession(SessionInfo{ID: 7}); err != nil {
-		t.Fatal(err)
-	}
-	if err := transport.SendDatagramBatch(context.Background(), 7, [][]byte{{1, 1}, {1, 2}}); err != nil {
-		t.Fatal(err)
-	}
-	await(t, downstream.datagramStarted)
-	if err := transport.SendDatagramBatch(context.Background(), 7, [][]byte{{2, 1}, {2, 2}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := transport.SendDatagramBatch(context.Background(), 7, [][]byte{{3, 1}, {3, 2}}); err != nil {
-		t.Fatal(err)
-	}
-	downstream.datagramRelease <- struct{}{}
-	await(t, downstream.datagramStarted)
-	downstream.datagramRelease <- struct{}{}
-
-	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := transport.Close(closeCtx); err != nil {
-		t.Fatal(err)
-	}
-	downstream.mu.Lock()
-	defer downstream.mu.Unlock()
-	if len(downstream.datagrams) != 2 || downstream.datagrams[1][0][0] != 3 || len(downstream.datagrams[1]) != 2 {
-		t.Fatalf("latest frame was not replaced atomically: %#v", downstream.datagrams)
-	}
-	stats := transport.Stats()
-	if stats.DatagramFramesDropped != 1 || stats.DatagramFramesSent != 2 {
-		t.Fatalf("unexpected stats: %+v", stats)
-	}
-}
-
-func TestAsyncTransportReliableBackpressureAndIndependentLane(t *testing.T) {
-	downstream := newBlockingTransport()
-	config := DefaultAsyncTransportConfig()
-	config.AllowOpaqueDatagrams = true
 	config.ReliableQueueSize = 1
 	config.SendTimeout = time.Second
 	transport, err := NewAsyncTransport(downstream, config)
@@ -125,11 +58,6 @@ func TestAsyncTransportReliableBackpressureAndIndependentLane(t *testing.T) {
 	if err := transport.SendReliable(context.Background(), 8, []byte("three")); !errors.Is(err, ErrReliableBackpressure) {
 		t.Fatalf("expected backpressure, got %v", err)
 	}
-	if err := transport.SendDatagramBatch(context.Background(), 8, [][]byte{{9}}); err != nil {
-		t.Fatal(err)
-	}
-	await(t, downstream.datagramStarted)
-	downstream.datagramRelease <- struct{}{}
 	downstream.reliableRelease <- struct{}{}
 	await(t, downstream.reliableStarted)
 	downstream.reliableRelease <- struct{}{}
@@ -139,15 +67,19 @@ func TestAsyncTransportReliableBackpressureAndIndependentLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := transport.Stats()
-	if stats.ReliableBackpressure != 1 || stats.ReliableSent != 2 || stats.DatagramFramesSent != 1 {
+	if stats.ReliableBackpressure != 1 || stats.ReliableSent != 2 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	if len(downstream.reliable) != 2 || string(downstream.reliable[0]) != "one" || string(downstream.reliable[1]) != "two" {
+		t.Fatalf("admitted messages did not arrive in order: %q", downstream.reliable)
 	}
 }
 
 func TestAsyncTransportReliableFailureIsTerminalAndHandlerPanicIsContained(t *testing.T) {
 	downstream := &orderedFailureTransport{started: make(chan struct{}), release: make(chan struct{})}
 	config := DefaultAsyncTransportConfig()
-	config.AllowOpaqueDatagrams = true
 	config.SendTimeout = time.Second
 	config.OnError = func(SendError) { panic("metrics sink panic") }
 	transport, err := NewAsyncTransport(downstream, config)
@@ -183,10 +115,6 @@ type orderedFailureTransport struct {
 	calls   int
 }
 
-func (*orderedFailureTransport) SendDatagram(context.Context, SessionID, []byte) error {
-	return nil
-}
-
 func (transport *orderedFailureTransport) SendReliable(context.Context, SessionID, []byte) error {
 	transport.mu.Lock()
 	transport.calls++
@@ -207,9 +135,8 @@ func (transport *orderedFailureTransport) Calls() int {
 }
 
 func TestAsyncTransportPreventsSessionIDReuseWhileOldSendDrains(t *testing.T) {
-	downstream := &stubbornDatagramTransport{started: make(chan struct{}), release: make(chan struct{})}
+	downstream := &stubbornReliableTransport{started: make(chan struct{}), release: make(chan struct{})}
 	config := DefaultAsyncTransportConfig()
-	config.AllowOpaqueDatagrams = true
 	config.SendTimeout = time.Second
 	transport, err := NewAsyncTransport(downstream, config)
 	if err != nil {
@@ -219,7 +146,7 @@ func TestAsyncTransportPreventsSessionIDReuseWhileOldSendDrains(t *testing.T) {
 	if err := transport.RegisterSession(info); err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.SendDatagram(context.Background(), info.ID, []byte{1}); err != nil {
+	if err := transport.SendReliable(context.Background(), info.ID, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
 	await(t, downstream.started)
@@ -249,51 +176,18 @@ func TestAsyncTransportPreventsSessionIDReuseWhileOldSendDrains(t *testing.T) {
 	}
 }
 
-type stubbornDatagramTransport struct {
+// stubbornReliableTransport ignores the send context once, so a session can
+// be observed while its old send is still in flight.
+type stubbornReliableTransport struct {
 	started chan struct{}
 	release chan struct{}
+	once    sync.Once
 }
 
-func TestAsyncTransportRejectsIncompleteOrMixedFrameBatch(t *testing.T) {
-	downstream := TransportFunc{
-		Datagram: func(context.Context, SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, SessionID, []byte) error { return nil },
-	}
-	transport, err := NewAsyncTransport(downstream, DefaultAsyncTransportConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := transport.RegisterSession(SessionInfo{ID: 51}); err != nil {
-		t.Fatal(err)
-	}
-	frame := DatagramMeta{RoomID: 1, Epoch: 1, Tick: 1, Sequence: 1, Full: true}
-	packets, err := FragmentDatagrams(frame, make([]byte, 300), 100, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := transport.SendDatagramBatch(context.Background(), 51, packets[:len(packets)-1]); !errors.Is(err, ErrInvalidDatagramBatch) {
-		t.Fatalf("incomplete frame was accepted: %v", err)
-	}
-	other := frame
-	other.Tick = 2
-	other.Sequence = 2
-	otherPackets, err := FragmentDatagrams(other, make([]byte, 300), 100, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mixed := append([][]byte(nil), packets...)
-	mixed[len(mixed)-1] = otherPackets[len(otherPackets)-1]
-	if err := transport.SendDatagramBatch(context.Background(), 51, mixed); !errors.Is(err, ErrInvalidDatagramBatch) {
-		t.Fatalf("mixed frame was accepted: %v", err)
-	}
-	if err := transport.SendDatagramBatch(context.Background(), 51, packets); err != nil {
-		t.Fatalf("valid frame was rejected: %v", err)
-	}
-	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := transport.Close(closeCtx); err != nil {
-		t.Fatal(err)
-	}
+func (transport *stubbornReliableTransport) SendReliable(context.Context, SessionID, []byte) error {
+	transport.once.Do(func() { close(transport.started) })
+	<-transport.release
+	return nil
 }
 
 func TestTransportRejectsTypedNilDependencies(t *testing.T) {
@@ -301,7 +195,8 @@ func TestTransportRejectsTypedNilDependencies(t *testing.T) {
 	if _, err := NewAsyncTransport(nilDownstream, DefaultAsyncTransportConfig()); !errors.Is(err, ErrTransportRequired) {
 		t.Fatalf("typed nil downstream was accepted: %v", err)
 	}
-	composite := CompositeTransport{Datagrams: nilDownstream, Reliable: nilDownstream}
+	var nilDatagrams *UDPTransport
+	composite := CompositeTransport{Datagrams: nilDatagrams, Reliable: nilDownstream}
 	if err := composite.SendDatagram(context.Background(), 1, []byte{1}); !errors.Is(err, ErrTransportRequired) {
 		t.Fatalf("typed nil datagram sender was accepted: %v", err)
 	}
@@ -356,7 +251,6 @@ type lifecycleTransport struct {
 	sessions map[SessionID]bool
 }
 
-func (*lifecycleTransport) SendDatagram(context.Context, SessionID, []byte) error { return nil }
 func (*lifecycleTransport) SendReliable(context.Context, SessionID, []byte) error { return nil }
 func (transport *lifecycleTransport) RegisterSession(info SessionInfo) error {
 	transport.mu.Lock()
@@ -373,16 +267,6 @@ func (transport *lifecycleTransport) RemoveSession(id SessionID) bool {
 	exists := transport.sessions[id]
 	delete(transport.sessions, id)
 	return exists
-}
-
-func (transport *stubbornDatagramTransport) SendDatagram(context.Context, SessionID, []byte) error {
-	close(transport.started)
-	<-transport.release
-	return nil
-}
-
-func (*stubbornDatagramTransport) SendReliable(context.Context, SessionID, []byte) error {
-	return nil
 }
 
 func await(t *testing.T, channel <-chan struct{}) {

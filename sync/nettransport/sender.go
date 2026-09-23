@@ -1,8 +1,9 @@
 // Package nettransport is the network side of entity sync: the UDP / KCP /
 // QUIC session transports, the AEAD datagram wrapper, and AsyncTransport, the
-// per-session queue with a reliable lane (entitysync frames, backpressure
-// closes the session) and a latest-only datagram lane. Frame contents are
-// opaque bytes here; what a frame means is statesync's and entitysync's job.
+// per-session reliable queue entitysync pushes frames through (backpressure
+// closes the session). Unreliable datagrams go straight to a DatagramSender;
+// lockstep does that. Payloads are opaque bytes here; what a frame means is
+// frame's and entitysync's job.
 package nettransport
 
 import (
@@ -13,20 +14,23 @@ import (
 )
 
 var (
-	ErrTransportRequired     = errors.New("replication transport: downstream transport is required")
-	ErrTransportClosed       = errors.New("replication transport: transport is closed")
-	ErrSessionNotRegistered  = errors.New("replication transport: session is not registered")
-	ErrSessionAlreadyExists  = errors.New("replication transport: session is already registered")
-	ErrSessionFailed         = errors.New("replication transport: session transport has failed")
-	ErrSessionLimit          = errors.New("replication transport: session limit exceeded")
-	ErrReliableBackpressure  = errors.New("replication transport: reliable queue is full")
-	ErrInvalidDatagramBatch  = errors.New("replication transport: invalid datagram batch")
-	ErrReliableMessageTooBig = errors.New("replication transport: reliable message is too large")
-	ErrRouteNotBound         = errors.New("replication transport: session network route is not bound")
-	ErrProtocolConfig        = errors.New("replication transport: invalid protocol configuration")
-	ErrPayloadTooLarge       = errors.New("replication transport: protocol payload is too large")
-	ErrAuthentication        = errors.New("replication transport: packet authentication failed")
+	ErrTransportRequired     = errors.New("nettransport: downstream transport is required")
+	ErrTransportClosed       = errors.New("nettransport: transport is closed")
+	ErrSessionNotRegistered  = errors.New("nettransport: session is not registered")
+	ErrSessionAlreadyExists  = errors.New("nettransport: session is already registered")
+	ErrSessionFailed         = errors.New("nettransport: session transport has failed")
+	ErrSessionLimit          = errors.New("nettransport: session limit exceeded")
+	ErrReliableBackpressure  = errors.New("nettransport: reliable queue is full")
+	ErrReliableMessageTooBig = errors.New("nettransport: reliable message is too large")
+	ErrRouteNotBound         = errors.New("nettransport: session network route is not bound")
+	ErrProtocolConfig        = errors.New("nettransport: invalid protocol configuration")
+	ErrPayloadTooLarge       = errors.New("nettransport: protocol payload is too large")
+	ErrAuthentication        = errors.New("nettransport: packet authentication failed")
 )
+
+// DefaultMaxDatagram is the payload bound a conservative path MTU leaves for
+// one unreliable datagram; the protocol transports default to it.
+const DefaultMaxDatagram = 1200
 
 type DatagramSender interface {
 	SendDatagram(context.Context, SessionID, []byte) error
@@ -38,22 +42,6 @@ type DatagramBatchSender interface {
 
 type ReliableSender interface {
 	SendReliable(context.Context, SessionID, []byte) error
-}
-
-// OutboundFrame is one already-framed replication message. Exactly one of
-// Datagrams and Reliable must be populated. Datagram fragments belong to one
-// complete frame and are admitted/replaced as a unit.
-type OutboundFrame struct {
-	Session   SessionID
-	Datagrams [][]byte
-	Reliable  []byte
-}
-
-// AtomicBatchTransport accepts all frames or none of them. Higher-level
-// schedulers use this boundary so their sequence counters and dirty state are
-// committed only after transport ownership has been transferred.
-type AtomicBatchTransport interface {
-	AdmitBatch(context.Context, []OutboundFrame) error
 }
 
 // CompositeTransport joins independent unreliable and reliable network lanes.

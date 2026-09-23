@@ -9,17 +9,18 @@ import (
 // has no function bound.
 var ErrTransportMissing = errors.New("nettransport: transport is not configured")
 
-// Transport is the two-lane send contract every session transport here
-// implements: a datagram lane (unreliable, latest wins) and a reliable lane
-// (ordered, backpressured). Payloads are opaque bytes.
+// Transport is the two-lane send contract the protocol transports (UDP, KCP,
+// QUIC, CompositeTransport) implement: an unreliable datagram send and a
+// reliable ordered send. Payloads are opaque bytes. AsyncTransport is not a
+// Transport — it is the reliable queue in front of one.
 type Transport interface {
 	SendDatagram(context.Context, SessionID, []byte) error
 	SendReliable(context.Context, SessionID, []byte) error
 }
 
-// DatagramBatchTransport admits all fragments of one frame as a unit. A
-// transport with a latest-only queue should implement this interface so it
-// never replaces or drops an individual fragment from a frame.
+// DatagramBatchTransport sends several datagrams for one session in one call,
+// for a protocol that can hand a burst to the socket more cheaply than one
+// packet at a time.
 type DatagramBatchTransport interface {
 	SendDatagramBatch(context.Context, SessionID, [][]byte) error
 }

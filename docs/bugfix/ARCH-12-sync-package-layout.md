@@ -136,6 +136,7 @@ S1 → S2 → S3 → S4，然后再做 ARCH-11 的 M-15（多 profile 优先级�
 | S1 | [M-15](M-15-statesync-dead-code.md) | 删 statesync 老 Replicator 一族与 `nettransport.ControlPlane`，约 −3.9k 行 |
 | S2 | [M-16](M-16-transport-contracts-home.md) | 会话 / 传输契约与分片头归位 nettransport；`FragmentDatagrams` 与帧解耦 |
 | S3 + S4 | [M-17](M-17-sync-layout.md) | 八个目录收进 `sync/`；`statesync` → `sync/frame`；InterestManager 从 `spatial` 搬进 `policy`；文档收口 |
+| 追加 | [M-18](M-18-async-transport-reliable-only.md) | W-2026-09-23-01 拍板：`AsyncTransport` 删掉 datagram lane，只留 reliable；分片头与批准入契约随行退场 |
 
 与 §3 的两处偏差：
 

@@ -12,11 +12,9 @@
 // Close when the match ends.
 //
 // Transport note: wire Datagrams to a raw transport sender (UDP/KCP/QUIC).
-// Do NOT route lockstep frames through nettransport.AsyncTransport's
-// datagram lane — its latest-only per-stream folding is built for STATE
-// frames (a newer state replaces an older one); lockstep INPUT frames are
-// each irreplaceable, and folding under transient congestion silently loses
-// frames beyond what redundancy can heal.
+// nettransport.AsyncTransport is reliable-only and is the wrong place for
+// lockstep frames anyway: a queue that could fold or delay input frames would
+// silently lose more than redundancy can heal.
 package lockstep
 
 import (
@@ -78,8 +76,7 @@ type RoomConfig struct {
 	// history. The abandonment surfaces in Tick's joined error.
 	CatchupMaxFailures int
 	// Datagrams broadcasts cut frames (required). Loss-tolerant lane: the
-	// AEAD UDP transport, or any raw DatagramSender — never a latest-only
-	// folding queue (see the package note).
+	// AEAD UDP transport, or any raw DatagramSender (see the package note).
 	Datagrams nettransport.DatagramSender
 	// Reliable pages catch-up frames to reconnecting sessions (optional;
 	// StartCatchup fails without it). KCP or QUIC transports fit here.

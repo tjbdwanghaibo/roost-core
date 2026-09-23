@@ -422,8 +422,8 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
 
 ### sync/nettransport（roost-core，原 kit replication）：帧复制网络层
 
-- **`AsyncTransport` 是心脏**（`roost-core/sync/nettransport/channel.go`（`AsyncTransport`））：每个 session 起**两个独立 worker**（datagram / reliable 分离，可靠流卡顿不阻塞状态帧）。datagram 通道是 **latest-only 合帧、键是 stream**：同一 stream 的新帧整体替换未发出的旧帧并计入 `DatagramFramesDropped`，不同 stream 各自保留最新。`AdmitBatch` 是原子准入：先锁外校验+拷贝（调用方可安全复用发送缓冲），再按 session id 升序加锁做容量与状态检查——全接受或全拒绝；`AdmissionError` 携带肇事 session，上层据此驱逐慢消费者后重试其余接收者。
-- **两条通道失败语义不对称**：reliable 发送失败把该 session lane 永久置为 `ErrSessionFailed`（worker 退出）；datagram 失败只上报，下一帧继续。**`Close(ctx)` 是有界优雅 drain，`RemoveSession` 是立即取消丢队列**——房间下线要 drain 必须用 Close。`ErrorHandler` 必须迅速返回（panic 被吞并计数，但阻塞会卡住该 session lane）。
+- **`AsyncTransport` 是心脏**（`roost-core/sync/nettransport/channel.go`）：每个 session 一个有界 reliable 队列 + 一个 worker，`SendReliable` 入队即返回（拷贝载荷，调用方可复用缓冲），worker 按序排空；队列满报 `ErrReliableBackpressure`，entitysync 把它当作该会话的失败并关会话。**只有这一条 lane**（M-18，2026-09-23）：老 Replicator 用的 latest-only datagram lane 已删——只带变化字段的帧经不起被下一帧替换（RR-20260920-02），而 lockstep 从来直接走裸 `DatagramSender`。
+- **下游失败是会话终态**：一次 `SendReliable` 下游出错，该会话队列作废（`ReliableAbandoned` 计数）、`ErrorHandler` 拿到原因、worker 退出并调用下游的 `RemoveSession`，id 随即可复用。**`Close(ctx)` 是有界优雅 drain，`RemoveSession` 是立即取消丢队列**——房间下线要 drain 必须用 Close。`ErrorHandler` 必须迅速返回（panic 被吞并计数，但阻塞会卡住该 session lane）。
 - **三个 transport 的能力矩阵**：
 
   | 维度 | UDPTransport | KCPTransport | QUICTransport |
@@ -500,7 +500,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 | `ai.Controller` | 外部（实体锁）串行化，自身不加锁；`Blackboard` 自带锁 |
 | `policy.AOI`（原 `spatial.InterestManager`） | 非并发安全（场景私有） |
 | `policy.AOICluster`（原 `spatial.InterestCluster`） | 单锁并发安全（多房间 handler 并行 tick） |
-| `nettransport.AsyncTransport` | 每 session 双 worker；AdmitBatch 按 session id 升序加锁 |
+| `nettransport.AsyncTransport` | 每 session 一个 worker，`SendReliable` 在 session 锁下入队 |
 | `entitysync.Manager` | 注册表读写锁 + 每 subject 一把锁 + pending 集合锁；tick 由 `flushMu` 串行，会话状态只在 tick 内改 |
 
 ### 玩法与实时组件（均在 roost-core）
