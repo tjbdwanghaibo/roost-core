@@ -194,6 +194,7 @@
 | ARCH-09 | 非房间的实体复制路径与 `syncTopic` 的去向 | **并入 ARCH-10**（2026-09-22） |
 | ARCH-10 | 实体同步统一为一个 SyncManager：subject 私有订阅者表 + 进程一个 manager + 每会话一个 SessionSink，room / AOI 降为 policy；帧头 Epoch/Tick 改为会话私有、RoomID 改为流常量 | **已完成**：M-13（机制，main）+ M-14（policy / ready / namespace，`feature/arch-10-sync-policy` 待 review） → [ARCH-10](ARCH-10-sync-manager.md) · [M-13](M-13-entitysync-manager.md) · [M-14](M-14-sync-policy-and-ready.md) |
 | ARCH-11 | 从 wdsync 借两件事：多 profile 引用计数 + 优先级（一会话一 subject 只发最细视图，跨组织重叠有正确语义）；tick 级组件编码缓存 → 可选 `FramePerSubject` 帧模式 + `MulticastTransport` 网关扇出 | **方案已出（2026-09-23），待拍板后按 M-15 / M-16 实施** → [ARCH-11](ARCH-11-view-priority-and-shared-encoding.md) |
+| ARCH-12 | sync 块包结构整理：划清范围（两条轴七个包；spatial / syncstream / cache 是基建，remoteentity 归 dataengine 块）；删 statesync 约 1900 行老 Replicator 死码；传输契约从 statesync 归位 nettransport；八个目录收进 `sync/` 根 | **方案已出（2026-09-23），S1–S4 待拍板** → [ARCH-12](ARCH-12-sync-package-layout.md) |
 
 ## 2026-09-19 那两条后来也修了
 
