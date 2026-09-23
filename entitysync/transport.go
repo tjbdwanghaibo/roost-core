@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/nettransport"
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 // SessionID names one receiver of frames. What it identifies — a connection,
 // a player, a bot — is the policy's business; the manager only needs it to be
 // stable for the session's lifetime and unique among open sessions.
-type SessionID = core.SessionID
+type SessionID = nettransport.SessionID
 
 // Transport is the wire end. One call is one complete, self-describing frame
 // for one session; the manager never splits a frame across calls and never
@@ -73,7 +72,7 @@ func (t *AsyncTransport) SessionOpened(session SessionID) error {
 	if t == nil || t.async == nil {
 		return ErrTransportRequired
 	}
-	err := t.async.RegisterSession(core.SessionInfo{ID: session})
+	err := t.async.RegisterSession(nettransport.SessionInfo{ID: session})
 	if errors.Is(err, nettransport.ErrSessionAlreadyExists) {
 		return nil
 	}

@@ -4,15 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 func admissionTransport(t *testing.T, mutate func(*AsyncTransportConfig)) *AsyncTransport {
 	t.Helper()
-	downstream := core.TransportFunc{
-		Datagram: func(context.Context, core.SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, core.SessionID, []byte) error { return nil },
+	downstream := TransportFunc{
+		Datagram: func(context.Context, SessionID, []byte) error { return nil },
+		Reliable: func(context.Context, SessionID, []byte) error { return nil },
 	}
 	cfg := DefaultAsyncTransportConfig()
 	cfg.AllowOpaqueDatagrams = true // isolate the transport's own limits from frame inspection
@@ -32,22 +30,22 @@ func admissionTransport(t *testing.T, mutate func(*AsyncTransportConfig)) *Async
 // registration after Close are refused with their own sentinel.
 func TestRegisterSessionRefusesZeroDuplicateOverLimitAndClosed(t *testing.T) {
 	transport := admissionTransport(t, func(c *AsyncTransportConfig) { c.MaxSessions = 1 })
-	if err := transport.RegisterSession(core.SessionInfo{ID: 0}); !errors.Is(err, ErrSessionNotRegistered) {
+	if err := transport.RegisterSession(SessionInfo{ID: 0}); !errors.Is(err, ErrSessionNotRegistered) {
 		t.Fatalf("zero session id = %v", err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 7}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 7}); !errors.Is(err, ErrSessionAlreadyExists) {
+	if err := transport.RegisterSession(SessionInfo{ID: 7}); !errors.Is(err, ErrSessionAlreadyExists) {
 		t.Fatalf("duplicate session = %v", err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 8}); !errors.Is(err, ErrSessionLimit) {
+	if err := transport.RegisterSession(SessionInfo{ID: 8}); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("over MaxSessions = %v", err)
 	}
 	if err := transport.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 9}); !errors.Is(err, ErrTransportClosed) {
+	if err := transport.RegisterSession(SessionInfo{ID: 9}); !errors.Is(err, ErrTransportClosed) {
 		t.Fatalf("register after Close = %v", err)
 	}
 }
@@ -62,7 +60,7 @@ func TestAdmitBatchRefusesEachMalformedFrame(t *testing.T) {
 		c.MaxDatagramsPerFrame = 2
 		c.MaxDatagramBytes = 4
 	})
-	if err := transport.RegisterSession(core.SessionInfo{ID: 7}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

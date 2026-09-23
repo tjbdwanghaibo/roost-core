@@ -10,8 +10,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 const udpEnvelopeHeaderSize = 16 // session ID + packet sequence
@@ -59,7 +57,7 @@ func (protector *AEADSessionProtector) Overhead() int {
 	return udpEnvelopeHeaderSize + protector.aead.Overhead()
 }
 
-func (protector *AEADSessionProtector) Seal(session core.SessionID, payload []byte) ([]byte, error) {
+func (protector *AEADSessionProtector) Seal(session SessionID, payload []byte) ([]byte, error) {
 	if protector == nil || protector.aead == nil || session == 0 || len(payload) == 0 {
 		return nil, ErrProtocolConfig
 	}
@@ -86,11 +84,11 @@ func (protector *AEADSessionProtector) nextSequence() (uint64, bool) {
 	}
 }
 
-func (protector *AEADSessionProtector) Open(expected core.SessionID, packet []byte) ([]byte, error) {
+func (protector *AEADSessionProtector) Open(expected SessionID, packet []byte) ([]byte, error) {
 	if protector == nil || protector.aead == nil || expected == 0 || len(packet) < protector.Overhead() {
 		return nil, ErrAuthentication
 	}
-	session := core.SessionID(binary.BigEndian.Uint64(packet[0:8]))
+	session := SessionID(binary.BigEndian.Uint64(packet[0:8]))
 	sequence := binary.BigEndian.Uint64(packet[8:16])
 	if session != expected || sequence == 0 {
 		return nil, ErrAuthentication

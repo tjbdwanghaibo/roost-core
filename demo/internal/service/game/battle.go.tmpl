@@ -17,7 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	"github.com/tjbdwanghaibo/roost-core/lockstep"
-	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"github.com/tjbdwanghaibo/roost-core/nettransport"
 )
 
 // The lockstep half of the demo: when the matchmaker forms a duel, this
@@ -129,15 +129,15 @@ type battleSender struct {
 	transport battlePusher
 }
 
-func (sender battleSender) SendDatagram(ctx context.Context, session corestate.SessionID, packet []byte) error {
+func (sender battleSender) SendDatagram(ctx context.Context, session nettransport.SessionID, packet []byte) error {
 	return sender.push(ctx, session, packet)
 }
 
-func (sender battleSender) SendReliable(ctx context.Context, session corestate.SessionID, packet []byte) error {
+func (sender battleSender) SendReliable(ctx context.Context, session nettransport.SessionID, packet []byte) error {
 	return sender.push(ctx, session, packet)
 }
 
-func (sender battleSender) push(ctx context.Context, session corestate.SessionID, packet []byte) error {
+func (sender battleSender) push(ctx context.Context, session nettransport.SessionID, packet []byte) error {
 	if sender.transport == nil {
 		return errors.New("battle: player tcp runtime is unavailable")
 	}
@@ -213,7 +213,7 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 	// The session id is the player id: the room hands it back to the sender
 	// adapter untouched, which is all it is for.
 	for member, seat := range seats {
-		if err := room.Attach(seat, corestate.SessionID(member)); err != nil {
+		if err := room.Attach(seat, nettransport.SessionID(member)); err != nil {
 			room.Close()
 			manager.mu.Unlock()
 			return fmt.Errorf("battle: attach player %d to %s: %w", member, battleID, err)

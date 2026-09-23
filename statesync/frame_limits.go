@@ -5,10 +5,7 @@ import (
 	"fmt"
 )
 
-const (
-	ProtocolVersion    uint16 = 1
-	DefaultMaxDatagram        = 1200
-)
+const ProtocolVersion uint16 = 1
 
 var (
 	ErrInvalidObjectRef  = errors.New("replication: invalid object ref")
@@ -18,10 +15,6 @@ var (
 	ErrFrameTooLarge     = errors.New("replication: frame payload too large")
 	ErrInvalidFrame      = errors.New("replication: invalid frame")
 	ErrBaselineMismatch  = errors.New("replication: baseline mismatch")
-	ErrInvalidDatagram   = errors.New("replication: invalid datagram")
-	ErrChecksumMismatch  = errors.New("replication: checksum mismatch")
-	ErrFragmentLimit     = errors.New("replication: fragment limit exceeded")
-	ErrTransportMissing  = errors.New("replication: transport is not configured")
 )
 
 type Limits struct {
@@ -29,8 +22,6 @@ type Limits struct {
 	MaxComponentsPerObject int
 	MaxComponentBytes      int
 	MaxFrameBytes          int
-	MaxDatagramBytes       int
-	MaxFragments           int
 }
 
 func DefaultLimits() Limits {
@@ -39,8 +30,6 @@ func DefaultLimits() Limits {
 		MaxComponentsPerObject: 64,
 		MaxComponentBytes:      64 << 10,
 		MaxFrameBytes:          4 << 20,
-		MaxDatagramBytes:       DefaultMaxDatagram,
-		MaxFragments:           64,
 	}
 }
 
@@ -57,12 +46,6 @@ func normalizeLimits(limits Limits) Limits {
 	}
 	if limits.MaxFrameBytes <= 0 {
 		limits.MaxFrameBytes = defaults.MaxFrameBytes
-	}
-	if limits.MaxDatagramBytes <= 0 {
-		limits.MaxDatagramBytes = defaults.MaxDatagramBytes
-	}
-	if limits.MaxFragments <= 0 {
-		limits.MaxFragments = defaults.MaxFragments
 	}
 	return limits
 }
@@ -136,13 +119,4 @@ type DeltaFrame struct {
 	Kind     FrameKind
 	BaseTick uint32
 	Objects  []ObjectDelta
-}
-
-type SessionID uint64
-
-type SessionInfo struct {
-	ID      SessionID
-	OwnerID int64
-	TeamID  int64
-	Roles   uint64
 }

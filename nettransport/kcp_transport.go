@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 	kcp "github.com/xtaci/kcp-go/v5"
 )
 
@@ -33,7 +32,7 @@ type KCPTransportConfig struct {
 
 func DefaultKCPTransportConfig() KCPTransportConfig {
 	return KCPTransportConfig{
-		MaxDatagramBytes: core.DefaultMaxDatagram, MaxReliableBytes: 1 << 20,
+		MaxDatagramBytes: DefaultMaxDatagram, MaxReliableBytes: 1 << 20,
 		MTU: 1400, SendWindow: 128, ReceiveWindow: 128,
 		NoDelay: 1, Interval: 20, FastResend: 2, DisableCongestion: 0,
 		ACKNoDelay: true, WriteDelay: false,
@@ -51,7 +50,7 @@ type kcpRoute struct {
 type KCPTransport struct {
 	mu     sync.RWMutex
 	config KCPTransportConfig
-	routes map[core.SessionID]*kcpRoute
+	routes map[SessionID]*kcpRoute
 	closed bool
 	stats  kcpCounters
 }
@@ -79,7 +78,7 @@ type KCPTransportStats struct {
 	ReceiveErrors            uint64
 }
 
-type KCPDatagramHandler func(core.SessionID, []byte)
+type KCPDatagramHandler func(SessionID, []byte)
 
 func NewKCPTransport(config KCPTransportConfig) (*KCPTransport, error) {
 	defaults := DefaultKCPTransportConfig()
@@ -107,10 +106,10 @@ func NewKCPTransport(config KCPTransportConfig) (*KCPTransport, error) {
 	if config.NoDelay < 0 || config.NoDelay > 1 || config.DisableCongestion < 0 || config.DisableCongestion > 1 || config.FastResend < 0 {
 		return nil, ErrProtocolConfig
 	}
-	return &KCPTransport{config: config, routes: make(map[core.SessionID]*kcpRoute)}, nil
+	return &KCPTransport{config: config, routes: make(map[SessionID]*kcpRoute)}, nil
 }
 
-func (transport *KCPTransport) RegisterSession(info core.SessionInfo) error {
+func (transport *KCPTransport) RegisterSession(info SessionInfo) error {
 	if transport == nil || info.ID == 0 {
 		return ErrSessionNotRegistered
 	}
@@ -134,7 +133,7 @@ func (transport *KCPTransport) RegisterSession(info core.SessionInfo) error {
 // BindSession configures an authenticated KCP session. The KCP listener/dialer
 // must enable FEC; kcp-go's OOB channel uses that framing to carry unreliable
 // state datagrams while the normal KCP path carries reliable messages.
-func (transport *KCPTransport) BindSession(sessionID core.SessionID, session *kcp.UDPSession) error {
+func (transport *KCPTransport) BindSession(sessionID SessionID, session *kcp.UDPSession) error {
 	if transport == nil || sessionID == 0 || session == nil {
 		return ErrProtocolConfig
 	}
@@ -205,7 +204,7 @@ func (transport *KCPTransport) BindSession(sessionID core.SessionID, session *kc
 	return nil
 }
 
-func (transport *KCPTransport) abortBind(sessionID core.SessionID, expected *kcpRoute) {
+func (transport *KCPTransport) abortBind(sessionID SessionID, expected *kcpRoute) {
 	transport.mu.Lock()
 	if route := transport.routes[sessionID]; route == expected && route.session == nil {
 		route.binding = nil
@@ -216,7 +215,7 @@ func (transport *KCPTransport) abortBind(sessionID core.SessionID, expected *kcp
 	transport.mu.Unlock()
 }
 
-func (transport *KCPTransport) BindDatagramHandler(sessionID core.SessionID, handler KCPDatagramHandler) error {
+func (transport *KCPTransport) BindDatagramHandler(sessionID SessionID, handler KCPDatagramHandler) error {
 	if handler == nil {
 		return ErrProtocolConfig
 	}
@@ -234,7 +233,7 @@ func (transport *KCPTransport) BindDatagramHandler(sessionID core.SessionID, han
 	})
 }
 
-func (transport *KCPTransport) RemoveSession(sessionID core.SessionID) bool {
+func (transport *KCPTransport) RemoveSession(sessionID SessionID) bool {
 	if transport == nil || sessionID == 0 {
 		return false
 	}
@@ -248,7 +247,7 @@ func (transport *KCPTransport) RemoveSession(sessionID core.SessionID) bool {
 	return exists
 }
 
-func (transport *KCPTransport) SendDatagram(ctx context.Context, sessionID core.SessionID, payload []byte) error {
+func (transport *KCPTransport) SendDatagram(ctx context.Context, sessionID SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
 	}
@@ -276,7 +275,7 @@ func (transport *KCPTransport) SendDatagram(ctx context.Context, sessionID core.
 	return nil
 }
 
-func (transport *KCPTransport) SendDatagramBatch(ctx context.Context, sessionID core.SessionID, packets [][]byte) error {
+func (transport *KCPTransport) SendDatagramBatch(ctx context.Context, sessionID SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, sessionID, packet); err != nil {
 			return err
@@ -285,7 +284,7 @@ func (transport *KCPTransport) SendDatagramBatch(ctx context.Context, sessionID 
 	return nil
 }
 
-func (transport *KCPTransport) SendReliable(ctx context.Context, sessionID core.SessionID, payload []byte) error {
+func (transport *KCPTransport) SendReliable(ctx context.Context, sessionID SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
 	}
@@ -330,7 +329,7 @@ func (transport *KCPTransport) SendReliable(ctx context.Context, sessionID core.
 	return nil
 }
 
-func (transport *KCPTransport) ReceiveReliable(ctx context.Context, sessionID core.SessionID) ([]byte, error) {
+func (transport *KCPTransport) ReceiveReliable(ctx context.Context, sessionID SessionID) ([]byte, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -386,7 +385,7 @@ func (transport *KCPTransport) ReceiveReliable(ctx context.Context, sessionID co
 	return buffer, nil
 }
 
-func (transport *KCPTransport) failRoute(sessionID core.SessionID, expected *kcpRoute) {
+func (transport *KCPTransport) failRoute(sessionID SessionID, expected *kcpRoute) {
 	transport.mu.Lock()
 	if transport.routes[sessionID] == expected {
 		delete(transport.routes, sessionID)
@@ -408,7 +407,7 @@ func (transport *KCPTransport) Close() error {
 	}
 	transport.closed = true
 	routes := transport.routes
-	transport.routes = make(map[core.SessionID]*kcpRoute)
+	transport.routes = make(map[SessionID]*kcpRoute)
 	transport.mu.Unlock()
 	if !transport.config.PreserveSessions {
 		for _, route := range routes {
@@ -440,7 +439,7 @@ func (transport *KCPTransport) Stats() KCPTransportStats {
 	}
 }
 
-func (transport *KCPTransport) route(sessionID core.SessionID) (*kcpRoute, error) {
+func (transport *KCPTransport) route(sessionID SessionID) (*kcpRoute, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -481,6 +480,6 @@ func KCPRemoteAddress(session *kcp.UDPSession) net.Addr {
 	return session.RemoteAddr()
 }
 
-var _ core.Transport = (*KCPTransport)(nil)
-var _ core.DatagramBatchTransport = (*KCPTransport)(nil)
-var _ core.SessionTransport = (*KCPTransport)(nil)
+var _ Transport = (*KCPTransport)(nil)
+var _ DatagramBatchTransport = (*KCPTransport)(nil)
+var _ SessionTransport = (*KCPTransport)(nil)

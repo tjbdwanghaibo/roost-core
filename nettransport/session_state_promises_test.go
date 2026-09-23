@@ -7,8 +7,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 // U-0131 · C2（空洞测试）· nightly gap map core `nettransport` 10/20。
@@ -29,13 +27,13 @@ type failingReliableTransport struct {
 	once    sync.Once
 }
 
-func (transport *failingReliableTransport) SendDatagram(context.Context, core.SessionID, []byte) error {
+func (transport *failingReliableTransport) SendDatagram(context.Context, SessionID, []byte) error {
 	transport.once.Do(func() { close(transport.started) })
 	<-transport.release
 	return nil
 }
 
-func (*failingReliableTransport) SendReliable(context.Context, core.SessionID, []byte) error {
+func (*failingReliableTransport) SendReliable(context.Context, SessionID, []byte) error {
 	return errors.New("stream reset by peer")
 }
 
@@ -82,7 +80,7 @@ func TestAdmitBatchRefusesUnregisteredDrainingAndFailedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := draining.RegisterSession(core.SessionInfo{ID: 41}); err != nil {
+	if err := draining.RegisterSession(SessionInfo{ID: 41}); err != nil {
 		t.Fatal(err)
 	}
 	if err := draining.SendDatagram(ctx, 41, []byte{1}); err != nil {
@@ -114,7 +112,7 @@ func TestAdmitBatchRefusesUnregisteredDrainingAndFailedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := failedTransport.RegisterSession(core.SessionInfo{ID: 51}); err != nil {
+	if err := failedTransport.RegisterSession(SessionInfo{ID: 51}); err != nil {
 		t.Fatal(err)
 	}
 	if err := failedTransport.SendDatagram(ctx, 51, []byte{1}); err != nil {

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 const DefaultUDPMaxPacketBytes = 1232 // IPv6 minimum MTU minus IPv6 + UDP headers
@@ -33,7 +31,7 @@ type udpRoute struct {
 type UDPTransport struct {
 	mu       sync.RWMutex
 	config   UDPTransportConfig
-	routes   map[core.SessionID]*udpRoute
+	routes   map[SessionID]*udpRoute
 	closed   bool
 	serving  atomic.Bool
 	closeOne sync.Once
@@ -65,7 +63,7 @@ type UDPTransportStats struct {
 	ReceiveErrors     uint64
 }
 
-type UDPReceiveHandler func(context.Context, core.SessionID, []byte, net.Addr) error
+type UDPReceiveHandler func(context.Context, SessionID, []byte, net.Addr) error
 
 func NewUDPTransport(config UDPTransportConfig) (*UDPTransport, error) {
 	if isNilInterface(config.PacketConn) {
@@ -80,10 +78,10 @@ func NewUDPTransport(config UDPTransportConfig) (*UDPTransport, error) {
 	if config.ReadPollInterval <= 0 {
 		config.ReadPollInterval = time.Second
 	}
-	return &UDPTransport{config: config, routes: make(map[core.SessionID]*udpRoute)}, nil
+	return &UDPTransport{config: config, routes: make(map[SessionID]*udpRoute)}, nil
 }
 
-func (transport *UDPTransport) RegisterSession(info core.SessionInfo) error {
+func (transport *UDPTransport) RegisterSession(info SessionInfo) error {
 	if transport == nil || info.ID == 0 {
 		return ErrSessionNotRegistered
 	}
@@ -106,7 +104,7 @@ func (transport *UDPTransport) RegisterSession(info core.SessionInfo) error {
 
 // BindSession installs the authenticated endpoint and directional AEAD state.
 // It may be called before RegisterSession, which is useful during handshake.
-func (transport *UDPTransport) BindSession(session core.SessionID, address net.Addr, protector *AEADSessionProtector) error {
+func (transport *UDPTransport) BindSession(session SessionID, address net.Addr, protector *AEADSessionProtector) error {
 	if transport == nil || session == 0 || isNilInterface(address) || protector == nil || protector.Overhead() == 0 {
 		return ErrProtocolConfig
 	}
@@ -128,7 +126,7 @@ func (transport *UDPTransport) BindSession(session core.SessionID, address net.A
 	return nil
 }
 
-func (transport *UDPTransport) RemoveSession(session core.SessionID) bool {
+func (transport *UDPTransport) RemoveSession(session SessionID) bool {
 	if transport == nil || session == 0 {
 		return false
 	}
@@ -139,7 +137,7 @@ func (transport *UDPTransport) RemoveSession(session core.SessionID) bool {
 	return exists
 }
 
-func (transport *UDPTransport) SendDatagram(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport *UDPTransport) SendDatagram(ctx context.Context, session SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
 	}
@@ -179,7 +177,7 @@ func (transport *UDPTransport) SendDatagram(ctx context.Context, session core.Se
 	return nil
 }
 
-func (transport *UDPTransport) SendDatagramBatch(ctx context.Context, session core.SessionID, packets [][]byte) error {
+func (transport *UDPTransport) SendDatagramBatch(ctx context.Context, session SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, session, packet); err != nil {
 			return err
@@ -188,7 +186,7 @@ func (transport *UDPTransport) SendDatagramBatch(ctx context.Context, session co
 	return nil
 }
 
-func (*UDPTransport) SendReliable(context.Context, core.SessionID, []byte) error {
+func (*UDPTransport) SendReliable(context.Context, SessionID, []byte) error {
 	return fmt.Errorf("%w: plain UDP has no reliable lane; compose another reliable sender", ErrProtocolConfig)
 }
 
@@ -240,7 +238,7 @@ func (transport *UDPTransport) Serve(ctx context.Context, handler UDPReceiveHand
 			continue
 		}
 		packet := append([]byte(nil), buffer[:length]...)
-		session := core.SessionID(binary.BigEndian.Uint64(packet[0:8]))
+		session := SessionID(binary.BigEndian.Uint64(packet[0:8]))
 		route, routeErr := transport.receiveRoute(session)
 		if routeErr != nil {
 			transport.stats.unknownSessions.Add(1)
@@ -277,7 +275,7 @@ func (transport *UDPTransport) Serve(ctx context.Context, handler UDPReceiveHand
 	}
 }
 
-func (transport *UDPTransport) isCurrentRoute(session core.SessionID, protector *AEADSessionProtector) bool {
+func (transport *UDPTransport) isCurrentRoute(session SessionID, protector *AEADSessionProtector) bool {
 	transport.mu.RLock()
 	defer transport.mu.RUnlock()
 	route := transport.routes[session]
@@ -322,7 +320,7 @@ func (transport *UDPTransport) Stats() UDPTransportStats {
 	}
 }
 
-func (transport *UDPTransport) route(session core.SessionID) (net.Addr, *AEADSessionProtector, error) {
+func (transport *UDPTransport) route(session SessionID) (net.Addr, *AEADSessionProtector, error) {
 	transport.mu.RLock()
 	defer transport.mu.RUnlock()
 	if transport.closed {
@@ -335,7 +333,7 @@ func (transport *UDPTransport) route(session core.SessionID) (net.Addr, *AEADSes
 	return cloneAddr(route.address), route.protector, nil
 }
 
-func (transport *UDPTransport) receiveRoute(session core.SessionID) (udpRoute, error) {
+func (transport *UDPTransport) receiveRoute(session SessionID) (udpRoute, error) {
 	transport.mu.RLock()
 	defer transport.mu.RUnlock()
 	route := transport.routes[session]
@@ -345,7 +343,7 @@ func (transport *UDPTransport) receiveRoute(session core.SessionID) (udpRoute, e
 	return udpRoute{registered: true, address: cloneAddr(route.address), protector: route.protector}, nil
 }
 
-func (transport *UDPTransport) migrate(session core.SessionID, protector *AEADSessionProtector, address net.Addr) bool {
+func (transport *UDPTransport) migrate(session SessionID, protector *AEADSessionProtector, address net.Addr) bool {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	if route := transport.routes[session]; !transport.closed && route != nil && route.registered && route.protector == protector {
@@ -381,6 +379,6 @@ func sameAddr(left, right net.Addr) bool {
 	return left != nil && right != nil && left.Network() == right.Network() && left.String() == right.String()
 }
 
-var _ core.Transport = (*UDPTransport)(nil)
-var _ core.DatagramBatchTransport = (*UDPTransport)(nil)
-var _ core.SessionTransport = (*UDPTransport)(nil)
+var _ Transport = (*UDPTransport)(nil)
+var _ DatagramBatchTransport = (*UDPTransport)(nil)
+var _ SessionTransport = (*UDPTransport)(nil)

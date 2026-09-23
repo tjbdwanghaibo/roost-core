@@ -10,8 +10,6 @@ import (
 	"errors"
 	"reflect"
 	"time"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 var (
@@ -31,22 +29,22 @@ var (
 )
 
 type DatagramSender interface {
-	SendDatagram(context.Context, core.SessionID, []byte) error
+	SendDatagram(context.Context, SessionID, []byte) error
 }
 
 type DatagramBatchSender interface {
-	SendDatagramBatch(context.Context, core.SessionID, [][]byte) error
+	SendDatagramBatch(context.Context, SessionID, [][]byte) error
 }
 
 type ReliableSender interface {
-	SendReliable(context.Context, core.SessionID, []byte) error
+	SendReliable(context.Context, SessionID, []byte) error
 }
 
 // OutboundFrame is one already-framed replication message. Exactly one of
 // Datagrams and Reliable must be populated. Datagram fragments belong to one
 // complete frame and are admitted/replaced as a unit.
 type OutboundFrame struct {
-	Session   core.SessionID
+	Session   SessionID
 	Datagrams [][]byte
 	Reliable  []byte
 }
@@ -65,14 +63,14 @@ type CompositeTransport struct {
 	Reliable  ReliableSender
 }
 
-func (transport CompositeTransport) SendDatagram(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport CompositeTransport) SendDatagram(ctx context.Context, session SessionID, payload []byte) error {
 	if isNilInterface(transport.Datagrams) {
 		return ErrTransportRequired
 	}
 	return transport.Datagrams.SendDatagram(ctx, session, payload)
 }
 
-func (transport CompositeTransport) SendDatagramBatch(ctx context.Context, session core.SessionID, packets [][]byte) error {
+func (transport CompositeTransport) SendDatagramBatch(ctx context.Context, session SessionID, packets [][]byte) error {
 	if isNilInterface(transport.Datagrams) {
 		return ErrTransportRequired
 	}
@@ -87,7 +85,7 @@ func (transport CompositeTransport) SendDatagramBatch(ctx context.Context, sessi
 	return nil
 }
 
-func (transport CompositeTransport) SendReliable(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport CompositeTransport) SendReliable(ctx context.Context, session SessionID, payload []byte) error {
 	if isNilInterface(transport.Reliable) {
 		return ErrTransportRequired
 	}
@@ -143,5 +141,5 @@ func interruptReadOnCancel(ctx context.Context, setter readDeadlineSetter) func(
 	}
 }
 
-var _ core.Transport = CompositeTransport{}
-var _ core.DatagramBatchTransport = CompositeTransport{}
+var _ Transport = CompositeTransport{}
+var _ DatagramBatchTransport = CompositeTransport{}

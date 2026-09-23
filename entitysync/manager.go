@@ -77,12 +77,6 @@ func (c ManagerConfig) normalized() ManagerConfig {
 	if c.Limits.MaxFrameBytes <= 0 {
 		c.Limits.MaxFrameBytes = defaults.MaxFrameBytes
 	}
-	if c.Limits.MaxDatagramBytes <= 0 {
-		c.Limits.MaxDatagramBytes = defaults.MaxDatagramBytes
-	}
-	if c.Limits.MaxFragments <= 0 {
-		c.Limits.MaxFragments = defaults.MaxFragments
-	}
 	if c.MaxSubjects <= 0 {
 		c.MaxSubjects = DefaultMaxSubjects
 	}

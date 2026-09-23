@@ -11,7 +11,6 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 // DefaultQUICALPN is negotiated on every QUIC handshake. Client and server
@@ -39,7 +38,7 @@ type quicRoute struct {
 type QUICTransport struct {
 	mu     sync.RWMutex
 	config QUICTransportConfig
-	routes map[core.SessionID]*quicRoute
+	routes map[SessionID]*quicRoute
 	closed bool
 	stats  quicCounters
 }
@@ -69,7 +68,7 @@ type QUICTransportStats struct {
 
 func NewQUICTransport(config QUICTransportConfig) *QUICTransport {
 	if config.MaxDatagramBytes <= 0 {
-		config.MaxDatagramBytes = core.DefaultMaxDatagram
+		config.MaxDatagramBytes = DefaultMaxDatagram
 	}
 	if config.MaxReliableBytes <= 0 {
 		config.MaxReliableBytes = 1 << 20
@@ -77,10 +76,10 @@ func NewQUICTransport(config QUICTransportConfig) *QUICTransport {
 	if config.CloseErrorCode == 0 {
 		config.CloseErrorCode = quic.ApplicationErrorCode(0xc001)
 	}
-	return &QUICTransport{config: config, routes: make(map[core.SessionID]*quicRoute)}
+	return &QUICTransport{config: config, routes: make(map[SessionID]*quicRoute)}
 }
 
-func (transport *QUICTransport) RegisterSession(info core.SessionInfo) error {
+func (transport *QUICTransport) RegisterSession(info SessionInfo) error {
 	if transport == nil || info.ID == 0 {
 		return ErrSessionNotRegistered
 	}
@@ -103,7 +102,7 @@ func (transport *QUICTransport) RegisterSession(info core.SessionInfo) error {
 
 // BindSession associates an authenticated QUIC connection with a replication
 // session. QUIC DATAGRAM support must have been negotiated by both peers.
-func (transport *QUICTransport) BindSession(session core.SessionID, connection *quic.Conn) error {
+func (transport *QUICTransport) BindSession(session SessionID, connection *quic.Conn) error {
 	if transport == nil || session == 0 || connection == nil {
 		return ErrProtocolConfig
 	}
@@ -142,7 +141,7 @@ func (transport *QUICTransport) BindSession(session core.SessionID, connection *
 	return nil
 }
 
-func (transport *QUICTransport) RemoveSession(session core.SessionID) bool {
+func (transport *QUICTransport) RemoveSession(session SessionID) bool {
 	if transport == nil || session == 0 {
 		return false
 	}
@@ -156,7 +155,7 @@ func (transport *QUICTransport) RemoveSession(session core.SessionID) bool {
 	return exists
 }
 
-func (transport *QUICTransport) SendDatagram(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport *QUICTransport) SendDatagram(ctx context.Context, session SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
 	}
@@ -184,7 +183,7 @@ func (transport *QUICTransport) SendDatagram(ctx context.Context, session core.S
 	return nil
 }
 
-func (transport *QUICTransport) SendDatagramBatch(ctx context.Context, session core.SessionID, packets [][]byte) error {
+func (transport *QUICTransport) SendDatagramBatch(ctx context.Context, session SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, session, packet); err != nil {
 			return err
@@ -193,7 +192,7 @@ func (transport *QUICTransport) SendDatagramBatch(ctx context.Context, session c
 	return nil
 }
 
-func (transport *QUICTransport) SendReliable(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport *QUICTransport) SendReliable(ctx context.Context, session SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
 	}
@@ -249,7 +248,7 @@ func (transport *QUICTransport) SendReliable(ctx context.Context, session core.S
 	return nil
 }
 
-func (transport *QUICTransport) ReceiveDatagram(ctx context.Context, session core.SessionID) ([]byte, error) {
+func (transport *QUICTransport) ReceiveDatagram(ctx context.Context, session SessionID) ([]byte, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -273,7 +272,7 @@ func (transport *QUICTransport) ReceiveDatagram(ctx context.Context, session cor
 	return append([]byte(nil), payload...), nil
 }
 
-func (transport *QUICTransport) ReceiveReliable(ctx context.Context, session core.SessionID) ([]byte, error) {
+func (transport *QUICTransport) ReceiveReliable(ctx context.Context, session SessionID) ([]byte, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -338,7 +337,7 @@ func (transport *QUICTransport) Close() error {
 	}
 	transport.closed = true
 	routes := transport.routes
-	transport.routes = make(map[core.SessionID]*quicRoute)
+	transport.routes = make(map[SessionID]*quicRoute)
 	transport.mu.Unlock()
 	if !transport.config.PreserveConnections {
 		for _, route := range routes {
@@ -370,7 +369,7 @@ func (transport *QUICTransport) Stats() QUICTransportStats {
 	}
 }
 
-func (transport *QUICTransport) route(session core.SessionID) (*quicRoute, error) {
+func (transport *QUICTransport) route(session SessionID) (*quicRoute, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -386,7 +385,7 @@ func (transport *QUICTransport) route(session core.SessionID) (*quicRoute, error
 	return route, nil
 }
 
-func (transport *QUICTransport) connection(session core.SessionID) (*quic.Conn, error) {
+func (transport *QUICTransport) connection(session SessionID) (*quic.Conn, error) {
 	route, err := transport.route(session)
 	if err != nil {
 		return nil, err
@@ -445,6 +444,6 @@ func DialQUIC(ctx context.Context, address string, tlsConfig *tls.Config, config
 	return quic.DialAddr(ctx, address, tlsConfig, QUICConfig(config))
 }
 
-var _ core.Transport = (*QUICTransport)(nil)
-var _ core.DatagramBatchTransport = (*QUICTransport)(nil)
-var _ core.SessionTransport = (*QUICTransport)(nil)
+var _ Transport = (*QUICTransport)(nil)
+var _ DatagramBatchTransport = (*QUICTransport)(nil)
+var _ SessionTransport = (*QUICTransport)(nil)

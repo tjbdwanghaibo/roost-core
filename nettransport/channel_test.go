@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type blockingTransport struct {
@@ -28,11 +26,11 @@ func newBlockingTransport() *blockingTransport {
 	}
 }
 
-func (transport *blockingTransport) SendDatagram(ctx context.Context, session core.SessionID, payload []byte) error {
+func (transport *blockingTransport) SendDatagram(ctx context.Context, session SessionID, payload []byte) error {
 	return transport.SendDatagramBatch(ctx, session, [][]byte{payload})
 }
 
-func (transport *blockingTransport) SendDatagramBatch(ctx context.Context, _ core.SessionID, packets [][]byte) error {
+func (transport *blockingTransport) SendDatagramBatch(ctx context.Context, _ SessionID, packets [][]byte) error {
 	transport.datagramStarted <- struct{}{}
 	select {
 	case <-ctx.Done():
@@ -49,7 +47,7 @@ func (transport *blockingTransport) SendDatagramBatch(ctx context.Context, _ cor
 	return nil
 }
 
-func (transport *blockingTransport) SendReliable(ctx context.Context, _ core.SessionID, payload []byte) error {
+func (transport *blockingTransport) SendReliable(ctx context.Context, _ SessionID, payload []byte) error {
 	transport.reliableStarted <- struct{}{}
 	select {
 	case <-ctx.Done():
@@ -71,7 +69,7 @@ func TestAsyncTransportKeepsLatestCompleteFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 7}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 	if err := transport.SendDatagramBatch(context.Background(), 7, [][]byte{{1, 1}, {1, 2}}); err != nil {
@@ -114,7 +112,7 @@ func TestAsyncTransportReliableBackpressureAndIndependentLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 8}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 8}); err != nil {
 		t.Fatal(err)
 	}
 	if err := transport.SendReliable(context.Background(), 8, []byte("one")); err != nil {
@@ -156,7 +154,7 @@ func TestAsyncTransportReliableFailureIsTerminalAndHandlerPanicIsContained(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 31}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 31}); err != nil {
 		t.Fatal(err)
 	}
 	if err := transport.SendReliable(context.Background(), 31, []byte("first")); err != nil {
@@ -185,11 +183,11 @@ type orderedFailureTransport struct {
 	calls   int
 }
 
-func (*orderedFailureTransport) SendDatagram(context.Context, core.SessionID, []byte) error {
+func (*orderedFailureTransport) SendDatagram(context.Context, SessionID, []byte) error {
 	return nil
 }
 
-func (transport *orderedFailureTransport) SendReliable(context.Context, core.SessionID, []byte) error {
+func (transport *orderedFailureTransport) SendReliable(context.Context, SessionID, []byte) error {
 	transport.mu.Lock()
 	transport.calls++
 	call := transport.calls
@@ -217,7 +215,7 @@ func TestAsyncTransportPreventsSessionIDReuseWhileOldSendDrains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := core.SessionInfo{ID: 41}
+	info := SessionInfo{ID: 41}
 	if err := transport.RegisterSession(info); err != nil {
 		t.Fatal(err)
 	}
@@ -257,20 +255,19 @@ type stubbornDatagramTransport struct {
 }
 
 func TestAsyncTransportRejectsIncompleteOrMixedFrameBatch(t *testing.T) {
-	downstream := core.TransportFunc{
-		Datagram: func(context.Context, core.SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, core.SessionID, []byte) error { return nil },
+	downstream := TransportFunc{
+		Datagram: func(context.Context, SessionID, []byte) error { return nil },
+		Reliable: func(context.Context, SessionID, []byte) error { return nil },
 	}
 	transport, err := NewAsyncTransport(downstream, DefaultAsyncTransportConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 51}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 51}); err != nil {
 		t.Fatal(err)
 	}
-	limits := core.DefaultLimits()
-	frame := core.DeltaFrame{SnapshotMeta: core.SnapshotMeta{RoomID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1}, Kind: core.FrameFull}
-	packets, err := core.FragmentFrame(frame, 1, make([]byte, 300), 100, limits)
+	frame := DatagramMeta{RoomID: 1, Epoch: 1, Tick: 1, Sequence: 1, Full: true}
+	packets, err := FragmentDatagrams(frame, make([]byte, 300), 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +276,8 @@ func TestAsyncTransportRejectsIncompleteOrMixedFrameBatch(t *testing.T) {
 	}
 	other := frame
 	other.Tick = 2
-	otherPackets, err := core.FragmentFrame(other, 2, make([]byte, 300), 100, limits)
+	other.Sequence = 2
+	otherPackets, err := FragmentDatagrams(other, make([]byte, 300), 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,12 +314,12 @@ func TestTransportRejectsTypedNilDependencies(t *testing.T) {
 }
 
 func TestAsyncTransportCascadesSessionLifecycle(t *testing.T) {
-	downstream := &lifecycleTransport{sessions: make(map[core.SessionID]bool)}
+	downstream := &lifecycleTransport{sessions: make(map[SessionID]bool)}
 	transport, err := NewAsyncTransport(downstream, DefaultAsyncTransportConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 61}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 61}); err != nil {
 		t.Fatal(err)
 	}
 	downstream.mu.Lock()
@@ -355,12 +353,12 @@ func TestAsyncTransportCascadesSessionLifecycle(t *testing.T) {
 
 type lifecycleTransport struct {
 	mu       sync.Mutex
-	sessions map[core.SessionID]bool
+	sessions map[SessionID]bool
 }
 
-func (*lifecycleTransport) SendDatagram(context.Context, core.SessionID, []byte) error { return nil }
-func (*lifecycleTransport) SendReliable(context.Context, core.SessionID, []byte) error { return nil }
-func (transport *lifecycleTransport) RegisterSession(info core.SessionInfo) error {
+func (*lifecycleTransport) SendDatagram(context.Context, SessionID, []byte) error { return nil }
+func (*lifecycleTransport) SendReliable(context.Context, SessionID, []byte) error { return nil }
+func (transport *lifecycleTransport) RegisterSession(info SessionInfo) error {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	if transport.sessions[info.ID] {
@@ -369,7 +367,7 @@ func (transport *lifecycleTransport) RegisterSession(info core.SessionInfo) erro
 	transport.sessions[info.ID] = true
 	return nil
 }
-func (transport *lifecycleTransport) RemoveSession(id core.SessionID) bool {
+func (transport *lifecycleTransport) RemoveSession(id SessionID) bool {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	exists := transport.sessions[id]
@@ -377,13 +375,13 @@ func (transport *lifecycleTransport) RemoveSession(id core.SessionID) bool {
 	return exists
 }
 
-func (transport *stubbornDatagramTransport) SendDatagram(context.Context, core.SessionID, []byte) error {
+func (transport *stubbornDatagramTransport) SendDatagram(context.Context, SessionID, []byte) error {
 	close(transport.started)
 	<-transport.release
 	return nil
 }
 
-func (*stubbornDatagramTransport) SendReliable(context.Context, core.SessionID, []byte) error {
+func (*stubbornDatagramTransport) SendReliable(context.Context, SessionID, []byte) error {
 	return nil
 }
 

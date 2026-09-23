@@ -4,20 +4,18 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 func TestAsyncTransportAdmitBatchIsAtomicOnReliableBackpressure(t *testing.T) {
-	transport, err := NewAsyncTransport(core.TransportFunc{
-		Datagram: func(context.Context, core.SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, core.SessionID, []byte) error { return nil },
+	transport, err := NewAsyncTransport(TransportFunc{
+		Datagram: func(context.Context, SessionID, []byte) error { return nil },
+		Reliable: func(context.Context, SessionID, []byte) error { return nil },
 	}, AsyncTransportConfig{ReliableQueueSize: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []core.SessionID{1, 2} {
-		if err := transport.RegisterSession(core.SessionInfo{ID: id}); err != nil {
+	for _, id := range []SessionID{1, 2} {
+		if err := transport.RegisterSession(SessionInfo{ID: id}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,14 +42,14 @@ func TestAsyncTransportAdmitBatchIsAtomicOnReliableBackpressure(t *testing.T) {
 }
 
 func TestAsyncTransportKeepsLatestPerRoom(t *testing.T) {
-	transport, err := NewAsyncTransport(core.TransportFunc{
-		Datagram: func(context.Context, core.SessionID, []byte) error { return nil },
-		Reliable: func(context.Context, core.SessionID, []byte) error { return nil },
+	transport, err := NewAsyncTransport(TransportFunc{
+		Datagram: func(context.Context, SessionID, []byte) error { return nil },
+		Reliable: func(context.Context, SessionID, []byte) error { return nil },
 	}, DefaultAsyncTransportConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.RegisterSession(core.SessionInfo{ID: 1}); err != nil {
+	if err := transport.RegisterSession(SessionInfo{ID: 1}); err != nil {
 		t.Fatal(err)
 	}
 	transport.mu.RLock()

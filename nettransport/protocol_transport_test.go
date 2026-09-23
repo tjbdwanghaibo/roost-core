@@ -16,7 +16,6 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 func TestAEADSessionProtectorRejectsReplayAndTamper(t *testing.T) {
@@ -84,17 +83,17 @@ func TestUDPTransportEncryptedLoopback(t *testing.T) {
 	}
 	defer server.Close()
 	defer client.Close()
-	const session core.SessionID = 71
+	const session SessionID = 71
 	if err := server.BindSession(session, clientConn.LocalAddr(), serverProtector); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.BindSession(session, serverConn.LocalAddr(), clientProtector); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := server.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := client.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,21 +101,21 @@ func TestUDPTransportEncryptedLoopback(t *testing.T) {
 	serverReceived := make(chan []byte, 1)
 	clientReceived := make(chan []byte, 1)
 	go func() {
-		_ = server.Serve(ctx, func(_ context.Context, _ core.SessionID, payload []byte, _ net.Addr) error {
+		_ = server.Serve(ctx, func(_ context.Context, _ SessionID, payload []byte, _ net.Addr) error {
 			serverReceived <- append([]byte(nil), payload...)
 			return nil
 		})
 	}()
 	go func() {
-		_ = client.Serve(ctx, func(_ context.Context, _ core.SessionID, payload []byte, _ net.Addr) error {
+		_ = client.Serve(ctx, func(_ context.Context, _ SessionID, payload []byte, _ net.Addr) error {
 			clientReceived <- append([]byte(nil), payload...)
 			return nil
 		})
 	}()
-	if err := client.SendDatagram(context.Background(), session, bytes.Repeat([]byte{1}, core.DefaultMaxDatagram)); err != nil {
+	if err := client.SendDatagram(context.Background(), session, bytes.Repeat([]byte{1}, DefaultMaxDatagram)); err != nil {
 		t.Fatal(err)
 	}
-	if payload := receiveBytes(t, serverReceived); len(payload) != core.DefaultMaxDatagram {
+	if payload := receiveBytes(t, serverReceived); len(payload) != DefaultMaxDatagram {
 		t.Fatalf("UDP payload length=%d", len(payload))
 	}
 	if err := server.SendDatagram(context.Background(), session, []byte("server-state")); err != nil {
@@ -165,17 +164,17 @@ func TestQUICTransportDatagramAndReliableLoopback(t *testing.T) {
 	client := NewQUICTransport(QUICTransportConfig{})
 	defer server.Close()
 	defer client.Close()
-	const session core.SessionID = 72
+	const session SessionID = 72
 	if err := server.BindSession(session, serverConnection); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.BindSession(session, clientConnection); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := server.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := client.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.SendDatagram(ctx, session, []byte("quic-state")); err != nil {
@@ -253,21 +252,21 @@ func TestKCPTransportOOBAndReliableLoopback(t *testing.T) {
 	}
 	defer server.Close()
 	defer client.Close()
-	const session core.SessionID = 73
+	const session SessionID = 73
 	if err := server.BindSession(session, serverSession); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.BindSession(session, clientSession); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := server.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.RegisterSession(core.SessionInfo{ID: session}); err != nil {
+	if err := client.RegisterSession(SessionInfo{ID: session}); err != nil {
 		t.Fatal(err)
 	}
 	clientDatagrams := make(chan []byte, 1)
-	if err := client.BindDatagramHandler(session, func(_ core.SessionID, payload []byte) { clientDatagrams <- payload }); err != nil {
+	if err := client.BindDatagramHandler(session, func(_ SessionID, payload []byte) { clientDatagrams <- payload }); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

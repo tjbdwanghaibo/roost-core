@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/nettransport"
-	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	"sort"
 )
 
@@ -110,15 +109,15 @@ type Room struct {
 	catchupMax   int
 	closed       bool
 	// sessions binds attached seats to their transport session.
-	sessions map[PlayerID]corestate.SessionID
+	sessions map[PlayerID]nettransport.SessionID
 	// spectators are receive-only sessions: they get live broadcasts and
 	// may catch up, but hold no seat and submit nothing.
-	spectators map[corestate.SessionID]struct{}
+	spectators map[nettransport.SessionID]struct{}
 	// sessionOwners tracks which receiver (seat or spectator) holds each
 	// session id, so one session can never serve two receivers.
-	sessionOwners map[corestate.SessionID]PlayerID // spectators use ownerSpectator
+	sessionOwners map[nettransport.SessionID]PlayerID // spectators use ownerSpectator
 	// catchups holds each catching-up session's paging state.
-	catchups map[corestate.SessionID]*catchupState
+	catchups map[nettransport.SessionID]*catchupState
 	// ruled tracks the outliers already surfaced per judged frame, so
 	// OnDesync fires exactly on set growth/change, not cardinality change.
 	ruled map[FrameID]map[PlayerID]struct{}
@@ -181,10 +180,10 @@ func NewRoom(config RoomConfig) (*Room, error) {
 		onDesync:      config.OnDesync,
 		catchupBatch:  batch,
 		catchupMax:    maxFailures,
-		sessions:      make(map[PlayerID]corestate.SessionID),
-		spectators:    make(map[corestate.SessionID]struct{}),
-		sessionOwners: make(map[corestate.SessionID]PlayerID),
-		catchups:      make(map[corestate.SessionID]*catchupState),
+		sessions:      make(map[PlayerID]nettransport.SessionID),
+		spectators:    make(map[nettransport.SessionID]struct{}),
+		sessionOwners: make(map[nettransport.SessionID]PlayerID),
+		catchups:      make(map[nettransport.SessionID]*catchupState),
 		ruled:         make(map[FrameID]map[PlayerID]struct{}),
 	}, nil
 }
@@ -195,7 +194,7 @@ func NewRoom(config RoomConfig) (*Room, error) {
 // (reconnect) replaces the previous one and drops its catch-up. A session
 // already serving another seat or a spectator is refused — two receivers on
 // one session would double-send and cross-cancel each other's catch-up.
-func (r *Room) Attach(player PlayerID, session corestate.SessionID) error {
+func (r *Room) Attach(player PlayerID, session nettransport.SessionID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -230,7 +229,7 @@ func (r *Room) Detach(player PlayerID) {
 
 // AttachSpectator binds a receive-only session: it gets live broadcasts and
 // may catch up via SpectatorCatchup, but holds no seat.
-func (r *Room) AttachSpectator(session corestate.SessionID) error {
+func (r *Room) AttachSpectator(session nettransport.SessionID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -243,7 +242,7 @@ func (r *Room) AttachSpectator(session corestate.SessionID) error {
 }
 
 // DetachSpectator unbinds a spectator session.
-func (r *Room) DetachSpectator(session corestate.SessionID) {
+func (r *Room) DetachSpectator(session nettransport.SessionID) {
 	if _, ok := r.spectators[session]; ok {
 		delete(r.spectators, session)
 		delete(r.sessionOwners, session)
@@ -320,7 +319,7 @@ func (r *Room) Tick(ctx context.Context) (Frame, error) {
 
 type broadcastReceiver struct {
 	owner   PlayerID
-	session corestate.SessionID
+	session nettransport.SessionID
 }
 
 // broadcastOrder returns seats (by ascending player) then spectators (by
@@ -336,7 +335,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 	for _, player := range players {
 		receivers = append(receivers, broadcastReceiver{owner: player, session: r.sessions[player]})
 	}
-	specs := make([]corestate.SessionID, 0, len(r.spectators))
+	specs := make([]nettransport.SessionID, 0, len(r.spectators))
 	for session := range r.spectators {
 		specs = append(specs, session)
 	}
@@ -363,14 +362,14 @@ func (r *Room) StartCatchup(player PlayerID, from FrameID) error {
 }
 
 // SpectatorCatchup begins paging history to an attached spectator session.
-func (r *Room) SpectatorCatchup(session corestate.SessionID, from FrameID) error {
+func (r *Room) SpectatorCatchup(session nettransport.SessionID, from FrameID) error {
 	if _, ok := r.spectators[session]; !ok {
 		return ErrPlayerDetached
 	}
 	return r.startCatchup(session, from)
 }
 
-func (r *Room) startCatchup(session corestate.SessionID, from FrameID) error {
+func (r *Room) startCatchup(session nettransport.SessionID, from FrameID) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
@@ -404,7 +403,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 	if len(r.catchups) == 0 {
 		return nil
 	}
-	sessions := make([]corestate.SessionID, 0, len(r.catchups))
+	sessions := make([]nettransport.SessionID, 0, len(r.catchups))
 	for session := range r.catchups {
 		sessions = append(sessions, session)
 	}
@@ -523,9 +522,9 @@ func (r *Room) History() *History { return r.history }
 // exactly one match — do not reuse it.
 func (r *Room) Close() {
 	r.closed = true
-	r.sessions = make(map[PlayerID]corestate.SessionID)
-	r.spectators = make(map[corestate.SessionID]struct{})
-	r.sessionOwners = make(map[corestate.SessionID]PlayerID)
-	r.catchups = make(map[corestate.SessionID]*catchupState)
+	r.sessions = make(map[PlayerID]nettransport.SessionID)
+	r.spectators = make(map[nettransport.SessionID]struct{})
+	r.sessionOwners = make(map[nettransport.SessionID]PlayerID)
+	r.catchups = make(map[nettransport.SessionID]*catchupState)
 	r.ruled = make(map[FrameID]map[PlayerID]struct{})
 }

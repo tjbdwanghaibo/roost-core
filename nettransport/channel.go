@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	core "github.com/tjbdwanghaibo/roost-core/statesync"
 )
 
 type Channel uint8
@@ -19,7 +17,7 @@ const (
 )
 
 type SendError struct {
-	Session core.SessionID
+	Session SessionID
 	Channel Channel
 	Err     error
 }
@@ -28,7 +26,7 @@ type SendError struct {
 // impossible to admit. Higher layers can evict that slow/failed session and
 // retry the remaining independent recipients.
 type AdmissionError struct {
-	Session core.SessionID
+	Session SessionID
 	Err     error
 }
 
@@ -59,7 +57,7 @@ type AsyncTransportConfig struct {
 	MaxDatagramBytes     int
 	MaxReliableBytes     int
 	SendTimeout          time.Duration
-	// AllowOpaqueDatagrams disables replication header, checksum, and complete
+	// AllowOpaqueDatagrams disables datagram header, checksum, and complete
 	// frame-batch validation. Keep false unless a trusted upstream has already
 	// performed equivalent validation.
 	AllowOpaqueDatagrams bool
@@ -70,8 +68,8 @@ func DefaultAsyncTransportConfig() AsyncTransportConfig {
 	return AsyncTransportConfig{
 		MaxSessions:          4096,
 		ReliableQueueSize:    256,
-		MaxDatagramsPerFrame: core.DefaultLimits().MaxFragments,
-		MaxDatagramBytes:     core.DefaultMaxDatagram,
+		MaxDatagramsPerFrame: DefaultMaxFragments,
+		MaxDatagramBytes:     DefaultMaxDatagram,
 		MaxReliableBytes:     1 << 20,
 		SendTimeout:          250 * time.Millisecond,
 	}
@@ -79,11 +77,11 @@ func DefaultAsyncTransportConfig() AsyncTransportConfig {
 
 type AsyncTransport struct {
 	mu         sync.RWMutex
-	downstream core.Transport
+	downstream Transport
 	config     AsyncTransportConfig
 	ctx        context.Context
 	cancel     context.CancelFunc
-	sessions   map[core.SessionID]*sessionQueue
+	sessions   map[SessionID]*sessionQueue
 	closed     bool
 	wait       sync.WaitGroup
 	closeOnce  sync.Once
@@ -92,7 +90,7 @@ type AsyncTransport struct {
 }
 
 type sessionQueue struct {
-	id     core.SessionID
+	id     SessionID
 	owner  *AsyncTransport
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -144,7 +142,7 @@ type AsyncTransportStats struct {
 	ErrorHandlerPanics    uint64
 }
 
-func NewAsyncTransport(downstream core.Transport, config AsyncTransportConfig) (*AsyncTransport, error) {
+func NewAsyncTransport(downstream Transport, config AsyncTransportConfig) (*AsyncTransport, error) {
 	if isNilInterface(downstream) {
 		return nil, ErrTransportRequired
 	}
@@ -170,13 +168,13 @@ func NewAsyncTransport(downstream core.Transport, config AsyncTransportConfig) (
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AsyncTransport{
 		downstream: downstream, config: config, ctx: ctx, cancel: cancel,
-		sessions: make(map[core.SessionID]*sessionQueue), closeDone: make(chan struct{}),
+		sessions: make(map[SessionID]*sessionQueue), closeDone: make(chan struct{}),
 	}, nil
 }
 
 // RegisterSession starts two independent workers: latest-only datagrams and
 // bounded reliable messages. This avoids reliable stream stalls blocking state.
-func (transport *AsyncTransport) RegisterSession(info core.SessionInfo) error {
+func (transport *AsyncTransport) RegisterSession(info SessionInfo) error {
 	id := info.ID
 	if transport == nil || id == 0 {
 		return ErrSessionNotRegistered
@@ -192,7 +190,7 @@ func (transport *AsyncTransport) RegisterSession(info core.SessionInfo) error {
 	if len(transport.sessions) >= transport.config.MaxSessions {
 		return ErrSessionLimit
 	}
-	if lifecycle, ok := transport.downstream.(core.SessionTransport); ok {
+	if lifecycle, ok := transport.downstream.(SessionTransport); ok {
 		if err := lifecycle.RegisterSession(info); err != nil {
 			return err
 		}
@@ -212,7 +210,7 @@ func (transport *AsyncTransport) RegisterSession(info core.SessionInfo) error {
 
 // RemoveSession cancels queued work immediately. Room shutdown should use
 // Close when reliable messages need a bounded graceful drain.
-func (transport *AsyncTransport) RemoveSession(id core.SessionID) bool {
+func (transport *AsyncTransport) RemoveSession(id SessionID) bool {
 	if transport == nil || id == 0 {
 		return false
 	}
@@ -225,22 +223,22 @@ func (transport *AsyncTransport) RemoveSession(id core.SessionID) bool {
 	return exists
 }
 
-func (transport *AsyncTransport) SendDatagram(ctx context.Context, id core.SessionID, payload []byte) error {
+func (transport *AsyncTransport) SendDatagram(ctx context.Context, id SessionID, payload []byte) error {
 	return transport.SendDatagramBatch(ctx, id, [][]byte{payload})
 }
 
 // SendDatagramBatch atomically replaces the pending state frame. It copies all
 // packets before admission, so callers may safely reuse their buffers.
-func (transport *AsyncTransport) SendDatagramBatch(ctx context.Context, id core.SessionID, packets [][]byte) error {
+func (transport *AsyncTransport) SendDatagramBatch(ctx context.Context, id SessionID, packets [][]byte) error {
 	return transport.AdmitBatch(ctx, []OutboundFrame{{Session: id, Datagrams: packets}})
 }
 
-func (transport *AsyncTransport) SendReliable(ctx context.Context, id core.SessionID, payload []byte) error {
+func (transport *AsyncTransport) SendReliable(ctx context.Context, id SessionID, payload []byte) error {
 	return transport.AdmitBatch(ctx, []OutboundFrame{{Session: id, Reliable: payload}})
 }
 
 type preparedOutboundFrame struct {
-	session   core.SessionID
+	session   SessionID
 	stream    uint64
 	datagrams [][]byte
 	reliable  []byte
@@ -290,7 +288,7 @@ func (transport *AsyncTransport) AdmitBatch(ctx context.Context, frames []Outbou
 		transport.mu.RUnlock()
 		return ErrTransportClosed
 	}
-	queuesByID := make(map[core.SessionID]*sessionQueue, len(prepared))
+	queuesByID := make(map[SessionID]*sessionQueue, len(prepared))
 	for _, item := range prepared {
 		queue := transport.sessions[item.session]
 		if queue == nil {
@@ -299,7 +297,7 @@ func (transport *AsyncTransport) AdmitBatch(ctx context.Context, frames []Outbou
 		}
 		queuesByID[item.session] = queue
 	}
-	ids := make([]core.SessionID, 0, len(queuesByID))
+	ids := make([]SessionID, 0, len(queuesByID))
 	for id := range queuesByID {
 		ids = append(ids, id)
 	}
@@ -318,7 +316,7 @@ func (transport *AsyncTransport) AdmitBatch(ctx context.Context, frames []Outbou
 			return AdmissionError{Session: id, Err: err}
 		}
 	}
-	reliableAdds := make(map[core.SessionID]int)
+	reliableAdds := make(map[SessionID]int)
 	for _, item := range prepared {
 		if item.reliable != nil {
 			reliableAdds[item.session]++
@@ -350,7 +348,7 @@ func (transport *AsyncTransport) AdmitBatch(ctx context.Context, frames []Outbou
 	return nil
 }
 
-func (transport *AsyncTransport) session(id core.SessionID) (*sessionQueue, error) {
+func (transport *AsyncTransport) session(id SessionID) (*sessionQueue, error) {
 	if transport == nil {
 		return nil, ErrTransportClosed
 	}
@@ -547,7 +545,7 @@ func (queue *sessionQueue) sendDatagrams(batch [][]byte) {
 	defer cancel()
 	downstream := queue.owner.downstream
 	var err error
-	if batched, ok := downstream.(core.DatagramBatchTransport); ok {
+	if batched, ok := downstream.(DatagramBatchTransport); ok {
 		err = batched.SendDatagramBatch(ctx, queue.id, batch)
 	} else {
 		for _, packet := range batch {
@@ -628,7 +626,7 @@ func (queue *sessionQueue) fail(err error) {
 
 func (queue *sessionQueue) workerDone() {
 	if queue.workersDone.Add(1) == 2 {
-		if lifecycle, ok := queue.owner.downstream.(core.SessionTransport); ok {
+		if lifecycle, ok := queue.owner.downstream.(SessionTransport); ok {
 			lifecycle.RemoveSession(queue.id)
 		}
 		queue.owner.mu.Lock()
@@ -670,22 +668,19 @@ func validateAndCopyDatagramBatch(packets [][]byte, config AsyncTransportConfig,
 	return stream, nil
 }
 
-func inspectDatagramBatch(packets [][]byte, config AsyncTransportConfig) (core.DatagramHeader, error) {
+func inspectDatagramBatch(packets [][]byte, config AsyncTransportConfig) (DatagramHeader, error) {
 	if len(packets) == 0 || len(packets) > config.MaxDatagramsPerFrame {
-		return core.DatagramHeader{}, ErrInvalidDatagramBatch
+		return DatagramHeader{}, ErrInvalidDatagramBatch
 	}
-	limits := core.DefaultLimits()
-	limits.MaxDatagramBytes = config.MaxDatagramBytes
-	limits.MaxFragments = config.MaxDatagramsPerFrame
-	var first core.DatagramHeader
+	var first DatagramHeader
 	seen := make([]bool, len(packets))
 	for index, packet := range packets {
-		header, err := core.InspectDatagram(packet, limits)
+		header, err := InspectDatagram(packet, config.MaxDatagramBytes, config.MaxDatagramsPerFrame)
 		if err != nil {
-			return core.DatagramHeader{}, fmt.Errorf("%w: packet %d: %v", ErrInvalidDatagramBatch, index, err)
+			return DatagramHeader{}, fmt.Errorf("%w: packet %d: %v", ErrInvalidDatagramBatch, index, err)
 		}
 		if int(header.ChunkCount) != len(packets) || int(header.ChunkIndex) >= len(seen) || seen[header.ChunkIndex] {
-			return core.DatagramHeader{}, ErrInvalidDatagramBatch
+			return DatagramHeader{}, ErrInvalidDatagramBatch
 		}
 		seen[header.ChunkIndex] = true
 		if index == 0 {
@@ -694,13 +689,13 @@ func inspectDatagramBatch(packets [][]byte, config AsyncTransportConfig) (core.D
 		}
 		if header.RoomID != first.RoomID || header.Epoch != first.Epoch || header.Tick != first.Tick ||
 			header.BaseTick != first.BaseTick || header.Sequence != first.Sequence || header.ChunkCount != first.ChunkCount || header.Flags != first.Flags {
-			return core.DatagramHeader{}, ErrInvalidDatagramBatch
+			return DatagramHeader{}, ErrInvalidDatagramBatch
 		}
 	}
 	return first, nil
 }
 
-var _ core.Transport = (*AsyncTransport)(nil)
-var _ core.DatagramBatchTransport = (*AsyncTransport)(nil)
-var _ core.SessionTransport = (*AsyncTransport)(nil)
+var _ Transport = (*AsyncTransport)(nil)
+var _ DatagramBatchTransport = (*AsyncTransport)(nil)
+var _ SessionTransport = (*AsyncTransport)(nil)
 var _ AtomicBatchTransport = (*AsyncTransport)(nil)

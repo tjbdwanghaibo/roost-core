@@ -1,7 +1,17 @@
-package statesync
+package nettransport
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
+// ErrTransportMissing is returned by TransportFunc when the lane asked for
+// has no function bound.
+var ErrTransportMissing = errors.New("nettransport: transport is not configured")
+
+// Transport is the two-lane send contract every session transport here
+// implements: a datagram lane (unreliable, latest wins) and a reliable lane
+// (ordered, backpressured). Payloads are opaque bytes.
 type Transport interface {
 	SendDatagram(context.Context, SessionID, []byte) error
 	SendReliable(context.Context, SessionID, []byte) error
@@ -14,13 +24,14 @@ type DatagramBatchTransport interface {
 	SendDatagramBatch(context.Context, SessionID, [][]byte) error
 }
 
-// SessionTransport is an optional lifecycle extension. Replicator invokes it
-// automatically, keeping queue/session bookkeeping below the application layer.
+// SessionTransport is an optional lifecycle extension: a transport that keeps
+// per-session state learns here when a session is registered and removed.
 type SessionTransport interface {
 	RegisterSession(SessionInfo) error
 	RemoveSession(SessionID) bool
 }
 
+// TransportFunc adapts two functions to Transport.
 type TransportFunc struct {
 	Datagram func(context.Context, SessionID, []byte) error
 	Reliable func(context.Context, SessionID, []byte) error
