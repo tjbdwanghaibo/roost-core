@@ -150,7 +150,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	}
 	shared := []string{"lock", "ops", "statslog"}
 	if len(mods) == 0 {
-		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "room", "remote_entity", "dataengine", "nest", "manager"}
+		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "syncbus", "remote_entity", "dataengine", "nest", "manager"}
 	}
 	svc := make(map[string]ServiceSpec, len(services))
 	for _, service := range services {
@@ -213,7 +213,8 @@ func decodeManifest(root string) (Manifest, error) {
 // rewritten in memory and the canonical spelling is what `project sync` writes
 // back out.
 var legacyModNames = map[string]string{
-	"sync": "room",
+	"sync": "syncbus",
+	"room": "syncbus",
 }
 
 var legacyFeatureNames = map[string]string{

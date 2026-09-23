@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | 内容 | `entity`（`SubjectSyncState`、`PrepareTick`） | 版本、脏位、packer、CommitLSN、Namespace | session、传输、谁在看 |
 | 机制 | `entitysync`（`Manager`、subject、session、wire、`Transport`） | subject 的订阅者、会话的帧时钟、门槛、两种失败 | 为什么有人订阅（距离？队伍？房间？） |
-| 组织 | `entitysync/policy`（`Interest`、`Room`、`Direct`、`RelationSource`） | 谁该订谁；把决定说给 Manager | 帧、线、传输、会话生命周期 |
+| 组织 | `entitysync/policy`（`Interest`、`Group`、`Direct`、`RelationSource`） | 谁该订谁；把决定说给 Manager | 帧、线、传输、会话生命周期 |
 | 应用 | demo `internal/service/game/scene.go` | 传输适配（一帧一 push）、会话生命周期（进场 held / ready / 离场）、地图尺寸、半径、队伍 | 聚合规则、重试规则、编码 |
 
 ## 三件收尾
@@ -27,7 +27,7 @@ handler `HandleSceneReady → Scene.Ready(playerID)`；机器人在 `scene_watch
 
 **3. `entitysync/policy`。** demo 模板里的 `InterestSystem` + `RelationSource`（AOI + 关系源聚合、first-source-subscribes / last-source-unsubscribes、
 band → profile、被拒重试）**整体搬进 core** 成为 `policy.Interest`，且直接驱动 Manager（`Apply() []Refusal`，调用方只决定日志级别）；
-新增 `policy.Room`（成员全互见，subject / member 两个集合，预算，关房退役）与 `policy.Direct`（显式绑定）。
+新增 `policy.Group`（成员全互见，subject / member 两个集合，预算，关闭时退役全部 subject；09-23 由 Room 改名，避免与 `lockstep.Room` 混淆）与 `policy.Direct`（显式绑定）。
 demo 删除 `game/scene/runtime/{interest,relations,interest_test}.go.tmpl`，`scene` 契约去掉 Source / Relations / SubscriptionChange / Interest，
 Scene 实体不再暴露 `Interest()`；bridge 用 `policy.NewInterest` 装配（地图尺寸来自 `WorldSceneConfig`，半径与 team 关系是 bridge 的常量）。
 
@@ -65,6 +65,6 @@ scene: 日志：1 × "player unreachable, leaving the scene"；WARN 仍只有 sl
 ## 边界
 
 - `policy.Interest` 的 `Session` 映射由应用给（demo：实体 id → player id）；不给则 session id == observer id。
-- `Room` 不管会话开关：会话是传输的事，`Join` 之前应用先 `OpenSession`。
+- `Group` 不管会话开关：会话是传输的事，`Join` 之前应用先 `OpenSession`。
 - `scene_ready` 是 demo 协议；用 nettransport 直连的部署在会话握手完成处调 `ReadySession` 即可，Manager 不关心信号来源。
 - 未发版；破坏性（标记改名、协议加消息、删 demo 运行时文件）。

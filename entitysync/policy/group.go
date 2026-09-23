@@ -9,8 +9,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entitysync"
 )
 
-// RoomConfig shapes a Room.
-type RoomConfig struct {
+// GroupConfig shapes a Group.
+type GroupConfig struct {
 	// Manager receives the subscriptions. Required.
 	Manager *entitysync.Manager
 	// Profile every member subscribes with. Zero is the default profile.
@@ -18,36 +18,36 @@ type RoomConfig struct {
 	// Session names a member's session. Nil means the session id IS the
 	// member id.
 	Session func(member int64) entitysync.SessionID
-	// MaxSubjects and MaxMembers bound the room. Zero means unbounded (the
+	// MaxSubjects and MaxMembers bound the group. Zero means unbounded (the
 	// manager's own limits still apply).
 	MaxSubjects int
 	MaxMembers  int
 }
 
 var (
-	ErrRoomClosed         = errors.New("policy: room is closed")
-	ErrRoomSubjectLimit   = errors.New("policy: room subject limit reached")
-	ErrRoomMemberLimit    = errors.New("policy: room member limit reached")
-	ErrRoomSubjectPresent = errors.New("policy: subject is already in the room")
-	ErrRoomMemberPresent  = errors.New("policy: member is already in the room")
-	ErrRoomNotPresent     = errors.New("policy: not in the room")
+	ErrGroupClosed         = errors.New("policy: group is closed")
+	ErrGroupSubjectLimit   = errors.New("policy: group subject limit reached")
+	ErrGroupMemberLimit    = errors.New("policy: group member limit reached")
+	ErrGroupSubjectPresent = errors.New("policy: subject is already in the group")
+	ErrGroupMemberPresent  = errors.New("policy: member is already in the group")
+	ErrGroupNotPresent     = errors.New("policy: not in the group")
 )
 
-// Room is the all-to-all policy: every member receives every subject in the
-// room, wherever they are. A lobby, a battle, an instance. Subjects and
+// Group is the all-to-all policy: every member receives every subject in the
+// room, wherever they are. A lobby, a party, an instance. It is not a lockstep battle room (that is lockstep.Room) and not a label on the wire. Subjects and
 // members are separate sets — a spectator is a member and not a subject, a
 // scripted actor is a subject and not a member — and a player is usually
 // both, added twice.
-type Room struct {
+type Group struct {
 	mu       sync.Mutex
-	config   RoomConfig
+	config   GroupConfig
 	session  func(int64) entitysync.SessionID
 	subjects map[int64]struct{}
 	members  map[int64]struct{}
 	closed   bool
 }
 
-func NewRoom(config RoomConfig) (*Room, error) {
+func NewGroup(config GroupConfig) (*Group, error) {
 	if config.Manager == nil {
 		return nil, entitysync.ErrManagerClosed
 	}
@@ -55,12 +55,12 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	if session == nil {
 		session = func(member int64) entitysync.SessionID { return entitysync.SessionID(member) }
 	}
-	return &Room{config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}, nil
+	return &Group{config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}, nil
 }
 
 // AddSubject registers a subject with the manager and subscribes every
 // current member to it.
-func (r *Room) AddSubject(state *entity.SubjectSyncState) error {
+func (r *Group) AddSubject(state *entity.SubjectSyncState) error {
 	if state == nil {
 		return entitysync.ErrSubjectInvalid
 	}
@@ -68,13 +68,13 @@ func (r *Room) AddSubject(state *entity.SubjectSyncState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return ErrRoomClosed
+		return ErrGroupClosed
 	}
 	if _, present := r.subjects[id]; present {
-		return ErrRoomSubjectPresent
+		return ErrGroupSubjectPresent
 	}
 	if r.config.MaxSubjects > 0 && len(r.subjects) >= r.config.MaxSubjects {
-		return ErrRoomSubjectLimit
+		return ErrGroupSubjectLimit
 	}
 	if err := r.config.Manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return err
@@ -90,11 +90,11 @@ func (r *Room) AddSubject(state *entity.SubjectSyncState) error {
 }
 
 // RemoveSubject retires a subject: every member is owed a remove.
-func (r *Room) RemoveSubject(id int64) error {
+func (r *Group) RemoveSubject(id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, present := r.subjects[id]; !present {
-		return ErrRoomNotPresent
+		return ErrGroupNotPresent
 	}
 	delete(r.subjects, id)
 	if err := r.config.Manager.Unregister(id); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
@@ -103,19 +103,19 @@ func (r *Room) RemoveSubject(id int64) error {
 	return nil
 }
 
-// Join makes a session a member: it receives every subject in the room. The
+// Join makes a session a member: it receives every subject in the group. The
 // session must already be open with the manager.
-func (r *Room) Join(member int64) error {
+func (r *Group) Join(member int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return ErrRoomClosed
+		return ErrGroupClosed
 	}
 	if _, present := r.members[member]; present {
-		return ErrRoomMemberPresent
+		return ErrGroupMemberPresent
 	}
 	if r.config.MaxMembers > 0 && len(r.members) >= r.config.MaxMembers {
-		return ErrRoomMemberLimit
+		return ErrGroupMemberLimit
 	}
 	session := r.session(member)
 	var errs []error
@@ -134,12 +134,12 @@ func (r *Room) Join(member int64) error {
 	return nil
 }
 
-// Leave takes a member out: it stops receiving the room's subjects.
-func (r *Room) Leave(member int64) error {
+// Leave takes a member out: it stops receiving the group's subjects.
+func (r *Group) Leave(member int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, present := r.members[member]; !present {
-		return ErrRoomNotPresent
+		return ErrGroupNotPresent
 	}
 	delete(r.members, member)
 	session := r.session(member)
@@ -153,8 +153,8 @@ func (r *Room) Leave(member int64) error {
 }
 
 // Close retires every subject and forgets every member. Members' sessions
-// stay open — they are the transport's, not the room's.
-func (r *Room) Close() error {
+// stay open — they are the transport's, not the group's.
+func (r *Group) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -172,14 +172,14 @@ func (r *Room) Close() error {
 	return errors.Join(errs...)
 }
 
-// Members and Subjects report the room's size.
-func (r *Room) Members() int {
+// Members and Subjects report the group's size.
+func (r *Group) Members() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.members)
 }
 
-func (r *Room) Subjects() int {
+func (r *Group) Subjects() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.subjects)

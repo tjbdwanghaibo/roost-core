@@ -16,9 +16,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/kit/ops"
 	"github.com/tjbdwanghaibo/roost-core/kit/redis"
 	"github.com/tjbdwanghaibo/roost-core/kit/remoteentity"
-	"github.com/tjbdwanghaibo/roost-core/kit/room"
 	"github.com/tjbdwanghaibo/roost-core/kit/saga"
 	"github.com/tjbdwanghaibo/roost-core/kit/statslog"
+	"github.com/tjbdwanghaibo/roost-core/kit/syncbus"
 )
 
 // app resolves DependsOn / OptionalDependsOn by Mod NAME. A dependency that
@@ -42,7 +42,7 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		ops.NewOpsMod(),
 		redis.NewRedisMod(),
 		remoteentity.NewRemoteEntityMod(0, remoteentity.WithMongoStorage(access)),
-		room.NewRoomMod(0),
+		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),
 		statslog.NewStatsLogMod(),
 	}

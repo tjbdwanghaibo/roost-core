@@ -14,9 +14,9 @@ import (
 	kitops "github.com/tjbdwanghaibo/roost-core/kit/ops"
 	kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/kit/remoteentity"
-	kitroom "github.com/tjbdwanghaibo/roost-core/kit/room"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/kit/saga"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/kit/statslog"
+	kitsyncbus "github.com/tjbdwanghaibo/roost-core/kit/syncbus"
 )
 
 // This compile-time list is the lifecycle gate for every infrastructure Mod
@@ -36,7 +36,7 @@ func TestBuiltInModsImplementContextStop(t *testing.T) {
 		(*kitremoteentity.RemoteEntityMod)(nil),
 		(*kitsaga.Mod)(nil),
 		(*kitstatslog.StatsLogMod)(nil),
-		(*kitroom.RoomMod)(nil),
+		(*kitsyncbus.SyncBusMod)(nil),
 	}
 	if len(implementations) != 13 {
 		t.Fatalf("lifecycle gate list = %d, want 13", len(implementations))

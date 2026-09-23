@@ -1,4 +1,4 @@
-package room
+package syncbus
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/health"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	coreroom "github.com/tjbdwanghaibo/roost-core/room"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
+	driver "github.com/tjbdwanghaibo/roost-core/syncbus/driver"
 	"log/slog"
 	"strings"
 	"time"
@@ -30,7 +30,7 @@ func configKey(cfg *viper.Viper, key string) string {
 		return roomConfigSection + "." + key
 	}
 	if cfg.IsSet(legacyConfigSection + "." + key) {
-		slog.Warn("room mod: config section \"sync\" is deprecated, rename it to \"room\"", "key", key)
+		slog.Warn("syncbus mod: config section \"sync\" is deprecated, rename it to \"room\"", "key", key)
 		return legacyConfigSection + "." + key
 	}
 	return roomConfigSection + "." + key
@@ -44,22 +44,22 @@ func cfgGetDuration(cfg *viper.Viper, key string) time.Duration {
 	return cfg.GetDuration(configKey(cfg, key))
 }
 
-// RoomMod implements app.Mod, providing ISyncBus over NATS.
+// SyncBusMod implements app.Mod, providing the service-to-service ISyncBus over NATS or JetStream.
 // Depends on: "nats" (fnats.IClient).
-type RoomMod struct {
+type SyncBusMod struct {
 	bus       fsyncbus.ISyncBus
 	localSid  int32
 	prefix    string
 	transport string
-	jsCfg     coreroom.JetStreamSyncConfig
+	jsCfg     driver.JetStreamSyncConfig
 }
 
-func NewRoomMod(localSid int32) *RoomMod {
-	return &RoomMod{localSid: localSid}
+func NewSyncBusMod(localSid int32) *SyncBusMod {
+	return &SyncBusMod{localSid: localSid}
 }
 
-func (m *RoomMod) Name() app.ModName { return mods.ModRoom }
-func (m *RoomMod) Init(cfg *viper.Viper) error {
+func (m *SyncBusMod) Name() app.ModName { return mods.ModSyncBus }
+func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 	if m.localSid == 0 {
 		m.localSid = cfg.GetInt32("sid")
 	}
@@ -68,7 +68,7 @@ func (m *RoomMod) Init(cfg *viper.Viper) error {
 		m.prefix = "roost.room"
 	}
 	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
-	m.jsCfg = coreroom.JetStreamSyncConfig{
+	m.jsCfg = driver.JetStreamSyncConfig{
 		LocalSid:     m.localSid,
 		Prefix:       m.prefix,
 		Stream:       cfgGetString(cfg, "stream"),
@@ -85,53 +85,53 @@ func (m *RoomMod) Init(cfg *viper.Viper) error {
 	return nil
 }
 
-func (m *RoomMod) Provide(r *app.Registry) error {
+func (m *SyncBusMod) Provide(r *app.Registry) error {
 	healthReg, ok := app.Lookup[*health.Registry](r, mods.ModHealth)
 	if !ok || healthReg == nil {
-		return fmt.Errorf("room mod: capability %q not found", mods.ModHealth)
+		return fmt.Errorf("syncbus mod: capability %q not found", mods.ModHealth)
 	}
 	if m.useJetStream() {
 		js, ok := app.Lookup[fnats.IJetStream](r, mods.ModNatsJetStream)
 		if !ok || js == nil {
-			return fmt.Errorf("room mod: required capability %q not found", mods.ModNatsJetStream)
+			return fmt.Errorf("syncbus mod: required capability %q not found", mods.ModNatsJetStream)
 		}
-		bus, err := coreroom.NewJetStreamSyncBus(fctx.BaseContext(), js, m.jsCfg)
+		bus, err := driver.NewJetStreamSyncBus(fctx.BaseContext(), js, m.jsCfg)
 		if err != nil {
 			return err
 		}
 		m.bus = bus
 		m.registerHealth(healthReg, "jetstream")
-		return r.Register(mods.ModRoom, m.bus)
+		return r.Register(mods.ModSyncBus, m.bus)
 	}
 	client, ok := app.Lookup[fnats.IClient](r, mods.ModNats)
 	if !ok {
-		return fmt.Errorf("room mod: required capability %q not found", mods.ModNats)
+		return fmt.Errorf("syncbus mod: required capability %q not found", mods.ModNats)
 	}
-	m.bus = coreroom.NewNatsSyncBus(client, m.localSid, m.prefix)
+	m.bus = driver.NewNatsSyncBus(client, m.localSid, m.prefix)
 	m.registerHealth(healthReg, "nats")
-	return r.Register(mods.ModRoom, m.bus)
+	return r.Register(mods.ModSyncBus, m.bus)
 }
 
-func (m *RoomMod) DependsOn() []app.ModName {
+func (m *SyncBusMod) DependsOn() []app.ModName {
 	return []app.ModName{mods.ModNats}
 }
 
-func (m *RoomMod) Start() error {
+func (m *SyncBusMod) Start() error {
 	transport := "nats"
 	if m.useJetStream() {
 		transport = "jetstream"
 	}
-	slog.Info("room mod: started", "transport", transport)
+	slog.Info("syncbus mod: started", "transport", transport)
 	return nil
 }
 
-func (m *RoomMod) Stop() {
+func (m *SyncBusMod) Stop() {
 	if err := m.StopWithContext(fctx.BaseContext()); err != nil {
-		slog.Warn("room mod: stop interrupted", "err", err)
+		slog.Warn("syncbus mod: stop interrupted", "err", err)
 	}
 }
 
-func (m *RoomMod) StopWithContext(ctx context.Context) error {
+func (m *SyncBusMod) StopWithContext(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
@@ -146,15 +146,15 @@ func (m *RoomMod) StopWithContext(ctx context.Context) error {
 		stopper.Stop()
 	}
 	m.bus = nil
-	slog.Info("room mod: stopped")
+	slog.Info("syncbus mod: stopped")
 	return nil
 }
 
-func (m *RoomMod) useJetStream() bool {
+func (m *SyncBusMod) useJetStream() bool {
 	return m != nil && (m.transport == "jetstream" || m.transport == "js")
 }
 
-func (m *RoomMod) registerHealth(reg *health.Registry, transport string) {
+func (m *SyncBusMod) registerHealth(reg *health.Registry, transport string) {
 	if reg == nil {
 		return
 	}

@@ -1,4 +1,4 @@
-package room
+package driver
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -102,7 +102,7 @@ func (f *topicFanout) snapshot() []fsyncbus.Handler {
 	for id := range f.handlers {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	out := make([]fsyncbus.Handler, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, f.handlers[id])

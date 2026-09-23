@@ -25,7 +25,7 @@ const (
 	ModEtcdDiscov   app.ModName = "etcd.discovery"
 	ModEtcdElection app.ModName = "etcd.election"
 
-	ModRoom                    app.ModName = "room"
+	ModSyncBus                 app.ModName = "syncbus"
 	ModDataEngine              app.ModName = "dataengine"
 	ModRemoteEntity            app.ModName = "remote_entity"
 	ModRemoteEntityAtomicStore app.ModName = "remote_entity.atomic_store"

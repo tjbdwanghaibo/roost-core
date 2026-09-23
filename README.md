@@ -66,7 +66,7 @@ v1.10.0 把一批只描述"机制"的包名换成描述"职责"的名字。旧�
 `roost-kit` 同步改名：`sync` → `room`、`replication` → `nettransport`、
 `remote_entity` → `remoteentity`、`taskflow` → `actionflow`。
 capability 常量 `ModObs` → `ModMetrics`（值 `"obs"` → `"metrics"`）、
-`ModSync` → `ModRoom`（值 `"sync"` → `"room"`）。
+`ModSync` → `ModRoom`（值 `"sync"` → `"room"`）；2026-09-23 再改为 `ModSyncBus`（值 `"syncbus"`，实现在 `syncbus/driver`，`room/` 包退场）。
 
 `roost.yaml` 是用户手写的，因此 codegen 同时接受旧名：mod `sync` 和 feature
 `replication-quic/kcp/udp` 会在加载时归一化成 `room` 和 `nettransport-*`，

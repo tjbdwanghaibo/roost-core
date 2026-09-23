@@ -1,6 +1,6 @@
 // Package policy holds the ways subscriptions get organized on top of an
 // entitysync.Manager: by distance (Interest), by membership in a group
-// (Room), or one binding at a time (Direct). None of them touch the wire or
+// (Group), or one binding at a time (Direct). None of them touch the wire or
 // the frames — a policy only decides WHO receives WHOM and says so to the
 // manager. The manager, in turn, knows nothing about any of them (ARCH-10).
 package policy

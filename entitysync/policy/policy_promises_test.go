@@ -14,7 +14,7 @@ import (
 
 // ARCH-10 · M-14：组织方式只决定"谁订谁"，全部落到 Manager 的 Subscribe / Unsubscribe 上。
 // 这里的承诺原来在 demo 的 InterestSystem 测试里（self 经关系源、滞回不抖、关系比距离活得久、
-// 被拒重发），搬进 core 后改为对 Manager 的订阅表断言；Room / Direct 是新增的两种组织方式。
+// 被拒重发），搬进 core 后改为对 Manager 的订阅表断言；Group / Direct 是新增的两种组织方式。
 
 // sink records frames per session; the policies never see it.
 type sink struct {
@@ -269,10 +269,10 @@ func TestARefusedSubscribeForAReleasedPairIsDropped(t *testing.T) {
 	}
 }
 
-// Room：成员全互见；subject 加入后所有成员都订上；成员离开撤掉；关房退役全部 subject。
-func TestARoomIsAllToAll(t *testing.T) {
+// Group：成员全互见；subject 加入后所有成员都订上；成员离开撤掉；关房退役全部 subject。
+func TestAGroupIsAllToAll(t *testing.T) {
 	manager := newManager(t)
-	room, err := NewRoom(RoomConfig{Manager: manager})
+	group, err := NewGroup(GroupConfig{Manager: manager})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,17 +281,17 @@ func TestARoomIsAllToAll(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := room.AddSubject(subjectState(t, 1)); err != nil {
+	if err := group.AddSubject(subjectState(t, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.Join(1); err != nil {
+	if err := group.Join(1); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.Join(2); err != nil {
+	if err := group.Join(2); err != nil {
 		t.Fatal(err)
 	}
 	// A subject added after the members joined reaches them too.
-	if err := room.AddSubject(subjectState(t, 2)); err != nil {
+	if err := group.AddSubject(subjectState(t, 2)); err != nil {
 		t.Fatal(err)
 	}
 	for _, subject := range []int64{1, 2} {
@@ -302,27 +302,27 @@ func TestARoomIsAllToAll(t *testing.T) {
 		}
 	}
 	if subscribed(manager, 3, 1) {
-		t.Fatal("a session that never joined receives the room")
+		t.Fatal("a session that never joined receives the group")
 	}
-	if err := room.Leave(2); err != nil {
+	if err := group.Leave(2); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if subscribed(manager, 2, 1) || subscribed(manager, 2, 2) {
-		t.Fatal("a member who left still receives the room")
+		t.Fatal("a member who left still receives the group")
 	}
-	if err := room.Close(); err != nil {
+	if err := group.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if manager.Stats().Subjects != 0 {
-		t.Fatalf("closing the room left subjects registered: %+v", manager.Stats())
+		t.Fatalf("closing the group left subjects registered: %+v", manager.Stats())
 	}
-	if err := room.Join(3); !errors.Is(err, ErrRoomClosed) {
+	if err := group.Join(3); !errors.Is(err, ErrGroupClosed) {
 		t.Fatalf("join after close: %v", err)
 	}
 }

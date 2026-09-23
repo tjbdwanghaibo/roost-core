@@ -109,8 +109,8 @@ move:
     to: github.com/tjbdwanghaibo/roost-core/remoteentity
     kit_keeps: ['ModOption', 'NewRemoteEntityMod', 'RemoteEntityMod', 'WithBackend', 'WithMongoStorage']
   - from: github.com/tjbdwanghaibo/roost-kit/room
-    to: github.com/tjbdwanghaibo/roost-core/room
-    kit_keeps: ['NewRoomMod', 'RoomMod']
+    to: github.com/tjbdwanghaibo/roost-core/syncbus/driver
+    kit_keeps: ['NewRoomMod', 'RoomMod'] # renamed to NewSyncBusMod / SyncBusMod in kit/syncbus (ARCH-10 follow-up)
   - from: github.com/tjbdwanghaibo/roost-kit/nettransport
     to: github.com/tjbdwanghaibo/roost-core/nettransport
   - from: github.com/tjbdwanghaibo/roost-kit/spatial

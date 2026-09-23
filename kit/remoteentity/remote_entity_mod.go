@@ -10,10 +10,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/syncbus"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
 	"github.com/spf13/viper"
 )
@@ -203,7 +203,7 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 
 func (m *RemoteEntityMod) DependsOn() []app.ModName {
 	// Mods only: health is a registry built-in, not a Mod (roost-codegen U-0025).
-	dependencies := []app.ModName{mods.ModRedis, mods.ModRoom}
+	dependencies := []app.ModName{mods.ModRedis, mods.ModSyncBus}
 	if m != nil && m.mongoLoader != nil && m.backend == nil {
 		dependencies = append(dependencies, mods.ModMongo)
 	}
@@ -233,9 +233,9 @@ func (m *RemoteEntityMod) Start() error {
 	if m.registry == nil {
 		return fmt.Errorf("remote_entity mod: registry is not configured")
 	}
-	bus, ok := app.Lookup[fsyncbus.ISyncBus](m.registry, mods.ModRoom)
+	bus, ok := app.Lookup[fsyncbus.ISyncBus](m.registry, mods.ModSyncBus)
 	if !ok {
-		return fmt.Errorf("remote_entity mod: required capability %q not found", mods.ModRoom)
+		return fmt.Errorf("remote_entity mod: required capability %q not found", mods.ModSyncBus)
 	}
 	if err := m.asm.Start(fctx.BaseContext(), bus); err != nil {
 		return fmt.Errorf("remote_entity mod: %w", err)

@@ -291,7 +291,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
           - redis
           - mongo
           - nats
-          - room
+          - syncbus
           - manager
           - remote_entity
           - dataengine
@@ -424,8 +424,8 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | mongo | MongoDB 访问 | 无 |
 | nats | NATS 消息传输 | 无 |
 | manager | 业务 Manager（内存单例逻辑）的生命周期：按 DependsOn 依赖序启动、逆序停止 | 无 |
-| room | 房间状态同步总线（Entity 状态推送） | nats |
-| remote_entity | 跨服 Remote Entity | redis、mongo、room |
+| syncbus | 服务间状态同步总线 ISyncBus（NATS / JetStream 二选一；旧名 room / sync 仍可写，自动映射） | nats |
+| remote_entity | 跨服 Remote Entity | redis、mongo、syncbus |
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | saga | 跨服务 Saga 编排 | dataengine、mongo、nats |

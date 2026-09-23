@@ -1,4 +1,7 @@
-package room
+// Package driver holds the ISyncBus implementations: plain NATS (at most once,
+// no confirmation) and JetStream (durable, confirmed). The contract is in
+// syncbus; this is the service-to-service sync bus, not entity replication.
+package driver
 
 import (
 	"context"

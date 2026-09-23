@@ -1,4 +1,4 @@
-package room
+package syncbus
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 func TestSyncModStopWithContextPrefersContextStopper(t *testing.T) {
 	bus := &contextStopSyncBus{}
-	mod := &RoomMod{bus: bus}
+	mod := &SyncBusMod{bus: bus}
 	if err := mod.StopWithContext(context.Background()); err != nil {
 		t.Fatalf("StopWithContext: %v", err)
 	}

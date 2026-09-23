@@ -19,11 +19,11 @@ import (
 const publishedDataEngineGeneratorDependencies = false
 
 func TestResolveModsAddsRequiredDependencies(t *testing.T) {
-	got, err := resolveMods([]string{"remote_entity", "room"})
+	got, err := resolveMods([]string{"remote_entity", "syncbus"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"redis", "nats", "remote_entity", "room"} {
+	for _, want := range []string{"redis", "nats", "remote_entity", "syncbus"} {
 		if !contains(got, want) {
 			t.Fatalf("resolved mods %v do not contain %s", got, want)
 		}

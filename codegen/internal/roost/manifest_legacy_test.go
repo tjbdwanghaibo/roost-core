@@ -15,14 +15,14 @@ func TestValidateCanonicalizesLegacyModAndFeatureNames(t *testing.T) {
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("legacy manifest rejected: %v", err)
 	}
-	if got := manifest.Services["game"].Mods; !contains(got, "room") || contains(got, "sync") {
+	if got := manifest.Services["game"].Mods; !contains(got, "syncbus") || contains(got, "sync") || contains(got, "room") {
 		t.Fatalf("service mods were not canonicalized: %v", got)
 	}
 	// A legacy name in shared_mods must canonicalize on the same path.
 	shared := Manifest{Schema: 1, Project: ProjectSpec{Name: "planet", Module: "example.com/planet"},
 		Services: map[string]ServiceSpec{"game": {Mods: []string{"nest"}}}, SharedMods: []string{"sync"}}
 	_ = shared.Validate()
-	if !contains(shared.SharedMods, "room") || contains(shared.SharedMods, "sync") {
+	if !contains(shared.SharedMods, "syncbus") || contains(shared.SharedMods, "sync") || contains(shared.SharedMods, "room") {
 		t.Fatalf("shared mods were not canonicalized: %v", shared.SharedMods)
 	}
 	if !contains(manifest.Features, "nettransport-quic") || contains(manifest.Features, "replication-quic") {
@@ -34,7 +34,7 @@ func TestValidateCanonicalizesLegacyModAndFeatureNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := string(raw); indexOf(text, "- room") < 0 {
+	if text := string(raw); indexOf(text, "- syncbus") < 0 || indexOf(text, "- room") >= 0 {
 		t.Fatalf("marshalled manifest did not persist the canonical mod name:\n%s", text)
 	}
 }

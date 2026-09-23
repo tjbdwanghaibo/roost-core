@@ -25,7 +25,7 @@
 | `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
-| `room/` | 服务间状态同步总线：`RoomMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一）。客户端方向的实体同步在 roost-core `entitysync`（`Manager`：subject 私有订阅者表、每会话一帧、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
+| `syncbus/` | 服务间状态同步总线：`SyncBusMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一；实现在 roost-core `syncbus/driver`）。客户端方向的实体同步在 roost-core `entitysync`（`Manager`：subject 私有订阅者表、每会话一帧、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
 | `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 生命周期的 **Mod 包装**——Mod 名 `mods.ModManager`、capability 登记、Mod 形状的 Stop / StopWithContext。引擎（按 `DependsOn` 稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、启动中收到 shutdown 中止启动、`Start` 后 `Register` 报错）**在 roost-core/manager.Engine**（M-09） | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
 | `lock/` | 进程内锁管理器（per-id 可重入互斥，同 id 同实例）——与 `redis.IDistLock`/`IVersionedLock` 是进程内 vs 跨进程的不同层，不参与"分布式锁二选一" | 无 | 进程内互斥 |
 | `ops/` | 运维 HTTP：`/healthz`（存活，恒 200）、`/readyz`（ready 位 + 依赖健康，503 语义）、`/metrics`（Prometheus 文本，**不鉴权**）、`/admin/*`（token 双通道鉴权，关闭时 404 隐藏）。**默认关闭（`ops.enabled`），默认只监听 127.0.0.1** | HTTP | 探针、指标抓取与运维命令 |
@@ -322,7 +322,7 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 | `ModSaga`（`saga`） | saga Mod | `*coresaga.Engine` |
 | `ModConfigData`（`config_data`） | configdata Mod | `*fconfigdata.Store` |
 | `ModManager`（`manager`） | manager Mod | `*manager.ManagerMod`（包装 roost-core/manager.Engine） |
-| `ModRoom`（`room`） | room Mod | `fsyncbus.ISyncBus` |
+| `ModSyncBus`（`syncbus`） | syncbus Mod | `fsyncbus.ISyncBus` |
 
 其余（`ModRedis`/`ModRedisLock`/`ModMongo`/`ModNats`/`ModNatsJetStream`/`ModNatsRpc`/`ModBus`/`ModEtcd`/`ModEtcdDiscov`/`ModEtcdElection`/`ModLock`/`ModOps`/`ModStatsLog`/`ModRemoteEntity`）与直觉一致，注册者即同名 Mod。
 
@@ -450,9 +450,9 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **编码在副本上**：会话的时钟与 ObjectRef 表只在帧被准入后采纳，重试的 tick 重发同样的帧。
 - **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
 - **held / ready**（`OpenHeldSession / ReadySession`）：会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 用 `scene_ready` 消息触发，消掉"快照抢在客户端解码器之前"的竞态。
-- **组织方式在 `entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Room`（成员全互见）、`Direct`（显式绑定）。它们只调 `Subscribe / Unsubscribe`，不碰帧与传输。
+- **组织方式在 `entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Group`（成员全互见）、`Direct`（显式绑定）。它们只调 `Subscribe / Unsubscribe`，不碰帧与传输。
 
-**`RoomMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/room/nats_syncbus.go`、`jetstream_syncbus.go`）：
+**`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
 
 ### syncstream（roost-core）：observer 维度的包流

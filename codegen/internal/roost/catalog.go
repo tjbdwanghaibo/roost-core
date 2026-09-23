@@ -50,12 +50,12 @@ var modCatalog = map[string]modSpec{
 		Config:     "nats:\n  url: nats://127.0.0.1:4222\n  prefix: roost\n  worker_num: 8\n  reliable:\n    enabled: false\n",
 		DevService: "nats",
 	},
-	"room": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/room", Alias: "kitroom", Constructor: "kitroom.NewRoomMod(0)", Depends: []string{"nats"},
-		Config: "room:\n  transport: jetstream\n  prefix: roost.room\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
+	"syncbus": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/syncbus", Alias: "kitsyncbus", Constructor: "kitsyncbus.NewSyncBusMod(0)", Depends: []string{"nats"},
+		Config: "syncbus:\n  transport: jetstream\n  prefix: roost.sync\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
 	},
 	"remote_entity": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "room"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},
 		Config: "remote_entity:\n  lock_ttl: 15s\n  retry_count: 3\n  retry_delay: 100ms\n  op_timeout: 3s\n  unlock_retry_count: 5\n  unlock_retry_interval: 100ms\n  version_ttl: 24h\n  finalize_retry_interval: 500ms\n  max_write_batch: 64\n  wrapper_capacity: 65536\n  wrapper_idle_ttl: 5m\n  snapshot_cache_shards: 64\n  snapshot_cache_entries: 10000\n  snapshot_cache_bytes: 268435456\n  snapshot_cache_ttl: 30s\n  snapshot_l2_ttl: 10m\n  snapshot_interest_ttl: 30s\n  snapshot_interest_keys: 10000\n  snapshot_interest_subs: 100000\n  marker_cache_ttl: 2s\n  snapshot_load_timeout: 3s\n  snapshot_max_waiters: 4096\n  async_finalize_capacity: 4096\n  async_finalize_workers: 16\n  transaction_track_limit: 100000\n  transaction_track_ttl: 10m\n  mongo:\n    database: remote_entity\n    transaction_ttl: 168h\n",
 	},
 	"dataengine": {
