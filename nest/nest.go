@@ -40,7 +40,10 @@ var (
 	// after-commit callbacks panicked. The committed state stands; what failed
 	// is work that ran after it, and the caller needs to know the difference
 	// from a rollback (RR-20260911-06).
-	ErrAfterCommitFailed             = errors.New("nest: transaction committed but after-commit work failed")
+	ErrAfterCommitFailed = errors.New("nest: transaction committed but after-commit work failed")
+	// ErrEntityReleaseFailed 表示准入后的解锁 hook 失败。它不表示事务被拒绝，
+	// 调用方仍需检查同时返回的 ErrCommitIndeterminate，不能据此重试整笔业务。
+	ErrEntityReleaseFailed           = errors.New("nest: entity release failed after admission")
 	ErrTransactionClosed             = errors.New("nest: transaction is already closed")
 	ErrCommitterRequired             = errors.New("nest: durable transaction committer is required")
 	ErrDurableRemoteWriteUnsupported = errors.New("nest: durable remote write requires a lease-aware WAL committer")
@@ -86,10 +89,12 @@ type NestMgr struct {
 	remoteSnapshotResolver RemoteSnapshotResolver
 	remoteManager          entity.IRemoteEntityManager
 	committer              TransactionCommitter
+	entitySync             entity.SyncCommitObserver
 	syncTimeout            time.Duration
 	// slowLockThreshold is the entity-lock hold time at which a dispatch is
 	// counted and logged as slow. Zero disables the warning; the metric is
 	// recorded regardless.
+	stageMetrics      bool
 	slowLockThreshold time.Duration
 	lifecycleMu       sync.Mutex
 	started           bool
@@ -178,28 +183,49 @@ func (mgr *NestMgr) TickDuration() time.Duration {
 }
 
 type NestOpts struct {
+	FastPool, SlowPool     WorkerPoolConfig
 	Getter                 entity.Getter
 	RemoteSnapshotResolver RemoteSnapshotResolver
 	RemoteManager          entity.IRemoteEntityManager
 	WorkerNum              int
 	HbWorkerNum            int
+	RemoteWorkers          int
 	MsgCap                 int
 	DelayedMsgCap          int
 	MaxDelay               time.Duration
 	TickDuration           time.Duration
 	SyncTimeout            time.Duration
 	Committer              TransactionCommitter
+	EntitySync             entity.SyncCommitObserver
 	PipelinedAllowlist     []string
 	PipelinedAsync         bool
 	PipelinedAsyncWorkers  int
 	PipelinedAsyncQueueCap int
 	SlowLockThreshold      time.Duration
 	SlowLockThresholdSet   bool
+	StageMetrics           bool
 }
 
 type NestOption func(*NestOpts)
 
 var (
+	// NestOptionWithWorkerPools 设置快慢两个执行池；非正数字段沿用默认或旧配置。
+	NestOptionWithWorkerPools = func(fast, slow WorkerPoolConfig) NestOption {
+		return func(opts *NestOpts) { opts.FastPool, opts.SlowPool = fast, slow }
+	}
+	// NestOptionWithRemoteWorkers 兼容旧配置，设置慢池并发。
+	// Deprecated: 使用 NestOptionWithWorkerPools。
+	NestOptionWithRemoteWorkers = func(workers int) NestOption {
+		return func(opts *NestOpts) { opts.RemoteWorkers = workers }
+	}
+	// NestOptionWithStageMetrics 启用按 handler/stage 的耗时指标，默认关闭。
+	// 旧 dispatch.cost 与 lock_hold 指标保持原口径。
+	NestOptionWithStageMetrics = func(enabled bool) NestOption {
+		return func(opts *NestOpts) { opts.StageMetrics = enabled }
+	}
+	NestOptionWithEntitySync = func(observer entity.SyncCommitObserver) NestOption {
+		return func(opts *NestOpts) { opts.EntitySync = observer }
+	}
 	NestOptionWithGetter = func(getter entity.Getter) NestOption {
 		return func(opts *NestOpts) {
 			opts.Getter = getter
@@ -299,11 +325,16 @@ func NewEngine(opts ...NestOption) *NestMgr {
 		remoteSnapshotResolver: params.RemoteSnapshotResolver,
 		remoteManager:          params.RemoteManager,
 		committer:              params.Committer,
+		entitySync:             params.EntitySync,
 		syncTimeout:            params.SyncTimeout,
 		slowLockThreshold:      params.SlowLockThreshold,
+		stageMetrics:           params.StageMetrics,
 		stopDone:               make(chan struct{}),
 		groupLocks:             newEntityLockGroupLockManager(),
 		handlers:               snapshotHandlerEntries(),
+	}
+	if ret.entitySync != nil {
+		ret.entitySync.BindSyncProducer()
 	}
 	if len(params.PipelinedAllowlist) > 0 {
 		ret.pipelinedAllow = make(map[string]struct{}, len(params.PipelinedAllowlist))
@@ -319,8 +350,23 @@ func NewEngine(opts ...NestOption) *NestMgr {
 		ret.syncTimeout = NestSyncTimeout
 	}
 	ret.dispatcher = NewDispatcher("nest", params.WorkerNum, params.HbWorkerNum, params.MsgCap, func(msg *Msg) {
+		if msg.remoteLogic != nil {
+			msg.remoteLogic.run(ret)
+			return
+		}
 		NestDispatch(ret, msg)
 	})
+	if params.FastPool.Workers > 0 {
+		ret.dispatcher.workerNum = params.FastPool.Workers
+	}
+	if params.FastPool.QueueCap > 0 {
+		ret.dispatcher.MsgCap = params.FastPool.QueueCap
+		ret.dispatcher.DelayedMsgCap = params.FastPool.QueueCap
+	}
+	ret.dispatcher.slowConfig = params.SlowPool
+	ret.dispatcher.remoteWorkers = params.RemoteWorkers
+	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
+	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
 	return ret
@@ -436,6 +482,11 @@ var (
 			opt.Delay = delay
 		}
 	}
+	// SendOptionSlow 将声明目标的加载及前后置 I/O 放入慢池；handler 始终在快池。
+	SendOptionSlow = func() SendOpt {
+		return func(opt *sendOptParam) { opt.Cost = true }
+	}
+	// Deprecated: 使用 SendOptionSlow；不再把业务 handler 放入独立 Cost 池。
 	SendOptionIsCost = func() SendOpt {
 		return func(opt *sendOptParam) {
 			opt.Cost = true

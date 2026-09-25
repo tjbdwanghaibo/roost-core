@@ -681,3 +681,20 @@ func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
 }
 
 var _ fmongo.IMongo = (*mongotest.Client)(nil)
+
+func TestMongoBatchRejectsConflictingDuplicateIDBeforeMarkerLookup(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	first := batchRecord(t, 9, 7, 4, 5)
+	second := coredata.CloneCommitRecord(first)
+	second.Handler = "different"
+	digest, err := digestRecord(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = markerCollection(client).Seed(transactionDocument{ID: second.ID.String(), Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); !errors.Is(err, ErrTransactionIdentity) {
+		t.Fatalf("conflicting batch identity=%v", err)
+	}
+}

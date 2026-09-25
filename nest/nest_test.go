@@ -101,7 +101,7 @@ func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
 	dispatcher.delaySendMsg(time.Hour, GenMsg(MsgTypeSingle))
 	dispatcher.observeStats()
 
-	wantPools := map[string]bool{"main": false, "heartbeat": false, "cost": false}
+	wantPools := map[string]bool{"fast": false, "slow": false}
 	delayedSeen := false
 	for _, metric := range metrics.Snapshot() {
 		if metric.Name == "nest.dispatch.delayed_messages" &&
@@ -187,6 +187,10 @@ func TestShouldTraceSlowDispatchUsesSlowThreshold(t *testing.T) {
 }
 
 func TestNestDispatchLogsSlowTraceWithStackAndMsgInfo(t *testing.T) {
+	slowDispatchStackGate.mu.Lock()
+	slowDispatchStackGate.next = time.Time{}
+	slowDispatchStackGate.suppressed = 0
+	slowDispatchStackGate.mu.Unlock()
 	var buf bytes.Buffer
 	if err := flog.Init(flog.Options{
 		Level:          slog.LevelWarn,

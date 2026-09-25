@@ -5,6 +5,7 @@ import (
 	"fmt"
 	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 	"log/slog"
+	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -73,6 +74,14 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if key := cfg.GetString("remote_entity.lock_key"); key != "" {
 		m.cfg.LockKey = key
 	}
+	// 锁状态与 fence 在一个 Lua 中更新；Cluster 必须显式选择同槽前缀。
+	// 不自动改 key，否则滚动发布时新旧节点会锁住不同身份。
+	if strings.TrimSpace(cfg.GetString("redis.cluster_addrs")) != "" {
+		start := strings.IndexByte(m.cfg.LockKey, '{')
+		if start < 0 || strings.IndexByte(m.cfg.LockKey[start+1:], '}') <= 0 {
+			return fmt.Errorf("remote_entity: Redis Cluster requires a non-empty hash tag in remote_entity.lock_key (for example {roost:remote}); got %q", m.cfg.LockKey)
+		}
+	}
 	if retry := cfg.GetInt("remote_entity.retry_count"); retry > 0 {
 		m.cfg.RetryCount = retry
 	}
@@ -132,6 +141,13 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	}
 	if capacity := cfg.GetInt("remote_entity.async_finalize_capacity"); capacity > 0 {
 		m.cfg.AsyncFinalizeCapacity = capacity
+	}
+	if cfg.IsSet("remote_entity.max_concurrent_writes") {
+		limit := cfg.GetInt("remote_entity.max_concurrent_writes")
+		if limit < 0 {
+			return fmt.Errorf("remote_entity.max_concurrent_writes must not be negative")
+		}
+		m.cfg.MaxConcurrentWrites = limit
 	}
 	if workers := cfg.GetInt("remote_entity.async_finalize_workers"); workers > 0 {
 		m.cfg.AsyncFinalizeWorkers = workers
@@ -223,7 +239,10 @@ func (m *RemoteEntityMod) checkHealth(context.Context) health.Result {
 	if (m.cfg.SnapshotInterestKeys > 0 && localInterests >= m.cfg.SnapshotInterestKeys) || (m.cfg.TransactionTrackLimit > 0 && activeTransactions >= m.cfg.TransactionTrackLimit) {
 		return health.Result{Status: health.StatusFail, Message: fmt.Sprintf("capacity exhausted wrappers=%d local_interests=%d transactions=%d active_transactions=%d", stats.Wrappers, localInterests, transactions, activeTransactions)}
 	}
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wrappers=%d capacity=%d local_interests=%d transactions=%d active_transactions=%d", stats.Wrappers, m.cfg.WrapperCapacity, localInterests, transactions, activeTransactions)}
+	if stats.WriteLimit > 0 && stats.WritesInFlight >= stats.WriteLimit {
+		return health.Result{Status: health.StatusDegraded, Message: fmt.Sprintf("write capacity exhausted writes_in_flight=%d write_limit=%d write_rejected=%d", stats.WritesInFlight, stats.WriteLimit, stats.WriteRejected)}
+	}
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wrappers=%d capacity=%d local_interests=%d transactions=%d active_transactions=%d writes_in_flight=%d write_limit=%d write_rejected=%d", stats.Wrappers, m.cfg.WrapperCapacity, localInterests, transactions, activeTransactions, stats.WritesInFlight, stats.WriteLimit, stats.WriteRejected)}
 }
 
 func (m *RemoteEntityMod) Start() error {

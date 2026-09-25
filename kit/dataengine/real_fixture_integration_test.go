@@ -4,7 +4,10 @@ package dataengine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"os"
 	"sync"
@@ -16,12 +19,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -30,6 +33,7 @@ const realIntegrationTimeout = 30 * time.Second
 var realFixtureSequence atomic.Uint64
 
 type realFixture struct {
+	t         *testing.T
 	ctx       context.Context
 	cancel    context.CancelFunc
 	database  string
@@ -65,7 +69,7 @@ func newRealFixtureWithNATS(t *testing.T, natsURL string) *realFixture {
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), id)
 	ctx, cancel := context.WithTimeout(context.Background(), realIntegrationTimeout)
 	fx := &realFixture{
-		ctx: ctx, cancel: cancel,
+		t: t, ctx: ctx, cancel: cancel,
 		database:  fmt.Sprintf("roost_it_%s", suffix),
 		stream:    fmt.Sprintf("ROOST_IT_EFFECTS_%s", suffix),
 		effectSub: fmt.Sprintf("roost.it.%s", suffix),
@@ -160,6 +164,11 @@ func (fx *realFixture) close() {
 		if fx.mongo != nil && fx.database != "" {
 			_ = fx.mongo.Database(fx.database).Drop(ctx)
 		}
+		if fx.jetStream != nil {
+			if err := fx.deleteTestStream(ctx); err != nil {
+				fx.t.Errorf("delete fixture stream %s: %v", fx.stream, err)
+			}
+		}
 		if fx.natsMod != nil {
 			_ = fx.natsMod.StopWithContext(ctx)
 		}
@@ -247,4 +256,22 @@ func assertCollectionCount(t *testing.T, fx *realFixture, resource string, want 
 	if got != want {
 		t.Fatalf("%s count=%d, want %d", resource, got, want)
 	}
+}
+
+// close 先停止 outbox，再删除本次独有的流；使用直连，避免测试注入的代理故障阻断清理。
+func (fx *realFixture) deleteTestStream(ctx context.Context) error {
+	client, err := gonats.Connect(os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"), gonats.Timeout(2*time.Second))
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	js, err := gojs.New(client)
+	if err != nil {
+		return err
+	}
+	err = js.DeleteStream(ctx, fx.stream)
+	if errors.Is(err, gojs.ErrStreamNotFound) {
+		return nil
+	}
+	return err
 }

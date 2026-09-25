@@ -20,6 +20,9 @@ type SessionID = nettransport.SessionID
 // Return ErrRetryLater (wrapped or bare) when the transport itself is
 // unavailable and the whole tick should be tried again; return anything else
 // to have the session closed and its subscriptions dropped.
+// Push 返回 nil 即表示这一帧已准入，返回错误表示这一帧未准入。
+// 后续 Push 的失败不会撤销此前成功的帧；Manager 保留已交付帧的会话时钟，
+// 并在部分成功后重试时用全量内容恢复受影响订阅的基线。
 type Transport interface {
 	Push(ctx context.Context, session SessionID, frame []byte) error
 }
@@ -88,3 +91,14 @@ func (t *AsyncTransport) SessionClosed(session SessionID) {
 
 var _ Transport = (*AsyncTransport)(nil)
 var _ SessionLifecycle = (*AsyncTransport)(nil)
+
+// FrameSizeLimiter 声明一次 Push 可接收的完整帧上限；0 表示不另加限制。
+// 包装 Transport 时应转发此能力，并扣除包装自身的协议头。
+type FrameSizeLimiter interface{ MaxFrameBytes() int }
+
+func (t *AsyncTransport) MaxFrameBytes() int {
+	if t == nil || t.async == nil {
+		return 0
+	}
+	return t.async.MaxReliableBytes()
+}

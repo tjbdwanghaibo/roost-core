@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -12,6 +11,8 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
+
+var ErrRuntimeStopped = errors.New("dataengine runtime: shutdown has started")
 
 type Runtime struct {
 	Store      *MongoStore
@@ -28,10 +29,12 @@ type Runtime struct {
 	ready            atomic.Bool
 	pipelined        PipelinedRuntimeConfig
 
-	// shutdownMu serializes Shutdown and guards the two completion marks, so
-	// a retried shutdown only waits on what has not stopped yet.
-	shutdownMu      sync.Mutex
+	// 启动和关闭共享所有权；等待时遵守调用者 deadline，stopping 是终态。
+	lifecycleGate   operationGate
+	stopping        bool
+	drainAttempted  bool
 	projectorClosed bool
+	walClosed       bool
 	outboxClosed    bool
 }
 
@@ -68,13 +71,21 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := runtime.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer runtime.lifecycleGate.release()
+	if runtime.stopping {
+		return ErrRuntimeStopped
+	}
+	if runtime.Ready() {
+		return nil
+	}
 	if err := runtime.Projector.Flush(ctx); err != nil {
 		return fmt.Errorf("dataengine runtime: startup projection recovery: %w", err)
 	}
-	runtime.Outbox.Start(context.Background())
 	unregister, err := runtime.access.ConfigureLoader(runtime.Repository)
 	if err != nil {
-		_ = runtime.Outbox.Close(ctx)
 		return err
 	}
 	runtime.unregisterLoader = unregister
@@ -83,10 +94,10 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 		runtime.unregisterLoader()
 		runtime.unregisterLoader = nil
 		runtime.ready.Store(false)
-		_ = runtime.Outbox.Close(ctx)
 		return err
 	}
 	runtime.unregisterDelete = unregisterDelete
+	runtime.Outbox.Start(context.Background())
 	// Publish readiness only after both framework entry points are installed.
 	// A concurrent health/committer lookup must never observe a half-wired
 	// runtime with a loader but no durable delete gate.
@@ -130,8 +141,20 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
-	runtime.shutdownMu.Lock()
-	defer runtime.shutdownMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := runtime.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer runtime.lifecycleGate.release()
+	return runtime.stop(ctx, true)
+}
+
+// stop 由持有 lifecycleGate 的 Shutdown，或尚未发布 Runtime 的 Assembly 调用。
+// 启动失败不再排空 WAL，只停止资源；未投影记录留给下次恢复。
+func (runtime *Runtime) stop(ctx context.Context, drain bool) error {
+	runtime.stopping = true
 	runtime.ready.Store(false)
 	if runtime.unregisterDelete != nil {
 		runtime.unregisterDelete()
@@ -144,23 +167,34 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	// Services stop before mods, so no new Nest handlers or guards can enter.
 	// First make every admitted WAL record visible, then stop new outbox claims;
 	// already staged effects remain durable in Mongo for the next start.
-	var projectorErr error
-	if runtime.Projector != nil && !runtime.projectorClosed {
-		flushErr := runtime.Projector.Flush(ctx)
-		closeErr := runtime.Projector.Close(ctx)
-		if closeErr == nil {
-			runtime.projectorClosed = true
-		}
-		projectorErr = errors.Join(flushErr, closeErr)
-	}
-	var outboxErr error
-	if runtime.Outbox != nil && !runtime.outboxClosed {
-		outboxErr = runtime.Outbox.Close(ctx)
-		if outboxErr == nil {
-			runtime.outboxClosed = true
+	var flushErr, projectorErr, walErr, outboxErr error
+	if !runtime.drainAttempted {
+		runtime.drainAttempted = true
+		if drain && runtime.Projector != nil {
+			flushErr = runtime.Projector.Flush(ctx)
 		}
 	}
-	return errors.Join(projectorErr, outboxErr)
+	if !runtime.projectorClosed {
+		if runtime.Projector != nil {
+			projectorErr = runtime.Projector.Close(ctx)
+		}
+		runtime.projectorClosed = projectorErr == nil
+	}
+	// Runtime/Assembly 拥有 WAL；即使 Projector 配置为不关闭 WAL，也必须回收。
+	// 先等重放退出，避免 writer 关闭与重放仍在执行的 ack 交错。
+	if runtime.projectorClosed && !runtime.walClosed {
+		if runtime.WAL != nil {
+			walErr = runtime.WAL.Close(ctx)
+		}
+		runtime.walClosed = walErr == nil
+	}
+	if !runtime.outboxClosed {
+		if runtime.Outbox != nil {
+			outboxErr = runtime.Outbox.Close(ctx)
+		}
+		runtime.outboxClosed = outboxErr == nil
+	}
+	return errors.Join(flushErr, projectorErr, walErr, outboxErr)
 }
 
 var _ coredata.Store = (*MongoStore)(nil)

@@ -1,7 +1,9 @@
 package entitysync
 
 import (
-	"sort"
+	"cmp"
+	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -11,10 +13,8 @@ import (
 type subscriptionKind uint8
 
 const (
-	// kindSnapshot: subscribed, has nothing yet; the next frame carries a
-	// full snapshot (an ObjectCreate, or an ObjectUpdate carrying a full
-	// payload when the session already holds the object under another
-	// profile).
+	// kindSnapshot：等待全量快照。首次订阅尚无对象，换 profile 或撤回退订时
+	// 则可能仍持有旧对象；是否欠 remove 必须查会话的已交付引用表。
 	kindSnapshot subscriptionKind = iota + 1
 	// kindLive: holds baseVersion; the next frame carries a delta from it.
 	kindLive
@@ -27,6 +27,11 @@ const (
 // of what used to be a coordinator row plus a sink row: the profile the
 // session wants, the kind of frame it is owed, and the version it holds.
 type subscription struct {
+	// revision 标识订阅意图；inFlight 防止首次快照在途时丢掉待删除记录。
+	revision    uint64
+	inFlight    bool
+	lifetime    *sessionLifetime
+	sources     map[*SubscriptionSource]entity.SyncProfile
 	profile     entity.SyncProfile
 	kind        subscriptionKind
 	baseVersion uint64
@@ -49,36 +54,25 @@ func newSubject(state *entity.SubjectSyncState) *subject {
 	return &subject{id: state.SubjectID(), state: state, subscribers: make(map[SessionID]*subscription)}
 }
 
-// profilesLocked collects the distinct profiles of the subscribers in kinds,
-// sorted so packers see a deterministic order.
-func (s *subject) profilesLocked(kinds ...subscriptionKind) []entity.SyncProfile {
-	unique := make(map[entity.SyncProfile]struct{})
+// profilesLocked 一次遍历收集两种内容需求，不在订阅数量上反复建立 profile map。
+// 内容层统一规范化、去重和排序；held 会话仍保留原有捕获语义。
+func (s *subject) profilesLocked(selected map[*subscription]bool) (delta, snapshot []entity.SyncProfile) {
 	for _, sub := range s.subscribers {
-		for _, kind := range kinds {
-			if sub.kind == kind {
-				unique[sub.profile.Normalize()] = struct{}{}
-				break
+		switch sub.kind {
+		case kindLive:
+			if !slices.Contains(delta, sub.profile) {
+				delta = append(delta, sub.profile)
+			}
+		case kindSnapshot:
+			if selected != nil && !selected[sub] {
+				continue
+			}
+			if !slices.Contains(snapshot, sub.profile) {
+				snapshot = append(snapshot, sub.profile)
 			}
 		}
 	}
-	if len(unique) == 0 {
-		return nil
-	}
-	profiles := make([]entity.SyncProfile, 0, len(unique))
-	for profile := range unique {
-		profiles = append(profiles, profile)
-	}
-	sort.Slice(profiles, func(i, j int) bool {
-		a, b := profiles[i], profiles[j]
-		if a.Key != b.Key {
-			return a.Key < b.Key
-		}
-		if a.LOD != b.LOD {
-			return a.LOD < b.LOD
-		}
-		return a.SchemaVersion < b.SchemaVersion
-	})
-	return profiles
+	return delta, snapshot
 }
 
 // sessionsLocked lists the subscribed sessions in ascending order.
@@ -87,17 +81,56 @@ func (s *subject) sessionsLocked() []SessionID {
 	for id := range s.subscribers {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 
-// updateFor picks the update prepared for this profile.
-func updateFor(updates []entity.SubjectSyncUpdate, profile entity.SyncProfile) (entity.SubjectSyncUpdate, bool) {
-	profile = profile.Normalize()
-	for _, update := range updates {
-		if update.Profile.Normalize() == profile {
-			return update, true
+// bestProfile 的排序只决定已授权视图的选择，不推断字段之间的包含关系。
+func (m *Manager) bestProfile(profiles map[*SubscriptionSource]entity.SyncProfile) entity.SyncProfile {
+	var best entity.SyncProfile
+	first := true
+	for _, profile := range profiles {
+		if first || m.CompareProfiles(profile, best) < 0 {
+			best = profile
+			first = false
 		}
 	}
-	return entity.SubjectSyncUpdate{}, false
+	return best
+}
+
+// ValidateViewPriority 检查 packer 视图与 Manager 的实际选择顺序是否使用同一配置。
+func (m *Manager) ValidateViewPriority(view entity.SyncView) error {
+	priority, ok := m.config.ProfilePriorities[view.Profile.Normalize()]
+	if !ok {
+		priority = int(view.Profile.LOD)
+	}
+	if priority != view.Priority {
+		return fmt.Errorf("entitysync: profile %+v priority is %d, view declares %d", view.Profile, priority, view.Priority)
+	}
+	return nil
+}
+
+func compareProfiles(a, b entity.SyncProfile) int {
+	if order := cmp.Compare(a.LOD, b.LOD); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(a.Key, b.Key); order != 0 {
+		return order
+	}
+	return cmp.Compare(a.SchemaVersion, b.SchemaVersion)
+}
+
+// CompareProfiles 将业务优先级与稳定平局规则集中在一处，Interest 与多政策来源共用。
+func (m *Manager) CompareProfiles(a, b entity.SyncProfile) int {
+	a, b = a.Normalize(), b.Normalize()
+	priority := func(p entity.SyncProfile) int {
+		if rank, ok := m.config.ProfilePriorities[p]; ok {
+			return rank
+		}
+		return int(p.LOD)
+	}
+	if order := cmp.Compare(priority(a), priority(b)); order != 0 {
+		return order
+	}
+	return compareProfiles(a, b)
 }

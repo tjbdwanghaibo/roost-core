@@ -319,8 +319,13 @@ func TestAGroupIsAllToAll(t *testing.T) {
 	if err := manager.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if manager.Stats().Subjects != 0 {
-		t.Fatalf("closing the group left subjects registered: %+v", manager.Stats())
+	if manager.Stats().Subjects != 2 || manager.Stats().Subscriptions != 0 {
+		t.Fatalf("closing a group must release its subscriptions, not retire entities: %+v", manager.Stats())
+	}
+	for _, id := range []int64{1, 2} {
+		if err := manager.Unregister(id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := group.Join(3); !errors.Is(err, ErrGroupClosed) {
 		t.Fatalf("join after close: %v", err)

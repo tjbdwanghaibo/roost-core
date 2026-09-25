@@ -21,9 +21,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/sync/nettransport"
-	"sort"
 )
 
 var (
@@ -328,7 +329,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 	for player := range r.sessions {
 		players = append(players, player)
 	}
-	sort.Slice(players, func(i, j int) bool { return players[i] < players[j] })
+	slices.Sort(players)
 	for _, player := range players {
 		receivers = append(receivers, broadcastReceiver{owner: player, session: r.sessions[player]})
 	}
@@ -336,7 +337,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 	for session := range r.spectators {
 		specs = append(specs, session)
 	}
-	sort.Slice(specs, func(i, j int) bool { return specs[i] < specs[j] })
+	slices.Sort(specs)
 	for _, session := range specs {
 		receivers = append(receivers, broadcastReceiver{owner: ownerSpectator, session: session})
 	}
@@ -404,7 +405,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 	for session := range r.catchups {
 		sessions = append(sessions, session)
 	}
-	sort.Slice(sessions, func(i, j int) bool { return sessions[i] < sessions[j] })
+	slices.Sort(sessions)
 	var errs []error
 	for _, session := range sessions {
 		state := r.catchups[session]

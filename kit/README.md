@@ -25,7 +25,7 @@
 | `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
-| `syncbus/` | 服务间状态同步总线：`SyncBusMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一；实现在 roost-core `sync/syncbus/driver`）。客户端方向的实体同步在 roost-core `entitysync`（`Manager`：subject 私有订阅者表、每会话一帧、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
+| `syncbus/` | 服务间状态同步总线：`SyncBusMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一；实现在 roost-core `sync/syncbus/driver`）。客户端方向的实体同步在 roost-core `sync/entitysync`（`Manager`：subject 私有订阅者表、按会话组帧、逐帧准入、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
 | `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 生命周期的 **Mod 包装**——Mod 名 `mods.ModManager`、capability 登记、Mod 形状的 Stop / StopWithContext。引擎（按 `DependsOn` 稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、启动中收到 shutdown 中止启动、`Start` 后 `Register` 报错）**在 roost-core/manager.Engine**（M-09） | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
 | `lock/` | 进程内锁管理器（per-id 可重入互斥，同 id 同实例）——与 `redis.IDistLock`/`IVersionedLock` 是进程内 vs 跨进程的不同层，不参与"分布式锁二选一" | 无 | 进程内互斥 |
 | `ops/` | 运维 HTTP：`/healthz`（存活，恒 200）、`/readyz`（ready 位 + 依赖健康，503 语义）、`/metrics`（Prometheus 文本，**不鉴权**）、`/admin/*`（token 双通道鉴权，关闭时 404 隐藏）。**默认关闭（`ops.enabled`），默认只监听 127.0.0.1** | HTTP | 探针、指标抓取与运维命令 |
@@ -33,7 +33,7 @@
 | `statslog/` | 周期统计 JSONL（每行一个 `StatsRecord`，每次 flush 都 fsync）：runtime + 自动富化 nest/entity 统计（装了对应 Mod 才有）、业务 provider 扩展点（panic 被捕获成记录）、窗口增量 + 累计双报。**默认关闭（`stats_log.enabled`）；entity 统计是 O(N) 全量扫描，interval 勿设太小** | 本地文件 | 周期运行时统计 |
 | `mods/` | 全部 capability 名称常量（`mods.ModRedis`、`mods.ModDataEngine`…），含对 core `app.*` 常量的再导出；常量 → 注册者 → 实际类型见 §3.3 | 无 | 业务从 Registry 取依赖时使用 |
 
-以下能力**已在 roost-core**（收敛已合回 main，Kit 不再持有实现，只在 Mod 里装配）：`nestwal`（Data Engine 的 WAL）、`remoteentity`、`syncstream` / `syncbus` / `statesync`、`lockstep`、`gateway`、`spatial`、`ai` / `actionflow`、`versionstore`、`servicerpc`、`mongo/mongotest`、`robot`（kit 侧只剩 KCP/QUIC 拨号已随 nettransport 归 core）。用法见各自的 core 包注释与 [roost-core README](https://github.com/tjbdwanghaibo/roost-core/blob/main/README.md)。
+以下能力**已在 roost-core**（收敛已合回 main，Kit 不再持有实现，只在 Mod 里装配）：`nestwal`（Data Engine 的 WAL）、`remoteentity`、`syncstream` / `sync/syncbus` / `sync/frame`、`sync/lockstep`、`gateway`、`spatial`、`ai` / `actionflow`、`versionstore`、`servicerpc`、`mongo/mongotest`、`robot`（kit 侧只剩 KCP/QUIC 拨号已随 nettransport 归 core）。用法见各自的 core 包注释与 [roost-core README](https://github.com/tjbdwanghaibo/roost-core/blob/main/README.md)。
 
 ---
 
@@ -254,7 +254,11 @@ dataengine:
     group_commit_interval: 10ms
   projection:
     batch_records: 256             # 每次重放最多记录数
-    batch_bytes: 4194304           # 普通批投影 segment 的逻辑字节上限，缺省 4 MiB
+    batch_bytes: 4194304           # 本地单/多 DAO 批量事务逻辑字节上限，缺省 4 MiB
+    checkpoint_records: 256        # 安全成功前缀的确认阈值；1 恢复逐单元确认
+    checkpoint_interval: 20ms      # 投影单元之间检查；不是固定等待窗口
+    max_unacked_records: 0         # 0 不限；按业务容量配置未确认事务准入上限
+    warn_unacked_records: 0        # 0 无独立预警，有上限时达到上限仍预警
   outbox:
     max_pending: 1000000
     max_oldest_age: 30m
@@ -272,9 +276,21 @@ projection 完成后推进 WAL ACK，effect 由独立 outbox worker 投递，因
 
 `dataengine.projection.batch_records` 限制一次 WAL 重放读取的记录数，也限制普通批投影
 segment 的记录数；`dataengine.projection.batch_bytes` 只限制普通批投影 segment 的保守逻辑
-字节数。特殊记录固定为 singleton，超过字节上限的单条普通记录也会作为 singleton 前进，二者
-都不会被字节上限拒绝。混合普通记录与事务记录时，切分严格保持 WAL 顺序；每个执行单元成功后
-才推进对应 ACK，ACK 绝不会跨过失败的执行单元。只有一条普通记录时仍走原有的单记录快速路径。
+字节数。本地多 DAO 和单 DAO 可以共享 Mongo 批量事务，每笔业务保持独立事务身份。
+Remote、receipt、effect、migration 固定逐笔处理，超过字节上限的单条记录也单独执行。
+顺序始终保持 WAL 先后；冲突先回滚整个批次，再逐笔判断，只确认成功前缀。
+
+有持久事务 marker 的路径可按数量/时间合并 checkpoint，在批次末尾、失败、held 或取消时
+确认已成功前缀。单 DAO 的单记录快路只保存最后事务 ID，因此仍立即确认；未知 Store 也保留
+逐单元确认。合并不改变 WAL fsync 或 Nest durable ticket，ACK 从不越过失败记录。
+`CheckpointInterval` 不主动等待凑批，检查发生在存储调用结束后；单次阻塞由 context 控制。
+
+准入上限覆盖 Projector.Commit / Enqueue / CommitSystem，在写入 WAL 前原子预留。
+达到上限返回 `engine.ErrProjectionBackpressure`，Nest 回滚当前事务，调用者可稍后重试；
+不会触发 fatal。ACK 成功后归还容量；健康检查到达预警阈值返回 Degraded，并输出
+`projection_backlog_warning` / `admission_rejected`。生产 Runtime 在 ready 前先恢复旧 WAL，
+该限制约束 ready 后的在途业务事务，不替代 WAL 的磁盘/年龄保护。默认不启用限流，示例中的
+0 不是推荐生产值，应结合实测落库速度与允许积压延迟设定。负值或预警高于非零上限会拒绝启动。
 
 ---
 
@@ -434,10 +450,11 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
   | 地址迁移 | 手工（仅 AEAD 验证通过后） | 无 | QUIC 原生连接迁移 |
   | 流控旋钮 | 仅包上限（默认 1232 = IPv6 最小 MTU 减头） | 窗口/nodelay/fastresend/限速/DSCP 全套 | 委托 quic-go |
 
-  选型：只要一条不可靠下行 → UDP（最轻）；同一条 UDP 链路上跑不可靠 + 可靠（lockstep 实时帧 + 追帧）→ KCP（旋钮多、CPU 轻）或 QUIC（443 穿透 + 连接迁移）；异构组合 → `CompositeTransport`。**状态帧**的队列/合帧/原子准入统一由 `AsyncTransport` 提供，`ControlPlane` 在业务层之下终结 ACK/resync 控制报文。**lockstep 的输入帧例外**：其 datagram 通道必须直连裸 transport——`AsyncTransport` 的 latest-only 合帧对每帧不可替代的输入帧意味着拥塞折叠即永久丢帧（见 lockstep 包注释）。
+  选型：只要一条不可靠下行 → UDP（最轻）；同一条 UDP 链路上跑不可靠 + 可靠（lockstep 实时帧 + 追帧）→ KCP（旋钮多、CPU 轻）或 QUIC（443 穿透 + 连接迁移）；异构组合 → `CompositeTransport`。**状态帧**由 `entitysync.Manager` 编码，经 `AsyncTransport` 的可靠队列逐帧准入；客户端接入和就绪由业务层配合 `OpenHeldSession / ReadySession` 完成。**lockstep 输入帧**直接走协议传输的 `DatagramSender`，追帧使用可靠通道。
+
 - **AEAD UDP**（`roost-core/sync/nettransport/udp_crypto.go`、`roost-core/sync/nettransport/udp_transport.go`）：AES-GCM per-session；`SendSalt`/`ReceiveSalt` 每个方向独立且构造时强制不相等（同 key 双向复用同一 nonce 空间会灾难性破坏 GCM）；nonce = salt(4B) + 单调 sequence(8B)，序列号耗尽即拒发；接收端 64 包位图防重放窗口；**地址迁移只在 AEAD 验证通过之后**（`Open` 成功且 `isCurrentRoute`）才生效，未认证的包改不了路由。UDP `Serve` 单飞、handler 返回 error 会终止整个接收循环（业务 handler 必须自行吞掉可恢复错误）。
 
-### entitysync（roost-core）：实体状态到客户端会话（ARCH-10 / M-13，2026-09-22）
+### sync/entitysync（roost-core）：实体状态到客户端会话（ARCH-10 / M-13，2026-09-22）
 
 一个机制：`entity.SubjectSyncState` 是内容（版本、脏掩码、packer、CommitLSN），`entitysync.Manager` 一个进程一个，拥有全部 subject 与会话；
 subject 自己持有订阅者表 `session → {profile, kind, baseVersion}`；每 tick 给每个会话**一帧**（statesync 帧，`Epoch/Tick` 是会话时钟）；
@@ -447,10 +464,10 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
   这就是慢消费者策略——不再有 Evict / FailBatch 两套。`AsyncTransport` 适配 nettransport 的可靠通道。
 - **持久化水位**（`ManagerConfig.DurableWatermark`）：按 `CommitLSN` 挡**整个 subject**（快照与 delta 一起），水位过了一起走。
 - **一次锁内捕获**（`PrepareTick`）：给在线者的 delta 与给新订阅者的快照在同一把实体锁内、同一版本上产生；每个不同 profile 只 pack 一次。
-- **编码在副本上**：会话的时钟与 ObjectRef 表只在帧被准入后采纳，重试的 tick 重发同样的帧。
+- **编码在副本上**：每帧准入后采纳对应的会话时钟与 ObjectRef 表，部分交付后的重试以全量恢复基线；旧交付不覆盖重置后的会话。
 - **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
 - **held / ready**（`OpenHeldSession / ReadySession`）：会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 用 `scene_ready` 消息触发，消掉"快照抢在客户端解码器之前"的竞态。
-- **组织方式在 `sync/entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Group`（成员全互见）、`Direct`（显式绑定）。它们只调 `Subscribe / Unsubscribe`，不碰帧与传输。
+- **组织方式在 `sync/entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Group`（成员全互见）、`Direct`（显式绑定）。各实例通过独立 `SubscriptionSource` 订阅，不碰帧与传输。Group/Interest 关闭只释放本来源，实体真正销毁仍由应用调用 `Manager.Unregister`。
 
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
@@ -470,6 +487,9 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **Mod 注册三个 capability**：`ModRemoteEntity`、`ModRemoteEntityAtomicStore`（nestwal 消费）、**`ModRedisVLock`（全应用的 versioned lock 工厂出自这里，不是 redis Mod）**。硬前置：sid 非 0（所有权 fencing 的前提）。`Start` 序列：绑 sync 双 replicator（snapshot + interest 两个 topic）→ 封存依赖 → 建存储 → **启动期重放未发布的已提交事务（outbox 恢复）** → 启动 finalizer；任一步失败回滚已启动的 replicator。health 在容量耗尽（interest 键/活跃事务达上限）时也报 fail。
 - **所有权状态机**（`roost-core/remoteentity/marker.go`）：一个 Redis hash + 5 段 Lua CAS，租约编码 `mode:owner:marker:route`，mode ∈ {local, shared}；enter/leave shared 与 transfer 都递增 marker（transfer 还递增 route）。**关键契约：ownership 缺失永远不被解释为本地租约**——Redis 数据丢失不会被误读成"我拥有它"。
 - **两级快照缓存**：进程内 L1 + Redis L2；L2 的 CAS 顺序是 **(marker, route, version) 三元组 + checksum**——延迟的发布者不能覆盖更新的所有权 epoch 或状态版本；同 epoch 同 version 但 checksum 不同返回分歧信号。
+- **独立资源预算**：`remote_entity.max_concurrent_writes` 默认 128，控制 Prepare 到实际释放的 Remote 写批次数；每批可能包含多个 Entity/DAO，结果不确定转后台后仍占额度。显式 0 沿用 `async_finalize_capacity`，有效值不会超过收尾容量。满额立即返回 `entity.ErrRemoteOverloaded`，不阻塞慢 worker 等额度。`Stats` 的 `WritesInFlight / WriteLimit / WriteRejected` 及 health 可观测压力；满写额度为 degraded，已有 fatal/capacity fail 优先。
+- **与 Nest、WAL 配合**：慢池可为其他慢 I/O 保留较大并发，但 Remote 写预算需按存储能力独立设定；已有 `dataengine.projection.max_unacked_records` 在 WAL 准入处原子限制所有未确认事务。两层额度不同，不自动互相推导，也不把采样值当原子预留；例如 Remote 128、WAL 512 是可测试起点，不保证给本地事务预留 384。过载是明确拒绝，框架不自行重试写请求。预算按进程生效，多进程部署须分配各自的额度。
+
 - **MongoCommitter 的幂等契约**：事务按 `RemoteTransactionID` + 批 digest 判重——同 id 不同 commits 拒绝（"transaction id reused"），同 id 同 digest 直接返回已存储的 receipts。实体 CAS 元数据、DAO 文档、不可变快照、幂等状态在**一个 Mongo 事务**里提交。
 
 ### saga（引擎在 roost-core/saga，Mod 在 roost-kit/saga）：exactly-once 步骤与 nest 启动通道
@@ -525,7 +545,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
    - 测试按价值排序：**`roost-core/nestwal/crash_test.go`**（真实子进程 `SIGKILL` 验证崩溃后 durable 前缀完整）、`roost-core/nestwal/pipelined_test.go`（ticket 语义）、`roost-core/nestwal/wal_test.go`（torn tail、ack、rotate）、`dataengine/fatal_fence_test.go`（熔断到 Nest/RuntimeFailure 的传导）、`roost-core/nestwal/` 的 backlog 集成测试（100k backlog 恢复）。
 4. **Data Engine 主线**：`roost-core/dataengine/engine/projector.go` → `roost-core/dataengine/engine/mongo_store.go` → `roost-core/dataengine/engine/entity_repository.go` → `roost-core/dataengine/migration.go` → `roost-core/dataengine/engine/outbox_worker.go`。
 5. **锁与选主**：`roost-core/redis/lock.go` + `roost-core/redis/driver/lock_test.go` → `roost-core/remoteentity/versioned_lock.go`、`roost-core/remoteentity/versioned_lock_lua.go` + `roost-core/remoteentity/versioned_lock_unlock_test.go` → `roost-core/etcd/election.go` + `roost-core/etcd/driver/election_test.go`（含"campaign ctx 取消不丢领导权"这条反直觉不变量）。
-6. **横向扩展**：`roost-core/saga/mongo_store.go`（lease CAS）+ **`roost-core/saga/command_consumer_test.go`**（重投只执行一次 = exactly-once step 的规格）→ `roost-core/remoteentity/transaction_manager.go`（跨服事务追踪）→ `roost-core/sync/nettransport/udp_crypto.go`、`roost-core/sync/nettransport/udp_transport.go` → `roost-core/room/room_broadcast.go`（状态帧）→ `roost-core/sync/lockstep/room.go` + `roost-core/sync/lockstep/room_test.go`（输入帧：追帧限速、断线重连、裁决回调的用例即文档）→ `spatial/`、`ai/`、`roost-core/actionflow/action_runner_test.go`（抢占/队列/重入检测）。
+6. **横向扩展**：`roost-core/saga/mongo_store.go`（lease CAS）+ **`roost-core/saga/command_consumer_test.go`**（重投只执行一次 = exactly-once step 的规格）→ `roost-core/remoteentity/transaction_manager.go`（跨服事务追踪）→ `roost-core/sync/nettransport/udp_crypto.go`、`roost-core/sync/nettransport/udp_transport.go` → `roost-core/sync/entitysync/flush.go`（状态帧）→ `roost-core/sync/lockstep/room.go` + `roost-core/sync/lockstep/room_test.go`（输入帧：追帧限速、断线重连、裁决回调的用例即文档）→ `spatial/`、`ai/`、`roost-core/actionflow/action_runner_test.go`（抢占/队列/重入检测）。
 7. **语义即测试的推荐清单**：`roost-core/etcd/driver/local_mirror_test.go`（原子快照、慢订阅隔离、panic 隔离、CAS）、`roost-core/nats/driver/jetstream_test.go`（Drain 与 Stop 的语义差）、`roost-core/gateway/middleware_test.go`（带回归原因注释的鉴权兜底）、`ops/ops_mod_test.go`（5 个测试 = 该包完整规格）、`roost-core/mongo/driver/collection_test.go`（"默认绝不 drop 生产索引"）。
 
 ---
@@ -562,3 +582,5 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 新增 Mod 时请同时提供：配置读取、Registry capability、health 检查、确定的 Stop 行为，以及不依赖真实外部服务的测试替身。
 
 本仓库以 [MIT License](LICENSE) 发布。
+
+正式实体同步可使用 `kit/nest.NewModWithEntitySync`，通过 `sync.entity.mode` 在周期与变化触发之间选择；默认周期。`Init` 后从 `EntitySync()` 安装业务 Interest 与会话，启动及停机排空由 Mod 管理。详见[双模式接入](../docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)。

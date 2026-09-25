@@ -10,8 +10,8 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
-	"{{MODULE}}/protocol/pb"
 	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -27,9 +27,8 @@ import (
 // remote bit into a distributed lock.
 //
 // The one thing the endpoint does have to decide is where a NEW guild's id
-// comes from, and that is the same problem the spawner solved: an id minted
-// from this process's sid, so two processes founding guilds at the same
-// moment cannot mint the same one (game/runtimeid).
+// comes from: a persistent counter shared by all game processes. Guilds
+// survive restarts, so the spawner's process-local runtime IDs cannot be used.
 
 func (controller *Controller) HandleFoundGuild(context *player_agent.Context, request *pb.FoundGuildRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
@@ -82,19 +81,15 @@ func (controller *Controller) HandleFoundGuild(context *player_agent.Context, re
 		// a guild — that is the real guild_exists.
 		return refuse(errcode.Wrap(apperrors.ErrGuildExists, nil, "guild_id", existing), "existing")
 	}
-	ids, err := controller.RuntimeIDs()
-	if err != nil {
-		return nil, fmt.Errorf("found_guild endpoint: %w", err)
-	}
-	uniqueID, err := ids.Next()
+	uniqueID, err := controller.nextGuildID(context.Context())
 	if err != nil {
 		return refuse(err, "mint")
 	}
 	// The aggregate has to EXIST before anything can take its lock: a remote
 	// entity is materialized by loading it from the authoritative store, so
 	// "found" is create-then-write, not write-and-hope. The create is local
-	// and unfenced — nobody else can know this id yet, because it was minted
-	// from this process's sid one line ago — and the write that follows is
+	// and unfenced — this ID has just been durably reserved for this creation —
+	// and the write that follows is
 	// the fenced one.
 	guilds, err := controller.Guilds()
 	if err != nil {

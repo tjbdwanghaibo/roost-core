@@ -52,17 +52,11 @@ func TestSendReliableRefusesUnregisteredDrainingAndFailedSessions(t *testing.T) 
 	if err := none.SendReliable(ctx, 1, []byte("x")); !errors.Is(err, ErrTransportClosed) {
 		t.Fatalf("SendReliable on a nil transport = %v", err)
 	}
-	if _, err := none.session(1); !errors.Is(err, ErrTransportClosed) {
-		t.Fatalf("session on a nil transport = %v", err)
-	}
 
 	// 未注册。
 	transport := admissionTransport(t, nil)
 	if err := transport.SendReliable(ctx, 99, []byte("x")); !errors.Is(err, ErrSessionNotRegistered) {
 		t.Fatalf("SendReliable to an unregistered session = %v", err)
-	}
-	if _, err := transport.session(99); !errors.Is(err, ErrSessionNotRegistered) {
-		t.Fatalf("session(99) = %v", err)
 	}
 
 	// 排空中：下游忽略 ctx，RemoveSession 后会话仍在表里但 closing。

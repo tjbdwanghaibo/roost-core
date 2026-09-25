@@ -4,28 +4,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/health"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/sync/frame"
 )
 
-// DefaultInterval is the tick: how often dirty subjects become frames. It is
-// a batching window, not a latency budget — a change reaches every session
-// within one interval.
+// DefaultInterval 是脏数据的合并检查周期；不包含执行、网络或重试耗时，
+// 不能作为端到端延迟上限。
 const DefaultInterval = 50 * time.Millisecond
 
 // ManagerConfig shapes the one Manager a process runs.
 type ManagerConfig struct {
-	// Transport receives one frame per session per tick. Required.
+	Mode SyncMode
+	// MaxFrozenBytes 限制变化触发模式保留的内容字节；零值为 64MiB。
+	MaxFrozenBytes int64
+	// Transport receives each encoded frame; a session may need multiple frames per tick. Required.
 	Transport Transport
 	// Interval is the tick period for Start. Zero takes DefaultInterval.
 	Interval time.Duration
+	// ProfilePriorities 越小越优先；未配置的视图按 LOD 排序。构造时复制配置。
+	// 只在已授权来源之间选一个视图，不合并字段或扩大授权。
+	ProfilePriorities map[entity.SyncProfile]int
+	// SnapshotBudget 只限制等待建立/恢复基线的全量，零值不限制。
+	SnapshotBudget SnapshotBudget
 	// Limits bound a frame. Zero fields take frame.DefaultLimits.
 	// MaxObjects is also how many subjects one session may hold.
 	Limits frame.Limits
@@ -50,7 +55,7 @@ type ManagerConfig struct {
 	// SessionLost is told when a session was closed by the manager because
 	// its transport refused a frame (not on CloseSession). The policy that
 	// subscribed the session uses it to forget the session on its side —
-	// there is no reverse index here to do that for it (ARCH-10).
+	// the manager's subscription index does not own policy-layer membership (ARCH-10).
 	SessionLost func(session SessionID, cause error)
 }
 
@@ -101,53 +106,110 @@ func (c ManagerConfig) normalized() ManagerConfig {
 	return c
 }
 
-// Manager owns every replicated subject and every receiving session in the
-// process. It is the whole scheduler: policies tell it who subscribes to
-// whom, entities tell it (through their dirty notifier) what changed, and on
-// each tick it gives every affected session one frame.
+// Manager 管理进程内的同步实体与接收会话。政策层通过 Subscribe 指定订阅关系，
+// 实体通过脏通知进入待同步集合，Flush 按会话组织并交付内容。
+//
+// 本文件负责配置、实体注册和生命周期；subscriptions.go 管理会话与订阅，
+// flush.go 负责捕获、准入与提交。订阅意图归 subject，已交付的时钟与引用归 session。
 type Manager struct {
-	config ManagerConfig
-	wire   wireConfig
+	frozenPeakBytes atomic.Int64
+	policyMu        sync.Mutex
+	policies        map[uint64]policyHook
+	nextPolicy      uint64
+	wake            chan struct{}
+	producerBound   atomic.Bool
+	frozenBytes     atomic.Int64
+	frozenDeferred  atomic.Uint64
+	budgetWindow    time.Time
+	windowAllowance snapshotAllowance
+	windowSessions  map[SessionID]int
+	config          ManagerConfig
+	wire            wireConfig
 
 	mu       sync.RWMutex
 	subjects map[int64]*subject
 	sessions map[SessionID]*session
 	closed   bool
+	closing  bool
 
 	pendingMu sync.Mutex
 	pending   map[int64]struct{}
 
-	// flushMu makes ticks sequential: Flush, Stop's final flush and Close
-	// never overlap, so a subject's Prepare is never in flight twice.
-	flushMu sync.Mutex
+	// flushGate 串行化捕获与关闭，等待者可随 context 取消退出。
+	flushGate chan struct{}
+	runMu     sync.Mutex
+	runState  *managerRun
+	stopState *managerStop
 
-	runMu   sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-
-	framesAdmitted atomic.Uint64
-	sessionsLost   atomic.Uint64
-	deferred       atomic.Uint64
-	flushFailures  atomic.Uint64
-	errMu          sync.Mutex
-	lastError      error
+	captureNanos      atomic.Uint64
+	encodeNanos       atomic.Uint64
+	admissionNanos    atomic.Uint64
+	flushCalls        atomic.Uint64
+	emptyFlushes      atomic.Uint64
+	flushNanos        atomic.Uint64
+	lastFlushNanos    atomic.Uint64
+	dirtyCaptured     atomic.Uint64
+	snapshotsCaptured atomic.Uint64
+	createsAdmitted   atomic.Uint64
+	updatesAdmitted   atomic.Uint64
+	removesAdmitted   atomic.Uint64
+	framesAdmitted    atomic.Uint64
+	sessionsLost      atomic.Uint64
+	deferred          atomic.Uint64
+	flushFailures     atomic.Uint64
+	errMu             sync.Mutex
+	lastError         error
+	flushWork         map[SessionID]*flushSession
+	flushPool         []*flushSession
+	snapshotCursor    SessionID // flushGate 保护轮转游标
+	snapshotsDeferred atomic.Uint64
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
+	if config.Mode != ModePeriodic && config.Mode != ModeOnChange {
+		return nil, fmt.Errorf("entitysync: invalid sync mode %d", config.Mode)
+	}
+	if config.Interval < 0 || config.MaxFrozenBytes < 0 {
+		return nil, fmt.Errorf("entitysync: negative interval or frozen capacity")
+	}
+	if config.MaxFrozenBytes == 0 {
+		config.MaxFrozenBytes = 64 << 20
+	}
 	if config.Transport == nil {
 		return nil, ErrTransportRequired
 	}
+	priorities := make(map[entity.SyncProfile]int, len(config.ProfilePriorities))
+	for profile, priority := range config.ProfilePriorities {
+		profile = profile.Normalize()
+		if _, exists := priorities[profile]; exists {
+			return nil, fmt.Errorf("entitysync: duplicate profile priority %+v", profile)
+		}
+		priorities[profile] = priority
+	}
+	config.ProfilePriorities = priorities
 	config = config.normalized()
+	if config.SnapshotBudget.MaxObjects < 0 || config.SnapshotBudget.MaxBytes < 0 || config.SnapshotBudget.PerSessionObjects < 0 {
+		return nil, fmt.Errorf("entitysync: negative snapshot budget")
+	}
+	if bounded, ok := config.Transport.(FrameSizeLimiter); ok {
+		if limit := bounded.MaxFrameBytes(); limit > 0 {
+			config.Limits.MaxFrameBytes = min(config.Limits.MaxFrameBytes, limit)
+		}
+	}
+	if config.Limits.MaxFrameBytes < 32 {
+		return nil, fmt.Errorf("entitysync: frame limit smaller than protocol header")
+	}
 	return &Manager{
 		config: config,
+		wake:   make(chan struct{}, 1),
 		wire: wireConfig{
 			limits: config.Limits, schemaVersion: config.FrameSchemaVersion, archetype: config.Archetype,
 			componentType: config.ComponentTypeID, componentSchema: config.ComponentSchemaVersion,
 		},
-		subjects: make(map[int64]*subject),
-		sessions: make(map[SessionID]*session),
-		pending:  make(map[int64]struct{}),
+		subjects:  make(map[int64]*subject),
+		sessions:  make(map[SessionID]*session),
+		pending:   make(map[int64]struct{}),
+		flushGate: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -165,7 +227,7 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	}
 	id := state.SubjectID()
 	m.mu.Lock()
-	if m.closed {
+	if m.closed || m.closing {
 		m.mu.Unlock()
 		return ErrManagerClosed
 	}
@@ -187,7 +249,12 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	m.mu.Unlock()
 	// Installing the notifier also fires it when the state is already dirty,
 	// so a subject that changed before it was registered is not forgotten.
-	state.SetDirtyNotifier(func(*entity.SubjectSyncState) { m.markPending(id) })
+	state.SetDirtyNotifier(func(*entity.SubjectSyncState) {
+		m.markPending(id)
+		if state.SyncCommitReady() {
+			m.WakeSync()
+		}
+	})
 	return nil
 }
 
@@ -202,12 +269,14 @@ func (m *Manager) Unregister(subjectID int64) error {
 	subj.mu.Lock()
 	subj.retiring = true
 	for id, sub := range subj.subscribers {
-		if sub.kind == kindSnapshot {
-			// Never received anything; nothing to take back.
-			delete(subj.subscribers, id)
+		if !sub.inFlight && !m.sessionHoldsSubject(id, subjectID) {
+			// 只有实际未持有对象的会话才不欠 remove；等待快照也可能是在换视图。
+			m.removeSubscriptionLocked(subj, id)
 			continue
 		}
+		clear(sub.sources)
 		sub.kind = kindLeaving
+		sub.revision++
 	}
 	remaining := len(subj.subscribers)
 	subj.mu.Unlock()
@@ -216,6 +285,7 @@ func (m *Manager) Unregister(subjectID int64) error {
 		return nil
 	}
 	m.markPending(subjectID)
+	m.WakeSync()
 	return nil
 }
 
@@ -229,6 +299,7 @@ func (m *Manager) forget(subjectID int64) {
 	m.mu.Unlock()
 	if ok {
 		subj.state.SetDirtyNotifier(nil)
+		subj.state.DiscardFrozenSync()
 	}
 }
 
@@ -241,620 +312,190 @@ func (m *Manager) subject(subjectID int64) *subject {
 	return m.subjects[subjectID]
 }
 
-// ---- sessions ----
+// ---- lifecycle ----
 
-// OpenSession admits a receiver. It is idempotent: an already open session
-// stays as it is.
-func (m *Manager) OpenSession(id SessionID) error {
-	if m == nil {
-		return ErrManagerClosed
-	}
-	if id == 0 {
-		return ErrSessionInvalid
-	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return ErrManagerClosed
-	}
-	if _, exists := m.sessions[id]; exists {
-		m.mu.Unlock()
-		return nil
-	}
-	if len(m.sessions) >= m.config.MaxSessions {
-		m.mu.Unlock()
-		return ErrSessionLimit
-	}
-	m.sessions[id] = newSession(id)
-	m.mu.Unlock()
-	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
-		if err := lifecycle.SessionOpened(id); err != nil {
-			m.mu.Lock()
-			delete(m.sessions, id)
-			m.mu.Unlock()
-			return err
-		}
-	}
-	return nil
+type managerRun struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
-// OpenHeldSession admits a receiver that is not ready to receive yet: it can
-// be subscribed, but no frame is encoded for it until ReadySession. A client
-// that installs its decoder only after the login answer wants this — the
-// first snapshot must not race the decoder (ARCH-10, "session ready").
-func (m *Manager) OpenHeldSession(id SessionID) error {
-	if err := m.OpenSession(id); err != nil {
-		return err
-	}
-	return m.HoldSession(id)
+type managerStop struct {
+	done chan struct{}
+	err  error // done 关闭后只读
 }
 
-// HoldSession stops frames to an open session and starts it over: every
-// subscription it holds goes back to "needs a snapshot" and the next frame it
-// gets (after ReadySession) opens a new epoch with a FrameFull. Use it when
-// the receiver has lost its state — a reconnect, a client-side reset.
-func (m *Manager) HoldSession(id SessionID) error {
-	if m == nil {
-		return ErrManagerClosed
+// Start 启动周期同步；父 context 取消或 Stop 都会取消在途 Push。
+// 旧循环与最后一次 Flush 尚未退出时，拒绝启动新循环。
+func (m *Manager) Start(ctx context.Context) error {
+	if m != nil && m.config.Mode == ModeOnChange && !m.producerBound.Load() {
+		return fmt.Errorf("entitysync: on_change requires a bound sync commit producer")
 	}
-	m.mu.Lock()
-	sess, ok := m.sessions[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrSessionUnknown
-	}
-	fresh := newSession(id)
-	fresh.epoch = sess.epoch + 1
-	fresh.framesSent = sess.framesSent
-	fresh.held = true
-	m.sessions[id] = fresh
-	subjects := make([]*subject, 0, len(m.subjects))
-	for _, subj := range m.subjects {
-		subjects = append(subjects, subj)
-	}
-	m.mu.Unlock()
-	for _, subj := range subjects {
-		subj.mu.Lock()
-		if sub, subscribed := subj.subscribers[id]; subscribed {
-			switch sub.kind {
-			case kindLeaving:
-				// It was owed a remove; with its state gone there is nothing to remove.
-				delete(subj.subscribers, id)
-			default:
-				sub.kind, sub.baseVersion = kindSnapshot, 0
-			}
-		}
-		subj.mu.Unlock()
-	}
-	return nil
-}
-
-// ReadySession lets frames flow to a held session. Every subject it is
-// subscribed to is scheduled so the snapshots go out on the next tick.
-func (m *Manager) ReadySession(id SessionID) error {
-	if m == nil {
-		return ErrManagerClosed
-	}
-	m.mu.Lock()
-	sess, ok := m.sessions[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrSessionUnknown
-	}
-	sess.held = false
-	subjects := make([]*subject, 0, len(m.subjects))
-	for _, subj := range m.subjects {
-		subjects = append(subjects, subj)
-	}
-	m.mu.Unlock()
-	for _, subj := range subjects {
-		subj.mu.Lock()
-		_, subscribed := subj.subscribers[id]
-		subj.mu.Unlock()
-		if subscribed {
-			m.markPending(subj.id)
-		}
-	}
-	return nil
-}
-
-// CloseSession forgets a receiver: its frame state goes, and every subject
-// drops its subscription without owing it a remove — there is nobody to send
-// one to. The policy that subscribed it is expected to have forgotten it
-// already; this is the safety net for the entries it missed.
-func (m *Manager) CloseSession(id SessionID) {
-	m.dropSession(id, nil, false)
-}
-
-// loseSession is CloseSession for a session the transport refused: counted,
-// and reported to the policy through SessionLost.
-func (m *Manager) loseSession(id SessionID, cause error) {
-	m.dropSession(id, cause, true)
-}
-
-func (m *Manager) dropSession(id SessionID, cause error, lost bool) {
-	if m == nil || id == 0 {
-		return
-	}
-	m.mu.Lock()
-	_, existed := m.sessions[id]
-	delete(m.sessions, id)
-	subjects := make([]*subject, 0, len(m.subjects))
-	for _, subj := range m.subjects {
-		subjects = append(subjects, subj)
-	}
-	m.mu.Unlock()
-	if !existed {
-		return
-	}
-	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
-		lifecycle.SessionClosed(id)
-	}
-	for _, subj := range subjects {
-		subj.mu.Lock()
-		if _, subscribed := subj.subscribers[id]; subscribed {
-			delete(subj.subscribers, id)
-			if subj.retiring && len(subj.subscribers) == 0 {
-				// Its last subscriber left before the remove could go out.
-				defer m.forget(subj.id)
-			}
-		}
-		subj.mu.Unlock()
-	}
-	if lost {
-		m.sessionsLost.Add(1)
-		metrics.IncCounter("entitysync_sessions_lost_total", nil, 1)
-		if m.config.SessionLost != nil {
-			m.config.SessionLost(id, cause)
-		}
-	}
-}
-
-// adoptSession installs the state a tick encoded against, unless the session
-// was closed meanwhile.
-func (m *Manager) adoptSession(next *session) {
-	m.mu.Lock()
-	if _, open := m.sessions[next.id]; open {
-		m.sessions[next.id] = next
-	}
-	m.mu.Unlock()
-}
-
-func (m *Manager) session(id SessionID) *session {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.sessions[id]
-}
-
-// ---- subscriptions ----
-
-// Subscribe makes a session a receiver of a subject under a profile. The
-// session gets a full snapshot on the next tick; changing the profile of an
-// existing subscription does the same.
-func (m *Manager) Subscribe(session SessionID, subjectID int64, profile entity.SyncProfile) error {
-	if m == nil {
-		return ErrManagerClosed
-	}
-	if session == 0 {
-		return ErrSessionInvalid
-	}
-	if m.session(session) == nil {
-		return ErrSessionUnknown
-	}
-	subj := m.subject(subjectID)
-	if subj == nil {
-		return ErrSubjectNotRegistered
-	}
-	profile = profile.Normalize()
-	subj.mu.Lock()
-	defer subj.mu.Unlock()
-	if subj.retiring {
-		return ErrSubjectRetiring
-	}
-	if existing, ok := subj.subscribers[session]; ok {
-		switch {
-		case existing.kind == kindLeaving:
-			// Back before the remove went out. It may have missed deltas
-			// while leaving, so it starts over with a snapshot.
-			existing.profile, existing.kind, existing.baseVersion = profile, kindSnapshot, 0
-		case existing.profile != profile:
-			existing.profile, existing.kind, existing.baseVersion = profile, kindSnapshot, 0
-		default:
-			return nil
-		}
-		m.markPending(subjectID)
-		return nil
-	}
-	if len(subj.subscribers) >= m.config.MaxSubscribersPerSubject {
-		return ErrSubscriberLimit
-	}
-	subj.subscribers[session] = &subscription{profile: profile, kind: kindSnapshot}
-	m.markPending(subjectID)
-	return nil
-}
-
-// Unsubscribe ends a subscription. A session that already holds the object is
-// owed an ObjectRemove on its next frame; one that never received anything is
-// simply forgotten.
-func (m *Manager) Unsubscribe(session SessionID, subjectID int64) error {
-	if m == nil {
-		return ErrManagerClosed
-	}
-	subj := m.subject(subjectID)
-	if subj == nil {
-		return ErrSubjectNotRegistered
-	}
-	subj.mu.Lock()
-	defer subj.mu.Unlock()
-	existing, ok := subj.subscribers[session]
-	if !ok {
-		return ErrSubscriptionNotFound
-	}
-	if sess := m.session(session); sess == nil || sess.held || existing.kind == kindSnapshot {
-		// Nothing was ever delivered to this session for this subject (or
-		// its state is gone): there is no object to take back.
-		delete(subj.subscribers, session)
-		if subj.retiring && len(subj.subscribers) == 0 {
-			defer m.forget(subjectID)
-		}
-		return nil
-	}
-	existing.kind = kindLeaving
-	m.markPending(subjectID)
-	return nil
-}
-
-// Subscribers reports the sessions subscribed to a subject, in ascending
-// order, whatever their standing.
-func (m *Manager) Subscribers(subjectID int64) []SessionID {
-	subj := m.subject(subjectID)
-	if subj == nil {
-		return nil
-	}
-	subj.mu.Lock()
-	defer subj.mu.Unlock()
-	return subj.sessionsLocked()
-}
-
-func (m *Manager) markPending(subjectID int64) {
-	m.pendingMu.Lock()
-	m.pending[subjectID] = struct{}{}
-	m.pendingMu.Unlock()
-}
-
-func (m *Manager) takePending() []int64 {
-	m.pendingMu.Lock()
-	ids := make([]int64, 0, len(m.pending))
-	for id := range m.pending {
-		ids = append(ids, id)
-	}
-	clear(m.pending)
-	m.pendingMu.Unlock()
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
-}
-
-// ---- the tick ----
-
-// settlement is what becomes true for one (session, subject) once the
-// session's frame has been admitted.
-type settlement struct {
-	subj    *subject
-	version uint64
-	remove  bool
-}
-
-// Flush is one tick. Every pending subject is captured once (one packer call
-// per distinct profile, under its entity lock), the captures are dealt into
-// per-session frames, each frame is pushed, and only then are the captures
-// committed. A session whose push fails is closed; a transport that cannot
-// take anything (ErrRetryLater) abandons the tick with every subject still
-// dirty. Subjects behind the durable watermark are skipped whole and retried.
-func (m *Manager) Flush(ctx context.Context) error {
 	if m == nil {
 		return ErrManagerClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	m.flushMu.Lock()
-	defer m.flushMu.Unlock()
-	if m.isClosed() {
-		return ErrManagerClosed
-	}
-	ids := m.takePending()
-	if len(ids) == 0 {
-		return nil
-	}
-	var watermark uint64
-	gated := m.config.DurableWatermark != nil
-	if gated {
-		watermark = m.config.DurableWatermark()
-	}
-
-	var prepared []*entity.PreparedSubjectSync
-	frames := make(map[SessionID][]frameEntry)
-	settlements := make(map[SessionID][]settlement)
-	var retry []int64
-	var failures []error
-
-	for _, id := range ids {
-		subj := m.subject(id)
-		if subj == nil {
-			continue
-		}
-		subj.mu.Lock()
-		// Sessions that closed since are pruned here: their entries owe
-		// nothing. Held sessions are skipped for this tick — ReadySession
-		// schedules the subject again when they can receive.
-		held := make(map[SessionID]bool)
-		for sid := range subj.subscribers {
-			sess := m.session(sid)
-			switch {
-			case sess == nil:
-				delete(subj.subscribers, sid)
-			case sess.held:
-				held[sid] = true
-			}
-		}
-		snapshotProfiles := subj.profilesLocked(kindSnapshot)
-		deltaProfiles := subj.profilesLocked(kindLive)
-		dirty := subj.state.PendingDirty()
-		wantsCapture := len(snapshotProfiles) > 0 || dirty
-		if wantsCapture {
-			// A dirty subject nobody live is watching still gets captured
-			// (against the default profile) so Commit clears its dirty state
-			// instead of leaving it pending forever.
-			item, err := subj.state.PrepareTick(deltaProfiles, snapshotProfiles)
-			switch {
-			case errors.Is(err, entity.ErrSubjectSyncNotDirty):
-			case err != nil:
-				failures = append(failures, fmt.Errorf("subject %d: %w", id, err))
-				retry = append(retry, id)
-			case gated && capturedAbove(item, watermark):
-				_ = item.AbortWithError(ErrDurabilityDeferred)
-				m.deferred.Add(1)
-				metrics.IncCounter("entitysync_durability_gate_deferred_total", nil, 1)
-				retry = append(retry, id)
-			default:
-				prepared = append(prepared, item)
-				snapshots, deltas := item.Snapshots(), item.Updates()
-				for sid, sub := range subj.subscribers {
-					if held[sid] {
-						continue
-					}
-					switch sub.kind {
-					case kindSnapshot:
-						if update, ok := updateFor(snapshots, sub.profile); ok {
-							frames[sid] = append(frames[sid], frameEntry{subjectID: id, kind: entryCreate, update: update})
-							settlements[sid] = append(settlements[sid], settlement{subj: subj, version: item.Version()})
-						}
-					case kindLive:
-						if !dirty {
-							continue
-						}
-						if update, ok := updateFor(deltas, sub.profile); ok {
-							frames[sid] = append(frames[sid], frameEntry{subjectID: id, kind: entryUpdate, update: update})
-							settlements[sid] = append(settlements[sid], settlement{subj: subj, version: item.Version()})
-						}
-					}
-				}
-			}
-		}
-		for sid, sub := range subj.subscribers {
-			if sub.kind == kindLeaving && !held[sid] {
-				frames[sid] = append(frames[sid], frameEntry{subjectID: id, kind: entryRemove})
-				settlements[sid] = append(settlements[sid], settlement{subj: subj, remove: true})
-			}
-		}
-		subj.mu.Unlock()
-	}
-
-	sessionIDs := make([]SessionID, 0, len(frames))
-	for sid := range frames {
-		sessionIDs = append(sessionIDs, sid)
-	}
-	sort.Slice(sessionIDs, func(i, j int) bool { return sessionIDs[i] < sessionIDs[j] })
-
-	for _, sid := range sessionIDs {
-		sess := m.session(sid)
-		if sess == nil {
-			continue
-		}
-		// Encode against a scratch copy: the clock and the reference table
-		// only move once the frames were admitted, so a retried tick sends
-		// the same frames again instead of deltas against ticks nobody saw.
-		next := sess.clone()
-		payloads, err := next.encode(frames[sid], m.wire)
-		if err != nil {
-			m.loseSession(sid, err)
-			continue
-		}
-		var pushErr error
-		for _, payload := range payloads {
-			if pushErr = m.config.Transport.Push(ctx, sid, payload); pushErr != nil {
-				break
-			}
-		}
-		if errors.Is(pushErr, ErrRetryLater) {
-			// Nobody's fault: put everything back and try the whole tick again.
-			abortAll(prepared, pushErr)
-			for _, id := range ids {
-				m.markPending(id)
-			}
-			m.flushFailures.Add(1)
-			m.setLastError(pushErr)
-			return pushErr
-		}
-		if pushErr != nil {
-			m.loseSession(sid, pushErr)
-			continue
-		}
-		m.adoptSession(next)
-		m.framesAdmitted.Add(uint64(len(payloads)))
-		metrics.IncCounter("entitysync_frames_admitted_total", nil, int64(len(payloads)))
-		for _, settle := range settlements[sid] {
-			settle.subj.mu.Lock()
-			if sub, ok := settle.subj.subscribers[sid]; ok {
-				if settle.remove {
-					delete(settle.subj.subscribers, sid)
-				} else {
-					sub.kind, sub.baseVersion = kindLive, settle.version
-				}
-			}
-			settle.subj.mu.Unlock()
-		}
-	}
-
-	if len(prepared) > 0 {
-		batch, err := entity.ReservePreparedSubjectSyncBatch(prepared)
-		if err != nil {
-			abortAll(prepared, err)
-			failures = append(failures, err)
-		} else if err := batch.Commit(); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	for _, id := range ids {
-		subj := m.subject(id)
-		if subj == nil {
-			continue
-		}
-		subj.mu.Lock()
-		done := subj.retiring && len(subj.subscribers) == 0
-		subj.mu.Unlock()
-		if done {
-			m.forget(id)
-		}
-	}
-	for _, id := range retry {
-		m.markPending(id)
-	}
-	err := errors.Join(failures...)
-	if err != nil {
-		m.flushFailures.Add(1)
-		m.setLastError(err)
-	}
-	return err
-}
-
-// capturedAbove reports whether any part of the capture came from a commit
-// the durable watermark has not reached.
-func capturedAbove(item *entity.PreparedSubjectSync, watermark uint64) bool {
-	for _, update := range item.Updates() {
-		if update.CommitLSN > watermark {
-			return true
-		}
-	}
-	for _, update := range item.Snapshots() {
-		if update.CommitLSN > watermark {
-			return true
-		}
-	}
-	return false
-}
-
-func abortAll(prepared []*entity.PreparedSubjectSync, cause error) {
-	for _, item := range prepared {
-		_ = item.AbortWithError(cause)
-	}
-}
-
-// ---- lifecycle ----
-
-// Start runs Flush every Interval until Stop.
-func (m *Manager) Start(ctx context.Context) error {
-	if m == nil {
-		return ErrManagerClosed
-	}
-	if m.isClosed() {
-		return ErrManagerClosed
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	m.runMu.Lock()
 	defer m.runMu.Unlock()
-	if m.running {
-		return nil
+	m.mu.RLock()
+	closed := m.closed || m.closing
+	m.mu.RUnlock()
+	if closed {
+		return ErrManagerClosed
 	}
-	m.running = true
-	m.stopCh = make(chan struct{})
-	m.doneCh = make(chan struct{})
-	go m.run(m.stopCh, m.doneCh)
+	if m.stopState != nil {
+		return ErrManagerStopping
+	}
+	if m.runState != nil {
+		select {
+		case <-m.runState.done:
+		default:
+			return nil
+		}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	state := &managerRun{cancel: cancel, done: make(chan struct{})}
+	m.runState = state
+	go m.run(runCtx, state)
 	return nil
 }
 
-func (m *Manager) run(stopCh, doneCh chan struct{}) {
-	defer close(doneCh)
+func (m *Manager) run(ctx context.Context, state *managerRun) {
+	defer close(state.done)
+	defer state.cancel()
 	ticker := time.NewTicker(m.config.Interval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = m.Flush(context.Background())
+			_ = m.Flush(ctx)
+		case <-m.wake:
+			_ = m.Flush(ctx)
 		}
 	}
 }
 
-// Stop ends the tick loop and flushes once more so nothing admitted before
-// the stop is left owed.
+// Stop 取消周期循环，退出后用调用方 context 做最后一次 Flush。
+// 超时只结束本次等待；旧循环真正退出前保持 stopping，防止并行重启。
+// Transport 必须响应 Push 的 context；不响应的传输不能被强制终止。
 func (m *Manager) Stop(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
-	m.runMu.Lock()
-	if m.running {
-		m.running = false
-		close(m.stopCh)
-		doneCh := m.doneCh
-		m.runMu.Unlock()
-		select {
-		case <-doneCh:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	} else {
-		m.runMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if m.isClosed() {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.runMu.Lock()
+	state := m.stopState
+	if state == nil {
+		state = &managerStop{done: make(chan struct{})}
+		m.stopState = state
+		running := m.runState
+		if running != nil {
+			running.cancel()
+		}
+		go m.finishStop(ctx, state, running)
+	}
+	m.runMu.Unlock()
+	select {
+	case <-state.done:
+		return state.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) finishStop(ctx context.Context, state *managerStop, running *managerRun) {
+	if running != nil {
+		<-running.done
 	}
 	err := m.Flush(ctx)
 	if errors.Is(err, ErrManagerClosed) {
-		return nil
+		err = nil
 	}
-	return err
+	m.runMu.Lock()
+	state.err = err
+	m.runState = nil
+	m.stopState = nil
+	close(state.done)
+	m.runMu.Unlock()
 }
 
-// Close stops the manager and lets go of every subject and session.
+// Close 先停循环再释放状态；超时返回后可再次调用以完成清理。
+// closing 阻止新注册、开会话和 Start，但允许停机的最后一次 Flush。
 func (m *Manager) Close(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
-	err := m.Stop(ctx)
-	m.flushMu.Lock()
-	defer m.flushMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.runMu.Lock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		m.runMu.Unlock()
+		return nil
+	}
+	m.closing = true
+	m.mu.Unlock()
+	m.runMu.Unlock()
+	stopErr := m.Stop(ctx)
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := m.acquireFlush(ctx); err != nil {
+		return err
+	}
+	defer m.releaseFlush()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
 	m.closed = true
-	subjects := m.subjects
-	sessions := m.sessions
+	subjects, sessions := m.subjects, m.sessions
 	m.subjects = make(map[int64]*subject)
 	m.sessions = make(map[SessionID]*session)
 	m.mu.Unlock()
 	for _, subj := range subjects {
 		subj.state.SetDirtyNotifier(nil)
+		subj.state.DiscardFrozenSync()
 	}
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		for id := range sessions {
 			lifecycle.SessionClosed(id)
 		}
 	}
-	return err
+	return stopErr
 }
+
+func (m *Manager) acquireFlush(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case m.flushGate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			m.releaseFlush()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) releaseFlush() { <-m.flushGate }
 
 func (m *Manager) isClosed() bool {
 	m.mu.RLock()
@@ -881,6 +522,19 @@ func (m *Manager) LastError() error {
 // ---- observability ----
 
 type ManagerStats struct {
+	FlushCalls         uint64
+	EmptyFlushes       uint64
+	FlushDuration      time.Duration
+	LastFlushDuration  time.Duration
+	DirtyCaptured      uint64
+	SnapshotsCaptured  uint64
+	SnapshotsDeferred  uint64
+	CaptureDuration    time.Duration
+	EncodeDuration     time.Duration
+	AdmissionDuration  time.Duration
+	CreatesAdmitted    uint64
+	UpdatesAdmitted    uint64
+	RemovesAdmitted    uint64
 	Subjects           int
 	Sessions           int
 	HeldSessions       int
@@ -920,6 +574,11 @@ func (m *Manager) Stats() ManagerStats {
 	pending := len(m.pending)
 	m.pendingMu.Unlock()
 	return ManagerStats{
+		FlushCalls: m.flushCalls.Load(), EmptyFlushes: m.emptyFlushes.Load(),
+		FlushDuration: time.Duration(m.flushNanos.Load()), LastFlushDuration: time.Duration(m.lastFlushNanos.Load()),
+		DirtyCaptured: m.dirtyCaptured.Load(), SnapshotsCaptured: m.snapshotsCaptured.Load(),
+		SnapshotsDeferred: m.snapshotsDeferred.Load(), CaptureDuration: time.Duration(m.captureNanos.Load()), EncodeDuration: time.Duration(m.encodeNanos.Load()), AdmissionDuration: time.Duration(m.admissionNanos.Load()),
+		CreatesAdmitted: m.createsAdmitted.Load(), UpdatesAdmitted: m.updatesAdmitted.Load(), RemovesAdmitted: m.removesAdmitted.Load(),
 		Subjects: len(subjects), Sessions: sessions, HeldSessions: heldSessions, Subscriptions: subscriptions, Pending: pending,
 		FramesAdmitted: m.framesAdmitted.Load(), SessionsLost: m.sessionsLost.Load(),
 		DurabilityDeferred: m.deferred.Load(), FlushFailures: m.flushFailures.Load(),

@@ -69,8 +69,9 @@ func runOnEntityRelease(ent IThreadSafeEntity) {
 
 // EntityGuard manages per-goroutine entity locks with priority-based deadlock avoidance.
 type EntityGuard struct {
-	eMap        map[int64]IThreadSafeEntity
-	postRelease []func()
+	syncMutation *SyncMutation
+	eMap         map[int64]IThreadSafeEntity
+	postRelease  []func()
 }
 
 type GuardScope struct {
@@ -205,6 +206,7 @@ func newEntityGuard() *EntityGuard {
 func (e *EntityGuard) clean() {
 	clear(e.eMap)
 	e.postRelease = nil
+	e.syncMutation = nil
 }
 
 // RequireEntity acquires the entity lock. Returns true on success.

@@ -75,6 +75,9 @@ func NewRedisClient(cfg *fredis.Config) *Client {
 			ContextTimeoutEnabled: true,
 		})
 	}
+	if cluster, ok := rdb.(*goredis.ClusterClient); ok {
+		cluster.AddHook(clusterRecoveryHook{client: cluster})
+	}
 	return &Client{rdb: rdb}
 }
 

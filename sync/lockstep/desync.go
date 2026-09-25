@@ -1,6 +1,6 @@
 package lockstep
 
-import "sort"
+import "slices"
 
 // DesyncDetector compares client-reported simulation hashes at sampled
 // keyframes and rules by majority: the players whose hash disagrees with the
@@ -104,6 +104,6 @@ func (d *DesyncDetector) judge(frame FrameID, reports map[PlayerID]uint64) Desyn
 			verdict.Outliers = append(verdict.Outliers, player)
 		}
 	}
-	sort.Slice(verdict.Outliers, func(i, j int) bool { return verdict.Outliers[i] < verdict.Outliers[j] })
+	slices.Sort(verdict.Outliers)
 	return verdict
 }

@@ -1,5 +1,68 @@
 # Roost 持续 Review 与学习记录
 
+[2026-09-25 合并前验收](MERGE-2026-09-25.md)：累计核心模块优化、全模块检查与保留的性能边界。
+
+09-25 [Nest慢池并发与队列实测](NEST-SLOW-WORKERS-2026-09-25.md)：10轮同源码对比；128/16通过100 TPS×120秒全量验收，256吞吐无明显收益且延迟增加，1024在120 TPS过载时大量超时。全局默认未改，保留所有失败样本及复跑入口。
+
+09-25 [Nest 双池再次复核](NEST-FAST-SLOW-2026-09-25.md)：修复小等待队列提前拒绝与回滚 panic 锁泄漏，七包 race/vet、定向并发 ×20 通过。1024/16 调度容量已验证；复用上一轮性能基线，未将其视为本轮或 1024 档的新 TPS 证明。
+
+09-25 Nest 双池：普通/广播/Cost/Remote 的业务统一进快池，慢池仅负责前后置 I/O；七包 race、21/21 故障矩阵通过，100 TPS ×120 秒零错误且全量校验通过，120 TPS 背压过载；[方案与本轮验证](../feature/REFACTOR-2026-09-25-nest-fast-slow.md)、[RR-07](../bugfix/RR-20260925-07.md)。
+
+09-25 Remote 调度隔离与容量收口：获取/确认/释放进入独立慢池；本机 80 TPS × 10 分钟 48000 笔零错误、全量校验通过，90 TPS 长测 6 次超时，不作为稳定通过档位。race/vet 和 21/21 故障矩阵通过。[方案与完整数据](../feature/REFACTOR-2026-09-25-nest-remote-stages.md)、[RR-06](../bugfix/RR-20260925-06.md)。
+
+[09-25 Remote 超时定位与 60 TPS 长稳](../feature/REFACTOR-2026-09-25-remote-throughput.md)：修复独立 Entity 串行投影导致的 Remote 确认与 Nest 排队超时；默认 8 路有界并行、同 Entity 顺序和 WAL 连续前缀确认保持。30 分钟 108000 笔全成功，59.997 TPS，p50/p95/p99=124/262/845ms；全量一致性、21/21 故障矩阵和五包 race/vet 通过，未部署。下方旧版 30 分钟失败证据保留。
+
+[09-25 Remote 默认许可与诊断优化复测](../feature/REMOTE-UNIFIED-2026-09-25.md)：删除未发布旧协议分支、限制诊断开销；保留中间退化与失败样本，运行跟踪定位并移除发布阶段重复 Mongo 事务。21/21 故障矩阵与 60 秒全量负载校验通过；追加同代码 30 分钟测试未通过：实际 19.997 TPS、35996 成功/4 错误/0 丢弃，p50/p95/p99=55/646/1506ms，首错 nest: sync timeout，未执行最终一致性验收。24 小时未跑。
+
+[09-25 Remote 持久权限修复与投影批量优化](../feature/REMOTE-AUTHORITY-2026-09-25.md)：修复 RR-26，正式写路径启用 Mongo 权威；21 组故障项目含修后补跑均有通过证据，保留初次失败。容量与当轮验收以此报告为准；未部署前提下的接口收敛见后续报告。
+[Remote 容量、长稳与集群故障验收](../feature/REMOTE-ACCEPTANCE-2026-09-24.md)：正式 1000 业务 worker / 10000 实体负载、30 分钟实跑、24 小时复跑入口与有界故障矩阵；当前运行状态和最终数据以报告为准。
+
+[09-24 Remote 第三轮](../feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)：多进程强杀接管、Redis 网络隔离后旧 owner 拒绝解锁，以及正式生成多实体多 DAO → Nest → WAL/Mongo → NATS 接收通过；修复 RR-23 准入预算。以下条目保留各轮当时判断，最新范围以第三轮记录为准，尚非生产容量或完整故障矩阵认证。
+
+[09-24 Remote 第二轮](../feature/REFACTOR-2026-09-24-remote.md#第二轮启停与锁代际)：修复 RR-19～22；双 Redis 客户端续租/交接、双 Manager 所有权争抢/转移和真实 Mongo/WAL 恢复通过。单进程验证不替代多进程故障和完整业务压测。
+
+[09-24 Remote 事务链路优化](../feature/REFACTOR-2026-09-24-remote.md)：同包整理 tracker，消除满容量与 Stats 全表扫描；修复 RR-16/17/18。真实 Mongo/Redis/WAL 的多实体原子提交、发布失败恢复、确认丢失重放及冷 Manager 读快照通过。多节点所有权与完整业务压测尚待验收。
+
+[09-24 DataEngine 剩余优先项实施](../feature/DATAENGINE-BATCH-2026-09-24.md)：多 DAO 批量、安全 checkpoint 合并、准入上限/健康预警已落地，修复 RR-14/15。36 样本同参数复测通过，pair/pipelined 最终落库约 58.5 倍；100/s 四 DAO 输入结束后约 29ms 排空。以下旧条目保留历史判断，最新状态以该记录为准。
+
+[09-24 DataEngine 真实压测与截止评估](../feature/DATAENGINE-PRESSURE-2026-09-24.md)：36 个最终样本、50,688 笔计时事务，单/双/四 DAO 与热点场景逐文档校验通过；20/s 持续负载无增长积压，100/s 四 DAO 输入超过本机处理能力。功能正确性批次可收口，多 DAO 投影与 checkpoint 性能仍需优化；Remote 留后续。
+
+[09-24 DataEngine 恢复验收](../feature/DATAENGINE-RECOVERY-2026-09-24.md)：100k 跨段积压、慢存储取消、6 类真实依赖故障与正式生成 DAO/Nest 三独立进程验证；修复 RR-13 慢发布退避。保留生产容量、任意点强杀和断电的验证边界。
+
+[09-24 DataEngine 生命周期与重放分配优化](../feature/REFACTOR-2026-09-24-dataengine.md#8-生命周期与重放分配继续实施)：RR-11/12 修复启停回收和 Remote 永久冲突处理；空闲/held 重放分配下降约 96%/94%，8 包 race、真实依赖 6 项及公会重启回归通过。历史 WAL 与文档概念已澄清。
+
+[09-24 DataEngine 继续实施](../feature/REFACTOR-2026-09-24-dataengine.md#7-2026-09-24-继续实施)：D1 主线拆分与中文契约已实施，RR-10 Outbox 启停修复；原始 WAL 定位历史 Remote 公会 ID 重启复用，持久化发号和真实 Mongo/WAL 恢复验证通过。D3 基准已建立，D2/D4 扩展矩阵尚未全部完成，历史冲突 WAL 未自动改写。
+
+[09-24 Sync 最终截止复核](../feature/SYNC-COMPLETION-2026-09-23.md#2026-09-24-最终截止复核)：已授权优化与双模式正式接入完成，Nest 收尾后的核心链路、18 包 race 和独立生成工程验证完成；转入维护。保留 5% 变化率严格 50ms 长尾及真实部署验收边界，未发布。
+
+[09-24 Nest 再收尾与消息吞吐](../feature/NEST-MSG-THROUGHPUT-2026-09-24.md)：复核并回归当前完成边界，新增独立进程 Dispatch/Request、热点/10000 实体分散压测，按真实完成消息数计量。
+
+[09-24 Nest 截止复核](../feature/NEST-COMPLETION-2026-09-24.md#8-截止复核与收口结论)：补齐释放异常和内联/降级回调异常的完成责任，修复 RR-07/08；既定批次与本轮已确认问题已收口，转入维护。验证与线上验收边界见记录。
+
+[09-24 Nest N1～N4 收尾验收](../feature/NEST-COMPLETION-2026-09-24.md)：事务主线与完成所有权、可选阶段观测、基于 profile 的热路径优化已落地，补充修复异步回调早于解锁和 Ticker 启停竞争。性能数据与验证范围见报告，未发布。
+
+[09-24 Nest 常规调度收尾](../feature/REFACTOR-2026-09-24-nest-and-immediate-sync.md#9-nest-常规调度收尾n2a)：single/multi/multiGroup 共用锁与执行收尾，保留顺序/缺失实体/分组语义；修复广播释放 panic 的引用泄漏与中断。Sync 保持现有契约，不作为本批重构中心。
+
+[09-24 Nest 后续优化](../feature/REFACTOR-2026-09-24-nest-and-immediate-sync.md#8-后续实施n1-与-cast-事务边界)：N1 同包职责整理已落地，主调度 1103 → 518 行；修复未接 Sync 时动态 Cast 的回滚/解锁/提交水位问题，相关 race 与生成工程通过。当时 N2～N4 未整体实施；最新完成状态见上方收尾验收，未发布。
+
+[09-24 Entity Sync 双模式正式接入](../feature/IMPLEMENTATION-2026-09-24-sync-modes.md)：已实施，周期模式保持默认，变化触发模式锁内冻结、解锁/确认后发送、20Hz 兜底；正式 Nest / Kit / codegen / Interest 接入，相关 race 与生成最小工程验证通过，未发布。
+
+[09-24 Nest 优化与即时状态同步方案](../feature/REFACTOR-2026-09-24-nest-and-immediate-sync.md)：保留首次审查与两个锁/提交问题的证据；双模式正式接入、N1 整理及 Cast 修复的后续状态见上方记录。
+
+[09-24 Sync 六项实施](../feature/REFACTOR-2026-09-24-sync-six-items.md)：完整实体包组帧、profile 装配校验、快照预算、临时内存与 AOI 复用、队列治理和观测；详见实施记录中的验证与限制。
+
+[09-24 Sync 剩余优化评估](SYNC-REMAINING-2026-09-24.md)：基于 A～E 完成后的代码重新采样；优先字节拆帧、profile 装配校验和全量突发控制，再考虑分配、AOI 查询与队列治理。本轮仅分析，未修改运行代码。
+
+[09-23 Sync 后续优化实施](../feature/REFACTOR-2026-09-23-sync-next-steps.md)：A～E 已落地；AOI/Flush 减分配、会话引用按需复制、观测和异步负载、[字段视图与优先级](../feature/SYNC-PROFILES.md)。20Hz/1%、5% 同模型分配下降约 58%、47%；回归通过，未发布。
+
+[09-23 目标规模 AOI 验证](../feature/SYNC-AOI-1000-10000-2026-09-23.md)：1000 玩家、10000 实体、每人约 50 可见，双进程；最新 20Hz/1%、5% 低变化率六轮数据校验通过，严格 50ms 最大延迟门禁仍未通过；用户认可当前容量。
+
+[09-23 Sync 业务负载验证](../feature/SYNC-BUSINESS-LOAD-2026-09-23.md)：生成 demo 的真实事务、AOI、BSON 与回环 TCP；单独记录容量配置边界及测量范围。
+
+[09-23 Sync 收尾：本轮范围已完成并验收，未发布](../feature/SYNC-COMPLETION-2026-09-23.md)：R1～R3、RR-01～07、M-19 多来源订阅、M-20 共享组件编码；[性能基准与取舍](../feature/SYNC-BENCHMARKS.md)。真实环境验证及网关多播单独跟进。
+
+[09-23 Sync 优化审查与重构方案](../feature/REFACTOR-2026-09-23-sync-readability.md)：基线 `967bc69`，核对八包结构与导入，深入实体同步交付链路；确认并修复退订残留、部分交付重试、满容量替换三项问题，同包职责整理、Go API 更新与命名文档对齐三批已实施，验收见记录。
+
 [09-20 修复验收、实时同步与所有权续审](REVIEW-2026-09-20.md)：Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`；六项新修复原触发通过，两个 Wanted 完成分流，新增[4个P1、1个P2](../bug/REVIEW-2026-09-20.md)，附[复现](../bug/REPRO-2026-09-20.md)和[增量传输、租约 fencing 与持久化类型边界](IMPLEMENTATION-DELTA-TRANSPORT-AND-LEASE-FENCING.md)。
 
 [09-19 第二轮：实体加载、Nest 分派与 Activity 交接](REVIEW-2026-09-19-02.md)：Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`；新确认[3个P1、1个P2](../bug/REVIEW-2026-09-19-02.md)，附[复现与证据](../bug/REPRO-2026-09-19-02.md)及[实体加载与活动交接机制](IMPLEMENTATION-ENTITY-LOAD-AND-ACTIVITY-HANDOFF.md)。

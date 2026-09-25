@@ -504,6 +504,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "Guild", Group: "game", Handler: "player"}, why: "the guild endpoints: found, join, read"},
 		{write: "protocol/def/guild.go", why: "three messages behind one response shape, carrying which process served the call"},
 		{write: "game/controllers/player/guild.go", why: "read against the dungeon endpoints: the remote entity changes nothing at this layer"},
+		{write: "game/controllers/player/guild_ids.go", why: "persistent guild IDs must survive process restarts"},
+		{write: "game/controllers/player/guild_ids_test.go", why: "same-sid restarts and concurrent creators must not reuse guild IDs"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},

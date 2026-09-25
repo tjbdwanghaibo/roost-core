@@ -295,9 +295,7 @@ func (m *Manager) ownershipContext(parent context.Context) (context.Context, con
 	if parent == nil {
 		parent = context.Background()
 	}
-	if _, ok := parent.Deadline(); ok {
-		return parent, func() {}
-	}
+	// WithTimeout 自动采用更早的截止时间；调用者的长 deadline 不应放大框架预算。
 	return context.WithTimeout(parent, m.cfg.OpTimeout)
 }
 

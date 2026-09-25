@@ -10,7 +10,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	redis "github.com/tjbdwanghaibo/roost-core/redis"
 )
@@ -186,9 +185,8 @@ func (m *Manager) getOrCreate(id int64, category entity.EntityCategory, kind ent
 	}
 	created := newRemoteEntityWrapper(meta.FullID, meta.Category, meta.Kind, m.lockFactory.NewVersionedLock(meta.FullID, opts), m)
 	created.retain()
-	if err := created.refreshMarked(fctx.BaseContext()); err != nil {
-		slog.Warn("remote_entity: initial marker refresh failed; shared path remains fail-closed", "id", meta.FullID, "err", err)
-	}
+	// 构造只建立本地协调状态；权威读取留给写入/所有权入口，使用本次调用的预算。
+	// markerUnknown 让首次准入必须查询 Redis，不能把未读取误当成本地所有权。
 
 	m.mu.Lock()
 	m.wrappers[meta.FullID] = created

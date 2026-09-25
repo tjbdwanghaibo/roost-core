@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"runtime"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +54,7 @@ func BenchmarkProjectionSegmentPlanner(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				if _, err := planProjectionSegments(records, fences, 1024, 4<<20); err != nil {
+				if _, err := planProjectionSegments(records, fences, 1024, 4<<20, false); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -212,44 +214,103 @@ func BenchmarkProjectorAdmissionMatrix(b *testing.B) {
 				defer projector.Close(context.Background())
 				set, _ := bson.Marshal(bson.M{"level": 7})
 				var sequence atomic.Uint64
-				previousProcs := runtime.GOMAXPROCS(writers)
-				defer runtime.GOMAXPROCS(previousProcs)
-				b.SetParallelism(1)
+				// writers 与 -cpu 独立；每个 writer 最多一笔等待中的 durable ticket。
+				latencies := make([]int64, b.N)
+				var workers sync.WaitGroup
 				b.ReportAllocs()
 				b.ResetTimer()
-				b.RunParallel(func(iterator *testing.PB) {
-					for iterator.Next() {
-						value := sequence.Add(1)
-						var id coredata.TransactionID
-						for index := 0; index < 8; index++ {
-							id[15-index] = byte(value >> (index * 8))
-						}
-						record := coredata.CommitRecord{ID: id, Durability: durability, Mutations: []coredata.Mutation{{
-							Key:  coredata.DocumentKey{Database: "game", Resource: "players", ID: int64(value)},
-							Kind: coredata.MutationPatch, ExpectedVersion: 7, NextVersion: 8, Schema: 1,
-							Patch: coredata.FieldPatch{SetBSON: set},
-						}}}
-						if durability == corenest.DurabilityPipelined {
-							ticket, err := projector.Enqueue(context.Background(), record)
-							if err == nil {
-								<-ticket.Done()
-								err = ticket.Err()
+				for range writers {
+					workers.Go(func() {
+						for {
+							value := sequence.Add(1)
+							if value > uint64(b.N) {
+								return
 							}
-							projector.TransactionReleased(id)
-							if err != nil {
+							started := time.Now()
+							var id coredata.TransactionID
+							for index := 0; index < 8; index++ {
+								id[15-index] = byte(value >> (index * 8))
+							}
+							record := coredata.CommitRecord{ID: id, Durability: durability, Mutations: []coredata.Mutation{{
+								Key:  coredata.DocumentKey{Database: "game", Resource: "players", ID: int64(value)},
+								Kind: coredata.MutationPatch, ExpectedVersion: 7, NextVersion: 8, Schema: 1,
+								Patch: coredata.FieldPatch{SetBSON: set},
+							}}}
+							if durability == corenest.DurabilityPipelined {
+								ticket, err := projector.Enqueue(context.Background(), record)
+								if err == nil {
+									<-ticket.Done()
+									err = ticket.Err()
+								}
+								projector.TransactionReleased(id)
+								if err != nil {
+									b.Error(err)
+									return
+								}
+								latencies[value-1] = time.Since(started).Nanoseconds()
+								continue
+							}
+							if err := projector.Commit(context.Background(), record); err != nil {
 								b.Error(err)
 								return
 							}
-							continue
+							projector.TransactionReleased(id)
+							latencies[value-1] = time.Since(started).Nanoseconds()
 						}
-						if err := projector.Commit(context.Background(), record); err != nil {
-							b.Error(err)
-							return
-						}
-						projector.TransactionReleased(id)
-					}
-				})
+					})
+				}
+				workers.Wait()
+				b.StopTimer()
+				if err := projector.Flush(context.Background()); err != nil {
+					b.Fatal(err)
+				}
+				if b.N > 0 {
+					slices.Sort(latencies)
+					b.ReportMetric(float64(latencies[(b.N-1)*95/100]), "p95-admit-ns")
+					b.ReportMetric(float64(latencies[(b.N-1)*99/100]), "p99-admit-ns")
+				}
 			})
 		}
+	}
+}
+
+// 空 WAL 与首条事务仍在 Entity 锁内，是后台轮询最常见的无进展路径。
+func BenchmarkProjectorReplayIdleOrHeld(b *testing.B) {
+	for _, held := range []bool{false, true} {
+		name := "idle"
+		if held {
+			name = "held"
+		}
+		b.Run(name, func(b *testing.B) {
+			options := nestwal.DefaultOptions(b.TempDir())
+			options.WriterVersion = nestwal.WriterVersionV2
+			wal, err := nestwal.Open(options)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer wal.Close(context.Background())
+			p, err := NewProjector(wal, &benchmarkProjectionStore{}, ProjectorOptions{IdlePoll: time.Hour})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := p.Close(context.Background()); err != nil {
+				b.Fatal(err)
+			}
+			if held {
+				record := benchmarkReplayRecords(b, 1, 0)[0]
+				p.admit(record.ID)
+				if _, err := wal.Append(context.Background(), record); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				count, err := p.ReplayPass(context.Background())
+				if count != 0 || (held && !errors.Is(err, errProjectorTransactionHeld)) || (!held && err != nil) {
+					b.Fatalf("count=%d err=%v", count, err)
+				}
+			}
+		})
 	}
 }

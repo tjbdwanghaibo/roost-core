@@ -80,6 +80,17 @@ func (s *MongoCommitter) CommitRemoteBatch(ctx context.Context, commits []entity
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// DataEngine 已原子落库后会经发布路径再次调用这里。持久回执已存在时，
+	// majority 读取并校验 digest 即可重放，不再为只读回执开一次 Mongo 事务。
+	txID, digest, err := validateRemoteCommitBatch(commits)
+	if err != nil {
+		return nil, err
+	}
+	if existing, found, err := s.loadTransaction(ctx, txID); err != nil {
+		return nil, err
+	} else if found {
+		return committedRemoteReceipts(txID, digest, existing)
+	}
 	session, err := s.mongo.StartSession(ctx)
 	if err != nil {
 		return nil, err
@@ -93,18 +104,8 @@ func (s *MongoCommitter) CommitRemoteBatch(ctx context.Context, commits []entity
 	})
 	if err != nil {
 		if errors.Is(err, fmongo.ErrVersionConflict) || errors.Is(err, fmongo.ErrDuplicateKey) {
-			txID, digest, validationErr := validateRemoteCommitBatch(commits)
-			if validationErr != nil {
-				return nil, validationErr
-			}
 			if existing, ok, loadErr := s.loadTransaction(ctx, txID); loadErr == nil && ok {
-				if !bytes.Equal(existing.Digest, digest) {
-					return nil, fmt.Errorf("%w: transaction id reused with different commits", entity.ErrRemoteRejected)
-				}
-				status := remoteStatusFromMongoTransaction(txID, existing)
-				if status.State == entity.RemoteCommitApplied || status.State == entity.RemoteCommitPublished || status.State == entity.RemoteCommitCommitted {
-					return append([]entity.RemoteCommitReceipt(nil), status.Receipts...), nil
-				}
+				return committedRemoteReceipts(txID, digest, existing)
 			}
 			return nil, entity.ErrRemoteVersionConflict
 		}
@@ -126,25 +127,17 @@ func (s *MongoCommitter) ApplyRemoteCommitsInTransaction(ctx context.Context, co
 	var existing mongoRemoteTransaction
 	findErr := s.controlDB().Collection(remoteTxCollection).FindOne(ctx, bson.M{"_id": txID.String()}, &existing)
 	if findErr == nil {
-		if !bytes.Equal(existing.Digest, digest) {
-			return nil, fmt.Errorf("%w: transaction id reused with different commits", entity.ErrRemoteRejected)
-		}
-		status := remoteStatusFromMongoTransaction(txID, existing)
-		if status.State == entity.RemoteCommitApplied || status.State == entity.RemoteCommitPublished || status.State == entity.RemoteCommitCommitted {
-			return append([]entity.RemoteCommitReceipt(nil), status.Receipts...), nil
-		}
-		return nil, fmt.Errorf("%w: %s", entity.ErrRemoteRejected, status.Cause)
+		return committedRemoteReceipts(txID, digest, existing)
 	}
 	if !errors.Is(findErr, fmongo.ErrNotFound) {
 		return nil, findErr
 	}
-	receipts := make([]entity.RemoteCommitReceipt, 0, len(commits))
-	for i := range commits {
-		receipt, err := s.applyCommit(ctx, commits[i])
-		if err != nil {
-			return nil, err
-		}
-		receipts = append(receipts, receipt)
+	receipts, err := s.applyCommitMetadata(ctx, commits)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.writeCommitPayloads(ctx, commits); err != nil {
+		return nil, err
 	}
 	doc := mongoRemoteTransaction{ID: txID.String(), State: uint8(entity.RemoteCommitApplied), Digest: append([]byte(nil), digest...), CreatedAt: time.Now().UTC()}
 	for i := range commits {
@@ -157,6 +150,20 @@ func (s *MongoCommitter) ApplyRemoteCommitsInTransaction(ctx context.Context, co
 		return nil, err
 	}
 	return receipts, nil
+}
+
+// 已提交与新许可并不冲突：返回原回执是幂等重放，不是一次新的写入。
+func committedRemoteReceipts(txID entity.RemoteTransactionID, digest []byte, doc mongoRemoteTransaction) ([]entity.RemoteCommitReceipt, error) {
+	if !bytes.Equal(doc.Digest, digest) {
+		return nil, fmt.Errorf("%w: transaction id reused with different commits", entity.ErrRemoteRejected)
+	}
+	status := remoteStatusFromMongoTransaction(txID, doc)
+	switch status.State {
+	case entity.RemoteCommitApplied, entity.RemoteCommitPublished, entity.RemoteCommitCommitted:
+		return append([]entity.RemoteCommitReceipt(nil), status.Receipts...), nil
+	default:
+		return nil, fmt.Errorf("%w: %s", entity.ErrRemoteRejected, status.Cause)
+	}
 }
 
 func validateRemoteCommitBatch(commits []entity.RemoteCommit) (entity.RemoteTransactionID, []byte, error) {
@@ -188,52 +195,6 @@ func validateRemoteCommitBatch(commits []entity.RemoteCommit) (entity.RemoteTran
 	return txID, digest, err
 }
 
-func (s *MongoCommitter) applyCommit(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
-	meta := s.controlDB().Collection(remoteMetaCollection)
-	filter := bson.M{"_id": commit.EntityID, "_ver": commit.BaseVersion, "$or": bson.A{
-		bson.M{"_marker_epoch": bson.M{"$lt": commit.MarkerEpoch}},
-		bson.M{"_marker_epoch": commit.MarkerEpoch, "_route_epoch": bson.M{"$lt": commit.RouteEpoch}},
-		bson.M{"_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": bson.M{"$lte": commit.LockFence}},
-	}}
-	update := bson.M{"$set": bson.M{"_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "_deleted": commit.Delete}}
-	result, err := meta.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return entity.RemoteCommitReceipt{}, err
-	}
-	if result == nil || result.MatchedCount == 0 {
-		if commit.BaseVersion != 0 {
-			return entity.RemoteCommitReceipt{}, fmongo.ErrVersionConflict
-		}
-		_, err = meta.InsertOne(ctx, bson.M{"_id": commit.EntityID, "_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "_deleted": commit.Delete})
-		if err != nil {
-			return entity.RemoteCommitReceipt{}, err
-		}
-	}
-	for _, mutation := range commit.Mutations {
-		doc := bson.M{"_id": mutation.ID, "_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "data": append([]byte(nil), mutation.Data...)}
-		if _, err := s.dataDB(mutation.Database, mutation.DatabaseScope).Collection(mutation.Collection).BulkWrite(ctx, []fmongo.WriteModel{fmongo.NewReplaceOneModel(bson.M{"_id": mutation.ID}, doc, true)}); err != nil {
-			return entity.RemoteCommitReceipt{}, err
-		}
-	}
-	for _, item := range commit.Deletes {
-		if _, err := s.dataDB(item.Database, item.DatabaseScope).Collection(item.Collection).DeleteOne(ctx, bson.M{"_id": item.ID}); err != nil {
-			return entity.RemoteCommitReceipt{}, err
-		}
-	}
-	for _, snapshot := range commit.Snapshots {
-		doc := bson.M{"_id": remoteSnapshotStorageKey(snapshot.Key), "key": snapshot.Key, "state_version": snapshot.StateVersion, "base_version": snapshot.BaseVersion, "marker_epoch": snapshot.MarkerEpoch, "route_epoch": snapshot.RouteEpoch, "schema": snapshot.Schema, "codec": snapshot.Codec, "checksum": snapshot.Checksum, "full": snapshot.Full, "data": append([]byte(nil), snapshot.Data...)}
-		if _, err := s.controlDB().Collection(remoteSnapshotCollection).BulkWrite(ctx, []fmongo.WriteModel{fmongo.NewReplaceOneModel(bson.M{"_id": remoteSnapshotStorageKey(snapshot.Key)}, doc, true)}); err != nil {
-			return entity.RemoteCommitReceipt{}, err
-		}
-	}
-	for _, key := range commit.Invalidations {
-		if _, err := s.controlDB().Collection(remoteSnapshotCollection).DeleteOne(ctx, bson.M{"_id": remoteSnapshotStorageKey(key)}); err != nil {
-			return entity.RemoteCommitReceipt{}, err
-		}
-	}
-	return entity.RemoteCommitReceipt{TransactionID: commit.TransactionID, EntityID: commit.EntityID, StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch, CommittedAt: time.Now().UnixNano()}, nil
-}
-
 func (s *MongoCommitter) CommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
 	if s == nil || s.mongo == nil || id.IsZero() {
 		return entity.RemoteCommitStatus{}, entity.ErrRemoteRejected
@@ -252,6 +213,14 @@ func (s *MongoCommitter) EnsureRemoteStorage(ctx context.Context) error {
 	if s == nil || s.mongo == nil || s.database == "" {
 		return entity.ErrRemoteWriteCapabilityDisabled
 	}
+	count, err := s.controlDB().Collection(remoteMetaCollection).CountDocuments(ctx, bson.M{"_authority": bson.M{"$ne": true}})
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return ErrRemoteAuthorityInvalid
+	}
+
 	ttl := s.transactionTTL
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
@@ -371,15 +340,15 @@ func remoteTransactionTTLSeconds(ttl time.Duration) int32 {
 
 func (s *MongoCommitter) LoadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, _ entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 	var doc struct {
-		StateVersion uint64 `bson:"state_version"`
-		BaseVersion  uint64 `bson:"base_version"`
-		MarkerEpoch  uint64 `bson:"marker_epoch"`
-		RouteEpoch   uint64 `bson:"route_epoch"`
-		Schema       uint32 `bson:"schema"`
-		Codec        uint16 `bson:"codec"`
+		StateVersion uint64                `bson:"state_version"`
+		BaseVersion  uint64                `bson:"base_version"`
+		MarkerEpoch  uint64                `bson:"marker_epoch"`
+		RouteEpoch   uint64                `bson:"route_epoch"`
+		Schema       uint32                `bson:"schema"`
+		Codec        uint16                `bson:"codec"`
 		Checksum     entity.RemoteChecksum `bson:"checksum"`
-		Full         bool   `bson:"full"`
-		Data         []byte `bson:"data"`
+		Full         bool                  `bson:"full"`
+		Data         []byte                `bson:"data"`
 	}
 	err := s.controlDB().Collection(remoteSnapshotCollection).FindOne(ctx, bson.M{"_id": remoteSnapshotStorageKey(key), "state_version": bson.M{"$gte": minVersion}}, &doc)
 	if errors.Is(err, fmongo.ErrNotFound) {
@@ -422,3 +391,38 @@ var _ entity.IRemoteSnapshotLoader = (*MongoCommitter)(nil)
 var _ entity.IRemoteCommitOutbox = (*MongoCommitter)(nil)
 var _ entity.IRemoteStorageInitializer = (*MongoCommitter)(nil)
 var _ AtomicCommitStore = (*MongoCommitter)(nil)
+
+// 准入必须先创建所有权并取得许可；在同一 Mongo 事务内一次校验多个实体。
+// MatchedCount 必须等于实体数；任一许可/版本失效都会使整个事务回滚。
+func (s *MongoCommitter) applyCommitMetadata(ctx context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	receipts := make([]entity.RemoteCommitReceipt, 0, len(commits))
+
+	models := make([]fmongo.WriteModel, 0, len(commits))
+	for _, commit := range commits {
+		filter := authorityCommitFilter(commit)
+		filter["_id"], filter["_ver"] = commit.EntityID, commit.BaseVersion
+		models = append(models, fmongo.NewUpdateOneModel(filter, remoteMetadataUpdate(commit), false))
+		receipts = append(receipts, remoteCommitReceipt(commit))
+	}
+	result, err := s.controlDB().Collection(remoteMetaCollection).BulkWrite(ctx, models)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.MatchedCount != int64(len(commits)) {
+		return nil, fmongo.ErrVersionConflict
+	}
+	return receipts, nil
+}
+func authorityCommitFilter(commit entity.RemoteCommit) bson.M {
+	return bson.M{"_authority": true, "_owner_epoch": commit.MarkerEpoch, "_owner_route": commit.RouteEpoch, "_grant_fence": commit.LockFence, "_grant_token": bson.M{"$ne": ""}}
+}
+func remoteMetadataUpdate(commit entity.RemoteCommit) bson.M {
+	return bson.M{"$set": bson.M{"_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "_deleted": commit.Delete}}
+}
+func remoteCommitReceipt(commit entity.RemoteCommit) entity.RemoteCommitReceipt {
+	return entity.RemoteCommitReceipt{TransactionID: commit.TransactionID, EntityID: commit.EntityID, StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch, CommittedAt: time.Now().UnixNano()}
+}
+
+// SupportsConcurrentRemoteCommits 允许不同 Entity 的独立 Mongo 事务并行；
+// 相同 Entity 仍必须按版本顺序提交，事务身份与最新许可校验保持不变。
+func (*MongoCommitter) SupportsConcurrentRemoteCommits() bool { return true }

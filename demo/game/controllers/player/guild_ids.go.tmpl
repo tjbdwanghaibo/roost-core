@@ -1,0 +1,34 @@
+package player
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// nextGuildID 在创建公会前持久化保留 ID。Mongo 的 majority+journal 写确认
+// 保证同 SID 重启和多进程并发不会重新发号；创建失败允许留下空号，不能回收。
+// 使用 dynamic 半区，与历史 runtimeid 的 static 半区隔离；完整 EntityID
+// 还包含 kind，因此公会和玩家的 unique 数值相同也不会产生身份冲突。
+func (controller *Controller) nextGuildID(ctx context.Context) (int64, error) {
+	if controller == nil || controller.guildIDs == nil {
+		return 0, fmt.Errorf("guild id allocator: persistent counter is unavailable")
+	}
+	var counter struct {
+		Next int64 `bson:"next"`
+	}
+	err := controller.guildIDs.FindOneAndUpdate(ctx,
+		bson.M{"_id": "guild", "next": bson.M{"$lt": int64(entity.StaticUniqueIDBase - 1)}},
+		bson.M{"$inc": bson.M{"next": int64(1)}}, &counter,
+		fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
+	if err != nil {
+		return 0, fmt.Errorf("guild id allocator: reserve: %w", err)
+	}
+	if counter.Next <= 0 || uint64(counter.Next) >= entity.StaticUniqueIDBase {
+		return 0, fmt.Errorf("guild id allocator: counter outside dynamic range: %d", counter.Next)
+	}
+	return counter.Next, nil
+}

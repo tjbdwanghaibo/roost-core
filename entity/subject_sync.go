@@ -133,7 +133,7 @@ type SubjectSyncCreateParam struct {
 // state contains content only; subscriber membership and delivery live in the
 // entitysync coordinator.
 type EntitySyncCreateParam struct {
-	Enabled bool
+	Enabled  bool
 	EntityID int64
 	// Namespace travels on the wire with every update of this subject and is
 	// the client's routing key ("player", "monster", …). It is the only
@@ -202,9 +202,13 @@ type SubjectSyncState struct {
 	packer          SubjectSyncPacker
 	lockEntity      subjectSyncLockFunc
 	dirtyNotifier   SubjectSyncDirtyNotifier
+	mutation        *syncMutationEntry
+	commitGate      *syncCommitGate
+	frozen          *frozenSubjectSync
 	nextToken       uint64
 	inflightToken   uint64
 	inflightSince   time.Time
+	inflightRelease func()
 	lastError       error
 	// lastCommitLSN mirrors EntityBase.lastCommitLSN so the subscription
 	// coordinator can gate distribution on the durable watermark without a
@@ -341,6 +345,11 @@ func (s *SubjectSyncState) MarkDirty(mask uint64) {
 	}
 	s.mu.Lock()
 	var notifier SubjectSyncDirtyNotifier
+	if s.enabled && s.mutation != nil {
+		s.mutation.mask |= mask
+		s.mu.Unlock()
+		return
+	}
 	if s.enabled {
 		s.dirtyMask |= mask
 		s.dirtyGeneration++
@@ -361,6 +370,12 @@ func (s *SubjectSyncState) MarkFullDirty(reason uint32) {
 	}
 	s.mu.Lock()
 	var notifier SubjectSyncDirtyNotifier
+	if s.enabled && s.mutation != nil {
+		s.mutation.full = true
+		s.mutation.reason = reason
+		s.mu.Unlock()
+		return
+	}
 	if s.enabled {
 		s.fullDirty = true
 		s.fullReason = reason
@@ -418,6 +433,19 @@ func (s *SubjectSyncState) PrepareTick(deltaProfiles, snapshotProfiles []SyncPro
 	}
 	deltaProfiles = normalizeSyncProfiles(deltaProfiles)
 	snapshotProfiles = uniqueSyncProfiles(snapshotProfiles)
+	return s.prepareProfiles(deltaProfiles, snapshotProfiles)
+}
+
+// PrepareViews 捕获明确指定的视图：空列表表示无人需要该类内容。
+// 即使没有接收者，也允许提交脏版本；与兼容的 PrepareTick 的默认 delta 视图区别明确。
+func (s *SubjectSyncState) PrepareViews(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
+	if s == nil {
+		return nil, ErrSubjectSyncClosed
+	}
+	return s.prepareProfiles(NormalizeSyncProfiles(deltaProfiles), NormalizeSyncProfiles(snapshotProfiles))
+}
+
+func (s *SubjectSyncState) prepareProfiles(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	var prepared *PreparedSubjectSync
 	err := s.withEntityLock(func() error {
 		s.prepareMu.Lock()
@@ -431,6 +459,10 @@ func (s *SubjectSyncState) PrepareTick(deltaProfiles, snapshotProfiles []SyncPro
 
 func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	s.mu.Lock()
+	if !s.commitGate.ready() {
+		s.mu.Unlock()
+		return nil, ErrSyncCommitPending
+	}
 	if !s.enabled {
 		s.mu.Unlock()
 		return nil, ErrSubjectSyncClosed
@@ -445,6 +477,10 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 			"token", s.inflightToken, "age", time.Since(s.inflightSince))
 		s.inflightToken = 0
 		s.inflightSince = time.Time{}
+		if s.inflightRelease != nil {
+			s.inflightRelease()
+			s.inflightRelease = nil
+		}
 	}
 	dirty := s.dirtyMask != 0 || s.fullDirty
 	if !dirty && len(snapshotProfiles) == 0 {
@@ -477,7 +513,18 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 	}
 	generation := s.dirtyGeneration
 	commitLSN := s.lastCommitLSN.Load() // under the entity lock: consistent with the content
+	frozen := s.frozen
+	s.frozen = nil
 	s.mu.Unlock()
+	if frozen != nil {
+		if item := frozen.prepare(s, token, generation, baseVersion, version, deltaProfiles, snapshotProfiles); item != nil {
+			s.mu.Lock()
+			s.inflightRelease = frozen.release
+			s.mu.Unlock()
+			return item, nil
+		}
+		frozen.release()
+	}
 
 	var deltas []SubjectSyncUpdate
 	if dirty {
@@ -504,7 +551,20 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 	}
 	snapshots := make([]SubjectSyncUpdate, 0, len(snapshotProfiles))
 	for _, profile := range snapshotProfiles {
-		payload, err := packer.PackSubjectSnapshot(profile)
+		var payload FrozenSyncPayload
+		var err error
+		reused := false
+		if full {
+			for _, update := range deltas {
+				if update.Profile == profile {
+					payload, reused = update.Payload, true
+					break
+				}
+			}
+		}
+		if !reused {
+			payload, err = packer.PackSubjectSnapshot(profile)
+		}
 		if err != nil {
 			s.failPrepare(token, err)
 			return nil, fmt.Errorf("entity: snapshot subject %d profile %q: %w", subjectID, profile.Key, err)
@@ -518,7 +578,7 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 
 	return &PreparedSubjectSync{
 		state: s, token: token, generation: generation, baseVersion: baseVersion,
-		version: version, updates: deltas, snapshots: snapshots,
+		version: version, commitLSN: commitLSN, updates: deltas, snapshots: snapshots,
 	}, nil
 }
 
@@ -544,6 +604,10 @@ func (s *SubjectSyncState) failPrepare(token uint64, err error) {
 	if s.inflightToken == token {
 		s.inflightToken = 0
 		s.inflightSince = time.Time{}
+		if s.inflightRelease != nil {
+			s.inflightRelease()
+			s.inflightRelease = nil
+		}
 	}
 	s.lastError = err
 	s.mu.Unlock()
@@ -565,6 +629,14 @@ func (s *SubjectSyncState) Close() {
 	s.prepareMu.Lock()
 	s.mu.Lock()
 	s.enabled = false
+	if s.inflightRelease != nil {
+		s.inflightRelease()
+		s.inflightRelease = nil
+	}
+	if s.frozen != nil {
+		s.frozen.release()
+		s.frozen = nil
+	}
 	s.dirtyMask = 0
 	s.fullDirty = false
 	s.fullReason = SyncFullReasonNone
@@ -575,6 +647,7 @@ func (s *SubjectSyncState) Close() {
 }
 
 type PreparedSubjectSync struct {
+	commitLSN   uint64
 	state       *SubjectSyncState
 	token       uint64
 	generation  uint64
@@ -583,6 +656,14 @@ type PreparedSubjectSync struct {
 	updates     []SubjectSyncUpdate // deltas (or full-dirty snapshots) for the subscribers who are up to date
 	snapshots   []SubjectSyncUpdate // full snapshots for the subscribers who have nothing yet
 	finished    atomic.Uint32
+}
+
+// CommitLSN 对应本次内容捕获，包括没有接收者、没有 payload 的捕获。
+func (p *PreparedSubjectSync) CommitLSN() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.commitLSN
 }
 
 func (p *PreparedSubjectSync) Version() uint64 {
@@ -728,6 +809,10 @@ func (b *PreparedSubjectSyncBatch) Commit() error {
 		}
 		state.inflightToken = 0
 		state.inflightSince = time.Time{}
+		if state.inflightRelease != nil {
+			state.inflightRelease()
+			state.inflightRelease = nil
+		}
 		state.lastError = nil
 		item.finished.Store(preparedSubjectSyncFinished)
 	}
@@ -762,6 +847,10 @@ func (b *PreparedSubjectSyncBatch) abortLocked(cause error) {
 		if state.inflightToken == item.token {
 			state.inflightToken = 0
 			state.inflightSince = time.Time{}
+			if state.inflightRelease != nil {
+				state.inflightRelease()
+				state.inflightRelease = nil
+			}
 			state.lastError = cause
 		}
 		item.finished.Store(preparedSubjectSyncFinished)
@@ -779,24 +868,7 @@ func uniqueSyncProfiles(profiles []SyncProfile) []SyncProfile {
 
 func normalizeSyncProfiles(profiles []SyncProfile) []SyncProfile {
 	if len(profiles) == 0 {
-		profiles = []SyncProfile{{Key: "default"}}
+		return []SyncProfile{{Key: "default"}}
 	}
-	unique := make(map[SyncProfile]struct{}, len(profiles))
-	for _, profile := range profiles {
-		unique[profile.Normalize()] = struct{}{}
-	}
-	out := make([]SyncProfile, 0, len(unique))
-	for profile := range unique {
-		out = append(out, profile)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Key != out[j].Key {
-			return out[i].Key < out[j].Key
-		}
-		if out[i].LOD != out[j].LOD {
-			return out[i].LOD < out[j].LOD
-		}
-		return out[i].SchemaVersion < out[j].SchemaVersion
-	})
-	return out
+	return NormalizeSyncProfiles(profiles)
 }

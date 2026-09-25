@@ -9,12 +9,12 @@ import (
 
 // WireVersion is the subject-update encoding version. It changed when ARCH-10
 // made frames per session: the outer room header (room frame number, room
-// session sequence) is gone, a frame is a plain statesync frame whose
+// session sequence) is gone, a frame is a plain frame.Frame whose
 // Epoch/Tick are the session's own clock, and RoomID carries nothing but the
 // stream constant below.
 const WireVersion uint16 = 2
 
-// wireStream is what goes into SnapshotMeta.RoomID. statesync requires it to
+// wireStream is what goes into SnapshotMeta.RoomID. frame requires it to
 // be non-zero and equal between a delta and its base; a session has exactly
 // one stream, so a constant does.
 const wireStream uint64 = 1
@@ -26,7 +26,7 @@ const (
 )
 
 // EncodeSubjectUpdate serializes one subject update as the data of one
-// statesync component. Namespace and profile key travel with it so a client
+// frame component. Namespace and profile key travel with it so a client
 // can route on them without any out-of-band table.
 func EncodeSubjectUpdate(update entity.SubjectSyncUpdate, maxBytes int) ([]byte, error) {
 	profile := update.Profile.Normalize()
@@ -104,8 +104,46 @@ func DecodeSubjectUpdate(data []byte, maxBytes int) (entity.SubjectSyncUpdate, e
 	return update, nil
 }
 
-// DecodeFrame decodes one frame as pushed to a session: a statesync frame
+// DecodeFrame decodes one frame as pushed to a session: a frame.Frame
 // whose components are subject updates. Epoch/Tick are the session's clock.
 func DecodeFrame(data []byte, limits frame.Limits) (frame.Frame, error) {
 	return frame.Decode(data, limits)
+}
+
+// capturedUpdate 把不可变捕获和本 tick 的编码缓存放在一起。
+// 同 subject/profile 的多个会话引用同一项，full 和 delta 来自不同捕获列表。
+// Flush 串行编码且使用相同 Limits；无需锁，也不跨 tick 保存缓存。
+// frame.Encode 复制组件到独立帧，Transport 不会拿到缓存的底层数组。
+type capturedUpdate struct {
+	update  entity.SubjectSyncUpdate
+	encoded []byte
+	err     error
+	ready   bool
+}
+
+// 扩容不会使已分发的指针失效：旧数组由 frameEntry 持有，后续只追加新捕获。
+func captureUpdates(buffer *[]capturedUpdate, updates []entity.SubjectSyncUpdate) []capturedUpdate {
+	start := len(*buffer)
+	for _, update := range updates {
+		*buffer = append(*buffer, capturedUpdate{update: update})
+	}
+	return (*buffer)[start:]
+}
+
+func updateFor(updates []capturedUpdate, profile entity.SyncProfile) (*capturedUpdate, bool) {
+	profile = profile.Normalize()
+	for i := range updates {
+		if updates[i].update.Profile.Normalize() == profile {
+			return &updates[i], true
+		}
+	}
+	return nil, false
+}
+
+func (captured *capturedUpdate) encode(maxBytes int) ([]byte, error) {
+	if !captured.ready {
+		captured.encoded, captured.err = EncodeSubjectUpdate(captured.update, maxBytes)
+		captured.ready = true
+	}
+	return captured.encoded, captured.err
 }

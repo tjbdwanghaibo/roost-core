@@ -72,6 +72,12 @@ durability 非 `memory` 时必须配置 rollback。调用 `nest.Emit` 会自动�
 
 同一进程内的“暂缓到解锁后 replay”避免 projector 在事务仍持有 Entity 锁时抢占存储工作。若进程在第 7 步后、第 9 步前崩溃，新进程没有暂缓表，会直接从 WAL 恢复，符合 commit point 语义。
 
+### 动态 Cast 的事务边界
+
+handler 通过 `CastOne` / `CastMulti` 新取得的本地实体也参与当前事务的回滚与持久化准备，无需启用客户端 Sync。事务内调用 `ReleaseCast` 不会立即解锁；框架必须持锁完成回滚或成功准入，再统一释放。无事务、无正式 Sync 作用域时仍可提前释放。
+
+pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释放其锁。若业务必须先放锁再执行另一项操作，应拆成独立业务调用，不能依赖 `ReleaseCast` 在事务中途放锁。[修复与验证](docs/bugfix/RR-20260924-03.md)。
+
 ## 5. WAL 格式与恢复
 
 - 单 writer goroutine，调用方可并发 append；

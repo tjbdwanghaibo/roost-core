@@ -3,13 +3,13 @@ package nest
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/worker"
 )
@@ -33,9 +33,12 @@ const (
 )
 
 type pipelinedCompletion struct {
-	ticket   CommitTicket
-	entityID int64
-	complete func(error)
+	ticket      CommitTicket
+	entityID    int64
+	complete    func(error)
+	handler     string
+	stages      bool
+	submittedAt time.Time
 }
 
 type completionTask struct {
@@ -148,10 +151,17 @@ func (p *completionPump) run() {
 		// Tickets resolve in LSN order (prefix durability), so a FIFO wait
 		// adds at most one group-commit batch of latency for entries pushed
 		// slightly out of order across entities.
+		observeNestStage(entry.handler, "commit_queue", entry.submittedAt)
+		waitStart := startNestStage(entry.stages)
 		<-entry.ticket.Done()
+		observeNestStage(entry.handler, "durable_wait", waitStart)
 		err := entry.ticket.Err()
 		complete := entry.complete
-		task := &completionTask{run: func() { complete(err) }}
+		readyAt := startNestStage(entry.stages)
+		task := &completionTask{run: func() {
+			observeNestStage(entry.handler, "completion_queue", readyAt)
+			complete(err)
+		}}
 		if p.pool.Dispatch(entry.entityID, task) != nil {
 			// Pool rejected (saturated or stopping): run inline rather than
 			// drop — a completion is a durability promise that must be
@@ -162,7 +172,7 @@ func (p *completionPump) run() {
 			// Inside the same recovery boundary the worker gives it: this
 			// goroutine is the pump itself, and a panic that escaped here
 			// took the process down (RR-20260911-06, 09-12 实测).
-			goroutine.SafeFunc(func() { complete(err) })
+			goroutine.SafeFunc(task.run)
 		}
 	}
 }
@@ -189,35 +199,32 @@ func (p *completionPump) submit(entry pipelinedCompletion) bool {
 	}
 }
 
-// prepareCompletion captures everything the post-durability work needs — the
-// msg is pooled and recycled as soon as the dispatch returns, so only plain
-// values (the buffered reply channel, the handler result) may escape —
-// reserves this transaction's place in its entity's completion order, and
-// tries to hand the work to the pump.
-//
-// Returns (deferred, runInline):
-//
-//	deferred == true  the pump owns the work; tx ownership transferred, and
-//	                  the dispatch path must not reply or touch tx.
-//	deferred == false the pump is full or closed; the caller keeps the Phase 1
-//	                  in-worker wait and must call runInline once its ticket
-//	                  resolves. runInline honors the same completion order, so
-//	                  backpressure degrades latency — never ordering, never
-//	                  correctness. The caller must also `defer release()`:
-//	                  the chain link is already taken at this point, and if
-//	                  the path unwinds before runInline the entity's later
-//	                  completions would block forever.
-//
-// A deferred completion runs on a pool goroutine: no request context, no
-// guard scope, no entity locks held.
-func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEntity, tx *RollbackTx, ticket CommitTicket, handler string, ret any) (bool, func(error), func()) {
+// completionHandoff 显式记录回复所有权和解锁屏障；排序位置仍在锁内建立。
+// deferred=true 后 tx 归完成池；否则由当前 worker 执行 complete，并兜底释放排序位置。
+type completionHandoff struct {
+	deferred     bool
+	complete     func(error)
+	releaseOrder func()
+	unlocked     chan struct{}
+	releaseErr   error // 解锁屏障关闭前写入，完成方只能在屏障后读取。
+}
+
+// prepareCompletion 只复制完成所需值，不让池化 Msg 逃到完成 goroutine。
+func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEntity, tx *RollbackTx, ticket CommitTicket, handler string, ret any) *completionHandoff {
+	handoff := &completionHandoff{unlocked: make(chan struct{})}
 	retChan := msg.RetChan
 	waitStart := time.Now()
 	entityID := completionEntityID(es, msg)
 	// Linked while the entity lock is still held: chain order == commit order.
 	order := pump.link(entityID)
 	complete := func(ticketErr error) {
+		unlockStart := startNestStage(tx.stageMetrics)
+		<-handoff.unlocked
+		observeNestStage(handler, "completion_unlock", unlockStart)
+		orderStart := startNestStage(tx.stageMetrics)
 		order.await()
+		observeNestStage(handler, "completion_order", orderStart)
+		defer observeNestStage(handler, "completion", startNestStage(tx.stageMetrics))
 		defer order.release()
 		metrics.ObserveDuration("nest.pipelined.durable_wait", metrics.Labels{"handler": handler}, time.Since(waitStart))
 		if ticketErr != nil {
@@ -229,23 +236,21 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 				pump.fence(ticketErr)
 			}
 			metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "indeterminate"}, 1)
+			failure := errors.Join(ticketErr, handoff.releaseErr)
 			if retChan != nil {
-				retChan <- ticketErr
+				retChan <- failure
 			} else {
-				slog.Error("nest pipelined completion failed", "handler", handler, "err", ticketErr)
+				slog.Error("nest pipelined completion failed", "handler", handler, "err", failure)
 			}
 			return
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			// Durable, but a callback panicked. The reply must say exactly
-			// that: not the handler's return value (the after-commit work
-			// did not all happen) and not silence (the caller would wait
-			// out its own timeout for a transaction that succeeded).
+		if commitErr := errors.Join(tx.commit(true), handoff.releaseErr); commitErr != nil {
+			// WAL 已成功，释放 hook 或完成回调失败仍需报告；不回滚、不回复业务成功。
 			metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "completion_failed"}, 1)
 			if retChan != nil {
 				retChan <- commitErr
 			} else {
-				slog.Error("nest pipelined completion after-commit failed", "handler", handler, "err", commitErr)
+				slog.Error("nest pipelined completion failed", "handler", handler, "err", commitErr)
 			}
 			return
 		}
@@ -254,15 +259,18 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 			retChan <- ret
 		}
 	}
-	if pump.submit(pipelinedCompletion{ticket: ticket, entityID: entityID, complete: complete}) {
+	handoff.complete = complete
+	handoff.releaseOrder = order.release
+	if pump.submit(pipelinedCompletion{ticket: ticket, entityID: entityID, complete: complete, handler: handler, stages: tx.stageMetrics, submittedAt: startNestStage(tx.stageMetrics)}) {
 		msg.deferredCompletion = true
-		return true, nil, nil
+		handoff.deferred = true
+		return handoff
 	}
 	metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "degraded"}, 1)
 	// The caller replies through complete(), so the dispatch path must not
 	// also send RetChan.
 	msg.deferredCompletion = true
-	return false, complete, order.release
+	return handoff
 }
 
 // completionEntityID picks the chain/pool key: the first non-nil (primary)

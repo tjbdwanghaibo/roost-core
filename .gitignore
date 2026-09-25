@@ -6,3 +6,15 @@
 go.work
 go.work.sum
 gapmap-report.md
+
+# Local Sync benchmark samples, profiles and test binaries.
+/artifacts/perf/sync/
+
+# Local Nest benchmark samples, profiles and test binaries.
+/artifacts/perf/nest/
+
+# Local DataEngine pressure samples and profiles.
+/artifacts/perf/dataengine/
+
+# Local Remote capacity and soak samples.
+/artifacts/perf/remote/

@@ -12,15 +12,17 @@
 //
 // The sequencer implements optimistic frame locking: frames are cut on the
 // host's clock, never waiting for slow clients — a missing input is an empty
-// input, and late inputs are folded into the next uncut frame. The package
-// has no dependencies and no transport opinions; roost-kit's lockstep package
-// wires it to rooms and datagram/reliable lanes.
+// input, and late inputs are folded into the next uncut frame.
+//
+// Sequencer 只负责输入排序；同包 Room 负责会话、广播与追帧，并通过
+// sync/nettransport 接入传输。实时冗余广播走 datagram，历史追帧走可靠通道；
+// 游戏模拟和输入含义由业务决定，不在排序器中实现。
 package lockstep
 
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 )
 
 // Lockstep errors.
@@ -312,7 +314,7 @@ func (s *Sequencer) Advance() Frame {
 		for player := range inputs {
 			players = append(players, player)
 		}
-		sort.Slice(players, func(i, j int) bool { return players[i] < players[j] })
+		slices.Sort(players)
 		frame.Inputs = make([]Input, 0, len(players))
 		for _, player := range players {
 			frame.Inputs = append(frame.Inputs, Input{Player: player, Payload: inputs[player].payload})

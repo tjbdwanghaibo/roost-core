@@ -78,3 +78,10 @@ func (b *Backend) ApplyRemoteCommitsInTransaction(ctx context.Context, commits [
 
 var _ entity.IRemoteEntityBackend = (*Backend)(nil)
 var _ AtomicCommitStore = (*Backend)(nil)
+
+func (b *Backend) WriteAuthority() WriteAuthority {
+	if provider, ok := b.storage.(WriteAuthorityProvider); ok {
+		return provider.WriteAuthority()
+	}
+	return nil
+}

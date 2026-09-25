@@ -16,15 +16,17 @@ import (
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/spatial"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	svcchat "github.com/tjbdwanghaibo/roost-core/kit/service/chat"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
 	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/kit/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/kit/service/platform"
-	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
 	svcrank "github.com/tjbdwanghaibo/roost-core/kit/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-core/kit/service/session"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
 
 // Controller hosts the player protocol endpoints. It holds what an endpoint
@@ -56,11 +58,11 @@ type Controller struct {
 	// paymentSecret is the demo's stand-in for a payment provider's signing
 	// key. A real game process does not hold one (see the purchase endpoint).
 	paymentSecret string
-	// serverSID and ids are what this process needs to mint ids for things it
-	// creates: a guild, like a monster, gets an id with this process's sid in
-	// it, so two processes founding at the same moment cannot collide.
+	// Runtime IDs are only for ephemeral objects; persistent guild IDs come
+	// from Mongo so another incarnation of this sid cannot reuse them.
 	serverSID int32
 	ids       *runtimeid.Allocator
+	guildIDs  fmongo.ICollection
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -208,6 +210,10 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
+	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongoClient == nil {
+		return nil, fmt.Errorf("player controller: guild id allocator requires mongo")
+	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -221,6 +227,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
+		guildIDs: mongoClient.Database("game").Collection("_guild_id_sequence"),
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }

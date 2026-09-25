@@ -128,6 +128,8 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 	}
 
 	for migrationAttempt := 0; migrationAttempt < 3; migrationAttempt++ {
+		// 每轮重新取得完整聚合的一致性视图；迁移完成后也必须重读，
+		// 不能把迁移前的其他 DAO 与迁移后的版本拼成一个 Entity。
 		loaded, remoteVector, err := repository.readAggregate(ctx, builder, fullID)
 		if err != nil {
 			return nil, err
@@ -157,6 +159,7 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 		}
 
 		daos := make(map[string]entity.DaoInterface, len(loaded))
+		// 所有 DAO 校验并恢复版本后才发布 Entity，避免外部看到半加载状态。
 		for _, item := range loaded {
 			hydrator, ok := item.dao.(entity.PersistedDaoLoader)
 			if !ok {
@@ -180,7 +183,11 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 			}
 			param.RemoteRestore = &remoteVector
 		}
-		created, err := repository.manager.Create(param)
+		var created entity.IThreadSafeEntity
+		var createErr error
+		// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
+		dispatchErr := entity.RunLocal(ctx, func() { created, createErr = repository.manager.Create(param) })
+		err = errors.Join(createErr, dispatchErr)
 		if err != nil {
 			if errors.Is(err, entity.ErrEntityExists) {
 				if existing := repository.manager.Get(fullID); existing != nil {

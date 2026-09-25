@@ -1,10 +1,12 @@
 package policy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"slices"
+
 	"github.com/tjbdwanghaibo/roost-core/spatial"
-	"sort"
 )
 
 // Interest management errors.
@@ -166,8 +168,12 @@ type AOI struct {
 	observers map[int64]*interestObserver
 	// blockObservers is the nine-grid subscription table: block index ->
 	// observers whose leave-radius box covers it.
-	blockObservers map[int64]map[int64]*interestObserver
-	pending        []InterestEvent
+	blockObservers    map[int64]map[int64]*interestObserver
+	pending           []InterestEvent
+	blocksScratch     []int64
+	queryScratch      []int64
+	candidatesScratch []entryCandidate
+	seenScratch       map[int64]struct{}
 }
 
 func NewAOI(config AOIConfig) (*AOI, error) {
@@ -235,8 +241,7 @@ func (m *AOI) MoveSubject(id int64, to spatial.Point) error {
 	}
 	m.index.Move(id, from, to)
 	m.subjects[id] = to
-	affected := m.observersAt(from)
-	affected = m.observersAt(to, affected...)
+	affected := m.observersAt(from, to)
 	m.evaluateSubjectFor(affected, id, to, false)
 	return nil
 }
@@ -338,11 +343,12 @@ func (m *AOI) Flush() []InterestEvent {
 	}
 	events := m.pending
 	m.pending = nil
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].Observer != events[j].Observer {
-			return events[i].Observer < events[j].Observer
+	// 同一观察者与实体的事件保持产生顺序，避免把 Enter/Leave 颠倒。
+	slices.SortStableFunc(events, func(a, b InterestEvent) int {
+		if order := cmp.Compare(a.Observer, b.Observer); order != 0 {
+			return order
 		}
-		return events[i].Subject < events[j].Subject
+		return cmp.Compare(a.Subject, b.Subject)
 	})
 	return events
 }
@@ -384,25 +390,25 @@ func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
 	}
 }
 
-// observersAt collects, in ascending id order, the observers subscribed to
-// the block neighborhood around a point (accumulating into a previous result
-// when extending across two neighborhoods).
-func (m *AOI) observersAt(at spatial.Point, previous ...*interestObserver) []*interestObserver {
-	seen := make(map[int64]struct{}, len(previous))
-	result := previous
-	for _, observer := range previous {
-		seen[observer.id] = struct{}{}
+// observersAt 合并旧、新格子的观察者，只排序一次。同格移动仍需评估距离变化。
+func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestObserver {
+	first := m.index.BlockIndex(at)
+	table := m.blockObservers[first]
+	result := make([]*interestObserver, 0, len(table))
+	for _, observer := range table {
+		result = append(result, observer)
 	}
-	if table := m.blockObservers[m.index.BlockIndex(at)]; table != nil {
-		for _, observer := range table {
-			if _, duplicate := seen[observer.id]; duplicate {
-				continue
+	if len(other) > 0 {
+		second := m.index.BlockIndex(other[0])
+		if second != first {
+			for id, observer := range m.blockObservers[second] {
+				if _, exists := table[id]; !exists {
+					result = append(result, observer)
+				}
 			}
-			seen[observer.id] = struct{}{}
-			result = append(result, observer)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].id < result[j].id })
+	slices.SortFunc(result, func(a, b *interestObserver) int { return cmp.Compare(a.id, b.id) })
 	return result
 }
 
@@ -414,6 +420,12 @@ func (m *AOI) evaluateSubjectFor(observers []*interestObserver, subject int64, a
 	}
 }
 
+type entryCandidate struct {
+	subject  int64
+	at       spatial.Point
+	distance int64
+}
+
 // evaluateObserver re-evaluates an observer's entire visible set: current
 // members against the leave radius, subscription-neighborhood subjects
 // against the enter radius.
@@ -422,23 +434,43 @@ func (m *AOI) evaluateObserver(observer *interestObserver) {
 		at, exists := m.subjects[subject]
 		m.evaluatePair(observer, subject, at, !exists)
 	}
-	blocks := make([]int64, 0, len(observer.blocks))
+	blocks := m.blocksScratch[:0]
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
 	}
-	sort.Slice(blocks, func(i, j int) bool { return blocks[i] < blocks[j] })
+	slices.Sort(blocks)
 	// Admit new candidates nearest-first: block-order admission could let a
 	// farther subject enter and be evicted by a nearer one within the same
 	// evaluation, emitting a transient Enter+Leave pair downstream.
-	type entryCandidate struct {
-		subject  int64
-		at       spatial.Point
-		distance int64
+	candidates := m.candidatesScratch[:0]
+	seen := m.seenScratch
+	if seen == nil {
+		seen = make(map[int64]struct{})
 	}
-	var candidates []entryCandidate
-	seen := make(map[int64]struct{})
+	defer func() {
+		if cap(m.queryScratch) > 4096 {
+			m.queryScratch = nil
+		}
+		if cap(blocks) <= 4096 {
+			m.blocksScratch = blocks[:0]
+		} else {
+			m.blocksScratch = nil
+		}
+		if cap(candidates) <= 4096 {
+			m.candidatesScratch = candidates[:0]
+		} else {
+			m.candidatesScratch = nil
+		}
+		if len(seen) <= 4096 {
+			clear(seen)
+			m.seenScratch = seen
+		} else {
+			m.seenScratch = nil
+		}
+	}()
 	for _, block := range blocks {
-		for _, subject := range m.index.QueryBlockIndex(block) {
+		m.queryScratch = m.index.AppendBlockIDs(m.queryScratch[:0], block)
+		for _, subject := range m.queryScratch {
 			if _, alreadyVisible := observer.visible[subject]; alreadyVisible {
 				continue
 			}
@@ -451,11 +483,11 @@ func (m *AOI) evaluateObserver(observer *interestObserver) {
 			}
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].distance != candidates[j].distance {
-			return candidates[i].distance < candidates[j].distance
+	slices.SortFunc(candidates, func(a, b entryCandidate) int {
+		if order := cmp.Compare(a.distance, b.distance); order != 0 {
+			return order
 		}
-		return candidates[i].subject < candidates[j].subject
+		return cmp.Compare(a.subject, b.subject)
 	})
 	for _, candidate := range candidates {
 		m.evaluatePair(observer, candidate.subject, candidate.at, false)
@@ -504,13 +536,13 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 // incumbent; the farthest scan breaks distance ties by id for determinism).
 func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
 	farthest, farthestDistance := int64(-1), int64(-1)
-	for _, subject := range sortedVisible(observer.visible) {
+	for subject := range observer.visible {
 		position, exists := m.subjects[subject]
 		if !exists {
 			continue
 		}
 		distance := spatial.DistanceSquared(observer.at, position)
-		if distance > farthestDistance {
+		if distance > farthestDistance || (distance == farthestDistance && subject < farthest) {
 			farthest, farthestDistance = subject, distance
 		}
 	}
@@ -527,6 +559,6 @@ func sortedVisible(visible map[int64]int) []int64 {
 	for id := range visible {
 		result = append(result, id)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
 }

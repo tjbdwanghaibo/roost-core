@@ -1,0 +1,202 @@
+package player
+
+import (
+	"context"
+	"errors"
+	guild "{{MODULE}}/game/entities/guild"
+	"fmt"
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	"github.com/tjbdwanghaibo/roost-core/mongo/driver"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/remoteentity"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+func TestGuildIDsSurviveIncarnationsAndConcurrentCreators(t *testing.T) {
+	client := mongotest.NewClient()
+	seen := make(map[int64]bool)
+	var mu sync.Mutex
+	for range 3 {
+		// Recreate every controller, retaining only the authoritative store.
+		var wg sync.WaitGroup
+		for range 8 {
+			controller := &Controller{serverSID: 1000, guildIDs: client.Database("game").Collection("_guild_id_sequence")}
+			wg.Go(func() {
+				for range 16 {
+					id, err := controller.nextGuildID(context.Background())
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					mu.Lock()
+					if seen[id] || id <= 0 || uint64(id) >= entity.StaticUniqueIDBase {
+						t.Errorf("invalid or reused guild id %d", id)
+					}
+					seen[id] = true
+					mu.Unlock()
+				}
+			})
+		}
+		wg.Wait()
+	}
+	if len(seen) != 384 {
+		t.Fatalf("unique IDs=%d, want 384", len(seen))
+	}
+}
+
+func TestGuildIDExhaustionDoesNotWrapOrUseRuntimeIDs(t *testing.T) {
+	coll := mongotest.NewClient().Collection("game", "_guild_id_sequence")
+	if err := coll.Seed(bson.M{"_id": "guild", "next": int64(entity.StaticUniqueIDBase - 1)}); err != nil {
+		t.Fatal(err)
+	}
+	controller := &Controller{guildIDs: coll}
+	for range 2 {
+		if id, err := controller.nextGuildID(context.Background()); err == nil || id != 0 {
+			t.Fatalf("id=%d err=%v", id, err)
+		}
+	}
+	if id, err := (&Controller{}).nextGuildID(context.Background()); err == nil || id != 0 {
+		t.Fatalf("unconfigured id=%d err=%v", id, err)
+	}
+}
+
+// Three incarnations share only Mongo and the WAL directory. The second
+// intentionally loses its acknowledgement; the third must replay it safely.
+func TestGuildIDsRealMongoWALRestart(t *testing.T) {
+	uri := os.Getenv("ROOST_GUILD_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("set ROOST_GUILD_IT_MONGO_URI to an isolated replica set")
+	}
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: guild.EntityKindGuild, Category: entity.EntityCategoryRemote, RemotePolicy: entity.RemotePolicyManaged})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := driver.NewClient(fmongo.DefaultConfig(uri), driver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(context.Background())
+	database := fmt.Sprintf("roost_guild_it_%d_%d", os.Getpid(), time.Now().UnixNano())
+	defer client.Database(database).Drop(context.Background())
+	remote := remoteentity.NewMongoCommitter(client, database, 1000, time.Hour)
+	if err := remote.EnsureRemoteStorage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, ServerID: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRemoteProjection(remote, guildReplayApplier{remote}); err != nil {
+		t.Fatal(err)
+	}
+	opts := nestwal.DefaultOptions(t.TempDir())
+	opts.WriterVersion = nestwal.WriterVersionV2
+	seen := map[int64]bool{}
+	var created []coredata.CommitRecord
+	for incarnation := byte(1); incarnation <= 3; incarnation++ {
+		controller := &Controller{serverSID: 1000, guildIDs: client.Database(database).Collection("_guild_id_sequence")}
+		wal, err := nestwal.Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { wal.Close(context.Background()) })
+		replayed := 0
+		var last nest.CommitFence
+		err = wal.Replay(ctx, func(f nest.CommitFence, r nest.CommitRecord) error {
+			replayed++
+			last = f
+			return store.Project(ctx, r)
+		})
+		if err != nil {
+			wal.Close(ctx)
+			t.Fatal(err)
+		}
+		if incarnation == 3 && replayed != 1 {
+			t.Fatalf("replayed=%d, want lost-ack transaction", replayed)
+		}
+		if replayed > 0 {
+			if err := wal.Ack(ctx, last); err != nil {
+				t.Fatal(err)
+			}
+		}
+		unique, err := controller.nextGuildID(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := entity.BuildEntityID(unique, guild.EntityKindGuild)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[id] {
+			t.Fatalf("reused persistent entity %d", id)
+		}
+		seen[id] = true
+		tx := coredata.TransactionID{}
+		tx[0] = incarnation
+		tx[15] = 1
+		data, err := bson.Marshal(bson.M{"_id": id, "name": fmt.Sprintf("incarnation-%d", incarnation)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit := entity.RemoteCommit{
+			TransactionID: entity.RemoteTransactionID(tx), EntityID: id, Kind: guild.EntityKindGuild,
+			BaseVersion: 0, NextVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
+			Mutations: []entity.RemoteDataMutation{{
+				Database: database, Collection: "guild", ID: id, Version: 1, Data: data,
+			}},
+		}
+		record := coredata.CommitRecord{
+			ID: tx, Durability: nest.DurabilityStrict,
+			Mutations: []coredata.Mutation{{
+				Key: coredata.DocumentKey{Resource: "remote_entity", ID: id},
+				Kind: coredata.MutationPut, ExpectedVersion: 0, NextVersion: 1,
+				Schema: 1, Codec: "remote", Remote: &commit,
+			}},
+		}
+		created = append(created, record)
+		fence, err := wal.Append(ctx, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := wal.Replay(ctx, func(_ nest.CommitFence, replay nest.CommitRecord) error { return store.Project(ctx, replay) }); err != nil {
+			t.Fatal(err)
+		}
+		if incarnation != 2 {
+			if err := wal.Ack(ctx, fence); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := wal.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, err := client.Database(database).Collection("guild").CountDocuments(ctx, bson.M{}); err != nil || count != 3 {
+		t.Fatalf("guilds=%d err=%v", count, err)
+	}
+	// A different transaction creating an existing ID is a real conflict,
+	// never a benign replay. This is the historical W-02 shape.
+	collision := coredata.CloneCommitRecord(created[0])
+	collision.ID[0] = 99
+	collision.Mutations[0].Remote.TransactionID = entity.RemoteTransactionID(collision.ID)
+	if err := store.Project(ctx, collision); !errors.Is(err, fmongo.ErrDuplicateKey) {
+		t.Fatalf("collision err=%v", err)
+	}
+}
+
+type guildReplayApplier struct{ store *remoteentity.MongoCommitter }
+
+func (a guildReplayApplier) ApplyRemoteCommits(ctx context.Context, _ entity.RemoteTransactionID, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	return a.store.CommitRemoteBatch(ctx, commits)
+}

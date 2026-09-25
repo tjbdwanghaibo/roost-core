@@ -49,10 +49,13 @@ func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
 	if len(txCollection.Indexes) != 2 || !txCollection.Indexes[1].Sparse || !txCollection.Indexes[1].RecreateOnConflict || txCollection.Indexes[1].TTL <= 0 {
 		t.Fatalf("unsafe transaction TTL indexes: %+v", txCollection.Indexes)
 	}
+	commit.LockFence = testWriteGrant(t, store, id).Fence
 	first, err := store.CommitRemote(context.Background(), commit)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sessions := mongo.Sessions()
+	mongo.StartSessionErr = errors.New("replay must not open another transaction")
 	second, err := store.CommitRemote(context.Background(), commit)
 	if err != nil || second != first {
 		t.Fatalf("idempotent receipt=%+v first=%+v err=%v", second, first, err)
@@ -62,6 +65,10 @@ func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
 	if _, err := store.CommitRemote(context.Background(), altered); !errors.Is(err, entity.ErrRemoteRejected) {
 		t.Fatalf("transaction id content collision error=%v", err)
 	}
+	if got := mongo.Sessions(); got != sessions {
+		t.Fatalf("replay started another Mongo session: %d -> %d", sessions, got)
+	}
+	mongo.StartSessionErr = nil
 	pending, err := store.PendingRemoteCommits(context.Background(), 10)
 	if err != nil || len(pending) != 1 || len(pending[0].Commits) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)

@@ -2,6 +2,7 @@ package monster
 
 import (
 	"context"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -70,5 +71,23 @@ func TestAnEphemeralMonsterReplicatesButNeverPersists(t *testing.T) {
 	}
 	if payload := subject.Dao().MarshalSync(dataengine.AllFields); len(payload) == 0 {
 		t.Fatal("MarshalSync produced nothing for a fully replicated DAO")
+	}
+}
+
+func TestMonsterFarViewOmitsHP(t *testing.T) {
+	packer := NewMonsterSyncPacker(newMonster(t))
+	full, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "far", LOD: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc bson.M
+	if err := bson.Unmarshal(full.BytesCopy(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["hp"]; exists {
+		t.Fatal("far view retained HP")
+	}
+	if _, exists := doc["template"]; !exists {
+		t.Fatal("far view lost template")
 	}
 }

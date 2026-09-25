@@ -11,9 +11,13 @@ type DispatcherWorkStats struct {
 }
 
 type DispatcherStats struct {
-	Main    worker.PoolStats
-	Heart   worker.PoolStats
-	Cost    worker.PoolStats
+	Fast, Slow        worker.PoolStats
+	FastContinuations int
+	// Deprecated: Main=Fast、Remote=Slow；Heart/Cost 不再创建池。
+	Main    worker.PoolStats `json:"-"`
+	Heart   worker.PoolStats `json:"-"`
+	Cost    worker.PoolStats `json:"-"`
+	Remote  worker.PoolStats `json:"-"`
 	Delayed int
 	Stopped bool
 	Work    DispatcherWorkStats
@@ -35,15 +39,8 @@ func (m *Dispatcher) Stats() DispatcherStats {
 			Slow200msMessages: m.slow200ms.Load(),
 		},
 	}
-	if m.pool != nil {
-		stats.Main = m.pool.Stats()
-	}
-	if m.hbPool != nil {
-		stats.Heart = m.hbPool.Stats()
-	}
-	if m.costPool != nil {
-		stats.Cost = m.costPool.Stats()
-	}
+	stats.Fast, stats.Slow, stats.FastContinuations = m.queue.stats()
+	stats.Main, stats.Remote = stats.Fast, stats.Slow
 	return stats
 }
 

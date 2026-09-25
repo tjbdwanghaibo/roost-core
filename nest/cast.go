@@ -173,11 +173,24 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		e.UnTouch()
 		lockedNow = append(lockedNow, e)
 	}
+	if mutation := entity.CurrentSyncMutation(); mutation != nil {
+		mutation.Include(lockedNow)
+	}
+	// 动态取得的实体属于当前业务事务，回滚/持久化参与不能依赖是否装配 Sync。
+	if tx := CurrentRollbackTx(); tx != nil {
+		if err := tx.CaptureEntities(lockedNow); err != nil {
+			return nil, err
+		}
+	}
 	return es, nil
 }
 
-// ReleaseCast releases one cast entity before the current context ends.
+// ReleaseCast 在无事务的上下文中提前释放动态实体。
+// 事务或正式同步作用域内保留锁，直到回滚或准入捕获完成后由 Guard 统一释放。
 func ReleaseCast(e entity.IThreadSafeEntity) {
+	if CurrentRollbackTx() != nil || entity.CurrentSyncMutation() != nil {
+		return
+	}
 	if e == nil || entity.CurrentGuardScope() == nil {
 		return
 	}

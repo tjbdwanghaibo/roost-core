@@ -153,8 +153,10 @@ func (s *remoteSnapshotL2Store) Set(ctx context.Context, value entity.RemoteSnap
 		return err
 	}
 	ttlMillis := s.ttl.Milliseconds()
+	// RemoteChecksum 是 BSON 专用命名类型，Redis 不接受它作为脚本参数。
+	// 转为精确十进制串，沿用既有 checksum 格式并保留完整 uint64 范围。
 	result, err := s.redis.Eval(ctx, remoteSnapshotL2CAS, []string{remoteSnapshotL2Key(value.Key)},
-		value.MarkerEpoch, value.RouteEpoch, value.StateVersion, value.Checksum, raw, ttlMillis,
+		value.MarkerEpoch, value.RouteEpoch, value.StateVersion, strconv.FormatUint(uint64(value.Checksum), 10), raw, ttlMillis,
 		value.Schema, value.Codec)
 	if err != nil {
 		return err

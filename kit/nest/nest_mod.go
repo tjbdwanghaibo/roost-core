@@ -4,34 +4,40 @@ package nest
 import (
 	"context"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/health"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 // Mod owns one instance-scoped Nest engine. It intentionally does not install
 // nest.Nest or entity.SendMsg; consumers obtain nest.Client from app.Registry
 // and inject it into generated senders.
 type Mod struct {
-	getter entity.Getter
-	opts   []corenest.NestOption
-	engine *corenest.NestMgr
-	config engineConfig
+	syncSetup  *EntitySyncSetup
+	entitySync *entitysync.Manager
+	getter     entity.Getter
+	opts       []corenest.NestOption
+	engine     *corenest.NestMgr
+	config     engineConfig
 }
 
 type engineConfig struct {
-	workerNum   int
-	hbWorkerNum int
-	queueCap    int
-	tick        time.Duration
-	timeout     time.Duration
-	delayedCap  int
-	maxDelay    time.Duration
+	fast, slow    corenest.WorkerPoolConfig
+	workerNum     int
+	hbWorkerNum   int
+	remoteWorkers int
+	queueCap      int
+	tick          time.Duration
+	timeout       time.Duration
+	delayedCap    int
+	maxDelay      time.Duration
 }
 
 func NewMod(getter entity.Getter, opts ...corenest.NestOption) *Mod {
@@ -59,15 +65,18 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return err
 	}
 	m.config = engineConfig{
-		workerNum:   cfg.GetInt("nest.worker_num"),
-		hbWorkerNum: cfg.GetInt("nest.heartbeat_worker_num"),
-		queueCap:    cfg.GetInt("nest.queue_capacity"),
-		tick:        cfg.GetDuration("nest.tick_duration"),
-		timeout:     cfg.GetDuration("nest.request_timeout"),
-		delayedCap:  cfg.GetInt("nest.delayed_capacity"),
-		maxDelay:    cfg.GetDuration("nest.max_delay"),
+		fast:          corenest.WorkerPoolConfig{Workers: cfg.GetInt("nest.fast.workers"), QueueCap: cfg.GetInt("nest.fast.queue_capacity")},
+		slow:          corenest.WorkerPoolConfig{Workers: cfg.GetInt("nest.slow.workers"), QueueCap: cfg.GetInt("nest.slow.queue_capacity")},
+		workerNum:     cfg.GetInt("nest.worker_num"),
+		hbWorkerNum:   cfg.GetInt("nest.heartbeat_worker_num"),
+		remoteWorkers: cfg.GetInt("nest.remote_workers"),
+		queueCap:      cfg.GetInt("nest.queue_capacity"),
+		tick:          cfg.GetDuration("nest.tick_duration"),
+		timeout:       cfg.GetDuration("nest.request_timeout"),
+		delayedCap:    cfg.GetInt("nest.delayed_capacity"),
+		maxDelay:      cfg.GetDuration("nest.max_delay"),
 	}
-	return nil
+	return m.initEntitySync(cfg)
 }
 
 func (m *Mod) Provide(registry *app.Registry) error {
@@ -80,6 +89,8 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	opts := []corenest.NestOption{
 		corenest.NestOptionWithGetter(m.getter),
 		corenest.NestOptionWithWorkerNumAndMsgCap(m.config.workerNum, m.config.hbWorkerNum, m.config.queueCap),
+		corenest.NestOptionWithRemoteWorkers(m.config.remoteWorkers),
+		corenest.NestOptionWithWorkerPools(m.config.fast, m.config.slow),
 		corenest.NestOptionWithTickDuration(m.config.tick),
 		corenest.NestOptionWithSyncTimeout(m.config.timeout),
 		corenest.NestOptionWithDelayedAdmission(m.config.delayedCap, m.config.maxDelay),
@@ -97,6 +108,9 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		opts = append(opts, corenest.NestOptionWithRemoteEntityManager(remoteManager))
 	}
 	opts = append(opts, m.opts...)
+	if m.entitySync != nil {
+		opts = append(opts, corenest.NestOptionWithEntitySync(m.entitySync))
+	}
 	m.engine = corenest.NewEngine(opts...)
 	capabilities := []mods.Capability{{Name: mods.ModNest, Value: m.engine}}
 	if _, exists := registry.Get(mods.ModEntityRuntime); !exists {
@@ -116,7 +130,19 @@ func (m *Mod) Start() error {
 	if m == nil || m.engine == nil {
 		return fmt.Errorf("nest mod: engine not provided")
 	}
-	return m.engine.Start()
+	if m.entitySync != nil {
+		if err := m.entitySync.Start(context.Background()); err != nil {
+			return err
+		}
+		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval())
+	}
+	if err := m.engine.Start(); err != nil {
+		if m.entitySync != nil {
+			_ = m.entitySync.Stop(context.Background())
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *Mod) Stop() {
@@ -127,7 +153,19 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 	if m == nil || m.engine == nil {
 		return nil
 	}
-	return m.engine.Shutdown(ctx)
+	if err := m.engine.Shutdown(ctx); err != nil {
+		return err
+	}
+	if m.entitySync != nil {
+		if err := m.entitySync.Stop(ctx); err != nil {
+			return err
+		}
+		if err := m.entitySync.Drain(ctx); err != nil {
+			return err
+		}
+		return m.entitySync.Close(ctx)
+	}
+	return nil
 }
 
 func (m *Mod) Engine() *corenest.NestMgr {
@@ -144,6 +182,6 @@ func (m *Mod) checkHealth(context.Context) health.Result {
 	stats := m.engine.Stats()
 	return health.Result{
 		Status:  health.StatusOK,
-		Message: fmt.Sprintf("queue=%d delayed=%d", stats.Main.QueueLen+stats.Heart.QueueLen+stats.Cost.QueueLen, stats.Delayed),
+		Message: fmt.Sprintf("queue=%d delayed=%d", stats.Fast.QueueLen+stats.Slow.QueueLen+stats.FastContinuations, stats.Delayed),
 	}
 }

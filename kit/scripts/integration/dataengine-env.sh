@@ -131,10 +131,11 @@ environment_test() {
 	# and nothing else. etcd/driver spawns etcd from PATH and skips loudly
 	# when the binary is absent; mongo/driver spawns its own standalone mongod
 	# (U-0153).
+	# Remote 也依赖同一隔离环境；故障套件按包串行，避免同时改动共享服务。
 	(
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration ./kit/dataengine ./kit/nats ./redis/... ./etcd/driver ./mongo/driver -count=1
+			go test -tags=integration -p 1 ./kit/dataengine ./kit/nats ./remoteentity ./redis/... ./etcd/driver ./mongo/driver -count=1
 	)
 }
 

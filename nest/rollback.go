@@ -11,7 +11,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 type RollbackPolicy uint8
@@ -59,6 +58,8 @@ type RollbackParticipant interface {
 	CaptureRollback(tx *RollbackTx) error
 }
 
+// RollbackTx 保存业务回滚与持久化参与者，执行时序由 execution.go 管理。
+// 准入前归持锁的业务 goroutine；pipelined 转交完成池后，业务侧不再操作该对象。
 type RollbackTx struct {
 	id                  TransactionID
 	policy              RollbackPolicy
@@ -67,6 +68,10 @@ type RollbackTx struct {
 	state               rollbackTxState
 	rollbacks           []func() error
 	afterAdmission      []func()
+	admissionErr        error
+	stageMetrics        bool
+	admissionObserved   bool
+	syncMutation        *entity.SyncMutation
 	commits             []func()
 	undoKeys            map[undoKey]struct{}
 	participants        []CommitParticipant
@@ -201,6 +206,7 @@ func (tx *RollbackTx) AfterCommit(fn func()) {
 // point but before Nest releases entity locks. It is reserved for lifecycle
 // transitions, such as removing an Entity whose delete tombstone is already
 // in the WAL. External side effects belong in AfterCommit instead.
+// pipelined 的准入早于 ticket 持久化确认；这里可冻结同步内容，但不能提前外发。
 func (tx *RollbackTx) AfterAdmission(fn func()) {
 	if tx != nil && tx.state == rollbackTxOpen && fn != nil {
 		tx.afterAdmission = append(tx.afterAdmission, fn)
@@ -348,6 +354,7 @@ func (tx *RollbackTx) Rollback() error {
 	if tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
 	}
+	defer observeNestStage(tx.handler, "rollback", startNestStage(tx.stageMetrics))
 	tx.state = rollbackTxRolledBack
 	var errs []error
 	for i := len(tx.rollbacks) - 1; i >= 0; i-- {
@@ -360,6 +367,7 @@ func (tx *RollbackTx) Rollback() error {
 	}
 	tx.commits = nil
 	tx.afterAdmission = nil
+	tx.admissionErr = nil
 	tx.deleteIntents = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
@@ -375,12 +383,17 @@ func (tx *RollbackTx) Rollback() error {
 }
 
 func (tx *RollbackTx) Commit() error {
+	return tx.commit(false)
+}
+
+// entitiesReleased 只由 pipelined 在统一释放完成后传 true。
+// Guard scope 此时可能仍挂在 dispatch goroutine 上，但已不持锁；不能再把
+// AfterCommit 排到 scope 的末尾，否则降级完成会提前回复并跳过回调错误报告。
+func (tx *RollbackTx) commit(entitiesReleased bool) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return nil
 	}
 	tx.state = rollbackTxCommitted
-	admitted := tx.afterAdmission
-	tx.afterAdmission = nil
 	tx.rollbacks = nil
 	tx.undoKeys = nil
 	tx.participants = nil
@@ -400,12 +413,11 @@ func (tx *RollbackTx) Commit() error {
 	// framework's own obligations queued behind it — the
 	// TransactionReleased notification is one of these callbacks, and the
 	// caller's reply depends on this function returning (RR-20260911-06).
-	// The panic is reported, not swallowed: the caller learns that the
-	// transaction is durable but its after-commit work failed.
-	var failed error
-	for _, fn := range admitted {
-		failed = errors.Join(failed, runCommitCallback(fn))
-	}
+	// 直接完成时把回调异常返回给调用者；Guard/remote 延迟执行的路径仍由各自
+	// runner 处理异常，不能从 Commit 返回 nil 推断延迟回调已经全部执行成功。
+	tx.runAfterAdmission()
+	failed := tx.admissionErr
+	tx.admissionErr = nil
 	if len(tx.commits) == 0 {
 		return failed
 	}
@@ -413,7 +425,7 @@ func (tx *RollbackTx) Commit() error {
 		msg.addPostRemoteCommit(tx.commits...)
 		return failed
 	}
-	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
+	if scope := entity.CurrentGuardScope(); !entitiesReleased && scope != nil && scope.Guard() != nil {
 		// The guard's post-release runner already isolates each callback.
 		for _, fn := range tx.commits {
 			scope.Guard().AppendPostRelease(fn)
@@ -424,6 +436,21 @@ func (tx *RollbackTx) Commit() error {
 		failed = errors.Join(failed, runCommitCallback(fn))
 	}
 	return failed
+}
+
+// runAfterAdmission 在交出 Entity 锁和事务所有权前完成生命周期变更。
+// pipelined 已被 WAL 接纳，回调失败不能再回滚；保留错误供最终完成路径报告。
+func (tx *RollbackTx) runAfterAdmission() {
+	if tx.stageMetrics && !tx.admissionObserved {
+		tx.admissionObserved = true
+		defer observeNestStage(tx.handler, "admission", time.Now())
+	}
+	callbacks := tx.afterAdmission
+	tx.afterAdmission = nil
+	for _, fn := range callbacks {
+		tx.admissionErr = errors.Join(tx.admissionErr, runCommitCallback(fn))
+	}
+	tx.syncMutation.Admit()
 }
 
 // runCommitCallback runs one after-commit callback inside its own recovery
@@ -452,6 +479,7 @@ func (tx *RollbackTx) abandon() {
 	tx.state = rollbackTxCommitted
 	tx.rollbacks = nil
 	tx.afterAdmission = nil
+	tx.admissionErr = nil
 	tx.commits = nil
 	tx.undoKeys = nil
 	tx.participants = nil
@@ -468,6 +496,9 @@ func (tx *RollbackTx) abandon() {
 }
 
 func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
+	if tx != nil {
+		defer observeNestStage(tx.handler, "prepare", startNestStage(tx.stageMetrics))
+	}
 	if tx == nil || tx.state != rollbackTxOpen {
 		return CommitRecord{}, ErrTransactionClosed
 	}
@@ -538,7 +569,10 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := committer.Commit(ctx, record); err != nil {
+	commitStart := startNestStage(tx.stageMetrics)
+	commitErr := committer.Commit(ctx, record)
+	observeNestStage(tx.handler, "durable_commit", commitStart)
+	if err := commitErr; err != nil {
 		if errors.Is(err, ErrCommitIndeterminate) {
 			return err
 		}
@@ -562,7 +596,9 @@ func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedT
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	enqueueStart := startNestStage(tx.stageMetrics)
 	ticket, err := committer.Enqueue(ctx, record)
+	observeNestStage(tx.handler, "enqueue", enqueueStart)
 	if err != nil {
 		return nil, errors.Join(ErrCommitRejected, err)
 	}
@@ -616,227 +652,11 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 	return fn()
 }
 
-// RunDetachedTransaction gives infrastructure adapters a lower-isolation
-// transaction boundary when they are invoked outside an entity-locked Nest
-// handler. It still requires a durable committer and uses the same
-// prepare/admit/accept/rollback lifecycle; the only omitted guarantee is
-// entity locking, which remains the caller's responsibility.
-func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
-	if call == nil {
-		return nil, errors.New("nest: detached transaction call is nil")
-	}
-	if CurrentRollbackTx() != nil {
-		return call()
-	}
-	if committer == nil {
-		return nil, ErrCommitterRequired
-	}
-	release := fctx.BindBase(ctx)
-	defer release()
-	return invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
-}
-
-// RunIsolatedTransaction always creates its own strict durable transaction,
-// even when called from an existing Nest handler. It is intended for
-// infrastructure lifecycle operations whose commit point cannot be rolled
-// back with the surrounding business transaction. Callers must already hold
-// every entity lock required by call.
-func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
-	if call == nil {
-		return nil, errors.New("nest: isolated transaction call is nil")
-	}
-	if committer == nil {
-		return nil, ErrCommitterRequired
-	}
-	release := fctx.BindBase(ctx)
-	defer release()
-	return invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
-}
-
-// invokeWithTransaction wraps one handler call in a rollback/commit envelope.
-// releaseLocks, when non-nil, must be idempotent (the dispatch site also
-// defers it); the pipelined path calls it right after WAL admission so entity
-// locks are not held across the fsync wait. A nil releaseLocks (broadcast)
-// keeps pipelined handlers on strict in-lock commit semantics. completions,
-// when non-nil, additionally moves the post-durability work off the calling
-// worker (Phase 2); a nil pump or full pump queue keeps the Phase 1 in-worker
-// wait for this transaction.
-func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error)) (ret any, err error) {
-	msg := currentNestDispatchMsg()
-	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
-		return call()
-	}
-	var pipelinedCommitter PipelinedTransactionCommitter
-	if meta.Durability == DurabilityPipelined {
-		pc, ok := committer.(PipelinedTransactionCommitter)
-		if !ok {
-			// Deployment configuration error: report instead of silently
-			// degrading to strict commits.
-			return nil, ErrPipelinedCommitterRequired
-		}
-		// Remote write batches keep their own two-phase protocol and stay on
-		// the strict path; so does broadcast, which has no early release.
-		if releaseLocks != nil && (msg == nil || msg.RemoteWriteBatch == nil) {
-			pipelinedCommitter = pc
-		}
-	}
-	tx := NewRollbackTx(meta.Rollback)
-	tx.durability = meta.Durability
-	tx.handler = handler
-	if err := tx.CaptureEntities(es); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				slog.Error("nest rollback after panic failed", "rollback", meta.Rollback.String(), "err", rbErr)
-				panic(errors.Join(fmt.Errorf("panic: %v", r), ErrRollbackFailed, rbErr))
-			}
-			panic(r)
-		}
-		if err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback failed: %w", rbErr))
-			}
-			return
-		}
-		commitCtx := context.Background()
-		if current := fctx.CurrentContext(); current != nil && current.Base != nil {
-			commitCtx = current.Base
-		}
-		if msg := currentNestDispatchMsg(); msg != nil && msg.RemoteWriteBatch != nil {
-			if finalizeErr := msg.finalizeRemoteWriteBatch(tx); finalizeErr != nil {
-				err = finalizeErr
-				if abortErr := msg.abortRemoteWriteBatchLocked(finalizeErr); abortErr != nil {
-					err = errors.Join(err, abortErr)
-				}
-				if rbErr := tx.Rollback(); rbErr != nil {
-					err = errors.Join(err, ErrRollbackFailed, rbErr)
-				}
-				return
-			}
-		}
-		if pipelinedCommitter != nil {
-			// Pipelined commit sequence (see NEST_PIPELINED_COMMIT.md):
-			// enqueue in-lock (the only rejection point), stamp entity LSNs,
-			// release locks early, then wait for durability out of lock.
-			ticket, enqueueErr := tx.pipelinedEnqueue(commitCtx, pipelinedCommitter)
-			if enqueueErr != nil {
-				err = enqueueErr
-				if errors.Is(enqueueErr, ErrCommitIndeterminate) {
-					tx.abandon()
-					return
-				}
-				if rbErr := tx.Rollback(); rbErr != nil {
-					err = errors.Join(err, ErrRollbackFailed, rbErr)
-				}
-				return
-			}
-			if ticket != nil {
-				lsn := ticket.LSN()
-				for _, e := range es {
-					if e != nil && e.Base() != nil {
-						e.Base().SetLastCommitLSN(lsn)
-					}
-				}
-			}
-			if notifier, ok := committer.(TransactionReleaseNotifier); ok {
-				txID := tx.ID()
-				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
-			}
-			// Phase 2: hand the post-durability work to the completion pump
-			// so the worker moves on. The ordering link is taken while the
-			// entity locks are still held, so same-entity completions run in
-			// commit order on every path — including the inline fallback
-			// below when the pump is saturated.
-			if ticket != nil && completions != nil {
-				if msg := currentNestDispatchMsg(); msg != nil {
-					deferred, runInline, releaseOrder := prepareCompletion(completions, msg, es, tx, ticket, handler, ret)
-					if !deferred {
-						// The chain link is already taken. Discharge it even
-						// if this path unwinds before runInline, otherwise
-						// every later completion for this entity blocks
-						// forever. release is idempotent, so runInline's own
-						// release still wins the normal case.
-						defer releaseOrder()
-					}
-					releaseLocks()
-					if deferred {
-						return
-					}
-					<-ticket.Done()
-					// runInline records durable_wait, performs abandon or
-					// Commit in entity order, and replies; err stays nil
-					// because the caller is answered through it.
-					runInline(ticket.Err())
-					return
-				}
-			}
-			// Nothing after this point can reject the transaction, so the
-			// in-memory state is final and the locks can be released before
-			// the fsync wait. Same-entity successors enqueue with higher
-			// LSNs; prefix durability keeps replay consistent with every
-			// state they observed.
-			releaseLocks()
-			if ticket != nil {
-				// The worker stays blocked here for one group-commit cycle
-				// (Phase 1). This duration is the Phase 2 decision input: if
-				// it dominates worker busy time and adding workers does not
-				// help, move the wait off the worker (async completion).
-				waitStart := time.Now()
-				<-ticket.Done()
-				metrics.ObserveDuration("nest.pipelined.durable_wait", metrics.Labels{"handler": handler}, time.Since(waitStart))
-				if ticketErr := ticket.Err(); ticketErr != nil {
-					err = ticketErr
-					tx.abandon()
-					return
-				}
-			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				err = commitErr
-			}
-			return
-		}
-		if commitErr := tx.durableCommit(commitCtx, committer); commitErr != nil {
-			err = commitErr
-			if errors.Is(commitErr, ErrCommitIndeterminate) {
-				if msg := currentNestDispatchMsg(); msg != nil && msg.RemoteWriteBatch != nil {
-					if markErr := msg.markRemoteWriteIndeterminateLocked(commitErr); markErr != nil {
-						err = errors.Join(err, markErr)
-					}
-				}
-				tx.abandon()
-				return
-			}
-			if msg := currentNestDispatchMsg(); msg != nil && msg.RemoteWriteBatch != nil {
-				if abortErr := msg.abortRemoteWriteBatchLocked(commitErr); abortErr != nil {
-					err = errors.Join(err, abortErr)
-				}
-			}
-			if rbErr := tx.Rollback(); rbErr != nil {
-				err = errors.Join(err, ErrRollbackFailed, rbErr)
-			}
-			return
-		}
-		if notifier, ok := committer.(TransactionReleaseNotifier); ok {
-			txID := tx.ID()
-			if msg := currentNestDispatchMsg(); msg != nil && msg.RemoteWriteBatch != nil {
-				msg.addAfterUnlock(func() { notifier.TransactionReleased(txID) })
-			} else {
-				tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
-			}
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			err = commitErr
-		}
-	}()
-	return withRollbackTx(tx, call)
-}
-
 func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	if tx == nil {
 		return nil
 	}
+	defer observeNestStage(tx.handler, "capture", startNestStage(tx.stageMetrics))
 	seen := make(map[int64]struct{}, len(es))
 	for _, e := range es {
 		if e == nil {

@@ -151,3 +151,21 @@ func TestPrepareRemoteWriteBatchRefusesWithoutManagerBackendOrFinalizeSlot(t *te
 		t.Fatalf("Commit on a batch without a manager = %v", err)
 	}
 }
+
+func (b *atomicTestBackend) WriteAuthority() WriteAuthority {
+	return NewMongoCommitter(newRemoteMongoFake(), "test", 7, 0).WriteAuthority()
+}
+
+// 自定义后端不能只声明原子提交而缺少持久权限源。
+type noAuthorityBackend struct {
+	entity.IRemoteEntityBackend
+	AtomicCommitStore
+}
+
+func TestAssemblyRefusesMissingDurableAuthority(t *testing.T) {
+	backend := &atomicTestBackend{newRemoteTestLoader()}
+	_, err := Assemble(AssemblyDeps{Redis: assembleRedis{}, Backend: noAuthorityBackend{backend, backend}}, nil, 7, MongoBackendConfig{})
+	if err == nil || !strings.Contains(err.Error(), "durable write authority") {
+		t.Fatalf("missing authority accepted: %v", err)
+	}
+}

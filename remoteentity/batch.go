@@ -73,12 +73,12 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 	if m.backend == nil {
 		return nil, entity.ErrRemoteWriteCapabilityDisabled
 	}
-	if !m.reserveRemoteFinalizeSlot() {
+	if !m.reserveRemoteWriteSlot() {
 		return nil, entity.ErrRemoteOverloaded
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// 整批准入共用一个上界，不能给每个实体重开 OpTimeout。
+	ctx, cancel := m.ownershipContext(ctx)
+	defer cancel()
 	batch := &remoteWriteBatch{mgr: m, ids: ordered, entries: make([]*remoteWriteEntry, 0, len(ordered)), reserved: true}
 	for _, id := range ordered {
 		meta := entity.ResolveEntityID(id)
@@ -110,12 +110,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	// one wait for all the others, and a configured 3s budget coexisted with
 	// a 79s dispatch (RR-20260920-08). The lock path in ownership.go already
 	// sets its deadline before waiting; this is the same rule, not a new one.
-	ctx := parent
-	var cancel context.CancelFunc
-	if _, ok := ctx.Deadline(); !ok {
-		ctx, cancel = context.WithTimeout(ctx, w.mgr.cfg.OpTimeout)
-		defer cancel()
-	}
+	ctx, cancel := w.mgr.ownershipContext(parent)
+	defer cancel()
 	gateStarted := time.Now()
 	select {
 	case w.writeGate <- struct{}{}:
@@ -154,6 +150,7 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		release()
 		return nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
+	authority, durable := w.mgr.ownershipStore.(WriteAuthority)
 	distLocked := false
 	lockFence := uint64(0)
 	if marked {
@@ -174,7 +171,20 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			release()
 			return nil, fmt.Errorf("%w: shared lock did not allocate fence", entity.ErrRemoteFenced)
 		}
-		if err := w.refreshMarked(ctx); err != nil || !w.isMarked() {
+		if durable {
+			// 许可已经原子包含 ownership；重复读取会增加往返并可能混入下一代 ownership。
+			provider, ok := w.rMu.(interface{ writeGrant() (WriteGrant, bool) })
+			var grant WriteGrant
+			if ok {
+				grant, ok = provider.writeGrant()
+			}
+			if !ok || !grant.Ownership.Shared || grant.Fence != lockFence {
+				_ = w.unlockObserved(ctx, w.rMu.Version())
+				release()
+				return nil, entity.ErrRemoteFenced
+			}
+			w.applyOwnership(grant.Ownership)
+		} else if err := w.refreshMarked(ctx); err != nil || !w.isMarked() {
 			_ = w.unlockObserved(ctx, w.rMu.Version())
 			release()
 			return nil, errors.Join(entity.ErrRemoteOwnerTransition, err)
@@ -192,8 +202,19 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		return nil, ownershipFenceError(w.id, marker)
 	}
 
+	expectedVersion := w.rMu.Version()
+	if !marked && durable {
+		grant, err := authority.GrantWrite(ctx, w.id, generateToken(), w.mgr.localSid)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		marker = grant.Ownership
+		w.applyOwnership(marker)
+		lockFence, expectedVersion = grant.Fence, grant.Version
+	}
 	remoteEntity := w.lookupLocalEntity()
-	if remoteEntity == nil || (marked && (remoteEntity.EntityVersion() != w.rMu.Version() || w.rMu.Version() <= 0)) {
+	if remoteEntity == nil || ((marked || durable) && (remoteEntity.EntityVersion() != expectedVersion || expectedVersion <= 0)) {
 		var loadErr error
 		remoteEntity, loadErr = w.loadEntity(ctx)
 		if loadErr != nil {
@@ -247,7 +268,14 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	if stateVersion < 0 {
 		stateVersion = 0
 	}
-	if current, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok && !marked {
+	if durable && stateVersion != expectedVersion {
+		if distLocked {
+			_ = w.unlockObserved(ctx, expectedVersion)
+		}
+		release()
+		return nil, fmt.Errorf("%w: entity %d loaded version %d, authority %d", entity.ErrRemoteVersionConflict, w.id, stateVersion, expectedVersion)
+	}
+	if current, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok && !marked && !durable {
 		lockFence = current.RemoteVersionVector().LockFence
 	}
 	state := entity.RemoteOwnershipLocalOwned
@@ -431,7 +459,7 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 			b.indeterminate = true
 			b.mu.Unlock()
 		} else if outcome.Durability == 0 {
-			b.mgr.rollbackRemoteEntries(b.entries)
+			err = errors.Join(err, entity.RunLocal(ctx, func() { b.mgr.rollbackRemoteEntries(b.entries) }))
 		}
 		return nil, errors.Join(err, b.mgr.quarantineEntries(b.entries, err))
 	}
@@ -497,7 +525,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	}
 	err := b.mgr.releaseRemoteEntries(ctx, entries)
 	if b.reserved {
-		b.mgr.releaseRemoteFinalizeSlot()
+		b.mgr.releaseRemoteWriteSlot()
 		b.reserved = false
 	}
 	return err

@@ -6,11 +6,16 @@
 // hands each session ITS frame; the policies that decide who subscribes to
 // whom (a room, an area of interest, a direct binding) live outside and only
 // call Subscribe / Unsubscribe (ARCH-10).
+//
+// 阅读主线：subject.go 保存订阅意图，Manager.Flush 捕获内容并按会话分发，
+// session.go 维护已交付的帧时钟与对象引用。内容版本、订阅意图、客户端实际持有
+// 的对象是三个不同事实，失败重试和退订时不能互相代替。
 package entitysync
 
 import "errors"
 
 var (
+	ErrManagerStopping      = errors.New("entitysync: manager is stopping")
 	ErrManagerClosed        = errors.New("entitysync: manager is closed")
 	ErrTransportRequired    = errors.New("entitysync: transport is required")
 	ErrSubjectInvalid       = errors.New("entitysync: subject is invalid")
@@ -29,6 +34,7 @@ var (
 	// from ANYBODY right now (starting up, shutting down). The tick is
 	// abandoned whole — every subject keeps its dirty state — and no session
 	// is blamed. Any other push error is that session's alone: it is closed.
+	// 已准入帧不会回滚；部分成功的订阅在重试时改发全量以恢复内容基线。
 	ErrRetryLater = errors.New("entitysync: transport cannot take frames now; retry the tick")
 
 	// ErrDurabilityDeferred marks a subject whose newest commit the durable

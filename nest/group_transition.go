@@ -80,7 +80,7 @@ func (mgr *NestMgr) requestEntityLockGroupTransition(entityID int64, state entit
 		return err
 	}
 	meta := entity.ResolveEntityID(fullID)
-	ent, err := mgr.getter.Get(nestBaseContext(), meta.FullID, meta.Category)
+	ent, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 		return nil, err
 	}
 	meta := entity.ResolveEntityID(fullID)
-	ent, err := mgr.getter.Get(nestBaseContext(), meta.FullID, meta.Category)
+	ent, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func (mgr *NestMgr) abortGroupTransition(req *GroupTransitionRequest) {
 		return
 	}
 	meta := entity.ResolveEntityID(fullID)
-	ent, err := mgr.getter.Get(nestBaseContext(), meta.FullID, meta.Category)
+	ent, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
 	if err != nil || ent == nil || ent.Base() == nil {
 		return
 	}

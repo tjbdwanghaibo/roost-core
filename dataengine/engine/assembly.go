@@ -49,8 +49,9 @@ type Assembly struct {
 	deps AssemblyDeps
 	cfg  AssemblyConfig
 
-	runtimeMu sync.RWMutex
-	runtime   *Runtime
+	lifecycleGate operationGate
+	runtimeMu     sync.RWMutex
+	runtime       *Runtime
 }
 
 // Assemble validates the dependencies and builds the Mongo store, binding the
@@ -86,14 +87,25 @@ func Assemble(deps AssemblyDeps, cfg AssemblyConfig) (*Assembly, error) {
 
 // Start ensures the Mongo infrastructure and the effect stream, opens the WAL
 // and brings up projector, outbox and runtime in dependency order. When a step
-// fails every component opened before it is closed, so a failed Start leaves
-// no WAL handle or worker behind. ctx bounds the whole startup.
-func (a *Assembly) Start(ctx context.Context) error {
+// fails, all opened components are stopped. If ctx expires during cleanup,
+// Runtime retains the remaining resources for a later Shutdown call.
+// ctx bounds both startup and its cleanup attempt.
+func (a *Assembly) Start(ctx context.Context) (err error) {
 	if a == nil || a.Store == nil {
 		return errors.New("dataengine: not assembled")
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := a.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer a.lifecycleGate.release()
+	if current := a.Runtime(); current != nil {
+		if current.Ready() {
+			return nil
+		}
+		return fmt.Errorf("%w: complete Assembly.Shutdown before restarting", ErrRuntimeStopped)
 	}
 	if err := a.Store.EnsureInfrastructure(ctx); err != nil {
 		return fmt.Errorf("dataengine: ensure mongo infrastructure: %w", err)
@@ -105,29 +117,41 @@ func (a *Assembly) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 先登记本次尝试拥有的资源。失败清理同样受 ctx 限制；未完成时保留
+	// Runtime 给 Shutdown 重试，不能在 deadline 到期后丢失 WAL 的所有权。
+	owned := &Runtime{WAL: wal}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if cleanupErr := owned.stop(ctx, false); cleanupErr != nil {
+			a.runtimeMu.Lock()
+			a.runtime = owned
+			a.runtimeMu.Unlock()
+			err = errors.Join(err, fmt.Errorf("dataengine: startup cleanup incomplete: %w", cleanupErr))
+		}
+	}()
 	projector, err := NewProjector(wal, a.Store, a.cfg.Projector)
 	if err != nil {
-		_ = wal.Close(ctx)
 		return err
 	}
+	owned.Projector = projector
 	outboxStore, err := NewMongoOutboxStore(a.Store)
 	if err != nil {
-		_ = projector.Close(ctx)
 		return err
 	}
 	publisher := &jetStreamOutboxPublisher{client: a.deps.JetStream, prefix: a.cfg.EffectPrefix}
 	outbox, err := NewOutboxWorker(outboxStore, publisher, a.cfg.Outbox)
 	if err != nil {
-		_ = projector.Close(ctx)
 		return err
 	}
+	owned.Outbox = outbox
 	runtime, err := NewRuntime(a.Store, wal, projector, outbox, a.deps.Access, a.deps.RemoteManager, a.deps.OnFatal, a.cfg.Pipelined)
 	if err != nil {
-		_ = projector.Close(ctx)
 		return err
 	}
+	owned = runtime
 	if err := runtime.Start(ctx); err != nil {
-		_ = runtime.Shutdown(ctx)
 		return err
 	}
 	a.runtimeMu.Lock()
@@ -136,7 +160,8 @@ func (a *Assembly) Start(ctx context.Context) error {
 	return nil
 }
 
-// Runtime is the started runtime, or nil before Start / after Shutdown.
+// Runtime is the running runtime, or an unready runtime awaiting failed-start
+// cleanup. It is nil before Start and after successful Shutdown.
 func (a *Assembly) Runtime() *Runtime {
 	if a == nil {
 		return nil
@@ -161,6 +186,13 @@ func (a *Assembly) Shutdown(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := a.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer a.lifecycleGate.release()
 	a.runtimeMu.RLock()
 	runtime := a.runtime
 	a.runtimeMu.RUnlock()

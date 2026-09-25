@@ -5,15 +5,17 @@ import "sync/atomic"
 // Tracker holds accepted persistence version and cross-server synchronization
 // state. Persistence dirty state is transaction-local and intentionally absent.
 type Tracker struct {
-	version     atomic.Uint64
-	syncDirty   atomic.Uint64
-	syncVersion atomic.Uint64
+	version         atomic.Uint64
+	syncDirty       atomic.Uint64
+	entitySyncDirty atomic.Uint64
+	syncVersion     atomic.Uint64
 }
 
 type TrackerSnapshot struct {
-	Version     uint64
-	SyncDirty   uint64
-	SyncVersion uint64
+	Version         uint64
+	SyncDirty       uint64
+	EntitySyncDirty uint64
+	SyncVersion     uint64
 }
 
 func (t *Tracker) Version() uint64 { return t.version.Load() }
@@ -51,6 +53,7 @@ func (t *Tracker) AdvanceVersion(next uint64) error {
 func (t *Tracker) MarkSync(mask uint64) {
 	if mask != 0 {
 		t.syncDirty.Or(mask)
+		t.entitySyncDirty.Or(mask)
 	}
 }
 
@@ -64,7 +67,10 @@ func (t *Tracker) TakeSyncDirty() uint64 { return t.syncDirty.Swap(0) }
 
 func (t *Tracker) CommitSync(_ uint64) {}
 
-func (t *Tracker) RollbackSync(mask uint64) { t.MarkSync(mask) }
+func (t *Tracker) RollbackSync(mask uint64) { t.syncDirty.Or(mask) }
+
+// TakeEntitySyncDirty 独立消费客户端同步变化，不影响服务间同步掩码。
+func (t *Tracker) TakeEntitySyncDirty() uint64 { return t.entitySyncDirty.Swap(0) }
 
 func (t *Tracker) SyncVersion() uint64 { return t.syncVersion.Load() }
 
@@ -81,9 +87,10 @@ func (t *Tracker) Snapshot() TrackerSnapshot {
 		return TrackerSnapshot{}
 	}
 	return TrackerSnapshot{
-		Version:     t.version.Load(),
-		SyncDirty:   t.syncDirty.Load(),
-		SyncVersion: t.syncVersion.Load(),
+		Version:         t.version.Load(),
+		SyncDirty:       t.syncDirty.Load(),
+		EntitySyncDirty: t.entitySyncDirty.Load(),
+		SyncVersion:     t.syncVersion.Load(),
 	}
 }
 
@@ -93,5 +100,6 @@ func (t *Tracker) Restore(snapshot TrackerSnapshot) {
 	}
 	t.version.Store(snapshot.Version)
 	t.syncDirty.Store(snapshot.SyncDirty)
+	t.entitySyncDirty.Store(snapshot.EntitySyncDirty)
 	t.syncVersion.Store(snapshot.SyncVersion)
 }

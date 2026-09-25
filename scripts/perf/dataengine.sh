@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
+# 每个策略/负载/样本生成独立测试库与 WAL；性能与正确性使用同一正式 DAO 生成链路。
 set -euo pipefail
-
-# Local benchmark run for the data engine path: WAL codec / writer (nestwal),
-# projector + Mongo adapter (dataengine/engine) and Saga reservation overhead
-# (saga). Moved from roost-kit/scripts/perf when the implementations moved to
-# core (v1.14.0); package paths are the only change.
-#
-# For an A/B against another checkout, set ROOST_PERF_COUNT=10 and run this
-# script in each tree with GOWORK=off, then normalise the `pkg:` lines and
-# compare with `benchstat` (see docs/history/P5_acceptance.md §4).
-
-readonly repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly go_cache="${ROOST_GO_CACHE:-$(cd /tmp && pwd -P)/roost-go-cache}"
-readonly output_dir="${ROOST_PERF_OUTPUT:-${repo_dir}/artifacts/perf}"
-readonly count="${ROOST_PERF_COUNT:-5}"
-
-mkdir -p "${output_dir}"
-cd "${repo_dir}"
-
-GOCACHE="${go_cache}" go test ./nestwal ./dataengine/engine ./saga \
-  -run '^$' -bench . -benchmem -count="${count}" -timeout 0 \
-  | tee "${output_dir}/dataengine-local.txt"
-
-cat <<'MSG'
-Local benchmark complete. This output covers codec, WAL, projector adapter,
-Mongo adapter, and Saga reservation overhead only. Production release gates
-must also run the replica-set + JetStream file-storage profile, including
-primary/leader failover and a 100k-record recovery backlog.
-MSG
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+label="${ROOST_PERF_LABEL:-dataengine-$(date +%Y%m%d-%H%M%S)}"
+[[ "$label" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid label' >&2; exit 2; }
+output="$repo_dir/artifacts/perf/dataengine/$label"
+[[ ! -e "$output" ]] || { echo "Output already exists: $output" >&2; exit 2; }
+repeats="${ROOST_PERF_COUNT:-3}"
+[[ "$repeats" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid repeat count' >&2; exit 2; }
+export GOMAXPROCS="${ROOST_PERF_CPU:-4}" GOWORK=off ROOST_DATAENGINE_PERF=1
+[[ "$GOMAXPROCS" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid CPU count' >&2; exit 2; }
+mkdir -p "$output"
+cd "$repo_dir"
+{
+  go version
+  git rev-parse HEAD
+  git status --short
+  printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"
+} > "$output/env.txt"
+for shape in ${ROOST_PERF_SHAPES:-single dual pair hot}; do
+  case "$shape" in single|dual|pair|hot) ;; *) echo 'Invalid shape' >&2; exit 2;; esac
+  for policy in ${ROOST_PERF_POLICIES:-async strict pipelined}; do
+    case "$policy" in async|strict|pipelined) ;; *) echo 'Invalid policy' >&2; exit 2;; esac
+    for ((sample=1; sample<=repeats; sample++)); do
+      name="$shape-$policy-$sample"
+      ROOST_PERF_SHAPE="$shape" ROOST_PERF_POLICY="$policy" ROOST_PERF_OUTPUT="$output/$name.json" \
+        bash scripts/test-dataengine-generated.sh > "$output/$name.log" 2>&1
+      cat "$output/$name.json"
+    done
+  done
+done
+printf 'Results: %s\n' "$output"

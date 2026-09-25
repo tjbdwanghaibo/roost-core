@@ -2,10 +2,11 @@ package nest
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
 
 var tick uint64
@@ -50,7 +51,11 @@ func RegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) error {
 		return fmt.Errorf("nest: duplicate tick callback %q", name.String())
 	}
 	tickCbSeen[name] = struct{}{}
-	tickCbList = append(tickCbList, cb)
+	// 注册时复制并发布，已取得旧列表的 tick 可以无锁继续执行。
+	callbacks := make([]func(TickMsg), len(tickCbList)+1)
+	copy(callbacks, tickCbList)
+	callbacks[len(tickCbList)] = cb
+	tickCbList = callbacks
 	return nil
 }
 
@@ -66,15 +71,12 @@ func RangeAllTickCallback(f func(ff func(msg TickMsg))) {
 	}
 }
 
-// snapshotTickCallbacks copies the registration-ordered callback list so
-// callers run callbacks outside the registry lock (a callback registering
-// another callback must not deadlock).
+// snapshotTickCallbacks 返回只读快照，调用者不得改写切片。
+// 注册时发布新数组，故 callback 内注册新 callback 不会影响本轮或造成锁重入。
 func snapshotTickCallbacks() []func(msg TickMsg) {
 	tickMu.RLock()
 	defer tickMu.RUnlock()
-	callbacks := make([]func(msg TickMsg), len(tickCbList))
-	copy(callbacks, tickCbList)
-	return callbacks
+	return tickCbList
 }
 
 // Ticker is the frame-based timing system (channel-based, no actor).
@@ -84,9 +86,9 @@ type Ticker struct {
 	tick         atomic.Uint64
 	stopChan     chan struct{}
 	done         chan struct{}
-	started      atomic.Bool
-	stopped      atomic.Bool
-	stopOnce     sync.Once
+	lifecycleMu  sync.Mutex
+	started      bool
+	stopped      bool
 }
 
 func NewTicker(duration time.Duration) *Ticker {
@@ -121,29 +123,31 @@ func (t *Ticker) Duration() time.Duration {
 	return t.duration
 }
 
+// Start/Stop 的状态判定与通道关闭属于同一临界区，不能用两个独立 atomic 判定启动所有权。
 func (t *Ticker) Start() {
-	if t.stopped.Load() {
+	t.lifecycleMu.Lock()
+	defer t.lifecycleMu.Unlock()
+	if t.stopped || t.started {
 		return
 	}
-	if t.started.CompareAndSwap(false, true) {
-		go t.run()
-	}
+	t.started = true
+	go t.run()
 }
 
 func (t *Ticker) Stop() {
-	if !t.stopped.CompareAndSwap(false, true) {
-		if t.started.Load() {
-			<-t.done
+	t.lifecycleMu.Lock()
+	started := t.started
+	if !t.stopped {
+		t.stopped = true
+		if started {
+			close(t.stopChan)
 		}
-		return
 	}
-	if !t.started.Load() {
-		return
+	t.lifecycleMu.Unlock()
+	// 等待不能持生命周期锁；所有 Stop 调用者等待同一个 run 退出。
+	if started {
+		<-t.done
 	}
-	t.stopOnce.Do(func() {
-		close(t.stopChan)
-	})
-	<-t.done
 }
 
 func (t *Ticker) run() {

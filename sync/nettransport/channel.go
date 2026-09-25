@@ -30,8 +30,14 @@ type AsyncTransportConfig struct {
 	MaxSessions       int
 	ReliableQueueSize int
 	MaxReliableBytes  int
-	SendTimeout       time.Duration
-	OnError           ErrorHandler
+	// MaxQueuedReliableBytes 限制每会话待发送字节，不含正在发送的一条；0 保持旧行为。
+	MaxQueuedReliableBytes int
+	// MaxResidentReliableBytes 限制全部会话可靠消息的驻留字节（排队+在途）；0 关闭。
+	MaxResidentReliableBytes int64
+	// MaxReliableAge 从入队开始计时，包含排队与发送；0 仅使用 SendTimeout。
+	MaxReliableAge time.Duration
+	SendTimeout    time.Duration
+	OnError        ErrorHandler
 }
 
 func DefaultAsyncTransportConfig() AsyncTransportConfig {
@@ -69,18 +75,27 @@ type AsyncTransport struct {
 	stats      asyncCounters
 }
 
+type queuedReliable struct {
+	data     []byte
+	queuedAt time.Time
+}
+
 type sessionQueue struct {
 	id     SessionID
 	owner  *AsyncTransport
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.Mutex
-	closing  bool
-	failure  error
-	reliable [][]byte
-	busy     bool
-	wake     chan struct{}
+	mu          sync.Mutex
+	closing     bool
+	failure     error
+	reliable    []queuedReliable
+	head        int
+	queuedBytes int64
+	busyBytes   int64
+	busySince   time.Time
+	busy        bool
+	wake        chan struct{}
 }
 
 type asyncCounters struct {
@@ -91,9 +106,17 @@ type asyncCounters struct {
 	reliableAbandoned    atomic.Uint64
 	sendErrors           atomic.Uint64
 	handlerPanics        atomic.Uint64
+	residentBytes        atomic.Int64
+	activeSessions       atomic.Int64
+	globalBackpressure   atomic.Uint64
+	expired              atomic.Uint64
 }
 
 type AsyncTransportStats struct {
+	PendingReliableBytes  int64
+	ReliableBytesInFlight int64
+	// OldestReliableAge 包含队列头与正在发送的消息，自准入时计时。
+	OldestReliableAge     time.Duration
 	ActiveSessions        int
 	DrainingSessions      int
 	PendingReliable       int
@@ -113,6 +136,9 @@ type AsyncTransportStats struct {
 func NewAsyncTransport(downstream ReliableSender, config AsyncTransportConfig) (*AsyncTransport, error) {
 	if isNilInterface(downstream) {
 		return nil, ErrTransportRequired
+	}
+	if config.MaxResidentReliableBytes < 0 || config.MaxReliableAge < 0 || config.MaxQueuedReliableBytes < 0 {
+		return nil, ErrProtocolConfig
 	}
 	defaults := DefaultAsyncTransportConfig()
 	if config.MaxSessions <= 0 {
@@ -159,6 +185,7 @@ func (transport *AsyncTransport) RegisterSession(info SessionInfo) error {
 	ctx, cancel := context.WithCancel(transport.ctx)
 	queue := &sessionQueue{id: id, owner: transport, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
 	transport.sessions[id] = queue
+	transport.stats.activeSessions.Add(1)
 	transport.wait.Add(1)
 	go queue.run()
 	return nil
@@ -206,7 +233,6 @@ func (transport *AsyncTransport) SendReliable(ctx context.Context, id SessionID,
 	if len(payload) > transport.config.MaxReliableBytes {
 		return ErrReliableMessageTooBig
 	}
-	message := append([]byte(nil), payload...)
 
 	transport.mu.RLock()
 	defer transport.mu.RUnlock()
@@ -222,31 +248,28 @@ func (transport *AsyncTransport) SendReliable(ctx context.Context, id SessionID,
 	if err := queue.admissionErrorLocked(); err != nil {
 		return err
 	}
-	if len(queue.reliable) >= transport.config.ReliableQueueSize {
+	if queue.pendingCount() >= transport.config.ReliableQueueSize ||
+		(transport.config.MaxQueuedReliableBytes > 0 && int64(len(payload)) > int64(transport.config.MaxQueuedReliableBytes)-queue.queuedBytes) {
 		transport.stats.reliableBackpressure.Add(1)
 		return ErrReliableBackpressure
 	}
-	queue.reliable = append(queue.reliable, message)
+	if !transport.reserveReliableBytes(int64(len(payload))) {
+		transport.stats.reliableBackpressure.Add(1)
+		transport.stats.globalBackpressure.Add(1)
+		return fmt.Errorf("%w: global resident byte budget", ErrReliableBackpressure)
+	}
+	// 先准入检查，再复制调用方字节；拒绝路径不为 payload 分配。
+	if len(queue.reliable) == cap(queue.reliable) && queue.head > 0 {
+		count := copy(queue.reliable, queue.reliable[queue.head:])
+		clear(queue.reliable[count:])
+		queue.reliable = queue.reliable[:count]
+		queue.head = 0
+	}
+	queue.reliable = append(queue.reliable, queuedReliable{data: append([]byte(nil), payload...), queuedAt: time.Now()})
+	queue.queuedBytes += int64(len(payload))
 	transport.stats.reliableQueued.Add(1)
 	signal(queue.wake)
 	return nil
-}
-
-func (transport *AsyncTransport) session(id SessionID) (*sessionQueue, error) {
-	if transport == nil {
-		return nil, ErrTransportClosed
-	}
-	transport.mu.RLock()
-	if transport.closed {
-		transport.mu.RUnlock()
-		return nil, ErrTransportClosed
-	}
-	queue := transport.sessions[id]
-	transport.mu.RUnlock()
-	if queue == nil {
-		return nil, ErrSessionNotRegistered
-	}
-	return queue, nil
 }
 
 // Close rejects new work, drains each session's queued messages, and then
@@ -292,6 +315,8 @@ func (transport *AsyncTransport) Stats() AsyncTransportStats {
 	}
 	transport.mu.RLock()
 	active, draining, pending, busy := 0, 0, 0, 0
+	var pendingBytes, busyBytes int64
+	var oldest time.Time
 	for _, queue := range transport.sessions {
 		queue.mu.Lock()
 		if queue.closing {
@@ -299,14 +324,30 @@ func (transport *AsyncTransport) Stats() AsyncTransportStats {
 		} else {
 			active++
 		}
-		pending += len(queue.reliable)
+		pending += queue.pendingCount()
+		pendingBytes += queue.queuedBytes
+		busyBytes += queue.busyBytes
+		if queue.pendingCount() > 0 {
+			at := queue.reliable[queue.head].queuedAt
+			if oldest.IsZero() || at.Before(oldest) {
+				oldest = at
+			}
+		}
+		if queue.busy && (oldest.IsZero() || queue.busySince.Before(oldest)) {
+			oldest = queue.busySince
+		}
 		if queue.busy {
 			busy++
 		}
 		queue.mu.Unlock()
 	}
 	transport.mu.RUnlock()
+	var age time.Duration
+	if !oldest.IsZero() {
+		age = time.Since(oldest)
+	}
 	return AsyncTransportStats{
+		PendingReliableBytes: pendingBytes, ReliableBytesInFlight: busyBytes, OldestReliableAge: age,
 		ActiveSessions:        active,
 		DrainingSessions:      draining,
 		PendingReliable:       pending,
@@ -331,8 +372,10 @@ func (queue *sessionQueue) beginClose() {
 func (queue *sessionQueue) cancelNow() {
 	queue.mu.Lock()
 	queue.closing = true
-	queue.owner.stats.reliableAbandoned.Add(uint64(len(queue.reliable)))
+	queue.owner.stats.reliableAbandoned.Add(uint64(queue.pendingCount()))
+	queue.owner.stats.residentBytes.Add(-queue.queuedBytes)
 	queue.reliable = nil
+	queue.head, queue.queuedBytes = 0, 0
 	queue.mu.Unlock()
 	queue.cancel()
 }
@@ -360,31 +403,60 @@ func (queue *sessionQueue) run() {
 	}
 }
 
+func (queue *sessionQueue) pendingCount() int { return len(queue.reliable) - queue.head }
+
 func (queue *sessionQueue) take() ([]byte, bool) {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
-	if len(queue.reliable) == 0 {
+	if queue.pendingCount() == 0 {
 		return nil, queue.closing
 	}
-	message := queue.reliable[0]
-	queue.reliable[0] = nil
-	queue.reliable = queue.reliable[1:]
+	message := queue.reliable[queue.head]
+	queue.reliable[queue.head] = queuedReliable{}
+	queue.head++
+	if queue.head == len(queue.reliable) {
+		queue.reliable = queue.reliable[:0]
+		queue.head = 0
+	}
+	queue.queuedBytes -= int64(len(message.data))
+	queue.busyBytes, queue.busySince = int64(len(message.data)), message.queuedAt
 	queue.busy = true
-	return message, false
+	return message.data, false
 }
 
 func (queue *sessionQueue) send(message []byte) bool {
-	ctx, cancel := context.WithTimeout(queue.ctx, queue.owner.config.SendTimeout)
+	// busySince 是本消息准入时刻，不能在出队时重新开始计算年龄。
+	deadline := time.Now().Add(queue.owner.config.SendTimeout)
+	var expires time.Time
+	if age := queue.owner.config.MaxReliableAge; age > 0 {
+		expires = queue.busySince.Add(age)
+		if expires.Before(deadline) {
+			deadline = expires
+		}
+	}
+	ctx, cancel := context.WithDeadline(queue.ctx, deadline)
 	defer cancel()
-	if err := queue.owner.downstream.SendReliable(ctx, queue.id, message); err != nil {
-		queue.owner.report(SendError{Session: queue.id, Err: err})
+	var err error
+	if !expires.IsZero() && !time.Now().Before(expires) {
+		err = ErrReliableExpired
+	} else {
+		err = queue.owner.downstream.SendReliable(ctx, queue.id, message)
+	}
+	if err != nil {
+		if !expires.IsZero() && !time.Now().Before(expires) {
+			err = fmt.Errorf("%w: %v", ErrReliableExpired, err)
+			queue.owner.stats.expired.Add(1)
+		}
 		queue.fail(err)
+		queue.owner.report(SendError{Session: queue.id, Err: err})
 		return false
 	}
 	queue.owner.stats.reliableSent.Add(1)
 	queue.owner.stats.reliableBytesSent.Add(uint64(len(message)))
 	queue.mu.Lock()
+	queue.owner.stats.residentBytes.Add(-queue.busyBytes)
 	queue.busy = false
+	queue.busyBytes, queue.busySince = 0, time.Time{}
 	queue.mu.Unlock()
 	return true
 }
@@ -417,14 +489,25 @@ func (queue *sessionQueue) fail(err error) {
 	queue.mu.Lock()
 	queue.failure = err
 	queue.closing = true
+	queue.owner.stats.residentBytes.Add(-queue.busyBytes)
 	queue.busy = false
-	queue.owner.stats.reliableAbandoned.Add(uint64(len(queue.reliable)))
+	queue.busyBytes, queue.busySince = 0, time.Time{}
+	queue.owner.stats.reliableAbandoned.Add(uint64(queue.pendingCount()))
+	queue.owner.stats.residentBytes.Add(-queue.queuedBytes)
 	queue.reliable = nil
+	queue.head, queue.queuedBytes = 0, 0
 	queue.mu.Unlock()
 	queue.cancel()
 }
 
 func (queue *sessionQueue) workerDone() {
+	// Close 超时可能在 worker 取下一条前取消：归还尚未消费的全部额度。
+	queue.cancelNow()
+	queue.mu.Lock()
+	queue.owner.stats.residentBytes.Add(-queue.busyBytes)
+	queue.busyBytes, queue.busySince, queue.busy = 0, time.Time{}, false
+	queue.mu.Unlock()
+	queue.owner.stats.activeSessions.Add(-1)
 	if lifecycle, ok := queue.owner.downstream.(SessionTransport); ok {
 		lifecycle.RemoveSession(queue.id)
 	}
@@ -445,3 +528,11 @@ func signal(channel chan struct{}) {
 
 var _ ReliableSender = (*AsyncTransport)(nil)
 var _ SessionTransport = (*AsyncTransport)(nil)
+
+// MaxReliableBytes 返回配置的单条可靠消息硬上限，供上游完整包组帧使用。
+func (transport *AsyncTransport) MaxReliableBytes() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxReliableBytes
+}

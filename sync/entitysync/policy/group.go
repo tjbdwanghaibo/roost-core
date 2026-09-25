@@ -33,18 +33,17 @@ var (
 	ErrGroupNotPresent     = errors.New("policy: not in the group")
 )
 
-// Group is the all-to-all policy: every member receives every subject in the
-// room, wherever they are. A lobby, a party, an instance. It is not a lockstep battle room (that is lockstep.Room) and not a label on the wire. Subjects and
-// members are separate sets — a spectator is a member and not a subject, a
-// scripted actor is a subject and not a member — and a player is usually
-// both, added twice.
+// Group 组织成员与实体的全互见关系：每个成员订阅集合中的每个实体。
+// 两者是独立集合；观战者只加入成员，场景 NPC 只加入实体，玩家通常两者都加入。
+// 会话由 Manager 管理，Group 只维护成员关系并调用订阅接口。
 type Group struct {
-	mu       sync.Mutex
-	config   GroupConfig
-	session  func(int64) entitysync.SessionID
-	subjects map[int64]struct{}
-	members  map[int64]struct{}
-	closed   bool
+	mu            sync.Mutex
+	config        GroupConfig
+	subscriptions *entitysync.SubscriptionSource
+	session       func(int64) entitysync.SessionID
+	subjects      map[int64]struct{}
+	members       map[int64]struct{}
+	closed        bool
 }
 
 func NewGroup(config GroupConfig) (*Group, error) {
@@ -55,132 +54,145 @@ func NewGroup(config GroupConfig) (*Group, error) {
 	if session == nil {
 		session = func(member int64) entitysync.SessionID { return entitysync.SessionID(member) }
 	}
-	return &Group{config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}, nil
+	return &Group{subscriptions: config.Manager.NewSubscriptionSource(), config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}, nil
 }
 
 // AddSubject registers a subject with the manager and subscribes every
 // current member to it.
-func (r *Group) AddSubject(state *entity.SubjectSyncState) error {
+func (g *Group) AddSubject(state *entity.SubjectSyncState) error {
 	if state == nil {
 		return entitysync.ErrSubjectInvalid
 	}
 	id := state.SubjectID()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
 		return ErrGroupClosed
 	}
-	if _, present := r.subjects[id]; present {
+	if _, present := g.subjects[id]; present {
 		return ErrGroupSubjectPresent
 	}
-	if r.config.MaxSubjects > 0 && len(r.subjects) >= r.config.MaxSubjects {
+	if g.config.MaxSubjects > 0 && len(g.subjects) >= g.config.MaxSubjects {
 		return ErrGroupSubjectLimit
 	}
-	if err := r.config.Manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+	if err := g.config.Manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return err
 	}
-	r.subjects[id] = struct{}{}
 	var errs []error
-	for member := range r.members {
-		if err := r.config.Manager.Subscribe(r.session(member), id, r.config.Profile); err != nil {
+	for member := range g.members {
+		if err := g.subscriptions.Subscribe(g.session(member), id, g.config.Profile); err != nil {
+			errs = append(errs, fmt.Errorf("member %d: %w", member, err))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		for member := range g.members {
+			_ = g.subscriptions.Unsubscribe(g.session(member), id)
+		}
+		return err
+	}
+	g.subjects[id] = struct{}{}
+	return nil
+}
+
+// RemoveSubject 释放本组对实体的订阅。实体真正销毁时由调用方 Manager.Unregister。
+func (g *Group) RemoveSubject(id int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, present := g.subjects[id]; !present {
+		return ErrGroupNotPresent
+	}
+	delete(g.subjects, id)
+	return g.releaseSubject(id)
+}
+
+// releaseSubject 由持有 g.mu 的调用方使用；不触碰其他政策的来源。
+func (g *Group) releaseSubject(id int64) error {
+	var errs []error
+	for member := range g.members {
+		if err := g.subscriptions.Unsubscribe(g.session(member), id); err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			errs = append(errs, fmt.Errorf("member %d: %w", member, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// RemoveSubject retires a subject: every member is owed a remove.
-func (r *Group) RemoveSubject(id int64) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, present := r.subjects[id]; !present {
-		return ErrGroupNotPresent
-	}
-	delete(r.subjects, id)
-	if err := r.config.Manager.Unregister(id); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
-		return err
-	}
-	return nil
-}
-
 // Join makes a session a member: it receives every subject in the group. The
 // session must already be open with the manager.
-func (r *Group) Join(member int64) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
+func (g *Group) Join(member int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
 		return ErrGroupClosed
 	}
-	if _, present := r.members[member]; present {
+	if _, present := g.members[member]; present {
 		return ErrGroupMemberPresent
 	}
-	if r.config.MaxMembers > 0 && len(r.members) >= r.config.MaxMembers {
+	if g.config.MaxMembers > 0 && len(g.members) >= g.config.MaxMembers {
 		return ErrGroupMemberLimit
 	}
-	session := r.session(member)
+	session := g.session(member)
 	var errs []error
-	for id := range r.subjects {
-		if err := r.config.Manager.Subscribe(session, id, r.config.Profile); err != nil {
+	for id := range g.subjects {
+		if err := g.subscriptions.Subscribe(session, id, g.config.Profile); err != nil {
 			errs = append(errs, fmt.Errorf("subject %d: %w", id, err))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		for id := range r.subjects {
-			_ = r.config.Manager.Unsubscribe(session, id)
+		for id := range g.subjects {
+			_ = g.subscriptions.Unsubscribe(session, id)
 		}
 		return err
 	}
-	r.members[member] = struct{}{}
+	g.members[member] = struct{}{}
 	return nil
 }
 
 // Leave takes a member out: it stops receiving the group's subjects.
-func (r *Group) Leave(member int64) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, present := r.members[member]; !present {
+func (g *Group) Leave(member int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, present := g.members[member]; !present {
 		return ErrGroupNotPresent
 	}
-	delete(r.members, member)
-	session := r.session(member)
+	delete(g.members, member)
+	session := g.session(member)
 	var errs []error
-	for id := range r.subjects {
-		if err := r.config.Manager.Unsubscribe(session, id); err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
+	for id := range g.subjects {
+		if err := g.subscriptions.Unsubscribe(session, id); err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			errs = append(errs, fmt.Errorf("subject %d: %w", id, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Close retires every subject and forgets every member. Members' sessions
-// stay open — they are the transport's, not the group's.
-func (r *Group) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
+// Close 释放本组的订阅与成员。会话及实体注册仍由 Manager 和业务生命周期管理。
+func (g *Group) Close() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
 		return nil
 	}
-	r.closed = true
+	g.closed = true
 	var errs []error
-	for id := range r.subjects {
-		if err := r.config.Manager.Unregister(id); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
+	for id := range g.subjects {
+		if err := g.releaseSubject(id); err != nil {
 			errs = append(errs, fmt.Errorf("subject %d: %w", id, err))
 		}
 	}
-	clear(r.subjects)
-	clear(r.members)
+	clear(g.subjects)
+	clear(g.members)
 	return errors.Join(errs...)
 }
 
 // Members and Subjects report the group's size.
-func (r *Group) Members() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.members)
+func (g *Group) Members() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.members)
 }
 
-func (r *Group) Subjects() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.subjects)
+func (g *Group) Subjects() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.subjects)
 }

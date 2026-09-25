@@ -3,13 +3,13 @@ package nest
 import (
 	"container/heap"
 	"context"
-	"errors"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	flog "github.com/tjbdwanghaibo/roost-core/log"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/misc"
 	"github.com/tjbdwanghaibo/roost-core/worker"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,13 +20,13 @@ type Dispatcher struct {
 	MsgCap        int
 	DelayedMsgCap int
 	MaxDelay      time.Duration
-	pool          *worker.Pool[*Msg]
-	hbPool        *worker.Pool[*Msg]
-	costPool      *worker.Pool[*Msg]
+	queue         *dispatchQueue
+	slowConfig    WorkerPoolConfig
+	remoteWorkers int
+	remoteHandler func(*Msg)
 	workerNum     int
-	hbWorkerNum   int
-	costWorkerNum int
 	handler       func(*Msg)
+	stageMetrics  bool
 	mu            sync.Mutex
 	delayed       map[*delayedMsg]struct{}
 	delayedHeap   delayedMsgHeap
@@ -79,21 +79,19 @@ func (h *delayedMsgHeap) Pop() any {
 
 func NewDispatcher(name string, workerNum, hbWorkerNum int, msgCap int, handler func(*Msg)) *Dispatcher {
 	ret := &Dispatcher{
-		Name:        name,
-		MsgCap:      msgCap,
-		workerNum:   workerNum,
-		hbWorkerNum: hbWorkerNum,
-		handler:     handler,
+		Name:      name,
+		MsgCap:    msgCap,
+		workerNum: workerNum,
+		handler:   handler,
 	}
 	if ret.workerNum <= 0 {
-		ret.workerNum = 1
+		ret.workerNum = runtime.GOMAXPROCS(0)
 	}
 	if ret.MsgCap <= 0 {
 		ret.MsgCap = 10000
 	}
 	ret.DelayedMsgCap = ret.MsgCap
 	ret.MaxDelay = 24 * time.Hour
-	ret.costWorkerNum = ret.workerNum
 	return ret
 }
 
@@ -121,24 +119,18 @@ func (m *Dispatcher) OnInit() {
 	m.mu.Unlock()
 	go m.delayLoop()
 
-	m.pool = worker.NewPool[*Msg](worker.PoolConfig{
-		Name:      m.Name,
-		WorkerNum: m.workerNum,
-		QueueCap:  m.MsgCap,
-	}, m.handler)
-
-	if m.hbWorkerNum > 0 {
-		m.hbPool = worker.NewPool[*Msg](worker.PoolConfig{
-			Name:      m.Name + "_hb",
-			WorkerNum: m.hbWorkerNum,
-			QueueCap:  m.MsgCap,
-		}, m.handler)
+	slow := m.slowConfig
+	if slow.Workers <= 0 {
+		slow.Workers = m.remoteWorkers
 	}
-	m.costPool = worker.NewPool[*Msg](worker.PoolConfig{
-		Name:      m.Name + "_cost",
-		WorkerNum: m.costWorkerNum,
-		QueueCap:  m.MsgCap,
-	}, m.handler)
+	if slow.Workers <= 0 {
+		slow.Workers = max(32, m.workerNum*4)
+	}
+	if slow.QueueCap <= 0 {
+		slow.QueueCap = 64
+	}
+	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, slow, m.handler, m.remoteHandler)
+
 }
 
 // Fence stops admission while leaving worker shutdown to OnDestroy. Messages
@@ -155,13 +147,7 @@ func (m *Dispatcher) Fence(err error) {
 }
 
 func (m *Dispatcher) OnRun() {
-	m.pool.Start()
-	if m.hbPool != nil {
-		m.hbPool.Start()
-	}
-	if m.costPool != nil {
-		m.costPool.Start()
-	}
+	m.queue.start()
 }
 
 func (m *Dispatcher) OnDestroy() {
@@ -221,17 +207,7 @@ func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 		recycleMsg(dm.msg)
 	}
 
-	var err error
-	if m.pool != nil {
-		err = errors.Join(err, m.pool.StopWithContext(ctx))
-	}
-	if m.hbPool != nil {
-		err = errors.Join(err, m.hbPool.StopWithContext(ctx))
-	}
-	if m.costPool != nil {
-		err = errors.Join(err, m.costPool.StopWithContext(ctx))
-	}
-	return err
+	return m.queue.stop(ctx)
 }
 
 func hashKey(key int64) uint64 {
@@ -271,44 +247,18 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 		recycleMsg(msg)
 		return ErrNestStopped
 	}
+	msg.stageMetrics = m.stageMetrics
+	msg.queuedAt = startNestStage(m.stageMetrics)
 	msg.OnSend()
-	dispatch := func(pool *worker.Pool[*Msg]) error {
-		if pool == nil {
-			emitNestTraceEventInfo(trace, "enqueue", "stopped", 0)
-			if msg.RetChan == nil {
-				logAsyncDispatchFailure(msg, ErrNestStopped)
-			}
-			msg.OnRelease()
-			return ErrNestStopped
+	err := m.queue.admit(msg, m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg)))
+	if err != nil {
+		emitNestTraceEventInfo(trace, "enqueue", "error", 0)
+		if msg.RetChan == nil {
+			logAsyncDispatchFailure(msg, err)
 		}
-		if err := pool.TryDispatch(msg.Key(), msg); err != nil {
-			emitNestTraceEventInfo(trace, "enqueue", "error", 0)
-			if msg.RetChan == nil {
-				logAsyncDispatchFailure(msg, err)
-			}
-			msg.OnRelease()
-			return err
-		}
-		emitNestTraceEventInfo(trace, "enqueue", "ok", 0)
-		return nil
-	}
-	var err error
-	if msg.Cost || msg.HasRemote {
-		if m.costPool != nil {
-			err = dispatch(m.costPool)
-		} else {
-			err = dispatch(m.pool)
-		}
+		msg.OnRelease()
 	} else {
-		if msg.Type == MsgTypeBroadcast {
-			if m.hbPool != nil {
-				err = dispatch(m.hbPool)
-			} else {
-				err = dispatch(m.pool)
-			}
-		} else {
-			err = dispatch(m.pool)
-		}
+		emitNestTraceEventInfo(trace, "enqueue", "ok", 0)
 	}
 	m.observeStatsIfDue()
 	return err
@@ -342,19 +292,19 @@ func (m *Dispatcher) observeStats() {
 	if m == nil {
 		return
 	}
-	m.observePoolStats("main", m.pool)
-	m.observePoolStats("heartbeat", m.hbPool)
-	m.observePoolStats("cost", m.costPool)
+	fast, slow, continuations := m.queue.stats()
+	m.observePoolStats("fast", fast)
+	m.observePoolStats("slow", slow)
+	metrics.SetGauge("nest.dispatch.fast_continuations", metrics.Labels{"dispatcher": m.Name}, int64(continuations))
 	metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{
 		"dispatcher": m.Name,
 	}, int64(m.delayedCount()))
 }
 
-func (m *Dispatcher) observePoolStats(poolName string, pool *worker.Pool[*Msg]) {
-	if m == nil || pool == nil {
+func (m *Dispatcher) observePoolStats(poolName string, stats worker.PoolStats) {
+	if m == nil {
 		return
 	}
-	stats := pool.Stats()
 	labels := metrics.Labels{
 		"dispatcher": m.Name,
 		"pool":       poolName,

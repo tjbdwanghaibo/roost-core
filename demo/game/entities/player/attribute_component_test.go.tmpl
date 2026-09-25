@@ -2,15 +2,18 @@ package player
 
 import (
 	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"path/filepath"
 	"testing"
 
-	generated "{{MODULE}}/configs/generated"
-	gameattr "{{MODULE}}/game/gameplay/attribute"
-	"github.com/tjbdwanghaibo/roost-core/configdata"
 	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
+	generated "{{MODULE}}/configs/generated"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
 )
 
 // attributeCommitter keeps nothing: this test is about the container, not
@@ -137,3 +140,51 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	}
 }
 
+// 使用真实生成 DAO 校验白名单及字段 delta，避免只测试掩码计算。
+func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
+	subject := newAttributePlayer(t, 7991)
+	packer := NewPlayerSyncPacker(subject)
+	near := entity.SyncProfile{Key: "near"}
+	full, err := packer.PackSubjectSnapshot(near)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc bson.M
+	if err := bson.Unmarshal(full.BytesCopy(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gold", "exp", "items", "attr_base", "attr_final"} {
+		if _, exists := doc[name]; exists {
+			t.Fatalf("near view leaked %s", name)
+		}
+	}
+	if _, exists := doc["pos_x"]; !exists {
+		t.Fatal("near view lost position")
+	}
+	position, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "PosX")
+	if !ok {
+		t.Fatal("position metadata missing")
+	}
+	delta, err := packer.PackSubjectDelta(near, position.Bit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc = nil
+	if err := bson.Unmarshal(delta.BytesCopy(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc) != 2 {
+		t.Fatalf("delta sent unchanged fields: %v", doc)
+	}
+	gold, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "Gold")
+	if !ok {
+		t.Fatal("gold metadata missing")
+	}
+	hidden, err := packer.PackSubjectDelta(near, gold.Bit)
+	if err != nil || !hidden.Empty() {
+		t.Fatalf("private change packed: %v", err)
+	}
+	if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "typo"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
+		t.Fatal(err)
+	}
+}

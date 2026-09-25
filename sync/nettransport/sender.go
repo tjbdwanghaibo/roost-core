@@ -21,6 +21,7 @@ var (
 	ErrSessionFailed         = errors.New("nettransport: session transport has failed")
 	ErrSessionLimit          = errors.New("nettransport: session limit exceeded")
 	ErrReliableBackpressure  = errors.New("nettransport: reliable queue is full")
+	ErrReliableExpired       = errors.New("nettransport: reliable message expired")
 	ErrReliableMessageTooBig = errors.New("nettransport: reliable message is too large")
 	ErrRouteNotBound         = errors.New("nettransport: session network route is not bound")
 	ErrProtocolConfig        = errors.New("nettransport: invalid protocol configuration")

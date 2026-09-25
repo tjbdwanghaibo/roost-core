@@ -96,3 +96,27 @@ func TestTrackerImplementsSyncOnlyDirtyContract(t *testing.T) {
 		t.Fatal("SelfClean did not clear sync dirty")
 	}
 }
+
+func TestEntitySyncConsumptionIsIndependentAndRollsBack(t *testing.T) {
+	var tracker Tracker
+	tracker.MarkSync(1)
+	before := tracker.Snapshot()
+	tracker.MarkSync(2)
+	if got := tracker.TakeEntitySyncDirty(); got != 3 {
+		t.Fatalf("client mask=%d", got)
+	}
+	if got := tracker.TakeSyncDirty(); got != 3 {
+		t.Fatalf("server mask=%d", got)
+	}
+	tracker.RollbackSync(3)
+	if got := tracker.TakeEntitySyncDirty(); got != 0 {
+		t.Fatalf("server retry republished client mask=%d", got)
+	}
+	tracker.Restore(before)
+	if got := tracker.TakeEntitySyncDirty(); got != 1 {
+		t.Fatalf("rollback client mask=%d", got)
+	}
+	if got := tracker.TakeSyncDirty(); got != 1 {
+		t.Fatalf("rollback server mask=%d", got)
+	}
+}

@@ -431,6 +431,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
+	if guild := read("game/controllers/player/guild.go"); !strings.Contains(guild, "controller.nextGuildID(") || strings.Contains(guild, "controller.RuntimeIDs(") {
+		t.Fatal("persistent guild creation must use the durable allocator")
+	}
+	read("game/controllers/player/guild_ids.go")
+	read("game/controllers/player/guild_ids_test.go")
 	if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
 		t.Errorf("EnterGame is not bound to the controller:\n%s", bind)
 	}

@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -20,10 +21,11 @@ const (
 
 // InterestConfig shapes an Interest.
 type InterestConfig struct {
+	// MaxQueuedFacts 限制正式提交事实队列；零值为 65536。
+	MaxQueuedFacts int
 	// Manager receives the subscriptions. Required.
 	Manager *entitysync.Manager
-	// Spatial shapes the AOI grid: bounds, block size, enter/leave radii,
-	// bands. Required (it is validated by spatial).
+	// AOI 配置空间网格、进入/离开半径和距离分档；由 NewAOI 校验。
 	AOI AOIConfig
 	// Session names the session an observer's frames go to. Observers,
 	// subjects and relations are keyed by ENTITY id — unique across kinds —
@@ -33,6 +35,12 @@ type InterestConfig struct {
 	// Profile turns a distance band into the profile a subscription asks
 	// for. Nil means band 0 → the default profile, band n → {Key: "bandN", LOD: n}.
 	Profile func(band int) entity.SyncProfile
+	// SourceProfiles 显式覆盖某来源、某距离档的视图；未配置的档继续使用 Profile。
+	// 例如 self→owner，spatial→near/far，team→team；构造时复制，来源名必须已声明。
+	SourceProfiles map[string]map[int]entity.SyncProfile
+	// ViewSets 非空时校验本 Interest 涉及的实体类型及其视图；构造时复制 map。
+	// 每个类型应支持可选来源视图，动态关系 band 在订阅前校验。
+	ViewSets map[string]*entity.SyncViewSet
 	// Relations are the named relation sources to create ("team",
 	// "friends", …); Relation(name) reaches them. SourceSelf is always there.
 	Relations []string
@@ -60,21 +68,30 @@ type Refusal struct {
 //
 // Aggregation is the part worth reading. A pair can be held by more than one
 // source at once — a teammate standing next to you is both spatial and team —
-// so Interest counts sources: the FIRST source to claim a pair subscribes,
+// so Interest retains each source: the FIRST source to claim a pair subscribes,
 // and only the LAST source to drop it unsubscribes. Without that, a teammate
 // walking out of view would take the team subscription with them.
 //
 // AOI is not safe for concurrent use; Interest carries the
 // lock that makes it so. Every method is callable from any goroutine.
 type Interest struct {
-	mu        sync.Mutex
-	manager   *entitysync.Manager
-	aoi       *AOI
-	self      *RelationSource
-	relations map[string]*RelationSource
-	sources   []Source
-	session   func(int64) entitysync.SessionID
-	profile   func(int) entity.SyncProfile
+	queueActive      bool
+	facts            []queuedInterestFact
+	maxQueuedFacts   int
+	wake             func()
+	cancelQueue      func()
+	mu               sync.Mutex
+	subscriptions    *entitysync.SubscriptionSource
+	aoi              *AOI
+	self             *RelationSource
+	relations        map[string]*RelationSource
+	sources          []Source
+	session          func(int64) entitysync.SessionID
+	profile          func(int) entity.SyncProfile
+	sourceProfiles   map[string]map[int]entity.SyncProfile
+	compareProfiles  func(entity.SyncProfile, entity.SyncProfile) int
+	viewSets         map[string]*entity.SyncViewSet
+	validatePriority func(entity.SyncView) error
 
 	// held maps a pair to the sources currently claiming it and to whether
 	// the manager has been told about it.
@@ -90,7 +107,7 @@ type pair struct{ observer, subject int64 }
 type hold struct {
 	bands      map[string]int
 	subscribed bool
-	band       int
+	profile    entity.SyncProfile
 }
 
 func NewInterest(config InterestConfig) (*Interest, error) {
@@ -110,8 +127,31 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		profile = DefaultBandProfile
 	}
 	in := &Interest{
-		manager: config.Manager, aoi: manager, session: session, profile: profile,
+		subscriptions: config.Manager.NewSubscriptionSource(), aoi: manager, session: session, profile: profile,
 		relations: make(map[string]*RelationSource), held: make(map[pair]*hold),
+	}
+	in.compareProfiles = config.Manager.CompareProfiles
+	in.validatePriority = config.Manager.ValidateViewPriority
+	in.viewSets = make(map[string]*entity.SyncViewSet, len(config.ViewSets))
+	for name, views := range config.ViewSets {
+		if name == "" || views == nil {
+			return nil, fmt.Errorf("policy: invalid view set %q", name)
+		}
+		in.viewSets[name] = views
+	}
+	in.sourceProfiles = make(map[string]map[int]entity.SyncProfile, len(config.SourceProfiles))
+	for source, bands := range config.SourceProfiles {
+		if source != SourceSpatial && source != SourceSelf && !slices.Contains(config.Relations, source) {
+			return nil, fmt.Errorf("policy: unknown profile source %q", source)
+		}
+		copy := make(map[int]entity.SyncProfile, len(bands))
+		for band, profile := range bands {
+			if band < 0 {
+				return nil, fmt.Errorf("policy: invalid profile band %d", band)
+			}
+			copy[band] = profile.Normalize()
+		}
+		in.sourceProfiles[source] = copy
 	}
 	in.sources = []Source{aoiSource{manager: manager}}
 	if config.SelfVisible == nil || *config.SelfVisible {
@@ -129,6 +169,18 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		in.relations[name] = relation
 		in.sources = append(in.sources, relation)
 	}
+	if err := in.validateConfiguredProfiles(config); err != nil {
+		return nil, err
+	}
+	if config.MaxQueuedFacts < 0 {
+		return nil, errors.New("policy: negative queued fact capacity")
+	}
+	in.maxQueuedFacts = config.MaxQueuedFacts
+	if in.maxQueuedFacts == 0 {
+		in.maxQueuedFacts = 65536
+	}
+	in.wake = config.Manager.WakeSync
+	in.cancelQueue = config.Manager.RegisterPolicy(in.applyQueued, in.queuedPending)
 	return in, nil
 }
 
@@ -276,8 +328,13 @@ func (in *Interest) Apply() []Refusal {
 	in.retry = nil
 	for _, source := range in.sources {
 		name := source.Name()
-		for _, event := range source.Flush() {
+		events := source.Flush()
+		for _, event := range events {
 			in.applyEvent(name, event, &refusals)
+		}
+		// 仅内部 AOI 返回的本批事件由 Interest 独占；公开 Flush 的所有权不变。
+		if name == SourceSpatial && len(events) > 0 && cap(events) <= 4096 {
+			in.aoi.pending = events[:0]
 		}
 	}
 	// Retries after the events, so that a pair a source event already spoke
@@ -287,7 +344,6 @@ func (in *Interest) Apply() []Refusal {
 		if hold == nil || hold.subscribed {
 			continue
 		}
-		hold.band = bestBand(hold.bands)
 		in.subscribe(key, hold, true, &refusals)
 	}
 	return refusals
@@ -305,28 +361,23 @@ func (in *Interest) applyEvent(source string, event InterestEvent, refusals *[]R
 		}
 		delete(current.bands, source)
 		if len(current.bands) > 0 {
-			// Another source still wants it. Only the band can change.
+			// 其他来源仍持有；重新选择其视图，必要时触发全量恢复。
 			in.reband(key, current, refusals)
 			return
 		}
 		delete(in.held, key)
-		if !current.subscribed {
-			// Refused and never accepted: nothing to take back.
-			return
-		}
-		err := in.manager.Unsubscribe(in.session(key.observer), key.subject)
+		err := in.subscriptions.Unsubscribe(in.session(key.observer), key.subject)
 		if err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Err: err})
 		}
 	default:
 		band := max(event.Band, 0)
 		if current == nil {
-			current = &hold{bands: make(map[string]int, 2), band: band}
+			current = &hold{bands: make(map[string]int, 2)}
 			in.held[key] = current
 		}
 		current.bands[source] = band
 		if !current.subscribed {
-			current.band = bestBand(current.bands)
 			in.subscribe(key, current, false, refusals)
 			return
 		}
@@ -338,8 +389,12 @@ func (in *Interest) applyEvent(source string, event InterestEvent, refusals *[]R
 // here — that is what makes the source counting work — and a refusal puts it
 // on the retry list instead.
 func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]Refusal) {
+	current.profile = in.selectedProfile(current)
 	current.subscribed = true
-	err := in.manager.Subscribe(in.session(key.observer), key.subject, in.profile(current.band))
+	err := in.validateProfile(current.profile)
+	if err == nil {
+		err = in.subscriptions.Subscribe(in.session(key.observer), key.subject, current.profile)
+	}
 	if err == nil {
 		return
 	}
@@ -349,37 +404,41 @@ func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]R
 }
 
 func (in *Interest) reband(key pair, current *hold, refusals *[]Refusal) {
-	band := bestBand(current.bands)
-	if band == current.band || !current.subscribed {
+	if !current.subscribed || in.selectedProfile(current) == current.profile {
 		return
 	}
-	current.band = band
 	in.subscribe(key, current, false, refusals)
 }
 
-// bestBand is the merge rule when sources disagree: the most detailed one
-// wins (band 0 is nearest). A relationship therefore outranks distance, which
-// is what "I see my teammate wherever they are" means.
-func bestBand(bands map[string]int) int {
-	best := -1
-	for _, band := range bands {
-		if best < 0 || band < best {
-			best = band
+// selectedProfile 先解析每个来源的业务视图，再用 Manager 的同一规则选优。
+// 不先折叠成最小 band，避免丢失 self/team 等来源的字段语义。
+func (in *Interest) selectedProfile(current *hold) entity.SyncProfile {
+	var best entity.SyncProfile
+	first := true
+	for source, band := range current.bands {
+		profile := in.profileFor(source, band)
+		if first || in.compareProfiles(profile, best) < 0 {
+			best, first = profile, false
 		}
 	}
-	return max(best, 0)
+	return best
 }
 
-// Close stops the policy. Subscriptions already said to the manager stay
-// with their sessions and subjects; closing the manager or the sessions is
-// what takes them down.
+// Close 释放本 Interest 来源持有的订阅；其他政策、会话和实体注册继续存在。
 func (in *Interest) Close() {
 	if in == nil {
 		return
 	}
+	if in.cancelQueue != nil {
+		in.cancelQueue()
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
+	in.facts = nil
+	for key := range in.held {
+		_ = in.subscriptions.Unsubscribe(in.session(key.observer), key.subject)
+	}
 	in.held = nil
 	in.retry = nil
 }

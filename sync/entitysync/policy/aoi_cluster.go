@@ -1,11 +1,13 @@
 package policy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/spatial"
-	"sort"
+	"slices"
 	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
 
 // Cluster errors.
@@ -133,12 +135,12 @@ func (c *AOICluster) AddArea(id AreaID, bounds spatial.Rect) error {
 	}
 	c.rooms[id] = &clusterArea{id: id, bounds: bounds, manager: manager}
 	c.order = append(c.order, id)
-	sort.Slice(c.order, func(i, j int) bool { return c.order[i] < c.order[j] })
+	slices.Sort(c.order)
 	observers := make([]int64, 0, len(c.observers))
 	for observer := range c.observers {
 		observers = append(observers, observer)
 	}
-	sort.Slice(observers, func(i, j int) bool { return observers[i] < observers[j] })
+	slices.Sort(observers)
 	for _, observer := range observers {
 		if err := c.placeObserverLocked(observer, c.observers[observer].at); err != nil {
 			return err
@@ -315,7 +317,7 @@ func (c *AOICluster) Visible(observer int64) []int64 {
 			result = append(result, pair.subject)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
 }
 
@@ -330,11 +332,12 @@ func (c *AOICluster) Flush() []InterestEvent {
 	}
 	events := c.pending
 	c.pending = nil
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].Observer != events[j].Observer {
-			return events[i].Observer < events[j].Observer
+	// 同一观察者与实体的事件保持产生顺序，避免把 Enter/Leave 颠倒。
+	slices.SortStableFunc(events, func(a, b InterestEvent) int {
+		if order := cmp.Compare(a.Observer, b.Observer); order != 0 {
+			return order
 		}
-		return events[i].Subject < events[j].Subject
+		return cmp.Compare(a.Subject, b.Subject)
 	})
 	return events
 }
@@ -374,7 +377,7 @@ func (c *AOICluster) collect() {
 	for observer := range touchedObservers {
 		observers = append(observers, observer)
 	}
-	sort.Slice(observers, func(i, j int) bool { return observers[i] < observers[j] })
+	slices.Sort(observers)
 	for _, observer := range observers {
 		c.settleObserverLocked(observer)
 	}
@@ -388,7 +391,7 @@ func (c *AOICluster) settleObserverLocked(observer int64) {
 	for subject := range pairs {
 		subjects = append(subjects, subject)
 	}
-	sort.Slice(subjects, func(i, j int) bool { return subjects[i] < subjects[j] })
+	slices.Sort(subjects)
 	// Capacity: keep the nearest MaxVisible of the room-visible subjects
 	// (distance ties break by id — deterministic).
 	if c.config.MaxVisible > 0 {
@@ -404,11 +407,11 @@ func (c *AOICluster) settleObserverLocked(observer int64) {
 			}
 			candidates = append(candidates, candidate{subject: subject, distance: spatial.DistanceSquared(observerAt, c.subjects[subject].at)})
 		}
-		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].distance != candidates[j].distance {
-				return candidates[i].distance < candidates[j].distance
+		slices.SortFunc(candidates, func(a, b candidate) int {
+			if order := cmp.Compare(a.distance, b.distance); order != 0 {
+				return order
 			}
-			return candidates[i].subject < candidates[j].subject
+			return cmp.Compare(a.subject, b.subject)
 		})
 		for index, entry := range candidates {
 			pairs[entry.subject].suppressed = index >= c.config.MaxVisible

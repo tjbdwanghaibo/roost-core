@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
@@ -70,6 +71,9 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	if m == nil || m.RemoteWriteBatch == nil {
 		return nil
 	}
+	if m.localExecutor != nil {
+		ctx = entity.WithLocalExecutor(ctx, m.localExecutor)
+	}
 	batch := m.RemoteWriteBatch
 	m.RemoteWriteBatch = nil
 	var err error
@@ -83,7 +87,11 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	}
 	err = errors.Join(err, batch.Close(ctx))
 	if err == nil && dispatchErr == nil {
-		m.runPostRemoteCommit()
+		if m.localExecutor != nil {
+			err = errors.Join(err, m.localExecutor(m.runPostRemoteCommit))
+		} else {
+			m.runPostRemoteCommit()
+		}
 	}
 	return err
 }
@@ -193,6 +201,11 @@ type Msg struct {
 	afterUnlock        []func()
 	postRemoteCommit   []func()
 	getter             entity.Getter
+	prepared           *preparedGetter
+	localExecutor      func(func()) error
+	stageMetrics       bool
+	queuedAt           time.Time
+	remoteLogic        *remoteLogicCall
 }
 
 func (m *Msg) Key() int64 {
@@ -221,7 +234,11 @@ func (m *Msg) OnSend() {
 func (m *Msg) OnRelease() {
 	m.RefCount--
 	if m.RefCount == 0 {
+		call := m.remoteLogic
 		recycleMsg(m)
+		if call != nil {
+			close(call.done)
+		}
 	}
 }
 

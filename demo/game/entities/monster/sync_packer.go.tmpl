@@ -2,6 +2,7 @@ package monster
 
 import (
 	"fmt"
+	db "{{MODULE}}/db"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -21,17 +22,34 @@ func NewMonsterSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPack
 
 type monsterSyncPacker struct{ monster *Monster }
 
-func (packer monsterSyncPacker) PackSubjectSnapshot(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
-	return packer.pack(dataengine.AllFields)
+var monsterViews, monsterViewsErr = dataengine.NewSyncViewSet(db.MonsterDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Template", "PosX", "PosY", "HP"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Template", "PosX", "PosY"}, Priority: 10},
+)
+
+func (packer monsterSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, dataengine.AllFields)
 }
 
-func (packer monsterSyncPacker) PackSubjectDelta(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-	return packer.pack(mask)
+func (packer monsterSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, mask)
 }
 
-func (packer monsterSyncPacker) pack(mask uint64) (entity.FrozenSyncPayload, error) {
+func (packer monsterSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
 	if packer.monster == nil {
 		return entity.FrozenSyncPayload{}, fmt.Errorf("monster sync packer: no entity")
+	}
+	if monsterViewsErr != nil {
+		return entity.FrozenSyncPayload{}, monsterViewsErr
+	}
+	view, ok := monsterViews.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	mask &= view.Fields
+	if mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
 	}
 	raw := packer.monster.Dao().MarshalSync(mask)
 	if len(raw) == 0 {

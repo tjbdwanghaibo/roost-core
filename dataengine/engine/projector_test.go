@@ -770,3 +770,14 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		return zero
 	}
 }
+
+// admit 供内部恢复测试登记已写入 WAL 的记录，不再走外部准入限制。
+func (projector *Projector) admit(id coredata.TransactionID) {
+	projector.heldMu.Lock()
+	defer projector.heldMu.Unlock()
+	projector.held[id] = struct{}{}
+	if _, exists := projector.admitted[id]; !exists {
+		projector.admitted[id] = struct{}{}
+		projector.walUnacked.Add(1)
+	}
+}

@@ -8,10 +8,10 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 type modJetStream struct{ streams int }
@@ -114,5 +114,50 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	defer mod.Stop()
 	if mod.Runtime() == nil || !mod.Runtime().Ready() || len(mod.NestOptions()) == 0 || jetStream.streams != 1 {
 		t.Fatalf("runtime=%v ready=%v options=%d streams=%d", mod.Runtime(), mod.Runtime() != nil && mod.Runtime().Ready(), len(mod.NestOptions()), jetStream.streams)
+	}
+}
+
+func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("dataengine.projection.checkpoint_records", 32)
+	cfg.Set("dataengine.projection.checkpoint_interval", "10ms")
+	cfg.Set("dataengine.projection.max_unacked_records", 100)
+	cfg.Set("dataengine.projection.warn_unacked_records", 80)
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	opts := mod.cfg.projector
+	if opts.CheckpointRecords != 32 || opts.CheckpointInterval.String() != "10ms" || opts.MaxUnackedRecords != 100 || opts.WarnUnackedRecords != 80 {
+		t.Fatalf("opts=%+v", opts)
+	}
+	for _, key := range []string{"checkpoint_records", "checkpoint_interval", "max_unacked_records", "warn_unacked_records"} {
+		invalid := viper.New()
+		invalid.Set("persistence.engine", "dataengine")
+		invalid.Set("dataengine.projection."+key, -1)
+		if err := mod.Init(invalid); err == nil {
+			t.Fatalf("accepted negative %s", key)
+		}
+	}
+	cfg.Set("dataengine.projection.warn_unacked_records", 101)
+	if err := mod.Init(cfg); err == nil {
+		t.Fatal("accepted warning above hard limit")
+	}
+}
+
+func TestDataEngineRemoteProjectionWorkerConfig(t *testing.T) {
+	for _, value := range []int{-1, 0, 1, 8, 64, 65} {
+		cfg := viper.New()
+		cfg.Set("dataengine.projection.remote_workers", value)
+		mod := NewMod()
+		err := mod.Init(cfg)
+		valid := value >= 1 && value <= 64
+		if (err == nil) != valid {
+			t.Fatalf("workers=%d err=%v", value, err)
+		}
+		if valid && mod.cfg.projector.RemoteProjectionWorkers != value {
+			t.Fatalf("workers=%d configured=%d", value, mod.cfg.projector.RemoteProjectionWorkers)
+		}
 	}
 }

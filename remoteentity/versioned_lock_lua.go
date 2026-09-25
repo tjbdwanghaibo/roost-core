@@ -3,15 +3,18 @@ package remoteentity
 // versionedTryLockLua acquires the lease and allocates a fence from a separate
 // non-expiring counter. The counter must never share the lock hash TTL.
 const versionedTryLockLua = `
-local ok = redis.call("HSETNX", KEYS[1], "owner", ARGV[1])
-if ok == 1 then
-    local fence = redis.call("INCR", KEYS[2])
+if redis.call("HEXISTS", KEYS[1], "owner") == 0 then
+    -- Lua 报错不会回滚前面的写入。先分配 fence，失败时不能留下没有 TTL 的 owner。
+    redis.call("INCR", KEYS[2])
+    -- Lua number 不能精确表达完整 int64；INCR 的返回值也不能直接传回 Go。
+    local fence = redis.call("GET", KEYS[2])
     local ver = redis.call("HGET", KEYS[1], "version")
+    redis.call("HSET", KEYS[1], "owner", ARGV[1])
     redis.call("PEXPIRE", KEYS[1], ARGV[2])
     if ver == false then
-        return {1, 0, fence}
+        return {1, "0", fence}
     end
-    return {1, tonumber(ver), fence}
+    return {1, ver, fence}
 end
 return {0, 0, 0}
 `

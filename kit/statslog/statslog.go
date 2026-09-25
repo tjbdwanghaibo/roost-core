@@ -13,10 +13,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/worker"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
 	"github.com/spf13/viper"
 )
@@ -59,9 +59,14 @@ type StatsRecord struct {
 }
 
 type NestStats struct {
-	Main                   NestQueueStats `json:"main"`
-	Broadcast              NestQueueStats `json:"broadcast"`
-	Cost                   NestQueueStats `json:"cost"`
+	Fast              NestQueueStats `json:"fast"`
+	Slow              NestQueueStats `json:"slow"`
+	FastContinuations int            `json:"fast_continuations"`
+	// Deprecated: 老字段保留源码兼容；JSON 仅输出两个执行池。
+	Main                   NestQueueStats `json:"-"`
+	Broadcast              NestQueueStats `json:"-"`
+	Cost                   NestQueueStats `json:"-"`
+	Remote                 NestQueueStats `json:"-"`
 	WindowSeconds          float64        `json:"window_seconds"`
 	ProcessedMessages      uint64         `json:"processed_messages"`
 	Slow200msMessages      uint64         `json:"slow_200ms_messages"`
@@ -413,9 +418,13 @@ func (m *StatsLogMod) formatNestStats(stats nest.DispatcherStats, now time.Time)
 
 func formatNestStats(stats nest.DispatcherStats, delta nest.DispatcherWorkStats, interval time.Duration) NestStats {
 	return NestStats{
+		Fast:                   formatNestPoolStats(stats.Fast),
+		Slow:                   formatNestPoolStats(stats.Slow),
+		FastContinuations:      stats.FastContinuations,
 		Main:                   formatNestPoolStats(stats.Main),
 		Broadcast:              formatNestPoolStats(stats.Heart),
 		Cost:                   formatNestPoolStats(stats.Cost),
+		Remote:                 formatNestPoolStats(stats.Remote),
 		WindowSeconds:          roundSeconds(interval),
 		ProcessedMessages:      delta.ProcessedMessages,
 		Slow200msMessages:      delta.Slow200msMessages,

@@ -452,7 +452,9 @@ func TestOwnerRoutedWriteUsesMarkerHotCache(t *testing.T) {
 func TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown(t *testing.T) {
 	const kind entity.EntityKind = 130
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	cfg := DefaultConfig()
+	cfg.MaxConcurrentWrites = 1
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -481,6 +483,12 @@ func TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown(t *testing.T) {
 	}
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if stats := mgr.Stats(); stats.WritesInFlight != 1 {
+		t.Fatalf("indeterminate transaction returned write budget early: %+v", stats)
+	}
+	if _, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{testRemoteFullIDWithKind(1499, 1, kind)}); !errors.Is(err, entity.ErrRemoteOverloaded) {
+		t.Fatalf("unrelated write bypassed unresolved transaction budget: %v", err)
 	}
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	_, probeErr := mgr.PrepareRemoteWriteBatch(probeCtx, []int64{live.GUId()})
@@ -635,7 +643,7 @@ func TestRemoteFinalizerStopCancelsLongRetryImmediately(t *testing.T) {
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	mgr.SetBackend(newRemoteTestLoader())
 	mgr.StartFinalizer()
-	if !mgr.reserveRemoteFinalizeSlot() {
+	if !mgr.reserveRemoteWriteSlot() {
 		t.Fatal("reserve finalizer slot")
 	}
 	txID := remoteTestTxID(99)
@@ -654,7 +662,7 @@ func TestRemoteFinalizerStopCancelsLongRetryImmediately(t *testing.T) {
 	if err := mgr.StopFinalizer(ctx); err != nil {
 		t.Fatalf("stop should cancel retry immediately: %v", err)
 	}
-	if got := len(mgr.remote.finalizeSlots); got != 0 {
+	if got := len(mgr.remote.writeSlots); got != 0 {
 		t.Fatalf("reserved slots after stop=%d", got)
 	}
 }
@@ -689,7 +697,7 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 	syncer := &flakySnapshotSyncer{}
 	mgr.SetSyncer(syncer)
 	mgr.StartFinalizer()
-	if !mgr.reserveRemoteFinalizeSlot() {
+	if !mgr.reserveRemoteWriteSlot() {
 		t.Fatal("reserve finalizer slot")
 	}
 	mgr.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate})
@@ -701,7 +709,7 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 		loader.mu.Lock()
 		marked := loader.marked
 		loader.mu.Unlock()
-		if marked && len(mgr.remote.finalizeSlots) == 0 {
+		if marked && len(mgr.remote.writeSlots) == 0 {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -709,12 +717,63 @@ func TestRemoteFinalizerReplaysAppliedOutboxWithoutRestart(t *testing.T) {
 	loader.mu.Lock()
 	marked := loader.marked
 	loader.mu.Unlock()
-	if !marked || syncer.attempts.Load() < 2 || len(mgr.remote.finalizeSlots) != 0 {
-		t.Fatalf("outbox replay incomplete: marked=%v attempts=%d slots=%d", marked, syncer.attempts.Load(), len(mgr.remote.finalizeSlots))
+	if !marked || syncer.attempts.Load() < 2 || len(mgr.remote.writeSlots) != 0 {
+		t.Fatalf("outbox replay incomplete: marked=%v attempts=%d slots=%d", marked, syncer.attempts.Load(), len(mgr.remote.writeSlots))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := mgr.StopFinalizer(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMemoryCommitFailureDelegatesLocalRollback(t *testing.T) {
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr.SetBackend(newRemoteTestLoader())
+	live := newTestRemoteEntity(1499, 1, entity.EntityKind(131))
+	live.dirty.dirty = false
+	txID := remoteTestTxID(99)
+	// 无效 commit 在提交前被拒绝，走确定失败的本地回滚分支。
+	batch := &remoteWriteBatch{mgr: mgr, finalized: true, outcome: entity.NewRemoteTransactionOutcome(txID, "rollback", "", true, 0), entries: []*remoteWriteEntry{{entity: live, finalized: true, commit: entity.RemoteCommit{TransactionID: txID}}}}
+	calls := 0
+	ctx := entity.WithLocalExecutor(context.Background(), func(fn func()) error {
+		calls++
+		done := make(chan struct{})
+		go func() { defer close(done); fn() }()
+		<-done
+		return nil
+	})
+	if _, err := batch.Commit(ctx); err == nil {
+		t.Fatal("invalid commit succeeded")
+	}
+	if calls != 1 || !live.dirty.dirty {
+		t.Fatalf("local rollback: delegated=%d dirty=%t", calls, live.dirty.dirty)
+	}
+}
+
+type panicRollbackEntity struct{ *testRemoteEntity }
+
+func (*panicRollbackEntity) RollbackRemoteCommit(entity.RemoteCommit) { panic("rollback hook") }
+func TestRemoteRollbackPanicReleasesLocalLock(t *testing.T) {
+	live := &panicRollbackEntity{newTestRemoteEntity(1500, 1, entity.EntityKind(131))}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("rollback panic was swallowed")
+			}
+		}()
+		(&Manager{}).rollbackRemoteEntries([]*remoteWriteEntry{{entity: live, finalized: true}})
+	}()
+	// Entity mutex 支持同 goroutine 重入，必须从另一个 goroutine 验证解锁。
+	unlocked := make(chan bool, 1)
+	go func() {
+		ok := live.GetMutex().TryLock()
+		if ok {
+			live.GetMutex().Unlock()
+		}
+		unlocked <- ok
+	}()
+	if !<-unlocked {
+		t.Fatal("rollback panic leaked Entity local lock")
 	}
 }

@@ -12,6 +12,9 @@ type Stats struct {
 	LocalInterests     int
 	Transactions       int
 	ActiveTransactions int
+	WritesInFlight     int
+	WriteLimit         int
+	WriteRejected      uint64
 }
 
 // Stats snapshots wrapper, interest and transaction counts. Assembly code
@@ -25,16 +28,15 @@ func (m *Manager) Stats() Stats {
 	if m.remote == nil {
 		return stats
 	}
+	stats.WritesInFlight = len(m.remote.writeSlots)
+	stats.WriteLimit = cap(m.remote.writeSlots)
+	stats.WriteRejected = m.remote.writeRejected.Load()
 	m.remote.localInterestMu.Lock()
 	stats.LocalInterests = len(m.remote.localInterests)
 	m.remote.localInterestMu.Unlock()
 	m.remote.txMu.Lock()
 	stats.Transactions = len(m.remote.txs)
-	for _, tracker := range m.remote.txs {
-		if !tracker.closed {
-			stats.ActiveTransactions++
-		}
-	}
+	stats.ActiveTransactions = stats.Transactions - m.remote.closedCount
 	m.remote.txMu.Unlock()
 	return stats
 }

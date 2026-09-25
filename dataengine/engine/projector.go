@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +16,7 @@ import (
 var (
 	errProjectorTransactionHeld = errors.New("dataengine projector: transaction is still under entity lock")
 	errProjectorBatchComplete   = errors.New("dataengine projector: replay batch complete")
+	ErrProjectionBackpressure   = errors.New("dataengine projector: unacknowledged transaction limit reached")
 )
 
 type ProjectionStore interface {
@@ -28,20 +28,42 @@ type BatchProjectionStore interface {
 	ProjectBatch(context.Context, []coredata.CommitRecord) error
 }
 
+// MultiMutationBatchProjectionStore 显式扩展旧 Store 的单 mutation 批量契约。
+// 未声明该能力的 Store 仍逐笔接收多 DAO 事务。
+// 实现方须持久记录批次中每笔事务及单笔多 mutation 的身份，支持后续版本落库后的重放。
+type MultiMutationBatchProjectionStore interface {
+	BatchProjectionStore
+	SupportsMultiMutationBatch() bool
+}
+
+// RemoteParallelProjectionStore 承诺互不重叠的纯 Remote 事务可以并发执行，
+// 且已成功的事务可在后续 WAL 重放中通过持久身份识别。未知 Store 保持串行。
+type RemoteParallelProjectionStore interface {
+	ProjectionStore
+	SupportsRemoteParallelProjection() bool
+}
+
 type ProjectorOptions struct {
-	RetryMin           time.Duration
-	RetryMax           time.Duration
-	IdlePoll           time.Duration
-	ReplayBatchRecords int
-	ReplayBatchBytes   int
-	CloseWAL           bool
-	OnFatal            func(error)
+	RetryMin                time.Duration
+	RetryMax                time.Duration
+	IdlePoll                time.Duration
+	ReplayBatchRecords      int
+	ReplayBatchBytes        int
+	RemoteProjectionWorkers int           // 0 使用默认值 8；1 关闭 Remote 并行投影。
+	CheckpointRecords       int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
+	CheckpointInterval      time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
+	MaxUnackedRecords       uint64        // 0 不限制；拒绝发生于 WAL 准入前。
+	WarnUnackedRecords      uint64        // 0 不设独立预警；达到准入上限也会报告预警。
+	CloseWAL                bool
+	OnFatal                 func(error)
 }
 
 func DefaultProjectorOptions() ProjectorOptions {
 	return ProjectorOptions{
 		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
 		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, CloseWAL: true,
+		CheckpointRecords: 256, CheckpointInterval: 20 * time.Millisecond,
+		RemoteProjectionWorkers: 8,
 	}
 }
 
@@ -52,6 +74,8 @@ type ProjectorStats struct {
 	ProjectionFailures       uint64
 	FatalProjectionConflicts uint64
 	LastError                string
+	AdmissionRejected        uint64
+	BacklogWarning           bool
 }
 
 // Projector owns durable admission and WAL -> Mongo projection. Effects are
@@ -63,13 +87,13 @@ type Projector struct {
 	opts  ProjectorOptions
 	ack   func(context.Context, corenest.CommitFence) error
 
-	ctx       context.Context
-	cancel    context.CancelFunc
-	kick      chan struct{}
-	done      chan struct{}
-	closeOnce sync.Once
-	flushMu   sync.Mutex
-	replayMu  sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	kick       chan struct{}
+	done       chan struct{}
+	closeOnce  sync.Once
+	flushGate  operationGate
+	replayGate operationGate
 
 	heldMu    sync.RWMutex
 	held      map[coredata.TransactionID]struct{}
@@ -81,11 +105,12 @@ type Projector struct {
 	ticketMu  sync.Mutex
 	tickets   map[coredata.TransactionID]*projectionTicket
 
-	committed      atomic.Uint64
-	projected      atomic.Uint64
-	walUnacked     atomic.Uint64
-	failures       atomic.Uint64
-	fatalConflicts atomic.Uint64
+	committed         atomic.Uint64
+	projected         atomic.Uint64
+	walUnacked        atomic.Uint64
+	failures          atomic.Uint64
+	fatalConflicts    atomic.Uint64
+	admissionRejected atomic.Uint64
 }
 
 func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOptions) (*Projector, error) {
@@ -93,6 +118,22 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 		return nil, errors.New("dataengine projector: WAL and store are required")
 	}
 	defaults := DefaultProjectorOptions()
+	if options.RemoteProjectionWorkers < 0 || options.RemoteProjectionWorkers > 64 {
+		return nil, errors.New("dataengine projector: remote projection workers must be between 0 and 64")
+	}
+	if options.RemoteProjectionWorkers == 0 {
+		options.RemoteProjectionWorkers = defaults.RemoteProjectionWorkers
+	}
+	if options.CheckpointRecords < 0 || options.CheckpointInterval < 0 ||
+		(options.MaxUnackedRecords > 0 && options.WarnUnackedRecords > options.MaxUnackedRecords) {
+		return nil, errors.New("dataengine projector: invalid checkpoint or backlog limits")
+	}
+	if options.CheckpointRecords == 0 {
+		options.CheckpointRecords = defaults.CheckpointRecords
+	}
+	if options.CheckpointInterval == 0 {
+		options.CheckpointInterval = defaults.CheckpointInterval
+	}
 	if options.RetryMin <= 0 {
 		options.RetryMin = defaults.RetryMin
 	}
@@ -157,7 +198,10 @@ func (projector *Projector) CommitSystem(ctx context.Context, record coredata.Co
 	}
 	projector.tickets[record.ID] = ticket
 	projector.ticketMu.Unlock()
-	projector.admitSystem(record.ID)
+	if err := projector.reserve(record.ID, false); err != nil {
+		projector.removeTicket(record.ID)
+		return nil, err
+	}
 	if _, err := projector.wal.Append(ctx, record); err != nil {
 		projector.discard(record.ID)
 		projector.removeTicket(record.ID)
@@ -175,7 +219,9 @@ func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRe
 	if fatal := projector.fatal(); fatal != nil {
 		return fatal
 	}
-	projector.admit(record.ID)
+	if err := projector.reserve(record.ID, true); err != nil {
+		return err
+	}
 	if _, err := projector.wal.Append(ctx, record); err != nil {
 		projector.discard(record.ID)
 		return err
@@ -192,7 +238,9 @@ func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitR
 	if fatal := projector.fatal(); fatal != nil {
 		return nil, fatal
 	}
-	projector.admit(record.ID)
+	if err := projector.reserve(record.ID, true); err != nil {
+		return nil, err
+	}
 	ticket, err := projector.wal.Enqueue(ctx, record)
 	if err != nil {
 		projector.discard(record.ID)
@@ -234,8 +282,10 @@ func (projector *Projector) Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	projector.flushMu.Lock()
-	defer projector.flushMu.Unlock()
+	if err := projector.flushGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer projector.flushGate.release()
 	if fatal := projector.fatal(); fatal != nil {
 		return fatal
 	}
@@ -264,144 +314,6 @@ func (projector *Projector) OverrideAck(ack func(context.Context, corenest.Commi
 		return
 	}
 	projector.ack = ack
-}
-
-func (projector *Projector) ReplayPass(ctx context.Context) (int, error) {
-	projector.replayMu.Lock()
-	defer projector.replayMu.Unlock()
-	records := make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
-	fences := make([]corenest.CommitFence, 0, projector.opts.ReplayBatchRecords)
-	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
-		if projector.isHeld(record.ID) {
-			return errProjectorTransactionHeld
-		}
-		records = append(records, record)
-		fences = append(fences, fence)
-		if len(records) >= projector.opts.ReplayBatchRecords {
-			return errProjectorBatchComplete
-		}
-		return nil
-	})
-	if len(records) == 0 {
-		if errors.Is(replayErr, errProjectorBatchComplete) {
-			replayErr = nil
-		}
-		return 0, replayErr
-	}
-	if errors.Is(replayErr, errProjectorBatchComplete) {
-		replayErr = nil
-	}
-	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
-	if err != nil {
-		return 0, err
-	}
-	_, batchCapable := projector.store.(BatchProjectionStore)
-	processed := 0
-	for _, segment := range segments {
-		// perRecord is latched when a batch reports that it cannot classify
-		// its own outcome (ErrProjectionBatchNeedsPerRecord). The rest of the
-		// segment then goes through the single-record path, which compares the
-		// stored version and _last_tx and so can tell an already-applied
-		// replay from a real conflict. Latching rather than retrying just the
-		// failing unit keeps the pass from re-issuing a bulk write that is
-		// going to defer again.
-		perRecord := false
-		for start := 0; start < len(segment.records); {
-			end := len(segment.records)
-			if segment.batch && (!batchCapable || perRecord) {
-				end = start + 1
-			}
-			unit := projectionSegment{
-				records: segment.records[start:end],
-				fences:  segment.fences[start:end],
-				batch:   segment.batch,
-			}
-			if err := projector.projectSegment(ctx, unit); err != nil {
-				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
-					perRecord = true
-					continue
-				}
-				if projector.isFatalProjection(err) {
-					for i := range records {
-						projector.completeProjection(records[i].ID, err)
-					}
-				}
-				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
-			}
-			processedIDs := make([]coredata.TransactionID, len(unit.records))
-			for i := range unit.records {
-				processedIDs[i] = unit.records[i].ID
-				projector.completeProjection(unit.records[i].ID, nil)
-			}
-			projector.projected.Add(uint64(len(unit.records)))
-			processed += len(unit.records)
-			if ackErr := projector.ack(ctx, unit.fences[len(unit.fences)-1]); ackErr != nil {
-				ackReplayErr := replayErr
-				if ackReplayErr == errProjectorTransactionHeld || ackReplayErr == errProjectorBatchComplete {
-					ackReplayErr = nil
-				}
-				return processed, errors.Join(ackReplayErr, ackErr)
-			}
-			projector.acknowledge(processedIDs)
-			start = end
-		}
-	}
-	return processed, replayErr
-}
-
-func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) error {
-	if len(segment.records) == 1 {
-		if err := projector.store.Project(ctx, segment.records[0]); err != nil {
-			return fmt.Errorf("transaction %s: %w", segment.records[0].ID.String(), err)
-		}
-		return nil
-	}
-	if store, ok := projector.store.(BatchProjectionStore); ok {
-		return store.ProjectBatch(ctx, segment.records)
-	}
-	for i := range segment.records {
-		if err := projector.store.Project(ctx, segment.records[i]); err != nil {
-			return fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
-		}
-	}
-	return nil
-}
-
-func (projector *Projector) run() {
-	defer close(projector.done)
-	backoff := projector.opts.RetryMin
-	for {
-		processed, err := projector.ReplayPass(projector.ctx)
-		if errors.Is(err, errProjectorTransactionHeld) {
-			backoff = projector.opts.RetryMin
-			if !projector.wait(projector.opts.RetryMin) {
-				return
-			}
-			continue
-		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			projector.recordFailure(err)
-			if projector.isFatalProjection(err) {
-				return
-			}
-			if !projector.wait(jitterDuration(backoff)) {
-				return
-			}
-			backoff = min(backoff*2, projector.opts.RetryMax)
-			continue
-		}
-		if projector.ctx.Err() != nil {
-			return
-		}
-		projector.setLastError(nil)
-		backoff = projector.opts.RetryMin
-		if processed > 0 {
-			continue
-		}
-		if !projector.wait(projector.opts.IdlePoll) {
-			return
-		}
-	}
 }
 
 func (projector *Projector) recordFailure(err error) {
@@ -435,8 +347,14 @@ func (projector *Projector) Stats() ProjectorStats {
 	stats := ProjectorStats{
 		Committed: projector.committed.Load(), Projected: projector.projected.Load(),
 		WALUnacked:         projector.walUnacked.Load(),
+		AdmissionRejected:  projector.admissionRejected.Load(),
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
 	}
+	warning := projector.opts.WarnUnackedRecords
+	if warning == 0 {
+		warning = projector.opts.MaxUnackedRecords
+	}
+	stats.BacklogWarning = warning > 0 && stats.WALUnacked >= warning
 	projector.errMu.RLock()
 	if projector.lastErr != nil {
 		stats.LastError = projector.lastErr.Error()
@@ -479,47 +397,28 @@ func (projector *Projector) Shutdown(ctx context.Context) error {
 	return errors.Join(projector.Flush(ctx), projector.Close(ctx))
 }
 
-func (projector *Projector) admit(id coredata.TransactionID) {
+// reserve 在同一锁内检查与预留额度，不能让并发 Commit 越过上限。
+func (projector *Projector) reserve(id coredata.TransactionID, held bool) error {
 	projector.heldMu.Lock()
-	projector.held[id] = struct{}{}
-	_, alreadyAdmitted := projector.admitted[id]
-	if !alreadyAdmitted {
+	defer projector.heldMu.Unlock()
+	if _, exists := projector.admitted[id]; !exists {
+		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {
+			projector.admissionRejected.Add(1)
+			return ErrProjectionBackpressure
+		}
 		projector.admitted[id] = struct{}{}
-	}
-	projector.heldMu.Unlock()
-	if !alreadyAdmitted {
 		projector.walUnacked.Add(1)
 	}
-}
-
-func (projector *Projector) admitSystem(id coredata.TransactionID) {
-	projector.heldMu.Lock()
-	_, alreadyAdmitted := projector.admitted[id]
-	if !alreadyAdmitted {
-		projector.admitted[id] = struct{}{}
+	if held {
+		projector.held[id] = struct{}{}
 	}
-	projector.heldMu.Unlock()
-	if !alreadyAdmitted {
-		projector.walUnacked.Add(1)
-	}
+	return nil
 }
 
 func (projector *Projector) discard(id coredata.TransactionID) {
 	projector.heldMu.Lock()
 	delete(projector.held, id)
 	if _, ok := projector.admitted[id]; ok {
-		delete(projector.admitted, id)
-		projector.walUnacked.Add(^uint64(0))
-	}
-	projector.heldMu.Unlock()
-}
-
-func (projector *Projector) acknowledge(ids []coredata.TransactionID) {
-	projector.heldMu.Lock()
-	for _, id := range ids {
-		if _, ok := projector.admitted[id]; !ok {
-			continue
-		}
 		delete(projector.admitted, id)
 		projector.walUnacked.Add(^uint64(0))
 	}
@@ -543,19 +442,6 @@ func (projector *Projector) signal() {
 	select {
 	case projector.kick <- struct{}{}:
 	default:
-	}
-}
-
-func (projector *Projector) wait(duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-projector.kick:
-		return true
-	case <-timer.C:
-		return true
-	case <-projector.ctx.Done():
-		return false
 	}
 }
 
@@ -597,14 +483,6 @@ func (projector *Projector) completeAllTickets(err error) {
 		close(ticket.done)
 	}
 	projector.ticketMu.Unlock()
-}
-
-func jitterDuration(duration time.Duration) time.Duration {
-	if duration <= 1 {
-		return duration
-	}
-	half := duration / 2
-	return half + time.Duration(rand.Int64N(int64(duration-half)))
 }
 
 var _ corenest.TransactionCommitter = (*Projector)(nil)

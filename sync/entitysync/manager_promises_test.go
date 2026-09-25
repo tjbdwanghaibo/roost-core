@@ -214,6 +214,20 @@ func TestEachSessionGetsASnapshotThenDeltasAndOnePackServesThemAll(t *testing.T)
 	if state.PendingDirty() {
 		t.Fatal("the subject is still dirty after its delta was admitted")
 	}
+
+	// Flush 频率不是发送频率：内容和订阅都没变化时，不打包也不发空帧。
+	packs = 0
+	for range 20 {
+		mustFlush(t, manager)
+	}
+	if packs != 0 {
+		t.Fatalf("unchanged subject cost %d pack(s), want 0", packs)
+	}
+	for _, session := range []SessionID{1, 2} {
+		if frames := transport.take(session); len(frames) != 0 {
+			t.Fatalf("unchanged session %d received %d frame(s), want 0", session, len(frames))
+		}
+	}
 }
 
 // 一个会话推不到只关它自己：它被关闭并告知政策，别人这一帧照常。

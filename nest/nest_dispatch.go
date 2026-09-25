@@ -1,204 +1,26 @@
 package nest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/fctx"
-	"github.com/tjbdwanghaibo/roost-core/hotcode"
-	flog "github.com/tjbdwanghaibo/roost-core/log"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"log/slog"
-	"runtime"
-	"sort"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
-var (
-	handlerMu  sync.RWMutex
-	handlerMap = make(map[HandlerName]handlerEntry)
-)
-
-type handlerEntry struct {
-	handler BaseHandler
-	meta    HandlerMeta
-}
-
-func HandlerPatchName(name HandlerName) string {
-	return "nest.handler." + name.String()
-}
-
-func RegisterHandler(name HandlerName, handler BaseHandler) error {
-	return RegisterHandlerWithMeta(name, handler, HandlerMeta{Rollback: RollbackState, Durability: DurabilityAsync})
-}
-
-// RegisterMemoryHandler is the explicit opt-out for ephemeral handlers whose
-// state must never be persisted. Production business mutations should use
-// RegisterHandler or RegisterHandlerWithMeta.
-func RegisterMemoryHandler(name HandlerName, handler BaseHandler) error {
-	return RegisterHandlerWithMeta(name, handler, HandlerMeta{})
-}
-
-func validateHandlerMeta(name HandlerName, meta HandlerMeta) error {
-	if meta.Rollback > RollbackUndo {
-		return fmt.Errorf("nest: invalid rollback policy %d", meta.Rollback)
-	}
-	if meta.Durability > DurabilityPipelined {
-		return fmt.Errorf("nest: invalid durability policy %d", meta.Durability)
-	}
-	if meta.Durability != DurabilityMemory && meta.Rollback == RollbackNone {
-		return fmt.Errorf("%w: durable handler %q requires rollback", ErrRollbackUnsupported, name.String())
-	}
-	return nil
-}
-
-func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
-	if err := validateHandlerMeta(name, meta); err != nil {
-		return err
-	}
-	handlerMu.Lock()
-	defer handlerMu.Unlock()
-	if _, ok := handlerMap[name]; ok {
-		return fmt.Errorf("nest: duplicate handler %q", name.String())
-	}
-	if err := hotcode.Register(HandlerPatchName(name), handler); err != nil {
-		return err
-	}
-	handlerMap[name] = handlerEntry{handler: handler, meta: meta}
-	return nil
-}
-
-func MustRegisterHandler(name HandlerName, handler BaseHandler) {
-	if err := RegisterHandler(name, handler); err != nil {
-		panic(err)
-	}
-}
-
-func MustRegisterMemoryHandler(name HandlerName, handler BaseHandler) {
-	if err := RegisterMemoryHandler(name, handler); err != nil {
-		panic(err)
-	}
-}
-
-func MustRegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) {
-	if err := RegisterHandlerWithMeta(name, handler, meta); err != nil {
-		panic(err)
-	}
-}
-
-func GetHandler(name HandlerName) BaseHandler {
-	entry, ok := GetHandlerEntry(name)
-	if !ok {
-		return nil
-	}
-	return entry.handler
-}
-
-func GetHandlerEntry(name HandlerName) (handlerEntry, bool) {
-	handlerMu.RLock()
-	defer handlerMu.RUnlock()
-	entry, ok := handlerMap[name]
-	if ok && entry.handler != nil {
-		entry.handler = hotcode.Resolve[BaseHandler](HandlerPatchName(name), entry.handler)
-	}
-	return entry, ok
-}
-
-func snapshotHandlerEntries() map[HandlerName]handlerEntry {
-	handlerMu.RLock()
-	defer handlerMu.RUnlock()
-	ret := make(map[HandlerName]handlerEntry, len(handlerMap))
-	for name, entry := range handlerMap {
-		ret[name] = entry
-	}
-	return ret
-}
-
-func (mgr *NestMgr) getHandlerEntry(name HandlerName) (handlerEntry, bool) {
-	if mgr == nil {
-		return handlerEntry{}, false
-	}
-	entry, ok := mgr.handlers[name]
-	if !ok {
-		return GetHandlerEntry(name)
-	}
-	if ok && entry.handler != nil {
-		entry.handler = hotcode.Resolve[BaseHandler](HandlerPatchName(name), entry.handler)
-	}
-	return entry, ok
-}
-
-// RegisterHandlerWithMeta registers a handler on this engine instance only.
-// Tests and multi-engine processes should prefer it over the package-global
-// registry: instance tables don't collide across engines or across
-// `go test -count>1` reruns, and need no ResetHandlersForTest hygiene.
-// Instance registration is only valid before Start — the table is read
-// lock-free once dispatch begins. Lookup order is instance first, then the
-// global registry (see getHandlerEntry).
-func (mgr *NestMgr) RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
-	if mgr == nil {
-		return fmt.Errorf("nest: nil engine")
-	}
-	if err := validateHandlerMeta(name, meta); err != nil {
-		return err
-	}
-	mgr.lifecycleMu.Lock()
-	defer mgr.lifecycleMu.Unlock()
-	if mgr.started {
-		return fmt.Errorf("nest: handler %q registered after engine start", name.String())
-	}
-	if _, ok := mgr.handlers[name]; ok {
-		return fmt.Errorf("nest: duplicate handler %q", name.String())
-	}
-	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta}
-	return nil
-}
-
-// MustRegisterHandlerWithMeta is the panicking form of the instance-scoped
-// RegisterHandlerWithMeta.
-func (mgr *NestMgr) MustRegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) {
-	if err := mgr.RegisterHandlerWithMeta(name, handler, meta); err != nil {
-		panic(err)
-	}
-}
-
-func ResetHandlersForTest() {
-	handlerMu.Lock()
-	defer handlerMu.Unlock()
-	handlerMap = make(map[HandlerName]handlerEntry)
-	hotcode.ResetForTest()
-}
-
-type HandlerOptionParam struct {
-	IsGroup  bool
-	GroupLen []int
-}
-
-type HandlerOption func(opt *HandlerOptionParam)
-
-var (
-	HandlerOptionWithGroup = func(groupLen []int) HandlerOption {
-		return func(opt *HandlerOptionParam) {
-			opt.IsGroup = true
-			opt.GroupLen = make([]int, len(groupLen))
-			copy(opt.GroupLen, groupLen)
-		}
-	}
-)
-
-type BaseHandler func(es []entity.IThreadSafeEntity, param []any, opts ...HandlerOption) (any, error)
-
-const (
-	nestSlowDispatchThreshold      = 200 * time.Millisecond
-	nestSlowDispatchTraceThreshold = nestSlowDispatchThreshold
-	nestSlowDispatchStackLimit     = 256 * 1024
-)
-
-// NestDispatch is the core routing engine for nest messages.
+// NestDispatch 为一条消息建立独立的请求上下文和 Guard，随后按路由加载并锁定实体。
+// execution.go 负责业务执行与提交；这里负责最终释放、远端确认与回复。
 func NestDispatch(mgr *NestMgr, msg *Msg) {
+	dispatchNest(mgr, msg, false)
+}
+
+func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	if msg == nil {
 		return
 	}
@@ -207,10 +29,20 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		return
 	}
 	msg.getter = mgr.getter
+	if remoteStage {
+		var executorMu sync.Mutex
+		msg.localExecutor = func(fn func()) error {
+			executorMu.Lock()
+			defer executorMu.Unlock()
+			_, err := mgr.dispatchFastContinuation(msg, fn)
+			return err
+		}
+	}
+	msg.stageMetrics = mgr.stageMetrics
+	observeNestStage(msg.Name, "queue", msg.queuedAt)
 	start := time.Now()
 	traceWatch := startSlowDispatchTraceWatch(msg, start)
 	releaseCtx := ensureNestContext(mgr, msg)
-	_, releaseGuardScope := entity.NewGuardScope("nest:" + msg.Name)
 	releaseCurrentMsg := pushCurrentNestDispatchMsg(msg)
 	var err error
 	var ret any
@@ -223,14 +55,18 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 			}
 			slog.Error("nest dispatch panic", "err", err)
 		}
-		releaseGuardScope()
-		msg.runAfterUnlock()
 		commitCtx := context.Background()
 		if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 			commitCtx = current.Base
 		}
+		remoteStart := startNestStage(mgr.stageMetrics && msg.RemoteWriteBatch != nil)
 		if remoteErr := msg.finishRemoteWriteBatch(commitCtx, err); remoteErr != nil {
 			err = errors.Join(err, fmt.Errorf("nest: finish remote write batch: %w", remoteErr))
+		}
+		observeNestStage(msg.Name, "remote_confirm", remoteStart)
+		if msg.prepared != nil {
+			err = errors.Join(err, msg.localExecutor(msg.prepared.release))
+			msg.prepared = nil
 		}
 		releaseCurrentMsg()
 		releaseCtx()
@@ -277,6 +113,12 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		}
 	}
 
+	if remoteStage {
+		current := fctx.CurrentContext()
+		current.Base = entity.WithLocalExecutor(current.Base, msg.localExecutor)
+	}
+	prepareStart := startNestStage(mgr.stageMetrics && remoteStage)
+	defer func() { observeNestStage(msg.Name, "remote_prepare", prepareStart) }()
 	if err = prepareRemoteSnapshots(msg, mgr.remoteSnapshotResolver, mgr.remoteManager); err != nil {
 		return
 	}
@@ -288,6 +130,45 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 		}
 	}
 
+	observeNestStage(msg.Name, "remote_prepare", prepareStart)
+	prepareStart = time.Time{}
+	if remoteStage {
+		if err = prepareSlowEntities(msg); err != nil {
+			return
+		}
+		ret, err = mgr.dispatchRemoteLogic(msg)
+	} else {
+		ret, err = runNestLogic(mgr, msg)
+	}
+}
+
+// runNestLogic 的 Guard 与事务上下文始终由执行 handler 的 goroutine 持有。
+// Remote 的获取和最终确认在调用者的慢 worker 上完成。
+func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if recoveredErr, ok := r.(error); ok {
+				err = recoveredErr
+			} else {
+				err = errors.New(fmt.Sprint(r))
+			}
+		}
+	}()
+	_, releaseGuardScope := entity.NewGuardScope("nest:" + msg.Name)
+	releaseCurrentMsg := pushCurrentNestDispatchMsg(msg)
+	defer releaseCurrentMsg()
+	defer func() {
+		cleanupStart := startNestStage(mgr.stageMetrics)
+		releaseGuardScope()
+		msg.runAfterUnlock()
+		observeNestStage(msg.Name, "cleanup", cleanupStart)
+	}()
+	if fenced := mgr.FenceError(); fenced != nil {
+		return nil, fenced
+	}
+	if cause := nestBaseContext().Err(); cause != nil {
+		return nil, errors.Join(ErrNestCanceled, cause)
+	}
 	switch msg.Type {
 	case MsgTypeSingle:
 		ret, err = mgr.singleDispatch(msg.Name, msg.Tid, msg.Params)
@@ -300,354 +181,7 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 	case MsgTypeGroupTransition:
 		ret, err = mgr.groupTransitionDispatch(msg.GroupTransition)
 	}
-}
-
-func observeDispatch(msg *Msg, err error, cost time.Duration) {
-	if msg == nil {
-		return
-	}
-	labels := metrics.Labels{
-		"handler": msg.Name,
-		"type":    msg.Type.String(),
-	}
-	if err != nil {
-		labels["result"] = "error"
-	} else {
-		labels["result"] = "ok"
-	}
-	metrics.IncCounter("nest.dispatch.total", labels, 1)
-	metrics.ObserveDuration("nest.dispatch.cost", labels, cost)
-	if msg.HasRemote {
-		metrics.IncCounter("nest.dispatch.remote.total", labels, 1)
-	}
-	if shouldLogSlowDispatch(cost) {
-		flog.NewELog().Title("nest").Warn("slow dispatch",
-			"handler", msg.Name,
-			"type", msg.Type.String(),
-			"key", msg.Key(),
-			"tid", msg.Tid,
-			"tids", len(msg.Tids),
-			"groups", len(msg.GroupTIds),
-			"cost_ms", cost.Milliseconds(),
-			"cost", cost.String(),
-			"result", labels["result"],
-			"cost_pool", msg.Cost,
-			"remote", msg.HasRemote,
-		)
-	}
-}
-
-func shouldLogSlowDispatch(cost time.Duration) bool {
-	return cost >= nestSlowDispatchThreshold
-}
-
-func shouldTraceSlowDispatch(cost time.Duration) bool {
-	return cost > nestSlowDispatchTraceThreshold
-}
-
-func dispatchResult(err error) string {
-	if err != nil {
-		return "error"
-	}
-	return "ok"
-}
-
-type slowDispatchTraceWatch struct {
-	timer    *time.Timer
-	msg      *Msg
-	start    time.Time
-	done     chan struct{}
-	doneOnce sync.Once
-	traced   atomic.Bool
-}
-
-func startSlowDispatchTraceWatch(msg *Msg, start time.Time) *slowDispatchTraceWatch {
-	if msg == nil {
-		return nil
-	}
-	watch := &slowDispatchTraceWatch{
-		msg:   msg,
-		start: start,
-		done:  make(chan struct{}),
-	}
-	watch.timer = time.AfterFunc(nestSlowDispatchTraceThreshold, func() {
-		defer watch.closeDone()
-		watch.trace(time.Since(watch.start), "running")
-	})
-	return watch
-}
-
-func (watch *slowDispatchTraceWatch) stop(cost time.Duration, result string) {
-	if watch == nil || watch.timer == nil {
-		return
-	}
-	if watch.timer.Stop() {
-		watch.closeDone()
-		return
-	}
-	if shouldTraceSlowDispatch(cost) {
-		watch.trace(cost, result)
-	}
-	<-watch.done
-}
-
-func (watch *slowDispatchTraceWatch) trace(cost time.Duration, result string) {
-	if watch.traced.CompareAndSwap(false, true) {
-		logSlowDispatchTrace(newNestMsgDebugInfo(watch.msg), cost, result)
-	}
-}
-
-func (watch *slowDispatchTraceWatch) closeDone() {
-	watch.doneOnce.Do(func() {
-		close(watch.done)
-	})
-}
-
-type nestMsgDebugInfo struct {
-	Handler      string
-	Type         string
-	Key          int64
-	Tid          int64
-	Tids         []int64
-	Groups       [][]int64
-	ParamsCount  int
-	ParamTypes   []string
-	ParamSamples []string
-	RefCount     int
-	HasRetChan   bool
-	CostPool     bool
-	Remote       bool
-	ContextValid bool
-	TraceID      string
-	TraceEnabled bool
-	TraceReason  string
-	TraceTags    map[string]string
-	MsgString    string
-}
-
-func newNestMsgDebugInfo(msg *Msg) nestMsgDebugInfo {
-	if msg == nil {
-		return nestMsgDebugInfo{}
-	}
-	return nestMsgDebugInfo{
-		Handler:      msg.Name,
-		Type:         msg.Type.String(),
-		Key:          msg.Key(),
-		Tid:          msg.Tid,
-		Tids:         cloneInt64s(msg.Tids),
-		Groups:       cloneInt64Groups(msg.GroupTIds),
-		ParamsCount:  len(msg.Params),
-		ParamTypes:   nestParamTypes(msg.Params),
-		ParamSamples: nestParamSamples(msg.Params),
-		RefCount:     msg.RefCount,
-		HasRetChan:   msg.RetChan != nil,
-		CostPool:     msg.Cost,
-		Remote:       msg.HasRemote,
-		ContextValid: msg.Context.Valid,
-		TraceID:      msg.Context.Trace.TraceID,
-		TraceEnabled: msg.Context.Trace.Active(),
-		TraceReason:  msg.Context.Trace.Reason,
-		TraceTags:    msg.Context.Trace.Tags,
-		MsgString:    msg.String(),
-	}
-}
-
-func (info nestMsgDebugInfo) fields() map[string]any {
-	return map[string]any{
-		"handler":       info.Handler,
-		"type":          info.Type,
-		"key":           info.Key,
-		"tid":           info.Tid,
-		"tids":          info.Tids,
-		"tids_count":    len(info.Tids),
-		"groups":        info.Groups,
-		"groups_count":  len(info.Groups),
-		"params_count":  info.ParamsCount,
-		"param_types":   info.ParamTypes,
-		"param_samples": info.ParamSamples,
-		"ref_count":     info.RefCount,
-		"has_ret_chan":  info.HasRetChan,
-		"cost_pool":     info.CostPool,
-		"remote":        info.Remote,
-		"context_valid": info.ContextValid,
-		"trace_id":      info.TraceID,
-		"trace_enabled": info.TraceEnabled,
-		"trace_reason":  info.TraceReason,
-		"trace_tags":    info.TraceTags,
-		"msg":           info.MsgString,
-	}
-}
-
-func cloneInt64s(src []int64) []int64 {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]int64, len(src))
-	copy(dst, src)
-	return dst
-}
-
-func cloneInt64Groups(src [][]int64) [][]int64 {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([][]int64, len(src))
-	for i, group := range src {
-		dst[i] = cloneInt64s(group)
-	}
-	return dst
-}
-
-func nestParamTypes(params []any) []string {
-	if len(params) == 0 {
-		return nil
-	}
-	ret := make([]string, len(params))
-	for i, param := range params {
-		if param == nil {
-			ret[i] = "nil"
-		} else {
-			ret[i] = fmt.Sprintf("%T", param)
-		}
-	}
-	return ret
-}
-
-func nestParamSamples(params []any) []string {
-	if len(params) == 0 {
-		return nil
-	}
-	ret := make([]string, len(params))
-	for i, param := range params {
-		ret[i] = truncateNestDebugText(fmt.Sprintf("%#v", param), 256)
-	}
-	return ret
-}
-
-func truncateNestDebugText(text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	return text[:limit] + "...(truncated)"
-}
-
-func logSlowDispatchTrace(info nestMsgDebugInfo, cost time.Duration, result string) {
-	stack, truncated := captureSlowDispatchStack()
-	flog.NewELog().Title("nest").Warn("slow dispatch trace",
-		"handler", info.Handler,
-		"type", info.Type,
-		"key", info.Key,
-		"cost_ms", cost.Milliseconds(),
-		"cost", cost.String(),
-		"result", result,
-		"msg_info", info.fields(),
-		"stack_truncated", truncated,
-		"stack", stack,
-	)
-}
-
-type nestTraceEventInfo struct {
-	Active      bool
-	Handler     string
-	Type        string
-	Key         int64
-	Tid         int64
-	TidsCount   int
-	GroupsCount int
-	Remote      bool
-	TraceID     string
-	Reason      string
-	Tags        map[string]string
-	Source      string
-	PlayerID    int64
-	MsgID       uint32
-	Seq         uint32
-}
-
-func newNestTraceEventInfo(msg *Msg) nestTraceEventInfo {
-	if msg == nil || !msg.Context.Trace.Active() {
-		return nestTraceEventInfo{}
-	}
-	return nestTraceEventInfo{
-		Active:      true,
-		Handler:     msg.Name,
-		Type:        msg.Type.String(),
-		Key:         msg.Key(),
-		Tid:         msg.Tid,
-		TidsCount:   len(msg.Tids),
-		GroupsCount: len(msg.GroupTIds),
-		Remote:      msg.HasRemote,
-		TraceID:     msg.Context.Trace.TraceID,
-		Reason:      msg.Context.Trace.Reason,
-		Tags:        msg.Context.Trace.Clone().Tags,
-		Source:      msg.Context.Meta.Source,
-		PlayerID:    msg.Context.Meta.PlayerID,
-		MsgID:       msg.Context.Meta.MsgID,
-		Seq:         msg.Context.Meta.Seq,
-	}
-}
-
-func emitNestTraceEvent(msg *Msg, event string, result string, cost time.Duration) {
-	emitNestTraceEventInfo(newNestTraceEventInfo(msg), event, result, cost)
-}
-
-func emitNestTraceEventInfo(info nestTraceEventInfo, event string, result string, cost time.Duration) {
-	if !info.Active {
-		return
-	}
-	labels := metrics.Labels{
-		"handler": info.Handler,
-		"type":    info.Type,
-		"event":   event,
-		"result":  result,
-	}
-	metrics.IncCounter("nest.trace.events.total", labels, 1)
-	if cost > 0 {
-		metrics.ObserveDuration("nest.trace.cost", labels, cost)
-	}
-	flog.NewELog().Title("nest_trace").Info("nest trace event",
-		"trace_id", info.TraceID,
-		"reason", info.Reason,
-		"event", event,
-		"result", result,
-		"handler", info.Handler,
-		"type", info.Type,
-		"key", info.Key,
-		"tid", info.Tid,
-		"tids", info.TidsCount,
-		"groups", info.GroupsCount,
-		"cost_ms", cost.Milliseconds(),
-		"cost", cost.String(),
-		"remote", info.Remote,
-		"source", info.Source,
-		"player", info.PlayerID,
-		"msg_id", info.MsgID,
-		"seq", info.Seq,
-		"tags", info.Tags,
-	)
-}
-
-func captureSlowDispatchStack() (string, bool) {
-	buf := make([]byte, nestSlowDispatchStackLimit)
-	n := runtime.Stack(buf, true)
-	return string(buf[:n]), n == len(buf)
-}
-
-func logAsyncDispatchError(msg *Msg, err error) {
-	if msg == nil || err == nil {
-		return
-	}
-	flog.NewELog().Title("nest").Warn("async handler failed",
-		"handler", msg.Name,
-		"type", msg.Type.String(),
-		"key", msg.Key(),
-		"tid", msg.Tid,
-		"tids", len(msg.Tids),
-		"groups", len(msg.GroupTIds),
-		"cost", msg.Cost,
-		"remote", msg.HasRemote,
-		"err", err,
-	)
+	return ret, err
 }
 
 func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
@@ -686,7 +220,9 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 		return nil, err
 	}
 	meta := entity.ResolveEntityID(fullID)
-	e, err := mgr.getter.Get(nestBaseContext(), meta.FullID, meta.Category)
+	loadStart := startNestStage(mgr.stageMetrics)
+	e, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
+	observeNestStage(name, "load", loadStart)
 	if err != nil {
 		return nil, err
 	}
@@ -701,20 +237,8 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 		return nil, ErrEntityNotFound
 	}
 	defer e.UnTouch()
-	guard := entity.GetEntityGuard()
 	es := []entity.IThreadSafeEntity{e}
-	if err := rejectPendingEntityGroupTransition(es); err != nil {
-		return nil, err
-	}
-	_, releaseLocks, err := lockDispatchEntitiesForHandlerWithStore(mgr.groupLockManager(), guard, es, groupStoreOf(mgr.getter))
-	if err != nil {
-		return nil, err
-	}
-	releaseOnce := sync.OnceFunc(releaseLocks)
-	defer releaseOnce()
-	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
-		return entry.handler(es, params)
-	})
+	return mgr.dispatchLoadedEntities(entry, name, es, es, params)
 }
 
 func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, error) {
@@ -722,52 +246,7 @@ func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, 
 	if !ok || entry.handler == nil {
 		return nil, ErrHandlerNotFound
 	}
-	fullIDs, fullIDCategories, err := normalizeFullIDs(ids)
-	if err != nil {
-		return nil, err
-	}
-	es, err := mgr.getter.GetMany(nestBaseContext(), fullIDs, fullIDCategories)
-	if err != nil {
-		return nil, err
-	}
-
-	var lockEs []entity.IThreadSafeEntity
-	var touchedEs []entity.IThreadSafeEntity
-	for i, e := range es {
-		if e != nil && e.Touch() {
-			lockEs = append(lockEs, e)
-			touchedEs = append(touchedEs, e)
-		} else {
-			es[i] = nil
-		}
-	}
-	defer func() {
-		for _, te := range touchedEs {
-			te.UnTouch()
-		}
-	}()
-
-	if firstDispatchEntityMissing(es) {
-		return nil, ErrEntityNotFound
-	}
-	if len(lockEs) == 0 {
-		return nil, ErrEntityNotFound
-	}
-	if err := rejectPendingEntityGroupTransition(lockEs); err != nil {
-		return nil, err
-	}
-
-	SortEntity(lockEs)
-	guard := entity.GetEntityGuard()
-	_, releaseLocks, err := lockDispatchEntitiesForHandlerWithStore(mgr.groupLockManager(), guard, lockEs, groupStoreOf(mgr.getter))
-	if err != nil {
-		return nil, err
-	}
-	releaseOnce := sync.OnceFunc(releaseLocks)
-	defer releaseOnce()
-	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
-		return entry.handler(es, params)
-	})
+	return mgr.dispatchMany(entry, name, ids, params)
 }
 
 func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []any) (any, error) {
@@ -781,17 +260,24 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 		groupLen[i] = len(group)
 		ids = append(ids, group...)
 	}
-	fullIDs, fullIDCategories, err := normalizeFullIDs(ids)
-	if err != nil {
-		return nil, err
-	}
-	es, err := mgr.getter.GetMany(nestBaseContext(), fullIDs, fullIDCategories)
-	if err != nil {
-		return nil, err
-	}
+	return mgr.dispatchMany(entry, name, ids, params, HandlerOptionWithGroup(groupLen))
+}
 
-	var lockEs []entity.IThreadSafeEntity
-	var touchedEs []entity.IThreadSafeEntity
+// dispatchMany 保留调用者的实体顺序与 nil 占位，另建锁集合用于排序。
+// Touch 记录单独保存，业务修改参数切片也不会影响引用归还；重复参数按次数配对。
+func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, params []any, opts ...HandlerOption) (any, error) {
+	fullIDs, categories, err := normalizeFullIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	loadStart := startNestStage(mgr.stageMetrics)
+	es, err := mgr.dispatchGetter().GetMany(nestBaseContext(), fullIDs, categories)
+	observeNestStage(name, "load", loadStart)
+	if err != nil {
+		return nil, err
+	}
+	lockEs := make([]entity.IThreadSafeEntity, 0, len(es))
+	touchedEs := make([]entity.IThreadSafeEntity, 0, len(es))
 	for i, e := range es {
 		if e != nil && e.Touch() {
 			lockEs = append(lockEs, e)
@@ -801,80 +287,46 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 		}
 	}
 	defer func() {
-		for _, te := range touchedEs {
-			te.UnTouch()
+		for _, e := range touchedEs {
+			e.UnTouch()
 		}
 	}()
-
 	if firstDispatchEntityMissing(es) {
 		return nil, ErrEntityNotFound
 	}
-	if len(lockEs) == 0 {
-		return nil, ErrEntityNotFound
-	}
+	return mgr.dispatchLoadedEntities(entry, name, es, lockEs, params, opts...)
+}
+
+// dispatchLoadedEntities 统一普通调用的组迁移检查、排序加锁和执行收尾。
+// 调用方负责配对 Touch/UnTouch；这里先释放锁，再返回调用方归还引用。
+// es 是业务参数，lockEs 是已 Touch 的锁集合；多实体时两者不可共用底层数组。
+func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, lockEs []entity.IThreadSafeEntity, params []any, opts ...HandlerOption) (any, error) {
 	if err := rejectPendingEntityGroupTransition(lockEs); err != nil {
 		return nil, err
 	}
 	SortEntity(lockEs)
 	guard := entity.GetEntityGuard()
+	lockStart := startNestStage(mgr.stageMetrics)
 	_, releaseLocks, err := lockDispatchEntitiesForHandlerWithStore(mgr.groupLockManager(), guard, lockEs, groupStoreOf(mgr.getter))
+	observeNestStage(name, "lock", lockStart)
 	if err != nil {
 		return nil, err
 	}
-	releaseOnce := sync.OnceFunc(releaseLocks)
-	defer releaseOnce()
-	return mgr.invokeHandlerTransaction(entry.meta, es, name, releaseOnce, func() (any, error) {
-		return entry.handler(es, params, HandlerOptionWithGroup(groupLen))
+	if mgr.stageMetrics {
+		originalRelease := releaseLocks
+		releaseLocks = func() {
+			defer observeNestStage(name, "release", time.Now())
+			originalRelease()
+		}
+	}
+	// 提前释放的异常由提交路径接管；defer 兜底不能再次抛出同一个 panic。
+	// Once.Do 只执行一次，OnceFunc 会在后续调用中重放第一次的 panic。
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(releaseLocks) }
+	defer release()
+	return mgr.invokeHandlerTransaction(entry.meta, es, name, release, func() (any, error) {
+		return entry.handler(es, params, opts...)
 	})
-}
-
-// invokeHandlerTransaction is the single dispatch-side entry into
-// invokeWithTransaction: it enforces the pipelined allowlist before any
-// handler code runs, supplies the engine's completion pump, and measures how
-// long the dispatch held its entity locks.
-func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, name string, releaseLocks func(), call func() (any, error)) (any, error) {
-	if meta.Durability == DurabilityPipelined && mgr != nil && mgr.pipelinedAllow != nil {
-		if _, ok := mgr.pipelinedAllow[name]; !ok {
-			return nil, fmt.Errorf("%w: %q", ErrPipelinedNotAllowed, name)
-		}
-	}
-	// Lock-hold budget: the locks are already held here, and they are
-	// released either through releaseLocks (the pipelined early release) or
-	// by the dispatch site right after this call returns — record at
-	// whichever happens first, once, on this goroutine.
-	start := time.Now()
-	recorded := false
-	record := func() {
-		if !recorded {
-			recorded = true
-			mgr.observeLockHold(name, time.Since(start))
-		}
-	}
-	wrappedRelease := releaseLocks
-	if releaseLocks != nil {
-		wrappedRelease = func() {
-			record()
-			releaseLocks()
-		}
-	}
-	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, wrappedRelease, mgr.completions, call)
-	if errors.Is(err, ErrCommitIndeterminate) {
-		mgr.Fence(err)
-	}
-	record()
-	return ret, err
-}
-
-// observeLockHold records the per-handler entity-lock hold time and flags
-// holds beyond the configured threshold — the operational signal for "which
-// handler is doing slow work inside its entity locks" (the exact cost class
-// DurabilityPipelined exists to remove).
-func (mgr *NestMgr) observeLockHold(handler string, hold time.Duration) {
-	metrics.ObserveDuration("nest.handler.lock_hold", metrics.Labels{"handler": handler}, hold)
-	if threshold := mgr.slowLockThreshold; threshold > 0 && hold >= threshold {
-		metrics.IncCounter("nest.handler.lock_hold.slow.total", metrics.Labels{"handler": handler}, 1)
-		slog.Warn("nest handler held entity locks beyond threshold", "handler", handler, "hold", hold, "threshold", threshold)
-	}
 }
 
 func firstDispatchEntityMissing(es []entity.IThreadSafeEntity) bool {
@@ -969,7 +421,9 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			continue
 		}
 		meta := entity.ResolveEntityID(fullID)
-		e, err := mgr.getter.Get(nestBaseContext(), meta.FullID, meta.Category)
+		loadStart := startNestStage(mgr.stageMetrics)
+		e, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
+		observeNestStage(name, "load", loadStart)
 		if err != nil {
 			continue
 		}
@@ -980,7 +434,10 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 		if e == nil || !e.Touch() {
 			continue
 		}
-		if !guard.RequireEntity(e) {
+		lockStart := startNestStage(mgr.stageMetrics)
+		locked := guard.RequireEntity(e)
+		observeNestStage(name, "lock", lockStart)
+		if !locked {
 			e.UnTouch()
 			continue
 		}
@@ -989,9 +446,13 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 				if r := recover(); r != nil {
 					slog.Error("nest broadcast handler panic", "id", meta.FullID, "handler", name, "err", r)
 				}
-				oneEntity[0] = nil
+			}()
+			// 清理各自独立：释放 hook panic 也必须归还 Touch，并留在逐实体恢复边界内。
+			defer func() { oneEntity[0] = nil }()
+			defer e.UnTouch()
+			defer func() {
+				defer observeNestStage(name, "release", startNestStage(mgr.stageMetrics))
 				guard.ReleaseEntity(e.GUId())
-				e.UnTouch()
 			}()
 			oneEntity[0] = e
 			// Broadcast has no early-release closure: pipelined handlers run
@@ -1022,27 +483,21 @@ func normalizeFullIDs(ids []int64) ([]int64, []entity.EntityCategory, error) {
 
 // SortEntity sorts entities for deadlock-free lock acquisition.
 func SortEntity(es []entity.IThreadSafeEntity) {
-	if len(es) == 0 {
-		return
-	}
-	sort.Slice(es, func(i, j int) bool {
-		guidI, guidJ := es[i].GUId(), es[j].GUId()
-		return cmpGuidFunc(guidI, guidJ)
+	slices.SortFunc(es, func(a, b entity.IThreadSafeEntity) int {
+		return compareEntityIDs(a.GUId(), b.GUId())
 	})
 }
 
 func SortEntityId(guids []int64) {
-	sort.Slice(guids, func(i, j int) bool {
-		return cmpGuidFunc(guids[i], guids[j])
-	})
+	slices.SortFunc(guids, compareEntityIDs)
 }
 
-func cmpGuidFunc(guidI, guidJ int64) bool {
+func compareEntityIDs(guidI, guidJ int64) int {
 	groupI, groupJ := entity.GetEntityGroup(guidI), entity.GetEntityGroup(guidJ)
 	if groupI != groupJ {
-		return groupI < groupJ
+		return cmp.Compare(groupI, groupJ)
 	}
-	return guidI < guidJ
+	return cmp.Compare(guidI, guidJ)
 }
 
 // prepareRemoteWriteBatch admits one fenced transaction before dispatch.

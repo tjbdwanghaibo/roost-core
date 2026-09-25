@@ -1,6 +1,6 @@
 # ARCH-12：sync 块的包结构整理——先划清范围，再局部聚集
 
-- 状态：**方案**（维护者 2026-09-23 定原则后写，未实施）
+- 状态：**已实施**（M-15～M-18，见 §6）；下文 §1～§5 保留实施前的盘点与方案，当前目录以 [sync/README](../../sync/README.md) 为准。后续可读性整理见 [09-23 方案](../feature/REFACTOR-2026-09-23-sync-readability.md)。
 - 原则（维护者）：roost core 就是三块基础——nest 调度、dataengine、sync；其余是通用基建。review 最高优先级是这三块，且不只查 bug，还查包结构与代码构造。除通用基建外，三块的代码要各自**局部聚集**。sync 先整理清楚，再基于整理结果给方案。
 - 前置：ARCH-10（M-13 / M-14）已落地；`room/` → `syncbus/driver`、`policy.Room` → `Group` 已在 `feature/arch-10-sync-policy`
 - 后续：ARCH-11 的 M-15 / M-16 在本方案 S3 之后做，避免同一批文件搬两次

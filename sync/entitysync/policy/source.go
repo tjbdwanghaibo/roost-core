@@ -6,7 +6,8 @@
 package policy
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"sync"
 )
 
@@ -15,8 +16,8 @@ import (
 // are others. They all answer the same question, so they all produce the same
 // events and Interest's aggregation does not care which is which.
 //
-// The event type is spatial's: a relation simply never emits BandChanged and
-// always uses band 0.
+// InterestEvent 定义在本包。空间来源可产生距离分档变化；关系来源始终使用
+// band 0，只产生进入和离开事件。Interest 负责合并来源，Manager 负责交付。
 type Source interface {
 	// Name identifies the source in the aggregator's bookkeeping. Two sources
 	// must not share a name.
@@ -114,11 +115,12 @@ func (s *RelationSource) Flush() []InterestEvent {
 	}
 	events := s.pending
 	s.pending = nil
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].Observer != events[j].Observer {
-			return events[i].Observer < events[j].Observer
+	// 同一观察者与实体的事件保持产生顺序，避免把 Enter/Leave 颠倒。
+	slices.SortStableFunc(events, func(a, b InterestEvent) int {
+		if order := cmp.Compare(a.Observer, b.Observer); order != 0 {
+			return order
 		}
-		return events[i].Subject < events[j].Subject
+		return cmp.Compare(a.Subject, b.Subject)
 	})
 	return events
 }

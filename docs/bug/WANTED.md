@@ -65,30 +65,19 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 生成工程 `sceneLane.AdmitBatch` 逐个推、遇错整批放弃；`pushPlayer` 无会话不计指标。按失败种类分流后关闭，记录见 [bugfix/U-0278](../bugfix/U-0278-scene-lane-per-session-push.md)。
 
-## W-2026-09-22-02：v1.16.1 的进程正常停止后重启，WAL 回放 `mongo: duplicate key`，进程再也起不来
+## W-2026-09-22-02：持久化公会复用进程临时 ID，Remote 投影冲突
 
-- **位置**：`roost-core/dataengine/engine`（startup projection recovery）与 `dataengine/mongo` 的 remote projection；
-  错误链 `startup projection recovery: dataengine projector: segment first_transaction=80ceb6c8c60c05af00000000000000ba
-  records=1: transaction 80ceb6c8c60c05af00000000000000ba: dataengine mongo: remote projection: mongo: duplicate key`。
-  基线 `00277bd`，生成工程钉 core v1.16.1。
-- **现象**：09-22 两进程实跑的 sid 1000（第二个化身，10:44:42 起、10:51 由 `run.sh stop` **正常停止**，
-  日志末尾 `mod stopped / server stopped`）在 11:17 重启时于 `mod dataengine start` 退出，每次重启都一样。
-  WAL 目录已原样保存：`<scratch>/evidence/wal-dataengine-1000/`（`segment-…0001.wal` 631 KB，最后写入 10:50；
-  `ack-0.chk` / `ack-1.chk` 最后写入 **10:44**——也就是第二个化身整整七分钟没有推进过 ack）。
-- **为何可疑**：
-  1. `game._dataengine_transactions` 与 `game._dataengine_receipts` 里**都没有** `80ceb6c8…ba`——这笔事务没有被记为已提交，
-     回放它却撞了 `_id`：它要插入的文档已经被别的事务写进去了。回放对这种记录不是幂等的。
-  2. RR-20260920-01 / U-0261 的结论是"新记录已不可能成为毒丸，只有旧记录没有隔离流程"（CARRYOVER A1）。
-     这条记录是 v1.16.1 自己写出来的，并且是在**正常停止**之后。A1 的前提不成立了。
-  3. `80ceb6c8c60c05af` 与该库里其他事务的前缀 `77750f86f3b3ab39` 不同——是第二个化身的前缀；`records=1` 说明
-     它是这个化身在这一段里的**第一条**记录。第一条记录 + ack 七分钟不动，指向"化身切换时 WAL / ack / receipt 三者的
-     起点没有对齐"，而不是某一笔业务写坏了。
-- **会红的测试草稿**：起一个 dataengine 运行时 → 写若干事务 → 正常 Shutdown → 用同一 WAL 目录、不同化身前缀再起 →
-  写一笔会插入新文档的事务 → 再正常 Shutdown → 第三次启动必须成功。若能复现，再把"ack 不推进"单独拆出来。
-- **候选修法**：先定契约——回放一条没有 receipt 的插入事务撞 `_id` 时，是"文档已在、视为已应用"（按 digest 比对后跳过）
-  还是"毒丸、隔离并继续"。两者都比"进程起不来"好。
-- **来源**：09-22 RR-20260922-01 的判别实验准备阶段。这条**没有在本轮修**：它不是登记的三条 RR 之一，
-  且需要先定契约。P1 分量（进程死、无出路）。
+**当前结论（2026-09-24）：发号根因已修复；Remote 永久版本冲突的错误分类已补修。**
+
+09-22 保存的真实二进制 WAL 中，事务 `944c96f5412e6a6600000000000000f3` 与新进程化身的 `80ceb6c8c60c05af00000000000000ba` 均以 `0→1` 创建 entity `6935121213685498901`，但业务内容不同。公会错误使用 runtimeid 的进程本地 sequence，重启归零后重复发号；后续还有连续多个 ID 重复。
+
+修复后公会改用 Mongo 持久化发号，新 ID 与历史 runtimeid 半区隔离。Remote 新建 ID 冲突或其他确定版本冲突在 DataEngine 中触发 fatal fencing，停止后续准入，保留未 ack 的 WAL，避免无意义重试与新事务积压。相同事务的真实幂等重放仍允许成功，瞬时存储错误仍按原策略重试。
+
+过去“进程化身导致 WAL/ack/receipt 起点错位”的推测已被原始 WAL 证据推翻，不再作为待决方案。不可按 receipt 缺失直接跳过冲突事务，它还包含玩家 guild_id 等原子业务变化。
+
+这里的“旧冲突记录”指 `/private/tmp/.../evidence/wal-dataengine-1000/` 中已经写出的历史测试数据，不是当前源码里另一段尚未修改的逻辑，也不是文档中的待实现项。代码修复防止重现、及时停止确定冲突；它不会悄悄重写已持久化的旧业务事实。
+
+[原始证据、发号修复与验证](../bugfix/W-2026-09-22-02.md) · [确定冲突分类修复](../bugfix/RR-20260924-12.md)。
 
 ## W-2026-09-22-01：`redis/driver` 的 toxiproxy 用例 `TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried` 在真实矩阵里 3/4 红
 

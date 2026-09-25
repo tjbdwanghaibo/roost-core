@@ -1,0 +1,463 @@
+// Copied into a freshly generated example.com/syncperf game-demo by sync-business.sh.
+package Game
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	player "example.com/syncperf/game/entities/player"
+	syncsender "example.com/syncperf/game/handler/syncsender"
+	gamescene "example.com/syncperf/game/scene"
+	access "example.com/syncperf/internal/access/player/tcp"
+	"example.com/syncperf/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// The TCP envelope belongs only to this measurement harness. The inner Sync
+// bytes, generated Player packer, Nest handler and Interest policy are real.
+// No login, persistence, production player-TCP envelope or remote network is measured.
+type businessTCP struct {
+	conns     map[int64]net.Conn
+	readers   []net.Conn
+	wg        sync.WaitGroup
+	sent      atomic.Int64
+	received  atomic.Int64
+	bytes     atomic.Int64
+	mu        sync.Mutex
+	failure   error
+	latencies []float64
+	updates   int64
+	expected  map[int]map[int64]businessState
+	tick      int
+	scheduled time.Time
+}
+type businessState struct {
+	Exp   int64
+	Level int32
+}
+
+func newBusinessTCP(t *testing.T, count int) *businessTCP {
+	t.Helper()
+	lane := &businessTCP{conns: make(map[int64]net.Conn), expected: make(map[int]map[int64]businessState)}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	t.Cleanup(func() {
+		for _, conn := range lane.conns {
+			_ = conn.Close()
+		}
+		for _, conn := range lane.readers {
+			_ = conn.Close()
+		}
+		lane.wg.Wait()
+	})
+	for i := 0; i < count; i++ {
+		client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := listener.Accept()
+		if err != nil {
+			_ = client.Close()
+			t.Fatal(err)
+		}
+		lane.conns[int64(9001+i)] = server
+		lane.readers = append(lane.readers, client)
+		lane.wg.Add(1)
+		go lane.consume(client)
+	}
+	return lane
+}
+func (lane *businessTCP) ActiveSessions(id int64) int {
+	if lane.conns[id] != nil {
+		return 1
+	}
+	return 0
+}
+func (*businessTCP) OnSessionClosed(func(access.SessionClosed)) func() { return func() {} }
+func (lane *businessTCP) PushPlayer(ctx context.Context, id int64, _ uint32, value any) error {
+	push, ok := value.(*pb.EntitySyncPush)
+	if !ok {
+		return fmt.Errorf("unexpected push %T", value)
+	}
+	conn := lane.conns[id]
+	if conn == nil {
+		return fmt.Errorf("unknown player %d", id)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	var header [20]byte
+	binary.LittleEndian.PutUint32(header[:4], uint32(len(push.Payload)))
+	binary.LittleEndian.PutUint64(header[4:12], uint64(lane.scheduled.UnixNano()))
+	binary.LittleEndian.PutUint64(header[12:], uint64(lane.tick))
+	buffers := net.Buffers{header[:], push.Payload}
+	if _, err := buffers.WriteTo(conn); err != nil {
+		return err
+	}
+	lane.sent.Add(1)
+	lane.bytes.Add(int64(len(push.Payload)))
+	return nil
+}
+func (lane *businessTCP) fail(err error) {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.failure == nil {
+		lane.failure = err
+	}
+}
+func (lane *businessTCP) consume(conn net.Conn) {
+	defer lane.wg.Done()
+	versions := make(map[int64]uint64)
+	var epoch uint64
+	var clock uint64
+	for {
+		var header [20]byte
+		if _, err := io.ReadFull(conn, header[:]); err != nil {
+			return
+		}
+		size := binary.LittleEndian.Uint32(header[:4])
+		if size > 4<<20 {
+			lane.fail(fmt.Errorf("frame too large: %d", size))
+			return
+		}
+		payload := make([]byte, int(size))
+		if _, err := io.ReadFull(conn, payload); err != nil {
+			lane.fail(err)
+			return
+		}
+		tick := int(binary.LittleEndian.Uint64(header[12:]))
+		decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
+		if err != nil {
+			lane.fail(err)
+			return
+		}
+		if uint64(decoded.Epoch) != epoch {
+			clear(versions)
+			epoch = uint64(decoded.Epoch)
+			clock = 0
+		}
+		if uint64(decoded.BaseTick) != clock {
+			lane.fail(fmt.Errorf("frame base %d, client %d", decoded.BaseTick, clock))
+			return
+		}
+		clock = uint64(decoded.Tick)
+		var updates int64
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+				if err != nil {
+					lane.fail(err)
+					return
+				}
+				if !update.Full && versions[update.SubjectID] != update.BaseVersion {
+					lane.fail(fmt.Errorf("subject %d base %d, client %d", update.SubjectID, update.BaseVersion, versions[update.SubjectID]))
+					return
+				}
+				versions[update.SubjectID] = update.Version
+				var document bson.M
+				if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+					lane.fail(err)
+					return
+				}
+				lane.mu.Lock()
+				expected, exists := lane.expected[tick][update.SubjectID]
+				lane.mu.Unlock()
+				if !exists {
+					lane.fail(fmt.Errorf("no expectation tick=%d subject=%d", tick, update.SubjectID))
+					return
+				}
+				if exp, ok := document["exp"]; ok && exp != expected.Exp {
+					lane.fail(fmt.Errorf("exp: got %v want %d", exp, expected.Exp))
+					return
+				}
+				if level, ok := document["level"]; ok && level != expected.Level {
+					lane.fail(fmt.Errorf("level: got %v want %d", level, expected.Level))
+					return
+				}
+				updates++
+			}
+		}
+		latency := float64(time.Now().UnixNano()-int64(binary.LittleEndian.Uint64(header[4:12]))) / 1e6
+		lane.mu.Lock()
+		if tick > 0 {
+			lane.latencies = append(lane.latencies, latency)
+			lane.updates += updates
+		}
+		lane.mu.Unlock()
+		lane.received.Add(1)
+	}
+}
+func (lane *businessTCP) drain(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for lane.received.Load() != lane.sent.Load() {
+		lane.mu.Lock()
+		err := lane.failure
+		lane.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("drain timeout: sent=%d received=%d", lane.sent.Load(), lane.received.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.failure != nil {
+		t.Fatal(lane.failure)
+	}
+}
+func businessQuantiles(values []float64) map[string]float64 {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	out := make(map[string]float64)
+	if len(sorted) == 0 {
+		return out
+	}
+	for name, q := range map[string]float64{"p50": .5, "p95": .95, "p99": .99, "max": 1} {
+		out[name] = sorted[int(math.Ceil(float64(len(sorted))*q))-1]
+	}
+	return out
+}
+func businessEnvInt(t *testing.T, name string, fallback int) int {
+	t.Helper()
+	if raw := os.Getenv(name); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			t.Fatalf("invalid %s=%q", name, raw)
+		}
+		return n
+	}
+	return fallback
+}
+
+// An absolute schedule preserves overdue work: no ticker drops missed ticks,
+// and client latency starts at the scheduled tick, so overload cannot appear fast.
+func TestSyncBusinessLoad(t *testing.T) {
+	if os.Getenv("ROOST_SYNC_BUSINESS") != "1" {
+		t.Skip("run scripts/perf/sync-business.sh")
+	}
+	ticks := businessEnvInt(t, "ROOST_SYNC_TICKS", 200)
+	interval := time.Second / time.Duration(businessEnvInt(t, "ROOST_SYNC_HZ", 20))
+	if interval <= 0 {
+		t.Fatal("frequency exceeds timer resolution")
+	}
+	cases := []struct {
+		Name           string
+		Players, Dirty int
+		Spread         bool
+	}{
+		{"solo", 1, 100, false}, {"hotspot32_sparse", 32, 10, false},
+		{"hotspot96_sparse", 96, 10, false}, {"hotspot96_busy", 96, 100, false},
+		{"spread128_busy", 128, 100, true},
+	}
+	if os.Getenv("ROOST_SYNC_CASE") == "custom" {
+		c := cases[0]
+		c.Name = "custom"
+		c.Players = businessEnvInt(t, "ROOST_SYNC_PLAYERS", 64)
+		c.Dirty = businessEnvInt(t, "ROOST_SYNC_DIRTY_PERCENT", 10)
+		layout := os.Getenv("ROOST_SYNC_LAYOUT")
+		if c.Players > 1024 || c.Dirty > 100 || (layout != "" && layout != "hotspot" && layout != "spread") {
+			t.Fatal("custom requires players <= 1024, dirty percent <= 100, layout hotspot or spread")
+		}
+		c.Spread = layout == "spread"
+		cases = append(cases, c)
+	}
+	if only := os.Getenv("ROOST_SYNC_CASE"); only != "" {
+		if !slices.ContainsFunc(cases, func(c struct {
+			Name           string
+			Players, Dirty int
+			Spread         bool
+		}) bool {
+			return c.Name == only
+		}) {
+			t.Fatalf("unknown ROOST_SYNC_CASE %q", only)
+		}
+	}
+	for _, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			if only := os.Getenv("ROOST_SYNC_CASE"); only != "" && only != c.Name {
+				t.Skip("case filter")
+			}
+			lane := newBusinessTCP(t, c.Players)
+			scene, err := newScene(lane, nil, gamescene.DefaultConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := scene.Close(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+			ctx := context.Background()
+			players := make([]*player.Player, c.Players)
+			entities := make(map[int64]entity.IThreadSafeEntity)
+			world := newSceneWorld(t)
+			entities[world.ID()] = world
+			positions := make([]spatial.Point, c.Players)
+			for i := range players {
+				p := newScenePlayer(t, int64(9001+i))
+				players[i] = p
+				entities[p.ID()] = p
+				at := spatial.Point{X: 500 + int64(i%16)*2, Y: 500 + int64(i/16)*2}
+				if c.Spread {
+					at = spatial.Point{X: 50 + int64(i%16)*55, Y: 50 + int64(i/16)*110}
+					if c.Name == "custom" {
+						side := int(math.Ceil(math.Sqrt(float64(c.Players))))
+						at = spatial.Point{X: 50 + int64(i%side)*900/int64(side), Y: 50 + int64(i/side)*900/int64(side)}
+					}
+				}
+				positions[i] = at
+				joinReady(t, scene, ctx, p, at)
+			}
+			client := newSceneNest(t, entities)
+			sender := syncsender.NewAddExpSender(client)
+			capture := func(tick int) {
+				states := make(map[int64]businessState, len(players))
+				for _, p := range players {
+					states[p.ID()] = businessState{p.Dao().GetExp(), p.Dao().GetLevel()}
+				}
+				lane.mu.Lock()
+				lane.expected[tick] = states
+				lane.mu.Unlock()
+			}
+			capture(0)
+			lane.scheduled = time.Now()
+			if err := scene.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			lane.drain(t)
+			if got := scene.manager.Stats().Sessions; got != c.Players {
+				t.Fatalf("session loss before measurement: %d/%d", got, c.Players)
+			}
+			dirty := max(1, (c.Players*c.Dirty+99)/100)
+			// Warm the transactional path, BSON packer and TCP clients before measuring.
+			for w := 0; w < 10; w++ {
+				for j := 0; j < dirty; j++ {
+					if _, err := sender.MultiSync_AddExp(ctx, players[(w*dirty+j)%c.Players].ID(), world.ID(), 1); err != nil {
+						t.Fatal(err)
+					}
+				}
+				capture(-w - 1)
+				lane.tick = -w - 1
+				if err := scene.Flush(ctx); err != nil {
+					t.Fatal(err)
+				}
+				lane.drain(t)
+			}
+			var memBefore, memAfter runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&memBefore)
+			sentBefore, bytesBefore := lane.sent.Load(), lane.bytes.Load()
+			workMS, flushMS := make([]float64, 0, ticks), make([]float64, 0, ticks)
+			lagMS := make([]float64, 0, ticks)
+			var overdue []map[string]any
+			var misses int
+			start := time.Now()
+			for tick := 1; tick <= ticks; tick++ {
+				scheduled := start.Add(time.Duration(tick-1) * interval)
+				if delay := time.Until(scheduled); delay > 0 {
+					time.Sleep(delay)
+				}
+				begin := time.Now()
+				lag := float64(begin.Sub(scheduled)) / 1e6
+				lagMS = append(lagMS, lag)
+				for j := 0; j < dirty; j++ {
+					i := ((tick-1)*dirty + j) % c.Players
+					if _, err := sender.MultiSync_AddExp(ctx, players[i].ID(), world.ID(), 1); err != nil {
+						t.Fatal(err)
+					}
+					// Spatial index movement accompanies each changed entity. Spread cases
+					// cross AOI edges; clustered cases keep the same dense audience.
+					at := positions[i]
+					at.X += int64(tick%5) * 3
+					scene.Moved(ctx, players[i].ID(), at)
+				}
+				capture(tick)
+				lane.tick = tick
+				lane.scheduled = scheduled
+				flushStart := time.Now()
+				if err := scene.Flush(ctx); err != nil {
+					t.Fatal(err)
+				}
+				end := time.Now()
+				flushMS = append(flushMS, float64(end.Sub(flushStart))/1e6)
+				workMS = append(workMS, float64(end.Sub(begin))/1e6)
+				if end.After(scheduled.Add(interval)) {
+					misses++
+					overdue = append(overdue, map[string]any{"tick": tick, "start_lag_ms": lag, "work_ms": workMS[len(workMS)-1], "flush_ms": flushMS[len(flushMS)-1]})
+				}
+			}
+			lane.drain(t)
+			if got := scene.manager.Stats().Sessions; got != c.Players {
+				t.Fatalf("session loss during measurement: %d/%d", got, c.Players)
+			}
+			elapsed := time.Since(start)
+			runtime.ReadMemStats(&memAfter)
+			lane.mu.Lock()
+			latency := businessQuantiles(lane.latencies)
+			samples, updates := len(lane.latencies), lane.updates
+			lane.mu.Unlock()
+			if samples == 0 || updates == 0 {
+				t.Fatal("no measured client updates")
+			}
+			report := map[string]any{
+				"start_lag_ms": businessQuantiles(lagMS), "overdue_ticks": overdue,
+				"process_gc_pause_ms": float64(memAfter.PauseTotalNs-memBefore.PauseTotalNs) / 1e6,
+				"subscriptions_final": scene.manager.Stats().Subscriptions,
+				"case":                c.Name, "players": c.Players, "dirty_percent": c.Dirty, "dirty_per_tick": dirty, "ticks": ticks, "hz": float64(time.Second) / float64(interval),
+				"elapsed_seconds": elapsed.Seconds(), "tick_work_ms": businessQuantiles(workMS), "flush_ms": businessQuantiles(flushMS),
+				"scheduled_to_client_ms": latency, "client_frame_samples": samples, "decoded_updates": updates,
+				"deadline_misses": misses, "sent_frames": lane.sent.Load() - sentBefore, "sync_bytes": lane.bytes.Load() - bytesBefore,
+				"process_alloc_bytes": memAfter.TotalAlloc - memBefore.TotalAlloc, "process_gc_cycles": memAfter.NumGC - memBefore.NumGC,
+				"gomaxprocs": runtime.GOMAXPROCS(0), "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH,
+			}
+			raw, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := os.Getenv("ROOST_SYNC_REPORT_DIR")
+			if out == "" {
+				t.Fatal("ROOST_SYNC_REPORT_DIR required")
+			}
+			if err := os.MkdirAll(out, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(out, c.Name+".json"), raw, 0644); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s", raw)
+			if misses > 0 {
+				t.Errorf("%d/%d ticks missed their %s budget", misses, ticks, interval)
+			}
+		})
+	}
+}

@@ -83,7 +83,7 @@ Saga store 原子保存实例状态与 outbox。Coordinator 通过 lease 获取�
 
 Entity mutation 先产生 sync dirty；`entitysync.Manager`（进程一个）在 tick 里对每个 pending subject 在实体锁内 `PrepareTick`——给在线会话的 delta 与给新订阅者的快照同一版本、同一 CommitLSN，每个 profile 一次 pack；commit 后才推进版本，发送失败不会把未送达数据错误标为已确认。
 
-subject 自己持有订阅者表（session → profile / kind / baseVersion）；捕获按会话聚合成**一帧**（statesync 帧，Epoch/Tick 是会话时钟），在会话状态的副本上编码、准入成功才采纳。传输只有两种失败：`ErrRetryLater`（整体不可用，tick 作废重来）与其他（该会话关闭并回调 `SessionLost`）。持久化门槛按 CommitLSN 挡整个 subject。room、AOI、直接绑定是订阅政策，不是机制的一部分。
+subject 自己持有订阅者表（session → profile / kind / baseVersion）；`sync/entitysync/flush.go` 将捕获按会话组帧（`sync/frame` 格式，Epoch/Tick 是会话时钟），超过单帧对象上限时分帧。编码修改会话副本，每帧准入成功后采纳对应的时钟和引用；会话的全部帧成功后结算订阅。`ErrRetryLater` 中止内容提交，保留已交付前缀，并要求相关订阅下次用全量恢复基线；其他传输失败关闭该会话并回调 `SessionLost`。持久化门槛按 CommitLSN 挡整个 subject。Group、Interest、Direct 属于 `sync/entitysync/policy`，负责决定订阅关系。每个政策实例持有独立 SubscriptionSource，重复订阅幂等，按 LOD/Key/SchemaVersion 选生效视图；释放不影响其他来源。
 
 syncstream 提供服务间的有序版本流、分片重组、checksum、ACK 和 resync，跑在 ISyncBus 上，与客户端方向的实体同步无关。
 
@@ -109,8 +109,8 @@ Skill compiler 严格解析配置，验证引用和预算，输出不可变 Prog
 | 实体与锁 | `entity/`、`lock/`、`worker/` |
 | 事务/WAL 契约 | `nest/`、[Nest WAL](../NEST_TRANSACTION_WAL.md) |
 | 数据引擎契约 | `dataengine/`；生产实现在同仓的 `dataengine/engine/` 与 `nestwal/` |
-| Remote | `entity/remote*`、`ownerroute/`、`mirror/`（副本同步）、[Remote 文档](../REMOTE_ENTITY.md) |
+| Remote | `entity/remote*`、`ownerroute/`、`sync/syncbus/mirror/`（副本同步）、[Remote 文档](../REMOTE_ENTITY.md) |
 | Saga | `saga/`、[Saga 文档](../SAGA.md) |
-| 同步 | `entitysync/`、`syncbus/`、`syncstream/`、`statesync/`、`lockstep/` |
+| 同步 | `sync/entitysync/`、`sync/frame/`、`sync/nettransport/`、`sync/lockstep/`、`sync/syncbus/`；块外有序流基建 `syncstream/` |
 | 中间件装配 | `kit/` 下的同名目录（`kit/redis`、`kit/nats`…只剩 Mod 胶水，实现在根部同名包） |
 | 项目与代码生成 | `codegen/internal/roost` 与各 generator，CLI 在 `codegen/cmd/roost` |

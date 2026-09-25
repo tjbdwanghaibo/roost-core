@@ -389,3 +389,47 @@ func TestEntityRepositoryRemoteVectorDoesNotLeakAcrossRetries(t *testing.T) {
 		}
 	}
 }
+
+func TestEntityRepositoryPublishesThroughLocalExecutor(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	id, _ := entity.BuildEntityID(9991, dataEngineRepositoryKind)
+	store := &repositoryStore{docs: map[string][]coredata.RawDocument{
+		"repository_profile":   {repositoryRaw(t, "repository_profile", id, 7)},
+		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
+	}}
+	manager := entity.NewEntityManager()
+	repository, err := newEntityRepository(manager, store, nil, repositoryGate(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	ctx := entity.WithLocalExecutor(context.Background(), func(fn func()) error {
+		close(entered)
+		<-release
+		fn()
+		return nil
+	})
+	go func() { _, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind); done <- err }()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("no local execution handoff")
+	}
+	if store.transactions.Load() != 1 || manager.Get(id) != nil {
+		t.Fatal("I/O and entity publication were not separated")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if manager.Get(id) == nil {
+		t.Fatal("entity was not published by local continuation")
+	}
+}

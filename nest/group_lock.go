@@ -275,16 +275,26 @@ func lockDispatchEntitiesWithGroup(locks *entityLockGroupLockManager, guard *ent
 		return nil, nil, ErrLockTimeout
 	}
 	releaseScope := pushEntityLockGroupScope(groupID, store)
+	releaseGroup := func() {
+		defer locks.release(groupEntry)
+		releaseScope()
+	}
+	handedOff := false
+	defer func() {
+		// 部分 Entity 加锁失败时也会调用 release hook，panic 不能泄漏组锁。
+		if !handedOff {
+			releaseGroup()
+		}
+	}()
 	acquired, err := tryLockDispatchEntities(guard, lockEs)
 	if err != nil {
-		releaseScope()
-		locks.release(groupEntry)
 		return nil, nil, err
 	}
+	handedOff = true
 	return acquired, func() {
+		// Entity release hook 可能 panic；组锁和 goroutine scope 仍必须释放。
+		defer releaseGroup()
 		releaseDispatchLocks(guard, acquired)
-		releaseScope()
-		locks.release(groupEntry)
 	}, nil
 }
 

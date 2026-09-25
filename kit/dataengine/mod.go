@@ -15,11 +15,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // Mod parses configuration, looks up the Mongo / JetStream / Remote Entity
@@ -133,6 +133,13 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	wal.OnFatal = mod.onFatal
 	projector := engine.DefaultProjectorOptions()
+	if cfg.IsSet("dataengine.projection.remote_workers") {
+		value := cfg.GetInt("dataengine.projection.remote_workers")
+		if value < 1 || value > 64 {
+			return errors.New("dataengine mod: projection.remote_workers must be between 1 and 64")
+		}
+		projector.RemoteProjectionWorkers = value
+	}
 	if value := cfg.GetDuration("dataengine.projection.retry_min"); value > 0 {
 		projector.RetryMin = value
 	}
@@ -145,6 +152,21 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if value := cfg.GetInt("dataengine.projection.batch_bytes"); value > 0 {
 		projector.ReplayBatchBytes = value
 	}
+	checkpointRecords := cfg.GetInt("dataengine.projection.checkpoint_records")
+	checkpointInterval := cfg.GetDuration("dataengine.projection.checkpoint_interval")
+	maxUnacked := cfg.GetInt64("dataengine.projection.max_unacked_records")
+	warnUnacked := cfg.GetInt64("dataengine.projection.warn_unacked_records")
+	if checkpointRecords < 0 || checkpointInterval < 0 || maxUnacked < 0 || warnUnacked < 0 || (maxUnacked > 0 && warnUnacked > maxUnacked) {
+		return errors.New("dataengine mod: invalid projection checkpoint or backlog limits")
+	}
+	if checkpointRecords > 0 {
+		projector.CheckpointRecords = checkpointRecords
+	}
+	if checkpointInterval > 0 {
+		projector.CheckpointInterval = checkpointInterval
+	}
+	projector.MaxUnackedRecords = uint64(maxUnacked)
+	projector.WarnUnackedRecords = uint64(warnUnacked)
 	projector.OnFatal = mod.onFatal
 	owner := strings.TrimSpace(cfg.GetString("dataengine.outbox.owner"))
 	if owner == "" {
@@ -372,7 +394,12 @@ func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 	if err := runtime.Outbox.RefreshBacklog(ctx); err != nil {
 		slog.Warn("dataengine: outbox backlog probe failed during health check", "err", err)
 	}
-	return health.Result{Status: health.StatusOK, Message: engine.HealthMessage(runtime.WAL.Stats(), runtime.Projector.Stats(), runtime.Outbox.Stats())}
+	stats := runtime.Projector.Stats()
+	status := health.StatusOK
+	if stats.BacklogWarning {
+		status = health.StatusDegraded
+	}
+	return health.Result{Status: status, Message: engine.HealthMessage(runtime.WAL.Stats(), stats, runtime.Outbox.Stats())}
 }
 
 // dataEngineHealthMessage is the one line an operator reads first. Both sides

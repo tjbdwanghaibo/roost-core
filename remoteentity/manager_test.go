@@ -241,8 +241,8 @@ func TestManagerCoalescesConcurrentWrapperCreation(t *testing.T) {
 	markers.mu.Lock()
 	gets := markers.gets
 	markers.mu.Unlock()
-	if gets != 1 {
-		t.Fatalf("marker reads=%d, want 1", gets)
+	if gets != 0 {
+		t.Fatalf("wrapper construction performed %d authority reads, want 0", gets)
 	}
 }
 

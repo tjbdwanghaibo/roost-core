@@ -5,11 +5,12 @@ import (
 	crand "crypto/rand"
 	"errors"
 	"fmt"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"math/rand/v2"
 	"strconv"
 	"sync"
 	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 var (
@@ -21,17 +22,20 @@ var (
 
 // versionedLock implements fredis.IVersionedLock.
 type versionedLock struct {
-	redis   fredis.IRedis
-	key     string
-	token   string
-	ttl     time.Duration
-	opts    fredis.VersionedLockOptions
-	initErr error
+	redis     fredis.IRedis
+	key       string
+	token     string
+	ttl       time.Duration
+	opts      fredis.VersionedLockOptions
+	initErr   error
+	id        int64
+	authority WriteAuthority
 
 	mu       sync.Mutex
 	acquired bool
 	version  int64
 	fence    uint64
+	grant    WriteGrant
 
 	// async touch
 	touchMu     sync.Mutex
@@ -47,6 +51,7 @@ func newVersionedLock(redis fredis.IRedis, id int64, opts fredis.VersionedLockOp
 
 	l := &versionedLock{
 		redis: redis,
+		id:    id,
 		key:   key,
 		ttl:   opts.TTL,
 		opts:  opts,
@@ -116,6 +121,28 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 		return ErrVersionedLockNotAcquired
 	}
 
+	if l.authority != nil {
+		grant, grantErr := l.authority.GrantWrite(ctx, l.id, token, 0)
+		if grantErr == nil {
+			refreshed, refreshErr := l.redis.Eval(ctx, versionedRefreshLua, []string{l.key}, token, ttlMs)
+			owned, parseErr := toInt(refreshed)
+			grantErr = errors.Join(refreshErr, parseErr)
+			if grantErr == nil && owned == 0 {
+				// Mongo 已确认许可，但业务尚未准入且 Redis 租约已失效。
+				// 这是确定的竞争失败，可以用新 token 重新争锁；未知 grant 结果不走此分支。
+				grantErr = errors.Join(ErrVersionedLockNotAcquired, ErrVersionedLockExpired)
+			}
+		}
+		if grantErr != nil {
+			// 尚未向业务发许可；只清理本 token，版本未知时不回写 Redis 版本缓存。
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			_, _ = l.redis.Eval(cleanup, versionedAbandonLua, []string{l.key}, token)
+			cancel()
+			return grantErr
+		}
+		vals[1], vals[2] = grant.Version, int64(grant.Fence)
+		l.grant = grant
+	}
 	l.acquired = true
 	l.token = token
 	l.version = vals[1]
@@ -219,15 +246,20 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 				lastErr = fmt.Errorf("versioned lock unlock parse: %w", pErr)
 			} else if ok == 0 {
 				l.mu.Lock()
-				l.acquired = false
+				if l.token == token {
+					l.acquired = false
+				}
 				l.mu.Unlock()
 				return ErrVersionedLockNotOwned
 			} else {
 				// 1 = unlocked now; 2 = a previous attempt whose response was
 				// lost already landed. Both mean the unlock succeeded.
 				l.mu.Lock()
-				l.acquired = false
-				l.version = newVersion
+				// Redis 已按 token 隔离代际；迟到的回复也只能更新同一代本地状态。
+				if l.token == token {
+					l.acquired = false
+					l.version = newVersion
+				}
 				l.mu.Unlock()
 				return nil
 			}
@@ -244,6 +276,13 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 		}
 	}
 	return lastErr
+}
+
+// writeGrant 返回当前锁代际已确认的许可；失效或 Redis-only 锁不提供持久证明。
+func (l *versionedLock) writeGrant() (WriteGrant, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.grant, l.acquired && l.authority != nil
 }
 
 func (l *versionedLock) Version() int64 {
@@ -427,20 +466,28 @@ func (l *versionedLock) runAsyncTouch(ctx context.Context, extend, interval time
 // --- Versioned Lock Factory ---
 
 type versionedLockFactory struct {
-	redis fredis.IRedis
+	redis     fredis.IRedis
+	authority WriteAuthority
 }
 
 var _ fredis.IVersionedLockFactory = (*versionedLockFactory)(nil)
 
-func NewVersionedLockFactory(redis fredis.IRedis) *versionedLockFactory {
-	return &versionedLockFactory{redis: redis}
+// NewVersionedLockFactory 无 authority 的兼容模式仅提供 Redis 协调，不保证故障切换 fencing。
+func NewVersionedLockFactory(redis fredis.IRedis, authorities ...WriteAuthority) *versionedLockFactory {
+	f := &versionedLockFactory{redis: redis}
+	if len(authorities) > 0 {
+		f.authority = authorities[0]
+	}
+	return f
 }
 
 func (f *versionedLockFactory) NewVersionedLock(id int64, opts fredis.VersionedLockOptions) fredis.IVersionedLock {
 	if f == nil {
 		return newVersionedLock(nil, id, opts)
 	}
-	return newVersionedLock(f.redis, id, opts)
+	lock := newVersionedLock(f.redis, id, opts)
+	lock.authority = f.authority
+	return lock
 }
 
 // --- Helpers ---
@@ -512,3 +559,11 @@ func toInt(v any) (int, error) {
 	n, err := toInt64(v)
 	return int(n), err
 }
+
+// 放弃未准入的许可时不修改版本缓存，避免用未知/过期版本覆盖已提交版本。
+const versionedAbandonLua = `
+if redis.call("HGET", KEYS[1], "owner") == ARGV[1] then
+ return redis.call("HDEL", KEYS[1], "owner")
+end
+return 0
+`

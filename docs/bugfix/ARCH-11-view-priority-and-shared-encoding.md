@@ -1,6 +1,6 @@
 # ARCH-11：从 wdsync 借两件事——多视图优先级合并、实体 × 视图共享编码 + 网关扇出
 
-- 状态：**方案**（维护者 2026-09-23 要求先出方案），未实施；实施时各占一个 M 编号
+- 状态：**部分实施**（2026-09-23）。M-19 完成多来源订阅，M-20 完成 tick 内共享编码；共享帧与网关多播按用户确认单独推进。下文保留最初方案，现行实现见末尾。
 - 来源：对照 ssr `kingdom/wds/troop.wds.go` 与 `watcher/wdsync` 的同步实现（观察者表 `EntityEasyncable`、视图优先级 `compareViewWithObserved`、`syncEntityChangesTo` 的一份 payload 多连接投递、`ViewCache` 原地补丁）
 - 前提：ARCH-10 已落地（M-13 / M-14）。两件事都在**机制层**（`entitysync`）内完成，组织层与内容层不动；第二件涉及 `Transport` 契约的可选扩展与一种新的帧模式。
 
@@ -91,3 +91,10 @@ type MulticastTransport interface {
 1. M-15：多 profile 引用计数 + 优先级（§1），`Unsubscribe` 加 profile 参数，三个政策跟随，promise test 四条。
 2. M-16：tick 级编码缓存（§2 第一层）+ 基准。
 3. 待网关线立项后：`MulticastTransport` + `FramePerSubject`（§2 第二层）。
+
+## 4. 2026-09-23 实施更正
+
+- **M-19**：没有采用“每次 Subscribe 都加计数”的旧草案。新增 `Manager.NewSubscriptionSource()`，每个来源对同一对只有一个 profile；重复调用幂等、换档替换、释放互不影响。Manager 原有签名保留为默认来源。Interest、Group、Direct 各实例独立持有来源；Group 不再替所有政策退役实体。
+- **M-20**：组件编码缓存直接附在本 tick 的 `capturedUpdate` 上，帧项持有捕获指针，full/delta 与不同 profile 各自独立；各会话外层帧仍单独编码。不再按大复合键对每个接收者查缓存。缓存缓冲按 tick 集中分配，减少单对象分配。
+- 旧 M-15 / M-16 编号已被 ARCH-12 使用。本次编号 M-19 / M-20；共享帧、网关和客户端协议未实施，不标记整个 ARCH-11 完成。
+- [当前 API、行为迁移与验收](../feature/SYNC-COMPLETION-2026-09-23.md) · [性能基准入口和实测](../feature/SYNC-BENCHMARKS.md)。

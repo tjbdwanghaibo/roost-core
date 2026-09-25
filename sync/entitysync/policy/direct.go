@@ -11,8 +11,8 @@ import (
 // Unsubscribe on the manager — not because it does anything the manager
 // cannot.
 type Direct struct {
-	manager *entitysync.Manager
-	session func(int64) entitysync.SessionID
+	subscriptions *entitysync.SubscriptionSource
+	session       func(int64) entitysync.SessionID
 }
 
 func NewDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID) (*Direct, error) {
@@ -22,15 +22,15 @@ func NewDirect(manager *entitysync.Manager, session func(observer int64) entitys
 	if session == nil {
 		session = func(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) }
 	}
-	return &Direct{manager: manager, session: session}, nil
+	return &Direct{subscriptions: manager.NewSubscriptionSource(), session: session}, nil
 }
 
 // Bind makes an observer receive a subject under a profile.
 func (d *Direct) Bind(observer, subject int64, profile entity.SyncProfile) error {
-	return d.manager.Subscribe(d.session(observer), subject, profile)
+	return d.subscriptions.Subscribe(d.session(observer), subject, profile)
 }
 
 // Unbind ends it.
 func (d *Direct) Unbind(observer, subject int64) error {
-	return d.manager.Unsubscribe(d.session(observer), subject)
+	return d.subscriptions.Unsubscribe(d.session(observer), subject)
 }

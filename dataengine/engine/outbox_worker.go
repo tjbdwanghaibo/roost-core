@@ -64,10 +64,12 @@ type OutboxWorker struct {
 	hardErr          error
 	hardOnce         sync.Once
 
-	cancel    context.CancelFunc
-	done      chan struct{}
-	startOnce sync.Once
-	closeOnce sync.Once
+	// 启动和关闭共享同一把锁，避免 Close 尚未看到 cancel 时提前关闭 done。
+	// closed 是终态；done 只能由未启动的 Close 或已启动的 run 之一关闭。
+	lifecycleMu sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	closed      bool
 }
 
 func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options OutboxWorkerOptions) (*OutboxWorker, error) {
@@ -121,7 +123,8 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 		item := items[i]
 		if err := worker.publisher.Publish(ctx, item); err != nil {
 			worker.publishFailures.Add(1)
-			next := now.Add(worker.retryDelay(item.Attempt))
+			// 退避从本次失败返回时开始；整批开始时间可能已被慢发布耗尽。
+			next := worker.now().UTC().Add(worker.retryDelay(item.Attempt))
 			if nackErr := worker.store.Nack(ctx, item.Effect.ID, item.Lease, next, err.Error()); nackErr != nil {
 				worker.storeFailures.Add(1)
 				return i, nackErr
@@ -217,14 +220,17 @@ func (worker *OutboxWorker) retryDelay(attempt uint32) time.Duration {
 }
 
 func (worker *OutboxWorker) Start(parent context.Context) {
-	worker.startOnce.Do(func() {
-		if parent == nil {
-			parent = context.Background()
-		}
-		ctx, cancel := context.WithCancel(parent)
-		worker.cancel = cancel
-		go worker.run(ctx)
-	})
+	worker.lifecycleMu.Lock()
+	defer worker.lifecycleMu.Unlock()
+	if worker.closed || worker.cancel != nil {
+		return
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	worker.cancel = cancel
+	go worker.run(ctx)
 }
 
 func (worker *OutboxWorker) run(ctx context.Context) {
@@ -254,13 +260,16 @@ func (worker *OutboxWorker) run(ctx context.Context) {
 }
 
 func (worker *OutboxWorker) Close(ctx context.Context) error {
-	worker.closeOnce.Do(func() {
+	worker.lifecycleMu.Lock()
+	if !worker.closed {
+		worker.closed = true
 		if worker.cancel != nil {
 			worker.cancel()
 		} else {
 			close(worker.done)
 		}
-	})
+	}
+	worker.lifecycleMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -4,18 +4,21 @@ import "time"
 
 // Config holds configuration for the remote entity module.
 type Config struct {
-	MaxWriteBatch         int
-	SnapshotCacheShards   int
-	SnapshotCacheEntries  int
-	SnapshotCacheBytes    int64
-	SnapshotCacheTTL      time.Duration
-	SnapshotL2TTL         time.Duration
-	SnapshotInterestTTL   time.Duration
-	SnapshotInterestKeys  int
-	SnapshotInterestSubs  int
-	MarkerCacheTTL        time.Duration
-	SnapshotLoadTimeout   time.Duration
-	SnapshotMaxWaiters    int
+	MaxWriteBatch        int
+	SnapshotCacheShards  int
+	SnapshotCacheEntries int
+	SnapshotCacheBytes   int64
+	SnapshotCacheTTL     time.Duration
+	SnapshotL2TTL        time.Duration
+	SnapshotInterestTTL  time.Duration
+	SnapshotInterestKeys int
+	SnapshotInterestSubs int
+	MarkerCacheTTL       time.Duration
+	SnapshotLoadTimeout  time.Duration
+	SnapshotMaxWaiters   int
+	// MaxConcurrentWrites 限制从 Prepare 到真正释放的写批次，包括后台收尾。
+	// 不等待额度；满额直接 ErrRemoteOverloaded。零值沿用收尾容量，默认配置为 128。
+	MaxConcurrentWrites   int
 	AsyncFinalizeCapacity int
 	AsyncFinalizeWorkers  int
 	TransactionTrackLimit int
@@ -53,6 +56,7 @@ func DefaultConfig() *Config {
 		MarkerCacheTTL:        500 * time.Millisecond,
 		SnapshotLoadTimeout:   2 * time.Second,
 		SnapshotMaxWaiters:    256,
+		MaxConcurrentWrites:   128,
 		AsyncFinalizeCapacity: 4096,
 		AsyncFinalizeWorkers:  16,
 		TransactionTrackLimit: 65536,

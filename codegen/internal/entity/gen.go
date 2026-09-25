@@ -509,6 +509,19 @@ func (e *{{$.Entity.Name}}) {{.GetterName}}() {{.TypeName}} { return e.{{.FieldN
 {{- end}}
 {{- end}}
 
+{{- if and .Entity.Sync (not (hasMethod .Entity "TakeEntitySyncChanges"))}}
+// TakeEntitySyncChanges 由 Nest 在成功准入且仍持锁时调用；服务间同步保留独立掩码。
+func (e *{{.Entity.Name}}) TakeEntitySyncChanges() uint64 {
+ var mask uint64
+{{- range .Entity.Daos}}
+ if e.{{.FieldName}} != nil {
+  mask |= entity.MapDAOSyncChanges(e, {{daoCollectionConst .TypeName}}, e.{{.FieldName}}.DirtyTracker().TakeEntitySyncDirty(), {{eq (len $.Entity.Daos) 1}})
+ }
+{{- end}}
+ return mask
+}
+{{- end}}
+
 func (e *{{.Entity.Name}}) generatedOnClear() {
 {{- if .HasComps}}
 	e.ComponentManager.Clear()

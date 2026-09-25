@@ -1,10 +1,99 @@
 # Changelog
 
+## 2026-09-25 Nest 双池复核
+
+- 修复小等待队列在 worker 尚有额度时提前拒绝请求；1024 并发 / 16 等待位已完成调度回归。
+- 修复 Remote 回滚 hook panic 遗留 Entity 本地锁；[复核与验证范围](docs/review/NEST-FAST-SLOW-2026-09-25.md)。
+
+## 2026-09-25 Nest 快慢双池
+
+- 统一全部显式目标 ID 准入顺序；main/hb/cost/remote 收敛 Fast/Slow，共享慢队列。
+- 所有 Nest handler/Guard 在快池，慢阶段的加载初始化与失败本地回滚同步交回快池；增加独立并发/整池等待容量配置。
+- [RR-20260925-07](docs/bugfix/RR-20260925-07.md) 与 [本轮验收](docs/feature/REFACTOR-2026-09-25-nest-fast-slow.md)。
+
 本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
 
 ## [Unreleased]
 
+### 2026-09-25 资源预算与会话恢复
+
+- Remote 完整写生命周期独立预算 `MaxConcurrentWrites`，默认 128；与 Nest 慢池并发、DataEngine WAL 上限分别配置，公开在途/上限/拒绝指标。
+- Sync Hold/Ready/Close 按实际订阅遍历；修复同 ID 重开会话继承旧订阅（RR-10），补齐通用故障矩阵 Remote 入口（RR-11）。
+- 1024 慢 worker 配 128 写预算短测 79.74 TPS 零错误；Sync 1% 变化本轮 50ms 门禁通过，5% 仍有少量长尾。配置迁移及实际验收边界见[报告](docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
+
+### Fixed（Remote）
+
+- **Nest 慢操作隔离**：Remote 获取、确认和释放使用独立有界慢池，业务和 Guard 在 cost 逻辑池执行；增加 `nest.remote_workers` 和启动 option，停机按依赖顺序排空，取消/过载仍清理批次。80 TPS × 10 分钟全量验收、race/vet 与 21/21 故障矩阵通过。[RR-06](docs/bugfix/RR-20260925-06.md)、[容量验收](docs/feature/REFACTOR-2026-09-25-nest-remote-stages.md)。
+
+- **投影排队与超时**：独立 Entity 的纯 Remote 事务默认 8 路有界并行，保留同实体顺序和 WAL 连续前缀确认；提供 `dataengine.projection.remote_workers`。默认 5 秒请求等待不变，30 分钟实测 59.997 TPS、108000 笔零错误，全量一致性与 21/21 故障回归通过。[RR-05](docs/bugfix/RR-20260925-05.md)、[验收报告](docs/feature/REFACTOR-2026-09-25-remote-throughput.md)。
+
+- **持久写权限与批量投影**：正式装配将 ownership/grant 迁入 Mongo majority，原子提交校验最新许可，修复 Redis 未复制写丢失后的 fence 复用；同一事务按集合合并 DAO/快照写入。当前未部署，默认统一严格许可校验并移除旧协议迁移入口。[RR-26](docs/bugfix/RR-20260924-26.md)、[本轮验收](docs/feature/REMOTE-AUTHORITY-2026-09-25.md)。
+- **Remote 回执重放快路**：DataEngine 已落库后的发布阶段直接读取并校验持久回执，省去重复 Mongo 事务；首次写入和并发重放仍保留事务内检查。[RR-04](docs/bugfix/RR-20260925-04.md)。
+- **Remote 准入与诊断收敛**：删除默认弱校验分支，共享写复用持久 grant 的 ownership，Nest 全进程慢堆栈每 5 秒至多采样一次。[RR-02](docs/bugfix/RR-20260925-02.md)、[RR-03](docs/bugfix/RR-20260925-03.md)。
+- **故障测试资源清理**：关闭集成夹具时删除本次独有的 JetStream 流，避免重复运行耗尽预留容量。[RR-20260925-01](docs/bugfix/RR-20260925-01.md)。
+
+- **集群故障恢复**：Redis Cluster 连接错误后合并异步刷新拓扑，不重放不确定写操作；Kit 拒绝无有效 hash tag 的 Remote Cluster 锁配置。[RR-24](docs/bugfix/RR-20260924-24.md)、[RR-25](docs/bugfix/RR-20260924-25.md)。新增 [容量、长稳与集群故障验收入口](docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)。
+
+- **准入预算**：冷 wrapper 构造不再执行脱离请求 context 的权威读取；多实体准入共享预算，调用方长 deadline 不覆盖 `OpTimeout`。[RR-23](docs/bugfix/RR-20260924-23.md)。补齐多进程故障与正式生成 Nest → Mongo/WAL → NATS 链路验收，[第三轮记录](docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
+
+- **启停与锁代际**：启动幂等、失败可重试、停机超时保留清理责任；迟到解锁只更新同代状态；Redis Lua 精确保留 int64 版本/fence，分配失败不遗留 owner。[RR-19](docs/bugfix/RR-20260924-19.md)、[RR-20](docs/bugfix/RR-20260924-20.md)、[RR-21](docs/bugfix/RR-20260924-21.md)、[RR-22](docs/bugfix/RR-20260924-22.md)。
+
+- **事务等待与准入**：FlushAll 保留调用时 tracker，避免终态淘汰导致错误等待；无效提交不再侵占 pending 容量。[RR-16](docs/bugfix/RR-20260924-16.md)、[RR-17](docs/bugfix/RR-20260924-17.md)。
+- **Redis 快照写入**：RemoteChecksum 在驱动边界编码为精确十进制参数，修复本机可读而 L2 未写入。[RR-18](docs/bugfix/RR-20260924-18.md)。
+- **事务缓存热点**：按首次完成顺序回收、常数时间计数；同包拆出事务跟踪，补真实 Mongo/Redis/WAL 恢复验收。[方案、数据与范围](docs/feature/REFACTOR-2026-09-24-remote.md)。
+
+### Fixed（DataEngine）
+
+- **投影身份与确定冲突**：事务内 Put 重复键不再查询已中止的 Mongo session；同批重复 ID 在 marker 查询前比较 digest，拒绝不同内容。[RR-14](docs/bugfix/RR-20260924-14.md)、[RR-15](docs/bugfix/RR-20260924-15.md)。
+
+- **慢 Broker 退避**：Outbox 重试时间从当前发布失败时计算，避免整批旧时刻耗尽重试窗口；1/2/4/4 秒受控时钟回归通过。[RR-13](docs/bugfix/RR-20260924-13.md)。
+
+- **启停与失败清理**：重复启动幂等、并发启停等待可取消、失败回收保留所有权，Runtime 明确关闭自己的 WAL。[RR-11](docs/bugfix/RR-20260924-11.md)。
+- **Remote 永久冲突**：新建 meta 的重复 ID 归为明确版本冲突，触发 Projector 熔断并保留未 ack WAL。[RR-12](docs/bugfix/RR-20260924-12.md)。
+- **重放内存分配**：读到可投影记录后才申请批次空间，删除中间事务 ID 切片；空闲/held 微基准 B/op 下降约 96%/94%，ack 顺序不变。[性能记录](docs/feature/DATAENGINE-BENCHMARKS-2026-09-24.md)。
+
+- **历史 Remote 创建 ID 冲突**（2026-09-24）：生成公会改用 Mongo 持久化发号，避免同 SID 重启复用 runtimeid；真实 WAL 证据与三轮 Mongo/WAL 恢复验证完成。历史冲突记录不自动丢弃。[W-2026-09-22-02](docs/bugfix/W-2026-09-22-02.md)。
+- **Outbox 启停竞争**（2026-09-24）：统一启动/关闭状态，修复关闭后启动导致的重复 close panic；并发 race 回归通过。[RR-20260924-10](docs/bugfix/RR-20260924-10.md)。
+
+- **投影与停机等待可取消**（2026-09-24）：Projector Flush/ReplayPass 和 Runtime 并发 Shutdown 等待操作所有权时遵守 context；保留单一投影、ack 与停机重试状态。[RR-20260924-09](docs/bugfix/RR-20260924-09.md)。
+
+### Added
+
+- **DataEngine 多 DAO 批量与积压治理**：支持有界本地多 DAO Mongo 批量事务、可安全重放路径的 checkpoint 合并、未 ack 事务准入上限和健康预警。36 样本复测中 pair/pipelined 最终落库约 48.6 → 2845.6 事务/s，保持 WAL/Mongo 持久化配置。[实施与验收](docs/feature/DATAENGINE-BATCH-2026-09-24.md)。
+
+- **DataEngine 正式压力工具**：生成 DAO → Nest → 文件 WAL → 真实 Mongo，覆盖单/双/四 DAO、热点争用和固定速率输入；分别统计请求返回、最终落库、投影延迟、积压与 ack 成本。[方法与结果](docs/feature/DATAENGINE-PRESSURE-2026-09-24.md)。
+
+- **DataEngine 恢复夹具**：100k WAL 跨段/慢存储取消/真实 Mongo 恢复；正式生成 DAO + Nest 的三次独立进程验证，覆盖 async/strict/pipelined、共享实体四文档交易、错误/panic 回滚、ack 丢失幂等重放与末文档冲突原子回滚。[入口与验收](docs/feature/DATAENGINE-RECOVERY-2026-09-24.md)。
+
+- **Nest 消息吞吐夹具**（2026-09-24）：正式 Client、EntityManager 与 Guard 的热点/分散 Dispatch/Request 压测，统计实际完成吞吐、采样延迟、分配和错误，附独立进程复跑脚本。[方法与数据](docs/feature/NEST-MSG-THROUGHPUT-2026-09-24.md)。
+
+- **正式 Entity Sync 双模式**（2026-09-24）：周期默认，变化触发可选；Nest 准入/解锁/确认边界、独立 DAO 客户端 dirty、生成器自动收集、有界冻结槽、提交关联的 Interest 事实、共享窗口预算及 Kit 启停接入。共用现有 Profile、版本与完整实体包线协议，不依赖示例游戏。[实施与验证](docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)。
+
+### Fixed（Nest）
+
+- **Nest 截止复核**（2026-09-24）：pipelined 准入后 release hook 异常仍完成 WAL 责任并回复，新增 `ErrEntityReleaseFailed`；inline / 队列满降级的 AfterCommit 失败不再返回成功。[RR-07](docs/bugfix/RR-20260924-07.md)、[RR-08](docs/bugfix/RR-20260924-08.md)。
+
+- **Nest 异步完成与 Ticker 竞争**（2026-09-24）：完成池等待 Guard 解锁后执行回调和回复；Ticker 的 Start/Stop 统一生命周期临界区，避免 Stop 返回后仍启动。[RR-05](docs/bugfix/RR-20260924-05.md)、[RR-06](docs/bugfix/RR-20260924-06.md)。
+
+- **Nest 提交与释放边界**（2026-09-24）：pipelined 的 AfterAdmission 在写入 CommitLSN 后、解锁及异步交接前执行；release hook panic 不再泄漏组锁与 scope，覆盖部分加锁失败回退。[RR-20260924-01](docs/bugfix/RR-20260924-01.md)、[RR-20260924-02](docs/bugfix/RR-20260924-02.md)。后续正式双模式已接入，见上方实施记录；原始[审查与方案](docs/feature/REFACTOR-2026-09-24-nest-and-immediate-sync.md)保留。
+
+### Changed
+
+- **Nest N1～N4 收尾**（2026-09-24）：同包职责整理、普通路由统一收尾、显式事务准入/释放/完成流程、可选分阶段指标、慢请求计时器安全复用与 tick 回调注册时复制；保持正式 Sync 双模式契约。新增可复跑微基准和 profile 脚本，[实施与验收](docs/feature/NEST-COMPLETION-2026-09-24.md)。
+
+- **Sync 六项收尾优化**（2026-09-24）：按完整实体包组帧并遵守传输上限；可选 profile 装配校验与优先级冲突检查；快照对象/字节预算及会话轮转；Flush/编码/AOI 工作区复用；可靠队列全局驻留预算、准入起算的年龄限制与无需遍历的 Counters。原有预算默认关闭，线协议不变，大包可能产生更多完整帧。[实施与验证](docs/feature/REFACTOR-2026-09-24-sync-six-items.md)。
+
+- **Sync 低变化率优化与 profile 配置**（2026-09-23）：AOI 直接选择最远对象、合并观察者查询，Flush 聚合临时数据，会话引用表首次写入才复制；字段视图支持生成 DAO 字段名、显式优先级和 Interest 来源映射，同次 full-dirty/新订阅复用 snapshot 打包。新增 Flush/队列指标、可选队列字节预算和异步负载模式。1%/5% 目标负载分配约下降 58%/47%。[实施与验收](docs/feature/REFACTOR-2026-09-23-sync-next-steps.md)。
+
+- **本 tick 共享组件编码**（M-20）：相同捕获结果由各会话共用，full/delta/profile 分开，缓存不跨 tick；会话外层帧和线格式保持。新增 EntitySync / frame 基准与 `scripts/perf/sync.sh`，支持固定参数、重复采样和 pprof。
+
+- **Sync 可读性整理**（2026-09-23）：Manager 在原包内按生命周期、会话订阅、Flush 分为三个职责文件；提取重试基线恢复与订阅结算步骤，补充中文契约注释。数值与多字段排序改用 `slices` / `cmp`，保留事件稳定顺序；会话 map 拷贝使用 `maps.Clone`。删除仅旧内部测试使用的 `AsyncTransport.session`，同步 Group/AOI 命名与当前文档。包路径、公开 API 和线格式保持不变。[实施记录](docs/feature/REFACTOR-2026-09-23-sync-readability.md)。
+
 ### Changed（破坏性）
+
+- **Profile 来源选择与 demo 白名单**：Interest 统一按来源映射后的 profile 优先级选优，非单调的自定义 band→profile 映射可能与旧 min-band 结果不同；默认映射保持。Player/Monster demo packer 从忽略 profile 改为接受已声明的 default/near/far，自定义 profile 需加入声明。[迁移说明](docs/feature/SYNC-PROFILES.md)。SyncProfile 线格式与已有用户自定义 packer 接口不变。
+
+- **订阅所有权明确为来源**（M-19）：Group / Interest / Direct 各实例独立持有 profile，重复订阅幂等，最优视图改变时补全量。`Manager.NewSubscriptionSource` 新增来源入口；原 Subscribe / Unsubscribe 签名保留，作用于默认来源。Group.RemoveSubject / Close 只释放本组订阅，实体销毁需显式 Manager.Unregister；Interest.Close 释放本来源订阅。
 
 - **`nettransport.AsyncTransport` 只留 reliable**（M-18，2026-09-23，关闭 W-2026-09-23-01）。删掉 latest-only datagram lane（`SendDatagram / SendDatagramBatch`）、`AdmitBatch / OutboundFrame / AtomicBatchTransport / AdmissionError`、42 字节分片头（`DatagramHeader / FragmentDatagrams / InspectDatagram`）与配置 `MaxDatagramsPerFrame / MaxDatagramBytes / AllowOpaqueDatagrams`、统计 `Datagram*`；`NewAsyncTransport` 的下游参数收窄为 `ReliableSender`；`SendError` 去掉 `Channel`。UDP / KCP / QUIC 的裸 `SendDatagram` 保留（lockstep 用）。
 - **同步块收进 `sync/`**（ARCH-12 S3 / S4，M-17，2026-09-23）。`entitysync` → `sync/entitysync`、`entitysync/policy` → `sync/entitysync/policy`、`statesync` → `sync/frame`（包名 `frame`，`EncodeFrame / DecodeFrame / DeltaFrame / FrameFull / FrameDelta` → `Encode / Decode / Frame / Full / Delta`）、`nettransport` → `sync/nettransport`、`lockstep` → `sync/lockstep`、`syncbus` → `sync/syncbus`、`mirror` → `sync/syncbus/mirror`。`sync/` 本身没有 Go 文件。`spatial` 只留纯几何：`InterestManager / InterestCluster / InterestConfig` 搬进 `policy` 改名 `AOI / AOICluster / AOIConfig`（`InterestEvent` 一族随行，`RoomID / AddRoom` → `AreaID / AddArea`），`policy.InterestConfig.Spatial` 字段改名 `AOI`；`spatial` 导出 `SaturatingAdd / SaturatingSub / DivideCeil / SafeSpan`。迁移表新增第三阶段 `layout:`，`roost project upgrade --consolidate` 改写业务工程的 import（T-175）。kit 的 `kit/syncbus`、`kit/remoteentity` 路径不变。
@@ -29,6 +118,12 @@
   承诺：`entitysync/manager_promises_test.go` 8 条 + demo `scene_test.go.tmpl`。
 
 ### Fixed
+
+- **Sync 收尾**（RR-20260923-04～07）：旧 Push 不再覆盖 Hold/重开/新的订阅意图；首次 create 在途退出仍补 remove。Stop/Close 等待可取消，周期 Push 跟随 context，退出前拒绝重启。Group.AddSubject 部分失败回滚本组订阅并支持重试；跨政策释放不再撤销其他来源。
+
+- **实体同步退订残留**（RR-20260923-01）：换 profile 或撤回退订后等待快照，退订/退役仍按会话已交付引用表发送 ObjectRemove。
+- **实体同步部分交付重试**（RR-20260923-02）：逐帧采纳已准入的时钟与引用；后续 ErrRetryLater 保留已交付前缀，受影响订阅以全量恢复内容基线，准入统计包含部分成功帧。
+- **实体同步满容量替换**（RR-20260923-03）：同 tick 先释放旧对象再分配新对象，合法替换不再因 subject ID 顺序误触容量上限并关闭会话。
 
 - **场景 lane 不再让一个推不到的会话拖累同批其他人**（U-0278，C8，W-2026-09-22-03，T-173；codegen 模板）。生成工程的 `sceneLane.AdmitBatch` 此前逐个 `PushPlayer`、第一个失败就 `dropAsync` 并整批返回错误：排在前面的已经推出去（下一 tick 再收一遍），排在后面的一帧没推；接入层整体不可用时也把玩家踢出场景。现在按失败种类分流：`ErrTransportUnavailable` 整批报错让房间重试、不踢人；单个玩家推不到则它自己离开（一条 Info），其余人这一帧照常。`Leave` 不再为"已注销"记日志；生成的接入层对"无会话"的推送计 `player_tcp_push_no_session_total`。`TestAnUnreachablePlayerDoesNotStarveTheOthers`、`TestAnUnavailableTransportKeepsTheBatchAndThePlayers`（`scene_test.go.tmpl`）。记录：`docs/bugfix/U-0278-scene-lane-per-session-push.md`。
 - **一个断线的观察者不再让整个房间的下发停摆**（U-0277，C3，RR-20260922-01，T-172）。`entitysync.Unsubscribe` 与 room 的退役此前以"Leave 信封投递给被撤观察者成功"为前提，投不到就恢复 Active；会话已经不在的观察者因此永远撤不掉，room 每次 flush 都为它生成帧，生成工程的原子传输在它那里整批拒绝，按 id 排在它之后的所有观察者从此收不到任何帧（16 机器人实跑 3–6 个 `pos_x` 永不到达，服务端零告警）。现在撤订阅无条件完成，Leave 尽力投递，投不到用新哨兵 `ErrLeaveNotDelivered`（wrap `ErrEnvelopeAdmission` 与原因）报给调用方；退役照样注销 subject 并把未投递的 Leave 报一次。**行为变化**：`RetireSubject` 不再无限重试、`Stop` 不再因此返回错误。`TestUnsubscribeRemovesTheSubscriptionEvenWhenTheLeaveCannotBeDelivered`、`TestFlushStillReachesTheOthersAfterAnUnreachableObserverIsUnsubscribed`、`TestRetireSubjectCompletesWhenASubscriberIsUnreachable`。记录：`docs/bugfix/RR-20260922-01.md`。

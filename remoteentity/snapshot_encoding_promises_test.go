@@ -76,6 +76,7 @@ func TestASnapshotCommitsWhicheverHalfOfTheHashSpaceItLandsIn(t *testing.T) {
 			if err = store.EnsureRemoteStorage(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			commit.LockFence = testWriteGrant(t, store, id).Fence
 			if _, err = store.CommitRemote(context.Background(), commit); err != nil {
 				t.Fatalf("a snapshot whose checksum is %d could not be committed: %v", checksum, err)
 			}
@@ -150,8 +151,8 @@ func TestACommitWhoseCountersCannotBeEncodedIsRefusedUpFront(t *testing.T) {
 // 会让既有快照不可用。
 func TestAChecksumStoredAsANumberStillReads(t *testing.T) {
 	for name, stored := range map[string]any{
-		"int64": int64(1234567890123),
-		"int32": int32(4242),
+		"int64":  int64(1234567890123),
+		"int32":  int32(4242),
 		"absent": nil,
 	} {
 		t.Run(name, func(t *testing.T) {

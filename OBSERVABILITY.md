@@ -25,13 +25,32 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | --- | --- | --- |
 | `nest.dispatch.total` / `nest.dispatch.remote.total` | Counter | 分发量（labels: handler/result） |
 | `nest.dispatch.cost` | Duration | 单次分发耗时 |
+| `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复全堆栈诊断，无实体 ID 标签 |
 | `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列水位 |
 | `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
-| `nest.handler.lock_hold` | Duration | 每 handler 实体锁持有时长（pipelined 灰度选型依据） |
+| `nest.handler.lock_hold` | Duration | 从进入事务执行到调用 release 前或事务返回；不含等锁及完整 release hook 成本，保留旧口径 |
 | `nest.handler.lock_hold.slow.total` | Counter | 超阈值持锁（默认 100ms，`NestOptionWithSlowLockThreshold`） |
-| `nest.pipelined.durable_wait` | Duration | Phase 1 提交等待 |
-| `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/indeterminate——**indeterminate 非零即事故**） |
+| `nest.pipelined.durable_wait` | Duration | 内联时为 ticket 等待；异步时从建立完成任务至解锁/前序完成后，不能当成纯 fsync 耗时 |
+| `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/completion_failed/indeterminate——**indeterminate 非零即事故**） |
 | `nest.entity_group.transition.total` | Counter | 锁组迁移 |
+
+Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈按进程每 5 秒至多采样一次。下一次堆栈日志中的 `suppressed_since_last_trace` 表示跳过的重复诊断数，避免依赖变慢时日志和运行时抓栈放大压力。
+
+`NestOptionWithStageMetrics(true)` 开启 `nest.stage.duration{handler,stage}`（Duration，默认关闭）。
+
+| stage | 计时边界 |
+| --- | --- |
+| queue | 本次消息进入 worker 准入前 → 开始 dispatch；主动延迟不计入，重排队重新起算 |
+| load / lock | 普通路由和广播的实体加载 / 初始实体及组锁获取；动态 Cast 成本包含在 handler 中 |
+| capture / handler | 事务初始实体捕获 / 业务调用（包含内部动态 Cast） |
+| prepare / enqueue / durable_commit | 构建提交记录 / pipelined Enqueue / strict Commit 调用；不是磁盘层 fsync 分解 |
+| admission | 成功准入回调与 Sync 锁内冻结；不重复统计后续 Commit 的幂等准入 |
+| durable_wait / commit_queue | 当前执行者等待 ticket / ticket 进入异步等待队列后至被取出 |
+| release / cleanup | 路由实体释放（含 hook）/ 外层 Guard 剩余清理与 after-unlock 回调 |
+| completion_queue / completion_unlock / completion_order | 已完成 ticket 等完成 worker / 等本事务解锁 / 等同主实体前序完成 |
+| completion / rollback / remote_confirm | 异步完成回调与回复 / 失败回滚 / 已存在远端写批次的最终收尾 |
+
+阶段只在实际经过的路径上产生；广播按实体采样。并发阶段可能重叠，嵌套事务、动态实体提前释放等成本也可能包含在外层阶段，不能直接相加视为端到端延迟。Duration 用于次数、总耗时和平均值诊断，不提供 p99；客户端延迟分位数仍由业务压测统计。详细成本和复跑命令见 [Nest 收尾验收](docs/feature/NEST-COMPLETION-2026-09-24.md)。
 
 ### Durability 管线（kit/dataengine + kit/nestwal）
 
@@ -64,6 +83,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `remote_entity.remote.{read,prepare,apply}_total` / `_latency` | Counter/Duration | 远程实体三段操作 |
+| `remote_entity.write_admission_rejected_total` | Counter | Remote 完整写生命周期预算耗尽；Stats 同时公开 WritesInFlight / WriteLimit / WriteRejected |
 | `remote_entity.remote.write_gate_wait` | Duration | 写闸门等待 |
 | `remote_entity.remote.interest_rejected_total` | Counter | interest 拒绝 |
 | `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |

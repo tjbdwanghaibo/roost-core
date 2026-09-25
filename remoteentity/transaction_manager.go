@@ -13,13 +13,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
-type remoteTransactionTracker struct {
-	done     chan struct{}
-	status   entity.RemoteCommitStatus
-	closed   bool
-	closedAt int64
-}
-
 type remoteVersionWaiter struct {
 	version uint64
 	done    chan struct{}
@@ -41,6 +34,10 @@ type remoteState struct {
 
 	txMu sync.Mutex
 	txs  map[entity.RemoteTransactionID]*remoteTransactionTracker
+	// 终态按首次完成顺序链接，和 txs 共用 txMu；等待者单独持有 tracker。
+	closedHead  *remoteTransactionTracker
+	closedTail  *remoteTransactionTracker
+	closedCount int
 
 	versionMu    sync.Mutex
 	versions     map[int64]uint64
@@ -55,7 +52,8 @@ type remoteState struct {
 	finalizeCtx    context.Context
 	finalizeCancel context.CancelFunc
 	finalizeQueue  chan deferredRemoteClose
-	finalizeSlots  chan struct{}
+	writeSlots     chan struct{}
+	writeRejected  atomic.Uint64
 	finalizeDone   chan struct{}
 	finalizeWG     sync.WaitGroup
 	retryWG        sync.WaitGroup
@@ -76,6 +74,12 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 	if capacity <= 0 {
 		capacity = 4096
 	}
+	// 一个写批次只预留一次，转入后台收尾也不归还。
+	// 上限不能超过收尾容量，否则释放路径可能反过来卡住慢 worker。
+	writeLimit := capacity
+	if cfg.MaxConcurrentWrites > 0 {
+		writeLimit = min(writeLimit, cfg.MaxConcurrentWrites)
+	}
 	state := &remoteState{
 		txs:         make(map[entity.RemoteTransactionID]*remoteTransactionTracker),
 		txCapacity:  cfg.TransactionTrackLimit,
@@ -90,7 +94,7 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 		localInterestCapacity: cfg.SnapshotInterestKeys,
 		finalizeCtx:           finalizeCtx, finalizeCancel: finalizeCancel,
 		finalizeQueue: make(chan deferredRemoteClose, capacity),
-		finalizeSlots: make(chan struct{}, capacity), finalizeDone: make(chan struct{}),
+		writeSlots:    make(chan struct{}, writeLimit), finalizeDone: make(chan struct{}),
 	}
 	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
 	if len(snapshotL2) > 0 {
@@ -120,24 +124,26 @@ func (m *Manager) StartFinalizer() {
 	m.remote.finalizeOnce.Do(func() { go m.runRemoteFinalizers(m.remote, workers) })
 }
 
-func (m *Manager) reserveRemoteFinalizeSlot() bool {
+func (m *Manager) reserveRemoteWriteSlot() bool {
 	if m == nil || m.remote == nil {
 		return false
 	}
 	select {
-	case m.remote.finalizeSlots <- struct{}{}:
+	case m.remote.writeSlots <- struct{}{}:
 		return true
 	default:
+		m.remote.writeRejected.Add(1)
+		metrics.IncCounter("remote_entity.write_admission_rejected_total", nil, 1)
 		return false
 	}
 }
 
-func (m *Manager) releaseRemoteFinalizeSlot() {
+func (m *Manager) releaseRemoteWriteSlot() {
 	if m == nil || m.remote == nil {
 		return
 	}
 	select {
-	case <-m.remote.finalizeSlots:
+	case <-m.remote.writeSlots:
 	default:
 	}
 }
@@ -197,7 +203,7 @@ func (m *Manager) runRemoteFinalizers(state *remoteState, workers int) {
 				metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
 			}
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 		default:
 			close(state.finalizeDone)
 			return
@@ -219,7 +225,7 @@ func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
 						metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
 					}
 					m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-					m.releaseRemoteFinalizeSlot()
+					m.releaseRemoteWriteSlot()
 				default:
 					return
 				}
@@ -234,7 +240,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		err = m.publishAppliedRemoteTransaction(state.finalizeCtx, status)
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 			return
 		}
 	}
@@ -242,14 +248,14 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		err = m.reconcileRemoteEntries(state.finalizeCtx, item.entries, status.Receipts)
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 			return
 		}
 	}
 	if status.State == entity.RemoteCommitRejected {
 		m.rollbackRemoteEntries(item.entries)
 		m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-		m.releaseRemoteFinalizeSlot()
+		m.releaseRemoteWriteSlot()
 		return
 	}
 	// One failed/pending transaction must not monopolize a finalizer worker.
@@ -278,7 +284,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		select {
 		case <-state.finalizeCtx.Done():
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 			return
 		case <-timer.C:
 		}
@@ -287,7 +293,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		state.retryMu.Unlock()
 		if stopping {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 			return
 		}
 		// Send outside the lock: holding retryMu across a bounded-queue send
@@ -298,7 +304,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		case state.finalizeQueue <- item:
 		case <-state.finalizeCtx.Done():
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteFinalizeSlot()
+			m.releaseRemoteWriteSlot()
 		}
 	}()
 }
@@ -392,8 +398,8 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 	if txID.IsZero() {
 		return nil, entity.ErrRemoteRejected
 	}
-	if err := m.trackRemoteTransaction(txID); err != nil {
-		return nil, err
+	if len(commits) == 0 {
+		return nil, fmt.Errorf("%w: empty commit batch", entity.ErrRemoteRejected)
 	}
 	cloned := make([]entity.RemoteCommit, len(commits))
 	for i, commit := range commits {
@@ -403,7 +409,14 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 		if err := commit.Validate(); err != nil {
 			return nil, err
 		}
+		if err := validateRemoteCommitEncodable(commit); err != nil {
+			return nil, err
+		}
 		cloned[i] = commit.Clone()
+	}
+	// 校验失败不能留下无法完成的 pending tracker；已存在的事务也不应被坏输入覆盖。
+	if err := m.trackRemoteTransaction(txID); err != nil {
+		return nil, err
 	}
 	if len(cloned) > 1 {
 		receipts, err = m.backend.CommitRemoteBatch(ctx, cloned)
@@ -739,98 +752,6 @@ func (m *Manager) snapshotPublisher() (entity.IRemoteSnapshotPublisher, bool) {
 	return nil, false
 }
 
-func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
-	_, err := m.trackedRemoteTransaction(id)
-	return err
-}
-
-// trackedRemoteTransaction admits the transaction and hands back its tracker.
-//
-// A caller that is going to WAIT must keep this pointer rather than looking the
-// id up again: capacity admission evicts the oldest CLOSED record, which is
-// exactly the record a waiter is being woken by, so between close(done) and the
-// waiter reacquiring txMu the map entry can be gone. Re-reading the map there
-// dereferenced nil, inside the txMu critical section, so the deferred Unlock
-// never ran and every later tracker call blocked on it (RR-20260910-03).
-// Eviction only drops the index; the object stays alive for whoever holds it.
-func (m *Manager) trackedRemoteTransaction(id entity.RemoteTransactionID) (*remoteTransactionTracker, error) {
-	if m == nil || m.remote == nil || id.IsZero() {
-		return nil, entity.ErrRemoteRejected
-	}
-	m.remote.txMu.Lock()
-	defer m.remote.txMu.Unlock()
-	if m.remote.txs[id] == nil {
-		if m.remote.txCapacity > 0 && len(m.remote.txs) >= m.remote.txCapacity {
-			m.pruneRemoteTransactionsLocked(time.Now().UnixNano())
-			if len(m.remote.txs) >= m.remote.txCapacity {
-				m.evictOldestClosedRemoteTransactionLocked()
-			}
-			if len(m.remote.txs) >= m.remote.txCapacity {
-				return nil, entity.ErrRemoteOverloaded
-			}
-		}
-		m.remote.txs[id] = &remoteTransactionTracker{done: make(chan struct{}), status: entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitAdmitted}}
-	}
-	return m.remote.txs[id], nil
-}
-
-func (m *Manager) evictOldestClosedRemoteTransactionLocked() {
-	var oldestID entity.RemoteTransactionID
-	oldestAt := int64(^uint64(0) >> 1)
-	found := false
-	for id, tracker := range m.remote.txs {
-		if tracker.closed && tracker.closedAt > 0 && tracker.closedAt < oldestAt {
-			oldestID, oldestAt, found = id, tracker.closedAt, true
-		}
-	}
-	if found {
-		delete(m.remote.txs, oldestID)
-	}
-}
-
-func (m *Manager) pruneRemoteTransactionsLocked(now int64) {
-	if m.remote.txTTL <= 0 {
-		return
-	}
-	cutoff := now - m.remote.txTTL.Nanoseconds()
-	for id, tracker := range m.remote.txs {
-		if tracker.closed && tracker.closedAt > 0 && tracker.closedAt <= cutoff {
-			delete(m.remote.txs, id)
-		}
-	}
-}
-
-func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, status entity.RemoteCommitStatus) {
-	if m == nil || m.remote == nil || id.IsZero() {
-		return
-	}
-	m.remote.txMu.Lock()
-	tracker := m.remote.txs[id]
-	if tracker == nil {
-		if m.remote.txCapacity > 0 && len(m.remote.txs) >= m.remote.txCapacity {
-			m.pruneRemoteTransactionsLocked(time.Now().UnixNano())
-			if len(m.remote.txs) >= m.remote.txCapacity {
-				m.evictOldestClosedRemoteTransactionLocked()
-			}
-			if len(m.remote.txs) >= m.remote.txCapacity {
-				m.remote.txMu.Unlock()
-				metrics.IncCounter("remote_entity_transaction_tracker_drop_total", nil, 1)
-				return
-			}
-		}
-		tracker = &remoteTransactionTracker{done: make(chan struct{})}
-		m.remote.txs[id] = tracker
-	}
-	tracker.status = status.Clone()
-	terminal := status.State == entity.RemoteCommitCommitted || status.State == entity.RemoteCommitRejected || status.State == entity.RemoteCommitIndeterminate
-	if terminal && !tracker.closed {
-		tracker.closed = true
-		tracker.closedAt = time.Now().UnixNano()
-		close(tracker.done)
-	}
-	m.remote.txMu.Unlock()
-}
-
 func (m *Manager) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt int64) {
 	if m == nil || m.remote == nil {
 		return
@@ -852,78 +773,6 @@ func (m *Manager) pruneLocalInterestsLocked(now int64) {
 			m.remote.interests.release(key, m.localSid, m.remote.interestGeneration.Load())
 		}
 	}
-}
-
-func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	tracker, err := m.trackedRemoteTransaction(id)
-	if err != nil {
-		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: err.Error()}, err
-	}
-	m.remote.txMu.Lock()
-	done := tracker.done
-	status := tracker.status.Clone()
-	closed := tracker.closed
-	m.remote.txMu.Unlock()
-	if closed {
-		return status, remoteStatusError(status)
-	}
-	select {
-	case <-done:
-		// Read through the tracker this call is holding, not through the map:
-		// the record may have been evicted while this goroutine was parked.
-		// Still under txMu, because completeRemoteTransaction writes status.
-		m.remote.txMu.Lock()
-		status = tracker.status.Clone()
-		m.remote.txMu.Unlock()
-		return status, remoteStatusError(status)
-	case <-ctx.Done():
-		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: ctx.Err().Error()}, errors.Join(entity.ErrRemoteCommitTimeout, ctx.Err())
-	}
-}
-
-func remoteStatusError(status entity.RemoteCommitStatus) error {
-	switch status.State {
-	case entity.RemoteCommitPublished, entity.RemoteCommitCommitted:
-		return nil
-	case entity.RemoteCommitRejected:
-		return fmt.Errorf("%w: %s", entity.ErrRemoteRejected, status.Cause)
-	case entity.RemoteCommitIndeterminate:
-		return fmt.Errorf("%w: %s", entity.ErrRemotePersistenceIndeterminate, status.Cause)
-	default:
-		return entity.ErrRemoteCommitNotFinalized
-	}
-}
-
-func (m *Manager) RemoteCommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
-	if m == nil || m.remote == nil || id.IsZero() {
-		return entity.RemoteCommitStatus{}, entity.ErrRemoteRejected
-	}
-	m.remote.txMu.Lock()
-	tracker := m.remote.txs[id]
-	if tracker != nil {
-		status := tracker.status.Clone()
-		if status.State != entity.RemoteCommitIndeterminate {
-			m.remote.txMu.Unlock()
-			return status, nil
-		}
-	}
-	m.remote.txMu.Unlock()
-	if m.backend != nil {
-		status, err := m.backend.CommitStatus(ctx, id)
-		if err == nil && (status.State == entity.RemoteCommitCommitted || status.State == entity.RemoteCommitRejected) {
-			m.completeRemoteTransaction(id, status)
-		}
-		return status.Clone(), err
-	}
-	return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown}, nil
-}
-
-func (m *Manager) FlushRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) error {
-	_, err := m.waitRemoteTransaction(ctx, id)
-	return err
 }
 
 func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {
@@ -953,23 +802,6 @@ func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion ui
 		m.removeRemoteVersionWaiter(id, waiter.done)
 		return ctx.Err()
 	}
-}
-
-func (m *Manager) FlushRemoteAll(ctx context.Context) error {
-	m.remote.txMu.Lock()
-	ids := make([]entity.RemoteTransactionID, 0, len(m.remote.txs))
-	for id, tracker := range m.remote.txs {
-		if !tracker.closed {
-			ids = append(ids, id)
-		}
-	}
-	m.remote.txMu.Unlock()
-	for _, id := range ids {
-		if err := m.FlushRemoteTransaction(ctx, id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (m *Manager) notifyRemoteVersion(id int64, version uint64) {
@@ -1063,14 +895,22 @@ func (m *Manager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
 		if entry == nil || entry.entity == nil || !entry.finalized || entry.entity.GetMutex() == nil {
 			continue
 		}
-		entry.entity.GetMutex().Lock()
-		if participant, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
-			participant.RollbackRemoteCommit(entry.commit.Clone())
-		}
-		entry.entity.GetMutex().Unlock()
+		func() {
+			mu := entry.entity.GetMutex()
+			mu.Lock()
+			// 自定义回滚 hook panic 也必须解锁，不能把后续快 worker 永久卡住。
+			defer mu.Unlock()
+			if participant, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
+				participant.RollbackRemoteCommit(entry.commit.Clone())
+			}
+		}()
 	}
 }
 
 var _ entity.RemoteWriteBatchManager = (*Manager)(nil)
 var _ entity.RemoteCommitApplier = (*Manager)(nil)
 var _ entity.RemoteSnapshotReader = (*Manager)(nil)
+
+// SupportsConcurrentRemoteCommits 声明独立 Entity 的投影/发布可并行。
+// 调用方负责保持同一 Entity 的版本顺序，Manager 继续逐笔确认完整发布。
+func (*Manager) SupportsConcurrentRemoteCommits() bool { return true }

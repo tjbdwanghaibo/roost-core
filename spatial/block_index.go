@@ -1,6 +1,7 @@
 package spatial
 
 import (
+	"slices"
 	"sort"
 	"sync"
 )
@@ -184,9 +185,24 @@ func (i *BlockIndex) QueryBlock(point Point) []int64 {
 // QueryBlockIndex returns the ids indexed in one block, addressed by block
 // index (as produced by BlockIndex/BlockRects), in ascending order.
 func (i *BlockIndex) QueryBlockIndex(index int64) []int64 {
-	seen := make(map[int64]struct{})
-	i.collect(index, seen)
-	return sortedIDs(seen)
+	return i.AppendBlockIDs(nil, index)
+}
+
+// AppendBlockIDs 将一个块的 ID 排序后追加到 dst；只排序新增部分。
+// 单块内 ID 唯一，无需去重 map；调用方独占 dst，可在查询间复用。
+func (i *BlockIndex) AppendBlockIDs(dst []int64, index int64) []int64 {
+	block := i.blockAt(index)
+	if block == nil {
+		return dst
+	}
+	start := len(dst)
+	block.mu.RLock()
+	for id := range block.ids {
+		dst = append(dst, id)
+	}
+	block.mu.RUnlock()
+	slices.Sort(dst[start:])
+	return dst
 }
 
 func (i *BlockIndex) QueryBlocks(blocks map[int64]Rect) []int64 {

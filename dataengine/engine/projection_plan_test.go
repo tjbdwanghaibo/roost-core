@@ -23,7 +23,7 @@ func TestPlanProjectionSegmentsPreservesMixedOrder(t *testing.T) {
 		projectorRecord(3, true), projectorRecord(4, false),
 	}
 	fences := projectionTestFences(records)
-	segments, err := planProjectionSegments(records, fences, 16, 4<<20)
+	segments, err := planProjectionSegments(records, fences, 16, 4<<20, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestPlanProjectionSegmentsBoundsOrdinaryBatches(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false)}
 	fences := projectionTestFences(records)
 	one := projectionRecordLogicalBytes(records[0])
-	segments, err := planProjectionSegments(records, fences, 2, one*2-1)
+	segments, err := planProjectionSegments(records, fences, 2, one*2-1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestPlanProjectionSegmentsBoundsOrdinaryBatches(t *testing.T) {
 
 func TestPlanProjectionSegmentsHonorsMaxRecords(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false)}
-	segments, err := planProjectionSegments(records, projectionTestFences(records), 2, 1<<30)
+	segments, err := planProjectionSegments(records, projectionTestFences(records), 2, 1<<30, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestPlanProjectionSegmentsHonorsMaxRecords(t *testing.T) {
 func TestPlanProjectionSegmentsPreservesEveryRecordAndFence(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, true), projectorRecord(3, false), projectorRecord(4, false)}
 	fences := projectionTestFences(records)
-	segments, err := planProjectionSegments(records, fences, 1, 1<<30)
+	segments, err := planProjectionSegments(records, fences, 1, 1<<30, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,14 +117,14 @@ func TestProjectionPlanSaturatingMultiply(t *testing.T) {
 }
 
 func TestPlanProjectionSegmentsRejectsMismatchedFences(t *testing.T) {
-	if _, err := planProjectionSegments([]coredata.CommitRecord{projectorRecord(1, false)}, nil, 16, 4<<20); err == nil {
+	if _, err := planProjectionSegments([]coredata.CommitRecord{projectorRecord(1, false)}, nil, 16, 4<<20, false); err == nil {
 		t.Fatal("expected record/fence mismatch")
 	}
 }
 
 func TestPlanProjectionSegmentsHandlesOversizedFirstRecord(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false)}
-	segments, err := planProjectionSegments(records, projectionTestFences(records), 16, 1)
+	segments, err := planProjectionSegments(records, projectionTestFences(records), 16, 1, false)
 	if err != nil || len(segments) != 2 || len(segments[0].records) != 1 {
 		t.Fatalf("segments=%+v err=%v", segments, err)
 	}
@@ -133,7 +133,7 @@ func TestPlanProjectionSegmentsHandlesOversizedFirstRecord(t *testing.T) {
 func TestPlanProjectionSegmentsRejectsInvalidLimits(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false)}
 	for _, limits := range [][2]int{{0, 1}, {1, 0}} {
-		if _, err := planProjectionSegments(records, projectionTestFences(records), limits[0], limits[1]); err == nil {
+		if _, err := planProjectionSegments(records, projectionTestFences(records), limits[0], limits[1], false); err == nil {
 			t.Fatalf("limits=%v accepted", limits)
 		}
 	}

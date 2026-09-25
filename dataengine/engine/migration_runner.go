@@ -77,6 +77,7 @@ func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredat
 	if err != nil {
 		return false, err
 	}
+	// 迁移需要 Mongo 投影完成；仅有 WAL durable 还不能让下一次装载读到新 schema。
 	if err := coredata.WaitProjection(ctx, ticket); err != nil {
 		return false, err
 	}
