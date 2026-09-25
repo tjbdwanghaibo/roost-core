@@ -16,7 +16,7 @@ import (
 func TestClientValidatesContentVersionAndVisibility(t *testing.T) {
 	for _, fault := range []string{"none", "version", "field", "visibility"} {
 		t.Run(fault, func(t *testing.T) {
-			c := config{Players: 1, Entities: 10, Padding: 8}
+			c := config{Players: 1, Entities: 10, Padding: 8, TraceCapacity: 16}
 			id := int64(1)
 			at := position(id, 0, c)
 			value := &subject{data: component{ID: id, X: at.X, Y: at.Y, HP: 100, Extra: []byte{1, 1, 1, 1, 1, 1, 1, 1}}}
@@ -79,6 +79,21 @@ func TestClientValidatesContentVersionAndVisibility(t *testing.T) {
 			if err := manager.Flush(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			if fault == "none" {
+				if err := manager.HoldSession(1); err != nil {
+					t.Fatal(err)
+				}
+				if err := manager.ReadySession(1); err != nil {
+					t.Fatal(err)
+				}
+				if err := manager.Flush(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				checkpoint, _ := json.Marshal([]int64{id})
+				if err := writePacket(server, packetRecovery, tick, time.Now().Add(-time.Second).UnixNano(), checkpoint); err != nil {
+					t.Fatal(err)
+				}
+			}
 			visible := []int64{id}
 			if fault == "visibility" {
 				visible = []int64{2}
@@ -89,8 +104,11 @@ func TestClientValidatesContentVersionAndVisibility(t *testing.T) {
 			select {
 			case result := <-done:
 				if fault == "none" {
-					if result.err != nil || result.frames != 1 || result.final != 1 || len(result.changed) != 1 {
+					if result.err != nil || result.frames != 2 || result.final != 1 || len(result.changed) != 1 {
 						t.Fatalf("valid stream rejected: %+v", result)
+					}
+					if result.recoveryVerifiedMS == nil || *result.recoveryVerifiedMS < 1000 || len(result.baselineReceipts) != 1 || result.baselineReceipts[0].Epoch != 2 {
+						t.Fatalf("missing actual client recovery evidence: %+v", result)
 					}
 				} else if result.err == nil {
 					t.Fatalf("%s corruption accepted", fault)

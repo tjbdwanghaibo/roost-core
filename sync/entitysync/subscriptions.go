@@ -30,6 +30,7 @@ func (m *Manager) OpenSession(id SessionID) error {
 		return ErrSessionLimit
 	}
 	opened := newSession(id)
+	opened.lifetime.traceID = m.nextLifetime.Add(1)
 	m.sessions[id] = opened
 	m.mu.Unlock()
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
@@ -76,6 +77,9 @@ func (m *Manager) HoldSession(id SessionID) error {
 	fresh.framesSent = sess.framesSent
 	fresh.held = true
 	m.sessions[id] = fresh
+	if m.config.Trace != nil {
+		m.config.Trace.Record(SyncTraceEvent{Stage: "session_reset", Session: id, Lifetime: fresh.lifetime.traceID, Epoch: fresh.epoch})
+	}
 	subjects := sessionSubjectsLocked(sess)
 	m.mu.Unlock()
 	for _, subj := range subjects {
@@ -88,8 +92,11 @@ func (m *Manager) HoldSession(id SessionID) error {
 			default:
 				sub.kind, sub.baseVersion = kindSnapshot, 0
 				sub.revision++
+				subj.profilesValid = false
+				m.traceSnapshotRequest(subj, fresh)
 			}
 		}
+		m.clearSnapshotWaitLocked(subj)
 		subj.mu.Unlock()
 	}
 	return nil
@@ -275,6 +282,8 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		}
 		existing.profile, existing.kind, existing.baseVersion = active, kindSnapshot, 0
 		existing.revision++
+		subj.profilesValid = false
+		m.traceSnapshotRequest(subj, m.sessions[session])
 		m.markPending(subjectID)
 		m.WakeSync()
 		return nil
@@ -289,7 +298,9 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		profile: profile, sources: map[*SubscriptionSource]entity.SyncProfile{source: profile},
 		kind: kindSnapshot, revision: 1, lifetime: sess.lifetime,
 	}
+	subj.profilesValid = false
 	sess.lifetime.subjects[subjectID] = subj
+	m.traceSnapshotRequest(subj, m.sessions[session])
 	m.markPending(subjectID)
 	m.WakeSync()
 	return nil
@@ -323,10 +334,19 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 		if active != existing.profile {
 			existing.profile, existing.kind, existing.baseVersion = active, kindSnapshot, 0
 			existing.revision++
+			subj.profilesValid = false
+			if sess := m.session(session); sess != nil {
+				m.traceSnapshotRequest(subj, sess)
+			}
 			m.markPending(subjectID)
 			m.WakeSync()
 		}
 		return nil
+	}
+	if m.config.Trace != nil {
+		if sess := m.session(session); sess != nil {
+			m.config.Trace.Record(SyncTraceEvent{Stage: "baseline_cancelled", SubjectID: subjectID, Session: session, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch})
+		}
 	}
 	if !existing.inFlight && !m.sessionHoldsSubject(session, subjectID) {
 		m.removeSubscriptionLocked(subj, session)
@@ -337,6 +357,7 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	}
 	existing.kind = kindLeaving
 	existing.revision++
+	subj.profilesValid = false
 	m.markPending(subjectID)
 	m.WakeSync()
 	return nil
@@ -374,4 +395,6 @@ func (m *Manager) removeSubscriptionLocked(subj *subject, sid SessionID) {
 	delete(sub.lifetime.subjects, subj.id)
 	delete(subj.subscribers, sid)
 	m.mu.Unlock()
+	subj.profilesValid = false
+	m.clearSnapshotWaitLocked(subj)
 }

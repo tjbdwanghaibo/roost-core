@@ -66,7 +66,18 @@ func (m *Manager) CaptureSync(state *entity.SubjectSyncState) error {
 	if retiring {
 		return nil
 	}
+	var started time.Time
+	if m.config.Trace != nil {
+		started = time.Now()
+	}
 	err := state.FreezeSyncViews(delta, snapshot, m.reserveFrozen)
+	if m.config.Trace != nil {
+		stage := "frozen"
+		if err != nil {
+			stage = "freeze_failed"
+		}
+		m.config.Trace.Record(SyncTraceEvent{Stage: stage, SubjectID: state.SubjectID(), Duration: time.Since(started)})
+	}
 	if m.subject(state.SubjectID()) != subj {
 		state.DiscardFrozenSync()
 	}

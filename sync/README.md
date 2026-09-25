@@ -41,3 +41,29 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 [正式双模式接入](../docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)：`ModePeriodic` 默认，`ModeOnChange` 锁内冻结、解锁及提交确认后唤醒。Nest option、Kit 配置、生成 DAO 自动收集、Interest 事实队列共用现有交付流水线；`Drain(ctx)` 在生产者停止后排空已登记工作。
 
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
+
+
+### 快照等待与阶段诊断
+
+on_change 下快照预算按 Interval 窗口共享；额度耗尽的快照需求单独等待下一窗口，
+业务变化、退订 remove 和新订阅仍可即时触发。periodic 仍按每次 Flush 计算预算。
+预算只限制客户端尚未持有对象的创建；现有对象的全量视图替换和补发不占恢复额度，
+仍受帧硬上限、冻结内存和传输背压约束。Hold/Ready 清空引用后重新创建对象，仍需额度。
+20Hz 恢复窗口不保证冷对象创建在 50ms 内到达客户端，排队与传输耗时需要单独计入。
+`Stats().Pending` 包含预算等待中的 subject；`PendingSnapshots` 统计待基线订阅（含 held），
+`WaitingSnapshotSubjects` 和 `OldestSnapshotWait` 用于检查预算等待。Stats 会遍历订阅，
+请按诊断频率调用；高频累计量仍用 Counters。
+
+可显式创建 `NewSyncTrace(capacity)`，传入 `ManagerConfig.Trace` 开启有界阶段记录；
+默认 nil，不记录事件。定期调用 `Drain()` 获取独立副本及本次覆盖数，随后在锁外写文件。
+事件关联 subject/version 与 session/lifetime/epoch/tick，零字段表示该阶段尚未赋值；
+记录不包含 payload。传输装配方可用 `Record` 补充发送阶段，客户端接收时间仍需客户端记录。
+这属于诊断功能，会影响性能；缺失或被覆盖的记录不能当成零等待。
+
+冷基线诊断另有 `baseline_requested`、`baseline_cancelled` 和 `session_reset` 事件；
+前者的 Snapshot 字段表示请求来自 held 会话的恢复集合。请求不等于收到，恢复集合里的
+实体离开可见范围也不能算接收成功。AOI 工具的客户端记录和离线分析见 scripts 说明。
+预算按固定 Interval 边界轮转，晚醒不推迟后续边界，空闲窗口不积攒额度；这是软预算，
+不是对任意滑动窗口的严格带宽限制。
+
+本批实现、微基准和 AOI 验收见[快照调度与长尾优化](../docs/feature/REFACTOR-2026-09-25-sync-snapshot-scheduling.md)。

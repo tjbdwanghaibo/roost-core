@@ -58,3 +58,27 @@ Remote 容量阶梯入口：`ROOST_REMOTE_CAPACITY_LABEL=<唯一标签> ROOST_RE
 慢池并发/队列对比：加载隔离环境后运行 `ROOST_REMOTE_WORKER_LABEL=<唯一标签> bash scripts/perf/remote-workers.sh`。默认固定快池8、投影8、每档120秒，比较慢池64/128/256/1024与等待位16/64；`ROOST_REMOTE_WORKER_CASES='64:64:120 1024:16:120'` 可指定慢worker:等待位:输入TPS。过载结果保留并继续下一档，环境/预热无结果则停止；以零错误、零丢弃和全量校验通过判定通过，不能只看成功TPS或队列长度。
 
 Remote 资源预算验证新增 `ROOST_REMOTE_WRITE_LIMIT`（正整数，未设使用正式默认 128）、`ROOST_REMOTE_WAL_LIMIT`（正整数，未设保持 WAL 不设记录数上限）。它们独立于快/慢 worker 数；历史 4096 预算对照可显式设 `ROOST_REMOTE_WRITE_LIMIT=4096`，前提是 `AsyncFinalizeCapacity` 足够。最新[预算与集中恢复验收](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)披露拒绝和成功 TPS。
+
+
+Sync 长尾诊断：AOI 压测增加 `-trace-capacity=262144`，输出固定内存环形记录的逐批
+`trace.jsonl`；随后运行 `python3 scripts/perf/sync-trace.py <sample-N目录>`，关联
+`client.json` 的最差超标样本并输出 `outlier-stages.json`。需同时检查覆盖数与客户端
+省略样本数。诊断运行含额外编码/文件输出，不能和关闭诊断的延迟门禁混用。
+默认无诊断的客户端仍保留原门禁及有界超标样本，分别报告 delta/full 变更延迟。
+`recovery_admission_caught_up_ms` 是集中恢复后服务端首次采样到待快照订阅为零的时间，
+不是客户端全部恢复时间；零值表示未观测到追平（或没有发起恢复），按 `config` 区分。
+最新[实现与复跑记录](../docs/feature/REFACTOR-2026-09-25-sync-snapshot-scheduling.md)。
+`-snapshot-objects` / `-snapshot-bytes` / `-snapshot-per-session` 只限制冷对象创建，
+已有对象的 Full 更新不占额度。最新四轮集中恢复中三轮严格门禁通过，一轮冷创建最大
+54.283ms，失败样本仍计入原门禁；不能将恢复预算视为全部 Full 更新的带宽上限。
+
+Sync 首次可见与客户端恢复：诊断运行加 `-trace-capacity=262144`，随后执行
+`python3 scripts/perf/sync-visibility.py <sample-N目录>`，生成 `visibility-latency.json`。
+客户端额外写 `baseline-receipts.json`，每连接最多保留 4096 条 Create/Remove、汇总文件最多输出 1048576 条，
+省略数明确报告。离线分析区分新请求首次可见、恢复初始集合收到/取消/未完成，以及在途创建
+晚于取消到达；不能把取消算成功或将残缺证据当完整恢复。
+诊断还在服务端待快照归零后排空并向恢复客户端发送当前 Interest 集合检查点，客户端逐项
+核验后报告 `recovery_client_verified_ms` 与会话数。这是实际恢复完成时间的上界，不是首次
+达到一致的精确时刻；检查点暂停输入及诊断开销只存在于诊断运行。
+支持本工具的单次 Hold/Ready，不将多次重置或同 session ID 重开混作一个恢复样本。
+最终固定预算对比、未采纳的短窗口实验和验收结果以实施报告末节为准。

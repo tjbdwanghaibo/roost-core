@@ -29,6 +29,7 @@ import (
 )
 
 type config struct {
+	TraceCapacity      int    `json:"trace_capacity"`
 	Nest               bool   `json:"nest_dispatch"`
 	Mode               string `json:"sync_mode"`
 	SnapshotObjects    int    `json:"snapshot_objects_per_flush"`
@@ -53,11 +54,12 @@ type config struct {
 
 func parseConfig() config {
 	var c config
+	flag.IntVar(&c.TraceCapacity, "trace-capacity", 0, "bounded diagnostic events; 0 disabled (diagnostic runs affect timing)")
 	flag.BoolVar(&c.Nest, "nest", true, "use formal Nest dispatch and sync commit boundary")
 	flag.StringVar(&c.Mode, "mode", "periodic", "periodic or on_change")
-	flag.IntVar(&c.SnapshotObjects, "snapshot-objects", 0, "global snapshot object budget per flush; 0 unlimited")
-	flag.IntVar(&c.SnapshotBytes, "snapshot-bytes", 0, "global snapshot byte soft budget; 0 unlimited")
-	flag.IntVar(&c.SnapshotPerSession, "snapshot-per-session", 0, "snapshot object budget per session per flush")
+	flag.IntVar(&c.SnapshotObjects, "snapshot-objects", 0, "cold object creation budget per flush (per interval in on_change mode); 0 unlimited")
+	flag.IntVar(&c.SnapshotBytes, "snapshot-bytes", 0, "cold object creation byte soft budget; 0 unlimited")
+	flag.IntVar(&c.SnapshotPerSession, "snapshot-per-session", 0, "cold object creation budget per session per flush (per interval in on_change mode); 0 unlimited")
 	flag.IntVar(&c.ReconnectTick, "reconnect-tick", 0, "reset client baselines at this measured tick; 0 disabled")
 	flag.IntVar(&c.ReconnectPlayers, "reconnect-players", 0, "number of sessions reset; 0 means all")
 	flag.BoolVar(&c.Async, "async", false, "use production reliable queue before loopback TCP")
@@ -86,6 +88,9 @@ func (c config) validate() error {
 	}
 	if c.Players < 1 || c.Entities < c.Players || c.Entities > 100000 || c.Ticks < 1 || c.Ticks > 10000 || c.Hz < 1 || c.Hz > 1000 || c.Dirty < 1 || c.Dirty > 100 || c.Padding < 0 || c.Padding > 4096 || c.Batches < 1 || c.Batches > 100 || c.Visible < 2 || c.Visible > 100 || c.Output == "" {
 		return errors.New("invalid workload: check counts, hz, dirty, padding, visible and output")
+	}
+	if c.TraceCapacity < 0 || c.TraceCapacity > 1<<20 {
+		return errors.New("invalid trace capacity")
 	}
 	if c.SnapshotObjects < 0 || c.SnapshotBytes < 0 || c.SnapshotPerSession < 0 || c.ReconnectTick < 0 || c.ReconnectTick > c.Ticks || c.ReconnectPlayers < 0 || c.ReconnectPlayers > c.Players {
 		return errors.New("invalid recovery workload")
@@ -188,6 +193,7 @@ func quantiles(values []float64) map[string]float64 {
 func milliseconds(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
 type serverTransport struct {
+	trace         *entitysync.SyncTrace
 	metaMu        sync.RWMutex
 	conns         map[int64]net.Conn
 	tick          int
@@ -208,9 +214,14 @@ func (l *serverTransport) Push(ctx context.Context, sid entitysync.SessionID, da
 		return err
 	}
 	tick, due := l.metadata()
+	var sendStarted time.Time
+	if l.trace != nil {
+		sendStarted = time.Now()
+	}
 	if err := writePacket(conn, packetFrame, tick, due, data); err != nil {
 		return err
 	}
+	l.traceSent(sid, data, sendStarted)
 	if tick > 0 {
 		l.frames++
 		l.bytes += int64(len(data))
@@ -238,7 +249,7 @@ func runServer(c config) error {
 	if err != nil {
 		return err
 	}
-	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode)
+	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity))
 	log, err := os.Create(filepath.Join(c.Output, "client.log"))
 	if err != nil {
 		return err
@@ -297,8 +308,14 @@ func runServer(c config) error {
 			_ = queued.queue.Close(closeCtx)
 		}()
 	}
+	trace, drainTrace, closeTrace, err := openSyncTrace(c)
+	if err != nil {
+		return err
+	}
+	defer closeTrace()
+	transport.trace = trace
 	mode, _ := entitysync.ParseSyncMode(c.Mode)
-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: mode, Interval: time.Second / time.Duration(c.Hz), Transport: output, SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: c.SnapshotObjects, MaxBytes: c.SnapshotBytes, PerSessionObjects: c.SnapshotPerSession}})
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Trace: trace, Mode: mode, Interval: time.Second / time.Duration(c.Hz), Transport: output, SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: c.SnapshotObjects, MaxBytes: c.SnapshotBytes, PerSessionObjects: c.SnapshotPerSession}})
 	if err != nil {
 		return err
 	}
@@ -362,6 +379,9 @@ func runServer(c config) error {
 			return err
 		}
 		startupTicks++
+		if err := drainTrace(); err != nil {
+			return err
+		}
 		if manager.Stats().Pending == 0 {
 			break
 		}
@@ -472,10 +492,14 @@ func runServer(c config) error {
 		}
 	}
 	start := time.Now()
+	trace.Record(entitysync.SyncTraceEvent{Stage: "measurement_started", At: start.UnixNano()})
 	work, flush, lag := make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks)
 	var overWork int
 	var slow []map[string]any
 	var recoverySetup time.Duration
+	var recoveryStarted time.Time
+	var recoveryCaughtUp time.Duration
+	var recoverySamples []map[string]any
 	for tick := 1; tick <= c.Ticks; tick++ {
 		tickStart := start.Add(time.Duration(tick-1) * period)
 		due := tickStart.Add(period)
@@ -483,6 +507,8 @@ func runServer(c config) error {
 		var active time.Duration
 		if tick == c.ReconnectTick {
 			resetStart := time.Now()
+			recoveryStarted = resetStart
+			trace.Record(entitysync.SyncTraceEvent{Stage: "recovery_started", At: resetStart.UnixNano()})
 			ids := observerIDs(c)
 			if c.ReconnectPlayers > 0 {
 				ids = ids[:c.ReconnectPlayers]
@@ -525,6 +551,39 @@ func runServer(c config) error {
 		}
 		elapsed := time.Since(begin)
 		active += elapsed
+		if !recoveryStarted.IsZero() && recoveryCaughtUp == 0 {
+			stats := manager.Stats()
+			recoverySamples = append(recoverySamples, map[string]any{"elapsed_ms": milliseconds(time.Since(recoveryStarted)), "pending_snapshots": stats.PendingSnapshots, "waiting_subjects": stats.WaitingSnapshotSubjects, "oldest_wait_ms": milliseconds(stats.OldestSnapshotWait)})
+			if stats.PendingSnapshots == 0 {
+				recoveryCaughtUp = time.Since(recoveryStarted)
+				if c.TraceCapacity > 0 {
+					// 只用于诊断：暂停本驱动的下一批输入，排空后给客户端一份当前
+					// Interest 集合检查点。客户端实际逐项核验，而非拿准入完成冒充到齐。
+					if err := manager.Flush(ctx); err != nil {
+						return err
+					}
+					if err := queued.drain(); err != nil {
+						return err
+					}
+					ids := observerIDs(c)
+					if c.ReconnectPlayers > 0 {
+						ids = ids[:c.ReconnectPlayers]
+					}
+					for _, id := range ids {
+						raw, err := json.Marshal(append(interest.Visible(id), id))
+						if err != nil {
+							return err
+						}
+						if err := writePacket(transport.conns[id], packetRecovery, tick, recoveryStarted.UnixNano(), raw); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		if err := drainTrace(); err != nil {
+			return err
+		}
 		work = append(work, milliseconds(active))
 		flush = append(flush, milliseconds(elapsed))
 		lag = append(lag, milliseconds(begin.Sub(due)))
@@ -535,6 +594,7 @@ func runServer(c config) error {
 			slow = append(slow, map[string]any{"tick": tick, "work_ms": milliseconds(active), "flush_ms": milliseconds(elapsed), "flush_start_lag_ms": milliseconds(begin.Sub(due))})
 		}
 	}
+	failuresBeforeStop := manager.Counters().FlushFailures
 	if c.Nest {
 		if err := engine.Shutdown(ctx); err != nil {
 			return err
@@ -547,6 +607,9 @@ func runServer(c config) error {
 		}
 	}
 	if err := queued.drain(); err != nil {
+		return err
+	}
+	if err := drainTrace(); err != nil {
 		return err
 	}
 	duration := time.Since(start)
@@ -591,7 +654,11 @@ func runServer(c config) error {
 			err = errors.New("client drain timed out")
 		}
 	}
-	report := map[string]any{"startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
+	report := map[string]any{"recovery_admission_caught_up_ms": milliseconds(recoveryCaughtUp), "recovery_samples": recoverySamples, "startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
+	report["flush_failures_before_stop"] = failuresBeforeStop
+	if last := manager.LastError(); last != nil {
+		report["manager_last_error"] = last.Error()
+	}
 	if queued != nil {
 		report["async_stats"] = queued.queue.Stats()
 		report["async_counters"] = queued.queue.Counters()
@@ -620,6 +687,9 @@ func runServer(c config) error {
 	}
 	if received.Samples == 0 {
 		return errors.New("no latency samples")
+	}
+	if failuresBeforeStop != 0 {
+		return fmt.Errorf("%d flush failures before shutdown; reports retained", failuresBeforeStop)
 	}
 	fmt.Printf("players=%d entities=%d visible_mean=%.2f planned_p99=%.2fms change_p99=%.2fms above50ms=%d/%d\n", c.Players, c.Entities, report["visible_final"].(map[string]float64)["mean"], received.Planned["p99"], received.Changed["p99"], received.PlannedOver, received.Samples)
 	if received.PlannedOver > 0 || received.ChangedOver > 0 {

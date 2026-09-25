@@ -48,6 +48,10 @@ type subject struct {
 	// retiring: Unregister was called; every subscriber is leaving and the
 	// subject is forgotten once the last remove has gone out.
 	retiring bool
+	// 缓存发布后不可修改；CaptureSync 解开 subject 锁后仍会使用这两组需求。
+	// 增删订阅以及有效 profile/kind 改变必须使 profilesValid 失效。
+	profilesValid                   bool
+	deltaProfiles, snapshotProfiles []entity.SyncProfile
 }
 
 func newSubject(state *entity.SubjectSyncState) *subject {
@@ -57,10 +61,26 @@ func newSubject(state *entity.SubjectSyncState) *subject {
 // profilesLocked 一次遍历收集两种内容需求，不在订阅数量上反复建立 profile map。
 // 内容层统一规范化、去重和排序；held 会话仍保留原有捕获语义。
 func (s *subject) profilesLocked(selected map[*subscription]bool) (delta, snapshot []entity.SyncProfile) {
+	if !s.profilesValid {
+		s.deltaProfiles, s.snapshotProfiles = s.collectProfilesLocked(nil)
+		s.profilesValid = true
+	}
+	if selected == nil {
+		return s.deltaProfiles, s.snapshotProfiles
+	}
+	// 空选择不必遍历订阅；非空集合只过滤预算相关的快照需求。
+	if len(selected) == 0 {
+		return s.deltaProfiles, nil
+	}
+	_, snapshot = s.collectProfilesLocked(selected)
+	return s.deltaProfiles, snapshot
+}
+
+func (s *subject) collectProfilesLocked(selected map[*subscription]bool) (delta, snapshot []entity.SyncProfile) {
 	for _, sub := range s.subscribers {
 		switch sub.kind {
 		case kindLive:
-			if !slices.Contains(delta, sub.profile) {
+			if selected == nil && !slices.Contains(delta, sub.profile) {
 				delta = append(delta, sub.profile)
 			}
 		case kindSnapshot:

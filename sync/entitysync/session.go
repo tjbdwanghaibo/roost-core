@@ -45,6 +45,7 @@ type wireConfig struct {
 // and the object references it has been given. Nothing here refers to a room
 // or to any other session — a session's frames are its own (ARCH-10).
 type sessionLifetime struct {
+	traceID uint64
 	// subjects 是订阅意图的反向索引，包含待快照与待删除项。
 	// 仅 Manager.mu 保护；编码副本共享生命周期，但不能读写此表。
 	subjects map[int64]*subject

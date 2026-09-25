@@ -81,6 +81,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 		m.flushFailures.Add(1)
 		return err
 	}
+	m.refreshSnapshotWindow()
 	ids := m.takePending()
 	if len(ids) == 0 {
 		m.emptyFlushes.Add(1)
@@ -105,7 +106,6 @@ func (m *Manager) Flush(ctx context.Context) error {
 	var failures []error
 
 	captureStarted := time.Now()
-	m.refreshSnapshotWindow()
 	selectedSnapshots := m.planSnapshotCaptures(ids)
 	// 捕获：按 subject 获取同一版本的快照与增量，归入各会话待交付内容。
 	for _, id := range ids {
@@ -143,8 +143,14 @@ func (m *Manager) Flush(ctx context.Context) error {
 		}
 		if selectedSnapshots != nil {
 			for sid, sub := range subj.subscribers {
+				if sub.kind == kindSnapshot && !held[sid] && work[sid] != nil {
+					// 已有引用的视图替换仍是一次对象更新，不能等待冷恢复预算。
+					if _, exists := work[sid].session.objects[id]; exists {
+						selectedSnapshots[sub] = true
+					}
+				}
 				if sub.kind == kindSnapshot && !held[sid] && !selectedSnapshots[sub] {
-					m.markPending(id)
+					m.deferSnapshot(subj)
 					m.snapshotsDeferred.Add(1)
 				}
 			}
@@ -164,17 +170,26 @@ func (m *Manager) Flush(ctx context.Context) error {
 			switch {
 			case errors.Is(err, entity.ErrSubjectSyncNotDirty):
 			case errors.Is(err, entity.ErrSyncCommitPending):
+				if m.config.Trace != nil {
+					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})
+				}
 				retry = append(retry, id)
 			case err != nil:
 				failures = append(failures, fmt.Errorf("subject %d: %w", id, err))
 				retry = append(retry, id)
 			case gated && capturedAbove(item, watermark):
+				if m.config.Trace != nil {
+					m.config.Trace.Record(SyncTraceEvent{Stage: "durability_wait", SubjectID: id, Version: item.Version(), CommitLSN: item.CommitLSN()})
+				}
 				_ = item.AbortWithError(ErrDurabilityDeferred)
 				m.deferred.Add(1)
 				metrics.IncCounter("entitysync_durability_gate_deferred_total", nil, 1)
 				retry = append(retry, id)
 			default:
 				dirty = item.Version() != item.BaseVersion()
+				if m.config.Trace != nil {
+					m.config.Trace.Record(SyncTraceEvent{Stage: "prepared", SubjectID: id, Version: item.Version(), BaseVersion: item.BaseVersion(), CommitLSN: item.CommitLSN()})
+				}
 				prepared = append(prepared, item)
 				if dirty {
 					m.dirtyCaptured.Add(1)
@@ -247,11 +262,28 @@ func (m *Manager) Flush(ctx context.Context) error {
 		}
 		encodeStarted := time.Now()
 		m.scheduleSnapshots(sid, batch, budget)
+		if m.config.Trace != nil {
+			for _, entry := range batch.entries {
+				if entry.update == nil {
+					continue
+				}
+				u := entry.update.update
+				m.config.Trace.Record(SyncTraceEvent{Stage: "selected", SubjectID: entry.subjectID, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Version: u.Version, BaseVersion: u.BaseVersion, Full: u.Full, Reason: uint8(u.Reason), Snapshot: entry.kind == entryCreate})
+			}
+		}
 		// 编码只改副本；每一帧准入后分别采纳其时钟与引用表。
 		// 后一帧或另一会话失败时，已成功交付的前缀不能回滚。
 		next := sess.clone()
 		next.snapshotAfter = batch.snapshotAfter
 		payloads, err := next.encode(batch.entries, m.wire)
+		if m.config.Trace != nil {
+			if err != nil {
+				m.config.Trace.Record(SyncTraceEvent{Stage: "encode_failed", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Duration: time.Since(encodeStarted)})
+			}
+			for _, encoded := range payloads {
+				m.config.Trace.Record(SyncTraceEvent{Stage: "encoded", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(encodeStarted)})
+			}
+		}
 		m.encodeNanos.Add(uint64(time.Since(encodeStarted)))
 		if err != nil {
 			m.loseSession(sess, err)
@@ -266,6 +298,13 @@ func (m *Manager) Flush(ctx context.Context) error {
 			}
 			admissionStarted := time.Now()
 			pushErr = m.config.Transport.Push(ctx, sid, encoded.payload)
+			if m.config.Trace != nil {
+				stage := "admitted"
+				if pushErr != nil {
+					stage = "admission_failed"
+				}
+				m.config.Trace.Record(SyncTraceEvent{Stage: stage, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(admissionStarted)})
+			}
 			m.admissionNanos.Add(uint64(time.Since(admissionStarted)))
 			if pushErr != nil {
 				break
@@ -292,7 +331,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 			// 内容捕获作废并保留脏位，但已交付会话可能已应用未提交版本的增量。
 			// 它们下次必须收全量，不能再把旧 baseVersion 的增量当成连续历史。
 			abortAll(prepared, pushErr)
-			requireSnapshotsAfterRetry(admittedSessions, work)
+			m.requireSnapshotsAfterRetry(admittedSessions, work)
 			for _, id := range ids {
 				m.markPending(id)
 			}
@@ -326,6 +365,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 		}
 		subj.mu.Lock()
 		done := subj.retiring && len(subj.subscribers) == 0
+		m.clearSnapshotWaitLocked(subj)
 		subj.mu.Unlock()
 		if done {
 			m.forget(id)
@@ -360,7 +400,7 @@ func releaseInFlight(work map[SessionID]*flushSession) {
 
 // requireSnapshotsAfterRetry 为已收到本轮内容的会话重新建立全量基线。
 // remove 仍按原意结算；已交付的会话时钟和引用表不在这里回滚。
-func requireSnapshotsAfterRetry(admittedSessions []SessionID, work map[SessionID]*flushSession) {
+func (m *Manager) requireSnapshotsAfterRetry(admittedSessions []SessionID, work map[SessionID]*flushSession) {
 	for _, admitted := range admittedSessions {
 		for _, settle := range work[admitted].settlements {
 			if settle.remove {
@@ -369,6 +409,8 @@ func requireSnapshotsAfterRetry(admittedSessions []SessionID, work map[SessionID
 			settle.subj.mu.Lock()
 			if sub := settle.subj.subscribers[admitted]; sub == settle.sub && sub.kind != kindLeaving {
 				sub.kind, sub.baseVersion = kindSnapshot, 0
+				settle.subj.profilesValid = false
+				m.traceSnapshotRequest(settle.subj, work[admitted].session)
 			}
 			settle.subj.mu.Unlock()
 		}
@@ -384,6 +426,9 @@ func (m *Manager) settleSubscriptions(sid SessionID, settlements []settlement) {
 			if settle.remove {
 				m.removeSubscriptionLocked(settle.subj, sid)
 			} else {
+				if sub.kind != kindLive {
+					settle.subj.profilesValid = false
+				}
 				sub.kind, sub.baseVersion = kindLive, settle.version
 			}
 		}

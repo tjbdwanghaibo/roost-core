@@ -19,7 +19,9 @@ const DefaultInterval = 50 * time.Millisecond
 
 // ManagerConfig shapes the one Manager a process runs.
 type ManagerConfig struct {
-	Mode SyncMode
+	// Trace 是可选的有界阶段诊断，nil 时不记录。
+	Trace *SyncTrace
+	Mode  SyncMode
 	// MaxFrozenBytes 限制变化触发模式保留的内容字节；零值为 64MiB。
 	MaxFrozenBytes int64
 	// Transport receives each encoded frame; a session may need multiple frames per tick. Required.
@@ -29,7 +31,7 @@ type ManagerConfig struct {
 	// ProfilePriorities 越小越优先；未配置的视图按 LOD 排序。构造时复制配置。
 	// 只在已授权来源之间选一个视图，不合并字段或扩大授权。
 	ProfilePriorities map[entity.SyncProfile]int
-	// SnapshotBudget 只限制等待建立/恢复基线的全量，零值不限制。
+	// SnapshotBudget 只限制客户端尚未持有对象的创建；现有对象全量刷新不占额度，零值不限制。
 	SnapshotBudget SnapshotBudget
 	// Limits bound a frame. Zero fields take frame.DefaultLimits.
 	// MaxObjects is also how many subjects one session may hold.
@@ -112,6 +114,7 @@ func (c ManagerConfig) normalized() ManagerConfig {
 // 本文件负责配置、实体注册和生命周期；subscriptions.go 管理会话与订阅，
 // flush.go 负责捕获、准入与提交。订阅意图归 subject，已交付的时钟与引用归 session。
 type Manager struct {
+	nextLifetime    atomic.Uint64
 	frozenPeakBytes atomic.Int64
 	policyMu        sync.Mutex
 	policies        map[uint64]policyHook
@@ -132,8 +135,9 @@ type Manager struct {
 	closed   bool
 	closing  bool
 
-	pendingMu sync.Mutex
-	pending   map[int64]struct{}
+	pendingMu        sync.Mutex
+	pending          map[int64]struct{}
+	waitingSnapshots map[int64]snapshotWait // pendingMu；仅保存重查请求，不保存旧订阅意图
 
 	// flushGate 串行化捕获与关闭，等待者可随 context 取消退出。
 	flushGate chan struct{}
@@ -206,10 +210,11 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 			limits: config.Limits, schemaVersion: config.FrameSchemaVersion, archetype: config.Archetype,
 			componentType: config.ComponentTypeID, componentSchema: config.ComponentSchemaVersion,
 		},
-		subjects:  make(map[int64]*subject),
-		sessions:  make(map[SessionID]*session),
-		pending:   make(map[int64]struct{}),
-		flushGate: make(chan struct{}, 1),
+		subjects:         make(map[int64]*subject),
+		sessions:         make(map[SessionID]*session),
+		pending:          make(map[int64]struct{}),
+		waitingSnapshots: make(map[int64]snapshotWait),
+		flushGate:        make(chan struct{}, 1),
 	}, nil
 }
 
@@ -252,6 +257,9 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	state.SetDirtyNotifier(func(*entity.SubjectSyncState) {
 		m.markPending(id)
 		if state.SyncCommitReady() {
+			if m.config.Trace != nil {
+				m.config.Trace.Record(SyncTraceEvent{Stage: "commit_ready", SubjectID: id})
+			}
 			m.WakeSync()
 		}
 	})
@@ -277,6 +285,7 @@ func (m *Manager) Unregister(subjectID int64) error {
 		clear(sub.sources)
 		sub.kind = kindLeaving
 		sub.revision++
+		subj.profilesValid = false
 	}
 	remaining := len(subj.subscribers)
 	subj.mu.Unlock()
@@ -298,6 +307,11 @@ func (m *Manager) forget(subjectID int64) {
 	}
 	m.mu.Unlock()
 	if ok {
+		m.pendingMu.Lock()
+		if wait := m.waitingSnapshots[subjectID]; wait.subject == subj {
+			delete(m.waitingSnapshots, subjectID)
+		}
+		m.pendingMu.Unlock()
 		subj.state.SetDirtyNotifier(nil)
 		subj.state.DiscardFrozenSync()
 	}
@@ -471,6 +485,10 @@ func (m *Manager) Close(ctx context.Context) error {
 		subj.state.SetDirtyNotifier(nil)
 		subj.state.DiscardFrozenSync()
 	}
+	m.pendingMu.Lock()
+	clear(m.pending)
+	clear(m.waitingSnapshots)
+	m.pendingMu.Unlock()
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		for id := range sessions {
 			lifecycle.SessionClosed(id)
@@ -522,30 +540,33 @@ func (m *Manager) LastError() error {
 // ---- observability ----
 
 type ManagerStats struct {
-	FlushCalls         uint64
-	EmptyFlushes       uint64
-	FlushDuration      time.Duration
-	LastFlushDuration  time.Duration
-	DirtyCaptured      uint64
-	SnapshotsCaptured  uint64
-	SnapshotsDeferred  uint64
-	CaptureDuration    time.Duration
-	EncodeDuration     time.Duration
-	AdmissionDuration  time.Duration
-	CreatesAdmitted    uint64
-	UpdatesAdmitted    uint64
-	RemovesAdmitted    uint64
-	Subjects           int
-	Sessions           int
-	HeldSessions       int
-	Subscriptions      int
-	Pending            int
-	FramesAdmitted     uint64
-	SessionsLost       uint64
-	DurabilityDeferred uint64
-	FlushFailures      uint64
-	MaxSubjects        int
-	MaxSessions        int
+	FlushCalls              uint64
+	EmptyFlushes            uint64
+	FlushDuration           time.Duration
+	LastFlushDuration       time.Duration
+	DirtyCaptured           uint64
+	SnapshotsCaptured       uint64
+	SnapshotsDeferred       uint64
+	CaptureDuration         time.Duration
+	EncodeDuration          time.Duration
+	AdmissionDuration       time.Duration
+	CreatesAdmitted         uint64
+	UpdatesAdmitted         uint64
+	RemovesAdmitted         uint64
+	Subjects                int
+	Sessions                int
+	HeldSessions            int
+	Subscriptions           int
+	Pending                 int
+	PendingSnapshots        int
+	WaitingSnapshotSubjects int
+	OldestSnapshotWait      time.Duration
+	FramesAdmitted          uint64
+	SessionsLost            uint64
+	DurabilityDeferred      uint64
+	FlushFailures           uint64
+	MaxSubjects             int
+	MaxSessions             int
 }
 
 func (m *Manager) Stats() ManagerStats {
@@ -564,16 +585,36 @@ func (m *Manager) Stats() ManagerStats {
 		}
 	}
 	m.mu.RUnlock()
-	subscriptions := 0
+	subscriptions, snapshots := 0, 0
 	for _, subj := range subjects {
 		subj.mu.Lock()
 		subscriptions += len(subj.subscribers)
+		for _, sub := range subj.subscribers {
+			if sub.kind == kindSnapshot {
+				snapshots++
+			}
+		}
 		subj.mu.Unlock()
 	}
 	m.pendingMu.Lock()
 	pending := len(m.pending)
+	var oldest time.Time
+	for id, wait := range m.waitingSnapshots {
+		if _, immediate := m.pending[id]; !immediate {
+			pending++
+		}
+		if oldest.IsZero() || wait.since.Before(oldest) {
+			oldest = wait.since
+		}
+	}
+	waiting := len(m.waitingSnapshots)
 	m.pendingMu.Unlock()
+	var age time.Duration
+	if !oldest.IsZero() {
+		age = time.Since(oldest)
+	}
 	return ManagerStats{
+		PendingSnapshots: snapshots, WaitingSnapshotSubjects: waiting, OldestSnapshotWait: age,
 		FlushCalls: m.flushCalls.Load(), EmptyFlushes: m.emptyFlushes.Load(),
 		FlushDuration: time.Duration(m.flushNanos.Load()), LastFlushDuration: time.Duration(m.lastFlushNanos.Load()),
 		DirtyCaptured: m.dirtyCaptured.Load(), SnapshotsCaptured: m.snapshotsCaptured.Load(),

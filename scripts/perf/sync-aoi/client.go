@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	packetFrame   uint32 = 1
-	packetBarrier uint32 = 2
-	packetFinish  uint32 = 3
+	packetFrame    uint32 = 1
+	packetBarrier  uint32 = 2
+	packetFinish   uint32 = 3
+	packetRecovery uint32 = 4
 )
 
 func readFull(r io.Reader, p []byte) (int, error) { return io.ReadFull(r, p) }
@@ -46,31 +47,43 @@ type objectState struct {
 	Version uint64
 }
 type clientResult struct {
+	recoveryVerifiedMS                       *float64
+	baselineReceipts                         []baselineReceipt
+	baselineOmitted                          int64
+	outliers                                 []latencyOutlier
+	outliersOmitted                          int64
+	live, full                               []float64
 	frames, bytes, updates, creates, removes int64
 	planned, changed, committed, dispatch    []float64
 	peak, final                              int
 	err                                      error
 }
 type clientReport struct {
-	Frames       int64              `json:"frames"`
-	Bytes        int64              `json:"sync_bytes"`
-	Samples      int64              `json:"mutation_samples"`
-	Planned      map[string]float64 `json:"planned_event_to_client_ms"`
-	Changed      map[string]float64 `json:"state_change_to_client_ms"`
-	Committed    map[string]float64 `json:"commit_to_client_ms"`
-	Dispatch     map[string]float64 `json:"transport_admission_to_client_ms"`
-	PlannedOver  int64              `json:"planned_event_over_50ms"`
-	ChangedOver  int64              `json:"state_change_over_50ms"`
-	Creates      int64              `json:"creates"`
-	Removes      int64              `json:"removes"`
-	Updates      int64              `json:"decoded_updates"`
-	VisibleFinal map[string]float64 `json:"visible_final"`
-	VisiblePeak  map[string]float64 `json:"visible_peak"`
-	AllocBytes   uint64             `json:"client_alloc_bytes"`
-	GCCycles     uint32             `json:"client_gc_cycles"`
-	GCPauseMS    float64            `json:"client_gc_pause_ms"`
-	GOMAXPROCS   int                `json:"client_gomaxprocs"`
-	Errors       []string           `json:"errors,omitempty"`
+	RecoveryVerified map[string]float64 `json:"recovery_client_verified_ms,omitempty"`
+	RecoverySessions int                `json:"recovery_client_verified_sessions"`
+	Outliers         []latencyOutlier   `json:"outliers,omitempty"`
+	OutliersOmitted  int64              `json:"outliers_omitted"`
+	Live             map[string]float64 `json:"delta_mutation_to_client_ms"`
+	Full             map[string]float64 `json:"full_mutation_to_client_ms"`
+	Frames           int64              `json:"frames"`
+	Bytes            int64              `json:"sync_bytes"`
+	Samples          int64              `json:"mutation_samples"`
+	Planned          map[string]float64 `json:"planned_event_to_client_ms"`
+	Changed          map[string]float64 `json:"state_change_to_client_ms"`
+	Committed        map[string]float64 `json:"commit_to_client_ms"`
+	Dispatch         map[string]float64 `json:"transport_admission_to_client_ms"`
+	PlannedOver      int64              `json:"planned_event_over_50ms"`
+	ChangedOver      int64              `json:"state_change_over_50ms"`
+	Creates          int64              `json:"creates"`
+	Removes          int64              `json:"removes"`
+	Updates          int64              `json:"decoded_updates"`
+	VisibleFinal     map[string]float64 `json:"visible_final"`
+	VisiblePeak      map[string]float64 `json:"visible_peak"`
+	AllocBytes       uint64             `json:"client_alloc_bytes"`
+	GCCycles         uint32             `json:"client_gc_cycles"`
+	GCPauseMS        float64            `json:"client_gc_pause_ms"`
+	GOMAXPROCS       int                `json:"client_gomaxprocs"`
+	Errors           []string           `json:"errors,omitempty"`
 }
 
 func runClient(c config) error {
@@ -97,7 +110,7 @@ func runClient(c config) error {
 				if ready.Add(1) == int64(c.Players) {
 					runtime.ReadMemStats(&before)
 				}
-			})
+			}, id)
 			results <- result
 		}()
 	}
@@ -106,10 +119,33 @@ func runClient(c config) error {
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 	report := clientReport{GOMAXPROCS: runtime.GOMAXPROCS(0), AllocBytes: after.TotalAlloc - before.TotalAlloc, GCCycles: after.NumGC - before.NumGC, GCPauseMS: float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6}
-	var planned, changed, committed, dispatch, visible, peak []float64
+	var planned, changed, committed, dispatch, visible, peak, live, full []float64
+	var baselines baselineReceipts
+	var recovered []float64
 	for r := range results {
+		if r.recoveryVerifiedMS != nil {
+			recovered = append(recovered, *r.recoveryVerifiedMS)
+		}
+		baselines.Omitted += r.baselineOmitted
+		for _, receipt := range r.baselineReceipts {
+			if len(baselines.Receipts) < 1<<20 {
+				baselines.Receipts = append(baselines.Receipts, receipt)
+			} else {
+				baselines.Omitted++
+			}
+		}
 		if r.err != nil {
 			report.Errors = append(report.Errors, r.err.Error())
+		}
+		live = append(live, r.live...)
+		full = append(full, r.full...)
+		report.OutliersOmitted += r.outliersOmitted
+		for _, event := range r.outliers {
+			if len(report.Outliers) < 256 {
+				report.Outliers = append(report.Outliers, event)
+			} else {
+				report.OutliersOmitted++
+			}
 		}
 		report.Frames += r.frames
 		report.Bytes += r.bytes
@@ -123,6 +159,8 @@ func runClient(c config) error {
 		visible = append(visible, float64(r.final))
 		peak = append(peak, float64(r.peak))
 	}
+	report.Live, report.Full = quantiles(live), quantiles(full)
+	report.RecoveryVerified, report.RecoverySessions = quantiles(recovered), len(recovered)
 	report.Samples = int64(len(planned))
 	for _, v := range planned {
 		if v > 50 {
@@ -137,6 +175,11 @@ func runClient(c config) error {
 	report.Planned, report.Changed, report.Dispatch = quantiles(planned), quantiles(changed), quantiles(dispatch)
 	report.Committed = quantiles(committed)
 	report.VisibleFinal, report.VisiblePeak = quantiles(visible), quantiles(peak)
+	if c.TraceCapacity > 0 {
+		if err := writeJSON(filepath.Join(c.Output, "baseline-receipts.json"), baselines); err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(filepath.Join(c.Output, "client.json"), report); err != nil {
 		return err
 	}
@@ -148,7 +191,7 @@ func runClient(c config) error {
 
 // 每条连接独立解码、维护 ObjectRef 和版本，避免同进程全局校验锁影响服务端。
 // 最后与 Interest 的真实可见集合逐项比较，不能只用“平均 50 个”掩盖漏发。
-func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
+func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r clientResult) {
 	refs := make(map[frame.ObjectRef]objectState)
 	measured := make(map[int64]int64)
 	var epoch, clock uint32
@@ -180,7 +223,7 @@ func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
 				return
 			}
 			continue
-		case packetFinish:
+		case packetFinish, packetRecovery:
 			var expected []int64
 			if err := json.Unmarshal(raw, &expected); err != nil {
 				r.err = err
@@ -194,6 +237,12 @@ func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
 			slices.Sort(expected)
 			if !slices.Equal(actual, expected) {
 				r.err = fmt.Errorf("final AOI mismatch: actual %v expected %v", actual, expected)
+				return
+			}
+			if kind == packetRecovery {
+				elapsed := float64(time.Now().UnixNano()-planned) / 1e6
+				r.recoveryVerifiedMS = &elapsed
+				continue
 			}
 			r.final = len(refs)
 			return
@@ -226,6 +275,9 @@ func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
 					return
 				}
 				delete(refs, object.Ref)
+				if c.TraceCapacity > 0 && tick > 0 {
+					r.recordBaseline(sessionID, current.ID, decoded.Epoch, frame.ObjectRemove)
+				}
 				if tick > 0 {
 					r.removes++
 				}
@@ -285,6 +337,9 @@ func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
 				}
 			}
 			refs[object.Ref] = objectState{ID: value.ID, Version: update.Version}
+			if c.TraceCapacity > 0 && tick > 0 && object.Operation == frame.ObjectCreate {
+				r.recordBaseline(sessionID, value.ID, decoded.Epoch, frame.ObjectCreate)
+			}
 			if tick > 0 {
 				r.updates++
 				// Old snapshots are not new state changes. Only this tick's changed
@@ -292,6 +347,23 @@ func consume(conn net.Conn, c config, onBarrier func()) (r clientResult) {
 				if value.Step > 0 && value.Step > measured[value.ID] && (value.Step == int64(tick) || object.Operation == frame.ObjectUpdate) {
 					measured[value.ID] = value.Step
 					now := time.Now().UnixNano()
+					latency := float64(now-value.Changed) / 1e6
+					if update.Full {
+						r.full = append(r.full, latency)
+					} else {
+						r.live = append(r.live, latency)
+					}
+					if now-value.Planned > int64(50*time.Millisecond) || now-value.Changed > int64(50*time.Millisecond) {
+						if len(r.outliers) < 16 {
+							var sid int64
+							if len(sessionID) > 0 {
+								sid = sessionID[0]
+							}
+							r.outliers = append(r.outliers, latencyOutlier{Session: sid, SubjectID: value.ID, Epoch: decoded.Epoch, Tick: decoded.Tick, Version: update.Version, BaseVersion: update.BaseVersion, Step: value.Step, EnvelopeStep: int64(tick), Full: update.Full, Reason: uint8(update.Reason), Operation: uint8(object.Operation), Planned: value.Planned, Changed: value.Changed, Committed: value.Committed, Admitted: planned, Received: now})
+						} else {
+							r.outliersOmitted++
+						}
+					}
 					r.planned = append(r.planned, float64(now-value.Planned)/1e6)
 					r.changed = append(r.changed, float64(now-value.Changed)/1e6)
 					if value.Committed > 0 {

@@ -17,7 +17,7 @@ func (m *Manager) Drain(ctx context.Context) error {
 			return err
 		}
 		m.pendingMu.Lock()
-		pending := len(m.pending)
+		pending := len(m.pending) + len(m.waitingSnapshots)
 		m.pendingMu.Unlock()
 		if pending == 0 && !m.policiesPending() {
 			return nil

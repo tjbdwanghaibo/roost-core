@@ -52,9 +52,14 @@ func (l *asyncLoad) SendReliable(ctx context.Context, id nettransport.SessionID,
 		return err
 	}
 	// one worker per connection preserves admitted order.
+	var sendStarted time.Time
+	if l.base.trace != nil {
+		sendStarted = time.Now()
+	}
 	if _, err := (&net.Buffers{packet}).WriteTo(conn); err != nil {
 		return err
 	}
+	l.base.traceSent(entitysync.SessionID(id), packet[24:], sendStarted)
 	if int64(binary.LittleEndian.Uint64(packet[8:16])) > 0 {
 		l.counts.Lock()
 		l.base.frames++
