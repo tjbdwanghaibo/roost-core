@@ -37,11 +37,14 @@ type versionedLock struct {
 	fence    uint64
 	grant    WriteGrant
 
-	// async touch
-	touchMu     sync.Mutex
-	touchActive bool
-	touchCancel context.CancelFunc
-	touchWg     sync.WaitGroup
+	// 异步续期按锁代际绑定（RR-20260926-43）。touchGeneration 是当前登记的续期 goroutine
+	// 所服务的 token，空表示没有登记。旧代际 goroutine 只续期、只判失效自己的 token，退出时
+	// 也只清除仍属于自己的登记；新代际 TryLock 时取消旧 goroutine 并为新 token 启动续期，
+	// 不依赖旧 goroutine 先退出。touchWg 覆盖全部尚未退出的续期 goroutine。
+	touchMu         sync.Mutex
+	touchGeneration string
+	touchCancel     context.CancelFunc
+	touchWg         sync.WaitGroup
 }
 
 var _ fredis.IVersionedLock = (*versionedLock)(nil)
@@ -149,7 +152,7 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	l.fence = uint64(vals[2])
 
 	if l.opts.AutoAsyncTouch {
-		l.startAsyncTouchLocked()
+		l.startAsyncTouchLocked(token)
 	}
 
 	return nil
@@ -329,7 +332,22 @@ func (l *versionedLock) Touch(ctx context.Context, duration time.Duration) error
 	}
 	token := l.token
 	l.mu.Unlock()
+	return l.touchLease(ctx, token, duration)
+}
 
+// holdsGeneration 报告 token 所代表的代际是否仍是本地持有的当前代际。
+func (l *versionedLock) holdsGeneration(token string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.acquired && l.token == token
+}
+
+// touchLease 只为 token 这一代际续期：代际已被替换或已失效时直接返回过期，
+// 迟到的 -1 回复也只能把同一代际标记为失效。
+func (l *versionedLock) touchLease(ctx context.Context, token string, duration time.Duration) error {
+	if !l.holdsGeneration(token) {
+		return ErrVersionedLockExpired
+	}
 	addMs := duration.Milliseconds()
 	maxTTLMs := (2 * l.ttl).Milliseconds()
 	result, err := l.redis.Eval(ctx, versionedTouchLua, []string{l.key}, token, addMs, maxTTLMs)
@@ -409,37 +427,47 @@ func (l *versionedLock) Close() error {
 
 // --- Async Touch ---
 
-func (l *versionedLock) startAsyncTouchLocked() {
+// startAsyncTouchLocked 为刚取得的 token 代际启动续期；调用方持有 l.mu。
+// 上一代际的 goroutine 可能已判定失效但尚未退出：这里只取消它，不在 l.mu 下等待
+// （它的 touchLease 需要 l.mu）。它不会再续期或清除新代际的登记，并在一个续期间隔内退出，
+// 因此每个锁对象同时至多有一个服务当前代际的 goroutine，外加正在退出的旧 goroutine。
+func (l *versionedLock) startAsyncTouchLocked(token string) {
 	l.touchMu.Lock()
 	defer l.touchMu.Unlock()
-	if l.touchActive {
+	if l.touchGeneration == token {
 		return
 	}
+	if l.touchCancel != nil {
+		l.touchCancel()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	l.touchGeneration = token
 	l.touchCancel = cancel
-	l.touchActive = true
 	l.touchWg.Add(1)
-	go l.runAsyncTouch(ctx, l.opts.AsyncTouchExtend, l.opts.AsyncTouchInterval)
+	go l.runAsyncTouch(ctx, cancel, token, l.opts.AsyncTouchExtend, l.opts.AsyncTouchInterval)
 }
 
+// stopAsyncTouch 取消当前代际的续期并等待全部续期 goroutine（含正在退出的旧代际）结束。
 func (l *versionedLock) stopAsyncTouch() {
 	l.touchMu.Lock()
 	cancel := l.touchCancel
-	active := l.touchActive
 	l.touchMu.Unlock()
-	if !active || cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
 	l.touchWg.Wait()
 }
 
-func (l *versionedLock) runAsyncTouch(ctx context.Context, extend, interval time.Duration) {
+func (l *versionedLock) runAsyncTouch(ctx context.Context, cancel context.CancelFunc, token string, extend, interval time.Duration) {
 	defer l.touchWg.Done()
 	defer func() {
+		cancel()
 		l.touchMu.Lock()
-		l.touchActive = false
-		l.touchCancel = nil
+		// 只清除仍属于本代际的登记；新代际已登记时保持不动。
+		if l.touchGeneration == token {
+			l.touchGeneration = ""
+			l.touchCancel = nil
+		}
 		l.touchMu.Unlock()
 	}()
 
@@ -451,11 +479,11 @@ func (l *versionedLock) runAsyncTouch(ctx context.Context, extend, interval time
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			evalCtx, cancel := context.WithTimeout(ctx, interval)
-			err := l.Touch(evalCtx, extend)
-			cancel()
+			evalCtx, evalCancel := context.WithTimeout(ctx, interval)
+			err := l.touchLease(evalCtx, token, extend)
+			evalCancel()
 			if err != nil {
-				if errors.Is(err, ErrVersionedLockExpired) || !l.IsAcquired() {
+				if errors.Is(err, ErrVersionedLockExpired) || !l.holdsGeneration(token) {
 					return
 				}
 			}
