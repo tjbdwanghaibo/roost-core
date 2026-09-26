@@ -261,7 +261,11 @@ func (m *Manager) sessionHoldsSubject(id SessionID, subjectID int64) bool {
 // SubscriptionSource 表示一个独立的订阅来源。重复订阅替换本来源的 profile，
 // 不增加计数；释放只影响本来源。来源令牌必须复用，不能每次调用都新建。
 // 它只能合并业务已授权的视图，不承担权限校验。
-type SubscriptionSource struct{ manager *Manager }
+type SubscriptionSource struct {
+	manager *Manager
+	// resubmit 非 nil 时，本来源被框架撤销的订阅在同 ID 重新登记后交还给它（NewSubscriptionSourceWithResubmit）。
+	resubmit func([]RetractedSubscription)
+}
 
 // NewSubscriptionSource 为一个独立所有者创建可复用的来源令牌。
 func (m *Manager) NewSubscriptionSource() *SubscriptionSource {
@@ -366,6 +370,8 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	}
 	subj := m.subject(subjectID)
 	if subj == nil {
+		// 政策释放了缺席实体的 pair：框架撤销时记下的这条不再交还（RR-20260926-70）。
+		m.dropRetracted(source, session, subjectID)
 		return ErrSubjectNotRegistered
 	}
 	subj.mu.Lock()
@@ -379,9 +385,11 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	}()
 	existing := subj.subscribers[session]
 	if existing == nil {
+		m.dropRetracted(source, session, subjectID)
 		return ErrSubscriptionNotFound
 	}
 	if _, held := existing.sources[source]; !held {
+		m.dropRetracted(source, session, subjectID)
 		return ErrSubscriptionNotFound
 	}
 	delete(existing.sources, source)

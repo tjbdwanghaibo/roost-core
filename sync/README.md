@@ -52,7 +52,11 @@ done 在 Manager 的调用路径上执行、不持锁，不得阻塞或调用 Fl
 `Manager` 实现 `entity.UnloadedSubjectSync`：`SubjectAwaitsReload` 报告“状态已关闭且仍有非 leaving 订阅者”，`ManagerAccess.ConfigureUnloadResync`（kit
 `NewModWithEntitySync` 自动接线）据此在快池之外从权威重载实体并 `Rebind`，订阅者收到同一对象的权威全量；权威里没有它、有界重试用尽或重载队列已满时
 `RetractUnloadedSubject` 退回 remove（只在 subject 仍停在关闭状态时，语义同 `Unregister`）；退役完成前实体又被加载时，`Rebind` / `Register` 按上面
-`RegisterAfterRetirement` 的同一机制排到退役完成后登记、返回 nil；无订阅者不重载（RR-20260926-59）。
+`RegisterAfterRetirement` 的同一机制排到退役完成后登记、返回 nil；无订阅者不重载（RR-20260926-59）。这个排队位与业务的
+`RegisterAfterRetirement` 共用：卸载退役中业务登记同样返回 `queued=true`、done 恰好报告一次，后到的替换先到的（RR-20260926-72）。
+退回 remove 撤销的订阅若来自政策来源（`NewSubscriptionSourceWithResubmit`；`policy.Interest` / `Group` / `Direct` 都用它），同 ID 重新登记后
+Manager 在下一次 Flush 的政策阶段把它们交还政策（`RetractedSubscription`），由政策按自己的判定重新提交：仍持有的 pair 恢复可见（订阅者先收到
+remove、再收到新对象的 create），缺席期间已释放的不恢复，各来源独立；`Manager.Subscribe` 与普通 `NewSubscriptionSource` 的订阅不恢复（RR-20260926-70）。
 
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
 

@@ -179,6 +179,12 @@ type Manager struct {
 	snapshotNextClass snapshotClass // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 
+	// resubmitMu 保护框架撤销的订阅记录（policy_queue.go，RR-20260926-70）；叶子锁。
+	resubmitMu      sync.Mutex
+	retracted       map[int64][]retractedSubscription // 撤销时记下，等同 ID 重新登记
+	resubmits       []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
+	resubmitEntries atomic.Int64                      // 两者的条数；退订热路径据此跳过加锁
+
 	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
 	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
 	forgetUnlinked func(subjectID int64)
@@ -271,6 +277,8 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 	m.subjects[id] = newSubject(state)
 	m.mu.Unlock()
 	m.installDirtyNotifier(id, state)
+	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交（RR-20260926-70）。
+	m.releaseRetracted(id)
 	return false, nil
 }
 
@@ -433,7 +441,8 @@ func (m *Manager) Unregister(subjectID int64) error {
 		return ErrSubjectNotRegistered
 	}
 	subj.mu.Lock()
-	subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
+	subj.unloadRetracted = false      // 业务的注销意图优先：之后重新加载不再自动排队登记
+	m.dropRetractedSubject(subjectID) // 同理，框架撤销的政策订阅也不再交还（在 forget 可能发生之前）
 	remaining, cancelled := m.retireLocked(subj)
 	subj.mu.Unlock()
 	cancelled.finish(ErrRegistrationCancelled)
@@ -495,7 +504,8 @@ func (m *Manager) SubjectAwaitsReload(subjectID int64) bool {
 // 已满）时退回 remove。只在 subject 仍停在已关闭的状态上时注销（与 Unregister 同一语义：持有对象的会话收到
 // ObjectRemove，全部发出后 subject 被忘掉——remove-before-create）；已重新绑定到活状态或已退役时不动，返回 false。
 // 检查与退役在同一把 subj.mu 下完成。退役完成前实体又被加载出来时，Rebind / Register 排队到退役完成后登记
-// （见 Rebind）；退役完成后同 ID 的登记是新 subject，订阅由政策层重新建立。
+// （见 Rebind）；退役完成后同 ID 的登记是新 subject。被撤销的订阅若来自政策来源（NewSubscriptionSourceWithResubmit），
+// 同 ID 重新登记后交还政策按自己的判定重新提交（RR-20260926-70，见 policy_queue.go）；其他来源的订阅不恢复。
 func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 	subj := m.subject(subjectID)
 	if subj == nil {
@@ -506,6 +516,8 @@ func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 		subj.mu.Unlock()
 		return false
 	}
+	// 退役会清空订阅来源：先记下政策来源的订阅，同 ID 重新登记时交还政策重新提交（RR-20260926-70）。
+	m.recordRetractedLocked(subj)
 	remaining, cancelled := m.retireLocked(subj)
 	subj.unloadRetracted = true
 	subj.mu.Unlock()
@@ -760,6 +772,7 @@ func (m *Manager) Close(ctx context.Context) error {
 		state.DiscardFrozenSync()
 		queued.finish(ErrManagerClosed)
 	}
+	m.clearRetracted()
 	m.pendingMu.Lock()
 	clear(m.pending)
 	clear(m.waitingSnapshots)

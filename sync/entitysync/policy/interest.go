@@ -127,9 +127,10 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		profile = DefaultBandProfile
 	}
 	in := &Interest{
-		subscriptions: config.Manager.NewSubscriptionSource(), aoi: manager, session: session, profile: profile,
+		aoi: manager, session: session, profile: profile,
 		relations: make(map[string]*RelationSource), held: make(map[pair]*hold),
 	}
+	in.subscriptions = config.Manager.NewSubscriptionSourceWithResubmit(in.resubmit)
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
 	in.viewSets = make(map[string]*entity.SyncViewSet, len(config.ViewSets))
@@ -309,6 +310,9 @@ func (in *Interest) Hide(id int64) error {
 //
 // The re-said pairs go through the retry list, so a manager that still
 // refuses one (the session is not open yet) is asked again on every Apply.
+//
+// 实体被框架退回 remove（RR-59 卸载后重载不了）之后重新登记的情形不需要调用它：Manager 把被撤销的订阅
+// 交还 Interest，由 resubmit 自动重新提交（RR-20260926-70）。
 func (in *Interest) Resubscribe(observer int64) int {
 	if in == nil {
 		return 0
@@ -328,6 +332,31 @@ func (in *Interest) Resubscribe(observer int64) int {
 		queued++
 	}
 	return queued
+}
+
+// resubmit 是 Interest 的重新提交入口（RR-20260926-70）：RR-59 卸载后重载不了，框架退回 remove 撤销了本 Interest
+// 的订阅，同 ID 实体又重新登记后，Manager 在 Flush 的政策阶段把这些订阅交还这里。与 Resubscribe 同一种修补：
+// Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（来源视图选择、ViewSets 校验、
+// Manager 的优先级与字段白名单）；缺席期间已释放的 pair（观察者走远、关系解除、Hide）不在 held 里，不恢复。
+// 被拒绝的 pair 进入重试表，下一次 Apply 以 Retry 报告并继续重说。
+func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed || len(in.held) == 0 {
+		return
+	}
+	wanted := make(map[int64][]entitysync.SessionID, len(retracted))
+	for _, subscription := range retracted {
+		wanted[subscription.Subject] = append(wanted[subscription.Subject], subscription.Session)
+	}
+	var refusals []Refusal // 已记入重试表，由下一次 Apply 报告
+	for key, current := range in.held {
+		sessions, retractedSubject := wanted[key.subject]
+		if !retractedSubject || !current.subscribed || !slices.Contains(sessions, in.session(key.observer)) {
+			continue
+		}
+		in.subscribe(key, current, true, &refusals)
+	}
 }
 
 // Visible lists what an observer currently sees through distance.

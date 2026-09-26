@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	flog "github.com/tjbdwanghaibo/roost-core/log"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 )
 
@@ -54,7 +55,35 @@ func NewGroup(config GroupConfig) (*Group, error) {
 	if session == nil {
 		session = func(member int64) entitysync.SessionID { return entitysync.SessionID(member) }
 	}
-	return &Group{subscriptions: config.Manager.NewSubscriptionSource(), config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}, nil
+	g := &Group{config: config, session: session, subjects: make(map[int64]struct{}), members: make(map[int64]struct{})}
+	g.subscriptions = config.Manager.NewSubscriptionSourceWithResubmit(g.resubmit)
+	return g, nil
+}
+
+// resubmit 是 Group 的重新提交入口（RR-20260926-70）：框架撤销（RR-59 退回 remove）的本组订阅在同 ID 实体重新
+// 登记后交还这里。实体仍在组里、会话仍属于某个成员时以本组视图重新订阅；缺席期间 RemoveSubject / Leave 过的不恢复。
+// 没有调用方可以报告拒绝（会话已关闭、容量不足、实体又被注销），记一条 Warn 后放弃，与 AddSubject 失败需调用方重做同一口径。
+func (g *Group) resubmit(retracted []entitysync.RetractedSubscription) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return
+	}
+	sessions := make(map[entitysync.SessionID]struct{}, len(g.members))
+	for member := range g.members {
+		sessions[g.session(member)] = struct{}{}
+	}
+	for _, subscription := range retracted {
+		if _, inGroup := g.subjects[subscription.Subject]; !inGroup {
+			continue
+		}
+		if _, member := sessions[subscription.Session]; !member {
+			continue
+		}
+		if err := g.subscriptions.Subscribe(subscription.Session, subscription.Subject, g.config.Profile); err != nil {
+			flog.Warn("policy: group could not resubmit a subscription the framework retracted", "session", subscription.Session, "subject", subscription.Subject, "err", err)
+		}
+	}
 }
 
 // AddSubject registers a subject with the manager and subscribes every
