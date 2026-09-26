@@ -2,6 +2,7 @@ package nest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -102,4 +103,67 @@ func (g loadedGetter) Get(ctx context.Context, id int64, category entity.EntityC
 }
 func (g loadedGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
 	return g.Getter.GetMany(entity.WithLoadedEntitiesOnly(ctx), ids, categories)
+}
+
+// errDeclaredTargetCold 标记“声明目标在 handler 取得 Guard 之前被发现未加载或已被驱逐”。
+// 它只在快池首跑、业务执行之前产生；dispatchNest 据此让派发队列把同一条已准入请求原位
+// 转到慢池准备，保留准入资格和同 ID 顺序位置（RR-20260926-25）。慢准备后的快续行不再
+// 产生它，冷目标错误照常返回。
+var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; moving to slow preparation")
+
+// admissionProbeContext 是不可变的共享 ctx，准入判定每条消息都用，避免逐次分配。
+var admissionProbeContext = entity.WithLoadedEntitiesOnly(context.Background())
+
+// declaredTargetsNeedSlowPreparation 在统一准入时只读内存判断声明目标里是否有冷实体：
+// 按 Getter 的 LoadedEntitiesOnly 契约，未加载且可由 loader 加载的目标返回
+// ErrColdLoadInLogic，不做 I/O、不等待加载，所以在调用方 goroutine（包括快 worker）上执行是安全的。
+// 广播是尽力扇出，冷目标逐个报告（TestFastBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
+// 组迁移等内部消息没有业务目标。ID 格式错误留给派发阶段按原语义报告。
+func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
+	if mgr.getter == nil {
+		return false
+	}
+	switch msg.Type {
+	case MsgTypeSingle, MsgTypeMulti, MsgTypeMultiGroup:
+	default:
+		return false
+	}
+	cold := func(id int64) bool {
+		fullID, err := entity.NormalizeFullID(id, entity.EntityKindNone)
+		if err != nil {
+			return false
+		}
+		meta := entity.ResolveEntityID(fullID)
+		_, err = mgr.getter.Get(admissionProbeContext, meta.FullID, meta.Category)
+		return errors.Is(err, entity.ErrColdLoadInLogic)
+	}
+	if msg.Tid != 0 && cold(msg.Tid) {
+		return true
+	}
+	for _, id := range msg.Tids {
+		if cold(id) {
+			return true
+		}
+	}
+	for _, group := range msg.GroupTIds {
+		for _, id := range group {
+			if cold(id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// beforeSlowPreparation 报告当前派发是否是快池首跑（尚未经过慢准备，msg.prepared == nil）。
+// 只有这时发现的声明目标冷缺失/驱逐才改写为 errDeclaredTargetCold；慢准备后的续行已持有
+// 准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
+func beforeSlowPreparation() bool {
+	msg := currentNestDispatchMsg()
+	return msg != nil && msg.prepared == nil
+}
+
+// declaredTargetCold 保留原错误，errors.Is 仍可判断 ErrColdLoadInLogic / ErrEntityNotFound / ErrLockTimeout。
+func declaredTargetCold(cause error) error {
+	return fmt.Errorf("%w: %w", errDeclaredTargetCold, cause)
 }

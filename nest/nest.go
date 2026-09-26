@@ -366,6 +366,7 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	ret.dispatcher.slowConfig = params.SlowPool
 	ret.dispatcher.remoteWorkers = params.RemoteWorkers
 	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
+	ret.dispatcher.coldTargets = ret.declaredTargetsNeedSlowPreparation
 	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
@@ -483,6 +484,8 @@ var (
 		}
 	}
 	// SendOptionSlow 将声明目标的加载及前后置 I/O 放入慢池；handler 始终在快池。
+	// 声明目标中有未加载实体时 Nest 在统一准入处自动走慢阶段（RR-20260926-25），
+	// 显式 Slow 仍有效，用于强制慢准备（例如自定义 Getter 无法按 LoadedEntitiesOnly 判别冷热）。
 	SendOptionSlow = func() SendOpt {
 		return func(opt *sendOptParam) { opt.Cost = true }
 	}

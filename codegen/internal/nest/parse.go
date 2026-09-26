@@ -559,7 +559,9 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 		fi.InvokeName = "receiver." + fnDecl.Name.Name
 	}
 
-	// Handle _cost suffix
+	// Handle _cost suffix：生成的 sender 带 nest.SendOptionIsCost()（等同 SendOptionSlow），
+	// 强制慢阶段准备。冷目标不需要它——Nest 在统一准入时发现声明目标未加载会自动走
+	// 慢阶段预加载（RR-20260926-25）；后缀只用于需要强制慢准备的特殊 handler。
 	if strings.HasSuffix(fi.Name, "_cost") {
 		fi.IsCost = true
 		fi.Name = strings.TrimSuffix(fi.Name, "_cost")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/worker"
 )
 
@@ -216,6 +217,7 @@ func (q *dispatchQueue) work(lane int) {
 		if j == nil {
 			return
 		}
+		rerouted := false
 		goroutine.SafeFunc(func() {
 			var phase fctx.Option
 			if lane == 0 {
@@ -223,12 +225,23 @@ func (q *dispatchQueue) work(lane int) {
 			}
 			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
 			defer release()
-			defer j.msg.OnRelease()
+			// 转慢的作业仍归队列所有，消息引用留给慢池那一次执行释放。
+			defer func() {
+				if !rerouted {
+					j.msg.OnRelease()
+				}
+			}()
 			if handler := q.handlers[lane]; handler != nil {
 				handler(j.msg)
 			}
+			rerouted = lane == 0 && !j.continuation && j.msg.slowReroute
 		})
 		q.mu.Lock()
+		if rerouted {
+			q.rerouteToSlow(j)
+			q.mu.Unlock()
+			continue
+		}
 		if !j.continuation {
 			q.running[lane]--
 		} else {
@@ -258,6 +271,24 @@ func (q *dispatchQueue) work(lane int) {
 		q.mu.Unlock()
 	}
 }
+
+// rerouteToSlow 把快池首跑时发现声明目标变冷的外部作业原位转到慢池。作业保持在
+// tails / successors 里的位置和 pending 计数：同 ID 后继继续等它完成，停机排空也继续等它，
+// 所以既不重新排到自身之后，也不占用新的准入预算（它早已准入；慢池等待数可暂时超过
+// QueueCap，上界仍是已准入的快池作业数）。handler 从未开始，迁移的只是“慢准备”这一步。
+// 调用方持有 q.mu。
+func (q *dispatchQueue) rerouteToSlow(j *dispatchJob) {
+	q.running[0]--
+	j.msg.slowReroute = false
+	j.slow = true
+	j.waitedForPredecessor = false
+	q.queued[1]++
+	q.waiting[1].push(j)
+	q.enqueueReady(1, j)
+	q.observation[1].PeakWaiting = max(q.observation[1].PeakWaiting, q.waitingCount(1))
+	metrics.IncCounter("nest.dispatch.slow_reroute.total", metrics.Labels{"dispatcher": q.name}, 1)
+}
+
 func (q *dispatchQueue) stop(ctx context.Context) error {
 	if q == nil {
 		return nil

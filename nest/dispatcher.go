@@ -39,6 +39,9 @@ type Dispatcher struct {
 	observeSeq    uint64
 	processed     atomic.Uint64
 	slow200ms     atomic.Uint64
+
+	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要慢阶段预加载。
+	coldTargets func(*Msg) bool
 }
 
 type delayedMsg struct {
@@ -250,7 +253,10 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	msg.stageMetrics = m.stageMetrics
 	msg.queuedAt = startNestStage(m.stageMetrics)
 	msg.OnSend()
-	err := m.queue.admit(msg, m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg)))
+	// 慢阶段三个来源：显式 SendOptionSlow、Remote，以及声明目标中有未加载的冷实体
+	// （RR-20260926-25：业务不必知道目标冷热）。同 ID 顺序在这里统一建立，与走哪个池无关。
+	slow := m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg) || (m.coldTargets != nil && m.coldTargets(msg)))
+	err := m.queue.admit(msg, slow)
 	if err != nil {
 		emitNestTraceEventInfo(trace, "enqueue", "error", 0)
 		if msg.RetChan == nil {

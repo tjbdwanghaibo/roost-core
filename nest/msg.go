@@ -211,6 +211,10 @@ type Msg struct {
 	stageMetrics       bool
 	queuedAt           time.Time
 	remoteLogic        *remoteLogicCall
+
+	// slowReroute 由快池首跑的 dispatchNest 设置：声明目标在 handler 取 Guard 之前变冷，
+	// 派发队列应把同一个作业原位转到慢池准备，而不是回复或释放消息（RR-20260926-25）。
+	slowReroute bool
 }
 
 func (m *Msg) Key() int64 {

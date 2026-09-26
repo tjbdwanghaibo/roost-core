@@ -442,6 +442,9 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 	}
 	// The completion is emitted inside the transaction, so nothing is
 	// returned for the consumer to publish: it waits for the receipt.
+	// The sender may be offline and cold (restart, idle hand-back): Nest sees
+	// the declared target is not loaded at admission and prepares it on the
+	// slow pool before the handler runs, so no Slow option is needed here.
 	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step); err != nil {
 		return saga.Completion{}, err
 	}
@@ -451,7 +454,9 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 // refund is debit's compensation: the same AddItem transaction the endpoint
 // runs. It can refuse too — the stack filled up meanwhile — and a refused
 // compensation is what the coordinator marks manual_required for: an
-// operator sees it in gm.saga.list and decides.
+// operator sees it in gm.saga.list and decides. A refund usually lands on an
+// offline, cold sender; Nest loads declared cold targets on its slow pool, so
+// "offline" is not a reason for the compensation to fail.
 func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
 	if err != nil {

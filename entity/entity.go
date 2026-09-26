@@ -48,7 +48,9 @@ type IThreadSafeEntityBase interface {
 // Getter 必须保留 context；LoadedEntitiesOnly 为真（快 worker 或显式约束的 ctx）时
 // 仅允许内存读取，冷目标返回可 errors.Is 判别的 ErrColdLoadInLogic，不能执行 I/O、
 // 不能等待加载，也不能 panic：冷缺失本身不阻塞，业务可以据此降级（RR-20260926-26）。
-// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInFastWorker。
+// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInFastWorker。Nest 统一准入也用
+// 这条只读路径判断声明目标是否需要慢阶段预加载（RR-20260926-25），违反契约的 Getter
+// 会在发送方 goroutine 上执行 I/O。
 type Getter interface {
 	Get(context.Context, int64, EntityCategory) (IThreadSafeEntity, error)
 	GetMany(context.Context, []int64, []EntityCategory) ([]IThreadSafeEntity, error)

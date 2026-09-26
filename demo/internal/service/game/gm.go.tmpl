@@ -183,6 +183,9 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				if err != nil {
 					return admin.Result{}, err
 				}
+				// Grants often target an offline, unloaded player: Nest sees the
+				// cold declared target at admission and loads it on the slow pool
+				// before the handler runs, so no Slow option is needed.
 				count, err := syncsender.NewAddItemSender(nestClient).Sync_AddItem(ctx, entityID, payload.ItemID, payload.Count)
 				if err != nil {
 					return admin.Result{}, err
