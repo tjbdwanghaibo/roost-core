@@ -116,6 +116,9 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 - core 不执行内存 rollback，避免 WAL 实际已提交时产生第二条相反历史；
 - 不运行 outbox release 通知；
 - WAL 拒绝后续 append；
+- fsync 失败是粘滞的（RR-20260926-33）：Linux 同一 fd 的写回错误只报告一次，之后的 fsync 返回 0 不证明失败那批页已落盘。
+  因此 terminal 之后 `Ack` 直接返回 terminal 错误、不写 checkpoint，group-commit ticker 与 `Sync` 不再 fsync，`DurableLSN` 不再前进；
+  排空关闭最后一次 sync 失败时在途 `Ack` 同样返回错误。这些错误以及交给在途 pipelined 票据的错误都满足 `errors.Is(err, nest.ErrCommitIndeterminate)`；
 - `OnFatal` 必须让实例停止接流并退出，由新进程 replay 判定最终历史。
 
 这不是可在线重试的普通错误。生产环境必须将 `OnFatal` 接到进程 fencing/shutdown。

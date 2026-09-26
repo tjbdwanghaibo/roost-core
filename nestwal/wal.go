@@ -63,6 +63,12 @@ type Options struct {
 	// point where it owns a collected batch and no lock (U-0190). Nil in
 	// production.
 	beforeProcessBatch func()
+	// syncFile 是包内测试缝（RR-20260926-33）：非 nil 时替代段文件 fsync，
+	// 用来注入 EIO 与 Linux“同一 fd 的错误只报告一次”语义。生产路径为 nil，走 f.Sync()。
+	syncFile func(*os.File) error
+	// afterAckAdmitted 是包内测试缝：Ack 进入 operations 生命周期后立即调用，
+	// 让测试把在途 Ack 停在 Close 之前（RR-20260926-33）。生产路径为 nil。
+	afterAckAdmitted func()
 }
 
 func DefaultOptions(dir string) Options {
@@ -122,8 +128,7 @@ type WAL struct {
 	offset       int64
 	unsynced     bool
 	lockHandle   *os.File
-	terminalMu   sync.RWMutex
-	terminalErr  error
+	terminalErr  atomic.Pointer[terminalState] // 只写一次，热路径免锁读
 	fatalOnce    sync.Once
 	replayMu     sync.Mutex
 	checkpointMu sync.Mutex
@@ -460,11 +465,17 @@ func (w *WAL) resolveDurableLocked() {
 
 // failPendingTickets resolves every pending ticket with the terminal error.
 // The write outcome of enqueued records is unknown once the WAL is fenced, so
-// indeterminate is the only honest verdict.
+// indeterminate is the only honest verdict. The exception is a ticket that
+// registered after the fsync covering it had already resolved the FIFO: its
+// LSN is within DurableLSN, which only a successful fsync before the terminal
+// transition can have published (RR-20260926-33), so it resolves as durable.
 func (w *WAL) failPendingTickets(err error) {
 	w.ticketMu.Lock()
+	durable := w.durableLSN.Load()
 	for _, ticket := range w.tickets {
-		ticket.err = err
+		if ticket.lsn > durable {
+			ticket.err = err
+		}
 		close(ticket.done)
 	}
 	w.tickets = nil
@@ -476,12 +487,20 @@ func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
 		return ErrClosed
 	}
 	defer w.operations.End()
+	if w.opts.afterAckAdmitted != nil {
+		w.opts.afterAckAdmitted()
+	}
 
 	if fence.Segment == 0 || fence.Offset <= 0 {
 		return errors.New("nestwal: invalid acknowledgement fence")
 	}
 	w.checkpointMu.Lock()
 	defer w.checkpointMu.Unlock()
+	// terminal 之后任何 fsync“成功”都不能证明失败那批页已落盘，checkpoint 不得再前进
+	// （RR-20260926-33）。顺序：checkpointMu 内先查 terminal，再刷段，最后存 checkpoint（RR-16）。
+	if terminal := w.terminal(); terminal != nil {
+		return terminal
+	}
 	if !fenceAfter(fence, w.checkpoint.fence) {
 		return nil
 	}
@@ -492,8 +511,8 @@ func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
 		return errors.New("nestwal: acknowledgement is beyond log end")
 	}
 	// checkpoint 持久化前先刷覆盖段，不能让 async 的 ack 超过已落盘内容。
+	// 失败已在 syncActiveLocked 内粘滞为 ErrCommitIndeterminate terminal。
 	if err := w.syncActive(); err != nil {
-		w.setTerminal(err)
 		return err
 	}
 
@@ -611,12 +630,8 @@ func (w *WAL) Sync(ctx context.Context) error {
 	if err := w.awaitWriteBarrier(ctx); err != nil {
 		return err
 	}
-	if err := w.syncActive(); err != nil {
-		err = errors.Join(corenest.ErrCommitIndeterminate, err)
-		w.setTerminal(err)
-		return err
-	}
-	return nil
+	// 失败已在 syncActiveLocked 内粘滞为 ErrCommitIndeterminate terminal。
+	return w.syncActive()
 }
 
 // awaitWriteBarrier queues a barrier and waits for the writer to answer it.
@@ -796,9 +811,8 @@ func (w *WAL) writerLoop() {
 			}
 			w.processBatch(batch)
 		case <-ticker.C:
-			if err := w.syncActive(); err != nil {
-				w.setTerminal(errors.Join(corenest.ErrCommitIndeterminate, err))
-			}
+			// 失败在 syncActiveLocked 内粘滞为 terminal；terminal 后这里不再 fsync。
+			_ = w.syncActive()
 		case <-w.closeCh:
 			w.drainAndClose()
 			return
@@ -957,7 +971,7 @@ func (w *WAL) processRecords(batch []appendRequest) error {
 		w.batchBuffers.Put(bufferPtr)
 	}
 	if err != nil {
-		err = errors.Join(corenest.ErrCommitIndeterminate, err)
+		err = indeterminate(err)
 		w.setTerminal(err)
 		for i := range batch {
 			batch[i].done <- appendResult{err: err}
@@ -997,7 +1011,7 @@ drainLoop:
 					// A failed final sync leaves enqueued outcomes unknown;
 					// fence and fail the remaining tickets so no pipelined
 					// waiter blocks past close.
-					w.setTerminal(errors.Join(corenest.ErrCommitIndeterminate, err))
+					w.setTerminal(indeterminate(err))
 					w.closeErr = errors.Join(w.closeErr, err)
 				}
 				w.closeErr = errors.Join(w.closeErr, w.terminal())
@@ -1084,7 +1098,7 @@ func (w *WAL) rotateLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := file.Sync(); err != nil {
+	if err := w.fsyncSegment(file); err != nil {
 		_ = file.Close()
 		return err
 	}
@@ -1103,20 +1117,49 @@ func (w *WAL) syncActive() error {
 	return w.syncActiveLocked()
 }
 
+// syncActiveLocked 刷当前段并解析被覆盖的票据，调用方持 stateMu。Ack、ticker、Sync、
+// 批量写、轮转和关闭排空都经由这里刷段。
+//
+// fsync 失败是粘滞的（RR-20260926-33）：Linux 同一 fd 的写回错误只报告一次，之后的 fsync
+// 返回 0 并不证明失败那批页已落盘。所以失败时在 stateMu 内立即进入 ErrCommitIndeterminate
+// terminal；terminal 之后不再 fsync、不清 unsynced、不推进 DurableLSN，直接返回 terminal。
 func (w *WAL) syncActiveLocked() error {
-	if w.active == nil || !w.unsynced {
-		// Everything written is already durable; late-registered tickets
-		// covered by the current watermark still need resolution.
+	if terminal := w.terminal(); terminal != nil {
+		// 与 setTerminal 清扫并发登记的票据在这里兜底，不让等待方悬挂。
+		w.failPendingTickets(terminal)
+		return terminal
+	}
+	if !w.unsynced {
+		// Everything written is already durable (also after a clean close,
+		// where active is nil); late-registered tickets covered by the
+		// current watermark still need resolution.
 		w.resolveDurableLocked()
 		return nil
 	}
-	if err := w.active.Sync(); err != nil {
+	if w.active == nil {
+		// 段已关闭仍有未刷写入：只有关闭时最后一次 sync 失败才会如此，而那时 terminal 已在上面
+		// 返回；这里防御性兜底，绝不当作“已全部落盘”。
+		err := indeterminate(errors.New("nestwal: segment closed with unsynced writes"))
+		w.setTerminal(err)
+		return err
+	}
+	if err := w.fsyncSegment(w.active); err != nil {
+		err = indeterminate(err)
+		w.setTerminal(err)
 		return err
 	}
 	w.unsynced = false
 	w.syncs.Add(1)
 	w.resolveDurableLocked()
 	return nil
+}
+
+// fsyncSegment 刷段文件；测试缝 syncFile 仅在包内测试设置。
+func (w *WAL) fsyncSegment(file *os.File) error {
+	if w.opts.syncFile != nil {
+		return w.opts.syncFile(file)
+	}
+	return file.Sync()
 }
 
 func (w *WAL) syncAndCloseActive() error {
@@ -1131,23 +1174,29 @@ func (w *WAL) syncAndCloseActive() error {
 	return err
 }
 
+// indeterminate 把物理写 / fsync 失败归为提交结果不确定；已归类的错误原样返回，避免重复包装。
+func indeterminate(err error) error {
+	if errors.Is(err, corenest.ErrCommitIndeterminate) {
+		return err
+	}
+	return errors.Join(corenest.ErrCommitIndeterminate, err)
+}
+
+// terminalState 包一层，使 atomic.Pointer 能以 CompareAndSwap(nil, …) 表达“首个错误胜出”。
+type terminalState struct{ err error }
+
 func (w *WAL) terminal() error {
-	w.terminalMu.RLock()
-	defer w.terminalMu.RUnlock()
-	return w.terminalErr
+	if state := w.terminalErr.Load(); state != nil {
+		return state.err
+	}
+	return nil
 }
 
 func (w *WAL) setTerminal(err error) {
 	if err == nil {
 		return
 	}
-	first := false
-	w.terminalMu.Lock()
-	if w.terminalErr == nil {
-		w.terminalErr = err
-		first = true
-	}
-	w.terminalMu.Unlock()
+	first := w.terminalErr.CompareAndSwap(nil, &terminalState{err: err})
 	if first {
 		// Enqueued records have unknown write outcomes once the WAL is
 		// fenced; their waiters must observe the terminal verdict instead of
