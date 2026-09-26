@@ -392,7 +392,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		m.clearSnapshotWaitLocked(subj)
 		subj.mu.Unlock()
 		if done {
-			m.forget(id)
+			m.forget(subj)
 		}
 	}
 	for _, id := range retry {

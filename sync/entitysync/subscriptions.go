@@ -212,7 +212,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 			m.removeSubscriptionLocked(subj, id)
 			if subj.retiring && len(subj.subscribers) == 0 {
 				// Its last subscriber left before the remove could go out.
-				defer m.forget(subj.id)
+				defer m.forget(subj)
 			}
 		}
 		subj.mu.Unlock()
@@ -369,7 +369,14 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 		return ErrSubjectNotRegistered
 	}
 	subj.mu.Lock()
-	defer subj.mu.Unlock()
+	// forget 要取 subj.mu，必须在解锁之后执行；直接 defer forget 会按后进先出在持锁时运行。
+	forgetAfter := false
+	defer func() {
+		subj.mu.Unlock()
+		if forgetAfter {
+			m.forget(subj)
+		}
+	}()
 	existing := subj.subscribers[session]
 	if existing == nil {
 		return ErrSubscriptionNotFound
@@ -400,9 +407,7 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	}
 	if !existing.inFlight && !m.sessionHoldsSubject(session, subjectID) {
 		m.removeSubscriptionLocked(subj, session)
-		if subj.retiring && len(subj.subscribers) == 0 {
-			defer m.forget(subjectID)
-		}
+		forgetAfter = subj.retiring && len(subj.subscribers) == 0
 		return nil
 	}
 	m.changeSubscriptionKindLocked(subj, session, existing, kindLeaving)

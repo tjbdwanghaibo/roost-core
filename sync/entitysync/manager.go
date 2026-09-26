@@ -178,6 +178,10 @@ type Manager struct {
 	windowByteBlocked bool          // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
 	snapshotNextClass snapshotClass // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
+
+	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
+	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
+	forgetUnlinked func(subjectID int64)
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
@@ -418,7 +422,7 @@ func (m *Manager) Unregister(subjectID int64) error {
 	remaining, cancelled := m.retireLocked(subj)
 	subj.mu.Unlock()
 	cancelled.finish(ErrRegistrationCancelled)
-	m.finishRetire(subjectID, remaining)
+	m.finishRetire(subj, remaining)
 	return nil
 }
 
@@ -442,12 +446,12 @@ func (m *Manager) retireLocked(subj *subject) (int, *queuedRegistration) {
 	return len(subj.subscribers), cancelled
 }
 
-func (m *Manager) finishRetire(subjectID int64, remaining int) {
+func (m *Manager) finishRetire(subj *subject, remaining int) {
 	if remaining == 0 {
-		m.forget(subjectID)
+		m.forget(subj)
 		return
 	}
-	m.markPending(subjectID)
+	m.markPending(subj.id)
 	m.WakeSync()
 }
 
@@ -491,7 +495,7 @@ func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 	subj.unloadRetracted = true
 	subj.mu.Unlock()
 	cancelled.finish(ErrRegistrationCancelled)
-	m.finishRetire(subjectID, remaining)
+	m.finishRetire(subj, remaining)
 	return true
 }
 
@@ -516,33 +520,41 @@ var _ entity.SyncSubjectRetractor = (*Manager)(nil)
 
 // forget drops a subject whose last remove has gone out, and then registers
 // the state queued behind the retirement, if any (RegisterAfterRetirement).
-func (m *Manager) forget(subjectID int64) {
+//
+// 只忘掉调用方看到的那个 subject：表里同 ID 已是另一个 subject（上一次 forget 之后重新登记的）时什么都不做。
+// 旧 subject 装在状态上的脏通知器与冻结内容在删表之前、同一把 m.mu 内清除（RR-20260926-69）：删表一放开，
+// 同一个状态对象就可能被 Register（RegisterAfterRetirement 的直接登记，或下面排队的登记）装上新 subject 的
+// 通知器，之后再清就会清掉新 subject 的，后续 MarkDirty 不再调度。锁序 m.mu → 状态锁：SetDirtyNotifier(nil)
+// 不回调，DiscardFrozenSync 只归还原子计数，状态锁内不取 Manager 的锁。
+func (m *Manager) forget(subj *subject) {
+	// 退役中的 subject 不再换状态（rebind 对退役中的 subject 只排队或拒绝），这里读到的就是删表时的状态。
+	state := subj.currentState()
 	m.mu.Lock()
-	subj, ok := m.subjects[subjectID]
-	if ok {
-		delete(m.subjects, subjectID)
-	}
-	m.mu.Unlock()
-	if !ok {
+	if m.subjects[subj.id] != subj {
+		m.mu.Unlock()
 		return
 	}
+	state.SetDirtyNotifier(nil)
+	state.DiscardFrozenSync()
+	delete(m.subjects, subj.id)
+	m.mu.Unlock()
+	if m.forgetUnlinked != nil {
+		m.forgetUnlinked(subj.id)
+	}
 	m.pendingMu.Lock()
-	if wait := m.waitingSnapshots[subjectID]; wait.subject == subj {
-		m.removeSnapshotWaitLocked(subjectID)
+	if wait := m.waitingSnapshots[subj.id]; wait.subject == subj {
+		m.removeSnapshotWaitLocked(subj.id)
 	}
 	m.pendingMu.Unlock()
 	subj.mu.Lock()
 	subj.forgotten = true
 	queued := subj.successor
 	subj.successor = nil
-	state := subj.state
 	subj.mu.Unlock()
-	state.SetDirtyNotifier(nil)
-	state.DiscardFrozenSync()
 	if queued == nil {
 		return
 	}
-	// 同一个状态对象重新登记也走这里：先清掉旧 subject 的通知与冻结内容，再以新 subject 登记，
+	// 同一个状态对象重新登记也走这里：旧 subject 的通知与冻结内容已在删表前清掉，这里以新 subject 登记，
 	// 状态若仍脏，installDirtyNotifier 会立即排队。
 	if !queued.state.Enabled() {
 		queued.finish(ErrRegistrationCancelled)
