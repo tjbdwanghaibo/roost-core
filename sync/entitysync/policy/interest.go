@@ -298,6 +298,38 @@ func (in *Interest) Hide(id int64) error {
 	return in.aoi.RemoveSubject(id)
 }
 
+// Resubscribe says every pair this observer holds to the manager again on the
+// next Apply, and reports how many it queued. It is for an observer whose
+// session the manager dropped on its own — a transport failure it reported
+// through ManagerConfig.SessionLost — while the observer stays in the policy
+// (it still has a live connection) and its session has been opened again: the
+// manager forgot the subscriptions, the policy did not, and without this the
+// reopened session would receive nothing until the pairs changed. Pairs other
+// observers hold on this subject are untouched; they never left.
+//
+// The re-said pairs go through the retry list, so a manager that still
+// refuses one (the session is not open yet) is asked again on every Apply.
+func (in *Interest) Resubscribe(observer int64) int {
+	if in == nil {
+		return 0
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed {
+		return 0
+	}
+	queued := 0
+	for key, current := range in.held {
+		if key.observer != observer || !current.subscribed {
+			continue
+		}
+		current.subscribed = false
+		in.retry = append(in.retry, key)
+		queued++
+	}
+	return queued
+}
+
 // Visible lists what an observer currently sees through distance.
 func (in *Interest) Visible(observer int64) []int64 {
 	in.mu.Lock()

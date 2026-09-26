@@ -354,3 +354,57 @@ func TestDirectBindsOnePairAtATime(t *testing.T) {
 		t.Fatal("unbind left the subscription")
 	}
 }
+
+// RR-20260926-40：Manager 因传输失败自行丢掉一个会话（SessionLost）而观察者仍在政策里
+// （它还有活着的连接）时，重开会话后 Resubscribe 把该观察者持有的全部 pair 重说一次；
+// 其他观察者对它的订阅不受影响。没有 Resubscribe，重开的会话在 pair 变化前什么都收不到。
+func TestResubscribeRestoresAReopenedObserversView(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager, "team")
+	player(t, manager, watcherID)
+	player(t, manager, moverID)
+	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Relation("team").Set(watcherID, []int64{moverID})
+	mustApply(t, interest)
+	if !subscribed(manager, watcherID, moverID) || !subscribed(manager, moverID, watcherID) {
+		t.Fatal("setup: the two players do not see each other")
+	}
+
+	// The manager drops the watcher's session the way a failed push does, and
+	// the session is opened again for the connection that is still up.
+	manager.CloseSession(entitysync.SessionID(watcherID))
+	if err := manager.OpenSession(entitysync.SessionID(watcherID)); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	if subscribed(manager, watcherID, moverID) {
+		t.Fatal("setup: the reopened session kept a subscription the manager dropped")
+	}
+	if got := interest.Resubscribe(watcherID); got != 2 {
+		t.Fatalf("Resubscribe queued %d pairs, want 2 (self and the mover)", got)
+	}
+	mustApply(t, interest)
+	if !subscribed(manager, watcherID, moverID) || !subscribed(manager, watcherID, watcherID) {
+		t.Fatalf("the reopened session's view was not restored: %v / %v", manager.Subscribers(moverID), manager.Subscribers(watcherID))
+	}
+	if !subscribed(manager, moverID, watcherID) {
+		t.Fatal("resubscribing the watcher disturbed the mover's own subscription to it")
+	}
+	// Nothing left over: an idle Apply says nothing, and the pair still
+	// releases normally on leave.
+	if refusals := interest.Apply(); len(refusals) != 0 {
+		t.Fatalf("an idle apply refused: %+v", refusals)
+	}
+	if err := interest.Leave(moverID); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	if subscribed(manager, watcherID, moverID) {
+		t.Fatal("a resubscribed pair did not release on leave")
+	}
+}

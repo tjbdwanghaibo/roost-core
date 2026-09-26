@@ -29,7 +29,7 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 | 普通实体服 | mongo、nats、dataengine、nest、ops |
 | 跨服实体 | 普通实体服 + sync、remote_entity |
 | 长事务协调器 | mongo、nats、dataengine、saga、ops |
-| 状态同步 | player 接入层或 nettransport 作为 `entitysync.Transport`；业务装 `entitysync.Manager`，`policy.Interest / Group / Direct` 作为订阅政策 |
+| 状态同步 | player 接入层或 nettransport 作为 `entitysync.Transport`；业务装 `entitysync.Manager`，`policy.Interest / Group / Direct` 作为订阅政策（Manager 因传输失败丢掉会话而观察者仍在时，重开会话后 `Interest.Resubscribe` 恢复其订阅，见 RR-20260926-40） |
 | 确定性帧同步 | lockstep + KCP/QUIC/UDP transport |
 
 ## 3. Entity、Component 与 DAO

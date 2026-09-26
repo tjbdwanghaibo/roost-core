@@ -245,8 +245,11 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；Manager 会压住整个主体直到水位追上。
 - **谁订阅谁不在这里决定**：`policy.Interest` 决定（距离 + 关系源），并直接说给 Manager；scene 只在 `NewInterest` 里给出地图尺寸、半径和关系名。
   加一种关系（好友、同盟）= `Relations` 里多一个名字加一处 `Relation(name).Set`。
-- **推送失败只关那个会话**：Manager 把推不到的会话关掉并回调 `SessionLost`，scene 让那个玩家离场；接入层整体不可用是 `ErrRetryLater`，
-  tick 重来、不踢人。会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
+- **推送失败只关那个会话**：Manager 把推不到的会话关掉并回调 `SessionLost`；接入层整体不可用是 `ErrRetryLater`，tick 重来、不踢人。
+  会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
+- **断线按 Join 代际判定**（RR-20260926-40）：每次 Join（首次登录或重连）有新代际；`SessionLost` 与会话关闭事件只登记“当时的代际”，
+  在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接还在时
+  玩家留在场景（其他人不会看到它消失），scene 重开它的复制会话并 `Interest.Resubscribe`，活着的客户端收到一次全量快照。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
   否则推送到了也解不出来、静默丢弃。
 

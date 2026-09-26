@@ -124,6 +124,14 @@ func (recorder *sceneRecorder) close(playerID int64) {
 	}
 }
 
+// reconnect brings a closed player back: a new connection is up.
+func (recorder *sceneRecorder) reconnect(playerID int64) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	delete(recorder.offline, playerID)
+	delete(recorder.unreachable, playerID)
+}
+
 func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -716,5 +724,194 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 		if _, ok := document[field]; !ok {
 			t.Errorf("the retried subscribe delivered %q-less state, so it was not a snapshot: %v", field, document)
 		}
+	}
+}
+
+// RR-20260926-40 (REPRO-2026-09-26-04 §7): during a reconnect the player has
+// two connections, and the push goes to both. Writing to the OLD one fails,
+// the manager closes the player's replication session and reports it lost —
+// while the NEW connection is up. The player must stay: still a member, its
+// subject still registered (nobody is sent an ObjectRemove for it), and its
+// own view restored on the live connection.
+func TestAnOldConnectionsPushFailureKeepsTheReconnectedPlayer(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reconnectID = int64(9701), int64(9702)
+	mover := newScenePlayer(t, moverID)
+	re := newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(moverID)
+	recorder.take(reconnectID)
+	// The new connection logs in: EnterGame joins again and the client says ready.
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	// The old connection is still registered and writing to it fails; the
+	// new one is up (ActiveSessions stays 1).
+	recorder.mu.Lock()
+	recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.mu.Unlock()
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
+		t.Fatal(err)
+	}
+	_ = scene.Flush(ctx)
+	recorder.mu.Lock()
+	recorder.unreachable = nil
+	recorder.mu.Unlock()
+
+	// The settle runs on its own goroutine: wait until either the player is
+	// gone (the defect) or its view is back (a frame naming the mover).
+	resynced := false
+	moverRemoves := 0
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && scene.Members() == 2 {
+		_ = scene.Flush(ctx)
+		moverRemoves += removesIn(t, recorder.take(moverID))
+		if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[mover.ID()]; ok {
+			resynced = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = scene.Flush(ctx)
+	moverRemoves += removesIn(t, recorder.take(moverID))
+	t.Logf("members=%d ActiveSessions(%d)=%d resynced=%v removes seen by the mover=%d", scene.Members(), reconnectID, recorder.ActiveSessions(reconnectID), resynced, moverRemoves)
+	if scene.Members() != 2 {
+		t.Fatalf("reconnected player %d (still has a live session) was removed from the scene by the old connection's push failure", reconnectID)
+	}
+	if moverRemoves != 0 {
+		t.Errorf("the mover was told the reconnected player's object is gone (%d removes): its subject was unregistered", moverRemoves)
+	}
+	if !resynced {
+		t.Errorf("the reconnected player stayed in the scene but its view was never restored after the manager dropped its session")
+	}
+}
+
+// RR-20260926-40: a disconnect is acted on for the Join it was reported
+// against. A close or a lost session reported for the previous login, whose
+// settle only runs after the player has logged in again, must not remove the
+// new login; a close for the current login still removes the player.
+func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(recorder)
+	// Hold every settle until the test says so, to put it after the rejoin.
+	var pendingMu sync.Mutex
+	var pending []func()
+	scene.async = func(fn func()) {
+		pendingMu.Lock()
+		pending = append(pending, fn)
+		pendingMu.Unlock()
+	}
+	runPending := func() int {
+		pendingMu.Lock()
+		queued := pending
+		pending = nil
+		pendingMu.Unlock()
+		for _, fn := range queued {
+			fn()
+		}
+		return len(queued)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const watcherID, reconnectID = int64(9801), int64(9802)
+	watcher := newScenePlayer(t, watcherID)
+	re := newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(watcherID)
+	recorder.take(reconnectID)
+
+	// 1. The only connection closes (ActiveSessions 0 when reported); the
+	// player logs in again before the removal runs.
+	recorder.close(reconnectID)
+	recorder.reconnect(reconnectID)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if ran := runPending(); ran != 1 {
+		t.Fatalf("%d settles were scheduled for one close, want 1", ran)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a close reported for the previous login removed the player who had logged in again: members=%d", members)
+	}
+	// 1b. The generation half of the rule on its own: the same late close,
+	// but by the time its settle runs the transport counts no connection for
+	// the player either (the new one is not counted, or has gone too). "No
+	// active session" holds, the Join the close was reported for is not the
+	// current one, so it is still dropped — only a close reported for the
+	// current Join may remove the player (step 3).
+	recorder.close(reconnectID)
+	recorder.reconnect(reconnectID)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	recorder.mu.Lock()
+	recorder.offline[reconnectID] = true
+	recorder.mu.Unlock()
+	runPending()
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a close reported for a superseded join was acted on: members=%d", members)
+	}
+	recorder.reconnect(reconnectID)
+
+	// 2. The manager dropped the session after a failed push; the player logs
+	// in again before the settle runs. The new Join reopens the session and
+	// gets the player's view back by itself; the late settle changes nothing.
+	scene.manager.CloseSession(sessionFor(re.ID()))
+	scene.sessionLost(sessionFor(re.ID()), errors.New("old socket: write timeout"))
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	runPending()
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a lost session reported for the previous login removed the player: members=%d", members)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if removes := removesIn(t, recorder.take(watcherID)); removes != 0 {
+		t.Fatalf("the watcher was told the rejoined player is gone (%d removes)", removes)
+	}
+	if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[watcher.ID()]; !ok {
+		t.Fatal("the rejoin after a dropped session did not restore the player's view of the watcher")
+	}
+
+	// 3. A close for the current login, with no other connection, still
+	// removes the player.
+	recorder.close(reconnectID)
+	runPending()
+	if members := scene.Members(); members != 1 {
+		t.Fatalf("a close for the current login left the player in the scene: members=%d", members)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if removes := removesIn(t, recorder.take(watcherID)); removes != 1 {
+		t.Fatalf("the watcher was told about %d removes after the player left, want 1", removes)
 	}
 }

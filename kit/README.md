@@ -477,6 +477,9 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
 - **held / ready**（`OpenHeldSession / ReadySession`）：会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 用 `scene_ready` 消息触发，消掉"快照抢在客户端解码器之前"的竞态。
 - **组织方式在 `sync/entitysync/policy`**：`Interest`（spatial AOI + 关系源聚合，直接驱动 Manager，被拒重试）、`Group`（成员全互见）、`Direct`（显式绑定）。各实例通过独立 `SubscriptionSource` 订阅，不碰帧与传输。Group/Interest 关闭只释放本来源，实体真正销毁仍由应用调用 `Manager.Unregister`。
+- **会话被 Manager 丢掉而观察者仍在**（`SessionLost` 但玩家还有活连接，例如重连窗口里旧连接写失败）：重开会话后调用 `Interest.Resubscribe(observer)`，
+  该观察者持有的全部 pair 在下一次 `Apply` 重说，客户端收到新 lifetime 的全量快照；其他观察者对它的订阅不受影响（RR-20260926-40）。
+  是否离场由应用按“该次 Join 的代际仍是当前且确实没有活跃连接”判定，demo scene 是参考实现。
 
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
