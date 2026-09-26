@@ -229,6 +229,11 @@ jobs:
             sleep 2
           done
           docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' | grep -q '^1$'
+          # RR-20260926-22: the guild allocator's real-Mongo tests (concurrent
+          # first mint on an existing collection, WAL restart) skip without
+          # this URI. The dev replica set is up here; the tests create and
+          # drop their own roost_guild_it_* databases.
+          ROOST_GUILD_IT_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0' go test -race -count=1 -run '^TestGuildIDs' -v ./game/controllers/player/
           READY_TIMEOUT=180 sh deploy/dev/run.sh start
           # RR-20260926-12: the configured transport is the one the running
           # game process uses (the unit-level check is the generated
