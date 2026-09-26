@@ -54,6 +54,11 @@ type Assembly struct {
 // ErrAssemblyStopped 表示 finalizer 已进入不可逆的停止流程；重新运行须重新 Assemble。
 var ErrAssemblyStopped = errors.New("remote_entity: assembly is stopping or stopped")
 
+// ErrRemoteManagedServerScopedDAO 表示 remote=managed 实体注册了按服选库（dbscope=sid）的 DAO。
+// 托管实体可由任一进程写入、所有权可迁移，而提交按提交方 sid 选库、加载按本服 sid 选库，
+// 两者不一致会让实体在跨服写或迁移后读到旧版本/缺失而不可写（RR-20260926-45）。
+var ErrRemoteManagedServerScopedDAO = errors.New("remote_entity: remote-managed entity DAO must use dbscope=global")
+
 // Assemble builds the manager with its lock factory, snapshot L2, backend and
 // ownership store. localSid must be non-zero: it fences ownership.
 func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBackendConfig) (*Assembly, error) {
@@ -65,6 +70,9 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	}
 	if cfg == nil {
 		cfg = DefaultConfig()
+	}
+	if err := validateRemoteManagedDaoScopes(entity.GetAllEntityBuilders()); err != nil {
+		return nil, err
 	}
 	backend := deps.Backend
 	if backend == nil && deps.Loader != nil {
@@ -136,6 +144,10 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 		return nil
 	}
 	if err := a.Manager.ValidateDependencies(); err != nil {
+		return err
+	}
+	// Assemble 之后注册的实体（含手写 DAO）在开始接收写入前再校验一次。
+	if err := validateRemoteManagedDaoScopes(entity.GetAllEntityBuilders()); err != nil {
 		return err
 	}
 	// 第一次绑定后保留同一组 replicator；失败重试只重订阅，不改动已封存的依赖。
@@ -238,4 +250,31 @@ func (a *Assembly) releaseLifecycle() {
 	close(a.operationDone)
 	a.operationDone = nil
 	a.lifecycleMu.Unlock()
+}
+
+// validateRemoteManagedDaoScopes 拒绝 remote=managed 实体注册 dbscope=sid 的 DAO（RR-20260926-45）。
+// 同时覆盖生成与手写实体：逐个实例化注册的 DAO 工厂读取 DbScope；未声明 DbScope 的 DAO 按 global。
+func validateRemoteManagedDaoScopes(builders []*entity.EntityBuilderParam) error {
+	var errs []error
+	for _, builder := range builders {
+		if builder == nil || !builder.RemotePolicy.RemoteManaged() {
+			continue
+		}
+		for i, build := range builder.DaoBuilders {
+			if build == nil {
+				continue
+			}
+			dao := build()
+			if dao == nil {
+				continue
+			}
+			scoped, ok := dao.(entity.DatabaseScopedDao)
+			if !ok || scoped.DbScope() != entity.DatabaseServer {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("%w: kind=%d dao[%d] %T collection=%q uses dbscope=sid; declare the DAO with dbscope=global (//roost:dao ... dbscope=global) so every process commits and loads the same database",
+				ErrRemoteManagedServerScopedDAO, builder.Kind, i, dao, dao.CollName()))
+		}
+	}
+	return errors.Join(errs...)
 }
