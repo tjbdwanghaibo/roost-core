@@ -158,12 +158,11 @@ func TestDurableLeaseRejectionReleasesDeferredWriteGate(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	next, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()})
-	if err != nil {
-		t.Fatal(err)
+	// gate 已释放：下一写者立即得到结果。被拒绝的内存修改仍在实例里，实体隔离到重新加载
+	// （RR-20260926-28 复核），所以结果是 ErrRemoteFenced 而不是 gate 超时。
+	if _, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()}); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("next writer after rejection err=%v, want ErrRemoteFenced", err)
 	}
-	_ = next.Abort(ctx, errors.New("test cleanup"))
-	_ = next.Close(ctx)
 	if err := mgr.StopFinalizer(ctx); err != nil {
 		t.Fatal(err)
 	}

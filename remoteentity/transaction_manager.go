@@ -247,8 +247,8 @@ func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
 }
 
 // processDeferredRemoteClose 只在拿到持久结论后收尾：Applied 先发布再释放，Committed
-// 确认后释放，Rejected 回滚、解除本事务造成的隔离后释放。其余情况保留 gate、fence、
-// 写额度并隔离实体，按退避重试。
+// 确认后释放，Rejected 回滚并隔离实体后释放（实体隔离到重新加载）。其余情况保留 gate、
+// fence、写额度并隔离实体，按退避重试。
 func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
 	status, err := m.RemoteCommitStatus(state.finalizeCtx, item.txID)
 	if err == nil && status.State == entity.RemoteCommitUnknown && item.durability == 0 {
@@ -271,10 +271,12 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		}
 	}
 	if status.State == entity.RemoteCommitRejected {
-		m.rollbackRejectedRemoteEntries(state.finalizeCtx, item.entries)
-		m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-		m.releaseRemoteWriteSlot()
-		return
+		err = m.settleRejectedRemoteEntries(state.finalizeCtx, item.entries)
+		if err == nil {
+			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+			m.releaseRemoteWriteSlot()
+			return
+		}
 	}
 	// One failed/pending transaction must not monopolize a finalizer worker.
 	// Keep its write gate and fence, quarantine the live object, and retry with
@@ -373,43 +375,28 @@ func remoteCommitStateLabel(state entity.RemoteCommitState) string {
 	}
 }
 
-// rollbackRejectedRemoteEntries 在持久拒绝后回滚本事务的定稿提交并解除本事务造成的隔离。
+// settleRejectedRemoteEntries 在持久拒绝后回滚本事务的定稿提交，并让批次内实体保持隔离。
 //
-// finalizer 不是 Nest 快 worker，也拿不到已结束消息的快池续行；回滚经 entity.RunLocal
-// 的本地执行路径（finalizeCtx 未注入执行器时就地执行），在每个实体自己的本地锁内进行，
-// 与快池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁（rollbackRemoteEntries）。
+// 回滚经 entity.RunLocal 的本地执行路径：finalizer 不是 Nest 快 worker，也拿不到已结束
+// 消息的快池续行，finalizeCtx 未注入执行器时就地执行，在每个实体自己的本地锁内调用
+// RollbackRemoteCommit（与快池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁）。
+// 回滚后清除定稿标记，释放时按 BaseVersion 解锁，与 Abort 一致，也保证重试不会重复回滚。
 //
-// 隔离只退到 Recovering 并作废 marker 缓存：持有 gate 期间没有其他写者，实体此时的
-// Quarantined 只能来自本事务的未知结果；拒绝后 Mongo 保持 BaseVersion，本地版本也未前进，
-// 但仍要求下一写者经 beginWrite 重新向权威读取 ownership/许可与版本后才恢复写入。
-func (m *Manager) rollbackRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) {
-	var thawErr error
+// 拒绝后不能解冻：生成实体的 RollbackRemoteCommit 是 no-op，被拒绝事务的内存修改仍在实体
+// 里，而下一次提交按整份 DAO 编码（MarshalPersist 忽略 mask、写入是 ReplaceOne），会把被拒绝
+// 的修改一并 CAS 进 Mongo。框架无法证明内存已回到权威状态，因此批次内实体一律隔离到重新
+// 加载为止（RR-20260926-28 复核）；隔离失败时返回错误，调用方保留 gate 重试，不释放。
+func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) error {
 	runErr := entity.RunLocal(ctx, func() {
 		m.rollbackRemoteEntries(entries)
 		for _, entry := range entries {
-			if entry == nil || entry.entity == nil || entry.entity.GetMutex() == nil {
-				continue
-			}
-			func() {
-				mu := entry.entity.GetMutex()
-				mu.Lock()
-				defer mu.Unlock()
-				if entry.entity.RemoteOwnershipState() != entity.RemoteOwnershipQuarantined {
-					return
-				}
-				if err := entry.entity.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err != nil {
-					thawErr = errors.Join(thawErr, fmt.Errorf("remote_entity: thaw rejected entity %d: %w", entry.entity.ID(), err))
-				}
-			}()
-			if entry.wrapper != nil {
-				entry.wrapper.invalidateMarker()
+			if entry != nil {
+				entry.finalized = false
+				entry.commit = entity.RemoteCommit{}
 			}
 		}
 	})
-	if err := errors.Join(runErr, thawErr); err != nil {
-		// 拒绝结论已持久，释放照常进行；解冻失败的实体保持隔离，只是不可写，不会越权。
-		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
-	}
+	return errors.Join(runErr, m.quarantineEntries(entries, entity.ErrRemoteRejected))
 }
 
 func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {

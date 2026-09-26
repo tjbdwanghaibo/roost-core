@@ -107,7 +107,7 @@ func (f memoryUnresolvedFixture) commitMemoryWrite(t *testing.T, tx entity.Remot
 }
 
 // RR-20260926-28：Durability 0 的事务从未到达 Mongo，finalizer 必须以同一事务 _id
-// 写入持久拒绝挡住迟到提交，然后回滚、解除隔离并释放 gate/锁/写额度。
+// 写入持久拒绝挡住迟到提交，然后回滚、保持隔离（直到重新加载）并释放 gate/锁/写额度。
 func TestMemoryNeverCommittedTransientErrorGetsDurableRejection(t *testing.T) {
 	f := newMemoryUnresolvedFixture(t, 1777, func(store *MongoCommitter) StorageBackend { return neverReachedStorage{store} })
 	tx := remoteTestTxID(91)
@@ -116,19 +116,22 @@ func TestMemoryNeverCommittedTransientErrorGetsDurableRejection(t *testing.T) {
 		t.Fatalf("commit err=%v, want indeterminate transient error", err)
 	}
 
-	// 下一写者在 gate 上排队；finalizer 拿到持久结论前不能进入，拿到后必须能进入。
+	// 下一写者在 gate 上排队；finalizer 拿到持久结论前不能得到结果。拿到后 gate 释放，
+	// 但持有被拒绝内存修改的实例保持隔离，下一写者立即得到 ErrRemoteFenced 而不是超时。
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	next, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()})
-	if err != nil {
+	if err == nil {
+		_ = next.Abort(ctx, errors.New("test cleanup"))
+		_ = next.Close(ctx)
+		t.Fatal("instance holding a rejected mutation was admitted without reload")
+	}
+	if !errors.Is(err, entity.ErrRemoteFenced) {
 		t.Fatalf("same entity stays blocked after never-committed memory write: %v (owner=%v slots=%d)",
 			err, f.live.RemoteOwnershipState(), len(f.mgr.remote.writeSlots))
 	}
-	if err = next.Abort(ctx, errors.New("test cleanup")); err != nil {
-		t.Fatal(err)
-	}
-	if err = next.Close(ctx); err != nil {
-		t.Fatal(err)
+	if got := f.live.RemoteOwnershipState(); got != entity.RemoteOwnershipQuarantined {
+		t.Fatalf("rejected entity state=%v, want quarantined until reload", got)
 	}
 
 	durable, err := f.store.CommitStatus(ctx, tx)
@@ -252,14 +255,11 @@ func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitUnknown {
 		t.Fatalf("durable status=%+v err=%v, want no record", status, err)
 	}
-	// 投影器的持久拒绝仍是它的收尾路径。
+	// 投影器的持久拒绝仍是它的收尾路径：gate 释放，实体保持隔离。
 	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	next, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()})
-	if err != nil {
-		t.Fatalf("projector rejection did not release the gate: %v", err)
+	if _, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()}); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("after projector rejection err=%v, want gate released and ErrRemoteFenced", err)
 	}
-	_ = next.Abort(ctx, errors.New("test cleanup"))
-	_ = next.Close(ctx)
 }
 
 func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
