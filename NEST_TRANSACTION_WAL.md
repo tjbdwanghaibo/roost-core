@@ -87,13 +87,30 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 - payload 为确定性二进制编码，header map 按 key 排序；
 - strict 请求在 batch 中合并为一次 fsync；
 - async 默认每 10 ms 刷盘；
-- 启动时只截断最后 segment 的不完整尾 frame；
+- 启动时只截断最后 segment 的不完整尾 frame 或零填充尾部，判据见下文“尾部截断判据”；
 - 完整 frame CRC 错误、segment 缺口、ack 越界均拒绝启动，不静默跳过；
 - writer 目录使用 OS 文件锁，禁止双进程同时写；
 - ack 使用双槽 checkpoint，更新一个槽时另一个槽保持可恢复；
 - segment 创建、轮转、删除和 checkpoint 原子替换同时持久化目录元数据；Windows checkpoint 使用 write-through replace；
 - replay 严格按 append 顺序；ack 后清理过老且已确认的 segment。
 - `max_disk_bytes` 与 `max_unacked_age` 进入健康门禁，超过恢复窗口立即摘除实例并告警。
+
+### 尾部截断判据（RR-20260926-41）
+
+断电、内核崩溃或 VM 快照后，最后一段尾部可能是“文件长度已持久、数据块未写回”的零填充（ext4 `data=writeback`、部分网络盘 / 云盘）。
+“坏点”指扫描遇到的第一个无法解析的帧起点（此前各帧均完整且 CRC 正确）。以下**同时满足**才截断坏点之后的全部内容，否则 `ErrCorrupt` 拒绝启动，且拒绝前不改动文件：
+
+1. 仅最后一段。更早的段在轮转时已 fsync，其中任何损坏（含零尾）在回放时报 `ErrCorrupt`。
+2. 坏点不早于 checkpoint fence。fence 是最后一个已确认帧的结束偏移，坏点 ≥ fence 表示被截掉的内容从未被确认；坏点落在已确认前缀内即拒绝。
+3. 坏点形态二选一：
+   - 不完整尾帧：剩余不足 20 字节帧头，或帧头声明的帧体越过文件末尾（既有规则）；
+   - 零填充：自坏点至文件末尾全为 0，即坏帧头所在 4 KiB 对齐块的剩余部分及其后所有块全零。
+     帧头有效但 CRC 不符、非零垃圾、零区之后又出现非零字节（包括中间零页之后仍有完整帧）都不属于此类。
+4. 截断后记 `slog.Warn`（段、坏点偏移、截断字节数、所在块偏移、checkpoint），并累加
+   `nestwal.recovery.tail_truncated.total` / `nestwal.recovery.tail_truncated.bytes`，标签只有 `reason=torn_frame|zero_fill`。
+
+残余风险：已 fsync、strict 已向调用方确认但尚未 ack 投影的记录，若介质把它所在的块连同其后全部内容整块清零，形态与未写回的零尾无法区分，会被当作撕裂截断，
+该记录丢失且没有 `ErrCorrupt`（checkpoint 之前的已确认记录不受影响）。截断告警与指标是发现这种情况的唯一线索，生产应对 `reason=zero_fill` 告警并核对投影结果。
 
 ## 6. 一致性和幂等
 

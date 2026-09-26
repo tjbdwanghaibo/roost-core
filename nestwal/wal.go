@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1060,16 +1061,10 @@ func (w *WAL) openActive() error {
 		_ = file.Close()
 		return err
 	}
-	lastGood, err := scanFramesEnd(file, w.segment, info.Size(), w.opts.MaxRecordBytes)
+	lastGood, err := w.recoverTail(file, info.Size())
 	if err != nil {
 		_ = file.Close()
 		return err
-	}
-	if lastGood != info.Size() {
-		if err := file.Truncate(lastGood); err != nil {
-			_ = file.Close()
-			return err
-		}
 	}
 	if _, err := file.Seek(lastGood, io.SeekStart); err != nil {
 		_ = file.Close()
@@ -1077,12 +1072,89 @@ func (w *WAL) openActive() error {
 	}
 	w.active = file
 	w.offset = lastGood
-	if fenceAfter(w.checkpoint.fence, corenest.CommitFence{Segment: w.segment, Offset: w.offset}) {
-		_ = file.Close()
-		w.active = nil
-		return errors.Join(ErrCorrupt, errors.New("acknowledgement is beyond recovered WAL end"))
-	}
 	return nil
+}
+
+// tailBlockSize 是零尾判据的对齐块：页缓存按页写回，断电丢写回表现为整块读出为 0。
+const tailBlockSize = 4096
+
+// recoverTail 扫描最后一段并决定可截断的尾部，返回恢复后的段末偏移（RR-20260926-41）。
+//
+// 只有最后一段会被修复，此前的段在轮转时已 fsync，其中任何损坏都由 Replay 报 ErrCorrupt。
+// 可截断的尾部只有两种：
+//   - 不完整尾帧（帧头不足 20 字节，或帧体越过文件末尾）——崩溃时未写完的最后一帧；
+//   - 零填充尾：第一个无法解析的帧起点（坏点）至文件末尾全为 0，即坏帧头所在 4 KiB 块的剩余部分
+//     及其后所有块全零——文件长度已持久而数据块未写回。CRC 不符的非零数据仍是 ErrCorrupt。
+//
+// 两种情形都要求坏点不早于 checkpoint fence：fence 是最后一个已确认帧的结束偏移，坏点 ≥ fence 表示
+// 截掉的内容从未被确认。否则拒绝启动，且拒绝前不改动文件。截断后告警并计指标（reason 仅 torn_frame / zero_fill）。
+func (w *WAL) recoverTail(file *os.File, size int64) (int64, error) {
+	lastGood, scanErr := scanFramesEnd(file, w.segment, size, w.opts.MaxRecordBytes)
+	if scanErr != nil && !errors.Is(scanErr, ErrCorrupt) {
+		return 0, scanErr
+	}
+	if lastGood == size {
+		return lastGood, w.checkRecoveredEnd(lastGood, nil)
+	}
+	zeroTail, err := allZeroFrom(file, lastGood, size)
+	if err != nil {
+		return 0, err
+	}
+	if scanErr != nil && !zeroTail {
+		return 0, scanErr
+	}
+	if err := w.checkRecoveredEnd(lastGood, scanErr); err != nil {
+		return 0, err
+	}
+	if err := file.Truncate(lastGood); err != nil {
+		return 0, err
+	}
+	reason := "torn_frame"
+	if zeroTail {
+		reason = "zero_fill"
+	}
+	truncated := size - lastGood
+	metrics.IncCounter("nestwal.recovery.tail_truncated.total", metrics.Labels{"reason": reason}, 1)
+	metrics.IncCounter("nestwal.recovery.tail_truncated.bytes", metrics.Labels{"reason": reason}, truncated)
+	slog.Warn("nestwal: truncated unacknowledged WAL tail on open",
+		"reason", reason, "segment", w.segment, "offset", lastGood, "bytes", truncated,
+		"block_offset", lastGood-lastGood%tailBlockSize,
+		"checkpoint_segment", w.checkpoint.fence.Segment, "checkpoint_offset", w.checkpoint.fence.Offset)
+	return lastGood, nil
+}
+
+// checkRecoveredEnd 拒绝恢复末端早于 checkpoint fence 的日志：那意味着已确认的记录丢失或损坏。
+func (w *WAL) checkRecoveredEnd(end int64, scanErr error) error {
+	if !fenceAfter(w.checkpoint.fence, corenest.CommitFence{Segment: w.segment, Offset: end}) {
+		return nil
+	}
+	if scanErr != nil {
+		return errors.Join(scanErr, fmt.Errorf("corrupt frame at segment %d offset %d is inside the acknowledged prefix (checkpoint %d/%d)",
+			w.segment, end, w.checkpoint.fence.Segment, w.checkpoint.fence.Offset))
+	}
+	return errors.Join(ErrCorrupt, errors.New("acknowledgement is beyond recovered WAL end"))
+}
+
+// allZeroFrom 报告 [offset, size) 是否全为 0。
+func allZeroFrom(file *os.File, offset, size int64) (bool, error) {
+	buffer := make([]byte, 64<<10)
+	for offset < size {
+		chunk := buffer[:min(int64(len(buffer)), size-offset)]
+		n, err := file.ReadAt(chunk, offset)
+		if n < len(chunk) {
+			if err == nil {
+				err = io.ErrUnexpectedEOF
+			}
+			return false, err
+		}
+		for _, b := range chunk {
+			if b != 0 {
+				return false, nil
+			}
+		}
+		offset += int64(n)
+	}
+	return true, nil
 }
 
 func (w *WAL) rotateLocked() error {
