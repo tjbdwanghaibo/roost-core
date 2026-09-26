@@ -476,7 +476,20 @@ func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 	if b == nil {
 		return nil
 	}
-	// 本地回滚归快阶段所有。已有 Guard 时复用锁，其余路径显式取得本地锁。
+	// 未定稿的批次没有本地状态要回滚（定稿失败已在 FinalizeLocked 内回滚），也没有登记事务：
+	// 就地标记 aborted，不投递快池续行（RR-20260926-44）。标记与定稿共用 b.mu，
+	// 之后的 FinalizeLocked 会拒绝；写门与写许可仍由 Close 统一释放。
+	b.mu.Lock()
+	if !b.finalized {
+		if !b.committed && !b.indeterminate && !b.closed {
+			b.aborted = true
+		}
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+	// 已定稿：本地回滚归快阶段所有。已有 Guard 时复用锁，其余路径显式取得本地锁。
+	// 进入快阶段后重新检查状态，期间可能已被提交或关闭。
 	return entity.RunLocal(ctx, func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
