@@ -165,6 +165,24 @@ func (m *Msg) markRemoteWriteIndeterminateLocked(cause error) error {
 	return nil
 }
 
+// markTransactionAdmitted 记录本条消息自己的事务已越过提交点；nil 接收者（嵌套事务、无派发调用）无操作。
+func (m *Msg) markTransactionAdmitted() {
+	if m != nil {
+		m.txAdmitted = true
+	}
+}
+
+// transactionPastCommitPoint 判断这条消息是否可能已经提交了业务：自己的事务越过提交点、Remote 本地已持久提交
+// 或结果未知，或回复已声明“提交之后失败”/“结果不确定”。这样的消息不能重新准入，否则已提交内容会再执行一次
+// （RR-20260926-49）。
+func (m *Msg) transactionPastCommitPoint(err error) bool {
+	if m == nil {
+		return false
+	}
+	return m.txAdmitted || m.remoteCommitted || m.remoteIndeterminate ||
+		errors.Is(err, ErrAfterCommitFailed) || errors.Is(err, ErrCommitIndeterminate)
+}
+
 func (m *Msg) addAfterUnlock(fn func()) {
 	if m != nil && fn != nil {
 		m.afterUnlock = append(m.afterUnlock, fn)
@@ -256,6 +274,12 @@ type Msg struct {
 	// remoteSyncMutation 是本地已持久提交的 Remote 事务的 Sync 提交门。Remote 确认没有结论时，
 	// deferPostRemoteCommit 把它连同 postRemoteCommit 交给批次：拒绝时 Reject（RR-20260926-37）。
 	remoteSyncMutation *entity.SyncMutation
+	// txInFlight 在本条消息自己的事务执行期间为真，用来区分 handler 内嵌套的独立事务。
+	// txAdmitted 表示本条消息自己的事务已越过提交点：strict / memory 持久提交成功、pipelined 记录已被 WAL 接纳、
+	// memory 快路径已准入。之后回复里的任何错误（即使链上有锁超时类错误）都不能让它重新准入（RR-20260926-49）。
+	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回（或慢阶段续行结束）后读。
+	txInFlight bool
+	txAdmitted bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().

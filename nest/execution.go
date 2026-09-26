@@ -118,12 +118,20 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	}
 	msg := currentNestDispatchMsg()
 	stages := msg != nil && msg.stageMetrics
+	// 本条消息自己的事务（不是 handler 里嵌套的 RunIsolatedTransaction）才在 Msg 上记录提交事实（RR-20260926-49）。
+	var owner *Msg
+	if msg != nil && !msg.txInFlight {
+		owner = msg
+		owner.txInFlight = true
+		defer func() { owner.txInFlight = false }()
+	}
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
 		ret, err = invokeMemoryHandler(handler, stages, call)
 		if err == nil {
 			admissionStart := startNestStage(stages)
 			syncMutation.Admit()
 			observeNestStage(handler, "admission", admissionStart)
+			owner.markTransactionAdmitted()
 			syncMutation.Confirm()
 		}
 		return ret, err
@@ -150,6 +158,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	tx.durability = meta.Durability
 	tx.handler = handler
 	tx.stageMetrics = stages
+	tx.dispatch = owner
 	if err := tx.CaptureEntities(es); err != nil {
 		return nil, err
 	}
@@ -232,6 +241,8 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 		}
 		return tx.rejectCommit(err)
 	}
+	// 持久提交点已越过：此后无论释放、回调、回复报什么错，这条消息都不能重新准入（RR-20260926-49）。
+	tx.dispatch.markTransactionAdmitted()
 	if msg != nil && msg.RemoteWriteBatch != nil {
 		// 持久提交已成功：此后 AfterCommit、释放锁、release hook 的任何失败都不能让
 		// Remote 批次 Abort。记录这个事实，而不是让收尾去猜错误类型（RR-20260926-32）。
@@ -252,6 +263,10 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTransactionCommitter, es []entity.IThreadSafeEntity, releaseLocks func(), pump *completionPump, msg *Msg, ret any) error {
 	// 准备和 Enqueue 是锁内的拒绝边界；准入后只允许完成或报告结果不确定。
 	ticket, err := tx.pipelinedEnqueue(ctx, committer)
+	if ticket != nil {
+		// WAL 已接纳这条记录：即使随后准入失败或 ticket 结果未知，重新准入都会让它再执行一次（RR-20260926-49）。
+		tx.dispatch.markTransactionAdmitted()
+	}
 	if err != nil {
 		if errors.Is(err, ErrCommitIndeterminate) {
 			tx.abandon()

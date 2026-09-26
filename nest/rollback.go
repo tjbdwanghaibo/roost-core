@@ -95,6 +95,9 @@ type RollbackTx struct {
 	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误（RR-20260926-48）。可回滚的事务据此在
 	// handler 结束时整条回滚并以锁超时重新准入，即使业务吞掉了 Create 返回的错误。
 	createLockBusy error
+	// dispatch 是以本事务为自身事务的派发消息（嵌套的 RunIsolatedTransaction / 无派发调用为 nil）；
+	// 越过提交点时在它上面记录，dispatchNest 据此不再重新准入（RR-20260926-49）。
+	dispatch *Msg
 }
 
 type rollbackTxState uint8
@@ -473,7 +476,12 @@ func runCommitCallback(fn func()) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", ErrAfterCommitFailed, r)
+			// panic 值是 error 时以 %w 保留原因链（RR-20260926-49），调用方仍可 errors.Is 原因。
+			if cause, ok := r.(error); ok {
+				err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, cause)
+			} else {
+				err = fmt.Errorf("%w: %v", ErrAfterCommitFailed, r)
+			}
 			slog.Error("nest after-commit callback panic", "err", r)
 		}
 	}()

@@ -90,11 +90,14 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		if errors.Is(err, ErrEntityGroupTransitionScheduled) {
 			err = nil
 		}
-		if requeuePendingEntityGroupTransition(mgr, msg, err) {
-			err = nil
-		}
-		if requeueTransientDispatch(mgr, msg, err) {
-			err = nil
+		// 锁超时 / 组迁移等暂时性错误只对尚未提交的消息重新准入；已越过提交点的事务回复原错误（RR-20260926-49）。
+		if !msg.transactionPastCommitPoint(err) {
+			if requeuePendingEntityGroupTransition(mgr, msg, err) {
+				err = nil
+			}
+			if requeueTransientDispatch(mgr, msg, err) {
+				err = nil
+			}
 		}
 		if msg.deferredCompletion {
 			// The completion pump owns the reply: it sends RetChan (or logs
