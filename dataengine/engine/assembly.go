@@ -37,6 +37,9 @@ type AssemblyDeps struct {
 	RemoteStore   RemoteProjectionStore
 	RemoteManager entity.IRemoteEntityManager
 	OnFatal       func(error)
+	// LocalExecutor 把需要 Entity 锁的框架步骤交给快池（kit 转发 Nest 绑定的 RunLocal）。
+	// 为 nil 时驱逐等本地步骤按 entity.RunLocal 的约定就地执行。
+	LocalExecutor func(func()) error
 }
 
 // Assembly owns the construction order and the failure rollback of the data
@@ -136,6 +139,9 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
 		return err
 	}
 	owned.Projector = projector
+	if a.deps.LocalExecutor != nil {
+		projector.BindLocalExecutor(a.deps.LocalExecutor)
+	}
 	outboxStore, err := NewMongoOutboxStore(a.Store)
 	if err != nil {
 		return err

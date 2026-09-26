@@ -370,6 +370,11 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
+	// committer 的可选能力：DataEngine 需要在快池持锁执行框架步骤（驱逐被跳过的原生步骤留下的
+	// 实体，RR-20260926-30），这里把本引擎的 RunLocal 交给它。
+	if binder, ok := params.Committer.(LocalExecutorBinder); ok {
+		binder.BindLocalExecutor(func(fn func()) error { return ret.RunLocal(context.Background(), fn) })
+	}
 	return ret
 }
 

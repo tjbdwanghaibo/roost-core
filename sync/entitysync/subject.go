@@ -43,8 +43,9 @@ type subscription struct {
 // live HERE, not in an index somewhere else: the subject is the truth about
 // who receives it (ARCH-10).
 type subject struct {
-	mu          sync.Mutex
-	id          int64
+	mu sync.Mutex
+	id int64
+	// state 是实体的内容状态；实体卸载后重新加载时由 Rebind 在 mu 下替换，读者在 mu 下取用。
 	state       *entity.SubjectSyncState
 	subscribers map[SessionID]*subscription
 	// retiring: Unregister was called; every subscriber is leaving and the
@@ -54,6 +55,13 @@ type subject struct {
 	// 增删订阅以及有效 profile/kind 改变必须使 profilesValid 失效。
 	profilesValid                   bool
 	deltaProfiles, snapshotProfiles []entity.SyncProfile
+}
+
+// currentState 读取当前内容状态；Rebind 会在 subject.mu 下替换它。
+func (s *subject) currentState() *entity.SubjectSyncState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
 }
 
 func newSubject(state *entity.SubjectSyncState) *subject {

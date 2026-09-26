@@ -172,7 +172,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			}
 		}
 		deltaProfiles, snapshotProfiles := subj.profilesLocked(selectedSnapshots)
-		dirty := subj.state.PendingDirty()
+		state := subj.state
+		dirty := state.PendingDirty()
 		wantsCapture := len(snapshotProfiles) > 0 || dirty
 		if wantsCapture {
 			// 无接收者也捕获并提交脏版本，但不为无人需要的默认视图打包。
@@ -181,10 +182,13 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 				revisions[sub] = sub.revision
 			}
 			subj.mu.Unlock()
-			item, err := subj.state.PrepareViews(deltaProfiles, snapshotProfiles)
+			item, err := state.PrepareViews(deltaProfiles, snapshotProfiles)
 			subj.mu.Lock()
 			switch {
 			case errors.Is(err, entity.ErrSubjectSyncNotDirty):
+			case errors.Is(err, entity.ErrSubjectSyncClosed):
+				// 实体已卸载或被驱逐，内容状态随之关闭：不捕获、不重试、不算失败。订阅者保留原对象，
+				// 直到 Rebind 接上重新加载的实体（强制全量）或 Unregister 发出 remove（RR-20260926-30）。
 			case errors.Is(err, entity.ErrSyncCommitPending):
 				if m.config.Trace != nil {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})

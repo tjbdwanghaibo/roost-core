@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/viper"
@@ -34,6 +35,9 @@ type Mod struct {
 
 	fatalMu  sync.RWMutex
 	fatalErr error
+
+	// localExecutor 由 Nest 构造时绑定（mod 是 Nest 的 committer），转交给启动后才创建的 Projector。
+	localExecutor atomic.Pointer[func(func()) error]
 }
 
 type ModOption func(*Mod)
@@ -233,7 +237,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	if !ok || jetStream == nil {
 		return fmt.Errorf("dataengine mod: capability %q not found", mods.ModNatsJetStream)
 	}
-	deps := engine.AssemblyDeps{Mongo: mongoClient, JetStream: jetStream, Access: mod.access, OnFatal: mod.onFatal}
+	deps := engine.AssemblyDeps{Mongo: mongoClient, JetStream: jetStream, Access: mod.access, OnFatal: mod.onFatal, LocalExecutor: mod.runLocal}
 	if mod.remoteEnabled {
 		manager, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
 		if !ok || manager == nil {
@@ -379,6 +383,32 @@ func (mod *Mod) TransactionReleased(id corenest.TransactionID) {
 	}
 }
 
+// BindLocalExecutor 实现 corenest.LocalExecutorBinder：Nest 在构造时交来快池执行入口，
+// DataEngine 用它在快池持锁驱逐被跳过的原生步骤留下的实体（RR-20260926-30）。
+func (mod *Mod) BindLocalExecutor(run func(func()) error) {
+	if mod != nil && run != nil {
+		mod.localExecutor.Store(&run)
+	}
+}
+
+// runLocal 是交给 Assembly 的转发：Nest 尚未绑定时（启动恢复阶段，还没有常驻实体）就地执行。
+func (mod *Mod) runLocal(fn func()) error {
+	if run := mod.localExecutor.Load(); run != nil {
+		return (*run)(fn)
+	}
+	fn()
+	return nil
+}
+
+// OnEntityLoaded 转发 engine.EntityRepository.OnEntityLoaded；Runtime 在 Start 之后才存在。
+func (mod *Mod) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) (func(), error) {
+	repository := mod.Repository()
+	if repository == nil {
+		return nil, errors.New("dataengine mod: runtime is not started")
+	}
+	return repository.OnEntityLoaded(hook), nil
+}
+
 func (mod *Mod) onFatal(err error) {
 	if err == nil {
 		return
@@ -439,6 +469,7 @@ func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 
 var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
+var _ corenest.LocalExecutorBinder = (*Mod)(nil)
 
 func duration(value, fallback time.Duration) time.Duration {
 	if value > 0 {

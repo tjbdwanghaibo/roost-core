@@ -250,13 +250,8 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	}
 	if existing, ok := m.subjects[id]; ok {
 		m.mu.Unlock()
-		existing.mu.Lock()
-		retiring := existing.retiring
-		existing.mu.Unlock()
-		if retiring {
-			return ErrSubjectRetiring
-		}
-		return ErrSubjectRegistered
+		// 旧状态已关闭（实体被卸载或驱逐后重新加载）时接到新状态上并强制全量；否则照旧拒绝。
+		return m.rebind(existing, state)
 	}
 	if len(m.subjects) >= m.config.MaxSubjects {
 		m.mu.Unlock()
@@ -264,8 +259,13 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	}
 	m.subjects[id] = newSubject(state)
 	m.mu.Unlock()
-	// Installing the notifier also fires it when the state is already dirty,
-	// so a subject that changed before it was registered is not forgotten.
+	m.installDirtyNotifier(id, state)
+	return nil
+}
+
+// installDirtyNotifier also fires the notifier when the state is already
+// dirty, so a subject that changed before it was registered is not forgotten.
+func (m *Manager) installDirtyNotifier(id int64, state *entity.SubjectSyncState) {
 	state.SetDirtyNotifier(func(*entity.SubjectSyncState) {
 		m.markPending(id)
 		if state.SyncCommitReady() {
@@ -275,6 +275,60 @@ func (m *Manager) Register(state *entity.SubjectSyncState) error {
 			m.WakeSync()
 		}
 	})
+}
+
+// Rebind 把已登记的 subject 接到同一实体重新加载出来的新内容状态上。前提是旧状态已关闭——
+// 实体被卸载或驱逐（例如原生 saga 步骤投影时被 lease fence 跳过，DataEngine 驱逐了含其效果的
+// 内存实体，RR-20260926-30）。订阅关系保持；每个仍持有或等待该对象的订阅者下一帧收到全量
+// （已持有的是整份替换的 ObjectUpdate），不在两份状态之间续发增量。待 remove 的订阅照旧发 remove。
+//
+// 未登记返回 ErrSubjectNotRegistered，退役中返回 ErrSubjectRetiring；已登记的状态仍在使用时返回
+// ErrSubjectRegistered（不抢占活着的状态）；同一状态重复调用是空操作。Register 遇到旧状态已关闭的
+// 同 ID subject 时走同一路径。旧状态关闭到重新绑定之间，该 subject 不捕获、不发送，也不计失败。
+func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
+	if m == nil {
+		return ErrManagerClosed
+	}
+	if state == nil || !state.Enabled() || state.SubjectID() == 0 {
+		return ErrSubjectInvalid
+	}
+	subj := m.subject(state.SubjectID())
+	if subj == nil {
+		return ErrSubjectNotRegistered
+	}
+	return m.rebind(subj, state)
+}
+
+func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState) error {
+	subj.mu.Lock()
+	switch {
+	case subj.retiring:
+		subj.mu.Unlock()
+		return ErrSubjectRetiring
+	case subj.state == state:
+		subj.mu.Unlock()
+		return nil
+	case subj.state.Enabled():
+		subj.mu.Unlock()
+		return ErrSubjectRegistered
+	}
+	previous := subj.state
+	subj.state = state
+	for sid, sub := range subj.subscribers {
+		if sub.kind == kindLeaving {
+			continue
+		}
+		// 与换 profile 同一机制：baseVersion 清零、改为等待全量，revision 前移让旧状态的在途捕获作废。
+		sub.baseVersion = 0
+		m.changeSubscriptionKindLocked(subj, sid, sub, kindSnapshot)
+		sub.revision++
+	}
+	subj.profilesValid = false
+	subj.mu.Unlock()
+	previous.DiscardFrozenSync()
+	m.installDirtyNotifier(subj.id, state)
+	m.markPending(subj.id)
+	m.WakeSync()
 	return nil
 }
 
@@ -324,8 +378,9 @@ func (m *Manager) forget(subjectID int64) {
 			m.removeSnapshotWaitLocked(subjectID)
 		}
 		m.pendingMu.Unlock()
-		subj.state.SetDirtyNotifier(nil)
-		subj.state.DiscardFrozenSync()
+		state := subj.currentState()
+		state.SetDirtyNotifier(nil)
+		state.DiscardFrozenSync()
 	}
 }
 
@@ -499,9 +554,10 @@ func (m *Manager) Close(ctx context.Context) error {
 		for sid := range subj.subscribers {
 			m.removeSubscriptionLocked(subj, sid)
 		}
+		state := subj.state
 		subj.mu.Unlock()
-		subj.state.SetDirtyNotifier(nil)
-		subj.state.DiscardFrozenSync()
+		state.SetDirtyNotifier(nil)
+		state.DiscardFrozenSync()
 	}
 	m.pendingMu.Lock()
 	clear(m.pending)

@@ -16,14 +16,21 @@ import (
 // Project 先检查幂等身份，再选择单文档 CAS 或 Mongo 原子事务。
 // Remote、receipt 和 outbox 必须与普通 DAO 一起提交，不能拆成独立写入。
 func (store *MongoStore) Project(ctx context.Context, record coredata.CommitRecord) error {
+	_, err := store.ProjectFenced(ctx, record)
+	return err
+}
+
+// ProjectFenced 与 Project 相同，另外报告记录是否因 lease fence 失效被整笔跳过（含重放时读到的
+// 持久 skipped 标记）。Projector 据此驱逐被跳过的原生步骤留下的内存实体（RR-20260926-30）。
+func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	if store == nil || store.client == nil {
-		return errors.New("dataengine mongo: store is not configured")
+		return false, errors.New("dataengine mongo: store is not configured")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := coredata.ValidateCommitRecord(record); err != nil {
-		return err
+		return false, err
 	}
 	if len(record.Mutations) == 1 && len(record.Effects) == 0 && len(record.Receipts) == 0 && record.Mutations[0].Remote == nil {
 		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
@@ -31,17 +38,17 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 			// A concurrent writer made this migration record obsolete. It must
 			// still advance the WAL checkpoint; the repository reloads and either
 			// observes the migrated schema or submits one new CAS attempt.
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	digest, err := digestRecord(record)
 	if err != nil {
-		return err
+		return false, err
 	}
 	session, err := store.client.StartSession(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer session.EndSession(ctx)
 	mutations := append([]coredata.Mutation(nil), record.Mutations...)
@@ -62,12 +69,12 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 			continue
 		}
 		if mutations[i].Remote.TransactionID != entity.RemoteTransactionID(record.ID) {
-			return fmt.Errorf("dataengine mongo: remote transaction identity mismatch at mutation %d", i)
+			return false, fmt.Errorf("dataengine mongo: remote transaction identity mismatch at mutation %d", i)
 		}
 		remote = append(remote, mutations[i].Remote.Clone())
 	}
 	if len(remote) > 0 && (store.remoteStore == nil || store.remoteApplier == nil) {
-		return ErrRemoteProjection
+		return false, ErrRemoteProjection
 	}
 	transactionSkipped := false
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
@@ -134,7 +141,7 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		return err
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if transactionSkipped {
 		if len(remote) > 0 {
@@ -144,14 +151,14 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 				notifier.RejectRemoteTransaction(entity.RemoteTransactionID(record.ID), expiredLeaseCause)
 			}
 		}
-		return nil
+		return true, nil
 	}
 	if len(remote) > 0 {
 		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
-			return fmt.Errorf("dataengine mongo: remote publication: %w", err)
+			return false, fmt.Errorf("dataengine mongo: remote publication: %w", err)
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // SupportsMultiMutationBatch 保留旧 BatchProjectionStore 实现的兼容边界。

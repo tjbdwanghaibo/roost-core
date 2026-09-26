@@ -85,6 +85,11 @@ type ProjectorStats struct {
 	LastError                string
 	AdmissionRejected        uint64
 	BacklogWarning           bool
+	// FencedEntities 是当前被原生步骤屏障挡住写入的实体数；FencedAdmissionRejected 是因此
+	// 以 ErrFencedEntityPending 拒绝的准入次数；StaleEvictions 是跳过后完成的驱逐次数（RR-20260926-30）。
+	FencedEntities          uint64
+	FencedAdmissionRejected uint64
+	StaleEvictions          uint64
 }
 
 // Projector owns durable admission and WAL -> Mongo projection. Effects are
@@ -117,6 +122,17 @@ type Projector struct {
 	fatalOnce           sync.Once
 	ticketMu            sync.Mutex
 	tickets             map[coredata.TransactionID]*projectionTicket
+	// fencedEntities：实体 → 持有屏障的原生步骤记录（fenced_step.go）。heldMu 保护，
+	// 与 pendingTransactions 中该记录的 entityProjection 同时登记、同时解除。
+	fencedEntities map[int64]coredata.TransactionID
+
+	// 被跳过的原生步骤的驱逐队列；evictEntities 由 Runtime 注入，localExecutor 由 Nest 绑定。
+	evictMu       sync.Mutex
+	evictQueue    []staleEviction
+	evictRunning  bool
+	evictWG       sync.WaitGroup
+	evictEntities func(context.Context, []int64) error
+	localExecutor atomic.Pointer[func(func()) error]
 
 	committed         atomic.Uint64
 	projected         atomic.Uint64
@@ -124,6 +140,8 @@ type Projector struct {
 	failures          atomic.Uint64
 	fatalConflicts    atomic.Uint64
 	admissionRejected atomic.Uint64
+	fencedRejected    atomic.Uint64
+	staleEvictions    atomic.Uint64
 }
 
 func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOptions) (*Projector, error) {
@@ -405,7 +423,11 @@ func (projector *Projector) Stats() ProjectorStats {
 		WALUnacked:         projector.walUnacked.Load(),
 		AdmissionRejected:  projector.admissionRejected.Load(),
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
+		FencedAdmissionRejected: projector.fencedRejected.Load(), StaleEvictions: projector.staleEvictions.Load(),
 	}
+	projector.heldMu.RLock()
+	stats.FencedEntities = uint64(len(projector.fencedEntities))
+	projector.heldMu.RUnlock()
 	warning := projector.opts.WarnUnackedRecords
 	if warning == 0 {
 		warning = projector.opts.MaxUnackedRecords
@@ -445,6 +467,10 @@ func (projector *Projector) Close(ctx context.Context) error {
 	}
 	select {
 	case <-projector.done:
+		// 驱逐 worker 在 ctx 取消后不再重试；等它退出，之后才统一解除剩余屏障与等待方。
+		if err := projector.waitEvictions(ctx); err != nil {
+			return err
+		}
 		projector.completeAllTickets(context.Canceled)
 		if projector.opts.CloseWAL {
 			return projector.wal.Close(ctx)
@@ -485,6 +511,10 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 		return fatal
 	}
 	if _, exists := projector.admitted[id]; !exists {
+		// 原生步骤的实体屏障（RR-20260926-30）：与下面的登记同一临界区，不用瞬时统计判断。
+		if err := projector.checkFencedEntitiesLocked(record); err != nil {
+			return err
+		}
 		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {
 			projector.admissionRejected.Add(1)
 			return ErrProjectionBackpressure

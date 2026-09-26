@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -34,6 +35,53 @@ type EntityRepository struct {
 
 	flightMu sync.Mutex
 	flights  map[int64]*entityLoadFlight
+
+	hookMu      sync.RWMutex
+	nextHookID  uint64
+	loadedHooks map[uint64]func(entity.IThreadSafeEntity)
+}
+
+// OnEntityLoaded 注册在聚合从 Mongo 加载并发布之后调用的回调，与发布在同一次本地执行里
+// （Nest 慢阶段下即快池续行）。用途是让依附在旧对象上的协作者接上重载出来的新对象：
+// 被跳过的原生步骤驱逐实体后，Sync 用它把原订阅者重新绑定到新对象并强制全量（RR-20260926-30）。
+// 回调不能阻塞、不能做 I/O；返回的函数注销回调。
+func (repository *EntityRepository) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) func() {
+	if repository == nil || hook == nil {
+		return func() {}
+	}
+	repository.hookMu.Lock()
+	defer repository.hookMu.Unlock()
+	if repository.loadedHooks == nil {
+		repository.loadedHooks = make(map[uint64]func(entity.IThreadSafeEntity))
+	}
+	repository.nextHookID++
+	id := repository.nextHookID
+	repository.loadedHooks[id] = hook
+	return func() {
+		repository.hookMu.Lock()
+		delete(repository.loadedHooks, id)
+		repository.hookMu.Unlock()
+	}
+}
+
+func (repository *EntityRepository) runLoadedHooks(loaded entity.IThreadSafeEntity) {
+	repository.hookMu.RLock()
+	hooks := make([]func(entity.IThreadSafeEntity), 0, len(repository.loadedHooks))
+	for _, hook := range repository.loadedHooks {
+		hooks = append(hooks, hook)
+	}
+	repository.hookMu.RUnlock()
+	for _, hook := range hooks {
+		// 实体已经发布；回调失败只影响它自己的协作者，不能把一次成功的加载变成失败。
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.Error("dataengine repository: entity loaded hook panicked", "entity", loaded.ID(), "panic", recovered)
+				}
+			}()
+			hook(loaded)
+		}()
+	}
 }
 
 func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, migration *MigrationRunner, gate RecoveryGate) (*EntityRepository, error) {
@@ -202,7 +250,11 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 		var created entity.IThreadSafeEntity
 		var createErr error
 		// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
-		dispatchErr := entity.RunLocal(ctx, func() { created, createErr = repository.manager.Create(param) })
+		dispatchErr := entity.RunLocal(ctx, func() {
+			if created, createErr = repository.manager.Create(param); createErr == nil {
+				repository.runLoadedHooks(created)
+			}
+		})
 		err = errors.Join(createErr, dispatchErr)
 		if err != nil {
 			if errors.Is(err, entity.ErrEntityExists) {

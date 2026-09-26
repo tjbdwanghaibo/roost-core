@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -367,6 +368,13 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			processCtx = withReservation(processCtx, reservation)
 			completion, err := handler(processCtx, command)
 			if err != nil {
+				if errors.Is(err, coredata.ErrFencedEntityPending) {
+					// 实体上还有一笔未确定结果的原生步骤（常见是本命令上一次投递的记录）：本次事务已整体
+					// 回滚，交还租约，让屏障解除后的重投能立刻重新 Reserve（RR-20260926-30）。
+					if releaseErr := inbox.releaseLease(context.WithoutCancel(messageCtx), reservation); releaseErr != nil {
+						err = errors.Join(err, fmt.Errorf("saga: release unused step lease: %w", releaseErr))
+					}
+				}
 				return err
 			}
 			completion.CommandID, completion.IdempotencyKey, completion.SagaID = command.ID, command.IdempotencyKey, command.SagaID

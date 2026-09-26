@@ -59,6 +59,8 @@ func NewRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbo
 		return nil, err
 	}
 	runtime.Repository = repository
+	// 被跳过的原生步骤要驱逐 Runtime 管理的内存实体；Projector 自己不认识 EntityManager。
+	projector.evictEntities = runtime.evictStaleEntities
 	return runtime, nil
 }
 

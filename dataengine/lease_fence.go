@@ -18,6 +18,15 @@ const LeaseFenceReceiptNamespace = "__dataengine_lease_fence_v1"
 
 var ErrInvalidLeaseFence = errors.New("dataengine: invalid lease fence")
 
+// ErrFencedEntityPending 表示该实体上有一笔本进程已准入、投影结果尚未确定的原生 saga 步骤
+// （本地 mutation + lease fence receipt）。写同一实体的其他事务在 WAL 准入处被拒绝：没有写 WAL，
+// Nest 在 Guard 内整体回滚，调用方拿到的错误同时满足 errors.Is(err, nest.ErrCommitRejected)。
+//
+// 这是可重试错误，不是业务拒绝。屏障在该步骤投影成功，或因租约失效被跳过且内存实体已驱逐后解除；
+// 正常只持续一次投影（毫秒级），Mongo 变慢或中断时与投影积压同量级。原因：被跳过的步骤已经改了
+// 内存，若允许后续事务以该内存为基础准入，它们投影时必然是版本冲突（RR-20260926-30）。
+var ErrFencedEntityPending = errors.New("dataengine: entity has a lease-fenced step awaiting projection; retry later")
+
 // Field names of the coordination document a LeaseFence points at, and the
 // only status under which a fenced transaction may apply.
 //

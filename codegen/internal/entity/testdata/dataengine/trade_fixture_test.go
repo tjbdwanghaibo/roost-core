@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/saga"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -64,6 +66,14 @@ func (gate *tradeProjectionGate) Project(ctx context.Context, record coredata.Co
 	}
 	return gate.store.Project(ctx, record)
 }
+
+// ProjectFenced 转发 MongoStore 的跳过结果，让 Projector 走正式的“被跳过才驱逐”路径（RR-20260926-30）。
+func (gate *tradeProjectionGate) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
+	if err := gate.wait(ctx, record); err != nil {
+		return false, err
+	}
+	return gate.store.ProjectFenced(ctx, record)
+}
 func (*tradeProjectionGate) SupportsMultiMutationBatch() bool { return true }
 func (gate *tradeProjectionGate) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	if err := gate.wait(ctx, records[0]); err != nil {
@@ -88,6 +98,12 @@ type tradeFixture struct {
 }
 
 func newTradeFixture(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, configure ...func(*engine.ProjectorOptions)) *tradeFixture {
+	t.Helper()
+	return newTradeFixtureWith(t, ctx, client, root, scenario, policy, ackHook, nil, configure...)
+}
+
+// newTradeFixtureWith 额外接收 Nest 选项（例如 NestOptionWithEntitySync），其余与 newTradeFixture 相同。
+func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, nestOptions []nest.NestOption, configure ...func(*engine.ProjectorOptions)) *tradeFixture {
 	t.Helper()
 	h := &tradeFixture{ctx: ctx, client: client, database: NewWalletDao().DbName(), fatal: make(chan error, 1), ackFailed: make(chan struct{}, 1)}
 	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: h.database})
@@ -145,7 +161,8 @@ func newTradeFixture(t *testing.T, ctx context.Context, client fmongo.IMongo, ro
 	}
 	h.access = entity.NewManagerAccess(entity.NewEntityManager())
 	names := []string{"trade_seed", "trade_buy", "trade_transfer", "trade_reject", "trade_panic"}
-	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: names, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
+	allow := append(slices.Clone(names), "trade_fenced")
+	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: allow, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +171,7 @@ func newTradeFixture(t *testing.T, ctx context.Context, client fmongo.IMongo, ro
 	}
 	t.Cleanup(func() { _ = h.runtime.Shutdown(context.Background()) })
 	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerNumAndMsgCap(8, 1, 256))
+	options = append(options, nestOptions...)
 	h.scheduler = nest.NewEngine(options...)
 	meta := nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy}
 	h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_seed"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -167,6 +185,16 @@ func newTradeFixture(t *testing.T, ctx context.Context, client fmongo.IMongo, ro
 		e.wallet.SetCoins(e.wallet.GetCoins() - 5)
 		e.inventory.SetItems(e.inventory.GetItems() + 1)
 		return nil, nil
+	}, meta)
+	// 原生 saga 步骤：本地 DAO 修改与 inbox.Bind 的 lease fence 在同一 CommitRecord（RR-20260926-30）。
+	h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_fenced"), func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		e := es[0].(*Trader)
+		inbox, command, reservation := params[0].(*saga.DataEngineStepInbox), params[1].(saga.Command), params[2].(saga.Reservation)
+		e.wallet.SetCoins(e.wallet.GetCoins() - 100)
+		if err := inbox.Bind(command, reservation); err != nil {
+			return nil, err
+		}
+		return nil, saga.EmitCompletion(saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true})
 	}, meta)
 	for _, name := range names[2:] {
 		h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName(name), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {

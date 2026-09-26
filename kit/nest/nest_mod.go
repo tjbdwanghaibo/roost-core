@@ -3,6 +3,7 @@ package nest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"log/slog"
@@ -26,6 +27,14 @@ type Mod struct {
 	opts       []corenest.NestOption
 	engine     *corenest.NestMgr
 	config     engineConfig
+	// dataEngine 是 Provide 时查到的 DataEngine 能力；Start 时用它把 Sync 接上重新加载的实体。
+	dataEngine   any
+	unhookLoaded func()
+}
+
+// entityLoadNotifier 是 DataEngine 的可选能力（kit/dataengine Mod.OnEntityLoaded）。
+type entityLoadNotifier interface {
+	OnEntityLoaded(func(entity.IThreadSafeEntity)) (func(), error)
 }
 
 type engineConfig struct {
@@ -99,6 +108,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	if !ok || provider == nil {
 		return fmt.Errorf("nest mod: required data engine capability %q not found", mods.ModDataEngine)
 	}
+	m.dataEngine = provider
 	engineOptions := provider.NestOptions()
 	if len(engineOptions) == 0 {
 		return fmt.Errorf("nest mod: data engine capability %q is not initialized", mods.ModDataEngine)
@@ -135,6 +145,16 @@ func (m *Mod) Start() error {
 			return err
 		}
 		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval())
+		// DataEngine 驱逐实体（例如原生步骤被 lease fence 跳过，RR-20260926-30）会关闭它的同步状态；
+		// 重新加载后把仍登记着的 subject 接到新对象上，原订阅者收到全量而不是续发增量。
+		if loads, ok := m.dataEngine.(entityLoadNotifier); ok && m.unhookLoaded == nil {
+			unhook, err := loads.OnEntityLoaded(m.rebindEntitySync)
+			if err != nil {
+				_ = m.entitySync.Stop(context.Background())
+				return fmt.Errorf("nest mod: entity sync reload hook: %w", err)
+			}
+			m.unhookLoaded = unhook
+		}
 	}
 	if err := m.engine.Start(); err != nil {
 		if m.entitySync != nil {
@@ -143,6 +163,20 @@ func (m *Mod) Start() error {
 		return err
 	}
 	return nil
+}
+
+// rebindEntitySync 只处理仍登记着、且旧状态已关闭的 subject；普通冷加载返回 ErrSubjectNotRegistered，忽略。
+func (m *Mod) rebindEntitySync(loaded entity.IThreadSafeEntity) {
+	if loaded == nil || loaded.Base() == nil {
+		return
+	}
+	state := loaded.Base().Sync()
+	if state == nil {
+		return
+	}
+	if err := m.entitySync.Rebind(state); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		slog.Warn("entity sync: reloaded entity was not rebound", "entity", loaded.ID(), "err", err)
+	}
 }
 
 func (m *Mod) Stop() {
@@ -155,6 +189,10 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 	}
 	if err := m.engine.Shutdown(ctx); err != nil {
 		return err
+	}
+	if m.unhookLoaded != nil {
+		m.unhookLoaded()
+		m.unhookLoaded = nil
 	}
 	if m.entitySync != nil {
 		if err := m.entitySync.Stop(ctx); err != nil {

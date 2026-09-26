@@ -222,6 +222,25 @@ func (inbox *DataEngineStepInbox) reserveInTransaction(ctx context.Context, comm
 	return inbox.activeReservation(commandID, digest, renewed.LeaseToken), nil
 }
 
+// releaseLease 交还本次投递刚拿到、但没有用上的租约：把 lease_until 设为现在，只对仍属于这个
+// owner/token 的 pending claim 生效。只在 handler 以 coredata.ErrFencedEntityPending 失败时调用——
+// 该错误说明这次 Nest 事务在 WAL 准入前整体回滚，没有带本 token 的记录进入 WAL；不交还的话，
+// 之后的重投都会读到“租约有效”的 Duplicate，一直等到本次租约自然过期（RR-20260926-30）。
+// 即使 handler 另有一笔已准入的记录用了本 token，交还后它最多在投影时被跳过，被跳过的原生步骤
+// 会驱逐受影响的内存实体，不会产生重复副作用。
+func (inbox *DataEngineStepInbox) releaseLease(ctx context.Context, reservation Reservation) error {
+	if inbox == nil || inbox.client == nil || reservation.Duplicate || reservation.Token == 0 || reservation.commandID == "" {
+		return nil
+	}
+	now := inbox.now().UTC()
+	filter := bson.M{
+		"_id": dataEngineStepNamespace + "/" + reservation.commandID, "digest": reservation.digest,
+		"owner": reservation.owner, "lease_token": reservation.Token, "status": claimStatusPending,
+	}
+	_, err := inbox.claims().UpdateOne(ctx, filter, bson.M{"$set": bson.M{"lease_until": now, "updated_at": now}})
+	return err
+}
+
 func (inbox *DataEngineStepInbox) activeReservation(commandID string, digest []byte, token uint64) Reservation {
 	return Reservation{
 		Token: token, commandID: commandID, owner: inbox.options.Owner,

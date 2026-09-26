@@ -179,6 +179,22 @@ func (q *dispatchQueue) continueFast(msg *Msg) {
 	q.pending++
 	q.wake[0].Signal()
 }
+
+// tryContinueFast 是 continueFast 给框架外部入口（NestMgr.RunLocal）用的版本：队列未启动或已开始
+// 停止时拒绝，避免信封落在一个不会再有 worker 取走的队列里、调用方永远等不到。
+func (q *dispatchQueue) tryContinueFast(msg *Msg) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.started || q.stopping {
+		return false
+	}
+	q.continuations.push(&dispatchJob{msg: msg, continuation: true})
+	q.continuationCount++
+	q.pending++
+	q.wake[0].Signal()
+	return true
+}
+
 func (q *dispatchQueue) take(lane int) *dispatchJob {
 	if lane == 0 && q.continuations.head != nil && (q.preferContinuation || q.ready[0].head == nil) {
 		q.preferContinuation = false

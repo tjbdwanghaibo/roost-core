@@ -13,12 +13,15 @@ type entityProjection struct {
 	ids  []int64
 	done chan struct{}
 	err  error
+	// fenced：原生步骤（本地 mutation + lease fence），ids 上持有准入屏障，随本项一起解除。
+	fenced bool
 }
 
 func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 	if p.pendingTransactions == nil {
 		p.pendingTransactions = make(map[coredata.TransactionID]*entityProjection)
 		p.pendingEntities = make(map[int64]map[coredata.TransactionID]*entityProjection)
+		p.fencedEntities = make(map[int64]coredata.TransactionID)
 	}
 	pending := &entityProjection{done: make(chan struct{})}
 	for _, mutation := range record.Mutations {
@@ -40,6 +43,12 @@ func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 		group[record.ID] = pending
 		pending.ids = append(pending.ids, id)
 	}
+	if len(pending.ids) > 0 && hasLeaseFence(record) {
+		pending.fenced = true
+		for _, id := range pending.ids {
+			p.fencedEntities[id] = record.ID
+		}
+	}
 	p.pendingTransactions[record.ID] = pending
 }
 func (p *Projector) finishEntities(id coredata.TransactionID, err error) {
@@ -57,6 +66,9 @@ func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 		delete(group, id)
 		if len(group) == 0 {
 			delete(p.pendingEntities, entityID)
+		}
+		if pending.fenced && p.fencedEntities[entityID] == id {
+			delete(p.fencedEntities, entityID)
 		}
 	}
 	delete(p.pendingTransactions, id)

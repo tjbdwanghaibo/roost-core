@@ -150,7 +150,8 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				fences:  segment.fences[start:end],
 				batch:   segment.batch,
 			}
-			if err := projector.projectSegment(ctx, unit); err != nil {
+			outcome, err := projector.projectSegment(ctx, unit)
+			if err != nil {
 				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
 					perRecord = true
 					continue
@@ -159,7 +160,10 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
 			}
 			for i := range unit.records {
-				projector.completeProjection(unit.records[i].ID, nil)
+				// 被跳过的原生步骤先驱逐内存实体，屏障与等待方到驱逐完成才解除（RR-20260926-30）。
+				if !projector.startStaleEviction(unit.records[i].ID, outcome) {
+					projector.completeProjection(unit.records[i].ID, nil)
+				}
 			}
 			projector.projected.Add(uint64(len(unit.records)))
 			processed += len(unit.records)
@@ -178,22 +182,38 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	return processed, replayErr
 }
 
-func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) error {
+// projectSegment 返回的 outcome 只对单笔段有意义：带 lease fence 的记录总是单独成段
+// （isLocalBatchRecord 排除 receipt）。批量段只含普通本地记录，结果总是 applied。
+func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) (projectionOutcome, error) {
 	if len(segment.records) == 1 {
-		if err := projector.store.Project(ctx, segment.records[0]); err != nil {
-			return fmt.Errorf("transaction %s: %w", segment.records[0].ID.String(), err)
+		record := segment.records[0]
+		outcome := projectionApplied
+		var err error
+		if store, ok := projector.store.(FenceOutcomeProjectionStore); ok {
+			var skipped bool
+			if skipped, err = store.ProjectFenced(ctx, record); skipped {
+				outcome = projectionSkipped
+			}
+		} else {
+			err = projector.store.Project(ctx, record)
+			if hasLeaseFence(record) {
+				outcome = projectionOutcomeUnknown
+			}
 		}
-		return nil
+		if err != nil {
+			return projectionApplied, fmt.Errorf("transaction %s: %w", record.ID.String(), err)
+		}
+		return outcome, nil
 	}
 	if store, ok := projector.store.(BatchProjectionStore); ok {
-		return store.ProjectBatch(ctx, segment.records)
+		return projectionApplied, store.ProjectBatch(ctx, segment.records)
 	}
 	for i := range segment.records {
 		if err := projector.store.Project(ctx, segment.records[i]); err != nil {
-			return fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
+			return projectionApplied, fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
 		}
 	}
-	return nil
+	return projectionApplied, nil
 }
 
 func (projector *Projector) run() {

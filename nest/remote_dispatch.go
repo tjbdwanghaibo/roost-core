@@ -1,6 +1,8 @@
 package nest
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,6 +62,58 @@ func (call *remoteLogicCall) run(mgr *NestMgr) {
 		call.ret, call.err = runNestLogic(mgr, call.msg)
 	}
 
+}
+
+const localTaskName = "__nest_run_local"
+
+// RunLocal 把需要 Entity 本地锁的框架步骤交给快池执行，并同步等待它结束；fn 在快 worker 上运行，
+// 自己取所需的 Entity 锁（锁等待属于 Guard/本地锁豁免）。它走续行通道，不排在任何实体的同 ID 链上，
+// 所以等待它的调用方与同 ID 的慢准备不会互相等待。
+//
+// 只能在快池之外调用：慢 worker 或框架后台 goroutine（例如 DataEngine 驱逐被跳过的原生步骤留下的
+// 实体，RR-20260926-30）。在快 worker 上调用返回 fctx.ErrBlockingInFastWorker，不会自等
+// （RR-20260926-06）。Nest 未启动、已开始停机或已 fence 时返回错误，fn 不会执行；一旦投递成功就
+// 等到 fn 结束，不因 ctx 提前返回——fn 仍可能正持有 Entity 锁。fn 的 panic 作为错误返回。
+func (mgr *NestMgr) RunLocal(ctx context.Context, fn func()) error {
+	if mgr == nil {
+		return ErrNestStopped
+	}
+	if fn == nil {
+		return nil
+	}
+	if err := fctx.BlockingError("nest.RunLocal"); err != nil {
+		return err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(ErrNestCanceled, err)
+		}
+	}
+	if err := mgr.FenceError(); err != nil {
+		return err
+	}
+	mgr.lifecycleMu.Lock()
+	var queue *dispatchQueue
+	if mgr.started && !mgr.stopped {
+		queue = mgr.dispatcher.queue
+	}
+	mgr.lifecycleMu.Unlock()
+	if queue == nil {
+		return ErrNestStopped
+	}
+	call := &remoteLogicCall{
+		msg: &Msg{Name: localTaskName}, fn: fn, done: make(chan struct{}),
+		queuedAt: startNestStage(mgr.stageMetrics),
+	}
+	envelope := msgPool.Get().(*Msg)
+	envelope.remoteLogic = call
+	envelope.OnSend()
+	if !queue.tryContinueFast(envelope) {
+		envelope.OnRelease()
+		return ErrNestStopped
+	}
+	<-call.done
+	return call.err
 }
 
 func (mgr *NestMgr) dispatchRemoteLogic(msg *Msg) (any, error) {

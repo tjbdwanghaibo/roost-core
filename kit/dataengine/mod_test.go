@@ -8,10 +8,12 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 type modJetStream struct{ streams int }
@@ -182,5 +184,55 @@ func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 	}
 	if err := waiter.WaitEntityProjection(context.Background(), 1); err == nil {
 		t.Fatal("an unprovided Mod reported the entity's projections as landed")
+	}
+}
+
+// RR-20260926-30：DataEngine 驱逐被跳过的原生步骤留下的实体要在 Nest 快池持锁执行；Mod 作为 Nest 的
+// committer 接收 RunLocal 并转交给启动后才创建的 Projector。Nest 绑定前（启动恢复阶段）就地执行。
+// 重载回调在 Runtime 启动后才能注册。
+func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("dataengine.wal.writer_version", 2)
+	cfg.Set("dataengine.wal.dir", t.TempDir())
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongotest.NewClient())); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModNatsJetStream, fnats.IJetStream(&modJetStream{})); err != nil {
+		t.Fatal(err)
+	}
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	mod := NewMod(WithEntityAccess(access))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mod.OnEntityLoaded(func(entity.IThreadSafeEntity) {}); err == nil {
+		t.Fatal("reload hook accepted before the runtime exists")
+	}
+	inPlace := false
+	if err := mod.runLocal(func() { inPlace = !fctx.InFastWorker() }); err != nil || !inPlace {
+		t.Fatalf("unbound local executor=%v in place=%v", err, inPlace)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mod.Stop()
+	unhook, err := mod.OnEntityLoaded(func(entity.IThreadSafeEntity) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unhook()
+	scheduler := corenest.NewEngine(append(mod.NestOptions(), corenest.NestOptionWithGetter(access))...)
+	if err := scheduler.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Shutdown(context.Background())
+	onFast := false
+	if err := mod.runLocal(func() { onFast = fctx.InFastWorker() }); err != nil || !onFast {
+		t.Fatalf("bound local executor=%v on fast worker=%v", err, onFast)
 	}
 }

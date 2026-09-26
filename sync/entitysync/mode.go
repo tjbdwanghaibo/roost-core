@@ -56,10 +56,14 @@ func (m *Manager) CaptureSync(state *entity.SubjectSyncState) error {
 		return nil
 	}
 	subj := m.subject(state.SubjectID())
-	if subj == nil || subj.state != state {
+	if subj == nil {
 		return nil
 	}
 	subj.mu.Lock()
+	if subj.state != state {
+		subj.mu.Unlock()
+		return nil
+	}
 	delta, snapshot := subj.profilesLocked(nil)
 	retiring := subj.retiring
 	subj.mu.Unlock()

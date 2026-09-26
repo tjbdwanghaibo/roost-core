@@ -99,6 +99,15 @@ type TransactionReleaseNotifier interface {
 	TransactionReleased(TransactionID)
 }
 
+// LocalExecutorBinder is an optional committer capability. NewEngine hands it
+// the engine's RunLocal so persistence infrastructure can run a step that needs
+// an entity's local lock on the fast pool (for example evicting an entity whose
+// lease-fenced transaction was skipped at projection, RR-20260926-30) instead
+// of taking that lock on its own goroutine.
+type LocalExecutorBinder interface {
+	BindLocalExecutor(run func(func()) error)
+}
+
 // CommitTicket resolves when an enqueued record becomes durable. Err is nil
 // on success or ErrCommitIndeterminate when the fsync outcome is unknown; no
 // other error is legal — every rejectable condition must be reported
