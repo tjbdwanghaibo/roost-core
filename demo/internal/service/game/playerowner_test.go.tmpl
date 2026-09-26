@@ -107,6 +107,9 @@ func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeLeaseTable, *fakeFencer,
 	// table is published), and without one a claim across a gap is refused —
 	// which is the point of RR-20260920-09, not the subject of most tests.
 	owners.Evict(&evictorStub{})
+	// Likewise every assembled deployment waits for the data engine before a
+	// hand-back (RR-20260926-31); by default nothing is in flight.
+	owners.Projections(newProjectionStub())
 	return owners, table, fencer, &clock
 }
 
@@ -729,5 +732,105 @@ func TestOneBusyEntityDoesNotHoldUpTheRefreshLoop(t *testing.T) {
 	// And the other player's lease was renewed by that same pass.
 	if err := owners.Admit(43); err != nil {
 		t.Fatalf("a bystander lost their lease to somebody else's busy entity: %v", err)
+	}
+}
+
+// projectionStub is this process's write-ahead log as a hand-back sees it:
+// a player's committed writes are either still on their way to Mongo, failed
+// to get there, or landed.
+type projectionStub struct {
+	mu      sync.Mutex
+	landed  chan struct{}
+	failure error
+	asked   []int64
+}
+
+// newProjectionStub has nothing in flight.
+func newProjectionStub() *projectionStub {
+	landed := make(chan struct{})
+	close(landed)
+	return &projectionStub{landed: landed}
+}
+
+// inFlight puts writes on the way; the returned func lands them.
+func (stub *projectionStub) inFlight() func() {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	landed := make(chan struct{})
+	stub.landed = landed
+	return sync.OnceFunc(func() { close(landed) })
+}
+
+func (stub *projectionStub) fail(err error) {
+	stub.mu.Lock()
+	stub.failure = err
+	stub.mu.Unlock()
+}
+
+func (stub *projectionStub) WaitPlayerProjection(ctx context.Context, playerID int64) error {
+	stub.mu.Lock()
+	stub.asked = append(stub.asked, playerID)
+	landed, failure := stub.landed, stub.failure
+	stub.mu.Unlock()
+	if failure != nil {
+		return failure
+	}
+	select {
+	case <-landed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RR-20260926-31：闲置交还要等本进程已提交的写入落库，再交出租约。
+//
+// 下一个所有者只从 Mongo 读取玩家。驱逐忘掉的是内存副本，但这份副本提交过的事务
+// 可能还在本进程 WAL 里等待投影；此时释放租约，另一进程会装载落后的文档，两边的
+// 版本计数在投影时撞成 fatal。旧实现驱逐后立刻 Release，这里投影未完成（等待超时
+// 或投影失败）时租约必须保留并留给下一轮重试；投影完成后才交还。
+func TestAHandBackWaitsForThePlayersWritesToReachTheDatabase(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	projections := newProjectionStub()
+	owners.Projections(projections)
+	owners.projectionWait = 20 * time.Millisecond
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The step committed a write that is still in the log when the lease
+	// goes idle.
+	land := projections.inFlight()
+	defer land()
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if table.owner[77] != 1000 || len(table.released) != 0 {
+		t.Fatalf("the lease was handed back while the player's writes were still on their way to the database: owner=%v released=%v", table.owner, table.released)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("a hand-back that did not happen left the lease out of service: %v", err)
+	}
+
+	// A projection that fails is not a projection that landed either.
+	projections.fail(errors.New("projection failed"))
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if table.owner[77] != 1000 || len(table.released) != 0 {
+		t.Fatalf("the lease was handed back after the projection failed: owner=%v released=%v", table.owner, table.released)
+	}
+
+	// Once the writes are in Mongo the next pass hands the lease back.
+	projections.fail(nil)
+	land()
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if _, held := table.owner[77]; held || len(table.released) != 1 {
+		t.Fatalf("the lease was not handed back once the writes had landed: owner=%v released=%v", table.owner, table.released)
+	}
+	projections.mu.Lock()
+	asked := len(projections.asked)
+	projections.mu.Unlock()
+	if asked != 3 {
+		t.Fatalf("hand-back asked about the projection %d times, want once per pass (3)", asked)
 	}
 }

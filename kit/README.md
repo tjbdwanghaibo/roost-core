@@ -331,7 +331,7 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 | 常量（字符串值） | 注册者 | 实际类型 |
 | --- | --- | --- |
 | `ModNest`（`nest`） | nest Mod | `*corenest.NestMgr` |
-| `ModDataEngine`（`dataengine`） | dataengine Mod | `*dataengine.Mod`（同时提供 lazy Nest committer） |
+| `ModDataEngine`（`dataengine`） | dataengine Mod | `*dataengine.Mod`（同时提供 lazy Nest committer；`WaitEntityProjection(ctx, entityID)` 是跨进程交出实体所有权前的本进程投影屏障，慢路径调用，RR-20260926-31） |
 | `ModRedisVLock`（`redis.versioned_lock`） | **remote_entity Mod**（不是 redis Mod） | `fredis.IVersionedLockFactory` |
 | `ModRemoteEntityAtomicStore`（`remote_entity.atomic_store`） | remote_entity Mod | `AtomicCommitStore`（Data Engine projection 消费） |
 | `ModEntityRuntime`（`entity.runtime`） | nest Mod 顺带注册（已存在则不覆盖） | entity getter（statslog 消费） |

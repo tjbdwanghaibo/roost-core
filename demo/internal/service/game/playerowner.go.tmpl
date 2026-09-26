@@ -68,7 +68,12 @@ type PlayerOwners struct {
 	// evictWait is evictBudget, as a field so a test does not have to spend
 	// five seconds proving that the wait is bounded.
 	evictWait time.Duration
-	now       func() time.Time
+	// projections answers whether this process's committed writes for a
+	// player have reached the database; projectionWait bounds how long one
+	// hand-back pass waits for that answer (RR-20260926-31).
+	projections    projectionBarrier
+	projectionWait time.Duration
+	now            func() time.Time
 
 	mu    sync.Mutex
 	local map[int64]*leaseState
@@ -205,6 +210,47 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 
 var _ residentEvictor = playerEvictor{}
 
+// projectionBarrier is the other half of "this process has nothing of that
+// player left": evicting forgets the copy in memory, but the transactions
+// that copy committed may still be in this process's write-ahead log on
+// their way to Mongo. The next owner loads the player from Mongo, so a lease
+// handed over before those writes land hands over a document that is behind
+// what this process already acknowledged — and the two processes' version
+// counters meet in a `fatal projection version conflict` (RR-20260926-31).
+//
+// It blocks, and it is only ever called from the refresh loop's goroutine,
+// never from a Nest worker.
+type projectionBarrier interface {
+	// WaitPlayerProjection returns nil once every write this process has
+	// committed for the player is in the database, or an error when that
+	// cannot be shown before ctx ends — in which case the caller keeps the
+	// lease.
+	WaitPlayerProjection(ctx context.Context, playerID int64) error
+}
+
+// entityProjectionWaiter is what the data engine Mod publishes under
+// mods.ModDataEngine for this question (kit/dataengine Mod.WaitEntityProjection).
+type entityProjectionWaiter interface {
+	WaitEntityProjection(ctx context.Context, entityID int64) error
+}
+
+// playerProjections asks the data engine about the Player entity of a
+// player id. The engine tracks in-flight projections by full entity id.
+type playerProjections struct{ engine entityProjectionWaiter }
+
+func (projections playerProjections) WaitPlayerProjection(ctx context.Context, playerID int64) error {
+	if projections.engine == nil {
+		return fmt.Errorf("player projections: data engine is not assembled")
+	}
+	entityID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return err
+	}
+	return projections.engine.WaitEntityProjection(ctx, entityID)
+}
+
+var _ projectionBarrier = playerProjections{}
+
 // leaseState is what this process knows about one lease, and when it stops
 // being able to claim it knows it. validUntil is a LOCAL deadline computed
 // from the last confirmation, never from the value in Redis: the two clocks
@@ -293,10 +339,24 @@ func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Tim
 	}
 	return &PlayerOwners{
 		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
-		evictWait: evictBudget,
+		evictWait: evictBudget, projectionWait: evictBudget,
 		local:     map[int64]*leaseState{},
 		evictions: map[int64]*eviction{},
 	}
+}
+
+// Projections sets what tells a hand-back that this process's writes for a
+// player have reached the database. Like Evict it is installed after
+// construction, before the table is published. A table without one never
+// hands a lease back: it cannot show that the next owner would load a
+// current document (RR-20260926-31).
+func (owners *PlayerOwners) Projections(barrier projectionBarrier) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.projections = barrier
+	owners.mu.Unlock()
 }
 
 // Evict sets what drops this process's copy of a player. Like Fence it is
@@ -476,9 +536,20 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 // process. Evicting first makes the release honest — after it, this process
 // has nothing of that player left. An eviction that fails therefore keeps the
 // lease.
+//
+// "Nothing left" includes the log. The copy's committed transactions may still
+// be in this process's write-ahead log on their way to Mongo, and Mongo is all
+// the next owner reads — so between the eviction and the release the pass
+// waits for this player's projections (RR-20260926-31). Evicting first means
+// no new write can join them; admission is already stopped by handingBack. A
+// wait that fails or runs out of budget keeps the lease, and the next pass
+// tries again. One budget covers the whole pass: a stalled database costs the
+// refresh loop one projectionWait, not one per player.
 func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 	owners.mu.Lock()
 	sessions := owners.fencer
+	projections := owners.projections
+	projectionWait := owners.projectionWait
 	now := owners.now()
 	var idle []int64
 	if sessions != nil {
@@ -496,6 +567,11 @@ func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 		}
 	}
 	owners.mu.Unlock()
+	if len(idle) == 0 {
+		return
+	}
+	projected, cancel := context.WithTimeout(ctx, projectionWait)
+	defer cancel()
 	for _, playerID := range idle {
 		// Asked outside the lock, and asked last: a player who reconnected
 		// while this pass was deciding keeps their lease.
@@ -505,6 +581,16 @@ func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 		}
 		if err := owners.dropResident(ctx, playerID); err != nil {
 			slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
+			owners.cancelHandBack(playerID)
+			continue
+		}
+		if projections == nil {
+			slog.Warn("player owners: idle lease kept because nothing can show its player's writes reached the database", "player_id", playerID)
+			owners.cancelHandBack(playerID)
+			continue
+		}
+		if err := projections.WaitPlayerProjection(projected, playerID); err != nil {
+			slog.Warn("player owners: idle lease kept because its player's writes have not reached the database yet", "player_id", playerID, "err", err)
 			owners.cancelHandBack(playerID)
 			continue
 		}

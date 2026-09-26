@@ -295,6 +295,21 @@ func (mod *Mod) Runtime() *engine.Runtime {
 	}
 	return mod.asm.Runtime()
 }
+
+// WaitEntityProjection 等待本进程 WAL 中该实体（完整 Entity ID）的在途投影落库，
+// 是跨进程交出实体所有权前的屏障（RR-20260926-31）：另一进程接手时只从 Mongo
+// 读取，本进程已确认但未投影的事务不会被它看到。只跟踪本进程的在途记录；
+// 投影失败、Runtime 未就绪或 WAL 不健康都返回错误，调用方应保留所有权并重试。
+// 会阻塞，只能在慢路径或独立 goroutine 调用，快 worker 上调用会按
+// RR-20260926-06 fail-fast。
+func (mod *Mod) WaitEntityProjection(ctx context.Context, entityID int64) error {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return errors.New("dataengine mod: not provided")
+	}
+	return runtime.WaitEntityProjection(ctx, entityID)
+}
+
 func (mod *Mod) Repository() *engine.EntityRepository {
 	runtime := mod.Runtime()
 	if runtime == nil {

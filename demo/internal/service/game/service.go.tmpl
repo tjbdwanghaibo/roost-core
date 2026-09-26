@@ -140,6 +140,14 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so a lease could never drop its player")
 	}
 	owners.Evict(playerEvictor{scene: scene, players: players, manager: access.Manager()})
+	// And what a hand-back waits for between dropping the copy and releasing
+	// the claim: this process's writes for the player reaching Mongo, which
+	// is all the next owner will read (RR-20260926-31).
+	projections, ok := app.Lookup[entityProjectionWaiter](registry, mods.ModDataEngine)
+	if !ok || projections == nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: data engine is unavailable, so a lease could never be handed back safely")
+	}
+	owners.Projections(playerProjections{engine: projections})
 	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
 	}

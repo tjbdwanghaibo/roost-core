@@ -169,3 +169,18 @@ func TestDataEngineRemoteProjectionWorkerConfig(t *testing.T) {
 		}
 	}
 }
+
+// RR-20260926-31：生成工程在闲置交还租约前，按接口从 ModDataEngine 取得实体投影屏障；
+// 未装配的 Mod 不能回答“已落库”。
+func TestModPublishesEntityProjectionBarrier(t *testing.T) {
+	var published any = NewMod()
+	waiter, ok := published.(interface {
+		WaitEntityProjection(context.Context, int64) error
+	})
+	if !ok {
+		t.Fatal("dataengine Mod does not publish WaitEntityProjection")
+	}
+	if err := waiter.WaitEntityProjection(context.Background(), 1); err == nil {
+		t.Fatal("an unprovided Mod reported the entity's projections as landed")
+	}
+}
