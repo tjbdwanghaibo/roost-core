@@ -101,3 +101,13 @@ func (b *Backend) RejectRemoteCommitsInTransaction(ctx context.Context, commits 
 	}
 	return store.RejectRemoteCommitsInTransaction(ctx, commits, cause)
 }
+
+// RejectUnresolvedRemoteCommits 转发 Durability 0 未知结果的持久拒绝；存储不支持时
+// 返回 ErrRemoteAtomicBatchUnsupported，finalizer 保持隔离并继续回源。
+func (b *Backend) RejectUnresolvedRemoteCommits(ctx context.Context, commits []entity.RemoteCommit, cause string) (entity.RemoteCommitStatus, error) {
+	store, ok := b.storage.(remoteUnresolvedRejecter)
+	if !ok {
+		return entity.RemoteCommitStatus{}, entity.ErrRemoteAtomicBatchUnsupported
+	}
+	return store.RejectUnresolvedRemoteCommits(ctx, commits, cause)
+}

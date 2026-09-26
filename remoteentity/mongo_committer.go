@@ -452,3 +452,39 @@ func (s *MongoCommitter) RejectRemoteCommitsInTransaction(ctx context.Context, c
 	_, err = collection.InsertOne(ctx, mongoRemoteTransaction{ID: id.String(), State: uint8(entity.RemoteCommitRejected), Digest: digest, Cause: cause, CreatedAt: time.Now().UTC()})
 	return err
 }
+
+// RejectUnresolvedRemoteCommits 为结果未知、且没有 WAL 会重放的事务（Durability 0）
+// 写下持久结论。与 RejectRemoteCommitsInTransaction 相同，拒绝记录占用同一事务 _id：
+// 插入成功后，任何迟到的提交都会在自己的 Mongo 事务里撞上这条记录而失败，
+// CommitRemoteBatch 读到它也只会返回 ErrRemoteRejected。
+//
+// 插入撞键说明事务已经存在（提交先落库，或更早的拒绝），按读回的真实状态返回，
+// 由调用方发布或回滚；绝不覆盖已有记录。其他错误表示仍无结论，调用方必须保持隔离并重试。
+func (s *MongoCommitter) RejectUnresolvedRemoteCommits(ctx context.Context, commits []entity.RemoteCommit, cause string) (entity.RemoteCommitStatus, error) {
+	if s == nil || s.mongo == nil || s.database == "" {
+		return entity.RemoteCommitStatus{}, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	id, digest, err := validateRemoteCommitBatch(commits)
+	if err != nil {
+		return entity.RemoteCommitStatus{}, err
+	}
+	rejected := mongoRemoteTransaction{ID: id.String(), State: uint8(entity.RemoteCommitRejected), Digest: digest, Cause: cause, CreatedAt: time.Now().UTC()}
+	_, err = s.controlDB().Collection(remoteTxCollection).InsertOne(ctx, rejected)
+	if err == nil {
+		return remoteStatusFromMongoTransaction(id, rejected), nil
+	}
+	if !errors.Is(err, fmongo.ErrDuplicateKey) {
+		return entity.RemoteCommitStatus{}, err
+	}
+	existing, found, err := s.loadTransaction(ctx, id)
+	if err != nil {
+		return entity.RemoteCommitStatus{}, err
+	}
+	if !found {
+		return entity.RemoteCommitStatus{}, fmt.Errorf("%w: rejection hit an existing transaction that cannot be read back", entity.ErrRemotePersistenceIndeterminate)
+	}
+	if !bytes.Equal(existing.Digest, digest) {
+		return entity.RemoteCommitStatus{}, fmt.Errorf("%w: transaction id reused with different commits", entity.ErrRemoteRejected)
+	}
+	return remoteStatusFromMongoTransaction(id, existing), nil
+}

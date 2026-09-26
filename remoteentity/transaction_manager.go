@@ -63,10 +63,22 @@ type remoteState struct {
 }
 
 type deferredRemoteClose struct {
-	txID    entity.RemoteTransactionID
-	entries []*remoteWriteEntry
-	attempt int
+	txID entity.RemoteTransactionID
+	// durability 决定 Unknown 由谁收敛：1/2 有 WAL，投影会写出 Applied 或持久拒绝；
+	// 0 没有 WAL，只能由 finalizer 自己写下持久拒绝（rejectUnresolvedMemoryTransaction）。
+	durability uint8
+	entries    []*remoteWriteEntry
+	attempt    int
 }
+
+// remoteUnresolvedRejecter 以事务 _id 持久写入拒绝，撞键时返回已有事务的真实状态。
+// MongoCommitter 与正式 Backend 实现它；其他存储没有这项能力时 Durability 0 的未知结果
+// 保持隔离重试，不能在无持久结论时释放。
+type remoteUnresolvedRejecter interface {
+	RejectUnresolvedRemoteCommits(context.Context, []entity.RemoteCommit, string) (entity.RemoteCommitStatus, error)
+}
+
+const unresolvedMemoryRejectCause = "memory durability outcome unresolved; rejected by finalizer"
 
 func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *remoteState {
 	finalizeCtx, finalizeCancel := context.WithCancel(context.Background())
@@ -234,8 +246,14 @@ func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
 	}
 }
 
+// processDeferredRemoteClose 只在拿到持久结论后收尾：Applied 先发布再释放，Committed
+// 确认后释放，Rejected 回滚、解除本事务造成的隔离后释放。其余情况保留 gate、fence、
+// 写额度并隔离实体，按退避重试。
 func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
 	status, err := m.RemoteCommitStatus(state.finalizeCtx, item.txID)
+	if err == nil && status.State == entity.RemoteCommitUnknown && item.durability == 0 {
+		status, err = m.rejectUnresolvedMemoryTransaction(state.finalizeCtx, item)
+	}
 	if err == nil && status.State == entity.RemoteCommitApplied {
 		err = m.publishAppliedRemoteTransaction(state.finalizeCtx, status)
 		if err == nil {
@@ -253,7 +271,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		}
 	}
 	if status.State == entity.RemoteCommitRejected {
-		m.rollbackRemoteEntries(item.entries)
+		m.rollbackRejectedRemoteEntries(state.finalizeCtx, item.entries)
 		m.releaseRemoteEntriesObserved(context.Background(), item.entries)
 		m.releaseRemoteWriteSlot()
 		return
@@ -307,6 +325,91 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 			m.releaseRemoteWriteSlot()
 		}
 	}()
+}
+
+// rejectUnresolvedMemoryTransaction 为回源读不到的 Durability 0 事务写下持久结论。
+//
+// 这类事务只有 ApplyRemoteCommits 那一次提交尝试，没有 WAL 会重放它；后端返回瞬时
+// 错误时事务可能根本没有到达 Mongo，CommitStatus 永远是 Unknown（RR-20260926-28）。
+// 调用时本次提交尝试已经返回（batch.Close 在 Commit 之后才转交 finalizer），但服务端
+// 仍可能有在途的提交，所以不能直接当成未提交：用同一事务 _id 写入拒绝，由唯一索引
+// 在“拒绝”和“迟到提交”之间裁决。插入成功即 Rejected；撞键则返回事务的真实状态
+// （Applied/Committed 走发布与确认，不回滚）。任何错误都意味着仍无结论，交回调用方重试。
+func (m *Manager) rejectUnresolvedMemoryTransaction(ctx context.Context, item deferredRemoteClose) (entity.RemoteCommitStatus, error) {
+	unknown := entity.RemoteCommitStatus{TransactionID: item.txID, State: entity.RemoteCommitUnknown}
+	rejecter, ok := m.backend.(remoteUnresolvedRejecter)
+	if !ok {
+		return unknown, fmt.Errorf("%w: backend cannot persist a rejection for unresolved transaction %s", entity.ErrRemotePersistenceIndeterminate, item.txID)
+	}
+	commits := finalizedRemoteCommits(item.entries)
+	if len(commits) == 0 {
+		return unknown, fmt.Errorf("%w: unresolved transaction %s has no finalized commits", entity.ErrRemotePersistenceIndeterminate, item.txID)
+	}
+	status, err := rejecter.RejectUnresolvedRemoteCommits(ctx, commits, unresolvedMemoryRejectCause)
+	if err != nil {
+		metrics.IncCounter("remote_entity.unresolved_reject_error_total", nil, 1)
+		return unknown, fmt.Errorf("remote_entity: persist rejection for transaction %s: %w", item.txID, err)
+	}
+	if status.TransactionID.IsZero() {
+		status.TransactionID = item.txID
+	}
+	if status.State == entity.RemoteCommitRejected || status.State == entity.RemoteCommitCommitted {
+		m.completeRemoteTransaction(item.txID, status)
+	}
+	metrics.IncCounter("remote_entity.unresolved_resolved_total", metrics.Labels{"state": remoteCommitStateLabel(status.State)}, 1)
+	return status, nil
+}
+
+func remoteCommitStateLabel(state entity.RemoteCommitState) string {
+	switch state {
+	case entity.RemoteCommitRejected:
+		return "rejected"
+	case entity.RemoteCommitApplied:
+		return "applied"
+	case entity.RemoteCommitCommitted:
+		return "committed"
+	default:
+		return "other"
+	}
+}
+
+// rollbackRejectedRemoteEntries 在持久拒绝后回滚本事务的定稿提交并解除本事务造成的隔离。
+//
+// finalizer 不是 Nest 快 worker，也拿不到已结束消息的快池续行；回滚经 entity.RunLocal
+// 的本地执行路径（finalizeCtx 未注入执行器时就地执行），在每个实体自己的本地锁内进行，
+// 与快池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁（rollbackRemoteEntries）。
+//
+// 隔离只退到 Recovering 并作废 marker 缓存：持有 gate 期间没有其他写者，实体此时的
+// Quarantined 只能来自本事务的未知结果；拒绝后 Mongo 保持 BaseVersion，本地版本也未前进，
+// 但仍要求下一写者经 beginWrite 重新向权威读取 ownership/许可与版本后才恢复写入。
+func (m *Manager) rollbackRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) {
+	var thawErr error
+	runErr := entity.RunLocal(ctx, func() {
+		m.rollbackRemoteEntries(entries)
+		for _, entry := range entries {
+			if entry == nil || entry.entity == nil || entry.entity.GetMutex() == nil {
+				continue
+			}
+			func() {
+				mu := entry.entity.GetMutex()
+				mu.Lock()
+				defer mu.Unlock()
+				if entry.entity.RemoteOwnershipState() != entity.RemoteOwnershipQuarantined {
+					return
+				}
+				if err := entry.entity.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err != nil {
+					thawErr = errors.Join(thawErr, fmt.Errorf("remote_entity: thaw rejected entity %d: %w", entry.entity.ID(), err))
+				}
+			}()
+			if entry.wrapper != nil {
+				entry.wrapper.invalidateMarker()
+			}
+		}
+	})
+	if err := errors.Join(runErr, thawErr); err != nil {
+		// 拒绝结论已持久，释放照常进行；解冻失败的实体保持隔离，只是不可写，不会越权。
+		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
+	}
 }
 
 func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {

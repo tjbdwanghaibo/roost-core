@@ -533,10 +533,11 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	entries := append([]*remoteWriteEntry(nil), b.entries...)
 	deferred := b.indeterminate || (b.committed && b.outcome.Durability == 1 && len(b.commitsLocked()) > 0)
 	txID := b.outcome.TransactionID
+	durability := b.outcome.Durability
 	b.entries = nil
 	b.mu.Unlock()
 	if deferred {
-		if err := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, entries: entries}); err == nil {
+		if err := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, durability: durability, entries: entries}); err == nil {
 			return nil
 		}
 	}
@@ -549,9 +550,15 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 }
 
 func (b *remoteWriteBatch) commitsLocked() []entity.RemoteCommit {
-	commits := make([]entity.RemoteCommit, 0, len(b.entries))
-	for _, entry := range b.entries {
-		if entry.finalized {
+	return finalizedRemoteCommits(b.entries)
+}
+
+// finalizedRemoteCommits 按批次实体顺序复制已定稿的提交；事务 digest 依赖这个顺序，
+// finalizer 为同一事务写持久拒绝时必须得到与提交时相同的内容。
+func finalizedRemoteCommits(entries []*remoteWriteEntry) []entity.RemoteCommit {
+	commits := make([]entity.RemoteCommit, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil && entry.finalized {
 			commits = append(commits, entry.commit.Clone())
 		}
 	}
