@@ -87,6 +87,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `remote_entity.remote.write_gate_wait` | Duration | 写闸门等待 |
 | `remote_entity.remote.interest_rejected_total` | Counter | interest 拒绝 |
 | `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |
+| `remote_entity.deferred_outcome_not_run_total{outcome}` | Counter | Remote 结果未知的事务拿到持久结论时 Nest 已停机 / 已 fence，提交后工作（AfterCommit、Sync 放行）未执行（RR-20260926-61）；停机窗口外应为零 |
 
 ### 帧同步（kit/lockstep）
 

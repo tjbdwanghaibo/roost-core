@@ -78,6 +78,24 @@ type rejectingStorage struct {
 	reject atomic.Bool
 	// loseReply：事务真实写进 Mongo，但回复丢失（调用方看到超时，结果未知）。
 	loseReply atomic.Bool
+	// statusHold 非 nil 时，回源读取在返回前等它关闭（进入时先通知 statusHeld），供回归按事件控制 finalizer 拿到结论的时刻。
+	statusHold atomic.Pointer[chan struct{}]
+	statusHeld chan struct{}
+}
+
+func (s *rejectingStorage) CommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
+	if hold := s.statusHold.Load(); hold != nil {
+		select {
+		case s.statusHeld <- struct{}{}:
+		default:
+		}
+		select {
+		case <-*hold:
+		case <-ctx.Done():
+			return entity.RemoteCommitStatus{}, ctx.Err()
+		}
+	}
+	return s.switchableStorage.CommitStatus(ctx, id)
 }
 
 func (s *rejectingStorage) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
@@ -105,7 +123,7 @@ func newReloadFixture(t *testing.T, rawID int64) (reloadFixture, *reloadableFull
 	const kind entity.EntityKind = 125
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
-	storage := &rejectingStorage{switchableStorage: &switchableStorage{MongoCommitter: store, statusCalls: make(chan struct{}, 1)}}
+	storage := &rejectingStorage{switchableStorage: &switchableStorage{MongoCommitter: store, statusCalls: make(chan struct{}, 1)}, statusHeld: make(chan struct{}, 1)}
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)
 	loader := &authorityLoader{store: store, manager: manager, kind: kind, rawID: rawID}

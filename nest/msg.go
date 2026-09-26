@@ -120,7 +120,9 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 
 // deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论（RR-20260926-37）。
 // 结论为已提交时回调按注册顺序在本地执行入口（快池）运行，每个回调独立隔离 panic；原请求已经或即将以
-// “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。结论为拒绝时只丢弃批次内 Remote 实体的
+// “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。回调看到的是原请求的上下文快照
+// （RR-20260926-61，见 deferredRequestSnapshot），与结论及时到达时经快池续行执行看到的一致。Nest 已停机或已 fence
+// 时 Remote 收尾不会调用闭包（不离池执行，计数告警），这些回调就不执行。结论为拒绝时只丢弃批次内 Remote 实体的
 // Sync 门与事实（RejectEntities，RR-20260926-58）：本地部分已经持久提交，本地实体的门按 Confirm 放行；
 // AfterCommit 不执行。批次不接手（没有后续持久结论）时什么也不做：没有持久结论就不 Confirm，门保持冻结。
 // 闭包只捕获值，不引用会被回收复用的 Msg。
@@ -136,10 +138,16 @@ func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
 		return
 	}
 	remoteIDs := batch.EntityIDs()
+	snapshot := deferredRequestSnapshot()
 	outcome := func(committed bool) {
 		if !committed {
 			mutation.RejectEntities(remoteIDs)
 			return
+		}
+		if current := fctx.CurrentContext(); current != nil && snapshot.Valid {
+			previous := current.Snapshot()
+			current.ApplySnapshot(snapshot)
+			defer current.ApplySnapshot(previous)
 		}
 		for _, callback := range callbacks {
 			if err := runCommitCallback(callback); err != nil {
@@ -152,6 +160,18 @@ func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
 		return
 	}
 	metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)
+}
+
+// deferredRequestSnapshot 捕获慢阶段此刻的请求上下文（快阶段写回的请求数据已在其中），供延迟执行的提交后回调使用
+// （RR-20260926-61）。两处与原样不同：去掉慢阶段注入的本地执行器（执行器属于正在结束的这次派发，不能随快照进入
+// 快阶段）；Base 与请求 ctx 的取消脱钩——结论到达时回复早已发出、请求 ctx 通常已取消，取消等待不等于撤销业务，
+// 已提交事务的回调不应因此失败。Base 上的值（请求元数据等）保留。
+func deferredRequestSnapshot() fctx.ContextSnapshot {
+	snapshot := fctx.CaptureSnapshot()
+	if snapshot.Valid && snapshot.Base != nil {
+		snapshot.Base = entity.WithLocalExecutor(context.WithoutCancel(snapshot.Base), nil)
+	}
+	return snapshot
 }
 
 func (m *Msg) abortRemoteWriteBatchLocked(cause error) error {

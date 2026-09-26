@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // RR-20260926-37：本地已提交、Remote 结果未知或被拒绝时，Nest 把提交后工作（Sync Confirm、AfterCommit）交给批次。
@@ -208,11 +209,26 @@ func TestShutdownWithoutOutcomeKeepsPostCommitPending(t *testing.T) {
 	}
 }
 
-// Nest 已停机（RunLocal 拒绝投递、fn 不执行）时拿到持久结论：提交后工作不取实体锁，就地执行一次，不丢失。
-func TestOutcomeRunsInlineWhenFastPoolRefuses(t *testing.T) {
+// deferredOutcomeNotRun 读取“快池拒绝投递、提交后工作未执行”的计数（RR-20260926-61）。
+func deferredOutcomeNotRun(outcome string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == "remote_entity.deferred_outcome_not_run_total" && metric.Labels["outcome"] == outcome {
+			total += metric.Value
+		}
+	}
+	return total
+}
+
+// RR-20260926-61：Nest 已停机 / 已 fence（RunLocal 拒绝投递、fn 不执行）时拿到持久结论：提交后工作（Sync Confirm、
+// AfterCommit）不离开快池执行——不在 finalizer goroutine 上就地运行，计数 +1 并记日志；gate 等资源照常交还，只调用一次入口。
+func TestOutcomeIsNotRunWhenFastPoolRefuses(t *testing.T) {
 	f, live := newReloadFixture(t, 1965)
+	steps := make(chan string, 16)
+	f.mgr.remote.finalizeTrace = func(_ entity.RemoteTransactionID, step string) { steps <- step }
 	recorder := newOutcomeRecorder()
-	f.mgr.BindLocalExecutor(func(func()) error { return errors.New("nest: stopped") })
+	var refused atomic.Int32
+	f.mgr.BindLocalExecutor(func(func()) error { refused.Add(1); return errors.New("nest: stopped") })
 	tx := remoteTestTxID(0xD5)
 	batch := f.prepareRejected(t, live, tx, 2)
 	commits := batch.Commits()
@@ -223,20 +239,34 @@ func TestOutcomeRunsInlineWhenFastPoolRefuses(t *testing.T) {
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if got := <-steps; got != "await_projection" {
+		t.Fatalf("finalizer step=%s", got)
+	}
+	before := deferredOutcomeNotRun("committed")
 	if _, err := f.store.CommitRemoteBatch(context.Background(), commits); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits); err != nil {
 		t.Fatal(err)
 	}
-	committed, slots, _, _ := recorder.awaitOne(t)
-	if !committed || slots != 0 {
-		t.Fatalf("outcome committed=%v slots=%d, want true after release", committed, slots)
+	for step := <-steps; step != "released"; step = <-steps {
+	}
+	if n := recorder.count(); n != 0 {
+		t.Fatalf("post-commit work ran %d time(s) outside the fast pool after the Nest refused it (want 0: never run business callbacks on the finalizer goroutine)", n)
+	}
+	if got := deferredOutcomeNotRun("committed") - before; got != 1 {
+		t.Fatalf("deferred_outcome_not_run_total{outcome=committed} grew by %d, want 1", got)
+	}
+	if refused.Load() == 0 {
+		t.Fatal("finalizer never offered the post-commit work to the local executor")
+	}
+	if slots := len(f.mgr.remote.writeSlots); slots != 0 {
+		t.Fatalf("write slots=%d after the committed outcome", slots)
 	}
 	if err := f.mgr.StopFinalizer(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if n := recorder.count(); n != 1 {
-		t.Fatalf("outcome delivered %d times, want exactly once", n)
+	if n := recorder.count(); n != 0 {
+		t.Fatalf("post-commit work ran %d time(s) after shutdown", n)
 	}
 }

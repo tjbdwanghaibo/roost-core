@@ -595,7 +595,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 		unloadErr := b.mgr.unloadRejectedEntities(ctx, entries)
 		switch {
 		case unloadErr == nil:
-			b.mgr.deliverRemoteOutcome(ctx, onOutcome, false)
+			b.mgr.deliverRemoteOutcome(ctx, txID, onOutcome, false)
 		case errors.Is(unloadErr, entity.ErrRemoteUnloadUnsupported):
 			// 旧实例仍在内存、仍持有被拒绝的冻结内容：不丢弃 Sync 门（见 finishRejectedRemoteClose）。
 		default:
