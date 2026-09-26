@@ -103,6 +103,7 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 - **历史FlushFailures根因未证明**：RR-20260926-01修复阶段错误留存；本轮没有复现历史偶发FlushFailures，不将观测修复说成历史根因修复。
 - **2026-09-26 复审核实并修复**：RR-03～06 四条成立；另确认 RR-07（WAL回放漏计）、RR-08（续行占用导致准入/指标分叉）、RR-09（Remote失败缺事务ID）。代码与防回归规则已补齐，race、静态检查及正式生成三链路通过，尚未提交/部署；[逐项判断、负对照和边界](review/REVIEW-2026-09-26-followup.md)。Projected是成功尝试数；Close/Open不等同Hold恢复；periodic仅字节预算的预捕获成本仍存在。此前性能数字未重测。
 - **2026-09-26 上线前复审登记、未修复**（基线 `aaada47`，[复审记录](review/REVIEW-2026-09-26-release.md)）：P1 级 [RR-20260926-10](bug/RR-20260926-10.md)（卸载后投影前重载 → fence 且重启不起来）、[RR-20260926-11](bug/RR-20260926-11.md)（Remote 重放被新 fence 拒绝，投影卡死）、[RR-20260926-12](bug/RR-20260926-12.md)（生成工程 syncbus 配置失效）；另 P2 十二条（RR-13～24）。**§4 的 Remote 30分钟80TPS、120/160TPS 容量与 RR-20260925-05 的 59.997TPS 由直接接 MongoCommitter 的测试装配测得，正式 kit 装配下并行投影未开启（[RR-20260926-21](bug/RR-20260926-21.md)），在正式装配复测前不作为上线依据。** 发版手续（清单 v1.16.1、生成器下限、CHANGELOG）与 CI 状态见复审记录。
+- **2026-09-26 修复复验（基线 `985d5ba`）**：RR-03～24 修复方向大多成立，但引入回归 RR-25～29（其中 RR-25 为 P1：冷实体业务固定失败），另有既有缺陷 RR-30～32 与 11 条复核残留；故障矩阵 20/21 PASS（唯一失败为 RR-29 夹具）。见[复验记录](review/REVIEW-2026-09-26-fix-verification.md)。
 - **图谱尚未刷新**：最后generation `2026-09-25T11:41:37Z`。刷新被“pre-coordination or unverified CBM generation is active”阻止；新代码以源码/实际测试补证。环境恢复后重建并检查coverage；不要清未知锁或中断其他实例。
 
 ## 6. 复跑与交付约定
@@ -201,3 +202,11 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260926-22](bug/RR-20260926-22.md) | demo 公会发号 upsert 竞态 | 未修复 |
 | [RR-20260926-23](bug/RR-20260926-23.md) | FatalSuffix 测试竞态与 Windows 时钟断言 | 未修复 |
 | [RR-20260926-24](bug/RR-20260926-24.md) | 迁移表缺 room 映射 | 未修复 |
+| [RR-20260926-25](bug/RR-20260926-25.md) | 生成 sender/demo 不走 Slow，冷实体业务固定失败（P1） | 未修复 |
+| [RR-20260926-26](bug/RR-20260926-26.md) | 快阶段冷缺失被改为 panic | 未修复 |
+| [RR-20260926-27](bug/RR-20260926-27.md) | 快池删除准入 panic 致进程 fence | 未修复 |
+| [RR-20260926-28](bug/RR-20260926-28.md) | Durability 0 未提交结果永无结论 | 未修复 |
+| [RR-20260926-29](bug/RR-20260926-29.md) | kit/dataengine 集成测试夹具失效 | 未修复 |
+| [RR-20260926-30](bug/RR-20260926-30.md) | 本地 lease fence 跳过后投影 fatal | 未修复 |
+| [RR-20260926-31](bug/RR-20260926-31.md) | 闲置交还未等投影即释放租约 | 未修复 |
+| [RR-20260926-32](bug/RR-20260926-32.md) | 提交后 release hook panic 仍 Abort | 未修复 |
