@@ -65,7 +65,7 @@ func TestMultiCheckpointThresholdsAndFailurePrefix(t *testing.T) {
 		wantAcks, wantProcessed int
 	}{
 		{"end", 256, time.Hour, false, 1, 3}, {"count", 2, time.Hour, false, 2, 3},
-		{"time", 256, time.Nanosecond, false, 3, 3}, {"legacy", 1, time.Hour, false, 3, 3},
+		{"time", 256, 20 * time.Millisecond, false, 3, 3}, {"legacy", 1, time.Hour, false, 3, 3},
 		{"failure", 256, time.Hour, true, 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,6 +78,8 @@ func TestMultiCheckpointThresholdsAndFailurePrefix(t *testing.T) {
 			p, w := stoppedProjectorWithRecords(t, store, records, 1)
 			p.opts.CheckpointRecords = tc.count
 			p.opts.CheckpointInterval = tc.interval
+			clock := time.Unix(0, 0)
+			p.now = func() time.Time { clock = clock.Add(20 * time.Millisecond); return clock }
 			acks := 0
 			p.ack = func(ctx context.Context, f corenest.CommitFence) error { acks++; return w.Ack(ctx, f) }
 			n, err := p.ReplayPass(context.Background())

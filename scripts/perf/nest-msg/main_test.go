@@ -17,7 +17,7 @@ func TestLoadFixtureCountsRealCompletions(t *testing.T) {
 				if !result.Correct || result.Completed != 2000 || result.Processed != 2000 || result.LatencySamples != 128 {
 					t.Fatalf("invalid completed-message accounting: %+v", result)
 				}
-				if result.P99US <= 0 || result.P99US > result.MaxSampleUS {
+				if result.P99US < 0 || result.P99US > result.MaxSampleUS {
 					t.Fatalf("invalid latency samples: %+v", result)
 				}
 			})

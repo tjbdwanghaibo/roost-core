@@ -18,6 +18,7 @@ func OpenRuntime(walOptions Options, applier MutationApplier, publisher EffectPu
 	if err != nil {
 		return nil, err
 	}
+	committerOptions.CloseWAL = true // OpenRuntime 拥有刚打开的 WAL。
 	committer, err := NewCommitter(wal, applier, publisher, committerOptions)
 	if err != nil {
 		_ = wal.Close(context.Background())

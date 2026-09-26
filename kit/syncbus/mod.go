@@ -17,23 +17,25 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config lives under the "room" section. Deployments written before the
-// package was renamed used "sync"; both are read so an existing config file
-// keeps working, with "room" winning when a key is set in both.
+// 正式配置段为 syncbus；保留 room / sync 兼容，优先级依次降低。
 const (
+	configSection       = "syncbus"
 	roomConfigSection   = "room"
 	legacyConfigSection = "sync"
 )
 
 func configKey(cfg *viper.Viper, key string) string {
+	if cfg.IsSet(configSection + "." + key) {
+		return configSection + "." + key
+	}
 	if cfg.IsSet(roomConfigSection + "." + key) {
 		return roomConfigSection + "." + key
 	}
 	if cfg.IsSet(legacyConfigSection + "." + key) {
-		slog.Warn("syncbus mod: config section \"sync\" is deprecated, rename it to \"room\"", "key", key)
+		slog.Warn("syncbus mod: config section \"sync\" is deprecated, rename it to \"syncbus\"", "key", key)
 		return legacyConfigSection + "." + key
 	}
-	return roomConfigSection + "." + key
+	return configSection + "." + key
 }
 
 func cfgGetString(cfg *viper.Viper, key string) string { return cfg.GetString(configKey(cfg, key)) }

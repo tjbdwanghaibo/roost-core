@@ -76,9 +76,15 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		// callback's transient value.
 		transactionSkipped = false
 		alreadyApplied, skipped, err := store.checkTransaction(txCtx, record.ID.String(), digest)
-		if err != nil || alreadyApplied {
-			transactionSkipped = skipped
+		if err != nil {
 			return err
+		}
+		if alreadyApplied {
+			transactionSkipped = skipped
+			if skipped {
+				return store.rejectRemoteCommits(txCtx, remote)
+			}
+			return nil
 		}
 		fencesMatch, err := store.leaseFencesMatch(txCtx, record.Receipts)
 		if err != nil {
@@ -86,6 +92,9 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		}
 		if !fencesMatch {
 			transactionSkipped = true
+			if err := store.rejectRemoteCommits(txCtx, remote); err != nil {
+				return err
+			}
 			return store.insertTransactionMarker(txCtx, transactionDocument{
 				ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(), Skipped: true,
 			})
@@ -125,6 +134,13 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 		return err
 	}
 	if transactionSkipped {
+		if len(remote) > 0 {
+			if notifier, ok := store.remoteApplier.(interface {
+				RejectRemoteTransaction(entity.RemoteTransactionID, string)
+			}); ok {
+				notifier.RejectRemoteTransaction(entity.RemoteTransactionID(record.ID), expiredLeaseCause)
+			}
+		}
 		return nil
 	}
 	if len(remote) > 0 {
@@ -323,4 +339,19 @@ func bulkUpserted(result *fmongo.BulkWriteResult) int64 {
 		return 0
 	}
 	return result.UpsertedCount
+}
+
+const expiredLeaseCause = "dataengine: lease fence expired or superseded"
+
+func (store *MongoStore) rejectRemoteCommits(ctx context.Context, commits []entity.RemoteCommit) error {
+	if len(commits) == 0 {
+		return nil
+	}
+	rejecter, ok := store.remoteStore.(interface {
+		RejectRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit, string) error
+	})
+	if !ok {
+		return fmt.Errorf("%w: remote store cannot persist lease-fence rejection", ErrRemoteProjection)
+	}
+	return rejecter.RejectRemoteCommitsInTransaction(ctx, commits, expiredLeaseCause)
 }

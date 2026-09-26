@@ -426,9 +426,22 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 		}
 		meta := entity.ResolveEntityID(fullID)
 		loadStart := startNestStage(mgr.stageMetrics)
-		e, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
+		e, err := func() (value entity.IThreadSafeEntity, err error) {
+			// 加载约束 panic 也属于这个广播目标；记录原因并继续独立的后续目标。
+			defer func() {
+				if r := recover(); r != nil {
+					if cause, ok := r.(error); ok {
+						err = cause
+					} else {
+						err = fmt.Errorf("getter panic: %v", r)
+					}
+				}
+			}()
+			return mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
+		}()
 		observeNestStage(name, "load", loadStart)
 		if err != nil {
+			slog.Error("nest broadcast target load failed", "id", meta.FullID, "handler", name, "err", err)
 			continue
 		}
 		// Skip, do not dereference: the per-entity recovery below starts

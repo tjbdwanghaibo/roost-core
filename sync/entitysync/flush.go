@@ -50,10 +50,11 @@ type settlement struct {
 
 // flushSession 集中保存同一次捕获的会话身份、帧内容与结算记录。
 type flushSession struct {
-	session       *session
-	entries       []frameEntry
-	settlements   []settlement
-	snapshotAfter [2]int64
+	session           *session
+	entries           []frameEntry
+	settlements       []settlement
+	snapshotAfter     [2]int64
+	snapshotAttempted bool
 }
 
 // Flush 执行一次同步 tick：捕获 pending subject，按会话组帧并逐帧准入，最后提交内容版本。
@@ -263,6 +264,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 	slices.Sort(sessionIDs)
 	m.scheduleSnapshots(work, plan)
+	defer m.commitSnapshotAttempts(work, plan)
 
 	var admittedSessions []SessionID
 	for _, sid := range sessionIDs {
@@ -306,7 +308,12 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 				stale = true
 				break
 			}
+			if err := ctx.Err(); err != nil {
+				pushErr = err
+				break
+			}
 			admissionStarted := time.Now()
+			batch.snapshotAttempted = true
 			pushErr = m.config.Transport.Push(ctx, sid, encoded.payload)
 			if m.config.Trace != nil {
 				stage := "admitted"

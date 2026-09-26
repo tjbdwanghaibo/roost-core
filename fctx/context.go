@@ -12,15 +12,16 @@ import (
 // Context is the per-goroutine request context.
 // It carries request-scoped metadata for logging, timing, and config access.
 type Context struct {
-	Now      time.Time
-	NowMilli int64
-	Config   any
-	Base     stdctx.Context
-	Frame    uint64
-	Meta     RequestMeta
-	Trace    TraceMeta
-	SyncWait time.Duration
-	keyValue map[any]any
+	Now        time.Time
+	NowMilli   int64
+	Config     any
+	Base       stdctx.Context
+	Frame      uint64
+	Meta       RequestMeta
+	Trace      TraceMeta
+	SyncWait   time.Duration
+	keyValue   map[any]any
+	fastWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
 }
 
 // ContextSnapshot is an immutable copy for framework-controlled synchronous
@@ -101,6 +102,7 @@ func NewContext(opts ...Option) (*Context, func()) {
 	prev := CurrentContext()
 	c := contextPool.Get().(*Context)
 	c.init()
+	c.fastWorker = prev != nil && prev.fastWorker
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)
@@ -151,6 +153,7 @@ func NowMilli() int64 {
 
 // Clear clears request-scoped state before the context is returned to pool.
 func (c *Context) Clear() {
+	c.fastWorker = false
 	c.Config = nil
 	c.Base = nil
 	c.Frame = 0

@@ -84,6 +84,8 @@ func (projector *Projector) projectRemoteWindow(ctx context.Context, segments []
 			if err == nil {
 				projector.completeProjection(record.ID, nil)
 				projector.projected.Add(1)
+			} else {
+				err = fmt.Errorf("remote transaction %v: %w", record.ID, err)
 			}
 			completed <- result{index, err}
 		}()

@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
@@ -103,7 +104,8 @@ type Stats struct {
 }
 
 type WAL struct {
-	opts Options
+	operations operation.Lifetime
+	opts       Options
 
 	appendCh chan appendRequest
 	closeCh  chan struct{}
@@ -470,6 +472,11 @@ func (w *WAL) failPendingTickets(err error) {
 }
 
 func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
+	if !w.operations.Begin() {
+		return ErrClosed
+	}
+	defer w.operations.End()
+
 	if fence.Segment == 0 || fence.Offset <= 0 {
 		return errors.New("nestwal: invalid acknowledgement fence")
 	}
@@ -484,6 +491,12 @@ func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
 	if beyondEnd {
 		return errors.New("nestwal: acknowledgement is beyond log end")
 	}
+	// checkpoint 持久化前先刷覆盖段，不能让 async 的 ack 超过已落盘内容。
+	if err := w.syncActive(); err != nil {
+		w.setTerminal(err)
+		return err
+	}
+
 	next := checkpointState{generation: w.checkpoint.generation + 1, fence: fence}
 	if err := storeCheckpoint(w.opts.Dir, next, w.opts.FileMode); err != nil {
 		return fmt.Errorf("nestwal: store acknowledgement: %w", err)
@@ -498,6 +511,11 @@ func (w *WAL) Ack(_ context.Context, fence corenest.CommitFence) error {
 }
 
 func (w *WAL) Replay(ctx context.Context, consume func(corenest.CommitFence, corenest.CommitRecord) error) error {
+	if !w.operations.Begin() {
+		return ErrClosed
+	}
+	defer w.operations.End()
+
 	if consume == nil {
 		return errors.New("nestwal: nil replay consumer")
 	}
@@ -753,6 +771,7 @@ func (w *WAL) Close(ctx context.Context) error {
 	w.closeOnce.Do(func() {
 		w.lifecycleMu.Lock()
 		w.closed = true
+		w.operations.Stop()
 		close(w.closeCh)
 		w.lifecycleMu.Unlock()
 	})
@@ -982,6 +1001,7 @@ drainLoop:
 					w.closeErr = errors.Join(w.closeErr, err)
 				}
 				w.closeErr = errors.Join(w.closeErr, w.terminal())
+				<-w.operations.Stop() // Replay/Ack 全部退出前不能交出目录锁。
 				if w.lockHandle != nil {
 					w.closeErr = errors.Join(w.closeErr, unlockFile(w.lockHandle), w.lockHandle.Close())
 				}

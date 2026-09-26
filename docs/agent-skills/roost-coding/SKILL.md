@@ -34,6 +34,8 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 - 同 ID 顺序在统一准入处、按显式声明的全部目标建立；内部续行使用既有准入资格，不能重新排到自身之后。动态 Cast 仍受锁保护，但未声明 ID 不承诺调度 FIFO。
 - **快池内不得阻塞等待。** 快 worker 上不做 I/O 等待、不等待在途加载，更不能把任务投递到快池再同步等它（快池 worker 数个这样的请求即全池饥饿死锁，且 Guard 不释放）。“投递到快池并同步等待”（`entity.RunLocal`、快续行）只属于慢 worker；快阶段需要本地步骤时就地执行。慢阶段注入的执行器等上下文不能随快照泄漏进快阶段。框架自带的等待入口在快 worker 上被调用属于编程错误，目标是 fail-fast（RR-20260926-06），不能静默阻塞。
 - 冷目标用正式 Slow option 并声明所需 ID，由慢阶段准备。快阶段 Getter 只读已加载实体；自定义 Getter 必须遵守 LoadedEntitiesOnly 契约。不能把执行一半的 handler 搬到慢池或自动重试来掩盖冷加载错误；任意 handler 内的阻塞 RPC 也不会自动隔离。
+- 执行位置与请求数据分离：快 worker 标记由接收阶段建立，嵌套 fctx 继承，但 ContextSnapshot 不传递；慢 executor 在快阶段屏蔽、返回慢阶段后恢复。不能只检查传入 ctx 或 msg.getter；直接 ManagerAccess、Repository、生成 lifecycle、保存的慢 ctx 和 Background ctx 都要核对。RunLocal 在实际快阶段就地执行。
+- 快池检查须早于等待和副作用。保留 Nest.Request 返回 ErrSyncInHandler 的契约；Guard/本地锁、回滚、Finalize 和既有锁内 WAL 准入是明确豁免，不因本条改变持久语义。列出实际保护的入口，不把定向保护称为全局 I/O 拦截。
 - 准入失败与结果不确定要分清；成功准入后不能因释放/回复失败回滚已接受事务。取消等待不等于撤销业务。保持 Cast、组锁、引用、完成 ticket 和关闭排空的唯一收尾责任。
 - worker 数、等待容量与 Remote/数据库写预算分开配置。不能推断慢 worker 越多、队列越短就必然越快。锁内 WAL 准入沿用当前契约，不以移出锁或降低持久级别换吞吐。
 
@@ -45,14 +47,27 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 - 以完整 EntitySync 包为最小组帧单位。可以一帧装多个完整实体包，不能按任意字节切断实体数据。超硬上限明确失败，软预算保证合法大对象最终有进度。
 - 只有交付成功的帧前缀才能结算。保持版本/基线、epoch/lifetime、订阅 revision、remove-before-create 及旧在途回调隔离。可靠增量不能 latest-only 丢弃；慢会话失败不能拖垮其他会话。
 - 冷创建/重连恢复预算与已有对象更新分开，即时 Flush 共用窗口额度；保持新入场/恢复之间和会话之间的公平。统计的增量索引跟随同一生命周期维护，完整扫描放显式 Audit 入口。
+- 预算区分计划预留、实际尝试和成功交付。当前冷预算按会话本批 Push 尝试计费，成功帧另行结算；取消、失效、编码失败和未尝试会话不得被预扣，游标跟随真实尝试且保留计划顺序。改变计费规则时明确退款与重试空转的取舍。
+- 公平性不能只看有限积压：加入持续新增小对象、单调/随机 ID、跨会话及 arrival/recovery 的负载。字节预算挡住旧请求时后来的小包不能无限越过它；同会话保留意图入队顺序。声明最终进度须有有界回归，不能靠提高预算通过。当前 recovery 是同一 lifetime 的 Hold/Ready，Close/Open 属于新入场，不凭 SessionID 推断跨生命周期恢复。
 
 ### DataEngine 与 Remote
 
 - 保持 Nest → 正式生成 DAO → 文件 WAL → 投影 → 持久确认/发布的完整链路。区分内存修改、WAL 准入、durable、投影、远端发布/确认；不把其中一个阶段的 TPS 作为整条业务吞吐。
 - async/strict/pipelined 的完成条件必须明确。回放读取、投影批次、未确认 WAL、Remote 在途写各有预算；不能用 Stats 的瞬时读取替代原子准入。
 - 并发投影只用于 Store 明确支持、实体与事务身份独立且无特殊屏障的记录。首次观察失败停止补位，等待已启动任务，checkpoint 只推进连续成功前缀；成功后缀靠持久身份幂等重放。
+- 并行错误带每笔失败事务 ID 并保留 errors.Is；不能依赖 goroutine 返回顺序判断某条记录未开始。区分唯一业务提交、成功投影尝试、WAL consume 次数与 ack 水位；成功后缀重放会增加 Projected，不能以 committed == projected 证明一致性。用最终 DAO 值/版本、持久身份、回执和 WAL 排空共同验证。
 - Remote 正式持久写权限由 Mongo 的 ownership/最新 grant/fence 与版本共同校验；Redis 是竞争协调。保持多 Entity、多 DAO 原子性、事务 digest、回执及 outbox 重放。不增加测试专用弱校验入口。
 - 超时/未知结果不等于未提交或回滚；继续承担恢复和资源释放责任。不能跳过冲突 WAL、自动删坏记录/生产数据、放宽版本比较或伪造持久确认来恢复“绿灯”。
+
+### 生命周期与装配的复审要点
+
+修改提交、回放或关闭时，先区分“数据已提交”“回调失败”“释放失败”“结果未知”。已提交事务不能 Abort；每个完成回调独立处理异常，后续框架 Confirm/Release 仍须执行。未知结果保留恢复责任，不能当成明确拒绝。冷卸载重载必须等待该 Entity 的在途投影，不能只凭 Runtime 启动时曾 Ready 就读取旧库状态。
+
+WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/Commit，超时仍保留目录/资源所有权。创建者负责关闭自己创建的 WAL；测试须覆盖旧实例退出、新实例接管及旧 Ack 被拒绝。同 SessionID 不代表同 lifetime，旧发送未结束时新 Open 必须明确失败或建立独立资源，不能吞注册冲突。
+
+性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
+
+当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像。若未来要支持投影时拒绝后的在线恢复，先设计完整内存与 Sync 回滚契约。历史问题与适用回归见 `docs/review/REVIEW-2026-09-26-release-fixes.md`。
 
 ## 优化、重构、review 与 bugfix
 
@@ -66,6 +81,8 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 纯重构方案写到既有相关设计或 `docs/feature/REFACTOR-YYYY-MM-DD-<topic>.md`：当前问题和收益、当前/目标目录树、符号迁移及依赖方向、公开 API/协议/持久格式变化、分批步骤、生成物影响、验证与回退。没改结构也明确写原包保留；行为变化单列，不藏在“整理”里。
 
 确认 bug 需要触发条件、预期与实际差异、根因证据和针对行为的回归。优先控制并发事件顺序，不用任意 sleep 制造概率性通过；能做时保留修前失败/修后通过证据，不编造负对照。修根因，避免症状特判。
+
+执行池变更覆盖 1 worker、N 请求占满 N worker、内部续行占用时的准入/统计和停机排空。访问约束不能只有 mock，需真实 ManagerAccess/Repository 或正式生成链路。预算覆盖取消、编码失败、RetryLater、会话失效和部分成功；WAL 边界检查 consume 返回值与计数，在真实文件上覆盖跨段。
 
 用户已授权“roost优化”范围内历史 bug 的调查与修复，旧 WANTED/CARRYOVER、旧“只审查/待拍板”备注不构成重复审批理由。当前用户限制优先；这里的授权不改变系统/开发者规则、工具权限或部署授权。业务语义确实缺失时提出具体选择，不替用户猜测破坏性迁移。
 

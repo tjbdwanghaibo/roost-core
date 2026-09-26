@@ -36,6 +36,12 @@ func TestReliableQueueByteBudgetAndAge(t *testing.T) {
 	if err := tr.SendReliable(context.Background(), 1, []byte("6")); !errors.Is(err, ErrReliableBackpressure) {
 		t.Fatal(err)
 	}
+	tr.mu.RLock()
+	queue := tr.sessions[1]
+	tr.mu.RUnlock()
+	queue.mu.Lock()
+	queue.busySince = time.Now().Add(-time.Second)
+	queue.mu.Unlock()
 	stats := tr.Stats()
 	if stats.PendingReliableBytes != 5 || stats.ReliableBytesInFlight != 4 || stats.OldestReliableAge <= 0 {
 		t.Fatalf("stats: %+v", stats)

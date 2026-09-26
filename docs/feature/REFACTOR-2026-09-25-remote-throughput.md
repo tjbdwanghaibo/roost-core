@@ -1,5 +1,7 @@
 # Remote 超时定位与 50 TPS 优化
 
+> 后续实现变更（2026-09-26）：下文描述当时按 worker 数分批的版本。当前窗口由 ReplayBatchRecords / ReplayBatchBytes 限制，RemoteProjectionWorkers 仅控制在途并发，空闲 worker 滑动补位、观察失败后停止；见[九项实施](../feature/REFACTOR-2026-09-26-core-nine-items.md)及[复审核实](../review/REVIEW-2026-09-26-followup.md)。
+
 ## 目标与证据
 
 用户要求查明 30 分钟负载中的 `nest: sync timeout`，并达到至少 50 TPS。沿用 1000 worker、10000 Entity、每事务 2 Entity × 2 DAO、strict 和真实 Mongo/Redis/NATS。不得以延长 5 秒请求等待、降低持久级别或减少数据校验代替优化。

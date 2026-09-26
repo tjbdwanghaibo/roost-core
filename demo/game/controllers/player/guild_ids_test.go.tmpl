@@ -150,9 +150,12 @@ func TestGuildIDsRealMongoWALRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+  // 与正式 Remote 准入一致：先取得 Mongo 权威许可，不能伪造 fence=0 的写入。
+  if _,err:=remote.ClaimOwnership(ctx,id,1000);err!=nil{t.Fatal(err)}
+  grant,err:=remote.GrantWrite(ctx,id,fmt.Sprintf("incarnation-%d",incarnation),1000);if err!=nil{t.Fatal(err)}
 		commit := entity.RemoteCommit{
 			TransactionID: entity.RemoteTransactionID(tx), EntityID: id, Kind: guild.EntityKindGuild,
-			BaseVersion: 0, NextVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
+			BaseVersion: 0, NextVersion: 1, MarkerEpoch: grant.Ownership.MarkerEpoch, RouteEpoch: grant.Ownership.RouteEpoch, LockFence:grant.Fence, Schema: 1, Codec: 1,
 			Mutations: []entity.RemoteDataMutation{{
 				Database: database, Collection: "guild", ID: id, Version: 1, Data: data,
 			}},
@@ -190,7 +193,7 @@ func TestGuildIDsRealMongoWALRestart(t *testing.T) {
 	collision := coredata.CloneCommitRecord(created[0])
 	collision.ID[0] = 99
 	collision.Mutations[0].Remote.TransactionID = entity.RemoteTransactionID(collision.ID)
-	if err := store.Project(ctx, collision); !errors.Is(err, fmongo.ErrDuplicateKey) {
+	if err := store.Project(ctx, collision); !errors.Is(err, fmongo.ErrVersionConflict) {
 		t.Fatalf("collision err=%v", err)
 	}
 }
@@ -199,4 +202,20 @@ type guildReplayApplier struct{ store *remoteentity.MongoCommitter }
 
 func (a guildReplayApplier) ApplyRemoteCommits(ctx context.Context, _ entity.RemoteTransactionID, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
 	return a.store.CommitRemoteBatch(ctx, commits)
+}
+
+func TestGuildIDsRealMongoConcurrentFirstMint(t *testing.T) {
+ uri:=os.Getenv("ROOST_GUILD_IT_MONGO_URI");if uri==""{t.Skip("isolated Mongo URI required")}
+ ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second);defer cancel()
+ client,err:=driver.NewClient(fmongo.DefaultConfig(uri),driver.IndexMigrationPolicy{});if err!=nil{t.Fatal(err)};defer client.Close(context.Background())
+ database:=fmt.Sprintf("roost_guild_it_concurrent_%d_%d",os.Getpid(),time.Now().UnixNano())
+ defer client.Database(database).Drop(context.Background())
+ controller:=&Controller{serverSID:1000,guildIDs:client.Database(database).Collection("_guild_id_sequence")}
+ start:=make(chan struct{});ids:=make(chan int64,128);failures:=make(chan error,128)
+ var group sync.WaitGroup
+ for range 128{group.Go(func(){<-start;id,err:=controller.nextGuildID(ctx);if err!=nil{failures<-err}else{ids<-id}})}
+ close(start);group.Wait();close(failures);close(ids)
+ for err:=range failures{t.Error(err)}
+ seen:=make(map[int64]bool);for id:=range ids{if seen[id]{t.Errorf("duplicate %d",id)};seen[id]=true}
+ if len(seen)!=128{t.Fatalf("minted %d/128",len(seen))}
 }

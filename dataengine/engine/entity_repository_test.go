@@ -12,6 +12,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -432,4 +433,32 @@ func TestEntityRepositoryPublishesThroughLocalExecutor(t *testing.T) {
 	if manager.Get(id) == nil {
 		t.Fatal("entity was not published by local continuation")
 	}
+}
+
+func TestRepositoryRejectsFastColdLoadBeforeJoiningFlight(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	id, err := entity.BuildEntityID(9876, dataEngineRepositoryKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &repositoryStore{}
+	repo, err := NewEntityRepository(entity.NewEntityManager(), store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.flights[id] = &entityLoadFlight{done: make(chan struct{})}
+	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("repository_cold"))
+	defer release()
+	defer func() {
+		err, ok := recover().(error)
+		if !ok || !errors.Is(err, fctx.ErrBlockingInFastWorker) || !errors.Is(err, entity.ErrColdLoadInLogic) {
+			t.Fatalf("panic=%v", err)
+		}
+		if store.transactions.Load() != 0 || len(repo.flights) != 1 {
+			t.Fatal("load started before rejection")
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, _ = repo.LoadEntity(ctx, id, dataEngineRepositoryKind)
 }

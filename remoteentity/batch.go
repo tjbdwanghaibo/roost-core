@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/redis"
 )
@@ -39,6 +40,7 @@ type remoteWriteBatch struct {
 var _ entity.RemoteWriteBatch = (*remoteWriteBatch)(nil)
 
 func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ entity.RemoteWriteBatch, err error) {
+	fctx.AssertBlockingAllowed("remoteentity.PrepareRemoteWriteBatch")
 	started := time.Now()
 	batchClass := "single"
 	if len(ids) > 1 {
@@ -416,6 +418,7 @@ func (b *remoteWriteBatch) Commits() []entity.RemoteCommit {
 }
 
 func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitReceipt, error) {
+	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Commit")
 	if b == nil || b.mgr == nil {
 		return nil, entity.ErrRemoteCommitNotFinalized
 	}
@@ -469,25 +472,38 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	return receipts, nil
 }
 
-func (b *remoteWriteBatch) Abort(_ context.Context, cause error) error {
+func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 	if b == nil {
 		return nil
 	}
-	b.mu.Lock()
-	if b.committed || b.indeterminate || b.closed {
-		b.mu.Unlock()
-		return nil
-	}
-	b.aborted = true
-	if b.finalized {
-		b.rollbackFinalizedLocked()
-	}
-	txID := b.outcome.TransactionID
-	b.mu.Unlock()
-	if !txID.IsZero() && b.mgr != nil {
-		b.mgr.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitRejected, Cause: errorString(cause)})
-	}
-	return nil
+	// 本地回滚归快阶段所有。已有 Guard 时复用锁，其余路径显式取得本地锁。
+	return entity.RunLocal(ctx, func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.committed || b.indeterminate || b.closed || b.aborted {
+			return
+		}
+		if b.finalized {
+			for _, entry := range b.entries {
+				if entry == nil || !entry.finalized || entry.entity == nil {
+					continue
+				}
+				if entity.GetEntityGuard().Guarded(entry.entity.GUId()) {
+					if p, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
+						p.RollbackRemoteCommit(entry.commit.Clone())
+					}
+				} else {
+					b.mgr.rollbackRemoteEntries([]*remoteWriteEntry{entry})
+				}
+				entry.finalized = false
+				entry.commit = entity.RemoteCommit{}
+			}
+		}
+		b.aborted = true
+		if id := b.outcome.TransactionID; !id.IsZero() && b.mgr != nil {
+			b.mgr.completeRemoteTransaction(id, entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitRejected, Cause: errorString(cause)})
+		}
+	})
 }
 
 func (b *remoteWriteBatch) Indeterminate(_ context.Context, _ error) error {
@@ -504,6 +520,7 @@ func (b *remoteWriteBatch) Indeterminate(_ context.Context, _ error) error {
 }
 
 func (b *remoteWriteBatch) Close(ctx context.Context) error {
+	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Close")
 	if b == nil {
 		return nil
 	}

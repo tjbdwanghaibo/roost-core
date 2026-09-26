@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
@@ -117,6 +118,7 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 }
 
 func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
+	fctx.AssertBlockingAllowed("remoteentity.waitRemoteTransaction")
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -129,6 +131,7 @@ func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTra
 
 // 单笔等待和 FlushAll 共用指针所有权；缓存淘汰不改变已接受等待的结果。
 func (m *Manager) waitTrackedRemoteTransaction(ctx context.Context, tracker *remoteTransactionTracker) (entity.RemoteCommitStatus, error) {
+	fctx.AssertBlockingAllowed("remoteentity.waitTrackedRemoteTransaction")
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -176,13 +179,14 @@ func (m *Manager) RemoteCommitStatus(ctx context.Context, id entity.RemoteTransa
 	tracker := m.remote.txs[id]
 	if tracker != nil {
 		status := tracker.status.Clone()
-		if status.State != entity.RemoteCommitIndeterminate {
+		if status.State == entity.RemoteCommitCommitted || status.State == entity.RemoteCommitPublished || status.State == entity.RemoteCommitRejected {
 			m.remote.txMu.Unlock()
 			return status, nil
 		}
 	}
 	m.remote.txMu.Unlock()
 	if m.backend != nil {
+		fctx.AssertBlockingAllowed("remoteentity.RemoteCommitStatus backend")
 		status, err := m.backend.CommitStatus(ctx, id)
 		if err == nil && (status.State == entity.RemoteCommitCommitted || status.State == entity.RemoteCommitRejected) {
 			m.completeRemoteTransaction(id, status)
@@ -198,6 +202,7 @@ func (m *Manager) FlushRemoteTransaction(ctx context.Context, id entity.RemoteTr
 }
 
 func (m *Manager) FlushRemoteAll(ctx context.Context) error {
+	fctx.AssertBlockingAllowed("remoteentity.FlushRemoteAll")
 	m.remote.txMu.Lock()
 	trackers := make([]*remoteTransactionTracker, 0, len(m.remote.txs)-m.remote.closedCount)
 	for _, tracker := range m.remote.txs {
@@ -212,4 +217,9 @@ func (m *Manager) FlushRemoteAll(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// RejectRemoteTransaction 仅由投影器在持久拒绝完成后通知；finalizer 仍可回源恢复此结论。
+func (m *Manager) RejectRemoteTransaction(id entity.RemoteTransactionID, cause string) {
+	m.completeRemoteTransaction(id, entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitRejected, Cause: cause})
 }

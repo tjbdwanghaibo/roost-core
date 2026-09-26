@@ -9,14 +9,16 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 var (
-	errProjectorTransactionHeld = errors.New("dataengine projector: transaction is still under entity lock")
-	errProjectorBatchComplete   = errors.New("dataengine projector: replay batch complete")
-	ErrProjectionBackpressure   = errors.New("dataengine projector: unacknowledged transaction limit reached")
+	errProjectorTransactionHeld    = errors.New("dataengine projector: transaction is still under entity lock")
+	errProjectorBatchComplete      = errors.New("dataengine projector: replay batch complete")
+	ErrRemoteLeaseFenceUnsupported = errors.New("dataengine: remote writes and lease-fence receipts cannot share an admission")
+	ErrProjectionBackpressure      = errors.New("dataengine projector: unacknowledged transaction limit reached")
 )
 
 type ProjectionStore interface {
@@ -70,7 +72,7 @@ func DefaultProjectorOptions() ProjectorOptions {
 
 type ProjectorStats struct {
 	Committed                uint64
-	Projected                uint64
+	Projected                uint64 // 成功投影次数，含幂等重放；不能与 Committed 相等代替数据一致性校验
 	WALUnacked               uint64
 	ProjectionFailures       uint64
 	FatalProjectionConflicts uint64
@@ -83,10 +85,12 @@ type ProjectorStats struct {
 // only staged by ProjectionStore; broker delivery is owned by OutboxWorker and
 // is deliberately absent from the WAL acknowledgement path.
 type Projector struct {
-	wal   *nestwal.WAL
-	store ProjectionStore
-	opts  ProjectorOptions
-	ack   func(context.Context, corenest.CommitFence) error
+	operations operation.Lifetime
+	wal        *nestwal.WAL
+	store      ProjectionStore
+	opts       ProjectorOptions
+	ack        func(context.Context, corenest.CommitFence) error
+	now        func() time.Time
 
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -96,15 +100,17 @@ type Projector struct {
 	flushGate  operationGate
 	replayGate operationGate
 
-	heldMu    sync.RWMutex
-	held      map[coredata.TransactionID]struct{}
-	admitted  map[coredata.TransactionID]struct{}
-	errMu     sync.RWMutex
-	lastErr   error
-	fatalErr  error
-	fatalOnce sync.Once
-	ticketMu  sync.Mutex
-	tickets   map[coredata.TransactionID]*projectionTicket
+	heldMu              sync.RWMutex
+	held                map[coredata.TransactionID]struct{}
+	admitted            map[coredata.TransactionID]struct{}
+	pendingEntities     map[int64]map[coredata.TransactionID]*entityProjection
+	pendingTransactions map[coredata.TransactionID]*entityProjection
+	errMu               sync.RWMutex
+	lastErr             error
+	fatalErr            error
+	fatalOnce           sync.Once
+	ticketMu            sync.Mutex
+	tickets             map[coredata.TransactionID]*projectionTicket
 
 	committed         atomic.Uint64
 	projected         atomic.Uint64
@@ -161,7 +167,7 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	projector := &Projector{
-		wal: wal, store: store, opts: options, ack: wal.Ack, ctx: ctx, cancel: cancel,
+		wal: wal, store: store, opts: options, ack: wal.Ack, now: time.Now, ctx: ctx, cancel: cancel,
 		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
 		tickets: make(map[coredata.TransactionID]*projectionTicket),
 	}
@@ -191,6 +197,10 @@ func (projector *Projector) CommitSystem(ctx context.Context, record coredata.Co
 	if projector == nil || projector.wal == nil {
 		return nil, errors.New("dataengine projector: not initialized")
 	}
+	if !projector.operations.Begin() {
+		return nil, ErrRuntimeStopped
+	}
+	defer projector.operations.End()
 	if fatal := projector.fatal(); fatal != nil {
 		return nil, fatal
 	}
@@ -205,7 +215,7 @@ func (projector *Projector) CommitSystem(ctx context.Context, record coredata.Co
 	}
 	projector.tickets[record.ID] = ticket
 	projector.ticketMu.Unlock()
-	if err := projector.reserve(record.ID, false); err != nil {
+	if err := projector.reserve(record, false); err != nil {
 		projector.removeTicket(record.ID)
 		return nil, err
 	}
@@ -223,10 +233,14 @@ func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRe
 	if projector == nil || projector.wal == nil {
 		return errors.New("dataengine projector: not initialized")
 	}
+	if !projector.operations.Begin() {
+		return ErrRuntimeStopped
+	}
+	defer projector.operations.End()
 	if fatal := projector.fatal(); fatal != nil {
 		return fatal
 	}
-	if err := projector.reserve(record.ID, true); err != nil {
+	if err := projector.reserve(record, true); err != nil {
 		return err
 	}
 	if _, err := projector.wal.Append(ctx, record); err != nil {
@@ -242,10 +256,14 @@ func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitR
 	if projector == nil || projector.wal == nil {
 		return nil, errors.New("dataengine projector: not initialized")
 	}
+	if !projector.operations.Begin() {
+		return nil, ErrRuntimeStopped
+	}
+	defer projector.operations.End()
 	if fatal := projector.fatal(); fatal != nil {
 		return nil, fatal
 	}
-	if err := projector.reserve(record.ID, true); err != nil {
+	if err := projector.reserve(record, true); err != nil {
 		return nil, err
 	}
 	ticket, err := projector.wal.Enqueue(ctx, record)
@@ -286,6 +304,10 @@ func (projector *Projector) Flush(ctx context.Context) error {
 	if projector == nil || projector.wal == nil {
 		return nil
 	}
+	if !projector.operations.Begin() {
+		return ErrRuntimeStopped
+	}
+	defer projector.operations.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -387,7 +409,13 @@ func (projector *Projector) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	drained := projector.operations.Stop()
 	projector.closeOnce.Do(projector.cancel)
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	select {
 	case <-projector.done:
 		projector.completeAllTickets(context.Canceled)
@@ -401,11 +429,27 @@ func (projector *Projector) Close(ctx context.Context) error {
 }
 
 func (projector *Projector) Shutdown(ctx context.Context) error {
+	if projector != nil && projector.ctx.Err() != nil {
+		return projector.Close(ctx)
+	}
 	return errors.Join(projector.Flush(ctx), projector.Close(ctx))
 }
 
 // reserve 在同一锁内检查与预留额度，不能让并发 Commit 越过上限。
-func (projector *Projector) reserve(id coredata.TransactionID, held bool) error {
+func (projector *Projector) reserve(record coredata.CommitRecord, held bool) error {
+	// 租约在投影时失效会跳过整笔记录；生成 Entity 无法在准入后撤销多实体内存修改。
+	// 在 WAL 前明确拒绝，让 Nest 仍在 Guard 内执行完整回滚；历史 WAL 回放不经过这里。
+	for _, receipt := range record.Receipts {
+		if receipt.Namespace != coredata.LeaseFenceReceiptNamespace {
+			continue
+		}
+		for _, mutation := range record.Mutations {
+			if mutation.Remote != nil {
+				return ErrRemoteLeaseFenceUnsupported
+			}
+		}
+	}
+	id := record.ID
 	projector.heldMu.Lock()
 	defer projector.heldMu.Unlock()
 	if _, exists := projector.admitted[id]; !exists {
@@ -414,6 +458,7 @@ func (projector *Projector) reserve(id coredata.TransactionID, held bool) error 
 			return ErrProjectionBackpressure
 		}
 		projector.admitted[id] = struct{}{}
+		projector.trackEntitiesLocked(record)
 		projector.walUnacked.Add(1)
 	}
 	if held {
@@ -423,6 +468,7 @@ func (projector *Projector) reserve(id coredata.TransactionID, held bool) error 
 }
 
 func (projector *Projector) discard(id coredata.TransactionID) {
+	projector.finishEntities(id, nil)
 	projector.heldMu.Lock()
 	delete(projector.held, id)
 	if _, ok := projector.admitted[id]; ok {
@@ -466,6 +512,7 @@ func (projector *Projector) fatal() error {
 }
 
 func (projector *Projector) completeProjection(id coredata.TransactionID, err error) {
+	projector.finishEntities(id, err)
 	projector.ticketMu.Lock()
 	ticket := projector.tickets[id]
 	if ticket != nil {
@@ -483,6 +530,11 @@ func (projector *Projector) removeTicket(id coredata.TransactionID) {
 }
 
 func (projector *Projector) completeAllTickets(err error) {
+	projector.heldMu.Lock()
+	for id := range projector.pendingTransactions {
+		projector.finishEntitiesLocked(id, err)
+	}
+	projector.heldMu.Unlock()
 	projector.ticketMu.Lock()
 	for id, ticket := range projector.tickets {
 		delete(projector.tickets, id)

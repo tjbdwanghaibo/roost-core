@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"testing"
+	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 )
@@ -53,4 +56,64 @@ func TestReplayOversizedRecordGetsExclusiveReadWindow(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	assertWALReplayCount(t, w, 0)
+}
+
+func TestReplayBudgetCountsConsumedRecordsAcrossSegments(t *testing.T) {
+	for _, budget := range []string{"records", "bytes"} {
+		t.Run(budget, func(t *testing.T) {
+			opts := nestwal.DefaultOptions(t.TempDir())
+			opts.WriterVersion = nestwal.WriterVersionV2
+			opts.SegmentBytes, opts.MaxRecordBytes = 4096, 2048
+			w, err := nestwal.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close(context.Background())
+			p, err := NewProjector(w, &recordingSegmentStore{}, ProjectorOptions{IdlePoll: time.Hour})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.cancel()
+			awaitChan(t, p.done, "stopped projector")
+			defer p.Close(context.Background())
+			p.opts.ReplayBatchRecords = 20
+			for i := byte(1); i <= 20; i++ {
+				record := projectorRecord(i, false)
+				record.Mutations[0].Data = make([]byte, 1024)
+				if budget == "bytes" {
+					p.opts.ReplayReadBytes = 2 * projectionRecordLogicalBytes(record)
+				} else {
+					p.opts.ReplayBatchRecords = 2
+				}
+				if _, err := w.Append(context.Background(), record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w.Stats().SegmentFiles < 2 {
+				t.Fatal("test did not cross a physical segment")
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if n, err := p.ReplayPass(ctx); n != 0 || !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancel: %d %v", n, err)
+			}
+			if w.Stats().Replayed != 0 {
+				t.Fatal("canceled pass consumed records")
+			}
+			for total := 0; total < 20; {
+				n, err := p.ReplayPass(t.Context())
+				if n != 2 || err != nil {
+					t.Fatalf("n=%d err=%v", n, err)
+				}
+				total += n
+				if got := w.Stats().Replayed; got != uint64(total) {
+					t.Fatalf("consumed=%d replayed=%d", total, got)
+				}
+			}
+			if p.Stats().Projected != 20 {
+				t.Fatal(p.Stats())
+			}
+			assertWALReplayCount(t, w, 0)
+		})
+	}
 }

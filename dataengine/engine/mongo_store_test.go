@@ -25,8 +25,10 @@ import (
 const testDatabase = "game"
 
 type mongoRemoteProjectionFake struct {
-	stored  int
-	applied int
+	stored   int
+	applied  int
+	rejected int
+	notified int
 }
 
 func (fake *mongoRemoteProjectionFake) ApplyRemoteCommitsInTransaction(_ context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
@@ -37,6 +39,14 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommitsInTransaction(_ context
 func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ entity.RemoteTransactionID, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
 	fake.applied += len(commits)
 	return nil, nil
+}
+
+func (fake *mongoRemoteProjectionFake) RejectRemoteCommitsInTransaction(_ context.Context, commits []entity.RemoteCommit, _ string) error {
+	fake.rejected += len(commits)
+	return nil
+}
+func (fake *mongoRemoteProjectionFake) RejectRemoteTransaction(entity.RemoteTransactionID, string) {
+	fake.notified++
 }
 
 func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest.Collection) {
@@ -209,6 +219,9 @@ func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
 	}
 	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
 		t.Fatalf("replayed skipped remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
+	}
+	if remoteProjection.rejected != 2 || remoteProjection.notified != 2 {
+		t.Fatalf("rejected=%d notified=%d", remoteProjection.rejected, remoteProjection.notified)
 	}
 	if markers := markerCollection(client).Len(); markers != 1 {
 		t.Fatalf("replay wrote %d markers, want 1", markers)

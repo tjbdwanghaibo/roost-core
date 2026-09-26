@@ -79,9 +79,25 @@ func (b *Backend) ApplyRemoteCommitsInTransaction(ctx context.Context, commits [
 var _ entity.IRemoteEntityBackend = (*Backend)(nil)
 var _ AtomicCommitStore = (*Backend)(nil)
 
+// SupportsConcurrentRemoteCommits 保留存储实现的并发能力；未知实现仍串行。
+func (b *Backend) SupportsConcurrentRemoteCommits() bool {
+	store, ok := b.storage.(interface{ SupportsConcurrentRemoteCommits() bool })
+	return ok && store.SupportsConcurrentRemoteCommits()
+}
+
 func (b *Backend) WriteAuthority() WriteAuthority {
 	if provider, ok := b.storage.(WriteAuthorityProvider); ok {
 		return provider.WriteAuthority()
 	}
 	return nil
+}
+
+func (b *Backend) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
+	store, ok := b.storage.(interface {
+		RejectRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit, string) error
+	})
+	if !ok {
+		return entity.ErrRemoteAtomicBatchUnsupported
+	}
+	return store.RejectRemoteCommitsInTransaction(ctx, commits, cause)
 }

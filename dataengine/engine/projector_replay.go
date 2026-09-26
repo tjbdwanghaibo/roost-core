@@ -14,6 +14,10 @@ import (
 // ReplayPass 按 WAL 物理顺序读取，在仍持有 Entity 锁的事务前停下。
 // 分段投影成功后才推进 ack；Mongo 已提交而 ack 失败时，下次依靠幂等身份重放。
 func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resultErr error) {
+	if !projector.operations.Begin() {
+		return 0, ErrRuntimeStopped
+	}
+	defer projector.operations.End()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -25,6 +29,11 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	var fences []corenest.CommitFence
 	readBytes := 0
 	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
+		// 上一条已被本轮接收，必须让它的 consume 返回 nil，WAL 才能如实计数。
+		// 读到下一条时停止；这条 lookahead 不保留、不确认。
+		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
+			return errProjectorBatchComplete
+		}
 		if projector.isHeld(record.ID) {
 			return errProjectorTransactionHeld
 		}
@@ -42,9 +51,6 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		records = append(records, record)
 		fences = append(fences, fence)
 		readBytes = saturatingAdd(readBytes, size)
-		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
-			return errProjectorBatchComplete
-		}
 		return nil
 	})
 	if len(records) == 0 {
@@ -65,7 +71,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	_, batchCapable := projector.store.(BatchProjectionStore)
 	// processed 是已成功投影的连续前缀；acked 只在 checkpoint 成功后前移。
 	acked := 0
-	lastAck := time.Now()
+	lastAck := projector.now()
 	checkpoint := func() error {
 		if processed == acked {
 			return nil
@@ -75,7 +81,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		}
 		projector.acknowledge(records[acked:processed])
 		acked = processed
-		lastAck = time.Now()
+		lastAck = projector.now()
 		return nil
 	}
 	// 所有退出路径都只尝试确认已成功的前缀。ack 失败不能被 held 哨兵掩盖。
@@ -167,7 +173,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			// 单 mutation 的 Project 快路只保存文档末次事务 ID。若后续版本
 			// 覆盖它，旧记录便无法判定幂等，因此仍立即 ack；未知 Store 也保留旧契约。
 			replaySafe := multi && (len(unit.records) > 1 || len(unit.records[0].Mutations) > 1)
-			if special || !replaySafe || processed-acked >= projector.opts.CheckpointRecords || time.Since(lastAck) >= projector.opts.CheckpointInterval {
+			if special || !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
 				if err := checkpoint(); err != nil {
 					ackFailed = true
 					return processed, err

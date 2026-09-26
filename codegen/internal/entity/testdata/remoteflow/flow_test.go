@@ -242,8 +242,11 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			if err := store.EnsureInfrastructure(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.SetRemoteProjection(remoteStore, assembly.Manager); err != nil {
+			if err := store.SetRemoteProjection(backend, assembly.Manager); err != nil {
 				t.Fatal(err)
+			}
+			if !store.SupportsRemoteParallelProjection() {
+				t.Fatal("production Backend wiring lost parallel projection capability")
 			}
 			opts := nestwal.DefaultOptions(t.TempDir())
 			opts.WriterVersion = nestwal.WriterVersionV2

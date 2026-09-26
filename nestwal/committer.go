@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
@@ -98,10 +99,11 @@ type CommitterStats struct {
 // Committer implements core Nest's TransactionCommitter and owns the
 // post-commit replay loop. Construction starts recovery immediately.
 type Committer struct {
-	wal       *WAL
-	applier   MutationApplier
-	publisher EffectPublisher
-	opts      CommitterOptions
+	operations operation.Lifetime
+	wal        *WAL
+	applier    MutationApplier
+	publisher  EffectPublisher
+	opts       CommitterOptions
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -190,6 +192,13 @@ func NewCommitter(wal *WAL, applier MutationApplier, publisher EffectPublisher, 
 }
 
 func (c *Committer) Commit(ctx context.Context, record corenest.CommitRecord) error {
+	if c != nil {
+		if !c.operations.Begin() {
+			return ErrClosed
+		}
+		defer c.operations.End()
+	}
+
 	if c == nil || c.wal == nil {
 		return errors.New("nestwal: committer is not initialized")
 	}
@@ -210,6 +219,13 @@ func (c *Committer) Commit(ctx context.Context, record corenest.CommitRecord) er
 // schedules after durability — so the replay loop cannot apply or publish a
 // record whose bytes may not have reached stable storage yet.
 func (c *Committer) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
+	if c != nil {
+		if !c.operations.Begin() {
+			return nil, ErrClosed
+		}
+		defer c.operations.End()
+	}
+
 	if c == nil || c.wal == nil {
 		return nil, errors.New("nestwal: committer is not initialized")
 	}
@@ -242,6 +258,13 @@ func (c *Committer) TransactionReleased(id corenest.TransactionID) {
 // replay pass starts. Concurrent commits are included until a complete empty
 // pass is observed or the context expires.
 func (c *Committer) Flush(ctx context.Context) error {
+	if c != nil {
+		if !c.operations.Begin() {
+			return ErrClosed
+		}
+		defer c.operations.End()
+	}
+
 	if c == nil || c.wal == nil {
 		return nil
 	}
@@ -312,7 +335,13 @@ func (c *Committer) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	drained := c.operations.Stop()
 	c.closeOnce.Do(c.cancel)
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	select {
 	case <-c.done:
 		if c.opts.CloseWAL {
@@ -328,6 +357,9 @@ func (c *Committer) Close(ctx context.Context) error {
 // closing the WAL. Applications should call it after they stop accepting new
 // Nest requests and after all entity guards have drained.
 func (c *Committer) Shutdown(ctx context.Context) error {
+	if c != nil && c.ctx.Err() != nil {
+		return c.Close(ctx)
+	}
 	flushErr := c.Flush(ctx)
 	closeErr := c.Close(ctx)
 	return errors.Join(flushErr, closeErr)
@@ -388,6 +420,10 @@ func (c *Committer) run() {
 }
 
 func (c *Committer) replayPass(ctx context.Context) (int, error) {
+	if !c.operations.Begin() {
+		return 0, ErrClosed
+	}
+	defer c.operations.End()
 	if err := acquireSlot(ctx, c.replaySem); err != nil {
 		return 0, err
 	}

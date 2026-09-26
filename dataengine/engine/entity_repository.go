@@ -8,6 +8,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 var (
@@ -66,6 +67,12 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 	if loaded := repository.manager.Get(fullID); loaded != nil {
 		return loaded, nil
 	}
+	if err := fctx.BlockingError("dataengine.EntityRepository.LoadEntity"); err != nil {
+		panic(fmt.Errorf("%w: entity %d: %w", entity.ErrColdLoadInLogic, fullID, err))
+	}
+	if entity.LoadedEntitiesOnly(ctx) {
+		return nil, fmt.Errorf("%w: entity %d", entity.ErrColdLoadInLogic, fullID)
+	}
 
 	repository.flightMu.Lock()
 	if flight := repository.flights[fullID]; flight != nil {
@@ -103,6 +110,15 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 		}
 	}()
 
+	if gate, ok := repository.gate.(interface {
+		WaitEntityProjection(context.Context, int64) error
+	}); ok {
+		if err := gate.WaitEntityProjection(ctx, fullID); err != nil {
+			flight.err = err
+			settled = true
+			return nil, err
+		}
+	}
 	flight.value, flight.err = repository.loadAggregate(ctx, fullID, kind)
 	settled = true
 	return flight.value, flight.err

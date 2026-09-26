@@ -182,6 +182,12 @@ layout:
   boundary:
     core: v1.17.0
   move:
+    - from: github.com/tjbdwanghaibo/roost-core/room
+      to: github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver
+      package: driver
+    - from: github.com/tjbdwanghaibo/roost-core/kit/room
+      to: github.com/tjbdwanghaibo/roost-core/kit/syncbus
+      package: syncbus
     - from: github.com/tjbdwanghaibo/roost-core/entitysync
       to: github.com/tjbdwanghaibo/roost-core/sync/entitysync
     - from: github.com/tjbdwanghaibo/roost-core/statesync

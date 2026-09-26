@@ -237,6 +237,15 @@ func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
 		t.Fatalf("rejection: %v", err)
 	}
 	rejected.OnRelease()
+	// 直接建立可测量的排队时长，不依赖 Windows 的真实时钟分辨率。
+	q.mu.Lock()
+	for job := q.waiting[0].head; job != nil; job = job.waitingNext {
+		job.admittedAt = time.Now().Add(-time.Second)
+		if !job.readyAt.IsZero() {
+			job.readyAt = job.admittedAt
+		}
+	}
+	q.mu.Unlock()
 	_, _, _, details := q.snapshotStats()
 	got := details.Fast
 	if got.Running != 1 || got.Ready != 1 || got.BlockedOnPredecessor != 1 || got.WaitingForWorker != 1 || got.PeakWaiting != 2 || got.Rejected != 1 || got.OldestWaiting <= 0 {
@@ -305,4 +314,39 @@ func (g *policyTestGetter) Get(ctx context.Context, id int64, cat entity.EntityC
 		return nil, entity.ErrColdLoadInLogic
 	}
 	return value, err
+}
+
+// 一个续行占满快池时，外部准入与 QueueLen 必须看见同一个真实等待位。
+func TestQueueStatsAndAdmissionCountRunningContinuation(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	q := newDispatchQueue("continuation", WorkerPoolConfig{1, 1}, WorkerPoolConfig{1, 1}, func(m *Msg) {
+		if m.Key() == 1 {
+			close(entered)
+			<-release
+		}
+	}, nil)
+	q.start()
+	defer q.stop(context.Background())
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	q.continueFast(queueMessage(1))
+	stagedSignal(t, entered)
+	admitQueue(t, q, false, 2)
+	rejected := queueMessage(3)
+	if err := q.admit(rejected, false); !errors.Is(err, worker.ErrWorkerQueueFull) {
+		t.Fatalf("admission=%v", err)
+	}
+	rejected.OnRelease()
+	fast, _, _, stats := q.snapshotStats()
+	if fast.QueueLen != 1 || stats.Fast.WaitingForWorker != 1 || stats.Fast.PeakWaiting != 1 || stats.ContinuationRunning != 1 {
+		t.Fatalf("pool=%+v stats=%+v", fast, stats)
+	}
+	unblock()
+	if err := q.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fast, _, pending, stats := q.snapshotStats()
+	if fast.QueueLen != 0 || pending != 0 || stats.ContinuationRunning != 0 || stats.Fast.WaitingForWorker != 0 {
+		t.Fatalf("not drained: %+v %+v", fast, stats)
+	}
 }

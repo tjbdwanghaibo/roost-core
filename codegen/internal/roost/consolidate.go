@@ -322,6 +322,13 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 			if !ok || id.Name != alias || id.Obj != nil {
 				return true
 			}
+			// Room 模块的正式改名只作用于已确认的 kit import，不触碰同名业务符号。
+			if rel.to == "github.com/tjbdwanghaibo/roost-core/kit/syncbus" || (rel.kitKeeps[sel.Sel.Name] && keptPath == "github.com/tjbdwanghaibo/roost-core/kit/syncbus") {
+				renamed := map[string]string{"RoomMod": "SyncBusMod", "NewRoomMod": "NewSyncBusMod"}[sel.Sel.Name]
+				if renamed != "" {
+					edits = append(edits, edit{fset.Position(sel.Sel.Pos()).Offset, fset.Position(sel.Sel.End()).Offset, renamed})
+				}
+			}
 			if rel.kitKeeps[sel.Sel.Name] {
 				kitUses = append(kitUses, sel)
 			} else {

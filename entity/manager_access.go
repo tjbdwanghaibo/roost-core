@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 // ManagerAccess adapts the in-memory EntityManager to the execution and remote
@@ -93,6 +95,9 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	access.loaderMu.RUnlock()
 	if loader == nil {
 		return nil, nil
+	}
+	if err := fctx.BlockingError("entity.ManagerAccess.Get"); err != nil {
+		panic(fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, id, err))
 	}
 	if LoadedEntitiesOnly(ctx) {
 		return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, id)
@@ -204,6 +209,9 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 		hasLoader := access.loader != nil
 		access.loaderMu.RUnlock()
 		if hasLoader {
+			if err := fctx.BlockingError("entity.ManagerAccess.GetMany"); err != nil {
+				panic(fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, requests[0].id, err))
+			}
 			return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, requests[0].id)
 		}
 		return result, nil

@@ -69,7 +69,7 @@ type session struct {
 	held bool
 
 	framesSent    uint64
-	snapshotAfter [2]int64 // 新入场/恢复分别轮转，避免另一类改变公平顺序
+	snapshotAfter [2]int64 // 两类分别记录请求序号；新请求不能按 Entity ID 插到旧请求前
 	// 仅编码副本可写；已发布的引用表始终只读。
 	referencesOwned bool
 }

@@ -2,6 +2,7 @@ package entitysync
 
 import (
 	"container/list"
+	"maps"
 	"slices"
 	"time"
 )
@@ -24,6 +25,7 @@ func (m *Manager) refreshSnapshotWindowAt(now time.Time) {
 			m.budgetWindow = m.budgetWindow.Add(now.Sub(m.budgetWindow) / interval * interval)
 		}
 		m.windowAllowance = snapshotAllowance{}
+		m.windowByteBlocked = false
 		clear(m.windowSessions)
 		if m.windowSessions == nil {
 			m.windowSessions = make(map[SessionID]int)
@@ -137,11 +139,19 @@ type snapshotCandidate struct {
 	sessionID SessionID
 	sub       *subscription
 	class     snapshotClass
+	sequence  int64 // 意图入队顺序，不能让不断到来的较小/较大 Entity ID 插队
 }
 
 type snapshotPlan struct {
-	selected map[*subscription]bool
-	order    []snapshotCandidate // 数量预选与字节准入共用顺序，不能再按会话重新争抢额度
+	selected    map[*subscription]bool
+	order       []snapshotCandidate // 数量预选与字节准入共用顺序，不能再按会话重新争抢额度
+	charges     []snapshotCharge    // 仅计划预留；真正尝试 Push 的会话才结算窗口与游标
+	byteBlocked bool
+}
+
+type snapshotCharge struct {
+	candidate snapshotCandidate
+	bytes     int
 }
 
 // 冷创建按业务来源交替，来源内部沿用会话和实体轮转。空闲来源的额度可被另一类使用。
@@ -152,6 +162,9 @@ func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 		return nil
 	}
 	plan := &snapshotPlan{selected: make(map[*subscription]bool)}
+	if m.config.Mode == ModeOnChange && m.windowByteBlocked {
+		return plan
+	}
 	if m.config.Mode == ModeOnChange && limit.MaxBytes > 0 && m.windowAllowance.objects > 0 && m.windowAllowance.bytes >= limit.MaxBytes {
 		return plan
 	}
@@ -213,7 +226,8 @@ func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 	return plan
 }
 
-// scheduleSnapshots 在组帧前统一扣减额度。这里只读取捕获的 settlement，不读可变订阅字段。
+// scheduleSnapshots 在组帧前按同一顺序预留额度，不修改实际窗口或游标。
+// 这里只读取捕获的 settlement，不读可变订阅字段。
 // 现有对象的 Full 更新、delta、remove 不消耗冷创建额度。
 func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snapshotPlan) {
 	for _, batch := range work {
@@ -241,11 +255,11 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 		}
 	}
 	limit := m.config.SnapshotBudget
-	used := &snapshotAllowance{}
+	used := snapshotAllowance{}
 	sessions := make(map[SessionID]int)
 	if m.config.Mode == ModeOnChange {
-		used = &m.windowAllowance
-		sessions = m.windowSessions
+		used = m.windowAllowance
+		sessions = maps.Clone(m.windowSessions)
 	}
 	for _, candidate := range plan.order {
 		item, ok := pending[candidate.sub]
@@ -263,16 +277,20 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 		} // 保留在帧编码中，走统一失败路径
 		bytes := 18 + len(data)
 		if (limit.MaxObjects > 0 && used.objects >= limit.MaxObjects) ||
-			(limit.PerSessionObjects > 0 && sessions[candidate.sessionID] >= limit.PerSessionObjects) ||
-			(limit.MaxBytes > 0 && used.objects > 0 && bytes > limit.MaxBytes-used.bytes) {
+			(limit.PerSessionObjects > 0 && sessions[candidate.sessionID] >= limit.PerSessionObjects) {
 			continue
+		}
+		if limit.MaxBytes > 0 && used.objects > 0 && bytes > limit.MaxBytes-used.bytes {
+			// 不允许后续小包越过首个被挡对象推进游标；下一窗口它可独占软预算。
+			// 本窗口也停止重捕获冷请求，避免即时通知反复编码同一个大包。
+			plan.byteBlocked = true
+			break
 		}
 		used.objects++
 		used.bytes += bytes
 		sessions[candidate.sessionID]++
-		batch.snapshotAfter[candidate.class] = candidate.subjectID
-		m.snapshotCursor[candidate.class] = candidate.sessionID
-		m.snapshotNextClass = 1 - candidate.class
+		batch.snapshotAfter[candidate.class] = candidate.sequence
+		plan.charges = append(plan.charges, snapshotCharge{candidate, bytes})
 		delete(pending, candidate.sub)
 	}
 	for _, item := range pending {
@@ -295,5 +313,32 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 		clear(batch.entries[count:])
 		clear(batch.settlements[count:])
 		batch.entries, batch.settlements = batch.entries[:count], batch.settlements[:count]
+	}
+}
+
+// 一次 Push 尝试消费该会话本批冷创建的额度（包括 RetryLater），防止同窗口空转。
+// 编码失败、会话失效、提前取消和未轮到的会话不消费额度。按原计划顺序推进游标，
+// 不能被实际按 session ID 发送的顺序重新排序；已发送的帧前缀仍由 Flush 单独结算。
+func (m *Manager) commitSnapshotAttempts(work map[SessionID]*flushSession, plan *snapshotPlan) {
+	if plan == nil {
+		return
+	}
+	attempted := 0
+	for _, charge := range plan.charges {
+		candidate := charge.candidate
+		if !work[candidate.sessionID].snapshotAttempted {
+			continue
+		}
+		attempted++
+		if m.config.Mode == ModeOnChange {
+			m.windowAllowance.objects++
+			m.windowAllowance.bytes += charge.bytes
+			m.windowSessions[candidate.sessionID]++
+		}
+		m.snapshotCursor[candidate.class] = candidate.sessionID
+		m.snapshotNextClass = 1 - candidate.class
+	}
+	if m.config.Mode == ModeOnChange && plan.byteBlocked && attempted == len(plan.charges) {
+		m.windowByteBlocked = true
 	}
 }

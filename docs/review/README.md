@@ -1,6 +1,11 @@
 # Roost 持续 Review 与学习记录
 
-[09-26 上线前复审](REVIEW-2026-09-26-release.md)：main `aaada47` 对 v1.16.1，发布门禁 + Nest/Sync/DataEngine/Remote/demo 五路；登记 RR-20260926-10～24（3 条 P1 级、12 条 P2，均未修复），附[复现](../bug/REPRO-2026-09-26-02.md)；结论：不能直接发布。
+[09-26 新增复审修复](REVIEW-2026-09-26-release-fixes.md)：RR-10～24 的修复、10 项负对照、正式链路、兼容变化和未验证边界。
+
+[09-26 上线前复审](REVIEW-2026-09-26-release.md)：main `aaada47` 对 v1.16.1，发布门禁 + Nest/Sync/DataEngine/Remote/demo 五路；登记 RR-20260926-10～24（3 条 P1 级、12 条 P2，原审查时未修复；当前见后续修复记录），附[复现](../bug/REPRO-2026-09-26-02.md)；结论：不能直接发布。
+
+[2026-09-26 三模块复审核实与修复](REVIEW-2026-09-26-followup.md)：RR-03～09、负对照、正式链路验证与规则补强。
+
 
 [09-26 核心优化复审](REVIEW-2026-09-26-core-optimization.md)：main `a22c5a5`，Nest / Sync / DataEngine+Remote 三路只读审查；登记 RR-20260926-03～06（均 P2、未修复），附[复现](../bug/REPRO-2026-09-26.md)；观测与文档类疑点列在记录内。
 

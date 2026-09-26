@@ -13,6 +13,7 @@ type DispatcherWorkStats struct {
 // DispatchLaneStats 区分 ID 顺序等待和执行资源等待；累计耗时在进入下一阶段时记账。
 // Ready 包含已预留执行额度但 goroutine 尚未取走的工作。
 // Rejected 只累计容量拒绝，不包含尚未启动或已经关闭的请求。
+// PeakWaiting / OldestWaiting 合并两种等待；DependencyWait / WorkerWait 分阶段累计。
 type DispatchLaneStats struct {
 	Running, Ready, BlockedOnPredecessor, WaitingForWorker int
 	PeakWaiting                                            int

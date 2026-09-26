@@ -1,6 +1,7 @@
 package player
 
 import (
+ db "{{MODULE}}/db"
 	"context"
 	"errors"
 	"fmt"
@@ -227,7 +228,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
-		guildIDs: mongoClient.Database("game").Collection("_guild_id_sequence"),
+		guildIDs: mongoClient.Database(db.NewGuildDao().DbName()).Collection("_guild_id_sequence"),
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }

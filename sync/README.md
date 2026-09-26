@@ -51,8 +51,15 @@ on_change 下快照预算按 Interval 窗口共享；额度耗尽的快照需求
 仍受帧硬上限、冻结内存和传输背压约束。Hold/Ready 清空引用后重新创建对象，仍需额度。
 20Hz 恢复窗口不保证冷对象创建在 50ms 内到达客户端，排队与传输耗时需要单独计入。
 `Stats().Pending` 包含预算等待中的 subject；`PendingSnapshots` 统计待基线订阅（含 held），
-`WaitingSnapshotSubjects` 和 `OldestSnapshotWait` 用于检查预算等待。Stats 会遍历订阅，
-请按诊断频率调用；高频累计量仍用 Counters。
+`WaitingSnapshotSubjects` 和 `OldestSnapshotWait` 用于检查预算等待。Stats 使用增量计数和等待链表，
+完整遍历在显式 AuditStats；两者的精确比对应在生命周期静止时进行。
+
+冷预算的计划预留不等于实际消费：开始 Push 的会话按本批冷创建计费（包括 RetryLater），
+编码失败、提前取消、失效及未轮到的会话不扣费。成功帧前缀独立结算，不因后缀失败倒退。
+字节预算挡住首个候选时停止后续小包插队；会话内按快照意图入队顺序，合法大对象可独占下一次额度。
+on_change 同窗口停止重复冷捕获，已有对象更新不受影响；periodic 仅配置字节预算仍可能预捕获全部候选。
+恢复类别目前指同一会话 lifetime 的 Hold/Ready；Close/Open 后是新入场。
+具体边界和回归见[复审核实](../docs/review/REVIEW-2026-09-26-followup.md)。
 
 可显式创建 `NewSyncTrace(capacity)`，传入 `ManagerConfig.Trace` 开启有界阶段记录；
 默认 nil，不记录事件。定期调用 `Drain()` 获取独立副本及本次覆盖数，随后在锁外写文件。

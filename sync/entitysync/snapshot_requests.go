@@ -13,6 +13,7 @@ type snapshotRequests struct {
 	entries  map[*subscription]snapshotCandidate
 	groups   [2]map[SessionID]*snapshotRequestGroup
 	sessions [2][]SessionID
+	sequence int64
 }
 type snapshotRequestGroup struct {
 	entries map[*subscription]snapshotCandidate
@@ -52,7 +53,8 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 		r.groups[class][sid] = group
 		r.sessions[class] = nil
 	}
-	candidate := snapshotCandidate{subj.id, sid, sub, class}
+	r.sequence++
+	candidate := snapshotCandidate{subj.id, sid, sub, class, r.sequence}
 	r.entries[sub], group.entries[sub] = candidate, candidate
 	group.ordered = nil
 }
@@ -71,7 +73,7 @@ func (g *snapshotRequestGroup) order() []snapshotCandidate {
 		for _, candidate := range g.entries {
 			g.ordered = append(g.ordered, candidate)
 		}
-		slices.SortFunc(g.ordered, func(a, b snapshotCandidate) int { return cmp.Compare(a.subjectID, b.subjectID) })
+		slices.SortFunc(g.ordered, func(a, b snapshotCandidate) int { return cmp.Compare(a.sequence, b.sequence) })
 	}
 	return g.ordered
 }
@@ -112,8 +114,8 @@ func (it *snapshotIterator) next(m *Manager, class snapshotClass, pending map[in
 			continue
 		}
 		it.items = m.snapshotRequests.groups[class][sid].order()
-		it.itemStart, _ = slices.BinarySearchFunc(it.items, it.session.snapshotAfter[class], func(a snapshotCandidate, id int64) int { return cmp.Compare(a.subjectID, id) })
-		for it.itemStart < len(it.items) && it.items[it.itemStart].subjectID <= it.session.snapshotAfter[class] {
+		it.itemStart, _ = slices.BinarySearchFunc(it.items, it.session.snapshotAfter[class], func(a snapshotCandidate, sequence int64) int { return cmp.Compare(a.sequence, sequence) })
+		for it.itemStart < len(it.items) && it.items[it.itemStart].sequence <= it.session.snapshotAfter[class] {
 			it.itemStart++
 		}
 		it.itemVisited = 0

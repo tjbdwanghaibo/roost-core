@@ -431,6 +431,9 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 			state = entity.RemoteCommitRejected
 		}
 		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: state, Cause: err.Error()})
+		if state == entity.RemoteCommitIndeterminate {
+			err = errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
+		}
 		return nil, err
 	}
 	if len(receipts) != len(cloned) {
@@ -681,36 +684,8 @@ func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCom
 	if receipt.TransactionID != commit.TransactionID || receipt.EntityID != commit.EntityID || receipt.StateVersion != commit.NextVersion || receipt.MarkerEpoch != commit.MarkerEpoch || receipt.LockFence != commit.LockFence || receipt.RouteEpoch != commit.RouteEpoch {
 		return fmt.Errorf("remote_entity: invalid commit receipt for %d", commit.EntityID)
 	}
-	if wrapper, ok := m.get(commit.EntityID); ok {
-		if concrete := wrapper; concrete != nil {
-			live := concrete.attachedEntity()
-			if live != nil {
-				if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
-					if err := remote.SetRemoteVersionVector(entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}); err != nil {
-						return err
-					}
-					if remote.RemoteOwnershipState() == entity.RemoteOwnershipQuarantined {
-						if err := remote.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err != nil {
-							return err
-						}
-						target := entity.RemoteOwnershipLocalOwned
-						if concrete.isMarked() {
-							target = entity.RemoteOwnershipShared
-						}
-						if err := remote.TransitionRemoteOwnership(target); err != nil {
-							return err
-						}
-					}
-				} else {
-					live.SetEntityVersion(int64(commit.NextVersion))
-				}
-				if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
-					if err := participant.AcknowledgeRemoteCommit(commit.Clone()); err != nil {
-						return err
-					}
-				}
-			}
-		}
+	if err := m.acknowledgeRemoteCommit(commit); err != nil {
+		return err
 	}
 	for _, record := range commit.Snapshots {
 		envelope := entity.RemoteSnapshotEnvelope{
@@ -914,3 +889,53 @@ var _ entity.RemoteSnapshotReader = (*Manager)(nil)
 // SupportsConcurrentRemoteCommits 声明独立 Entity 的投影/发布可并行。
 // 调用方负责保持同一 Entity 的版本顺序，Manager 继续逐笔确认完整发布。
 func (*Manager) SupportsConcurrentRemoteCommits() bool { return true }
+
+// 持久回执重放仍需发布历史快照，但不得用旧事务覆盖已获得更高许可的本地实体。
+// 只在已验证回执的路径使用此判断；新写入的 fence 校验保持严格。
+func remoteReceiptObsolete(live entity.IThreadSafeEntity, commit entity.RemoteCommit) bool {
+	remote, ok := live.(entity.IThreadSafeRemoteEntity)
+	if !ok {
+		return false
+	}
+	v := remote.RemoteVersionVector()
+	return v.StateVersion >= commit.NextVersion && v.MarkerEpoch >= commit.MarkerEpoch && v.RouteEpoch >= commit.RouteEpoch && v.LockFence >= commit.LockFence &&
+		(v.StateVersion > commit.NextVersion || v.LockFence > commit.LockFence || v.MarkerEpoch > commit.MarkerEpoch || v.RouteEpoch > commit.RouteEpoch)
+}
+func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
+	wrapper, ok := m.get(commit.EntityID)
+	if !ok || wrapper == nil {
+		return nil
+	}
+	live := wrapper.attachedEntity()
+	if live == nil || remoteReceiptObsolete(live, commit) {
+		return nil
+	}
+	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
+		vector := entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}
+		if err := remote.SetRemoteVersionVector(vector); err != nil {
+			// 并发取得新许可可能发生在上面的读取之后；再次核对完整向量。
+			if remoteReceiptObsolete(live, commit) {
+				return nil
+			}
+			return err
+		}
+		if remote.RemoteOwnershipState() == entity.RemoteOwnershipQuarantined {
+			if err := remote.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err != nil {
+				return err
+			}
+			target := entity.RemoteOwnershipLocalOwned
+			if wrapper.isMarked() {
+				target = entity.RemoteOwnershipShared
+			}
+			if err := remote.TransitionRemoteOwnership(target); err != nil {
+				return err
+			}
+		}
+	} else {
+		live.SetEntityVersion(int64(commit.NextVersion))
+	}
+	if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
+		return participant.AcknowledgeRemoteCommit(commit.Clone())
+	}
+	return nil
+}

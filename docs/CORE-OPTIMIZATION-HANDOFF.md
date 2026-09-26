@@ -1,5 +1,9 @@
 # Roost 核心优化汇总与 agent 交接
 
+**提交更新（2026-09-26）**：用户已授权提交，RR-03～24 的修复、回归与文档随本次 main 提交保存；未执行 push 或发布。下文“未提交”和索引刷新失败是修复验收时的记录。
+
+**最新修复（2026-09-26）**：RR-10～24 见[新增复审修复](review/REVIEW-2026-09-26-release-fixes.md)。当前工作树未提交；旧性能结论不能代表 Backend 正式装配，新的 Remote + lease-fence 混合准入明确拒绝，同 SessionID 重连遇到旧队列未退出需重试。下文原批次结论需结合此更新阅读。
+
 更新日期：2026-09-26。范围是本轮对话已实施的 Nest、Sync、DataEngine、Remote 优化与必要调用链，并回链更早的结构调整；不是全仓逐函数审计或永久性能保证。
 
 **当前结论：约定的优化批次已实施，用户已接受本轮 Sync 少量 50ms 尾延迟超标，允许提交。** 原严格门禁结果仍保留为失败，不修改代码阈值，不自动推广到其他负载。24小时长稳、真实生产网络等未验证项单列。
@@ -52,11 +56,11 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 | 批次 | 最终行为与收益 | 原始记录 |
 | --- | --- | --- |
-| N1～N4 | 注册/dispatch/事务/回滚/诊断同包分文件；Single/Multi/MultiGroup统一收尾；准入、释放与回复责任显式化；可选阶段指标；profile驱动Timer/临时集合优化 | [Nest整体验收](feature/NEST-COMPLETION-2026-09-24.md)、[消息吞吐](feature/NEST-MSG-THROUGHPUT-2026-09-24.md) |
+| 09-24 整体验收 N1～N4 | 注册/dispatch/事务/回滚/诊断同包分文件；Single/Multi/MultiGroup统一收尾；准入、释放与回复责任显式化；可选阶段指标；profile驱动Timer/临时集合优化 | [Nest整体验收](feature/NEST-COMPLETION-2026-09-24.md)、[消息吞吐](feature/NEST-MSG-THROUGHPUT-2026-09-24.md) |
 | 事务正确性 | pipelined锁内准入、Cast事务保护、组锁/panic/广播清理、Ticker启停、已准入后的持久完成责任、真实释放后回调 | [早期主线](feature/REFACTOR-2026-09-24-nest-and-immediate-sync.md)、RR-20260924-01～08 |
 | Remote分段 | 慢准备→快业务→慢确认/释放，避免远端I/O长期占逻辑worker；内部续行保留收尾能力 | [阶段隔离](feature/REFACTOR-2026-09-25-nest-remote-stages.md) |
 | 快慢双池 | main/hb/remote等执行资源归为双池；全部显式ID统一依赖顺序；无关ID共享worker；有界等待、内部续行公平与停机排空 | [双池](feature/REFACTOR-2026-09-25-nest-fast-slow.md)、RR-20260925-07～09 |
-| 最新N1～N3 | 快阶段Getter禁止冷加载；Slow准备声明目标；队列区分前驱与worker等待、峰值/年龄/拒绝和续行；指标key和单ID减分配 | [九项实施](feature/REFACTOR-2026-09-26-core-nine-items.md)、RR-20260926-02 |
+| 09-26 九项 N1～N3 | 快阶段Getter禁止冷加载；Slow准备声明目标；队列区分前驱与worker等待、峰值/年龄/拒绝和续行；指标key和单ID减分配 | [九项实施](feature/REFACTOR-2026-09-26-core-nine-items.md)、RR-20260926-02 |
 
 ### DataEngine 与 Remote
 
@@ -97,7 +101,7 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 - **24小时未运行**：保留入口。30分钟堆86.94–307.58MB且后半程基线较高，事务保留接近65536上限；不能宣称排除了泄漏。缺少24小时结果不撤销用户本次接受，也不能写成长期已验证。
 - **故障矩阵有版本边界**：历史Remote版本有21/21通过，最新九项版本未完整重跑；其正式生成与相关race通过不等同新的完整集群矩阵。真实跨机/弱网、生产客户端与业务schema仍需部署环境验证。
 - **历史FlushFailures根因未证明**：RR-20260926-01修复阶段错误留存；本轮没有复现历史偶发FlushFailures，不将观测修复说成历史根因修复。
-- **2026-09-26 复审登记、未修复**：[RR-20260926-03](bug/RR-20260926-03.md)（Nest 双池以来即有：Slow 快阶段 RunLocal 自等死锁）、[RR-20260926-04](bug/RR-20260926-04.md)（Sync 字节软预算大对象饥饿，默认预算关闭时不触发）、[RR-20260926-05](bug/RR-20260926-05.md)（九项 S 批引入的快照额度预扣回退）、[RR-20260926-06](bug/RR-20260926-06.md)（快池阻塞入口 fail-fast 要求）。§3 中“快阶段 Getter 禁止冷加载”只覆盖 `msg.getter`；“软预算保证大对象进度”在字节预算下不成立。观测/文档类疑点未登记 RR，见[复审记录](review/REVIEW-2026-09-26-core-optimization.md)。
+- **2026-09-26 复审核实并修复**：RR-03～06 四条成立；另确认 RR-07（WAL回放漏计）、RR-08（续行占用导致准入/指标分叉）、RR-09（Remote失败缺事务ID）。代码与防回归规则已补齐，race、静态检查及正式生成三链路通过，尚未提交/部署；[逐项判断、负对照和边界](review/REVIEW-2026-09-26-followup.md)。Projected是成功尝试数；Close/Open不等同Hold恢复；periodic仅字节预算的预捕获成本仍存在。此前性能数字未重测。
 - **2026-09-26 上线前复审登记、未修复**（基线 `aaada47`，[复审记录](review/REVIEW-2026-09-26-release.md)）：P1 级 [RR-20260926-10](bug/RR-20260926-10.md)（卸载后投影前重载 → fence 且重启不起来）、[RR-20260926-11](bug/RR-20260926-11.md)（Remote 重放被新 fence 拒绝，投影卡死）、[RR-20260926-12](bug/RR-20260926-12.md)（生成工程 syncbus 配置失效）；另 P2 十二条（RR-13～24）。**§4 的 Remote 30分钟80TPS、120/160TPS 容量与 RR-20260925-05 的 59.997TPS 由直接接 MongoCommitter 的测试装配测得，正式 kit 装配下并行投影未开启（[RR-20260926-21](bug/RR-20260926-21.md)），在正式装配复测前不作为上线依据。** 发版手续（清单 v1.16.1、生成器下限、CHANGELOG）与 CI 状态见复审记录。
 - **图谱尚未刷新**：最后generation `2026-09-25T11:41:37Z`。刷新被“pre-coordination or unverified CBM generation is active”阻止；新代码以源码/实际测试补证。环境恢复后重建并检查coverage；不要清未知锁或中断其他实例。
 
@@ -175,10 +179,13 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260925-13](bug/RR-20260925-13.md) | 冷快照窗口边界随晚醒漂移 | [修复](bugfix/RR-20260925-13.md) |
 | [RR-20260926-01](bug/RR-20260926-01.md) | Sync policy 失败丢失 LastError | [修复](bugfix/RR-20260926-01.md) |
 | [RR-20260926-02](bug/RR-20260926-02.md) | Nest 快阶段允许冷加载占用逻辑 worker | [修复](bugfix/RR-20260926-02.md) |
-| [RR-20260926-03](bug/RR-20260926-03.md) | Slow 快阶段继承慢阶段执行器，RunLocal 在快池内自等，快池饥饿死锁 | 未修复 |
-| [RR-20260926-04](bug/RR-20260926-04.md) | 字节软预算下大对象被持续插队而饿死 | 未修复 |
-| [RR-20260926-05](bug/RR-20260926-05.md) | 快照额度在 Push 前预扣，RetryLater 后窗口额度被未尝试会话占满 | 未修复 |
-| [RR-20260926-06](bug/RR-20260926-06.md) | 快池内框架阻塞等待入口没有 fail-fast（应 panic） | 未修复 |
+| [RR-20260926-03](bug/RR-20260926-03.md) | Slow 快阶段继承慢阶段执行器，RunLocal 在快池内自等，快池饥饿死锁 | [修复](bugfix/RR-20260926-03.md) |
+| [RR-20260926-04](bug/RR-20260926-04.md) | 字节软预算下大对象被持续插队而饿死 | [修复](bugfix/RR-20260926-04.md) |
+| [RR-20260926-05](bug/RR-20260926-05.md) | 快照额度在 Push 前预扣，RetryLater 后窗口额度被未尝试会话占满 | [修复](bugfix/RR-20260926-05.md) |
+| [RR-20260926-06](bug/RR-20260926-06.md) | 快池内框架阻塞等待入口没有 fail-fast（应 panic） | [修复](bugfix/RR-20260926-06.md) |
+| [RR-20260926-07](bug/RR-20260926-07.md) | WAL回放边界漏计 | [修复](bugfix/RR-20260926-07.md) |
+| [RR-20260926-08](bug/RR-20260926-08.md) | 续行占用时队列容量和观测分叉 | [修复](bugfix/RR-20260926-08.md) |
+| [RR-20260926-09](bug/RR-20260926-09.md) | Remote并行投影缺少失败事务ID | [修复](bugfix/RR-20260926-09.md) |
 | [RR-20260926-10](bug/RR-20260926-10.md) | 卸载后投影前重载读旧版本，进程 fence 且重启无法恢复（P1） | 未修复 |
 | [RR-20260926-11](bug/RR-20260926-11.md) | Remote 重放被新 fence 拒绝，WAL 投影永久卡住（P1） | 未修复 |
 | [RR-20260926-12](bug/RR-20260926-12.md) | 生成工程 syncbus 配置段被忽略，JetStream 静默退回 NATS（P1 建议） | 未修复 |

@@ -172,6 +172,7 @@ type Manager struct {
 	flushWork         map[SessionID]*flushSession
 	flushPool         []*flushSession
 	snapshotCursor    [2]SessionID  // flushGate；两类分别保留会话轮转位置
+	windowByteBlocked bool          // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
 	snapshotNextClass snapshotClass // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 }

@@ -145,7 +145,7 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	}
 	// 先使用尚未占用的外部执行额度。否则 1024 worker / 16 等待位
 	// 会在 worker 尚未被调度时，仅准入 16 条就误报满队列。
-	hasExecutionSlot := j.predecessors == 0 && q.running[lane]+q.readyCount[lane] < q.config[lane].Workers
+	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane)+q.readyCount[lane] < q.config[lane].Workers
 	if !hasExecutionSlot && q.waitingCount(lane) >= q.config[lane].QueueCap {
 		q.observation[lane].Rejected++
 		return worker.ErrWorkerQueueFull
@@ -183,6 +183,7 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 		q.preferContinuation = false
 		q.continuationCount--
 		q.continuationRunning++
+		q.observation[0].PeakWaiting = max(q.observation[0].PeakWaiting, q.waitingCount(0))
 		return q.continuations.pop()
 	}
 	if j := q.ready[lane].pop(); j != nil {
@@ -216,7 +217,11 @@ func (q *dispatchQueue) work(lane int) {
 			return
 		}
 		goroutine.SafeFunc(func() {
-			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name))
+			var phase fctx.Option
+			if lane == 0 {
+				phase = fctx.WithFastWorker()
+			}
+			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
 			defer release()
 			defer j.msg.OnRelease()
 			if handler := q.handlers[lane]; handler != nil {
@@ -292,11 +297,7 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 		lanes[i] = q.observation[i]
 		lanes[i].Running, lanes[i].Ready = q.running[i], q.readyCount[i]
 		lanes[i].BlockedOnPredecessor = q.queued[i] - q.readyCount[i]
-		busy := q.running[i]
-		if i == 0 {
-			busy += q.continuationRunning
-		}
-		lanes[i].WaitingForWorker = max(0, q.readyCount[i]-max(0, q.config[i].Workers-busy))
+		lanes[i].WaitingForWorker = max(0, q.readyCount[i]-max(0, q.config[i].Workers-q.busyWorkers(i)))
 		if head := q.waiting[i].head; head != nil {
 			lanes[i].OldestWaiting = now.Sub(head.admittedAt)
 		}
@@ -307,8 +308,17 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 // waitingCount 排除已预留外部执行额度的就绪消息。前驱未完成的消息
 // 始终算等待，不能用空闲 worker 数掩盖同 ID 的积压。调用方持有 q.mu。
 func (q *dispatchQueue) waitingCount(lane int) int {
-	reserved := min(q.readyCount[lane], q.config[lane].Workers-q.running[lane])
+	reserved := min(q.readyCount[lane], max(0, q.config[lane].Workers-q.busyWorkers(lane)))
 	return q.queued[lane] - reserved
+}
+
+// 续行也占实际快 worker；准入和观测必须使用同一执行容量。调用方持有 q.mu。
+func (q *dispatchQueue) busyWorkers(lane int) int {
+	busy := q.running[lane]
+	if lane == 0 {
+		busy += q.continuationRunning
+	}
+	return busy
 }
 func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 	j.readyAt = time.Now()

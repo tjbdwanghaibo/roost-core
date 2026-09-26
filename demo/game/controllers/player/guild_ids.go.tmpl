@@ -21,7 +21,7 @@ func (controller *Controller) nextGuildID(ctx context.Context) (int64, error) {
 		Next int64 `bson:"next"`
 	}
 	err := controller.guildIDs.FindOneAndUpdate(ctx,
-		bson.M{"_id": "guild", "next": bson.M{"$lt": int64(entity.StaticUniqueIDBase - 1)}},
+		bson.M{"_id": "guild"},
 		bson.M{"$inc": bson.M{"next": int64(1)}}, &counter,
 		fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
 	if err != nil {

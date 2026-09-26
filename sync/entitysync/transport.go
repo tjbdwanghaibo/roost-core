@@ -75,11 +75,8 @@ func (t *AsyncTransport) SessionOpened(session SessionID) error {
 	if t == nil || t.async == nil {
 		return ErrTransportRequired
 	}
-	err := t.async.RegisterSession(nettransport.SessionInfo{ID: session})
-	if errors.Is(err, nettransport.ErrSessionAlreadyExists) {
-		return nil
-	}
-	return err
+	// 旧发送尚未退出时必须明确拒绝；不能把新 lifetime 绑定到旧队列。
+	return t.async.RegisterSession(nettransport.SessionInfo{ID: session})
 }
 
 func (t *AsyncTransport) SessionClosed(session SessionID) {

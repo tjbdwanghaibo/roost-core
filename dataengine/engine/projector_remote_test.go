@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,6 +99,9 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 	if n != 1 || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
+	if !strings.Contains(err.Error(), records[1].ID.String()) {
+		t.Fatalf("missing failed transaction: %v", err)
+	}
 	assertWALReplayIDs(t, w, []coredata.TransactionID{records[1].ID, records[2].ID, records[3].ID})
 	// 首次观察失败前，先返回的成功记录可以触发补位；任何已成功后缀仍不可 ack。
 	if calls[records[2].ID] != 1 || calls[records[3].ID] > 1 {
@@ -109,14 +114,19 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 	if calls[records[2].ID] != 2 {
 		t.Fatal("successful suffix must be replayed")
 	}
+	// Projected 是成功尝试数：成功但未 ack 的后缀重放会再次计数。
+	wantProjected := uint64(1 + calls[records[2].ID] + calls[records[3].ID] + 1)
+	if p.Stats().Projected != wantProjected {
+		t.Fatalf("projected=%d want attempts=%d", p.Stats().Projected, wantProjected)
+	}
 	assertWALReplayCount(t, w, 0)
 }
 
 func TestRemoteProjectionWindowBoundaries(t *testing.T) {
-	for _, name := range []string{"independent", "overlap", "transaction", "effect", "receipt", "ordinary", "mixed", "migration", "invalid", "workers", "bytes"} {
+	for _, name := range []string{"independent", "overlap", "transaction", "effect", "receipt", "ordinary", "mixed", "migration", "invalid", "records", "bytes"} {
 		t.Run(name, func(t *testing.T) {
 			records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
-			workers, bytes, want := 8, 4<<20, 3
+			maxRecords, bytes, want := 8, 4<<20, 3
 			switch name {
 			case "overlap":
 				records[1].Mutations = coredata.CloneCommitRecord(records[0]).Mutations
@@ -144,8 +154,8 @@ func TestRemoteProjectionWindowBoundaries(t *testing.T) {
 			case "invalid":
 				records[1].Mutations[0].Remote.Mutations[0].ID = 999
 				want = 1
-			case "workers":
-				workers = 2
+			case "records":
+				maxRecords = 2
 				want = 2
 			case "bytes":
 				bytes = projectionRecordLogicalBytes(records[0])
@@ -155,7 +165,7 @@ func TestRemoteProjectionWindowBoundaries(t *testing.T) {
 			for i := range records {
 				segments[i].records = records[i : i+1]
 			}
-			if n := remoteProjectionWindow(segments, workers, bytes); n != want {
+			if n := remoteProjectionWindow(segments, maxRecords, bytes); n != want {
 				t.Fatalf("window=%d want=%d", n, want)
 			}
 		})
@@ -259,13 +269,15 @@ func TestRemoteProjectionWithoutCapabilityRemainsSerial(t *testing.T) {
 
 func TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure(t *testing.T) {
 	records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3), remoteProjectionRecord(t, 4)}
+	var unexpected atomic.Int32
 	s := &parallelRemoteStore{project: func(_ context.Context, r coredata.CommitRecord) error {
 		switch r.ID {
-		case records[1].ID:
+		case records[0].ID, records[1].ID:
 			return context.DeadlineExceeded
 		case records[2].ID:
 			return ErrProjectionConflict
 		}
+		unexpected.Add(1)
 		return nil
 	}}
 	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
@@ -273,7 +285,8 @@ func TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure(t *test
 	ticket := &projectionTicket{done: make(chan struct{})}
 	p.tickets[records[3].ID] = ticket
 	n, err := p.ReplayPass(context.Background())
-	if n != 1 || !errors.Is(err, ErrProjectionConflict) || !errors.Is(err, context.DeadlineExceeded) {
+	// 首批全部失败，任一完成次序都不能补位；不假设某个 goroutine 会先返回。
+	if n != 0 || !errors.Is(err, ErrProjectionConflict) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	awaitChan(t, ticket.Done(), "fatal result for unstarted record")
@@ -283,7 +296,10 @@ func TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure(t *test
 	if p.Stats().FatalProjectionConflicts != 1 {
 		t.Fatal(p.Stats())
 	}
-	assertWALReplayCount(t, w, 3)
+	if unexpected.Load() != 0 {
+		t.Fatalf("refilled after failure: %d", unexpected.Load())
+	}
+	assertWALReplayCount(t, w, 4)
 }
 
 func TestMongoStoreParallelCapabilityRequiresBothAdapters(t *testing.T) {

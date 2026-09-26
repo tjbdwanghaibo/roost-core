@@ -15,6 +15,13 @@
 
 ## [Unreleased]
 
+### 2026-09-26 复审修复
+
+- RR-10～24：实体重载投影屏障、Remote 提交/收尾分离、WAL 持久确认与关闭排空、syncbus 配置、Backend 并行能力及公会 ID。详见 [修复与兼容边界](docs/review/REVIEW-2026-09-26-release-fixes.md)。
+- 新的 Remote 写 + lease-fence receipt 同事务在 WAL 前拒绝；旧 WAL skipped 记录补持久拒绝结论。
+- `upgrade --consolidate` 补齐 `room`、`kit/room` 包迁移和 `RoomMod` / `NewRoomMod` 改名。旧 Entity 标记 `syncTopic` **必须先手动改成 `syncNamespace` 再重跑 upgrade**；demo 业务文件仍需按既有迁移指南重新生成或人工合并。
+
+
 ### 2026-09-25 资源预算与会话恢复
 
 - Remote 完整写生命周期独立预算 `MaxConcurrentWrites`，默认 128；与 Nest 慢池并发、DataEngine WAL 上限分别配置，公开在途/上限/拒绝指标。

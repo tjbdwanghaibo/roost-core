@@ -2,8 +2,10 @@ package nest
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 // remoteLogicCall 是慢 worker 到逻辑 worker 的一次借用。原 Msg 由慢 worker
@@ -32,8 +34,10 @@ func needsRemoteStage(msg *Msg) bool {
 }
 
 func (call *remoteLogicCall) run(mgr *NestMgr) {
-	_, release := fctx.NewContext(fctx.WithSnapshot(call.snapshot))
+	current, release := fctx.NewContext(fctx.WithSnapshot(call.snapshot), fctx.WithFastWorker())
 	defer release()
+	base := current.Base
+	current.Base = entity.WithLocalExecutor(base, nil)
 	observeNestStage(call.msg.Name, "logic_queue", call.queuedAt)
 	defer func() {
 		if r := recover(); r != nil {
@@ -43,6 +47,8 @@ func (call *remoteLogicCall) run(mgr *NestMgr) {
 				call.err = fmt.Errorf("nest: local continuation panic: %v", r)
 			}
 		}
+		// 只返回请求数据；本地执行器仍属于等待本次续行的慢阶段。
+		current.Base = base
 		call.snapshot = fctx.CaptureSnapshot()
 	}()
 	if call.fn != nil {
@@ -60,6 +66,7 @@ func (mgr *NestMgr) dispatchRemoteLogic(msg *Msg) (any, error) {
 	return mgr.dispatchFastContinuation(msg, nil)
 }
 func (mgr *NestMgr) dispatchFastContinuation(msg *Msg, fn func()) (any, error) {
+	fctx.AssertBlockingAllowed("nest.dispatchFastContinuation")
 	call := &remoteLogicCall{
 		msg: msg, fn: fn, snapshot: fctx.CaptureSnapshot(), done: make(chan struct{}),
 		queuedAt: startNestStage(mgr.stageMetrics),

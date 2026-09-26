@@ -3,6 +3,8 @@ package entity
 import (
 	"context"
 	"errors"
+
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 type localExecutorKey struct{}
@@ -20,6 +22,11 @@ func WithLocalExecutor(ctx context.Context, run func(func()) error) context.Cont
 // RunLocal 将需要 Entity 本地锁或业务回调的步骤交回本地执行池。
 // 连接、缓存和租约元数据的内部互斥不属于这个边界。
 func RunLocal(ctx context.Context, fn func()) error {
+	// 已在快池时就地执行；即使调用方保存了慢阶段的 ctx，也不能再次投递并自等。
+	if fctx.InFastWorker() {
+		fn()
+		return nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -42,11 +49,11 @@ func WithLoadedEntitiesOnly(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if LoadedEntitiesOnly(ctx) {
+	if ctx.Value(loadedEntitiesOnlyKey{}) == true {
 		return ctx
 	}
 	return context.WithValue(ctx, loadedEntitiesOnlyKey{}, true)
 }
 func LoadedEntitiesOnly(ctx context.Context) bool {
-	return ctx != nil && ctx.Value(loadedEntitiesOnlyKey{}) == true
+	return fctx.InFastWorker() || (ctx != nil && ctx.Value(loadedEntitiesOnlyKey{}) == true)
 }

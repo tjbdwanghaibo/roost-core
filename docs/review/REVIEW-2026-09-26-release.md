@@ -1,5 +1,7 @@
 # 2026-09-26 上线前复审运行记录（v1.16.1 → main `aaada47`）
 
+**后续更新**：RR-10～24 已实施修复，验证与尚未覆盖的发布/环境边界见[修复记录](REVIEW-2026-09-26-release-fixes.md)。下文保留原始基线结论。
+
 范围：上一轮（[核心优化复审](REVIEW-2026-09-26-core-optimization.md)）未覆盖的链路 + 发布门禁：Nest 事务收尾与 Sync 交付、DataEngine / Remote 持久化与生命周期、
 Remote 持久权威、生成 demo 冒烟、CI、API 兼容与发版手续。全部在 `git archive aaada47` 导出副本上进行；仓库工作树中另一会话的未提交修复不在本轮基线内。
 codebase-memory 图谱 generation 早于基线，结论来自源码、临时探针与实跑。

@@ -426,3 +426,29 @@ func remoteCommitReceipt(commit entity.RemoteCommit) entity.RemoteCommitReceipt 
 // SupportsConcurrentRemoteCommits 允许不同 Entity 的独立 Mongo 事务并行；
 // 相同 Entity 仍必须按版本顺序提交，事务身份与最新许可校验保持不变。
 func (*MongoCommitter) SupportsConcurrentRemoteCommits() bool { return true }
+
+// RejectRemoteCommitsInTransaction 将租约失效的结论与 DataEngine skipped 标记原子持久化。
+// 重放只能复用相同内容的拒绝，不能覆盖已经提交的事务。
+func (s *MongoCommitter) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
+	if s == nil || s.mongo == nil || s.database == "" {
+		return entity.ErrRemoteWriteCapabilityDisabled
+	}
+	id, digest, err := validateRemoteCommitBatch(commits)
+	if err != nil {
+		return err
+	}
+	collection := s.controlDB().Collection(remoteTxCollection)
+	var existing mongoRemoteTransaction
+	err = collection.FindOne(ctx, bson.M{"_id": id.String()}, &existing)
+	if err == nil {
+		if bytes.Equal(existing.Digest, digest) && existing.State == uint8(entity.RemoteCommitRejected) {
+			return nil
+		}
+		return fmt.Errorf("%w: rejection conflicts with existing remote transaction", entity.ErrRemoteRejected)
+	}
+	if !errors.Is(err, fmongo.ErrNotFound) {
+		return err
+	}
+	_, err = collection.InsertOne(ctx, mongoRemoteTransaction{ID: id.String(), State: uint8(entity.RemoteCommitRejected), Digest: digest, Cause: cause, CreatedAt: time.Now().UTC()})
+	return err
+}

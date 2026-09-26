@@ -77,20 +77,25 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	batch := m.RemoteWriteBatch
 	m.RemoteWriteBatch = nil
 	var err error
+	committed := false
 	if m.remoteIndeterminate {
 		// WAL may already contain the transaction. Close transfers ownership of
 		// the held gates/leases to the manager's status-driven finalizer.
-	} else if dispatchErr != nil || !m.remoteFinalized {
+	} else if (dispatchErr != nil && !errors.Is(dispatchErr, ErrAfterCommitFailed)) || !m.remoteFinalized {
 		err = batch.Abort(ctx, dispatchErr)
 	} else {
 		_, err = batch.Commit(ctx)
+		committed = err == nil
 	}
 	err = errors.Join(err, batch.Close(ctx))
-	if err == nil && dispatchErr == nil {
+	// 提交事实独立于释放/回调错误，不能遗失 Sync Confirm 或再次 Abort。
+	if committed {
 		if m.localExecutor != nil {
-			err = errors.Join(err, m.localExecutor(m.runPostRemoteCommit))
+			var callbackErr error
+			executeErr := m.localExecutor(func() { callbackErr = m.runPostRemoteCommit() })
+			err = errors.Join(err, executeErr, callbackErr)
 		} else {
-			m.runPostRemoteCommit()
+			err = errors.Join(err, m.runPostRemoteCommit())
 		}
 	}
 	return err
@@ -139,14 +144,14 @@ func (m *Msg) addPostRemoteCommit(callbacks ...func()) {
 	}
 }
 
-func (m *Msg) runPostRemoteCommit() {
+func (m *Msg) runPostRemoteCommit() error {
 	callbacks := m.postRemoteCommit
 	m.postRemoteCommit = nil
+	var failed error
 	for _, callback := range callbacks {
-		if callback != nil {
-			callback()
-		}
+		failed = errors.Join(failed, runCommitCallback(callback))
 	}
+	return failed
 }
 
 type MsgType uint8
