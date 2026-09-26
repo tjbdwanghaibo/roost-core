@@ -160,9 +160,11 @@ worker 数只限制同时在途量，遇到共享 Entity、相同事务或特殊
 观察到错误后停止补位，等待已经开始的工作结束，仅确认连续成功前缀。
 
 Nest 快阶段对 Getter 传入 `entity.WithLoadedEntitiesOnly(ctx)`。
-实际快 worker 的 ManagerAccess / EntityRepository 冷路径会在加载和 singleflight 前 panic，
-由 Nest 转为含 `entity.ErrColdLoadInLogic` 与 `fctx.ErrBlockingInFastWorker` 的请求错误；
-仅带 LoadedEntitiesOnly context 的池外访问仍返回冷加载错误。无 loader 时保留 nil/缺失语义。
+快阶段经 ManagerAccess `Get/GetMany`（含动态 Cast）访问未加载目标时，不做 I/O、不等 singleflight，
+返回可 `errors.Is` 判别的 `entity.ErrColdLoadInLogic`（快 worker 上同时包裹 `fctx.ErrBlockingInFastWorker`），
+业务可以据此降级，例如“好友离线”（RR-20260926-26）；仅带 LoadedEntitiesOnly context 的池外访问同样返回该错误。
+真正会等待的入口——EntityRepository 冷加载、投影等待、Remote 准备/确认——在快 worker 上于等待和副作用之前 panic，
+由 Nest 转为请求错误。无 loader 时保留 nil/缺失语义。
 调用方应显式声明目标并使用
 `nest.SendOptionSlow()`。自定义 Getter 需遵守 `entity.LoadedEntitiesOnly(ctx)`。
 不能在持有 Guard 的动态 Cast 中临时加载，也不能在失败后自动重放已执行的 handler。

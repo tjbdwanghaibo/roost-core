@@ -96,11 +96,8 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	if loader == nil {
 		return nil, nil
 	}
-	if err := fctx.BlockingError("entity.ManagerAccess.Get"); err != nil {
-		panic(fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, id, err))
-	}
 	if LoadedEntitiesOnly(ctx) {
-		return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, id)
+		return nil, coldLoadInLogicError("entity.ManagerAccess.Get", id)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -113,6 +110,18 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 		return nil, fmt.Errorf("entity manager access: loaded entity %d category mismatch", id)
 	}
 	return value, nil
+}
+
+// coldLoadInLogicError 是快阶段冷缺失的唯一答复：它发生在任何 I/O、加载 goroutine 和
+// singleflight 等待之前，本身不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，
+// 让业务按“目标未加载”降级（RR-02 契约）。RR-06 曾在这里 panic，业务因此失去降级能力
+// （RR-20260926-26）；fail-fast 只留给真正会等待的入口（Repository 冷加载、投影等待、
+// Remote 准备等）。在快 worker 上额外包裹 fctx.ErrBlockingInFastWorker，便于定位入口与 handler。
+func coldLoadInLogicError(operation string, id int64) error {
+	if err := fctx.BlockingError(operation); err != nil {
+		return fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, id, err)
+	}
+	return fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, id)
 }
 
 // loadEntityShared collapses concurrent loads of the same entity into one
@@ -209,10 +218,7 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 		hasLoader := access.loader != nil
 		access.loaderMu.RUnlock()
 		if hasLoader {
-			if err := fctx.BlockingError("entity.ManagerAccess.GetMany"); err != nil {
-				panic(fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, requests[0].id, err))
-			}
-			return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, requests[0].id)
+			return nil, coldLoadInLogicError("entity.ManagerAccess.GetMany", requests[0].id)
 		}
 		return result, nil
 	}
