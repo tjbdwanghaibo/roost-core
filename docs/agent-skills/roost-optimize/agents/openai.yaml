@@ -1,0 +1,4 @@
+interface:
+  display_name: "roost优化"
+  short_description: "按统一 Roost 开发规范优化核心模块，保留契约、回归证据和问题修复文档。"
+  default_prompt: "使用 $roost-optimize 按 roost-coding 基本要求与最新交接文档优化指定模块；已授权实施直接推进，确认 bug 补齐问题与修复记录。"

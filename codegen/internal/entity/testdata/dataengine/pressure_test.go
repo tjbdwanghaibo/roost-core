@@ -66,6 +66,10 @@ func (s *pressureStore) ProjectBatch(ctx context.Context, records []coredata.Com
 }
 
 type pressureResult struct {
+	PayloadBytesPerDAO       int                   `json:"payload_bytes_per_dao"`
+	BurstRequests            int                   `json:"burst_requests"`
+	ColdEntities             int                   `json:"cold_entities"`
+	Mixed                    *mixedResult          `json:"mixed,omitempty"`
 	Shape                    string                `json:"shape"`
 	Policy                   string                `json:"policy"`
 	Entities                 int                   `json:"entities"`
@@ -131,11 +135,14 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	case "single":
 	case "dual":
 		daos = 2
-	case "pair", "hot":
+	case "pair", "hot", "cold":
 		daos = 4
 	default:
 		t.Fatal("invalid shape")
 	}
+	payloadBytes := pressureInt(t, "ROOST_PERF_PAYLOAD_BYTES", 0, 1<<20)
+	burst := pressureInt(t, "ROOST_PERF_BURST", 1, 10000)
+	padding := strings.Repeat("p", payloadBytes)
 	clientAPI := "Request"
 	if daos == 4 {
 		clientAPI = "RequestMulti"
@@ -210,12 +217,25 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
-	scheduler := nest.NewEngine(append(rt.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerNumAndMsgCap(8, 1, 256))...)
+	options := append(rt.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 4096}, nest.WorkerPoolConfig{Workers: 128, QueueCap: 256}))
+	var mixed *mixedLoad
+	if os.Getenv("ROOST_PERF_MIXED") == "1" {
+		if shape == "cold" {
+			t.Fatal("mixed AOI cannot retain evicted entity pointers")
+		}
+		mixed = newMixedLoad(t, ctx, count)
+		options = append(options, nest.NestOptionWithEntitySync(mixed.manager))
+	}
+	scheduler := nest.NewEngine(options...)
 	meta := nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy}
 	scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_seed"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		e := es[0].(*Trader)
 		e.wallet.SetCoins(10000)
 		e.inventory.SetItems(1000)
+		if payloadBytes > 0 {
+			e.wallet.SetPayload(padding)
+			e.inventory.SetPayload(padding)
+		}
 		return nil, nil
 	}, meta)
 	scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("pressure_update"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -223,19 +243,43 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 			e := value.(*Trader)
 			e.wallet.SetCoins(e.wallet.GetCoins() + 1)
 			e.wallet.SetTransfers(e.wallet.GetTransfers() + 1)
+			if payloadBytes > 0 {
+				e.wallet.SetPayload(fmt.Sprintf("%08d", e.wallet.GetTransfers()) + padding)
+			}
 			if daos > 1 {
 				e.inventory.SetItems(e.inventory.GetItems() + 1)
 				e.inventory.SetTransfers(e.inventory.GetTransfers() + 1)
+				if payloadBytes > 0 {
+					e.inventory.SetPayload(fmt.Sprintf("%08d", e.inventory.GetTransfers()) + padding)
+				}
 			}
 		}
 		return nil, nil
 	}, meta)
+	if mixed != nil {
+		mixed.installHandler(scheduler)
+	}
 	if err = scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = scheduler.Shutdown(context.Background()) })
 	h := &tradeFixture{ctx: ctx, client: client, database: database, runtime: rt, scheduler: scheduler, access: access, wal: wal}
 	ids := h.seed(t, 30000, count)
+	cold := 0
+	if shape == "cold" {
+		for i, id := range ids {
+			if i%2 == 0 {
+				if err := access.Destroy(ctx, access.Manager().Get(id), entity.EntityDestroyReason(0), false); err != nil {
+					t.Fatal(err)
+				}
+				cold++
+			}
+		}
+	}
+	if mixed != nil {
+		mixed.start(t, scheduler, access, ids)
+	}
+
 	beforeStats := projector.Stats()
 	latencies := make([]time.Duration, n)
 	scheduledLatencies := make([]time.Duration, n)
@@ -269,7 +313,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 				}
 				scheduled := started
 				if rate > 0 {
-					scheduled = started.Add(time.Duration(index) * time.Second / time.Duration(rate))
+					scheduled = started.Add(time.Duration(index/burst*burst) * time.Second / time.Duration(rate))
 					if delay := time.Until(scheduled); delay > 0 {
 						timer := time.NewTimer(delay)
 						select {
@@ -290,7 +334,11 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 				callStarted := time.Now()
 				var err error
 				if daos == 4 {
-					err = h.request("pressure_update", entityIDs...)
+					var opts []nest.SendOpt
+					if shape == "cold" {
+						opts = append(opts, nest.SendOptionSlow())
+					}
+					_, err = scheduler.RequestMulti(ctx, nest.NewHandlerName("pressure_update"), entityIDs, nil, opts...)
 				} else {
 					_, err = scheduler.Request(ctx, nest.NewHandlerName("pressure_update"), entityIDs[0], nil)
 				}
@@ -317,6 +365,10 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	}
 	group.Wait()
 	requestElapsed := time.Since(started)
+	var mixedStats *mixedResult
+	if mixed != nil {
+		mixedStats = mixed.stop(t)
+	}
 	unacked := projector.Stats().WALUnacked
 	close(failures)
 	for err := range failures {
@@ -346,7 +398,11 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	// 每份 DAO 都验证，而非只核对事务计数。单 DAO 场景还检查未修改的背包版本。
 	for i, id := range ids {
 		updates := counts[i].Load()
-		e := access.Manager().Get(id).(*Trader)
+		value, loadErr := access.Get(ctx, id, entity.EntityCategoryNone)
+		if loadErr != nil || value == nil {
+			t.Fatalf("final load: %v", loadErr)
+		}
+		e := value.(*Trader)
 		if e.wallet.GetCoins() != 10000+updates || e.wallet.GetTransfers() != updates || e.wallet.DirtyTracker().Version() != uint64(1+updates) {
 			t.Fatalf("wallet memory mismatch: %d", id)
 		}
@@ -359,6 +415,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 		}
 		for _, resource := range []string{"trade_wallets", "trade_inventories"} {
 			var doc struct {
+				Payload   string `bson:"payload"`
 				Coins     int64  `bson:"coins"`
 				Items     int64  `bson:"items"`
 				Transfers int64  `bson:"transfers"`
@@ -370,6 +427,13 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 			want, value, base := updates, doc.Coins, int64(10000)
 			if resource == "trade_inventories" {
 				want, value, base = inventoryUpdates, doc.Items, 1000
+			}
+			expectedPayload := padding
+			if payloadBytes > 0 && want > 0 {
+				expectedPayload = fmt.Sprintf("%08d", want) + padding
+			}
+			if doc.Payload != expectedPayload {
+				t.Fatalf("payload mismatch: %s/%d size=%d want=%d", resource, id, len(doc.Payload), len(expectedPayload))
 			}
 			if doc.Transfers != want || doc.Version != uint64(1+want) || value != base+want {
 				t.Fatalf("Mongo mismatch: %s/%d=%+v want=%d", resource, id, doc, want)
@@ -385,7 +449,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	}
 	slices.Sort(observed.ages)
 	ms := func(v time.Duration) float64 { return float64(v) / float64(time.Millisecond) }
-	result := pressureResult{Shape: shape, Policy: policy.String(), Entities: count, Writers: writers, Requests: n, DAOsPerRequest: daos,
+	result := pressureResult{PayloadBytesPerDAO: payloadBytes, BurstRequests: burst, ColdEntities: cold, Mixed: mixedStats, Shape: shape, Policy: policy.String(), Entities: count, Writers: writers, Requests: n, DAOsPerRequest: daos,
 		ClientAPI:        clientAPI,
 		OfferedPerSecond: rate, ScheduledP99MS: ms(scheduledLatencies[(n-1)*99/100]),
 		RequestSeconds: requestElapsed.Seconds(), DrainSeconds: drainElapsed.Seconds(), CompletedPerSecond: float64(n) / requestElapsed.Seconds(), PersistedPerSecond: float64(n) / totalElapsed.Seconds(),

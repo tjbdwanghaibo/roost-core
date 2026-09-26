@@ -1,0 +1,4 @@
+interface:
+  display_name: "roost 写代码"
+  short_description: "Roost 开发与交接规范：易读 Go、正式链路、优化审查、缺陷修复和证据要求。"
+  default_prompt: "使用 $roost-coding 按仓库交接文档接手 roost-core，遵守可读性、执行契约和 review/bugfix 验证要求完成当前任务。"

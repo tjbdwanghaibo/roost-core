@@ -28,13 +28,15 @@ const (
 // session wants, the kind of frame it is owed, and the version it holds.
 type subscription struct {
 	// revision 标识订阅意图；inFlight 防止首次快照在途时丢掉待删除记录。
-	revision    uint64
-	inFlight    bool
-	lifetime    *sessionLifetime
-	sources     map[*SubscriptionSource]entity.SyncProfile
-	profile     entity.SyncProfile
-	kind        subscriptionKind
-	baseVersion uint64
+	revision uint64
+	inFlight bool
+	lifetime *sessionLifetime
+	sources  map[*SubscriptionSource]entity.SyncProfile
+	profile  entity.SyncProfile
+	kind     subscriptionKind
+	// snapshotClass 只决定冷对象创建的调度；有效 Profile 和线协议语义不变。
+	snapshotClass snapshotClass
+	baseVersion   uint64
 }
 
 // subject is an entity's sync state plus its subscribers. The subscribers

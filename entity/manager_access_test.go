@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -187,5 +188,38 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		t.Fatalf("timed out waiting for %s", what)
 		var zero T
 		return zero
+	}
+}
+
+func TestLoadedOnlyLookupNeverStartsOrJoinsColdLoad(t *testing.T) {
+	manager := NewEntityManager()
+	access := NewManagerAccess(manager)
+	loader := &countingAggregateLoader{manager: manager}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithLoadedEntitiesOnly(context.Background())
+	if _, err := access.Get(ctx, 4242, EntityCategoryNone); !errors.Is(err, ErrColdLoadInLogic) {
+		t.Fatalf("cold Get: %v", err)
+	}
+	if _, err := access.GetMany(ctx, []int64{4242, 4243}, nil); !errors.Is(err, ErrColdLoadInLogic) {
+		t.Fatalf("cold GetMany: %v", err)
+	}
+	// 即使已有加载正在进行，快阶段也不得加入它并占用 worker。
+	access.flights[4242] = &entityLoadFlight{done: make(chan struct{})}
+	if _, err := access.Get(ctx, 4242, EntityCategoryNone); !errors.Is(err, ErrColdLoadInLogic) {
+		t.Fatalf("in flight: %v", err)
+	}
+	delete(access.flights, 4242)
+	if loader.loads.Load() != 0 {
+		t.Fatal("fast lookup called loader")
+	}
+	value, err := access.Get(context.Background(), 4242, EntityCategoryNone)
+	if err != nil || value == nil {
+		t.Fatalf("slow preparation: %v", err)
+	}
+	values, err := access.GetMany(ctx, []int64{4242, 4242}, nil)
+	if err != nil || len(values) != 2 || values[0] != value || values[1] != value {
+		t.Fatalf("prepared lookup: %v %v", values, err)
 	}
 }

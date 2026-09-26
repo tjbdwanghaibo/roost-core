@@ -23,9 +23,15 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	defer projector.replayGate.release()
 	var records []corenest.CommitRecord
 	var fences []corenest.CommitFence
+	readBytes := 0
 	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
 		if projector.isHeld(record.ID) {
 			return errProjectorTransactionHeld
+		}
+		size := projectionRecordLogicalBytes(record)
+		if len(records) > 0 && size > projector.opts.ReplayReadBytes-readBytes {
+			// WAL 已解码这一条，但不保留、不确认它；下一轮从成功前缀后重新读取。
+			return errProjectorBatchComplete
 		}
 		// 空闲或首条事务尚未解锁时不需要批次空间。等到确实有可投影
 		// 记录才分配，避免后台每次无进展轮询都申请整个批次的容量。
@@ -35,7 +41,8 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		}
 		records = append(records, record)
 		fences = append(fences, fence)
-		if len(records) >= projector.opts.ReplayBatchRecords {
+		readBytes = saturatingAdd(readBytes, size)
+		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
 			return errProjectorBatchComplete
 		}
 		return nil
@@ -86,10 +93,10 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		}
 	}()
 	parallelStore, parallel := projector.store.(RemoteParallelProjectionStore)
-	parallel = parallel && parallelStore.SupportsRemoteParallelProjection()
+	parallel = parallel && parallelStore.SupportsRemoteParallelProjection() && projector.opts.RemoteProjectionWorkers > 1
 	for segmentIndex := 0; segmentIndex < len(segments); {
 		if parallel {
-			count := remoteProjectionWindow(segments[segmentIndex:], projector.opts.RemoteProjectionWorkers, projector.opts.ReplayBatchBytes)
+			count := remoteProjectionWindow(segments[segmentIndex:], projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
 			if count > 1 {
 				if err := checkpoint(); err != nil {
 					ackFailed = true

@@ -149,3 +149,25 @@ Kit 对应 `nest.fast.workers`、`nest.fast.queue_capacity`、`nest.slow.workers
 `NestMgr.Stats().Fast/Slow/FastContinuations` 和 statslog 的 `nest.fast/nest.slow` 输出两池及内部延续；旧 `Stats().Remote` 只是 Slow 的源码兼容别名。可选 stage metrics 的 `remote_prepare`、`logic_queue`、`remote_confirm` 分别定位获取、逻辑排队和后置确认。停机关闭外部准入，两池保持运行直到已接受工作和内部延续全部排空；strict 请求仍在确认完成后返回，WAL 持久准入保留锁内契约。
 
 慢池可以设为 1024 worker / 16 等待位，独立 ID 使用执行额度、同 ID 仍按前驱顺序等待；它最多准入 1040 个外部慢请求，不能把 16 当作总在途上限。应按后端容量选择并发，当前默认未上调；[配置解释与验证边界](review/NEST-FAST-SLOW-2026-09-25.md)。
+
+### 回放、快阶段访问与观测
+
+`dataengine.projection.read_bytes` 对应 `ProjectorOptions.ReplayReadBytes`，默认 4MiB，
+限制一次回放保留的逻辑记录字节；与 `projection.batch_bytes` 的投影分段预算独立。
+首条超过软限额的记录独占一次读取以保持进度；WAL 解码可能临时读取下一条，故不是精确堆内存上限。
+Remote 在这个有界窗口内滑动补充 worker，遇到共享 Entity、相同事务或特殊事务即截止。
+观察到错误后停止补位，等待已经开始的工作结束，仅确认连续成功前缀。
+
+Nest 快阶段对 Getter 传入 `entity.WithLoadedEntitiesOnly(ctx)`。
+ManagerAccess 在冷目标上返回 `entity.ErrColdLoadInLogic`；调用方应显式声明目标并使用
+`nest.SendOptionSlow()`。自定义 Getter 需遵守 `entity.LoadedEntitiesOnly(ctx)`。
+不能在持有 Guard 的动态 Cast 中临时加载，也不能在失败后自动重放已执行的 handler。
+
+`NestMgr.Stats().Queue` 分别报告快/慢池 Running、Ready、BlockedOnPredecessor、WaitingForWorker，
+以及拒绝、峰值、最老等待与前驱/worker 累计等待；内部续行有独立运行计数。
+Ready 包含已预留执行额度但 goroutine 尚未取走的请求；worker 等待统计还考虑正在执行的内部续行。
+`Sync.Manager.Stats()` 使用增量计数和等待链表，不再获取所有 subject 锁；低频核对用 `AuditStats()`。
+两者都允许各阶段间并发推进，需要在静止状态比较精确计数。
+
+九项实现、回归、容量梯度、混合业务与长稳结果及复跑参数见
+[三大模块九项实施记录](feature/REFACTOR-2026-09-26-core-nine-items.md)。

@@ -1,6 +1,7 @@
 package entitysync
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -114,20 +115,23 @@ func (c ManagerConfig) normalized() ManagerConfig {
 // 本文件负责配置、实体注册和生命周期；subscriptions.go 管理会话与订阅，
 // flush.go 负责捕获、准入与提交。订阅意图归 subject，已交付的时钟与引用归 session。
 type Manager struct {
-	nextLifetime    atomic.Uint64
-	frozenPeakBytes atomic.Int64
-	policyMu        sync.Mutex
-	policies        map[uint64]policyHook
-	nextPolicy      uint64
-	wake            chan struct{}
-	producerBound   atomic.Bool
-	frozenBytes     atomic.Int64
-	frozenDeferred  atomic.Uint64
-	budgetWindow    time.Time
-	windowAllowance snapshotAllowance
-	windowSessions  map[SessionID]int
-	config          ManagerConfig
-	wire            wireConfig
+	nextLifetime      atomic.Uint64
+	subscriptionCount atomic.Int64
+	snapshotRequests  snapshotRequests
+	heldSessions      int // mu
+	frozenPeakBytes   atomic.Int64
+	policyMu          sync.Mutex
+	policies          map[uint64]policyHook
+	nextPolicy        uint64
+	wake              chan struct{}
+	producerBound     atomic.Bool
+	frozenBytes       atomic.Int64
+	frozenDeferred    atomic.Uint64
+	budgetWindow      time.Time
+	windowAllowance   snapshotAllowance
+	windowSessions    map[SessionID]int
+	config            ManagerConfig
+	wire              wireConfig
 
 	mu       sync.RWMutex
 	subjects map[int64]*subject
@@ -137,6 +141,8 @@ type Manager struct {
 
 	pendingMu        sync.Mutex
 	pending          map[int64]struct{}
+	waitingOrder     list.List
+	pendingOverlap   int                    // 同时在 pending 与 waitingSnapshots 中的 subject 数，pendingMu
 	waitingSnapshots map[int64]snapshotWait // pendingMu；仅保存重查请求，不保存旧订阅意图
 
 	// flushGate 串行化捕获与关闭，等待者可随 context 取消退出。
@@ -165,7 +171,8 @@ type Manager struct {
 	lastError         error
 	flushWork         map[SessionID]*flushSession
 	flushPool         []*flushSession
-	snapshotCursor    SessionID // flushGate 保护轮转游标
+	snapshotCursor    [2]SessionID  // flushGate；两类分别保留会话轮转位置
+	snapshotNextClass snapshotClass // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 }
 
@@ -283,7 +290,7 @@ func (m *Manager) Unregister(subjectID int64) error {
 			continue
 		}
 		clear(sub.sources)
-		sub.kind = kindLeaving
+		m.changeSubscriptionKindLocked(subj, id, sub, kindLeaving)
 		sub.revision++
 		subj.profilesValid = false
 	}
@@ -309,7 +316,7 @@ func (m *Manager) forget(subjectID int64) {
 	if ok {
 		m.pendingMu.Lock()
 		if wait := m.waitingSnapshots[subjectID]; wait.subject == subj {
-			delete(m.waitingSnapshots, subjectID)
+			m.removeSnapshotWaitLocked(subjectID)
 		}
 		m.pendingMu.Unlock()
 		subj.state.SetDirtyNotifier(nil)
@@ -480,14 +487,22 @@ func (m *Manager) Close(ctx context.Context) error {
 	subjects, sessions := m.subjects, m.sessions
 	m.subjects = make(map[int64]*subject)
 	m.sessions = make(map[SessionID]*session)
+	m.heldSessions = 0
 	m.mu.Unlock()
 	for _, subj := range subjects {
+		subj.mu.Lock()
+		for sid := range subj.subscribers {
+			m.removeSubscriptionLocked(subj, sid)
+		}
+		subj.mu.Unlock()
 		subj.state.SetDirtyNotifier(nil)
 		subj.state.DiscardFrozenSync()
 	}
 	m.pendingMu.Lock()
 	clear(m.pending)
 	clear(m.waitingSnapshots)
+	m.waitingOrder.Init()
+	m.pendingOverlap = 0
 	m.pendingMu.Unlock()
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		for id := range sessions {
@@ -573,46 +588,22 @@ func (m *Manager) Stats() ManagerStats {
 	if m == nil {
 		return ManagerStats{}
 	}
+
 	m.mu.RLock()
-	subjects := make([]*subject, 0, len(m.subjects))
-	for _, subj := range m.subjects {
-		subjects = append(subjects, subj)
-	}
-	sessions, heldSessions := len(m.sessions), 0
-	for _, sess := range m.sessions {
-		if sess.held {
-			heldSessions++
-		}
-	}
+	subjects, sessions, heldSessions := len(m.subjects), len(m.sessions), m.heldSessions
 	m.mu.RUnlock()
-	subscriptions, snapshots := 0, 0
-	for _, subj := range subjects {
-		subj.mu.Lock()
-		subscriptions += len(subj.subscribers)
-		for _, sub := range subj.subscribers {
-			if sub.kind == kindSnapshot {
-				snapshots++
-			}
-		}
-		subj.mu.Unlock()
-	}
+	subscriptions := int(m.subscriptionCount.Load())
+	m.snapshotRequests.mu.Lock()
+	snapshots := len(m.snapshotRequests.entries)
+	m.snapshotRequests.mu.Unlock()
 	m.pendingMu.Lock()
-	pending := len(m.pending)
-	var oldest time.Time
-	for id, wait := range m.waitingSnapshots {
-		if _, immediate := m.pending[id]; !immediate {
-			pending++
-		}
-		if oldest.IsZero() || wait.since.Before(oldest) {
-			oldest = wait.since
-		}
-	}
+	pending := len(m.pending) + len(m.waitingSnapshots) - m.pendingOverlap
 	waiting := len(m.waitingSnapshots)
-	m.pendingMu.Unlock()
 	var age time.Duration
-	if !oldest.IsZero() {
-		age = time.Since(oldest)
+	if first := m.waitingOrder.Front(); first != nil {
+		age = time.Since(m.waitingSnapshots[first.Value.(int64)].since)
 	}
+	m.pendingMu.Unlock()
 	return ManagerStats{
 		PendingSnapshots: snapshots, WaitingSnapshotSubjects: waiting, OldestSnapshotWait: age,
 		FlushCalls: m.flushCalls.Load(), EmptyFlushes: m.emptyFlushes.Load(),
@@ -620,11 +611,61 @@ func (m *Manager) Stats() ManagerStats {
 		DirtyCaptured: m.dirtyCaptured.Load(), SnapshotsCaptured: m.snapshotsCaptured.Load(),
 		SnapshotsDeferred: m.snapshotsDeferred.Load(), CaptureDuration: time.Duration(m.captureNanos.Load()), EncodeDuration: time.Duration(m.encodeNanos.Load()), AdmissionDuration: time.Duration(m.admissionNanos.Load()),
 		CreatesAdmitted: m.createsAdmitted.Load(), UpdatesAdmitted: m.updatesAdmitted.Load(), RemovesAdmitted: m.removesAdmitted.Load(),
-		Subjects: len(subjects), Sessions: sessions, HeldSessions: heldSessions, Subscriptions: subscriptions, Pending: pending,
+		Subjects: subjects, Sessions: sessions, HeldSessions: heldSessions, Subscriptions: subscriptions, Pending: pending,
 		FramesAdmitted: m.framesAdmitted.Load(), SessionsLost: m.sessionsLost.Load(),
 		DurabilityDeferred: m.deferred.Load(), FlushFailures: m.flushFailures.Load(),
 		MaxSubjects: m.config.MaxSubjects, MaxSessions: m.config.MaxSessions,
 	}
+}
+
+// AuditStats 显式遍历订阅真相，用于低频诊断和静止状态下核对增量计数。
+// 与 Stats 一样，各锁之间允许并发进展，因此不是全局原子快照。
+func (m *Manager) AuditStats() ManagerStats {
+	stats := m.Stats()
+	if m == nil {
+		return stats
+	}
+	m.mu.RLock()
+	subjects := make([]*subject, 0, len(m.subjects))
+	for _, subj := range m.subjects {
+		subjects = append(subjects, subj)
+	}
+	stats.Subjects, stats.Sessions, stats.HeldSessions = len(subjects), len(m.sessions), 0
+	for _, sess := range m.sessions {
+		if sess.held {
+			stats.HeldSessions++
+		}
+	}
+	m.mu.RUnlock()
+	stats.Subscriptions, stats.PendingSnapshots = 0, 0
+	for _, subj := range subjects {
+		subj.mu.Lock()
+		stats.Subscriptions += len(subj.subscribers)
+		for _, sub := range subj.subscribers {
+			if sub.kind == kindSnapshot {
+				stats.PendingSnapshots++
+			}
+		}
+		subj.mu.Unlock()
+	}
+	m.pendingMu.Lock()
+	stats.Pending = len(m.pending)
+	stats.WaitingSnapshotSubjects = len(m.waitingSnapshots)
+	var oldest time.Time
+	for id, wait := range m.waitingSnapshots {
+		if _, ok := m.pending[id]; !ok {
+			stats.Pending++
+		}
+		if oldest.IsZero() || wait.since.Before(oldest) {
+			oldest = wait.since
+		}
+	}
+	m.pendingMu.Unlock()
+	stats.OldestSnapshotWait = 0
+	if !oldest.IsZero() {
+		stats.OldestSnapshotWait = time.Since(oldest)
+	}
+	return stats
 }
 
 // CheckHealth degrades at 80% of either capacity and fails when full or

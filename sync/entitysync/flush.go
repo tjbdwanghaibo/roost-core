@@ -13,7 +13,12 @@ import (
 
 func (m *Manager) markPending(subjectID int64) {
 	m.pendingMu.Lock()
-	m.pending[subjectID] = struct{}{}
+	if _, exists := m.pending[subjectID]; !exists {
+		if _, waiting := m.waitingSnapshots[subjectID]; waiting {
+			m.pendingOverlap++
+		}
+		m.pending[subjectID] = struct{}{}
+	}
 	m.pendingMu.Unlock()
 }
 
@@ -24,6 +29,7 @@ func (m *Manager) takePending() []int64 {
 		ids = append(ids, id)
 	}
 	clear(m.pending)
+	m.pendingOverlap = 0
 	m.pendingMu.Unlock()
 	slices.Sort(ids)
 	return ids
@@ -34,11 +40,12 @@ func (m *Manager) takePending() []int64 {
 // settlement is what becomes true for one (session, subject) once the
 // session's frame has been admitted.
 type settlement struct {
-	sub      *subscription
-	revision uint64
-	subj     *subject
-	version  uint64
-	remove   bool
+	sub           *subscription
+	revision      uint64
+	subj          *subject
+	version       uint64
+	remove        bool
+	snapshotClass snapshotClass
 }
 
 // flushSession 集中保存同一次捕获的会话身份、帧内容与结算记录。
@@ -46,7 +53,7 @@ type flushSession struct {
 	session       *session
 	entries       []frameEntry
 	settlements   []settlement
-	snapshotAfter int64
+	snapshotAfter [2]int64
 }
 
 // Flush 执行一次同步 tick：捕获 pending subject，按会话组帧并逐帧准入，最后提交内容版本。
@@ -55,7 +62,7 @@ type flushSession struct {
 // ErrRetryLater 会中止本轮内容提交并保留脏状态；已准入的会话时钟和引用继续有效，
 // 相关订阅在下次用全量恢复基线。其他交付错误只关闭失败会话。
 // flushGate 串行化整个过程，避免同一内容同时参与两次捕获。
-func (m *Manager) Flush(ctx context.Context) error {
+func (m *Manager) Flush(ctx context.Context) (result error) {
 	if m == nil {
 		return ErrManagerClosed
 	}
@@ -72,14 +79,18 @@ func (m *Manager) Flush(ctx context.Context) error {
 	started := time.Now()
 	m.flushCalls.Add(1)
 	defer func() {
+		// 所有已执行的失败 Flush 在一个出口记账，policy 失败也必须保留原因。
+		if result != nil {
+			m.flushFailures.Add(1)
+			m.setLastError(result)
+		}
 		elapsed := time.Since(started)
 		m.flushNanos.Add(uint64(elapsed))
 		m.lastFlushNanos.Store(uint64(elapsed))
 		metrics.ObserveHistogram("entitysync_flush_duration", nil, elapsed)
 	}()
 	if err := m.applyPolicies(); err != nil {
-		m.flushFailures.Add(1)
-		return err
+		return fmt.Errorf("sync policy: %w", err)
 	}
 	m.refreshSnapshotWindow()
 	ids := m.takePending()
@@ -106,7 +117,11 @@ func (m *Manager) Flush(ctx context.Context) error {
 	var failures []error
 
 	captureStarted := time.Now()
-	selectedSnapshots := m.planSnapshotCaptures(ids)
+	plan := m.planSnapshotCaptures(ids)
+	var selectedSnapshots map[*subscription]bool
+	if plan != nil {
+		selectedSnapshots = plan.selected
+	}
 	// 捕获：按 subject 获取同一版本的快照与增量，归入各会话待交付内容。
 	for _, id := range ids {
 		subj := m.subject(id)
@@ -175,7 +190,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 				}
 				retry = append(retry, id)
 			case err != nil:
-				failures = append(failures, fmt.Errorf("subject %d: %w", id, err))
+				failures = append(failures, fmt.Errorf("sync prepare subject %d: %w", id, err))
 				retry = append(retry, id)
 			case gated && capturedAbove(item, watermark):
 				if m.config.Trace != nil {
@@ -247,11 +262,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 		sessionIDs = append(sessionIDs, sid)
 	}
 	slices.Sort(sessionIDs)
-	m.rotateSnapshotSessions(sessionIDs)
-	budget := &snapshotAllowance{}
-	if m.config.Mode == ModeOnChange {
-		budget = &m.windowAllowance
-	}
+	m.scheduleSnapshots(work, plan)
 
 	var admittedSessions []SessionID
 	for _, sid := range sessionIDs {
@@ -261,7 +272,6 @@ func (m *Manager) Flush(ctx context.Context) error {
 			continue
 		}
 		encodeStarted := time.Now()
-		m.scheduleSnapshots(sid, batch, budget)
 		if m.config.Trace != nil {
 			for _, entry := range batch.entries {
 				if entry.update == nil {
@@ -335,9 +345,7 @@ func (m *Manager) Flush(ctx context.Context) error {
 			for _, id := range ids {
 				m.markPending(id)
 			}
-			m.flushFailures.Add(1)
-			m.setLastError(pushErr)
-			return pushErr
+			return fmt.Errorf("sync admission session %d: %w", sid, pushErr)
 		}
 		if pushErr != nil {
 			m.loseSession(sess, pushErr)
@@ -353,9 +361,9 @@ func (m *Manager) Flush(ctx context.Context) error {
 		batch, err := entity.ReservePreparedSubjectSyncBatch(prepared)
 		if err != nil {
 			abortAll(prepared, err)
-			failures = append(failures, err)
+			failures = append(failures, fmt.Errorf("sync reserve: %w", err))
 		} else if err := batch.Commit(); err != nil {
-			failures = append(failures, err)
+			failures = append(failures, fmt.Errorf("sync commit: %w", err))
 		}
 	}
 	for _, id := range ids {
@@ -374,18 +382,13 @@ func (m *Manager) Flush(ctx context.Context) error {
 	for _, id := range retry {
 		m.markPending(id)
 	}
-	err := errors.Join(failures...)
-	if err != nil {
-		m.flushFailures.Add(1)
-		m.setLastError(err)
-	}
-	return err
+	return errors.Join(failures...)
 }
 
 // captureSettlement 在 subject 锁内记录本轮捕获对应的意图。
 func captureSettlement(subj *subject, sub *subscription, version uint64, remove bool) settlement {
 	sub.inFlight = true
-	return settlement{subj: subj, sub: sub, revision: sub.revision, version: version, remove: remove}
+	return settlement{subj: subj, sub: sub, revision: sub.revision, version: version, remove: remove, snapshotClass: sub.snapshotClass}
 }
 
 func releaseInFlight(work map[SessionID]*flushSession) {
@@ -408,7 +411,8 @@ func (m *Manager) requireSnapshotsAfterRetry(admittedSessions []SessionID, work 
 			}
 			settle.subj.mu.Lock()
 			if sub := settle.subj.subscribers[admitted]; sub == settle.sub && sub.kind != kindLeaving {
-				sub.kind, sub.baseVersion = kindSnapshot, 0
+				sub.baseVersion = 0
+				m.changeSubscriptionKindLocked(settle.subj, admitted, sub, kindSnapshot)
 				settle.subj.profilesValid = false
 				m.traceSnapshotRequest(settle.subj, work[admitted].session)
 			}
@@ -429,7 +433,9 @@ func (m *Manager) settleSubscriptions(sid SessionID, settlements []settlement) {
 				if sub.kind != kindLive {
 					settle.subj.profilesValid = false
 				}
-				sub.kind, sub.baseVersion = kindLive, settle.version
+				sub.baseVersion = settle.version
+				m.changeSubscriptionKindLocked(settle.subj, sid, sub, kindLive)
+				sub.snapshotClass = snapshotArrival
 			}
 		}
 		settle.subj.mu.Unlock()

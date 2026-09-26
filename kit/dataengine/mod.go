@@ -152,6 +152,11 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if value := cfg.GetInt("dataengine.projection.batch_bytes"); value > 0 {
 		projector.ReplayBatchBytes = value
 	}
+	if value := cfg.GetInt("dataengine.projection.read_bytes"); value < 0 {
+		return errors.New("dataengine mod: projection.read_bytes must not be negative")
+	} else if value > 0 {
+		projector.ReplayReadBytes = value
+	}
 	checkpointRecords := cfg.GetInt("dataengine.projection.checkpoint_records")
 	checkpointInterval := cfg.GetDuration("dataengine.projection.checkpoint_interval")
 	maxUnacked := cfg.GetInt64("dataengine.projection.max_unacked_records")

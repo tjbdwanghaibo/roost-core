@@ -1,6 +1,7 @@
 package entitysync
 
 import (
+	"container/list"
 	"slices"
 	"time"
 )
@@ -31,6 +32,7 @@ func (m *Manager) refreshSnapshotWindowAt(now time.Time) {
 		for id := range m.waitingSnapshots {
 			m.pending[id] = struct{}{}
 		}
+		m.pendingOverlap = len(m.waitingSnapshots)
 		// 等待年龄在实际没有欠快照时才清除，不能在窗口轮转时重置。
 		m.pendingMu.Unlock()
 	}
@@ -39,6 +41,7 @@ func (m *Manager) refreshSnapshotWindowAt(now time.Time) {
 type snapshotWait struct {
 	subject *subject
 	since   time.Time
+	order   *list.Element
 }
 
 // deferSnapshot 只延后预算拒绝的重查。dirty/remove/订阅变化仍可直接 markPending。
@@ -56,7 +59,11 @@ func (m *Manager) deferSnapshot(subj *subject) {
 	}
 	m.pendingMu.Lock()
 	if old, ok := m.waitingSnapshots[subj.id]; !ok || old.subject != subj {
-		m.waitingSnapshots[subj.id] = snapshotWait{subject: subj, since: time.Now()}
+		m.removeSnapshotWaitLocked(subj.id)
+		m.waitingSnapshots[subj.id] = snapshotWait{subject: subj, since: time.Now(), order: m.waitingOrder.PushBack(subj.id)}
+		if _, pending := m.pending[subj.id]; pending {
+			m.pendingOverlap++
+		}
 		if m.config.Trace != nil {
 			m.config.Trace.Record(SyncTraceEvent{Stage: "subject_budget_wait", SubjectID: subj.id, Snapshot: true})
 		}
@@ -81,9 +88,22 @@ func (m *Manager) clearSnapshotWaitLocked(subj *subject) {
 	}
 	m.pendingMu.Lock()
 	if wait := m.waitingSnapshots[subj.id]; wait.subject == subj {
-		delete(m.waitingSnapshots, subj.id)
+		m.removeSnapshotWaitLocked(subj.id)
 	}
 	m.pendingMu.Unlock()
+}
+
+// 调用方持有 pendingMu；索引与按首次等待时间排序的链表一起删除。
+func (m *Manager) removeSnapshotWaitLocked(id int64) {
+	wait, ok := m.waitingSnapshots[id]
+	if !ok {
+		return
+	}
+	m.waitingOrder.Remove(wait.order)
+	delete(m.waitingSnapshots, id)
+	if _, pending := m.pending[id]; pending {
+		m.pendingOverlap--
+	}
 }
 
 // SnapshotBudget 是快照准入软预算：periodic 每次 Flush 重置，on_change 在
@@ -91,6 +111,7 @@ func (m *Manager) clearSnapshotWaitLocked(subj *subject) {
 // 对象/组件头计，不含外层帧头；单包超过软预算时允许它独占一次额度以保证进度。
 // 只限制客户端尚未持有对象的创建。现有对象的全量替换、增量和 remove 不占额度；
 // 帧/组件/传输的硬上限仍然有效，预算不能替代总带宽或队列背压。
+// 新入场与 Hold 后的基线恢复轮流使用同一额度，一类为空时另一类可用完剩余额度。
 type SnapshotBudget struct {
 	MaxObjects        int
 	MaxBytes          int
@@ -103,169 +124,176 @@ func (b SnapshotBudget) enabled() bool {
 
 type snapshotAllowance struct{ objects, bytes int }
 
+// snapshotClass 表达业务来源，不能通过变更 Profile 提升恢复请求的优先级。
+type snapshotClass uint8
+
+const (
+	snapshotArrival snapshotClass = iota
+	snapshotRecovery
+)
+
 type snapshotCandidate struct {
 	subjectID int64
+	sessionID SessionID
 	sub       *subscription
+	class     snapshotClass
 }
 
-// 数量预算可在 packer 执行前决定。先按同一轮转顺序选出本轮有额度的订阅，
-// 避免恢复期间为后面几轮的快照反复打包；字节额度需知道实际包长，仍在准入前检查。
-// 选择按订阅指针匹配，期间重开/新建的订阅留到下一轮，不复活旧订阅。
-func (m *Manager) planSnapshotCaptures(ids []int64) map[*subscription]bool {
+type snapshotPlan struct {
+	selected map[*subscription]bool
+	order    []snapshotCandidate // 数量预选与字节准入共用顺序，不能再按会话重新争抢额度
+}
+
+// 冷创建按业务来源交替，来源内部沿用会话和实体轮转。空闲来源的额度可被另一类使用。
+// 返回 nil 表示不设预算；非 nil 的空计划表示额度已耗尽。
+func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 	limit := m.config.SnapshotBudget
-	if m.config.Mode == ModeOnChange && limit.MaxBytes > 0 && m.windowAllowance.objects > 0 && m.windowAllowance.bytes >= limit.MaxBytes {
-		return map[*subscription]bool{}
-	}
-	if limit.MaxObjects == 0 && limit.PerSessionObjects == 0 {
+	if !limit.enabled() {
 		return nil
 	}
-	remainingObjects := limit.MaxObjects
-	if remainingObjects > 0 && m.config.Mode == ModeOnChange {
-		remainingObjects = max(0, remainingObjects-m.windowAllowance.objects)
-		if remainingObjects == 0 {
-			// nil 表示不限制；空集合表示本窗口没有快照额度。
-			return map[*subscription]bool{}
+	plan := &snapshotPlan{selected: make(map[*subscription]bool)}
+	if m.config.Mode == ModeOnChange && limit.MaxBytes > 0 && m.windowAllowance.objects > 0 && m.windowAllowance.bytes >= limit.MaxBytes {
+		return plan
+	}
+	remaining := limit.MaxObjects
+	if remaining > 0 && m.config.Mode == ModeOnChange {
+		remaining = max(0, remaining-m.windowAllowance.objects)
+		if remaining == 0 {
+			return plan
 		}
 	}
-	candidates := make(map[SessionID][]snapshotCandidate)
-	sessions := make(map[SessionID]*session)
+
+	// 固定本轮的 subject 集合；仅遍历增量索引中的快照请求。
+	pending := make(map[int64]struct{}, len(ids))
 	for _, id := range ids {
-		subj := m.subject(id)
-		if subj == nil {
-			continue
-		}
-		subj.mu.Lock()
-		for sid, sub := range subj.subscribers {
-			if sub.kind != kindSnapshot {
-				continue
-			}
-			sess, found := sessions[sid]
-			if !found {
-				sess = m.session(sid)
-				sessions[sid] = sess
-			}
-			if sess == nil || sess.held || sess.lifetime != sub.lifetime {
-				continue
-			}
-			if _, exists := sess.objects[id]; exists {
-				// 现有对象全量替换由 Flush 选择，不挤占新对象的恢复额度。
-				continue
-			}
-			candidates[sid] = append(candidates[sid], snapshotCandidate{subjectID: id, sub: sub})
-		}
-		subj.mu.Unlock()
+		pending[id] = struct{}{}
 	}
-	order := make([]SessionID, 0, len(candidates))
-	for sid := range candidates {
-		order = append(order, sid)
-	}
-	slices.Sort(order)
-	m.rotateSnapshotSessions(order)
-	selected := make(map[*subscription]bool)
-	for _, sid := range order {
-		items := candidates[sid]
-		start := 0
-		for start < len(items) && items[start].subjectID <= sessions[sid].snapshotAfter {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.snapshotRequests.mu.Lock()
+	defer m.snapshotRequests.mu.Unlock()
+	var iterators [2]snapshotIterator
+	for class := snapshotArrival; class <= snapshotRecovery; class++ {
+		order := m.snapshotRequests.sessionOrder(class)
+		start, _ := slices.BinarySearch(order, m.snapshotCursor[class])
+		for start < len(order) && order[start] <= m.snapshotCursor[class] {
 			start++
 		}
-		count := len(items)
-		if limit.PerSessionObjects > 0 {
-			remaining := limit.PerSessionObjects
-			if m.config.Mode == ModeOnChange {
-				remaining -= m.windowSessions[sid]
-			}
-			count = min(count, max(0, remaining))
+		iterators[class] = snapshotIterator{sessions: order, start: start}
+	}
+	exhausted := [2]bool{}
+	selectedSessions := make(map[SessionID]int)
+	next := m.snapshotNextClass
+
+	for !exhausted[0] || !exhausted[1] {
+		class := next
+		if exhausted[class] {
+			class = 1 - class
 		}
-		if limit.MaxObjects > 0 {
-			remaining := remainingObjects - len(selected)
-			count = min(count, max(0, remaining))
+		candidate, ok := iterators[class].next(m, class, pending)
+		if !ok {
+			exhausted[class] = true
+			continue
 		}
-		for offset := range count {
-			selected[items[(start+offset)%len(items)].sub] = true
+		selected := selectedSessions[candidate.sessionID]
+		if m.config.Mode == ModeOnChange {
+			selected += m.windowSessions[candidate.sessionID]
 		}
-		if limit.MaxObjects > 0 && len(selected) == remainingObjects {
+		if limit.PerSessionObjects > 0 && selected >= limit.PerSessionObjects {
+			continue
+		}
+		plan.selected[candidate.sub] = true
+		plan.order = append(plan.order, candidate)
+		selectedSessions[candidate.sessionID]++
+		next = 1 - class
+		if limit.MaxObjects > 0 && len(plan.order) >= remaining {
 			break
 		}
 	}
-	return selected
+	return plan
 }
 
-func (m *Manager) rotateSnapshotSessions(sessions []SessionID) {
-	if m.config.SnapshotBudget.enabled() {
-		start := 0
-		for start < len(sessions) && sessions[start] <= m.snapshotCursor {
-			start++
-		}
-		if start < len(sessions) {
-			slices.Reverse(sessions[:start])
-			slices.Reverse(sessions[start:])
-			slices.Reverse(sessions)
-		}
+// scheduleSnapshots 在组帧前统一扣减额度。这里只读取捕获的 settlement，不读可变订阅字段。
+// 现有对象的 Full 更新、delta、remove 不消耗冷创建额度。
+func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snapshotPlan) {
+	for _, batch := range work {
+		batch.snapshotAfter = batch.session.snapshotAfter
 	}
-}
-
-func (m *Manager) scheduleSnapshots(sid SessionID, batch *flushSession, used *snapshotAllowance) {
-	batch.snapshotAfter = batch.session.snapshotAfter
-	limit := m.config.SnapshotBudget
-	if !limit.enabled() {
+	if plan == nil {
 		return
 	}
-	// entries 与 settlements 在捕获阶段一一对应；编码排序在此之后进行。
-	// 从上次实体之后开始挑选，避免不断出现的小 ID 快照饿死老请求。
-	start := 0
-	for start < len(batch.entries) && batch.entries[start].subjectID <= batch.snapshotAfter {
-		start++
+	type capturedSnapshot struct {
+		batch  *flushSession
+		entry  *frameEntry
+		settle *settlement
 	}
-	selected := 0
+	pending := make(map[*subscription]capturedSnapshot, len(plan.order))
+	for _, batch := range work {
+		for i := range batch.entries {
+			entry := &batch.entries[i]
+			if entry.kind != entryCreate {
+				continue
+			}
+			if _, exists := batch.session.objects[entry.subjectID]; exists {
+				continue
+			}
+			pending[batch.settlements[i].sub] = capturedSnapshot{batch, entry, &batch.settlements[i]}
+		}
+	}
+	limit := m.config.SnapshotBudget
+	used := &snapshotAllowance{}
+	sessions := make(map[SessionID]int)
 	if m.config.Mode == ModeOnChange {
-		selected = m.windowSessions[sid]
+		used = &m.windowAllowance
+		sessions = m.windowSessions
 	}
-	for offset := range len(batch.entries) {
-		i := (start + offset) % len(batch.entries)
-		entry := &batch.entries[i]
-		if entry.kind != entryCreate {
+	for _, candidate := range plan.order {
+		item, ok := pending[candidate.sub]
+		if !ok {
 			continue
 		}
-		if _, exists := batch.session.objects[entry.subjectID]; exists {
-			// entryCreate 表示需要 Full 内容；线上也可能是 ObjectUpdate。
+		batch, entry := item.batch, item.entry
+		if m.session(candidate.sessionID) != batch.session || item.settle.snapshotClass != candidate.class {
 			continue
 		}
 		data, err := entry.update.encode(m.wire.limits.MaxComponentBytes)
 		if err != nil {
+			delete(pending, candidate.sub)
 			continue
-		} // 交给编码的统一失败路径处理
+		} // 保留在帧编码中，走统一失败路径
 		bytes := 18 + len(data)
-		allowed := (limit.MaxObjects == 0 || used.objects < limit.MaxObjects) &&
-			(limit.PerSessionObjects == 0 || selected < limit.PerSessionObjects) &&
-			(limit.MaxBytes == 0 || used.objects == 0 || bytes <= limit.MaxBytes-used.bytes)
-		if allowed {
-			selected++
-			if m.config.Mode == ModeOnChange {
-				m.windowSessions[sid] = selected
-			}
-			used.objects++
-			used.bytes += bytes
-			batch.snapshotAfter = entry.subjectID
-			m.snapshotCursor = sid
+		if (limit.MaxObjects > 0 && used.objects >= limit.MaxObjects) ||
+			(limit.PerSessionObjects > 0 && sessions[candidate.sessionID] >= limit.PerSessionObjects) ||
+			(limit.MaxBytes > 0 && used.objects > 0 && bytes > limit.MaxBytes-used.bytes) {
 			continue
 		}
-		settle := &batch.settlements[i]
-		settle.subj.mu.Lock()
-		settle.sub.inFlight = false
-		settle.subj.mu.Unlock()
-		m.deferSnapshot(settle.subj)
+		used.objects++
+		used.bytes += bytes
+		sessions[candidate.sessionID]++
+		batch.snapshotAfter[candidate.class] = candidate.subjectID
+		m.snapshotCursor[candidate.class] = candidate.sessionID
+		m.snapshotNextClass = 1 - candidate.class
+		delete(pending, candidate.sub)
+	}
+	for _, item := range pending {
+		item.settle.subj.mu.Lock()
+		item.settle.sub.inFlight = false
+		item.settle.subj.mu.Unlock()
+		m.deferSnapshot(item.settle.subj)
 		m.snapshotsDeferred.Add(1)
-		entry.kind = 0 // 仅清除本 tick 捕获；订阅仍然等待快照
+		item.entry.kind = 0
 	}
-	count := 0
-	for i, entry := range batch.entries {
-		if entry.kind == 0 {
-			continue
+	for _, batch := range work {
+		count := 0
+		for i, entry := range batch.entries {
+			if entry.kind == 0 {
+				continue
+			}
+			batch.entries[count], batch.settlements[count] = entry, batch.settlements[i]
+			count++
 		}
-		batch.entries[count], batch.settlements[count] = entry, batch.settlements[i]
-		count++
+		clear(batch.entries[count:])
+		clear(batch.settlements[count:])
+		batch.entries, batch.settlements = batch.entries[:count], batch.settlements[:count]
 	}
-	clear(batch.entries[count:])
-	clear(batch.settlements[count:])
-	batch.entries, batch.settlements = batch.entries[:count], batch.settlements[:count]
 }

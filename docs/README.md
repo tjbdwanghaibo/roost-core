@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**维护与接手入口：[核心优化汇总与验收边界](CORE-OPTIMIZATION-HANDOFF.md) · [roost 写代码 skill](agent-skills/roost-coding/SKILL.md)**。汇总 Nest、Sync、DataEngine、Remote 历轮最终实现与可复跑证据；包含2026-09-26用户对当前Sync尾延迟的接受决定。下方历史记录保留各自时点状态。
+
 **[三仓合一仓：给 review 的交接](feature/SINGLE_MODULE_MIGRATION.md)** · **[方案与阶段门禁](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)**（2026-09-20 完成，core v1.16.0）：框架只剩一个仓库、一个 Go module、一个 tag；roost-kit 与 roost-codegen 已归档，旧 tag 仍可 pin。跨过这条边界的工程用 `roost project upgrade --consolidate` 改写 import。
 
 [09-20 修复验收、实时同步与所有权续审](review/REVIEW-2026-09-20.md)：两个活动 Wanted 完成分流，确认 datagram 增量永久丢字段、Remote BSON uint64、player owner ABA/失主双写及 pending poison 前缀五项问题；附复现、进度和实施交接。未修改源码。

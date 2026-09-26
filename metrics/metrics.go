@@ -536,23 +536,53 @@ func metricKey(name string, labels Labels) string {
 	if len(labels) == 0 {
 		return name
 	}
-	return name + "{" + labelsKey(labels) + "}"
+	var out strings.Builder
+	out.Grow(len(name) + labelKeySize(labels) + 2)
+	out.WriteString(name)
+	out.WriteByte('{')
+	writeLabels(&out, labels)
+	out.WriteByte('}')
+	return out.String()
 }
 
 func labelsKey(labels Labels) string {
-	if len(labels) == 0 {
-		return ""
+	var out strings.Builder
+	out.Grow(labelKeySize(labels))
+	writeLabels(&out, labels)
+	return out.String()
+}
+
+// 指标热路径直接写入最终 key，避免中间 parts、Join 和整串拼接。
+// 估算不含转义增长；Builder 会按需要扩容，编码规则仍用 strconv.Quote。
+func labelKeySize(labels Labels) int {
+	size := 0
+	for k, v := range labels {
+		size += len(k) + len(v) + 4
+	}
+	return size
+}
+func writeLabels(out *strings.Builder, labels Labels) {
+	if len(labels) == 1 {
+		for key, value := range labels {
+			out.WriteString(key)
+			out.WriteByte('=')
+			out.WriteString(strconv.Quote(value))
+		}
+		return
 	}
 	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
+	for key := range labels {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+strconv.Quote(labels[k]))
+	for i, key := range keys {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.WriteString(key)
+		out.WriteByte('=')
+		out.WriteString(strconv.Quote(labels[key]))
 	}
-	return strings.Join(parts, ",")
 }
 
 func cloneLabels(src Labels) Labels {

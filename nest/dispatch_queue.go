@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
@@ -14,13 +15,17 @@ import (
 type WorkerPoolConfig struct{ Workers, QueueCap int }
 
 type dispatchJob struct {
-	msg          *Msg
-	ids          []int64
-	slow         bool
-	continuation bool
-	predecessors int
-	successors   []*dispatchJob
-	next         *dispatchJob
+	singleID                 [1]int64
+	admittedAt, readyAt      time.Time
+	waitingPrev, waitingNext *dispatchJob
+	msg                      *Msg
+	ids                      []int64
+	slow                     bool
+	continuation             bool
+	predecessors             int
+	waitedForPredecessor     bool
+	successors               []*dispatchJob
+	next                     *dispatchJob
 }
 
 type readyJobs struct{ head, tail *dispatchJob }
@@ -48,23 +53,26 @@ func (q *readyJobs) pop() *dispatchJob {
 // dispatchQueue 先登记 ID 顺序，再交给两种执行资源。慢池没有 ID 分槽；
 // 等待前驱只占准入预算，不占任何 worker。内部快阶段继承父请求的顺序位置。
 type dispatchQueue struct {
-	mu                 sync.Mutex
-	wake               [2]*sync.Cond
-	config             [2]WorkerPoolConfig
-	ready              [2]readyJobs
-	continuations      readyJobs
-	preferContinuation bool
-	queued             [2]int // 尚未开始执行的外部请求，包括 ID 前驱等待。
-	readyCount         [2]int // 其中已经满足 ID 依赖的请求。
-	running            [2]int // 正在执行的外部请求；内部延续单独预算。
-	continuationCount  int
-	tails              map[int64]*dispatchJob
-	pending            int
-	started, stopping  bool
-	done               chan struct{}
-	wg                 sync.WaitGroup
-	handlers           [2]func(*Msg)
-	name               string
+	mu                  sync.Mutex
+	wake                [2]*sync.Cond
+	config              [2]WorkerPoolConfig
+	ready               [2]readyJobs
+	continuations       readyJobs
+	preferContinuation  bool
+	queued              [2]int // 尚未开始执行的外部请求，包括 ID 前驱等待。
+	readyCount          [2]int // 其中已经满足 ID 依赖的请求。
+	running             [2]int // 正在执行的外部请求；内部延续单独预算。
+	continuationCount   int
+	tails               map[int64]*dispatchJob
+	pending             int
+	started, stopping   bool
+	done                chan struct{}
+	wg                  sync.WaitGroup
+	handlers            [2]func(*Msg)
+	name                string
+	waiting             [2]readyWaiting
+	observation         [2]DispatchLaneStats
+	continuationRunning int
 }
 
 func newDispatchQueue(name string, fast, slow WorkerPoolConfig, handler, slowHandler func(*Msg)) *dispatchQueue {
@@ -88,8 +96,19 @@ func (q *dispatchQueue) start() {
 		}
 	}
 }
-func dispatchIDs(msg *Msg) []int64 {
-	ids := make([]int64, 0, 1+len(msg.Tids))
+func dispatchIDs(msg *Msg) []int64 { return dispatchIDsInto(nil, msg) }
+
+func dispatchIDsInto(ids []int64, msg *Msg) []int64 {
+	size := len(msg.Tids)
+	if msg.Tid != 0 {
+		size++
+	}
+	for _, group := range msg.GroupTIds {
+		size += len(group)
+	}
+	if cap(ids) < max(1, size) {
+		ids = make([]int64, 0, max(1, size))
+	}
 	if msg.Tid != 0 {
 		ids = append(ids, msg.Tid)
 	}
@@ -103,6 +122,7 @@ func dispatchIDs(msg *Msg) []int64 {
 	slices.Sort(ids)
 	return slices.Compact(ids)
 }
+
 func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if q == nil {
 		return worker.ErrWorkerClosed
@@ -111,7 +131,8 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if slow {
 		lane = 1
 	}
-	j := &dispatchJob{msg: msg, ids: dispatchIDs(msg), slow: slow}
+	j := &dispatchJob{msg: msg, slow: slow}
+	j.ids = dispatchIDsInto(j.singleID[:0], msg)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started || q.stopping {
@@ -126,6 +147,7 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	// 会在 worker 尚未被调度时，仅准入 16 条就误报满队列。
 	hasExecutionSlot := j.predecessors == 0 && q.running[lane]+q.readyCount[lane] < q.config[lane].Workers
 	if !hasExecutionSlot && q.waitingCount(lane) >= q.config[lane].QueueCap {
+		q.observation[lane].Rejected++
 		return worker.ErrWorkerQueueFull
 	}
 	for _, id := range j.ids {
@@ -134,11 +156,15 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 		}
 		q.tails[id] = j
 	}
+	j.waitedForPredecessor = j.predecessors > 0
 	q.pending++
 	q.queued[lane]++
+	j.admittedAt = time.Now()
+	q.waiting[lane].push(j)
 	if j.predecessors == 0 {
 		q.enqueueReady(lane, j)
 	}
+	q.observation[lane].PeakWaiting = max(q.observation[lane].PeakWaiting, q.waitingCount(lane))
 	return nil
 }
 
@@ -156,12 +182,19 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 	if lane == 0 && q.continuations.head != nil && (q.preferContinuation || q.ready[0].head == nil) {
 		q.preferContinuation = false
 		q.continuationCount--
+		q.continuationRunning++
 		return q.continuations.pop()
 	}
 	if j := q.ready[lane].pop(); j != nil {
 		q.queued[lane]--
 		q.readyCount[lane]--
 		q.running[lane]++
+		q.waiting[lane].remove(j)
+		stats := &q.observation[lane]
+		stats.Started++
+		waited := time.Since(j.readyAt)
+		stats.WorkerWait += waited
+		stats.MaxWorkerWait = max(stats.MaxWorkerWait, waited)
 		if lane == 0 {
 			q.preferContinuation = true
 		}
@@ -193,6 +226,8 @@ func (q *dispatchQueue) work(lane int) {
 		q.mu.Lock()
 		if !j.continuation {
 			q.running[lane]--
+		} else {
+			q.continuationRunning--
 		}
 		for _, id := range j.ids {
 			if q.tails[id] == j {
@@ -239,15 +274,34 @@ func (q *dispatchQueue) stop(ctx context.Context) error {
 	}
 }
 func (q *dispatchQueue) stats() (fast, slow worker.PoolStats, continuations int) {
+	fast, slow, continuations, _ = q.snapshotStats()
+	return
+}
+
+func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuations int, details DispatchQueueStats) {
 	if q == nil {
 		return
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	stats := func(i int, name string) worker.PoolStats {
-		return worker.PoolStats{Name: q.name + "_" + name, WorkerNum: q.config[i].Workers, QueueCap: q.config[i].QueueCap, QueueLen: q.waitingCount(i), Started: q.started, Stopped: q.stopping}
+	pools := [2]worker.PoolStats{}
+	lanes := [2]DispatchLaneStats{}
+	now := time.Now()
+	for i, name := range []string{"fast", "slow"} {
+		pools[i] = worker.PoolStats{Name: q.name + "_" + name, WorkerNum: q.config[i].Workers, QueueCap: q.config[i].QueueCap, QueueLen: q.waitingCount(i), Started: q.started, Stopped: q.stopping}
+		lanes[i] = q.observation[i]
+		lanes[i].Running, lanes[i].Ready = q.running[i], q.readyCount[i]
+		lanes[i].BlockedOnPredecessor = q.queued[i] - q.readyCount[i]
+		busy := q.running[i]
+		if i == 0 {
+			busy += q.continuationRunning
+		}
+		lanes[i].WaitingForWorker = max(0, q.readyCount[i]-max(0, q.config[i].Workers-busy))
+		if head := q.waiting[i].head; head != nil {
+			lanes[i].OldestWaiting = now.Sub(head.admittedAt)
+		}
 	}
-	return stats(0, "fast"), stats(1, "slow"), q.continuationCount
+	return pools[0], pools[1], q.continuationCount, DispatchQueueStats{Fast: lanes[0], Slow: lanes[1], ContinuationRunning: q.continuationRunning}
 }
 
 // waitingCount 排除已预留外部执行额度的就绪消息。前驱未完成的消息
@@ -257,7 +311,39 @@ func (q *dispatchQueue) waitingCount(lane int) int {
 	return q.queued[lane] - reserved
 }
 func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
+	j.readyAt = time.Now()
+	if j.waitedForPredecessor {
+		waited := j.readyAt.Sub(j.admittedAt)
+		q.observation[lane].DependencyWait += waited
+		q.observation[lane].MaxDependencyWait = max(q.observation[lane].MaxDependencyWait, waited)
+	}
 	q.readyCount[lane]++
 	q.ready[lane].push(j)
 	q.wake[lane].Signal()
+}
+
+// 等待链按准入顺序维护，启动时 O(1) 删除；Stats 不扫描全部 ID 或依赖链。
+type readyWaiting struct{ head, tail *dispatchJob }
+
+func (w *readyWaiting) push(j *dispatchJob) {
+	j.waitingPrev = w.tail
+	if w.tail != nil {
+		w.tail.waitingNext = j
+	} else {
+		w.head = j
+	}
+	w.tail = j
+}
+func (w *readyWaiting) remove(j *dispatchJob) {
+	if j.waitingPrev != nil {
+		j.waitingPrev.waitingNext = j.waitingNext
+	} else {
+		w.head = j.waitingNext
+	}
+	if j.waitingNext != nil {
+		j.waitingNext.waitingPrev = j.waitingPrev
+	} else {
+		w.tail = j.waitingPrev
+	}
+	j.waitingPrev, j.waitingNext = nil, nil
 }

@@ -98,7 +98,8 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	assertWALReplayIDs(t, w, []coredata.TransactionID{records[1].ID, records[2].ID, records[3].ID})
-	if calls[records[2].ID] != 1 || calls[records[3].ID] != 0 {
+	// 首次观察失败前，先返回的成功记录可以触发补位；任何已成功后缀仍不可 ack。
+	if calls[records[2].ID] != 1 || calls[records[3].ID] > 1 {
 		t.Fatalf("calls=%v", calls)
 	}
 	fail = false
@@ -170,13 +171,49 @@ func TestRemoteProjectionCheckpointFailureKeepsWindow(t *testing.T) {
 	p.opts.RemoteProjectionWorkers = 2
 	failure := errors.New("checkpoint failed")
 	p.ack = func(context.Context, corenest.CommitFence) error { return failure }
-	if n, err := p.ReplayPass(context.Background()); n != 2 || !errors.Is(err, failure) {
+	if n, err := p.ReplayPass(context.Background()); n != 3 || !errors.Is(err, failure) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
-	if calls != 2 {
+	if calls != 3 {
 		t.Fatalf("calls=%d", calls)
 	}
 	assertWALReplayCount(t, w, 3)
+}
+
+func TestRemoteProjectionRefillsWhileFirstRecordIsBlocked(t *testing.T) {
+	records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
+	entered, third, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	s := &parallelRemoteStore{project: func(ctx context.Context, r coredata.CommitRecord) error {
+		switch r.ID {
+		case records[0].ID:
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case records[2].ID:
+			close(third)
+		}
+		return nil
+	}}
+	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
+	p.opts.RemoteProjectionWorkers = 2
+	done := make(chan struct{})
+	var n int
+	var err error
+	go func() { defer close(done); n, err = p.ReplayPass(context.Background()) }()
+	awaitChan(t, entered, "blocked first record")
+	awaitChan(t, third, "free worker refilled before first completes")
+	assertWALReplayCount(t, w, 3)
+	once.Do(func() { close(release) })
+	awaitChan(t, done, "all projections joined")
+	if n != 3 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	assertWALReplayCount(t, w, 0)
 }
 
 func TestRemoteProjectionCancellationJoinsWorkers(t *testing.T) {

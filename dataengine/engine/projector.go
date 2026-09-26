@@ -49,6 +49,7 @@ type ProjectorOptions struct {
 	IdlePoll                time.Duration
 	ReplayBatchRecords      int
 	ReplayBatchBytes        int
+	ReplayReadBytes         int           // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
 	RemoteProjectionWorkers int           // 0 使用默认值 8；1 关闭 Remote 并行投影。
 	CheckpointRecords       int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
 	CheckpointInterval      time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
@@ -61,7 +62,7 @@ type ProjectorOptions struct {
 func DefaultProjectorOptions() ProjectorOptions {
 	return ProjectorOptions{
 		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
-		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, CloseWAL: true,
+		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, ReplayReadBytes: 4 << 20, CloseWAL: true,
 		CheckpointRecords: 256, CheckpointInterval: 20 * time.Millisecond,
 		RemoteProjectionWorkers: 8,
 	}
@@ -118,6 +119,12 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 		return nil, errors.New("dataengine projector: WAL and store are required")
 	}
 	defaults := DefaultProjectorOptions()
+	if options.ReplayReadBytes < 0 {
+		return nil, errors.New("dataengine projector: replay read bytes must not be negative")
+	}
+	if options.ReplayReadBytes == 0 {
+		options.ReplayReadBytes = defaults.ReplayReadBytes
+	}
 	if options.RemoteProjectionWorkers < 0 || options.RemoteProjectionWorkers > 64 {
 		return nil, errors.New("dataengine projector: remote projection workers must be between 0 and 64")
 	}

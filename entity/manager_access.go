@@ -94,6 +94,9 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	if loader == nil {
 		return nil, nil
 	}
+	if LoadedEntitiesOnly(ctx) {
+		return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, id)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -195,6 +198,17 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 	if len(requests) == 0 {
 		return result, nil
 	}
+	// 快阶段只读内存，缺失实体也不能创建加载 goroutine 或等待 singleflight。
+	if LoadedEntitiesOnly(ctx) {
+		access.loaderMu.RLock()
+		hasLoader := access.loader != nil
+		access.loaderMu.RUnlock()
+		if hasLoader {
+			return nil, fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, requests[0].id)
+		}
+		return result, nil
+	}
+
 	if ctx == nil {
 		ctx = context.Background()
 	}

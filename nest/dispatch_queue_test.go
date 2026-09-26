@@ -213,3 +213,96 @@ func BenchmarkMixedFastSlow(b *testing.B) {
 		})
 	}
 }
+
+func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
+	fastEntered, slowEntered, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	q := newDispatchQueue("observed", WorkerPoolConfig{1, 2}, WorkerPoolConfig{1, 2}, func(m *Msg) {
+		if m.Key() == 1 {
+			close(fastEntered)
+			<-release
+		}
+	}, func(*Msg) { close(slowEntered); <-release })
+	q.start()
+	defer q.stop(context.Background())
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	admitQueue(t, q, false, 1)
+	stagedSignal(t, fastEntered)
+	admitQueue(t, q, true, 2)
+	stagedSignal(t, slowEntered)
+	admitQueue(t, q, false, 2) // 等慢前驱；不能占 fast worker。
+	admitQueue(t, q, false, 3) // 无 ID 冲突，仅等 worker。
+	rejected := queueMessage(4)
+	if err := q.admit(rejected, false); !errors.Is(err, worker.ErrWorkerQueueFull) {
+		t.Fatalf("rejection: %v", err)
+	}
+	rejected.OnRelease()
+	_, _, _, details := q.snapshotStats()
+	got := details.Fast
+	if got.Running != 1 || got.Ready != 1 || got.BlockedOnPredecessor != 1 || got.WaitingForWorker != 1 || got.PeakWaiting != 2 || got.Rejected != 1 || got.OldestWaiting <= 0 {
+		t.Fatalf("waiting stats: %+v", details)
+	}
+	if got.DependencyWait != 0 {
+		t.Fatalf("independent admission counted as dependency: %v", got.DependencyWait)
+	}
+	unblock()
+	if err := q.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, details = q.snapshotStats()
+	got = details.Fast
+	if got.Running+got.Ready+got.BlockedOnPredecessor+got.WaitingForWorker != 0 || got.OldestWaiting != 0 || got.Started != 3 || got.DependencyWait <= 0 || got.WorkerWait <= 0 {
+		t.Fatalf("settled stats: %+v", details)
+	}
+}
+
+func TestFastLogicMarksGetterContextAndSlowPreparationCanLoad(t *testing.T) {
+	base := newMockGetter()
+	id := mustBuildCastID(t, 9950, entity.EntityCategory(1), nestLocalKind)
+	base.Add(newMockEntity(id, entity.EntityCategory(1)))
+	getter := &policyTestGetter{Getter: base}
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("policy"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		// preparedGetter 缓存以外的动态目标也必须继承快阶段约束。
+		_, err := mgr.dispatchGetter().Get(nestBaseContext(), id+1, entity.EntityCategory(1))
+		if !errors.Is(err, entity.ErrColdLoadInLogic) {
+			return nil, fmt.Errorf("dynamic miss: %v", err)
+		}
+		return "ok", nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Shutdown(context.Background())
+	for _, slow := range []bool{false, true} {
+		msg, ch := GenSyncMsg(MsgTypeSingle)
+		msg.Name, msg.Tid, msg.Cost = "policy", id, slow
+		if err := mgr.dispatcher.TrySendMsg(msg); err != nil {
+			t.Fatal(err)
+		}
+		if got := stagedWait(t, ch); got != "ok" {
+			t.Fatalf("slow=%v: %v", slow, got)
+		}
+	}
+	if getter.fast.Load() == 0 || getter.slow.Load() == 0 {
+		t.Fatalf("fast=%d slow=%d", getter.fast.Load(), getter.slow.Load())
+	}
+}
+
+type policyTestGetter struct {
+	entity.Getter
+	fast, slow atomic.Int32
+}
+
+func (g *policyTestGetter) Get(ctx context.Context, id int64, cat entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if entity.LoadedEntitiesOnly(ctx) {
+		g.fast.Add(1)
+	} else {
+		g.slow.Add(1)
+	}
+	value, err := g.Getter.Get(ctx, id, cat)
+	if value == nil && entity.LoadedEntitiesOnly(ctx) {
+		return nil, entity.ErrColdLoadInLogic
+	}
+	return value, err
+}

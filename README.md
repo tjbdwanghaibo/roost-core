@@ -4,6 +4,8 @@
 
 ## 三级文档入口
 
+- **Agent / 维护者接手**：[历轮核心优化、最新验收与边界](docs/CORE-OPTIMIZATION-HANDOFF.md)；遵循 [roost 写代码基本要求](docs/agent-skills/roost-coding/SKILL.md)。
+
 - **完全新手**：从 [五分钟快速开始](docs/QUICKSTART.md) 生成并运行第一个项目。
 - **有经验的开发者**：阅读 [开发者完整使用说明](docs/USER_GUIDE.md)，按场景选择 Entity/Nest、Remote Entity、Saga、状态同步或帧同步。
 - **Nest 优化验收**：[职责整理、事务边界、阶段指标与性能数据](docs/feature/NEST-COMPLETION-2026-09-24.md)。
@@ -29,7 +31,7 @@
 | `app` | `Mod`/`Service` 生命周期、类型安全的 capability `Registry`、配置生产门禁、运行期 fail-stop | 装配任何服务的入口 |
 | `manager` | 一个 Service 的内存单例 manager 的生命周期引擎：按 `DependsOn` 的稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、关停可中止进行中的启动、Stop 幂等（M-09）；kit 的 `ManagerMod` 是它的 Mod 包装 | 自己装配 manager 集合，或写与 kit 无关的服务进程 |
 | `entity` | 实体 = `EntityBase` + 组件 + DAO 的组合；`EntityManager`/`Getter`；实体锁与 guard 作用域；远程实体元数据 | 定义所有业务对象 |
-| `nest` | 按实体 ID 哈希的串行 actor 调度、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
+| `nest` | 快慢双池与显式目标 ID 的准入依赖顺序、全局锁序死锁预防、`RollbackTx` 内存事务、WAL commit point、pipelined 提交 | 所有实体状态修改的唯一执行入口 |
 | `dataengine` | `Tracker`、Put/Patch/Delete mutation、聚合 Load、schema migration、Saga/Remote commit 契约 | Entity 状态统一进入 Nest transaction 与 kit Data Engine WAL |
 | `lock`、`worker`、`goroutine`、`container`、`misc` | 可重入实体锁（parking 语义）、同 key 串行的哈希 worker pool；`goroutine` 是协程原语（goroutine-ID、panic 安全包装、MPSC 队列、task pool、并行 map/slice），`container` 是通用容器（分桶表、keymap、对象池、拓扑排序），`misc` 只留跨包小工具（`Hash64` 分片、`Integer` 泛型约束） | 框架内部依赖；业务偶尔直接用 `worker.Pool` |
 | `sync/`：`entitysync`（机制）、`entitysync/policy`（组织）、`frame`（帧格式）、`nettransport`（传输）、`lockstep`（帧同步）、`syncbus` + `syncbus/driver` + `syncbus/mirror`（服务↔服务总线） | **同步块**（ARCH-12，2026-09-23 收进一个目录；`sync/` 本身不是包）。服务→客户端的实体复制是一条轴：进程一个 `Manager`、subject 私有订阅、按会话组帧、prepare/commit 两阶段（`entitysync`），谁订谁由 `policy`（Interest / Group / Direct）决定，`frame` 只是帧格式，`nettransport` 只是传输；服务↔服务的 `ISyncBus` 是另一条轴。`syncstream`（有序持久流）是基建，不在块内 | 实体状态推给客户端；服务间状态同步 |

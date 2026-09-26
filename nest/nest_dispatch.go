@@ -145,6 +145,10 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 // runNestLogic 的 Guard 与事务上下文始终由执行 handler 的 goroutine 持有。
 // Remote 的获取和最终确认在调用者的慢 worker 上完成。
 func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
+	previousGetter := msg.getter
+	msg.getter = loadedGetter{previousGetter}
+	defer func() { msg.getter = previousGetter }()
+
 	defer func() {
 		if r := recover(); r != nil {
 			if recoveredErr, ok := r.(error); ok {

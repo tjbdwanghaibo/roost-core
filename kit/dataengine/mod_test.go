@@ -31,12 +31,20 @@ func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")
 	cfg.Set("dataengine.projection.batch_bytes", 2<<20)
+	cfg.Set("dataengine.projection.read_bytes", 8<<20)
 	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
 	if err := mod.Init(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if got := mod.cfg.projector.ReplayBatchBytes; got != 2<<20 {
 		t.Fatalf("projection batch bytes=%d", got)
+	}
+	if got := mod.cfg.projector.ReplayReadBytes; got != 8<<20 {
+		t.Fatalf("read bytes=%d", got)
+	}
+	cfg.Set("dataengine.projection.read_bytes", -1)
+	if err := mod.Init(cfg); err == nil {
+		t.Fatal("negative read budget accepted")
 	}
 }
 

@@ -1,6 +1,9 @@
 package entity
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type localExecutorKey struct{}
 
@@ -25,4 +28,25 @@ func RunLocal(ctx context.Context, fn func()) error {
 	}
 	fn()
 	return nil
+}
+
+// ErrColdLoadInLogic 表示快阶段缺少预加载目标。应在消息上声明全部冷目标并走 Slow，
+// 不能在持有 Guard 时把半个 handler 转移到慢池。
+var ErrColdLoadInLogic = errors.New("entity: cold load forbidden in logic; declare targets and dispatch through slow preparation")
+
+type loadedEntitiesOnlyKey struct{}
+
+// WithLoadedEntitiesOnly 禁止 Getter 进行冷加载和等待在途加载；内存中的目标仍可访问。
+// 自定义 Getter 必须遵守 LoadedEntitiesOnly，不能丢弃传入的 context。
+func WithLoadedEntitiesOnly(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if LoadedEntitiesOnly(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, loadedEntitiesOnlyKey{}, true)
+}
+func LoadedEntitiesOnly(ctx context.Context) bool {
+	return ctx != nil && ctx.Value(loadedEntitiesOnlyKey{}) == true
 }

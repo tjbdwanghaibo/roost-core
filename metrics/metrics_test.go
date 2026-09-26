@@ -134,3 +134,19 @@ func TestHistogramObserveQuantileAndExport(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricKeyRetainsCanonicalEscapingAndOrder(t *testing.T) {
+	cases := []struct {
+		labels Labels
+		want   string
+	}{
+		{nil, "sample"},
+		{Labels{"handler": "login"}, `sample{handler="login"}`},
+		{Labels{"z": "line\nquote\"", "a": "x\\y"}, `sample{a="x\\y",z="line\nquote\""}`},
+	}
+	for _, tc := range cases {
+		if got := metricKey("sample", tc.labels); got != tc.want {
+			t.Fatalf("key=%q want=%q", got, tc.want)
+		}
+	}
+}

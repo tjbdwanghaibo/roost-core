@@ -16,10 +16,12 @@ cd "$repo_dir"
   go version
   git rev-parse HEAD
   git status --short
+  shasum -a 256 codegen/internal/entity/testdata/dataengine/*.go nest/*.go dataengine/engine/*.go sync/entitysync/*.go
+  env | sort | sed -n '/^ROOST_PERF_/p'
   printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"
 } > "$output/env.txt"
 for shape in ${ROOST_PERF_SHAPES:-single dual pair hot}; do
-  case "$shape" in single|dual|pair|hot) ;; *) echo 'Invalid shape' >&2; exit 2;; esac
+  case "$shape" in single|dual|pair|hot|cold) ;; *) echo 'Invalid shape' >&2; exit 2;; esac
   for policy in ${ROOST_PERF_POLICIES:-async strict pipelined}; do
     case "$policy" in async|strict|pipelined) ;; *) echo 'Invalid policy' >&2; exit 2;; esac
     for ((sample=1; sample<=repeats; sample++)); do

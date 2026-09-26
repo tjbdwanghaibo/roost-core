@@ -10,7 +10,22 @@ type DispatcherWorkStats struct {
 	Slow200msMessages uint64
 }
 
+// DispatchLaneStats 区分 ID 顺序等待和执行资源等待；累计耗时在进入下一阶段时记账。
+// Ready 包含已预留执行额度但 goroutine 尚未取走的工作。
+// Rejected 只累计容量拒绝，不包含尚未启动或已经关闭的请求。
+type DispatchLaneStats struct {
+	Running, Ready, BlockedOnPredecessor, WaitingForWorker int
+	PeakWaiting                                            int
+	Started, Rejected                                      uint64
+	DependencyWait, WorkerWait                             time.Duration
+	MaxDependencyWait, MaxWorkerWait, OldestWaiting        time.Duration
+}
+type DispatchQueueStats struct {
+	Fast, Slow          DispatchLaneStats
+	ContinuationRunning int
+}
 type DispatcherStats struct {
+	Queue             DispatchQueueStats
 	Fast, Slow        worker.PoolStats
 	FastContinuations int
 	// Deprecated: Main=Fast、Remote=Slow；Heart/Cost 不再创建池。
@@ -39,7 +54,7 @@ func (m *Dispatcher) Stats() DispatcherStats {
 			Slow200msMessages: m.slow200ms.Load(),
 		},
 	}
-	stats.Fast, stats.Slow, stats.FastContinuations = m.queue.stats()
+	stats.Fast, stats.Slow, stats.FastContinuations, stats.Queue = m.queue.snapshotStats()
 	stats.Main, stats.Remote = stats.Fast, stats.Slow
 	return stats
 }

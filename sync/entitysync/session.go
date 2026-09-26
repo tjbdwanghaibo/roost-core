@@ -69,7 +69,7 @@ type session struct {
 	held bool
 
 	framesSent    uint64
-	snapshotAfter int64 // 最近调度的快照实体，用于同会话轮转
+	snapshotAfter [2]int64 // 新入场/恢复分别轮转，避免另一类改变公平顺序
 	// 仅编码副本可写；已发布的引用表始终只读。
 	referencesOwned bool
 }

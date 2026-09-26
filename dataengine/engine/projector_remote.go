@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -12,15 +11,15 @@ import (
 
 // remoteProjectionWindow 只组合相邻且不共享 Entity 的纯 Remote 事务。
 // RemoteCommit.Validate 保证其 DAO、删除与快照都属于该 Entity；特殊事务是顺序边界。
-func remoteProjectionWindow(segments []projectionSegment, workers, maxBytes int) int {
-	if workers <= 1 {
+func remoteProjectionWindow(segments []projectionSegment, maxRecords, maxBytes int) int {
+	if maxRecords <= 1 {
 		return 0
 	}
 	entities := make(map[int64]struct{})
 	transactions := make(map[coredata.TransactionID]struct{})
 	size, count := 0, 0
 	for _, segment := range segments {
-		if count == workers || len(segment.records) != 1 {
+		if count == maxRecords || len(segment.records) != 1 {
 			break
 		}
 		record := segment.records[0]
@@ -59,33 +58,55 @@ func remoteProjectionWindow(segments []projectionSegment, workers, maxBytes int)
 	return count
 }
 
-// 每条记录独立完成；checkpoint 只能跨过连续成功前缀。
-// 失败之后已提交的后缀仍留在 WAL，下次通过 Mongo 的持久事务身份重放。
-// 返回前必须等所有工作结束，禁止后台写跨越下一窗口或 Shutdown。
+// 每条记录独立完成；空闲 worker 可继续处理本窗口的下一条独立记录。
+// 窗口受回放记录/字节预算限制，并在共享 Entity、事务身份或特殊内容之前截止。
+// 首次观察到失败后停止补位，等待已经发出的工作全部返回；只确认连续成功前缀。
 func (projector *Projector) projectRemoteWindow(ctx context.Context, segments []projectionSegment) (int, error) {
+	type result struct {
+		index int
+		err   error
+	}
+	concurrency := min(projector.opts.RemoteProjectionWorkers, len(segments))
+	completed := make(chan result, concurrency)
 	errs := make([]error, len(segments))
-	var workers sync.WaitGroup
-	for i, segment := range segments {
-		workers.Go(func() {
-			record := segment.records[0]
-			if err := ctx.Err(); err != nil {
-				errs[i] = err
-				return
+	next, active := 0, 0
+	failed := false
+	launch := func() {
+		index := next
+		next++
+		active++
+		go func() {
+			record := segments[index].records[0]
+			err := ctx.Err()
+			if err == nil {
+				err = projector.store.Project(ctx, record)
 			}
-			errs[i] = projector.store.Project(ctx, record)
-			if errs[i] == nil {
+			if err == nil {
 				projector.completeProjection(record.ID, nil)
 				projector.projected.Add(1)
 			}
-		})
+			completed <- result{index, err}
+		}()
 	}
-	workers.Wait()
+	for next < concurrency {
+		launch()
+	}
+	for active > 0 {
+		done := <-completed
+		active--
+		errs[done.index] = done.err
+		failed = failed || done.err != nil
+		if !failed && ctx.Err() == nil && next < len(segments) {
+			launch()
+		}
+	}
 	prefix := 0
-	for prefix < len(errs) && errs[prefix] == nil {
+	for prefix < next && errs[prefix] == nil {
 		prefix++
 	}
-	if prefix == len(errs) {
+	if prefix == len(segments) {
 		return prefix, nil
 	}
-	return prefix, fmt.Errorf("dataengine projector: remote transaction %s: %w", segments[prefix].records[0].ID.String(), errors.Join(errs...))
+	cause := errors.Join(append(errs[:next], ctx.Err())...)
+	return prefix, fmt.Errorf("dataengine projector: remote window stopped after %d/%d records: %w", prefix, len(segments), cause)
 }

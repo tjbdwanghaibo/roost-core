@@ -92,3 +92,14 @@ func (mgr *NestMgr) dispatchGetter() entity.Getter {
 	}
 	return mgr.getter
 }
+
+// loadedGetter 只在实际访问实体时标记加载约束，保留业务请求的原始 context 身份。
+// preparedGetter 缺失的动态目标同样经过此约束，不会持锁退回冷加载。
+type loadedGetter struct{ entity.Getter }
+
+func (g loadedGetter) Get(ctx context.Context, id int64, category entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g.Getter.Get(entity.WithLoadedEntitiesOnly(ctx), id, category)
+}
+func (g loadedGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	return g.Getter.GetMany(entity.WithLoadedEntitiesOnly(ctx), ids, categories)
+}

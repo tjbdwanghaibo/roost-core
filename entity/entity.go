@@ -45,6 +45,8 @@ type IThreadSafeEntityBase interface {
 }
 
 // Getter retrieves entities by ID.
+// Getter 必须保留 context；LoadedEntitiesOnly 为真时仅允许内存读取，
+// 冷目标返回 ErrColdLoadInLogic，不能执行 I/O 或等待加载。
 type Getter interface {
 	Get(context.Context, int64, EntityCategory) (IThreadSafeEntity, error)
 	GetMany(context.Context, []int64, []EntityCategory) ([]IThreadSafeEntity, error)

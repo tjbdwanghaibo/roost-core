@@ -77,6 +77,9 @@ func (m *Manager) HoldSession(id SessionID) error {
 	fresh.framesSent = sess.framesSent
 	fresh.held = true
 	m.sessions[id] = fresh
+	if !sess.held {
+		m.heldSessions++
+	}
 	if m.config.Trace != nil {
 		m.config.Trace.Record(SyncTraceEvent{Stage: "session_reset", Session: id, Lifetime: fresh.lifetime.traceID, Epoch: fresh.epoch})
 	}
@@ -90,7 +93,9 @@ func (m *Manager) HoldSession(id SessionID) error {
 				// It was owed a remove; with its state gone there is nothing to remove.
 				m.removeSubscriptionLocked(subj, id)
 			default:
-				sub.kind, sub.baseVersion = kindSnapshot, 0
+				sub.baseVersion = 0
+				sub.snapshotClass = snapshotRecovery
+				m.changeSubscriptionKindLocked(subj, id, sub, kindSnapshot)
 				sub.revision++
 				subj.profilesValid = false
 				m.traceSnapshotRequest(subj, fresh)
@@ -121,6 +126,7 @@ func (m *Manager) ReadySession(id SessionID) error {
 	next := sess.clone()
 	next.held = false
 	m.sessions[id] = next
+	m.heldSessions--
 	subjects := sessionSubjectsLocked(sess)
 	m.mu.Unlock()
 	for _, subj := range subjects {
@@ -160,6 +166,9 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 		return
 	}
 	delete(m.sessions, id)
+	if removed.held {
+		m.heldSessions--
+	}
 	subjects := sessionSubjectsLocked(removed)
 	m.mu.Unlock()
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
@@ -280,7 +289,11 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		if existing.kind != kindLeaving && existing.profile == active {
 			return nil
 		}
-		existing.profile, existing.kind, existing.baseVersion = active, kindSnapshot, 0
+		if existing.kind == kindLeaving {
+			existing.snapshotClass = snapshotArrival
+		}
+		existing.profile, existing.baseVersion = active, 0
+		m.changeSubscriptionKindLocked(subj, session, existing, kindSnapshot)
 		existing.revision++
 		subj.profilesValid = false
 		m.traceSnapshotRequest(subj, m.sessions[session])
@@ -293,12 +306,16 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 	}
 	if old := subj.subscribers[session]; old != nil {
 		delete(old.lifetime.subjects, subjectID)
+		m.changeSubscriptionKindLocked(subj, session, old, kindLeaving)
+		m.subscriptionCount.Add(-1)
 	}
 	subj.subscribers[session] = &subscription{
 		profile: profile, sources: map[*SubscriptionSource]entity.SyncProfile{source: profile},
 		kind: kindSnapshot, revision: 1, lifetime: sess.lifetime,
 	}
 	subj.profilesValid = false
+	m.snapshotRequests.update(subj, session, subj.subscribers[session])
+	m.subscriptionCount.Add(1)
 	sess.lifetime.subjects[subjectID] = subj
 	m.traceSnapshotRequest(subj, m.sessions[session])
 	m.markPending(subjectID)
@@ -332,7 +349,8 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	if len(existing.sources) > 0 {
 		active := m.bestProfile(existing.sources)
 		if active != existing.profile {
-			existing.profile, existing.kind, existing.baseVersion = active, kindSnapshot, 0
+			existing.profile, existing.baseVersion = active, 0
+			m.changeSubscriptionKindLocked(subj, session, existing, kindSnapshot)
 			existing.revision++
 			subj.profilesValid = false
 			if sess := m.session(session); sess != nil {
@@ -355,7 +373,7 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 		}
 		return nil
 	}
-	existing.kind = kindLeaving
+	m.changeSubscriptionKindLocked(subj, session, existing, kindLeaving)
 	existing.revision++
 	subj.profilesValid = false
 	m.markPending(subjectID)
@@ -394,6 +412,8 @@ func (m *Manager) removeSubscriptionLocked(subj *subject, sid SessionID) {
 	m.mu.Lock()
 	delete(sub.lifetime.subjects, subj.id)
 	delete(subj.subscribers, sid)
+	m.changeSubscriptionKindLocked(subj, sid, sub, kindLeaving)
+	m.subscriptionCount.Add(-1)
 	m.mu.Unlock()
 	subj.profilesValid = false
 	m.clearSnapshotWaitLocked(subj)
