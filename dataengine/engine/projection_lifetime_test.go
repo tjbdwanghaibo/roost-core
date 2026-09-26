@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"testing"
@@ -301,18 +302,41 @@ func TestEntityProjectionWaiterSeesFailedPipelinedDurability(t *testing.T) {
 	}
 }
 
+// RR-20260926-19：同一事务里的 Remote 写与 lease-fence receipt 必须在写 WAL 前被拒绝，
+// 三个准入入口都要拒。复核残留：旧版本用空 RemoteCommit 与空 receipt，修前就在 WAL
+// 规范化阶段因 invalid identity / invalid receipt 被拒，构不成负对照。这里用 WAL 会接受的
+// 合法 Remote 写与合法 lease-fence receipt（先用 ValidateCommitRecord 证明），修前三个
+// 入口都准入并写进 WAL；每个入口用独立事务，逐个报告。
 func TestRemoteLeaseFenceRejectedBeforeWALAdmission(t *testing.T) {
 	p, w := stoppedProjectorWithRecords(t, &multiSegmentStore{}, nil, 4<<20)
-	record := localMultiRecord(1)
-	record.Mutations[0].Remote = &remoteProjectionTestCommit
-	record.Receipts = []coredata.Receipt{{Namespace: coredata.LeaseFenceReceiptNamespace}}
-	for _, call := range []func() error{
-		func() error { return p.Commit(context.Background(), record) },
-		func() error { _, err := p.Enqueue(context.Background(), record); return err },
-		func() error { _, err := p.CommitSystem(context.Background(), record); return err },
-	} {
-		if err := call(); !errors.Is(err, ErrRemoteLeaseFenceUnsupported) {
-			t.Fatalf("admission=%v", err)
+	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: "saga", Resource: "saga_steps", DocumentID: "step-1", Owner: "sid-1", Token: 7, Digest: make([]byte, sha256.Size),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissions := []struct {
+		name  string
+		admit func(coredata.CommitRecord) error
+	}{
+		{"Commit", func(record coredata.CommitRecord) error { return p.Commit(context.Background(), record) }},
+		{"Enqueue", func(record coredata.CommitRecord) error {
+			_, err := p.Enqueue(context.Background(), record)
+			return err
+		}},
+		{"CommitSystem", func(record coredata.CommitRecord) error {
+			_, err := p.CommitSystem(context.Background(), record)
+			return err
+		}},
+	}
+	for i, admission := range admissions {
+		record := remoteProjectionRecord(t, byte(i+1))
+		record.Receipts = []coredata.Receipt{fence}
+		if err := coredata.ValidateCommitRecord(record); err != nil {
+			t.Fatalf("fixture is not a record the WAL would accept, so it proves nothing: %v", err)
+		}
+		if err := admission.admit(record); !errors.Is(err, ErrRemoteLeaseFenceUnsupported) {
+			t.Errorf("%s admitted a remote write that carries a lease fence: %v", admission.name, err)
 		}
 	}
 	assertWALReplayCount(t, w, 0)

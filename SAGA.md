@@ -81,6 +81,17 @@ Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，
 安全 ACK。这样新 owner 接管后，旧 worker 的晚到记录不能产生副作用，也不会成为永久
 poison WAL。控制 receipt 不进入业务 receipt collection。
 
+**原生步骤不能修改 Remote 实体。** 原生步骤的 CommitRecord 必然带 lease fence control
+receipt；同一 Nest 事务里若还有 Remote 实体的修改，DataEngine 在写 WAL 前返回
+`engine.ErrRemoteLeaseFenceUnsupported`，Nest 在 Guard 内整体回滚（RR-20260926-19）。原因：
+lease fence 在投影时失效会跳过整笔记录，而 Remote 写在准入时已经改了内存、占住写权限与
+分布式锁；生成 Entity 的 `RollbackRemoteCommit` 不保存跨实体前像，投影阶段无法撤销，旧实现
+下这笔 Remote 事务会一直得不到结论。这个拒绝不是业务 Completion：handler 返回错误后消息
+重投，同一 CommandID 的 claim 仍在租约内，重投得到 `Duplicate` 并等待 completion 直到步骤
+deadline，之后按 `Timeout` / `MaxAttempts` 重试、最终补偿，而不是立即得到业务拒绝。框架目前
+没有让原生步骤与 Remote 写原子提交的入口：Remote 实体的修改应放在 Saga 之外、以
+`IdempotencyKey` 幂等的 Remote 事务里，原生步骤只修改本地 Entity。
+
 handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt 和
 outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
 receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`，不同 CommandID 即使共享
