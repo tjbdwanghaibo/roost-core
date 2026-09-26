@@ -279,9 +279,15 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			for i := 1; i <= workers; i++ {
 				sendRequest(mgr, fmt.Sprintf("B%d", i), follower, ids[i], out)
 			}
-			deadline := time.Now().Add(time.Second)
+			// 等到每个 follower 都至少执行过一次（creator 仍停在提交里）；-race 下多包并行时 1s 可能不够，
+			// memory 子用例的断言依赖 follower 在 creator 提交之前执行（RR-20260926-64）。
+			deadline := time.Now().Add(10 * time.Second)
 			for attempts.Load() < workers && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
+			}
+			if attempts.Load() < workers {
+				close(committer.release)
+				t.Fatalf("followers did not all start within 10s while the creator held X (attempts=%d)", attempts.Load())
 			}
 			done := make(chan requestResult, 1)
 			sendRequest(mgr, "unrelated", unrelated, ids[workers+1], done)
