@@ -120,18 +120,25 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 
 // deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论（RR-20260926-37）。
 // 结论为已提交时回调按注册顺序在本地执行入口（快池）运行，每个回调独立隔离 panic；原请求已经或即将以
-// “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。结论为拒绝时丢弃 Sync 门（不再阻塞后续提交），
+// “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。结论为拒绝时只丢弃批次内 Remote 实体的
+// Sync 门与事实（RejectEntities，RR-20260926-58）：本地部分已经持久提交，本地实体的门按 Confirm 放行；
 // AfterCommit 不执行。批次不接手（没有后续持久结论）时什么也不做：没有持久结论就不 Confirm，门保持冻结。
 // 闭包只捕获值，不引用会被回收复用的 Msg。
 func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
+	handler := m.Name
 	callbacks := m.postRemoteCommit
 	mutation := m.remoteSyncMutation
 	m.postRemoteCommit = nil
 	m.remoteSyncMutation = nil
-	handler := m.Name
+	deferrer, ok := batch.(entity.RemoteOutcomeDeferrer)
+	if !ok {
+		metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)
+		return
+	}
+	remoteIDs := batch.EntityIDs()
 	outcome := func(committed bool) {
 		if !committed {
-			mutation.Reject()
+			mutation.RejectEntities(remoteIDs)
 			return
 		}
 		for _, callback := range callbacks {
@@ -141,7 +148,7 @@ func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
 			}
 		}
 	}
-	if deferrer, ok := batch.(entity.RemoteOutcomeDeferrer); ok && deferrer.DeferUntilDurableOutcome(outcome) {
+	if deferrer.DeferUntilDurableOutcome(outcome) {
 		return
 	}
 	metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)

@@ -34,23 +34,29 @@ type syncMutationEntry struct {
 	collector SyncChangeCollector
 	parent    *syncMutationEntry
 	previous  *syncCommitGate
+	gate      *syncCommitGate
 	mask      uint64
 	full      bool
 	reason    uint32
 }
 
+// syncCommitGate 是一个实体在一笔提交里的门：同一 SyncMutation 的每个实体各有一道，共享 batch 的
+// released / confirmed。rejected 按实体记录（RR-20260926-58）：混合事务只有 Remote 部分被持久拒绝时，
+// 只有这些实体的门按拒绝处理，已持久提交的本地实体仍按 Confirm 放行。
 type syncCommitGate struct {
 	batch    *SyncMutation
 	previous *syncCommitGate
+	rejected atomic.Bool
+}
+
+// passed 表示这道门不再阻塞：已释放且已确认，或持久结论为拒绝（不再阻塞后续提交，Reject）。
+func (g *syncCommitGate) passed() bool {
+	return g.rejected.Load() || (g.batch.released.Load() && g.batch.confirmed.Load())
 }
 
 func (g *syncCommitGate) ready() bool {
 	for ; g != nil; g = g.previous {
-		if g.batch.rejected.Load() {
-			// 已准入但持久结论为拒绝的提交不再阻塞后续提交（Reject）。
-			continue
-		}
-		if !g.batch.released.Load() || !g.batch.confirmed.Load() {
+		if !g.passed() {
 			return false
 		}
 	}
@@ -69,9 +75,12 @@ type SyncMutation struct {
 	released         atomic.Bool
 	confirmed        atomic.Bool
 	discarded        atomic.Bool
-	// rejected 表示已准入的提交最终被持久拒绝（Remote 结论，RR-20260926-37）：门不再阻塞后续提交，
-	// 本提交自己的兴趣事实按丢弃处理；从不 Confirm。
+	// rejected 表示已准入的提交整体被持久拒绝（Remote 结论，RR-20260926-37）：全部实体的门不再阻塞后续提交，
+	// 本提交自己的兴趣事实按丢弃处理；从不 Confirm。只拒绝其中一部分实体见 RejectEntities（各门自己的 rejected）。
 	rejected atomic.Bool
+	// rejectedIDs 是 RejectEntities 拒绝的实体，发布于 confirmed 之前；只供没有 SubjectSyncState 的实体
+	// 判断自己的事实（SyncConditionFor 的回退路径）。
+	rejectedIDs atomic.Pointer[map[int64]struct{}]
 }
 
 func BeginSyncMutation(es []IThreadSafeEntity, observer SyncCommitObserver) *SyncMutation {
@@ -111,12 +120,13 @@ func (b *SyncMutation) Include(es []IThreadSafeEntity) {
 		s.mu.Lock()
 		previous := s.commitGate
 		// 已放行的头结点无需保留，避免前序 WAL 等待时后续内存提交积成历史链。
-		for previous != nil && (previous.batch.rejected.Load() || (previous.batch.released.Load() && previous.batch.confirmed.Load())) {
+		for previous != nil && previous.passed() {
 			previous = previous.previous
 		}
-		entry := &syncMutationEntry{state: s, base: e.Base(), collector: collector, parent: s.mutation, previous: previous}
+		gate := &syncCommitGate{batch: b, previous: previous}
+		entry := &syncMutationEntry{state: s, base: e.Base(), collector: collector, parent: s.mutation, previous: previous, gate: gate}
 		s.mutation = entry
-		s.commitGate = &syncCommitGate{batch: b, previous: previous}
+		s.commitGate = gate
 		s.mu.Unlock()
 		b.entries = append(b.entries, entry)
 	}
@@ -195,15 +205,61 @@ func (b *SyncMutation) Confirm() {
 	}
 }
 
-// Reject 用于已准入、但远端持久结论为拒绝的提交（RR-20260926-37）：丢弃这道门，不 Confirm，
-// 不再阻塞同一实体的后续提交。被拒绝实例在锁内冻结的内容由它的仅内存卸载关闭同步状态时丢弃，
-// 调用方须在卸载之后调用；同批次其他实体的冻结内容与各自内存一致，照常交付。
+// Reject 用于已准入、但远端持久结论为拒绝、且本提交没有其他已持久提交部分的提交（RR-20260926-37）：
+// 丢弃全部实体的门，不 Confirm，不再阻塞同一实体的后续提交，本提交的兴趣事实全部丢弃。被拒绝实例在锁内
+// 冻结的内容由它的仅内存卸载关闭同步状态时丢弃，调用方须在卸载之后调用。本地部分已持久提交的混合事务
+// 用 RejectEntities，只拒绝 Remote 实体。
 func (b *SyncMutation) Reject() {
-	if b != nil {
-		if !b.rejected.Swap(true) && b.released.Load() {
-			b.observer.WakeSync()
+	if b == nil {
+		return
+	}
+	for _, entry := range b.entries {
+		entry.gate.rejected.Store(true)
+	}
+	if !b.rejected.Swap(true) && b.released.Load() {
+		b.observer.WakeSync()
+	}
+}
+
+// RejectEntities 用于本地部分已持久提交、Remote 部分被持久拒绝的提交（RR-20260926-58）：ids 是被拒绝的
+// Remote 实体（Remote 批次的实体 ID）。只有它们的门按 Reject 处理——不再阻塞后续提交、本提交里关于它们的
+// 兴趣事实丢弃；其余实体的提交已经持久，门按 Confirm 放行，事实与冻结内容照常交付。ids 覆盖全部实体时
+// 等同 Reject。与 Reject 一样须在被拒绝实例卸载之后调用。
+func (b *SyncMutation) RejectEntities(ids []int64) {
+	if b == nil {
+		return
+	}
+	rejected := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		rejected[id] = struct{}{}
+	}
+	remaining := false
+	for _, entry := range b.entries {
+		if _, ok := rejected[entry.base.ID()]; ok {
+			entry.gate.rejected.Store(true)
+		} else {
+			remaining = true
 		}
 	}
+	if !remaining {
+		b.Reject()
+		return
+	}
+	// 先发布被拒绝的实体，再 Confirm：任何看到 confirmed 的读者也看到了拒绝标记。
+	b.rejectedIDs.Store(&rejected)
+	b.Confirm()
+}
+
+// entityRejected 报告 id 是否在 RejectEntities 中被拒绝，或整笔提交被 Reject。
+func (b *SyncMutation) entityRejected(id int64) bool {
+	if b.rejected.Load() {
+		return true
+	}
+	if ids := b.rejectedIDs.Load(); ids != nil {
+		_, ok := (*ids)[id]
+		return ok
+	}
+	return false
 }
 
 // Finish 清理未准入的作用域。结果不确定时保留屏障，等待进程 fencing/recovery；
@@ -260,7 +316,8 @@ func (s *SubjectSyncState) SyncCommitCondition() func() (ready, discarded bool) 
 	s.mu.Unlock()
 	return func() (bool, bool) {
 		for current := gate; current != nil; current = current.previous {
-			if current.batch.discarded.Load() || (current == gate && current.batch.rejected.Load()) {
+			// 只有本提交自己被拒绝的门才丢弃事实；前序被拒绝的门只是不再阻塞（ready 跳过）。
+			if current.batch.discarded.Load() || (current == gate && current.rejected.Load()) {
 				return false, true
 			}
 		}
@@ -290,8 +347,17 @@ func SyncConditionFor(e IThreadSafeEntity) func() (bool, bool) {
 		return e.Base().Sync().SyncCommitCondition()
 	}
 	if batch := CurrentSyncMutation(); batch != nil {
+		// 没有 SubjectSyncState 的实体只能看整笔提交；RejectEntities 按实体 ID 判断它自己是否被拒绝。
+		var id int64
+		known := e != nil && e.Base() != nil
+		if known {
+			id = e.Base().ID()
+		}
 		return func() (bool, bool) {
 			rejected := batch.rejected.Load()
+			if known {
+				rejected = batch.entityRejected(id)
+			}
 			return !rejected && batch.released.Load() && batch.confirmed.Load(), rejected || batch.discarded.Load()
 		}
 	}

@@ -18,7 +18,11 @@ type outcomeDeferringBatch struct {
 	stagedRemoteBatch
 	mu      sync.Mutex
 	outcome func(bool)
+	ids     []int64
 }
+
+// EntityIDs 是批次里的 Remote 实体（被拒绝时只丢弃它们的 Sync 内容与事实，RR-20260926-58）。
+func (b *outcomeDeferringBatch) EntityIDs() []int64 { return append([]int64(nil), b.ids...) }
 
 func (b *outcomeDeferringBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) {
 	return nil, fmt.Errorf("%w: %w", entity.ErrRemotePersistenceIndeterminate, context.DeadlineExceeded)
@@ -62,7 +66,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 				remoteID := mustBuildCastID(t, unique+1, entity.EntityCategoryRemote, nestRemoteManagedKind)
 				getter.Add(newMockEntity(remoteID, entity.EntityCategoryRemote))
 				getter.Add(e)
-				first := &outcomeDeferringBatch{}
+				first := &outcomeDeferringBatch{ids: []int64{remoteID}}
 				useFirst := true
 				manager := &bindingRemoteManager{stagedRemoteManager: stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) {
 					if useFirst {
