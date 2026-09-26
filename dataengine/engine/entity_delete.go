@@ -8,6 +8,7 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
@@ -26,7 +27,13 @@ func (intent remoteDeleteIntent) RemoteDeleteRequested(entityID int64) bool {
 func (runtime *Runtime) admitEntityDelete(ctx context.Context, value entity.IThreadSafeEntity, reason entity.EntityDestroyReason) (admission entity.DeleteAdmission, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("dataengine delete: admission panic: %v", recovered)
+			// 准入中途 panic 无法证明远端、WAL 或内存未被动过，只能按不确定结果处理：
+			// fatal 并由 EntityManager 摘除实体。保留原错误链供 errors.Is 判断。
+			if cause, ok := recovered.(error); ok {
+				err = fmt.Errorf("dataengine delete: admission panic: %w", cause)
+			} else {
+				err = fmt.Errorf("dataengine delete: admission panic: %v", recovered)
+			}
 			admission = entity.DeleteAdmissionIndeterminate
 			runtime.fail(err)
 		}
@@ -99,6 +106,14 @@ func (runtime *Runtime) admitLocalEntityDelete(ctx context.Context, value entity
 func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entity.IThreadSafeEntity) (entity.DeleteAdmission, error) {
 	if runtime.remoteManager == nil {
 		return entity.DeleteAdmissionImmediate, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，快 worker 上不允许等待。
+	// 在任何远端/WAL 副作用之前明确拒绝：实体保留在内存、不 fence，调用方可按
+	// fctx.ErrBlockingInFastWorker 判别并改为声明目标后走正式事务（RR-20260926-27）。
+	// 旧实现让 PrepareRemoteWriteBatch 入口断言 panic，再被上面的 recover 当成
+	// 不确定结果，一次误用就 fence 全进程并摘除实体。
+	if err := fctx.BlockingError("dataengine.admitRemoteEntityDelete"); err != nil {
+		return entity.DeleteAdmissionImmediate, fmt.Errorf("dataengine delete: remote entity %d: %w", value.ID(), err)
 	}
 	if ctx == nil {
 		ctx = context.Background()
