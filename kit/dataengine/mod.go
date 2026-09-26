@@ -282,6 +282,16 @@ func (mod *Mod) Stop() {
 	_ = mod.StopWithContext(ctx)
 }
 
+// StopBudget 声明 dataengine.shutdown_timeout 为 App 停机预算（app.ModStopBudgetProvider）：
+// App 在 shutdown.total_timeout 内优先把这段时间给 StopWithContext 排空 WAL 与投影，
+// 总时长不够时按比例缩放并告警（RR-20260926-42）。未 Init 时为 0，即不声明。
+func (mod *Mod) StopBudget() time.Duration {
+	if mod == nil {
+		return 0
+	}
+	return mod.cfg.shutdownTimeout
+}
+
 func (mod *Mod) StopWithContext(ctx context.Context) error {
 	if mod == nil {
 		return nil
@@ -451,4 +461,5 @@ func positiveInt64(value, fallback int64) int64 {
 
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
+var _ app.ModStopBudgetProvider = (*Mod)(nil)
 var _ app.ModOptionalDependencyProvider = (*Mod)(nil)

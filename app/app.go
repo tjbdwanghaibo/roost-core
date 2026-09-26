@@ -353,7 +353,8 @@ func (a *App) run(serverType ServiceName) error {
 	}
 
 	// Stop service-specific mods in reverse order
-	if err := stopModsReverseWithContext(shutdownCtx, startedServiceMods, "mod stop (service-specific)"); err != nil {
+	// 共享 Mod 在服务专属 Mod 之后停止，但共用同一个总时限：规划时把它们声明的预算算进去。
+	if err := stopModsReverseBefore(shutdownCtx, startedServiceMods, startedSharedMods, "mod stop (service-specific)"); err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
 		if stopIncomplete(err) {
 			// A service-specific Mod may still use shared capabilities. Preserve
@@ -409,6 +410,14 @@ func stopModsReverse(mods []Mod, msg string) {
 }
 
 func stopModsReverseWithContext(ctx context.Context, mods []Mod, msg string) error {
+	return stopModsReverseBefore(ctx, mods, nil, msg)
+}
+
+// stopModsReverseBefore 逆序停止 mods。later 是同一次停机里、这些 mods 停完之后才会停止
+// 的 Mod（服务专属 Mod 先停、共享 Mod 后停，共用一个 shutdown.total_timeout），不在这里停止，
+// 只把它们声明的预算计入规划：先停的一段必须给后面声明了预算的 Mod 留出时间
+// （RR-20260926-42）。later 中未声明预算的 Mod 不参与这一段的均分，与原先相同。
+func stopModsReverseBefore(ctx context.Context, mods []Mod, later []Mod, msg string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -422,9 +431,9 @@ func stopModsReverseWithContext(ctx context.Context, mods []Mod, msg string) err
 			joined = errors.Join(joined, errors.New("app: nil mod during stop"))
 			continue
 		}
-		modCtx, cancel := modStopContext(ctx, i+1)
+		modCtx, cancel, budget := modStopContext(ctx, mod, mods[:i], later)
 		started := time.Now()
-		slog.Info(msg, "mod", mod.Name())
+		slog.Info(msg, "mod", mod.Name(), "budget", budget)
 		err := stopModSafely(modCtx, mod)
 		cancel()
 		duration := time.Since(started)
@@ -445,23 +454,88 @@ func stopIncomplete(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
+// defaultModStopTimeout 是未声明预算的 Mod 的基准停机时长：没有总截止时间时直接使用；
+// 有总截止时间时作为它在预算规划里的需求（见 modStopBudget）。
 const defaultModStopTimeout = 5 * time.Second
 
-func modStopContext(parent context.Context, remainingMods int) (context.Context, context.CancelFunc) {
+// declaredStopBudget 返回 Mod 通过 ModStopBudgetProvider 声明的预算，未声明为 0。
+func declaredStopBudget(mod Mod) time.Duration {
+	provider, ok := mod.(ModStopBudgetProvider)
+	if !ok {
+		return 0
+	}
+	return max(provider.StopBudget(), 0)
+}
+
+// modStopBudget 在剩余总时长 remaining 内为 mod 分配停机截止时长。pending 是同一段里在它
+// 之后停止的 Mod；later 是之后另一段才停止的 Mod，只贡献声明预算。每停一个 Mod 重新规划
+// 一次，前面 Mod 提前结束省下的时间自然留给后面。
+//
+// 需求 = 声明预算之和 + 本段未声明 Mod 数 x defaultModStopTimeout。需求不超过剩余时间时，
+// 声明的 Mod 恰好拿到声明值，本段未声明的 Mod 均分其余（每个不少于基准）；超过时全部需求
+// 按“剩余 / 需求”同比缩放（scaled=true）：声明预算之和因此不超过总时长，未声明的 Mod 也
+// 不会拿到零——零截止时间会让它立即超时并中断整条关闭链。没有任何 Mod 声明预算时，结果与
+// 原先的“剩余 / 本段剩余 Mod 数”相同。
+func modStopBudget(remaining time.Duration, mod Mod, pending, later []Mod) (budget time.Duration, scaled bool) {
+	own := declaredStopBudget(mod)
+	declared, undeclared := own, 0
+	if own == 0 {
+		undeclared = 1
+	}
+	for _, next := range pending {
+		if next == nil {
+			continue
+		}
+		if b := declaredStopBudget(next); b > 0 {
+			declared += b
+		} else {
+			undeclared++
+		}
+	}
+	for _, next := range later {
+		if next != nil {
+			declared += declaredStopBudget(next)
+		}
+	}
+	need := declared + time.Duration(undeclared)*defaultModStopTimeout
+	scale := 1.0
+	if need > remaining {
+		scale, scaled = float64(remaining)/float64(need), true
+	}
+	if own > 0 {
+		return time.Duration(float64(own) * scale), scaled
+	}
+	return (remaining - time.Duration(float64(declared)*scale)) / time.Duration(undeclared), scaled
+}
+
+// modStopContext 给一个 Mod 的 StopWithContext 建立截止时间，并返回所给的时长（日志用）。
+// 没有总截止时间（兼容 Stop 路径）时，声明的 Mod 用声明值，其余用 defaultModStopTimeout。
+func modStopContext(parent context.Context, mod Mod, pending, later []Mod) (context.Context, context.CancelFunc, time.Duration) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	if remainingMods < 1 {
-		remainingMods = 1
-	}
-	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return context.WithCancel(parent)
+	deadline, ok := parent.Deadline()
+	if !ok {
+		budget := declaredStopBudget(mod)
+		if budget == 0 {
+			budget = defaultModStopTimeout
 		}
-		return context.WithTimeout(parent, remaining/time.Duration(remainingMods))
+		ctx, cancel := context.WithTimeout(parent, budget)
+		return ctx, cancel, budget
 	}
-	return context.WithTimeout(parent, defaultModStopTimeout)
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, cancel, 0
+	}
+	budget, scaled := modStopBudget(remaining, mod, pending, later)
+	if declared := declaredStopBudget(mod); scaled && declared > 0 {
+		slog.Warn("mod stop budget scaled down: shutdown.total_timeout cannot cover every declared budget plus the default share of the other mods",
+			"mod", mod.Name(), "declared", declared, "granted", budget, "remaining", remaining,
+			"default_mod_budget", defaultModStopTimeout)
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
+	return ctx, cancel, budget
 }
 
 func stopModSafely(ctx context.Context, mod Mod) error {

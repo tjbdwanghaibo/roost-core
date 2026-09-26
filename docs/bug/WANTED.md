@@ -8,6 +8,21 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
+## W-2026-09-26-01：`remoteentity` strict 超时后恢复路径对同一提交并发 `AcknowledgeRemoteCommit`（-race 偶发）
+
+- **位置**：roost-core `remoteentity/batch_test.go:452` `TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown`；并发的两条调用链都经
+  `remoteentity/transaction_manager.go:773` `afterRemoteCommit` → `:1028` `acknowledgeRemoteCommit` → 参与方 `AcknowledgeRemoteCommit`：
+  一条来自测试直接调用的 `ApplyRemoteCommits`（`:535`），一条来自 finalizer worker 的 `processDeferredRemoteClose`（`:266`）→
+  `reconcileRemoteEntries`（`:415`）。基线 `49f20ee`（相关代码本轮未改）。
+- **现象**：`GOWORK=off go test -race -count=200 -run TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown ./remoteentity` 报 1 次
+  DATA RACE，写的是测试替身 `testRemoteEntity.dirty.dirty`（`batch_test.go:155`）；全包 `-race -count=1` 也碰到过 1 次。
+- **为何可疑**：替身本身不加锁是测试问题，但竞态说明 strict 超时后“调用方补发 `ApplyRemoteCommits`”与“finalizer 按状态收尾”两条路径
+  会对同一 Remote 提交各执行一次 `AcknowledgeRemoteCommit`，且不在同一 Entity 锁/执行位置下。生成的 Entity 若在该回调里改内存状态
+  （清脏、推进版本、切 Sync 基线），就是生产里的重复确认与并发写；需要 review 确认契约是“至多一次确认”还是“幂等且调用方自带同步”。
+- **复现**：见上面的命令，约 1/200。
+- **候选修法（可选）**：让 `afterRemoteCommit` 对同一事务 / 实体只确认一次（按事务状态 CAS），或明确回调需幂等并给替身加锁。
+- **来源**：RR-20260926-34 / 42 修复交付前全量 `-race`（[RR-42 修复记录](../bugfix/RR-20260926-42.md#未验证项)）；与伪 Mongo 忠实化无关（该测试不经过 mongotest）。
+
 ## W-2026-09-23-01 分流结论：→ 维护者拍板整条删（M-18，2026-09-23）；`AsyncTransport` 只留 reliable
 
 - **位置**：roost-core `nettransport/channel.go`（`AsyncTransport` 的 datagram lane：`SendDatagram / SendDatagramBatch`、`inspectDatagramBatch`、latest-only 折叠）、`statesync/datagram.go`（`FragmentFrame`、`InspectDatagram`、42 字节分片头）。基线：M-15。
