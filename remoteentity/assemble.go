@@ -254,10 +254,13 @@ func (a *Assembly) releaseLifecycle() {
 
 // validateRemoteManagedDaoScopes 拒绝 remote=managed 实体注册 dbscope=sid 的 DAO（RR-20260926-45）。
 // 同时覆盖生成与手写实体：逐个实例化注册的 DAO 工厂读取 DbScope；未声明 DbScope 的 DAO 按 global。
+// 是否托管看 kind 在注册表里的实际策略（entity.GetEntityKindRemotePolicy），不看 builder 自带的 RemotePolicy：
+// kind 定义声明 managed、手写 builder 省略 RemotePolicy 时注册表按“部分重复声明”接受，全部 Remote 路径都按
+// managed 处理，校验也必须按 managed（RR-20260926-60）。
 func validateRemoteManagedDaoScopes(builders []*entity.EntityBuilderParam) error {
 	var errs []error
 	for _, builder := range builders {
-		if builder == nil || !builder.RemotePolicy.RemoteManaged() {
+		if builder == nil || !entity.GetEntityKindRemotePolicy(builder.Kind).RemoteManaged() {
 			continue
 		}
 		for i, build := range builder.DaoBuilders {
