@@ -248,3 +248,4 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 ## 2026-09-26 连接、复制会话与同步总线（RR-52/55/56）
 
 - 生成的玩家 TCP 传输：一次推送里某条连接写失败，这条连接立即被关闭注销（客户端断线重连），其余连接收到则 `PushPlayer` 返回 nil；全部连接都写不进时返回错误且这些连接都已关闭。写之前就被拒绝（ctx 结束、payload 超限）的推送不关闭连接。依赖“任一连接失败即报错”的调用方改看 `ActiveSessions` 或会话关闭事件。已生成工程重新生成 `server_gen.go` 即可（[RR-20260926-52](bugfix/RR-20260926-52.md)）。
+- entitysync 新增 `Manager.RegisterAfterRetirement(state, done)`：subject 仍在退役（Leave 之后观察者还欠 ObjectRemove）时把登记排到退役完成，不再返回 `ErrSubjectRetiring`；每个 subject 至多一个排队，再次 `Unregister`、被替换、状态关闭或 Manager 关闭时 done 收到取消。`entitysync.SessionOpenRetryable(err)` 判断 OpenSession 的“稍后重试”错误。game-demo 的 scene 用它们让同 tick 内的快速重连进入复制场景，会话打开遇“旧会话仍在关闭”按 25ms 起翻倍、上限 1s、至多 8 次重试（[RR-20260926-55](bugfix/RR-20260926-55.md)）。

@@ -44,6 +44,11 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 语义同 `Unregister`：只撤同一个状态对象的登记，未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，退役完成前同 ID
 重新登记返回 `ErrSubjectRetiring`；已退役 subject 的状态在捕获期间关闭不计 Flush 失败（RR-20260926-35）。
 
+需要在退役完成后重新登记同一 subject 的调用方（例如玩家离开后同一 tick 内重连）用 `RegisterAfterRetirement(state, done)`：不在退役中时等同
+`Register`；退役中时排到最后一个 remove 交付（或最后一个订阅者会话关闭）的同一步登记，done 恰好报告一次（nil，或 `ErrRegistrationCancelled` /
+`ErrManagerClosed`）。每个 subject 至多一个排队，后到的替换先到的，再次 `Unregister` 取消；退役期间的订阅仍被拒绝，remove-before-create 不变。
+done 在 Manager 的调用路径上执行、不持锁，不得阻塞或调用 Flush（RR-20260926-55）。
+
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
 
 
@@ -67,7 +72,8 @@ on_change 下快照预算按 Interval 窗口共享；额度耗尽的快照需求
 on_change 同窗口停止重复冷捕获，已有对象更新不受影响。
 恢复类别目前指同一会话 lifetime 的 Hold/Ready；Close/Open 后是新入场。
 传输实现 SessionLifecycle 时，OpenSession 在 SessionOpened 成功后才发布会话；同 ID 旧发送未退出返回
-`ErrSessionClosing`，另一次打开尚未确认返回 `ErrSessionOpening`，两者都未创建会话、可重试，OpenSession 本身不等待。
+`ErrSessionClosing`，另一次打开尚未确认返回 `ErrSessionOpening`，两者都未创建会话、可重试，OpenSession 本身不等待；
+`SessionOpenRetryable(err)` 判断这两种，重试的退避由调用方安排在快池之外（demo scene 为 25ms 起翻倍、上限 1s、至多 8 次）。
 具体边界和回归见[复审核实](../docs/review/REVIEW-2026-09-26-followup.md)。
 
 可显式创建 `NewSyncTrace(capacity)`，传入 `ManagerConfig.Trace` 开启有界阶段记录；

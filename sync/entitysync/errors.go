@@ -50,4 +50,16 @@ var (
 	// ErrSessionOpening 表示同一 SessionID 的另一次 OpenSession 正在等待传输确认、结果未定，
 	// 本次调用没有创建会话。稍后重试：那次打开成功则得到 nil，失败则重新尝试打开。
 	ErrSessionOpening = errors.New("entitysync: session with this id is being opened; retry OpenSession later")
+
+	// ErrRegistrationCancelled 是 RegisterAfterRetirement 排队的登记被取消时交给 done 的错误：
+	// subject 在退役完成前再次 Unregister、另一次排队替换了它，或排队的状态已经关闭。
+	ErrRegistrationCancelled = errors.New("entitysync: queued registration was cancelled")
 )
+
+// SessionOpenRetryable 报告 OpenSession / OpenHeldSession 的错误是否只是“这次没有创建会话，
+// 稍后重试即可”：ErrSessionClosing（同 ID 的旧 lifetime 仍在传输层退出）或 ErrSessionOpening
+// （同 ID 的另一次打开尚未确认）。其他错误（会话上限、Manager 关闭、传输拒绝）重试无益。
+// 重试的等待由调用方安排在快池之外（RR-20260926-55）。
+func SessionOpenRetryable(err error) bool {
+	return errors.Is(err, ErrSessionClosing) || errors.Is(err, ErrSessionOpening)
+}

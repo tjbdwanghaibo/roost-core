@@ -486,6 +486,8 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **会话被 Manager 丢掉而观察者仍在**（`SessionLost` 但玩家还有活连接，例如重连窗口里旧连接写失败）：重开会话后调用 `Interest.Resubscribe(observer)`，
   该观察者持有的全部 pair 在下一次 `Apply` 重说，客户端收到新 lifetime 的全量快照；其他观察者对它的订阅不受影响（RR-20260926-40）。
   是否离场由应用按“该次 Join 的代际仍是当前且确实没有活跃连接”判定，demo scene 是参考实现。
+- **离开后立即重新加入**（subject 仍在退役、观察者还欠 ObjectRemove）：用 `Manager.RegisterAfterRetirement(state, done)` 把登记排到退役完成，
+  done 里（交给自己的 goroutine）让政策 `Apply` 重说退役期间被拒绝的订阅；会话打开遇 `entitysync.SessionOpenRetryable` 的错误按有界退避重试（RR-20260926-55）。
 
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。

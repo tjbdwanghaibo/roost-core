@@ -51,6 +51,10 @@ type subject struct {
 	// retiring: Unregister was called; every subscriber is leaving and the
 	// subject is forgotten once the last remove has gone out.
 	retiring bool
+	// successor 是 RegisterAfterRetirement 排在退役完成之后登记的状态，至多一个；
+	// forgotten 表示 forget 已经取走 successor，之后不能再排队（调用方改走 Register）。
+	successor *queuedRegistration
+	forgotten bool
 	// 缓存发布后不可修改；CaptureSync 解开 subject 锁后仍会使用这两组需求。
 	// 增删订阅以及有效 profile/kind 改变必须使 profilesValid 失效。
 	profilesValid                   bool

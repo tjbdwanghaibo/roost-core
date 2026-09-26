@@ -332,9 +332,67 @@ func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState) error {
 	return nil
 }
 
+// queuedRegistration 是一次排在退役完成之后的登记。
+type queuedRegistration struct {
+	state *entity.SubjectSyncState
+	done  func(error)
+}
+
+func (q *queuedRegistration) finish(err error) {
+	if q != nil && q.done != nil {
+		q.done(err)
+	}
+}
+
+// RegisterAfterRetirement 与 Register 相同，只是 subject 正在退役（Unregister 之后仍欠订阅者
+// ObjectRemove）时不返回 ErrSubjectRetiring，而是把 state 排在退役完成之后登记（RR-20260926-55）：
+// 最后一个 remove 交付、或最后一个订阅者的会话关闭时，同一步里以 state 重新登记。remove-before-create
+// 不变——退役期间对该 subject 的订阅仍被拒绝（ErrSubjectRetiring），登记完成后的订阅从全量快照开始。
+//
+// 返回 queued=true 表示已排队，结果由 done 报告且恰好一次：nil 为已登记；ErrRegistrationCancelled
+// 为退役完成前再次 Unregister、被后一次排队替换、或排队的 state 已关闭；ErrManagerClosed 为
+// Manager 已关闭。每个 subject 至多排一个。done 在 Manager 自己的调用路径上执行（Flush、
+// CloseSession、Unregister、Close），不持有 Manager 的锁；它不得阻塞，也不得调用 Flush——
+// 需要做事（例如让政策重说被拒绝的订阅）就交给自己的 goroutine。
+//
+// queued=false 时它就是 Register 的结果，done 不会被调用。本方法不等待，可在快池调用。
+func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
+	if m == nil {
+		return false, ErrManagerClosed
+	}
+	if state == nil || !state.Enabled() || state.SubjectID() == 0 {
+		return false, ErrSubjectInvalid
+	}
+	id := state.SubjectID()
+	// 一次循环要么返回，要么观察到退役刚好完成（subject 已被 forget），所以两轮足够；
+	// 第三轮只在并发的 Unregister/Register 反复交错时出现，仍然有界。
+	for range 3 {
+		err := m.Register(state)
+		if !errors.Is(err, ErrSubjectRetiring) {
+			return false, err
+		}
+		subj := m.subject(id)
+		if subj == nil {
+			continue // 退役在两步之间完成
+		}
+		subj.mu.Lock()
+		if subj.forgotten || !subj.retiring {
+			subj.mu.Unlock()
+			continue
+		}
+		replaced := subj.successor
+		subj.successor = &queuedRegistration{state: state, done: done}
+		subj.mu.Unlock()
+		replaced.finish(ErrRegistrationCancelled)
+		return true, nil
+	}
+	return false, ErrSubjectRetiring
+}
+
 // Unregister retires a subject: every subscriber is owed an ObjectRemove on
 // its next frame, and once the last one has gone out the subject is
-// forgotten. Subscribing to a retiring subject is refused.
+// forgotten. Subscribing to a retiring subject is refused. A registration
+// queued behind an earlier retirement (RegisterAfterRetirement) is cancelled.
 func (m *Manager) Unregister(subjectID int64) error {
 	subj := m.subject(subjectID)
 	if subj == nil {
@@ -342,6 +400,9 @@ func (m *Manager) Unregister(subjectID int64) error {
 	}
 	subj.mu.Lock()
 	subj.retiring = true
+	cancelled := subj.successor
+	subj.successor = nil
+	defer cancelled.finish(ErrRegistrationCancelled)
 	for id, sub := range subj.subscribers {
 		if !sub.inFlight && !m.sessionHoldsSubject(id, subjectID) {
 			// 只有实际未持有对象的会话才不欠 remove；等待快照也可能是在换视图。
@@ -381,7 +442,8 @@ func (m *Manager) RetractSyncSubject(state *entity.SubjectSyncState) {
 
 var _ entity.SyncSubjectRetractor = (*Manager)(nil)
 
-// forget drops a subject whose last remove has gone out.
+// forget drops a subject whose last remove has gone out, and then registers
+// the state queued behind the retirement, if any (RegisterAfterRetirement).
 func (m *Manager) forget(subjectID int64) {
 	m.mu.Lock()
 	subj, ok := m.subjects[subjectID]
@@ -389,16 +451,32 @@ func (m *Manager) forget(subjectID int64) {
 		delete(m.subjects, subjectID)
 	}
 	m.mu.Unlock()
-	if ok {
-		m.pendingMu.Lock()
-		if wait := m.waitingSnapshots[subjectID]; wait.subject == subj {
-			m.removeSnapshotWaitLocked(subjectID)
-		}
-		m.pendingMu.Unlock()
-		state := subj.currentState()
-		state.SetDirtyNotifier(nil)
-		state.DiscardFrozenSync()
+	if !ok {
+		return
 	}
+	m.pendingMu.Lock()
+	if wait := m.waitingSnapshots[subjectID]; wait.subject == subj {
+		m.removeSnapshotWaitLocked(subjectID)
+	}
+	m.pendingMu.Unlock()
+	subj.mu.Lock()
+	subj.forgotten = true
+	queued := subj.successor
+	subj.successor = nil
+	state := subj.state
+	subj.mu.Unlock()
+	state.SetDirtyNotifier(nil)
+	state.DiscardFrozenSync()
+	if queued == nil {
+		return
+	}
+	// 同一个状态对象重新登记也走这里：先清掉旧 subject 的通知与冻结内容，再以新 subject 登记，
+	// 状态若仍脏，installDirtyNotifier 会立即排队。
+	if !queued.state.Enabled() {
+		queued.finish(ErrRegistrationCancelled)
+		return
+	}
+	queued.finish(m.Register(queued.state))
 }
 
 func (m *Manager) subject(subjectID int64) *subject {
@@ -572,9 +650,13 @@ func (m *Manager) Close(ctx context.Context) error {
 			m.removeSubscriptionLocked(subj, sid)
 		}
 		state := subj.state
+		subj.forgotten = true
+		queued := subj.successor
+		subj.successor = nil
 		subj.mu.Unlock()
 		state.SetDirtyNotifier(nil)
 		state.DiscardFrozenSync()
+		queued.finish(ErrManagerClosed)
 	}
 	m.pendingMu.Lock()
 	clear(m.pending)

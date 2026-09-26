@@ -915,3 +915,348 @@ func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *te
 		t.Fatalf("the watcher was told about %d removes after the player left, want 1", removes)
 	}
 }
+
+// RR-20260926-55 (REPRO-2026-09-26-05 §6): the connection closes, the settle
+// takes the player out — which retires its subject: the watcher is still owed
+// the ObjectRemove, sent on the next tick — and the player logs in again
+// before that tick. Register used to refuse the retiring subject and the Join
+// failed ("player did not join the replicated scene"): a fast reconnect left
+// the player out of replication until its next login.
+//
+// Join now queues the registration behind the retirement. The watcher gets the
+// remove first and then the player as a new object; the player's own session
+// gets the watcher. The manager's tick is not started, so "before the tick"
+// is certain rather than likely.
+func TestAQuickReconnectAfterTheSettleJoinsTheScene(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(recorder)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	ctx := context.Background()
+	const watcherID, reconnectID = int64(9771), int64(9772)
+	watcher, re := newScenePlayer(t, watcherID), newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[re.ID()]; !ok {
+		t.Fatal("setup: the watcher never saw the player")
+	}
+	recorder.take(reconnectID)
+
+	recorder.close(reconnectID)
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if scene.Members() != 1 {
+		t.Fatal("setup: the close did not take the player out")
+	}
+	recorder.reconnect(reconnectID)
+	if err := scene.Join(ctx, re, spatial.Point{X: 510, Y: 500}); err != nil {
+		t.Fatalf("a reconnect right after the settle's leave failed to join: %v", err)
+	}
+	if err := scene.Ready(reconnectID); err != nil {
+		t.Fatalf("ready after the quick reconnect: %v", err)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("members=%d after the quick reconnect, want 2", members)
+	}
+
+	// The remove goes out and completes the retirement; the queued
+	// registration and the pairs refused meanwhile follow.
+	removes, seenByWatcher, sawWatcher := 0, false, false
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !(seenByWatcher && sawWatcher) {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		toWatcher := recorder.take(watcherID)
+		removes += removesIn(t, toWatcher)
+		if _, ok := decodeSceneFrames(t, watcherID, toWatcher)[re.ID()]; ok {
+			if removes == 0 {
+				t.Fatal("the watcher was sent the player again before the old object's remove (remove-before-create)")
+			}
+			seenByWatcher = true
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[watcher.ID()]; ok {
+			sawWatcher = true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Logf("removes seen by the watcher=%d watcher sees the player again=%v player sees the watcher=%v", removes, seenByWatcher, sawWatcher)
+	if removes != 1 || !seenByWatcher {
+		t.Errorf("the watcher got %d removes and saw the rejoined player=%v, want the old object removed once and the player back", removes, seenByWatcher)
+	}
+	if !sawWatcher {
+		t.Error("the rejoined player's own view never came back")
+	}
+}
+
+// closingLane is the scene's lane over a transport with a session lifecycle —
+// the shape of entitysync.AsyncTransport — that is still closing a player's
+// previous session for the next closing[id] opens (entitysync.ErrSessionClosing).
+type closingLane struct {
+	sceneLane
+	mu      sync.Mutex
+	closing map[entitysync.SessionID]int
+	opens   map[entitysync.SessionID]int
+}
+
+func newClosingLane(transport scenePusher) *closingLane {
+	return &closingLane{sceneLane: sceneLane{transport: transport}, closing: map[entitysync.SessionID]int{}, opens: map[entitysync.SessionID]int{}}
+}
+
+func (lane *closingLane) SessionOpened(id entitysync.SessionID) error {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	lane.opens[id]++
+	if lane.closing[id] > 0 {
+		lane.closing[id]--
+		return fmt.Errorf("previous lifetime still sending: %w", entitysync.ErrSessionClosing)
+	}
+	return nil
+}
+
+func (*closingLane) SessionClosed(entitysync.SessionID) {}
+
+func (lane *closingLane) refuse(id entitysync.SessionID, opens int) {
+	lane.mu.Lock()
+	lane.closing[id] = opens
+	lane.mu.Unlock()
+}
+
+func (lane *closingLane) opened(id entitysync.SessionID) int {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	return lane.opens[id]
+}
+
+// sceneSchedule holds what the scene hands to async and after, so the test
+// decides when a settle or a retry runs.
+type sceneSchedule struct {
+	mu      sync.Mutex
+	settles []func()
+	retries []func()
+	delays  []time.Duration
+}
+
+func (schedule *sceneSchedule) install(scene *Scene) {
+	scene.async = func(fn func()) {
+		schedule.mu.Lock()
+		schedule.settles = append(schedule.settles, fn)
+		schedule.mu.Unlock()
+	}
+	scene.after = func(delay time.Duration, fn func()) {
+		schedule.mu.Lock()
+		schedule.retries = append(schedule.retries, fn)
+		schedule.delays = append(schedule.delays, delay)
+		schedule.mu.Unlock()
+	}
+}
+
+func (schedule *sceneSchedule) runSettles() int {
+	schedule.mu.Lock()
+	queued := schedule.settles
+	schedule.settles = nil
+	schedule.mu.Unlock()
+	for _, fn := range queued {
+		fn()
+	}
+	return len(queued)
+}
+
+// runRetry runs the one scheduled retry and reports its delay; false if none.
+func (schedule *sceneSchedule) runRetry(t *testing.T) (time.Duration, bool) {
+	t.Helper()
+	schedule.mu.Lock()
+	if len(schedule.retries) == 0 {
+		schedule.mu.Unlock()
+		return 0, false
+	}
+	if len(schedule.retries) > 1 {
+		schedule.mu.Unlock()
+		t.Fatalf("%d retries scheduled at once for one player", len(schedule.retries))
+	}
+	fn, delay := schedule.retries[0], schedule.delays[0]
+	schedule.retries, schedule.delays = nil, nil
+	schedule.mu.Unlock()
+	fn()
+	return delay, true
+}
+
+// RR-20260926-55 (second half): over a transport with a session lifecycle a
+// reopen can find the player's previous session still closing — OpenSession
+// answers ErrSessionClosing, which only means "not yet". The resync after a
+// push failure used to log a warning and give up, leaving a connected player
+// with no view until its next login. It is retried with a growing delay, a
+// bounded number of times, for the Join it was for only.
+func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
+	type harness struct {
+		scene    *Scene
+		lane     *closingLane
+		recorder *sceneRecorder
+		schedule *sceneSchedule
+		mover    *player.Player
+		re       *player.Player
+	}
+	const moverID, reconnectID = int64(9781), int64(9782)
+	setup := func(t *testing.T) harness {
+		t.Helper()
+		recorder := newSceneRecorder()
+		lane := newClosingLane(recorder)
+		scene, err := newSceneOn(lane, recorder, nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.watchSessions(recorder)
+		schedule := &sceneSchedule{}
+		schedule.install(scene)
+		t.Cleanup(func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = scene.Close(closeCtx)
+		})
+		ctx := context.Background()
+		h := harness{scene: scene, lane: lane, recorder: recorder, schedule: schedule, mover: newScenePlayer(t, moverID), re: newScenePlayer(t, reconnectID)}
+		joinReady(t, scene, ctx, h.mover, spatial.Point{X: 500, Y: 500})
+		joinReady(t, scene, ctx, h.re, spatial.Point{X: 510, Y: 500})
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		recorder.take(moverID)
+		recorder.take(reconnectID)
+		return h
+	}
+	// losePush fails one push to the player while its connection stays up,
+	// so the manager drops the session and the settle wants to reopen it.
+	losePush := func(t *testing.T, h harness) {
+		t.Helper()
+		ctx := context.Background()
+		h.recorder.mu.Lock()
+		h.recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+		h.recorder.mu.Unlock()
+		counters := newSceneWorld(t)
+		client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{h.mover.ID(): h.mover, h.re.ID(): h.re, counters.ID(): counters})
+		if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, h.mover.ID(), counters.ID(), 10); err != nil {
+			t.Fatal(err)
+		}
+		_ = h.scene.Flush(ctx)
+		h.recorder.mu.Lock()
+		h.recorder.unreachable = nil
+		h.recorder.mu.Unlock()
+		if ran := h.schedule.runSettles(); ran != 1 {
+			t.Fatalf("%d settles for one lost session, want 1", ran)
+		}
+	}
+	session := entitysync.SessionID(reconnectID)
+
+	t.Run("retried until the transport lets go", func(t *testing.T) {
+		h := setup(t)
+		opensBefore := h.lane.opened(session)
+		h.lane.refuse(session, 2)
+		losePush(t, h)
+		var delays []time.Duration
+		for {
+			delay, ran := h.schedule.runRetry(t)
+			if !ran {
+				break
+			}
+			delays = append(delays, delay)
+		}
+		t.Logf("opens=%d retry delays=%v", h.lane.opened(session)-opensBefore, delays)
+		if got := h.lane.opened(session) - opensBefore; got != 3 {
+			t.Fatalf("the reopen was tried %d times, want 3 (two refusals, then open)", got)
+		}
+		if len(delays) != 2 || delays[0] != sessionReopenFirstDelay || delays[1] != 2*sessionReopenFirstDelay {
+			t.Fatalf("retry delays %v, want %v then %v", delays, sessionReopenFirstDelay, 2*sessionReopenFirstDelay)
+		}
+		if err := h.scene.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, h.recorder.take(reconnectID))[h.mover.ID()]; !ok {
+			t.Fatal("the reopened session did not get the player's view back")
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("members=%d, want 2", h.scene.Members())
+		}
+	})
+	t.Run("bounded", func(t *testing.T) {
+		h := setup(t)
+		opensBefore := h.lane.opened(session)
+		h.lane.refuse(session, 1000)
+		losePush(t, h)
+		var longest time.Duration
+		for {
+			delay, ran := h.schedule.runRetry(t)
+			if !ran {
+				break
+			}
+			longest = max(longest, delay)
+		}
+		if got := h.lane.opened(session) - opensBefore; got != sessionReopenAttempts {
+			t.Fatalf("a transport that never lets go was asked %d times, want %d", got, sessionReopenAttempts)
+		}
+		if longest > sessionReopenMaxDelay {
+			t.Fatalf("a retry waited %v, more than the %v cap", longest, sessionReopenMaxDelay)
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("giving up on the reopen removed the player: members=%d", h.scene.Members())
+		}
+	})
+	t.Run("cancelled when the player leaves", func(t *testing.T) {
+		h := setup(t)
+		h.lane.refuse(session, 1000)
+		losePush(t, h)
+		h.recorder.close(reconnectID)
+		h.schedule.runSettles()
+		if h.scene.Members() != 1 {
+			t.Fatalf("members=%d after the close, want 1", h.scene.Members())
+		}
+		opens := h.lane.opened(session)
+		if _, ran := h.schedule.runRetry(t); !ran {
+			t.Fatal("setup: no retry was pending")
+		}
+		if got := h.lane.opened(session); got != opens {
+			t.Fatalf("a retry for a player who left opened a session (%d → %d)", opens, got)
+		}
+		if _, ran := h.schedule.runRetry(t); ran {
+			t.Fatal("a retry for a player who left scheduled another")
+		}
+	})
+	t.Run("a join whose session cannot open yet still joins", func(t *testing.T) {
+		h := setup(t)
+		ctx := context.Background()
+		h.recorder.close(reconnectID)
+		h.schedule.runSettles()
+		if err := h.scene.Flush(ctx); err != nil { // the leave's remove goes out
+			t.Fatal(err)
+		}
+		h.recorder.take(moverID)
+		h.recorder.reconnect(reconnectID)
+		h.lane.refuse(session, 1)
+		if err := h.scene.Join(ctx, h.re, spatial.Point{X: 510, Y: 500}); err != nil {
+			t.Fatalf("a join whose session the transport is still closing failed: %v", err)
+		}
+		if err := h.scene.Ready(reconnectID); err != nil {
+			t.Fatalf("ready before the session could open: %v", err)
+		}
+		if _, ran := h.schedule.runRetry(t); !ran {
+			t.Fatal("no retry was scheduled for the join's session")
+		}
+		if err := h.scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, h.recorder.take(reconnectID))[h.mover.ID()]; !ok {
+			t.Fatal("the rejoined player's session opened but its view did not arrive (it should open ready)")
+		}
+	})
+}
