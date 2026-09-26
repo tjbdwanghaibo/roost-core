@@ -1,19 +1,65 @@
 # Changelog
 
-## 2026-09-25 Nest 双池复核
+本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
+
+## [Unreleased]
+
+> 计划发布为 **v1.17.0**。相对 v1.16.1 **含大量破坏性变化**：严格按语义化版本应升大版本，但模块路径保持 v1（v2 需 `/v2` 路径并重写全部 import），
+> 沿用 v1.16.0 合仓时“破坏性变化发小版本”的惯例，**本版不遵守 SemVer 的大版本规则**。升级先读下方“Changed（破坏性）”，再执行 `roost project upgrade --consolidate`。
+
+### Changed（破坏性，v1.16.1 → v1.17.0 补充）
+
+以下为下文各节之外、此前漏记或本轮新增的破坏性 / 行为收紧：
+
+- **Nest 快阶段执行约束**：handler、Guard 与本地回滚只在快池；快 worker 上不做 I/O 等待。快阶段访问未加载实体返回 `entity.ErrColdLoadInLogic`（不再冷加载，快 worker 上同时包裹 `fctx.ErrBlockingInFastWorker`）；
+  声明目标未加载时统一准入**自动**走慢阶段预加载，生成 sender 与业务代码无需改动，`nest.SendOptionSlow()` 仍可显式使用；自定义 Getter 必须遵守 `entity.LoadedEntitiesOnly`。
+  框架自带的等待入口（Repository 冷加载、投影等待、Remote 准备/提交/等待、快续行）在快 worker 上被调用时 panic `ErrBlockingInFastWorker`（RR-20260926-02/03/06/25/26）。
+- **DataEngine**：自定义 `RecoveryGate` 需提供 `WaitEntityProjection`（重载前等待本实体投影，RR-10）；`Projector.Close` 后 `Flush` / `ReplayPass` 返回 `ErrRuntimeStopped`（RR-17）；
+  `ProjectorOptions.OnFatal` 改为异步调用一次，回调内可同步 Close；fatal 后 `WaitEntityProjection` 与 `CommitSystem` 票据立即以 fatal 结束，关闭后返回 `ErrRuntimeStopped`（RR-10/17 复核）；
+  Remote 写与 lease-fence receipt 同事务在 WAL 准入前拒绝 `engine.ErrRemoteLeaseFenceUnsupported`，saga 原生步骤不能写 Remote 实体（RR-19，见 SAGA.md）；
+  自定义 remoteStore 回放历史混合记录需实现 `RejectRemoteCommitsInTransaction`（RR-19）。
+- **Remote**：Durability 0 提交结果未知时交 finalizer，从未到达 Mongo 的事务由 finalizer 以同一事务 `_id` 写持久 Rejected 收敛（RR-28）；
+  持久拒绝后实体**保持隔离直到重新加载**，不再解冻为可写（此前 Durability 1 首轮即读到 Rejected 的实体可继续写并把被拒绝的内存修改写出，已堵上）；
+  tracker 中 Committed / Rejected 终态不再被重放失败覆盖（RR-11 复核）；Remote 批次按显式“已持久提交”状态决定 Commit / Abort，提交后错误（release hook panic 等）不再 Abort（RR-14/32）。
+- **Sync**：`OpenSession` 在传输确认前会话不可见；确认期间同 ID 并发 Open 返回 `entitysync.ErrSessionOpening`，旧队列未退出时返回 `ErrSessionClosing`（包裹 `nettransport.ErrSessionAlreadyExists`），
+  均表示未创建、可重试；确认期间 Subscribe 返回 `ErrSessionUnknown`（RR-15 复核）。字节软预算下被挡的冷创建不再每窗口重复打包，RetryLater 后游标不越过未尝试会话（RR-04/05 复核）。
+- **kit/syncbus**：配置以 `syncbus:` 段为准，兼容读取 `room:` / `sync:` 并告警弃用；未知键告警；无效 `transport` 使 Init 失败（此前静默退回普通 NATS，RR-12）。
+- **codegen `upgrade --consolidate`**：遇到无法自动映射的已删除 / 换包符号时逐条列出 `文件:行` 与指引并**非零退出**；kit 保留路径包名变化时补别名（RR-24）；旧 Entity 标记 `syncTopic` 须先手动改为 `syncNamespace`。
+- 此前漏记：`entity.SubjectSyncState.CaptureSnapshot` 删除（M-13 收尾）；`remoteentity.NewVersionedLockFactory` 新增可变参数 `...WriteAuthority`；robot 使用的 lockstep 类型随 `sync/lockstep` 迁移。
+
+### Added（2026-09-26）
+
+- `engine.ProjectorOptions.ManualReplay`（外部测试夹具手动回放，生产装配不设置）、`kit/dataengine.Mod.WaitEntityProjection`、
+  `remoteentity.MongoCommitter/Backend.RejectUnresolvedRemoteCommits`、`fctx.InFastWorker/WithFastWorker/BlockingError/AssertBlockingAllowed/ErrBlockingInFastWorker`、
+  `entitysync.ErrSessionOpening/ErrSessionClosing`；指标 `nest.dispatch.slow_reroute.total`、`remote_entity.unresolved_reject_error_total`、`remote_entity.unresolved_resolved_total`、
+  `remote_entity_transaction_final_overwrite_ignored_total`。
+
+### Fixed（2026-09-26 复审与复验）
+
+- **RR-20260926-01～09**：Sync policy 失败保留 LastError；Nest 快阶段禁冷加载；Slow 快阶段 RunLocal 自等死锁；字节软预算大对象饥饿；快照额度 Push 前预扣；快池阻塞入口 fail-fast；
+  WAL 回放边界漏计；续行占用时队列容量口径；Remote 并行投影错误带失败事务 ID。
+- **RR-20260926-10～24**：实体卸载后投影前重载（P1）、Remote 重放被新 fence 拒绝致投影卡死（P1）、syncbus 配置段失效（P1）及 12 条 P2，见 [上线前复审](docs/review/REVIEW-2026-09-26-release.md) 与 [修复与兼容边界](docs/review/REVIEW-2026-09-26-release-fixes.md)。
+- **RR-20260926-25～29、31、32（复验发现的回归与既有缺陷）**：冷声明目标自动慢阶段预加载（P1，离线玩家 saga 补偿 / GM 发放）；快阶段冷缺失不再 panic；快 worker 删除 Remote 实体确定拒绝不 fence；
+  Durability 0 未提交结果持久拒绝收敛；kit/dataengine 集成夹具恢复；demo 闲置交还等待投影再释放租约；Remote 批次按显式持久提交状态收尾。
+  复核补修：RR-04/05/07/10/11/12/15/17/19/22/24。见 [修复复验](docs/review/REVIEW-2026-09-26-fix-verification.md)；**RR-20260926-30 未修复，需维护者拍板契约**（[评估](docs/bugfix/RR-20260926-30.md)）。
+- 修前负对照证据收入仓库：[EVIDENCE-2026-09-26-985d5ba-negative](docs/review/EVIDENCE-2026-09-26-985d5ba-negative.md)。
+
+### 2026-09-26 九项优化与快照调度（8ce21a5、a22c5a5）
+
+- Sync：待快照请求增量索引、轻量 `Stats` 与显式 `AuditStats`；新入场 / 恢复分类公平调度共用预算并可借用空闲额度；冷创建与已有对象全量更新预算分开；恢复诊断与窗口边界修复。
+- DataEngine：`projection.read_bytes`（ReplayReadBytes）独立限制回放读取保留量；Remote 有界滑动窗口并发投影（`RemoteProjectionWorkers`），只 ack 连续成功前缀。
+- Nest：队列区分前驱等待与 worker 等待、峰值 / 年龄 / 拒绝 / 续行观测；指标 key 与单 ID 路径减分配。验收与已接受的性能边界见 [交接文档](docs/CORE-OPTIMIZATION-HANDOFF.md) §4。
+
+### 2026-09-25 Nest 双池复核
 
 - 修复小等待队列在 worker 尚有额度时提前拒绝请求；1024 并发 / 16 等待位已完成调度回归。
 - 修复 Remote 回滚 hook panic 遗留 Entity 本地锁；[复核与验证范围](docs/review/NEST-FAST-SLOW-2026-09-25.md)。
 
-## 2026-09-25 Nest 快慢双池
+### 2026-09-25 Nest 快慢双池
 
 - 统一全部显式目标 ID 准入顺序；main/hb/cost/remote 收敛 Fast/Slow，共享慢队列。
 - 所有 Nest handler/Guard 在快池，慢阶段的加载初始化与失败本地回滚同步交回快池；增加独立并发/整池等待容量配置。
 - [RR-20260925-07](docs/bugfix/RR-20260925-07.md) 与 [本轮验收](docs/feature/REFACTOR-2026-09-25-nest-fast-slow.md)。
-
-本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
-
-## [Unreleased]
 
 ### 2026-09-26 复审修复
 

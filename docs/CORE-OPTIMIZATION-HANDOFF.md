@@ -104,6 +104,7 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 - **2026-09-26 复审核实并修复**：RR-03～06 四条成立；另确认 RR-07（WAL回放漏计）、RR-08（续行占用导致准入/指标分叉）、RR-09（Remote失败缺事务ID）。代码与防回归规则已补齐，race、静态检查及正式生成三链路通过，尚未提交/部署；[逐项判断、负对照和边界](review/REVIEW-2026-09-26-followup.md)。Projected是成功尝试数；Close/Open不等同Hold恢复；periodic仅字节预算的预捕获成本仍存在。此前性能数字未重测。
 - **2026-09-26 上线前复审登记、未修复**（基线 `aaada47`，[复审记录](review/REVIEW-2026-09-26-release.md)）：P1 级 [RR-20260926-10](bug/RR-20260926-10.md)（卸载后投影前重载 → fence 且重启不起来）、[RR-20260926-11](bug/RR-20260926-11.md)（Remote 重放被新 fence 拒绝，投影卡死）、[RR-20260926-12](bug/RR-20260926-12.md)（生成工程 syncbus 配置失效）；另 P2 十二条（RR-13～24）。**§4 的 Remote 30分钟80TPS、120/160TPS 容量与 RR-20260925-05 的 59.997TPS 由直接接 MongoCommitter 的测试装配测得，正式 kit 装配下并行投影未开启（[RR-20260926-21](bug/RR-20260926-21.md)），在正式装配复测前不作为上线依据。** 发版手续（清单 v1.16.1、生成器下限、CHANGELOG）与 CI 状态见复审记录。
 - **2026-09-26 修复复验（基线 `985d5ba`）**：RR-03～24 修复方向大多成立，但引入回归 RR-25～29（其中 RR-25 为 P1：冷实体业务固定失败），另有既有缺陷 RR-30～32 与 11 条复核残留；故障矩阵 20/21 PASS（唯一失败为 RR-29 夹具）。见[复验记录](review/REVIEW-2026-09-26-fix-verification.md)。
+- **2026-09-26 复验问题修复（未发布）**：RR-25～29、31、32 已修复，RR-04/05/07/10/11/12/15/17/19/22/24 复核补修完成；**RR-20260926-30 未修复**（本地 lease fence 跳过，需维护者拍板契约）。RR-28 复核中发现并堵上“持久拒绝后解冻会把被拒绝的内存修改写出”（含修复前 Durability 1 首轮拒绝的同类泄漏）。版本清单与生成器下限已改为 v1.17.0，CHANGELOG 已整理，尚未打 tag。
 - **图谱尚未刷新**：最后generation `2026-09-25T11:41:37Z`。刷新被“pre-coordination or unverified CBM generation is active”阻止；新代码以源码/实际测试补证。环境恢复后重建并检查coverage；不要清未知锁或中断其他实例。
 
 ## 6. 复跑与交付约定
@@ -187,26 +188,26 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260926-07](bug/RR-20260926-07.md) | WAL回放边界漏计 | [修复](bugfix/RR-20260926-07.md) |
 | [RR-20260926-08](bug/RR-20260926-08.md) | 续行占用时队列容量和观测分叉 | [修复](bugfix/RR-20260926-08.md) |
 | [RR-20260926-09](bug/RR-20260926-09.md) | Remote并行投影缺少失败事务ID | [修复](bugfix/RR-20260926-09.md) |
-| [RR-20260926-10](bug/RR-20260926-10.md) | 卸载后投影前重载读旧版本，进程 fence 且重启无法恢复（P1） | 未修复 |
-| [RR-20260926-11](bug/RR-20260926-11.md) | Remote 重放被新 fence 拒绝，WAL 投影永久卡住（P1） | 未修复 |
-| [RR-20260926-12](bug/RR-20260926-12.md) | 生成工程 syncbus 配置段被忽略，JetStream 静默退回 NATS（P1 建议） | 未修复 |
-| [RR-20260926-13](bug/RR-20260926-13.md) | 释放失败跳过 postRemoteCommit，Sync 冻结 | 未修复 |
-| [RR-20260926-14](bug/RR-20260926-14.md) | 持久提交后仍 Abort，远端锁外回滚 | 未修复 |
-| [RR-20260926-15](bug/RR-20260926-15.md) | 同 SessionID 重开被传输层丢弃 | 未修复 |
-| [RR-20260926-16](bug/RR-20260926-16.md) | async checkpoint 先于段 fsync | 未修复 |
-| [RR-20260926-17](bug/RR-20260926-17.md) | 停机不等外部 Flush，checkpoint 回退 | 未修复 |
-| [RR-20260926-18](bug/RR-20260926-18.md) | OpenRuntime Shutdown 不释放 WAL | 未修复 |
-| [RR-20260926-19](bug/RR-20260926-19.md) | 租约跳过后 Remote 事务悬挂 | 未修复 |
-| [RR-20260926-20](bug/RR-20260926-20.md) | Memory 级结果未知被回滚 | 未修复 |
-| [RR-20260926-21](bug/RR-20260926-21.md) | 正式装配未开并行投影，性能口径待复测 | 未修复 |
-| [RR-20260926-22](bug/RR-20260926-22.md) | demo 公会发号 upsert 竞态 | 未修复 |
-| [RR-20260926-23](bug/RR-20260926-23.md) | FatalSuffix 测试竞态与 Windows 时钟断言 | 未修复 |
-| [RR-20260926-24](bug/RR-20260926-24.md) | 迁移表缺 room 映射 | 未修复 |
-| [RR-20260926-25](bug/RR-20260926-25.md) | 生成 sender/demo 不走 Slow，冷实体业务固定失败（P1） | 未修复 |
-| [RR-20260926-26](bug/RR-20260926-26.md) | 快阶段冷缺失被改为 panic | 未修复 |
-| [RR-20260926-27](bug/RR-20260926-27.md) | 快池删除准入 panic 致进程 fence | 未修复 |
-| [RR-20260926-28](bug/RR-20260926-28.md) | Durability 0 未提交结果永无结论 | 未修复 |
-| [RR-20260926-29](bug/RR-20260926-29.md) | kit/dataengine 集成测试夹具失效 | 未修复 |
-| [RR-20260926-30](bug/RR-20260926-30.md) | 本地 lease fence 跳过后投影 fatal | 未修复 |
-| [RR-20260926-31](bug/RR-20260926-31.md) | 闲置交还未等投影即释放租约 | 未修复 |
-| [RR-20260926-32](bug/RR-20260926-32.md) | 提交后 release hook panic 仍 Abort | 未修复 |
+| [RR-20260926-10](bug/RR-20260926-10.md) | 卸载后投影前重载读旧版本，进程 fence 且重启无法恢复（P1） | [修复](bugfix/RR-20260926-10.md) |
+| [RR-20260926-11](bug/RR-20260926-11.md) | Remote 重放被新 fence 拒绝，WAL 投影永久卡住（P1） | [修复](bugfix/RR-20260926-11.md) |
+| [RR-20260926-12](bug/RR-20260926-12.md) | 生成工程 syncbus 配置段被忽略，JetStream 静默退回 NATS（P1 建议） | [修复](bugfix/RR-20260926-12.md) |
+| [RR-20260926-13](bug/RR-20260926-13.md) | 释放失败跳过 postRemoteCommit，Sync 冻结 | [修复](bugfix/RR-20260926-13.md) |
+| [RR-20260926-14](bug/RR-20260926-14.md) | 持久提交后仍 Abort，远端锁外回滚 | [修复](bugfix/RR-20260926-14.md) |
+| [RR-20260926-15](bug/RR-20260926-15.md) | 同 SessionID 重开被传输层丢弃 | [修复](bugfix/RR-20260926-15.md) |
+| [RR-20260926-16](bug/RR-20260926-16.md) | async checkpoint 先于段 fsync | [修复](bugfix/RR-20260926-16.md) |
+| [RR-20260926-17](bug/RR-20260926-17.md) | 停机不等外部 Flush，checkpoint 回退 | [修复](bugfix/RR-20260926-17.md) |
+| [RR-20260926-18](bug/RR-20260926-18.md) | OpenRuntime Shutdown 不释放 WAL | [修复](bugfix/RR-20260926-18.md) |
+| [RR-20260926-19](bug/RR-20260926-19.md) | 租约跳过后 Remote 事务悬挂 | [修复](bugfix/RR-20260926-19.md) |
+| [RR-20260926-20](bug/RR-20260926-20.md) | Memory 级结果未知被回滚 | [修复](bugfix/RR-20260926-20.md) |
+| [RR-20260926-21](bug/RR-20260926-21.md) | 正式装配未开并行投影，性能口径待复测 | [修复](bugfix/RR-20260926-21.md) |
+| [RR-20260926-22](bug/RR-20260926-22.md) | demo 公会发号 upsert 竞态 | [修复](bugfix/RR-20260926-22.md) |
+| [RR-20260926-23](bug/RR-20260926-23.md) | FatalSuffix 测试竞态与 Windows 时钟断言 | [修复](bugfix/RR-20260926-23.md) |
+| [RR-20260926-24](bug/RR-20260926-24.md) | 迁移表缺 room 映射 | [修复](bugfix/RR-20260926-24.md) |
+| [RR-20260926-25](bug/RR-20260926-25.md) | 生成 sender/demo 不走 Slow，冷实体业务固定失败（P1） | [修复](bugfix/RR-20260926-25.md) |
+| [RR-20260926-26](bug/RR-20260926-26.md) | 快阶段冷缺失被改为 panic | [修复](bugfix/RR-20260926-26.md) |
+| [RR-20260926-27](bug/RR-20260926-27.md) | 快池删除准入 panic 致进程 fence | [修复](bugfix/RR-20260926-27.md) |
+| [RR-20260926-28](bug/RR-20260926-28.md) | Durability 0 未提交结果永无结论 | [修复](bugfix/RR-20260926-28.md) |
+| [RR-20260926-29](bug/RR-20260926-29.md) | kit/dataengine 集成测试夹具失效 | [修复](bugfix/RR-20260926-29.md) |
+| [RR-20260926-30](bug/RR-20260926-30.md) | 本地 lease fence 跳过后投影 fatal | 未修复（需维护者拍板，见[评估](bugfix/RR-20260926-30.md)） |
+| [RR-20260926-31](bug/RR-20260926-31.md) | 闲置交还未等投影即释放租约 | [修复](bugfix/RR-20260926-31.md) |
+| [RR-20260926-32](bug/RR-20260926-32.md) | 提交后 release hook panic 仍 Abort | [修复](bugfix/RR-20260926-32.md) |

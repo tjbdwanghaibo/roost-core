@@ -44,12 +44,14 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 //
 // Core rose to v1.16.0 because that is the first release carrying kit/ and
 // codegen/ inside roost-core: everything this generator emits imports
-// roost-core/kit/…, which no earlier tag has. Kit and Codegen stay as fields
+// roost-core/kit/…, which no earlier tag has. It rose again to v1.17.0 because
+// the output now imports sync/* and kit/syncbus (ARCH-12 layout), which
+// v1.16.x does not contain. Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.16.0",
+	Core:    "v1.17.0",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
