@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/viper"
@@ -23,10 +24,14 @@ import (
 type Mod struct {
 	syncSetup  *EntitySyncSetup
 	entitySync *entitysync.Manager
-	getter     entity.Getter
-	opts       []corenest.NestOption
-	engine     *corenest.NestMgr
-	config     engineConfig
+	// autoWatermark 表示 EntitySync 的外发水位由 kit 接线，来源在 Provide 构造引擎后写入 watermark；
+	// Sync 的 Flush 可能在其他 goroutine 读取，所以用原子指针。
+	autoWatermark bool
+	watermark     atomic.Pointer[durableWatermarkSource]
+	getter        entity.Getter
+	opts          []corenest.NestOption
+	engine        *corenest.NestMgr
+	config        engineConfig
 	// dataEngine 是 Provide 时查到的 DataEngine 能力；Start 时用它把 Sync 接上重新加载的实体。
 	dataEngine   any
 	unhookLoaded func()
@@ -122,6 +127,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		opts = append(opts, corenest.NestOptionWithEntitySync(m.entitySync))
 	}
 	m.engine = corenest.NewEngine(opts...)
+	m.bindDurableWatermark(m.engine)
 	capabilities := []mods.Capability{{Name: mods.ModNest, Value: m.engine}}
 	if _, exists := registry.Get(mods.ModEntityRuntime); !exists {
 		capabilities = append(capabilities, mods.Capability{Name: mods.ModEntityRuntime, Value: m.getter})

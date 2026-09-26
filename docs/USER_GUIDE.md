@@ -59,7 +59,19 @@ DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。�
 - `memory`：只承诺内存提交，用于可重建临时状态。
 - `async`：WAL durable admission 后可返回，后台批量落权威存储。
 - `strict`：等待事务 WAL 和存储提交点，适合支付、跨服资产、唯一奖励。
-- `pipelined`：高吞吐 group commit；外部可见结果仍受 durable watermark 约束。
+- `pipelined`：高吞吐 group commit；外部可见结果仍受 durable watermark 约束。Kit 装配的 EntitySync
+  （`kitnest.NewModWithEntitySync`）在业务未显式设置 `ManagerConfig.DurableWatermark` 时自动接 committer 的
+  `DurableLSN`：committer 实现 `PipelinedTransactionCommitter` 时按水位暂缓未持久内容，否则不设门槛
+  （RR-20260926-35）。显式配置优先；自建 `entitysync.Manager` 仍需自己接线，入口 `NestMgr.DurableWatermark()`。
+
+handler 内用当前 Guard 作用域调用 `CreateInScope`（`entity.CurrentGuardScope()`）新建的实体属于当前事务，
+与动态 Cast 相同：纳入回滚 / 持久化参与者与 Sync 提交屏障，提交确认（pipelined 为 ticket 持久）之前不外发；
+handler 报错、panic 或提交被明确拒绝时撤销发布——从 EntityManager 摘除并标记 removed、不写入持久化记录、
+Nest 自己的 EntitySync 注销该 subject（已持有对象的会话收到 ObjectRemove），Guard 释放后调用
+`OnDestroy(DestroyReasonCommon)` 并回收 ID。登记在业务自建 Sync Manager 上的 subject 需在 `OnDestroy` 里自行注销。
+`EntityManager.Create`、生成 Lifecycle 的 `Create` 以及 Nest 之外的 `WithGuardScope` 仍是立即发布的原语义。
+RollbackState 下新实体的 DAO 需要可快照（生成 DAO 已满足），remote-managed 实体在 durable 事务内创建会被拒绝，
+这两条与 Cast 的约束一致。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
 

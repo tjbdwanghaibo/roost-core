@@ -40,6 +40,10 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 
 [正式双模式接入](../docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)：`ModePeriodic` 默认，`ModeOnChange` 锁内冻结、解锁及提交确认后唤醒。Nest option、Kit 配置、生成 DAO 自动收集、Interest 事实队列共用现有交付流水线；`Drain(ctx)` 在生产者停止后排空已登记工作。
 
+事务内新建的实体被回滚或拒绝时，Nest 通过可选的 `entity.SyncSubjectRetractor`（`Manager.RetractSyncSubject`）撤回它，
+语义同 `Unregister`：只撤同一个状态对象的登记，未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，退役完成前同 ID
+重新登记返回 `ErrSubjectRetiring`；已退役 subject 的状态在捕获期间关闭不计 Flush 失败（RR-20260926-35）。
+
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
 
 

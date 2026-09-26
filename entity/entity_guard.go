@@ -70,8 +70,10 @@ func runOnEntityRelease(ent IThreadSafeEntity) {
 // EntityGuard manages per-goroutine entity locks with priority-based deadlock avoidance.
 type EntityGuard struct {
 	syncMutation *SyncMutation
-	eMap         map[int64]IThreadSafeEntity
-	postRelease  []func()
+	// createdCapturer 是当前在本 Guard 上执行的事务；只由持有 Guard 的业务 goroutine 读写。
+	createdCapturer CreatedEntityCapturer
+	eMap            map[int64]IThreadSafeEntity
+	postRelease     []func()
 }
 
 type GuardScope struct {
@@ -207,6 +209,19 @@ func (e *EntityGuard) clean() {
 	clear(e.eMap)
 	e.postRelease = nil
 	e.syncMutation = nil
+	e.createdCapturer = nil
+}
+
+// BindCreatedEntityCapturer 让本 Guard 上后续的 CreateInScope 把新实体交给 capturer，
+// 返回的函数恢复先前的值（嵌套事务各自捕获自己的新实体）。只由持有该 Guard 的
+// 业务 goroutine 调用；Nest 在调用业务 handler 期间绑定当前事务。
+func (e *EntityGuard) BindCreatedEntityCapturer(capturer CreatedEntityCapturer) (restore func()) {
+	if e == nil {
+		return func() {}
+	}
+	previous := e.createdCapturer
+	e.createdCapturer = capturer
+	return func() { e.createdCapturer = previous }
 }
 
 // RequireEntity acquires the entity lock. Returns true on success.

@@ -194,6 +194,9 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})
 				}
 				retry = append(retry, id)
+			case errors.Is(err, entity.ErrSubjectSyncClosed) && subj.retiring:
+				// 已注销的 subject 在捕获期间关闭了状态（实体被销毁或事务内创建被撤销）：
+				// 没有内容可发，只欠下面的 ObjectRemove，不算失败也不重试。
 			case err != nil:
 				failures = append(failures, fmt.Errorf("sync prepare subject %d: %w", id, err))
 				retry = append(retry, id)

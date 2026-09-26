@@ -177,7 +177,11 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 }
 
 // 只恢复业务调用的 panic。成功准入后不能因释放或完成异常再回滚已接受的状态。
+// 业务调用期间把事务绑定到当前 Guard，handler 内 CreateInScope 新建的实体因此进入本事务（RR-20260926-35）。
 func callTransactionHandler(tx *RollbackTx, call func() (any, error)) (any, error) {
+	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
+		defer scope.Guard().BindCreatedEntityCapturer(tx)()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {

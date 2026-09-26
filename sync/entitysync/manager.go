@@ -364,6 +364,23 @@ func (m *Manager) Unregister(subjectID int64) error {
 	return nil
 }
 
+// RetractSyncSubject 实现 entity.SyncSubjectRetractor：事务内新建的实体被回滚或拒绝时，
+// Nest 在仍持有该实体锁时调用它（RR-20260926-35）。只注销以同一个状态对象登记的 subject，
+// 语义与 Unregister 相同：未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，
+// 之后同 ID 的新实体才能重新登记（remove-before-create）。
+func (m *Manager) RetractSyncSubject(state *entity.SubjectSyncState) {
+	if m == nil || state == nil {
+		return
+	}
+	id := state.SubjectID()
+	if subj := m.subject(id); subj == nil || subj.state != state {
+		return
+	}
+	_ = m.Unregister(id)
+}
+
+var _ entity.SyncSubjectRetractor = (*Manager)(nil)
+
 // forget drops a subject whose last remove has gone out.
 func (m *Manager) forget(subjectID int64) {
 	m.mu.Lock()

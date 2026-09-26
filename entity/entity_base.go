@@ -173,11 +173,14 @@ func (e *EntityBase) SetSyncState(syncState *SubjectSyncState) {
 		return
 	}
 	if syncState != nil {
+		// ID 在安装时取定：同步调度器可能在实体被销毁 / 撤销（doClear 清零 id）的同时进入这里，
+		// 不能在锁外再读 EntityBase 的可变字段（RR-20260926-35 的并发 tick 回归在 race 下暴露）。
+		entityID := e.ID()
 		syncState.setEntityLock(func(fn func() error) error {
 			if fn == nil {
 				return nil
 			}
-			if entitySyncLockedInCurrentGuard(e.ID()) || e.GetMutex() == nil {
+			if entitySyncLockedInCurrentGuard(entityID) || e.GetMutex() == nil {
 				return fn()
 			}
 			e.GetMutex().Lock()

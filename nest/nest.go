@@ -475,6 +475,19 @@ func (mgr *NestMgr) Running() bool {
 	return mgr.started && !mgr.stopped && mgr.fenceErr == nil
 }
 
+// DurableWatermark 返回装配的 committer 的持久化水位来源：committer 实现
+// PipelinedTransactionCommitter 时为其 DurableLSN，否则为 nil（同步持久提交不需要外发水位）。
+// 装配层用它给 Sync 的 DurableWatermark 接线，pipelined 事务在 WAL 持久化前不外发（RR-20260926-35）。
+func (mgr *NestMgr) DurableWatermark() func() uint64 {
+	if mgr == nil {
+		return nil
+	}
+	if pipelined, ok := mgr.committer.(PipelinedTransactionCommitter); ok && pipelined != nil {
+		return pipelined.DurableLSN
+	}
+	return nil
+}
+
 type sendOptParam struct {
 	Delay time.Duration
 	Cost  bool

@@ -16,6 +16,14 @@ type SyncCommitObserver interface {
 	WakeSync()
 }
 
+// SyncSubjectRetractor 是 SyncCommitObserver 的可选能力：撤回事务内新建、随后被回滚或拒绝的
+// 实体（RR-20260926-35）。实现方注销该 subject：尚未持有对象的订阅直接移除，已持有对象的会话
+// 在下一帧收到 ObjectRemove（remove-before-create）。只登记在别的调度器上的 subject 不受影响。
+// 在持有该实体锁的业务 goroutine 上调用，不得阻塞或等待网络。
+type SyncSubjectRetractor interface {
+	RetractSyncSubject(*SubjectSyncState)
+}
+
 // SyncChangeCollector 由生成器或手写实体实现。掩码属于实体内容 schema，
 // 不得直接合并不同 DAO 的局部字段位；无法映射时返回 SyncMaskFull。
 type SyncChangeCollector interface{ TakeEntitySyncChanges() uint64 }
@@ -74,7 +82,7 @@ func BeginSyncMutation(es []IThreadSafeEntity, observer SyncCommitObserver) *Syn
 	return b
 }
 
-// Include 将持锁后动态取得的 Cast 实体加入同一提交边界。
+// Include 将持锁后动态取得的 Cast 实体、事务内 CreateInScope 新建的实体加入同一提交边界。
 func (b *SyncMutation) Include(es []IThreadSafeEntity) {
 	if b == nil || b.admitted {
 		return

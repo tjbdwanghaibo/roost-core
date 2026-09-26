@@ -90,6 +90,8 @@ type RollbackTx struct {
 	receiptDigests      map[receiptKey][]byte
 	remoteWrite         bool
 	deleteIntents       map[int64]struct{}
+	// created 是 handler 内 CreateInScope 新建的实体，准入前再次加入 SyncMutation（RR-20260926-35）。
+	created []entity.IThreadSafeEntity
 }
 
 type rollbackTxState uint8
@@ -369,6 +371,7 @@ func (tx *RollbackTx) Rollback() error {
 	tx.afterAdmission = nil
 	tx.admissionErr = nil
 	tx.deleteIntents = nil
+	tx.created = nil
 	tx.participantChanges = nil
 	tx.participantOrder = nil
 	tx.remoteParticipants = nil
@@ -445,6 +448,12 @@ func (tx *RollbackTx) runAfterAdmission() {
 		tx.admissionObserved = true
 		defer observeNestStage(tx.handler, "admission", time.Now())
 	}
+	// 业务可能在 CreateInScope 之后才启用新实体的同步状态；准入前再纳入一次（Include 按状态去重），
+	// 保证新实体与参数实体、Cast 实体共用同一个提交屏障。
+	if len(tx.created) > 0 {
+		tx.syncMutation.Include(tx.created)
+		tx.created = nil
+	}
 	callbacks := tx.afterAdmission
 	tx.afterAdmission = nil
 	for _, fn := range callbacks {
@@ -493,6 +502,7 @@ func (tx *RollbackTx) abandon() {
 	tx.receipts = nil
 	tx.receiptDigests = nil
 	tx.deleteIntents = nil
+	tx.created = nil
 }
 
 func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
@@ -651,6 +661,29 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 	}()
 	return fn()
 }
+
+// CaptureCreatedEntity 实现 entity.CreatedEntityCapturer：handler 内 CreateInScope 新建的实体与动态
+// Cast 一样由本事务捕获回滚与持久化参与者（RR-20260926-35）。revoke 先于捕获登记，回滚时最后执行
+// （回滚函数逆序），所以即使后续捕获部分失败，回滚 / 拒绝也会撤销这次发布。
+func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, revoke func()) error {
+	if tx == nil || tx.state != rollbackTxOpen {
+		return ErrTransactionClosed
+	}
+	if created == nil {
+		return nil
+	}
+	tx.DeferRollback(func() error {
+		revoke()
+		return nil
+	})
+	if err := tx.CaptureEntities([]entity.IThreadSafeEntity{created}); err != nil {
+		return err
+	}
+	tx.created = append(tx.created, created)
+	return nil
+}
+
+var _ entity.CreatedEntityCapturer = (*RollbackTx)(nil)
 
 func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	if tx == nil {
