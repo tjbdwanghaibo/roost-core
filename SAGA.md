@@ -76,10 +76,33 @@ if err := inbox.Bind(command, reservation); err != nil {
 
 Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，以及 ID 为
 `saga-completion:{CommandID}` 的 completion effect 会形成同一个 CommitRecord。Mongo
-投影在同一事务里验证 claim 的 owner、lease token、`pending` 状态和 `lease_until`；任一
-不匹配都只写入幂等的 skipped transaction marker，不应用业务 mutation/effect，并让 WAL
-安全 ACK。这样新 owner 接管后，旧 worker 的晚到记录不能产生副作用，也不会成为永久
-poison WAL。控制 receipt 不进入业务 receipt collection。
+投影在同一事务里对 claim 做一次条件写（owner、lease token、digest、`pending`、
+`lease_until > now` 都匹配才写 `updated_at`）；不匹配就只写入幂等的 skipped transaction
+marker，不应用业务 mutation/effect，并让 WAL 安全 ACK。条件写让投影与另一 worker 的
+过期接管（`$inc lease_token`）写同一文档，二者只能有一个提交：租约到期附近不会出现
+“投影落库、接管也成功”的双执行（RR-20260926-30 §6）。控制 receipt 不进入业务 receipt
+collection。
+
+被跳过的记录已经改过 Nest 内存（扣减、状态推进都在准入前完成），所以框架还保证内存与后续
+WAL 不以它为基础（RR-20260926-30）：
+
+- **实体屏障**：原生步骤记录准入 WAL 后、投影结果确定前，写到同一实体的其他事务在 WAL
+  准入处被拒绝，错误可 `errors.Is(err, dataengine.ErrFencedEntityPending)`（同时满足
+  `nest.ErrCommitRejected`），Nest 在 Guard 内整体回滚，没有写 WAL。这是**可重试**错误：
+  正常只持续一次投影（毫秒级），Mongo 变慢或中断时与投影积压同量级。业务入口应按可重试
+  失败回复客户端或稍后重投，不要当成业务拒绝。同一命令的重投（新 token）同样被挡到屏障
+  解除；`SubscribeDataEngineStep` 在 handler 以该错误失败时交还本次刚拿到的租约，屏障解除
+  后的重投能立刻重新 Reserve，而不是等租约自然过期。
+- **跳过后驱逐**：记录被跳过时，受影响的常驻实体在 Nest 快池内持锁驱逐（不持久化），屏障
+  保持到驱逐完成。之后的访问从 Mongo 重载；已登记的 Sync subject 在重载后被重新绑定，
+  订阅者收到整份全量，而不是在旧版本链上续发增量（驱逐到重载之间该对象不再同步）。
+  `Projector.Stats()` 的 `FencedEntities`、`FencedAdmissionRejected`、`StaleEvictions`
+  以及 `dataengine.fence.*` 指标可观测这两步。
+- **重启**：屏障保证被跳过记录之后没有同实体依赖记录；启动恢复在实体可加载前排空 WAL，
+  跳过后实体从 Mongo 读取，不会 fence。
+
+副作用仍然只发生一次：被跳过的记录不落库、不发 completion；步骤按 Timeout/重投再次执行。
+客户端可能短暂看到被跳过的扣减（它在准入时已经同步出去），重载后的全量会纠正。
 
 **原生步骤不能修改 Remote 实体。** 原生步骤的 CommitRecord 必然带 lease fence control
 receipt；同一 Nest 事务里若还有 Remote 实体的修改，DataEngine 在写 WAL 前返回
@@ -132,6 +155,10 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
   可能超过 lease 的组合，避免尚未处理的批内任务提前失租；
 - worker 数量、batch、Mongo pool 和 JetStream ack 参数必须通过压测确定；
 - 监控 `StoreFailures`、`WorkerFailures`、冲突、发布失败、手工处理量以及各步骤延迟。
+
+原生步骤的 `LeaseDuration` 仍应覆盖投影的高分位延迟：租约只在 Reserve 时设置、不随投影续期，
+投影积压超过租约期时记录会被跳过（上面的屏障与驱逐保证不会 fence，但该步骤要重投再执行一次，
+期间同一实体的写入会被可重试地拒绝）。监控 `StaleEvictions` 的增长可以发现租约偏短。
 
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
