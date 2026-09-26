@@ -65,19 +65,24 @@ func (lifecycle *generatedShapeLifecycle) Create(ctx context.Context, uniqueID i
 }
 
 func (lifecycle *generatedShapeLifecycle) GetOrCreate(ctx context.Context, uniqueID int64) (*rollbackTestEntity, bool, error) {
-	value, err := lifecycle.Get(ctx, uniqueID)
-	if err == nil {
-		return value, false, nil
+	for attempt := 1; ; attempt++ {
+		value, err := lifecycle.Get(ctx, uniqueID)
+		if err == nil {
+			return value, false, nil
+		}
+		if !errors.Is(err, errGeneratedShapeNotFound) {
+			return nil, false, err
+		}
+		value, err = lifecycle.Create(ctx, uniqueID)
+		if errors.Is(err, entity.ErrEntityExists) {
+			value, err = lifecycle.Get(ctx, uniqueID)
+			return value, false, err
+		}
+		if errors.Is(err, entity.ErrEntityRemoved) && attempt < 3 {
+			continue
+		}
+		return value, err == nil, err
 	}
-	if !errors.Is(err, errGeneratedShapeNotFound) {
-		return nil, false, err
-	}
-	value, err = lifecycle.Create(ctx, uniqueID)
-	if errors.Is(err, entity.ErrEntityExists) {
-		value, err = lifecycle.Get(ctx, uniqueID)
-		return value, false, err
-	}
-	return value, err == nil, err
 }
 
 // lifecycleEntries 是 handler 内新建实体的两个生成入口。

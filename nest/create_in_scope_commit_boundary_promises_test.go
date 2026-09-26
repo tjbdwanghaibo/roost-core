@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,11 +24,17 @@ func createdInScopePacker(e entity.IThreadSafeEntity) entity.SubjectSyncPacker {
 	return entity.SubjectSyncPackFunc{Snapshot: packed, Delta: func(p entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) { return packed(p) }}
 }
 
+// createdInScopeBuildHook 让个别用例在新实例构造时插入同步点（RR-20260926-57 用它确定 GetOrCreate 的重试时机）。
+var createdInScopeBuildHook atomic.Pointer[func()]
+
 func init() {
 	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 		Category: entity.EntityCategory(1),
 		Kind:     createdInScopeKind,
 		Builder: func(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+			if hook := createdInScopeBuildHook.Load(); hook != nil {
+				(*hook)()
+			}
 			return &rollbackTestEntity{
 				EntityBase: entity.NewEntityBaseWithMutex(p.Id, p.Category, false, p.Mutex, p.Kind),
 				dao:        &rollbackTestDao{id: p.Id},

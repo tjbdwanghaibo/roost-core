@@ -189,14 +189,13 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			case errors.Is(err, entity.ErrSubjectSyncClosed):
 				// 实体已卸载或被驱逐，内容状态随之关闭：不捕获、不重试、不算失败。订阅者保留原对象，
 				// 直到 Rebind 接上重新加载的实体（强制全量）或 Unregister 发出 remove（RR-20260926-30）。
+				// 已注销（subj.retiring）的 subject 在捕获期间关闭了状态（实体被销毁或事务内创建被撤销，
+				// RR-20260926-35）也落在这里：没有内容可发，只欠后面的 ObjectRemove。
 			case errors.Is(err, entity.ErrSyncCommitPending):
 				if m.config.Trace != nil {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})
 				}
 				retry = append(retry, id)
-			case errors.Is(err, entity.ErrSubjectSyncClosed) && subj.retiring:
-				// 已注销的 subject 在捕获期间关闭了状态（实体被销毁或事务内创建被撤销）：
-				// 没有内容可发，只欠下面的 ObjectRemove，不算失败也不重试。
 			case err != nil:
 				failures = append(failures, fmt.Errorf("sync prepare subject %d: %w", id, err))
 				retry = append(retry, id)

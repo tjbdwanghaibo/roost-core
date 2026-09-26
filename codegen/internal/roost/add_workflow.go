@@ -129,20 +129,30 @@ func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error)
 	return typed, nil
 }
 
+// GetOrCreate returns the existing Entity or creates it when persistence has
+// no record. entity.ErrEntityRemoved means the previous instance with this ID
+// is still finishing its removal (a revoked in-transaction create or a
+// Destroy); it is transient, so the lookup is retried a bounded number of
+// times before the error is returned.
 func (lifecycle *%s) GetOrCreate(ctx context.Context, uniqueID int64) (*%s.%s, bool, error) {
-	value, err := lifecycle.Get(ctx, uniqueID)
-	if err == nil {
-		return value, false, nil
+	for attempt := 1; ; attempt++ {
+		value, err := lifecycle.Get(ctx, uniqueID)
+		if err == nil {
+			return value, false, nil
+		}
+		if !errors.Is(err, {{PERSISTENCE_NOT_FOUND}}) && !errors.Is(err, Err%sNotFound) {
+			return nil, false, err
+		}
+		value, err = lifecycle.Create(ctx, uniqueID)
+		if errors.Is(err, entity.ErrEntityExists) {
+			value, err = lifecycle.Get(ctx, uniqueID)
+			return value, false, err
+		}
+		if errors.Is(err, entity.ErrEntityRemoved) && attempt < 3 {
+			continue
+		}
+		return value, err == nil, err
 	}
-	if !errors.Is(err, {{PERSISTENCE_NOT_FOUND}}) && !errors.Is(err, Err%sNotFound) {
-		return nil, false, err
-	}
-	value, err = lifecycle.Create(ctx, uniqueID)
-	if errors.Is(err, entity.ErrEntityExists) {
-		value, err = lifecycle.Get(ctx, uniqueID)
-		return value, false, err
-	}
-	return value, err == nil, err
 }
 
 func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.EntityDestroyReason, deletePersisted bool) error {

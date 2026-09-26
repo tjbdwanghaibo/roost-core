@@ -80,6 +80,7 @@ handler 内新建实体的锁持有到 handler 结束（memory handler 也一样
 `Create` 返回满足 `errors.Is(err, nest.ErrLockTimeout)` 的错误，可回滚（state / undo）的事务整条回滚后自动重新准入——即使业务吞掉了这个错误；
 重排后排到同 ID 后继之后，多次仍冲突时调用方收到锁超时。rollback=none 的 handler 不强制回滚，请直接返回该错误
 （[RR-20260926-48](bugfix/RR-20260926-48.md)）。
+生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
 

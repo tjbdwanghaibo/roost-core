@@ -477,7 +477,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
 		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},
 		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
-		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer"},
+		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3"},
 		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
 	}
 	for path, fragments := range checks {
