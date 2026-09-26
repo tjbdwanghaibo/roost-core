@@ -24,18 +24,67 @@ const (
 	legacyConfigSection = "sync"
 )
 
+// configKeys 是本 Mod 读取的全部键。三个配置段里的其他键没有任何效果，
+// 由 configWarnings 在启动时说出来（RR-20260926-12）。
+var configKeys = []string{
+	"transport", "prefix", "stream", "storage", "ack_wait", "max_deliver", "stream_max_age",
+	"duplicates", "replicas", "max_bytes", "setup_timeout", "publish_timeout",
+}
+
 func configKey(cfg *viper.Viper, key string) string {
-	if cfg.IsSet(configSection + "." + key) {
-		return configSection + "." + key
-	}
-	if cfg.IsSet(roomConfigSection + "." + key) {
-		return roomConfigSection + "." + key
-	}
-	if cfg.IsSet(legacyConfigSection + "." + key) {
-		slog.Warn("syncbus mod: config section \"sync\" is deprecated, rename it to \"syncbus\"", "key", key)
-		return legacyConfigSection + "." + key
+	for _, section := range []string{configSection, roomConfigSection, legacyConfigSection} {
+		if cfg.IsSet(section + "." + key) {
+			return section + "." + key
+		}
 	}
 	return configSection + "." + key
+}
+
+// configWarnings 列出配置里写了却不会生效或即将失效的部分。RR-12 的根因是生成器
+// 改了段名而 Mod 整段忽略、没有任何提示，所以“没被读取”必须可观测：
+//   - room / sync 段里本 Mod 实际读取的键：兼容读取，但告警弃用；
+//   - 被更高优先级段遮住的旧键：写了也不生效；
+//   - syncbus / room 段里不认识的键（多半是拼写错误）：没有任何效果。
+//
+// sync 段只看本 Mod 的键，sync.entity 归 kit/nest，不算未知。
+func configWarnings(cfg *viper.Viper) []string {
+	known := make(map[string]bool, len(configKeys))
+	for _, key := range configKeys {
+		known[key] = true
+	}
+	var warnings []string
+	for _, section := range []string{configSection, roomConfigSection, legacyConfigSection} {
+		var deprecated, shadowed, unknown []string
+		for _, full := range cfg.AllKeys() {
+			rest, ok := strings.CutPrefix(full, section+".")
+			if !ok {
+				continue
+			}
+			key, _, _ := strings.Cut(rest, ".")
+			switch {
+			case !known[key]:
+				// sync 段是共享的旧命名空间（sync.entity.* 归 kit/nest），
+				// 那里本 Mod 不认识的键不归它判断。
+				if section != legacyConfigSection {
+					unknown = append(unknown, full)
+				}
+			case configKey(cfg, key) != section+"."+key:
+				shadowed = append(shadowed, full+" (overridden by "+configKey(cfg, key)+")")
+			case section != configSection:
+				deprecated = append(deprecated, full)
+			}
+		}
+		if len(deprecated) > 0 {
+			warnings = append(warnings, fmt.Sprintf("config section %q is deprecated, rename %s to the %q section", section, strings.Join(deprecated, ", "), configSection))
+		}
+		if len(shadowed) > 0 {
+			warnings = append(warnings, "config keys are ignored: "+strings.Join(shadowed, ", "))
+		}
+		if len(unknown) > 0 {
+			warnings = append(warnings, "unknown config keys are ignored: "+strings.Join(unknown, ", "))
+		}
+	}
+	return warnings
 }
 
 func cfgGetString(cfg *viper.Viper, key string) string { return cfg.GetString(configKey(cfg, key)) }
@@ -70,6 +119,15 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 		m.prefix = "roost.room"
 	}
 	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
+	switch m.transport {
+	case "", "nats", "jetstream", "js":
+	default:
+		// 旧实现把任何不认识的值当作普通 NATS：配置的持久投递静默降级（RR-20260926-12）。
+		return fmt.Errorf("syncbus mod: %s must be nats or jetstream, got %q", configKey(cfg, "transport"), m.transport)
+	}
+	for _, warning := range configWarnings(cfg) {
+		slog.Warn("syncbus mod: " + warning)
+	}
 	m.jsCfg = driver.JetStreamSyncConfig{
 		LocalSid:     m.localSid,
 		Prefix:       m.prefix,

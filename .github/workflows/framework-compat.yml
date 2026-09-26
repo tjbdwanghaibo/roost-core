@@ -196,6 +196,13 @@ jobs:
               exit 1
             fi
             echo "$svc: service init reached, process alive"
+            # RR-20260926-12: the generated config asks for JetStream; the
+            # process must say it started on it, not fall back to plain NATS.
+            if [ "$svc" = game ] && ! grep -q '"msg":"syncbus mod: started".*"transport":"jetstream"' "$svc.boot.log"; then
+              echo "::error::generated game process did not start the sync bus on the configured jetstream transport"
+              grep 'syncbus mod' "$svc.boot.log" || true
+              exit 1
+            fi
             kill "$pid"
             wait "$pid" 2>/dev/null || true
           }
@@ -223,6 +230,14 @@ jobs:
           done
           docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' | grep -q '^1$'
           READY_TIMEOUT=180 sh deploy/dev/run.sh start
+          # RR-20260926-12: the configured transport is the one the running
+          # game process uses (the unit-level check is the generated
+          # internal/service/game/syncbus_config_test.go).
+          if ! grep -q '"msg":"syncbus mod: started".*"transport":"jetstream"' .dev/game.log; then
+            echo "::error::game did not start the sync bus on the configured jetstream transport"
+            grep 'syncbus mod' .dev/game.log || true
+            exit 1
+          fi
           go run ./cmd/loadtest -count 6
           sh deploy/dev/run.sh stop
       - name: dev stack state (on failure)

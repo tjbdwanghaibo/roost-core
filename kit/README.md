@@ -471,6 +471,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
+配置段为 `syncbus:`（键：transport / prefix / stream / storage / ack_wait / max_deliver / stream_max_age / duplicates / replicas / max_bytes / setup_timeout / publish_timeout）；旧 `room:` / `sync:` 段兼容读取但启动告警弃用，被 `syncbus:` 遮住的旧键、`syncbus:` / `room:` 里不认识的键都告警；`transport` 只接受 nats / jetstream（js），写错直接 Init 失败而不是退回普通 NATS（RR-20260926-12）。启动日志 `syncbus mod: started` 的 `transport` 是实际生效的那个。
 
 ### syncstream（roost-core）：observer 维度的包流
 
