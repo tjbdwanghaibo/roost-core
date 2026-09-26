@@ -14,21 +14,25 @@ import (
 // remoteEntityWrapper is an internal per-entity coordination cell. Business
 // code can only reach it through RemoteWriteBatch and immutable snapshot APIs.
 type remoteEntityWrapper struct {
-	id          int64
-	category    entity.EntityCategory
-	kind        entity.EntityKind
-	e           entity.IThreadSafeRemoteEntity
-	rMu         redis.IVersionedLock
-	entityMu    sync.Mutex
-	marker      atomic.Uint32
-	markerAt    atomic.Int64
-	markerLease entity.RemoteEntityMarkerLease
-	markerMu    sync.RWMutex
-	ownershipMu sync.RWMutex
-	writeGate   chan struct{}
-	mgr         *Manager
-	refs        atomic.Int64
-	lastUsed    atomic.Int64
+	id       int64
+	category entity.EntityCategory
+	kind     entity.EntityKind
+	e        entity.IThreadSafeRemoteEntity
+	rMu      redis.IVersionedLock
+	entityMu sync.Mutex
+	// rejectedStale 是因 Remote 写被持久拒绝而隔离、等待框架仅内存卸载并从权威重载的旧实例（RR-20260926-62），
+	// 与 e 同由 entityMu 保护。写准入见到它仍处于隔离时返回可重试的 entity.ErrRemoteEntityReloading，而不是通用的
+	// ErrRemoteFenced；关联上别的实例或 loader 不支持卸载时清除。
+	rejectedStale entity.IThreadSafeRemoteEntity
+	marker        atomic.Uint32
+	markerAt      atomic.Int64
+	markerLease   entity.RemoteEntityMarkerLease
+	markerMu      sync.RWMutex
+	ownershipMu   sync.RWMutex
+	writeGate     chan struct{}
+	mgr           *Manager
+	refs          atomic.Int64
+	lastUsed      atomic.Int64
 }
 
 const (
@@ -102,7 +106,44 @@ func (w *remoteEntityWrapper) invalidateMarker() {
 func (w *remoteEntityWrapper) attachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Lock()
 	w.e = e
+	if w.rejectedStale != nil && w.rejectedStale != e {
+		// 已换成从权威重载的新实例：重载窗口结束。
+		w.rejectedStale = nil
+	}
 	w.entityMu.Unlock()
+}
+
+// markRejectedReload 记录 e 因持久拒绝被隔离、正等待框架卸载重载（RR-20260926-62）。
+func (w *remoteEntityWrapper) markRejectedReload(e entity.IThreadSafeRemoteEntity) {
+	if w == nil || e == nil {
+		return
+	}
+	w.entityMu.Lock()
+	w.rejectedStale = e
+	w.entityMu.Unlock()
+}
+
+// clearRejectedReload 在不会由框架重载时（loader 不支持卸载）撤销标记，写准入回到通用的 ErrRemoteFenced。
+func (w *remoteEntityWrapper) clearRejectedReload(e entity.IThreadSafeRemoteEntity) {
+	if w == nil {
+		return
+	}
+	w.entityMu.Lock()
+	if w.rejectedStale == e {
+		w.rejectedStale = nil
+	}
+	w.entityMu.Unlock()
+}
+
+// rejectedReloadPending 报告 e 是否是等待框架卸载重载的被拒绝实例。
+func (w *remoteEntityWrapper) rejectedReloadPending(e entity.IThreadSafeRemoteEntity) bool {
+	if w == nil || e == nil {
+		return false
+	}
+	w.entityMu.Lock()
+	pending := w.rejectedStale == e
+	w.entityMu.Unlock()
+	return pending
 }
 
 // detachEntity 在实例被仅内存卸载后解除关联；已换成新实例时不动（RR-20260926-39）。
@@ -110,6 +151,10 @@ func (w *remoteEntityWrapper) detachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Lock()
 	if w.e == e {
 		w.e = nil
+	}
+	if w.rejectedStale == e {
+		// 卸载已完成，下一次访问直接从权威重载，不再需要按旧实例判断重载窗口。
+		w.rejectedStale = nil
 	}
 	w.entityMu.Unlock()
 }

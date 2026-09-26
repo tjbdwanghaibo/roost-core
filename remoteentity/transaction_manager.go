@@ -536,7 +536,12 @@ func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*re
 			}
 		}
 	})
-	return errors.Join(runErr, m.quarantineEntries(entries, entity.ErrRemoteRejected))
+	if err := errors.Join(runErr, m.quarantineEntries(entries, entity.ErrRemoteRejected)); err != nil {
+		return err
+	}
+	// gate 释放之后框架会卸载这些实例、下一次访问从权威重载；其间下一写者得到可重试的重载哨兵（RR-20260926-62）。
+	m.markRejectedReloadPending(entries)
+	return nil
 }
 
 // reconcileRemoteEntries 确认已 Committed 事务的本地实体。本进程已完成发布（投影器或 finalizer 的

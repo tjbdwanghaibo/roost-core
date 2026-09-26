@@ -20,6 +20,11 @@ var (
 	ErrRemoteWriteCapabilityDisabled = errors.New("remote entity: write capability disabled")
 	ErrRemoteInvalidStateTransition  = errors.New("remote entity: invalid ownership transition")
 	ErrRemoteCommitNotFinalized      = errors.New("remote entity: commit not finalized")
+	// ErrRemoteEntityReloading 表示实例因 Remote 写被持久拒绝而隔离、框架正在把它仅内存卸载并从权威重新加载
+	// （RR-20260926-39 / 62）：gate 释放到卸载完成之间的下一写者、卸载（Destroy）过程中发起的重载都得到它。
+	// 这是可重试错误：卸载完成后的下一次访问得到从权威重载的新实例。它包裹 ErrRemoteFenced，
+	// 既有 errors.Is(err, ErrRemoteFenced) 判断保持成立；需要区分“可重试的重载窗口”时先判断本哨兵。
+	ErrRemoteEntityReloading = fmt.Errorf("%w: rejected instance is being unloaded and reloaded from the authority (retryable)", ErrRemoteFenced)
 )
 
 type RemoteOwnershipState uint8

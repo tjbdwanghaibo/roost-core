@@ -230,6 +230,11 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 				_ = w.unlockObserved(ctx, w.rMu.Version())
 			}
 			release()
+			if errors.Is(loadErr, entity.ErrEntityRemoved) {
+				// 旧实例正被卸载（Destroy 已把它移出索引、生命周期回调未结束），EntityManager 拒绝登记重载的实例：
+				// 这是卸载重载窗口，可重试（RR-20260926-62）。
+				return nil, fmt.Errorf("%w: entity %d: %w", entity.ErrRemoteEntityReloading, w.id, loadErr)
+			}
 			return nil, fmt.Errorf("remote_entity: load entity %d: %w", w.id, loadErr)
 		}
 	}
@@ -265,7 +270,11 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			}
 			release()
 			cause := entity.ErrRemoteOwnerTransition
-			if state == entity.RemoteOwnershipFenced || state == entity.RemoteOwnershipQuarantined {
+			switch {
+			case state == entity.RemoteOwnershipQuarantined && w.rejectedReloadPending(remote):
+				// 持久拒绝已收尾、gate 已释放，框架即将卸载这份旧实例并从权威重载：可重试（RR-20260926-62）。
+				cause = entity.ErrRemoteEntityReloading
+			case state == entity.RemoteOwnershipFenced || state == entity.RemoteOwnershipQuarantined:
 				cause = entity.ErrRemoteFenced
 			}
 			return nil, fmt.Errorf("%w: entity=%d state=%s", cause, w.id, state)
@@ -463,17 +472,24 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 		receipts = status.Receipts
 	}
 	if err != nil {
+		rejected := false
 		if outcome.Durability == 2 || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 			b.mu.Lock()
 			b.indeterminate = true
 			b.mu.Unlock()
 		} else if outcome.Durability == 0 {
 			err = errors.Join(err, entity.RunLocal(ctx, func() { b.mgr.rollbackRemoteEntries(b.entries) }))
+			rejected = true
 			b.mu.Lock()
 			b.rejected = true
 			b.mu.Unlock()
 		}
-		return nil, errors.Join(err, b.mgr.quarantineEntries(b.entries, err))
+		quarantineErr := b.mgr.quarantineEntries(b.entries, err)
+		if rejected && quarantineErr == nil {
+			// 明确拒绝：Close 释放后卸载这些实例，其间下一写者得到可重试的重载哨兵（RR-20260926-62）。
+			b.mgr.markRejectedReloadPending(b.entries)
+		}
+		return nil, errors.Join(err, quarantineErr)
 	}
 	b.mu.Lock()
 	b.committed = true

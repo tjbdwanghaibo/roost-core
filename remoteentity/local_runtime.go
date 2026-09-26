@@ -51,7 +51,13 @@ func runLocalStep(ctx context.Context, fn func()) (ran bool, err error) {
 // entry.unloaded，重试只处理剩余条目。loader 不支持卸载时返回 entity.ErrRemoteUnloadUnsupported：
 // 实例保持隔离，等业务自行重新加载（旧行为）。本地执行入口拒绝投递（Nest 不在运行）时返回错误，
 // 调用方保持隔离并重试。
-func (m *Manager) unloadRejectedEntities(ctx context.Context, entries []*remoteWriteEntry) error {
+func (m *Manager) unloadRejectedEntities(ctx context.Context, entries []*remoteWriteEntry) (err error) {
+	defer func() {
+		if errors.Is(err, entity.ErrRemoteUnloadUnsupported) {
+			// 不会由框架重载：撤销“重载中”标记，下一写者回到通用的 ErrRemoteFenced（隔离到业务自行重载）。
+			clearRejectedReloadPending(entries)
+		}
+	}()
 	unloader, ok := m.backend.(entity.IRemoteEntityUnloader)
 	if !ok {
 		return entity.ErrRemoteUnloadUnsupported
@@ -87,6 +93,28 @@ func (m *Manager) unloadRejectedEntities(ctx context.Context, entries []*remoteW
 		runErr = errors.New("remote_entity: local executor did not run the unload")
 	}
 	return errors.Join(runErr, failed)
+}
+
+// markRejectedReloadPending 在持久拒绝收尾（回滚 + 隔离）之后，把批次内的旧实例登记为“等待框架卸载重载”
+// （RR-20260926-62）：gate 释放到卸载完成之间，写准入对它返回可重试的 entity.ErrRemoteEntityReloading（包裹
+// ErrRemoteFenced）。loader 不能卸载时不登记——实例只能隔离到业务自行重载，继续是通用的 ErrRemoteFenced。
+func (m *Manager) markRejectedReloadPending(entries []*remoteWriteEntry) {
+	if _, ok := m.backend.(entity.IRemoteEntityUnloader); !ok {
+		return
+	}
+	for _, entry := range entries {
+		if entry != nil && entry.wrapper != nil && entry.entity != nil && !entry.unloaded {
+			entry.wrapper.markRejectedReload(entry.entity)
+		}
+	}
+}
+
+func clearRejectedReloadPending(entries []*remoteWriteEntry) {
+	for _, entry := range entries {
+		if entry != nil && entry.wrapper != nil {
+			entry.wrapper.clearRejectedReload(entry.entity)
+		}
+	}
 }
 
 // unloadRemoteEntityOnce 把卸载里的 panic（业务 OnDestroy 等）转成错误，不让它打穿 finalizer 或快池续行。

@@ -26,9 +26,14 @@ type reloadableFullDocEntity struct {
 	*fullDocRemoteEntity
 	destroyed       chan entity.EntityDestroyReason
 	destroyedOnFast atomic.Bool
+	// duringDestroy 在 OnDestroy 开头调用（实例已离开索引、EntityManager 仍把该 ID 记为 removing），供回归停在卸载过程中。
+	duringDestroy func()
 }
 
 func (e *reloadableFullDocEntity) OnDestroy(reason entity.EntityDestroyReason) {
+	if e.duringDestroy != nil {
+		e.duringDestroy()
+	}
 	e.destroyedOnFast.Store(fctx.InFastWorker())
 	select {
 	case e.destroyed <- reason:
