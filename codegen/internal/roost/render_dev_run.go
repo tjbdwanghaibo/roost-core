@@ -70,7 +70,7 @@ func renderDevRun(m Manifest) string {
 	b.WriteString("# Each service gets its own ops port (configs/service/config.<svc>.yaml ops.addr) so they coexist;\n")
 	b.WriteString("# pids and logs are under .dev/. SID and READY_TIMEOUT are overridable from the environment.\n")
 	b.WriteString("# SERVICES entries are name:ops-port:stop-grace-seconds; stop waits the grace (the service's\n")
-	b.WriteString("# generated shutdown.total_timeout + 5s) before kill -9.\n")
+	b.WriteString("# generated shutdown.total_timeout, or the longer total its configs set, + 5s) before kill -9.\n")
 	b.WriteString("set -eu\n\n")
 	b.WriteString("SERVICES=\"" + strings.Join(services, " ") + "\"\n")
 	b.WriteString("SID=\"${SID:-1000}\"\nREADY_TIMEOUT=\"${READY_TIMEOUT:-90}\"\nDEV_DIR=\".dev\"\nBIN=\"bin/app\"\n\n")
@@ -288,7 +288,7 @@ cmd_stop() {
   pid=$(cat "$PID_FILE")
   kill "$pid" 2>/dev/null || true
   i=0
-  # The %[1]s service's generated shutdown.total_timeout + 5s.
+  # The %[1]s service's grace period: its shutdown.total_timeout (generated, or the longer configured one) + 5s.
   while kill -0 "$pid" 2>/dev/null && [ "$i" -lt %[7]d ]; do i=$((i + 1)); sleep 1; done
   rm -f "$PID_FILE"
   echo "${SERVICE}2: stopped"

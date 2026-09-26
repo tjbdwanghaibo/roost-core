@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -67,6 +68,12 @@ type Manifest struct {
 	Features   []string               `yaml:"features,omitempty"`
 	Sagas      []string               `yaml:"sagas,omitempty"`
 	IDs        map[string]IDSpace     `yaml:"ids,omitempty"`
+
+	// configuredShutdown is each service's longest shutdown.total_timeout
+	// found in the project's configs, filled by withConfiguredShutdown when
+	// rendering into an existing project. The deployment grace periods never
+	// go below it (RR-20260926-66). Not part of roost.yaml.
+	configuredShutdown map[string]time.Duration
 }
 
 type ProjectSpec struct {

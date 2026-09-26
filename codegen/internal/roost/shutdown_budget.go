@@ -26,10 +26,12 @@ import (
 // service from the Mods its bootstrap registers:
 //
 //	total_timeout = declared budgets + generatedModStopFloor x undeclared Mods + generatedShutdownMargin
-//	grace period  = total_timeout + generatedGraceOverTotal
+//	grace period  = max(total_timeout, the longest total the service's configs set) + generatedGraceOverTotal
 //
 // and writes the same numbers into the service's configs and every deployment
-// template (k8s, compose, systemd, the dev scripts).
+// template (k8s, compose, systemd, the dev scripts). The grace period never
+// goes below what the configs actually set (RR-20260926-66 复核): configs are
+// application-owned and may hold an edited or older total.
 const (
 	// generatedModStopFloor mirrors app.undeclaredModStopFloor.
 	generatedModStopFloor = 3 * time.Second
@@ -64,17 +66,36 @@ type serviceShutdown struct {
 	declaring int
 	declared  time.Duration
 	margin    time.Duration
-	total     time.Duration
-	grace     time.Duration
+	// total is the formula's shutdown.total_timeout.
+	total time.Duration
+	// grace is what the deployment templates wait after SIGTERM:
+	// max(total, the longest total the project's configs actually set) + 5s.
+	grace time.Duration
 }
 
 func (plan serviceShutdown) undeclared() int { return plan.mods - plan.declaring }
+
+// sameFormula reports whether two plans would render the same shutdown: block
+// (grace is not part of it: the block states total_timeout + 5s).
+func (plan serviceShutdown) sameFormula(other serviceShutdown) bool {
+	return plan.mods == other.mods && plan.declaring == other.declaring && plan.declared == other.declared &&
+		plan.margin == other.margin && plan.total == other.total
+}
 
 // serviceShutdownPlan counts what the bootstrap registers for the service
 // (renderBootstrap: the shared a.Mods list, then serviceModConstructors) and
 // applies the formula. Only dataengine declares a stop budget among the Mods
 // the generator wires; every other Kit, framework, rpc and access Mod gets the
 // floor.
+//
+// The grace period never goes below the total the service's configs actually
+// set (m.configuredShutdown, see withConfiguredShutdown): configs are
+// application-owned, so a hand-edited total, a block from a generator before
+// RR-20260926-66 (60s for every service) or a missing key (the App's 30s
+// fallback) stays as it is while the templates are regenerated on every sync.
+// A grace period computed from the formula alone would then be shorter than
+// the window the App waits for, and the platform would SIGKILL the process
+// halfway through stopping its Mods.
 func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 	shared, _ := resolveMods(m.SharedMods)
 	own, _ := resolveMods(effectiveServiceMods(m, service))
@@ -86,8 +107,75 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 		}
 	}
 	plan.total = plan.declared + time.Duration(plan.undeclared())*generatedModStopFloor + plan.margin
-	plan.grace = plan.total + generatedGraceOverTotal
+	plan.grace = max(plan.total, m.configuredShutdown[service]) + generatedGraceOverTotal
 	return plan
+}
+
+// withConfiguredShutdown returns m carrying, per service, the longest
+// shutdown.total_timeout the project's configs set (configuredShutdownTotal),
+// for rendering into the project at root. A service whose configs do not exist
+// yet (being created in this render) gets none: its config is the one being
+// written, with the formula's total.
+func (m Manifest) withConfiguredShutdown(root string) Manifest {
+	configured := make(map[string]time.Duration, len(m.Services))
+	for _, service := range sortedServiceNames(m) {
+		if total, _, ok := configuredShutdownTotal(root, service); ok {
+			configured[service] = total
+		}
+	}
+	m.configuredShutdown = configured
+	return m
+}
+
+// configuredShutdownTotal is the longest shutdown.total_timeout the service's
+// configs in the project set — the dev config, the production example and the
+// k8s secret example (a real production config outside the repository cannot
+// be seen; docs say so) — as the App would read it: a missing key, or a value
+// the App cannot parse as a duration, is the App's 30s fallback. It also
+// returns which file set it; ok is false when none of the files exists.
+func configuredShutdownTotal(root, service string) (time.Duration, string, bool) {
+	var longest time.Duration
+	var from string
+	found := false
+	for _, target := range shutdownConfigTargets(service) {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.rel)))
+		if err != nil {
+			continue
+		}
+		total := configTotalTimeout(raw, target.indent != "")
+		if !found || total > longest {
+			longest, from = total, target.rel
+		}
+		found = true
+	}
+	return longest, from, found
+}
+
+// configTotalTimeout reads shutdown.total_timeout from a service config, or
+// from the config.yaml a k8s Secret example carries.
+func configTotalTimeout(raw []byte, secret bool) time.Duration {
+	if secret {
+		var document struct {
+			StringData map[string]string `yaml:"stringData"`
+		}
+		if yaml.Unmarshal(raw, &document) != nil {
+			return appDefaultShutdownTotal
+		}
+		raw = []byte(document.StringData["config.yaml"])
+	}
+	var config struct {
+		Shutdown struct {
+			TotalTimeout string `yaml:"total_timeout"`
+		} `yaml:"shutdown"`
+	}
+	if yaml.Unmarshal(raw, &config) != nil {
+		return appDefaultShutdownTotal
+	}
+	total, err := time.ParseDuration(strings.TrimSpace(config.Shutdown.TotalTimeout))
+	if err != nil || total <= 0 {
+		return appDefaultShutdownTotal
+	}
+	return total
 }
 
 // seconds renders a whole-second duration the way the generated YAML and
@@ -112,7 +200,7 @@ func renderShutdownConfig(plan serviceShutdown) string {
 		"  # >= total_timeout + 5s: %s for this service.\n"+
 		"  total_timeout: %s\n  serve_wait_timeout: 5s\n",
 		plan.mods, seconds(plan.declared), plan.undeclared(), seconds(plan.margin), seconds(plan.total),
-		seconds(plan.grace), seconds(plan.total))
+		seconds(plan.total+generatedGraceOverTotal), seconds(plan.total))
 }
 
 var generatedShutdownSummary = regexp.MustCompile(`Generated for this service's (\d+) Mods: (\d+)s declared \+ 3s x (\d+)\n *# undeclared \+ (\d+)s for Service\.Shutdown = (\d+)s\.`)
@@ -176,7 +264,7 @@ func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) 
 			}
 			body := string(raw)
 			written, ok := parseGeneratedShutdown(body)
-			if !ok || written == plan {
+			if !ok || written.sameFormula(plan) {
 				continue
 			}
 			before := indentText(renderShutdownConfig(written), target.indent)
@@ -193,14 +281,97 @@ func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) 
 	return changed, nil
 }
 
-// checkShutdownBudgets is the doctor's view of the same numbers for a config
-// the generator no longer maintains (edited, or from before RR-20260926-66):
-// total_timeout has to cover the Mods' floors and the declared budget, and the
-// generated grace period has to outlast it, or the platform kills the process
-// while the App is still stopping Mods.
+// deployedGrace is one grace period a deployment template on disk sets.
+type deployedGrace struct {
+	rel   string
+	grace time.Duration
+}
+
+var (
+	k8sGracePattern      = regexp.MustCompile(`terminationGracePeriodSeconds: (\d+)`)
+	composeGracePattern  = regexp.MustCompile(`stop_grace_period: (\d+)s`)
+	legacySystemdPattern = regexp.MustCompile(`\nTimeoutStopSec=(\d+)s\n`)
+	devStopWaitPattern   = regexp.MustCompile(`kill -0 "\$pid" 2>/dev/null && \[ "\$i" -lt (\d+) \]`)
+	nextComposeService   = regexp.MustCompile(`\n  [a-z0-9_-]+:\n`)
+)
+
+// deployedGracePeriods reads the service's grace period out of every
+// deployment template present on disk — as generated now, or by a generator
+// before RR-20260926-66 (one value for every service) — so doctor can compare
+// what the platform will wait with what the App will take.
+func deployedGracePeriods(root string, m Manifest, service string) []deployedGrace {
+	read := func(rel string) string {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	}
+	var out []deployedGrace
+	add := func(rel string, match []string) {
+		if match == nil {
+			return
+		}
+		value, err := strconv.Atoi(match[1])
+		if err == nil {
+			out = append(out, deployedGrace{rel: rel, grace: time.Duration(value) * time.Second})
+		}
+	}
+	rel := "deploy/k8s/base/" + service + ".yaml"
+	add(rel, k8sGracePattern.FindStringSubmatch(read(rel)))
+	rel = "deploy/docker/docker-compose.prod.yaml"
+	if compose := read(rel); strings.Contains(compose, "\n  "+service+":\n") {
+		block := compose[strings.Index(compose, "\n  "+service+":\n")+1:]
+		if next := nextComposeService.FindStringIndex(block); next != nil {
+			block = block[:next[0]]
+		}
+		add(rel, composeGracePattern.FindStringSubmatch(block))
+	}
+	rel = "deploy/shell/install.sh"
+	install := read(rel)
+	if match := regexp.MustCompile(`\n  ` + regexp.QuoteMeta(service) + `\) STOP_TIMEOUT=(\d+)s ;;`).FindStringSubmatch(install); match != nil {
+		add(rel, match)
+	} else {
+		add(rel, legacySystemdPattern.FindStringSubmatch(install))
+	}
+	rel = "deploy/dev/run.sh"
+	run := read(rel)
+	if match := regexp.MustCompile(`[" ]` + regexp.QuoteMeta(service) + `:\d+:(\d+)[" ]`).FindStringSubmatch(run); match != nil {
+		add(rel, match)
+	} else {
+		add(rel, devStopWaitPattern.FindStringSubmatch(run))
+	}
+	if service == firstBusinessService(m) {
+		rel = "deploy/dev/second-game.sh"
+		add(rel, devStopWaitPattern.FindStringSubmatch(read(rel)))
+	}
+	return out
+}
+
+// checkShutdownBudgets is the doctor's view of the same numbers. A deployment
+// template whose grace period is shorter than the longest configured
+// total_timeout + 5s is a FAIL: the platform would SIGKILL the process while
+// the App is still stopping Mods (templates not synced since a config was
+// raised, or edited by hand). A total that cannot cover the Mods' floors and
+// the declared budget is a WARN: every stop warns and budgets are cut.
 func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 	var items []CheckItem
 	for _, service := range sortedServiceNames(m) {
+		name := "shutdown:" + service
+		if configured, from, ok := configuredShutdownTotal(root, service); ok {
+			var short []string
+			for _, deployed := range deployedGracePeriods(root, m, service) {
+				if deployed.grace < configured+generatedGraceOverTotal {
+					short = append(short, fmt.Sprintf("%s grace period %s < total_timeout %s + 5s", deployed.rel, seconds(deployed.grace), seconds(configured)))
+				}
+			}
+			if len(short) > 0 {
+				items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf(
+					"%s (%s); the platform would SIGKILL the process while the App is still stopping Mods. Run roost project sync: the templates' grace period follows the longest configured total_timeout + 5s",
+					strings.Join(short, "; "), from)})
+				continue
+			}
+		}
 		rel := "configs/service/config." + service + ".yaml"
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
@@ -214,11 +385,10 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				ShutdownTimeout string `yaml:"shutdown_timeout"`
 			} `yaml:"dataengine"`
 		}
-		name := "shutdown:" + service
 		if err := yaml.Unmarshal(raw, &config); err != nil {
 			continue // reported by the config check
 		}
-		plan := serviceShutdownPlan(m, service)
+		plan := serviceShutdownPlan(m.withConfiguredShutdown(root), service)
 		total, err := parseConfigDuration(config.Shutdown.TotalTimeout, appDefaultShutdownTotal)
 		if err != nil {
 			items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: shutdown.total_timeout: %v", rel, err)})
@@ -235,10 +405,6 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 		}
 		need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
 		switch {
-		case total+generatedGraceOverTotal > plan.grace:
-			items = append(items, CheckItem{Name: name, Status: StatusWarn, Detail: fmt.Sprintf(
-				"%s: total_timeout %s + 5s exceeds the generated deployment grace period %s; the platform would kill the process while Mods are still stopping. Lower total_timeout to %s or keep it and raise the grace period after every sync",
-				rel, seconds(total), seconds(plan.grace), seconds(plan.total))})
 		case total < need:
 			items = append(items, CheckItem{Name: name, Status: StatusWarn, Detail: fmt.Sprintf(
 				"%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d = %s); every stop warns and budgets are cut. Set it to %s",

@@ -837,7 +837,7 @@ func DiffProject(root string, stdout io.Writer) error {
 }
 
 func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Writer) error {
-	plan, err := renderProject(m)
+	plan, err := renderProject(m.withConfiguredShutdown(root))
 	if err != nil {
 		return err
 	}

@@ -228,7 +228,7 @@ func SyncProject(root string) (SyncResult, error) {
 // outputs. Application-owned source was copied into the staging tree solely so
 // generators could parse it; it is never copied back implicitly.
 func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChange, error) {
-	plan, err := renderProject(manifest)
+	plan, err := renderProject(manifest.withConfiguredShutdown(stage))
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +521,9 @@ func verifySyncChangeCurrent(change syncChange) error {
 }
 
 func planManifestSync(root string, manifest Manifest) (SyncResult, []syncChange, error) {
-	plan, err := renderProject(manifest)
+	// The deployment grace periods follow the totals the project's configs
+	// actually set (RR-20260926-66), so the render reads them from root.
+	plan, err := renderProject(manifest.withConfiguredShutdown(root))
 	if err != nil {
 		return SyncResult{}, nil, err
 	}

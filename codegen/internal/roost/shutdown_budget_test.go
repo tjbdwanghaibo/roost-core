@@ -233,9 +233,106 @@ func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 	}
 	// The secret example was never touched by hand and keeps following.
 	counts, _ = bootstrapModCounts(t, root)
-	total, grace = expectedShutdown(counts["game"], false)
+	total, _ = expectedShutdown(counts["game"], false)
 	assertContains(t, root, "deploy/k8s/base/secret.game.example.yaml", fmt.Sprintf("total_timeout: %ds\n", total))
-	assertContains(t, root, "deploy/k8s/base/game.yaml", fmt.Sprintf("terminationGracePeriodSeconds: %d\n", grace))
+	// The grace period follows the longest configured total (the hand-edited 200s), not the formula.
+	assertDeployedGrace(t, root, "game", 205)
+}
+
+// deployedGraces reads a service's grace period out of every generated
+// deployment template: k8s, production compose, the systemd installer and the
+// dev run script.
+func deployedGraces(t *testing.T, root, service string) map[string]int {
+	t.Helper()
+	number := func(rel, pattern string) int {
+		match := regexp.MustCompile(pattern).FindStringSubmatch(readProjectFile(t, root, rel))
+		if match == nil {
+			t.Fatalf("%s: no grace period for %s (%s)", rel, service, pattern)
+		}
+		var value int
+		fmt.Sscanf(match[1], "%d", &value)
+		return value
+	}
+	compose := readProjectFile(t, root, "deploy/docker/docker-compose.prod.yaml")
+	block := compose[strings.Index(compose, "\n  "+service+":\n")+1:]
+	if next := regexp.MustCompile(`\n  [a-z0-9_-]+:\n`).FindStringIndex(block); next != nil {
+		block = block[:next[0]]
+	}
+	composeGrace := regexp.MustCompile(`stop_grace_period: (\d+)s`).FindStringSubmatch(block)
+	if composeGrace == nil {
+		t.Fatalf("compose service %s has no stop_grace_period", service)
+	}
+	var composeValue int
+	fmt.Sscanf(composeGrace[1], "%d", &composeValue)
+	return map[string]int{
+		"k8s":     number("deploy/k8s/base/"+service+".yaml", `terminationGracePeriodSeconds: (\d+)`),
+		"compose": composeValue,
+		"systemd": number("deploy/shell/install.sh", `\n  `+regexp.QuoteMeta(service)+`\) STOP_TIMEOUT=(\d+)s ;;`),
+		"dev":     number("deploy/dev/run.sh", `[" ]`+regexp.QuoteMeta(service)+`:\d+:(\d+)[" ]`),
+	}
+}
+
+func assertDeployedGrace(t *testing.T, root, service string, want int) {
+	t.Helper()
+	for template, got := range deployedGraces(t, root, service) {
+		if got != want {
+			t.Errorf("%s: %s grace period = %ds, want %ds", service, template, got, want)
+		}
+	}
+}
+
+// RR-20260926-66 复核：the grace period regenerated on sync must never fall
+// below what the process will actually wait for. A project generated before
+// RR-66 keeps its 60s shutdown block (sync never rewrites that format); the
+// new formula alone gives a framework service 23s, so its regenerated grace
+// period dropped from 65s to 28s — the platform would SIGKILL the process
+// halfway through the App's own 60s window. The same holds for a hand-edited
+// total. So grace = max(formula, the configured total) + 5s.
+func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// account: the shutdown block a generator before RR-66 wrote (RR-51: 60s for every service).
+	legacy := "shutdown:\n" +
+		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
+		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
+		"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
+		"  # when the rest cannot cover it. Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n" +
+		"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n" +
+		"  # stop_grace_period, systemd TimeoutStopSec) must be >= total_timeout + 5s: 65s by default.\n" +
+		"  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
+	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
+		body := readProjectFile(t, target, rel)
+		end := strings.Index(body, "  serve_wait_timeout: 5s\n") + len("  serve_wait_timeout: 5s\n")
+		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
+	}
+	// game: a hand-edited total above the formula's 101s.
+	game := readProjectFile(t, target, "configs/service/config.game.yaml")
+	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 101s\n", "total_timeout: 120s\n", 1))
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	assertDeployedGrace(t, target, "account", 65)
+	assertDeployedGrace(t, target, "game", 125)
+	// Services nobody touched keep the formula.
+	assertDeployedGrace(t, target, "chat", 28)
+	// Neither config was rewritten.
+	assertContains(t, target, "configs/service/config.account.yaml", legacy)
+	assertContains(t, target, "configs/service/config.game.yaml", "total_timeout: 120s\n")
+	// The second game process waits as long as the first.
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 125 ]`)
+
+	// A config with no total_timeout key runs on the App's 30s fallback.
+	rel := "configs/service/config.chat.yaml"
+	writeProjectFile(t, target, rel, regexp.MustCompile(`  total_timeout: \d+s\n`).ReplaceAllString(readProjectFile(t, target, rel), ""))
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	assertDeployedGrace(t, target, "chat", 35)
 }
 
 // roost doctor reports a config the generator no longer maintains when its
@@ -271,11 +368,24 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 		body := regexp.MustCompile(`total_timeout: \d+s\n`).ReplaceAllString(readProjectFile(t, target, rel), "total_timeout: 60s\n")
 		writeProjectFile(t, target, rel, body)
 	}
+	// Before a sync the deployment templates still carry 28s for account:
+	// a process the platform would SIGKILL while the App is still stopping it.
 	items := status()
-	if item := items["shutdown:account"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "exceeds the generated deployment grace period 28s") {
-		t.Errorf("account on 60s: %s %s", item.Status, item.Detail)
+	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 28s < total_timeout 60s + 5s") {
+		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
 	}
 	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 23 Mods (30s declared + 3s x 22 = 96s)") || !strings.Contains(item.Detail, "Set it to 101s") {
 		t.Errorf("game on 60s: %s %s", item.Status, item.Detail)
+	}
+	// Sync follows the configured total: the grace period is back above it.
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	items = status()
+	if item := items["shutdown:account"]; item.Status != StatusOK {
+		t.Errorf("account on 60s after sync: %s %s", item.Status, item.Detail)
+	}
+	if item := items["shutdown:game"]; item.Status != StatusWarn {
+		t.Errorf("game on 60s after sync: %s %s (the total still cannot cover its Mods)", item.Status, item.Detail)
 	}
 }
