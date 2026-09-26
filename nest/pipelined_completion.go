@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -246,6 +247,10 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 		}
 		if commitErr := errors.Join(tx.commit(true), handoff.releaseErr); commitErr != nil {
 			// WAL 已成功，释放 hook 或完成回调失败仍需报告；不回滚、不回复业务成功。
+			// 事务已提交：统一带 ErrAfterCommitFailed，保留原因链（RR-20260926-53）。
+			if !errors.Is(commitErr, ErrAfterCommitFailed) {
+				commitErr = fmt.Errorf("%w: %w", ErrAfterCommitFailed, commitErr)
+			}
 			metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "completion_failed"}, 1)
 			if retChan != nil {
 				retChan <- commitErr

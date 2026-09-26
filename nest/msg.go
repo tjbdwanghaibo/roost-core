@@ -172,6 +172,25 @@ func (m *Msg) markTransactionAdmitted() {
 	}
 }
 
+// markTransactionCommitted 记录本条消息自己的事务已确定提交；nil 接收者无操作。
+func (m *Msg) markTransactionCommitted() {
+	if m != nil {
+		m.txCommitted = true
+	}
+}
+
+// replyAfterCommit 判断回复里的错误是否都发生在提交之后：纯本地事务看 txCommitted，带 Remote 批次的看 remoteConfirmed
+// （本地已提交而 Remote 确认未知 / 被拒绝不是“已提交”，RR-20260926-46）。
+func (m *Msg) replyAfterCommit() bool {
+	if m == nil {
+		return false
+	}
+	if m.remoteCommitted {
+		return m.remoteConfirmed
+	}
+	return m.txCommitted
+}
+
 // transactionPastCommitPoint 判断这条消息是否可能已经提交了业务：自己的事务越过提交点、Remote 本地已持久提交
 // 或结果未知，或回复已声明“提交之后失败”/“结果不确定”。这样的消息不能重新准入，否则已提交内容会再执行一次
 // （RR-20260926-49）。
@@ -280,6 +299,10 @@ type Msg struct {
 	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回（或慢阶段续行结束）后读。
 	txInFlight bool
 	txAdmitted bool
+	// txCommitted 表示本条消息自己的事务已确定提交（strict / memory 持久提交成功、pipelined ticket 已持久、memory 快路径
+	// 已准入）。纯本地事务此后的释放 / 回调错误由 dispatchNest 包 ErrAfterCommitFailed（RR-20260926-53）；带 Remote 批次的
+	// 消息仍以 remoteConfirmed 为准。pipelined ticket 结果未知只置 txAdmitted，不置它。
+	txCommitted bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().

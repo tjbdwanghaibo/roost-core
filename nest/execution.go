@@ -132,6 +132,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			syncMutation.Admit()
 			observeNestStage(handler, "admission", admissionStart)
 			owner.markTransactionAdmitted()
+			owner.markTransactionCommitted()
 			syncMutation.Confirm()
 		}
 		return ret, err
@@ -243,6 +244,7 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 	}
 	// 持久提交点已越过：此后无论释放、回调、回复报什么错，这条消息都不能重新准入（RR-20260926-49）。
 	tx.dispatch.markTransactionAdmitted()
+	tx.dispatch.markTransactionCommitted()
 	if msg != nil && msg.RemoteWriteBatch != nil {
 		// 持久提交已成功：此后 AfterCommit、释放锁、release hook 的任何失败都不能让
 		// Remote 批次 Abort。记录这个事实，而不是让收尾去猜错误类型（RR-20260926-32）。
@@ -314,6 +316,8 @@ func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTr
 			return errors.Join(releaseErr, err)
 		}
 	}
+	// 记录已持久（或没有需要持久的内容）：此后的释放 / 回调错误由 dispatchNest 包 ErrAfterCommitFailed（RR-20260926-53）。
+	tx.dispatch.markTransactionCommitted()
 	return errors.Join(releaseErr, tx.commit(true))
 }
 
