@@ -92,6 +92,9 @@ type RollbackTx struct {
 	deleteIntents       map[int64]struct{}
 	// created 是 handler 内 CreateInScope 新建的实体，准入前再次加入 SyncMutation（RR-20260926-35）。
 	created []entity.IThreadSafeEntity
+	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误（RR-20260926-48）。可回滚的事务据此在
+	// handler 结束时整条回滚并以锁超时重新准入，即使业务吞掉了 Create 返回的错误。
+	createLockBusy error
 }
 
 type rollbackTxState uint8
@@ -683,7 +686,32 @@ func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, rev
 	return nil
 }
 
+// CreatedEntityLockBusy 实现 entity.CreatedEntityCapturer：新实体的锁按锁序不能等待且已被占用（RR-20260926-48）。
+// 记录第一次冲突，返回交给业务的可重试错误；invokeWithTransaction 在 handler 结束时据此回滚并重新准入。
+func (tx *RollbackTx) CreatedEntityLockBusy(id int64) error {
+	err := createdEntityLockBusy(id)
+	if tx != nil && tx.createLockBusy == nil {
+		tx.createLockBusy = err
+	}
+	return err
+}
+
 var _ entity.CreatedEntityCapturer = (*RollbackTx)(nil)
+
+// createdEntityLockBusy 是 handler 内新建实体锁冲突交给业务的错误：满足 errors.Is(ErrLockTimeout)，
+// 事务回滚后由 requeueTransientDispatch 重新准入（与动态 Cast、嵌套派发的锁冲突同一类）。
+func createdEntityLockBusy(id int64) error {
+	return fmt.Errorf("%w: created entity %d is locked by another holder and cannot be waited for in lock order", ErrLockTimeout, id)
+}
+
+// memoryHandlerCreates 在 memory 快路径（RollbackNone + DurabilityMemory、无 Remote 批次）的 handler 期间
+// 绑定到 Guard（RR-20260926-48）：handler 内新建的实体沿用本 Guard 持锁到 handler 结束，并进入本次
+// SyncMutation。memory 快路径没有回滚，所以不捕获、不撤销；锁冲突的错误原样交给业务，业务返回它时
+// 与其他锁超时一样重新准入——RollbackNone 本就不撤销已做的内存修改。
+type memoryHandlerCreates struct{}
+
+func (memoryHandlerCreates) CaptureCreatedEntity(entity.IThreadSafeEntity, func()) error { return nil }
+func (memoryHandlerCreates) CreatedEntityLockBusy(id int64) error                        { return createdEntityLockBusy(id) }
 
 func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 	if tx == nil {

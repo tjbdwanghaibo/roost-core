@@ -75,6 +75,11 @@ Nest 自己的 EntitySync 注销该 subject（已持有对象的会话收到 Obj
 Repository 聚合加载（`IsCreate=false`）不受影响。
 RollbackState 下新实体的 DAO 需要可快照（生成 DAO 已满足），remote-managed 实体在 durable 事务内创建会被拒绝，
 这两条与 Cast 的约束一致。
+handler 内新建实体的锁持有到 handler 结束（memory handler 也一样，并进入本次 Sync 提交屏障），取锁遵循与 Cast 相同的锁序：
+新实体的锁组高于 handler 已持有的全部锁组时等待；否则（与声明目标同组或更低组，最常见的写法）只尝试加锁，被其他 handler 占用时
+`Create` 返回满足 `errors.Is(err, nest.ErrLockTimeout)` 的错误，可回滚（state / undo）的事务整条回滚后自动重新准入——即使业务吞掉了这个错误；
+重排后排到同 ID 后继之后，多次仍冲突时调用方收到锁超时。rollback=none 的 handler 不强制回滚，请直接返回该错误
+（[RR-20260926-48](bugfix/RR-20260926-48.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
 

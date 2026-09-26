@@ -408,26 +408,10 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 }
 
 func tryRequireDispatchEntity(guard *entity.EntityGuard, ent entity.IThreadSafeEntity) bool {
-	if guard == nil || ent == nil {
+	if guard == nil {
 		return false
 	}
-	gID := ent.GUId()
-	mu := ent.GetMutex()
-	if gID == 0 || mu == nil {
-		return false
-	}
-	if guard.Guarded(gID) {
-		return true
-	}
-	if !mu.TryLock() {
-		return false
-	}
-	if ent.IsClear() || ent.IsRemoved() {
-		mu.Unlock()
-		return false
-	}
-	guard.GuardEntity(ent)
-	return true
+	return guard.TryRequireEntity(ent)
 }
 
 func releaseDispatchLocks(guard *entity.EntityGuard, acquired []entity.IThreadSafeEntity) {

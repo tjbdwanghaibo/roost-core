@@ -1,9 +1,11 @@
 package entity
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"fmt"
 	"log/slog"
 	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
 
 // GetEntityGroup is the lock rank of an entity id, acquired lowest first.
@@ -70,7 +72,8 @@ func runOnEntityRelease(ent IThreadSafeEntity) {
 // EntityGuard manages per-goroutine entity locks with priority-based deadlock avoidance.
 type EntityGuard struct {
 	syncMutation *SyncMutation
-	// createdCapturer 是当前在本 Guard 上执行的事务；只由持有 Guard 的业务 goroutine 读写。
+	// createdCapturer 是当前在本 Guard 上执行的 Nest handler（事务或 memory 快路径）；只由持有 Guard 的
+	// 业务 goroutine 读写。非 nil 时 handler 内新建实体沿用本 Guard 持锁并按锁序取锁（RR-20260926-35 / 48）。
 	createdCapturer CreatedEntityCapturer
 	eMap            map[int64]IThreadSafeEntity
 	postRelease     []func()
@@ -219,9 +222,19 @@ func (e *EntityGuard) BindCreatedEntityCapturer(capturer CreatedEntityCapturer) 
 	if e == nil {
 		return func() {}
 	}
-	previous := e.createdCapturer
-	e.createdCapturer = capturer
+	previous := e.SwapCreatedEntityCapturer(capturer)
 	return func() { e.createdCapturer = previous }
+}
+
+// SwapCreatedEntityCapturer 是 BindCreatedEntityCapturer 的无分配形式：换入 capturer 并返回先前的值，
+// 调用方用返回值再换回。Nest 的 memory 快路径每条消息都要绑定，不为此分配恢复闭包。
+func (e *EntityGuard) SwapCreatedEntityCapturer(capturer CreatedEntityCapturer) (previous CreatedEntityCapturer) {
+	if e == nil {
+		return nil
+	}
+	previous = e.createdCapturer
+	e.createdCapturer = capturer
+	return previous
 }
 
 // RequireEntity acquires the entity lock. Returns true on success.
@@ -246,6 +259,51 @@ func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
 	}
 	e.eMap[gId] = ent
 	return true
+}
+
+// TryRequireEntity 不等待地取得实体锁：锁被占用、实体已清理或已摘除时返回 false。
+func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
+	if ent == nil {
+		return false
+	}
+	gId := ent.GUId()
+	mu := ent.GetMutex()
+	if gId == 0 || mu == nil {
+		return false
+	}
+	if _, exists := e.eMap[gId]; exists {
+		return true
+	}
+	if !mu.TryLock() {
+		return false
+	}
+	if ent.IsClear() || ent.IsRemoved() {
+		mu.Unlock()
+		return false
+	}
+	e.eMap[gId] = ent
+	return true
+}
+
+// lockCreated 取得新建实体的锁（RR-20260926-48）。Nest handler 内（capturer 非 nil）与 Cast 相同的锁序：
+// 新实体的锁组高于本 Guard 已持有的全部锁组时可以等待——与 Cast 一样是按全序的有序等待，不会成环，属于
+// Guard/本地锁豁免；否则等待可能与持有者成环（交叉创建、创建后再 Cast 更高锁组），只 try-lock，被占用时
+// 由 capturer 给出交给业务的可重试错误，事务整条回滚后重新准入，不在快 worker 上等待。
+// Nest 之外（Create 自建的短作用域、独立 WithGuardScope）沿用原来的等待取锁。
+func (e *EntityGuard) lockCreated(ent IThreadSafeEntity, capturer CreatedEntityCapturer) error {
+	if capturer != nil && !e.mayLock(ent.GUId(), e.maxLockedGroup()) {
+		if e.TryRequireEntity(ent) {
+			return nil
+		}
+		if ent.GetMutex() == nil || ent.GUId() == 0 {
+			return fmt.Errorf("entity guard scope lock failed: %d", ent.ID())
+		}
+		return capturer.CreatedEntityLockBusy(ent.ID())
+	}
+	if !e.RequireEntity(ent) {
+		return fmt.Errorf("entity guard scope lock failed: %d", ent.ID())
+	}
+	return nil
 }
 
 // CheckContainAllLock checks if all entities in es are already locked or safe to lock.

@@ -9,10 +9,11 @@ import (
 // Create builds and publishes an entity while holding its mutex until the
 // short-lived guard scope is released. Later mutations must enter through Nest.
 //
-// 在 Nest handler 内新建（param.IsCreate 且当前 Guard 作用域绑定了事务，即
-// CreatedEntityCapturer）时，Create 就是事务内创建：沿用当前作用域走 CreateInScope，
-// 与 Cast 一样进入同一提交边界，锁随事务的 Guard 释放，回滚 / 拒绝时撤销发布
-// （RR-20260926-35 复核：生成 Lifecycle 的 Create / GetOrCreate 都经过这里）。
+// 在 Nest handler 内新建（param.IsCreate 且当前 Guard 作用域绑定了 CreatedEntityCapturer）时，
+// Create 就是 handler 内创建：沿用当前作用域走 CreateInScope，锁随 handler 的 Guard 释放。
+// 事务 handler 与 Cast 一样进入同一提交边界，回滚 / 拒绝时撤销发布（RR-20260926-35 复核：生成
+// Lifecycle 的 Create / GetOrCreate 都经过这里）；memory 快路径 handler 同样持锁到 handler 结束并进入
+// 本次 SyncMutation（RR-20260926-48）。取锁按 Cast 的锁序，冲突时返回可重试错误，见 CreateInScope。
 // 加载已持久的实体（IsCreate=false，Repository 聚合加载）和 Nest 之外的调用保持
 // 短作用域立即发布的原语义。
 func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, error) {
@@ -36,22 +37,32 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 	return result, err
 }
 
-// CreatedEntityCapturer 接收事务内由 CreateInScope 新建的实体（RR-20260926-35）。
-// 持锁执行器（Nest 事务）在业务调用期间把它绑定到 Guard 上，让新实体与动态 Cast 一样进入
-// 回滚与持久化边界。revoke 撤销这次发布，事务在回滚 / 明确拒绝时调用；重复调用无副作用。
+// CreatedEntityCapturer 接收 Nest handler 内由 CreateInScope 新建的实体（RR-20260926-35）。
+// 持锁执行器（Nest）在业务调用期间把它绑定到 Guard 上：事务 handler 让新实体与动态 Cast 一样进入
+// 回滚与持久化边界，memory 快路径 handler 只借它表明“新实体随本 handler 的 Guard 持锁”。
+//
+// CaptureCreatedEntity：revoke 撤销这次发布，事务在回滚 / 明确拒绝时调用；重复调用无副作用。
 // 返回错误时 CreateInScope 立即撤销发布并把错误交给业务。
+//
+// CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48）。返回交给业务的错误
+// （Nest 返回可重试的锁超时类错误）；Nest 事务据此在 handler 结束时整条回滚并重新准入。
 type CreatedEntityCapturer interface {
 	CaptureCreatedEntity(created IThreadSafeEntity, revoke func()) error
+	CreatedEntityLockBusy(id int64) error
 }
 
 // CreateInScope builds an entity, acquires its mutex in the existing
 // deterministic guard scope, and only then publishes it. This ordering keeps a
 // newly visible entity from being observed before its creator owns the lock.
 //
-// scope 属于正在执行的 Nest 事务时（Guard 上绑定了 CreatedEntityCapturer），新实体随事务
+// scope 属于正在执行的 Nest handler 时（Guard 上绑定了 CreatedEntityCapturer），新实体随事务
 // 提交：先交给事务捕获回滚与持久化参与者，再加入当前 SyncMutation，Sync 在提交确认前不外发；
-// 事务回滚或被拒绝时撤销发布（见 revokeCreated）。其余作用域（Create 自建的短作用域、
-// Nest 之外的 WithGuardScope）保持立即发布的原语义。
+// 事务回滚或被拒绝时撤销发布（见 revokeCreated）。取锁遵循与 Cast 相同的锁序（见 lockCreated）：
+// 不能有序等待时只 try-lock，被占用返回 capturer 给出的可重试错误，不发布、不持锁。
+// 其余作用域（Create 自建的短作用域、Nest 之外的 WithGuardScope）保持等待取锁、立即发布的原语义。
+//
+// 发布失败（TryAdd 报 ErrEntityExists / ErrEntityRemoved）时归还本次取得的锁：同一作用域随后按同 ID
+// 重试（生成 GetOrCreate）会新建实例，若锁仍以旧实例记在 Guard 上，新实例会在未加锁的情况下发布。
 func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged
@@ -63,14 +74,19 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	if err != nil {
 		return nil, err
 	}
-	if !scope.guard.RequireEntity(value) {
-		return nil, fmt.Errorf("entity guard scope lock failed: %d", value.ID())
-	}
-	if err := m.TryAdd(value); err != nil {
+	guard := scope.guard
+	capturer := guard.createdCapturer
+	lockedNow := !guard.Guarded(value.GUId())
+	if err := guard.lockCreated(value, capturer); err != nil {
 		return nil, err
 	}
-	guard := scope.guard
-	if capturer := guard.createdCapturer; capturer != nil {
+	if err := m.TryAdd(value); err != nil {
+		if lockedNow {
+			guard.ReleaseEntity(value.GUId())
+		}
+		return nil, err
+	}
+	if capturer != nil {
 		revoke := m.createdRevoker(guard, value)
 		if err := capturer.CaptureCreatedEntity(value, revoke); err != nil {
 			revoke()

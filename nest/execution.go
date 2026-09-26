@@ -119,7 +119,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	msg := currentNestDispatchMsg()
 	stages := msg != nil && msg.stageMetrics
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
-		ret, err = invokeBusinessHandler(handler, stages, call)
+		ret, err = invokeMemoryHandler(handler, stages, call)
 		if err == nil {
 			admissionStart := startNestStage(stages)
 			syncMutation.Admit()
@@ -154,6 +154,11 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 		return nil, err
 	}
 	ret, err = callTransactionHandler(tx, call)
+	if busy := tx.createLockBusy; busy != nil && tx.policy != RollbackNone && !errors.Is(err, ErrLockTimeout) {
+		// handler 内新建实体遇到锁冲突而业务吞掉了错误：仍整条回滚并以锁超时重新准入（RR-20260926-48），
+		// 不能提交一个缺了新实体的结果。RollbackNone 不撤销内存修改，强制重做会重复生效，交由业务决定。
+		err = errors.Join(err, busy)
+	}
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			err = errors.Join(err, fmt.Errorf("rollback failed: %w", rbErr))
@@ -192,6 +197,17 @@ func callTransactionHandler(tx *RollbackTx, call func() (any, error)) (any, erro
 		}
 	}()
 	return withRollbackTx(tx, func() (any, error) { return invokeBusinessHandler(tx.handler, tx.stageMetrics, call) })
+}
+
+// invokeMemoryHandler 执行 memory 快路径的业务调用。期间在当前 Guard 上绑定 memoryHandlerCreates，
+// handler 内新建的实体因此随本 Guard 持锁到 handler 结束，并按 Cast 的锁序取锁（RR-20260926-48）。
+func invokeMemoryHandler(handler string, stages bool, call func() (any, error)) (any, error) {
+	if scope := entity.CurrentGuardScope(); scope != nil && scope.Guard() != nil {
+		guard := scope.Guard()
+		previous := guard.SwapCreatedEntityCapturer(memoryHandlerCreates{})
+		defer guard.SwapCreatedEntityCapturer(previous)
+	}
+	return invokeBusinessHandler(handler, stages, call)
 }
 
 // rejectCommit 只用于明确拒绝；不确定结果必须 abandon 并交给 fencing/recovery。
