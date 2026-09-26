@@ -1,0 +1,54 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	"example.com/planet/game/matchmaking"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/kit/service/match"
+)
+
+// HandlePollMatch reads the player's ticket and, once it is matched, the
+// match it joined. Polling is the demo's choice; a real game would push the
+// match to the session through the transport's Runtime instead.
+func (controller *Controller) HandlePollMatch(context *player_agent.Context, request *pb.PollMatchRequest) (*pb.PollMatchResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("poll_match endpoint: context and request are required")
+	}
+	queue, ok := matchmaking.QueueFor(request.Mode)
+	if !ok {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: mode %q", svcmatch.ErrQueueInvalid, request.Mode))
+		return &pb.PollMatchResponse{Code: code, Reason: reason}, nil
+	}
+	// Ownership is checked by kind and id; the score plays no part in a read.
+	subject := matchmaking.PlayerSubject(context.PlayerID, 0)
+	ticket, found, err := controller.Matcher().Ticket(context.Context(), queue, request.TicketID, subject)
+	if err == nil && !found {
+		err = svcmatch.ErrTicketMissing
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("poll_match failed", "player_id", context.PlayerID, "ticket_id", request.TicketID, "err", err)
+		}
+		return &pb.PollMatchResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.PollMatchResponse{State: string(ticket.State), MatchID: ticket.MatchID}
+	if ticket.State != svcmatch.TicketMatched {
+		return response, nil
+	}
+	match, found, err := controller.Matcher().Match(context.Context(), queue, ticket.MatchID)
+	if err != nil || !found {
+		// The ticket says matched; the match record is what carries the
+		// members. Report the state and let the client ask again.
+		slog.Warn("poll_match: match record unavailable", "match_id", ticket.MatchID, "found", found, "err", err)
+		return response, nil
+	}
+	for _, member := range match.Members {
+		response.Members = append(response.Members, member.ID)
+	}
+	return response, nil
+}

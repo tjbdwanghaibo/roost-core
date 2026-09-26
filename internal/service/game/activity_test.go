@@ -1,0 +1,99 @@
+package Game
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	gameactivity "example.com/planet/game/activity"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// windowCoordinator is the coordinator as this test needs it: a score per
+// window. Everything else is embedded, so a method this test did not think
+// about panics instead of quietly answering zero.
+type windowCoordinator struct {
+	svcactivity.Coordinator
+	scores map[string]int64
+}
+
+func (c *windowCoordinator) ApplyProgress(_ context.Context, key svcactivity.Key, _ string, _ string, delta svcactivity.ProgressDelta) (svcactivity.Participant, error) {
+	if c.scores == nil {
+		c.scores = map[string]int64{}
+	}
+	c.scores[key.ActivityID] += delta.Score
+	return svcactivity.Participant{Score: c.scores[key.ActivityID], Progress: c.scores[key.ActivityID]}, nil
+}
+
+func (c *windowCoordinator) LookupActivity(_ context.Context, key svcactivity.Key) (svcactivity.Activity, bool, error) {
+	return svcactivity.Activity{Key: key}, true, nil
+}
+
+func (c *windowCoordinator) LookupParticipant(_ context.Context, key svcactivity.Key, _ string) (svcactivity.Participant, bool, error) {
+	score := c.scores[key.ActivityID]
+	return svcactivity.Participant{Score: score, Progress: score}, score > 0, nil
+}
+
+// boardRedis swallows the board write; this test is about which window the
+// point went into, not about the index beside it.
+type boardRedis struct{ fredis.IRedis }
+
+func (boardRedis) ZAdd(_ context.Context, _ string, _ ...fredis.Z) (int64, error) { return 1, nil }
+
+// U-0273 · C5 · RR-20260921-01：一次贡献必须说出它落进了哪个窗口。
+//
+// 窗口每 gameactivity.WindowSeconds 滚一次，而 Contribute 与 Standing 各自
+// 用调用那一刻的时钟算窗口 id。所以"12:14:59 贡献、12:15:01 查询"问的是两个
+// 窗口——在此之前调用方无法把这种情况与"这一点没算上"区分开，CI 里的机器人
+// 就是这样在整 300 秒边界上红的。
+func TestAContributionSaysWhichWindowTookIt(t *testing.T) {
+	ctx := context.Background()
+	coordinator := &windowCoordinator{}
+	// 停在窗口末尾前一秒。
+	clock := time.Unix(gameactivity.WindowStart(time.Now().Unix())+gameactivity.WindowSeconds-1, 0)
+	runner := &ActivityRunner{
+		coordinator: coordinator,
+		redis:       boardRedis{},
+		prefix:      "test",
+		now:         func() time.Time { return clock },
+	}
+
+	contributed, participant, err := runner.Contribute(ctx, 900001, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contributed != gameactivity.ID(clock.Unix()) {
+		t.Fatalf("contribution reported window %q, want %q", contributed, gameactivity.ID(clock.Unix()))
+	}
+	if participant.Score != 1 {
+		t.Fatalf("the contribution counted %d, want 1", participant.Score)
+	}
+
+	// 同一个窗口内查询：看得见自己那一点。
+	sameID, _, sameParticipant, err := runner.Standing(ctx, 900001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameID != contributed || sameParticipant.Score != 1 {
+		t.Fatalf("within the window the standing is %q score=%d, want %q score=1", sameID, sameParticipant.Score, contributed)
+	}
+
+	// 跨过边界再查：是另一个窗口，分数为 0——而调用方**能看出来**这是换了窗口，
+	// 因为它手里有贡献时的那个 id。
+	clock = clock.Add(2 * time.Second)
+	rolledID, _, rolledParticipant, err := runner.Standing(ctx, 900001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledID == contributed {
+		t.Fatalf("the window did not roll across the boundary: still %q", rolledID)
+	}
+	if rolledParticipant.Score != 0 {
+		t.Fatalf("a fresh window inherited the point: %q score=%d", rolledID, rolledParticipant.Score)
+	}
+	// 而那一点仍然在它落进的窗口里，没有丢。
+	if coordinator.scores[contributed] != 1 {
+		t.Fatalf("the point left the window it landed in: %v", coordinator.scores)
+	}
+}

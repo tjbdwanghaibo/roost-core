@@ -1,0 +1,53 @@
+package handler
+
+import (
+	"example.com/planet/game/dungeon"
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+	apperrors "example.com/planet/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerClaimDungeon pays for one cleared run, at most once.
+//
+// It is the AddExp transaction plus an identity: the run id is recorded on
+// the Player in the same WAL record as the experience and the World's
+// counter, so "this run was paid" and "the payment happened" are the same
+// durable fact. A replay finds the run id already there and returns
+// Claimed=false without touching anything — and because the record and the
+// payment commit together, a crash between them cannot leave a run that is
+// marked paid but was not (rollback=undo takes the record back with the rest).
+//
+// Why this is not the endpoint's job: the endpoint cannot read-then-write
+// atomically, so two replays arriving together would both see "not claimed"
+// (RR-20260917-08).
+//
+// The ledger cannot be kept forever, so the identity it remembers has to
+// stop being replayable at some point. That point is resolvedAtUnix + the
+// claim window, and it is checked **here**, in the same transaction that
+// would pay — one choke point for every entry into the reward, sharing the
+// predicate with the pruning (RR-20260918-04). A refusal is an error, not a
+// quiet zero: a player whose reward really did time out unclaimed has to be
+// visible to an operator, or the fix for double-paying becomes silent
+// under-paying.
+//
+//roost:nest rollback=undo durability=strict
+func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity, runID string, amount int64, resolvedAtUnix int64, nowUnix int64) (dungeon.ClaimResult, error) {
+	if runID == "" {
+		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonRun, nil, "run_id", runID)
+	}
+	if dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix) {
+		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonClaimWindow, nil, "run_id", runID, "resolved_at", resolvedAtUnix, "now", nowUnix)
+	}
+	if !target.ProfileComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
+		// Already paid. Not an error: the client asked again for something it
+		// already has, and the honest answer is "nothing happened".
+		return dungeon.ClaimResult{}, nil
+	}
+	gained, err := target.ProfileComp().AddExp(amount)
+	if err != nil {
+		return dungeon.ClaimResult{}, err
+	}
+	stats.StatsComp().RecordExp(amount)
+	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained}, nil
+}

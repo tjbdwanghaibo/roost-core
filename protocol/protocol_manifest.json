@@ -1,0 +1,669 @@
+{
+  "package": "roost.protocol",
+  "structs": [
+    {
+      "name": "ActivityStandingRequest",
+      "group": "activity_standing",
+      "source_kind": "common",
+      "source_file": "activity_standing.go"
+    },
+    {
+      "name": "ActivityStandingResponse",
+      "group": "activity_standing",
+      "source_kind": "common",
+      "source_file": "activity_standing.go"
+    },
+    {
+      "name": "AddExpRequest",
+      "group": "add_exp",
+      "source_kind": "common",
+      "source_file": "add_exp.go"
+    },
+    {
+      "name": "AddExpResponse",
+      "group": "add_exp",
+      "source_kind": "common",
+      "source_file": "add_exp.go"
+    },
+    {
+      "name": "AddItemRequest",
+      "group": "add_item",
+      "source_kind": "common",
+      "source_file": "add_item.go"
+    },
+    {
+      "name": "AddItemResponse",
+      "group": "add_item",
+      "source_kind": "common",
+      "source_file": "add_item.go"
+    },
+    {
+      "name": "BattleFramePush",
+      "group": "battle_frame",
+      "source_kind": "common",
+      "source_file": "battle_frame.go"
+    },
+    {
+      "name": "BattleInputRequest",
+      "group": "battle_input",
+      "source_kind": "common",
+      "source_file": "battle_input.go"
+    },
+    {
+      "name": "BattleInputResponse",
+      "group": "battle_input",
+      "source_kind": "common",
+      "source_file": "battle_input.go"
+    },
+    {
+      "name": "ChatHistoryRequest",
+      "group": "chat_history",
+      "source_kind": "common",
+      "source_file": "chat_history.go"
+    },
+    {
+      "name": "ChatHistoryResponse",
+      "group": "chat_history",
+      "source_kind": "common",
+      "source_file": "chat_history.go"
+    },
+    {
+      "name": "ChatMessagePush",
+      "group": "chat_message",
+      "source_kind": "common",
+      "source_file": "chat_message.go"
+    },
+    {
+      "name": "ClaimMailRequest",
+      "group": "claim_mail",
+      "source_kind": "common",
+      "source_file": "claim_mail.go"
+    },
+    {
+      "name": "ClaimMailResponse",
+      "group": "claim_mail",
+      "source_kind": "common",
+      "source_file": "claim_mail.go"
+    },
+    {
+      "name": "EnterDungeonRequest",
+      "group": "enter_dungeon",
+      "source_kind": "common",
+      "source_file": "enter_dungeon.go"
+    },
+    {
+      "name": "EnterDungeonResponse",
+      "group": "enter_dungeon",
+      "source_kind": "common",
+      "source_file": "enter_dungeon.go"
+    },
+    {
+      "name": "EnterGameRequest",
+      "group": "enter_game",
+      "source_kind": "common",
+      "source_file": "enter_game.go"
+    },
+    {
+      "name": "EnterGameResponse",
+      "group": "enter_game",
+      "source_kind": "common",
+      "source_file": "enter_game.go"
+    },
+    {
+      "name": "EntitySyncPush",
+      "group": "entity_sync",
+      "source_kind": "common",
+      "source_file": "entity_sync.go"
+    },
+    {
+      "name": "EquipRequest",
+      "group": "equip",
+      "source_kind": "common",
+      "source_file": "equip.go"
+    },
+    {
+      "name": "EquipResponse",
+      "group": "equip",
+      "source_kind": "common",
+      "source_file": "equip.go"
+    },
+    {
+      "name": "FinishDungeonRequest",
+      "group": "finish_dungeon",
+      "source_kind": "common",
+      "source_file": "finish_dungeon.go"
+    },
+    {
+      "name": "FinishDungeonResponse",
+      "group": "finish_dungeon",
+      "source_kind": "common",
+      "source_file": "finish_dungeon.go"
+    },
+    {
+      "name": "FoundGuildRequest",
+      "group": "guild",
+      "source_kind": "common",
+      "source_file": "guild.go"
+    },
+    {
+      "name": "GiftStatusRequest",
+      "group": "gift_status",
+      "source_kind": "common",
+      "source_file": "gift_status.go"
+    },
+    {
+      "name": "GiftStatusResponse",
+      "group": "gift_status",
+      "source_kind": "common",
+      "source_file": "gift_status.go"
+    },
+    {
+      "name": "GuildInfoRequest",
+      "group": "guild",
+      "source_kind": "common",
+      "source_file": "guild.go"
+    },
+    {
+      "name": "GuildResponse",
+      "group": "guild",
+      "source_kind": "common",
+      "source_file": "guild.go"
+    },
+    {
+      "name": "JoinGuildRequest",
+      "group": "guild",
+      "source_kind": "common",
+      "source_file": "guild.go"
+    },
+    {
+      "name": "JoinQueueRequest",
+      "group": "join_queue",
+      "source_kind": "common",
+      "source_file": "join_queue.go"
+    },
+    {
+      "name": "JoinQueueResponse",
+      "group": "join_queue",
+      "source_kind": "common",
+      "source_file": "join_queue.go"
+    },
+    {
+      "name": "ListMailRequest",
+      "group": "list_mail",
+      "source_kind": "common",
+      "source_file": "list_mail.go"
+    },
+    {
+      "name": "ListMailResponse",
+      "group": "list_mail",
+      "source_kind": "common",
+      "source_file": "list_mail.go"
+    },
+    {
+      "name": "MailEntry",
+      "group": "list_mail",
+      "source_kind": "common",
+      "source_file": "list_mail.go"
+    },
+    {
+      "name": "MatchFoundPush",
+      "group": "match_found",
+      "source_kind": "common",
+      "source_file": "match_found.go"
+    },
+    {
+      "name": "MoveRequest",
+      "group": "move",
+      "source_kind": "common",
+      "source_file": "move.go"
+    },
+    {
+      "name": "MoveResponse",
+      "group": "move",
+      "source_kind": "common",
+      "source_file": "move.go"
+    },
+    {
+      "name": "PollMatchRequest",
+      "group": "poll_match",
+      "source_kind": "common",
+      "source_file": "poll_match.go"
+    },
+    {
+      "name": "PollMatchResponse",
+      "group": "poll_match",
+      "source_kind": "common",
+      "source_file": "poll_match.go"
+    },
+    {
+      "name": "PurchaseRequest",
+      "group": "purchase",
+      "source_kind": "common",
+      "source_file": "purchase.go"
+    },
+    {
+      "name": "PurchaseResponse",
+      "group": "purchase",
+      "source_kind": "common",
+      "source_file": "purchase.go"
+    },
+    {
+      "name": "RankTopEntry",
+      "group": "rank_top",
+      "source_kind": "common",
+      "source_file": "rank_top.go"
+    },
+    {
+      "name": "RankTopRequest",
+      "group": "rank_top",
+      "source_kind": "common",
+      "source_file": "rank_top.go"
+    },
+    {
+      "name": "RankTopResponse",
+      "group": "rank_top",
+      "source_kind": "common",
+      "source_file": "rank_top.go"
+    },
+    {
+      "name": "SceneReadyRequest",
+      "group": "scene_ready",
+      "source_kind": "common",
+      "source_file": "scene_ready.go"
+    },
+    {
+      "name": "SceneReadyResponse",
+      "group": "scene_ready",
+      "source_kind": "common",
+      "source_file": "scene_ready.go"
+    },
+    {
+      "name": "SendChatRequest",
+      "group": "send_chat",
+      "source_kind": "common",
+      "source_file": "send_chat.go"
+    },
+    {
+      "name": "SendChatResponse",
+      "group": "send_chat",
+      "source_kind": "common",
+      "source_file": "send_chat.go"
+    },
+    {
+      "name": "SendGiftRequest",
+      "group": "send_gift",
+      "source_kind": "common",
+      "source_file": "send_gift.go"
+    },
+    {
+      "name": "SendGiftResponse",
+      "group": "send_gift",
+      "source_kind": "common",
+      "source_file": "send_gift.go"
+    },
+    {
+      "name": "SkillCatalogRequest",
+      "group": "skill_catalog",
+      "source_kind": "common",
+      "source_file": "skill_catalog.go"
+    },
+    {
+      "name": "SkillCatalogResponse",
+      "group": "skill_catalog",
+      "source_kind": "common",
+      "source_file": "skill_catalog.go"
+    },
+    {
+      "name": "WorldStatsRequest",
+      "group": "world_stats",
+      "source_kind": "common",
+      "source_file": "world_stats.go"
+    },
+    {
+      "name": "WorldStatsResponse",
+      "group": "world_stats",
+      "source_kind": "common",
+      "source_file": "world_stats.go"
+    }
+  ],
+  "messages": [
+    {
+      "name": "AddItem",
+      "mode": "req_resp",
+      "req": "AddItemRequest",
+      "req_id": 10000,
+      "resp": "AddItemResponse",
+      "resp_id": 10000,
+      "handler": "player",
+      "group": "game",
+      "source_file": "add_item.go",
+      "source_interface": "AddItemProtocol"
+    },
+    {
+      "name": "AddExp",
+      "mode": "req_resp",
+      "req": "AddExpRequest",
+      "req_id": 10001,
+      "resp": "AddExpResponse",
+      "resp_id": 10001,
+      "handler": "player",
+      "group": "game",
+      "source_file": "add_exp.go",
+      "source_interface": "AddExpProtocol"
+    },
+    {
+      "name": "EnterGame",
+      "mode": "req_resp",
+      "req": "EnterGameRequest",
+      "req_id": 10002,
+      "resp": "EnterGameResponse",
+      "resp_id": 10002,
+      "handler": "player",
+      "group": "game",
+      "source_file": "enter_game.go",
+      "source_interface": "EnterGameProtocol"
+    },
+    {
+      "name": "JoinQueue",
+      "mode": "req_resp",
+      "req": "JoinQueueRequest",
+      "req_id": 10003,
+      "resp": "JoinQueueResponse",
+      "resp_id": 10003,
+      "handler": "player",
+      "group": "game",
+      "source_file": "join_queue.go",
+      "source_interface": "JoinQueueProtocol"
+    },
+    {
+      "name": "PollMatch",
+      "mode": "req_resp",
+      "req": "PollMatchRequest",
+      "req_id": 10004,
+      "resp": "PollMatchResponse",
+      "resp_id": 10004,
+      "handler": "player",
+      "group": "game",
+      "source_file": "poll_match.go",
+      "source_interface": "PollMatchProtocol"
+    },
+    {
+      "name": "WorldStats",
+      "mode": "req_resp",
+      "req": "WorldStatsRequest",
+      "req_id": 10005,
+      "resp": "WorldStatsResponse",
+      "resp_id": 10005,
+      "handler": "player",
+      "group": "game",
+      "source_file": "world_stats.go",
+      "source_interface": "WorldStatsProtocol"
+    },
+    {
+      "name": "SendChat",
+      "mode": "req_resp",
+      "req": "SendChatRequest",
+      "req_id": 10006,
+      "resp": "SendChatResponse",
+      "resp_id": 10006,
+      "handler": "player",
+      "group": "game",
+      "source_file": "send_chat.go",
+      "source_interface": "SendChatProtocol"
+    },
+    {
+      "name": "ChatHistory",
+      "mode": "req_resp",
+      "req": "ChatHistoryRequest",
+      "req_id": 10007,
+      "resp": "ChatHistoryResponse",
+      "resp_id": 10007,
+      "handler": "player",
+      "group": "game",
+      "source_file": "chat_history.go",
+      "source_interface": "ChatHistoryProtocol"
+    },
+    {
+      "name": "ListMail",
+      "mode": "req_resp",
+      "req": "ListMailRequest",
+      "req_id": 10008,
+      "resp": "ListMailResponse",
+      "resp_id": 10008,
+      "handler": "player",
+      "group": "game",
+      "source_file": "list_mail.go",
+      "source_interface": "ListMailProtocol"
+    },
+    {
+      "name": "ClaimMail",
+      "mode": "req_resp",
+      "req": "ClaimMailRequest",
+      "req_id": 10009,
+      "resp": "ClaimMailResponse",
+      "resp_id": 10009,
+      "handler": "player",
+      "group": "game",
+      "source_file": "claim_mail.go",
+      "source_interface": "ClaimMailProtocol"
+    },
+    {
+      "name": "EnterDungeon",
+      "mode": "req_resp",
+      "req": "EnterDungeonRequest",
+      "req_id": 10010,
+      "resp": "EnterDungeonResponse",
+      "resp_id": 10010,
+      "handler": "player",
+      "group": "game",
+      "source_file": "enter_dungeon.go",
+      "source_interface": "EnterDungeonProtocol"
+    },
+    {
+      "name": "FinishDungeon",
+      "mode": "req_resp",
+      "req": "FinishDungeonRequest",
+      "req_id": 10011,
+      "resp": "FinishDungeonResponse",
+      "resp_id": 10011,
+      "handler": "player",
+      "group": "game",
+      "source_file": "finish_dungeon.go",
+      "source_interface": "FinishDungeonProtocol"
+    },
+    {
+      "name": "SkillCatalog",
+      "mode": "req_resp",
+      "req": "SkillCatalogRequest",
+      "req_id": 10012,
+      "resp": "SkillCatalogResponse",
+      "resp_id": 10012,
+      "handler": "player",
+      "group": "game",
+      "source_file": "skill_catalog.go",
+      "source_interface": "SkillCatalogProtocol"
+    },
+    {
+      "name": "SendGift",
+      "mode": "req_resp",
+      "req": "SendGiftRequest",
+      "req_id": 10013,
+      "resp": "SendGiftResponse",
+      "resp_id": 10013,
+      "handler": "player",
+      "group": "game",
+      "source_file": "send_gift.go",
+      "source_interface": "SendGiftProtocol"
+    },
+    {
+      "name": "GiftStatus",
+      "mode": "req_resp",
+      "req": "GiftStatusRequest",
+      "req_id": 10014,
+      "resp": "GiftStatusResponse",
+      "resp_id": 10014,
+      "handler": "player",
+      "group": "game",
+      "source_file": "gift_status.go",
+      "source_interface": "GiftStatusProtocol"
+    },
+    {
+      "name": "BattleInput",
+      "mode": "req_resp",
+      "req": "BattleInputRequest",
+      "req_id": 10015,
+      "resp": "BattleInputResponse",
+      "resp_id": 10015,
+      "handler": "player",
+      "group": "game",
+      "source_file": "battle_input.go",
+      "source_interface": "BattleInputProtocol"
+    },
+    {
+      "name": "RankTop",
+      "mode": "req_resp",
+      "req": "RankTopRequest",
+      "req_id": 10016,
+      "resp": "RankTopResponse",
+      "resp_id": 10016,
+      "handler": "player",
+      "group": "game",
+      "source_file": "rank_top.go",
+      "source_interface": "RankTopProtocol"
+    },
+    {
+      "name": "Move",
+      "mode": "req_resp",
+      "req": "MoveRequest",
+      "req_id": 10017,
+      "resp": "MoveResponse",
+      "resp_id": 10017,
+      "handler": "player",
+      "group": "game",
+      "source_file": "move.go",
+      "source_interface": "MoveProtocol"
+    },
+    {
+      "name": "Equip",
+      "mode": "req_resp",
+      "req": "EquipRequest",
+      "req_id": 10018,
+      "resp": "EquipResponse",
+      "resp_id": 10018,
+      "handler": "player",
+      "group": "game",
+      "source_file": "equip.go",
+      "source_interface": "EquipProtocol"
+    },
+    {
+      "name": "Purchase",
+      "mode": "req_resp",
+      "req": "PurchaseRequest",
+      "req_id": 10019,
+      "resp": "PurchaseResponse",
+      "resp_id": 10019,
+      "handler": "player",
+      "group": "game",
+      "source_file": "purchase.go",
+      "source_interface": "PurchaseProtocol"
+    },
+    {
+      "name": "ActivityStanding",
+      "mode": "req_resp",
+      "req": "ActivityStandingRequest",
+      "req_id": 10020,
+      "resp": "ActivityStandingResponse",
+      "resp_id": 10020,
+      "handler": "player",
+      "group": "game",
+      "source_file": "activity_standing.go",
+      "source_interface": "ActivityStandingProtocol"
+    },
+    {
+      "name": "FoundGuild",
+      "mode": "req_resp",
+      "req": "FoundGuildRequest",
+      "req_id": 10021,
+      "resp": "GuildResponse",
+      "resp_id": 10021,
+      "handler": "player",
+      "group": "game",
+      "source_file": "guild.go",
+      "source_interface": "GuildProtocol"
+    },
+    {
+      "name": "JoinGuild",
+      "mode": "req_resp",
+      "req": "JoinGuildRequest",
+      "req_id": 10022,
+      "resp": "GuildResponse",
+      "resp_id": 10022,
+      "handler": "player",
+      "group": "game",
+      "source_file": "guild.go",
+      "source_interface": "GuildProtocol"
+    },
+    {
+      "name": "GuildInfo",
+      "mode": "req_resp",
+      "req": "GuildInfoRequest",
+      "req_id": 10023,
+      "resp": "GuildResponse",
+      "resp_id": 10023,
+      "handler": "player",
+      "group": "game",
+      "source_file": "guild.go",
+      "source_interface": "GuildProtocol"
+    },
+    {
+      "name": "SceneReady",
+      "mode": "req_resp",
+      "req": "SceneReadyRequest",
+      "req_id": 10024,
+      "resp": "SceneReadyResponse",
+      "resp_id": 10024,
+      "handler": "player",
+      "group": "game",
+      "source_file": "scene_ready.go",
+      "source_interface": "SceneReadyProtocol"
+    }
+  ],
+  "pushes": [
+    {
+      "name": "MatchFound",
+      "mode": "ntf",
+      "msg": "MatchFoundPush",
+      "msg_id": 10100,
+      "group": "game",
+      "source_file": "match_found.go",
+      "source_interface": "MatchFoundProtocol"
+    },
+    {
+      "name": "ChatMessage",
+      "mode": "ntf",
+      "msg": "ChatMessagePush",
+      "msg_id": 10101,
+      "group": "game",
+      "source_file": "chat_message.go",
+      "source_interface": "ChatMessageProtocol"
+    },
+    {
+      "name": "BattleFrame",
+      "mode": "ntf",
+      "msg": "BattleFramePush",
+      "msg_id": 10102,
+      "group": "game",
+      "source_file": "battle_frame.go",
+      "source_interface": "BattleFrameProtocol"
+    },
+    {
+      "name": "EntitySync",
+      "mode": "ntf",
+      "msg": "EntitySyncPush",
+      "msg_id": 10103,
+      "group": "game",
+      "source_file": "entity_sync.go",
+      "source_interface": "EntitySyncProtocol"
+    }
+  ]
+}

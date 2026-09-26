@@ -1,0 +1,47 @@
+package monster
+
+import (
+	db "example.com/planet/db"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindMonster entity.EntityKind = 4
+
+// SyncNamespaceMonster is the routing key every update of a replicated monster carries on the wire.
+const SyncNamespaceMonster = "monster"
+
+// Monster is a thing the scene spawns, replicates and takes away again.
+//
+// It is the demo's proof that the AOI and the replication pipeline do not
+// care what is behind a subject: a monster is registered with the interest
+// system as a subject that never observes, and everything else — the room,
+// the packer, the wire — is the same code the Player uses.
+//
+// `noPersist=true lifetime=ephemeral`: the spawner rebuilds the population on
+// every start from the spawn table, so a monster that survived a restart
+// would be a monster nobody counted.
+//
+// Category: rank 5 (Other), below Player — a transaction that touches a
+// player and a monster takes the player first. Nothing in the demo does that
+// yet; deciding it now is cheaper than deciding it after the first monster id
+// exists, because the rank is encoded in the id.
+//
+//roost:entity id=4 entityKind=EntityKindMonster category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral sync=true syncNamespace="monster" subjectPacker=NewMonsterSyncPacker
+type Monster struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	body *BodyComponent `comp:"CompTypeBody"`
+	dao  *db.MonsterDao `dao:"monster"`
+}
+
+// PublishSyncDirty hands the DAO's accumulated sync mask to the subject, the
+// same way the Player does. One call per mutation, not per field.
+func (monster *Monster) PublishSyncDirty() {
+	if monster == nil {
+		return
+	}
+	if mask := monster.Dao().DirtyTracker().TakeSyncDirty(); mask != 0 {
+		monster.MarkSyncDirty(mask)
+	}
+}

@@ -1,0 +1,198 @@
+package Game
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	monster "example.com/planet/game/entities/monster"
+	sceneentity "example.com/planet/game/entities/scene"
+	"example.com/planet/game/flags"
+	lifecycle "example.com/planet/game/lifecycle"
+	"example.com/planet/game/runtimeid"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// spawnTick is how often the spawner asks the scene what is missing. It is a
+// latency budget for respawns, not a simulation rate: a monster that should
+// come back at t comes back within one tick of it.
+const spawnTick = time.Second
+
+// spawner turns the scene's population policy into Entities.
+//
+// The split is the same one the interest system uses: the Refresh system
+// decides WHAT should exist (it reads the spawn table and counts what it has
+// been told exists), and this file makes it exist — because building an
+// Entity needs the lifecycle, the lifecycle needs the entity packages, and
+// the entity packages hold the scene runtime. A system that created its own
+// Entities would be an import cycle.
+//
+// Monster ids come from game/runtimeid: the process's sid is encoded into the
+// id, so two game processes cannot mint the same one. A local counter was the
+// first version of this and it was wrong for exactly the deployment the rest
+// of the demo is built for (RR-20260918-09).
+type spawner struct {
+	area   *sceneentity.Scene
+	bridge *Scene
+	lives  *lifecycle.MonsterLifecycle
+	ids    *runtimeid.Allocator
+
+	mu       sync.Mutex
+	monsters map[int64]*monster.Monster
+}
+
+func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity.Scene, bridge *Scene) (func(), *spawner, error) {
+	lives, err := lifecycle.MonsterFromRegistry(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("spawner: %w", err)
+	}
+	ids, err := runtimeid.New(processSid(registry))
+	if err != nil {
+		return nil, nil, fmt.Errorf("spawner: %w", err)
+	}
+	instance := &spawner{
+		area: area, bridge: bridge, lives: lives, ids: ids,
+		monsters: make(map[int64]*monster.Monster),
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(spawnTick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case now := <-ticker.C:
+				instance.refill(loopCtx, now)
+			}
+		}
+	}()
+	stop := func() {
+		cancel()
+		<-done
+		// Take the population down with the process: these Entities are
+		// ephemeral, and leaving them in the manager would leave subjects the
+		// room still holds.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer drainCancel()
+		instance.drain(drainCtx)
+	}
+	return stop, instance, nil
+}
+
+// refill asks the scene what is missing and creates it. Each monster is
+// created, placed, registered as a replicated subject and shown to the
+// interest system — in that order, because a subject that is visible before
+// it has a position would be replicated at (0,0).
+func (s *spawner) refill(ctx context.Context, now time.Time) {
+	// The respawn kill switch, read before the pass rather than per monster:
+	// off means the population DRAINS as monsters are killed, not that
+	// anything alive disappears. Removing live monsters would be a different
+	// operation with different consequences, and a switch should not quietly
+	// be both.
+	if !flags.Enabled(flags.MonsterSpawn) {
+		return
+	}
+	refresh := s.area.Refresh()
+	if refresh == nil {
+		return
+	}
+	for _, request := range refresh.Due(now) {
+		uniqueID, err := s.ids.Next()
+		if err != nil {
+			// The sequence is exhausted. Refusing is the point: wrapping
+			// would re-mint ids that are still in use.
+			slog.Error("spawner: out of runtime ids", "err", err)
+			return
+		}
+		value, err := s.lives.Create(ctx, uniqueID)
+		if err != nil {
+			slog.Warn("spawner: monster not created", "group", request.Group, "err", err)
+			continue
+		}
+		value.BodyComp().Place(request.Template, request.HP, request.At)
+		if err := s.bridge.ShowSubject(ctx, value.Sync(), value.ID(), request.At); err != nil {
+			slog.Warn("spawner: monster not replicated", "monster_id", value.ID(), "err", err)
+			_ = s.lives.Destroy(ctx, value, coreentity.DestroyReasonCommon, false)
+			continue
+		}
+		s.mu.Lock()
+		s.monsters[value.ID()] = value
+		s.mu.Unlock()
+		// Only now does it count: the system counts what it has been told
+		// exists, so a failure above simply appears in the next Due.
+		refresh.Spawned(request.Group, value.ID())
+	}
+}
+
+// Kill removes a monster and queues its slot. It is what the GM command calls;
+// a real game calls it from combat.
+func (s *spawner) Kill(ctx context.Context, monsterID int64) error {
+	s.mu.Lock()
+	value, known := s.monsters[monsterID]
+	delete(s.monsters, monsterID)
+	s.mu.Unlock()
+	if !known {
+		return fmt.Errorf("spawner: monster %d is not here", monsterID)
+	}
+	s.area.Refresh().Died(monsterID, time.Now())
+	s.bridge.HideSubject(ctx, monsterID)
+	return s.lives.Destroy(ctx, value, coreentity.DestroyReasonCommon, false)
+}
+
+func (s *spawner) drain(ctx context.Context) {
+	s.mu.Lock()
+	values := make([]*monster.Monster, 0, len(s.monsters))
+	for _, value := range s.monsters {
+		values = append(values, value)
+	}
+	s.monsters = make(map[int64]*monster.Monster)
+	s.mu.Unlock()
+	for _, value := range values {
+		s.bridge.HideSubject(ctx, value.ID())
+		if err := s.lives.Destroy(ctx, value, coreentity.DestroyReasonCommon, false); err != nil {
+			slog.Debug("spawner: monster not destroyed", "monster_id", value.ID(), "err", err)
+		}
+	}
+}
+
+// processSid is this process's server id, the same number every other part of
+// the deployment is keyed by. It is required: a process that does not know
+// which server it is cannot mint ids that are unique across servers.
+//
+// It comes from the registry's own configuration, which is the process's
+// config. `fctx.RuntimeConfig()` looks like the same thing and is not — that
+// slot holds whatever was set last, and the config-data Mod puts its active
+// snapshot there.
+func processSid(registry *app.Registry) int32 {
+	if registry == nil {
+		return 0
+	}
+	config := registry.Config()
+	if config == nil {
+		return 0
+	}
+	return int32(config.GetInt("sid"))
+}
+
+// Count and IDs are what the GM commands report.
+func (s *spawner) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.monsters)
+}
+
+func (s *spawner) IDs() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]int64, 0, len(s.monsters))
+	for id := range s.monsters {
+		ids = append(ids, id)
+	}
+	return ids
+}

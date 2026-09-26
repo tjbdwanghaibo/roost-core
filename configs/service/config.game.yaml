@@ -1,0 +1,195 @@
+# Generated starter configuration; application-owned after project creation.
+sid: 1000
+log:
+  level: info
+  json: true
+  stdout: true
+  file: true
+  dir: log
+shutdown:
+  total_timeout: 30s
+  serve_wait_timeout: 5s
+ops:
+  enabled: true
+  addr: 127.0.0.1:9100
+  admin_enabled: true
+  admin_token: dev-gm-token
+  allow_dev_token: true
+stats_log:
+  enabled: true
+  dir: log
+  interval: 1m
+config_data:
+  dir: configs/data
+mongo:
+  uri: mongodb://127.0.0.1:27017/?replicaSet=rs0
+  connect_timeout: 5s
+  transaction_timeout: 30s
+  require_replica_set: true
+  max_pool_size: 100
+  min_pool_size: 5
+  max_idle_time: 5m
+nats:
+  url: nats://127.0.0.1:4222
+  prefix: roost
+  worker_num: 8
+  reliable:
+    enabled: false
+persistence:
+  engine: dataengine
+nest:
+  worker_num: 8
+  heartbeat_worker_num: 2
+  queue_capacity: 4096
+  delayed_capacity: 4096
+  max_delay: 24h
+  tick_duration: 50ms
+  request_timeout: 3s
+  pipelined:
+    allowlist: []
+    async: false
+    async_workers: 8
+    async_queue_capacity: 4096
+dataengine:
+  database: game
+  startup_timeout: 30s
+  shutdown_timeout: 30s
+  transaction_receipt_ttl: 720h
+  receipt_ttl: 720h
+  wal:
+    dir: data/wal/dataengine
+    writer_version: 2
+    segment_bytes: 268435456
+    max_disk_bytes: 8589934592
+    max_unacked_age: 24h
+    queue_capacity: 8192
+    group_commit_interval: 2ms
+  projection:
+    batch_records: 256
+    retry_min: 100ms
+    retry_max: 5s
+  outbox:
+    workers: 2
+    batch_size: 64
+    lease_duration: 30s
+    poll_interval: 100ms
+    retry_min: 1s
+    retry_max: 1m
+    max_pending: 1000000
+    max_oldest_age: 30m
+  effects:
+    subject_prefix: roost.effect
+    stream: ROOST_EFFECTS
+    max_age: 168h
+    max_bytes: 8589934592
+    duplicate_window: 10m
+    replicas: 1
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+  pool_size: 32
+  min_idle_conns: 4
+syncbus:
+  transport: jetstream
+  prefix: roost.sync
+  storage: file
+  replicas: 1
+  publish_timeout: 3s
+remote_entity:
+  lock_ttl: 15s
+  retry_count: 3
+  retry_delay: 100ms
+  op_timeout: 3s
+  unlock_retry_count: 5
+  unlock_retry_interval: 100ms
+  version_ttl: 24h
+  finalize_retry_interval: 500ms
+  max_write_batch: 64
+  wrapper_capacity: 65536
+  wrapper_idle_ttl: 5m
+  snapshot_cache_shards: 64
+  snapshot_cache_entries: 10000
+  snapshot_cache_bytes: 268435456
+  snapshot_cache_ttl: 30s
+  snapshot_l2_ttl: 10m
+  snapshot_interest_ttl: 30s
+  snapshot_interest_keys: 10000
+  snapshot_interest_subs: 100000
+  marker_cache_ttl: 2s
+  snapshot_load_timeout: 3s
+  snapshot_max_waiters: 4096
+  async_finalize_capacity: 4096
+  async_finalize_workers: 16
+  transaction_track_limit: 100000
+  transaction_track_ttl: 10m
+  mongo:
+    database: remote_entity
+    transaction_ttl: 168h
+saga:
+  database: saga
+  subject_prefix: roost.saga
+  stream: ROOST_SAGA
+  coordinator_workers: 4
+  publisher_workers: 4
+  coordinator_claim_batch: 3
+  publisher_claim_batch: 1
+  lease_duration: 15s
+  store_timeout: 3s
+  poll_interval: 100ms
+  publish_timeout: 3s
+  publish_backoff_min: 50ms
+  publish_backoff_max: 5s
+  max_payload_bytes: 65536
+  completion_receipt_ttl: 720h
+  stream_max_age: 168h
+  stream_max_bytes: 8589934592
+  duplicate_window: 10m
+  replicas: 1
+  result_ack_wait: 30s
+  result_process_timeout: 3s
+  result_max_deliver: 25000
+  result_max_ack_pending: 256
+  result_nak_backoff_min: 250ms
+  result_nak_backoff_max: 30s
+  start_effect_stream: ROOST_EFFECTS
+  start_effect_prefix: roost.effect
+  start_effect_durable: roost-saga-start
+  start_effect_ack_wait: 30s
+  start_effect_process_timeout: 3s
+  start_effect_max_deliver: 25000
+  start_effect_max_ack_pending: 256
+  start_effect_nak_backoff_min: 250ms
+  start_effect_nak_backoff_max: 30s
+  result_effect_durable: roost-saga-start-result
+  result_effect_ack_wait: 30s
+  result_effect_process_timeout: 3s
+  result_effect_max_deliver: 25000
+  result_effect_max_ack_pending: 256
+  result_effect_nak_backoff_min: 250ms
+  result_effect_nak_backoff_max: 30s
+
+player_access:
+  tcp:
+    enabled: true
+    addr: 0.0.0.0:7000
+    max_connections: 10000
+    max_connections_per_ip: 128
+    max_handshakes: 1024
+    max_handshake_bytes: 8192
+    max_payload_bytes: 1048576
+    handshake_timeout: 5s
+    idle_timeout: 90s
+    write_timeout: 5s
+    shutdown_timeout: 10s
+game_route:
+  key_prefix: roost:planet:route
+activity:
+  key_prefix: roost:planet:activity
+  # Every game server this deployment may run. LiveGames narrows it to
+  # the ones holding a lease, and those are what an activity waits for.
+  game_sids:
+    - 1000
+platform:
+  key_prefix: roost:planet:platform
+  payment_secret: dev-platform-payment-secret

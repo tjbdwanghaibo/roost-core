@@ -1,0 +1,17 @@
+[
+  {
+    "enabled": true,
+    "name": "purchase",
+    "note": "The store. Off refuses Purchase with a coded answer; paid orders already recorded still settle."
+  },
+  {
+    "enabled": true,
+    "name": "monster_spawn",
+    "note": "Scene monsters. Off stops respawns; monsters already alive stay until killed."
+  },
+  {
+    "enabled": true,
+    "name": "activity",
+    "note": "The timed server-wide event. Off stops opening new windows; a window already open still settles."
+  }
+]

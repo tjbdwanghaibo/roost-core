@@ -1,0 +1,4 @@
+name,enabled,note
+Name,Enabled,Note
+string,bool,string
+required;unique,,

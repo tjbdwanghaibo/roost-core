@@ -1,0 +1,41 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "example.com/planet/game/entities/player"
+	syncsender "example.com/planet/game/handler/syncsender"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleAddExp: same boundary rule as HandleAddItem — coded errors become the
+// response, everything else collapses to CodeInternal and is logged here.
+// It is hand-written rather than scaffolded: `roost add endpoint` wires a
+// single-entity handler, and AddExp addresses two.
+func (controller *Controller) HandleAddExp(context *player_agent.Context, request *pb.AddExpRequest) (*pb.AddExpResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("add_exp endpoint: context and request are required")
+	}
+	// context.PlayerID is the player's unique id; Nest addresses a full entity
+	// id, which carries the kind and its lock category as well.
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("add_exp endpoint: %w", err)
+	}
+	sender := syncsender.NewAddExpSender(controller.NestClient())
+	// Two entity ids, one call: the handler declares two entity parameters,
+	// so the Sender takes an id for each and Nest locks both, World first.
+	gained, err := sender.MultiSync_AddExp(context.Context(), entityID, controller.WorldID(), request.Amount)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("add_exp failed", "player_id", context.PlayerID, "amount", request.Amount, "err", err)
+		}
+		return &pb.AddExpResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.AddExpResponse{LevelsGained: gained}, nil
+}

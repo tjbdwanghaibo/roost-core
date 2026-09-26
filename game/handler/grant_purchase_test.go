@@ -1,0 +1,125 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	syncsender "example.com/planet/game/handler/syncsender"
+	apperrors "example.com/planet/internal/errors"
+)
+
+// The paid-order ledger closes the window between the platform process and
+// this one: the grant is recorded in Redis, the transaction below puts the
+// items in the bag, and the record is deleted afterwards. A crash between the
+// commit and the delete means the grant is read again — and the second read
+// must grant nothing.
+//
+// It runs against the real generated handler in a real Nest transaction, on
+// the same harness the mail ledger uses.
+
+func TestAPaidOrderIsGrantedOnce(t *testing.T) {
+	subject, client, committer := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	const potion = int64(1001)
+	ctx := context.Background()
+	sender := syncsender.NewGrantPurchaseSender(client)
+
+	first, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "order-1", potion, 10, now, now)
+	if err != nil {
+		t.Fatalf("first grant: %v", err)
+	}
+	if !first.Granted || first.BagCount != 10 {
+		t.Fatalf("first grant = %+v, want ten potions", first)
+	}
+
+	// The drain read the same grant again: the delete was lost.
+	second, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "order-1", potion, 10, now, now+30)
+	if err != nil {
+		t.Fatalf("replayed grant: %v", err)
+	}
+	if second.Granted {
+		t.Error("the replayed grant reported a fresh delivery")
+	}
+	if second.BagCount != 10 || subject.BagComp().ItemCount(potion) != 10 {
+		t.Errorf("the bag holds %d after a replay, want 10", subject.BagComp().ItemCount(potion))
+	}
+
+	// A second purchase is a second order: the ledger must not mistake it for
+	// a replay, or a player who buys twice is charged twice and paid once.
+	other, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "order-2", potion, 10, now, now)
+	if err != nil {
+		t.Fatalf("second order: %v", err)
+	}
+	if !other.Granted || other.BagCount != 20 {
+		t.Fatalf("second order = %+v, want a second stack", other)
+	}
+	if len(committer.records) < 2 {
+		t.Fatalf("the grants committed %d records; the ledger entry and the items must ride together", len(committer.records))
+	}
+}
+
+// A paid grant does not expire, and its ledger entry is never pruned
+// (RR-20260919-06).
+//
+// The first version of this gave a grant thirty days and pruned on the same
+// number. The reasoning was right for mail — admission and pruning must be one
+// predicate — and wrong here, because a paid order has no moment after which a
+// replay is impossible: the platform service marked it delivered when the
+// grant became durable. A player who did not log in for a month would have
+// found a paid order settled on one side and refused on the other, with the
+// grant deleted afterwards.
+func TestAnOldPaidGrantIsStillHonoured(t *testing.T) {
+	subject, client, _ := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	const potion = int64(1001)
+	ctx := context.Background()
+	sender := syncsender.NewGrantPurchaseSender(client)
+
+	// A year later. There is no retention that makes this refusable.
+	paidAt := now - 365*24*60*60
+	result, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "ancient", potion, 10, paidAt, now)
+	if err != nil || !result.Granted {
+		t.Fatalf("a year-old paid grant was refused: %+v %v", result, err)
+	}
+	if held := subject.BagComp().ItemCount(potion); held != 10 {
+		t.Fatalf("the bag holds %d, want the goods that were paid for", held)
+	}
+
+	// And the ledger still refuses its replay, however old: an entry that was
+	// pruned would let the next drain pay a second time.
+	replay, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "ancient", potion, 10, paidAt, now+10*365*24*60*60)
+	if err != nil {
+		t.Fatalf("replaying an ancient grant: %v", err)
+	}
+	if replay.Granted || subject.BagComp().ItemCount(potion) != 10 {
+		t.Errorf("an old ledger entry was forgotten; the replay paid again: %+v", replay)
+	}
+}
+
+// A grant with no order id or no payment moment cannot be made exactly-once,
+// so it is refused rather than granted on trust.
+func TestAnUnidentifiableGrantIsRefused(t *testing.T) {
+	subject, client, _ := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	ctx := context.Background()
+	sender := syncsender.NewGrantPurchaseSender(client)
+
+	for name, call := range map[string]func() error{
+		"no order id": func() error {
+			_, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "", 1001, 1, now, now)
+			return err
+		},
+		"no payment moment": func() error {
+			_, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "order-3", 1001, 1, 0, now)
+			return err
+		},
+	} {
+		if err := call(); !errors.Is(err, apperrors.ErrPurchaseGrant) {
+			t.Errorf("%s: returned %v, want the coded refusal", name, err)
+		}
+	}
+	if held := subject.BagComp().ItemCount(1001); held != 0 {
+		t.Errorf("a refused grant moved the bag to %d", held)
+	}
+}

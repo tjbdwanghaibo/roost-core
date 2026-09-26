@@ -1,0 +1,25 @@
+package handler
+
+import (
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+)
+
+// handlerAddExp is a two-entity transaction: the Player gains experience and
+// levels up, the World counts the experience granted, and both changes land
+// in one WAL record — either both are durable or neither is. Nest locks the
+// two by rank, World (2) before Player (4), which is why the demo moved the
+// kinds off the scaffold's EntityCategoryOther (see the entity files). The
+// level-up effect rides on the same transaction. The return value is the
+// number of levels gained, carried back through the generated Sender
+// (MultiSync_AddExp, one id per entity parameter).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+	gained, err := target.ProfileComp().AddExp(amount)
+	if err != nil {
+		return 0, err
+	}
+	stats.StatsComp().RecordExp(amount)
+	return gained, nil
+}

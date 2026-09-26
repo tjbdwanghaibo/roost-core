@@ -1,0 +1,836 @@
+package Game
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"example.com/planet/game/playerroute"
+	"example.com/planet/protocol/msgid"
+)
+
+// RR-20260920-04：持有一把租约，和**知道自己还持有它**，是两件事。
+//
+// 续租失败之后这个进程什么都不知道，而 30 秒后另一个进程可以合法地接手同一个
+// 玩家。所以"写到有人来拦"不成立——没有人会来拦。每条写入路径都问 Admit，它只
+// 根据 Redis 最近一次**确认过**的续租回答，并且在确认的租约快到期时提前收口。
+
+type fakeLeaseTable struct {
+	sid      int32
+	owner    map[int64]int32
+	refresh  func(playerID int64) playerroute.RefreshResult
+	released []int64
+}
+
+func newFakeLeaseTable(sid int32) *fakeLeaseTable {
+	return &fakeLeaseTable{sid: sid, owner: map[int64]int32{}}
+}
+
+func (f *fakeLeaseTable) SID() int32 { return f.sid }
+
+func (f *fakeLeaseTable) Claim(_ context.Context, playerID int64) (playerroute.Route, error) {
+	if held, ok := f.owner[playerID]; ok {
+		return playerroute.Route{SID: held, Token: "t"}, nil
+	}
+	f.owner[playerID] = f.sid
+	return playerroute.Route{SID: f.sid, Token: "t"}, nil
+}
+
+func (f *fakeLeaseTable) Owner(_ context.Context, playerID int64) (playerroute.Route, error) {
+	if held, ok := f.owner[playerID]; ok {
+		return playerroute.Route{SID: held, Token: "t"}, nil
+	}
+	return playerroute.Route{}, nil
+}
+
+func (f *fakeLeaseTable) Owns(_ context.Context, playerID int64) (bool, error) {
+	return f.owner[playerID] == f.sid, nil
+}
+
+func (f *fakeLeaseTable) GetRoute(_ context.Context, playerID int64) (playerroute.Route, bool, error) {
+	held, ok := f.owner[playerID]
+	if !ok {
+		return playerroute.Route{}, false, nil
+	}
+	return playerroute.Route{SID: held, Token: "t"}, true, nil
+}
+
+func (f *fakeLeaseTable) Refresh(_ context.Context, playerIDs []int64) []playerroute.RefreshResult {
+	out := make([]playerroute.RefreshResult, 0, len(playerIDs))
+	for _, playerID := range playerIDs {
+		if f.refresh != nil {
+			out = append(out, f.refresh(playerID))
+			continue
+		}
+		out = append(out, playerroute.RefreshResult{PlayerID: playerID, Held: f.owner[playerID] == f.sid})
+	}
+	return out
+}
+
+func (f *fakeLeaseTable) Release(_ context.Context, playerID int64) error {
+	f.released = append(f.released, playerID)
+	delete(f.owner, playerID)
+	return nil
+}
+
+type fakeFencer struct {
+	closed []int64
+	// online is who this process still has a connection for. The zero value
+	// is "nobody", which is what a background consumer's player looks like.
+	online map[int64]int
+}
+
+func (f *fakeFencer) CloseSessions(playerID int64, _ error) int {
+	f.closed = append(f.closed, playerID)
+	delete(f.online, playerID)
+	return 1
+}
+
+func (f *fakeFencer) ActiveSessions(playerID int64) int { return f.online[playerID] }
+
+func (f *fakeFencer) connect(playerID int64) {
+	if f.online == nil {
+		f.online = map[int64]int{}
+	}
+	f.online[playerID] = 1
+}
+
+func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeLeaseTable, *fakeFencer, *time.Time) {
+	t.Helper()
+	table := newFakeLeaseTable(1000)
+	fencer := &fakeFencer{}
+	clock := time.Unix(1_700_000_000, 0)
+	owners := newPlayerOwners(table, fencer, func() time.Time { return clock })
+	// Every assembled deployment has one (service.go installs it before the
+	// table is published), and without one a claim across a gap is refused —
+	// which is the point of RR-20260920-09, not the subject of most tests.
+	owners.Evict(&evictorStub{})
+	// Likewise every assembled deployment waits for the data engine before a
+	// hand-back (RR-20260926-31); by default nothing is in flight.
+	owners.Projections(newProjectionStub())
+	return owners, table, fencer, &clock
+}
+
+// Redis 说这把租约已经是别人的：立刻停止服务这个玩家——拒绝新事务，并断开连接。
+func TestALostLeaseFencesThePlayer(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	ctx := context.Background()
+	if mine, err := owners.Claim(ctx, 42); err != nil || !mine {
+		t.Fatalf("claim = %v, %v", mine, err)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a freshly confirmed lease was refused: %v", err)
+	}
+
+	// The next renewal says it is somebody else's. (Not merely gone: a lease
+	// that has simply lapsed is retaken, which the test below covers.)
+	table.owner[42] = 1001
+	owners.renew(ctx)
+
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a player whose lease moved is still admitted for writes: %v", err)
+	}
+	if len(fencer.closed) != 1 || fencer.closed[0] != 42 {
+		t.Fatalf("the player was left connected to a process that may not serve them: closed=%v", fencer.closed)
+	}
+	// The lease belongs to somebody else now; deleting it would delete THEIR
+	// lease, so nothing was released.
+	if len(table.released) != 0 {
+		t.Fatalf("a fenced lease was released, which deletes the new owner's: %v", table.released)
+	}
+}
+
+// 续租读不出来（Redis 挂了）：不知道 ≠ 失去。租约不被放弃，但确认的期限不再延长，
+// 于是准入自己走到头——这正是"停在越界之前"和"越界之后还在写"的区别。
+func TestAnUnknownRenewalRunsAdmissionOutInsteadOfPretending(t *testing.T) {
+	owners, table, fencer, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	table.refresh = func(playerID int64) playerroute.RefreshResult {
+		return playerroute.RefreshResult{PlayerID: playerID, Err: errors.New("redis down")}
+	}
+
+	// Renewals keep failing while the confirmed lease still has room.
+	for i := 0; i < 2; i++ {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		if err := owners.Admit(42); err != nil {
+			t.Fatalf("admission stopped while the confirmed lease still had %s left: %v", playerroute.Lease-time.Duration(i+1)*playerroute.RefreshInterval, err)
+		}
+	}
+	if len(fencer.closed) != 0 {
+		t.Fatalf("an unknown renewal disconnected the player; unknown is not lost: %v", fencer.closed)
+	}
+
+	// Past the guard band, admission must stop on its own.
+	*clock = clock.Add(playerroute.Lease - 2*playerroute.RefreshInterval - AdmissionGuard + time.Second)
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a new transaction was admitted inside the guard band: %v", err)
+	}
+}
+
+// 准入必须提前于到期收口，否则一个在最后一刻被放行的事务会跨过截止时刻。
+func TestAdmissionStopsOneGuardBandBeforeTheDeadline(t *testing.T) {
+	owners, _, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	*clock = clock.Add(playerroute.Lease - AdmissionGuard - time.Second)
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("refused while more than the guard band remained: %v", err)
+	}
+	*clock = clock.Add(2 * time.Second)
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("admitted with less than the guard band left: %v", err)
+	}
+}
+
+// 没有确认过的租约就不能写，哪怕 Redis 里这个 sid 确实是持有者——那可能是前一次
+// 化身留下的。
+func TestASidMatchWithoutAConfirmedLeaseIsNotOwnership(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	ctx := context.Background()
+	table.owner[42] = 1000 // same sid, but this process never claimed it
+
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a lease this process never confirmed was admitted: %v", err)
+	}
+	owned, err := owners.OwnedHere(ctx, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned {
+		t.Fatal("OwnedHere answered yes for a lease this process cannot prove it holds")
+	}
+}
+
+// 边界上的闸门：登录必须放行（它就是取得所有权的那条消息），其余一律按 Admit 判。
+func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
+	owners, _, _, _ := ownersUnderTest(t)
+	ctx := context.Background()
+
+	// Nothing claimed yet: only the login may run.
+	if err := owners.AdmitMessage(42, msgid.MsgEnterGame); err != nil {
+		t.Fatalf("login was gated on already owning the player: %v", err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a write was admitted for a player this process does not own: %v", err)
+	}
+
+	// After the login's claim, ordinary messages run.
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); err != nil {
+		t.Fatalf("a write was refused while the lease is confirmed: %v", err)
+	}
+}
+
+// 租约只是"没了"（我们的续租断过一段），而没有别人接手：重新取回来，不要把玩家踢掉。
+// SetNX 是原子的，所以"没人拿着"这个判断和取回是同一件事。
+func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	// Retaking means dropping the copy from before the gap, so a table that
+	// can retake is a table that can forget (RR-20260920-09). This used to
+	// pass without an evictor, which was the defect: the retake was treated
+	// as benign.
+	owners.Evict(&evictorStub{})
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// The key vanished — our renewals lapsed — but nobody took the player.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a lease that merely lapsed was not retaken: %v", err)
+	}
+	if len(fencer.closed) != 0 {
+		t.Fatalf("the player was disconnected although nobody else had taken them: %v", fencer.closed)
+	}
+	if table.owner[42] != 1000 {
+		t.Fatalf("the table does not show this process as the owner: %v", table.owner)
+	}
+}
+
+// evictorStub records which players this process was told to forget, and can
+// refuse one.
+type evictorStub struct {
+	mu      sync.Mutex
+	dropped []int64
+	fail    error
+}
+
+func (stub *evictorStub) EvictPlayer(_ context.Context, playerID int64) error {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.fail != nil {
+		return stub.fail
+	}
+	stub.dropped = append(stub.dropped, playerID)
+	return nil
+}
+
+// forget is what a test calls between the claim it does not care about and
+// the one it does.
+func (stub *evictorStub) forget() {
+	stub.mu.Lock()
+	stub.dropped = nil
+	stub.mu.Unlock()
+}
+
+func (stub *evictorStub) taken() []int64 {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	return append([]int64(nil), stub.dropped...)
+}
+
+// U-0268 · C8 · RR-20260920-09：租约有过间断，内存里那份副本就不能再用。
+//
+// An absent key has two histories — nobody ever took the player, or somebody
+// took them, wrote, and their lease expired too — and the table cannot tell
+// them apart. So a claim across a gap must drop whatever this process still
+// has: nothing reloads a resident entity, and the document may have moved on
+// without it.
+func TestALeaseThatWasInterruptedDropsTheResidentCopy(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// The first claim is itself a claim across a gap — this process had
+	// nothing before it — so it asks for the copy to be dropped and finds
+	// none. What matters is the SECOND one.
+	evictor.forget()
+
+	// The key vanished: our renewals lapsed. Whether anybody else held it in
+	// the meantime is exactly what cannot be known.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if dropped := evictor.taken(); len(dropped) != 1 || dropped[0] != 42 {
+		t.Fatalf("the copy from before the gap was kept: dropped=%v", dropped)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("the player is not served after a clean retake: %v", err)
+	}
+}
+
+// A claim this process could not make safe is not taken into service: the
+// lease is left to lapse rather than used on a copy that is still there.
+func TestAClaimWhoseCopyCannotBeDroppedIsNotTakenIntoService(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	ctx := context.Background()
+	mine, err := owners.Claim(ctx, 42)
+	if mine {
+		t.Fatal("the player was taken into service although the stale copy is still resident")
+	}
+	if err == nil {
+		t.Fatal("the caller was not told why")
+	}
+	if err := owners.Admit(42); err == nil {
+		t.Fatal("writes are admitted for a player this process could not make safe")
+	}
+	// The lease IS ours in Redis — nothing refreshes it, so it lapses.
+	if table.owner[42] != 1000 {
+		t.Fatalf("the claim did not happen at all: %v", table.owner)
+	}
+}
+
+// Holding the lease without interruption keeps the resident copy: the whole
+// point is that an ordinary session costs nothing.
+func TestAnUninterruptedLeaseKeepsItsPlayer(t *testing.T) {
+	owners, _, fencer, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// Logged in here, so the idle hand-back (U-0269) leaves them alone and
+	// this test is about the interruption rule only.
+	fencer.connect(42)
+	evictor.forget()
+	for range 5 {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+	}
+	// And a re-login while the lease never lapsed is not a gap either.
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if dropped := evictor.taken(); len(dropped) != 0 {
+		t.Fatalf("a player this process never stopped owning was dropped: %v", dropped)
+	}
+}
+
+// Fencing takes the copy with the sessions. Disconnecting stops this process
+// being asked to do anything; it does not make the resident entity match a
+// document the new owner is writing.
+func TestFencingAlsoDropsTheCopy(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	evictor.forget()
+	table.owner[42] = 2000 // another process owns them now
+	owners.renew(ctx)
+
+	if len(fencer.closed) != 1 {
+		t.Fatalf("the player was not disconnected: %v", fencer.closed)
+	}
+	// The eviction is not waited on, so give it a moment to land.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(evictor.taken()) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("a fenced player's copy was kept: dropped=%v", evictor.taken())
+}
+
+// U-0269 · C8 · RR-20260920-10：为后台工作取得的所有权必须还回去。
+//
+// Ownership has to be takeable for an offline player — their mail, their saga
+// steps and their paid orders cannot wait for them to log in. What it must
+// not be is permanent: nothing releases it, so the first background step to
+// touch an offline player used to pin them to that process for as long as it
+// lived, and a login anywhere else was refused by name, forever.
+func TestABackgroundClaimIsHandedBackWhenNobodyIsPlaying(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+
+	// A gift step for a player who is not logged in anywhere.
+	owned, err := owners.Owns(ctx, 77)
+	if err != nil || !owned {
+		t.Fatalf("a background consumer could not take an unowned player: owned=%v err=%v", owned, err)
+	}
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim did not happen: %v", table.owner)
+	}
+	// Taking a player this process did not hold is itself a claim across a
+	// gap, so it already asked for a copy that is not there (U-0268). What
+	// this test is about is the drop that comes with the hand-back.
+	evictor.forget()
+	// The step finishes; nothing else asks about this player.
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if len(evictor.taken()) != 1 {
+		t.Fatalf("the player's copy was kept: %v", evictor.taken())
+	}
+	if _, held := table.owner[77]; held {
+		t.Fatalf("the lease was not handed back: %v", table.owner)
+	}
+	if err := owners.Admit(77); err == nil {
+		t.Fatal("this process still admits writes for a player it gave back")
+	}
+}
+
+// A player who is actually playing here keeps their lease however quiet they
+// are: an idle connection is still a connection.
+func TestAPlayerWithASessionIsNeverHandedBack(t *testing.T) {
+	owners, table, fencer, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	fencer.connect(42)
+	for range 5 {
+		*clock = clock.Add(HandBackIdle)
+		owners.renew(ctx)
+	}
+	if table.owner[42] != 1000 {
+		t.Fatalf("a connected player's lease was given away: %v", table.owner)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a connected player is no longer admitted: %v", err)
+	}
+}
+
+// Work in progress holds the lease: every admission is a use, so a step that
+// keeps being retried is never handed back underneath itself.
+func TestWorkInProgressKeepsTheLease(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	for range 5 {
+		*clock = clock.Add(HandBackIdle - time.Second)
+		if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+			t.Fatalf("the background consumer lost the player mid-work: %v %v", owned, err)
+		}
+		owners.renew(ctx)
+	}
+	if table.owner[77] != 1000 {
+		t.Fatalf("a lease doing work was handed back: %v", table.owner)
+	}
+}
+
+// The copy goes first and the claim second, never the other way round:
+// releasing while the entity is still resident is what invites a second copy
+// of it in another process (U-0259).
+func TestAHandBackThatCannotDropTheCopyKeepsTheLease(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The entity becomes unavailable AFTER the claim: a transaction is on it
+	// when the hand-back comes round.
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim was given back although this process still holds the player: %v", table.owner)
+	}
+}
+
+// U-0271 · C8 · RR-20260920-11：为新工作重新取得的租约不是空闲租约。
+//
+// `confirm` used to serve two different events through one `IsZero` guard: a
+// renewal (which must NOT count as use, or no lease would ever look idle) and
+// a fresh claim (which must, because work is about to start). A lease retaken
+// after its window expired therefore kept the timestamp of the work before
+// it, and the very next refresh pass handed it back — out from under the step
+// it had just admitted.
+func TestALeaseRetakenForNewWorkIsNotIdle(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+
+	// T0: a background step claims an offline player.
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The confirmed window runs out and the key expires with it: from here
+	// Admit refuses, so the next Owns has to go and retake the lease.
+	*clock = clock.Add(playerroute.Lease + time.Second)
+	delete(table.owner, 77)
+
+	// T1: new work arrives and is admitted.
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("the new step was refused: %v %v", owned, err)
+	}
+	// The refresh pass that follows, with that step still running.
+	owners.renew(ctx)
+
+	if _, held := table.owner[77]; !held {
+		t.Fatalf("the lease was handed back under the step it had just admitted: %v", table.owner)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("the step lost its admission mid-work: %v", err)
+	}
+}
+
+// A renewal is not use: if it were, no lease would ever look idle and the
+// hand-back would never happen at all.
+func TestRenewalsDoNotCountAsUse(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// Refresh passes keep confirming the lease, but nobody asks for the
+	// player. Each pass is well inside HandBackIdle, so only the accumulated
+	// time can make it idle.
+	for range 4 {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+	}
+	if _, held := table.owner[77]; held {
+		t.Fatalf("a lease nothing has used was renewed forever: %v", table.owner)
+	}
+}
+
+// While a hand-back is in flight the lease admits nothing. Between dropping
+// the copy and releasing the claim there is a window where the old code still
+// said yes, and work admitted in it would load a fresh copy of a player this
+// process is about to give away.
+func TestAHandBackInFlightAdmitsNothing(t *testing.T) {
+	owners, _, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	// Armed only for the hand-back: a claim evicts too (RR-20260920-09), and
+	// that one says no for a different reason — there is no lease yet.
+	armed := false
+	var duringHandBack []error
+	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
+		if armed {
+			duringHandBack = append(duringHandBack, owners.Admit(playerID))
+		}
+		return nil
+	}))
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	*clock = clock.Add(HandBackIdle + time.Second)
+	armed = true
+	owners.renew(ctx)
+	armed = false
+
+	if len(duringHandBack) != 1 {
+		t.Fatalf("the hand-back did not evict exactly once: %v", duringHandBack)
+	}
+	if duringHandBack[0] == nil {
+		t.Fatal("work was admitted while the player was being handed back")
+	}
+}
+
+// A hand-back that could not complete leaves the lease in service rather than
+// in a state that refuses everything.
+func TestAFailedHandBackPutsTheLeaseBackInService(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim was given back although the copy is still here: %v", table.owner)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("the lease stayed closed after a hand-back that did not happen: %v", err)
+	}
+}
+
+// evictorFunc adapts a function to residentEvictor.
+type evictorFunc func(context.Context, int64) error
+
+func (fn evictorFunc) EvictPlayer(ctx context.Context, playerID int64) error {
+	return fn(ctx, playerID)
+}
+
+// blockingEvictor holds the eviction until a test lets it go, the way a
+// transaction on the entity holds EntityManager.Destroy — which waits for the
+// entity's mutex and does not look at a context.
+type blockingEvictor struct {
+	release chan struct{}
+	calls   chan int64
+}
+
+func newBlockingEvictor() *blockingEvictor {
+	return &blockingEvictor{release: make(chan struct{}), calls: make(chan int64, 8)}
+}
+
+func (e *blockingEvictor) EvictPlayer(_ context.Context, playerID int64) error {
+	e.calls <- playerID
+	<-e.release
+	return nil
+}
+
+// U-0272 · C8 · RR-20260920-12：撤离的预算只能限制"等多久"，那就让它限制等待。
+//
+// The wait used to be a ctx timeout around a call that ends in
+// EntityManager.Destroy, which waits on the entity's mutex without reading
+// ctx — so it bounded nothing, and a busy entity sat on the refresh loop with
+// every other player's renewal behind it.
+func TestAClaimWaitsAtMostTheBudgetForABusyEntity(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	ctx := context.Background()
+
+	start := time.Now()
+	mine, err := owners.Claim(ctx, 42)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("the claim waited %s for a budget of %s", elapsed, owners.evictWait)
+	}
+	if mine || err == nil {
+		t.Fatalf("a player whose copy is still resident was taken into service: mine=%v err=%v", mine, err)
+	}
+	if err := owners.Admit(42); err == nil {
+		t.Fatal("writes are admitted for a player this process could not make safe")
+	}
+	// The claim did happen in Redis; nothing refreshes it, so it lapses.
+	if table.owner[42] != 1000 {
+		t.Fatalf("the claim did not happen at all: %v", table.owner)
+	}
+}
+
+// A second caller joins the eviction already in flight instead of starting a
+// second one — which is also what keeps a claim from being confirmed while an
+// older drop of the same player is still running.
+func TestASecondDropJoinsTheOneAlreadyRunning(t *testing.T) {
+	owners, _, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	ctx := context.Background()
+
+	for range 3 {
+		if _, err := owners.Claim(ctx, 42); err == nil {
+			t.Fatal("the claim succeeded although the eviction never finished")
+		}
+	}
+	if len(evictor.calls) != 1 {
+		t.Fatalf("the eviction was started %d times", len(evictor.calls))
+	}
+
+	// Once the entity is free the drop completes, and the next claim is
+	// served by it.
+	close(evictor.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mine, err := owners.Claim(ctx, 42)
+		if mine && err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the player was never taken into service after the entity was released")
+}
+
+// The refresh loop keeps its cadence: one busy entity costs a bounded wait,
+// not everybody else's lease.
+func TestOneBusyEntityDoesNotHoldUpTheRefreshLoop(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	ctx := context.Background()
+
+	// Two players held here; one of them will need an eviction it cannot get.
+	owners.Evict(&evictorStub{})
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owners.Claim(ctx, 43); err != nil {
+		t.Fatal(err)
+	}
+	owners.Evict(evictor)
+	delete(table.owner, 42) // 42's lease lapsed: the pass will try to retake it
+
+	start := time.Now()
+	owners.renew(ctx)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("one busy entity held the refresh pass for %s", elapsed)
+	}
+	// And the other player's lease was renewed by that same pass.
+	if err := owners.Admit(43); err != nil {
+		t.Fatalf("a bystander lost their lease to somebody else's busy entity: %v", err)
+	}
+}
+
+// projectionStub is this process's write-ahead log as a hand-back sees it:
+// a player's committed writes are either still on their way to Mongo, failed
+// to get there, or landed.
+type projectionStub struct {
+	mu      sync.Mutex
+	landed  chan struct{}
+	failure error
+	asked   []int64
+}
+
+// newProjectionStub has nothing in flight.
+func newProjectionStub() *projectionStub {
+	landed := make(chan struct{})
+	close(landed)
+	return &projectionStub{landed: landed}
+}
+
+// inFlight puts writes on the way; the returned func lands them.
+func (stub *projectionStub) inFlight() func() {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	landed := make(chan struct{})
+	stub.landed = landed
+	return sync.OnceFunc(func() { close(landed) })
+}
+
+func (stub *projectionStub) fail(err error) {
+	stub.mu.Lock()
+	stub.failure = err
+	stub.mu.Unlock()
+}
+
+func (stub *projectionStub) WaitPlayerProjection(ctx context.Context, playerID int64) error {
+	stub.mu.Lock()
+	stub.asked = append(stub.asked, playerID)
+	landed, failure := stub.landed, stub.failure
+	stub.mu.Unlock()
+	if failure != nil {
+		return failure
+	}
+	select {
+	case <-landed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RR-20260926-31：闲置交还要等本进程已提交的写入落库，再交出租约。
+//
+// 下一个所有者只从 Mongo 读取玩家。驱逐忘掉的是内存副本，但这份副本提交过的事务
+// 可能还在本进程 WAL 里等待投影；此时释放租约，另一进程会装载落后的文档，两边的
+// 版本计数在投影时撞成 fatal。旧实现驱逐后立刻 Release，这里投影未完成（等待超时
+// 或投影失败）时租约必须保留并留给下一轮重试；投影完成后才交还。
+func TestAHandBackWaitsForThePlayersWritesToReachTheDatabase(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	projections := newProjectionStub()
+	owners.Projections(projections)
+	owners.projectionWait = 20 * time.Millisecond
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The step committed a write that is still in the log when the lease
+	// goes idle.
+	land := projections.inFlight()
+	defer land()
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if table.owner[77] != 1000 || len(table.released) != 0 {
+		t.Fatalf("the lease was handed back while the player's writes were still on their way to the database: owner=%v released=%v", table.owner, table.released)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("a hand-back that did not happen left the lease out of service: %v", err)
+	}
+
+	// A projection that fails is not a projection that landed either.
+	projections.fail(errors.New("projection failed"))
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if table.owner[77] != 1000 || len(table.released) != 0 {
+		t.Fatalf("the lease was handed back after the projection failed: owner=%v released=%v", table.owner, table.released)
+	}
+
+	// Once the writes are in Mongo the next pass hands the lease back.
+	projections.fail(nil)
+	land()
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+	if _, held := table.owner[77]; held || len(table.released) != 1 {
+		t.Fatalf("the lease was not handed back once the writes had landed: owner=%v released=%v", table.owner, table.released)
+	}
+	projections.mu.Lock()
+	asked := len(projections.asked)
+	projections.mu.Unlock()
+	if asked != 3 {
+		t.Fatalf("hand-back asked about the projection %d times, want once per pass (3)", asked)
+	}
+}

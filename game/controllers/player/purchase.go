@@ -1,0 +1,101 @@
+package player
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"example.com/planet/game/flags"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/game/purchase"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcplatform "github.com/tjbdwanghaibo/roost-core/kit/service/platform"
+)
+
+// HandlePurchase buys a product: the payment callback, then the grant.
+//
+// THE GAME PROCESS IS PLAYING THE PAYMENT PROVIDER HERE, and that is the one
+// thing about this endpoint a real project must not copy. A real callback
+// arrives from the store at an ingress the client cannot reach, signed with a
+// secret the game process never holds; the client's part is to tell the store
+// to charge, and the server hears about it from the store. The demo has no
+// store, so this endpoint signs a callback itself — which means anyone who
+// can call it can mint goods for free. Everything AROUND that is real:
+//
+//   - the order id is derived from the session and the frame sequence, so a
+//     retried frame is the same order and the platform service answers it as
+//     a replay rather than charging twice;
+//   - the price and the contents come from the server's catalogue, never from
+//     the request;
+//   - the platform service verifies, records and delivers, all before this
+//     endpoint sees an answer;
+//   - the goods reach the bag through the drain, which is the same path a
+//     purchase made while offline takes.
+func (controller *Controller) HandlePurchase(context *player_agent.Context, request *pb.PurchaseRequest) (*pb.PurchaseResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("purchase endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.PurchaseResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("purchase failed", "player_id", context.PlayerID, "product_id", request.ProductID, "stage", stage, "err", err)
+		}
+		return &pb.PurchaseResponse{Code: code, Reason: reason}, nil
+	}
+	// The store's kill switch, read at the entry point and nowhere else. An
+	// order the platform service has already recorded still settles — the
+	// drain does not consult this — because a paid order is not something a
+	// switch may drop; what this stops is taking new money.
+	if !flags.Enabled(flags.Purchase) {
+		return refuse(fmt.Errorf("%w: the store is closed", svcplatform.ErrRequestInvalid), "flag")
+	}
+	product, ok := purchase.Lookup(request.ProductID)
+	if !ok {
+		return refuse(fmt.Errorf("%w: product %q is not in the catalogue", svcplatform.ErrRequestInvalid, request.ProductID), "catalogue")
+	}
+	ctx := context.Context()
+	orderID := purchase.OrderID(context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	raw, err := json.Marshal(map[string]any{
+		"order_id": orderID, "player_id": context.PlayerID, "channel": purchase.Channel,
+		"product_id": product.ID, "amount_minor": product.AmountMinor, "currency": product.Currency,
+		"paid_at_unix": time.Now().Unix(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("purchase endpoint: %w", err)
+	}
+	// The signature the store would have produced. `SignPayload` is exported
+	// by the platform package for exactly this — simulating a provider — and
+	// the secret is the demo's, in configuration, shared by the two processes.
+	receipt, err := controller.Payments().HandleCallback(ctx, raw, svcplatform.SignPayload(raw, controller.PaymentSecret()))
+	if err != nil {
+		return refuse(err, "callback")
+	}
+	// The grant is durable now, whether or not this player was online when
+	// the callback landed. Draining is what puts it in the bag; a failure
+	// here is not a failed purchase, so it is reported as what it is — the
+	// goods arrive on the next drain.
+	response := &pb.PurchaseResponse{
+		OrderID: receipt.Order.OrderID, ItemID: product.ItemID, Count: product.Count,
+		Delivered: receipt.Delivered, Replayed: receipt.Replayed,
+	}
+	drain, err := controller.Purchases()
+	if err != nil {
+		slog.Error("purchase: the grant is recorded but the drain is unavailable", "player_id", context.PlayerID, "order_id", orderID, "err", err)
+		return response, nil
+	}
+	settled, err := drain.DrainPlayer(ctx, context.PlayerID)
+	if err != nil {
+		slog.Error("purchase: the grant is recorded but was not settled", "player_id", context.PlayerID, "order_id", orderID, "err", err)
+		return response, nil
+	}
+	for _, settlement := range settled {
+		// The drain may have settled grants that were waiting from earlier
+		// purchases; the answer to THIS request is the one with this order id.
+		if settlement.OrderID == orderID {
+			response.BagCount = settlement.BagCount
+		}
+	}
+	return response, nil
+}

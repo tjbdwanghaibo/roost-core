@@ -1,0 +1,98 @@
+# Roost project manifest. Run make sync after editing.
+# versions.* defaults to latest; go.mod records the concrete release resolved
+# for one build. Minimums: core v1.17.0, kit v1.14.8, codegen v1.15.0.
+schema: 1
+project:
+    name: planet
+    module: example.com/planet
+versions:
+    core: latest
+    kit: latest
+    skill: latest
+    service: latest
+    codegen: latest
+cicd:
+    provider: github
+    registry: ghcr
+    environments:
+        - staging
+        - production
+    deploy:
+        - shell
+        - docker
+        - k8s
+shared_mods:
+    - lock
+    - ops
+    - statslog
+services:
+    account:
+        framework: account
+    activity:
+        framework: activity
+    chat:
+        framework: chat
+    game:
+        mods:
+            - configdata
+            - dataengine
+            - mongo
+            - nats
+            - nest
+            - redis
+            - remote_entity
+            - saga
+        uses:
+            - account
+            - activity
+            - chat
+            - global
+            - mail
+            - match
+            - platform
+            - rank
+            - session
+    global:
+        framework: global
+    mail:
+        framework: mail
+    match:
+        framework: match
+    platform:
+        framework: platform
+    rank:
+        framework: rank
+    session:
+        framework: session
+access:
+    player:
+        service: game
+        transports:
+            - tcp
+features:
+    - attribute
+    - config
+    - dao
+    - entity
+    - errcode
+    - event
+    - nest
+    - protocol
+    - saga
+sagas:
+    - gift_item
+ids:
+    component:
+        min: 2000
+        max: 2999
+    entity:
+        min: 1
+        max: 255
+    errcode:
+        min: 100000
+        max: 199999
+    protocol:
+        groups:
+            game:
+                min: 10000
+                max: 19999

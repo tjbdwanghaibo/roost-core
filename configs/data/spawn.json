@@ -1,0 +1,12 @@
+[
+  {
+    "center_x": 520,
+    "center_y": 500,
+    "count": 3,
+    "hp": 30,
+    "id": 1,
+    "radius": 40,
+    "respawn_seconds": 20,
+    "template": 9001
+  }
+]

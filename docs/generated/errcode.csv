@@ -1,0 +1,21 @@
+Code,Name,Message,File
+100001,item_unknown,unknown item,internal/errors/item_unknown.go
+100002,item_count,item count must be positive,internal/errors/item_count.go
+100003,bag_full,bag full,internal/errors/bag_full.go
+100004,exp_amount,exp amount must be positive,internal/errors/exp_amount.go
+100005,name_empty,name must not be empty,internal/errors/name_empty.go
+100006,item_short,not enough items,internal/errors/item_short.go
+100007,battle_not_found,battle not found,internal/errors/battle_not_found.go
+100008,battle_not_seated,not seated in this battle,internal/errors/battle_not_seated.go
+100009,battle_busy,battle is busy,internal/errors/battle_busy.go
+100010,dungeon_run,invalid dungeon run,internal/errors/dungeon_run.go
+100011,mail_claim,invalid mail claim,internal/errors/mail_claim.go
+100012,dungeon_claim_window,dungeon reward window closed,internal/errors/dungeon_claim_window.go
+100013,scene_position,invalid scene position,internal/errors/scene_position.go
+100014,purchase_grant,invalid purchase grant,internal/errors/purchase_grant.go
+100015,player_elsewhere,player is served by another server,internal/errors/player_elsewhere.go
+100016,guild_name,invalid guild name,internal/errors/guild_name.go
+100017,guild_exists,guild already exists,internal/errors/guild_exists.go
+100018,guild_missing,guild not found,internal/errors/guild_missing.go
+100019,guild_full,guild is full,internal/errors/guild_full.go
+100020,guild_busy,"guild is busy, try again",internal/errors/guild_busy.go

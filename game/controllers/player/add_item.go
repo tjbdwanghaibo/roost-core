@@ -1,0 +1,46 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "example.com/planet/game/entities/player"
+	syncsender "example.com/planet/game/handler/syncsender"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleAddItem is the protocol boundary, and the boundary is where errors
+// change shape.
+//
+// Returning an error from an endpoint makes the access layer drop the
+// connection (the generated TCP server treats a dispatch failure like a
+// broken frame), which is right for a malformed request and wrong for "you
+// do not have that item". So a business failure becomes a response:
+// errcode.ClientError maps a coded error to its stable code and client-facing
+// message, and anything without a code — an infrastructure failure, a bug —
+// collapses to errcode.CodeInternal with a fixed reason, so internals never
+// leak to a client. The cause is logged here, where the operator can see it.
+func (controller *Controller) HandleAddItem(context *player_agent.Context, request *pb.AddItemRequest) (*pb.AddItemResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("add_item endpoint: context and request are required")
+	}
+	// context.PlayerID is the player's unique id; Nest addresses a full entity
+	// id, which carries the kind and its lock category as well.
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("add_item endpoint: %w", err)
+	}
+	sender := syncsender.NewAddItemSender(controller.NestClient())
+	count, err := sender.Sync_AddItem(context.Context(), entityID, request.ItemID, request.Count)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("add_item failed", "player_id", context.PlayerID, "item_id", request.ItemID, "err", err)
+		}
+		return &pb.AddItemResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.AddItemResponse{Count: count}, nil
+}

@@ -1,0 +1,74 @@
+package Game
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	kitsyncbus "github.com/tjbdwanghaibo/roost-core/kit/syncbus"
+)
+
+// RR-20260926-12：生成的配置里声明的同步总线，必须是进程真正用上的那一个。
+//
+// 生成器写的是 `syncbus:` 段，kit 曾经只读 `room:` / `sync:`：整段被忽略，配置的
+// JetStream 静默退回至多一次的普通 NATS，功能在无故障时照常工作，唯一的痕迹是启动
+// 日志 "syncbus mod: started" 里的 transport。所以这里用本工程生成的配置文件初始化
+// 真实的 kit Mod，断言那条启动日志报出的正是配置的 transport，并且没有任何“配置未被
+// 读取”的告警（弃用段、被遮住的键、不认识的键）。
+func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
+	for _, file := range []string{
+		"../../../configs/service/config.game.yaml",
+		"../../../configs/service/config.game.prod.example.yaml",
+	} {
+		t.Run(file, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigFile(file)
+			if err := cfg.ReadInConfig(); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.ToLower(strings.TrimSpace(cfg.GetString("syncbus.transport")))
+			switch want {
+			case "":
+				t.Fatalf("%s has no syncbus.transport, so the process would run on the default", file)
+			case "js":
+				want = "jetstream"
+			}
+
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			defer slog.SetDefault(previous)
+			mod := kitsyncbus.NewSyncBusMod(0)
+			if err := mod.Init(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if err := mod.Start(); err != nil {
+				t.Fatal(err)
+			}
+
+			started := ""
+			for line := range strings.Lines(logs.String()) {
+				var entry struct {
+					Level     string `json:"level"`
+					Msg       string `json:"msg"`
+					Transport string `json:"transport"`
+				}
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					continue
+				}
+				if entry.Level == slog.LevelWarn.String() || entry.Level == slog.LevelError.String() {
+					t.Errorf("the generated syncbus config is not read as written: %s", entry.Msg)
+				}
+				if entry.Msg == "syncbus mod: started" {
+					started = entry.Transport
+				}
+			}
+			if started != want {
+				t.Fatalf("%s configures syncbus.transport=%s but the mod started on %q", file, want, started)
+			}
+		})
+	}
+}
