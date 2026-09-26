@@ -14,7 +14,8 @@ import (
 // touchGenerationStub 在 unlockEvalStub 之上模拟续期与刷新脚本：
 //   - expired 中的 token 已在 Redis 失效（touch 回 -1、refresh 回 0，并清掉 owner）；
 //   - blocked 中的 token 的 touch 在 Redis 端挂起，直到测试放行或调用方取消；
-//   - 其余 token 续期成功，按 token 计数，并在首次续期时通知 firstRenewal。
+//   - 其余 token 续期成功，按 token 计数，并在首次续期时通知 firstRenewal；每次续期都关闭并替换 renewed，
+//     供回归按事件等待“续期次数达到 n”，不依赖固定时间窗口（RR-20260926-63）。
 type touchGenerationStub struct {
 	*unlockEvalStub
 	tmu          sync.Mutex
@@ -23,7 +24,12 @@ type touchGenerationStub struct {
 	blockedEnter chan string
 	renewals     map[string]int
 	firstRenewal map[string]chan struct{}
+	renewed      chan struct{}
 }
+
+// touchHangGuard 只防测试挂死，不是正确性窗口：断言都由事件（续期发生、goroutine 登记 / 退出）决定，
+// 负载下续期晚到只会让等待更久，不会让回归变红（RR-20260926-63）。
+const touchHangGuard = 30 * time.Second
 
 func newTouchGenerationStub() *touchGenerationStub {
 	return &touchGenerationStub{
@@ -33,7 +39,34 @@ func newTouchGenerationStub() *touchGenerationStub {
 		blockedEnter:   make(chan string, 16),
 		renewals:       map[string]int{},
 		firstRenewal:   map[string]chan struct{}{},
+		renewed:        make(chan struct{}),
 	}
+}
+
+// awaitRenewals 等到 token 的续期次数达到 n；只有超过 touchHangGuard 才返回 false。
+func (s *touchGenerationStub) awaitRenewals(token string, n int) bool {
+	guard := time.NewTimer(touchHangGuard)
+	defer guard.Stop()
+	for {
+		s.tmu.Lock()
+		count, changed := s.renewals[token], s.renewed
+		s.tmu.Unlock()
+		if count >= n {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-guard.C:
+			return false
+		}
+	}
+}
+
+// registeredTouchGeneration 读取锁当前登记续期 goroutine 的代际（TryLock 在 l.mu 临界区内同步登记）。
+func registeredTouchGeneration(l *versionedLock) string {
+	l.touchMu.Lock()
+	defer l.touchMu.Unlock()
+	return l.touchGeneration
 }
 
 func (s *touchGenerationStub) dropOwner(token string) {
@@ -83,6 +116,8 @@ func (s *touchGenerationStub) Eval(ctx context.Context, script string, keys []st
 			return int64(-1), nil
 		}
 		s.renewals[token]++
+		close(s.renewed)
+		s.renewed = make(chan struct{})
 		if s.renewals[token] == 1 {
 			ch, ok := s.firstRenewal[token]
 			if !ok {
@@ -148,20 +183,20 @@ func TestVersionedLockNewGenerationRenewsWhileOldTouchGoroutineExits(t *testing.
 	if newToken == oldToken {
 		t.Fatal("setup: TryLock reused the old token")
 	}
+	if got := registeredTouchGeneration(lock); got != newToken {
+		t.Fatalf("new generation got no renewal goroutine: registered generation=%q, want the new token (old token %q)", got, oldToken)
+	}
 	close(release) // 旧 goroutine 的迟到回复（-1）到达并退出。
-	select {
-	case <-stub.renewedSignal(newToken):
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("new generation got no renewal goroutine: acquired=%v renewals=%d (interval 2ms)", lock.IsAcquired(), stub.renewalCount(newToken))
+	if !stub.awaitRenewals(newToken, 1) {
+		t.Fatalf("new generation never renewed: acquired=%v renewals=%d", lock.IsAcquired(), stub.renewalCount(newToken))
 	}
-	// 旧 goroutine 退出后，新代际的续期仍持续。
+	// 旧 goroutine 退出后，新代际的续期仍持续，登记也没有被旧 goroutine 的退出清掉。
 	before := stub.renewalCount(newToken)
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for stub.renewalCount(newToken) < before+3 && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
+	if !stub.awaitRenewals(newToken, before+3) {
+		t.Fatalf("new generation renewal stopped after the old goroutine exited: before=%d after=%d", before, stub.renewalCount(newToken))
 	}
-	if got := stub.renewalCount(newToken); got < before+3 {
-		t.Fatalf("new generation renewal stopped after the old goroutine exited: before=%d after=%d", before, got)
+	if got := registeredTouchGeneration(lock); got != newToken {
+		t.Fatalf("old goroutine's exit cleared the new generation's registration: registered=%q", got)
 	}
 	if !lock.IsAcquired() {
 		t.Fatal("new generation lost acquisition")
@@ -169,14 +204,17 @@ func TestVersionedLockNewGenerationRenewsWhileOldTouchGoroutineExits(t *testing.
 	if err := lock.Unlock(context.Background(), 1, time.Second); err != nil {
 		t.Fatalf("unlock new generation: %v", err)
 	}
-	// Unlock 会等全部续期 goroutine 退出；之后不能再有续期。
+	// Unlock 会等全部续期 goroutine 退出（touchWg）；之后登记为空，不能再有续期。
+	if got := registeredTouchGeneration(lock); got != "" {
+		t.Fatalf("renewal still registered after Unlock: %q", got)
+	}
 	after := stub.renewalCount(newToken)
 	time.Sleep(10 * time.Millisecond)
 	if got := stub.renewalCount(newToken); got != after {
 		t.Fatalf("renewal continued after Unlock: %d -> %d", after, got)
 	}
 	// 每个代际至多一个续期 goroutine，且都随代际结束退出，不随加锁次数累积。
-	deadline = time.Now().Add(time.Second)
+	deadline := time.Now().Add(touchHangGuard)
 	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
@@ -186,7 +224,9 @@ func TestVersionedLockNewGenerationRenewsWhileOldTouchGoroutineExits(t *testing.
 }
 
 // RR-20260926-43 高迭代压测：真实 goroutine、无状态注入。上一代际由续期 goroutine 自己观察到失效，
-// 持有方见 !IsAcquired 跳过 Unlock，下一写者立即 TryLock；新代际必须在有界时间内获得续期。
+// 持有方见 !IsAcquired 跳过 Unlock，下一写者立即 TryLock；新代际必须登记自己的续期 goroutine 并真的续期。
+// 判定按事件（RR-20260926-63）：TryLock 返回时同步检查登记的代际，再等到新代际的第一次续期；
+// 原先 200ms 的等待窗口在 race + 负载下会把晚到的续期误判为漏启动（1,000,000 次中 2 次）。
 func TestVersionedLockTouchRestartStressNoLostRenewal(t *testing.T) {
 	const iterations = 20000
 	workers := runtime.GOMAXPROCS(0) / 2
@@ -211,19 +251,20 @@ func TestVersionedLockTouchRestartStressNoLostRenewal(t *testing.T) {
 				stub.expired[currentLockToken(lock)] = true
 				stub.tmu.Unlock()
 				for lock.IsAcquired() {
+					runtime.Gosched()
 				}
 				if err := lock.TryLock(context.Background()); err != nil {
 					t.Error(err)
 					return
 				}
 				token := currentLockToken(lock)
-				select {
-				case <-stub.renewedSignal(token):
-				case <-time.After(200 * time.Millisecond):
-					if lock.IsAcquired() {
-						lost.Add(1)
-						firstLost.CompareAndSwap(nil, token)
-					}
+				switch {
+				case registeredTouchGeneration(lock) != token:
+					// 修前的漏启动：旧代际的登记还在，新代际没有续期 goroutine。
+					lost.Add(1)
+					firstLost.CompareAndSwap(nil, token)
+				case !stub.awaitRenewals(token, 1):
+					t.Errorf("generation %s registered a renewal goroutine but never renewed within the hang guard", token)
 				}
 				lock.stopAsyncTouch()
 			}

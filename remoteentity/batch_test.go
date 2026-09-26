@@ -93,7 +93,7 @@ func (e *testRemoteEntity) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 			Invalidations: []entity.RemoteSnapshotKey{{EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: 1}},
 		}, nil
 	}
-	e.dirty.dirty = false
+	e.dirty.set(false)
 	return entity.RemoteCommit{
 		Schema: 1, Codec: 1,
 		Mutations: []entity.RemoteDataMutation{{Collection: "remote", ID: e.GUId(), Version: lease.BaseVersion + 1, Mask: 1, Data: []byte("state")}},
@@ -151,13 +151,14 @@ func (l *remoteTestLoader) CommitRemoteBatch(ctx context.Context, commits []enti
 	return receipts, nil
 }
 
+// AcknowledgeRemoteCommit 按契约幂等且并发安全（RR-20260926-63）：重复确认同一提交只是再次清脏，状态经 testDirty 的锁。
 func (e *testRemoteEntity) AcknowledgeRemoteCommit(_ entity.RemoteCommit) error {
-	e.dirty.dirty = false
+	e.dirty.set(false)
 	return nil
 }
 
 func (e *testRemoteEntity) RollbackRemoteCommit(_ entity.RemoteCommit) {
-	e.dirty.dirty = true
+	e.dirty.set(true)
 }
 
 func (l *remoteTestLoader) CommitRemote(_ context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
@@ -247,7 +248,7 @@ func TestRemoteWriteBatchMemoryCommitPublishesImmutableSnapshot(t *testing.T) {
 
 	live := newTestRemoteEntity(1401, 1, kind)
 	live.SetEntityVersion(0)
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	loader.add(live)
 
 	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
@@ -265,8 +266,8 @@ func TestRemoteWriteBatchMemoryCommitPublishesImmutableSnapshot(t *testing.T) {
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(receipts) != 1 || receipts[0].StateVersion != 1 || live.EntityVersion() != 1 || live.dirty.dirty {
-		t.Fatalf("receipts=%+v version=%d dirty=%v", receipts, live.EntityVersion(), live.dirty.dirty)
+	if len(receipts) != 1 || receipts[0].StateVersion != 1 || live.EntityVersion() != 1 || live.dirty.Dirty() {
+		t.Fatalf("receipts=%+v version=%d dirty=%v", receipts, live.EntityVersion(), live.dirty.Dirty())
 	}
 	snapshot, ok, err := mgr.ReadRemoteSnapshot(context.Background(), entity.RemoteSnapshotKey{EntityID: live.GUId(), Kind: live.GetEntityKind(), Scope: 1}, entity.RemoteReadMonotonic, 1)
 	if err != nil || !ok || string(snapshot.Payload.BytesCopy()) != "snapshot" {
@@ -289,7 +290,7 @@ func TestRemoteWriteBatchAsyncRetainsGateUntilWALApply(t *testing.T) {
 	mgr.SetOwnershipStore(newMockMarkerStore())
 
 	live := newTestRemoteEntity(1402, 1, kind)
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	loader.add(live)
 
 	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
@@ -393,8 +394,8 @@ func TestRemoteWriteBatchRollsBackEarlierFrozenEntityOnBuildFailure(t *testing.T
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	first := newTestRemoteEntity(1404, 1, kind)
 	second := newTestRemoteEntity(1405, 1, kind)
-	first.dirty.dirty = true
-	second.dirty.dirty = true
+	first.dirty.set(true)
+	second.dirty.set(true)
 	second.buildErr = errors.New("freeze failed")
 	loader.add(first, second)
 	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{second.GUId(), first.GUId()})
@@ -404,7 +405,7 @@ func TestRemoteWriteBatchRollsBackEarlierFrozenEntityOnBuildFailure(t *testing.T
 	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(3), "test", "request", true, 0)); err == nil {
 		t.Fatal("expected freeze failure")
 	}
-	if !first.dirty.dirty {
+	if !first.dirty.Dirty() {
 		t.Fatal("first entity dirty state was not restored")
 	}
 	_ = batch.Abort(context.Background(), errors.New("expected"))
@@ -464,7 +465,7 @@ func TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown(t *testing.T) {
 	mgr.SetBackend(loader)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	live := newTestRemoteEntity(1407, 1, kind)
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	loader.add(live)
 	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
 	if err != nil {
@@ -539,7 +540,7 @@ func TestMemoryCommitPublishFailureQueriesStatusAndReconciles(t *testing.T) {
 	syncer := &flakySnapshotSyncer{}
 	mgr.SetSyncer(syncer)
 	live := newTestRemoteEntity(1408, 1, kind)
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	loader.add(live)
 
 	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
@@ -553,7 +554,7 @@ func TestMemoryCommitPublishFailureQueriesStatusAndReconciles(t *testing.T) {
 	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 		t.Fatalf("commit error = %v, want indeterminate", err)
 	}
-	if live.dirty.dirty {
+	if live.dirty.Dirty() {
 		t.Fatal("committed dirty generation was incorrectly rolled back")
 	}
 	if err := batch.Close(context.Background()); err != nil {
@@ -731,7 +732,7 @@ func TestMemoryCommitFailureDelegatesLocalRollback(t *testing.T) {
 	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	mgr.SetBackend(newRemoteTestLoader())
 	live := newTestRemoteEntity(1499, 1, entity.EntityKind(131))
-	live.dirty.dirty = false
+	live.dirty.set(false)
 	txID := remoteTestTxID(99)
 	// 无效 commit 在提交前被拒绝，走确定失败的本地回滚分支。
 	batch := &remoteWriteBatch{mgr: mgr, finalized: true, outcome: entity.NewRemoteTransactionOutcome(txID, "rollback", "", true, 0), entries: []*remoteWriteEntry{{entity: live, finalized: true, commit: entity.RemoteCommit{TransactionID: txID}}}}
@@ -746,8 +747,8 @@ func TestMemoryCommitFailureDelegatesLocalRollback(t *testing.T) {
 	if _, err := batch.Commit(ctx); err == nil {
 		t.Fatal("invalid commit succeeded")
 	}
-	if calls != 1 || !live.dirty.dirty {
-		t.Fatalf("local rollback: delegated=%d dirty=%t", calls, live.dirty.dirty)
+	if calls != 1 || !live.dirty.Dirty() {
+		t.Fatalf("local rollback: delegated=%d dirty=%t", calls, live.dirty.Dirty())
 	}
 }
 

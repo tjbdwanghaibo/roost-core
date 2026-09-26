@@ -22,7 +22,7 @@ func prepareReplayBatch(t *testing.T, backend entity.IRemoteEntityBackend) (*Man
 	mgr.SetBackend(backend)
 	mgr.SetOwnershipStore(newMockMarkerStore())
 	live := newTestRemoteEntity(1488, 1, kind)
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	switch b := backend.(type) {
 	case *remoteTestLoader:
 		b.add(live)
@@ -33,7 +33,7 @@ func prepareReplayBatch(t *testing.T, backend entity.IRemoteEntityBackend) (*Man
 	if err != nil {
 		t.Fatal(err)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(88), "replay", "", true, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -54,11 +54,11 @@ func TestCommittedReplayPreservesNewerLiveFenceAndDirtyState(t *testing.T) {
 	if err := live.SetRemoteVersionVector(newer); err != nil {
 		t.Fatal(err)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	if _, err := mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits); err != nil {
 		t.Fatal(err)
 	}
-	if live.RemoteVersionVector() != newer || !live.dirty.dirty {
+	if live.RemoteVersionVector() != newer || !live.dirty.Dirty() {
 		t.Fatal("old receipt rewound/acknowledged newer local work")
 	}
 	stale := newer
@@ -83,7 +83,7 @@ func TestMemoryLostCommitReplyKeepsFinalizerOwnership(t *testing.T) {
 	if !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unknown commit=%v", err)
 	}
-	if live.dirty.dirty {
+	if live.dirty.Dirty() {
 		t.Fatal("unknown result rolled back committed mutation")
 	}
 	if err = batch.Close(context.Background()); err != nil {
@@ -214,7 +214,7 @@ func TestCommittedTrackerSurvivesFailedReplayPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	tx := remoteTestTxID(77)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "replay", "", true, 0)); err != nil {
 		t.Fatal(err)

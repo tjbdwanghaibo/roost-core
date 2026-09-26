@@ -177,10 +177,26 @@ func (s *mockMarkerStore) LeaveSharedExpected(_ context.Context, id int64, lease
 	return next, nil
 }
 
-type testDirty struct{ dirty bool }
+// testDirty 是测试替身的脏标记。它按 IRemoteCommitParticipant 的契约做成并发安全：投影器重试与 finalizer 的回源发布
+// 可以并发确认同一提交（RR-20260926-63），AcknowledgeRemoteCommit 与读取方都经这把锁。
+type testDirty struct {
+	mu    sync.Mutex
+	dirty bool
+}
 
-func (d *testDirty) Dirty() bool { return d.dirty }
-func (d *testDirty) SelfClean()  { d.dirty = false }
+func (d *testDirty) Dirty() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dirty
+}
+
+func (d *testDirty) set(dirty bool) {
+	d.mu.Lock()
+	d.dirty = dirty
+	d.mu.Unlock()
+}
+
+func (d *testDirty) SelfClean() { d.set(false) }
 
 type testRemoteEntity struct {
 	entity.RemoteEntityBase

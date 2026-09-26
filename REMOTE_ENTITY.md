@@ -23,7 +23,7 @@ kit 的 `MongoCommitter` 在同一 Mongo transaction 中完成：
 
 Nest WAL codec v4 持久化完整 RemoteCommit（mutation、delete、snapshot、invalidation）。Async handler 在 WAL admission 后返回，write gate 由 finalizer 持有，直到 backend status 确认。坏事务采用单次检查后退避重排队，不独占 worker。
 
-Mongo transaction 首先标记 `Applied`；snapshot/replica 发布成功后标记 `Committed`。运行期 finalizer 会直接重放发布失败的 `Applied` 事务，模块启动时也会先恢复全部 `Applied` outbox，再绑定业务入口。未发布记录不设置 TTL，只有完成发布的记录才进入过期回收。发布和 ACK 都是幂等的。
+Mongo transaction 首先标记 `Applied`；snapshot/replica 发布成功后标记 `Committed`。运行期 finalizer 会直接重放发布失败的 `Applied` 事务，模块启动时也会先恢复全部 `Applied` outbox，再绑定业务入口。未发布记录不设置 TTL，只有完成发布的记录才进入过期回收。发布和 ACK 都是幂等的。实体侧的 ACK（`IRemoteCommitParticipant.AcknowledgeRemoteCommit`）还必须**并发安全**：投影器报告结果未知后 finalizer 回源 Applied 自行发布，投影器对同一事务的重试同时也会确认，两者不持实体锁、可能并发；生成实体经 `Tracker.AdvanceVersion` 原子 CAS 满足，手写参与者与测试替身须自行保证（RR-20260926-63）。
 
 ## 读取
 

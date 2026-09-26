@@ -160,6 +160,19 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 投影积压超过租约期时记录会被跳过（上面的屏障与驱逐保证不会 fence，但该步骤要重投再执行一次，
 期间同一实体的写入会被可重试地拒绝）。监控 `StaleEvictions` 的增长可以发现租约偏短。
 
+**屏障期间的重投会消耗 JetStream `MaxDeliver`（RR-20260926-63）。** 实体屏障（`ErrFencedEntityPending`）让 step 消费者
+返回可重试错误（租约内的 `Duplicate` 则等待 completion，等不到时同样返回错误），消息被 Nak 并按 `NakBackoffMin` 起倍增、
+封顶 `NakBackoffMax` 的退避重投，每次都计入该 consumer 的 `MaxDeliver`。屏障时长与投影积压同量级：Mongo 中断或变慢时它可能远长于一次投影。投递次数达到
+`MaxDeliver` 后适配层对消息 `Term`（计数 `nats.jetstream.terminal.total{reason="max_deliver"}`），JetStream 不再投递，
+这条命令不会因屏障解除而自动执行——只能等 coordinator 的步骤 `Timeout` / `MaxAttempts` 发起新 attempt（新 CommandID）重试，
+或进入补偿，恢复时间受步骤 deadline 约束。运维要点：
+
+- 按预期最长的 Mongo 故障 / 投影积压时长核算 `MaxDeliver` 与 `NakBackoffMax`：默认 25 000 次、250ms～30s，约 8 天才会耗尽；
+  调小 `MaxDeliver` 或退避上限时，要确认 `MaxDeliver × NakBackoffMax` 仍覆盖这段时间；
+- 步骤 `Timeout` / `MaxAttempts` 必须能在投递耗尽后兜底，不要把 `MaxDeliver` 当作业务重试上限；
+- 监控 `nats.jetstream.terminal.total{reason="max_deliver"}`、consumer 的重投计数与 `Projector.Stats().FencedAdmissionRejected`：
+  屏障拒绝持续增长同时出现 `max_deliver` 终止，说明投影积压已超过投递预算。
+
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
 必须长于 stream 最大保留时间。上线门禁需要在目标 Mongo/NATS 拓扑上验证持续吞吐、

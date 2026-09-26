@@ -85,7 +85,7 @@ func TestRemoteWriteBatchAbortBeforeFinalizeStaysInPlace(t *testing.T) {
 	if n := hops.Load(); n != 0 {
 		t.Fatalf("Abort of an unfinalized batch made %d fast-pool continuation(s)", n)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(44), "probe", "", true, 0)); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
 		t.Fatalf("aborted batch must refuse FinalizeLocked, got %v", err)
 	}
@@ -109,19 +109,19 @@ func TestRemoteWriteBatchAbortAfterFinalizeRollsBackOnLocalExecutor(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(45), "probe", "", true, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Commits()) != 1 || live.dirty.dirty {
-		t.Fatalf("setup: finalize must freeze one commit, commits=%d dirty=%v", len(batch.Commits()), live.dirty.dirty)
+	if len(batch.Commits()) != 1 || live.dirty.Dirty() {
+		t.Fatalf("setup: finalize must freeze one commit, commits=%d dirty=%v", len(batch.Commits()), live.dirty.Dirty())
 	}
 	var hops atomic.Int32
 	var ranOnExecutor atomic.Bool
 	ctx := entity.WithLocalExecutor(context.Background(), func(fn func()) error {
 		hops.Add(1)
 		fn()
-		ranOnExecutor.Store(live.dirty.dirty)
+		ranOnExecutor.Store(live.dirty.Dirty())
 		return nil
 	})
 	if err := batch.Abort(ctx, errors.New("rejected")); err != nil {

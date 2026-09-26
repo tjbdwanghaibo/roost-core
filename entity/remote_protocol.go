@@ -382,6 +382,12 @@ func (s RemoteCommitStatus) Clone() RemoteCommitStatus {
 // called with the entity mutex held and freezes transaction-local changes.
 // Acknowledge runs only after the authoritative remote outcome is known;
 // Rollback must not require business code to manage entity locks.
+//
+// AcknowledgeRemoteCommit 必须幂等且并发安全（RR-20260926-63）：同一提交可能被确认多次，且可能并发——WAL 投影器报告
+// “结果未知”后 finalizer 回源 Applied 自行发布，投影器对同一事务的重试同时也会确认；outbox 重放、Committed 收尾的对账
+// 也会再次确认已确认过的提交。它不持有实体锁被调用，不能假设与 Build / Rollback 或另一次 Acknowledge 互斥。
+// 生成实现经 dataengine.Tracker.AdvanceVersion（原子 CAS，版本已相等时直接成功）满足该契约；手写实现与测试替身须自行
+// 保证（重复确认同一版本返回 nil、共享状态加锁或原子化）。
 type IRemoteCommitParticipant interface {
 	BuildRemoteCommitLocked(RemoteWriteLease, RemoteTransactionOutcome) (RemoteCommit, error)
 	AcknowledgeRemoteCommit(RemoteCommit) error

@@ -130,7 +130,7 @@ func (f projectionOwnershipFixture) asyncWrite(t *testing.T, tx entity.RemoteTra
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.live.dirty.dirty = true
+	f.live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "async", "", true, 1)); err != nil {
 		t.Fatal(err)
 	}

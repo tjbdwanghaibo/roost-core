@@ -174,7 +174,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	if err = batch1.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx1, "remote-e2e", "", true, uint8(nest.DurabilityAsync))); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	if got := live.RemoteVersionVector().LockFence; got != newerFence {
 		t.Fatalf("replay rewound the newer fence: %d -> %d", newerFence, got)
 	}
-	live.dirty.dirty = true
+	live.dirty.set(true)
 	close(storage.allowThird)
 
 	// 新写者正常提交：它的 WAL 记录排在 tx1 之后，tx1 ack 后才会投影。

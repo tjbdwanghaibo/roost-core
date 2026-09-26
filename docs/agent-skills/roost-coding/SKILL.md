@@ -67,7 +67,13 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 
 性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
 
-当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像。若未来要支持投影时拒绝后的在线恢复，先设计完整内存与 Sync 回滚契约。历史问题与适用回归见 `docs/review/REVIEW-2026-09-26-release-fixes.md`。
+当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像（它是 no-op）。投影时被跳过 / 持久拒绝后的在线恢复已有定案契约（RR-20260926-30 / 39，维护者批准），新路径沿用它，不另建机制：
+- 内存无法证明等于权威时不解冻、不原地“回滚”：原生步骤记录投影结论前，同实体写在 WAL 准入处以可重试的 `dataengine.ErrFencedEntityPending` 屏障；跳过 / 拒绝后经 `NestMgr.RunLocal`（`LocalExecutorBinder` 接线）在快池对受影响实例做仅内存卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`），下一次访问从权威重载；卸载失败保持隔离并重试。
+- Sync：实体在权威里仍存在就换代——关闭旧状态、订阅保持、不发 remove，重载后 `Rebind` 强制全量；事务内新建而权威里不存在的实体才 `RetractSyncSubject`（remove-before-create）。
+- Remote 持久拒绝只丢弃被拒绝 Remote 实体的 Sync 内容与事实，同一事务里已持久提交的本地实体照常生效（`SyncMutation.RejectEntities`，RR-20260926-58）；拒绝后卸载 / 重载窗口给写者可重试的 `entity.ErrRemoteEntityReloading`（包裹 `ErrRemoteFenced`，RR-20260926-62）。
+- 结果未知时提交后回调随 Remote 收尾交给 finalizer，拿到持久结论后只经快池执行至多一次、带原请求上下文快照；快池拒绝投递（停机 / fence）时不离池执行，只计数告警（RR-20260926-37 / 61）。`IRemoteCommitParticipant.AcknowledgeRemoteCommit` 必须幂等且并发安全，投影器重试与 finalizer 回源发布可能并发确认同一提交（RR-20260926-63）。
+
+历史问题与适用回归见 `docs/review/REVIEW-2026-09-26-release-fixes.md` 与各 RR 修复记录。
 
 ## 优化、重构、review 与 bugfix
 

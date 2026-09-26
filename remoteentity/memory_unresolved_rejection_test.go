@@ -94,7 +94,7 @@ func (f memoryUnresolvedFixture) commitMemoryWrite(t *testing.T, tx entity.Remot
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.live.dirty.dirty = true
+	f.live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "memory", "", true, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestMemoryNeverCommittedTransientErrorGetsDurableRejection(t *testing.T) {
 	if _, err = f.store.CommitRemoteBatch(ctx, commits); !errors.Is(err, entity.ErrRemoteRejected) {
 		t.Fatalf("late commit after durable rejection err=%v, want ErrRemoteRejected", err)
 	}
-	if !f.live.dirty.dirty {
+	if !f.live.dirty.Dirty() {
 		t.Fatal("rejected memory write was not rolled back")
 	}
 	if got := f.live.RemoteVersionVector().StateVersion; got != 0 {
@@ -183,7 +183,7 @@ func TestMemoryLateCommitBeatsFinalizerRejection(t *testing.T) {
 	if err != nil || durable.State != entity.RemoteCommitCommitted {
 		t.Fatalf("durable status=%+v err=%v, want committed (published)", durable, err)
 	}
-	if f.live.dirty.dirty {
+	if f.live.dirty.Dirty() {
 		t.Fatal("committed late write was rolled back")
 	}
 	if got := f.live.RemoteVersionVector().StateVersion; got != 1 {
@@ -230,7 +230,7 @@ func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.live.dirty.dirty = true
+	f.live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "async", "", true, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.live.dirty.dirty = true
+	f.live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(94), "memory", "", true, 0)); err != nil {
 		t.Fatal(err)
 	}

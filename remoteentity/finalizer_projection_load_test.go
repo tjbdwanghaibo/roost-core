@@ -150,7 +150,7 @@ func TestRemoteAsyncFinalizerProjectionLoad(t *testing.T) {
 				var tx entity.RemoteTransactionID
 				tx[0] = 0x38
 				binary.BigEndian.PutUint64(tx[8:], n)
-				live.dirty.dirty = true
+				live.dirty.set(true)
 				if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "load", "", true, uint8(nest.DurabilityAsync))); err != nil {
 					failures.Add(1)
 					t.Errorf("finalize: %v", err)

@@ -1207,6 +1207,7 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 		live.SetEntityVersion(int64(commit.NextVersion))
 	}
 	if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
+		// 不持实体锁；投影器重试与 finalizer 回源发布可能并发走到这里，参与者按契约幂等且并发安全（RR-20260926-63）。
 		return participant.AcknowledgeRemoteCommit(commit.Clone())
 	}
 	return nil
