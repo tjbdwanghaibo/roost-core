@@ -187,6 +187,14 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	case existing.policy == def.RemotePolicy:
 		return nil
 	case existing.policy == RemotePolicyNone:
+		if builder := existing.builder; builder != nil {
+			// builder 先注册时按 none 定下了默认生命周期；策略随后升级，生命周期必须与新策略相符，
+			// 否则 kind 变成托管而 builder 的生命周期仍是本地默认值（RR-20260926-71）。先声明 kind 定义再注册
+			// builder 时 normalizeBuilderPolicy 会按注册表的策略取默认生命周期。
+			if err := ValidateEntityPolicy(kind, builder.NoPersist, def.RemotePolicy, builder.Lifetime); err != nil {
+				return fmt.Errorf("entity kind %d remote policy %d declared after its builder: %w", kind, def.RemotePolicy, err)
+			}
+		}
 		next := *existing
 		next.policy = def.RemotePolicy
 		kindEntries[kind].Store(&next)
@@ -322,27 +330,39 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	return e, nil
 }
 
+// normalizeBuilderPolicy 按 kind 的实际策略补默认生命周期并校验（调用方持有 registryMu）。builder 省略 RemotePolicy 时，
+// kind 可能已经由 kind 定义声明为 managed / mirror——注册表按“部分重复声明”接受，全部 Remote 路径都按注册表的策略处理，
+// 这里也必须一致，否则托管 kind 得到本地实体的默认生命周期（RR-20260926-71，与 RR-20260926-60 同类）。
 func normalizeBuilderPolicy(param *EntityBuilderParam) {
 	if param == nil {
 		return
 	}
-	if param.Lifetime == EntityLifetimeDefault {
-		param.Lifetime = DefaultEntityLifetime(param.NoPersist, param.RemotePolicy)
+	policy := param.RemotePolicy
+	if policy == RemotePolicyNone {
+		if entry := kindEntryOf(param.Kind); entry != nil {
+			policy = entry.policy
+		}
 	}
-	if err := ValidateEntityPolicy(param.Kind, param.NoPersist, param.RemotePolicy, param.Lifetime); err != nil {
+	if param.Lifetime == EntityLifetimeDefault {
+		param.Lifetime = DefaultEntityLifetime(param.NoPersist, policy)
+	}
+	if err := ValidateEntityPolicy(param.Kind, param.NoPersist, policy, param.Lifetime); err != nil {
 		panic(err)
 	}
 }
 
+// IsRemoteCapable 报告 builder 的 kind 是否 Remote 可用：builder 自带的策略或 kind 在注册表里的实际策略（RR-20260926-71）。
 func (param *EntityBuilderParam) IsRemoteCapable() bool {
-	return param != nil && param.RemotePolicy.RemoteCapable()
+	return param != nil && (param.RemotePolicy.RemoteCapable() || GetEntityKindRemotePolicy(param.Kind).RemoteCapable())
 }
 
+// validateBuiltEntityPolicy 按 kind 在注册表里的实际策略校验构建结果（RR-20260926-71）：kind 为 managed 而 builder 省略
+// RemotePolicy 时，构建出的实体同样必须实现 IThreadSafeRemoteEntity。
 func validateBuiltEntityPolicy(bp *EntityBuilderParam, e IThreadSafeEntity) error {
 	if bp == nil || e == nil {
 		return nil
 	}
-	if bp.RemotePolicy.RemoteManaged() {
+	if GetEntityKindRemotePolicy(bp.Kind).RemoteManaged() {
 		if _, ok := e.(IThreadSafeRemoteEntity); !ok {
 			return fmt.Errorf("entity kind %d remote=managed but does not implement IThreadSafeRemoteEntity", bp.Kind)
 		}
@@ -361,7 +381,7 @@ func resolveEntityLifetime(param *EntityCreateParam, bp *EntityBuilderParam) Ent
 	remotePolicy := RemotePolicyNone
 	if bp != nil {
 		noPersist = bp.NoPersist
-		remotePolicy = bp.RemotePolicy
+		remotePolicy = GetEntityKindRemotePolicy(bp.Kind)
 	}
 	return DefaultEntityLifetime(noPersist, remotePolicy)
 }

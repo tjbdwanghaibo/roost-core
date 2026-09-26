@@ -179,7 +179,10 @@ func TestMongoStoreLeaseFenceRejectsExpiredLease(t *testing.T) {
 }
 
 func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
-	const kind entity.EntityKind = 242
+	// 只需要一个托管且没有 builder 的 kind。原用 242，与 entity_repository_promises_test.go 的本地 builder
+	// dataEngineNilBuilderKind 撞号：两个用例先后运行时 kind 被升级成 managed 而 builder 仍是本地生命周期，
+	// RR-20260926-71 起注册表拒绝这种升级。
+	const kind entity.EntityKind = 236
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	entityID, err := entity.BuildEntityID(78, kind)
 	if err != nil {
@@ -562,7 +565,9 @@ func TestMongoStoreMigrationConflictBecomesObsoleteNoop(t *testing.T) {
 }
 
 func TestMongoStoreProjectsRemoteAndOrdinaryMutationInOneSession(t *testing.T) {
-	const kind entity.EntityKind = 241
+	// 托管、无 builder 的 kind。原用 241，与 entity_repository_promises_test.go 的本地 builder dataEngineDuplicateDAOKind 撞号，
+	// RR-20260926-71 起注册表拒绝把已有本地 builder 的 kind 升级为 managed。
+	const kind entity.EntityKind = 235
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	entityID, err := entity.BuildEntityID(77, kind)
 	if err != nil {

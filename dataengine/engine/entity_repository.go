@@ -252,7 +252,9 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 			IsCreate: false, Category: builder.Category, Kind: kind, Id: fullID,
 			Dao: daos, Lifetime: builder.Lifetime,
 		}
-		if builder.RemotePolicy.RemoteManaged() {
+		// 是否托管看 kind 在注册表里的实际策略，不看 builder 自带的 RemotePolicy：kind 定义声明 managed、手写 builder 省略
+		// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封（RR-20260926-71，同 RR-60）。
+		if entity.GetEntityKindRemotePolicy(kind).RemoteManaged() {
 			if remoteVector.StateVersion == 0 {
 				return nil, fmt.Errorf("%w: remote entity %d has no version envelope", ErrEntityAggregateCorrupt, fullID)
 			}

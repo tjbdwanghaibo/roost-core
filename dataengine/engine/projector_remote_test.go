@@ -25,7 +25,9 @@ func (s *parallelRemoteStore) Project(ctx context.Context, r coredata.CommitReco
 
 func remoteProjectionRecord(t *testing.T, sequence byte) coredata.CommitRecord {
 	t.Helper()
-	const kind entity.EntityKind = 241
+	// 托管、无 builder 的 kind。原用 241，与 entity_repository_promises_test.go 的本地 builder dataEngineDuplicateDAOKind 撞号，
+	// RR-20260926-71 起注册表拒绝把已有本地 builder 的 kind 升级为 managed。
+	const kind entity.EntityKind = 235
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, err := entity.BuildEntityID(int64(sequence), kind)
 	if err != nil {
