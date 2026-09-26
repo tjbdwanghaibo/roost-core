@@ -8,7 +8,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 
 
-## W-2026-09-26-01：`remoteentity` strict 超时后恢复路径对同一提交并发 `AcknowledgeRemoteCommit`（-race 偶发）
+## W-2026-09-26-01 已分流：→ RR-20260926-63（原复现由 RR-38 消除，根因“ack 须幂等且并发安全”登记为契约）；原条目：`remoteentity` strict 超时后恢复路径对同一提交并发 `AcknowledgeRemoteCommit`（-race 偶发）
 
 - **位置**：roost-core `remoteentity/batch_test.go:452` `TestStrictCommitTimeoutRetainsGateUntilOutcomeIsKnown`；并发的两条调用链都经
   `remoteentity/transaction_manager.go:773` `afterRemoteCommit` → `:1028` `acknowledgeRemoteCommit` → 参与方 `AcknowledgeRemoteCommit`：
