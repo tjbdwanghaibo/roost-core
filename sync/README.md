@@ -62,6 +62,8 @@ on_change 下快照预算按 Interval 窗口共享；额度耗尽的快照需求
 被挡对象不在每个等待窗口重复打包；准入仍按当轮最新冻结内容的实际编码，periodic 与 on_change 相同。
 on_change 同窗口停止重复冷捕获，已有对象更新不受影响。
 恢复类别目前指同一会话 lifetime 的 Hold/Ready；Close/Open 后是新入场。
+传输实现 SessionLifecycle 时，OpenSession 在 SessionOpened 成功后才发布会话；同 ID 旧发送未退出返回
+`ErrSessionClosing`，另一次打开尚未确认返回 `ErrSessionOpening`，两者都未创建会话、可重试，OpenSession 本身不等待。
 具体边界和回归见[复审核实](../docs/review/REVIEW-2026-09-26-followup.md)。
 
 可显式创建 `NewSyncTrace(capacity)`，传入 `ManagerConfig.Trace` 开启有界阶段记录；

@@ -40,6 +40,8 @@ func (f TransportFunc) Push(ctx context.Context, session SessionID, frame []byte
 // SessionLifecycle is optional on a Transport: a transport that keeps its own
 // per-session state (queues, connections) learns here when the manager opens
 // and closes a session.
+// SessionOpened 返回前会话对 Subscribe/Flush 不可见；返回错误时 Manager 不创建会话。
+// 同 ID 旧资源仍在释放时应返回包装了 ErrSessionClosing 的错误，调用方据此重试。
 type SessionLifecycle interface {
 	SessionOpened(session SessionID) error
 	SessionClosed(session SessionID)
@@ -76,7 +78,13 @@ func (t *AsyncTransport) SessionOpened(session SessionID) error {
 		return ErrTransportRequired
 	}
 	// 旧发送尚未退出时必须明确拒绝；不能把新 lifetime 绑定到旧队列。
-	return t.async.RegisterSession(nettransport.SessionInfo{ID: session})
+	// Manager 保证同 ID 没有活跃会话时才调用这里，注册冲突只能是旧队列尚未退出。
+	// 本适配器独占所包装 nettransport 的会话注册。
+	err := t.async.RegisterSession(nettransport.SessionInfo{ID: session})
+	if errors.Is(err, nettransport.ErrSessionAlreadyExists) {
+		return fmt.Errorf("%w: %w", ErrSessionClosing, err)
+	}
+	return err
 }
 
 func (t *AsyncTransport) SessionClosed(session SessionID) {

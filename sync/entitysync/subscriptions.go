@@ -9,6 +9,17 @@ import (
 
 // OpenSession admits a receiver. It is idempotent: an already open session
 // stays as it is.
+//
+// 传输实现 SessionLifecycle 时，先由 SessionOpened 建立传输资源，成功后才发布会话；
+// 在此之前 Subscribe/Flush 看不到它，不会向未注册的传输 Push 或报告 SessionLost。
+// 返回 nil 表示会话此刻已打开；返回错误表示本次调用没有创建会话。可重试的错误：
+//   - ErrSessionClosing：同 ID 上一个 lifetime 的旧发送仍在退出（如 CloseSession 或
+//     传输失败后立即重连）。旧发送结束后重试，或为新连接分配新 SessionID。
+//   - ErrSessionOpening：同 ID 的另一次 OpenSession 正在等待传输确认。重试即可得到
+//     与那次结果一致的状态。
+//
+// 本方法不等待旧发送退出，也不等待另一次打开完成，可在快池内调用；需要等待的重试
+// 由调用方安排在慢阶段或下一次调度。
 func (m *Manager) OpenSession(id SessionID) error {
 	if m == nil {
 		return ErrManagerClosed
@@ -16,6 +27,7 @@ func (m *Manager) OpenSession(id SessionID) error {
 	if id == 0 {
 		return ErrSessionInvalid
 	}
+	lifecycle, managed := m.config.Transport.(SessionLifecycle)
 	m.mu.Lock()
 	if m.closed || m.closing {
 		m.mu.Unlock()
@@ -25,25 +37,45 @@ func (m *Manager) OpenSession(id SessionID) error {
 		m.mu.Unlock()
 		return nil
 	}
-	if len(m.sessions) >= m.config.MaxSessions {
+	if _, busy := m.opening[id]; busy {
+		m.mu.Unlock()
+		return ErrSessionOpening
+	}
+	if len(m.sessions)+len(m.opening) >= m.config.MaxSessions {
 		m.mu.Unlock()
 		return ErrSessionLimit
 	}
+	if !managed {
+		m.publishSessionLocked(id)
+		m.mu.Unlock()
+		return nil
+	}
+	m.opening[id] = struct{}{}
+	m.mu.Unlock()
+
+	err := lifecycle.SessionOpened(id)
+	m.mu.Lock()
+	delete(m.opening, id)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if m.closed || m.closing {
+		// 传输确认期间 Manager 开始关闭：Close 不会再看到这个 ID，由这里归还传输资源。
+		m.mu.Unlock()
+		lifecycle.SessionClosed(id)
+		return ErrManagerClosed
+	}
+	m.publishSessionLocked(id)
+	m.mu.Unlock()
+	return nil
+}
+
+// publishSessionLocked 让新 lifetime 对订阅与 Flush 可见；调用方持有 m.mu。
+func (m *Manager) publishSessionLocked(id SessionID) {
 	opened := newSession(id)
 	opened.lifetime.traceID = m.nextLifetime.Add(1)
 	m.sessions[id] = opened
-	m.mu.Unlock()
-	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
-		if err := lifecycle.SessionOpened(id); err != nil {
-			m.mu.Lock()
-			if m.sessions[id] == opened {
-				delete(m.sessions, id)
-			}
-			m.mu.Unlock()
-			return err
-		}
-	}
-	return nil
 }
 
 // OpenHeldSession admits a receiver that is not ready to receive yet: it can

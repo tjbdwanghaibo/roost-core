@@ -41,4 +41,13 @@ var (
 	// watermark has not reached. Nothing is sent for it this tick; its dirty
 	// state and pending subscriptions are kept and the next tick tries again.
 	ErrDurabilityDeferred = errors.New("entitysync: content is not durable yet; retry after the watermark advances")
+
+	// ErrSessionClosing 表示同一 SessionID 的上一个 lifetime 仍在传输层退出（旧发送未结束），
+	// 本次 OpenSession 没有创建会话。旧发送退出后重试，或为新连接分配新 SessionID。
+	// SessionLifecycle 实现可包装它，表达“ID 仍被旧 lifetime 占用”。
+	ErrSessionClosing = errors.New("entitysync: previous session with this id is still closing; retry OpenSession later")
+
+	// ErrSessionOpening 表示同一 SessionID 的另一次 OpenSession 正在等待传输确认、结果未定，
+	// 本次调用没有创建会话。稍后重试：那次打开成功则得到 nil，失败则重新尝试打开。
+	ErrSessionOpening = errors.New("entitysync: session with this id is being opened; retry OpenSession later")
 )

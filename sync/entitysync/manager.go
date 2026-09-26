@@ -136,8 +136,11 @@ type Manager struct {
 	mu       sync.RWMutex
 	subjects map[int64]*subject
 	sessions map[SessionID]*session
-	closed   bool
-	closing  bool
+	// opening 登记正在等待传输 SessionOpened 的 ID；传输确认前会话不进入 sessions，
+	// Subscribe/Flush 看不见它，同 ID 的并发 OpenSession 返回 ErrSessionOpening。
+	opening map[SessionID]struct{}
+	closed  bool
+	closing bool
 
 	pendingMu        sync.Mutex
 	pending          map[int64]struct{}
@@ -220,6 +223,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		},
 		subjects:         make(map[int64]*subject),
 		sessions:         make(map[SessionID]*session),
+		opening:          make(map[SessionID]struct{}),
 		pending:          make(map[int64]struct{}),
 		waitingSnapshots: make(map[int64]snapshotWait),
 		flushGate:        make(chan struct{}, 1),
