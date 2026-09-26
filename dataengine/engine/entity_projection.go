@@ -15,6 +15,9 @@ type entityProjection struct {
 	err  error
 	// fenced：原生步骤（本地 mutation + lease fence），ids 上持有准入屏障，随本项一起解除。
 	fenced bool
+	// evicting：该原生步骤已被跳过、已交给驱逐 worker（heldMu 保护）。按事务身份只登记一次：
+	// ack 失败后的重投会再次读到同一条被跳过的记录，不能再排队、再计数（RR-20260926-50）。
+	evicting bool
 }
 
 func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
@@ -78,7 +81,8 @@ func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 
 // WaitEntityProjection 等待实体 id 在本进程已准入的全部投影完成。等待前、等待中、等待后
 // 都能感知“本进程不会再投影”：投影 fatal（ErrProjectionConflict 等，可 errors.Is 判别）、
-// Projector 已关闭（ErrRuntimeStopped）、WAL 不健康。fatal 会唤醒全部等待方，不只 fatal 批次。
+// Projector 已关闭（ErrRuntimeStopped）、WAL 不健康。fatal 与 WAL terminal（errors.Is
+// corenest.ErrCommitIndeterminate，RR-20260926-50）都会唤醒全部等待方，不只相关批次。
 func (p *Projector) WaitEntityProjection(ctx context.Context, id int64) error {
 	fctx.AssertBlockingAllowed("dataengine.WaitEntityProjection")
 	if ctx == nil {
@@ -113,6 +117,9 @@ func (p *Projector) WaitEntityProjection(ctx context.Context, id int64) error {
 func (p *Projector) projectionUsable() error {
 	if fatal := p.fatal(); fatal != nil {
 		return fatal
+	}
+	if terminal := p.walTerminal(); terminal != nil {
+		return terminal
 	}
 	if p.ctx.Err() != nil {
 		return ErrRuntimeStopped

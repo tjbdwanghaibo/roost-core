@@ -130,6 +130,7 @@ type WAL struct {
 	unsynced     bool
 	lockHandle   *os.File
 	terminalErr  atomic.Pointer[terminalState] // 只写一次，热路径免锁读
+	terminated   chan struct{}                 // 首个 terminal 错误写入后关闭（Terminated）
 	fatalOnce    sync.Once
 	replayMu     sync.Mutex
 	checkpointMu sync.Mutex
@@ -232,6 +233,7 @@ func Open(options Options) (*WAL, error) {
 		appendCh:   make(chan appendRequest, opts.QueueCapacity),
 		closeCh:    make(chan struct{}),
 		doneCh:     make(chan struct{}),
+		terminated: make(chan struct{}),
 		lockHandle: lockHandle,
 	}
 	w.batchBuffers.New = func() any {
@@ -1264,6 +1266,14 @@ func (w *WAL) terminal() error {
 	return nil
 }
 
+// Terminated 在 WAL 进入 terminal（物理写入或 fsync 结果不确定，错误 errors.Is
+// corenest.ErrCommitIndeterminate）后关闭，之后 Healthy 返回该错误。只报告 terminal，
+// 正常 Close 不关闭它。供依赖 WAL 的等待方（例如 DataEngine 投影等待）立即感知“本进程
+// 不会再确认任何记录”，而不是轮询 Healthy（RR-20260926-50）。
+func (w *WAL) Terminated() <-chan struct{} {
+	return w.terminated
+}
+
 func (w *WAL) setTerminal(err error) {
 	if err == nil {
 		return
@@ -1274,6 +1284,7 @@ func (w *WAL) setTerminal(err error) {
 		// fenced; their waiters must observe the terminal verdict instead of
 		// blocking forever.
 		w.failPendingTickets(err)
+		close(w.terminated)
 	}
 	if first && w.opts.OnFatal != nil {
 		w.fatalOnce.Do(func() {

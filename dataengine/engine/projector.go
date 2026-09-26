@@ -120,8 +120,12 @@ type Projector struct {
 	lastErr             error
 	fatalErr            error
 	fatalOnce           sync.Once
-	ticketMu            sync.Mutex
-	tickets             map[coredata.TransactionID]*projectionTicket
+	// walTerminalErr：WAL 已 terminal（RR-20260926-50），本进程不会再确认任何记录；errMu 保护，
+	// 与 fatalErr 一样先写入、再唤醒全部等待方，reserve 在 heldMu 下复查。
+	walTerminalErr  error
+	walTerminalOnce sync.Once
+	ticketMu        sync.Mutex
+	tickets         map[coredata.TransactionID]*projectionTicket
 	// fencedEntities：实体 → 持有屏障的原生步骤记录（fenced_step.go）。heldMu 保护，
 	// 与 pendingTransactions 中该记录的 entityProjection 同时登记、同时解除。
 	fencedEntities map[int64]coredata.TransactionID
@@ -195,6 +199,7 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
 		tickets: make(map[coredata.TransactionID]*projectionTicket),
 	}
+	go projector.watchWALTerminal()
 	if options.ManualReplay {
 		// 没有后台循环：Close 不需要等待，done 从一开始就处于“循环已退出”。
 		close(projector.done)
@@ -417,6 +422,48 @@ func (projector *Projector) isFatalProjection(err error) bool {
 	return true
 }
 
+// watchWALTerminal 在 WAL 进入 terminal 时立即唤醒全部待投影等待方（RR-20260926-50）。WAL terminal 之后
+// Ack 恒失败、准入恒失败，本进程不会再推进任何记录；只在等待前后检查 Healthy 的等待方要等到自己的截止
+// 时间或 Close。Projector 关闭时退出。
+func (projector *Projector) watchWALTerminal() {
+	select {
+	case <-projector.wal.Terminated():
+		projector.walTerminated(projector.wal.Healthy())
+	case <-projector.ctx.Done():
+	}
+}
+
+// observeAckError 把 checkpoint 失败里的 WAL terminal 当作同一个信号：nestwal.Ack 只在 WAL 已 terminal
+// （或本次 fsync 失败、随即粘滞为 terminal）时返回 ErrCommitIndeterminate。
+func (projector *Projector) observeAckError(err error) {
+	if errors.Is(err, corenest.ErrCommitIndeterminate) {
+		projector.walTerminated(err)
+	}
+}
+
+// walTerminated 与 fatal 同一不变量：先写 walTerminalErr，再唤醒全部待投影等待方与系统票据；reserve 在
+// heldMu 下复查，唤醒之后不会再登记新的等待项。错误保留 errors.Is(corenest.ErrCommitIndeterminate)：
+// 已准入记录的投影结果对本进程是未知的（可能已落库、ack 丢失），不是明确失败。
+func (projector *Projector) walTerminated(cause error) {
+	if cause == nil {
+		return
+	}
+	projector.walTerminalOnce.Do(func() {
+		err := fmt.Errorf("dataengine projector: WAL is terminal, this process will not confirm pending projections: %w", cause)
+		projector.errMu.Lock()
+		projector.walTerminalErr = err
+		projector.errMu.Unlock()
+		projector.completeAllTickets(err)
+	})
+}
+
+func (projector *Projector) walTerminal() error {
+	projector.errMu.RLock()
+	err := projector.walTerminalErr
+	projector.errMu.RUnlock()
+	return err
+}
+
 func (projector *Projector) Stats() ProjectorStats {
 	stats := ProjectorStats{
 		Committed: projector.committed.Load(), Projected: projector.projected.Load(),
@@ -446,7 +493,7 @@ func (projector *Projector) Healthy() error {
 		return errors.New("dataengine projector: not initialized")
 	}
 	projector.errMu.RLock()
-	err := errors.Join(projector.lastErr, projector.fatalErr)
+	err := errors.Join(projector.lastErr, projector.fatalErr, projector.walTerminalErr)
 	projector.errMu.RUnlock()
 	return errors.Join(projector.wal.Healthy(), err)
 }
@@ -509,6 +556,9 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 	// fatal 唤醒扫描也持 heldMu，之后登记的等待项将无人唤醒。
 	if fatal := projector.fatal(); fatal != nil {
 		return fatal
+	}
+	if terminal := projector.walTerminal(); terminal != nil {
+		return terminal
 	}
 	if _, exists := projector.admitted[id]; !exists {
 		// 原生步骤的实体屏障（RR-20260926-30）：与下面的登记同一临界区，不用瞬时统计判断。

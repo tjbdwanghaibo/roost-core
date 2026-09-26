@@ -77,6 +77,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			return nil
 		}
 		if err := projector.ack(ctx, fences[processed-1]); err != nil {
+			projector.observeAckError(err)
 			return err
 		}
 		projector.acknowledge(records[acked:processed])

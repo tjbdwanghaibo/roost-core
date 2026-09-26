@@ -87,22 +87,32 @@ func (p *Projector) checkFencedEntitiesLocked(record coredata.CommitRecord) erro
 
 // startStaleEviction 在记录投影完成后调用。原生步骤被跳过（或结果未知）时保留它的 entityProjection
 // ——也就是保留屏障与冷加载等待——并交给驱逐 worker；返回 false 表示按普通投影完成处理。
+//
+// 驱逐按事务身份只登记一次（RR-20260926-50）：ack 失败后投影器从 checkpoint 重投，同一条被跳过的记录
+// 每轮都会再到这里。已登记的直接返回 true（屏障与等待照旧由那一次驱逐解除），不再排队、不再计数——
+// 否则驱逐成功后多出的队列项会去卸载刚从 Mongo 重载的新对象。驱逐完成后记录已不在待投影表里，之后的
+// 重投走下面的 !fenced 分支。
 func (p *Projector) startStaleEviction(id coredata.TransactionID, outcome projectionOutcome) bool {
 	if outcome == projectionApplied {
 		return false
 	}
-	p.heldMu.RLock()
+	p.heldMu.Lock()
 	pending := p.pendingTransactions[id]
 	fenced := pending != nil && pending.fenced
+	registered := fenced && pending.evicting
 	var ids []int64
-	if fenced {
-		ids = append(ids, pending.ids...)
+	if fenced && !registered {
+		pending.evicting = true
+		ids = slices.Clone(pending.ids)
 	}
-	p.heldMu.RUnlock()
+	p.heldMu.Unlock()
 	if !fenced {
 		// 不是本进程这次准入的原生步骤：启动恢复或 ack 丢失后的重放。前者没有常驻实体；后者第一次
 		// 投影时已经驱逐过，之后常驻的实体都从 Mongo 加载，不含被跳过的效果。
 		return false
+	}
+	if registered {
+		return true
 	}
 	metrics.IncCounter("dataengine.fence.evictions.started.total", nil, 1)
 	p.evictMu.Lock()
