@@ -69,6 +69,10 @@ var (
 	// 不能回滚的 handler（RollbackNone、memory 快路径）不带 ErrLockTimeout：冲突前的内存修改已生效且不撤销，
 	// 消息不自动重排，这个错误原样（或补在业务错误上）回复调用方；是否重试由业务按 handler 的幂等性决定。
 	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
+	// ErrNestedTransactionCommitted 表示这条消息自己的事务没有提交（回滚或失败），但 handler 内嵌套的独立事务
+	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）。消息按已越过提交点处理，框架不自动重排；
+	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
+	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
 )
 
 func NewParamCountMismatchError(handler string, got int, want int) error {

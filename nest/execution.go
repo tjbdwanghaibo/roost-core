@@ -232,6 +232,10 @@ func (tx *RollbackTx) rejectCommit(cause error) error {
 func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCommitter, msg *Msg) error {
 	if err := tx.durableCommit(ctx, committer); err != nil {
 		if errors.Is(err, ErrCommitIndeterminate) {
+			if tx.dispatch == nil {
+				// 嵌套独立事务结果未知：WAL 里可能已有它，外层消息同样不能重排（RR-20260926-65）。
+				msg.markNestedTransactionCommitted()
+			}
 			if msg != nil && msg.RemoteWriteBatch != nil {
 				err = errors.Join(err, msg.markRemoteWriteIndeterminateLocked(err))
 			}
@@ -246,6 +250,12 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 	// 持久提交点已越过：此后无论释放、回调、回复报什么错，这条消息都不能重新准入（RR-20260926-49）。
 	tx.dispatch.markTransactionAdmitted()
 	tx.dispatch.markTransactionCommitted()
+	if tx.dispatch == nil && tx.accepted {
+		// handler 内嵌套的独立事务（RunIsolatedTransaction 等，不认领消息）已持久提交：外层消息此后失败也不能
+		// 重排，否则独立事务会再提交一次；回复由 dispatchNest 标上 ErrNestedTransactionCommitted（RR-20260926-65）。
+		// 记录为空（accepted 为假）时没有任何内容持久化，不算越过提交点。
+		msg.markNestedTransactionCommitted()
+	}
 	if msg != nil && msg.RemoteWriteBatch != nil {
 		// 持久提交已成功：此后 AfterCommit、释放锁、release hook 的任何失败都不能让
 		// Remote 批次 Abort。记录这个事实，而不是让收尾去猜错误类型（RR-20260926-32）。

@@ -86,6 +86,11 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			// errors.Is(ErrAfterCommitFailed) 区分“已提交”，不能据此重复业务。
 			err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, err)
 		}
+		if msg.nestedTxCommitted && err != nil && !errors.Is(err, ErrAfterCommitFailed) && !errors.Is(err, ErrNestedTransactionCommitted) {
+			// 自己的事务没有提交，但 handler 内嵌套的独立事务已持久提交（或结果未知）：调用方必须能区分
+			// “什么都没提交”与“部分已提交”，不能据此重试整笔业务；消息也不重排（RR-20260926-65）。
+			err = fmt.Errorf("%w: %w", ErrNestedTransactionCommitted, err)
+		}
 		releaseCurrentMsg()
 		releaseCtx()
 		if errors.Is(err, ErrEntityGroupTransitionScheduled) {

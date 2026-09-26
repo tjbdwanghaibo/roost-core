@@ -206,6 +206,14 @@ func (m *Msg) markTransactionCommitted() {
 	}
 }
 
+// markNestedTransactionCommitted 记录这条消息的 handler 内，一个不认领消息的嵌套独立事务已持久提交或结果未知
+// （RR-20260926-65）；nil 接收者（不在派发中）无操作。
+func (m *Msg) markNestedTransactionCommitted() {
+	if m != nil {
+		m.nestedTxCommitted = true
+	}
+}
+
 // markCreateLockConflictWithoutRollback 记录这条消息里，不能回滚的 handler 内新建实体遇到了锁冲突
 // （RR-20260926-64）；nil 接收者无操作。
 func (m *Msg) markCreateLockConflictWithoutRollback() {
@@ -235,14 +243,14 @@ func (m *Msg) replyAfterCommit() bool {
 	return m.txCommitted
 }
 
-// transactionPastCommitPoint 判断这条消息是否可能已经提交了业务：自己的事务越过提交点、Remote 本地已持久提交
-// 或结果未知，或回复已声明“提交之后失败”/“结果不确定”。这样的消息不能重新准入，否则已提交内容会再执行一次
-// （RR-20260926-49）。
+// transactionPastCommitPoint 判断这条消息是否可能已经提交了业务：自己的事务越过提交点、handler 内嵌套的独立事务
+// 已持久提交或结果未知（RR-20260926-65）、Remote 本地已持久提交或结果未知，或回复已声明“提交之后失败”/“结果不确定”。
+// 这样的消息不能重新准入，否则已提交内容会再执行一次（RR-20260926-49）。
 func (m *Msg) transactionPastCommitPoint(err error) bool {
 	if m == nil {
 		return false
 	}
-	return m.txAdmitted || m.remoteCommitted || m.remoteIndeterminate ||
+	return m.txAdmitted || m.nestedTxCommitted || m.remoteCommitted || m.remoteIndeterminate ||
 		errors.Is(err, ErrAfterCommitFailed) || errors.Is(err, ErrCommitIndeterminate)
 }
 
@@ -353,6 +361,10 @@ type Msg struct {
 	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读（与 txAdmitted 相同）。
 	txNoRollback                 bool
 	createLockConflictNoRollback bool
+	// nestedTxCommitted 表示 handler 内嵌套的独立事务（不认领消息的 RunIsolatedTransaction 等）已持久提交或结果未知：
+	// 消息按已越过提交点处理，不重排；自己的事务没有提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
+	// 由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
+	nestedTxCommitted bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().
