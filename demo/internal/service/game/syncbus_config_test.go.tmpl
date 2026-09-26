@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/viper"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/kit/syncbus"
+	syncbusdriver "github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver"
 )
 
 // RR-20260926-12：生成的配置里声明的同步总线，必须是进程真正用上的那一个。
@@ -18,6 +19,9 @@ import (
 // 日志 "syncbus mod: started" 里的 transport。所以这里用本工程生成的配置文件初始化
 // 真实的 kit Mod，断言那条启动日志报出的正是配置的 transport，并且没有任何“配置未被
 // 读取”的告警（弃用段、被遮住的键、不认识的键）。
+//
+// RR-20260926-56：JetStream 的流名决定与谁共享消息和游标，所以同一条日志还要说出
+// 实际流名——未显式配置时由 prefix 派生，生成的 prefix roost.sync 仍是 ROOST_SYNC。
 func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 	for _, file := range []string{
 		"../../../configs/service/config.{{GAME_SERVICE}}.yaml",
@@ -37,6 +41,17 @@ func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 				want = "jetstream"
 			}
 
+			wantStream := ""
+			if want == "jetstream" {
+				wantStream = cfg.GetString("syncbus.stream")
+				if wantStream == "" {
+					wantStream = syncbusdriver.JetStreamSyncStream(cfg.GetString("syncbus.prefix"))
+				}
+				if cfg.GetString("syncbus.prefix") == "roost.sync" && !cfg.IsSet("syncbus.stream") && wantStream != "ROOST_SYNC" {
+					t.Fatalf("the generated prefix roost.sync must keep the deployed stream ROOST_SYNC, derived %q", wantStream)
+				}
+			}
+
 			var logs bytes.Buffer
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -49,12 +64,13 @@ func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			started := ""
+			started, startedStream := "", ""
 			for line := range strings.Lines(logs.String()) {
 				var entry struct {
 					Level     string `json:"level"`
 					Msg       string `json:"msg"`
 					Transport string `json:"transport"`
+					Stream    string `json:"stream"`
 				}
 				if err := json.Unmarshal([]byte(line), &entry); err != nil {
 					continue
@@ -63,11 +79,14 @@ func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 					t.Errorf("the generated syncbus config is not read as written: %s", entry.Msg)
 				}
 				if entry.Msg == "syncbus mod: started" {
-					started = entry.Transport
+					started, startedStream = entry.Transport, entry.Stream
 				}
 			}
 			if started != want {
 				t.Fatalf("%s configures syncbus.transport=%s but the mod started on %q", file, want, started)
+			}
+			if startedStream != wantStream {
+				t.Fatalf("%s: the start log names stream %q, want %q", file, startedStream, wantStream)
 			}
 		})
 	}

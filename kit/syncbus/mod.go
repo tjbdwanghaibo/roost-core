@@ -22,6 +22,9 @@ const (
 	configSection       = "syncbus"
 	roomConfigSection   = "room"
 	legacyConfigSection = "sync"
+
+	// defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀（沿用 room 时代的名字）。
+	defaultPrefix = "roost.room"
 )
 
 // configKeys 是本 Mod 读取的全部键。三个配置段里的其他键没有任何效果，
@@ -116,7 +119,7 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 	}
 	m.prefix = cfgGetString(cfg, "prefix")
 	if m.prefix == "" {
-		m.prefix = "roost.room"
+		m.prefix = defaultPrefix
 	}
 	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
 	switch m.transport {
@@ -131,7 +134,7 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 	m.jsCfg = driver.JetStreamSyncConfig{
 		LocalSid:     m.localSid,
 		Prefix:       m.prefix,
-		Stream:       cfgGetString(cfg, "stream"),
+		Stream:       jetStreamStream(cfgGetString(cfg, "stream"), m.prefix),
 		Storage:      parseJetStreamSyncStorage(cfgGetString(cfg, "storage")),
 		AckWait:      cfgGetDuration(cfg, "ack_wait"),
 		MaxDeliver:   cfgGetInt(cfg, "max_deliver"),
@@ -143,6 +146,19 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 		PublishTime:  cfgGetDuration(cfg, "publish_timeout"),
 	}
 	return nil
+}
+
+// jetStreamStream 决定 JetStream 流名（RR-20260926-56）：显式 stream 优先；否则由 prefix 派生，
+// 不同 prefix 的部署共用一个 NATS 时各有各的流。本 Mod 的缺省 prefix roost.room 与生成配置的
+// roost.sync 在修复前都落在 ROOST_SYNC 上，仍映射到 ROOST_SYNC，已部署的流与 durable 游标不变。
+func jetStreamStream(configured, prefix string) string {
+	if configured != "" {
+		return configured
+	}
+	if prefix == defaultPrefix {
+		return driver.JetStreamSyncStream("")
+	}
+	return driver.JetStreamSyncStream(prefix)
 }
 
 func (m *SyncBusMod) Provide(r *app.Registry) error {
@@ -177,11 +193,12 @@ func (m *SyncBusMod) DependsOn() []app.ModName {
 }
 
 func (m *SyncBusMod) Start() error {
-	transport := "nats"
 	if m.useJetStream() {
-		transport = "jetstream"
+		// 实际流名写进启动日志：流名决定与谁共享消息与游标（RR-20260926-56）。
+		slog.Info("syncbus mod: started", "transport", "jetstream", "prefix", m.prefix, "stream", m.jsCfg.Stream)
+		return nil
 	}
-	slog.Info("syncbus mod: started", "transport", transport)
+	slog.Info("syncbus mod: started", "transport", "nats", "prefix", m.prefix)
 	return nil
 }
 

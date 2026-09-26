@@ -52,7 +52,7 @@ var modCatalog = map[string]modSpec{
 	},
 	"syncbus": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/syncbus", Alias: "kitsyncbus", Constructor: "kitsyncbus.NewSyncBusMod(0)", Depends: []string{"nats"},
-		Config: "syncbus:\n  transport: jetstream\n  prefix: roost.sync\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
+		Config: "syncbus:\n  transport: jetstream\n  prefix: roost.sync\n  # JetStream stream name. Left out it is derived from prefix (roost.sync -> ROOST_SYNC,\n  # zz.sync -> ZZ_SYNC), so deployments sharing one NATS with different prefixes get\n  # different streams; set it only to keep an existing stream and its consumer cursors.\n  # stream: ROOST_SYNC\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
 	},
 	"remote_entity": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},

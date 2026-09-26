@@ -29,8 +29,10 @@ const (
 )
 
 type JetStreamSyncConfig struct {
-	LocalSid     int32
-	Prefix       string
+	LocalSid int32
+	Prefix   string
+	// Stream 是承载 Prefix.> 的 JetStream 流名。留空时由 Prefix 派生（JetStreamSyncStream）：
+	// 默认 prefix roost.sync 仍是 ROOST_SYNC，其他 prefix 各得其流（RR-20260926-56）。
 	Stream       string
 	Storage      fnats.JetStreamStorage
 	AckWait      time.Duration
@@ -48,7 +50,7 @@ func normalizeJetStreamSyncConfig(cfg JetStreamSyncConfig) JetStreamSyncConfig {
 		cfg.Prefix = defaultJetStreamSyncPrefix
 	}
 	if cfg.Stream == "" {
-		cfg.Stream = defaultJetStreamSyncStream
+		cfg.Stream = JetStreamSyncStream(cfg.Prefix)
 	}
 	if cfg.Storage == "" {
 		cfg.Storage = fnats.JetStreamStorageFile
@@ -129,7 +131,7 @@ func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStream
 		Replicas:   cfg.Replicas,
 		MaxBytes:   cfg.MaxBytes,
 	}); err != nil {
-		return nil, fmt.Errorf("jetstream sync: ensure stream: %w", err)
+		return nil, fmt.Errorf("jetstream sync: ensure stream %s for %s.>: %w", cfg.Stream, cfg.Prefix, err)
 	}
 	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout)}, nil
 }
@@ -284,6 +286,57 @@ func (b *jetStreamSyncBus) Stop() {
 
 func (b *jetStreamSyncBus) subject(topic string) string {
 	return fmt.Sprintf("%s.%s", b.cfg.Prefix, topic)
+}
+
+// JetStreamSyncStream 是 prefix 缺省对应的流名（RR-20260926-56）。
+//
+// 流名曾固定为 ROOST_SYNC：prefix 不同的两个部署共用一个 NATS 时，EnsureStream
+// （CreateOrUpdateStream）把同一个流的 subjects 改成后启动者的 prefix，先启动者的发布从此
+// 不再入流。现在流名跟随 prefix：
+//   - 默认 prefix（roost.sync，或留空）仍是 ROOST_SYNC——已部署的流与其上的 durable 游标不变；
+//   - 只由小写字母、数字和单个 "." 分隔组成的 prefix 大写并把 "." 换成 "_"
+//     （zz3640.sync → ZZ3640_SYNC），这一映射可逆，不同 prefix 不会相撞；
+//   - 其他 prefix（含 "_"、"-"、大写等）在同样折叠后追加 prefix 的摘要，
+//     折叠后相同的两个 prefix（zz.sync 与 zz_sync）仍得到不同的流。
+func JetStreamSyncStream(prefix string) string {
+	if prefix == "" || prefix == defaultJetStreamSyncPrefix {
+		return defaultJetStreamSyncStream
+	}
+	name := make([]byte, 0, len(prefix))
+	reversible := true
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+			name = append(name, c-'a'+'A')
+		case c >= '0' && c <= '9':
+			name = append(name, c)
+		case c == '.':
+			// 开头、结尾或连续的 "." 不是合法的 subject 分段，也就不可逆。
+			if i == 0 || i == len(prefix)-1 || prefix[i-1] == '.' {
+				reversible = false
+			}
+			name = append(name, '_')
+		case c >= 'A' && c <= 'Z', c == '_', c == '-':
+			name = append(name, c)
+			reversible = false
+		default:
+			name = append(name, '_')
+			reversible = false
+		}
+	}
+	stream := strings.Trim(string(name), "_")
+	if len(stream) > 200 {
+		stream, reversible = stream[:200], false
+	}
+	if reversible {
+		return stream
+	}
+	if stream == "" {
+		stream = "SYNC"
+	}
+	sum := sha256.Sum256([]byte(prefix))
+	return fmt.Sprintf("%s_%X", stream, sum[:8])
 }
 
 func syncMsgID(msg *fsyncbus.SyncMsg) string {
