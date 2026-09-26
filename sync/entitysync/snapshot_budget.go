@@ -114,6 +114,8 @@ func (m *Manager) removeSnapshotWaitLocked(id int64) {
 // 只限制客户端尚未持有对象的创建。现有对象的全量替换、增量和 remove 不占额度；
 // 帧/组件/传输的硬上限仍然有效，预算不能替代总带宽或队列背压。
 // 新入场与 Hold 后的基线恢复轮流使用同一额度，一类为空时另一类可用完剩余额度。
+// 设了 MaxBytes 时按上次捕获大小预判准入，被挡的冷创建不在每个等待窗口重复打包；
+// 发送的始终是准入当轮的最新冻结内容。
 type SnapshotBudget struct {
 	MaxObjects        int
 	MaxBytes          int
@@ -125,6 +127,9 @@ func (b SnapshotBudget) enabled() bool {
 }
 
 type snapshotAllowance struct{ objects, bytes int }
+
+// snapshotObjectOverhead 是 MaxBytes 计入的对象/组件头，加在实体更新包长度之上。
+const snapshotObjectOverhead = 18
 
 // snapshotClass 表达业务来源，不能通过变更 Profile 提升恢复请求的优先级。
 type snapshotClass uint8
@@ -156,6 +161,11 @@ type snapshotCharge struct {
 
 // 冷创建按业务来源交替，来源内部沿用会话和实体轮转。空闲来源的额度可被另一类使用。
 // 返回 nil 表示不设预算；非 nil 的空计划表示额度已耗尽。
+//
+// 设了 MaxBytes 时，计划按上次捕获的大小（未知时取最小可能大小）先做一遍与
+// scheduleSnapshots 同序的字节预判：预判放不下的首个候选及其后缀本轮不捕获，
+// 被挡的大对象不会在每个等待窗口重复打包。预判只决定“是否值得捕获”，
+// 准入仍按本轮最新冻结内容的实际编码计算；窗口内首个对象照常独占软预算。
 func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 	limit := m.config.SnapshotBudget
 	if !limit.enabled() {
@@ -197,6 +207,10 @@ func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 	exhausted := [2]bool{}
 	selectedSessions := make(map[SessionID]int)
 	next := m.snapshotNextClass
+	admitted, plannedBytes := 0, 0 // 本窗口已结算加本计划预选的对象数与预估字节
+	if m.config.Mode == ModeOnChange {
+		admitted, plannedBytes = m.windowAllowance.objects, m.windowAllowance.bytes
+	}
 
 	for !exhausted[0] || !exhausted[1] {
 		class := next
@@ -214,6 +228,16 @@ func (m *Manager) planSnapshotCaptures(ids []int64) *snapshotPlan {
 		}
 		if limit.PerSessionObjects > 0 && selected >= limit.PerSessionObjects {
 			continue
+		}
+		if limit.MaxBytes > 0 {
+			bytes := m.snapshotRequests.estimateLocked(candidate.sub)
+			if admitted > 0 && bytes > limit.MaxBytes-plannedBytes {
+				// 与准入同一规则：首个放不下的候选挡住后缀，游标不越过它。
+				plan.byteBlocked = true
+				break
+			}
+			admitted++
+			plannedBytes += bytes
 		}
 		plan.selected[candidate.sub] = true
 		plan.order = append(plan.order, candidate)
@@ -255,6 +279,14 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 		}
 	}
 	limit := m.config.SnapshotBudget
+	if limit.MaxBytes > 0 {
+		// 捕获过的冷创建都记下实际大小（含本轮会被挡下的），下一轮计划据此判断是否值得再捕获。
+		sizes := make(map[*subscription]int, len(pending))
+		for sub, item := range pending {
+			sizes[sub] = snapshotObjectOverhead + subjectUpdateBytes(item.entry.update.update)
+		}
+		m.snapshotRequests.recordEstimates(sizes)
+	}
 	used := snapshotAllowance{}
 	sessions := make(map[SessionID]int)
 	if m.config.Mode == ModeOnChange {
@@ -275,7 +307,7 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 			delete(pending, candidate.sub)
 			continue
 		} // 保留在帧编码中，走统一失败路径
-		bytes := 18 + len(data)
+		bytes := snapshotObjectOverhead + len(data)
 		if (limit.MaxObjects > 0 && used.objects >= limit.MaxObjects) ||
 			(limit.PerSessionObjects > 0 && sessions[candidate.sessionID] >= limit.PerSessionObjects) {
 			continue

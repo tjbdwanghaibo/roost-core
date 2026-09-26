@@ -14,6 +14,9 @@ type snapshotRequests struct {
 	groups   [2]map[SessionID]*snapshotRequestGroup
 	sessions [2][]SessionID
 	sequence int64
+	// estimates 记住字节预算下最近一次捕获的冷创建大小，只用于计划阶段判断能否准入；
+	// 真正准入仍按本轮最新捕获的实际编码计算。意图结算或撤销时随索引项一起删除。
+	estimates map[*subscription]int
 }
 type snapshotRequestGroup struct {
 	entries map[*subscription]snapshotCandidate
@@ -38,6 +41,7 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 		delete(r.entries, sub)
 	}
 	if sub.kind != kindSnapshot {
+		delete(r.estimates, sub)
 		return
 	}
 	if r.entries == nil {
@@ -58,6 +62,31 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 	r.entries[sub], group.entries[sub] = candidate, candidate
 	group.ordered = nil
 }
+
+// estimateLocked 返回计划用的冷创建字节数；从未捕获过的请求按最小可能大小计，
+// 因此排在前面的未知请求只会让预估偏小，不会误挡后面的候选。调用方持有 r.mu。
+func (r *snapshotRequests) estimateLocked(sub *subscription) int {
+	if bytes, ok := r.estimates[sub]; ok {
+		return bytes
+	}
+	return snapshotObjectOverhead + subjectHeaderBytes
+}
+
+// recordEstimates 在捕获后记下各冷创建的实际大小；已不在索引中的意图不记录，避免残留。
+func (r *snapshotRequests) recordEstimates(sizes map[*subscription]int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for sub, bytes := range sizes {
+		if _, indexed := r.entries[sub]; !indexed {
+			continue
+		}
+		if r.estimates == nil {
+			r.estimates = make(map[*subscription]int)
+		}
+		r.estimates[sub] = bytes
+	}
+}
+
 func (r *snapshotRequests) sessionOrder(class snapshotClass) []SessionID {
 	if r.sessions[class] == nil {
 		for sid := range r.groups[class] {

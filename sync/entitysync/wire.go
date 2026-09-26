@@ -68,6 +68,11 @@ func EncodeSubjectUpdate(update entity.SubjectSyncUpdate, maxBytes int) ([]byte,
 	return out, nil
 }
 
+// subjectUpdateBytes 是 EncodeSubjectUpdate 的输出长度，只用于预算预估，不做上限校验。
+func subjectUpdateBytes(update entity.SubjectSyncUpdate) int {
+	return subjectHeaderBytes + len(update.Namespace) + len(update.Profile.Normalize().Key) + update.Payload.Len()
+}
+
 // DecodeSubjectUpdate is the inverse of EncodeSubjectUpdate; a client calls it
 // on each component of a decoded frame.
 func DecodeSubjectUpdate(data []byte, maxBytes int) (entity.SubjectSyncUpdate, error) {
