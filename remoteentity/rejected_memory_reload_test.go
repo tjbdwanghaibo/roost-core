@@ -49,6 +49,8 @@ type authorityLoader struct {
 	kind    entity.EntityKind
 	rawID   int64
 	loads   atomic.Int32
+	// prepare 在实例登记进 EntityManager 之前调用（生成工厂在发布前启用同步，RR-20260926-59 回归用它）。
+	prepare func(*reloadableFullDocEntity)
 }
 
 func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
@@ -71,6 +73,9 @@ func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity
 		e.SetEntityVersion(authority.Version)
 	case !errors.Is(err, fmongo.ErrNotFound):
 		return nil, err
+	}
+	if l.prepare != nil {
+		l.prepare(e)
 	}
 	if err := l.manager.TryAdd(e); err != nil {
 		return nil, err

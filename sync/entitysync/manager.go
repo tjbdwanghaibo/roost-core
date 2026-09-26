@@ -285,6 +285,11 @@ func (m *Manager) installDirtyNotifier(id int64, state *entity.SubjectSyncState)
 // 未登记返回 ErrSubjectNotRegistered，退役中返回 ErrSubjectRetiring；已登记的状态仍在使用时返回
 // ErrSubjectRegistered（不抢占活着的状态）；同一状态重复调用是空操作。Register 遇到旧状态已关闭的
 // 同 ID subject 时走同一路径。旧状态关闭到重新绑定之间，该 subject 不捕获、不发送，也不计失败。
+//
+// 例外（RR-20260926-59）：subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时，
+// 实体又被加载出来（业务访问、kit 的 OnEntityLoaded）——Rebind / Register 把新状态排在退役完成之后登记
+// （与 RegisterAfterRetirement 同一机制：最后一个 remove 交付的同一步登记，remove-before-create 不变），
+// 返回 nil，调用方不会遇到 ErrSubjectRetiring。业务自己 Unregister 的退役不受影响。
 func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
 	if m == nil {
 		return ErrManagerClosed
@@ -302,6 +307,16 @@ func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
 func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState) error {
 	subj.mu.Lock()
 	switch {
+	case subj.retiring && subj.unloadRetracted && !subj.forgotten:
+		if queued := subj.successor; queued != nil && queued.state == state {
+			subj.mu.Unlock()
+			return nil
+		}
+		replaced := subj.successor
+		subj.successor = &queuedRegistration{state: state}
+		subj.mu.Unlock()
+		replaced.finish(ErrRegistrationCancelled)
+		return nil
 	case subj.retiring:
 		subj.mu.Unlock()
 		return ErrSubjectRetiring
@@ -399,12 +414,22 @@ func (m *Manager) Unregister(subjectID int64) error {
 		return ErrSubjectNotRegistered
 	}
 	subj.mu.Lock()
+	subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
+	remaining, cancelled := m.retireLocked(subj)
+	subj.mu.Unlock()
+	cancelled.finish(ErrRegistrationCancelled)
+	m.finishRetire(subjectID, remaining)
+	return nil
+}
+
+// retireLocked 标记退役并把订阅改成 leaving（欠 remove），返回仍需发 remove 的订阅数与被取消的排队登记
+// （调用方解锁后 finish：done 不得在持锁时执行）。调用方持有 subj.mu。
+func (m *Manager) retireLocked(subj *subject) (int, *queuedRegistration) {
 	subj.retiring = true
 	cancelled := subj.successor
 	subj.successor = nil
-	defer cancelled.finish(ErrRegistrationCancelled)
 	for id, sub := range subj.subscribers {
-		if !sub.inFlight && !m.sessionHoldsSubject(id, subjectID) {
+		if !sub.inFlight && !m.sessionHoldsSubject(id, subj.id) {
 			// 只有实际未持有对象的会话才不欠 remove；等待快照也可能是在换视图。
 			m.removeSubscriptionLocked(subj, id)
 			continue
@@ -414,16 +439,63 @@ func (m *Manager) Unregister(subjectID int64) error {
 		sub.revision++
 		subj.profilesValid = false
 	}
-	remaining := len(subj.subscribers)
-	subj.mu.Unlock()
+	return len(subj.subscribers), cancelled
+}
+
+func (m *Manager) finishRetire(subjectID int64, remaining int) {
 	if remaining == 0 {
 		m.forget(subjectID)
-		return nil
+		return
 	}
 	m.markPending(subjectID)
 	m.WakeSync()
-	return nil
 }
+
+// SubjectAwaitsReload 实现 entity.UnloadedSubjectSync（RR-20260926-59）：subject 已登记、未退役、内容状态已关闭
+// （实体被卸载或驱逐），且仍有持有或等待该对象的订阅者（离开中的不算）。ManagerAccess.Unload 据此决定是否
+// 主动从权威重载；重载 worker 每轮也先查它，业务已先重载并重新绑定、订阅者都已离开时不再重载。
+func (m *Manager) SubjectAwaitsReload(subjectID int64) bool {
+	subj := m.subject(subjectID)
+	if subj == nil {
+		return false
+	}
+	subj.mu.Lock()
+	defer subj.mu.Unlock()
+	if subj.retiring || subj.state.Enabled() {
+		return false
+	}
+	for _, sub := range subj.subscribers {
+		if sub.kind != kindLeaving {
+			return true
+		}
+	}
+	return false
+}
+
+// RetractUnloadedSubject 实现 entity.UnloadedSubjectSync：卸载后的实体重载不了（权威没有它、重试用尽、重载队列
+// 已满）时退回 remove。只在 subject 仍停在已关闭的状态上时注销（与 Unregister 同一语义：持有对象的会话收到
+// ObjectRemove，全部发出后 subject 被忘掉——remove-before-create）；已重新绑定到活状态或已退役时不动，返回 false。
+// 检查与退役在同一把 subj.mu 下完成。退役完成前实体又被加载出来时，Rebind / Register 排队到退役完成后登记
+// （见 Rebind）；退役完成后同 ID 的登记是新 subject，订阅由政策层重新建立。
+func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
+	subj := m.subject(subjectID)
+	if subj == nil {
+		return false
+	}
+	subj.mu.Lock()
+	if subj.retiring || subj.state.Enabled() {
+		subj.mu.Unlock()
+		return false
+	}
+	remaining, cancelled := m.retireLocked(subj)
+	subj.unloadRetracted = true
+	subj.mu.Unlock()
+	cancelled.finish(ErrRegistrationCancelled)
+	m.finishRetire(subjectID, remaining)
+	return true
+}
+
+var _ entity.UnloadedSubjectSync = (*Manager)(nil)
 
 // RetractSyncSubject 实现 entity.SyncSubjectRetractor：事务内新建的实体被回滚或拒绝时，
 // Nest 在仍持有该实体锁时调用它（RR-20260926-35）。只注销以同一个状态对象登记的 subject，

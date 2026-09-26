@@ -13,9 +13,20 @@ import (
 )
 
 var (
-	ErrEntityAggregateNotFound = errors.New("dataengine repository: entity aggregate not found")
-	ErrEntityAggregateCorrupt  = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
+	// ErrEntityAggregateNotFound 同时满足 errors.Is(err, entity.ErrAuthorityEntityNotFound)：卸载后重载据此
+	// 立即向订阅者退回 remove，而不是当作可重试的读取失败（RR-20260926-59）。
+	ErrEntityAggregateNotFound error = aggregateNotFoundError{}
+	ErrEntityAggregateCorrupt        = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
 )
+
+type aggregateNotFoundError struct{}
+
+func (aggregateNotFoundError) Error() string {
+	return "dataengine repository: entity aggregate not found"
+}
+func (aggregateNotFoundError) Is(target error) bool {
+	return target == entity.ErrAuthorityEntityNotFound
+}
 
 type RecoveryGate interface {
 	Ready() bool

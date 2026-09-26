@@ -25,10 +25,12 @@ type ManagerAccess struct {
 	loadConcurrency int
 	loadTimeout     time.Duration
 	// localExecutor 是 Nest 绑定的快池入口（NestMgr.RunLocal，经 LocalExecutorBinder）：领头调用方
-	// 离开后，共享加载经它把发布实体交回快池。
+	// 离开后，共享加载经它把发布实体交回快池；卸载后重载（RR-20260926-59）也经它发布。
 	localExecutor atomic.Pointer[func(func()) error]
 	flightMu      sync.Mutex
 	flights       map[int64]*entityLoadFlight
+	// resync：卸载后仍有订阅者时的主动重载（ConfigureUnloadResync，RR-20260926-59）；nil 表示未接线。
+	resync atomic.Pointer[unloadResync]
 }
 
 // DefaultEntityLoadTimeout 是一次共享冷加载的框架上限（RR-20260926-54）。加载与调用方解耦后，
@@ -265,6 +267,14 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	access.flightMu.Lock()
 	flight, joined := access.flights[fullID]
 	if !joined {
+		// 调用方查过内存之后、拿到 flightMu 之前，上一轮加载可能刚发布并撤掉 flight（flight 在发布之后才删除）：
+		// 在同一把锁下复查，不为已发布的实体再读一次权威（卸载后主动重载与业务访问并发时即此窗口，RR-20260926-59）。
+		if access.manager != nil {
+			if value := access.manager.Get(fullID); value != nil {
+				access.flightMu.Unlock()
+				return value, nil
+			}
+		}
 		flight = &entityLoadFlight{done: make(chan struct{}), leaderRun: localExecutorOf(ctx)}
 		if access.flights == nil {
 			access.flights = make(map[int64]*entityLoadFlight)
@@ -560,9 +570,13 @@ func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntit
 // Unload 把实例从本进程内存卸载、不删持久数据：内存状态已不可信、须从权威重建时使用（DataEngine 驱逐
 // 被 lease fence 跳过的原生步骤留下的实体，RR-20260926-30；Remote 事务被持久拒绝后的实例，RR-20260926-39）。
 // 内部是 EntityManager.Destroy(deleteFromDB=false, DestroyReasonMemoryUnload)：自己取实体锁、先从索引删除，
-// 在途引用由 Touch 计数保护（归零才清理），Guard 对已移除实体拒绝加锁；实体的 SubjectSyncState 随之关闭，
-// Sync 订阅保持登记，等重载后的实例经 Rebind（kit 在 EntityRepository.OnEntityLoaded 上接好）强制全量。
-// 之后 Get 未命中、经已配置的 loader 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。
+// 在途引用由 Touch 计数保护（归零才清理），Guard 对已移除实体拒绝加锁。之后 Get 未命中、经已配置的 loader
+// 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。
+//
+// Sync：实例一离开 EntityManager 就关闭它的 SubjectSyncState（不等在途引用归零后的 ClearBase），被丢弃的内容
+// 不再捕获；订阅保持登记。若该 subject 仍有订阅者且已接上 ConfigureUnloadResync，框架在快池之外主动从权威
+// 重载并 Rebind 全量，重载不了时退回 remove（RR-20260926-59）；这里只做登记，不做 I/O、不等待。未接线时
+// 订阅者保留原对象，直到实体经 kit 的 EntityRepository.OnEntityLoaded → Rebind 被重新加载。
 // 需要实体锁：调用方在本地执行入口（快池，或 Nest 未装配时就地）调用。
 func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity) error {
 	if access == nil || access.manager == nil {
@@ -571,6 +585,21 @@ func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity
 	if value == nil {
 		return nil
 	}
+	id := value.ID()
+	var state *SubjectSyncState
+	if base := value.Base(); base != nil {
+		state = base.Sync()
+	}
+	// defer：业务 OnDestroy panic 时实例也已离开 EntityManager，同样要关闭同步状态并登记重载。
+	defer func() {
+		if !value.IsRemoved() {
+			return
+		}
+		state.Close()
+		if resync := access.resync.Load(); resync != nil {
+			resync.schedule(id)
+		}
+	}()
 	err := access.manager.Destroy(ctx, value, DestroyReasonMemoryUnload, false)
 	if errors.Is(err, ErrEntityRemoved) || errors.Is(err, ErrEntityNotManaged) {
 		return nil

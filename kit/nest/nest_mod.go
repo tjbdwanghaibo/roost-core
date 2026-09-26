@@ -35,11 +35,18 @@ type Mod struct {
 	// dataEngine 是 Provide 时查到的 DataEngine 能力；Start 时用它把 Sync 接上重新加载的实体。
 	dataEngine   any
 	unhookLoaded func()
+	// stopResync 停止卸载后重载（ManagerAccess.ConfigureUnloadResync，RR-20260926-59）；未接线时为 nil。
+	stopResync func(context.Context) error
 }
 
 // entityLoadNotifier 是 DataEngine 的可选能力（kit/dataengine Mod.OnEntityLoaded）。
 type entityLoadNotifier interface {
 	OnEntityLoaded(func(entity.IThreadSafeEntity)) (func(), error)
+}
+
+// unloadResyncConfigurer 是 getter 的可选能力（正式装配里 getter 就是 *entity.ManagerAccess）。
+type unloadResyncConfigurer interface {
+	ConfigureUnloadResync(entity.UnloadedSubjectSync, entity.UnloadResyncConfig) (func(context.Context) error, error)
 }
 
 type engineConfig struct {
@@ -161,14 +168,44 @@ func (m *Mod) Start() error {
 			}
 			m.unhookLoaded = unhook
 		}
+		// 实体被仅内存卸载（RR-30 驱逐、RR-39 持久拒绝）后仍有订阅者时，框架在快池之外从权威重载并 Rebind，
+		// 重载不了退回 remove（RR-20260926-59）。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
+		// 的 NestMgr.RunLocal（BindLocalExecutor）回快池。
+		if resync, ok := m.getter.(unloadResyncConfigurer); ok && m.stopResync == nil {
+			stop, err := resync.ConfigureUnloadResync(m.entitySync, entity.UnloadResyncConfig{})
+			if err != nil {
+				m.unhookEntitySync()
+				_ = m.entitySync.Stop(context.Background())
+				return fmt.Errorf("nest mod: entity sync unload resync: %w", err)
+			}
+			m.stopResync = stop
+		}
 	}
 	if err := m.engine.Start(); err != nil {
 		if m.entitySync != nil {
+			_ = m.stopUnloadResync(context.Background())
+			m.unhookEntitySync()
 			_ = m.entitySync.Stop(context.Background())
 		}
 		return err
 	}
 	return nil
+}
+
+func (m *Mod) stopUnloadResync(ctx context.Context) error {
+	if m.stopResync == nil {
+		return nil
+	}
+	err := m.stopResync(ctx)
+	m.stopResync = nil
+	return err
+}
+
+func (m *Mod) unhookEntitySync() {
+	if m.unhookLoaded != nil {
+		m.unhookLoaded()
+		m.unhookLoaded = nil
+	}
 }
 
 // rebindEntitySync 只处理仍登记着、且旧状态已关闭的 subject；普通冷加载返回 ErrSubjectNotRegistered，忽略。
@@ -193,23 +230,23 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 	if m == nil || m.engine == nil {
 		return nil
 	}
+	// 先停卸载后重载：停机期间不再为订阅者重载（取消在途重载，不发 remove），也不让重载撞上正在停止的 Nest。
+	// 等 worker 退出超时也继续停 Nest，错误一并返回。
+	resyncErr := m.stopUnloadResync(ctx)
 	if err := m.engine.Shutdown(ctx); err != nil {
-		return err
+		return errors.Join(resyncErr, err)
 	}
-	if m.unhookLoaded != nil {
-		m.unhookLoaded()
-		m.unhookLoaded = nil
-	}
+	m.unhookEntitySync()
 	if m.entitySync != nil {
 		if err := m.entitySync.Stop(ctx); err != nil {
-			return err
+			return errors.Join(resyncErr, err)
 		}
 		if err := m.entitySync.Drain(ctx); err != nil {
-			return err
+			return errors.Join(resyncErr, err)
 		}
-		return m.entitySync.Close(ctx)
+		return errors.Join(resyncErr, m.entitySync.Close(ctx))
 	}
-	return nil
+	return resyncErr
 }
 
 func (m *Mod) Engine() *corenest.NestMgr {

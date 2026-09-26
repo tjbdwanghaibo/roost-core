@@ -55,6 +55,10 @@ type subject struct {
 	// forgotten 表示 forget 已经取走 successor，之后不能再排队（调用方改走 Register）。
 	successor *queuedRegistration
 	forgotten bool
+	// unloadRetracted：退役来自 RetractUnloadedSubject（实体被仅内存卸载后重载不了，RR-20260926-59），不是业务
+	// Unregister。退役完成前该实体又被加载出来时，Rebind / Register 把新状态排在退役完成之后登记
+	// （RegisterAfterRetirement 的同一机制），不返回 ErrSubjectRetiring。业务再 Unregister 时清除。
+	unloadRetracted bool
 	// 缓存发布后不可修改；CaptureSync 解开 subject 锁后仍会使用这两组需求。
 	// 增删订阅以及有效 profile/kind 改变必须使 profilesValid 失效。
 	profilesValid                   bool
