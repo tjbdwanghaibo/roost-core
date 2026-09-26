@@ -38,7 +38,9 @@ type remoteWriteBatch struct {
 	// rejected 表示 Durability 0 被权威明确拒绝，Commit 已同步回滚并隔离；Close 释放后卸载旧实例（RR-20260926-39）。
 	rejected bool
 	closed   bool
-	reserved bool
+	// onOutcome 是 Nest 交来的提交后工作（RR-20260926-37），拿到持久结论后恰好调用一次。
+	onOutcome func(bool)
+	reserved  bool
 }
 
 var _ entity.RemoteWriteBatch = (*remoteWriteBatch)(nil)
@@ -539,6 +541,23 @@ func (b *remoteWriteBatch) Indeterminate(_ context.Context, _ error) error {
 	return nil
 }
 
+// DeferUntilDurableOutcome 接手本地已提交事务的提交后工作（entity.RemoteOutcomeDeferrer）。只在 Commit 之后、
+// Close 之前、且结论仍待定（indeterminate：交给 finalizer）或已明确拒绝（rejected：Close 卸载后通知）时接手。
+func (b *remoteWriteBatch) DeferUntilDurableOutcome(fn func(bool)) bool {
+	if b == nil || fn == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.onOutcome != nil || (!b.indeterminate && !b.rejected) {
+		return false
+	}
+	b.onOutcome = fn
+	return true
+}
+
+var _ entity.RemoteOutcomeDeferrer = (*remoteWriteBatch)(nil)
+
 func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Close")
 	if b == nil {
@@ -555,12 +574,15 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	txID := b.outcome.TransactionID
 	durability := b.outcome.Durability
 	rejected := b.rejected
+	onOutcome := b.onOutcome
+	b.onOutcome = nil
 	b.entries = nil
 	b.mu.Unlock()
 	if deferred {
-		if err := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, durability: durability, entries: entries}); err == nil {
+		if err := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, durability: durability, entries: entries, onOutcome: onOutcome}); err == nil {
 			return nil
 		}
+		// finalizer 已停止：拿不到持久结论，提交后工作不执行（Sync 门保持冻结）。
 	}
 	err := b.mgr.releaseRemoteEntries(ctx, entries)
 	if b.reserved {
@@ -571,8 +593,14 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 		// 明确拒绝已回滚并隔离；gate 释放后卸载持有被拒绝修改的旧实例（ctx 带消息的快池续行）。
 		// 卸载失败交给 finalizer 重试（这一项不再持有任何资源）；finalizer 已停止时实例保持隔离。
 		unloadErr := b.mgr.unloadRejectedEntities(ctx, entries)
-		if unloadErr != nil && !errors.Is(unloadErr, entity.ErrRemoteUnloadUnsupported) {
-			if deferErr := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, durability: durability, entries: entries, settled: true}); deferErr != nil {
+		switch {
+		case unloadErr == nil:
+			b.mgr.deliverRemoteOutcome(ctx, onOutcome, false)
+		case errors.Is(unloadErr, entity.ErrRemoteUnloadUnsupported):
+			// 旧实例仍在内存、仍持有被拒绝的冻结内容：不丢弃 Sync 门（见 finishRejectedRemoteClose）。
+		default:
+			item := deferredRemoteClose{txID: txID, durability: durability, entries: entries, settled: true, onOutcome: onOutcome}
+			if deferErr := b.mgr.deferRemoteClose(item); deferErr != nil {
 				err = errors.Join(err, unloadErr)
 			}
 		}

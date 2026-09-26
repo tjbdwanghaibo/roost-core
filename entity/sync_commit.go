@@ -46,6 +46,10 @@ type syncCommitGate struct {
 
 func (g *syncCommitGate) ready() bool {
 	for ; g != nil; g = g.previous {
+		if g.batch.rejected.Load() {
+			// 已准入但持久结论为拒绝的提交不再阻塞后续提交（Reject）。
+			continue
+		}
 		if !g.batch.released.Load() || !g.batch.confirmed.Load() {
 			return false
 		}
@@ -65,6 +69,9 @@ type SyncMutation struct {
 	released         atomic.Bool
 	confirmed        atomic.Bool
 	discarded        atomic.Bool
+	// rejected 表示已准入的提交最终被持久拒绝（Remote 结论，RR-20260926-37）：门不再阻塞后续提交，
+	// 本提交自己的兴趣事实按丢弃处理；从不 Confirm。
+	rejected atomic.Bool
 }
 
 func BeginSyncMutation(es []IThreadSafeEntity, observer SyncCommitObserver) *SyncMutation {
@@ -104,7 +111,7 @@ func (b *SyncMutation) Include(es []IThreadSafeEntity) {
 		s.mu.Lock()
 		previous := s.commitGate
 		// 已放行的头结点无需保留，避免前序 WAL 等待时后续内存提交积成历史链。
-		for previous != nil && previous.batch.released.Load() && previous.batch.confirmed.Load() {
+		for previous != nil && (previous.batch.rejected.Load() || (previous.batch.released.Load() && previous.batch.confirmed.Load())) {
 			previous = previous.previous
 		}
 		entry := &syncMutationEntry{state: s, base: e.Base(), collector: collector, parent: s.mutation, previous: previous}
@@ -188,6 +195,17 @@ func (b *SyncMutation) Confirm() {
 	}
 }
 
+// Reject 用于已准入、但远端持久结论为拒绝的提交（RR-20260926-37）：丢弃这道门，不 Confirm，
+// 不再阻塞同一实体的后续提交。被拒绝实例在锁内冻结的内容由它的仅内存卸载关闭同步状态时丢弃，
+// 调用方须在卸载之后调用；同批次其他实体的冻结内容与各自内存一致，照常交付。
+func (b *SyncMutation) Reject() {
+	if b != nil {
+		if !b.rejected.Swap(true) && b.released.Load() {
+			b.observer.WakeSync()
+		}
+	}
+}
+
 // Finish 清理未准入的作用域。结果不确定时保留屏障，等待进程 fencing/recovery；
 // 已准入的 pipelined 事务由完成池 Confirm，不能在当前函数返回时提前放行。
 func (b *SyncMutation) Finish(indeterminate bool) {
@@ -242,7 +260,7 @@ func (s *SubjectSyncState) SyncCommitCondition() func() (ready, discarded bool) 
 	s.mu.Unlock()
 	return func() (bool, bool) {
 		for current := gate; current != nil; current = current.previous {
-			if current.batch.discarded.Load() {
+			if current.batch.discarded.Load() || (current == gate && current.batch.rejected.Load()) {
 				return false, true
 			}
 		}
@@ -272,7 +290,10 @@ func SyncConditionFor(e IThreadSafeEntity) func() (bool, bool) {
 		return e.Base().Sync().SyncCommitCondition()
 	}
 	if batch := CurrentSyncMutation(); batch != nil {
-		return func() (bool, bool) { return batch.released.Load() && batch.confirmed.Load(), batch.discarded.Load() }
+		return func() (bool, bool) {
+			rejected := batch.rejected.Load()
+			return !rejected && batch.released.Load() && batch.confirmed.Load(), rejected || batch.discarded.Load()
+		}
 	}
 	return func() (bool, bool) { return true, false }
 }

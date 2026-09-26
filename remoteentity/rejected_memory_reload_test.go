@@ -76,11 +76,19 @@ func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity
 type rejectingStorage struct {
 	*switchableStorage
 	reject atomic.Bool
+	// loseReply：事务真实写进 Mongo，但回复丢失（调用方看到超时，结果未知）。
+	loseReply atomic.Bool
 }
 
 func (s *rejectingStorage) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
 	if s.reject.Load() {
 		return entity.RemoteCommitReceipt{}, entity.ErrRemoteVersionConflict
+	}
+	if s.loseReply.Load() {
+		if _, err := s.switchableStorage.CommitRemote(ctx, commit); err != nil {
+			return entity.RemoteCommitReceipt{}, err
+		}
+		return entity.RemoteCommitReceipt{}, context.DeadlineExceeded
 	}
 	return s.switchableStorage.CommitRemote(ctx, commit)
 }

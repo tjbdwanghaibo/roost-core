@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strconv"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 func (m *Msg) setRemoteWriteBatch(batch entity.RemoteWriteBatch) {
@@ -88,6 +90,11 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	case m.remoteCommitted:
 		_, err = batch.Commit(ctx)
 		committed = err == nil
+		if err != nil {
+			// 本地已持久提交，Remote 确认超时 / 结果未知 / 被明确拒绝：此刻没有持久结论，不能 Confirm；
+			// 提交后工作在 Close 之前交给批次，由它拿到结论后执行一次（RR-20260926-37）。
+			m.deferPostRemoteCommit(batch)
+		}
 	default:
 		cause := dispatchErr
 		if cause == nil {
@@ -109,6 +116,35 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 		}
 	}
 	return err
+}
+
+// deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论（RR-20260926-37）。
+// 结论为已提交时回调按注册顺序在本地执行入口（快池）运行，每个回调独立隔离 panic；原请求已经或即将以
+// “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。结论为拒绝时丢弃 Sync 门（不再阻塞后续提交），
+// AfterCommit 不执行。批次不接手（没有后续持久结论）时什么也不做：没有持久结论就不 Confirm，门保持冻结。
+// 闭包只捕获值，不引用会被回收复用的 Msg。
+func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
+	callbacks := m.postRemoteCommit
+	mutation := m.remoteSyncMutation
+	m.postRemoteCommit = nil
+	m.remoteSyncMutation = nil
+	handler := m.Name
+	outcome := func(committed bool) {
+		if !committed {
+			mutation.Reject()
+			return
+		}
+		for _, callback := range callbacks {
+			if err := runCommitCallback(callback); err != nil {
+				metrics.IncCounter("nest.remote.deferred_after_commit_error_total", metrics.Labels{"handler": handler}, 1)
+				slog.Error("nest: deferred remote after-commit callback failed", "handler", handler, "err", err)
+			}
+		}
+	}
+	if deferrer, ok := batch.(entity.RemoteOutcomeDeferrer); ok && deferrer.DeferUntilDurableOutcome(outcome) {
+		return
+	}
+	metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)
 }
 
 func (m *Msg) abortRemoteWriteBatchLocked(cause error) error {
@@ -217,6 +253,9 @@ type Msg struct {
 	// 此后回复里的任何错误都是提交后的释放/回调失败，由 dispatchNest 统一包 ErrAfterCommitFailed；
 	// 结果未知（确认超时）、拒绝与 Abort 都不置位，回复不得带该哨兵（RR-20260926-46）。
 	remoteConfirmed bool
+	// remoteSyncMutation 是本地已持久提交的 Remote 事务的 Sync 提交门。Remote 确认没有结论时，
+	// deferPostRemoteCommit 把它连同 postRemoteCommit 交给批次：拒绝时 Reject（RR-20260926-37）。
+	remoteSyncMutation *entity.SyncMutation
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().

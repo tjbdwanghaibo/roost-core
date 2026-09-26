@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,9 @@ type deferredRemoteClose struct {
 	// settled 表示持久拒绝已收尾（回滚、隔离、gate/fence/写额度已交还），这一项只剩仅内存卸载
 	// 需要完成或重试（RR-20260926-39）；排空与重试都不能再次释放。
 	settled bool
+	// onOutcome 是 Nest 交来的提交后工作（Sync Confirm、AfterCommit；RR-20260926-37），只在拿到持久结论后
+	// 调用一次：Applied/Committed 为 true，Rejected（卸载完成后）为 false。停机排空时不调用。
+	onOutcome func(bool)
 }
 
 // remoteUnresolvedRejecter 以事务 _id 持久写入拒绝，撞键时返回已有事务的真实状态。
@@ -287,7 +291,8 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 			item.projectionDeadline = time.Now().Add(m.finalizeProjectionTimeout())
 		}
 		tracked, done := m.trackedRemoteOutcome(item.txID)
-		if !projectorReported(tracked.State) && time.Now().Before(item.projectionDeadline) {
+		// tracker 不存在（done 为 nil）只会是已结束的记录被容量/TTL 淘汰：结论已经有了，直接回源。
+		if done != nil && !projectorReported(tracked.State) && time.Now().Before(item.projectionDeadline) {
 			m.awaitRemoteProjection(state, item, done)
 			return
 		}
@@ -304,6 +309,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
 			m.releaseRemoteWriteSlot()
+			m.deliverRemoteOutcome(m.localContext(state.finalizeCtx), item.onOutcome, true)
 			state.traceFinalize(item.txID, "released")
 			return
 		}
@@ -313,6 +319,7 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
 			m.releaseRemoteWriteSlot()
+			m.deliverRemoteOutcome(m.localContext(state.finalizeCtx), item.onOutcome, true)
 			state.traceFinalize(item.txID, "released")
 			return
 		}
@@ -340,16 +347,46 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 // 本地执行入口卸载，下一次访问从权威重载。卸载失败时实例保持隔离、按退避重试；loader 不支持卸载时
 // 维持旧行为（隔离到业务重新加载）。
 func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRemoteClose) {
-	err := m.unloadRejectedEntities(m.localContext(state.finalizeCtx), item.entries)
-	if err == nil || errors.Is(err, entity.ErrRemoteUnloadUnsupported) {
-		if err != nil {
-			metrics.IncCounter("remote_entity.rejected_unload_unsupported_total", nil, 1)
-		}
+	ctx := m.localContext(state.finalizeCtx)
+	err := m.unloadRejectedEntities(ctx, item.entries)
+	if err == nil {
+		// 被拒绝实例已卸载、同步状态已关闭：丢弃 Sync 门，不执行 AfterCommit（RR-20260926-37）。
+		m.deliverRemoteOutcome(ctx, item.onOutcome, false)
+		state.traceFinalize(item.txID, "released")
+		return
+	}
+	if errors.Is(err, entity.ErrRemoteUnloadUnsupported) {
+		// loader 不能卸载：旧实例仍持有被拒绝的冻结内容，丢弃门会把它交付给客户端。
+		// 门保持冻结，直到业务自行重新加载（与修复前相同）。
+		metrics.IncCounter("remote_entity.rejected_unload_unsupported_total", nil, 1)
 		state.traceFinalize(item.txID, "released")
 		return
 	}
 	metrics.IncCounter("remote_entity.rejected_unload_error_total", nil, 1)
 	m.scheduleDeferredRetry(state, item)
+}
+
+// deliverRemoteOutcome 把持久结论交给 Nest 的提交后工作，恰好一次：调用方只在终态分支、资源释放之后调用，
+// 调用后收尾项不再入队。经 ctx 的本地执行入口（Nest 快池）执行；fn 自己隔离每个回调的 panic，
+// 这里只兜底记录执行入口的错误。
+func (m *Manager) deliverRemoteOutcome(ctx context.Context, fn func(bool), committed bool) {
+	if fn == nil {
+		return
+	}
+	ran, err := runLocalStep(ctx, func() { fn(committed) })
+	if !ran {
+		// NestMgr.RunLocal 拒绝投递（Nest 未启动、停机中或已 fence）：持久结论已经拿到，不能丢。
+		// 提交后工作不取 Entity 锁（Sync Confirm/Reject 是原子标记，AfterCommit 与 pipelined 完成池一样在
+		// 解锁之后运行），就地执行一次。
+		metrics.IncCounter("remote_entity.deferred_outcome_inline_total", nil, 1)
+		slog.Warn("remote_entity: fast pool unavailable, running deferred post-commit work inline", "committed", committed, "err", err)
+		fn(committed)
+		return
+	}
+	if err != nil {
+		metrics.IncCounter("remote_entity.deferred_outcome_error_total", nil, 1)
+		slog.Error("remote_entity: deferred post-commit work failed", "committed", committed, "err", err)
+	}
 }
 
 // scheduleDeferredRetry 以有界指数退避把收尾项重新入队，不占 finalizer worker。
