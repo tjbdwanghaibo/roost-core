@@ -59,3 +59,38 @@ RR-22（负对照弱、CI 跳过真实 Mongo）、RR-24（v1.16.1 game-demo 升�
 ## 环境副作用
 
 本轮全部使用隔离库 / 前缀并清理；未写共享 `game` 库。故障矩阵按脚本对本地 roost-it 注入故障并 heal，结束时 `final-health` PASS。
+
+## 修复后门禁（2026-09-26，`b8d985d` 临时 worktree，本地 roost-it）
+
+全部 PASS：`go build ./...`、`go vet ./...`、`go vet -tags integration ./...`、`go test -race -count=1 ./...`、`glsvet ./...`、gofmt（aaada47 以来改动的 .go 文件）、
+`scripts/test-sync-modes-generated.sh`、`scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`、
+`go test -race -tags integration -p 1 ./dataengine/... ./nestwal/... ./kit/dataengine/... ./kit/syncbus/...`（跳过 Failover/Toxic/Outage，由矩阵覆盖）。
+
+故障矩阵 `scripts/test-remote-matrix.sh`：**21/21 PASS**（985d5ba 时唯一失败的 `mongo-wal-recovery` 已由 RR-29 修复）：
+
+```text
+business-mongo-primary-async	PASS
+business-mongo-primary-strict	PASS
+business-mongo-primary-pipelined	PASS
+business-mongo-majority-async	PASS
+business-mongo-majority-strict	PASS
+business-mongo-majority-pipelined	PASS
+business-nats-node-async	PASS
+business-nats-node-strict	PASS
+business-nats-node-pipelined	PASS
+business-nats-all-async	PASS
+business-nats-all-strict	PASS
+business-nats-all-pipelined	PASS
+lease-process	PASS
+redis-cluster	PASS
+redis-unreplicated-fence	PASS
+durable-process	PASS
+ownership-counters	PASS
+mongo-wal-recovery	PASS
+broker-failover	PASS
+broker-network	PASS
+final-health	PASS
+```
+
+未做：Windows 实机（windows-compatibility 待 CI）、24 小时长稳、正式 kit 装配下 Remote 容量阶梯复测（RR-21）、RR-16 / RR-10 性能对照、1000 玩家负载下 RR-25 尾延迟复测。
+RR-20260926-30 未修复（需维护者拍板）。
