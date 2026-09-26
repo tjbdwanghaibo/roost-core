@@ -24,8 +24,12 @@ type Config struct {
 	TransactionTrackLimit int
 	TransactionTrackTTL   time.Duration
 	FinalizeRetryInterval time.Duration
-	WrapperCapacity       int
-	WrapperIdleTTL        time.Duration
+	// FinalizeProjectionTimeout 是 Durability 1/2 的延迟收尾等待 WAL 投影器结论的上限。期限内 finalizer
+	// 不回源、不发布，只等投影器写入 Committed / Rejected / Indeterminate；超期后按回源结论收尾
+	// （投影器停滞、DataEngine fence 等）。零值取 30s（RR-20260926-38）。
+	FinalizeProjectionTimeout time.Duration
+	WrapperCapacity           int
+	WrapperIdleTTL            time.Duration
 	// Versioned lock settings
 	LockKey    string        // versioned lock key prefix, default "e"
 	LockTTL    time.Duration // lock TTL, default 24h
@@ -44,33 +48,34 @@ type Config struct {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxWriteBatch:         100,
-		SnapshotCacheShards:   64,
-		SnapshotCacheEntries:  65536,
-		SnapshotCacheBytes:    256 << 20,
-		SnapshotCacheTTL:      30 * time.Second,
-		SnapshotL2TTL:         5 * time.Minute,
-		SnapshotInterestTTL:   30 * time.Second,
-		SnapshotInterestKeys:  65536,
-		SnapshotInterestSubs:  262144,
-		MarkerCacheTTL:        500 * time.Millisecond,
-		SnapshotLoadTimeout:   2 * time.Second,
-		SnapshotMaxWaiters:    256,
-		MaxConcurrentWrites:   128,
-		AsyncFinalizeCapacity: 4096,
-		AsyncFinalizeWorkers:  16,
-		TransactionTrackLimit: 65536,
-		TransactionTrackTTL:   10 * time.Minute,
-		FinalizeRetryInterval: 500 * time.Millisecond,
-		WrapperCapacity:       65536,
-		WrapperIdleTTL:        5 * time.Minute,
-		LockKey:               "e",
-		LockTTL:               24 * time.Hour,
-		RetryCount:            5,
-		RetryDelay:            100 * time.Millisecond,
-		UnlockRetryCount:      5,
-		UnlockRetryInterval:   100 * time.Millisecond,
-		VersionTTL:            24 * time.Hour,
-		OpTimeout:             30 * time.Second,
+		MaxWriteBatch:             100,
+		SnapshotCacheShards:       64,
+		SnapshotCacheEntries:      65536,
+		SnapshotCacheBytes:        256 << 20,
+		SnapshotCacheTTL:          30 * time.Second,
+		SnapshotL2TTL:             5 * time.Minute,
+		SnapshotInterestTTL:       30 * time.Second,
+		SnapshotInterestKeys:      65536,
+		SnapshotInterestSubs:      262144,
+		MarkerCacheTTL:            500 * time.Millisecond,
+		SnapshotLoadTimeout:       2 * time.Second,
+		SnapshotMaxWaiters:        256,
+		MaxConcurrentWrites:       128,
+		AsyncFinalizeCapacity:     4096,
+		AsyncFinalizeWorkers:      16,
+		TransactionTrackLimit:     65536,
+		TransactionTrackTTL:       10 * time.Minute,
+		FinalizeRetryInterval:     500 * time.Millisecond,
+		FinalizeProjectionTimeout: 30 * time.Second,
+		WrapperCapacity:           65536,
+		WrapperIdleTTL:            5 * time.Minute,
+		LockKey:                   "e",
+		LockTTL:                   24 * time.Hour,
+		RetryCount:                5,
+		RetryDelay:                100 * time.Millisecond,
+		UnlockRetryCount:          5,
+		UnlockRetryInterval:       100 * time.Millisecond,
+		VersionTTL:                24 * time.Hour,
+		OpTimeout:                 30 * time.Second,
 	}
 }

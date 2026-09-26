@@ -262,6 +262,8 @@ func TestRejectedAsyncWriteAfterQuarantineIsNotCarriedByNextWrite(t *testing.T) 
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// RR-20260926-38 起，投影期间 finalizer 不回源；投影器报告结果未知后才回源并隔离。
+	f.mgr.completeRemoteTransaction(tx, entity.RemoteCommitStatus{TransactionID: tx, State: entity.RemoteCommitIndeterminate, Cause: "projector publication failed"})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	for range 2 { // 第二次回源开始时，第一轮已看到 Unknown 并完成隔离

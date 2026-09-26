@@ -18,6 +18,9 @@ type remoteTransactionTracker struct {
 	closedAt   time.Time
 	id         entity.RemoteTransactionID
 	nextClosed *remoteTransactionTracker
+	// published 表示本进程已完成这笔事务的快照发布与 MarkRemoteCommitPublished（投影器或 finalizer
+	// 的 Applied 分支）。finalizer 的 Committed 收尾据此只做本地确认，不重复发布（RR-20260926-38）。
+	published bool
 }
 
 func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
@@ -212,6 +215,50 @@ func (m *Manager) RemoteCommitStatus(ctx context.Context, id entity.RemoteTransa
 		return status.Clone(), err
 	}
 	return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown}, nil
+}
+
+// trackedRemoteOutcome 只读本进程 tracker，不回源：返回当前状态与会在 Committed / Rejected /
+// Indeterminate 时关闭的 done。tracker 不存在时 done 为 nil、状态 Unknown。
+func (m *Manager) trackedRemoteOutcome(id entity.RemoteTransactionID) (entity.RemoteCommitStatus, <-chan struct{}) {
+	unknown := entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown}
+	if m == nil || m.remote == nil || id.IsZero() {
+		return unknown, nil
+	}
+	m.remote.txMu.Lock()
+	defer m.remote.txMu.Unlock()
+	tracker := m.remote.txs[id]
+	if tracker == nil {
+		return unknown, nil
+	}
+	return tracker.status.Clone(), tracker.done
+}
+
+// completePublishedRemoteTransaction 记录本进程完成了发布，再写入 Committed。
+func (m *Manager) completePublishedRemoteTransaction(id entity.RemoteTransactionID, status entity.RemoteCommitStatus) {
+	if m == nil || m.remote == nil || id.IsZero() {
+		return
+	}
+	m.remote.txMu.Lock()
+	if tracker := m.remote.txs[id]; tracker != nil {
+		tracker.published = true
+	}
+	m.remote.txMu.Unlock()
+	m.completeRemoteTransaction(id, status)
+}
+
+func (m *Manager) remotePublishedLocally(id entity.RemoteTransactionID) bool {
+	if m == nil || m.remote == nil || id.IsZero() {
+		return false
+	}
+	m.remote.txMu.Lock()
+	defer m.remote.txMu.Unlock()
+	tracker := m.remote.txs[id]
+	return tracker != nil && tracker.published
+}
+
+func (m *Manager) localRemoteCommitState(id entity.RemoteTransactionID) entity.RemoteCommitState {
+	status, _ := m.trackedRemoteOutcome(id)
+	return status.State
 }
 
 func (m *Manager) FlushRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) error {

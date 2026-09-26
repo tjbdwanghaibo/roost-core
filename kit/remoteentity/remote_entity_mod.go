@@ -103,6 +103,9 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if interval := cfg.GetDuration("remote_entity.finalize_retry_interval"); interval > 0 {
 		m.cfg.FinalizeRetryInterval = interval
 	}
+	if wait := cfg.GetDuration("remote_entity.finalize_projection_timeout"); wait > 0 {
+		m.cfg.FinalizeProjectionTimeout = wait
+	}
 	if limit := cfg.GetInt("remote_entity.max_write_batch"); limit > 0 {
 		m.cfg.MaxWriteBatch = limit
 	}

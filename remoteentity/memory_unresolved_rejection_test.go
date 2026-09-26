@@ -240,6 +240,9 @@ func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	if err = batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// RR-20260926-38 起，投影期间 finalizer 不回源；投影器报告结果未知（发布失败把 tracker 置为
+	// Indeterminate，与 ApplyRemoteCommits 的瞬时失败相同）后才回源。
+	f.mgr.completeRemoteTransaction(tx, entity.RemoteCommitStatus{TransactionID: tx, State: entity.RemoteCommitIndeterminate, Cause: "projector publication failed"})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	for range 3 { // 至少两轮 finalizer 回源都看到 Unknown
