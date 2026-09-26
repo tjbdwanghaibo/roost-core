@@ -139,6 +139,7 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"os"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -171,8 +172,11 @@ var (
 	// failed there (a deadline, a reset, a closed socket). Whatever part of
 	// the frame went out, the stream is no longer in step with the client, so
 	// the connection is closed (RR-20260926-52). A frame refused before any
-	// byte was written — the caller's context already done, a payload over the
-	// limit — is not the connection's fault and does not carry this mark.
+	// byte was written — the caller's context already done, the caller's own
+	// deadline running out before the first byte (RR-20260926-68), a payload
+	// over the limit — is not the connection's fault and does not carry this
+	// mark. write_timeout running out is the connection's fault even when
+	// nothing was written.
 	errConnectionBroken = errors.New("player tcp: connection cannot take the frame")
 )
 
@@ -875,7 +879,8 @@ func (server *Server) dropBrokenSession(current *session, cause error) {
 // it: the player is reachable, and the closed connection's client has to
 // reconnect anyway. It fails when no connection took it (all of them are closed
 // by then), and when a connection refused it before writing anything (context
-// done, payload too large) — that is not the connection's fault, so nothing is
+// done or its deadline hit before the first byte, payload too large) — that is
+// not the connection's fault, so nothing is
 // closed and the caller learns the frame did not go out everywhere.
 func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
 	if messageID == 0 { return fmt.Errorf("%%w: push message id is zero", errInvalidFrame) }
@@ -997,7 +1002,8 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	// connection failed (which closes it).
 	if err := ctx.Err(); err != nil { return err }
 	writeDeadline := time.Now().Add(session.writeTimeout)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(writeDeadline) { writeDeadline = contextDeadline }
+	callerDeadline := false
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(writeDeadline) { writeDeadline, callerDeadline = contextDeadline, true }
 	if err := session.connection.SetWriteDeadline(writeDeadline); err != nil { return fmt.Errorf("%%w: %%w", errConnectionBroken, err) }
 	var header [headerSize]byte
 	header[0], header[1], header[2] = frameMagic[0], frameMagic[1], protocolVersion
@@ -1006,11 +1012,21 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	binary.BigEndian.PutUint32(header[8:12], sequence)
 	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
 	buffers := net.Buffers{header[:], payload}
-	if _, err := buffers.WriteTo(session.connection); err != nil {
-		metrics.IncCounter("player_tcp_write_error_total", nil, 1)
-		return fmt.Errorf("%%w: %%w", errConnectionBroken, err)
+	written, err := buffers.WriteTo(session.connection)
+	if err == nil { return nil }
+	// The caller's own deadline — earlier than write_timeout — ran out before
+	// a single byte went out (it can expire between the check above and the
+	// write system call): nothing reached the stream, so it is still in step
+	// and this is a refusal like a context already done, not a connection
+	// failure (RR-20260926-68). Anything else closes the connection: part of
+	// the frame went out (the stream is out of step), write_timeout itself ran
+	// out (the connection cannot take a byte for that long — RR-52's "slow
+	// enough to drop"), or the socket failed (reset, closed).
+	if written == 0 && callerDeadline && errors.Is(err, os.ErrDeadlineExceeded) {
+		return fmt.Errorf("%%w: nothing written before the caller's deadline: %%w", context.DeadlineExceeded, err)
 	}
-	return nil
+	metrics.IncCounter("player_tcp_write_error_total", nil, 1)
+	return fmt.Errorf("%%w: %%w", errConnectionBroken, err)
 }
 
 func remoteHost(address net.Addr) string {
@@ -1050,6 +1066,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"os"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1602,6 +1621,162 @@ func TestASessionPushThatCannotBeWrittenClosesThatSession(t *testing.T) {
 	if got := runtime.ActiveSessions(7); got != 1 { t.Fatalf("active sessions = %%d after the session's write failed, want 1", got) }
 	waitClosed(t, closed, "stalled")
 	waitReleased(t, server, 1)
+}
+
+// scriptedConn is a net.Conn whose writes report what the test says: how many
+// bytes went out and which error came back.
+type scriptedConn struct {
+	net.Conn
+	mu       sync.Mutex
+	written  int
+	err      error
+	deadline time.Time
+}
+
+func (c *scriptedConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err == nil {
+		return len(p), nil
+	}
+	n := min(c.written, len(p))
+	c.written -= n
+	return n, c.err
+}
+func (c *scriptedConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return nil
+}
+func (c *scriptedConn) Close() error { return nil }
+
+// RR-20260926-68: a write the caller's own deadline cut off before a single
+// byte went out left the stream in step; it is refused like a push whose
+// context was already done, and must not close the connection. The same
+// write stopped by write_timeout, one that wrote part of the frame, and one
+// the peer reset are connection failures and still close it (RR-52).
+func TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal(t *testing.T) {
+	callerDeadline := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 10*time.Millisecond)
+	}
+	for _, tc := range []struct {
+		name    string
+		written int
+		err     error
+		ctx     func() (context.Context, context.CancelFunc)
+		broken  bool
+	}{
+		{"caller deadline, nothing written", 0, os.ErrDeadlineExceeded, callerDeadline, false},
+		{"write_timeout, nothing written", 0, os.ErrDeadlineExceeded, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true},
+		{"caller deadline, part of the frame written", 5, os.ErrDeadlineExceeded, callerDeadline, true},
+		{"caller deadline, peer reset", 0, syscall.ECONNRESET, callerDeadline, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connection := &scriptedConn{written: tc.written, err: tc.err}
+			current := &session{connection: connection, writeTimeout: time.Second}
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			err := current.writeFrame(ctx, flagServerPush, pushTestMessageID, 1, []byte("payload"))
+			if err == nil {
+				t.Fatal("a failed write reported success")
+			}
+			if got := errors.Is(err, errConnectionBroken); got != tc.broken {
+				t.Fatalf("errConnectionBroken=%%v, want %%v: %%v", got, tc.broken, err)
+			}
+			if !tc.broken && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("a push the caller's deadline refused = %%v, want context.DeadlineExceeded", err)
+			}
+		})
+	}
+}
+
+// The same classification on a real in-memory pipe: nobody reads, so the
+// write blocks and the earlier deadline decides.
+func TestAPipeWriteRefusedByTheCallerDeadlineIsNotAConnectionFailure(t *testing.T) {
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	current := &session{connection: client, writeTimeout: time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := current.writeFrame(ctx, flagServerPush, pushTestMessageID, 1, []byte("blocked")); err == nil || errors.Is(err, errConnectionBroken) {
+		t.Fatalf("nothing written before the caller's deadline = %%v, want a refusal without errConnectionBroken", err)
+	}
+	stalled := &session{connection: client, writeTimeout: 20 * time.Millisecond}
+	if err := stalled.writeFrame(context.Background(), flagServerPush, pushTestMessageID, 2, []byte("blocked")); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("nothing written within write_timeout = %%v, want errConnectionBroken", err)
+	}
+	go func() { buffer := make([]byte, 5); _, _ = peer.Read(buffer) }()
+	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := current.writeFrame(ctx, flagServerPush, pushTestMessageID, 3, []byte("partly")); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("a frame cut off after 5 bytes = %%v, want errConnectionBroken", err)
+	}
+}
+
+// REPRO-2026-09-26-06 §4: pushes whose caller context expires almost at once
+// (1µs) are refused, but must not close the player's two healthy, reading
+// connections; a normal push afterwards still reaches both.
+func TestAnExpiringCallerDeadlineClosesNoHealthyConnection(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	var received []<-chan int
+	for _, token := range []string{"a", "b"} {
+		connection := dialAuthenticated(t, server, token)
+		received = append(received, readPushes(t, server, connection))
+	}
+	waitReleased(t, server, 2)
+	failures := 0
+	var broken error
+	for range 2000 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+		if err := runtime.PushPlayer(ctx, 7, pushTestMessageID, []byte("x")); err != nil {
+			failures++
+			if broken == nil && errors.Is(err, errConnectionBroken) {
+				broken = err
+			}
+		}
+		cancel()
+		if runtime.ActiveSessions(7) != 2 {
+			break
+		}
+	}
+	if broken != nil {
+		t.Errorf("an expired caller deadline was reported as a broken connection: %%v", broken)
+	}
+	if got := runtime.ActiveSessions(7); got != 2 {
+		t.Fatalf("active sessions = %%d after %%d refused pushes, want 2", got, failures)
+	}
+	select {
+	case event := <-closed:
+		t.Fatalf("healthy reading connection %%s was closed by a push that expired before writing", event.SessionID)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := runtime.PushPlayer(context.Background(), 7, pushTestMessageID, []byte("after")); err != nil {
+		t.Fatalf("push after the refused ones: %%v", err)
+	}
+	for i, counts := range received {
+		if !receivedPayloadOfSize(counts, len("after"), 2*time.Second) {
+			t.Fatalf("connection %%d never received the push after the refused ones", i)
+		}
+	}
+}
+
+func receivedPayloadOfSize(counts <-chan int, size int, within time.Duration) bool {
+	deadline := time.After(within)
+	for {
+		select {
+		case got, ok := <-counts:
+			if !ok {
+				return false
+			}
+			if got == size {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
 }
 
 func TestServerRejectsInvalidConstruction(t *testing.T) {

@@ -132,7 +132,9 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
 - `PushPlayer`：协议只编码一次，发布到玩家全部已认证会话。某条连接写失败（写超时、连接重置、已关闭）时，
   这条连接立即注销并关闭（客户端看到断线、需重连；连接槽、按 IP 计数与会话关闭事件照常各释放一次），
   其余连接收到则返回 nil；没有任何连接收到时返回错误（此时这些连接都已关闭）。写之前就被拒绝的推送
-  （ctx 已结束、payload 超限）不关闭连接并返回错误（RR-20260926-52）；
+  （ctx 已结束、payload 超限）不关闭连接并返回错误（RR-20260926-52）；调用方 ctx 的截止早于 `write_timeout`
+  且在第一个字节写出前到期的推送同样是写前拒绝，返回 `context.DeadlineExceeded`、不关闭连接；写出部分字节，
+  或 `write_timeout` 本身到期（即便一个字节都没写进），仍视为连接损坏并关闭（RR-20260926-68）；
 - `PushSession`：只投递指定 SessionID，写失败同样关闭该会话；
 - `ActiveSessions`：返回当前玩家在线会话数；
 - `ErrSessionNotFound`：玩家/会话离线；
