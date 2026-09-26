@@ -166,6 +166,63 @@ func (s *fatalRecordStore) Project(_ context.Context, r coredata.CommitRecord) e
 	return nil
 }
 
+// RR-20260926-17 复核残留：自定义 OnFatal 里同步 Close 不能自等。旧实现在 ReplayPass/Flush
+// 仍持有 operation（后台循环还持有自己的 done）时同步回调 OnFatal，Close 等 drained/done
+// 直到截止时间。现在 OnFatal 异步投递；fatal 在回调之前已对准入与等待方可见。
+func TestProjectorOnFatalMayCloseProjector(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		name := "external_flush"
+		if background {
+			name = "background_loop"
+		}
+		t.Run(name, func(t *testing.T) {
+			options := nestwal.DefaultOptions(t.TempDir())
+			options.WriterVersion = nestwal.WriterVersionV2
+			w, err := nestwal.Open(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = w.Close(context.Background()) })
+			a := projectorRecord(1, false)
+			var p *Projector
+			closed := make(chan error, 1)
+			visible := make(chan error, 1)
+			onFatal := func(error) {
+				// 回调开始时 fatal 已可见：准入在 WAL 前拒绝。
+				visible <- p.Commit(context.Background(), projectorRecord(9, false))
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				closed <- p.Close(ctx)
+			}
+			p, err = NewProjector(w, &fatalRecordStore{failID: a.ID}, ProjectorOptions{
+				CloseWAL: false, IdlePoll: time.Hour, RetryMin: time.Hour, RetryMax: time.Hour,
+				ManualReplay: !background, OnFatal: onFatal,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Commit(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			p.TransactionReleased(a.ID)
+			if !background {
+				if err := p.Flush(context.Background()); !errors.Is(err, ErrProjectionConflict) {
+					t.Fatalf("flush=%v", err)
+				}
+			}
+			if err := awaitChan(t, visible, "OnFatal to run"); !errors.Is(err, ErrProjectionConflict) {
+				t.Fatalf("admission inside OnFatal=%v, want the fatal verdict", err)
+			}
+			if err := awaitChan(t, closed, "Close inside OnFatal"); err != nil {
+				t.Fatalf("Close inside OnFatal=%v", err)
+			}
+			if _, err := p.ReplayPass(context.Background()); !errors.Is(err, ErrRuntimeStopped) {
+				t.Fatalf("replay after close=%v", err)
+			}
+		})
+	}
+}
+
 // RR-20260926-10 复核残留：投影 fatal 之后，本进程再不会投影 fatal 记录及其后的任何记录。
 // 所有待投影实体的等待方（包括 fatal 批次之外的实体）都必须立即拿到可判别的 fatal，
 // 不能等到各自截止时间；fatal 之后才开始的等待同样如此。旧实现只唤醒 fatal 批次内的记录。

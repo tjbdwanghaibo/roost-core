@@ -34,16 +34,18 @@ func TestRemoteCreationConflictFencesProjectorAndKeepsWAL(t *testing.T) {
 		ExpectedVersion: 0, NextVersion: 1, Schema: 1, Codec: "remote", Remote: &commit,
 	})
 	p, wal := stoppedProjectorWithRecords(t, store, []coredata.CommitRecord{record}, 0)
-	failures := 0
-	p.opts.OnFatal = func(error) { failures++ }
+	// OnFatal 异步投递（RR-20260926-17 复核补修）；用带缓冲 channel 计数。
+	failures := make(chan error, 2)
+	p.opts.OnFatal = func(err error) { failures <- err }
 	for range 2 {
 		count, err := p.ReplayPass(context.Background())
 		if count != 0 || !errors.Is(err, ErrProjectionConflict) || !errors.Is(err, fmongo.ErrVersionConflict) {
 			t.Fatalf("count=%d err=%v", count, err)
 		}
 	}
-	if failures != 1 {
-		t.Fatalf("fatal notifications=%d, want 1", failures)
+	awaitChan(t, failures, "the fatal notification")
+	if len(failures) != 0 {
+		t.Fatalf("fatal notified %d extra times, want once", len(failures))
 	}
 	if err := p.Commit(context.Background(), projectorRecord(43, false)); !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("admitted after fatal conflict: %v", err)

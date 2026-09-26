@@ -58,7 +58,9 @@ type ProjectorOptions struct {
 	MaxUnackedRecords       uint64        // 0 不限制；拒绝发生于 WAL 准入前。
 	WarnUnackedRecords      uint64        // 0 不设独立预警；达到准入上限也会报告预警。
 	CloseWAL                bool
-	OnFatal                 func(error)
+	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
+	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
+	OnFatal func(error)
 	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
 	// 供需要逐步控制回放与 ack 的外部夹具使用（例如注入“投影成功、checkpoint 丢失”后
 	// 检查中间状态）；Close 后这些入口同样返回 ErrRuntimeStopped。生产装配不设置。
@@ -383,8 +385,15 @@ func (projector *Projector) isFatalProjection(err error) bool {
 		// 等待方（不只本批次），让冷加载与系统票据立即拿到可判别的 fatal。fatalErr
 		// 已先于唤醒写入，reserve 在同一把 heldMu 下复查，唤醒之后不会再有新的等待项。
 		projector.completeAllTickets(err)
-		if projector.opts.OnFatal != nil {
-			projector.opts.OnFatal(err)
+		if onFatal := projector.opts.OnFatal; onFatal != nil {
+			// 异步投递（与 nestwal.Options.OnFatal 相同）：这里可能在 ReplayPass/Flush 持有
+			// operation、或后台循环尚未退出时被调用，同步回调里 Close 会等自己（RR-20260926-17
+			// 复核残留）。fatalErr 与等待方唤醒已在上面完成，所以回调开始前准入已被拒绝、
+			// 等待方已拿到 fatal；回调只负责进程级 fence，允许在其中同步 Close。
+			go func() {
+				defer func() { _ = recover() }()
+				onFatal(err)
+			}()
 		}
 	})
 	return true
