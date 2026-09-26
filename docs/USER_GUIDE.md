@@ -222,3 +222,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 - `ProjectorOptions.OnFatal` 在首次确定性投影冲突后**异步**调用一次；调用前 fatal 已对准入、Flush 和实体等待方可见，回调里可以同步 Close/Shutdown。依赖“Flush 返回前回调已执行完”的代码需改为等待回调，见 [RR-20260926-17 补修](bugfix/RR-20260926-17.md)。
 
 细节与验证边界见 [RR-10～24 修复汇总](review/REVIEW-2026-09-26-release-fixes.md)。
+
+## 2026-09-26 Remote 收尾链路（RR-37/38/39/46）
+
+- 已提交的 Remote 请求若收尾失败（Close 释放不完整、release hook 或 AfterCommit 回调异常），回复错误满足 `errors.Is(err, nest.ErrAfterCommitFailed)`，原因仍可 `errors.Is`；Abort、确认结果未知与拒绝的回复不带该哨兵。判断“是否已提交”请用 `errors.Is`，不要匹配错误文本（[RR-20260926-46](bugfix/RR-20260926-46.md)）。

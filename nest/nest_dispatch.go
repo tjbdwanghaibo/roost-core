@@ -80,6 +80,11 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			err = errors.Join(err, msg.localExecutor(msg.prepared.release))
 			msg.prepared = nil
 		}
+		if msg.remoteConfirmed && err != nil && !errors.Is(err, ErrAfterCommitFailed) {
+			// 本地与 Remote 都已提交：release hook、Close、预加载引用释放等错误只说明收尾失败，
+			// 调用方必须能用 errors.Is(ErrAfterCommitFailed) 区分“已提交”，不能据此重复业务。
+			err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, err)
+		}
 		releaseCurrentMsg()
 		releaseCtx()
 		if errors.Is(err, ErrEntityGroupTransitionScheduled) {

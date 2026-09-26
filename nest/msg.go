@@ -97,6 +97,8 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	}
 	err = errors.Join(err, batch.Close(ctx))
 	// 提交事实独立于释放/回调错误，不能遗失 Sync Confirm 或再次 Abort。
+	// remoteConfirmed 让回复路径给此后的释放/回调错误加 ErrAfterCommitFailed（RR-20260926-46）。
+	m.remoteConfirmed = committed
 	if committed {
 		if m.localExecutor != nil {
 			var callbackErr error
@@ -211,6 +213,10 @@ type Msg struct {
 	// 时由执行 handler 的 goroutine 设置，慢阶段在续行返回后读取（done channel 建立
 	// happens-before）。finishRemoteWriteBatch 只凭它决定 Commit / Abort（RR-20260926-32）。
 	remoteCommitted bool
+	// remoteConfirmed 表示 Remote 批次也已确认提交（finishRemoteWriteBatch 中 Commit 成功）。
+	// 此后回复里的任何错误都是提交后的释放/回调失败，由 dispatchNest 统一包 ErrAfterCommitFailed；
+	// 结果未知（确认超时）、拒绝与 Abort 都不置位，回复不得带该哨兵（RR-20260926-46）。
+	remoteConfirmed bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().
