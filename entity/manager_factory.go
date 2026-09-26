@@ -77,7 +77,7 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	}
 	guard := scope.guard
 	capturer := guard.createdCapturer
-	lockedNow := !guard.Guarded(value.GUId())
+	lockedNow := !guard.GuardedEntity(value)
 	if err := guard.lockCreated(value, capturer); err != nil {
 		return nil, err
 	}

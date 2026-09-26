@@ -158,7 +158,7 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 
 	lockedNow := make([]entity.IThreadSafeEntity, 0, len(lockEs))
 	for _, e := range lockEs {
-		if guard.Guarded(e.GUId()) {
+		if guard.GuardedEntity(e) {
 			continue
 		}
 		if !e.Touch() {

@@ -402,7 +402,7 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 		if e == nil {
 			continue
 		}
-		if guard.Guarded(e.GUId()) {
+		if guard.GuardedEntity(e) {
 			continue
 		}
 		ok := false

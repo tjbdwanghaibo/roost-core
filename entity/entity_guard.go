@@ -75,8 +75,18 @@ type EntityGuard struct {
 	// createdCapturer 是当前在本 Guard 上执行的 Nest handler（事务或 memory 快路径）；只由持有 Guard 的
 	// 业务 goroutine 读写。非 nil 时 handler 内新建实体沿用本 Guard 持锁并按锁序取锁（RR-20260926-35 / 48）。
 	createdCapturer CreatedEntityCapturer
-	eMap            map[int64]IThreadSafeEntity
-	postRelease     []func()
+	// eMap 以 ID 记当前持有的实例。同 ID 的另一实例若换了锁（handler 内 Destroy 后 LockManager 摘掉了旧锁，
+	// 重建的实例拿到新锁），取得新锁后新实例进 eMap，旧实例连同它仍被本 Guard 持有的锁移到 superseded，
+	// Guard 释放时一并解锁（RR-20260926-67）。
+	eMap        map[int64]IThreadSafeEntity
+	superseded  []heldEntity
+	postRelease []func()
+}
+
+// heldEntity 是被同 ID 新实例取代、但锁仍由本 Guard 持有的旧实例。id 单独保存：旧实例可能已被清理（ID 归零）。
+type heldEntity struct {
+	id  int64
+	ent IThreadSafeEntity
 }
 
 type GuardScope struct {
@@ -210,6 +220,7 @@ func newEntityGuard() *EntityGuard {
 
 func (e *EntityGuard) clean() {
 	clear(e.eMap)
+	e.superseded = nil
 	e.postRelease = nil
 	e.syncMutation = nil
 	e.createdCapturer = nil
@@ -248,7 +259,8 @@ func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
 		return false
 	}
 
-	if _, exists := e.eMap[gId]; exists {
+	held, stale := e.holding(ent)
+	if held {
 		return true
 	}
 
@@ -257,7 +269,7 @@ func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
 		mu.Unlock()
 		return false
 	}
-	e.eMap[gId] = ent
+	e.hold(gId, ent, stale)
 	return true
 }
 
@@ -271,7 +283,8 @@ func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
 	if gId == 0 || mu == nil {
 		return false
 	}
-	if _, exists := e.eMap[gId]; exists {
+	held, stale := e.holding(ent)
+	if held {
 		return true
 	}
 	if !mu.TryLock() {
@@ -281,8 +294,30 @@ func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
 		mu.Unlock()
 		return false
 	}
-	e.eMap[gId] = ent
+	e.hold(gId, ent, stale)
 	return true
+}
+
+// holding 按实例判断本 Guard 是否已持有 ent 的锁（RR-20260926-67）：同一实例，或同 ID 且共用同一把锁的另一实例
+// （Destroy 之前重复构建的实例）都算已持有。同 ID 但锁不同的旧实例作为 stale 返回——它的锁仍由本 Guard 持有，
+// 但不代表 ent 的锁：只按 ID 判断会让新实例在未加锁的情况下被当作已持有。
+func (e *EntityGuard) holding(ent IThreadSafeEntity) (held bool, stale IThreadSafeEntity) {
+	current, ok := e.eMap[ent.GUId()]
+	if !ok {
+		return false, nil
+	}
+	if current == ent || current.GetMutex() == ent.GetMutex() {
+		return true, nil
+	}
+	return false, current
+}
+
+// hold 记下刚取得锁的实例；stale 非 nil 时它仍被持有的锁转入 superseded，Guard 释放时解锁。
+func (e *EntityGuard) hold(id int64, ent, stale IThreadSafeEntity) {
+	if stale != nil {
+		e.superseded = append(e.superseded, heldEntity{id: id, ent: stale})
+	}
+	e.eMap[id] = ent
 }
 
 // lockCreated 取得新建实体的锁（RR-20260926-48）。Nest handler 内（capturer 非 nil）与 Cast 相同的锁序：
@@ -292,7 +327,7 @@ func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
 // 不在快 worker 上等待。
 // Nest 之外（Create 自建的短作用域、独立 WithGuardScope）沿用原来的等待取锁。
 func (e *EntityGuard) lockCreated(ent IThreadSafeEntity, capturer CreatedEntityCapturer) error {
-	if capturer != nil && !e.mayLock(ent.GUId(), e.maxLockedGroup()) {
+	if capturer != nil && !e.mayLockEntity(ent, e.maxLockedGroup()) {
 		if e.TryRequireEntity(ent) {
 			return nil
 		}
@@ -317,7 +352,7 @@ func (e *EntityGuard) CheckContainAllLock(es []IThreadSafeEntity) bool {
 	}
 	maxLockedGroup := e.maxLockedGroup()
 	for _, en := range es {
-		if !e.mayLock(en.GUId(), maxLockedGroup) {
+		if !e.mayLockEntity(en, maxLockedGroup) {
 			return false
 		}
 	}
@@ -353,12 +388,23 @@ func (e *EntityGuard) maxLockedGroup() int {
 }
 
 // mayLock reports whether acquiring id now keeps the lock order: it is already
-// held, or it belongs to a later group than everything held so far.
+// held, or it belongs to a later group than everything held so far. It judges
+// by id because it runs before the entities are loaded (CheckContainAllIDs);
+// once an instance is at hand, mayLockEntity decides by the instance.
 func (e *EntityGuard) mayLock(id int64, maxLockedGroup int) bool {
 	if _, held := e.eMap[id]; held {
 		return true
 	}
 	return GetEntityGroup(id) > maxLockedGroup
+}
+
+// mayLockEntity 是按实例的 mayLock（RR-20260926-67）：同 ID 但换了锁的新实例不是“已持有”，而它的锁组与
+// 本 Guard 持有的旧实例相同，所以不满足锁序——只能 try-lock 或拒绝，不能等待，更不能跳过加锁。
+func (e *EntityGuard) mayLockEntity(ent IThreadSafeEntity, maxLockedGroup int) bool {
+	if held, _ := e.holding(ent); held {
+		return true
+	}
+	return GetEntityGroup(ent.GUId()) > maxLockedGroup
 }
 
 func (e *EntityGuard) AppendPostRelease(f func()) {
@@ -371,10 +417,23 @@ func (e *EntityGuard) GuardEntity(ent IThreadSafeEntity) {
 	e.eMap[ent.GUId()] = ent
 }
 
+// ReleaseEntity 提前释放 id 当前持有的实例。同 ID 被它取代、锁仍由本 Guard 持有的旧实例随后回到 eMap
+// （RR-20260926-67）：锁序判断与 Guarded 仍要算上这把锁，Guard 释放时解锁。
 func (e *EntityGuard) ReleaseEntity(id int64) {
 	ent := e.eMap[id]
 	if ent != nil {
-		e.doReleaseEntity(ent)
+		e.doReleaseEntity(id, ent)
+		e.restoreSuperseded(id)
+	}
+}
+
+func (e *EntityGuard) restoreSuperseded(id int64) {
+	for i := len(e.superseded) - 1; i >= 0; i-- {
+		if held := e.superseded[i]; held.id == id {
+			e.superseded = append(e.superseded[:i], e.superseded[i+1:]...)
+			e.eMap[id] = held.ent
+			return
+		}
 	}
 }
 
@@ -384,8 +443,13 @@ func (e *EntityGuard) ReleaseAll() {
 }
 
 func (e *EntityGuard) releaseEntities() []func() {
-	for _, ent := range e.eMap {
-		e.safeReleaseEntity(ent)
+	for id, ent := range e.eMap {
+		e.safeReleaseEntity(id, ent)
+	}
+	superseded := e.superseded
+	e.superseded = nil
+	for _, held := range superseded {
+		e.safeReleaseEntity(held.id, held.ent)
 	}
 	callbacks := e.postRelease
 	e.postRelease = nil
@@ -407,23 +471,22 @@ func (e *EntityGuard) runPostRelease(callbacks []func()) {
 	}
 }
 
-func (e *EntityGuard) safeReleaseEntity(ent IThreadSafeEntity) {
+func (e *EntityGuard) safeReleaseEntity(id int64, ent IThreadSafeEntity) {
 	defer func() {
 		if r := recover(); r != nil {
-			id := int64(0)
-			if ent != nil {
-				id = ent.GUId()
-			}
 			slog.Error("entity release hook panic", "id", id, "err", r)
 		}
 	}()
-	e.doReleaseEntity(ent)
+	e.doReleaseEntity(id, ent)
 }
 
-func (e *EntityGuard) doReleaseEntity(ent IThreadSafeEntity) {
+// doReleaseEntity 解锁 ent，并在它仍是 id 的当前实例时从 eMap 删除（被取代的旧实例不在 eMap 里）。
+func (e *EntityGuard) doReleaseEntity(id int64, ent IThreadSafeEntity) {
 	mu := ent.GetMutex()
 	defer func() {
-		delete(e.eMap, ent.GUId())
+		if current, ok := e.eMap[id]; ok && current == ent {
+			delete(e.eMap, id)
+		}
 		mu.Unlock()
 	}()
 
@@ -440,6 +503,20 @@ func (e *EntityGuard) Guarded(id int64) bool {
 		return false
 	}
 	_, held := e.eMap[id]
+	return held
+}
+
+// GuardedEntity reports whether this guard holds ent's own lock: the same
+// instance, or another instance with the same id that shares the held mutex.
+// Guarded answers by id only; after a handler destroyed and re-created an id,
+// the re-created instance has a new mutex and is not held until it is locked
+// (RR-20260926-67). Code that is about to skip locking an instance it holds a
+// pointer to must ask this, not Guarded.
+func (e *EntityGuard) GuardedEntity(ent IThreadSafeEntity) bool {
+	if e == nil || ent == nil {
+		return false
+	}
+	held, _ := e.holding(ent)
 	return held
 }
 

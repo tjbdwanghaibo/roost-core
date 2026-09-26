@@ -307,7 +307,7 @@ func tryLockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadS
 		if ent == nil {
 			continue
 		}
-		if guard.Guarded(ent.GUId()) {
+		if guard.GuardedEntity(ent) {
 			continue
 		}
 		if !tryRequireDispatchEntity(guard, ent) {

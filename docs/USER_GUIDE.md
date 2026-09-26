@@ -83,6 +83,9 @@ handler 内新建实体的锁持有到 handler 结束（memory handler 也一样
 不能回滚的 handler（rollback=none，即 memory 快路径）冲突前的内存修改不会撤销，所以框架**不**自动重排这条消息：
 `Create` 的错误不带 `ErrLockTimeout`，请直接返回它，调用方收到 `ErrCreatedEntityLockConflict`；业务改返回别的锁超时类错误时，
 回复同样补上该哨兵、不重排。是否重试由业务按 handler 的幂等性决定（[RR-20260926-64](bugfix/RR-20260926-64.md)）。
+handler 内先 `Destroy` 某个实体、再新建同 ID 的实体时，新实例拿到新锁，按上面的锁序规则取锁（同组即尝试加锁），持锁到 handler 结束并进入本次提交边界；
+事务回滚时新实例按上文撤销发布，旧实例的销毁不回滚（`Destroy` 本身不是事务操作）。同一 handler 里若 `Destroy` 之后别处重建了同 ID、再 `Cast` 它，
+返回 `nest.ErrCastDeadlockRisk`，不会拿到未加锁的实例（[RR-20260926-67](bugfix/RR-20260926-67.md)）。
 生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
