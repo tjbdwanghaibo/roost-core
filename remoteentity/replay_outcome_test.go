@@ -3,9 +3,11 @@ package remoteentity
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 func prepareReplayBatch(t *testing.T, backend entity.IRemoteEntityBackend) (*Manager, *testRemoteEntity, entity.RemoteWriteBatch) {
@@ -183,5 +185,73 @@ func TestAdmittedTransactionStatusRefreshesDurableRejection(t *testing.T) {
 	}
 	if mgr.Stats().ActiveTransactions != 0 {
 		t.Fatal("durable rejection left tracker admitted")
+	}
+}
+
+type flakyMarkBackend struct {
+	*remoteTestLoader
+	fail atomic.Bool
+}
+
+func (b *flakyMarkBackend) MarkRemoteCommitPublished(context.Context, entity.RemoteTransactionID) error {
+	if b.fail.Load() {
+		return errors.New("injected publish mark failure")
+	}
+	return nil
+}
+
+// RR-20260926-11 复核残留：已 Committed 的事务重放发布失败，不能把 tracker 改回
+// Indeterminate，后到的等待方 / FlushRemoteAll 仍应得到已提交结论。
+func TestCommittedTrackerSurvivesFailedReplayPublication(t *testing.T) {
+	const kind entity.EntityKind = 119
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	backend := &flakyMarkBackend{remoteTestLoader: newRemoteTestLoader()}
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	mgr.SetBackend(backend)
+	mgr.SetOwnershipStore(newMockMarkerStore())
+	live := newTestRemoteEntity(1499, 1, kind)
+	backend.add(live)
+	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.dirty.dirty = true
+	tx := remoteTestTxID(77)
+	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "replay", "", true, 0)); err != nil {
+		t.Fatal(err)
+	}
+	commits := batch.Commits()
+	if _, err = batch.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = batch.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := mgr.waitRemoteTransaction(context.Background(), tx); err != nil || status.State != entity.RemoteCommitCommitted {
+		t.Fatalf("before replay status=%+v err=%v", status, err)
+	}
+
+	backend.fail.Store(true)
+	if _, err = mgr.ApplyRemoteCommits(context.Background(), tx, commits); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("replay publication failure must stay retryable for the caller: %v", err)
+	}
+	status, err := mgr.waitRemoteTransaction(context.Background(), tx)
+	if err != nil || status.State != entity.RemoteCommitCommitted {
+		t.Fatalf("committed tracker overwritten by failed replay: state=%v err=%v", status.State, err)
+	}
+	if err = mgr.FlushRemoteAll(context.Background()); err != nil {
+		t.Fatalf("FlushRemoteAll after failed replay: %v", err)
+	}
+	if status, err = mgr.RemoteCommitStatus(context.Background(), tx); err != nil || status.State != entity.RemoteCommitCommitted {
+		t.Fatalf("status after failed replay=%+v err=%v", status, err)
+	}
+
+	// 非终态仍可被持久结论升级：Indeterminate 之后的成功发布写回 Committed。
+	backend.fail.Store(false)
+	other := remoteTestTxID(78)
+	mgr.completeRemoteTransaction(other, entity.RemoteCommitStatus{TransactionID: other, State: entity.RemoteCommitIndeterminate, Cause: "probe"})
+	mgr.completeRemoteTransaction(other, entity.RemoteCommitStatus{TransactionID: other, State: entity.RemoteCommitCommitted})
+	if status, err = mgr.waitRemoteTransaction(context.Background(), other); err != nil || status.State != entity.RemoteCommitCommitted {
+		t.Fatalf("indeterminate tracker not upgraded: state=%v err=%v", status.State, err)
 	}
 }

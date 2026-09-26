@@ -100,8 +100,19 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 		metrics.IncCounter("remote_entity_transaction_tracker_drop_total", nil, 1)
 		return
 	}
+	if remoteCommitFinal(tracker.status.State) {
+		// 终态不可改写（RR-20260926-11 复核残留）：已提交事务的重放发布失败只影响这次
+		// 调用的返回值，不能把 Committed 改回 Indeterminate，后到的等待方/FlushRemoteAll
+		// 仍须得到已提交结论。相互矛盾的终态保留先到的持久结论并计数。
+		if status.State != tracker.status.State {
+			metrics.IncCounter("remote_entity_transaction_final_overwrite_ignored_total", nil, 1)
+		}
+		m.remote.txMu.Unlock()
+		return
+	}
 	tracker.status = status.Clone()
-	terminal := status.State == entity.RemoteCommitCommitted || status.State == entity.RemoteCommitRejected || status.State == entity.RemoteCommitIndeterminate
+	// Indeterminate 也会关闭 done 唤醒等待方，但不是终态：之后的持久结论仍可覆盖它。
+	terminal := remoteCommitFinal(status.State) || status.State == entity.RemoteCommitIndeterminate
 	if terminal && !tracker.closed {
 		tracker.closed = true
 		tracker.closedAt = time.Now()
@@ -115,6 +126,13 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 		close(tracker.done)
 	}
 	m.remote.txMu.Unlock()
+}
+
+// remoteCommitFinal 报告 tracker 的终态：Committed（已持久并发布）与 Rejected（持久拒绝或
+// 确定未提交）。Admitted/Applied/Indeterminate/Unknown 都只是过程或未知结论，可以被后续的
+// 持久结论覆盖；终态一旦写入就不再改变。
+func remoteCommitFinal(state entity.RemoteCommitState) bool {
+	return state == entity.RemoteCommitCommitted || state == entity.RemoteCommitRejected
 }
 
 func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
