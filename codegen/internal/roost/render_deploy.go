@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 func renderProductionDeployment(m Manifest) map[string]string {
@@ -130,6 +131,11 @@ install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
 install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.yaml"
 (cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
 
+# TimeoutStopSec: the service's generated shutdown.total_timeout + 5s. Raise it
+# together with total_timeout.
+case "$SERVICE" in
+{{STOP_TIMEOUTS}}esac
+
 cat >"$UNIT_PATH" <<EOF
 [Unit]
 Description={{APP}} $SERVICE server (sid $SID)
@@ -144,7 +150,7 @@ WorkingDirectory=$APP_ROOT
 ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
 Restart=on-failure
 RestartSec=2s
-TimeoutStopSec=65s
+TimeoutStopSec=$STOP_TIMEOUT
 KillSignal=SIGTERM
 LimitNOFILE=1048576
 UMask=0027
@@ -209,6 +215,11 @@ exit 1
 	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(services, " "))
 	value = strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(services, "|"))
 	value = strings.ReplaceAll(value, "{{STATEFUL_GUARD}}", renderStatefulWALGuard(stateful))
+	var stopTimeouts strings.Builder
+	for _, service := range services {
+		fmt.Fprintf(&stopTimeouts, "  %s) STOP_TIMEOUT=%s ;;\n", service, seconds(serviceShutdownPlan(m, service).grace))
+	}
+	value = strings.ReplaceAll(value, "{{STOP_TIMEOUTS}}", stopTimeouts.String())
 	return value
 }
 
@@ -554,7 +565,9 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	fmt.Fprintf(&head, "        app.kubernetes.io/name: %s\n        app.kubernetes.io/component: %s\n", m.Project.Name, service)
 	head.WriteString("      annotations:\n        prometheus.io/scrape: \"true\"\n        prometheus.io/port: \"9100\"\n        prometheus.io/path: /metrics\n    spec:\n")
 	fmt.Fprintf(&head, "      serviceAccountName: %s\n", m.Project.Name)
-	head.WriteString("      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: 65\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
+	// shutdown.total_timeout of this service + 5s (serviceShutdownPlan, RR-20260926-66).
+	fmt.Fprintf(&head, "      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: %d\n", int64(serviceShutdownPlan(m, service).grace/time.Second))
+	head.WriteString("      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
 	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
 	if serviceOwnsPlayerTCP(m, service) {
@@ -616,7 +629,9 @@ stringData:
 func renderKubernetesReadme(m Manifest) string {
 	var services strings.Builder
 	for _, service := range sortedServiceNames(m) {
-		fmt.Fprintf(&services, "- `%s`：复制 `secret.%s.example.yaml` 为 `secret.%s.local.yaml`，替换全部 `CHANGE_ME`。\n", service, service, service)
+		plan := serviceShutdownPlan(m, service)
+		fmt.Fprintf(&services, "- `%s`：复制 `secret.%s.example.yaml` 为 `secret.%s.local.yaml`，替换全部 `CHANGE_ME`。停机：%d 个 Mod，`shutdown.total_timeout` %s，`terminationGracePeriodSeconds` %d。\n",
+			service, service, service, plan.mods, seconds(plan.total), int64(plan.grace/time.Second))
 	}
 	return fmt.Sprintf(`# Kubernetes 部署
 
@@ -634,7 +649,7 @@ func renderKubernetesReadme(m Manifest) string {
 - Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
-- /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds（模板 65s）必须 ≥ shutdown.total_timeout（生成配置 60s）+ 5s；调大 total_timeout 时同步调大宽限期与 systemd TimeoutStopSec。
+- /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s），terminationGracePeriodSeconds 为它 + 5s（见上方列表）；增加 Mod 或调大 total_timeout / dataengine.shutdown_timeout 时同步调大宽限期与 systemd TimeoutStopSec（roost doctor 会检查）。
 - 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
 `, services.String(), m.Project.Name, m.Project.Name, m.Project.Name)
 }

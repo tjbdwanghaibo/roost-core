@@ -213,6 +213,14 @@ func SyncProject(root string) (SyncResult, error) {
 	if err := commitSyncChanges(changes); err != nil {
 		return SyncResult{}, err
 	}
+	// The deployment templates just committed carry each service's grace
+	// period for its current Mods; bring an unedited generated shutdown:
+	// block in the application-owned configs to the same plan (RR-20260926-66).
+	refreshed, err := refreshGeneratedShutdownConfigs(absRoot, manifest)
+	result.Updated = append(result.Updated, refreshed...)
+	if err != nil {
+		return result, fmt.Errorf("refresh shutdown.total_timeout: %w", err)
+	}
 	return result, nil
 }
 

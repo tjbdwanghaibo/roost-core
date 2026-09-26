@@ -382,54 +382,66 @@ func renderBootstrap(m Manifest) string {
 		b.WriteString("\t)\n")
 	}
 	for _, name := range services {
-		mods, _ := resolveMods(effectiveServiceMods(m, name))
 		if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 			// The roost-service Server is the process's Service; the owner Mod
 			// is built from the project's collaborators file.
-			args := make([]string, 0, len(spec.ModArgs))
-			for _, arg := range spec.ModArgs {
-				args = append(args, "service"+safeIdent(name)+"."+arg)
-			}
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(svc%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
-			for _, mod := range mods {
-				fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
-			}
-			var chain strings.Builder
-			for _, call := range spec.ModChain {
-				fmt.Fprintf(&chain, ".%s", strings.Replace(call, "(", "(service"+safeIdent(name)+".", 1))
-			}
-			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewMod(%s)%s)\n", spec.Package, strings.Join(args, ", "), chain.String())
-			continue
+		} else {
+			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		}
-		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
-		for _, mod := range mods {
-			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
-		}
-		used := append([]string(nil), m.Services[name].Uses...)
-		sort.Strings(used)
-		for _, target := range used {
-			spec := frameworkCatalog[m.Services[target].Framework]
-			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewClientMod()", spec.Package)
-		}
-		// The project's own rpcs: the owner Mod wraps the implementation
-		// (New() takes whatever the service needs; edit the call here), a
-		// consumer gets the generated ClientMod.
-		for _, rpc := range uniqueSorted(m.Services[name].Rpcs) {
-			fmt.Fprintf(&b, ",\n\t\t%s.NewMod(%s.New())", rpcAlias(rpc), rpcAlias(rpc))
-		}
-		for _, rpc := range uniqueSorted(m.Services[name].UsesRpcs) {
-			fmt.Fprintf(&b, ",\n\t\t%s.NewClientMod()", rpcAlias(rpc))
-		}
-		if access, enabled := m.Access["player"]; enabled && access.Service == name {
-			b.WriteString(",\n\t\taccessplayer.NewMod()")
-			if contains(access.Transports, "tcp") {
-				b.WriteString(",\n\t\taccessplayertcp.NewMod()")
-			}
+		for _, constructor := range serviceModConstructors(m, name, allMods) {
+			fmt.Fprintf(&b, ",\n\t\t%s", constructor)
 		}
 		b.WriteString(")\n")
 	}
 	b.WriteString("\treturn a, nil\n}\n")
 	return b.String()
+}
+
+// serviceModConstructors is every Mod the bootstrap registers for one service
+// after its Service, in registration order: the service's Kit Mods, then for a
+// hosted framework service its owner Mod, for a business service the framework
+// ClientMods it uses, its project rpcs' owner / client Mods and the player
+// access Mods it hosts. serviceShutdownPlan counts this same list, so the
+// generated shutdown.total_timeout follows what the process actually stops.
+func serviceModConstructors(m Manifest, name string, allMods []string) []string {
+	var out []string
+	mods, _ := resolveMods(effectiveServiceMods(m, name))
+	for _, mod := range mods {
+		out = append(out, renderModConstructor(m, mod, allMods, name))
+	}
+	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
+		args := make([]string, 0, len(spec.ModArgs))
+		for _, arg := range spec.ModArgs {
+			args = append(args, "service"+safeIdent(name)+"."+arg)
+		}
+		var chain strings.Builder
+		for _, call := range spec.ModChain {
+			fmt.Fprintf(&chain, ".%s", strings.Replace(call, "(", "(service"+safeIdent(name)+".", 1))
+		}
+		return append(out, fmt.Sprintf("svc%s.NewMod(%s)%s", spec.Package, strings.Join(args, ", "), chain.String()))
+	}
+	used := append([]string(nil), m.Services[name].Uses...)
+	sort.Strings(used)
+	for _, target := range used {
+		out = append(out, fmt.Sprintf("svc%s.NewClientMod()", frameworkCatalog[m.Services[target].Framework].Package))
+	}
+	// The project's own rpcs: the owner Mod wraps the implementation
+	// (New() takes whatever the service needs; edit the call here), a
+	// consumer gets the generated ClientMod.
+	for _, rpc := range uniqueSorted(m.Services[name].Rpcs) {
+		out = append(out, fmt.Sprintf("%s.NewMod(%s.New())", rpcAlias(rpc), rpcAlias(rpc)))
+	}
+	for _, rpc := range uniqueSorted(m.Services[name].UsesRpcs) {
+		out = append(out, fmt.Sprintf("%s.NewClientMod()", rpcAlias(rpc)))
+	}
+	if access, enabled := m.Access["player"]; enabled && access.Service == name {
+		out = append(out, "accessplayer.NewMod()")
+		if contains(access.Transports, "tcp") {
+			out = append(out, "accessplayertcp.NewMod()")
+		}
+	}
+	return out
 }
 
 func renderModConstructor(m Manifest, name string, allMods []string, service string) string {
@@ -520,14 +532,7 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	b.WriteString("# Generated starter configuration; application-owned after project creation.\n")
 	b.WriteString("sid: 1000\n")
 	b.WriteString("log:\n  level: info\n  json: true\n  stdout: true\n  file: true\n  dir: log\n")
-	b.WriteString("shutdown:\n" +
-		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
-		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
-		"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
-		"  # when the rest cannot cover it. Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n" +
-		"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n" +
-		"  # stop_grace_period, systemd TimeoutStopSec) must be >= total_timeout + 5s: 65s by default.\n" +
-		"  total_timeout: 60s\n  serve_wait_timeout: 5s\n")
+	b.WriteString(renderShutdownConfig(serviceShutdownPlan(m, service)))
 	seen := map[string]bool{}
 	for _, name := range mods {
 		if !seen[name] && modCatalog[name].Config != "" {

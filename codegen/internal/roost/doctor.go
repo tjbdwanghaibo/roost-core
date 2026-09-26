@@ -83,6 +83,7 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 			report.Items = append(report.Items, CheckItem{Name: "config:" + service, Status: StatusOK, Detail: filepath.ToSlash(path)})
 		}
 	}
+	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
 	if err := CheckIDs(root, m); err != nil {
 		report.Items = append(report.Items, CheckItem{Name: "ids", Status: StatusFail, Detail: err.Error()})
 	} else {

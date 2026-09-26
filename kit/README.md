@@ -361,11 +361,14 @@ App 的分配规则（RR-20260926-42，RR-20260926-51 修订）：Service.Shutdo
 共享 Mod 保留它们声明的预算。没有 Mod 声明预算时与原先“剩余 / 剩余 Mod 数”相同；没有总截止时间的兼容路径（启动失败回滚）下，
 声明的 Mod 用声明值，其余 5s。某个 Mod 超时后仍按既有语义停止后续关闭、保留其余 Mod 的资源。
 
-生成配置的默认值为 `shutdown.total_timeout: 60s`、`dataengine.shutdown_timeout: 30s`：5 / 7 / 10 个 Mod 时 dataengine 都拿满 30s，
-先停的 Mod 各得 7.5s / 5s / 3.3s，不告警。自定义时保持 `total_timeout ≥ dataengine.shutdown_timeout + 3s × 其他 Mod 数`，
-部署的终止宽限期（k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`）≥ `total_timeout + 5s`，
-默认即 ≥ 65s。RR-51 之前生成、仍为 `total_timeout: 30s` 的工程，dataengine 在 5 / 7 / 10 个 Mod 时得 21s / 18s / 12s 并告警，
-建议改为 60s 并同步放宽宽限期。
+生成配置的 `shutdown.total_timeout` 按服务计算（RR-20260926-66）：声明预算之和（`dataengine.shutdown_timeout: 30s`）+ 3s × 其余 Mod 数
++ 5s（Service.Shutdown 在同一时限内、先于 Mod 运行），Mod 数取该服务进程实际注册的全部 Mod（含共享 Mod）；部署的终止宽限期
+（k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh`）为 `total_timeout + 5s`。
+game-demo 的 game 服务 23 个 Mod：101s / 106s，dataengine 拿满 30s、其余每个 Mod ≥ 3s、不告警；框架服务（6 个 Mod、无声明）23s / 28s。
+自定义时保持 `total_timeout ≥ 声明预算之和 + 3s × 其他 Mod 数`、宽限期 ≥ `total_timeout + 5s`（`roost project doctor` 检查两者）。
+RR-66 之前生成、仍为 `total_timeout: 60s` 的工程：Mod 多的服务（game-demo game）每次停机告警且个别 Mod 低于保底，应改为生成值；
+重新 sync 后部署模板的宽限期按新公式生成，Mod 少的服务会小于 65s，配置仍为 60s 时须一并改小或保留旧宽限期（doctor 会提示）。
+RR-51 之前生成、仍为 `total_timeout: 30s` 的工程，dataengine 在 5 / 7 / 10 个 Mod 时得 21s / 18s / 12s 并告警。
 
 ### 3.5 Durability 管线全景（nest 事务 → 磁盘 → 数据库）
 

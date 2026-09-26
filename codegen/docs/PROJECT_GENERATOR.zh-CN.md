@@ -587,9 +587,17 @@ v1.7.0 起，新项目同时生成三套部署入口：
 
 | 路径 | 用途 | 关键默认值 |
 | --- | --- | --- |
-| `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、45s 停机预算、实例独占 WAL |
+| `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、按服务生成的停机宽限期（`TimeoutStopSec` = 该服务 `shutdown.total_timeout` + 5s）、实例独占 WAL |
 | `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含配置、只读根文件系统运行示例、版本 ldflags |
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
+
+停机时长按服务生成（RR-20260926-66）：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的
+`dataengine.shutdown_timeout`，生成值 30s）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限），
+Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Kit Mod、框架 ClientMod / owner Mod、rpc Mod、player access Mod）；
+k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh` / `second-game.sh` 的
+`kill -9` 前等待均为它 + 5s。game-demo：game 服务 23 个 Mod → 101s / 106s；每个框架服务 6 个 Mod → 23s / 28s。
+配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
+改过的段或旧版生成器写的段保持不动，由 `roost project doctor` 的 `shutdown:<service>` 检查提示（总时长覆盖不了 Mod 保底，或超过生成的宽限期）。
 
 新项目还会生成 `.github/workflows/ci.yml`、`dependency-update.yml`、`release.yml`、`deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml` 和 `security.yml`。普通 CI 使用已经提交的 `go.mod/go.sum`，不会执行 `deps-update` 或 `go get -u`；追踪最新框架由独立依赖升级流水线完成并创建 PR。Release 构建一次不可变二进制包和 OCI 镜像，Shell 使用版本包，Docker 与 Kubernetes 使用同一个镜像 digest。
 
