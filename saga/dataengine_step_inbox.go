@@ -62,6 +62,8 @@ func ReservationFromContext(ctx context.Context) (Reservation, bool) {
 	return reservation, ok && reservation.Token > 0 && !reservation.Duplicate && reservation.commandID != "" && reservation.owner != "" && len(reservation.digest) > 0
 }
 
+// dataEngineClaim 的 updated_at 也由投影事务按 coredata.LeaseFenceFieldUpdatedAt 条件写入，
+// 使投影与 reserveInTransaction 的过期接管写同一文档、在 Mongo 里串行化（RR-20260926-30 §6）。
 type dataEngineClaim struct {
 	ID         string    `bson:"_id"`
 	Namespace  string    `bson:"namespace"`

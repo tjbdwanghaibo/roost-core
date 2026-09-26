@@ -99,6 +99,9 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 				ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(), Skipped: true,
 			})
 		}
+		if store.afterLeaseFence != nil && len(record.Receipts) > 0 {
+			store.afterLeaseFence(txCtx)
+		}
 		for i := range ordinary {
 			if err := store.applyMutation(txCtx, record.ID.String(), ordinary[i], true); err != nil {
 				return fmt.Errorf("dataengine mongo: mutation %d: %w", i, err)

@@ -33,6 +33,9 @@ const (
 	LeaseFenceFieldDigest     = "digest"
 	LeaseFenceFieldStatus     = "status"
 	LeaseFenceFieldLeaseUntil = "lease_until"
+	// LeaseFenceFieldUpdatedAt 是投影事务确认租约时写入的字段。确认必须是一次写：
+	// 只读的校验与另一事务里的租约接管互不冲突，到期附近两边都会提交（RR-20260926-30 §6）。
+	LeaseFenceFieldUpdatedAt = "updated_at"
 
 	LeaseFenceStatusPending = "pending"
 )
@@ -69,6 +72,16 @@ func (fence LeaseFence) Predicate(now time.Time) bson.M {
 		LeaseFenceFieldStatus:     LeaseFenceStatusPending,
 		LeaseFenceFieldLeaseUntil: bson.M{"$gt": now},
 	}
+}
+
+// Confirmation is the update a projector applies to the document matched by
+// Predicate, inside the same Mongo transaction that applies the fenced
+// record. The write is what serializes the projection with a concurrent lease
+// takeover: two transactions writing one document cannot both commit, so
+// either the takeover wins (the projection retries, no longer matches and
+// skips) or the projection wins (the takeover retries and finds the receipt).
+func (fence LeaseFence) Confirmation(now time.Time) bson.M {
+	return bson.M{"$set": bson.M{LeaseFenceFieldUpdatedAt: now}}
 }
 
 func NewLeaseFenceReceipt(fence LeaseFence) (Receipt, error) {

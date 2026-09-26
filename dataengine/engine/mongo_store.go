@@ -57,6 +57,10 @@ type MongoStore struct {
 	now           func() time.Time
 	remoteStore   RemoteProjectionStore
 	remoteApplier entity.RemoteCommitApplier
+
+	// afterLeaseFence 是测试缝：租约校验通过、业务写入之前在同一 Mongo 事务里调用，
+	// 用来在确定的位置插入并发的租约接管（RR-20260926-30 写偏斜回归）。生产为 nil。
+	afterLeaseFence func(context.Context)
 }
 
 type RemoteProjectionStore interface {
@@ -312,9 +316,15 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 		// assembled here: the document is written by another package, and two
 		// independent spellings of the same schema is how a rename turns every
 		// fenced transaction into a silent no-op.
-		var found bson.M
-		err = store.client.Database(fence.Database).Collection(fence.Resource).
-			FindOne(ctx, fence.Predicate(now), &found)
+		//
+		// 校验必须是条件写而不是读（RR-20260926-30 §6）：只读 claim 时，租约到期附近
+		// 另一事务的接管（lease_token+1）与本投影事务互不写冲突，两边都会提交，同一步骤
+		// 执行两次。写同一文档让 Mongo 只允许其中一个提交，输家由驱动重试后看到对方结果。
+		result, err := store.client.Database(fence.Database).Collection(fence.Resource).
+			UpdateOne(ctx, fence.Predicate(now), fence.Confirmation(now))
+		if err == nil && (result == nil || result.MatchedCount == 0) {
+			err = fmongo.ErrNotFound
+		}
 		if errors.Is(err, fmongo.ErrNotFound) {
 			// A stale lease is the expected outcome here, but so is a schema
 			// drift that makes the predicate unsatisfiable — and the two look
