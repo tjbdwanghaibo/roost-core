@@ -92,13 +92,17 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			err = nil
 		}
 		// 锁超时 / 组迁移等暂时性错误只对尚未提交的消息重新准入；已越过提交点的事务回复原错误（RR-20260926-49）。
-		if !msg.transactionPastCommitPoint(err) {
+		// 不能回滚的 handler 在新建实体冲突前已做的修改不撤销，同样不重排（RR-20260926-64）。
+		if msg.requeueAllowed(err) {
 			if requeuePendingEntityGroupTransition(mgr, msg, err) {
 				err = nil
 			}
 			if requeueTransientDispatch(mgr, msg, err) {
 				err = nil
 			}
+		} else if msg.createLockConflictNoRollback && isRequeueableDispatchError(err) && !errors.Is(err, ErrCreatedEntityLockConflict) {
+			// 业务换成了别的锁超时类错误回复：补上冲突哨兵，调用方仍能判别“框架没有重排、修改未回滚”。
+			err = fmt.Errorf("%w: %w", ErrCreatedEntityLockConflict, err)
 		}
 		if msg.deferredCompletion {
 			// The completion pump owns the reply: it sends RetChan (or logs

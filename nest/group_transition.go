@@ -361,6 +361,12 @@ func requeueTransientDispatch(mgr *NestMgr, msg *Msg, err error) bool {
 	return requeueNestDispatch(mgr, msg, reason)
 }
 
+// isRequeueableDispatchError 判断 err 是否属于 dispatchNest 会自动重新准入的错误类别（组迁移待定或暂时性锁错误）。
+func isRequeueableDispatchError(err error) bool {
+	_, transient := transientDispatchRequeueReason(err)
+	return transient || errorsIsEntityGroupPending(err)
+}
+
 func transientDispatchRequeueReason(err error) (string, bool) {
 	switch {
 	case errors.Is(err, ErrLockTimeout):

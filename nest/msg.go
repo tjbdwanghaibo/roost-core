@@ -206,6 +206,23 @@ func (m *Msg) markTransactionCommitted() {
 	}
 }
 
+// markCreateLockConflictWithoutRollback 记录这条消息里，不能回滚的 handler 内新建实体遇到了锁冲突
+// （RR-20260926-64）；nil 接收者无操作。
+func (m *Msg) markCreateLockConflictWithoutRollback() {
+	if m != nil {
+		m.createLockConflictNoRollback = true
+	}
+}
+
+// requeueAllowed 判断失败的这条消息能否由框架自动重新准入：没有越过提交点（RR-20260926-49），
+// 且不是“不能回滚的 handler 在冲突前已做了修改”（RR-20260926-64）。
+func (m *Msg) requeueAllowed(err error) bool {
+	if m == nil {
+		return false
+	}
+	return !m.transactionPastCommitPoint(err) && !m.createLockConflictNoRollback
+}
+
 // replyAfterCommit 判断回复里的错误是否都发生在提交之后：纯本地事务看 txCommitted，带 Remote 批次的看 remoteConfirmed
 // （本地已提交而 Remote 确认未知 / 被拒绝不是“已提交”，RR-20260926-46）。
 func (m *Msg) replyAfterCommit() bool {
@@ -330,6 +347,12 @@ type Msg struct {
 	// 已准入）。纯本地事务此后的释放 / 回调错误由 dispatchNest 包 ErrAfterCommitFailed（RR-20260926-53）；带 Remote 批次的
 	// 消息仍以 remoteConfirmed 为准。pipelined ticket 结果未知只置 txAdmitted，不置它。
 	txCommitted bool
+	// txNoRollback 表示本条消息自己的事务是 RollbackNone（memory 快路径，或带 Remote 批次的 memory handler）：
+	// handler 失败时已做的内存修改不撤销。createLockConflictNoRollback 表示这样的消息里 handler 内新建实体遇到了
+	// 按锁序不能等待的锁冲突；dispatchNest 据此不重排、回复带 ErrCreatedEntityLockConflict（RR-20260926-64）。
+	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读（与 txAdmitted 相同）。
+	txNoRollback                 bool
+	createLockConflictNoRollback bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().

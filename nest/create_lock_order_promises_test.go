@@ -232,7 +232,8 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 
 // REPRO-2026-09-26-05 §1 探针 B：A 新建 X 后停在 strict 提交里（锁内 WAL 准入，豁免）；声明不同目标的 handler
 // 也新建 X。修前它们停在 X 的锁上占满快池；修后冲突即回滚并延迟重新准入，无关请求照常完成，A 提交后都得到“已存在”。
-// memory 模式 handler 不回滚，冲突错误原样交给业务，业务返回它时同样走锁超时重新准入。
+// memory 模式 handler 不回滚：冲突前的修改不撤销，所以不重排，调用方直接收到 ErrCreatedEntityLockConflict
+// （RR-20260926-64 按维护者 2026-09-27 的决定改了这条子用例的期望；修前它会重排直到“已存在”）。
 func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -311,9 +312,19 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 				t.Fatalf("A: want created, got ret=%v err=%v", r.ret, r.err)
 			}
 			for i := 1; i <= workers; i++ {
-				if r := results[fmt.Sprintf("B%d", i)]; r.err != nil || r.ret != "exists" {
+				r := results[fmt.Sprintf("B%d", i)]
+				if tc.meta.Rollback == RollbackNone {
+					if !errors.Is(r.err, ErrCreatedEntityLockConflict) || errors.Is(r.err, ErrLockTimeout) {
+						t.Fatalf("B%d (memory): want ErrCreatedEntityLockConflict without requeue, got ret=%v err=%v", i, r.ret, r.err)
+					}
+					continue
+				}
+				if r.err != nil || r.ret != "exists" {
 					t.Fatalf("B%d: want exists after the creator committed, got ret=%v err=%v", i, r.ret, r.err)
 				}
+			}
+			if tc.meta.Rollback == RollbackNone && attempts.Load() != workers {
+				t.Fatalf("memory followers ran %d times, want %d (one each, no requeue)", attempts.Load(), workers)
 			}
 		})
 	}

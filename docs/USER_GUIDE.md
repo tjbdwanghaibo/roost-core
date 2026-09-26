@@ -77,9 +77,12 @@ RollbackState 下新实体的 DAO 需要可快照（生成 DAO 已满足），re
 这两条与 Cast 的约束一致。
 handler 内新建实体的锁持有到 handler 结束（memory handler 也一样，并进入本次 Sync 提交屏障），取锁遵循与 Cast 相同的锁序：
 新实体的锁组高于 handler 已持有的全部锁组时等待；否则（与声明目标同组或更低组，最常见的写法）只尝试加锁，被其他 handler 占用时
-`Create` 返回满足 `errors.Is(err, nest.ErrLockTimeout)` 的错误，可回滚（state / undo）的事务整条回滚后自动重新准入——即使业务吞掉了这个错误；
-重排后排到同 ID 后继之后，多次仍冲突时调用方收到锁超时。rollback=none 的 handler 不强制回滚，请直接返回该错误
-（[RR-20260926-48](bugfix/RR-20260926-48.md)）。
+`Create` 返回满足 `errors.Is(err, nest.ErrCreatedEntityLockConflict)` 的错误。可回滚（state / undo）的事务里它同时满足
+`errors.Is(err, nest.ErrLockTimeout)`，事务整条回滚后自动重新准入——即使业务吞掉了这个错误；重排后排到同 ID 后继之后，
+多次仍冲突时调用方收到锁超时（[RR-20260926-48](bugfix/RR-20260926-48.md)）。
+不能回滚的 handler（rollback=none，即 memory 快路径）冲突前的内存修改不会撤销，所以框架**不**自动重排这条消息：
+`Create` 的错误不带 `ErrLockTimeout`，请直接返回它，调用方收到 `ErrCreatedEntityLockConflict`；业务改返回别的锁超时类错误时，
+回复同样补上该哨兵、不重排。是否重试由业务按 handler 的幂等性决定（[RR-20260926-64](bugfix/RR-20260926-64.md)）。
 生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。

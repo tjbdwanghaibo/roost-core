@@ -44,8 +44,9 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 // CaptureCreatedEntity：revoke 撤销这次发布，事务在回滚 / 明确拒绝时调用；重复调用无副作用。
 // 返回错误时 CreateInScope 立即撤销发布并把错误交给业务。
 //
-// CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48）。返回交给业务的错误
-// （Nest 返回可重试的锁超时类错误）；Nest 事务据此在 handler 结束时整条回滚并重新准入。
+// CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48）。返回交给业务的错误：
+// 可回滚的 Nest 事务给可重试的锁超时类错误，并据此在 handler 结束时整条回滚并重新准入；不能回滚的 handler
+// （memory 快路径）给不可自动重排的冲突错误，消息不重排（RR-20260926-64）。
 type CreatedEntityCapturer interface {
 	CaptureCreatedEntity(created IThreadSafeEntity, revoke func()) error
 	CreatedEntityLockBusy(id int64) error

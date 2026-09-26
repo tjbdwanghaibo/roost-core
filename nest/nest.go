@@ -64,6 +64,11 @@ var (
 	// and recovered from WAL; rolling the in-memory state back could create a
 	// second, conflicting history.
 	ErrCommitIndeterminate = errors.New("nest: transaction commit outcome is indeterminate")
+	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用
+	// （RR-20260926-48 / 64）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
+	// 不能回滚的 handler（RollbackNone、memory 快路径）不带 ErrLockTimeout：冲突前的内存修改已生效且不撤销，
+	// 消息不自动重排，这个错误原样（或补在业务错误上）回复调用方；是否重试由业务按 handler 的幂等性决定。
+	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
 )
 
 func NewParamCountMismatchError(handler string, got int, want int) error {

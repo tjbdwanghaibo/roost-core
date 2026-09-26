@@ -288,7 +288,8 @@ func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
 // lockCreated 取得新建实体的锁（RR-20260926-48）。Nest handler 内（capturer 非 nil）与 Cast 相同的锁序：
 // 新实体的锁组高于本 Guard 已持有的全部锁组时可以等待——与 Cast 一样是按全序的有序等待，不会成环，属于
 // Guard/本地锁豁免；否则等待可能与持有者成环（交叉创建、创建后再 Cast 更高锁组），只 try-lock，被占用时
-// 由 capturer 给出交给业务的可重试错误，事务整条回滚后重新准入，不在快 worker 上等待。
+// 由 capturer 给出交给业务的错误（可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排，RR-20260926-64），
+// 不在快 worker 上等待。
 // Nest 之外（Create 自建的短作用域、独立 WithGuardScope）沿用原来的等待取锁。
 func (e *EntityGuard) lockCreated(ent IThreadSafeEntity, capturer CreatedEntityCapturer) error {
 	if capturer != nil && !e.mayLock(ent.GUId(), e.maxLockedGroup()) {

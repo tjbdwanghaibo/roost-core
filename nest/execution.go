@@ -123,6 +123,7 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	if msg != nil && !msg.txInFlight {
 		owner = msg
 		owner.txInFlight = true
+		owner.txNoRollback = meta.Rollback == RollbackNone
 		defer func() { owner.txInFlight = false }()
 	}
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
