@@ -22,8 +22,9 @@ type ModStopperWithContext interface {
 }
 
 // ModStopBudgetProvider 由需要固定停机时长的 Mod 实现（例如 dataengine 的
-// dataengine.shutdown_timeout：排空 WAL 与投影）。App 在 shutdown.total_timeout 内
-// 优先把声明的预算分给它，其余 Mod 均分剩下的时间；总时长不够时按比例缩放并告警。
+// dataengine.shutdown_timeout：排空 WAL 与投影）。App 先为每个未声明的 Mod 留出固定保底，
+// 在 shutdown.total_timeout 的其余部分内把声明的预算分给它，未声明的 Mod 均分剩下的时间；
+// 声明预算之和超过这一上限时按比例缩放并告警（RR-20260926-51）。
 // 返回值 <= 0 视为未声明。只影响 App 给 StopWithContext 的截止时间，超时后仍按
 // 既有语义停止后续 Mod 的关闭、保留它们的资源。
 type ModStopBudgetProvider interface {

@@ -144,7 +144,7 @@ WorkingDirectory=$APP_ROOT
 ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
 Restart=on-failure
 RestartSec=2s
-TimeoutStopSec=45s
+TimeoutStopSec=65s
 KillSignal=SIGTERM
 LimitNOFILE=1048576
 UMask=0027
@@ -554,7 +554,7 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	fmt.Fprintf(&head, "        app.kubernetes.io/name: %s\n        app.kubernetes.io/component: %s\n", m.Project.Name, service)
 	head.WriteString("      annotations:\n        prometheus.io/scrape: \"true\"\n        prometheus.io/port: \"9100\"\n        prometheus.io/path: /metrics\n    spec:\n")
 	fmt.Fprintf(&head, "      serviceAccountName: %s\n", m.Project.Name)
-	head.WriteString("      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: 45\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
+	head.WriteString("      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: 65\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
 	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
 	if serviceOwnsPlayerTCP(m, service) {
@@ -634,7 +634,7 @@ func renderKubernetesReadme(m Manifest) string {
 - Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
-- /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds 必须大于框架总停机预算。
+- /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds（模板 65s）必须 ≥ shutdown.total_timeout（生成配置 60s）+ 5s；调大 total_timeout 时同步调大宽限期与 systemd TimeoutStopSec。
 - 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
 `, services.String(), m.Project.Name, m.Project.Name, m.Project.Name)
 }

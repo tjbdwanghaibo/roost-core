@@ -521,12 +521,13 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	b.WriteString("sid: 1000\n")
 	b.WriteString("log:\n  level: info\n  json: true\n  stdout: true\n  file: true\n  dir: log\n")
 	b.WriteString("shutdown:\n" +
-		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. A Mod that\n" +
-		"  # declares a stop budget (dataengine.shutdown_timeout) is granted it first; each other Mod\n" +
-		"  # shares the rest with a 5s baseline. When the window cannot cover them all, every budget is\n" +
-		"  # scaled down proportionally and a warning is logged. Keep it >= dataengine.shutdown_timeout\n" +
-		"  # + 5s x the other Mods, and below the deployment's termination grace period.\n" +
-		"  total_timeout: 30s\n  serve_wait_timeout: 5s\n")
+		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
+		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
+		"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
+		"  # when the rest cannot cover it. Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n" +
+		"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n" +
+		"  # stop_grace_period, systemd TimeoutStopSec) must be >= total_timeout + 5s: 65s by default.\n" +
+		"  total_timeout: 60s\n  serve_wait_timeout: 5s\n")
 	seen := map[string]bool{}
 	for _, name := range mods {
 		if !seen[name] && modCatalog[name].Config != "" {

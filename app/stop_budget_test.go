@@ -1,10 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +13,7 @@ import (
 
 // RR-20260926-42（REPRO-2026-09-26-04 §8 改写）：Mod 通过 StopBudget 声明所需停机预算，
 // App 在 shutdown.total_timeout 内优先分配给它，其余 Mod 均分剩余；总时长不足时按比例
-// 缩放并告警。修前 dataengine 只拿到“剩余 / 剩余 mod 数”（总 30s 时 5/7/10 个 mod 分别
+// 缩放并告警（缩放规则 RR-20260926-51 改为“剩余 − 未声明保底”封顶，见 stop_budget_floor_test.go）。修前 dataengine 只拿到“剩余 / 剩余 mod 数”（总 30s 时 5/7/10 个 mod 分别
 // 7.5s/6s/4.29s），dataengine.shutdown_timeout 不生效。
 
 // budgetRecorder 记录每个 Mod 在 StopWithContext 入口看到的剩余截止时长。
@@ -101,7 +99,7 @@ func assertBudgetNear(t *testing.T, what string, got, want time.Duration) {
 }
 
 func TestDeclaredStopBudgetIsHonoredWithinTotalTimeout(t *testing.T) {
-	// 90s 足够覆盖 20s 声明 + 最多 9 个未声明 Mod x 5s 基准，三种组合都不需要缩放。
+	// 90s 足够覆盖 20s 声明 + 最多 9 个未声明 Mod 的保底，三种组合都不需要缩放。
 	const total, declared = 90 * time.Second, 20 * time.Second
 	for _, order := range reproStopOrders {
 		rec := newBudgetRecorder()
@@ -120,46 +118,31 @@ func TestDeclaredStopBudgetIsHonoredWithinTotalTimeout(t *testing.T) {
 }
 
 func TestStopBudgetsScaleProportionallyWhenTotalIsInsufficient(t *testing.T) {
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(previous)
+	logs := captureWarnings(t)
 
-	// 生成配置的默认值：shutdown.total_timeout=30s，dataengine.shutdown_timeout=30s。
+	// RR-42 时的生成默认值（未重新生成配置的工程仍是它）：shutdown.total_timeout=30s，
+	// dataengine.shutdown_timeout=30s。RR-51 起按“剩余 − 未声明保底”封顶：先停 nest 时
+	// 上限 = 30 − 4 x 3s = 18s < 30s，声明值被缩放，nest 恰好拿保底 3s；nest 立即结束后为
+	// dataengine 重新规划：上限 = 30 − 3 x 3s = 21s，dataengine 拿 21s 并告警（修前 7.5s，
+	// RR-42 的“一起缩放”为 20s）。
 	const total, declared = 30 * time.Second, 30 * time.Second
-	order := reproStopOrders[0]
 	rec := newBudgetRecorder()
-	ctx, cancel := context.WithTimeout(context.Background(), total)
-	err := stopModsReverseWithContext(ctx, stopBudgetMods(order, "dataengine", declared, rec), "test stop")
-	cancel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 先停 nest：需求 = 30s 声明 + 4 个未声明 Mod x defaultModStopTimeout(5s) = 50s > 30s，
-	// 按 30/50 缩放，nest 拿 3s。nest 立即结束后为 dataengine 重新规划：剩余仍约 30s，
-	// 需求 = 30s + 3 x 5s = 45s，dataengine 拿 30 x 30/45 = 20s（修前 7.5s）。
-	scaledShare := func(want, need time.Duration) time.Duration {
-		return time.Duration(float64(want) * float64(total) / float64(need))
-	}
-	assertBudgetNear(t, "nest", rec.get("nest"), scaledShare(defaultModStopTimeout, declared+4*defaultModStopTimeout))
-	assertBudgetNear(t, "dataengine", rec.get("dataengine"), scaledShare(declared, declared+3*defaultModStopTimeout))
+	runStopBudgetPlan(t, total, stopBudgetMods(reproStopOrders[0], "dataengine", declared, rec))
+	assertBudgetNear(t, "nest", rec.get("nest"), undeclaredModStopFloor)
+	assertBudgetNear(t, "dataengine", rec.get("dataengine"), total-3*undeclaredModStopFloor)
 	if !strings.Contains(logs.String(), "dataengine") || !strings.Contains(logs.String(), "scaled") {
 		t.Fatalf("no scale-down warning for dataengine; logs:\n%s", logs.String())
 	}
 }
 
-// REPRO §8 的三种组合，用生成配置的默认值（总 30s、dataengine 30s）：修前 7.5s / 6s / 4.29s。
-// 轮到 dataengine 时其后分别还有 3 / 4 / 6 个未声明 Mod，需求 45s / 50s / 60s，按比例得 20s / 18s / 15s。
+// REPRO-2026-09-26-04 §8 的三种组合，用 RR-42 时的生成默认值（总 30s、dataengine 30s）：修前
+// 7.5s / 6s / 4.29s。轮到 dataengine 时其后分别还有 3 / 4 / 6 个未声明 Mod，上限 30 − 3s x 未声明数，
+// 得 21s / 18s / 12s。新的生成默认值（总 60s）见 TestGeneratedDefaultShutdownBudgetsCoverEveryMod。
 func TestGeneratedDefaultsGrantDataEngineItsScaledDeclaredBudget(t *testing.T) {
 	const total, declared = 30 * time.Second, 30 * time.Second
-	for i, want := range []time.Duration{20 * time.Second, 18 * time.Second, 15 * time.Second} {
+	for i, want := range []time.Duration{21 * time.Second, 18 * time.Second, 12 * time.Second} {
 		rec := newBudgetRecorder()
-		ctx, cancel := context.WithTimeout(context.Background(), total)
-		err := stopModsReverseWithContext(ctx, stopBudgetMods(reproStopOrders[i], "dataengine", declared, rec), "test stop")
-		cancel()
-		if err != nil {
-			t.Fatal(err)
-		}
+		runStopBudgetPlan(t, total, stopBudgetMods(reproStopOrders[i], "dataengine", declared, rec))
 		assertBudgetNear(t, fmt.Sprintf("%d mods: dataengine", len(reproStopOrders[i])), rec.get("dataengine"), want)
 	}
 }

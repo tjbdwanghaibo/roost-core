@@ -118,7 +118,7 @@ kubectl -n roost get pod,pvc,svc,pdb
 
 ## 8. 停机与回滚
 
-Kubernetes 先让 readiness 失败并停止新请求，再发送 SIGTERM。`terminationGracePeriodSeconds` 必须大于 `shutdown.total_timeout`，并给 preStop/网络摘流留余量。最终退出前检查 Nest admission 关闭、Service Shutdown、Saga/consumer drain、Data Engine Flush/WAL shutdown 和连接关闭的错误。
+Kubernetes 先让 readiness 失败并停止新请求，再发送 SIGTERM。`terminationGracePeriodSeconds` 必须 ≥ `shutdown.total_timeout` + 5s，并给 preStop/网络摘流留余量：生成配置 `shutdown.total_timeout: 60s`（`dataengine.shutdown_timeout: 30s`），生成的 k8s 模板 `terminationGracePeriodSeconds: 65`、compose `stop_grace_period: 65s`、systemd `TimeoutStopSec=65s`、`deploy/dev/run.sh`（`make dev-stop`）等待 65s 后才 `kill -9`；加 preStop sleep 或调大 `total_timeout` 时同步调大这些值（RR-20260926-51）。停机预算的分配：每个未声明预算的 Mod 保底 3s，声明预算的 Mod（dataengine）从其余时间拿声明值，`total_timeout` 应 ≥ `dataengine.shutdown_timeout` + 3s × 其他 Mod 数，不足时记 Warn `mod stop budget scaled down`（详见 kit/README.md §3.4）。RR-51 之前生成、仍为 `total_timeout: 30s`、宽限期 45s 的工程应一并改为 60s / 65s。最终退出前检查 Nest admission 关闭、Service Shutdown、Saga/consumer drain、Data Engine Flush/WAL shutdown 和连接关闭的错误。
 
 可回滚的前提是旧版本能读取新版本已经写入的 wire、WAL 和数据库数据。否则选择前滚修复。回滚有状态实例前：停止新 writer、记录 route/marker/fence、快照 PVC/数据库、再启动旧制品；绝不能让旧新两个 writer 同时运行。
 

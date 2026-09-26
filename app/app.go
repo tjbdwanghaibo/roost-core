@@ -454,9 +454,14 @@ func stopIncomplete(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// defaultModStopTimeout 是未声明预算的 Mod 的基准停机时长：没有总截止时间时直接使用；
-// 有总截止时间时作为它在预算规划里的需求（见 modStopBudget）。
+// defaultModStopTimeout 是没有总截止时间（兼容 Stop 路径）时未声明预算的 Mod 的停机时长。
 const defaultModStopTimeout = 5 * time.Second
+
+// undeclaredModStopFloor 是有总截止时间时每个未声明预算的 Mod 的固定保底（RR-20260926-51）：
+// 规划先为它们留出保底，声明预算只能用剩下的部分；保底不随声明预算一起缩放，先停的 Mod 因此
+// 不会被一个很大的声明值压到接近零——那会让它立即超时并中断整条关闭链。取 3s，与生成配置的
+// nest.request_timeout 同值（Nest 排空已准入请求的上限）。
+const undeclaredModStopFloor = 3 * time.Second
 
 // declaredStopBudget 返回 Mod 通过 ModStopBudgetProvider 声明的预算，未声明为 0。
 func declaredStopBudget(mod Mod) time.Duration {
@@ -467,19 +472,38 @@ func declaredStopBudget(mod Mod) time.Duration {
 	return max(provider.StopBudget(), 0)
 }
 
+// stopBudgetPlan 是某一时刻“剩余总时长”在尚未停止的 Mod 之间的分配结果。
+type stopBudgetPlan int
+
+const (
+	// stopBudgetDeclaredGranted：声明的 Mod 拿到声明值，未声明的均分其余（每个不低于保底）。
+	stopBudgetDeclaredGranted stopBudgetPlan = iota
+	// stopBudgetDeclaredScaled：声明值之和超过“剩余 − 未声明保底之和”，声明值按比例缩放到这个上限，
+	// 未声明的 Mod 恰好拿保底。
+	stopBudgetDeclaredScaled
+	// stopBudgetEvenSplit：剩余连每个 Mod 一份保底都给不起，所有 Mod（含声明的）均分剩余。
+	stopBudgetEvenSplit
+)
+
 // modStopBudget 在剩余总时长 remaining 内为 mod 分配停机截止时长。pending 是同一段里在它
-// 之后停止的 Mod；later 是之后另一段才停止的 Mod，只贡献声明预算。每停一个 Mod 重新规划
-// 一次，前面 Mod 提前结束省下的时间自然留给后面。
+// 之后停止的 Mod；later 是之后另一段才停止的 Mod，只贡献声明预算（later 中未声明的 Mod 不参与
+// 这一段的规划，与 RR-42 之前相同）。每停一个 Mod 重新规划一次，前面 Mod 提前结束省下的时间
+// 自然留给后面。
 //
-// 需求 = 声明预算之和 + 本段未声明 Mod 数 x defaultModStopTimeout。需求不超过剩余时间时，
-// 声明的 Mod 恰好拿到声明值，本段未声明的 Mod 均分其余（每个不少于基准）；超过时全部需求
-// 按“剩余 / 需求”同比缩放（scaled=true）：声明预算之和因此不超过总时长，未声明的 Mod 也
-// 不会拿到零——零截止时间会让它立即超时并中断整条关闭链。没有任何 Mod 声明预算时，结果与
-// 原先的“剩余 / 本段剩余 Mod 数”相同。
-func modStopBudget(remaining time.Duration, mod Mod, pending, later []Mod) (budget time.Duration, scaled bool) {
+// 规则（RR-20260926-51，维护者批准）：
+//   - 保底之和 = 本段未声明 Mod 数 x undeclaredModStopFloor；声明预算的上限 = remaining − 保底之和。
+//   - 声明值之和不超过上限：声明的 Mod 拿到声明值，未声明的 Mod 均分 remaining − 声明值之和。
+//   - 超过上限：声明值按“上限 / 声明值之和”缩放，未声明的 Mod 各拿保底；保底不参与缩放。
+//   - remaining 不足以给参与规划的每个 Mod 一份保底：全部均分 remaining（声明的 Mod 也一样）。
+//
+// 没有任何 Mod 声明预算时三种情形都退化为“remaining / 本段剩余 Mod 数”，与原先相同。
+// 声明预算之和因此永远不超过剩余总时长。
+func modStopBudget(remaining time.Duration, mod Mod, pending, later []Mod) (time.Duration, stopBudgetPlan) {
 	own := declaredStopBudget(mod)
-	declared, undeclared := own, 0
-	if own == 0 {
+	declared, declaring, undeclared := own, 0, 0
+	if own > 0 {
+		declaring = 1
+	} else {
 		undeclared = 1
 	}
 	for _, next := range pending {
@@ -488,24 +512,36 @@ func modStopBudget(remaining time.Duration, mod Mod, pending, later []Mod) (budg
 		}
 		if b := declaredStopBudget(next); b > 0 {
 			declared += b
+			declaring++
 		} else {
 			undeclared++
 		}
 	}
 	for _, next := range later {
-		if next != nil {
-			declared += declaredStopBudget(next)
+		if next == nil {
+			continue
+		}
+		if b := declaredStopBudget(next); b > 0 {
+			declared += b
+			declaring++
 		}
 	}
-	need := declared + time.Duration(undeclared)*defaultModStopTimeout
-	scale := 1.0
-	if need > remaining {
-		scale, scaled = float64(remaining)/float64(need), true
+	participants := time.Duration(declaring + undeclared)
+	if remaining < participants*undeclaredModStopFloor {
+		return remaining / participants, stopBudgetEvenSplit
+	}
+	floors := time.Duration(undeclared) * undeclaredModStopFloor
+	capacity := remaining - floors
+	if declared <= capacity {
+		if own > 0 {
+			return own, stopBudgetDeclaredGranted
+		}
+		return (remaining - declared) / time.Duration(undeclared), stopBudgetDeclaredGranted
 	}
 	if own > 0 {
-		return time.Duration(float64(own) * scale), scaled
+		return time.Duration(float64(own) * float64(capacity) / float64(declared)), stopBudgetDeclaredScaled
 	}
-	return (remaining - time.Duration(float64(declared)*scale)) / time.Duration(undeclared), scaled
+	return undeclaredModStopFloor, stopBudgetDeclaredScaled
 }
 
 // modStopContext 给一个 Mod 的 StopWithContext 建立截止时间，并返回所给的时长（日志用）。
@@ -528,11 +564,17 @@ func modStopContext(parent context.Context, mod Mod, pending, later []Mod) (cont
 		ctx, cancel := context.WithCancel(parent)
 		return ctx, cancel, 0
 	}
-	budget, scaled := modStopBudget(remaining, mod, pending, later)
-	if declared := declaredStopBudget(mod); scaled && declared > 0 {
-		slog.Warn("mod stop budget scaled down: shutdown.total_timeout cannot cover every declared budget plus the default share of the other mods",
+	budget, plan := modStopBudget(remaining, mod, pending, later)
+	declared := declaredStopBudget(mod)
+	switch {
+	case plan == stopBudgetEvenSplit:
+		slog.Warn("mod stop budget: shutdown.total_timeout cannot cover the per-mod floor; splitting the remaining time evenly",
 			"mod", mod.Name(), "declared", declared, "granted", budget, "remaining", remaining,
-			"default_mod_budget", defaultModStopTimeout)
+			"floor", undeclaredModStopFloor)
+	case plan == stopBudgetDeclaredScaled && declared > 0:
+		slog.Warn("mod stop budget scaled down: shutdown.total_timeout minus the other mods' floors cannot cover every declared budget",
+			"mod", mod.Name(), "declared", declared, "granted", budget, "remaining", remaining,
+			"floor", undeclaredModStopFloor)
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	return ctx, cancel, budget

@@ -287,8 +287,8 @@ func (mod *Mod) Stop() {
 }
 
 // StopBudget 声明 dataengine.shutdown_timeout 为 App 停机预算（app.ModStopBudgetProvider）：
-// App 在 shutdown.total_timeout 内优先把这段时间给 StopWithContext 排空 WAL 与投影，
-// 总时长不够时按比例缩放并告警（RR-20260926-42）。未 Init 时为 0，即不声明。
+// App 在 shutdown.total_timeout 扣除其他未声明 Mod 的固定保底后优先把这段时间给 StopWithContext
+// 排空 WAL 与投影，不够时按比例缩放并告警（RR-20260926-42、RR-20260926-51）。未 Init 时为 0，即不声明。
 func (mod *Mod) StopBudget() time.Duration {
 	if mod == nil {
 		return 0

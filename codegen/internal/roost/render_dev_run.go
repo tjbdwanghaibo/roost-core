@@ -148,7 +148,7 @@ cmd_stop() {
       if kill -0 "$pid" 2>/dev/null; then
         echo "stopping $svc (pid $pid)"
         kill "$pid" 2>/dev/null || true
-        i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
+        i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 65 ]; do i=$((i + 1)); sleep 1; done
         kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
       fi
       rm -f "$DEV_DIR/$svc.pid"
@@ -282,7 +282,7 @@ cmd_stop() {
   pid=$(cat "$PID_FILE")
   kill "$pid" 2>/dev/null || true
   i=0
-  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 65 ]; do i=$((i + 1)); sleep 1; done
   rm -f "$PID_FILE"
   echo "${SERVICE}2: stopped"
 }

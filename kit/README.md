@@ -352,14 +352,20 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 | statslog | ✅ | 有界：卡住的 provider 不会挂死停服（文件留给后台关闭） |
 | saga / nest | ✅ | App 传入统一 `shutdown.total_timeout`；直接调用兼容 `Stop()` 才使用 background context |
 
-App 的分配规则（RR-20260926-42）：Service.Shutdown 之后，Mod 逆序停止，每停一个按剩余时间重新规划。实现了
-`app.ModStopBudgetProvider`（`StopBudget() time.Duration`，<=0 视为未声明）的 Mod 优先拿到声明的预算；未声明的 Mod 以
-5s 为基准需求，均分剩下的时间。需求合计（声明预算 + 未声明 Mod 数 × 5s）超过剩余时间时，全部按比例缩放，声明的 Mod
-被缩减时记 Warn 日志 `mod stop budget scaled down`；声明预算之和因此不会超过总时长，未声明的 Mod 也不会拿到零截止时间。
-服务专属 Mod 先于共享 Mod 停止，规划时会为之后的共享 Mod 保留它们声明的预算。没有 Mod 声明预算时与原先“剩余 / 剩余 Mod 数”
-相同；没有总截止时间的兼容路径（启动失败回滚）下，声明的 Mod 用声明值，其余 5s。某个 Mod 超时后仍按既有语义停止后续关闭、
-保留其余 Mod 的资源。生成配置的默认值 `total_timeout: 30s` 与 `dataengine.shutdown_timeout: 30s` 属于“不够”的情形
-（共 5 / 7 / 10 个 Mod 时 dataengine 分别约 20s / 18s / 15s 并告警，修前为 7.5s / 6s / 4.3s），生产环境建议 `total_timeout ≥ dataengine.shutdown_timeout + 5s × 其他 Mod 数`。
+App 的分配规则（RR-20260926-42，RR-20260926-51 修订）：Service.Shutdown 之后，Mod 逆序停止，每停一个按剩余时间重新规划。
+实现了 `app.ModStopBudgetProvider`（`StopBudget() time.Duration`，<=0 视为未声明）的 Mod 先按声明值分配，上限为
+“剩余时间 − 每个未声明 Mod 的固定保底（3s）”；未声明的 Mod 均分其余（每个不低于 3s）。只有声明值之和超过上限时才按比例
+缩放声明值，此时未声明的 Mod 恰好拿保底，声明的 Mod 记 Warn `mod stop budget scaled down`；保底是固定下限、不参与缩放，
+所以一个很大的声明值不会把先停的 Mod 压到接近零而中断关闭链。剩余时间连每个 Mod 一份保底都给不起时全部均分并记 Warn
+（`cannot cover the per-mod floor`）。声明预算之和永远不超过剩余总时长。服务专属 Mod 先于共享 Mod 停止，规划时会为之后的
+共享 Mod 保留它们声明的预算。没有 Mod 声明预算时与原先“剩余 / 剩余 Mod 数”相同；没有总截止时间的兼容路径（启动失败回滚）下，
+声明的 Mod 用声明值，其余 5s。某个 Mod 超时后仍按既有语义停止后续关闭、保留其余 Mod 的资源。
+
+生成配置的默认值为 `shutdown.total_timeout: 60s`、`dataengine.shutdown_timeout: 30s`：5 / 7 / 10 个 Mod 时 dataengine 都拿满 30s，
+先停的 Mod 各得 7.5s / 5s / 3.3s，不告警。自定义时保持 `total_timeout ≥ dataengine.shutdown_timeout + 3s × 其他 Mod 数`，
+部署的终止宽限期（k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`）≥ `total_timeout + 5s`，
+默认即 ≥ 65s。RR-51 之前生成、仍为 `total_timeout: 30s` 的工程，dataengine 在 5 / 7 / 10 个 Mod 时得 21s / 18s / 12s 并告警，
+建议改为 60s 并同步放宽宽限期。
 
 ### 3.5 Durability 管线全景（nest 事务 → 磁盘 → 数据库）
 

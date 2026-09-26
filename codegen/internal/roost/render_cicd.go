@@ -449,7 +449,7 @@ func renderProductionCompose(m Manifest) string {
 		fmt.Fprintf(&b, "    container_name: %s-%s\n", m.Project.Name, service)
 		fmt.Fprintf(&b, "    command: [%q, \"--sid=%d\", \"--config=/etc/roost/config.yaml\"]\n", service, sid)
 		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]\n")
-		b.WriteString("    stop_grace_period: 45s\n    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: 30s\n")
+		b.WriteString("    stop_grace_period: 65s\n    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: 30s\n")
 		// Long syntax with an explicit type. In short syntax a source that
 		// does not begin with "/", "./" or "../" is a NAMED volume, so a
 		// relative ROOST_CONFIG_ROOT made compose report "refers to undefined
