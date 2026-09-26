@@ -81,6 +81,9 @@ type deferredRemoteClose struct {
 	attempt    int
 	// projectionDeadline 是 Durability 1/2 等待投影器结论的截止时间，首次处理时设定（RR-20260926-38）。
 	projectionDeadline time.Time
+	// settled 表示持久拒绝已收尾（回滚、隔离、gate/fence/写额度已交还），这一项只剩仅内存卸载
+	// 需要完成或重试（RR-20260926-39）；排空与重试都不能再次释放。
+	settled bool
 }
 
 // remoteUnresolvedRejecter 以事务 _id 持久写入拒绝，撞键时返回已有事务的真实状态。
@@ -253,6 +256,11 @@ func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
 // abandonDeferredRemoteClose 是停机排空：拿不到持久结论也要交还 gate、fence 与写额度，
 // 但实体保持隔离（结果未知不能当作已提交或已回滚）。
 func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
+	if item.settled {
+		// 资源早已交还；未完成的卸载放弃，实例保持隔离。
+		state.traceFinalize(item.txID, "abandoned")
+		return
+	}
 	if quarantineErr := m.quarantineEntries(item.entries, state.finalizeCtx.Err()); quarantineErr != nil {
 		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
 	}
@@ -270,6 +278,10 @@ func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRe
 // 只等 tracker 结束或 FinalizeProjectionTimeout 到期（RR-20260926-38）；投影器报告未知
 // （Indeterminate）或超期后才按 RR-19 回源取得持久结论。Durability 0 没有 WAL，一律回源。
 func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
+	if item.settled {
+		m.finishRejectedRemoteClose(state, item)
+		return
+	}
 	if item.durability != 0 {
 		if item.projectionDeadline.IsZero() {
 			item.projectionDeadline = time.Now().Add(m.finalizeProjectionTimeout())
@@ -310,7 +322,8 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
 			m.releaseRemoteWriteSlot()
-			state.traceFinalize(item.txID, "released")
+			item.settled = true
+			m.finishRejectedRemoteClose(state, item)
 			return
 		}
 	}
@@ -320,6 +333,27 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 	if quarantineErr := m.quarantineEntries(item.entries, err); quarantineErr != nil {
 		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
 	}
+	m.scheduleDeferredRetry(state, item)
+}
+
+// finishRejectedRemoteClose 完成持久拒绝后的仅内存卸载（RR-20260926-39）：gate 已释放，旧实例经
+// 本地执行入口卸载，下一次访问从权威重载。卸载失败时实例保持隔离、按退避重试；loader 不支持卸载时
+// 维持旧行为（隔离到业务重新加载）。
+func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRemoteClose) {
+	err := m.unloadRejectedEntities(m.localContext(state.finalizeCtx), item.entries)
+	if err == nil || errors.Is(err, entity.ErrRemoteUnloadUnsupported) {
+		if err != nil {
+			metrics.IncCounter("remote_entity.rejected_unload_unsupported_total", nil, 1)
+		}
+		state.traceFinalize(item.txID, "released")
+		return
+	}
+	metrics.IncCounter("remote_entity.rejected_unload_error_total", nil, 1)
+	m.scheduleDeferredRetry(state, item)
+}
+
+// scheduleDeferredRetry 以有界指数退避把收尾项重新入队，不占 finalizer worker。
+func (m *Manager) scheduleDeferredRetry(state *remoteState, item deferredRemoteClose) {
 	metrics.IncCounter("remote_entity.finalize_retry_total", nil, 1)
 	item.attempt++
 	delay := m.cfg.FinalizeRetryInterval
@@ -448,7 +482,7 @@ func remoteCommitStateLabel(state entity.RemoteCommitState) string {
 // 的修改一并 CAS 进 Mongo。框架无法证明内存已回到权威状态，因此批次内实体一律隔离到重新
 // 加载为止（RR-20260926-28 复核）；隔离失败时返回错误，调用方保留 gate 重试，不释放。
 func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) error {
-	runErr := entity.RunLocal(ctx, func() {
+	runErr := entity.RunLocal(m.localContext(ctx), func() {
 		m.rollbackRemoteEntries(entries)
 		for _, entry := range entries {
 			if entry != nil {

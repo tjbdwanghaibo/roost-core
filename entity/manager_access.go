@@ -2,6 +2,7 @@ package entity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -385,6 +386,35 @@ func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntit
 	return access.manager.Destroy(ctx, value, reason, deleteFromDB)
 }
 
+// Unload 把实例从本进程内存卸载、不删持久数据：内存状态已不可信、须从权威重建时使用（DataEngine 驱逐
+// 被 lease fence 跳过的原生步骤留下的实体，RR-20260926-30；Remote 事务被持久拒绝后的实例，RR-20260926-39）。
+// 内部是 EntityManager.Destroy(deleteFromDB=false, DestroyReasonMemoryUnload)：自己取实体锁、先从索引删除，
+// 在途引用由 Touch 计数保护（归零才清理），Guard 对已移除实体拒绝加锁；实体的 SubjectSyncState 随之关闭，
+// Sync 订阅保持登记，等重载后的实例经 Rebind（kit 在 EntityRepository.OnEntityLoaded 上接好）强制全量。
+// 之后 Get 未命中、经已配置的 loader 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。
+// 需要实体锁：调用方在本地执行入口（快池，或 Nest 未装配时就地）调用。
+func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity) error {
+	if access == nil || access.manager == nil {
+		return ErrEntityNotManaged
+	}
+	if value == nil {
+		return nil
+	}
+	err := access.manager.Destroy(ctx, value, DestroyReasonMemoryUnload, false)
+	if errors.Is(err, ErrEntityRemoved) || errors.Is(err, ErrEntityNotManaged) {
+		return nil
+	}
+	return err
+}
+
+// UnloadRemoteEntity 实现 IRemoteEntityUnloader，与 Unload 同一路径。
+func (access *ManagerAccess) UnloadRemoteEntity(ctx context.Context, value IThreadSafeRemoteEntity) error {
+	if value == nil {
+		return nil
+	}
+	return access.Unload(ctx, value)
+}
+
 func (access *ManagerAccess) ConfigureIDGenerator(generator func() (uint64, error)) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
@@ -396,3 +426,4 @@ var _ Getter = (*ManagerAccess)(nil)
 var _ LoadedChecker = (*ManagerAccess)(nil)
 var _ IRemoteEntityLoader = (*ManagerAccess)(nil)
 var _ IRemoteEntityLocalLookup = (*ManagerAccess)(nil)
+var _ IRemoteEntityUnloader = (*ManagerAccess)(nil)

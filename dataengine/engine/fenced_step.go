@@ -212,14 +212,12 @@ func (runtime *Runtime) evictStaleEntities(ctx context.Context, ids []int64) err
 		if resident == nil {
 			continue
 		}
+		// 与 Remote 持久拒绝后的卸载（RR-20260926-39）同一入口：ManagerAccess.Unload 只卸载内存、
+		// 已被别的路径卸载或替换时返回 nil。
 		var destroyErr error
 		runErr := entity.RunLocal(entity.WithLocalExecutor(ctx, runtime.Projector.localRun()), func() {
-			destroyErr = runtime.access.Destroy(ctx, resident, entity.DestroyReasonCommon, false)
+			destroyErr = runtime.access.Unload(ctx, resident)
 		})
-		if errors.Is(destroyErr, entity.ErrEntityRemoved) || errors.Is(destroyErr, entity.ErrEntityNotManaged) {
-			// 已被别的路径卸载：本进程不再持有这份内存，目的已经达到。
-			destroyErr = nil
-		}
 		if err := errors.Join(runErr, destroyErr); err != nil {
 			errs = append(errs, fmt.Errorf("entity %d: %w", id, err))
 			continue

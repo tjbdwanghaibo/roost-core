@@ -40,6 +40,14 @@ func (b *Backend) LookupLocalRemoteEntity(id int64, kind entity.EntityKind) enti
 	return nil
 }
 
+// UnloadRemoteEntity 转发给 loader；loader 不支持卸载时返回 entity.ErrRemoteUnloadUnsupported。
+func (b *Backend) UnloadRemoteEntity(ctx context.Context, e entity.IThreadSafeRemoteEntity) error {
+	if unloader, ok := b.loader.(entity.IRemoteEntityUnloader); ok {
+		return unloader.UnloadRemoteEntity(ctx, e)
+	}
+	return entity.ErrRemoteUnloadUnsupported
+}
+
 func (b *Backend) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
 	return b.storage.CommitRemote(ctx, commit)
 }

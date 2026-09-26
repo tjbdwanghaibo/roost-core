@@ -105,6 +105,15 @@ func (w *remoteEntityWrapper) attachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Unlock()
 }
 
+// detachEntity 在实例被仅内存卸载后解除关联；已换成新实例时不动（RR-20260926-39）。
+func (w *remoteEntityWrapper) detachEntity(e entity.IThreadSafeRemoteEntity) {
+	w.entityMu.Lock()
+	if w.e == e {
+		w.e = nil
+	}
+	w.entityMu.Unlock()
+}
+
 func (w *remoteEntityWrapper) attachedEntity() entity.IThreadSafeRemoteEntity {
 	w.entityMu.Lock()
 	e := w.e

@@ -20,6 +20,8 @@ type remoteWriteEntry struct {
 	distLock  bool
 	finalized bool
 	commit    entity.RemoteCommit
+	// unloaded 表示持久拒绝后旧实例已被仅内存卸载（RR-20260926-39），重试时跳过。
+	unloaded bool
 }
 
 type remoteWriteBatch struct {
@@ -33,8 +35,10 @@ type remoteWriteBatch struct {
 	committed     bool
 	aborted       bool
 	indeterminate bool
-	closed        bool
-	reserved      bool
+	// rejected 表示 Durability 0 被权威明确拒绝，Commit 已同步回滚并隔离；Close 释放后卸载旧实例（RR-20260926-39）。
+	rejected bool
+	closed   bool
+	reserved bool
 }
 
 var _ entity.RemoteWriteBatch = (*remoteWriteBatch)(nil)
@@ -463,6 +467,9 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 			b.mu.Unlock()
 		} else if outcome.Durability == 0 {
 			err = errors.Join(err, entity.RunLocal(ctx, func() { b.mgr.rollbackRemoteEntries(b.entries) }))
+			b.mu.Lock()
+			b.rejected = true
+			b.mu.Unlock()
 		}
 		return nil, errors.Join(err, b.mgr.quarantineEntries(b.entries, err))
 	}
@@ -547,6 +554,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	deferred := b.indeterminate || (b.committed && b.outcome.Durability == 1 && len(b.commitsLocked()) > 0)
 	txID := b.outcome.TransactionID
 	durability := b.outcome.Durability
+	rejected := b.rejected
 	b.entries = nil
 	b.mu.Unlock()
 	if deferred {
@@ -558,6 +566,16 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	if b.reserved {
 		b.mgr.releaseRemoteWriteSlot()
 		b.reserved = false
+	}
+	if rejected {
+		// 明确拒绝已回滚并隔离；gate 释放后卸载持有被拒绝修改的旧实例（ctx 带消息的快池续行）。
+		// 卸载失败交给 finalizer 重试（这一项不再持有任何资源）；finalizer 已停止时实例保持隔离。
+		unloadErr := b.mgr.unloadRejectedEntities(ctx, entries)
+		if unloadErr != nil && !errors.Is(unloadErr, entity.ErrRemoteUnloadUnsupported) {
+			if deferErr := b.mgr.deferRemoteClose(deferredRemoteClose{txID: txID, durability: durability, entries: entries, settled: true}); deferErr != nil {
+				err = errors.Join(err, unloadErr)
+			}
+		}
 	}
 	return err
 }

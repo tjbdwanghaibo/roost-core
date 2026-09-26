@@ -376,8 +376,14 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	ret.ticker = NewTicker(params.TickDuration)
 	// committer 的可选能力：DataEngine 需要在快池持锁执行框架步骤（驱逐被跳过的原生步骤留下的
 	// 实体，RR-20260926-30），这里把本引擎的 RunLocal 交给它。
+	// Remote Manager 的后台收尾（finalizer）同样需要：持久拒绝后的回滚与仅内存卸载、确认无结论时
+	// 延迟执行的提交后回调（RR-20260926-37/39）。两者共用这一个入口。
+	runLocal := func(fn func()) error { return ret.RunLocal(context.Background(), fn) }
 	if binder, ok := params.Committer.(LocalExecutorBinder); ok {
-		binder.BindLocalExecutor(func(fn func()) error { return ret.RunLocal(context.Background(), fn) })
+		binder.BindLocalExecutor(runLocal)
+	}
+	if binder, ok := params.RemoteManager.(LocalExecutorBinder); ok {
+		binder.BindLocalExecutor(runLocal)
 	}
 	return ret
 }
