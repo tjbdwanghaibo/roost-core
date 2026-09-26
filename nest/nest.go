@@ -385,6 +385,11 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if binder, ok := params.RemoteManager.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
 	}
+	// Getter（entity.ManagerAccess）的共享冷加载与调用方解耦：领头的慢阶段请求截止离开后，加载仍在
+	// 进行，发布实体不能再经那条已结束消息的快续行，改走这个入口（RR-20260926-54）。
+	if binder, ok := params.Getter.(LocalExecutorBinder); ok {
+		binder.BindLocalExecutor(runLocal)
+	}
 	return ret
 }
 

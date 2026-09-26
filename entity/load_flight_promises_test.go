@@ -46,7 +46,7 @@ func TestALoaderPanicDoesNotWedgeTheEntity(t *testing.T) {
 				t.Fatal("the loader panic was swallowed; a failed load must not look like a successful one")
 			}
 		}()
-		_, _ = access.loadEntityShared(context.Background(), fullID, 1, loader)
+		_, _ = access.loadEntityShared(context.Background(), fullID, 1, entityLoaderBinding{loader: loader})
 	}()
 
 	access.flightMu.Lock()
@@ -61,7 +61,7 @@ func TestALoaderPanicDoesNotWedgeTheEntity(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := access.loadEntityShared(ctx, fullID, 1, loader)
+		_, err := access.loadEntityShared(ctx, fullID, 1, entityLoaderBinding{loader: loader})
 		done <- err
 	}()
 	select {
@@ -93,7 +93,7 @@ func TestWaitersOfAPanickingLoadAreReleased(t *testing.T) {
 	leaderDone := make(chan struct{})
 	go func() {
 		defer func() { _ = recover(); close(leaderDone) }()
-		_, _ = access.loadEntityShared(context.Background(), fullID, 1, loader)
+		_, _ = access.loadEntityShared(context.Background(), fullID, 1, entityLoaderBinding{loader: loader})
 	}()
 	<-entered
 
@@ -101,7 +101,7 @@ func TestWaitersOfAPanickingLoadAreReleased(t *testing.T) {
 	defer cancel()
 	waiter := make(chan error, 1)
 	go func() {
-		_, err := access.loadEntityShared(waiterCtx, fullID, 1, loader)
+		_, err := access.loadEntityShared(waiterCtx, fullID, 1, entityLoaderBinding{loader: loader})
 		waiter <- err
 	}()
 	// Give the waiter time to attach to the flight, then let the leader die.

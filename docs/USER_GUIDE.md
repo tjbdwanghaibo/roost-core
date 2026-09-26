@@ -184,6 +184,15 @@ Nest 快阶段对 Getter 传入 `entity.WithLoadedEntitiesOnly(ctx)`。
 同 ID 顺序仍在准入处建立（RR-20260926-25）。准入判定之后、handler 取得 Guard 之前目标被驱逐（读取、引用、
 取锁三个窗口）时，同一条已准入请求原位转到慢池准备，保留同 ID 顺序位置，不重新排队、不在快 worker 上冷加载；
 Stats 的慢池 Started 会多计一次，指标 `nest.dispatch.slow_reroute.total` 记录次数。显式 `nest.SendOptionSlow()` 仍然有效。
+同一实体的并发冷加载由 ManagerAccess 合并成一次（singleflight）。加载运行在与调用方解耦的 ctx 上（RR-20260926-54）：
+保留第一个调用方 ctx 的值，不随任何调用方取消或截止；每个等待方按自己的 ctx 离开并得到自己的 `ctx.Err()`，最后一个
+等待方离开也不取消在途加载，完成后实体照常进入 EntityManager，之后的访问直接命中。加载只受两个框架约束：
+`entity.DefaultEntityLoadTimeout`（30s，`ManagerAccess.ConfigureLoadTimeout` 可改；超出时等待方得到满足
+`errors.Is(err, context.DeadlineExceeded)` 与 `entity.ErrEntityLoadTimeout` 的错误）和 loader 注销（DataEngine Runtime
+停机时取消在途加载，错误满足 `context.Canceled` 与 `entity.ErrEntityLoaderStopped`）。因此短预算的调用方（如 2s 登录预算）
+先超时离开，不再连带同一 flight 里预算更长的等待方；它随后重试会加入仍在进行的那次加载，而不是重新发起。
+领头调用方仍在等待时，加载里需要 Entity 锁的发布沿用它自己的本地执行器（Nest 慢阶段即本条消息的快续行）；
+它离开后改走 Nest 绑定给 ManagerAccess 的 `NestMgr.RunLocal`（Nest 构造时经 `LocalExecutorBinder` 自动绑定），仍在快池执行。
 未声明的动态 Cast 目标保持只读已加载实体（返回 `ErrColdLoadInLogic`）。自定义 Getter 仍需遵守 `entity.LoadedEntitiesOnly(ctx)`
 （快阶段读取用它）。准入判定只调用可选的 `entity.LoadedChecker.IsLoaded(id)`：它在发送方 goroutine（含快 worker 与唯一的延迟派发
 goroutine）上执行，不得 I/O、等待或 Touch；未实现它的自定义 Getter 保持 RR-25 之前的行为——准入不判冷、不自动转慢、准入后也不原位转慢，

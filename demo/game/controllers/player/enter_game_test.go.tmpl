@@ -161,10 +161,14 @@ func TestEnterGameColdLoadStuckOnProjectionAnswersWithinTheLoginBudget(t *testin
 	t.Run("the login leads the load", func(t *testing.T) {
 		login := newStuckLogin(t)
 		login.enter(t)
-		// The next attempt is a fresh load, not a wait on a dead one.
+		// The login gave up, but the load it started keeps running: the load
+		// runs on a context of its own (RR-20260926-54), bounded by the
+		// framework load timeout and the loader's shutdown, not by whoever
+		// happened to start it. The next attempt joins that live load instead
+		// of starting another one, and answers within its own budget again.
 		login.enter(t)
-		if got := len(login.loads); got != 2 {
-			t.Errorf("two logins started %d loads, want 2: a timed-out load left a flight behind", got)
+		if got := len(login.loads); got != 1 {
+			t.Errorf("two logins started %d loads, want 1: the second login must join the load still in flight", got)
 		}
 	})
 	t.Run("the login joins another load", func(t *testing.T) {

@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
@@ -16,23 +20,74 @@ type ManagerAccess struct {
 	manager         *EntityManager
 	loaderMu        sync.RWMutex
 	loader          AggregateLoader
+	loaderStopped   context.Context // 当前 loader 注册被注销时结束（停机取消在途共享加载）
 	loaderID        uint64
 	loadConcurrency int
-	flightMu        sync.Mutex
-	flights         map[int64]*entityLoadFlight
+	loadTimeout     time.Duration
+	// localExecutor 是 Nest 绑定的快池入口（NestMgr.RunLocal，经 LocalExecutorBinder）：领头调用方
+	// 离开后，共享加载经它把发布实体交回快池。
+	localExecutor atomic.Pointer[func(func()) error]
+	flightMu      sync.Mutex
+	flights       map[int64]*entityLoadFlight
 }
 
+// DefaultEntityLoadTimeout 是一次共享冷加载的框架上限（RR-20260926-54）。加载与调用方解耦后，
+// 调用方的截止时间不再约束它；这个上限保证没有等待方的加载（投影持续失败、store 不作答）
+// 最终结束、释放 flight，之后的请求重新发起加载。取值远大于各调用方预算（Nest 请求、登录、
+// dispatch 默认 2～3s），只作兜底。
+const DefaultEntityLoadTimeout = 30 * time.Second
+
+var (
+	// ErrEntityLoadTimeout 是共享加载超过框架加载上限时 ctx 的 Cause；等待方拿到的错误同时满足
+	// errors.Is(err, context.DeadlineExceeded)。
+	ErrEntityLoadTimeout = errors.New("entity manager access: shared entity load exceeded the framework load timeout")
+	// ErrEntityLoaderStopped 是 loader 被注销（DataEngine Runtime 停机）时在途共享加载 ctx 的 Cause；
+	// 等待方拿到的错误同时满足 errors.Is(err, context.Canceled)。
+	ErrEntityLoaderStopped = errors.New("entity manager access: aggregate loader stopped; in-flight load cancelled")
+)
+
 // entityLoadFlight deduplicates concurrent cold loads of one entity: the
-// first caller performs LoadEntity, everyone else waits on done. Without it a
+// first caller starts LoadEntity on its own goroutine, everyone (the first
+// caller included) waits on done or leaves on its own context. Without it a
 // hot entity's cache miss stampedes the database with one load per caller.
 type entityLoadFlight struct {
-	done  chan struct{}
-	value IThreadSafeEntity
-	err   error
+	done     chan struct{}
+	value    IThreadSafeEntity
+	err      error
+	panicked bool
+
+	// leaderMu 保护领头调用方的本地执行器交接：领头方仍在等待时，加载里的 RunLocal 走它自己
+	// ctx 上的执行器（Nest 慢阶段即本条消息的快续行，与修前相同）；领头方离开时置 leaderGone，
+	// 之后改走 ManagerAccess 绑定的快池入口。离开要等正在进行的续行结束——续行仍在使用领头方
+	// 的 Msg，Msg 在领头方返回后会被回收。
+	leaderMu   sync.Mutex
+	leaderRun  func(func()) error
+	leaderGone bool
 }
 
 func NewManagerAccess(manager *EntityManager) *ManagerAccess {
 	return &ManagerAccess{manager: manager, loadConcurrency: 8, flights: make(map[int64]*entityLoadFlight)}
+}
+
+// ConfigureLoadTimeout 设置一次共享冷加载的框架上限；<=0 忽略，未设置时为 DefaultEntityLoadTimeout。
+// 对之后开始的加载生效。
+func (access *ManagerAccess) ConfigureLoadTimeout(timeout time.Duration) {
+	if access == nil || timeout <= 0 {
+		return
+	}
+	access.loaderMu.Lock()
+	access.loadTimeout = timeout
+	access.loaderMu.Unlock()
+}
+
+// BindLocalExecutor 实现 nest.LocalExecutorBinder：Nest 构造时把 NestMgr.RunLocal 交给作为
+// Getter 的 ManagerAccess。共享加载的领头调用方离开后，加载经它把实体发布交回快池；未绑定
+// （没有 Nest）时就地执行，与独立使用 Entity 时的 RunLocal 相同。
+func (access *ManagerAccess) BindLocalExecutor(run func(func()) error) {
+	if access == nil || run == nil {
+		return
+	}
+	access.localExecutor.Store(&run)
 }
 
 func (access *ManagerAccess) ConfigureLoadConcurrency(concurrency int) {
@@ -65,22 +120,64 @@ func (access *ManagerAccess) RegisterDeleteAdmitter(admitter DeleteAdmitter) (fu
 	return access.manager.RegisterDeleteAdmitter(admitter)
 }
 
+// ConfigureLoader 安装冷加载器，返回的函数注销它。注销同时取消这次注册下所有在途的共享加载
+// （Cause 为 ErrEntityLoaderStopped）：DataEngine Runtime 停机时先注销 loader，加载不会在停机后
+// 继续等投影或读 store。注销可重复调用；loader 已被新注册替换时只取消自己的在途加载。
 func (access *ManagerAccess) ConfigureLoader(loader AggregateLoader) (func(), error) {
 	if access == nil || access.manager == nil || loader == nil {
 		return nil, fmt.Errorf("entity manager access: aggregate loader is required")
 	}
+	stopped, stop := context.WithCancelCause(context.Background())
 	access.loaderMu.Lock()
 	access.loaderID++
 	id := access.loaderID
 	access.loader = loader
+	access.loaderStopped = stopped
 	access.loaderMu.Unlock()
 	return func() {
 		access.loaderMu.Lock()
 		if access.loaderID == id {
 			access.loader = nil
+			access.loaderStopped = nil
 		}
 		access.loaderMu.Unlock()
+		stop(ErrEntityLoaderStopped)
 	}, nil
+}
+
+// entityLoaderBinding 是一次冷加载开始时读到的 loader 注册：loader 本身、它的停机信号与框架加载上限。
+type entityLoaderBinding struct {
+	loader  AggregateLoader
+	stopped context.Context
+	timeout time.Duration
+}
+
+func (access *ManagerAccess) currentLoader() entityLoaderBinding {
+	access.loaderMu.RLock()
+	defer access.loaderMu.RUnlock()
+	return entityLoaderBinding{loader: access.loader, stopped: access.loaderStopped, timeout: access.loadTimeout}
+}
+
+// loadContext 为共享加载派生与调用方解耦的 ctx：保留领头调用方 ctx 的值（trace 等），去掉它的
+// 取消与截止（context.WithoutCancel），只受框架加载上限与 loader 注销约束。
+func (binding entityLoaderBinding) loadContext(leader context.Context) (context.Context, func()) {
+	timeout := binding.timeout
+	if timeout <= 0 {
+		timeout = DefaultEntityLoadTimeout
+	}
+	timed, cancelTimeout := context.WithTimeoutCause(context.WithoutCancel(leader), timeout,
+		fmt.Errorf("%w (%v)", ErrEntityLoadTimeout, timeout))
+	if binding.stopped == nil {
+		return timed, cancelTimeout
+	}
+	loadCtx, cancelLoad := context.WithCancelCause(timed)
+	stopped := binding.stopped
+	stopWatch := context.AfterFunc(stopped, func() { cancelLoad(context.Cause(stopped)) })
+	return loadCtx, func() {
+		stopWatch()
+		cancelLoad(nil)
+		cancelTimeout()
+	}
 }
 
 func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityCategory) (IThreadSafeEntity, error) {
@@ -91,10 +188,8 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	if value := access.manager.GetWithCategory(meta.FullID, category); value != nil {
 		return value, nil
 	}
-	access.loaderMu.RLock()
-	loader := access.loader
-	access.loaderMu.RUnlock()
-	if loader == nil {
+	binding := access.currentLoader()
+	if binding.loader == nil {
 		return nil, nil
 	}
 	if LoadedEntitiesOnly(ctx) {
@@ -103,7 +198,7 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	value, err := access.loadEntityShared(ctx, meta.FullID, meta.Kind, loader)
+	value, err := access.loadEntityShared(ctx, meta.FullID, meta.Kind, binding)
 	if err != nil {
 		return nil, err
 	}
@@ -143,58 +238,134 @@ func coldLoadInLogicError(operation string, id int64) error {
 // loadEntityShared collapses concurrent loads of the same entity into one
 // LoadEntity call. Results (including errors) are shared with every waiter;
 // the flight is removed before done closes, so a retry after a failure
-// starts a fresh load. A waiter whose own context is cancelled stops waiting
-// without affecting the in-flight load.
+// starts a fresh load.
+//
+// 加载与调用方解耦（RR-20260926-54）：第一个调用方（领头方）在独立 goroutine 上启动 LoadEntity，
+// ctx 由 entityLoaderBinding.loadContext 派生——保留领头方 ctx 的值，不随它取消或截止，只受框架
+// 加载上限与 loader 注销（停机）约束。每个等待方（含领头方）只按自己的 ctx 离开；最后一个等待方
+// 离开也不取消在途加载，加载完成后结果照常经 loader 发布进 EntityManager，之后的 Get 直接命中。
+// 修前 LoadEntity 直接用领头方的 ctx，EnterGame 以 2s 登录预算领头时（RR-20260926-36），同一 flight
+// 里预算更长的等待方（同一玩家的 Nest 慢阶段准备）在 2s 时一起得到 DeadlineExceeded。
 //
 // Finishing the flight is a DEFER, and that is the load-bearing part
 // (RR-20260919-08). A panic anywhere under LoadEntity — the store, the
 // builder, a decoder, an OnInitFinish — used to skip the removal and the
-// close, leaving a flight nobody would ever finish: the process survived
-// (Nest recovers handler panics) but every later request for that entity
-// waited on a channel that never closed and got back its own deadline, and
-// the retry never reached the loader because a load "was already in flight".
-// One entity became permanently unavailable, quietly.
-func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64, kind EntityKind, loader AggregateLoader) (IThreadSafeEntity, error) {
+// close, leaving a flight nobody would ever finish: every later request for
+// that entity waited on a channel that never closed and got back its own
+// deadline, and the retry never reached the loader because a load "was
+// already in flight". The load goroutine recovers the panic (re-panicking
+// there would take the process down), logs it with its stack, and every
+// waiter gets a real error; the leader, if it is still waiting, keeps seeing
+// it as a panic, because a caller whose load blew up must not be told it
+// worked.
+func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64, kind EntityKind, binding entityLoaderBinding) (IThreadSafeEntity, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	access.flightMu.Lock()
-	if flight, ok := access.flights[fullID]; ok {
-		access.flightMu.Unlock()
-		select {
-		case <-flight.done:
-			return flight.value, flight.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	flight, joined := access.flights[fullID]
+	if !joined {
+		flight = &entityLoadFlight{done: make(chan struct{}), leaderRun: localExecutorOf(ctx)}
+		if access.flights == nil {
+			access.flights = make(map[int64]*entityLoadFlight)
 		}
+		access.flights[fullID] = flight
 	}
-	flight := &entityLoadFlight{done: make(chan struct{})}
-	if access.flights == nil {
-		access.flights = make(map[int64]*entityLoadFlight)
-	}
-	access.flights[fullID] = flight
 	access.flightMu.Unlock()
+	if !joined {
+		go access.runEntityLoad(ctx, fctx.CaptureSnapshot(), fullID, kind, binding, flight)
+	}
+
+	select {
+	case <-flight.done:
+		if !joined && flight.panicked {
+			panic(flight.err)
+		}
+		return flight.value, flight.err
+	case <-ctx.Done():
+		if !joined {
+			flight.leaderLeft()
+		}
+		return nil, ctx.Err()
+	}
+}
+
+// runEntityLoad 在自己的 goroutine 上执行一次共享加载并结束 flight。它不是快 worker：LoadEntity 里
+// 需要 Entity 锁的发布步骤经 flight.runLocal 交回本地执行池。fctx 请求数据（meta、trace）沿用领头方
+// 的快照，Base 换成解耦后的加载 ctx。
+func (access *ManagerAccess) runEntityLoad(leader context.Context, snapshot fctx.ContextSnapshot, fullID int64, kind EntityKind, binding entityLoaderBinding, flight *entityLoadFlight) {
+	loadCtx, cancel := binding.loadContext(leader)
+	defer cancel()
+	loadCtx = WithLocalExecutor(loadCtx, flight.runLocal(access))
+	current, release := fctx.NewContext(fctx.WithSnapshot(snapshot))
+	current.Base = loadCtx
+	defer release()
 
 	settled := false
 	defer func() {
 		if !settled {
-			// The load is unwinding through a panic. The waiters get a real
-			// error rather than the leader's panic — they are on their own
-			// goroutines and re-panicking there would take the process down
-			// for something they did not do — and the leader keeps panicking,
-			// because a caller whose load blew up must not be told it worked.
-			flight.value, flight.err = nil, fmt.Errorf(
-				"entity manager access: loading entity %d panicked: %v", fullID, recover())
+			recovered := recover()
+			flight.value, flight.err, flight.panicked = nil, fmt.Errorf(
+				"entity manager access: loading entity %d panicked: %v", fullID, recovered), true
+			slog.Error("entity manager access: shared entity load panicked", "entity", fullID, "panic", recovered, "stack", string(debug.Stack()))
 		}
 		access.flightMu.Lock()
-		delete(access.flights, fullID)
+		if access.flights[fullID] == flight {
+			delete(access.flights, fullID)
+		}
 		access.flightMu.Unlock()
 		close(flight.done)
-		if !settled {
-			panic(flight.err)
-		}
 	}()
 
-	flight.value, flight.err = loader.LoadEntity(ctx, fullID, kind)
+	value, err := binding.loader.LoadEntity(loadCtx, fullID, kind)
+	if err != nil && loadCtx.Err() != nil {
+		// 加载被框架上限或停机结束：把 Cause 带给等待方，便于区分“自己的截止”与“加载被结束”。
+		if cause := context.Cause(loadCtx); cause != nil && !errors.Is(err, cause) {
+			err = fmt.Errorf("%w (%w)", err, cause)
+		}
+	}
+	flight.value, flight.err = value, err
 	settled = true
-	return flight.value, flight.err
+}
+
+// localExecutorOf 返回 ctx 上由 WithLocalExecutor 指定的本地执行器，未指定为 nil。
+func localExecutorOf(ctx context.Context) func(func()) error {
+	if ctx == nil {
+		return nil
+	}
+	run, _ := ctx.Value(localExecutorKey{}).(func(func()) error)
+	return run
+}
+
+// runLocal 是共享加载 ctx 上的本地执行器。领头方仍在等待时沿用它自己的执行器（未指定则就地执行，
+// 与修前相同），并在执行期间持有 leaderMu，领头方此时离开要等这一步结束；领头方离开后改走
+// ManagerAccess 绑定的快池入口，未绑定时就地执行。
+func (flight *entityLoadFlight) runLocal(access *ManagerAccess) func(func()) error {
+	return func(fn func()) error {
+		flight.leaderMu.Lock()
+		if !flight.leaderGone {
+			defer flight.leaderMu.Unlock()
+			if flight.leaderRun != nil {
+				return flight.leaderRun(fn)
+			}
+			fn()
+			return nil
+		}
+		flight.leaderMu.Unlock()
+		if run := access.localExecutor.Load(); run != nil {
+			return (*run)(fn)
+		}
+		fn()
+		return nil
+	}
+}
+
+// leaderLeft 在领头方按自己的 ctx 离开时调用：之后的本地步骤不再使用它的执行器。
+func (flight *entityLoadFlight) leaderLeft() {
+	flight.leaderMu.Lock()
+	flight.leaderGone = true
+	flight.leaderRun = nil
+	flight.leaderMu.Unlock()
 }
 
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {
