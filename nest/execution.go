@@ -212,6 +212,11 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 		}
 		return tx.rejectCommit(err)
 	}
+	if msg != nil && msg.RemoteWriteBatch != nil {
+		// 持久提交已成功：此后 AfterCommit、释放锁、release hook 的任何失败都不能让
+		// Remote 批次 Abort。记录这个事实，而不是让收尾去猜错误类型（RR-20260926-32）。
+		msg.remoteCommitted = true
+	}
 	if notifier, ok := committer.(TransactionReleaseNotifier); ok {
 		txID := tx.ID()
 		if msg != nil && msg.RemoteWriteBatch != nil {

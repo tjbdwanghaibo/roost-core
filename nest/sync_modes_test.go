@@ -309,7 +309,9 @@ func TestSyncRemoteConfirmationIsSeparateFromLocalCommit(t *testing.T) {
 	scope.Guard().RequireEntity(e)
 	batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
 	defer batch.Finish(false)
-	msg := &Msg{RemoteWriteBatch: &remoteBatchIntegrationFake{}, remoteFinalized: true}
+	// 本测试直接模拟“本地事务已持久提交”；RR-20260926-32 起这个事实由提交路径显式记录
+	// （remoteCommitted），finishRemoteWriteBatch 不再从 nil 错误推断已提交。
+	msg := &Msg{RemoteWriteBatch: &remoteBatchIntegrationFake{}, remoteFinalized: true, remoteCommitted: true}
 	pop := pushCurrentNestDispatchMsg(msg)
 	defer pop()
 	tx := NewRollbackTx(RollbackNone)

@@ -78,14 +78,22 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	m.RemoteWriteBatch = nil
 	var err error
 	committed := false
-	if m.remoteIndeterminate {
+	// 是否已提交只看提交路径记录的事实，不从 dispatchErr 的类型推断：提交之后的 release
+	// hook panic、回复前的其他错误都会以普通错误出现，旧实现据此把已持久的事务 Abort
+	// （RR-20260926-32，与 RR-13/14 同根）。提交后的错误只随回复报告。
+	switch {
+	case m.remoteIndeterminate:
 		// WAL may already contain the transaction. Close transfers ownership of
 		// the held gates/leases to the manager's status-driven finalizer.
-	} else if (dispatchErr != nil && !errors.Is(dispatchErr, ErrAfterCommitFailed)) || !m.remoteFinalized {
-		err = batch.Abort(ctx, dispatchErr)
-	} else {
+	case m.remoteCommitted:
 		_, err = batch.Commit(ctx)
 		committed = err == nil
+	default:
+		cause := dispatchErr
+		if cause == nil {
+			cause = entity.ErrRemoteCommitNotFinalized
+		}
+		err = batch.Abort(ctx, cause)
 	}
 	err = errors.Join(err, batch.Close(ctx))
 	// 提交事实独立于释放/回调错误，不能遗失 Sync Confirm 或再次 Abort。
@@ -199,6 +207,10 @@ type Msg struct {
 	GroupTransition     *GroupTransitionRequest
 	remoteFinalized     bool
 	remoteIndeterminate bool
+	// remoteCommitted 在本地事务持久提交成功（commitDurable 的 durableCommit 返回 nil）
+	// 时由执行 handler 的 goroutine 设置，慢阶段在续行返回后读取（done channel 建立
+	// happens-before）。finishRemoteWriteBatch 只凭它决定 Commit / Abort（RR-20260926-32）。
+	remoteCommitted bool
 	// deferredCompletion marks a pipelined transaction whose reply and
 	// AfterCommit hooks were handed to the completion pump: the dispatch
 	// path must not send RetChan itself. Reset by clean().
