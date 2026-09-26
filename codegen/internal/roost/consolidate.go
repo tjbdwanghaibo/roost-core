@@ -65,6 +65,15 @@ type consolidationMap struct {
 			To      string `yaml:"to"`
 			Package string `yaml:"package"`
 		} `yaml:"move"`
+		// Removed lists, per final import path, exported symbols a v1.16.x
+		// project may use that no longer exist there and cannot be rewritten
+		// mechanically; each group carries the migration guide printed with
+		// every use (RR-20260926-24 复核残留).
+		Removed []struct {
+			Package string   `yaml:"package"`
+			Guide   string   `yaml:"guide"`
+			Symbols []string `yaml:"symbols"`
+		} `yaml:"removed"`
 	} `yaml:"layout"`
 }
 
@@ -143,6 +152,41 @@ type ConsolidateResult struct {
 	GoMod      bool     // go.mod lost the removed modules / gained the boundary versions
 	Manifest   bool     // roost.yaml lost versions.skill / versions.service
 	Unresolved []string // "file: import" pairs on removed modules the map does not know
+	Removed    []string // "file:line: qualifier.Symbol" uses of symbols that no longer exist
+}
+
+// fileRemovedUse is a removedUse with the project-relative file it is in.
+type fileRemovedUse struct {
+	file string
+	removedUse
+}
+
+// removedSymbolsError lists every use as file:line with a reference to its
+// guide, then each guide once.
+func removedSymbolsError(uses []fileRemovedUse, m consolidationMap) error {
+	sort.Slice(uses, func(i, j int) bool {
+		if uses[i].file != uses[j].file {
+			return uses[i].file < uses[j].file
+		}
+		return uses[i].line < uses[j].line
+	})
+	var b strings.Builder
+	fmt.Fprintf(&b, "consolidate: %d use(s) of framework symbols that no longer exist and cannot be rewritten automatically; change them as the guides say, then run `roost project upgrade --consolidate` again:\n", len(uses))
+	var groups []int
+	seen := map[int]bool{}
+	for _, use := range uses {
+		fmt.Fprintf(&b, "  %s:%d: %s [%d]\n", use.file, use.line, use.ref, use.group+1)
+		if !seen[use.group] {
+			seen[use.group] = true
+			groups = append(groups, use.group)
+		}
+	}
+	sort.Ints(groups)
+	b.WriteString("guides:")
+	for _, group := range groups {
+		fmt.Fprintf(&b, "\n  [%d] %s: %s", group+1, m.Layout.Removed[group].Package, m.Layout.Removed[group].Guide)
+	}
+	return errors.New(b.String())
 }
 
 // ConsolidateProject rewrites a business project from the pre-consolidation
@@ -155,6 +199,7 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 		return ConsolidateResult{}, err
 	}
 	var result ConsolidateResult
+	var removedUses []fileRemovedUse
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -169,13 +214,16 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 		if !strings.HasSuffix(p, ".go") {
 			return nil
 		}
-		changed, unresolved, err := consolidateFile(p, table, m, dryRun)
+		changed, unresolved, removed, err := consolidateFile(p, table, m, dryRun)
 		if err != nil {
 			return fmt.Errorf("%s: %w", p, err)
 		}
 		rel := relativeSlash(root, p)
 		for _, u := range unresolved {
 			result.Unresolved = append(result.Unresolved, rel+": "+u)
+		}
+		for _, use := range removed {
+			removedUses = append(removedUses, fileRemovedUse{file: rel, removedUse: use})
 		}
 		if changed {
 			result.Files = append(result.Files, rel)
@@ -188,6 +236,26 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 	sort.Strings(result.Files)
 	if len(result.Unresolved) > 0 {
 		return result, fmt.Errorf("consolidate: %d import(s) point at removed modules but are not in the relocation map:\n  %s", len(result.Unresolved), strings.Join(result.Unresolved, "\n  "))
+	}
+	if len(removedUses) > 0 {
+		// The imports are already rewritten (unless dry-run); what is left is
+		// manual. Say what was done, then fail with the list — succeeding here
+		// would leave the user to discover the same list as `undefined` errors
+		// with no pointer to the replacement API.
+		if stdout != nil && len(result.Files) > 0 {
+			verb := "rewrote"
+			if dryRun {
+				verb = "would rewrite"
+			}
+			fmt.Fprintf(stdout, "consolidate: %s %d Go file(s)\n", verb, len(result.Files))
+			for _, f := range result.Files {
+				fmt.Fprintf(stdout, "  %s\n", f)
+			}
+		}
+		for _, use := range removedUses {
+			result.Removed = append(result.Removed, fmt.Sprintf("%s:%d: %s", use.file, use.line, use.ref))
+		}
+		return result, removedSymbolsError(removedUses, m)
 	}
 	result.GoMod, err = consolidateGoMod(filepath.Join(root, "go.mod"), m, dryRun)
 	if err != nil {
@@ -217,23 +285,63 @@ func ConsolidateProject(root string, dryRun bool, stdout io.Writer) (Consolidate
 	return result, nil
 }
 
+// edit replaces src[start:end] with text; consolidateFile applies them back to
+// front so earlier offsets stay valid.
+type edit struct {
+	start, end int
+	text       string
+}
+
+// keptImportEdits repoints an import whose symbols stay in kit to where kit
+// moved it. When the package name changes on the way (roost-kit/room →
+// kit/syncbus, package room → syncbus) an unaliased import gets the name the
+// file already uses, the same rule the everything-moves branch applies;
+// without it `room.NewSyncBusMod` compiles to `undefined: room`
+// (RR-20260926-24 复核残留).
+func keptImportEdits(fset *token.FileSet, imp *ast.ImportSpec, keptPath, keptBase, alias string) []edit {
+	start, end := fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset
+	edits := []edit{{start, end, strconv.Quote(keptPath)}}
+	if imp.Name == nil && keptBase != alias {
+		edits = append(edits, edit{start, start, alias + " "})
+	}
+	return edits
+}
+
 // consolidateFile rewrites one Go file. Split packages are decided per
 // selector: symbols the map lists as staying in kit keep the old import, every
 // other symbol moves to the core path; a file using both ends up with both
 // imports.
-func consolidateFile(p string, table map[string]relocation, m consolidationMap, dryRun bool) (bool, []string, error) {
+func consolidateFile(p string, table map[string]relocation, m consolidationMap, dryRun bool) (bool, []string, []removedUse, error) {
 	src, err := os.ReadFile(p)
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
+	content, changed, unresolved, err := rewriteImports(p, src, table, m)
+	if err != nil {
+		return false, unresolved, nil, err
+	}
+	// Scanned on what the file will contain, so the reported lines are the
+	// lines the user opens — and a rerun after the imports were rewritten
+	// still finds what is left.
+	removed, err := findRemovedUses(content, m)
+	if err != nil {
+		return false, unresolved, nil, err
+	}
+	if !changed || dryRun {
+		return changed, unresolved, removed, nil
+	}
+	return true, unresolved, removed, os.WriteFile(p, content, 0o644)
+}
+
+// rewriteImports computes the relocated source of one Go file without
+// writing it. It reports the new content (src itself when nothing moved),
+// whether anything changed, and imports on removed modules the map does not
+// know.
+func rewriteImports(p string, src []byte, table map[string]relocation, m consolidationMap) ([]byte, bool, []string, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, p, src, parser.ParseComments)
 	if err != nil {
-		return false, nil, err
-	}
-	type edit struct {
-		start, end int
-		text       string
+		return nil, false, nil, err
 	}
 	var edits []edit
 	var unresolved []string
@@ -260,7 +368,7 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 	for _, imp := range file.Imports {
 		oldPath, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {
-			return false, nil, err
+			return nil, false, nil, err
 		}
 		rel, mapped := table[oldPath]
 		switch {
@@ -303,8 +411,12 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 		// Where a split package's kept symbols live after stage two. For an
 		// unsplit package this equals the old path and nothing uses it.
 		keptPath, keptMoved := singleModulePath(oldPath, m)
-		if moved, _, ok := layoutPath(keptPath, m); ok {
-			keptPath, keptMoved = moved, true
+		keptBase := path.Base(keptPath)
+		if moved, pkgName, ok := layoutPath(keptPath, m); ok {
+			keptPath, keptMoved, keptBase = moved, true, path.Base(moved)
+			if pkgName != "" {
+				keptBase = pkgName
+			}
 		}
 		// The name this file uses to refer to the package.
 		alias := path.Base(oldPath)
@@ -353,13 +465,13 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 			// Only Mod glue used: the kit import stays — but stage two moves
 			// the place it stayed in.
 			if keptMoved {
-				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset, strconv.Quote(keptPath)})
+				edits = append(edits, keptImportEdits(fset, imp, keptPath, keptBase, alias)...)
 			}
 		default:
 			// Mixed: kit import stays (at its stage-two location), moved
 			// symbols get a second import.
 			if keptMoved {
-				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset, strconv.Quote(keptPath)})
+				edits = append(edits, keptImportEdits(fset, imp, keptPath, keptBase, alias)...)
 			}
 			coreAlias := fresh("core" + path.Base(oldPath))
 			extraImports = append(extraImports, coreAlias+" "+strconv.Quote(rel.to))
@@ -369,7 +481,7 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 		}
 	}
 	if len(edits) == 0 && len(extraImports) == 0 {
-		return false, unresolved, nil
+		return src, false, unresolved, nil
 	}
 	if len(extraImports) > 0 {
 		first := file.Imports[0]
@@ -410,12 +522,76 @@ func consolidateFile(p string, table map[string]relocation, m consolidationMap, 
 	}
 	formatted, err := format.Source(out)
 	if err != nil {
-		return false, unresolved, fmt.Errorf("rewritten source does not format: %w", err)
+		return nil, false, unresolved, fmt.Errorf("rewritten source does not format: %w", err)
 	}
-	if dryRun {
-		return true, unresolved, nil
+	return formatted, true, unresolved, nil
+}
+
+// removedUse is one reference, in a file's final content, to a symbol the
+// layout stage lists as removed at the path the file imports.
+type removedUse struct {
+	line  int
+	ref   string // qualifier.Symbol as the file writes it
+	group int    // index into consolidationMap.Layout.Removed
+}
+
+// findRemovedUses lists every qualified reference to a removed symbol. The
+// qualifier is resolved through the file's own imports — an explicit alias or
+// the path's last element, which is the package name for every path the table
+// names — so a local identifier that happens to share a package's name is
+// not a use.
+func findRemovedUses(src []byte, m consolidationMap) ([]removedUse, error) {
+	if len(m.Layout.Removed) == 0 {
+		return nil, nil
 	}
-	return true, unresolved, os.WriteFile(p, formatted, 0o644)
+	removedAt := map[string]map[string]int{} // import path → symbol → group
+	for i, group := range m.Layout.Removed {
+		if removedAt[group.Package] == nil {
+			removedAt[group.Package] = map[string]int{}
+		}
+		for _, symbol := range group.Symbols {
+			removedAt[group.Package][symbol] = i
+		}
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return nil, err
+	}
+	byQualifier := map[string]map[string]int{}
+	for _, imp := range file.Imports {
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || removedAt[importPath] == nil {
+			continue
+		}
+		name := path.Base(importPath)
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == "_" || name == "." {
+			continue
+		}
+		byQualifier[name] = removedAt[importPath]
+	}
+	if len(byQualifier) == 0 {
+		return nil, nil
+	}
+	var uses []removedUse
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok || id.Obj != nil {
+			return true
+		}
+		if group, ok := byQualifier[id.Name][sel.Sel.Name]; ok {
+			uses = append(uses, removedUse{line: fset.Position(sel.Pos()).Line, ref: id.Name + "." + sel.Sel.Name, group: group})
+		}
+		return true
+	})
+	return uses, nil
 }
 
 var consolidateRequireLine = regexp.MustCompile(`(?m)^\s*github\.com/tjbdwanghaibo/(roost-skill|roost-service|roost-kit|roost-codegen)\s+\S+[^\n]*\n`)

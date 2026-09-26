@@ -177,7 +177,9 @@ service:
 # package where it differs from the last path element's old name; symbols of
 # statesync that dropped their Frame prefix (EncodeFrame → frame.Encode,
 # DecodeFrame → frame.Decode, DeltaFrame → frame.Frame, FrameFull / FrameDelta
-# → frame.Full / frame.Delta) are left to the compiler, see TROUBLESHOOTING T-175.
+# → frame.Full / frame.Delta) are not rewritten; `removed:` below makes
+# upgrade list them (and every other symbol that did not survive) with a guide
+# instead of leaving them to the compiler, see TROUBLESHOOTING T-175.
 layout:
   boundary:
     core: v1.17.0
@@ -201,3 +203,47 @@ layout:
       to: github.com/tjbdwanghaibo/roost-core/sync/syncbus
     - from: github.com/tjbdwanghaibo/roost-core/mirror
       to: github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror
+  # Exported identifiers that existed in v1.16.1 and are gone at the path the
+  # rewrite leaves them on (API diff v1.16.1 → the layout boundary, top-level
+  # declarations only; methods, fields and signatures are still the
+  # compiler's). They cannot be rewritten mechanically — a different package,
+  # a different shape, or no replacement at all — so `upgrade --consolidate`
+  # lists every use as file:line with the guide and exits non-zero instead of
+  # reporting success (RR-20260926-24 复核残留).
+  removed:
+    - package: github.com/tjbdwanghaibo/roost-core/sync/frame
+      guide: "同包改名（M-17 去掉重复前缀）：EncodeFrame → Encode、DecodeFrame → Decode、DeltaFrame → Frame、FrameFull → Full、FrameDelta → Delta、FrameKind → Kind。见 CHANGELOG「同步块收进 sync/」、TROUBLESHOOTING T-175"
+      symbols: [EncodeFrame, DecodeFrame, DeltaFrame, FrameFull, FrameDelta, FrameKind]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/frame
+      guide: "移到 sync/nettransport，名字不变（M-16）：import \"github.com/tjbdwanghaibo/roost-core/sync/nettransport\" 后写 nettransport.<同名>。见 CHANGELOG「传输契约归位 nettransport」、docs/bugfix/M-16-transport-contracts-home.md"
+      symbols: [DatagramBatchTransport, DefaultMaxDatagram, ErrTransportMissing, SessionID, SessionInfo, SessionTransport, Transport, TransportFunc]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/frame
+      guide: "已删除，无替代（M-16 移到 nettransport 后 M-18 删除 datagram 分片通道）：实体同步只走 reliable（nettransport.AsyncTransport），每帧直接 frame.Decode / entitysync.DecodeFrame，不再分片重组。见 CHANGELOG「nettransport.AsyncTransport 只留 reliable」、docs/bugfix/M-18-async-transport-reliable-only.md"
+      symbols: [DatagramFlagFull, DatagramFlags, DatagramHeader, DatagramHeaderSize, DecodeDatagram, FragmentFrame, InspectDatagram, ErrFragmentLimit, ErrInvalidDatagram]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/frame
+      guide: "已删除，无替代（M-15：ARCH-10 之后没有调用者的 Replicator / SessionState / LOD / Snapshot / Schema / 控制消息 / Reassembler 一族）：实体同步用 sync/entitysync.Manager；客户端解码用 entitysync.DecodeFrame + entitysync.DecodeSubjectUpdate（线格式 v2 一帧一包，无需 Reassembler）。demo 的 cmd/loadtest、scene.go、scene_test.go 按当前模板重生成或人工合并。见 CHANGELOG「statesync 只剩帧格式」、docs/bugfix/M-15-statesync-dead-code.md、docs/bugfix/M-13-entitysync-manager.md"
+      symbols: [ApplyDelta, BuildDelta, CodecGeneratedBitset, CodecGeneratedDelta, CodecRaw, CodecType, ComponentLODPolicy, ComponentSchema, ComponentState, ContextProjector, ControlAck, ControlMessage, ControlMessageSize, ControlResync, ControlType, DecodeControl, DefaultSnapshotRateHz, EncodeControl, ErrChecksumMismatch, ErrInvalidAck, ErrInvalidControl, ErrInvalidLOD, ErrObjectNotFound, ErrPreparedFrameStale, ErrReassemblyCapacity, ErrReplicatorClosed, ErrSchemaFrozen, ErrSessionNotFound, ErrSnapshotNotFound, IsControlPayload, LODAtAll, LODAtFull, LODAtLow, LODAtMinimal, LODAtReduced, LODCulled, LODDecision, LODFull, LODLevel, LODLow, LODMask, LODMinimal, LODProjector, LODProjectorConfig, LODProjectorStats, LODReduced, LODSelector, LODSelectorFunc, Lane, LaneEvent, LaneLifecycle, LaneState, LaneStatic, NewLODMask, NewLODProjector, NewReassembler, NewReplicator, NewSchemaRegistry, NewSessionState, NewShadowStore, NewSnapshot, NewSnapshotRing, ObjectState, PreparedFrame, Priority, PriorityCosmetic, PriorityCritical, PriorityHigh, PriorityLow, PriorityNormal, ProjectionContext, Projector, ProjectorFunc, Reassembler, Reliability, ReliabilityReliableOrdered, ReliabilityUnreliableEvent, ReliabilityUnreliableLatest, ReplicationPolicy, Replicator, ReplicatorConfig, ReplicatorStats, ResyncBaselineMissing, ResyncDecodeFailure, ResyncReason, ResyncReassemblyExpired, ResyncSchemaMismatch, ResyncUnknown, SchemaRegistry, SessionSnapshot, SessionState, ShadowStore, Snapshot, SnapshotRing, Visibility, VisibilityCustom, VisibilityOwner, VisibilityPublic, VisibilitySpectator, VisibilityTeam]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver
+      guide: "改用 sync/entitysync 的线格式函数（M-13 线格式 v2 去掉 room 帧头）：DecodeRoomWireFrame → entitysync.DecodeFrame(data, frame.DefaultLimits())、DecodeRoomSubjectUpdate → entitysync.DecodeSubjectUpdate(data, maxBytes)、EncodeRoomSubjectUpdate → entitysync.EncodeSubjectUpdate(update, maxBytes)。见 CHANGELOG「实体同步统一为 entitysync.Manager」、docs/bugfix/M-13-entitysync-manager.md"
+      symbols: [DecodeRoomWireFrame, DecodeRoomSubjectUpdate, EncodeRoomSubjectUpdate]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver
+      guide: "已删除（M-13：room 广播器整条退场，room/ 只剩 ISyncBus 驱动）：改用 sync/entitysync.Manager（Register / OpenSession / Subscribe / Flush / Start / Stop）与 sync/entitysync/policy 的 Group / Interest / Direct。见 CHANGELOG「实体同步统一为 entitysync.Manager」、docs/bugfix/M-13-entitysync-manager.md"
+      symbols: [DefaultRoomArchetype, DefaultRoomBroadcastInterval, DefaultRoomComponentID, ErrRoomAlreadyExists, ErrRoomBroadcasterStopped, ErrRoomClosing, ErrRoomEnvelopeInvalid, ErrRoomFrameAdmission, ErrRoomFrameSinkRequired, ErrRoomGlobalSubjectLimit, ErrRoomGlobalSubscriberLimit, ErrRoomIDInvalid, ErrRoomLimit, ErrRoomManagerNotRunning, ErrRoomManagerStopped, ErrRoomNotFound, ErrRoomSessionInvalid, ErrRoomSessionResolver, ErrRoomSubjectAlreadyExists, ErrRoomSubjectBaseline, ErrRoomSubjectHasSubscribers, ErrRoomSubjectInvalid, ErrRoomSubjectLimit, ErrRoomSubjectNotRegistered, ErrRoomSubjectRetiring, ErrRoomSubscriberLimit, ErrRoomTransportClosed, ErrRoomTransportRequired, ErrRoomWireFrame, NewRoomBroadcaster, NewRoomEnvelopeSink, NewRoomManager, NewRoomTransportSink, ReliableRoomFrameSink, ReliableRoomFrameSinkFunc, RoomBroadcaster, RoomBroadcasterConfig, RoomBroadcasterStats, RoomEnvelopeSink, RoomFrame, RoomFrameEntry, RoomLifecycle, RoomManager, RoomManagerConfig, RoomManagerStats, RoomSessionResolver, RoomSessionResolverFunc, RoomSlowConsumer, RoomSubjectLifecycle, RoomSubscriberLifecycle, RoomTransportSink, RoomTransportSinkConfig, RoomTransportSinkStats, RoomWireVersion, SlowConsumerEvict, SlowConsumerFailBatch, SlowConsumerPolicy]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/entitysync
+      guide: "已删除（M-13：SubscriptionCoordinator 与投递信封一族退场）：订阅由 entitysync.Manager 的 Subscribe / Unsubscribe（或 NewSubscriptionSource）管理，subject 自己持有订阅者表。见 CHANGELOG「实体同步统一为 entitysync.Manager」、docs/bugfix/M-13-entitysync-manager.md"
+      symbols: [DeliveryEnvelope, EnvelopeDelta, EnvelopeKind, EnvelopeLeave, EnvelopeSnapshot, ErrCoordinatorClosed, ErrEnvelopeAdmission, ErrEnvelopeSinkRequired, ErrPreparedProfilesMissing, ErrSubscriberInvalid, ErrSubscriptionState, ErrSubscriptionSubject, NewSubscriptionCoordinator, ReliableEnvelopeSink, ReliableEnvelopeSinkFunc, SubscriberKind, SubscriberKindEntity, SubscriberKindGroup, SubscriberKindNone, SubscriberKindPlayer, SubscriberKindServer, SubscriberRef, Subscription, SubscriptionActive, SubscriptionClosing, SubscriptionCoordinator, SubscriptionPending, SubscriptionState]
+    - package: github.com/tjbdwanghaibo/roost-core/sync/nettransport
+      guide: "已删除（M-18 只留 reliable；ControlPlane 随 M-15 删除）：发送走 nettransport.AsyncTransport（下游为 ReliableSender），失败看 SendError。见 CHANGELOG「nettransport.AsyncTransport 只留 reliable」、docs/bugfix/M-18-async-transport-reliable-only.md"
+      symbols: [AdmissionError, AtomicBatchTransport, Channel, ChannelDatagram, ChannelReliable, ControlPlane, ControlTarget, ErrInvalidDatagramBatch, NewControlPlane, OutboundFrame]
+    - package: github.com/tjbdwanghaibo/roost-core/spatial
+      guide: "搬到 sync/entitysync/policy 并改名（M-17）：InterestManager → policy.AOI、NewInterestManager → policy.NewAOI、InterestCluster → policy.AOICluster、NewInterestCluster → policy.NewAOICluster、InterestConfig → policy.AOIConfig（不是 policy.InterestConfig）、RoomID → policy.AreaID、ErrRoomDuplicate / ErrRoomOverlap / ErrRoomUnknown → policy.ErrAreaDuplicate / ErrAreaOverlap / ErrAreaUnknown、AddRoom → AddArea。见 CHANGELOG「同步块收进 sync/」、TROUBLESHOOTING T-175"
+      symbols: [InterestManager, NewInterestManager, InterestCluster, NewInterestCluster, InterestConfig, RoomID, ErrRoomDuplicate, ErrRoomOverlap, ErrRoomUnknown]
+    - package: github.com/tjbdwanghaibo/roost-core/spatial
+      guide: "搬到 sync/entitysync/policy，名字不变（M-17，spatial 只留纯几何）：import \"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy\" 后写 policy.<同名>。见 CHANGELOG「同步块收进 sync/」、TROUBLESHOOTING T-175"
+      symbols: [DefaultMaxObserverBlocks, ErrInterestBudget, ErrInterestConfig, ErrInterestUnknown, InterestBandChanged, InterestEnter, InterestEvent, InterestEventKind, InterestLeave]
+    - package: github.com/tjbdwanghaibo/roost-core/kit/mods
+      guide: "改名为 mods.ModSyncBus（值 \"syncbus\"，配置段 syncbus:）。见 CHANGELOG「room/ 包退场」"
+      symbols: [ModRoom]
+    - package: github.com/tjbdwanghaibo/roost-core/kit/syncbus
+      guide: "改名为 syncbus.NewSyncBusMod / syncbus.SyncBusMod（upgrade 对已确认的 kit import 自动改写；这里是残留）。见 CHANGELOG「room/ 包退场」"
+      symbols: [NewRoomMod, RoomMod]

@@ -37,7 +37,11 @@ require (
 // changes, and leave files on the new layout alone. It maps package paths
 // only: a symbol that changed home or name inside the merge (nats.Permanent,
 // syncstream.HealthOptions) is left for the compiler to report — there is no
-// per-symbol table to maintain (TROUBLESHOOTING T-45).
+// per-symbol table for the first two stages (TROUBLESHOOTING T-45). The
+// layout stage is different: v1.16.x projects use symbols that were deleted
+// or moved package, so it keeps a removed-symbol table and upgrade fails with
+// file:line and a guide (RR-20260926-24 复核残留,
+// TestConsolidationReportsRemovedSymbolsInsteadOfSucceeding).
 func TestConsolidateProjectRewritesImportsGoModAndManifest(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFile(t, root, "go.mod", legacyGoMod)
