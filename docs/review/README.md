@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-26 上线前复审](REVIEW-2026-09-26-release.md)：main `aaada47` 对 v1.16.1，发布门禁 + Nest/Sync/DataEngine/Remote/demo 五路；登记 RR-20260926-10～24（3 条 P1 级、12 条 P2，均未修复），附[复现](../bug/REPRO-2026-09-26-02.md)；结论：不能直接发布。
+
 [09-26 核心优化复审](REVIEW-2026-09-26-core-optimization.md)：main `a22c5a5`，Nest / Sync / DataEngine+Remote 三路只读审查；登记 RR-20260926-03～06（均 P2、未修复），附[复现](../bug/REPRO-2026-09-26.md)；观测与文档类疑点列在记录内。
 
 [09-25 Sync 四项最终收尾](../feature/REFACTOR-2026-09-25-sync-snapshot-scheduling.md#最终实现与未采纳的实验)：冷创建客户端观测及 RR-13 窗口漂移修复完成；11 包 race、静态检查、生成工程和离线统计回归通过。正常 1%/5% p99 2.342/3.857ms，原门禁通过；集中恢复仍有超标及历史单次 FlushFailures 记录，未宣称严格 50ms 全部验收通过。1000 个客户端当前 AOI 集合诊断核验通过，完成上界 3.601 秒；小窗口实验无收益已撤回，未增加配置。
