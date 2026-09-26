@@ -32,7 +32,7 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 
 - 快池执行全部业务 handler、Guard/Entity local 锁和本地回滚；慢池仅承担准备 I/O、远端获取/确认/释放等等待。慢池不能直接执行业务或取得 Entity local 锁，初始化/发布/回滚若需锁必须交回快池。
 - 同 ID 顺序在统一准入处、按显式声明的全部目标建立；内部续行使用既有准入资格，不能重新排到自身之后。动态 Cast 仍受锁保护，但未声明 ID 不承诺调度 FIFO。
-- **快池内不得阻塞等待。** 快 worker 上不做 I/O 等待、不等待在途加载，更不能把任务投递到快池再同步等它（快池 worker 数个这样的请求即全池饥饿死锁，且 Guard 不释放）。“投递到快池并同步等待”（`entity.RunLocal`、快续行）只属于慢 worker；快阶段需要本地步骤时就地执行。慢阶段注入的执行器等上下文不能随快照泄漏进快阶段。框架自带的等待入口在快 worker 上被调用属于编程错误，目标是 fail-fast（RR-20260926-06），不能静默阻塞。
+- **快池内不得阻塞等待。** 快 worker 上不做 I/O 等待、不等待在途加载，更不能把任务投递到快池再同步等它（快池 worker 数个这样的请求即全池饥饿死锁，且 Guard 不释放）。“投递到快池并同步等待”（`entity.RunLocal`、快续行）只属于慢 worker；快阶段需要本地步骤时就地执行。慢阶段注入的执行器等上下文不能随快照泄漏进快阶段。框架自带的等待入口在快 worker 上被调用属于编程错误，目标是 fail-fast（RR-20260926-06），不能静默阻塞。**显式豁免**（设计内、不依赖快池、不会饥饿死锁）：锁内 WAL 准入及其持久策略（strict 锁内 fsync）；pipelined 阶段一在锁外等待 WAL group-commit（`<-ticket.Done()`，含完成泵满时的降级，见 NEST_PIPELINED_COMMIT.md）。豁免清单之外的新等待入口须经评审。
 - 冷目标用正式 Slow option 并声明所需 ID，由慢阶段准备。快阶段 Getter 只读已加载实体；自定义 Getter 必须遵守 LoadedEntitiesOnly 契约。不能把执行一半的 handler 搬到慢池或自动重试来掩盖冷加载错误；任意 handler 内的阻塞 RPC 也不会自动隔离。
 - 执行位置与请求数据分离：快 worker 标记由接收阶段建立，嵌套 fctx 继承，但 ContextSnapshot 不传递；慢 executor 在快阶段屏蔽、返回慢阶段后恢复。不能只检查传入 ctx 或 msg.getter；直接 ManagerAccess、Repository、生成 lifecycle、保存的慢 ctx 和 Background ctx 都要核对。RunLocal 在实际快阶段就地执行。
 - 快池检查须早于等待和副作用。保留 Nest.Request 返回 ErrSyncInHandler 的契约；Guard/本地锁、回滚、Finalize 和既有锁内 WAL 准入是明确豁免，不因本条改变持久语义。列出实际保护的入口，不把定向保护称为全局 I/O 拦截。
