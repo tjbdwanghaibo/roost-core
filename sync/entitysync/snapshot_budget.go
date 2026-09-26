@@ -348,17 +348,46 @@ func (m *Manager) scheduleSnapshots(work map[SessionID]*flushSession, plan *snap
 	}
 }
 
+// admissionOrder 让带冷创建计费的会话按计划中首次出现的顺序先尝试 Push，其余会话仍按 ID 顺序。
+// RetryLater 或取消中断准入时，实际尝试过的会话因此就是计划前缀，计费与游标一致。
+func (plan *snapshotPlan) admissionOrder(sessionIDs []SessionID) []SessionID {
+	if plan == nil || len(plan.charges) == 0 {
+		return sessionIDs
+	}
+	planned := make(map[SessionID]bool, len(plan.charges))
+	ordered := make([]SessionID, 0, len(sessionIDs))
+	for _, charge := range plan.charges {
+		if sid := charge.candidate.sessionID; !planned[sid] {
+			planned[sid] = true
+			ordered = append(ordered, sid)
+		}
+	}
+	for _, sid := range sessionIDs {
+		if !planned[sid] {
+			ordered = append(ordered, sid)
+		}
+	}
+	return ordered
+}
+
 // 一次 Push 尝试消费该会话本批冷创建的额度（包括 RetryLater），防止同窗口空转。
-// 编码失败、会话失效、提前取消和未轮到的会话不消费额度。按原计划顺序推进游标，
-// 不能被实际按 session ID 发送的顺序重新排序；已发送的帧前缀仍由 Flush 单独结算。
+// 编码失败、会话失效、提前取消和未轮到的会话不消费额度。游标按原计划顺序只推进到
+// 实际尝试的前缀：遇到仍然有效却未被尝试的会话就停下，其后即使有已尝试的会话
+// （同一会话跨两个类别时可能出现）也不越过它；已失效的会话不再参与轮转，可以越过。
+// 已发送的帧前缀仍由 Flush 单独结算。
 func (m *Manager) commitSnapshotAttempts(work map[SessionID]*flushSession, plan *snapshotPlan) {
 	if plan == nil {
 		return
 	}
 	attempted := 0
+	prefix := true
 	for _, charge := range plan.charges {
 		candidate := charge.candidate
-		if !work[candidate.sessionID].snapshotAttempted {
+		batch := work[candidate.sessionID]
+		if !batch.snapshotAttempted {
+			if m.session(candidate.sessionID) == batch.session {
+				prefix = false
+			}
 			continue
 		}
 		attempted++
@@ -367,8 +396,10 @@ func (m *Manager) commitSnapshotAttempts(work map[SessionID]*flushSession, plan 
 			m.windowAllowance.bytes += charge.bytes
 			m.windowSessions[candidate.sessionID]++
 		}
-		m.snapshotCursor[candidate.class] = candidate.sessionID
-		m.snapshotNextClass = 1 - candidate.class
+		if prefix {
+			m.snapshotCursor[candidate.class] = candidate.sessionID
+			m.snapshotNextClass = 1 - candidate.class
+		}
 	}
 	if m.config.Mode == ModeOnChange && plan.byteBlocked && attempted == len(plan.charges) {
 		m.windowByteBlocked = true

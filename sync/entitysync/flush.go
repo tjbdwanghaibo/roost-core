@@ -254,7 +254,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 
 	m.captureNanos.Add(uint64(time.Since(captureStarted)))
-	// 准入：会话有序处理，每帧成功后推进线协议状态，该会话全部帧成功后结算订阅。
+	// 准入：会话有序处理（冷创建计费会话按计划顺序在前，其余按 ID），
+	// 每帧成功后推进线协议状态，该会话全部帧成功后结算订阅。
 	sessionIDs := make([]SessionID, 0, len(work))
 	for sid, batch := range work {
 		if len(batch.entries) == 0 {
@@ -264,6 +265,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 	slices.Sort(sessionIDs)
 	m.scheduleSnapshots(work, plan)
+	sessionIDs = plan.admissionOrder(sessionIDs)
 	defer m.commitSnapshotAttempts(work, plan)
 
 	var admittedSessions []SessionID
