@@ -111,16 +111,15 @@ func (g loadedGetter) GetMany(ctx context.Context, ids []int64, categories []ent
 // 产生它，冷目标错误照常返回。
 var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; moving to slow preparation")
 
-// admissionProbeContext 是不可变的共享 ctx，准入判定每条消息都用，避免逐次分配。
-var admissionProbeContext = entity.WithLoadedEntitiesOnly(context.Background())
-
-// declaredTargetsNeedSlowPreparation 在统一准入时只读内存判断声明目标里是否有冷实体：
-// 按 Getter 的 LoadedEntitiesOnly 契约，未加载且可由 loader 加载的目标返回
-// ErrColdLoadInLogic，不做 I/O、不等待加载，所以在调用方 goroutine（包括快 worker）上执行是安全的。
+// declaredTargetsNeedSlowPreparation 在统一准入时判断声明目标里是否有需要加载的冷实体。
+// 只用 Getter 可选实现的 entity.LoadedChecker（ManagerAccess 实现为一次内存查找），不调用 Get：
+// 准入在发送方 goroutine 上执行——包括在 handler 里发送的快 worker 和唯一的延迟派发 goroutine——
+// 不能依赖自定义 Getter 遵守 LoadedEntitiesOnly（RR-20260926-47）。Getter 未实现时 NewEngine 不安装本判定。
 // 广播是尽力扇出，冷目标逐个报告（TestFastBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
 // 组迁移等内部消息没有业务目标。ID 格式错误留给派发阶段按原语义报告。
 func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
-	if mgr.getter == nil {
+	checker := mgr.loadedChecker
+	if checker == nil {
 		return false
 	}
 	switch msg.Type {
@@ -133,9 +132,7 @@ func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
 		if err != nil {
 			return false
 		}
-		meta := entity.ResolveEntityID(fullID)
-		_, err = mgr.getter.Get(admissionProbeContext, meta.FullID, meta.Category)
-		return errors.Is(err, entity.ErrColdLoadInLogic)
+		return !checker.IsLoaded(entity.ResolveEntityID(fullID).FullID)
 	}
 	if msg.Tid != 0 && cold(msg.Tid) {
 		return true
@@ -155,10 +152,14 @@ func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
 	return false
 }
 
-// beforeSlowPreparation 报告当前派发是否是快池首跑（尚未经过慢准备，msg.prepared == nil）。
-// 只有这时发现的声明目标冷缺失/驱逐才改写为 errDeclaredTargetCold；慢准备后的续行已持有
-// 准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
-func beforeSlowPreparation() bool {
+// beforeSlowPreparation 报告当前派发是否是快池首跑（尚未经过慢准备，msg.prepared == nil），并且本引擎
+// 在准入时做了冷目标判定（Getter 实现 LoadedChecker）。只有这时发现的声明目标冷缺失/驱逐才改写为
+// errDeclaredTargetCold；慢准备后的续行已持有准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
+// 准入不判冷的 Getter 没有“准入时已加载”这个前提，冷目标按 RR-02 原样返回（RR-20260926-47）。
+func (mgr *NestMgr) beforeSlowPreparation() bool {
+	if mgr.loadedChecker == nil {
+		return false
+	}
 	msg := currentNestDispatchMsg()
 	return msg != nil && msg.prepared == nil
 }

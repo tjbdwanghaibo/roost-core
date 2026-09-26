@@ -112,6 +112,21 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	return value, nil
 }
 
+// IsLoaded 实现 LoadedChecker：一次分片 map 查找，未命中时再读一次加载器配置；
+// 不加载、不等待 singleflight、不 Touch，可在任何 goroutine 上调用。
+func (access *ManagerAccess) IsLoaded(id int64) bool {
+	if access == nil || access.manager == nil || id == 0 {
+		return true
+	}
+	if access.manager.Get(id) != nil {
+		return true
+	}
+	access.loaderMu.RLock()
+	hasLoader := access.loader != nil
+	access.loaderMu.RUnlock()
+	return !hasLoader
+}
+
 // coldLoadInLogicError 是快阶段冷缺失的唯一答复：它发生在任何 I/O、加载 goroutine 和
 // singleflight 等待之前，本身不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，
 // 让业务按“目标未加载”降级（RR-02 契约）。RR-06 曾在这里 panic，业务因此失去降级能力
@@ -378,5 +393,6 @@ func (access *ManagerAccess) ConfigureIDGenerator(generator func() (uint64, erro
 }
 
 var _ Getter = (*ManagerAccess)(nil)
+var _ LoadedChecker = (*ManagerAccess)(nil)
 var _ IRemoteEntityLoader = (*ManagerAccess)(nil)
 var _ IRemoteEntityLocalLookup = (*ManagerAccess)(nil)

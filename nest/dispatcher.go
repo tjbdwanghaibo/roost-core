@@ -254,7 +254,8 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	msg.queuedAt = startNestStage(m.stageMetrics)
 	msg.OnSend()
 	// 慢阶段三个来源：显式 SendOptionSlow、Remote，以及声明目标中有未加载的冷实体
-	// （RR-20260926-25：业务不必知道目标冷热）。同 ID 顺序在这里统一建立，与走哪个池无关。
+	// （RR-20260926-25：业务不必知道目标冷热；只经 Getter 的 LoadedChecker 判定、不调用 Get，RR-20260926-47）。
+	// 同 ID 顺序在这里统一建立，与走哪个池无关。
 	slow := m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg) || (m.coldTargets != nil && m.coldTargets(msg)))
 	err := m.queue.admit(msg, slow)
 	if err != nil {

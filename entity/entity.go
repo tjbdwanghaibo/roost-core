@@ -48,12 +48,23 @@ type IThreadSafeEntityBase interface {
 // Getter 必须保留 context；LoadedEntitiesOnly 为真（快 worker 或显式约束的 ctx）时
 // 仅允许内存读取，冷目标返回可 errors.Is 判别的 ErrColdLoadInLogic，不能执行 I/O、
 // 不能等待加载，也不能 panic：冷缺失本身不阻塞，业务可以据此降级（RR-20260926-26）。
-// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInFastWorker。Nest 统一准入也用
-// 这条只读路径判断声明目标是否需要慢阶段预加载（RR-20260926-25），违反契约的 Getter
-// 会在发送方 goroutine 上执行 I/O。
+// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInFastWorker。Nest 统一准入不调用
+// Get 判断冷热，只用可选的 LoadedChecker（RR-20260926-47）。
 type Getter interface {
 	Get(context.Context, int64, EntityCategory) (IThreadSafeEntity, error)
 	GetMany(context.Context, []int64, []EntityCategory) ([]IThreadSafeEntity, error)
+}
+
+// LoadedChecker 是 Getter 的可选能力：不做任何加载的只读查询，Nest 统一准入用它判断声明目标
+// 是否需要慢阶段预加载（RR-20260926-25 / 47）。准入在发送方 goroutine（包括快 worker 和唯一的
+// 延迟派发 goroutine）上执行，实现不得做 I/O、等待在途加载、Touch 实体或阻塞。
+// Getter 未实现时，准入不判冷、不自动转慢，也不在准入后发现冷目标时原位转慢；冷目标按
+// LoadedEntitiesOnly 契约返回 ErrColdLoadInLogic，需要预加载时业务使用显式 Slow。
+type LoadedChecker interface {
+	// IsLoaded 报告完整 ID 的实体是否无需加载即可读取：已在内存中返回 true；不在内存且
+	// 有可用加载器时返回 false；没有加载器时也返回 true——慢阶段同样读不到，缺失交由派发阶段
+	// 按不存在处理。
+	IsLoaded(id int64) bool
 }
 
 // AggregateLoader reconstructs a complete entity from persistent DAO

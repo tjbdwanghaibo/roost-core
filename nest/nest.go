@@ -86,6 +86,7 @@ type NestMgr struct {
 	dispatcher             *Dispatcher
 	ticker                 *Ticker
 	getter                 entity.Getter
+	loadedChecker          entity.LoadedChecker // getter 可选实现的只读“是否已加载”；nil 时准入不判冷（RR-20260926-47）
 	remoteSnapshotResolver RemoteSnapshotResolver
 	remoteManager          entity.IRemoteEntityManager
 	committer              TransactionCommitter
@@ -366,7 +367,10 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	ret.dispatcher.slowConfig = params.SlowPool
 	ret.dispatcher.remoteWorkers = params.RemoteWorkers
 	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
-	ret.dispatcher.coldTargets = ret.declaredTargetsNeedSlowPreparation
+	if checker, ok := params.Getter.(entity.LoadedChecker); ok && checker != nil {
+		ret.loadedChecker = checker
+		ret.dispatcher.coldTargets = ret.declaredTargetsNeedSlowPreparation
+	}
 	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
@@ -502,8 +506,9 @@ var (
 		}
 	}
 	// SendOptionSlow 将声明目标的加载及前后置 I/O 放入慢池；handler 始终在快池。
-	// 声明目标中有未加载实体时 Nest 在统一准入处自动走慢阶段（RR-20260926-25），
-	// 显式 Slow 仍有效，用于强制慢准备（例如自定义 Getter 无法按 LoadedEntitiesOnly 判别冷热）。
+	// Getter 实现 entity.LoadedChecker（ManagerAccess 已实现）时，声明目标中有未加载实体会在统一准入处
+	// 自动走慢阶段（RR-20260926-25 / 47）；显式 Slow 仍有效，用于强制慢准备，也是未实现 LoadedChecker 的
+	// 自定义 Getter 预加载冷目标的方式。
 	SendOptionSlow = func() SendOpt {
 		return func(opt *sendOptParam) { opt.Cost = true }
 	}
