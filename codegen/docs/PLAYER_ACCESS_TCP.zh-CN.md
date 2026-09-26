@@ -41,6 +41,13 @@ roost add transport tcp
 失败直接断开。业务请求按连接串行 Dispatch，响应沿用请求 sequence。倒序、重复 sequence、保留 flag、
 未知协议、解码失败或内部业务错误都关闭连接；稳定业务错误应由项目 endpoint 编码为明确 errcode。
 
+每次 Dispatch 在连接 ctx 上派生一个 `dispatch_timeout` 截止的 ctx（RR-20260926-36）；Session 被关闭
+（同 SessionID 重连替换、`CloseSessions`、网络错误）时取消连接 ctx，在途 Dispatch 随之结束，读循环、
+连接槽和按 IP 计数随连接一起释放。截止只结束**等待**，不撤销 handler 已准入的事务：超时后结果可能已经
+提交，客户端对非幂等请求应按幂等键重试或先查询。handler 在截止后仍返回的响应照常写回（用连接 ctx，
+受 `write_timeout` 约束）。截止依赖 handler 遵守 ctx；不遵守 ctx 的阻塞调用不会被传输层抢占
+（读循环不为每个请求起 goroutine）。超过预算的请求计入 `player_tcp_dispatch_timeout_total`。
+
 服务端主动推送使用 flag 1 和每个 Session 独立递增的服务端 sequence，不占用请求/响应 sequence 空间。
 客户端必须分别维护两个方向的序列语义。
 
@@ -71,7 +78,16 @@ player_access:
     idle_timeout: 90s
     write_timeout: 5s
     shutdown_timeout: 10s
+    dispatch_timeout: 3s
+    login_timeout: 2s
 ```
+
+- `dispatch_timeout`：单个请求的总预算。应与 `nest.request_timeout` 一致（handler 内一次 Nest 调用已有这个
+  预算）；键缺省时取同一配置里的 `nest.request_timeout`，再缺省为 3s。`add transport tcp` 补键时按该服务配置
+  已有的 `nest.request_timeout` 写入。上限 5m。
+- `login_timeout`：登录请求里“把玩家接入本进程”（归属 Claim + 冷加载）可用的份额，必须不大于
+  `dispatch_timeout`；缺省为 min(2s, dispatch_timeout)。传输层本身不使用它，只经 `Runtime.LoginTimeout()` 发布给
+  登录端点（game-demo 的 EnterGame 超出时回 `login_timeout` 错误码，客户端重试）。
 
 完成 `auth.go` 后执行 `roost config enable player-tcp`。命令会先确认鉴权不再是默认骨架，再只修改
 `enabled` 标量；临时停流使用 `roost config disable player-tcp`，不需要手工编辑 YAML。

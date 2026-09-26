@@ -1,6 +1,8 @@
 package player
 
 import (
+	stdcontext "context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -42,8 +44,25 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		code, reason := errcode.ClientError(ownersErr)
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
-	mine, claimErr := owners.Claim(context.Context(), context.PlayerID)
+	// Taking the player into service — the claim and the load — runs on its
+	// own budget, a share of this request's dispatch deadline
+	// (player_access.tcp.login_timeout, RR-20260926-36). A cold load waits
+	// for this player's projections to reach the store; if the store is down
+	// that wait does not end on its own, and it must not hold the connection:
+	// the client gets login_timeout and retries. What is left of the dispatch
+	// budget covers the answer and the placement steps below.
+	//
+	// Running out of budget stops the WAITING, nothing else. A load another
+	// login of the same player is sharing goes on for them; nothing admitted
+	// is undone. EnterGame is safe to retry: GetOrCreate finds the Entity a
+	// timed-out attempt may have created.
+	loginCtx, cancelLogin := controller.loginContext(context.Context())
+	defer cancelLogin()
+	mine, claimErr := owners.Claim(loginCtx, context.PlayerID)
 	if claimErr != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "claim", claimErr); cutShort {
+			return answer, nil
+		}
 		slog.Error("enter_game: ownership not claimed", "player_id", context.PlayerID, "err", claimErr)
 		code, reason := errcode.ClientError(claimErr)
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
@@ -54,8 +73,12 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", sid))
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
-	subject, created, err := controller.Players().GetOrCreate(context.Context(), context.PlayerID)
+	subject, created, err := controller.Players().GetOrCreate(loginCtx, context.PlayerID)
+	cancelLogin()
 	if err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "load", err); cutShort {
+			return answer, nil
+		}
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
 			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
@@ -110,4 +133,33 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		controller.deliver(context.Context(), message)
 	}
 	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
+}
+
+// loginContext is the login step's share of the request: the configured
+// login budget when the transport publishes one, otherwise the request's own
+// deadline alone.
+func (controller *Controller) loginContext(parent stdcontext.Context) (stdcontext.Context, stdcontext.CancelFunc) {
+	if budget := controller.LoginTimeout(); budget > 0 {
+		return stdcontext.WithTimeout(parent, budget)
+	}
+	return stdcontext.WithCancel(parent)
+}
+
+// loginCutShort answers a claim or load whose wait was cut short: the login
+// budget ran out, or the connection closed under it (a newer login of the
+// same session replaced it, and the answer goes nowhere). Both are named —
+// login_timeout, retry — rather than reported as a server error, and logged
+// as what they are, not in the error log. Any other failure is not its
+// business.
+func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameResponse, bool) {
+	switch {
+	case errors.Is(err, stdcontext.DeadlineExceeded):
+		slog.Warn("enter_game: login budget exhausted", "step", step, "player_id", playerID, "err", err)
+	case errors.Is(err, stdcontext.Canceled):
+		slog.Info("enter_game: login abandoned, its connection closed", "step", step, "player_id", playerID, "err", err)
+	default:
+		return nil, false
+	}
+	code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrLoginTimeout, err, "player_id", playerID))
+	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
 }

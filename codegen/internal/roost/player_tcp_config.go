@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,6 +24,10 @@ var playerTCPConfigDefaults = []struct{ key, value string }{
 	{key: "idle_timeout", value: "90s"},
 	{key: "write_timeout", value: "5s"},
 	{key: "shutdown_timeout", value: "10s"},
+	// RR-20260926-36: dispatch_timeout matches the generated nest.request_timeout;
+	// login_timeout is the share of it a login gives to claim + cold load.
+	{key: "dispatch_timeout", value: "3s"},
+	{key: "login_timeout", value: "2s"},
 }
 
 // ensurePlayerTCPConfig adds only missing YAML keys and changes only the
@@ -51,16 +56,17 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 	if err != nil {
 		return "", fmt.Errorf("parse %s: %w", filepath.ToSlash(relative), err)
 	}
+	defaults := playerTCPDefaultsFor(document)
 	playerKey, playerNode := yamlMappingEntry(document, "player_access")
 	if playerNode == nil {
-		text = strings.TrimRight(text, "\n") + "\n\n" + playerTCPBlock(0) + "\n"
+		text = strings.TrimRight(text, "\n") + "\n\n" + playerTCPBlock(0, defaults) + "\n"
 	} else {
 		if playerNode.Kind != yaml.MappingNode || playerNode.Style&yaml.FlowStyle != 0 {
 			return "", errors.New("player_access must use block-map YAML so codegen can safely add tcp without rewriting application config")
 		}
 		tcpKey, tcpNode := yamlMappingEntry(playerNode, "tcp")
 		if tcpNode == nil {
-			text, err = insertYAMLLines(text, playerKey.Line, strings.Split(strings.TrimSuffix(playerTCPBlock(2), "\n"), "\n"))
+			text, err = insertYAMLLines(text, playerKey.Line, strings.Split(strings.TrimSuffix(playerTCPBlock(2, defaults), "\n"), "\n"))
 			if err != nil {
 				return "", err
 			}
@@ -68,8 +74,8 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 			if tcpNode.Kind != yaml.MappingNode || tcpNode.Style&yaml.FlowStyle != 0 {
 				return "", errors.New("player_access.tcp must use block-map YAML so codegen can safely fill defaults")
 			}
-			missing := make([]string, 0, len(playerTCPConfigDefaults))
-			for _, item := range playerTCPConfigDefaults {
+			missing := make([]string, 0, len(defaults))
+			for _, item := range defaults {
 				if _, value := yamlMappingEntry(tcpNode, item.key); value == nil {
 					missing = append(missing, "    "+item.key+": "+item.value)
 				}
@@ -114,7 +120,36 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 	return filepath.Clean(relative), nil
 }
 
-func playerTCPBlock(indent int) string {
+// playerTCPDefaultsFor is playerTCPConfigDefaults for one service config: the
+// dispatch budget is written equal to that config's nest.request_timeout when
+// it has one, so a service whose Nest calls were given longer does not get a
+// transport deadline that cuts them off (RR-20260926-36). The login budget
+// stays at its default unless that would exceed the dispatch budget.
+func playerTCPDefaultsFor(document *yaml.Node) []struct{ key, value string } {
+	defaults := append([]struct{ key, value string }(nil), playerTCPConfigDefaults...)
+	_, nestNode := yamlMappingEntry(document, "nest")
+	_, requestNode := yamlMappingEntry(nestNode, "request_timeout")
+	if requestNode == nil || requestNode.Kind != yaml.ScalarNode {
+		return defaults
+	}
+	request, err := time.ParseDuration(strings.TrimSpace(requestNode.Value))
+	if err != nil || request <= 0 {
+		return defaults
+	}
+	for index := range defaults {
+		switch defaults[index].key {
+		case "dispatch_timeout":
+			defaults[index].value = request.String()
+		case "login_timeout":
+			if login, err := time.ParseDuration(defaults[index].value); err == nil && login > request {
+				defaults[index].value = request.String()
+			}
+		}
+	}
+	return defaults
+}
+
+func playerTCPBlock(indent int, defaults []struct{ key, value string }) string {
 	prefix := strings.Repeat(" ", indent)
 	var builder strings.Builder
 	valuePrefix := prefix + "  "
@@ -124,7 +159,7 @@ func playerTCPBlock(indent int) string {
 	} else {
 		builder.WriteString(prefix + "tcp:\n")
 	}
-	for _, item := range playerTCPConfigDefaults {
+	for _, item := range defaults {
 		builder.WriteString(valuePrefix + item.key + ": " + item.value + "\n")
 	}
 	return strings.TrimSuffix(builder.String(), "\n")

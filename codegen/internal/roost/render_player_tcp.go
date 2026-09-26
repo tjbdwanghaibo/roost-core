@@ -25,6 +25,8 @@ player_access:
     idle_timeout: 90s
     write_timeout: 5s
     shutdown_timeout: 10s
+    dispatch_timeout: 3s
+    login_timeout: 2s
 `
 }
 
@@ -189,7 +191,23 @@ type Config struct {
 	IdleTimeout time.Duration
 	WriteTimeout time.Duration
 	ShutdownTimeout time.Duration
+	// DispatchTimeout bounds one request: every Dispatch runs under a context
+	// that ends this long after the frame was read (RR-20260926-36). It is
+	// meant to match nest.request_timeout — the budget one Nest call inside
+	// the handler already has — and defaults to it when the key is absent.
+	DispatchTimeout time.Duration
+	// LoginTimeout is the part of a login request's DispatchTimeout that
+	// taking the player into service (ownership claim + cold load) may use.
+	// It is not applied by the transport: the login endpoint reads it through
+	// Runtime.LoginTimeout, so what is left of the dispatch budget still
+	// covers the answer and the placement steps after the load.
+	LoginTimeout time.Duration
 }
+
+const (
+	defaultDispatchTimeout = 3 * time.Second
+	defaultLoginTimeout = 2 * time.Second
+)
 
 func defaultConfig() Config {
 	return Config{
@@ -198,6 +216,7 @@ func defaultConfig() Config {
 		MaxPayloadBytes: 1 << 20, HandshakeTimeout: 5 * time.Second,
 		IdleTimeout: 90 * time.Second, WriteTimeout: 5 * time.Second,
 		ShutdownTimeout: 10 * time.Second,
+		DispatchTimeout: defaultDispatchTimeout, LoginTimeout: defaultLoginTimeout,
 	}
 }
 
@@ -216,6 +235,19 @@ func configFromViper(cfg *viper.Viper) (Config, error) {
 	if value := cfg.GetDuration(key + "idle_timeout"); value != 0 { result.IdleTimeout = value }
 	if value := cfg.GetDuration(key + "write_timeout"); value != 0 { result.WriteTimeout = value }
 	if value := cfg.GetDuration(key + "shutdown_timeout"); value != 0 { result.ShutdownTimeout = value }
+	// The dispatch budget follows the Nest request budget unless it is set on
+	// its own: a request is at least one Nest call, and a transport deadline
+	// shorter than that call's own would cut it off for no stated reason.
+	if value := cfg.GetDuration(key + "dispatch_timeout"); value != 0 {
+		result.DispatchTimeout = value
+	} else if value := cfg.GetDuration("nest.request_timeout"); value > 0 {
+		result.DispatchTimeout = value
+	}
+	if value := cfg.GetDuration(key + "login_timeout"); value != 0 {
+		result.LoginTimeout = value
+	} else {
+		result.LoginTimeout = min(defaultLoginTimeout, result.DispatchTimeout)
+	}
 	if err := validateConfig(result); err != nil { return Config{}, err }
 	return result, nil
 }
@@ -226,12 +258,17 @@ func validateConfig(result Config) error {
 		result.MaxHandshakes <= 0 || result.MaxHandshakes > result.MaxConnections ||
 		result.MaxHandshakeBytes == 0 || result.MaxHandshakeBytes > 64<<10 ||
 		result.MaxPayloadBytes == 0 || result.MaxPayloadBytes > hardMaxPayload ||
-		result.HandshakeTimeout <= 0 || result.IdleTimeout <= 0 || result.WriteTimeout <= 0 || result.ShutdownTimeout <= 0 {
+		result.HandshakeTimeout <= 0 || result.IdleTimeout <= 0 || result.WriteTimeout <= 0 || result.ShutdownTimeout <= 0 ||
+		result.DispatchTimeout <= 0 || result.LoginTimeout <= 0 {
 		return errors.New("player tcp: addr, limits and timeouts are outside safe bounds")
 	}
 	if _, _, err := net.SplitHostPort(result.Addr); err != nil { return fmt.Errorf("player tcp: invalid addr %%q: %%w", result.Addr, err) }
-	if result.HandshakeTimeout > time.Minute || result.WriteTimeout > time.Minute || result.IdleTimeout > 24*time.Hour || result.ShutdownTimeout > 5*time.Minute {
+	if result.HandshakeTimeout > time.Minute || result.WriteTimeout > time.Minute || result.IdleTimeout > 24*time.Hour || result.ShutdownTimeout > 5*time.Minute ||
+		result.DispatchTimeout > 5*time.Minute {
 		return errors.New("player tcp: timeouts exceed safe bounds")
+	}
+	if result.LoginTimeout > result.DispatchTimeout {
+		return fmt.Errorf("player tcp: login_timeout %%v exceeds dispatch_timeout %%v; the login runs inside one dispatch", result.LoginTimeout, result.DispatchTimeout)
 	}
 	return nil
 }
@@ -289,7 +326,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		if err := bound.BindRegistry(registry); err != nil { return fmt.Errorf("player tcp: bind authenticator: %%w", err) }
 	}
 	mod.runtime = runtime
-	mod.transportRuntime = &Runtime{protocols: runtime.Protocols}
+	mod.transportRuntime = &Runtime{protocols: runtime.Protocols, loginTimeout: mod.config.LoginTimeout}
 	return registry.Register(Name, mod.transportRuntime)
 }
 
@@ -336,6 +373,7 @@ func (mod *Mod) StopWithContext(ctx context.Context) error {
 type Runtime struct {
 	protocols *player_agent.ProtocolRegistry
 	server atomic.Pointer[Server]
+	loginTimeout time.Duration
 
 	lifecycleMu sync.Mutex
 	subscribers map[uint64]func(SessionClosed)
@@ -489,6 +527,14 @@ func (runtime *Runtime) PushSession(ctx context.Context, sessionID string, messa
 	return server.pushSession(ctx, sessionID, messageID, payload)
 }
 
+// LoginTimeout is player_access.tcp.login_timeout: how much of a login
+// request's dispatch budget the login endpoint gives to taking the player into
+// service. Zero means no separate budget (the dispatch deadline still holds).
+func (runtime *Runtime) LoginTimeout() time.Duration {
+	if runtime == nil { return 0 }
+	return runtime.loginTimeout
+}
+
 func (runtime *Runtime) ActiveSessions(playerID int64) int {
 	if runtime == nil { return 0 }
 	server := runtime.server.Load()
@@ -540,6 +586,10 @@ type Server struct {
 func NewServer(config Config, runtime *accessplayer.Runtime, authenticator Authenticator) (*Server, error) {
 	if runtime == nil || runtime.Protocols == nil { return nil, errors.New("player tcp: runtime is nil") }
 	if authenticator == nil { return nil, errors.New("player tcp: authenticator is nil") }
+	// A Config built before the request budgets existed (RR-20260926-36) has
+	// them at zero; it gets the defaults rather than a refusal.
+	if config.DispatchTimeout == 0 { config.DispatchTimeout = defaultDispatchTimeout }
+	if config.LoginTimeout == 0 { config.LoginTimeout = min(defaultLoginTimeout, config.DispatchTimeout) }
 	if err := validateConfig(config); err != nil { return nil, err }
 	server := &Server{
 		config: config, runtime: runtime, authenticator: authenticator,
@@ -657,8 +707,11 @@ func (server *Server) serveConnection(connection net.Conn) {
 		_ = tcpConnection.SetKeepAlivePeriod(30 * time.Second)
 		_ = tcpConnection.SetNoDelay(true)
 	}
-	connectionCtx, cancel := context.WithCancel(server.ctx)
-	defer cancel()
+	// connectionCtx is this connection's lifetime: the server stopping or the
+	// session closing (a replacing login, CloseSessions, a network error) ends
+	// it, and with it whatever request the connection is still running.
+	connectionCtx, cancel := context.WithCancelCause(server.ctx)
+	defer cancel(gateway.ErrSessionClosed)
 	handshakeCtx, handshakeCancel := context.WithTimeout(connectionCtx, server.config.HandshakeTimeout)
 	defer handshakeCancel()
 	handshakeDeadline, _ := handshakeCtx.Deadline()
@@ -683,7 +736,7 @@ func (server *Server) serveConnection(connection net.Conn) {
 	<-server.handshakeSlots
 	handshakeHeld = false
 	if err != nil || !principal.Authenticated() { metrics.IncCounter("player_tcp_auth_failure_total", nil, 1); _ = connection.Close(); return }
-	session := &session{connection: connection, principal: clonePrincipal(principal), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes}
+	session := &session{connection: connection, principal: clonePrincipal(principal), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes, cancel: cancel}
 	defer func() {
 		_ = session.Close(gateway.ErrSessionClosed)
 	}()
@@ -699,15 +752,30 @@ func (server *Server) serveConnection(connection net.Conn) {
 			metrics.IncCounter("player_tcp_frame_error_total", nil, 1); releasePayload(); return
 		}
 		lastSequence = request.sequence
+		// One request, one deadline (RR-20260926-36). Without it a handler
+		// waiting on something that never finishes — a cold load behind a
+		// projection that keeps failing — held this goroutine, this socket's
+		// reads and the connection slot until the process stopped. The read
+		// loop is synchronous on purpose (per-connection order, no goroutine
+		// per request); the deadline is what keeps that from being unbounded.
+		// It bounds waiting, not work: a request the handler already had
+		// admitted is not undone by it.
 		dispatchStarted := time.Now()
-		response, dispatchErr := server.runtime.Protocols.Dispatch(connectionCtx, session, request.messageID, request.sequence, request.payload)
+		dispatchCtx, cancelDispatch := context.WithTimeout(connectionCtx, server.config.DispatchTimeout)
+		response, dispatchErr := server.runtime.Protocols.Dispatch(dispatchCtx, session, request.messageID, request.sequence, request.payload)
+		overBudget := errors.Is(dispatchCtx.Err(), context.DeadlineExceeded)
+		cancelDispatch()
 		metrics.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))
 		releasePayload()
+		if overBudget { metrics.IncCounter("player_tcp_dispatch_timeout_total", nil, 1) }
 		if dispatchErr != nil {
 			metrics.IncCounter("player_tcp_dispatch_error_total", nil, 1)
-			slog.Debug("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "err", dispatchErr)
+			slog.Debug("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "over_budget", overBudget, "err", dispatchErr)
 			return
 		}
+		// The answer goes out on the connection's context, not the request's:
+		// a handler that finished at its deadline is reporting what happened,
+		// and dropping that report would leave the client guessing.
 		if response != nil {
 			if err := session.Reply(connectionCtx, response); err != nil { return }
 		}
@@ -833,6 +901,10 @@ type session struct {
 	closeOnce sync.Once
 	closeErr error
 	serverSequence atomic.Uint32
+	// cancel ends the connection's context. Close calls it so a session that
+	// is closed from outside — replaced by a new login, CloseSessions — stops
+	// the request its connection is still running instead of only its socket.
+	cancel context.CancelCauseFunc
 }
 
 func clonePrincipal(principal gateway.Principal) gateway.Principal {
@@ -893,6 +965,7 @@ func (session *session) Close(reason error) error {
 		session.closeErr = reason
 		session.closeErr = errors.Join(reason, session.connection.Close())
 		session.writeMu.Unlock()
+		if session.cancel != nil { session.cancel(reason) }
 	})
 	return session.closeErr
 }
@@ -918,6 +991,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/gateway"
 	accessplayer %q
 	%q
@@ -1089,6 +1163,185 @@ func TestAPanickingSubscriberDoesNotStopTheDispatcher(t *testing.T) {
 		}
 	}
 	runtime.stopLifecycle()
+}
+
+// RR-20260926-36: the dispatch budget follows nest.request_timeout unless it
+// is set on its own, and a login budget larger than the dispatch it runs in is
+// refused rather than silently cut short.
+func TestDispatchBudgetFollowsTheNestRequestTimeout(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("nest.request_timeout", "7s")
+	config, err := configFromViper(cfg)
+	if err != nil { t.Fatal(err) }
+	if config.DispatchTimeout != 7*time.Second || config.LoginTimeout != defaultLoginTimeout {
+		t.Fatalf("dispatch=%%v login=%%v, want 7s and %%v", config.DispatchTimeout, config.LoginTimeout, defaultLoginTimeout)
+	}
+	cfg.Set("nest.request_timeout", "1s")
+	if config, err = configFromViper(cfg); err != nil || config.DispatchTimeout != time.Second || config.LoginTimeout != time.Second {
+		t.Fatalf("dispatch=%%v login=%%v err=%%v, want both 1s", config.DispatchTimeout, config.LoginTimeout, err)
+	}
+	cfg.Set("player_access.tcp.dispatch_timeout", "3s")
+	cfg.Set("player_access.tcp.login_timeout", "5s")
+	if _, err := configFromViper(cfg); err == nil {
+		t.Fatal("a login budget larger than the dispatch budget was accepted")
+	}
+	// A Config built without the budgets (code written before they existed)
+	// gets the defaults from NewServer instead of being refused.
+	legacy := defaultConfig()
+	legacy.DispatchTimeout, legacy.LoginTimeout = 0, 0
+	server, err := NewServer(legacy, &accessplayer.Runtime{Protocols: player_agent.NewProtocolRegistry()}, AuthenticatorFunc(func(context.Context, string, net.Addr) (gateway.Principal, error) {
+		return gateway.Principal{}, nil
+	}))
+	if err != nil || server.config.DispatchTimeout != defaultDispatchTimeout || server.config.LoginTimeout != defaultLoginTimeout {
+		t.Fatalf("legacy config: err=%%v dispatch=%%v login=%%v", err, server.config.DispatchTimeout, server.config.LoginTimeout)
+	}
+}
+
+const (
+	stuckRequestID uint32 = 10001
+	stuckResponseID uint32 = 10002
+)
+
+// stuckDispatchServer serves one request type whose work never finishes on
+// its own — the shape of a cold login waiting on a projection that keeps
+// failing. The handler honors its context the way the projection wait does and
+// answers once the context ends.
+func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*Server, <-chan context.Context) {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
+	cfg.Set("player_access.tcp.dispatch_timeout", dispatchTimeout)
+	cfg.Set("player_access.tcp.login_timeout", dispatchTimeout)
+	config, err := configFromViper(cfg)
+	if err != nil { t.Fatal(err) }
+	started := make(chan context.Context, 4)
+	protocols := player_agent.NewProtocolRegistry()
+	if err := player_agent.RegisterProtocol[string, string](protocols, stuckRequestID, stuckResponseID,
+		func(payload []byte) (string, error) { return string(payload), nil },
+		func(value string) ([]byte, error) { return []byte(value), nil },
+		func(ctx *player_agent.Context, _ string) (string, error) {
+			started <- ctx.Context()
+			<-ctx.Context().Done()
+			return "gave up: " + ctx.Context().Err().Error(), nil
+		}); err != nil { t.Fatal(err) }
+	if err := protocols.Seal(); err != nil { t.Fatal(err) }
+	server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+		return gateway.Principal{PlayerID: 7, SessionID: token}, nil
+	}))
+	if err != nil { t.Fatal(err) }
+	if err := server.Start(); err != nil { t.Fatal(err) }
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+	return server, started
+}
+
+func dialAuthenticated(t *testing.T, server *Server, token string) net.Conn {
+	t.Helper()
+	server.mu.RLock()
+	addr := server.listener.Addr().String()
+	server.mu.RUnlock()
+	connection, err := net.Dial("tcp", addr)
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { _ = connection.Close() })
+	client := &session{connection: connection, writeTimeout: time.Second}
+	if err := client.writeFrame(context.Background(), 0, 0, 1, []byte(token)); err != nil { t.Fatal(err) }
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ack, release, err := server.readFrame(connection)
+	if err != nil { t.Fatalf("authentication ack: %%v", err) }
+	release()
+	if ack.messageID != 0 || ack.sequence != 1 { t.Fatalf("unexpected ack %%+v", ack) }
+	return connection
+}
+
+func sendStuckRequest(t *testing.T, connection net.Conn, sequence uint32) {
+	t.Helper()
+	client := &session{connection: connection, writeTimeout: time.Second}
+	if err := client.writeFrame(context.Background(), 0, stuckRequestID, sequence, []byte("login")); err != nil { t.Fatal(err) }
+}
+
+// waitReleased waits for the server's connection slots and per-IP counts to
+// come down to what the still-open connections hold.
+func waitReleased(t *testing.T, server *Server, open int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	counted := func() (slots, perIP int) {
+		server.mu.RLock()
+		defer server.mu.RUnlock()
+		for _, count := range server.ipConnections { perIP += count }
+		return len(server.connectionSlots), perIP
+	}
+	slots, perIP := counted()
+	for (slots != open || perIP != open) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		slots, perIP = counted()
+	}
+	if slots != open || perIP != open {
+		t.Fatalf("connection slots in use = %%d, per-IP count = %%d, want %%d each", slots, perIP, open)
+	}
+}
+
+// RR-20260926-36: a request whose work never finishes must end at the
+// dispatch budget and be answered, and the connection's slot and per-IP count
+// must come back when the client goes. Before, the handler's context was the
+// connection's, which only the server stopping ended.
+func TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T) {
+	server, started := stuckDispatchServer(t, "200ms")
+	connection := dialAuthenticated(t, server, "session-a")
+	began := time.Now()
+	sendStuckRequest(t, connection, 2)
+	select {
+	case ctx := <-started:
+		if deadline, ok := ctx.Deadline(); !ok || deadline.Sub(began) > time.Second {
+			t.Errorf("the dispatch context deadline is %%v (set=%%v), want about 200ms after the request", deadline.Sub(began), ok)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request never reached its handler")
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	response, release, err := server.readFrame(connection)
+	if err != nil {
+		t.Fatalf("no answer %%v after the request was sent (budget 200ms): %%v", time.Since(began).Round(time.Millisecond), err)
+	}
+	defer release()
+	if response.messageID != stuckResponseID || response.sequence != 2 || !bytes.HasPrefix(response.payload, []byte("gave up: context deadline exceeded")) {
+		t.Fatalf("unexpected response %%+v (%%q)", response, response.payload)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second { t.Errorf("answered after %%v, budget 200ms", elapsed) }
+	// The connection is still usable: the budget ended one request, not the session.
+	sendStuckRequest(t, connection, 3)
+	<-started
+	if _, release, err := server.readFrame(connection); err != nil { t.Fatalf("second request on the same connection: %%v", err) } else { release() }
+	_ = connection.Close()
+	waitReleased(t, server, 0)
+}
+
+// RR-20260926-36: closing a session — here the same SessionID logging in on a
+// new connection, which is what a reconnect does — must cancel the request its
+// old connection is still running, so the old goroutine and slot are released
+// now rather than when the server stops.
+func TestClosingASessionCancelsItsInFlightDispatch(t *testing.T) {
+	server, started := stuckDispatchServer(t, "1m")
+	old := dialAuthenticated(t, server, "session-r")
+	sendStuckRequest(t, old, 2)
+	var inFlight context.Context
+	select {
+	case inFlight = <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request never reached its handler")
+	}
+	dialAuthenticated(t, server, "session-r")
+	select {
+	case <-inFlight.Done():
+		if cause := context.Cause(inFlight); !errors.Is(cause, gateway.ErrSessionClosed) {
+			t.Errorf("the in-flight request was cancelled by %%v, want the session close", cause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the replaced session's in-flight dispatch is still running: closing a session did not cancel it")
+	}
+	waitReleased(t, server, 1)
 }
 
 func TestServerRejectsInvalidConstruction(t *testing.T) {

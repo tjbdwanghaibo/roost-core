@@ -437,6 +437,10 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
   用一张表把响应映射回机器人等待的序号；这是唯一同时知道两边格式的地方，常量要与 `server_gen.go` 同步。
 - **`enter_game` 为什么不是 Nest handler**：Nest 处理的是已存在的实体，第一次登录还没有；创建 Player 是生命周期操作，
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
+- **登录有预算**（RR-20260926-36）：传输层给每个请求 `player_access.tcp.dispatch_timeout`（与 `nest.request_timeout` 对齐）；
+  EnterGame 的归属 Claim + GetOrCreate 另用 `player_access.tcp.login_timeout`（默认 2s，不大于 dispatch）。冷加载要等该玩家已准入
+  事务投影到库，库不可用时这个等待不会自己结束；超出预算回 `login_timeout`（100021），连接不被挂住，客户端重试即可——超时只停止等待，
+  不撤销任何已准入的事务，共享的加载 flight 也不因一个等待方离开而取消。
 - 生成的 pb 类型没有 `GetCode()`，`RegisterCall` 的自动 code 检查不会生效，每个 call 用 `OnResp` 自己查 `Code`。
 - **成组后推送**：matchmaker 在 Commit 成功后经传输层 `Runtime.PushPlayer` 给每个成员推 `MatchFound`（协议里是一个没有请求的
   notify 方法，生成的 bind 注册它的编码器）。推送到达的是该玩家**所有**已认证会话；玩家已下线时推送失败只记 debug 日志——票据里

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
@@ -121,6 +122,13 @@ type purchaseDrainer interface {
 type pushTransport interface {
 	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
 	ActiveSessions(playerID int64) int
+}
+
+// loginBudgetSource is the slice of the player TCP Runtime EnterGame reads:
+// player_access.tcp.login_timeout, the share of a login request's dispatch
+// budget that taking the player into service may use (RR-20260926-36).
+type loginBudgetSource interface {
+	LoginTimeout() time.Duration
 }
 
 // playerTCPCapability is internal/access/player/tcp's Name: the capability
@@ -304,6 +312,21 @@ func (controller *Controller) Transport() (pushTransport, error) {
 	}
 	controller.transport.Store(&runtime)
 	return runtime, nil
+}
+
+// LoginTimeout is the transport's login budget, or zero when no transport
+// publishes one (the request's dispatch deadline still bounds the login).
+// Looked up on each call: it is one map read per login, and the transport
+// Mod publishes after this controller is built.
+func (controller *Controller) LoginTimeout() time.Duration {
+	if controller == nil || controller.registry == nil {
+		return 0
+	}
+	source, ok := app.Lookup[loginBudgetSource](controller.registry, playerTCPCapability)
+	if !ok || source == nil {
+		return 0
+	}
+	return source.LoginTimeout()
 }
 
 // Battles is the battle manager, looked up lazily: the service registers it
