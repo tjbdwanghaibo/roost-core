@@ -240,31 +240,38 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 // notifications schedule it for the next tick; nobody receives it until a
 // policy subscribes a session.
 func (m *Manager) Register(state *entity.SubjectSyncState) error {
+	_, err := m.register(state, nil)
+	return err
+}
+
+// register 是 Register 与 RegisterAfterRetirement 的共同路径。done 只在登记被排到退役完成之后
+// （queued=true）时交给排队项，由它恰好报告一次结果；直接登记或被拒绝时不调用。
+func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
 	if m == nil {
-		return ErrManagerClosed
+		return false, ErrManagerClosed
 	}
 	if state == nil || !state.Enabled() || state.SubjectID() == 0 {
-		return ErrSubjectInvalid
+		return false, ErrSubjectInvalid
 	}
 	id := state.SubjectID()
 	m.mu.Lock()
 	if m.closed || m.closing {
 		m.mu.Unlock()
-		return ErrManagerClosed
+		return false, ErrManagerClosed
 	}
 	if existing, ok := m.subjects[id]; ok {
 		m.mu.Unlock()
 		// 旧状态已关闭（实体被卸载或驱逐后重新加载）时接到新状态上并强制全量；否则照旧拒绝。
-		return m.rebind(existing, state)
+		return m.rebind(existing, state, done)
 	}
 	if len(m.subjects) >= m.config.MaxSubjects {
 		m.mu.Unlock()
-		return ErrSubjectLimit
+		return false, ErrSubjectLimit
 	}
 	m.subjects[id] = newSubject(state)
 	m.mu.Unlock()
 	m.installDirtyNotifier(id, state)
-	return nil
+	return false, nil
 }
 
 // installDirtyNotifier also fires the notifier when the state is already
@@ -305,31 +312,35 @@ func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
 	if subj == nil {
 		return ErrSubjectNotRegistered
 	}
-	return m.rebind(subj, state)
+	_, err := m.rebind(subj, state, nil)
+	return err
 }
 
-func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState) error {
+// rebind 返回 queued=true 表示 state 被排在卸载退役（RR-59）完成之后登记。done 随排队项保存，
+// 由 forget 的登记或取消恰好报告一次；后到的排队替换先到的，被替换者的 done 收到 ErrRegistrationCancelled
+// （RR-20260926-72）。Rebind / Register 传 nil：同一状态已在排队时保留原排队项（不取消业务排队的 done）。
+func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
 	subj.mu.Lock()
 	switch {
 	case subj.retiring && subj.unloadRetracted && !subj.forgotten:
-		if queued := subj.successor; queued != nil && queued.state == state {
+		if current := subj.successor; done == nil && current != nil && current.state == state {
 			subj.mu.Unlock()
-			return nil
+			return true, nil
 		}
 		replaced := subj.successor
-		subj.successor = &queuedRegistration{state: state}
+		subj.successor = &queuedRegistration{state: state, done: done}
 		subj.mu.Unlock()
 		replaced.finish(ErrRegistrationCancelled)
-		return nil
+		return true, nil
 	case subj.retiring:
 		subj.mu.Unlock()
-		return ErrSubjectRetiring
+		return false, ErrSubjectRetiring
 	case subj.state == state:
 		subj.mu.Unlock()
-		return nil
+		return false, nil
 	case subj.state.Enabled():
 		subj.mu.Unlock()
-		return ErrSubjectRegistered
+		return false, ErrSubjectRegistered
 	}
 	previous := subj.state
 	subj.state = state
@@ -348,7 +359,7 @@ func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState) error {
 	m.installDirtyNotifier(subj.id, state)
 	m.markPending(subj.id)
 	m.WakeSync()
-	return nil
+	return false, nil
 }
 
 // queuedRegistration 是一次排在退役完成之后的登记。
@@ -374,6 +385,10 @@ func (q *queuedRegistration) finish(err error) {
 // CloseSession、Unregister、Close），不持有 Manager 的锁；它不得阻塞，也不得调用 Flush——
 // 需要做事（例如让政策重说被拒绝的订阅）就交给自己的 goroutine。
 //
+// subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时（RR-20260926-59），
+// 同样返回 queued=true 并由 done 报告结果（RR-20260926-72）；这个排队位与 Rebind / Register 的排队
+// （kit 的 OnEntityLoaded）共用，后到的替换先到的。
+//
 // queued=false 时它就是 Register 的结果，done 不会被调用。本方法不等待，可在快池调用。
 func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
 	if m == nil {
@@ -386,9 +401,9 @@ func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done f
 	// 一次循环要么返回，要么观察到退役刚好完成（subject 已被 forget），所以两轮足够；
 	// 第三轮只在并发的 Unregister/Register 反复交错时出现，仍然有界。
 	for range 3 {
-		err := m.Register(state)
+		queued, err := m.register(state, done)
 		if !errors.Is(err, ErrSubjectRetiring) {
-			return false, err
+			return queued, err
 		}
 		subj := m.subject(id)
 		if subj == nil {
@@ -560,7 +575,10 @@ func (m *Manager) forget(subj *subject) {
 		queued.finish(ErrRegistrationCancelled)
 		return
 	}
-	queued.finish(m.Register(queued.state))
+	// 表里若已是另一个又在卸载退役中的同 ID subject，登记会再次排队：done 随新的排队项走，这里不报告。
+	if requeued, err := m.register(queued.state, queued.done); !requeued {
+		queued.finish(err)
+	}
 }
 
 func (m *Manager) subject(subjectID int64) *subject {
