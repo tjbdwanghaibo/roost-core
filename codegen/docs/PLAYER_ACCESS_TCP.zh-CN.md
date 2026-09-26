@@ -128,8 +128,11 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
 }
 ```
 
-- `PushPlayer`：协议只编码一次，发布到玩家全部已认证会话；
-- `PushSession`：只投递指定 SessionID；
+- `PushPlayer`：协议只编码一次，发布到玩家全部已认证会话。某条连接写失败（写超时、连接重置、已关闭）时，
+  这条连接立即注销并关闭（客户端看到断线、需重连；连接槽、按 IP 计数与会话关闭事件照常各释放一次），
+  其余连接收到则返回 nil；没有任何连接收到时返回错误（此时这些连接都已关闭）。写之前就被拒绝的推送
+  （ctx 已结束、payload 超限）不关闭连接并返回错误（RR-20260926-52）；
+- `PushSession`：只投递指定 SessionID，写失败同样关闭该会话；
 - `ActiveSessions`：返回当前玩家在线会话数；
 - `ErrSessionNotFound`：玩家/会话离线；
 - `ErrTransportUnavailable`：listener 未启动或正在关闭。
@@ -142,7 +145,7 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
 - `ProtocolRegistry` Seal 后通过 atomic immutable snapshot 无锁分发；
 - 每连接一个顺序读循环，同玩家命令不额外并行争锁，跨玩家由 Nest 并行；
 - payload 在读取长度后才分配，小于 64 KiB 的 buffer 有界复用；
-- 写操作受 Session mutex 和 deadline 保护，慢客户端产生同步背压，不创建无界写队列；
+- 写操作受 Session mutex 和 deadline 保护，慢客户端产生同步背压，不创建无界写队列；写满 `write_timeout` 仍写不进的连接被关闭，不再拖住后续推送；
 - accept 错误指数退避，满连接立即拒绝；TCP 开启 keepalive 与 no-delay；
 - 登录票据使用独立 8 KiB 上限，鉴权并发和单 IP 连接都有硬上限；
 - Response 和主动 Push 同样执行 payload 上限，不能绕过入站限包；

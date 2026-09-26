@@ -167,6 +167,13 @@ var (
 	errInvalidFrame = errors.New("player tcp: invalid frame")
 	ErrTransportUnavailable = errors.New("player tcp: transport unavailable")
 	ErrSessionNotFound = errors.New("player tcp: session not found")
+	// errConnectionBroken marks a write that reached the connection and
+	// failed there (a deadline, a reset, a closed socket). Whatever part of
+	// the frame went out, the stream is no longer in step with the client, so
+	// the connection is closed (RR-20260926-52). A frame refused before any
+	// byte was written — the caller's context already done, a payload over the
+	// limit — is not the connection's fault and does not carry this mark.
+	errConnectionBroken = errors.New("player tcp: connection cannot take the frame")
 )
 
 // Wire format (network byte order): magic[2], version[1], flags[1],
@@ -822,13 +829,7 @@ func (server *Server) registerSession(current *session) {
 }
 
 func (server *Server) unregisterSession(current *session) {
-	server.mu.Lock()
-	if server.sessions[current.principal.SessionID] == current { delete(server.sessions, current.principal.SessionID) }
-	if byPlayer := server.playerSessions[current.principal.PlayerID]; byPlayer != nil {
-		if byPlayer[current.principal.SessionID] == current { delete(byPlayer, current.principal.SessionID) }
-		if len(byPlayer) == 0 { delete(server.playerSessions, current.principal.PlayerID) }
-	}
-	server.mu.Unlock()
+	server.forgetSession(current)
 	// The connection is gone; say so once, asynchronously. Everything that
 	// maintains an "online" set needs this, and the alternative — noticing by
 	// failing to push — never fires if nothing tries (RR-20260918-06).
@@ -837,6 +838,45 @@ func (server *Server) unregisterSession(current *session) {
 	}
 }
 
+// forgetSession takes a session out of the lookup maps, if it is still the
+// one registered under its id. It is the only place that does; the session's
+// close event is published by unregisterSession, once, from the connection's
+// own teardown.
+func (server *Server) forgetSession(current *session) {
+	server.mu.Lock()
+	if server.sessions[current.principal.SessionID] == current { delete(server.sessions, current.principal.SessionID) }
+	if byPlayer := server.playerSessions[current.principal.PlayerID]; byPlayer != nil {
+		if byPlayer[current.principal.SessionID] == current { delete(byPlayer, current.principal.SessionID) }
+		if len(byPlayer) == 0 { delete(server.playerSessions, current.principal.PlayerID) }
+	}
+	server.mu.Unlock()
+}
+
+// dropBrokenSession closes a connection a push could not be written to
+// (RR-20260926-52). It is forgotten first, so the push's caller already sees
+// it gone (ActiveSessions, the next push); closing the socket then ends its
+// read loop, whose teardown releases the connection slot and the per-IP count
+// and publishes the session-close event — the same single release path as any
+// other disconnect.
+func (server *Server) dropBrokenSession(current *session, cause error) {
+	server.forgetSession(current)
+	metrics.IncCounter("player_tcp_push_closed_total", nil, 1)
+	slog.Debug("player tcp: closing a connection that could not take a push", "player_id", current.principal.PlayerID, "session_id", current.principal.SessionID, "err", cause)
+	_ = current.Close(fmt.Errorf("%%w: push not written: %%w", gateway.ErrSessionClosed, cause))
+}
+
+// pushPlayer sends one frame to every connection of the player.
+//
+// A connection the frame could not be written to is closed (dropBrokenSession):
+// a partly written frame has put its stream out of step, and a connection that
+// cannot take frames — typically the old socket of a player who has logged in
+// again — would otherwise stay registered until its read loop notices, failing
+// every push meanwhile. The push is then a success if another connection took
+// it: the player is reachable, and the closed connection's client has to
+// reconnect anyway. It fails when no connection took it (all of them are closed
+// by then), and when a connection refused it before writing anything (context
+// done, payload too large) — that is not the connection's fault, so nothing is
+// closed and the caller learns the frame did not go out everywhere.
 func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
 	if messageID == 0 { return fmt.Errorf("%%w: push message id is zero", errInvalidFrame) }
 	server.mu.RLock()
@@ -848,10 +888,24 @@ func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID 
 	// "who is still addressing a gone player" signal, and it used to leave no trace (U-0278).
 	if len(sessions) == 0 { metrics.IncCounter("player_tcp_push_no_session_total", nil, 1); return fmt.Errorf("%%w: player %%d", ErrSessionNotFound, playerID) }
 	var joined error
+	delivered, refused := 0, false
 	for _, current := range sessions {
-		if err := current.push(ctx, messageID, payload); err != nil { joined = errors.Join(joined, fmt.Errorf("session %%s: %%w", current.principal.SessionID, err)) }
+		err := current.push(ctx, messageID, payload)
+		switch {
+		case err == nil:
+			delivered++
+			continue
+		case errors.Is(err, errConnectionBroken):
+			server.dropBrokenSession(current, err)
+		default:
+			refused = true
+		}
+		joined = errors.Join(joined, fmt.Errorf("session %%s: %%w", current.principal.SessionID, err))
 	}
-	if joined == nil { metrics.IncCounter("player_tcp_push_total", nil, int64(len(sessions))) } else { metrics.IncCounter("player_tcp_push_error_total", nil, 1) }
+	if delivered > 0 { metrics.IncCounter("player_tcp_push_total", nil, int64(delivered)) }
+	if joined == nil { return nil }
+	metrics.IncCounter("player_tcp_push_error_total", nil, 1)
+	if delivered > 0 && !refused { return nil }
 	return joined
 }
 
@@ -862,7 +916,9 @@ func (server *Server) pushSession(ctx context.Context, sessionID string, message
 	server.mu.RUnlock()
 	if current == nil { metrics.IncCounter("player_tcp_push_no_session_total", nil, 1); return fmt.Errorf("%%w: %%s", ErrSessionNotFound, sessionID) }
 	err := current.push(ctx, messageID, payload)
-	if err == nil { metrics.IncCounter("player_tcp_push_total", nil, 1) } else { metrics.IncCounter("player_tcp_push_error_total", nil, 1) }
+	if err == nil { metrics.IncCounter("player_tcp_push_total", nil, 1); return nil }
+	metrics.IncCounter("player_tcp_push_error_total", nil, 1)
+	if errors.Is(err, errConnectionBroken) { server.dropBrokenSession(current, err) }
 	return err
 }
 
@@ -935,10 +991,14 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	if uint64(len(payload)) > uint64(limit) { return fmt.Errorf("%%w: outbound payload %%d exceeds %%d", errInvalidFrame, len(payload), limit) }
 	session.writeMu.Lock()
 	defer session.writeMu.Unlock()
-	if session.closeErr != nil { return gateway.ErrSessionClosed }
+	if session.closeErr != nil { return fmt.Errorf("%%w: %%w", errConnectionBroken, gateway.ErrSessionClosed) }
+	// Checked again under the lock: a context that ended while another write
+	// held it has written nothing, and must not be mistaken for a write the
+	// connection failed (which closes it).
+	if err := ctx.Err(); err != nil { return err }
 	writeDeadline := time.Now().Add(session.writeTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(writeDeadline) { writeDeadline = contextDeadline }
-	if err := session.connection.SetWriteDeadline(writeDeadline); err != nil { return err }
+	if err := session.connection.SetWriteDeadline(writeDeadline); err != nil { return fmt.Errorf("%%w: %%w", errConnectionBroken, err) }
 	var header [headerSize]byte
 	header[0], header[1], header[2] = frameMagic[0], frameMagic[1], protocolVersion
 	header[3] = flags
@@ -946,9 +1006,11 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	binary.BigEndian.PutUint32(header[8:12], sequence)
 	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
 	buffers := net.Buffers{header[:], payload}
-	_, err := buffers.WriteTo(session.connection)
-	if err != nil { metrics.IncCounter("player_tcp_write_error_total", nil, 1) }
-	return err
+	if _, err := buffers.WriteTo(session.connection); err != nil {
+		metrics.IncCounter("player_tcp_write_error_total", nil, 1)
+		return fmt.Errorf("%%w: %%w", errConnectionBroken, err)
+	}
+	return nil
 }
 
 func remoteHost(address net.Addr) string {
@@ -1341,6 +1403,204 @@ func TestClosingASessionCancelsItsInFlightDispatch(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the replaced session's in-flight dispatch is still running: closing a session did not cancel it")
 	}
+	waitReleased(t, server, 1)
+}
+
+const pushTestMessageID uint32 = 20002
+
+// pushServer is a real server on loopback with a short write timeout, linked
+// to a Runtime the way the Mod links them, with every session close collected.
+func pushServer(t *testing.T) (*Server, *Runtime, <-chan SessionClosed) {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
+	cfg.Set("player_access.tcp.write_timeout", "100ms")
+	config, err := configFromViper(cfg)
+	if err != nil { t.Fatal(err) }
+	protocols := player_agent.NewProtocolRegistry()
+	if err := player_agent.RegisterTypedEncoder[[]byte](protocols, pushTestMessageID, func(value []byte) ([]byte, error) { return value, nil }); err != nil { t.Fatal(err) }
+	if err := protocols.Seal(); err != nil { t.Fatal(err) }
+	server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+		return gateway.Principal{PlayerID: 7, SessionID: token}, nil
+	}))
+	if err != nil { t.Fatal(err) }
+	runtime := &Runtime{protocols: protocols}
+	server.transport = runtime
+	runtime.startLifecycle()
+	closed := make(chan SessionClosed, 16)
+	runtime.OnSessionClosed(func(event SessionClosed) { closed <- event })
+	if err := server.Start(); err != nil { t.Fatal(err) }
+	runtime.server.Store(server)
+	t.Cleanup(func() {
+		runtime.server.Store(nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+		runtime.stopLifecycle()
+	})
+	return server, runtime, closed
+}
+
+// readPushes drains a client connection and counts the pushes it got.
+func readPushes(t *testing.T, server *Server, connection net.Conn) <-chan int {
+	t.Helper()
+	counts := make(chan int, 1024)
+	go func() {
+		defer close(counts)
+		for {
+			_ = connection.SetReadDeadline(time.Time{})
+			got, release, err := server.readFrame(connection)
+			if err != nil { return }
+			release()
+			if got.flags == flagServerPush { counts <- len(got.payload) }
+		}
+	}()
+	return counts
+}
+
+// stalled is a client that stops reading: once its socket buffers are full,
+// every write to it waits out write_timeout and fails.
+func stalled(t *testing.T, server *Server, token string) net.Conn {
+	t.Helper()
+	connection := dialAuthenticated(t, server, token)
+	_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
+	return connection
+}
+
+// fillUntilOneFails pushes filler to player 7 until a push to one of its
+// connections has failed: the push reports it, or a connection is gone.
+func fillUntilOneFails(t *testing.T, runtime *Runtime) (pushes int, err error) {
+	t.Helper()
+	before := runtime.ActiveSessions(7)
+	filler := bytes.Repeat([]byte{1}, 512<<10)
+	for pushes < 128 {
+		err = runtime.PushPlayer(context.Background(), 7, pushTestMessageID, filler)
+		if err != nil { return pushes, err }
+		pushes++
+		if runtime.ActiveSessions(7) < before { return pushes, nil }
+	}
+	t.Fatal("64MiB of pushes never failed a write to the stalled connection")
+	return pushes, nil
+}
+
+func waitClosed(t *testing.T, closed <-chan SessionClosed, want ...string) {
+	t.Helper()
+	seen := map[string]int{}
+	deadline := time.After(2 * time.Second)
+	for received := 0; received < len(want); received++ {
+		select {
+		case event := <-closed:
+			seen[event.SessionID]++
+		case <-deadline:
+			t.Fatalf("session closes seen %%v, want one each for %%v", seen, want)
+		}
+	}
+	select {
+	case event := <-closed:
+		seen[event.SessionID]++
+	case <-time.After(100 * time.Millisecond):
+	}
+	for _, id := range want {
+		if seen[id] != 1 { t.Errorf("session %%s closed %%d times, want once (seen %%v)", id, seen[id], seen) }
+	}
+	if len(seen) != len(want) { t.Errorf("session closes seen %%v, want only %%v", seen, want) }
+}
+
+// RR-20260926-52: a push goes to every connection of the player. One that
+// cannot take it — an old connection that stopped reading — used to fail the
+// whole push while staying registered until its read loop noticed (up to
+// idle_timeout), so every later push failed the same way and the caller
+// could not tell a dead player from a live one with a dead old socket.
+//
+// The connection whose write failed is now closed and unregistered at once;
+// the push is a success for the connections that took it; the close goes
+// through the socket's own teardown, so its slot, its per-IP count and its
+// session-close event are released exactly once.
+func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	live := dialAuthenticated(t, server, "live")
+	received := readPushes(t, server, live)
+	stalled(t, server, "stalled")
+	waitReleased(t, server, 2)
+	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("active sessions = %%d, want 2", got) }
+
+	pushes, err := fillUntilOneFails(t, runtime)
+	if err != nil { t.Errorf("a push the live connection took was reported as failed: %%v", err) }
+	if got := runtime.ActiveSessions(7); got != 1 { t.Fatalf("after the stalled connection's write failed: active sessions = %%d, want 1 (only the live one)", got) }
+	waitClosed(t, closed, "stalled")
+	waitReleased(t, server, 1)
+
+	if err := runtime.PushPlayer(context.Background(), 7, pushTestMessageID, []byte("after")); err != nil { t.Fatalf("push to the remaining live connection: %%v", err) }
+	deadline := time.After(2 * time.Second)
+	for got := 0; got < pushes+1; got++ {
+		select {
+		case <-received:
+		case <-deadline:
+			t.Fatalf("the live connection received %%d of %%d pushes", got, pushes+1)
+		}
+	}
+}
+
+// When no connection takes the frame the player is unreachable: the push
+// fails and every connection is closed, so nothing stays registered for a
+// player nobody can reach.
+func TestAPushNoConnectionTakesFailsAndClosesThemAll(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	stalled(t, server, "first")
+	stalled(t, server, "second")
+	waitReleased(t, server, 2)
+	var err error
+	for range 128 {
+		if err = runtime.PushPlayer(context.Background(), 7, pushTestMessageID, bytes.Repeat([]byte{1}, 512<<10)); err != nil || runtime.ActiveSessions(7) == 0 { break }
+	}
+	if err == nil { t.Fatal("a push no connection took was reported as delivered") }
+	for range 128 {
+		if runtime.ActiveSessions(7) == 0 { break }
+		_ = runtime.PushPlayer(context.Background(), 7, pushTestMessageID, bytes.Repeat([]byte{1}, 512<<10))
+	}
+	if got := runtime.ActiveSessions(7); got != 0 { t.Fatalf("active sessions = %%d after every write failed, want 0", got) }
+	waitClosed(t, closed, "first", "second")
+	waitReleased(t, server, 0)
+	if err := runtime.PushPlayer(context.Background(), 7, pushTestMessageID, []byte("x")); !errors.Is(err, ErrSessionNotFound) { t.Fatalf("push to a player with no connection = %%v, want ErrSessionNotFound", err) }
+}
+
+// Only a WRITE failure says something about a connection. A push the caller
+// cancelled before anything was written, or a payload over the limit, is not
+// the connection's fault and must not close a live one.
+func TestAPushThatFailsBeforeWritingClosesNoConnection(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	first := dialAuthenticated(t, server, "first")
+	second := dialAuthenticated(t, server, "second")
+	readPushes(t, server, first)
+	readPushes(t, server, second)
+	waitReleased(t, server, 2)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runtime.PushPlayer(cancelled, 7, pushTestMessageID, []byte("x")); !errors.Is(err, context.Canceled) { t.Fatalf("cancelled push = %%v, want context.Canceled", err) }
+	if err := runtime.PushPlayer(context.Background(), 7, pushTestMessageID, bytes.Repeat([]byte{1}, int(server.config.MaxPayloadBytes)+1)); !errors.Is(err, errInvalidFrame) { t.Fatalf("oversized push = %%v, want errInvalidFrame", err) }
+	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("a push that wrote nothing closed a connection: active sessions = %%d, want 2", got) }
+	select {
+	case event := <-closed:
+		t.Fatalf("a push that wrote nothing closed session %%s", event.SessionID)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := runtime.PushPlayer(context.Background(), 7, pushTestMessageID, []byte("ok")); err != nil { t.Fatalf("push after the refused ones: %%v", err) }
+}
+
+// PushSession is the same write to one connection and follows the same rule.
+func TestASessionPushThatCannotBeWrittenClosesThatSession(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	live := dialAuthenticated(t, server, "live")
+	readPushes(t, server, live)
+	stalled(t, server, "stalled")
+	waitReleased(t, server, 2)
+	var err error
+	for range 128 {
+		if err = runtime.PushSession(context.Background(), "stalled", pushTestMessageID, bytes.Repeat([]byte{1}, 512<<10)); err != nil { break }
+	}
+	if err == nil { t.Fatal("pushes to a stalled session never failed") }
+	if got := runtime.ActiveSessions(7); got != 1 { t.Fatalf("active sessions = %%d after the session's write failed, want 1", got) }
+	waitClosed(t, closed, "stalled")
 	waitReleased(t, server, 1)
 }
 

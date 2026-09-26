@@ -244,3 +244,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 - Durability 1/2（async/strict）的 Remote 写由 WAL 投影器完成确认：投影期间后台收尾不再回源 Mongo、不再隔离实体，投影完成即释放写权限；投影器报告结果未知或超过 `remote_entity.finalize_projection_timeout`（默认 30s）后才回源。同一事务的快照只发布一次（[RR-20260926-38](bugfix/RR-20260926-38.md)）。
 - Remote 写被持久拒绝后，框架在释放写权限后把持有被拒绝修改的实例从本进程内存卸载（不删持久数据，业务收到 `OnDestroy(entity.DestroyReasonMemoryUnload)`；DataEngine 驱逐被跳过的原生步骤留下的实体也改用同一原因），下一次访问从权威重新加载，无需重启。卸载前的短窗口内写入仍可能得到 `ErrRemoteFenced`，重试即可。Sync 与 DataEngine 驱逐同一规则：订阅不注销、不发 remove，重载后原订阅者收到全量（kit 自动 Rebind）；不要在 `DestroyReasonMemoryUnload` 的 `OnDestroy` 里 Unregister。自定义 Remote loader 需实现 `entity.IRemoteEntityUnloader` 才有此行为（`ManagerAccess` 已实现）（[RR-20260926-39](bugfix/RR-20260926-39.md)）。
 - 本地已提交、而 strict 远端确认超时或 Durability 0 结果未知时，请求返回可 `errors.Is(entity.ErrRemotePersistenceIndeterminate)` 的错误；该事务的 Sync 放行与 `AfterCommit` 回调转交 Remote 后台收尾，拿到持久结论后执行一次：已提交则在 Nest 快池执行（时机不早于这次错误回复，可能与回复并发或在其后），被拒绝则不执行且不再冻结同实体后续提交的 Sync；停机前仍无结论则不执行。不要因“结果未知”在别处重复 AfterCommit 的副作用（[RR-20260926-37](bugfix/RR-20260926-37.md)）。
+
+## 2026-09-26 连接、复制会话与同步总线（RR-52/55/56）
+
+- 生成的玩家 TCP 传输：一次推送里某条连接写失败，这条连接立即被关闭注销（客户端断线重连），其余连接收到则 `PushPlayer` 返回 nil；全部连接都写不进时返回错误且这些连接都已关闭。写之前就被拒绝（ctx 结束、payload 超限）的推送不关闭连接。依赖“任一连接失败即报错”的调用方改看 `ActiveSessions` 或会话关闭事件。已生成工程重新生成 `server_gen.go` 即可（[RR-20260926-52](bugfix/RR-20260926-52.md)）。

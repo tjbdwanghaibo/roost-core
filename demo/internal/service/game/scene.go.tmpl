@@ -491,10 +491,11 @@ func (bridge *Scene) sweepLocked() {
 // sessionLost is the manager telling us a push to a player failed and their
 // session was closed. A leaver is ordinary churn, not an error, but a scene
 // that silently loses members is how RR-20260922-01 stayed invisible — so one
-// Info line. The push goes to every connection the player has, so a failure
-// can come from an old connection of a player who has already logged in again
-// on a new one (RR-20260926-40); settle tells the two apart. It runs inside
-// the manager's tick, so the settle goes to its own goroutine.
+// Info line. The push goes to every connection the player has and fails only
+// when none of them took it (the ones that could not are closed,
+// RR-20260926-52); a new connection may have come up since (RR-20260926-40),
+// and settle tells the two apart. It runs inside the manager's tick, so the
+// settle goes to its own goroutine.
 func (bridge *Scene) sessionLost(session entitysync.SessionID, cause error) {
 	slog.Info("scene: push to player failed, its replication session was closed", "player_id", int64(session), "err", cause)
 	bridge.settleLater(int64(session), true)
@@ -530,10 +531,14 @@ func (bridge *Scene) settleLater(playerID int64, sessionDropped bool) {
 //     logged in again, or already left): the event speaks for a connection
 //     that no longer represents this player, and is dropped;
 //   - the player still has an active connection: it stays. If the manager
-//     dropped its replication session (sessionDropped: a push to the OLD
-//     connection failed), the session is opened again and the policy says the
-//     player's pairs again, so the live client gets a fresh snapshot instead
-//     of silence. Nobody else is told anything — the player never left;
+//     dropped its replication session (sessionDropped: a push failed on every
+//     connection the player had at that moment — the transport closes a
+//     connection that cannot take a frame and fails the push only when none
+//     took it, RR-20260926-52 — and a new connection came up since), the
+//     session is opened again and the policy says the player's
+//     pairs again, so the live client gets a fresh snapshot instead of
+//     silence. The failed connections are gone, so this happens at most once
+//     per failure. Nobody else is told anything — the player never left;
 //   - otherwise the player is gone and leaves.
 func (bridge *Scene) settle(subjectID int64, generation uint64, sessionDropped bool) {
 	bridge.transitions.Lock()
