@@ -109,34 +109,165 @@ func (c *Client) Collection(db, name string) *Collection {
 
 type session struct{ client *Client }
 
-// WithTransaction models the two properties production code depends on:
-// all-or-nothing application, and the driver's documented automatic retry.
-// Each attempt starts from the pre-transaction state, so a callback that
-// accumulates across attempts — or a batch that claims atomicity but leaves a
-// partial write behind — fails here instead of in production.
+// TransientTransactionError is the error label the real server attaches to a
+// transaction that can be retried from the start (NoSuchTransaction after an
+// abort, WriteConflict). The driver's WithTransaction re-runs the whole
+// callback while the callback's error carries it; errors returned by this fake
+// expose it through HasErrorLabel, the same method the driver's
+// mongo.LabeledError interface uses.
+const TransientTransactionError = "TransientTransactionError"
+
+// ErrNoSuchTransaction is what every operation in a transaction returns once
+// an earlier write in the same transaction failed. The real server aborts the
+// transaction on any write error (a duplicate key included) and answers later
+// statements with NoSuchTransaction (code 251) labelled
+// TransientTransactionError; code that "reads back after a duplicate key"
+// inside the transaction therefore never sees the document, and the driver
+// retries the callback until transaction_timeout (RR-20260926-34).
+var ErrNoSuchTransaction = errors.New("mongofake: NoSuchTransaction: transaction has been aborted")
+
+// transientAttemptLimit bounds how often WithTransaction re-runs a callback
+// whose error is labelled TransientTransactionError. The real driver keeps
+// retrying until its 120s budget (or the caller's deadline) runs out; a test
+// cannot wait that long, so the fake stops after this many attempts and
+// returns the last error, which still carries the label.
+const transientAttemptLimit = 16
+
+// labeledError carries server error labels the way the driver's errors do.
+type labeledError struct {
+	err    error
+	labels []string
+}
+
+func (e *labeledError) Error() string { return e.err.Error() }
+func (e *labeledError) Unwrap() error { return e.err }
+func (e *labeledError) HasErrorLabel(label string) bool {
+	for _, own := range e.labels {
+		if own == label {
+			return true
+		}
+	}
+	return false
+}
+
+// duplicateKeyError mirrors what mongo/driver returns for E11000:
+// fmongo.ErrDuplicateKey in front of a server error that carries labels (none
+// of them TransientTransactionError). The driver's retry check stops at the
+// first labelled error in a chain, so a duplicate key joined in front of a
+// transient error is not retried there — and must not be here either.
+func duplicateKeyError() error {
+	return &labeledError{err: fmongo.ErrDuplicateKey}
+}
+
+func hasErrorLabel(err error, label string) bool {
+	var labeled interface{ HasErrorLabel(string) bool }
+	return errors.As(err, &labeled) && labeled.HasErrorLabel(label)
+}
+
+type transactionKey struct{}
+
+// transaction is the server-side state of one WithTransaction attempt. It is
+// carried in the callback's context, so only operations issued with that
+// context (or a context derived from it) belong to the transaction.
+type transaction struct {
+	mu    sync.Mutex
+	cause error
+}
+
+func transactionFrom(ctx context.Context) *transaction {
+	if ctx == nil {
+		return nil
+	}
+	tx, _ := ctx.Value(transactionKey{}).(*transaction)
+	return tx
+}
+
+// refuse returns the NoSuchTransaction error once the transaction aborted.
+func (tx *transaction) refuse() error {
+	if tx == nil {
+		return nil
+	}
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if tx.cause == nil {
+		return nil
+	}
+	return &labeledError{
+		err:    fmt.Errorf("%w (aborted by: %v)", ErrNoSuchTransaction, tx.cause),
+		labels: []string{TransientTransactionError},
+	}
+}
+
+// writeFailed records a write error. Like the server, any write failure —
+// except "no document matched", which is not a server error — aborts the
+// transaction. The error itself is returned unchanged.
+func (tx *transaction) writeFailed(err error) error {
+	if tx == nil || err == nil || errors.Is(err, fmongo.ErrNotFound) {
+		return err
+	}
+	tx.mu.Lock()
+	if tx.cause == nil {
+		tx.cause = err
+	}
+	tx.mu.Unlock()
+	return err
+}
+
+// WithTransaction models the properties production code depends on:
+// all-or-nothing application, the server aborting a transaction on its first
+// write error, and the driver's documented automatic retry. Each attempt
+// starts from the pre-transaction state, so a callback that accumulates across
+// attempts — or a batch that claims atomicity but leaves a partial write
+// behind — fails here instead of in production.
+//
+// Retry follows the driver: a callback error labelled
+// TransientTransactionError re-runs the callback (bounded by
+// transientAttemptLimit and ctx), and a callback that returns nil after its
+// transaction was aborted fails to commit with NoSuchTransaction, which is
+// transient too. Any other error aborts and is returned as is.
 func (s *session) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.client.mu.Lock()
 	retries := s.client.TransientRetries
 	s.client.mu.Unlock()
-	var err error
-	for attempt := 0; attempt <= retries; attempt++ {
+	forced, transient := 0, 0
+	for {
 		snapshot := s.client.snapshot()
 		s.client.mu.Lock()
 		s.client.attempts++
 		s.client.mu.Unlock()
-		err = fn(ctx)
+		tx := &transaction{}
+		err := fn(context.WithValue(ctx, transactionKey{}, tx))
+		if err == nil {
+			// Committing an aborted transaction is refused by the server.
+			err = tx.refuse()
+		}
 		if err != nil {
 			// Abort: the callback's writes never became visible.
 			s.client.restore(snapshot)
-			return err
+			if !hasErrorLabel(err, TransientTransactionError) {
+				return err
+			}
+			transient++
+			if transient >= transientAttemptLimit {
+				return fmt.Errorf("mongofake: transaction still transient after %d attempts: %w", transient, err)
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return errors.Join(ctxErr, err)
+			}
+			continue
 		}
-		if attempt < retries {
+		if forced < retries {
 			// The commit outcome was unknown, so the driver re-runs the whole
 			// callback against the original state.
+			forced++
 			s.client.restore(snapshot)
+			continue
 		}
+		return nil
 	}
-	return err
 }
 
 func (s *session) EndSession(context.Context) {}
@@ -258,6 +389,15 @@ func (c *Collection) fail(method string) error {
 	return c.Errors[method]
 }
 
+// enter counts the call and refuses it the way the server would: an injected
+// failure, or a transaction that an earlier write error already aborted.
+func (c *Collection) enter(tx *transaction, method string) error {
+	if err := c.fail(method); err != nil {
+		return err
+	}
+	return tx.refuse()
+}
+
 // Seed inserts a document directly, bypassing duplicate checks and call
 // counters — the test fixture entry point.
 func (c *Collection) Seed(doc any) error {
@@ -313,10 +453,12 @@ func (c *Collection) Lookup(id any) (bson.M, bool) {
 	return cloneDoc(doc), true
 }
 
-func (c *Collection) InsertOne(_ context.Context, doc any) (string, error) {
+func (c *Collection) InsertOne(ctx context.Context, doc any) (id string, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.fail("InsertOne"); err != nil {
+	if err := c.enter(tx, "InsertOne"); err != nil {
 		return "", err
 	}
 	return c.insertLocked(doc)
@@ -332,7 +474,7 @@ func (c *Collection) insertLocked(doc any) (string, error) {
 		return "", err
 	}
 	if _, exists := c.docs[key]; exists {
-		return "", fmongo.ErrDuplicateKey
+		return "", duplicateKeyError()
 	}
 	if err := c.checkUniqueLocked(normalized, key); err != nil {
 		return "", err
@@ -342,10 +484,12 @@ func (c *Collection) insertLocked(doc any) (string, error) {
 	return key, nil
 }
 
-func (c *Collection) InsertMany(ctx context.Context, docs []any) ([]string, error) {
+func (c *Collection) InsertMany(ctx context.Context, docs []any) (inserted []string, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.fail("InsertMany"); err != nil {
+	if err := c.enter(tx, "InsertMany"); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(docs))
@@ -359,11 +503,11 @@ func (c *Collection) InsertMany(ctx context.Context, docs []any) ([]string, erro
 	return ids, nil
 }
 
-func (c *Collection) FindOne(_ context.Context, filter any, result any) error {
+func (c *Collection) FindOne(ctx context.Context, filter any, result any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("FindOne"); err != nil {
+	if err := c.enter(transactionFrom(ctx), "FindOne"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -376,11 +520,11 @@ func (c *Collection) FindOne(_ context.Context, filter any, result any) error {
 	return decodeInto(c.docs[matched[0]], result)
 }
 
-func (c *Collection) Find(_ context.Context, filter any, results any, opts ...fmongo.FindOption) error {
+func (c *Collection) Find(ctx context.Context, filter any, results any, opts ...fmongo.FindOption) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("Find"); err != nil {
+	if err := c.enter(transactionFrom(ctx), "Find"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -407,10 +551,10 @@ func (c *Collection) Find(_ context.Context, filter any, results any, opts ...fm
 
 // StreamFind implements fmongo.IStreamingCollection so loaders exercise their
 // production cursor path rather than silently falling back to Find.
-func (c *Collection) StreamFind(_ context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
+func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
 	c.mu.Lock()
 	c.LastFilter = filter
-	if err := c.fail("StreamFind"); err != nil {
+	if err := c.enter(transactionFrom(ctx), "StreamFind"); err != nil {
 		c.mu.Unlock()
 		return err
 	}
@@ -446,41 +590,49 @@ func (c *Collection) StreamFind(_ context.Context, filter any, consume func([]by
 	return nil
 }
 
-func (c *Collection) UpdateOne(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+func (c *Collection) UpdateOne(ctx context.Context, filter any, update any) (result *fmongo.UpdateResult, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter, c.LastUpdate = filter, update
-	if err := c.fail("UpdateOne"); err != nil {
+	if err := c.enter(tx, "UpdateOne"); err != nil {
 		return nil, err
 	}
 	return c.updateLocked(filter, update, false, false)
 }
 
-func (c *Collection) UpdateMany(_ context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+func (c *Collection) UpdateMany(ctx context.Context, filter any, update any) (result *fmongo.UpdateResult, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter, c.LastUpdate = filter, update
-	if err := c.fail("UpdateMany"); err != nil {
+	if err := c.enter(tx, "UpdateMany"); err != nil {
 		return nil, err
 	}
 	return c.updateLocked(filter, update, false, true)
 }
 
-func (c *Collection) ReplaceOne(_ context.Context, filter any, replacement any) (*fmongo.UpdateResult, error) {
+func (c *Collection) ReplaceOne(ctx context.Context, filter any, replacement any) (result *fmongo.UpdateResult, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter, c.LastUpdate = filter, replacement
-	if err := c.fail("ReplaceOne"); err != nil {
+	if err := c.enter(tx, "ReplaceOne"); err != nil {
 		return nil, err
 	}
 	return c.replaceLocked(filter, replacement, false)
 }
 
-func (c *Collection) DeleteOne(_ context.Context, filter any) (int64, error) {
+func (c *Collection) DeleteOne(ctx context.Context, filter any) (deleted int64, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("DeleteOne"); err != nil {
+	if err := c.enter(tx, "DeleteOne"); err != nil {
 		return 0, err
 	}
 	matched, err := c.matchLocked(filter)
@@ -494,11 +646,13 @@ func (c *Collection) DeleteOne(_ context.Context, filter any) (int64, error) {
 	return 1, nil
 }
 
-func (c *Collection) DeleteMany(_ context.Context, filter any) (int64, error) {
+func (c *Collection) DeleteMany(ctx context.Context, filter any) (deleted int64, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("DeleteMany"); err != nil {
+	if err := c.enter(tx, "DeleteMany"); err != nil {
 		return 0, err
 	}
 	matched, err := c.matchLocked(filter)
@@ -511,11 +665,13 @@ func (c *Collection) DeleteMany(_ context.Context, filter any) (int64, error) {
 	return int64(len(matched)), nil
 }
 
-func (c *Collection) FindOneAndUpdate(_ context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) error {
+func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) (err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter, c.LastUpdate = filter, update
-	if err := c.fail("FindOneAndUpdate"); err != nil {
+	if err := c.enter(tx, "FindOneAndUpdate"); err != nil {
 		return err
 	}
 	option := fmongo.FindOneAndUpdateOption{}
@@ -564,11 +720,13 @@ func (c *Collection) FindOneAndUpdate(_ context.Context, filter any, update any,
 	return decodeInto(c.docs[after[0]], result)
 }
 
-func (c *Collection) FindOneAndDelete(_ context.Context, filter any, result any) error {
+func (c *Collection) FindOneAndDelete(ctx context.Context, filter any, result any) (err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("FindOneAndDelete"); err != nil {
+	if err := c.enter(tx, "FindOneAndDelete"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -586,11 +744,13 @@ func (c *Collection) FindOneAndDelete(_ context.Context, filter any, result any)
 	return decodeInto(doc, result)
 }
 
-func (c *Collection) FindOneAndReplace(_ context.Context, filter any, replacement any, result any) error {
+func (c *Collection) FindOneAndReplace(ctx context.Context, filter any, replacement any, result any) (err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter, c.LastUpdate = filter, replacement
-	if err := c.fail("FindOneAndReplace"); err != nil {
+	if err := c.enter(tx, "FindOneAndReplace"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -610,11 +770,11 @@ func (c *Collection) FindOneAndReplace(_ context.Context, filter any, replacemen
 	return decodeInto(before, result)
 }
 
-func (c *Collection) CountDocuments(_ context.Context, filter any) (int64, error) {
+func (c *Collection) CountDocuments(ctx context.Context, filter any) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastFilter = filter
-	if err := c.fail("CountDocuments"); err != nil {
+	if err := c.enter(transactionFrom(ctx), "CountDocuments"); err != nil {
 		return 0, err
 	}
 	matched, err := c.matchLocked(filter)
@@ -626,19 +786,21 @@ func (c *Collection) CountDocuments(_ context.Context, filter any) (int64, error
 
 // Aggregate is intentionally unsupported: no kit production path uses it, and
 // returning an empty result would be indistinguishable from a passing query.
-func (c *Collection) Aggregate(_ context.Context, _ any, _ any) error {
+func (c *Collection) Aggregate(ctx context.Context, _ any, _ any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.fail("Aggregate"); err != nil {
+	if err := c.enter(transactionFrom(ctx), "Aggregate"); err != nil {
 		return err
 	}
 	return fmt.Errorf("%w: Aggregate", ErrUnsupported)
 }
 
-func (c *Collection) BulkWrite(_ context.Context, models []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
+func (c *Collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) (bulk *fmongo.BulkWriteResult, err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.fail("BulkWrite"); err != nil {
+	if err := c.enter(tx, "BulkWrite"); err != nil {
 		return nil, err
 	}
 	result := &fmongo.BulkWriteResult{}
@@ -767,7 +929,7 @@ func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
 				}
 			}
 			if same {
-				return fmongo.ErrDuplicateKey
+				return duplicateKeyError()
 			}
 		}
 	}
@@ -914,7 +1076,7 @@ func (c *Collection) updateLocked(filter any, update any, upsert bool, many bool
 			return nil, err
 		}
 		if _, exists := c.docs[key]; exists {
-			return nil, fmongo.ErrDuplicateKey
+			return nil, duplicateKeyError()
 		}
 		if err := c.checkUniqueLocked(updated, key); err != nil {
 			return nil, err
@@ -976,7 +1138,7 @@ func (c *Collection) replaceLocked(filter any, replacement any, upsert bool) (*f
 			return nil, err
 		}
 		if _, exists := c.docs[key]; exists {
-			return nil, fmongo.ErrDuplicateKey
+			return nil, duplicateKeyError()
 		}
 		if err := c.checkUniqueLocked(normalized, key); err != nil {
 			return nil, err

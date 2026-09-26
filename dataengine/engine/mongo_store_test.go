@@ -654,14 +654,32 @@ func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing
 	}
 }
 
+// inMongoTransaction runs a staging step the way Project does: inside one
+// session transaction. The fake aborts the transaction on a write error, so a
+// step that reads back after a duplicate key fails here as it does on a real
+// server (RR-20260926-34) instead of passing outside any transaction.
+func inMongoTransaction(t *testing.T, client *mongotest.Client, step func(context.Context) error) error {
+	t.Helper()
+	session, err := client.StartSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.EndSession(context.Background())
+	return session.WithTransaction(context.Background(), step)
+}
+
 func TestMongoStoreReceiptIdentityIncludesCompletionPayload(t *testing.T) {
 	store, client, _ := newMongoStoreTest(t)
 	receipt := coredata.Receipt{Namespace: "saga-step", ID: "command-1", Digest: []byte{1}, Payload: []byte("completion")}
-	if err := store.stageReceipt(context.Background(), "tx-1", receipt); err != nil {
+	stage := func(receipt coredata.Receipt) error {
+		return inMongoTransaction(t, client, func(ctx context.Context) error { return store.stageReceipt(ctx, "tx-1", receipt) })
+	}
+	if err := stage(receipt); err != nil {
 		t.Fatal(err)
 	}
 	// Same receipt, same payload: idempotent.
-	if err := store.stageReceipt(context.Background(), "tx-1", receipt); err != nil {
+	attempts := client.Attempts()
+	if err := stage(receipt); err != nil {
 		t.Fatalf("identical receipt replay: %v", err)
 	}
 	if client.Collection(testDatabase, ReceiptCollection).Len() != 1 {
@@ -670,26 +688,103 @@ func TestMongoStoreReceiptIdentityIncludesCompletionPayload(t *testing.T) {
 	// Same identity, different completion payload: an identity conflict.
 	conflicting := receipt
 	conflicting.Payload = []byte("different")
-	if err := store.stageReceipt(context.Background(), "tx-1", conflicting); !errors.Is(err, ErrReceiptIdentity) {
+	if err := stage(conflicting); !errors.Is(err, ErrReceiptIdentity) {
 		t.Fatalf("err=%v, want ErrReceiptIdentity", err)
+	}
+	// Each verdict is reached on the first attempt; a transient retry loop
+	// is what burns transaction_timeout on a real server.
+	if got := client.Attempts() - attempts; got != 2 {
+		t.Fatalf("attempts=%d, want one per verdict", got)
 	}
 }
 
 func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
 	store, client, _ := newMongoStoreTest(t)
 	effect := coredata.Effect{ID: "effect-1", Topic: "hero.changed", Payload: []byte{1}}
-	if err := store.stageEffect(context.Background(), "tx-1", effect); err != nil {
+	stage := func(txID string) error {
+		return inMongoTransaction(t, client, func(ctx context.Context) error { return store.stageEffect(ctx, txID, effect) })
+	}
+	if err := stage("tx-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.stageEffect(context.Background(), "tx-1", effect); err != nil {
+	attempts := client.Attempts()
+	if err := stage("tx-1"); err != nil {
 		t.Fatalf("identical effect replay: %v", err)
 	}
 	if client.Collection(testDatabase, OutboxCollection).Len() != 1 {
 		t.Fatal("identical effect replay staged a duplicate")
 	}
 	// The same effect id under a different transaction is a WAL identity bug.
-	if err := store.stageEffect(context.Background(), "tx-2", effect); !errors.Is(err, ErrTransactionIdentity) {
+	if err := stage("tx-2"); !errors.Is(err, ErrTransactionIdentity) {
 		t.Fatalf("err=%v, want ErrTransactionIdentity", err)
+	}
+	if got := client.Attempts() - attempts; got != 2 {
+		t.Fatalf("attempts=%d, want one per verdict", got)
+	}
+}
+
+// RR-20260926-34：跨事务复用 receipt / effect 身份时，Project 必须在第一次尝试内裁决：
+// 相同 receipt 成功并落库，receipt 漂移与 effect ID 复用是 fatal 身份冲突且整笔回滚。
+// saga start 的 effect ID 是命令内容哈希，同一 start 在两个事务各发一次即第三种形状，
+// 按现有设计保持 fatal。
+func TestMongoStoreProjectIdentityVerdictsAcrossTransactions(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	record := func(idByte byte, docID int64) coredata.CommitRecord {
+		var id coredata.TransactionID
+		id[15] = idByte
+		data, _ := bson.Marshal(bson.M{"_id": docID, "level": int32(1)})
+		return coredata.CommitRecord{ID: id, Mutations: []coredata.Mutation{{
+			Key:  coredata.DocumentKey{Database: testDatabase, Resource: "heroes", ID: docID},
+			Kind: coredata.MutationPut, NextVersion: 1, Mask: 1, Schema: 1, Codec: "bson-v2", Data: data,
+		}}}
+	}
+	receipt := coredata.Receipt{Namespace: "saga-step", ID: "cmd-1", Digest: []byte("d1"), Payload: []byte("p1")}
+	first := record(1, 1)
+	first.Receipts = []coredata.Receipt{receipt}
+	first.Effects = []coredata.Effect{{ID: "effect-1", Topic: "hero.changed", Payload: []byte{1}}}
+	if err := store.Project(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	heroes := client.Collection(testDatabase, "heroes")
+	for _, tc := range []struct {
+		name   string
+		record coredata.CommitRecord
+		want   error
+	}{
+		{name: "identical receipt", record: func() coredata.CommitRecord {
+			r := record(2, 2)
+			r.Receipts = []coredata.Receipt{receipt}
+			return r
+		}()},
+		{name: "receipt payload drift", want: ErrReceiptIdentity, record: func() coredata.CommitRecord {
+			r := record(3, 3)
+			r.Receipts = []coredata.Receipt{{Namespace: "saga-step", ID: "cmd-1", Digest: []byte("d1"), Payload: []byte("other")}}
+			return r
+		}()},
+		{name: "effect id reused", want: ErrTransactionIdentity, record: func() coredata.CommitRecord {
+			r := record(4, 4)
+			r.Effects = []coredata.Effect{{ID: "effect-1", Topic: "hero.changed", Payload: []byte{1}}}
+			return r
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := client.Attempts()
+			err := store.Project(context.Background(), tc.record)
+			if got := client.Attempts() - attempts; got != 1 {
+				t.Fatalf("attempts=%d err=%v, want the verdict on the first attempt", got, err)
+			}
+			_, written := heroes.Lookup(tc.record.Mutations[0].Key.ID)
+			fatal := (&Projector{}).isFatalProjection(err)
+			if tc.want == nil {
+				if err != nil || !written || fatal {
+					t.Fatalf("err=%v written=%v fatal=%v, want success", err, written, fatal)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) || !fatal || written {
+				t.Fatalf("err=%v written=%v fatal=%v, want fatal %v and a rolled-back DAO", err, written, fatal, tc.want)
+			}
+		})
 	}
 }
 

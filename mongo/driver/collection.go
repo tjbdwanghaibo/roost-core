@@ -349,6 +349,14 @@ func stringifyID(id any) string {
 	return fmt.Sprintf("%v", id)
 }
 
+// wrapError maps driver errors onto the fmongo sentinels. A duplicate key keeps
+// the driver error in its chain: errors.Is(err, fmongo.ErrDuplicateKey) still
+// holds, and the WriteException / server labels stay reachable through
+// errors.As (mongo.LabeledError, mongo.ServerError) — including the
+// TransientTransactionError label that mongo.Session.WithTransaction retries
+// on. Replacing it with the bare sentinel used to discard them
+// (RR-20260926-34). ErrNoDocuments carries no server state and maps to the bare
+// fmongo.ErrNotFound as before.
 func wrapError(err error) error {
 	if err == nil {
 		return nil
@@ -357,7 +365,7 @@ func wrapError(err error) error {
 		return fmongo.ErrNotFound
 	}
 	if mongo.IsDuplicateKeyError(err) {
-		return fmongo.ErrDuplicateKey
+		return fmt.Errorf("%w: %w", fmongo.ErrDuplicateKey, err)
 	}
 	return err
 }

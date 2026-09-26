@@ -282,17 +282,18 @@ type transactionDocument struct {
 	Skipped   bool      `bson:"skipped,omitempty"`
 }
 
+// insertTransactionMarker 只在 Project 回调里、checkTransaction 已在同一事务快照中确认
+// marker 不存在之后调用。并发投影同一记录时，对方在快照之后提交（或尚未提交）的 marker
+// 让这里的插入得到 WriteConflict（TransientTransactionError），驱动重跑回调，由下一次
+// 开头的 checkTransaction 裁决“已应用”或身份冲突。
+//
+// 撞键会中止 Mongo 事务，不能在同一事务里读回（RR-20260926-34）。快照读未命中后仍撞键
+// 不属于上面的正常路径，按非 fatal 错误整笔回滚，保留原错误链；投影器重试时由新事务
+// 开头的 checkTransaction 重新裁决。
 func (store *MongoStore) insertTransactionMarker(ctx context.Context, document transactionDocument) error {
 	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection).InsertOne(ctx, document)
-	if !errors.Is(err, fmongo.ErrDuplicateKey) {
-		return err
-	}
-	applied, _, checkErr := store.checkTransaction(ctx, document.ID, document.Digest)
-	if checkErr != nil {
-		return checkErr
-	}
-	if applied {
-		return nil
+	if errors.Is(err, fmongo.ErrDuplicateKey) {
+		return fmt.Errorf("dataengine mongo: transaction marker %s appeared after the snapshot read: %w", document.ID, err)
 	}
 	return err
 }
@@ -355,6 +356,14 @@ type receiptDocument struct {
 	CreatedAt     time.Time `bson:"created_at"`
 }
 
+// stageReceipt 在 Project 的 Mongo 事务内先快照读、后插入（RR-20260926-34）。
+//
+// 真实 Mongo 在事务内任一写错误（撞唯一键也是）后立即中止事务，之后同一事务的读返回
+// 带 TransientTransactionError 标签的 NoSuchTransaction，驱动会重跑回调直到
+// transaction_timeout。所以身份裁决必须发生在插入之前：已有同 ID 回执时，digest 与
+// payload 都相同即幂等成功（允许来自另一事务），任一不同即 fatal ErrReceiptIdentity。
+// 快照里没有才插入；并发事务插入同一回执时，服务端以 WriteConflict（transient）中止
+// 本事务，驱动重跑回调，下一次快照读就会看到对方已提交的回执并按上面规则裁决。
 func (store *MongoStore) stageReceipt(ctx context.Context, txID string, receipt coredata.Receipt) error {
 	expiresAt := time.Unix(0, receipt.ExpiresAt).UTC()
 	if receipt.ExpiresAt == 0 {
@@ -365,18 +374,25 @@ func (store *MongoStore) stageReceipt(ctx context.Context, txID string, receipt 
 		TransactionID: txID, Digest: append([]byte(nil), receipt.Digest...), Payload: append([]byte(nil), receipt.Payload...),
 		ExpiresAt: expiresAt, CreatedAt: store.now().UTC(),
 	}
-	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(ReceiptCollection).InsertOne(ctx, doc)
-	if !errors.Is(err, fmongo.ErrDuplicateKey) {
+	coll := store.client.Database(store.cfg.DefaultDatabase).Collection(ReceiptCollection)
+	var stored receiptDocument
+	err := coll.FindOne(ctx, bson.M{"_id": doc.ID}, &stored)
+	if err == nil {
+		if !bytes.Equal(stored.Digest, doc.Digest) || !bytes.Equal(stored.Payload, doc.Payload) {
+			return fmt.Errorf("%w: %s", ErrReceiptIdentity, doc.ID)
+		}
+		return nil
+	}
+	if !errors.Is(err, fmongo.ErrNotFound) {
 		return err
 	}
-	var stored receiptDocument
-	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(ReceiptCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
-		return errors.Join(err, findErr)
+	_, err = coll.InsertOne(ctx, doc)
+	if errors.Is(err, fmongo.ErrDuplicateKey) {
+		// 快照读未命中却撞键：事务已被服务端中止，不能在这里读回。按非 fatal 整笔回滚，
+		// 投影器重试时由新事务的快照读裁决；原错误链保留，驱动标签不被吞掉。
+		return fmt.Errorf("dataengine mongo: receipt %s appeared after the snapshot read: %w", doc.ID, err)
 	}
-	if !bytes.Equal(stored.Digest, doc.Digest) || !bytes.Equal(stored.Payload, doc.Payload) {
-		return ErrReceiptIdentity
-	}
-	return nil
+	return err
 }
 
 type outboxDocument struct {
@@ -396,6 +412,10 @@ type outboxDocument struct {
 	CreatedAt     time.Time         `bson:"created_at"`
 }
 
+// stageEffect 与 stageReceipt 相同，在事务快照内先读后插（RR-20260926-34）。outbox 中
+// 已有同 ID effect 时，同一事务、同一 topic 即幂等成功；属于另一事务或 topic 不同是 WAL
+// 身份缺陷，返回 fatal ErrTransactionIdentity（同一 saga start 在两个事务各发一次即此形状，
+// 按现有设计保持 fatal）。outbox 文档投递成功后会被删除，这项检查只覆盖尚未投递的窗口。
 func (store *MongoStore) stageEffect(ctx context.Context, txID string, effect coredata.Effect) error {
 	availableAt := time.Unix(0, effect.AvailableAt).UTC()
 	if effect.AvailableAt == 0 {
@@ -406,18 +426,24 @@ func (store *MongoStore) stageEffect(ctx context.Context, txID string, effect co
 		Payload: append([]byte(nil), effect.Payload...), Headers: cloneHeaders(effect.Headers),
 		AvailableAt: availableAt, CreatedAt: store.now().UTC(),
 	}
-	_, err := store.client.Database(store.cfg.DefaultDatabase).Collection(OutboxCollection).InsertOne(ctx, doc)
-	if !errors.Is(err, fmongo.ErrDuplicateKey) {
+	coll := store.client.Database(store.cfg.DefaultDatabase).Collection(OutboxCollection)
+	var stored outboxDocument
+	err := coll.FindOne(ctx, bson.M{"_id": doc.ID}, &stored)
+	if err == nil {
+		if stored.TransactionID != txID || stored.Topic != effect.Topic {
+			return fmt.Errorf("%w: effect %s staged by transaction %s", ErrTransactionIdentity, doc.ID, stored.TransactionID)
+		}
+		return nil
+	}
+	if !errors.Is(err, fmongo.ErrNotFound) {
 		return err
 	}
-	var stored outboxDocument
-	if findErr := store.client.Database(store.cfg.DefaultDatabase).Collection(OutboxCollection).FindOne(ctx, bson.M{"_id": doc.ID}, &stored); findErr != nil {
-		return errors.Join(err, findErr)
+	_, err = coll.InsertOne(ctx, doc)
+	if errors.Is(err, fmongo.ErrDuplicateKey) {
+		// 见 stageReceipt：事务已中止，非 fatal 回滚，由重试时的快照读裁决。
+		return fmt.Errorf("dataengine mongo: effect %s appeared after the snapshot read: %w", doc.ID, err)
 	}
-	if stored.TransactionID != txID || stored.Topic != effect.Topic {
-		return ErrTransactionIdentity
-	}
-	return nil
+	return err
 }
 
 func digestRecord(record coredata.CommitRecord) ([]byte, error) {
