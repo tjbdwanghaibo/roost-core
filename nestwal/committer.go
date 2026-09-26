@@ -435,6 +435,12 @@ func (c *Committer) replayPass(ctx context.Context) (int, error) {
 	var lastFence corenest.CommitFence
 	processedIDs := make([]corenest.TransactionID, 0, c.opts.ReplayBatchRecords)
 	err := c.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
+		// 批次已满时在下一条 lookahead 上停止：它不应用、不确认，下一轮重新读取。
+		// 之前在批次最后一条的 consume 里返回截止哨兵，WAL 只对返回 nil 的 consume
+		// 计数，那一条已应用却不计入 Stats.Replayed（RR-20260926-07 复核残留）。
+		if processed >= c.opts.ReplayBatchRecords {
+			return errReplayBatchComplete
+		}
 		if c.isHeld(record.ID) {
 			return errTransactionHeld
 		}
@@ -459,9 +465,6 @@ func (c *Committer) replayPass(ctx context.Context) (int, error) {
 		processed++
 		processedIDs = append(processedIDs, record.ID)
 		lastFence = fence
-		if processed >= c.opts.ReplayBatchRecords {
-			return errReplayBatchComplete
-		}
 		return nil
 	})
 	if errors.Is(err, errReplayBatchComplete) {
