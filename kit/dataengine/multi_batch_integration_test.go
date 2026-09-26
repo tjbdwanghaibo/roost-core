@@ -30,15 +30,15 @@ func realLocalMultiRecords(t *testing.T, fx *realFixture) []coredata.CommitRecor
 	return records
 }
 
+// manualRealProjector 返回不启动后台循环的 Projector，由测试逐步调用 ReplayPass / Flush。
+// RR-20260926-29：RR-17 后 Close 会拒绝后续 ReplayPass，不能再用“先 Close 停循环”的办法。
 func manualRealProjector(t *testing.T, wal *nestwal.WAL, store engine.ProjectionStore) *engine.Projector {
 	t.Helper()
-	p, err := engine.NewProjector(wal, store, engine.ProjectorOptions{CloseWAL: false, CheckpointInterval: time.Hour})
+	p, err := engine.NewProjector(wal, store, engine.ProjectorOptions{CloseWAL: false, CheckpointInterval: time.Hour, ManualReplay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = p.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() { _ = p.Close(context.Background()) })
 	return p
 }
 

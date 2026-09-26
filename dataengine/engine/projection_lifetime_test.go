@@ -92,3 +92,47 @@ func TestRemoteLeaseFenceRejectedBeforeWALAdmission(t *testing.T) {
 		t.Fatal("rejected admission leaked state")
 	}
 }
+
+// RR-20260926-29：外部夹具需要“不启动后台循环”的 Projector 来逐步驱动回放。
+// ManualReplay 下没有后台循环（done 一开始就关闭），记录只由显式 ReplayPass 投影；
+// Close 之后仍按 RR-17 拒绝 ReplayPass / Flush。
+func TestManualReplayProjectorRunsOnlyExplicitPasses(t *testing.T) {
+	options := nestwal.DefaultOptions(t.TempDir())
+	options.WriterVersion = nestwal.WriterVersionV2
+	w, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close(context.Background()) })
+	store := &recordingSegmentStore{}
+	p, err := NewProjector(w, store, ProjectorOptions{CloseWAL: false, ManualReplay: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("manual projector started a background replay loop")
+	}
+	record := projectorRecord(1, false)
+	if err := p.Commit(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	p.TransactionReleased(record.ID)
+	if len(store.events) != 0 {
+		t.Fatalf("projected without an explicit pass: %v", store.events)
+	}
+	if n, err := p.ReplayPass(context.Background()); n != 1 || err != nil {
+		t.Fatalf("manual pass n=%d err=%v", n, err)
+	}
+	assertWALReplayCount(t, w, 0)
+	if err := p.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ReplayPass(context.Background()); !errors.Is(err, ErrRuntimeStopped) {
+		t.Fatalf("replay after close=%v", err)
+	}
+	if err := p.Flush(context.Background()); !errors.Is(err, ErrRuntimeStopped) {
+		t.Fatalf("flush after close=%v", err)
+	}
+}

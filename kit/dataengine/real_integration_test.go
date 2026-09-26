@@ -250,15 +250,8 @@ func TestRealMixedProjectionSegmentsPreserveOrder(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	projector, err := engine.NewProjector(wal, fx.runtime.Store, engine.ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Close cancels the loop and waits for it to finish; the WAL stays open
-	// (CloseWAL is false) so the records below can still be appended.
-	if err := projector.Close(context.Background()); err != nil {
-		t.Fatalf("stop projector before appending: %v", err)
-	}
+	// 手动回放：没有后台循环抢先投影，下面追加的三条由一次 ReplayPass 处理。
+	projector := manualRealProjector(t, wal, fx.runtime.Store)
 	for _, record := range []coredata.CommitRecord{first, second, third} {
 		if _, err := wal.Append(fx.context(), record); err != nil {
 			t.Fatal(err)
@@ -311,13 +304,10 @@ func TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder(t *tes
 	}
 	firstStore := &projectionOnlyMongoStore{delegate: fx.runtime.Store}
 	firstProjector, err := engine.NewProjector(wal, firstStore, engine.ProjectorOptions{
-		ReplayBatchRecords: 16, ReplayBatchBytes: 4 << 20, CloseWAL: false, IdlePoll: time.Hour,
+		ReplayBatchRecords: 16, ReplayBatchBytes: 4 << 20, CloseWAL: false, ManualReplay: true,
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := firstProjector.Close(context.Background()); err != nil {
-		t.Fatalf("stop first projector: %v", err)
 	}
 	for i := range records {
 		if _, err := wal.Append(fx.context(), records[i]); err != nil {
@@ -407,13 +397,10 @@ func TestRealMongoMixedRatioWALReplayAckThroughput(t *testing.T) {
 			}
 			projector, err := engine.NewProjector(wal, fx.runtime.Store, engine.ProjectorOptions{
 				ReplayBatchRecords: recordCount, ReplayBatchBytes: 64 << 20,
-				CloseWAL: false, IdlePoll: time.Hour,
+				CloseWAL: false, ManualReplay: true,
 			})
 			if err != nil {
 				t.Fatal(err)
-			}
-			if err := projector.Close(context.Background()); err != nil {
-				t.Errorf("stop projector: %v", err)
 			}
 			for i := range records {
 				if _, err := wal.Append(fx.context(), records[i]); err != nil {

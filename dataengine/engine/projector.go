@@ -59,6 +59,10 @@ type ProjectorOptions struct {
 	WarnUnackedRecords      uint64        // 0 不设独立预警；达到准入上限也会报告预警。
 	CloseWAL                bool
 	OnFatal                 func(error)
+	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
+	// 供需要逐步控制回放与 ack 的外部夹具使用（例如注入“投影成功、checkpoint 丢失”后
+	// 检查中间状态）；Close 后这些入口同样返回 ErrRuntimeStopped。生产装配不设置。
+	ManualReplay bool
 }
 
 func DefaultProjectorOptions() ProjectorOptions {
@@ -170,6 +174,11 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 		wal: wal, store: store, opts: options, ack: wal.Ack, now: time.Now, ctx: ctx, cancel: cancel,
 		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
 		tickets: make(map[coredata.TransactionID]*projectionTicket),
+	}
+	if options.ManualReplay {
+		// 没有后台循环：Close 不需要等待，done 从一开始就处于“循环已退出”。
+		close(projector.done)
+		return projector, nil
 	}
 	go projector.run()
 	projector.signal()
