@@ -2,7 +2,7 @@ package engine
 
 import (
 	"context"
-	"errors"
+
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
@@ -63,10 +63,17 @@ func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 	pending.err = err
 	close(pending.done)
 }
+
+// WaitEntityProjection 等待实体 id 在本进程已准入的全部投影完成。等待前、等待中、等待后
+// 都能感知“本进程不会再投影”：投影 fatal（ErrProjectionConflict 等，可 errors.Is 判别）、
+// Projector 已关闭（ErrRuntimeStopped）、WAL 不健康。fatal 会唤醒全部等待方，不只 fatal 批次。
 func (p *Projector) WaitEntityProjection(ctx context.Context, id int64) error {
 	fctx.AssertBlockingAllowed("dataengine.WaitEntityProjection")
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := p.projectionUsable(); err != nil {
+		return err
 	}
 	p.heldMu.RLock()
 	pending := make([]*entityProjection, 0, len(p.pendingEntities[id]))
@@ -86,5 +93,17 @@ func (p *Projector) WaitEntityProjection(ctx context.Context, id int64) error {
 			return ErrRuntimeStopped
 		}
 	}
-	return errors.Join(p.fatal(), p.wal.Healthy())
+	return p.projectionUsable()
+}
+
+// projectionUsable 报告冷读是否还能相信“等到的投影就是全部”：fatal 或关闭后，
+// 已准入但未投影的记录不会再被本进程投影，WAL 不健康时准入结果本身不确定。
+func (p *Projector) projectionUsable() error {
+	if fatal := p.fatal(); fatal != nil {
+		return fatal
+	}
+	if p.ctx.Err() != nil {
+		return ErrRuntimeStopped
+	}
+	return p.wal.Healthy()
 }

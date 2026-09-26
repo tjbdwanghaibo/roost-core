@@ -285,13 +285,18 @@ func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitR
 	// pipelined record becomes durable later, so the kick has to wait for the
 	// ticket: the transaction's release usually arrives before the fsync, and
 	// a loop woken then finds nothing to replay and sleeps for IdlePoll.
-	go projector.signalWhenDurable(ticket)
+	go projector.signalWhenDurable(record.ID, ticket)
 	return ticket, nil
 }
 
-func (projector *Projector) signalWhenDurable(ticket corenest.CommitTicket) {
+func (projector *Projector) signalWhenDurable(id coredata.TransactionID, ticket corenest.CommitTicket) {
 	select {
 	case <-ticket.Done():
+		// 写入结果未知（WAL 已 terminal）时本进程不会再投影这条记录；等它的冷加载
+		// 立即拿到 WAL 错误，而不是等到各自截止时间（RR-20260926-10 复核残留）。
+		if err := ticket.Err(); err != nil {
+			projector.finishEntities(id, err)
+		}
 		projector.signal()
 	case <-projector.ctx.Done():
 	}
@@ -374,6 +379,10 @@ func (projector *Projector) isFatalProjection(err error) bool {
 		projector.errMu.Lock()
 		projector.fatalErr = err
 		projector.errMu.Unlock()
+		// fatal 之后本进程不再投影 fatal 记录及其后的任何记录，所以唤醒全部待投影
+		// 等待方（不只本批次），让冷加载与系统票据立即拿到可判别的 fatal。fatalErr
+		// 已先于唤醒写入，reserve 在同一把 heldMu 下复查，唤醒之后不会再有新的等待项。
+		projector.completeAllTickets(err)
 		if projector.opts.OnFatal != nil {
 			projector.opts.OnFatal(err)
 		}
@@ -461,6 +470,11 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 	id := record.ID
 	projector.heldMu.Lock()
 	defer projector.heldMu.Unlock()
+	// 调用方在准入前已查过 fatal；这里在 heldMu 下复查，关闭“查过之后才 fatal”的窗口：
+	// fatal 唤醒扫描也持 heldMu，之后登记的等待项将无人唤醒。
+	if fatal := projector.fatal(); fatal != nil {
+		return fatal
+	}
 	if _, exists := projector.admitted[id]; !exists {
 		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {
 			projector.admissionRejected.Add(1)

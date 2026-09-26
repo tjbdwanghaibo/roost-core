@@ -111,11 +111,8 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				prefix, err := projector.projectRemoteWindow(ctx, segments[segmentIndex:segmentIndex+count])
 				processed += prefix
 				if err != nil {
-					if projector.isFatalProjection(err) {
-						for _, record := range records {
-							projector.completeProjection(record.ID, err)
-						}
-					}
+					// fatal 由 isFatalProjection 统一唤醒全部待投影等待方。
+					projector.isFatalProjection(err)
 					return processed, err
 				}
 				if err := checkpoint(); err != nil {
@@ -158,11 +155,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 					perRecord = true
 					continue
 				}
-				if projector.isFatalProjection(err) {
-					for i := range records {
-						projector.completeProjection(records[i].ID, err)
-					}
-				}
+				projector.isFatalProjection(err)
 				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
 			}
 			for i := range unit.records {
