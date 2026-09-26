@@ -8,9 +8,21 @@ import (
 
 // Create builds and publishes an entity while holding its mutex until the
 // short-lived guard scope is released. Later mutations must enter through Nest.
+//
+// 在 Nest handler 内新建（param.IsCreate 且当前 Guard 作用域绑定了事务，即
+// CreatedEntityCapturer）时，Create 就是事务内创建：沿用当前作用域走 CreateInScope，
+// 与 Cast 一样进入同一提交边界，锁随事务的 Guard 释放，回滚 / 拒绝时撤销发布
+// （RR-20260926-35 复核：生成 Lifecycle 的 Create / GetOrCreate 都经过这里）。
+// 加载已持久的实体（IsCreate=false，Repository 聚合加载）和 Nest 之外的调用保持
+// 短作用域立即发布的原语义。
 func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged
+	}
+	if param != nil && param.IsCreate {
+		if scope := CurrentGuardScope(); scope != nil && scope.guard != nil && scope.guard.createdCapturer != nil {
+			return m.CreateInScope(scope, param)
+		}
 	}
 	var result IThreadSafeEntity
 	err := WithGuardScope("entity_create", func(scope *GuardScope) error {
