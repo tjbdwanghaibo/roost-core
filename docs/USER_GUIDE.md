@@ -269,7 +269,8 @@ Stats 的慢池 Started 会多计一次，指标 `nest.dispatch.slow_reroute.tot
 领头调用方仍在等待时，加载里需要 Entity 锁的发布沿用它自己的本地执行器（Nest 慢阶段即本条消息的快续行）；Nest 之外、
 没有指定执行器的领头方若持有实体锁（例如在 `WithGuardScope` 里锁着 X 时冷加载 Y），发布交回领头方自己的 goroutine 执行，
 loader 的发布即使还要锁 X 也不会死锁，领头方按自己的 ctx 离开最多晚一个本地步骤；不持锁的领头方，发布在加载 goroutine 上就地执行
-（[RR-20260927-27](bugfix/RR-20260927-27.md)）。领头方离开后改走 Nest 绑定给 ManagerAccess 的 `NestMgr.RunLocal`（Nest 构造时经 `LocalExecutorBinder` 自动绑定），仍在快池执行。
+（[RR-20260927-27](bugfix/RR-20260927-27.md)）。领头方离开后改走 Nest 绑定给 ManagerAccess 的 `NestMgr.RunLocal`（Nest 构造时经 `LocalExecutorBinder` 自动绑定），仍在快池执行，未绑定时就地执行。
+“离开”包括领头方按自己的 ctx 返回，也包括加载完成（或 panic）后返回：loader 在 `LoadEntity` 返回之后仍用加载 ctx 调 `RunLocal`（契约外用法）时同样走这条路径，不会阻塞（[RR-20260927-29](bugfix/RR-20260927-29.md)）。
 Nest 只对传入的 Getter 本身做 `LocalExecutorBinder` 类型断言：**包装了 `ManagerAccess` 的自定义 Getter 必须实现并转发
 `BindLocalExecutor(run)` 给内层 ManagerAccess**，否则领头方离开后的发布会在加载 goroutine 上就地执行（与没有 Nest 时相同，
 不经快池）；正式 kit 装配直接传 ManagerAccess，不受影响（RR-20260926-54）。

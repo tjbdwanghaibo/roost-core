@@ -65,6 +65,7 @@ type entityLoadFlight struct {
 	leaderMu   sync.Mutex
 	leaderRun  func(func()) error
 	leaderGone bool
+	leaveOnce  sync.Once
 
 	// leaderSteps / leaderAway（RR-20260927-27）：领头方在 Nest 之外、没有指定执行器、并且持有实体锁时非 nil。
 	// 它仍在等待时，加载里的本地步骤经 leaderSteps 交回领头方自己的 goroutine 执行——RR-54 之前发布就在那里，
@@ -319,6 +320,11 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	var steps chan *leaderLocalStep
 	if !joined {
 		steps = flight.leaderSteps
+		// RR-20260927-29：领头方无论怎样离开（自己的 ctx 到期、加载正常完成、加载 panic 重新抛出）都要登记离开。
+		// 之前只有 ctx 分支调用 leaderLeft：加载正常完成后 loader 另起的 goroutine 若仍用加载 ctx 调 RunLocal，
+		// 持锁的非 Nest 领头方已不再接收 leaderSteps、leaderAway 又从未关闭，runOnLeader 永久阻塞；Nest 领头方
+		// 则会把迟到步骤交给已返回（Msg 将被回收）的那条消息的快续行。离开后迟到步骤改走绑定执行器或就地执行。
+		defer flight.leaderLeft()
 	}
 	for {
 		select {
@@ -330,9 +336,6 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 		case step := <-steps:
 			step.run()
 		case <-ctx.Done():
-			if !joined {
-				flight.leaderLeft()
-			}
 			return nil, ctx.Err()
 		}
 	}
@@ -445,16 +448,19 @@ func (flight *entityLoadFlight) runOnLeader(fn func()) bool {
 	return true
 }
 
-// leaderLeft 在领头方按自己的 ctx 离开时调用（每个 flight 至多一次）：之后的本地步骤不再使用它的执行器，
-// 也不再交给它的 goroutine。
+// leaderLeft 在领头方离开 loadEntityShared 时调用（任何返回方式，含 panic；leaveOnce 保证只生效一次）：之后的本地步骤
+// 不再使用它的执行器，也不再交给它的 goroutine。取 leaderMu 会等正在用领头方执行器的续行结束（续行仍在使用领头方的 Msg）；
+// leaderSteps 路径的步骤不持 leaderMu，领头方离开不等它们。
 func (flight *entityLoadFlight) leaderLeft() {
-	flight.leaderMu.Lock()
-	flight.leaderGone = true
-	flight.leaderRun = nil
-	flight.leaderMu.Unlock()
-	if flight.leaderAway != nil {
-		close(flight.leaderAway)
-	}
+	flight.leaveOnce.Do(func() {
+		flight.leaderMu.Lock()
+		flight.leaderGone = true
+		flight.leaderRun = nil
+		flight.leaderMu.Unlock()
+		if flight.leaderAway != nil {
+			close(flight.leaderAway)
+		}
+	})
 }
 
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {
