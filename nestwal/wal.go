@@ -313,6 +313,8 @@ func normalizeOptions(opts Options) (Options, error) {
 	return opts, nil
 }
 
+// Append 是阻塞式提交入口（Committer.Commit、Projector.Commit / CommitSystem）：记录写入所在批后返回 fence。
+// async 只等写入，由组提交 ticker 周期刷盘；strict 与 pipelined 等所在批 fsync 成功后才返回。
 func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenest.CommitFence, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -326,9 +328,13 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 	}
 	frame := encodeFrame(payload)
 	req := appendRequest{
-		record:      record,
-		frame:       frame,
-		requireSync: record.Durability == corenest.DurabilityStrict,
+		record: record,
+		frame:  frame,
+		// 经 Append 到达的 pipelined（Durability 3）记录来自回退到 strict 路径的事务：broadcast 没有提前放锁、带 Remote 批次
+		// 保留两阶段协议（nest/execution.go），Nest 在 Append 返回后就放锁、Confirm Sync、执行 AfterCommit，所以必须与 strict
+		// 一样等 fsync。之前只认 DurabilityStrict，这些记录按 async 在 fsync 之前返回，成功先于持久对外可见（RR-20260928-11）。
+		// 正常 pipelined 记录走 Enqueue（票据在 fsync 后完成），不经这里；encodeRecordVersion 已拒绝大于 pipelined 的取值。
+		requireSync: record.Durability >= corenest.DurabilityStrict,
 		done:        make(chan appendResult, 1),
 	}
 

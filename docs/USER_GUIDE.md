@@ -63,6 +63,9 @@ DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。�
   （`kitnest.NewModWithEntitySync`）在业务未显式设置 `ManagerConfig.DurableWatermark` 时自动接 committer 的
   `DurableLSN`：committer 实现 `PipelinedTransactionCommitter` 时按水位暂缓未持久内容，否则不设门槛
   （RR-20260926-35）。显式配置优先；自建 `entitysync.Manager` 仍需自己接线，入口 `NestMgr.DurableWatermark()`。
+  broadcast 与带 Remote 批次的消息不走 pipelined 的提前放锁，按 strict 在锁内等本地 WAL fsync，之后才释放锁、确认 Sync、
+  执行 AfterCommit 与回复；这两条路径的锁持有时间因此包含一次组提交 fsync（此前 WAL 在这里不等 fsync，实际是 async 语义，
+  [RR-20260928-11](bugfix/RR-20260928-11.md)）。
 
 handler 内新建的实体属于当前事务：用当前 Guard 作用域调用 `CreateInScope`（`entity.CurrentGuardScope()`），
 以及在 handler 内调用 `EntityManager.Create` / `ManagerAccess.Create`（`IsCreate`）——生成 Lifecycle 的 `Create`、`GetOrCreate`

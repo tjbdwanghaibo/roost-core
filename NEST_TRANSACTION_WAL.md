@@ -85,7 +85,7 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 - record 默认上限 16 MiB；
 - frame 包含 magic、格式版本、payload 长度、header CRC、payload CRC；
 - payload 为确定性二进制编码，header map 按 key 排序；
-- strict 请求在 batch 中合并为一次 fsync；
+- strict 请求在 batch 中合并为一次 fsync；经阻塞式 `Append` 提交的 pipelined 记录（broadcast、带 Remote 批次时回退到 strict 路径）同样等这次 fsync（[RR-20260928-11](docs/bugfix/RR-20260928-11.md)）；
 - async 默认每 10 ms 刷盘；
 - 启动时只截断最后 segment 的不完整尾 frame 或零填充尾部，判据见下文“尾部截断判据”；
 - 完整 frame CRC 错误、segment 缺口、ack 越界均拒绝启动，不静默跳过；
