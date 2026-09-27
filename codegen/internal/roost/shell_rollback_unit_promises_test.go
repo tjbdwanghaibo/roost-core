@@ -101,17 +101,39 @@ exec `+realInstall+` "$@"
 if [ "$1" = -Tf ]; then rm -f "$3"; exec `+realMv+` -f "$2" "$3"; fi
 exec `+realMv+` "$@"
 `, 0o755)
-	// systemd keeps the unit it loaded until daemon-reload; restart starts the
-	// loaded unit's ExecStart in its WorkingDirectory.
+	// systemd keeps the unit it loaded until daemon-reload; start runs the
+	// loaded unit's ExecStart in its WorkingDirectory, and is a no-op while the
+	// service is already running; stop stops it with the TimeoutStopSec of the
+	// unit loaded at that moment (RR-20260928-12), restart is stop + start.
+	// ROOST_TEST_RUNNING holds the running process: its release directory and
+	// the TimeoutStopSec it was started under; every stop appends
+	// "<release>|<TimeoutStopSec at start>|<TimeoutStopSec at stop>" to
+	// ROOST_TEST_STOPS. A daemon-reload fails once, loading nothing, while
+	// ROOST_TEST_FAIL_RELOAD exists.
 	write(filepath.Join(stub, "systemctl"), `#!/bin/sh
+stop_running() {
+  if [ -f "$ROOST_TEST_RUNNING" ]; then
+    tss=$(sed -n 's/^TimeoutStopSec=//p' "$ROOST_TEST_LOADED")
+    printf '%s|%s\n' "$(cat "$ROOST_TEST_RUNNING")" "${tss:-unset}" >> "$ROOST_TEST_STOPS"
+    rm -f "$ROOST_TEST_RUNNING"
+  fi
+  rm -f "$ROOST_TEST_READY"
+}
+start_loaded() {
+  [ ! -f "$ROOST_TEST_RUNNING" ] || return 0
+  wd=$(sed -n 's/^WorkingDirectory=//p' "$ROOST_TEST_LOADED")
+  exec_start=$(sed -n 's/^ExecStart=//p' "$ROOST_TEST_LOADED")
+  tss=$(sed -n 's/^TimeoutStopSec=//p' "$ROOST_TEST_LOADED")
+  printf '%s|%s' "$(cd "$wd" && pwd -P)" "${tss:-unset}" > "$ROOST_TEST_RUNNING"
+  (cd "$wd" && $exec_start) || true
+}
 case "$1" in
-  daemon-reload) cp "$UNIT_PATH" "$ROOST_TEST_LOADED" ;;
-  stop) rm -f "$ROOST_TEST_READY" ;;
-  restart)
-    rm -f "$ROOST_TEST_READY"
-    wd=$(sed -n 's/^WorkingDirectory=//p' "$ROOST_TEST_LOADED")
-    exec_start=$(sed -n 's/^ExecStart=//p' "$ROOST_TEST_LOADED")
-    (cd "$wd" && $exec_start) || true ;;
+  daemon-reload)
+    if [ -f "$ROOST_TEST_FAIL_RELOAD" ]; then rm -f "$ROOST_TEST_FAIL_RELOAD"; exit 1; fi
+    cp "$UNIT_PATH" "$ROOST_TEST_LOADED" ;;
+  stop) stop_running ;;
+  start) start_loaded ;;
+  restart) stop_running; start_loaded ;;
 esac
 exit 0
 `, 0o755)
@@ -124,6 +146,9 @@ exit 0
 		"HEALTH_ATTEMPTS=1",
 		"ROOST_TEST_READY="+r.ready,
 		"ROOST_TEST_LOADED="+filepath.Join(dir, "loaded.service"),
+		"ROOST_TEST_RUNNING="+filepath.Join(dir, "running"),
+		"ROOST_TEST_STOPS="+filepath.Join(dir, "stops.log"),
+		"ROOST_TEST_FAIL_RELOAD="+filepath.Join(dir, "fail-reload"),
 	)
 	return r
 }
@@ -147,6 +172,10 @@ func (r *shellDeployRehearsal) runningIn() string {
 	return strings.TrimSpace(string(raw))
 }
 
+// legacyStopTimeout is the TimeoutStopSec of the legacy unit: not what the
+// generator renders for this manifest, so a stop under the wrong unit shows.
+const legacyStopTimeout = "7s"
+
 // installLegacyRelease lays out what an install.sh from before RR-20260928-05
 // left behind: release v1 with only the binary and config, current -> v1, a
 // unit with WorkingDirectory=$APP_ROOT, and the tables the operator put in
@@ -167,7 +196,7 @@ func (r *shellDeployRehearsal) installLegacyRelease() {
 		filepath.Join(v1, "planet"):                                   string(good),
 		filepath.Join(v1, "config.yaml"):                              "sid: 1003\n",
 		filepath.Join(r.appRoot, "configs", "data", "_manifest.json"): "{}\n",
-		r.unitPath: "[Service]\nWorkingDirectory=" + r.appRoot + "\nExecStart=" + r.appRoot + "/current/planet game --sid 1003 --config " + r.appRoot + "/current/config.yaml\n",
+		r.unitPath: "[Service]\nWorkingDirectory=" + r.appRoot + "\nExecStart=" + r.appRoot + "/current/planet game --sid 1003 --config " + r.appRoot + "/current/config.yaml\nTimeoutStopSec=" + legacyStopTimeout + "\n",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			r.t.Fatal(err)

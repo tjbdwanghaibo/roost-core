@@ -195,24 +195,27 @@ wait_ready() {
   return 1
 }
 
+# Stop before switching: the running process stops under the unit it was
+# started with (its TimeoutStopSec), not the one loaded for the next release.
+[ ! -f "$UNIT_PATH" ] || systemctl stop "$INSTANCE.service"
 switch_release "$RELEASE_ROOT"
-use_unit "$RELEASE_ROOT"
-systemctl enable "$INSTANCE.service"
-if systemctl restart "$INSTANCE.service" && wait_ready; then
+if ! { use_unit "$RELEASE_ROOT" && systemctl enable "$INSTANCE.service"; }; then
+  printf 'failed to install the systemd unit for %s version %s; rolling back\n' "$INSTANCE" "$VERSION" >&2
+elif systemctl start "$INSTANCE.service" && wait_ready; then
   printf 'deployed %s version %s; inspect with: systemctl status %s.service\n' "$INSTANCE" "$VERSION" "$INSTANCE"
   exit 0
+else
+  printf 'deployment health check failed for %s version %s; rolling back\n' "$INSTANCE" "$VERSION" >&2
 fi
 
-printf 'deployment health check failed for %s version %s; rolling back\n' "$INSTANCE" "$VERSION" >&2
+systemctl stop "$INSTANCE.service" || true
 if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
   switch_release "$PREVIOUS"
-  use_unit "$PREVIOUS" || true
-  systemctl restart "$INSTANCE.service" || true
+  use_unit "$PREVIOUS" || printf 'failed to restore the systemd unit of %s\n' "${PREVIOUS##*/}" >&2
+  systemctl start "$INSTANCE.service" || true
   if ! wait_ready; then
     printf 'rollback also failed readiness; manual recovery required\n' >&2
   fi
-else
-  systemctl stop "$INSTANCE.service" || true
 fi
 exit 1
 `, m)
@@ -352,7 +355,7 @@ SID=$2
 VERSION=$3
 case "$SERVICE" in {{SERVICE_ALTERNATIVES}}) ;; *) printf 'unknown service: %s\n' "$SERVICE" >&2; exit 2;; esac
 case "$SID" in *[!0-9]*|'0'|'') printf 'sid must be a positive integer\n' >&2; exit 2;; esac
-case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version\n' >&2; exit 2;; esac
+case "$VERSION" in *[!a-zA-Z0-9._-]*|''|.|..) printf 'invalid version\n' >&2; exit 2;; esac
 
 INSTANCE={{APP}}-$SERVICE-$SID
 APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
@@ -365,29 +368,42 @@ PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 {{UNIT_RECORD}}record_unit "$PREVIOUS"
 NEXT=$APP_ROOT/.current.$$
 trap 'rm -f "$NEXT"' EXIT HUP INT TERM
-ln -s "$TARGET" "$NEXT"
-mv -Tf "$NEXT" "$CURRENT"
-use_unit "$TARGET"
-systemctl restart "$INSTANCE.service"
+switch_current() {
+  ln -s "$1" "$NEXT"
+  mv -Tf "$NEXT" "$CURRENT"
+}
+# The running process stops under the unit it was started with (its
+# TimeoutStopSec), so stop before loading another release's unit.
+restore_previous() {
+  systemctl stop "$INSTANCE.service" || true
+  [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] || return 0
+  switch_current "$PREVIOUS"
+  use_unit "$PREVIOUS" || printf 'failed to restore the systemd unit of %s; manual recovery required\n' "${PREVIOUS##*/}" >&2
+  systemctl start "$INSTANCE.service" || true
+}
+[ ! -f "$UNIT_PATH" ] || systemctl stop "$INSTANCE.service"
+switch_current "$TARGET"
+if ! use_unit "$TARGET"; then
+  restore_previous
+  printf 'failed to install the systemd unit of release %s; restored previous release\n' "$VERSION" >&2
+  exit 1
+fi
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
 HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
-attempt=1
-while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
-  if sh "$ROOT/deploy/shell/healthcheck.sh" "$HEALTH_URL" >/dev/null 2>&1; then
-    printf 'rolled back %s to %s\n' "$INSTANCE" "$VERSION"
-    exit 0
-  fi
-  attempt=$((attempt + 1))
-  sleep 1
-done
-if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
-  ln -s "$PREVIOUS" "$NEXT"
-  mv -Tf "$NEXT" "$CURRENT"
-  use_unit "$PREVIOUS" || true
-  systemctl restart "$INSTANCE.service" || true
+if systemctl start "$INSTANCE.service"; then
+  attempt=1
+  while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
+    if sh "$ROOT/deploy/shell/healthcheck.sh" "$HEALTH_URL" >/dev/null 2>&1; then
+      printf 'rolled back %s to %s\n' "$INSTANCE" "$VERSION"
+      exit 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
 fi
+restore_previous
 printf 'rollback target failed readiness; restored previous release\n' >&2
 exit 1
 `, m)
@@ -409,6 +425,14 @@ exit 1
 // 所以 unit 按 release 记在 $APP_ROOT/units/<version>.service，与 current 一起切换。
 // record_unit 在任何覆盖之前把当前 release 正在用的 unit 记给它——这是旧 install.sh
 // 装的 release 唯一能得到记录的时机；没有记录的 release 沿用已安装的 unit（修前行为）。
+//
+// 两个脚本都按 stop（当前装载的 unit）→ 切 current → use_unit → start 的顺序切换
+// （RR-20260928-12）。之前是 use_unit 之后 systemctl restart：daemon-reload 后 restart 里的
+// stop 用的是刚装载的目标 unit 的 TimeoutStopSec，正在运行的进程按别的 release 的停机预算
+// 被停（rollback.sh 回 v1 时 v2 进程按 v1 较短的预算，超时即 SIGKILL）。stop 失败时 set -e
+// 在改动任何东西之前退出，不能吞掉：服务还在运行时 start 是空操作，旧进程会被当成新版本
+// 通过 readiness。use_unit 失败（install / daemon-reload）时切回上一个 release 及其 unit
+// 再启动并报错退出，不再像之前那样在 set -e 下留下 current 已切换、unit 与进程都没换。
 func renderShellUnitRecord() string {
 	return `# Each release runs under the systemd unit it was installed with, recorded in
 # $APP_ROOT/units/<version>.service and switched together with current.
@@ -437,7 +461,7 @@ func renderShellReadme(m Manifest) string {
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload。readiness 未在预算内成功时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload；切换前先按正在用的 unit 停掉当前进程，正在运行的版本按它自己 unit 的 TimeoutStopSec 停机，再装入目标 unit 启动。readiness 未在预算内成功、或目标 unit 装不上（install / daemon-reload 失败）时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本（版本号不能是 . 或 ..），目标版本 readiness 失败或 unit 装不上会恢复原版本并以非零退出。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
 `, m)
 }
 
