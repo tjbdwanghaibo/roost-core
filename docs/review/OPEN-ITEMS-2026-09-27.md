@@ -90,6 +90,7 @@
 | B35 | RR-35 与 RR-36 对生成工程 go.work 模式说法矛盾：35 报 genproto `ambiguous import` 只好改 replace，36 用 go.work 却通过 | [bf-35 §验证](../bugfix/RR-20260926-35.md)、[bf-47 §验证](../bugfix/RR-20260926-47.md)、[bf-36](../bugfix/RR-20260926-36.md) | 未复跑 | HEAD 生成 game-demo，`go.work use . <repo>` 后 `go build ./...`，记录是否仍报 ambiguous | S |
 | B36 | RR-81～85，以及 audit4 之后做的 RR-73、RR-80 复核补修（`62b3ad7`、`eb05c7a`），都没有经过非修复方独立审计 | 交接文档 `:110`（“RR-83～85 未经独立审计”）；[audit4](REVIEW-2026-09-27-audit4.md) `:3-4`（范围只到 RR-73～80，RR-81/82 不在范围）；`docs/review` 下没有 audit5 | 已核实仍成立 | 按前四轮格式做第五轮审计：修前红（各修复提交的父提交）/ 修后绿 / 约束符合度 / 跨组交互 | M |
 | B37 | 小的复验缺口：RR-83 `-shuffle=on` 的 seed 没记录；RR-85 在 `b95c895` 上的探针对照没重跑；RR-05 持续 RetryLater 下的会话公平性只做了推理 | [bf-83 §验证（修后）](../bugfix/RR-20260926-83.md)、[bf-85 §验证](../bugfix/RR-20260926-85.md)、[bf-05 §未验证项与边界](../bugfix/RR-20260926-05.md) | 仍成立 | `go test -count=2 -shuffle=on -v ./entity` 记 seed；`git worktree add` 到 `b95c895` 跑 REPRO-08 §2 探针 F；entitysync 写“持续 RetryLater N 个窗口，每个会话最终交付”用例 | S |
+| B39 | RR-85：`Unregister` 在已被 forget 的旧 subject 上取释放戳，可能删掉同 ID 新登记的记录与 Direct 活绑定（audit5 疑点，推断） | [audit5 §疑点](REVIEW-2026-09-27-audit5.md) | 推断，未写探针 | 在 `Unregister` 取 `subj` 与加 `subj.mu` 之间加测试缝，构造 forget + 重新登记 + Bind，看新登记的绑定与撤销记录是否被删 | S |
 | B38 | CARRYOVER 里仍未分流的 B4：活动窗口的机器人分支逻辑没有真实跨过 300 秒边界跑过 | [CARRYOVER §B](../bug/CARRYOVER.md)（B4“本轮进展：无”） | 仍成立（之后没有记录） | 集成环境让机器人运行跨过一个完整 300 秒窗口边界，或在 loadtest 里对齐起跑时间 | S |
 
 ## C. 本地做不了，或需要维护者决定（33 条）
@@ -303,10 +304,11 @@
 | RR-20260927-18 | B25 demo 场景 Manager 接卸载重载（可达时） | 6 Sync |
 | RR-20260927-19 | C18 场景重开重试用尽计数 | 6 |
 | RR-20260927-20 | A07 nest 单用例重复运行 duplicate handler | 2 卫生 |
+| RR-20260927-21 | audit5 N1：同一 Guard 自我撤销后再建同 ID 空转重排 | 4 entity |
 
 | 批次 | 条目 | 状态 |
 | --- | --- | --- |
-| 0 | B36（RR-81～85 与 RR-73/80 补修的第五轮独立审计） | 进行中 |
+| 0 | B36（RR-81～85 与 RR-73/80 补修的第五轮独立审计） | **完成**：全部成立，见 [audit5](REVIEW-2026-09-27-audit5.md)；新登记 RR-20260927-21（交批次 4），CHANGELOG 误写已更正，疑点记为 B39（交批次 6） |
 | 1 生成器 / demo | A01、A02、A03、A04、A08、A09、C05 | 进行中 |
 | 2 仓库卫生与文档 | A05、A06、A07、A11、A12、A13、E 节、C 类“接受 / 保留 / 确认”项的文档记录（C02、C10、C12、C16、C19～C24、C28～C31） | 进行中 |
 | 3 Nest | B03→C07、B04、B05、B16、B17、B19、B24→C09、B26、C06 | 进行中 |

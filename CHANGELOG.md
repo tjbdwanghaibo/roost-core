@@ -42,7 +42,7 @@
 - **`dataengine.shutdown_timeout` 不参与生成（RR-20260926-77 更正文档）**：生成公式按 30s 计，只调大它不会改变生成的 `total_timeout` 与宽限期，须同时手动调大 `shutdown.total_timeout` 再 sync。
 
 - **收尾阶段的独立事务不再认领消息（RR-20260926-84）**：独立事务是否属于消息改按入口判定。带 Remote 批次的消息在 post-release / 解锁后回调里调用 `RunIsolatedTransaction` 返回 `ErrNestedTransactionInRemoteMessage`；
-  纯本地消息按嵌套独立事务处理（外层失败回复带 `ErrNestedTransactionCommitted` 而非 `ErrAfterCommitFailed`，结果未知时 fence）。`RunDetachedTransaction` 在无事务的 memory handler 内调用时同样不再认领消息（`skill/combatcomponent` 受此影响：之后业务失败回复带 `ErrNestedTransactionCommitted`，结果未知 fence）。
+  纯本地消息按嵌套独立事务处理（外层失败回复带 `ErrNestedTransactionCommitted` 而非 `ErrAfterCommitFailed`，结果未知时 fence）。handler 内（包括 memory handler 内经 `RunDetachedTransaction`，如 `skill/combatcomponent`）的调用修前就按嵌套处理，行为不变；变化只在收尾阶段（更正：本条发布时曾误写 memory handler 内行为也变了，见 [第五轮审计](docs/review/REVIEW-2026-09-27-audit5.md) N2）。
 - **`entitysync.ReleasedSubscription` 新增 `Stamp` 字段（RR-20260926-85）**：用位置式字面量构造它的仓外代码需改为带字段名；自建政策判定释放应比较戳（`SubscriptionSource.SubscribeStamped`），不再用 `Holds`。
 
 ### Added
