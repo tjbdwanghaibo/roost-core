@@ -14,6 +14,8 @@ import (
 // RR-20260926-65：消息执行期间，handler 内嵌套的独立事务（RunIsolatedTransaction）一旦持久提交，
 // 这条消息就按“已越过提交点”处理（与 RR-20260926-49 同一判据）：外层随后以锁超时等可重排错误失败时不再
 // 自动重排（重排会让已提交的独立事务再提交一次），回复带 ErrNestedTransactionCommitted 供调用方判别。
+// RR-20260926-74 之后，嵌套独立事务不能再写外层可回滚事务已快照的实体（声明实体就是），所以这里的独立事务改为写一个
+// 在自己事务里 Cast 取得的实体；RR-65 的承诺本身（已提交不重排、回复带哨兵）不变。
 
 type isolatedCountingCommitter struct {
 	calls   atomic.Int64
@@ -33,15 +35,29 @@ type isolatedRun struct {
 	iso               *isolatedCountingCommitter
 }
 
-// registerIsolatedThenFail 注册一个 handler：先在 RunIsolatedTransaction 里修改声明实体并持久提交，第一次执行随后返回 outerErr。
+// addIsolatedTarget 放入一个锁组高于 pilot 的实体，供嵌套独立事务在自己的事务里 Cast 并写入：外层没有它的快照（RR-20260926-74）。
+func addIsolatedTarget(t *testing.T, manager *entity.EntityManager, unique int64) *rollbackTestEntity {
+	t.Helper()
+	id := mustBuildCastID(t, unique, castPlayerCategory, castPlayerKind)
+	e := &rollbackTestEntity{EntityBase: entity.NewEntityBase(id, castPlayerCategory, false, castPlayerKind), dao: &rollbackTestDao{id: id, Value: 1}}
+	if err := manager.TryAdd(e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// registerIsolatedThenFail 注册一个 handler：先在 RunIsolatedTransaction 里 Cast run.value 并修改、持久提交，第一次执行随后返回 outerErr。
 func registerIsolatedThenFail(t *testing.T, mgr *NestMgr, name HandlerName, meta HandlerMeta, run *isolatedRun, outerErr error) {
 	t.Helper()
+	targetID := run.value.GUId()
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		n := run.attempts.Add(1)
-		e := es[0].(*rollbackTestEntity)
-		run.value = e
 		if _, err := RunIsolatedTransaction(context.Background(), run.iso, "rr65_iso", func() (any, error) {
 			run.isoRuns.Add(1)
+			e, err := CastOne[*rollbackTestEntity](targetID)
+			if err != nil {
+				return nil, err
+			}
 			old := e.dao.Value
 			if !RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil }) {
 				return nil, errors.New("missing isolated transaction")
@@ -85,13 +101,14 @@ func TestIsolatedCommitThenOuterLockTimeoutIsNotRequeued(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := entity.NewEntityManager()
 			ids := addPilots(t, manager, 36500+int64(i)*10, 1)
+			target := addIsolatedTarget(t, manager, 36505+int64(i)*10)
 			access := entity.NewManagerAccess(manager)
 			var outer TransactionCommitter = &isolatedCountingCommitter{}
 			if tc.pipelined {
 				outer = newPipelinedTestCommitter(true)
 			}
 			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
-			run := &isolatedRun{iso: &isolatedCountingCommitter{}}
+			run := &isolatedRun{iso: &isolatedCountingCommitter{}, value: target}
 			name := NewHandlerName("rr65_iso_then_lock_timeout_" + tc.name)
 			registerIsolatedThenFail(t, mgr, name, tc.meta, run, fmt.Errorf("%w: simulated lock conflict after the isolated commit", ErrLockTimeout))
 			if err := mgr.Start(); err != nil {
@@ -121,9 +138,10 @@ func TestIsolatedCommitThenOuterLockTimeoutIsNotRequeued(t *testing.T) {
 func TestIsolatedCommitThenOuterFailureCarriesSentinel(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 36560, 1)
+	target := addIsolatedTarget(t, manager, 36565)
 	access := entity.NewManagerAccess(manager)
 	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
-	run := &isolatedRun{iso: &isolatedCountingCommitter{}}
+	run := &isolatedRun{iso: &isolatedCountingCommitter{}, value: target}
 	boom := errors.New("business failed after the isolated commit")
 	name := NewHandlerName("rr65_iso_then_boom")
 	registerIsolatedThenFail(t, mgr, name, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, run, boom)
@@ -141,9 +159,10 @@ func TestIsolatedCommitThenOuterFailureCarriesSentinel(t *testing.T) {
 func TestIsolatedRejectedThenOuterLockTimeoutStillRequeues(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 36570, 1)
+	target := addIsolatedTarget(t, manager, 36575)
 	access := entity.NewManagerAccess(manager)
 	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
-	run := &isolatedRun{iso: &isolatedCountingCommitter{rejectN: 1}}
+	run := &isolatedRun{iso: &isolatedCountingCommitter{rejectN: 1}, value: target}
 	name := NewHandlerName("rr65_iso_rejected_then_lock_timeout")
 	registerIsolatedThenFail(t, mgr, name, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, run, fmt.Errorf("%w: simulated", ErrLockTimeout))
 	if err := mgr.Start(); err != nil {

@@ -74,6 +74,9 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 // infrastructure lifecycle operations whose commit point cannot be rolled
 // back with the surrounding business transaction. Callers must already hold
 // every entity lock required by call.
+//
+// 在 Nest handler 内调用时：要持久写的实体若已被外层可回滚事务（state / undo）登记回滚快照，在写任何持久记录之前返回
+// ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。
 func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
 	if call == nil {
 		return nil, errors.New("nest: isolated transaction call is nil")
@@ -163,6 +166,8 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	tx.handler = handler
 	tx.stageMetrics = stages
 	tx.dispatch = owner
+	// handler 内嵌套的独立事务记下外层事务：提交前拒绝写外层会回滚的实体（RR-20260926-74）。消息自己的事务此处为 nil。
+	tx.enclosing = CurrentRollbackTx()
 	if err := tx.CaptureEntities(es); err != nil {
 		return nil, err
 	}

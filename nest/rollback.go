@@ -98,6 +98,11 @@ type RollbackTx struct {
 	// dispatch 是以本事务为自身事务的派发消息（嵌套的 RunIsolatedTransaction / 无派发调用为 nil）；
 	// 越过提交点时在它上面记录，dispatchNest 据此不再重新准入（RR-20260926-49）。
 	dispatch *Msg
+	// enclosing 是本事务开始时已在执行的外层事务（handler 内嵌套的 RunIsolatedTransaction 才有；消息自己的事务为 nil）。
+	// snapshotted 是本事务以可回滚策略捕获（登记了快照 / tracker 恢复）的实体。嵌套事务提交前据此拒绝写外层会回滚的实体
+	// （RR-20260926-74）。
+	enclosing   *RollbackTx
+	snapshotted []entity.IThreadSafeEntity
 }
 
 type rollbackTxState uint8
@@ -581,6 +586,9 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 	if record.Empty() {
 		return nil
 	}
+	if err := tx.refuseWriteUnderEnclosingRollback(); err != nil {
+		return err
+	}
 	if committer == nil {
 		if tx.durability != DurabilityMemory || len(record.Effects) > 0 {
 			return ErrCommitterRequired
@@ -600,6 +608,63 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 		return errors.Join(ErrCommitRejected, err)
 	}
 	return tx.acceptPersistence()
+}
+
+// refuseWriteUnderEnclosingRollback 在嵌套事务写任何持久记录之前检查（RR-20260926-74）：本事务要持久写的 DAO 若已被外层
+// 可回滚事务登记回滚快照，外层随后失败回滚会把快照恢复到内存（RollbackState 值与 tracker 版本、RollbackUndo 的 tracker 版本），
+// 覆盖本事务已持久的结果，内存与持久分叉、下一次写以旧 ExpectedVersion 撞冲突。旧实现照常提交。维护者决定拒绝而不是改外层
+// 快照的基准：返回 ErrNestedTransactionRollbackConflict，由 commitDurable 按明确拒绝回滚本事务，外层快照不动。
+// 外层是 RollbackNone（memory 快路径没有 RollbackTx，带 Remote 批次的 memory handler 不登记快照）时不受影响。
+func (tx *RollbackTx) refuseWriteUnderEnclosingRollback() error {
+	for outer := tx.enclosing; outer != nil; outer = outer.enclosing {
+		if outer.policy == RollbackNone || outer.state != rollbackTxOpen {
+			continue
+		}
+		if id, ok := outer.restoresWriteOf(tx.participantOrder); ok {
+			return fmt.Errorf("%w: id %d (nested %q, enclosing %s transaction %q)", ErrNestedTransactionRollbackConflict, id, tx.handler, outer.policy, outer.handler)
+		}
+	}
+	return nil
+}
+
+// restoresWriteOf 报告本（外层）事务回滚时是否会恢复 participants 写到的状态：participant 是本事务 MarkPersist 过的 DAO
+// （已登记 tracker 快照），或属于本事务快照过的实体。按 DAO 实例判断，不按 ID：生成 DAO 的 Id() 是 StorageID，不一定等于实体 ID。
+// 返回命中的 ID（用于错误信息）。
+func (tx *RollbackTx) restoresWriteOf(participants []MutationParticipant) (int64, bool) {
+	for _, participant := range participants {
+		if _, ok := tx.participantChanges[participant]; ok {
+			return persistParticipantID(participant), true
+		}
+		for _, e := range tx.snapshotted {
+			if entityOwnsParticipant(e, participant) {
+				return e.GUId(), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// entityOwnsParticipant 按实例判断 participant 是否是 e 的某个 DAO。比较经 any 进行：动态类型不同直接不等；
+// 相同时 participant 的类型已由 persistChange 保证可比较。
+func entityOwnsParticipant(e entity.IThreadSafeEntity, participant MutationParticipant) bool {
+	guardable, ok := e.(entity.Guardable)
+	if !ok {
+		return false
+	}
+	owned := false
+	guardable.RangeDao(func(dao entity.DaoInterface) {
+		if !owned && dao != nil && any(dao) == any(participant) {
+			owned = true
+		}
+	})
+	return owned
+}
+
+func persistParticipantID(participant MutationParticipant) int64 {
+	if dao, ok := participant.(interface{ Id() int64 }); ok {
+		return dao.Id()
+	}
+	return 0
 }
 
 // pipelinedEnqueue performs the in-lock half of a pipelined commit. It is the
@@ -765,6 +830,11 @@ func (tx *RollbackTx) CaptureEntities(es []entity.IThreadSafeEntity) error {
 		if tx.policy == RollbackNone {
 			continue
 		}
+		if tx.snapshotted == nil {
+			// 一次分配覆盖声明目标加少量 Cast / 新建实体。
+			tx.snapshotted = make([]entity.IThreadSafeEntity, 0, len(es)+2)
+		}
+		tx.snapshotted = append(tx.snapshotted, e)
 		if tx.policy == RollbackState {
 			if custom, ok := e.(RollbackParticipant); ok {
 				if err := custom.CaptureRollback(tx); err != nil {

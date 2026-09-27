@@ -81,6 +81,12 @@ var (
 	//   - 能否重试：框架不重试。业务确认 handler 幂等（或先读回实体当前状态）后才能自行重试，不能按“锁超时=未执行”盲目重发。
 	// handler 开始执行之前的准入失败（声明目标取锁超时、组迁移待定等）不带它，照常由 Nest 重新准入。
 	ErrNonRollbackNotRequeued = errors.New("nest: handler cannot roll back; transient failure after it started was not requeued")
+	// ErrNestedTransactionRollbackConflict 表示 handler 内嵌套的独立事务（RunIsolatedTransaction）要持久写的实体，已被外层可回滚事务
+	// （RollbackState / RollbackUndo）登记了回滚快照（RR-20260926-74）。外层随后失败回滚会把快照恢复到内存，覆盖嵌套事务已持久的
+	// 结果，所以嵌套事务在写任何持久记录之前被拒绝并自身回滚；外层快照不变。外层是 memory handler（无回滚快照）时不受此限。
+	//   - 是否可能已提交：否。嵌套事务没有写任何持久记录，它的内存修改已撤销；外层事务照常由业务决定继续或失败。
+	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
+	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
 )
 
 func NewParamCountMismatchError(handler string, got int, want int) error {
