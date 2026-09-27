@@ -49,6 +49,11 @@ type unloadResyncConfigurer interface {
 	ConfigureUnloadResync(entity.UnloadedSubjectSync, entity.UnloadResyncConfig) (func(context.Context) error, error)
 }
 
+// loadTimeoutConfigurer 是 getter 的可选能力（*entity.ManagerAccess.ConfigureLoadTimeout，RR-20260926-54）。
+type loadTimeoutConfigurer interface {
+	ConfigureLoadTimeout(time.Duration)
+}
+
 type engineConfig struct {
 	fast, slow    corenest.WorkerPoolConfig
 	workerNum     int
@@ -59,6 +64,8 @@ type engineConfig struct {
 	timeout       time.Duration
 	delayedCap    int
 	maxDelay      time.Duration
+	// unloadResync 来自 nest.unload_resync.*，零值字段取 entity 的默认（Workers 4、Attempts 5、QueueCapacity 4096）。
+	unloadResync entity.UnloadResyncConfig
 }
 
 func NewMod(getter entity.Getter, opts ...corenest.NestOption) *Mod {
@@ -96,8 +103,45 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		timeout:       cfg.GetDuration("nest.request_timeout"),
 		delayedCap:    cfg.GetInt("nest.delayed_capacity"),
 		maxDelay:      cfg.GetDuration("nest.max_delay"),
+		unloadResync: entity.UnloadResyncConfig{
+			Workers:       cfg.GetInt("nest.unload_resync.workers"),
+			Attempts:      cfg.GetInt("nest.unload_resync.attempts"),
+			QueueCapacity: cfg.GetInt("nest.unload_resync.queue_capacity"),
+		},
+	}
+	if err := m.initEntityLoadConfig(cfg); err != nil {
+		return err
 	}
 	return m.initEntitySync(cfg)
+}
+
+// initEntityLoadConfig 校验并接上 ManagerAccess 的两项可调参数（RR-20260927-13）：共享冷加载的框架上限
+// nest.entity_load_timeout（RR-54，缺省 entity.DefaultEntityLoadTimeout），与卸载后重载的 nest.unload_resync.*（RR-59，
+// Start 时交给 ConfigureUnloadResync）。键缺省或为 0 时行为与之前相同；负值拒绝启动。之前 kit 固定传零值
+// UnloadResyncConfig{}，ConfigureLoadTimeout 没有生产调用方，部署无法按规模调整。
+func (m *Mod) initEntityLoadConfig(cfg *viper.Viper) error {
+	for key, value := range map[string]int{
+		"nest.unload_resync.workers":        m.config.unloadResync.Workers,
+		"nest.unload_resync.attempts":       m.config.unloadResync.Attempts,
+		"nest.unload_resync.queue_capacity": m.config.unloadResync.QueueCapacity,
+	} {
+		if value < 0 {
+			return fmt.Errorf("nest mod: %s must not be negative (0 or unset uses the framework default), got %d", key, value)
+		}
+	}
+	loadTimeout := cfg.GetDuration("nest.entity_load_timeout")
+	if loadTimeout < 0 {
+		return fmt.Errorf("nest mod: nest.entity_load_timeout must not be negative (0 or unset uses %s), got %s", entity.DefaultEntityLoadTimeout, loadTimeout)
+	}
+	if loadTimeout == 0 {
+		return nil
+	}
+	configurer, ok := m.getter.(loadTimeoutConfigurer)
+	if !ok {
+		return fmt.Errorf("nest mod: nest.entity_load_timeout is set but the entity getter %T has no ConfigureLoadTimeout", m.getter)
+	}
+	configurer.ConfigureLoadTimeout(loadTimeout)
+	return nil
 }
 
 func (m *Mod) Provide(registry *app.Registry) error {
@@ -172,7 +216,7 @@ func (m *Mod) Start() error {
 		// 重载不了退回 remove（RR-20260926-59）。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
 		// 的 NestMgr.RunLocal（BindLocalExecutor）回快池。
 		if resync, ok := m.getter.(unloadResyncConfigurer); ok && m.stopResync == nil {
-			stop, err := resync.ConfigureUnloadResync(m.entitySync, entity.UnloadResyncConfig{})
+			stop, err := resync.ConfigureUnloadResync(m.entitySync, m.config.unloadResync)
 			if err != nil {
 				m.unhookEntitySync()
 				_ = m.entitySync.Stop(context.Background())

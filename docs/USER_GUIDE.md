@@ -259,7 +259,8 @@ Stats 的慢池 Started 会多计一次，指标 `nest.dispatch.slow_reroute.tot
 同一实体的并发冷加载由 ManagerAccess 合并成一次（singleflight）。加载运行在与调用方解耦的 ctx 上（RR-20260926-54）：
 保留第一个调用方 ctx 的值，不随任何调用方取消或截止；每个等待方按自己的 ctx 离开并得到自己的 `ctx.Err()`，最后一个
 等待方离开也不取消在途加载，完成后实体照常进入 EntityManager，之后的访问直接命中。加载只受两个框架约束：
-`entity.DefaultEntityLoadTimeout`（30s，`ManagerAccess.ConfigureLoadTimeout` 可改；超出时等待方得到满足
+`entity.DefaultEntityLoadTimeout`（30s，`ManagerAccess.ConfigureLoadTimeout` 可改，kit 配置键 `nest.entity_load_timeout`，缺省或 0 不改、负值拒绝启动，
+[RR-20260927-13](bugfix/RR-20260927-13.md)；超出时等待方得到满足
 `errors.Is(err, context.DeadlineExceeded)` 与 `entity.ErrEntityLoadTimeout` 的错误）和 loader 注销（DataEngine Runtime
 停机时取消在途加载，错误满足 `context.Canceled` 与 `entity.ErrEntityLoaderStopped`）。因此短预算的调用方（如 2s 登录预算）
 先超时离开，不再连带同一 flight 里预算更长的等待方；它随后重试会加入仍在进行的那次加载，而不是重新发起。
@@ -299,6 +300,9 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 - **原生 saga 步骤的实体屏障（RR-20260926-30，行为收紧）**：本地 mutation + lease fence 的记录准入后、投影结果确定前，写同一实体的其他事务（含系统删档、同一命令的重投）在 WAL 准入处被拒绝，错误可 `errors.Is(err, dataengine.ErrFencedEntityPending)`（同时满足 `nest.ErrCommitRejected`），Nest 已整体回滚。它是**可重试**错误：业务入口应回复“稍后重试”或延迟重投，不能当成业务拒绝；正常只持续一次投影（毫秒级），Mongo 变慢或中断时与投影积压同量级。只读 handler 不受影响；屏障只看写集合。
 - 投影时租约已失效的原生步骤被跳过后，DataEngine 在 Nest 快池内驱逐受影响的常驻实体（`EntityManager.Destroy`，`DestroyReasonCommon`，不删库），实体的 `OnDestroy` 会被调用；下次访问从 Mongo 重载。装配了 `NewModWithEntitySync` 的 kit 工程会在重载后调用 `entitysync.Manager.Rebind`，原订阅者收到整份全量；自建 entitysync 的装配需要自己在 `EntityRepository.OnEntityLoaded`（或 kit/dataengine Mod 的同名方法）里调用 `Rebind`，否则驱逐后的 subject 一直停在关闭状态（不发送、不计失败），直到 `Unregister`。`Register` 遇到旧状态已关闭的同 ID subject 也会走同一重新绑定路径。
 - **驱逐 / 卸载后订阅者的修正（RR-20260926-59，行为变化）**：订阅者在驱逐前可能已收到被跳过的效果（Remote Durability 1 也可能已收到被拒绝的内容）。实体被仅内存卸载（`ManagerAccess.Unload`，本条与下文 Remote 持久拒绝共用）时同步状态立即关闭；若该 subject 仍有订阅者，框架在快池之外经正式仓储从权威重载实体（等该实体投影/驱逐结束，发布回快池）并 `Rebind`，订阅者收到同一对象的权威全量；权威中没有该实体、重载有界重试（默认 5 次）后仍失败或重载队列（默认 4096）已满时，订阅者收到 `ObjectRemove`（remove 发完前实体又被加载时，`Rebind` / `Register` 按 RR-55 的机制排到退役完成后登记、返回 nil，不再遇到 `ErrSubjectRetiring`）；无订阅者不主动重载。重载就是一次普通的共享冷加载（RR-54：受框架加载上限与 loader 注销约束）。`NewModWithEntitySync` 的 kit 装配自动接线，停机时先停重载（取消在途、不发 remove）；自建装配调用 `entity.ManagerAccess.ConfigureUnloadResync(entitySyncManager, entity.UnloadResyncConfig{})`（发布经 Nest 绑定给 getter 的 `RunLocal`）并在停 Nest 前调用返回的 stop。自定义 loader 报“权威没有”时包 `entity.ErrAuthorityEntityNotFound`（DataEngine 的 `ErrEntityAggregateNotFound` 已满足）或返回 `(nil, nil)`。计数见 `ManagerAccess.UnloadResyncStats()`（[RR-20260926-59](bugfix/RR-20260926-59.md)）。
+  kit 配置键（[RR-20260927-13](bugfix/RR-20260927-13.md)，缺省或 0 取框架默认，负值拒绝启动）：`nest.unload_resync.workers`（并发重载上限，默认 4）、
+  `nest.unload_resync.attempts`（每实体尝试次数，默认 5）、`nest.unload_resync.queue_capacity`（等待重载的实体数上限，默认 4096，超出立即 remove）；
+  单次重载的上限即 `nest.entity_load_timeout`。退避（100ms 起翻倍、上限 2s）不开放配置。
 - 运维：`Projector.Stats()` 新增 `FencedEntities`（当前被屏障挡住写入的实体数）、`FencedAdmissionRejected`、`StaleEvictions`；指标 `dataengine.fence.skipped.total` / `dataengine.fence.evictions.started.total` / `dataengine.fence.evictions.failed.total`。`StaleEvictions` 持续增长说明原生步骤的 `LeaseDuration` 短于投影延迟；`FencedEntities` 长时间不为 0 同时 `evictions.failed` 增长说明驱逐失败（如 Nest 已停止或被 fence），实体写入会一直被可重试地拒绝，按 Nest/DataEngine 健康检查处理。
 - `nest.NestMgr.RunLocal(ctx, fn)` 是框架后台 goroutine 把需要 Entity 锁的步骤交给快池的正式入口（快 worker 上调用返回 `fctx.ErrBlockingInFastWorker`）；实现 `nest.LocalExecutorBinder` 的 committer 在 `NewEngine` 时自动拿到它，DataEngine 的 Projector 与 kit Mod 已实现。
 - 投影事务现在对 lease fence 指向的 claim 文档做条件写（`updated_at`），与 `DataEngineStepInbox` 的过期接管串行化；claim 文档的 `updated_at` 会随投影更新。
