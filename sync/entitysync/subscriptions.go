@@ -198,6 +198,9 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 		return
 	}
 	delete(m.sessions, id)
+	// 释放戳在删除会话的同一把 m.mu 内取（RR-20260926-85）：这一次打开里的订阅都在 m.mu 内确认生命期并取戳，所以都更小；
+	// 同 ID 重开要等 m.mu 放开，新生命期里的订阅戳都更大。政策据此只删除本通知所指那一次打开里的绑定。
+	stamp := m.nextStamp()
 	if removed.held {
 		m.heldSessions--
 	}
@@ -211,7 +214,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 	for _, subj := range subjects {
 		subj.mu.Lock()
 		if sub, subscribed := subj.subscribers[id]; subscribed && sub.lifetime == removed.lifetime {
-			released = releasedLocked(released, sub.sources, id, subj.id)
+			released = releasedLocked(released, sub.sources, id, subj.id, stamp)
 			m.removeSubscriptionLocked(subj, id)
 			if subj.retiring && len(subj.subscribers) == 0 {
 				// Its last subscriber left before the remove could go out.
@@ -220,7 +223,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 		}
 		subj.mu.Unlock()
 	}
-	m.queueReleases(m.releasedRecordsOfSession(released, id))
+	m.queueReleases(m.releasedRecordsOfSession(released, id, stamp))
 	if lost {
 		m.sessionsLost.Add(1)
 		metrics.IncCounter("entitysync_sessions_lost_total", nil, 1)
@@ -279,8 +282,17 @@ func (m *Manager) NewSubscriptionSource() *SubscriptionSource {
 }
 
 func (s *SubscriptionSource) Subscribe(session SessionID, subjectID int64, profile entity.SyncProfile) error {
+	_, err := s.SubscribeStamped(session, subjectID, profile)
+	return err
+}
+
+// SubscribeStamped 与 Subscribe 相同，成功时另外返回这次订阅的戳（RR-20260926-85）：戳在确认会话生命期与 subject 登记的
+// 同一临界区内取得，与 ReleasedSubscription.Stamp 同一时钟。政策把它记在自己的簿记上，收到释放通知时只删除戳小于
+// 通知的那些——那是通知所指那一次会话打开 / 那一次登记里做的；更大的是通知途中在重开的会话或重新登记的 subject 上
+// 重新做的，与这次释放无关，即使它此刻已被 RR-59 撤销、正等待重新提交。重复订阅（同视图的空操作）也返回新的戳。
+func (s *SubscriptionSource) SubscribeStamped(session SessionID, subjectID int64, profile entity.SyncProfile) (SubscriptionStamp, error) {
 	if s == nil {
-		return ErrManagerClosed
+		return 0, ErrManagerClosed
 	}
 	return s.manager.subscribe(s, session, subjectID, profile)
 }
@@ -293,7 +305,8 @@ func (s *SubscriptionSource) Unsubscribe(session SessionID, subjectID int64) err
 }
 
 // Holds 报告本来源此刻是否让 session（当前这一次打开）订阅着 subject：subject 已登记、未退役，订阅的来源里有本来源。
-// 被框架撤销、尚待重新提交的 pair 不算。政策收到 Released 通知后用它确认 pair 没有在通知途中被重新订阅（RR-20260926-79）。
+// 被框架撤销、尚待重新提交的 pair 不算（RR-20260926-79）。它只是当前值：通知途中重新订阅、随即又被撤销的 pair 此刻为假，
+// 不能据此判断释放通知是否过期——那要比较 SubscribeStamped 的戳与 ReleasedSubscription.Stamp（RR-20260926-85）。
 func (s *SubscriptionSource) Holds(session SessionID, subjectID int64) bool {
 	if s == nil || s.manager == nil {
 		return false
@@ -320,23 +333,25 @@ func (s *SubscriptionSource) Holds(session SessionID, subjectID int64) bool {
 // Subscribe 使用默认来源订阅。重复调用幂等，改变 profile 时替换默认来源的视图。
 // 与其他来源重叠时，只发送按 LOD、Key、SchemaVersion 升序选出的一个视图。
 func (m *Manager) Subscribe(session SessionID, subjectID int64, profile entity.SyncProfile) error {
-	return m.subscribe(nil, session, subjectID, profile)
+	_, err := m.subscribe(nil, session, subjectID, profile)
+	return err
 }
 
-func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subjectID int64, profile entity.SyncProfile) error {
+// subscribe 成功时返回订阅戳（SubscribeStamped），在持有 subj.mu 与 m.mu、生命期与退役检查通过之后取得。
+func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subjectID int64, profile entity.SyncProfile) (SubscriptionStamp, error) {
 	if m == nil {
-		return ErrManagerClosed
+		return 0, ErrManagerClosed
 	}
 	if session == 0 {
-		return ErrSessionInvalid
+		return 0, ErrSessionInvalid
 	}
 	sess := m.session(session)
 	if sess == nil {
-		return ErrSessionUnknown
+		return 0, ErrSessionUnknown
 	}
 	subj := m.subject(subjectID)
 	if subj == nil {
-		return ErrSubjectNotRegistered
+		return 0, ErrSubjectNotRegistered
 	}
 	profile = profile.Normalize()
 	subj.mu.Lock()
@@ -345,16 +360,16 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if current := m.sessions[session]; current == nil || current.lifetime != sess.lifetime {
-		return ErrSessionUnknown
+		return 0, ErrSessionUnknown
 	}
 	if subj.retiring {
-		return ErrSubjectRetiring
+		return 0, ErrSubjectRetiring
 	}
 	if existing := subj.subscribers[session]; existing != nil && existing.lifetime == sess.lifetime {
 		existing.sources[source] = profile
 		active := m.bestProfile(existing.sources)
 		if existing.kind != kindLeaving && existing.profile == active {
-			return nil
+			return m.nextStamp(), nil
 		}
 		if existing.kind == kindLeaving {
 			existing.snapshotClass = snapshotArrival
@@ -366,10 +381,10 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		m.traceSnapshotRequest(subj, m.sessions[session])
 		m.markPending(subjectID)
 		m.WakeSync()
-		return nil
+		return m.nextStamp(), nil
 	}
 	if subj.subscribers[session] == nil && len(subj.subscribers) >= m.config.MaxSubscribersPerSubject {
-		return ErrSubscriberLimit
+		return 0, ErrSubscriberLimit
 	}
 	if old := subj.subscribers[session]; old != nil {
 		delete(old.lifetime.subjects, subjectID)
@@ -387,7 +402,7 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 	m.traceSnapshotRequest(subj, m.sessions[session])
 	m.markPending(subjectID)
 	m.WakeSync()
-	return nil
+	return m.nextStamp(), nil
 }
 
 // Unsubscribe 只释放默认来源。其他来源仍持有时不会发送 remove。

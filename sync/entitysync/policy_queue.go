@@ -108,7 +108,8 @@ type SubscriptionSourceHooks struct {
 	// Released 报告框架替本来源丢掉的订阅（RR-20260926-79）：会话关闭（CloseSession，或传输拒绝帧后 Manager 关闭它）
 	// 时该会话的全部订阅，业务 Unregister 时该 subject 的全部订阅；包括 RR-59 撤销后尚待重新提交的记录。RR-59 的
 	// RetractUnloadedSubject 不算释放（那些订阅走 Resubmit）。通知在下一次政策阶段送达，这之间调用方可能已在重开的
-	// 会话或重新登记的 subject 上重新订阅：政策删除自己的簿记前应以 Holds 确认本来源确实不再持有这对 pair。
+	// 会话或重新登记的 subject 上重新订阅，新订阅随后还可能被 RR-59 撤销：政策只应删除 SubscribeStamped 戳小于
+	// ReleasedSubscription.Stamp 的簿记（RR-20260926-85）。不要用 Holds 判定：被撤销、等待重新提交的新订阅此刻 Holds 为假。
 	Released func([]ReleasedSubscription)
 }
 
@@ -116,7 +117,17 @@ type SubscriptionSourceHooks struct {
 type ReleasedSubscription struct {
 	Session SessionID
 	Subject int64
+	// Stamp 是这次释放（会话关闭 / 业务注销）发生的时刻，与 SubscribeStamped 同一时钟（RR-20260926-85）：本来源对这对
+	// pair 戳小于它的订阅都已被这次释放丢掉；戳大于它的是之后在新的会话打开或新的登记上做的，不受本通知影响。
+	Stamp SubscriptionStamp
 }
+
+// SubscriptionStamp 是 Manager 的订阅逻辑时钟读数（RR-20260926-85）。SubscribeStamped 在订阅成功的临界区内取一个，
+// 会话关闭在删除会话的临界区内、业务注销在退役 subject 的临界区内各取一个给释放通知；只在同一个 Manager 内可比，
+// 值越大越晚，从不相等。零值表示没有戳。
+type SubscriptionStamp uint64
+
+func (m *Manager) nextStamp() SubscriptionStamp { return SubscriptionStamp(m.stampClock.Add(1)) }
 
 type queuedRelease struct {
 	source       *SubscriptionSource
@@ -271,18 +282,18 @@ func (m *Manager) deliverResubmits() {
 // 记录共用叶子锁 resubmitMu，releaseEntries 让政策阶段在没有通知时不加锁。
 
 // releasedLocked 追加 sources 里带 Released 回调的来源对 (session, subject) 的释放通知。调用方持有 subj.mu。
-func releasedLocked(out []queuedRelease, sources map[*SubscriptionSource]entity.SyncProfile, session SessionID, subjectID int64) []queuedRelease {
+func releasedLocked(out []queuedRelease, sources map[*SubscriptionSource]entity.SyncProfile, session SessionID, subjectID int64, stamp SubscriptionStamp) []queuedRelease {
 	for source := range sources {
 		if source != nil && source.released != nil {
-			out = append(out, queuedRelease{source: source, subscription: ReleasedSubscription{Session: session, Subject: subjectID}})
+			out = append(out, queuedRelease{source: source, subscription: ReleasedSubscription{Session: session, Subject: subjectID, Stamp: stamp}})
 		}
 	}
 	return out
 }
 
 // releasedRecordsLocked 追加 RR-70 记录（撤销表、待交付、交付中）里满足 match 的、带 Released 回调的来源的释放通知：
-// 这些 pair 此刻没有订阅可供 dropSession / Unregister 遍历，却仍在政策的簿记里。调用方持有 resubmitMu。
-func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(ReleasedSubscription) bool) []queuedRelease {
+// 这些 pair 此刻没有订阅可供 dropSession / Unregister 遍历，却仍在政策的簿记里。通知带本次释放的 stamp。调用方持有 resubmitMu。
+func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(ReleasedSubscription) bool, stamp SubscriptionStamp) []queuedRelease {
 	add := func(source *SubscriptionSource, pair ReleasedSubscription) {
 		if source != nil && source.released != nil && match(pair) {
 			out = append(out, queuedRelease{source: source, subscription: pair})
@@ -290,12 +301,12 @@ func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(Released
 	}
 	for subjectID, entries := range m.retracted {
 		for _, entry := range entries {
-			add(entry.source, ReleasedSubscription{Session: entry.session, Subject: subjectID})
+			add(entry.source, ReleasedSubscription{Session: entry.session, Subject: subjectID, Stamp: stamp})
 		}
 	}
 	for _, items := range [][]queuedResubmit{m.resubmits, m.delivering} {
 		for _, item := range items {
-			add(item.source, ReleasedSubscription(item.subscription))
+			add(item.source, ReleasedSubscription{Session: item.subscription.Session, Subject: item.subscription.Subject, Stamp: stamp})
 		}
 	}
 	return out
@@ -303,13 +314,13 @@ func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(Released
 
 // releasedRecordsOfSession 是 dropSession 的记录部分：会话关闭时 RR-70 记录保持不变（其恢复语义不因本修复改变），
 // 只把其中属于该会话的 pair 通知政策，由政策决定是否释放（Direct 会 Unsubscribe，记录随之删除）。
-func (m *Manager) releasedRecordsOfSession(out []queuedRelease, session SessionID) []queuedRelease {
+func (m *Manager) releasedRecordsOfSession(out []queuedRelease, session SessionID, stamp SubscriptionStamp) []queuedRelease {
 	if m.resubmitEntries.Load() == 0 {
 		return out
 	}
 	m.resubmitMu.Lock()
 	defer m.resubmitMu.Unlock()
-	return m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Session == session })
+	return m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Session == session }, stamp)
 }
 
 func (m *Manager) queueReleases(items []queuedRelease) {
@@ -384,13 +395,13 @@ func (m *Manager) dropRetracted(source *SubscriptionSource, session SessionID, s
 
 // dropRetractedSubject：业务 Unregister 该 ID，之前的撤销记录与待交付项都不再交还；其中带 Released 回调的来源的
 // pair 追加到 out 通知政策（RR-20260926-79）。
-func (m *Manager) dropRetractedSubject(subjectID int64, out []queuedRelease) []queuedRelease {
+func (m *Manager) dropRetractedSubject(subjectID int64, out []queuedRelease, stamp SubscriptionStamp) []queuedRelease {
 	if m.resubmitEntries.Load() == 0 {
 		return out
 	}
 	m.resubmitMu.Lock()
 	defer m.resubmitMu.Unlock()
-	out = m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Subject == subjectID })
+	out = m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Subject == subjectID }, stamp)
 	removed := len(m.retracted[subjectID])
 	delete(m.retracted, subjectID)
 	sameSubject := func(item queuedResubmit) bool { return item.subscription.Subject == subjectID }

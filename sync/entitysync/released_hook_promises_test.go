@@ -33,9 +33,13 @@ func newReleaseRecorder(manager *Manager) *releaseRecorder {
 	return r
 }
 
+// take 返回已收到的 (会话, subject)，按会话、subject 排序；戳（RR-20260926-85）另有回归，这里清零后比较。
 func (r *releaseRecorder) take() []ReleasedSubscription {
 	out := r.released
 	r.released = nil
+	for i := range out {
+		out[i].Stamp = 0
+	}
 	slices.SortFunc(out, func(a, b ReleasedSubscription) int {
 		if a.Session != b.Session {
 			return int(a.Session - b.Session)
@@ -62,7 +66,7 @@ func TestReleasedHookReportsWhatTheFrameworkDropped(t *testing.T) {
 	if err := manager.Register(retracted); err != nil {
 		t.Fatal(err)
 	}
-	for _, pair := range []ReleasedSubscription{{1, 3501}, {1, 3505}, {2, 3502}, {3, 3503}} {
+	for _, pair := range []ReleasedSubscription{{Session: 1, Subject: 3501}, {Session: 1, Subject: 3505}, {Session: 2, Subject: 3502}, {Session: 3, Subject: 3503}} {
 		if err := recorder.source.Subscribe(pair.Session, pair.Subject, entity.SyncProfile{}); err != nil {
 			t.Fatal(err)
 		}
@@ -98,7 +102,7 @@ func TestReleasedHookReportsWhatTheFrameworkDropped(t *testing.T) {
 		t.Fatal("a pending release is not reported to Drain")
 	}
 	mustFlush(t, manager)
-	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{1, 3501}, {1, 3505}}) {
+	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{Session: 1, Subject: 3501}, {Session: 1, Subject: 3505}}) {
 		t.Fatalf("released after closing session 1 = %v, want its live subscription and its retracted record", got)
 	}
 	// RR-70 的撤销记录不因会话关闭而删除（政策决定是否释放）。
@@ -111,7 +115,7 @@ func TestReleasedHookReportsWhatTheFrameworkDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustFlush(t, manager)
-	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{2, 3502}}) {
+	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{Session: 2, Subject: 3502}}) {
 		t.Fatalf("released after unregistering 3502 = %v", got)
 	}
 
@@ -123,7 +127,7 @@ func TestReleasedHookReportsWhatTheFrameworkDropped(t *testing.T) {
 		t.Fatalf("released inside the failing flush before its policy phase could run: %v", got)
 	}
 	mustFlush(t, manager)
-	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{3, 3503}}) {
+	if got := recorder.take(); !slices.Equal(got, []ReleasedSubscription{{Session: 3, Subject: 3503}}) {
 		t.Fatalf("released after the transport refused session 3 = %v", got)
 	}
 }

@@ -60,7 +60,9 @@ remove、再收到新对象的 create），缺席期间已释放的不恢复，�
 重新登记后、重新提交交付前新 subject 又被撤销时，尚未交付（或交付中政策尚未订阅上）的记录回到撤销表，下一次登记再交还；同一来源、会话、subject
 只留一条（RR-20260926-78）。
 会话关闭（`CloseSession` 或传输失败）与业务 `Unregister` 丢掉的来源订阅，经 `NewSubscriptionSourceWithHooks` 的 `Released` 回调在下一次政策阶段
-通知政策（`ReleasedSubscription`，先于重新提交；RR-59 撤销不算释放）；政策删除簿记前用 `SubscriptionSource.Holds` 确认没有被重新订阅。
+通知政策（`ReleasedSubscription`，先于重新提交；RR-59 撤销不算释放）。通知带释放时刻的戳（`ReleasedSubscription.Stamp`），政策只删除
+`SubscriptionSource.SubscribeStamped` 戳小于它的簿记——那是通知所指那一次会话打开 / 那一次登记里的；通知途中在重开的会话或重新登记的实体上
+重新做的订阅戳更大，即使随后被 RR-59 撤销、正等待重新提交也保留（RR-20260926-85）。`Holds` 只报告当前值，被撤销的新订阅此刻为假，不能用来判定。
 `policy.Direct` 据此删除绑定，绑定表的大小落在活跃绑定数上（RR-20260926-79）。
 
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。

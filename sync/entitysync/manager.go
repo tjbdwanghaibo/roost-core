@@ -187,6 +187,7 @@ type Manager struct {
 	resubmitEntries atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
 	releases        []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知（RR-20260926-79）
 	releaseEntries  atomic.Int64                      // releases 的条数；政策阶段据此跳过加锁
+	stampClock      atomic.Uint64                     // 订阅戳与释放戳共用的逻辑时钟（SubscriptionStamp，RR-20260926-85）
 
 	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
 	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
@@ -447,12 +448,14 @@ func (m *Manager) Unregister(subjectID int64) error {
 	subj.mu.Lock()
 	subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
 	// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
-	// 其中的 pair 也一并通知。
+	// 其中的 pair 也一并通知。释放戳在 subj.mu 内取（RR-20260926-85）：对本 subject 的订阅都在这把锁内取戳，之后的新登记
+	// 在 forget 之后才出现，所以本次登记内的订阅戳都更小，新登记上的都更大。
+	stamp := m.nextStamp()
 	var released []queuedRelease
 	for sid, sub := range subj.subscribers {
-		released = releasedLocked(released, sub.sources, sid, subjectID)
+		released = releasedLocked(released, sub.sources, sid, subjectID, stamp)
 	}
-	released = m.dropRetractedSubject(subjectID, released)
+	released = m.dropRetractedSubject(subjectID, released, stamp)
 	remaining, cancelled := m.retireLocked(subj)
 	subj.mu.Unlock()
 	m.queueReleases(released)
