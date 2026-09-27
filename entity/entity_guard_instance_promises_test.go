@@ -1,7 +1,9 @@
 package entity
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/lock"
 )
@@ -112,5 +114,67 @@ func TestGuardReleaseEntityKeepsSupersededLockAccounted(t *testing.T) {
 	guard.ReleaseAll()
 	if !lockableElsewhere(old) {
 		t.Fatal("superseded lock leaked after ReleaseAll")
+	}
+}
+
+// RR-20260927-25：自定义 lock.Mutex 可以是不可比较的值类型（含 func 字段、值接收者）。同 ID 两个实例各持一份时，
+// holding 直接用 == 比较两个接口值会 panic（comparing uncomparable type）；修后不可比较的锁按“不是同一把锁”处理，
+// 新实例照常加锁、Guard 释放时两把锁都归还。
+type funcFieldMutex struct {
+	id     int64
+	mu     *sync.Mutex
+	onLock func()
+}
+
+func (m funcFieldMutex) TryLock() bool { return m.mu.TryLock() }
+func (m funcFieldMutex) Lock()         { m.mu.Lock() }
+func (m funcFieldMutex) LockWithTimeout(time.Duration) bool {
+	m.mu.Lock()
+	return true
+}
+func (m funcFieldMutex) Unlock()       { m.mu.Unlock() }
+func (m funcFieldMutex) LockId() int64 { return m.id }
+
+func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
+	for _, via := range []string{"RequireEntity", "TryRequireEntity", "GuardedEntity"} {
+		t.Run(via, func(t *testing.T) {
+			id := mustBuildTestEntityID(t, 6801, testEntityCategoryPlayer, EntityKindNone)
+			oldMu := funcFieldMutex{id: id, mu: &sync.Mutex{}, onLock: func() {}}
+			freshMu := funcFieldMutex{id: id, mu: &sync.Mutex{}, onLock: func() {}}
+			old := &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, oldMu, EntityKindNone)}
+			fresh := &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, freshMu, EntityKindNone)}
+			guard := newEntityGuard()
+			if !guard.RequireEntity(old) {
+				t.Fatal("setup: lock old")
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("%s(fresh) panicked: %v", via, r)
+				}
+			}()
+			switch via {
+			case "RequireEntity":
+				if !guard.RequireEntity(fresh) {
+					t.Fatal("RequireEntity(fresh) = false")
+				}
+			case "TryRequireEntity":
+				if !guard.TryRequireEntity(fresh) {
+					t.Fatal("TryRequireEntity(fresh) = false")
+				}
+			case "GuardedEntity":
+				if guard.GuardedEntity(fresh) {
+					t.Fatal("GuardedEntity(fresh) = true before locking it: an uncomparable mutex was taken as the held one")
+				}
+				guard.ReleaseAll()
+				return
+			}
+			if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
+				t.Fatal("the fresh instance's own mutex is not held after locking it")
+			}
+			guard.ReleaseAll()
+			if !lockableElsewhere(old) || !lockableElsewhere(fresh) {
+				t.Fatalf("locks leaked after ReleaseAll: old free=%v fresh free=%v", lockableElsewhere(old), lockableElsewhere(fresh))
+			}
+		})
 	}
 }

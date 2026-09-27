@@ -3,10 +3,12 @@ package entity
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/lock"
 )
 
 // GetEntityGroup is the lock rank of an entity id, acquired lowest first.
@@ -312,10 +314,28 @@ func (e *EntityGuard) holding(ent IThreadSafeEntity) (held bool, stale IThreadSa
 	if !ok {
 		return false, nil
 	}
-	if current == ent || current.GetMutex() == ent.GetMutex() {
+	if current == ent || sameMutex(current.GetMutex(), ent.GetMutex()) {
 		return true, nil
 	}
 	return false, current
+}
+
+// sameMutex 报告 a、b 是否是同一把锁（RR-20260927-25）。之前直接用 == 比较两个 lock.Mutex 接口值：自定义 Mutex
+// 若是不可比较的值类型（含 func / slice / map 字段、值接收者），同 ID 两个实例各持一份时 == 在运行期 panic。
+// 框架自己的锁都是 *lock.ReentrantMutex，先按指针比较，不经反射；只有其他类型才用 reflect 判断动态类型是否可比较。
+// 不可比较的值无法判定是否同一把锁，按“不是同一把锁”处理：与 RR-20260926-67 一致，新实例自己加锁，被取代的
+// 旧实例连同它的锁转入 superseded，Guard 释放时一并解锁。这种值类型若内部共用同一把不可重入的锁，第二次加锁会
+// 自锁——自定义 Mutex 应当用指针或可比较的值实现。
+func sameMutex(a, b lock.Mutex) bool {
+	if ra, ok := a.(*lock.ReentrantMutex); ok {
+		rb, ok := b.(*lock.ReentrantMutex)
+		return ok && ra == rb
+	}
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) {
+		return false
+	}
+	return ta == nil || (ta.Comparable() && a == b)
 }
 
 // hold 记下刚取得锁的实例；stale 非 nil 时它仍被持有的锁转入 superseded，Guard 释放时解锁。
