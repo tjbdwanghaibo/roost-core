@@ -138,7 +138,9 @@ install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.ya
 case "$SERVICE" in
 {{STOP_TIMEOUTS}}esac
 
-cat >"$UNIT_PATH" <<EOF
+{{UNIT_RECORD}}PREVIOUS=$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)
+record_unit "$PREVIOUS"
+cat >"$APP_ROOT/units/$VERSION.service" <<EOF
 [Unit]
 Description={{APP}} $SERVICE server (sid $SID)
 After=network-online.target
@@ -193,9 +195,8 @@ wait_ready() {
   return 1
 }
 
-PREVIOUS=$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)
 switch_release "$RELEASE_ROOT"
-systemctl daemon-reload
+use_unit "$RELEASE_ROOT"
 systemctl enable "$INSTANCE.service"
 if systemctl restart "$INSTANCE.service" && wait_ready; then
   printf 'deployed %s version %s; inspect with: systemctl status %s.service\n' "$INSTANCE" "$VERSION" "$INSTANCE"
@@ -205,6 +206,7 @@ fi
 printf 'deployment health check failed for %s version %s; rolling back\n' "$INSTANCE" "$VERSION" >&2
 if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
   switch_release "$PREVIOUS"
+  use_unit "$PREVIOUS" || true
   systemctl restart "$INSTANCE.service" || true
   if ! wait_ready; then
     printf 'rollback also failed readiness; manual recovery required\n' >&2
@@ -218,6 +220,7 @@ exit 1
 	value = strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(services, "|"))
 	value = strings.ReplaceAll(value, "{{STATEFUL_GUARD}}", renderStatefulWALGuard(stateful))
 	value = strings.ReplaceAll(value, "{{STATS_LOG_LINK}}", renderStatsLogLink(m))
+	value = strings.ReplaceAll(value, "{{UNIT_RECORD}}", renderShellUnitRecord())
 	guard, copyData := renderShellConfigData(m)
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_GUARD}}", guard)
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_INSTALL}}", copyData)
@@ -353,15 +356,18 @@ case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version\n' >&2; exit 2;
 
 INSTANCE={{APP}}-$SERVICE-$SID
 APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
+UNIT_PATH=/etc/systemd/system/$INSTANCE.service
 TARGET=$APP_ROOT/releases/$VERSION
 CURRENT=$APP_ROOT/current
 [ -d "$TARGET" ] || { printf 'release not installed: %s\n' "$TARGET" >&2; exit 2; }
 PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 [ "$PREVIOUS" != "$TARGET" ] || { printf 'release %s is already current\n' "$VERSION"; exit 0; }
+{{UNIT_RECORD}}record_unit "$PREVIOUS"
 NEXT=$APP_ROOT/.current.$$
 trap 'rm -f "$NEXT"' EXIT HUP INT TERM
 ln -s "$TARGET" "$NEXT"
 mv -Tf "$NEXT" "$CURRENT"
+use_unit "$TARGET"
 systemctl restart "$INSTANCE.service"
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -379,13 +385,47 @@ done
 if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
   ln -s "$PREVIOUS" "$NEXT"
   mv -Tf "$NEXT" "$CURRENT"
+  use_unit "$PREVIOUS" || true
   systemctl restart "$INSTANCE.service" || true
 fi
 printf 'rollback target failed readiness; restored previous release\n' >&2
 exit 1
 `, m)
 	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(sortedServiceNames(m), " "))
+	value = strings.ReplaceAll(value, "{{UNIT_RECORD}}", renderShellUnitRecord())
 	return strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(sortedServiceNames(m), "|"))
+}
+
+// renderShellUnitRecord 是 install.sh 与 rollback.sh 共用的两个函数：每个 release
+// 在它自己安装时写的 systemd unit 下运行（RR-20260928-10）。
+//
+// unit 由构建该 release 的那一版生成器的 install.sh 写出，形态随生成器变化——
+// RR-20260928-05 把 WorkingDirectory 从 $APP_ROOT 改成了 $APP_ROOT/current（configdata
+// 在那里找数据表）。之前两个脚本回退时只切 current：升级失败后 install.sh 在新 unit 下
+// 重启上一个 release，RR-05 之前安装的 release 里没有 configs/data，照样 "stat dir
+// configs/data" 起不来，报 "rollback also failed readiness"，即使运维为旧 unit 在
+// $APP_ROOT/configs/data 放好了数据；rollback.sh 的手工回退同样如此（临时根演练实测）。
+//
+// 所以 unit 按 release 记在 $APP_ROOT/units/<version>.service，与 current 一起切换。
+// record_unit 在任何覆盖之前把当前 release 正在用的 unit 记给它——这是旧 install.sh
+// 装的 release 唯一能得到记录的时机；没有记录的 release 沿用已安装的 unit（修前行为）。
+func renderShellUnitRecord() string {
+	return `# Each release runs under the systemd unit it was installed with, recorded in
+# $APP_ROOT/units/<version>.service and switched together with current.
+record_unit() {
+  install -d -m 0755 "$APP_ROOT/units"
+  [ -n "$1" ] && [ -f "$UNIT_PATH" ] || return 0
+  [ -e "$APP_ROOT/units/${1##*/}.service" ] || install -m 0644 "$UNIT_PATH" "$APP_ROOT/units/${1##*/}.service"
+}
+use_unit() {
+  if [ ! -f "$APP_ROOT/units/${1##*/}.service" ]; then
+    printf 'no unit recorded for release %s; keeping %s\n' "${1##*/}" "$UNIT_PATH" >&2
+    return 0
+  fi
+  install -m 0644 "$APP_ROOT/units/${1##*/}.service" "$UNIT_PATH"
+  systemctl daemon-reload
+}
+`
 }
 
 func renderShellReadme(m Manifest) string {
@@ -397,7 +437,7 @@ func renderShellReadme(m Manifest) string {
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload。readiness 未在预算内成功时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
 `, m)
 }
 
