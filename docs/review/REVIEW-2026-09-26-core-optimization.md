@@ -61,3 +61,18 @@
 执行过的定向测试：`GOWORK=off go test -race ./dataengine/engine -run 'Remote|Replay|ReadBudget|Oversized|Backpressure|Checkpoint'`、
 `./kit/dataengine`、`-race ./remoteentity ./kit/remoteentity -run 'Budget|WriteSlot|Overload'`、`-race ./nest -run 'TestQueueStats|TestFastLogic|TestWorkerBudget|TestTwoPools|TestSlow' -count=3`、
 `./entity -run TestLoadedOnly -count=3`、`-race ./sync/entitysync -count=1`，均通过。
+
+## 关闭说明（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) E 节。上文原文保留。按当前源码核对后关闭以下各条：
+
+- “疑点”中的 Remote 并行窗口缺事务 ID、`Replayed` 漏计、N2 队列口径分叉：已登记为 RR-20260926-09 / 07 / 08 并修复（v1.17.0）。
+- 快池 Broadcast 静默跳过冷目标：现在逐目标记日志继续后续目标（`nest/nest_dispatch.go:491` `nest broadcast target load failed`）。
+- 快阶段约束只挂在 `msg.getter`：已并入 RR-20260926-03 / 06 修复（v1.17.0）。
+- 空 ID Remote 批次多归还写额度：正式准备路径不可达，列为已接受边界（OPEN-ITEMS D34）。
+- “文档不一致”中：`sync/README.md` 已改为“增量计数、完整遍历在 AuditStats”（现 `:78-80`）；`docs/bugfix/RR-20260925-05.md:3` 与
+  `feature/REFACTOR-2026-09-25-remote-throughput.md:3` 已加“后续实现变更”说明；`projector_remote_test.go` 已没有 `"workers"` 子用例名；
+  RR-20260926-02 的 `/tmp` 证据已在该修复记录追加更正与摘要（OPEN-ITEMS A12⑤）；交接文档 §3 两组 Nest 编号已改开（N24-1～4 / N26-1～3，OPEN-ITEMS A13⑤）。
+- 仍保留、不在此关闭：Close 后重连不算恢复（OPEN-ITEMS C21，接受当前语义）、只配字节预算的 periodic 重复捕获（C22，设计题）。
+  “D1 取消 / 跨段回归”“D2 停止补位的严格断言”“窗口字节上限命名”“九项 Cast / GetMany 只测 mock、RR-02 错误语义收紧未列兼容项”几条，
+  OPEN-ITEMS E 节未逐条核对，本次也未核对，**不在此关闭**。

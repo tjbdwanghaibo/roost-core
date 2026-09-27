@@ -87,3 +87,13 @@ codebase-memory 图谱 generation 早于基线，结论来自源码、临时探�
 - `scripts/test-remote-matrix.sh`、kit/dataengine 故障注入用例、Redis Cluster 集成、24 小时长稳、任何压测；RR-21 要求的正式装配 Remote 性能复测。
 - 审查中对共享本地环境的副作用：一轮 demo 复现未隔离库名，推进了 itest 环境共享 `game` 库中 6 个 player 与 1 个 world 文档的版本（属另一会话的测试数据，无法回滚），
   并可能向共享 `ROOST_SYNC` 流写入少量消息；其余自建库 / 键 / 流已清理。
+
+## 关闭说明（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) E 节。上文原文保留。
+
+- “登记的 RR（均未修复）”：RR-20260926-10～24 全部已修复，随 v1.17.0 发布。RR-21 的性能口径（正式 kit Backend 装配下复测）仍保留为 OPEN-ITEMS B30。
+- “发版手续（未完成，阻塞打 tag）”：已完成——v1.17.0（2026-09-26）与 v1.17.1（2026-09-27）已发布，`8973a78` 把 `framework-release.yaml`、
+  生成器下限与 framework-compat 的 core 版本升到 v1.17.1，CHANGELOG 已有版本标题。
+- “疑点（未登记 RR）”：已由 [v1.17.0 triage](REVIEW-2026-09-26-v1170-triage.md) 逐条处理——登记为 RR-20260926-33～47（均已修复，v1.17.1）或判为非问题（OPEN-ITEMS D16）。
+  仍保留的只有：生成工程写死库名 `"game"`（OPEN-ITEMS C12，保留为 feature 需求）与 RR-16 的 Linux fsync 实测（C03）。

@@ -94,3 +94,14 @@ final-health	PASS
 
 未做：Windows 实机（windows-compatibility 待 CI）、24 小时长稳、正式 kit 装配下 Remote 容量阶梯复测（RR-21）、RR-16 / RR-10 性能对照、1000 玩家负载下 RR-25 尾延迟复测。
 RR-20260926-30 未修复（需维护者拍板）。
+
+## 关闭说明（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) E 节。上文原文保留。
+
+- “新登记（均未修复）”：RR-20260926-25～32 全部已修复（RR-30 随 v1.17.1，其余随 v1.17.0 发布）。
+- “疑点（未登记）”：已由 [v1.17.0 triage](REVIEW-2026-09-26-v1170-triage.md) 逐条处理——冷登录无上限 → RR-36，RR-13 已提交哨兵 → RR-46，
+  Abort 占快池续行 → RR-44，finalizer 与投影器并发发布 → RR-38，demo 重连移出新连接玩家 → RR-40（均已修复，v1.17.1），其余判为非问题（OPEN-ITEMS D16）。
+  仍保留：生成 DAO 库名写死 `"game"`（C12）、RR-16 每次 Ack 多一次 fsync 的 Linux 同口径对照（C03 / B29）。
+- 证据只在本机 `/tmp`：已收进 [EVIDENCE-2026-09-26-985d5ba-negative](EVIDENCE-2026-09-26-985d5ba-negative.md)；弱负对照由 RR-17 / 19 / 22 复核补修加强。
+  RR-02 修复记录的同类问题已按 OPEN-ITEMS A12⑤ 追加更正。

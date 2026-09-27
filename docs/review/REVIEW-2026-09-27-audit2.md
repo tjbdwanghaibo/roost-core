@@ -29,3 +29,13 @@ RR-20260926-64（P2 潜在）、65～71（P3）、72（P4）。维护者 2026-09
 - RR-61：延迟回调快照中的 KV 为浅拷贝，与原请求回复并发时可变值可能竞争。
 - RR-62：业务自身删除 Remote 实体的并发窗口也会拿到“重载中”标签。
 - 基线原有：生成传输 `closeSessions` 恒返回 0；`unsubscribe` 中 defer 顺序若走到会自锁；demo scene Manager 未接 RR-59 重载链路。
+
+## 关闭说明（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) E 节。上文原文保留。
+
+- “须随发布补的文档”：CHANGELOG 已写 RR-56 迁移与 RR-52 行为（`CHANGELOG.md:14-18`）；kit/README 那句已在 OPEN-ITEMS A11 改为注明
+  `roost.room` / `roost.sync` 兼容映射到同一个 `ROOST_SYNC`。本节关闭。
+- 疑点“`unsubscribe` 中 defer 顺序若走到会自锁”：已改为解锁后再 `forget`（`sync/entitysync/subscriptions.go:423-431`，RR-20260926-69）。关闭。
+- 其余疑点另有去处：RR-54 包装 Getter 契约已写入 USER_GUIDE（A13⑧）；生成传输 `closeSessions` 恒 0 → A02；RR-48 活锁 → B24 / C09；
+  RR-51 保底无余量 → C05；RR-59 最坏延迟 → C14；demo scene 未接重载 → B25；RR-59 无 loader、RR-62 业务删除窗口 → D38。
