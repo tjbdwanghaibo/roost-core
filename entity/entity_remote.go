@@ -79,6 +79,10 @@ func (r *RemoteEntityBase) RemoteVersionVector() RemoteVersionVector {
 
 // SetRemoteVersionVector rejects a stale fence even if a caller still holds a
 // Go reference to this entity after its distributed lease expired.
+//
+// 同一 fence 下 StateVersion 也不能回退（RR-20260927-15）：非 authority 的兼容装配里本节点的每笔写都沿用同一个
+// fence，只比 fence 挡不住已提交事务的迟到重放把版本写回旧值。返回 ErrRemoteVersionConflict，调用方按过期处理
+// （acknowledgeRemoteCommit 会再次核对 remoteReceiptObsolete）。正式装配每次写都由 GrantWrite 递增 fence，不走到这里。
 func (r *RemoteEntityBase) SetRemoteVersionVector(version RemoteVersionVector) error {
 	if version.StateVersion > math.MaxInt64 {
 		return ErrRemoteVersionConflict
@@ -87,6 +91,9 @@ func (r *RemoteEntityBase) SetRemoteVersionVector(version RemoteVersionVector) e
 		current := r.version.Load()
 		if current != nil && version.LockFence < current.LockFence {
 			return ErrRemoteFenced
+		}
+		if current != nil && version.LockFence == current.LockFence && version.StateVersion < current.StateVersion {
+			return ErrRemoteVersionConflict
 		}
 		next := version
 		if r.version.CompareAndSwap(current, &next) {
