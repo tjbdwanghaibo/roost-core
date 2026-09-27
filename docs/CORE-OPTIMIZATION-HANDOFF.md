@@ -298,3 +298,17 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260927-26](bug/RR-20260927-26.md) | P3 `ReleaseCast(旧实例)` 放掉同 ID 新实例的锁 | [修复](bugfix/RR-20260927-26.md)（未发布） |
 | [RR-20260927-27](bug/RR-20260927-27.md) | P4 非 Nest 持锁领头方冷加载死锁 | [修复](bugfix/RR-20260927-27.md)（未发布） |
 | [RR-20260927-28](bug/RR-20260927-28.md) | P4 `RetractSyncSubject` 锁外比对后误注销新登记 | [修复](bugfix/RR-20260927-28.md)（未发布） |
+| [RR-20260927-29](bug/RR-20260927-29.md) | P4 领头方正常完成时不关 `leaderAway`，迟到 `RunLocal` 永久阻塞 | [修复](bugfix/RR-20260927-29.md)（未发布） |
+| [RR-20260927-30](bug/RR-20260927-30.md) | P4 含装着 func 的接口字段的 Mutex 仍 panic | [修复](bugfix/RR-20260927-30.md)（未发布） |
+| [RR-20260927-31](bug/RR-20260927-31.md) | P3 Cast 捕获失败被吞后事务照常提交 | [修复](bugfix/RR-20260927-31.md)（未发布） |
+| [RR-20260927-32](bug/RR-20260927-32.md) | P4 提交前拒绝不带 `ErrCommitRejected`，判别表表述 | [修复](bugfix/RR-20260927-32.md)（未发布） |
+| [RR-20260927-33](bug/RR-20260927-33.md) | P2 生成 compose 的 `tmpfs` 被逗号拆开，服务起不来 | [修复](bugfix/RR-20260927-33.md)（未发布） |
+| [RR-20260927-34](bug/RR-20260927-34.md) | P2 生产镜像缺 `configs/data`，容器启动即失败 | [修复](bugfix/RR-20260927-34.md)（未发布） |
+| [RR-20260927-35](bug/RR-20260927-35.md) | P4 demo 模板测试期望流名未含 `roost.room` 兼容映射 | [修复](bugfix/RR-20260927-35.md)（未发布） |
+| [RR-20260928-01](bug/RR-20260928-01.md) | P4 多 ManagerAccess 下积压 gauge 互相覆盖 | [修复](bugfix/RR-20260928-01.md)（未发布） |
+| [RR-20260928-02](bug/RR-20260928-02.md) | P4 Guard 跨 Manager 同 ID 时 RR-21 误判 | [修复](bugfix/RR-20260928-02.md)（未发布） |
+| [RR-20260928-03](bug/RR-20260928-03.md) | P3 本地已提交、Remote 明确拒绝时回复无哨兵 | [修复](bugfix/RR-20260928-03.md)（未发布） |
+| [RR-20260928-04](bug/RR-20260928-04.md) | P3 stats_log 在容器 / systemd 里不落盘也不告警 | [修复](bugfix/RR-20260928-04.md)（未发布） |
+| [RR-20260928-05](bug/RR-20260928-05.md) | P2 shell / systemd 安装缺 `configs/data` | [修复](bugfix/RR-20260928-05.md)（未发布） |
+| [RR-20260928-06](bug/RR-20260928-06.md) | P3 game-demo 生产示例缺 `game_route` / `activity` / `platform` | [修复](bugfix/RR-20260928-06.md)（未发布） |
+| [RR-20260928-07](bug/RR-20260928-07.md) | P3 k8s Secret 示例缺 `saga` / `player_access` | [修复](bugfix/RR-20260928-07.md)（未发布） |

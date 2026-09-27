@@ -4,8 +4,8 @@
 
 ## [Unreleased]
 
-> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～28，08 未使用）与补测。
-> 第五轮独立审计（v1.17.1 中 RR-81～85）见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)。
+> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～07）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
+> 第五、六轮独立审计见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)、[audit6](docs/review/REVIEW-2026-09-27-audit6.md)。
 
 ### Changed（行为收紧 / 需要注意）
 
@@ -24,17 +24,25 @@
 - **game-demo 玩家 id 计数键移到 `<account.key_prefix>:player_id`（RR-20260927-03）**：首次分配时以旧键 `roost:demo:player_id` 的值为起点（旧键只读不删）；升级时先停掉全部 account 进程，回滚前要把旧键手工设为新键的值（见 demo/README）；已生成的 `collaborators.go` 需重新生成或手工合并。
 - **game-demo 场景接卸载后重载与 `OnEntityLoaded → Rebind`（RR-20260927-18 / 23）**：玩家被仅内存卸载（原生步骤投影被 lease fence 跳过）后观察者收到权威全量；无人观看时卸载、之后被业务重载的玩家绑回场景；`NewScene` 在缺少实体运行时或 DataEngine `OnEntityLoaded` 时返回错误。场景文件 `internal/service/game/scene.go` / `scene_test.go` 是 demo 脚手架只写一次的应用文件，**`roost project sync` 不会更新**：已生成工程要按新模板手工合并（RR-20260927-19 的计数同理）。
 
+- **生成的生产部署物可以启动了（RR-20260927-33 / 34，RR-20260928-04 / 05，需 `roost project sync`）**：compose 的 `tmpfs` 改为单条挂载（此前被 YAML 拆成 4 项，所有服务起不来）；生产镜像自带 `configs/data`（此前容器启动即 `stat dir configs/data` 失败并反复重启）；
+  镜像 / compose / k8s / systemd 给相对的 `stats_log.dir` 一个可写位置，stats_log 写失败记 WARN 与 `stats_log.write_failures`（此前静默不落盘）；shell / systemd 安装把 `configs/data` 装进 release，**unit 的 `WorkingDirectory` 改为 `$APP_ROOT/current`**（数据随 rollback 回退），缺数据时在创建 release 之前拒绝，新增可选环境变量 `CONFIG_DATA`。
+- **game-demo 生产示例与 k8s Secret 示例补齐（RR-20260928-06 / 07，需手工合并）**：prod 示例与 Secret 示例写出 `game_route` / `activity` / `platform`（`payment_secret: CHANGE_ME`）；Secret 示例与 prod 示例同源，`add mod` / `add saga` / `add transport tcp` 事后追加的段也进 Secret（此前按 Secret 部署缺 `saga:`，saga 按 8 GiB 默认建流失败）。这两份是脚手架，sync 不更新，已生成工程与仓库外的真实配置须手工补齐。
+- **新增 `nest.ErrRemotePartRejected`，判别表改号（RR-20260928-03）**：带 Remote 批次的消息本地已提交、Remote 部分被明确拒绝时回复带该哨兵（部分已提交、不得整笔重试）；USER_GUIDE §4 判别表插为第 4 行（原 4～12 顺延为 5～13），新增第 14 行（`ErrNestCanceled` / `ErrNestTimeout`：调用方等待截止，结果未知）与第 15 行兜底（未提交）。
+- **提交前的明确拒绝统一带 `nest.ErrCommitRejected`（RR-20260927-32）**：Remote 批次定稿拒绝、fence 后拒绝、嵌套写快照拒绝、准备提交记录失败等；只增加 `errors.Is` 命中，回复文本多一行前缀。
+- **Cast 捕获失败强制整条事务失败（RR-20260927-31）**：与 RR-20260927-11 同一机制，业务吞掉错误也回滚、不重排。
+
 ### Added
 
 - 配置：`nest.entity_load_timeout`、`nest.unload_resync.{workers,attempts,queue_capacity}`（RR-20260927-13，缺省不变，负值拒绝启动）；`remote_entity.snapshot_l2_key_prefix`（RR-20260927-17，缺省空时键不变，设置或修改需整体重启）。
 - API：`remoteentity.NewSnapshotL2StoreWithKeyPrefix`、`ValidateSnapshotL2KeyPrefix`、`Config.SnapshotL2KeyPrefix`；`entity.ValidateRemoteManagedDaoScopes`、`entity.ErrRemoteManagedServerScopedDAO`、`entity.DestroyReasonCreateRevoked`、`EntityGuard.ReleaseEntityInstance`、`UnloadResyncStats.Backlog`。
-- 指标：`entity.unload_resync.backlog`（RR-20260927-14）、`saga.step_inbox.mark_completed_error_total`（RR-20260927-16）、game-demo `scene_session_reopen_failed_total{reason}`（RR-20260927-19）。
+- API：`nest.ErrRemotePartRejected`（RR-20260928-03）、`kit/syncbus.JetStreamStreamFromConfig`（RR-20260927-35）。
+- 指标：`stats_log.write_failures`（RR-20260928-04）；`entity.unload_resync.backlog`（RR-20260927-14，RR-20260928-01 起为进程内全部 ManagerAccess 之和）、`saga.step_inbox.mark_completed_error_total`（RR-20260927-16）、game-demo `scene_session_reopen_failed_total{reason}`（RR-20260927-19）。
 
 ### Fixed
 
 - **生成器 / doctor**：Windows CI 上 RR-80 写失败用例（RR-20260927-01）；生成的 `Runtime.CloseSessions` 返回实际关闭数（RR-20260927-02，需重新生成）；`deploy/dev/run.sh` 登记游戏服传 `redis.db` / `redis.password`（RR-20260927-03）；
   doctor 对 0 或负的 `total_timeout` / `dataengine.shutdown_timeout` 按运行时 30s 判定，“Set it to”按配置的 dataengine 预算、各份不同时逐文件给出（RR-20260927-04）。
-- **其他**：不可比较的自定义 `lock.Mutex` 不再 panic（RR-20260927-25）；saga 收件箱 claim 标记失败记 Warn 与计数（RR-20260927-16）；卸载后重载最坏延迟写成真实上界，默认约 43 小时（RR-20260927-14）。
+- **其他**：不可比较的自定义 `lock.Mutex` 不再 panic（RR-20260927-25 / 30）；共享冷加载领头方以任何方式离开都登记离开，迟到 `RunLocal` 不再永久阻塞（RR-20260927-29）；Guard 撤销记录按（EntityManager, ID）判定（RR-20260928-02）；demo 模板测试流名解析（RR-20260927-35）；saga 收件箱 claim 标记失败记 Warn 与计数（RR-20260927-16）；卸载后重载最坏延迟写成真实上界，默认约 43 小时（RR-20260927-14）。
 - **测试与卫生**：nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；32 个文件 gofmt（全仓 `gofmt -l` 为空）；`entity.ResetEntityRegistryForTest` 标 Deprecated；
   补测收为回归：B02 / B04 / B08～B10 / B13～B19 / B21 / B22 / B24 / B26 / B37，均见清单。
 - **文档**：USER_GUIDE §4 判别表补 `ErrRemoteCommitTimeout` 并更正收尾阶段表述；`ErrNestedTransactionInRemoteMessage` 的 `PrepareRemoteWriteBatch` 窗口；RR-54 包装 Getter 契约；kit/README 的 `roost.room` / `roost.sync` 共用 `ROOST_SYNC`；多份修复记录追加更正与关闭说明。
