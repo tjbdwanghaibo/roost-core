@@ -117,10 +117,7 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 	if m.localSid == 0 {
 		m.localSid = cfg.GetInt32("sid")
 	}
-	m.prefix = cfgGetString(cfg, "prefix")
-	if m.prefix == "" {
-		m.prefix = defaultPrefix
-	}
+	m.prefix = configuredPrefix(cfg)
 	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
 	switch m.transport {
 	case "", "nats", "jetstream", "js":
@@ -146,6 +143,22 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 		PublishTime:  cfgGetDuration(cfg, "publish_timeout"),
 	}
 	return nil
+}
+
+func configuredPrefix(cfg *viper.Viper) string {
+	if prefix := cfgGetString(cfg, "prefix"); prefix != "" {
+		return prefix
+	}
+	return defaultPrefix
+}
+
+// JetStreamStreamFromConfig 返回本 Mod 按 cfg 启动 JetStream 时实际使用的流名，规则与 Init 相同：
+// syncbus / room / sync 三段的键优先级、未写 prefix 时的缺省 roost.room、roost.room → ROOST_SYNC 的
+// 兼容映射、显式 stream 优先。生成工程的测试用它推期望流名（RR-20260927-35）：之前测试自己按
+// driver.JetStreamSyncStream(prefix) 推，漏了兼容映射，按迁移说明保留 prefix: roost.room 的工程
+// 期望 ROOST_ROOM、实际 ROOST_SYNC，测试误报失败。只读 cfg，不校验 transport。
+func JetStreamStreamFromConfig(cfg *viper.Viper) string {
+	return jetStreamStream(cfgGetString(cfg, "stream"), configuredPrefix(cfg))
 }
 
 // jetStreamStream 决定 JetStream 流名（RR-20260926-56）：显式 stream 优先；否则由 prefix 派生，

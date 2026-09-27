@@ -505,6 +505,8 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 一个部署用 `roost.room`、另一个用 `roost.sync` 时仍会争同一个流（后启动者改写其 subjects），这类部署要给至少一方显式写不同的 `stream`，
 或改用非兼容 prefix（OPEN-ITEMS A11）。启动日志同时输出 `prefix` 与实际 `stream`。写了非默认 prefix、没写 stream 的旧部署升级会换流，
 要沿用旧流与游标请显式写 `stream: ROOST_SYNC`（RR-20260926-56）。
+要在测试或工具里算出本 Mod 实际使用的流名，调用 `kitsyncbus.JetStreamStreamFromConfig(cfg)`（与 Init 同一规则，含上面的兼容映射）；
+只按 `driver.JetStreamSyncStream(prefix)` 推会漏掉 `roost.room` → `ROOST_SYNC`（RR-20260927-35）。
 
 ### syncstream（roost-core）：observer 维度的包流
 

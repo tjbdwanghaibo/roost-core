@@ -46,6 +46,11 @@ func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 			if got := startedStream(logs); got != tc.want {
 				t.Fatalf("the start log names stream %q, the bus runs on %q: %s", got, tc.want, logs)
 			}
+			// RR-20260927-35：导出给生成工程测试用的解析函数必须与 Mod 实际确保的流一致，
+			// 含 roost.room 的兼容映射。
+			if got := JetStreamStreamFromConfig(cfg); got != tc.want {
+				t.Fatalf("JetStreamStreamFromConfig = %q, the bus runs on %q", got, tc.want)
+			}
 		})
 	}
 	t.Run("two prefixes on one NATS do not share a stream", func(t *testing.T) {
