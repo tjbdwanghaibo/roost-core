@@ -108,6 +108,14 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	}
 	batch1, _ := prepare(tx1, x)
 	batch2, commits2 := prepare(tx2, y)
+	// OPEN-ITEMS B44：钉住“两笔进入同一窗口”。一次回放在开头就定下本轮读到的 WAL 末尾；后台回放若在
+	// tx2 追加之前开始、扫到 tx1 时 tx1 恰好已释放，就会单独投影 tx1——串行投影里前缀停在注入点等后缀，
+	// 后缀永远不开始，用例 10s 超时（负载下约 3/2000）。这里在两笔都已追加、都还 held 时同步跑一轮
+	// 回放：回放之间由 replayGate 串行，它返回即说明更早开始的回放都已结束（且都在 tx1 前停下），
+	// 此后的每一轮都读得到 tx2；tx1 在 WAL 里靠前且最后释放，第一轮能投影的回放必然同时带上两笔。
+	if processed, _ := projector.ReplayPass(ctx); processed != 0 {
+		t.Fatalf("premise: both transactions are held, but a replay pass projected %d records", processed)
+	}
 	projector.TransactionReleased(coredata.TransactionID(tx2))
 	projector.TransactionReleased(coredata.TransactionID(tx1))
 
