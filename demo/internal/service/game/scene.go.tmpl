@@ -94,6 +94,11 @@ type Scene struct {
 	// that returned (see Start). Nil in a test that builds no runtime.
 	unloads     unloadResyncer
 	stopUnloads func(context.Context) error
+	// loads is the Data Engine's notice of an entity loaded from the
+	// authority; Start hooks rebindLoaded on it and unhookLoads is what that
+	// returned (RR-20260927-23). Nil in a test that builds no Data Engine.
+	loads       entityLoadNotifier
+	unhookLoads func()
 
 	// transitions serializes what changes a player's membership — Join,
 	// Ready, Leave and the disconnect-driven settle — so a removal decided for
@@ -151,6 +156,15 @@ type unloadResyncer interface {
 	ConfigureUnloadResync(coreentity.UnloadedSubjectSync, coreentity.UnloadResyncConfig) (func(context.Context) error, error)
 }
 
+// entityLoadNotifier is the Data Engine's notice of an entity loaded from the
+// authority and published (kit/dataengine Mod.OnEntityLoaded) — the same
+// optional capability the kit's Nest Mod hooks for the manager it owns. The
+// hook runs where the load is published, on the Nest fast pool: it must not
+// block.
+type entityLoadNotifier interface {
+	OnEntityLoaded(func(coreentity.IThreadSafeEntity)) (func(), error)
+}
+
 // sessionSource is the access layer's session lifecycle source. It is an
 // interface so a test can close a session without a socket, and it is
 // separate from scenePusher because a deployment could plausibly have one
@@ -191,11 +205,18 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	if !ok || access == nil {
 		return nil, errors.New("scene: entity runtime is unavailable, so an unloaded player could never be reloaded for the ones watching it")
 	}
+	// The other half of following a reloaded player (RR-20260927-23): a load
+	// nobody's watching triggered — the business touching a player it had
+	// unloaded while nobody watched — is rebound here (Start).
+	loads, ok := app.Lookup[entityLoadNotifier](registry, mods.ModDataEngine)
+	if !ok || loads == nil {
+		return nil, errors.New("scene: the data engine does not report entity loads, so a player loaded again after an unload would stay unbound from the scene")
+	}
 	scene, err := newScene(transport, watermark, lifecycle.WorldSceneConfig())
 	if err != nil {
 		return nil, err
 	}
-	scene.unloads = access
+	scene.unloads, scene.loads = access, loads
 	// The connection telling us it is gone beats waiting to fail a push to
 	// it: a player who logs off while nothing is happening used to stay in
 	// the scene until somebody else's frame tried to reach them
@@ -286,6 +307,17 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 // the closed state and the others kept the last content they had received —
 // possibly an effect that never became the authority — until the player left
 // (RR-20260927-18). One entity runtime takes one such wiring.
+//
+// The framework reloads only while someone watches. A player unloaded while
+// nobody did — its own session dropped and not reopened, nobody near — is
+// loaded again by whatever touches it next, and the Data Engine reports that
+// load; Start hooks it (rebindLoaded) the way the kit's Nest Mod does for its
+// own manager. Without it the subject stayed on the closed state and a
+// watcher who came into view later never received the player
+// (RR-20260927-23).
+//
+// Both are wired before the replication loop starts, and a failure takes
+// back what was wired, so a scene that did not start leaves nothing hooked.
 func (bridge *Scene) Start(ctx context.Context) error {
 	if bridge == nil {
 		return errors.New("scene: nil")
@@ -297,10 +329,54 @@ func (bridge *Scene) Start(ctx context.Context) error {
 		}
 		bridge.stopUnloads = stop
 	}
+	if bridge.loads != nil && bridge.unhookLoads == nil {
+		unhook, err := bridge.loads.OnEntityLoaded(bridge.rebindLoaded)
+		if err != nil {
+			return errors.Join(fmt.Errorf("scene: rebind of reloaded players: %w", err), bridge.stopUnloadResync(ctx))
+		}
+		bridge.unhookLoads = unhook
+	}
 	if err := bridge.manager.Start(ctx); err != nil {
+		bridge.unhookEntityLoads()
 		return errors.Join(fmt.Errorf("scene: start replication: %w", err), bridge.stopUnloadResync(ctx))
 	}
 	return nil
+}
+
+// rebindLoaded binds the scene's subject to an instance just loaded from the
+// authority, if the subject is still on a closed one: the watchers get it as
+// a full update and follow the new instance (RR-20260927-23). Any other load
+// is none of the scene's business and answers one of the ignored errors — a
+// player not in the scene (not registered), the instance the subject is
+// already on or another live one (registered), a leave still owing removes
+// (retiring: the rejoin registers after it), or a manager already closed.
+// It runs where the load is published, on the Nest fast pool; Rebind does not
+// wait.
+func (bridge *Scene) rebindLoaded(loaded coreentity.IThreadSafeEntity) {
+	if loaded == nil || loaded.Base() == nil {
+		return
+	}
+	state := loaded.Base().Sync()
+	if state == nil || !state.Enabled() {
+		return
+	}
+	switch err := bridge.manager.Rebind(state); {
+	case err == nil,
+		errors.Is(err, entitysync.ErrSubjectNotRegistered),
+		errors.Is(err, entitysync.ErrSubjectRegistered),
+		errors.Is(err, entitysync.ErrSubjectRetiring),
+		errors.Is(err, entitysync.ErrManagerClosed):
+	default:
+		slog.Warn("scene: a reloaded player was not rebound", "entity", loaded.ID(), "err", err)
+	}
+}
+
+// unhookEntityLoads releases the Data Engine load hook.
+func (bridge *Scene) unhookEntityLoads() {
+	if bridge.unhookLoads != nil {
+		bridge.unhookLoads()
+		bridge.unhookLoads = nil
+	}
 }
 
 // stopUnloadResync stops the reload: in-flight reloads are abandoned (no
@@ -331,8 +407,11 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	// The reload first, the way the kit's Nest Mod stops its own before the
 	// Nest: nothing rebinds or retracts on a manager being closed, and a
 	// reload never runs into a Nest that is stopping (the service shuts down
-	// before its Mods). Its timeout does not keep the manager open.
+	// before its Mods). Its timeout does not keep the manager open. Then the
+	// load hook (RR-20260927-23), before the manager closes: the Nest is still
+	// running, and a load it publishes from here on is not rebound.
 	resyncErr := bridge.stopUnloadResync(ctx)
+	bridge.unhookEntityLoads()
 	bridge.interest.Close()
 	return errors.Join(resyncErr, bridge.manager.Close(ctx))
 }

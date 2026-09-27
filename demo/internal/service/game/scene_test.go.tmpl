@@ -1309,18 +1309,63 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 // sceneAuthority is the Player's authority, stood in for: an unloaded player
 // comes back from it as a fresh instance — without the effect that was
 // skipped or refused — and is published the way the Data Engine's repository
-// publishes a load (entity.RunLocal, back on the Nest fast pool).
+// publishes a load (entity.RunLocal, back on the Nest fast pool), with the
+// repository's load hooks (OnEntityLoaded) run in the same local step.
 type sceneAuthority struct {
 	t       *testing.T
 	manager *entity.EntityManager
 	loads   atomic.Int32
+
+	hookMu   sync.Mutex
+	hooks    map[int]func(entity.IThreadSafeEntity)
+	nextHook int
+}
+
+// OnEntityLoaded is the Data Engine's load notice (kit/dataengine
+// Mod.OnEntityLoaded), stood in for.
+func (authority *sceneAuthority) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) (func(), error) {
+	authority.hookMu.Lock()
+	defer authority.hookMu.Unlock()
+	if authority.hooks == nil {
+		authority.hooks = make(map[int]func(entity.IThreadSafeEntity))
+	}
+	authority.nextHook++
+	id := authority.nextHook
+	authority.hooks[id] = hook
+	return func() {
+		authority.hookMu.Lock()
+		delete(authority.hooks, id)
+		authority.hookMu.Unlock()
+	}, nil
+}
+
+func (authority *sceneAuthority) hooked() int {
+	authority.hookMu.Lock()
+	defer authority.hookMu.Unlock()
+	return len(authority.hooks)
+}
+
+func (authority *sceneAuthority) runLoadedHooks(loaded entity.IThreadSafeEntity) {
+	authority.hookMu.Lock()
+	hooks := make([]func(entity.IThreadSafeEntity), 0, len(authority.hooks))
+	for _, hook := range authority.hooks {
+		hooks = append(hooks, hook)
+	}
+	authority.hookMu.Unlock()
+	for _, hook := range hooks {
+		hook(loaded)
+	}
 }
 
 func (authority *sceneAuthority) LoadEntity(ctx context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	authority.loads.Add(1)
 	fresh := newScenePlayer(authority.t, entity.GetUniqueIDFromEntityID(id))
 	var added error
-	if err := entity.RunLocal(ctx, func() { added = authority.manager.TryAdd(fresh) }); err != nil {
+	if err := entity.RunLocal(ctx, func() {
+		if added = authority.manager.TryAdd(fresh); added == nil {
+			authority.runLoadedHooks(fresh)
+		}
+	}); err != nil {
 		return nil, err
 	}
 	if errors.Is(added, entity.ErrEntityExists) {
@@ -1512,4 +1557,197 @@ func TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses(t *testing.T) {
 		t.Fatalf("the scene's wiring is still live after Close: %v", err)
 	}
 	_ = stop(ctx)
+}
+
+// RR-20260927-23: the framework reloads an unloaded player only while
+// someone still watches it (RR-20260926-59). A player unloaded while nobody
+// did — its own replication session dropped and not reopened, nobody near —
+// is loaded again by whatever touches it next, and that load is the Data
+// Engine's to report (OnEntityLoaded). The scene did not hook it, as the kit's
+// Nest Mod does for the manager it owns: its subject stayed on the unloaded
+// instance, and a watcher who came into view afterwards never received the
+// player. The scene now rebinds the subject on that load: the newcomer gets
+// the player, and its changes after that.
+func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *testing.T) {
+	ctx := context.Background()
+	entities := entity.NewEntityManager()
+	access := entity.NewManagerAccess(entities)
+	authority := &sceneAuthority{t: t, manager: entities}
+	unhook, err := access.ConfigureLoader(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unhook)
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	recorder := newSceneRecorder()
+	lane := newClosingLane(recorder)
+	scene, err := newSceneOn(lane, recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	schedule := &sceneSchedule{}
+	schedule.install(scene)
+	// What NewScene does with the process's entity runtime and Data Engine.
+	scene.unloads, scene.loads = access, authority
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const watcherID, moverID = int64(9861), int64(9862)
+	mover := newScenePlayer(t, moverID)
+	counters := newSceneWorld(t)
+	moverEntity := mover.ID()
+	for _, resident := range []entity.IThreadSafeEntity{mover, counters} {
+		entities.Add(resident)
+	}
+	sender := syncsender.NewAddExpSender(engine)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(moverID)
+
+	// The mover's own replication session is lost while its connection stays
+	// up, and the reopen is refused for good: it stays in the scene with
+	// nobody — itself included — subscribed to it.
+	moverSession := sessionFor(moverEntity)
+	recorder.mu.Lock()
+	recorder.unreachable = map[int64]error{moverID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.mu.Unlock()
+	lane.breakOpens(moverSession, errors.New("session limit reached"))
+	if _, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 10); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	_ = scene.Flush(ctx)
+	recorder.mu.Lock()
+	recorder.unreachable = nil
+	recorder.mu.Unlock()
+	if ran := schedule.runSettles(); ran != 1 {
+		t.Fatalf("premise: %d settles for one lost session, want 1", ran)
+	}
+	if scene.Members() != 1 || len(scene.manager.Subscribers(moverEntity)) != 0 {
+		t.Fatalf("premise: members=%d subscribers=%v, want the mover in the scene with nobody subscribed", scene.Members(), scene.manager.Subscribers(moverEntity))
+	}
+
+	// Unloaded from memory with nobody watching: the framework does not reload it.
+	var unloadErr error
+	if err := engine.RunLocal(ctx, func() { unloadErr = access.Unload(ctx, mover) }); err != nil || unloadErr != nil {
+		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)
+	}
+	if got := authority.loads.Load(); got != 0 {
+		t.Fatalf("premise: an unload nobody watched was reloaded %d times", got)
+	}
+
+	// The business touches the player again: the Data Engine loads it from the authority.
+	reloaded, err := access.Get(ctx, moverEntity, entity.EntityCategoryNone)
+	if err != nil || reloaded == nil {
+		t.Fatalf("load the player again: %v %v", reloaded, err)
+	}
+	if got := authority.loads.Load(); got != 1 {
+		t.Fatalf("premise: the player was loaded %d times, want once", got)
+	}
+
+	// A watcher comes into view.
+	watcher := newScenePlayer(t, watcherID)
+	entities.Add(watcher)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 520, Y: 500})
+	var seen bson.M
+	for range 3 {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if full, ok := sceneFullUpdates(t, recorder.take(watcherID))[moverEntity]; ok {
+			seen = full
+			break
+		}
+	}
+	if seen == nil {
+		t.Fatal("the player was loaded again after an unload nobody watched, but a watcher who came into view later never received it: " +
+			"the scene's subject is still on the unloaded instance")
+	}
+
+	// The scene follows the loaded instance: its next change reaches the watcher.
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp after the load: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]; !ok {
+		t.Fatal("a change on the loaded player did not reach the watcher: the scene is not bound to the loaded instance")
+	}
+}
+
+// RR-20260927-23: the scene holds the Data Engine load hook exactly while it
+// runs. Start hooks it before the replication loop; Close releases it after
+// the reload stops and before the manager closes; a Start that fails takes
+// back both wirings.
+func TestTheSceneHooksEntityLoadsOnlyWhileItRuns(t *testing.T) {
+	ctx := context.Background()
+	t.Run("start and close", func(t *testing.T) {
+		authority := &sceneAuthority{t: t, manager: entity.NewEntityManager()}
+		scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.unloads, scene.loads = entity.NewManagerAccess(entity.NewEntityManager()), authority
+		if err := scene.Start(ctx); err != nil {
+			t.Fatalf("start scene: %v", err)
+		}
+		if got := authority.hooked(); got != 1 {
+			t.Fatalf("a running scene holds %d load hooks, want 1", got)
+		}
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := scene.Close(closeCtx); err != nil {
+			t.Fatalf("close scene: %v", err)
+		}
+		if got := authority.hooked(); got != 0 {
+			t.Fatalf("a closed scene still holds %d load hooks", got)
+		}
+	})
+	t.Run("a start that fails", func(t *testing.T) {
+		authority := &sceneAuthority{t: t, manager: entity.NewEntityManager()}
+		access := entity.NewManagerAccess(entity.NewEntityManager())
+		scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.unloads, scene.loads = access, authority
+		// The replication loop cannot start on a closed manager.
+		if err := scene.manager.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := scene.Start(ctx); err == nil {
+			t.Fatal("premise: the scene started on a closed manager")
+		}
+		if got := authority.hooked(); got != 0 {
+			t.Fatalf("a scene that did not start left %d load hooks behind", got)
+		}
+		other, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = other.Close(context.Background()) })
+		stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{})
+		if err != nil {
+			t.Fatalf("a scene that did not start left the reload wired: %v", err)
+		}
+		_ = stop(ctx)
+	})
 }
