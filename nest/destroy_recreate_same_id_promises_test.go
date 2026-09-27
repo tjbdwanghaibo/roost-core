@@ -3,7 +3,9 @@ package nest
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
@@ -172,5 +174,99 @@ func TestCastAfterDestroyDoesNotReturnUnlockedRecreatedInstance(t *testing.T) {
 	}
 	if !errors.Is(castErr, ErrCastDeadlockRisk) {
 		t.Fatalf("Cast err=%v, want ErrCastDeadlockRisk", castErr)
+	}
+}
+
+// remoteRecreatableKind 是带真实 builder 的 remote-managed kind（nestRemoteManagedKind 的 builder 返回 nil，不能重建）。
+const remoteRecreatableKind entity.EntityKind = 252
+
+type remoteRecreatableEntity struct {
+	*entity.RemoteEntityBase
+}
+
+func (e *remoteRecreatableEntity) Base() *entity.EntityBase { return &e.RemoteEntityBase.EntityBase }
+
+func init() {
+	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+		Category:     entity.EntityCategoryRemote,
+		Kind:         remoteRecreatableKind,
+		RemotePolicy: entity.RemotePolicyManaged,
+		NoPersist:    true,
+		Lifetime:     entity.EntityLifetimeRemoteManaged,
+		Builder: func(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+			return &remoteRecreatableEntity{RemoteEntityBase: entity.NewRemoteEntityBaseWithMutex(p.Id, p.Category, false, p.Mutex, p.Kind)}, nil
+		},
+	})
+}
+
+// OPEN-ITEMS B17：RR-67 对 Remote 实体同样成立。声明目标是 remote-managed 实体 X（慢阶段经受控批次准备，快续行执行 memory handler），
+// handler 内 Destroy X 再新建同 ID 的 X：新实例持锁到 handler 结束（执行中别的 goroutine 取不到它的锁）、成为发布的实例，
+// Remote 批次照常 Commit，handler 结束后新旧两把锁都释放。
+func TestDestroyThenRecreateSameIDRemoteEntityLocksNewInstance(t *testing.T) {
+	manager := entity.NewEntityManager()
+	access := entity.NewManagerAccess(manager)
+	x := mustBuildCastID(t, 36745, entity.EntityCategoryRemote, remoteRecreatableKind)
+	remoteParam := func() *entity.EntityCreateParam {
+		return &entity.EntityCreateParam{IsCreate: true, Id: x, Category: entity.EntityCategoryRemote, Kind: remoteRecreatableKind}
+	}
+	run := &destroyRecreateRun{}
+	var err error
+	if run.old, err = access.Create(remoteParam()); err != nil { // Nest 之外创建并发布
+		t.Fatal(err)
+	}
+	var batchCommits atomic.Int32
+	batch := &stagedRemoteBatch{commit: func() { batchCommits.Add(1) }}
+	remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	name := NewHandlerName("b17_remote_destroy_recreate")
+	var remoteBatch bool
+	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		remoteBatch = currentNestDispatchMsg() != nil && currentNestDispatchMsg().RemoteWriteBatch != nil
+		if err := access.Destroy(context.Background(), es[0], entity.EntityDestroyReason(0), false); err != nil {
+			return nil, err
+		}
+		run.fresh, run.createErr = access.Create(remoteParam())
+		if run.createErr != nil {
+			return nil, run.createErr
+		}
+		run.sameMutex = run.fresh.GetMutex() == run.old.GetMutex()
+		run.freshLockableElsewhere = tryLockElsewhere(run.fresh)
+		return "ok", nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Shutdown(context.Background()) }()
+	msg, ch := GenSyncMsg(MsgTypeMulti)
+	msg.Name, msg.Tids, msg.Cost, msg.HasRemote = name.String(), []int64{x}, true, true
+	if err := mgr.dispatcher.TrySendMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	var reply any
+	select {
+	case reply = <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatal("remote destroy/re-create handler did not reply within 10s")
+	}
+	if reply != "ok" || run.createErr != nil {
+		t.Fatalf("reply=%v createErr=%v", reply, run.createErr)
+	}
+	if !remoteBatch || !entity.IsEntityKindRemoteManaged(run.fresh.GetEntityKind()) {
+		t.Fatalf("premise: handler ran with a Remote batch=%v on a remote-managed entity=%v", remoteBatch, entity.IsEntityKindRemoteManaged(run.fresh.GetEntityKind()))
+	}
+	if run.sameMutex {
+		t.Fatal("fixture: Destroy must have released the old mutex from the LockManager")
+	}
+	if run.freshLockableElsewhere {
+		t.Fatal("the re-created Remote instance was published unlocked mid-handler (another goroutine could lock it)")
+	}
+	if published := manager.Get(x); published != run.fresh {
+		t.Fatalf("published=%p want the re-created instance %p", published, run.fresh)
+	}
+	if batchCommits.Load() != 1 || batch.aborted.Load() || batch.closed.Load() != 1 {
+		t.Fatalf("Remote batch commits=%d aborted=%v closed=%d: want one Commit and one Close", batchCommits.Load(), batch.aborted.Load(), batch.closed.Load())
+	}
+	if !tryLockElsewhere(run.fresh) || !tryLockElsewhere(run.old) {
+		t.Fatalf("locks leaked after the handler: fresh free=%v old free=%v", tryLockElsewhere(run.fresh), tryLockElsewhere(run.old))
 	}
 }
