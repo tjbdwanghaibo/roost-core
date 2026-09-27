@@ -71,3 +71,14 @@ bash scripts/test-remote-generated.sh
 [roost-coding](../agent-skills/roost-coding/SKILL.md) 加入执行位置与请求快照分离、实际等待入口清单、one-worker/N-worker 自等待、真实 Getter/Repository 绕过路径、预算预留/尝试/成功三状态、持续到达公平性和观测口径规则。测试不只验证默认开关、固定积压或 mock 的理想路径；并行结果断言不得依赖 goroutine 完成顺序。仓库规则与本机 roost-coding / roost-optimize 已同步并通过 skill 结构检查。
 
 图谱仍是 2026-09-25T11:41:37Z 的旧代际；本轮刷新再次被 `pre-coordination or unverified CBM generation is active` 阻止，未清理未知锁或停止其他实例。30 个本轮 Go 证据路径 coverage 均为 metadata_changed / not_tracked，已做定向查询并使用当前源码/编译/race 补证。无图谱完整性结论。代码与 docs 各自保持原目录，全部公开协议/持久格式保持；回退需整体撤回关联修复，不能只撤保护或只撤测试。
+
+## 更正（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) A12④。上文原文保留。
+
+“决策边界”中的“带 loader 的冷缺失在快池 panic 后由 Nest 转为请求错误”，以及上表 RR-06 行“ManagerAccess / Repository 在冷加载及
+singleflight 前 panic”里关于 **ManagerAccess 冷缺失** 的部分，已被 [RR-20260926-26](../bugfix/RR-20260926-26.md) 推翻：快阶段（快 worker 或
+`WithLoadedEntitiesOnly` ctx）访问未加载且配置了 loader 的目标本身不阻塞，现在 `ManagerAccess.Get` / `GetMany` **直接返回**
+`ErrColdLoadInLogic`（快 worker 上同时包裹 `fctx.ErrBlockingInFastWorker`），不 panic，业务可以据此降级。
+仍然 fail-fast（panic）的是真正会等待的入口：DataEngine Repository 冷加载 / `WaitEntityProjection`、Remote 准备 / Commit / Close / 等待、
+快续行自投递（见 roost-coding SKILL.md “快池内不得阻塞等待”与 USER_GUIDE）。

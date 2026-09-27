@@ -1022,6 +1022,10 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	// the frame went out (the stream is out of step), write_timeout itself ran
 	// out (the connection cannot take a byte for that long — RR-52's "slow
 	// enough to drop"), or the socket failed (reset, closed).
+	// Consequence: a caller that keeps pushing with deadlines shorter than
+	// write_timeout never closes a half-dead connection through those pushes;
+	// the next push with no or a longer deadline, or the read loop's
+	// idle_timeout, is what finds and closes it (RR-20260926-68; OPEN-ITEMS A12).
 	if written == 0 && callerDeadline && errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("%%w: nothing written before the caller's deadline: %%w", context.DeadlineExceeded, err)
 	}

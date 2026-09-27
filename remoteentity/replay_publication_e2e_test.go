@@ -231,8 +231,9 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	if err = projector.Flush(ctx); err != nil {
 		t.Fatalf("projector flush: %v", err)
 	}
-	// 投影后再转交 finalizer：测试实体的 dirty 标记不是并发安全的，避免与投影器的确认并发
-	// （生成实体的 AcknowledgeRemoteCommit 走原子 AdvanceVersion，不受此限）。
+	// 投影后再转交 finalizer：让 tx2 按“投影器先确认、finalizer 再收尾”的固定先后走完。
+	// 早先这样排是因为测试实体的 dirty 标记不是并发安全的；RR-20260926-63 已给 testDirty 加锁
+	// （manager_test.go，按 IRemoteCommitParticipant 契约并发安全），这里的先后不再是为了规避数据竞争（OPEN-ITEMS A12）。
 	if err = batch2.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
