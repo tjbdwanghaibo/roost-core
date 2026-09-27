@@ -93,6 +93,8 @@
 | B39 | RR-85：`Unregister` 在已被 forget 的旧 subject 上取释放戳，可能删掉同 ID 新登记的记录与 Direct 活绑定（audit5 疑点，推断） | [audit5 §疑点](REVIEW-2026-09-27-audit5.md) | 推断，未写探针 | 在 `Unregister` 取 `subj` 与加 `subj.mu` 之间加测试缝，构造 forget + 重新登记 + Bind，看新登记的绑定与撤销记录是否被删 | S |
 | B40 | `TestSameIDCreateDoesNotOccupyFastPool/memory` 在高负载整包 `-race -count=20` 中偶发一次 `got ret=exists`；基线与分支重跑 `-count=20` ×2、单测 `-count=200` 均通过（批次 4 报告） | 批次 4 报告 | 未证明：疑为用例只等到 follower 计数自增、没等它真正进入 Create | 在用例里用事件钉住“follower 已进入 Create”，高负载（`-race -count=20` 与另一重包并行）下复跑；是测试时序问题就修测试，否则转 RR | S |
 | B41 | `RetractSyncSubject` 在锁外比对 `subj.state==state` 后按 ID 调 `Unregister`，其间同 ID 以另一个状态重新登记时注销的是新登记（批次 10 报告，修前即有、RR-22 未扩大） | [bf-RR-20260927-22](../bugfix/RR-20260927-22.md) | 推断，未写探针 | 在比对与 `Unregister` 之间加测试缝构造交错；证实则改为在 `subj.mu` 内比对并按实例注销 | S |
+| B42 | `entity.unload_resync.backlog` 为无标签 gauge，一个进程有多个 ManagerAccess 时互相覆盖（audit6 推断） | audit6 | 推断 | 构造两个 ManagerAccess 各有积压，看 gauge 值；证实则按实例聚合或文档写明“只反映最近写入者” | S |
+| B43 | `revokedCreated` 按 Guard 记而 `removing` 按 EntityManager 记，一个 Guard 跨多个 Manager 同 ID 时可能误判（audit6 推断） | audit6 | 推断 | 两个 Manager 同 ID，一边撤销、另一边新建，看 RR-21 分支是否误判 | S |
 | B38 | CARRYOVER 里仍未分流的 B4：活动窗口的机器人分支逻辑没有真实跨过 300 秒边界跑过 | [CARRYOVER §B](../bug/CARRYOVER.md)（B4“本轮进展：无”） | 仍成立（之后没有记录） | 集成环境让机器人运行跨过一个完整 300 秒窗口边界，或在 loadtest 里对齐起跑时间 | S |
 
 ## C. 本地做不了，或需要维护者决定（33 条）
@@ -314,6 +316,10 @@
 | RR-20260927-26 | B07 证实：并发 Touch 下 `ReleaseCast(旧实例)` 释放新实例的锁 | 12 追加 |
 | RR-20260927-27 | B20 相邻形状：loader 发布要锁领头方持有的实体时永久死锁 | 12 追加 |
 | RR-20260927-28 | B41 证实：`RetractSyncSubject` 锁外比对后按 ID 注销，误注销同 ID 新登记 | 12 追加 |
+| RR-20260927-29 | audit6 N1：RR-27 后领头方正常完成时不关 `leaderAway`，迟到 `RunLocal` 永久阻塞 | 13 追加 |
+| RR-20260927-30 | audit6 N2：RR-25 不完整，含接口字段的 Mutex 仍 panic | 13 追加 |
+| RR-20260927-31 | audit6：Cast 捕获失败被吞后事务照常提交 | 13 追加 |
+| RR-20260927-32 | audit6：提交前拒绝不带 `ErrCommitRejected`、判别表无兜底行、RR-06 RollbackNone 表述 | 13 追加 |
 
 | 批次 | 条目 | 状态 |
 | --- | --- | --- |
