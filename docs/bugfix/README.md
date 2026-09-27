@@ -1,5 +1,13 @@
 # Bugfix 记录
 
+[RR-20260928-11](RR-20260928-11.md)：`Append` 对 pipelined 同样等 fsync（未发版）。
+
+[RR-20260928-10](RR-20260928-10.md)：unit 随 release 一起回退（未发版）。
+
+[RR-20260928-09](RR-20260928-09.md)：与 strict 一样交 finalizer 回滚、隔离、卸载（未发版）。
+
+[RR-20260928-08](RR-20260928-08.md)：等待失败除明确拒绝外带 `ErrRemotePersistenceIndeterminate`（未发版）。
+
 [RR-20260928-07](RR-20260928-07.md)：Secret 与 prod 示例同源（未发版）。
 
 [RR-20260928-06](RR-20260928-06.md)：prod / Secret 示例补齐（未发版）。

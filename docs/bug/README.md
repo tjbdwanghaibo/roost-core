@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+[RR-20260928-11](RR-20260928-11.md)：P2 pipelined 回退 strict 路径时 `WAL.Append` 不等 fsync（已修复，未发版）。
+
+[RR-20260928-10](RR-20260928-10.md)：P3 install.sh 升级失败自动回滚 / rollback.sh 回不到旧 release（已修复，未发版）。
+
+[RR-20260928-09](RR-20260928-09.md)：P2 pipelined + Remote 明确拒绝不回滚、不卸载、Sync 门冻结（已修复，未发版）。
+
+[RR-20260928-08](RR-20260928-08.md)：P4 strict 下 tracker 淘汰后 Overloaded 被误标 `ErrRemotePartRejected`（已修复，未发版）。
+
 [RR-20260928-07](RR-20260928-07.md)：P3 k8s Secret 示例缺 `saga` / `player_access`（已修复，未发版）。
 
 [RR-20260928-06](RR-20260928-06.md)：P3 game-demo 生产示例缺 `game_route` / `activity` / `platform`（已修复，未发版）。

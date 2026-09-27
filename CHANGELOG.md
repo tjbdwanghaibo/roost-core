@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～07）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
+> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～11）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
 > 第五、六轮独立审计见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)、[audit6](docs/review/REVIEW-2026-09-27-audit6.md)。
 
 ### Changed（行为收紧 / 需要注意）
@@ -30,6 +30,12 @@
 - **新增 `nest.ErrRemotePartRejected`，判别表改号（RR-20260928-03）**：带 Remote 批次的消息本地已提交、Remote 部分被明确拒绝时回复带该哨兵（部分已提交、不得整笔重试）；USER_GUIDE §4 判别表插为第 4 行（原 4～12 顺延为 5～13），新增第 14 行（`ErrNestCanceled` / `ErrNestTimeout`：调用方等待截止，结果未知）与第 15 行兜底（未提交）。
 - **提交前的明确拒绝统一带 `nest.ErrCommitRejected`（RR-20260927-32）**：Remote 批次定稿拒绝、fence 后拒绝、嵌套写快照拒绝、准备提交记录失败等；只增加 `errors.Is` 命中，回复文本多一行前缀。
 - **Cast 捕获失败强制整条事务失败（RR-20260927-31）**：与 RR-20260927-11 同一机制，业务吞掉错误也回滚、不重排。
+
+- **pipelined 回退到 strict 路径时等 fsync（RR-20260928-11，行为变化）**：broadcast 与带 Remote 批次的 pipelined handler 回退到 strict 提交、经 `WAL.Append` 写入，此前 `Append` 只对 strict 等 fsync，这些记录实际是 async 语义（锁释放、Sync Confirm、AfterCommit、回复可能先于持久）；
+  现在与 strict 相同，在锁内等一次组提交 fsync。同机对照 broadcast pipelined 吞吐 −21%、p50 +28%，与 broadcast strict 持平；快路径（`Enqueue`）不变。
+- **pipelined + Remote 明确拒绝与 strict 一致（RR-20260928-09）**：带 Remote 批次的 pipelined handler 被持久明确拒绝时交 finalizer 回滚、隔离、仅内存卸载并从权威重载，Sync 门放行（此前实例一直隔离、重启前不可写，Sync 门永久冻结）。
+- **strict / pipelined 的 Remote 等待失败除明确拒绝外都带 `ErrRemotePersistenceIndeterminate`（RR-20260928-08）**：tracker 被淘汰后重新登记报 `ErrRemoteOverloaded` 的回复不再误标 `ErrRemotePartRejected`（判别表第 4 行），改落第 2 行；本地已提交且嵌套事务也已提交时外层文案为 `nest: a nested isolated transaction also committed`（`errors.Is` 不变）。
+- **shell / systemd 回滚连同 unit 一起回退（RR-20260928-10，需 `roost project sync`）**：每个 release 的 unit 记在 `$APP_ROOT/units/<version>.service`，install.sh 的自动回滚与 `rollback.sh` 装回目标 release 的 unit 并 `daemon-reload`（此前从 RR-20260928-05 之前安装的 release 升级失败时回滚报 `rollback also failed readiness`）。
 
 ### Added
 

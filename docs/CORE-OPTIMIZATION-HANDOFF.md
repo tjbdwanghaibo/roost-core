@@ -312,3 +312,7 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260928-05](bug/RR-20260928-05.md) | P2 shell / systemd 安装缺 `configs/data` | [修复](bugfix/RR-20260928-05.md)（未发布） |
 | [RR-20260928-06](bug/RR-20260928-06.md) | P3 game-demo 生产示例缺 `game_route` / `activity` / `platform` | [修复](bugfix/RR-20260928-06.md)（未发布） |
 | [RR-20260928-07](bug/RR-20260928-07.md) | P3 k8s Secret 示例缺 `saga` / `player_access` | [修复](bugfix/RR-20260928-07.md)（未发布） |
+| [RR-20260928-08](bug/RR-20260928-08.md) | P4 strict 下 tracker 淘汰后 Overloaded 被误标 `ErrRemotePartRejected` | [修复](bugfix/RR-20260928-08.md)（未发布） |
+| [RR-20260928-09](bug/RR-20260928-09.md) | P2 pipelined + Remote 明确拒绝不回滚、不卸载、Sync 门冻结 | [修复](bugfix/RR-20260928-09.md)（未发布） |
+| [RR-20260928-10](bug/RR-20260928-10.md) | P3 install.sh 升级失败自动回滚 / rollback.sh 回不到旧 release | [修复](bugfix/RR-20260928-10.md)（未发布） |
+| [RR-20260928-11](bug/RR-20260928-11.md) | P2 pipelined 回退 strict 路径时 `WAL.Append` 不等 fsync | [修复](bugfix/RR-20260928-11.md)（未发布） |
