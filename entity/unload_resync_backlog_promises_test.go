@@ -101,3 +101,65 @@ func TestUnloadResyncBacklogIsZeroAfterStop(t *testing.T) {
 	}
 	h.unhookLoader()
 }
+
+// RR-20260928-01（OPEN-ITEMS B42）：一个进程可以有多个 ManagerAccess（多个 EntityManager，或测试 / 工具进程），
+// 每个都有自己的卸载后重载接线。gauge 无标签、一个进程一条序列，承诺它是进程内全部接线积压之和：
+// 两个接线积压 3 + 2 时为 5；停掉其中一个只撤回它自己的 2，另一个的 3 仍在；全部停掉后为 0。
+// 修复前每个接线写自己的绝对值，gauge 是最后写入者的值（2），停掉第二个后被清零（0）而第一个仍有 3 个在等。
+func TestUnloadResyncBacklogSumsAcrossManagerAccesses(t *testing.T) {
+	reg := metrics.NewRegistry()
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(reg)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+
+	// stuck 建一个接线：1 个 worker 停在 loader 的 gate 上，其余在队列里，积压 n。
+	stuck := func(base int64, n int) (*resyncHarness, chan struct{}) {
+		gate := make(chan struct{})
+		t.Cleanup(func() { close(gate) })
+		h := newResyncHarness(t, &scriptedLoader{label: "authority", gate: gate}, entity.UnloadResyncConfig{Workers: 1, QueueCapacity: 8})
+		values := make([]*resyncEntity, 0, n)
+		for i := range n {
+			value := h.resident(base+int64(i), "rejected", false)
+			if err := h.sync.Subscribe(1, value.ID(), entity.SyncProfile{}); err != nil {
+				t.Fatal(err)
+			}
+			values = append(values, value)
+		}
+		if err := h.sync.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for len(h.frames) > 0 {
+			<-h.frames
+		}
+		for _, value := range values {
+			h.unload(value)
+		}
+		waitFor(t, "the reload to reach the loader", func() bool { return h.loader.inFlight.Load() == 1 })
+		return h, gate
+	}
+	h1, _ := stuck(6300, 3)
+	h2, _ := stuck(6400, 2)
+
+	b1, b2 := h1.access.UnloadResyncStats().Backlog, h2.access.UnloadResyncStats().Backlog
+	if b1 != 3 || b2 != 2 {
+		t.Fatalf("fixture: backlogs %d + %d, want 3 + 2", b1, b2)
+	}
+	if v, labels, _ := backlogGauge(reg); v != int64(b1+b2) || labels != 0 {
+		t.Fatalf("%s = %d (%d labels) with two ManagerAccess backlogs %d + %d; want their sum on one unlabelled series", backlogMetric, v, labels, b1, b2)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := h2.stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := backlogGauge(reg); v != int64(h1.access.UnloadResyncStats().Backlog) || v != 3 {
+		t.Fatalf("%s = %d after stopping the second ManagerAccess; the first still has %d entities waiting or reloading", backlogMetric, v, h1.access.UnloadResyncStats().Backlog)
+	}
+	if err := h1.stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := backlogGauge(reg); v != 0 {
+		t.Fatalf("%s = %d after stopping both, want 0", backlogMetric, v)
+	}
+}

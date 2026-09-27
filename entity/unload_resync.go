@@ -56,7 +56,7 @@ type UnloadedSubjectSync interface {
 // 由 Workers 个 worker 处理，风暴中最后一个被接纳的实体最迟在 ceil((QueueCapacity+Workers)/Workers) × T_entity 后得出结论。
 // 默认值（4 / 4096 / 5、100ms~2s、30s）：T_entity = 5×30s + 1.5s = 151.5s，上界 1025 × 151.5s ≈ 43.1 小时；加载快速失败时
 // （T_load≈0）约 1025 × 1.5s ≈ 26 分钟。上界假设风暴之后没有新的卸载：处理中再次被卸载的实体会再排一轮。
-// 期间订阅者停在旧内容上；积压见 gauge entity.unload_resync.backlog 与 UnloadResyncStats.Backlog。
+// 期间订阅者停在旧内容上；积压见 gauge entity.unload_resync.backlog（进程内全部接线之和）与 UnloadResyncStats.Backlog（本接线）。
 type UnloadResyncConfig struct {
 	Workers       int           // 并发重载上限，默认 4
 	QueueCapacity int           // 等待重载的实体数上限，默认 4096；放不下的立即退回 remove
@@ -88,7 +88,8 @@ func (config UnloadResyncConfig) normalized() UnloadResyncConfig {
 
 // UnloadResyncStats 是卸载后重载的累计计数。Scheduled 是登记的重载，Reloaded 是订阅者已接上权威状态，
 // Retracted 是退回 remove（含 Overflow），Failures 是失败的重载尝试，Overflow 是队列放不下的卸载。
-// Backlog 是此刻等待或正在重载的实体数（不是累计值），与 gauge entity.unload_resync.backlog 相同（RR-20260927-14）。
+// Backlog 是本接线此刻等待或正在重载的实体数（不是累计值，RR-20260927-14）；gauge entity.unload_resync.backlog
+// 是进程内全部接线的 Backlog 之和（RR-20260928-01），一个进程只有一个 ManagerAccess 时两者相同。
 type UnloadResyncStats struct {
 	Scheduled uint64
 	Reloaded  uint64
@@ -98,9 +99,19 @@ type UnloadResyncStats struct {
 	Backlog   int
 }
 
-// unloadResyncBacklogMetric 是卸载后重载的积压 gauge：等待或正在重载的实体数。无标签，一个进程一条序列
-// （每个服务一个 ManagerAccess）；停止时归零（RR-20260927-14）。
+// unloadResyncBacklogMetric 是卸载后重载的积压 gauge：进程内全部接线等待或正在重载的实体数之和。无标签，
+// 一个进程一条序列（RR-20260927-14）；每个接线停止时撤回自己的部分，全部停止后为 0。
 const unloadResyncBacklogMetric = "entity.unload_resync.backlog"
+
+// unloadResyncBacklog 汇总进程内全部接线的积压（RR-20260928-01）。一个进程可以有多个 ManagerAccess（多个
+// EntityManager、测试或工具进程），原来每个接线直接写自己的 len(jobs)，gauge 变成最后写入者的值，一个接线停止
+// 写 0 还会抹掉其余接线的积压。现在每个接线记住自己已计入的份额（unloadResync.published），变化时只把差值记进
+// total，并在同一把锁下写出 total——加法与写出在一起，才不会被并发的另一个接线用旧和覆盖。
+// 锁是叶子锁（调用方持有 unloadResync.mu，锁内只做加法和一次 SetGauge），不做 I/O、不等待其他任务。
+var unloadResyncBacklog struct {
+	mu    sync.Mutex
+	total int64
+}
 
 type resyncJobState uint8
 
@@ -123,6 +134,8 @@ type unloadResync struct {
 	jobs    map[int64]resyncJobState
 	workers int
 	stopped bool
+	// published 是本接线已计入 unloadResyncBacklog.total 的份额（RR-20260928-01）。
+	published int64
 
 	scheduled, reloaded, retracted, failures, overflow atomic.Uint64
 }
@@ -168,8 +181,14 @@ func (access *ManagerAccess) UnloadResyncStats() UnloadResyncStats {
 }
 
 // publishBacklogLocked 在 jobs 变化后更新积压 gauge（调用方持有 r.mu）。jobs 按实体去重，含排队、处理中与“再来一轮”。
+// gauge 是进程内全部接线之和：这里只调整本接线的份额（RR-20260928-01）。
 func (r *unloadResync) publishBacklogLocked() {
-	metrics.SetGauge(unloadResyncBacklogMetric, nil, int64(len(r.jobs)))
+	contribution := int64(len(r.jobs))
+	unloadResyncBacklog.mu.Lock()
+	unloadResyncBacklog.total += contribution - r.published
+	r.published = contribution
+	metrics.SetGauge(unloadResyncBacklogMetric, nil, unloadResyncBacklog.total)
+	unloadResyncBacklog.mu.Unlock()
 }
 
 // schedule 在 Unload 里调用（快池）：只查订阅、登记、按需启动 worker，不做 I/O、不等待。

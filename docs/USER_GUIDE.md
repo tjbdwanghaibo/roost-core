@@ -318,7 +318,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
   上界 `1025 × 151.5s ≈ 43.1 小时`（权威一直不作答、每次加载都等满 30s 时）；加载快速失败时约 `1025 × 1.5s ≈ 26 分钟`。上界假设风暴之后没有新的卸载
   （处理中又被卸载的实体会再排一轮），发布回快池的排队等待另计。需要更短的上界时减小 `queue_capacity`（放不下的立即 remove）、`attempts`、
   `nest.entity_load_timeout` 或增大 `workers`，例如 `workers: 8, attempts: 3, queue_capacity: 256, entity_load_timeout: 5s` 时约
-  `33 × 15.3s ≈ 8.4 分钟`。积压看 gauge `entity.unload_resync.backlog`（无标签，等待或正在重载的实体数，停止时归零）或 `UnloadResyncStats().Backlog`。
+  `33 × 15.3s ≈ 8.4 分钟`。积压看 gauge `entity.unload_resync.backlog`（无标签，进程内全部 ManagerAccess 等待或正在重载的实体数之和，每个接线停止时撤回自己的部分，RR-20260928-01）或 `UnloadResyncStats().Backlog`（单个 ManagerAccess）。
 - 运维：`Projector.Stats()` 新增 `FencedEntities`（当前被屏障挡住写入的实体数）、`FencedAdmissionRejected`、`StaleEvictions`；指标 `dataengine.fence.skipped.total` / `dataengine.fence.evictions.started.total` / `dataengine.fence.evictions.failed.total`。`StaleEvictions` 持续增长说明原生步骤的 `LeaseDuration` 短于投影延迟；`FencedEntities` 长时间不为 0 同时 `evictions.failed` 增长说明驱逐失败（如 Nest 已停止或被 fence），实体写入会一直被可重试地拒绝，按 Nest/DataEngine 健康检查处理。
 - `nest.NestMgr.RunLocal(ctx, fn)` 是框架后台 goroutine 把需要 Entity 锁的步骤交给快池的正式入口（快 worker 上调用返回 `fctx.ErrBlockingInFastWorker`）；实现 `nest.LocalExecutorBinder` 的 committer 在 `NewEngine` 时自动拿到它，DataEngine 的 Projector 与 kit Mod 已实现。
 - 投影事务现在对 lease fence 指向的 claim 文档做条件写（`updated_at`），与 `DataEngineStepInbox` 的过期接管串行化；claim 文档的 `updated_at` 会随投影更新。
