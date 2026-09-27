@@ -326,7 +326,7 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 - <Entity>FromRegistry（如 PlayerFromRegistry）：从当前 App 实例的 entity.runtime 获取 ManagerAccess，避免跨实例全局状态；每个 Entity 一个，同包不重名。
 - Get：构造完整 EntityID，并通过 Data Engine loader 做 singleflight 冷加载。
 - Create：仅创建不存在的聚合；并发创建由 EntityManager 的 ErrEntityExists 收敛。
-- GetOrCreate：只在“持久化记录不存在”时创建；数据库、解码、超时错误不会误判成不存在。同 ID 的上一个实例正在撤销 / 销毁收尾（entity.ErrEntityRemoved）时最多再试两次（再 Get、再 Create）。
+- GetOrCreate：只在“持久化记录不存在”时创建；数据库、解码、超时错误不会误判成不存在。同 ID 的上一个实例正在撤销 / 销毁收尾（entity.ErrEntityRemoved）时最多再试两次（再 Get、再 Create）；在 Nest handler 内调用时，这个窗口按新建锁冲突返回 nest.ErrCreatedEntityLockConflict，由框架决定整条回滚后重排（可回滚事务）或不重排（memory），不在此重试（RR-20260926-81）。
 - Destroy：先执行 Entity 销毁生命周期；deletePersisted=true 是不可恢复业务动作，只用于明确删档。
 
 ## 3. 正确调用位置

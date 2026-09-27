@@ -93,7 +93,7 @@ handler 开始执行之前的准入失败（声明目标取锁超时、组锁被
 handler 内先 `Destroy` 某个实体、再新建同 ID 的实体时，新实例拿到新锁，按上面的锁序规则取锁（同组即尝试加锁），持锁到 handler 结束并进入本次提交边界；
 事务回滚时新实例按上文撤销发布，旧实例的销毁不回滚（`Destroy` 本身不是事务操作）。同一 handler 里若 `Destroy` 之后别处重建了同 ID、再 `Cast` 它，
 返回 `nest.ErrCastDeadlockRisk`，不会拿到未加锁的实例（[RR-20260926-67](bugfix/RR-20260926-67.md)）。
-生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）。
+生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）；在 Nest handler 内这个窗口按新建锁冲突返回 `nest.ErrCreatedEntityLockConflict`（[RR-20260926-81](bugfix/RR-20260926-81.md)）。
 handler 内新建时同 ID 的上一个实例正在撤销 / 销毁收尾（锁已释放、收尾回调未结束），与上面的锁冲突同样处理：`Create` 返回 `ErrCreatedEntityLockConflict`
 （可回滚事务同时带 `ErrLockTimeout`、整条回滚后重新准入；不能回滚的 handler 不带、不重排），不再返回 `entity.ErrEntityRemoved`；
 Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-20260926-81.md)）。

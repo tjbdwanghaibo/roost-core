@@ -133,7 +133,10 @@ func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error)
 // no record. entity.ErrEntityRemoved means the previous instance with this ID
 // is still finishing its removal (a revoked in-transaction create or a
 // Destroy); it is transient, so the lookup is retried a bounded number of
-// times before the error is returned.
+// times before the error is returned. Inside a Nest handler the framework
+// reports that window as nest.ErrCreatedEntityLockConflict instead and
+// decides itself whether the whole message is rolled back and re-admitted
+// (RR-20260926-81).
 func (lifecycle *%s) GetOrCreate(ctx context.Context, uniqueID int64) (*%s.%s, bool, error) {
 	for attempt := 1; ; attempt++ {
 		value, err := lifecycle.Get(ctx, uniqueID)
