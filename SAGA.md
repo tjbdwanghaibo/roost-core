@@ -119,6 +119,10 @@ handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 muta
 outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
 receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`，不同 CommandID 即使共享
 IdempotencyKey 仍表示新的 Saga attempt，业务 step 继续按 IdempotencyKey 保证语义幂等。
+Reserve 读到 receipt 时顺手把 claim 标成 completed；这一步失败不改变 Reserve 的结论（receipt 仍是权威，
+写错误会让 Mongo 中止事务并由驱动重跑），但每次失败记 Warn（带 `command_id` 与原因）并累加
+`saga.step_inbox.mark_completed_error_total`。该计数持续增长、同一步骤反复 Duplicate 直到 deadline 时，
+检查 claim 集合的写入（权限、索引、文档校验）（RR-20260927-16）。
 
 raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo transaction 中；
 不要在这类 handler 中混用 Nest Entity 修改。两种 inbox 分开是为了保持各自的原子边界，

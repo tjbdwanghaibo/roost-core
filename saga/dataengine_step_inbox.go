@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -174,7 +176,13 @@ func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command Command) 
 func (inbox *DataEngineStepInbox) reserveInTransaction(ctx context.Context, commandID string, digest []byte) (Reservation, error) {
 	if completion, found, err := inbox.readReceipt(ctx, commandID, digest); err != nil || found {
 		if found {
-			_ = inbox.markCompleted(ctx, commandID, completion)
+			// 回执是权威，claim 只是协调行：标记失败不改变 Reserve 的结论（真实服务端会因写错误中止事务并由驱动重跑）。
+			// 但不能静默吞掉——将来出现确定性失败时会一直重跑到超时，日志与计数是唯一线索（RR-20260927-16）。
+			if markErr := inbox.markCompleted(ctx, commandID, completion); markErr != nil {
+				metrics.IncCounter("saga.step_inbox.mark_completed_error_total", nil, 1)
+				slog.Warn("saga dataengine inbox: mark claim completed failed; the receipt stays authoritative",
+					"command_id", commandID, "err", markErr)
+			}
 		}
 		return Reservation{Duplicate: found, Completion: completion}, err
 	}
