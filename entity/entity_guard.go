@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
@@ -81,6 +82,10 @@ type EntityGuard struct {
 	eMap        map[int64]IThreadSafeEntity
 	superseded  []heldEntity
 	postRelease []func()
+	// revokedCreated 是本 Guard 上撤销了发布、收尾（销毁回调、回收 LockManager 条目与 removing 标记）挂在本 Guard
+	// post-release 里尚未执行的新建实体 ID（revokeCreated）。同一 handler 里再建这些 ID 会撞上自己留下的 removing，
+	// 那是确定失败，不是别的持有者的暂时状态（RR-20260927-21）。取走 post-release 回调时清空。
+	revokedCreated []int64
 }
 
 // heldEntity 是被同 ID 新实例取代、但锁仍由本 Guard 持有的旧实例。id 单独保存：旧实例可能已被清理（ID 归零）。
@@ -222,6 +227,7 @@ func (e *EntityGuard) clean() {
 	clear(e.eMap)
 	e.superseded = nil
 	e.postRelease = nil
+	e.revokedCreated = nil
 	e.syncMutation = nil
 	e.createdCapturer = nil
 }
@@ -453,7 +459,14 @@ func (e *EntityGuard) releaseEntities() []func() {
 	}
 	callbacks := e.postRelease
 	e.postRelease = nil
+	// 撤销收尾就在 callbacks 里，随后执行；之后同 ID 不再有本 Guard 留下的 removing。
+	e.revokedCreated = nil
 	return callbacks
+}
+
+// revokedInThisGuard 报告 id 是否是本 Guard 上撤销、收尾尚未执行的新建实体（RR-20260927-21）。
+func (e *EntityGuard) revokedInThisGuard(id int64) bool {
+	return e != nil && slices.Contains(e.revokedCreated, id)
 }
 
 func (e *EntityGuard) runPostRelease(callbacks []func()) {

@@ -11,16 +11,13 @@ import (
 )
 
 // OPEN-ITEMS B18：RR-20260926-81 的另外两种形状。RR-81 的回归只覆盖“另一个事务撤销新建（revokeCreated）的收尾窗口”，
-// 这里验证同一个 removing 分支上的另外两条路径同样按新建锁冲突处理、不把 ErrEntityRemoved 交给业务：
+// 这里验证 Destroy 收尾窗口同样按新建锁冲突处理、不把 ErrEntityRemoved 交给业务：Nest 之外 Destroy X，Destroy 已摘索引、
+// 置 removing、释放 X 的锁，正在跑销毁回调（LockManager 条目与 removing 在回调之后才回收）；此时 handler 内新建 X。
+// 时序由销毁回调里的同步点钉住，不靠 sleep。可回滚事务得到 ErrLockTimeout + ErrCreatedEntityLockConflict，整条回滚后
+// 重新准入；不能回滚的 memory 快路径得到只带 ErrCreatedEntityLockConflict 的冲突错误、不重排（RR-20260926-64）。
 //
-//  1. Destroy 收尾窗口：Nest 之外 Destroy X，Destroy 已摘索引、置 removing、释放 X 的锁，正在跑销毁回调
-//     （LockManager 条目与 removing 在回调之后才回收）；此时 handler 内新建 X。
-//  2. 同一 Guard 的嵌套撤销：handler 内嵌套 RunIsolatedTransaction 新建 X 后失败回滚，撤销收尾挂在同一 Guard 的
-//     post-release 上、要等整个 handler 释放才跑；外层随后再新建 X。
-//
-// 两种形状都由事件顺序钉住（销毁回调里的同步点 / 同一 handler 内的先后），不靠 sleep。可回滚事务得到
-// ErrLockTimeout + ErrCreatedEntityLockConflict，整条回滚后重新准入；不能回滚的 memory 快路径得到只带
-// ErrCreatedEntityLockConflict 的冲突错误、不重排（RR-20260926-64）。
+// 另一种形状（同一 Guard 内嵌套事务自己撤销后外层再建）不是别的持有者的暂时状态，改为确定失败，见
+// created_entity_self_revoke_promises_test.go（RR-20260927-21）。
 
 func assertRollbackableCreateConflict(t *testing.T, where string, err error) {
 	t.Helper()
@@ -166,99 +163,6 @@ func TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict(t *testing.T) {
 		}
 		if got := manager.Get(x); got != nil {
 			t.Fatalf("X published although the only creator failed: %v", got)
-		}
-	})
-}
-
-func TestOuterCreateAfterNestedRevokeInSameGuardIsTreatedAsLockConflict(t *testing.T) {
-	t.Run("state_strict", func(t *testing.T) {
-		manager := entity.NewEntityManager()
-		pilots := addPilots(t, manager, 38120, 1)
-		access := entity.NewManagerAccess(manager)
-		x := mustBuildCastID(t, 38125, entity.EntityCategory(1), createdInScopeKind)
-		committer := &recordingCommitter{}
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
-		nestedBoom := errors.New("nested transaction failed after creating X")
-		var runs int
-		var outerErrs []error
-		name := NewHandlerName("b18_nested_revoke_strict")
-		mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
-			runs++
-			if runs == 1 {
-				// 只在第一次执行里走嵌套撤销：重新准入后撤销收尾已在上一个 Guard 释放时完成。
-				if _, err := RunIsolatedTransaction(context.Background(), committer, "b18_nested", func() (any, error) {
-					if _, err := access.Create(createParam(x)); err != nil {
-						return nil, err
-					}
-					return nil, nestedBoom
-				}); !errors.Is(err, nestedBoom) {
-					return nil, err
-				}
-			}
-			_, err := access.Create(createParam(x))
-			outerErrs = append(outerErrs, err)
-			return "ok", err
-		}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
-		if err := mgr.Start(); err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = mgr.Shutdown(context.Background()) }()
-
-		ret, err := mgr.Request(context.Background(), name, pilots[0], nil)
-		if err != nil || ret != "ok" || runs != 2 || len(outerErrs) != 2 {
-			t.Fatalf("reply ret=%v err=%v runs=%d outer creates=%v; want one conflict, a re-admission, then ok", ret, err, runs, outerErrs)
-		}
-		assertRollbackableCreateConflict(t, "outer Create after the nested revoke (first run)", outerErrs[0])
-		if outerErrs[1] != nil {
-			t.Fatalf("outer Create after re-admission = %v, want nil", outerErrs[1])
-		}
-		created := manager.Get(x)
-		if created == nil || created.IsRemoved() || !tryLockElsewhere(created) {
-			t.Fatalf("X after the handler committed: %v (want published and unlocked)", created)
-		}
-	})
-
-	t.Run("memory", func(t *testing.T) {
-		manager := entity.NewEntityManager()
-		pilots := addPilots(t, manager, 38130, 1)
-		access := entity.NewManagerAccess(manager)
-		x := mustBuildCastID(t, 38135, entity.EntityCategory(1), createdInScopeKind)
-		committer := &recordingCommitter{}
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
-		nestedBoom := errors.New("nested transaction failed after creating X")
-		var runs int
-		var outerErr error
-		name := NewHandlerName("b18_nested_revoke_memory")
-		mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-			runs++
-			es[0].(*rollbackTestEntity).dao.Value++
-			if _, err := RunIsolatedTransaction(context.Background(), committer, "b18_nested_memory", func() (any, error) {
-				if _, err := access.Create(createParam(x)); err != nil {
-					return nil, err
-				}
-				return nil, nestedBoom
-			}); !errors.Is(err, nestedBoom) {
-				return nil, err
-			}
-			_, outerErr = access.Create(createParam(x))
-			return "ok", outerErr
-		}, HandlerMeta{})
-		if err := mgr.Start(); err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = mgr.Shutdown(context.Background()) }()
-
-		_, err := mgr.Request(context.Background(), name, pilots[0], nil)
-		assertNonRollbackCreateConflict(t, "memory outer Create after the nested revoke", outerErr)
-		assertNonRollbackCreateConflict(t, "memory reply", err)
-		if runs != 1 {
-			t.Fatalf("memory handler ran %d times, want exactly 1 (not requeued)", runs)
-		}
-		if v := manager.Get(pilots[0]).(*rollbackTestEntity).dao.Value; v != 2 {
-			t.Fatalf("declared entity value=%d, want 2 (one execution)", v)
-		}
-		if got := manager.Get(x); got != nil {
-			t.Fatalf("X published although both creations failed: %v", got)
 		}
 	})
 }

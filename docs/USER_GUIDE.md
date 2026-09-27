@@ -98,6 +98,10 @@ handler 内先 `Destroy` 某个实体、再新建同 ID 的实体时，新实例
 handler 内新建时同 ID 的上一个实例正在撤销 / 销毁收尾（锁已释放、收尾回调未结束），与上面的锁冲突同样处理：`Create` 返回 `ErrCreatedEntityLockConflict`
 （可回滚事务同时带 `ErrLockTimeout`、整条回滚后重新准入；不能回滚的 handler 不带、不重排），不再返回 `entity.ErrEntityRemoved`；
 Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-20260926-81.md)）。
+例外：同 ID 的上一个实例是**本 handler 自己**撤销的（例如 handler 内 `RunIsolatedTransaction` 新建后回滚，撤销收尾挂在同一个 Guard 上，
+要等整个 handler 释放才执行），在同一 handler 里再建它是确定失败：`Create` 返回满足 `errors.Is(err, entity.ErrEntityRemoved)` 的错误、
+文案说明是本 handler 内已撤销的同 ID，不带 `ErrCreatedEntityLockConflict` / `ErrLockTimeout`，消息不重排（之前可回滚事务会每次重排都重现、
+空转到重排上限）。handler 结束后同一 ID 可以正常新建（[RR-20260927-21](bugfix/RR-20260927-21.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
 
@@ -112,15 +116,19 @@ Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-2026
 | --- | --- | --- | --- | --- |
 | 1 | `nest.ErrCommitIndeterminate` | 消息自己的事务或 handler 内嵌套独立事务（含消息自己的事务结束后、收尾阶段调用的独立事务，RR-84）的提交结果未知；引擎已 fence（RR-76） | **可能** | 不得重试；等实例从 WAL 恢复后按业务幂等键核对 |
 | 2 | `entity.ErrRemotePersistenceIndeterminate`，或 `entity.ErrRemoteCommitTimeout` | 本地已持久提交，Remote 结果未知（RR-37）：Durability 0 远端回复丢失 / 未到达、strict 等待期间投影器报告未知时带前者；strict 等待 Remote 确认到截止时带后者（与 `context.DeadlineExceeded` 并存，不带前者） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
+
+| 1 | `nest.ErrCommitIndeterminate` | 消息自己的事务或 handler 内嵌套独立事务的提交结果未知；引擎已 fence（RR-76）。消息自己的事务结束后、收尾阶段（Guard post-release、解锁后回调）调用的独立事务结果未知时引擎同样 fence（RR-84），但业务在收尾阶段已无法把错误带进回复：**回复里看不到本哨兵**，只能从之后的请求得到 `ErrNestFenced` 得知 | **可能** | 不得重试；等实例从 WAL 恢复后按业务幂等键核对 |
+| 2 | `entity.ErrRemotePersistenceIndeterminate` | 本地已持久提交，Remote 远端确认超时 / 结果未知（RR-37） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
 | 3 | `nest.ErrAfterCommitFailed` | 消息自己的事务已提交，收尾（release hook、AfterCommit、Close、引用释放）失败（RR-46 / 53）。收尾阶段调用的 `RunIsolatedTransaction` 不算消息自己的事务，它的提交不会让回复带本哨兵（RR-84） | **已提交** | 不得重试 |
 | 4 | `nest.ErrNestedTransactionCommitted` | 消息自己的事务没提交，但 handler 内嵌套独立事务（或收尾阶段——Guard post-release、解锁后回调——调用的独立事务，RR-84）已提交或结果未知；消息未重排（RR-65） | **部分已提交** | 不得整笔重试 |
 | 5 | `nest.ErrNonRollbackNotRequeued` | 不能回滚的 handler（memory）开始执行后遇锁超时 / 组迁移类错误；未准入，但失败前的内存修改已生效且不撤销，未重排（RR-73） | 未持久提交，修改未回滚 | 框架不重试；确认 handler 幂等（或读回状态）后业务自行重试 |
 | 6 | `nest.ErrCreatedEntityLockConflict`，且不带 `ErrLockTimeout` | 不能回滚的 handler 内新建实体锁冲突，未重排，冲突前的修改未回滚（RR-64） | 同上 | 同上 |
-| 7 | `nest.ErrCreatedEntityLockConflict` 与 `ErrLockTimeout` 并存 | 可回滚事务新建实体冲突：已整条回滚、自动重排仍冲突到上限（RR-48）。只在不命中第 1～4 行时成立——外层已有嵌套提交时同样两者并存，但那是“已回滚、未重排”，按第 4 行 | 否 | 可重试 |
+| 7 | `nest.ErrCreatedEntityLockConflict` 与 `ErrLockTimeout` 并存 | 可回滚事务新建实体冲突：已整条回滚、自动重排仍冲突到上限（RR-48）。只在不命中第 1～4 行时成立——外层已有嵌套提交时同样两者并存，但那是“已回滚、未重排”，按第 4 行。同 ID 由本 handler 自己撤销的不在此列，见第 12 行 | 否 | 可重试 |
 | 8 | `nest.ErrLockTimeout` / `ErrEntityLockGroupChanged` / `ErrEntityGroupTransitionPending` | 未提交：准入阶段失败，或可回滚事务已回滚；框架已自动重排到上限 | 否 | 可重试 |
 | 9 | `nest.ErrNestedTransactionRollbackConflict` | `RunIsolatedTransaction` 要写外层可回滚事务已快照的实体，写持久记录前被拒绝并自身回滚（RR-74） | 否（嵌套事务） | 原样重试仍被拒；把写入并入外层事务 |
 | 10 | `nest.ErrNestedTransactionInRemoteMessage` | 带 Remote 批次的消息里调用 `RunIsolatedTransaction`（handler 内，或消息自己的事务结束后、批次收尾前的收尾阶段），函数体未执行（RR-75 / 84） | 否（嵌套事务） | 原样重试仍被拒；把写入并入消息自己的事务 |
 | 11 | `nest.ErrCommitRejected` | 提交被明确拒绝，事务已回滚 | 否 | 看原因：`dataengine.ErrFencedEntityPending` 可重试，其余按业务错误处理 |
+| 12 | `entity.ErrEntityRemoved`（handler 内新建） | 同一 handler 里再建本 handler 自己较早撤销的同 ID（撤销收尾要等 handler 释放），确定失败、未重排（RR-20260927-21）；可回滚事务已回滚 | 否（消息自己的事务；嵌套事务已提交时按第 4 行） | 原样重试会重复同一流程、再次失败；改业务流程，不在同一 handler 内重建刚撤销的 ID |
 
 第 2 行的两种形态由 `remoteentity/reply_sentinel_table_test.go` 在真实 Nest + 正式 Remote Manager 上钉住（OPEN-ITEMS B23）。
 调用方自己的等待先到截止时，`Nest.Request` 返回 `nest.ErrNestCanceled`（与 ctx 错误并存）或 `nest.ErrNestTimeout`，这只说明没等到回复、不说明结果：

@@ -47,7 +47,8 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 // 错误也整条回滚（与 CreatedEntityLockBusy 同类，RR-20260927-11）。
 //
 // CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48），或同 ID 的上一个实例仍在
-// 撤销 / 销毁收尾、TryAdd 撞上 removing 标记（RR-20260926-81，同样是持有者尚未交还的暂时状态）。返回交给业务的错误：
+// 撤销 / 销毁收尾、TryAdd 撞上 removing 标记（RR-20260926-81，同样是持有者尚未交还的暂时状态；本 Guard 自己撤销、
+// 收尾挂在本 Guard 上的同 ID 除外，那是确定失败，CreateInScope 直接返回 ErrEntityRemoved，RR-20260927-21）。返回交给业务的错误：
 // 可回滚的 Nest 事务给可重试的锁超时类错误，并据此在 handler 结束时整条回滚并重新准入；不能回滚的 handler
 // （memory 快路径）给不可自动重排的冲突错误，消息不重排（RR-20260926-64）。
 type CreatedEntityCapturer interface {
@@ -67,7 +68,8 @@ type CreatedEntityCapturer interface {
 //
 // 发布失败（TryAdd 报 ErrEntityExists / ErrEntityRemoved）时归还本次取得的锁：同一作用域随后按同 ID
 // 重试（生成 GetOrCreate）会新建实例，若锁仍以旧实例记在 Guard 上，新实例会在未加锁的情况下发布。
-// Nest handler 内的 ErrEntityRemoved（同 ID 的上一个实例撤销 / 销毁收尾未完）改由 capturer 给冲突错误（RR-20260926-81）。
+// Nest handler 内的 ErrEntityRemoved（同 ID 的上一个实例撤销 / 销毁收尾未完）改由 capturer 给冲突错误（RR-20260926-81）；
+// 撤销是本 Guard 自己做的（收尾要等本 handler 释放）时保留 ErrEntityRemoved，确定失败、不重排（RR-20260927-21）。
 func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged
@@ -88,6 +90,13 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	if err := m.TryAdd(value); err != nil {
 		if lockedNow {
 			guard.ReleaseEntity(value.GUId())
+		}
+		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(value.ID()) {
+			// RR-20260927-21：removing 是本 handler 自己留下的——同一 Guard 上较早撤销了同 ID 的新建（例如嵌套
+			// RunIsolatedTransaction 新建后回滚），收尾挂在本 Guard 的 post-release 上，要等整个 handler 释放才执行。
+			// 在这个 handler 里它不会结束，是确定失败：原样保留 ErrEntityRemoved，不给冲突 / 锁超时哨兵。之前走下面的
+			// RR-81 分支，可回滚事务每次重排都重现同一冲突，空转到重排上限，文案还归咎于别的持有者。
+			return nil, fmt.Errorf("%w; entity %d was created and then revoked earlier in this handler, and its revoke finishes only when the handler releases its locks, so the same id cannot be created again in this handler", err, value.ID())
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) {
 			// RR-20260926-81：同 ID 的上一个实例正在撤销（revokeCreated）或销毁收尾——锁已释放、removing 标记要等
@@ -153,6 +162,7 @@ func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
 	m.removeGroupIndex(e)
 	e.Base().setOwner(nil)
 	m.addMu.Unlock()
+	guard.revokedCreated = append(guard.revokedCreated, id)
 	flog.Debug("entity: creation revoked", "id", id, "category", e.GetEntityCategory(), "kind", e.GetEntityKind())
 
 	if state := e.Base().Sync(); state != nil {
