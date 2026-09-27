@@ -95,10 +95,10 @@ type RollbackTx struct {
 	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误（RR-20260926-48）。可回滚的事务据此在
 	// handler 结束时整条回滚并以锁超时重新准入，即使业务吞掉了 Create 返回的错误。
 	createLockBusy error
-	// createCaptureFailed 是 handler 内新建实体时第一次事务捕获失败的错误（RR-20260927-11）。与 createLockBusy 同一种处理：
-	// handler 结束时即使业务吞掉了 Create 返回的错误也整条回滚——捕获失败前可能已登记了提交参与者，照常提交会让它们准备
-	// 记录，本事务的其他修改带着一个新建失败的结果持久化。
-	createCaptureFailed error
+	// captureFailed 是 handler 内动态纳入事务的实体（CreateInScope 新建，RR-20260927-11；Cast 取得，RR-20260927-31）第一次
+	// 事务捕获失败的错误。与 createLockBusy 同一种处理：handler 结束时即使业务吞掉了返回的错误也整条回滚——捕获失败前可能
+	// 已登记了提交参与者，照常提交会让它们准备记录，本事务的其他修改带着一个未进入回滚 / 持久化参与的实体持久化。
+	captureFailed error
 	// dispatch 是以本事务为自身事务的派发消息（嵌套的 RunIsolatedTransaction / 无派发调用为 nil）；
 	// 越过提交点时在它上面记录，dispatchNest 据此不再重新准入（RR-20260926-49）。
 	dispatch *Msg
@@ -826,13 +826,19 @@ func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, rev
 		return nil
 	})
 	if err := tx.CaptureEntities([]entity.IThreadSafeEntity{created}); err != nil {
-		if tx.createCaptureFailed == nil {
-			tx.createCaptureFailed = err
-		}
+		tx.noteCaptureFailed(err)
 		return err
 	}
 	tx.created = append(tx.created, created)
 	return nil
+}
+
+// noteCaptureFailed 记下 handler 内动态纳入实体时第一次捕获失败的错误，handler 结束时由 invokeWithTransaction 并入
+// 结果、整条回滚（RR-20260927-11 / 31）。
+func (tx *RollbackTx) noteCaptureFailed(err error) {
+	if tx.captureFailed == nil {
+		tx.captureFailed = err
+	}
 }
 
 // CreatedEntityLockBusy 实现 entity.CreatedEntityCapturer：新实体的锁按锁序不能等待且已被占用（RR-20260926-48）。

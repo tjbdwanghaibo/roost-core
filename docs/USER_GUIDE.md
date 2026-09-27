@@ -77,6 +77,8 @@ Repository 聚合加载（`IsCreate=false`）不受影响。
 RollbackState 下新实体的 DAO 需要可快照（生成 DAO 已满足），remote-managed 实体在 durable 事务内创建会被拒绝，
 这两条与 Cast 的约束一致。这类事务捕获失败时 `Create` 撤销发布并返回该错误；业务即使吞掉它、handler 返回成功，
 事务也整条回滚，调用方收到该错误（可 `errors.Is`，不按锁超时重排），committer 不被调用（[RR-20260927-11](bugfix/RR-20260927-11.md)）。
+handler 内动态 Cast 取得实体后的事务捕获失败同样处理：`CastOne` / `CastMulti` 等返回该错误，业务吞掉它时事务照常整条回滚、调用方收到该错误、不重排，
+Cast 已取得的锁在事务结束时归还（[RR-20260927-31](bugfix/RR-20260927-31.md)；之前业务吞错后事务照常提交）。
 handler 内新建实体的锁持有到 handler 结束（memory handler 也一样，并进入本次 Sync 提交屏障），取锁遵循与 Cast 相同的锁序：
 新实体的锁组高于 handler 已持有的全部锁组时等待；否则（与声明目标同组或更低组，最常见的写法）只尝试加锁，被其他 handler 占用时
 `Create` 返回满足 `errors.Is(err, nest.ErrCreatedEntityLockConflict)` 的错误。可回滚（state / undo）的事务里它同时满足

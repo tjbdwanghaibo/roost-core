@@ -211,9 +211,10 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		// 不能提交一个缺了新实体的结果。RollbackNone 不撤销内存修改，强制重做会重复生效，交由业务决定。
 		err = errors.Join(err, busy)
 	}
-	if failed := tx.createCaptureFailed; failed != nil && !errors.Is(err, failed) {
-		// handler 内新建实体的事务捕获失败而业务吞掉了错误：与上面的锁冲突同类，整条回滚，不能提交一个缺了新实体、
-		// 却可能已登记其提交参与者的结果（RR-20260927-11）。捕获错误不是锁超时，不会被重新准入；业务自己返回了它时不重复拼接。
+	if failed := tx.captureFailed; failed != nil && !errors.Is(err, failed) {
+		// handler 内新建（RR-20260927-11）或 Cast 取得（RR-20260927-31）的实体事务捕获失败而业务吞掉了错误：与上面的锁冲突
+		// 同类，整条回滚，不能提交一个缺了该实体的回滚 / 持久化参与、却可能已登记其提交参与者的结果。捕获错误不是锁超时，
+		// 不会被重新准入；业务自己返回了它时不重复拼接。
 		err = errors.Join(err, failed)
 	}
 	if err != nil {

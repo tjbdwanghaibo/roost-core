@@ -185,8 +185,12 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		mutation.Include(lockedNow)
 	}
 	// 动态取得的实体属于当前业务事务，回滚/持久化参与不能依赖是否装配 Sync。
+	// 捕获失败时在事务上记下（RR-20260927-31）：之前只把错误还给业务，业务吞掉后事务照常提交，一个未进入回滚 / 持久化
+	// 参与的实体随事务落地。现在与 CreateInScope 捕获失败（RR-20260927-11）同一机制，handler 结束时整条回滚；已取得的锁
+	// 仍由 Guard 在事务结束时统一释放。
 	if tx := CurrentRollbackTx(); tx != nil {
 		if err := tx.CaptureEntities(lockedNow); err != nil {
+			tx.noteCaptureFailed(err)
 			return nil, err
 		}
 	}
