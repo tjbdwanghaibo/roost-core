@@ -1649,6 +1649,11 @@ func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	dialAuthenticated(t, server, "first")
 	dialAuthenticated(t, server, "second")
 	waitReleased(t, server, 2)
+	// The server writes the authentication ack before it registers the
+	// session: wait for both to be registered, or CloseSessions may not see one.
+	for deadline := time.Now().Add(2 * time.Second); runtime.ActiveSessions(7) != 2 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("active sessions = %%d, want 2", got) }
 
 	if got := runtime.CloseSessions(7, errors.New("fenced")); got != 2 { t.Errorf("CloseSessions closed the player's 2 open sessions and reported %%d", got) }
