@@ -19,6 +19,7 @@ open http://127.0.0.1:3000        # admin / admin，仪表盘 "Roost game-demo" 
 | 实体锁 | `nest_handler_lock_hold_*{handler}`、`nest_handler_lock_hold_slow_total`、`nest_dispatch_requeue_total` | strict 事务在锁内等 fsync，锁时长 ≈ 业务 + fsync；requeue 是锁冲突 |
 | WAL 落库 | `nestwal_append_total` / `nestwal_batch_total`（合批放大率）、`nestwal_fsync_duration_*`、`nestwal_disk_bytes`、`nestwal_pending_tickets`、`nestwal_reject_total` | fsync 时延是锁内成本的来源；reject 非零是容量事故 |
 | 升级 effect → 邮件 | `nats_jetstream_terminal_total{subject}` | 消费者重试 20 次仍失败（比如 mail 没起）会计入这里，非零即事故 |
+| 场景复制会话 | `scene_session_reopen_failed_total{reason}` | 非零 = 有玩家仍连着、留在场景里，却没有自己的视图，要等下次登录；`exhausted` 是传输一直在关旧会话、8 次“稍后重试”用尽，`refused` 是会话上限等不会好转的拒绝 |
 | 配置表 | `configdata_version`、`configdata_reload_total` | 热更后版本 +1；请求内读到的是钉住的快照 |
 | game → match / mail | `bus_rpc_call_total`（发出）、`bus_rpc_request_total`（服务端答）、`bus_rpc_pending`、`bus_dispatch_duration_*` | 三个进程各自的 job 标签把发起方和应答方分开；**`bus_rpc_*` 只在 JetStream 可靠 RPC 路径（`nats.reliable.enabled`）上计数**，默认轻量 request/reply 下该面板 No data 是正常的 |
 | 机器人 | `robot_runner_scenario_total{result}`、`robot_runner_scenario_cost_bucket`、`robot_session_call_bucket{msg}`、`robot_runner_online` | 只有这里有真正的直方图；单次调用 p95 按消息 id 区分 |

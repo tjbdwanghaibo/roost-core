@@ -20,6 +20,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
@@ -1010,6 +1011,7 @@ type closingLane struct {
 	mu      sync.Mutex
 	closing map[entitysync.SessionID]int
 	opens   map[entitysync.SessionID]int
+	broken  map[entitysync.SessionID]error // an open of this session fails with this, and not "not yet"
 }
 
 func newClosingLane(transport scenePusher) *closingLane {
@@ -1020,6 +1022,9 @@ func (lane *closingLane) SessionOpened(id entitysync.SessionID) error {
 	lane.mu.Lock()
 	defer lane.mu.Unlock()
 	lane.opens[id]++
+	if err := lane.broken[id]; err != nil {
+		return err
+	}
 	if lane.closing[id] > 0 {
 		lane.closing[id]--
 		return fmt.Errorf("previous lifetime still sending: %w", entitysync.ErrSessionClosing)
@@ -1033,6 +1038,25 @@ func (lane *closingLane) refuse(id entitysync.SessionID, opens int) {
 	lane.mu.Lock()
 	lane.closing[id] = opens
 	lane.mu.Unlock()
+}
+
+func (lane *closingLane) breakOpens(id entitysync.SessionID, err error) {
+	lane.mu.Lock()
+	if lane.broken == nil {
+		lane.broken = map[entitysync.SessionID]error{}
+	}
+	lane.broken[id] = err
+	lane.mu.Unlock()
+}
+
+// sceneReopenFailures reads the process's count of reopens given up for reason.
+func sceneReopenFailures(reason string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == sceneReopenFailedMetric && metric.Labels["reason"] == reason {
+			return metric.Value
+		}
+	}
+	return 0
 }
 
 func (lane *closingLane) opened(id entitysync.SessionID) int {
@@ -1193,6 +1217,7 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 	t.Run("bounded", func(t *testing.T) {
 		h := setup(t)
 		opensBefore := h.lane.opened(session)
+		exhaustedBefore := sceneReopenFailures("exhausted")
 		h.lane.refuse(session, 1000)
 		losePush(t, h)
 		var longest time.Duration
@@ -1211,6 +1236,25 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 		}
 		if h.scene.Members() != 2 {
 			t.Fatalf("giving up on the reopen removed the player: members=%d", h.scene.Members())
+		}
+		// RR-20260927-19: giving up is counted once per player, not only logged.
+		if got := sceneReopenFailures("exhausted") - exhaustedBefore; got != 1 {
+			t.Fatalf("a reopen given up after %d attempts counted %d on %s{reason=exhausted}, want 1", sessionReopenAttempts, got, sceneReopenFailedMetric)
+		}
+	})
+	t.Run("a refusal that is not \"not yet\" is counted apart", func(t *testing.T) {
+		h := setup(t)
+		refusedBefore, exhaustedBefore := sceneReopenFailures("refused"), sceneReopenFailures("exhausted")
+		h.lane.breakOpens(session, errors.New("session limit reached"))
+		losePush(t, h)
+		if _, ran := h.schedule.runRetry(t); ran {
+			t.Fatal("a refusal that is not \"not yet\" was retried")
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("a refused reopen removed the player: members=%d", h.scene.Members())
+		}
+		if got, other := sceneReopenFailures("refused")-refusedBefore, sceneReopenFailures("exhausted")-exhaustedBefore; got != 1 || other != 0 {
+			t.Fatalf("a refused reopen counted refused=%d exhausted=%d, want 1 and 0", got, other)
 		}
 	})
 	t.Run("cancelled when the player leaves", func(t *testing.T) {

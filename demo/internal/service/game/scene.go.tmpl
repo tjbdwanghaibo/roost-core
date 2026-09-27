@@ -19,6 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
@@ -66,6 +67,13 @@ const (
 	sessionReopenAttempts   = 8
 	sessionReopenFirstDelay = 25 * time.Millisecond
 	sessionReopenMaxDelay   = time.Second
+
+	// sceneReopenFailedMetric counts the players whose replication session
+	// could not be reopened — attempts used up (reason "exhausted") or a
+	// refusal that is not "not yet" (reason "refused", e.g. the session
+	// limit). Each one stays in the scene without its own view until its next
+	// login; a warning per player was the only trace (RR-20260927-19).
+	sceneReopenFailedMetric = "scene_session_reopen_failed_total"
 )
 
 // SceneCapability is the name the scene is published under, so an endpoint
@@ -717,7 +725,8 @@ func (bridge *Scene) settle(subjectID int64, generation uint64, sessionDropped b
 // the previous session, RR-20260926-55) is retried with a growing delay, up to
 // sessionReopenAttempts; anything else, or the last attempt, leaves the player
 // in the scene (others still see it) with its own view to come back with its
-// next login. Called with transitions held.
+// next login — a warning and one count on sceneReopenFailedMetric per player
+// (RR-20260927-19). Called with transitions held.
 func (bridge *Scene) reopenLocked(subjectID int64, member sceneMember, attempt int) {
 	session := sessionFor(subjectID)
 	open := bridge.manager.OpenHeldSession
@@ -733,7 +742,12 @@ func (bridge *Scene) reopenLocked(subjectID int64, member sceneMember, attempt i
 	}
 	bridge.setReopening(subjectID, member.generation, false)
 	if err != nil {
-		slog.Warn("scene: replication session not reopened", "subject_id", subjectID, "attempts", attempt, "err", err)
+		reason := "refused"
+		if entitysync.SessionOpenRetryable(err) {
+			reason = "exhausted"
+		}
+		metrics.IncCounter(sceneReopenFailedMetric, metrics.Labels{"reason": reason}, 1)
+		slog.Warn("scene: replication session not reopened", "subject_id", subjectID, "attempts", attempt, "reason", reason, "err", err)
 		return
 	}
 	queued := bridge.interest.Resubscribe(subjectID)
