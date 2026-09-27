@@ -4,6 +4,58 @@
 
 ## [Unreleased]
 
+> v1.17.0 之后的全部修复（RR-20260926-30、33～80）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、
+> [第二轮](docs/review/REVIEW-2026-09-27-audit2.md)、[第三轮](docs/review/REVIEW-2026-09-27-audit3.md)。升级前先读下面“Changed”。
+
+### Changed（破坏性 / 行为收紧）
+
+- **syncbus JetStream 流名随 prefix 派生（RR-20260926-56，需迁移）**：默认 prefix（`roost.sync` / 未写 prefix 的 `roost.room`）与显式写了 `syncbus.stream` 的部署，流名和 durable 游标都不变。
+  写了非默认 prefix、没写 `stream` 的部署升级后改用派生流名；若旧 `ROOST_SYNC` 仍持有该 prefix 的 subjects，启动时报 subjects overlap 并失败（不会静默）。
+  迁移：同一 prefix 的多个实例**不能滚动升级**——要么先给全部实例配 `stream: ROOST_SYNC` 沿用旧流，要么全停后升级；共用 NATS 时不要删 `ROOST_SYNC`，只从中移除本 prefix 的 subjects；
+  清理旧流上本部署留下的孤儿 durable consumer。kit/README 中“不同 prefix 即各有各的流”对兼容映射的 `roost.room` / `roost.sync` 不成立。见 [修复记录](docs/bugfix/RR-20260926-56.md)。
+- **生成 TCP 传输：写失败即断开该连接（RR-20260926-52/68，需重新生成）**：一次推送写失败的连接由服务端关闭，客户端表现为断线重连；`write_timeout`（默认 5s）也是“慢到这个程度就断开”的阈值。
+  `PushPlayer` 部分连接失败、其余收到时返回 `nil`。调用方截止在第一个字节写出前到期的推送按“写前拒绝”处理，不关闭健康连接（RR-68）。
+  已生成工程执行 `roost generate` 覆盖 `internal/access/player/tcp/server_gen.go`。
+- **停机总时长与部署宽限期按服务实际 Mod 生成（RR-20260926-42/51/66）**：Mod 可声明停机预算（dataengine 声明 `dataengine.shutdown_timeout`），App 在 `shutdown.total_timeout` 内先按声明值分配，未声明的 Mod 各保底 3s。
+  生成器按每个服务注册的 Mod 计算 `total_timeout`（game-demo：game 101s，框架服务 23s），k8s / compose / systemd / dev 脚本的宽限期取 `max(公式值, 配置里实际生效的 total) + 5s`，
+  不会低于配置；`roost project doctor` 在模板宽限期低于配置 total + 5s 时 FAIL。RR-66 之前生成、仍为统一 60s 的工程重新 sync 后宽限期保持 65s，Mod 多的服务应按 doctor 提示调大 total。见 [DEPLOYMENT §8](docs/DEPLOYMENT.md)。
+- **注册期拒绝矛盾的 Remote 策略（RR-20260926-45/60/71）**：`remote=managed` 实体不能使用 `dbscope=sid` 的 DAO（生成期与装配期双重校验）；冷加载与构建按 kind 在注册表里的实际 Remote 策略判定；
+  手写 builder 先按 none 注册、kind 定义后声明 managed / mirror 且生命周期矛盾时，`RegisterEntityKindDefs` 返回错误、`MustRegisterEntityKindDefs` 在启动期 panic（此前静默接受）。生成工程不受影响。
+- **Nest 不再重排可能已提交或不可回滚的消息（RR-20260926-49/64/65）**：越过提交点的事务、handler 内嵌套独立事务已提交（或结果未知）的消息、不可回滚 handler 内新建实体遇锁冲突的消息，
+  都不再自动重新准入，回复分别带 `ErrAfterCommitFailed` / `nest.ErrNestedTransactionCommitted` / `nest.ErrCreatedEntityLockConflict`。带任一“可能已提交”哨兵的回复不得重试整笔业务。
+  事务内新建实体按 Cast 锁序取锁，可回滚事务冲突时整条回滚后重排（RR-48）。纯本地 strict 已提交后的释放 / 回调错误同样带 `ErrAfterCommitFailed`（RR-53）。
+- **Remote 结果未知与拒绝（RR-20260926-37/39/58/61/62）**：确认无结论时 Sync Confirm 与 AfterCommit 交给 finalizer，拿到持久结论后执行一次；持久结论到达时 Nest 已停机 / 已 fence、快池拒绝投递，
+  则该事务的 AfterCommit **不执行**（计数 `remote_entity.deferred_outcome_not_run_total` 并告警），需要可靠副作用的业务应改用持久记录 / outbox。
+  持久拒绝后框架自动仅内存卸载被拒绝的实例，下一次访问从权威重载，重载窗口内返回可重试的 `entity.ErrRemoteEntityReloading`（包裹 `ErrRemoteFenced`）；
+  混合事务 Remote 部分被拒绝时只丢弃 Remote 实体的 Sync 内容，已提交的本地实体照常生效。
+- **本地 lease fence 跳过（RR-20260926-30）**：saga 原生步骤因 lease fence 过期被跳过时，投影对同实体后续记录设屏障，跳过后驱逐该实体、从持久层重载，Sync 对原订阅者强制全量；不再 fatal、不再重启起不来。
+- **卸载后重同步（RR-20260926-59/69/70/72）**：实体被仅内存卸载后仍有订阅者时，框架在快池之外从权威重载并 Rebind 全量，重载不了才对订阅者发 remove；政策（Interest / AOI / Group / Direct）撤销的订阅在实体重新登记后自动重新提交。
+- **WAL**：fsync 失败后 terminal 粘滞，Ack / ticker / Sync 不再刷段、不推进 checkpoint 与 DurableLSN，票据错误包 `ErrCommitIndeterminate`（RR-20260926-33）；
+  最后一段的零填充尾部按四条件判据截断（指标 `nestwal.recovery.tail_truncated.total`），其余仍 `ErrCorrupt`（RR-41）。
+
+### Added
+
+- 哨兵：`nest.ErrNestedTransactionCommitted`、`nest.ErrCreatedEntityLockConflict`、`entity.ErrRemoteEntityReloading`、`entity.ErrEntityLoadTimeout`、`entity.ErrEntityLoaderStopped`、
+  `entitysync.ErrRegistrationCancelled`、`entity.ErrRemoteUnloadUnsupported`、`engine.ErrEntityAggregateCorrupt`。
+- API：`entity.ManagerAccess` 的 `IsLoaded` / `Unload` / `UnloadRemoteEntity` / `ConfigureLoadTimeout` / `ConfigureUnloadResync` / `BindLocalExecutor`；`entitysync.Manager` 的 `Rebind` / `RetractSyncSubject` /
+  `RetractUnloadedSubject` / `SubjectAwaitsReload` / `RegisterAfterRetirement` / `NewSubscriptionSourceWithResubmit`；`NestMgr.RunLocal` / `DurableWatermark`；`kit/dataengine.Mod.OnEntityLoaded` / `StopBudget`；
+  `nestwal.WAL.Terminated`；`driver.JetStreamSyncStream`；`entitysync.SessionOpenRetryable`。
+- 配置：`player_access.tcp.dispatch_timeout` / `login_timeout`（RR-36）、`remote_entity.finalize_projection_timeout`（RR-38）。
+- 指标：`dataengine.fence.evictions.{started,failed}.total`、`nest.remote.deferred_after_commit_error_total`、`nest.remote.post_commit_without_outcome_total`、`remote_entity.rejected_unload{,_error,_unsupported}_total`、
+  `remote_entity.finalize_retry_total`、`remote_entity.finalize_status_read_total`、`remote_entity.quarantine_error_total`、`remote_entity.deferred_outcome_{error,not_run}_total`。
+
+### Fixed
+
+- **RR-20260926-33～47**（v1.17.0 疑点核实）：WAL fsync 粘滞、投影 Mongo 事务撞键卡死、handler 内 CreateInScope 进入提交边界且 kit 自动接 pipelined 水位、冷登录等待投影有截止、
+  Remote strict 确认超时后 Sync 冻结、finalizer 与投影器并发发布、被拒绝隔离的 Remote 实体可重载、demo 重连不再移出新连接玩家、零填充尾部、`dataengine.shutdown_timeout` 生效、
+  versionedLock 续期按代际绑定、Prepare 失败 Abort 不占快池续行、sid 作用域 DAO 校验、已提交回复带哨兵、准入冷目标判定不调 Getter。见 [核实记录](docs/review/REVIEW-2026-09-26-v1170-triage.md)。
+- **RR-20260926-48～63**（修复合并后审计）：事务内新建实体交叉创建死锁、已提交事务被重排、WAL terminal 后重复驱逐、停机预算缩放反例、旧连接重同步循环、共享加载与调用方 ctx 解耦、
+  快速重连 `ErrSubjectRetiring`、syncbus 流名隔离、GetOrCreate 瞬时 `ErrEntityRemoved` 有界重试、混合事务 Remote 拒绝、卸载后订阅者重载、装配校验、快池拒绝不就地执行回调、重载窗口可区分、测试与契约收尾。
+- **RR-20260926-64～72**（第二轮审计）：memory handler 新建冲突不重排、嵌套独立事务已提交不重排、按 Mod 生成停机时长、handler 内 Destroy 后重建同 ID 实例取锁、临近截止推送不关健康连接、
+  forget 不清新 subject 的通知器、政策订阅自动重新提交、按 kind 实际 Remote 策略判定、`RegisterAfterRetirement` 退役中返回值。
+- **RR-20260926-73～80**（第三轮审计）：见各记录（修复进行中，合并时补全本条）。
+- `kit/scripts/integration/dataengine-env.sh test` 纳入 `./dataengine/engine` 的真实 Mongo 集成测试（RR-30 新增）。
+
 ## [v1.17.0] - 2026-09-26
 
 > **v1.17.0**。相对 v1.16.1 **含大量破坏性变化**：严格按语义化版本应升大版本，但模块路径保持 v1（v2 需 `/v2` 路径并重写全部 import），
