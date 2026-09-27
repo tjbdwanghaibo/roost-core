@@ -188,6 +188,21 @@ func SyncProject(root string) (SyncResult, error) {
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("snapshot project inputs: %w", err)
 	}
+	// Bring an unedited generated shutdown: block in the application-owned
+	// configs to the current Mods' plan (RR-20260926-66) in the staging tree,
+	// BEFORE anything is rendered: the templates' grace period follows the
+	// configured totals, so rendering them from the refreshed values is what
+	// makes one sync converge (RR-20260926-80). Refreshing in the real project
+	// after the commit — as before — rendered the templates from the old
+	// configs (a service that lost a Mod kept its larger grace period until a
+	// second sync) and wrote the configs outside the commit's rollback and
+	// concurrent-edit checks. The refreshed files are committed with the rest
+	// below; inputs was snapshotted before the refresh, so it still describes
+	// the real project.
+	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest)
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("refresh shutdown.total_timeout: %w", err)
+	}
 	result, err := syncManifest(stage, manifest)
 	if err != nil {
 		return SyncResult{}, err
@@ -206,23 +221,34 @@ func SyncProject(root string) (SyncResult, error) {
 	if err != nil {
 		return SyncResult{}, err
 	}
+	// The refreshed configs are application-owned: commit exactly those, each
+	// guarded by its bytes in the real project like every other change.
+	configChanges, err := planExplicitStagedFiles(absRoot, stage, refreshed...)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	changes, err = mergeSyncChanges(changes, configChanges)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].rel < changes[j].rel })
 	mergeStagedChangesIntoResult(&result, changes)
+	if syncProjectBeforeCommit != nil {
+		syncProjectBeforeCommit()
+	}
 	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
 		return SyncResult{}, err
 	}
 	if err := commitSyncChanges(changes); err != nil {
 		return SyncResult{}, err
 	}
-	// The deployment templates just committed carry each service's grace
-	// period for its current Mods; bring an unedited generated shutdown:
-	// block in the application-owned configs to the same plan (RR-20260926-66).
-	refreshed, err := refreshGeneratedShutdownConfigs(absRoot, manifest)
-	result.Updated = append(result.Updated, refreshed...)
-	if err != nil {
-		return result, fmt.Errorf("refresh shutdown.total_timeout: %w", err)
-	}
 	return result, nil
 }
+
+// syncProjectBeforeCommit, when set by a test, runs after SyncProject has
+// planned every change and before it verifies the project inputs and
+// commits: the window in which a concurrent edit must stop the sync.
+var syncProjectBeforeCommit func()
 
 // planStagedProjectCommit commits only codegen-owned templates and generated
 // outputs. Application-owned source was copied into the staging tree solely so

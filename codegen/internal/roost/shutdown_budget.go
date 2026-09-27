@@ -249,6 +249,10 @@ func shutdownConfigTargets(service string) []struct{ rel, indent string } {
 // A block is rewritten only when it is exactly what the generator wrote for
 // the plan its own summary names — any hand edit, and any block from a
 // generator before RR-20260926-66, is left alone (roost doctor reports those).
+//
+// SyncProject calls it on its staging tree before rendering, so the
+// templates are rendered from the refreshed totals and the returned files
+// are committed with them (RR-20260926-80).
 func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) {
 	var changed []string
 	for _, service := range sortedServiceNames(m) {
@@ -354,15 +358,25 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 // the App is still stopping Mods (templates not synced since a config was
 // raised, or edited by hand). A total that cannot cover the Mods' floors and
 // the declared budget is a WARN: every stop warns and budgets are cut.
+//
+// The WARN judges each of the service's configs in the repository on its own
+// — the dev config, the production example and the k8s secret example — and
+// names every one that falls short (RR-20260926-80): a deployment starts
+// from whichever of them it copies, and reading only config.<svc>.yaml said
+// OK for a project whose examples still carried the old 60s. The OK / WARN
+// line reports the grace period the deployment templates on disk set, which
+// is what the platform waits; it used to print the plan the generator would
+// render now, which differs from the disk until the templates are synced.
 func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 	var items []CheckItem
 	for _, service := range sortedServiceNames(m) {
 		name := "shutdown:" + service
+		deployed := deployedGracePeriods(root, m, service)
 		if configured, from, ok := configuredShutdownTotal(root, service); ok {
 			var short []string
-			for _, deployed := range deployedGracePeriods(root, m, service) {
-				if deployed.grace < configured+generatedGraceOverTotal {
-					short = append(short, fmt.Sprintf("%s grace period %s < total_timeout %s + 5s", deployed.rel, seconds(deployed.grace), seconds(configured)))
+			for _, template := range deployed {
+				if template.grace < configured+generatedGraceOverTotal {
+					short = append(short, fmt.Sprintf("%s grace period %s < total_timeout %s + 5s", template.rel, seconds(template.grace), seconds(configured)))
 				}
 			}
 			if len(short) > 0 {
@@ -372,48 +386,140 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				continue
 			}
 		}
-		rel := "configs/service/config." + service + ".yaml"
-		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			continue // the config check already reports a missing file
-		}
-		var config struct {
-			Shutdown struct {
-				TotalTimeout string `yaml:"total_timeout"`
-			} `yaml:"shutdown"`
-			DataEngine struct {
-				ShutdownTimeout string `yaml:"shutdown_timeout"`
-			} `yaml:"dataengine"`
-		}
-		if err := yaml.Unmarshal(raw, &config); err != nil {
-			continue // reported by the config check
-		}
-		plan := serviceShutdownPlan(m.withConfiguredShutdown(root), service)
-		total, err := parseConfigDuration(config.Shutdown.TotalTimeout, appDefaultShutdownTotal)
-		if err != nil {
-			items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: shutdown.total_timeout: %v", rel, err)})
-			continue
-		}
-		declared := plan.declared
-		if plan.declaring > 0 {
-			value, err := parseConfigDuration(config.DataEngine.ShutdownTimeout, generatedDataEngineShutdownTimeout)
+		plan := serviceShutdownPlan(m, service)
+		var covered []configuredTotal
+		var shortfalls []string
+		failed := false
+		for index, target := range shutdownConfigTargets(service) {
+			// The dev config comes first and keeps its checks as before: a
+			// missing or unparsable file is the config check's to report, an
+			// invalid duration in it is a FAIL. The examples are deployed as
+			// copies, so a problem in one is a WARN naming that file.
+			dev := index == 0
+			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.rel)))
 			if err != nil {
-				items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", rel, err)})
+				if dev {
+					break // the config check already reports a missing file
+				}
+				continue // this example is not in the repository
+			}
+			settings, err := readShutdownSettings(raw, target.indent != "")
+			if err != nil {
+				if dev {
+					break // reported by the config check
+				}
+				shortfalls = append(shortfalls, fmt.Sprintf("%s: %v", target.rel, err))
 				continue
 			}
-			declared = value * time.Duration(plan.declaring)
+			total, err := parseConfigDuration(settings.Shutdown.TotalTimeout, appDefaultShutdownTotal)
+			if err != nil {
+				if dev {
+					items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err)})
+					failed = true
+					break
+				}
+				shortfalls = append(shortfalls, fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err))
+				continue
+			}
+			declared := plan.declared
+			if plan.declaring > 0 {
+				value, err := parseConfigDuration(settings.DataEngine.ShutdownTimeout, generatedDataEngineShutdownTimeout)
+				if err != nil {
+					if dev {
+						items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err)})
+						failed = true
+						break
+					}
+					shortfalls = append(shortfalls, fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err))
+					continue
+				}
+				declared = value * time.Duration(plan.declaring)
+			}
+			need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
+			if total < need {
+				shortfalls = append(shortfalls, fmt.Sprintf("%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d = %s)",
+					target.rel, seconds(total), plan.mods, seconds(declared), plan.undeclared(), seconds(need)))
+				continue
+			}
+			covered = append(covered, configuredTotal{rel: target.rel, total: total})
 		}
-		need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
 		switch {
-		case total < need:
+		case failed:
+		case len(shortfalls) > 0:
 			items = append(items, CheckItem{Name: name, Status: StatusWarn, Detail: fmt.Sprintf(
-				"%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d = %s); every stop warns and budgets are cut. Set it to %s",
-				rel, seconds(total), plan.mods, seconds(declared), plan.undeclared(), seconds(need), seconds(plan.total))})
-		default:
-			items = append(items, CheckItem{Name: name, Status: StatusOK, Detail: fmt.Sprintf("total_timeout %s, grace period %s", seconds(total), seconds(plan.grace))})
+				"%s; every stop warns and budgets are cut. Set it to %s; %s",
+				strings.Join(shortfalls, "; "), seconds(plan.total), describeDeployedGrace(deployed))})
+		case len(covered) > 0:
+			items = append(items, CheckItem{Name: name, Status: StatusOK, Detail: describeConfiguredTotals(covered) + ", " + describeDeployedGrace(deployed)})
 		}
 	}
 	return items
+}
+
+// shutdownSettings is what the doctor reads from one service config.
+type shutdownSettings struct {
+	Shutdown struct {
+		TotalTimeout string `yaml:"total_timeout"`
+	} `yaml:"shutdown"`
+	DataEngine struct {
+		ShutdownTimeout string `yaml:"shutdown_timeout"`
+	} `yaml:"dataengine"`
+}
+
+// readShutdownSettings parses a service config, or the config.yaml a k8s
+// Secret example carries.
+func readShutdownSettings(raw []byte, secret bool) (shutdownSettings, error) {
+	var settings shutdownSettings
+	if secret {
+		var document struct {
+			StringData map[string]string `yaml:"stringData"`
+		}
+		if err := yaml.Unmarshal(raw, &document); err != nil {
+			return settings, err
+		}
+		raw = []byte(document.StringData["config.yaml"])
+	}
+	err := yaml.Unmarshal(raw, &settings)
+	return settings, err
+}
+
+// configuredTotal is the total_timeout one config file sets.
+type configuredTotal struct {
+	rel   string
+	total time.Duration
+}
+
+// describeConfiguredTotals is "total_timeout 101s" when every config sets the
+// same total, or names each file's value.
+func describeConfiguredTotals(totals []configuredTotal) string {
+	for _, configured := range totals {
+		if configured.total != totals[0].total {
+			parts := make([]string, 0, len(totals))
+			for _, each := range totals {
+				parts = append(parts, each.rel+" "+seconds(each.total))
+			}
+			return "total_timeout " + strings.Join(parts, ", ")
+		}
+	}
+	return "total_timeout " + seconds(totals[0].total)
+}
+
+// describeDeployedGrace is "grace period 106s" when every deployment template
+// on disk waits the same, or names each template's value.
+func describeDeployedGrace(deployed []deployedGrace) string {
+	if len(deployed) == 0 {
+		return "no deployment template on disk sets a grace period"
+	}
+	for _, template := range deployed {
+		if template.grace != deployed[0].grace {
+			parts := make([]string, 0, len(deployed))
+			for _, each := range deployed {
+				parts = append(parts, each.rel+" "+seconds(each.grace))
+			}
+			return "grace period " + strings.Join(parts, ", ")
+		}
+	}
+	return "grace period " + seconds(deployed[0].grace)
 }
 
 func parseConfigDuration(value string, fallback time.Duration) (time.Duration, error) {
