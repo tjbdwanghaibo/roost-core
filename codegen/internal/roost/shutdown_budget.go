@@ -378,6 +378,10 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 // with a bad total_timeout runs on the App's 30s fallback, whose SIGKILL risk
 // the FAIL above already judges (configuredShutdownTotal counts an
 // unparsable total as 30s).
+//
+// RR-20260927-04：WARN 按运行时实际读配置的方式判定——非正的 total_timeout 按 App 兜底的
+// 30s、非正的 dataengine.shutdown_timeout 按 kit/dataengine 兜底的 30s；“Set it to” 的建议值
+// 是每份不足的配置按它自己的声明预算算出的所需 + 余量（各份不同时逐文件列出）。
 func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 	var items []CheckItem
 	for _, service := range sortedServiceNames(m) {
@@ -399,8 +403,9 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 		}
 		plan := serviceShutdownPlan(m, service)
 		var covered []configuredTotal
-		var shortfalls []string // totals that were read and cannot cover the Mods
-		var unreadable []string // examples the doctor cannot parse: file and key only
+		var shortfalls []string      // totals that were read and cannot cover the Mods
+		var advice []configuredTotal // per short file: the total its own declared budgets need
+		var unreadable []string      // examples the doctor cannot parse: file and key only
 		failed := false
 		for index, target := range shutdownConfigTargets(service) {
 			// The dev config comes first and keeps its checks as before: a
@@ -433,6 +438,13 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				unreadable = append(unreadable, fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err))
 				continue
 			}
+			// RR-20260927-04：非正的 total 在 App 里按 30s 兜底（app.App.Execute），上面的 FAIL
+			// 判定（configTotalTimeout）早就这样算；这里原先按 0 判定，把能覆盖 Mod 保底的配置
+			// 报成“覆盖不了”并给建议值。
+			written := total
+			if total <= 0 {
+				total = appDefaultShutdownTotal
+			}
 			declared := plan.declared
 			if plan.declaring > 0 {
 				value, err := parseConfigDuration(settings.DataEngine.ShutdownTimeout, generatedDataEngineShutdownTimeout)
@@ -445,15 +457,23 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 					unreadable = append(unreadable, fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err))
 					continue
 				}
+				// kit/dataengine 对非正值同样兜底 30s（mod.go duration()），按 0 算会漏报。
+				if value <= 0 {
+					value = generatedDataEngineShutdownTimeout
+				}
 				declared = value * time.Duration(plan.declaring)
 			}
 			need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
 			if total < need {
 				shortfalls = append(shortfalls, fmt.Sprintf("%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d = %s)",
-					target.rel, seconds(total), plan.mods, seconds(declared), plan.undeclared(), seconds(need)))
+					target.rel, describeTotal(written, total), plan.mods, seconds(declared), plan.undeclared(), seconds(need)))
+				// RR-20260927-04：建议值 = 这份配置自己的所需（按它写的 dataengine 预算）+ 余量。
+				// 原先用生成公式（dataengine 按常量 30s），调大 dataengine.shutdown_timeout 后
+				// 照着改完仍然 WARN。project sync 的公式不变（OPEN-ITEMS D11）。
+				advice = append(advice, configuredTotal{rel: target.rel, total: need + plan.margin})
 				continue
 			}
-			covered = append(covered, configuredTotal{rel: target.rel, total: total})
+			covered = append(covered, configuredTotal{rel: target.rel, total: total, written: written})
 		}
 		switch {
 		case failed:
@@ -461,7 +481,7 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 			var parts []string
 			if len(shortfalls) > 0 {
 				parts = append(parts, fmt.Sprintf("%s; every stop warns and budgets are cut. Set it to %s",
-					strings.Join(shortfalls, "; "), seconds(plan.total)))
+					strings.Join(shortfalls, "; "), describeAdvice(advice)))
 			}
 			parts = append(parts, unreadable...)
 			parts = append(parts, describeDeployedGrace(deployed))
@@ -506,25 +526,51 @@ func readShutdownSettings(raw []byte, secret bool) (shutdownSettings, error) {
 	return settings, nil
 }
 
-// configuredTotal is the total_timeout one config file sets.
+// configuredTotal is the total_timeout one config file sets: total is what
+// the App runs on, written what the file says (they differ for a non-positive
+// value, which the App replaces with its 30s).
 type configuredTotal struct {
-	rel   string
-	total time.Duration
+	rel     string
+	total   time.Duration
+	written time.Duration
+}
+
+// describeTotal is "101s", or "0s (the App uses 30s)" for a non-positive value.
+func describeTotal(written, total time.Duration) string {
+	if written == total {
+		return seconds(total)
+	}
+	return fmt.Sprintf("%s (the App uses %s)", seconds(written), seconds(total))
 }
 
 // describeConfiguredTotals is "total_timeout 101s" when every config sets the
 // same total, or names each file's value.
 func describeConfiguredTotals(totals []configuredTotal) string {
 	for _, configured := range totals {
-		if configured.total != totals[0].total {
+		if configured.total != totals[0].total || configured.written != totals[0].written {
 			parts := make([]string, 0, len(totals))
 			for _, each := range totals {
-				parts = append(parts, each.rel+" "+seconds(each.total))
+				parts = append(parts, each.rel+" "+describeTotal(each.written, each.total))
 			}
 			return "total_timeout " + strings.Join(parts, ", ")
 		}
 	}
-	return "total_timeout " + seconds(totals[0].total)
+	return "total_timeout " + describeTotal(totals[0].written, totals[0].total)
+}
+
+// describeAdvice is "101s" when every short config needs the same total, or
+// names each file's value ("101s in a, 116s in b").
+func describeAdvice(advice []configuredTotal) string {
+	for _, each := range advice {
+		if each.total != advice[0].total {
+			parts := make([]string, 0, len(advice))
+			for _, file := range advice {
+				parts = append(parts, seconds(file.total)+" in "+file.rel)
+			}
+			return strings.Join(parts, ", ")
+		}
+	}
+	return seconds(advice[0].total)
 }
 
 // describeDeployedGrace is "grace period 106s" when every deployment template

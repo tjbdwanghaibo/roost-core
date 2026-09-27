@@ -602,7 +602,8 @@ k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `Tim
 配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
 改过的段或旧版生成器写的段保持不动，宽限期跟随它们的值。配置段的改写在渲染模板之前、与模板同一次提交（同受回滚与并发输入检查保护），
 增减 Mod 后一次 sync 即收敛、`roost project diff` 为空（RR-20260926-80）。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置
-total + 5s 为 FAIL（未 sync 或手改模板，会被 SIGKILL）；三份配置逐份判定，任一份的 total 覆盖不了 Mod 保底即 WARN 并指明文件；
+total + 5s 为 FAIL（未 sync 或手改模板，会被 SIGKILL）；三份配置逐份判定，任一份的 total 覆盖不了 Mod 保底即 WARN 并指明文件，
+`Set it to` 的建议值按该份配置里实际的 `dataengine.shutdown_timeout` 计算（各份不同时逐文件给出），0 或负的时长按运行时的 30s 兜底判定（RR-20260927-04）；
 示例配置解析失败或时长非法时 WARN 只指明文件与键，不附 `Set it to` 建议（dev 配置时长非法为 FAIL）；
 OK / WARN 行显示磁盘上部署模板的实际宽限期。
 
