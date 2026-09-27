@@ -77,6 +77,7 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 //
 // 在 Nest handler 内调用时：要持久写的实体若已被外层可回滚事务（state / undo）登记回滚快照，在写任何持久记录之前返回
 // ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。
+// 所在消息带 Remote 批次时直接返回 ErrNestedTransactionInRemoteMessage，call 不执行（RR-20260926-75）。
 func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
 	if call == nil {
 		return nil, errors.New("nest: isolated transaction call is nil")
@@ -95,6 +96,13 @@ func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter,
 // 没有 releaseLocks 的广播路径保持锁内提交；有完成池时可转移 WAL 等待和回复所有权，
 // 队列满则在当前 worker 等待。远端批次仍使用原有最终确认协议。
 func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error), observers ...entity.SyncCommitObserver) (ret any, err error) {
+	msg := currentNestDispatchMsg()
+	if msg != nil && msg.txInFlight && msg.RemoteWriteBatch != nil {
+		// 带 Remote 批次的消息里嵌套独立事务：批次只能随消息自己的事务 Commit / Abort。旧实现让嵌套事务经过
+		// finalizeRemoteWriteBatch / commitDurable 的批次分支，替外层 finalize 并置 remoteCommitted，外层失败时批次仍 Commit、
+		// 回复误报已提交（RR-20260926-75）。维护者决定拒绝、不引入嵌套独立批次：call 不执行，不碰批次与 Msg 上的 Remote 事实。
+		return nil, fmt.Errorf("%w: nested %q in message %q", ErrNestedTransactionInRemoteMessage, handler, msg.Name)
+	}
 	var observer entity.SyncCommitObserver
 	if len(observers) > 0 {
 		observer = observers[0]
@@ -119,7 +127,6 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 			originalRelease()
 		}
 	}
-	msg := currentNestDispatchMsg()
 	stages := msg != nil && msg.stageMetrics
 	// 本条消息自己的事务（不是 handler 里嵌套的 RunIsolatedTransaction）才在 Msg 上记录提交事实（RR-20260926-49）。
 	var owner *Msg

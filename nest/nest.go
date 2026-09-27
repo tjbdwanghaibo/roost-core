@@ -87,6 +87,12 @@ var (
 	//   - 是否可能已提交：否。嵌套事务没有写任何持久记录，它的内存修改已撤销；外层事务照常由业务决定继续或失败。
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
+	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）。Remote 批次只随
+	// 消息自己的事务 Commit 或 Abort；嵌套独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
+	// 框架直接拒绝：call 不执行、没有任何提交、批次与消息的 Remote 状态不变。
+	//   - 是否可能已提交：否。独立事务没有执行；消息自己的事务照常由业务决定继续或失败，其 Remote 批次按它的结果 Commit / Abort。
+	//   - 能否重试：原样重试仍会被拒绝（结构性限制）。把写入并入消息自己的事务，或放到不声明 Remote 目标的消息里执行。
+	ErrNestedTransactionInRemoteMessage = errors.New("nest: nested isolated transaction is not supported in a message with a remote write batch")
 )
 
 func NewParamCountMismatchError(handler string, got int, want int) error {
