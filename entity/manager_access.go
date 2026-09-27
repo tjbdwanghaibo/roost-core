@@ -65,6 +65,30 @@ type entityLoadFlight struct {
 	leaderMu   sync.Mutex
 	leaderRun  func(func()) error
 	leaderGone bool
+
+	// leaderSteps / leaderAway（RR-20260927-27）：领头方在 Nest 之外、没有指定执行器、并且持有实体锁时非 nil。
+	// 它仍在等待时，加载里的本地步骤经 leaderSteps 交回领头方自己的 goroutine 执行——RR-54 之前发布就在那里，
+	// 可重入锁不阻塞；领头方离开时关闭 leaderAway，之后的步骤改走绑定的快池入口或就地执行。
+	leaderSteps chan *leaderLocalStep
+	leaderAway  chan struct{}
+}
+
+// leaderLocalStep 是交给领头方 goroutine 执行的一个本地步骤；fn 的 panic 带回加载 goroutine，按加载 panic 处理。
+type leaderLocalStep struct {
+	fn        func()
+	done      chan struct{}
+	panicked  bool
+	recovered any
+}
+
+func (step *leaderLocalStep) run() {
+	defer close(step.done)
+	defer func() {
+		if r := recover(); r != nil {
+			step.panicked, step.recovered = true, r
+		}
+	}()
+	step.fn()
 }
 
 func NewManagerAccess(manager *EntityManager) *ManagerAccess {
@@ -276,6 +300,10 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 			}
 		}
 		flight = &entityLoadFlight{done: make(chan struct{}), leaderRun: localExecutorOf(ctx)}
+		if flight.leaderRun == nil && currentGoroutineHoldsEntityLocks() {
+			flight.leaderSteps = make(chan *leaderLocalStep)
+			flight.leaderAway = make(chan struct{})
+		}
 		if access.flights == nil {
 			access.flights = make(map[int64]*entityLoadFlight)
 		}
@@ -286,18 +314,35 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 		go access.runEntityLoad(ctx, fctx.CaptureSnapshot(), fullID, kind, binding, flight)
 	}
 
-	select {
-	case <-flight.done:
-		if !joined && flight.panicked {
-			panic(flight.err)
-		}
-		return flight.value, flight.err
-	case <-ctx.Done():
-		if !joined {
-			flight.leaderLeft()
-		}
-		return nil, ctx.Err()
+	// 只有领头方接收交回的本地步骤；nil channel 的分支永不就绪。领头方执行步骤期间不看 ctx，
+	// 所以它按自己的 ctx 离开最多晚一个本地步骤（与 Nest 领头方等快续行结束相同）。
+	var steps chan *leaderLocalStep
+	if !joined {
+		steps = flight.leaderSteps
 	}
+	for {
+		select {
+		case <-flight.done:
+			if !joined && flight.panicked {
+				panic(flight.err)
+			}
+			return flight.value, flight.err
+		case step := <-steps:
+			step.run()
+		case <-ctx.Done():
+			if !joined {
+				flight.leaderLeft()
+			}
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// currentGoroutineHoldsEntityLocks 报告当前 goroutine 的 GuardScope 是否持有实体锁（RR-20260927-27）。
+// 不持锁的领头方，加载里的发布无论在哪个 goroutine 上都等不到它，保持 RR-54 的就地执行。
+func currentGoroutineHoldsEntityLocks() bool {
+	scope := CurrentGuardScope()
+	return scope != nil && scope.guard != nil && scope.guard.GuardedCount() > 0
 }
 
 // runEntityLoad 在自己的 goroutine 上执行一次共享加载并结束 flight。它不是快 worker：LoadEntity 里
@@ -347,21 +392,35 @@ func localExecutorOf(ctx context.Context) func(func()) error {
 	return run
 }
 
-// runLocal 是共享加载 ctx 上的本地执行器。领头方仍在等待时沿用它自己的执行器（未指定则就地执行，
-// 与修前相同），并在执行期间持有 leaderMu，领头方此时离开要等这一步结束；领头方离开后改走
-// ManagerAccess 绑定的快池入口，未绑定时就地执行。
+// runLocal 是共享加载 ctx 上的本地执行器。领头方仍在等待时：
+//   - 它指定了执行器（Nest 慢阶段的快续行）：沿用它，执行期间持有 leaderMu，领头方此时离开要等这一步结束；
+//   - 它在 Nest 之外、持有实体锁（leaderSteps 非 nil）：把步骤交回领头方 goroutine 执行（RR-20260927-27）；
+//   - 其余（Nest 之外、不持锁）：就地执行。
+//
+// 领头方离开后改走 ManagerAccess 绑定的快池入口，未绑定时就地执行。
+//
+// RR-20260927-27：之前 Nest 之外的领头方也是“持 leaderMu 就地执行”。发布若要锁领头方正持有的实体，加载 goroutine
+// 在发布里等那把锁，领头方在等加载；它的 ctx 到期后 leaderLeft 又要等 leaderMu——永久死锁，RR-54“领头方按自己的
+// ctx 离开”不成立。RR-54 之前发布在领头方 goroutine 上，可重入锁不阻塞；现在交回那里执行，不持 leaderMu 等待。
+// 领头方不会是快 worker（快阶段 Getter 不冷加载），在它的 goroutine 上执行本地步骤不属于快池内等待。
 func (flight *entityLoadFlight) runLocal(access *ManagerAccess) func(func()) error {
 	return func(fn func()) error {
-		flight.leaderMu.Lock()
-		if !flight.leaderGone {
-			defer flight.leaderMu.Unlock()
-			if flight.leaderRun != nil {
-				return flight.leaderRun(fn)
+		if flight.leaderSteps != nil {
+			if flight.runOnLeader(fn) {
+				return nil
 			}
-			fn()
-			return nil
+		} else {
+			flight.leaderMu.Lock()
+			if !flight.leaderGone {
+				defer flight.leaderMu.Unlock()
+				if flight.leaderRun != nil {
+					return flight.leaderRun(fn)
+				}
+				fn()
+				return nil
+			}
+			flight.leaderMu.Unlock()
 		}
-		flight.leaderMu.Unlock()
 		if run := access.localExecutor.Load(); run != nil {
 			return (*run)(fn)
 		}
@@ -370,12 +429,32 @@ func (flight *entityLoadFlight) runLocal(access *ManagerAccess) func(func()) err
 	}
 }
 
-// leaderLeft 在领头方按自己的 ctx 离开时调用：之后的本地步骤不再使用它的执行器。
+// runOnLeader 把 fn 交给仍在等待的领头方 goroutine 执行并等它完成；领头方已离开、没有接手时返回 false，
+// 由调用方改走领头方离开后的路径。fn 的 panic 在加载 goroutine 上重新抛出，由 runEntityLoad 按加载 panic 处理。
+func (flight *entityLoadFlight) runOnLeader(fn func()) bool {
+	step := &leaderLocalStep{fn: fn, done: make(chan struct{})}
+	select {
+	case flight.leaderSteps <- step:
+	case <-flight.leaderAway:
+		return false
+	}
+	<-step.done
+	if step.panicked {
+		panic(step.recovered)
+	}
+	return true
+}
+
+// leaderLeft 在领头方按自己的 ctx 离开时调用（每个 flight 至多一次）：之后的本地步骤不再使用它的执行器，
+// 也不再交给它的 goroutine。
 func (flight *entityLoadFlight) leaderLeft() {
 	flight.leaderMu.Lock()
 	flight.leaderGone = true
 	flight.leaderRun = nil
 	flight.leaderMu.Unlock()
+	if flight.leaderAway != nil {
+		close(flight.leaderAway)
+	}
 }
 
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {
