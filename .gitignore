@@ -21,3 +21,6 @@ gapmap-report.md
 
 # Local raw regression logs and source backups; portable evidence lives in docs.
 /artifacts/perf/core-nine-validation/
+
+# Locally built glsvet binary; the formal entry is `go run ./cmd/glsvet` (OPEN-ITEMS A05).
+/glsvet
