@@ -14,12 +14,16 @@ import (
 const NestSyncTimeout = 5 * time.Second
 
 var (
-	ErrHandlerNotFound                = errors.New("nest: handler not found")
-	ErrInvalidMessage                 = errors.New("nest: invalid message")
-	ErrGetterNotSet                   = errors.New("nest: entity getter not set")
-	ErrQueueFull                      = errors.New("nest: dispatch queue full")
-	ErrEntityNotFound                 = errors.New("nest: entity not found")
-	ErrEntityTypeMismatch             = errors.New("nest: entity type mismatch")
+	ErrHandlerNotFound    = errors.New("nest: handler not found")
+	ErrInvalidMessage     = errors.New("nest: invalid message")
+	ErrGetterNotSet       = errors.New("nest: entity getter not set")
+	ErrQueueFull          = errors.New("nest: dispatch queue full")
+	ErrEntityNotFound     = errors.New("nest: entity not found")
+	ErrEntityTypeMismatch = errors.New("nest: entity type mismatch")
+	// ErrLockTimeout 是取锁超时 / 锁冲突类暂时性错误。只有回复不带任何“可能已提交”哨兵（ErrCommitIndeterminate、
+	// entity.ErrRemotePersistenceIndeterminate、ErrAfterCommitFailed、ErrNestedTransactionCommitted），也不带
+	// ErrNonRollbackNotRequeued 或不带锁超时形态的 ErrCreatedEntityLockConflict 时，它才表示“未提交（未开始或已回滚）、
+	// 框架已自动重排到上限”，可以重试；链上有前述哨兵时以它们为准（RR-20260926-77，判别表见 docs/USER_GUIDE.md §4）。
 	ErrLockTimeout                    = errors.New("nest: lock timeout")
 	ErrNestTimeout                    = errors.New("nest: sync timeout")
 	ErrNestCanceled                   = errors.New("nest: sync canceled")
@@ -40,6 +44,9 @@ var (
 	// after-commit callbacks panicked. The committed state stands; what failed
 	// is work that ran after it, and the caller needs to know the difference
 	// from a rollback (RR-20260911-06).
+	//   - 是否可能已提交：已提交（消息自己的事务）。能否重试：不得重试。
+	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，
+	//     所以判断“是否可能已提交”不能只看它（RR-20260926-77）。
 	ErrAfterCommitFailed = errors.New("nest: transaction committed but after-commit work failed")
 	// ErrEntityReleaseFailed 表示准入后的解锁 hook 失败。它不表示事务被拒绝，
 	// 调用方仍需检查同时返回的 ErrCommitIndeterminate，不能据此重试整笔业务。
@@ -63,21 +70,28 @@ var (
 	// commit bytes may have reached durable media. The process must be fenced
 	// and recovered from WAL; rolling the in-memory state back could create a
 	// second, conflicting history.
+	//   - 是否可能已提交：可能。能否重试：不得重试，等实例从 WAL 恢复后按业务幂等键核对。
+	//   - 消息自己的事务与 handler 内嵌套独立事务结果未知时都已 fence 引擎（RR-20260926-76）。
 	ErrCommitIndeterminate = errors.New("nest: transaction commit outcome is indeterminate")
 	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用
 	// （RR-20260926-48 / 64）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
 	// 不能回滚的 handler（RollbackNone、memory 快路径）不带 ErrLockTimeout：冲突前的内存修改已生效且不撤销，
 	// 消息不自动重排，这个错误原样（或补在业务错误上）回复调用方；是否重试由业务按 handler 的幂等性决定。
+	//   - 是否可能已提交：两种形态本身都未提交。但“与 ErrLockTimeout 并存 = 已回滚、已重排到上限”只在不带
+	//     ErrNestedTransactionCommitted 时成立：外层已有嵌套提交时同样两者并存，却是“已回滚、未重排、嵌套部分已提交”（RR-20260926-77）。
+	//   - 能否重试：带 ErrLockTimeout 且不带任何“可能已提交”哨兵时可重试；不带 ErrLockTimeout 时框架未重排、修改未回滚，
+	//     业务确认 handler 幂等后才可重试。
 	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
 	// ErrNestedTransactionCommitted 表示这条消息自己的事务没有提交（回滚或失败），但 handler 内嵌套的独立事务
 	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）。消息按已越过提交点处理，框架不自动重排；
 	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
+	//   - 是否可能已提交：是（嵌套部分已提交或结果未知）。能否重试：不得整笔重试，即使链上同时有 ErrLockTimeout（RR-20260926-77）。
 	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
 	// ErrNonRollbackNotRequeued 表示不能回滚的 handler（memory 快路径，或消息自己的事务是 RollbackNone）已经开始执行后，
 	// 以锁超时 / 组迁移类暂时性错误失败（RR-20260926-73）。可回滚的事务遇到这类错误会整条回滚后由 Nest 自动重新准入；
 	// 这里 handler 失败前已做的内存修改不撤销，重排会让它们重复生效，所以框架不重排，原因错误（如 ErrLockTimeout）保留在链上。
 	//   - 是否可能已提交：消息自己的事务没有提交（memory 快路径未准入、Remote 批次已 Abort），但失败前的内存修改仍在；
-	//     若同时带 ErrNestedTransactionCommitted，嵌套独立事务可能已提交。
+	//     消息已越过提交点（例如嵌套独立事务已提交）时不补本哨兵，由 ErrNestedTransactionCommitted 等说明。
 	//   - 能否重试：框架不重试。业务确认 handler 幂等（或先读回实体当前状态）后才能自行重试，不能按“锁超时=未执行”盲目重发。
 	// handler 开始执行之前的准入失败（声明目标取锁超时、组迁移待定等）不带它，照常由 Nest 重新准入。
 	ErrNonRollbackNotRequeued = errors.New("nest: handler cannot roll back; transient failure after it started was not requeued")

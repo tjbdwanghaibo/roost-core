@@ -79,7 +79,8 @@ handler 内新建实体的锁持有到 handler 结束（memory handler 也一样
 新实体的锁组高于 handler 已持有的全部锁组时等待；否则（与声明目标同组或更低组，最常见的写法）只尝试加锁，被其他 handler 占用时
 `Create` 返回满足 `errors.Is(err, nest.ErrCreatedEntityLockConflict)` 的错误。可回滚（state / undo）的事务里它同时满足
 `errors.Is(err, nest.ErrLockTimeout)`，事务整条回滚后自动重新准入——即使业务吞掉了这个错误；重排后排到同 ID 后继之后，
-多次仍冲突时调用方收到锁超时（[RR-20260926-48](bugfix/RR-20260926-48.md)）。
+多次仍冲突时调用方收到锁超时（[RR-20260926-48](bugfix/RR-20260926-48.md)）。例外：同一消息里嵌套独立事务已经提交时消息不再重排，
+回复同样两者并存但另带 `ErrNestedTransactionCommitted`，表示“已回滚外层、未重排、嵌套部分已提交”，按下文判别表处理。
 不能回滚的 handler（rollback=none，即 memory 快路径）冲突前的内存修改不会撤销，所以框架**不**自动重排这条消息：
 `Create` 的错误不带 `ErrLockTimeout`，请直接返回它，调用方收到 `ErrCreatedEntityLockConflict`；业务改返回别的锁超时类错误时，
 回复同样补上该哨兵、不重排。是否重试由业务按 handler 的幂等性决定（[RR-20260926-64](bugfix/RR-20260926-64.md)）。
@@ -95,6 +96,30 @@ handler 内先 `Destroy` 某个实体、再新建同 ID 的实体时，新实例
 生成 Lifecycle 的 `GetOrCreate` 在同 ID 的上一个实例正在撤销 / 销毁收尾（`entity.ErrEntityRemoved`）时最多再试两次，已生成的工程重新运行生成器即可获得（[RR-20260926-57](bugfix/RR-20260926-57.md)）。
 
 结果不确定时框架 fence 实例，不进行猜测性回滚。业务必须把“服务暂不可用”和“业务失败”分成不同错误码。
+
+### 回复错误判别：是否可能已提交、能否重试
+
+`Nest.Request` 等返回的错误可能同时满足多个哨兵（原因链保留），**只看有没有 `ErrAfterCommitFailed` 不够**：嵌套独立事务已提交时
+回复是 `ErrNestedTransactionCommitted` 包着外层原因（可能正是 `ErrLockTimeout`），并不带 `ErrAfterCommitFailed`。
+按下表**从上到下取第一个命中的行**（全部用 `errors.Is`，不要匹配文本）。规则：**带任一“可能已提交”哨兵（前 4 行）即不得重试**，
+即使链上同时有 `ErrLockTimeout`；第 5、6 行“框架没有重排、修改未回滚”也不得盲目重试（[RR-20260926-77](bugfix/RR-20260926-77.md)）。
+
+| # | 回复满足 `errors.Is(err, …)` | 含义 | 是否可能已提交 | 能否重试 |
+| --- | --- | --- | --- | --- |
+| 1 | `nest.ErrCommitIndeterminate` | 消息自己的事务或 handler 内嵌套独立事务的提交结果未知；引擎已 fence（RR-76） | **可能** | 不得重试；等实例从 WAL 恢复后按业务幂等键核对 |
+| 2 | `entity.ErrRemotePersistenceIndeterminate` | 本地已持久提交，Remote 远端确认超时 / 结果未知（RR-37） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
+| 3 | `nest.ErrAfterCommitFailed` | 消息自己的事务已提交，收尾（release hook、AfterCommit、Close、引用释放）失败（RR-46 / 53） | **已提交** | 不得重试 |
+| 4 | `nest.ErrNestedTransactionCommitted` | 消息自己的事务没提交，但 handler 内嵌套独立事务已提交或结果未知；消息未重排（RR-65） | **部分已提交** | 不得整笔重试 |
+| 5 | `nest.ErrNonRollbackNotRequeued` | 不能回滚的 handler（memory）开始执行后遇锁超时 / 组迁移类错误；未准入，但失败前的内存修改已生效且不撤销，未重排（RR-73） | 未持久提交，修改未回滚 | 框架不重试；确认 handler 幂等（或读回状态）后业务自行重试 |
+| 6 | `nest.ErrCreatedEntityLockConflict`，且不带 `ErrLockTimeout` | 不能回滚的 handler 内新建实体锁冲突，未重排，冲突前的修改未回滚（RR-64） | 同上 | 同上 |
+| 7 | `nest.ErrCreatedEntityLockConflict` 与 `ErrLockTimeout` 并存 | 可回滚事务新建实体冲突：已整条回滚、自动重排仍冲突到上限（RR-48）。只在不命中第 1～4 行时成立——外层已有嵌套提交时同样两者并存，但那是“已回滚、未重排”，按第 4 行 | 否 | 可重试 |
+| 8 | `nest.ErrLockTimeout` / `ErrEntityLockGroupChanged` / `ErrEntityGroupTransitionPending` | 未提交：准入阶段失败，或可回滚事务已回滚；框架已自动重排到上限 | 否 | 可重试 |
+| 9 | `nest.ErrNestedTransactionRollbackConflict` | `RunIsolatedTransaction` 要写外层可回滚事务已快照的实体，写持久记录前被拒绝并自身回滚（RR-74） | 否（嵌套事务） | 原样重试仍被拒；把写入并入外层事务 |
+| 10 | `nest.ErrNestedTransactionInRemoteMessage` | 带 Remote 批次的消息里调用 `RunIsolatedTransaction`，函数体未执行（RR-75） | 否（嵌套事务） | 原样重试仍被拒；把写入并入消息自己的事务 |
+| 11 | `nest.ErrCommitRejected` | 提交被明确拒绝，事务已回滚 | 否 | 看原因：`dataengine.ErrFencedEntityPending` 可重试，其余按业务错误处理 |
+
+第 9、10 行是 `RunIsolatedTransaction` 返回给业务的错误；业务原样回复时，消息自己的事务是否提交仍按其余行判断（这两种情况下嵌套事务
+什么都没提交，不会触发第 4 行）。`ErrNestFenced` 表示实例已 fence、请求未执行，等实例恢复后可重试。
 
 ## 5. Commit、Load 与主动 Flush
 
@@ -253,7 +278,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 
 ## 2026-09-26 Remote 收尾链路（RR-37/38/39/46）
 
-- 已提交的 Remote 请求若收尾失败（Close 释放不完整、release hook 或 AfterCommit 回调异常），回复错误满足 `errors.Is(err, nest.ErrAfterCommitFailed)`，原因仍可 `errors.Is`；Abort、确认结果未知与拒绝的回复不带该哨兵。判断“是否已提交”请用 `errors.Is`，不要匹配错误文本（[RR-20260926-46](bugfix/RR-20260926-46.md)）。纯本地事务同样如此：strict / memory 提交成功、pipelined ticket 持久之后的 release hook、释放或回调失败都带该哨兵，结果未知不带（[RR-20260926-53](bugfix/RR-20260926-53.md)）。已越过提交点的事务，即使错误链里有 `nest.ErrLockTimeout` 也不会被框架自动重新执行（[RR-20260926-49](bugfix/RR-20260926-49.md)）；调用方也不要对带 `ErrAfterCommitFailed` 的回复重试业务。handler 内嵌套的独立事务（`nest.RunIsolatedTransaction`）一旦持久提交（或结果未知），这条消息同样按已越过提交点处理：外层随后失败不再自动重排，回复满足 `errors.Is(err, nest.ErrNestedTransactionCommitted)`（外层原因仍可 `errors.Is`），表示“外层未提交、独立事务已提交”，不要当作什么都没发生重试整笔业务（[RR-20260926-65](bugfix/RR-20260926-65.md)）。外层是可回滚事务（state / undo）时，独立事务不能持久写外层已登记回滚快照的实体（声明目标、外层 Cast / 新建的实体、外层 `MarkPersist` 过的 DAO）：外层失败回滚会把快照恢复到内存、覆盖已持久的结果。这种写在写任何持久记录之前被拒绝，`RunIsolatedTransaction` 返回满足 `errors.Is(err, nest.ErrNestedTransactionRollbackConflict)` 的错误，独立事务自身回滚、什么都没提交，原样重试仍会被拒绝——把写入并入外层事务，或只让独立事务写外层没有捕获的实体（例如在独立事务里 Cast 取得的实体）。外层是 memory handler 时不受此限（[RR-20260926-74](bugfix/RR-20260926-74.md)）。带 Remote 批次（声明了 remote-managed 目标）的消息里不支持嵌套独立事务：`RunIsolatedTransaction` 直接返回满足 `errors.Is(err, nest.ErrNestedTransactionInRemoteMessage)` 的错误，函数体不执行、什么都没提交，Remote 批次只随消息自己的事务提交或撤销；把写入并入消息自己的事务（[RR-20260926-75](bugfix/RR-20260926-75.md)）。handler 内的独立事务（`RunIsolatedTransaction`，以及 memory handler 内新建事务的 `RunDetachedTransaction`）提交结果未知（`ErrCommitIndeterminate`）时，框架在它返回之前就 fence 所在的 Nest 引擎，与消息自己的事务结果未知相同：`NestMgr.FenceError()` 满足 `nest.ErrNestFenced` 与 `nest.ErrCommitIndeterminate`，此后新请求一律被拒，业务吞掉这个错误也一样（[RR-20260926-76](bugfix/RR-20260926-76.md)）。
+- 已提交的 Remote 请求若收尾失败（Close 释放不完整、release hook 或 AfterCommit 回调异常），回复错误满足 `errors.Is(err, nest.ErrAfterCommitFailed)`，原因仍可 `errors.Is`；Abort、确认结果未知与拒绝的回复不带该哨兵。判断“是否已提交”请用 `errors.Is`，不要匹配错误文本（[RR-20260926-46](bugfix/RR-20260926-46.md)）；只看 `ErrAfterCommitFailed` 不够，完整顺序见 §4“回复错误判别”表（[RR-20260926-77](bugfix/RR-20260926-77.md)）。纯本地事务同样如此：strict / memory 提交成功、pipelined ticket 持久之后的 release hook、释放或回调失败都带该哨兵，结果未知不带（[RR-20260926-53](bugfix/RR-20260926-53.md)）。已越过提交点的事务，即使错误链里有 `nest.ErrLockTimeout` 也不会被框架自动重新执行（[RR-20260926-49](bugfix/RR-20260926-49.md)）；调用方也不要对带 `ErrAfterCommitFailed` 的回复重试业务。handler 内嵌套的独立事务（`nest.RunIsolatedTransaction`）一旦持久提交（或结果未知），这条消息同样按已越过提交点处理：外层随后失败不再自动重排，回复满足 `errors.Is(err, nest.ErrNestedTransactionCommitted)`（外层原因仍可 `errors.Is`），表示“外层未提交、独立事务已提交”，不要当作什么都没发生重试整笔业务（[RR-20260926-65](bugfix/RR-20260926-65.md)）。外层是可回滚事务（state / undo）时，独立事务不能持久写外层已登记回滚快照的实体（声明目标、外层 Cast / 新建的实体、外层 `MarkPersist` 过的 DAO）：外层失败回滚会把快照恢复到内存、覆盖已持久的结果。这种写在写任何持久记录之前被拒绝，`RunIsolatedTransaction` 返回满足 `errors.Is(err, nest.ErrNestedTransactionRollbackConflict)` 的错误，独立事务自身回滚、什么都没提交，原样重试仍会被拒绝——把写入并入外层事务，或只让独立事务写外层没有捕获的实体（例如在独立事务里 Cast 取得的实体）。外层是 memory handler 时不受此限（[RR-20260926-74](bugfix/RR-20260926-74.md)）。带 Remote 批次（声明了 remote-managed 目标）的消息里不支持嵌套独立事务：`RunIsolatedTransaction` 直接返回满足 `errors.Is(err, nest.ErrNestedTransactionInRemoteMessage)` 的错误，函数体不执行、什么都没提交，Remote 批次只随消息自己的事务提交或撤销；把写入并入消息自己的事务（[RR-20260926-75](bugfix/RR-20260926-75.md)）。handler 内的独立事务（`RunIsolatedTransaction`，以及 memory handler 内新建事务的 `RunDetachedTransaction`）提交结果未知（`ErrCommitIndeterminate`）时，框架在它返回之前就 fence 所在的 Nest 引擎，与消息自己的事务结果未知相同：`NestMgr.FenceError()` 满足 `nest.ErrNestFenced` 与 `nest.ErrCommitIndeterminate`，此后新请求一律被拒，业务吞掉这个错误也一样（[RR-20260926-76](bugfix/RR-20260926-76.md)）。
 - Durability 1/2（async/strict）的 Remote 写由 WAL 投影器完成确认：投影期间后台收尾不再回源 Mongo、不再隔离实体，投影完成即释放写权限；投影器报告结果未知或超过 `remote_entity.finalize_projection_timeout`（默认 30s）后才回源。同一事务的快照只发布一次（[RR-20260926-38](bugfix/RR-20260926-38.md)）。
 - Remote 写被持久拒绝后，框架在释放写权限后把持有被拒绝修改的实例从本进程内存卸载（不删持久数据，业务收到 `OnDestroy(entity.DestroyReasonMemoryUnload)`；DataEngine 驱逐被跳过的原生步骤留下的实体也改用同一原因），下一次访问从权威重新加载，无需重启。释放写权限到卸载完成之间、以及卸载过程中发起的重载，下一写者得到可 `errors.Is(err, entity.ErrRemoteEntityReloading)` 的**可重试**错误（它包裹 `ErrRemoteFenced`，既有 `errors.Is(err, entity.ErrRemoteFenced)` 判断不变；需要区分时先判断 `ErrRemoteEntityReloading`），稍后重试即得到从权威重载的新实例；仍是 `ErrRemoteFenced` 而不是该哨兵的，是真正的 fence / 隔离（例如结果未知、自定义 loader 不支持卸载），不要按短窗口重试处理（[RR-20260926-62](bugfix/RR-20260926-62.md)）。Sync 与 DataEngine 驱逐同一规则：订阅不注销、不发 remove，重载后原订阅者收到全量（kit 自动 Rebind）；不要在 `DestroyReasonMemoryUnload` 的 `OnDestroy` 里 Unregister。自定义 Remote loader 需实现 `entity.IRemoteEntityUnloader` 才有此行为（`ManagerAccess` 已实现）（[RR-20260926-39](bugfix/RR-20260926-39.md)）。〔更正：“不发 remove”只指卸载本身；仍有订阅者时框架随即重载并全量，重载不了才发 remove，见上条 RR-20260926-59。〕
 - 本地已提交、而 strict 远端确认超时或 Durability 0 结果未知时，请求返回可 `errors.Is(entity.ErrRemotePersistenceIndeterminate)` 的错误；该事务的 Sync 放行与 `AfterCommit` 回调转交 Remote 后台收尾，拿到持久结论后执行一次：已提交则在 Nest 快池执行（时机不早于这次错误回复，可能与回复并发或在其后），被拒绝则不执行且不再冻结同实体后续提交的 Sync——只丢弃被拒绝 Remote 实体本提交的 Sync 内容与兴趣事实，同一事务里已持久提交的本地实体照常同步、其 AOI/关系事实照常生效（[RR-20260926-58](bugfix/RR-20260926-58.md)）；停机前仍无结论则不执行。延迟执行的 AfterCommit 看到原请求的上下文快照（trace、handler 元数据、请求内写入的 fctx KV），其 Base 不继承已结束请求的取消。**停机 / fence 期间提交后回调可能不执行**：持久结论到达时 Nest 已停机或已 fence，框架不会在后台 goroutine 上执行业务回调，该事务的 AfterCommit 不执行、Sync 门保持冻结（重启后实体从权威重载），计数 `remote_entity.deferred_outcome_not_run_total{outcome}` 并记告警日志；需要可靠副作用的业务应使用持久记录 / outbox，而不是依赖“结果未知”的 AfterCommit 最终执行。不要因“结果未知”在别处重复 AfterCommit 的副作用（[RR-20260926-37](bugfix/RR-20260926-37.md)、[RR-20260926-61](bugfix/RR-20260926-61.md)）。
