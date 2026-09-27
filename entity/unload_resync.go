@@ -8,6 +8,7 @@ import (
 	"time"
 
 	flog "github.com/tjbdwanghaibo/roost-core/log"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // 卸载后重载（RR-20260926-59）。
@@ -45,7 +46,17 @@ type UnloadedSubjectSync interface {
 	RetractUnloadedSubject(subjectID int64) bool
 }
 
-// UnloadResyncConfig 限定卸载后重载的资源；零值取默认。
+// UnloadResyncConfig 限定卸载后重载的资源；零值取默认。kit 配置键见 nest.unload_resync.*（RR-20260927-13）。
+//
+// 最坏延迟（RR-20260927-14）：一个实体从登记到得出结论（重载成功或退回 remove）最多
+//
+//	T_entity = Attempts × T_load + Σ_{k=1}^{Attempts-1} min(RetryMin·2^(k-1), RetryMax)
+//
+// T_load 是一次共享冷加载的框架上限（ManagerAccess.ConfigureLoadTimeout，默认 DefaultEntityLoadTimeout 30s）。队列按 FIFO
+// 由 Workers 个 worker 处理，风暴中最后一个被接纳的实体最迟在 ceil((QueueCapacity+Workers)/Workers) × T_entity 后得出结论。
+// 默认值（4 / 4096 / 5、100ms~2s、30s）：T_entity = 5×30s + 1.5s = 151.5s，上界 1025 × 151.5s ≈ 43.1 小时；加载快速失败时
+// （T_load≈0）约 1025 × 1.5s ≈ 26 分钟。上界假设风暴之后没有新的卸载：处理中再次被卸载的实体会再排一轮。
+// 期间订阅者停在旧内容上；积压见 gauge entity.unload_resync.backlog 与 UnloadResyncStats.Backlog。
 type UnloadResyncConfig struct {
 	Workers       int           // 并发重载上限，默认 4
 	QueueCapacity int           // 等待重载的实体数上限，默认 4096；放不下的立即退回 remove
@@ -77,13 +88,19 @@ func (config UnloadResyncConfig) normalized() UnloadResyncConfig {
 
 // UnloadResyncStats 是卸载后重载的累计计数。Scheduled 是登记的重载，Reloaded 是订阅者已接上权威状态，
 // Retracted 是退回 remove（含 Overflow），Failures 是失败的重载尝试，Overflow 是队列放不下的卸载。
+// Backlog 是此刻等待或正在重载的实体数（不是累计值），与 gauge entity.unload_resync.backlog 相同（RR-20260927-14）。
 type UnloadResyncStats struct {
 	Scheduled uint64
 	Reloaded  uint64
 	Retracted uint64
 	Failures  uint64
 	Overflow  uint64
+	Backlog   int
 }
+
+// unloadResyncBacklogMetric 是卸载后重载的积压 gauge：等待或正在重载的实体数。无标签，一个进程一条序列
+// （每个服务一个 ManagerAccess）；停止时归零（RR-20260927-14）。
+const unloadResyncBacklogMetric = "entity.unload_resync.backlog"
 
 type resyncJobState uint8
 
@@ -141,10 +158,18 @@ func (access *ManagerAccess) UnloadResyncStats() UnloadResyncStats {
 	if resync == nil {
 		return UnloadResyncStats{}
 	}
+	resync.mu.Lock()
+	backlog := len(resync.jobs)
+	resync.mu.Unlock()
 	return UnloadResyncStats{
 		Scheduled: resync.scheduled.Load(), Reloaded: resync.reloaded.Load(), Retracted: resync.retracted.Load(),
-		Failures: resync.failures.Load(), Overflow: resync.overflow.Load(),
+		Failures: resync.failures.Load(), Overflow: resync.overflow.Load(), Backlog: backlog,
 	}
+}
+
+// publishBacklogLocked 在 jobs 变化后更新积压 gauge（调用方持有 r.mu）。jobs 按实体去重，含排队、处理中与“再来一轮”。
+func (r *unloadResync) publishBacklogLocked() {
+	metrics.SetGauge(unloadResyncBacklogMetric, nil, int64(len(r.jobs)))
 }
 
 // schedule 在 Unload 里调用（快池）：只查订阅、登记、按需启动 worker，不做 I/O、不等待。
@@ -176,6 +201,7 @@ func (r *unloadResync) schedule(id int64) {
 	r.jobs[id] = resyncQueued
 	r.queue = append(r.queue, id)
 	r.scheduled.Add(1)
+	r.publishBacklogLocked()
 	if r.workers < r.config.Workers {
 		r.workers++
 		r.wg.Add(1)
@@ -206,6 +232,7 @@ func (r *unloadResync) work() {
 			r.queue = append(r.queue, id)
 		} else {
 			delete(r.jobs, id)
+			r.publishBacklogLocked()
 		}
 		r.mu.Unlock()
 	}
@@ -309,6 +336,9 @@ func (r *unloadResync) stop(ctx context.Context) error {
 	r.mu.Lock()
 	r.stopped = true
 	r.queue = nil
+	// 丢弃的排队不再重载；处理中的 worker 结束时按 jobs 缺项处理（delete 空操作），不会再登记。
+	clear(r.jobs)
+	r.publishBacklogLocked()
 	r.mu.Unlock()
 	r.cancel()
 	done := make(chan struct{})
