@@ -365,7 +365,7 @@ API 层再补一刀：handler 内同步跨实体调用直接 panic，从根上�
 
 `invokeWithTransaction` 是全部语义的汇聚点。`DurabilityStrict` 下 `tx.durableCommit` 在**实体锁内**调用 `committer.Commit`：
 
-- committer 明确拒绝 → `ErrCommitRejected`，执行内存回滚，对外报错——世界回到事务前。
+- committer 明确拒绝（以及写任何持久记录之前的其他明确拒绝：Remote 批次定稿失败、fence 之后不再交给 committer 等，RR-20260927-32）→ `ErrCommitRejected`，执行内存回滚，对外报错——世界回到事务前（不能回滚的 memory handler 例外：内存修改不撤销）。
 - committer 报告 `ErrCommitIndeterminate`（fsync 出错，字节可能已到、也可能没到持久介质）→ **不回滚**：`tx.abandon()` 丢弃 undo 与 AfterCommit，内存保持事务后形态，进程应当 `Fence` 停止接流。
 
 为什么不回滚？因为如果 WAL 实际已提交，内存回滚会制造一条与持久历史相反的第二历史，后续事务会在错误状态上继续叠加。唯一诚实的做法是承认"不知道"，把裁决权交给新进程的 WAL replay：replay 到该记录则事务成立，没有则自然消失。这是设计不变量第 2 条的直接实现；`TestIndeterminateCommitDoesNotRollback`（`nest/nest_test.go`）固化了该语义。

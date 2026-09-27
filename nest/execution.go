@@ -269,7 +269,15 @@ func invokeMemoryHandler(handler string, stages bool, call func() (any, error)) 
 }
 
 // rejectCommit 只用于明确拒绝；不确定结果必须 abandon 并交给 fencing/recovery。
+//
+// 走到这里的都是写任何持久记录之前的拒绝：Remote 批次 FinalizeLocked 拒绝、准备提交记录失败、嵌套事务写外层快照（RR-74）、
+// fence 之后不交给 committer（RR-20260927-06）、committer / Enqueue 明确拒绝（acceptPersistence 的失败恒为结果未知，不会到这里）。
+// 统一带 ErrCommitRejected（RR-20260927-32）：之前只有 committer 拒绝带它，其余原样返回，判别表按“从上到下第一个命中”
+// 一行都不命中。只增加 errors.Is 命中，原因链不变；已带时不重复包。
 func (tx *RollbackTx) rejectCommit(cause error) error {
+	if !errors.Is(cause, ErrCommitRejected) {
+		cause = errors.Join(ErrCommitRejected, cause)
+	}
 	if rbErr := tx.Rollback(); rbErr != nil {
 		return errors.Join(cause, ErrRollbackFailed, rbErr)
 	}

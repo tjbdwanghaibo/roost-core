@@ -19,6 +19,8 @@ type fullDocRemoteEntity struct {
 	*testRemoteEntity
 	mu   sync.Mutex
 	a, b string
+	// scope 是提交里 mutation 的 DatabaseScope（缺省 0 = global）；RR-20260927-32 的回归设成 sid，让 FinalizeLocked 按 RR-09 拒绝。
+	scope uint8
 }
 
 const fullDocCollection = "remote_fulldoc"
@@ -43,10 +45,11 @@ func (*fullDocRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcom
 func (e *fullDocRemoteEntity) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, _ entity.RemoteTransactionOutcome) (entity.RemoteCommit, error) {
 	e.mu.Lock()
 	data := []byte(fmt.Sprintf("a=%s;b=%s", e.a, e.b))
+	scope := e.scope
 	e.mu.Unlock()
 	return entity.RemoteCommit{
 		Schema: 1, Codec: 1,
-		Mutations: []entity.RemoteDataMutation{{Collection: fullDocCollection, ID: e.GUId(), Version: lease.BaseVersion + 1, Mask: 1, Data: data}},
+		Mutations: []entity.RemoteDataMutation{{Collection: fullDocCollection, ID: e.GUId(), Version: lease.BaseVersion + 1, Mask: 1, Data: data, DatabaseScope: scope}},
 	}, nil
 }
 

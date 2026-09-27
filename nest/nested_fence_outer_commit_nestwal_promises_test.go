@@ -191,8 +191,9 @@ func TestOuterCommitAfterNestedAcceptFailureIsRefusedBeforeWAL(t *testing.T) {
 			if admitted := wal.Stats().Admitted; admitted != 1 {
 				t.Fatalf("after the engine was fenced the outer transaction was still handed to the WAL: admitted=%d (want 1, the nested record only) reply=%v/%v", admitted, ret, err)
 			}
-			if !errors.Is(err, nest.ErrNestFenced) || !errors.Is(err, nest.ErrNestedTransactionCommitted) || errors.Is(err, nest.ErrCommitIndeterminate) {
-				t.Fatalf("reply=%v/%v: want ErrNestFenced (refused before the committer, so not indeterminate) + ErrNestedTransactionCommitted", ret, err)
+			// RR-20260927-32：交给 committer 之前的拒绝同时带 ErrCommitRejected（判别表仍先命中第 4 行）。
+			if !errors.Is(err, nest.ErrNestFenced) || !errors.Is(err, nest.ErrNestedTransactionCommitted) || !errors.Is(err, nest.ErrCommitRejected) || errors.Is(err, nest.ErrCommitIndeterminate) {
+				t.Fatalf("reply=%v/%v: want ErrNestFenced + ErrCommitRejected (refused before the committer, so not indeterminate) + ErrNestedTransactionCommitted", ret, err)
 			}
 			if pilot.dao.Value != 1 || pilot.dao.Tracker.Version() != 0 {
 				t.Fatalf("outer changes were not rolled back: value=%d version=%d, want 1/0", pilot.dao.Value, pilot.dao.Tracker.Version())

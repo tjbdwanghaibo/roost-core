@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,6 +94,51 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 			}
 		})
 	}
+}
+
+// RR-20260927-32：Remote 批次在 FinalizeLocked（WAL 准入之前）被明确拒绝——这里用 RR-20260927-09 的 sid 作用域拒绝——时，回复之前原样
+// 返回 ErrRemoteManagedServerScopedDAO，判别表一行都不命中。在真实 Nest + 正式 Remote Manager 上断言回复现在按“第一个命中的行”
+// 落在第 11 行（ErrCommitRejected：未提交、已回滚），原因仍可 errors.Is，本地 committer 没收到记录。
+func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow11(t *testing.T) {
+	f, live := newReloadFixture(t, 1996)
+	live.mu.Lock()
+	live.scope = uint8(entity.DatabaseServer)
+	live.mu.Unlock()
+	committer := &countingLocalCommitter{}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithRemoteEntityManager(f.mgr))
+	name := nest.NewHandlerName("reply_sentinels_finalize_rejected")
+	engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+		live.set("sid", "")
+		return "ok", nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	reply, err := engine.Request(ctx, name, live.ID(), nil)
+	cancel()
+	row, hits := firstTableRow(err)
+	t.Logf("reply=%v first-row=%d sentinels=[%s]", reply, row, hits)
+	if !errors.Is(err, entity.ErrRemoteManagedServerScopedDAO) {
+		t.Fatalf("reply err=%v, want errors.Is ErrRemoteManagedServerScopedDAO (fixture: FinalizeLocked must refuse dbscope=sid)", err)
+	}
+	if row != 11 {
+		t.Fatalf("reply err=%v hits decision-table row %d (sentinels %s), want row 11 (ErrCommitRejected)", err, row, hits)
+	}
+	if n := committer.calls.Load(); n != 0 {
+		t.Fatalf("local committer received %d record(s) although FinalizeLocked refused the batch", n)
+	}
+}
+
+// countingLocalCommitter 与 localDurableCommitter 相同（立即持久），另计 Commit 次数。
+type countingLocalCommitter struct{ calls atomic.Int32 }
+
+func (c *countingLocalCommitter) Commit(context.Context, coredata.CommitRecord) error {
+	c.calls.Add(1)
+	return nil
 }
 
 // replySentinels 是 USER_GUIDE §4“回复错误判别”表按行的哨兵（第 7 行是第 6 行加 ErrLockTimeout 的组合，这里按第 6、8 行分别列出）。

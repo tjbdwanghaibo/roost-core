@@ -57,7 +57,11 @@ var (
 	ErrCommitterRequired             = errors.New("nest: durable transaction committer is required")
 	ErrDurableRemoteWriteUnsupported = errors.New("nest: durable remote write requires a lease-aware WAL committer")
 	ErrRemoteBroadcastUnsupported    = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
-	ErrCommitRejected                = errors.New("nest: transaction commit rejected")
+	// ErrCommitRejected 表示事务在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，以及 Remote 批次 FinalizeLocked
+	// 拒绝、准备提交记录失败、嵌套事务写外层快照被拒（ErrNestedTransactionRollbackConflict）、fence 之后不交给 committer
+	// （ErrNestFenced）——后几种从 RR-20260927-32 起同样带本哨兵，原因仍可 errors.Is。
+	//   - 是否可能已提交：否。可回滚事务已回滚；不能回滚的事务（带 Remote 批次的 memory handler）内存修改不撤销。
+	ErrCommitRejected = errors.New("nest: transaction commit rejected")
 	// ErrPipelinedCommitterRequired means a handler declared
 	// DurabilityPipelined but the configured committer does not implement
 	// PipelinedTransactionCommitter. This is a deployment configuration error
