@@ -104,8 +104,12 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	if authority == nil {
 		return nil, errors.New("remote_entity: backend must provide durable write authority")
 	}
+	snapshotL2, err := NewSnapshotL2StoreWithKeyPrefix(deps.Redis, cfg.SnapshotL2TTL, cfg.SnapshotL2KeyPrefix)
+	if err != nil {
+		return nil, err
+	}
 	lockFactory := NewVersionedLockFactory(deps.Redis, authority)
-	manager := NewManager(lockFactory, cfg, localSid, NewSnapshotL2Store(deps.Redis, cfg.SnapshotL2TTL))
+	manager := NewManager(lockFactory, cfg, localSid, snapshotL2)
 	if err := manager.LockFactoryError(); err != nil {
 		return nil, err
 	}

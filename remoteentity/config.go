@@ -10,6 +10,10 @@ type Config struct {
 	SnapshotCacheBytes   int64
 	SnapshotCacheTTL     time.Duration
 	SnapshotL2TTL        time.Duration
+	// SnapshotL2KeyPrefix 是共享 L2 快照键的可选部署前缀（kit：remote_entity.snapshot_l2_key_prefix）。
+	// 空（默认）时键为 remote_entity:snapshot:…，与旧版本逐字相同、无需迁移；共用一个 Redis db 的多个部署
+	// 应各自配置不同前缀，否则彼此读写同一份 L2 快照（RR-20260927-17）。同一部署的所有节点必须一致。
+	SnapshotL2KeyPrefix  string
 	SnapshotInterestTTL  time.Duration
 	SnapshotInterestKeys int
 	SnapshotInterestSubs int

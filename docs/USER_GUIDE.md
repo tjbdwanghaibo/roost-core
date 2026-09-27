@@ -143,6 +143,13 @@ Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带
 
 Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是共享 snapshot store。`Cached` 不回源，`Monotonic` 在版本不足时 singleflight 回源，`Linearizable` 每次读权威存储。高频展示、排行榜引用和 AOI 属性优先 Cached/Monotonic；结算前校验使用 Linearizable 或转成 owner 命令。
 
+L2 快照键默认是 `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<policy>`，不带部署前缀。多个部署共用一个 Redis db 时，给每个部署配置不同的
+`remote_entity.snapshot_l2_key_prefix`（例如 `roost:<工程名>`，core 为 `Config.SnapshotL2KeyPrefix`），键变为 `<prefix>:remote_entity:snapshot:…`，
+否则彼此读写同一份快照。缺省为空时键与旧版本逐字相同，不需要迁移。同一部署的所有节点必须配置同一个值：新设或修改前缀相当于换一套空的 L2（快照会从权威重新发布），
+滚动修改期间新旧节点互相看不到对方写入的 L2，`Cached` 读可能在 `snapshot_l2_ttl` 内读到旧前缀下的旧快照，所以应整体重启。前缀不能含空白，
+也不能含 Redis Cluster hash tag（`{…}`，L2 脚本只操作单键，带 tag 会把全部快照键钉在同一个槽），Init / Assemble 拒绝这类值（[RR-20260927-17](bugfix/RR-20260927-17.md)）。
+这个前缀只作用于 L2 快照键；Remote 的锁键仍由 `remote_entity.lock_key` 决定，非 authority 兼容装配的 Redis 所有权标记键由 `NewRedisMarker` 的 key 参数决定（默认 `remote_entity:marks`）。
+
 Write 模式使用 Mongo 持久所有权；共享写先竞争 Redis 协调锁，再取得 Mongo majority 写许可，owner-routed 写也取得持久许可，然后权威加载 → Nest 事务修改 → 条件提交。存储条件同时包含 StateVersion、MarkerEpoch、LockFence、RouteEpoch。分布式锁只避免同时进入临界区，四维 fence 才能拒绝暂停后恢复的旧 owner 或旧路由写入。
 
 正式 Assembly 要求持久权威能力；MongoCommitter 创建即强制校验许可，WriteAuthority() 只返回能力，没有弱校验开关。当前未部署，不提供旧协议迁移入口；不支持的元数据拒绝启动，见 [提交契约](bugfix/RR-20260925-02.md)。

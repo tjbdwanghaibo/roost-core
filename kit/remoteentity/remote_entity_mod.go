@@ -124,6 +124,15 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if ttl := cfg.GetDuration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
 		m.cfg.SnapshotL2TTL = ttl
 	}
+	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
+	// nats.prefix 只管 NATS 且缺省即 "roost"，remote_entity.lock_key 是锁身份（Cluster 下必须带 hash tag）。
+	// 从后两者派生都会让已配置它们的部署升级后换键，所以单列一项、缺省为空：不配置时键与旧版本逐字相同。
+	if prefix := cfg.GetString("remote_entity.snapshot_l2_key_prefix"); prefix != "" {
+		if err := coreremote.ValidateSnapshotL2KeyPrefix(prefix); err != nil {
+			return fmt.Errorf("remote_entity.snapshot_l2_key_prefix: %w", err)
+		}
+		m.cfg.SnapshotL2KeyPrefix = prefix
+	}
 	if ttl := cfg.GetDuration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
 		m.cfg.SnapshotInterestTTL = ttl
 	}

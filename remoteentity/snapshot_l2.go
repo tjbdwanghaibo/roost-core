@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -76,6 +77,9 @@ return 1
 type remoteSnapshotL2Store struct {
 	redis remoteSnapshotRedis
 	ttl   time.Duration
+	// keyPrefix 为空时键与旧版本逐字相同（remote_entity:snapshot:…）；非空时键为 "<keyPrefix>:remote_entity:snapshot:…"，
+	// 让共用一个 Redis db 的多个部署不共享 L2 快照（RR-20260927-17）。
+	keyPrefix string
 }
 
 type remoteSnapshotL2Value struct {
@@ -103,11 +107,35 @@ func NewSnapshotL2Store(redis remoteSnapshotRedis, ttl time.Duration) *remoteSna
 	return &remoteSnapshotL2Store{redis: redis, ttl: ttl}
 }
 
+// NewSnapshotL2StoreWithKeyPrefix 与 NewSnapshotL2Store 相同，另给全部 L2 快照键加部署前缀（Config.SnapshotL2KeyPrefix）。
+// 前缀为空时等同 NewSnapshotL2Store，键不变。前缀先经 ValidateSnapshotL2KeyPrefix 校验。
+func NewSnapshotL2StoreWithKeyPrefix(redis remoteSnapshotRedis, ttl time.Duration, prefix string) (*remoteSnapshotL2Store, error) {
+	if err := ValidateSnapshotL2KeyPrefix(prefix); err != nil {
+		return nil, err
+	}
+	return &remoteSnapshotL2Store{redis: redis, ttl: ttl, keyPrefix: prefix}, nil
+}
+
+// ValidateSnapshotL2KeyPrefix 校验 L2 快照键前缀：可以为空（键不变）；非空时不能有首尾空白或内部空白，
+// 也不能含 Redis Cluster hash tag 的花括号——L2 脚本只操作单键，不需要同槽，带 hash tag 会把全部快照键钉在同一个槽上。
+func ValidateSnapshotL2KeyPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if strings.TrimSpace(prefix) != prefix || strings.ContainsAny(prefix, " \t\r\n") {
+		return fmt.Errorf("remote_entity: snapshot L2 key prefix %q must not contain whitespace", prefix)
+	}
+	if strings.ContainsAny(prefix, "{}") {
+		return fmt.Errorf("remote_entity: snapshot L2 key prefix %q must not contain a Redis Cluster hash tag; L2 scripts touch one key and a tag would pin every snapshot key to one slot", prefix)
+	}
+	return nil
+}
+
 func (s *remoteSnapshotL2Store) Get(ctx context.Context, key entity.RemoteSnapshotKey) (entity.RemoteSnapshotEnvelope, bool, error) {
 	if s == nil || s.redis == nil || !key.Valid() {
 		return entity.RemoteSnapshotEnvelope{}, false, nil
 	}
-	raw, err := s.redis.HGet(ctx, remoteSnapshotL2Key(key), "data")
+	raw, err := s.redis.HGet(ctx, s.key(key), "data")
 	if err != nil {
 		if errors.Is(err, rediscore.ErrNil) {
 			return entity.RemoteSnapshotEnvelope{}, false, nil
@@ -155,7 +183,7 @@ func (s *remoteSnapshotL2Store) Set(ctx context.Context, value entity.RemoteSnap
 	ttlMillis := s.ttl.Milliseconds()
 	// RemoteChecksum 是 BSON 专用命名类型，Redis 不接受它作为脚本参数。
 	// 转为精确十进制串，沿用既有 checksum 格式并保留完整 uint64 范围。
-	result, err := s.redis.Eval(ctx, remoteSnapshotL2CAS, []string{remoteSnapshotL2Key(value.Key)},
+	result, err := s.redis.Eval(ctx, remoteSnapshotL2CAS, []string{s.key(value.Key)},
 		value.MarkerEpoch, value.RouteEpoch, value.StateVersion, strconv.FormatUint(uint64(value.Checksum), 10), raw, ttlMillis,
 		value.Schema, value.Codec)
 	if err != nil {
@@ -178,7 +206,7 @@ func (s *remoteSnapshotL2Store) Delete(ctx context.Context, key entity.RemoteSna
 	if s == nil || s.redis == nil || !key.Valid() {
 		return nil
 	}
-	_, err := s.redis.Del(ctx, remoteSnapshotL2Key(key))
+	_, err := s.redis.Del(ctx, s.key(key))
 	return err
 }
 
@@ -189,11 +217,19 @@ func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.
 	if s == nil || s.redis == nil || !key.Valid() {
 		return nil
 	}
-	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{remoteSnapshotL2Key(key)}, strconv.FormatUint(version, 10))
+	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10))
 	return err
 }
 
 var _ entity.RemoteSnapshotVersionedDeleter = (*remoteSnapshotL2Store)(nil)
+
+// key 是本 store 的 Redis 键：无前缀时与 remoteSnapshotL2Key 逐字相同。
+func (s *remoteSnapshotL2Store) key(key entity.RemoteSnapshotKey) string {
+	if s.keyPrefix == "" {
+		return remoteSnapshotL2Key(key)
+	}
+	return s.keyPrefix + ":" + remoteSnapshotL2Key(key)
+}
 
 func remoteSnapshotL2Key(key entity.RemoteSnapshotKey) string {
 	return fmt.Sprintf("remote_entity:snapshot:%d:%d:%d:%d:%d", key.Tenant, key.Kind, key.EntityID, key.Scope, key.Policy)
