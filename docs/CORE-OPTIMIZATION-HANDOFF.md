@@ -266,6 +266,6 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260926-80](bug/RR-20260926-80.md) | P4 doctor WARN 只看一份配置、减 Mod 后 sync 不一次收敛 | [修复](bugfix/RR-20260926-80.md)（未发布） |
 | [RR-20260926-81](bug/RR-20260926-81.md) | P3 新建冲突回滚后同 ID 新建拿到 ErrEntityRemoved | [修复](bugfix/RR-20260926-81.md)（未发布） |
 | [RR-20260926-82](bug/RR-20260926-82.md) | P4 dataengine/engine 包测试不能重复运行 | [修复](bugfix/RR-20260926-82.md)（未发布） |
-| [RR-20260926-83](bug/RR-20260926-83.md) | P4 entity 包测试不能重复运行 | 未修复 |
-| [RR-20260926-84](bug/RR-20260926-84.md) | P3（潜在） 收尾阶段 RunIsolatedTransaction 被当成消息自己的事务 | 未修复 |
-| [RR-20260926-85](bug/RR-20260926-85.md) | P4 RR-79 释放通知删掉重开后被撤销的 Direct 绑定 | 未修复 |
+| [RR-20260926-83](bug/RR-20260926-83.md) | P4 entity 包测试不能重复运行 | [修复](bugfix/RR-20260926-83.md)（未发布） |
+| [RR-20260926-84](bug/RR-20260926-84.md) | P3（潜在） 收尾阶段 RunIsolatedTransaction 被当成消息自己的事务 | [修复](bugfix/RR-20260926-84.md)（未发布） |
+| [RR-20260926-85](bug/RR-20260926-85.md) | P4 RR-79 释放通知删掉重开后被撤销的 Direct 绑定 | [修复](bugfix/RR-20260926-85.md)（未发布） |

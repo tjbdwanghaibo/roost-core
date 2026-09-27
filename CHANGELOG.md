@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-> v1.17.0 之后的全部修复（RR-20260926-30、33～82）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、
+> v1.17.0 之后的全部修复（RR-20260926-30、33～85）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、
 > [第二轮](docs/review/REVIEW-2026-09-27-audit2.md)、[第三轮](docs/review/REVIEW-2026-09-27-audit3.md)。升级前先读下面“Changed”。
 
 ### Changed（破坏性 / 行为收紧）
@@ -39,12 +39,16 @@
   判别规则：回复带任一“可能已提交”哨兵即不得重试整笔业务，只看 `ErrAfterCommitFailed` 不够，见 USER_GUIDE §4 判别表（RR-77）。
 - **`dataengine.shutdown_timeout` 不参与生成（RR-20260926-77 更正文档）**：生成公式按 30s 计，只调大它不会改变生成的 `total_timeout` 与宽限期，须同时手动调大 `shutdown.total_timeout` 再 sync。
 
+- **收尾阶段的独立事务不再认领消息（RR-20260926-84）**：独立事务是否属于消息改按入口判定。带 Remote 批次的消息在 post-release / 解锁后回调里调用 `RunIsolatedTransaction` 返回 `ErrNestedTransactionInRemoteMessage`；
+  纯本地消息按嵌套独立事务处理（外层失败回复带 `ErrNestedTransactionCommitted` 而非 `ErrAfterCommitFailed`，结果未知时 fence）。`RunDetachedTransaction` 在无事务的 memory handler 内调用时同样不再认领消息（`skill/combatcomponent` 受此影响：之后业务失败回复带 `ErrNestedTransactionCommitted`，结果未知 fence）。
+- **`entitysync.ReleasedSubscription` 新增 `Stamp` 字段（RR-20260926-85）**：用位置式字面量构造它的仓外代码需改为带字段名；自建政策判定释放应比较戳（`SubscriptionSource.SubscribeStamped`），不再用 `Holds`。
+
 ### Added
 
 - 哨兵：`nest.ErrNonRollbackNotRequeued`、`nest.ErrNestedTransactionRollbackConflict`、`nest.ErrNestedTransactionInRemoteMessage`、`nest.ErrNestedTransactionCommitted`、`nest.ErrCreatedEntityLockConflict`、`entity.ErrRemoteEntityReloading`、`entity.ErrEntityLoadTimeout`、`entity.ErrEntityLoaderStopped`、
   `entitysync.ErrRegistrationCancelled`、`entity.ErrRemoteUnloadUnsupported`、`engine.ErrEntityAggregateCorrupt`。
 - API：`entity.ManagerAccess` 的 `IsLoaded` / `Unload` / `UnloadRemoteEntity` / `ConfigureLoadTimeout` / `ConfigureUnloadResync` / `BindLocalExecutor`；`entitysync.Manager` 的 `Rebind` / `RetractSyncSubject` /
-  `RetractUnloadedSubject` / `SubjectAwaitsReload` / `RegisterAfterRetirement` / `NewSubscriptionSourceWithResubmit`；`NestMgr.RunLocal` / `DurableWatermark`；`entitysync.Manager.NewSubscriptionSourceWithHooks`、`SubscriptionSourceHooks`、`ReleasedSubscription`、`SubscriptionSource.Holds`（RR-79）；`kit/dataengine.Mod.OnEntityLoaded` / `StopBudget`；
+  `RetractUnloadedSubject` / `SubjectAwaitsReload` / `RegisterAfterRetirement` / `NewSubscriptionSourceWithResubmit`；`NestMgr.RunLocal` / `DurableWatermark`；`entitysync.Manager.NewSubscriptionSourceWithHooks`、`SubscriptionSourceHooks`、`ReleasedSubscription`、`SubscriptionSource.Holds`（RR-79）、`SubscriptionStamp`、`ReleasedSubscription.Stamp`、`SubscriptionSource.SubscribeStamped`（RR-85）；`kit/dataengine.Mod.OnEntityLoaded` / `StopBudget`；
   `nestwal.WAL.Terminated`；`driver.JetStreamSyncStream`；`entitysync.SessionOpenRetryable`。
 - 配置：`player_access.tcp.dispatch_timeout` / `login_timeout`（RR-36）、`remote_entity.finalize_projection_timeout`（RR-38）。
 - 指标：`dataengine.fence.evictions.{started,failed}.total`、`nest.remote.deferred_after_commit_error_total`、`nest.remote.post_commit_without_outcome_total`、`remote_entity.rejected_unload{,_error,_unsupported}_total`、
@@ -64,6 +68,8 @@
   配置刷新与模板同一批提交、同受回滚与并发输入检查保护；USER_GUIDE §4 新增“是否已提交 / 能否重试”判别表。
 - **RR-20260926-81**：handler 内新建撞上同 ID 撤销 / 销毁收尾中的实例（锁已释放、removing 标记未清）时，不再返回不重排的 `ErrEntityRemoved`，改为 `nest.ErrCreatedEntityLockConflict`：可回滚事务整条回滚后重新准入，不能回滚的 handler 不重排；Nest 之外行为不变。修复 RR-48 回归的偶发失败。
 - **RR-20260926-82**：dataengine/engine 包测试可重复运行（只改测试）。
+- **RR-20260926-83～85 与复核补修**：entity 包测试可重复运行（只改测试）；收尾阶段独立事务不认领消息；Direct 释放通知不再删掉会话重开 / 重新登记后新做、随即被撤销的绑定（Group / Direct 恢复语义与 RR-70 一致）；
+  Cast 摘除错误带目标 ID（RR-73）；doctor 对读不懂的示例配置只指明文件与键，不再给误导性的建议值（RR-80）。
 - `kit/scripts/integration/dataengine-env.sh test` 纳入 `./dataengine/engine` 的真实 Mongo 集成测试（RR-30 新增）。
 
 ## [v1.17.0] - 2026-09-26
