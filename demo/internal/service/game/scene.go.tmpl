@@ -81,6 +81,12 @@ type Scene struct {
 	// unsubscribe releases this bridge's session-close subscription.
 	unsubscribe func()
 
+	// unloads is the entity runtime's reload of an instance unloaded from
+	// memory only; Start wires it to this manager and stopUnloads is what
+	// that returned (see Start). Nil in a test that builds no runtime.
+	unloads     unloadResyncer
+	stopUnloads func(context.Context) error
+
 	// transitions serializes what changes a player's membership — Join,
 	// Ready, Leave and the disconnect-driven settle — so a removal decided for
 	// an old connection cannot interleave with the Join of a new one
@@ -130,6 +136,13 @@ type scenePusher interface {
 	ActiveSessions(playerID int64) int
 }
 
+// unloadResyncer is the slice of the entity runtime (entity.ManagerAccess)
+// the scene needs to have a player unloaded from memory only reloaded for
+// the ones watching it.
+type unloadResyncer interface {
+	ConfigureUnloadResync(coreentity.UnloadedSubjectSync, coreentity.UnloadResyncConfig) (func(context.Context) error, error)
+}
+
 // sessionSource is the access layer's session lifecycle source. It is an
 // interface so a test can close a session without a socket, and it is
 // separate from scenePusher because a deployment could plausibly have one
@@ -164,10 +177,17 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	} else {
 		slog.Warn("scene: no data engine watermark; replication will not wait for durability")
 	}
+	// The scene's manager is its own, so the framework's reload of a player
+	// unloaded from memory only is wired here, not by the Nest Mod (Start).
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, errors.New("scene: entity runtime is unavailable, so an unloaded player could never be reloaded for the ones watching it")
+	}
 	scene, err := newScene(transport, watermark, lifecycle.WorldSceneConfig())
 	if err != nil {
 		return nil, err
 	}
+	scene.unloads = access
 	// The connection telling us it is gone beats waiting to fail a push to
 	// it: a player who logs off while nothing is happening used to stay in
 	// the scene until somebody else's frame tried to reach them
@@ -245,12 +265,46 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 
 // Start brings the tick up. It is separate from NewScene so a process that
 // failed later in assembly never leaves a replication loop running.
+//
+// It also wires the reload of a player unloaded from memory only — the Data
+// Engine evicting it after a native step it skipped (the gift debit is one,
+// RR-20260926-30), or a Remote write the authority refused (RR-20260926-39).
+// Unloading closes the player's sync state; while anyone still watches it,
+// the framework reloads it from the authority off the fast pool and rebinds
+// this manager's subject to the new instance, so the watchers get its
+// authoritative state as a full update and its changes after that; if it
+// cannot be reloaded they get a remove (RR-20260926-59). The kit's Nest Mod
+// only wires the manager it owns; without this the scene's subject stayed on
+// the closed state and the others kept the last content they had received —
+// possibly an effect that never became the authority — until the player left
+// (RR-20260927-18). One entity runtime takes one such wiring.
 func (bridge *Scene) Start(ctx context.Context) error {
 	if bridge == nil {
 		return errors.New("scene: nil")
 	}
+	if bridge.unloads != nil && bridge.stopUnloads == nil {
+		stop, err := bridge.unloads.ConfigureUnloadResync(bridge.manager, coreentity.UnloadResyncConfig{})
+		if err != nil {
+			return fmt.Errorf("scene: reload of unloaded players: %w", err)
+		}
+		bridge.stopUnloads = stop
+	}
 	if err := bridge.manager.Start(ctx); err != nil {
-		return fmt.Errorf("scene: start replication: %w", err)
+		return errors.Join(fmt.Errorf("scene: start replication: %w", err), bridge.stopUnloadResync(ctx))
+	}
+	return nil
+}
+
+// stopUnloadResync stops the reload: in-flight reloads are abandoned (no
+// remove is sent) and no unload is picked up after it returns.
+func (bridge *Scene) stopUnloadResync(ctx context.Context) error {
+	if bridge.stopUnloads == nil {
+		return nil
+	}
+	err := bridge.stopUnloads(ctx)
+	bridge.stopUnloads = nil
+	if err != nil {
+		return fmt.Errorf("scene: stop the reload of unloaded players: %w", err)
 	}
 	return nil
 }
@@ -266,8 +320,13 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	bridge.mu.Lock()
 	bridge.closed = true
 	bridge.mu.Unlock()
+	// The reload first, the way the kit's Nest Mod stops its own before the
+	// Nest: nothing rebinds or retracts on a manager being closed, and a
+	// reload never runs into a Nest that is stopping (the service shuts down
+	// before its Mods). Its timeout does not keep the manager open.
+	resyncErr := bridge.stopUnloadResync(ctx)
 	bridge.interest.Close()
-	return bridge.manager.Close(ctx)
+	return errors.Join(resyncErr, bridge.manager.Close(ctx))
 }
 
 // Flush runs one replication tick now. The loop does this on its own every

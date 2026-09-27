@@ -250,6 +250,10 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **断线按 Join 代际判定**（RR-20260926-40）：每次 Join（首次登录或重连）有新代际；`SessionLost` 与会话关闭事件只登记“当时的代际”，
   在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接还在时
   玩家留在场景（其他人不会看到它消失），scene 重开它的复制会话并 `Interest.Resubscribe`，活着的客户端收到一次全量快照。
+- **仅内存卸载后重载**（RR-20260927-18）：礼物扣除等原生步骤投影时被 lease fence 跳过，DataEngine 会把含其效果的 Player 从内存卸载
+  （`ManagerAccess.Unload`，RR-20260926-30）。scene 的 Manager 是自建的，kit 的 Nest Mod 不替它接线，所以 `Scene.Start` 自己调
+  `ConfigureUnloadResync`：仍有人看着这个玩家时框架在快池外从 Mongo 重载并 `Rebind`，观察者收到权威全量、之后照常收增量；重载不了收到 remove。
+  `Scene.Close` 先停重载再关 Manager（服务先于 Nest Mod 停止）。一个实体运行时只能接一处，工程若另用 `NewModWithEntitySync`，scene 启动会明确失败。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
   否则推送到了也解不出来、静默丢弃。
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1259,4 +1260,212 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 			t.Fatal("the rejoined player's session opened but its view did not arrive (it should open ready)")
 		}
 	})
+}
+
+// sceneAuthority is the Player's authority, stood in for: an unloaded player
+// comes back from it as a fresh instance — without the effect that was
+// skipped or refused — and is published the way the Data Engine's repository
+// publishes a load (entity.RunLocal, back on the Nest fast pool).
+type sceneAuthority struct {
+	t       *testing.T
+	manager *entity.EntityManager
+	loads   atomic.Int32
+}
+
+func (authority *sceneAuthority) LoadEntity(ctx context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	authority.loads.Add(1)
+	fresh := newScenePlayer(authority.t, entity.GetUniqueIDFromEntityID(id))
+	var added error
+	if err := entity.RunLocal(ctx, func() { added = authority.manager.TryAdd(fresh) }); err != nil {
+		return nil, err
+	}
+	if errors.Is(added, entity.ErrEntityExists) {
+		if existing := authority.manager.Get(id); existing != nil {
+			return existing, nil
+		}
+	}
+	return fresh, added
+}
+
+// sceneFullUpdates decodes what one player received into the subject updates
+// that were full (a snapshot or a whole-state replacement), by subject.
+func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+	t.Helper()
+	out := make(map[int64]bson.M)
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+				if err != nil {
+					t.Fatalf("decode subject update: %v", err)
+				}
+				if !update.Full {
+					continue
+				}
+				var document bson.M
+				if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+					t.Fatalf("decode player sync payload: %v", err)
+				}
+				out[update.SubjectID] = document
+			}
+		}
+	}
+	return out
+}
+
+// OPEN-ITEMS B25 / RR-20260927-18: a player in the scene whose instance is
+// unloaded from memory only — the Data Engine evicting it after a skipped
+// native step (RR-20260926-30; the gift debit is one), or a refused Remote
+// write (RR-20260926-39) — has its sync state closed. The scene's manager is
+// the scene's own, so nothing reloaded the player for the others and nothing
+// bound the reloaded instance to the scene: the others stayed on the content
+// they had last received, which may never have become the authority, and saw
+// no change of that player again until it left. The scene now wires the
+// framework's reload (ConfigureUnloadResync), as the kit Mod does for its
+// own manager: the others get the player's authoritative state as a full
+// update, and its later changes as deltas.
+func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
+	ctx := context.Background()
+	entities := entity.NewEntityManager()
+	access := entity.NewManagerAccess(entities)
+	authority := &sceneAuthority{t: t, manager: entities}
+	unhook, err := access.ConfigureLoader(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unhook)
+	handler.RegisterAddExpNestHandlers()
+	// The Nest binds its fast-pool entry to the entity runtime, so a reload is
+	// published there — the production assembly.
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	// What NewScene does with the process's entity runtime.
+	scene.unloads = access
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const watcherID, moverID = int64(9851), int64(9852)
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	counters := newSceneWorld(t)
+	// The unloaded instance is cleared (its id reads 0 afterwards): name the
+	// player by its id from here on.
+	moverEntity := mover.ID()
+	for _, resident := range []entity.IThreadSafeEntity{watcher, mover, counters} {
+		entities.Add(resident)
+	}
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 520, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(watcherID)
+
+	// The watcher is told of a level-up that will not survive.
+	sender := syncsender.NewAddExpSender(engine)
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stale, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]
+	if !ok {
+		t.Fatal("setup: the watcher did not receive the level-up")
+	}
+
+	// The Data Engine drops the instance from memory, on the fast pool.
+	var unloadErr error
+	if err := engine.RunLocal(ctx, func() { unloadErr = access.Unload(ctx, mover) }); err != nil || unloadErr != nil {
+		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)
+	}
+
+	var reloaded bson.M
+	deadline := time.Now().Add(3 * time.Second)
+	for reloaded == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("the player was unloaded from memory, but the watcher still holds its last content (level %v): no authoritative full update reached it (loads=%d)", stale["level"], authority.loads.Load())
+		}
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		reloaded = sceneFullUpdates(t, recorder.take(watcherID))[moverEntity]
+		time.Sleep(2 * time.Millisecond)
+	}
+	if reloaded["level"] == stale["level"] {
+		t.Fatalf("the full update after the reload carries the level the authority never had: %v", reloaded)
+	}
+	if got := authority.loads.Load(); got != 1 {
+		t.Fatalf("the unloaded player was loaded %d times, want once", got)
+	}
+
+	// The scene follows the reloaded instance: its next change reaches the watcher.
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp after the reload: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]; !ok {
+		t.Fatal("a change on the reloaded player did not reach the watcher: the scene is still bound to the unloaded instance")
+	}
+}
+
+// The scene owns its wiring of the reload for as long as it runs: another
+// wiring on the same entity runtime is refused while it does, and Close
+// stops it (before the manager closes, and before the Nest the service
+// shuts down ahead of), so the runtime can be wired again afterwards.
+func TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses(t *testing.T) {
+	ctx := context.Background()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.unloads = access
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	other, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close(context.Background()) })
+	if stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{}); err == nil {
+		_ = stop(ctx)
+		t.Fatal("a second wiring was accepted while the scene runs: the scene did not wire the reload")
+	}
+	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := scene.Close(closeCtx); err != nil {
+		t.Fatalf("close scene: %v", err)
+	}
+	stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{})
+	if err != nil {
+		t.Fatalf("the scene's wiring is still live after Close: %v", err)
+	}
+	_ = stop(ctx)
 }
