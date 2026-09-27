@@ -16,8 +16,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 type rpcToxiproxy struct{ base string }

@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
-	flock "github.com/tjbdwanghaibo/roost-core/lock"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	flock "github.com/tjbdwanghaibo/roost-core/lock"
 
 	"github.com/spf13/viper"
 )

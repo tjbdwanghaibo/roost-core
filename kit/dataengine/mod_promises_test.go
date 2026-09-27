@@ -10,11 +10,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
 // U-0113 · C2（空洞测试）· nightly gap map kit `dataengine` 10/10。
@@ -53,8 +53,12 @@ func TestModProvideRefusesEachMissingCapability(t *testing.T) {
 	type registration func(*app.Registry)
 	withMongo := func(r *app.Registry) { _ = r.Register(mods.ModMongo, fmongo.IMongo(mongotest.NewClient())) }
 	withJetStream := func(r *app.Registry) { _ = r.Register(mods.ModNatsJetStream, fnats.IJetStream(&modJetStream{})) }
-	withRemote := func(r *app.Registry) { _ = r.Register(mods.ModRemoteEntity, entity.IRemoteEntityManager(remoteManagerStub{})) }
-	withAtomic := func(r *app.Registry) { _ = r.Register(mods.ModRemoteEntityAtomicStore, engine.RemoteProjectionStore(remoteStoreStub{})) }
+	withRemote := func(r *app.Registry) {
+		_ = r.Register(mods.ModRemoteEntity, entity.IRemoteEntityManager(remoteManagerStub{}))
+	}
+	withAtomic := func(r *app.Registry) {
+		_ = r.Register(mods.ModRemoteEntityAtomicStore, engine.RemoteProjectionStore(remoteStoreStub{}))
+	}
 
 	if err := NewMod(WithEntityAccess(access)).Provide(nil); err == nil || !strings.Contains(err.Error(), "nil registry") {
 		t.Fatalf("Provide(nil) = %v", err)

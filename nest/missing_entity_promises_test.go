@@ -23,7 +23,9 @@ import (
 // 返回 error，恰好掩盖了它。
 
 // nilForMissingGetter is the production contract: not found is (nil, nil).
-type nilForMissingGetter struct{ present map[int64]entity.IThreadSafeEntity }
+type nilForMissingGetter struct {
+	present map[int64]entity.IThreadSafeEntity
+}
 
 func (g nilForMissingGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
 	return g.present[id], nil

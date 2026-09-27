@@ -17,9 +17,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/health"
 	"github.com/tjbdwanghaibo/roost-core/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 
 	"github.com/spf13/viper"
 )

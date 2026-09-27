@@ -36,7 +36,9 @@ func TestSyncEntityBuildsAndCarriesItsSyncState(t *testing.T) {
 	// The generated wiring must reach Core's Sync state; compiling is not
 	// enough, because a builder that silently drops the parameter also
 	// compiles.
-	base, ok := built.(interface{ Sync() *entity.SubjectSyncState })
+	base, ok := built.(interface {
+		Sync() *entity.SubjectSyncState
+	})
 	if !ok {
 		t.Fatalf("built entity %T exposes no Sync()", built)
 	}
@@ -75,7 +77,9 @@ func TestPlainEntityHasNoSyncState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build entity: %v", err)
 	}
-	base, ok := built.(interface{ Sync() *entity.SubjectSyncState })
+	base, ok := built.(interface {
+		Sync() *entity.SubjectSyncState
+	})
 	if !ok {
 		t.Fatalf("built entity %T exposes no Sync()", built)
 	}

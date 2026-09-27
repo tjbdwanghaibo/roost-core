@@ -19,8 +19,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
-	coremanager "github.com/tjbdwanghaibo/roost-core/manager"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	coremanager "github.com/tjbdwanghaibo/roost-core/manager"
 
 	"github.com/spf13/viper"
 )

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
 // U-0122 · C5（静默吞错）· classscan C5 扫描 / 观察 O-5。
