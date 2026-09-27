@@ -298,7 +298,6 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
 	}
-	entityID, database, resource := mutation.EntityID, mutation.Database, mutation.Resource
 	if mutation.Key != (dataengine.DocumentKey{}) {
 		if mutation.EntityID != 0 || mutation.Database != "" || mutation.DatabaseScope != 0 || mutation.Resource != "" || mutation.Version != 0 {
 			return dataengine.ErrMixedMutationForms
@@ -306,20 +305,27 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 		if err := dataengine.ValidateMutation(mutation); err != nil {
 			return err
 		}
-		entityID, database, resource = mutation.Key.ID, mutation.Key.Database, mutation.Key.Resource
-	} else if entityID == 0 || resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
+	} else if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
 		return errors.New("nest: invalid entity mutation")
 	}
 	if tx.mutationKeys == nil {
 		tx.mutationKeys = make(map[mutationKey]struct{}, 4)
 	}
-	key := mutationKey{database: database, resource: resource, entityID: entityID}
+	key := keyOfMutation(mutation)
 	if _, exists := tx.mutationKeys[key]; exists {
-		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", database, resource, entityID)
+		return fmt.Errorf("nest: duplicate entity mutation %s/%s/%d", key.database, key.resource, key.entityID)
 	}
 	tx.mutationKeys[key] = struct{}{}
 	tx.mutations = append(tx.mutations, cloneMutation(mutation))
 	return nil
+}
+
+// keyOfMutation 是 AddMutation 去重用的身份：DocumentKey 形式取 Key，旧形式取 EntityID / Database / Resource。
+func keyOfMutation(mutation EntityMutation) mutationKey {
+	if mutation.Key != (dataengine.DocumentKey{}) {
+		return mutationKey{database: mutation.Key.Database, resource: mutation.Key.Resource, entityID: mutation.Key.ID}
+	}
+	return mutationKey{database: mutation.Database, resource: mutation.Resource, entityID: mutation.EntityID}
 }
 
 func (tx *RollbackTx) Emit(effect Effect) error {
@@ -626,8 +632,47 @@ func (tx *RollbackTx) refuseWriteUnderEnclosingRollback() error {
 		if id, ok := outer.restoresWriteOf(tx.participantOrder); ok {
 			return fmt.Errorf("%w: id %d (nested %q, enclosing %s transaction %q)", ErrNestedTransactionRollbackConflict, id, tx.handler, outer.policy, outer.handler)
 		}
+		if id, ok := outer.snapshotsRawMutationOf(tx); ok {
+			return fmt.Errorf("%w: raw mutation for entity %d (nested %q, enclosing %s transaction %q)", ErrNestedTransactionRollbackConflict, id, tx.handler, outer.policy, outer.handler)
+		}
 	}
 	return nil
+}
+
+// snapshotsRawMutationOf 报告 nested 里不经 DAO、由 AddMutation 直接加入的原始 mutation 是否按实体 ID 命中本（外层）事务快照过的
+// 实体（RR-20260927-07）。restoresWriteOf 只看 MarkPersist 登记的 DAO 参与方：嵌套事务用导出的 AddMutation 直写外层已快照实体时，
+// 旧实现照常提交，外层失败回滚后内存与持久分叉（audit4 探针 B）。原始 mutation 没有 DAO 实例可比，只能按实体 ID
+// （DocumentKey 形式取 Key.ID，与 AddMutation 去重的身份一致）。preparePersistence 由 DAO 生成的 mutation 已由 restoresWriteOf
+// 按实例判断，这里按去重身份跳过它们：生成 DAO 的 Id() 是 StorageID，不一定等于实体 ID，按 ID 比较会误判。
+// 仓内生产调用不受影响：msg.go 的 finalizeRemoteWriteBatch 只在消息自己的事务里调用（enclosing 为 nil，带 Remote 批次的消息里
+// 嵌套事务在 runTransaction 入口已被拒绝），persist_change.go 的 preparePersistence 生成的正是被跳过的 DAO mutation。
+func (tx *RollbackTx) snapshotsRawMutationOf(nested *RollbackTx) (int64, bool) {
+	if len(tx.snapshotted) == 0 {
+		return 0, false
+	}
+	for i := range nested.mutations {
+		key := keyOfMutation(nested.mutations[i])
+		if nested.preparedMutationKey(key) {
+			continue
+		}
+		for _, e := range tx.snapshotted {
+			if e.GUId() == key.entityID {
+				return key.entityID, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// preparedMutationKey 报告 key 是否是 preparePersistence 由 DAO 参与方生成的 mutation。AddMutation 按同一身份去重，所以同一 key
+// 在 mutations 里只有一条，命中即说明它来自 DAO。
+func (tx *RollbackTx) preparedMutationKey(key mutationKey) bool {
+	for _, prepared := range tx.preparedMutations {
+		if keyOfMutation(prepared) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // refuseCommitAfterFence 在消息自己的事务交给 committer 之前检查所在引擎是否已 fence（RR-20260927-06）。handler 内嵌套独立

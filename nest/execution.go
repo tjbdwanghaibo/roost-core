@@ -80,7 +80,8 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 // 在 Nest 派发的消息里调用时，它从不认领消息：handler 内，以及消息自己的事务结束之后的收尾阶段（Guard post-release、
 // 解锁后回调）都按嵌套独立事务处理，不改消息自己事务的提交事实（RR-20260926-84）：
 //   - 要持久写的实体若已被外层可回滚事务（state / undo）登记回滚快照，在写任何持久记录之前返回
-//     ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。
+//     ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。不经 DAO、用 AddMutation
+//     直写的原始 mutation 按实体 ID 命中外层已快照的实体时同样拒绝（RR-20260927-07）。
 //   - 所在消息带 Remote 批次（批次尚未收尾）时直接返回 ErrNestedTransactionInRemoteMessage，call 不执行（RR-20260926-75 / 84）。
 //   - 持久提交或结果未知后，消息不再重排，自己的事务没提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
 //   - 提交结果未知（ErrCommitIndeterminate）时，返回之前已 fence 所在的 Nest 引擎，与消息自己的事务相同（RR-20260926-76）；

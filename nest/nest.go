@@ -100,6 +100,7 @@ var (
 	// ErrNestedTransactionRollbackConflict 表示 handler 内嵌套的独立事务（RunIsolatedTransaction）要持久写的实体，已被外层可回滚事务
 	// （RollbackState / RollbackUndo）登记了回滚快照（RR-20260926-74）。外层随后失败回滚会把快照恢复到内存，覆盖嵌套事务已持久的
 	// 结果，所以嵌套事务在写任何持久记录之前被拒绝并自身回滚；外层快照不变。外层是 memory handler（无回滚快照）时不受此限。
+	// 不经 DAO、用 AddMutation 直接加入的原始 mutation 按实体 ID 同样判断（RR-20260927-07）。
 	//   - 是否可能已提交：否。嵌套事务没有写任何持久记录，它的内存修改已撤销；外层事务照常由业务决定继续或失败。
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
