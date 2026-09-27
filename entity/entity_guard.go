@@ -85,9 +85,17 @@ type EntityGuard struct {
 	superseded  []heldEntity
 	postRelease []func()
 	// revokedCreated 是本 Guard 上撤销了发布、收尾（销毁回调、回收 LockManager 条目与 removing 标记）挂在本 Guard
-	// post-release 里尚未执行的新建实体 ID（revokeCreated）。同一 handler 里再建这些 ID 会撞上自己留下的 removing，
-	// 那是确定失败，不是别的持有者的暂时状态（RR-20260927-21）。取走 post-release 回调时清空。
-	revokedCreated []int64
+	// post-release 里尚未执行的新建实体（revokeCreated）。同一 handler 里在同一个 EntityManager 上再建这些 ID 会撞上
+	// 自己留下的 removing，那是确定失败，不是别的持有者的暂时状态（RR-20260927-21）。取走 post-release 回调时清空。
+	// 以（EntityManager, ID）为键（RR-20260928-02）：removing 按 EntityManager 记，Manager A 上的撤销与 Manager B 上
+	// 同 ID 的 removing 无关；之前只按 ID 记，B 上别的持有者的收尾窗口被误判成本 handler 自己撤销。
+	revokedCreated []revokedEntity
+}
+
+// revokedEntity 是本 Guard 上撤销、收尾未执行的一次新建：removing 标记留在 manager 上（RR-20260928-02）。
+type revokedEntity struct {
+	manager *EntityManager
+	id      int64
 }
 
 // heldEntity 是被同 ID 新实例取代、但锁仍由本 Guard 持有的旧实例。id 单独保存：旧实例可能已被清理（ID 归零）。
@@ -516,9 +524,10 @@ func (e *EntityGuard) releaseEntities() []func() {
 	return callbacks
 }
 
-// revokedInThisGuard 报告 id 是否是本 Guard 上撤销、收尾尚未执行的新建实体（RR-20260927-21）。
-func (e *EntityGuard) revokedInThisGuard(id int64) bool {
-	return e != nil && slices.Contains(e.revokedCreated, id)
+// revokedInThisGuard 报告 manager 上的 id 是否是本 Guard 上撤销、收尾尚未执行的新建实体（RR-20260927-21）。
+// 只认同一个 EntityManager 上的撤销（RR-20260928-02）。
+func (e *EntityGuard) revokedInThisGuard(manager *EntityManager, id int64) bool {
+	return e != nil && slices.Contains(e.revokedCreated, revokedEntity{manager: manager, id: id})
 }
 
 func (e *EntityGuard) runPostRelease(callbacks []func()) {

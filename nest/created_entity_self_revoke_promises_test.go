@@ -83,3 +83,64 @@ func TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically(t *testin
 		})
 	}
 }
+
+// RR-20260928-02（OPEN-ITEMS B43）：本 Guard 的撤销记录按 ID 记、不区分 EntityManager，而 removing 按 EntityManager 记。
+// 同一 handler 在 Manager A 上新建 X 后被嵌套事务回滚撤销，随后在 Manager B 上新建同 ID 的 X，而 B 上的 X 正处在别的持有者的
+// Destroy 收尾窗口（B.removing[X]、锁空闲）。B 的 removing 与本 handler 在 A 上的撤销无关，是别的持有者尚未交还的暂时状态，
+// 承诺仍按 RR-81 给 ErrCreatedEntityLockConflict（不带 ErrEntityRemoved）；修复前按 ID 命中 A 上的撤销记录，误判成
+// “本 handler 内已撤销”的确定失败（ErrEntityRemoved）。对照组不在 A 上撤销，两组结论应一致。
+func TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict(t *testing.T) {
+	for i, revokeInA := range []bool{false, true} {
+		name := map[bool]string{false: "no_revoke_in_A", true: "revoked_in_A"}[revokeInA]
+		t.Run(name, func(t *testing.T) {
+			offset := int64(i) * 10
+			managerA := entity.NewEntityManager()
+			pilots := addPilots(t, managerA, 49800+offset, 1)
+			accessA := entity.NewManagerAccess(managerA)
+			managerB := entity.NewEntityManager()
+			accessB := entity.NewManagerAccess(managerB)
+			x := mustBuildCastID(t, 49805+offset, entity.EntityCategory(1), createdInScopeKind)
+			window := openDestroyWindow(t, managerB, accessB, x) // B 上 X：别的持有者 Destroy 收尾中，removing 在、锁空闲
+			defer window.finish(t)
+
+			committer := &recordingCommitter{}
+			mgr := NewEngine(NestOptionWithGetter(accessA), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			nestedBoom := errors.New("nested transaction failed after creating X in A")
+			var isoErr, crossErr error
+			var runs int
+			handler := NewHandlerName("rr20260928_02_cross_manager_" + name)
+			mgr.MustRegisterHandlerWithMeta(handler, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+				runs++
+				if revokeInA {
+					_, isoErr = RunIsolatedTransaction(context.Background(), committer, "rr20260928_02_iso", func() (any, error) {
+						if _, err := accessA.Create(createParam(x)); err != nil {
+							return nil, err
+						}
+						return nil, nestedBoom // 独立事务回滚：A 上撤销 X，收尾挂在本 Guard 上
+					})
+				}
+				_, crossErr = accessB.Create(createParam(x))
+				return "done", nil
+			}, HandlerMeta{}) // memory：不重排，只看这一次的分类
+			if err := mgr.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = mgr.Shutdown(context.Background()) }()
+			if _, err := mgr.Request(context.Background(), handler, pilots[0], nil); err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			if revokeInA && !errors.Is(isoErr, nestedBoom) {
+				t.Fatalf("fixture: nested transaction err=%v, want its own failure", isoErr)
+			}
+			if runs != 1 {
+				t.Fatalf("memory handler ran %d times", runs)
+			}
+			if !errors.Is(crossErr, ErrCreatedEntityLockConflict) || errors.Is(crossErr, entity.ErrEntityRemoved) {
+				t.Fatalf("creating X in manager B inside another holder's destroy window returned %v; want the RR-81 conflict (ErrCreatedEntityLockConflict, no ErrEntityRemoved) — a revoke of the same id in manager A must not count", crossErr)
+			}
+			if strings.Contains(crossErr.Error(), "revoked earlier in this handler") {
+				t.Fatalf("B.Create text %q blames a revoke that happened in another manager", crossErr)
+			}
+		})
+	}
+}

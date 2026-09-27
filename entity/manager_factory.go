@@ -91,8 +91,8 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 		if lockedNow {
 			guard.ReleaseEntityInstance(value)
 		}
-		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(value.ID()) {
-			// RR-20260927-21：removing 是本 handler 自己留下的——同一 Guard 上较早撤销了同 ID 的新建（例如嵌套
+		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(m, value.ID()) {
+			// RR-20260927-21：removing 是本 handler 自己留下的——同一 Guard 上较早在同一个 Manager 上（RR-20260928-02）撤销了同 ID 的新建（例如嵌套
 			// RunIsolatedTransaction 新建后回滚），收尾挂在本 Guard 的 post-release 上，要等整个 handler 释放才执行。
 			// 在这个 handler 里它不会结束，是确定失败：原样保留 ErrEntityRemoved，不给冲突 / 锁超时哨兵。之前走下面的
 			// RR-81 分支，可回滚事务每次重排都重现同一冲突，空转到重排上限，文案还归咎于别的持有者。
@@ -162,7 +162,7 @@ func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
 	m.removeGroupIndex(e)
 	e.Base().setOwner(nil)
 	m.addMu.Unlock()
-	guard.revokedCreated = append(guard.revokedCreated, id)
+	guard.revokedCreated = append(guard.revokedCreated, revokedEntity{manager: m, id: id})
 	flog.Debug("entity: creation revoked", "id", id, "category", e.GetEntityCategory(), "kind", e.GetEntityKind())
 
 	if state := e.Base().Sync(); state != nil {
