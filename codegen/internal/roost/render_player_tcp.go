@@ -944,9 +944,13 @@ func (server *Server) closeSessions(playerID int64, reason error) int {
 		targets = append(targets, current)
 	}
 	server.mu.RUnlock()
+	// Counted by whether this call is the one that closed the session
+	// (RR-20260927-02). It used to count Close returning nil, but Close
+	// returns the close reason, which is never nil, so every call reported
+	// 0; a session another path already closed is not counted again.
 	closed := 0
 	for _, current := range targets {
-		if err := current.Close(reason); err == nil {
+		if current.close(reason) {
 			closed++
 		}
 	}
@@ -1041,7 +1045,14 @@ func remoteHost(address net.Addr) string {
 }
 
 func (session *session) Close(reason error) error {
+	session.close(reason)
+	return session.closeErr
+}
+
+// close closes the connection once and reports whether this call did it.
+func (session *session) close(reason error) (first bool) {
 	session.closeOnce.Do(func() {
+		first = true
 		if reason == nil { reason = gateway.ErrSessionClosed }
 		session.writeMu.Lock()
 		session.closeErr = reason
@@ -1049,7 +1060,7 @@ func (session *session) Close(reason error) error {
 		session.writeMu.Unlock()
 		if session.cancel != nil { session.cancel(reason) }
 	})
-	return session.closeErr
+	return first
 }
 
 var (
@@ -1625,6 +1636,27 @@ func TestASessionPushThatCannotBeWrittenClosesThatSession(t *testing.T) {
 	if got := runtime.ActiveSessions(7); got != 1 { t.Fatalf("active sessions = %%d after the session's write failed, want 1", got) }
 	waitClosed(t, closed, "stalled")
 	waitReleased(t, server, 1)
+}
+
+// RR-20260927-02: CloseSessions reports how many sessions it closed. A
+// session's Close returns the close reason — never nil: a nil reason becomes
+// gateway.ErrSessionClosed — so counting the calls that returned nil counted
+// none, and every fail-closed decision logged sessions_closed=0 however many
+// sockets it cut. A session some other path already closed is not counted
+// again.
+func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	dialAuthenticated(t, server, "first")
+	dialAuthenticated(t, server, "second")
+	waitReleased(t, server, 2)
+	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("active sessions = %%d, want 2", got) }
+
+	if got := runtime.CloseSessions(7, errors.New("fenced")); got != 2 { t.Errorf("CloseSessions closed the player's 2 open sessions and reported %%d", got) }
+	// Both are closed now, whether or not their teardown has unregistered them yet.
+	if got := runtime.CloseSessions(7, errors.New("fenced again")); got != 0 { t.Errorf("CloseSessions on sessions already closed reported %%d, want 0", got) }
+	waitClosed(t, closed, "first", "second")
+	waitReleased(t, server, 0)
+	if got := runtime.CloseSessions(7, nil); got != 0 { t.Errorf("CloseSessions for a player with no session reported %%d, want 0", got) }
 }
 
 // scriptedConn is a net.Conn whose writes report what the test says: how many
