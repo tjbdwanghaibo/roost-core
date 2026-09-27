@@ -2,6 +2,8 @@ package roost
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -711,6 +713,13 @@ spec:
 `, m.Project.Name, service, m.Project.Name, service)
 }
 
+// renderKubernetesSecretExample embeds the service's production example, as
+// renderServiceConfig renders it, under stringData.config.yaml. That is only
+// the starting point: sections appended to the production example after the
+// project was created (appendModConfigSections, the player TCP block of
+// `add transport tcp`, the demo's game sections, the shutdown refresh) are
+// applied to the embedded copy too, through editKubernetesSecretExampleConfig
+// or with the Secret's indentation, so the two stay one source.
 func renderKubernetesSecretExample(m Manifest, service string) string {
 	config := renderServiceConfig(m, service, true)
 	return fmt.Sprintf(`# Copy to secret.%s.local.yaml, replace every CHANGE_ME, then apply it separately.
@@ -723,6 +732,77 @@ type: Opaque
 stringData:
   config.yaml: |
 %s`, service, m.Project.Name, service, indentText(config, "    "))
+}
+
+// kubernetesSecretExampleRel is where renderProductionDeployment writes a
+// service's Secret example.
+func kubernetesSecretExampleRel(service string) string {
+	return "deploy/k8s/base/secret." + service + ".example.yaml"
+}
+
+// kubernetesSecretConfigHeader is the line the embedded configuration follows,
+// indented by four spaces (renderKubernetesSecretExample).
+const kubernetesSecretConfigHeader = "\n  config.yaml: |\n"
+
+// editKubernetesSecretExampleConfig applies edit to the config.yaml a
+// service's k8s Secret example embeds: the caller passes the same edit it just
+// made to the production example, so the Secret gets the same text
+// (RR-20260928-07). Before, the Secret was rendered once at creation and
+// nothing appended later reached it — a game-demo deployed from it had no
+// saga: block (saga built ROOST_SAGA with the 8 GiB code default, which a
+// JetStream could refuse, and there was no section to lower it in) and no
+// player_access: block (player TCP off by default).
+//
+// The embedded block runs from the header to the first non-blank line
+// indented less than four spaces; anything after it is kept as it is. A
+// Secret example that is missing, or has no such block (rewritten by hand),
+// is left alone. It returns the path it changed, or "".
+func editKubernetesSecretExampleConfig(root, service string, edit func(config string) (string, error)) (string, error) {
+	rel := kubernetesSecretExampleRel(service)
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	body := string(raw)
+	if strings.Count(body, kubernetesSecretConfigHeader) != 1 {
+		return "", nil
+	}
+	start := strings.Index(body, kubernetesSecretConfigHeader) + len(kubernetesSecretConfigHeader)
+	rest := body[start:]
+	var config strings.Builder
+	end := 0
+	for end < len(rest) {
+		line := rest[end:]
+		if newline := strings.IndexByte(line, '\n'); newline >= 0 {
+			line = line[:newline+1]
+		}
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "    ") {
+			break
+		}
+		if strings.TrimSpace(line) == "" {
+			// indentText writes blank lines as four spaces.
+			config.WriteString(strings.TrimLeft(line, " \t"))
+		} else {
+			config.WriteString(strings.TrimPrefix(line, "    "))
+		}
+		end += len(line)
+	}
+	edited, err := edit(config.String())
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", rel, err)
+	}
+	if edited == config.String() {
+		return "", nil
+	}
+	updated := body[:start] + indentText(edited, "    ") + rest[end:]
+	if err := writeAtomic(path, []byte(updated), 0o644); err != nil {
+		return "", err
+	}
+	return rel, nil
 }
 
 func renderKubernetesReadme(m Manifest) string {

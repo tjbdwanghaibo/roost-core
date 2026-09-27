@@ -580,7 +580,10 @@ func productionizeConfig(value string) string {
 // Only top-level keys the file does not have are appended (a Mod's section
 // may carry several, dataengine's has three), so hand edits stay and a
 // repeat is a no-op. The production example gets the same transforms the
-// whole file got. It returns the files it changed.
+// whole file got, and the k8s Secret example that embeds the production
+// example gets the same production text (RR-20260928-07: it used to keep
+// only what was rendered at creation, so the game-demo's Secret had no
+// saga: block). It returns the files it changed.
 func appendModConfigSections(root string, before, after Manifest, service string) ([]string, error) {
 	previous, _ := resolveMods(append(append([]string{}, before.SharedMods...), effectiveServiceMods(before, service)...))
 	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
@@ -609,24 +612,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		if err != nil {
 			return changed, err
 		}
-		body := string(raw)
-		if body != "" && !strings.HasSuffix(body, "\n") {
-			body += "\n"
-		}
-		appended := false
-		for _, section := range sections {
-			for _, block := range topLevelConfigBlocks(section) {
-				if strings.HasPrefix(body, block.key+":") || strings.Contains(body, "\n"+block.key+":") {
-					continue
-				}
-				text := block.text
-				if target.production {
-					text = productionizeConfig(text)
-				}
-				body += text
-				appended = true
-			}
-		}
+		body, appended := appendMissingConfigBlocks(string(raw), sections, target.production)
 		if !appended {
 			continue
 		}
@@ -635,7 +621,43 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		}
 		changed = append(changed, target.rel)
 	}
+	secret, err := editKubernetesSecretExampleConfig(root, service, func(config string) (string, error) {
+		if body, appended := appendMissingConfigBlocks(config, sections, true); appended {
+			return body, nil
+		}
+		return config, nil
+	})
+	if err != nil {
+		return changed, err
+	}
+	if secret != "" {
+		changed = append(changed, secret)
+	}
 	return changed, nil
+}
+
+// appendMissingConfigBlocks appends to one config text the top-level blocks of
+// sections it does not have yet, productionized for a production config. It
+// reports whether it appended anything.
+func appendMissingConfigBlocks(body string, sections []string, production bool) (string, bool) {
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	appended := false
+	for _, section := range sections {
+		for _, block := range topLevelConfigBlocks(section) {
+			if strings.HasPrefix(body, block.key+":") || strings.Contains(body, "\n"+block.key+":") {
+				continue
+			}
+			text := block.text
+			if production {
+				text = productionizeConfig(text)
+			}
+			body += text
+			appended = true
+		}
+	}
+	return body, appended
 }
 
 type configBlock struct {

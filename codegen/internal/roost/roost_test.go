@@ -658,7 +658,9 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 14 {
+	// 15: the k8s Secret example gets the same player_access block as the
+	// production example it embeds (RR-20260928-07).
+	if len(paths) != 15 {
 		t.Fatalf("transport paths = %v", paths)
 	}
 	for path, fragments := range map[string][]string{
@@ -671,6 +673,7 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 		"configs/examples/access.player.tcp.yaml":       {"enabled: false", "max_handshake_bytes: 8192", "max_payload_bytes: 1048576"},
 		"configs/service/config.game.yaml":              {"player_access:", "enabled: false", "max_payload_bytes: 1048576"},
 		"configs/service/config.game.prod.example.yaml": {"player_access:", "enabled: false", "max_payload_bytes: 1048576"},
+		"deploy/k8s/base/secret.game.example.yaml":      {"    player_access:", "        enabled: false", "        max_payload_bytes: 1048576"},
 	} {
 		raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 		if readErr != nil {

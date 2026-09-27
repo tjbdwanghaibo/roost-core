@@ -131,6 +131,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		configPaths := []string{
 			"configs/service/config." + access.Service + ".yaml",
 			"configs/service/config." + access.Service + ".prod.example.yaml",
+			kubernetesSecretExampleRel(access.Service),
 		}
 		backups, backupErr := captureFiles(root, configPaths)
 		if backupErr != nil {
@@ -150,6 +151,15 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if _, err := ensurePlayerTCPConfig(root, access.Service, productionConfig, false); err != nil {
 			return nil, restoreFiles(root, backups, fmt.Errorf("configure production player tcp example: %w", err))
 		}
+		// The k8s Secret example embeds the production example; it gets the
+		// same block, or a deployment made from it runs without player TCP
+		// settings (RR-20260928-07).
+		secretConfig, err := editKubernetesSecretExampleConfig(root, access.Service, func(config string) (string, error) {
+			return mergePlayerTCPConfig(config, "stringData.config.yaml", false)
+		})
+		if err != nil {
+			return nil, restoreFiles(root, backups, fmt.Errorf("configure k8s secret player tcp example: %w", err))
+		}
 		configured, err := captureFiles(root, configPaths)
 		if err != nil {
 			return nil, restoreFiles(root, backups, err)
@@ -157,7 +167,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
 			return nil, restoreFilesIfCurrent(root, backups, configured, err)
 		}
-		return []string{
+		changed := []string{
 			"roost.yaml",
 			"internal/access/player/tcp/server_gen.go",
 			"internal/access/player/tcp/server_gen_test.go",
@@ -172,7 +182,11 @@ func Add(root string, options AddOptions) ([]string, error) {
 			"deploy/docker/README.md",
 			"deploy/k8s/base/network-policy.yaml",
 			"deploy/k8s/base/" + access.Service + ".yaml",
-		}, nil
+		}
+		if secretConfig != "" {
+			changed = append(changed, secretConfig)
+		}
+		return changed, nil
 	}
 	if options.Kind == "saga" {
 		rollbackPaths := []string{"saga/" + toSnake(options.Name) + "/definition.go"}

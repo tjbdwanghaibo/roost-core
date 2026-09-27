@@ -9,8 +9,8 @@ package roost
 // 这里同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的
 // 这三段与生产示例一致；前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里
 // 是 CHANGE_ME，由运维填）。
-// Secret 示例只比这三段：它由生成器按 Mod 目录渲染，之后 add saga / player TCP 追加进开发与生产
-// 示例的 saga、player_access 段不会进 Secret（另一处缺口，已报主会话，不在本条范围）。
+// Secret 示例这里只比这三段；Secret 与生产示例整体同源（含 add saga / player TCP 事后追加的 saga、
+// player_access 段）由 RR-20260928-07 的 k8s_secret_config_promises_test.go 守。
 
 import (
 	"fmt"

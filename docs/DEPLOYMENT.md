@@ -23,6 +23,8 @@
 
 生成项目提供 `configs/service/config.<service>.prod.example.yaml` 和 `deploy/k8s/secret.<service>.example.yaml`。复制为本地文件，替换每个占位符后再部署。
 
+Secret 示例的 `stringData.config.yaml` 就是同服务的生产示例：建工程之后 `roost add mod` / `add saga` 追加的 Mod 配置段、`add transport tcp` 追加的 `player_access` 段也同时写进两份文件（RR-20260928-07）。这两份是脚手架，`project sync` 不重写；用 2026-09-28 之前的生成器建的工程，Secret 示例可能缺这些段，按生产示例手工补齐（缩进四格）。
+
 规则：
 
 - ops 在容器中监听 `0.0.0.0:9100`，但由 Service/NetworkPolicy 控制访问；admin 默认关闭。

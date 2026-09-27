@@ -52,11 +52,33 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 	if bytes.Contains(raw, []byte("\r\n")) {
 		lineEnding = "\r\n"
 	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	text, err := mergePlayerTCPConfig(strings.ReplaceAll(string(raw), "\r\n", "\n"), filepath.ToSlash(relative), enabled)
+	if err != nil {
+		return "", err
+	}
+	if lineEnding == "\r\n" {
+		text = strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	if err := writeAtomic(path, []byte(text), 0o644); err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(relative) {
+		if rel, relErr := filepath.Rel(root, relative); relErr == nil {
+			relative = rel
+		}
+	}
+	return filepath.Clean(relative), nil
+}
 
+// mergePlayerTCPConfig is ensurePlayerTCPConfig on one config text (LF line
+// endings): missing player_access.tcp keys added, enabled set, the rest byte
+// for byte. name is what errors call the text. `add transport tcp` applies it
+// to the k8s Secret example's embedded config.yaml as well as to the
+// production example (RR-20260928-07).
+func mergePlayerTCPConfig(text, name string, enabled bool) (string, error) {
 	document, err := parseYAMLDocument([]byte(text))
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", filepath.ToSlash(relative), err)
+		return "", fmt.Errorf("parse %s: %w", name, err)
 	}
 	defaults := playerTCPDefaultsFor(document)
 	playerKey, playerNode := yamlMappingEntry(document, "player_access")
@@ -93,7 +115,7 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 
 	document, err = parseYAMLDocument([]byte(text))
 	if err != nil {
-		return "", fmt.Errorf("validate merged %s: %w", filepath.ToSlash(relative), err)
+		return "", fmt.Errorf("validate merged %s: %w", name, err)
 	}
 	_, playerNode = yamlMappingEntry(document, "player_access")
 	_, tcpNode := yamlMappingEntry(playerNode, "tcp")
@@ -106,20 +128,9 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 		return "", err
 	}
 	if _, err := parseYAMLDocument([]byte(text)); err != nil {
-		return "", fmt.Errorf("validate updated %s: %w", filepath.ToSlash(relative), err)
+		return "", fmt.Errorf("validate updated %s: %w", name, err)
 	}
-	if lineEnding == "\r\n" {
-		text = strings.ReplaceAll(text, "\n", "\r\n")
-	}
-	if err := writeAtomic(path, []byte(text), 0o644); err != nil {
-		return "", err
-	}
-	if filepath.IsAbs(relative) {
-		if rel, relErr := filepath.Rel(root, relative); relErr == nil {
-			relative = rel
-		}
-	}
-	return filepath.Clean(relative), nil
+	return text, nil
 }
 
 // playerTCPDefaultsFor is playerTCPConfigDefaults for one service config: the
