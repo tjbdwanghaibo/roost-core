@@ -115,11 +115,8 @@ Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-2026
 
 | # | 回复满足 `errors.Is(err, …)` | 含义 | 是否可能已提交 | 能否重试 |
 | --- | --- | --- | --- | --- |
-| 1 | `nest.ErrCommitIndeterminate` | 消息自己的事务或 handler 内嵌套独立事务（含消息自己的事务结束后、收尾阶段调用的独立事务，RR-84）的提交结果未知；引擎已 fence（RR-76） | **可能** | 不得重试；等实例从 WAL 恢复后按业务幂等键核对 |
-| 2 | `entity.ErrRemotePersistenceIndeterminate`，或 `entity.ErrRemoteCommitTimeout` | 本地已持久提交，Remote 结果未知（RR-37）：Durability 0 远端回复丢失 / 未到达、strict 等待期间投影器报告未知时带前者；strict 等待 Remote 确认到截止时带后者（与 `context.DeadlineExceeded` 并存，不带前者） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
-
 | 1 | `nest.ErrCommitIndeterminate` | 消息自己的事务或 handler 内嵌套独立事务的提交结果未知；引擎已 fence（RR-76）。消息自己的事务结束后、收尾阶段（Guard post-release、解锁后回调）调用的独立事务结果未知时引擎同样 fence（RR-84），但业务在收尾阶段已无法把错误带进回复：**回复里看不到本哨兵**，只能从之后的请求得到 `ErrNestFenced` 得知 | **可能** | 不得重试；等实例从 WAL 恢复后按业务幂等键核对 |
-| 2 | `entity.ErrRemotePersistenceIndeterminate` | 本地已持久提交，Remote 远端确认超时 / 结果未知（RR-37） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
+| 2 | `entity.ErrRemotePersistenceIndeterminate`，或 `entity.ErrRemoteCommitTimeout` | 本地已持久提交，Remote 结果未知（RR-37）：Durability 0 远端回复丢失 / 未到达、strict 等待期间投影器报告未知时带前者；strict 等待 Remote 确认到截止时带后者（与 `context.DeadlineExceeded` 并存，不带前者） | **可能** | 不得重试；结论由 Remote 后台收尾给出 |
 | 3 | `nest.ErrAfterCommitFailed` | 消息自己的事务已提交，收尾（release hook、AfterCommit、Close、引用释放）失败（RR-46 / 53）。收尾阶段调用的 `RunIsolatedTransaction` 不算消息自己的事务，它的提交不会让回复带本哨兵（RR-84） | **已提交** | 不得重试 |
 | 4 | `nest.ErrNestedTransactionCommitted` | 消息自己的事务没提交，但 handler 内嵌套独立事务（或收尾阶段——Guard post-release、解锁后回调——调用的独立事务，RR-84）已提交或结果未知；消息未重排（RR-65） | **部分已提交** | 不得整笔重试 |
 | 5 | `nest.ErrNonRollbackNotRequeued` | 不能回滚的 handler（memory）开始执行后遇锁超时 / 组迁移类错误；未准入，但失败前的内存修改已生效且不撤销，未重排（RR-73） | 未持久提交，修改未回滚 | 框架不重试；确认 handler 幂等（或读回状态）后业务自行重试 |
