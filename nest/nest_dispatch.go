@@ -29,6 +29,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		return
 	}
 	msg.getter = mgr.getter
+	msg.engine = mgr
 	if remoteStage {
 		var executorMu sync.Mutex
 		msg.localExecutor = func(fn func()) error {

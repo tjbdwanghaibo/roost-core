@@ -78,6 +78,7 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 // 在 Nest handler 内调用时：要持久写的实体若已被外层可回滚事务（state / undo）登记回滚快照，在写任何持久记录之前返回
 // ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。
 // 所在消息带 Remote 批次时直接返回 ErrNestedTransactionInRemoteMessage，call 不执行（RR-20260926-75）。
+// 提交结果未知（ErrCommitIndeterminate）时，返回之前已 fence 所在的 Nest 引擎，与消息自己的事务相同（RR-20260926-76）。
 func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
 	if call == nil {
 		return nil, errors.New("nest: isolated transaction call is nil")
@@ -253,6 +254,9 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 			if tx.dispatch == nil {
 				// 嵌套独立事务结果未知：WAL 里可能已有它，外层消息同样不能重排（RR-20260926-65）。
 				msg.markNestedTransactionCommitted()
+				// 与消息自己的事务同一规则：返回业务之前 fence 引擎（同 invokeHandlerTransaction 的 mgr.Fence 入口与错误）。
+				// 旧实现只在消息自己的事务返回结果未知时 fence，业务吞掉嵌套事务的错误后引擎照常受理新请求（RR-20260926-76）。
+				msg.fenceEngine(err)
 			}
 			if msg != nil && msg.RemoteWriteBatch != nil {
 				err = errors.Join(err, msg.markRemoteWriteIndeterminateLocked(err))

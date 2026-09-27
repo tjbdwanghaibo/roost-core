@@ -214,6 +214,13 @@ func (m *Msg) markNestedTransactionCommitted() {
 	}
 }
 
+// fenceEngine 以 cause fence 执行这条消息的 Nest 引擎（NestMgr.Fence）；nil 接收者或不经 dispatchNest 的消息无操作。
+func (m *Msg) fenceEngine(cause error) {
+	if m != nil && m.engine != nil {
+		m.engine.Fence(cause)
+	}
+}
+
 // markCreateLockConflictWithoutRollback 记录这条消息里，不能回滚的 handler 内新建实体遇到了锁冲突
 // （RR-20260926-64）；nil 接收者无操作。
 func (m *Msg) markCreateLockConflictWithoutRollback() {
@@ -394,6 +401,9 @@ type Msg struct {
 	// slowReroute 由快池首跑的 dispatchNest 设置：声明目标在 handler 取 Guard 之前变冷，
 	// 派发队列应把同一个作业原位转到慢池准备，而不是回复或释放消息（RR-20260926-25）。
 	slowReroute bool
+
+	// engine 是执行这条消息的 Nest 引擎，dispatchNest 设置；handler 内嵌套独立事务结果未知时据此 fence（RR-20260926-76）。
+	engine *NestMgr
 }
 
 func (m *Msg) Key() int64 {
