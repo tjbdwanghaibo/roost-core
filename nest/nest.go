@@ -74,7 +74,7 @@ var (
 	//   - 消息自己的事务与 handler 内嵌套独立事务结果未知时都已 fence 引擎（RR-20260926-76）。
 	ErrCommitIndeterminate = errors.New("nest: transaction commit outcome is indeterminate")
 	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用
-	// （RR-20260926-48 / 64）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
+	// （RR-20260926-48 / 64），或同 ID 的上一个实例仍在撤销 / 销毁收尾（RR-20260926-81，不再返回 entity.ErrEntityRemoved）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
 	// 不能回滚的 handler（RollbackNone、memory 快路径）不带 ErrLockTimeout：冲突前的内存修改已生效且不撤销，
 	// 消息不自动重排，这个错误原样（或补在业务错误上）回复调用方；是否重试由业务按 handler 的幂等性决定。
 	//   - 是否可能已提交：两种形态本身都未提交。但“与 ErrLockTimeout 并存 = 已回滚、已重排到上限”只在不带
