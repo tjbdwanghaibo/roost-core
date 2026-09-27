@@ -43,7 +43,8 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 // 回滚与持久化边界，memory 快路径 handler 只借它表明“新实体随本 handler 的 Guard 持锁”。
 //
 // CaptureCreatedEntity：revoke 撤销这次发布，事务在回滚 / 明确拒绝时调用；重复调用无副作用。
-// 返回错误时 CreateInScope 立即撤销发布并把错误交给业务。
+// 返回错误时 CreateInScope 立即撤销发布并把错误交给业务；Nest 事务同时记下这次失败，handler 结束时即使业务吞掉
+// 错误也整条回滚（与 CreatedEntityLockBusy 同类，RR-20260927-11）。
 //
 // CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48），或同 ID 的上一个实例仍在
 // 撤销 / 销毁收尾、TryAdd 撞上 removing 标记（RR-20260926-81，同样是持有者尚未交还的暂时状态）。返回交给业务的错误：
