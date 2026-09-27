@@ -91,7 +91,7 @@ func TestPreCommitRejectionsCarryErrCommitRejected(t *testing.T) {
 				t.Fatalf("reply=%v, want errors.Is the rejection cause %v", reply, tc.cause)
 			}
 			if !errors.Is(err, ErrCommitRejected) {
-				t.Fatalf("a rejection before any durable record must carry ErrCommitRejected (decision table row 11), reply=%v", err)
+				t.Fatalf("a rejection before any durable record must carry ErrCommitRejected (decision table row 12 since RR-20260928-03), reply=%v", err)
 			}
 			for _, committed := range []error{ErrCommitIndeterminate, ErrAfterCommitFailed, ErrNestedTransactionCommitted} {
 				if errors.Is(err, committed) {

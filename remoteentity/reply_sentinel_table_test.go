@@ -16,7 +16,7 @@ import (
 // OPEN-ITEMS B23：RR-20260926-77 判别表第 2 行按 RR-37 记录写入、没有核对过真实回复链。这里在真实 Nest + 正式 Remote Manager
 // （MongoCommitter 权威、ManagerAccess loader，RR-39 的 newReloadFixture）上跑 RR-37 的四种“本地已提交、Remote 结果未知”，
 // 打印回复链上的哨兵组合，并断言按判别表“从上到下第一个命中的行”恰是第 2 行（可能已提交、不得重试），
-// 且不带第 1、3、4 行的哨兵。
+// 且不带第 1 行的哨兵（第 3～5 行排在它之后，命中第 2 行即可）。
 //
 // 核对结果（2026-09-27）：Durability 0 回复丢失 / 从未到达、strict 等待中投影器报告未知，回复带 ErrRemotePersistenceIndeterminate；
 // strict 等待 Remote 确认到截止时回复是 ErrRemoteCommitTimeout + context.DeadlineExceeded，**不带** ErrRemotePersistenceIndeterminate
@@ -92,14 +92,19 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 			if row != 2 {
 				t.Fatalf("reply err=%v hits decision-table row %d (sentinels %s), want row 2", err, row, hits)
 			}
+			if errors.Is(err, nest.ErrRemotePartRejected) {
+				// RR-20260928-03：结果未知不是明确拒绝，两者互斥。
+				t.Fatalf("reply err=%v: an unknown Remote outcome must not claim the Remote part was rejected", err)
+			}
 		})
 	}
 }
 
 // RR-20260927-32：Remote 批次在 FinalizeLocked（WAL 准入之前）被明确拒绝——这里用 RR-20260927-09 的 sid 作用域拒绝——时，回复之前原样
 // 返回 ErrRemoteManagedServerScopedDAO，判别表一行都不命中。在真实 Nest + 正式 Remote Manager 上断言回复现在按“第一个命中的行”
-// 落在第 11 行（ErrCommitRejected：未提交、已回滚），原因仍可 errors.Is，本地 committer 没收到记录。
-func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow11(t *testing.T) {
+// 落在 ErrCommitRejected 那一行（未提交、已回滚），原因仍可 errors.Is，本地 committer 没收到记录。
+// RR-20260928-03 在判别表第 4 行插入 ErrRemotePartRejected，这一行由第 11 行顺延为第 12 行（原用例名 …Row11）。
+func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow12(t *testing.T) {
 	f, live := newReloadFixture(t, 1996)
 	live.mu.Lock()
 	live.scope = uint8(entity.DatabaseServer)
@@ -125,11 +130,85 @@ func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow11(t *testing.T) {
 	if !errors.Is(err, entity.ErrRemoteManagedServerScopedDAO) {
 		t.Fatalf("reply err=%v, want errors.Is ErrRemoteManagedServerScopedDAO (fixture: FinalizeLocked must refuse dbscope=sid)", err)
 	}
-	if row != 11 {
-		t.Fatalf("reply err=%v hits decision-table row %d (sentinels %s), want row 11 (ErrCommitRejected)", err, row, hits)
+	if row != 12 {
+		t.Fatalf("reply err=%v hits decision-table row %d (sentinels %s), want row 12 (ErrCommitRejected)", err, row, hits)
 	}
 	if n := committer.calls.Load(); n != 0 {
 		t.Fatalf("local committer received %d record(s) although FinalizeLocked refused the batch", n)
+	}
+}
+
+// RR-20260928-03：带 Remote 批次的消息，本地事务已提交而 Remote 部分被明确拒绝（RR-20260926-58：只丢弃被拒绝的 Remote 部分，
+// 本地部分照常生效）。之前回复是 “nest: finish remote write batch: …write rejected before commit…”，判别表一行都不命中，
+// 调用方看不出本地已提交，可能整笔重试、重复执行本地部分。承诺：回复满足 errors.Is(nest.ErrRemotePartRejected)，按“第一个命中的行”
+// 落在第 4 行（部分已提交、不得整笔重试），原因（entity.ErrRemoteRejected / ErrRemoteVersionConflict）仍可 errors.Is；不带第 2 行
+// （结果未知）与第 3 行（Remote 也已确认）的哨兵；本地 committer 确实收到了这笔记录。
+// strict：WAL 投影器（这里由 beforeWait 模拟）把 Remote 写交给权威、被版本冲突拒绝，strict 等待得到 Rejected 结论（探针原形）；
+// memory：Durability 0 由 Commit 直接写权威、被版本冲突拒绝。
+func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rawID      int64
+		durability nest.DurabilityPolicy
+		rollback   nest.RollbackPolicy
+		beforeWait func(f reloadFixture, commits []entity.RemoteCommit)
+		cause      error
+	}{
+		{name: "strict_projector_rejected", rawID: 1997, durability: nest.DurabilityStrict, rollback: nest.RollbackUndo,
+			beforeWait: func(f reloadFixture, commits []entity.RemoteCommit) {
+				f.storage.reject.Store(true)
+				go func() { _, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits) }()
+			}, cause: entity.ErrRemoteRejected},
+		{name: "memory_rejected", rawID: 1998, durability: nest.DurabilityMemory, rollback: nest.RollbackNone,
+			beforeWait: func(f reloadFixture, _ []entity.RemoteCommit) { f.storage.reject.Store(true) },
+			cause:      entity.ErrRemoteVersionConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, live := newReloadFixture(t, tc.rawID)
+			committer := &countingLocalCommitter{}
+			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: tc.beforeWait}
+			options := []nest.NestOption{nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+				nest.NestOptionWithRemoteEntityManager(manager)}
+			if tc.durability != nest.DurabilityMemory {
+				options = append(options, nest.NestOptionWithTransactionCommitter(committer))
+			}
+			engine := nest.NewEngine(options...)
+			name := nest.NewHandlerName("reply_sentinels_remote_part_rejected_" + tc.name)
+			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+				live.set("rejected", "")
+				return "ok", nil
+			}, nest.HandlerMeta{Rollback: tc.rollback, Durability: tc.durability})
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reply, err := engine.Request(ctx, name, live.ID(), nil)
+			cancel()
+			row, hits := firstTableRow(err)
+			t.Logf("reply=%v err=%v first-row=%d sentinels=[%s]", reply, err, row, hits)
+			if !errors.Is(err, tc.cause) {
+				t.Fatalf("fixture: reply err=%v, want the Remote rejection errors.Is(%v) on the chain", err, tc.cause)
+			}
+			if errors.Is(err, nest.ErrNestCanceled) || errors.Is(err, nest.ErrNestTimeout) {
+				t.Fatalf("premise: the caller's own wait ended before the reply: %v", err)
+			}
+			if tc.durability != nest.DurabilityMemory {
+				if n := committer.calls.Load(); n != 1 {
+					t.Fatalf("premise: local committer received %d record(s), want 1 (the local transaction commits first)", n)
+				}
+			}
+			if !errors.Is(err, nest.ErrRemotePartRejected) {
+				t.Fatalf("reply err=%v (sentinels [%s]) after the local transaction committed and the Remote part was rejected; want errors.Is nest.ErrRemotePartRejected", err, hits)
+			}
+			if errors.Is(err, entity.ErrRemotePersistenceIndeterminate) || errors.Is(err, nest.ErrAfterCommitFailed) {
+				t.Fatalf("reply err=%v: an explicit Remote rejection must not also claim an unknown outcome or a confirmed Remote commit", err)
+			}
+			if row != 4 {
+				t.Fatalf("reply err=%v hits decision-table row %d (sentinels [%s]), want row 4", err, row, hits)
+			}
+		})
 	}
 }
 
@@ -141,7 +220,8 @@ func (c *countingLocalCommitter) Commit(context.Context, coredata.CommitRecord) 
 	return nil
 }
 
-// replySentinels 是 USER_GUIDE §4“回复错误判别”表按行的哨兵（第 7 行是第 6 行加 ErrLockTimeout 的组合，这里按第 6、8 行分别列出）。
+// replySentinels 是 USER_GUIDE §4“回复错误判别”表按行的哨兵（第 8 行是第 7 行加 ErrLockTimeout 的组合，这里按第 7、9 行分别列出；
+// 第 13 行 entity.ErrEntityRemoved 只对 handler 内新建成立，第 14 行是兜底，都不在这里列）。
 var replySentinels = []struct {
 	row  int
 	name string
@@ -151,15 +231,16 @@ var replySentinels = []struct {
 	{2, "entity.ErrRemotePersistenceIndeterminate", entity.ErrRemotePersistenceIndeterminate},
 	{2, "entity.ErrRemoteCommitTimeout", entity.ErrRemoteCommitTimeout},
 	{3, "nest.ErrAfterCommitFailed", nest.ErrAfterCommitFailed},
-	{4, "nest.ErrNestedTransactionCommitted", nest.ErrNestedTransactionCommitted},
-	{5, "nest.ErrNonRollbackNotRequeued", nest.ErrNonRollbackNotRequeued},
-	{6, "nest.ErrCreatedEntityLockConflict", nest.ErrCreatedEntityLockConflict},
-	{8, "nest.ErrLockTimeout", nest.ErrLockTimeout},
-	{8, "nest.ErrEntityLockGroupChanged", nest.ErrEntityLockGroupChanged},
-	{8, "nest.ErrEntityGroupTransitionPending", nest.ErrEntityGroupTransitionPending},
-	{9, "nest.ErrNestedTransactionRollbackConflict", nest.ErrNestedTransactionRollbackConflict},
-	{10, "nest.ErrNestedTransactionInRemoteMessage", nest.ErrNestedTransactionInRemoteMessage},
-	{11, "nest.ErrCommitRejected", nest.ErrCommitRejected},
+	{4, "nest.ErrRemotePartRejected", nest.ErrRemotePartRejected},
+	{5, "nest.ErrNestedTransactionCommitted", nest.ErrNestedTransactionCommitted},
+	{6, "nest.ErrNonRollbackNotRequeued", nest.ErrNonRollbackNotRequeued},
+	{7, "nest.ErrCreatedEntityLockConflict", nest.ErrCreatedEntityLockConflict},
+	{9, "nest.ErrLockTimeout", nest.ErrLockTimeout},
+	{9, "nest.ErrEntityLockGroupChanged", nest.ErrEntityLockGroupChanged},
+	{9, "nest.ErrEntityGroupTransitionPending", nest.ErrEntityGroupTransitionPending},
+	{10, "nest.ErrNestedTransactionRollbackConflict", nest.ErrNestedTransactionRollbackConflict},
+	{11, "nest.ErrNestedTransactionInRemoteMessage", nest.ErrNestedTransactionInRemoteMessage},
+	{12, "nest.ErrCommitRejected", nest.ErrCommitRejected},
 	{0, "nest.ErrNestCanceled", nest.ErrNestCanceled},
 	{0, "nest.ErrNestTimeout", nest.ErrNestTimeout},
 	{0, "context.DeadlineExceeded", context.DeadlineExceeded},

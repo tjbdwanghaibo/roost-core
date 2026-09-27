@@ -191,7 +191,7 @@ func TestOuterCommitAfterNestedAcceptFailureIsRefusedBeforeWAL(t *testing.T) {
 			if admitted := wal.Stats().Admitted; admitted != 1 {
 				t.Fatalf("after the engine was fenced the outer transaction was still handed to the WAL: admitted=%d (want 1, the nested record only) reply=%v/%v", admitted, ret, err)
 			}
-			// RR-20260927-32：交给 committer 之前的拒绝同时带 ErrCommitRejected（判别表仍先命中第 4 行）。
+			// RR-20260927-32：交给 committer 之前的拒绝同时带 ErrCommitRejected（判别表仍先命中 ErrNestedTransactionCommitted 那一行，RR-20260928-03 起为第 5 行）。
 			if !errors.Is(err, nest.ErrNestFenced) || !errors.Is(err, nest.ErrNestedTransactionCommitted) || !errors.Is(err, nest.ErrCommitRejected) || errors.Is(err, nest.ErrCommitIndeterminate) {
 				t.Fatalf("reply=%v/%v: want ErrNestFenced + ErrCommitRejected (refused before the committer, so not indeterminate) + ErrNestedTransactionCommitted", ret, err)
 			}

@@ -21,8 +21,9 @@ var (
 	ErrEntityNotFound     = errors.New("nest: entity not found")
 	ErrEntityTypeMismatch = errors.New("nest: entity type mismatch")
 	// ErrLockTimeout 是取锁超时 / 锁冲突类暂时性错误。只有回复不带任何“可能已提交”哨兵（ErrCommitIndeterminate、
-	// entity.ErrRemotePersistenceIndeterminate、entity.ErrRemoteCommitTimeout、ErrAfterCommitFailed、ErrNestedTransactionCommitted），也不带
-	// ErrNonRollbackNotRequeued 或不带锁超时形态的 ErrCreatedEntityLockConflict 时，它才表示“未提交（未开始或已回滚）、
+	// entity.ErrRemotePersistenceIndeterminate、entity.ErrRemoteCommitTimeout、ErrAfterCommitFailed、ErrRemotePartRejected、
+	// ErrNestedTransactionCommitted），也不带 ErrNonRollbackNotRequeued 或不带锁超时形态的 ErrCreatedEntityLockConflict 时，
+	// 它才表示“未提交（未开始或已回滚）、
 	// 框架已自动重排到上限”，可以重试；链上有前述哨兵时以它们为准（RR-20260926-77，判别表见 docs/USER_GUIDE.md §4）。
 	// strict 等 Remote 确认到截止的回复同时带 ErrRemoteCommitTimeout 与 ErrRemotePersistenceIndeterminate（RR-20260927-24）；
 	// 自定义 Remote 实现可能只返回前者，所以两者都列。
@@ -50,6 +51,15 @@ var (
 	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务（或消息自己的事务结束后、收尾阶段调用的独立事务，RR-20260926-84）
 	//     已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，所以判断“是否可能已提交”不能只看它（RR-20260926-77）。
 	ErrAfterCommitFailed = errors.New("nest: transaction committed but after-commit work failed")
+	// ErrRemotePartRejected 表示带 Remote 批次的消息自己的本地事务已提交（按 handler 的 durability：strict / async 已持久，
+	// memory 为内存提交），而 Remote 部分被明确拒绝（RR-20260928-03）。按 RR-20260926-58，只丢弃被拒绝 Remote 实体的修改
+	// （批次回滚、隔离并从权威重载），同一事务里的本地部分照常生效；提交后回调（AfterCommit）不执行。
+	// 原因错误（如 entity.ErrRemoteRejected、entity.ErrRemoteVersionConflict）保留在链上。按 entity 契约，Remote 结果未知时 Commit
+	// 返回 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行），不带它的 Commit 失败就是 Remote 没有写入；两者互斥，
+	// 与 ErrAfterCommitFailed（Remote 也已确认）同样互斥。之前这种回复不带任何哨兵，调用方看不出本地已提交。
+	//   - 是否可能已提交：部分已提交（本地部分已提交，Remote 部分未提交）。能否重试：不得整笔重试（本地部分会重复执行）；
+	//     按业务只补做 Remote 部分，或读回状态后再决定。
+	ErrRemotePartRejected = errors.New("nest: local transaction committed but its remote part was rejected")
 	// ErrEntityReleaseFailed 表示准入后的解锁 hook 失败。它不表示事务被拒绝，
 	// 调用方仍需检查同时返回的 ErrCommitIndeterminate，不能据此重试整笔业务。
 	ErrEntityReleaseFailed           = errors.New("nest: entity release failed after admission")

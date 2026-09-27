@@ -94,6 +94,9 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 			// 本地已持久提交，Remote 确认超时 / 结果未知 / 被明确拒绝：此刻没有持久结论，不能 Confirm；
 			// 提交后工作在 Close 之前交给批次，由它拿到结论后执行一次（RR-20260926-37）。
 			m.deferPostRemoteCommit(batch)
+			// 结果未知的 Commit 错误带 entity.ErrRemotePersistenceIndeterminate（entity 契约，判别表第 2 行）；不带它的就是
+			// Remote 没有写入的明确拒绝。记下事实，由 dispatchNest 给回复加 ErrRemotePartRejected（RR-20260928-03）。
+			m.remotePartRejected = !errors.Is(err, entity.ErrRemotePersistenceIndeterminate)
 		}
 	default:
 		cause := dispatchErr
@@ -358,6 +361,10 @@ type Msg struct {
 	// 此后回复里的任何错误都是提交后的释放/回调失败，由 dispatchNest 统一包 ErrAfterCommitFailed；
 	// 结果未知（确认超时）、拒绝与 Abort 都不置位，回复不得带该哨兵（RR-20260926-46）。
 	remoteConfirmed bool
+	// remotePartRejected 表示本地已提交（remoteCommitted）而 Remote Commit 被明确拒绝（错误不带
+	// ErrRemotePersistenceIndeterminate）；dispatchNest 据此给回复加 ErrRemotePartRejected（RR-20260928-03）。
+	// 与 remoteConfirmed 互斥，由 finishRemoteWriteBatch 在慢阶段（或无慢阶段时的派发 goroutine）写、同一 goroutine 读。
+	remotePartRejected bool
 	// remoteSyncMutation 是本地已持久提交的 Remote 事务的 Sync 提交门。Remote 确认没有结论时，
 	// deferPostRemoteCommit 把它连同 postRemoteCommit 交给批次：拒绝时 Reject（RR-20260926-37）。
 	remoteSyncMutation *entity.SyncMutation

@@ -87,6 +87,12 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			// errors.Is(ErrAfterCommitFailed) 区分“已提交”，不能据此重复业务。
 			err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, err)
 		}
+		if msg.remotePartRejected && err != nil && !errors.Is(err, ErrRemotePartRejected) {
+			// 本地事务已提交，Remote 部分被明确拒绝（只丢弃 Remote 部分，RR-20260926-58）：调用方必须能区分“部分已提交”，
+			// 不能整笔重试；之前回复只有 Remote 的原因错误，判别表一行都不命中（RR-20260928-03）。与上面的 ErrAfterCommitFailed
+			// （Remote 也已确认）互斥；与 Remote 结果未知（错误链上的 entity.ErrRemotePersistenceIndeterminate）互斥。
+			err = fmt.Errorf("%w: %w", ErrRemotePartRejected, err)
+		}
 		if msg.nestedTxCommitted && err != nil && !errors.Is(err, ErrAfterCommitFailed) && !errors.Is(err, ErrNestedTransactionCommitted) {
 			// 自己的事务没有提交，但 handler 内嵌套的独立事务已持久提交（或结果未知）：调用方必须能区分
 			// “什么都没提交”与“部分已提交”，不能据此重试整笔业务；消息也不重排（RR-20260926-65）。
