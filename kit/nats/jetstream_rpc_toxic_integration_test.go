@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
@@ -42,6 +44,35 @@ func (c rpcToxiproxy) do(t *testing.T, method, path string, body any) {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		t.Fatalf("toxiproxy %s %s: status %d", method, path, resp.StatusCode)
+	}
+}
+
+// deleteRPCStreams removes the streams this run created. It connects to the
+// direct NATS URL when the environment exports one, so a toxic left on the
+// proxy cannot block the cleanup; streams that were never created are fine.
+func deleteRPCStreams(t *testing.T, proxiedURL string, streams ...string) {
+	t.Helper()
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		url = proxiedURL
+	}
+	client, err := gonats.Connect(url, gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Errorf("cleanup: connect NATS to delete %v: %v", streams, err)
+		return
+	}
+	defer client.Close()
+	js, err := gojs.New(client)
+	if err != nil {
+		t.Errorf("cleanup: JetStream: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, stream := range streams {
+		if err := js.DeleteStream(ctx, stream); err != nil && !errors.Is(err, gojs.ErrStreamNotFound) {
+			t.Errorf("cleanup: delete stream %s: %v", stream, err)
+		}
 	}
 }
 
@@ -85,8 +116,12 @@ func TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen(t *testing.T) {
 	// 主题前缀也按轮次唯一：流名已经唯一，但两轮的流若共用 `roost.rpc.>` 主题，
 	// 在持久化的本机环境里第二轮会被 JetStream 以 "subjects overlap" 拒绝。
 	cfg.Set("nats.prefix", "roostit"+suffix)
-	cfg.Set("nats.rpc.request_stream", "ROOST_IT_RPC_REQ_"+suffix)
-	cfg.Set("nats.rpc.response_stream", "ROOST_IT_RPC_RESP_"+suffix)
+	requestStream, responseStream := "ROOST_IT_RPC_REQ_"+suffix, "ROOST_IT_RPC_RESP_"+suffix
+	cfg.Set("nats.rpc.request_stream", requestStream)
+	cfg.Set("nats.rpc.response_stream", responseStream)
+	// OPEN-ITEMS B45：两条流按轮次唯一命名，之前每跑一次就在共享 NATS 上留下两条。
+	// 这条 Cleanup 先于 Mod 的 Stop 注册，所以在 Mod 停下、代理复位之后才执行。
+	t.Cleanup(func() { deleteRPCStreams(t, natsURL, requestStream, responseStream) })
 	cfg.Set("nats.rpc.call_timeout", 500*time.Millisecond)
 	cfg.Set("nats.rpc.setup_timeout", 20*time.Second)
 	cfg.Set("nats.rpc.max_bytes", int64(16<<20))

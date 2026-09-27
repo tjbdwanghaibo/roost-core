@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/redis/driver"
 
@@ -42,9 +44,46 @@ func client(t *testing.T) fredis.IRedis {
 
 // prefix is unique per test run, so a failed run leaves nothing that affects
 // the next one and two runs can share a Redis.
+//
+// OPEN-ITEMS B45：唯一前缀只保证互不影响，不保证不留垃圾——之前每跑一次整包在目标 Redis 留下
+// 约 90 个键，大部分没有 TTL。这里给每个前缀注册 Cleanup，用例结束时删掉前缀下的全部键；
+// 它在调用方随后注册的 mod.Stop 之后执行（Cleanup 后进先出），Mod 停下后不会再写。
 func prefix(t *testing.T, name string) string {
 	t.Helper()
-	return fmt.Sprintf("itest:%s:%d", name, time.Now().UnixNano())
+	p := fmt.Sprintf("itest:%s:%d", name, time.Now().UnixNano())
+	t.Cleanup(func() { deleteKeysUnder(t, p) })
+	return p
+}
+
+// deleteKeysUnder removes every key this run wrote under prefix (the stores
+// put all their keys at "<prefix>:..."). IRedis has no SCAN, so it uses its
+// own go-redis client on REDIS_ADDR.
+func deleteKeysUnder(t *testing.T, prefix string) {
+	t.Helper()
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		return
+	}
+	c := goredis.NewClient(&goredis.Options{Addr: addr})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	escaped := strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`, "]", `\]`).Replace(prefix)
+	iter := c.Scan(ctx, 0, escaped+":*", 256).Iterator()
+	var keys []string
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		t.Errorf("cleanup: scan %s:*: %v", prefix, err)
+		return
+	}
+	for chunk := range slices.Chunk(keys, 256) {
+		if err := c.Del(ctx, chunk...).Err(); err != nil {
+			t.Errorf("cleanup: delete %d keys under %s: %v", len(chunk), prefix, err)
+			return
+		}
+	}
 }
 
 // --- directory ---
