@@ -26,6 +26,12 @@ func TestSkippedFencedStepIsQueuedForEvictionOnce(t *testing.T) {
 		if _, err := projector.ReplayPass(context.Background()); err == nil {
 			t.Fatalf("pass %d: ack unexpectedly succeeded", pass)
 		}
+		if pass == 0 {
+			// 第一轮登记的那一项要先被驱逐 worker 取走（它随后在失败重试里退避），下面对队列长度的断言才只数
+			// 重投多排的项。之前不等：worker goroutine 还没被调度时队列里正是那唯一一项，负载高或整包重复运行时
+			// 偶发误报“多排了 1 次”（RR-20260926-82）。
+			awaitChan(t, recorder.failed, "the eviction worker to take the first registration")
+		}
 	}
 	projector.evictMu.Lock()
 	queued := len(projector.evictQueue)

@@ -20,7 +20,10 @@ import (
 // 经正式 EntityRepository（等待该实体投影/驱逐完成、发布回到快池、OnEntityLoaded）从 Mongo 重载并 Rebind，
 // 订阅者收到权威全量；Mongo 里没有该实体时退回 remove。
 
-const fencedResyncKind entity.EntityKind = 243
+// fencedResyncKind 与同包其他用例的 kind 互不相同（RR-20260926-82）：kind 注册表是进程级的，原值 243 与
+// entity_repository_load_promises_test.go 的 dataEngineNoBuilderKind 相同。本用例给 243 注册了 builder，同一进程里
+// 第二轮（-count>1）“kind 没有 builder”的用例就不再成立。
+const fencedResyncKind entity.EntityKind = 248
 const fencedResyncCollection = "resync_heroes"
 
 type fencedResyncDAO struct {
