@@ -6,7 +6,7 @@
 
 [RR-20260926-83](RR-20260926-83.md)：entity 包测试可重复运行——夹具按用例快照并恢复注册表，撞号改开（只改测试）（v1.17.1）。
 
-[RR-20260926-82](RR-20260926-82.md)：dataengine/engine 包测试可重复运行——kind 撞号改开，驱逐队列断言先等 worker 取走第一项（只改测试，未发版）。
+[RR-20260926-82](RR-20260926-82.md)：dataengine/engine 包测试可重复运行——kind 撞号改开，驱逐队列断言先等 worker 取走第一项（只改测试，v1.17.1）。
 
 [RR-20260926-81](RR-20260926-81.md)：handler 内新建撞上同 ID 撤销 / 销毁收尾中的实例，按新建锁冲突处理（v1.17.1）。
 
@@ -427,8 +427,8 @@
 | ARCH-08 | room 同步的分层收敛（envelope sink 的 roomID 键；coordinator 的边界） | **并入 ARCH-10**（2026-09-22） |
 | ARCH-09 | 非房间的实体复制路径与 `syncTopic` 的去向 | **并入 ARCH-10**（2026-09-22） |
 | ARCH-10 | 实体同步统一为一个 SyncManager：subject 私有订阅者表 + 进程一个 manager + 每会话一个 SessionSink，room / AOI 降为 policy；帧头 Epoch/Tick 改为会话私有、RoomID 改为流常量 | **已完成**：M-13（机制，main）+ M-14（policy / ready / namespace，`feature/arch-10-sync-policy` 待 review） → [ARCH-10](ARCH-10-sync-manager.md) · [M-13](M-13-entitysync-manager.md) · [M-14](M-14-sync-policy-and-ready.md) |
-| ARCH-11 | 从 wdsync 借两件事：多 profile 引用计数 + 优先级（一会话一 subject 只发最细视图，跨组织重叠有正确语义）；tick 级组件编码缓存 → 可选 `FramePerSubject` 帧模式 + `MulticastTransport` 网关扇出 | **方案已出（2026-09-23），待拍板后按 M-15 / M-16 实施** → [ARCH-11](ARCH-11-view-priority-and-shared-encoding.md) |
-| ARCH-12 | sync 块包结构整理：划清范围（两条轴七个包；spatial / syncstream / cache 是基建，remoteentity 归 dataengine 块）；删 statesync 约 1900 行老 Replicator 死码；传输契约从 statesync 归位 nettransport；八个目录收进 `sync/` 根 | **方案已出（2026-09-23），S1–S4 待拍板** → [ARCH-12](ARCH-12-sync-package-layout.md) |
+| ARCH-11 | 从 wdsync 借两件事：多 profile 引用计数 + 优先级（一会话一 subject 只发最细视图，跨组织重叠有正确语义）；tick 级组件编码缓存 → 可选 `FramePerSubject` 帧模式 + `MulticastTransport` 网关扇出 | **部分实施**（2026-09-23）：多来源订阅（M-19）与 tick 内同 Profile 共享不可变编码（M-20）已落地（见 ARCH-11 §4 实施更正）；共享帧协议 + 网关多播（`FramePerSubject` / `MulticastTransport`）需网关 / 客户端配套，按用户确认定为独立后续需求（交接文档 §5），不再“待拍板”（2026-09-27 回写，OPEN-ITEMS A13④） → [ARCH-11](ARCH-11-view-priority-and-shared-encoding.md) |
+| ARCH-12 | sync 块包结构整理：划清范围（两条轴七个包；spatial / syncstream / cache 是基建，remoteentity 归 dataengine 块）；删 statesync 约 1900 行老 Replicator 死码；传输契约从 statesync 归位 nettransport；八个目录收进 `sync/` 根 | **已实施**（M-15～M-18）：statesync 老 Replicator 已删除，传输契约归位 nettransport，同步块收进 `sync/`（entitysync / frame / lockstep / nettransport / syncbus），当前目录以 [sync/README](../../sync/README.md) 为准（2026-09-27 回写，OPEN-ITEMS A13④） → [ARCH-12](ARCH-12-sync-package-layout.md) · [M-15](M-15-statesync-dead-code.md) · [M-16](M-16-transport-contracts-home.md) · [M-17](M-17-sync-layout.md) · [M-18](M-18-async-transport-reliable-only.md) |
 
 ## 2026-09-19 那两条后来也修了
 

@@ -242,6 +242,9 @@ Stats 的慢池 Started 会多计一次，指标 `nest.dispatch.slow_reroute.tot
 先超时离开，不再连带同一 flight 里预算更长的等待方；它随后重试会加入仍在进行的那次加载，而不是重新发起。
 领头调用方仍在等待时，加载里需要 Entity 锁的发布沿用它自己的本地执行器（Nest 慢阶段即本条消息的快续行）；
 它离开后改走 Nest 绑定给 ManagerAccess 的 `NestMgr.RunLocal`（Nest 构造时经 `LocalExecutorBinder` 自动绑定），仍在快池执行。
+Nest 只对传入的 Getter 本身做 `LocalExecutorBinder` 类型断言：**包装了 `ManagerAccess` 的自定义 Getter 必须实现并转发
+`BindLocalExecutor(run)` 给内层 ManagerAccess**，否则领头方离开后的发布会在加载 goroutine 上就地执行（与没有 Nest 时相同，
+不经快池）；正式 kit 装配直接传 ManagerAccess，不受影响（RR-20260926-54）。
 未声明的动态 Cast 目标保持只读已加载实体（返回 `ErrColdLoadInLogic`）。自定义 Getter 仍需遵守 `entity.LoadedEntitiesOnly(ctx)`
 （快阶段读取用它）。准入判定只调用可选的 `entity.LoadedChecker.IsLoaded(id)`：它在发送方 goroutine（含快 worker 与唯一的延迟派发
 goroutine）上执行，不得 I/O、等待或 Touch；未实现它的自定义 Getter 保持 RR-25 之前的行为——准入不判冷、不自动转慢、准入后也不原位转慢，
