@@ -234,6 +234,11 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 // 也新建 X。修前它们停在 X 的锁上占满快池；修后冲突即回滚并延迟重新准入，无关请求照常完成，A 提交后都得到“已存在”。
 // memory 模式 handler 不回滚：冲突前的修改不撤销，所以不重排，调用方直接收到 ErrCreatedEntityLockConflict
 // （RR-20260926-64 按维护者 2026-09-27 的决定改了这条子用例的期望；修前它会重排直到“已存在”）。
+//
+// OPEN-ITEMS B40：高负载下 memory 子用例偶发 `got ret=exists`。用例原先只等到每个 follower 的计数自增（handler 入口），
+// 没等它的 Create 真正对 X 做出取锁判定：follower 进入 Create 后在 try-lock 之前被调度延迟，用例已放开 creator 的提交，
+// creator 提交并放锁后 follower 才 try-lock，拿到锁、发布时发现 X 已存在——这是用例时序，不是框架缺陷（插桩与变异见
+// bf-RR-20260926-64 §后续验证）。现在等每个 follower 的第一次 Create 返回（取锁判定已在 creator 持有 X 期间做出）再放开提交。
 func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -258,11 +263,12 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 				}
 				return "created", MarkPersist(value.(*rollbackTestEntity).dao, 1)
 			}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
-			var attempts atomic.Int64
+			var attempts, decided atomic.Int64
 			follower := NewHandlerName("rr48_same_id_follower_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(follower, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				attempts.Add(1)
 				_, err := access.Create(createParam(x))
+				decided.Add(1) // Create 已返回：对 X 的取锁判定已做出（B40）
 				if errors.Is(err, entity.ErrEntityExists) {
 					return "exists", nil
 				}
@@ -279,15 +285,16 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			for i := 1; i <= workers; i++ {
 				sendRequest(mgr, fmt.Sprintf("B%d", i), follower, ids[i], out)
 			}
-			// 等到每个 follower 都至少执行过一次（creator 仍停在提交里）；-race 下多包并行时 1s 可能不够，
-			// memory 子用例的断言依赖 follower 在 creator 提交之前执行（RR-20260926-64）。
+			// 等到每个 follower 的第一次 Create 都已返回（creator 仍停在提交里）；-race 下多包并行时 1s 可能不够，
+			// memory 子用例的断言依赖 follower 在 creator 提交之前对 X 做出取锁判定（RR-20260926-64）。只等 handler 入口不够：
+			// Create 内的 try-lock 可能被调度到放开提交之后（OPEN-ITEMS B40）。
 			deadline := time.Now().Add(10 * time.Second)
-			for attempts.Load() < workers && time.Now().Before(deadline) {
+			for decided.Load() < workers && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-			if attempts.Load() < workers {
+			if decided.Load() < workers {
 				close(committer.release)
-				t.Fatalf("followers did not all start within 10s while the creator held X (attempts=%d)", attempts.Load())
+				t.Fatalf("followers' Create did not all return within 10s while the creator held X (attempts=%d decided=%d)", attempts.Load(), decided.Load())
 			}
 			done := make(chan requestResult, 1)
 			sendRequest(mgr, "unrelated", unrelated, ids[workers+1], done)
