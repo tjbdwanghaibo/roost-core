@@ -144,8 +144,8 @@ func (m *EntityManager) createdRevoker(guard *EntityGuard, e IThreadSafeEntity) 
 //     看到 removed 即退出（与 Destroy 相同的 GetLock 契约），Guard 释放时也不再运行 release hook；
 //  2. 撤回同步：Nest 的同步调度器实现 SyncSubjectRetractor 时注销该 subject（已持有对象的会话收到
 //     ObjectRemove，未持有的直接移除），然后关闭实体自己的同步状态，不再有内容可捕获；
-//  3. Guard 释放全部锁之后，与 Destroy 同序执行销毁回调、清理实体资源、回收 LockManager 条目和
-//     removing 标记，之后同一 ID 可以重新创建。
+//  3. Guard 释放全部锁之后，与 Destroy 同序执行销毁回调（原因 DestroyReasonCreateRevoked，RR-20260927-12）、清理实体资源、
+//     回收 LockManager 条目和 removing 标记，之后同一 ID 可以重新创建。
 //
 // 实体从未进入已提交的持久化记录：事务回滚时它的变更随 RollbackTx 一起丢弃，这里不做删除准入。
 func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
@@ -183,8 +183,8 @@ func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
 			m.addMu.Unlock()
 		}()
 		defer e.ClearBase()
-		e.Base().DestroyAll(DestroyReasonCommon)
-		e.OnDestroy(DestroyReasonCommon)
+		e.Base().DestroyAll(DestroyReasonCreateRevoked)
+		e.OnDestroy(DestroyReasonCreateRevoked)
 	})
 }
 

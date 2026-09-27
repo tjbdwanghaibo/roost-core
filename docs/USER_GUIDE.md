@@ -70,7 +70,8 @@ handler 内新建的实体属于当前事务：用当前 Guard 作用域调用 `
 与动态 Cast 相同：纳入回滚 / 持久化参与者与 Sync 提交屏障，提交确认（pipelined 为 ticket 持久）之前不外发；
 handler 报错、panic 或提交被明确拒绝时撤销发布——从 EntityManager 摘除并标记 removed、不写入持久化记录、
 Nest 自己的 EntitySync 注销该 subject（已持有对象的会话收到 ObjectRemove），Guard 释放后调用
-`OnDestroy(DestroyReasonCommon)` 并回收 ID。登记在业务自建 Sync Manager 上的 subject 需在 `OnDestroy` 里自行注销。
+`OnDestroy(entity.DestroyReasonCreateRevoked)` 并回收 ID（与业务 `Destroy` 传入的原因、仅内存卸载的 `DestroyReasonMemoryUnload` 都不同；
+之前是 `DestroyReasonCommon`，[RR-20260927-12](bugfix/RR-20260927-12.md)）。登记在业务自建 Sync Manager 上的 subject 需在 `OnDestroy` 里自行注销。
 在 Nest 之外（登录 / 创角端点、spawner、Service.Init、独立 `WithGuardScope`）调用这些入口仍是立即发布的原语义；
 Repository 聚合加载（`IsCreate=false`）不受影响。
 RollbackState 下新实体的 DAO 需要可快照（生成 DAO 已满足），remote-managed 实体在 durable 事务内创建会被拒绝，

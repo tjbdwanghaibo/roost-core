@@ -46,4 +46,9 @@ const (
 	// 内存仍留着被拒绝的修改，RR-20260926-39），下一次访问从权威重新加载。业务的 OnDestroy 可据此只回收
 	// 内存资源，不当作业务删除；Sync 订阅不要注销，重载后框架 Rebind 强制全量。
 	DestroyReasonMemoryUnload EntityDestroyReason = 255
+	// DestroyReasonCreateRevoked 表示 Nest handler 内新建的实体随事务回滚 / 提交被明确拒绝而撤销发布（RR-20260926-35）：
+	// 它从未进入已提交的持久化记录，也从未成为权威；框架在 Guard 释放后以此原因调用 DestroyAll / OnDestroy 并回收 ID。
+	// 业务的 OnDestroy 可据此只回收内存资源，不当作业务删除（RR-20260927-12；之前用 DestroyReasonCommon，与业务 Destroy
+	// 的缺省原因无法区分）。取值紧挨 DestroyReasonMemoryUnload，从高位往下分配框架原因，低位留给业务的领域别名。
+	DestroyReasonCreateRevoked EntityDestroyReason = 254
 )
