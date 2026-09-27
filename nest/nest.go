@@ -45,8 +45,8 @@ var (
 	// is work that ran after it, and the caller needs to know the difference
 	// from a rollback (RR-20260911-06).
 	//   - 是否可能已提交：已提交（消息自己的事务）。能否重试：不得重试。
-	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，
-	//     所以判断“是否可能已提交”不能只看它（RR-20260926-77）。
+	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务（或消息自己的事务结束后、收尾阶段调用的独立事务，RR-20260926-84）
+	//     已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，所以判断“是否可能已提交”不能只看它（RR-20260926-77）。
 	ErrAfterCommitFailed = errors.New("nest: transaction committed but after-commit work failed")
 	// ErrEntityReleaseFailed 表示准入后的解锁 hook 失败。它不表示事务被拒绝，
 	// 调用方仍需检查同时返回的 ErrCommitIndeterminate，不能据此重试整笔业务。
@@ -71,7 +71,8 @@ var (
 	// and recovered from WAL; rolling the in-memory state back could create a
 	// second, conflicting history.
 	//   - 是否可能已提交：可能。能否重试：不得重试，等实例从 WAL 恢复后按业务幂等键核对。
-	//   - 消息自己的事务与 handler 内嵌套独立事务结果未知时都已 fence 引擎（RR-20260926-76）。
+	//   - 消息自己的事务与 handler 内嵌套独立事务结果未知时都已 fence 引擎（RR-20260926-76）；消息自己的事务结束后、收尾阶段
+	//     （Guard post-release、解锁后回调）调用的独立事务同样（RR-20260926-84）。
 	ErrCommitIndeterminate = errors.New("nest: transaction commit outcome is indeterminate")
 	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用
 	// （RR-20260926-48 / 64），或同 ID 的上一个实例仍在撤销 / 销毁收尾（RR-20260926-81，不再返回 entity.ErrEntityRemoved）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
@@ -83,7 +84,8 @@ var (
 	//     业务确认 handler 幂等后才可重试。
 	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
 	// ErrNestedTransactionCommitted 表示这条消息自己的事务没有提交（回滚或失败），但 handler 内嵌套的独立事务
-	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）。消息按已越过提交点处理，框架不自动重排；
+	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）；消息自己的事务结束后、收尾阶段（Guard post-release、
+	// 解锁后回调）调用的独立事务也不认领消息，同样由本哨兵说明，不会被当成消息自己的提交（RR-20260926-84）。消息按已越过提交点处理，框架不自动重排；
 	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
 	//   - 是否可能已提交：是（嵌套部分已提交或结果未知）。能否重试：不得整笔重试，即使链上同时有 ErrLockTimeout（RR-20260926-77）。
 	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
@@ -101,8 +103,9 @@ var (
 	//   - 是否可能已提交：否。嵌套事务没有写任何持久记录，它的内存修改已撤销；外层事务照常由业务决定继续或失败。
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
-	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）。Remote 批次只随
-	// 消息自己的事务 Commit 或 Abort；嵌套独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
+	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）：handler 内，
+	// 或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、解锁后回调，RR-20260926-84）。Remote 批次只随
+	// 消息自己的事务 Commit 或 Abort；独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
 	// 框架直接拒绝：call 不执行、没有任何提交、批次与消息的 Remote 状态不变。
 	//   - 是否可能已提交：否。独立事务没有执行；消息自己的事务照常由业务决定继续或失败，其 Remote 批次按它的结果 Commit / Abort。
 	//   - 能否重试：原样重试仍会被拒绝（结构性限制）。把写入并入消息自己的事务，或放到不声明 Remote 目标的消息里执行。

@@ -206,8 +206,8 @@ func (m *Msg) markTransactionCommitted() {
 	}
 }
 
-// markNestedTransactionCommitted 记录这条消息的 handler 内，一个不认领消息的嵌套独立事务已持久提交或结果未知
-// （RR-20260926-65）；nil 接收者（不在派发中）无操作。
+// markNestedTransactionCommitted 记录这条消息的 handler 内（或消息自己的事务结束后的收尾阶段，RR-20260926-84），一个不认领消息的
+// 独立事务已持久提交或结果未知（RR-20260926-65）；nil 接收者（不在派发中）无操作。
 func (m *Msg) markNestedTransactionCommitted() {
 	if m != nil {
 		m.nestedTxCommitted = true
@@ -361,7 +361,8 @@ type Msg struct {
 	// remoteSyncMutation 是本地已持久提交的 Remote 事务的 Sync 提交门。Remote 确认没有结论时，
 	// deferPostRemoteCommit 把它连同 postRemoteCommit 交给批次：拒绝时 Reject（RR-20260926-37）。
 	remoteSyncMutation *entity.SyncMutation
-	// txInFlight 在本条消息自己的事务执行期间为真，用来区分 handler 内嵌套的独立事务。
+	// txInFlight 在本条消息自己的事务执行期间为真，用来区分 handler 内嵌套的独立事务；事务结束后的收尾阶段它已复位，
+	// 独立事务靠入口（runTransaction 的 claimsMessage）区分，不能只看它（RR-20260926-84）。
 	// txAdmitted 表示本条消息自己的事务已越过提交点：strict / memory 持久提交成功、pipelined 记录已被 WAL 接纳、
 	// memory 快路径已准入。之后回复里的任何错误（即使链上有锁超时类错误）都不能让它重新准入（RR-20260926-49）。
 	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回（或慢阶段续行结束）后读。
@@ -381,7 +382,7 @@ type Msg struct {
 	// 组迁移类错误都不再重排，回复带 ErrNonRollbackNotRequeued（RR-20260926-73）。取锁、组迁移检查等 handler 之前的准入失败
 	// 不置位，照常重排。由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
 	noRollbackHandlerStarted bool
-	// nestedTxCommitted 表示 handler 内嵌套的独立事务（不认领消息的 RunIsolatedTransaction 等）已持久提交或结果未知：
+	// nestedTxCommitted 表示 handler 内嵌套的独立事务（不认领消息的 RunIsolatedTransaction 等，含收尾阶段调用的，RR-20260926-84）已持久提交或结果未知：
 	// 消息按已越过提交点处理，不重排；自己的事务没有提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
 	// 由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
 	nestedTxCommitted bool
