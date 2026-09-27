@@ -448,7 +448,11 @@ func renderProductionCompose(m Manifest) string {
 		b.WriteString("    image: ${ROOST_IMAGE:?ROOST_IMAGE must be an immutable digest}\n")
 		fmt.Fprintf(&b, "    container_name: %s-%s\n", m.Project.Name, service)
 		fmt.Fprintf(&b, "    command: [%q, \"--sid=%d\", \"--config=/etc/roost/config.yaml\"]\n", service, sid)
-		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]\n")
+		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n")
+		// RR-20260927-33：挂载选项之间是逗号，必须整项加引号。之前写成不带引号的
+		// flow 序列 [/tmp:rw,noexec,nosuid,size=64m]，YAML 按逗号拆成 4 项，
+		// docker compose up 报 "'noexec' mount path must be absolute"，所有服务都起不来。
+		b.WriteString("    tmpfs: [\"/tmp:rw,noexec,nosuid,size=64m\"]\n")
 		// shutdown.total_timeout of this service + 5s (serviceShutdownPlan, RR-20260926-66).
 		fmt.Fprintf(&b, "    stop_grace_period: %s\n", seconds(serviceShutdownPlan(m, service).grace))
 		b.WriteString("    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: 30s\n")
