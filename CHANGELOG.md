@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～28，08 未使用）与补测。
+> 第五轮独立审计（v1.17.1 中 RR-81～85）见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)。
+
+### Changed（行为收紧 / 需要注意）
+
+- **Nest fence 之后拒绝外层提交（RR-20260927-06）**：引擎已 fence 时，仍在执行的消息自己的事务在交给 committer 之前返回 `nest.ErrNestFenced` 并回滚（此前结果未知来自 `AcceptMutation` 失败时 WAL 未 terminal，外层记录照常写入）。别的消息 fence 了引擎时，在途消息的提交同样被拒。
+- **嵌套独立事务的裸 mutation 同样受 RR-74 约束（RR-20260927-07）**：外层 state / undo 事务中，`RunIsolatedTransaction` 里用 `AddMutation` 直写、按实体 ID 命中外层已快照实体的写入返回 `ErrNestedTransactionRollbackConflict`，什么都不提交。
+- **handler 内新建的两处收紧（RR-20260927-11 / 21）**：`CreateInScope` 捕获失败时整条事务失败（业务吞掉错误也回滚、不重排）；同一 handler 里再建本 handler 自己撤销的同 ID 为确定失败（`errors.Is(entity.ErrEntityRemoved)`、不重排，此前可回滚事务空转到重排上限）。USER_GUIDE §4 判别表新增第 12 行。
+- **Remote 托管实体 + sid 作用域 DAO 在提交路径拒绝（RR-20260927-09）**：`ValidateEntityRegistry` 与 Remote 事务进 WAL 前（`FinalizeLocked`）都拒绝该组合，错误满足 `errors.Is(entity.ErrRemoteManagedServerScopedDAO)`（`remoteentity` 同名哨兵为同一个值）。
+- **同 fence 下拒绝 Remote 版本向量回退（RR-20260927-15）**：`SetRemoteVersionVector` 遇同 fence、更小 StateVersion 返回 `ErrRemoteVersionConflict`；只影响非 authority 兼容装配，迟到重放按过期处理。
+- **strict 等 Remote 确认截止的回复同时满足 `ErrRemotePersistenceIndeterminate`（RR-20260927-24）**：兑现 RR-37 承诺；`ErrRemoteCommitTimeout` 与 `context.DeadlineExceeded` 保留，只增加 `errors.Is` 命中。
+- **`RegisterEntityKindDefs` / `RegisterEntityKindCategories` 整批校验后再写入（RR-20260927-10）**：出错不留半批。
+- **撤销新建实体改用 `entity.DestroyReasonCreateRevoked`（RR-20260927-12）**：此前为 `DestroyReasonCommon`；按原因分支的业务销毁回调需识别新值。
+- **`ReleaseCast` 按实例释放（RR-20260927-26）**：handler 内 Destroy 后同 ID 重建时，`ReleaseCast(旧实例)` 不再放掉新实例的锁；新增 `EntityGuard.ReleaseEntityInstance`，`ReleaseEntity(id)` 语义不变。
+- **非 Nest 持锁领头方冷加载时发布交回领头方 goroutine（RR-20260927-27）**：loader 发布要锁领头方已持有的实体时不再永久死锁，领头方按自己的 ctx 离开恢复成立。
+- **entitysync 注销按当前登记 / 按实例（RR-20260927-22 / 28）**：`Unregister` 取锁后确认表项，旧 subject 已被 forget 时注销同 ID 的当前登记；`RetractSyncSubject` 在 `subj.mu` 内比对状态、只撤回传入的那个状态。
+- **生成的 player TCP Mod 声明停机预算（RR-20260927-05，需 `roost project sync`）**：`StopBudget = player_access.tcp.shutdown_timeout`，托管 TCP 的服务 `shutdown.total_timeout` 与宽限期 +7s（game-demo 缺省 Mod 集 game 107s / 112s → 114s / 119s）；未手改的 `shutdown:` 段经 sync 自动更新，手改的看 doctor 提示。
+- **game-demo 玩家 id 计数键移到 `<account.key_prefix>:player_id`（RR-20260927-03）**：首次分配时以旧键 `roost:demo:player_id` 的值为起点（旧键只读不删）；升级时先停掉全部 account 进程；已生成的 `collaborators.go` 需重新生成或手工合并。
+- **game-demo 场景接卸载后重载与 `OnEntityLoaded → Rebind`（RR-20260927-18 / 23）**：玩家被仅内存卸载（原生步骤投影被 lease fence 跳过）后观察者收到权威全量；无人观看时卸载、之后被业务重载的玩家绑回场景；`NewScene` 在缺少实体运行时或 DataEngine `OnEntityLoaded` 时返回错误。
+
+### Added
+
+- 配置：`nest.entity_load_timeout`、`nest.unload_resync.{workers,attempts,queue_capacity}`（RR-20260927-13，缺省不变，负值拒绝启动）；`remote_entity.snapshot_l2_key_prefix`（RR-20260927-17，缺省空时键不变，设置或修改需整体重启）。
+- API：`remoteentity.NewSnapshotL2StoreWithKeyPrefix`、`ValidateSnapshotL2KeyPrefix`、`Config.SnapshotL2KeyPrefix`；`entity.ValidateRemoteManagedDaoScopes`、`entity.ErrRemoteManagedServerScopedDAO`、`entity.DestroyReasonCreateRevoked`、`EntityGuard.ReleaseEntityInstance`、`UnloadResyncStats.Backlog`。
+- 指标：`entity.unload_resync.backlog`（RR-20260927-14）、`saga.step_inbox.mark_completed_error_total`（RR-20260927-16）、game-demo `scene_session_reopen_failed_total{reason}`（RR-20260927-19）。
+
+### Fixed
+
+- **生成器 / doctor**：Windows CI 上 RR-80 写失败用例（RR-20260927-01）；生成的 `Runtime.CloseSessions` 返回实际关闭数（RR-20260927-02，需重新生成）；`deploy/dev/run.sh` 登记游戏服传 `redis.db` / `redis.password`（RR-20260927-03）；
+  doctor 对 0 或负的 `total_timeout` / `dataengine.shutdown_timeout` 按运行时 30s 判定，“Set it to”按配置的 dataengine 预算、各份不同时逐文件给出（RR-20260927-04）。
+- **其他**：不可比较的自定义 `lock.Mutex` 不再 panic（RR-20260927-25）；saga 收件箱 claim 标记失败记 Warn 与计数（RR-20260927-16）；卸载后重载最坏延迟写成真实上界，默认约 43 小时（RR-20260927-14）。
+- **测试与卫生**：nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；21 个文件 gofmt；`entity.ResetEntityRegistryForTest` 标 Deprecated；
+  补测收为回归：B02 / B04 / B08～B10 / B13～B19 / B21 / B22 / B24 / B26 / B37，均见清单。
+- **文档**：USER_GUIDE §4 判别表补 `ErrRemoteCommitTimeout` 并更正收尾阶段表述；`ErrNestedTransactionInRemoteMessage` 的 `PrepareRemoteWriteBatch` 窗口；RR-54 包装 Getter 契约；kit/README 的 `roost.room` / `roost.sync` 共用 `ROOST_SYNC`；多份修复记录追加更正与关闭说明。
+
 ## [v1.17.1] - 2026-09-27
 
 > v1.17.0 之后的全部修复（RR-20260926-30、33～85）。生成器输出要求 roost-core ≥ v1.17.1（生成的 scene 桥接用到本版新增的 entitysync / policy API）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、

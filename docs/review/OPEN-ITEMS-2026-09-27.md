@@ -293,7 +293,7 @@
 | RR-20260927-05 | C05 player TCP Mod 声明停机预算 | 1 |
 | RR-20260927-06 | C07 fence 后外层提交仍交给 committer（B03 证实后） | 3 Nest |
 | RR-20260927-07 | C06 嵌套独立事务裸 mutation 绕过 RR-74 | 3 |
-| RR-20260927-08 | C09 交叉创建重排抖动（仅 B24 出现耗尽时） | 3 |
+| RR-20260927-08 | C09 交叉创建重排抖动（仅 B24 出现耗尽时）——**未使用**：B24 3100 次试验 0 耗尽，不加抖动 | 3 |
 | RR-20260927-09 | A10 + C15 Remote 托管 + sid 作用域 DAO 提交路径 fail-fast | 4 entity |
 | RR-20260927-10 | C17 `RegisterEntityKindDefs` 原子化 | 4 |
 | RR-20260927-11 | C26 `CreateInScope` 捕获失败强制事务失败 | 4 |
