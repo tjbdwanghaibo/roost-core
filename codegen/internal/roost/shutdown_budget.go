@@ -18,12 +18,14 @@ import (
 // first, then the service's own Mods and the shared Mods in reverse order, each
 // with a deadline planned from what is left (app.modStopBudget). A Mod without
 // a declared stop budget keeps a fixed floor (app.undeclaredModStopFloor, 3s);
-// a Mod that declares one (dataengine: dataengine.shutdown_timeout) is granted
+// a Mod that declares one (dataengine: dataengine.shutdown_timeout; the player
+// TCP listener: player_access.tcp.shutdown_timeout, RR-20260927-05) is granted
 // it from the rest, and is scaled down with a warning only when the rest cannot
 // cover it. One value for every service cannot fit that: the game-demo game
-// service registers 23 Mods and needs 30s + 3s x 22, a framework service
-// registers 6 and needs 3s x 6. So the generator computes the window per
-// service from the Mods its bootstrap registers:
+// service (-mods configdata,mongo,nats,dataengine,nest) registers 23 Mods and
+// needs 30s + 10s + 3s x 21, a framework service registers 6 and needs 3s x 6.
+// So the generator computes the window per service from the Mods its
+// bootstrap registers:
 //
 //	total_timeout = declared budgets + generatedModStopFloor x undeclared Mods + generatedShutdownMargin
 //	grace period  = max(total_timeout, the longest total the service's configs set) + generatedGraceOverTotal
@@ -39,6 +41,13 @@ const (
 	// generated config writes it (catalog.go): the stop budget kit/dataengine
 	// declares to the App.
 	generatedDataEngineShutdownTimeout = 30 * time.Second
+	// generatedPlayerTCPShutdownTimeout is player_access.tcp.shutdown_timeout
+	// as the generated config writes it (player_tcp_config.go): the stop
+	// budget the generated player TCP Mod declares to the App.
+	//
+	// RR-20260927-05：之前这个 Mod 不声明预算，App 只给它 3s 保底（低于它自己的 10s，与
+	// nest.request_timeout 3s 也没有余量）；现在它声明 shutdown_timeout，生成公式与 doctor 同步计入。
+	generatedPlayerTCPShutdownTimeout = 10 * time.Second
 	// generatedShutdownMargin is for Service.Shutdown, which runs inside the
 	// same window before any Mod stops (the App starts the clock before it).
 	// Generated services only close in-process loops there — a hosted framework
@@ -65,7 +74,12 @@ type serviceShutdown struct {
 	// declaring is how many of them declare a stop budget; declared is the sum.
 	declaring int
 	declared  time.Duration
-	margin    time.Duration
+	// dataEngine and playerTCP are how many of the declaring Mods are
+	// dataengine and the player TCP listener: the doctor reads each one's
+	// budget from its own config key. Not part of the rendered block.
+	dataEngine int
+	playerTCP  int
+	margin     time.Duration
 	// total is the formula's shutdown.total_timeout.
 	total time.Duration
 	// grace is what the deployment templates wait after SIGTERM:
@@ -84,9 +98,9 @@ func (plan serviceShutdown) sameFormula(other serviceShutdown) bool {
 
 // serviceShutdownPlan counts what the bootstrap registers for the service
 // (renderBootstrap: the shared a.Mods list, then serviceModConstructors) and
-// applies the formula. Only dataengine declares a stop budget among the Mods
-// the generator wires; every other Kit, framework, rpc and access Mod gets the
-// floor.
+// applies the formula. Among the Mods the generator wires, dataengine and the
+// player TCP listener (RR-20260927-05) declare a stop budget; every other Kit,
+// framework, rpc and access Mod gets the floor.
 //
 // The grace period never goes below the total the service's configs actually
 // set (m.configuredShutdown, see withConfiguredShutdown): configs are
@@ -103,8 +117,15 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 	for _, mod := range append(append([]string(nil), shared...), own...) {
 		if mod == "dataengine" {
 			plan.declaring++
+			plan.dataEngine++
 			plan.declared += generatedDataEngineShutdownTimeout
 		}
+	}
+	// Registered by serviceModConstructors under the same condition.
+	if serviceOwnsPlayerTCP(m, service) {
+		plan.declaring++
+		plan.playerTCP++
+		plan.declared += generatedPlayerTCPShutdownTimeout
 	}
 	plan.total = plan.declared + time.Duration(plan.undeclared())*generatedModStopFloor + plan.margin
 	plan.grace = max(plan.total, m.configuredShutdown[service]) + generatedGraceOverTotal
@@ -445,23 +466,17 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 			if total <= 0 {
 				total = appDefaultShutdownTotal
 			}
-			declared := plan.declared
-			if plan.declaring > 0 {
-				value, err := parseConfigDuration(settings.DataEngine.ShutdownTimeout, generatedDataEngineShutdownTimeout)
-				if err != nil {
-					if dev {
-						items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err)})
-						failed = true
-						break
-					}
-					unreadable = append(unreadable, fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err))
-					continue
+			// 每个声明预算的 Mod 按它自己的配置键读（RR-20260927-05 之前只有 dataengine，
+			// 这里曾是 dataengine 值 × 声明数）。
+			declared, err := configuredDeclaredBudgets(plan, settings)
+			if err != nil {
+				if dev {
+					items = append(items, CheckItem{Name: name, Status: StatusFail, Detail: fmt.Sprintf("%s: %v", target.rel, err)})
+					failed = true
+					break
 				}
-				// kit/dataengine 对非正值同样兜底 30s（mod.go duration()），按 0 算会漏报。
-				if value <= 0 {
-					value = generatedDataEngineShutdownTimeout
-				}
-				declared = value * time.Duration(plan.declaring)
+				unreadable = append(unreadable, fmt.Sprintf("%s: %v", target.rel, err))
+				continue
 			}
 			need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
 			if total < need {
@@ -501,6 +516,46 @@ type shutdownSettings struct {
 	DataEngine struct {
 		ShutdownTimeout string `yaml:"shutdown_timeout"`
 	} `yaml:"dataengine"`
+	PlayerAccess struct {
+		TCP struct {
+			ShutdownTimeout string `yaml:"shutdown_timeout"`
+		} `yaml:"tcp"`
+	} `yaml:"player_access"`
+}
+
+// configuredDeclaredBudgets is the sum of the stop budgets the service's
+// declaring Mods take from one config, read the way each Mod reads its key:
+// dataengine.shutdown_timeout missing or non-positive is kit/dataengine's 30s
+// (RR-20260927-04); player_access.tcp.shutdown_timeout missing or 0 is the
+// generated Mod's 10s, and a negative one stops the Mod from starting
+// (validateConfig), reported as an error (RR-20260927-05).
+func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) (time.Duration, error) {
+	var declared time.Duration
+	if plan.dataEngine > 0 {
+		value, err := parseConfigDuration(settings.DataEngine.ShutdownTimeout, generatedDataEngineShutdownTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("dataengine.shutdown_timeout: %w", err)
+		}
+		// kit/dataengine 对非正值同样兜底 30s（mod.go duration()），按 0 算会漏报。
+		if value <= 0 {
+			value = generatedDataEngineShutdownTimeout
+		}
+		declared += value * time.Duration(plan.dataEngine)
+	}
+	if plan.playerTCP > 0 {
+		value, err := parseConfigDuration(settings.PlayerAccess.TCP.ShutdownTimeout, generatedPlayerTCPShutdownTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("player_access.tcp.shutdown_timeout: %w", err)
+		}
+		if value < 0 {
+			return 0, fmt.Errorf("player_access.tcp.shutdown_timeout: %s is negative; the player tcp Mod refuses to start", value)
+		}
+		if value == 0 {
+			value = generatedPlayerTCPShutdownTimeout
+		}
+		declared += value * time.Duration(plan.playerTCP)
+	}
+	return declared, nil
 }
 
 // readShutdownSettings parses a service config, or the config.yaml a k8s

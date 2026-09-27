@@ -364,6 +364,15 @@ func (mod *Mod) Stop() {
 	_ = mod.StopWithContext(ctx)
 }
 
+// StopBudget declares player_access.tcp.shutdown_timeout to the App
+// (app.ModStopBudgetProvider): within shutdown.total_timeout the App grants
+// the listener this long to drain its connections, and the generated
+// total_timeout counts it (RR-20260927-05). Undeclared, the Mod only got the
+// App's fixed 3s floor — below its own 10s, and no slack over the 3s a
+// request already in flight may take (nest.request_timeout). 0 before Init,
+// i.e. not declared.
+func (mod *Mod) StopBudget() time.Duration { return mod.config.ShutdownTimeout }
+
 func (mod *Mod) StopWithContext(ctx context.Context) error {
 	if mod.transportRuntime != nil { mod.transportRuntime.server.Store(nil) }
 	if mod.server == nil {
@@ -1066,6 +1075,7 @@ func (session *session) close(reason error) (first bool) {
 var (
 	_ app.Mod = (*Mod)(nil)
 	_ app.ModStopperWithContext = (*Mod)(nil)
+	_ app.ModStopBudgetProvider = (*Mod)(nil)
 	_ gateway.Session = (*session)(nil)
 )
 `, generatedHeader, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAgentImportSuffix)
@@ -1662,6 +1672,23 @@ func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	waitClosed(t, closed, "first", "second")
 	waitReleased(t, server, 0)
 	if got := runtime.CloseSessions(7, nil); got != 0 { t.Errorf("CloseSessions for a player with no session reported %%d, want 0", got) }
+}
+
+// RR-20260927-05: the Mod declares player_access.tcp.shutdown_timeout as its
+// stop budget, so the App grants the listener that long inside
+// shutdown.total_timeout instead of the 3s floor of an undeclared Mod.
+func TestTheModDeclaresItsShutdownTimeoutAsTheStopBudget(t *testing.T) {
+	mod := NewMod()
+	provider, ok := any(mod).(interface{ StopBudget() time.Duration })
+	if !ok { t.Fatal("the player tcp Mod declares no stop budget: the App gives it only the 3s floor of an undeclared Mod") }
+	if got := provider.StopBudget(); got != 0 { t.Fatalf("stop budget before Init = %%v, want 0 (not declared)", got) }
+	mod.authenticator = AuthenticatorFunc(func(context.Context, string, net.Addr) (gateway.Principal, error) { return gateway.Principal{}, nil })
+	for _, tc := range []struct{ configured string; want time.Duration }{{"", 10 * time.Second}, {"7s", 7 * time.Second}} {
+		cfg := viper.New()
+		if tc.configured != "" { cfg.Set("player_access.tcp.shutdown_timeout", tc.configured) }
+		if err := mod.Init(cfg); err != nil { t.Fatal(err) }
+		if got := provider.StopBudget(); got != tc.want { t.Errorf("shutdown_timeout %%q: stop budget = %%v, want %%v", tc.configured, got, tc.want) }
+	}
 }
 
 // scriptedConn is a net.Conn whose writes report what the test says: how many

@@ -112,8 +112,10 @@ unset ROOST_PLAYER_TOKEN
 
 代码还设置了生产硬上限：最大 1,000,000 个连接、最大 16 MiB payload、握手/写超时不超过 1 分钟、
 idle 不超过 24 小时、transport shutdown 不超过 5 分钟。应用总 shutdown timeout 必须大于 transport
-预算。生成的 transport Mod 不向 App 声明停机预算：App 停机时它与其他未声明的 Mod 一样至少得到 3s 保底份额
-（game-demo 的 game 服务约 3.7s），`shutdown_timeout` 只约束兼容 `Stop()` 路径。Linux 同时配置 `nofile`、listen backlog、conntrack 和 LB idle timeout；LB idle 应略大于应用值。
+预算。生成的 transport Mod 把 `shutdown_timeout` 声明为停机预算（`StopBudget()`，`app.ModStopBudgetProvider`，RR-20260927-05）：
+App 在 `shutdown.total_timeout` 内按声明值给它排空连接的时间，生成的 `total_timeout` 已计入它（改大 `shutdown_timeout` 时
+`roost project doctor` 按配置判定并给出建议值，total 要同步调大）；兼容 `Stop()` 路径同样用它。此前它不声明预算，只得到 3s 保底
+（game-demo 的 game 服务约 3.7s），低于自己的 10s。Linux 同时配置 `nofile`、listen backlog、conntrack 和 LB idle timeout；LB idle 应略大于应用值。
 
 ## 5. 主动发布
 

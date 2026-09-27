@@ -23,7 +23,9 @@ var playerTCPConfigDefaults = []struct{ key, value string }{
 	{key: "handshake_timeout", value: "5s"},
 	{key: "idle_timeout", value: "90s"},
 	{key: "write_timeout", value: "5s"},
-	{key: "shutdown_timeout", value: "10s"},
+	// The generated Mod declares it as its stop budget and the generated
+	// shutdown.total_timeout counts it (RR-20260927-05).
+	{key: "shutdown_timeout", value: seconds(generatedPlayerTCPShutdownTimeout)},
 	// RR-20260926-36: dispatch_timeout matches the generated nest.request_timeout;
 	// login_timeout is the share of it a login gives to claim + cold load.
 	{key: "dispatch_timeout", value: "3s"},

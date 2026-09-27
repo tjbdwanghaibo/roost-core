@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+// RR-20260927-05: the player TCP Mod (accessplayertcp) now declares
+// player_access.tcp.shutdown_timeout (10s) as its stop budget, so the game
+// service's window counts 30s + 10s declared; the numbers below follow.
+//
 // RR-20260926-66: every service got the same shutdown.total_timeout (60s) and
 // deployment grace period (65s), whatever it runs. The game-demo game service
 // registers 23 Mods (20 of its own and the 3 shared ones); the App keeps a
@@ -30,7 +34,7 @@ import (
 // how many Mods the process registers: the shared a.Mods(...) block plus the
 // Mods passed to that service's RegisterServer. It is read from the output, not
 // from the generator's own bookkeeping, so the two cannot agree by accident.
-func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]bool) {
+func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]declaringMods) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
 	if err != nil {
@@ -44,7 +48,7 @@ func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]b
 		shared = len(constructor.FindAllString(block, -1))
 	}
 	sharedDataEngine := strings.Contains(body[:max(strings.Index(body, "a.RegisterServer("), 0)], "kitdataengine.NewMod(")
-	counts, declares := map[string]int{}, map[string]bool{}
+	counts, declares := map[string]int{}, map[string]declaringMods{}
 	register := regexp.MustCompile(`(?m)^\ta\.RegisterServer\(app\.ServiceName\(([^)]*)\)`)
 	for _, match := range register.FindAllStringSubmatchIndex(body, -1) {
 		name := strings.Trim(body[match[2]:match[3]], `"`)
@@ -58,18 +62,29 @@ func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]b
 		}
 		block := rest[:end]
 		counts[name] = shared + len(constructor.FindAllString(block, -1))
-		declares[name] = sharedDataEngine || strings.Contains(block, "kitdataengine.NewMod(")
+		declares[name] = declaringMods{
+			dataengine: sharedDataEngine || strings.Contains(block, "kitdataengine.NewMod("),
+			playerTCP:  strings.Contains(block, "accessplayertcp.NewMod("),
+		}
 	}
 	return counts, declares
 }
 
+// declaringMods is which of the Mods that declare a stop budget a service's
+// bootstrap registers.
+type declaringMods struct{ dataengine, playerTCP bool }
+
 // expectedShutdown is the formula of the fix, applied to what the bootstrap
 // registers: dataengine declares dataengine.shutdown_timeout (30s in the
-// generated config); every other Mod declares nothing.
-func expectedShutdown(mods int, dataengine bool) (totalSeconds, graceSeconds int) {
+// generated config), the player TCP Mod player_access.tcp.shutdown_timeout
+// (10s, RR-20260927-05); every other Mod declares nothing.
+func expectedShutdown(mods int, declares declaringMods) (totalSeconds, graceSeconds int) {
 	declared, undeclared := 0, mods
-	if dataengine {
-		declared, undeclared = 30, mods-1
+	if declares.dataengine {
+		declared, undeclared = declared+30, undeclared-1
+	}
+	if declares.playerTCP {
+		declared, undeclared = declared+10, undeclared-1
 	}
 	total := declared + 3*undeclared + 5
 	return total, total + 5
@@ -144,11 +159,11 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 	}
 	counts, declares := bootstrapModCounts(t, target)
 	// The real game service of the demo: 20 service Mods + lock, ops, statslog.
-	if counts["game"] != 23 || !declares["game"] {
-		t.Fatalf("game registers %d Mods (dataengine: %v), want 23 with dataengine", counts["game"], declares["game"])
+	if counts["game"] != 23 || !declares["game"].dataengine || !declares["game"].playerTCP {
+		t.Fatalf("game registers %d Mods (declaring: %+v), want 23 with dataengine and the player TCP Mod", counts["game"], declares["game"])
 	}
-	// 30s + 3s x 22 + 5s; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
-	pinned := map[string][2]int{"game": {101, 106}, "account": {23, 28}}
+	// 30s + 10s + 3s x 21 + 5s; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
+	pinned := map[string][2]int{"game": {108, 113}, "account": {23, 28}}
 	for service, mods := range counts {
 		total, grace := expectedShutdown(mods, declares[service])
 		if want, ok := pinned[service]; ok && (want[0] != total || want[1] != grace) {
@@ -160,7 +175,7 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 		t.Fatalf("account registers %d Mods, game %d", counts["account"], counts["game"])
 	}
 	// The second game process runs the game service's Mods and waits as long.
-	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 106 ]`)
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 113 ]`)
 }
 
 // A service with few Mods gets a smaller window than the demo's game service.
@@ -171,12 +186,12 @@ func TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts, declares := bootstrapModCounts(t, target)
-	if declares["gate"] {
-		t.Fatal("gate unexpectedly runs dataengine")
+	if declares["gate"] != (declaringMods{}) {
+		t.Fatalf("gate unexpectedly runs a declaring Mod: %+v", declares["gate"])
 	}
-	total, grace := expectedShutdown(counts["gate"], false)
-	if total >= 101 {
-		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 101s", counts["gate"], total)
+	total, grace := expectedShutdown(counts["gate"], declaringMods{})
+	if total >= 108 {
+		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 108s", counts["gate"], total)
 	}
 	assertGeneratedShutdown(t, target, "gate", total, grace)
 }
@@ -202,13 +217,13 @@ func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	counts, _ := bootstrapModCounts(t, root)
-	before, _ := expectedShutdown(counts["game"], false)
+	counts, declares := bootstrapModCounts(t, root)
+	before, _ := expectedShutdown(counts["game"], declares["game"])
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "redis", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
-	counts, _ = bootstrapModCounts(t, root)
-	total, grace := expectedShutdown(counts["game"], false)
+	counts, declares = bootstrapModCounts(t, root)
+	total, grace := expectedShutdown(counts["game"], declares["game"])
 	if total != before+3 {
 		t.Fatalf("adding redis moved the formula from %ds to %ds, want +3s", before, total)
 	}
@@ -232,8 +247,8 @@ func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 		t.Errorf("a shutdown block from an older generator was rewritten:\n%s", got)
 	}
 	// The secret example was never touched by hand and keeps following.
-	counts, _ = bootstrapModCounts(t, root)
-	total, _ = expectedShutdown(counts["game"], false)
+	counts, declares = bootstrapModCounts(t, root)
+	total, _ = expectedShutdown(counts["game"], declares["game"])
 	assertContains(t, root, "deploy/k8s/base/secret.game.example.yaml", fmt.Sprintf("total_timeout: %ds\n", total))
 	// The grace period follows the longest configured total (the hand-edited 200s), not the formula.
 	assertDeployedGrace(t, root, "game", 205)
@@ -310,9 +325,9 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 		end := strings.Index(body, "  serve_wait_timeout: 5s\n") + len("  serve_wait_timeout: 5s\n")
 		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
 	}
-	// game: a hand-edited total above the formula's 101s.
+	// game: a hand-edited total above the formula's 108s.
 	game := readProjectFile(t, target, "configs/service/config.game.yaml")
-	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 101s\n", "total_timeout: 120s\n", 1))
+	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 108s\n", "total_timeout: 120s\n", 1))
 	if _, err := SyncProject(target); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +389,7 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 28s < total_timeout 60s + 5s") {
 		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
 	}
-	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 23 Mods (30s declared + 3s x 22 = 96s)") || !strings.Contains(item.Detail, "Set it to 101s") {
+	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 23 Mods (40s declared + 3s x 21 = 103s)") || !strings.Contains(item.Detail, "Set it to 108s") {
 		t.Errorf("game on 60s: %s %s", item.Status, item.Detail)
 	}
 	// Sync follows the configured total: the grace period is back above it.

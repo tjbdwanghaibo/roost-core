@@ -361,11 +361,13 @@ App 的分配规则（RR-20260926-42，RR-20260926-51 修订）：Service.Shutdo
 共享 Mod 保留它们声明的预算。没有 Mod 声明预算时与原先“剩余 / 剩余 Mod 数”相同；没有总截止时间的兼容路径（启动失败回滚）下，
 声明的 Mod 用声明值，其余 5s。某个 Mod 超时后仍按既有语义停止后续关闭、保留其余 Mod 的资源。
 
-生成配置的 `shutdown.total_timeout` 按服务计算（RR-20260926-66）：声明预算之和（`dataengine.shutdown_timeout: 30s`）+ 3s × 其余 Mod 数
+生成配置的 `shutdown.total_timeout` 按服务计算（RR-20260926-66）：声明预算之和（`dataengine.shutdown_timeout: 30s`；托管 player TCP 接入的服务另有生成的
+TCP Mod 声明的 `player_access.tcp.shutdown_timeout: 10s`，RR-20260927-05）+ 3s × 其余 Mod 数
 + 5s（Service.Shutdown 在同一时限内、先于 Mod 运行），Mod 数取该服务进程实际注册的全部 Mod（含共享 Mod）；部署的终止宽限期
 （k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh`）为
 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`——配置手改、旧格式或缺键（App 兜底 30s）时宽限期跟随配置，永远不低于配置 total + 5s。
-game-demo 缺省 Mod 集的 game 服务 25 个 Mod：107s / 112s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个：101s / 106s），dataengine 拿满 30s、其余每个 Mod ≥ 3s、不告警；框架服务（6 个 Mod、无声明）23s / 28s。
+game-demo 缺省 Mod 集的 game 服务 25 个 Mod：114s / 119s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个：108s / 113s），dataengine 拿满 30s、player TCP 拿满 10s、其余每个 Mod ≥ 3s、不告警
+（RR-20260927-05 之前 TCP Mod 不声明、只得 3s 保底，两组值为 107s / 112s 与 101s / 106s）；框架服务（6 个 Mod、无声明）23s / 28s。
 自定义时保持 `total_timeout ≥ 声明预算之和 + 3s × 其他 Mod 数`（`config.<svc>.yaml`、`.prod.example.yaml`、k8s secret 示例逐份判定，任一份不足时 `roost project doctor` WARN 并指明文件，建议值按该份配置的 `dataengine.shutdown_timeout` 计算，0 或负的时长按运行时的 30s 兜底判定；示例解析失败或时长非法时 WARN 只指明文件与键）；改大 total 后执行 `roost project sync`，
 部署模板的宽限期随之放大（模板宽限期低于配置 total + 5s 时 doctor FAIL）。
 RR-66 之前生成、仍为 `total_timeout: 60s` 的工程：Mod 多的服务（game-demo game）每次停机告警且个别 Mod 低于保底，应改为生成值；

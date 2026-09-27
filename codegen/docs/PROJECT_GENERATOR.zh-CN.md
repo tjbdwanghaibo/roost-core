@@ -592,13 +592,13 @@ v1.7.0 起，新项目同时生成三套部署入口：
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
 
 停机时长按服务生成（RR-20260926-66）：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的
-`dataengine.shutdown_timeout`，生成值 30s）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限），
+`dataengine.shutdown_timeout`，生成值 30s；托管 player TCP 接入的服务另加生成的 TCP Mod 声明的 `player_access.tcp.shutdown_timeout`，生成值 10s，RR-20260927-05）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限），
 Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Kit Mod、框架 ClientMod / owner Mod、rpc Mod、player access Mod）；
 只有生成器 Manifest 已知的 Mod 计入：应用手写、在 bootstrap 里自行注册的 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget`，其声明值也不进公式，`roost project doctor` 同样不检查它，
 需要时手工调大该服务的 `shutdown.total_timeout` 与下面各处宽限期（RR-20260926-66，OPEN-ITEMS C31）；
 k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh` / `second-game.sh` 的
 `kill -9` 前等待均为 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`（读 `config.<svc>.yaml`、`.prod.example.yaml` 与 k8s secret 示例，
-缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 107s / 112s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 101s / 106s）；每个框架服务 6 个 Mod → 23s / 28s。
+缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 114s / 119s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 108s / 113s；RR-20260927-05 之前为 107s / 112s、101s / 106s）；每个框架服务 6 个 Mod → 23s / 28s。
 配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
 改过的段或旧版生成器写的段保持不动，宽限期跟随它们的值。配置段的改写在渲染模板之前、与模板同一次提交（同受回滚与并发输入检查保护），
 增减 Mod 后一次 sync 即收敛、`roost project diff` 为空（RR-20260926-80）。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置

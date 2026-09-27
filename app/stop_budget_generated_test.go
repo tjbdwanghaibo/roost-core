@@ -14,13 +14,20 @@ import (
 // 每次停机 WARN `cannot cover the per-mod floor`，先停的 accessplayertcp 只得约 3s 以下。
 //
 // 修复在生成器：按该服务实际注册的 Mod 计算 total_timeout = 声明预算之和 + 3s × 未声明 Mod 数 + 5s
-// （余量给与 Mod 共用同一时限、先于 Mod 运行的 Service.Shutdown）。game 服务的生成值是 101s；
+// （余量给与 Mod 共用同一时限、先于 Mod 运行的 Service.Shutdown）。
+//
+// RR-20260927-05：accessplayertcp 也声明预算（player_access.tcp.shutdown_timeout: 10s），不再只拿 3s 保底；
+// game 服务的生成值因此是 30s + 10s + 3s × 21 + 5s = 108s（此前 101s）。
 // codegen/internal/roost/shutdown_budget_test.go 从生成工程的 bootstrap 数出 23 个 Mod 并钉住同一个值。
 const (
-	generatedGameShutdownTotal  = 101 * time.Second
+	generatedGameShutdownTotal  = 108 * time.Second
 	generatedShutdownMargin     = 5 * time.Second
 	generatedDataEngineDeclared = 30 * time.Second
+	generatedPlayerTCPDeclared  = 10 * time.Second
 )
+
+// generatedDeclared 是生成的 game 服务里声明停机预算的 Mod 及其声明值。
+var generatedDeclared = map[ModName]time.Duration{"dataengine": generatedDataEngineDeclared, "accessplayertcp": generatedPlayerTCPDeclared}
 
 // game-demo game 服务的 Mod（生成 bootstrap 的注册顺序）与共享 Mod。
 var (
@@ -46,8 +53,8 @@ func buildPlanMods(names []ModName) []Mod {
 	mods := make([]Mod, len(names))
 	for i, name := range names {
 		plain := plainStopMod{name: name}
-		if name == "dataengine" {
-			mods[i] = declaringStopMod{plainStopMod: plain, declared: generatedDataEngineDeclared}
+		if declared, ok := generatedDeclared[name]; ok {
+			mods[i] = declaringStopMod{plainStopMod: plain, declared: declared}
 			continue
 		}
 		mods[i] = plain
@@ -57,7 +64,7 @@ func buildPlanMods(names []ModName) []Mod {
 
 // 模拟时钟：用 modStopBudget 按 App 的停止顺序逐个规划。Service.Shutdown 用掉 0 或整个余量；
 // Mod 要么立即结束，要么 dataengine 之前的每个 Mod 用满给它的预算（最坏情况：dataengine 最晚拿到剩余）。
-// 每个 Mod 都要拿到至少 3s 保底，dataengine 拿满声明的 30s，且全程不进入缩放 / 均分分支（不告警）。
+// 每个 Mod 都要拿到至少 3s 保底，dataengine 拿满声明的 30s、accessplayertcp 拿满 10s，且全程不进入缩放 / 均分分支（不告警）。
 func TestGeneratedGameServiceTotalCoversEveryModFloorAndTheDeclaredBudget(t *testing.T) {
 	assertGameServiceBudgets(t, generatedGameShutdownTotal)
 }
@@ -85,8 +92,10 @@ func assertGameServiceBudgets(t *testing.T, total time.Duration) {
 						}
 						if mod == "dataengine" {
 							reachedDataEngine = true
-							if budget != generatedDataEngineDeclared {
-								problems = append(problems, fmt.Sprintf("dataengine=%v, want %v", budget, generatedDataEngineDeclared))
+						}
+						if declared, ok := generatedDeclared[mod]; ok {
+							if budget != declared {
+								problems = append(problems, fmt.Sprintf("%s=%v, want %v", mod, budget, declared))
 							}
 						} else if budget < undeclaredModStopFloor {
 							problems = append(problems, fmt.Sprintf("%s=%v below the %v floor", mod, budget, undeclaredModStopFloor))
@@ -109,6 +118,11 @@ func TestGeneratedGameServiceStopsWithoutBudgetWarnings(t *testing.T) {
 	logs := captureWarnings(t)
 	rec := newBudgetRecorder()
 	service := stopBudgetMods(generatedGameServiceMods, "dataengine", generatedDataEngineDeclared, rec)
+	for i, mod := range service {
+		if mod.Name() == "accessplayertcp" {
+			service[i] = declaringStopMod{plainStopMod: plainStopMod{name: mod.Name(), rec: rec}, declared: generatedPlayerTCPDeclared}
+		}
+	}
 	shared := stopBudgetMods(generatedSharedMods, "", 0, rec)
 	ctx, cancel := context.WithTimeout(context.Background(), generatedGameShutdownTotal)
 	defer cancel()
@@ -119,6 +133,7 @@ func TestGeneratedGameServiceStopsWithoutBudgetWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertBudgetNear(t, "dataengine", rec.get("dataengine"), generatedDataEngineDeclared)
+	assertBudgetNear(t, "accessplayertcp", rec.get("accessplayertcp"), generatedPlayerTCPDeclared)
 	for _, name := range append(append([]ModName{}, generatedGameServiceMods...), generatedSharedMods...) {
 		if got := rec.get(name); got < undeclaredModStopFloor-250*time.Millisecond {
 			t.Errorf("%s budget=%v, below the %v floor", name, got, undeclaredModStopFloor)

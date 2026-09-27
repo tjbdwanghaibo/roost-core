@@ -131,15 +131,15 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 	}
 	item := shutdownStatus(t, root)["shutdown:game"]
 	for _, rel := range []string{dev, prod, secret} {
-		if item.Status != StatusWarn || !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 23 Mods (30s declared + 3s x 22 = 96s)") {
+		if item.Status != StatusWarn || !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 23 Mods (40s declared + 3s x 21 = 103s)") {
 			t.Errorf("all three configs on 60s: %s %s (want a WARN naming %s)", item.Status, item.Detail, rel)
 		}
 	}
 
-	setShutdownTotal(t, root, dev, "101s")
+	setShutdownTotal(t, root, dev, "108s")
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if item.Status != StatusWarn {
-		t.Fatalf("only %s raised to 101s, the examples still 60s: %s %s", dev, item.Status, item.Detail)
+		t.Fatalf("only %s raised to 108s, the examples still 60s: %s %s", dev, item.Status, item.Detail)
 	}
 	for _, rel := range []string{prod, secret} {
 		if !strings.Contains(item.Detail, rel+": total_timeout 60s cannot cover 23 Mods") {
@@ -150,16 +150,16 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 		t.Errorf("WARN names %s, which covers the Mods: %s", dev, item.Detail)
 	}
 
-	setShutdownTotal(t, root, prod, "101s")
+	setShutdownTotal(t, root, prod, "108s")
 	item = shutdownStatus(t, root)["shutdown:game"]
 	if item.Status != StatusWarn || !strings.Contains(item.Detail, secret+":") || strings.Contains(item.Detail, prod+":") {
 		t.Errorf("only %s left on 60s: %s %s", secret, item.Status, item.Detail)
 	}
 
-	setShutdownTotal(t, root, secret, "101s")
+	setShutdownTotal(t, root, secret, "108s")
 	item = shutdownStatus(t, root)["shutdown:game"]
-	if item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 101s, grace period 106s") {
-		t.Errorf("every config on 101s: %s %s", item.Status, item.Detail)
+	if item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 108s, grace period 113s") {
+		t.Errorf("every config on 108s: %s %s", item.Status, item.Detail)
 	}
 }
 
@@ -179,18 +179,18 @@ func TestOneSyncConvergesAfterAServiceLosesAMod(t *testing.T) {
 	}
 	counts, declares := bootstrapModCounts(t, root)
 	total, grace := expectedShutdown(counts["game"], declares["game"])
-	if counts["game"] != 22 || total != 98 || grace != 103 {
-		t.Fatalf("game after dropping session: %d Mods, %ds / %ds; want 22 Mods, 98s / 103s", counts["game"], total, grace)
+	if counts["game"] != 22 || total != 105 || grace != 110 {
+		t.Fatalf("game after dropping session: %d Mods, %ds / %ds; want 22 Mods, 105s / 110s", counts["game"], total, grace)
 	}
 	assertGeneratedShutdown(t, root, "game", total, grace)
-	assertContains(t, root, "deploy/dev/second-game.sh", `[ "$i" -lt 103 ]`)
+	assertContains(t, root, "deploy/dev/second-game.sh", `[ "$i" -lt 110 ]`)
 	assertProjectDiffEmpty(t, root)
 	for name, item := range shutdownStatus(t, root) {
 		if item.Status != StatusOK {
 			t.Errorf("%s after one sync: %s %s", name, item.Status, item.Detail)
 		}
 	}
-	if item := shutdownStatus(t, root)["shutdown:game"]; !strings.Contains(item.Detail, "total_timeout 98s, grace period 103s") {
+	if item := shutdownStatus(t, root)["shutdown:game"]; !strings.Contains(item.Detail, "total_timeout 105s, grace period 110s") {
 		t.Errorf("shutdown:game after one sync: %s", item.Detail)
 	}
 }
@@ -205,8 +205,8 @@ func TestOneSyncConvergesAfterAServiceGainsAMod(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "redis", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
-	counts, _ := bootstrapModCounts(t, root)
-	total, grace := expectedShutdown(counts["game"], false)
+	counts, declares := bootstrapModCounts(t, root)
+	total, grace := expectedShutdown(counts["game"], declares["game"])
 	assertGeneratedShutdown(t, root, "game", total, grace)
 	assertProjectDiffEmpty(t, root)
 	item := shutdownStatus(t, root)["shutdown:game"]
