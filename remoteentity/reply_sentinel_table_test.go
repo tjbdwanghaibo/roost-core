@@ -20,6 +20,10 @@ import (
 // 核对结果（2026-09-27）：Durability 0 回复丢失 / 从未到达、strict 等待中投影器报告未知，回复带 ErrRemotePersistenceIndeterminate；
 // strict 等待 Remote 确认到截止时回复是 ErrRemoteCommitTimeout + context.DeadlineExceeded，**不带** ErrRemotePersistenceIndeterminate
 // （transaction_tracking.go waitRemoteTransaction 的截止分支）。判别表第 2 行原先只列前者，已补上后者。
+//
+// RR-20260927-24：RR-37 承诺“Remote 结果未知 → ErrRemotePersistenceIndeterminate”，按这个哨兵判“可能已提交、不得重试”的调用方
+// 在 strict 截止场景漏判。截止分支改为同时带上它（ErrRemoteCommitTimeout 与 ctx 错误保留），这里断言四种场景都满足它，
+// strict 截止另外断言原有的两个哨兵仍在（只增加 errors.Is 命中，不删除）。
 func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -29,15 +33,16 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 		// strict：Remote 确认等待的上限；beforeWait 在等待开始前调用（模拟 WAL 投影器）。
 		confirm    time.Duration
 		beforeWait func(f reloadFixture, commits []entity.RemoteCommit)
-		want       error
+		// also：除 ErrRemotePersistenceIndeterminate 外必须仍然满足的哨兵。
+		also []error
 	}{
-		{name: "memory_lost_reply", rawID: 1991, durability: nest.DurabilityMemory, want: entity.ErrRemotePersistenceIndeterminate,
+		{name: "memory_lost_reply", rawID: 1991, durability: nest.DurabilityMemory,
 			setup: func(f reloadFixture) { f.storage.loseReply.Store(true) }},
-		{name: "memory_never_reached", rawID: 1992, durability: nest.DurabilityMemory, want: entity.ErrRemotePersistenceIndeterminate,
+		{name: "memory_never_reached", rawID: 1992, durability: nest.DurabilityMemory,
 			setup: func(f reloadFixture) { f.storage.unreachable.Store(true) }},
-		{name: "strict_confirm_deadline", rawID: 1993, durability: nest.DurabilityStrict, want: entity.ErrRemoteCommitTimeout,
-			confirm: 100 * time.Millisecond},
-		{name: "strict_projector_reports_unknown", rawID: 1994, durability: nest.DurabilityStrict, want: entity.ErrRemotePersistenceIndeterminate,
+		{name: "strict_confirm_deadline", rawID: 1993, durability: nest.DurabilityStrict,
+			confirm: 100 * time.Millisecond, also: []error{entity.ErrRemoteCommitTimeout, context.DeadlineExceeded}},
+		{name: "strict_projector_reports_unknown", rawID: 1994, durability: nest.DurabilityStrict,
 			confirm: 3 * time.Second, beforeWait: func(f reloadFixture, commits []entity.RemoteCommit) {
 				// 投影器的发布没拿到 Remote 回复：tracker Indeterminate，strict 等待随之结束。
 				f.storage.unreachable.Store(true)
@@ -75,8 +80,10 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 			cancel()
 			row, hits := firstTableRow(err)
 			t.Logf("reply=%v first-row=%d sentinels=[%s]", reply, row, hits)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("reply err=%v, want errors.Is(%v)", err, tc.want)
+			for _, want := range append([]error{entity.ErrRemotePersistenceIndeterminate}, tc.also...) {
+				if !errors.Is(err, want) {
+					t.Fatalf("reply err=%v (sentinels %s), want errors.Is(%v)", err, hits, want)
+				}
 			}
 			if errors.Is(err, nest.ErrNestCanceled) || errors.Is(err, nest.ErrNestTimeout) {
 				t.Fatalf("premise: the caller's own wait ended before the reply: %v", err)

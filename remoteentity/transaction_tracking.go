@@ -175,7 +175,11 @@ func (m *Manager) waitTrackedRemoteTransaction(ctx context.Context, tracker *rem
 		m.remote.txMu.Unlock()
 		return status, remoteStatusError(status)
 	case <-ctx.Done():
-		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: ctx.Err().Error()}, errors.Join(entity.ErrRemoteCommitTimeout, ctx.Err())
+		// 等待截止只说明没等到结论：事务仍在跟踪、之后可能提交，是“结果未知”而不是失败。
+		// 之前只带 ErrRemoteCommitTimeout，按 RR-20260926-37 承诺的 ErrRemotePersistenceIndeterminate 判“可能已提交、不得重试”的
+		// 调用方在 strict 截止时漏判（RR-20260927-24）；现同时带上它，原有的 ErrRemoteCommitTimeout 与 ctx 错误保留。
+		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: ctx.Err().Error()},
+			errors.Join(entity.ErrRemoteCommitTimeout, entity.ErrRemotePersistenceIndeterminate, ctx.Err())
 	}
 }
 

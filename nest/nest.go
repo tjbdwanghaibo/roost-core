@@ -21,9 +21,11 @@ var (
 	ErrEntityNotFound     = errors.New("nest: entity not found")
 	ErrEntityTypeMismatch = errors.New("nest: entity type mismatch")
 	// ErrLockTimeout 是取锁超时 / 锁冲突类暂时性错误。只有回复不带任何“可能已提交”哨兵（ErrCommitIndeterminate、
-	// entity.ErrRemotePersistenceIndeterminate、ErrAfterCommitFailed、ErrNestedTransactionCommitted），也不带
+	// entity.ErrRemotePersistenceIndeterminate、entity.ErrRemoteCommitTimeout、ErrAfterCommitFailed、ErrNestedTransactionCommitted），也不带
 	// ErrNonRollbackNotRequeued 或不带锁超时形态的 ErrCreatedEntityLockConflict 时，它才表示“未提交（未开始或已回滚）、
 	// 框架已自动重排到上限”，可以重试；链上有前述哨兵时以它们为准（RR-20260926-77，判别表见 docs/USER_GUIDE.md §4）。
+	// strict 等 Remote 确认到截止的回复同时带 ErrRemoteCommitTimeout 与 ErrRemotePersistenceIndeterminate（RR-20260927-24）；
+	// 自定义 Remote 实现可能只返回前者，所以两者都列。
 	ErrLockTimeout                    = errors.New("nest: lock timeout")
 	ErrNestTimeout                    = errors.New("nest: sync timeout")
 	ErrNestCanceled                   = errors.New("nest: sync canceled")
