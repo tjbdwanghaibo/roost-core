@@ -130,10 +130,12 @@ Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-2026
 | 11 | `nest.ErrNestedTransactionInRemoteMessage` | 带 Remote 批次的消息里调用 `RunIsolatedTransaction`（批次挂到消息上之后：慢阶段准备、handler 内，或消息自己的事务结束后、批次收尾前的收尾阶段），函数体未执行（RR-75 / 84）。`PrepareRemoteWriteBatch` 执行期间批次还没挂上，不在此列（见表后说明） | 否（嵌套事务） | 原样重试仍被拒；把写入并入消息自己的事务 |
 | 12 | `nest.ErrCommitRejected` | 提交在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，以及 Remote 批次定稿（`FinalizeLocked`）拒绝（如 sid 作用域，RR-20260927-09）、准备提交记录失败、fence 之后不再交给 committer（同时带 `ErrNestFenced`，RR-20260927-06）——后几种从 RR-20260927-32 起同样带本哨兵，原因仍可 `errors.Is`。可回滚事务（state / undo）已回滚；不能回滚的 handler（带 Remote 批次的 memory handler，RollbackNone）失败前的内存修改**不撤销**（与第 6 行同一语义） | 否 | 看原因：`dataengine.ErrFencedEntityPending` 可重试，其余按业务错误处理；不能回滚的 handler 同第 6 行，确认幂等（或读回状态）后再重试 |
 | 13 | `entity.ErrEntityRemoved`（handler 内新建） | 同一 handler 里再建本 handler 自己较早撤销的同 ID（撤销收尾要等 handler 释放），确定失败、未重排（RR-20260927-21）；可回滚事务已回滚 | 否（消息自己的事务；嵌套事务已提交时按第 5 行） | 原样重试会重复同一流程、再次失败；改业务流程，不在同一 handler 内重建刚撤销的 ID |
+| 14 | `nest.ErrNestCanceled` / `nest.ErrNestTimeout`（`Nest.Request` 返回） | 调用方自己的等待先结束（ctx 取消 / 截止，或同步等待超时）：只说明没等到回复，**不说明结果**——请求可能未执行，也可能已准入并在回复之后提交（strict 事务实测会在回复之后提交，RR-20260928-03） | **结果未知** | 持久 handler 按“可能已提交”处理、不得据此重试；等结论后按业务幂等键核对 |
+| 15 | 不命中以上任何一行 | 未提交：准入 / 停机 / 慢阶段准备失败、handler 返回的业务错误（可回滚事务已回滚）等。例外：不能回滚的 handler（memory / RollbackNone）返回业务错误时，失败前的内存修改不撤销，按第 6 行语义处理 | 否 | 按业务错误处理 |
 
 第 2 行的四种形态由 `remoteentity/reply_sentinel_table_test.go` 在真实 Nest + 正式 Remote Manager 上钉住（OPEN-ITEMS B23、RR-20260927-24），第 4 行的 strict（投影器写权威被拒）与 Durability 0（直接写权威被拒）两种形态、第 12 行的定稿拒绝同样在那里钉住（RR-20260928-03、RR-20260927-32）。
 第 4 行的判据：本地事务已提交后 Remote `Commit` 返回的错误，带 `entity.ErrRemotePersistenceIndeterminate` 的是结果未知（第 2 行），不带的按 entity 契约就是 Remote 没有写入（框架自带的 `remoteentity` 如此实现），回复加 `ErrRemotePartRejected`；自定义 Remote 实现在结果未知时必须带前者，否则会被当成明确拒绝。
-调用方自己的等待先到截止时，`Nest.Request` 返回 `nest.ErrNestCanceled`（与 ctx 错误并存）或 `nest.ErrNestTimeout`，这只说明没等到回复、不说明结果：
+第 14 行展开：调用方自己的等待先到截止时，`Nest.Request` 返回 `nest.ErrNestCanceled`（与 ctx 错误并存）或 `nest.ErrNestTimeout`，这只说明没等到回复、不说明结果：
 截止只停止等待、不撤销已准入的业务，持久 handler（尤其 strict Remote，请求截止与 Remote 确认截止常是同一个时刻）按“可能已提交”处理，不得据此重试。
 
 第 10、11 行是 `RunIsolatedTransaction` 返回给业务的错误；业务原样回复时，消息自己的事务是否提交仍按其余行判断（这两种情况下嵌套事务
