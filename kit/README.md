@@ -365,7 +365,7 @@ App 的分配规则（RR-20260926-42，RR-20260926-51 修订）：Service.Shutdo
 + 5s（Service.Shutdown 在同一时限内、先于 Mod 运行），Mod 数取该服务进程实际注册的全部 Mod（含共享 Mod）；部署的终止宽限期
 （k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh`）为
 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`——配置手改、旧格式或缺键（App 兜底 30s）时宽限期跟随配置，永远不低于配置 total + 5s。
-game-demo 的 game 服务 23 个 Mod：101s / 106s，dataengine 拿满 30s、其余每个 Mod ≥ 3s、不告警；框架服务（6 个 Mod、无声明）23s / 28s。
+game-demo 缺省 Mod 集的 game 服务 25 个 Mod：107s / 112s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个：101s / 106s），dataengine 拿满 30s、其余每个 Mod ≥ 3s、不告警；框架服务（6 个 Mod、无声明）23s / 28s。
 自定义时保持 `total_timeout ≥ 声明预算之和 + 3s × 其他 Mod 数`（`config.<svc>.yaml`、`.prod.example.yaml`、k8s secret 示例逐份判定，任一份不足时 `roost project doctor` WARN 并指明文件）；改大 total 后执行 `roost project sync`，
 部署模板的宽限期随之放大（模板宽限期低于配置 total + 5s 时 doctor FAIL）。
 RR-66 之前生成、仍为 `total_timeout: 60s` 的工程：Mod 多的服务（game-demo game）每次停机告警且个别 Mod 低于保底，应改为生成值；

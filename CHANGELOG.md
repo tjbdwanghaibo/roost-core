@@ -17,7 +17,7 @@
   `PushPlayer` 部分连接失败、其余收到时返回 `nil`。调用方截止在第一个字节写出前到期的推送按“写前拒绝”处理，不关闭健康连接（RR-68）。
   已生成工程执行 `roost generate` 覆盖 `internal/access/player/tcp/server_gen.go`。
 - **停机总时长与部署宽限期按服务实际 Mod 生成（RR-20260926-42/51/66）**：Mod 可声明停机预算（dataengine 声明 `dataengine.shutdown_timeout`），App 在 `shutdown.total_timeout` 内先按声明值分配，未声明的 Mod 各保底 3s。
-  生成器按每个服务注册的 Mod 计算 `total_timeout`（game-demo：game 101s，框架服务 23s），k8s / compose / systemd / dev 脚本的宽限期取 `max(公式值, 配置里实际生效的 total) + 5s`，
+  生成器按每个服务注册的 Mod 计算 `total_timeout`（game-demo 缺省 Mod 集：game 107s，框架服务 23s），k8s / compose / systemd / dev 脚本的宽限期取 `max(公式值, 配置里实际生效的 total) + 5s`，
   不会低于配置；`roost project doctor` 在模板宽限期低于配置 total + 5s 时 FAIL。RR-66 之前生成、仍为统一 60s 的工程重新 sync 后宽限期保持 65s，Mod 多的服务应按 doctor 提示调大 total。见 [DEPLOYMENT §8](docs/DEPLOYMENT.md)。
 - **注册期拒绝矛盾的 Remote 策略（RR-20260926-45/60/71）**：`remote=managed` 实体不能使用 `dbscope=sid` 的 DAO（生成期与装配期双重校验）；冷加载与构建按 kind 在注册表里的实际 Remote 策略判定；
   手写 builder 先按 none 注册、kind 定义后声明 managed / mirror 且生命周期矛盾时，`RegisterEntityKindDefs` 返回错误、`MustRegisterEntityKindDefs` 在启动期 panic（此前静默接受）。生成工程不受影响。
