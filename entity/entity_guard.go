@@ -443,13 +443,42 @@ func (e *EntityGuard) GuardEntity(ent IThreadSafeEntity) {
 	e.eMap[ent.GUId()] = ent
 }
 
-// ReleaseEntity 提前释放 id 当前持有的实例。同 ID 被它取代、锁仍由本 Guard 持有的旧实例随后回到 eMap
-// （RR-20260926-67）：锁序判断与 Guarded 仍要算上这把锁，Guard 释放时解锁。
+// ReleaseEntity 按 ID 提前释放 id 当前登记的实例，不论调用方手里是哪个实例。同 ID 被它取代、锁仍由本 Guard 持有的旧实例
+// 随后回到 eMap（RR-20260926-67）：锁序判断与 Guarded 仍要算上这把锁，Guard 释放时解锁。
+// 调用方持有实例指针、要释放的是“这个实例的锁”时用 ReleaseEntityInstance：handler 内 Destroy 后同 ID 重建，
+// 按 ID 释放放掉的是新实例的锁（RR-20260927-26）。
 func (e *EntityGuard) ReleaseEntity(id int64) {
 	ent := e.eMap[id]
 	if ent != nil {
 		e.doReleaseEntity(id, ent)
 		e.restoreSuperseded(id)
+	}
+}
+
+// ReleaseEntityInstance 提前释放本 Guard 为 ent 这个实例持有的锁，别的实例的锁不动（RR-20260927-26）：
+//   - ent 是 id 当前登记的实例（或与它共用同一把锁）：同 ReleaseEntity；
+//   - ent 已被同 ID 的新实例取代、锁在 superseded 里：只释放这把旧锁，新实例仍被持有；
+//   - 本 Guard 没有为 ent 登记锁：什么也不做。
+//
+// 之前 ReleaseCast 按 ent.GUId() 调 ReleaseEntity。handler 内 Destroy X 再新建同 ID 的 X 后，旧 X 的清理若被别的访问者的
+// Touch 推迟（最后一次 UnTouch 才清零 ID），旧 X 的 GUId 仍非零，ReleaseCast(旧 X) 就把新 X 的锁在 handler 中途放掉了。
+// ent 的 ID 已清零时它不会是 eMap 的当前登记（按 ID 查不到），只查 superseded，与原来的空操作一致。
+func (e *EntityGuard) ReleaseEntityInstance(ent IThreadSafeEntity) {
+	if e == nil || ent == nil {
+		return
+	}
+	if id := ent.GUId(); id != 0 {
+		if held, _ := e.holding(ent); held {
+			e.ReleaseEntity(id)
+			return
+		}
+	}
+	for i := len(e.superseded) - 1; i >= 0; i-- {
+		if held := e.superseded[i]; held.ent == ent || sameMutex(held.ent.GetMutex(), ent.GetMutex()) {
+			e.superseded = append(e.superseded[:i], e.superseded[i+1:]...)
+			e.doReleaseEntity(held.id, held.ent)
+			return
+		}
 	}
 }
 

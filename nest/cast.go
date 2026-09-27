@@ -193,8 +193,10 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 	return es, nil
 }
 
-// ReleaseCast 在无事务的上下文中提前释放动态实体。
+// ReleaseCast 在无事务的上下文中提前释放动态实体 e 这个实例的锁。
 // 事务或正式同步作用域内保留锁，直到回滚或准入捕获完成后由 Guard 统一释放。
+// 按实例释放（RR-20260927-26）：handler 内 Destroy e 后又新建了同 ID 的实例时，ReleaseCast(e) 只释放 e 自己的锁，
+// 不会放掉新实例的锁；之前按 e.GUId() 释放，e 的清理被别的访问者推迟、ID 尚未清零时释放的是新实例。
 func ReleaseCast(e entity.IThreadSafeEntity) {
 	if CurrentRollbackTx() != nil || entity.CurrentSyncMutation() != nil {
 		return
@@ -202,12 +204,14 @@ func ReleaseCast(e entity.IThreadSafeEntity) {
 	if e == nil || entity.CurrentGuardScope() == nil {
 		return
 	}
-	entity.GetEntityGuard().ReleaseEntity(e.GUId())
+	entity.GetEntityGuard().ReleaseEntityInstance(e)
 }
 
+// releaseCastEntities 归还本次 Cast 刚取得的锁（取锁中途失败）。这些实例刚由本 goroutine 加锁、就是各自 ID 的当前登记，
+// 按实例释放与按 ID 等价；用按实例的入口与 ReleaseCast 保持同一语义。
 func releaseCastEntities(guard *entity.EntityGuard, es []entity.IThreadSafeEntity) {
 	for _, e := range es {
-		guard.ReleaseEntity(e.GUId())
+		guard.ReleaseEntityInstance(e)
 	}
 }
 

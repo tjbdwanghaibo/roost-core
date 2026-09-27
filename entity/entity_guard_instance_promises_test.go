@@ -178,3 +178,68 @@ func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
 		})
 	}
 }
+
+// RR-20260927-26：ReleaseEntityInstance 只释放传入实例自己的锁。旧实例被同 ID 新实例取代（锁在 superseded）时释放旧锁、
+// 新实例仍被持有；传入当前实例或与它共用同一把锁的实例时同 ReleaseEntity；本 Guard 没为它登记锁时不动别人的锁。
+func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {
+	t.Run("superseded_old", func(t *testing.T) {
+		old, fresh := guardInstancePair(t, false)
+		guard := newEntityGuard()
+		if !guard.RequireEntity(old) || !guard.RequireEntity(fresh) {
+			t.Fatal("setup")
+		}
+		guard.ReleaseEntityInstance(old)
+		if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
+			t.Fatal("ReleaseEntityInstance(old) released the re-created instance's lock")
+		}
+		if !lockableElsewhere(old) || guard.GuardedEntity(old) {
+			t.Fatal("ReleaseEntityInstance(old) did not release the superseded instance's own lock")
+		}
+		guard.ReleaseAll()
+		if !lockableElsewhere(fresh) {
+			t.Fatal("fresh lock leaked after ReleaseAll")
+		}
+	})
+	t.Run("current_restores_superseded", func(t *testing.T) {
+		old, fresh := guardInstancePair(t, false)
+		guard := newEntityGuard()
+		if !guard.RequireEntity(old) || !guard.RequireEntity(fresh) {
+			t.Fatal("setup")
+		}
+		guard.ReleaseEntityInstance(fresh)
+		if !lockableElsewhere(fresh) {
+			t.Fatal("ReleaseEntityInstance(current) did not release it")
+		}
+		if lockableElsewhere(old) || !guard.GuardedEntity(old) {
+			t.Fatal("the superseded instance's lock must stay held and accounted until the guard releases")
+		}
+		guard.ReleaseAll()
+		if !lockableElsewhere(old) {
+			t.Fatal("superseded lock leaked after ReleaseAll")
+		}
+	})
+	t.Run("shared_mutex_duplicate", func(t *testing.T) {
+		old, dup := guardInstancePair(t, true)
+		guard := newEntityGuard()
+		if !guard.RequireEntity(old) {
+			t.Fatal("setup")
+		}
+		guard.ReleaseEntityInstance(dup)
+		if !lockableElsewhere(old) || guard.GuardedCount() != 0 {
+			t.Fatal("ReleaseEntityInstance(duplicate sharing the held mutex) must release that mutex once")
+		}
+		guard.ReleaseAll()
+	})
+	t.Run("not_held", func(t *testing.T) {
+		old, fresh := guardInstancePair(t, false)
+		guard := newEntityGuard()
+		if !guard.RequireEntity(fresh) {
+			t.Fatal("setup")
+		}
+		guard.ReleaseEntityInstance(old)
+		if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
+			t.Fatal("ReleaseEntityInstance of an instance this guard never locked released another instance's lock")
+		}
+		guard.ReleaseAll()
+	})
+}

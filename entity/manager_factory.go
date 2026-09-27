@@ -89,7 +89,7 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	}
 	if err := m.TryAdd(value); err != nil {
 		if lockedNow {
-			guard.ReleaseEntity(value.GUId())
+			guard.ReleaseEntityInstance(value)
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(value.ID()) {
 			// RR-20260927-21：removing 是本 handler 自己留下的——同一 Guard 上较早撤销了同 ID 的新建（例如嵌套

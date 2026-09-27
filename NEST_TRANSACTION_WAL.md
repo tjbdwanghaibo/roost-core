@@ -74,7 +74,7 @@ durability 非 `memory` 时必须配置 rollback。调用 `nest.Emit` 会自动�
 
 ### 动态 Cast 的事务边界
 
-handler 通过 `CastOne` / `CastMulti` 新取得的本地实体也参与当前事务的回滚与持久化准备，无需启用客户端 Sync。事务内调用 `ReleaseCast` 不会立即解锁；框架必须持锁完成回滚或成功准入，再统一释放。无事务、无正式 Sync 作用域时仍可提前释放。
+handler 通过 `CastOne` / `CastMulti` 新取得的本地实体也参与当前事务的回滚与持久化准备，无需启用客户端 Sync。事务内调用 `ReleaseCast` 不会立即解锁；框架必须持锁完成回滚或成功准入，再统一释放。无事务、无正式 Sync 作用域时仍可提前释放；提前释放按实例，只放传入实例自己的锁——handler 内 Destroy 后又新建了同 ID 的实体时，`ReleaseCast(旧实例)` 不会放掉新实例的锁（[RR-20260927-26](docs/bugfix/RR-20260927-26.md)）。
 
 pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释放其锁。若业务必须先放锁再执行另一项操作，应拆成独立业务调用，不能依赖 `ReleaseCast` 在事务中途放锁。[修复与验证](docs/bugfix/RR-20260924-03.md)。
 
