@@ -48,12 +48,27 @@ func systemdUnitValue(t *testing.T, install, key string) string {
 	return strings.TrimSpace(match[1])
 }
 
+// systemdReleaseDir is the directory, as install.sh names it, that the unit's
+// WorkingDirectory is when the service starts: $APP_ROOT/current is switched to
+// $RELEASE_ROOT before the restart (RR-20260928-05).
+func systemdReleaseDir(t *testing.T, install string) string {
+	t.Helper()
+	unitDir := systemdUnitValue(t, install, "WorkingDirectory")
+	if unitDir == "$APP_ROOT/current" {
+		if !strings.Contains(install, `switch_release "$RELEASE_ROOT"`) {
+			t.Fatalf("WorkingDirectory=%s but install.sh never switches current to $RELEASE_ROOT", unitDir)
+		}
+		return "$RELEASE_ROOT"
+	}
+	return unitDir
+}
+
 func assertStatsLogIsWritable(t *testing.T, m Manifest, file func(rel string) (string, bool)) {
 	t.Helper()
 	dockerfile, _ := file("Dockerfile")
 	workdir, copies := dockerRuntimeStage(t, dockerfile)
 	install, _ := file("deploy/shell/install.sh")
-	unitDir := systemdUnitValue(t, install, "WorkingDirectory")
+	unitDir := systemdReleaseDir(t, install)
 	readWrite := strings.Fields(systemdUnitValue(t, install, "ReadWritePaths"))
 
 	composeBody, _ := file("deploy/docker/docker-compose.prod.yaml")

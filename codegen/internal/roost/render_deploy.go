@@ -111,7 +111,7 @@ case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version: %s\n' "$VERSIO
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 BINARY=${BINARY:-"$ROOT/dist/{{APP}}"}
 [ -x "$BINARY" ] || { printf 'binary not found; run: sh deploy/shell/build.sh\n' >&2; exit 2; }
-
+{{CONFIG_DATA_GUARD}}
 INSTANCE={{APP}}-$SERVICE-$SID
 APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
 STATE_ROOT=${STATE_ROOT:-/var/lib/roost/$INSTANCE}
@@ -127,9 +127,9 @@ HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
 fi
 install -d -m 0755 "$APP_ROOT/releases" "$RELEASE_ROOT"
 install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 "$STATE_ROOT/wal" "$LOG_ROOT"
-{{STATS_LOG_LINK}}install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
+install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
 install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.yaml"
-(cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
+{{CONFIG_DATA_INSTALL}}{{STATS_LOG_LINK}}(cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
 
 # TimeoutStopSec: max(the service's generated shutdown.total_timeout, the total
 # its configs set) + 5s. Run roost project sync after raising total_timeout.
@@ -146,7 +146,7 @@ Wants=network-online.target
 Type=simple
 User=$RUN_USER
 Group=$RUN_USER
-WorkingDirectory=$APP_ROOT
+WorkingDirectory=$APP_ROOT/current
 ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
 Restart=on-failure
 RestartSec=2s
@@ -216,6 +216,9 @@ exit 1
 	value = strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(services, "|"))
 	value = strings.ReplaceAll(value, "{{STATEFUL_GUARD}}", renderStatefulWALGuard(stateful))
 	value = strings.ReplaceAll(value, "{{STATS_LOG_LINK}}", renderStatsLogLink(m))
+	guard, copyData := renderShellConfigData(m)
+	value = strings.ReplaceAll(value, "{{CONFIG_DATA_GUARD}}", guard)
+	value = strings.ReplaceAll(value, "{{CONFIG_DATA_INSTALL}}", copyData)
 	var stopTimeouts strings.Builder
 	for _, service := range services {
 		fmt.Fprintf(&stopTimeouts, "  %s) STOP_TIMEOUT=%s ;;\n", service, seconds(serviceShutdownPlan(m, service).grace))
@@ -248,20 +251,67 @@ esac
 }
 
 // renderStatsLogLink points the relative stats_log.dir under the unit's
-// WorkingDirectory at LOG_ROOT (RR-20260928-04). WorkingDirectory=$APP_ROOT is
-// read-only to the service (root-owned, and ProtectSystem=strict), so the
-// stats file was never written there; LOG_ROOT is the instance's log directory,
-// owned by the run user and already in ReadWritePaths. Omitted when no service
-// enables stats_log.
+// WorkingDirectory — the release, see renderShellConfigData — at LOG_ROOT
+// (RR-20260928-04). The release is read-only to the service (root-owned, and
+// ProtectSystem=strict), so the stats file was never written there; LOG_ROOT is
+// the instance's log directory, owned by the run user and already in
+// ReadWritePaths. Each release carries its own link, so a rollback keeps
+// writing to the same place. Omitted when no service enables stats_log.
 func renderStatsLogLink(m Manifest) string {
 	for _, service := range sortedServiceNames(m) {
 		if serviceUsesStatsLog(m, service) {
 			return `# stats_log.dir is relative (` + defaultStatsLogDir + `) and resolves under WorkingDirectory.
-ln -sfn "$LOG_ROOT" "$APP_ROOT/` + defaultStatsLogDir + `"
+ln -sfn "$LOG_ROOT" "$RELEASE_ROOT/` + defaultStatsLogDir + `"
 `
 		}
 	}
 	return ""
+}
+
+// renderShellConfigData installs the configdata tables into the release for
+// the services that load them (RR-20260928-05).
+//
+// config_data.dir is relative (configs/data) and resolves against the unit's
+// WorkingDirectory. That used to be $APP_ROOT, and nothing installed the data
+// there, so a configdata service installed by this script stopped at start with
+// "configdata: stat dir configs/data: no such file or directory". The layout now
+// matches the image (RR-20260927-34, WORKDIR /app holding the binary and
+// configs/data): the tables go into the release next to the binary they were
+// generated for, and WorkingDirectory is $APP_ROOT/current, which systemd
+// resolves when the process starts — a switch of current (install, rollback.sh)
+// takes effect with the restart that follows it, and a running process keeps
+// reading (and Reloading) its own release's tables until then.
+//
+// guard runs before the release directory exists, so a missing data directory
+// does not leave behind an "immutable" release that blocks the next attempt.
+func renderShellConfigData(m Manifest) (guard, install string) {
+	var services []string
+	for _, service := range sortedServiceNames(m) {
+		if serviceUsesConfigData(m, service) {
+			services = append(services, service)
+		}
+	}
+	if len(services) == 0 {
+		return "", ""
+	}
+	arm := strings.Join(services, "|")
+	guard = `CONFIG_DATA=${CONFIG_DATA:-"$ROOT/` + defaultConfigDataDir + `"}
+case "$SERVICE" in
+  ` + arm + `)
+    [ -f "$CONFIG_DATA/_manifest.json" ] || { printf 'config data not found: %s/_manifest.json; run make generate or set CONFIG_DATA\n' "$CONFIG_DATA" >&2; exit 2; }
+    ;;
+esac
+`
+	install = `# config_data.dir is relative (` + defaultConfigDataDir + `) and resolves under WorkingDirectory, the release.
+case "$SERVICE" in
+  ` + arm + `)
+    install -d -m 0755 "$RELEASE_ROOT/configs"
+    cp -R "$CONFIG_DATA" "$RELEASE_ROOT/` + defaultConfigDataDir + `"
+    chmod -R u+rwX,go+rX,go-w "$RELEASE_ROOT/` + defaultConfigDataDir + `"
+    ;;
+esac
+`
+	return guard, install
 }
 
 func renderShellHealthcheck() string {
@@ -345,7 +395,7 @@ func renderShellReadme(m Manifest) string {
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，把相对的 stats_log.dir（log）链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置），创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
 `, m)
 }
 
@@ -806,6 +856,13 @@ func serviceUsesPersistentWAL(m Manifest, service string) bool {
 func serviceUsesStatsLog(m Manifest, service string) bool {
 	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
 	return err == nil && contains(mods, "statslog")
+}
+
+// serviceUsesConfigData reports whether the service's generated config loads
+// configdata tables from config_data.dir.
+func serviceUsesConfigData(m Manifest, service string) bool {
+	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
+	return err == nil && contains(mods, "configdata")
 }
 
 func serviceOwnsPlayerTCP(m Manifest, service string) bool {
