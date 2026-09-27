@@ -49,3 +49,64 @@ func TestRetractSyncSubjectRemovesHeldObjectsBeforeRecreate(t *testing.T) {
 		t.Fatalf("re-register after the remove: %v", err)
 	}
 }
+
+// OPEN-ITEMS B41 → RR-20260927-28：RetractSyncSubject(state) 只撤回以 state 登记的那一次。取到 subject 之后、注销生效之前，
+// 同 ID 换成另一个状态登记（旧状态关闭后 Rebind 到新状态；或旧登记被注销、忘掉，新状态重新登记为新 subject）时，
+// 撤回不能落到新登记上：新登记保持登记、订阅者不被退役。窗口由 retractLookedUp 测试缝确定性进入。
+func TestRetractSyncSubjectDoesNotRetireALaterRegistration(t *testing.T) {
+	for _, shape := range []string{"rebound_to_new_state", "forgotten_then_registered_again"} {
+		t.Run(shape, func(t *testing.T) {
+			transport := newRecordingTransport()
+			manager := newTestManager(t, transport, ManagerConfig{})
+			open(t, manager, 1)
+			const id = 1211
+			first := labelledSubject(id, "first")
+			if err := manager.Register(first); err != nil {
+				t.Fatal(err)
+			}
+			second := labelledSubject(id, "second")
+			windowSeen := false
+			manager.retractLookedUp = func(int64) {
+				manager.retractLookedUp = nil
+				windowSeen = true
+				switch shape {
+				case "rebound_to_new_state":
+					first.Close() // 旧状态关闭，同 ID 接到新状态上（同一个 subject）
+					if err := manager.Rebind(second); err != nil {
+						t.Fatalf("premise: rebind to the new state: %v", err)
+					}
+				case "forgotten_then_registered_again":
+					// 旧登记被注销；没有会话持有对象，随即被忘掉，新状态登记为新 subject
+					if err := manager.Unregister(id); err != nil {
+						t.Fatalf("premise: unregister the old registration: %v", err)
+					}
+					if manager.subject(id) != nil {
+						t.Fatal("premise: the old subject was not forgotten")
+					}
+					if err := manager.Register(second); err != nil {
+						t.Fatalf("premise: register the new state: %v", err)
+					}
+				}
+				mustSubscribe(t, manager, 1, id, entity.SyncProfile{})
+			}
+			manager.RetractSyncSubject(first)
+			if !windowSeen {
+				t.Fatal("premise: the window between lookup and unregister was not entered")
+			}
+			subj := manager.subject(id)
+			if subj == nil {
+				t.Fatalf("RetractSyncSubject(first) retired the registration of the second state: subject %d is gone", id)
+			}
+			subj.mu.Lock()
+			current, retiring := subj.state, subj.retiring
+			subj.mu.Unlock()
+			if current != second || retiring {
+				t.Fatalf("RetractSyncSubject(first) retired the registration of the second state: state is second=%v, retiring=%v", current == second, retiring)
+			}
+			mustFlush(t, manager)
+			if got := manager.Subscribers(id); len(got) != 1 || got[0] != 1 {
+				t.Fatalf("session 1's subscription to the second registration was dropped: %v", got)
+			}
+		})
+	}
+}

@@ -199,6 +199,9 @@ type Manager struct {
 	// unregisterLookedUp 是测试缝：Unregister 无锁取到 subject 之后、取 subj.mu 之前调用，用来确定性地在这一窗口让旧
 	// subject 被 forget、同 ID 重新登记并订阅（OPEN-ITEMS B39，第五轮审计疑点）。生产中恒为 nil。
 	unregisterLookedUp func(subjectID int64)
+	// retractLookedUp 是测试缝：RetractSyncSubject 取到 subject 之后、比对状态并注销之前调用，用来确定性地在这一窗口让同 ID
+	// 换成另一个状态登记（OPEN-ITEMS B41）。生产中恒为 nil。
+	retractLookedUp func(subjectID int64)
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
@@ -454,6 +457,12 @@ func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done f
 // Unregister 按 ID 注销当前登记：取到 subject 之后、取锁之前，它若已退役完成被 forget、同 ID 已重新登记，
 // 注销作用在重新登记的那一个上（RR-20260927-22）。
 func (m *Manager) Unregister(subjectID int64) error {
+	return m.unregister(subjectID, nil)
+}
+
+// unregister 是 Unregister 与 RetractSyncSubject 的共同路径。only 非 nil 时只注销以 only 登记的那一次：
+// 取锁并确认表项之后，当前登记的状态不是 only 就什么也不做（RR-20260927-28）。
+func (m *Manager) unregister(subjectID int64, only *entity.SubjectSyncState) error {
 	for {
 		subj := m.subject(subjectID)
 		if subj == nil {
@@ -476,6 +485,13 @@ func (m *Manager) Unregister(subjectID int64) error {
 			m.mu.RUnlock()
 			subj.mu.Unlock()
 			continue
+		}
+		if only != nil && subj.state != only {
+			// RR-20260927-28：同 ID 已换成另一个状态登记（旧状态关闭后 Rebind 到新状态，或旧登记被忘掉后新状态重新登记），
+			// 要撤回的那次登记已经不在了，不能退役别人的登记。比对与退役在同一把 subj.mu 下、确认表项之后，中间不再有窗口。
+			m.mu.RUnlock()
+			subj.mu.Unlock()
+			return nil
 		}
 		subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
 		// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
@@ -579,15 +595,22 @@ var _ entity.UnloadedSubjectSync = (*Manager)(nil)
 // Nest 在仍持有该实体锁时调用它（RR-20260926-35）。只注销以同一个状态对象登记的 subject，
 // 语义与 Unregister 相同：未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，
 // 之后同 ID 的新实体才能重新登记（remove-before-create）。
+//
+// 按实例撤回（RR-20260927-28，OPEN-ITEMS B41）：状态比对在 unregister 里、取 subj.mu 并确认表项之后进行。
+// 之前在锁外比对 subj.state == state 后按 ID 调 Unregister：两步之间同 ID 换成另一个状态登记时，注销的是新登记；
+// 锁外读 subj.state 本身也与 rebind 的写并发。
 func (m *Manager) RetractSyncSubject(state *entity.SubjectSyncState) {
 	if m == nil || state == nil {
 		return
 	}
 	id := state.SubjectID()
-	if subj := m.subject(id); subj == nil || subj.state != state {
+	if m.subject(id) == nil {
 		return
 	}
-	_ = m.Unregister(id)
+	if m.retractLookedUp != nil {
+		m.retractLookedUp(id)
+	}
+	_ = m.unregister(id, state)
 }
 
 var _ entity.SyncSubjectRetractor = (*Manager)(nil)
