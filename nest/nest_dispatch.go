@@ -404,6 +404,12 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 	if guard == nil {
 		return nil, ErrLockTimeout
 	}
+	// useTryLock（guard 已持有别的实体时改用 TryRequire，避免越锁序阻塞等待）在当前生产路径上不可达（OPEN-ITEMS B05，
+	// 2026-09-27 按源码核对）：本函数唯一调用方是 group_lock.go 的 lockDispatchEntitiesWithGroup（groupID==0），往上只有
+	// dispatchLoadedEntities ← singleDispatch / dispatchMany ← runNestLogic（快池派发与 remote_dispatch.go 的快续行都经它）。
+	// runNestLogic 在取锁前新建 GuardScope，GetEntityGuard 取到的是池里已清空的 guard；其间的 Getter 只读已加载实体、不取实体锁，
+	// 所以这里 GuardedCount() 恒为 0。handler 内的公开 Request / Dispatch 被 ErrSyncInHandler / ErrAsyncInHandler 拒绝，
+	// 也没有别的嵌套派发入口。分支保留为防御：将来出现“在已持锁 guard 上派发”的入口时，它避免越锁序等待。
 	useTryLock := guard.GuardedCount() > 0 && !guard.CheckContainAllLock(lockEs)
 	acquired := make([]entity.IThreadSafeEntity, 0, len(lockEs))
 	for _, e := range lockEs {
