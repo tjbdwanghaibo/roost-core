@@ -107,6 +107,7 @@ func TestNestSyncModesShareCommitAndUnlockBoundaries(t *testing.T) {
 }
 
 func TestNestOnChangeRunsWithoutWaitingForInterval(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	id, e := newAsyncPilotEntity(t, 9901, 10)
 	m, frames, _ := syncTestManager(t, e, entitysync.ModeOnChange)
 	getter := newMockGetter()
@@ -241,6 +242,7 @@ func TestNestSyncRejectedCommitDoesNotFreezeOrPublish(t *testing.T) {
 }
 
 func TestNestSyncTracksCastEntityUntilAdmission(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	id, a := newAsyncPilotEntity(t, 9905, 10)
 	_, b := newAsyncPilotEntity(t, 9906, 20)
 	bid := mustBuildCastID(t, 9906, castAllianceCategory, castAllianceKind)

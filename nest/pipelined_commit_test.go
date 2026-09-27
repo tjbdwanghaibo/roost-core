@@ -103,6 +103,7 @@ func (c *pipelinedTestCommitter) resolveAll(err error) {
 }
 
 func TestPipelinedCommitReleasesLocksBeforeDurable(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 320, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -185,6 +186,7 @@ func TestPipelinedCommitReleasesLocksBeforeDurable(t *testing.T) {
 }
 
 func TestPipelinedEnqueueRejectionRollsBack(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 321, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -226,6 +228,7 @@ func TestPipelinedEnqueueRejectionRollsBack(t *testing.T) {
 }
 
 func TestPipelinedIndeterminateAbandonsWithoutRollback(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 322, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -273,6 +276,7 @@ func TestPipelinedIndeterminateAbandonsWithoutRollback(t *testing.T) {
 }
 
 func TestPipelinedRequiresCapableCommitter(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 323, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -306,6 +310,7 @@ func TestPipelinedRequiresCapableCommitter(t *testing.T) {
 }
 
 func TestPipelinedAllowlistGatesHandlers(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 324, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(&rollbackTestEntity{
@@ -348,6 +353,7 @@ func TestPipelinedAllowlistGatesHandlers(t *testing.T) {
 }
 
 func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	// Design doc §8.4: T1 enqueues and releases its locks before durability;
 	// T2 (a multi-entity handler on another worker) reads the state T1 wrote
 	// and enqueues on top of it. Neither reply may escape before its own

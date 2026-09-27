@@ -43,6 +43,7 @@ func registerAsyncIncrementHandler(name string, hooks *[]string, hooksMu *sync.M
 }
 
 func TestAsyncCompletionFreesWorkerDuringDurableWait(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	// The Phase 2 property: with one worker, a pipelined transaction waiting
 	// for durability must not block the worker — a request to a different
 	// entity on the same worker completes while the first ticket is pending.
@@ -122,6 +123,7 @@ func TestAsyncCompletionFreesWorkerDuringDurableWait(t *testing.T) {
 }
 
 func TestAsyncCompletionKeepsSameEntityCommitOrder(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	// Two pipelined transactions on one entity: the second handler runs while
 	// the first is still waiting for durability (that is the point), but
 	// AfterCommit hooks and replies must fire in commit (LSN) order.
@@ -195,6 +197,7 @@ func TestAsyncCompletionKeepsSameEntityCommitOrder(t *testing.T) {
 }
 
 func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id, ent := newAsyncPilotEntity(t, 343, 10)
 	getter.Add(ent)
@@ -234,6 +237,7 @@ func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
 }
 
 func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	// A deferred completion is accepted work: Shutdown must not finish until
 	// the pending reply is delivered.
 	getter := newMockGetter()
@@ -293,6 +297,7 @@ func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
 }
 
 func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	// Regression: the saturated-pump fallback used to run its Commit and
 	// AfterCommit hooks inline without regard for same-entity completions
 	// still queued in the pump, so an overloaded engine could reorder

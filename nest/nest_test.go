@@ -404,6 +404,7 @@ func (g *mockGetter) UpdateEntityGroup(value entity.IThreadSafeEntity, groupID i
 }
 
 func TestRegisterAndDispatchHandler(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 1, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
@@ -836,6 +837,7 @@ func TestNestHandlerRejectsNestedAsyncDispatch(t *testing.T) {
 }
 
 func TestRollbackStateRestoresDaoAndDirty(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 301, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -880,6 +882,7 @@ func TestRollbackStateRestoresDaoAndDirty(t *testing.T) {
 }
 
 func TestRollbackAfterCommitRunsOnSuccess(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 303, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -921,6 +924,7 @@ func TestRollbackAfterCommitRunsOnSuccess(t *testing.T) {
 }
 
 func TestRollbackUndoRestoresStateAndDirty(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 304, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -962,6 +966,7 @@ func TestRollbackUndoRestoresStateAndDirty(t *testing.T) {
 }
 
 func TestStrictCommitFailureRollsBack(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 305, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -1008,6 +1013,7 @@ func TestStrictCommitFailureRollsBack(t *testing.T) {
 }
 
 func TestStrictCommitSuccessKeepsState(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 306, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -1051,6 +1057,7 @@ func TestStrictCommitSuccessKeepsState(t *testing.T) {
 }
 
 func TestIndeterminateCommitDoesNotRollback(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 307, entity.EntityCategory(1), nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}
@@ -1129,6 +1136,7 @@ func TestEmitUpgradesTransactionToStrictDurability(t *testing.T) {
 }
 
 func TestSyncUsesRequestSyncWait(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 101, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
@@ -1156,6 +1164,7 @@ func TestSyncUsesRequestSyncWait(t *testing.T) {
 }
 
 func TestSyncCarriesCurrentContextIntoHandler(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 102, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
@@ -1204,6 +1213,7 @@ func TestSyncCarriesCurrentContextIntoHandler(t *testing.T) {
 }
 
 func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	metrics.DefaultRegistry().Reset()
 	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 
@@ -1468,6 +1478,7 @@ func TestEntityKindRemoteCapability(t *testing.T) {
 }
 
 func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 320, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(&rollbackTestEntity{
