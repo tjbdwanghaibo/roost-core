@@ -135,7 +135,7 @@ environment_test() {
 	(
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration -p 1 ./dataengine/engine ./kit/dataengine ./kit/nats ./remoteentity ./redis/... ./etcd/driver ./mongo/driver -count=1
+			go test -tags=integration -p 1 ./dataengine/engine ./kit/dataengine ./kit/nats ./kit/syncbus ./remoteentity ./redis/... ./etcd/driver ./mongo/driver -count=1
 	)
 }
 
