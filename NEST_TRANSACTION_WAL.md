@@ -112,6 +112,12 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 残余风险：已 fsync、strict 已向调用方确认但尚未 ack 投影的记录，若介质把它所在的块连同其后全部内容整块清零，形态与未写回的零尾无法区分，会被当作撕裂截断，
 该记录丢失且没有 `ErrCorrupt`（checkpoint 之前的已确认记录不受影响）。截断告警与指标是发现这种情况的唯一线索，生产应对 `reason=zero_fill` 告警并核对投影结果。
 
+判据内仍拒绝启动的形态（跨页半写回，OPEN-ITEMS B02 / C08，维护者 2026-09-27 决定不放宽）：最后一帧跨 4 KiB 页边界，前页（含帧头）已写回、后页未写回读出为 0，文件长度不变。
+坏点是这一帧的起点，帧头有效、帧体长度在文件之内，只有 payload CRC 不符（`invalid frame payload checksum`）；坏点之后并非全 0，所以不属于零填充尾，
+即使这一帧在 checkpoint fence 之后、从未被确认，也按“帧头有效但 CRC 不符”拒绝启动且不改动文件。WAL 无法区分“后页丢写回”与真实的 payload 损坏，
+放宽会吞掉真实的 CRC 错误。这种拒绝与“零页之后仍有非零字节”一样需要人工处置；错误文本只有 `invalid frame payload checksum`，不带段号与偏移，坏帧在最后一段，起点是其中最后一个完整帧的结束偏移。
+回归：`nestwal/torn_page_tail_promises_test.go`。
+
 ## 6. 一致性和幂等
 
 WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库但 ack 尚未刷盘；effect 已发布但 ack 尚未刷盘；ack 文件更新失败。
