@@ -107,9 +107,15 @@ var (
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
 	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）：handler 内，
-	// 或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、解锁后回调，RR-20260926-84）。Remote 批次只随
+	// 消息自己的事务开始之前的慢阶段准备里（批次挂上之后），或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、
+	// 解锁后回调，RR-20260926-84）。Remote 批次只随
 	// 消息自己的事务 Commit 或 Abort；独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
 	// 框架直接拒绝：call 不执行、没有任何提交、批次与消息的 Remote 状态不变。
+	// “带 Remote 批次”从批次挂到消息上开始算：IRemoteEntityManager.PrepareRemoteWriteBatch 执行期间批次还没挂上，这时调用
+	// RunIsolatedTransaction 不返回本错误，按不认领消息的嵌套独立事务处理：照常执行并提交，不碰随后才挂上的批次；RR-65 的
+	// 标记（消息自己的事务随后没提交时回复带 ErrNestedTransactionCommitted）与 RR-76 的 fence（结果未知）同样适用，与纯本地
+	// 消息的收尾阶段相同。框架自带的 remoteentity.Manager 在这一步只做所有权准入与冷加载，本身不调用 RunIsolatedTransaction
+	// （RR-20260926-84 复核残留，OPEN-ITEMS B19）。
 	//   - 是否可能已提交：否。独立事务没有执行；消息自己的事务照常由业务决定继续或失败，其 Remote 批次按它的结果 Commit / Abort。
 	//   - 能否重试：原样重试仍会被拒绝（结构性限制）。把写入并入消息自己的事务，或放到不声明 Remote 目标的消息里执行。
 	ErrNestedTransactionInRemoteMessage = errors.New("nest: nested isolated transaction is not supported in a message with a remote write batch")
