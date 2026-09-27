@@ -83,6 +83,12 @@ handler 内新建实体的锁持有到 handler 结束（memory handler 也一样
 不能回滚的 handler（rollback=none，即 memory 快路径）冲突前的内存修改不会撤销，所以框架**不**自动重排这条消息：
 `Create` 的错误不带 `ErrLockTimeout`，请直接返回它，调用方收到 `ErrCreatedEntityLockConflict`；业务改返回别的锁超时类错误时，
 回复同样补上该哨兵、不重排。是否重试由业务按 handler 的幂等性决定（[RR-20260926-64](bugfix/RR-20260926-64.md)）。
+同一规则推广到不能回滚的 handler（memory 快路径，或带 Remote 批次的 memory handler）开始执行后的**任何**锁超时 / 组迁移类错误
+（`ErrLockTimeout`、`ErrEntityLockGroupChanged`、`ErrEntityGroupTransitionPending`）：框架不重排，回复满足
+`errors.Is(err, nest.ErrNonRollbackNotRequeued)`，原因仍可 `errors.Is`——此时 `ErrLockTimeout` 不再表示“未执行”，失败前的修改已生效。
+handler 开始执行之前的准入失败（声明目标取锁超时、组锁被占、组迁移待定）照常自动重新准入。
+动态 Cast 在等锁期间目标被 `Destroy` 或仅内存卸载时返回满足 `errors.Is(err, nest.ErrEntityNotFound)` 的错误（此前是 `ErrLockTimeout`），
+可回滚的事务照常整条回滚、不重排（[RR-20260926-73](bugfix/RR-20260926-73.md)）。
 handler 内先 `Destroy` 某个实体、再新建同 ID 的实体时，新实例拿到新锁，按上面的锁序规则取锁（同组即尝试加锁），持锁到 handler 结束并进入本次提交边界；
 事务回滚时新实例按上文撤销发布，旧实例的销毁不回滚（`Destroy` 本身不是事务操作）。同一 handler 里若 `Destroy` 之后别处重建了同 ID、再 `Cast` 它，
 返回 `nest.ErrCastDeadlockRisk`，不会拿到未加锁的实例（[RR-20260926-67](bugfix/RR-20260926-67.md)）。

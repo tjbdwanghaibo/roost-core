@@ -97,7 +97,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			err = nil
 		}
 		// 锁超时 / 组迁移等暂时性错误只对尚未提交的消息重新准入；已越过提交点的事务回复原错误（RR-20260926-49）。
-		// 不能回滚的 handler 在新建实体冲突前已做的修改不撤销，同样不重排（RR-20260926-64）。
+		// 不能回滚的 handler 一旦开始执行，已做的修改不撤销，同样不重排（新建实体冲突 RR-20260926-64，其余 RR-20260926-73）。
 		if msg.requeueAllowed(err) {
 			if requeuePendingEntityGroupTransition(mgr, msg, err) {
 				err = nil
@@ -105,9 +105,16 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			if requeueTransientDispatch(mgr, msg, err) {
 				err = nil
 			}
-		} else if msg.createLockConflictNoRollback && isRequeueableDispatchError(err) && !errors.Is(err, ErrCreatedEntityLockConflict) {
-			// 业务换成了别的锁超时类错误回复：补上冲突哨兵，调用方仍能判别“框架没有重排、修改未回滚”。
-			err = fmt.Errorf("%w: %w", ErrCreatedEntityLockConflict, err)
+		} else {
+			if msg.createLockConflictNoRollback && isRequeueableDispatchError(err) && !errors.Is(err, ErrCreatedEntityLockConflict) {
+				// 业务换成了别的锁超时类错误回复：补上冲突哨兵，调用方仍能判别“框架没有重排、修改未回滚”。
+				err = fmt.Errorf("%w: %w", ErrCreatedEntityLockConflict, err)
+			}
+			if msg.noRollbackHandlerStarted && !msg.transactionPastCommitPoint(err) && isRequeueableDispatchError(err) && !errors.Is(err, ErrNonRollbackNotRequeued) {
+				// 本该重排的暂时性错误因 handler 不能回滚而没有重排：调用方据此判别“框架没有重排、修改未回滚”，
+				// 不能按 ErrLockTimeout 的“未执行”语义重发（RR-20260926-73）。已越过提交点的由提交哨兵说明，不叠加。
+				err = fmt.Errorf("%w: %w", ErrNonRollbackNotRequeued, err)
+			}
 		}
 		if msg.deferredCompletion {
 			// The completion pump owns the reply: it sends RetChan (or logs

@@ -95,6 +95,7 @@ func CastThree[E1, E2, E3 entity.IThreadSafeEntity](t1, t2, t3 CastTarget) (E1, 
 }
 
 // CastMulti retrieves and locks targets in the current entity guard scope.
+// 目标不存在、或在等锁期间被 Destroy / 仅内存卸载时返回满足 errors.Is(err, ErrEntityNotFound) 的错误（RR-20260926-73）。
 func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("%w: empty targets", ErrCastInvalidTarget)
@@ -168,6 +169,11 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		if !guard.RequireEntity(e) {
 			e.UnTouch()
 			releaseCastEntities(guard, lockedNow)
+			if e.IsRemoved() || e.IsClear() {
+				// 等锁期间目标被 Destroy / 仅内存卸载：目标已不在，不是暂时性锁冲突。旧实现一律返回 ErrLockTimeout，
+				// 不能回滚的 handler 因此被整条重排、已做的修改重复生效（RR-20260926-73）。
+				return nil, fmt.Errorf("%w: id=%d was removed while waiting for its lock", ErrEntityNotFound, e.GUId())
+			}
 			return nil, ErrLockTimeout
 		}
 		e.UnTouch()

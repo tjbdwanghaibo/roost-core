@@ -222,13 +222,22 @@ func (m *Msg) markCreateLockConflictWithoutRollback() {
 	}
 }
 
+// markNoRollbackHandlerStarted 记录这条消息自己的事务不能回滚、且业务 handler 已开始执行（RR-20260926-73）；
+// nil 接收者（嵌套事务、无派发调用）无操作。
+func (m *Msg) markNoRollbackHandlerStarted() {
+	if m != nil {
+		m.noRollbackHandlerStarted = true
+	}
+}
+
 // requeueAllowed 判断失败的这条消息能否由框架自动重新准入：没有越过提交点（RR-20260926-49），
-// 且不是“不能回滚的 handler 在冲突前已做了修改”（RR-20260926-64）。
+// 且不是“不能回滚的 handler 已经开始执行”——冲突前 / 失败前已做的修改不撤销，重排会让它们重复生效
+// （新建实体冲突 RR-20260926-64，任意锁超时 / 组迁移类错误 RR-20260926-73）。handler 开始之前的准入失败照常重排。
 func (m *Msg) requeueAllowed(err error) bool {
 	if m == nil {
 		return false
 	}
-	return !m.transactionPastCommitPoint(err) && !m.createLockConflictNoRollback
+	return !m.transactionPastCommitPoint(err) && !m.createLockConflictNoRollback && !m.noRollbackHandlerStarted
 }
 
 // replyAfterCommit 判断回复里的错误是否都发生在提交之后：纯本地事务看 txCommitted，带 Remote 批次的看 remoteConfirmed
@@ -361,6 +370,10 @@ type Msg struct {
 	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读（与 txAdmitted 相同）。
 	txNoRollback                 bool
 	createLockConflictNoRollback bool
+	// noRollbackHandlerStarted 表示本条消息自己的事务不能回滚（txNoRollback）且业务 handler 已开始执行：此后任何锁超时 /
+	// 组迁移类错误都不再重排，回复带 ErrNonRollbackNotRequeued（RR-20260926-73）。取锁、组迁移检查等 handler 之前的准入失败
+	// 不置位，照常重排。由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
+	noRollbackHandlerStarted bool
 	// nestedTxCommitted 表示 handler 内嵌套的独立事务（不认领消息的 RunIsolatedTransaction 等）已持久提交或结果未知：
 	// 消息按已越过提交点处理，不重排；自己的事务没有提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
 	// 由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。

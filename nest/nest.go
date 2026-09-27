@@ -73,6 +73,14 @@ var (
 	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）。消息按已越过提交点处理，框架不自动重排；
 	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
 	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
+	// ErrNonRollbackNotRequeued 表示不能回滚的 handler（memory 快路径，或消息自己的事务是 RollbackNone）已经开始执行后，
+	// 以锁超时 / 组迁移类暂时性错误失败（RR-20260926-73）。可回滚的事务遇到这类错误会整条回滚后由 Nest 自动重新准入；
+	// 这里 handler 失败前已做的内存修改不撤销，重排会让它们重复生效，所以框架不重排，原因错误（如 ErrLockTimeout）保留在链上。
+	//   - 是否可能已提交：消息自己的事务没有提交（memory 快路径未准入、Remote 批次已 Abort），但失败前的内存修改仍在；
+	//     若同时带 ErrNestedTransactionCommitted，嵌套独立事务可能已提交。
+	//   - 能否重试：框架不重试。业务确认 handler 幂等（或先读回实体当前状态）后才能自行重试，不能按“锁超时=未执行”盲目重发。
+	// handler 开始执行之前的准入失败（声明目标取锁超时、组迁移待定等）不带它，照常由 Nest 重新准入。
+	ErrNonRollbackNotRequeued = errors.New("nest: handler cannot roll back; transient failure after it started was not requeued")
 )
 
 func NewParamCountMismatchError(handler string, got int, want int) error {

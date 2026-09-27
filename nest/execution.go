@@ -127,6 +127,8 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 		defer func() { owner.txInFlight = false }()
 	}
 	if meta.Rollback == RollbackNone && meta.Durability == DurabilityMemory && (msg == nil || msg.RemoteWriteBatch == nil) {
+		// 从这里起 handler 的修改不能撤销：失败也不再重排（RR-20260926-73）。
+		owner.markNoRollbackHandlerStarted()
 		ret, err = invokeMemoryHandler(handler, stages, call)
 		if err == nil {
 			admissionStart := startNestStage(stages)
@@ -163,6 +165,10 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 	tx.dispatch = owner
 	if err := tx.CaptureEntities(es); err != nil {
 		return nil, err
+	}
+	if tx.policy == RollbackNone {
+		// 带 Remote 批次的 memory handler：同样不撤销内存修改，开始执行后失败不再重排（RR-20260926-73）。
+		owner.markNoRollbackHandlerStarted()
 	}
 	ret, err = callTransactionHandler(tx, call)
 	if busy := tx.createLockBusy; busy != nil && tx.policy != RollbackNone && !errors.Is(err, ErrLockTimeout) {
