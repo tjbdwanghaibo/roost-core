@@ -471,9 +471,13 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	}
 	if b.committed {
 		commits := b.commitsLocked()
+		durability := b.outcome.Durability
 		b.mu.Unlock()
 		status, err := b.mgr.RemoteCommitStatus(ctx, b.outcome.TransactionID)
 		if err != nil {
+			if durability >= 2 {
+				err = waitedCommitError(err)
+			}
 			return nil, err
 		}
 		if len(status.Receipts) > 0 {
@@ -497,6 +501,7 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 		var status entity.RemoteCommitStatus
 		status, err = b.mgr.waitRemoteTransaction(ctx, outcome.TransactionID)
 		receipts = status.Receipts
+		err = waitedCommitError(err)
 	}
 	if err != nil {
 		rejected := false
@@ -522,6 +527,21 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	b.committed = true
 	b.mu.Unlock()
 	return receipts, nil
+}
+
+// waitedCommitError 给等待投影器结论的 Commit（strict，以及随 strict 路径提交的 pipelined）的错误归类（RR-20260928-08）。
+// 本地记录已经进 WAL，Remote 部分由投影器按 WAL 写权威；这里的错误只说明本批次没有等到结论，不说明 Remote 没写入。
+// 只有 entity.ErrRemoteRejected 是明确拒绝：tracker 终态 Rejected（投影器写权威被 fenced / 版本冲突 / 持久拒绝，
+// 过期租约跳过），或 finalizer 回源得到 Rejected，原样返回（判别表第 4 行）。其余——tracker 被容量淘汰后重新登记报
+// ErrRemoteOverloaded、状态查询失败、未定终态——一律加上 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行）；
+// 已带它的（Indeterminate 终态、等待截止，RR-20260927-24）不重复加。
+// 之前 Commit 对 strict 的这些错误已按结果未知交给 finalizer（之后按已提交收尾），错误本身却不带哨兵，nest 按“不带哨兵 =
+// 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。
+func waitedCommitError(err error) error {
+	if err == nil || errors.Is(err, entity.ErrRemoteRejected) || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		return err
+	}
+	return errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
 }
 
 func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {

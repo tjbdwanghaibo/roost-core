@@ -212,6 +212,157 @@ func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) 
 	}
 }
 
+// RR-20260928-08（第七轮审计 N1，由审计探针改写）：strict 下本地已提交，WAL 投影器（这里由 beforeWait 模拟）已把 Remote 写进权威、
+// tracker 转 Committed 并关闭；strict 等待开始之前，另一笔 Remote 事务准入时按容量淘汰了这条已关闭的 tracker、占住唯一名额（pending 不淘汰）。
+// 等待重新登记 tracker 得到 entity.ErrRemoteOverloaded。批次对 strict 的任何 Commit 错误都按结果未知交给 finalizer（之后按已提交收尾），
+// 而这个错误不带 entity.ErrRemotePersistenceIndeterminate，nest 按判别表第 4 行的判据把回复标成 ErrRemotePartRejected（Remote 没写入），
+// 调用方照做会把已经提交的 Remote 部分再写一次。承诺：等待投影器结论的 Commit 凡不是明确拒绝（entity.ErrRemoteRejected）的错误都带
+// ErrRemotePersistenceIndeterminate，回复按“第一个命中的行”落在第 2 行、不带 ErrRemotePartRejected，原因 ErrRemoteOverloaded 仍可 errors.Is。
+// pipelined handler 带 Remote 批次时同样走 strict 提交路径、同样等待投影器结论（outcome.Durability=3），一并钉住。
+func TestRemoteStrictTrackerEvictedAfterCommitReplyHitsDecisionTableRow2(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rawID      int64
+		durability nest.DurabilityPolicy
+		committer  interface {
+			nest.TransactionCommitter
+			commits() int32
+		}
+	}{
+		{name: "strict", rawID: 1999, durability: nest.DurabilityStrict, committer: &countingLocalCommitter{}},
+		{name: "pipelined", rawID: 1988, durability: nest.DurabilityPipelined, committer: &pipelinedLocalCommitter{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, live := newReloadFixture(t, tc.rawID)
+			f.mgr.remote.txMu.Lock()
+			f.mgr.remote.txCapacity = 1
+			f.mgr.remote.txMu.Unlock()
+			var txID entity.RemoteTransactionID
+			beforeWait := func(f reloadFixture, commits []entity.RemoteCommit) {
+				txID = commits[0].TransactionID
+				// 投影器把 Remote 写交给权威并成功：tracker Committed、关闭。
+				if _, err := f.mgr.ApplyRemoteCommits(context.Background(), txID, commits); err != nil {
+					t.Errorf("projector apply: %v", err)
+				}
+				// 另一笔 Remote 事务准入：容量满，淘汰最旧的已关闭 tracker（本事务），占住唯一名额。
+				if err := f.mgr.trackRemoteTransaction(remoteTestTxID(251)); err != nil {
+					t.Errorf("second admission: %v", err)
+				}
+			}
+			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+				nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(tc.committer))
+			name := nest.NewHandlerName("reply_sentinels_tracker_evicted_" + tc.name)
+			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+				live.set("committed-remote", "")
+				return "ok", nil
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: tc.durability})
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reply, err := engine.Request(ctx, name, live.ID(), nil)
+			cancel()
+			row, hits := firstTableRow(err)
+			t.Logf("reply=%v err=%v first-row=%d sentinels=[%s]", reply, err, row, hits)
+			status, statusErr := f.storage.CommitStatus(context.Background(), txID)
+			if statusErr != nil || status.State != entity.RemoteCommitCommitted {
+				t.Fatalf("premise: authority CommitStatus(tx)=%v err=%v, want the Remote write committed", status.State, statusErr)
+			}
+			if n := tc.committer.commits(); n != 1 {
+				t.Fatalf("premise: local committer received %d record(s), want 1 (the local transaction commits first)", n)
+			}
+			if !errors.Is(err, entity.ErrRemoteOverloaded) {
+				t.Fatalf("premise: reply err=%v, want the wait to fail re-admitting the evicted tracker (errors.Is ErrRemoteOverloaded)", err)
+			}
+			if errors.Is(err, nest.ErrNestCanceled) || errors.Is(err, nest.ErrNestTimeout) {
+				t.Fatalf("premise: the caller's own wait ended before the reply: %v", err)
+			}
+			if errors.Is(err, nest.ErrRemotePartRejected) {
+				t.Fatalf("reply err=%v claims the Remote part was rejected (row 4), but the authority committed the Remote write", err)
+			}
+			if !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+				t.Fatalf("reply err=%v (sentinels [%s]): a Commit error that is not an explicit rejection must carry ErrRemotePersistenceIndeterminate", err, hits)
+			}
+			if row != 2 {
+				t.Fatalf("reply err=%v hits decision-table row %d (sentinels [%s]), want row 2", err, row, hits)
+			}
+		})
+	}
+}
+
+// pipelinedLocalCommitter 让 pipelined handler 通过注册检查；带 Remote 批次的消息不走 Enqueue（Remote 批次保留自己的两阶段协议，
+// 留在 strict 路径，nest/execution.go），本地记录经 Commit 立即持久。Enqueue 被调用说明 Remote 消息离开了 strict 路径，直接报错。
+type pipelinedLocalCommitter struct{ countingLocalCommitter }
+
+func (*pipelinedLocalCommitter) Enqueue(context.Context, coredata.CommitRecord) (nest.CommitTicket, error) {
+	return nil, errors.New("test: a message with a Remote write batch must stay on the strict commit path")
+}
+
+func (*pipelinedLocalCommitter) DurableLSN() uint64 { return 0 }
+
+// RR-20260928-08（第七轮审计 N2）：判别表第 14 行——调用方自己的等待先结束，Nest.Request* 返回 ErrNestCanceled（与 ctx 错误并存）
+// 或 ErrNestTimeout，结果未知。在真实 Nest + 正式 Remote Manager 上构造：strict handler 本地已提交，Remote 确认还在等（没有投影器），
+// 调用方的 ctx 截止 / 引擎同步等待超时先到。断言回复按“第一个命中的行”落在第 14 行（不命中第 1～13 行，也不落到兜底第 15 行），
+// 且本地事务确实已提交——这正是第 14 行“不说明结果、不得据此重试”的原因。
+func TestCallerWaitEndedReplyHitsDecisionTableRow14(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rawID     int64
+		ctxWait   time.Duration
+		syncWait  time.Duration
+		sentinels []error
+	}{
+		{name: "caller_ctx_deadline", rawID: 1989, ctxWait: 200 * time.Millisecond, syncWait: 5 * time.Second,
+			sentinels: []error{nest.ErrNestCanceled, context.DeadlineExceeded}},
+		{name: "engine_sync_timeout", rawID: 1990, ctxWait: 5 * time.Second, syncWait: 200 * time.Millisecond,
+			sentinels: []error{nest.ErrNestTimeout}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, live := newReloadFixture(t, tc.rawID)
+			committer := &countingLocalCommitter{}
+			// Remote 确认等待比调用方的等待长：调用方先截止，回复送达时批次仍在等 Remote 结论。
+			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: time.Second}
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+				nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(committer),
+				nest.NestOptionWithSyncTimeout(tc.syncWait))
+			name := nest.NewHandlerName("reply_sentinels_row14_" + tc.name)
+			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+				live.set("row14", "")
+				return "ok", nil
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), tc.ctxWait)
+			reply, err := engine.Request(ctx, name, live.ID(), nil)
+			cancel()
+			row, hits := firstTableRow(err)
+			t.Logf("reply=%v err=%v first-row=%d sentinels=[%s]", reply, err, row, hits)
+			for _, want := range tc.sentinels {
+				if !errors.Is(err, want) {
+					t.Fatalf("premise: reply err=%v (sentinels [%s]), want errors.Is(%v): the caller's own wait must end first", err, hits, want)
+				}
+			}
+			if row != 14 {
+				t.Fatalf("reply err=%v hits decision-table row %d (sentinels [%s]), want row 14 (caller's wait ended: outcome unknown)", err, row, hits)
+			}
+			// 本地事务在 Remote 确认等待之前已提交：回复不说明结果，重试会重复执行。
+			deadline := time.Now().Add(3 * time.Second)
+			for committer.calls.Load() == 0 && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if n := committer.calls.Load(); n != 1 {
+				t.Fatalf("local committer received %d record(s), want 1: the row-14 reply hides a committed local transaction", n)
+			}
+		})
+	}
+}
+
 // countingLocalCommitter 与 localDurableCommitter 相同（立即持久），另计 Commit 次数。
 type countingLocalCommitter struct{ calls atomic.Int32 }
 
@@ -220,44 +371,62 @@ func (c *countingLocalCommitter) Commit(context.Context, coredata.CommitRecord) 
 	return nil
 }
 
-// replySentinels 是 USER_GUIDE §4“回复错误判别”表按行的哨兵（第 8 行是第 7 行加 ErrLockTimeout 的组合，这里按第 7、9 行分别列出；
-// 第 13 行 entity.ErrEntityRemoved 只对 handler 内新建成立，第 14 行是兜底，都不在这里列）。
+func (c *countingLocalCommitter) commits() int32 { return c.calls.Load() }
+
+// replySentinels 是 USER_GUIDE §4“回复错误判别”表第 1～14 行的判据，按行号与表对齐；第 15 行是兜底（不命中以上任何一行），
+// firstTableRow 对它返回 15。第 7、8 行共用 ErrCreatedEntityLockConflict，按是否同时带 ErrLockTimeout 区分（without / with）；
+// 第 13 行 entity.ErrEntityRemoved 只对“handler 内新建本 handler 较早撤销的同 ID”成立，errors.Is 看不出来源，用例自己保证来源。
+// row 0 的项不是任何一行的判据，只在命中时打印（context.DeadlineExceeded 与第 2、14 行并存）。
+// RR-20260928-08：之前停在 RR-20260928-03 改号之前（兜底记为第 14 行、ErrNestCanceled / ErrNestTimeout 记为 0、第 8 行被当成第 7 行）。
 var replySentinels = []struct {
-	row  int
-	name string
-	err  error
+	row     int
+	name    string
+	err     error
+	with    error // 非 nil：还必须同时满足它
+	without error // 非 nil：同时满足它时不算这一行
 }{
-	{1, "nest.ErrCommitIndeterminate", nest.ErrCommitIndeterminate},
-	{2, "entity.ErrRemotePersistenceIndeterminate", entity.ErrRemotePersistenceIndeterminate},
-	{2, "entity.ErrRemoteCommitTimeout", entity.ErrRemoteCommitTimeout},
-	{3, "nest.ErrAfterCommitFailed", nest.ErrAfterCommitFailed},
-	{4, "nest.ErrRemotePartRejected", nest.ErrRemotePartRejected},
-	{5, "nest.ErrNestedTransactionCommitted", nest.ErrNestedTransactionCommitted},
-	{6, "nest.ErrNonRollbackNotRequeued", nest.ErrNonRollbackNotRequeued},
-	{7, "nest.ErrCreatedEntityLockConflict", nest.ErrCreatedEntityLockConflict},
-	{9, "nest.ErrLockTimeout", nest.ErrLockTimeout},
-	{9, "nest.ErrEntityLockGroupChanged", nest.ErrEntityLockGroupChanged},
-	{9, "nest.ErrEntityGroupTransitionPending", nest.ErrEntityGroupTransitionPending},
-	{10, "nest.ErrNestedTransactionRollbackConflict", nest.ErrNestedTransactionRollbackConflict},
-	{11, "nest.ErrNestedTransactionInRemoteMessage", nest.ErrNestedTransactionInRemoteMessage},
-	{12, "nest.ErrCommitRejected", nest.ErrCommitRejected},
-	{0, "nest.ErrNestCanceled", nest.ErrNestCanceled},
-	{0, "nest.ErrNestTimeout", nest.ErrNestTimeout},
-	{0, "context.DeadlineExceeded", context.DeadlineExceeded},
+	{row: 1, name: "nest.ErrCommitIndeterminate", err: nest.ErrCommitIndeterminate},
+	{row: 2, name: "entity.ErrRemotePersistenceIndeterminate", err: entity.ErrRemotePersistenceIndeterminate},
+	{row: 2, name: "entity.ErrRemoteCommitTimeout", err: entity.ErrRemoteCommitTimeout},
+	{row: 3, name: "nest.ErrAfterCommitFailed", err: nest.ErrAfterCommitFailed},
+	{row: 4, name: "nest.ErrRemotePartRejected", err: nest.ErrRemotePartRejected},
+	{row: 5, name: "nest.ErrNestedTransactionCommitted", err: nest.ErrNestedTransactionCommitted},
+	{row: 6, name: "nest.ErrNonRollbackNotRequeued", err: nest.ErrNonRollbackNotRequeued},
+	{row: 7, name: "nest.ErrCreatedEntityLockConflict(without ErrLockTimeout)", err: nest.ErrCreatedEntityLockConflict, without: nest.ErrLockTimeout},
+	{row: 8, name: "nest.ErrCreatedEntityLockConflict+ErrLockTimeout", err: nest.ErrCreatedEntityLockConflict, with: nest.ErrLockTimeout},
+	{row: 9, name: "nest.ErrLockTimeout", err: nest.ErrLockTimeout},
+	{row: 9, name: "nest.ErrEntityLockGroupChanged", err: nest.ErrEntityLockGroupChanged},
+	{row: 9, name: "nest.ErrEntityGroupTransitionPending", err: nest.ErrEntityGroupTransitionPending},
+	{row: 10, name: "nest.ErrNestedTransactionRollbackConflict", err: nest.ErrNestedTransactionRollbackConflict},
+	{row: 11, name: "nest.ErrNestedTransactionInRemoteMessage", err: nest.ErrNestedTransactionInRemoteMessage},
+	{row: 12, name: "nest.ErrCommitRejected", err: nest.ErrCommitRejected},
+	{row: 13, name: "entity.ErrEntityRemoved", err: entity.ErrEntityRemoved},
+	{row: 14, name: "nest.ErrNestCanceled", err: nest.ErrNestCanceled},
+	{row: 14, name: "nest.ErrNestTimeout", err: nest.ErrNestTimeout},
+	{row: 0, name: "context.DeadlineExceeded", err: context.DeadlineExceeded},
 }
 
-// firstTableRow 返回判别表“从上到下第一个命中的行”（0 = 没有命中任何行），以及命中的全部哨兵名。
+// decisionTableFallbackRow 是判别表的兜底行“不命中以上任何一行：未提交”。
+const decisionTableFallbackRow = 15
+
+// firstTableRow 返回判别表“从上到下第一个命中的行”（err 为 nil 时返回 0；不命中第 1～14 行时返回兜底第 15 行），以及命中的全部哨兵名。
 func firstTableRow(err error) (int, string) {
+	if err == nil {
+		return 0, ""
+	}
 	first := 0
 	var hits []string
 	for _, s := range replySentinels {
-		if !errors.Is(err, s.err) {
+		if !errors.Is(err, s.err) || (s.with != nil && !errors.Is(err, s.with)) || (s.without != nil && errors.Is(err, s.without)) {
 			continue
 		}
 		hits = append(hits, s.name)
 		if s.row != 0 && (first == 0 || s.row < first) {
 			first = s.row
 		}
+	}
+	if first == 0 {
+		first = decisionTableFallbackRow
 	}
 	return first, strings.Join(hits, " + ")
 }

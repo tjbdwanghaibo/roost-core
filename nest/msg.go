@@ -96,6 +96,7 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 			m.deferPostRemoteCommit(batch)
 			// 结果未知的 Commit 错误带 entity.ErrRemotePersistenceIndeterminate（entity 契约，判别表第 2 行）；不带它的就是
 			// Remote 没有写入的明确拒绝。记下事实，由 dispatchNest 给回复加 ErrRemotePartRejected（RR-20260928-03）。
+			// 这个判据要求 Remote 实现在“没等到结论”时也带未知哨兵：remoteentity 的 strict Commit 自 RR-20260928-08 起如此。
 			m.remotePartRejected = !errors.Is(err, entity.ErrRemotePersistenceIndeterminate)
 		}
 	default:

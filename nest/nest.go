@@ -55,7 +55,8 @@ var (
 	// memory 为内存提交），而 Remote 部分被明确拒绝（RR-20260928-03）。按 RR-20260926-58，只丢弃被拒绝 Remote 实体的修改
 	// （批次回滚、隔离并从权威重载），同一事务里的本地部分照常生效；提交后回调（AfterCommit）不执行。
 	// 原因错误（如 entity.ErrRemoteRejected、entity.ErrRemoteVersionConflict）保留在链上。按 entity 契约，Remote 结果未知时 Commit
-	// 返回 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行），不带它的 Commit 失败就是 Remote 没有写入；两者互斥，
+	// 返回 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行），不带它的 Commit 失败就是 Remote 没有写入（框架自带的 remoteentity
+	// 在 strict 下只有 entity.ErrRemoteRejected 不带它，其余等待失败都带，RR-20260928-08）；两者互斥，
 	// 与 ErrAfterCommitFailed（Remote 也已确认）同样互斥。之前这种回复不带任何哨兵，调用方看不出本地已提交。
 	//   - 是否可能已提交：部分已提交（本地部分已提交，Remote 部分未提交）。能否重试：不得整笔重试（本地部分会重复执行）；
 	//     按业务只补做 Remote 部分，或读回状态后再决定。
@@ -104,6 +105,10 @@ var (
 	// 解锁后回调）调用的独立事务也不认领消息，同样由本哨兵说明，不会被当成消息自己的提交（RR-20260926-84）。消息按已越过提交点处理，框架不自动重排；
 	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
 	//   - 是否可能已提交：是（嵌套部分已提交或结果未知）。能否重试：不得整笔重试，即使链上同时有 ErrLockTimeout（RR-20260926-77）。
+	//   - 带 Remote 批次的消息自己的本地事务已提交、Remote 结果未知或被明确拒绝（链上同时有 entity.ErrRemotePersistenceIndeterminate
+	//     或 ErrRemotePartRejected，判别表第 2、4 行先命中）时也可能带本哨兵：PrepareRemoteWriteBatch 期间调用的独立事务已提交
+	//     （OPEN-ITEMS B19 窗口）。这时回复外层文本是“nest: a nested isolated transaction also committed”，不说“消息失败”；
+	//     errors.Is(err, ErrNestedTransactionCommitted) 照常成立（RR-20260928-08）。
 	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
 	// ErrNonRollbackNotRequeued 表示不能回滚的 handler（memory 快路径，或消息自己的事务是 RollbackNone）已经开始执行后，
 	// 以锁超时 / 组迁移类暂时性错误失败（RR-20260926-73）。可回滚的事务遇到这类错误会整条回滚后由 Nest 自动重新准入；
@@ -134,6 +139,22 @@ var (
 	//   - 能否重试：原样重试仍会被拒绝（结构性限制）。把写入并入消息自己的事务，或放到不声明 Remote 目标的消息里执行。
 	ErrNestedTransactionInRemoteMessage = errors.New("nest: nested isolated transaction is not supported in a message with a remote write batch")
 )
+
+// errNestedTransactionAlsoCommitted 是 ErrNestedTransactionCommitted 在“消息自己的本地事务也已提交”时的外层表述（RR-20260928-08）。
+// 带 Remote 批次的消息本地已提交、Remote 结果未知或被明确拒绝，同时 PrepareRemoteWriteBatch 期间开的独立事务已提交（OPEN-ITEMS B19）：
+// 之前回复外层是 ErrNestedTransactionCommitted 的文本“…committed before the message failed”，与内层“local transaction committed …”矛盾。
+// 只换文本，errors.Is(err, ErrNestedTransactionCommitted) 照常成立。
+var errNestedTransactionAlsoCommitted error = nestedTransactionAlsoCommitted{}
+
+type nestedTransactionAlsoCommitted struct{}
+
+func (nestedTransactionAlsoCommitted) Error() string {
+	return "nest: a nested isolated transaction also committed"
+}
+
+func (nestedTransactionAlsoCommitted) Is(target error) bool {
+	return target == ErrNestedTransactionCommitted
+}
 
 func NewParamCountMismatchError(handler string, got int, want int) error {
 	return fmt.Errorf("%w: handler=%s got=%d want=%d", ErrParamMismatch, handler, got, want)

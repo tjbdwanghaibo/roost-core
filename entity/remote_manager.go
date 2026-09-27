@@ -9,6 +9,9 @@ var (
 	// ErrRemotePersistenceIndeterminate means a remote save/delete returned an
 	// error after the backend may already have accepted it. Callers must not
 	// blindly replay the business command.
+	// RemoteWriteBatch.Commit 在本地事务已提交之后返回的错误，只有“Remote 确定没有写入”的明确拒绝可以不带它；Nest 按
+	// “不带它 = 明确拒绝”给回复加 nest.ErrRemotePartRejected（判别表第 4 行）。等待 WAL 投影器结论的 Commit（strict）没等到
+	// 结论就失败（等待截止、tracker 重新登记失败等）不说明 Remote 没写入，必须带它（RR-20260928-08）。
 	ErrRemotePersistenceIndeterminate = errors.New("remote entity persistence outcome is indeterminate")
 	// ErrRemoteReleaseIncomplete means state persistence completed but an
 	// ownership/distributed guard could not be released normally.

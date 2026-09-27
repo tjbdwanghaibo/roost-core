@@ -96,7 +96,13 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		if msg.nestedTxCommitted && err != nil && !errors.Is(err, ErrAfterCommitFailed) && !errors.Is(err, ErrNestedTransactionCommitted) {
 			// 自己的事务没有提交，但 handler 内嵌套的独立事务已持久提交（或结果未知）：调用方必须能区分
 			// “什么都没提交”与“部分已提交”，不能据此重试整笔业务；消息也不重排（RR-20260926-65）。
-			err = fmt.Errorf("%w: %w", ErrNestedTransactionCommitted, err)
+			// 带 Remote 批次的消息自己的本地事务已提交（Remote 未确认：结果未知或被拒绝）时，外层换成不说“消息失败”的表述，
+			// 哨兵语义不变（RR-20260928-08，OPEN-ITEMS B19 并存形态）。
+			nested := ErrNestedTransactionCommitted
+			if msg.remoteCommitted {
+				nested = errNestedTransactionAlsoCommitted
+			}
+			err = fmt.Errorf("%w: %w", nested, err)
 		}
 		releaseCurrentMsg()
 		releaseCtx()

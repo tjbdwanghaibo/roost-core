@@ -130,12 +130,16 @@ Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-2026
 | 11 | `nest.ErrNestedTransactionInRemoteMessage` | 带 Remote 批次的消息里调用 `RunIsolatedTransaction`（批次挂到消息上之后：慢阶段准备、handler 内，或消息自己的事务结束后、批次收尾前的收尾阶段），函数体未执行（RR-75 / 84）。`PrepareRemoteWriteBatch` 执行期间批次还没挂上，不在此列（见表后说明） | 否（嵌套事务） | 原样重试仍被拒；把写入并入消息自己的事务 |
 | 12 | `nest.ErrCommitRejected` | 提交在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，以及 Remote 批次定稿（`FinalizeLocked`）拒绝（如 sid 作用域，RR-20260927-09）、准备提交记录失败、fence 之后不再交给 committer（同时带 `ErrNestFenced`，RR-20260927-06）——后几种从 RR-20260927-32 起同样带本哨兵，原因仍可 `errors.Is`。可回滚事务（state / undo）已回滚；不能回滚的 handler（带 Remote 批次的 memory handler，RollbackNone）失败前的内存修改**不撤销**（与第 6 行同一语义） | 否 | 看原因：`dataengine.ErrFencedEntityPending` 可重试，其余按业务错误处理；不能回滚的 handler 同第 6 行，确认幂等（或读回状态）后再重试 |
 | 13 | `entity.ErrEntityRemoved`（handler 内新建） | 同一 handler 里再建本 handler 自己较早撤销的同 ID（撤销收尾要等 handler 释放），确定失败、未重排（RR-20260927-21）；可回滚事务已回滚 | 否（消息自己的事务；嵌套事务已提交时按第 5 行） | 原样重试会重复同一流程、再次失败；改业务流程，不在同一 handler 内重建刚撤销的 ID |
-| 14 | `nest.ErrNestCanceled` / `nest.ErrNestTimeout`（`Nest.Request` 返回） | 调用方自己的等待先结束（ctx 取消 / 截止，或同步等待超时）：只说明没等到回复，**不说明结果**——请求可能未执行，也可能已准入并在回复之后提交（strict 事务实测会在回复之后提交，RR-20260928-03） | **结果未知** | 持久 handler 按“可能已提交”处理、不得据此重试；等结论后按业务幂等键核对 |
+| 14 | `nest.ErrNestCanceled` / `nest.ErrNestTimeout`（`Nest.Request*` 返回：`Request`、`RequestMulti`、`RequestMultiGroup` 及经它们的生成调用，同一等待出口） | 调用方自己的等待先结束（ctx 取消 / 截止，或同步等待超时）：只说明没等到回复，**不说明结果**——请求可能未执行，也可能已准入并在回复之后提交（strict 事务实测会在回复之后提交，RR-20260928-03） | **结果未知** | 持久 handler 按“可能已提交”处理、不得据此重试；等结论后按业务幂等键核对 |
 | 15 | 不命中以上任何一行 | 未提交：准入 / 停机 / 慢阶段准备失败、handler 返回的业务错误（可回滚事务已回滚）等。例外：不能回滚的 handler（memory / RollbackNone）返回业务错误时，失败前的内存修改不撤销，按第 6 行语义处理 | 否 | 按业务错误处理 |
 
-第 2 行的四种形态由 `remoteentity/reply_sentinel_table_test.go` 在真实 Nest + 正式 Remote Manager 上钉住（OPEN-ITEMS B23、RR-20260927-24），第 4 行的 strict（投影器写权威被拒）与 Durability 0（直接写权威被拒）两种形态、第 12 行的定稿拒绝同样在那里钉住（RR-20260928-03、RR-20260927-32）。
-第 4 行的判据：本地事务已提交后 Remote `Commit` 返回的错误，带 `entity.ErrRemotePersistenceIndeterminate` 的是结果未知（第 2 行），不带的按 entity 契约就是 Remote 没有写入（框架自带的 `remoteentity` 如此实现），回复加 `ErrRemotePartRejected`；自定义 Remote 实现在结果未知时必须带前者，否则会被当成明确拒绝。
-第 14 行展开：调用方自己的等待先到截止时，`Nest.Request` 返回 `nest.ErrNestCanceled`（与 ctx 错误并存）或 `nest.ErrNestTimeout`，这只说明没等到回复、不说明结果：
+第 2 行的四种形态由 `remoteentity/reply_sentinel_table_test.go` 在真实 Nest + 正式 Remote Manager 上钉住（OPEN-ITEMS B23、RR-20260927-24），第 4 行的 strict（投影器写权威被拒）与 Durability 0（直接写权威被拒）两种形态、第 12 行的定稿拒绝、第 14 行的调用方截止 / 同步等待超时、strict 等待时 tracker 已被淘汰（见下段）同样在那里钉住（RR-20260928-03、RR-20260927-32、RR-20260928-08）。
+第 4 行的判据：本地事务已提交后 Remote `Commit` 返回的错误，带 `entity.ErrRemotePersistenceIndeterminate` 的是结果未知（第 2 行），不带的按 entity 契约就是 Remote 没有写入，回复加 `ErrRemotePartRejected`。框架自带的 `remoteentity` 按 Durability 分两种：
+Durability 0（memory）由 `Commit` 直接写权威，写前校验失败与权威返回的 fenced / 版本冲突 / 拒绝不带前者（第 4 行），写出后回复丢失、发布失败等带前者；
+strict（以及带 Remote 批次、随 strict 路径提交的 pipelined）的 Remote 部分由 WAL 投影器写权威，`Commit` 只等结论——只有投影器写权威被拒（结论 Rejected，满足 `errors.Is(err, entity.ErrRemoteRejected)`，fenced / 版本冲突等原因只在文本里）不带前者，
+其余没等到结论的失败（等待截止、投影器报告未知、结论被容量淘汰后重新登记报 `entity.ErrRemoteOverloaded` 等）一律带前者、落在第 2 行（RR-20260928-08；此前最后一种不带，被误标为第 4 行，Remote 其实已写入）。
+自定义 Remote 实现在结果未知或没等到结论时必须带前者，否则会被当成明确拒绝。
+第 14 行展开：调用方自己的等待先到截止时，`Nest.Request*` 返回 `nest.ErrNestCanceled`（与 ctx 错误并存）或 `nest.ErrNestTimeout`，这只说明没等到回复、不说明结果：
 截止只停止等待、不撤销已准入的业务，持久 handler（尤其 strict Remote，请求截止与 Remote 确认截止常是同一个时刻）按“可能已提交”处理，不得据此重试。
 
 第 10、11 行是 `RunIsolatedTransaction` 返回给业务的错误；业务原样回复时，消息自己的事务是否提交仍按其余行判断（这两种情况下嵌套事务
@@ -149,7 +153,9 @@ Nest 之外仍返回 `entity.ErrEntityRemoved`（[RR-20260926-81](bugfix/RR-2026
 不返回第 11 行的错误，按不认领消息的嵌套独立事务处理——与纯本地消息的收尾阶段相同：照常执行并提交，不碰随后才挂上的批次，已提交时回复按
 第 5 行、结果未知时按第 1 行 fence。框架自带的 `remoteentity.(*Manager).PrepareRemoteWriteBatch` 只做所有权准入与冷加载，本身不调用
 `RunIsolatedTransaction`；只有在这一步里执行的代码（自定义 Remote 管理器，或准备过程中回调到的业务代码）开独立事务才会进入这个窗口
-（RR-20260926-84 复核残留，OPEN-ITEMS B19）。
+（RR-20260926-84 复核残留，OPEN-ITEMS B19）。这个窗口里独立事务已提交、消息自己的本地事务随后也提交而 Remote 结果未知或被明确拒绝时，
+回复同时带第 2 / 4 行的哨兵与 `ErrNestedTransactionCommitted`，按先命中的第 2 / 4 行处理；外层文本是 `nest: a nested isolated transaction also committed`
+（不说“消息失败”，此前沿用第 5 行哨兵的 `…committed before the message failed`），`errors.Is(err, nest.ErrNestedTransactionCommitted)` 照常成立（RR-20260928-08）。
 
 ## 5. Commit、Load 与主动 Flush
 
