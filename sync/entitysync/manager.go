@@ -185,6 +185,8 @@ type Manager struct {
 	resubmits       []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
 	delivering      []queuedResubmit                  // 政策阶段已取出、回调尚未返回（RR-20260926-78）
 	resubmitEntries atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
+	releases        []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知（RR-20260926-79）
+	releaseEntries  atomic.Int64                      // releases 的条数；政策阶段据此跳过加锁
 
 	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
 	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
@@ -443,10 +445,17 @@ func (m *Manager) Unregister(subjectID int64) error {
 		return ErrSubjectNotRegistered
 	}
 	subj.mu.Lock()
-	subj.unloadRetracted = false      // 业务的注销意图优先：之后重新加载不再自动排队登记
-	m.dropRetractedSubject(subjectID) // 同理，框架撤销的政策订阅也不再交还（在 forget 可能发生之前）
+	subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
+	// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
+	// 其中的 pair 也一并通知。
+	var released []queuedRelease
+	for sid, sub := range subj.subscribers {
+		released = releasedLocked(released, sub.sources, sid, subjectID)
+	}
+	released = m.dropRetractedSubject(subjectID, released)
 	remaining, cancelled := m.retireLocked(subj)
 	subj.mu.Unlock()
+	m.queueReleases(released)
 	cancelled.finish(ErrRegistrationCancelled)
 	m.finishRetire(subj, remaining)
 	return nil

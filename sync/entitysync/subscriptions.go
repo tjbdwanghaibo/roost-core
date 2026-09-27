@@ -206,9 +206,12 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		lifecycle.SessionClosed(id)
 	}
+	// 丢掉的来源订阅通知政策（RR-20260926-79）：订阅在这里逐条移除，RR-59 撤销后尚待重新提交的记录没有订阅可遍历，另行查找。
+	var released []queuedRelease
 	for _, subj := range subjects {
 		subj.mu.Lock()
 		if sub, subscribed := subj.subscribers[id]; subscribed && sub.lifetime == removed.lifetime {
+			released = releasedLocked(released, sub.sources, id, subj.id)
 			m.removeSubscriptionLocked(subj, id)
 			if subj.retiring && len(subj.subscribers) == 0 {
 				// Its last subscriber left before the remove could go out.
@@ -217,6 +220,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 		}
 		subj.mu.Unlock()
 	}
+	m.queueReleases(m.releasedRecordsOfSession(released, id))
 	if lost {
 		m.sessionsLost.Add(1)
 		metrics.IncCounter("entitysync_sessions_lost_total", nil, 1)
@@ -265,6 +269,8 @@ type SubscriptionSource struct {
 	manager *Manager
 	// resubmit 非 nil 时，本来源被框架撤销的订阅在同 ID 重新登记后交还给它（NewSubscriptionSourceWithResubmit）。
 	resubmit func([]RetractedSubscription)
+	// released 非 nil 时，框架因会话关闭或业务注销丢掉本来源的订阅后通知它（NewSubscriptionSourceWithHooks，RR-20260926-79）。
+	released func([]ReleasedSubscription)
 }
 
 // NewSubscriptionSource 为一个独立所有者创建可复用的来源令牌。
@@ -284,6 +290,31 @@ func (s *SubscriptionSource) Unsubscribe(session SessionID, subjectID int64) err
 		return ErrManagerClosed
 	}
 	return s.manager.unsubscribe(s, session, subjectID)
+}
+
+// Holds 报告本来源此刻是否让 session（当前这一次打开）订阅着 subject：subject 已登记、未退役，订阅的来源里有本来源。
+// 被框架撤销、尚待重新提交的 pair 不算。政策收到 Released 通知后用它确认 pair 没有在通知途中被重新订阅（RR-20260926-79）。
+func (s *SubscriptionSource) Holds(session SessionID, subjectID int64) bool {
+	if s == nil || s.manager == nil {
+		return false
+	}
+	m := s.manager
+	sess := m.session(session)
+	subj := m.subject(subjectID)
+	if sess == nil || subj == nil {
+		return false
+	}
+	subj.mu.Lock()
+	defer subj.mu.Unlock()
+	if subj.retiring {
+		return false
+	}
+	sub := subj.subscribers[session]
+	if sub == nil || sub.lifetime != sess.lifetime {
+		return false
+	}
+	_, held := sub.sources[s]
+	return held
 }
 
 // Subscribe 使用默认来源订阅。重复调用幂等，改变 profile 时替换默认来源的视图。

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"maps"
 	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
 type policyHook struct {
@@ -41,6 +43,8 @@ func (m *Manager) policyHooks() []policyHook {
 	return hooks
 }
 func (m *Manager) applyPolicies() error {
+	// 释放通知先于重新提交（RR-20260926-79）：会话已关闭的 pair 先从政策侧删掉，同一阶段的重新提交就不会把它说回去。
+	m.deliverReleases()
 	m.deliverResubmits()
 	var err error
 	for _, hook := range m.policyHooks() {
@@ -49,7 +53,7 @@ func (m *Manager) applyPolicies() error {
 	return err
 }
 func (m *Manager) policiesPending() bool {
-	if m.resubmitsPending() {
+	if m.releaseEntries.Load() > 0 || m.resubmitsPending() {
 		return true
 	}
 	for _, hook := range m.policyHooks() {
@@ -94,6 +98,35 @@ type retractedSubscription struct {
 type queuedResubmit struct {
 	source       *SubscriptionSource
 	subscription RetractedSubscription
+}
+
+// SubscriptionSourceHooks 是政策来源向 Manager 登记的回调。两者都在 Flush 的政策阶段（捕获前、持有 flushGate、
+// 不持有 Manager 的锁）按来源分批调用：可以取政策自己的锁并 Subscribe / Unsubscribe，不得调用 Flush，不得阻塞。
+type SubscriptionSourceHooks struct {
+	// Resubmit 见 NewSubscriptionSourceWithResubmit（RR-20260926-70）。
+	Resubmit func([]RetractedSubscription)
+	// Released 报告框架替本来源丢掉的订阅（RR-20260926-79）：会话关闭（CloseSession，或传输拒绝帧后 Manager 关闭它）
+	// 时该会话的全部订阅，业务 Unregister 时该 subject 的全部订阅；包括 RR-59 撤销后尚待重新提交的记录。RR-59 的
+	// RetractUnloadedSubject 不算释放（那些订阅走 Resubmit）。通知在下一次政策阶段送达，这之间调用方可能已在重开的
+	// 会话或重新登记的 subject 上重新订阅：政策删除自己的簿记前应以 Holds 确认本来源确实不再持有这对 pair。
+	Released func([]ReleasedSubscription)
+}
+
+// ReleasedSubscription 是一条被框架丢掉的来源订阅（SubscriptionSourceHooks.Released）。
+type ReleasedSubscription struct {
+	Session SessionID
+	Subject int64
+}
+
+type queuedRelease struct {
+	source       *SubscriptionSource
+	subscription ReleasedSubscription
+}
+
+// NewSubscriptionSourceWithHooks 与 NewSubscriptionSource 相同，另外登记政策的回调（见 SubscriptionSourceHooks）。
+// 零值 hooks 等同 NewSubscriptionSource。
+func (m *Manager) NewSubscriptionSourceWithHooks(hooks SubscriptionSourceHooks) *SubscriptionSource {
+	return &SubscriptionSource{manager: m, resubmit: hooks.Resubmit, released: hooks.Released}
 }
 
 // NewSubscriptionSourceWithResubmit 与 NewSubscriptionSource 相同，另外登记政策的重新提交入口（RR-20260926-70）：
@@ -229,6 +262,90 @@ func (m *Manager) deliverResubmits() {
 	m.resubmitMu.Unlock()
 }
 
+// ---- 框架丢掉订阅后通知政策（RR-20260926-79） ----
+//
+// CloseSession / 传输失败关闭会话、业务 Unregister 时 Manager 丢掉订阅，但政策自己的簿记（Direct 的绑定表）不知道，
+// 只会随历史绑定数增长。这两个位置（dropSession、Unregister）本来就逐条处理被丢掉的订阅：在同一把 subj.mu 内顺手记下
+// 带 Released 回调的来源，排进 releases，由下一次政策阶段交付——不在调用方路径上回调政策（Unregister 可能在 Nest
+// 快 worker 上、持有实体锁时被调用，也可能在政策持锁时被调用），也不为每次通知起 goroutine。releases 与 RR-70 的
+// 记录共用叶子锁 resubmitMu，releaseEntries 让政策阶段在没有通知时不加锁。
+
+// releasedLocked 追加 sources 里带 Released 回调的来源对 (session, subject) 的释放通知。调用方持有 subj.mu。
+func releasedLocked(out []queuedRelease, sources map[*SubscriptionSource]entity.SyncProfile, session SessionID, subjectID int64) []queuedRelease {
+	for source := range sources {
+		if source != nil && source.released != nil {
+			out = append(out, queuedRelease{source: source, subscription: ReleasedSubscription{Session: session, Subject: subjectID}})
+		}
+	}
+	return out
+}
+
+// releasedRecordsLocked 追加 RR-70 记录（撤销表、待交付、交付中）里满足 match 的、带 Released 回调的来源的释放通知：
+// 这些 pair 此刻没有订阅可供 dropSession / Unregister 遍历，却仍在政策的簿记里。调用方持有 resubmitMu。
+func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(ReleasedSubscription) bool) []queuedRelease {
+	add := func(source *SubscriptionSource, pair ReleasedSubscription) {
+		if source != nil && source.released != nil && match(pair) {
+			out = append(out, queuedRelease{source: source, subscription: pair})
+		}
+	}
+	for subjectID, entries := range m.retracted {
+		for _, entry := range entries {
+			add(entry.source, ReleasedSubscription{Session: entry.session, Subject: subjectID})
+		}
+	}
+	for _, items := range [][]queuedResubmit{m.resubmits, m.delivering} {
+		for _, item := range items {
+			add(item.source, ReleasedSubscription(item.subscription))
+		}
+	}
+	return out
+}
+
+// releasedRecordsOfSession 是 dropSession 的记录部分：会话关闭时 RR-70 记录保持不变（其恢复语义不因本修复改变），
+// 只把其中属于该会话的 pair 通知政策，由政策决定是否释放（Direct 会 Unsubscribe，记录随之删除）。
+func (m *Manager) releasedRecordsOfSession(out []queuedRelease, session SessionID) []queuedRelease {
+	if m.resubmitEntries.Load() == 0 {
+		return out
+	}
+	m.resubmitMu.Lock()
+	defer m.resubmitMu.Unlock()
+	return m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Session == session })
+}
+
+func (m *Manager) queueReleases(items []queuedRelease) {
+	if len(items) == 0 {
+		return
+	}
+	m.resubmitMu.Lock()
+	m.releases = append(m.releases, items...)
+	m.releaseEntries.Add(int64(len(items)))
+	m.resubmitMu.Unlock()
+	m.WakeSync()
+}
+
+// deliverReleases 在政策阶段按来源分批交付释放通知，批次顺序为各来源首次出现的顺序。
+func (m *Manager) deliverReleases() {
+	if m.releaseEntries.Load() == 0 {
+		return
+	}
+	m.resubmitMu.Lock()
+	queued := m.releases
+	m.releases = nil
+	m.releaseEntries.Add(-int64(len(queued)))
+	m.resubmitMu.Unlock()
+	var order []*SubscriptionSource
+	batches := make(map[*SubscriptionSource][]ReleasedSubscription)
+	for _, item := range queued {
+		if _, seen := batches[item.source]; !seen {
+			order = append(order, item.source)
+		}
+		batches[item.source] = append(batches[item.source], item.subscription)
+	}
+	for _, source := range order {
+		source.released(batches[source])
+	}
+}
+
 func (m *Manager) resubmitsPending() bool {
 	if m.resubmitEntries.Load() == 0 {
 		return false
@@ -265,13 +382,15 @@ func (m *Manager) dropRetracted(source *SubscriptionSource, session SessionID, s
 	m.resubmitEntries.Add(int64(len(m.resubmits) + len(m.delivering) - before))
 }
 
-// dropRetractedSubject：业务 Unregister 该 ID，之前的撤销记录与待交付项都不再交还。
-func (m *Manager) dropRetractedSubject(subjectID int64) {
+// dropRetractedSubject：业务 Unregister 该 ID，之前的撤销记录与待交付项都不再交还；其中带 Released 回调的来源的
+// pair 追加到 out 通知政策（RR-20260926-79）。
+func (m *Manager) dropRetractedSubject(subjectID int64, out []queuedRelease) []queuedRelease {
 	if m.resubmitEntries.Load() == 0 {
-		return
+		return out
 	}
 	m.resubmitMu.Lock()
 	defer m.resubmitMu.Unlock()
+	out = m.releasedRecordsLocked(out, func(pair ReleasedSubscription) bool { return pair.Subject == subjectID })
 	removed := len(m.retracted[subjectID])
 	delete(m.retracted, subjectID)
 	sameSubject := func(item queuedResubmit) bool { return item.subscription.Subject == subjectID }
@@ -279,6 +398,7 @@ func (m *Manager) dropRetractedSubject(subjectID int64) {
 	m.resubmits = slices.DeleteFunc(m.resubmits, sameSubject)
 	m.delivering = slices.DeleteFunc(m.delivering, sameSubject)
 	m.resubmitEntries.Add(-int64(removed + before - len(m.resubmits) - len(m.delivering)))
+	return out
 }
 
 func (m *Manager) clearRetracted() {
@@ -287,5 +407,7 @@ func (m *Manager) clearRetracted() {
 	m.resubmits = nil
 	m.delivering = nil
 	m.resubmitEntries.Store(0)
+	m.releases = nil
+	m.releaseEntries.Store(0)
 	m.resubmitMu.Unlock()
 }
