@@ -95,15 +95,15 @@ func MustRegisterEntityKindCategory(kind EntityKind, category EntityCategory) {
 	}
 }
 
+// RegisterEntityKindCategories 整批登记 kind 的 category：先校验整批，全部通过才写入，出错时注册表不变（RR-20260927-10）。
 func RegisterEntityKindCategories(defs ...EntityKindCategory) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	for _, def := range defs {
-		if err := registerEntityKindCategoryLocked(def.Kind, def.Category); err != nil {
-			return err
-		}
+	kindDefs := make([]EntityKindDef, len(defs))
+	for i, def := range defs {
+		kindDefs[i] = EntityKindDef{Kind: def.Kind, Category: def.Category}
 	}
-	return nil
+	return registerEntityKindDefinitionsLocked(kindDefs)
 }
 
 func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
@@ -112,15 +112,12 @@ func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
 	}
 }
 
+// RegisterEntityKindDefs 整批登记 kind 定义：先校验整批（含批内同一 kind 的多条定义），全部通过才写入；
+// 出错时注册表与派生锁档保持调用前的样子（RR-20260927-10）。
 func RegisterEntityKindDefs(defs ...EntityKindDef) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	for _, def := range defs {
-		if err := registerEntityKindDefinitionLocked(def); err != nil {
-			return err
-		}
-	}
-	return nil
+	return registerEntityKindDefinitionsLocked(defs)
 }
 
 func MustRegisterEntityKindDefs(defs ...EntityKindDef) {
@@ -162,22 +159,56 @@ func registerEntityKindCategoryLocked(kind EntityKind, category EntityCategory) 
 }
 
 func registerEntityKindDefinitionLocked(def EntityKindDef) error {
+	return registerEntityKindDefinitionsLocked([]EntityKindDef{def})
+}
+
+// registerEntityKindDefinitionsLocked 整批应用 kind 定义（调用方持有 registryMu）。第一遍只在暂存副本上校验与合并，
+// 批内后面的定义看到的是前面定义合并后的结果；全部通过后第二遍才发布记录并刷新派生锁档。之前逐条写入、出错即返回，
+// 被拒批次的前半段（新 kind、策略升级、锁档）留在注册表里（RR-20260927-10）。读者无锁，第二遍逐 kind 发布，
+// 每个 kind 的记录各自一致，与单条注册的可见性相同。
+func registerEntityKindDefinitionsLocked(defs []EntityKindDef) error {
+	staged := make(map[EntityKind]*entityKindEntry, len(defs))
+	order := make([]EntityKind, 0, len(defs))
+	for _, def := range defs {
+		existing, seen := staged[def.Kind]
+		if !seen {
+			existing = kindEntryOf(def.Kind)
+		}
+		next, err := resolveEntityKindDefinition(existing, def)
+		if err != nil {
+			return err
+		}
+		if next == existing {
+			continue
+		}
+		if !seen {
+			order = append(order, def.Kind)
+		}
+		staged[def.Kind] = next
+	}
+	for _, kind := range order {
+		kindEntries[kind].Store(staged[kind])
+		refreshLockRankLocked(kind)
+	}
+	return nil
+}
+
+// resolveEntityKindDefinition 计算把 def 应用到 existing（nil 表示未登记）之后的记录，不写注册表。
+// 返回 existing 本身表示无变化。
+func resolveEntityKindDefinition(existing *entityKindEntry, def EntityKindDef) (*entityKindEntry, error) {
 	kind := def.Kind
 	category := def.Category
 	if kind == EntityKindNone {
-		return fmt.Errorf("entity kind must not be none")
+		return nil, fmt.Errorf("entity kind must not be none")
 	}
 	if category == EntityCategoryNone {
-		return fmt.Errorf("entity category must not be none for kind %d", kind)
+		return nil, fmt.Errorf("entity category must not be none for kind %d", kind)
 	}
-	existing := kindEntryOf(kind)
 	if existing == nil {
-		kindEntries[kind].Store(&entityKindEntry{category: category, policy: def.RemotePolicy})
-		refreshLockRankLocked(kind)
-		return nil
+		return &entityKindEntry{category: category, policy: def.RemotePolicy}, nil
 	}
 	if existing.category != category {
-		return fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing.category, category)
+		return nil, fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing.category, category)
 	}
 	// A category-only registration carries policy none, so none is an "unknown
 	// yet" value that a later definition may fill in. The reverse is a partial
@@ -185,25 +216,23 @@ func registerEntityKindDefinitionLocked(def EntityKindDef) error {
 	// refused. Anything else is two sources disagreeing.
 	switch {
 	case existing.policy == def.RemotePolicy:
-		return nil
+		return existing, nil
 	case existing.policy == RemotePolicyNone:
 		if builder := existing.builder; builder != nil {
 			// builder 先注册时按 none 定下了默认生命周期；策略随后升级，生命周期必须与新策略相符，
 			// 否则 kind 变成托管而 builder 的生命周期仍是本地默认值（RR-20260926-71）。先声明 kind 定义再注册
 			// builder 时 normalizeBuilderPolicy 会按注册表的策略取默认生命周期。
 			if err := ValidateEntityPolicy(kind, builder.NoPersist, def.RemotePolicy, builder.Lifetime); err != nil {
-				return fmt.Errorf("entity kind %d remote policy %d declared after its builder: %w", kind, def.RemotePolicy, err)
+				return nil, fmt.Errorf("entity kind %d remote policy %d declared after its builder: %w", kind, def.RemotePolicy, err)
 			}
 		}
 		next := *existing
 		next.policy = def.RemotePolicy
-		kindEntries[kind].Store(&next)
-		refreshLockRankLocked(kind)
-		return nil
+		return &next, nil
 	case def.RemotePolicy == RemotePolicyNone:
-		return nil
+		return existing, nil
 	default:
-		return fmt.Errorf("entity kind %d remote policy mismatch: registered=%d new=%d", kind, existing.policy, def.RemotePolicy)
+		return nil, fmt.Errorf("entity kind %d remote policy mismatch: registered=%d new=%d", kind, existing.policy, def.RemotePolicy)
 	}
 }
 
