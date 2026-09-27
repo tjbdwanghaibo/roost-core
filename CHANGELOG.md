@@ -21,8 +21,8 @@
 - **非 Nest 持锁领头方冷加载时发布交回领头方 goroutine（RR-20260927-27）**：loader 发布要锁领头方已持有的实体时不再永久死锁，领头方按自己的 ctx 离开恢复成立。
 - **entitysync 注销按当前登记 / 按实例（RR-20260927-22 / 28）**：`Unregister` 取锁后确认表项，旧 subject 已被 forget 时注销同 ID 的当前登记；`RetractSyncSubject` 在 `subj.mu` 内比对状态、只撤回传入的那个状态。
 - **生成的 player TCP Mod 声明停机预算（RR-20260927-05，需 `roost project sync`）**：`StopBudget = player_access.tcp.shutdown_timeout`，托管 TCP 的服务 `shutdown.total_timeout` 与宽限期 +7s（game-demo 缺省 Mod 集 game 107s / 112s → 114s / 119s）；未手改的 `shutdown:` 段经 sync 自动更新，手改的看 doctor 提示。
-- **game-demo 玩家 id 计数键移到 `<account.key_prefix>:player_id`（RR-20260927-03）**：首次分配时以旧键 `roost:demo:player_id` 的值为起点（旧键只读不删）；升级时先停掉全部 account 进程；已生成的 `collaborators.go` 需重新生成或手工合并。
-- **game-demo 场景接卸载后重载与 `OnEntityLoaded → Rebind`（RR-20260927-18 / 23）**：玩家被仅内存卸载（原生步骤投影被 lease fence 跳过）后观察者收到权威全量；无人观看时卸载、之后被业务重载的玩家绑回场景；`NewScene` 在缺少实体运行时或 DataEngine `OnEntityLoaded` 时返回错误。
+- **game-demo 玩家 id 计数键移到 `<account.key_prefix>:player_id`（RR-20260927-03）**：首次分配时以旧键 `roost:demo:player_id` 的值为起点（旧键只读不删）；升级时先停掉全部 account 进程，回滚前要把旧键手工设为新键的值（见 demo/README）；已生成的 `collaborators.go` 需重新生成或手工合并。
+- **game-demo 场景接卸载后重载与 `OnEntityLoaded → Rebind`（RR-20260927-18 / 23）**：玩家被仅内存卸载（原生步骤投影被 lease fence 跳过）后观察者收到权威全量；无人观看时卸载、之后被业务重载的玩家绑回场景；`NewScene` 在缺少实体运行时或 DataEngine `OnEntityLoaded` 时返回错误。场景文件 `internal/service/game/scene.go` / `scene_test.go` 是 demo 脚手架只写一次的应用文件，**`roost project sync` 不会更新**：已生成工程要按新模板手工合并（RR-20260927-19 的计数同理）。
 
 ### Added
 
@@ -35,7 +35,7 @@
 - **生成器 / doctor**：Windows CI 上 RR-80 写失败用例（RR-20260927-01）；生成的 `Runtime.CloseSessions` 返回实际关闭数（RR-20260927-02，需重新生成）；`deploy/dev/run.sh` 登记游戏服传 `redis.db` / `redis.password`（RR-20260927-03）；
   doctor 对 0 或负的 `total_timeout` / `dataengine.shutdown_timeout` 按运行时 30s 判定，“Set it to”按配置的 dataengine 预算、各份不同时逐文件给出（RR-20260927-04）。
 - **其他**：不可比较的自定义 `lock.Mutex` 不再 panic（RR-20260927-25）；saga 收件箱 claim 标记失败记 Warn 与计数（RR-20260927-16）；卸载后重载最坏延迟写成真实上界，默认约 43 小时（RR-20260927-14）。
-- **测试与卫生**：nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；21 个文件 gofmt；`entity.ResetEntityRegistryForTest` 标 Deprecated；
+- **测试与卫生**：nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；32 个文件 gofmt（全仓 `gofmt -l` 为空）；`entity.ResetEntityRegistryForTest` 标 Deprecated；
   补测收为回归：B02 / B04 / B08～B10 / B13～B19 / B21 / B22 / B24 / B26 / B37，均见清单。
 - **文档**：USER_GUIDE §4 判别表补 `ErrRemoteCommitTimeout` 并更正收尾阶段表述；`ErrNestedTransactionInRemoteMessage` 的 `PrepareRemoteWriteBatch` 窗口；RR-54 包装 Getter 契约；kit/README 的 `roost.room` / `roost.sync` 共用 `ROOST_SYNC`；多份修复记录追加更正与关闭说明。
 

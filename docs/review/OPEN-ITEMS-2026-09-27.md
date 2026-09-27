@@ -334,7 +334,8 @@
 | 11 追加修复 | RR-20260927-24 | **完成**（`7b56060`）：strict 截止回复同时满足 `ErrRemotePersistenceIndeterminate`；仓内按两哨兵分支的调用点逐处核对无回退 |
 | 12 追加修复 | RR-20260927-25、26、27，B40、B41 | **完成**（`84f9424`～`1f0ba87`）：RR-25～28 修复（RR-27 选“发布交回领头方 goroutine”）；B40 为用例时序问题（follower 的 try-lock 判定晚于放开提交），已修测试；B41 证实 → RR-28 |
 | 门禁 | 批次 1～12 合入后 HEAD `afade7a`：build / vet / glsvet、整仓 race 120 包、entity / nest / dataengine/engine 整包 `-count=2`、sync-modes、新生成 game-demo build / vet / test 17 包 / game 与 account race / doctor（game 114s / 119s）/ `project diff` 0 文件，全部通过；剩余 11 个未格式化文件 `001b03b` 补齐，全仓 `gofmt -l` 为空 | **完成** |
-| 审计 | 第六轮独立审计 RR-20260927-01～28（两路） | 进行中 |
+| 审计 | 第六轮独立审计 RR-20260927-01～28（两路） | **完成**：[audit6](REVIEW-2026-09-27-audit6.md)；登记 RR-20260927-29～32，三处文档直接更正 |
+| 13 追加修复 | RR-20260927-29～32，B42、B43 | 进行中 |
 | 7 集成环境（串行，批次 1～6 合入后） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose）、B22 后一半 | 进行中 |
 | 8 长跑与性能（最后、独占机器） | B29、B30、C01、C03 | 待开始 |
 | 9 真实环境端到端补测（分四批） | B27 | 待开始 |
