@@ -278,6 +278,7 @@ func TestRollbackHandlerTransientFailureStillRequeues(t *testing.T) {
 }
 
 // REPRO-2026-09-26-07 §1 RR-64 补充对照改写：带 Remote 批次的 memory handler 内新建实体冲突，只执行一次、只带冲突哨兵、批次 Abort。
+// OPEN-ITEMS B16：这是 RollbackTx policy 为 none 的唯一形态（纯本地 memory 走没有 RollbackTx 的快路径），用例同时核对这个前提。
 func TestRemoteNonRollbackHandlerCreateConflictIsNotRequeued(t *testing.T) {
 	manager := entity.NewEntityManager()
 	aID, a := newAsyncPilotEntity(t, 45000, 1)
@@ -306,8 +307,12 @@ func TestRemoteNonRollbackHandlerCreateConflictIsNotRequeued(t *testing.T) {
 		return "created", MarkPersist(v.(*rollbackTestEntity).dao, 1)
 	}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
 	var attempts atomic.Int64
+	var noneTx atomic.Bool
 	mgr.MustRegisterHandlerWithMeta(follower, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
-		attempts.Add(1)
+		if attempts.Add(1) == 1 {
+			tx := CurrentRollbackTx()
+			noneTx.Store(tx != nil && tx.policy == RollbackNone)
+		}
 		p.dao.Value++
 		_, err := access.Create(createParam(x))
 		return "created", err
@@ -334,6 +339,9 @@ func TestRemoteNonRollbackHandlerCreateConflictIsNotRequeued(t *testing.T) {
 	close(committer.release)
 	<-ra
 	err, _ := reply.(error)
+	if !noneTx.Load() {
+		t.Fatal("premise: the follower must run inside a RollbackTx with policy none (memory handler with a Remote batch)")
+	}
 	if attempts.Load() != 1 || p.dao.Value != 2 {
 		t.Fatalf("attempts=%d value=%d (want 1/2) reply=%v", attempts.Load(), p.dao.Value, reply)
 	}
