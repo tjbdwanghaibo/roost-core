@@ -53,7 +53,7 @@ var (
 	// either gives up on transient errors or lets one unreadable record
 	// occupy the head of its queue for good (RR-20260920-05).
 	ErrMalformedRecord = errors.New("versionstore: record cannot be decoded")
-	ErrKeyEmpty = errors.New("versionstore: key is empty")
+	ErrKeyEmpty        = errors.New("versionstore: key is empty")
 )
 
 // Versioned pairs a value with the version the store assigned it. Version is

@@ -18,9 +18,9 @@ import (
 // 分不开的重试循环只有两个结局——要么对瞬时错误放弃，要么让一条坏记录永久占住队头。
 func TestAnUnreadableRecordIsReportedAsMalformed(t *testing.T) {
 	for name, stored := range map[string]string{
-		"no version separator": "not-an-envelope",
-		"version not a number": "abc\n{}",
-		"version is zero":      "0\n{}",
+		"no version separator":    "not-an-envelope",
+		"version not a number":    "abc\n{}",
+		"version is zero":         "0\n{}",
 		"payload does not decode": "1\n{not json",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -106,7 +106,6 @@ func (f *malformedFakeRedis) Eval(_ context.Context, _ string, _ []string, _ ...
 	}
 	return []any{int64(1), ""}, nil
 }
-
 
 // IndexDefer 的两条承诺：把已有条目挪到后面，不存在的条目不要凭空造出来。
 // 后一条是为了不让"索引"和"记录"悄悄分叉——一个 defer 不存在条目的调用方，

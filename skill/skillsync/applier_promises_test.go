@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func mintedManifest(t *testing.T, observer syncstream.Observer) (syncstream.Packet, *syncstream.History) {

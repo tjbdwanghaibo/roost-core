@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
 // 多进程：一条命令投递到不该执行它的进程时，该进程必须在“动任何状态之前”拒绝。
@@ -86,7 +86,7 @@ func TestStepConsumersAdmitBeforeTakingTheClaim(t *testing.T) {
 		}
 		config := StepConsumerConfig{
 			Stream: "ROOST_SAGA", Durable: "game-gift-deliver", Topic: "debit",
-			Admit:  func(context.Context, Command) error { return refused },
+			Admit: func(context.Context, Command) error { return refused },
 		}
 		if _, err := SubscribeMongoStep(context.Background(), client, transport, inbox, config, handler); err != nil {
 			t.Fatal(err)
@@ -116,7 +116,7 @@ func TestStepConsumersAdmitBeforeTakingTheClaim(t *testing.T) {
 		}
 		config := StepConsumerConfig{
 			Stream: "ROOST_SAGA", Durable: "game-gift-deliver", Topic: "debit",
-			Admit:  func(context.Context, Command) error { return nil },
+			Admit: func(context.Context, Command) error { return nil },
 		}
 		if _, err := SubscribeMongoStep(context.Background(), client, transport, inbox, config, handler); err != nil {
 			t.Fatal(err)

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 const (

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/syncstream"
 	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
 func TestProjectorBuildsStronglyTypedPackets(t *testing.T) {

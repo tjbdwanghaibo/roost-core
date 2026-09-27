@@ -6,9 +6,9 @@ package main
 import (
 	"fmt"
 
+	"github.com/tjbdwanghaibo/roost-core/skill"
 	"github.com/tjbdwanghaibo/roost-core/skill/combat"
 	"github.com/tjbdwanghaibo/roost-core/skill/combatcomponent"
-	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 const (
