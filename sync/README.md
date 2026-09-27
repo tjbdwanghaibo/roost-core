@@ -57,6 +57,8 @@ done 在 Manager 的调用路径上执行、不持锁，不得阻塞或调用 Fl
 退回 remove 撤销的订阅若来自政策来源（`NewSubscriptionSourceWithResubmit`；`policy.Interest` / `Group` / `Direct` 都用它），同 ID 重新登记后
 Manager 在下一次 Flush 的政策阶段把它们交还政策（`RetractedSubscription`），由政策按自己的判定重新提交：仍持有的 pair 恢复可见（订阅者先收到
 remove、再收到新对象的 create），缺席期间已释放的不恢复，各来源独立；`Manager.Subscribe` 与普通 `NewSubscriptionSource` 的订阅不恢复（RR-20260926-70）。
+重新登记后、重新提交交付前新 subject 又被撤销时，尚未交付（或交付中政策尚未订阅上）的记录回到撤销表，下一次登记再交还；同一来源、会话、subject
+只留一条（RR-20260926-78）。
 
 会话恢复按实际订阅处理：Hold / Ready / Close 使用 Manager 维护的生命周期反向索引，包含待全量与待 remove 的关系，不再逐会话扫描全服 Entity。编码引用表仍以成功交付为准；同 ID 重开不会继承旧 lifetime 的订阅。集中恢复验收见[资源预算与会话恢复](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)。
 

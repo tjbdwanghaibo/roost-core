@@ -183,7 +183,8 @@ type Manager struct {
 	resubmitMu      sync.Mutex
 	retracted       map[int64][]retractedSubscription // 撤销时记下，等同 ID 重新登记
 	resubmits       []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
-	resubmitEntries atomic.Int64                      // 两者的条数；退订热路径据此跳过加锁
+	delivering      []queuedResubmit                  // 政策阶段已取出、回调尚未返回（RR-20260926-78）
+	resubmitEntries atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
 
 	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
 	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
@@ -274,11 +275,12 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 		m.mu.Unlock()
 		return false, ErrSubjectLimit
 	}
-	m.subjects[id] = newSubject(state)
+	created := newSubject(state)
+	m.subjects[id] = created
 	m.mu.Unlock()
 	m.installDirtyNotifier(id, state)
 	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交（RR-20260926-70）。
-	m.releaseRetracted(id)
+	m.releaseRetracted(created)
 	return false, nil
 }
 
