@@ -95,6 +95,8 @@
 | B41 | `RetractSyncSubject` 在锁外比对 `subj.state==state` 后按 ID 调 `Unregister`，其间同 ID 以另一个状态重新登记时注销的是新登记（批次 10 报告，修前即有、RR-22 未扩大） | [bf-RR-20260927-22](../bugfix/RR-20260927-22.md) | 推断，未写探针 | 在比对与 `Unregister` 之间加测试缝构造交错；证实则改为在 `subj.mu` 内比对并按实例注销 | S |
 | B42 | `entity.unload_resync.backlog` 为无标签 gauge，一个进程有多个 ManagerAccess 时互相覆盖（audit6 推断） | audit6 | 推断 | 构造两个 ManagerAccess 各有积压，看 gauge 值；证实则按实例聚合或文档写明“只反映最近写入者” | S |
 | B43 | `revokedCreated` 按 Guard 记而 `removing` 按 EntityManager 记，一个 Guard 跨多个 Manager 同 ID 时可能误判（audit6 推断） | audit6 | 推断 | 两个 Manager 同 ID，一边撤销、另一边新建，看 RR-21 分支是否误判 | S |
+| B44 | B08 回归 `TestParallelWindowReplaysSucceededSuffixUnderNewerFence` 无 race 时约 1/100 超时（`:115 timed out waiting for the suffix publication`）；推测用例未强制两笔落在同一投影窗口 | 批次 7 | 未证明 | 钉住“两笔进入同一窗口”再复跑 `-count=1000`；是用例问题就修测试 | S |
+| B45 | 集成测试残留：`kit/nats` `TestToxicJetStreamRPCCall…` 每次在共享 NATS 留两条流；只认 `REDIS_ADDR` 的三个包在目标 Redis 留 118 个键（部分无 TTL） | 批次 7 | 已观察 | 用例 `t.Cleanup` 删除自己创建的流 / 键 | S |
 | B38 | CARRYOVER 里仍未分流的 B4：活动窗口的机器人分支逻辑没有真实跨过 300 秒边界跑过 | [CARRYOVER §B](../bug/CARRYOVER.md)（B4“本轮进展：无”） | 仍成立（之后没有记录） | 集成环境让机器人运行跨过一个完整 300 秒窗口边界，或在 loadtest 里对齐起跑时间 | S |
 
 ## C. 本地做不了，或需要维护者决定（33 条）
@@ -133,6 +135,7 @@
 | C30 | RR-06：`Nest.Request*` 保留 `ErrSyncInHandler`、不改 panic，主记录要求“由维护者决定并在 CHANGELOG 标注”，没找到维护者确认的记载 | [bug-06 §实施方向](../bug/RR-20260926-06.md)；[bf-06](../bugfix/RR-20260926-06.md)`:11` | 仍成立：`nest/client.go:74`、`:114` 返回 `ErrSyncInHandler`（`nest/nest.go:35`） | 维护者补一句确认即可关闭 | S |
 | C31 | RR-66：手写 Mod（生成器不知道的）实现 `StopBudget` 也不计入生成值；新测试注册 kind 没有占用清单（RR-83） | [bf-66 §未验证项](../bugfix/RR-20260926-66.md)、[bf-83 §未验证项 / 风险](../bugfix/RR-20260926-83.md) | 仍成立：`codegen/internal/roost/shutdown_budget.go:99` 只看 Manifest | 流程约定，维护者定是否做清单 / 扫描测试 | S |
 | C32 | triage 留的“残留加固”：同 fence 下拒绝 StateVersion 回退（只影响非 authority 兼容装配） | [triage §核实后判为非问题](REVIEW-2026-09-26-v1170-triage.md)（RR-11 项） | 未见后续处理 | 维护者定是否做 | S |
+| C34 | B22 后一半：remoteflow 真实持久拒绝 + 订阅者。当前正式链路新写入可达的持久拒绝只有 Durability 0 结果未知（finalizer `RejectUnresolvedRemoteCommits`，B12 已验证）；要让提交“没到达 Mongo”需适配器替身或 Mongo 故障注入，且 remoteflow 的 `vaultLoader` 不支持卸载，需换正式 `ManagerAccess` + entitysync——fixture 设计量级 | [bf-59](../bugfix/RR-20260926-59.md) 更正节 | 保留：需要 fixture 设计 | M |
 | C33 | codebase-memory 图谱没刷新，刷新被 “pre-coordination or unverified CBM generation is active” 阻止 | 交接文档 §5 `:114`；多份 bf（51/54/66/76～85）| 仍成立 | 需确认没有其他 CBM 实例在用，再按记忆里的锁处理步骤重建；不要清未知锁 | S |
 
 ## D. 已接受的边界 / 契约（不处理，39 条）
@@ -320,6 +323,9 @@
 | RR-20260927-30 | audit6 N2：RR-25 不完整，含接口字段的 Mutex 仍 panic | 13 追加 |
 | RR-20260927-31 | audit6：Cast 捕获失败被吞后事务照常提交 | 13 追加 |
 | RR-20260927-32 | audit6：提交前拒绝不带 `ErrCommitRejected`、判别表无兜底行、RR-06 RollbackNone 表述 | 13 追加 |
+| RR-20260927-33 | 批次 7：生成 compose 的 `tmpfs` 被逗号拆开，所有服务起不来（P2） | 14 追加 |
+| RR-20260927-34 | 批次 7：生成镜像没有 `configs/data`，容器启动即失败（P2） | 14 追加 |
+| RR-20260927-35 | 批次 7：demo 模板测试期望流名未含 `roost.room` 兼容映射 | 14 追加 |
 
 | 批次 | 条目 | 状态 |
 | --- | --- | --- |
@@ -336,7 +342,8 @@
 | 门禁 | 批次 1～12 合入后 HEAD `afade7a`：build / vet / glsvet、整仓 race 120 包、entity / nest / dataengine/engine 整包 `-count=2`、sync-modes、新生成 game-demo build / vet / test 17 包 / game 与 account race / doctor（game 114s / 119s）/ `project diff` 0 文件，全部通过；剩余 11 个未格式化文件 `001b03b` 补齐，全仓 `gofmt -l` 为空 | **完成** |
 | 审计 | 第六轮独立审计 RR-20260927-01～28（两路） | **完成**：[audit6](REVIEW-2026-09-27-audit6.md)；登记 RR-20260927-29～32，三处文档直接更正 |
 | 13 追加修复 | RR-20260927-29～32，B42、B43 | 进行中 |
-| 7 集成环境（串行，批次 1～6 合入后） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose）、B22 后一半 | 进行中 |
+| 14 追加修复 | RR-20260927-33～35，B44、B45 | 待开始 |
+| 7 集成环境（串行） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose）、B22 后一半 | **完成**（`a2d08d6`～`21555fd`）：B28 三项门禁全绿（注：`dataengine-env.sh test` 含故障注入，会重启隔离 mongo-1 / nats）；B01 为用例固定键残留，非问题，WANTED 分流；B12 / B31 / B11 收为回归；B32 升级人工处理清单写入 bf-24；B33 漂移文件非 golden（D）；B35 两份记录不矛盾（取决于 Mod 集）；B34 / C04 停机实测无缺陷（compose 需先修两个部署物缺陷）；B38 跨窗口实跑通过、CARRYOVER B4 关闭；B22 后一半本地做不了 → C34；新缺陷 → RR-20260927-33～35，偶发 → B44，观察 → B45 |
 | 8 长跑与性能（最后、独占机器） | B29、B30、C01、C03 | 待开始 |
 | 9 真实环境端到端补测（分四批） | B27 | 待开始 |
 | — | C33 图谱刷新 | 批次 8 前尝试 |
