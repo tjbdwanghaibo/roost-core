@@ -179,6 +179,109 @@ func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
 	}
 }
 
+// RR-20260927-30：RR-25 用 reflect.Type.Comparable 判定能否比较。含接口字段的结构体在类型层面可比较，但接口里装着 func 时
+// == 仍在运行期 panic（comparing uncomparable type func()）。修后按值判定：装着不可比较动态值的锁按“不是同一把锁”处理
+// （与 RR-25 相同，各用各的底层锁）；接口字段装的是可比较值时仍能认出同一把锁，不退化成各自加锁。
+// hook 放在最前：结构体 == 逐字段比较、遇到不等即停，排在不同的 mu 之后就比较不到 hook。
+type ifaceFieldMutex struct {
+	hook any
+	id   int64
+	mu   *sync.Mutex
+}
+
+func (m ifaceFieldMutex) TryLock() bool { return m.mu.TryLock() }
+func (m ifaceFieldMutex) Lock()         { m.mu.Lock() }
+func (m ifaceFieldMutex) LockWithTimeout(time.Duration) bool {
+	m.mu.Lock()
+	return true
+}
+func (m ifaceFieldMutex) Unlock()       { m.mu.Unlock() }
+func (m ifaceFieldMutex) LockId() int64 { return m.id }
+
+func TestGuardCustomMutexWithFuncInInterfaceFieldDoesNotPanic(t *testing.T) {
+	pair := func(t *testing.T, hook func() any, shared bool) (old, fresh *testEntity) {
+		id := mustBuildTestEntityID(t, 6891, testEntityCategoryPlayer, EntityKindNone)
+		oldLock := &sync.Mutex{}
+		freshLock := &sync.Mutex{}
+		if shared {
+			freshLock = oldLock
+		}
+		old = &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, ifaceFieldMutex{id: id, mu: oldLock, hook: hook()}, EntityKindNone)}
+		fresh = &testEntity{EntityBase: NewEntityBaseWithMutex(id, testEntityCategoryPlayer, false, ifaceFieldMutex{id: id, mu: freshLock, hook: hook()}, EntityKindNone)}
+		return old, fresh
+	}
+	funcHook := func() any { return func() {} }
+	noPanic := func(t *testing.T, via string) {
+		t.Helper()
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", via, r)
+		}
+	}
+	for _, via := range []string{"RequireEntity", "TryRequireEntity", "GuardedEntity", "ReleaseEntityInstance"} {
+		t.Run(via, func(t *testing.T) {
+			old, fresh := pair(t, funcHook, false)
+			guard := newEntityGuard()
+			if !guard.RequireEntity(old) {
+				t.Fatal("setup: lock old")
+			}
+			defer noPanic(t, via)
+			switch via {
+			case "RequireEntity":
+				if !guard.RequireEntity(fresh) {
+					t.Fatal("RequireEntity(fresh) = false")
+				}
+			case "TryRequireEntity":
+				if !guard.TryRequireEntity(fresh) {
+					t.Fatal("TryRequireEntity(fresh) = false")
+				}
+			case "GuardedEntity":
+				if guard.GuardedEntity(fresh) {
+					t.Fatal("GuardedEntity(fresh) = true before locking it: a mutex holding a func was taken as the held one")
+				}
+				guard.ReleaseAll()
+				return
+			case "ReleaseEntityInstance":
+				// old 被 fresh 取代、锁转入 superseded：释放 old 要比较 fresh 与 old 的锁（holding）和 superseded 里的锁。
+				if !guard.RequireEntity(fresh) {
+					t.Fatal("setup: lock fresh")
+				}
+				guard.ReleaseEntityInstance(old)
+				if !lockableElsewhere(old) || lockableElsewhere(fresh) {
+					t.Fatalf("ReleaseEntityInstance(old): old free=%v (want true) fresh free=%v (want false)", lockableElsewhere(old), lockableElsewhere(fresh))
+				}
+				guard.ReleaseAll()
+				if !lockableElsewhere(fresh) {
+					t.Fatal("fresh lock leaked after ReleaseAll")
+				}
+				return
+			}
+			if lockableElsewhere(fresh) || !guard.GuardedEntity(fresh) {
+				t.Fatal("the fresh instance's own mutex is not held after locking it")
+			}
+			guard.ReleaseAll()
+			if !lockableElsewhere(old) || !lockableElsewhere(fresh) {
+				t.Fatalf("locks leaked after ReleaseAll: old free=%v fresh free=%v", lockableElsewhere(old), lockableElsewhere(fresh))
+			}
+		})
+	}
+	t.Run("comparable_value_in_interface_still_same_lock", func(t *testing.T) {
+		// 接口字段装的是可比较值、两份包装共用同一把不可重入的底层锁：必须认出是同一把锁，否则第二次加锁会自锁。
+		old, fresh := pair(t, func() any { return "observer" }, true)
+		guard := newEntityGuard()
+		if !guard.RequireEntity(old) {
+			t.Fatal("setup: lock old")
+		}
+		defer noPanic(t, "RequireEntity(shared)")
+		if !guard.GuardedEntity(fresh) || !guard.TryRequireEntity(fresh) {
+			t.Fatal("a wrapper with a comparable interface field sharing the held lock must count as held")
+		}
+		guard.ReleaseAll()
+		if !lockableElsewhere(old) {
+			t.Fatal("shared lock leaked after ReleaseAll")
+		}
+	})
+}
+
 // RR-20260927-26：ReleaseEntityInstance 只释放传入实例自己的锁。旧实例被同 ID 新实例取代（锁在 superseded）时释放旧锁、
 // 新实例仍被持有；传入当前实例或与它共用同一把锁的实例时同 ReleaseEntity；本 Guard 没为它登记锁时不动别人的锁。
 func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {

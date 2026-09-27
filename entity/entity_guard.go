@@ -322,7 +322,10 @@ func (e *EntityGuard) holding(ent IThreadSafeEntity) (held bool, stale IThreadSa
 
 // sameMutex 报告 a、b 是否是同一把锁（RR-20260927-25）。之前直接用 == 比较两个 lock.Mutex 接口值：自定义 Mutex
 // 若是不可比较的值类型（含 func / slice / map 字段、值接收者），同 ID 两个实例各持一份时 == 在运行期 panic。
-// 框架自己的锁都是 *lock.ReentrantMutex，先按指针比较，不经反射；只有其他类型才用 reflect 判断动态类型是否可比较。
+// 框架自己的锁都是 *lock.ReentrantMutex，先按指针比较，不经反射；只有其他类型才用 reflect 判断值是否可比较。
+// RR-20260927-30：可比较性按值判定（reflect.Value.Comparable），不按类型。之前用 reflect.Type.Comparable：含接口字段的
+// 结构体在类型层面可比较，但接口里装着 func 等不可比较的动态值时 == 仍在运行期 panic。Value.Comparable 会检查接口字段的
+// 动态值，并保证为 true 时与任意值做 == 都不 panic。
 // 不可比较的值无法判定是否同一把锁，按“不是同一把锁”处理：与 RR-20260926-67 一致，新实例自己加锁，被取代的
 // 旧实例连同它的锁转入 superseded，Guard 释放时一并解锁。这种值类型若内部共用同一把不可重入的锁，第二次加锁会
 // 自锁——自定义 Mutex 应当用指针或可比较的值实现。
@@ -335,7 +338,7 @@ func sameMutex(a, b lock.Mutex) bool {
 	if ta != reflect.TypeOf(b) {
 		return false
 	}
-	return ta == nil || (ta.Comparable() && a == b)
+	return ta == nil || (reflect.ValueOf(a).Comparable() && a == b)
 }
 
 // hold 记下刚取得锁的实例；stale 非 nil 时它仍被持有的锁转入 superseded，Guard 释放时解锁。
