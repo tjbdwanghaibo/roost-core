@@ -91,6 +91,7 @@
 | B36 | RR-81～85，以及 audit4 之后做的 RR-73、RR-80 复核补修（`62b3ad7`、`eb05c7a`），都没有经过非修复方独立审计 | 交接文档 `:110`（“RR-83～85 未经独立审计”）；[audit4](REVIEW-2026-09-27-audit4.md) `:3-4`（范围只到 RR-73～80，RR-81/82 不在范围）；`docs/review` 下没有 audit5 | 已核实仍成立 | 按前四轮格式做第五轮审计：修前红（各修复提交的父提交）/ 修后绿 / 约束符合度 / 跨组交互 | M |
 | B37 | 小的复验缺口：RR-83 `-shuffle=on` 的 seed 没记录；RR-85 在 `b95c895` 上的探针对照没重跑；RR-05 持续 RetryLater 下的会话公平性只做了推理 | [bf-83 §验证（修后）](../bugfix/RR-20260926-83.md)、[bf-85 §验证](../bugfix/RR-20260926-85.md)、[bf-05 §未验证项与边界](../bugfix/RR-20260926-05.md) | 仍成立 | `go test -count=2 -shuffle=on -v ./entity` 记 seed；`git worktree add` 到 `b95c895` 跑 REPRO-08 §2 探针 F；entitysync 写“持续 RetryLater N 个窗口，每个会话最终交付”用例 | S |
 | B39 | RR-85：`Unregister` 在已被 forget 的旧 subject 上取释放戳，可能删掉同 ID 新登记的记录与 Direct 活绑定（audit5 疑点，推断） | [audit5 §疑点](REVIEW-2026-09-27-audit5.md) | 推断，未写探针 | 在 `Unregister` 取 `subj` 与加 `subj.mu` 之间加测试缝，构造 forget + 重新登记 + Bind，看新登记的绑定与撤销记录是否被删 | S |
+| B40 | `TestSameIDCreateDoesNotOccupyFastPool/memory` 在高负载整包 `-race -count=20` 中偶发一次 `got ret=exists`；基线与分支重跑 `-count=20` ×2、单测 `-count=200` 均通过（批次 4 报告） | 批次 4 报告 | 未证明：疑为用例只等到 follower 计数自增、没等它真正进入 Create | 在用例里用事件钉住“follower 已进入 Create”，高负载（`-race -count=20` 与另一重包并行）下复跑；是测试时序问题就修测试，否则转 RR | S |
 | B38 | CARRYOVER 里仍未分流的 B4：活动窗口的机器人分支逻辑没有真实跨过 300 秒边界跑过 | [CARRYOVER §B](../bug/CARRYOVER.md)（B4“本轮进展：无”） | 仍成立（之后没有记录） | 集成环境让机器人运行跨过一个完整 300 秒窗口边界，或在 loadtest 里对齐起跑时间 | S |
 
 ## C. 本地做不了，或需要维护者决定（33 条）
@@ -308,6 +309,9 @@
 | RR-20260927-22 | B39 证实：`Unregister` 作用在已 forget 的旧 subject 上释放新登记的订阅 | 10 追加 |
 | RR-20260927-23 | demo 场景未接 `OnEntityLoaded → Rebind`（RR-18 剩余边界） | 10 追加 |
 | RR-20260927-24 | B23 证实：strict 截止回复不带 `ErrRemotePersistenceIndeterminate` | 11 追加 |
+| RR-20260927-25 | B06 证实：不可比较的自定义 Mutex 在 `holding` 比较时 panic | 12 追加 |
+| RR-20260927-26 | B07 证实：并发 Touch 下 `ReleaseCast(旧实例)` 释放新实例的锁 | 12 追加 |
+| RR-20260927-27 | B20 相邻形状：loader 发布要锁领头方持有的实体时永久死锁 | 12 追加 |
 
 | 批次 | 条目 | 状态 |
 | --- | --- | --- |
@@ -315,11 +319,12 @@
 | 1 生成器 / demo | A01、A02、A03、A04、A08、A09、C05 | 进行中 |
 | 2 仓库卫生与文档 | A05、A06、A07、A11、A12、A13、E 节、C 类“接受 / 保留 / 确认”项的文档记录（C02、C10、C12、C16、C19～C24、C28～C31） | **完成**（`d9b9a82`～`97e8f4e`）：glsvet 取消跟踪；gofmt 后 `gofmt -l` 为空；RR-20260927-20 修复（25 个用例收尾清表）；A12 七处更正；A13 状态回写；E 节在原文件标注关闭（core-optimization 的 4 条未逐条核对、未关闭，RR-28 等 B26）；C 类决定写入各记录 |
 | 3 Nest | B03→C07、B04、B05、B16、B17、B19、B24→C09、B26、C06 | **完成**（`dd6ec84`～`13b2b8d`）：B03 证实并修复为 RR-20260927-06；C06 修复为 RR-20260927-07；B04/B16/B17/B19/B26 无缺陷、收为回归（B26 更正 bf-28）；B05 不可达并注明；B24 3100 次试验 0 耗尽，不加抖动（C09 不做）；B19 边界：`PrepareRemoteWriteBatch` 执行期间调用不被拒，只影响文档字面，记入 RR-84 残留 |
-| 4 entity / kit | B06、B07、B18、B20、A10+C15、C13、C14、C17、C26、C27 | 进行中 |
+| 4 entity / kit | B06、B07、B18、B20、A10+C15、C13、C14、C17、C26、C27、RR-20260927-21 | **完成**（`ceb7c70`～`3ff024f`，判别表合并修正 `00f67c7`）：RR-20260927-09～14、21 修复（A10/C15 的拒绝放在 `FinalizeLocked`——Validate 与选库处都在投影 / 重放路径上，在那里拒绝会造成投影毒丸，偏离清单候选但符合 bf-45）；B18 部分被 RR-21 推翻并更正 bf-81；B20 指定形状无缺陷；B06、B07、B20 相邻形状证实 → RR-20260927-25～27；整包高负载下 `TestSameIDCreateDoesNotOccupyFastPool/memory` 偶发一次失败 → B40 |
 | 5 DataEngine / Remote / WAL / saga | B02、B08、B09、B10、B13、B14、B15、B23、C08（文档）、C11、C25、C32 | **完成**（`c9cf0cc`～`4c7424c`）：B02/B08/B09/B10/B13/B14/B15 无缺陷、收为回归（B14 更正 bf-38）；B23 判别表补 `ErrRemoteCommitTimeout`，代码与 RR-37 承诺不一致 → RR-20260927-24；C32/C25/C11 修复为 RR-20260927-15/16/17（C11 改为新增显式配置 `remote_entity.snapshot_l2_key_prefix`，缺省空：kit 没有缺省下能保持键不变的部署级 Redis 前缀，论证见 bf-17） |
 | 6 Sync / demo 场景 | B21、B22、B25、B37、C18、B39 | **完成**（`366e7c9`～`879b909`）：B21/B22/B37 无缺陷、收为回归；B25 可达并修复为 RR-20260927-18；C18 修复为 RR-20260927-19；B39 证实 → RR-20260927-22；剩余边界 → RR-20260927-23；B22 的 remoteflow 真实拒绝留批次 7 |
 | 10 追加修复 | RR-20260927-22、23，RR-84 残留（B19 边界文档） | 进行中 |
-| 11 追加修复 | RR-20260927-24 | 待开始 |
+| 11 追加修复 | RR-20260927-24 | 进行中 |
+| 12 追加修复 | RR-20260927-25、26、27，B40 | 待开始 |
 | 7 集成环境（串行，批次 1～6 合入后） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose） | 待开始 |
 | 8 长跑与性能（最后、独占机器） | B29、B30、C01、C03 | 待开始 |
 | 9 真实环境端到端补测（分四批） | B27 | 待开始 |
