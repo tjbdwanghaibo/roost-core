@@ -354,7 +354,7 @@ func renderDockerReadme(m Manifest) string {
       {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
 
 配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
-
+%s
 生产 Compose：
 
     cp deploy/docker/env.example deploy/docker/.env.production
@@ -363,7 +363,26 @@ func renderDockerReadme(m Manifest) string {
     sh deploy/docker/rollback.sh
 
 deploy.sh 要求 digest，使用容器内 /app/healthprobe 等待所有实例 readiness，并记录 current/previous image。生产 workflow 使用受保护 Environment 和带 roost-docker 标签的 self-hosted runner。
-`, service, playerPort, service, playerNote), m)
+`, service, playerPort, service, playerNote, paragraph(configDataImageNote(m))), m)
+}
+
+// configDataImageNote says where the image keeps the configdata tables and how
+// to override them (RR-20260927-34); empty for projects without configdata.
+func configDataImageNote(m Manifest) string {
+	if !contains(allProjectMods(m), "configdata") {
+		return ""
+	}
+	return "configdata 的数据表随镜像发布：Dockerfile 把 " + defaultConfigDataDir + " 拷到 /app/" + defaultConfigDataDir +
+		"（运行层 WORKDIR /app，config_data.dir 的生成值是相对路径，按它解析），和二进制作为同一份制品晋级；环境配置与密钥仍在部署时挂载。" +
+		"要按环境换数据，把只读卷（compose 用 bind，k8s 用 ConfigMap / 卷）整目录挂到 /app/" + defaultConfigDataDir +
+		" 遮盖镜像内容，更新后经 configdata Reload 热加载；把 config_data.dir 改成别的路径时镜像里的数据不会跟着移动，须自己挂到新路径。"
+}
+
+func paragraph(text string) string {
+	if text == "" {
+		return ""
+	}
+	return "\n" + text + "\n"
 }
 
 func renderDockerDeployScript(m Manifest) string {
@@ -650,8 +669,15 @@ func renderKubernetesReadme(m Manifest) string {
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
 - /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s），terminationGracePeriodSeconds 为 max(它, 配置里实际的 total_timeout) + 5s（见上方列表）；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算宽限期与 systemd TimeoutStopSec；dataengine.shutdown_timeout 与 player_access.tcp.shutdown_timeout 不参与生成（按 30s / 10s 计），调大它们须同时手动调大 total_timeout 再 sync（roost doctor 检查模板宽限期不低于配置 total + 5s）。
-- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
-`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name)
+%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
+`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)))
+}
+
+func bullet(text string) string {
+	if text == "" {
+		return ""
+	}
+	return "- " + text + "\n"
 }
 
 func renderImplementationGuide(m Manifest) string {
@@ -711,8 +737,8 @@ func renderDeploymentGuide(m Manifest) string {
 
 ## Docker
 
-Dockerfile 生成不包含配置的 distroless 非 root 镜像，并包含独立 healthprobe。deploy/docker/docker-compose.prod.yaml 用同一 digest 启动各 Service，运行时只读根文件系统，外挂配置和独占 WAL volume，丢弃 Linux capabilities。deploy.sh 保存前一个 digest并在 readiness 失败时调用 rollback.sh。
-
+Dockerfile 生成不包含环境配置与密钥的 distroless 非 root 镜像，并包含独立 healthprobe。deploy/docker/docker-compose.prod.yaml 用同一 digest 启动各 Service，运行时只读根文件系统，外挂配置和独占 WAL volume，丢弃 Linux capabilities。deploy.sh 保存前一个 digest并在 readiness 失败时调用 rollback.sh。
+%s
 ## Kubernetes
 
 deploy/k8s 使用 base/ 与 overlays/staging、overlays/production，Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。deploy.sh 要求不可变镜像 digest，先 server-side dry-run 再 apply 并等待 rollout。带 Data Engine 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
@@ -723,7 +749,7 @@ deploy/k8s 使用 base/ 与 overlays/staging、overlays/production，Secret 挂�
 - schema/wire/持久化格式不兼容升级必须先完成迁移或双读，不能只回滚二进制。
 - 回滚前先停止新 writer 并 Flush；旧版本必须能读取新版本已写的数据，否则只能前滚修复。
 - 故障演练至少覆盖 kill -9、磁盘满、PVC 重新挂载、Mongo primary 切换、Redis AOF 不满足、NATS 重投、etcd compaction 和网络分区。
-`, m.Project.Name)
+`, m.Project.Name, paragraph(configDataImageNote(m)))
 }
 
 func serviceUsesPersistentWAL(m Manifest, service string) bool {

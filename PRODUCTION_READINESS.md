@@ -73,7 +73,7 @@ go test -race ./dataengine ./remote_entity ./nestwal ./nest ./replication ./sync
 git diff --check
 ```
 
-生成项目还必须校验 `deploy/shell/*.sh` 可通过 `sh -n`、全部 Kubernetes YAML 可解析、镜像不包含配置、生产 Secret 示例不被 kustomization 自动应用。正式流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+生成项目还必须校验 `deploy/shell/*.sh` 可通过 `sh -n`、全部 Kubernetes YAML 可解析、镜像不包含环境配置与密钥（configdata 数据表随镜像，RR-20260927-34）、生产 Secret 示例不被 kustomization 自动应用。正式流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 

@@ -14,6 +14,12 @@ type modSpec struct {
 	DevService  string
 }
 
+// defaultConfigDataDir is the generated config_data.dir: relative, resolved
+// against the process working directory (the project root in development,
+// WORKDIR /app in the generated image). The Dockerfile copies the data to the
+// same relative path under /app (RR-20260927-34), so both come from here.
+const defaultConfigDataDir = "configs/data"
+
 var modCatalog = map[string]modSpec{
 	"lock": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/lock", Alias: "kitlock", Constructor: "kitlock.NewLockMod()",
@@ -28,7 +34,7 @@ var modCatalog = map[string]modSpec{
 	},
 	"configdata": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/configdata", Alias: "kitconfigdata", Constructor: "kitconfigdata.NewConfigDataMod()",
-		Config: "config_data:\n  dir: configs/data\n",
+		Config: "config_data:\n  dir: " + defaultConfigDataDir + "\n",
 	},
 	"etcd": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/etcd", Alias: "kitetcd", Constructor: "kitetcd.NewEtcdMod()",

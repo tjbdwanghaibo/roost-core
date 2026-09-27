@@ -53,7 +53,7 @@ sh deploy/shell/healthcheck.sh http://127.0.0.1:9100/readyz
 
 ## 5. Docker
 
-生成 Dockerfile 使用多阶段构建和 distroless nonroot 运行层，不把配置复制进镜像：
+生成 Dockerfile 使用多阶段构建和 distroless nonroot 运行层，不把环境配置与密钥复制进镜像。启用 configdata Mod 时，数据表 `configs/data` 随镜像发布到 `/app/configs/data`（运行层 `WORKDIR /app`，生成的 `config_data.dir: configs/data` 按它解析），与二进制同一版本晋级；按环境替换数据时把只读卷整目录挂到 `/app/configs/data`，再经 configdata Reload 热加载（RR-20260927-34）：
 
 ```bash
 docker build \
