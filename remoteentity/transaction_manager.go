@@ -80,7 +80,7 @@ type deferredRemoteClose struct {
 	durability uint8
 	entries    []*remoteWriteEntry
 	attempt    int
-	// projectionDeadline 是 Durability 1/2 等待投影器结论的截止时间，首次处理时设定（RR-20260926-38）。
+	// projectionDeadline 是 Durability 1/2/3 等待投影器结论的截止时间，首次处理时设定（RR-20260926-38）。
 	projectionDeadline time.Time
 	// settled 表示持久拒绝已收尾（回滚、隔离、gate/fence/写额度已交还），这一项只剩仅内存卸载
 	// 需要完成或重试（RR-20260926-39）；排空与重试都不能再次释放。
@@ -278,7 +278,7 @@ func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRe
 // 确认后释放，Rejected 回滚并隔离实体后释放（实体隔离到重新加载）。其余情况保留 gate、
 // fence、写额度并隔离实体，按退避重试。
 //
-// Durability 1/2 有 WAL：投影器在同一 Mongo 事务里提交、随后发布并 ack，结论由它写进 tracker
+// Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交、随后发布并 ack，结论由它写进 tracker
 // （Committed / Rejected，失败时 Indeterminate）。投影期间 finalizer 不回源、不隔离、不发布，
 // 只等 tracker 结束或 FinalizeProjectionTimeout 到期（RR-20260926-38）；投影器报告未知
 // （Indeterminate）或超期后才按 RR-19 回源取得持久结论。Durability 0 没有 WAL，一律回源。

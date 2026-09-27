@@ -28,7 +28,7 @@ type Config struct {
 	TransactionTrackLimit int
 	TransactionTrackTTL   time.Duration
 	FinalizeRetryInterval time.Duration
-	// FinalizeProjectionTimeout 是 Durability 1/2 的延迟收尾等待 WAL 投影器结论的上限。期限内 finalizer
+	// FinalizeProjectionTimeout 是 Durability 1/2/3（async、strict、带 Remote 批次的 pipelined）的延迟收尾等待 WAL 投影器结论的上限。期限内 finalizer
 	// 不回源、不发布，只等投影器写入 Committed / Rejected / Indeterminate；超期后按回源结论收尾
 	// （投影器停滞、DataEngine fence 等）。零值取 30s（RR-20260926-38）。
 	FinalizeProjectionTimeout time.Duration

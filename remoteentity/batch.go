@@ -505,7 +505,11 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	}
 	if err != nil {
 		rejected := false
-		if outcome.Durability == 2 || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		// 等待投影器结论的批次（strict = 2，以及带 Remote 批次、随 strict 路径提交的 pipelined = 3）：本地记录已进 WAL，
+		// 即使等到的是明确拒绝，也由 finalizer 按持久结论收尾（Rejected：回滚、隔离、释放、仅内存卸载后交付 false，RR-28 / 39 / 58 / 62）。
+		// 之前这里只认 == 2：pipelined 被拒时既不交给 finalizer、也不走下面 Durability 0 的同步回滚，Close 直接释放 gate，
+		// 实例隔离后永不卸载（直到重启都不可写）、提交后工作没有结论、Sync 门永久冻结（RR-20260928-09）。
+		if outcome.Durability >= 2 || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 			b.mu.Lock()
 			b.indeterminate = true
 			b.mu.Unlock()
