@@ -65,7 +65,7 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 
 WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/Commit，超时仍保留目录/资源所有权。创建者负责关闭自己创建的 WAL；测试须覆盖旧实例退出、新实例接管及旧 Ack 被拒绝。同 SessionID 不代表同 lifetime，旧发送未结束时新 Open 必须明确失败或建立独立资源，不能吞注册冲突。
 
-性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
+性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。停机预算的生成值（`shutdown.total_timeout` 与部署宽限期）只计入生成器 Manifest 已知的 Mod：手写 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget` 也不计入，doctor 也不检查它，新增这类 Mod 时须手工调大 total 与宽限期（RR-20260926-66，OPEN-ITEMS C31）。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
 
 当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像（它是 no-op）。投影时被跳过 / 持久拒绝后的在线恢复已有定案契约（RR-20260926-30 / 39，维护者批准），新路径沿用它，不另建机制：
 - 内存无法证明等于权威时不解冻、不原地“回滚”：原生步骤记录投影结论前，同实体写在 WAL 准入处以可重试的 `dataengine.ErrFencedEntityPending` 屏障；跳过 / 拒绝后经 `NestMgr.RunLocal`（`LocalExecutorBinder` 接线）在快池对受影响实例做仅内存卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`），下一次访问从权威重载；卸载失败保持隔离并重试。
@@ -111,6 +111,7 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 - 区分输入速率与成功完成 TPS、吞吐与延迟、微基准与端到端、同 ID 热点与独立实体。20Hz 状态变化窗口不是 Remote 持久事务频率；进程内解码不是生产网络延迟；短测不是长期容量保证。
 - 保留失败和退化样本。不能删样本、换口径、放宽门禁、增加负载特判或无效代码强行过关；优化没有收益就撤回或如实记录代价。用户接受某项偏差时，记录范围、具体数值和决定，保留原始失败结果；不得扩张成以后任何退化都可接受。
 - 目前负载背景与已接受指标从交接文档读取，不把 1000/10000/50、20Hz、worker1024 等写死进生产逻辑。新业务目标改变时重新验证。
+- 测试写进程级注册表（entity kind / builder、nest 包级 handler、hotcode 等）时，同包 kind 号互不冲突（取新号前先查同包已用号，常量注释写明为什么不能撞号），注册用 `sync.Once`、按用例快照恢复或 `t.Cleanup` 撤销，保证单用例和整包 `-count>1` 都可重复运行；nest 包级 handler 注册后 `t.Cleanup(ResetHandlersForTest)` 或改用实例级 `mgr.RegisterHandlerWithMeta`；不用清空整张表的 `entity.ResetEntityRegistryForTest`（已弃用）。没有集中的 kind 占用清单，以同包源码为准（RR-20260926-82/83、RR-20260927-20，OPEN-ITEMS C31）。
 - 本地测试依赖使用隔离库/实例；环境脚本可能含凭据，不输出或提交。将可携带的小型脱敏证据写入 docs，原始 profile、二进制和大日志保留在被忽略的 artifacts。不可用环境/未执行测试明确标记。
 
 ## 接力与提交

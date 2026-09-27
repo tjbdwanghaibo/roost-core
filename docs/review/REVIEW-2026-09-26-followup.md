@@ -82,3 +82,10 @@ singleflight 前 panic”里关于 **ManagerAccess 冷缺失** 的部分，已�
 `ErrColdLoadInLogic`（快 worker 上同时包裹 `fctx.ErrBlockingInFastWorker`），不 panic，业务可以据此降级。
 仍然 fail-fast（panic）的是真正会等待的入口：DataEngine Repository 冷加载 / `WaitEntityProjection`、Remote 准备 / Commit / Close / 等待、
 快续行自投递（见 roost-coding SKILL.md “快池内不得阻塞等待”与 USER_GUIDE）。
+
+## 维护者决定（2026-09-27）
+
+来源：[OPEN-ITEMS-2026-09-27](OPEN-ITEMS-2026-09-27.md) §H“C 类推荐处理”。维护者 2026-09-27 决定 C 类全部按推荐执行；上文原文保留。
+
+- **C21 接受当前语义**：Close/Open 不等于 Hold 恢复（“判断与处理”一节的结论不变），跨会话恢复需新协议，业务未提需求。
+- **C22 保留为设计题**：periodic 仅字节预算的预捕获成本仍存在，跨 tick 缓存另行设计。
