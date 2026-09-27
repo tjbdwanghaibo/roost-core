@@ -226,6 +226,13 @@ func GetAllEntityBuilders() []*EntityBuilderParam {
 	return result
 }
 
+// ResetEntityRegistryForTest 清空整张 kind 注册表（每个 kind 的定义、builder 与派生锁档）。
+//
+// Deprecated: 不要再用。它清掉的是进程级的整张表，包括 init() 与 sync.Once 只注册一次的条目，
+// 同一进程里的后续用例（含 go test -count>1 的第二轮）因此拿不到它们——这正是 RR-20260926-83
+// 的根因。仓内已无调用方；entity 包自己的测试改用按用例快照并恢复注册表的夹具。包外测试请让每个
+// 用例使用互不冲突的 kind，并用 sync.Once 保证只注册一次。保留导出只为不破坏既有调用方
+// （OPEN-ITEMS-2026-09-27 C10，维护者 2026-09-27 决定加弃用注释、不删除）。
 func ResetEntityRegistryForTest() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
