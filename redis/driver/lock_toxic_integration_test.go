@@ -5,8 +5,10 @@ package driver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"net/http"
 	"os"
@@ -71,6 +73,21 @@ func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 	return rdb, proxy
 }
 
+// toxicLockKey 给每次运行一个独立的锁键，并在用例结束时删除它。
+// OPEN-ITEMS B01 / W-2026-09-22-01：原来三条用例共用固定键（toxic:lock / toxic:acquire / toxic:slow），
+// 上一次运行结尾 Acquire 成功后留下的键（TTL 5s）会被下一次运行撞上——和解用的 Release 只删自己 token 的键，
+// 删不掉上一轮的，于是 `-count>1` 或相邻两次运行报 "key still held after reconciliation"，把用例污染显成锁缺陷。
+func toxicLockKey(t *testing.T, rdb goredis.UniversalClient, name string) string {
+	t.Helper()
+	key := fmt.Sprintf("toxic:%s:%d:%s", name, os.Getpid(), rand.Text())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = rdb.Del(ctx, key).Err()
+	})
+	return key
+}
+
 // Invariant 2 at the network level: a Release whose reply is swallowed by the
 // network (toxiproxy `timeout`: data dropped, connection held open) leaves the
 // lock UNCERTAIN — Redis may or may not have executed it. Until a Release has
@@ -83,7 +100,8 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
 	factory := NewDistLockFactory(rdb)
-	lock := factory.NewLock("toxic:lock", 5*time.Second)
+	key := toxicLockKey(t, rdb, "lock")
+	lock := factory.NewLock(key, 5*time.Second)
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)
 	}
@@ -106,7 +124,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 	proxy.do(t, http.MethodPost, "/reset", nil)
 	// A second owner: the key is still held (the lost Release did not run) or
 	// already gone (it did); either way the answer is honest, never a crash.
-	other := factory.NewLock("toxic:lock", 5*time.Second)
+	other := factory.NewLock(key, 5*time.Second)
 	otherOK, err := other.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("second owner acquire after heal: %v", err)
@@ -118,7 +136,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 	}
 	if otherOK {
 		// Our reconcile must not have removed the other owner's lock.
-		if val, err := rdb.Get(ctx, "toxic:lock").Result(); err != nil || val == "" {
+		if val, err := rdb.Get(ctx, key).Result(); err != nil || val == "" {
 			t.Fatalf("reconcile deleted another owner's lock: val=%q err=%v", val, err)
 		}
 		if err := other.Release(ctx); err != nil {
@@ -140,7 +158,8 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
-	lock := NewDistLockFactory(rdb).NewLock("toxic:acquire", 5*time.Second)
+	key := toxicLockKey(t, rdb, "acquire")
+	lock := NewDistLockFactory(rdb).NewLock(key, 5*time.Second)
 	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
 		"name": "blackhole", "type": "timeout", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"timeout": 0},
 	})
@@ -157,11 +176,14 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	if err := lock.Release(ctx); err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
 		t.Fatalf("reconciling Release: %v", err)
 	}
-	if held, err := rdb.Exists(ctx, "toxic:acquire").Result(); err != nil || held != 0 {
+	if held, err := rdb.Exists(ctx, key).Result(); err != nil || held != 0 {
 		t.Fatalf("key still held after reconciliation: exists=%d err=%v", held, err)
 	}
 	if ok, err := lock.Acquire(ctx); err != nil || !ok {
 		t.Fatalf("lock unusable after reconciliation: ok=%v err=%v", ok, err)
+	}
+	if err := lock.Release(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -175,7 +197,7 @@ func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
 	rdb, proxy := toxicRedis(t)
 	ctx := context.Background()
 	factory := NewDistLockFactory(rdb)
-	lock := factory.NewLock("toxic:slow", 5*time.Second)
+	lock := factory.NewLock(toxicLockKey(t, rdb, "slow"), 5*time.Second)
 
 	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
 		"name": "slow", "type": "latency", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"latency": 3000, "jitter": 0},

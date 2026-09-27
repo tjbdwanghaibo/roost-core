@@ -96,7 +96,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 [原始证据、发号修复与验证](../bugfix/W-2026-09-22-02.md) · [确定冲突分类修复](../bugfix/RR-20260924-12.md)。
 
-## W-2026-09-22-01：`redis/driver` 的 toxiproxy 用例 `TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried` 在真实矩阵里 3/4 红
+## W-2026-09-22-01 分流结论：不是问题（用例固定键互相污染，锁实现无缺陷；OPEN-ITEMS B01 已修用例并收为回归）；原条目：`redis/driver` 的 toxiproxy 用例 `TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried` 在真实矩阵里 3/4 红
 
 - **位置**：`roost-core/redis/driver/lock_toxic_integration_test.go:151` 与 `:161`；被测 `distLock.Acquire` / `Release`
   （`redis/driver/lock*.go`）。基线 `00277bd`。
@@ -128,6 +128,14 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   执行值守护删除（Lua：`if GET==token then DEL`）。先确认现状是哪一步没做到再动手。
 - **来源**：U-0276（RR-20260922-02）修复后的验收实跑。这条不是 RR-02 的一部分——RR-02 修的是"矩阵没跑"，
   这一条是"矩阵跑了之后发现的"。
+- **分流结论（2026-09-27，OPEN-ITEMS B01）**：不是问题，不登 RR。基线 `001b03b`，本机隔离环境 + toxiproxy（`ROOST_IT_TOXIPROXY=1`）。
+  修用例前 `-count=5`：第 1 次绿、后 4 次全红在 `:161 key still held after reconciliation: exists=1`——用例结尾 `Acquire` 成功后不释放，
+  固定键 `toxic:acquire`（TTL 5s）留给下一次运行；下一次的 SETNX 没写进去，和解 `Release` 按**自己的** token 做值守护删除，删不掉上一轮的键，
+  这正是 `Release` 该有的行为。`distLock` 在回复丢失时已置 uncertain 并保留 token（`redis/driver/lock.go` `Acquire` 的 `err != nil` 分支），
+  `Release` 在 uncertain 态执行 Lua 值守护删除，原“主嫌疑”不成立。用例改为每次运行独立键并在 `t.Cleanup` 删除、结尾释放（三条 Toxic 用例同改）后：
+  目标用例 `-count=5` 全绿；`-race -run TestToxic -count=30` 绿；两条丢回复用例 `-count=150` 绿；运行后 Redis 无 `toxic:*` 残留。
+  原条目的 `:151 ok=false err=<nil>` 本轮未复现：它要求 SETNX 的回复穿过了刚加上的 toxic，且键被上一轮占着；键污染已消除，toxic 穿透在 185 次运行里未出现，
+  若将来再出现应作为 toxiproxy 用法问题另查，不是锁缺陷。修用例与命令见 [RR-20260922-02 后续验证](../bugfix/RR-20260922-02.md)。
 
 ## W-2026-09-20-06 已分流：→ RR-20260921-02
 
