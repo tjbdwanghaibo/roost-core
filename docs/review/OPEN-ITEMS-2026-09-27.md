@@ -334,6 +334,8 @@
 | RR-20260928-06 | game-demo 生产示例配置缺 `game_route` / `activity` / `platform`（推断，待实证） | 16 追加 |
 | RR-20260928-07 | k8s Secret 示例缺 `saga` / `player_access` 段 | 17 追加 |
 | RR-20260928-08 | audit7：strict 下 tracker 淘汰后 Overloaded 被误标 `ErrRemotePartRejected`；表测试改号、措辞 | 18 追加 |
+| RR-20260928-09 | pipelined + Remote 明确拒绝不交 finalizer、被拒修改不隔离（P2） | 19 追加 |
+| RR-20260928-10 | install.sh 升级失败自动回滚到无 `configs/data` 的旧 release（推断） | 19 追加 |
 
 | 批次 | 条目 | 状态 |
 | --- | --- | --- |
@@ -355,7 +357,8 @@
 | 16 追加修复 | RR-20260928-04～06 | **完成**（`c5857a5`～`e80d88e`）：stats_log 写失败计数告警、部署物给可写目录（本机 compose 10 服务落盘）；shell / systemd 安装实证缺数据并修复（release 内带数据、WorkingDirectory 改为 `$APP_ROOT/current`）；prod / Secret 示例补三段（compose 按 prod 示例起 game healthy）；新发现 → RR-20260928-07；T-177 |
 | 17 追加修复 | RR-20260928-07 | **完成**（`414e965`，DEPLOYMENT k8s 章节对齐 `462c8d7`） |
 | 审计 | 第七轮独立审计（RR-20260927-29～35、RR-20260928-01～06） | **完成**：[audit7](REVIEW-2026-09-28-audit7.md)；登记 RR-20260928-08 |
-| 18 追加修复 | RR-20260928-08 | 进行中 |
+| 18 追加修复 | RR-20260928-08 | **完成**（`e10b950`）：strict / pipelined 等待失败除明确拒绝外带 `ErrRemotePersistenceIndeterminate`；表测试 1～15 对齐；B19 外层文案改为 “also committed”；新发现 → RR-20260928-09、10 |
+| 19 追加修复 | RR-20260928-09、10 | 进行中 |
 | 7 集成环境（串行） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose）、B22 后一半 | **完成**（`a2d08d6`～`21555fd`）：B28 三项门禁全绿（注：`dataengine-env.sh test` 含故障注入，会重启隔离 mongo-1 / nats）；B01 为用例固定键残留，非问题，WANTED 分流；B12 / B31 / B11 收为回归；B32 升级人工处理清单写入 bf-24；B33 漂移文件非 golden（D）；B35 两份记录不矛盾（取决于 Mod 集）；B34 / C04 停机实测无缺陷（compose 需先修两个部署物缺陷）；B38 跨窗口实跑通过、CARRYOVER B4 关闭；B22 后一半本地做不了 → C34；新缺陷 → RR-20260927-33～35，偶发 → B44，观察 → B45 |
 | 8 长跑与性能（最后、独占机器） | B29、B30、C01、C03 | 待开始 |
 | 9 真实环境端到端补测（分四批） | B27 | 待开始 |
