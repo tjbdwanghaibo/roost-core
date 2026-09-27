@@ -124,10 +124,15 @@ register_game_server() {
   # accountctl is part of the game-demo template; other projects register
   # servers however their account collaborators decide.
   if [ -d cmd/accountctl ] && [ -f configs/service/config.account.yaml ]; then
+    # The same Redis the account service reads: addr, password AND db
+    # (RR-20260927-03 — without the db a non-zero database registered the
+    # server in db 0, and CreateRole answered "account: server is invalid").
     redis=$(awk '/^redis:/{r=1;next} r&&/^  addr:/{print $2;exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | tr -d '"')
+    redis_db=$(awk '/^redis:/{r=1;next} r&&/^  db:/{print $2;exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | tr -d '"')
+    redis_password=$(awk '/^redis:/{r=1;next} r&&/^  password:/{sub(/^  password:[ \t]*/, ""); print; exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
     prefix=$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')
     echo "registering game server $SID with the account service"
-    go run ./cmd/accountctl -redis "${redis:-127.0.0.1:6379}" -prefix "${prefix:-roost:account}" upsert-server -sid "$SID" >/dev/null
+    go run ./cmd/accountctl -redis "${redis:-127.0.0.1:6379}" -redis-password "$redis_password" -redis-db "${redis_db:-0}" -prefix "${prefix:-roost:account}" upsert-server -sid "$SID" >/dev/null
   fi
 }
 

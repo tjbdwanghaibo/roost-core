@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -47,17 +48,64 @@ func Verifier() account.IdentityVerifier {
 }
 
 // playerIDCounterKey is the Redis key the demo's player id counter lives
-// under. It is deliberately not derived from account.key_prefix: the counter
-// belongs to this project, and it must survive a prefix change — a counter
-// that restarted from zero after a rename would hand an existing player's id
-// to a new role.
-const playerIDCounterKey = "roost:demo:player_id"
+// under: <account.key_prefix>:player_id, beside the accounts, roles and server
+// registrations the account service keeps under the same prefix
+// (RR-20260927-03). Two deployments sharing one Redis database are told apart
+// by that prefix, so they must not share one counter, and a cleanup by prefix
+// must take the counter with the rest. A deployment that changes its prefix
+// while keeping its data moves every key under the old prefix — the counter
+// with them; the account store would be lost otherwise anyway.
+func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
+
+// legacyPlayerIDCounterKey is where the counter lived before RR-20260927-03,
+// the same fixed key for every deployment. A counter under the prefix that
+// does not exist yet starts from its value (carryLegacyCounter), so a demo
+// deployed before the move never hands out an id it handed out already. It
+// is only read — never written or deleted; remove it by hand once every
+// deployment on that Redis database has allocated an id since upgrading.
+const legacyPlayerIDCounterKey = "roost:demo:player_id"
 
 // firstPlayerID keeps demo ids clear of the small numbers hand-written test
 // data tends to use.
 const firstPlayerID int64 = 100_000
 
-type redisHandle struct{ client fredis.IRedis }
+type redisHandle struct {
+	client     fredis.IRedis
+	counterKey string
+
+	// carried is set once carryLegacyCounter has run to completion in this
+	// process; carryMu makes concurrent first allocations wait for it.
+	carried atomic.Bool
+	carryMu sync.Mutex
+}
+
+// carryLegacyCounter makes the counter under the prefix start from the
+// legacy key's value when it does not exist yet (SETNX: a counter that
+// already exists — this deployment's, or one another replica just seeded —
+// is left alone). It runs before this process's first INCR and is retried
+// until it succeeds, so no process of an upgraded deployment counts from 0.
+func (handle *redisHandle) carryLegacyCounter(ctx context.Context) error {
+	if handle.carried.Load() {
+		return nil
+	}
+	handle.carryMu.Lock()
+	defer handle.carryMu.Unlock()
+	if handle.carried.Load() {
+		return nil
+	}
+	legacy, err := handle.client.Get(ctx, legacyPlayerIDCounterKey)
+	switch {
+	case errors.Is(err, fredis.ErrNil):
+	case err != nil:
+		return fmt.Errorf("demo player id allocator: read legacy counter %s: %w", legacyPlayerIDCounterKey, err)
+	default:
+		if _, err := handle.client.SetNX(ctx, handle.counterKey, string(legacy), 0); err != nil {
+			return fmt.Errorf("demo player id allocator: seed %s from %s: %w", handle.counterKey, legacyPlayerIDCounterKey, err)
+		}
+	}
+	handle.carried.Store(true)
+	return nil
+}
 
 // redisAllocator mints player ids from one INCR counter in the account
 // server's Redis. That satisfies the allocator contract — the counter is
@@ -76,7 +124,12 @@ func (allocator *redisAllocator) BindRegistry(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("demo player id allocator: %w", err)
 	}
-	allocator.handle.Store(&redisHandle{client: client})
+	// The same account.key_prefix the account Mod reads in Init.
+	prefix, err := mods.KeyPrefix(registry.Config(), "account")
+	if err != nil {
+		return fmt.Errorf("demo player id allocator: %w", err)
+	}
+	allocator.handle.Store(&redisHandle{client: client, counterKey: playerIDCounterKey(prefix)})
 	return nil
 }
 
@@ -88,7 +141,10 @@ func (allocator *redisAllocator) Allocate(ctx context.Context, _ int32) (int64, 
 	if handle == nil {
 		return 0, errors.New("demo player id allocator: not bound to a registry (the account Mod binds it in Provide)")
 	}
-	next, err := handle.client.Incr(ctx, playerIDCounterKey)
+	if err := handle.carryLegacyCounter(ctx); err != nil {
+		return 0, err
+	}
+	next, err := handle.client.Incr(ctx, handle.counterKey)
 	if err != nil {
 		return 0, fmt.Errorf("demo player id allocator: %w", err)
 	}

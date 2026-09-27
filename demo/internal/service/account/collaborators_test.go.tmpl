@@ -1,0 +1,171 @@
+package Account
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/account"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// RR-20260927-03（OPEN-ITEMS A04）：demo 的玩家 id 计数器归属 account 服务的数据，和它的账号、角色、服务器
+// 登记放在同一个 account.key_prefix 下（<key_prefix>:player_id）。旧版本写死 roost:demo:player_id：同一个
+// Redis db 上的多份部署共用一个计数器，按前缀清理一份部署时它被漏掉。已部署的 demo 用的是那个旧键，所以新键
+// 不存在时从旧键接着数（只取旧值作为起点，旧键不改不删），升级后发出的 id 仍然大于升级前发出的所有 id。
+
+// counterRedis is the part of Redis the allocator uses: GET, SETNX and INCR on
+// plain integer keys. Every other call panics through the nil embedded
+// interface, so a new dependency of the allocator shows up here.
+type counterRedis struct {
+	fredis.IRedis
+
+	mu     sync.Mutex
+	values map[string]int64
+}
+
+func newCounterRedis(values map[string]int64) *counterRedis {
+	if values == nil {
+		values = map[string]int64{}
+	}
+	return &counterRedis{values: values}
+}
+
+func (r *counterRedis) Get(_ context.Context, key string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value, ok := r.values[key]
+	if !ok {
+		return nil, fredis.ErrNil
+	}
+	return []byte(formatInt(value)), nil
+}
+
+func (r *counterRedis) SetNX(_ context.Context, key string, value any, _ time.Duration) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.values[key]; ok {
+		return false, nil
+	}
+	parsed, err := parseInt(value)
+	if err != nil {
+		return false, err
+	}
+	r.values[key] = parsed
+	return true, nil
+}
+
+func (r *counterRedis) Incr(_ context.Context, key string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values[key]++
+	return r.values[key], nil
+}
+
+func (r *counterRedis) value(key string) (int64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value, ok := r.values[key]
+	return value, ok
+}
+
+func formatInt(value int64) string { return strconv.FormatInt(value, 10) }
+
+func parseInt(value any) (int64, error) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, nil
+	case string:
+		return strconv.ParseInt(typed, 10, 64)
+	case []byte:
+		return strconv.ParseInt(string(typed), 10, 64)
+	default:
+		return 0, errors.New("counterRedis: SETNX value is not an integer")
+	}
+}
+
+// boundAllocator is the demo allocator bound the way the account Mod binds it:
+// a registry carrying the config (account.key_prefix) and the Redis client.
+func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) account.PlayerIDAllocator {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("account.key_prefix", prefix)
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModRedis, client); err != nil {
+		t.Fatal(err)
+	}
+	allocator := Allocator()
+	bound, ok := allocator.(account.RegistryBound)
+	if !ok {
+		t.Fatal("the demo allocator does not bind to the registry")
+	}
+	if err := bound.BindRegistry(registry); err != nil {
+		t.Fatal(err)
+	}
+	return allocator
+}
+
+func allocate(t *testing.T, allocator account.PlayerIDAllocator) int64 {
+	t.Helper()
+	id, err := allocator.Allocate(context.Background(), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// Two deployments on one Redis database, told apart by account.key_prefix,
+// each count their own ids under their own prefix.
+func TestPlayerIDCounterLivesUnderTheAccountKeyPrefix(t *testing.T) {
+	client := newCounterRedis(nil)
+	first := boundAllocator(t, client, "roost:a:account")
+	second := boundAllocator(t, client, "roost:b:account")
+	if got := allocate(t, first); got != firstPlayerID+1 {
+		t.Errorf("first id of deployment a = %d, want %d", got, firstPlayerID+1)
+	}
+	if got := allocate(t, second); got != firstPlayerID+1 {
+		t.Errorf("first id of deployment b = %d, want %d: the two deployments share one counter", got, firstPlayerID+1)
+	}
+	for _, key := range []string{"roost:a:account:player_id", "roost:b:account:player_id"} {
+		if got, ok := client.value(key); !ok || got != 1 {
+			t.Errorf("counter %s = %d (present %v), want 1", key, got, ok)
+		}
+	}
+	if _, ok := client.value("roost:demo:player_id"); ok {
+		t.Error("the allocator wrote the fixed key roost:demo:player_id")
+	}
+}
+
+// A demo deployed before the counter moved keeps counting from where the old
+// key stopped: no id it already handed out is handed out again.
+func TestPlayerIDCounterContinuesFromTheLegacyKey(t *testing.T) {
+	client := newCounterRedis(map[string]int64{"roost:demo:player_id": 865})
+	allocator := boundAllocator(t, client, "roost:planet:account")
+	if got := allocate(t, allocator); got != firstPlayerID+866 {
+		t.Errorf("first id after the upgrade = %d, want %d (the legacy counter stood at 865)", got, firstPlayerID+866)
+	}
+	if got := allocate(t, allocator); got != firstPlayerID+867 {
+		t.Errorf("second id after the upgrade = %d, want %d", got, firstPlayerID+867)
+	}
+	if got, _ := client.value("roost:planet:account:player_id"); got != 867 {
+		t.Errorf("counter under the prefix = %d, want 867", got)
+	}
+	if got, _ := client.value("roost:demo:player_id"); got != 865 {
+		t.Errorf("the legacy counter changed to %d; it is only read", got)
+	}
+}
+
+// Once the counter under the prefix exists, the legacy key no longer matters.
+func TestPlayerIDCounterUnderThePrefixWinsOverTheLegacyKey(t *testing.T) {
+	client := newCounterRedis(map[string]int64{"roost:demo:player_id": 865, "roost:planet:account:player_id": 5})
+	allocator := boundAllocator(t, client, "roost:planet:account")
+	if got := allocate(t, allocator); got != firstPlayerID+6 {
+		t.Errorf("id = %d, want %d: the counter under the prefix (5) must be the one that counts, not the legacy key (865)", got, firstPlayerID+6)
+	}
+}

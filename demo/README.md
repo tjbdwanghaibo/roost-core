@@ -402,7 +402,10 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
   两者不同：把 `_id` 当唯一 id 再包一层会得到一个不存在的实体（`entity aggregate not found`）。响应里同时给出 `player_id`（唯一 id）与 `entity_id`。
-  唯一 id 从 Redis 计数器 `roost:demo:player_id` 分配，同一份 Redis 上反复起 demo 不会从 100001 重来——别猜，从 `EnterGame` 的响应或 Mongo 取。
+  唯一 id 从 account 服务 Redis 里的计数器 `<account.key_prefix>:player_id`（生成配置下是 `roost:<项目名>:account:player_id`）分配，同一份 Redis 上反复起 demo 不会从 100001 重来——别猜，从 `EnterGame` 的响应或 Mongo 取。
+  计数器跟账号、角色、服务器登记在同一个前缀下：同一个 Redis db 上前缀不同的两份部署各数各的，按前缀清理一份部署会连它一起清掉（RR-20260927-03）。
+  **升级兼容**：旧版本的计数器是写死的 `roost:demo:player_id`。新键不存在时，第一次分配前用 `SETNX` 把旧键的值作为起点，之后只在新键上 `INCR`，升级前发出的 id 不会再发一次；旧键只读不改不删，所有部署都升级并分配过 id 后可以手工删除。
+  升级时先停掉全部 account 进程再启动新版本：新旧版本混跑时旧进程还在旧键上计数，新旧两边可能发出同一个 id。改 `account.key_prefix` 而保留数据时，要把旧前缀下的全部键（计数器在内）一起迁过去。
 - 加道具受 Player 的背包规则约束（每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_full`），不是 GM 越过规则。
 - 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走同一个 mail 客户端、附件用同一份 `rewards` 编码，玩家经 `ClaimMail` 领。
 - `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。
