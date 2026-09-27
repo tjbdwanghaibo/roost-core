@@ -47,12 +47,15 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // codegen/ inside roost-core: everything this generator emits imports
 // roost-core/kit/…, which no earlier tag has. It rose again to v1.17.0 because
 // the output now imports sync/* and kit/syncbus (ARCH-12 layout), which
-// v1.16.x does not contain. Kit and Codegen stay as fields
+// v1.16.x does not contain, and to v1.17.1 because the generated game-demo scene
+// bridge calls entitysync.SessionOpenRetryable, Manager.RegisterAfterRetirement
+// and policy.Interest.Resubscribe (RR-20260926-55/59/72), which v1.17.0 lacks.
+// Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.17.0",
+	Core:    "v1.17.1",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }

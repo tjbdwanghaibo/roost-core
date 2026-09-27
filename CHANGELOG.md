@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-> v1.17.0 之后的全部修复（RR-20260926-30、33～85）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、
+## [v1.17.1] - 2026-09-27
+
+> v1.17.0 之后的全部修复（RR-20260926-30、33～85）。生成器输出要求 roost-core ≥ v1.17.1（生成的 scene 桥接用到本版新增的 entitysync / policy API）。三轮独立审计的结论见 [修复合并后审计](docs/review/REVIEW-2026-09-26-audit.md)、
 > [第二轮](docs/review/REVIEW-2026-09-27-audit2.md)、[第三轮](docs/review/REVIEW-2026-09-27-audit3.md)。升级前先读下面“Changed”。
 
 ### Changed（破坏性 / 行为收紧）
