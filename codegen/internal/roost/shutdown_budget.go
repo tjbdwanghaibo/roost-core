@@ -367,6 +367,17 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 // line reports the grace period the deployment templates on disk set, which
 // is what the platform waits; it used to print the plan the generator would
 // render now, which differs from the disk until the templates are synced.
+//
+// An example the doctor cannot parse — the YAML does not parse, or its
+// shutdown.total_timeout / dataengine.shutdown_timeout is not a duration — is
+// its own WARN entry naming the file and the key, without the "every stop
+// warns … Set it to" advice (RR-20260926-80 复核残留): no budget was read, so
+// nothing is known to fall short, and the advice read as if raising the value
+// would fix a file the doctor could not understand. It stays a WARN, not a
+// FAIL: no process reads an example directly, and a deployment copying one
+// with a bad total_timeout runs on the App's 30s fallback, whose SIGKILL risk
+// the FAIL above already judges (configuredShutdownTotal counts an
+// unparsable total as 30s).
 func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 	var items []CheckItem
 	for _, service := range sortedServiceNames(m) {
@@ -388,7 +399,8 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 		}
 		plan := serviceShutdownPlan(m, service)
 		var covered []configuredTotal
-		var shortfalls []string
+		var shortfalls []string // totals that were read and cannot cover the Mods
+		var unreadable []string // examples the doctor cannot parse: file and key only
 		failed := false
 		for index, target := range shutdownConfigTargets(service) {
 			// The dev config comes first and keeps its checks as before: a
@@ -408,7 +420,7 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				if dev {
 					break // reported by the config check
 				}
-				shortfalls = append(shortfalls, fmt.Sprintf("%s: %v", target.rel, err))
+				unreadable = append(unreadable, fmt.Sprintf("%s: %v", target.rel, err))
 				continue
 			}
 			total, err := parseConfigDuration(settings.Shutdown.TotalTimeout, appDefaultShutdownTotal)
@@ -418,7 +430,7 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 					failed = true
 					break
 				}
-				shortfalls = append(shortfalls, fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err))
+				unreadable = append(unreadable, fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err))
 				continue
 			}
 			declared := plan.declared
@@ -430,7 +442,7 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 						failed = true
 						break
 					}
-					shortfalls = append(shortfalls, fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err))
+					unreadable = append(unreadable, fmt.Sprintf("%s: dataengine.shutdown_timeout: %v", target.rel, err))
 					continue
 				}
 				declared = value * time.Duration(plan.declaring)
@@ -445,10 +457,15 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 		}
 		switch {
 		case failed:
-		case len(shortfalls) > 0:
-			items = append(items, CheckItem{Name: name, Status: StatusWarn, Detail: fmt.Sprintf(
-				"%s; every stop warns and budgets are cut. Set it to %s; %s",
-				strings.Join(shortfalls, "; "), seconds(plan.total), describeDeployedGrace(deployed))})
+		case len(shortfalls) > 0 || len(unreadable) > 0:
+			var parts []string
+			if len(shortfalls) > 0 {
+				parts = append(parts, fmt.Sprintf("%s; every stop warns and budgets are cut. Set it to %s",
+					strings.Join(shortfalls, "; "), seconds(plan.total)))
+			}
+			parts = append(parts, unreadable...)
+			parts = append(parts, describeDeployedGrace(deployed))
+			items = append(items, CheckItem{Name: name, Status: StatusWarn, Detail: strings.Join(parts, "; ")})
 		case len(covered) > 0:
 			items = append(items, CheckItem{Name: name, Status: StatusOK, Detail: describeConfiguredTotals(covered) + ", " + describeDeployedGrace(deployed)})
 		}
@@ -467,7 +484,8 @@ type shutdownSettings struct {
 }
 
 // readShutdownSettings parses a service config, or the config.yaml a k8s
-// Secret example carries.
+// Secret example carries. The error says which document failed, so the
+// doctor's WARN can point at it.
 func readShutdownSettings(raw []byte, secret bool) (shutdownSettings, error) {
 	var settings shutdownSettings
 	if secret {
@@ -475,12 +493,17 @@ func readShutdownSettings(raw []byte, secret bool) (shutdownSettings, error) {
 			StringData map[string]string `yaml:"stringData"`
 		}
 		if err := yaml.Unmarshal(raw, &document); err != nil {
-			return settings, err
+			return settings, fmt.Errorf("does not parse: %w", err)
 		}
-		raw = []byte(document.StringData["config.yaml"])
+		if err := yaml.Unmarshal([]byte(document.StringData["config.yaml"]), &settings); err != nil {
+			return settings, fmt.Errorf("stringData config.yaml does not parse: %w", err)
+		}
+		return settings, nil
 	}
-	err := yaml.Unmarshal(raw, &settings)
-	return settings, err
+	if err := yaml.Unmarshal(raw, &settings); err != nil {
+		return settings, fmt.Errorf("does not parse: %w", err)
+	}
+	return settings, nil
 }
 
 // configuredTotal is the total_timeout one config file sets.
