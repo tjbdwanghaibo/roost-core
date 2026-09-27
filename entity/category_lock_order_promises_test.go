@@ -11,7 +11,9 @@ import (
 // 最前这一条不是业务约定而是物理约束:远程托管实体在 dispatch 顶层要拿分布式所有权锁,
 // 持着本地互斥去等一次网络往返会把那把锁挡在整条路径上。其余档位之间怎么排都只是业务约定。
 func TestRegisteredCategoriesMakeTheCategoryValueTheLockOrder(t *testing.T) {
-	t.Cleanup(resetEntityCategoriesForTest)
+	// RR-20260926-83：收尾时原样放回注册表与锁档；原来的 t.Cleanup(resetEntityCategoriesForTest) 把所有 kind
+	// 的锁档清零，而重复注册同一定义不会重算锁档，第二轮起这些 kind 的锁档都变成“未派生”。
+	isolateEntityRegistry(t)
 	resetEntityCategoriesForTest()
 
 	const (

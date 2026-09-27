@@ -4,9 +4,11 @@ import "testing"
 
 func TestRemoteViewRefValidatesEntityIDAndKind(t *testing.T) {
 	rawID := int64(1001)
+	// RR-20260926-83：原来在这里 t.Cleanup(ResetEntityRegistryForTest)，清空的是整张注册表，
+	// 第二轮起 init / sync.Once 注册的 kind 全部丢失；只撤销本用例自己的登记。
+	isolateEntityRegistry(t)
 	kind := EntityKind(7)
 	MustRegisterEntityKindCategory(kind, EntityCategory(1))
-	t.Cleanup(ResetEntityRegistryForTest)
 
 	id, err := BuildEntityID(rawID, kind)
 	if err != nil {

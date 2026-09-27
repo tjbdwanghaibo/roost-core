@@ -22,6 +22,9 @@ func TestRemoteSnapshotCacheAppliesDeltaAndRejectsGap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// delta 注册表同样是进程级的，重复注册返回 ErrRemoteSnapshotDecoderDuplicate；撤销本用例的登记，
+	// 重复运行时每轮都从未注册开始（RR-20260926-83）。
+	forgetRemoteSnapshotDeltaOnCleanup(t, schema)
 	cache := NewRemoteSnapshotCache(RemoteSnapshotCacheConfig{Shards: 4, MaxEntries: 32, MaxBytes: 1 << 20, TTL: time.Minute, MaxWaiters: 4}, nil, nil)
 	key := RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
 	full := RemoteSnapshotRecord{Key: key, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: schema, Codec: 1, Full: true, Data: []byte("a")}

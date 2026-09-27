@@ -72,7 +72,10 @@ func TestKindRegistryReadsDoNotBlockOnRegistrationWrites(t *testing.T) {
 // a second registration, and the full builder listing.
 func TestKindRegistryKeepsItsRegistrationRules(t *testing.T) {
 	// No reset here either: the package's init registers shared kinds that
-	// later tests need, and reset clears every slot.
+	// later tests need, and reset clears every slot. The builder registration
+	// below panics on a second run, so this test's own registrations are
+	// undone on cleanup instead (RR-20260926-83).
+	isolateEntityRegistry(t)
 	const (
 		plain    EntityKind = 152
 		upgraded EntityKind = 153

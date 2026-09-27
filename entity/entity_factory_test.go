@@ -190,8 +190,8 @@ func TestInitEntitySyncInstallsContentState(t *testing.T) {
 		DaoManager:       NewDaoManager(),
 	}
 	bp := &EntityBuilderParam{Sync: EntitySyncBuilderParam{
-		Enabled: true,
-		Namespace:   "factory.subject",
+		Enabled:   true,
+		Namespace: "factory.subject",
 		PackerFactory: func(IThreadSafeEntity) SubjectSyncPacker {
 			return SubjectSyncPackFunc{
 				Snapshot: func(SyncProfile) (FrozenSyncPayload, error) {

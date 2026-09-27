@@ -17,6 +17,8 @@ func expectErrContains(t *testing.T, err error, want string) {
 // the system, and none of its refusals had a test. Each rule is pinned by the
 // reason it names; re-registering an identical pair stays idempotent.
 func TestRegisterEntityKindCategoryRefusesEachInvalidPair(t *testing.T) {
+	// 用例断言 kind 201 还没注册（“被拒的注册没有留下登记”），重复运行时必须撤销上一轮的登记（RR-20260926-83）。
+	isolateEntityRegistry(t)
 	const kind EntityKind = 201
 	expectErrContains(t, RegisterEntityKindCategory(EntityKindNone, 1), "entity kind must not be none")
 	expectErrContains(t, RegisterEntityKindCategory(kind, EntityCategoryNone), "entity category must not be none for kind 201")
@@ -24,8 +26,11 @@ func TestRegisterEntityKindCategoryRefusesEachInvalidPair(t *testing.T) {
 	// registry the authority on a kind's category and demoted that field to
 	// legacy padding, so the bound is gone: the target taxonomy needs five
 	// categories and the field can express three. Checked on its own kind so
-	// the pair rules below still run against a fresh one.
-	const aboveField EntityKind = 231
+	// the pair rules below still run against a fresh one. 239 rather than the
+	// original 231: snapshot_load_waiters_promises_test registers 231 in
+	// category 1, and only the whole-registry reset that RR-20260926-83 removed
+	// kept the two from colliding.
+	const aboveField EntityKind = 239
 	if err := RegisterEntityKindCategory(aboveField, EntityCategory(EntityCategoryMask)+1); err != nil {
 		t.Fatalf("category above the legacy field must now be accepted: %v", err)
 	}

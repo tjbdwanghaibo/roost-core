@@ -9,7 +9,9 @@ import "testing"
 // EntityCategoryRemote 档;本进程不认识的 kind 排最后,因为持有它之后什么都锁不了,
 // 是最保守的答案。
 func TestLockOrderIsTheCategoryWithNoApplicationHook(t *testing.T) {
-	t.Cleanup(resetEntityCategoriesForTest)
+	// RR-20260926-83：收尾时原样放回注册表与锁档；原来的 t.Cleanup(resetEntityCategoriesForTest) 把所有 kind
+	// 的锁档清零，而重复注册同一定义不会重算锁档，第二轮起这些 kind 的锁档都变成“未派生”。
+	isolateEntityRegistry(t)
 
 	const (
 		worldKind  EntityKind     = 181
@@ -45,9 +47,11 @@ func TestLockOrderIsTheCategoryWithNoApplicationHook(t *testing.T) {
 	}
 
 	// A kind this process does not link ranks last, and one whose id carries
-	// the remote bit ranks with remote.
+	// the remote bit ranks with remote. 250 is claimed by no test in this
+	// package; the original 200 is registered by remote_snapshot_test, and
+	// only the whole-registry reset removed by RR-20260926-83 hid that.
 	unknown := int64(1) << UniqueIDShift
-	unknown |= int64(uint64(200) << EntityKindShift)
+	unknown |= int64(uint64(250) << EntityKindShift)
 	if got := GetEntityGroup(unknown); got != int(EntityCategoryUnknown) {
 		t.Errorf("unknown kind lock rank = %d, want last (%d)", got, EntityCategoryUnknown)
 	}
