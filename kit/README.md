@@ -499,7 +499,9 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 配置段为 `syncbus:`（键：transport / prefix / stream / storage / ack_wait / max_deliver / stream_max_age / duplicates / replicas / max_bytes / setup_timeout / publish_timeout）；旧 `room:` / `sync:` 段兼容读取但启动告警弃用，被 `syncbus:` 遮住的旧键、`syncbus:` / `room:` 里不认识的键都告警；`transport` 只接受 nats / jetstream（js），写错直接 Init 失败而不是退回普通 NATS（RR-20260926-12）。启动日志 `syncbus mod: started` 的 `transport` 是实际生效的那个。
 JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driver.JetStreamSyncStream`）——生成配置的 `roost.sync` 与未配 prefix 时的缺省 `roost.room`
 仍为 `ROOST_SYNC`（已部署的流与 durable 游标不变），`zz3640.sync` → `ZZ3640_SYNC`，含 `_` / `-` / 大写等的 prefix 追加摘要避免相撞。
-共用一个 NATS 的部署用不同 prefix 即各有各的流；启动日志同时输出 `prefix` 与实际 `stream`。写了非默认 prefix、没写 stream 的旧部署升级会换流，
+共用一个 NATS 的部署用不同的非兼容 prefix 即各有各的流；**例外是兼容映射**：`roost.room`（含未写 prefix）与 `roost.sync` 都映射到 `ROOST_SYNC`，
+一个部署用 `roost.room`、另一个用 `roost.sync` 时仍会争同一个流（后启动者改写其 subjects），这类部署要给至少一方显式写不同的 `stream`，
+或改用非兼容 prefix（OPEN-ITEMS A11）。启动日志同时输出 `prefix` 与实际 `stream`。写了非默认 prefix、没写 stream 的旧部署升级会换流，
 要沿用旧流与游标请显式写 `stream: ROOST_SYNC`（RR-20260926-56）。
 
 ### syncstream（roost-core）：observer 维度的包流
