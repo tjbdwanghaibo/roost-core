@@ -192,6 +192,10 @@ type Manager struct {
 	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
 	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
 	forgetUnlinked func(subjectID int64)
+	// registeredBeforeHandBack 是测试缝：register 把新 subject 放进表、放开 m.mu 并装好脏通知之后，交还撤销记录
+	// （releaseRetracted）之前调用，用来确定性地在这一窗口再次撤销新 subject（OPEN-ITEMS B21，RR-20260926-78 自报的
+	// 未验证窗口）。生产中恒为 nil。
+	registeredBeforeHandBack func(subjectID int64)
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
@@ -282,6 +286,9 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 	m.subjects[id] = created
 	m.mu.Unlock()
 	m.installDirtyNotifier(id, state)
+	if m.registeredBeforeHandBack != nil {
+		m.registeredBeforeHandBack(id)
+	}
 	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交（RR-20260926-70）。
 	m.releaseRetracted(created)
 	return false, nil
