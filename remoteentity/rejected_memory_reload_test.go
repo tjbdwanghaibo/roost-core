@@ -28,6 +28,8 @@ type reloadableFullDocEntity struct {
 	destroyedOnFast atomic.Bool
 	// duringDestroy 在 OnDestroy 开头调用（实例已离开索引、EntityManager 仍把该 ID 记为 removing），供回归停在卸载过程中。
 	duringDestroy func()
+	// rollbacks / rollbacksOffFast 记录 RollbackRemoteCommit 的调用次数与其中不在快 worker 上的次数（OPEN-ITEMS B26）。
+	rollbacks, rollbacksOffFast atomic.Int32
 }
 
 func (e *reloadableFullDocEntity) OnDestroy(reason entity.EntityDestroyReason) {
