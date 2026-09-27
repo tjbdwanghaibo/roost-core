@@ -83,7 +83,8 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 //     ErrNestedTransactionRollbackConflict 并自身回滚（RR-20260926-74）；外层是 memory handler 时不受此限。
 //   - 所在消息带 Remote 批次（批次尚未收尾）时直接返回 ErrNestedTransactionInRemoteMessage，call 不执行（RR-20260926-75 / 84）。
 //   - 持久提交或结果未知后，消息不再重排，自己的事务没提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
-//   - 提交结果未知（ErrCommitIndeterminate）时，返回之前已 fence 所在的 Nest 引擎，与消息自己的事务相同（RR-20260926-76）。
+//   - 提交结果未知（ErrCommitIndeterminate）时，返回之前已 fence 所在的 Nest 引擎，与消息自己的事务相同（RR-20260926-76）；
+//     外层 handler 继续执行到结束，但它自己的事务在交给 committer 之前返回 ErrNestFenced 并回滚（RR-20260927-06）。
 func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter, handler string, call func() (any, error)) (any, error) {
 	if call == nil {
 		return nil, errors.New("nest: isolated transaction call is nil")

@@ -589,6 +589,9 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 	if err := tx.refuseWriteUnderEnclosingRollback(); err != nil {
 		return err
 	}
+	if err := tx.refuseCommitAfterFence(); err != nil {
+		return err
+	}
 	if committer == nil {
 		if tx.durability != DurabilityMemory || len(record.Effects) > 0 {
 			return ErrCommitterRequired
@@ -625,6 +628,24 @@ func (tx *RollbackTx) refuseWriteUnderEnclosingRollback() error {
 		}
 	}
 	return nil
+}
+
+// refuseCommitAfterFence 在消息自己的事务交给 committer 之前检查所在引擎是否已 fence（RR-20260927-06）。handler 内嵌套独立
+// 事务结果未知时 RR-76 已 fence 引擎，但外层 handler 会继续执行到结束；结果未知若来自 acceptPersistence（committer 已成功、
+// DAO AcceptMutation 失败），真实 WAL 并未进入 terminal，旧实现把外层自己的记录照常交给 committer 并被接受——引擎 fence 之后
+// 仍在写。现在返回 ErrNestFenced：记录没有交给 committer，是明确拒绝，调用方（commitDurable / commitPipelined）按拒绝回滚。
+// 错误里不带 fence 原因的哨兵（%v）：原因链上的 ErrCommitIndeterminate 会让调用方误走结果未知分支（abandon 而不回滚）。
+// 嵌套独立事务（dispatch 为 nil）不在此列：C07 的约束只针对外层自己的提交。只读一次 lifecycleMu 保护的字段，不等待、不做 I/O，
+// 与派发入口 runNestLogic 在快 worker 上读 FenceError 相同。
+func (tx *RollbackTx) refuseCommitAfterFence() error {
+	if tx.dispatch == nil || tx.dispatch.engine == nil {
+		return nil
+	}
+	fenced := tx.dispatch.engine.FenceError()
+	if fenced == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: transaction of %q was not handed to the committer (fence cause: %v)", ErrNestFenced, tx.handler, fenced)
 }
 
 // restoresWriteOf 报告本（外层）事务回滚时是否会恢复 participants 写到的状态：participant 是本事务 MarkPersist 过的 DAO
@@ -678,6 +699,9 @@ func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedT
 	}
 	if record.Empty() {
 		return nil, nil
+	}
+	if err := tx.refuseCommitAfterFence(); err != nil {
+		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
