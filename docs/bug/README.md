@@ -1,8 +1,10 @@
 # Roost Review 问题索引
 
-[RR-20260926-82](RR-20260926-82.md)：P4 dataengine/engine 包测试不能重复运行（未修复）。
+[RR-20260926-83](RR-20260926-83.md)：P4 entity 包测试不能重复运行（未修复）。
 
-[RR-20260926-81](RR-20260926-81.md)：P3 新建冲突回滚后同 ID 新建拿到 ErrEntityRemoved（RR-48 回归偶发）（未修复）。
+[RR-20260926-82](RR-20260926-82.md)：P4 dataengine/engine 包测试不能重复运行（已修复，未发版）。
+
+[RR-20260926-81](RR-20260926-81.md)：P3 新建冲突回滚后同 ID 新建拿到 ErrEntityRemoved（RR-48 回归偶发）（已修复，未发版）。
 
 [RR-20260926-80](RR-20260926-80.md)：P4 doctor WARN 只看一份配置、减 Mod 后 sync 不一次收敛（已修复，未发版）。
 

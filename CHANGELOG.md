@@ -62,6 +62,8 @@
 - **RR-20260926-73～80**（第三轮审计）：Cast 等锁期间目标被摘除返回 `ErrEntityNotFound`；政策重新提交交付前再次撤销时记录回到撤销表（Group / Direct 不再永久丢订阅）；
   会话关闭 / 业务注销时通知政策，`policy.Direct` 绑定表不再单调增长；doctor 逐份判定三份仓内配置并显示磁盘模板的实际宽限期，减少 Mod 后一次 `roost project sync` 即收敛，
   配置刷新与模板同一批提交、同受回滚与并发输入检查保护；USER_GUIDE §4 新增“是否已提交 / 能否重试”判别表。
+- **RR-20260926-81**：handler 内新建撞上同 ID 撤销 / 销毁收尾中的实例（锁已释放、removing 标记未清）时，不再返回不重排的 `ErrEntityRemoved`，改为 `nest.ErrCreatedEntityLockConflict`：可回滚事务整条回滚后重新准入，不能回滚的 handler 不重排；Nest 之外行为不变。修复 RR-48 回归的偶发失败。
+- **RR-20260926-82**：dataengine/engine 包测试可重复运行（只改测试）。
 - `kit/scripts/integration/dataengine-env.sh test` 纳入 `./dataengine/engine` 的真实 Mongo 集成测试（RR-30 新增）。
 
 ## [v1.17.0] - 2026-09-26

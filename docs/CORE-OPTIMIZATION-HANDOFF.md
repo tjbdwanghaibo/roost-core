@@ -263,5 +263,6 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260926-78](bug/RR-20260926-78.md) | P4 二次撤销后 Group / Direct 订阅永久丢失 | [修复](bugfix/RR-20260926-78.md)（未发布） |
 | [RR-20260926-79](bug/RR-20260926-79.md) | P4 Direct 绑定表只在 Unbind 时清理 | [修复](bugfix/RR-20260926-79.md)（未发布） |
 | [RR-20260926-80](bug/RR-20260926-80.md) | P4 doctor WARN 只看一份配置、减 Mod 后 sync 不一次收敛 | [修复](bugfix/RR-20260926-80.md)（未发布） |
-| [RR-20260926-81](bug/RR-20260926-81.md) | P3 新建冲突回滚后同 ID 新建拿到 ErrEntityRemoved | 未修复 |
-| [RR-20260926-82](bug/RR-20260926-82.md) | P4 dataengine/engine 包测试不能重复运行 | 未修复 |
+| [RR-20260926-81](bug/RR-20260926-81.md) | P3 新建冲突回滚后同 ID 新建拿到 ErrEntityRemoved | [修复](bugfix/RR-20260926-81.md)（未发布） |
+| [RR-20260926-82](bug/RR-20260926-82.md) | P4 dataengine/engine 包测试不能重复运行 | [修复](bugfix/RR-20260926-82.md)（未发布） |
+| [RR-20260926-83](bug/RR-20260926-83.md) | P4 entity 包测试不能重复运行 | 未修复 |
