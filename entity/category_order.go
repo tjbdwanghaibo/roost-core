@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -229,11 +230,60 @@ func ValidateEntityRegistry() error {
 			problems = append(problems, fmt.Errorf("kind %d is remote-managed but declared in category %d (%s); it must be in category %d (remote), which is the rank acquired first",
 				kind, entry.category, EntityCategoryName(entry.category), EntityCategoryRemote))
 		}
+		// RR-20260927-09：与 Remote 装配期同一条 RR-20260926-45 规则。之前只有 remoteentity.Assemble / Start 检查，
+		// 不装 Remote 的进程带着这个组合启动，要到装配 Remote 时才暴露。
+		if entry.builder != nil {
+			problems = append(problems, remoteManagedDaoScopeProblems(entry.builder)...)
+		}
 	}
 	if len(problems) == 0 {
 		return nil
 	}
 	return fmt.Errorf("entity registry is inconsistent: %w", joinCategoryProblems(problems))
+}
+
+// ErrRemoteManagedServerScopedDAO 表示 remote=managed 实体使用了按服选库（dbscope=sid）的 DAO（RR-20260926-45）。
+// 托管实体可由任一进程写入、所有权可迁移，而 Remote 提交按提交方 sid 选库、加载按本服 sid 选库，两者不一致会让实体
+// 在跨服写或迁移后读到旧版本 / 缺失而不可写。ValidateEntityRegistry、Remote 装配（remoteentity.Assemble / Start，
+// 其 ErrRemoteManagedServerScopedDAO 就是这个值）与 Remote 提交的 WAL 准入前（RR-20260927-09）都用它拒绝。
+var ErrRemoteManagedServerScopedDAO = errors.New("remote_entity: remote-managed entity DAO must use dbscope=global")
+
+// ValidateRemoteManagedDaoScopes 拒绝 remote=managed 实体注册 dbscope=sid 的 DAO（RR-20260926-45）：逐个实例化
+// builders 注册的 DAO 工厂读取 DbScope，未声明 DbScope 的 DAO 按 global。每个违规 DAO 一条错误，用 errors.Join 汇总，
+// 均可 errors.Is ErrRemoteManagedServerScopedDAO。
+//
+// 是否托管看 kind 在注册表里的实际策略（GetEntityKindRemotePolicy），不看 builder 自带的 RemotePolicy：kind 定义声明
+// managed、手写 builder 省略 RemotePolicy 时注册表按“部分重复声明”接受，全部 Remote 路径都按 managed 处理，校验也
+// 必须按 managed（RR-20260926-60 / 71）。
+func ValidateRemoteManagedDaoScopes(builders []*EntityBuilderParam) error {
+	var problems []error
+	for _, builder := range builders {
+		problems = append(problems, remoteManagedDaoScopeProblems(builder)...)
+	}
+	return errors.Join(problems...)
+}
+
+func remoteManagedDaoScopeProblems(builder *EntityBuilderParam) []error {
+	if builder == nil || !GetEntityKindRemotePolicy(builder.Kind).RemoteManaged() {
+		return nil
+	}
+	var problems []error
+	for i, build := range builder.DaoBuilders {
+		if build == nil {
+			continue
+		}
+		dao := build()
+		if dao == nil {
+			continue
+		}
+		scoped, ok := dao.(DatabaseScopedDao)
+		if !ok || scoped.DbScope() != DatabaseServer {
+			continue
+		}
+		problems = append(problems, fmt.Errorf("%w: kind=%d dao[%d] %T collection=%q uses dbscope=sid; declare the DAO with dbscope=global (//roost:dao ... dbscope=global) so every process commits and loads the same database",
+			ErrRemoteManagedServerScopedDAO, builder.Kind, i, dao, dao.CollName()))
+	}
+	return problems
 }
 
 func joinCategoryProblems(problems []error) error {

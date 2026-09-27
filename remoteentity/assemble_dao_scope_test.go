@@ -67,7 +67,7 @@ func TestValidateRemoteManagedDaoScopes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateRemoteManagedDaoScopes([]*entity.EntityBuilderParam{tc.builder, nil})
+			err := entity.ValidateRemoteManagedDaoScopes([]*entity.EntityBuilderParam{tc.builder, nil})
 			if !tc.reject {
 				if err != nil {
 					t.Fatalf("legal combination rejected: %v", err)

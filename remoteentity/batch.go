@@ -392,6 +392,11 @@ func (b *remoteWriteBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcom
 			b.rollbackFinalizedLocked()
 			return fmt.Errorf("remote_entity: validate commit %d: %w", entry.lease.EntityID, err)
 		}
+		if err := refuseServerScopedRemoteData(commit); err != nil {
+			participant.RollbackRemoteCommit(commit)
+			b.rollbackFinalizedLocked()
+			return fmt.Errorf("remote_entity: validate commit %d: %w", entry.lease.EntityID, err)
+		}
 		entry.commit = commit.Clone()
 		entry.finalized = true
 	}
@@ -401,6 +406,28 @@ func (b *remoteWriteBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcom
 	}
 	b.outcome = outcome
 	b.finalized = true
+	return nil
+}
+
+// refuseServerScopedRemoteData 在 WAL 准入之前拒绝按服选库（dbscope=sid）的托管数据（RR-20260927-09）。
+// RR-20260926-45 的装配期校验只看注册的 DAO 工厂；手写实体注册的工厂与实际持有的 DAO 不一致时它看不到，而提交按
+// mutation 自带的 DatabaseScope 选库（mongo_payload.go → MongoCommitter.dataDB），又回到“提交按提交方 sid、加载按
+// 本服 sid”的不一致。这里是 Remote 提交进入 WAL 前的唯一定稿点，所以只在这里拒绝：RemoteCommit.Validate 同时被
+// WAL 编解码、投影与 ApplyRemoteCommits（投影重放）调用，在那里拒绝会把已准入的记录变成投影毒丸、让重启重放失败
+// （RR-45 修复记录“未采用”一节）；DatabaseScope 字段、WAL 编码与 dataDB 的 sid 分支因此原样保留。
+func refuseServerScopedRemoteData(commit entity.RemoteCommit) error {
+	for i := range commit.Mutations {
+		if entity.DatabaseScope(commit.Mutations[i].DatabaseScope) == entity.DatabaseServer {
+			return fmt.Errorf("%w: kind=%d mutation collection=%q uses dbscope=sid; declare the DAO with dbscope=global (//roost:dao ... dbscope=global) so every process commits and loads the same database",
+				entity.ErrRemoteManagedServerScopedDAO, commit.Kind, commit.Mutations[i].Collection)
+		}
+	}
+	for i := range commit.Deletes {
+		if entity.DatabaseScope(commit.Deletes[i].DatabaseScope) == entity.DatabaseServer {
+			return fmt.Errorf("%w: kind=%d delete collection=%q uses dbscope=sid; declare the DAO with dbscope=global (//roost:dao ... dbscope=global) so every process commits and loads the same database",
+				entity.ErrRemoteManagedServerScopedDAO, commit.Kind, commit.Deletes[i].Collection)
+		}
+	}
 	return nil
 }
 

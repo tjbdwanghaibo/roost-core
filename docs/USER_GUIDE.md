@@ -154,6 +154,8 @@ Write 模式使用 Mongo 持久所有权；共享写先竞争 Redis 协调锁，
 
 正式 Assembly 要求持久权威能力；MongoCommitter 创建即强制校验许可，WriteAuthority() 只返回能力，没有弱校验开关。当前未部署，不提供旧协议迁移入口；不支持的元数据拒绝启动，见 [提交契约](bugfix/RR-20260925-02.md)。
 
+`remote=managed` 实体的 DAO 必须是 `dbscope=global`（缺省）：托管实体由任一进程提交、所有权可迁移，按服选库会让提交与加载落在不同的库。这条规则在四处以同一个可 `errors.Is(err, entity.ErrRemoteManagedServerScopedDAO)` 的错误拒绝（`remoteentity.ErrRemoteManagedServerScopedDAO` 是同一个值）：`roost generate` 生成期、生成 registry 末尾的 `entity.ValidateEntityRegistry`、Remote 装配（`remoteentity.Assemble` / `Start`），以及 Remote 事务进入 WAL 之前（手写实体注册的 DAO 工厂漏报 sid DAO 时由这里兜底，事务回滚、不产生提交）。已写入 WAL 的旧记录重放不受影响。见 [RR-20260926-45](bugfix/RR-20260926-45.md)、[RR-20260927-09](bugfix/RR-20260927-09.md)。
+
 不要把 Remote Entity 当透明 RPC ORM。调用方必须选择读一致性，命令必须有 request/transaction ID，重试必须幂等。
 
 ## 7. 跨服务 Saga
