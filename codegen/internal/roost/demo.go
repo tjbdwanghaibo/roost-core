@@ -215,17 +215,55 @@ func demoPaymentSecrets(root, gameService string) error {
 	// The game side: the key prefix it reads grants under, and the secret it
 	// signs its simulated callbacks with. Appended rather than templated
 	// because the game process does not host the platform service, so nothing
-	// generates a platform block for it.
-	gamePath := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
-	gameRaw, err := os.ReadFile(gamePath)
-	if err != nil {
-		return err
+	// generates a platform block for it. The production configs get the same
+	// block with the secret left as CHANGE_ME, like the platform service's own
+	// production example: the two must be set to the same real value.
+	block := "platform:\n  key_prefix: " + blockKeyPrefix(string(raw), "platform") + "\n  payment_secret: %s\n"
+	return appendDemoGameConfig(root, gameService, "platform",
+		fmt.Sprintf(block, "dev-platform-payment-secret"), fmt.Sprintf(block, "CHANGE_ME"))
+}
+
+// appendDemoGameConfig appends one top-level section the demo's game code
+// reads at Init to all three of the game service's repository configs: the
+// dev config, the production example, and the k8s Secret example that embeds
+// the production example under config.yaml (RR-20260928-06). Only the dev
+// config used to get these sections, so a game started from the production
+// example — or from the Secret — stopped at Init ("platform.payment_secret is
+// empty", then "game_route.key_prefix is empty", then "activity.key_prefix is
+// empty"). The production text goes through productionizeConfig like the rest
+// of the example. A file that already has the key is left alone, so hand
+// edits stay; a missing file (no k8s deploy target) is skipped.
+func appendDemoGameConfig(root, gameService, key, dev, production string) error {
+	production = productionizeConfig(production)
+	for _, target := range []struct {
+		rel, marker, block string
+	}{
+		{"configs/service/config." + gameService + ".yaml", "\n" + key + ":\n", dev},
+		{"configs/service/config." + gameService + ".prod.example.yaml", "\n" + key + ":\n", production},
+		// The Secret's config.yaml is a literal block indented by four spaces
+		// and is the last thing in the file (renderKubernetesSecretExample).
+		{"deploy/k8s/base/secret." + gameService + ".example.yaml", "\n    " + key + ":\n", indentText(production, "    ")},
+	} {
+		path := filepath.Join(root, filepath.FromSlash(target.rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		body := string(raw)
+		if strings.Contains(body, target.marker) {
+			continue
+		}
+		if body != "" && !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		if err := writeAtomic(path, []byte(body+target.block), 0o644); err != nil {
+			return err
+		}
 	}
-	if strings.Contains(string(gameRaw), "\nplatform:\n") {
-		return nil
-	}
-	block := "platform:\n  key_prefix: " + blockKeyPrefix(string(raw), "platform") + "\n  payment_secret: dev-platform-payment-secret\n"
-	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
+	return nil
 }
 
 // gameRoutePrefix is the game's own Redis namespace, derived from a prefix the
@@ -266,25 +304,23 @@ func demoActivityKeys(root, gameService string) error {
 	if err != nil {
 		return err
 	}
-	gamePath := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
-	gameRaw, err := os.ReadFile(gamePath)
-	if err != nil {
-		return err
-	}
-	if strings.Contains(string(gameRaw), "\nactivity:\n") {
-		return nil
-	}
 	// The game's own keyspace, for facts that are the GAME's rather than a
 	// framework service's: which process owns which player (game/playerroute).
 	// It is per deployment, like every other prefix, so two deployments on one
 	// Redis do not decide each other's ownership.
 	routeBlock := "game_route:\n  key_prefix: " + gameRoutePrefix(blockKeyPrefix(string(activityRaw), "activity")) + "\n"
-	gameRaw = append(append([]byte(nil), gameRaw...), []byte(routeBlock)...)
+	if err := appendDemoGameConfig(root, gameService, "game_route", routeBlock, routeBlock); err != nil {
+		return err
+	}
+	// The same text for the production configs: neither value is a secret,
+	// and 1000 is the sid the production example starts with. A deployment
+	// lists the sid of every game process it runs (the --sid each one is
+	// started with).
 	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
 		"\n  # Every game server this deployment may run. LiveGames narrows it to\n" +
 		"  # the ones holding a lease, and those are what an activity waits for.\n" +
 		"  game_sids:\n    - 1000\n"
-	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
+	return appendDemoGameConfig(root, gameService, "activity", block, block)
 }
 
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {

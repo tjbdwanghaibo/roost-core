@@ -1,0 +1,185 @@
+package roost
+
+// RR-20260928-06：game-demo 的生产示例配置与 k8s Secret 示例必须能让 game 通过 Init 的配置校验。
+// demo 的 game 在 Init 里要求 platform.payment_secret、game_route.key_prefix、activity.key_prefix
+// 非空（按这个顺序失败），activity.game_sids 给出候选 sid，platform.key_prefix 按 kit/mods.KeyPrefix
+// 的规则非空且无空白。旧行为：demo 只把这三段追加进开发配置，按生产示例起 game（本机 compose 实测）
+// 依次报 "platform.payment_secret is empty" → "game_route.key_prefix is empty" →
+// "activity.key_prefix is empty"。
+// 这里同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的
+// 这三段与生产示例一致；前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里
+// 是 CHANGE_ME，由运维填）。
+// Secret 示例只比这三段：它由生成器按 Mod 目录渲染，之后 add saga / player TCP 追加进开发与生产
+// 示例的 saga、player_access 段不会进 Secret（另一处缺口，已报主会话，不在本条范围）。
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
+)
+
+// configLeaves flattens a YAML document into dotted key -> scalar text.
+func configLeaves(t *testing.T, name, body string) map[string]string {
+	t.Helper()
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
+	}
+	out := map[string]string{}
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		if m, ok := value.(map[string]any); ok && len(m) > 0 {
+			for key, child := range m {
+				next := key
+				if prefix != "" {
+					next = prefix + "." + key
+				}
+				walk(next, child)
+			}
+			return
+		}
+		out[prefix] = fmt.Sprint(value)
+	}
+	walk("", doc)
+	return out
+}
+
+// secretExampleConfig returns the config.yaml a k8s Secret example embeds.
+func secretExampleConfig(t *testing.T, name, body string) string {
+	t.Helper()
+	var secret struct {
+		StringData map[string]string `yaml:"stringData"`
+	}
+	if err := yaml.Unmarshal([]byte(body), &secret); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
+	}
+	config, ok := secret.StringData["config.yaml"]
+	if !ok {
+		t.Fatalf("%s has no stringData.config.yaml", name)
+	}
+	return config
+}
+
+func sortedKeys(set map[string]string) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// checkDemoGameInitConfig applies the checks the demo's game code makes on its
+// configuration at Init, in the order it makes them, and returns the first
+// refusal with the game's own wording.
+func checkDemoGameInitConfig(body string) error {
+	cfg := viper.New()
+	cfg.SetConfigType("yaml")
+	if err := cfg.ReadConfig(strings.NewReader(body)); err != nil {
+		return err
+	}
+	// game/controllers/player/controller.go
+	if cfg.GetString("platform.payment_secret") == "" {
+		return fmt.Errorf("player controller: platform.payment_secret is empty")
+	}
+	// internal/service/<game>/playerowner.go NewPlayerOwners
+	if cfg.GetString("game_route.key_prefix") == "" {
+		return fmt.Errorf("player owners: game_route.key_prefix is empty")
+	}
+	// internal/service/<game>/activity.go
+	if cfg.GetString("activity.key_prefix") == "" {
+		return fmt.Errorf("activity: activity.key_prefix is empty")
+	}
+	if len(cfg.GetIntSlice("activity.game_sids")) == 0 {
+		return fmt.Errorf("activity: activity.game_sids lists no game server")
+	}
+	// internal/service/<game>/purchase_drain.go: mods.KeyPrefix(cfg, "platform")
+	if prefix := strings.TrimSpace(cfg.GetString("platform.key_prefix")); prefix == "" || strings.ContainsAny(prefix, " \t\n") {
+		return fmt.Errorf("purchase drain: platform.key_prefix %q", prefix)
+	}
+	return nil
+}
+
+// demoGameSection reports whether a dotted key belongs to one of the sections
+// the demo appends to the game service's configs.
+func demoGameSection(key string) bool {
+	for _, section := range []string{"game_route", "activity", "platform"} {
+		if key == section || strings.HasPrefix(key, section+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
+	root := newGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(rel string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	gameService := m.Access["player"].Service
+	if gameService == "" {
+		t.Fatal("game-demo declares no player access service")
+	}
+	for _, service := range sortedServiceNames(m) {
+		devRel := "configs/service/config." + service + ".yaml"
+		prodRel := "configs/service/config." + service + ".prod.example.yaml"
+		secretRel := "deploy/k8s/base/secret." + service + ".example.yaml"
+		configs := map[string]string{
+			prodRel:   read(prodRel),
+			secretRel: secretExampleConfig(t, secretRel, read(secretRel)),
+		}
+		dev := configLeaves(t, devRel, read(devRel))
+		for rel, body := range configs {
+			leaves := configLeaves(t, rel, body)
+			var missing []string
+			for _, key := range sortedKeys(dev) {
+				if rel == secretRel && !demoGameSection(key) {
+					continue
+				}
+				if _, ok := leaves[key]; !ok {
+					missing = append(missing, key)
+				}
+			}
+			if len(missing) > 0 {
+				t.Errorf("%s lacks keys the dev config %s has: %v", rel, devRel, missing)
+			}
+			for _, key := range sortedKeys(leaves) {
+				if strings.HasSuffix(key, "key_prefix") && dev[key] != "" && leaves[key] != dev[key] {
+					t.Errorf("%s: %s = %q, dev config has %q; the two come from one source", rel, key, leaves[key], dev[key])
+				}
+				if strings.Contains(strings.ToLower(leaves[key]), "dev-") {
+					t.Errorf("%s: %s carries the dev value %q", rel, key, leaves[key])
+				}
+			}
+			if service != gameService {
+				continue
+			}
+			if err := checkDemoGameInitConfig(body); err != nil {
+				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
+			}
+			// The prefixes the game borrows are the owning services' own.
+			for owner, key := range map[string]string{"activity": "activity.key_prefix", "platform": "platform.key_prefix"} {
+				ownerRel := "configs/service/config." + owner + ".prod.example.yaml"
+				want := configLeaves(t, ownerRel, read(ownerRel))[key]
+				if got := leaves[key]; got != want {
+					t.Errorf("%s: %s = %q, but the %s service keeps its keys under %q", rel, key, got, owner, want)
+				}
+			}
+		}
+	}
+}
