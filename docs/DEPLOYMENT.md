@@ -49,6 +49,8 @@ sh deploy/shell/healthcheck.sh http://127.0.0.1:9100/readyz
 
 安装器创建非登录用户、只读系统保护、独立状态目录、NOFILE 上限和 45 秒 SIGTERM 预算；对带 WAL 的 Service 校验配置路径与实例目录一致。每个版本进入不可覆盖的 release 目录并生成 SHA256SUMS，`current` 原子切换；重启后 readiness 未在预算内成功会自动切回上一版二进制和配置，首次安装失败则停服。自动回滚仍以数据格式向后兼容为前提。
 
+生成配置的 `stats_log.dir: log` 是相对路径，按 unit 的 `WorkingDirectory` 解析；工作目录在 `ProtectSystem=strict` 下只读，安装器把它下面的 `log` 链接到实例日志目录 `/var/log/roost/<instance>`（`LOG_ROOT`，属于运行用户且在 `ReadWritePaths` 里），统计文件落在那里（RR-20260928-04）。
+
 建议由配置管理系统管理 unit 和配置；不要在大量机器上手工执行脚本。Journal 日志应转发到集中系统并限制磁盘占用。
 
 ## 5. Docker
@@ -72,9 +74,12 @@ docker run --rm --name planet-game-1001 \
   -p 127.0.0.1:9100:9100 \
   -v /secure/config.game.yaml:/etc/roost/config.yaml:ro \
   -v planet-game-1001-wal:/var/lib/roost/wal \
+  -v planet-game-1001-log:/app/log \
   registry.example.com/planet@sha256:<digest> \
   game --sid 1001 --config /etc/roost/config.yaml
 ```
+
+只读根文件系统下，相对的 `stats_log.dir: log`（`/app/log`）必须挂可写卷：镜像里 `/app/log` 是属于 65532 的空目录，命名卷第一次挂载时按它初始化属主；生产 compose 为每个 Service 挂 `<app>-<service>-log` 命名卷，k8s 挂 `stats-log` emptyDir（sizeLimit 1Gi）。目录写不进去时 statslog 在启动时即 WARN（同一错误只告警一次，恢复时 INFO），每次失败计入 `stats_log.write_failures`；之前这些错误被吞掉，容器里统计文件从不落盘（RR-20260928-04）。
 
 本地 `deploy/dev/docker-compose.yaml` 只用于开发依赖，不是生产编排。生产镜像流水线还应输出 SBOM、漏洞扫描结果和签名，并在准入控制中验证 digest/签名。
 

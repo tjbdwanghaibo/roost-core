@@ -588,7 +588,7 @@ v1.7.0 起，新项目同时生成三套部署入口：
 | 路径 | 用途 | 关键默认值 |
 | --- | --- | --- |
 | `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、按服务生成的停机宽限期（`TimeoutStopSec` = 该服务 `shutdown.total_timeout` + 5s）、实例独占 WAL |
-| `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含环境配置与密钥（启用 configdata 时数据表 `configs/data` 随镜像放在 `/app/configs/data`，与相对的 `config_data.dir` 一致，RR-20260927-34）、只读根文件系统运行示例、版本 ldflags |
+| `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含环境配置与密钥（启用 configdata 时数据表 `configs/data` 随镜像放在 `/app/configs/data`，与相对的 `config_data.dir` 一致，RR-20260927-34）、只读根文件系统运行示例（相对的 `stats_log.dir: log` 即 `/app/log` 挂可写卷：镜像里是属于 65532 的空目录，compose 每服务一个 `<app>-<service>-log` 命名卷，k8s 挂 `stats-log` emptyDir，systemd 链接到 `LOG_ROOT`，RR-20260928-04）、版本 ldflags |
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
 
 停机时长按服务生成（RR-20260926-66）：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的

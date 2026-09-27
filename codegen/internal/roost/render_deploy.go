@@ -127,7 +127,7 @@ HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
 fi
 install -d -m 0755 "$APP_ROOT/releases" "$RELEASE_ROOT"
 install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 "$STATE_ROOT/wal" "$LOG_ROOT"
-install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
+{{STATS_LOG_LINK}}install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
 install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.yaml"
 (cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
 
@@ -215,6 +215,7 @@ exit 1
 	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(services, " "))
 	value = strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(services, "|"))
 	value = strings.ReplaceAll(value, "{{STATEFUL_GUARD}}", renderStatefulWALGuard(stateful))
+	value = strings.ReplaceAll(value, "{{STATS_LOG_LINK}}", renderStatsLogLink(m))
 	var stopTimeouts strings.Builder
 	for _, service := range services {
 		fmt.Fprintf(&stopTimeouts, "  %s) STOP_TIMEOUT=%s ;;\n", service, seconds(serviceShutdownPlan(m, service).grace))
@@ -244,6 +245,23 @@ func renderStatefulWALGuard(stateful []string) string {
 esac
 
 `
+}
+
+// renderStatsLogLink points the relative stats_log.dir under the unit's
+// WorkingDirectory at LOG_ROOT (RR-20260928-04). WorkingDirectory=$APP_ROOT is
+// read-only to the service (root-owned, and ProtectSystem=strict), so the
+// stats file was never written there; LOG_ROOT is the instance's log directory,
+// owned by the run user and already in ReadWritePaths. Omitted when no service
+// enables stats_log.
+func renderStatsLogLink(m Manifest) string {
+	for _, service := range sortedServiceNames(m) {
+		if serviceUsesStatsLog(m, service) {
+			return `# stats_log.dir is relative (` + defaultStatsLogDir + `) and resolves under WorkingDirectory.
+ln -sfn "$LOG_ROOT" "$APP_ROOT/` + defaultStatsLogDir + `"
+`
+		}
+	}
+	return ""
 }
 
 func renderShellHealthcheck() string {
@@ -327,7 +345,7 @@ func renderShellReadme(m Manifest) string {
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，把相对的 stats_log.dir（log）链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置），创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
 `, m)
 }
 
@@ -351,9 +369,10 @@ func renderDockerReadme(m Manifest) string {
       -p 9100:9100 \
 %s      -v "$PWD/config.prod.yaml:/etc/roost/config.yaml:ro" \
       -v {{APP}}-wal:/var/lib/roost/wal \
+      -v {{APP}}-log:/app/log \
       {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
 
-配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
+配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。只读根文件系统下 stats_log.dir（相对的 log，即 /app/log）必须挂可写卷，否则统计文件写不进去（进程启动时 WARN，计入 stats_log.write_failures）；生产 compose 已为每个 Service 挂 <app>-<service>-log 命名卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
 %s
 生产 Compose：
 
@@ -596,9 +615,20 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	if stateful {
 		head.WriteString("            - {name: wal, mountPath: /var/lib/roost/wal}\n")
 	}
+	// RR-20260928-04：readOnlyRootFilesystem 下相对的 stats_log.dir（/app/log）不可写，
+	// 统计文件之前从不落盘。emptyDir 可写（fsGroup 65532），随 Pod 生命周期；sizeLimit
+	// 按默认 1 分钟一条（game-demo 实测每条 0.7–0.9 KiB，约 1.2 MiB/天）留足一年以上，
+	// 超出会被 kubelet 驱逐，调小 interval 或要长期保留时改成 PVC / 日志采集。
+	statsLog := serviceUsesStatsLog(m, service)
+	if statsLog {
+		fmt.Fprintf(&head, "            - {name: stats-log, mountPath: /app/%s}\n", defaultStatsLogDir)
+	}
 	head.WriteString("      volumes:\n        - name: config\n          secret:\n")
 	fmt.Fprintf(&head, "            secretName: %s-config\n", name)
 	head.WriteString("            items:\n              - {key: config.yaml, path: config.yaml}\n        - name: tmp\n          emptyDir: {sizeLimit: 64Mi}\n")
+	if statsLog {
+		head.WriteString("        - name: stats-log\n          emptyDir: {sizeLimit: 1Gi}\n")
+	}
 	if stateful {
 		head.WriteString("  volumeClaimTemplates:\n    - metadata:\n        name: wal\n      spec:\n        accessModes: [\"ReadWriteOnce\"]\n        resources:\n          requests:\n            storage: 10Gi\n")
 	}
@@ -669,8 +699,21 @@ func renderKubernetesReadme(m Manifest) string {
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
 - /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s），terminationGracePeriodSeconds 为 max(它, 配置里实际的 total_timeout) + 5s（见上方列表）；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算宽限期与 systemd TimeoutStopSec；dataengine.shutdown_timeout 与 player_access.tcp.shutdown_timeout 不参与生成（按 30s / 10s 计），调大它们须同时手动调大 total_timeout 再 sync（roost doctor 检查模板宽限期不低于配置 total + 5s）。
-%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
-`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)))
+%s%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
+`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)), bullet(statsLogKubernetesNote(m)))
+}
+
+// statsLogKubernetesNote says where the stats file goes in the pod
+// (RR-20260928-04); empty when no service enables stats_log.
+func statsLogKubernetesNote(m Manifest) string {
+	for _, service := range sortedServiceNames(m) {
+		if serviceUsesStatsLog(m, service) {
+			return "只读根文件系统下 stats_log.dir（相对的 " + defaultStatsLogDir + "，即 /app/" + defaultStatsLogDir +
+				"）挂 stats-log emptyDir（sizeLimit 1Gi，默认 1 分钟一条约可存一年以上，随 Pod 删除）；要长期保留或调小 interval 时改成 PVC 或接日志采集。" +
+				"写不进去时进程启动即 WARN，并计入 stats_log.write_failures。"
+		}
+	}
+	return ""
 }
 
 func bullet(text string) string {
@@ -755,6 +798,14 @@ deploy/k8s 使用 base/ 与 overlays/staging、overlays/production，Secret 挂�
 func serviceUsesPersistentWAL(m Manifest, service string) bool {
 	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
 	return err == nil && contains(mods, "dataengine")
+}
+
+// serviceUsesStatsLog reports whether the service's generated config enables
+// stats_log (the Mod set renderServiceConfig writes sections for), so the
+// deployment has to give its relative directory a writable place.
+func serviceUsesStatsLog(m Manifest, service string) bool {
+	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
+	return err == nil && contains(mods, "statslog")
 }
 
 func serviceOwnsPlayerTCP(m Manifest, service string) bool {

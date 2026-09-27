@@ -20,6 +20,12 @@ type modSpec struct {
 // same relative path under /app (RR-20260927-34), so both come from here.
 const defaultConfigDataDir = "configs/data"
 
+// defaultStatsLogDir is the generated stats_log.dir: relative like the config
+// data, so it lands under the working directory — WORKDIR /app in the image,
+// the release directory under systemd. Every generated deployment gives that
+// path a writable mount or link (RR-20260928-04), so they come from here too.
+const defaultStatsLogDir = "log"
+
 var modCatalog = map[string]modSpec{
 	"lock": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/lock", Alias: "kitlock", Constructor: "kitlock.NewLockMod()",
@@ -30,7 +36,7 @@ var modCatalog = map[string]modSpec{
 	},
 	"statslog": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/statslog", Alias: "kitstatslog", Constructor: "kitstatslog.NewStatsLogMod()",
-		Config: "stats_log:\n  enabled: true\n  dir: log\n  interval: 1m\n",
+		Config: "stats_log:\n  enabled: true\n  dir: " + defaultStatsLogDir + "\n  interval: 1m\n",
 	},
 	"configdata": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/configdata", Alias: "kitconfigdata", Constructor: "kitconfigdata.NewConfigDataMod()",

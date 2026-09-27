@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -102,6 +103,9 @@ type StatsLogMod struct {
 	lastNestWork   nest.DispatcherWorkStats
 	lastNestAt     time.Time
 	registry       *app.Registry
+	// writeErr 是上一次打开 / 写文件的错误文本（空表示上一次成功），只用来给
+	// reportWrite 去重告警（RR-20260928-04）。受 mu 保护。
+	writeErr string
 
 	started  bool
 	stopCh   chan struct{}
@@ -204,6 +208,13 @@ func (m *StatsLogMod) Start() error {
 	m.started = true
 	m.mu.Unlock()
 
+	// RR-20260928-04：启动时先把文件打开一次，目录不可写在启动日志里就能看到，
+	// 不用等第一个 interval（默认 1 分钟）。之前 Start 不碰文件，周期循环又把错误吞掉，
+	// 生成的容器（只读根文件系统上的相对目录 /app/log）从不落盘，也没有一行告警。
+	// 不因此让 Start 失败：统计文件是旁路观测，同一份数据每次采集都已发布到 metrics
+	// gauge 与 ops /statsz；为它拒绝启动会让已部署、但还没合并新部署物的服务在升级后
+	// 反复重启，代价比丢一份统计文件大。
+	m.reportWrite(m.openFile())
 	go func() {
 		defer close(m.doneCh)
 		ticker := time.NewTicker(m.interval)
@@ -211,13 +222,45 @@ func (m *StatsLogMod) Start() error {
 		for {
 			select {
 			case <-ticker.C:
-				_ = m.FlushOnce()
+				m.reportWrite(m.FlushOnce())
 			case <-m.stopCh:
 				return
 			}
 		}
 	}()
 	return nil
+}
+
+// path is where the records go: stats_log.dir is resolved against the process
+// working directory when relative.
+func (m *StatsLogMod) path() string { return filepath.Join(m.dir, m.filename) }
+
+// reportWrite makes a failed open or write visible (RR-20260928-04): every
+// failure counts in stats_log.write_failures (no labels), and a WARN is logged
+// when writing starts failing or the error changes, so a tick every few
+// seconds does not flood the log with one fact. The first success after a
+// failure is logged at INFO.
+func (m *StatsLogMod) reportWrite(err error) {
+	m.mu.Lock()
+	previous := m.writeErr
+	m.writeErr = ""
+	if err != nil {
+		m.writeErr = err.Error()
+	}
+	m.mu.Unlock()
+	if err == nil {
+		if previous != "" {
+			slog.Info("stats_log: writing the stats file again", "path", m.path())
+		}
+		return
+	}
+	if m.metrics != nil {
+		m.metrics.IncCounter("stats_log.write_failures", nil, 1)
+	}
+	if err.Error() != previous {
+		slog.Warn("stats_log: cannot write the stats file; records are not persisted until it is writable (further failures with the same error only count in stats_log.write_failures)",
+			"path", m.path(), "err", err)
+	}
 }
 
 func (m *StatsLogMod) Stop() {
@@ -288,20 +331,36 @@ func (m *StatsLogMod) FlushOnce() error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.file == nil {
-		if err := os.MkdirAll(m.dir, 0o755); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(filepath.Join(m.dir, m.filename), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		m.file = f
+	if err := m.openFileLocked(); err != nil {
+		return err
 	}
 	if _, err := m.file.Write(append(raw, '\n')); err != nil {
 		return err
 	}
 	return m.file.Sync()
+}
+
+func (m *StatsLogMod) openFile() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.openFileLocked()
+}
+
+// openFileLocked opens the stats file for append, creating its directory; a
+// failure leaves m.file nil so the next flush tries again. Caller holds mu.
+func (m *StatsLogMod) openFileLocked() error {
+	if m.file != nil {
+		return nil
+	}
+	if err := os.MkdirAll(m.dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(m.path(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	m.file = f
+	return nil
 }
 
 func (m *StatsLogMod) collect() StatsRecord {

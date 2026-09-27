@@ -467,18 +467,32 @@ func renderProductionCompose(m Manifest) string {
 		if serviceUsesPersistentWAL(m, service) {
 			fmt.Fprintf(&b, "      - type: volume\n        source: %s-%s-wal\n        target: /var/lib/roost/wal\n", m.Project.Name, service)
 		}
+		// RR-20260928-04：read_only 根文件系统上相对的 stats_log.dir（/app/log）不可写，
+		// 统计文件之前从不落盘。给它一个每服务独立的命名卷：比 tmpfs 多活过容器重建，
+		// 首次挂载时按镜像里属于 65532 的空目录初始化属主（见 renderDockerfile）。
+		if serviceUsesStatsLog(m, service) {
+			fmt.Fprintf(&b, "      - type: volume\n        source: %s-%s-log\n        target: /app/%s\n", m.Project.Name, service, defaultStatsLogDir)
+		}
 		b.WriteString("    deploy:\n      resources:\n        limits: {cpus: \"2\", memory: 2G}\n        reservations: {cpus: \"0.25\", memory: 256M}\n")
 	}
 	hasVolumes := false
 	for _, service := range sortedServiceNames(m) {
-		if !serviceUsesPersistentWAL(m, service) {
-			continue
+		for _, volume := range []struct {
+			suffix string
+			used   bool
+		}{
+			{"wal", serviceUsesPersistentWAL(m, service)},
+			{"log", serviceUsesStatsLog(m, service)},
+		} {
+			if !volume.used {
+				continue
+			}
+			if !hasVolumes {
+				b.WriteString("volumes:\n")
+				hasVolumes = true
+			}
+			fmt.Fprintf(&b, "  %s-%s-%s: {}\n", m.Project.Name, service, volume.suffix)
 		}
-		if !hasVolumes {
-			b.WriteString("volumes:\n")
-			hasVolumes = true
-		}
-		fmt.Fprintf(&b, "  %s-%s-wal: {}\n", m.Project.Name, service)
 	}
 	return b.String()
 }
