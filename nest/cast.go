@@ -162,6 +162,8 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 		if guard.GuardedEntity(e) {
 			continue
 		}
+		// 等锁之前记下目标 ID：等锁期间实体被清理后 e.GUId() 已归零，错误文本会变成 id=0（RR-20260926-73 复核残留）。
+		id := e.GUId()
 		if !e.Touch() {
 			releaseCastEntities(guard, lockedNow)
 			return nil, ErrEntityNotFound
@@ -172,7 +174,7 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 			if e.IsRemoved() || e.IsClear() {
 				// 等锁期间目标被 Destroy / 仅内存卸载：目标已不在，不是暂时性锁冲突。旧实现一律返回 ErrLockTimeout，
 				// 不能回滚的 handler 因此被整条重排、已做的修改重复生效（RR-20260926-73）。
-				return nil, fmt.Errorf("%w: id=%d was removed while waiting for its lock", ErrEntityNotFound, e.GUId())
+				return nil, fmt.Errorf("%w: id=%d was removed while waiting for its lock", ErrEntityNotFound, id)
 			}
 			return nil, ErrLockTimeout
 		}
