@@ -21,7 +21,7 @@
 
 ## 3. 配置与 Secret
 
-生成项目提供 `configs/service/config.<service>.prod.example.yaml` 和 `deploy/k8s/secret.<service>.example.yaml`。复制为本地文件，替换每个占位符后再部署。
+生成项目提供 `configs/service/config.<service>.prod.example.yaml` 和 `deploy/k8s/base/secret.<service>.example.yaml`。复制为本地文件，替换每个占位符后再部署。
 
 Secret 示例的 `stringData.config.yaml` 就是同服务的生产示例：建工程之后 `roost add mod` / `add saga` 追加的 Mod 配置段、`add transport tcp` 追加的 `player_access` 段也同时写进两份文件（RR-20260928-07）。这两份是脚手架，`project sync` 不重写；用 2026-09-28 之前的生成器建的工程，Secret 示例可能缺这些段，按生产示例手工补齐（缩进四格）。
 
@@ -87,15 +87,16 @@ docker run --rm --name planet-game-1001 \
 
 ## 6. Kubernetes + Kustomize
 
-生成内容：Namespace、ServiceAccount、默认拒绝业务入口的 NetworkPolicy、每个 Service 的 workload/Service/PDB、Secret 示例和 kustomization。有 WAL 的 Service 使用单副本 StatefulSet + RWO PVC；无 WAL 的 Service 使用 Deployment。容器带 startup/readiness/liveness probe、资源预算、只读根文件系统、drop ALL、seccomp 和 45 秒 termination grace。默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，开放玩家或服务端口前必须显式补调用方规则。
+生成内容：Namespace、ServiceAccount、默认拒绝业务入口的 NetworkPolicy、每个 Service 的 workload/Service/PDB、Secret 示例和 kustomization。有 WAL 的 Service 使用单副本 StatefulSet + RWO PVC；无 WAL 的 Service 使用 Deployment。容器带 startup/readiness/liveness probe、资源预算、只读根文件系统、drop ALL、seccomp，termination grace 按每个 Service 实际注册的 Mod 生成（见 §8）。默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，开放玩家或服务端口前必须显式补调用方规则。
 
 部署：
 
 ```bash
-cp deploy/k8s/secret.game.example.yaml deploy/k8s/secret.game.local.yaml
-# 编辑本地 Secret；不得提交
-kubectl apply -f deploy/k8s/secret.game.local.yaml
-kubectl apply -k deploy/k8s
+cp deploy/k8s/base/secret.game.example.yaml deploy/k8s/base/secret.game.local.yaml
+# 编辑本地 Secret；不得提交（Secret 不加入 kustomization）
+kubectl apply -f deploy/k8s/base/secret.game.local.yaml
+# 选择 staging / production overlay，镜像用不可变 digest（deploy.sh 渲染 overlay 后 server-side apply）
+ENVIRONMENT=staging ROOST_IMAGE=ghcr.io/example/planet@sha256:<digest> sh deploy/k8s/deploy.sh
 kubectl -n roost rollout status statefulset/planet-game
 kubectl -n roost get pod,pvc,svc,pdb
 ```
