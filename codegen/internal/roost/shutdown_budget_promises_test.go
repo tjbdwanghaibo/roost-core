@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -286,10 +287,44 @@ func assertProjectUnchanged(t *testing.T, root string, before map[string][sha256
 	}
 }
 
-// readOnlyDir makes dir unwritable for the rest of the test (the directory
-// keeps its files; creating the temporary file of an atomic write fails).
-func readOnlyDir(t *testing.T, dir string) {
+// blockWritesIn makes the files already in dir impossible to replace for the
+// rest of the test, so an atomic write into dir (writeAtomic: a temporary
+// file, then a rename over the target) fails. The files keep their bytes and
+// stay readable.
+//
+// RR-20260927-01：这里原先只有 os.Chmod(dir, 0o555)。Windows 上 os.Chmod 只切换文件的只读属性
+// （os.Chmod 文档：Windows 只用 0o200 位），对目录的写入与改名不起作用，CI windows-compatibility
+// 因此 "sync succeeded although configs/service is read-only"。Windows 上改为持有目录里每个文件的
+// 句柄：Go 在 Windows 打开文件时共享模式只有 FILE_SHARE_READ|FILE_SHARE_WRITE、不带
+// FILE_SHARE_DELETE（syscall.Open），而 os.Rename 是 MoveFileEx(MOVEFILE_REPLACE_EXISTING)——
+// 替换一个这样被打开的文件、或把它挪去备份，都会被拒绝，writeAtomic 的直接改名与它为 Windows 准备的
+// “先挪到备份再改名”两条路都失败；读取（os.ReadFile 同样只要读共享）不受影响。Unix 上打开的句柄
+// 不妨碍改名，仍用去掉目录写权限的办法（创建临时文件即失败）。
+func blockWritesIn(t *testing.T, dir string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held := 0
+		for _, entry := range entries {
+			if !entry.Type().IsRegular() {
+				continue
+			}
+			file, err := os.Open(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Registered after t.TempDir, so it runs before the directory is removed.
+			t.Cleanup(func() { _ = file.Close() })
+			held++
+		}
+		if held == 0 {
+			t.Fatalf("%s has no file to hold: the injected write failure would not happen", dir)
+		}
+		return
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
@@ -314,9 +349,9 @@ func TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten(t *testing.T) {
 		m.Services["game"] = spec
 	})
 	before := projectFileHashes(t, root)
-	readOnlyDir(t, filepath.Join(root, "configs", "service"))
+	blockWritesIn(t, filepath.Join(root, "configs", "service"))
 	if _, err := SyncProject(root); err == nil {
-		t.Fatal("sync succeeded although configs/service is read-only")
+		t.Fatal("sync succeeded although no file in configs/service can be written")
 	}
 	assertProjectUnchanged(t, root, before)
 }
@@ -336,9 +371,9 @@ func TestSyncRollsTheShutdownRefreshBackWithTheTemplates(t *testing.T) {
 	before := projectFileHashes(t, root)
 	// internal/bootstrap/generated.go sorts after configs/ and deploy/: both
 	// are written, then rolled back.
-	readOnlyDir(t, filepath.Join(root, "internal", "bootstrap"))
+	blockWritesIn(t, filepath.Join(root, "internal", "bootstrap"))
 	if _, err := SyncProject(root); err == nil {
-		t.Fatal("sync succeeded although internal/bootstrap is read-only")
+		t.Fatal("sync succeeded although no file in internal/bootstrap can be written")
 	}
 	assertProjectUnchanged(t, root, before)
 }
