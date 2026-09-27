@@ -196,6 +196,9 @@ type Manager struct {
 	// （releaseRetracted）之前调用，用来确定性地在这一窗口再次撤销新 subject（OPEN-ITEMS B21，RR-20260926-78 自报的
 	// 未验证窗口）。生产中恒为 nil。
 	registeredBeforeHandBack func(subjectID int64)
+	// unregisterLookedUp 是测试缝：Unregister 无锁取到 subject 之后、取 subj.mu 之前调用，用来确定性地在这一窗口让旧
+	// subject 被 forget、同 ID 重新登记并订阅（OPEN-ITEMS B39，第五轮审计疑点）。生产中恒为 nil。
+	unregisterLookedUp func(subjectID int64)
 }
 
 func NewManager(config ManagerConfig) (*Manager, error) {
@@ -447,28 +450,51 @@ func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done f
 // its next frame, and once the last one has gone out the subject is
 // forgotten. Subscribing to a retiring subject is refused. A registration
 // queued behind an earlier retirement (RegisterAfterRetirement) is cancelled.
+//
+// Unregister 按 ID 注销当前登记：取到 subject 之后、取锁之前，它若已退役完成被 forget、同 ID 已重新登记，
+// 注销作用在重新登记的那一个上（RR-20260927-22）。
 func (m *Manager) Unregister(subjectID int64) error {
-	subj := m.subject(subjectID)
-	if subj == nil {
-		return ErrSubjectNotRegistered
+	for {
+		subj := m.subject(subjectID)
+		if subj == nil {
+			return ErrSubjectNotRegistered
+		}
+		if m.unregisterLookedUp != nil {
+			m.unregisterLookedUp(subjectID)
+		}
+		subj.mu.Lock()
+		// RR-20260927-22：subject 是无锁取的，取锁前它可能已退役完成、被 forget 摘表，同 ID 随即重新登记，政策也已在新登记上
+		// 订阅。之前不做这一步检查，旧 subject 上取的释放戳比新登记上的订阅戳大，按 ID 删撤销记录又删到新登记名下，
+		// 结果新登记还在，它的订阅和待交还记录却被这次注销清掉——任何串行顺序都得不到这个状态。
+		// 所以取锁后先确认它仍是表里的那一个，不是就重新查表，注销当前登记（业务按 ID 注销，就是要这个 ID 不再同步；
+		// 只把它当作“旧登记已结束”的空操作，会让卸载后重载的新登记在业务注销之后继续存活）。
+		// 锁序 subj.mu → m.mu 与 subscribe 相同。读锁一直持有到按 ID 删完撤销记录：forget 摘表要取 m.mu 写锁，
+		// 所以这段时间里同 ID 不会出现新登记，按 ID 删掉的都是本次登记名下的记录。释放戳也在这段里取，
+		// 新登记上的订阅戳一定更大（RR-20260926-85）。
+		m.mu.RLock()
+		if m.subjects[subjectID] != subj {
+			m.mu.RUnlock()
+			subj.mu.Unlock()
+			continue
+		}
+		subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
+		// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
+		// 其中的 pair 也一并通知。
+		stamp := m.nextStamp()
+		var released []queuedRelease
+		for sid, sub := range subj.subscribers {
+			released = releasedLocked(released, sub.sources, sid, subjectID, stamp)
+		}
+		released = m.dropRetractedSubject(subjectID, released, stamp)
+		m.mu.RUnlock()
+		// retireLocked 查会话持有表要取 m.mu 读锁，不能在上面的读锁内重入（RWMutex 读锁重入遇到等待的写者会死锁）。
+		remaining, cancelled := m.retireLocked(subj)
+		subj.mu.Unlock()
+		m.queueReleases(released)
+		cancelled.finish(ErrRegistrationCancelled)
+		m.finishRetire(subj, remaining)
+		return nil
 	}
-	subj.mu.Lock()
-	subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
-	// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
-	// 其中的 pair 也一并通知。释放戳在 subj.mu 内取（RR-20260926-85）：对本 subject 的订阅都在这把锁内取戳，之后的新登记
-	// 在 forget 之后才出现，所以本次登记内的订阅戳都更小，新登记上的都更大。
-	stamp := m.nextStamp()
-	var released []queuedRelease
-	for sid, sub := range subj.subscribers {
-		released = releasedLocked(released, sub.sources, sid, subjectID, stamp)
-	}
-	released = m.dropRetractedSubject(subjectID, released, stamp)
-	remaining, cancelled := m.retireLocked(subj)
-	subj.mu.Unlock()
-	m.queueReleases(released)
-	cancelled.finish(ErrRegistrationCancelled)
-	m.finishRetire(subj, remaining)
-	return nil
 }
 
 // retireLocked 标记退役并把订阅改成 leaving（欠 remove），返回仍需发 remove 的订阅数与被取消的排队登记
