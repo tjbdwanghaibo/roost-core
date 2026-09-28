@@ -321,3 +321,4 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260928-12](bug/RR-20260928-12.md) | P4 回滚时新进程按旧 unit 的 TimeoutStopSec 被停 | [修复](bugfix/RR-20260928-12.md)（v1.17.2） |
 | [RR-20260928-13](bug/RR-20260928-13.md) | P4 CRLF Secret 示例被静默跳过 | [修复](bugfix/RR-20260928-13.md)（v1.17.2） |
 | [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（v1.17.2） |
+| [RR-20260928-15](bug/RR-20260928-15.md) | P4 生成 TCP / scene 测试未等会话登记 | [修复](bugfix/RR-20260928-15.md)（未发布） |

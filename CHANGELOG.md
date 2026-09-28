@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **生成的 player TCP 与 game-demo 场景连接测试先等会话登记（RR-20260928-15）**：生成的服务器先写认证 ack、再登记会话，`server_gen_test.go` 的 6 个用例与 `scene_connections_test.go` 的两个用例原来拨号后直接断言，高负载下偶发 `active sessions = 1, want 2`（framework-compat source-head lane）。只改测试；已生成工程 sync 更新 `server_gen_test.go`，`scene_connections_test.go` 是业务文件需手工补。
+- **测试**：remoteflow 生成链路补 Remote 持久拒绝与收尾的端到端用例（REMAINING C34、B27 第 1 批）——装配改用正式 `ManagerAccess` 作 Remote loader 并接 entitysync，覆盖 Durability 0～3 持久拒绝后的卸载、重载全量与重载后可写，strict 确认截止后的延迟回调，结果未知后停机 / fence，嵌套 / 收尾阶段独立事务的拒绝，快 worker 删除 Remote 实体；`scripts/test-remote-generated.sh` 默认一起运行，新增 `ROOST_REMOTE_COUNT` / `ROOST_REMOTE_RUN`。
+
 ## [v1.17.2] - 2026-09-28
 
 > v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～14）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。** 生成器输出要求 roost-core ≥ v1.17.2（生成的 syncbus 测试用到 `kit/syncbus.JetStreamStreamFromConfig`）。

@@ -165,3 +165,18 @@ OPEN-ITEMS §H 把批次 8（长跑与性能：B29、B30、C01、C03）定为“
 | N70 | **新失败（发版后才出现）**：framework-compat `generated-consumer (source-head, full)` 里生成工程的 `TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt` 报 `server_gen_test.go:556: active sessions = 1, want 2`。生成器源码 `codegen/internal/roost/render_player_tcp.go:1563-1569` 在 `waitReleased` 之后立即断言 `ActiveSessions(7) == 2`，没有像 `TestCloseSessionsCountsTheSessionsItClosed`（`:1657` 起）那样等两个会话都登记。**推断**：与 [RR-20260927-02 §后续更正](../bugfix/RR-20260927-02.md) 同一原因——服务器先写认证 ack、后 `registerSession`。只改测试，不涉及产品行为 | 只在 run `36367611936` 出现一次（`51fc7ee` 的同一 lane 通过），**待复现** | 生成测试加上同样的有界等待；生成工程里 `-race -count=200` 跑该用例通过；framework-compat 转绿 |
 | CI-2 | ci 的 linux-test 分片偶发（B46）是否再现 | `51fc7ee` 的 ci run `36365082237` 全部 success（linux-test 0～3、windows-compatibility、linux-quality、release-hygiene、service-redis）。本次核对时，`924cc5d` 上 main 的 run `36367611929` 与 tag v1.17.2 的 run `36367614024` 都还在运行 | 连续若干次 main / tag 的 ci 中 linux-test 全绿；再现则按 §5 N60 处理 |
 | CI-3 | windows-compatibility 超时（RR-20260928-14）是否真的解决 | `7b5e5a4` 起转绿，`codegen/internal/roost` 在 Windows 上 224s | 包耗时持续明显低于 10 分钟默认超时；如果回到接近 10 分钟，按 [RR-20260928-14 §未验证项](../bugfix/RR-20260928-14.md)给 windows job 加 `-timeout` 并调大 `timeout-minutes` |
+
+## 7. 进度（2026-09-28 起按维护者安排执行）
+
+维护者 2026-09-28 决定：优先 5 条中 **C03 不做**，**C01 最后做**，其余（N70、B30、B27 第 1 批 + C34）先做。
+
+| 条目 | 状态 |
+| --- | --- |
+| N70（及 N62） | **已修复**：[RR-20260928-15](../bugfix/RR-20260928-15.md)（`0516670`）——生成的 player TCP / scene 测试先等会话登记；延迟探针确定根因，并行负载下修前 1/500 失败、修后 500 次通过 |
+| C34 | **已完成**（`21a3171`）：remoteflow 生成链路改用正式 `ManagerAccess` + entitysync，加写失败注入点，构造出 Durability 0～3 的 Remote 持久拒绝：实例仅内存卸载、订阅者收到权威全量（无权威时 remove）、重载后可写、被拒修改未写出；负对照成立 |
+| B27 第 1 批 | **已完成**（`911dbec`）：13 份记录中 10 份在生成链路补了端到端用例、均无缺陷；RR-20260927-09（需独立 fixture 包）、RR-20260927-15（正式装配不可达）、RR-20260926-63 的混合事务 Remote 部分拒绝（正式链路构造不出）写明原因；各记录已追加“后续验证” |
+| B30 | 进行中（独占集成环境与本机） |
+| C01 | 待 B30 之后 |
+| C03 | 维护者决定不做 |
+
+B27 第 1 批的观察：生成链路上 `Nest.Request` 的调用方与 Remote 确认等待共用同一请求 ctx，调用方总是先拿到判别表第 14 行（`nest: sync canceled` + `DeadlineExceeded`），RR-20260927-24 新加的第 2 行哨兵送不到调用方；两行结论同为“结果未知”，已写入 RR-37 / RR-20260927-24 记录。

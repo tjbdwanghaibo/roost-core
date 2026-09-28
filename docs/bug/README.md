@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+[RR-20260928-15](RR-20260928-15.md)：P4 生成 TCP / scene 测试未等会话登记（framework-compat 偶发）（已修复，未发版）。
+
 [RR-20260928-14](RR-20260928-14.md)：P3 `codegen/internal/roost` 在 Windows CI 超时（已修复，v1.17.2）。
 
 [RR-20260928-13](RR-20260928-13.md)：P4 CRLF Secret 示例被静默跳过（已修复，v1.17.2）。
