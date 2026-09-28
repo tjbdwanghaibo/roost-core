@@ -2,7 +2,7 @@
 
 Remote 容量/长稳：`scripts/perf/remote.sh`（默认 30m，`ROOST_REMOTE_DURATION=24h` 可复跑 24 小时）；故障矩阵：`scripts/test-remote-matrix.sh`。两者独占隔离环境，原始日志和数据保存于 `artifacts/perf/remote/<label>/`；[负载、判据与结果](../docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)。
 
-Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL` 后运行 `./scripts/test-remote-generated.sh`。正式 DAO/Entity 生成器构造两实体各两 DAO，经 Nest 与三种持久化策略提交，校验 Mongo、业务拒绝/panic 回滚和真实 NATS 快照接收；不依赖 demo。脚本只清理自身临时工程，测试仅清理专属数据库和 Redis key。[完整验收及独立多进程故障命令](../docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
+Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL` 后运行 `./scripts/test-remote-generated.sh`。正式 DAO/Entity 生成器构造两实体各两 DAO，经 Nest 与三种持久化策略提交，校验 Mongo、业务拒绝/panic 回滚和真实 NATS 快照接收；不依赖 demo。同一次运行还跑持久拒绝与收尾用例（`reject_test.go` / `outcome_test.go`：正式 `ManagerAccess` 作 Remote loader + entitysync，Durability 0～3 的持久拒绝后卸载、重载全量、重载后可写，以及 strict 确认截止、结果未知后停机、嵌套独立事务、快 worker 删除，OPEN-ITEMS C34 / B27 第 1 批）；`ROOST_REMOTE_LOAD=1` 或设置了 `ROOST_REMOTE_FAULT` 时只跑 `TestGeneratedRemoteNestFlow`。`ROOST_REMOTE_COUNT` 设 `-count`，`ROOST_REMOTE_RUN` 覆盖 `-run`。脚本只清理自身临时工程，测试仅清理专属数据库和 Redis key。[完整验收及独立多进程故障命令](../docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
 
 仓库级的工具，**每个只有一份**。合仓之前 core / kit / codegen 各带一套，
 其中 `gapmap.sh` 三份逐字节相同、`pretag.sh` 三份各不相同却只有一个还能用
