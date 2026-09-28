@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-29 Core 全 service 审查与实施交接](review/REVIEW-2026-09-29-services.md)：10 个服务域主链、9 项可复现问题和 1 项自动清理接线缺口；原有 race/Redis 集成与生成门禁通过。附[问题](bug/REVIEW-2026-09-29-services.md)、[复现](bug/REPRO-2026-09-29-services.md)、[设计机制](review/IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)及[进度](review/PROGRESS.md)。仅文档，未修生产代码。
+
 **维护与接手入口：[核心优化汇总与验收边界](CORE-OPTIMIZATION-HANDOFF.md) · [roost 写代码 skill](agent-skills/roost-coding/SKILL.md)**。汇总 Nest、Sync、DataEngine、Remote 历轮最终实现与可复跑证据；包含2026-09-26用户对当前Sync尾延迟的接受决定。下方历史记录保留各自时点状态。
 
 **[三仓合一仓：给 review 的交接](feature/SINGLE_MODULE_MIGRATION.md)** · **[方案与阶段门禁](ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)**（2026-09-20 完成，core v1.16.0）：框架只剩一个仓库、一个 Go module、一个 tag；roost-kit 与 roost-codegen 已归档，旧 tag 仍可 pin。跨过这条边界的工程用 `roost project upgrade --consolidate` 改写 import。

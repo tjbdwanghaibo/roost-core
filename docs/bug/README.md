@@ -1,5 +1,20 @@
 # Roost Review 问题索引
 
+09-29 Core 全 service 审查：[问题与实施交接](REVIEW-2026-09-29-services.md) · [9 项反例及源码](REPRO-2026-09-29-services.md)。本轮未修生产代码；RR-09 为源码接线缺口，其他九项动态复现。
+
+| 编号 | 优先级 | 结论（未修复/未实施） |
+| --- | --- | --- |
+| [RR-20260929-01](REVIEW-2026-09-29-services.md#rr-20260929-01) | P1 | platform 迟到发货覆盖人工结算终态 |
+| [RR-20260929-02](REVIEW-2026-09-29-services.md#rr-20260929-02) | P1 | activity 未确认进度证明被 ring 淘汰后重复计入 |
+| [RR-20260929-03](REVIEW-2026-09-29-services.md#rr-20260929-03) | P2 | account 跨服建角补偿释放已有名字 |
+| [RR-20260929-04](REVIEW-2026-09-29-services.md#rr-20260929-04) | P2 | mail 过期不可见条目占满邮箱 |
+| [RR-20260929-05](REVIEW-2026-09-29-services.md#rr-20260929-05) | P2 | rank 逗号 requestID 不能去重 |
+| [RR-20260929-06](REVIEW-2026-09-29-services.md#rr-20260929-06) | P2 | rank 并发 no-op 覆盖去重记录 |
+| [RR-20260929-07](REVIEW-2026-09-29-services.md#rr-20260929-07) | P2 | chat 自定义频道键碰撞私聊键 |
+| [RR-20260929-08](REVIEW-2026-09-29-services.md#rr-20260929-08) | P2 | activity 最后 ACK 窗口被立即重试关闭 |
+| [RR-20260929-09](REVIEW-2026-09-29-services.md#rr-20260929-09) | P2 | session sweep 缺少公开 owner 来源接线 |
+| [RR-20260929-10](REVIEW-2026-09-29-services.md#rr-20260929-10) | P3 | rank Around 最大半径与页上限矛盾 |
+
 [RR-20260928-15](RR-20260928-15.md)：P4 生成 TCP / scene 测试未等会话登记（framework-compat 偶发）（已修复，未发版）。
 
 [RR-20260928-14](RR-20260928-14.md)：P3 `codegen/internal/roost` 在 Windows CI 超时（已修复，v1.17.2）。

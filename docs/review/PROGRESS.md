@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+09-29 最新停点：[Core 全部 service 域](REVIEW-2026-09-29-services.md)。单仓 Core `6b73289c`，范围 `service/` + `kit/service/`；本次 **10/10 服务域主链完成**（account、directory、global routing/lease、activity、mail、match、platform、rank、session、chat），不是全源码审完率。96 个生产 Go 路径有清单，18 个生成文件通过门禁并抽样；其余按当前主链与接线做源码验证，不宣称每行覆盖。
+
+| 本轮状态 | 已完成 | 保留下一轮 |
+| --- | --- | --- |
+| 缺陷发现 | RR-20260929-01..10：9 个动态反例、1 个源码接线缺口；2 P1、7 P2、1 P3 | 尚未修复/实施；先支付终态与 activity 未确认进度 |
+| 服务回归 | 15 测试包 race/integration pass，684 pass 事件，无测试级 skip；4 个 platform 初次 skip 已补跑 | 真实 Broker、业务退款/发奖、多进程重启/强杀 |
+| 传输生成 | 9 RPC 服务、12 次 servicerpc -check 全通过，无生成文件写入 | 正式 game 接收/确认链路补测 |
+| 图谱证据 | MCP 恢复；96 路径 coverage：20 metadata_changed、76 not_tracked；当前源码补证 | 图谱 generation 仍 09-20，不能据 ready/HEAD 宣称刷新完 |
+| 设计/性能 | 状态证明、所有权补偿、键隔离、候选清理和热点对象成本写入机制文档 | match/activity 历史积压容量与热点 p95/p99；session roster 可达性 |
+
+文档交接与复跑脚本已完成；生产源码未改，不关闭旧修复。本轮更新不覆盖下方旧报告的时点结论，也不重算历史三仓覆盖率。用户说“没有修复”则跳过旧 bug 验收，继续新范围。
+
 09-20 最新停点：[运行/验收/同步/所有权](REVIEW-2026-09-20.md)。Core `8c589a6` / Kit `19fb010` / Codegen `9bbac81`；RR-20260919-02/04/07/08/09/10 原触发通过，两个活动 Wanted 分流，新增 RR-20260920-01..05（4 个 P1、1 个 P2）。累计 **54 份运行记录、33 篇机制文档、99 个不同 RR**，不是代码覆盖率或当前未修复数。
 
 | 当前域 | 本轮新增阅读与执行 | 未完成及下一步 |
