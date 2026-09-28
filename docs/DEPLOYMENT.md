@@ -23,7 +23,7 @@
 
 生成项目提供 `configs/service/config.<service>.prod.example.yaml` 和 `deploy/k8s/base/secret.<service>.example.yaml`。复制为本地文件，替换每个占位符后再部署。
 
-Secret 示例的 `stringData.config.yaml` 就是同服务的生产示例：建工程之后 `roost add mod` / `add saga` 追加的 Mod 配置段、`add transport tcp` 追加的 `player_access` 段也同时写进两份文件（RR-20260928-07）。这两份是脚手架，`project sync` 不重写；用 2026-09-28 之前的生成器建的工程，Secret 示例可能缺这些段，按生产示例手工补齐（缩进四格）。
+Secret 示例的 `stringData.config.yaml` 就是同服务的生产示例：建工程之后 `roost add mod` / `add saga` 追加的 Mod 配置段、`add transport tcp` 追加的 `player_access` 段也同时写进两份文件（RR-20260928-07）。这两份是脚手架，`project sync` 不重写；用 2026-09-28 之前的生成器建的工程，Secret 示例可能缺这些段，按生产示例手工补齐（缩进四格）。CRLF 行尾的 Secret 示例（如 Windows `core.autocrlf=true` 检出）与 LF 同样处理，按原行尾写回；Secret 示例被改写成生成器认不出的结构（没有恰好一个 `  config.yaml: |` 块），或内嵌 config 无法合并（如 flow 风格的 `player_access: {...}`）时，这些命令在 stderr 打印 `WARN: deploy/k8s/base/secret.<service>.example.yaml: ...; left unchanged ...`、不改 Secret、命令照常完成，需要按生产示例手工同步（RR-20260928-13；之前 CRLF 与认不出结构时 `add mod` 静默跳过，`add transport tcp` 在无法合并时整体失败回滚）。`project sync` 的停机块刷新对 CRLF 的开发配置、生产示例与 Secret 同样生效。
 
 规则：
 

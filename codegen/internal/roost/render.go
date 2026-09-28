@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -583,8 +584,9 @@ func productionizeConfig(value string) string {
 // whole file got, and the k8s Secret example that embeds the production
 // example gets the same production text (RR-20260928-07: it used to keep
 // only what was rendered at creation, so the game-demo's Secret had no
-// saga: block). It returns the files it changed.
-func appendModConfigSections(root string, before, after Manifest, service string) ([]string, error) {
+// saga: block). A Secret example it cannot recognise is a WARN on warn
+// (RR-20260928-13). It returns the files it changed.
+func appendModConfigSections(root string, before, after Manifest, service string, warn io.Writer) ([]string, error) {
 	previous, _ := resolveMods(append(append([]string{}, before.SharedMods...), effectiveServiceMods(before, service)...))
 	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
 	var sections []string
@@ -621,7 +623,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		}
 		changed = append(changed, target.rel)
 	}
-	secret, err := editKubernetesSecretExampleConfig(root, service, func(config string) (string, error) {
+	secret, err := editKubernetesSecretExampleConfig(root, service, warn, func(config string) (string, error) {
 		if body, appended := appendMissingConfigBlocks(config, sections, true); appended {
 			return body, nil
 		}

@@ -1,7 +1,9 @@
 package roost
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -819,9 +821,18 @@ const kubernetesSecretConfigHeader = "\n  config.yaml: |\n"
 //
 // The embedded block runs from the header to the first non-blank line
 // indented less than four spaces; anything after it is kept as it is. A
-// Secret example that is missing, or has no such block (rewritten by hand),
-// is left alone. It returns the path it changed, or "".
-func editKubernetesSecretExampleConfig(root, service string, edit func(config string) (string, error)) (string, error) {
+// Secret example that is missing (no k8s deploy target) is skipped. It returns
+// the path it changed, or "".
+//
+// RR-20260928-13：定位与改写按 LF 进行，CRLF 的文件（Windows core.autocrlf=true 检出）先
+// 规范成 LF、改完按 CRLF 写回，与 ensurePlayerTCPConfig 的做法相同。之前以
+// "\n  config.yaml: |\n" 定位，CRLF 时找不到就原样返回，add mod 之后生产示例有新段而 Secret
+// 没有，什么也不报。认不出结构（没有恰好一个该块——被手工改写）或 edit 无法施加到内嵌 config
+// （如 flow 风格的 player_access）时，向 warn 写一行 WARN、Secret 不动、返回 nil：Secret 示例
+// 是非受控的脚手架，没有进程直接读它，被改写成别的结构（data: / secretGenerator）也是合法定制，
+// 不能因此让 add 失败；之前 add mod 静默跳过而 add transport tcp 整体失败回滚，两种处理都不对。
+// 读写失败仍返回错误。
+func editKubernetesSecretExampleConfig(root, service string, warn io.Writer, edit func(config string) (string, error)) (string, error) {
 	rel := kubernetesSecretExampleRel(service)
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	raw, err := os.ReadFile(path)
@@ -831,9 +842,13 @@ func editKubernetesSecretExampleConfig(root, service string, edit func(config st
 	if err != nil {
 		return "", err
 	}
-	body := string(raw)
-	if strings.Count(body, kubernetesSecretConfigHeader) != 1 {
+	skip := func(reason string) (string, error) {
+		fmt.Fprintf(warn, "WARN: %s: %s; left unchanged, apply the same change to its embedded config.yaml by hand (it mirrors configs/service/config.%s.prod.example.yaml)\n", rel, reason, service)
 		return "", nil
+	}
+	body, crlf := lfText(raw)
+	if strings.Count(body, kubernetesSecretConfigHeader) != 1 {
+		return skip("no single `config.yaml: |` block under stringData")
 	}
 	start := strings.Index(body, kubernetesSecretConfigHeader) + len(kubernetesSecretConfigHeader)
 	rest := body[start:]
@@ -857,16 +872,32 @@ func editKubernetesSecretExampleConfig(root, service string, edit func(config st
 	}
 	edited, err := edit(config.String())
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", rel, err)
+		return skip(err.Error())
 	}
 	if edited == config.String() {
 		return "", nil
 	}
 	updated := body[:start] + indentText(edited, "    ") + rest[end:]
-	if err := writeAtomic(path, []byte(updated), 0o644); err != nil {
+	if err := writeAtomic(path, restoreLineEndings(updated, crlf), 0o644); err != nil {
 		return "", err
 	}
 	return rel, nil
+}
+
+// lfText returns raw with CRLF line endings turned into LF, and whether it
+// had any; restoreLineEndings writes such a text back the way it was read.
+func lfText(raw []byte) (string, bool) {
+	if !bytes.Contains(raw, []byte("\r\n")) {
+		return string(raw), false
+	}
+	return strings.ReplaceAll(string(raw), "\r\n", "\n"), true
+}
+
+func restoreLineEndings(text string, crlf bool) []byte {
+	if crlf {
+		text = strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	return []byte(text)
 }
 
 func renderKubernetesReadme(m Manifest) string {

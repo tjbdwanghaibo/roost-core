@@ -323,7 +323,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, ID: *id})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

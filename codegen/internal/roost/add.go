@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,9 +16,16 @@ type AddOptions struct {
 	Protocol, NestHandler                                  string
 	Mods, Steps                                            []string
 	ID                                                     int64
+	// Warnings receives what the command could not do but did not fail for,
+	// such as a k8s Secret example it cannot recognise (RR-20260928-13).
+	// nil means os.Stderr, so nothing is skipped silently.
+	Warnings io.Writer
 }
 
 func Add(root string, options AddOptions) ([]string, error) {
+	if options.Warnings == nil {
+		options.Warnings = os.Stderr
+	}
 	m, err := LoadManifest(root)
 	if err != nil {
 		return nil, err
@@ -67,7 +75,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		// The service's configs were rendered at creation; give the new Mod
 		// its section there too, or it runs on defaults nobody can see.
-		configs, err := appendModConfigSections(root, previous, m, service)
+		configs, err := appendModConfigSections(root, previous, m, service, options.Warnings)
 		if err != nil {
 			return []string{"roost.yaml"}, err
 		}
@@ -153,8 +161,9 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		// The k8s Secret example embeds the production example; it gets the
 		// same block, or a deployment made from it runs without player TCP
-		// settings (RR-20260928-07).
-		secretConfig, err := editKubernetesSecretExampleConfig(root, access.Service, func(config string) (string, error) {
+		// settings (RR-20260928-07). One it cannot merge is a WARN, as for
+		// add mod, not a failure (RR-20260928-13).
+		secretConfig, err := editKubernetesSecretExampleConfig(root, access.Service, options.Warnings, func(config string) (string, error) {
 			return mergePlayerTCPConfig(config, "stringData.config.yaml", false)
 		})
 		if err != nil {
@@ -229,7 +238,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		paths = append(paths, "roost.yaml", "internal/bootstrap/generated.go")
 		// The saga Mod (and whatever it pulled in) gets its config section in
 		// the service's configs, like a Mod chosen at project creation.
-		configs, err := appendModConfigSections(root, previous, m, service)
+		configs, err := appendModConfigSections(root, previous, m, service, options.Warnings)
 		if err != nil {
 			return paths, err
 		}

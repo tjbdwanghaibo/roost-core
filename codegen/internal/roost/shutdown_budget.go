@@ -287,7 +287,9 @@ func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) 
 			if err != nil {
 				return changed, err
 			}
-			body := string(raw)
+			// RR-20260928-13：按 LF 识别与替换，CRLF 的文件按 CRLF 写回；之前摘要行的正则与
+			// 整块比对都认不出 "\r\n"，CRLF 检出的三份配置从此不再跟着 Mod 刷新。
+			body, crlf := lfText(raw)
 			written, ok := parseGeneratedShutdown(body)
 			if !ok || written.sameFormula(plan) {
 				continue
@@ -297,7 +299,7 @@ func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) 
 				continue
 			}
 			body = strings.Replace(body, before, indentText(renderShutdownConfig(plan), target.indent), 1)
-			if err := writeAtomic(path, []byte(body), 0o644); err != nil {
+			if err := writeAtomic(path, restoreLineEndings(body, crlf), 0o644); err != nil {
 				return changed, err
 			}
 			changed = append(changed, target.rel)
