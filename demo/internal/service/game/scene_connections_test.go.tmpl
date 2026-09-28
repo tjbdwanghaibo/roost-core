@@ -202,6 +202,11 @@ func readSceneFrame(reader io.Reader) (uint32, []byte, error) {
 	return binary.BigEndian.Uint32(header[4:8]), payload, nil
 }
 
+// waitActiveSessions waits, bounded, until the player has want registered
+// connections. The transport writes the authentication ack before it
+// registers the session, so a dialed client is not yet one the scene can see:
+// a member without a registered connection is swept out when the next player
+// joins, and a push to it fails (RR-20260928-15).
 func waitActiveSessions(t *testing.T, transport *accessplayertcp.Runtime, playerID int64, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -263,6 +268,7 @@ func TestAStalledOldConnectionDoesNotResetTheLiveClient(t *testing.T) {
 	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reconnectID)
 	moverClient := dialScenePlayer(t, addr, moverID, true)
 	dialScenePlayer(t, addr, reconnectID, false) // the old connection: it stops reading
+	waitActiveSessions(t, transport, moverID, 1)
 	waitActiveSessions(t, transport, reconnectID, 1)
 	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
 	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
@@ -333,6 +339,7 @@ func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
 	moverClient := dialScenePlayer(t, addr, moverID, true)
 	dialScenePlayer(t, addr, stalledID, false)
 	dialScenePlayer(t, addr, stalledID, false)
+	waitActiveSessions(t, transport, moverID, 1)
 	waitActiveSessions(t, transport, stalledID, 2)
 	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
 	joinReady(t, scene, ctx, stalled, spatial.Point{X: 510, Y: 500})

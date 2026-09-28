@@ -1368,6 +1368,20 @@ func sendStuckRequest(t *testing.T, connection net.Conn, sequence uint32) {
 	if err := client.writeFrame(context.Background(), 0, stuckRequestID, sequence, []byte("login")); err != nil { t.Fatal(err) }
 }
 
+// waitRegistered waits, bounded, until the player has want registered
+// sessions. The server writes the authentication ack before it registers the
+// session (serveConnection), so a client holding its ack does not yet prove
+// the server counts it: a test that pushes, closes or counts right after
+// dialAuthenticated has to wait for the registration first (RR-20260927-02,
+// RR-20260928-15).
+func waitRegistered(t *testing.T, runtime *Runtime, playerID int64, want int) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); runtime.ActiveSessions(playerID) != want && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := runtime.ActiveSessions(playerID); got != want { t.Fatalf("active sessions = %%d, want %%d", got, want) }
+}
+
 // waitReleased waits for the server's connection slots and per-IP counts to
 // come down to what the still-open connections hold.
 func waitReleased(t *testing.T, server *Server, open int) {
@@ -1566,7 +1580,7 @@ func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) 
 	received := readPushes(t, server, live)
 	stalled(t, server, "stalled")
 	waitReleased(t, server, 2)
-	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("active sessions = %%d, want 2", got) }
+	waitRegistered(t, runtime, 7, 2)
 
 	pushes, err := fillUntilOneFails(t, runtime)
 	if err != nil { t.Errorf("a push the live connection took was reported as failed: %%v", err) }
@@ -1593,6 +1607,7 @@ func TestAPushNoConnectionTakesFailsAndClosesThemAll(t *testing.T) {
 	stalled(t, server, "first")
 	stalled(t, server, "second")
 	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
 	var err error
 	for range 128 {
 		if err = runtime.PushPlayer(context.Background(), 7, pushTestMessageID, bytes.Repeat([]byte{1}, 512<<10)); err != nil || runtime.ActiveSessions(7) == 0 { break }
@@ -1618,6 +1633,7 @@ func TestAPushThatFailsBeforeWritingClosesNoConnection(t *testing.T) {
 	readPushes(t, server, first)
 	readPushes(t, server, second)
 	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := runtime.PushPlayer(cancelled, 7, pushTestMessageID, []byte("x")); !errors.Is(err, context.Canceled) { t.Fatalf("cancelled push = %%v, want context.Canceled", err) }
@@ -1638,6 +1654,7 @@ func TestASessionPushThatCannotBeWrittenClosesThatSession(t *testing.T) {
 	readPushes(t, server, live)
 	stalled(t, server, "stalled")
 	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
 	var err error
 	for range 128 {
 		if err = runtime.PushSession(context.Background(), "stalled", pushTestMessageID, bytes.Repeat([]byte{1}, 512<<10)); err != nil { break }
@@ -1659,12 +1676,8 @@ func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	dialAuthenticated(t, server, "first")
 	dialAuthenticated(t, server, "second")
 	waitReleased(t, server, 2)
-	// The server writes the authentication ack before it registers the
-	// session: wait for both to be registered, or CloseSessions may not see one.
-	for deadline := time.Now().Add(2 * time.Second); runtime.ActiveSessions(7) != 2 && time.Now().Before(deadline); {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := runtime.ActiveSessions(7); got != 2 { t.Fatalf("active sessions = %%d, want 2", got) }
+	// Both registered, or CloseSessions may not see one.
+	waitRegistered(t, runtime, 7, 2)
 
 	if got := runtime.CloseSessions(7, errors.New("fenced")); got != 2 { t.Errorf("CloseSessions closed the player's 2 open sessions and reported %%d", got) }
 	// Both are closed now, whether or not their teardown has unregistered them yet.
@@ -1794,6 +1807,7 @@ func TestAnExpiringCallerDeadlineClosesNoHealthyConnection(t *testing.T) {
 		received = append(received, readPushes(t, server, connection))
 	}
 	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
 	failures := 0
 	var broken error
 	for range 2000 {
