@@ -1,5 +1,11 @@
 # Roost Review 问题索引
 
+[RR-20260928-14](RR-20260928-14.md)：P3 `codegen/internal/roost` 在 Windows CI 超时（已修复，未发版）。
+
+[RR-20260928-13](RR-20260928-13.md)：P4 CRLF Secret 示例被静默跳过（已修复，未发版）。
+
+[RR-20260928-12](RR-20260928-12.md)：P4 回滚时新进程按旧 unit 的 TimeoutStopSec 被停（已修复，未发版）。
+
 [RR-20260928-11](RR-20260928-11.md)：P2 pipelined 回退 strict 路径时 `WAL.Append` 不等 fsync（已修复，未发版）。
 
 [RR-20260928-10](RR-20260928-10.md)：P3 install.sh 升级失败自动回滚 / rollback.sh 回不到旧 release（已修复，未发版）。

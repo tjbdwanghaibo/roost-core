@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～11）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
+> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～14）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
 > 第五、六轮独立审计见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)、[audit6](docs/review/REVIEW-2026-09-27-audit6.md)。
 
 ### Changed（行为收紧 / 需要注意）
@@ -37,6 +37,9 @@
 - **strict / pipelined 的 Remote 等待失败除明确拒绝外都带 `ErrRemotePersistenceIndeterminate`（RR-20260928-08）**：tracker 被淘汰后重新登记报 `ErrRemoteOverloaded` 的回复不再误标 `ErrRemotePartRejected`（判别表第 4 行），改落第 2 行；本地已提交且嵌套事务也已提交时外层文案为 `nest: a nested isolated transaction also committed`（`errors.Is` 不变）。
 - **shell / systemd 回滚连同 unit 一起回退（RR-20260928-10，需 `roost project sync`）**：每个 release 的 unit 记在 `$APP_ROOT/units/<version>.service`，install.sh 的自动回滚与 `rollback.sh` 装回目标 release 的 unit 并 `daemon-reload`（此前从 RR-20260928-05 之前安装的 release 升级失败时回滚报 `rollback also failed readiness`）。
 
+- **shell / systemd 切换 release 先按当前 unit 停机（RR-20260928-12，需 `roost project sync`）**：install.sh 与 rollback.sh 先 stop（当前 unit）→ 切 current → 装入目标 unit → start，正在运行的版本按它自己的 TimeoutStopSec 停机；目标 unit 装不上时恢复 current 与 unit 并非零退出；rollback.sh 拒绝版本号 `.` / `..`。
+- **CRLF 的 k8s Secret 示例与 LF 同样编辑（RR-20260928-13，行为变化）**：`add mod` / `add saga` / `add transport tcp` 按原行尾写回，sync 的停机块刷新支持 CRLF；认不出 Secret 结构时各命令统一在 stderr 打印 WARN 并照常完成——`add transport tcp` 遇到合并不了的 Secret 不再整体失败。
+
 ### Added
 
 - 配置：`nest.entity_load_timeout`、`nest.unload_resync.{workers,attempts,queue_capacity}`（RR-20260927-13，缺省不变，负值拒绝启动）；`remote_entity.snapshot_l2_key_prefix`（RR-20260927-17，缺省空时键不变，设置或修改需整体重启）。
@@ -49,7 +52,7 @@
 - **生成器 / doctor**：Windows CI 上 RR-80 写失败用例（RR-20260927-01）；生成的 `Runtime.CloseSessions` 返回实际关闭数（RR-20260927-02，需重新生成）；`deploy/dev/run.sh` 登记游戏服传 `redis.db` / `redis.password`（RR-20260927-03）；
   doctor 对 0 或负的 `total_timeout` / `dataengine.shutdown_timeout` 按运行时 30s 判定，“Set it to”按配置的 dataengine 预算、各份不同时逐文件给出（RR-20260927-04）。
 - **其他**：不可比较的自定义 `lock.Mutex` 不再 panic（RR-20260927-25 / 30）；共享冷加载领头方以任何方式离开都登记离开，迟到 `RunLocal` 不再永久阻塞（RR-20260927-29）；Guard 撤销记录按（EntityManager, ID）判定（RR-20260928-02）；demo 模板测试流名解析（RR-20260927-35）；saga 收件箱 claim 标记失败记 Warn 与计数（RR-20260927-16）；卸载后重载最坏延迟写成真实上界，默认约 43 小时（RR-20260927-14）。
-- **测试与卫生**：nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；32 个文件 gofmt（全仓 `gofmt -l` 为空）；`entity.ResetEntityRegistryForTest` 标 Deprecated；
+- **测试与卫生**：`codegen/internal/roost` 包测试按参数缓存生成工程、慢用例并行，本机 265s→73s，修复 Windows CI 超时（RR-20260928-14）；nest 单用例可 `-count>1` 重跑（RR-20260927-20）；B40 同 ID 新建用例时序修正；仓库根不再跟踪 `glsvet` 二进制；32 个文件 gofmt（全仓 `gofmt -l` 为空）；`entity.ResetEntityRegistryForTest` 标 Deprecated；
   补测收为回归：B02 / B04 / B08～B10 / B13～B19 / B21 / B22 / B24 / B26 / B37，均见清单。
 - **文档**：USER_GUIDE §4 判别表补 `ErrRemoteCommitTimeout` 并更正收尾阶段表述；`ErrNestedTransactionInRemoteMessage` 的 `PrepareRemoteWriteBatch` 窗口；RR-54 包装 Getter 契约；kit/README 的 `roost.room` / `roost.sync` 共用 `ROOST_SYNC`；多份修复记录追加更正与关闭说明。
 
