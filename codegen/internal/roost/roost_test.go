@@ -83,6 +83,7 @@ func TestDefaultManifestUsesOnlyDataEnginePersistence(t *testing.T) {
 }
 
 func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	result, root, err := NewProject(NewOptions{
 		Name:     "planet",
@@ -175,11 +176,7 @@ func TestLoadManifestRejectsUnknownFields(t *testing.T) {
 }
 
 func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "bare")
 	manifestPath := filepath.Join(root, ManifestName)
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -289,6 +286,7 @@ func TestAddCamelCaseProtocolUsesSnakeFileAndPascalTypes(t *testing.T) {
 }
 
 func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
@@ -392,6 +390,7 @@ func TestAddComponentInfersOnlyEntityAndRejectsAmbiguity(t *testing.T) {
 }
 
 func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
@@ -507,13 +506,10 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 }
 
 func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	var output bytes.Buffer
-	err = DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "first-business"}, &output)
+	err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "first-business"}, &output)
 	if err == nil {
 		t.Fatal("incomplete first business workflow unexpectedly passed")
 	}
@@ -525,17 +521,14 @@ func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
 }
 
 func TestDoctorFailsWhenGeneratedProjectDoesNotCompile(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	if err := os.WriteFile(filepath.Join(root, "broken.go"), []byte("package planet\nfunc broken("), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var output bytes.Buffer
-	err = DoctorWithOptions(root, DoctorOptions{Strict: false}, &output)
+	err := DoctorWithOptions(root, DoctorOptions{Strict: false}, &output)
 	if err == nil {
 		t.Fatalf("non-compiling project unexpectedly passed doctor:\n%s", output.String())
 	}
@@ -545,11 +538,8 @@ func TestDoctorFailsWhenGeneratedProjectDoesNotCompile(t *testing.T) {
 }
 
 func TestProjectNextReturnsOnlyTheCurrentSafeAction(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	var output bytes.Buffer
 	if err := PrintNextStep(root, "", &output); err != nil {
 		t.Fatal(err)
@@ -575,11 +565,8 @@ func TestProjectNextReturnsOnlyTheCurrentSafeAction(t *testing.T) {
 }
 
 func TestProjectNextRejectsEmptyDAOAndComponentSkeleton(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	for _, step := range []AddOptions{
 		{Kind: "access", Name: "player", Service: "game"},
 		{Kind: "entity", Name: "Player"},
@@ -616,11 +603,8 @@ func TestProjectNextRejectsEmptyDAOAndComponentSkeleton(t *testing.T) {
 }
 
 func TestAddManifestMutationRollsBackWhenSyncPreflightFails(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	manifestPath := filepath.Join(root, ManifestName)
 	before, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -643,11 +627,8 @@ func TestAddManifestMutationRollsBackWhenSyncPreflightFails(t *testing.T) {
 }
 
 func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err == nil || !strings.Contains(err.Error(), "roost add access player") {
 		t.Fatalf("transport without access error = %v", err)
 	}
@@ -740,11 +721,7 @@ func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
 	if !publishedDataEngineGeneratorDependencies {
 		t.Skip("GOWORK=off doctor gate resumes after the Data Engine framework release")
 	}
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
@@ -777,11 +754,8 @@ func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
 }
 
 func TestConfigEnablePlayerTCPRefusesSkeletonThenPreservesConfig(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
@@ -789,7 +763,7 @@ func TestConfigEnablePlayerTCPRefusesSkeletonThenPreservesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = Run([]string{"config", "enable", "player-tcp", "--root", root}, &output, &output)
+	err := Run([]string{"config", "enable", "player-tcp", "--root", root}, &output, &output)
 	if err == nil || !strings.Contains(err.Error(), "auth.go is still") {
 		t.Fatalf("enable with skeleton auth error = %v", err)
 	}
@@ -877,11 +851,8 @@ func TestCLIRejectsDangerousDefaultsAndUnexpectedArguments(t *testing.T) {
 }
 
 func TestProjectInputSnapshotRejectsConcurrentBusinessEdit(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "bare")
 	manifest, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
@@ -952,11 +923,7 @@ func TestRelatedBusinessFilesPreserveConcurrentEntityEdit(t *testing.T) {
 }
 
 func TestAddRejectsTraversalInRelatedNames(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "bare")
 	if _, err := Add(root, AddOptions{Kind: "component", Name: "Profile", Entity: `..\..\outside`}); err == nil || !strings.Contains(err.Error(), "invalid Entity name") {
 		t.Fatalf("traversal Entity error = %v", err)
 	}
@@ -1018,11 +985,7 @@ func TestGuardedRollbackDoesNotOverwriteConcurrentEdit(t *testing.T) {
 }
 
 func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "bare")
 	paths, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"})
 	if err != nil {
 		t.Fatal(err)
@@ -1101,6 +1064,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 }
 
 func TestAddSagaGeneratesValidatedDefinition(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
 	if err != nil {
@@ -1570,11 +1534,8 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 }
 
 func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "bare")
 	makefilePath := filepath.Join(root, "Makefile")
 	legacy := []byte("# Code generated by roost-codegen. DO NOT EDIT.\n\n.PHONY: sync\nsync:\n\t$(ROOST) project sync\n")
 	if err := os.WriteFile(makefilePath, legacy, 0o644); err != nil {
@@ -1614,11 +1575,8 @@ func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
 }
 
 func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "bare")
 	makefilePath := filepath.Join(root, "Makefile")
 	custom := []byte("build:\n\tgo build ./...\n")
 	if err := os.WriteFile(makefilePath, custom, 0o644); err != nil {
@@ -1660,11 +1618,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 }
 
 func TestDiffIgnoresResolvedUserOwnedGoMod(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "bare")
 	goModPath := filepath.Join(root, "go.mod")
 	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
@@ -1684,6 +1638,7 @@ func TestDiffIgnoresResolvedUserOwnedGoMod(t *testing.T) {
 }
 
 func TestSyncPreflightsConflictsBeforeWriting(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})
 	if err != nil {
@@ -1752,6 +1707,7 @@ func TestSyncRollbackPreservesConcurrentEdit(t *testing.T) {
 }
 
 func TestSyncCommitsGeneratedOrphanDeletion(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
@@ -1786,6 +1742,7 @@ func TestSyncCommitsGeneratedOrphanDeletion(t *testing.T) {
 }
 
 func TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,

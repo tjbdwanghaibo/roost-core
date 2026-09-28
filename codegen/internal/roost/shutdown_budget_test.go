@@ -158,13 +158,7 @@ func opsPortOf(t *testing.T, root, service string) int {
 }
 
 func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	if _, _, err := NewProject(NewOptions{
-		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	target := newGameDemo(t)
 	counts, declares := bootstrapModCounts(t, target)
 	// The real game service of the demo: 20 service Mods + lock, ops, statslog.
 	if counts["game"] != 23 || !declares["game"].dataengine || !declares["game"].playerTCP {
@@ -220,11 +214,8 @@ func readProjectFile(t *testing.T, root, rel string) string {
 // then adds saga and the two player access Mods). A block someone edited, or
 // one from an older generator, is left alone.
 func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	counts, declares := bootstrapModCounts(t, root)
 	before, _ := expectedShutdown(counts["game"], declares["game"])
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "redis", Service: "game"}); err != nil {
@@ -312,13 +303,8 @@ func assertDeployedGrace(t *testing.T, root, service string, want int) {
 // halfway through the App's own 60s window. The same holds for a hand-edited
 // total. So grace = max(formula, the configured total) + 5s.
 func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	if _, _, err := NewProject(NewOptions{
-		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	target := newGameDemo(t)
 	// account: the shutdown block a generator before RR-66 wrote (RR-51: 60s for every service).
 	legacy := "shutdown:\n" +
 		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
@@ -363,13 +349,8 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 // service still on the old 60s default, now generated with a 28s grace
 // period), and one too short for its Mods (the game service on 60s).
 func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	if _, _, err := NewProject(NewOptions{
-		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	target := newGameDemo(t)
 	m, err := LoadManifest(target)
 	if err != nil {
 		t.Fatal(err)

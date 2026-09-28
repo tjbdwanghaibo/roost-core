@@ -19,14 +19,10 @@ import (
 	"testing"
 )
 
+// newSecretTestProject 返回一份私有的 configdata + saga 工程，取自夹具缓存（RR-20260928-14）。
 func newSecretTestProject(t *testing.T) string {
 	t.Helper()
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Features: []string{"saga"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
+	return copyOfNewProject(t, "saga")
 }
 
 var secretTestConfigs = []string{
@@ -38,6 +34,7 @@ var secretTestConfigs = []string{
 var bareLineFeed = regexp.MustCompile("(^|[^\r])\n")
 
 func TestCRLFKubernetesSecretExampleGetsTheSameEditsAsLF(t *testing.T) {
+	t.Parallel()
 	lf, crlf := newSecretTestProject(t), newSecretTestProject(t)
 	for _, rel := range secretTestConfigs {
 		path := filepath.Join(crlf, filepath.FromSlash(rel))
@@ -109,6 +106,7 @@ func runCLI(t *testing.T, args ...string) (string, error) {
 }
 
 func TestUnrecognizedKubernetesSecretExampleIsAVisibleWarningForEveryCommand(t *testing.T) {
+	t.Parallel()
 	secretRel := secretTestConfigs[2]
 	t.Run("add mod, no config.yaml block", func(t *testing.T) {
 		root := newSecretTestProject(t)

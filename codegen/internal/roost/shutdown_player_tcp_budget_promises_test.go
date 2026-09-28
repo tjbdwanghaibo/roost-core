@@ -105,6 +105,7 @@ func TestDoctorRejectsANegativePlayerTCPShutdownTimeout(t *testing.T) {
 // recognises them (their summary still matches what that generator wrote)
 // and moves them, and every template, to the new plan.
 func TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	plan := gamePlan(t, root)
 	before := plan

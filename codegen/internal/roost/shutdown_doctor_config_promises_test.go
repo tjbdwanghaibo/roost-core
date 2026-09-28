@@ -48,6 +48,7 @@ var accountConfigs = []string{
 // A framework service needs 3s x 6 = 18s; a total_timeout of 0s or below runs
 // on the App's 30s, which covers it.
 func TestDoctorJudgesANonPositiveTotalAsTheAppsFallback(t *testing.T) {
+	t.Parallel()
 	for _, total := range []string{"0s", "-5s"} {
 		t.Run(total, func(t *testing.T) {
 			root := newGameDemo(t)
@@ -71,6 +72,7 @@ func TestDoctorJudgesANonPositiveTotalAsTheAppsFallback(t *testing.T) {
 // The game service needs more than 30s: the WARN says so from the App's 30s,
 // not from 0s.
 func TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	dev := gameConfigs[0]
 	setShutdownTotal(t, root, dev, "0s")
@@ -103,6 +105,7 @@ func TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback(t *testing.T) {
 // The advice is computed from the dataengine budget the configs set, and
 // following it makes the WARN go away.
 func TestDoctorAdviceFollowsTheConfiguredDataEngineBudget(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	for _, rel := range gameConfigs {
 		setDataEngineShutdownTimeout(t, root, rel, "60s")

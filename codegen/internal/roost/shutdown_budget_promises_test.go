@@ -103,22 +103,18 @@ func editManifest(t *testing.T, root string, edit func(*Manifest)) {
 	writeProjectFile(t, root, ManifestName, string(raw))
 }
 
+// newGameDemo 返回一份私有的 game-demo 工程。同参数只真实 NewProject 一次，之后复制（RR-20260928-14，
+// 见 project_fixture_test.go；副本与新鲜生成逐字节相同）。
 func newGameDemo(t *testing.T) string {
 	t.Helper()
-	target := filepath.Join(t.TempDir(), "planet")
-	if _, _, err := NewProject(NewOptions{
-		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return target
+	return copyOfNewProject(t, "game-demo")
 }
 
 // (a) An old 60s project upgraded with sync, then only config.game.yaml raised
 // to the value doctor suggests (REPRO-2026-09-26-07 §3 step 2): the production
 // example and the secret example still run 60s, and doctor must say so.
 func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	dev := "configs/service/config.game.yaml"
 	prod := "configs/service/config.game.prod.example.yaml"
@@ -168,6 +164,7 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 // template to the new plan, leave project diff empty and doctor all OK with
 // the grace period the templates on disk actually set.
 func TestOneSyncConvergesAfterAServiceLosesAMod(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	editManifest(t, root, func(m *Manifest) {
 		spec := m.Services["game"]
@@ -197,11 +194,8 @@ func TestOneSyncConvergesAfterAServiceLosesAMod(t *testing.T) {
 
 // (c) A service gains a Mod: one sync, the same promises.
 func TestOneSyncConvergesAfterAServiceGainsAMod(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "redis", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +213,7 @@ func TestOneSyncConvergesAfterAServiceGainsAMod(t *testing.T) {
 // what the generator would render now. Templates raised by hand to 120s: the
 // OK line says 120s.
 func TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	graces := deployedGraces(t, root, "game")
 	generated := graces["k8s"]
 	replace := func(rel, old, new string) {
@@ -338,11 +328,7 @@ func blockWritesIn(t *testing.T, dir string) {
 // nothing of the sync is (the templates already rendered for the new plan are
 // not left behind with the old configs).
 func TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	editManifest(t, root, func(m *Manifest) {
 		spec := m.Services["game"]
 		spec.Mods = append(spec.Mods, "redis")
@@ -358,11 +344,7 @@ func TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten(t *testing.T) {
 
 // A later write failing rolls the refreshed configs back with the templates.
 func TestSyncRollsTheShutdownRefreshBackWithTheTemplates(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	editManifest(t, root, func(m *Manifest) {
 		spec := m.Services["game"]
 		spec.Mods = append(spec.Mods, "redis")
@@ -382,11 +364,7 @@ func TestSyncRollsTheShutdownRefreshBackWithTheTemplates(t *testing.T) {
 // commit) stops the sync like any other project input: the developer's edit
 // stays, no template is written.
 func TestSyncRefusesAConfigEditedWhileItRuns(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	editManifest(t, root, func(m *Manifest) {
 		spec := m.Services["game"]
 		spec.Mods = append(spec.Mods, "redis")
@@ -397,7 +375,7 @@ func TestSyncRefusesAConfigEditedWhileItRuns(t *testing.T) {
 	syncProjectBeforeCommit = func() { writeProjectFile(t, root, rel, edited) }
 	t.Cleanup(func() { syncProjectBeforeCommit = nil })
 	before := projectFileHashes(t, root)
-	_, err = SyncProject(root)
+	_, err := SyncProject(root)
 	if err == nil || !strings.Contains(err.Error(), rel) || !strings.Contains(err.Error(), "rerun") {
 		t.Fatalf("sync with %s edited concurrently: %v", rel, err)
 	}

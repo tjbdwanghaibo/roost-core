@@ -11,6 +11,7 @@ import (
 // 调用者（roost.yaml uses_rpcs）装配生成的 ClientMod；生成的两半随 make generate 重生成；
 // ErrRequestInvalid 的码来自清单的 errcode 号段。
 func TestAddRPCScaffoldsOwnerAndWiresCaller(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,

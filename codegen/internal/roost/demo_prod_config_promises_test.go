@@ -118,6 +118,7 @@ func demoGameSection(key string) bool {
 }
 
 func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	m, err := LoadManifest(root)
 	if err != nil {

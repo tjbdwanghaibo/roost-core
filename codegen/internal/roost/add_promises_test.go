@@ -11,6 +11,7 @@ import (
 // U-0089 (C2): every refusal in Add's per-kind parameter checks must fire on
 // its own, and a refused Add must leave roost.yaml byte-identical.
 func TestAddRefusesEachInvalidKindParameter(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,

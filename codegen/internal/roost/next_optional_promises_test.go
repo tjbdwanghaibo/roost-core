@@ -11,11 +11,7 @@ import (
 // D16 · project next 的进阶引导：必做链完成后，列出框架有、工程还没用的能力（rpc / saga / attribute /
 // skill / webroute / cfggen），每条一个命令一个理由；用了的不再提示。
 func TestOptionalHintsNameWhatTheProjectHasNotUsedYet(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := copyOfNewProject(t, "configdata")
 	m, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
@@ -52,11 +48,8 @@ func TestOptionalHintsNameWhatTheProjectHasNotUsedYet(t *testing.T) {
 // C14 · 换行不是内容：Windows 检出把生成文件存成 CRLF，generate --check 不能因此报 stale；
 // 生成工程还带一份 .gitattributes 把生成的文本文件钉成 LF。
 func TestGenerateCheckToleratesCRLFCheckouts(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
 	if err := Generate(root, GenerateOptions{Check: true}); err != nil {
 		t.Fatalf("fresh project is stale: %v", err)
 	}

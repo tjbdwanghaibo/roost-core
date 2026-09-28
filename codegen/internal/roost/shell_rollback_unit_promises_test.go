@@ -218,6 +218,7 @@ func (r *shellDeployRehearsal) installLegacyRelease() {
 }
 
 func TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit(t *testing.T) {
+	t.Parallel()
 	r := newShellDeployRehearsal(t)
 	r.installLegacyRelease()
 	release := func(v string) string { return filepath.Join(r.appRoot, "releases", v) }

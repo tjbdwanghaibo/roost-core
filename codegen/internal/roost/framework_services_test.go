@@ -157,6 +157,7 @@ func TestAProjectWithoutFrameworkServicesDoesNotDependOnRoostService(t *testing.
 // Init — and the two lifecycle files must coexist in one package, which they
 // did not while both declared FromRegistry.
 func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	result, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
 		Mods: []string{"configdata"}, Template: "game"})
@@ -215,6 +216,7 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 // doctor reports each hosted service whose collaborators are still the
 // generated fail-closed stubs, and clears the item once they are replaced.
 func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Template: "game"})
 	if err != nil {

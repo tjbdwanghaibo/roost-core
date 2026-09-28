@@ -219,6 +219,7 @@ func TestKubernetesBaseIsNotAnAncestorOfItsOverlays(t *testing.T) {
 // names and the roost namespace instead — and leaves a hand-written file and
 // the never-owned secret example alone.
 func TestSyncRemovesTheLegacyKubernetesBase(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
 		Services: []string{"game"}, Mods: []string{"configdata"}, Features: []string{"config"}}); err != nil {

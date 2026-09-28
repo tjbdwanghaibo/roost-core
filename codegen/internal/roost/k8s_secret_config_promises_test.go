@@ -98,11 +98,8 @@ func TestGameDemoKubernetesSecretExamplesMirrorTheProductionExamples(t *testing.
 // The same promise on a plain project, one appender at a time: add mod,
 // add saga, add access + add transport tcp. A repeat changes nothing.
 func TestAddedConfigSectionsReachTheKubernetesSecretExample(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Features: []string{"saga"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "saga")
 	secretRel := filepath.Join(root, "deploy", "k8s", "base", "secret.game.example.yaml")
 	steps := []AddOptions{
 		{Kind: "mod", Name: "redis", Service: "game"},

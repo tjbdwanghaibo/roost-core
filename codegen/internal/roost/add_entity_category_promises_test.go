@@ -13,6 +13,7 @@ import (
 // 实体的那一档,于是被排在所有东西之前,而且彼此同档、互相不能叠锁。Other 是安全默认:
 // 持有它之后什么都锁不了,不会打乱别人依赖的顺序。
 func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,

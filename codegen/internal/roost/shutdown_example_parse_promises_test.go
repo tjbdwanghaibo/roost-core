@@ -35,6 +35,7 @@ func setDataEngineShutdownTimeout(t *testing.T, root, rel, value string) {
 }
 
 func TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse(t *testing.T) {
+	t.Parallel()
 	dev := "configs/service/config.game.yaml"
 	prod := "configs/service/config.game.prod.example.yaml"
 	secret := "deploy/k8s/base/secret.game.example.yaml"

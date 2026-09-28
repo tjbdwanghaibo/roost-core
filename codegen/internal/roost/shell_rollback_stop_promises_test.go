@@ -56,6 +56,7 @@ func (r *shellDeployRehearsal) requireStopsUnderOwnUnit(step string, want ...str
 }
 
 func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
+	t.Parallel()
 	r := newShellDeployRehearsal(t)
 	r.installLegacyRelease()
 	r.stops()
@@ -99,6 +100,7 @@ func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
 }
 
 func TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled(t *testing.T) {
+	t.Parallel()
 	r := newShellDeployRehearsal(t)
 	r.installLegacyRelease()
 	if out, err := r.run("good", "deploy/shell/install.sh", "game", "1003", "v2", "../config.game.yaml"); err != nil {
@@ -146,6 +148,7 @@ func TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled(t 
 // OPEN-ITEMS audit8 D4：rollback.sh 的版本号是 releases/ 下的目录名，"." 与 ".." 指向
 // releases 本身或 APP_ROOT，不是已安装的 release，必须在动任何东西之前拒绝。
 func TestShellRollbackRejectsDotVersions(t *testing.T) {
+	t.Parallel()
 	r := newShellDeployRehearsal(t)
 	r.installLegacyRelease()
 	for _, version := range []string{".", ".."} {

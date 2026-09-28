@@ -13,11 +13,8 @@ import (
 // 8 GiB stream_max_bytes 建流，隔离环境的 JetStream 存不下，game 进程起不来，而配置文件里
 // 根本没有可改的 saga 段。
 func TestAddModAppendsItsConfigSectionToExistingServiceConfigs(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "planet")
-	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Features: []string{"saga"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	root := copyOfNewProject(t, "saga")
 	read := func(rel string) string {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {

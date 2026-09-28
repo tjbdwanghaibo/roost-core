@@ -108,6 +108,7 @@ func TestDemoTemplateKeepsTheGameTemplateAndItsFeatures(t *testing.T) {
 // present. Compilation against roost-core is verified by CI, which generates a
 // project from this template and builds it.
 func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
@@ -562,6 +563,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 // first service is not called "game" gets them under its own directory, in
 // its own package, naming itself correctly.
 func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"arena"},
