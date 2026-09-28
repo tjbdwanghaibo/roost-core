@@ -271,51 +271,51 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260926-83](bug/RR-20260926-83.md) | P4 entity 包测试不能重复运行 | [修复](bugfix/RR-20260926-83.md)（v1.17.1） |
 | [RR-20260926-84](bug/RR-20260926-84.md) | P3（潜在） 收尾阶段 RunIsolatedTransaction 被当成消息自己的事务 | [修复](bugfix/RR-20260926-84.md)（v1.17.1） |
 | [RR-20260926-85](bug/RR-20260926-85.md) | P4 RR-79 释放通知删掉重开后被撤销的 Direct 绑定 | [修复](bugfix/RR-20260926-85.md)（v1.17.1） |
-| [RR-20260927-01](bug/RR-20260927-01.md) | P4 Windows 上 RR-80 写失败用例注入不生效（CI 红） | [修复](bugfix/RR-20260927-01.md)（未发布） |
-| [RR-20260927-02](bug/RR-20260927-02.md) | P4 生成的 TCP `CloseSessions` 恒为 0 | [修复](bugfix/RR-20260927-02.md)（未发布） |
-| [RR-20260927-03](bug/RR-20260927-03.md) | P4 demo run.sh 不传 redis.db / password，玩家 id 计数键不带前缀 | [修复](bugfix/RR-20260927-03.md)（未发布） |
-| [RR-20260927-04](bug/RR-20260927-04.md) | P4 doctor 非正时长判定与运行时不一致、建议值口径 | [修复](bugfix/RR-20260927-04.md)（未发布） |
-| [RR-20260927-05](bug/RR-20260927-05.md) | P3 player TCP Mod 不声明停机预算 | [修复](bugfix/RR-20260927-05.md)（未发布） |
-| [RR-20260927-06](bug/RR-20260927-06.md) | P3 fence 之后外层自己的事务仍交给 committer | [修复](bugfix/RR-20260927-06.md)（未发布） |
-| [RR-20260927-07](bug/RR-20260927-07.md) | P3 嵌套独立事务裸 mutation 绕过 RR-74 | [修复](bugfix/RR-20260927-07.md)（未发布） |
-| [RR-20260927-09](bug/RR-20260927-09.md) | P3 Remote 托管 + sid 作用域 DAO 提交路径不拒绝 | [修复](bugfix/RR-20260927-09.md)（未发布） |
-| [RR-20260927-10](bug/RR-20260927-10.md) | P4 `RegisterEntityKindDefs` 出错留半批 | [修复](bugfix/RR-20260927-10.md)（未发布） |
-| [RR-20260927-11](bug/RR-20260927-11.md) | P3 `CreateInScope` 捕获失败被吞掉仍提交 | [修复](bugfix/RR-20260927-11.md)（未发布） |
-| [RR-20260927-12](bug/RR-20260927-12.md) | P4 撤销新建实体用 `DestroyReasonCommon` | [修复](bugfix/RR-20260927-12.md)（未发布） |
-| [RR-20260927-13](bug/RR-20260927-13.md) | P4 卸载后重载 / 共享加载超时参数没接 kit 配置 | [修复](bugfix/RR-20260927-13.md)（未发布） |
-| [RR-20260927-14](bug/RR-20260927-14.md) | P4 卸载后重载最坏延迟文档不实 | [修复](bugfix/RR-20260927-14.md)（未发布） |
-| [RR-20260927-15](bug/RR-20260927-15.md) | P3 同 fence 下 Remote 版本向量可回退 | [修复](bugfix/RR-20260927-15.md)（未发布） |
-| [RR-20260927-16](bug/RR-20260927-16.md) | P4 saga 收件箱 `markCompleted` 失败静默 | [修复](bugfix/RR-20260927-16.md)（未发布） |
-| [RR-20260927-17](bug/RR-20260927-17.md) | P4 Remote L2 快照键不带部署前缀 | [修复](bugfix/RR-20260927-17.md)（未发布） |
-| [RR-20260927-18](bug/RR-20260927-18.md) | P3 demo 场景 Manager 未接卸载后重载 | [修复](bugfix/RR-20260927-18.md)（未发布） |
-| [RR-20260927-19](bug/RR-20260927-19.md) | P4 场景重开复制会话失败无计数 | [修复](bugfix/RR-20260927-19.md)（未发布） |
-| [RR-20260927-20](bug/RR-20260927-20.md) | P4 nest 单用例 `-count>1` panic duplicate handler | [修复](bugfix/RR-20260927-20.md)（未发布） |
-| [RR-20260927-21](bug/RR-20260927-21.md) | P4 同 Guard 自我撤销后再建同 ID 空转重排 | [修复](bugfix/RR-20260927-21.md)（未发布） |
-| [RR-20260927-22](bug/RR-20260927-22.md) | P4 `Unregister` 作用在已 forget 的旧 subject 上 | [修复](bugfix/RR-20260927-22.md)（未发布） |
-| [RR-20260927-23](bug/RR-20260927-23.md) | P4 demo 场景未接 `OnEntityLoaded → Rebind` | [修复](bugfix/RR-20260927-23.md)（未发布） |
-| [RR-20260927-24](bug/RR-20260927-24.md) | P4 strict 截止回复缺 `ErrRemotePersistenceIndeterminate` | [修复](bugfix/RR-20260927-24.md)（未发布） |
-| [RR-20260927-25](bug/RR-20260927-25.md) | P4 不可比较的自定义 Mutex 比较 panic | [修复](bugfix/RR-20260927-25.md)（未发布） |
-| [RR-20260927-26](bug/RR-20260927-26.md) | P3 `ReleaseCast(旧实例)` 放掉同 ID 新实例的锁 | [修复](bugfix/RR-20260927-26.md)（未发布） |
-| [RR-20260927-27](bug/RR-20260927-27.md) | P4 非 Nest 持锁领头方冷加载死锁 | [修复](bugfix/RR-20260927-27.md)（未发布） |
-| [RR-20260927-28](bug/RR-20260927-28.md) | P4 `RetractSyncSubject` 锁外比对后误注销新登记 | [修复](bugfix/RR-20260927-28.md)（未发布） |
-| [RR-20260927-29](bug/RR-20260927-29.md) | P4 领头方正常完成时不关 `leaderAway`，迟到 `RunLocal` 永久阻塞 | [修复](bugfix/RR-20260927-29.md)（未发布） |
-| [RR-20260927-30](bug/RR-20260927-30.md) | P4 含装着 func 的接口字段的 Mutex 仍 panic | [修复](bugfix/RR-20260927-30.md)（未发布） |
-| [RR-20260927-31](bug/RR-20260927-31.md) | P3 Cast 捕获失败被吞后事务照常提交 | [修复](bugfix/RR-20260927-31.md)（未发布） |
-| [RR-20260927-32](bug/RR-20260927-32.md) | P4 提交前拒绝不带 `ErrCommitRejected`，判别表表述 | [修复](bugfix/RR-20260927-32.md)（未发布） |
-| [RR-20260927-33](bug/RR-20260927-33.md) | P2 生成 compose 的 `tmpfs` 被逗号拆开，服务起不来 | [修复](bugfix/RR-20260927-33.md)（未发布） |
-| [RR-20260927-34](bug/RR-20260927-34.md) | P2 生产镜像缺 `configs/data`，容器启动即失败 | [修复](bugfix/RR-20260927-34.md)（未发布） |
-| [RR-20260927-35](bug/RR-20260927-35.md) | P4 demo 模板测试期望流名未含 `roost.room` 兼容映射 | [修复](bugfix/RR-20260927-35.md)（未发布） |
-| [RR-20260928-01](bug/RR-20260928-01.md) | P4 多 ManagerAccess 下积压 gauge 互相覆盖 | [修复](bugfix/RR-20260928-01.md)（未发布） |
-| [RR-20260928-02](bug/RR-20260928-02.md) | P4 Guard 跨 Manager 同 ID 时 RR-21 误判 | [修复](bugfix/RR-20260928-02.md)（未发布） |
-| [RR-20260928-03](bug/RR-20260928-03.md) | P3 本地已提交、Remote 明确拒绝时回复无哨兵 | [修复](bugfix/RR-20260928-03.md)（未发布） |
-| [RR-20260928-04](bug/RR-20260928-04.md) | P3 stats_log 在容器 / systemd 里不落盘也不告警 | [修复](bugfix/RR-20260928-04.md)（未发布） |
-| [RR-20260928-05](bug/RR-20260928-05.md) | P2 shell / systemd 安装缺 `configs/data` | [修复](bugfix/RR-20260928-05.md)（未发布） |
-| [RR-20260928-06](bug/RR-20260928-06.md) | P3 game-demo 生产示例缺 `game_route` / `activity` / `platform` | [修复](bugfix/RR-20260928-06.md)（未发布） |
-| [RR-20260928-07](bug/RR-20260928-07.md) | P3 k8s Secret 示例缺 `saga` / `player_access` | [修复](bugfix/RR-20260928-07.md)（未发布） |
-| [RR-20260928-08](bug/RR-20260928-08.md) | P4 strict 下 tracker 淘汰后 Overloaded 被误标 `ErrRemotePartRejected` | [修复](bugfix/RR-20260928-08.md)（未发布） |
-| [RR-20260928-09](bug/RR-20260928-09.md) | P2 pipelined + Remote 明确拒绝不回滚、不卸载、Sync 门冻结 | [修复](bugfix/RR-20260928-09.md)（未发布） |
-| [RR-20260928-10](bug/RR-20260928-10.md) | P3 install.sh 升级失败自动回滚 / rollback.sh 回不到旧 release | [修复](bugfix/RR-20260928-10.md)（未发布） |
-| [RR-20260928-11](bug/RR-20260928-11.md) | P2 pipelined 回退 strict 路径时 `WAL.Append` 不等 fsync | [修复](bugfix/RR-20260928-11.md)（未发布） |
-| [RR-20260928-12](bug/RR-20260928-12.md) | P4 回滚时新进程按旧 unit 的 TimeoutStopSec 被停 | [修复](bugfix/RR-20260928-12.md)（未发布） |
-| [RR-20260928-13](bug/RR-20260928-13.md) | P4 CRLF Secret 示例被静默跳过 | [修复](bugfix/RR-20260928-13.md)（未发布） |
-| [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（未发布） |
+| [RR-20260927-01](bug/RR-20260927-01.md) | P4 Windows 上 RR-80 写失败用例注入不生效（CI 红） | [修复](bugfix/RR-20260927-01.md)（v1.17.2） |
+| [RR-20260927-02](bug/RR-20260927-02.md) | P4 生成的 TCP `CloseSessions` 恒为 0 | [修复](bugfix/RR-20260927-02.md)（v1.17.2） |
+| [RR-20260927-03](bug/RR-20260927-03.md) | P4 demo run.sh 不传 redis.db / password，玩家 id 计数键不带前缀 | [修复](bugfix/RR-20260927-03.md)（v1.17.2） |
+| [RR-20260927-04](bug/RR-20260927-04.md) | P4 doctor 非正时长判定与运行时不一致、建议值口径 | [修复](bugfix/RR-20260927-04.md)（v1.17.2） |
+| [RR-20260927-05](bug/RR-20260927-05.md) | P3 player TCP Mod 不声明停机预算 | [修复](bugfix/RR-20260927-05.md)（v1.17.2） |
+| [RR-20260927-06](bug/RR-20260927-06.md) | P3 fence 之后外层自己的事务仍交给 committer | [修复](bugfix/RR-20260927-06.md)（v1.17.2） |
+| [RR-20260927-07](bug/RR-20260927-07.md) | P3 嵌套独立事务裸 mutation 绕过 RR-74 | [修复](bugfix/RR-20260927-07.md)（v1.17.2） |
+| [RR-20260927-09](bug/RR-20260927-09.md) | P3 Remote 托管 + sid 作用域 DAO 提交路径不拒绝 | [修复](bugfix/RR-20260927-09.md)（v1.17.2） |
+| [RR-20260927-10](bug/RR-20260927-10.md) | P4 `RegisterEntityKindDefs` 出错留半批 | [修复](bugfix/RR-20260927-10.md)（v1.17.2） |
+| [RR-20260927-11](bug/RR-20260927-11.md) | P3 `CreateInScope` 捕获失败被吞掉仍提交 | [修复](bugfix/RR-20260927-11.md)（v1.17.2） |
+| [RR-20260927-12](bug/RR-20260927-12.md) | P4 撤销新建实体用 `DestroyReasonCommon` | [修复](bugfix/RR-20260927-12.md)（v1.17.2） |
+| [RR-20260927-13](bug/RR-20260927-13.md) | P4 卸载后重载 / 共享加载超时参数没接 kit 配置 | [修复](bugfix/RR-20260927-13.md)（v1.17.2） |
+| [RR-20260927-14](bug/RR-20260927-14.md) | P4 卸载后重载最坏延迟文档不实 | [修复](bugfix/RR-20260927-14.md)（v1.17.2） |
+| [RR-20260927-15](bug/RR-20260927-15.md) | P3 同 fence 下 Remote 版本向量可回退 | [修复](bugfix/RR-20260927-15.md)（v1.17.2） |
+| [RR-20260927-16](bug/RR-20260927-16.md) | P4 saga 收件箱 `markCompleted` 失败静默 | [修复](bugfix/RR-20260927-16.md)（v1.17.2） |
+| [RR-20260927-17](bug/RR-20260927-17.md) | P4 Remote L2 快照键不带部署前缀 | [修复](bugfix/RR-20260927-17.md)（v1.17.2） |
+| [RR-20260927-18](bug/RR-20260927-18.md) | P3 demo 场景 Manager 未接卸载后重载 | [修复](bugfix/RR-20260927-18.md)（v1.17.2） |
+| [RR-20260927-19](bug/RR-20260927-19.md) | P4 场景重开复制会话失败无计数 | [修复](bugfix/RR-20260927-19.md)（v1.17.2） |
+| [RR-20260927-20](bug/RR-20260927-20.md) | P4 nest 单用例 `-count>1` panic duplicate handler | [修复](bugfix/RR-20260927-20.md)（v1.17.2） |
+| [RR-20260927-21](bug/RR-20260927-21.md) | P4 同 Guard 自我撤销后再建同 ID 空转重排 | [修复](bugfix/RR-20260927-21.md)（v1.17.2） |
+| [RR-20260927-22](bug/RR-20260927-22.md) | P4 `Unregister` 作用在已 forget 的旧 subject 上 | [修复](bugfix/RR-20260927-22.md)（v1.17.2） |
+| [RR-20260927-23](bug/RR-20260927-23.md) | P4 demo 场景未接 `OnEntityLoaded → Rebind` | [修复](bugfix/RR-20260927-23.md)（v1.17.2） |
+| [RR-20260927-24](bug/RR-20260927-24.md) | P4 strict 截止回复缺 `ErrRemotePersistenceIndeterminate` | [修复](bugfix/RR-20260927-24.md)（v1.17.2） |
+| [RR-20260927-25](bug/RR-20260927-25.md) | P4 不可比较的自定义 Mutex 比较 panic | [修复](bugfix/RR-20260927-25.md)（v1.17.2） |
+| [RR-20260927-26](bug/RR-20260927-26.md) | P3 `ReleaseCast(旧实例)` 放掉同 ID 新实例的锁 | [修复](bugfix/RR-20260927-26.md)（v1.17.2） |
+| [RR-20260927-27](bug/RR-20260927-27.md) | P4 非 Nest 持锁领头方冷加载死锁 | [修复](bugfix/RR-20260927-27.md)（v1.17.2） |
+| [RR-20260927-28](bug/RR-20260927-28.md) | P4 `RetractSyncSubject` 锁外比对后误注销新登记 | [修复](bugfix/RR-20260927-28.md)（v1.17.2） |
+| [RR-20260927-29](bug/RR-20260927-29.md) | P4 领头方正常完成时不关 `leaderAway`，迟到 `RunLocal` 永久阻塞 | [修复](bugfix/RR-20260927-29.md)（v1.17.2） |
+| [RR-20260927-30](bug/RR-20260927-30.md) | P4 含装着 func 的接口字段的 Mutex 仍 panic | [修复](bugfix/RR-20260927-30.md)（v1.17.2） |
+| [RR-20260927-31](bug/RR-20260927-31.md) | P3 Cast 捕获失败被吞后事务照常提交 | [修复](bugfix/RR-20260927-31.md)（v1.17.2） |
+| [RR-20260927-32](bug/RR-20260927-32.md) | P4 提交前拒绝不带 `ErrCommitRejected`，判别表表述 | [修复](bugfix/RR-20260927-32.md)（v1.17.2） |
+| [RR-20260927-33](bug/RR-20260927-33.md) | P2 生成 compose 的 `tmpfs` 被逗号拆开，服务起不来 | [修复](bugfix/RR-20260927-33.md)（v1.17.2） |
+| [RR-20260927-34](bug/RR-20260927-34.md) | P2 生产镜像缺 `configs/data`，容器启动即失败 | [修复](bugfix/RR-20260927-34.md)（v1.17.2） |
+| [RR-20260927-35](bug/RR-20260927-35.md) | P4 demo 模板测试期望流名未含 `roost.room` 兼容映射 | [修复](bugfix/RR-20260927-35.md)（v1.17.2） |
+| [RR-20260928-01](bug/RR-20260928-01.md) | P4 多 ManagerAccess 下积压 gauge 互相覆盖 | [修复](bugfix/RR-20260928-01.md)（v1.17.2） |
+| [RR-20260928-02](bug/RR-20260928-02.md) | P4 Guard 跨 Manager 同 ID 时 RR-21 误判 | [修复](bugfix/RR-20260928-02.md)（v1.17.2） |
+| [RR-20260928-03](bug/RR-20260928-03.md) | P3 本地已提交、Remote 明确拒绝时回复无哨兵 | [修复](bugfix/RR-20260928-03.md)（v1.17.2） |
+| [RR-20260928-04](bug/RR-20260928-04.md) | P3 stats_log 在容器 / systemd 里不落盘也不告警 | [修复](bugfix/RR-20260928-04.md)（v1.17.2） |
+| [RR-20260928-05](bug/RR-20260928-05.md) | P2 shell / systemd 安装缺 `configs/data` | [修复](bugfix/RR-20260928-05.md)（v1.17.2） |
+| [RR-20260928-06](bug/RR-20260928-06.md) | P3 game-demo 生产示例缺 `game_route` / `activity` / `platform` | [修复](bugfix/RR-20260928-06.md)（v1.17.2） |
+| [RR-20260928-07](bug/RR-20260928-07.md) | P3 k8s Secret 示例缺 `saga` / `player_access` | [修复](bugfix/RR-20260928-07.md)（v1.17.2） |
+| [RR-20260928-08](bug/RR-20260928-08.md) | P4 strict 下 tracker 淘汰后 Overloaded 被误标 `ErrRemotePartRejected` | [修复](bugfix/RR-20260928-08.md)（v1.17.2） |
+| [RR-20260928-09](bug/RR-20260928-09.md) | P2 pipelined + Remote 明确拒绝不回滚、不卸载、Sync 门冻结 | [修复](bugfix/RR-20260928-09.md)（v1.17.2） |
+| [RR-20260928-10](bug/RR-20260928-10.md) | P3 install.sh 升级失败自动回滚 / rollback.sh 回不到旧 release | [修复](bugfix/RR-20260928-10.md)（v1.17.2） |
+| [RR-20260928-11](bug/RR-20260928-11.md) | P2 pipelined 回退 strict 路径时 `WAL.Append` 不等 fsync | [修复](bugfix/RR-20260928-11.md)（v1.17.2） |
+| [RR-20260928-12](bug/RR-20260928-12.md) | P4 回滚时新进程按旧 unit 的 TimeoutStopSec 被停 | [修复](bugfix/RR-20260928-12.md)（v1.17.2） |
+| [RR-20260928-13](bug/RR-20260928-13.md) | P4 CRLF Secret 示例被静默跳过 | [修复](bugfix/RR-20260928-13.md)（v1.17.2） |
+| [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（v1.17.2） |

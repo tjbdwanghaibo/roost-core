@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～14）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。**
+## [v1.17.2] - 2026-09-28
+
+> v1.17.1 之后按 [残留清单 OPEN-ITEMS-2026-09-27](docs/review/OPEN-ITEMS-2026-09-27.md) 逐条处理的修复（RR-20260927-01～35，08 未使用；RR-20260928-01～14）与补测。**v1.17.1 生成的生产 compose 与镜像无法启动（RR-20260927-33 / 34），用这两者部署的工程升级后执行 `roost project sync`。** 生成器输出要求 roost-core ≥ v1.17.2（生成的 syncbus 测试用到 `kit/syncbus.JetStreamStreamFromConfig`）。
 > 第五、六轮独立审计见 [audit5](docs/review/REVIEW-2026-09-27-audit5.md)、[audit6](docs/review/REVIEW-2026-09-27-audit6.md)。
 
 ### Changed（行为收紧 / 需要注意）
