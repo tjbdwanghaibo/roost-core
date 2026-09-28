@@ -97,6 +97,7 @@
 | B43 | `revokedCreated` 按 Guard 记而 `removing` 按 EntityManager 记，一个 Guard 跨多个 Manager 同 ID 时可能误判（audit6 推断） | audit6 | 推断 | 两个 Manager 同 ID，一边撤销、另一边新建，看 RR-21 分支是否误判 | S |
 | B44 | B08 回归 `TestParallelWindowReplaysSucceededSuffixUnderNewerFence` 无 race 时约 1/100 超时（`:115 timed out waiting for the suffix publication`）；推测用例未强制两笔落在同一投影窗口 | 批次 7 | 未证明 | 钉住“两笔进入同一窗口”再复跑 `-count=1000`；是用例问题就修测试 | S |
 | B45 | 集成测试残留：`kit/nats` `TestToxicJetStreamRPCCall…` 每次在共享 NATS 留两条流；只认 `REDIS_ADDR` 的三个包在目标 Redis 留 118 个键（部分无 TTL） | 批次 7 | 已观察 | 用例 `t.Cleanup` 删除自己创建的流 / 键 | S |
+| B46 | CI（run 36364494353 linux-test shard 1）偶发：`TestRejectedWriteUnloadsOnNestFastPoolAndRebindsSync` 在 `assertReloadedFromAuthority` 收到销毁回调后立即写，落进 removing 标记尚未清除的窗口，得到文档承诺的可重试 `ErrRemoteEntityReloading` | 推送后 CI | **已处理**：本地 300 次 + race 200 次不复现；辅助函数按契约有界重试该哨兵，其他错误仍判失败（测试修正，无产品行为变化） | — | S |
 | B38 | CARRYOVER 里仍未分流的 B4：活动窗口的机器人分支逻辑没有真实跨过 300 秒边界跑过 | [CARRYOVER §B](../bug/CARRYOVER.md)（B4“本轮进展：无”） | 仍成立（之后没有记录） | 集成环境让机器人运行跨过一个完整 300 秒窗口边界，或在 loadtest 里对齐起跑时间 | S |
 
 ## C. 本地做不了，或需要维护者决定（33 条）
@@ -364,7 +365,7 @@
 | 审计 | 第八轮独立审计（RR-20260928-07～11） | **完成**：[audit8](REVIEW-2026-09-28-audit8.md)；登记 RR-20260928-12、13 与文档疑点 D1 / D3 / D4 / D5 |
 | 门禁 | HEAD `d66eeeb`：build / vet / glsvet / gofmt 0、整仓 race 120 包、entity / nest / dataengine/engine `-count=2`、sync-modes、新生成 game-demo 17 包 / race / doctor（114s / 119s）/ diff 0 | **完成** |
 | 21 追加修复 | RR-20260928-12、13，audit8 D1 / D3 / D4 / D5 | **完成**（`df5d2eb`～`3710d69`） |
-| CI | 推送 `3a58811` 后：framework-compat released / minimum 两条 lane 红——生成 demo 的测试用到 v1.17.1 没有的 `kitsyncbus.JetStreamStreamFromConfig`（RR-20260927-35），需发 v1.17.2 并把生成器下限升到 v1.17.2 才能转绿；windows-compatibility 超时 → RR-20260928-14 | 待发版 / 修复中 |
+| CI | 推送 `3a58811` 后：framework-compat released / minimum 两条 lane 红——生成 demo 的测试用到 v1.17.1 没有的 `kitsyncbus.JetStreamStreamFromConfig`（RR-20260927-35），需发 v1.17.2 并把生成器下限升到 v1.17.2 才能转绿；windows-compatibility 超时 → RR-20260928-14 | 推送 `7b5e5a4` 后 windows-compatibility **转绿**（`codegen/internal/roost` 在 Windows 224s）；framework-compat 待发 v1.17.2；linux shard 1 偶发 → B46 已修测试 |
 | 22 追加修复 | RR-20260928-14 | **完成**（`96f8cbf` 合入）：只改测试；PASS 数 275 → 280（多出新等价性用例），修前全部用例按名保留；Windows 实跑待推送后 CI |
 | 7 集成环境（串行） | B01、B12、B28、B31、B11、B32、B33、B34、B35、B38、C04（compose）、B22 后一半 | **完成**（`a2d08d6`～`21555fd`）：B28 三项门禁全绿（注：`dataengine-env.sh test` 含故障注入，会重启隔离 mongo-1 / nats）；B01 为用例固定键残留，非问题，WANTED 分流；B12 / B31 / B11 收为回归；B32 升级人工处理清单写入 bf-24；B33 漂移文件非 golden（D）；B35 两份记录不矛盾（取决于 Mod 集）；B34 / C04 停机实测无缺陷（compose 需先修两个部署物缺陷）；B38 跨窗口实跑通过、CARRYOVER B4 关闭；B22 后一半本地做不了 → C34；新缺陷 → RR-20260927-33～35，偶发 → B44，观察 → B45 |
 | 8 长跑与性能（最后、独占机器） | B29、B30、C01、C03 | 待开始 |

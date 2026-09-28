@@ -196,7 +196,14 @@ func (f reloadFixture) assertReloadedFromAuthority(t *testing.T, stale *reloadab
 	}
 	f.storage.unreachable.Store(false)
 	f.storage.reject.Store(false)
+	// 销毁回调（stale.destroyed）先于 EntityManager 清除 removing 标记执行（见 RR-20260926-81 的撤销 / 销毁收尾窗口），
+	// 这个窗口内的写得到文档承诺的可重试哨兵 ErrRemoteEntityReloading（RR-20260926-62）。CI 高负载下会落进窗口，
+	// 所以按契约有界重试该哨兵；其他任何错误、或窗口在期限内不结束，仍判失败（OPEN-ITEMS B46）。
 	next, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.id})
+	for err != nil && errors.Is(err, entity.ErrRemoteEntityReloading) && ctx.Err() == nil {
+		time.Sleep(time.Millisecond)
+		next, err = f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.id})
+	}
 	if err != nil {
 		t.Fatalf("entity not writable after the framework unloaded the rejected instance: %v", err)
 	}
