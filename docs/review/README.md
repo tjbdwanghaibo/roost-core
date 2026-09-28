@@ -2,6 +2,8 @@
 
 [09-29 Core 全 service 域审查](REVIEW-2026-09-29-services.md)：最新 `6b73289c`，10 个服务域主链完成；9 项动态反例 + 1 项源码接线缺口（2 P1、7 P2、1 P3）。原有服务 race/真实 Redis 集成与 12 次生成一致性检查通过，不代表全部故障交错已验证。[问题交接](../bug/REVIEW-2026-09-29-services.md) · [复现](../bug/REPRO-2026-09-29-services.md) · [机制与实施方案](IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md) · [逐路径证据](evidence/service-review-20260929/inventory.csv)。只改文档。
 
+[09-29 B30 复测与调查](REVIEW-2026-09-29-b30.md)：正式装配 80 TPS × 30 分钟在写许可 128 下失败，非回归，是 Mongo 停顿超过许可余量；256 时通过（单样本）；隔离环境 mongo-3 数据文件缺失待处理。
+
 [09-28 v1.17.2 之后剩余项](REMAINING-2026-09-28.md)：发版后的结论清单——OPEN-ITEMS 93 条中已完成 73、已接受 / 保留 14、剩余 6（长稳、性能对照、Remote 容量、端到端补测、Linux fsync、图谱刷新），另从记录与审计整理 48 条 N 项；发版后 framework-compat 有一处生成 TCP 测试偶发（N70）。
 
 [09-28 第八轮独立审计](REVIEW-2026-09-28-audit8.md)：`d66eeeb` 上 RR-20260928-07～11 红绿成立；登记 RR-20260928-12、13（P4）与文档疑点。
