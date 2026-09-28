@@ -124,6 +124,14 @@ func assertGeneratedShutdown(t *testing.T, root string, service string, total, g
 		t.Errorf("compose service %s: stop_grace_period is not %ds:\n%s", service, grace, block)
 	}
 	assertContains(t, root, "deploy/shell/install.sh", fmt.Sprintf("  %s) STOP_TIMEOUT=%ds ;;\n", service, grace))
+	// audit8 D3: the shell README names the same per-service value, not a fixed 45s.
+	readme, err := os.ReadFile(filepath.Join(root, "deploy", "shell", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(当前为 |、)`+regexp.QuoteMeta(fmt.Sprintf("%s %ds", service, grace))+`(、|；)`).Match(readme) || strings.Contains(string(readme), "45 秒") {
+		t.Errorf("deploy/shell/README.md does not give %s the stop budget %ds install.sh uses", service, grace)
+	}
 	run, err := os.ReadFile(filepath.Join(root, "deploy", "dev", "run.sh"))
 	if err != nil {
 		t.Fatal(err)

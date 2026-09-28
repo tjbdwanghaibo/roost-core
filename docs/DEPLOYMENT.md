@@ -49,7 +49,7 @@ systemctl status planet-game-1001.service
 sh deploy/shell/healthcheck.sh http://127.0.0.1:9100/readyz
 ```
 
-安装器创建非登录用户、只读系统保护、独立状态目录、NOFILE 上限和 45 秒 SIGTERM 预算；对带 WAL 的 Service 校验配置路径与实例目录一致。每个版本进入不可覆盖的 release 目录并生成 SHA256SUMS，`current` 原子切换；重启后 readiness 未在预算内成功会自动切回上一版二进制和配置，首次安装失败则停服。自动回滚仍以数据格式向后兼容为前提。
+安装器创建非登录用户、只读系统保护、独立状态目录、NOFILE 上限和按 Service 生成的 SIGTERM 停机预算（`TimeoutStopSec` = max(该 Service 按实际注册的 Mod 生成的 `shutdown.total_timeout`, 配置里实际的 `total_timeout`) + 5s，公式见 §8，各 Service 的当前值写在生成的 `deploy/shell/README.md` 里；增减 Mod 或调大 `total_timeout` 后执行 `roost project sync` 重算）；对带 WAL 的 Service 校验配置路径与实例目录一致。每个版本进入不可覆盖的 release 目录并生成 SHA256SUMS，`current` 原子切换；重启后 readiness 未在预算内成功会自动切回上一版二进制和配置，首次安装失败则停服。自动回滚仍以数据格式向后兼容为前提。
 
 unit 的 `WorkingDirectory` 是 `$APP_ROOT/current`，即当前 release（systemd 在进程启动时解析这个链接，切换 `current` 在随后的重启生效；运行中的进程一直读自己 release 里的文件），布局与镜像的 `WORKDIR /app` 一致。生成配置里的相对路径都按它解析：启用 configdata 的 Service 安装时把工程里的 `configs/data`（可用 `CONFIG_DATA` 环境变量指定，必须含 `_manifest.json`，缺失时在创建 release 之前就拒绝）拷进 release，数据表与生成它的二进制同一版本、随 `rollback.sh` 一起回退（RR-20260928-05；之前只装二进制与配置，`WorkingDirectory=$APP_ROOT` 下没有 `configs/data`，服务启动即失败）；release 在 `ProtectSystem=strict` 下只读，安装器把每个 release 里的 `log` 链接到实例日志目录 `/var/log/roost/<instance>`（`LOG_ROOT`，属于运行用户且在 `ReadWritePaths` 里），`stats_log.dir: log` 的统计文件落在那里（RR-20260928-04）。本版之前安装的 release 没有这两样。
 
