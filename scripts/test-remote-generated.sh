@@ -30,4 +30,7 @@ if [[ "${ROOST_REMOTE_LOAD:-0}" == 1 && "${ROOST_REMOTE_RACE:-0}" != 1 ]]; then 
 profile=()
 if [[ -n "${ROOST_REMOTE_TRACE:-}" ]]; then profile+=("-trace=$ROOST_REMOTE_TRACE"); fi
 if [[ -n "${ROOST_REMOTE_CPU_PROFILE:-}" ]]; then profile+=("-cpuprofile=$ROOST_REMOTE_CPU_PROFILE"); fi
-go test -mod=mod ${race[@]+"${race[@]}"} ${profile[@]+"${profile[@]}"} -count=1 -timeout="${ROOST_REMOTE_TIMEOUT:-120s}" -run '^TestGeneratedRemoteNestFlow$' -v .
+# 功能验收同时跑持久拒绝用例（reject_test.go，OPEN-ITEMS C34）；压测与故障矩阵只跑正式业务流，口径不变。
+run='^TestGeneratedRemote'
+if [[ "${ROOST_REMOTE_LOAD:-0}" == 1 || -n "${ROOST_REMOTE_FAULT:-}" ]]; then run='^TestGeneratedRemoteNestFlow$'; fi
+go test -mod=mod ${race[@]+"${race[@]}"} ${profile[@]+"${profile[@]}"} -count="${ROOST_REMOTE_COUNT:-1}" -timeout="${ROOST_REMOTE_TIMEOUT:-120s}" -run "${ROOST_REMOTE_RUN:-$run}" -v .
