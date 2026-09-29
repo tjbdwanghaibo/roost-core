@@ -1,5 +1,22 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第五轮：本阶段主链收口
+
+source b336ce62；第四批 3 项修复已推送。随后完成[第五轮新内容](REVIEW-2026-09-29-services-05.md)、[10 域矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)和[机制学习](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md)。**10/10 域的列明主链/存储/组装契约已整理；100/100 当前生产路径已归类，不是逐行或测试覆盖率。**57 路径复用未变源码证据、25 非生成变更路径复读、18 生成文件当前检查。
+
+新增 RR-25/26/27（2 P2、1 P3），旧 RR-20260914-02 的迟到 Opening 残余 P2，均未实施；[交接](../bug/REVIEW-2026-09-29-services-05.md)。新 21 叶子 × 两模式 = 42 次执行，18 pass / 24 预期 fail / 0 skip，最终无 build-fail/race 警报；12 次 RPC 检查通过。原 16 测试包/801 事件回归基线通过。
+
+| 本轮推进 | 已读 / 已执行 | 状态及具名剩余范围 |
+| --- | --- | --- |
+| Account / Directory | 发布门禁、失败关闭准入、同计划重建、名字 owner；Account Memory/Redis 新控制通过，Directory 条件删除已有正式证据 | 主链整理完成；legacy 孤儿/真实强杀与自定义后端专项未验证 |
+| Global | 旧 Acquire 与迁移/new lease 重叠，Memory PASS | 主链完成；实际业务 fence/双进程/HA 未验证 |
+| Activity | grace 回收、确认、满容量、过期扫描，Memory/Redis 反例成立 | 主链完成；RR-14-02 残余待修，超容量旧数据恢复/真实 game 专项 |
+| Mail / Platform | 第四批未知效果/回包/删除证明已修；正式回归、生成购买消费工程与 split Attempts 接入 | 主链完成；实际资产/支付对账、在途删除产品契约、旧数据专项 |
+| Match / Rank | 公开 Grouping 非法大小、历史 churn；Rank 正负溢出与合法边界真实 Redis | 主链完成；RR-25/26 待修；历史归档、房间分配、压力/公平专项 |
+| Session / Chat | 3 页轮转来源清理、并发 Releaser 2 calls/1 fixture effect；Chat 去重及 2 秒偏移 Memory/Redis | 主链完成；RR-27 待修；真实 allocator、Gap/年龄契约、入口限流专项 |
+
+源码整理、场景验证、缺陷修复独立计数：本轮新问题 0/4 修复；真实 allocator/HA/断网/强杀/负载未验证，不计已完成。下一入口为该四项 bugfix 或矩阵的具名专项；不要从头重复 service 主链。K1/K2/K3 原进度保留，本轮服务收口不代替其专项证据。
+
 ## 2026-09-29 Service 第四批 bugfix 完成
 
 RR-23/24、旧 RR-10 删除残余 3/3 实现并通过定向回归；16 包/801 测试及子测试 pass、0 测试 fail/skip；生成工程消费链及全仓编译通过。[升级与下一入口](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。随后继续 review 新范围，下方保留历史停点。

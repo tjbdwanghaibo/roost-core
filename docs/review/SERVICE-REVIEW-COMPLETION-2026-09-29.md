@@ -1,0 +1,42 @@
+# Service 审查完成矩阵（2026-09-29）
+
+**service 的 10 个功能域主链、存储契约与组装链已完成本阶段有界审查；问题修复和生产故障验证分别计算。**本阶段不再留“其余 service 随后再看”的未列范围。当前仍有本轮 3 个新问题、1 个旧活动残余未实施；正式资源分配、HA、强杀、真实支付/消息与性能专项仍未验证，不能称所有逻辑和交错已穷尽或已无 bug。
+
+范围是 Core 单仓 `service/` 与 `kit/service/` 的 tracked 生产 Go 路径；source SHA `b336ce62f75ce0d763138bc8523c4695724214a2`。不把另一 agent 的其他模块纳入服务结论。当前 **100 个路径，82 个非生成、18 个生成**；[清单](evidence/service-review-20260929-05/inventory.csv)逐行保存源码 blob、证据方式与基线。这是范围核算，**不是代码覆盖率或逐行审完率**。
+
+## 10 域闭环与证据
+
+下表“完成”表示列出的公开主链/存储/组装契约已整理，每域均包含 Redis 构造、owner/client capability、手写 run/管理入口及生成运输；生成文件用当前 12 次只读一致性检查与抽样审查，不称逐行阅读。此前原触发修复状态见三份 bugfix 记录，本轮没有将历史绿测升级成全部故障交错已验收。
+
+| 域（生产路径） | 已完成主链范围 | 本阶段证据 / 当前问题 | 专项未验证边界 |
+| --- | --- | --- | --- |
+| Account（10） | Login/identity、server/slot、名字预约、持久建角计划与发布、session/profile、Redis/Mod/RPC | 首轮至第四批源码与回归；本轮 pending 角色拒绝 SelectRole/Profile、读失败关闭准入、同 store 重建恢复，Memory/Redis PASS | 旧孤儿/legacy slot 自动恢复、跨进程强杀、业务封禁撤销策略 |
+| Directory（4） | Normalize、Reserve/Commit/Cancel/Release、代次/token、过期、条件删除、Redis/Mod | RR-21 修复后的 DeleteIf/同 owner 重建 ABA 正式回归与 Redis 通过 | 自定义后端、HA、业务名字迁移 |
+| Global route/lease（8） | Bind/Resolve、迁移 Begin/Complete/Abort、Acquire/Renew/Release、epoch/incarnation、Load、Redis/runner | 迁移旧租约正式回归；本轮旧 Acquire 阻塞、新 route/new lease 后拒绝旧 CAS，Memory PASS | 真实业务写入使用 fence、双进程迟到调用/强杀 |
+| Activity（9） | Open/window、Notify/Advance、progress/participant/ledger、dispatch/ACK、owed/分页/runner/Admin | 普通恢复/计分/ACK 回归；本轮 Opening 回收晚确认、满容量与扫描漏项 Memory/Redis FAIL；旧 RR-14-02 残余 | game 真消费、超容量旧数据恢复、贡献接受项沿 CARRYOVER |
+| Mail（12） | send 意图/ledger/envelope、direct/broadcast、邮箱状态与页读取、Reserve/Commit/Cancel、删除/淘汰/墓碑、Redis/runner | 三批源代码修复与正式 Memory/Redis 回归；第四批未领取删除不复活已通过 | 真实资产回执、在途删除产品契约、混合旧 owner 与旧数据迁移 |
+| Match（11） | Queue identity、Enqueue/Cancel、候选/分组/Commit、Ticket→Match、expiry/sweep、Redis/runner | 提交未知读回正式证据；新 Group 非法大小 8 叶子 FAIL，正常控制 PASS；历史容量观察已去重 | 终态归档/幂等保留窗口、真实房间 allocator、长期公平/大对象压力 |
+| Platform（10） | auth/callback 校验、Order/pending/index、attempt/backoff、失败分类/未知证明、Admin/对账、Redis/runner | RR-23/24 第四批修复已通过；未知效果拒绝退款/重发，同 store 重建；生成购买消费链编译/已有行为测试通过 | 实际渠道权威对账、真实资金、强杀/Redis HA、旧 pending 恢复 |
+| Rank（9） | 编码/member、Submit/模式/Lua CAS、幂等 ring、Remove/Reset、Page/Rank/Around、Redis/RPC/runner | 编码与并发回归通过；新 int64 加法正负溢出真实 Redis FAIL，合法边界 PASS | 高热点容量/延迟、复杂 Remove/Reset 并发、编码旧数据迁移 |
+| Session（12） | Enter/claim/request、Attach、Finish/Leave、Pending Release/Admin、rotating OwnerSource/Sweep、Redis/Mod/runner | 正式 ABA/cleanup/输出验证；本轮 3 页 sweep 清理 PASS；并发释放幂等 fixture 2 calls/1 effect PASS，均 Memory | 正式 allocator 的持久幂等与 allocation incarnation、进程/资源服务失联 |
+| Chat（9） | policy/body/auth、ChannelRef、Append/Seq/History、请求去重/保留、Prune、Redis/RPC/runner | 频道隔离回归；有限窗口控制 Memory/Redis PASS；2 秒偏移过期漏清理 FAIL，RR-27 | 实际入口限流/授权、年龄清理 Gap 协议、多节点时钟/负载 |
+
+辅助 6 路径：split 四文件、integration/doc.go、servicemetrics 别名。已复查 split CancelClaim 传递 Attempts、owner/client 对称装配与资产侧稳定 token；示例 grant 是空实现，绝非资产服务验收。integration 是测试契约说明，servicemetrics 是类型转发，不虚设第 11 个服务域。
+
+## 证据如何复用
+
+首轮源码 SHA `6b73289c` 的[主链记录](REVIEW-2026-09-29-services.md)覆盖当时 96 路径。当前逐路径比较 blob/变更，**57 个非生成路径无变化，复用首轮和后续记录**；**25 个非生成变更/新增路径按当前主链复读**，关联后续 review/bugfix 的执行证据；18 个生成文件按当前生成门禁与样本。不是这一轮重新完整阅读 100 文件。
+
+前三批与第四批累计记录入口：
+[两轮 19 项实施](../bugfix/SERVICE-BUGFIX-2026-09-29.md)、
+[RR-19～22](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)、
+[RR-23/24 与删除残余](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。
+当前 16 个有测试包 / 801 个测试及子测试通过，是回归基线；不当作 801 个独立故障场景。
+
+第五轮新增 **21 叶子 × 两种运行模式 = 42 次执行，18 pass / 24 预期 fail / 0 skip**；Rank 始终真实 Redis；Account/Activity/Chat 切换真实后端；Global/Session/Match 历史观察仍为 Memory fixture。生成消费工程实际 handler/game 测试与编译通过，不把生成 CLI 依赖获取被阻止写成完整生成安装成功。
+
+## 完成判定与后续范围
+
+源码主链与契约整理：**10/10 域完成本阶段范围**。范围清单核算：**100/100 当前路径已归类**，不是源码行覆盖率。缺陷修复：本轮 **0/4**（3 新 + 1 旧残余），另此前第四批 **3/3 原触发修复通过**。上线级故障、外部资源系统及性能：**未完成，不计入已验证**。
+
+下一步若实施 bugfix，按 RR-25/26/27 和 RR-14-02 的验收执行；若继续 review，转入表中具名专项或其他核心域，不再以“service 主链未整理”重复从头审。图谱仍有 freshness/方法解析限制，实际源码与行为证据为结论依据，详见第五轮运行。

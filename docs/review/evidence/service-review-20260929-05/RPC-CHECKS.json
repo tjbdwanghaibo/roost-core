@@ -1,0 +1,50 @@
+[
+  {
+    "path": "kit/service/account",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/chat",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/global",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/global/activity",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/platform",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/rank",
+    "exit": 0
+  },
+  {
+    "path": "service/mail",
+    "exit": 0
+  },
+  {
+    "path": "service/match",
+    "exit": 0
+  },
+  {
+    "path": "service/session",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/mail",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/match",
+    "exit": 0
+  },
+  {
+    "path": "kit/service/session",
+    "exit": 0
+  }
+]

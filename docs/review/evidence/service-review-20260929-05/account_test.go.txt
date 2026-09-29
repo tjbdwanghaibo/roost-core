@@ -1,0 +1,75 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/directory"
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"testing"
+)
+
+type review5UnknownRole struct {
+	versionstore.Store[int64, Role]
+	failed     bool
+	readFailed bool
+}
+
+func (s *review5UnknownRole) Create(ctx context.Context, k int64, v Role) (versionstore.Versioned[Role], bool, error) {
+	got, created, err := s.Store.Create(ctx, k, v)
+	if created && err == nil && !s.failed {
+		s.failed = true
+		return versionstore.Versioned[Role]{}, false, errors.New("role reply lost")
+	}
+	return got, created, err
+}
+func (s *review5UnknownRole) Get(ctx context.Context, k int64) (versionstore.Versioned[Role], bool, error) {
+	if s.failed && !s.readFailed {
+		s.readFailed = true
+		return versionstore.Versioned[Role]{}, false, errors.New("role authority unavailable")
+	}
+	return s.Store.Get(ctx, k)
+}
+func TestReview5PendingRoleCannotPlayUntilRecovery(t *testing.T) {
+	var gate *review5UnknownRole
+	s, _, cfg := review3AccountService(t, func(c *Config) { gate = &review5UnknownRole{Store: c.Roles}; c.Roles = gate })
+	ctx := context.Background()
+	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "new-window", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRole(ctx, a.ID, 1, "Pending"); err == nil {
+		t.Fatal("injected lost reply not reported")
+	}
+	slot, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1))
+	if err != nil || !found {
+		t.Fatal(slot, found, err)
+	}
+	id := slot.Value.Creation.PlayerID
+	if id == 0 {
+		t.Fatal("recovery identity missing")
+	}
+	if _, err := s.SelectRole(ctx, a.ID, id); err == nil {
+		t.Fatal("read fault must fail closed")
+	}
+	if _, err := s.SelectRole(ctx, a.ID, id); !errors.Is(err, ErrConflict) {
+		t.Fatal("unpublished role minted a session", err)
+	}
+	if _, err := s.UpdateProfile(ctx, a.ID, id, []byte("premature")); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	rebuilt, err := New(s.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := rebuilt.CreateRole(ctx, a.ID, 1, "Pending")
+	if err != nil || role.PlayerID != id {
+		t.Fatal(role, err)
+	}
+	if _, err := rebuilt.SelectRole(ctx, a.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	if entry, found, err := cfg.Names.Lookup(ctx, "Pending"); err != nil || !found || entry.Owner != directory.Owner(fmt.Sprintf("%s/%s", slotKeyFor(a.ID, 1), slot.Value.Creation.ID)) {
+		t.Fatal(entry, found, err)
+	}
+}

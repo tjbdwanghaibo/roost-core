@@ -1,0 +1,77 @@
+package chat
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/redis/driver"
+	"os"
+	"testing"
+	"time"
+)
+
+func review5Chat(t *testing.T) *harness {
+	t.Helper()
+	if os.Getenv("ROOST_REVIEW5_BACKEND") != "redis" {
+		return newHarness(t)
+	}
+	addr := os.Getenv("ROOST_REVIEW_REDIS")
+	if addr == "" {
+		t.Fatal("isolated Redis address required")
+	}
+	client, err := driver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	state, err := NewRedisStateStore(client, fmt.Sprintf("review5:chat:%d", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newHarness(t, withState(state))
+}
+func TestReview5DeduplicationWindowControls(t *testing.T) {
+	h := review5Chat(t)
+	ctx := context.Background()
+	if _, err := h.service.Publish(ctx, role(1), text("first", "old", world())); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < DefaultRetain; i++ {
+		if _, err := h.service.Publish(ctx, role(1), text("churn", fmt.Sprint(i), world())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.service.Publish(ctx, role(1), text("first", "old", world())); !errors.Is(err, ErrAlreadyPublished) {
+		t.Fatal("retained dedup proof did not refuse removed body", err)
+	}
+	for i := DefaultRetain; i < requestKeyBudget(DefaultRetain); i++ {
+		if _, err := h.service.Publish(ctx, role(1), text("churn", fmt.Sprint(i), world())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.service.Publish(ctx, role(1), text("first", "old", world())); err != nil {
+		t.Fatal("outside declared dedup window", err)
+	}
+	t.Log("finite deduplication window confirmed; outside window a new publish is accepted")
+}
+func TestReview5PruneMustFindExpiredRowsAfterClockSkew(t *testing.T) {
+	h := review5Chat(t)
+	ctx := context.Background()
+	if _, err := h.service.Publish(ctx, role(1), text("future", "a", world())); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(-2 * time.Second)
+	if _, err := h.service.Publish(ctx, role(1), text("older", "b", world())); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(DefaultRetentionAge + time.Second)
+	ref, err := h.service.Resolve(world(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := h.service.Prune(ctx, ref, 10)
+	if err != nil || n != 1 {
+		t.Fatalf("one timestamp-expired message was blocked by nonexpired sequence prefix: pruned=%d err=%v", n, err)
+	}
+}

@@ -1,5 +1,9 @@
 # Roost 持续 Review 与学习记录
 
+[09-29 Service 第五轮与阶段收口](REVIEW-2026-09-29-services-05.md)：源码 b336ce62；[10 域完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、100 路径逐项归类；[RR-25/26/27 与旧活动残余](../bug/REVIEW-2026-09-29-services-05.md)均未实施。新 42 次叶子执行，18 控制通过、24 反例预期失败、无 skip/build-fail；12 次生成检查通过。[学习](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md) · [复跑](evidence/service-review-20260929-05/README.md)。真实 allocator/HA/强杀/性能留专项，不计为完成。
+
+[09-29 Service 第四批实施](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)：RR-23/24 与未领取删除残余已修；提交 b336ce62 已推送，801 测试及子测试回归通过，未发版。
+
 [09-29 Service 第四轮](REVIEW-2026-09-29-services-04.md)：基线 `bdbb61bc`，Platform 外部未知结果/回包所有权、Mail 删除终态、Match 提交恢复和 Session 资源链；2 个新增 RR、1 个旧问题删除残余。[问题](../bug/REVIEW-2026-09-29-services-04.md) · [学习](IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md) · [复跑](evidence/service-review-20260929-04/README.md) · [进度](PROGRESS.md)。现有 794 事件全过，新 16 个叶子执行保留 7 个失败反例；只改文档。
 
 [09-29 Service 第三轮实施](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)：RR-19～22 的原触发已修复、正式回归/Redis/生成消费者通过，794 测试事件、16 包通过；[最新机制](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md#本批修复后的实际实现)。旧数据与外部系统仍有明确边界，下方保留 review 时点。

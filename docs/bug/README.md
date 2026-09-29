@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**最新：09-29 Service 第五轮**，[问题与实施交接](REVIEW-2026-09-29-services-05.md)。RR-20260929-25 P2 Grouping 非法 Queue panic/伪成功；RR-20260929-26 P2 Rank 加法溢出落库；RR-20260929-27 P3 Chat 时钟偏移漏清理；旧 RR-20260914-02 P2 追加 Opening 回收晚确认的容量/扫描残余。四项均未实施，有可复跑反例。[阶段完成与未验证边界](../review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)。下方历史“未修”以对应 review 时点理解。
+
 [第四批 service 修复](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)：RR-23/24 和旧 RR-20260910-02 删除残余已修，保留原反例与未验证边界。
 
 

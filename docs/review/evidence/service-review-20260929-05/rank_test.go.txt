@@ -1,0 +1,41 @@
+package rank
+
+import (
+	"context"
+	"errors"
+	"math"
+	"testing"
+)
+
+func TestReview5AddRejectsOverflowWithoutChangingScore(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		initial, delta int64
+	}{{"positive", math.MaxInt64, 1}, {"negative", math.MinInt64, -1}} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := reviewRankStore(t)
+			ctx := context.Background()
+			if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: tt.initial}, UpdateSet, ""); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: tt.delta}, UpdateAdd, "overflow")
+			stored, found, readErr := s.Rank(ctx, arena(), 1)
+			if !errors.Is(err, ErrScoreInvalid) || readErr != nil || !found || stored.Score.Value != tt.initial {
+				t.Fatalf("overflow committed: result=%+v err=%v stored=%+v found=%v read=%v", got, err, stored, found, readErr)
+			}
+		})
+	}
+}
+func TestReview5AddBoundaryControls(t *testing.T) {
+	for _, tt := range []struct{ initial, delta, want int64 }{{math.MaxInt64 - 1, 1, math.MaxInt64}, {math.MinInt64 + 1, -1, math.MinInt64}} {
+		s := reviewRankStore(t)
+		ctx := context.Background()
+		if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: tt.initial}, UpdateSet, ""); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: tt.delta}, UpdateAdd, "safe")
+		if err != nil || got.Score.Value != tt.want {
+			t.Fatal(got, err)
+		}
+	}
+}
