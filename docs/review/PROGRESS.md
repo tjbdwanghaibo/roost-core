@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 第八批 bugfix / Service 第十轮
+
+基线68cf87fc，fetch无远端改动；[RR-33 1/1修复/声明场景验证](../bugfix/SERVICE-BUGFIX-2026-09-29-08.md)，新[RR-34 P2 Pipeline误报成功](../bug/REVIEW-2026-09-29-services-10.md)仅交接未改driver。[运行](REVIEW-2026-09-29-services-10.md) · [实现学习](IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)；提交/最终图谱见该轮交付追加。
+
+| 进度分母 | 当前事实 | 不计为完成 / 下一入口 |
+| --- | --- | --- |
+| Service10域主链 | 10/10本阶段有界整理；100生产路径97blob复用第九轮/3Mail变化复读；共享Redis/cache错误与生命周期补查 | 不是逐行/分支或全故障正确率，不重开全域扫描 |
+| 上轮RR-33 | 原2叶子红绿、Mod16封跨3owner两页、读取边界/错误传播已验证 | 自定义客户端Pipeline接线、所有读owner升级；未部署 |
+| 本轮新缺陷 | RR-34两真实后端反例fail、复用/Discard控制pass | 下次bugfix在driver检查全部Cmder错误 |
+| 本机回归 | Mail count2/race314pass事件280叶子0skip；18包965pass事件888叶子0fail；Core/consumer编译、vet、RPC12/12 | 3Toxiproxy test skip、servicemetrics package skip1；外部渠道資源/HA/強杀/長稳未验 |
+
+Wanted本基线无新活动候选；Match历史、购买fulfilled/归档、资源幂等沿第九轮设计入口，未改变验收。下方旧“RR-33未修”为历史。
+
+
 ## 2026-09-29 第七批 bugfix 与第九轮：service 本阶段专项收口
 
 实现/主体文档已推送 `004c8cf8`，干净主树同步；graph full更新成功，ready/新正式测试命中、generation13:13:03Z。124路径仍有metadata_changed/两个go.txt未纳入的限制，[后补证据](evidence/service-review-20260929-09/COVERAGE-AFTER.json)保留源码与执行依据。四个独占Redis已核验目录后关闭，共享MCP保留。

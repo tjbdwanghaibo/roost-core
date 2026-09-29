@@ -20,6 +20,8 @@
 
 ## 观察与去重
 
+**2026-09-29第八批更新：RR-33已实施并通过原触发与声明场景。**[修复/兼容/红绿证据](../bugfix/RR-20260929-33.md)。上文“未实施/候选”保留原时点；现有Mail采用Pipeline并逐future检查。新独立[RR-34](REVIEW-2026-09-29-services-10.md)另行交接，不推翻本次Mail修复有效性。
+
 - Match 终态 Tickets/Requests、完整队列 clone/JSON 重写的成本延续 [09-17 观察](REVIEW-2026-09-17.md#观察项终态历史保留使队列空了但聚合状态仍增长)。本轮补 Memory/Redis 64/256/1024/4096 历史规模、各 16 次 Enqueue/Cancel，最终 Waiting=0 仍保存历史。未测出规定 SLO 失败，不重复分配 RR；结果和归档约束见[机制学习](../review/IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md)。
 - PurchaseDrain 的 HGetAll 与永久 ClaimPurchase ledger 没有履约阻断/归档协议，沿旧观察；本轮 RR-32 修复只固定首次仍存在的 outbox 字段。不能据此删除 ledger 或把 delivered 改解释为资产已入账。
 - Session 释放回调“exactly/at most once”注释过强，真实调用可重复，资源端须持久且并发幂等；沿第三/五轮契约观察，不把 demo 日志当 allocator 验收。真实支付、资产/房间、HA/强杀与长稳没有执行。

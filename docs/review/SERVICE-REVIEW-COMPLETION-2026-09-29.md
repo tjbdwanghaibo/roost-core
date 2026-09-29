@@ -1,5 +1,18 @@
 # Service 审查完成矩阵（2026-09-29）
 
+## 最新：第八批 Mail 修复与第十轮邻接审查
+
+基线68cf87fc加本轮源摘要，[运行](REVIEW-2026-09-29-services-10.md)。**RR-33原触发/声明场景已修已验；新RR-34 P2未修。**10/10域主链有界整理保持完成，100路径97复用/3Mail变化复读，外加相关Redis/cache专项。
+
+| 层级 | 当前事实 | 仍未完成 |
+| --- | --- | --- |
+| Mail跨槽读取 | 有界Pipeline，原2叶子绿，Mod普通prefix跨3owner16封分页/claim通过 | 窄客户端补Pipeline、旧读取owner升级，未部署 |
+| Pipeline邻接错误 | 生命周期控制通过；standalone/Cluster首缺失后HSet错误被Exec吞掉，RR-34确认 | driver检查全部命令结果的实施/回归 |
+| 回归与消费 | Mail race/count2 314pass事件280叶子0skip；18包965pass事件888叶子；Core/consumer编译、vet、12check绿 | 3Toxiproxy skip；真实资源/HA/強杀/迁移/長稳未验 |
+
+新问题有复跑/实施入口；“主链整理完”不等于“所有逻辑无缺陷”。下方保留第九轮时点。
+
+
 ## 最新：第七批修复与第九轮专项收口
 
 **本阶段10/10域主链及本轮具名本机专项已完成有界审查；RR-31/32已修复验收，新RR-33未实施。**[本轮](REVIEW-2026-09-29-services-09.md) · [两项修复](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md) · [新问题](../bug/REVIEW-2026-09-29-services-09.md)。当前源码 bcebb805 加本轮内容，[100路径](evidence/service-review-20260929-09/inventory.csv)记录95不变blob复用/5变化复读，不冒称本轮逐行重读100文件。

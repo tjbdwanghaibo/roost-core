@@ -463,8 +463,8 @@ type Item struct {
 
 // List returns one page of a player's mailbox, newest first.
 //
-// The work is bounded, not just the output. This is exactly two reads — the
-// mailbox, then one batched envelope fetch for at most `limit` ids — where the
+// The work is bounded, not just the output: a mailbox read (and any necessary
+// expiry CAS), then one batched envelope fetch for at most `limit` ids. The
 // implementation this replaces clamped how many items it returned and then
 // looped issuing one read per envelope until the page filled, with no bound on
 // the iterations. A player with many deleted mails turned one packet into an

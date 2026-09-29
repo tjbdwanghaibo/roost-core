@@ -1,5 +1,8 @@
 # Roost Review 问题索引
 
+**最新第十轮：RR-33已修/原触发及声明场景已验；新[RR-34 P2 Pipeline先缺失后写错误却返回成功](REVIEW-2026-09-29-services-10.md)未实施。**[第八批修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-08.md) · [运行](../review/REVIEW-2026-09-29-services-10.md)。下方“RR-33未修”为历史时点。
+
+
 **最新第九轮：RR-31/32 2/2已修/声明场景验证；新[RR-33 P2 Mail Cluster多封页CROSSSLOT](REVIEW-2026-09-29-services-09.md)未实施。**[修复与升级](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md) · [service阶段收口](../review/REVIEW-2026-09-29-services-09.md)。原8/8、新正式33叶子、最终17包909事件通过；新Mail反例/Pipeline候选有真实Cluster证据。下方为历史时点。
 
 **最新：第六批已关闭 RR-28/29/30 原触发，继续 review 新开两个 P2。**[RR-31 Activity Cluster 完成聚合但无 dispatch；RR-32 demo 购买 catalog 升级重试覆盖首次 grant](REVIEW-2026-09-29-services-08.md)，均未实施。[三项修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [第八轮运行](../review/REVIEW-2026-09-29-services-08.md)。原15/15转绿、新正式43叶子与17包826事件通过；新3控制通过/5反例失败属两个RR。下方为历史时点。

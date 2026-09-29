@@ -17,26 +17,15 @@ import (
 // than accepting them. A double that returned success from SetNX would make
 // the insert-only test pass while proving nothing.
 //
-// Its limit, stated plainly: it reimplements MGet's semantics in Go rather
-// than talking to Redis, so what it establishes is that THIS package handles a
-// positional reply correctly — not that Redis or the driver produces one. That
-// half of the contract is pinned in roost-kit, where MGet is implemented,
-// against a real Redis; and end to end here in redis_integration_test.go.
-//
-// This division got smaller when MGet moved onto the client interface. The
-// batch read used to be a one-line Lua script, purely because the method was
-// missing, and a Go double cannot evaluate a script at all — so a defect in
-// the script text was invisible to every unit test. Removing the script
-// removed that blind spot rather than merely testing around it.
+// It evaluates buffered GETs on Exec; it does not establish driver or Cluster
+// routing correctness. Real-backend tests cover that separate contract.
 type fakeRedisEnvelopes struct {
 	mu     sync.Mutex
 	values map[string][]byte
-	// batchCalls counts round trips, so a test can assert that a batch read is
-	// ONE call rather than one per id.
+	// batchCalls counts executions, not network round trips across nodes.
 	batchCalls int
-	// shortReply makes the batch read return fewer values than keys, which is
-	// the truncating reply the store must refuse rather than silently drop.
-	shortReply bool
+	execErr    error
+	commandErr error
 	// lastTTL is the expiration the store asked for, so a test can assert
 	// that it came from the injected clock rather than the wall clock.
 	lastTTL time.Duration
@@ -74,29 +63,43 @@ func (f *fakeRedisEnvelopes) Get(_ context.Context, key string) ([]byte, error) 
 	return bytes.Clone(stored), nil
 }
 
-// MGet evaluates against the same map Get reads, honouring the positional
-// contract: one element per key, nil for absent ones. Copies go through
-// bytes.Clone so a stored EMPTY value stays a non-nil empty slice, as Redis
-// reports it — folding it into nil would hide the difference between "no key"
-// and "a key holding nothing", which is exactly what Get and GetMany must
-// agree on.
-func (f *fakeRedisEnvelopes) MGet(_ context.Context, keys ...string) ([][]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.batchCalls++
-	out := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		stored, ok := f.values[key]
-		if !ok {
-			out = append(out, nil)
-			continue
+type fakeEnvelopePipeline struct {
+	// Unused commands deliberately have no implementation: accidental use
+	// fails instead of pretending that it executed successfully.
+	fredis.IPipeline
+	client  *fakeRedisEnvelopes
+	keys    []string
+	futures []*fredis.FutureBytes
+}
+
+func (f *fakeRedisEnvelopes) Pipeline() fredis.IPipeline {
+	return &fakeEnvelopePipeline{client: f}
+}
+
+func (p *fakeEnvelopePipeline) Get(_ context.Context, key string) *fredis.FutureBytes {
+	future := &fredis.FutureBytes{}
+	p.keys = append(p.keys, key)
+	p.futures = append(p.futures, future)
+	return future
+}
+
+func (p *fakeEnvelopePipeline) Exec(ctx context.Context) error {
+	p.client.mu.Lock()
+	p.client.batchCalls++
+	execErr, commandErr := p.client.execErr, p.client.commandErr
+	p.client.mu.Unlock()
+	for i, key := range p.keys {
+		value, err := p.client.Get(ctx, key)
+		if i == len(p.keys)-1 && commandErr != nil {
+			err = commandErr
 		}
-		out = append(out, bytes.Clone(stored))
+		p.futures[i].SetResult(value, err)
 	}
-	if f.shortReply && len(out) > 0 {
-		out = out[:len(out)-1]
-	}
-	return out, nil
+	return execErr
+}
+
+func (p *fakeEnvelopePipeline) Discard() {
+	p.keys, p.futures = nil, nil
 }
 
 func (f *fakeRedisEnvelopes) rounds() int {
@@ -178,14 +181,14 @@ func TestRedisCreateRefusesAnAlreadyExpiredEnvelope(t *testing.T) {
 	}
 }
 
-// The batch read is ONE round trip regardless of how many ids it is given.
+// The batch uses one Exec regardless of how many ids it is given.
 // This is the assertion the contract exists for: the implementation being
 // replaced issued one read per envelope in an unbounded loop.
-func TestRedisGetManyIsOneRoundTrip(t *testing.T) {
+func TestRedisGetManyIsOneBoundedBatch(t *testing.T) {
 	store, fake := newRedisEnvelopeStore(t)
 	ctx := context.Background()
-	ids := make([]string, 0, 40)
-	for i := 0; i < 40; i++ {
+	ids := make([]string, 0, MaxPageSize)
+	for i := 0; i < MaxPageSize; i++ {
 		id := fmt.Sprintf("m%d", i)
 		if _, err := store.Create(ctx, testEnvelope(id, time.Hour)); err != nil {
 			t.Fatal(err)
@@ -201,7 +204,7 @@ func TestRedisGetManyIsOneRoundTrip(t *testing.T) {
 		t.Fatalf("the batch read returned %d envelopes for %d ids", len(got), len(ids))
 	}
 	if rounds := fake.rounds(); rounds != 1 {
-		t.Fatalf("reading %d envelopes took %d round trips, want 1", len(ids), rounds)
+		t.Fatalf("reading %d envelopes took %d executions, want 1", len(ids), rounds)
 	}
 }
 
@@ -238,21 +241,40 @@ func TestRedisGetManyRefusesAnOversizedBatch(t *testing.T) {
 	}
 }
 
-// A reply with fewer values than keys is refused. Accepting it would silently
-// drop envelopes, which is the truncating read this repository exists to
-// remove — and it is exactly what a short page looked like in the
-// implementation being replaced.
-func TestRedisGetManyRefusesAShortReply(t *testing.T) {
-	store, fake := newRedisEnvelopeStore(t)
-	ctx := context.Background()
-	for _, id := range []string{"m1", "m2", "m3"} {
-		if _, err := store.Create(ctx, testEnvelope(id, time.Hour)); err != nil {
-			t.Fatal(err)
-		}
+func TestRedisGetManyPreservesBatchAndCommandErrors(t *testing.T) {
+	backendErr := errors.New("backend unavailable")
+	for _, batchError := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch_error_%v", batchError), func(t *testing.T) {
+			store, fake := newRedisEnvelopeStore(t)
+			if _, err := store.Create(context.Background(), testEnvelope("present", time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if batchError {
+				fake.execErr = backendErr
+			} else {
+				fake.commandErr = backendErr
+			}
+			got, err := store.GetMany(context.Background(), []string{"missing", "present"})
+			if !errors.Is(err, backendErr) || got != nil {
+				t.Fatalf("partial success or lost error: %v %v", got, err)
+			}
+		})
 	}
-	fake.shortReply = true
-	if _, err := store.GetMany(ctx, []string{"m1", "m2", "m3"}); err == nil {
-		t.Fatal("a reply with fewer values than keys was accepted, silently dropping an envelope")
+}
+
+func TestRedisGetManyValidatesBeforeExecuting(t *testing.T) {
+	store, fake := newRedisEnvelopeStore(t)
+	if got, err := store.GetMany(context.Background(), nil); err != nil || len(got) != 0 {
+		t.Fatalf("empty: %v %v", got, err)
+	}
+	if _, err := store.GetMany(context.Background(), []string{"valid", " "}); !errors.Is(err, ErrMailInvalid) {
+		t.Fatal(err)
+	}
+	if _, err := store.GetMany(context.Background(), make([]string, MaxPageSize+1)); !errors.Is(err, ErrRangeInvalid) {
+		t.Fatal(err)
+	}
+	if fake.rounds() != 0 {
+		t.Fatal("invalid or empty batch reached backend")
 	}
 }
 

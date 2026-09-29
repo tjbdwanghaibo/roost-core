@@ -1,0 +1,106 @@
+{
+  "source_base": "68cf87fc79bb3d63c970bb0ce1439dd05466f039",
+  "working_changes": true,
+  "paths": [
+    {
+      "path": "service/mail/redis_store.go",
+      "git_blob": "92a6cb07b7f86dc97bf83bf9328267130970b5a3",
+      "raw_sha256": "654D1E8AA95B8884B2B8D59073BB0706D6675B47899D6AA9423FC13EB602A060"
+    },
+    {
+      "path": "service/mail/redis_store_test.go",
+      "git_blob": "d14d93535b09ae3141dfcce58314358265880b19",
+      "raw_sha256": "C03A2AA918B2918D5ABFADFAF6CF4AE7CDEFB949A263B46806AB060A639E147C"
+    },
+    {
+      "path": "service/mail/get_consistency_promises_test.go",
+      "git_blob": "7bcc9776b4607dca4fcf87b7e3cc97a19514b408",
+      "raw_sha256": "AFBFA08D20F741B9A7BB7585E641BDFAD6295B51D555FB4DFA10A8506CFD93EA"
+    },
+    {
+      "path": "service/mail/redis_integration_test.go",
+      "git_blob": "3bf60faa8a1244bf7c911bf97a6ecdc37c2b35a8",
+      "raw_sha256": "FEEB7709C2E2C5A68F312A7F0B8EE372C1BEE786C7FD31BDC222859A6CE3096C"
+    },
+    {
+      "path": "service/mail/store.go",
+      "git_blob": "d37e29272be8bacb2734e1418400c9b9d02cba18",
+      "raw_sha256": "D5A7C447737E2D9E672A2B8A90C472518D5F0A3EF23CD3416C42527299922632"
+    },
+    {
+      "path": "service/mail/service.go",
+      "git_blob": "eb6f526e558d67eaef31e704bdda2d20a07575c7",
+      "raw_sha256": "512EE28F2E4572926028EA42C008C5CA62B44F12D1A5608864684279578379E3"
+    },
+    {
+      "path": "kit/service/mail/mail_mod.go",
+      "git_blob": "872844292bf57d5a4e236475270c02c744599fe8",
+      "raw_sha256": "91CB6906F66F4D52C8C41311409BDA853B71177E470E92CF52264808652613F5"
+    },
+    {
+      "path": "redis/driver/pipeline.go",
+      "git_blob": "a52384f7eae85af4293838092c64d6deb965412c",
+      "raw_sha256": "86460FC57078C07C0FF3215F7D7F291B5B1B94CA29C21EAD2272466388227D47"
+    },
+    {
+      "path": "redis/pipeline.go",
+      "git_blob": "92deecdb1c33b813c72abc42b85eec5a2196a9f9",
+      "raw_sha256": "DA987E2D6CEA44F1923AE20ABE3994E55578A0EC5C6F5593CF20FA28006226B2"
+    },
+    {
+      "path": "redis/driver/client.go",
+      "git_blob": "d63a21e40fe10d3610c1d1f9aff4c18c93e808f3",
+      "raw_sha256": "BDFE65811948480D6297D8FD6E148CDA760B4B58F780B29DDD7962EE6C67712C"
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-09/mail_test.go.txt",
+      "git_blob": "d5a563d7dcdd5a918a67e51c781f0a5e44441574",
+      "raw_sha256": "5D66222B9F4D0F7A4BCF24761F1BB4A26EB05423E87C217264AA25B3B035F0DD"
+    },
+    {
+      "path": "service/mail/batch_pipeline_integration_test.go",
+      "git_blob": "5b268e0c1f9430365f699984d146b2c720bc29d3",
+      "raw_sha256": "B5D60B39F76D800CBA1C6D4ABED1C9400566568211F2DCB5A5DEF04E64EEF2B7"
+    },
+    {
+      "path": "kit/service/mail/batch_cluster_integration_test.go",
+      "git_blob": "d17adb46cf2825e6d7ded4463fd60dda4f96bd89",
+      "raw_sha256": "DE12A9C71230A0EA3BEB3257C8611D803CEEB22B7B85668D0C3F4300E8674298"
+    },
+    {
+      "path": "service/mail/types.go",
+      "git_blob": "c57bbf5f2f578f94be377b003a968c1f263f53f0",
+      "raw_sha256": "AB879E5813E31862968C0CCD677346BA9F8437004E849814914286FD937DDC9D"
+    },
+    {
+      "path": "kit/service/mail/mail_rpc_assembly_gen.go",
+      "git_blob": "b2a7ccecdaa939263ca018c4d856a8d6332218c6",
+      "raw_sha256": "FB6D613FF93CC2D85187B8E2DCB2EDC80AA8C234E2C58AE555FF5A2534B6E600"
+    },
+    {
+      "path": "redis/driver/cluster_recovery.go",
+      "git_blob": "c0c7f43ca66a6ddbda348ddc5ff36de7f0974d46",
+      "raw_sha256": "9CF2DD3BA2507B20DB4F655E27BF5DF4DA7D39EFEC67FB7FC5D62C0BB16579A8"
+    },
+    {
+      "path": "redis/driver/client_promises_test.go",
+      "git_blob": "42e680e9b22dc5f467b7fff9bac4edf27cda405f",
+      "raw_sha256": "7D8B3047B3AAAB901F7655100FB06BA2CB25C2C6E6EC503E0FDCCAFA3B338D74"
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-10/pipeline_test.go.txt",
+      "git_blob": "b2d8a8f39ef877c434c31b4a3c681ea31b17369f",
+      "raw_sha256": "52EFEE119972D1E8D37F7726B5884E51F6E2351D119A7826E46E14B68AE0B731"
+    },
+    {
+      "path": "cache/ref_hmap.go",
+      "git_blob": "9a48c7533c0dbc645ea10c4e244bc3113a79ce73",
+      "raw_sha256": "2CF2B507285EA5211497EF03CB342030BA48D6C20D8903149AB61920200D37B5"
+    },
+    {
+      "path": "service/mail/fake_envelopes_test.go",
+      "git_blob": "01ec29ed6ff4860caa0c0959249cf8eb83ad4e75",
+      "raw_sha256": "CB58E72A5E1E010F7AF5C79C1F2C40CDB16E5B3AF2C2E836DFA51F834137DF56"
+    }
+  ]
+}

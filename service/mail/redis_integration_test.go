@@ -17,16 +17,8 @@ import (
 	kitredis "github.com/tjbdwanghaibo/roost-core/redis/driver"
 )
 
-// These tests run the batch read and the key ttl against a real Redis,
-// because the unit-test double reimplements MGet's semantics in Go: it
-// establishes that this package handles a positional reply correctly, not that
-// Redis and the driver produce one.
-//
-// The gap used to be larger. The batch read was a one-line Lua script — purely
-// because MGet was missing from the client interface — and a Go double cannot
-// evaluate a script at all, so a defect in the script text was invisible to
-// every unit test. Adding MGet to the interface removed that blind spot
-// instead of testing around it.
+// These tests run bounded pipeline reads and key TTL against a real Redis.
+// The unit double evaluates commands in Go and cannot prove driver semantics.
 //
 //	docker run --rm -p 6379:6379 redis:7
 //	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./mail/ -run Integration
@@ -158,11 +150,7 @@ func TestIntegrationBatchReadReturnsOneValuePerKey(t *testing.T) {
 	}
 }
 
-// An empty batch must not reach Redis at all: `MGET` with no keys is an error
-// there, so a store that passed an empty list through would fail on a
-// perfectly ordinary empty page. MGet itself guarantees this, and it is
-// asserted here too because the failure would surface as a broken mailbox
-// page rather than as a client error.
+// An empty envelope page returns an empty result without backend work.
 func TestIntegrationAnEmptyBatchIsNotSentToRedis(t *testing.T) {
 	stores, _ := integrationStores(t)
 	got, err := stores.Envelopes.GetMany(context.Background(), nil)

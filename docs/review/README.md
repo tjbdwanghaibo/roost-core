@@ -1,5 +1,8 @@
 # Roost 持续 Review 与学习记录
 
+[09-29第八批bugfix/第十轮](REVIEW-2026-09-29-services-10.md)：[RR-33修复验证](../bugfix/RR-20260929-33.md)，正式Mod无tag跨3owner分页；新增[RR-34 Pipeline首缺失掩盖写错误](../bug/REVIEW-2026-09-29-services-10.md)，真实两后端反例、仅交接。[机制](IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md) · [进度](PROGRESS.md) · [复跑](evidence/service-review-20260929-10/README.md)。10域主链有界整理保持完成；100路径97复用/3变化，不冒称无bug。
+
+
 [09-29 第七批bugfix与第九轮专项收口](REVIEW-2026-09-29-services-09.md)：RR-31/32 **2/2修复验证**；新增[RR-33 Mail Cluster分页](../bug/REVIEW-2026-09-29-services-09.md)未修。10域主链、100路径核算及具名本机专项完成有界整理；外部资源/HA/长稳另算。[机制/归档方案](IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md) · [完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md) · [复跑](evidence/service-review-20260929-09/README.md) · [修复](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md)。
 
 [09-29 第六批 bugfix + 第八轮 review](REVIEW-2026-09-29-services-08.md)：RR-28/29/30 **3/3 修复验证**，原15/15转绿；正式定向43叶子、完整17包/826事件通过。继续发现 [Activity Cluster dispatch、购买 catalog 重试覆盖两项新 P2](../bug/REVIEW-2026-09-29-services-08.md)，仅记录未实施。[修复兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [复跑](evidence/service-review-20260929-08/README.md) · [机制](IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md#第六批修复后的实现与第八轮学习) · [进度](PROGRESS.md)。下方“未修”保留历史时点。

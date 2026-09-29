@@ -18,7 +18,8 @@ type EnvelopeStore interface {
 	Create(ctx context.Context, envelope Envelope) (created bool, err error)
 	// Get reads one envelope.
 	Get(ctx context.Context, id string) (Envelope, bool, error)
-	// GetMany reads a bounded set of envelopes in ONE round trip.
+	// GetMany reads a bounded set of envelopes in a batch. Cluster backends
+	// may use a batch per node; no cross-node atomic snapshot is promised.
 	//
 	// This method exists because of a confirmed defect: the implementation
 	// this replaces read one envelope page and then issued one state read per

@@ -1,5 +1,8 @@
 # Roost 核心优化汇总与 agent 交接
 
+**Service第八批/第十轮（2026-09-29）**：[RR-33 Mail Cluster批读修复/验证](bugfix/RR-20260929-33.md)，正式Mod跨3owner分页/claim；[新RR-34 P2 Pipeline首缺失掩盖写错误](bug/REVIEW-2026-09-29-services-10.md)只交接未改driver。[运行/停点](review/REVIEW-2026-09-29-services-10.md) · [机制/兼容](review/IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)。10域主链有界整理完成，965pass事件/3Toxiproxy skip分列；无key迁移、未发布/部署，不改其他核心性能专项验收。下方保留历史。
+
+
 **Service第七批与第九轮（2026-09-29）**：[RR-31/32两项2/2修复验证](bugfix/SERVICE-BUGFIX-2026-09-29-07.md)，原8/8、新正式33叶子、最终integration+race17包/909事件通过；[10域主链/具名本机专项收口](review/REVIEW-2026-09-29-services-09.md)，新[RR-33 P2 Mail Cluster页](bug/REVIEW-2026-09-29-services-09.md)仅记录未修。[Pipeline候选、Match历史成本、购买fulfilled归档设计](review/IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md)。不改变其他核心专项验收，已有业务需合并升级；HA/真实资源/迁移/长稳未全验，未发布。下方为历史时点。
 
 **Service 第六批实施与第八轮 review（2026-09-29）**：[RR-28/29/30 3/3 修复验证](bugfix/SERVICE-BUGFIX-2026-09-29-06.md)，原15/15、新正式43叶子、完整17包/826事件通过；继续确认[Activity Cluster dispatch准入、demo grant catalog重试覆盖两个新P2](bug/REVIEW-2026-09-29-services-08.md)，仅交接未实施。[运行/停点](review/REVIEW-2026-09-29-services-08.md)、[实际机制](review/IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md#第六批修复后的实现与第八轮学习)。不改下方性能专项验收；未发布、未迁移旧数据、HA/真实资金/长稳仍有限制。下方“未修”是历史时点。

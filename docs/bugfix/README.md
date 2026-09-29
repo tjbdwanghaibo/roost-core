@@ -1,5 +1,8 @@
 # Bugfix 记录
 
+[09-29第八批service修复](SERVICE-BUGFIX-2026-09-29-08.md)：[RR-33](RR-20260929-33.md) **1/1已修/声明场景已验**，现有Pipeline有界单key读取；原2/2绿、Mail race/count2 314pass事件/280叶子执行0skip。完整service+driver18包965pass事件、3Toxiproxy skip；全编译/生成consumer编译、vet、RPC12check通过。自定义窄客户端需补Pipeline，无key迁移；[新RR-34](../bug/REVIEW-2026-09-29-services-10.md)未修，未发布。
+
+
 [09-29 第七批service修复](SERVICE-BUGFIX-2026-09-29-07.md)：[RR-31](RR-20260929-31.md)/[RR-32](RR-20260929-32.md) **2/2已修/已验**，Activity现有Cluster验证/多game恢复、购买首次durable grant保留；原8/8、新正式33叶子、integration+race17包909事件通过。已有生成业务需合并write-once补丁，未发布/迁移；[新RR-33](../bug/REVIEW-2026-09-29-services-09.md)仅交接。
 
 [09-29 第六批 service 修复](SERVICE-BUGFIX-2026-09-29-06.md)：[RR-28](RR-20260929-28.md) / [RR-29](RR-20260929-29.md) / [RR-30](RR-20260929-30.md) **3/3 已修/已验**，原15叶子全过，新增正式43叶子、完整17包/826事件通过。原子缺失索引清理、Rank/Platform有效Cluster tag，不改键格式；旧数据对账/配置迁移、混合旧owner边界另列，未发布。[继续review新问题](../bug/REVIEW-2026-09-29-services-08.md)尚未实施。

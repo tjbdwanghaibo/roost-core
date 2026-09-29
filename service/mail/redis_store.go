@@ -100,7 +100,7 @@ func NewRedisStores(client fredis.IRedis, cfg RedisConfig) (RedisStores, error) 
 type envelopeClient interface {
 	SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
 	Get(ctx context.Context, key string) ([]byte, error)
-	MGet(ctx context.Context, keys ...string) ([][]byte, error)
+	Pipeline() fredis.IPipeline
 }
 
 // redisEnvelopes stores envelopes as one JSON value per key, with the key's
@@ -109,7 +109,7 @@ type envelopeClient interface {
 // Redis rather than a document store, deliberately: every other package in
 // this repository already requires Redis and none requires Mongo, so this
 // adds no infrastructure. And an envelope's shape fits exactly — written once
-// (SETNX), read in batches (one MGET), expiring on its own deadline (the key
+// (SETNX), read in bounded pipelines, expiring on its own deadline (the key
 // TTL). The implementation this replaces stored mail in Mongo with timestamps
 // as int64 milliseconds rather than dates, which meant it could not have a
 // TTL index and the collection grew without bound.
@@ -196,24 +196,12 @@ func (s *redisEnvelopes) Get(ctx context.Context, id string) (Envelope, bool, er
 	return envelope, true, nil
 }
 
-// GetMany reads a bounded set of envelopes in one round trip.
-//
-// This method exists because of a confirmed defect: the implementation this
-// replaces read one envelope page and then issued one state read per
-// envelope, in a loop with no bound on the iterations. A contract that can
-// only fetch one envelope at a time makes that the natural thing to write.
-//
-// It is one MGet. An earlier version wrapped `MGET` in a one-line Lua script,
-// because MGet was not on the client interface — which meant the batch read
-// went through a code path no Go test double can evaluate, for no reason
-// other than a missing method. MGet is on the interface now, so the script is
-// gone: there is less to get wrong, and the whole path is exercised by the
-// unit suite as well as against a real Redis.
+// GetMany batches at most MaxPageSize single-key reads in one pipeline Exec.
+// Cluster routes these commands per node; it is neither one global network
+// round trip nor an atomic snapshot. Unlike multi-key MGET, it supports
+// envelopes in different slots without changing their existing keys.
 func (s *redisEnvelopes) GetMany(ctx context.Context, ids []string) (map[string]Envelope, error) {
 	if len(ids) == 0 {
-		// A fast path, not a guard: MGet itself returns early for zero keys,
-		// so this only avoids building a keys slice. It is not separately
-		// testable and is not load-bearing.
 		return map[string]Envelope{}, nil
 	}
 	if len(ids) > MaxPageSize {
@@ -222,30 +210,32 @@ func (s *redisEnvelopes) GetMany(ctx context.Context, ids []string) (map[string]
 		// unbounded read this contract was introduced to prevent.
 		return nil, fmt.Errorf("%w: %d ids requested, limit %d", ErrRangeInvalid, len(ids), MaxPageSize)
 	}
-	keys := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if strings.TrimSpace(id) == "" {
 			return nil, fmt.Errorf("%w: batch contains an empty id", ErrMailInvalid)
 		}
-		keys = append(keys, s.key(id))
 	}
-	values, err := s.client.MGet(ctx, keys...)
-	if err != nil {
+	pipe := s.client.Pipeline()
+	defer pipe.Discard()
+	futures := make([]*fredis.FutureBytes, len(ids))
+	for index, id := range ids {
+		futures[index] = pipe.Get(ctx, s.key(id))
+	}
+	if err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("mail: batch read %d envelopes: %w", len(ids), err)
 	}
-	if len(values) != len(ids) {
-		// MGet's contract is positional: one element per key. A short reply
-		// would silently drop envelopes, which is the truncating-read failure
-		// this package exists to avoid — so it is checked here rather than
-		// trusted, even though the contract promises it.
-		return nil, fmt.Errorf("mail: batch read returned %d values for %d ids", len(values), len(ids))
-	}
 	out := make(map[string]Envelope, len(ids))
-	for index, payload := range values {
-		if payload == nil {
+	for index, future := range futures {
+		payload, err := future.Result()
+		if errors.Is(err, fredis.ErrNil) {
 			// Absent: the envelope expired. The caller counts these; see
 			// Service.List.
 			continue
+		}
+		// Exec's aggregate result cannot replace checking each command: an
+		// earlier missing key may mask a later command error in that result.
+		if err != nil {
+			return nil, fmt.Errorf("mail: read envelope %s: %w", ids[index], err)
 		}
 		envelope, err := decodeEnvelope(payload)
 		if err != nil {

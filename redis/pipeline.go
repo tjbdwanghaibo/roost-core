@@ -5,7 +5,8 @@ import (
 	"time"
 )
 
-// IPipeline batches multiple commands into a single round-trip.
+// IPipeline batches commands. Cluster clients route batches per node;
+// execution is not a transaction or an atomic snapshot across keys.
 type IPipeline interface {
 	Get(ctx context.Context, key string) *FutureBytes
 	Set(ctx context.Context, key string, value any, expiration time.Duration)
@@ -19,7 +20,8 @@ type IPipeline interface {
 	RPush(ctx context.Context, key string, values ...any)
 	LPop(ctx context.Context, key string) *FutureBytes
 
-	// Exec sends all buffered commands and returns results.
+	// Exec sends buffered commands and populates futures. Inspect each future
+	// for its command's error even when Exec returns nil.
 	Exec(ctx context.Context) error
 
 	// Discard clears buffered commands without executing.

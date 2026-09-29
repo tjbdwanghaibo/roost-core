@@ -1,0 +1,273 @@
+{
+  "initial": {
+    "project": "roost-core",
+    "signal": "best_effort",
+    "indexed_at": "2026-09-29T13:13:03Z",
+    "metadata": {
+      "generation": "2026-09-29T13:13:03Z",
+      "index_mode": "full",
+      "recorded_at": "2026-09-29T13:13:04Z",
+      "recording_status": "complete",
+      "ignored_files_stored": 1,
+      "ignored_files_total": 1,
+      "hash_records_complete": true,
+      "coverage_version": 3,
+      "generation_matches": true
+    },
+    "paths": [
+      {
+        "requested_path": "service/mail/redis_store.go",
+        "path": "service/mail/redis_store.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/redis_store_test.go",
+        "path": "service/mail/redis_store_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/get_consistency_promises_test.go",
+        "path": "service/mail/get_consistency_promises_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/redis_integration_test.go",
+        "path": "service/mail/redis_integration_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/store.go",
+        "path": "service/mail/store.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/service.go",
+        "path": "service/mail/service.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "kit/service/mail/mail_mod.go",
+        "path": "kit/service/mail/mail_mod.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "redis/driver/pipeline.go",
+        "path": "redis/driver/pipeline.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "redis/pipeline.go",
+        "path": "redis/pipeline.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "redis/driver/client.go",
+        "path": "redis/driver/client.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "docs/review/evidence/service-review-20260929-09/mail_test.go.txt",
+        "path": "docs/review/evidence/service-review-20260929-09/mail_test.go.txt",
+        "status": "no_recorded_issue",
+        "freshness": "not_tracked",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      }
+    ],
+    "scopes": [
+      {
+        "requested_scope": "service/mail",
+        "scope": "service/mail",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      },
+      {
+        "requested_scope": "kit/service/mail",
+        "scope": "kit/service/mail",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      },
+      {
+        "requested_scope": "redis/driver",
+        "scope": "redis/driver",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      }
+    ],
+    "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+  },
+  "added": {
+    "project": "roost-core",
+    "signal": "best_effort",
+    "indexed_at": "2026-09-29T13:13:03Z",
+    "metadata": {
+      "generation": "2026-09-29T13:13:03Z",
+      "index_mode": "full",
+      "recorded_at": "2026-09-29T13:13:04Z",
+      "recording_status": "complete",
+      "ignored_files_stored": 1,
+      "ignored_files_total": 1,
+      "hash_records_complete": true,
+      "coverage_version": 3,
+      "generation_matches": true
+    },
+    "paths": [
+      {
+        "requested_path": "service/mail/batch_pipeline_integration_test.go",
+        "path": "service/mail/batch_pipeline_integration_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "missing",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "kit/service/mail/batch_cluster_integration_test.go",
+        "path": "kit/service/mail/batch_cluster_integration_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "missing",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "service/mail/types.go",
+        "path": "service/mail/types.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "kit/service/mail/mail_rpc_assembly_gen.go",
+        "path": "kit/service/mail/mail_rpc_assembly_gen.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "redis/driver/cluster_recovery.go",
+        "path": "redis/driver/cluster_recovery.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "redis/driver/client_promises_test.go",
+        "path": "redis/driver/client_promises_test.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      },
+      {
+        "requested_path": "docs/review/evidence/service-review-20260929-10/pipeline_test.go.txt",
+        "path": "docs/review/evidence/service-review-20260929-10/pipeline_test.go.txt",
+        "status": "no_recorded_issue",
+        "freshness": "missing",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      }
+    ],
+    "scopes": [
+      {
+        "requested_scope": "redis/driver",
+        "scope": "redis/driver",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      },
+      {
+        "requested_scope": "service/mail",
+        "scope": "service/mail",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      },
+      {
+        "requested_scope": "kit/service/mail",
+        "scope": "kit/service/mail",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      }
+    ],
+    "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+  },
+  "cache": {
+    "project": "roost-core",
+    "signal": "best_effort",
+    "indexed_at": "2026-09-29T13:13:03Z",
+    "metadata": {
+      "generation": "2026-09-29T13:13:03Z",
+      "index_mode": "full",
+      "recorded_at": "2026-09-29T13:13:04Z",
+      "recording_status": "complete",
+      "ignored_files_stored": 1,
+      "ignored_files_total": 1,
+      "hash_records_complete": true,
+      "coverage_version": 3,
+      "generation_matches": true
+    },
+    "paths": [
+      {
+        "requested_path": "cache/ref_hmap.go",
+        "path": "cache/ref_hmap.go",
+        "status": "no_recorded_issue",
+        "freshness": "metadata_changed",
+        "recommended_action": "read_source_and_reindex",
+        "coverage": []
+      }
+    ],
+    "scopes": [
+      {
+        "requested_scope": "cache/ref_hmap.go",
+        "scope": "cache/ref_hmap.go",
+        "total": 0,
+        "has_more": false,
+        "entries": [],
+        "status": "no_recorded_issue"
+      }
+    ],
+    "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+  }
+}

@@ -1,5 +1,8 @@
 # Roost 文档中心
 
+**09-29 Service第八批/第十轮**：[RR-33 Mail跨槽分页已修/已验](bugfix/RR-20260929-33.md)，正式Mod跨3owner分页通过；新[RR-34 P2 Pipeline首缺失掩盖写错误](bug/REVIEW-2026-09-29-services-10.md)未实施。[运行](review/REVIEW-2026-09-29-services-10.md) · [机制学习](review/IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)。10域主链有界整理保持完成，外部专项另算；下方保留历史。
+
+
 **09-29 Service第七批与第九轮收口**：[RR-31/32两项已修/已验](bugfix/SERVICE-BUGFIX-2026-09-29-07.md)，[10域本阶段主链/专项完成口径](review/REVIEW-2026-09-29-services-09.md)，[新RR-33 Mail Cluster页与现有Pipeline方案](bug/REVIEW-2026-09-29-services-09.md)未实施。[历史状态/履约学习](review/IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md)。未发版，外部资源/HA/长稳另列。
 
 **09-29 最新：先 bugfix，再 service review。**[RR-28/29/30 三项修复与升级说明](bugfix/SERVICE-BUGFIX-2026-09-29-06.md)，原15/15与正式43叶子通过，完整17包/826事件通过；继续发现[Activity Cluster/购买首次grant两个新P2](bug/REVIEW-2026-09-29-services-08.md)，未实施。[运行](review/REVIEW-2026-09-29-services-08.md) · [最新进度](review/PROGRESS.md) · [学习](review/IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md#第六批修复后的实现与第八轮学习)。下方旧状态保留其历史时点。
