@@ -66,3 +66,7 @@ Tier2，graph project `roost-core`，root `D:/whb_s/cube-core`，开始 generati
 | HA/物理网络/长稳 | 本机三 master无 replica；hook证明错误分类，3 Toxiproxy未跑 | replica failover、网络分区、强杀、真实长稳与容量，独立记录环境/失败标准 |
 
 上述事项不冒充新确认 bug，也不冒充已实施功能；不阻止给出“本阶段Service源码主链审查已完成”，但不能称Service全面生产收敛。其他核心域、既有Wanted/性能台账不因本轮Service完成自动升级。
+
+## 最终交付补记
+
+实现/阶段文档提交 `16579298e7755ab3f3a108f0e80ed5561aebec0f` 已推送 main、主树干净快进；完整索引ready，generation `2026-09-29T14:50:03Z`，新五个正式测试symbol入图，115证据路径/3scope复核。仍有metadata_changed和两旧runner解析限制，沿当前源码内容与运行补证；[最终图谱](evidence/service-review-20260929-11/COVERAGE-AFTER.json)。本轮四个Redis仅核对本轮目录后关闭，端口全闭；后补只改文档/JSON，不改变已测源内容。

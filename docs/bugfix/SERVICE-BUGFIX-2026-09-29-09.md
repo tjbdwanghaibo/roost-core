@@ -9,3 +9,5 @@
 原真实反例 3/3 转绿；正式定向 race/count=2 58 次叶子执行通过，完整相关 integration/race 19 包、1035 pass 事件/951 pass 叶子通过，3 Toxiproxy test skip 与 servicemetrics 无测试 package skip 分开保留。Core/consumer 编译、vet、12 RPC check 通过。[结果和复跑](evidence/service-bugfix-20260929-09/README.md)。
 
 本轮专用 Redis8.8 standalone 16449、三 master Cluster 16446/16447/16448（16384 slots，state ok），无 replica/持久化。清理仅针对核验 dir 的本轮实例；未接触用户 MCP 进程或共享服务。上线、生产迁移、外部资产/渠道/allocator、HA/长稳不包含在本轮实施。
+
+交付补记：实现提交 `16579298e7755ab3f3a108f0e80ed5561aebec0f` 已推送 main、主树干净快进。full索引ready/generation14:50:03Z，新正式测试入图；115路径/3scope及限制见[最终图谱](../review/evidence/service-review-20260929-11/COVERAGE-AFTER.json)。四个专用Redis核对目录后关闭，端口全闭；文档后补不改变测试源码。
