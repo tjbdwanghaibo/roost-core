@@ -2,6 +2,8 @@
 
 ## 2026-09-29 第六批 bugfix 与 Service 第八轮
 
+代码与主体文档已提交推送 `5f81e5c8`。图谱 full 更新成功，最终 ready/HEAD 对齐、generation11:18:53Z，三个新正式测试已纳入；29证据路径仍metadata_changed，源码补证与partial边界见[刷新结果](evidence/service-review-20260929-08/COVERAGE-AFTER.json)。四个独占Redis实例已关闭，未停止共享MCP。
+
 基线 db642494 加本轮工作树修复，[源文件摘要](evidence/service-review-20260929-08/SOURCE.json)标识具体内容。**RR-28/29/30 三项 3/3 已修复、原场景验证；新 RR-31/32 两项 0/2 实施。**[修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [新问题](../bug/REVIEW-2026-09-29-services-08.md) · [运行](REVIEW-2026-09-29-services-08.md)。
 
 | 增量专项 | 已完成源码/实际场景 | 停点与下轮入口 |

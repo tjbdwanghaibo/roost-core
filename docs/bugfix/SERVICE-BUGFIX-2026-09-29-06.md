@@ -34,3 +34,5 @@ Go 1.27.0 Windows amd64；独占 Redis 8.8.0 单机 16419，三 master 16416/164
 [实际计数与日志 hash](evidence/service-bugfix-20260929-06/RESULTS.json) · [复跑入口](evidence/service-bugfix-20260929-06/README.md)。生产文件、正式测试与 review 依赖的 blob/SHA256 在[源码摘要](../review/evidence/service-review-20260929-08/SOURCE.json)。证据以 baseline+工作树内容摘要标识，不把测试时 HEAD 当作已经包含未提交修复。
 
 未验证实际支付渠道/资产、replica/failover、断网/强杀、历史索引迁移与长稳容量。原第五批 4/4 验收沿未变实现保留，新第八轮问题不会改写其历史。
+
+实施提交 `5f81e5c80ef3c8b7f517ab827157e3fc5fbc31d6` 已推送并核验 origin/main，主树干净同步；codebase-memory full索引成功、HEAD对齐、generation11:18:53Z。记录metadata_changed/partial限制，未停止共享MCP；测试独占实例核对目录后关闭，未发版。后续文档补记不改变上述生产源码/测试结果。

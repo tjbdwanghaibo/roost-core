@@ -31,6 +31,8 @@ Codebase-memory Verify；nearest Git project 为 roost-core/root D:/whb_s/cube-c
 
 测试时 HEAD 是基线，修复尚在工作树；记录 source_base+working_changes+源文件摘要，不把 HEAD 写成已经包含修复的 commit。提交同步后以新 index_status/coverage 追加事实，不停止共享 MCP 或清除未知锁。
 
+**收尾事实**：实现与本轮记录提交为 `5f81e5c80ef3c8b7f517ab827157e3fc5fbc31d6`，已正常推送并通过 ls-remote 验证 origin/main；干净主树快进同步。full index_repository 成功返回 indexed，后续 index_status ready/HEAD=5f81e5c8，generation **2026-09-29T11:18:53Z**、recording complete、31125 nodes/206239 edges；新方法与共享验证 search 命中无更多页。[刷新后 coverage](evidence/service-review-20260929-08/COVERAGE-AFTER.json)的三个新测试均已纳入，29路径仍 metadata_changed、flags_test仍partial，因此保留源码/测试证据，不宣称metadata freshness已完全消除。独占四个Redis实例在核对CONFIG GET dir后均已关闭；共享MCP未停止。此次提交不等于发布/部署。
+
 ## 当前进度与下轮入口
 
 Service 10/10 域、100 路径的**既有主链有界整理**保留；本轮为具名专项，不重新计算为逐行覆盖或全局 100% 无 bug。上轮三项 3/3 原触发关闭，本轮新增两项 0/2 实施。Wanted 标题均已分流/判定，本轮没有新增活动项；历史内容不再重复改结论。
