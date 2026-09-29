@@ -1,5 +1,7 @@
 # Service 第五轮问题与实施交接（2026-09-29）
 
+**最新实施状态**：RR-25/26/27 和旧 RR-20260914-02 的本轮残余 **4/4 已修复并通过正式回归**；见[第五批 bugfix 的决策、升级与证据](../bugfix/SERVICE-BUGFIX-2026-09-29-05.md)。Activity 采用持久创建计划与保留名额，Chat 同步处理页内/尾部 Gap；下方“未修”保留原审查时点，不表示当前状态。旧数据与真实外部系统边界未自动关闭。
+
 源码基线 `b336ce62f75ce0d763138bc8523c4695724214a2`。先完成[第四批 bugfix](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)，再审新范围。本轮 **3 个新问题（2 P2、1 P3）及旧 RR-20260914-02 的 P2 残余**均未实施。结果见[可执行证据](../review/evidence/service-review-20260929-05/README.md)；[完成矩阵](../review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)与[机制学习](../review/IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md)分开记录。
 
 ## RR-20260929-25

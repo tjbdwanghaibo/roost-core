@@ -564,14 +564,6 @@ func pageOf(state channelState, query HistoryQuery) Page {
 		}
 		selected = ring[start:end]
 		page.HasMore = end < len(ring)
-		// The cursor names a message older than the oldest one retained, so
-		// everything between them is gone. Report it rather than pretend the
-		// client is current.
-		if len(ring) == 0 {
-			page.Gap = query.AfterSeq < state.LastSeq
-		} else {
-			page.Gap = query.AfterSeq+1 < page.OldestSeq
-		}
 	case query.BeforeSeq > 0:
 		end := 0
 		for end < len(ring) && ring[end].Seq < query.BeforeSeq {
@@ -595,6 +587,37 @@ func pageOf(state channelState, query HistoryQuery) Page {
 		page.HasMore = start > 0
 	}
 
+	// Age pruning may leave holes inside the sequence-ordered ring. Report
+	// only the range this page crossed, including its cursor boundary and
+	// the missing tail when no later retained message remains.
+	if query.AfterSeq > 0 {
+		cursor := query.AfterSeq
+		for _, message := range selected {
+			if message.Seq-cursor > 1 {
+				page.Gap = true
+			}
+			cursor = message.Seq
+		}
+		if !page.HasMore && cursor < state.LastSeq {
+			page.Gap = true
+		}
+	} else {
+		for i := 1; i < len(selected); i++ {
+			if selected[i].Seq-selected[i-1].Seq > 1 {
+				page.Gap = true
+			}
+		}
+		upper := state.LastSeq
+		if query.BeforeSeq > 0 && query.BeforeSeq-1 < upper {
+			upper = query.BeforeSeq - 1
+		}
+		if len(selected) == 0 {
+			page.Gap = upper > 0
+		} else if selected[len(selected)-1].Seq < upper ||
+			(!page.HasMore && selected[0].Seq > 1) {
+			page.Gap = true
+		}
+	}
 	page.Messages = make([]Message, 0, len(selected))
 	for _, message := range selected {
 		page.Messages = append(page.Messages, message.clone())
@@ -635,18 +658,19 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 			return current, false, nil
 		}
 		next := current.clone()
-		// The ring is oldest first, so retention only ever removes a prefix.
-		// The age comes from the stored timestamp, which is the only thing that
-		// timestamp is for — it never decides order.
-		for len(next.Ring) > 0 && pruned < limit && next.Ring[0].StoredAtUnix <= cutoff {
-			next.Ring = next.Ring[1:]
-			pruned++
+		// Sequence order is independent of replica wall clocks. Scan the
+		// bounded ring for expired rows; never stop at a fresh prefix.
+		kept := make([]Message, 0, len(next.Ring))
+		for _, message := range next.Ring {
+			if pruned < limit && message.StoredAtUnix <= cutoff {
+				pruned++
+				continue
+			}
+			kept = append(kept, message)
 		}
 		if pruned == 0 {
 			return current, false, nil
 		}
-		kept := make([]Message, len(next.Ring))
-		copy(kept, next.Ring)
 		next.Ring = kept
 		next.Evicted += uint64(pruned)
 		// Idempotency keys are deliberately NOT dropped with their messages: a

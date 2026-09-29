@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[09-29 第五批 service 修复](SERVICE-BUGFIX-2026-09-29-05.md)：RR-25/26/27 与旧 Activity Opening 残余 4/4；Grouping 校验、Rank 溢出拒绝、Chat 年龄清理/Gap、Activity 持久计划与有界轮转。完整回归 16 包/830 事件通过，最终定向两模式各 27 叶子全过；Activity/Chat owner 升级与 legacy 处理有明确边界，未发版。
+
 [09-29 第四批 service 修复](SERVICE-BUGFIX-2026-09-29-04.md)：RR-23/24 与旧 RR-10 删除残余已修复，正式 Memory/Redis、生成工程消费回归通过。
 
 

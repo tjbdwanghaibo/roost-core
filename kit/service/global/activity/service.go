@@ -69,9 +69,10 @@ type Config struct {
 
 	// OpeningGrace is how long a window entry may sit unconfirmed — admitted
 	// by OpenActivity, Activities.Create not yet observed — before a sweep
-	// reclaims its slot. It covers the opener crashing between the two
-	// writes; a slow opener that confirms after it still lands in the window
-	// (confirm re-adds). Zero selects DefaultOpeningGrace.
+	// helps its durable creation intent forward. A timeout cannot prove an
+	// in-flight Create will never commit, so it does not release the slot.
+	// Legacy entries without an intent require a same-key Open retry.
+	// Zero selects DefaultOpeningGrace.
 	OpeningGrace time.Duration
 
 	// Now is the clock; nil means time.Now. Every deadline, grace window and
@@ -231,15 +232,6 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 		return Activity{}, err
 	}
 
-	// The window entry goes in first, as an opening entry. See Window: an
-	// activity with no window entry is never swept at all, while an opening
-	// entry with no activity is reclaimed only after OpeningGrace — a sweep
-	// running between these two writes must not read "no activity yet" as
-	// "dead entry" (RR-20260914-02).
-	if err := s.admitToWindow(ctx, key); err != nil {
-		return Activity{}, err
-	}
-
 	nowUnix := s.cfg.Now().Unix()
 	activity := Activity{
 		Key:              key,
@@ -248,15 +240,20 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 		OpenedAtUnix:     nowUnix,
 		UpdatedAtUnix:    nowUnix,
 	}
+	// Persist the plan and its capacity slot BEFORE Create. A sweep can help
+	// it after a crash without inventing a new expected set or releasing a
+	// slot still promised to a slow opener (RR-20260914-02).
+	activity, err := s.admitToWindow(ctx, activity)
+	if err != nil {
+		return Activity{}, err
+	}
 	stored, created, err := s.cfg.Activities.Create(ctx, key, activity)
 	if err != nil {
 		// The create may or may not have landed; the opening entry stays so
-		// the next sweep can tell (activity present → confirm, absent past
-		// OpeningGrace → reclaim).
+		// the next sweep can confirm or restore the same durable plan.
 		return Activity{}, err
 	}
-	// Confirm regardless of who created it: the record exists, so the key
-	// belongs in Keys, and a reclaim that raced ahead of us is undone here.
+	// Confirmation consumes the existing slot, never adds an unreserved one.
 	if err := s.confirmWindow(ctx, key); err != nil {
 		return Activity{}, err
 	}
@@ -267,35 +264,27 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 }
 
 // confirmWindow moves a key from Opening to Keys under compare-and-set. It
-// is idempotent and unconditional about presence: after Activities.Create
-// has been observed the key must be in Keys whether or not a sweep already
-// reclaimed its opening entry.
+// is idempotent but cannot invent a slot after an admission was removed.
 func (s *Service) confirmWindow(ctx context.Context, key Key) error {
 	_, _, err := s.cfg.Windows.Update(ctx, key.GroupID, func(current Window, found bool) (Window, bool, error) {
-		next := Window{GroupID: key.GroupID}
-		if found {
-			next = current.clone()
-			next.GroupID = key.GroupID
+		if !found {
+			return current, false, fmt.Errorf("%w: activity %s has no window admission", ErrConflict, key)
 		}
-		changed := false
-		if i := next.openingIndex(key); i >= 0 {
-			next.Opening = append(next.Opening[:i], next.Opening[i+1:]...)
-			changed = true
-		}
-		inKeys := false
-		for _, existing := range next.Keys {
-			if existing == key {
-				inKeys = true
-				break
-			}
-		}
-		if !inKeys {
-			next.Keys = append(next.Keys, key)
-			changed = true
-		}
-		if !changed {
+		next := current.clone()
+		if next.delivering(key) {
 			return current, false, nil
 		}
+		for _, existing := range next.Keys {
+			if existing == key {
+				return current, false, nil
+			}
+		}
+		i := next.openingIndex(key)
+		if i < 0 {
+			return current, false, fmt.Errorf("%w: activity %s has no window admission", ErrConflict, key)
+		}
+		next.Opening = append(next.Opening[:i], next.Opening[i+1:]...)
+		next.Keys = append(next.Keys, key)
 		return next, true, nil
 	})
 	return err
@@ -303,17 +292,32 @@ func (s *Service) confirmWindow(ctx context.Context, key Key) error {
 
 // admitToWindow adds a key to its group's pending window under
 // compare-and-set. It is idempotent, so a retried open does not double-list.
-func (s *Service) admitToWindow(ctx context.Context, key Key) error {
+func (s *Service) admitToWindow(ctx context.Context, activity Activity) (Activity, error) {
+	key := activity.Key
+	var planned Activity
 	var backlog bool
 	_, _, err := s.cfg.Windows.Update(ctx, key.GroupID, func(current Window, found bool) (Window, bool, error) {
 		backlog = false
+		planned = activity.clone()
 		next := Window{GroupID: key.GroupID}
 		if found {
 			next = current.clone()
 			next.GroupID = key.GroupID
 		}
 		if next.contains(key) {
+			if i := next.openingIndex(key); i >= 0 {
+				if next.Opening[i].Intent != nil {
+					planned = next.Opening[i].Intent.clone()
+				} else {
+					intent := planned.clone()
+					next.Opening[i].Intent = &intent
+					return next, true, nil
+				}
+			}
 			return current, false, nil
+		}
+		if next.delivering(key) {
+			return current, false, fmt.Errorf("%w: activity %s", ErrExists, key)
 		}
 		if next.pending() >= MaxPendingActivities {
 			// Saved, not just returned: the refusal is counted in the record
@@ -323,17 +327,18 @@ func (s *Service) admitToWindow(ctx context.Context, key Key) error {
 			next.RefusedOpens++
 			return next, true, nil
 		}
-		next.Opening = append(next.Opening, OpeningEntry{Key: key, AdmittedAtUnix: s.cfg.Now().Unix()})
+		intent := planned.clone()
+		next.Opening = append(next.Opening, OpeningEntry{Key: key, AdmittedAtUnix: activity.OpenedAtUnix, Intent: &intent})
 		return next, true, nil
 	})
 	if err != nil {
-		return err
+		return Activity{}, err
 	}
 	if backlog {
-		return fmt.Errorf("%w: group %q holds %d unfinished activities",
+		return Activity{}, fmt.Errorf("%w: group %q holds %d unfinished activities",
 			ErrBacklog, key.GroupID, MaxPendingActivities)
 	}
-	return nil
+	return planned, nil
 }
 
 // LookupActivity reads an aggregation.
@@ -713,14 +718,33 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		deadline int64
 	}
 	var (
-		due         []candidate
-		prune       []Key
-		heal        []Activity
-		confirm     []Key
-		dropOpening []Key
+		due     []candidate
+		prune   []Key
+		heal    []Activity
+		confirm []Key
 	)
 	nowUnix := s.cfg.Now().Unix()
 	snapshot := window.Value.clone()
+	batch := pendingScanBatch(snapshot)
+	selected := make(map[Key]struct{}, len(batch))
+	for _, key := range batch {
+		selected[key] = struct{}{}
+	}
+	if snapshot.pending() > MaxPendingActivities && len(batch) > 0 {
+		// Advance before I/O so one unavailable activity cannot pin every
+		// legacy tail behind it. Failed work is revisited on the next rotation.
+		last := batch[len(batch)-1]
+		if _, _, err := s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
+			if !found {
+				return current, false, nil
+			}
+			next := current.clone()
+			next.ScanAfter = &last
+			return next, true, nil
+		}); err != nil {
+			return nil, err
+		}
+	}
 	keys := snapshot.Keys
 	sortKeys(keys)
 	classify := func(key Key, activity Activity) {
@@ -736,12 +760,9 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			due = append(due, candidate{key: key, deadline: activity.GraceDeadlineUnix})
 		}
 	}
-	for index, key := range keys {
-		if index >= MaxPendingActivities {
-			// The bound is enforced on write, but a record written by an older
-			// build could exceed it. Stop rather than trust stored data to
-			// respect a bound this code is responsible for.
-			break
+	for _, key := range keys {
+		if _, scan := selected[key]; !scan {
+			continue
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, key)
 		if err != nil {
@@ -755,23 +776,32 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		classify(key, current.Value)
 	}
-	// Opening entries (U-0191): the opener may have died between admitting
-	// and creating, or between creating and confirming. Present → confirm on
-	// its behalf and treat it like any confirmed entry. Absent → nothing to
-	// conclude until OpeningGrace has passed; then reclaim, and only if the
-	// entry is still opening at reclaim time (see dropOpening in
-	// retireFromWindow).
+	// Help durable openings after grace; absence or a deadline cannot prove
+	// a slow Create is cancelled. Legacy entries without a plan stay visible
+	// until a same-key Open retry supplies the immutable creation intent.
 	openingGraceUnix := int64(s.cfg.OpeningGrace / time.Second)
 	for _, entry := range snapshot.Opening {
+		if _, scan := selected[entry.Key]; !scan {
+			continue
+		}
 		current, exists, err := s.cfg.Activities.Get(ctx, entry.Key)
 		if err != nil {
 			return nil, err
 		}
 		if !exists {
-			if nowUnix-entry.AdmittedAtUnix >= openingGraceUnix {
-				dropOpening = append(dropOpening, entry.Key)
+			if entry.Intent == nil || nowUnix-entry.AdmittedAtUnix < openingGraceUnix {
+				continue
 			}
-			continue
+			if entry.Intent.Key != entry.Key || entry.Intent.Status != StatusPending {
+				return nil, fmt.Errorf("%w: malformed opening intent for %s", ErrConflict, entry.Key)
+			}
+			if err := validateExpectedGames(entry.Intent.ExpectedGameSIDs); err != nil {
+				return nil, err
+			}
+			current, _, err = s.cfg.Activities.Create(ctx, entry.Key, entry.Intent.clone())
+			if err != nil {
+				return nil, err
+			}
 		}
 		confirm = append(confirm, entry.Key)
 		classify(entry.Key, current.Value)
@@ -815,12 +845,41 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		delivering = append(delivering, activity.Key)
 	}
-	if len(prune)+len(dropOpening) > 0 {
-		if err := s.retireFromWindow(ctx, groupID, prune, delivering, dropOpening); err != nil {
+	if len(prune) > 0 {
+		if err := s.retireFromWindow(ctx, groupID, prune, delivering); err != nil {
 			return completed, err
 		}
 	}
 	return completed, nil
+}
+
+// pendingScanBatch bounds backend reads and rotates a legacy oversized
+// window. The cursor is a key, so removal or insertion does not reset progress.
+func pendingScanBatch(window Window) []Key {
+	unique := make(map[Key]struct{}, window.pending())
+	for _, key := range window.Keys {
+		unique[key] = struct{}{}
+	}
+	for _, entry := range window.Opening {
+		unique[entry.Key] = struct{}{}
+	}
+	keys := make([]Key, 0, len(unique))
+	for key := range unique {
+		keys = append(keys, key)
+	}
+	sortKeys(keys)
+	if len(keys) <= MaxPendingActivities {
+		return keys
+	}
+	start := 0
+	if window.ScanAfter != nil {
+		start = sort.Search(len(keys), func(i int) bool { return keys[i].String() > window.ScanAfter.String() })
+	}
+	batch := make([]Key, 0, MaxPendingActivities)
+	for i := 0; i < MaxPendingActivities; i++ {
+		batch = append(batch, keys[(start+i)%len(keys)])
+	}
+	return batch
 }
 
 // completeExpired finishes one lapsed aggregation. advanced reports whether
@@ -865,7 +924,7 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 	if err := s.ensureDispatches(ctx, activity); err != nil {
 		return err
 	}
-	return s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key}, nil)
+	return s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key})
 }
 
 // retireFromWindow is the one compare-and-set that moves keys out of the
@@ -874,21 +933,13 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 //   - prune leaves Keys (and Opening, should a confirm have been skipped);
 //   - delivering (a subset of prune: the complete ones) joins Delivering so
 //     the sweep keeps retrying their dispatches (U-0192);
-//   - dropOpening leaves Opening only, and only if still there — the
-//     opener's confirm may have moved it to Keys since the sweep looked, in
-//     which case the reclaim observed a generation that no longer exists and
-//     must do nothing (U-0191).
-func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering, dropOpening []Key) error {
-	if len(prune)+len(dropOpening) == 0 {
+func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering []Key) error {
+	if len(prune) == 0 {
 		return nil
 	}
 	remove := make(map[Key]struct{}, len(prune))
 	for _, key := range prune {
 		remove[key] = struct{}{}
-	}
-	reclaim := make(map[Key]struct{}, len(dropOpening))
-	for _, key := range dropOpening {
-		reclaim[key] = struct{}{}
 	}
 	_, _, err := s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
 		if !found {
@@ -908,8 +959,7 @@ func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, d
 		opening := next.Opening[:0]
 		for _, entry := range next.Opening {
 			_, drop := remove[entry.Key]
-			_, reclaimed := reclaim[entry.Key]
-			if drop || reclaimed {
+			if drop {
 				changed = true
 				continue
 			}

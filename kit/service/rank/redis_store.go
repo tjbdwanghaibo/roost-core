@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -403,6 +404,10 @@ func nextScore(stored string, incoming Score, mode UpdateMode) (Score, bool, err
 			}
 		}
 	case UpdateAdd:
+		if (incoming.Value > 0 && current.Value > math.MaxInt64-incoming.Value) ||
+			(incoming.Value < 0 && current.Value < math.MinInt64-incoming.Value) {
+			return Score{}, false, fmt.Errorf("%w: additive score overflows int64", ErrScoreInvalid)
+		}
 		next.Value = current.Value + incoming.Value
 	default:
 		return Score{}, false, fmt.Errorf("%w: unknown mode %q", ErrScoreInvalid, mode)

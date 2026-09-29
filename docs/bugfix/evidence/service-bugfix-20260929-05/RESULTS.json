@@ -1,0 +1,768 @@
+{
+  "base_sha": "cec1dd30c66f420d9e01f4e659251abe3dfaec09",
+  "go": "1.27.0 windows/amd64",
+  "before": {
+    "source_head": "cec1dd30c66f420d9e01f4e659251abe3dfaec09",
+    "backend": "redis",
+    "redis": "127.0.0.1:16396",
+    "go_exit": 1,
+    "leaf_pass": 9,
+    "leaf_fail": 12,
+    "leaf_skip": 0,
+    "log_sha256": "36F6883B6CEA0211A8FEBF76D8AE5DF941B7678C365F5120EFDC1DA34F1104FC",
+    "outcomes": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_-1",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_0",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_1",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_65",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_-1",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_0",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_1",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_65",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingValidControl",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5MatchChurnRetainsHistoryObservation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/positive",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/negative",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddBoundaryControls",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global",
+        "Test": "TestReview5AcquireMigrationRaceCannotDisplaceNewLease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/session",
+        "Test": "TestReview5RotatingOwnerSourceClearsEveryPage",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/session",
+        "Test": "TestReview5ConcurrentFinishNeedsResourceSideIdempotency",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/account",
+        "Test": "TestReview5PendingRoleCannotPlayUntilRecovery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+        "Test": "TestReview5LateOpenCannotExceedWindowBound",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+        "Test": "TestReview5UnreclaimedOpeningControl",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+        "Test": "TestReview5DeduplicationWindowControls",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+        "Test": "TestReview5PruneMustFindExpiredRowsAfterClockSkew",
+        "Action": "fail"
+      }
+    ],
+    "failure_output": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_-1",
+        "Output": "    review5_overlay_test.go:16: invalid Queue caused panic instead of ErrQueueInvalid: runtime error: slice bounds out of range [:-1]\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_0",
+        "Output": "    review5_overlay_test.go:21: invalid size 0: formed=true err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_1",
+        "Output": "    review5_overlay_test.go:21: invalid size 1: formed=true err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/fifo/size_65",
+        "Output": "    review5_overlay_test.go:21: invalid size 65: formed=false err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_-1",
+        "Output": "    review5_overlay_test.go:16: invalid Queue caused panic instead of ErrQueueInvalid: runtime error: slice bounds out of range [:-1]\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_0",
+        "Output": "    review5_overlay_test.go:21: invalid size 0: formed=true err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_1",
+        "Output": "    review5_overlay_test.go:21: invalid size 1: formed=true err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "Test": "TestReview5GroupingRejectsInvalidQueues/score/size_65",
+        "Output": "    review5_overlay_test.go:21: invalid size 65: formed=false err=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore",
+        "Output": "=== RUN   TestReview5AddRejectsOverflowWithoutChangingScore\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/positive",
+        "Output": "=== RUN   TestReview5AddRejectsOverflowWithoutChangingScore/positive\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/positive",
+        "Output": "    review5_overlay_test.go:24: overflow committed: result={Rank:1 Score:{OwnerID:1 Value:-9223372036854775808 Tie:1790667850811 Brief:[]}} err=<nil> stored={Rank:1 Score:{OwnerID:1 Value:-9223372036854775808 Tie:1790667850811 Brief:[]}} found=true read=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/positive",
+        "Output": "--- FAIL: TestReview5AddRejectsOverflowWithoutChangingScore/positive (0.02s)\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/negative",
+        "Output": "=== RUN   TestReview5AddRejectsOverflowWithoutChangingScore/negative\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/negative",
+        "Output": "    review5_overlay_test.go:24: overflow committed: result={Rank:1 Score:{OwnerID:1 Value:9223372036854775807 Tie:1790667850820 Brief:[]}} err=<nil> stored={Rank:1 Score:{OwnerID:1 Value:9223372036854775807 Tie:1790667850820 Brief:[]}} found=true read=<nil>\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore/negative",
+        "Output": "--- FAIL: TestReview5AddRejectsOverflowWithoutChangingScore/negative (0.01s)\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+        "Test": "TestReview5AddRejectsOverflowWithoutChangingScore",
+        "Output": "--- FAIL: TestReview5AddRejectsOverflowWithoutChangingScore (0.03s)\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+        "Test": "TestReview5LateOpenCannotExceedWindowBound",
+        "Output": "    review5_overlay_test.go:92: expired admission returned and exceeded hard bound: pending=257 limit=256\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+        "Test": "TestReview5LateOpenCannotExceedWindowBound",
+        "Output": "    review5_overlay_test.go:108: expired late aggregation remains collecting: scan truncates its key behind 256 never-notified activities\n"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+        "Test": "TestReview5PruneMustFindExpiredRowsAfterClockSkew",
+        "Output": "    review5_overlay_test.go:75: one timestamp-expired message was blocked by nonexpired sequence prefix: pruned=0 err=<nil>\n"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "run": "memory",
+      "test_pass": 32,
+      "test_fail": 0,
+      "test_skip": 0,
+      "leaf_pass": 27,
+      "package_pass": 4,
+      "build_fail": 0,
+      "sha256": "CCE2C205F5468C5973A422E941CC3E0748812D7306BD55621FBD8B092134E57B",
+      "outcomes": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/positive",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/negative",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5ConcurrentAddsCannotWrapAfterCASRetry",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5AgePruneHandlesInteriorAndTailGaps",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5GapOnlyReportsTheRangeActuallyPaged",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LateCreateCannotBorrowAnAlreadyPromisedSlot",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LostAdmissionReplyRecoversItsOriginalPlan",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable/create",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable/confirm",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5OversizedLegacyWindowRotatesAcrossServiceRebuild",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim",
+          "Action": "pass"
+        }
+      ]
+    },
+    {
+      "run": "redis",
+      "test_pass": 32,
+      "test_fail": 0,
+      "test_skip": 0,
+      "leaf_pass": 27,
+      "package_pass": 4,
+      "build_fail": 0,
+      "sha256": "C0200B977D44801CEAF31E2AFD3A319F125B03B7887AE97B1E951F650C470EE9",
+      "outcomes": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/positive",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/negative",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5ConcurrentAddsCannotWrapAfterCASRetry",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5AgePruneHandlesInteriorAndTailGaps",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5GapOnlyReportsTheRangeActuallyPaged",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LateCreateCannotBorrowAnAlreadyPromisedSlot",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LostAdmissionReplyRecoversItsOriginalPlan",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable/create",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable/confirm",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5CreatedOrConfirmedReplyLossRemainsRecoverable",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5OversizedLegacyWindowRotatesAcrossServiceRebuild",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim",
+          "Action": "pass"
+        }
+      ]
+    },
+    {
+      "run": "baseline",
+      "test_pass": 830,
+      "test_fail": 0,
+      "test_skip": 0,
+      "leaf_pass": 773,
+      "package_pass": 16,
+      "build_fail": 0,
+      "sha256": "4DA096A8C232C8A1EBC3995739F5C02CBBB2DBE7D52FA4B40D5FC1538C64D648",
+      "outcomes": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/fifo",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_-1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_0_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_1_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_0",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score/size_65_candidates_2",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates/score",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestBugfix5GroupingValidatesBeforeReadingCandidates",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5AgePruneHandlesInteriorAndTailGaps",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/chat",
+          "Test": "TestBugfix5GapOnlyReportsTheRangeActuallyPaged",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LateCreateCannotBorrowAnAlreadyPromisedSlot",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LostAdmissionReplyRecoversItsOriginalPlan",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5OversizedLegacyWindowRotatesAcrossServiceRebuild",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestBugfix5LegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/positive",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest/negative",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5OverflowDoesNotChangeScoreOrConsumeRequest",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/rank",
+          "Test": "TestBugfix5ConcurrentAddsCannotWrapAfterCASRetry",
+          "Action": "pass"
+        }
+      ]
+    }
+  ],
+  "source_files": [
+    {
+      "path": "kit/service/chat/chat.go",
+      "sha256": "019AFF3C707FFCBD5D3D8D89B4FFDDD36CAF5A04F46007D6A6CEC55F48ABE81C"
+    },
+    {
+      "path": "kit/service/chat/store.go",
+      "sha256": "50FCC330271A1ED463A53DF295BC355C655E125BB4E6F682E4ECEF3237103406"
+    },
+    {
+      "path": "kit/service/global/activity/open_window_lifecycle_promises_test.go",
+      "sha256": "B057B5DF1D3368D0630B4E0405695FDFD0136F6B7933C97577A7A2D5CAF7FBCF"
+    },
+    {
+      "path": "kit/service/global/activity/service.go",
+      "sha256": "5E18DC19E5E919752FCFF42EBA0FEA017B3F0DC5724EE3FC938EE5AFDF475520"
+    },
+    {
+      "path": "kit/service/global/activity/types.go",
+      "sha256": "DFBB44663225D7D781006DF9E242210E48CFECF75A1C1FF5C66CBF45DAB89649"
+    },
+    {
+      "path": "kit/service/rank/redis_store.go",
+      "sha256": "EB6A7DACB79C1DD18C4641CAFD6A9940A2B2588F0E407A511187DF723A05B1CE"
+    },
+    {
+      "path": "service/match/grouping.go",
+      "sha256": "E5375832EECE3B5B78A11A76C93DD04CF628F002795D1433E50C75B55DC3E6D7"
+    },
+    {
+      "path": "service/match/bugfix_grouping_boundary_test.go",
+      "sha256": "6D8F7E221B49BDEFDA314F556C4B235ADCF35F94526AB0972FFB41FCAE1B1134"
+    },
+    {
+      "path": "kit/service/rank/bugfix_add_overflow_test.go",
+      "sha256": "E340310A739C7DA5173B922234A36270E7F7D94127974A6BC6B9599495FC9BE8"
+    },
+    {
+      "path": "kit/service/chat/bugfix_retention_gap_test.go",
+      "sha256": "67D1D11D1CCC8D8590CD9A86BD8CBF2918CFCAFC7D9956E0DFE46B1145723759"
+    },
+    {
+      "path": "kit/service/global/activity/bugfix_opening_recovery_test.go",
+      "sha256": "FF72F43AE5AF51FD3F31AE3F91BFC1138A9F8EE11986E0E421E5BB45E4FDAFF0"
+    }
+  ],
+  "limits": "Rank always Redis; Activity/Chat switch backend; object reconstruction is not process kill; baseline preceded two supplemental create/confirm lost-response cases"
+}

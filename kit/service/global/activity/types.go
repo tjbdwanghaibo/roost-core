@@ -782,11 +782,13 @@ type Window struct {
 	Keys []Key `json:"keys,omitempty"`
 	// Opening are entries admitted before their Activities.Create has been
 	// confirmed (U-0191, RR-20260914-02). A sweep that finds no activity for
-	// one of these cannot tell "not created yet" from "never will be"; it
-	// only reclaims the entry once it is older than Config.OpeningGrace, and
-	// only if it is still here — the confirm that follows Create moves it to
-	// Keys under the same compare-and-set, so a late reclaim finds nothing.
+	// one of these cannot tell "not created yet" from "never will be".
+	// After Config.OpeningGrace it helps the durable intent forward; it never
+	// frees a capacity slot on the strength of a timeout.
 	Opening []OpeningEntry `json:"opening,omitempty"`
+	// ScanAfter rotates bounded reads across legacy oversized windows.
+	// Persisted so rebuilding the service does not restart at the same prefix.
+	ScanAfter *Key `json:"scan_after,omitempty"`
 	// Delivering are complete activities whose dispatches are not all
 	// terminal yet (U-0192, RR-20260914-03). They left Keys — the aggregation
 	// is over — but the sweep must keep finding them until every dispatch is
@@ -802,6 +804,10 @@ type Window struct {
 type OpeningEntry struct {
 	Key            Key   `json:"key"`
 	AdmittedAtUnix int64 `json:"admitted_at_unix"`
+	// Intent is the immutable creation plan. A timeout cannot revoke a
+	// possibly in-flight Create; the sweep helps this plan forward instead.
+	// Nil identifies a legacy admission requiring a same-key Open retry.
+	Intent *Activity `json:"intent,omitempty"`
 }
 
 // contains reports whether key holds a pending slot: confirmed or opening.
@@ -844,6 +850,16 @@ func (w Window) clone() Window {
 	if len(w.Opening) > 0 {
 		out.Opening = make([]OpeningEntry, len(w.Opening))
 		copy(out.Opening, w.Opening)
+		for i, entry := range out.Opening {
+			if entry.Intent != nil {
+				intent := entry.Intent.clone()
+				out.Opening[i].Intent = &intent
+			}
+		}
+	}
+	if w.ScanAfter != nil {
+		key := *w.ScanAfter
+		out.ScanAfter = &key
 	}
 	if len(w.Delivering) > 0 {
 		out.Delivering = make([]Key, len(w.Delivering))

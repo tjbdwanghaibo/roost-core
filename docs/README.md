@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-29 Service 第五批 bugfix**：[RR-25/26/27 与旧活动残余 4/4 修复](bugfix/SERVICE-BUGFIX-2026-09-29-05.md)。完整 16 包/830 事件回归与最终 Memory/Redis 定向通过；Activity 持久计划/保留容量、旧超容量扫描轮转、Chat 页内/尾部 Gap 已实现。owner 升级与旧数据边界另列，未发版。
+
 **09-29 Service 修复后审查收口**：[10 域完成矩阵](review/SERVICE-REVIEW-COMPLETION-2026-09-29.md) · [第五轮运行](review/REVIEW-2026-09-29-services-05.md) · [3 新问题及旧活动残余](bug/REVIEW-2026-09-29-services-05.md) · [容量/年龄/资源恢复学习](review/IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md)。第四批 3 项已修复并推送；新四项交接未实施。主链范围收口，外部系统/HA/强杀/性能专项仍未验证。
 
 **09-29 Service 第四批修复完成**：[3 项实现与升级说明](bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。未知发货保留证明、回包切片隔离、未领取删除身份保留；801 事件 service 回归通过，未发版。

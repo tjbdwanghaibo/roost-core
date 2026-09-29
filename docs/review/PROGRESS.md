@@ -1,5 +1,9 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第五批 bugfix
+
+基线 cec1dd30；RR-25/26/27 与旧 RR-20260914-02 的本轮残余 **4/4 已实施、原触发和邻接恢复回归通过**。[决策、兼容与执行记录](../bugfix/SERVICE-BUGFIX-2026-09-29-05.md)。16 包/830 测试及子测试事件通过；随后补充两个写后丢回复场景，最终定向两模式各 27 叶子/32 事件全过。全仓编译、四包 vet、Chat/Activity 生成检查与生成消费者通过。Activity/Chat owner 升级、legacy 意图、真实外部系统边界保留；继续修后 service review，不因 4/4 关闭所有专项。
+
 ## 2026-09-29 Service 第五轮：本阶段主链收口
 
 source b336ce62；第四批 3 项修复已推送。随后完成[第五轮新内容](REVIEW-2026-09-29-services-05.md)、[10 域矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)和[机制学习](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md)。**10/10 域的列明主链/存储/组装契约已整理；100/100 当前生产路径已归类，不是逐行或测试覆盖率。**57 路径复用未变源码证据、25 非生成变更路径复读、18 生成文件当前检查。

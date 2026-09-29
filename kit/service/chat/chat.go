@@ -573,11 +573,9 @@ type Page struct {
 	// HasMore reports that more retained messages exist in the direction this
 	// page was paging.
 	HasMore bool `json:"has_more"`
-	// Gap reports that the forward cursor predates the oldest retained
-	// message: messages between them were dropped by retention and this client
-	// will never receive them. Saying so is the difference from an
-	// implementation where the loss was silent — a client can resynchronise
-	// instead of believing it is up to date.
+	// Gap reports missing sequences crossed by this page, including holes
+	// left by age pruning, its cursor boundary, and an exhausted retained
+	// tail. The client can resynchronise instead of treating loss as current.
 	Gap bool `json:"gap"`
 	// OldestSeq is the oldest sequence still retained, zero when nothing is.
 	OldestSeq uint64 `json:"oldest_seq"`

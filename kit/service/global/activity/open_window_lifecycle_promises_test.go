@@ -14,7 +14,7 @@ import (
 // 删掉"——它分不清"还没建"与"已经没了"。交错:admitToWindow → sweep 读到 key、Get 不存在、prune →
 // Create 成功 → 首个 notify 进入 collecting → 宽限期过了,窗口里没有它,没人再看它:
 // `status=collecting window=[]`。承诺:窗口条目有 opening / 确认两段生命周期,清理只能删它观察到
-// 的那一代(仍在 opening 且超过 OpeningGrace 的),Create 之后的确认无论如何都把 key 落进窗口。
+// 的恢复责任。OpeningGrace 后帮助持久计划创建,确认只消费原来的名额。
 
 type openingStoreHook struct {
 	versionstore.Store[Key, Activity]
@@ -67,7 +67,7 @@ func TestSweepHealsAnOpeningEntryWhoseActivityExists(t *testing.T) {
 	s, c := newActivityService(t)
 	ctx := context.Background()
 	k := activityKey("half-open")
-	if err := s.admitToWindow(ctx, k); err != nil {
+	if _, err := s.admitToWindow(ctx, Activity{Key: k, ExpectedGameSIDs: []int32{1, 2}, Status: StatusPending}); err != nil {
 		t.Fatal(err)
 	}
 	now := s.cfg.Now().Unix()
@@ -88,9 +88,9 @@ func TestSweepHealsAnOpeningEntryWhoseActivityExists(t *testing.T) {
 	}
 }
 
-// 对照:Create 一直失败(开活动的进程没能建记录),opening 条目在 OpeningGrace 之后被回收,
-// 名额还回来;在此之前不回收——那可能只是还没建完。
-func TestSweepReclaimsAnAbandonedOpeningEntryAfterGrace(t *testing.T) {
+// Create 返回错误不能证明未提交。Grace 后继续帮助相同计划,失败时仍保留名额,
+// 后端恢复后成功创建;不能靠超时重新承诺这个名额。
+func TestSweepRetainsAndRecoversAnUnknownOpeningAfterGrace(t *testing.T) {
 	s, c := newActivityService(t)
 	ctx := context.Background()
 	hook := &openingStoreHook{Store: s.cfg.Activities, createErr: errors.New("activities: connection reset")}
@@ -106,10 +106,17 @@ func TestSweepReclaimsAnAbandonedOpeningEntryAfterGrace(t *testing.T) {
 		t.Fatalf("an opening entry inside its grace was reclaimed: window=%v", keys)
 	}
 	c.advance(s.cfg.OpeningGrace + time.Second)
+	if _, err := s.AdvanceExpired(ctx, "group-a", 10); err == nil {
+		t.Fatal("expected the still-unavailable create to be reported")
+	}
+	if keys, _ := s.PendingActivities(ctx, "group-a", 10); len(keys) != 1 {
+		t.Fatalf("unknown create lost its capacity promise: window=%v", keys)
+	}
+	hook.createErr = nil
 	if _, err := s.AdvanceExpired(ctx, "group-a", 10); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.PendingActivities(ctx, "group-a", 10); len(keys) != 0 {
-		t.Fatalf("abandoned opening entry not reclaimed after grace: window=%v", keys)
+	if activity, found, err := s.LookupActivity(ctx, k); err != nil || !found || activity.Status != StatusPending {
+		t.Fatalf("creation plan was not recovered: %+v %v %v", activity, found, err)
 	}
 }

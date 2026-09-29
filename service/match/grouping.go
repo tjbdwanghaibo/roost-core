@@ -28,6 +28,9 @@ type Grouping interface {
 type FirstComeGrouping struct{}
 
 func (FirstComeGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, bool, error) {
+	if err := queue.Validate(); err != nil {
+		return nil, false, err
+	}
 	if len(candidates) < queue.GroupSize {
 		return nil, false, nil
 	}
@@ -53,6 +56,9 @@ type ScoreWindowGrouping struct {
 }
 
 func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, bool, error) {
+	if err := queue.Validate(); err != nil {
+		return nil, false, err
+	}
 	if g.NowUnix == nil {
 		return nil, false, fmt.Errorf("%w: score window grouping needs a clock", ErrQueueInvalid)
 	}
