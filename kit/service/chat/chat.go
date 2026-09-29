@@ -404,15 +404,17 @@ func resolveRef(ch Channel, rule ChannelRule, participant int64) (ChannelRef, er
 	if err := ch.validate(rule, participant); err != nil {
 		return ChannelRef{}, err
 	}
+	// Preserve built-in keys; escape delimiters in extensible kind names.
+	kind := strings.NewReplacer("%", "%25", ":", "%3A").Replace(string(ch.Kind))
 	switch rule.Scope {
 	case ScopeShared:
-		return ChannelRef{Kind: ch.Kind, key: fmt.Sprintf("%s:%d", ch.Kind, ch.Target)}, nil
+		return ChannelRef{Kind: ch.Kind, key: fmt.Sprintf("%s:%d", kind, ch.Target)}, nil
 	case ScopePair:
 		low, high := participant, ch.Target
 		if low > high {
 			low, high = high, low
 		}
-		return ChannelRef{Kind: ch.Kind, key: fmt.Sprintf("%s:%d:%d", ch.Kind, low, high)}, nil
+		return ChannelRef{Kind: ch.Kind, key: fmt.Sprintf("%s:%d:%d", kind, low, high)}, nil
 	default:
 		return ChannelRef{}, fmt.Errorf("%w: kind %q has unknown scope %q", ErrChannelInvalid, ch.Kind, rule.Scope)
 	}

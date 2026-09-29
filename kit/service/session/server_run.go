@@ -32,7 +32,7 @@ const SweepBatch = 100
 // a deployment supplies the owner set, and until it does, expired runs are
 // resolved lazily by the next Enter from the same owner (see resolveClaim).
 // Lazy resolution is correct but only fires when that owner comes back, so a
-// deployment that wants resources released promptly wires the list here.
+// deployment that wants prompt release supplies WithSweepOwners to NewMod.
 func (s *Server) run(ctx context.Context) error {
 	ticker := time.NewTicker(SweepInterval)
 	defer ticker.Stop()
@@ -55,11 +55,7 @@ func (s *Server) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			owners := s.sweepOwners()
-			if len(owners) == 0 {
-				continue
-			}
-			resolved, err := service.Sweep(ctx, owners, SweepBatch)
+			resolved, err := service.SweepPending(ctx, SweepBatch)
 			if err != nil {
 				// Reported, not returned: a sweep that failed is retried on
 				// the next tick, and taking the process down for it would
@@ -73,11 +69,3 @@ func (s *Server) run(ctx context.Context) error {
 		}
 	}
 }
-
-// sweepOwners is the owner set this process sweeps.
-//
-// Empty by default, deliberately: there is no way to enumerate owners without
-// an unbounded scan, and inventing one here would put that scan on a timer. A
-// deployment that knows its live owners — from a presence service, from a
-// shard's roster — supplies them.
-func (s *Server) sweepOwners() []int64 { return nil }

@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-29 最新修复**：[Service 两轮 bugfix 与实施接手](bugfix/SERVICE-BUGFIX-2026-09-29.md)，18 项新问题及旧正常 Finish ABA 已实施并通过定向回归；[roost-bugfix skill](agent-skills/roost-bugfix/SKILL.md) 已新增。尚未发版，升级/旧数据恢复边界见总记录。下方历史 review 的“未修复”不代表当前源码。
+
 [09-29 Service 第二轮](review/REVIEW-2026-09-29-services-02.md)：新增 8 个可复现问题，补旧 Session ABA 的正常 Finish/真实 Redis 证据。[问题及修复方案](bug/REVIEW-2026-09-29-services-02.md) · [复跑](bug/REPRO-2026-09-29-services-02.md) · [进度](review/PROGRESS.md)。没有修改生产代码。
 
 [09-29 Core 全 service 审查与实施交接](review/REVIEW-2026-09-29-services.md)：10 个服务域主链、9 项可复现问题和 1 项自动清理接线缺口；原有 race/Redis 集成与生成门禁通过。附[问题](bug/REVIEW-2026-09-29-services.md)、[复现](bug/REPRO-2026-09-29-services.md)、[设计机制](review/IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)及[进度](review/PROGRESS.md)。仅文档，未修生产代码。

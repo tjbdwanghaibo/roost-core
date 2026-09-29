@@ -44,6 +44,15 @@ type claimsWithDeleteHook struct {
 	hook *deleteHook
 }
 
+func (s *claimsWithDeleteHook) DeleteIf(ctx context.Context, key int64, expect versionstore.Versioned[Claim], match func(Claim) bool) error {
+	store := s.Store.(versionstore.ConditionalDeleter[int64, Claim])
+	if err := store.DeleteIf(ctx, key, expect, match); err != nil {
+		return err
+	}
+	s.hook.fire()
+	return nil
+}
+
 func (s *claimsWithDeleteHook) Delete(ctx context.Context, key int64, expect versionstore.Versioned[Claim]) error {
 	if err := s.Store.Delete(ctx, key, expect); err != nil {
 		return err

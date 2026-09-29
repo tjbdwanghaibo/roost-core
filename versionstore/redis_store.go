@@ -375,6 +375,10 @@ func (s *RedisStore[K, T]) Create(ctx context.Context, key K, value T) (Versione
 }
 
 func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T]) error {
+	return s.DeleteIf(ctx, key, expect, nil)
+}
+
+func (s *RedisStore[K, T]) DeleteIf(ctx context.Context, key K, expect Versioned[T], match func(T) bool) error {
 	redisKey, err := s.key(key)
 	if err != nil {
 		return err
@@ -392,37 +396,36 @@ func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T
 	if current.Version != expect.Version {
 		return fmt.Errorf("%w: %s is at version %d, caller held %d", ErrVersionMismatch, redisKey, current.Version, expect.Version)
 	}
-	// Delete by compare-and-set to a tombstone-free state is not expressible
-	// with CompareAndSet, so the version check above is confirmed by a
-	// conditional delete: swap to a sentinel only if unchanged, then remove.
-	// Doing it in one step would need a dedicated script; the swap makes the
-	// window observable rather than silent.
-	var retire *fredis.CompareAndSetIndex
+	if match != nil && !match(current.Value) {
+		return fmt.Errorf("%w: %s identity changed", ErrVersionMismatch, redisKey)
+	}
+	keys := []string{redisKey}
+	member := ""
 	if s.cfg.Index != nil {
 		// The set this value is in comes from the value itself when the index
 		// is per owner, which is why the read above is needed before the
 		// delete rather than only for the version compare.
-		if member, indexKey := s.cfg.KeyOf(key), s.cfg.Index.indexKeyFor(current.Value); member != "" && indexKey != "" {
-			retire = &fredis.CompareAndSetIndex{Key: indexKey, Member: member, Remove: true}
+		if indexKey := s.cfg.Index.indexKeyFor(current.Value); indexKey != "" {
+			member = s.cfg.KeyOf(key)
+			keys = append(keys, indexKey)
 		}
 	}
-	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
-		Key: redisKey, Expected: raw, Next: deleteSentinel, TTL: time.Second,
-		Index: retire,
-	})
+	result, err := s.client.Eval(ctx, deleteIfScript, keys, raw, member)
 	if err != nil {
 		return err
 	}
-	if !result.Applied {
+	if applied, _ := result.(int64); applied != 1 {
 		return fmt.Errorf("%w: %s changed during delete", ErrVersionMismatch, redisKey)
-	}
-	if _, err := s.client.Del(ctx, redisKey); err != nil {
-		return err
 	}
 	return nil
 }
 
-var deleteSentinel = []byte("0\n")
+const deleteIfScript = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call("DEL", KEYS[1])
+if KEYS[2] then redis.call("ZREM", KEYS[2], ARGV[2]) end
+return 1
+`
 
 func (s *RedisStore[K, T]) backoff(attempt int) {
 	RetryBackoff(attempt, s.cfg.RetryBackoff, s.cfg.Sleep)

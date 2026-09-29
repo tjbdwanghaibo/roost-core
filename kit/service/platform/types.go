@@ -236,6 +236,10 @@ type Order struct {
 	// Attempts counts delivery attempts. It bounds the retry queue and is the
 	// signal that a payment is not getting through.
 	Attempts int32 `json:"attempts"`
+	// AttemptSequence never resets on reopen. PendingAttempts survives budget
+	// exhaustion: a timer cannot prove that an external delivery stopped.
+	AttemptSequence uint64   `json:"attempt_sequence,omitempty"`
+	PendingAttempts []uint64 `json:"pending_attempts,omitempty"`
 	// MaxAttempts is the ceiling this order was created under, so raising the
 	// configured ceiling does not silently revive orders that already gave up.
 	MaxAttempts int32 `json:"max_attempts"`
@@ -261,6 +265,11 @@ type Order struct {
 	// no recorded reason cannot be reviewed.
 	AdminNote         string `json:"admin_note,omitempty"`
 	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
+}
+
+func (o Order) clone() Order {
+	o.PendingAttempts = append([]uint64(nil), o.PendingAttempts...)
+	return o
 }
 
 // Terminal reports whether the order needs no further delivery work.

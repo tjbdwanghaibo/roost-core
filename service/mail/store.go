@@ -47,6 +47,9 @@ type SentRecord struct {
 	RequestID     string `json:"request_id"`
 	MailID        string `json:"mail_id"`
 	CreatedAtUnix int64  `json:"created_at_unix"`
+	// Intent survives a failed envelope insert so retries restore the SAME
+	// mail id and contents. Nil is an older record, not permission to invent.
+	Intent *Envelope `json:"intent,omitempty"`
 	// DeliveredAtUnix is stamped once the envelope's delivery has succeeded.
 	// Zero means the first attempt never finished delivering, and a replay of
 	// this request id must deliver before it answers "sent". Records written

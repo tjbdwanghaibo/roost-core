@@ -18,22 +18,24 @@ import (
 )
 
 type (
-	State         = core.State
-	Resource      = core.Resource
-	Run           = core.Run
-	Claim         = core.Claim
-	LedgerEntry   = core.LedgerEntry
-	EnterRequest  = core.EnterRequest
-	Config        = core.Config
-	Service       = core.Service
-	Releaser      = core.Releaser
-	ReleaserFunc  = core.ReleaserFunc
-	RunStore      = core.RunStore
-	ClaimStore    = core.ClaimStore
-	RequestLedger = core.RequestLedger
-	Admin         = core.Admin
-	RedisConfig   = core.RedisConfig
-	RedisStores   = core.RedisStores
+	State           = core.State
+	Resource        = core.Resource
+	Run             = core.Run
+	Claim           = core.Claim
+	LedgerEntry     = core.LedgerEntry
+	EnterRequest    = core.EnterRequest
+	Config          = core.Config
+	Service         = core.Service
+	Releaser        = core.Releaser
+	ReleaserFunc    = core.ReleaserFunc
+	RunStore        = core.RunStore
+	ClaimStore      = core.ClaimStore
+	RequestLedger   = core.RequestLedger
+	OwnerSource     = core.OwnerSource
+	OwnerSourceFunc = core.OwnerSourceFunc
+	Admin           = core.Admin
+	RedisConfig     = core.RedisConfig
+	RedisStores     = core.RedisStores
 )
 
 const (

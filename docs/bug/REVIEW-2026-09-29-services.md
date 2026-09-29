@@ -1,5 +1,7 @@
 # Core service 新问题与实施交接（2026-09-29）
 
+**后续实施更新（2026-09-29）**：RR-20260929-01～10 已在 `f46db3e7` 基线上修复并通过定向回归；各项当前行为、兼容限制与测试见 [bugfix 总记录](../bugfix/SERVICE-BUGFIX-2026-09-29.md)。下文保留原始发现、反例和当时的建议。
+
 审查基线：`6b73289cefd4e300a75f2550d4d68646172294ad`。9 月 28 日的初始基线 `b8a401ab` 到此提交没有修改 `service/`、`kit/service/`。本轮只登记问题，不修生产代码，不宣布旧问题关闭。执行环境、全部反例源码与复跑方法见 [复现说明](REPRO-2026-09-29-services.md)，设计与性能判断见 [运行报告](../review/REVIEW-2026-09-29-services.md) 与 [机制文档](../review/IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)。
 
 | 编号 | 优先级 | 问题 | 证据 |

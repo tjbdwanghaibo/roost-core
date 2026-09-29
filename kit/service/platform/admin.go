@@ -65,6 +65,10 @@ type Admin interface {
 	// this service — refunded, or granted by hand — so it stops being owed
 	// without being counted as a delivery.
 	SettleOutOfBand(ctx context.Context, orderID string, note string) (order Order, err error)
+	// ResolvePendingAttempts is an audited assertion that ALL external
+	// attempts stopped and their outcomes were reconciled. It is owner-only;
+	// a deployment must establish this fact before clearing an unknown debt.
+	ResolvePendingAttempts(ctx context.Context, orderID string, note string) (order Order, err error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. Notes are stored on the order and
@@ -101,6 +105,9 @@ func (s *Service) ReopenDelivery(ctx context.Context, orderID string, note strin
 	_, _, err = s.cfg.Orders.Update(ctx, orderID, func(current Order, found bool) (Order, bool, error) {
 		if !found {
 			return current, false, fmt.Errorf("%w: order %s is not recorded", ErrOrderInvalid, orderID)
+		}
+		if len(current.PendingAttempts) != 0 {
+			return current, false, fmt.Errorf("%w: delivery outcomes remain pending", ErrNotResolvable)
 		}
 		switch current.State {
 		case DeliveryExhausted:
@@ -168,6 +175,9 @@ func (s *Service) SettleOutOfBand(ctx context.Context, orderID string, note stri
 		if !found {
 			return current, false, fmt.Errorf("%w: order %s is not recorded", ErrOrderInvalid, orderID)
 		}
+		if len(current.PendingAttempts) != 0 {
+			return current, false, fmt.Errorf("%w: delivery outcomes remain pending", ErrNotResolvable)
+		}
 		switch current.State {
 		case DeliveryExhausted:
 			// The only settleable state.
@@ -191,6 +201,34 @@ func (s *Service) SettleOutOfBand(ctx context.Context, orderID string, note stri
 	}
 	s.report.Accepted("admin.settle")
 	return settled, nil
+}
+
+func (s *Service) ResolvePendingAttempts(ctx context.Context, orderID, note string) (Order, error) {
+	note, err := validateAdminNote(note)
+	if err != nil {
+		return Order{}, err
+	}
+	nowUnix := s.cfg.Now().Unix()
+	var result Order
+	_, _, err = s.cfg.Orders.Update(ctx, orderID, func(current Order, found bool) (Order, bool, error) {
+		if !found {
+			return current, false, fmt.Errorf("%w: order %s", ErrOrderInvalid, orderID)
+		}
+		if current.State != DeliveryExhausted {
+			return current, false, fmt.Errorf("%w: reconciliation requires exhausted order", ErrNotResolvable)
+		}
+		current = current.clone()
+		current.PendingAttempts = nil
+		current.AdminNote = note
+		current.AdminActionAtUnix = nowUnix
+		current.UpdatedAtUnix = current.AdminActionAtUnix
+		result = current.clone()
+		return current, true, nil
+	})
+	if err == nil {
+		s.report.Accepted("admin.reconcile")
+	}
+	return result, err
 }
 
 // validateAdminNote requires a reason and bounds it.

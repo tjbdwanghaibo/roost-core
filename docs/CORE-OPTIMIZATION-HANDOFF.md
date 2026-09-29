@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**Service 实施交接（2026-09-29）**：[两轮 18 项新问题及旧正常 Finish ABA 修复](bugfix/SERVICE-BUGFIX-2026-09-29.md)已完成定向回归，未发版；新增 [roost-bugfix](agent-skills/roost-bugfix/SKILL.md)。这是 service 状态/恢复的独立批次，不改下方既有性能任务的验收结论。
+
 **当前状态（2026-09-27）**：RR-20260926-01～85 全部已修复并已发布——RR-01～29、31、32 随 **v1.17.0**（2026-09-26，tag `8811c02`），RR-30、33～85 随 **v1.17.1**（2026-09-27，tag `ffcf902`）；各轮修复均已提交并推送 main。v1.17.1 之后仍未完成 / 未验证的条目统一在 [OPEN-ITEMS-2026-09-27](review/OPEN-ITEMS-2026-09-27.md)，进度以其 §H 为准。下文 §5 各条中的“未提交 / 未修复 / 未发布”是当时的记录，已在条目内注明现状。
 
 **仍然有效的边界**：RR-10～24 的修复见[新增复审修复](review/REVIEW-2026-09-26-release-fixes.md)（已随 v1.17.0 发布）。§4 的 Remote 两行原为直接注入 MongoCommitter 的装配；2026-09-29 已在正式 kit Backend 装配复测（B30，写许可 256，见[复测记录](review/REVIEW-2026-09-29-b30.md)），结论已并入 §4；Remote + lease-fence 混合准入明确拒绝；同 SessionID 重连遇到旧队列未退出需重试。下文原批次结论需结合此更新阅读。

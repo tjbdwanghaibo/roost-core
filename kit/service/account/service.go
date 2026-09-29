@@ -173,10 +173,23 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 		return Account{}, err
 	}
 	accountID := Identity{Channel: verified.Channel, OpenID: verified.OpenID}.AccountID()
+	legacyID := strings.ToLower(strings.TrimSpace(string(verified.Channel))) + ":" + strings.TrimSpace(verified.OpenID)
+	if legacyID != accountID {
+		legacy, found, err := s.cfg.Accounts.Get(ctx, legacyID)
+		if err != nil {
+			return Account{}, err
+		}
+		if found && sameVerifiedIdentity(legacy.Value, verified) {
+			accountID = legacyID
+		}
+	}
 	now := s.cfg.Now()
 
 	var result Account
 	_, _, err = s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {
+		if found && !sameVerifiedIdentity(current, verified) {
+			return current, false, fmt.Errorf("%w: stored account identity does not match verified identity", ErrIdentityInvalid)
+		}
 		if found && current.Banned {
 			// A banned account still resolves, so an operator can see it, but
 			// login does not succeed.
@@ -258,7 +271,8 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 		return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
 	}
 
-	nameClaim, err := s.cfg.Names.Reserve(ctx, name, directory.Owner(accountID), s.cfg.ClaimTTL)
+	nameOwner := directory.Owner(slotKey)
+	nameClaim, err := s.cfg.Names.Reserve(ctx, name, nameOwner, s.cfg.ClaimTTL)
 	if err != nil {
 		if releaseErr := s.releaseSlot(ctx, slotKey, slot); releaseErr != nil {
 			err = errors.Join(err, releaseErr)
@@ -268,6 +282,11 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 			return Role{}, fmt.Errorf("%w: %q", ErrNameTaken, name)
 		}
 		return Role{}, err
+	}
+	// A committed legacy owner can happen to equal another account's slot
+	// key. Never use or compensate an already-committed name reservation.
+	if nameClaim.ExpiresAt.IsZero() {
+		return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, name), s.releaseSlot(ctx, slotKey, slot))
 	}
 
 	playerID, err := s.cfg.Allocator.Allocate(ctx, serverID)
@@ -298,14 +317,10 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 			s.rollback(ctx, nameClaim, slotKey, slot))
 	}
 
-	// The commit point is the slot write at the very end. Everything before it
-	// is reversible and IS reversed on failure — including the role record,
-	// which nobody has been handed yet. Until this fix the two tail failures
-	// returned the error and kept the role: a lost name commit left a role
-	// whose name claim lapsed and could then be taken by another account, and
-	// a lost slot write left a role the retrying client was refused for with
-	// ErrRoleLimit. Success is not reported before the commit point, and
-	// nothing that precedes it may survive a failure (U-0021).
+	// The commit point is the final slot write. Before compensating an error
+	// at that boundary, read back whether it committed: an error reply does
+	// not prove that the write was absent. Unknown outcomes preserve the role
+	// and name for reconciliation (RR-20260929-12).
 	if _, err := s.cfg.Names.Commit(ctx, nameClaim); err != nil {
 		return Role{}, errors.Join(err,
 			s.rollbackRole(ctx, storedRole),
@@ -319,10 +334,20 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 		current.PlayerID = playerID
 		return current, true, nil
 	}); err != nil {
+		// An error is not evidence that the commit failed. Reconcile before
+		// compensation; a failed read retains the role/name for recovery.
+		current, found, readErr := s.cfg.Slots.Get(ctx, slotKey)
+		if readErr != nil {
+			return role, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
+		}
+		if found && current.Value.PlayerID == playerID && current.Value.AccountID == accountID && current.Value.ServerID == serverID {
+			s.report.Accepted("create_role")
+			return role, nil
+		}
 		// The name is committed by now, so it is released as an owner would
 		// release it, not cancelled as a claim.
 		var joined error
-		if releaseErr := s.cfg.Names.Release(ctx, role.Name, directory.Owner(accountID)); releaseErr != nil {
+		if releaseErr := s.cfg.Names.Release(ctx, role.Name, nameOwner); releaseErr != nil {
 			joined = errors.Join(joined, fmt.Errorf("release committed name: %w", releaseErr))
 		}
 		joined = errors.Join(joined, s.rollbackRole(ctx, storedRole), s.releaseSlot(ctx, slotKey, slot))
@@ -333,6 +358,10 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 	}
 	s.report.Accepted("create_role")
 	return role, nil
+}
+
+func sameVerifiedIdentity(account Account, identity Verified) bool {
+	return strings.EqualFold(strings.TrimSpace(string(account.Channel)), strings.TrimSpace(string(identity.Channel))) && strings.TrimSpace(account.OpenID) == strings.TrimSpace(identity.OpenID)
 }
 
 // rollbackRole removes a role record the caller was never handed, version

@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -965,6 +968,20 @@ func (s *Service) ApplyProgress(
 	requestID string,
 	delta ProgressDelta,
 ) (Participant, error) {
+	for attempt := 0; attempt < versionstore.DefaultMaxAttempts; attempt++ {
+		result, err := s.applyProgress(ctx, key, participantID, requestID, delta)
+		if !errors.Is(err, versionstore.ErrVersionMismatch) {
+			return result, err
+		}
+		if err := ctx.Err(); err != nil {
+			return Participant{}, err
+		}
+		versionstore.RetryBackoff(attempt, 0, nil)
+	}
+	return Participant{}, fmt.Errorf("%w: progress snapshot kept changing", versionstore.ErrConflict)
+}
+
+func (s *Service) applyProgress(ctx context.Context, key Key, participantID, requestID string, delta ProgressDelta) (Participant, error) {
 	requestKey := RequestKey{Activity: key, ParticipantID: participantID, RequestID: requestID}
 	if err := requestKey.Validate(); err != nil {
 		return Participant{}, err
@@ -991,6 +1008,26 @@ func (s *Service) ApplyProgress(
 
 	now := s.cfg.Now()
 	participantKey := ParticipantKey{Activity: key, ParticipantID: participantID}
+	// Read BEFORE consulting the ledger. A stale reserved reader must not
+	// apply after another caller confirmed and reclaimed its bounded proof.
+	observed, _, err := s.lookupParticipant(ctx, participantKey)
+	if err != nil {
+		return Participant{}, err
+	}
+	pending := observed.PendingRequestIDs
+	if observed.ProgressProofVersion == 0 {
+		pending = observed.AppliedRequestIDs
+	}
+	var confirmed []string
+	for _, id := range pending {
+		proof, found, err := s.cfg.Ledger.Get(ctx, RequestKey{Activity: key, ParticipantID: participantID, RequestID: id})
+		if err != nil {
+			return Participant{}, err
+		}
+		if found && proof.Value.State == ReservationApplied {
+			confirmed = append(confirmed, id)
+		}
+	}
 
 	reservation := ProgressReservation{
 		Key:           requestKey,
@@ -1021,6 +1058,9 @@ func (s *Service) ApplyProgress(
 			return Participant{}, fmt.Errorf("%w: request %q was reserved for a different delta", ErrRequestInvalid, requestID)
 		}
 		if existing.Value.State == ReservationApplied {
+			if err := s.clearPendingProgress(ctx, participantKey, requestID); err != nil {
+				return Participant{}, err
+			}
 			current, _, err := s.lookupParticipant(ctx, participantKey)
 			if err != nil {
 				return Participant{}, err
@@ -1041,14 +1081,29 @@ func (s *Service) ApplyProgress(
 			result = current.clone()
 			return current, false, nil
 		}
+		if current.Applies != observed.Applies {
+			return current, false, versionstore.ErrVersionMismatch
+		}
 		next := Participant{Key: key, ParticipantID: participantID}
 		if found {
 			next = current.clone()
 			next.Key, next.ParticipantID = key, participantID
 		}
+		if next.ProgressProofVersion == 0 {
+			next.PendingRequestIDs = cloneStrings(next.AppliedRequestIDs)
+			next.ProgressProofVersion = 1
+		}
+		next.PendingRequestIDs = slices.DeleteFunc(next.PendingRequestIDs, func(id string) bool { return slices.Contains(confirmed, id) })
+		if len(next.PendingRequestIDs) >= MaxProgressWindow {
+			return current, false, fmt.Errorf("%w: pending progress confirmations are full", versionstore.ErrConflict)
+		}
+		if next.Score > math.MaxInt64-delta.Score || next.Progress > math.MaxInt64-delta.Progress || next.Applies == math.MaxUint64 {
+			return current, false, fmt.Errorf("%w: progress total would overflow", ErrRequestInvalid)
+		}
 		next.Score += delta.Score
 		next.Progress += delta.Progress
 		next.AppliedRequestIDs = appendBounded(next.AppliedRequestIDs, requestID, MaxProgressWindow)
+		next.PendingRequestIDs = append(next.PendingRequestIDs, requestID)
 		next.Applies++
 		next.UpdatedAtUnix = now.Unix()
 		result = next.clone()
@@ -1064,8 +1119,23 @@ func (s *Service) ApplyProgress(
 	if err := s.markReservationApplied(ctx, requestKey, now.Unix()); err != nil {
 		return result, err
 	}
+	if err := s.clearPendingProgress(ctx, participantKey, requestID); err != nil {
+		return result, err
+	}
 	s.report.Accepted("apply_progress")
 	return result, nil
+}
+
+func (s *Service) clearPendingProgress(ctx context.Context, key ParticipantKey, requestID string) error {
+	_, _, err := s.cfg.Participants.Update(ctx, key, func(current Participant, found bool) (Participant, bool, error) {
+		if !found || !slices.Contains(current.PendingRequestIDs, requestID) {
+			return current, false, nil
+		}
+		next := current.clone()
+		next.PendingRequestIDs = slices.DeleteFunc(next.PendingRequestIDs, func(id string) bool { return id == requestID })
+		return next, true, nil
+	})
+	return err
 }
 
 func (s *Service) markReservationApplied(ctx context.Context, key RequestKey, nowUnix int64) error {
@@ -1313,6 +1383,10 @@ func (s *Service) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (
 					ErrDispatchExhausted, key, gameSID, current.Attempts)
 				return current, false, nil
 			}
+			if !current.Due(nowUnix) {
+				refusal = fmt.Errorf("%w: activity %s game %d is due at %d, now %d", ErrDispatchNotDue, key, gameSID, current.NextAttemptAtUnix, nowUnix)
+				return current, false, nil
+			}
 			if current.Attempts >= current.MaxAttempts {
 				// Budget spent and still unacknowledged. Record the terminal
 				// state; the refusal is reported after the write so the state
@@ -1323,11 +1397,6 @@ func (s *Service) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (
 				result = next.clone()
 				exhausted = true
 				return next, true, nil
-			}
-			if !current.Due(nowUnix) {
-				refusal = fmt.Errorf("%w: activity %s game %d is due at %d, now %d",
-					ErrDispatchNotDue, key, gameSID, current.NextAttemptAtUnix, nowUnix)
-				return current, false, nil
 			}
 			next := current.clone()
 			next.Attempts++

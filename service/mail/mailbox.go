@@ -46,8 +46,9 @@ type Mailbox struct {
 
 // Entry is one mail's state for one player.
 type Entry struct {
-	MailID string `json:"mail_id"`
-	Status Status `json:"status"`
+	MailID                string `json:"mail_id"`
+	Status                Status `json:"status"`
+	EnvelopeExpiresAtUnix int64  `json:"envelope_expires_at_unix,omitempty"`
 
 	// ClaimToken is the idempotency key for this mail's attachment delivery.
 	//
@@ -74,6 +75,30 @@ type Entry struct {
 
 	DeliveredAtUnix int64 `json:"delivered_at_unix"`
 	UpdatedAtUnix   int64 `json:"updated_at_unix"`
+}
+
+// expireEntries reclaims only known-expired entries with no unsettled claim.
+// Unknown legacy expiry and a retained token require explicit recovery.
+func (m *Mailbox) expireEntries(nowUnix int64) bool {
+	changed := false
+	for id, entry := range m.Entries {
+		if entry.EnvelopeExpiresAtUnix <= 0 || nowUnix < entry.EnvelopeExpiresAtUnix {
+			continue
+		}
+		if entry.ClaimToken != "" && entry.Status != StatusClaimed {
+			continue
+		}
+		if entry.Status == StatusUnread {
+			m.Unread--
+		}
+		delete(m.Entries, id)
+		m.Evicted++
+		changed = true
+	}
+	if changed {
+		m.UpdatedAtUnix = nowUnix
+	}
+	return changed
 }
 
 // claimable reports whether a reservation may be taken now, and why not when

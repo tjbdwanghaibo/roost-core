@@ -183,7 +183,8 @@ func (i Identity) Validate() error {
 // Derivation is deterministic so the same verified identity always maps to the
 // same account without a lookup table.
 func (i Identity) AccountID() string {
-	return strings.ToLower(strings.TrimSpace(string(i.Channel))) + ":" + strings.TrimSpace(i.OpenID)
+	channel := strings.ToLower(strings.TrimSpace(string(i.Channel)))
+	return strings.NewReplacer("%", "%25", ":", "%3A").Replace(channel) + ":" + strings.TrimSpace(i.OpenID)
 }
 
 // Account is one player's account across servers.

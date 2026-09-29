@@ -188,8 +188,10 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (Envelope, error) {
 	// sends with one request id cannot both proceed to create an envelope.
 	// The implementation this replaces checked a ledger and then wrote,
 	// which two racers both pass.
+	intent := envelope.clone()
 	_, claimed, err := s.cfg.Sends.Create(ctx, req.RequestID, SentRecord{
 		RequestID: req.RequestID, MailID: id, CreatedAtUnix: now.Unix(),
+		Intent: &intent,
 	})
 	if err != nil {
 		return Envelope{}, err
@@ -283,6 +285,29 @@ func (s *Service) replaySend(ctx context.Context, record SentRecord) (Envelope, 
 		return Envelope{}, err
 	}
 	if !ok {
+		if record.Intent != nil && record.Intent.ID == record.MailID {
+			envelope = record.Intent.clone()
+			if record.DeliveredAtUnix != 0 {
+				return envelope, nil
+			}
+			if envelope.Expired(s.cfg.Now().Unix()) {
+				return Envelope{}, fmt.Errorf("%w: pending send expired", ErrMailInvalid)
+			}
+			if _, err := s.cfg.Envelopes.Create(ctx, envelope); err != nil {
+				return Envelope{}, err
+			}
+			// A concurrent retry may have created it; use the authoritative value.
+			stored, found, err := s.cfg.Envelopes.Get(ctx, record.MailID)
+			if err != nil {
+				return Envelope{}, err
+			}
+			if !found || !sameSendIntent(stored, envelope) {
+				return Envelope{}, fmt.Errorf("%w: reserved envelope differs or is missing", ErrConflict)
+			}
+			envelope, ok = stored, true
+		}
+	}
+	if !ok {
 		// The ledger names a mail that is not there. Answering "sent"
 		// would be a lie and answering "not sent" would risk a second
 		// send; report the inconsistency instead.
@@ -306,7 +331,7 @@ func (s *Service) replaySend(ctx context.Context, record SentRecord) (Envelope, 
 func (s *Service) deliverDirect(ctx context.Context, envelope Envelope) error {
 	nowUnix := s.cfg.Now().Unix()
 	for _, playerID := range envelope.Recipients {
-		if err := s.Deliver(ctx, playerID, envelope.ID, nowUnix); err != nil {
+		if err := s.deliver(ctx, playerID, envelope.ID, nowUnix, envelope.ExpiresAtUnix); err != nil {
 			return err
 		}
 	}
@@ -319,6 +344,24 @@ func (s *Service) deliverDirect(ctx context.Context, envelope Envelope) error {
 // strategy a caller picks, this is the step that has to be idempotent, and
 // reimplementing it would be reimplementing the unread counter.
 func (s *Service) Deliver(ctx context.Context, playerID int64, mailID string, nowUnix int64) error {
+	if playerID <= 0 {
+		return fmt.Errorf("%w: player id must be positive", ErrRequestInvalid)
+	}
+	if strings.TrimSpace(mailID) == "" {
+		return fmt.Errorf("%w: mail id is empty", ErrMailInvalid)
+	}
+	envelope, found, err := s.cfg.Envelopes.Get(ctx, mailID)
+	if err != nil {
+		return err
+	}
+	expiry := int64(0)
+	if found {
+		expiry = envelope.ExpiresAtUnix
+	}
+	return s.deliver(ctx, playerID, mailID, nowUnix, expiry)
+}
+
+func (s *Service) deliver(ctx context.Context, playerID int64, mailID string, nowUnix, expiry int64) error {
 	if playerID <= 0 {
 		return fmt.Errorf("%w: player id must be positive", ErrRequestInvalid)
 	}
@@ -342,6 +385,10 @@ func (s *Service) Deliver(ctx context.Context, playerID int64, mailID string, no
 		// (RR-20260911-05). match's callbacks have always cloned first.
 		current = current.clone()
 		current.init(playerID)
+		current.expireEntries(nowUnix)
+		if expiry > 0 && nowUnix >= expiry {
+			return current, false, fmt.Errorf("%w: delivery envelope expired", ErrMailInvalid)
+		}
 		delivered, refused, refusedSettled = false, false, false
 		_, settled := current.settledClaim(mailID)
 		if _, exists := current.entry(mailID); !exists && !settled && current.full() {
@@ -353,6 +400,10 @@ func (s *Service) Deliver(ctx context.Context, playerID int64, mailID string, no
 				ErrMailboxFull, playerID, len(current.Entries))
 		}
 		_, added := current.deliver(mailID, nowUnix)
+		if entry, found := current.Entries[mailID]; found && expiry > 0 {
+			entry.EnvelopeExpiresAtUnix = expiry
+			current.Entries[mailID] = entry
+		}
 		delivered = added
 		// Eviction runs AFTER the insert, so the bound holds on what is
 		// stored rather than on what was stored a moment ago. Evicting first
@@ -438,7 +489,22 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 	if !found {
 		return Page{}, nil
 	}
-	mailbox := stored.Value
+	mailbox := stored.Value.clone()
+	expiryNowUnix := s.cfg.Now().Unix()
+	if mailbox.expireEntries(expiryNowUnix) {
+		updated, _, err := s.cfg.Mailboxes.Update(ctx, playerID, func(current Mailbox, found bool) (Mailbox, bool, error) {
+			if !found {
+				return current, false, nil
+			}
+			next := current.clone()
+			changed := next.expireEntries(expiryNowUnix)
+			return next, changed, nil
+		})
+		if err != nil {
+			return Page{}, err
+		}
+		mailbox = updated.Value.clone()
+	}
 
 	// Order is decided here, from delivery time and then id, so it does not
 	// depend on map iteration and does not depend on a wall clock read at

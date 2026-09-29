@@ -68,6 +68,19 @@ func (f *fakeRedis) Del(_ context.Context, keys ...string) (int64, error) {
 func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if script == deleteIfScript {
+		current, found := f.values[keys[0]]
+		expected, _ := args[0].([]byte)
+		if !found || f.failEveryCAS || string(current) != string(expected) {
+			return int64(0), nil
+		}
+		delete(f.values, keys[0])
+		if len(keys) > 1 {
+			member, _ := args[1].(string)
+			delete(f.index[keys[1]], member)
+		}
+		return int64(1), nil
+	}
 	if strings.Contains(script, "ZRANGEBYSCORE") {
 		return f.indexDue(keys, args)
 	}

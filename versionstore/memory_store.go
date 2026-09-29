@@ -65,7 +65,11 @@ func (s *MemoryStore[K, T]) Create(_ context.Context, key K, value T) (Versioned
 	return stored, true, nil
 }
 
-func (s *MemoryStore[K, T]) Delete(_ context.Context, key K, expect Versioned[T]) error {
+func (s *MemoryStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T]) error {
+	return s.DeleteIf(ctx, key, expect, nil)
+}
+
+func (s *MemoryStore[K, T]) DeleteIf(_ context.Context, key K, expect Versioned[T], match func(T) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, found := s.items[key]
@@ -77,6 +81,9 @@ func (s *MemoryStore[K, T]) Delete(_ context.Context, key K, expect Versioned[T]
 	}
 	if current.Version != expect.Version {
 		return fmt.Errorf("%w: stored version %d, caller held %d", ErrVersionMismatch, current.Version, expect.Version)
+	}
+	if match != nil && !match(current.Value) {
+		return fmt.Errorf("%w: key identity changed", ErrVersionMismatch)
 	}
 	delete(s.items, key)
 	return nil

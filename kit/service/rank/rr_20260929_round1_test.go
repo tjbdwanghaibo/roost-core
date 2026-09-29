@@ -1,0 +1,84 @@
+package rank
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	driver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+)
+
+func reviewRankStore(t *testing.T) *RedisStore {
+	t.Helper()
+	if addr := os.Getenv("ROOST_REVIEW_REDIS"); addr != "" {
+		c, err := driver.NewClient(fredis.DefaultConfig(addr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := NewRedisStore(c, RedisConfig{Prefix: fmt.Sprintf("service-review:%d", time.Now().UnixNano())})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Reset(context.Background(), arena()); _ = c.Close() })
+		t.Log("real Redis backend")
+		return s
+	}
+	s, _ := newStore(t)
+	return s
+}
+
+func TestReviewCommaRequestIsIdempotent(t *testing.T) {
+	s := reviewRankStore(t)
+	first := submit(t, s, 1, 10, UpdateAdd, "order,one")
+	second := submit(t, s, 1, 10, UpdateAdd, "order,one")
+	if second.Score.Value != first.Score.Value {
+		t.Fatalf("duplicate request applied twice: %d -> %d", first.Score.Value, second.Score.Value)
+	}
+}
+func TestReviewAroundAcceptedMaximumRadius(t *testing.T) {
+	s := reviewRankStore(t)
+	submit(t, s, 1, 10, UpdateSet, "")
+	if _, err := s.Around(context.Background(), arena(), 1, MaxPageSize/2); err != nil {
+		t.Fatalf("accepted radius rejects delegated Page: %v", err)
+	}
+}
+
+type reviewPausedSwap struct {
+	RedisClient
+	entered, release chan struct{}
+	paused           atomic.Bool
+}
+
+func (c *reviewPausedSwap) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if script == swapScript && fmt.Sprint(args[3]) == "a" && c.paused.CompareAndSwap(false, true) {
+		close(c.entered)
+		<-c.release
+	}
+	return c.RedisClient.Eval(ctx, script, keys, args...)
+}
+func TestReviewUnchangedMemberCASProtectsRequestRing(t *testing.T) {
+	s := reviewRankStore(t)
+	submit(t, s, 1, 100, UpdateSet, "")
+	gate := &reviewPausedSwap{RedisClient: s.client, entered: make(chan struct{}), release: make(chan struct{})}
+	s.client = gate
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Submit(context.Background(), arena(), Score{OwnerID: 1, Value: 90}, UpdateMax, "a")
+		done <- err
+	}()
+	<-gate.entered
+	_, err := s.Submit(context.Background(), arena(), Score{OwnerID: 1, Value: 80}, UpdateMax, "b")
+	close(gate.release)
+	if aerr := <-done; err != nil || aerr != nil {
+		t.Fatal(err, aerr)
+	}
+	submit(t, s, 1, 50, UpdateSet, "")
+	replay := submit(t, s, 1, 80, UpdateMax, "b")
+	if replay.Score.Value != 50 {
+		t.Fatalf("concurrent no-op forgot successful request b: value=%d want=50", replay.Score.Value)
+	}
+}

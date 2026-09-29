@@ -450,10 +450,10 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 		}
 		switch {
 		case current.State == DeliveryDelivered:
-			claimed, outcome = current, "already_delivered"
+			claimed, outcome = current.clone(), "already_delivered"
 			return current, false, nil
 		case current.State == DeliveryExhausted:
-			claimed, outcome = current, "exhausted"
+			claimed, outcome = current.clone(), "exhausted"
 			return current, false, nil
 		case current.State == DeliverySettled:
 			// Terminal, and NOT the same answer as "held". A settled order has
@@ -461,12 +461,12 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 			// through to the not-due branch and reported ErrDeliveryHeld —
 			// which the retry hook treats as benign, so a refunded order would
 			// be retried on every tick forever.
-			claimed, outcome = current, "settled"
+			claimed, outcome = current.clone(), "settled"
 			return current, false, nil
 		case !current.Due(nowUnix):
 			// Either a backoff that has not elapsed or another attempt in
 			// flight. Both mean "not now", and both are the same refusal.
-			claimed, outcome = current, "held"
+			claimed, outcome = current.clone(), "held"
 			return current, false, nil
 		case current.Attempts >= current.MaxAttempts:
 			// The budget was already spent; record the terminal state rather
@@ -474,7 +474,7 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 			current.State = DeliveryExhausted
 			current.NextAttemptAtUnix = 0
 			current.UpdatedAtUnix = nowUnix
-			claimed, outcome, exhausted = current, "exhausted", true
+			claimed, outcome, exhausted = current.clone(), "exhausted", true
 			return current, true, nil
 		}
 		// The attempt is claimed BEFORE the deliverer runs, so a crash
@@ -484,7 +484,12 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 		current.Attempts++
 		current.NextAttemptAtUnix = now.Add(s.backoff(int(current.Attempts))).Unix()
 		current.UpdatedAtUnix = nowUnix
-		claimed, outcome = current, "claimed"
+		if current.AttemptSequence == ^uint64(0) {
+			return current, false, fmt.Errorf("%w: attempt sequence exhausted", ErrConflict)
+		}
+		current.AttemptSequence++
+		current.PendingAttempts = append(append([]uint64(nil), current.PendingAttempts...), current.AttemptSequence)
+		claimed, outcome = current.clone(), "claimed"
 		return current, true, nil
 	})
 	if err != nil {
@@ -515,7 +520,7 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 		// The error is RECORDED, not discarded and replaced with a constant.
 		// A payment that failed to deliver leaving no trace on the server is
 		// the confirmed defect this answers.
-		failed, err := s.recordFailure(ctx, orderID, deliverErr, nowUnix)
+		failed, err := s.recordFailure(ctx, orderID, claimed.AttemptSequence, deliverErr, nowUnix)
 		if err != nil {
 			return Receipt{}, err
 		}
@@ -538,22 +543,34 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 		if !found {
 			return current, false, fmt.Errorf("%w: order %s vanished", ErrConflict, orderID)
 		}
+		if current.State == DeliverySettled || !containsAttempt(current.PendingAttempts, claimed.AttemptSequence) {
+			result = current.clone()
+			return current, false, nil
+		}
+		current = current.clone()
+		current.PendingAttempts = removeAttempt(current.PendingAttempts, claimed.AttemptSequence)
 		if current.State == DeliveryDelivered {
 			// Idempotent: the delivery time is not moved, or "when was order
 			// X delivered" becomes whenever it was last retried.
-			result, raced = current, true
-			return current, false, nil
+			result, raced = current.clone(), true
+			return current, true, nil
 		}
 		current.State = DeliveryDelivered
 		current.DeliveredAtUnix = nowUnix
 		current.UpdatedAtUnix = nowUnix
 		current.NextAttemptAtUnix = 0
 		current.LastError = ""
-		result = current
+		result = current.clone()
 		return current, true, nil
 	})
 	if err != nil {
 		return Receipt{}, err
+	}
+	if result.State == DeliverySettled {
+		return Receipt{Order: result}, fmt.Errorf("%w: order %s", ErrOrderSettled, orderID)
+	}
+	if result.State != DeliveryDelivered {
+		return Receipt{Order: result}, fmt.Errorf("%w: stale delivery completion", ErrConflict)
 	}
 	if raced {
 		// Another attempt committed while this one was in the deliverer. The
@@ -567,15 +584,21 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 	return Receipt{Order: result, Delivered: true}, nil
 }
 
-func (s *Service) recordFailure(ctx context.Context, orderID string, cause error, nowUnix int64) (Order, error) {
+func (s *Service) recordFailure(ctx context.Context, orderID string, generation uint64, cause error, nowUnix int64) (Order, error) {
 	var result Order
 	_, _, err := s.cfg.Orders.Update(ctx, orderID, func(current Order, found bool) (Order, bool, error) {
 		if !found {
 			return current, false, fmt.Errorf("%w: order %s vanished", ErrConflict, orderID)
 		}
-		if current.State == DeliveryDelivered {
-			result = current
+		if current.State == DeliverySettled || !containsAttempt(current.PendingAttempts, generation) {
+			result = current.clone()
 			return current, false, nil
+		}
+		current = current.clone()
+		current.PendingAttempts = removeAttempt(current.PendingAttempts, generation)
+		if current.State == DeliveryDelivered || generation != current.AttemptSequence {
+			result = current.clone()
+			return current, true, nil
 		}
 		current.LastError = truncate(cause.Error(), 512)
 		current.UpdatedAtUnix = nowUnix
@@ -583,13 +606,32 @@ func (s *Service) recordFailure(ctx context.Context, orderID string, cause error
 			current.State = DeliveryExhausted
 			current.NextAttemptAtUnix = 0
 		}
-		result = current
+		result = current.clone()
 		return current, true, nil
 	})
 	if err != nil {
 		return Order{}, err
 	}
 	return result, nil
+}
+
+func containsAttempt(pending []uint64, generation uint64) bool {
+	for _, id := range pending {
+		if id == generation {
+			return true
+		}
+	}
+	return false
+}
+
+func removeAttempt(pending []uint64, generation uint64) []uint64 {
+	out := make([]uint64, 0, len(pending))
+	for _, id := range pending {
+		if id != generation {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // backoff grows the retry delay with the attempt count, capped so a long-lived
@@ -612,7 +654,7 @@ func (s *Service) Order(ctx context.Context, orderID string) (Order, bool, error
 	if err != nil || !found {
 		return Order{}, false, err
 	}
-	return stored.Value, true, nil
+	return stored.Value.clone(), true, nil
 }
 
 // SignPayload signs a payload with a secret. Exported for provider

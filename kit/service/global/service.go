@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -277,7 +278,10 @@ func (s *Service) AcquireLease(ctx context.Context, gameSID int32) (GameLease, e
 
 	var result GameLease
 	_, _, err = s.cfg.Leases.Update(ctx, gameSID, func(current GameLease, found bool) (GameLease, bool, error) {
-		if found && current.State == LeaseActive && !current.Expired(now.Unix()) {
+		if found && current.RouteEpoch > binding.Epoch {
+			return current, false, fmt.Errorf("%w: route changed during acquire", ErrConflict)
+		}
+		if found && sameLeaseBinding(current, binding) && current.State == LeaseActive && !current.Expired(now.Unix()) {
 			s.report.Refused("acquire_lease", "held")
 			return current, false, fmt.Errorf("%w: game %d lease is held until %d",
 				ErrConflict, gameSID, current.ExpiresAtUnix)
@@ -297,6 +301,9 @@ func (s *Service) AcquireLease(ctx context.Context, gameSID int32) (GameLease, e
 		return next, true, nil
 	})
 	if err != nil {
+		return GameLease{}, err
+	}
+	if err := s.checkLeaseBinding(ctx, result); err != nil {
 		return GameLease{}, err
 	}
 	s.report.Accepted("acquire_lease")
@@ -321,9 +328,19 @@ func (s *Service) RenewLease(ctx context.Context, gameSID int32, incarnation str
 	now := s.cfg.Now()
 
 	var result GameLease
-	_, _, err := s.cfg.Leases.Update(ctx, gameSID, func(current GameLease, found bool) (GameLease, bool, error) {
+	binding, err := s.Resolve(ctx, gameSID)
+	if err != nil {
+		if errors.Is(err, ErrRouteMissing) {
+			return GameLease{}, fmt.Errorf("%w: game %d", ErrLeaseMissing, gameSID)
+		}
+		return GameLease{}, err
+	}
+	_, _, err = s.cfg.Leases.Update(ctx, gameSID, func(current GameLease, found bool) (GameLease, bool, error) {
 		if !found {
 			return current, false, fmt.Errorf("%w: game %d", ErrLeaseMissing, gameSID)
+		}
+		if !sameLeaseBinding(current, binding) {
+			return current, false, fmt.Errorf("%w: route binding changed", ErrLeaseNotHolder)
 		}
 		if current.Incarnation != incarnation {
 			// Deliberately does not reveal the current incarnation: a caller
@@ -347,10 +364,13 @@ func (s *Service) RenewLease(ctx context.Context, gameSID int32, incarnation str
 		next.LastHeartbeatAtUnix = now.Unix()
 		next.ExpiresAtUnix = now.Add(s.cfg.LeaseTTL).Unix()
 		next.Load = cloneLoad(load)
-		result = next
+		result = cloneLease(next)
 		return next, true, nil
 	})
 	if err != nil {
+		return GameLease{}, err
+	}
+	if err := s.checkLeaseBinding(ctx, result); err != nil {
 		return GameLease{}, err
 	}
 	s.report.Accepted("renew_lease")
@@ -410,7 +430,13 @@ func (s *Service) Lease(ctx context.Context, gameSID int32) (GameLease, bool, er
 	if err != nil || !found {
 		return GameLease{}, false, err
 	}
-	lease := current.Value
+	lease := cloneLease(current.Value)
+	if err := s.checkLeaseBinding(ctx, lease); err != nil {
+		if !errors.Is(err, ErrLeaseNotHolder) {
+			return GameLease{}, false, err
+		}
+		lease.State = LeaseLapsed
+	}
 	if lease.Expired(s.cfg.Now().Unix()) {
 		// Reported as lapsed rather than released: the deadline it missed is
 		// left in place, so a caller can see when it stopped answering.
@@ -441,9 +467,15 @@ func (s *Service) LiveGames(ctx context.Context, groupID string, candidates []in
 		if !found {
 			continue
 		}
-		lease := current.Value
+		lease := cloneLease(current.Value)
 		if lease.GlobalGroupID != groupID || lease.State != LeaseActive || lease.Expired(nowUnix) {
 			continue
+		}
+		if err := s.checkLeaseBinding(ctx, lease); err != nil {
+			if errors.Is(err, ErrLeaseNotHolder) {
+				continue
+			}
+			return nil, err
 		}
 		out = append(out, lease)
 		if len(out) == limit {
@@ -451,4 +483,26 @@ func (s *Service) LiveGames(ctx context.Context, groupID string, candidates []in
 		}
 	}
 	return out, nil
+}
+
+func sameLeaseBinding(lease GameLease, route RouteBinding) bool {
+	return lease.GameSID == route.GameSID && lease.RouteEpoch == route.Epoch && lease.GlobalSID == route.GlobalSID && lease.GlobalGroupID == route.GlobalGroupID
+}
+
+// Routing is the authority: a physically retained old lease is invalid once
+// its epoch differs. Both writers recheck after CAS and readers enforce it.
+func (s *Service) checkLeaseBinding(ctx context.Context, lease GameLease) error {
+	route, err := s.Resolve(ctx, lease.GameSID)
+	if err != nil {
+		return err
+	}
+	if !sameLeaseBinding(lease, route) {
+		return fmt.Errorf("%w: stale route lease", ErrLeaseNotHolder)
+	}
+	return nil
+}
+
+func cloneLease(lease GameLease) GameLease {
+	lease.Load = cloneLoad(lease.Load)
+	return lease
 }

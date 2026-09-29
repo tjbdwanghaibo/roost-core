@@ -1,0 +1,52 @@
+{
+  "baseline": "f46db3e7d504bbd73581aa4119baa71171352519",
+  "scope": "RR-20260929-01..18 and RR-20260909-02 normal Finish ABA",
+  "redTopLevelFail": [
+    "--- FAIL: TestReviewAttachCannotAssertAlreadyReleased (0.00s)",
+    "--- FAIL: TestReviewSuccessfulFinishRetryFreesClaim (0.00s)",
+    "--- FAIL: TestReviewTerminalFinishCannotDeleteReacquiredClaim (0.02s)",
+    "--- FAIL: TestReviewExpiredMailboxMakesRoom (0.01s)",
+    "--- FAIL: TestReviewTransientEnvelopeFailureCanRetrySameRequest (0.00s)",
+    "--- FAIL: TestReviewCrossServerRoleRollbackKeepsExistingName (0.00s)",
+    "--- FAIL: TestReviewVerifiedIdentityEncodingIsInjective (0.00s)",
+    "--- FAIL: TestReviewLostSlotReplyCannotDeleteCommittedRole (0.00s)",
+    "--- FAIL: TestReviewCommaRequestIsIdempotent (0.01s)",
+    "--- FAIL: TestReviewAroundAcceptedMaximumRadius (0.00s)",
+    "--- FAIL: TestReviewUnchangedMemberCASProtectsRequestRing (0.01s)",
+    "--- FAIL: TestReviewSettledOrderSurvivesLateDelivery (0.00s)",
+    "--- FAIL: TestReviewLeaseCannotRenewAgainstChangedRoute (0.00s)",
+    "--- FAIL: TestReviewLeaseSnapshotsOwnLoadMaps (0.00s)",
+    "--- FAIL: TestReviewLastDispatchRetryKeepsAckWindow (0.00s)",
+    "--- FAIL: TestReviewUnconfirmedProgressSurvivesRingEviction (0.00s)",
+    "--- FAIL: TestReviewPositiveProgressCannotWrapNegative (0.00s)",
+    "--- FAIL: TestReviewCustomSharedChannelCannotReadPrivatePair (0.00s)"
+  ],
+  "raceIntegration": {
+    "command": "go test -race -p 1 -tags integration -json ./versionstore ./service/... ./kit/service/...",
+    "passedTestsAndSubtests": 756,
+    "passedPackages": 16,
+    "failed": 0,
+    "testSkips": 0,
+    "noTestPackages": [
+      "github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+    ]
+  },
+  "extraEdgePass": [
+    "TestStaleReservedReaderCannotApplyAfterProofWasReclaimed",
+    "TestLegacyRequestRingUpgradesWithoutDroppingPriorIDs",
+    "TestMalformedRequestRingFailsClosed"
+  ],
+  "compileCommand": "go test ./... -run ^$ (exit 0; compile only)",
+  "vetCommand": "go vet ./versionstore ./service/... ./kit/service/... (exit 0)",
+  "servicerpcChecks": 12,
+  "redis": "isolated 127.0.0.1:16391",
+  "graphGeneration": "2026-09-29T00:39:36Z",
+  "graphLimit": "metadata_changed and missing: current worktree source fallback",
+  "notValidated": [
+    "production migration",
+    "external broker/grant",
+    "process kill",
+    "network partition/Redis HA",
+    "load capacity"
+  ]
+}

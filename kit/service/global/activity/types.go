@@ -504,6 +504,10 @@ type Participant struct {
 	// concurrent in-flight requests per participant, not client retry
 	// horizons.
 	AppliedRequestIDs []string `json:"applied_request_ids,omitempty"`
+	// PendingRequestIDs pins proofs until their ledger confirmations land.
+	// Unlike the recent ring, a full pending set applies backpressure.
+	PendingRequestIDs    []string `json:"pending_request_ids,omitempty"`
+	ProgressProofVersion int      `json:"progress_proof_version,omitempty"`
 	// Applies counts accepted applies. A replay does not increment it, which
 	// is what makes "the replay was a no-op" observable rather than inferred.
 	Applies       uint64 `json:"applies"`
@@ -512,12 +516,13 @@ type Participant struct {
 
 // Applied reports whether requestID is still inside the participant's ring.
 func (p Participant) Applied(requestID string) bool {
-	return containsString(p.AppliedRequestIDs, requestID)
+	return containsString(p.AppliedRequestIDs, requestID) || containsString(p.PendingRequestIDs, requestID)
 }
 
 func (p Participant) clone() Participant {
 	out := p
 	out.AppliedRequestIDs = cloneStrings(p.AppliedRequestIDs)
+	out.PendingRequestIDs = cloneStrings(p.PendingRequestIDs)
 	return out
 }
 

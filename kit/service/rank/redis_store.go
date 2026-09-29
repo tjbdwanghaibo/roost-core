@@ -2,6 +2,7 @@ package rank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -90,13 +91,18 @@ func (s *RedisStore) ownerKey(board Board) string {
 //
 // KEYS[1] board sorted set, KEYS[2] owner->member hash.
 // ARGV: owner id, expected member (empty for create), next member,
-// request id (may be empty), request ring.
+// request id (may be empty), next JSON request ring, previous tagged ring.
 const swapScript = `
 local ownerID  = ARGV[1]
 local expected = ARGV[2]
 local nextMember = ARGV[3]
 local reqID    = ARGV[4]
 local ring     = ARGV[5]
+local previousRing = ARGV[6]
+
+local v2 = redis.call("HGET", KEYS[2], ownerID .. ":applied_v2")
+local currentRing = v2 and ("2\n" .. v2) or ("1\n" .. (redis.call("HGET", KEYS[2], ownerID .. ":applied") or ""))
+if currentRing ~= previousRing then return {0, redis.call("HGET", KEYS[2], ownerID) or ""} end
 
 local stored = redis.call("HGET", KEYS[2], ownerID)
 if expected == "" then
@@ -108,7 +114,8 @@ end
 redis.call("ZADD", KEYS[1], 0, nextMember)
 redis.call("HSET", KEYS[2], ownerID, nextMember)
 if reqID ~= "" then
-  redis.call("HSET", KEYS[2], ownerID .. ":applied", ring)
+  redis.call("HSET", KEYS[2], ownerID .. ":applied_v2", ring)
+  redis.call("HDEL", KEYS[2], ownerID .. ":applied")
 end
 return {1, nextMember}
 `
@@ -120,6 +127,7 @@ if not stored then return 0 end
 redis.call("ZREM", KEYS[1], stored)
 redis.call("HDEL", KEYS[2], ownerID)
 redis.call("HDEL", KEYS[2], ownerID .. ":applied")
+redis.call("HDEL", KEYS[2], ownerID .. ":applied_v2")
 return 1
 `
 
@@ -160,13 +168,18 @@ func (s *RedisStore) Submit(ctx context.Context, board Board, score Score, mode 
 			// Nothing to write, but the request still has to be recorded or a
 			// replay would be indistinguishable from a first attempt.
 			if requestID != "" {
-				if _, _, err := s.swap(ctx, zkey, okey, score.OwnerID, stored, stored, requestID, appendRing(ring, requestID)); err != nil {
+				applied, _, err := s.swap(ctx, zkey, okey, score.OwnerID, stored, stored, requestID, appendRing(ring, requestID), ring)
+				if err != nil {
 					return Entry{}, err
+				}
+				if !applied {
+					versionstore.RetryBackoff(attempt, s.cfg.RetryBackoff, s.cfg.Sleep)
+					continue
 				}
 			}
 			return s.entryFor(ctx, zkey, stored)
 		}
-		applied, current, err := s.swap(ctx, zkey, okey, score.OwnerID, stored, encodeEntry(next), requestID, appendRing(ring, requestID))
+		applied, current, err := s.swap(ctx, zkey, okey, score.OwnerID, stored, encodeEntry(next), requestID, appendRing(ring, requestID), ring)
 		if err != nil {
 			return Entry{}, err
 		}
@@ -202,7 +215,8 @@ func (s *RedisStore) readOwner(ctx context.Context, okey string, ownerID int64) 
 	ret, err := s.client.Eval(ctx, `
 local m = redis.call("HGET", KEYS[1], ARGV[1])
 local a = redis.call("HGET", KEYS[1], ARGV[1] .. ":applied")
-return {m or "", a or ""}
+local v2 = redis.call("HGET", KEYS[1], ARGV[1] .. ":applied_v2")
+return {m or "", v2 and ("2\n" .. v2) or ("1\n" .. (a or ""))}
 `, []string{okey}, strconv.FormatInt(ownerID, 10))
 	if err != nil {
 		return "", "", err
@@ -211,12 +225,19 @@ return {m or "", a or ""}
 	if !ok || len(items) != 2 {
 		return "", "", fmt.Errorf("rank: unexpected owner read result %T", ret)
 	}
-	return luaString(items[0]), luaString(items[1]), nil
+	member, ring = luaString(items[0]), luaString(items[1])
+	if strings.HasPrefix(ring, "2\n") {
+		var ids []string
+		if err := json.Unmarshal([]byte(ring[2:]), &ids); err != nil {
+			return "", "", fmt.Errorf("rank: invalid request ledger: %w", err)
+		}
+	}
+	return member, ring, nil
 }
 
-func (s *RedisStore) swap(ctx context.Context, zkey, okey string, ownerID int64, expected, next, requestID, ring string) (bool, string, error) {
+func (s *RedisStore) swap(ctx context.Context, zkey, okey string, ownerID int64, expected, next, requestID, ring, previousRing string) (bool, string, error) {
 	ret, err := s.client.Eval(ctx, swapScript, []string{zkey, okey},
-		strconv.FormatInt(ownerID, 10), expected, next, requestID, ring)
+		strconv.FormatInt(ownerID, 10), expected, next, requestID, ring, previousRing)
 	if err != nil {
 		return false, "", err
 	}
@@ -314,7 +335,8 @@ func (s *RedisStore) Around(ctx context.Context, board Board, ownerID int64, rad
 	if offset < 0 {
 		offset = 0
 	}
-	return s.Page(ctx, board, offset, radius*2+1)
+	// Keep the center while respecting the common page budget at radius 100.
+	return s.Page(ctx, board, offset, min(radius*2+1, MaxPageSize))
 }
 
 func (s *RedisStore) Reset(ctx context.Context, board Board) error {
@@ -395,7 +417,7 @@ func ringContains(ring, requestID string) bool {
 	if ring == "" || requestID == "" {
 		return false
 	}
-	for _, token := range strings.Split(ring, ",") {
+	for _, token := range decodeRing(ring) {
 		if token == requestID {
 			return true
 		}
@@ -410,20 +432,34 @@ func appendRing(ring, requestID string) string {
 	if requestID == "" {
 		return ring
 	}
-	tokens := []string{}
-	if ring != "" {
-		tokens = strings.Split(ring, ",")
-	}
+	tokens := decodeRing(ring)
 	for _, token := range tokens {
 		if token == requestID {
-			return ring
+			encoded, _ := json.Marshal(tokens)
+			return string(encoded)
 		}
 	}
 	tokens = append(tokens, requestID)
 	if len(tokens) > maxAppliedRequests {
 		tokens = tokens[len(tokens)-maxAppliedRequests:]
 	}
-	return strings.Join(tokens, ",")
+	encoded, _ := json.Marshal(tokens)
+	return string(encoded)
+}
+
+func decodeRing(ring string) []string {
+	if strings.HasPrefix(ring, "2\n") {
+		var ids []string
+		_ = json.Unmarshal([]byte(ring[2:]), &ids)
+		return ids
+	}
+	if strings.HasPrefix(ring, "1\n") {
+		ring = ring[2:]
+	}
+	if ring == "" {
+		return nil
+	}
+	return strings.Split(ring, ",")
 }
 
 func luaString(value any) string {

@@ -27,11 +27,16 @@ type Mod struct {
 	ttl        time.Duration
 	requestTTL time.Duration
 	service    *Service
+	owners     OwnerSource
 }
 
 // NewMod returns a session Mod. release is required.
-func NewMod(release Releaser, reporter servicemetrics.Reporter) *Mod {
-	return &Mod{release: release, metrics: reporter}
+func NewMod(release Releaser, reporter servicemetrics.Reporter, options ...ModOption) *Mod {
+	m := &Mod{release: release, metrics: reporter}
+	for _, option := range options {
+		option(m)
+	}
+	return m
 }
 
 // Name implements app.Mod.
@@ -89,6 +94,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	service, err := New(Config{
 		Runs: stores.Runs, Claims: stores.Claims, Requests: stores.Requests,
 		Release: m.release, TTL: m.ttl, Metrics: m.metrics,
+		Owners: m.owners,
 	})
 	if err != nil {
 		return fmt.Errorf("session mod: %w", err)

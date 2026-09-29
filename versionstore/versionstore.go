@@ -63,6 +63,13 @@ type Versioned[T any] struct {
 	Version uint64
 }
 
+// ConditionalDeleter additionally fences deletion by logical identity. A
+// version can recur after deletion/recreation; match must be pure and is
+// checked against the very value atomically removed, not a caller's old read.
+type ConditionalDeleter[K comparable, T any] interface {
+	DeleteIf(ctx context.Context, key K, expect Versioned[T], match func(T) bool) error
+}
+
 // Mutate computes the next value from the current one. found reports whether
 // the key exists; when it does not, current is the zero value.
 //

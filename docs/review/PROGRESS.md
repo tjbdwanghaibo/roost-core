@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 修复停点
+
+基线 `f46db3e7`；RR-20260929-01～18 和旧 RR-20260909-02 正常 Finish ABA 共 **19 项实现完成并通过定向回归**。756 个测试/子测试通过，另补 3 个边界用例通过；全仓编译、定向 vet、12 次生成一致性检查通过。进度是所列问题的实现/验证状态，不是源码覆盖率或全故障交错完成率。
+
+[逐项实现、学习与升级边界](../bugfix/SERVICE-BUGFIX-2026-09-29.md) · [roost-bugfix skill](../agent-skills/roost-bugfix/SKILL.md)。正式回归已进入对应包。下一入口：独立验收本轮实现，mail 在途 claim/正文缺失分类、Account 其他未知写入结果。旧邮箱缺期限、旧 ledger 缺 Intent 和旧身份碰撞仍需对账迁移；本轮未发版。
+
+图谱 `roost-core` generation `2026-09-29T00:39:36Z`；coverage 标记 metadata_changed / 工作树新文件 missing，当前源码补证。下方保留修复前时点的报告。
+
 09-29 第二轮最新停点：[Service 身份、迁移与失败恢复](REVIEW-2026-09-29-services-02.md)。单仓 Core `e10dd3f1`；上一轮 **10/10 服务域主链**保持为范围进度，本轮不换算源码正确率。新增 **RR-20260929-11..18：8 个动态问题（6 P2、2 P3）**；旧 RR-20260909-02 追加正常 Finish 的真实 Redis ABA，不重复编号。
 
 | 本轮新增范围 | 已完成 | 下一入口与限制 |

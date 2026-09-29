@@ -21,7 +21,10 @@ import (
 type RunStore = versionstore.Store[string, Run]
 
 // ClaimStore holds the per-owner exclusive claim. Insert-only use; see Claim.
-type ClaimStore = versionstore.Store[int64, Claim]
+type ClaimStore interface {
+	versionstore.Store[int64, Claim]
+	versionstore.ConditionalDeleter[int64, Claim]
+}
 
 // RequestLedger maps an enter idempotency key to the run it produced, so a
 // retried enter returns that run instead of allocating another.
@@ -50,6 +53,18 @@ type Releaser interface {
 	Release(ctx context.Context, run Run, resource Resource) error
 }
 
+// OwnerSource supplies a bounded, rotating roster for expiration recovery.
+// The deployment owns pagination/fairness; no unbounded store scan is implied.
+type OwnerSource interface {
+	SweepOwners(ctx context.Context, limit int) ([]int64, error)
+}
+
+type OwnerSourceFunc func(context.Context, int) ([]int64, error)
+
+func (f OwnerSourceFunc) SweepOwners(ctx context.Context, limit int) ([]int64, error) {
+	return f(ctx, limit)
+}
+
 // ReleaserFunc adapts a function to Releaser.
 type ReleaserFunc func(context.Context, Run, Resource) error
 
@@ -64,6 +79,7 @@ type Config struct {
 	Runs     RunStore
 	Claims   ClaimStore
 	Requests RequestLedger
+	Owners   OwnerSource
 
 	// Release hands resources back. Required: a run that allocates external
 	// resources and cannot release them is the leak this package exists to
@@ -437,7 +453,9 @@ func (s *Service) releaseClaim(ctx context.Context, ownerID int64, expectRunID s
 		s.report.Dropped("claim.release_not_ours", 1)
 		return nil
 	}
-	if err := s.cfg.Claims.Delete(ctx, ownerID, stored); err != nil {
+	if err := s.cfg.Claims.DeleteIf(ctx, ownerID, stored, func(current Claim) bool {
+		return current.RunID == stored.Value.RunID && current.OwnerID == stored.Value.OwnerID
+	}); err != nil {
 		if errors.Is(err, versionstore.ErrVersionMismatch) {
 			// Someone else changed it, which means ours was already gone.
 			return nil
@@ -458,6 +476,9 @@ func (s *Service) releaseClaim(ctx context.Context, ownerID int64, expectRunID s
 func (s *Service) Attach(ctx context.Context, ownerID int64, runID string, resource Resource) (Run, error) {
 	if err := resource.Validate(); err != nil {
 		return Run{}, err
+	}
+	if resource.ReleasedAtUnix != 0 || resource.ForcedRelease {
+		return Run{}, fmt.Errorf("%w: attachment cannot declare release state", ErrRunInvalid)
 	}
 	nowUnix := s.cfg.Now().Unix()
 	var (
@@ -558,7 +579,11 @@ func (s *Service) finish(ctx context.Context, ownerID int64, runID string, state
 		// not move its finish time, or "when did this run end" becomes
 		// whenever it was last retried.
 		s.report.Replayed("finish")
-		return s.releasePending(ctx, stored.Value, nowUnix)
+		run, err := s.releasePending(ctx, stored.Value, nowUnix)
+		if err != nil {
+			return run, err
+		}
+		return run, s.releaseClaim(ctx, ownerID, runID)
 	}
 	// An open run whose deadline has passed becomes expired, not whatever the
 	// caller asked for: the run was over before the call arrived, and
