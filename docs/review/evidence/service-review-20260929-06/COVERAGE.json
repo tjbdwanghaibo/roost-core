@@ -1,0 +1,125 @@
+{
+  "project": "roost-core",
+  "signal": "best_effort",
+  "indexed_at": "2026-09-29T08:12:07Z",
+  "metadata": {
+    "generation": "2026-09-29T08:12:07Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-29T08:12:09Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "paths": [
+    {
+      "requested_path": "service/match/grouping.go",
+      "path": "service/match/grouping.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/bugfix_grouping_boundary_test.go",
+      "path": "service/match/bugfix_grouping_boundary_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/rank/redis_store.go",
+      "path": "kit/service/rank/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/rank/bugfix_add_overflow_test.go",
+      "path": "kit/service/rank/bugfix_add_overflow_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/chat/store.go",
+      "path": "kit/service/chat/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/chat/chat.go",
+      "path": "kit/service/chat/chat.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/chat/bugfix_retention_gap_test.go",
+      "path": "kit/service/chat/bugfix_retention_gap_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/global/activity/service.go",
+      "path": "kit/service/global/activity/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/global/activity/types.go",
+      "path": "kit/service/global/activity/types.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/global/activity/bugfix_opening_recovery_test.go",
+      "path": "kit/service/global/activity/bugfix_opening_recovery_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/global/activity/open_window_lifecycle_promises_test.go",
+      "path": "kit/service/global/activity/open_window_lifecycle_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    }
+  ],
+  "scopes": [
+    {
+      "requested_scope": "service",
+      "scope": "service",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "kit/service",
+      "scope": "kit/service",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    }
+  ],
+  "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+}

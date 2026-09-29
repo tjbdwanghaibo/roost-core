@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第六轮：本批缺陷收敛
+
+源码 **4b0837d7**；[修后邻接 review](REVIEW-2026-09-29-services-06.md)、[最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、[当前机制](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md#第五批修复后的实际实现)齐全。本批 RR-25/26/27 与旧 RR-14-02 残余 **4/4 原触发/声明场景通过**，列明邻接范围无新增确认缺陷。10/10 域主链整理已收口；当前 100 生产路径，6 变更源码及回归复查、94 blob 不变复用，不能称行/分支覆盖率。
+
+| 本轮闭环 | 实际执行/结论 | 后续具名边界 |
+| --- | --- | --- |
+| Match / Rank | Group 非法与空候选、合法 2/64；加法溢出拒绝/同键合法重试/并发重读，全过 | Match 终态历史归档、热点榜/队列容量 |
+| Chat | 中间/尾部年龄洞、limit、正反/空页/游标/Gap、Requests、计数；Memory/Redis 全过 | 真实入口限流、所有读取/清理 owner 升级 |
+| Activity | 慢 Create/满容量；admit/Create/confirm 写后丢回复；持久计划重建；旧 257 窗口有界轮转跨重建；legacy 同 key 恢复，全过 | legacy 无计划/遗忘 orphan 对账；真实 game/HA/强杀 |
+| 基础 / 消费 | 完整 16 包/830 事件 pass，最终两模式各 27 叶子/32 事件全绿；编译/vet/受影响生成检查/已有生成消费通过 | allocator/支付、断网、多进程、长稳性能未验证 |
+| 图谱 | full 刷新等待未得到完整返回；后续 coverage 看到 08:12:07Z 新 full generation、新测试已纳入 | 11 路径仍 metadata_changed，源码补证；不据 scope 干净证明完整 |
+
+本阶段可以转入具名专项或其他核心域，不重复 service 第一轮。未操作生产升级/迁移/发布；K1/K2/K3 原专项状态不因服务回归绿自动改变。下方保留第五批实施与此前 review 时点。
+
 ## 2026-09-29 Service 第五批 bugfix
 
 基线 cec1dd30；RR-25/26/27 与旧 RR-20260914-02 的本轮残余 **4/4 已实施、原触发和邻接恢复回归通过**。[决策、兼容与执行记录](../bugfix/SERVICE-BUGFIX-2026-09-29-05.md)。16 包/830 测试及子测试事件通过；随后补充两个写后丢回复场景，最终定向两模式各 27 叶子/32 事件全过。全仓编译、四包 vet、Chat/Activity 生成检查与生成消费者通过。Activity/Chat owner 升级、legacy 意图、真实外部系统边界保留；继续修后 service review，不因 4/4 关闭所有专项。

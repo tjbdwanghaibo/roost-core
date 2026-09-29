@@ -1,5 +1,19 @@
 # Service：容量、年龄与资源恢复的实现学习
 
+## 第五批修复后的实际实现
+
+源码 4b0837d7，[实现、兼容与测试](../bugfix/SERVICE-BUGFIX-2026-09-29-05.md)、[修后审查](REVIEW-2026-09-29-services-06.md)已完成。下方原建议保留为第五轮的教学推导，本节是当前事实。
+
+- Activity 用原 Window.Opening.Intent 保存初始 Activity，先持久准入再 Create；错误与超时不撤销名额。grace 后帮助原计划创建，确认只能消耗已有 slot。安全性依靠 insert-only Key 的同计划恢复，不靠短期计时器撤销慢调用，也没有增加第二套事务/存储系统。
+- 旧超容量 pending 采用 Window.ScanAfter 持久游标，单批读取至多 256 个不同 key，重建 Service 后延续。窗口 JSON 本体依旧整对象读取/复制；对旧大对象的内存/延迟不作常量成本承诺。
+- Group 的两条公开策略入口复用 Queue.Validate；Rank int64 正负溢出在 Lua CAS 与请求 ring 更新前拒绝，不静默饱和，拒绝后相同 RequestID 可合法再试。
+- Chat 年龄清理遍历有界 Ring、按 limit 删除；保留 Seq 顺序和 Requests。Page.Gap 现在覆盖页内/游标边界/保留尾部洞，空 forward 页不推进输入 NextCursor。年龄与消息顺序的合同分别兑现。
+- 恢复责任会保留容量：旧没有 Intent 且缺活动记录的 Opening 不能猜 expected 集合，需业务同 key Open 补计划；新已准入计划也不能用超时当取消。Activity/Chat owner 协调升级，JSON 可读不等于混合版本安全。
+
+本批 Memory/Redis 的正式定向各 27 叶子通过；真实进程强杀、allocator/渠道与 HA 仍需专项，不由本节自动关闭。
+
+## 第五轮原学习记录
+
 源码 `b336ce62`，事实与[第五轮执行](REVIEW-2026-09-29-services-05.md)关联；以下建议尚未实现。现有架构和范围见[完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)。
 
 ## 准入、索引和扫描是一条完整证明链
