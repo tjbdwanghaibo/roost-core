@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -836,6 +837,9 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 			}
 			reserved = minted
 		}
+		if entry.ClaimAttempts < 0 || entry.ClaimAttempts == math.MaxInt32 {
+			return current, false, fmt.Errorf("%w: claim attempt generation exhausted", ErrRequestInvalid)
+		}
 		entry.ClaimToken = reserved
 		// Remember how long this mail stays claimable, so the settled-claim
 		// record that outlives the entry can be kept for exactly that long
@@ -973,9 +977,9 @@ func (s *Service) CommitClaim(ctx context.Context, playerID int64, mailID string
 // than answering OK either way. The implementation this replaces had two
 // return branches with identical values, so a caller could not tell a
 // released reservation from a no-op, and neither was counted.
-func (s *Service) CancelClaim(ctx context.Context, playerID int64, mailID string, token string) (bool, error) {
-	if strings.TrimSpace(token) == "" {
-		return false, fmt.Errorf("%w: a claim token is required", ErrRequestInvalid)
+func (s *Service) CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (bool, error) {
+	if strings.TrimSpace(token) == "" || attempts <= 0 {
+		return false, fmt.Errorf("%w: claim token and positive attempt generation are required", ErrRequestInvalid)
 	}
 	nowUnix := s.cfg.Now().Unix()
 	var released bool
@@ -996,7 +1000,7 @@ func (s *Service) CancelClaim(ctx context.Context, playerID int64, mailID string
 		if !ok {
 			return current, false, nil
 		}
-		if entry.ClaimToken != token {
+		if entry.ClaimToken != token || entry.ClaimAttempts != attempts {
 			// Not ours. Clearing the deadline here would release another
 			// caller's reservation.
 			return current, false, nil

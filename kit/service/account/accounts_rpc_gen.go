@@ -319,9 +319,9 @@ func (c *BusClient) Login(ctx context.Context, identity Identity) (Account, erro
 	return resp.Account, err
 }
 
-// CreateRole creates one role for an account on a server. The name is
-// reserved insert-only, so two concurrent creations of one name cannot
-// both succeed.
+// CreateRole starts or resumes one durable role plan for an account/server.
+// Same-name retries share its ID, including a lost success response;
+// a different name cannot consume a second role allowance.
 // CreateRole implements Accounts.
 func (c *BusClient) CreateRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
 	var resp rpcCreateRoleResponse

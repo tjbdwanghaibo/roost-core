@@ -298,7 +298,7 @@ func TestIntegrationTheServiceRunsEndToEndOnRedis(t *testing.T) {
 	}
 	// The token is constant across reservations, which is the property the
 	// whole claim design rests on — asserted here against real storage.
-	if _, err := service.CancelClaim(ctx, 7, sent.ID, claim.Token); err != nil {
+	if _, err := service.CancelClaim(ctx, 7, sent.ID, claim.Token, claim.Attempts); err != nil {
 		t.Fatal(err)
 	}
 	second, err := service.ReserveClaim(ctx, 7, sent.ID, "")

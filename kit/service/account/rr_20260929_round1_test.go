@@ -45,3 +45,7 @@ func TestReviewCrossServerRoleRollbackKeepsExistingName(t *testing.T) {
 		t.Fatalf("second creation rollback removed first role name: found=%v err=%v", found, err)
 	}
 }
+
+func (s *reviewFailSlot) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
+}

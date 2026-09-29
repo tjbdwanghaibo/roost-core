@@ -313,7 +313,7 @@ func TestACancelReleasesTheDeadlineButKeepsTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released, err := h.service.CancelClaim(ctx, 1, envelope.ID, first.Token)
+	released, err := h.service.CancelClaim(ctx, 1, envelope.ID, first.Token, first.Attempts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestACancelThatReleasesNothingReportsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	released, err := h.service.CancelClaim(ctx, 1, envelope.ID, "not-the-token")
+	released, err := h.service.CancelClaim(ctx, 1, envelope.ID, "not-the-token", claim.Attempts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestACancelThatReleasesNothingReportsIt(t *testing.T) {
 		t.Fatalf("the foreign cancel released the real reservation: %v", err)
 	}
 	// The real token still works, so the foreign cancel changed nothing at all.
-	if released, err := h.service.CancelClaim(ctx, 1, envelope.ID, claim.Token); err != nil || !released {
+	if released, err := h.service.CancelClaim(ctx, 1, envelope.ID, claim.Token, claim.Attempts); err != nil || !released {
 		t.Fatalf("the real cancel released=%v err=%v", released, err)
 	}
 }

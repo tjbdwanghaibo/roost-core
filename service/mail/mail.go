@@ -62,11 +62,13 @@ type Mail interface {
 	ReserveClaim(ctx context.Context, playerID int64, mailID string, scope string) (claim Claim, err error)
 	// CommitClaim marks an attachment claimed. The token is required.
 	CommitClaim(ctx context.Context, playerID int64, mailID string, token string) (entry Entry, err error)
-	// CancelClaim releases an in-flight reservation. It reports whether it
+	// CancelClaim releases only the reservation with this attempt generation.
+	// The stable token identifies the reward; attempts identifies this lease.
+	// A delayed cancellation cannot clear a newer lease. It reports whether it
 	// released anything, which is why it returns a bool rather than only an
 	// error: a cancel that found nothing to release is not the same outcome as
 	// one that did.
-	CancelClaim(ctx context.Context, playerID int64, mailID string, token string) (released bool, err error)
+	CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (released bool, err error)
 }
 
 var _ Mail = (*Service)(nil)

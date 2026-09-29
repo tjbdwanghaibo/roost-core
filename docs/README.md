@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-29 最新实施**：[Service 第三轮 bugfix 与升级交接](bugfix/SERVICE-BUGFIX-2026-09-29-03.md)：RR-19～22 已修复，正式 Memory/Redis 回归通过；Mail 取消 API 新增 attempts、Directory/Slot 后端需保留 DeleteIf、旧状态需对账，未发版。下方历史 review 的“未实施”保留当时结论。
+
 **09-29 Service 第三轮 review**：[运行与进度](review/REVIEW-2026-09-29-services-03.md) · [4 个新增问题及实施交接](bug/REVIEW-2026-09-29-services-03.md) · [提交未知/预约身份学习](review/IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md) · [复跑材料](review/evidence/service-review-20260929-03/README.md)。旧修复的已有回归通过，新增邻近问题尚未实施；本轮只改文档。
 
 **09-29 最新修复**：[Service 两轮 bugfix 与实施接手](bugfix/SERVICE-BUGFIX-2026-09-29.md)，18 项新问题及旧正常 Finish ABA 已实施并通过定向回归；[roost-bugfix skill](agent-skills/roost-bugfix/SKILL.md) 已新增。尚未发版，升级/旧数据恢复边界见总记录。下方历史 review 的“未修复”不代表当前源码。

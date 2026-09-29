@@ -1,5 +1,7 @@
 # Service 学习：提交未知、预约身份与对象所有权
 
+**后续实施更新（2026-09-29）**：RR-19～22 已实施，[修复与验证](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)和本文末尾的实际实现为最新交接；以下至“性能与接入评价”保留原 `83c04243` review 时点，不把当时建议冒充实现。
+
 源码时点 `83c042438ea9ae235cfe3a41a1a7217949139670`，2026-09-29。[运行证据](REVIEW-2026-09-29-services-03.md) · [问题与验收交接](../bug/REVIEW-2026-09-29-services-03.md)。以下先解释当前实现，建议均未实施。
 
 ## Account：多记录创建不等于一个事务
@@ -49,3 +51,31 @@ Go struct 值复制不复制 slice/map 指向的数据。Account.UpdateProfile �
 目前复用版本存储、目录预约和 mailbox proof，业务规则可在 owner 内集中，减少多处手写补偿；这套基础适合继续做通用游戏框架。当前风险集中在多个持久对象之间的结果不确定，以及同一幂等身份被用于不同控制目的。
 
 新增 intent/attempt 字段会增加持久化和对账成本，但能让故障恢复有明确对象；先证明正确性，再量化热点 CAS 重试、Mailbox 大对象克隆/序列化、pending 积压和扫尾耗时。本轮只验证 200 条容量边界，**没有测 p95/p99、吞吐或证明性能回归**。
+
+## 本批修复后的实际实现
+
+基于 23f92d73 的本批修复提交，详见 [四项实施](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)。原先的“建议未实施”是前半历史时点，此节解释当前代码。
+
+Account 使用现有 Slot 的 RoleCreation 值保存计划，先预分配 PlayerID、insert-only 保存计划，再预约名字、CAS 保存 Claim/Admitted、Create 角色、Commit 名字、发布 slot.PlayerID。角色带同一 CreationID。没有新增持久 store、后台 worker 或跨 key 事务。
+
+\`\`\`mermaid
+flowchart LR
+    I["slot 持久计划"] --> A["保存 Claim / Admitted"]
+    A --> R["固定 ID 创建或读回角色"]
+    R --> N["提交名字"]
+    N --> P["发布 slot.PlayerID"]
+    E["写入结果未知"] --> I
+    P --> S["同名重试返回原角色"]
+\`\`\`
+
+图中的阶段是现有记录/事实组合，不是另一个枚举状态机。未知结果保留已有事实，重试从计划继续；Names.Commit 已完成但本调用快照旧时，会读回持久 Claim 验证。名字 Token 更新也通过 CAS 防旧 worker 覆盖新预约。不同创建计划按 CreationID fencing，补偿删除复用 DeleteIf；确定的 pre-role 名字冲突可释放未 admitted slot，确定的 foreign ID 可取消自己的名字预约并释放自己的 slot，普通 error 不走删除角色的补偿。
+
+同名重试为幂等，新 pending 角色不允许 SelectRole/ValidateSession/UpdateProfile；完成后才能使用。旧角色 CreationID 为空保持兼容。旧空 slot 与新 pending 名字冲突不猜测处理，恢复/迁移步骤见 RR-19。严格说没有全系统自动恢复证明，只有正式可重试入口和已执行场景。
+
+Directory 的 Cancel/Release 现在把 Token/Owner/State 放进现有 DeleteIf 的原子边界。New 显式检查能力；Account Slots 同样要求该能力，wrapper 需转发。通用版本 Delete 的契约保持。
+
+Mail CancelClaim 新增 attempts int32，CAS 内同时匹配稳定 Token 和代次。正代次必填；负数/耗尽计数不能回绕。CommitClaim 保留稳定 Token，协议区分奖励确认与取消预约。Mail Go API、typed transport、split 样例、正式 game 模板已同步，旧业务工程 controller 要迁移同一参数。
+
+Role.clone 隔离 UpdateProfile、ValidateSession 和 CreateRole 恢复/完成输出的切片；测试修改返回值后，两个后端的存储和版本保持不变。Memory 的浅复制契约没有偷偷改变。
+
+上面的 pending mail 容量取舍与 Session 回调观察仍保持，未在这批改变。新增 slot admission 和 roleReady 查询带来额外 I/O，尚未测本流程吞吐/尾延迟，不外推历史框架性能指标。

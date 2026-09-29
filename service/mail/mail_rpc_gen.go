@@ -219,6 +219,7 @@ type rpcCancelClaimRequest struct {
 	PlayerID int64  `json:"player_id"`
 	MailID   string `json:"mail_id"`
 	Token    string `json:"token"`
+	Attempts int32  `json:"attempts"`
 }
 
 // rpcCancelClaimResponse is the CancelClaim response on the wire.
@@ -304,7 +305,7 @@ func RegisterHandlers(b bus.IBus, service Mail) error {
 			if err := ctx.Decode(&wire); err != nil {
 				return rpcCancelClaimResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
 			}
-			released, err := service.CancelClaim(ctx.Context(), wire.PlayerID, wire.MailID, wire.Token)
+			released, err := service.CancelClaim(ctx.Context(), wire.PlayerID, wire.MailID, wire.Token, wire.Attempts)
 			return rpcCancelClaimResponse{rpcStatus: statusOf(err), Released: released}, nil
 		},
 	}
@@ -443,17 +444,20 @@ func (c *BusClient) CommitClaim(ctx context.Context, playerID int64, mailID stri
 	return resp.Entry, err
 }
 
-// CancelClaim releases an in-flight reservation. It reports whether it
+// CancelClaim releases only the reservation with this attempt generation.
+// The stable token identifies the reward; attempts identifies this lease.
+// A delayed cancellation cannot clear a newer lease. It reports whether it
 // released anything, which is why it returns a bool rather than only an
 // error: a cancel that found nothing to release is not the same outcome as
 // one that did.
 // CancelClaim implements Mail.
-func (c *BusClient) CancelClaim(ctx context.Context, playerID int64, mailID string, token string) (bool, error) {
+func (c *BusClient) CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (bool, error) {
 	var resp rpcCancelClaimResponse
 	err := c.call(ctx, MethodCancelClaim, rpcCancelClaimRequest{
 		PlayerID: playerID,
 		MailID:   mailID,
 		Token:    token,
+		Attempts: attempts,
 	}, &resp)
 	return resp.Released, err
 }
@@ -508,8 +512,8 @@ func (c capability) CommitClaim(ctx context.Context, playerID int64, mailID stri
 	return c.inner.CommitClaim(ctx, playerID, mailID, token)
 }
 
-func (c capability) CancelClaim(ctx context.Context, playerID int64, mailID string, token string) (bool, error) {
-	return c.inner.CancelClaim(ctx, playerID, mailID, token)
+func (c capability) CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (bool, error) {
+	return c.inner.CancelClaim(ctx, playerID, mailID, token, attempts)
 }
 
 // Capability wraps a Mail for registration. Both Mods use it, so the

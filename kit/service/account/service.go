@@ -25,23 +25,12 @@ type Config struct {
 	Roles    versionstore.Store[int64, Role]
 	Servers  versionstore.Store[int32, GameServer]
 
-	// Names reserves display names. Uniqueness is a two-phase claim so a
-	// crash between reserving the name and writing the role releases the name
-	// instead of burning it.
+	// Names reserves display names. Slot intents retain the reservation and
+	// role identity for recovery after uncertain writes.
 	Names directory.Directory
-	// Slots records the one-role-per-account-per-server occupancy.
-	//
-	// Deliberately NOT the directory primitive. A directory reservation is
-	// idempotent for the same owner — a retried Reserve returns the claim it
-	// already holds, which is right for a name a caller may re-request — and
-	// that is exactly wrong here: an account racing itself would get one
-	// shared claim and every racer would proceed. The slot is a mutual
-	// exclusion for the duration of one create, so it uses insert-only
-	// versioned state, where a second creator loses regardless of who it is.
-	//
-	// The limit it replaces was a read-count-write over a deliberately
-	// non-unique index, so two concurrent creates both saw zero and both
-	// inserted.
+	// Slots stores one durable role plan per account/server. Insert-only
+	// creation excludes different plans; same-name retries resume the same ID.
+	// Stores used here must preserve ConditionalDeleter for safe pre-role cleanup.
 	Slots versionstore.Store[string, Slot]
 
 	// Verifier, Allocator and NameRules are required. See their interfaces
@@ -57,7 +46,7 @@ type Config struct {
 	// RolesPerServer is how many roles one account may hold on one server;
 	// zero selects one. It is configuration, not a compiled-in constant.
 	RolesPerServer int
-	// ClaimTTL is how long a name or slot claim is held while a role is being
+	// ClaimTTL is how long an uncommitted name claim is held while a role is being
 	// created; zero selects DefaultClaimTTL.
 	ClaimTTL time.Duration
 	// Now is the clock; nil means time.Now.
@@ -106,6 +95,8 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.Slots == nil {
 		missing = append(missing, "Slots")
+	} else if _, ok := cfg.Slots.(versionstore.ConditionalDeleter[string, Slot]); !ok {
+		missing = append(missing, "Slots (atomic identity-checked DeleteIf is required)")
 	}
 	if cfg.Verifier == nil {
 		// Stated at length because this is the one whose absence was a
@@ -212,23 +203,9 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 	return result, nil
 }
 
-// CreateRole allocates a role under an account on a server.
-//
-// The order is deliberate and is the whole point of the two directories:
-//
-//  1. Reserve the per-server slot. An account that already holds its allowance
-//     on this server loses here, atomically, rather than by a count that two
-//     callers can both read as zero.
-//  2. Reserve the name. Losing here releases the slot.
-//  3. Allocate the player id and insert the role. Insert-only: an id
-//     collision fails instead of overwriting an existing player.
-//  4. Commit both claims.
-//
-// A crash at any point leaves claims that expire, so nothing is burned. The
-// implementation this replaces wrote the name and the role to two collections
-// with no transaction and dropped the error from its compensating release, so
-// a crash between them reserved a name to a role that did not exist, with no
-// code path able to free it.
+// CreateRole creates or resumes one pending role with the same name.
+// The slot persists its plan before other writes. Unknown results retain the
+// plan for retry; a completed slot still refuses a second role.
 func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return Role{}, fmt.Errorf("%w: account id is empty", ErrAccountMissing)
@@ -258,162 +235,11 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 		return Role{}, fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
 	}
 
-	slotKey := slotKeyFor(accountID, serverID)
-	slot, claimed, err := s.cfg.Slots.Create(ctx, slotKey, Slot{AccountID: accountID, ServerID: serverID})
-	if err != nil {
-		return Role{}, err
-	}
-	if !claimed {
-		// Insert-only, so exactly one creator wins — including when the same
-		// account races itself, which a same-owner-idempotent reservation
-		// would have let through.
-		s.report.Refused("create_role", "role_limit")
-		return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
-	}
-
-	nameOwner := directory.Owner(slotKey)
-	nameClaim, err := s.cfg.Names.Reserve(ctx, name, nameOwner, s.cfg.ClaimTTL)
-	if err != nil {
-		if releaseErr := s.releaseSlot(ctx, slotKey, slot); releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-		}
-		if errors.Is(err, directory.ErrKeyTaken) {
-			s.report.Refused("create_role", "name_taken")
-			return Role{}, fmt.Errorf("%w: %q", ErrNameTaken, name)
-		}
-		return Role{}, err
-	}
-	// A committed legacy owner can happen to equal another account's slot
-	// key. Never use or compensate an already-committed name reservation.
-	if nameClaim.ExpiresAt.IsZero() {
-		return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, name), s.releaseSlot(ctx, slotKey, slot))
-	}
-
-	playerID, err := s.cfg.Allocator.Allocate(ctx, serverID)
-	if err != nil {
-		return Role{}, errors.Join(err, s.rollback(ctx, nameClaim, slotKey, slot))
-	}
-	if playerID == 0 {
-		return Role{}, errors.Join(
-			fmt.Errorf("account: allocator returned a zero player id"),
-			s.rollback(ctx, nameClaim, slotKey, slot))
-	}
-
-	now := s.cfg.Now()
-	role := Role{
-		PlayerID: playerID, AccountID: accountID, ServerID: serverID,
-		Name: strings.TrimSpace(name), CreatedAtUnix: now.Unix(),
-	}
-	// Insert-only. An id that is already taken fails here instead of
-	// overwriting the player who holds it.
-	storedRole, created, err := s.cfg.Roles.Create(ctx, playerID, role)
-	if err != nil {
-		return Role{}, errors.Join(err, s.rollback(ctx, nameClaim, slotKey, slot))
-	}
-	if !created {
-		s.report.Conflict("create_role")
-		return Role{}, errors.Join(
-			fmt.Errorf("%w: player id %d is already in use", ErrConflict, playerID),
-			s.rollback(ctx, nameClaim, slotKey, slot))
-	}
-
-	// The commit point is the final slot write. Before compensating an error
-	// at that boundary, read back whether it committed: an error reply does
-	// not prove that the write was absent. Unknown outcomes preserve the role
-	// and name for reconciliation (RR-20260929-12).
-	if _, err := s.cfg.Names.Commit(ctx, nameClaim); err != nil {
-		return Role{}, errors.Join(err,
-			s.rollbackRole(ctx, storedRole),
-			s.rollback(ctx, nameClaim, slotKey, slot))
-	}
-	// Record which role occupies the slot, now that there is one.
-	if _, _, err := s.cfg.Slots.Update(ctx, slotKey, func(current Slot, found bool) (Slot, bool, error) {
-		if !found {
-			return current, false, fmt.Errorf("%w: slot %s vanished during create", ErrConflict, slotKey)
-		}
-		current.PlayerID = playerID
-		return current, true, nil
-	}); err != nil {
-		// An error is not evidence that the commit failed. Reconcile before
-		// compensation; a failed read retains the role/name for recovery.
-		current, found, readErr := s.cfg.Slots.Get(ctx, slotKey)
-		if readErr != nil {
-			return role, errors.Join(err, fmt.Errorf("account: slot outcome unknown: %w", readErr))
-		}
-		if found && current.Value.PlayerID == playerID && current.Value.AccountID == accountID && current.Value.ServerID == serverID {
-			s.report.Accepted("create_role")
-			return role, nil
-		}
-		// The name is committed by now, so it is released as an owner would
-		// release it, not cancelled as a claim.
-		var joined error
-		if releaseErr := s.cfg.Names.Release(ctx, role.Name, nameOwner); releaseErr != nil {
-			joined = errors.Join(joined, fmt.Errorf("release committed name: %w", releaseErr))
-		}
-		joined = errors.Join(joined, s.rollbackRole(ctx, storedRole), s.releaseSlot(ctx, slotKey, slot))
-		if joined != nil {
-			s.report.Dropped("rollback.failed", 1)
-		}
-		return Role{}, errors.Join(err, joined)
-	}
-	s.report.Accepted("create_role")
-	return role, nil
+	return s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
 }
 
 func sameVerifiedIdentity(account Account, identity Verified) bool {
 	return strings.EqualFold(strings.TrimSpace(string(account.Channel)), strings.TrimSpace(string(identity.Channel))) && strings.TrimSpace(account.OpenID) == strings.TrimSpace(identity.OpenID)
-}
-
-// rollbackRole removes a role record the caller was never handed, version
-// checked so it cannot remove a role that has since been touched by anything
-// else.
-func (s *Service) rollbackRole(ctx context.Context, stored versionstore.Versioned[Role]) error {
-	if err := s.cfg.Roles.Delete(ctx, stored.Value.PlayerID, stored); err != nil {
-		if errors.Is(err, versionstore.ErrVersionMismatch) {
-			return nil
-		}
-		s.report.Dropped("rollback.failed", 1)
-		return fmt.Errorf("remove role %d: %w", stored.Value.PlayerID, err)
-	}
-	return nil
-}
-
-// rollback undoes what a failed create took.
-//
-// A failure here is reported rather than dropped — the implementation this
-// replaces discarded the error from its compensating release, so a name could
-// be reserved to a role that did not exist with no path to free it. The name
-// claim additionally carries a TTL, so even a rollback that fails outright
-// lapses instead of burning the name. The slot has no TTL, so its release is
-// the one that must be reported: an unreleased slot blocks that account on
-// that server until an operator intervenes.
-func (s *Service) rollback(ctx context.Context, nameClaim directory.Claim, slotKey string, slot versionstore.Versioned[Slot]) error {
-	var joined error
-	if err := s.cfg.Names.Cancel(ctx, nameClaim); err != nil && !errors.Is(err, directory.ErrClaimStale) {
-		joined = errors.Join(joined, fmt.Errorf("release name claim: %w", err))
-	}
-	if err := s.releaseSlot(ctx, slotKey, slot); err != nil {
-		joined = errors.Join(joined, err)
-	}
-	if joined != nil {
-		// The slot is still held by a create that failed. This is the one
-		// leak in the package that does not expire on its own.
-		s.report.Dropped("rollback.failed", 1)
-	}
-	return joined
-}
-
-// releaseSlot frees an occupancy record, version-checked so it cannot remove
-// a slot another creator has since taken.
-func (s *Service) releaseSlot(ctx context.Context, slotKey string, slot versionstore.Versioned[Slot]) error {
-	if err := s.cfg.Slots.Delete(ctx, slotKey, slot); err != nil {
-		if errors.Is(err, versionstore.ErrVersionMismatch) {
-			// Someone else owns it now, which means ours was already gone.
-			return nil
-		}
-		return fmt.Errorf("release slot: %w", err)
-	}
-	return nil
 }
 
 // slotKeyFor renders the exclusive-membership key for one account's role
@@ -444,6 +270,9 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	if role.Value.AccountID != accountID {
 		s.report.Refused("select_role", "not_owner")
 		return Session{}, fmt.Errorf("%w: player %d", ErrNotPermitted, playerID)
+	}
+	if err := s.roleReady(ctx, role.Value); err != nil {
+		return Session{}, err
 	}
 	now := s.cfg.Now()
 	token, err := security.SignSessionToken(playerID, s.cfg.SessionSecret, s.cfg.SessionTTL, now)
@@ -481,7 +310,10 @@ func (s *Service) ValidateSession(ctx context.Context, playerID int64, token str
 	if !found {
 		return Role{}, fmt.Errorf("%w: player %d", ErrRoleMissing, playerID)
 	}
-	return role.Value, nil
+	if err := s.roleReady(ctx, role.Value); err != nil {
+		return Role{}, err
+	}
+	return role.Value.clone(), nil
 }
 
 // UpdateProfile replaces a role's opaque game profile.
@@ -497,8 +329,21 @@ func (s *Service) UpdateProfile(ctx context.Context, accountID string, playerID 
 		// reason ErrRangeInvalid had no producer in this package.
 		return Role{}, fmt.Errorf("%w: profile is %d bytes, limit %d", ErrRangeInvalid, len(profile), MaxProfileBytes)
 	}
+	stored, found, err := s.cfg.Roles.Get(ctx, playerID)
+	if err != nil {
+		return Role{}, err
+	}
+	if found {
+		if stored.Value.AccountID != accountID {
+			s.report.Refused("update_profile", "not_owner")
+			return Role{}, fmt.Errorf("%w: player %d", ErrNotPermitted, playerID)
+		}
+		if err := s.roleReady(ctx, stored.Value); err != nil {
+			return Role{}, err
+		}
+	}
 	var result Role
-	_, _, err := s.cfg.Roles.Update(ctx, playerID, func(current Role, found bool) (Role, bool, error) {
+	_, _, err = s.cfg.Roles.Update(ctx, playerID, func(current Role, found bool) (Role, bool, error) {
 		if !found {
 			return current, false, fmt.Errorf("%w: player %d", ErrRoleMissing, playerID)
 		}
@@ -507,7 +352,7 @@ func (s *Service) UpdateProfile(ctx context.Context, accountID string, playerID 
 			return current, false, fmt.Errorf("%w: player %d", ErrNotPermitted, playerID)
 		}
 		current.Profile = append([]byte(nil), profile...)
-		result = current
+		result = current.clone()
 		return current, true, nil
 	})
 	if err != nil {

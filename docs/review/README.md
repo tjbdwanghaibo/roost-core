@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-29 Service 第三轮实施](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)：RR-19～22 的原触发已修复、正式回归/Redis/生成消费者通过，794 测试事件、16 包通过；[最新机制](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md#本批修复后的实际实现)。旧数据与外部系统仍有明确边界，下方保留 review 时点。
+
 [09-29 Service 第三轮](REVIEW-2026-09-29-services-03.md)：基线 `83c04243`；新增 4 个确认问题（3 P2、1 P3）：建角未知提交、旧取消解除新预约、Directory 删除重建 ABA、Memory Profile 输出别名。[问题与实施交接](../bug/REVIEW-2026-09-29-services-03.md) · [复跑附件](evidence/service-review-20260929-03/README.md) · [实现学习](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md) · [进度](PROGRESS.md)。16 包已有回归通过；新增 25 个叶子场景已执行，未修生产代码。
 
 [09-29 Service 修复与接手](../bugfix/SERVICE-BUGFIX-2026-09-29.md)：两轮 18 项新问题 + 旧正常 Finish ABA 已实施；正式行为回归、Memory/真实 Redis、编译和生成检查完成。旧数据迁移、外部系统对账与未测窗口单独保留，未发版。修复流程见 [roost-bugfix](../agent-skills/roost-bugfix/SKILL.md)。下方为修复前历史 review。

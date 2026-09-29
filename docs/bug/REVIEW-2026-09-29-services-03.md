@@ -1,5 +1,7 @@
 # Service 第三轮：提交未知、预约代次与删除身份
 
+**2026-09-29 后续 bugfix**：RR-19～22 已实施，原触发 Memory/Redis、RPC/并发及正式回归通过，未发版。[最终实现、升级与验证](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)。下文完整保留修复前 review 的源码时点和结论；旧数据恢复及未测外部系统仍见新交接。
+
 审查源码：`83c042438ea9ae235cfe3a41a1a7217949139670`，Core 单仓，2026-09-29。状态：**4 个新增确认问题，3 P2、1 P3，尚未实施**。上轮 19 项修复的已有回归在本轮通过；下面是邻近的新触发，不把旧修复重新判为无效。
 
 [运行与证据边界](../review/REVIEW-2026-09-29-services-03.md) · [复现材料](../review/evidence/service-review-20260929-03/README.md) · [机制与实施交接](../review/IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md)。

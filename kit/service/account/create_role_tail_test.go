@@ -41,14 +41,9 @@ func (s *slotsFailingUpdateOnce) Update(ctx context.Context, key string, mutate 
 	return s.Store.Update(ctx, key, mutate)
 }
 
-// CreateRole's commit point is its last write. When either of the two writes
-// after the role record fails, the caller gets an error and NOTHING of the
-// create survives: the same account can retry and succeed with the same name,
-// which is only possible if the role, the name and the slot were all undone.
-// Before this held, a lost name commit kept a role whose name lapsed and
-// could be taken by someone else, and a lost slot write kept a role the
-// retrying client was refused for with ErrRoleLimit.
-func TestACreateThatFailsAfterTheRoleRecordLeavesNothingBehind(t *testing.T) {
+// Unknown writes retain one durable plan. Retry uses the same ID instead of
+// assuming a failed response means that a possibly committed role is absent.
+func TestACreateWithAnUnknownWriteRetainsOneRecoverablePlan(t *testing.T) {
 	const fixedID = int64(4242)
 	for name, mutate := range map[string]func(*Config){
 		"name commit lost": func(cfg *Config) { cfg.Names = &namesFailingCommitOnce{Directory: cfg.Names} },
@@ -67,8 +62,12 @@ func TestACreateThatFailsAfterTheRoleRecordLeavesNothingBehind(t *testing.T) {
 			if _, err := service.CreateRole(ctx, owner.ID, 1, "Alice"); err == nil {
 				t.Fatal("a create whose commit tail failed reported success")
 			}
-			if _, found, _ := cfg.Roles.Get(ctx, fixedID); found {
-				t.Fatal("the role record survived a failed create; the caller was never handed it")
+			slot, found, err := cfg.Slots.Get(ctx, slotKeyFor(owner.ID, 1))
+			if err != nil || !found || slot.Value.Creation.ID == "" || slot.Value.Creation.PlayerID != fixedID {
+				t.Fatalf("unknown write lost its recovery plan: %+v %v %v", slot, found, err)
+			}
+			if stored, exists, err := cfg.Roles.Get(ctx, fixedID); err != nil || (exists && stored.Value.CreationID != slot.Value.Creation.ID) {
+				t.Fatalf("role is not linked to recovery intent: %+v %v", stored, err)
 			}
 			if got := sink.Count("accepted:create_role"); got != 0 {
 				t.Fatalf("a failed create was counted as accepted (%d); %s", got, sink.Events())
@@ -77,7 +76,7 @@ func TestACreateThatFailsAfterTheRoleRecordLeavesNothingBehind(t *testing.T) {
 				t.Fatalf("the rollback reported %d failures; %s", got, sink.Events())
 			}
 
-			// The retry is a clean first attempt: name free, slot free.
+			// The retry resumes this plan, including a possibly stored role.
 			role, err := service.CreateRole(ctx, owner.ID, 1, "Alice")
 			if err != nil {
 				t.Fatalf("the retry after a rolled-back create failed: %v", err)
@@ -92,4 +91,8 @@ func TestACreateThatFailsAfterTheRoleRecordLeavesNothingBehind(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *slotsFailingUpdateOnce) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }

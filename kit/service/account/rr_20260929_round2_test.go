@@ -2,10 +2,10 @@ package account
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
 func TestReviewVerifiedIdentityEncodingIsInjective(t *testing.T) {
@@ -41,7 +41,7 @@ type reviewSlotAppliedError struct {
 
 func (s *reviewSlotAppliedError) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
 	v, saved, err := s.Store.Update(ctx, k, m)
-	if err == nil && saved && !s.failed {
+	if err == nil && saved && v.Value.PlayerID != 0 && !s.failed {
 		s.failed = true
 		return versionstore.Versioned[Slot]{}, false, fmt.Errorf("injected reply lost after slot commit")
 	}
@@ -71,8 +71,12 @@ func TestReviewLostSlotReplyCannotDeleteCommittedRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, retryErr := s.CreateRole(ctx, a.ID, 1, "hero")
-	if !roleFound || !errors.Is(retryErr, ErrRoleLimit) {
+	retried, retryErr := s.CreateRole(ctx, a.ID, 1, "hero")
+	if !roleFound || retryErr != nil || retried.PlayerID != created.PlayerID {
 		t.Fatalf("committed slot v%d refers to deleted role %d; retry=%v", slot.Version, slot.Value.PlayerID, retryErr)
 	}
+}
+
+func (s *reviewSlotAppliedError) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }

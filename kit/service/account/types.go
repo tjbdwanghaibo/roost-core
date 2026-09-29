@@ -22,7 +22,7 @@
 //     insert-only.
 //   - The per-server role limit was a read-count-write with a deliberately
 //     non-unique index behind it, so two concurrent creates both passed.
-//     Here it is an exclusive claim in the directory primitive.
+//     Here one insert-only slot owns a durable creation plan.
 //   - A separate upsert entry point bypassed name reservation, account
 //     existence and the role limit, and would reparent a role to another
 //     account or rename it while orphaning the old reservation. There is no
@@ -30,7 +30,7 @@
 //   - Name reservation and the role record were two collection writes with no
 //     transaction, and the compensating release dropped its error, so a crash
 //     between them burned the name permanently. Here reservation is the
-//     two-phase claim in the directory package: an uncommitted claim expires.
+//     two-phase directory claim, linked to a durable slot intent for recovery.
 //   - Redis role updates compared a re-marshalled value against stored bytes,
 //     so adding one field wedged every role write across a rolling deploy.
 //     Here state goes through versionstore, which compares versions.
@@ -42,6 +42,7 @@ import (
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
@@ -230,6 +231,9 @@ type GameServer struct {
 
 // Role is one character under an account on one server.
 type Role struct {
+	// CreationID links a new role to its durable creation intent. Empty on
+	// legacy roles; it is not a session token or a client request identity.
+	CreationID string `json:"creation_id,omitempty"`
 	// PlayerID is allocated by the injected PlayerIDAllocator, never by this
 	// service. It is the role's identity everywhere else in the system.
 	PlayerID  int64  `json:"player_id"`
@@ -244,6 +248,12 @@ type Role struct {
 	CreatedAtUnix    int64  `json:"created_at_unix"`
 	LastLoginAtUnix  int64  `json:"last_login_at_unix"`
 	LastLogoutAtUnix int64  `json:"last_logout_at_unix"`
+}
+
+// clone transfers the mutable profile to the caller without exposing storage.
+func (r Role) clone() Role {
+	r.Profile = append([]byte(nil), r.Profile...)
+	return r
 }
 
 // Session is what a verified role selection produces.
@@ -267,4 +277,19 @@ type Slot struct {
 	// between claiming the slot and inserting the role, which is what makes
 	// an abandoned claim identifiable.
 	PlayerID int64 `json:"player_id,omitempty"`
+	// Creation is retained until publication and identifies retries after an
+	// uncertain write. A legacy empty slot cannot be safely inferred from it.
+	Creation RoleCreation `json:"creation,omitempty"`
+}
+
+// RoleCreation is an immutable role plan plus the reservation admitted to
+// insert it. After Admitted, storage errors are recovered forward, never by
+// deleting a role whose Create may already have committed.
+type RoleCreation struct {
+	ID            string          `json:"id"`
+	PlayerID      int64           `json:"player_id"`
+	Name          string          `json:"name"`
+	CreatedAtUnix int64           `json:"created_at_unix"`
+	Claim         directory.Claim `json:"claim"`
+	Admitted      bool            `json:"admitted"`
 }

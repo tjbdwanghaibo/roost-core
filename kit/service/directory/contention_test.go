@@ -21,6 +21,10 @@ type contendedStore struct {
 	versionstore.Store[string, Entry]
 }
 
+func (s contendedStore) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Entry], match func(Entry) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Entry]).DeleteIf(ctx, key, expect, match)
+}
+
 func (c contendedStore) Update(ctx context.Context, key string, mutate versionstore.Mutate[Entry]) (versionstore.Versioned[Entry], bool, error) {
 	current, found, err := c.Store.Get(ctx, key)
 	if err != nil {

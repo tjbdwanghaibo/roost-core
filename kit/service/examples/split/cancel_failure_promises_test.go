@@ -25,7 +25,7 @@ func (s *stubMail) Send(context.Context, mail.SendRequest) (mail.Envelope, error
 func (s *stubMail) ReserveClaim(context.Context, int64, string, string) (mail.Claim, error) {
 	return mail.Claim{MailID: "m-1", Token: "tok-1"}, nil
 }
-func (s *stubMail) CancelClaim(context.Context, int64, string, string) (bool, error) {
+func (s *stubMail) CancelClaim(context.Context, int64, string, string, int32) (bool, error) {
 	s.cancelled++
 	return s.cancelErr == nil, s.cancelErr
 }

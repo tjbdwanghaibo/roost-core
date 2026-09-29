@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第三轮 bugfix 停点
+
+基线 `23f92d73`，本批 RR-20260929-19～22 **4/4 已实施并通过原触发回归**；[逐项实现、兼容与验证](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)。16 个包通过、794 测试/子测试事件通过、无测试级 skip；全仓编译、定向 vet、Mail/Account 生成检查通过。新框架场景不以该数字计算源码覆盖率。
+
+| 范围 | 当前实际实现与证据 | 下一入口 / 保留边界 |
+| --- | --- | --- |
+| Account | slot 持久计划、同 ID/同名恢复、pending 准入、Memory/Redis、服务重建、并发 | 旧空 slot/孤儿/committed 名字需对账；新名字被他人提交需业务协调；无后台扫尾 |
+| Mail | Token+Attempts 取消，旧 JSON 拒绝、生成调用者/模板、迟到 Commit 仍可结算 | owner-first 升级；真实发奖/跨进程旧取消仍需部署验证；继续 Delete/Commit 与在途发奖 |
+| Directory / Profile | 8 个删除重建交错；三公开 Role 输出 Memory/Redis 所有权 | 自定义 backend/wrapper 需 DeleteIf；真实 HA/断网未测 |
+| 生成与运维 | codegen 首跑的 sh 环境失败已在 Git shell 补跑该用例通过 | shellcheck 未安装，不称检查通过；未部署/发版/运行生产迁移 |
+
+源码修复不等于整个 service 域审完。用户说没有修复时，旧验收跳过规则保持；默认继续 Account 其他补偿失败、Mail 在途交错、实际 Releaser 并发与 Platform 未知外部结果。下方完整保留第三轮 review 和历史停点。
+
 ## 2026-09-29 Service 第三轮停点
 
 最新源码 `83c04243`，fetch 后未新增 main 源码；[运行记录](REVIEW-2026-09-29-services-03.md) · [问题交接](../bug/REVIEW-2026-09-29-services-03.md) · [实现学习](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md)。新增 **RR-20260929-19..22（3 P2、1 P3）**，尚未实施。旧 19 项的现有回归复跑通过，不代表各问题所有故障窗口已验收。

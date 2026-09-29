@@ -44,7 +44,7 @@ type unknownSlotOutcome struct {
 
 func (s *unknownSlotOutcome) Update(ctx context.Context, key string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
 	v, saved, err := s.Store.Update(ctx, key, m)
-	if err == nil && saved {
+	if err == nil && saved && v.Value.PlayerID != 0 {
 		s.failed = true
 		return versionstore.Versioned[Slot]{}, false, errors.New("lost write reply")
 	}
@@ -102,4 +102,8 @@ func TestLegacyVerifiedIdentityRetainsAccountAndRefusesCollision(t *testing.T) {
 	if _, err := s.Login(ctx, Identity{Channel: "test", OpenID: "second", Credential: "second"}); !errors.Is(err, ErrIdentityInvalid) {
 		t.Fatalf("legacy collision merged: %v", err)
 	}
+}
+
+func (s *unknownSlotOutcome) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }

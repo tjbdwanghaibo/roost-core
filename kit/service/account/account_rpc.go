@@ -45,9 +45,9 @@ type Accounts interface {
 	// never read from the request.
 	Login(ctx context.Context, identity Identity) (account Account, err error)
 
-	// CreateRole creates one role for an account on a server. The name is
-	// reserved insert-only, so two concurrent creations of one name cannot
-	// both succeed.
+	// CreateRole starts or resumes one durable role plan for an account/server.
+	// Same-name retries share its ID, including a lost success response;
+	// a different name cannot consume a second role allowance.
 	CreateRole(ctx context.Context, accountID string, serverID int32, name string) (role Role, err error)
 
 	// SelectRole mints a session for a role the account owns. Ownership is

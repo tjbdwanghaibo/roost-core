@@ -75,7 +75,7 @@ func (f *RewardFlow) GrantSeasonReward(ctx context.Context, playerID int64, seas
 		// The reservation is released so a retry does not have to wait out
 		// the lease. Cancelling reports whether it released anything, which
 		// is why the result is checked rather than discarded.
-		if _, cancelErr := f.mail.CancelClaim(ctx, playerID, sent.ID, claim.Token); cancelErr != nil {
+		if _, cancelErr := f.mail.CancelClaim(ctx, playerID, sent.ID, claim.Token, claim.Attempts); cancelErr != nil {
 			return fmt.Errorf("grant reward: %w (releasing the claim also failed: %v)", err, cancelErr)
 		}
 		return fmt.Errorf("grant reward: %w", err)

@@ -32,25 +32,29 @@ type Config struct {
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
 	//
-	// Cancel and Release deliberately return nil for claims that are no longer
-	// the caller's — deleting there is the race this primitive exists to
-	// prevent. That makes them silent no-ops reported as success, which is
-	// only acceptable because they are counted here.
+	// Cancel counts stale claims as no-ops; Release reports owner mismatch.
+	// Both fence the identity at the atomic deletion boundary.
 	Metrics servicemetrics.Reporter
 }
 
 // store is a Directory over versioned state. Every mutation goes through
 // versionstore.Update, so "read, decide, write" cannot be expressed here.
 type store struct {
-	state  versionstore.Store[string, Entry]
-	cfg    Config
-	report servicemetrics.Sink
+	state   versionstore.Store[string, Entry]
+	deleter versionstore.ConditionalDeleter[string, Entry]
+	cfg     Config
+	report  servicemetrics.Sink
 }
 
-// New returns a Directory backed by state.
+// New returns a Directory backed by state. State must preserve the optional
+// versionstore.ConditionalDeleter capability; unsafe Delete is never a fallback.
 func New(state versionstore.Store[string, Entry], cfg Config) (Directory, error) {
 	if state == nil {
 		return nil, fmt.Errorf("directory: state store is nil")
+	}
+	deleter, ok := state.(versionstore.ConditionalDeleter[string, Entry])
+	if !ok {
+		return nil, fmt.Errorf("directory: state store must support atomic identity-checked DeleteIf")
 	}
 	if cfg.Normalize == nil {
 		return nil, fmt.Errorf("directory: normalizer is required")
@@ -64,7 +68,7 @@ func New(state versionstore.Store[string, Entry], cfg Config) (Directory, error)
 	if cfg.NewToken == nil {
 		cfg.NewToken = randomToken
 	}
-	return &store{state: state, cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
+	return &store{state: state, deleter: deleter, cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }
 
 // NormalizeLower is the common normalizer: trim surrounding space and fold
@@ -232,9 +236,11 @@ func (s *store) Cancel(ctx context.Context, claim Claim) error {
 		s.report.Refused("cancel", "committed")
 		return fmt.Errorf("%w: %q is committed; use Release", ErrClaimStale, claim.Key)
 	}
-	// Version-checked delete: if the entry changed since the read, the delete
-	// is refused rather than removing whatever is there now.
-	if err := s.state.Delete(ctx, claim.Key, current); err != nil {
+	// A version can recur after deletion/recreation. Check this reservation's
+	// identity against the very value removed, including a concurrent Commit.
+	if err := s.deleter.DeleteIf(ctx, claim.Key, current, func(entry Entry) bool {
+		return entry.Token == claim.Token && entry.Owner == current.Value.Owner && entry.State == StateReserved
+	}); err != nil {
 		if errors.Is(err, versionstore.ErrVersionMismatch) {
 			s.report.Dropped("cancel.raced", 1)
 			return nil
@@ -280,7 +286,9 @@ func (s *store) Release(ctx context.Context, raw string, owner Owner) error {
 		s.report.Refused("release", "not_owner")
 		return fmt.Errorf("%w: %q belongs to %q", ErrOwnerMismatch, key, current.Value.Owner)
 	}
-	if err := s.state.Delete(ctx, key, current); err != nil {
+	if err := s.deleter.DeleteIf(ctx, key, current, func(entry Entry) bool {
+		return entry.Owner == owner && entry.Token == current.Value.Token && entry.State == current.Value.State
+	}); err != nil {
 		if errors.Is(err, versionstore.ErrVersionMismatch) {
 			s.report.Conflict("release")
 			return fmt.Errorf("%w: %q changed during release", ErrOwnerMismatch, key)

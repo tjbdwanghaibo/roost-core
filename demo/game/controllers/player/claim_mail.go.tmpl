@@ -62,7 +62,7 @@ func (controller *Controller) HandleClaimMail(context *player_agent.Context, req
 	if err != nil {
 		// Not this game's reward: give the reservation back so the mail is
 		// not stuck "held" until the lease lapses, and answer with a code.
-		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token, claim.Attempts); cancelErr != nil {
 			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
 		}
 		return refuse(fmt.Errorf("%w: %v", svcmail.ErrMailInvalid, err), "decode")
@@ -76,7 +76,7 @@ func (controller *Controller) HandleClaimMail(context *player_agent.Context, req
 		// The grant did not happen (the transaction rolled back, ledger entry
 		// included), so the reservation can be released; a full bag is a
 		// coded refusal.
-		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token, claim.Attempts); cancelErr != nil {
 			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
 		}
 		return refuse(err, "grant")

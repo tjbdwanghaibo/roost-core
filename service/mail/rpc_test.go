@@ -146,7 +146,7 @@ func TestBothImplementationsBehaveTheSame(t *testing.T) {
 			if string(first.Attachment) != "100 gold" {
 				t.Fatalf("the claim carried %q", first.Attachment)
 			}
-			released, err := mail.CancelClaim(ctx, 7, sent.ID, first.Token)
+			released, err := mail.CancelClaim(ctx, 7, sent.ID, first.Token, first.Attempts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,7 +173,7 @@ func TestBothImplementationsBehaveTheSame(t *testing.T) {
 
 			// A cancel that releases nothing reports false through both
 			// transports, rather than collapsing into "no error".
-			if released, err := mail.CancelClaim(ctx, 7, sent.ID, "not-the-token"); err != nil {
+			if released, err := mail.CancelClaim(ctx, 7, sent.ID, "not-the-token", second.Attempts); err != nil {
 				t.Fatalf("a foreign cancel errored: %v", err)
 			} else if released {
 				t.Fatal("a foreign cancel reported that it released something")
@@ -387,7 +387,7 @@ func (s *spyMail) ReserveClaim(context.Context, int64, string, string) (Claim, e
 func (s *spyMail) CommitClaim(context.Context, int64, string, string) (Entry, error) {
 	return Entry{}, errors.New("spyMail: CommitClaim not implemented")
 }
-func (s *spyMail) CancelClaim(context.Context, int64, string, string) (bool, error) {
+func (s *spyMail) CancelClaim(context.Context, int64, string, string, int32) (bool, error) {
 	return false, errors.New("spyMail: CancelClaim not implemented")
 }
 

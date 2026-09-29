@@ -110,3 +110,7 @@ func TestCreateRoleRefusesAZeroPlayerIDAndRollsBack(t *testing.T) {
 		t.Fatalf("retry after the zero id failed: %v", err)
 	}
 }
+
+func (s *slotsVanishingOnce) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
+}
