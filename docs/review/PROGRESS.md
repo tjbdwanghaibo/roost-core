@@ -2,6 +2,8 @@
 
 ## 2026-09-29 第八批 bugfix / Service 第十轮
 
+实现/主体文档已推送28f8fc15，干净主树同步；graph full generation14:09:57Z ready，新正式测试已纳入。137路径仍135 metadata_changed/两个go.txt nottracked，[后补证据](evidence/service-review-20260929-10/COVERAGE-AFTER.json)保存限制和源/执行依据。四个隔离Redis核验目录后关闭，共享MCP保留。
+
 基线68cf87fc，fetch无远端改动；[RR-33 1/1修复/声明场景验证](../bugfix/SERVICE-BUGFIX-2026-09-29-08.md)，新[RR-34 P2 Pipeline误报成功](../bug/REVIEW-2026-09-29-services-10.md)仅交接未改driver。[运行](REVIEW-2026-09-29-services-10.md) · [实现学习](IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)；提交/最终图谱见该轮交付追加。
 
 | 进度分母 | 当前事实 | 不计为完成 / 下一入口 |

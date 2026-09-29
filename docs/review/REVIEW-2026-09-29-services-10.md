@@ -28,3 +28,9 @@
 Verify；独立roost-core，session确认ready/HEAD68cf87fc、full generation13:13:03Z。search→both trace→snippet均处理到无分页；GetMany snippet因receiver同名实际返回fake，直接补读production，trace也有interface/receiver误归，未以图谱0caller作安全依据。初始路径检查metadata_changed、两个新正式测试main尚不存在/go.txt未tracked，当前worktree精确源/实际测试补证；[原coverage](evidence/service-review-20260929-10/COVERAGE-BEFORE.json)保存代际与范围。最终索引状态见交付追加，不将Git HEAD变化当generation更新。
 
 下一次bugfix：先RR-34所列aggregate/command/future行为，复用现有driver；之后按具名外部验收/归档设计继续。旧主链不从头重扫。提交推送是流程收尾，未发版/部署/数据迁移。
+
+## 交付与最终索引
+
+代码/主体文档已提交推送 `28f8fc15aac66e0165e1e7de06f094556056cdb3`，ls-remote一致，干净main快进同步；20个已记录执行源blob与交付一致。四个独占Redis先核验各自`service-bugfix8-redis/<port>`目录再SHUTDOWN NOSAVE，端口全部关闭，共享MCP保留。
+
+full重建成功，ready/HEAD28f8fc15，generation **2026-09-29T14:09:57Z**、recording complete；31539 nodes/207972 edges，两个新正式Mail integration符号均检索命中且无分页。[最终coverage](evidence/service-review-20260929-10/COVERAGE-AFTER.json)：137路径分100/37两批核查（接口单次上限128），135 metadata_changed、两个go.txt not_tracked；scopes service/kit-service/driver/ref_hmap无记录gap，不是完整性证明。仍按执行源摘要、实际读源/回归补证。全项目15个partial中本轮Run-Review.ps1的18/23/24行已直接读源并成功执行；不外推模板等其他partial。后补提交只记录交付/索引，不再改行为或重跑已通过源码测试。

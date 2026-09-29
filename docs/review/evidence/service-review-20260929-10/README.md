@@ -11,3 +11,5 @@
 默认严格要求两个missing→failed HSet反例fail、一个reuse/Discard控制pass且无skip/build-fail；runner识别预期反例，不能把环境/编译失败当bug证明。RR-34修复后加`-ExpectFixed`要求三个叶子全pass。脚本不启动/停止Redis、不提交源码。
 
 RESULTS保存失败值、错误和日志hash；inventory只核算100个service生产路径（97未变复用/3变化），不代表逐行/测试覆盖率。COVERAGE-BEFORE记录初始13:13:03Z代际metadata_changed/missing/nottracked和boundedscopes，当前源码补证；最终图谱/交付记录以本轮追加为准。raw日志在本地.tmp，不提交大日志或Redis数据。
+
+[COVERAGE-AFTER](COVERAGE-AFTER.json)保存full新generation14:09:57Z、ready/HEAD28f8fc15、新正式符号命中和137路径分批coverage；135metadata_changed/两个go.txt未纳入仍由源摘要/实际执行补证。partial脚本范围直接读源且本轮成功跑过。独占Redis已经核验目录后全部关闭，下次复跑需自建环境。
