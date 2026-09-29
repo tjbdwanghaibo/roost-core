@@ -1,0 +1,217 @@
+package Platform
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/kit/service/platform"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/redis/driver"
+	"{{MODULE}}/game/purchase"
+)
+
+// The wrapper loses the reply only after the real Redis script committed.
+type lostGrantReply struct{ grantStore }
+
+func (s lostGrantReply) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if _, err := s.grantStore.Eval(ctx, script, keys, args...); err != nil {
+		return nil, err
+	}
+	return nil, context.DeadlineExceeded
+}
+
+// Force the read/insert interleaving without changing the production catalog.
+type grantReadBarrier struct {
+	grantStore
+	beforeInsert func()
+}
+
+func (s grantReadBarrier) HGet(ctx context.Context, key, field string) ([]byte, error) {
+	raw, err := s.grantStore.HGet(ctx, key, field)
+	if errors.Is(err, redis.ErrNil) {
+		s.beforeInsert()
+	}
+	return raw, err
+}
+
+type failedGrantRead struct{ grantStore }
+
+func (s failedGrantRead) HGet(context.Context, string, string) ([]byte, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestPurchaseDeliveryDurableWinner(t *testing.T) {
+	for _, backend := range []string{"standalone", "cluster"} {
+		t.Run(backend, func(t *testing.T) {
+			cfg := redis.DefaultConfig(os.Getenv("ROOST_REVIEW_REDIS"))
+			if backend == "cluster" {
+				cfg.ClusterAddrs = strings.Split(os.Getenv("ROOST_REVIEW_CLUSTER"), ",")
+				if cfg.ClusterAddrs[0] == "" {
+					t.Skip("ROOST_REVIEW_CLUSTER is not set")
+				}
+			} else if os.Getenv("ROOST_REVIEW_REDIS") == "" {
+				t.Skip("ROOST_REVIEW_REDIS is not set")
+			}
+			client, err := driver.NewClient(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			prefix := fmt.Sprintf("purchase-test:{%d}", time.Now().UnixNano())
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			order := platform.Order{OrderID: "order", PlayerID: 1001, ProductID: "potion_pack", PaidAtUnix: 1700000000}
+			key := purchase.GrantsKey(prefix, order.PlayerID)
+			t.Cleanup(func() { _, _ = client.Del(context.Background(), key) })
+			reset := func() {
+				if _, err := client.Del(ctx, key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			read := func() string {
+				raw, err := client.HGet(ctx, key, order.OrderID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(raw)
+			}
+			seed := func(grant purchase.Grant) string {
+				raw, err := purchase.Encode(grant)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := client.HSet(ctx, key, order.OrderID, raw); err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			old := purchase.Grant{OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: order.ProductID, PaidAtUnix: order.PaidAtUnix, ItemID: 1002, Count: 99}
+			newDeliverer := func(store grantStore) *grantDeliverer { return &grantDeliverer{client: store, prefix: prefix} }
+			t.Run("lost_reply_restart", func(t *testing.T) {
+				reset()
+				err := newDeliverer(lostGrantReply{client}).Deliver(ctx, order)
+				if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, platform.ErrDeliveryNotApplied) {
+					t.Fatalf("lost reply classification: %v", err)
+				}
+				before := read()
+				if err := newDeliverer(client).Deliver(ctx, order); err != nil {
+					t.Fatal(err)
+				}
+				if read() != before {
+					t.Fatal("restart changed the durable grant")
+				}
+			})
+			t.Run("changed_catalog", func(t *testing.T) {
+				reset()
+				before := seed(old)
+				if err := newDeliverer(client).Deliver(ctx, order); err != nil {
+					t.Fatal(err)
+				}
+				if read() != before {
+					t.Fatal("retry resolved the new catalog over the durable goods")
+				}
+			})
+			t.Run("retired_product", func(t *testing.T) {
+				reset()
+				retired := order
+				retired.ProductID = "retired-product"
+				grant := old
+				grant.ProductID = retired.ProductID
+				before := seed(grant)
+				if err := newDeliverer(client).Deliver(ctx, retired); err != nil {
+					t.Fatal(err)
+				}
+				if read() != before {
+					t.Fatal("retired product changed")
+				}
+			})
+			t.Run("concurrent_winner", func(t *testing.T) {
+				reset()
+				var before string
+				barrier := grantReadBarrier{grantStore: client, beforeInsert: func() { before = seed(old) }}
+				if err := newDeliverer(barrier).Deliver(ctx, order); err != nil {
+					t.Fatal(err)
+				}
+				if read() != before {
+					t.Fatal("insert overwrote a competing durable grant")
+				}
+			})
+			t.Run("concurrent_retries", func(t *testing.T) {
+				reset()
+				var wg sync.WaitGroup
+				failures := make(chan error, 16)
+				for i := 0; i < 16; i++ {
+					wg.Add(1)
+					go func() { defer wg.Done(); failures <- newDeliverer(client).Deliver(ctx, order) }()
+				}
+				wg.Wait()
+				close(failures)
+				for err := range failures {
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				grant, err := purchase.Decode(read())
+				if err != nil || grant.Count != 10 || grant.ItemID != 1001 {
+					t.Fatalf("grant: %+v %v", grant, err)
+				}
+			})
+			t.Run("read_unknown", func(t *testing.T) {
+				reset()
+				before := seed(old)
+				err := newDeliverer(failedGrantRead{client}).Deliver(ctx, order)
+				if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, platform.ErrDeliveryNotApplied) || read() != before {
+					t.Fatalf("read failure: %v", err)
+				}
+			})
+			t.Run("unknown_product_absent", func(t *testing.T) {
+				reset()
+				unknown := order
+				unknown.ProductID = "unknown"
+				if err := newDeliverer(client).Deliver(ctx, unknown); !errors.Is(err, platform.ErrDeliveryNotApplied) {
+					t.Fatalf("expected definite prewrite refusal: %v", err)
+				}
+				if _, err := client.HGet(ctx, key, order.OrderID); !errors.Is(err, redis.ErrNil) {
+					t.Fatalf("unexpected write: %v", err)
+				}
+			})
+			for _, field := range []string{"order", "player", "product", "paid_at", "empty", "malformed"} {
+				t.Run("preserve_"+field, func(t *testing.T) {
+					reset()
+					bad := old
+					var before string
+					switch field {
+					case "order":
+						bad.OrderID = "other"
+					case "player":
+						bad.PlayerID++
+					case "product":
+						bad.ProductID = "other"
+					case "paid_at":
+						bad.PaidAtUnix++
+					}
+					before = seed(bad)
+					if field == "empty" || field == "malformed" {
+						before = ""
+						if field == "malformed" {
+							before = "{"
+						}
+						if err := client.HSet(ctx, key, order.OrderID, before); err != nil {
+							t.Fatal(err)
+						}
+					}
+					err := newDeliverer(client).Deliver(ctx, order)
+					if err == nil || errors.Is(err, platform.ErrDeliveryNotApplied) || read() != before {
+						t.Fatalf("inconsistent grant was hidden or changed: %v", err)
+					}
+				})
+			}
+		})
+	}
+}

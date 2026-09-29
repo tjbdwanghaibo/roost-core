@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 第七批 bugfix 与第九轮：service 本阶段专项收口
+
+基线 bcebb805 加本轮实现。**RR-31/32 2/2 已修/声明场景已验；新 RR-33 P2 Mail Cluster 分页未修。**[修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md)、[新问题/实施方向](../bug/REVIEW-2026-09-29-services-09.md)、[运行](REVIEW-2026-09-29-services-09.md)、[机制与归档方案](IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md)。下方旧“0/2未修”保持历史时点。
+
+| 完成口径 | 当前状态 | 剩余边界 |
+| --- | --- | --- |
+| Service主链范围 | 10/10功能域本阶段有界整理；100生产路径核算，95blob不变复用/5变化复读；18生成文件按12check核验 | 不是逐行/分支/全故障正确率，不升级其他核心域 |
+| 本轮具名专项 | Activity配置/多game部分完成恢复；购买首内容/未知回复/消费归档边界；Mail跨槽批读/Pipeline候选；Match历史成本；生成装配均有源码/实际证据 | 本机专项审查收口，不是方案已实施或外部验收完成 |
+| 第八轮两项缺陷 | RR-31/32 2/2修复，原断言8/8绿、新正式33叶子通过 | 旧prefix迁移、旧业务producer升级、历史被覆盖goods恢复未执行 |
+| 新缺陷 | RR-33真实反例1fail、tagged/Pipeline控制通过 | 下一次service bugfix入口；Mail生产未改 |
+| 回归/消费 | integration+race17包/909事件/841叶子，test skip0；consumer107事件/100叶子；demo5/5、RPC12/12、全Core/consumer编译、定向vet绿 | 实际渠道/asset/allocator、HA/強杀、长稳/生产迁移未执行 |
+
+不再留“其余service尚未安排”的泛化待办。后续优先RR-33，归档/fulfilled/资源回执按具体设计入口推进；缺少外部环境的不计已验证。[最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、[路径/样本/限制](evidence/service-review-20260929-09/README.md)。
+
 ## 2026-09-29 第六批 bugfix 与 Service 第八轮
 
 代码与主体文档已提交推送 `5f81e5c8`。图谱 full 更新成功，最终 ready/HEAD 对齐、generation11:18:53Z，三个新正式测试已纳入；29证据路径仍metadata_changed，源码补证与partial边界见[刷新结果](evidence/service-review-20260929-08/COVERAGE-AFTER.json)。四个独占Redis实例已关闭，未停止共享MCP。

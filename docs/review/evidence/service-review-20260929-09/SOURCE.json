@@ -1,0 +1,626 @@
+{
+  "source_base": "bcebb80568559dcf895db0683cb85eee75b9ef53",
+  "working_changes": true,
+  "files": [
+    {
+      "path": "codegen/cmd/servicerpc/main.go",
+      "git_blob": "cda2552c086ab36d1fc0e9431fdf3e8f1e649266",
+      "raw_sha256": "2E217F578464F34C4B3C4D4F2FAA62FD8D6CF48D3E29ABE549DA57A294111B98"
+    },
+    {
+      "path": "codegen/internal/roost/demo_test.go",
+      "git_blob": "8b1322f1e1bff3a1c30f03d7b9bdca9fc941ba08",
+      "raw_sha256": "04CE70BA754A8C523FF96968DCEE7D4D6B781D089B7EDCD03ADAC11CE2C72AC6"
+    },
+    {
+      "path": "codegen/internal/roost/demo.go",
+      "git_blob": "5293cfb317a2b9fa8a947d00bbf929d05a5a9d05",
+      "raw_sha256": "82C9C7C7DFEF1F253206213900D531F5AF0E50E6A850C50BA0408F3836F0E9B4"
+    },
+    {
+      "path": "codegen/internal/servicerpc/gen.go",
+      "git_blob": "3ec29473a7d6848d7c47d4a11bf666791026e414",
+      "raw_sha256": "D6E9E15025F0C348DBD0CA6D302DD7CEFFEFA69508D69079EADA3044FC835734"
+    },
+    {
+      "path": "codegen/internal/servicerpc/run.go",
+      "git_blob": "bda7f920fcaf67944e4963ef5a9be5325840c070",
+      "raw_sha256": "FFC7DEE613427472810175ADA8C26B8AA1D2DE37A9A7369FD409E023BA7AA5EB"
+    },
+    {
+      "path": "demo/embed.go",
+      "git_blob": "d6a9c1444c9e38e42996ea9c24e88ef2774b659f",
+      "raw_sha256": "FFBB36DEBD88E55799022F8834F1BA214F6A322A6C3D36322FC0D87EDC0BCC8F"
+    },
+    {
+      "path": "demo/game/entities/player/bag_component.go.tmpl",
+      "git_blob": "bb26b92beea0e575abe89b8ac65a2591a8563645",
+      "raw_sha256": "392988DA121809F31AF0497746CA1C14645F2F11B937FB420D7B4A722E600063"
+    },
+    {
+      "path": "demo/game/handler/grant_purchase_test.go.tmpl",
+      "git_blob": "0be3d7dbb3b4a1166824ae8a465d67e19461c7f3",
+      "raw_sha256": "64AB03C791C53339C7A2E04B5E8151064D1060E7F8ECADD0B92A6CC0CA375495"
+    },
+    {
+      "path": "demo/game/handler/grant_purchase.go.tmpl",
+      "git_blob": "11cde4a7cd7e0c5dce1f2ac7473a894aaae7c7a1",
+      "raw_sha256": "D24EFFEE5B86D177EAC133F433960A007238147B596D0D374882EA3A5B585B00"
+    },
+    {
+      "path": "demo/game/purchase/purchase.go.tmpl",
+      "git_blob": "27665d194b0b3e005aa650e7f2f6e37b5355f42e",
+      "raw_sha256": "4902588E7BA67D679DD5770465570CD6BFB03D8476DBCA6B1CED198A59D88505"
+    },
+    {
+      "path": "demo/internal/service/game/purchase_drain.go.tmpl",
+      "git_blob": "6df9ad110dff7acc8a50e3b2afb4ffa01560a0a7",
+      "raw_sha256": "19AD540D56B8098A7C871BC410EE9F981FF9D6B0A7108C2815D2D3F1DEDC4F9F"
+    },
+    {
+      "path": "demo/internal/service/platform/collaborators.go.tmpl",
+      "git_blob": "df82b1416f1a00d07ae92270826f788429dd5483",
+      "raw_sha256": "618CB4C2DB66F3E1936884284A061DECF5E36A91ED812E80CCB00BA79FDCFB8E"
+    },
+    {
+      "path": "demo/internal/service/platform/purchase_delivery_test.go.tmpl",
+      "git_blob": "244970dc49cc3b624602bd5e0478e9151cf1d44c",
+      "raw_sha256": "4803067BBD5660652D77A925FACC8FE85F3A1241EAF2390284E1713571F7672A"
+    },
+    {
+      "path": "demo/internal/service/session/collaborators.go.tmpl",
+      "git_blob": "9c5374b5d0046151e76c734265ab4d35750d704b",
+      "raw_sha256": "5AF9CBE4693ED077E5C342FF1DC20BE190DE4C323A7889B3F899CBC1ECFD64C3"
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-09/mail_test.go.txt",
+      "git_blob": "d5a563d7dcdd5a918a67e51c781f0a5e44441574",
+      "raw_sha256": "5D66222B9F4D0F7A4BCF24761F1BB4A26EB05423E87C217264AA25B3B035F0DD"
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-09/match_test.go.txt",
+      "git_blob": "bf3240437daf53355ef9af2369377dc6b646d79a",
+      "raw_sha256": "A610AC2595A35D49A2EE21AA0766F4C3A3D1A324FF21D2DC17BF09520B5A2661"
+    },
+    {
+      "path": "kit/mods/service_servicemods.go",
+      "git_blob": "e2280b953530cc99e99f3d7208ca08b826c2c833",
+      "raw_sha256": "DA1D45F318E9C73099EFB7CADCC542B85CC17DA25B6F894082CA2F68AE8F4B3A"
+    },
+    {
+      "path": "kit/service/account/account_mod.go",
+      "git_blob": "e3beb5f177e8340ff9d77278e9e04ba78e1a6e19",
+      "raw_sha256": "E21B177922B9A20AF2FC871364B56D60D857A818D91BC1F8FF285867AEF3CD1D"
+    },
+    {
+      "path": "kit/service/account/account_rpc.go",
+      "git_blob": "dd5c7aff3d3f63a6bdc0287e096ce9c7bd5daaba",
+      "raw_sha256": "438C16006533950267C763607F6FF0767F6236445E5EBDCC6B23D4930EBCACA2"
+    },
+    {
+      "path": "kit/service/account/accounts_rpc_assembly_gen.go",
+      "git_blob": "dd5d16bf68808793ceaa214dbcbbbe0fc0dfee80",
+      "raw_sha256": "9B57377B952C95DF6C336ED940D4A9E6132ADA70BA1E05FCC1156B976C2A8209"
+    },
+    {
+      "path": "kit/service/account/accounts_rpc_gen.go",
+      "git_blob": "5f884c2c42fc922af3343e1df0c7a82717da636a",
+      "raw_sha256": "A89C371A3F6F5014EFA8065EBF51F028A03168446D5E2C07F6FFCB281CD7772D"
+    },
+    {
+      "path": "kit/service/account/create_role.go",
+      "git_blob": "b4b0137611c3dcb9d99f357b130a201a52be795c",
+      "raw_sha256": "1FF45C15295B8D56F048C8F9ADB95997E55C6294348395F1BDFE6B919C96C03A"
+    },
+    {
+      "path": "kit/service/account/identity.go",
+      "git_blob": "31d3f65c2999ad84e9c5b13239092ec43a9a282c",
+      "raw_sha256": "5EB9E7115BE11DDBD118C49E18ABF0AB01CD87291FD13227D15F7A47BC252E4A"
+    },
+    {
+      "path": "kit/service/account/redis_store.go",
+      "git_blob": "32d9e8ce464e21e15740ee24a3323585a7eb61a9",
+      "raw_sha256": "25F5C3257BD9384F6C87BEEFEE55D3690FFE3444BCF58CA170430565F2B44168"
+    },
+    {
+      "path": "kit/service/account/server_run.go",
+      "git_blob": "a47981a987dd03d5a561204c40a5a1c402941134",
+      "raw_sha256": "5D18CD4805F8BAFCC8C31A8728EE438658F78383450A9187959C6BC79CF9E400"
+    },
+    {
+      "path": "kit/service/account/service.go",
+      "git_blob": "edbad2155a9ac54734c625ec5d98da20aac2f3f7",
+      "raw_sha256": "A96CE4C233C1CCC54093B3A35AD6858CC175D58BB176EFB69A7A74431E3CCE57"
+    },
+    {
+      "path": "kit/service/account/types.go",
+      "git_blob": "45de492e3d21494af4efe45a81c0d1e5f8d2ee05",
+      "raw_sha256": "0EF45590D29C03DCD7BFC6A6D825150035F9D197C9EC343C90B6C6BF3AB38095"
+    },
+    {
+      "path": "kit/service/chat/chat_mod.go",
+      "git_blob": "46d07458a602c3fbab948c7a5e0ec7983e0ae519",
+      "raw_sha256": "6A1AB412E95731DCBE130D557DF67EC3FE91361E75C4CC95A0A42CE334F6E477"
+    },
+    {
+      "path": "kit/service/chat/chat_rpc.go",
+      "git_blob": "cdefdc840d1b1da3082f053c661565867141bc04",
+      "raw_sha256": "5295AAD30DCCFE579535296CE8650A8D866D0C7590D8C8A426314CE1964D49D9"
+    },
+    {
+      "path": "kit/service/chat/chat.go",
+      "git_blob": "b0649fd35ba3e71a1e248ef04425e24d950ead95",
+      "raw_sha256": "019AFF3C707FFCBD5D3D8D89B4FFDDD36CAF5A04F46007D6A6CEC55F48ABE81C"
+    },
+    {
+      "path": "kit/service/chat/messaging_rpc_assembly_gen.go",
+      "git_blob": "b9e10b46a6b7080848ed6126b42b07b042a81044",
+      "raw_sha256": "3506BB0371E3A181C02BAA7B15BBE4858E4157CF8B0CEAFA911BA070808EAA95"
+    },
+    {
+      "path": "kit/service/chat/messaging_rpc_gen.go",
+      "git_blob": "55f4514a1413e1b76239d211553b4b8f2ec58073",
+      "raw_sha256": "DCE6DB6C138997B9AB25ED874AB5F71B6997D076C1DF48A24B8DF5C22A72E748"
+    },
+    {
+      "path": "kit/service/chat/redis_store.go",
+      "git_blob": "699824a72356abd970f392bc5dceaba4c9f7db67",
+      "raw_sha256": "0D03C88CCFC8E26F931DC022CC63655CCDB51CE3FE37D345570F90067908F505"
+    },
+    {
+      "path": "kit/service/chat/server_run.go",
+      "git_blob": "abe22fd4b0af815c06a160e90c7ae3e7d8dd881b",
+      "raw_sha256": "2107409F57A1D8E994CE85F716CD5F5761361C26A4D3247163D803E25698F7EF"
+    },
+    {
+      "path": "kit/service/chat/service.go",
+      "git_blob": "4a4a40066f9f4a68fe702eb0ceb226348a18f1cf",
+      "raw_sha256": "9FFB4ECDA9DB9C40D72CBD400FCF99729C51213AF2E7D8A31D5830CA3BAB4CDE"
+    },
+    {
+      "path": "kit/service/chat/store.go",
+      "git_blob": "aa33b91f6f39a4e9519c901edaaab1656edb21fc",
+      "raw_sha256": "50FCC330271A1ED463A53DF295BC355C655E125BB4E6F682E4ECEF3237103406"
+    },
+    {
+      "path": "kit/service/directory/directory_mod.go",
+      "git_blob": "07bd61a3cd345c70882fefa88d97b6f51eb0f4f2",
+      "raw_sha256": "F8CE53AF1C47C71C4540C773E696FF2A321FD9BD13C54F563C37E2570DCD458D"
+    },
+    {
+      "path": "kit/service/directory/directory.go",
+      "git_blob": "d514f3dbee66ef699427194a28f46b48b7b8f4c0",
+      "raw_sha256": "CB2EDA205C50073DED6CE536A4EE5D88C47D4D48B2A24946D78A6F1680E4484C"
+    },
+    {
+      "path": "kit/service/directory/redis_store.go",
+      "git_blob": "8e1c3f1608c8c06955767cdbec612e00743e99d3",
+      "raw_sha256": "2A950AE62190F4481CB7ECCB9111740491AB996940089BCDF39C0705DA1101D3"
+    },
+    {
+      "path": "kit/service/directory/store.go",
+      "git_blob": "bcfe2c2929a74dfe6eb5c1c220b9173d2dd8d86c",
+      "raw_sha256": "E228B8D4204DDD4AB422C8643AFE7500F258CFC92456495E8FD0DEAA53EC4401"
+    },
+    {
+      "path": "kit/service/examples/split/consumer.go",
+      "git_blob": "e24f0635a45095fdf1babc4e5eb2a9326fb8ae7b",
+      "raw_sha256": "1A9568F9CB1D80F3D08791C0362EF7C6BD5DB2DBFE7452C75A7709074DEB800F"
+    },
+    {
+      "path": "kit/service/examples/split/doc.go",
+      "git_blob": "ace0a4ad73f28dbf326a4819b00ecfbc04f55ff6",
+      "raw_sha256": "9A9DAF25965E42F406C4D02E72C7BBA187292B7180838CF2A6C0B599D0DB1DE8"
+    },
+    {
+      "path": "kit/service/examples/split/gameprocess.go",
+      "git_blob": "b8b5c21d398f7eeff6c00193fdf8c6455077f993",
+      "raw_sha256": "C92A90C488A2854C5F2F81D2AB129CD260050AC202B0B7441EAC802716F416C3"
+    },
+    {
+      "path": "kit/service/examples/split/mailprocess.go",
+      "git_blob": "b96c766fbc3e3c2d1403ef1e062f4a468416bea0",
+      "raw_sha256": "1FCC830DAE556540BDFAB34B993DD1F5C0C5BBB0796FDDFE81189EBA528245D3"
+    },
+    {
+      "path": "kit/service/global/activity/activity_mod.go",
+      "git_blob": "74afdbd4cf3e0367bfa98da79551ae2d03c1a2c5",
+      "raw_sha256": "95BB5B10D602C3FA4446D4A5FA1C6C1CE28DC41FBEF68CE69819052729953CF4"
+    },
+    {
+      "path": "kit/service/global/activity/activity_rpc.go",
+      "git_blob": "efeed869cba9940e550dc19dfd9dfabfd784f51b",
+      "raw_sha256": "0F5D191E691F1E27C1F8341609694A5B6F610D6C0F66D2DB303DA8DDDA3805F2"
+    },
+    {
+      "path": "kit/service/global/activity/admin.go",
+      "git_blob": "eb20f3cef07d9e0d9de7c658d2ae7e96d300ee5c",
+      "raw_sha256": "4CAE70985F5D31FF1BA19AE12603E87E007B57E543E809D2B586FFD068F4AB6B"
+    },
+    {
+      "path": "kit/service/global/activity/bugfix_cluster_prefix_test.go",
+      "git_blob": "4bd84c6950ac0662ea6f209221365148cde2d923",
+      "raw_sha256": "BE2862213CD060CA3B13FE56FA0E5DC582F91423F0DCBAFABD901BCB2006A786"
+    },
+    {
+      "path": "kit/service/global/activity/coordinator_rpc_assembly_gen.go",
+      "git_blob": "d998fb34633c7921645de79096ec9265a891258f",
+      "raw_sha256": "6B341A843276C3E53DCD21A5CD0804CBC3A50D82C3105E0ECDE4404CEAB8FEE8"
+    },
+    {
+      "path": "kit/service/global/activity/coordinator_rpc_gen.go",
+      "git_blob": "0f3973481782b2e24d39d8cc3c399add315de0c2",
+      "raw_sha256": "D9EEAADD3BC70748DE942AA75AD98861F4F5944C14D38611C5FA383168CC4D89"
+    },
+    {
+      "path": "kit/service/global/activity/redis_store.go",
+      "git_blob": "acfc9ef4d8ecf3eafc44e5a9559ddeff42bfca4f",
+      "raw_sha256": "896D64F89A7FB2DB01D3C23DF57A44EC92C65E2DBFC14A08D5411A7D0EBBA780"
+    },
+    {
+      "path": "kit/service/global/activity/server_run.go",
+      "git_blob": "d525fe653552ce267d06639d047f0b999d041303",
+      "raw_sha256": "9B8F736283F050BBFEF504D9A4AD9262906E471921BCB676A41EE0C94A48C5E4"
+    },
+    {
+      "path": "kit/service/global/activity/service.go",
+      "git_blob": "881aa8d7bc2f033e20ca552e70dc9b12c4c2be5f",
+      "raw_sha256": "5E18DC19E5E919752FCFF42EBA0FEA017B3F0DC5724EE3FC938EE5AFDF475520"
+    },
+    {
+      "path": "kit/service/global/activity/types.go",
+      "git_blob": "d690cafe02bc77c964b788d41a7cc680aaade7bd",
+      "raw_sha256": "DFBB44663225D7D781006DF9E242210E48CFECF75A1C1FF5C66CBF45DAB89649"
+    },
+    {
+      "path": "kit/service/global/global_mod.go",
+      "git_blob": "f352ba8d15b6d6cf615d3f7aea26c7d4c6f2c86b",
+      "raw_sha256": "11D89535D297D4E081D7C6F35B228BF54F1CFCB7A21A5249674EE38E28662585"
+    },
+    {
+      "path": "kit/service/global/global_rpc.go",
+      "git_blob": "1c0d8dd7980eed900269a705f4011b87420347f5",
+      "raw_sha256": "1C0B82C713BF6B9F23EE3264402477C4F7F509D2D28E7A7372F0169CF7D1C750"
+    },
+    {
+      "path": "kit/service/global/redis_store.go",
+      "git_blob": "fb229efa2daa5a1bdb5c1d1b45d7ccea36faf64a",
+      "raw_sha256": "3F54C984E8D28C899B9AC4F3B939616B13E82479FBDACB842E76AB7698BF582A"
+    },
+    {
+      "path": "kit/service/global/routing_rpc_assembly_gen.go",
+      "git_blob": "3beeae89ee0d71482fddb7d5f1e24fb22a5ad0ff",
+      "raw_sha256": "260B07856B3BB44D22CF39DF2B837E30822AB7278909AD29DD4EAD51226CBE08"
+    },
+    {
+      "path": "kit/service/global/routing_rpc_gen.go",
+      "git_blob": "216006944e54c1ad0491e6db53993b11b8982356",
+      "raw_sha256": "839DDE067C975309099F28F1BD3398F0DC174EFFB32D401B10C47AA7BB9BF388"
+    },
+    {
+      "path": "kit/service/global/server_run.go",
+      "git_blob": "dc5bbf76979be5081b02fbfdbfb94a555041b019",
+      "raw_sha256": "E2AB6B2ABF38894A182DDC3A070589873A2E00F88B33725A9E0859133F57EA66"
+    },
+    {
+      "path": "kit/service/global/service.go",
+      "git_blob": "f3f24aab5c7cd3b2510ec810df3b8c68145feb69",
+      "raw_sha256": "A60F1FEE6167DD453F33B602C294E0DB18B061AD54B60B1837424B824FE9B2E1"
+    },
+    {
+      "path": "kit/service/global/types.go",
+      "git_blob": "c9affdc74e8d1fc6059619397d01ebb47cc9674f",
+      "raw_sha256": "F2FB45824F26D19695AEA236787583B162004E83193DD4257DB49ADE8684EC64"
+    },
+    {
+      "path": "kit/service/integration/doc.go",
+      "git_blob": "162afa401b0b4b6048a30e8b5e05cf4a6bf68935",
+      "raw_sha256": "27B66EBC41CAC7872CA1798E925C4C35AD0336D26E3CDF6E9F7976C729929E34"
+    },
+    {
+      "path": "kit/service/mail/alias.go",
+      "git_blob": "cbbb04a9b530aed00b946e980c029b5f3afd73ee",
+      "raw_sha256": "A52A9AB293262F0868C330F4A1FB1840E342DE63505C4B88ACC1B49E13E3C583"
+    },
+    {
+      "path": "kit/service/mail/mail_mod.go",
+      "git_blob": "872844292bf57d5a4e236475270c02c744599fe8",
+      "raw_sha256": "91CB6906F66F4D52C8C41311409BDA853B71177E470E92CF52264808652613F5"
+    },
+    {
+      "path": "kit/service/mail/mail_rpc_assembly_gen.go",
+      "git_blob": "b2a7ccecdaa939263ca018c4d856a8d6332218c6",
+      "raw_sha256": "FB6D613FF93CC2D85187B8E2DCB2EDC80AA8C234E2C58AE555FF5A2534B6E600"
+    },
+    {
+      "path": "kit/service/mail/server_run.go",
+      "git_blob": "292cda02afb0999a71185baa3967f9619db8be95",
+      "raw_sha256": "A2E943C073403E64FFA43DB366F904CC693718FB7C5AAC1B826CD393E6F79BED"
+    },
+    {
+      "path": "kit/service/match/alias.go",
+      "git_blob": "1bbcb34cc53eb41d461d5876a2b895efe3c7ad17",
+      "raw_sha256": "CAB4717CFD59C2F01DC0EAB27069CF75004A0269D8EDDF3C95A52BC2E061EB62"
+    },
+    {
+      "path": "kit/service/match/match_mod.go",
+      "git_blob": "887fe1f26a02b54fb66a86b50e057ca6f176901d",
+      "raw_sha256": "034D72410EF8955F005559D5077ABF88AE495C6567C0617E6D20E552F64E7439"
+    },
+    {
+      "path": "kit/service/match/matchmaker_rpc_assembly_gen.go",
+      "git_blob": "df54adbe902871a063f9fcfdedb9c8ac81e4ab64",
+      "raw_sha256": "CB901DFFE80090EAD9504EC0AE1C94A07AC8E899FCB9C0774031DEFABE07569D"
+    },
+    {
+      "path": "kit/service/match/server_run.go",
+      "git_blob": "eb050342ce6183167a829f365165e32677d1d447",
+      "raw_sha256": "D21656E209ABF9492494920631DE3131E8C998AA1CAC65703BB272C31374AC92"
+    },
+    {
+      "path": "kit/service/platform/admin.go",
+      "git_blob": "fff71c4660d9d7b59d0637f26211fd02aec36438",
+      "raw_sha256": "CF9C710AC53A097498B7362F0E2E21435BD76C085DB4845CB1E47AB24E959A4C"
+    },
+    {
+      "path": "kit/service/platform/identity.go",
+      "git_blob": "7726b95bf028036ccd3935752347e0509eca0b70",
+      "raw_sha256": "EC06784D62070543F66ACFFFF877DD11377550BD01A52AD889CF881BEA8B54AE"
+    },
+    {
+      "path": "kit/service/platform/platform_mod.go",
+      "git_blob": "a43cdd79d3fbe066c258f81848a53d3ef1d48e72",
+      "raw_sha256": "725CC19C05A691429288668900A937746684933485FF335D3877DED03D0CCCBB"
+    },
+    {
+      "path": "kit/service/platform/platform_rpc_assembly_gen.go",
+      "git_blob": "22a6504767da96bf50956ca7c9801efc32329e70",
+      "raw_sha256": "7C44D8511F267BFD78D8FBCA0BCF2619770E364E45878AE4B1C99A2F369D2F5F"
+    },
+    {
+      "path": "kit/service/platform/platform_rpc_gen.go",
+      "git_blob": "05bca481a54624111db43ec9f24dccdac462753a",
+      "raw_sha256": "529F50F69DED9672F199C38E88FD654084576D9C56A10A16ABDF4C1CDAF07BDD"
+    },
+    {
+      "path": "kit/service/platform/platform_rpc.go",
+      "git_blob": "6adb8fce96ec9f058c48cb06dc8926f0ec02f3d8",
+      "raw_sha256": "26126AB22690CCE3B0949608C24123BFE03281C0A7D8FD00E5E73F980FB1A3EA"
+    },
+    {
+      "path": "kit/service/platform/redis_store.go",
+      "git_blob": "386b286a10edcd76e3706abacbbc8caea62625f0",
+      "raw_sha256": "0B66A7FE787AEC1E4DBF63363C841D9ACC4943090AE7B1DF9137CB04143E8595"
+    },
+    {
+      "path": "kit/service/platform/server_run.go",
+      "git_blob": "64b2dc9cefaea67859dfdeb5a8a41238798d45ce",
+      "raw_sha256": "072F4E429206E54D2295C1C1A4F86812B686EC2CB60A459B0D9BC608B04839C0"
+    },
+    {
+      "path": "kit/service/platform/service.go",
+      "git_blob": "3d93dab374f2e196af55306425ea1b7230c9954a",
+      "raw_sha256": "E0C61AFE276F1AA57EEFAD0B6292E01781705722F6A2AA0B956F41700B994C78"
+    },
+    {
+      "path": "kit/service/platform/types.go",
+      "git_blob": "8dae17e7ebbd153840ba5c800e60fcc6a3cbbf5a",
+      "raw_sha256": "2AD898F2F181A12311AA2DB78FDC50F9E99738F1352F3E28F894FC6978224B7D"
+    },
+    {
+      "path": "kit/service/rank/member.go",
+      "git_blob": "37d972822950a31f086ad380a5deab2fbcc1587f",
+      "raw_sha256": "0E72E910DDC7F9BC36BF8223523ECBCFFBFD990ECDFBB7BD427880333F1B094F"
+    },
+    {
+      "path": "kit/service/rank/rank_mod.go",
+      "git_blob": "62ce1cf72b0174b51a6d649d21d750338173a1ff",
+      "raw_sha256": "FEB7DD47F1177778C49E571617BE00F28DB81CD94072447A0A54F0D29D4173A1"
+    },
+    {
+      "path": "kit/service/rank/rank_rpc_assembly_gen.go",
+      "git_blob": "a25756784f3133c347cb196d18128c8b1afb080d",
+      "raw_sha256": "8D3BC4BBD237ACE4F2246AC1A00BE540069DA020045CBD754CCBE3FEDA28BF70"
+    },
+    {
+      "path": "kit/service/rank/rank_rpc_gen.go",
+      "git_blob": "6af88af2e85444105dba65b1d8bb41b20461db5c",
+      "raw_sha256": "2FE9D4B311AB773A28C766842264C113EC45608A6F18E2AC9186E93DDA3B858C"
+    },
+    {
+      "path": "kit/service/rank/rank.go",
+      "git_blob": "82cdb5249ef614676c6d384e1deb92fb18d9b371",
+      "raw_sha256": "15D2CD56E2A6C42ECCF98DCAC9766DB01200E03AC620375444CA172D31097BBF"
+    },
+    {
+      "path": "kit/service/rank/redis_store.go",
+      "git_blob": "b257adbe2cfa58eae1aedda52a5518cb30ced99f",
+      "raw_sha256": "E4BB99E91D468F412D47867A7D81FF4258A6DEFD798E1A46384BD1F13C38129B"
+    },
+    {
+      "path": "kit/service/rank/server_run.go",
+      "git_blob": "df355927703ef143d2909a4e437d7552e947a84e",
+      "raw_sha256": "3BE33A0636876B91DCD64E527FF8CD3E316674C81DE13659DA6811F710F6FF7C"
+    },
+    {
+      "path": "kit/service/rank/store.go",
+      "git_blob": "655cc14a2eea089297b55e70042a27310b91f2d2",
+      "raw_sha256": "26E44A346D8B6DA9CD5AAE2F10D2F0A6CF917239B0A5E1D637020959E7CBC5C4"
+    },
+    {
+      "path": "kit/service/rank/types.go",
+      "git_blob": "4478adca3b85eeeb392433446ff1d3d71bf00f3e",
+      "raw_sha256": "C4FC5E36EECB2405A8180A3FC645C2C43ED78E2125DC4E492F3730BFBDE1BE2C"
+    },
+    {
+      "path": "kit/service/servicemetrics/servicemetrics.go",
+      "git_blob": "dbbd148173210bf7010d733b4d26a607ac950e86",
+      "raw_sha256": "C0391A89013AD7EE30F42327BA6D9309B5EB53400629EFD06856550B2B481EEE"
+    },
+    {
+      "path": "kit/service/session/alias.go",
+      "git_blob": "41b967e9409f5d797d79c83883f45e50b9e85cf5",
+      "raw_sha256": "75F9541309862284E8D483FEA79698E17D5AE66FEB535A62541CCDB714875026"
+    },
+    {
+      "path": "kit/service/session/options.go",
+      "git_blob": "192eb206bb78bdfa6f83a7d1ea4db67f14ef9944",
+      "raw_sha256": "E47B1C29EF57268FB4CBA1A120B5B403A27947713A8D543DFD5DF05583FF410D"
+    },
+    {
+      "path": "kit/service/session/server_run.go",
+      "git_blob": "2e7143d9ca6b56c6aad554dd7c5103f6f4ba9a59",
+      "raw_sha256": "819906FB6F4F0C43012B48E4C3092D19D4E3BE300A269FD0E5B54698E24FC83B"
+    },
+    {
+      "path": "kit/service/session/session_mod.go",
+      "git_blob": "2ff99aa734e60cdf96f2942985f66e1b137f950e",
+      "raw_sha256": "827C6198861735F7DF2978A5B2F020A3764AED3DDEC2C87864283F9764EB5067"
+    },
+    {
+      "path": "kit/service/session/session_rpc_assembly_gen.go",
+      "git_blob": "48538f84f813c83c5d1209311d37431fce1c4f00",
+      "raw_sha256": "6323530A35A04D6EB06024E83146416A57963CFFE2D034DBBEF614CE60B2DE8C"
+    },
+    {
+      "path": "redis/client.go",
+      "git_blob": "7f07a7c264276bcae336f950127e27824b6116e0",
+      "raw_sha256": "F4E72CDAF1BEEC8D26AAFCF0F6B9D2DEECED2CA8F39CCCEE7208E3CC2DA758C0"
+    },
+    {
+      "path": "redis/driver/client.go",
+      "git_blob": "d63a21e40fe10d3610c1d1f9aff4c18c93e808f3",
+      "raw_sha256": "BDFE65811948480D6297D8FD6E148CDA760B4B58F780B29DDD7962EE6C67712C"
+    },
+    {
+      "path": "redis/driver/pipeline.go",
+      "git_blob": "a52384f7eae85af4293838092c64d6deb965412c",
+      "raw_sha256": "86460FC57078C07C0FF3215F7D7F291B5B1B94CA29C21EAD2272466388227D47"
+    },
+    {
+      "path": "redis/pipeline.go",
+      "git_blob": "f2ef0bcc0d50a23f4b7b4414be0623ca3da7f821",
+      "raw_sha256": "896CCEE0B12D2E52F7DF00E49E4CF27419BA4D066D0C8C0CF352E17480E8DF07"
+    },
+    {
+      "path": "service/mail/mail_rpc_gen.go",
+      "git_blob": "7ce488c749ed5e4f83e3274085c9bcc98326cbb0",
+      "raw_sha256": "E6DC6C671C9B5529FF41C2A16496957850442029516350013D7700173E7BA810"
+    },
+    {
+      "path": "service/mail/mail.go",
+      "git_blob": "38d22f02a53eda8a585a649776cd4dabc38b963f",
+      "raw_sha256": "C0420F6F990AA5B97CCA00C1728E5778184F8660CE40FB85A009A8F829AC9AFB"
+    },
+    {
+      "path": "service/mail/mailbox.go",
+      "git_blob": "ca33f60ecf4bbd6b05da76defbf5aa8b84f9409a",
+      "raw_sha256": "94C96E978AA4A01167ED1CE19A628422891AC5F25FEAD3EDF87A7BD2F4E8575D"
+    },
+    {
+      "path": "service/mail/redis_store.go",
+      "git_blob": "3bc29bf916c5f3b29c83b40af2577b06b1b835bc",
+      "raw_sha256": "DEC5BD4CEE085E7548F52150A2B39E483CE24BCF4E3FA1A13CC3741A7C67ADF9"
+    },
+    {
+      "path": "service/mail/send_intent.go",
+      "git_blob": "001cf11b551a03f799fc1a69a4f772dc2d215ecd",
+      "raw_sha256": "F6DAF08BC8F15CCCB0D771F0D0F06031A0801D13A5E18973838CBB60A089C095"
+    },
+    {
+      "path": "service/mail/service.go",
+      "git_blob": "ce1dd7cb0b1095a1e0b5b1e029e828f7f59a5e0e",
+      "raw_sha256": "953A8245C4D9C91EDC8E3BCB4E205A8D9D5F883282604AD85F17498D13DA9E06"
+    },
+    {
+      "path": "service/mail/store.go",
+      "git_blob": "241d47c67a7f5a153d4a171a4e476bed73d6453b",
+      "raw_sha256": "9A6D25A2660C46A59F20A3A853BFC212556370E3001D6418296E0F44A32F2105"
+    },
+    {
+      "path": "service/mail/types.go",
+      "git_blob": "c57bbf5f2f578f94be377b003a968c1f263f53f0",
+      "raw_sha256": "AB879E5813E31862968C0CCD677346BA9F8437004E849814914286FD937DDC9D"
+    },
+    {
+      "path": "service/match/grouping.go",
+      "git_blob": "44514d7802e7041a7b2e1cb71664835a63e5c389",
+      "raw_sha256": "E5375832EECE3B5B78A11A76C93DD04CF628F002795D1433E50C75B55DC3E6D7"
+    },
+    {
+      "path": "service/match/match_rpc.go",
+      "git_blob": "af342f490cbcc76056727ca0820606c76a5a2879",
+      "raw_sha256": "1C07FFBFF8EF64FEB9DA5AF744E557B84C007851A8F57155ACF186213BB9417B"
+    },
+    {
+      "path": "service/match/matchmaker_rpc_gen.go",
+      "git_blob": "507f0a072b09fbd5df8e0a0098f80864e54c5b06",
+      "raw_sha256": "6A6DA6F0E68B0E8DAF1230289486935FF1B27BDD6F70BAA4BAAC1B6F485FC4C8"
+    },
+    {
+      "path": "service/match/queue_store.go",
+      "git_blob": "b1f2aa68a73260d51e4d5a564bff16f46a894817",
+      "raw_sha256": "D719310EC36184F34D6870BBE4E72E8C05EAFFB53766EC23F73CBD04B3E4FE6A"
+    },
+    {
+      "path": "service/match/redis_store.go",
+      "git_blob": "77b61a786212555bc2822277ec0196aa0e86b26d",
+      "raw_sha256": "446645DAD3E214B0C28F253CF85EC0B17933F0AA2A5A441649C2145D2C7E4EC3"
+    },
+    {
+      "path": "service/match/store.go",
+      "git_blob": "d9742a175b439e966b20f43bc25801c884e983aa",
+      "raw_sha256": "F84CEB9BF1C2853E6BC3CC52DA0475C81D067A0549BF4DD668BEADFD9E97F41E"
+    },
+    {
+      "path": "service/match/types.go",
+      "git_blob": "36de1c4555a93e80f3f018b1dab080c3eca1427b",
+      "raw_sha256": "D7A37AA7716C6BC9E3BEF2F7DFC62B73802C5A26A4F27C544E3F0B2A3CD3F27F"
+    },
+    {
+      "path": "service/session/admin.go",
+      "git_blob": "c7642fe423e47d2ace0e155a5155a3e6e8013081",
+      "raw_sha256": "CAFD908DF0C3E4259A0A797632746DC5C98263AA18784E3517126768A7E005A3"
+    },
+    {
+      "path": "service/session/redis_store.go",
+      "git_blob": "d6630dd0acada836e02de0b970da8df2c5cc6a5d",
+      "raw_sha256": "B52843086E35D732C421F2EADDC9F02773EEDA66210D866255DC9D3B35047D25"
+    },
+    {
+      "path": "service/session/service.go",
+      "git_blob": "eaca93c7d675a7a8be6f42b24649450d23ba0abd",
+      "raw_sha256": "626F5BAD31FC3C8EAE6EEDDDB8B9C09C96E403A9A5A45509A57B1CF553E730D9"
+    },
+    {
+      "path": "service/session/session_rpc_gen.go",
+      "git_blob": "364b380f233bab844e8440529bef70ccd54e3ef8",
+      "raw_sha256": "656BFCF99582CC45585E3DD247BEC02DAAF1E3BCE3B5D87F05D509923FB8A702"
+    },
+    {
+      "path": "service/session/session_rpc.go",
+      "git_blob": "9a9f33c91482b771450ba98f916a6809bb70bb43",
+      "raw_sha256": "E103C74274FE8C40E58FBA00D89201A8CDAEE5C17D2107BB0148F5537E466DA9"
+    },
+    {
+      "path": "service/session/sweep_source.go",
+      "git_blob": "36a11b0ed1100b21d57e8a5cf70841f2867f4132",
+      "raw_sha256": "B29051A808C370DD9B1F1491FC527AE51CF4379B1EDB7C1F20845B9D86271913"
+    },
+    {
+      "path": "service/session/types.go",
+      "git_blob": "2326e2536907674d7d09ff175bf3fbde61f21079",
+      "raw_sha256": "15609EBE7D80435FA9BA107B59E50A88F170B6C5D1B42A60B6CB3B19B2F68A22"
+    },
+    {
+      "path": "versionstore/redis_store.go",
+      "git_blob": "59bca77f6df0432603c9e9799924ffe6bb7373d0",
+      "raw_sha256": "A73174E9815A32F8A2436FBEFE994473EC44D1DCD54D285BAF553357FC990BB0"
+    },
+    {
+      "path": "versionstore/versionstore.go",
+      "git_blob": "1080486516b2abae2718fe44462a280a1176340c",
+      "raw_sha256": "9AAC5DF9AA7D82B38E00518D6852BC2B00975C498075B2DFFDA9142CBB0939DC"
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "source_base": "bcebb80568559dcf895db0683cb85eee75b9ef53",
+  "working_changes": true,
+  "go": "go version go1.27.0 windows/amd64",
+  "os": "Windows amd64",
+  "redis": "8.8.0",
+  "redis_address": "127.0.0.1:16429",
+  "cluster": "16426,16427,16428: 3 masters/no replica/16384 slots/state ok",
+  "runs": [
+    {
+      "run": "activity",
+      "pass_events": 8,
+      "leaf_pass": 7,
+      "leaf_fail": 0,
+      "leaf_skip": 0,
+      "test_skip": 0,
+      "package_pass": 1,
+      "package_skip": 0,
+      "build_fail": 0,
+      "log_sha256": "35FBC395C13C308A72EE530B30C89FBC9F3741782751680537CBCB09605C55A0",
+      "skipped": []
+    },
+    {
+      "run": "purchase",
+      "pass_events": 29,
+      "leaf_pass": 26,
+      "leaf_fail": 0,
+      "leaf_skip": 0,
+      "test_skip": 0,
+      "package_pass": 1,
+      "package_skip": 0,
+      "build_fail": 0,
+      "log_sha256": "80A3725148106EE88C5BB2509A67120C20E5EF1B7B43B255283523D144C22A29",
+      "skipped": []
+    },
+    {
+      "run": "full",
+      "pass_events": 816,
+      "leaf_pass": 754,
+      "leaf_fail": 0,
+      "leaf_skip": 11,
+      "test_skip": 11,
+      "package_pass": 17,
+      "package_skip": 1,
+      "build_fail": 0,
+      "log_sha256": "D3D920FD48FFAFC9CCB3E134F6124CB54FB8FB4486175877EF455CB4C894EB37",
+      "skipped": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/versionstore",
+          "Test": "TestBugfix6ConditionalIndexRetirementIntegration/cluster_false"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/versionstore",
+          "Test": "TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBugfix6RetirementCannotHideLatePaidOrder/reconstruct_false"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBugfix6RetirementCannotHideLatePaidOrder/reconstruct_true"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBugfix6PendingMaintenanceControls/ghost_only"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBugfix6PendingMaintenanceControls/existing_paid_order"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBugfix6PendingMaintenanceControls/defer_does_not_resurrect_terminal"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestAStoredOrderIsImmediatelyEnumerableIntegration"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestATerminalOrderLeavesTheIndexIntegration"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestBackoffMovesAnOrderInTheIndexIntegration"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestAnIndexEntryWithNoOrderIsRetiredIntegration"
+        }
+      ]
+    },
+    {
+      "run": "full-integration",
+      "pass_events": 909,
+      "leaf_pass": 841,
+      "leaf_fail": 0,
+      "leaf_skip": 0,
+      "test_skip": 0,
+      "package_pass": 17,
+      "package_skip": 1,
+      "build_fail": 0,
+      "log_sha256": "4B95E848541FB9EDD1FDE1F7D0F29934E5D74418A7CB83B8D75692B3ADB4535B",
+      "skipped": []
+    },
+    {
+      "run": "consumer",
+      "pass_events": 107,
+      "leaf_pass": 100,
+      "leaf_fail": 0,
+      "leaf_skip": 0,
+      "test_skip": 0,
+      "package_pass": 3,
+      "package_skip": 1,
+      "build_fail": 0,
+      "log_sha256": "DC470896FD17A2F9F113FC58C5D32A521576BF1A510C90831B2544C3B05780BA",
+      "skipped": []
+    },
+    {
+      "run": "codegen",
+      "pass_events": 5,
+      "leaf_pass": 5,
+      "leaf_fail": 0,
+      "leaf_skip": 0,
+      "test_skip": 0,
+      "package_pass": 1,
+      "package_skip": 0,
+      "build_fail": 0,
+      "log_sha256": "CCBDF257B10B1343D98EF64B9C9FF320D5D5FA5C5C5DB0B3E04CB2642F5AB57F",
+      "skipped": []
+    }
+  ],
+  "build_exit": 0,
+  "vet_exit": 0,
+  "generator_exit_after_local_replace": 0
+}

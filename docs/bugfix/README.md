@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[09-29 第七批service修复](SERVICE-BUGFIX-2026-09-29-07.md)：[RR-31](RR-20260929-31.md)/[RR-32](RR-20260929-32.md) **2/2已修/已验**，Activity现有Cluster验证/多game恢复、购买首次durable grant保留；原8/8、新正式33叶子、integration+race17包909事件通过。已有生成业务需合并write-once补丁，未发布/迁移；[新RR-33](../bug/REVIEW-2026-09-29-services-09.md)仅交接。
+
 [09-29 第六批 service 修复](SERVICE-BUGFIX-2026-09-29-06.md)：[RR-28](RR-20260929-28.md) / [RR-29](RR-20260929-29.md) / [RR-30](RR-20260929-30.md) **3/3 已修/已验**，原15叶子全过，新增正式43叶子、完整17包/826事件通过。原子缺失索引清理、Rank/Platform有效Cluster tag，不改键格式；旧数据对账/配置迁移、混合旧owner边界另列，未发布。[继续review新问题](../bug/REVIEW-2026-09-29-services-08.md)尚未实施。
 
 [09-29 第五批 service 修复](SERVICE-BUGFIX-2026-09-29-05.md)：RR-25/26/27 与旧 Activity Opening 残余 4/4；Grouping 校验、Rank 溢出拒绝、Chat 年龄清理/Gap、Activity 持久计划与有界轮转。完整回归 16 包/830 事件通过，最终定向两模式各 27 叶子全过；Activity/Chat owner 升级与 legacy 处理有明确边界，未发版。

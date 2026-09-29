@@ -1,5 +1,7 @@
 # Service 第八轮：Activity Cluster 与购买内容重放
 
+**后续状态：RR-31/32已在[第七批](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md)2/2修复并通过原断言/正式回归；下方“未修”是原review时点。**购买故障钩子适配为真实Eval写后丢回复，独立catalog升级保留Count10；Activity合法Cluster多game部分恢复也已验证。新Mail RR-33另见[第九轮](REVIEW-2026-09-29-services-09.md)。
+
 2026-09-29，基线 `db642494f7dbe594539244dbdba356490d466a51` 加[第六批修复](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md)。本轮先修 RR-28/29/30，再继续 review；下述 Activity/购买生产文件与基线 blob 未改变，**两项新问题只记录，尚未修复**。[复跑](../review/evidence/service-review-20260929-08/README.md) · [结果](../review/evidence/service-review-20260929-08/RESULTS.json)。
 
 | 编号 | 等级 | 确认问题 |

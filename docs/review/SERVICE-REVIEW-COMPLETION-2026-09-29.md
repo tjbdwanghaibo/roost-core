@@ -1,5 +1,19 @@
 # Service 审查完成矩阵（2026-09-29）
 
+## 最新：第七批修复与第九轮专项收口
+
+**本阶段10/10域主链及本轮具名本机专项已完成有界审查；RR-31/32已修复验收，新RR-33未实施。**[本轮](REVIEW-2026-09-29-services-09.md) · [两项修复](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md) · [新问题](../bug/REVIEW-2026-09-29-services-09.md)。当前源码 bcebb805 加本轮内容，[100路径](evidence/service-review-20260929-09/inventory.csv)记录95不变blob复用/5变化复读，不冒称本轮逐行重读100文件。
+
+| 层级 | 已完成 | 未完成 / 不计为完成 |
+| --- | --- | --- |
+| 10域源码主链/契约 | 10/10阶段范围，历史证据复用+当前差异核对；12RPC check和当前回归 | 逐行/分支/所有故障证明不是该分母 |
+| 前轮两项缺陷 | RR-31/32 2/2修复，原8/8断言、新正式33叶子/37事件通过 | 旧prefix搬迁、已有write-once工程升级、历史goods被覆盖后的对账 |
+| 本轮专项 | Activity多game恢复、purchase并发/失联/下架、Mail跨槽页/Pipeline、Match4规模两后端、永久ledger与fulfilled边界 | 新RR-33未修；归档/分页drain/fulfilled尚未实现 |
+| 本机回归 | integration+race17包/909事件/841叶子、0test skip/fail；consumer107事件/100叶子、全编译；demo5/5、RPC12/12、vet | 不外推真实资产/资金/资源服务 |
+| 外部/生产专项 | 具名接口与验收条件已交接 | allocator幂等、渠道/资产回执、强杀/分区/HA、生产迁移、长稳/热点SLO未执行 |
+
+“本阶段service review完成”有明确源码/场景边界；“service完全无问题/全部生产验证完成”不成立。下一入口RR-33与具名设计/外部验收，不重开10域主链。下方保留原历史时点。
+
 ## 最新：第六批修复与第八轮审查
 
 基线 db642494 加[本批修复](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md)。[当前运行](REVIEW-2026-09-29-services-08.md)与[新增问题](../bug/REVIEW-2026-09-29-services-08.md)记录实际边界；本阶段10/10域主链有界整理保留，全service仍不能称无缺陷。

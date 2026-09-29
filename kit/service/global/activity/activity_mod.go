@@ -57,12 +57,19 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  dispatch_backoff: 5s         # optional
 //	  sweep_groups: [alliance-a]   # groups whose grace windows THIS process back-stops
 //
+// Redis Cluster requires a common non-empty hash tag in key_prefix, for
+// example {roost:activity}; dispatch records and their owed index share a CAS.
+// Changing an existing prefix requires a separate data migration.
+//
 // These keys were under `global:` while the service lived in that package.
 // The prefix may still point at the same root — each service owning its own
 // keyspace setting is the point, not that the keyspaces have to differ.
 func (m *Mod) Init(cfg *viper.Viper) error {
 	prefix, err := mods.KeyPrefix(cfg, "activity")
 	if err != nil {
+		return err
+	}
+	if err := mods.ValidateClusterKeyPrefix(cfg, "activity", prefix); err != nil {
 		return err
 	}
 	// Required, with no default. It must exceed the longest client retry
