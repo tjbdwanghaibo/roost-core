@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 第六批 bugfix 与 Service 第八轮
+
+基线 db642494 加本轮工作树修复，[源文件摘要](evidence/service-review-20260929-08/SOURCE.json)标识具体内容。**RR-28/29/30 三项 3/3 已修复、原场景验证；新 RR-31/32 两项 0/2 实施。**[修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [新问题](../bug/REVIEW-2026-09-29-services-08.md) · [运行](REVIEW-2026-09-29-services-08.md)。
+
+| 增量专项 | 已完成源码/实际场景 | 停点与下轮入口 |
+| --- | --- | --- |
+| Platform 原子缺失退休 | 新 versionstore Lua/接线；原 overlay15/15，正式屏障/重建；两后端空坏字节和执行前/后错误重试 | RR-28 原触发关闭；旧丢 pending 对账未实施 |
+| Rank/Platform Cluster | 首 tag 共享工具、配置拒绝；三 master 合法生命周期 | RR-29/30 原触发关闭；直接构造器/跨 slot 分片与旧 prefix 迁移 |
+| Activity Cluster | 4 坏配置 actual complete/dispatch=false/CROSSSLOT；tagged Open→Notify→Owed→Attempt→Ack 控制通过 | RR-31 缺启动校验，新发现未改码 |
+| 购买 producer→drain→strict handler/ledger | 模板全读、生成源码核对；旧 seed/control=10，新 catalog 二进制重试覆盖为3 | RR-32 固定首次 grant；fulfilled 归档协议、HGetAll/ledger 容量 |
+| Mail 存储边界 | 单 key Mailbox/SendLedger 不能按缺 tag 归 bug | 跨槽 MGet 页未新增实跑，不做无问题结论 |
+
+正式定向43叶子/51事件、完整17包/826事件/764叶子均通过，test skip=0；servicemetrics 无测试包 package skip=1。新 review8 次叶子3 pass/5反例fail/0 skip/build-fail。全仓编译/四包vet/既有生成消费通过。10/10 域主链有界整理沿既有证据保留，本轮不重置进度、不将测试数当覆盖率或全 service 无 bug。29路径图谱检查含metadata_changed/三个新增正式测试missing，源码补证；旧K1/K2/K3与资金/HA/强杀/长期容量状态不变。下方保留此前时点。
+
 ## 2026-09-29 Service 第七轮：维护竞争与 Cluster
 
 源码 **1625fee0**；[问题/实施交接](../bug/REVIEW-2026-09-29-services-07.md)、[运行证据](REVIEW-2026-09-29-services-07.md)、[索引与 Cluster 学习](IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md)。继续第六轮专项而非重扫 100 路径。新增 **RR-28 P1、RR-29/30 P2，0/3 修复**；原第五批 4/4 沿已验收证据保持关闭。

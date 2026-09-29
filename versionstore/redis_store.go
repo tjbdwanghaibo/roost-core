@@ -214,10 +214,8 @@ func (s *RedisStore[K, T]) IndexDueIn(ctx context.Context, indexKey string, maxS
 
 // IndexRemove drops one member from the index without touching its value.
 //
-// It is for entries that name a value which is not there — the only case in
-// which the index and the keyspace can legitimately disagree, and one a reader
-// would otherwise carry on every page forever. Removing an entry whose value
-// DOES exist would hide live work, so callers must establish absence first.
+// This removal is unconditional. A preceding Get does not protect against
+// concurrent creation; use IndexRemoveIfAbsent for missing-value cleanup.
 func (s *RedisStore[K, T]) IndexRemove(ctx context.Context, key K) (bool, error) {
 	if s.cfg.Index == nil {
 		return false, fmt.Errorf("versionstore: this store has no index")
@@ -250,6 +248,40 @@ func (s *RedisStore[K, T]) IndexRemoveIn(ctx context.Context, indexKey string, k
 
 const indexRemoveScript = `
 return redis.call("ZREM", KEYS[1], ARGV[1])
+`
+
+// IndexRemoveIfAbsent retires a fixed-index member only while its value key
+// does not exist. Absence and removal share one script so concurrent creation
+// cannot lose its work-list entry. Existing values, including malformed or
+// empty envelopes, are preserved. Both keys must share a slot on Redis Cluster.
+// A transport error leaves the outcome unknown; the operation is safe to retry.
+func (s *RedisStore[K, T]) IndexRemoveIfAbsent(ctx context.Context, key K) (bool, error) {
+	if s.cfg.Index == nil {
+		return false, fmt.Errorf("versionstore: this store has no index")
+	}
+	if s.cfg.Index.KeyOf != nil {
+		return false, fmt.Errorf("versionstore: conditional absence cleanup requires a fixed index")
+	}
+	redisKey, err := s.key(key)
+	if err != nil {
+		return false, err
+	}
+	raw, err := s.client.Eval(ctx, indexRemoveIfAbsentScript, []string{redisKey, s.cfg.Index.Key}, s.cfg.KeyOf(key))
+	if err != nil {
+		return false, err
+	}
+	removed, ok := raw.(int64)
+	if !ok || (removed != 0 && removed != 1) {
+		return false, fmt.Errorf("versionstore: unexpected conditional index removal result %v", raw)
+	}
+	return removed == 1, nil
+}
+
+const indexRemoveIfAbsentScript = `
+if redis.call("EXISTS", KEYS[1]) ~= 0 then
+  return 0
+end
+return redis.call("ZREM", KEYS[2], ARGV[1])
 `
 
 const indexDueScript = `

@@ -31,6 +31,9 @@ type RedisClient interface {
 type RedisConfig struct {
 	// Prefix namespaces every key. Required to be non-empty so two services
 	// cannot share a keyspace by accident.
+	// On Redis Cluster it must contain an effective common hash tag: board
+	// ordering and owner proofs are changed atomically. Mod.Init checks this
+	// for configured clusters; direct constructors must supply a valid prefix.
 	Prefix string
 	// Now supplies the default tiebreak for a submit that leaves Tie zero.
 	// nil means time.Now.

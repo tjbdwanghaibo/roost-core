@@ -1,0 +1,135 @@
+{
+  "source_base": "db642494f7dbe594539244dbdba356490d466a51",
+  "working_changes": true,
+  "go": "go version go1.27.0 windows/amd64",
+  "demo_module": "example.com/reviewservice",
+  "leaf_pass": 3,
+  "leaf_fail": 5,
+  "leaf_skip": 0,
+  "runs": [
+    {
+      "name": "activity",
+      "go_exit": 1,
+      "outcomes": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/activity",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:activity",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{activity",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:{valid}:activity",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity",
+          "Test": "TestReview8ActivityTaggedClusterLifecycle",
+          "Action": "pass"
+        }
+      ],
+      "log_sha256": "F433AF98E5DD2C2BA6FE611ADC7E8EBE9B5581447E65AD44568D694822F056B9",
+      "evidence": [
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/activity",
+          "Output": "    review8_overlay_test.go:73: aggregation=complete dispatch_found=false lookup_err=<nil> notify_err=CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/activity",
+          "Output": "    review8_overlay_test.go:74: Init/Provide accepted prefix that cannot create result dispatch: CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:activity",
+          "Output": "    review8_overlay_test.go:73: aggregation=complete dispatch_found=false lookup_err=<nil> notify_err=CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:activity",
+          "Output": "    review8_overlay_test.go:74: Init/Provide accepted prefix that cannot create result dispatch: CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{activity",
+          "Output": "    review8_overlay_test.go:73: aggregation=complete dispatch_found=false lookup_err=<nil> notify_err=CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{activity",
+          "Output": "    review8_overlay_test.go:74: Init/Provide accepted prefix that cannot create result dispatch: CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:{valid}:activity",
+          "Output": "    review8_overlay_test.go:73: aggregation=complete dispatch_found=false lookup_err=<nil> notify_err=CROSSSLOT Keys in request don't hash to the same slot\n"
+        },
+        {
+          "Test": "TestReview8ActivityClusterRejectsInvalidPrefix/{}:{valid}:activity",
+          "Output": "    review8_overlay_test.go:74: Init/Provide accepted prefix that cannot create result dispatch: CROSSSLOT Keys in request don't hash to the same slot\n"
+        }
+      ]
+    },
+    {
+      "name": "purchase-seed",
+      "go_exit": 0,
+      "outcomes": [
+        {
+          "Package": "example.com/reviewservice/internal/service/platform",
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Action": "pass"
+        }
+      ],
+      "log_sha256": "F5965C71A7C749DC8D00B68D33F2B7F2033EF7F4D6A0C5987A782220A05D1780",
+      "evidence": [
+        {
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Output": "    review8_overlay_test.go:67: stage=seed resolved_count=10\n"
+        }
+      ]
+    },
+    {
+      "name": "purchase-control",
+      "go_exit": 0,
+      "outcomes": [
+        {
+          "Package": "example.com/reviewservice/internal/service/platform",
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Action": "pass"
+        }
+      ],
+      "log_sha256": "754A1563EE997650CA9E8C9E89D106037E27A5D52C74310240C99D073EC72802",
+      "evidence": [
+        {
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Output": "    review8_overlay_test.go:67: stage=control resolved_count=10\n"
+        }
+      ]
+    },
+    {
+      "name": "purchase-upgrade",
+      "go_exit": 1,
+      "outcomes": [
+        {
+          "Package": "example.com/reviewservice/internal/service/platform",
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Action": "fail"
+        }
+      ],
+      "log_sha256": "336C32DEB441DB4DA3E8AAF851D31AA409E66FF8C9AA5071B906ACD39F590814",
+      "evidence": [
+        {
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Output": "    review8_overlay_test.go:67: stage=upgrade resolved_count=3\n"
+        },
+        {
+          "Test": "TestReview8PurchaseCatalogRetry",
+          "Output": "    review8_overlay_test.go:69: retry overwrote the durable resolved grant: count=3 want=10\n"
+        }
+      ]
+    }
+  ]
+}

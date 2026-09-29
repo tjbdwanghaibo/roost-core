@@ -1,6 +1,8 @@
 # Roost Review 问题索引
 
-**最新：Service 第七轮新增三项，均未修复**，[RR-20260929-28 P1：迟到 ghost 退休隐藏新支付待办；RR-29 P2：Rank Cluster 无 tag 准入；RR-30 P2：Platform 空/未闭合 tag 准入](REVIEW-2026-09-29-services-07.md)。真实 Redis/三 master Cluster 6 失败反例、9 正常控制；四包 268 既有测试事件通过。[运行与实施学习](../review/REVIEW-2026-09-29-services-07.md)。原第五批 4/4 修复保持已验收状态，service 尚有三项新开问题。
+**最新：第六批已关闭 RR-28/29/30 原触发，继续 review 新开两个 P2。**[RR-31 Activity Cluster 完成聚合但无 dispatch；RR-32 demo 购买 catalog 升级重试覆盖首次 grant](REVIEW-2026-09-29-services-08.md)，均未实施。[三项修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [第八轮运行](../review/REVIEW-2026-09-29-services-08.md)。原15/15转绿、新正式43叶子与17包826事件通过；新3控制通过/5反例失败属两个RR。下方为历史时点。
+
+**第七轮原时点：新增三项，当时均未修复**，[RR-20260929-28 P1：迟到 ghost 退休隐藏新支付待办；RR-29 P2：Rank Cluster 无 tag 准入；RR-30 P2：Platform 空/未闭合 tag 准入](REVIEW-2026-09-29-services-07.md)。真实 Redis/三 master Cluster 6 失败反例、9 正常控制；四包 268 既有测试事件通过。[运行与实施学习](../review/REVIEW-2026-09-29-services-07.md)。原第五批 4/4 修复保持已验收状态，service 尚有三项新开问题。
 
 **最新实施：第五批 4/4 已修复**，[RR-25/26/27、旧 Activity RR-20260914-02 残余](../bugfix/SERVICE-BUGFIX-2026-09-29-05.md)。正式回归、Memory/Redis 与生成消费通过；下方第五轮“均未实施”是原 review 时点。Activity 不再按超时回收未知名额；升级/旧数据恢复边界保留，不能等同生产迁移完成。
 

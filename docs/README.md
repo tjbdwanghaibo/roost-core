@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-29 最新：先 bugfix，再 service review。**[RR-28/29/30 三项修复与升级说明](bugfix/SERVICE-BUGFIX-2026-09-29-06.md)，原15/15与正式43叶子通过，完整17包/826事件通过；继续发现[Activity Cluster/购买首次grant两个新P2](bug/REVIEW-2026-09-29-services-08.md)，未实施。[运行](review/REVIEW-2026-09-29-services-08.md) · [最新进度](review/PROGRESS.md) · [学习](review/IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md#第六批修复后的实现与第八轮学习)。下方旧状态保留其历史时点。
+
 **09-29 Service 第七轮新增问题**：[待办清理竞争、Rank/Platform Cluster 准入三个确认缺陷与实施交接](bug/REVIEW-2026-09-29-services-07.md)，均未修复；[运行与进度](review/REVIEW-2026-09-29-services-07.md)、[机制学习](review/IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md)、[最新矩阵](review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)。真实 Redis/Cluster 6 反例失败、9 正常控制通过；当前 service 未完全收敛，上轮4/4原触发修复仍有效。
 
 **09-29 Service 修复后收敛结论**：[第六轮审查](review/REVIEW-2026-09-29-services-06.md) · [最新完成矩阵](review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)。上轮 4/4 缺陷修复/声明场景通过，邻接范围无新增确认缺陷；10 域主链完成，真实外部系统/HA/强杀/性能及旧数据专项未完全验证。

@@ -34,3 +34,19 @@ Match 的 Waiting、Tickets、Matches、Requests 同聚合 CAS 保证不会半�
 ## 证据如何继续
 
 先修 RR-28 的原子缺失条件，再完善 RR-29/30 启动校验；保留原本的真实 Redis 和 tagged Cluster 正常对照。下一阶段进入真实故障/容量时，分别保存 replica/网络/进程事件和结果证明；对象重建、同槽测试和 268 个已有测试事件不能替代 HA、生产资金或长稳结论。
+
+## 第六批修复后的实现与第八轮学习
+
+2026-09-29，db642494 基线加[本批修复](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md)，源内容见[摘要](evidence/service-review-20260929-08/SOURCE.json)。上文“拟议/未实现”保留第七轮时点，此节为最终事实。
+
+`retryPendingOnce → RedisOrders.RetirePending → RedisStore.IndexRemoveIfAbsent` 在同一次 Lua 验证 EXISTS 与移除 fixed index member。即使此前读到 absent，后来的 paid Create 已落库就不移除；清理先完成也不阻止 Create 自带索引加入。EXISTS 不解码，不把坏字节/空值当缺失。已执行但丢回复、未执行失败都可以安全重试；旧无条件 IndexRemove/In 保留，通用 Store/订单 wire/键格式没有变化。
+
+`Rank/Platform Mod.Init → mods.ValidateClusterKeyPrefix` 只在配置 cluster_addrs 非空时验证 Redis 的首 tag，内容非空且闭合。单机 keyspace 保持，错误配置启动拒绝。一个公共 prefix tag集中一个slot是现在的部署代价，不自动添加 tag 或迁移已存数据。窄 Redis 构造器不推断拓扑；自定义/直接接入必须保证原子 keys 同槽。
+
+第八轮同类边界沿调用链扩大到 Activity：Mod.Init 尚未接共享校验，虽然 OwedDispatchKey 注释声称有保护。Window/Activity 单 key允许 Open/Notify聚合先成功，后续 `settleCompletion → ensureDispatches → dispatch Create + owed ZSet` 才遇 CROSSSLOT；因此看到 aggregate=complete 不等于 game 已有可领取结果。四反例与 tagged Attempt/Ack 对照确认 [RR-31](../bug/REVIEW-2026-09-29-services-08.md#rr-20260929-31)，本轮未修 Activity。
+
+购买链为 `grantDeliverer.Lookup/Encode/HSet → PurchaseDrain.HGetAll → strict GrantPurchase → ClaimPurchase+AddItem同事务 → HDel`。后半顺序保留 paid责任：只有成功 durable响应后删除grant；未知/失败留存，永久order ledger防重复领取。前半的“稳定field所以幂等”却额外依赖 payload不变：首次HSet已成功、回复丢失后换catalog重试，重新解析并覆盖首次商品事实。独立二进制真实Redis反例10→3确认[RR-32](../bug/REVIEW-2026-09-29-services-08.md#rr-20260929-32)，没有实际资金/背包验证。
+
+优先复用现有 Eval/单个grants Hash，缺失才插入、已存在返回首次持久内容；不能Go HExists后HSet。归档还需要producer理解fulfilled的持久事实，约束迟到在途写；game仅HDel之后删ClaimPurchase，会让producer旧重试重新制造可领取grant，不能用“已领取过”替代整个协议。HGetAll与永久ledger的容量仍是已知观察，未据本轮短测改成可上线保证。collaborators写一次模板不会自动覆盖用户业务工程，修复应提供正式模板与既有消费升级方法。
+
+原15叶子全绿、新正式43叶子通过；第八轮8次执行3pass/5fail是两个新问题。主链整理、场景执行、确认缺陷修复三种进度分别记，不能用826正式测试事件掩盖新counterexample。

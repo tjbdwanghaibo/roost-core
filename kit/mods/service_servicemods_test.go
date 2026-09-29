@@ -75,6 +75,24 @@ func TestKeyPrefixIsRequiredAndRejectsWhitespace(t *testing.T) {
 	}
 }
 
+func TestClusterKeyPrefixUsesFirstRedisHashTag(t *testing.T) {
+	for _, prefix := range []string{"plain", "{}", "{open", "{}:{valid}", "{valid}", "before}{valid}:suffix", "{{nested}"} {
+		for _, cluster := range []bool{false, true} {
+			t.Run(prefix+"/"+map[bool]string{false: "single", true: "cluster"}[cluster], func(t *testing.T) {
+				cfg := viper.New()
+				if cluster {
+					cfg.Set("redis.cluster_addrs", "127.0.0.1:1")
+				}
+				err := ValidateClusterKeyPrefix(cfg, "rank", prefix)
+				invalid := cluster && (prefix == "plain" || prefix == "{}" || prefix == "{open" || prefix == "{}:{valid}")
+				if (err != nil) != invalid {
+					t.Fatalf("prefix=%q cluster=%v err=%v", prefix, cluster, err)
+				}
+			})
+		}
+	}
+}
+
 func TestSecretIsRequiredAndMustNotBeEmpty(t *testing.T) {
 	cfg := viper.New()
 	if _, err := Secret(cfg, "platform.payment_secret"); err == nil {

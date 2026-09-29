@@ -1,0 +1,200 @@
+{
+  "source_base": "db642494f7dbe594539244dbdba356490d466a51",
+  "working_changes": true,
+  "actual_source_root": "D:\\whb_s\\.tmp\\review-service-20260928",
+  "note": "Git canonical blob and raw working-tree SHA256 differ in newline normalization; hashes identify reviewed and tested content before commit",
+  "files": [
+    {
+      "path": "versionstore/redis_store.go",
+      "git_blob": "59bca77f6df0432603c9e9799924ffe6bb7373d0",
+      "raw_sha256": "A73174E9815A32F8A2436FBEFE994473EC44D1DCD54D285BAF553357FC990BB0",
+      "lines": 557
+    },
+    {
+      "path": "versionstore/bugfix_index_retirement_test.go",
+      "git_blob": "25ca6b385237da8534c6b5fad7e9d6679426f2e6",
+      "raw_sha256": "1CD76915914A24557463F317FFB0BE3B79F923F37BB41B26019BD6B03D080B84",
+      "lines": 159
+    },
+    {
+      "path": "versionstore/malformed_promises_test.go",
+      "git_blob": "ee0c763584f0f930c0df474c3643391457b03c65",
+      "raw_sha256": "BBB860CAA02DD51C297C95D9882F076C94CAA607E1B314185C3F49032E3E258B",
+      "lines": 196
+    },
+    {
+      "path": "kit/mods/service_servicemods.go",
+      "git_blob": "e2280b953530cc99e99f3d7208ca08b826c2c833",
+      "raw_sha256": "DA1D45F318E9C73099EFB7CADCC542B85CC17DA25B6F894082CA2F68AE8F4B3A",
+      "lines": 105
+    },
+    {
+      "path": "kit/mods/service_servicemods_test.go",
+      "git_blob": "71231db34f93e37d2f8bda6bd897e87535575cf2",
+      "raw_sha256": "DD34FDEB81748A2B9C2F826C5EFEC674FF326D598FF5AF491E20B09135AE3494",
+      "lines": 162
+    },
+    {
+      "path": "kit/service/platform/redis_store.go",
+      "git_blob": "386b286a10edcd76e3706abacbbc8caea62625f0",
+      "raw_sha256": "0B66A7FE787AEC1E4DBF63363C841D9ACC4943090AE7B1DF9137CB04143E8595",
+      "lines": 167
+    },
+    {
+      "path": "kit/service/platform/platform_mod.go",
+      "git_blob": "a43cdd79d3fbe066c258f81848a53d3ef1d48e72",
+      "raw_sha256": "725CC19C05A691429288668900A937746684933485FF335D3877DED03D0CCCBB",
+      "lines": 217
+    },
+    {
+      "path": "kit/service/platform/bugfix_pending_retirement_test.go",
+      "git_blob": "1b6ff9547b9ceedbcd1aef0e714c21cca7737634",
+      "raw_sha256": "36654FFAD6FFD4086BDEBDFC19010C53EAE5704EE2067B22297DE30DA24F7FA1",
+      "lines": 218
+    },
+    {
+      "path": "kit/service/platform/platform_test.go",
+      "git_blob": "7d381edb7d15d1ca8e6c8821009704acb6b4cb81",
+      "raw_sha256": "9DD6802A3FCA2994679BAFD2304D3D7DD45FF1F0750E35FAF9D8D6766DC08839",
+      "lines": 858
+    },
+    {
+      "path": "kit/service/platform/server_run.go",
+      "git_blob": "64b2dc9cefaea67859dfdeb5a8a41238798d45ce",
+      "raw_sha256": "072F4E429206E54D2295C1C1A4F86812B686EC2CB60A459B0D9BC608B04839C0",
+      "lines": 162
+    },
+    {
+      "path": "kit/service/rank/rank_mod.go",
+      "git_blob": "62ce1cf72b0174b51a6d649d21d750338173a1ff",
+      "raw_sha256": "FEB7DD47F1177778C49E571617BE00F28DB81CD94072447A0A54F0D29D4173A1",
+      "lines": 92
+    },
+    {
+      "path": "kit/service/rank/redis_store.go",
+      "git_blob": "b257adbe2cfa58eae1aedda52a5518cb30ced99f",
+      "raw_sha256": "E4BB99E91D468F412D47867A7D81FF4258A6DEFD798E1A46384BD1F13C38129B",
+      "lines": 497
+    },
+    {
+      "path": "kit/service/rank/bugfix_cluster_prefix_test.go",
+      "git_blob": "f0559819cafd500e3067829fa803382467b827e0",
+      "raw_sha256": "6CE8B2C2483DFDE431A9CA10EC04D47C7B3C0D6CF60B9349DC6991038F3C5439",
+      "lines": 99
+    },
+    {
+      "path": "kit/service/global/activity/activity_mod.go",
+      "git_blob": "b2a9a0b39a506c35f1e9b7ea6717da04e1a0f3fe",
+      "raw_sha256": "10D80C563B637F2FE6189D3BE0C46244ACCB14FC62DF8861506F1EAFFBB22E26",
+      "lines": 141
+    },
+    {
+      "path": "kit/service/global/activity/redis_store.go",
+      "git_blob": "acfc9ef4d8ecf3eafc44e5a9559ddeff42bfca4f",
+      "raw_sha256": "896D64F89A7FB2DB01D3C23DF57A44EC92C65E2DBFC14A08D5411A7D0EBBA780",
+      "lines": 182
+    },
+    {
+      "path": "kit/service/global/activity/service.go",
+      "git_blob": "881aa8d7bc2f033e20ca552e70dc9b12c4c2be5f",
+      "raw_sha256": "5E18DC19E5E919752FCFF42EBA0FEA017B3F0DC5724EE3FC938EE5AFDF475520",
+      "lines": 1565
+    },
+    {
+      "path": "kit/service/global/activity/types.go",
+      "git_blob": "d690cafe02bc77c964b788d41a7cc680aaade7bd",
+      "raw_sha256": "DFBB44663225D7D781006DF9E242210E48CFECF75A1C1FF5C66CBF45DAB89649",
+      "lines": 973
+    },
+    {
+      "path": "kit/service/global/activity/activity_test.go",
+      "git_blob": "55e7b984934999931d746d71ca5100dd2d2832dd",
+      "raw_sha256": "AF569B8AB74A9064E83B1DF86B78A4EACCC76A51690F342BA3A783B3D0BB997F",
+      "lines": 1560
+    },
+    {
+      "path": "service/mail/redis_store.go",
+      "git_blob": "3bc29bf916c5f3b29c83b40af2577b06b1b835bc",
+      "raw_sha256": "DEC5BD4CEE085E7548F52150A2B39E483CE24BCF4E3FA1A13CC3741A7C67ADF9",
+      "lines": 273
+    },
+    {
+      "path": "kit/service/mail/mail_mod.go",
+      "git_blob": "872844292bf57d5a4e236475270c02c744599fe8",
+      "raw_sha256": "91CB6906F66F4D52C8C41311409BDA853B71177E470E92CF52264808652613F5",
+      "lines": 118
+    },
+    {
+      "path": "demo/game/purchase/purchase.go.tmpl",
+      "git_blob": "27665d194b0b3e005aa650e7f2f6e37b5355f42e",
+      "raw_sha256": "4902588E7BA67D679DD5770465570CD6BFB03D8476DBCA6B1CED198A59D88505",
+      "lines": 161
+    },
+    {
+      "path": "demo/game/handler/grant_purchase.go.tmpl",
+      "git_blob": "11cde4a7cd7e0c5dce1f2ac7473a894aaae7c7a1",
+      "raw_sha256": "D24EFFEE5B86D177EAC133F433960A007238147B596D0D374882EA3A5B585B00",
+      "lines": 47
+    },
+    {
+      "path": "demo/game/entities/player/bag_component.go.tmpl",
+      "git_blob": "bb26b92beea0e575abe89b8ac65a2591a8563645",
+      "raw_sha256": "392988DA121809F31AF0497746CA1C14645F2F11B937FB420D7B4A722E600063",
+      "lines": 170
+    },
+    {
+      "path": "demo/internal/service/game/purchase_drain.go.tmpl",
+      "git_blob": "6df9ad110dff7acc8a50e3b2afb4ffa01560a0a7",
+      "raw_sha256": "19AD540D56B8098A7C871BC410EE9F981FF9D6B0A7108C2815D2D3F1DEDC4F9F",
+      "lines": 131
+    },
+    {
+      "path": "demo/internal/service/platform/collaborators.go.tmpl",
+      "git_blob": "511f25cfc9d410973e47784170aa3ddda0bde9a7",
+      "raw_sha256": "B6BA89E893109F95DCB0A2CF8C422BC9AA2C51F29CB9EB82634DF3957EDC42A7",
+      "lines": 171
+    },
+    {
+      "path": "demo/internal/service/game/flags_test.go.tmpl",
+      "git_blob": "d2a38ca3088d86cd8f3c5655c806c58dcfa67744",
+      "raw_sha256": "E3AD1C1AE8768C141F217ED44F25A408CA10A38862446ACA470EB83B944FF85E",
+      "lines": 87
+    },
+    {
+      "path": "redis/client.go",
+      "git_blob": "7f07a7c264276bcae336f950127e27824b6116e0",
+      "raw_sha256": "F4E72CDAF1BEEC8D26AAFCF0F6B9D2DEECED2CA8F39CCCEE7208E3CC2DA758C0",
+      "lines": 117
+    },
+    {
+      "path": "redis/driver/client.go",
+      "git_blob": "d63a21e40fe10d3610c1d1f9aff4c18c93e808f3",
+      "raw_sha256": "BDFE65811948480D6297D8FD6E148CDA760B4B58F780B29DDD7962EE6C67712C",
+      "lines": 452
+    },
+    {
+      "path": "redis/cas.go",
+      "git_blob": "b08aa3c1a5a76d5d4fe0bb23fd93dcd53b8d9674",
+      "raw_sha256": "92F36B14E1090902EA7FEC37851F10D8796AD8EDA74A2FDF484EA90A99DD3C36",
+      "lines": 242
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-08/activity_test.go.txt",
+      "git_blob": "e4943faf9e4c3a118f978884dd2cf3c6a3a3b1db",
+      "raw_sha256": "3B299AD588B951D8CCC743E80081597544FF8EDFB0AF86669A107644863ED718",
+      "lines": 106
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-08/purchase_test.go.txt",
+      "git_blob": "40592753863893b37cbea3156cc5e634e0af7dfd",
+      "raw_sha256": "DA0F13B3723AE85E019FFB580B6C4391FCB9ABA818F0AE18094FF1427671DA6C",
+      "lines": 71
+    },
+    {
+      "path": "docs/review/evidence/service-review-20260929-08/Run-Repro.ps1",
+      "git_blob": "2e5374a1faa7c88a0da3f957ec5d9b395ddefd6f",
+      "raw_sha256": "880C498C6263ABBC4A7712DE3AA52AA2EC7876D4408AD5E426F7022DC299EAA9",
+      "lines": 80
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+package Platform
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/kit/service/platform"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/redis/driver"
+	"{{MODULE}}/game/purchase"
+)
+
+type review8LostGrantReply struct{ grantStore }
+
+func (s review8LostGrantReply) HSet(ctx context.Context, key string, values ...any) error {
+	if err := s.grantStore.HSet(ctx, key, values...); err != nil {
+		return err
+	}
+	return context.DeadlineExceeded
+}
+
+func TestReview8PurchaseCatalogRetry(t *testing.T) {
+	addr, prefix, stage := os.Getenv("ROOST_REVIEW_REDIS"), os.Getenv("ROOST_REVIEW_PURCHASE_PREFIX"), os.Getenv("ROOST_REVIEW_PURCHASE_STAGE")
+	if addr == "" || prefix == "" || stage == "" {
+		t.Fatal("owned Redis, prefix and stage required")
+	}
+	client, err := driver.NewClient(redis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	order := platform.Order{OrderID: "catalog-upgrade", PlayerID: 1001, Channel: purchase.Channel, ProductID: "potion_pack", AmountMinor: 99, PaidAtUnix: 1700000000}
+	key := purchase.GrantsKey(prefix, order.PlayerID)
+	if stage == "seed" {
+		_, _ = client.Del(ctx, key)
+		d := &grantDeliverer{client: review8LostGrantReply{client}, prefix: prefix}
+		if err := d.Deliver(ctx, order); !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, platform.ErrDeliveryNotApplied) {
+			t.Fatalf("unknown outcome: %v", err)
+		}
+	} else {
+		raw, err := client.HGet(ctx, key, order.OrderID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := purchase.Decode(string(raw))
+		if err != nil || before.Count != 10 {
+			t.Fatalf("invalid seed: %+v %v", before, err)
+		}
+		d := &grantDeliverer{client: client, prefix: prefix}
+		if err := d.Deliver(ctx, order); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := client.HGet(ctx, key, order.OrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := purchase.Decode(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("stage=%s resolved_count=%d", stage, grant.Count)
+	if grant.Count != 10 {
+		t.Fatalf("retry overwrote the durable resolved grant: count=%d want=10", grant.Count)
+	}
+}

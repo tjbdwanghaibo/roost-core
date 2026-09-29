@@ -1,0 +1,50 @@
+{
+  "source_base": "db642494f7dbe594539244dbdba356490d466a51",
+  "working_changes": true,
+  "go": "go version go1.27.0 windows/amd64",
+  "redis": "8.8.0",
+  "redis_address": "127.0.0.1:16419",
+  "cluster_addresses": "127.0.0.1:16416,127.0.0.1:16417,127.0.0.1:16418",
+  "runs": [
+    {
+      "name": "target",
+      "test_event_pass": 51,
+      "leaf_pass": 43,
+      "test_skip": 0,
+      "packages_pass": 4,
+      "package_skip": 0,
+      "fail": 0,
+      "build_fail": 0,
+      "log_sha256": "05C1571A8AB646F3BB7CE82A1216681BAEF87090E1A039983657BB1BC6112AB7"
+    },
+    {
+      "name": "full",
+      "test_event_pass": 826,
+      "leaf_pass": 764,
+      "test_skip": 0,
+      "packages_pass": 17,
+      "package_skip": 1,
+      "fail": 0,
+      "build_fail": 0,
+      "log_sha256": "4EA896ADF35E8B0AD29FA718B147888C379FF2BB71BAD5D0506F9CDDBE1C4623"
+    },
+    {
+      "name": "original_after",
+      "test_event_pass": 21,
+      "leaf_pass": 15,
+      "test_skip": 0,
+      "packages_pass": 3,
+      "package_skip": 0,
+      "fail": 0,
+      "build_fail": 0,
+      "log_sha256": "A1733844440962A4EF0C030B8F49EB568B4CD11DCDFFCCD133803E54D7D17DAF"
+    }
+  ],
+  "validation": {
+    "vet": "go vet ./versionstore ./kit/mods ./kit/service/platform ./kit/service/rank; exit 0",
+    "compile": "go test -run ^$ ./...; exit 0",
+    "compile_log_sha256": "885B42335CABF229C61557F4DBDB386F9DC1D5E0E33FED2EEBC8C8CBA50641AA",
+    "consumer": "go test -mod=mod -count=1 -timeout=120s ./internal/service/platform ./game/purchase ./game/handler ./internal/service/game; exit 0",
+    "consumer_log_sha256": "E05F6916F717AD03DE80520D589237B25D0B3FEDEE936CF430A665A14C2ECCFC"
+  }
+}

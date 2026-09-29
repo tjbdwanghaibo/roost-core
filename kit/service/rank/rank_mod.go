@@ -58,6 +58,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err != nil {
 		return err
 	}
+	if err := mods.ValidateClusterKeyPrefix(cfg, "rank", prefix); err != nil {
+		return err
+	}
 	m.prefix = prefix
 	return nil
 }

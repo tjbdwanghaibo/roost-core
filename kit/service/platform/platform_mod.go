@@ -2,7 +2,6 @@ package platform
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -129,10 +128,8 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	// Refused here rather than discovered as a CROSSSLOT error on the first
 	// callback, or, worse, as an index that is only usually right
 	// (RR-20260919-04).
-	if strings.TrimSpace(cfg.GetString("redis.cluster_addrs")) != "" && !strings.Contains(prefix, "{") {
-		return fmt.Errorf("platform mod: this process talks to a Redis cluster and platform.key_prefix (%q) has no hash tag; "+
-			"the order keys and the pending index are written together and must share a slot — "+
-			"use something like \"{roost:platform}\" so both land in one", prefix)
+	if err := mods.ValidateClusterKeyPrefix(cfg, "platform", prefix); err != nil {
+		return err
 	}
 	m.prefix, m.sessionSecret, m.paymentSecret = prefix, sessionSecret, paymentSecret
 	m.sessionTTL, m.attempts, m.backoff = sessionTTL, attempts, backoff

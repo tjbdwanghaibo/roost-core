@@ -44,6 +44,22 @@ func KeyPrefix(cfg *viper.Viper, service string) (string, error) {
 	return prefix, nil
 }
 
+// ValidateClusterKeyPrefix validates the common hash tag needed by services
+// with atomic multi-key writes. Redis uses the first opening brace and the
+// first closing brace after it; an empty first pair disables tag hashing even
+// when a later pair is valid. Single-server prefixes are unchanged.
+func ValidateClusterKeyPrefix(cfg *viper.Viper, service, prefix string) error {
+	if strings.TrimSpace(cfg.GetString("redis.cluster_addrs")) == "" {
+		return nil
+	}
+	if start := strings.IndexByte(prefix, '{'); start >= 0 {
+		if end := strings.IndexByte(prefix[start+1:], '}'); end > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("servicemods: %s.key_prefix (%q) requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:%s} so atomic keys share a slot", service, prefix, service)
+}
+
 // Secret reads a required secret from configuration.
 //
 // Empty is refused at startup. The implementation this repository replaces
