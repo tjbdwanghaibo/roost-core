@@ -9,6 +9,8 @@
 
 没有改通用 Redis API、订单/奖励格式、RPC、DAO、ledger 或后端依赖；没有发版/部署/生产数据迁移。新增正式生成测试已由 demoScaffoldSteps 接线，不只是一个无人消费的 tmpl 文件。
 
+实现提交 `004c8cf8a684729bf9c2074981ffeb0ee36b8564` 已推送并核对远端，主树干净快进；graph full刷新后ready、generation13:13:03Z、新正式测试已纳入。仍有metadata_changed、模板/PowerShell解析限制，保留真实源码与执行补证；本轮四个Redis核验目录后关闭。[最终图谱证据](../review/evidence/service-review-20260929-09/COVERAGE-AFTER.json)。后补文档不改变生产/模板内容或测试结果。
+
 ## 修前、修后与实际运行
 
 [修前结果](evidence/service-bugfix-20260929-07/BEFORE.json)：原第八轮 overlay 8 叶子，3 pass/5 fail/0 skip/build-fail。测试时生产树仍干净 bcebb805；旧 runner 的 working_changes=true 是硬编码描述，不能据它认定修前已有本轮改码，实际源码基线以 HEAD 与该时点干净状态为准。

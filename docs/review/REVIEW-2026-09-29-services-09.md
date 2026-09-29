@@ -42,4 +42,6 @@
 
 ## 下轮入口
 
+**交付事实**：实现/回归/本轮主体文档提交 `004c8cf8a684729bf9c2074981ffeb0ee36b8564` 已正常推送，ls-remote确认origin/main同SHA；干净主树已快进同步。初次index_status的Git HEAD虽变，coverage仍旧代际且新测试not_tracked，未据此宣称图已更新；full index_repository成功后ready、31343nodes/207522edges、generation **2026-09-29T13:13:03Z**，正式Activity新测试搜索完整命中。[124路径刷新后coverage](evidence/service-review-20260929-09/COVERAGE-AFTER.json)保留122metadata_changed/2个go.txt探针not_tracked（直接源码/执行补证）；新增PowerShell脚本partial范围也补读，不宣称图谱完全覆盖。四个独占Redis先核验CONFIG GET dir精确匹配后关闭，共享MCP未停。后补交付文档不改变已测源码，不重跑源码测试。
+
 本阶段不再留“其余 service 尚未安排”的泛化待办。下一次 service bugfix 先实施 RR-33；历史容量/fulfilled/allocator/HA 等按学习文档的具体验收条件推进。源码整理已完成不能替代问题已修复/外部验证；已确认 RR-33 未修，不称 service 完全无缺陷。

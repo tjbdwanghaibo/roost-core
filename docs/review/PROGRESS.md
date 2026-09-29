@@ -2,6 +2,8 @@
 
 ## 2026-09-29 第七批 bugfix 与第九轮：service 本阶段专项收口
 
+实现/主体文档已推送 `004c8cf8`，干净主树同步；graph full更新成功，ready/新正式测试命中、generation13:13:03Z。124路径仍有metadata_changed/两个go.txt未纳入的限制，[后补证据](evidence/service-review-20260929-09/COVERAGE-AFTER.json)保留源码与执行依据。四个独占Redis已核验目录后关闭，共享MCP保留。
+
 基线 bcebb805 加本轮实现。**RR-31/32 2/2 已修/声明场景已验；新 RR-33 P2 Mail Cluster 分页未修。**[修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md)、[新问题/实施方向](../bug/REVIEW-2026-09-29-services-09.md)、[运行](REVIEW-2026-09-29-services-09.md)、[机制与归档方案](IMPLEMENTATION-SERVICE-FINAL-SPECIALTIES.md)。下方旧“0/2未修”保持历史时点。
 
 | 完成口径 | 当前状态 | 剩余边界 |
