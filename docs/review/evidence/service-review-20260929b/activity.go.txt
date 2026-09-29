@@ -1,0 +1,64 @@
+package activity
+
+import (
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"math"
+	"testing"
+)
+
+func TestReviewPositiveProgressCannotWrapNegative(t *testing.T) {
+	s, _ := newActivityService(t)
+	ctx := context.Background()
+	key := activityKey("overflow")
+	openActivity(t, s, key, 1)
+	if _, err := s.ApplyProgress(ctx, key, "p", "first", ProgressDelta{Score: math.MaxInt64, Progress: math.MaxInt64}); err != nil {
+		t.Fatal(err)
+	}
+	_, applyErr := s.ApplyProgress(ctx, key, "p", "second", ProgressDelta{Score: 1, Progress: 1})
+	p, found, err := s.LookupParticipant(ctx, key, "p")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	if applyErr == nil && (p.Score < 0 || p.Progress < 0) {
+		t.Fatalf("positive delta persisted negative standing: score=%d progress=%d", p.Score, p.Progress)
+	}
+}
+
+type reviewPausedProgressCreate struct {
+	versionstore.Store[RequestKey, ProgressReservation]
+	entered, release chan struct{}
+}
+
+func (s *reviewPausedProgressCreate) Create(ctx context.Context, k RequestKey, v ProgressReservation) (versionstore.Versioned[ProgressReservation], bool, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.Create(ctx, k, v)
+}
+func TestReviewObserveProgressCompletionOverlap(t *testing.T) {
+	var gate *reviewPausedProgressCreate
+	s, _ := newActivityService(t, func(c *Config) {
+		gate = &reviewPausedProgressCreate{c.Ledger, make(chan struct{}), make(chan struct{})}
+		c.Ledger = gate
+	})
+	ctx := context.Background()
+	key := activityKey("close-race")
+	openActivity(t, s, key, 1)
+	done := make(chan error, 1)
+	go func() { _, err := s.ApplyProgress(ctx, key, "p", "late", ProgressDelta{Score: 1}); done <- err }()
+	<-gate.entered
+	completed := notify(t, s, key, 1)
+	if completed.Status != StatusComplete {
+		t.Fatal("not complete")
+	}
+	close(gate.release)
+	applyErr := <-done
+	p, found, err := s.LookupParticipant(ctx, key, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applyErr != nil || !found || p.Score != 1 {
+		t.Fatalf("overlap observation changed: found=%v score=%d err=%v", found, p.Score, applyErr)
+	}
+	t.Logf("observation, not a confirmed bug: admitted progress persisted after status=%s score=%d", completed.Status, p.Score)
+}

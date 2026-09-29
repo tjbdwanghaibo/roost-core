@@ -38,3 +38,27 @@ chat policy 判断的是逻辑 Channel，store 按字符串 key 读写；只有 
 4. rank Around 边界与公开文档收口；9 服务 `servicerpc -check`、服务 race + 真实 Redis 集成回归。
 
 压测分别观察热点 owner/queue/group 与大量独立键：记录对象字节量、存储调用数、CAS 重试、backlog 年龄及 p95/p99。应有错误与一致性校验，不能仅统计成功路径吞吐；本轮尚未执行该门禁。
+
+## 第二轮：键单射、绑定 epoch 与服务拥有的证明
+
+对应 [Service 第二轮](REVIEW-2026-09-29-services-02.md)，以下均为实施建议。account 的 `(channel, openID)`、chat 的频道和 match 的 queue 都不能依赖未转义的字符串拼接来隔离。逻辑身份由 verifier 验证，不代表编码之后还保持唯一；新编码还必须带旧键、角色引用和会话的迁移方案。参考现有复合键编码能力，不新建与框架重复的账户抽象。
+
+global incarnation 证明“哪个进程持有 lease”，RouteEpoch 证明“哪个路由决定允许这份 lease”。只核对其中一个不能保证另一维一致；两个独立 versionstore CAS 也不自然组成跨记录原子操作。先定义迁移期、完成后失效/转移和 read/renew 的统一语义，再选择同一对象聚合或可证明的跨对象协议。增加一次先读后写只能修顺序例子，门禁必须包含迁移与 acquire/renew 重叠。
+
+Resource 的 ReleasedAtUnix/ForcedRelease 是服务产生的完成证明，不能由 Attach 调用者声明。输入 DTO 与存储类型可以不同：已有资源的 ID 可传入，释放事实由成功 Releaser 或有审计的 admin 动作产生。使用 codegen 生成传输，领域校验必须守住边界，而不是依赖某个客户端碰巧清零。
+
+## 第二轮：提交未知、恢复意图和清理身份
+
+account Slot.Update 已生效但返回错误，不能因“API 返回 error”就删除已经提交的 Role。以操作身份和阶段保存意图，读取权威状态核对；读失败维持 unknown，恢复候选要可枚举且有界。复用 versionstore、Directory 和既有服务指标，不用任意 sleep 假设后端已收敛。
+
+mail 在固定 MailID 下保存可恢复 envelope 意图，再复用 insert-only Create、deliverAndRecord 和 mailbox 去重推进。缺失正文可以是从未写成、写成后误删或其他未知结果，不能盲删 ledger 并重新 mint。若承诺只人工修复，必须有可验证的恢复入口、保存的原始意图和明确运维文档；当前错误信息本身不能恢复发送。
+
+session 的正常 Finish 与旧 Enter 撤回有不同不变量：终态 run 允许下一次 Enter 清理旧 claim，因而清理顺序不能独自证明旧版本删除安全。版本数只在一次键生命周期单调；删除时必须原子验证不可复用身份。修 Finish 重试遗漏时一起验证此约束，避免新增清理调用扩大 ABA 窗口。
+
+## 第二轮：数字和输出对象也有领域边界
+
+活动分数/进度非负的输入检查不能保证相加后仍非负。先在 CAS 回调内检查总值上界，再更新累加与 applied 证明；错误时不部分改变另一字段。饱和与拒绝是业务选择，要写清楚，不能任由 int64 回绕参与排名。
+
+MemoryStore 复制 struct 不复制 map。global 输入已经 cloneLoad，但 RenewLease/Lease/LiveGames 的输出仍共享存储引用；在类型出口统一 clone，不把每次输出深拷贝的责任隐含给泛型 Store。单次顺序修改已能证明未经过 CAS，不必用 race 检出才能叫一致性问题。
+
+活动完成与在途进度重叠尚无冻结契约，不能直接定性缺陷。如果完成的奖励依赖封闭参加者快照，应单独定义停止准入、等待/拒绝在途操作和最终快照，不能只看物理写入先后。以上正确性约束收敛后，再比较额外 CAS/读取/克隆在热点下的成本；本轮没有性能数字。

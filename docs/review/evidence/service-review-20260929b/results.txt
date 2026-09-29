@@ -1,0 +1,51 @@
+=== RUN   TestReviewAttachCannotAssertAlreadyReleased
+    zz_review_20260929b_test.go:29: caller-controlled release marker skipped release: calls=0
+--- FAIL: TestReviewAttachCannotAssertAlreadyReleased (0.00s)
+=== RUN   TestReviewSuccessfulFinishRetryFreesClaim
+    zz_review_20260929b_test.go:52: successful Finish retry leaves terminal owner's claim
+--- FAIL: TestReviewSuccessfulFinishRetryFreesClaim (0.00s)
+=== RUN   TestReviewTerminalFinishCannotDeleteReacquiredClaim
+    zz_review_20260929b_test.go:85: real Redis backend
+    zz_review_20260929b_test.go:106: late Finish deleted replacement claim: b=run-2 c=run-3 both live
+--- FAIL: TestReviewTerminalFinishCannotDeleteReacquiredClaim (0.02s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/session	1.509s
+=== RUN   TestReviewTransientEnvelopeFailureCanRetrySameRequest
+    zz_review_20260929b_test.go:28: store recovered but same send cannot recover: mail: conflict: send "send-1" names missing mail mail-1
+--- FAIL: TestReviewTransientEnvelopeFailureCanRetrySameRequest (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/service/mail	1.456s
+=== RUN   TestReviewVerifiedIdentityEncodingIsInjective
+    zz_review_20260929b_test.go:33: distinct verified identities merged: first=vendor:a/b second returned=vendor:a/b account=vendor:a:b
+--- FAIL: TestReviewVerifiedIdentityEncodingIsInjective (0.00s)
+=== RUN   TestReviewLostSlotReplyCannotDeleteCommittedRole
+    zz_review_20260929b_test.go:73: committed slot v2 refers to deleted role 1000001; retry=account: role limit reached for this server: test:slot already holds a role on server 1
+--- FAIL: TestReviewLostSlotReplyCannotDeleteCommittedRole (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/service/account	0.733s
+=== RUN   TestReviewLeaseCannotRenewAgainstChangedRoute
+    zz_review_20260929b_test.go:29: stale routing lease renewed: route=(sid=2 epoch=3) lease=(sid=1 epoch=1)
+--- FAIL: TestReviewLeaseCannotRenewAgainstChangedRoute (0.00s)
+=== RUN   TestReviewLeaseSnapshotsOwnLoadMaps
+=== RUN   TestReviewLeaseSnapshotsOwnLoadMaps/renew
+    zz_review_20260929b_test.go:73: returned renew snapshot edited storage without CAS: load=forged version=2->2
+=== RUN   TestReviewLeaseSnapshotsOwnLoadMaps/lookup
+    zz_review_20260929b_test.go:73: returned lookup snapshot edited storage without CAS: load=forged version=2->2
+=== RUN   TestReviewLeaseSnapshotsOwnLoadMaps/live
+    zz_review_20260929b_test.go:73: returned live snapshot edited storage without CAS: load=forged version=2->2
+--- FAIL: TestReviewLeaseSnapshotsOwnLoadMaps (0.00s)
+    --- FAIL: TestReviewLeaseSnapshotsOwnLoadMaps/renew (0.00s)
+    --- FAIL: TestReviewLeaseSnapshotsOwnLoadMaps/lookup (0.00s)
+    --- FAIL: TestReviewLeaseSnapshotsOwnLoadMaps/live (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/service/global	0.703s
+=== RUN   TestReviewPositiveProgressCannotWrapNegative
+    zz_review_20260929b_test.go:24: positive delta persisted negative standing: score=-9223372036854775808 progress=-9223372036854775808
+--- FAIL: TestReviewPositiveProgressCannotWrapNegative (0.00s)
+=== RUN   TestReviewObserveProgressCompletionOverlap
+    zz_review_20260929b_test.go:63: observation, not a confirmed bug: admitted progress persisted after status=complete score=1
+--- PASS: TestReviewObserveProgressCompletionOverlap (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/service/global/activity	0.720s
+FAIL
+Repro exit=1 (baseline expects 1; defect assertions after fixes expect 0; observation is contract-dependent).

@@ -1,0 +1,8 @@
+"package","status","elapsed_seconds"
+"github.com/tjbdwanghaibo/roost-core/service/match","pass","1.798"
+"github.com/tjbdwanghaibo/roost-core/kit/service/global","pass","1.842"
+"github.com/tjbdwanghaibo/roost-core/kit/service/account","pass","1.859"
+"github.com/tjbdwanghaibo/roost-core/service/mail","pass","2.041"
+"github.com/tjbdwanghaibo/roost-core/kit/service/global/activity","pass","2.173"
+"github.com/tjbdwanghaibo/roost-core/service/session","pass","2.749"
+"github.com/tjbdwanghaibo/roost-core/kit/service/chat","pass","2.465"

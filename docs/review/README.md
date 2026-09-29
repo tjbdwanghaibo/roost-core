@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-29 Service 第二轮](REVIEW-2026-09-29-services-02.md)：基线 `e10dd3f1`，身份编码、迁移 lease、Attach 管理字段、提交未知和失败恢复；8 个新增已复现问题（6 P2、2 P3），另补旧 ABA 的真实 Redis 新触发，1 项完成重叠仅列观察。7 包原有 race/integration 全过，425 个测试/子测试无 skip。[问题交接](../bug/REVIEW-2026-09-29-services-02.md) · [复跑](../bug/REPRO-2026-09-29-services-02.md) · [机制](IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)。本轮索引调用超时，源码补证；仅文档。
+
 [09-29 Core 全 service 域审查](REVIEW-2026-09-29-services.md)：最新 `6b73289c`，10 个服务域主链完成；9 项动态反例 + 1 项源码接线缺口（2 P1、7 P2、1 P3）。原有服务 race/真实 Redis 集成与 12 次生成一致性检查通过，不代表全部故障交错已验证。[问题交接](../bug/REVIEW-2026-09-29-services.md) · [复现](../bug/REPRO-2026-09-29-services.md) · [机制与实施方案](IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md) · [逐路径证据](evidence/service-review-20260929/inventory.csv)。只改文档。
 
 [09-29 B30 复测与调查](REVIEW-2026-09-29-b30.md)：正式装配 80 TPS × 30 分钟在写许可 128 下失败，非回归，是 Mongo 停顿超过许可余量；256 时通过（单样本）；隔离环境 mongo-3 数据文件缺失待处理。

@@ -1,5 +1,18 @@
 # Roost Review 问题索引
 
+09-29 Service 第二轮：[8 个新增问题与实施方案](REVIEW-2026-09-29-services-02.md)（RR-11..18，6 P2、2 P3）· [复现](REPRO-2026-09-29-services-02.md)。另补旧 [RR-20260909-02 正常 Finish/真实 Redis ABA](REVIEW-2026-09-09-02.md#2026-09-29-normal-finish-aba)，不重复编号。均未在本轮修生产代码。
+
+| 编号 | 优先级 | 结论（本轮未实施） |
+| --- | --- | --- |
+| [RR-20260929-11](REVIEW-2026-09-29-services-02.md#rr-20260929-11) | P2 | account 已验证身份键碰撞 |
+| [RR-20260929-12](REVIEW-2026-09-29-services-02.md#rr-20260929-12) | P2 | account slot 提交未知时误删角色、遗留占位 |
+| [RR-20260929-13](REVIEW-2026-09-29-services-02.md#rr-20260929-13) | P2 | global 迁移后旧路由 lease 可续期 |
+| [RR-20260929-14](REVIEW-2026-09-29-services-02.md#rr-20260929-14) | P2 | session Attach 接受伪造释放标记 |
+| [RR-20260929-15](REVIEW-2026-09-29-services-02.md#rr-20260929-15) | P2 | activity 非负累加回绕为负 |
+| [RR-20260929-16](REVIEW-2026-09-29-services-02.md#rr-20260929-16) | P2 | mail 正文写失败后同请求无法恢复 |
+| [RR-20260929-17](REVIEW-2026-09-29-services-02.md#rr-20260929-17) | P3 | global Load 输出引用污染 MemoryStore |
+| [RR-20260929-18](REVIEW-2026-09-29-services-02.md#rr-20260929-18) | P3 | session Finish 重试成功仍留 claim |
+
 09-29 Core 全 service 审查：[问题与实施交接](REVIEW-2026-09-29-services.md) · [9 项反例及源码](REPRO-2026-09-29-services.md)。本轮未修生产代码；RR-09 为源码接线缺口，其他九项动态复现。
 
 | 编号 | 优先级 | 结论（未修复/未实施） |
@@ -620,7 +633,7 @@ U-0224 原 BSON 三项、U-0225 所在 Saga 现有 race 测试通过；不代表
 | RR-20260908-02 | P2 | core | ReadThrough 取消等待不归还名额 | 已修复（U-0155，core v1.15.2）→ [bugfix](../bugfix/RR-20260908-02.md) |
 | RR-20260908-03 | P2 | codegen | 单行 import 包拆分产生非法 Go 语法 | 已修复（U-0156，codegen v1.15.4）→ [bugfix](../bugfix/RR-20260908-03.md) |
 | RR-20260909-01 | P2 | core/docs | 当前接入指南的版本与必需参数不一致 | 已修复（U-0157，core v1.15.2）→ [bugfix](../bugfix/RR-20260909-01.md) |
-| RR-20260909-02 | P2 | kit | Session 冲突清理误删重新取得的 claim（ABA） | 已修复（U-0158，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-02.md) · [第二轮复核](REVIEW-2026-09-09-02.md) |
+| RR-20260909-02 | P2 | kit → core | Session 清理误删重建 claim（ABA） | 原冲突撤回路径已修（U-0158，已发版）；正常 Finish 新触发仍有残留，09-29 真实 Redis 已复现 → [追加证据](REVIEW-2026-09-09-02.md#2026-09-29-normal-finish-aba) · [原 bugfix](../bugfix/RR-20260909-02.md) |
 | RR-20260909-03 | P2 | core | Assembly 停机未完成即遗失 Runtime，重试虚报成功 | 已修复（U-0159，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-03.md) · [第三轮](REVIEW-2026-09-09-03.md) |
 | RR-20260909-04 | P2 | codegen | 同包多个 Entity 生成重名注册符号，消费者无法编译 | 已修复（U-0160，已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5）→ [bugfix](../bugfix/RR-20260909-04.md) · [第三轮](REVIEW-2026-09-09-03.md) |
 

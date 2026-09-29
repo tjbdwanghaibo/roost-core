@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+[09-29 Service 第二轮](review/REVIEW-2026-09-29-services-02.md)：新增 8 个可复现问题，补旧 Session ABA 的正常 Finish/真实 Redis 证据。[问题及修复方案](bug/REVIEW-2026-09-29-services-02.md) · [复跑](bug/REPRO-2026-09-29-services-02.md) · [进度](review/PROGRESS.md)。没有修改生产代码。
+
 [09-29 Core 全 service 审查与实施交接](review/REVIEW-2026-09-29-services.md)：10 个服务域主链、9 项可复现问题和 1 项自动清理接线缺口；原有 race/Redis 集成与生成门禁通过。附[问题](bug/REVIEW-2026-09-29-services.md)、[复现](bug/REPRO-2026-09-29-services.md)、[设计机制](review/IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)及[进度](review/PROGRESS.md)。仅文档，未修生产代码。
 
 **维护与接手入口：[核心优化汇总与验收边界](CORE-OPTIMIZATION-HANDOFF.md) · [roost 写代码 skill](agent-skills/roost-coding/SKILL.md)**。汇总 Nest、Sync、DataEngine、Remote 历轮最终实现与可复跑证据；包含2026-09-26用户对当前Sync尾延迟的接受决定。下方历史记录保留各自时点状态。
