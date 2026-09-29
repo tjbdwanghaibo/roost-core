@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 
+# 基准端口：客户端 14222-14224、路由 16222-16224、监控 18222-18224，经
+# roost_it_port 统一平移（ROOST_IT_PORT_OFFSET）。
 nats_client_port() {
-	printf '%d\n' "$((14221 + $1))"
+	roost_it_port "$((14221 + $1))"
 }
 
 nats_route_port() {
-	printf '%d\n' "$((16221 + $1))"
+	roost_it_port "$((16221 + $1))"
 }
 
 nats_monitor_port() {
-	printf '%d\n' "$((18221 + $1))"
+	roost_it_port "$((18221 + $1))"
+}
+
+nats_client_url() {
+	printf 'nats://127.0.0.1:%d,nats://127.0.0.1:%d,nats://127.0.0.1:%d\n' "$(nats_client_port 1)" "$(nats_client_port 2)" "$(nats_client_port 3)"
 }
 
 nats_node_dir() {
@@ -61,16 +67,19 @@ nats_meta_leader_ready() {
 }
 
 nats_start_node() {
-	local index="$1" node pid_file config client monitor
+	local index="$1" node pid_file config client route monitor
 	node="$(nats_node_dir "$index")"
 	pid_file="$(nats_node_pid_file "$index")"
 	config="$node/nats.conf"
 	client="$(nats_client_port "$index")"
+	route="$(nats_route_port "$index")"
 	monitor="$(nats_monitor_port "$index")"
 	if read_owned_pid "$pid_file" >/dev/null 2>&1; then
 		return 0
 	fi
 	require_port_available_or_owned "$client" "$pid_file" "nats-$index client"
+	# 路由端口也要查：端口可平移后，它可能落在别的环境的某个监听上。
+	require_port_available_or_owned "$route" "$pid_file" "nats-$index route"
 	require_port_available_or_owned "$monitor" "$pid_file" "nats-$index monitor"
 	nats_write_config "$index"
 	rm -f -- "$pid_file"
@@ -124,8 +133,9 @@ nats_status() {
 }
 
 nats_stream_leader_node() {
-	local stream="$1" monitor leader
-	for monitor in 18222 18223 18224; do
+	local stream="$1" index monitor leader
+	for index in 1 2 3; do
+		monitor="$(nats_monitor_port "$index")"
 		leader="$(curl --silent --fail "http://127.0.0.1:$monitor/jsz?streams=true" 2>/dev/null | jq -r --arg stream "$stream" '
           [.account_details[]?.stream_detail[]? | select(.name == $stream) | .cluster.leader][0] // empty
         ' 2>/dev/null || true)"

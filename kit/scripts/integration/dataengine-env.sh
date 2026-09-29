@@ -25,7 +25,7 @@ Commands:
   up                         Start and initialize all isolated nodes
   down                       Stop isolated nodes and preserve their data
   status                     Show Mongo, NATS, Redis and toxiproxy status
-  reset                      Stop nodes and delete only the fixed test root
+  reset                      Stop nodes and delete only the canonical test root
   test                       Start nodes and run integration-tagged tests
   fault mongo-primary        Stop the current isolated Mongo primary
   fault nats-leader STREAM   Stop the leader for an isolated JetStream stream
@@ -36,6 +36,16 @@ Network faults: when toxiproxy-server is installed, up also starts toxiproxy
 with one proxy per NATS node and exports ROOST_DATAENGINE_IT_TOXIPROXY_URL and
 ROOST_DATAENGINE_IT_NATS_PROXIED_URL; the Toxic* integration tests use them.
 ROOST_IT_TOXIPROXY=1 makes toxiproxy mandatory (the nightly fault matrix).
+
+Location and ports (defaults keep the historical layout):
+  ROOST_IT_HOME=DIR          Existing absolute parent directory; the test root is
+                             DIR/roost-dataengine-it (default DIR=/tmp). Prefer a
+                             directory outside /tmp for a long-lived environment:
+                             macOS purges /tmp files that are not accessed for days.
+  ROOST_IT_PORT_OFFSET=N     Added to every port (default 0). A root remembers the
+                             offset it was created with and refuses another one.
+The generated env.sh exports both, so a shell that sourced it drives the same
+environment. See scripts/integration/README.md.
 USAGE
 }
 
@@ -47,6 +57,7 @@ preflight() {
 environment_up() {
 	preflight
 	mkdir -p "$ROOST_IT_ROOT"
+	record_port_offset
 	mongo_up
 	nats_up
 	redis_up

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 
 readonly ROOST_IT_MONGO_REPLICA_SET="roost-it"
-readonly ROOST_IT_MONGO_URI="mongodb://127.0.0.1:27117,127.0.0.1:27118,127.0.0.1:27119/?replicaSet=$ROOST_IT_MONGO_REPLICA_SET"
 
+# 基准端口 27117-27119，经 roost_it_port 统一平移（ROOST_IT_PORT_OFFSET）。
 mongo_node_port() {
-	printf '%d\n' "$((27116 + $1))"
+	roost_it_port "$((27116 + $1))"
 }
+
+readonly ROOST_IT_MONGO_URI="mongodb://127.0.0.1:$(mongo_node_port 1),127.0.0.1:$(mongo_node_port 2),127.0.0.1:$(mongo_node_port 3)/?replicaSet=$ROOST_IT_MONGO_REPLICA_SET"
 
 mongo_node_dir() {
 	printf '%s/mongo-%d\n' "$ROOST_IT_ROOT" "$1"
@@ -47,7 +49,7 @@ mongo_start_node() {
 }
 
 mongo_replica_initialized() {
-	mongosh --quiet --host 127.0.0.1 --port 27117 --eval \
+	mongosh --quiet --host 127.0.0.1 --port "$(mongo_node_port 1)" --eval \
 		'try { const s=rs.status(); quit(s.ok===1?0:1) } catch (e) { quit(1) }' >/dev/null 2>&1
 }
 
@@ -56,13 +58,14 @@ mongo_initiate_replica() {
 		return 0
 	fi
 	roost_it_log "initializing Mongo replica set $ROOST_IT_MONGO_REPLICA_SET"
-	mongosh --quiet --host 127.0.0.1 --port 27117 --eval '
-const config={_id:"roost-it",members:[
-  {_id:0,host:"127.0.0.1:27117",priority:3},
-  {_id:1,host:"127.0.0.1:27118",priority:2},
-  {_id:2,host:"127.0.0.1:27119",priority:1}
+	# 成员地址就是驱动发现后要拨的地址，必须与平移后的端口一致。
+	mongosh --quiet --host 127.0.0.1 --port "$(mongo_node_port 1)" --eval "
+const config={_id:\"$ROOST_IT_MONGO_REPLICA_SET\",members:[
+  {_id:0,host:\"127.0.0.1:$(mongo_node_port 1)\",priority:3},
+  {_id:1,host:\"127.0.0.1:$(mongo_node_port 2)\",priority:2},
+  {_id:2,host:\"127.0.0.1:$(mongo_node_port 3)\",priority:1}
 ]};
-const result=rs.initiate(config);
+const result=rs.initiate(config);"'
 if (result.ok !== 1 && result.codeName !== "AlreadyInitialized") { printjson(result); quit(1); }
 ' >/dev/null
 }
@@ -91,9 +94,9 @@ mongo_primary_node() {
 	local primary
 	primary="$(mongosh "$ROOST_IT_MONGO_URI" --quiet --eval 'const h=db.adminCommand({hello:1}); if(h.primary) print(h.primary)' 2>/dev/null)"
 	case "$primary" in
-		*27117) printf 'mongo-1\n' ;;
-		*27118) printf 'mongo-2\n' ;;
-		*27119) printf 'mongo-3\n' ;;
+		*":$(mongo_node_port 1)") printf 'mongo-1\n' ;;
+		*":$(mongo_node_port 2)") printf 'mongo-2\n' ;;
+		*":$(mongo_node_port 3)") printf 'mongo-3\n' ;;
 		*) return 1 ;;
 	esac
 }

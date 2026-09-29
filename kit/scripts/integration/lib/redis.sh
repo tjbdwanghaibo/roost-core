@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # One isolated Redis node for the lock / versionstore fault tests. Port 16379
 # so a developer's own Redis on 6379 is never touched; toxiproxy fronts it on
-# 26379 when installed (see toxiproxy.sh).
+# 26379 when installed (see toxiproxy.sh). Both are base ports shifted by
+# ROOST_IT_PORT_OFFSET (roost_it_port).
 
-redis_port() { printf '16379\n'; }
+redis_port() { roost_it_port 16379; }
 redis_dir() { printf '%s/redis\n' "$ROOST_IT_ROOT"; }
 redis_pid_file() { printf '%s/redis.pid\n' "$(redis_dir)"; }
 

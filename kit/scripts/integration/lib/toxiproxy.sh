@@ -7,9 +7,10 @@
 # driver each member's own advertised address, so a proxy in front of the seed
 # list is bypassed after the first hello.
 
-toxiproxy_api_port() { printf '18474\n'; }
-toxiproxy_proxy_port() { printf '%d\n' "$((24221 + $1))"; }
-toxiproxy_redis_port() { printf '26379\n'; }
+# 基准端口：API 18474、NATS 代理 24222-24224、Redis 代理 26379，经 roost_it_port 平移。
+toxiproxy_api_port() { roost_it_port 18474; }
+toxiproxy_proxy_port() { roost_it_port "$((24221 + $1))"; }
+toxiproxy_redis_port() { roost_it_port 26379; }
 toxiproxy_dir() { printf '%s/toxiproxy\n' "$ROOST_IT_ROOT"; }
 toxiproxy_pid_file() { printf '%s/toxiproxy.pid\n' "$(toxiproxy_dir)"; }
 toxiproxy_api() { printf 'http://127.0.0.1:%d\n' "$(toxiproxy_api_port)"; }
@@ -55,6 +56,13 @@ toxiproxy_up() {
 	dir="$(toxiproxy_dir)"
 	mkdir -p "$dir"
 	if ! toxiproxy_running; then
+		# toxiproxy-server 的命令行里没有根目录，没法按 read_owned_pid 认领；API 端口
+		# 已被别人占着时直接拒绝，否则下面的就绪检查会连上另一套环境的 toxiproxy，
+		# 并在它上面建代理、reset 它的 toxic。
+		if port_is_listening "$(toxiproxy_api_port)"; then
+			roost_it_error "toxiproxy API port $(toxiproxy_api_port) is occupied by a process outside $ROOST_IT_ROOT"
+			return 1
+		fi
 		nohup toxiproxy-server -host 127.0.0.1 -port "$(toxiproxy_api_port)" >"$dir/toxiproxy.log" 2>&1 &
 		echo $! > "$(toxiproxy_pid_file)"
 	fi
