@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 第九批bugfix / Service第十一轮：阶段完成
+
+**10/10功能域主链及具名本机专项完成有界审查。**[本轮](REVIEW-2026-09-29-services-11.md) · [最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md) · [学习](IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。RR-34 **1/1修复/声明场景通过**；RR-20260929-01～34按各批原验收关闭，旧残余沿证据单列。本轮无新增确认缺陷，不声称全框架或全部生产逻辑无bug。
+
+| 口径 | 最新事实 | 未计为完成 |
+| --- | --- | --- |
+| 源码范围 | 100生产路径（82非生成/18生成）100blob不变复用；共享Redis改码/维护入口专项复读，12RPC check通过 | 不是逐行/分支或执行覆盖率 |
+| 本轮修复 | 原standalone/Cluster反例与生命周期3/3绿；正式两后端race/count2 58次叶子执行通过 | 物理丢包/跨owner全局顺序/HA不由hook证明 |
+| 当前回归 | 19测试包1035pass事件/951pass叶子；Core/consumer编译、vet通过，0fail/build-fail | 3Toxiproxytest skip；无测试package skip1另计 |
+| 后续 | Match归档、购买fulfilled/drain、真实资源回执、旧数据迁移、HA/强杀/长稳具名交接 | 方案未实施/真实环境未执行，不泛化为service主链未安排 |
+
+下方未实施/FAIL保留历史时点，不重新打开已通过声明场景的旧根因，也不升级其他核心域/性能事项。
+
 ## 2026-09-29 第八批 bugfix / Service 第十轮
 
 实现/主体文档已推送28f8fc15，干净主树同步；graph full generation14:09:57Z ready，新正式测试已纳入。137路径仍135 metadata_changed/两个go.txt nottracked，[后补证据](evidence/service-review-20260929-10/COVERAGE-AFTER.json)保存限制和源/执行依据。四个隔离Redis核验目录后关闭，共享MCP保留。

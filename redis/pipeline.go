@@ -22,6 +22,8 @@ type IPipeline interface {
 
 	// Exec sends buffered commands and populates futures. Inspect each future
 	// for its command's error even when Exec returns nil.
+	// Missing reads alone are not a batch failure; other command errors are.
+	// An error does not roll back commands that already executed.
 	Exec(ctx context.Context) error
 
 	// Discard clears buffered commands without executing.

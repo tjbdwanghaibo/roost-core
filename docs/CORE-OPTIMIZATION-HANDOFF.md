@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**Service第九批/第十一轮阶段完成（2026-09-29）**：[RR-34 Pipeline修复/验证](bugfix/RR-20260929-34.md)，[10域主链完成/34项新编号台账/具名剩余事项](review/REVIEW-2026-09-29-services-11.md)，本轮无新确认缺陷。原3/3绿、正式58叶子执行/整体19包951pass叶子、3Toxiproxy skip分列；100Service源blob未变，Core/consumer编译、vet、12RPC check通过。[机制](review/IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。后续是归档/fulfilled与外部/HA/长稳具名设计验收，不再泛化重开其余service。未发布/迁移，不升级其他核心性能专项；下方为历史时点。
+
 **Service第八批/第十轮（2026-09-29）**：[RR-33 Mail Cluster批读修复/验证](bugfix/RR-20260929-33.md)，正式Mod跨3owner分页/claim；[新RR-34 P2 Pipeline首缺失掩盖写错误](bug/REVIEW-2026-09-29-services-10.md)只交接未改driver。[运行/停点](review/REVIEW-2026-09-29-services-10.md) · [机制/兼容](review/IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)。10域主链有界整理完成，965pass事件/3Toxiproxy skip分列；无key迁移、未发布/部署，不改其他核心性能专项验收。下方保留历史。
 
 

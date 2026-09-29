@@ -1,0 +1,127 @@
+{
+  "base": "328fc6ef31fdc91f21035389b2110d15f2e1c4e3",
+  "checks": {
+    "vet": 0,
+    "consumer_compile": 0,
+    "rpc_fail": 0,
+    "rpc_checks": 12,
+    "core_compile": 0
+  },
+  "working_changes": true,
+  "runs": [
+    {
+      "name": "unit-red",
+      "exit": 1,
+      "pass_events": 3,
+      "pass_leaf_executions": 3,
+      "failed_leaf_executions": 3,
+      "test_skips": [],
+      "package_pass": 0,
+      "package_skip": 0,
+      "build_fail": 0,
+      "failed": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestPipelineExecChecksEveryCommandError/missing_before_failure"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestPipelineExecChecksEveryCommandError/nil_aggregate_with_failure"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestPipelineExecPopulatesAllFuturesOnFailure"
+        }
+      ],
+      "failed_output": [
+        {
+          "Test": "TestPipelineExecChecksEveryCommandError/missing_before_failure",
+          "Output": "    pipeline_errors_test.go:47: Exec=<nil>, want command failed\n"
+        },
+        {
+          "Test": "TestPipelineExecChecksEveryCommandError/nil_aggregate_with_failure",
+          "Output": "    pipeline_errors_test.go:47: Exec=<nil>, want command failed\n"
+        },
+        {
+          "Test": "TestPipelineExecPopulatesAllFuturesOnFailure",
+          "Output": "    pipeline_errors_test.go:69: Exec: <nil>\n"
+        }
+      ],
+      "log_sha256": "EF5DD0AD3EB76CC103F13BDF93766CE3C508A4CB67970344F7E3A13AA2BE5802"
+    },
+    {
+      "name": "target",
+      "exit": 1,
+      "pass_events": 66,
+      "pass_leaf_executions": 56,
+      "failed_leaf_executions": 2,
+      "test_skips": [],
+      "package_pass": 0,
+      "package_skip": 0,
+      "build_fail": 0,
+      "failed": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false"
+        }
+      ],
+      "failed_output": [
+        {
+          "Test": "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false",
+          "Output": "    pipeline_errors_integration_test.go:214: actual write: \"\" reply lost after write\n"
+        },
+        {
+          "Test": "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false",
+          "Output": "    pipeline_errors_integration_test.go:214: actual write: \"\" reply lost after write\n"
+        }
+      ],
+      "log_sha256": "502F7A79793E823B436C4FABF6E3B82193D6E6E6A74D6E99462AFBA156406180"
+    },
+    {
+      "name": "target-final",
+      "exit": 0,
+      "pass_events": 70,
+      "pass_leaf_executions": 58,
+      "failed_leaf_executions": 0,
+      "test_skips": [],
+      "package_pass": 1,
+      "package_skip": 0,
+      "build_fail": 0,
+      "failed": [],
+      "failed_output": [],
+      "log_sha256": "E44D1A4245110B06C8033B425794BB35EF226EA1DBD4221D09BEDB6F3BD1C585"
+    },
+    {
+      "name": "all",
+      "exit": 0,
+      "pass_events": 1035,
+      "pass_leaf_executions": 951,
+      "failed_leaf_executions": 0,
+      "test_skips": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+          "Test": "TestToxicRedisLatencyKeepsAcquireWithinItsDeadline"
+        }
+      ],
+      "package_pass": 19,
+      "package_skip": 1,
+      "build_fail": 0,
+      "failed": [],
+      "failed_output": [],
+      "log_sha256": "29CEF305663F63753F35F10A0CF0AC4A5FFC6635F7B7A921EF0162778D0E5D8C"
+    }
+  ],
+  "note": "target initial failures were hook connection-initialization fixture errors; final warm-up fixed fixture, assertions retained. count=2 is executions, not unique coverage."
+}

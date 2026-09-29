@@ -1,0 +1,26 @@
+{
+  "base": "328fc6ef31fdc91f21035389b2110d15f2e1c4e3",
+  "working_changes": true,
+  "files": [
+    {
+      "path": "redis/driver/pipeline.go",
+      "blob": "9c3e9b76e06c33a63e3e142398dacaa48a0e027c",
+      "raw_sha256": "2907666DE77E73012FEF142FCAB9080F70C01B6936A1AFC0790CE8529378147A"
+    },
+    {
+      "path": "redis/pipeline.go",
+      "blob": "656f99b7a122ee122f4a190f633200d1493c564c",
+      "raw_sha256": "97BAC2610682F718B300BB9F8AB7F6858B651A7B07A89C0A36E6E4C4921DDD34"
+    },
+    {
+      "path": "redis/driver/pipeline_errors_test.go",
+      "blob": "953e37e93d5474d24b396644ed9e739986e5d5d0",
+      "raw_sha256": "8D90567312CC838EB3DEAA8BFBA4216F46C198CF56DCBC7A92371575F4AA1172"
+    },
+    {
+      "path": "redis/driver/pipeline_errors_integration_test.go",
+      "blob": "8623af86c31bb546293e4a9ede26bf4cf663ea8b",
+      "raw_sha256": "297AACE8E628D2570679EAD57D33001BB88A5B5C5CE5AA33C836915B1E18B20D"
+    }
+  ]
+}

@@ -104,7 +104,7 @@ func (p *pipeline) Exec(ctx context.Context) error {
 		p.stringMapFutures = nil
 		p.int64Futures = nil
 	}()
-	_, err := p.pipe.Exec(ctx)
+	commands, err := p.pipe.Exec(ctx)
 	// Assign results to futures
 	for _, bc := range p.bytesFutures {
 		val, cmdErr := bc.cmd.Bytes()
@@ -122,9 +122,16 @@ func (p *pipeline) Exec(ctx context.Context) error {
 		val, cmdErr := mc.cmd.Result()
 		mc.future.SetResult(val, cmdErr)
 	}
-	// Return pipeline-level error (ignoring individual Nil errors)
+	// Preserve transport/aggregate errors after filling every future. Redis
+	// Nil may be the first command error while a later write failed; writes
+	// without futures still need their error reported by Exec.
 	if err != nil && err != goredis.Nil {
 		return err
+	}
+	for _, command := range commands {
+		if commandErr := command.Err(); commandErr != nil && commandErr != goredis.Nil {
+			return commandErr
+		}
 	}
 	return nil
 }

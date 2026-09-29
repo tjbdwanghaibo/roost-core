@@ -1,0 +1,29 @@
+{
+  "outcomes": [
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_false",
+      "Action": "pass"
+    },
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_true",
+      "Action": "pass"
+    },
+    {
+      "Test": "TestReview10PipelineReuseAndDiscard",
+      "Action": "pass"
+    }
+  ],
+  "log_sha256": "2E14787A42DB9D7BC36ADDBA617B732AAE4F5EB383E9E92707FCE73E6AB5028F",
+  "expect_fixed": true,
+  "evidence": [
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_false",
+      "Output": "    review10_overlay_test.go:32: Exec=WRONGTYPE Operation against a key holding the wrong kind of value missing=redis: nil actual_value=\"original\" read_error=<nil>\n"
+    },
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_true",
+      "Output": "    review10_overlay_test.go:32: Exec=WRONGTYPE Operation against a key holding the wrong kind of value missing=redis: nil actual_value=\"original\" read_error=<nil>\n"
+    }
+  ],
+  "exit": 0
+}

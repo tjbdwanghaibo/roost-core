@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-29 Service本阶段review完成**：[第十一轮范围/逐批台账/后续设计](review/REVIEW-2026-09-29-services-11.md)，10/10域主链、100路径内容核算；[RR-34修复](bugfix/RR-20260929-34.md)原3/3转绿，正式两后端/整体回归通过，本轮无新确认缺陷。[完成矩阵](review/SERVICE-REVIEW-COMPLETION-2026-09-29.md) · [机制学习](review/IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。3Toxiproxy skip/外部资源/HA/容量设计另列，未发布；下方保留历史。
+
 **09-29 Service第八批/第十轮**：[RR-33 Mail跨槽分页已修/已验](bugfix/RR-20260929-33.md)，正式Mod跨3owner分页通过；新[RR-34 P2 Pipeline首缺失掩盖写错误](bug/REVIEW-2026-09-29-services-10.md)未实施。[运行](review/REVIEW-2026-09-29-services-10.md) · [机制学习](review/IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)。10域主链有界整理保持完成，外部专项另算；下方保留历史。
 
 

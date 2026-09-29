@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**最新第十一轮：RR-34已修/已验，本轮无新增确认缺陷。**[修复与原断言](../bugfix/RR-20260929-34.md) · [本阶段Service完成结论](../review/REVIEW-2026-09-29-services-11.md)。RR-20260929-01～34均沿具名验收关闭；归档/fulfilled/真实外部资源/HA等是单列设计/验证事项，不宣称全框架无bug。下方未实施/FAIL保留历史时点。
+
 **最新第十轮：RR-33已修/原触发及声明场景已验；新[RR-34 P2 Pipeline先缺失后写错误却返回成功](REVIEW-2026-09-29-services-10.md)未实施。**[第八批修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-08.md) · [运行](../review/REVIEW-2026-09-29-services-10.md)。下方“RR-33未修”为历史时点。
 
 

@@ -1,0 +1,29 @@
+{
+  "exit": 1,
+  "log_sha256": "60F4C401D13E084BA6F65DA459A6071C28A95305218A0DD81A8DC1C88354E60C",
+  "evidence": [
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_false",
+      "Output": "    review10_overlay_test.go:32: Exec=<nil> missing=redis: nil actual_value=\"original\" read_error=<nil>\n"
+    },
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_true",
+      "Output": "    review10_overlay_test.go:32: Exec=<nil> missing=redis: nil actual_value=\"original\" read_error=<nil>\n"
+    }
+  ],
+  "outcomes": [
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_false",
+      "Action": "fail"
+    },
+    {
+      "Test": "TestReview10PipelineMissingMasksWriteError/cluster_true",
+      "Action": "fail"
+    },
+    {
+      "Test": "TestReview10PipelineReuseAndDiscard",
+      "Action": "pass"
+    }
+  ],
+  "expect_fixed": false
+}
