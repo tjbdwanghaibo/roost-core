@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第七轮：维护竞争与 Cluster
+
+源码 **1625fee0**；[问题/实施交接](../bug/REVIEW-2026-09-29-services-07.md)、[运行证据](REVIEW-2026-09-29-services-07.md)、[索引与 Cluster 学习](IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md)。继续第六轮专项而非重扫 100 路径。新增 **RR-28 P1、RR-29/30 P2，0/3 修复**；原第五批 4/4 沿已验收证据保持关闭。
+
+| 已查范围 | 源码/实际场景 | 当前停点与下一入口 |
+| --- | --- | --- |
+| Platform pending→缺失→Retire / malformed→Defer | 真 Redis 两个迟到创建/对象重建反例；ghost、正常 paid、终态不复活控制通过 | RR-28 条件退休原语与接线；历史索引对账未执行 |
+| Platform/Rank Mod→driver→Cluster 多 key 脚本 | 三 master、16384 slots；4 个坏前缀反例；2 个有效 tag 生命周期控制通过 | RR-29/30 有效共同 tag 启动校验；复制/failover/完整 app 网络未验 |
+| Rank Reset/Remove→在途 Add→同键重放 | 2 个屏障控制通过，旧 base=100 不被带回；实际结果 5 | 不推定封季/fence，复杂长期竞争未穷尽 |
+| Match terminal/Requests/Sweep/状态体积 | Memory/Redis 各 64 Cancel、一年后仍保留 23084-byte 状态；重放返回原终态 | 已有容量观察不重复 RR；聚合压力/归档与购买 ledger 为后续纯 review 入口 |
+
+当前 15 叶子场景 9 pass/6 预期 fail/0 skip/build-fail；无 overlay 四包 268 测试及子测试 pass。100 路径/10 域主链有界整理保持完成，不把本轮专项等同全 service 已无 bug。图谱代际08:12:07Z，34 证据/复用路径 metadata_changed，关键源码补证；K1/K2/K3 与 HA/强杀/真实资金/长稳专项状态不变。
+
 ## 2026-09-29 Service 第六轮：本批缺陷收敛
 
 源码 **4b0837d7**；[修后邻接 review](REVIEW-2026-09-29-services-06.md)、[最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、[当前机制](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md#第五批修复后的实际实现)齐全。本批 RR-25/26/27 与旧 RR-14-02 残余 **4/4 原触发/声明场景通过**，列明邻接范围无新增确认缺陷。10/10 域主链整理已收口；当前 100 生产路径，6 变更源码及回归复查、94 blob 不变复用，不能称行/分支覆盖率。

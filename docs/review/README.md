@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-29 Service 第七轮](REVIEW-2026-09-29-services-07.md)：维护竞争与 Cluster 专项，新增 [RR-28 P1、RR-29/30 P2](../bug/REVIEW-2026-09-29-services-07.md)，均未修；真实 Redis/三 master Cluster 15 叶子中 9 正常控制通过、6 反例失败，四包268既有事件通过。[机制学习](IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md) · [复跑](evidence/service-review-20260929-07/README.md) · [最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)。原第五批4/4仍已关闭，HA/强杀/真实资金/容量未全验。
+
 [09-29 Service 第六轮](REVIEW-2026-09-29-services-06.md)：第五批 4/4 缺陷已修并验证，修后邻接范围无新增确认问题；[最新完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、[实际机制](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md#第五批修复后的实际实现)。10 域主链收口，容量/真实资源/HA/强杀/旧数据等专项未完全验证。[复跑与清单](evidence/service-review-20260929-06/README.md)。
 
 [09-29 Service 第五轮与阶段收口](REVIEW-2026-09-29-services-05.md)：源码 b336ce62；[10 域完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md)、100 路径逐项归类；[RR-25/26/27 与旧活动残余](../bug/REVIEW-2026-09-29-services-05.md)均未实施。新 42 次叶子执行，18 控制通过、24 反例预期失败、无 skip/build-fail；12 次生成检查通过。[学习](IMPLEMENTATION-SERVICE-BOUNDS-AND-RECOVERY-CLOSURE.md) · [复跑](evidence/service-review-20260929-05/README.md)。真实 allocator/HA/强杀/性能留专项，不计为完成。

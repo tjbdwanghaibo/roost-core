@@ -1,0 +1,109 @@
+{
+  "source_head": "1625fee0bf0884792acf8520fd5bb26183dd0b64",
+  "source_files": [
+    {
+      "path": "kit/service/platform/service.go",
+      "git_blob": "3d93dab374f2e196af55306425ea1b7230c9954a",
+      "sha256": "E0C61AFE276F1AA57EEFAD0B6292E01781705722F6A2AA0B956F41700B994C78"
+    },
+    {
+      "path": "kit/service/platform/server_run.go",
+      "git_blob": "64b2dc9cefaea67859dfdeb5a8a41238798d45ce",
+      "sha256": "072F4E429206E54D2295C1C1A4F86812B686EC2CB60A459B0D9BC608B04839C0"
+    },
+    {
+      "path": "kit/service/platform/redis_store.go",
+      "git_blob": "2d79973d7f73dd201db44db7b50b5303ee6ee709",
+      "sha256": "F5ACF96CAF5CDC06C485741D0E2B2049EA8A0AD6A508A1CD4E7694F304126447"
+    },
+    {
+      "path": "kit/service/platform/platform_mod.go",
+      "git_blob": "d43c8269207b8b135a7094cf35b79cd509f2f5ad",
+      "sha256": "5DFEF7056739B29A324E06695236774D39D025783E73C86014219DCCA658E05E"
+    },
+    {
+      "path": "kit/service/rank/rank_mod.go",
+      "git_blob": "9dfcce677f8e566c4c7d2940f9bba7684ada18ae",
+      "sha256": "08FE8AA88D16B714C18066085841E70635C11447965A9855F88BF2016284BA55"
+    },
+    {
+      "path": "kit/service/rank/redis_store.go",
+      "git_blob": "42239b9bc971d02e2d07b9f68ca802edd4312df3",
+      "sha256": "EB6A7DACB79C1DD18C4641CAFD6A9940A2B2588F0E407A511187DF723A05B1CE"
+    },
+    {
+      "path": "kit/mods/service_servicemods.go",
+      "git_blob": "09999b6f6dd25a6a40fc757cc18e4ab19b6a3497",
+      "sha256": "A51D490B5BE800F74597F4AB25D44F943ABE694B473479F3AA593AE02EFB26F7"
+    },
+    {
+      "path": "kit/redis/redis_mod.go",
+      "git_blob": "4e0d369c4ba823a920752b06244cd8aeb92141b4",
+      "sha256": "A5F8DA0505A89FEAF6CBBF9489CAC403C10094630EA5BCF99EDC2516111DFE17"
+    },
+    {
+      "path": "redis/config.go",
+      "git_blob": "189c922bd79183e7bd2bd3cae674a308d8f1979d",
+      "sha256": "A4D2AF919D97513B99DAE82815F9BEFC9C12B4B7E93D89F90CFF45D93005A423"
+    },
+    {
+      "path": "redis/driver/client.go",
+      "git_blob": "d63a21e40fe10d3610c1d1f9aff4c18c93e808f3",
+      "sha256": "BDFE65811948480D6297D8FD6E148CDA760B4B58F780B29DDD7962EE6C67712C"
+    },
+    {
+      "path": "versionstore/redis_store.go",
+      "git_blob": "13e956e1c75cecf13ac7c33f64923ef67c3a93a2",
+      "sha256": "54623002A57E5E6A96373CE1D3553C35BACB81242981702DAA8032656AA5B698"
+    },
+    {
+      "path": "service/match/queue_store.go",
+      "git_blob": "b1f2aa68a73260d51e4d5a564bff16f46a894817",
+      "sha256": "D719310EC36184F34D6870BBE4E72E8C05EAFFB53766EC23F73CBD04B3E4FE6A"
+    },
+    {
+      "path": "service/match/grouping.go",
+      "git_blob": "44514d7802e7041a7b2e1cb71664835a63e5c389",
+      "sha256": "E5375832EECE3B5B78A11A76C93DD04CF628F002795D1433E50C75B55DC3E6D7"
+    },
+    {
+      "path": "service/match/store.go",
+      "git_blob": "d9742a175b439e966b20f43bc25801c884e983aa",
+      "sha256": "F84CEB9BF1C2853E6BC3CC52DA0475C81D067A0549BF4DD668BEADFD9E97F41E"
+    },
+    {
+      "path": "service/match/types.go",
+      "git_blob": "36de1c4555a93e80f3f018b1dab080c3eca1427b",
+      "sha256": "D7A37AA7716C6BC9E3BEF2F7DFC62B73802C5A26A4F27C544E3F0B2A3CD3F27F"
+    },
+    {
+      "path": "service/match/redis_store.go",
+      "git_blob": "77b61a786212555bc2822277ec0196aa0e86b26d",
+      "sha256": "446645DAD3E214B0C28F253CF85EC0B17933F0AA2A5A441649C2145D2C7E4EC3"
+    },
+    {
+      "path": "kit/service/match/server_run.go",
+      "git_blob": "eb050342ce6183167a829f365165e32677d1d447",
+      "sha256": "D21656E209ABF9492494920631DE3131E8C998AA1CAC65703BB272C31374AC92"
+    }
+  ],
+  "evidence_files": [
+    {
+      "path": "match_test.go.txt",
+      "sha256": "F1338DEAA3FE0A837043982DF1E9614E352520A4DCBFA1275CF5D610A1C3CD31"
+    },
+    {
+      "path": "platform_test.go.txt",
+      "sha256": "6A971E0132A21E2319366F27BBE03CEEEB02334225B5E1056FE1FD467ED89E73"
+    },
+    {
+      "path": "rank_test.go.txt",
+      "sha256": "F6368578D75B456726B24A48BB4CA6D9BCF9B2BEFB0EF4C47B05BC012158F7CA"
+    },
+    {
+      "path": "Run-Repro.ps1",
+      "sha256": "8B9FF3AFEC62B7A281D6855BE737FC047F0245C2E5068CDDF19905EF6B22F08D"
+    }
+  ],
+  "limits": "Source-file SHA256 uses raw worktree bytes; Git blobs are canonical. No production changes in this review."
+}

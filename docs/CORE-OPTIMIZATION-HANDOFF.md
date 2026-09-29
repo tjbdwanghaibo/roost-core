@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**Service 第七轮 review（2026-09-29）**：[RR-28 P1 支付待办清理竞争、RR-29/30 P2 Cluster 配置准入](bug/REVIEW-2026-09-29-services-07.md)，均未修；[运行](review/REVIEW-2026-09-29-services-07.md)、[索引/Cluster 学习](review/IMPLEMENTATION-SERVICE-INDEX-MAINTENANCE-AND-CLUSTER.md)。真实 Redis/三 master Cluster 6 反例失败、9 控制通过，四包268既有事件通过。原第五批4/4保持关闭；本轮仅文档，不改下方性能专项验收，不代表HA/生产资金/容量已收敛。
+
 **Service 第五批实施与第六轮审查（2026-09-29）**：[RR-25/26/27、旧 Activity Opening 残余 4/4 修复](bugfix/SERVICE-BUGFIX-2026-09-29-05.md)，源码 4b0837d7；[邻接审查](review/REVIEW-2026-09-29-services-06.md)无新增确认缺陷，[10 域最新矩阵](review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)。16 包/830 事件回归、最终两模式各 27 叶子通过；Activity/Chat owner 升级、legacy 恢复与外部资源/HA/强杀/容量专项仍有边界。未发版，不改变下方性能专项验收；旧“未修”保留历史时点。
 
 **Service 第四轮 review（2026-09-29）**：[问题与交接](bug/REVIEW-2026-09-29-services-04.md)：RR-23 外部发货未知错误清除证明（P1）、RR-24 Platform 回包切片共享（Memory/P3），旧 Mail 删除残余另关联 RR-20260910-02。未修生产代码；[学习及恢复入口](review/IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md)、[运行/测试](review/REVIEW-2026-09-29-services-04.md)。本批不改变下方性能任务验收。
