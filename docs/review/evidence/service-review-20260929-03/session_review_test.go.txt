@@ -1,0 +1,39 @@
+package session
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+)
+
+func TestReview3ObserveConcurrentFinishReleases(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	h := newHarness(t, func(c *Config) {
+		c.Release = ReleaserFunc(func(context.Context, Run, Resource) error {
+			if calls.Add(1) == 1 {
+				close(started)
+				<-release
+			}
+			return nil
+		})
+	})
+	ctx := context.Background()
+	run := mustEnter(t, h, 1, "concurrent")
+	if _, e := h.service.Attach(ctx, 1, run.ID, scene("r")); e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan error, 1)
+	go func() { _, e := h.service.Finish(ctx, 1, run.ID, StateSucceeded, "done"); done <- e }()
+	<-started
+	_, secondErr := h.service.Finish(ctx, 1, run.ID, StateSucceeded, "done")
+	close(release)
+	firstErr := <-done
+	if firstErr != nil || secondErr != nil {
+		t.Fatal(firstErr, secondErr)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("observation changed: calls=%d", calls.Load())
+	}
+	t.Log("observation only: two concurrent releases; Releaser must dedupe run/resource, including concurrent invocations")
+}

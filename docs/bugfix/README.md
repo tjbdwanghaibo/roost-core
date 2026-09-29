@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[09-29 修复后第三轮 review](../review/REVIEW-2026-09-29-services-03.md)：`83c04243` 现有 service/versionstore 回归 16 包、759 测试/子测试事件全过；邻近新增 RR-19..22 尚未实施，详见[问题](../bug/REVIEW-2026-09-29-services-03.md)。不将原触发通过外推到全故障窗口。
+
 [09-29 Service 两轮修复总记录](SERVICE-BUGFIX-2026-09-29.md)：RR-20260929-01～18 + 旧正常 Finish ABA；含逐项 bugfix 链接、回归、API/存储升级限制与 roost-bugfix skill（未发版）。
 
 [RR-20260928-15](RR-20260928-15.md)：生成的 player TCP / scene 测试先等会话登记再推送或计数（未发版）。

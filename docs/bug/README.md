@@ -1,5 +1,16 @@
 # Roost Review 问题索引
 
+**09-29 第三轮新增、未实施**：[RR-20260929-19..22](REVIEW-2026-09-29-services-03.md)，3 P2、1 P3；[复现材料](../review/evidence/service-review-20260929-03/README.md)。旧 19 项已有回归在 `83c04243` 重跑通过，以下新触发单独登记，不混淆旧修复有效范围。
+
+| 编号 | 优先级 | 当前问题 |
+| --- | --- | --- |
+| [RR-20260929-19](REVIEW-2026-09-29-services-03.md#rr-20260929-19) | P2 | Account 初始 slot/角色/名字提交未知缺少恢复；Memory 与 Redis |
+| [RR-20260929-20](REVIEW-2026-09-29-services-03.md#rr-20260929-20) | P2 | Mail 旧 CancelClaim 解除新一次预约；Memory 与 Redis |
+| [RR-20260929-21](REVIEW-2026-09-29-services-03.md#rr-20260929-21) | P2 | Directory Cancel/Release 删除重建 ABA；四后端/操作场景 |
+| [RR-20260929-22](REVIEW-2026-09-29-services-03.md#rr-20260929-22) | P3 | Account 返回 Profile 切片改写 MemoryStore，Redis 对照通过 |
+
+过期未结算 mail 占容量、Session 并发释放回调作为设计/契约观察保留，未重复登记功能 bug。
+
 **2026-09-29 修复更新**：上两轮 RR-20260929-01～18 及旧 RR-20260909-02 正常 Finish ABA 共 19 项已实施并通过定向回归，尚未发版。逐项状态、实际验证和旧数据升级限制见 [修复总记录](../bugfix/SERVICE-BUGFIX-2026-09-29.md)。下方“未实施”是原 review 时点的历史结论。
 
 09-29 Service 第二轮：[8 个新增问题与实施方案](REVIEW-2026-09-29-services-02.md)（RR-11..18，6 P2、2 P3）· [复现](REPRO-2026-09-29-services-02.md)。另补旧 [RR-20260909-02 正常 Finish/真实 Redis ABA](REVIEW-2026-09-09-02.md#2026-09-29-normal-finish-aba)，不重复编号。均未在本轮修生产代码。

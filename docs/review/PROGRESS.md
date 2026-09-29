@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第三轮停点
+
+最新源码 `83c04243`，fetch 后未新增 main 源码；[运行记录](REVIEW-2026-09-29-services-03.md) · [问题交接](../bug/REVIEW-2026-09-29-services-03.md) · [实现学习](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md)。新增 **RR-20260929-19..22（3 P2、1 P3）**，尚未实施。旧 19 项的现有回归复跑通过，不代表各问题所有故障窗口已验收。
+
+| 范围（最近 SHA 83c04243） | 新增阅读与实际执行 | 状态 / 下轮入口 |
+| --- | --- | --- |
+| Account 建角 | Slots.Create / Roles.Create / Names.Commit 补偿；三写后错误 × Memory/Redis；对应三写前控制 | RR-19；继续持久 intent、崩溃、读回失败及补偿失败；旧 slot 尾提交修复保留 |
+| Mail 领取 | Reserve/Cancel 的 Token、Attempts、Deadline；旧取消 × 两后端；200 条过期 pending 容量及 Delete 后重试 | RR-20；容量为保护证明的观察；下一入口 Delete/Commit 与在途发奖交错 |
+| Directory | Cancel/Release → Store.Delete；四个删除重建交错、现有 DeleteIf 语义 | RR-21；优先原子身份删除；同 Owner 换 Token 待执行 |
+| 返回所有权 / 资源 | Account 两输出切片 × 两后端；Session 并发 Finish 回调观察 | RR-22 仅 Memory；真实 Releaser 并发幂等仍未测 |
+| 回归与证据 | 16 包通过、759 测试/子测试事件通过、0 测试 skip；新选定 25/25 叶子已执行，14 反例失败、11 对照/观察通过 | 不是整包/全框架正确率；真实 Broker、发奖、断网 HA、强杀、负载未测 |
+| 图谱 | roost-core 新 coverage generation 03:13:02Z 已发布；路径 metadata_changed，关键源码补证 | full 请求本身超时；不作全 service 穷尽图谱结论 |
+
+此前 10/10 服务域“主链有记录”的范围计数保留，不能解释为全文件或全场景审完。当前用户优先 service；后续按以上邻近未覆盖入口推进。用户说没有修复时跳过旧验收。下方是历史修复/审查时点。
+
 ## 2026-09-29 Service 修复停点
 
 基线 `f46db3e7`；RR-20260929-01～18 和旧 RR-20260909-02 正常 Finish ABA 共 **19 项实现完成并通过定向回归**。756 个测试/子测试通过，另补 3 个边界用例通过；全仓编译、定向 vet、12 次生成一致性检查通过。进度是所列问题的实现/验证状态，不是源码覆盖率或全故障交错完成率。

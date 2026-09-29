@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-29 Service 第三轮](REVIEW-2026-09-29-services-03.md)：基线 `83c04243`；新增 4 个确认问题（3 P2、1 P3）：建角未知提交、旧取消解除新预约、Directory 删除重建 ABA、Memory Profile 输出别名。[问题与实施交接](../bug/REVIEW-2026-09-29-services-03.md) · [复跑附件](evidence/service-review-20260929-03/README.md) · [实现学习](IMPLEMENTATION-SERVICE-COMPENSATION-AND-ATTEMPT-IDENTITY.md) · [进度](PROGRESS.md)。16 包已有回归通过；新增 25 个叶子场景已执行，未修生产代码。
+
 [09-29 Service 修复与接手](../bugfix/SERVICE-BUGFIX-2026-09-29.md)：两轮 18 项新问题 + 旧正常 Finish ABA 已实施；正式行为回归、Memory/真实 Redis、编译和生成检查完成。旧数据迁移、外部系统对账与未测窗口单独保留，未发版。修复流程见 [roost-bugfix](../agent-skills/roost-bugfix/SKILL.md)。下方为修复前历史 review。
 
 [09-29 Service 第二轮](REVIEW-2026-09-29-services-02.md)：基线 `e10dd3f1`，身份编码、迁移 lease、Attach 管理字段、提交未知和失败恢复；8 个新增已复现问题（6 P2、2 P3），另补旧 ABA 的真实 Redis 新触发，1 项完成重叠仅列观察。7 包原有 race/integration 全过，425 个测试/子测试无 skip。[问题交接](../bug/REVIEW-2026-09-29-services-02.md) · [复跑](../bug/REPRO-2026-09-29-services-02.md) · [机制](IMPLEMENTATION-SERVICE-STATE-AND-RECOVERY.md)。本轮索引调用超时，源码补证；仅文档。

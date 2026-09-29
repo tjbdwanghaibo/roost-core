@@ -1,0 +1,226 @@
+{
+  "project": "roost-core",
+  "metadata": {
+    "generation": "2026-09-29T03:13:02Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-29T03:13:03Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "paths": [
+    {
+      "path": "service/mail/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/mailbox.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/mail.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/mail_rpc_gen.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/mail_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/mail/claim_expiry_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/types.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/account_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/account_rpc.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/account/accounts_rpc_gen.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/directory/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/directory/directory.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/directory/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/session/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/session/admin.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/session/session_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "service/session/sweep_source.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/session/options.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/session/session_mod.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/session/server_run.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/platform/admin.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/platform/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/platform/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "versionstore/memory_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "versionstore/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "docs/history/ledger.md",
+      "status": "partial",
+      "freshness": "metadata_changed",
+      "coverage": [
+        {
+          "path": "docs/history/ledger.md",
+          "kind": "parse_partial",
+          "detail": "249-249,486-486",
+          "match": "exact",
+          "ranges": [
+            {
+              "start": 249,
+              "end": 249
+            },
+            {
+              "start": 486,
+              "end": 486
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "redis/driver/client.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "kit/service/directory/directory_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    },
+    {
+      "path": "versionstore/versionstore.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "coverage": []
+    }
+  ],
+  "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+}
