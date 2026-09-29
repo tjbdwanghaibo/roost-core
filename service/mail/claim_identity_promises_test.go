@@ -70,9 +70,8 @@ func TestEvictionKeepsTheClaimIdentityOfAClaimedMail(t *testing.T) {
 	}
 }
 
-// A mail that was never claimed is a different case: dropping it is what the
-// retention bound is for, and a later redelivery legitimately shows it again.
-func TestEvictionStillForgetsAMailThatWasNeverClaimed(t *testing.T) {
+// Deletion remains authoritative after display retention, even without a token.
+func TestEvictionPreservesUnclaimedDeletion(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -93,7 +92,7 @@ func TestEvictionStillForgetsAMailThatWasNeverClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, exists := stored.Value.Entries[envelope.ID]; exists {
-		t.Skip("the deleted entry was not evicted; nothing to assert")
+		t.Fatal("the deleted entry was not evicted")
 	}
 	if _, err := h.service.Delete(ctx, 1, "filler-0"); err != nil {
 		t.Fatal(err)
@@ -106,8 +105,8 @@ func TestEvictionStillForgetsAMailThatWasNeverClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, exists := stored.Value.Entries[envelope.ID]
-	if !exists || entry.Status != StatusUnread {
-		t.Fatalf("an unclaimed mail must be deliverable again as unread, got exists=%v entry=%+v", exists, entry)
+	if exists || !stored.Value.SettledClaims[envelope.ID].Deleted {
+		t.Fatalf("deleted identity was lost: exists=%v entry=%+v", exists, entry)
 	}
 }
 

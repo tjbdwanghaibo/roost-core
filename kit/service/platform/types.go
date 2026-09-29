@@ -70,7 +70,10 @@ const (
 )
 
 var (
-	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "platform: request is invalid", "")
+	// ErrDeliveryNotApplied is positive proof of no external effect. Other
+	// errors require reconciliation before retrying or settling an order.
+	ErrDeliveryNotApplied = errors.New("platform: delivery definitely not applied")
+	ErrRequestInvalid     = errcode.Define(CodeRequestInvalid, "platform: request is invalid", "")
 	// ErrSignatureInvalid reports that the payload's signature did not verify.
 	// It is deliberately indistinguishable to the caller from a malformed
 	// payload of the right shape: a provider integration that is misconfigured
@@ -190,8 +193,10 @@ const (
 	DeliveryReserved DeliveryState = "reserved"
 	// DeliveryDelivered is terminal and is what a replay is answered from.
 	DeliveryDelivered DeliveryState = "delivered"
-	// DeliveryExhausted means the attempt budget is spent. It is terminal and
-	// needs an operator: the player paid and did not receive the goods.
+	// DeliveryExhausted means the budget is spent or an external result needs
+	// reconciliation. PendingAttempts must be resolved before admin recovery.
+	// It is terminal for automatic delivery and
+	// needs an operator: the player paid and delivery is not confirmed.
 	DeliveryExhausted DeliveryState = "exhausted"
 	// DeliverySettled means a human resolved this order outside the service —
 	// refunded, or granted by hand. It is distinct from DeliveryDelivered on

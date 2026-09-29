@@ -121,7 +121,7 @@ func (deliverer *grantDeliverer) handle() (grantStore, string) {
 func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Order) error {
 	client, prefix := deliverer.handle()
 	if client == nil {
-		return fmt.Errorf("purchase delivery: not bound to a registry")
+		return fmt.Errorf("%w: purchase delivery: not bound to a registry", platform.ErrDeliveryNotApplied)
 	}
 	product, ok := purchase.Lookup(order.ProductID)
 	if !ok {
@@ -129,14 +129,14 @@ func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Ord
 		// the only honest answer: the order stays undelivered and visible,
 		// and someone has to either ship the product or settle the order by
 		// hand. Succeeding would close a paid order having granted nothing.
-		return fmt.Errorf("purchase delivery: order %s bought unknown product %q", order.OrderID, order.ProductID)
+		return fmt.Errorf("%w: purchase delivery: order %s bought unknown product %q", platform.ErrDeliveryNotApplied, order.OrderID, order.ProductID)
 	}
 	grant, err := purchase.Encode(purchase.Grant{
 		OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: product.ID,
 		ItemID: product.ItemID, Count: product.Count, PaidAtUnix: order.PaidAtUnix,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", platform.ErrDeliveryNotApplied, err)
 	}
 	if err := client.HSet(ctx, purchase.GrantsKey(prefix, order.PlayerID), order.OrderID, grant); err != nil {
 		return fmt.Errorf("purchase delivery: record grant %s: %w", order.OrderID, err)

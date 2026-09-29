@@ -1,5 +1,8 @@
 # Service 第四轮问题与实施交接（2026-09-29）
 
+**当前状态（09-29 后续实施）：RR-23/24 和旧 RR-10 未领取删除残余已实现并通过正式回归，见 [修复与兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。下方保留修前证据。**
+
+
 基线：单仓 Core `bdbb61bc4340c5c6261f746f882039e6cc4f3928`。新增 2 项：**RR-20260929-23（P1）、RR-20260929-24（P3）**；另补旧 RR-20260910-02 的未领取删除变体（P2），不重复编号。生产源码未修改。
 
 [复跑材料](../review/evidence/service-review-20260929-04/README.md) · [运行记录](../review/REVIEW-2026-09-29-services-04.md) · [机制和实施建议](../review/IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md)。新反例在 race 模式执行；Redis 是真实订单/邮箱后端，外部发奖使用受控 collaborator，不是生产支付或资产系统。

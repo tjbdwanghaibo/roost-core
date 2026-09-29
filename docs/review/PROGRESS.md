@@ -1,5 +1,10 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第四批 bugfix 完成
+
+RR-23/24、旧 RR-10 删除残余 3/3 实现并通过定向回归；16 包/801 测试及子测试 pass、0 测试 fail/skip；生成工程消费链及全仓编译通过。[升级与下一入口](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。随后继续 review 新范围，下方保留历史停点。
+
+
 ## 2026-09-29 Service 第四轮停点
 
 源码 `bdbb61bc`，fetch 后 origin/main 相同；[运行](REVIEW-2026-09-29-services-04.md) · [问题](../bug/REVIEW-2026-09-29-services-04.md) · [学习](IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md)。新增 **RR-23 P1、RR-24 P3**，旧 RR-20260910-02 追加未领取删除残余 P2，均未实施。上一轮四项当前源码/正式回归复核通过，不扩大为全故障窗口独立验收。

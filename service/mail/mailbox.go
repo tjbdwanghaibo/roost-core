@@ -121,6 +121,8 @@ func (e Entry) claimable(nowUnix int64) error {
 // SettledClaim is what remains of a claimed mail after its entry was evicted:
 // the token that was the delivery key, and when the entry went.
 type SettledClaim struct {
+	// Deleted preserves an unclaimed deletion after display retention.
+	Deleted       bool   `json:"deleted,omitempty"`
 	Token         string `json:"token"`
 	SettledAtUnix int64  `json:"settled_at_unix"`
 	// EnvelopeExpiresAtUnix is when the envelope this claim protects stops
@@ -181,12 +183,16 @@ func (m *Mailbox) setStatus(mailID string, next Status, nowUnix int64) (Entry, b
 // deliver records a mail as delivered to this mailbox, idempotently.
 func (m *Mailbox) deliver(mailID string, nowUnix int64) (Entry, bool) {
 	if settled, ok := m.settledClaim(mailID); ok {
+		status := StatusClaimed
+		if settled.Deleted {
+			status = StatusDeleted
+		}
 		// Already delivered and already claimed; the entry is gone only
 		// because retention dropped it. Recreating it as unread is what let a
 		// second token be minted for the same attachment, so this answers
 		// like any other redelivery of a mail already in the mailbox.
 		return Entry{
-			MailID: mailID, Status: StatusClaimed,
+			MailID: mailID, Status: status,
 			ClaimToken:      settled.Token,
 			DeliveredAtUnix: settled.SettledAtUnix,
 			UpdatedAtUnix:   settled.SettledAtUnix,
@@ -217,6 +223,7 @@ func (m *Mailbox) deliver(mailID string, nowUnix int64) (Entry, bool) {
 // that cannot be brought under the limit refuses the delivery instead, which
 // is an error the caller can act on rather than a loss nobody observes.
 func (m *Mailbox) evict(nowUnix int64) {
+	m.evictSettledClaims(nowUnix)
 	if len(m.Entries) <= MaxMailboxEntries {
 		return
 	}
@@ -237,17 +244,22 @@ func (m *Mailbox) evict(nowUnix int64) {
 			break
 		}
 		delete(m.Entries, entry.MailID)
-		if entry.ClaimToken != "" {
+		if entry.ClaimToken != "" || entry.Status == StatusDeleted {
 			// Keyed on the token rather than on Status: a claimed mail the
 			// player then deleted is evicted as StatusDeleted, and forgetting
 			// its claim there would reopen the same hole from the other side.
 			if m.SettledClaims == nil {
 				m.SettledClaims = make(map[string]SettledClaim)
 			}
+			expires := entry.ClaimEnvelopeExpiresAtUnix
+			if expires == 0 {
+				expires = entry.EnvelopeExpiresAtUnix
+			}
 			m.SettledClaims[entry.MailID] = SettledClaim{
+				Deleted:               entry.Status == StatusDeleted && entry.ClaimToken == "",
 				Token:                 entry.ClaimToken,
 				SettledAtUnix:         nowUnix,
-				EnvelopeExpiresAtUnix: entry.ClaimEnvelopeExpiresAtUnix,
+				EnvelopeExpiresAtUnix: expires,
 			}
 		}
 		m.Evicted++
@@ -282,7 +294,7 @@ func (m *Mailbox) evictSettledClaims(nowUnix int64) {
 	}
 	legacy := make([]string, 0, len(m.SettledClaims))
 	for mailID, settled := range m.SettledClaims {
-		if settled.EnvelopeExpiresAtUnix <= 0 {
+		if settled.EnvelopeExpiresAtUnix <= 0 && !settled.Deleted {
 			legacy = append(legacy, mailID)
 		}
 	}

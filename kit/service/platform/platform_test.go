@@ -51,10 +51,10 @@ func (d *recordingDeliverer) Deliver(_ context.Context, order Order) error {
 	defer d.mu.Unlock()
 	if remaining := d.failFor[order.OrderID]; remaining > 0 {
 		d.failFor[order.OrderID] = remaining - 1
-		return fmt.Errorf("game is down")
+		return fmt.Errorf("%w: game is down", ErrDeliveryNotApplied)
 	}
 	if d.failWith != nil {
-		return d.failWith
+		return fmt.Errorf("%w: %w", ErrDeliveryNotApplied, d.failWith)
 	}
 	d.grants[order.OrderID]++
 	return nil
@@ -678,7 +678,7 @@ func TestTwoRacingDeliveryAttemptsGrantOnce(t *testing.T) {
 				// The setup attempt fails, so the order lands in reserved
 				// deterministically and the race under test is the two
 				// attempts rather than whether the order exists yet.
-				return fmt.Errorf("not yet")
+				return fmt.Errorf("%w: not yet", ErrDeliveryNotApplied)
 			}
 			return nil
 		})

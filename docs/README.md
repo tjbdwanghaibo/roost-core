@@ -1,5 +1,8 @@
 # Roost 文档中心
 
+**09-29 Service 第四批修复完成**：[3 项实现与升级说明](bugfix/SERVICE-BUGFIX-2026-09-29-04.md)。未知发货保留证明、回包切片隔离、未领取删除身份保留；801 事件 service 回归通过，未发版。
+
+
 **09-29 Service 第四轮 review**：[运行与进度](review/REVIEW-2026-09-29-services-04.md) · [2 新问题及旧删除残余](bug/REVIEW-2026-09-29-services-04.md) · [外部结果/删除/恢复学习](review/IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md) · [复跑](review/evidence/service-review-20260929-04/README.md)。已补 Memory/Redis 证据，当前 794 事件基础回归全过；新增安全反例仍失败，生产源码未改。
 
 **09-29 最新实施**：[Service 第三轮 bugfix 与升级交接](bugfix/SERVICE-BUGFIX-2026-09-29-03.md)：RR-19～22 已修复，正式 Memory/Redis 回归通过；Mail 取消 API 新增 attempts、Directory/Slot 后端需保留 DeleteIf、旧状态需对账，未发版。下方历史 review 的“未实施”保留当时结论。

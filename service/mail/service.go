@@ -805,7 +805,10 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 		current.init(playerID)
 		entry, ok := current.entry(mailID)
 		if !ok {
-			if _, settled := current.settledClaim(mailID); settled {
+			if proof, settled := current.settledClaim(mailID); settled {
+				if proof.Deleted {
+					return current, false, fmt.Errorf("%w: mail %s was deleted", ErrMailMissing, mailID)
+				}
 				// The entry is gone because retention dropped it, but the
 				// claim it recorded is not: minting a second token here is
 				// exactly what let the same attachment be handed out twice
@@ -911,6 +914,9 @@ func (s *Service) CommitClaim(ctx context.Context, playerID int64, mailID string
 		entry, ok := current.entry(mailID)
 		if !ok {
 			if settled, ok := current.settledClaim(mailID); ok {
+				if settled.Deleted {
+					return current, false, fmt.Errorf("%w: mail %s was deleted", ErrMailMissing, mailID)
+				}
 				// A late retry of the commit that already succeeded. The
 				// tombstone kept the token, so this is still answerable as
 				// the replay it is instead of "never delivered".

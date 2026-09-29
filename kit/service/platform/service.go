@@ -31,10 +31,10 @@ type OrderStore = versionstore.Store[string, Order]
 // — which is what the replaced implementation did, having nothing to record —
 // means a crash between the two delivers the goods with no record that it did.
 //
-// An implementation may additionally dedupe on OrderID. It should not have to:
-// this package guarantees at-most-one successful delivery per order. But
-// belt-and-braces here is cheap, and the replaced implementation's ONLY
-// protection was a dedupe three hops away, so the habit is worth keeping.
+// Return ErrDeliveryNotApplied only with positive proof that no goods or grant
+// record was committed. Other errors retain the attempt for reconciliation.
+// Dedupe on OrderID is still required at the external effect boundary: operator
+// reconciliation and legacy pending attempts cannot establish exactly once.
 type Deliverer interface {
 	Deliver(ctx context.Context, order Order) error
 }
@@ -374,7 +374,7 @@ func (s *Service) HandleCallback(ctx context.Context, raw []byte, signature stri
 			return Receipt{}, fmt.Errorf("%w: order %s", ErrOrderMismatch, order.OrderID)
 		}
 		s.report.Replayed("callback")
-		receipt := Receipt{Order: existing.Value, Replayed: true,
+		receipt := Receipt{Order: existing.Value.clone(), Replayed: true,
 			Delivered: existing.Value.State == DeliveryDelivered}
 		if receipt.Delivered {
 			return receipt, nil
@@ -468,6 +468,13 @@ func (s *Service) AttemptDelivery(ctx context.Context, orderID string) (Receipt,
 			// flight. Both mean "not now", and both are the same refusal.
 			claimed, outcome = current.clone(), "held"
 			return current, false, nil
+		case len(current.PendingAttempts) > 0:
+			// An elapsed backoff does not prove an external call did not apply.
+			current.State = DeliveryExhausted
+			current.NextAttemptAtUnix = 0
+			current.UpdatedAtUnix = nowUnix
+			claimed, outcome, exhausted = current.clone(), "exhausted", true
+			return current, true, nil
 		case current.Attempts >= current.MaxAttempts:
 			// The budget was already spent; record the terminal state rather
 			// than leaving an order that looks retryable forever.
@@ -595,14 +602,16 @@ func (s *Service) recordFailure(ctx context.Context, orderID string, generation 
 			return current, false, nil
 		}
 		current = current.clone()
-		current.PendingAttempts = removeAttempt(current.PendingAttempts, generation)
+		if errors.Is(cause, ErrDeliveryNotApplied) {
+			current.PendingAttempts = removeAttempt(current.PendingAttempts, generation)
+		}
 		if current.State == DeliveryDelivered || generation != current.AttemptSequence {
 			result = current.clone()
 			return current, true, nil
 		}
 		current.LastError = truncate(cause.Error(), 512)
 		current.UpdatedAtUnix = nowUnix
-		if current.Attempts >= current.MaxAttempts {
+		if !errors.Is(cause, ErrDeliveryNotApplied) || current.Attempts >= current.MaxAttempts {
 			current.State = DeliveryExhausted
 			current.NextAttemptAtUnix = 0
 		}

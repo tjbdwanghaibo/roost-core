@@ -31,54 +31,31 @@ func (d *blockingDeliverer) Deliver(_ context.Context, _ Order) error {
 	return nil
 }
 
-// When two attempts both grant, the SECOND commit finds the order delivered
-// and must leave the recorded delivery time alone — "when was order X
-// delivered" is the first commit, not whichever retry finished last — and
-// must report the double grant as a conflict, because it is a bug worth
-// seeing rather than a routine replay.
-func TestALateAttemptDoesNotMoveTheDeliveryTimeAndIsCountedAsAConflict(t *testing.T) {
+// An outstanding external call remains proof even after its backoff expires.
+func TestElapsedBackoffDoesNotStartAnotherExternalGrant(t *testing.T) {
 	d := &blockingDeliverer{entered: make(chan struct{}), release: make(chan struct{})}
 	h := newHarness(t, func(cfg *Config) { cfg.Deliver = d })
 	ctx := context.Background()
 	raw, signature := callback(t, "order-1", 1001, 499)
-
-	var (
-		firstReceipt Receipt
-		firstErr     error
-		done         = make(chan struct{})
-	)
-	go func() {
-		defer close(done)
-		firstReceipt, firstErr = h.service.HandleCallback(ctx, raw, signature)
-	}()
+	done := make(chan error, 1)
+	go func() { _, err := h.service.HandleCallback(ctx, raw, signature); done <- err }()
 	<-d.entered
-
-	// The first attempt's backoff elapses while it is still delivering, so a
-	// retry is admitted and commits first.
 	h.clock.advance(time.Hour)
-	secondAt := h.clock.Now().Unix()
 	second, err := h.service.AttemptDelivery(ctx, "order-1")
-	if err != nil || !second.Delivered || second.Replayed {
-		t.Fatalf("the retry that overtook a slow delivery: err=%v delivered=%v replayed=%v", err, second.Delivered, second.Replayed)
-	}
 	close(d.release)
-	<-done
+	firstErr := <-done
+	if !errors.Is(err, ErrDeliveryExpired) || len(second.Order.PendingAttempts) != 1 {
+		t.Fatalf("pending call was retried: %+v %v", second, err)
+	}
 	if firstErr != nil {
-		t.Fatalf("the overtaken attempt failed: %v", firstErr)
+		t.Fatal(firstErr)
 	}
-	if !firstReceipt.Replayed || !firstReceipt.Delivered {
-		t.Fatalf("the overtaken attempt reported replayed=%v delivered=%v; it must read as a replay of the commit that beat it",
-			firstReceipt.Replayed, firstReceipt.Delivered)
+	stored, found, err := h.service.Order(ctx, "order-1")
+	if err != nil || !found || stored.State != DeliveryDelivered || len(stored.PendingAttempts) != 0 {
+		t.Fatalf("late authoritative success: %+v %v", stored, err)
 	}
-	order, _, err := h.service.Order(ctx, "order-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if order.DeliveredAtUnix != secondAt {
-		t.Fatalf("delivered_at moved to %d; the first commit was at %d", order.DeliveredAtUnix, secondAt)
-	}
-	if got := h.metrics.Count("conflict:deliver"); got != 1 {
-		t.Fatalf("a double grant reported %d conflicts; %s", got, h.metrics.Events())
+	if d.calls != 1 {
+		t.Fatalf("external calls=%d", d.calls)
 	}
 }
 
