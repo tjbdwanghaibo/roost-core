@@ -1,0 +1,205 @@
+{
+  "source_sha": "bdbb61bc4340c5c6261f746f882039e6cc4f3928",
+  "date": "2026-09-29",
+  "tier": "Verify",
+  "go_version": "go version go1.27.0 windows/amd64",
+  "baseline": {
+    "test_skip": 0,
+    "go_exit": 0,
+    "package_pass": 16,
+    "test_fail": 0,
+    "test_pass": 794
+  },
+  "prior_fixes_redis": {
+    "test_skip": 0,
+    "go_exit": 0,
+    "package_pass": 2,
+    "test_fail": 0,
+    "test_pass": 15
+  },
+  "runs": [
+    {
+      "backend": "memory",
+      "go_exit": 1,
+      "pass_events": 5,
+      "fail_events": 4,
+      "skip_events": 0,
+      "test_results": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/mail",
+          "Test": "TestReview4DeletedUnclaimedMailMustNotResurrect",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/mail",
+          "Test": "TestReview4ObserveDeleteInFlightCommitRetention",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_false",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_true",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4UnknownGrantMustBlockSettlement",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4UnknownGrantMustNotGrantAgain",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4KnownNoGrantControl",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4CallbackReceiptMustOwnPendingProof",
+          "Action": "fail"
+        }
+      ],
+      "outputs": [
+        {
+          "Test": "TestReview4DeletedUnclaimedMailMustNotResurrect",
+          "Output": "    review4_overlay_test.go:32: deleted mail revived after retention: token=\"token-1\" attachment=\"reward\" err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4ObserveDeleteInFlightCommitRetention",
+          "Output": "    review4_overlay_test.go:47: deleted in-flight proof: Commit before eviction=mail: mail not found: mail mail-1 was deleted; after eviction=claimed; no external asset service invoked\n"
+        },
+        {
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_true",
+          "Output": "    review4_overlay_test.go:52: unknown Commit recovered through Ticket.MatchID -> Match; direct replay is a conflict\n"
+        },
+        {
+          "Test": "TestReview4UnknownGrantMustBlockSettlement",
+          "Output": "    review4_overlay_test.go:47: external grant=1 timeout=platform: delivery attempts are exhausted: order paid after 1 attempts: context deadline exceeded pending=[] state=exhausted; refund admitted: state=settled err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4UnknownGrantMustNotGrantAgain",
+          "Output": "    review4_overlay_test.go:58: lost external grant reply caused 2 grants; receipt={Order:{OrderID:paid PlayerID:1 Channel:store ProductID:gems-100 AmountMinor:100 Currency:USD PayloadDigest:44af1006b4b0c78534f569f37790afd7186ee280f44ab4067be677ac05077f65 State:delivered Attempts:2 AttemptSequence:2 PendingAttempts:[] MaxAttempts:2 NextAttemptAtUnix:0 LastError: PaidAtUnix:1700000000 CreatedAtUnix:1700000000 DeliveredAtUnix:1700000006 UpdatedAtUnix:1700000006 Reopens:0 AdminNote: AdminActionAtUnix:0} Replayed:false Delivered:true} err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4CallbackReceiptMustOwnPendingProof",
+          "Output": "    review4_overlay_test.go:86: receipt changed authoritative pending proof without CAS: before=1 after=[101] version=2/2\n"
+        },
+        {
+          "Test": "TestReview4CallbackReceiptMustOwnPendingProof",
+          "Output": "    review4_overlay_test.go:78: first callback completion=platform: conflict: stale delivery completion\n"
+        }
+      ]
+    },
+    {
+      "backend": "redis",
+      "go_exit": 1,
+      "pass_events": 6,
+      "fail_events": 3,
+      "skip_events": 0,
+      "test_results": [
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4UnknownGrantMustBlockSettlement",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4UnknownGrantMustNotGrantAgain",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4KnownNoGrantControl",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/kit/service/platform",
+          "Test": "TestReview4CallbackReceiptMustOwnPendingProof",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/mail",
+          "Test": "TestReview4DeletedUnclaimedMailMustNotResurrect",
+          "Action": "fail"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_false",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_true",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/match",
+          "Test": "TestReview4MatchUnknownCommitRecovery",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/tjbdwanghaibo/roost-core/service/mail",
+          "Test": "TestReview4ObserveDeleteInFlightCommitRetention",
+          "Action": "pass"
+        }
+      ],
+      "outputs": [
+        {
+          "Test": "TestReview4UnknownGrantMustBlockSettlement",
+          "Output": "    review4_overlay_test.go:47: external grant=1 timeout=platform: delivery attempts are exhausted: order paid after 1 attempts: context deadline exceeded pending=[] state=exhausted; refund admitted: state=settled err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4UnknownGrantMustNotGrantAgain",
+          "Output": "    review4_overlay_test.go:58: lost external grant reply caused 2 grants; receipt={Order:{OrderID:paid PlayerID:1 Channel:store ProductID:gems-100 AmountMinor:100 Currency:USD PayloadDigest:44af1006b4b0c78534f569f37790afd7186ee280f44ab4067be677ac05077f65 State:delivered Attempts:2 AttemptSequence:2 PendingAttempts:[] MaxAttempts:2 NextAttemptAtUnix:0 LastError: PaidAtUnix:1700000000 CreatedAtUnix:1700000000 DeliveredAtUnix:1700000006 UpdatedAtUnix:1700000006 Reopens:0 AdminNote: AdminActionAtUnix:0} Replayed:false Delivered:true} err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4CallbackReceiptMustOwnPendingProof",
+          "Output": "    review4_overlay_test.go:78: first callback completion=<nil>\n"
+        },
+        {
+          "Test": "TestReview4DeletedUnclaimedMailMustNotResurrect",
+          "Output": "    review4_overlay_test.go:32: deleted mail revived after retention: token=\"token-1\" attachment=\"reward\" err=<nil>\n"
+        },
+        {
+          "Test": "TestReview4MatchUnknownCommitRecovery/after_write_true",
+          "Output": "    review4_overlay_test.go:52: unknown Commit recovered through Ticket.MatchID -> Match; direct replay is a conflict\n"
+        },
+        {
+          "Test": "TestReview4ObserveDeleteInFlightCommitRetention",
+          "Output": "    review4_overlay_test.go:47: deleted in-flight proof: Commit before eviction=mail: mail not found: mail mail-1 was deleted; after eviction=claimed; no external asset service invoked\n"
+        }
+      ]
+    }
+  ],
+  "evidence_hashes": [
+    {
+      "path": "platform_review_test.go.txt",
+      "sha256": "7DA3B3A50873F97BEECF2A797F72E3A96EBB56107D3C4D469BA49FCBB0E478F9"
+    },
+    {
+      "path": "mail_review_test.go.txt",
+      "sha256": "1BB5FC2F71BED03B9F75B199E4E5BABC7BF6C0BC95F580E8779C75657E0959CE"
+    },
+    {
+      "path": "match_review_test.go.txt",
+      "sha256": "5B67272687E54B1870BFCF04733413BA804CD0B628022FE308591597799F3292"
+    },
+    {
+      "path": "Run-Repro.ps1",
+      "sha256": "6FF1ADF92FCDDFF1BC3485E330DB0A9A14F4A04DF943D0267F3405B70C6CF4C0"
+    }
+  ],
+  "hash_note": "SHA256 records raw evidence worktree bytes at execution time; Git checkout may convert LF/CRLF."
+}

@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[09-29 Service 第四轮复核](../review/REVIEW-2026-09-29-services-04.md)：`bdbb61bc` 的 RR-19～22 当前实现与现有回归通过（16 包/794 事件；另补 Redis Account/Mail 15 事件），未外推全部交错。新增 RR-23/24 和旧 Mail 删除残余另见[问题](../bug/REVIEW-2026-09-29-services-04.md)，未实施。
+
 [09-29 第三轮 Service 修复](SERVICE-BUGFIX-2026-09-29-03.md)：[RR-19](RR-20260929-19.md)、[RR-20](RR-20260929-20.md)、[RR-21](RR-20260929-21.md)、[RR-22](RR-20260929-22.md) 已实施；持久建角计划、预约代次/生成消费者、原子身份删除和返回所有权。Memory/Redis、16 包/794 测试事件通过，Go API/旧数据边界已记录，未发版。下方是此前时点的记录。
 
 [09-29 修复后第三轮 review](../review/REVIEW-2026-09-29-services-03.md)：`83c04243` 现有 service/versionstore 回归 16 包、759 测试/子测试事件全过；邻近新增 RR-19..22 尚未实施，详见[问题](../bug/REVIEW-2026-09-29-services-03.md)。不将原触发通过外推到全故障窗口。

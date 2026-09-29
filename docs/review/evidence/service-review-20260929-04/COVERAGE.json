@@ -1,0 +1,389 @@
+{
+  "tier": "Verify",
+  "source_sha": "bdbb61bc4340c5c6261f746f882039e6cc4f3928",
+  "project": "roost-core",
+  "index_request": "full RPC timed out after 300s; later metadata published new generation",
+  "metadata": {
+    "generation": "2026-09-29T05:34:58Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-29T05:35:00Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "scopes": [
+    {
+      "requested_scope": "service/mail",
+      "scope": "service/mail",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "service/session",
+      "scope": "service/session",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "service/match",
+      "scope": "service/match",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "kit/service/platform",
+      "scope": "kit/service/platform",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    }
+  ],
+  "paths": [
+    {
+      "requested_path": "service/mail/service.go",
+      "path": "service/mail/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/mail/mailbox.go",
+      "path": "service/mail/mailbox.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/mail/store.go",
+      "path": "service/mail/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/mail/mail_test.go",
+      "path": "service/mail/mail_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/mail/rr_20260929_round3_test.go",
+      "path": "service/mail/rr_20260929_round3_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/mail/redis_store.go",
+      "path": "service/mail/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/service.go",
+      "path": "kit/service/platform/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/admin.go",
+      "path": "kit/service/platform/admin.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/types.go",
+      "path": "kit/service/platform/types.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/redis_store.go",
+      "path": "kit/service/platform/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/platform_mod.go",
+      "path": "kit/service/platform/platform_mod.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/server.go",
+      "path": "kit/service/platform/server.go",
+      "status": "no_recorded_issue",
+      "freshness": "missing",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/platform_test.go",
+      "path": "kit/service/platform/platform_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/platform/bugfix_reconciliation_test.go",
+      "path": "kit/service/platform/bugfix_reconciliation_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "demo/internal/service/platform/collaborators.go.tmpl",
+      "path": "demo/internal/service/platform/collaborators.go.tmpl",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "demo/internal/service/session/collaborators.go.tmpl",
+      "path": "demo/internal/service/session/collaborators.go.tmpl",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/session/service.go",
+      "path": "service/session/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/session/session_test.go",
+      "path": "service/session/session_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/session/rr_20260929_round2_test.go",
+      "path": "service/session/rr_20260929_round2_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/queue_store.go",
+      "path": "service/match/queue_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/grouping.go",
+      "path": "service/match/grouping.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/store.go",
+      "path": "service/match/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/types.go",
+      "path": "service/match/types.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/match_test.go",
+      "path": "service/match/match_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "service/match/redis_store.go",
+      "path": "service/match/redis_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "versionstore/store.go",
+      "path": "versionstore/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "missing",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/account/create_role.go",
+      "path": "kit/service/account/create_role.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "docs/history/ledger.md",
+      "path": "docs/history/ledger.md",
+      "status": "partial",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": [
+        {
+          "path": "docs/history/ledger.md",
+          "kind": "parse_partial",
+          "detail": "249-249,486-486",
+          "match": "exact",
+          "ranges": [
+            {
+              "start": 249,
+              "end": 249
+            },
+            {
+              "start": 486,
+              "end": 486
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "requested_path": "kit/service/platform/server_run.go",
+      "path": "kit/service/platform/server_run.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "versionstore/versionstore.go",
+      "path": "versionstore/versionstore.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "versionstore/memory.go",
+      "path": "versionstore/memory.go",
+      "status": "no_recorded_issue",
+      "freshness": "missing",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/account/service.go",
+      "path": "kit/service/account/service.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/account/types.go",
+      "path": "kit/service/account/types.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/account/rr_20260929_round3_test.go",
+      "path": "kit/service/account/rr_20260929_round3_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/directory/store.go",
+      "path": "kit/service/directory/store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/service/directory/rr_20260929_round3_test.go",
+      "path": "kit/service/directory/rr_20260929_round3_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "docs/bug/REVIEW-2026-09-10-02.md",
+      "path": "docs/bug/REVIEW-2026-09-10-02.md",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "docs/bugfix/RR-20260929-01.md",
+      "path": "docs/bugfix/RR-20260929-01.md",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "versionstore/memory_store.go",
+      "path": "versionstore/memory_store.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    }
+  ],
+  "limitations": [
+    "metadata_changed entries read at current source; no completeness claim",
+    "missing requests kit/service/platform/server.go, versionstore/store.go, versionstore/memory.go resolved to server_run.go, versionstore.go, memory_store.go; kit/service/mail/service.go is absent (alias only)",
+    "ledger parse_partial 249 and 486 read directly",
+    "Match receiver methods and HandleCallback missing in search; interface trace insufficient, direct source used",
+    "spatial.Add, policy.Join and log.Errorf heuristic edges are not relied on"
+  ]
+}

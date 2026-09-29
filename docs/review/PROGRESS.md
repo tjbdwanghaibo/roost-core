@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+## 2026-09-29 Service 第四轮停点
+
+源码 `bdbb61bc`，fetch 后 origin/main 相同；[运行](REVIEW-2026-09-29-services-04.md) · [问题](../bug/REVIEW-2026-09-29-services-04.md) · [学习](IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md)。新增 **RR-23 P1、RR-24 P3**，旧 RR-20260910-02 追加未领取删除残余 P2，均未实施。上一轮四项当前源码/正式回归复核通过，不扩大为全故障窗口独立验收。
+
+| 域（本轮 SHA bdbb61bc） | 已读/执行与当前状态 | 下轮未完成入口 |
+| --- | --- | --- |
+| Platform | recordFailure/admin/回调输出/Mod/index/生成发奖；超时退款和重复发货 × 两后端；输出别名 Memory FAIL/Redis PASS；RR-23/24 | 外部结果分类与收据；真实 purchase grant 消费及进程重建 |
+| Mail | Delete/Commit/evict/Deliver/Reserve；删除复活 × 两后端；在途 Commit 淘汰前后观察；旧 RR-10 残余 | 有效删除证明及容量；在途删除业务契约、实际奖励回执 |
+| Match | 单 queue CAS、ticket/match 读回、分组、expiry；写前/写后错误 × 两后端共 4 叶子 PASS | 正式 matchmaker → 房间资源幂等分配；历史容量与长期公平性 |
+| Session | Finish/Release/markReleased/claim 和 demo collaborator 精读；已有回归复跑 | 实际 allocator 缺证据；不能称 double-free 已确认 |
+| 证据 | 新选定 16/16 叶子执行，7 安全反例 FAIL/9 对照观察 PASS；现有 16 包/794 事件全过；补 Redis 2 包/15 事件全过 | 未跑真实 Broker/资产/HA/断网/强杀/负载；不是代码审完百分比 |
+| 图谱 | 新 generation 05:34:58Z 发布，full RPC 本身超时；search/双向 trace/snippet/coverage 后当前源码补证 | metadata_changed、方法遗漏与错边限制保留；无全 service 完整性声明 |
+
+既有 10/10 服务域主链有记录的范围数不变。本轮向四域邻近路径推进，不回头重复主链；用户声明未修复时跳过旧验收。下方完整保留第三轮修复与历史停点。
+
 ## 2026-09-29 Service 第三轮 bugfix 停点
 
 基线 `23f92d73`，本批 RR-20260929-19～22 **4/4 已实施并通过原触发回归**；[逐项实现、兼容与验证](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)。16 个包通过、794 测试/子测试事件通过、无测试级 skip；全仓编译、定向 vet、Mail/Account 生成检查通过。新框架场景不以该数字计算源码覆盖率。

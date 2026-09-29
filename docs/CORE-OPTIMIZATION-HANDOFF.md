@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**Service 第四轮 review（2026-09-29）**：[问题与交接](bug/REVIEW-2026-09-29-services-04.md)：RR-23 外部发货未知错误清除证明（P1）、RR-24 Platform 回包切片共享（Memory/P3），旧 Mail 删除残余另关联 RR-20260910-02。未修生产代码；[学习及恢复入口](review/IMPLEMENTATION-SERVICE-EXTERNAL-OUTCOME-AND-DISPOSAL.md)、[运行/测试](review/REVIEW-2026-09-29-services-04.md)。本批不改变下方性能任务验收。
+
 **Service 第三轮实施（2026-09-29）**：[RR-20260929-19～22 修复与兼容](bugfix/SERVICE-BUGFIX-2026-09-29-03.md)已完成：建角持久恢复计划、Mail 取消代次/生成消费者、Directory 原子身份删除、Profile 输出隔离；16 包、794 测试事件通过，未发版。此批不改变下方性能任务验收；Mail API/自定义 store 与旧数据对账按新交接执行。
 
 **Service 实施交接（2026-09-29）**：[两轮 18 项新问题及旧正常 Finish ABA 修复](bugfix/SERVICE-BUGFIX-2026-09-29.md)已完成定向回归，未发版；新增 [roost-bugfix](agent-skills/roost-bugfix/SKILL.md)。这是 service 状态/恢复的独立批次，不改下方既有性能任务的验收结论。

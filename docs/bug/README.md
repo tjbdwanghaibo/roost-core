@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**09-29 Service 第四轮**：[问题与交接](REVIEW-2026-09-29-services-04.md)：**RR-20260929-23 P1** 外部发货未知错误清除 pending、允许再发货/结算；**RR-20260929-24 P3** Platform 回包切片共享（仅 Memory）。另补 **RR-20260910-02 P2** 未领取直接删除后重投复活，不另编号。均未修；[Memory/Redis 反例及对照](../review/evidence/service-review-20260929-04/README.md)。旧 RR-19～22 当前源码核对与现有回归通过，新反例独立登记。
+
 **09-29 最新 bugfix**：[RR-20260929-19～22 已实施并验证](../bugfix/SERVICE-BUGFIX-2026-09-29-03.md)：建角持久计划恢复、Mail 取消代次、Directory 身份删除、Profile 输出所有权；794 测试/子测试事件通过，未发版。下方“第三轮新增、未实施”等描述保留原 review 时点，不代表当前状态。
 
 **09-29 第三轮新增、未实施**：[RR-20260929-19..22](REVIEW-2026-09-29-services-03.md)，3 P2、1 P3；[复现材料](../review/evidence/service-review-20260929-03/README.md)。旧 19 项已有回归在 `83c04243` 重跑通过，以下新触发单独登记，不混淆旧修复有效范围。
