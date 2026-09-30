@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-30 问题存档](ARCHIVE-2026-09-30.md)：v1.17.0 之后两条工作线（A 线 RR 104 条全部已修复；B 线 38 条，未修 RR-20260930-04/05）逐编号状态、OPEN-ITEMS / REMAINING 各条去向、仍开放事项（P0：main 的 ci 与 framework-compat 为红）、证据索引与不一致清单，换人接手先读它。C01 24 小时长稳改由 fable 执行：[C01-RUNBOOK](C01-RUNBOOK-2026-09-30.md)。
+
 [09-30 Codegen 第二轮](REVIEW-2026-09-30-codegen-02.md)：[RR-01/02 原触发修复](../bugfix/RR-20260930-01.md)并核对 Protocol 上层提交；[新 RR-04/05 Entity/Nest 退役旧文件](../bug/REVIEW-2026-09-30-codegen-02.md)只记录未实施。[Protocol 修复](../bugfix/RR-20260930-02.md) · [复跑](evidence/codegen-review-20260930-02/README.md) · [机制更新](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [进度](PROGRESS.md)。
 
 [09-30 Codegen 第一轮](REVIEW-2026-09-30-codegen-01.md)：当前生成器在 Core `codegen/`；审查暂存/提交、servicerpc、protocol 与 DAO 退役对照。确认两个未修 P2：RPC 标记删除后 `-check` 假通过、协议定义清空后旧产物保留。[问题/实施交接](../bug/REVIEW-2026-09-30-codegen-01.md) · [机制学习](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [复现](evidence/codegen-review-20260930-01/README.md) · [进度](PROGRESS.md)。
