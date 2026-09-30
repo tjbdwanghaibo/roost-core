@@ -103,6 +103,7 @@ type sceneClient struct {
 	mu         sync.Mutex
 	kinds      []frame.Kind
 	removes    int
+	creates    int
 }
 
 func dialScenePlayer(t *testing.T, addr string, playerID int64, reading bool) *sceneClient {
@@ -152,12 +153,23 @@ func (client *sceneClient) read() {
 		client.mu.Lock()
 		client.kinds = append(client.kinds, decoded.Kind)
 		for _, object := range decoded.Objects {
-			if object.Operation == frame.ObjectRemove {
+			switch object.Operation {
+			case frame.ObjectRemove:
 				client.removes++
+			case frame.ObjectCreate:
+				client.creates++
 			}
 		}
 		client.mu.Unlock()
 	}
+}
+
+// created reports how many object creates the client has seen in total (a
+// full snapshot's objects included); unlike take it forgets nothing.
+func (client *sceneClient) created() int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.creates
 }
 
 // take reports the frames received so far (full, delta) and the removes, and
@@ -366,5 +378,180 @@ func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
 	}
 	if got := transport.ActiveSessions(stalledID); got != 0 {
 		t.Errorf("the stalled player still has %d registered connections", got)
+	}
+}
+
+// RR-20260926-40 on the real transport (B27 第 3 批): a player logs in again
+// while their first connection is still alive and reading. The second
+// EnterGame resyncs the replication session, so every connection of the
+// player gets a full snapshot and both keep receiving deltas; the mover is
+// never told the player left. When the FIRST connection then closes, the
+// player is still connected (the second one is up), so the scene keeps them
+// and the surviving connection keeps getting deltas — no remove, no reset.
+func TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reID = int64(9871), int64(9872)
+	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	first := dialScenePlayer(t, addr, reID, true)
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, reID, 1)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+
+	second := dialScenePlayer(t, addr, reID, true) // logs in again; the first connection stays up
+	waitActiveSessions(t, transport, reID, 2)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	time.Sleep(100 * time.Millisecond)
+	first.take()
+	second.take()
+	moverClient.take()
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
+	update := func(rounds int) {
+		for range rounds {
+			if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 10); err != nil {
+				t.Fatal(err)
+			}
+			_ = scene.Flush(ctx)
+			time.Sleep(60 * time.Millisecond)
+		}
+	}
+	update(4)
+	firstFull, firstDelta, _ := first.take()
+	secondFull, secondDelta, _ := second.take()
+	_, _, moverRemoves := moverClient.take()
+	t.Logf("both connections live: first full=%d delta=%d, second full=%d delta=%d, removes seen by the mover=%d, members=%d",
+		firstFull, firstDelta, secondFull, secondDelta, moverRemoves, scene.Members())
+	if firstDelta == 0 || secondDelta == 0 {
+		t.Errorf("a live connection of the player received no delta: first=%d second=%d", firstDelta, secondDelta)
+	}
+	if moverRemoves != 0 || scene.Members() != 2 {
+		t.Errorf("logging in again on a second connection removed the player: removes=%d members=%d", moverRemoves, scene.Members())
+	}
+
+	_ = first.connection.Close() // the old connection goes away; the player is still here
+	waitActiveSessions(t, transport, reID, 1)
+	time.Sleep(150 * time.Millisecond) // the session-close settle
+	second.take()
+	moverClient.take()
+	update(4)
+	full, delta, _ := second.take()
+	_, _, moverRemoves = moverClient.take()
+	t.Logf("after the first connection closed: second full=%d delta=%d, removes seen by the mover=%d, members=%d connections=%d",
+		full, delta, moverRemoves, scene.Members(), transport.ActiveSessions(reID))
+	if delta == 0 {
+		t.Error("the surviving connection received no delta after the old one closed")
+	}
+	if full != 0 {
+		t.Errorf("the surviving connection was reset with %d full snapshots when the old connection closed", full)
+	}
+	if moverRemoves != 0 || scene.Members() != 2 {
+		t.Errorf("closing the old connection removed a player who still has one: removes=%d members=%d", moverRemoves, scene.Members())
+	}
+}
+
+// RR-20260926-55 on the real transport (B27 第 3 批): the player's connection
+// closes and a new one is dialed, authenticated and joined at once —
+// inside one tick when the machine is fast enough, after the leave settled
+// when it is not (the transport reports the close from its read loop, the
+// scene settles it on its own goroutine). Whichever way a round lands, the
+// new connection must end up with its own subject replicated (one full
+// snapshot), the player must be in the scene, and the mover must see the
+// player present: every remove it was shown is followed by a create. Ten
+// rounds, so both orderings get their chance.
+func TestADisconnectAndReconnectInsideOneTickEndsWithTheNewConnectionReplicated(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reID = int64(9881), int64(9882)
+	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	current := dialScenePlayer(t, addr, reID, true)
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, reID, 1)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	time.Sleep(100 * time.Millisecond)
+	moverClient.take()
+	createsBefore := moverClient.created()
+
+	const rounds = 10
+	joinErrors := 0
+	for round := range rounds {
+		_ = current.connection.Close()
+		fresh := dialScenePlayer(t, addr, reID, true)
+		// The old connection may still be registered for a moment (the
+		// transport learns of the close from its read loop), and the fresh
+		// one is registered after its ack: wait for exactly the fresh one.
+		waitActiveSessions(t, transport, reID, 1)
+		if err := scene.Join(ctx, re, spatial.Point{X: 510, Y: 500}); err != nil {
+			// RR-20260926-40 的已知边界：同一 tick 内 Leave 后立刻 Join 可能撞上
+			// retiring。这里只记数，最后一起判断。
+			joinErrors++
+			t.Logf("round %d: join refused: %v", round, err)
+		} else if err := scene.Ready(reID); err != nil {
+			t.Fatalf("round %d: ready: %v", round, err)
+		}
+		_ = scene.Flush(ctx)
+		deadline := time.Now().Add(2 * time.Second)
+		full, delta := 0, 0
+		for time.Now().Before(deadline) {
+			full, delta, _ = fresh.take()
+			if full > 0 {
+				break
+			}
+			_ = scene.Flush(ctx)
+			time.Sleep(5 * time.Millisecond)
+		}
+		if full == 0 {
+			t.Fatalf("round %d: the new connection never received its full snapshot (delta=%d members=%d)", round, delta, scene.Members())
+		}
+		current = fresh
+	}
+	time.Sleep(150 * time.Millisecond)
+	_ = scene.Flush(ctx)
+	time.Sleep(50 * time.Millisecond)
+	_, _, removes := moverClient.take()
+	creates := moverClient.created() - createsBefore
+	t.Logf("rounds=%d joinErrors=%d members=%d removes seen by the mover=%d creates seen by the mover=%d", rounds, joinErrors, scene.Members(), removes, creates)
+	if joinErrors != 0 {
+		t.Errorf("%d of %d immediate rejoins were refused", joinErrors, rounds)
+	}
+	if scene.Members() != 2 {
+		t.Errorf("members=%d after %d reconnects, want 2", scene.Members(), rounds)
+	}
+	if creates < removes {
+		t.Errorf("the mover was shown %d removes but only %d creates: the reconnected player is missing from its view", removes, creates)
 	}
 }
