@@ -1,0 +1,110 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
+)
+
+type review12FlakyClaims struct {
+	ClaimStore
+	failed bool
+}
+
+func (s *review12FlakyClaims) Get(ctx context.Context, owner int64) (versionstore.Versioned[Claim], bool, error) {
+	if owner == 1 && !s.failed {
+		s.failed = true
+		return versionstore.Versioned[Claim]{}, false, errors.New("temporary claim read failure")
+	}
+	return s.ClaimStore.Get(ctx, owner)
+}
+
+// 250 durable expired owners span three 100-entry pages. One failed read
+// must remain retryable while the other 249 make progress; the supplied
+// source rotates back to the first page on the fourth tick.
+func TestReview12SessionRotatingBacklogWithOneFailure(t *testing.T) {
+	client, _ := review12Client(t, "standalone")
+	defer client.Close()
+	prefix := fmt.Sprintf("{review12-backlog-%d}", time.Now().UnixNano())
+	stores, err := NewRedisStores(client, RedisConfig{Prefix: prefix, RequestTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Unix(1790700000, 0)
+	seq, cursor := 0, 0
+	owners := make([]int64, 250)
+	for i := range owners {
+		owners[i] = int64(i + 1)
+	}
+	released := map[string]int{}
+	flaky := &review12FlakyClaims{ClaimStore: stores.Claims}
+	service, err := New(Config{Runs: stores.Runs, Claims: flaky, Requests: stores.Requests,
+		TTL: time.Minute, Now: func() time.Time { return clock },
+		NewRunID: func() (string, error) { seq++; return fmt.Sprintf("run-%d", seq), nil },
+		Owners: OwnerSourceFunc(func(_ context.Context, limit int) ([]int64, error) {
+			if cursor >= len(owners) {
+				cursor = 0
+			}
+			end := cursor + limit
+			if end > len(owners) {
+				end = len(owners)
+			}
+			page := append([]int64(nil), owners[cursor:end]...)
+			cursor = end
+			return page, nil
+		}),
+		Release: ReleaserFunc(func(_ context.Context, _ Run, r Resource) error { released[r.ID]++; return nil }),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	runIDs := make([]string, len(owners))
+	for i, owner := range owners {
+		run, err := service.Enter(ctx, owner, EnterRequest{Kind: "dungeon", RequestID: fmt.Sprintf("backlog-%d", owner)})
+		if err != nil {
+			t.Fatalf("seed Enter owner=%d: %v", owner, err)
+		}
+		runIDs[i] = run.ID
+		if _, err = service.Attach(ctx, owner, run.ID, Resource{Kind: "scene", ID: fmt.Sprintf("scene-%d", owner)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock = clock.Add(2 * time.Minute)
+	want := []int{99, 100, 50, 1}
+	for turn, count := range want {
+		resolved, err := service.SweepPending(ctx, 100)
+		if turn == 0 {
+			if err == nil || !strings.Contains(err.Error(), "temporary claim read failure") {
+				t.Fatalf("missing first page error: %v", err)
+			}
+		} else if err != nil {
+			t.Fatalf("turn %d: %v", turn, err)
+		}
+		if len(resolved) != count {
+			t.Fatalf("turn %d resolved=%d want=%d", turn, len(resolved), count)
+		}
+		t.Logf("PAGE turn=%d resolved=%d cumulative=%d", turn+1, len(resolved), len(released))
+	}
+	for i, owner := range owners {
+		stored, found, err := stores.Runs.Get(ctx, runIDs[i])
+		if err != nil || !found || stored.Value.State != StateExpired || len(stored.Value.Pending()) != 0 {
+			t.Fatalf("owner=%d final state=%q pending=%d err=%v", owner, stored.Value.State, len(stored.Value.Pending()), err)
+		}
+		_, found, err = stores.Claims.Get(ctx, owner)
+		if err != nil || found {
+			t.Fatalf("owner=%d claim remains=%v err=%v", owner, found, err)
+		}
+		key := fmt.Sprintf("scene-%d", owner)
+		if released[key] != 1 {
+			t.Fatalf("owner=%d release calls=%d", owner, released[key])
+		}
+	}
+	t.Logf("RESULT owners=250 pages=4 resolved=99,100,50,1 failed_reads=1 final_pending=0 exact_release_callbacks=250")
+}

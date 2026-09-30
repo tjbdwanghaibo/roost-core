@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Service 第十二轮：本机故障与容量专项
+
+[本轮审查](REVIEW-2026-09-30-services-12.md) · [机制学习](IMPLEMENTATION-SERVICE-CRASH-HA-AND-CAPACITY.md) · [探针与结果](evidence/service-review-20260930-01/README.md)。Core `88c65286`、Kit `f0e5b67a`、Codegen `1e028fa4` 拉取并核对；原 Service 10/10 域主链阶段进度保持，不把本轮四类小专项改称全生产验收。**无新增确认生产 bug；未改生产源码。**
+
+| 专项分母 | 本轮已执行 | 尚未验收 |
+| --- | --- | --- |
+| 跨进程强杀 | standalone/Cluster 各 2 次 `-race` 通过；真实子进程退出、后续新实例完成；模拟资源回调 2 次/持久效果 1 次 | 实际 allocator/scene/资产资源的回执、幂等及对账 |
+| Redis HA | 本机 3 主 3 从，1 个负责测试 key 的 master 强杀、`WAIT 1=1`、副本提升、独立进程 verify 通过 | 跨机器/分区、普通未 `WAIT` 写、写入未知结果、多 owner 故障交错 |
+| Backlog 与 Match 容量 | 250 owner 轮转及单次读故障，4 页 99/100/50/1 清空；Match 64～16384 旧记录/16 对及 8192 旧记录/128 对短样本通过，测得显著增长 | 持久 owner 来源接线、Match 归档实施、并发/长稳及业务 SLO |
+| Toxiproxy 物理网络故障 | 3 test skip / 0 pass，环境尚未接线 | 丢回复、延迟、分区恢复 |
+
+首次 HA fixture 因 1 分钟 TTL 超时和错误断言失败两次，结果、校验值和纠正后通过的第二轮均保留；这些失败不计作框架 bug。七个本轮独占 Redis 端口已经核对目录后关闭。下方各批记录是当时快照。
+
 ## 2026-09-29 第九批bugfix / Service第十一轮：阶段完成
 
 **10/10功能域主链及具名本机专项完成有界审查。**[本轮](REVIEW-2026-09-29-services-11.md) · [最新矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md) · [学习](IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。RR-34 **1/1修复/声明场景通过**；RR-20260929-01～34按各批原验收关闭，旧残余沿证据单列。本轮无新增确认缺陷，不声称全框架或全部生产逻辑无bug。
