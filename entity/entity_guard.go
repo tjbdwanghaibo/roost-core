@@ -81,6 +81,9 @@ type EntityGuard struct {
 	// eMap 以 ID 记当前持有的实例。同 ID 的另一实例若换了锁（handler 内 Destroy 后 LockManager 摘掉了旧锁，
 	// 重建的实例拿到新锁），取得新锁后新实例进 eMap，旧实例连同它仍被本 Guard 持有的锁移到 superseded，
 	// Guard 释放时一并解锁（RR-20260926-67）。
+	// 契约（REMAINING §3 N27，维护者 2026-09-30 定）：账本只按 ID、不按 EntityManager——一个 handler 不跨 Manager 持有同 ID 的
+	// 实体。同一 Guard 先持有 Manager A 上的 X、再对 Manager B 上同 ID 的 X 取锁时，按“同 ID 换了实例”处理（B 上的 X 进 eMap、
+	// A 上的转入 superseded），锁序判断同样按 eMap 条目；这不是支持的用法，框架不为它收紧也不为它扩大记账。
 	eMap        map[int64]IThreadSafeEntity
 	superseded  []heldEntity
 	postRelease []func()

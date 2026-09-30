@@ -699,6 +699,11 @@ func (tx *RollbackTx) preparedMutationKey(key mutationKey) bool {
 // 与派发入口 runNestLogic 在快 worker 上读 FenceError 相同。
 // 带 Remote 批次、没有 effect 的 memory handler 没有记录交给 committer，但它的 Durability 0 Remote 直写同样经这里拒绝
 // （durableCommit 的 memory 分支，RR-20260930-12）。
+//
+// 契约（REMAINING §3 N20，维护者 2026-09-30 接受）：这是交给 committer 之前的一次性检查，不是临界区。别的 goroutine 在检查之后、
+// committer 接受之前 fence 引擎的窗口不在这里拦：那种 fence 来自另一笔事务的结果未知，本笔记录进入 WAL 后由 WAL terminal
+// （引擎 fence 后 WAL 拒绝 / 停止推进）兜底；嵌套场景（同一 goroutine 先 fence 再提交外层）时序确定，本检查必然命中。
+// 不把检查放进 committer 的临界区：那会让 WAL 准入依赖 Nest 的生命周期锁，且对已越过提交点的记录无法撤销。
 func (tx *RollbackTx) refuseCommitAfterFence() error {
 	if tx.dispatch == nil || tx.dispatch.engine == nil {
 		return nil
