@@ -1,0 +1,18 @@
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterConfigData
+    namespace_promises_test.go:34: reserved bean RegisterConfigData was not rejected with a collision diagnostic: <nil>
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterGeneratedConfigData
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/MustRegisterGeneratedConfigData
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/configdata
+    namespace_promises_test.go:34: reserved bean configdata was not rejected with a collision diagnostic: <nil>
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/strconv
+    namespace_promises_test.go:34: reserved bean strconv was not rejected with a collision diagnostic: <nil>
+--- FAIL: TestCfggenRejectsReservedBeanNamesBeforeWriting (0.10s)
+    --- FAIL: TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterConfigData (0.02s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterGeneratedConfigData (0.02s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/MustRegisterGeneratedConfigData (0.02s)
+    --- FAIL: TestCfggenRejectsReservedBeanNamesBeforeWriting/configdata (0.02s)
+    --- FAIL: TestCfggenRejectsReservedBeanNamesBeforeWriting/strconv (0.02s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/cfggen	0.565s
+FAIL

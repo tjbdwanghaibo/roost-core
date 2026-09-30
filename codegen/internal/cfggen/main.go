@@ -349,6 +349,13 @@ func validateMeta(meta *Meta) error {
 	identifiers := map[string]string{
 		"RegisterGeneratedConfigData":     "generated function",
 		"MustRegisterGeneratedConfigData": "generated function",
+		"RegisterConfigData":              "generated function",
+		"configdata":                      "generated import",
+	}
+	// RR-20260930-13: import names share this file's namespace with beans.
+	// Keep strconv available as a bean name when no accessor needs it.
+	if usesStrconv(meta) {
+		identifiers["strconv"] = "generated import"
 	}
 	claim := func(id, source string) error {
 		if prev, exists := identifiers[id]; exists {
