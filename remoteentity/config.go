@@ -35,6 +35,9 @@ type Config struct {
 	WrapperCapacity           int
 	WrapperIdleTTL            time.Duration
 	// Versioned lock settings
+	// LockKey 是版本锁键的前缀 / 锁身份（kit：remote_entity.lock_key），键为 lock:<LockKey>:<id> 与 lock:<LockKey>:<id>:fence。
+	// 缺省 "e" 不带部署前缀且不能自动改（改了滚动发布的新旧节点会锁住不同身份，RR-20260924-25）；共用一个 Redis db 的
+	// 多个部署应各自显式配置不同值，Cluster 下必须带 hash tag（RR-20260930-19 现状清单）。
 	LockKey    string        // versioned lock key prefix, default "e"
 	LockTTL    time.Duration // lock TTL, default 24h
 	RetryCount int           // lock acquire retry count, default 5

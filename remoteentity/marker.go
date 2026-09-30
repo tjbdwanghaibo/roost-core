@@ -93,6 +93,9 @@ return value
 `
 )
 
+// markerRedisKey 是缺省的所有权标记 hash 键：一把 hash，field 是实体 ID。正式 Assemble 不写它
+// （所有权存储是 Mongo 的 WriteAuthority）；只有自行 SetOwnershipStore(NewRedisMarker…) 的非 authority
+// 兼容装配会用到。缺省不带部署前缀，共用一个 Redis db 的多个部署应各自加前缀（RR-20260930-19）。
 const markerRedisKey = "remote_entity:marks"
 
 type markerEval interface {
@@ -109,8 +112,50 @@ type redisMarker struct {
 
 var _ entity.IRemoteEntityOwnershipStore = (*redisMarker)(nil)
 
+// NewRedisMarker 用显式键名构造标记存储；key 为空时用缺省 remote_entity:marks。
 func NewRedisMarker(redis fredis.IRedis, key string) *redisMarker {
 	return newRedisMarkerForEval(redis, key)
+}
+
+// NewRedisMarkerWithKeyPrefix 与 NewRedisMarker(redis, "") 相同，另给标记键加部署前缀：
+// prefix 为空时键仍是 remote_entity:marks（逐字不变），非空时是 "<prefix>:remote_entity:marks"，
+// 与 L2 快照键前缀（NewSnapshotL2StoreWithKeyPrefix）同形，同一个部署前缀值可同时用于两者。
+// 前缀先经 ValidateMarkerKeyPrefix 校验（RR-20260930-19）。
+func NewRedisMarkerWithKeyPrefix(redis fredis.IRedis, prefix string) (*redisMarker, error) {
+	return newRedisMarkerForEvalWithKeyPrefix(redis, prefix)
+}
+
+// ValidateMarkerKeyPrefix 校验标记键前缀：可以为空（键不变）；非空时不能含首尾或内部空白。
+// 标记只有一把 hash 键，Redis Cluster hash tag 无害、允许（与 L2 前缀不同，L2 是逐实体多键，带 tag 会钉在一个槽）；
+// 但一旦写了花括号就要求首个 tag 非空且闭合——Redis 对 "e{" / "e{}" 不做 tag 哈希，配置者会以为钉住了槽而没有。
+// 这与 kit 对 remote_entity.lock_key 的 Cluster 判断是同一条规则（RR-20260924-25）。
+func ValidateMarkerKeyPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if strings.TrimSpace(prefix) != prefix || strings.ContainsAny(prefix, " \t\r\n") {
+		return fmt.Errorf("remote_entity: marker key prefix %q must not contain whitespace", prefix)
+	}
+	if start := strings.IndexByte(prefix, '{'); start >= 0 {
+		if end := strings.IndexByte(prefix[start+1:], '}'); end <= 0 {
+			return fmt.Errorf("remote_entity: marker key prefix %q has an empty or unclosed first Redis Cluster hash tag; use e.g. {roost:remote} or drop the braces", prefix)
+		}
+	}
+	return nil
+}
+
+func markerKeyForPrefix(prefix string) string {
+	if prefix == "" {
+		return markerRedisKey
+	}
+	return prefix + ":" + markerRedisKey
+}
+
+func newRedisMarkerForEvalWithKeyPrefix(redis markerEval, prefix string) (*redisMarker, error) {
+	if err := ValidateMarkerKeyPrefix(prefix); err != nil {
+		return nil, err
+	}
+	return newRedisMarkerForEval(redis, markerKeyForPrefix(prefix)), nil
 }
 
 func newRedisMarkerForEval(redis markerEval, key string) *redisMarker {
