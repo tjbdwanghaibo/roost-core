@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第五轮：cfggen 与依赖自动迁移
+
+[运行/停点](REVIEW-2026-09-30-codegen-05.md) · [三个新 P2](../bug/REVIEW-2026-09-30-codegen-05.md) · [实现学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [复跑](evidence/codegen-review-20260930-05/README.md)。基线 `30085d62`，仅文档审查。上轮五项修复实现无新变化，Codegen 包回归通过；RR-12～14 已复现、未修。
+
+| 范围 | 新增覆盖/实际执行 | 状态与下一入口 |
+| --- | --- | --- |
+| cfggen 导出/校验/类型/名字/accessor | 当前主文件源码与图谱定位；false、true、无 index、两个 bean 冲突正式 CLI/独立消费包 | 部分场景已验证；RR-12/13 未修；继续运行期 ref/required/skipempty 与索引值往返 |
+| cfggen 分组和复合 bean | server target；嵌套值 bean、切片递归、int/bool/string 索引、global；编译且 client 表/字段省去 | 正常样本通过；不计作真实 JSON 加载/所有 group 组合已验 |
+| 依赖 stage 到 root、自动 consolidation | 事务/迁移/CLI 当前源码；注入 resolver 的成功漏回写反例、失败 root 前像控制 | RR-14 未修；真实代理/tag 解析未验；显式 upgrade/dry-run/并发变化下一轮 |
+| 正式包/并发回归 | `go test ./codegen/...` 跳过具名 shell 环境项；cfggen/依赖/consolidation 定向 race | 两组通过；不把既有测试绿当作新三个问题关闭 |
+
+四个预期失败反例与四个通过控制对应具名场景，不换算为全域覆盖百分比。已补上一轮“cfggen 复杂 schema/升级分支”的部分缺口；Codegen 整体仍未收敛。图谱刷新超时、freshness metadata_changed，源码与实跑补证；未确认同代图谱全覆盖。仍待正式 Webroute 服务启动、真实配置消费、升级消费者、强杀/磁盘故障与线上兼容。
+
 ## 2026-09-30 Codegen 第四轮：五项修复与消费端验证
 
 [本轮运行与剩余边界](REVIEW-2026-09-30-codegen-04.md) · [RR-06～10 修复](../bugfix/README.md) · [现有生成机制更新](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md)。Core 基线 `da56c998`；Codegen 主入口盘点沿用第三轮矩阵。本轮五项原触发 **5/5 修复并在声明场景验证**；未发布，不等于 Codegen 全域完成。

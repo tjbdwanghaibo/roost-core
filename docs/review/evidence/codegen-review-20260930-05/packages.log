@@ -1,0 +1,30 @@
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/entity	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/errcode	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/eventgen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/project	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute	1.910s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/cfggen	2.926s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/dao	3.266s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	3.543s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	1.016s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/eventgen	2.473s
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/marker	0.762s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/nest	3.091s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/project	1.547s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol	3.022s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/registry	2.838s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	115.178s
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost/cmd/attributeruntime	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc	3.002s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen	0.713s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute	0.619s

@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-30 Codegen 第五轮：**[cfggen 消费者与依赖自动迁移](review/REVIEW-2026-09-30-codegen-05.md)新增[三个未修 P2](bug/REVIEW-2026-09-30-codegen-05.md)；四个反例/四个控制归档，包回归与定向 race 通过。[机制学习](review/IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [进度](review/PROGRESS.md)。只审查未改源码，整体尚未收敛。
+
 **09-30 Codegen 第四轮：**[RR-06～10 五项修复与旧验证缺口复查](review/REVIEW-2026-09-30-codegen-04.md) · [逐项 bugfix](bugfix/README.md) · [进度](review/PROGRESS.md)。隔离业务工程生成、退役检查与消费者编译通过；旧 v1 表格归属、HTTP 启动消费和版本兼容仍需后续验证。未发版。
 
 **09-30 Codegen 第三轮：**[RR-04 Entity 修复](bugfix/RR-20260930-04.md) · [RR-05 Nest 修复](bugfix/RR-20260930-05.md) · [五个新问题未修](bug/REVIEW-2026-09-30-codegen-03.md) · [审查矩阵与进度](review/REVIEW-2026-09-30-codegen-03.md)。主生成器入口已盘点，整体 Codegen 仍有具名缺口；未发版。
