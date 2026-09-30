@@ -1,6 +1,8 @@
 # Bugfix 记录
 
-[RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，未发版）。
+**v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
+
+[RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，v1.18.0）。
 
 [09-30 Codegen 第三批](RR-20260930-06.md)：[RR-06 Attribute](RR-20260930-06.md)、[RR-07 Event](RR-20260930-07.md)、[RR-08 Webroute](RR-20260930-08.md)、[RR-09 Tablegen](RR-20260930-09.md)、[RR-10 Errcode](RR-20260930-10.md) **5/5 原触发已修、声明场景已验**；表格退役额外通过隔离业务工程的暂存提交、`--check` 和消费者编译。[本轮验证](../review/REVIEW-2026-09-30-codegen-04.md)。旧 v1 表格 manifest 归属不明时需人工确认；未发版。
 
@@ -30,9 +32,9 @@
 
 [09-29 Service 两轮修复总记录](SERVICE-BUGFIX-2026-09-29.md)：RR-20260929-01～18 + 旧正常 Finish ABA；含逐项 bugfix 链接、回归、API/存储升级限制与 roost-bugfix skill（未发版）。
 
-[RR-20260930-03](RR-20260930-03.md)：`AtomicLocalStore` 时钟记录随存活键数有界（覆盖写 / Delete / 过期后压缩），修复 C01 24 小时堆单调增长（未发版）。
+[RR-20260930-03](RR-20260930-03.md)：`AtomicLocalStore` 时钟记录随存活键数有界（覆盖写 / Delete / 过期后压缩），修复 C01 24 小时堆单调增长（v1.18.0）。
 
-[RR-20260928-15](RR-20260928-15.md)：生成的 player TCP / scene 测试先等会话登记再推送或计数（未发版）。
+[RR-20260928-15](RR-20260928-15.md)：生成的 player TCP / scene 测试先等会话登记再推送或计数（v1.18.0）。
 
 [RR-20260928-14](RR-20260928-14.md)：生成工程按参数缓存为私有副本、慢用例并行（265s→73s）（v1.17.2）。
 
