@@ -18,6 +18,7 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20260930-19](RR-20260930-19.md)：P3 Remote 其余 Redis 键不带部署前缀——非 authority 兼容装配的 `remote_entity:marks` 缺省键跨部署串租约；锁键 `remote_entity.lock_key` 已可配但缺省不隔离、文档未写（REMAINING §3 N25，维护者 09-30 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20260930-19.md)）。
 [RR-20260930-11](RR-20260930-11.md)：P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 只等到 `loads > 0` 就放行加载器，晚到的 goroutine 再加载一次（`-race -count=400` 每轮约 1% 红，测试假设过强，实现不动）（已修复，v1.18.0；[修复记录](../bugfix/RR-20260930-11.md)）。
 
 [RR-20260930-03](RR-20260930-03.md)：**P2** `cache.AtomicLocalStore` 覆盖写无限追加时钟记录，Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆 4.7GB，v1.10.0 起即有）（已修复，v1.18.0；[修复记录](../bugfix/RR-20260930-03.md)）。

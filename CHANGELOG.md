@@ -4,9 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
 - **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-12）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-12.md)。
 - **cfggen 写入前拒绝生成名称冲突（RR-20260930-13）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-13.md)。
 - **依赖事务同时提交明确的合仓迁移（RR-20260930-14）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-14.md)。
+
+### Added
+
+- **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。
 
 ## [v1.18.0] - 2026-09-30
 

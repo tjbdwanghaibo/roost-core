@@ -4,6 +4,7 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20260930-19](RR-20260930-19.md)：core 新增 `NewRedisMarkerWithKeyPrefix` / `ValidateMarkerKeyPrefix`（`<prefix>:remote_entity:marks`，空值键不变）；kit 不加配置项（Mod 不写 marks）；USER_GUIDE §6 三类 Redis 键清单，`lock_key` 隔离要求写进文档（未发版）。
 [RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，v1.18.0）。
 
 [09-30 Codegen 第三批](RR-20260930-06.md)：[RR-06 Attribute](RR-20260930-06.md)、[RR-07 Event](RR-20260930-07.md)、[RR-08 Webroute](RR-20260930-08.md)、[RR-09 Tablegen](RR-20260930-09.md)、[RR-10 Errcode](RR-20260930-10.md) **5/5 原触发已修、声明场景已验**；表格退役额外通过隔离业务工程的暂存提交、`--check` 和消费者编译。[本轮验证](../review/REVIEW-2026-09-30-codegen-04.md)。旧 v1 表格 manifest 归属不明时需人工确认；未发版。

@@ -14,6 +14,7 @@
 | [codegen-race.log](codegen-race.log) | 全 Codegen race 通过，明确跳过一个 shell 环境项 |
 | [vet.log](vet.log) / [glsvet.log](glsvet.log) | 两条静态检查 exit0，无输出日志为空是正常结果 |
 | [consumer-deps.log](consumer-deps.log) / [consumer-test.log](consumer-test.log) | 正式 project deps 真实 Go get/tidy、迁移回写与生成工程编译通过 |
+| [merged-consumer-test.log](merged-consumer-test.log) | 整合另一工作线最新 Remote 源码后，真实生成工程再次编译通过；不冒称 RR-19 独立验收 |
 | [sync-dao.log](sync-dao.log) / [sync-entity.log](sync-entity.log) / [sync-consumer.log](sync-consumer.log) | 正式 DAO/Entity fixture 生成及 periodic/on_change 两种 Sync race 通过 |
 
 修前运行的是本次新建的正式测试，在生产修复前执行，不靠 stash 或修改旧失败。18 个新叶子只代表具名场景；全包通过仍不能证明所有 schema、升级版本或故障模式。

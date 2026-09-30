@@ -177,7 +177,15 @@ L2 快照键默认是 `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<poli
 否则彼此读写同一份快照。缺省为空时键与旧版本逐字相同，不需要迁移。同一部署的所有节点必须配置同一个值：新设或修改前缀相当于换一套空的 L2（快照会从权威重新发布），
 滚动修改期间新旧节点互相看不到对方写入的 L2，`Cached` 读可能在 `snapshot_l2_ttl` 内读到旧前缀下的旧快照，所以应整体重启。前缀不能含空白，
 也不能含 Redis Cluster hash tag（`{…}`，L2 脚本只操作单键，带 tag 会把全部快照键钉在同一个槽），Init / Assemble 拒绝这类值（[RR-20260927-17](bugfix/RR-20260927-17.md)）。
-这个前缀只作用于 L2 快照键；Remote 的锁键仍由 `remote_entity.lock_key` 决定，非 authority 兼容装配的 Redis 所有权标记键由 `NewRedisMarker` 的 key 参数决定（默认 `remote_entity:marks`）。
+这个前缀只作用于 L2 快照键。Remote 写到 Redis 的键一共三类，共用一个 Redis db 的部署要**逐类**隔离（[RR-20260930-19](bugfix/RR-20260930-19.md)）：
+
+| 键 | 谁写 | 缺省 | 隔离方式 |
+| --- | --- | --- | --- |
+| `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<policy>`（逐实体 hash） | 正式装配的 L2 快照 | 不带前缀 | `remote_entity.snapshot_l2_key_prefix`（不能带 hash tag） |
+| `lock:<lock_key>:<id>`、`lock:<lock_key>:<id>:fence`（逐实体 hash + 计数器） | 正式装配的版本锁 | `lock_key` 缺省 `e`，不带前缀 | `remote_entity.lock_key` 各部署配不同值（如 `game-a`；Cluster 下必须带 hash tag，如 `{roost:game-a}`）。缺省值不会自动改：改锁身份要整体重启，不能滚动（RR-20260924-25） |
+| `remote_entity:marks`（一把 hash，field 是实体 ID） | **只有非 authority 兼容装配**（自行 `SetOwnershipStore(NewRedisMarker…)`）；正式 kit 装配的所有权存储是 Mongo 权威，不写这把键 | 不带前缀 | core API：`NewRedisMarkerWithKeyPrefix(redis, prefix)` → `<prefix>:remote_entity:marks`，或 `NewRedisMarker(redis, key)` 显式键名。kit 没有对应配置项，因为 kit 不写它 |
+
+`NewRedisMarkerWithKeyPrefix` 的前缀与 L2 前缀同形（同一个部署前缀值可同时用于两者），空值键不变；不能含空白；标记只有一把 hash 键，允许 hash tag，但写了花括号就必须是首个非空闭合 tag（与 `lock_key` 的 Cluster 判断同一规则）。
 
 Write 模式使用 Mongo 持久所有权；共享写先竞争 Redis 协调锁，再取得 Mongo majority 写许可，owner-routed 写也取得持久许可，然后权威加载 → Nest 事务修改 → 条件提交。存储条件同时包含 StateVersion、MarkerEpoch、LockFence、RouteEpoch。分布式锁只避免同时进入临界区，四维 fence 才能拒绝暂停后恢复的旧 owner 或旧路由写入。
 
