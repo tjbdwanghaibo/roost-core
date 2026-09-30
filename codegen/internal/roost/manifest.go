@@ -51,13 +51,16 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // bridge calls entitysync.SessionOpenRetryable, Manager.RegisterAfterRetirement
 // and policy.Interest.Resubscribe (RR-20260926-55/59/72), which v1.17.0 lacks,
 // and to v1.17.2 because the generated game-demo syncbus test calls
-// kit/syncbus.JetStreamStreamFromConfig (RR-20260927-35), which v1.17.1 lacks.
+// kit/syncbus.JetStreamStreamFromConfig (RR-20260927-35), which v1.17.1 lacks,
+// and to v1.18.0 because the generated game-demo bodies call the new
+// kit/service/mail CancelClaim signature and kit/service/platform
+// ErrDeliveryNotApplied (RR-20260929-20/23), which v1.17.2 lacks.
 // Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.17.2",
+	Core:    "v1.18.0",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
