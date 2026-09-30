@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，未发版）。
+
 [09-30 Codegen 第三批](RR-20260930-06.md)：[RR-06 Attribute](RR-20260930-06.md)、[RR-07 Event](RR-20260930-07.md)、[RR-08 Webroute](RR-20260930-08.md)、[RR-09 Tablegen](RR-20260930-09.md)、[RR-10 Errcode](RR-20260930-10.md) **5/5 原触发已修、声明场景已验**；表格退役额外通过隔离业务工程的暂存提交、`--check` 和消费者编译。[本轮验证](../review/REVIEW-2026-09-30-codegen-04.md)。旧 v1 表格 manifest 归属不明时需人工确认；未发版。
 
 [09-30 Codegen 第二批](RR-20260930-04.md)：Entity/Nest 旧生成物退役 [RR-04](RR-20260930-04.md)/[RR-05](RR-20260930-05.md) **2/2 修复并按声明场景验证**；当时[五个新问题](../bug/REVIEW-2026-09-30-codegen-03.md)只审查未实施。该轮外部工程受模块缓存写锁限制，本轮已用隔离缓存完成消费者编译；未发布。

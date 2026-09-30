@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -87,15 +88,31 @@ func TestReadThroughStoreCoalescesMisses(t *testing.T) {
 			}
 		}()
 	}
-	for loads.Load() == 0 {
-		time.Sleep(time.Millisecond)
+	// The promise is that misses in flight at the same time share one load.
+	// Pin all eight there before releasing the loader: one inside the loader
+	// (Loads == 1) and the other seven registered as followers (Coalesced ==
+	// 7). Releasing on loads > 0 alone let a goroutine that had already
+	// missed L1 reach load after the leader was done and start a load of its
+	// own (RR-20260930-11).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stats := store.Stats()
+		if stats.Loads == 1 && stats.Coalesced == 7 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(start)
+			wg.Wait()
+			t.Fatalf("waiting for 1 load and 7 followers: stats=%+v", stats)
+		}
+		runtime.Gosched()
 	}
 	close(start)
 	wg.Wait()
 	if got := loads.Load(); got != 1 {
 		t.Fatalf("loads=%d", got)
 	}
-	if store.Stats().Coalesced == 0 {
-		t.Fatal("expected coalesced reads")
+	if stats := store.Stats(); stats.Loads != 1 || stats.Coalesced != 7 {
+		t.Fatalf("stats=%+v, want Loads=1 Coalesced=7", stats)
 	}
 }
