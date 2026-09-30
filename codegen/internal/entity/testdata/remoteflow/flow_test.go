@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +52,8 @@ type scopedRedis struct {
 	fredis.IRedis
 	prefix string
 	keys   sync.Map
+	// evalFault 非空时 Eval 不发往 Redis、直接返回该错误（B27 第 2 批 RR-20260926-46：提交后释放锁失败）。
+	evalFault atomic.Pointer[error]
 }
 
 func (r *scopedRedis) key(key string) string {
@@ -59,6 +62,9 @@ func (r *scopedRedis) key(key string) string {
 	return key
 }
 func (r *scopedRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if fault := r.evalFault.Load(); fault != nil {
+		return nil, *fault
+	}
 	scoped := make([]string, len(keys))
 	for i, key := range keys {
 		scoped[i] = r.key(key)
