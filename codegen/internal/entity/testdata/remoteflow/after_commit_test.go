@@ -146,7 +146,7 @@ func TestGeneratedRemoteReleaseHookPanicAfterDurableCommitStillCommits(t *testin
 // pipelined 同样）。hook 的 panic 从 dispatchLoadedEntities 的 `defer release()`（nest/nest_dispatch.go:404-406）经 Guard.ReleaseEntity
 // 传到 runNestLogic 的 recover（nest/nest_dispatch.go:203-209 `err = recoveredErr`），在途的 handler 错误被整个替换。
 func TestGeneratedRemoteRolledBackReleaseHookPanicKeepsBusinessError(t *testing.T) {
-	t.Skip("待登记 RR：带 Remote 批次的 strict 消息业务失败后 release hook panic，回复丢失业务错误，只剩 hook 错误")
+	t.Skip("RR-20260930-20：带 Remote 批次的 strict 消息业务失败后 release hook panic，回复丢失业务错误，只剩 hook 错误")
 	rig, name := newAfterCommitRig(t)
 	id := rig.seed(t, 9705)
 	if err := rig.request(rig.ctx, id); err != nil {
@@ -221,7 +221,7 @@ func TestGeneratedRemoteEntityWritableAfterUnlockFailure(t *testing.T) {
 	// UnlockWithRetry 用尽重试后本地 acquired 仍为 true（remoteentity/versioned_lock.go:236-275 只在 Redis 答复 0 时清 acquired），
 	// 下一次 beginWrite 的 rMu.Lock（batch.go:165）→ TryLock（versioned_lock.go:108-110）看本地状态就拒绝，不再问 Redis；
 	// 只有 Touch / Refresh 看到租约失效才清（:355-405），而写之间没有人 Touch。实体在本进程内从此不可写。
-	t.Skip("待登记 RR：提交后释放 Redis 锁失败后，versionedLock 本地 acquired 不清，同一实体在本进程内永久 `versioned lock already acquired`")
+	t.Skip("RR-20260930-21：提交后释放 Redis 锁失败后，versionedLock 本地 acquired 不清，同一实体在本进程内永久 `versioned lock already acquired`")
 	rig, name := newAfterCommitRig(t)
 	id := rig.seed(t, 9715)
 	if err := rig.request(rig.ctx, id); err != nil {

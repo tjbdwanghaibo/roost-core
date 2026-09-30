@@ -104,7 +104,7 @@ func TestGeneratedDataEngineReleaseHookPanicAfterCommitCarriesSentinel(t *testin
 // （nest/nest_dispatch.go:404-406）→ releaseDispatchEntities → Guard.ReleaseEntity → runOnEntityRelease 不 recover，hook 的 panic
 // 一路传到 runNestLogic 的 recover（nest/nest_dispatch.go:203-209 `err = recoveredErr`），在途的 handler 错误被整个替换。
 func TestGeneratedDataEngineRolledBackReleaseHookPanicKeepsBusinessError(t *testing.T) {
-	t.Skip("待登记 RR：handler 失败后 release hook panic 的回复丢失业务错误，只剩 hook 错误（async / strict / pipelined 与 Remote 消息都如此）")
+	t.Skip("RR-20260930-20：handler 失败后 release hook panic 的回复丢失业务错误，只剩 hook 错误（async / strict / pipelined 与 Remote 消息都如此）")
 	ctx, client := reloadTestClient(t)
 	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
 		t.Run(policy.String(), func(t *testing.T) {

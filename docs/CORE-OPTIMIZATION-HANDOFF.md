@@ -348,6 +348,8 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260930-13](bug/RR-20260930-13.md) | P3 `SetEntityVersion` 同 fence 可回退 StateVersion（N26） | [修复](bugfix/RR-20260930-13.md)（未发布；接口签名改为返回 error） |
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
+| [RR-20260930-20](bug/RR-20260930-20.md) | P2 回滚后 release hook panic 吞掉业务错误（B27 第 2 批暴露） | 未修复 |
+| [RR-20260930-21](bug/RR-20260930-21.md) | P2 解锁失败后本地 `acquired` 不清，实体本进程内永久不可写（B27 第 2 批暴露） | 未修复 |
 | [RR-20260930-16](bug/RR-20260930-16.md) | P4 CRLF 配置追加 Mod 段用 LF（N23） | [修复](bugfix/RR-20260930-16.md)（未发布） |
 | [RR-20260930-17](bug/RR-20260930-17.md) | P3 生成工程 CI 抓不到 compose 语义错误（N24） | [修复](bugfix/RR-20260930-17.md)（未发布；生成工程自带结构检查） |
 | [RR-20260930-18](bug/RR-20260930-18.md) | P3 game-demo `Scene.Close` 不受停机时限约束（N31） | [修复](bugfix/RR-20260930-18.md)（未发布） |
