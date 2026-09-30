@@ -1203,8 +1203,12 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 				return err
 			}
 		}
-	} else {
-		live.SetEntityVersion(int64(commit.NextVersion))
+	} else if err := live.SetEntityVersion(int64(commit.NextVersion)); err != nil {
+		// 同 fence 回退被拒（RR-20260930-13）：与上面的向量分支相同，再次核对是否已是过期回执。
+		if remoteReceiptObsolete(live, commit) {
+			return nil
+		}
+		return err
 	}
 	if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
 		// 不持实体锁；投影器重试与 finalizer 回源发布可能并发走到这里，参与者按契约幂等且并发安全（RR-20260926-63）。

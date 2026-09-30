@@ -12,7 +12,9 @@ import (
 type IThreadSafeRemoteEntity interface {
 	IThreadSafeEntity
 	EntityVersion() int64
-	SetEntityVersion(int64)
+	// SetEntityVersion 只改 StateVersion、沿用当前 fence；同一 fence 下不能回退（RR-20260930-13），
+	// 更小的版本返回 ErrRemoteVersionConflict 且不写入。
+	SetEntityVersion(int64) error
 	// ExcludeSId is the current ownership sid. Zero means the entity is
 	// remotely shared/owned; a positive sid means that server owns the local
 	// fast path. It is not the source of truth for whether the entity is
@@ -43,7 +45,13 @@ func (r *RemoteEntityBase) EntityVersion() int64 {
 	return int64(version)
 }
 
-func (r *RemoteEntityBase) SetEntityVersion(v int64) {
+// SetEntityVersion 只改 StateVersion，其余维度（fence、marker、route）沿用当前值。
+//
+// 同一 fence 下 StateVersion 不能回退（RR-20260930-13，与 SetRemoteVersionVector 的 RR-20260927-15 同一规则）：这个入口
+// 从不换 fence，所以“同 fence 回退”在这里就是“写更小的版本”。之前不做任何检查，迟到的调用能把已推进的版本写回旧值，
+// RR-15 的判据因此有一条绕过路径。更小的版本返回 ErrRemoteVersionConflict、向量不变；相等或更大照常 CAS 写入。
+// 负数按 0 处理（与之前一致），所以已推进过的实体写负数同样被拒绝。
+func (r *RemoteEntityBase) SetEntityVersion(v int64) error {
 	if v < 0 {
 		v = 0
 	}
@@ -51,11 +59,14 @@ func (r *RemoteEntityBase) SetEntityVersion(v int64) {
 		current := r.version.Load()
 		next := RemoteVersionVector{StateVersion: uint64(v)}
 		if current != nil {
+			if uint64(v) < current.StateVersion {
+				return ErrRemoteVersionConflict
+			}
 			next = *current
 			next.StateVersion = uint64(v)
 		}
 		if r.version.CompareAndSwap(current, &next) {
-			return
+			return nil
 		}
 	}
 }
