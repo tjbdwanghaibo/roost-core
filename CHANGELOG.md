@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+> 维护者 2026-09-30 对 [REMAINING §3](docs/review/REMAINING-2026-09-28.md) 的 13 条待决定项拍板：N21 / N23 / N24 / N25 / N26 / N28 / N31 / N32 做，N20 / N22 / N27 / N29 写进契约（N29 另加入口校验），N30 写部署文档。
+
+### Changed（行为收紧 / API 变化）
+
+- **Go API 签名变化（源码不兼容）**：`entity.IThreadSafeRemoteEntity.SetEntityVersion(int64)` → `SetEntityVersion(int64) error`（RR-20260930-13，N26）。同一 fence 下写更小的 StateVersion 现在返回 `ErrRemoteVersionConflict` 且不写入；生成实体经嵌入 `RemoteEntityBase` 获得该方法、不受影响，仓外自行实现该接口的类型需改签名。[记录](docs/bugfix/RR-20260930-13.md)
+- **fence 之后拒绝 Durability 0 的 Remote 直写（RR-20260930-12，P2，N21）**：带 Remote 批次、没有 effect 的 memory handler 在引擎 fence 后回复 `nest.ErrNestFenced` + `ErrCommitRejected`（判别表第 12 行）、Remote 批次 Abort，权威不再被写；此前成功并写权威。[记录](docs/bugfix/RR-20260930-12.md)
+- **广播每个目标自己的锁作用域（RR-20260930-14，N28）**：`broadcastDispatch` 在目标结束时释放它取得的全部锁（含 Destroy 后同 ID 重建的实例、Cast 取得的实体）与 Sync post-release 回调，不再跨后续目标持有。每目标多一次 Guard 池取还，未做基准。[记录](docs/bugfix/RR-20260930-14.md)
+- **实体实现必须是指针（RR-20260930-15，N29）**：`BuildEntity` 与 `EntityManager.Add` / `TryAdd` 拒绝值类型实现，新增 `entity.ErrEntityNotPointer`（错误点名类型）；生成实体都是指针。[记录](docs/bugfix/RR-20260930-15.md)
+- 契约文字（无行为变化）：USER_GUIDE §4 判别表外补 N20（`refuseCommitAfterFence` 是交给 committer 前的一次性检查，跨 goroutine 的窗口由 WAL terminal 兜底）、N22（业务吞掉嵌套事务结果未知得到的成功回复不加哨兵）、N27（Guard 锁账本按 ID，一个 handler 不跨 Manager 持有同 ID 实体）；B40 回归 `state_strict` 断言加强为每个 follower 各至少一次（N32）。
+
 ### Added
 
 - **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。

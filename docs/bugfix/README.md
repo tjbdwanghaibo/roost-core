@@ -2,6 +2,10 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20260930-15](RR-20260930-15.md)：实体实现必须是指针——契约 + `BuildEntity` / `TryAdd` 用 reflect 校验一次并点名类型，热路径比较不改；仓内值类型替身 `kit/nest` `reloadedEntity` 改指针（未发版）。
+[RR-20260930-14](RR-20260930-14.md)：广播每个目标自己的 Guard 作用域，目标实例按实例释放、其余锁与 post-release 随作用域结束释放；补 Remote 目标 `ReleaseCast` 回归（未发版）。
+[RR-20260930-13](RR-20260930-13.md)：`SetEntityVersion` 同一 fence 下拒绝 StateVersion 回退（`ErrRemoteVersionConflict`），接口改为 `SetEntityVersion(int64) error`（未发版）。
+[RR-20260930-12](RR-20260930-12.md)：`durableCommit` 的 memory 早返回分支在消息带 Remote 批次时先做 `refuseCommitAfterFence`，fence 后 Durability 0 直写被拒并 Abort 批次（未发版）。
 [RR-20260930-19](RR-20260930-19.md)：core 新增 `NewRedisMarkerWithKeyPrefix` / `ValidateMarkerKeyPrefix`（`<prefix>:remote_entity:marks`，空值键不变）；kit 不加配置项（Mod 不写 marks）；USER_GUIDE §6 三类 Redis 键清单，`lock_key` 隔离要求写进文档（未发版）。
 [RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，v1.18.0）。
 
