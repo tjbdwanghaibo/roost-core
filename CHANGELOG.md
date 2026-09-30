@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。
+
 ## [v1.18.0] - 2026-09-30
 
 > 本版合并两条工作线：A 线（core cache、生成链路测试、CI 门禁：RR-20260928-15、RR-20260930-03/11）与 B 线（Service 十域、Redis driver、Codegen 退役旧产物：RR-20260929-01～34、RR-20260930-01/02/04～10）。B 线有源码不兼容的 Go API 变化（`Mail.CancelClaim`、`session.ClaimStore`、`platform.Admin`），所以是次版本而非补丁；生成器 Core 下限与 framework-compat 的 minimum 同步升到 v1.18.0。两条线的逐编号状态见 [ARCHIVE-2026-09-30](docs/review/ARCHIVE-2026-09-30.md)。发版前验证：`scripts/pretag.sh` 通过（干净 worktree）；Remote 故障矩阵 21/21 PASS（`artifacts/perf/remote/matrix-v1180-30085d62`，本地）。tag → `4b277176`。

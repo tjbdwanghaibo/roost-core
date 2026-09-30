@@ -344,4 +344,5 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（v1.17.2） |
 | [RR-20260928-15](bug/RR-20260928-15.md) | P4 生成 TCP / scene 测试未等会话登记 | [修复](bugfix/RR-20260928-15.md)（v1.18.0） |
 | [RR-20260930-03](bug/RR-20260930-03.md) | P2 `AtomicLocalStore` 覆盖写无限追加时钟记录（C01 堆增长） | [修复](bugfix/RR-20260930-03.md)（v1.18.0） |
+| [RR-20260930-19](bug/RR-20260930-19.md) | P3 Remote 标记键无部署前缀、锁键隔离要求未写（N25） | [修复](bugfix/RR-20260930-19.md)（未发布；缺省键逐字不变、kit 配置面不变） |
 | [RR-20260930-11](bug/RR-20260930-11.md) | P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发（测试只钉住领头者） | [修复](bugfix/RR-20260930-11.md)（只改测试，v1.18.0） |
