@@ -1,0 +1,135 @@
+package match
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
+)
+
+type review13MatchToxicRunner struct {
+	versionstore.RedisClient
+	beforeEval func() error
+}
+
+func (r *review13MatchToxicRunner) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if r.beforeEval != nil {
+		fire := r.beforeEval
+		r.beforeEval = nil
+		if err := fire(); err != nil {
+			return nil, err
+		}
+	}
+	return r.RedisClient.Eval(ctx, script, keys, args...)
+}
+
+func review13MatchToxicAPI(path string, payload any) error {
+	var body bytes.Buffer
+	if payload != nil {
+		if err := json.NewEncoder(&body).Encode(payload); err != nil {
+			return err
+		}
+	}
+	resp, err := http.Post(os.Getenv("ROOST_REVIEW13_TOXI_API")+path, "application/json", &body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("Toxiproxy %s: status %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
+func TestReview13MatchLostEnqueueReplyReplaysOneTicket(t *testing.T) {
+	api, backend, proxy := os.Getenv("ROOST_REVIEW13_TOXI_API"), os.Getenv("ROOST_REVIEW_REDIS"), os.Getenv("ROOST_REVIEW13_TOXI_REDIS")
+	if api == "" || backend == "" || proxy == "" {
+		t.Fatal("isolated Redis and Toxiproxy required")
+	}
+	if err := review13MatchToxicAPI("/reset", nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := review13MatchToxicAPI("/reset", nil); err != nil {
+			t.Errorf("reset proxy: %v", err)
+		}
+	})
+	ctx := context.Background()
+	direct, err := driver.NewClient(redis.DefaultConfig(backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	proxied, err := driver.NewClient(redis.DefaultConfig(proxy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxied.Close()
+	prefix := fmt.Sprintf("review13-match-toxic-%d", time.Now().UnixNano())
+	queue := Queue{Mode: "review", GroupSize: 2, Partition: "toxic"}
+	defer direct.Del(ctx, prefix+":queue:"+queue.Key())
+	storeConfig := versionstore.RedisConfig[string, queueState]{Prefix: prefix + ":queue:", KeyOf: func(k string) string { return k }, Codec: versionstore.JSONCodec[queueState]{}}
+	state, err := versionstore.NewRedisStore(direct, storeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := queueState{}
+	initial.init()
+	if _, created, err := state.Create(ctx, queue.Key(), initial); err != nil || !created {
+		t.Fatalf("seed: created=%v err=%v", created, err)
+	}
+	toxic := &review13MatchToxicRunner{RedisClient: proxied}
+	toxic.beforeEval = func() error {
+		return review13MatchToxicAPI("/proxies/redis/toxics", map[string]any{
+			"name": "drop-enqueue-reply", "type": "timeout", "stream": "downstream", "toxicity": 1.0,
+			"attributes": map[string]any{"timeout": 0},
+		})
+	}
+	proxiedState, err := versionstore.NewRedisStore[string, queueState](toxic, storeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Config{NewID: func() (string, error) { return "review13-ticket", nil }}
+	proxiedStore, err := NewStore(proxiedState, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewStore(state, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := Subject{Kind: "player", ID: 123}
+	deadline, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	_, enqueueErr := proxiedStore.Enqueue(deadline, queue, subject, "request-123")
+	cancel()
+	if enqueueErr == nil || toxic.beforeEval != nil {
+		t.Fatalf("expected CAS response loss: err=%v beforeEval_pending=%v", enqueueErr, toxic.beforeEval != nil)
+	}
+	if err := review13MatchToxicAPI("/reset", nil); err != nil {
+		t.Fatal(err)
+	}
+	committed, found, err := state.Get(ctx, queue.Key())
+	if err != nil || !found || len(committed.Value.Waiting) != 1 || len(committed.Value.Tickets) != 1 || len(committed.Value.Requests) != 1 {
+		t.Fatalf("write outcome: found=%v waiting=%d tickets=%d requests=%d err=%v", found, len(committed.Value.Waiting), len(committed.Value.Tickets), len(committed.Value.Requests), err)
+	}
+	replay, err := service.Enqueue(ctx, queue, subject, "request-123")
+	if err != nil || replay.ID != "review13-ticket" {
+		t.Fatalf("replay: ticket=%+v err=%v", replay, err)
+	}
+	if _, err := service.Cancel(ctx, queue, replay.ID, subject); err != nil {
+		t.Fatal(err)
+	}
+	final, found, err := state.Get(ctx, queue.Key())
+	if err != nil || !found || len(final.Value.Waiting) != 0 || len(final.Value.Tickets) != 1 {
+		t.Fatalf("final state found=%v waiting=%d tickets=%d err=%v", found, len(final.Value.Waiting), len(final.Value.Tickets), err)
+	}
+	t.Logf("RESULT lost_reply_error=%v committed=1 replay_same=true final_waiting=0", enqueueErr)
+}

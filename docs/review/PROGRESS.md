@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Service 第十三轮：真实代理故障与持续热点
+
+[审查结论](REVIEW-2026-09-30-services-13.md) · [机制学习](IMPLEMENTATION-SERVICE-FAULT-AND-CONTENTION.md) · [复跑/日志校验](evidence/service-review-20260930-02/README.md)。Core `d91d8a30`、Kit `f0e5b67a`、Codegen `1e028fa4` 三仓 fetch 后 HEAD 未变。**本轮无新增确认生产 bug，生产代码未改。**Service 原 10/10 域主链阶段整理维持；新增的是下列有界场景，不改称生产故障全验收。
+
+| 上轮专项缺口 | 本轮新增实测 | 仍未完成 |
+| --- | --- | --- |
+| Toxiproxy 3 skip | 真实代理下 3 test × race/count2 = 6 pass/0 skip；Session/Match CAS 写后丢回复各 1 pass，读回/同身份重试稳定 | 完整双向分区、服务间 RPC 与实际资源系统 |
+| 单 owner、带 `WAIT` HA | 无 `WAIT` 脚本强杀 owner 1 master，六 owner 跨槽 seed/独立 verify 各 1 pass，副本接管后全部回收 | 不证明写入在强杀时未复制；跨机/分区和丢失已确认写的业务对账 |
+| 测试侧内存轮转 250 owner | Redis 持久游标跨三个 Go 进程：99/100/50/1 完成，250 效果各 1，3 pass | 部署用 roster/游标、真实读断线与孤儿 owner 对账 |
+| Match 短串行样本 | 4096 旧终态、四客户端 60.371 秒 443 对完成、209 冲突重试、Waiting=0；样本 p99 3.529 秒、Go TotalAlloc 59.46 GB | 归档未实施；目标 SLO、生产并发、跨天长稳未验证 |
+
+测试二进制按 Toxiproxy 官方 Go 模块在工作区临时目录构建；独占 Redis/代理均核对归属后关闭。上轮“Core 下缺数据环境脚本”只指 Core 根路径；`kit/scripts/integration/` 实际提供接线脚本。以下是各批原时点快照。
+
 ## 2026-09-30 Service 第十二轮：本机故障与容量专项
 
 [本轮审查](REVIEW-2026-09-30-services-12.md) · [机制学习](IMPLEMENTATION-SERVICE-CRASH-HA-AND-CAPACITY.md) · [探针与结果](evidence/service-review-20260930-01/README.md)。Core `88c65286`、Kit `f0e5b67a`、Codegen `1e028fa4` 拉取并核对；原 Service 10/10 域主链阶段进度保持，不把本轮四类小专项改称全生产验收。**无新增确认生产 bug；未改生产源码。**

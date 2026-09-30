@@ -38,6 +38,6 @@ go test -count=1 -timeout=180s -overlay $sessionOverlay -json -run '^TestReview1
 
 复跑时应使用**新的空目录/端口或唯一前缀**。首次 `{review12-ha}` fixture 的 TTL 仅 1 分钟，运行延迟跨过 deadline；两份旧 verify 日志分别错断言 `StateOpen` 与无 `ErrRunExpired`，属于测试预期错误。最终源已改为 5 分钟 TTL，并允许真正过期时按 `ErrRunExpired` 判断；`{review12-ha-b}` 在时限内 seed、failover、verify 通过。不能把旧失败计作生产 bug，也不能从最终通过推断无时间边界问题。
 
-已有 Toxiproxy 用例的命令是 `go test -tags integration -count=1 -json -run '^TestToxicRedis' ./redis/driver`；本机缺 Toxiproxy 接线和必要环境变量，**3 test skip / 0 pass**。这些不算物理丢回复/延迟通过。完整网络故障验收仍需 Toxiproxy 代理、API、`ROOST_DATAENGINE_IT=1`、`ROOST_DATAENGINE_IT_TOXIPROXY_URL`、`ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR`，并核对代理只接独占测试 Redis。源码提示的 `scripts/integration/dataengine-env.sh` 在本基线缺失。
+已有 Toxiproxy 用例的命令是 `go test -tags integration -count=1 -json -run '^TestToxicRedis' ./redis/driver`；本轮当时缺 Toxiproxy 接线和必要环境变量，**3 test skip / 0 pass**。这些不算物理丢回复/延迟通过。完整网络故障验收仍需 Toxiproxy 代理、API、`ROOST_DATAENGINE_IT=1`、`ROOST_DATAENGINE_IT_TOXIPROXY_URL`、`ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR`，并核对代理只接独占测试 Redis。Core 根路径的 `scripts/integration/dataengine-env.sh` 在本基线缺失；`kit/scripts/integration/dataengine-env.sh` 实际存在。此项已在[第十三轮](../service-review-20260930-02/README.md)接起真实代理并验证，上述 3 skip 保留为第十二轮历史结果。
 
 本机测试结束后按端口逐一用 `CONFIG GET dir` 核对预期独占目录，只对匹配的仍存活实例执行 `redis-cli -p <port> SHUTDOWN NOSAVE`；已经被强杀的端口应关闭。再检查七个端口均不再监听。不要按端口盲关共享实例，亦不要清理其他测试目录。
