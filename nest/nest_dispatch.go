@@ -475,13 +475,16 @@ func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThrea
 	}
 }
 
+// broadcastDispatch 对每个目标各执行一次 handler（每个目标一个事务）。每个目标在自己的 Guard 作用域里取锁、执行、释放
+// （RR-20260930-14）：目标结束时它取得的全部锁——声明的目标实例、handler 内 Destroy 后同 ID 重建的新实例（旧实例转入
+// superseded）、Cast 取得的实体——连同 post-release 回调一起释放，不跨后续目标持有。之前整轮广播共用 runNestLogic 的
+// 一把 Guard、目标结束时按 ID 释放：Destroy 后同 ID 重建时按 ID 放掉的是新实例的锁，旧实例回到 eMap，它的锁一直持有到
+// 整轮广播结束（RR-20260927-26 §未验证项，REMAINING §3 N28）。
 func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
 		return
 	}
-	guard := entity.GetEntityGuard()
-	defer entity.EntityGuardRelease(guard)
 
 	oneEntity := make([]entity.IThreadSafeEntity, 1)
 	for _, id := range ids {
@@ -516,14 +519,19 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 		if e == nil || !e.Touch() {
 			continue
 		}
-		lockStart := startNestStage(mgr.stageMetrics)
-		locked := guard.RequireEntity(e)
-		observeNestStage(name, "lock", lockStart)
-		if !locked {
-			e.UnTouch()
-			continue
-		}
 		func() {
+			// 目标自己的 Guard 作用域：handler 看到的 CurrentGuardScope 就是它；作用域结束释放本目标取得的全部锁与
+			// post-release 回调，与单目标派发的边界一致。
+			scope, releaseScope := entity.NewGuardScope("nest:broadcast:" + name)
+			defer releaseScope()
+			guard := scope.Guard()
+			lockStart := startNestStage(mgr.stageMetrics)
+			locked := guard.RequireEntity(e)
+			observeNestStage(name, "lock", lockStart)
+			if !locked {
+				e.UnTouch()
+				return
+			}
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("nest broadcast handler panic", "id", meta.FullID, "handler", name, "err", r)
@@ -534,7 +542,8 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			defer e.UnTouch()
 			defer func() {
 				defer observeNestStage(name, "release", startNestStage(mgr.stageMetrics))
-				guard.ReleaseEntity(e.GUId())
+				// 按实例释放本目标的实例（被同 ID 新实例取代时只放旧锁）；新实例等其余锁随作用域结束一起释放。
+				guard.ReleaseEntityInstance(e)
 			}()
 			oneEntity[0] = e
 			// Broadcast has no early-release closure: pipelined handlers run
