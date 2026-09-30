@@ -10,6 +10,9 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20260930-18](RR-20260930-18.md)：P3 game-demo 模板 `Service.Shutdown` 用 `context.Background()` 关场景，停止重载不受 App 停机时限约束（REMAINING §3 N31，维护者 09-30 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20260930-18.md)）。
+[RR-20260930-17](RR-20260930-17.md)：P3 生成工程 CI 只跑 `docker compose config --quiet`，RR-20260927-33 那种语法合法、语义错的 tmpfs 抓不到（REMAINING §3 N24）（已修复：生成工程自带 `deploy/docker/compose_check_test.go`，未发版；[修复记录](../bugfix/RR-20260930-17.md)）。
+[RR-20260930-16](RR-20260930-16.md)：P4 `add mod` / `add saga` 给 CRLF 的服务配置追加 Mod 段时用 LF，行尾混用（REMAINING §3 N23）（已修复，未发版；[修复记录](../bugfix/RR-20260930-16.md)）。
 [RR-20260930-15](RR-20260930-15.md)：P3 Guard `holding` 直接比较实体接口值，值类型且不可比较的实体实现会 panic（REMAINING N29，维护者 09-30 拍板；已修复：契约“实体必须是指针”+ `BuildEntity` / `TryAdd` 入口校验、`entity.ErrEntityNotPointer`，未发版；[修复记录](../bugfix/RR-20260930-15.md)）。
 [RR-20260930-14](RR-20260930-14.md)：P3 广播 handler 内 Destroy 后同 ID 重建，`broadcastDispatch` 按 ID 释放、一把锁跨后续目标持有（REMAINING N28；已修复：每目标自己的 Guard 作用域、按实例释放，未发版；[修复记录](../bugfix/RR-20260930-14.md)）。
 [RR-20260930-13](RR-20260930-13.md)：P3 `SetEntityVersion` 不做检查改写 StateVersion，同 fence 可回退（REMAINING N26；已修复：拒绝回退并改为返回 error——签名变化，未发版；[修复记录](../bugfix/RR-20260930-13.md)）。

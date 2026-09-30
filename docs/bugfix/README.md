@@ -2,6 +2,10 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20260930-18](RR-20260930-18.md)：game-demo `Service.Shutdown(ctx)` 把 App 停机 ctx 传给 `Scene.Close`；回归模板 `service_shutdown_test.go`；已有工程需手改（demo 文件应用所有）（未发版）。
+[RR-20260930-17](RR-20260930-17.md)：生成工程新增受控文件 `deploy/docker/compose_check_test.go`，对 `docker compose config --format json` 断言 tmpfs / read_only / user / cap_drop / security_opt / stop_grace_period / healthcheck / config bind / 命名卷；`ROOST_COMPOSE_CHECK` 开关，CI 与 `make compose-check` 设置它（未发版）。
+[RR-20260930-16](RR-20260930-16.md)：`appendModConfigSections` 走 `lfText` / `restoreLineEndings`，CRLF 配置按 CRLF 追加（未发版）。
+[RR-20260928-04 后续](RR-20260928-04.md)：stats_log 不做内建轮转，DEPLOYMENT §4 / §5 与生成 README 给 `copytruncate` 的 logrotate 示例（N30，维护者 09-30 拍板）。
 [RR-20260930-15](RR-20260930-15.md)：实体实现必须是指针——契约 + `BuildEntity` / `TryAdd` 用 reflect 校验一次并点名类型，热路径比较不改；仓内值类型替身 `kit/nest` `reloadedEntity` 改指针（未发版）。
 [RR-20260930-14](RR-20260930-14.md)：广播每个目标自己的 Guard 作用域，目标实例按实例释放、其余锁与 post-release 随作用域结束释放；补 Remote 目标 `ReleaseCast` 回归（未发版）。
 [RR-20260930-13](RR-20260930-13.md)：`SetEntityVersion` 同一 fence 下拒绝 StateVersion 回退（`ErrRemoteVersionConflict`），接口改为 `SetEntityVersion(int64) error`（未发版）。

@@ -16,7 +16,14 @@
 
 ### Added
 
+- **生成工程自带 compose 结构检查 `deploy/docker/compose_check_test.go`，CI 与 `make compose-check` 跑它**（RR-20260930-17，N24）：读 `docker compose config --format json` 的解析结果，断言每个 Service 的 tmpfs 恰好一条绝对路径挂载、read_only / user / cap_drop / security_opt、stop_grace_period、healthcheck、config bind 与命名卷；只在 `ROOST_COMPOSE_CHECK` 设置时执行（CI generated-and-deployment 作业与 Makefile 设置），没设置时跳过。已有工程 `project sync` 新建该文件并更新 Makefile / ci.yml。[记录](docs/bugfix/RR-20260930-17.md)
+- **部署文档：stats_log 统计文件不轮转，给出 `copytruncate` 的 logrotate 示例**（REMAINING N30）：`docs/DEPLOYMENT.md` §4 / §5 与生成的 `deploy/shell|docker/README.md`；文件以 `O_APPEND` 打开且进程不重开，`create` / 改名式轮转无效。[记录](docs/bugfix/RR-20260928-04.md)
 - **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。
+
+### Fixed
+
+- **`roost add mod` / `add saga` 给 CRLF 检出的服务配置追加 Mod 段时沿用原行尾**（RR-20260930-16，N23）：开发配置与生产示例之前一律按 LF 追加，一份文件行尾混用；现在与 Secret 示例同一条路径（`lfText` / `restoreLineEndings`），LF 与空文件保持 LF。[记录](docs/bugfix/RR-20260930-16.md)
+- **game-demo：`Service.Shutdown` 把 App 的停机 ctx 传给 `Scene.Close`**（RR-20260930-18，N31）：停止“卸载后重载”与 replication manager 排空受 `shutdown.total_timeout` 约束，不再用 `context.Background()` 等到部署侧 SIGKILL。demo 文件应用所有，已有工程手改两处。[记录](docs/bugfix/RR-20260930-18.md)
 
 ## [v1.18.0] - 2026-09-30
 
