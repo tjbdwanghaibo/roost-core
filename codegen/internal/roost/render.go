@@ -64,6 +64,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")
 		add(path, body, owned)
 	}
+	// RR-20260930-17：生成工程自带的 compose 结构检查，CI 与 make compose-check 跑它。
+	if err := addGo("deploy/docker/compose_check_test.go", renderComposeCheckTest(m), true); err != nil {
+		return nil, err
+	}
 	add("docs/IMPLEMENTATION.zh-CN.md", renderImplementationGuide(m), true)
 	add("docs/DEPLOYMENT.zh-CN.md", renderDeploymentGuide(m), true)
 	if err := addGo("main.go", renderMain(m), false); err != nil {
@@ -867,6 +871,7 @@ image-build:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t $(APP_NAME):$(VERSION) .
 compose-check:
 	ROOST_IMAGE=ghcr.io/example/$(APP_NAME)@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=$(CURDIR)/configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+	`+composeCheckEnv+`=1 go test -count=1 ./deploy/docker/
 k8s-render:
 	kubectl kustomize deploy/k8s/overlays/$(ENV)
 k8s-check:
@@ -999,6 +1004,10 @@ jobs:
           ROOST_IMAGE: ghcr.io/example/{{APP}}@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           ROOST_CONFIG_ROOT: ${{ github.workspace }}/configs/service
         run: docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+      - name: production compose resolves to the shape the deployment relies on
+        env:
+          `+composeCheckEnv+`: "1"
+        run: go test -count=1 ./deploy/docker/
       - name: kubernetes manifests render
         run: |
           kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"
