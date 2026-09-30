@@ -1,8 +1,10 @@
-# RR-20260930-CG-12～24 修前与修后证据
+# RR-20260930-CG-12～14 修前与修后证据
 
 起点 Core `4784ef820cab599e0b1321a96a5843af2ab95e58`；五个最终 Go 文件见 [source-evidence.csv](source-evidence.csv)，源码收口 `2f68aa22`。Go 1.27.0 / Windows；仅临时消费者有 local replace，未改 Core go.mod/toolchain 或 go.work。
 
-编号映射：日志名 RR12/13/14 是第五轮原 Codegen 编号，当前为 RR22/23/24，原始日志不改写。初轮摘要见 [source-evidence-initial.csv](source-evidence-initial.csv)；source-evidence.csv 记录编号更正并整合远端后的 `56d4b805` 源码。新增 final-* 记录该基线上的重复验证，保持原轮次证据独立。
+编号映射：日志名 RR12/13/14 是第五轮原 Codegen 编号，当前完整编号为 RR-20260930-CG-12/13/14，原始日志不改写。临时 22/23/24 被另一工作线占用，映射历史见[规范记录](../../../bug/RR-20260930-CG-12.md)。初轮摘要见 [source-evidence-initial.csv](source-evidence-initial.csv)，第一次整合摘要见 [source-evidence-56d4b805.csv](source-evidence-56d4b805.csv)，source-evidence.csv 记录最终 `05f0dc3b` 源码。final-* 日志属于 `56d4b805`，cg-final-* 属于 `05f0dc3b`，保持各轮证据独立。
+
+`05f0dc3b` 已包含远端 `9f7d0dc5`：cg-final-cfggen.log（全 cfggen race）、cg-final-roost.log（demo 模板生成、依赖迁移/失败/并发/隔离与 consolidation 邻接 race）、cg-final-vet.log / cg-final-glsvet.log（静态 exit0）、cg-final-consumer.log（已有正式工程消费当前 Core）、cg-final-sync-consumer.log（既有正式生成 periodic/on_change fixture 在当前 Core race），均通过。相对 `56d4b805` 的本轮五个 Go 文件仅 RR 注释更正，最新远端没有改这五个文件；全 Codegen race 使用前一整合版本，不冒称在最终版本又跑全域。新增 demo 测试模板解析/生成通过，但未运行真实资源端到端或其新登记的 game-demo 问题。
 
 | 文件 | 实际结果 |
 | --- | --- |

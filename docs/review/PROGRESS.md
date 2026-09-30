@@ -15,6 +15,8 @@ RR-CG-12～14 按本表范围关闭；整个 Codegen 仍有下方具名未审项
 
 编号映射：第五轮原 Codegen RR-12/13/14 → RR-CG-12/13/14，避免与并行 Nest/Entity 记录重号；原报告和证据保留。正常整合远端 `d4ef0a3b` 至 `56d4b805`，重新构建 CLI、迁移新工程与 DAO/Entity 双模式消费者，均通过；生成 compose 的 Docker 运行检查未执行。完整收尾结果见第六轮记录及 final-* 日志。
 
+收尾版本 `05f0dc3b` 又整合了 `9f7d0dc5`。临时 22/23/24 与 game-demo 重号，因此 Codegen 最终完整编号为 RR-20260930-CG-12/13/14，映射见规范 bug 记录。补跑全 cfggen 与 demo/依赖/consolidation 定向 race、静态检查、当前 Core 生成消费者及双模式 Sync 全通过；对应 cg-final-* 日志。game-demo 独立 RR-20260930-22～24 仍按另一工作线的未修状态管理，不计入本轮 3/3。
+
 ## 2026-09-30 Codegen 第五轮：cfggen 与依赖自动迁移
 
 [运行/停点](REVIEW-2026-09-30-codegen-05.md) · [三个新 P2](../bug/REVIEW-2026-09-30-codegen-05.md) · [实现学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [复跑](evidence/codegen-review-20260930-05/README.md)。基线 `30085d62`，仅文档审查。上轮五项修复实现无新变化，Codegen 包回归通过；RR-12～14 已复现、未修。

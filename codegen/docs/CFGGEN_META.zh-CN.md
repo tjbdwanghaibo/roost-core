@@ -140,7 +140,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 所有生成的顶层标识符（类型名、访问器名、固定函数名）在生成期做**全量冲突检查**：`my_table` 与 `myTable`、表 `item` 与全局 `item_table`（派生名同为 `ItemTableFrom`）、bean 撞行类型名等都会在生成期报错，而不是产出编译不过的代码。
 
-固定保留名包括 `RegisterGeneratedConfigData`、`MustRegisterGeneratedConfigData`、`RegisterConfigData` 和导入名 `configdata`。完整 schema 含启用的非 string 索引时，也保留 `strconv`；`index: false` 不启用索引，不会因此引入 strconv。冲突在写入前返回错误，已有生成文件保持，修正 schema 后重新生成（RR-20260930-CG-12/23）。
+固定保留名包括 `RegisterGeneratedConfigData`、`MustRegisterGeneratedConfigData`、`RegisterConfigData` 和导入名 `configdata`。完整 schema 含启用的非 string 索引时，也保留 `strconv`；`index: false` 不启用索引，不会因此引入 strconv。冲突在写入前返回错误，已有生成文件保持，修正 schema 后重新生成（RR-20260930-CG-12 / RR-20260930-CG-13）。
 
 ## 生成产物
 

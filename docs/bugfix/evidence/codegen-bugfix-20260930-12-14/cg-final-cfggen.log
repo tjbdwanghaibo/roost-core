@@ -1,0 +1,106 @@
+=== RUN   TestCfggenDisabledIndexesCompile
+=== RUN   TestCfggenDisabledIndexesCompile/string_enabled_numeric_disabled
+=== RUN   TestCfggenDisabledIndexesCompile/mixed_enabled_disabled
+=== RUN   TestCfggenDisabledIndexesCompile/all_disabled
+=== RUN   TestCfggenDisabledIndexesCompile/no_indexes
+--- PASS: TestCfggenDisabledIndexesCompile (5.26s)
+    --- PASS: TestCfggenDisabledIndexesCompile/string_enabled_numeric_disabled (1.71s)
+    --- PASS: TestCfggenDisabledIndexesCompile/mixed_enabled_disabled (1.24s)
+    --- PASS: TestCfggenDisabledIndexesCompile/all_disabled (1.12s)
+    --- PASS: TestCfggenDisabledIndexesCompile/no_indexes (1.20s)
+=== RUN   TestExportRefusesABeanWithEveryFieldExcluded
+--- PASS: TestExportRefusesABeanWithEveryFieldExcluded (0.01s)
+=== RUN   TestCfggenExportsOnlyTheTargetGroups
+--- PASS: TestCfggenExportsOnlyTheTargetGroups (0.02s)
+=== RUN   TestCfggenGroupsFlagSelectsAnotherTarget
+--- PASS: TestCfggenGroupsFlagSelectsAnotherTarget (0.04s)
+=== RUN   TestCfggenWithoutGroupsExportsEverything
+--- PASS: TestCfggenWithoutGroupsExportsEverything (0.01s)
+=== RUN   TestCfggenRefusesEachInvalidGroupUse
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/group_is_not_a_name
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/undeclared_field_group
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/undeclared_table_group
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/undeclared_target
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/group_declared_twice
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/key_field_excluded
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/ref_to_an_excluded_table
+=== RUN   TestCfggenRefusesEachInvalidGroupUse/global_with_every_field_excluded
+--- PASS: TestCfggenRefusesEachInvalidGroupUse (0.09s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/group_is_not_a_name (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/undeclared_field_group (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/undeclared_table_group (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/undeclared_target (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/group_declared_twice (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/key_field_excluded (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/ref_to_an_excluded_table (0.01s)
+    --- PASS: TestCfggenRefusesEachInvalidGroupUse/global_with_every_field_excluded (0.01s)
+=== RUN   TestCfggenGeneratesStructsRegistrationAndAccessors
+--- PASS: TestCfggenGeneratesStructsRegistrationAndAccessors (0.02s)
+=== RUN   TestCfggenAcceptsObjectsAliasForGlobals
+--- PASS: TestCfggenAcceptsObjectsAliasForGlobals (0.03s)
+=== RUN   TestCfggenRejectsBrokenMeta
+--- PASS: TestCfggenRejectsBrokenMeta (0.09s)
+=== RUN   TestCfggenIndexFalseDisablesIndex
+--- PASS: TestCfggenIndexFalseDisablesIndex (0.02s)
+=== RUN   TestCfggenKeywordFieldNamesGenerateCompilableParams
+--- PASS: TestCfggenKeywordFieldNamesGenerateCompilableParams (0.02s)
+=== RUN   TestCfggenSanitizesMultilineComments
+--- PASS: TestCfggenSanitizesMultilineComments (0.01s)
+=== RUN   TestCfggenRejectsIdentifierCollisionsAndBadNames
+--- PASS: TestCfggenRejectsIdentifierCollisionsAndBadNames (0.13s)
+=== RUN   TestCfggenKeywordTableNameIsFine
+--- PASS: TestCfggenKeywordTableNameIsFine (0.03s)
+=== RUN   TestCfggenBeanSliceRecursionIsAllowed
+--- PASS: TestCfggenBeanSliceRecursionIsAllowed (0.02s)
+=== RUN   TestCfggenRequiredAndSkipEmptyOptions
+--- PASS: TestCfggenRequiredAndSkipEmptyOptions (0.03s)
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/table_duplicate_field
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/table_fields_collide_on_Go_field
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/table_file_escapes_data_dir
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/duplicate_table_name
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/duplicate_global_name
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/table_without_fields
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/global_without_fields
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_duplicate_field
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_fields_collide_on_Go_field
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_field_with_ref
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_field_with_index
+=== RUN   TestCfggenRejectsEachFieldRuleForTheStatedReason/ref_target_not_a_table
+--- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason (0.10s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/table_duplicate_field (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/table_fields_collide_on_Go_field (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/table_file_escapes_data_dir (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/duplicate_table_name (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/duplicate_global_name (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/table_without_fields (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/global_without_fields (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_duplicate_field (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_fields_collide_on_Go_field (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_field_with_ref (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/bean_field_with_index (0.01s)
+    --- PASS: TestCfggenRejectsEachFieldRuleForTheStatedReason/ref_target_not_a_table (0.01s)
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterConfigData
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterGeneratedConfigData
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/MustRegisterGeneratedConfigData
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/configdata
+=== RUN   TestCfggenRejectsReservedBeanNamesBeforeWriting/strconv
+--- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting (0.06s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterConfigData (0.01s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/RegisterGeneratedConfigData (0.02s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/MustRegisterGeneratedConfigData (0.01s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/configdata (0.01s)
+    --- PASS: TestCfggenRejectsReservedBeanNamesBeforeWriting/strconv (0.01s)
+=== RUN   TestCfggenNonCollidingBeanNamesCompile
+=== RUN   TestCfggenNonCollidingBeanNamesCompile/Configdata
+=== RUN   TestCfggenNonCollidingBeanNamesCompile/RegisterConfigDataBean
+=== RUN   TestCfggenNonCollidingBeanNamesCompile/strconv
+--- PASS: TestCfggenNonCollidingBeanNamesCompile (3.13s)
+    --- PASS: TestCfggenNonCollidingBeanNamesCompile/Configdata (1.06s)
+    --- PASS: TestCfggenNonCollidingBeanNamesCompile/RegisterConfigDataBean (1.03s)
+    --- PASS: TestCfggenNonCollidingBeanNamesCompile/strconv (1.03s)
+=== RUN   TestCfggenRejectsBrokenMetaForTheStatedReason
+--- PASS: TestCfggenRejectsBrokenMetaForTheStatedReason (0.03s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/cfggen	10.924s

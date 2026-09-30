@@ -39,6 +39,8 @@ Tier 2，roost-core index_status ready，起点 HEAD 对齐 `4784ef82`；coverag
 
 ## 后续停点
 
-最终基线 `56d4b805` 的 `go test -race ./codegen/... -skip TestDeployScriptsCarryNoKnownShellcheckFindings -count=1` 全包通过（roost 包约 172 秒），见 final-codegen-race.log。Codegen 的三项本轮修复均保留正式回归，原始红测与初轮绿测独立归档；远端相关修改已纳入这次回归，但不冒称其他工作线各 RR 均由本轮独立验收。
+整合基线 `56d4b805` 的 `go test -race ./codegen/... -skip TestDeployScriptsCarryNoKnownShellcheckFindings -count=1` 全包通过（roost 包约 172 秒），见 final-codegen-race.log。Codegen 的三项本轮修复均保留正式回归，原始红测与初轮绿测独立归档；此时远端相关修改已纳入这次回归，但不冒称其他工作线各 RR 均由本轮独立验收。
+
+最终源码基线 `05f0dc3b` 整合远端 `9f7d0dc5` 的 Remote 锁恢复和 demo 新测试。五个本轮 Go 文件相对上述全域 race 基线只有编号注释更正，无行为差异；本轮补跑全 cfggen race、roost 的 demo 模板生成和依赖/consolidation 定向 race、Codegen vet/glsvet、正式工程消费当前 Core、DAO/Entity 已生成双模式 Sync race，均通过，见 cg-final-*。这些检查不等于真实资源端到端验收，也未运行新 game-demo RR-22～24 的失败路径；保留另一工作线未修状态。
 
 RR-CG-12～14 已在上述范围关闭，不能因此把整个 Codegen 标为完成。下一次 review 继续真实配置加载/required/ref/skipempty/索引值往返，显式 upgrade 的旧版本消费者、正式 Webroute 服务启动；强杀/磁盘/rollback 失败与旧客户端兼容仍未验证。本轮同步[进度](PROGRESS.md)与[机制学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md)，不替这些边界补写“已验”。
