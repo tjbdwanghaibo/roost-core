@@ -240,7 +240,12 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 
 // Shutdown drains the consumer: in-flight effects finish or are redelivered
 // to the next process holding the durable; nothing is lost either way.
-func (s *Service) Shutdown(context.Context) error {
+//
+// ctx is the App's stop context, bounded by shutdown.total_timeout; the scene
+// closes under it (RR-20260930-18), so stopping the reload of unloaded
+// players and closing the replication manager cannot outlive the deployment's
+// grace period. It used to close under context.Background().
+func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
@@ -290,7 +295,7 @@ func (s *Service) Shutdown(context.Context) error {
 	// replication loop and the transport sink, and anything still preparing
 	// a frame finishes first.
 	if s.scene != nil {
-		if err := s.scene.Close(context.Background()); err != nil {
+		if err := s.scene.Close(ctx); err != nil {
 			slog.Warn("scene did not close cleanly", "err", err)
 		}
 		s.scene = nil

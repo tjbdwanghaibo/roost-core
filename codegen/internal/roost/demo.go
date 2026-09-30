@@ -580,6 +580,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "deploy/dev/observability/grafana/dashboards/roost-demo.json", why: "the dashboard, one row per step of the chain"},
 		{write: "deploy/dev/observability/README.md", why: "metric ↔ chain step ↔ what to look at"},
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
+		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout (RR-20260930-18)"},
 		{write: "internal/service/game/syncbus_config_test.go", why: "the generated syncbus section is the transport the kit Mod actually starts on, with no unread-config warnings (RR-20260926-12)"},
 		{write: "internal/service/game/level_up_mail.go", why: "the consumer: JetStream durable + Mongo inbox → mail.Send keyed by EffectID"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
