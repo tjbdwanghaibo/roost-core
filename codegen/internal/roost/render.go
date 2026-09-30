@@ -614,11 +614,16 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		if err != nil {
 			return changed, err
 		}
-		body, appended := appendMissingConfigBlocks(string(raw), sections, target.production)
+		// RR-20260930-16：按文件原有的行尾追加。CRLF 检出的配置之前一律按 LF 追加新段，
+		// 一份文件里两种行尾混用；Secret 示例（下面 editKubernetesSecretExampleConfig）
+		// 早已按原行尾写回，这两份文件走同一对 lfText / restoreLineEndings。
+		// 空文件与 LF 文件保持 LF。
+		text, crlf := lfText(raw)
+		body, appended := appendMissingConfigBlocks(text, sections, target.production)
 		if !appended {
 			continue
 		}
-		if err := writeAtomic(path, []byte(body), 0o644); err != nil {
+		if err := writeAtomic(path, restoreLineEndings(body, crlf), 0o644); err != nil {
 			return changed, err
 		}
 		changed = append(changed, target.rel)
