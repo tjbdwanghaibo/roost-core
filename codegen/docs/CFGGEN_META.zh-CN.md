@@ -136,9 +136,11 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 | 字段 `scene_id` | struct 字段 `SceneID`（`id` 词固定大写为 `ID`），json tag 保持原名 |
 | 索引 `scene_id`（或 `index: camp`） | 访问器 `MonsterBySceneID(snap, sceneID int32) []MonsterCfg` / `MonsterByCamp(...)` |
 | 字段名撞 Go 关键字/保留名（`type`/`range`/`table`/`snap`…） | 参数名自动加后缀：`typeArg`——字段名照常可用 |
-| bean 名 | 原样作为 Go 类型名（因此必须是导出形（大写开头）、非关键字、不遮蔽预声明标识符） |
+| bean 名 | 原样作为 Go 类型名；建议大写开头供其他包使用，必须是合法 Go 标识符、非关键字、不遮蔽预声明标识符或生成保留名 |
 
 所有生成的顶层标识符（类型名、访问器名、固定函数名）在生成期做**全量冲突检查**：`my_table` 与 `myTable`、表 `item` 与全局 `item_table`（派生名同为 `ItemTableFrom`）、bean 撞行类型名等都会在生成期报错，而不是产出编译不过的代码。
+
+固定保留名包括 `RegisterGeneratedConfigData`、`MustRegisterGeneratedConfigData`、`RegisterConfigData` 和导入名 `configdata`。完整 schema 含启用的非 string 索引时，也保留 `strconv`；`index: false` 不启用索引，不会因此引入 strconv。冲突在写入前返回错误，已有生成文件保持，修正 schema 后重新生成（RR-20260930-12/13）。
 
 ## 生成产物
 

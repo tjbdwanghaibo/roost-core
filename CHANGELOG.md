@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-12）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-12.md)。
+- **cfggen 写入前拒绝生成名称冲突（RR-20260930-13）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-13.md)。
+- **依赖事务同时提交明确的合仓迁移（RR-20260930-14）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-14.md)。
+
 ## [v1.18.0] - 2026-09-30
 
 > 本版合并两条工作线：A 线（core cache、生成链路测试、CI 门禁：RR-20260928-15、RR-20260930-03/11）与 B 线（Service 十域、Redis driver、Codegen 退役旧产物：RR-20260929-01～34、RR-20260930-01/02/04～10）。B 线有源码不兼容的 Go API 变化（`Mail.CancelClaim`、`session.ClaimStore`、`platform.Admin`），所以是次版本而非补丁；生成器 Core 下限与 framework-compat 的 minimum 同步升到 v1.18.0。两条线的逐编号状态见 [ARCHIVE-2026-09-30](docs/review/ARCHIVE-2026-09-30.md)。发版前验证：`scripts/pretag.sh` 通过（干净 worktree）；Remote 故障矩阵 21/21 PASS（`artifacts/perf/remote/matrix-v1180-30085d62`，本地）。tag → `4b277176`。

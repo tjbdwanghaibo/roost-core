@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**09-30 Codegen 第四批：**[RR-12 false 索引](RR-20260930-12.md)、[RR-13 命名空间](RR-20260930-13.md)、[RR-14 依赖迁移](RR-20260930-14.md) **3/3 已修复并在具名场景验证，未发版**。正式回归先红后绿；全 Codegen race/vet、glsvet、正式 project deps 消费与双模式 Sync 生成链通过，具名 shell 环境项跳过。[运行/进度](../review/REVIEW-2026-09-30-codegen-06.md) · [原始证据](evidence/codegen-bugfix-20260930-12-14/README.md)。
+
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
 [RR-20260930-11](RR-20260930-11.md)：`cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发 `loads=2` 是测试假设过强（只等到 `loads > 0` 就放行），改为轮询 `Stats()` 把 8 个 goroutine 钉到合并点再放行，断言 `Loads=1 / Coalesced=7`；实现不动，不进 CHANGELOG（已修复，v1.18.0）。

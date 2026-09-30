@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第六轮：RR-12～14 修复验收
+
+[运行/停点](REVIEW-2026-09-30-codegen-06.md) · [三项修复](../bugfix/README.md) · [原始证据](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。起点 `4784ef82`，源码修复收口 `2f68aa22`。用户本轮明确 bugfix；三项原触发与具名邻接场景已验，未发版，下方第五轮“未修”保留历史。
+
+| 范围 | 本轮实证 | 剩余边界 |
+| --- | --- | --- |
+| cfggen 索引/namespace | 18 个新增叶子中的 12 项配置消费/拒绝控制；四索引场景、五保留名、三正常 bean；全包 race | required/ref/skipempty 与真实 JSON/索引往返仍未执行 |
+| deps 自动合仓/输入所有权 | 六项正式成功/失败/并发场景、既有只提交模块保护；真实 CLI get/tidy 后 Go/manifest/模块对账，生成工程编译 | 不等于所有显式升级版本消费者/强杀/磁盘/rollback 失败验证 |
+| 相邻生成消费 | 正式 DAO → Entity → periodic/on_change Sync，native Go 等价脚本链 race | 不是完整业务进程运行或真实外部资源矩阵 |
+| 全 Codegen/静态 | 全 Codegen race/vet、glsvet 通过；具名 shell 项跳过 | sh/shellcheck PATH 工具限制；发布 tag 未含新修复 |
+
+RR-12～14 按本表范围关闭；整个 Codegen 仍有下方具名未审项，继续入口是配置运行期、显式 upgrade 消费者、正式 Webroute 启动。新测试 graph coverage not_tracked、旧路径 metadata_changed，当前源码和执行补证，不称图谱全域同代。
+
 ## 2026-09-30 Codegen 第五轮：cfggen 与依赖自动迁移
 
 [运行/停点](REVIEW-2026-09-30-codegen-05.md) · [三个新 P2](../bug/REVIEW-2026-09-30-codegen-05.md) · [实现学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [复跑](evidence/codegen-review-20260930-05/README.md)。基线 `30085d62`，仅文档审查。上轮五项修复实现无新变化，Codegen 包回归通过；RR-12～14 已复现、未修。
