@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **integration 覆盖门禁识别 Redis Cluster 套件**：`kit/service/mail/batch_cluster_integration_test.go`（RR-20260929-33）以 `ROOST_REVIEW_CLUSTER` 准入，此前被门禁归为全环境套件、要求故障矩阵运行它，main 的 `ci` / `nightly` 因 `TestFaultMatrixScriptNamesEveryFullEnvironmentSuite` 一直红。现在门禁分三类：`REDIS_ADDR` → ci.yml Redis job，`ROOST_DATAENGINE_IT` → `dataengine-env.sh test`，`ROOST_REVIEW_CLUSTER` → 新增的手动入口 `kit/scripts/integration/redis-cluster-suites.sh`（CI 无集群，这些用例在 CI 里一律 skip，由 `TestRedisClusterScriptNamesEveryClusterKeyedSuite` 钉住包清单）。
 - **`cache.AtomicLocalStore` 时钟记录随存活键数有界（RR-20260930-03，P2）**：此前覆盖写、Delete、过期都不回收时钟记录，键数远低于上限、永不淘汰的 Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆涨到 4.7GB，v1.10.0 起即有）；现在超过 `2 × 存活键数 + 1024` 时就地压缩，准入规则与淘汰顺序不变。覆盖写约多 11ns、0 B/op。remoteflow 负载 harness 新增 `ROOST_REMOTE_HEAP_PROFILE_MINUTES`（默认关闭）。
 
 - **生成的 player TCP 与 game-demo 场景连接测试先等会话登记（RR-20260928-15）**：生成的服务器先写认证 ack、再登记会话，`server_gen_test.go` 的 6 个用例与 `scene_connections_test.go` 的两个用例原来拨号后直接断言，高负载下偶发 `active sessions = 1, want 2`（framework-compat source-head lane）。只改测试；已生成工程 sync 更新 `server_gen_test.go`，`scene_connections_test.go` 是业务文件需手工补。

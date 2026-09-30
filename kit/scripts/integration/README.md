@@ -71,3 +71,20 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 
 脚本自检：`bash kit/scripts/integration/dataengine_env_test.sh`。它只 source 库、只写
 临时目录，不启动进程；开头那次 `status` 只读，会指向当前变量选中的环境。
+
+## 需要 Redis Cluster 的套件：`redis-cluster-suites.sh`
+
+以 `ROOST_REVIEW_CLUSTER` 为准入的 integration 用例（`kit/service/mail`、`redis/driver`、
+`service/mail` 各一个文件）需要真实的 Redis Cluster。CI 的 Redis job 只有单实例，
+`dataengine-env.sh` 也不起集群，所以它们在 CI 里一律 skip；本机对着 3 主 3 从集群跑：
+
+```bash
+ROOST_REVIEW_CLUSTER=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005 \
+  bash kit/scripts/integration/redis-cluster-suites.sh
+```
+
+包清单由 `integration_coverage_promises_test.go` 钉在磁盘上的文件：新增一个含
+`ROOST_REVIEW_CLUSTER` 的 integration 测试文件，它所在的包必须加进脚本，否则根包测试
+`TestRedisClusterScriptNamesEveryClusterKeyedSuite` 变红；同理，`ROOST_DATAENGINE_IT`
+准入的包必须在 `dataengine-env.sh test` 的清单里，`REDIS_ADDR` 准入的包必须在 ci.yml 的
+Redis job 里。

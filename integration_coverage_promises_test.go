@@ -19,11 +19,21 @@ import (
 // 有哪些 `//go:build integration` 的测试文件。** 这条测试让列表以真相为准。
 
 // integrationTestPackages lists every package directory that has at least one
-// `//go:build integration` test file, and whether that file keys on REDIS_ADDR
-// (a Redis-only suite) or on the full ROOST_DATAENGINE_IT environment.
-func integrationTestPackages(t *testing.T) (redisOnly, fullEnv []string) {
+// `//go:build integration` test file, grouped by the environment those files
+// key on: REDIS_ADDR (a Redis-only suite), the full ROOST_DATAENGINE_IT
+// environment, or ROOST_REVIEW_CLUSTER (a real Redis Cluster that no CI job
+// provides; those suites have their own manual entry, see
+// TestRedisClusterScriptNamesEveryClusterKeyedSuite).
+//
+// A directory is Redis-only when any of its files keys on REDIS_ADDR (the
+// Redis job runs the whole package), full-environment when it has a
+// full-environment file and no Redis-only one, and cluster when any file keys
+// on ROOST_REVIEW_CLUSTER — that last set overlaps the other two on purpose:
+// the cluster file inside a Redis-only or full-environment package is still
+// run by nobody unless the cluster script names the package.
+func integrationTestPackages(t *testing.T) (redisOnly, fullEnv, cluster []string) {
 	t.Helper()
-	seen := map[string]string{}
+	kinds := map[string]map[string]bool{}
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -53,31 +63,50 @@ func integrationTestPackages(t *testing.T) (redisOnly, fullEnv []string) {
 			return nil
 		}
 		dir := filepath.ToSlash(filepath.Dir(path))
-		kind := "full"
-		if strings.Contains(text, "REDIS_ADDR") && !strings.Contains(text, "ROOST_DATAENGINE_IT") {
-			kind = "redis"
+		if kinds[dir] == nil {
+			kinds[dir] = map[string]bool{}
 		}
-		if prev, ok := seen[dir]; !ok || prev == "full" {
-			seen[dir] = kind
+		// A file may gate some tests on REDIS_ADDR and others on the cluster
+		// (service/mail does), so the cluster flag is independent of the
+		// Redis-only / full-environment split; a file keyed on the cluster
+		// alone belongs to no other runner.
+		kind := "full"
+		switch {
+		case strings.Contains(text, "ROOST_DATAENGINE_IT"):
+		case strings.Contains(text, "REDIS_ADDR"):
+			kind = "redis"
+		case strings.Contains(text, "ROOST_REVIEW_CLUSTER"):
+			kind = ""
+		}
+		if kind != "" {
+			kinds[dir][kind] = true
+		}
+		if strings.Contains(text, "ROOST_REVIEW_CLUSTER") {
+			kinds[dir]["cluster"] = true
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for dir, kind := range seen {
-		if kind == "redis" {
+	for dir, has := range kinds {
+		switch {
+		case has["redis"]:
 			redisOnly = append(redisOnly, dir)
-		} else {
+		case has["full"]:
 			fullEnv = append(fullEnv, dir)
+		}
+		if has["cluster"] {
+			cluster = append(cluster, dir)
 		}
 	}
 	sort.Strings(redisOnly)
 	sort.Strings(fullEnv)
+	sort.Strings(cluster)
 	if len(redisOnly) == 0 || len(fullEnv) == 0 {
 		t.Fatalf("expected both Redis-only and full-environment integration suites; got redis=%v full=%v", redisOnly, fullEnv)
 	}
-	return redisOnly, fullEnv
+	return redisOnly, fullEnv, cluster
 }
 
 // goTestPackageArgs extracts the ./package arguments of every `go test` line
@@ -117,7 +146,7 @@ func covers(args []string, dir string) bool {
 // The Redis job in ci.yml must name every Redis-only integration suite, and
 // its skip guard is only as good as that list.
 func TestCIRedisJobRunsEveryRedisIntegrationSuite(t *testing.T) {
-	redisOnly, _ := integrationTestPackages(t)
+	redisOnly, _, _ := integrationTestPackages(t)
 	raw, err := os.ReadFile(filepath.Join(".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +168,7 @@ func TestCIRedisJobRunsEveryRedisIntegrationSuite(t *testing.T) {
 // that has no integration tests (a `[no test files]` cell reports green for
 // nothing).
 func TestFaultMatrixScriptNamesEveryFullEnvironmentSuite(t *testing.T) {
-	_, fullEnv := integrationTestPackages(t)
+	_, fullEnv, _ := integrationTestPackages(t)
 	script := filepath.Join("kit", "scripts", "integration", "dataengine-env.sh")
 	raw, err := os.ReadFile(script)
 	if err != nil {
@@ -168,6 +197,39 @@ func TestFaultMatrixScriptNamesEveryFullEnvironmentSuite(t *testing.T) {
 	// default; prose about that history is fine, the variable is not.
 	if strings.Contains(string(raw), "ROOST_CORE_DIR") {
 		t.Errorf("%s still looks for a sibling roost-core checkout; since the consolidation the core suites are in this module and the path does not exist (the script printed \"NOT run\" and exited 0)", script)
+	}
+}
+
+// Suites keyed on ROOST_REVIEW_CLUSTER need a real Redis Cluster, which
+// neither the Redis job nor the isolated environment provides, so they skip
+// everywhere in CI. The manual entry kit/scripts/integration/redis-cluster-suites.sh
+// must name every package that has such a file — a package it leaves out is
+// run by nobody, and a package it names without one is a `[no test files]`
+// or all-skip cell that reports green for nothing.
+func TestRedisClusterScriptNamesEveryClusterKeyedSuite(t *testing.T) {
+	_, _, cluster := integrationTestPackages(t)
+	script := filepath.Join("kit", "scripts", "integration", "redis-cluster-suites.sh")
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := goTestPackageArgs(string(raw))
+	if len(args) == 0 {
+		t.Fatalf("%s has no `go test -tags=integration` line", script)
+	}
+	for _, dir := range cluster {
+		if !covers(args, dir) {
+			t.Errorf("%s: %s has ROOST_REVIEW_CLUSTER integration tests that no runner names (they skip without a cluster, and CI has none); args: %v", script, dir, args)
+		}
+	}
+	for _, arg := range args {
+		if strings.HasSuffix(arg, "/...") {
+			t.Errorf("%s names %s: the cluster list is spelled out per package so that a package without cluster tests cannot hide inside a pattern", script, arg)
+			continue
+		}
+		if dir := strings.TrimPrefix(arg, "./"); !covers(cluster, dir) {
+			t.Errorf("%s names %s, which has no ROOST_REVIEW_CLUSTER test files: that cell reports green for nothing", script, arg)
+		}
 	}
 }
 
