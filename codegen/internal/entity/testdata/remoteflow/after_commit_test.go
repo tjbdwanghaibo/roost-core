@@ -216,11 +216,9 @@ func TestGeneratedRemoteCloseFailureAfterCommitCarriesSentinel(t *testing.T) {
 // 提交后释放 Redis 锁失败（回复已带 ErrAfterCommitFailed + ErrRemoteReleaseIncomplete）之后，同一实体在 Redis 租期（LockTTL 3s）
 // 到期后应当重新可写：释放失败只是资源没交还，不是实体从此不可写。
 func TestGeneratedRemoteEntityWritableAfterUnlockFailure(t *testing.T) {
-	// 2026-09-30 实跑（B27 第 2 批）：10s 内 50 次重试全部 `remote_entity: shared lock <id>: versioned lock already acquired`。
-	// UnlockWithRetry 用尽重试后本地 acquired 仍为 true（remoteentity/versioned_lock.go:236-275 只在 Redis 答复 0 时清 acquired），
-	// 下一次 beginWrite 的 rMu.Lock（batch.go:165）→ TryLock（versioned_lock.go:108-110）看本地状态就拒绝，不再问 Redis；
-	// 只有 Touch / Refresh 看到租约失效才清（:355-405），而写之间没有人 Touch。实体在本进程内从此不可写。
-	t.Skip("RR-20260930-21：提交后释放 Redis 锁失败后，versionedLock 本地 acquired 不清，同一实体在本进程内永久 `versioned lock already acquired`")
+	// 2026-09-30 修前实跑（B27 第 2 批，RR-20260930-21）：10s 内 50 次重试全部 `remote_entity: shared lock <id>: versioned lock already acquired`。
+	// UnlockWithRetry 用尽重试后本地 acquired 仍为 true，下一次 beginWrite 的 rMu.Lock → TryLock 看本地状态就拒绝，不再问 Redis。
+	// 修后释放失败让锁进入"持有状态未知"，TryLock 以 Redis 为准：租约仍是上一代 token 就在同一条脚本里换成新 token 重新取得。
 	rig, name := newAfterCommitRig(t)
 	id := rig.seed(t, 9715)
 	if err := rig.request(rig.ctx, id); err != nil {

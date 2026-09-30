@@ -33,7 +33,12 @@ func (s *unlockEvalStub) Eval(_ context.Context, script string, _ []string, args
 	defer s.mu.Unlock()
 	switch script {
 	case versionedTryLockLua:
-		if _, held := s.hash["owner"]; held {
+		// ARGV[3]：上一次释放结果未知的 token，owner 仍是它时同样可取得（RR-20260930-21）。
+		reclaim := ""
+		if len(args) > 2 {
+			reclaim, _ = args[2].(string)
+		}
+		if owner, held := s.hash["owner"]; held && (reclaim == "" || owner != reclaim) {
 			return []any{int64(0), int64(0), int64(0)}, nil
 		}
 		s.hash["owner"] = args[0].(string)
