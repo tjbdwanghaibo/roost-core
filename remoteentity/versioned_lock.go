@@ -37,6 +37,13 @@ type versionedLock struct {
 	fence    uint64
 	grant    WriteGrant
 
+	// releaseUnknownToken 是上一次释放没有得到 Redis 明确答复的代际（RR-20260930-21）：UnlockWithRetry 的 Redis 错误
+	// 用尽重试或 ctx 到期后，本地不再算持有（acquired=false，Touch / Refresh / IsAcquired / Close 都按未持有处理），
+	// 但 Redis 上 owner 可能仍是它、也可能已过期或被别人取得。下一次 TryLock 把它交给 Lua 以 Redis 为准：owner 仍是它
+	// 就视为重新取得（新 token、新 fence、新代际），被别人持有走 NotAcquired，已过期正常取锁；Redis 给出明确答复后清空。
+	// 不能伪造"已释放"（Redis 上锁可能仍在），也不能留着 acquired=true（TryLock 不问 Redis 就拒绝，实体在本进程内永久不可写）。
+	releaseUnknownToken string
+
 	// 异步续期按锁代际绑定（RR-20260926-43）。touchGeneration 是当前登记的续期 goroutine
 	// 所服务的 token，空表示没有登记。旧代际 goroutine 只续期、只判失效自己的 token，退出时
 	// 也只清除仍属于自己的登记；新代际 TryLock 时取消旧 goroutine 并为新 token 启动续期，
@@ -111,7 +118,8 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 
 	ttlMs := l.ttl.Milliseconds()
 	token := generateToken()
-	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs)
+	// 上一次释放结果未知的代际交给 Lua：owner 仍是它就在同一条脚本里换成新 token（RR-20260930-21）。
+	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.releaseUnknownToken)
 	if err != nil {
 		return fmt.Errorf("versioned lock redis error: %w", err)
 	}
@@ -120,6 +128,8 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("versioned lock parse error: %w", err)
 	}
+	// Redis 已对上一代 token 给出明确答复：要么被本次取得替换，要么已不是 owner；之后不再拿它去问。
+	l.releaseUnknownToken = ""
 	if len(vals) < 3 || vals[0] == 0 {
 		return ErrVersionedLockNotAcquired
 	}
@@ -236,6 +246,7 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 	for i := 0; i <= retryCount; i++ {
 		select {
 		case <-ctx.Done():
+			l.releaseOutcomeUnknown(token)
 			return ctx.Err()
 		default:
 		}
@@ -273,12 +284,29 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 			jitter := time.Duration(float64(backoff) * (0.5 + rand.Float64()*0.5))
 			select {
 			case <-ctx.Done():
+				l.releaseOutcomeUnknown(token)
 				return ctx.Err()
 			case <-time.After(jitter):
 			}
 		}
 	}
+	// Redis 错误用尽重试：没有明确答复，Redis 上 owner 可能仍是 token。本地进入持有状态未知，
+	// 下一次 TryLock 以 Redis 为准（RR-20260930-21）；这里既不能伪造已释放，也不能保持 acquired。
+	l.releaseOutcomeUnknown(token)
 	return lastErr
+}
+
+// releaseOutcomeUnknown 记录一次没有拿到 Redis 明确答复的释放（RR-20260930-21）：只对仍是当前代际的 token 生效
+// （Touch / Refresh 已看到失效的代际不再改），本地不再算持有，token 留给下一次 TryLock 交 Lua 裁决。
+// 调用时续期 goroutine 已由 stopAsyncTouch 停掉并等待退出，不会再有人为这个 token 续期。
+func (l *versionedLock) releaseOutcomeUnknown(token string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.acquired || l.token != token {
+		return
+	}
+	l.acquired = false
+	l.releaseUnknownToken = token
 }
 
 // writeGrant 返回当前锁代际已确认的许可；失效或 Redis-only 锁不提供持久证明。
