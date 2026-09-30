@@ -144,7 +144,7 @@ ROOST_REMOTE_LABEL=hot-20 ROOST_REMOTE_DURATION=30s \
   ROOST_REMOTE_SHAPE=hot ROOST_REMOTE_RATE=20 bash scripts/perf/remote.sh
 ```
 
-压力结果位于 `artifacts/perf/remote/<label>/`：环境信息、压缩原始日志、result.json、每 10 秒 JSONL 采样及最终 `.verified` 标记。`ROOST_REMOTE_LOCK_TTL` 可显式设置锁租期，未设置时采用框架默认 24h；不延长 Nest 默认 5 秒回复等待。`ROOST_REMOTE_PROFILE=1` 输出 CPU profile；仅短时容量样本建议开启。故障矩阵逐格保留日志与 results.tsv，测试跳过或非零退出均记为失败。最终脚本短测使用 strict、100 Entity、16 worker、20 TPS × 3s，完成 60 笔并通过全量校验；它验证执行入口，不能替代 10000 Entity 的容量或 24 小时验收。
+压力结果位于 `artifacts/perf/remote/<label>/`：环境信息、压缩原始日志、result.json、每 10 秒 JSONL 采样及最终 `.verified` 标记。`ROOST_REMOTE_LOCK_TTL` 可显式设置锁租期，未设置时采用框架默认 24h；不延长 Nest 默认 5 秒回复等待。`ROOST_REMOTE_PROFILE=1` 输出 CPU profile；仅短时容量样本建议开启。`ROOST_REMOTE_HEAP_PROFILE_MINUTES=10,30,60`（逗号分隔的正整数分钟，默认不设即关闭，写错直接失败）在负载开始后的对应分钟及结束时先 GC 再写 `result.json.heap-<N>m.pprof` / `result.json.heap-end.pprof`，用 `go tool pprof -sample_index=inuse_space -top -diff_base <早> <晚>` 对比增长；每次写入多一次强制 GC，只用于长稳内存调查（RR-20260930-03），不与延迟验收混用。故障矩阵逐格保留日志与 results.tsv，测试跳过或非零退出均记为失败。最终脚本短测使用 strict、100 Entity、16 worker、20 TPS × 3s，完成 60 笔并通过全量校验；它验证执行入口，不能替代 10000 Entity 的容量或 24 小时验收。
 
 ## 图谱与证据范围
 

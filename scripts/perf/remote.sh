@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 正式生成业务链路；持续时间可以设为 30m / 24h，数据和日志保留在独立目录。
+# 内存调查：ROOST_REMOTE_HEAP_PROFILE_MINUTES=10,30,60 在对应分钟与结束时写 heap profile 到结果目录（默认关闭，见 REMOTE-ACCEPTANCE）。
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 label="${ROOST_REMOTE_LABEL:-remote-$(date +%Y%m%d-%H%M%S)}"

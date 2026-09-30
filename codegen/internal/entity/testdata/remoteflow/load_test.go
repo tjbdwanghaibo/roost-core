@@ -6,7 +6,9 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,6 +111,7 @@ func runRemoteLoad(t *testing.T, ctx context.Context, scheduler *nest.NestMgr, n
 	if output == "" {
 		t.Fatal("ROOST_REMOTE_OUTPUT required")
 	}
+	heapProfiles := newRemoteHeapProfiles(t, output)
 	progress, err := os.Create(output + ".jsonl")
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +291,7 @@ loop:
 			emitUntil(time.Now())
 		case <-progressTick.C:
 			sample()
+			heapProfiles.writeDue(time.Since(started))
 		case <-finish.C:
 			emitUntil(started.Add(duration))
 			break loop
@@ -299,6 +303,7 @@ loop:
 	close(jobs)
 	workers.Wait()
 	sample()
+	heapProfiles.writeEnd()
 	report.DurationSeconds = time.Since(started).Seconds()
 	report.Completed = completed.Load()
 	report.Errors = failed.Load()
@@ -344,4 +349,71 @@ loop:
 	}
 	t.Logf("REMOTE_LOAD %s", raw)
 	return expected
+}
+
+// remoteHeapProfiles 是长稳内存调查用的 heap profile 开关（RR-20260930-03 的 C01 调查引入，
+// 修复后正式保留）。默认关闭；设置 ROOST_REMOTE_HEAP_PROFILE_MINUTES="10,30,60" 后，
+// 在负载开始后的对应分钟（随 10 秒采样检查，误差不超过一个采样周期）以及负载结束时，
+// 先 runtime.GC 再写 <ROOST_REMOTE_OUTPUT>.heap-<N>m.pprof / .heap-end.pprof。
+// 每次写入会多一次强制 GC 停顿，只用于内存调查，不与正式延迟验收混用。
+type remoteHeapProfiles struct {
+	t       *testing.T
+	output  string
+	minutes []int // 升序、去重，已写出的从头部移除
+	enabled bool
+}
+
+func newRemoteHeapProfiles(t *testing.T, output string) *remoteHeapProfiles {
+	t.Helper()
+	p := &remoteHeapProfiles{t: t, output: output}
+	spec := strings.TrimSpace(os.Getenv("ROOST_REMOTE_HEAP_PROFILE_MINUTES"))
+	if spec == "" {
+		return p
+	}
+	for part := range strings.SplitSeq(spec, ",") {
+		minute, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || minute <= 0 {
+			// 写错的时间点不静默跳过：否则长跑结束才发现少了 profile。
+			t.Fatalf("ROOST_REMOTE_HEAP_PROFILE_MINUTES=%q: want comma-separated positive minutes", spec)
+		}
+		p.minutes = append(p.minutes, minute)
+	}
+	slices.Sort(p.minutes)
+	p.minutes = slices.Compact(p.minutes)
+	p.enabled = true
+	return p
+}
+
+func (p *remoteHeapProfiles) writeDue(elapsed time.Duration) {
+	for len(p.minutes) > 0 && elapsed >= time.Duration(p.minutes[0])*time.Minute {
+		p.write(strconv.Itoa(p.minutes[0]) + "m")
+		p.minutes = p.minutes[1:]
+	}
+}
+
+func (p *remoteHeapProfiles) writeEnd() {
+	if p.enabled {
+		p.write("end")
+	}
+}
+
+func (p *remoteHeapProfiles) write(tag string) {
+	runtime.GC()
+	path := p.output + ".heap-" + tag + ".pprof"
+	file, err := os.Create(path)
+	if err != nil {
+		p.t.Errorf("heap profile %s: %v", tag, err)
+		return
+	}
+	err = pprof.Lookup("heap").WriteTo(file, 0)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		p.t.Errorf("heap profile %s: %v", tag, err)
+		return
+	}
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	p.t.Logf("heap profile %s heap_alloc=%d heap_objects=%d path=%s", tag, mem.HeapAlloc, mem.HeapObjects, path)
 }

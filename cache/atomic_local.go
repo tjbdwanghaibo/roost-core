@@ -60,6 +60,10 @@ type atomicLocalOrder[K comparable] struct {
 	generation uint64
 }
 
+// atomicLocalShard 的 items / order / hand / entries / bytes 只在 mu 写锁下修改，读路径只取读锁。
+// order 是插入时钟：每次写入（含覆盖）追加一条 {key, generation}，覆盖写即“重新插入”；
+// order[:hand] 是淘汰指针已走过的前缀，每个存活键在 order[hand:] 里恰有一条当前记录，
+// 其余是已被覆盖 / 删除 / 过期取代的旧记录，由 compactOrderLocked 与淘汰后的压缩回收。
 type atomicLocalShard[K comparable, V any] struct {
 	mu         sync.RWMutex
 	items      map[K]atomicLocalEntry[V]
@@ -72,7 +76,8 @@ type atomicLocalShard[K comparable, V any] struct {
 
 // AtomicLocalStore is a bounded, sharded cache intended for immutable values.
 // Eviction is insertion-clock based rather than exact LRU so cache hits do not
-// contend on an exclusive lock.
+// contend on an exclusive lock. The clock record list stays proportional to the
+// live entries even when the cache never reaches its limits.
 type AtomicLocalStore[K comparable, V any] struct {
 	cfg           AtomicLocalConfig[K, V]
 	seed          maphash.Seed
@@ -198,6 +203,7 @@ func (s *AtomicLocalStore[K, V]) SetWithTTL(_ context.Context, value V, ttl time
 		s.stats.bytes.Add(size)
 	}
 	s.evictLocked(shard)
+	shard.compactOrderLocked()
 	shard.mu.Unlock()
 	return nil
 }
@@ -208,7 +214,9 @@ func (s *AtomicLocalStore[K, V]) Delete(_ context.Context, key K) error {
 	}
 	shard := s.shard(key)
 	shard.mu.Lock()
-	s.deleteLocked(shard, key)
+	if s.deleteLocked(shard, key) {
+		shard.compactOrderLocked()
+	}
 	shard.mu.Unlock()
 	return nil
 }
@@ -233,6 +241,7 @@ func (s *AtomicLocalStore[K, V]) expire(shard *atomicLocalShard[K, V], key K, ge
 	shard.mu.Lock()
 	if current, ok := shard.items[key]; ok && current.generation == generation && current.expiresAt > 0 && s.cfg.Now().UnixNano() >= current.expiresAt {
 		s.deleteLocked(shard, key)
+		shard.compactOrderLocked()
 	}
 	shard.mu.Unlock()
 }
@@ -277,6 +286,35 @@ func (s *AtomicLocalStore[K, V]) evictLocked(shard *atomicLocalShard[K, V]) {
 		shard.order = append([]atomicLocalOrder[K](nil), shard.order[shard.hand:]...)
 		shard.hand = 0
 	}
+}
+
+// atomicLocalOrderSlack 是 order 未淘汰部分允许超出 2×存活键数的常量余量，
+// 让小分片不必每几次写入就压缩一次。
+const atomicLocalOrderSlack = 1024
+
+// compactOrderLocked 在 order[hand:] 的记录数超过 2×存活键数 + atomicLocalOrderSlack 时，
+// 就地只保留仍是当前 generation 的记录并把 hand 归零。调用方持有 shard.mu 写锁，
+// 且不能在 evictLocked 的淘汰循环里调用（循环正按 hand 遍历 order）。
+//
+// RR-20260930-03：之前只有 evictLocked 在淘汰推进 hand 之后才压缩，而覆盖写、Delete、
+// 过期都不回收旧记录；键集合远低于上限的缓存（Remote 快照 L1）永不淘汰，order 随写入
+// 次数线性增长（C01 长稳每小时约 100MB）。过滤保持剩余记录的相对顺序，所以淘汰顺序
+// （覆盖写 = 重新插入）不变；触发线随存活键数线性增长，过滤成本摊销 O(1)。
+func (shard *atomicLocalShard[K, V]) compactOrderLocked() {
+	if len(shard.order)-shard.hand <= 2*shard.entries+atomicLocalOrderSlack {
+		return
+	}
+	kept := 0
+	for _, record := range shard.order[shard.hand:] {
+		if entry, ok := shard.items[record.key]; ok && entry.generation == record.generation {
+			shard.order[kept] = record
+			kept++
+		}
+	}
+	// 清掉尾部旧记录，避免底层数组继续引用已删除的键。
+	clear(shard.order[kept:])
+	shard.order = shard.order[:kept]
+	shard.hand = 0
 }
 
 var _ ExpiringStore[int, int] = (*AtomicLocalStore[int, int])(nil)
