@@ -11,3 +11,9 @@
 `protocol.Run` 从定义写 `protocol.proto`、`protocol.pb.go`、`msgid_gen.go`、manifest，并可写 player bind、robot registry、handler/bootstrap。空定义且无 bootstrap 时提前返回，有 bootstrap 时只写空 bootstrap，均没有处理其余旧产物；非空路径写 handler 也是遍历“新文件”，未比较旧文件集合。这意味着删除输入可能保留旧消息类型/ID；当前隔离复现确认最后定义删除后的四个固定文件仍在。是否应删除旧 ID 需结合上线兼容窗口判断，生成器的默认退役策略应显式约定，不能仅凭文件系统差异决定网络协议兼容性。源码：`codegen/internal/protocol/run.go:26-190`。
 
 接入方应把“当前定义集合 → 当前生成物集合”的关系作为升级前检查：确认旧 RPC/协议是否被调用、跨包装配是否仍引用、线上客户端是否仍发旧 ID。删除定义之后，仅看到 CLI exit 0 或 `-check` 通过不足以证明旧输出已退役。下一轮的重点是部分删除、重命名和下游生成消费者的真实构建/注册结果。
+
+## 2026-09-30 第二轮实施后的补充
+
+上文是 `1b7a2fc5` 修前机制快照；RR-20260930-01/02 在 Core `f6566d4e` 之后已[修复并验证](REVIEW-2026-09-30-codegen-02.md)。新的 `servicerpc` 先把本次应有的传输/装配文件列出，再只把同半边、同生成头、同 regenerate 命令而不在预期集合内的文件当孤儿；检查模式失败，普通模式删除。具体实现和跨包保留边界见 [RPC 修复](../bugfix/RR-20260930-01.md)。
+
+Protocol 空定义会主动移走可识别旧输出；有 bootstrap 时保留重新生成的空 bootstrap。没有 Go 生成头的 proto/JSON manifest 由 `protocol.IsGeneratedArtifact` 以固定路径与内容结构识别，`roost` 暂存提交规划及 `--check` 使用相同规则。这一层补齐后，生成器在暂存树的删除才能落到真实项目。其他生成器不能自动继承该行为：第二轮新复现表明 Entity/Nest 仍留旧文件，[RR-04/05](../bug/REVIEW-2026-09-30-codegen-02.md) 待实施。业务协议兼容窗口与旧调用方清理仍是接入方责任。

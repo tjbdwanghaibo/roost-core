@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第二轮：修复两项并继续退役审查
+
+[运行/停点](REVIEW-2026-09-30-codegen-02.md) · [RR-01 修复](../bugfix/RR-20260930-01.md) · [RR-02 修复](../bugfix/RR-20260930-02.md) · [新 RR-04/05](../bug/REVIEW-2026-09-30-codegen-02.md) · [复跑](evidence/codegen-review-20260930-02/README.md)。Core `f6566d4e` 基线，Kit/独立 Codegen 无新源码；工作在 Core `codegen/`。原两项 **2/2 修复/声明场景验证**，生产发布/部署未做；新两项 Entity/Nest 退役缺陷未修。其他 agent 的 RR-20260930-03 是独立 Cache/长稳问题，本轮未触碰。
+
+| 本轮 Codegen 范围 | 已执行/状态 | 仍待完成 |
+| --- | --- | --- |
+| servicerpc 零标记、跨包半边 | 修前红；修后 CLI `-check` 1、生成清理 2/2，手写/其他源保留测试，定向 race 绿 | 不同字面路径命令、实际 Kit 消费编译/发布版本迁移 |
+| protocol 空定义、handler、上层暂存/检查 | 修前红；修后 CLI 清理 4/4、正式包空/部分/手写/失败回归，`SyncProject` 删除 4/4 与 `-check` 两项漂移，定向 race 绿 | 自定义输出路径在上层规划、强杀/磁盘故障、线上旧消息 ID 兼容 |
+| entity → registry | 源码与当前 CLI 生成→删 marker→重跑；旧 wire 留存且仍有注册 marker，RR-20260930-04 未修 | 正式项目 aggregate/消费者与多实体改名、guard test |
+| nest wrapper/sender/bootstrap | 源码与当前 CLI 生成→删 marker→重跑；旧四文件留存，RR-20260930-05 未修 | 正式 game bootstrap/消费者、`-sender=false`、源文件改名 |
+| 其它生成器 | registry 按扫描 marker 重写 aggregate 源码已读；Codegen 包回归完成 | event、table/config、webroute/errcode 的同类退役与交叉生成 |
+
+图谱基础 generation 在本轮工作树改码前已落后两个纯文档提交，所有物质结论均回读当前源码，修改后的新文件不宣称在旧图中。旧第一轮下方“未修复”为当时结论。
+
 ## 2026-09-30 Codegen 第一轮：当前 Core 生成链与输入退役
 
 [本轮审查](REVIEW-2026-09-30-codegen-01.md) · [两项未修复问题](../bug/REVIEW-2026-09-30-codegen-01.md) · [实现学习](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [隔离复现](evidence/codegen-review-20260930-01/README.md)。三仓 fetch 后不变；Core `1b7a2fc5`、Kit `f0e5b67a`、冻结独立 Codegen `1e028fa4`。实际入口为 Core `codegen/`。上一轮 Service 本机场景已留档，外部真实资源/跨机 HA/生产长稳仍另待环境，不把本轮 Codegen 回归冒称 Service 验收。

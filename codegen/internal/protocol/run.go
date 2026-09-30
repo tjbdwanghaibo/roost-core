@@ -64,22 +64,37 @@ func Run(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("parse protocol defs: %w", err)
 	}
-	if len(defs.Structs) == 0 && *handlerBootstrap == "" {
-		_, _ = fmt.Fprintf(stdout, "no protocol structs found in %s\n", *defDir)
-		return nil
-	}
-	projectInfo, err := project.Discover(*defDir)
-	if err != nil {
-		return fmt.Errorf("discover target module: %w", err)
-	}
-	defs.ModulePath = projectInfo.ModulePath
-	defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
 	if len(defs.Structs) == 0 {
-		if err := os.MkdirAll(filepath.Dir(*handlerBootstrap), 0o755); err != nil {
-			return err
+		outputs := protocolOutputPaths{
+			proto:    filepath.Join(*protoDir, "protocol.proto"),
+			pb:       filepath.Join(*pbDir, "protocol.pb.go"),
+			msgID:    filepath.Join(*msgIDDir, "msgid_gen.go"),
+			bind:     *bindDir,
+			robot:    *robotProtocolFile,
+			manifest: *manifestFile,
+			handlers: *handlerDir,
 		}
+		if *handlerBootstrap == "" {
+			if err := retireProtocolOutputs(outputs, stdout); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(stdout, "no protocol structs found in %s\n", *defDir)
+			return nil
+		}
+		projectInfo, err := project.Discover(*defDir)
+		if err != nil {
+			return fmt.Errorf("discover target module: %w", err)
+		}
+		defs.ModulePath = projectInfo.ModulePath
+		defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
 		content, err := generateProtocolBootstrap(defs, "")
 		if err != nil {
+			return err
+		}
+		if err := retireProtocolOutputs(outputs, stdout); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(*handlerBootstrap), 0o755); err != nil {
 			return err
 		}
 		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
@@ -89,6 +104,12 @@ func Run(args []string, stdout io.Writer) error {
 		printChange(stdout, *handlerBootstrap, changed)
 		return nil
 	}
+	projectInfo, err := project.Discover(*defDir)
+	if err != nil {
+		return fmt.Errorf("discover target module: %w", err)
+	}
+	defs.ModulePath = projectInfo.ModulePath
+	defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
 	dirs := []string{*protoDir, *pbDir, *msgIDDir, filepath.Dir(*manifestFile)}
 	if *bindDir != "" {
 		dirs = append(dirs, *bindDir)
@@ -186,7 +207,7 @@ func Run(args []string, stdout io.Writer) error {
 		}
 		printChange(stdout, *handlerBootstrap, changed)
 	}
-	return nil
+	return retireProtocolHandlers(*handlerDir, files, stdout)
 }
 
 func printChange(w io.Writer, path string, changed bool) {

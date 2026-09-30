@@ -65,9 +65,24 @@ func Run(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	expected := make(map[string]bool)
+	var generated []File
+	for _, service := range services {
+		files, err := GenerateWith(service, Options{Half: half, Regenerate: regenerate})
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			expected[file.Name] = true
+			generated = append(generated, file)
+		}
+	}
+	orphans, err := orphanGeneratedFiles(outDir, regenerate, half, expected)
+	if err != nil {
+		return err
+	}
 	if len(services) == 0 {
 		_, _ = fmt.Fprintf(stdout, "no //roost:rpc interfaces in %s\n", absDir)
-		return nil
 	}
 	for _, service := range services {
 		_, _ = fmt.Fprintf(stdout, "%s.%s: service_type=%s capability=%s methods=%d\n",
@@ -86,48 +101,87 @@ func Run(args []string, stdout io.Writer) error {
 		}
 	}
 	var stale []string
-	for _, service := range services {
-		files, err := GenerateWith(service, Options{Half: half, Regenerate: regenerate})
-		if err != nil {
-			return err
+	for _, file := range generated {
+		path := filepath.Join(outDir, file.Name)
+		existing, readErr := os.ReadFile(path)
+		// A CRLF checkout of the LF the generator writes is current, not
+		// stale: newlines are the working tree's business, not the
+		// transport's.
+		current := readErr == nil && bytes.Equal(bytes.ReplaceAll(existing, []byte("\r\n"), []byte("\n")), file.Content)
+		if current {
+			_, _ = fmt.Fprintf(stdout, "up to date: %s\n", file.Name)
+			continue
 		}
-		for _, file := range files {
-			path := filepath.Join(outDir, file.Name)
-			existing, readErr := os.ReadFile(path)
-			// A CRLF checkout of the LF the generator writes is current, not
-			// stale: newlines are the working tree's business, not the
-			// transport's.
-			current := readErr == nil && bytes.Equal(bytes.ReplaceAll(existing, []byte("\r\n"), []byte("\n")), file.Content)
-			if current {
-				_, _ = fmt.Fprintf(stdout, "up to date: %s\n", file.Name)
-				continue
+		if *check {
+			// Missing and differing are reported apart: one means nobody ran
+			// the generator, the other means the file was edited or produced
+			// by a different version of it, and the fix is not the same.
+			if readErr != nil {
+				stale = append(stale, file.Name+" (missing)")
+			} else {
+				stale = append(stale, file.Name)
 			}
-			if *check {
-				// Missing and differing are reported apart: one means nobody ran
-				// the generator, the other means the file was edited or produced
-				// by a different version of it, and the fix is not the same.
-				if readErr != nil {
-					stale = append(stale, file.Name+" (missing)")
-				} else {
-					stale = append(stale, file.Name)
-				}
-				_, _ = fmt.Fprintf(stdout, "STALE: %s\n", file.Name)
-				continue
-			}
-			if err := os.WriteFile(path, file.Content, 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", path, err)
-			}
-			_, _ = fmt.Fprintf(stdout, "generated: %s\n", file.Name)
+			_, _ = fmt.Fprintf(stdout, "STALE: %s\n", file.Name)
+			continue
 		}
+		if err := os.WriteFile(path, file.Content, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		_, _ = fmt.Fprintf(stdout, "generated: %s\n", file.Name)
+	}
+	for _, name := range orphans {
+		if *check {
+			stale = append(stale, name+" (orphan)")
+			_, _ = fmt.Fprintf(stdout, "STALE: %s (orphan)\n", name)
+			continue
+		}
+		if err := os.Remove(filepath.Join(outDir, name)); err != nil {
+			return fmt.Errorf("remove orphan %s: %w", name, err)
+		}
+		_, _ = fmt.Fprintf(stdout, "removed orphan: %s\n", name)
 	}
 	if len(stale) > 0 {
-		return fmt.Errorf("%s: generated transport does not match the interface: %s. "+
+		return fmt.Errorf("%s: generated transport does not match the current interfaces: %s. "+
 			"Run `go generate ./...` and commit the result — a hand-edited generated file is "+
 			"reverted by the next run, and a file produced by a different version of this "+
 			"generator means the committed transport is not the one this interface describes",
 			outDir, strings.Join(stale, ", "))
 	}
 	return nil
+}
+
+// orphanGeneratedFiles only owns the selected half made by this exact
+// invocation. A kit output directory may also contain assembly files from
+// other core packages; their recorded regenerate commands must not match.
+func orphanGeneratedFiles(outDir, regenerate string, half Half, expected map[string]bool) ([]string, error) {
+	entries, err := os.ReadDir(outDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan generated RPC files in %s: %w", outDir, err)
+	}
+	var orphans []string
+	for _, entry := range entries {
+		name := entry.Name()
+		transport := strings.HasSuffix(name, "_rpc_gen.go") && half != HalfAssembly
+		assembly := strings.HasSuffix(name, "_rpc_assembly_gen.go") && half != HalfTransport
+		if !entry.Type().IsRegular() || expected[name] || (!transport && !assembly) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("inspect generated RPC file %s: %w", name, err)
+		}
+		if !bytes.HasPrefix(raw, []byte("// Code generated by roost servicerpc. DO NOT EDIT.")) {
+			continue
+		}
+		normalized := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+		if bytes.Contains(normalized, []byte("//\t"+regenerate+"\n")) {
+			orphans = append(orphans, name)
+		}
+	}
+	return orphans, nil
 }
 
 // regenerateCommand is what the generated header tells a reader to run: the

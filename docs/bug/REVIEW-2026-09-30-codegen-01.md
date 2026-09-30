@@ -1,5 +1,7 @@
 # Codegen 第一轮问题：删除输入后旧产物仍有效
 
+**后续状态（2026-09-30 第二轮）：**RR-20260930-01/02 的原触发已修复并按声明场景验证，见 [RPC 修复](../bugfix/RR-20260930-01.md)、[Protocol 修复](../bugfix/RR-20260930-02.md)。下方“未修复”保留第一轮审查时点；新 Entity/Nest 问题另见[第二轮](REVIEW-2026-09-30-codegen-02.md)。
+
 审查基线：Core `1b7a2fc5aa4bfd9ae921ae8c80efd2392d08a165`；独立 Codegen 仓库 `1e028fa4b2927ffb5d7772b90440e7447dc665cf` 已冻结，当前实际生成器位于 Core `codegen/`。两项均在本机隔离目录以当前 CLI 确认；**未修复，未修改生产源码**。[运行和复现](../review/REVIEW-2026-09-30-codegen-01.md) · [原始命令与输出](../review/evidence/codegen-review-20260930-01/README.md)。
 
 ## RR-20260930-01 · P2 · servicerpc 删除标记后 `-check` 假通过

@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+[09-30 Codegen 第一批](RR-20260930-01.md)：RR-20260930-01/02 **2/2 原触发修复并验证**，RPC 孤儿检查/清理、Protocol 空定义退役及上层暂存提交/漂移检查；[Protocol 明细](RR-20260930-02.md) · [继续 review 的新 RR-04/05](../bug/REVIEW-2026-09-30-codegen-02.md)未实施。未发布/部署，旧协议消费须按业务窗口迁移。
+
 [09-29第九批Service修复](SERVICE-BUGFIX-2026-09-29-09.md)：[RR-34 Pipeline写错误被缺失掩盖](RR-20260929-34.md) **1/1已修/声明场景已验**，原3/3绿、正式race/count2 58叶子执行、整体19包951pass叶子，3Toxiproxy skip另列。签名/key/RPC不变，不回滚/重放。[阶段完成](../review/REVIEW-2026-09-29-services-11.md)：10域主链完成，RR-01～34沿各自验收关闭，本轮无新确认缺陷，外部/HA/容量设计另列。
 
 [09-29第八批service修复](SERVICE-BUGFIX-2026-09-29-08.md)：[RR-33](RR-20260929-33.md) **1/1已修/声明场景已验**，现有Pipeline有界单key读取；原2/2绿、Mail race/count2 314pass事件/280叶子执行0skip。完整service+driver18包965pass事件、3Toxiproxy skip；全编译/生成consumer编译、vet、RPC12check通过。自定义窄客户端需补Pipeline，无key迁移；[新RR-34](../bug/REVIEW-2026-09-29-services-10.md)未修，未发布。
