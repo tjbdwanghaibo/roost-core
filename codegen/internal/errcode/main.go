@@ -1,14 +1,17 @@
 package errcode
 
 import (
+	"bytes"
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,8 +23,6 @@ type Definition struct {
 	Message string
 	File    string
 }
-
-var defineRE = regexp.MustCompile(`errcode\.Define\(\s*([0-9]+)\s*,\s*("(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*")\s*\)`)
 
 // DefaultOutFile is where the error-code table is written inside a business
 // project; `roost generate` refers to it (U-0118).
@@ -67,28 +68,66 @@ func extractDefinitions(root string) ([]Definition, error) {
 		if err != nil {
 			return err
 		}
-		matches := defineRE.FindAllSubmatch(raw, -1)
-		if len(matches) == 0 {
+		if !bytes.Contains(raw, []byte("errcode.Define")) {
 			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, raw, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			rel = path
 		}
-		for _, m := range matches {
-			code64, err := strconv.ParseInt(string(m[1]), 10, 32)
-			if err != nil {
-				return fmt.Errorf("%s: parse errcode %q: %w", rel, m[1], err)
+		var visitErr error
+		ast.Inspect(file, func(node ast.Node) bool {
+			if visitErr != nil {
+				return false
 			}
-			name, err := strconv.Unquote(string(m[2]))
-			if err != nil {
-				return fmt.Errorf("%s: parse errcode name: %w", rel, err)
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) != 3 {
+				return true
 			}
-			message, err := strconv.Unquote(string(m[3]))
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Define" {
+				return true
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok || ident.Name != "errcode" {
+				return true
+			}
+			code, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || code.Kind != token.INT || strings.Trim(code.Value, "0123456789") != "" {
+				return true
+			}
+			nameLit, ok := call.Args[1].(*ast.BasicLit)
+			if !ok || nameLit.Kind != token.STRING {
+				return true
+			}
+			messageLit, ok := call.Args[2].(*ast.BasicLit)
+			if !ok || messageLit.Kind != token.STRING {
+				return true
+			}
+			code64, err := strconv.ParseInt(code.Value, 10, 32)
 			if err != nil {
-				return fmt.Errorf("%s: parse errcode message: %w", rel, err)
+				visitErr = fmt.Errorf("%s: parse errcode %q: %w", rel, code.Value, err)
+				return false
+			}
+			name, err := strconv.Unquote(nameLit.Value)
+			if err != nil {
+				visitErr = fmt.Errorf("%s: parse errcode name: %w", rel, err)
+				return false
+			}
+			message, err := strconv.Unquote(messageLit.Value)
+			if err != nil {
+				visitErr = fmt.Errorf("%s: parse errcode message: %w", rel, err)
+				return false
 			}
 			defs = append(defs, Definition{Code: int32(code64), Name: name, Message: message, File: rel})
+			return true
+		})
+		if visitErr != nil {
+			return visitErr
 		}
 		return nil
 	})

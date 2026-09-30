@@ -1,5 +1,7 @@
 # Codegen 第三轮新增问题：其余生成器的输入退役
 
+**2026-09-30 修复更新：**本页以下“未修复”是第三轮基线时点。RR-06～10 的原触发已在后续工作中修复并按声明场景验证，逐项见 [Attribute](../bugfix/RR-20260930-06.md)、[Event](../bugfix/RR-20260930-07.md)、[Webroute](../bugfix/RR-20260930-08.md)、[Tablegen](../bugfix/RR-20260930-09.md)、[Errcode](../bugfix/RR-20260930-10.md)；[验证边界](../review/REVIEW-2026-09-30-codegen-04.md)。未发版。
+
 基线 Core `5fedc6526d49378246f76fa6ea9cf9e582435eee`。前四项在隔离目录中用当前 CLI 做了“生成 → 删除最后一个输入/标记 → 重跑”的实际复现，均 **P2、未修复**；第五项为 Errcode 注释误提取，**P3、未修复**。没有把 Entity/Nest 的修复外推到这些生成器。[运行与复现](../review/REVIEW-2026-09-30-codegen-03.md) · [证据](../review/evidence/codegen-review-20260930-03/README.md)。
 
 ## RR-20260930-06 · Attribute 删最后一个 profile 后旧实现仍留存

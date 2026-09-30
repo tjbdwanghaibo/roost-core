@@ -139,7 +139,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if err := addGo("configs/generated/doc.go", "package generated\n", false); err != nil {
 			return nil, err
 		}
-		add("configs/data/_manifest.json", "{\n  \"version\": 1,\n  \"tables\": {}\n}\n", false)
+		add("configs/data/_manifest.json", "{\n  \"version\": 2,\n  \"generated_at\": \"\",\n  \"tables\": {}\n}\n", false)
 	}
 	featurePackages := map[string]string{
 		"protocol": "protocol/def/doc.go", "entity": "game/entities/doc.go", "nest": "game/handler/doc.go",

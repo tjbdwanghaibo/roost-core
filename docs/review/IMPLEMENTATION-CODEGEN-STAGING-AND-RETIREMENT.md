@@ -23,3 +23,9 @@ Protocol 空定义会主动移走可识别旧输出；有 bootstrap 时保留重
 上段 RR-04/05 的“待实施”是第二轮历史时点；当前 [Entity](../bugfix/RR-20260930-04.md) 与 [Nest](../bugfix/RR-20260930-05.md) 已修复。Entity 在扫描目录时既认当前 marker，也认带自身生成头的旧 wire/guard test，解析完当前实体后清理不在当前集合的文件；同包首实体删除会把唯一包级 `RegisterEntity` 转移到剩余实体的 wire。Nest 在全部扫描与 game bootstrap 成功后才按当前源文件和 `-sender` 模式清理自身旧 wrapper/sender/guard test。两者均要求可识别生成头、限定文件名及扫描范围；手写同名文件保留。`roost` 上层因这些 Go 文件有 `Code generated` 头，现有暂存规划会提交删除，本轮以真实生成项目的暂存规划/提交测试验证 Entity。
 
 退役责任仍须逐生成器审查。Attribute 零 profile 提前返回，Event 零定义提前返回且 handler 只写当前 receiver，Webroute 只遍历当前有路由的包，Tablegen 零 meta/空 CSV 分支不清旧 JSON；隔离 CLI 证实四个最后输入删除后均留旧文件，[RR-06～09](../bug/REVIEW-2026-09-30-codegen-03.md) 未实施。对这些路径的安全修复应先定义归属：Go 文件可以结合固定命名、生成头、扫描范围；JSON/CSV 缺生成头，不可仅凭后缀删除业务数据，需可审查的 manifest 或严格形状及路径规则。下层先从当前输入求期望文件集合并显式退役，`roost` 上层再把可识别删除纳入暂存提交和 `--check`。旧协议 ID、路由与配置生命周期不能由文件清理自动决定发布兼容窗口。
+
+## 2026-09-30 第四轮：JSON 所有权与真实消费端
+
+上段“RR-06～09 未实施”是第三轮历史结论；当前五项问题已按[第四轮运行记录](REVIEW-2026-09-30-codegen-04.md)修复。Attribute、Event、Webroute 分别在当前输入验证后，将默认命名且带自身生成头的旧 Go 文件与期望集合对账。Event 的零定义路径在删三份类型文件前先扫描 handler，仍有 `DealEventX` 引用便拒绝退役；部分 receiver 消失则只删除对应派发文件。Errcode 用 AST 避免原始文本正则读取注释/字符串。
+
+Tablegen 的 JSON 无生成头，v2 `_manifest.json` 以文件名和 SHA-256 记录生成器拥有的直接子文件。生成器先解析当前全部 CSV，检验旧孤儿未被人工改动，然后写当前输出、删除孤儿并写新 manifest。旧 v1 manifest 的 `tables` 恒为空，无法区分手工 JSON 和遗留生成物；有不明文件时明确报错，不猜测归属。`roost` 的 config-data 生成器在没有 CSV 但已有 manifest 时也必须运行，才能把下层删除带到上层暂存树；上层 `isGeneratedData`、`planStagedProjectCommit` 和 `--check` 已识别 JSON 路径。外部 `example.com/consumer` 工程的“生成 → 删除最后 schema/CSV → `--check` 失败 → 生成删除 → `--check`/编译通过”证实了这条完整链。版本窗口、旧表数据迁移和服务真实加载仍属于接入方验证。

@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**09-30 Codegen 第四轮修复更新：**[RR-06～10](REVIEW-2026-09-30-codegen-03.md) 五项原触发已修并按声明场景验证，逐项记录见 [Attribute](../bugfix/RR-20260930-06.md)、[Event](../bugfix/RR-20260930-07.md)、[Webroute](../bugfix/RR-20260930-08.md)、[Tablegen](../bugfix/RR-20260930-09.md)、[Errcode](../bugfix/RR-20260930-10.md)。旧 manifest 手工判定、正式 HTTP 启动消费、旧客户端兼容仍待处理；未发版。下方“未修”保留第三轮历史时点。
+
 **09-30 Codegen 第三轮：**[RR-04/05](REVIEW-2026-09-30-codegen-02.md) 原触发已[修复](../bugfix/RR-20260930-04.md)/[Nest 修复](../bugfix/RR-20260930-05.md)；[新 RR-06～10](REVIEW-2026-09-30-codegen-03.md) 包含 Attribute、Event、Webroute、Tablegen 退役旧产物四项 P2，Errcode 注释误提取一项 P3，均未修。[运行](../review/REVIEW-2026-09-30-codegen-03.md)。
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。

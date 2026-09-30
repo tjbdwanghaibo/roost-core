@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第四轮：五项修复与消费端验证
+
+[本轮运行与剩余边界](REVIEW-2026-09-30-codegen-04.md) · [RR-06～10 修复](../bugfix/README.md) · [现有生成机制更新](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md)。Core 基线 `da56c998`；Codegen 主入口盘点沿用第三轮矩阵。本轮五项原触发 **5/5 修复并在声明场景验证**；未发布，不等于 Codegen 全域完成。
+
+| 范围 | 本轮实证 | 下一入口 |
+| --- | --- | --- |
+| Attribute/Event/Webroute 退役 | 零输入、部分 receiver、手写保护及失败前保留正式回归；定向 race | 正式 Webroute 服务启动/旧 URL 消失；事件协议窗口 |
+| Tablegen JSON 与 roost 暂存 | v2 所有权、改动拒删、v1 不明归属报错；正式暂存/`--check`；外部业务工程两次编译及漂移→修复→转绿 | 旧 v1 项目人工归属判定、实际配置加载/版本迁移 |
+| Errcode | 注释、块注释、字符串误提取正式回归、重复码旧回归 | 非字面量定义仍按原契约不入 CSV |
+| 之前验证缺口 | 独立模块缓存+本机 file proxy+Go 1.27 解决上轮 `go mod tidy` 缓存写锁；真实 `go test ./...` 通过 | cfggen 组合、upgrade、多故障强杀/磁盘与客户端兼容仍待审 |
+
+图谱起点同 `da56c998`，但候选路径 freshness `metadata_changed`；新修改主要由源码和执行证据证明。下方第三轮“未修/外部编译受阻”均为历史时点。
+
 ## 2026-09-30 Codegen 第三轮：主入口盘点，整体未收敛
 
 [运行及各生成器矩阵](REVIEW-2026-09-30-codegen-03.md) · [RR-04/05 修复](../bugfix/RR-20260930-04.md) / [Nest](../bugfix/RR-20260930-05.md) · [新 RR-06～10](../bug/REVIEW-2026-09-30-codegen-03.md) · [复现/限制](evidence/codegen-review-20260930-03/README.md)。Core `5fedc652`、Kit `f0e5b67a`、独立 Codegen `1e028fa4` 拉取核对；实际生成器在 Core `codegen/`。RR-04/05 **2/2 原触发修复并按声明场景验证**；新四项 P2、一项 P3 未修。

@@ -107,7 +107,11 @@ func generatorsFor(m Manifest, force bool) []generator {
 			if empty, err := dirHasNoDataFiles("./configs/table"); err != nil {
 				return err
 			} else if empty {
-				return nil
+				if _, err := os.Stat("./configs/data/_manifest.json"); os.IsNotExist(err) {
+					return nil
+				} else if err != nil {
+					return err
+				}
 			}
 			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv", "./configs/table", "-json", "./configs/data", "-force"}, w)
 		}},

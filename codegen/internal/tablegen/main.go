@@ -9,6 +9,7 @@ package tablegen
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
@@ -100,7 +101,7 @@ func Run(args []string, stdout io.Writer) error {
 		// Still emit an empty registry when -out is requested. A freshly
 		// scaffolded project can then compile before its first business table is
 		// defined, and the file is replaced deterministically once metas exist.
-		if *outDir == "" {
+		if *outDir == "" && !(*csvDir != "" && *jsonDir != "") && !(*jsonDir != "" && *check) {
 			return nil
 		}
 	}
@@ -340,12 +341,28 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 	if err := os.MkdirAll(jsonDir, 0755); err != nil {
 		return err
 	}
-	manifest := map[string]any{
-		"version":      1,
-		"generated_at": "",
-		"tables":       map[string]any{},
+	manifestPath := filepath.Join(jsonDir, "_manifest.json")
+	previous := tableJSONManifest{}
+	if raw, err := os.ReadFile(manifestPath); err == nil {
+		if err := json.Unmarshal(raw, &previous); err != nil {
+			return fmt.Errorf("read table manifest: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
+	manifest := tableJSONManifest{Version: 2, Tables: make(map[string]string)}
+	type output struct {
+		name string
+		raw  []byte
+	}
+	var outputs []output
 	for _, meta := range metas {
+		if !safeTableJSONName(meta.JSON) {
+			return fmt.Errorf("invalid table JSON filename %q", meta.JSON)
+		}
+		if _, duplicate := manifest.Tables[meta.JSON]; duplicate {
+			return fmt.Errorf("duplicate table JSON filename %q", meta.JSON)
+		}
 		rows, err := readCSVRecords(filepath.Join(csvDir, meta.File), meta)
 		if err != nil {
 			return err
@@ -363,15 +380,77 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 			return err
 		}
 		raw = append(raw, '\n')
-		out := filepath.Join(jsonDir, meta.JSON)
-		if err := writeGenerated(out, raw, force); err != nil {
+		outputs = append(outputs, output{meta.JSON, raw})
+		manifest.Tables[meta.JSON] = fmt.Sprintf("%x", sha256.Sum256(raw))
+	}
+	// Version 1 did not record ownership. An unrecognized JSON file could be
+	// either retired generated data or hand-maintained data; require an explicit
+	// decision rather than silently retaining it or deleting it.
+	if previous.Version == 1 {
+		entries, err := os.ReadDir(jsonDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || name == "_manifest.json" || !strings.HasSuffix(name, ".json") || manifest.Tables[name] != "" {
+				continue
+			}
+			return fmt.Errorf("untracked table JSON %s from legacy manifest: remove or migrate it explicitly", filepath.Join(jsonDir, name))
+		}
+	}
+	if previous.Version != 0 && previous.Version != 1 && previous.Version != 2 {
+		return fmt.Errorf("unsupported table manifest version %d", previous.Version)
+	}
+	for name, digest := range previous.Tables {
+		if manifest.Tables[name] != "" {
+			continue
+		}
+		if !safeTableJSONName(name) {
+			return fmt.Errorf("invalid table manifest filename %q", name)
+		}
+		path := filepath.Join(jsonDir, name)
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if fmt.Sprintf("%x", sha256.Sum256(raw)) != digest {
+			return fmt.Errorf("retired table JSON %s was modified; resolve it explicitly", path)
+		}
+	}
+	for _, item := range outputs {
+		out := filepath.Join(jsonDir, item.name)
+		if err := writeGenerated(out, item.raw, force); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "table json: %s\n", out)
 	}
+	for name := range previous.Tables {
+		if manifest.Tables[name] != "" {
+			continue
+		}
+		path := filepath.Join(jsonDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Fprintf(stdout, "retired table json: %s\n", path)
+	}
 	manifestRaw, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestRaw = append(manifestRaw, '\n')
-	return writeGenerated(filepath.Join(jsonDir, "_manifest.json"), manifestRaw, true)
+	return writeGenerated(manifestPath, manifestRaw, true)
+}
+
+type tableJSONManifest struct {
+	Version     int               `json:"version"`
+	GeneratedAt string            `json:"generated_at"`
+	Tables      map[string]string `json:"tables"`
+}
+
+func safeTableJSONName(name string) bool {
+	return name != "_manifest.json" && filepath.Base(name) == name && strings.HasSuffix(name, ".json")
 }
 
 func checkJSONFiles(metas []Meta, jsonDir string) error {

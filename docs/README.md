@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-30 Codegen 第四轮：**[RR-06～10 五项修复与旧验证缺口复查](review/REVIEW-2026-09-30-codegen-04.md) · [逐项 bugfix](bugfix/README.md) · [进度](review/PROGRESS.md)。隔离业务工程生成、退役检查与消费者编译通过；旧 v1 表格归属、HTTP 启动消费和版本兼容仍需后续验证。未发版。
+
 **09-30 Codegen 第三轮：**[RR-04 Entity 修复](bugfix/RR-20260930-04.md) · [RR-05 Nest 修复](bugfix/RR-20260930-05.md) · [五个新问题未修](bug/REVIEW-2026-09-30-codegen-03.md) · [审查矩阵与进度](review/REVIEW-2026-09-30-codegen-03.md)。主生成器入口已盘点，整体 Codegen 仍有具名缺口；未发版。
 
 **09-30 Codegen 第二轮：**[RR-01 RPC 修复](bugfix/RR-20260930-01.md) · [RR-02 Protocol 修复](bugfix/RR-20260930-02.md) · [新 RR-04/05 待实施](bug/REVIEW-2026-09-30-codegen-02.md) · [运行/进度](review/REVIEW-2026-09-30-codegen-02.md)。原两项行为回归和隔离 CLI 已验证，继续 review 发现 Entity/Nest 输入删除后旧生成文件留存；未发版。
