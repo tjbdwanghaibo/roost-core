@@ -23,10 +23,8 @@ type dependencyFileSnapshot struct {
 	exists bool
 }
 
-// UpdateFrameworkDependencies resolves core, kit and skill in one go-get
-// operation. Keeping all three as direct requirements lets Go's minimal
-// version selection retain the highest selected core/kit versions even when a
-// downstream framework module declares an older lower bound.
+// UpdateFrameworkDependencies stages legacy import consolidation and resolves
+// the single Core module, then commits the planned migration and module files.
 func UpdateFrameworkDependencies(root string, manifest Manifest, stdout, stderr io.Writer) error {
 	return updateFrameworkDependenciesTransactional(root, manifest, stdout, stderr, runDependencyCommand)
 }
@@ -51,6 +49,24 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 	if err != nil {
 		return fmt.Errorf("snapshot dependency inputs: %w", err)
 	}
+	var migrationChanges []syncChange
+	if needsConsolidation(stage) {
+		fmt.Fprintln(stdout, "framework dependencies: staging import consolidation before resolving modules")
+		result, err := ConsolidateProject(stage, false, stdout)
+		if err != nil {
+			return fmt.Errorf("consolidate project before resolving dependencies: %w", err)
+		}
+		rels := result.Files
+		if result.Manifest {
+			rels = append(rels, ManifestName)
+		}
+		// RR-20260930-14: freeze only the migration's own output before the
+		// resolver runs. Arbitrary stage edits by go commands stay isolated.
+		migrationChanges, err = planExplicitStagedFiles(absRoot, stage, rels...)
+		if err != nil {
+			return err
+		}
+	}
 	if err := updateFrameworkDependencies(stage, manifest, stdout, stderr, run); err != nil {
 		return err
 	}
@@ -61,7 +77,7 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
 		return err
 	}
-	return commitSyncChanges(changes)
+	return commitSyncChanges(append(migrationChanges, changes...))
 }
 
 // TidyProjectDependencies records module checksums introduced by newly
@@ -109,16 +125,6 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 	goMod := filepath.Join(absRoot, "go.mod")
 	if _, err := os.Stat(goMod); err != nil {
 		return fmt.Errorf("framework dependencies require go.mod: %w", err)
-	}
-	if needsConsolidation(absRoot) {
-		// Crossing either consolidation boundary without rewriting imports
-		// would leave the project pointing at modules that no longer exist:
-		// core v1.14.0 folded roost-skill / roost-service in, core v1.16.0
-		// folded roost-kit and roost-codegen in. Rewrite first, then resolve.
-		fmt.Fprintln(stdout, "framework dependencies: project predates the consolidation; rewriting imports first")
-		if _, err := ConsolidateProject(absRoot, false, stdout); err != nil {
-			return fmt.Errorf("consolidate project before resolving dependencies: %w", err)
-		}
 	}
 	snapshots, err := snapshotDependencyFiles(goMod, filepath.Join(absRoot, "go.sum"))
 	if err != nil {

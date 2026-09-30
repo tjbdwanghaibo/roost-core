@@ -89,14 +89,14 @@ roost project next                 # 根据真实进度只显示一个当前动�
 roost project next --workflow player-tcp
 ```
 
-同步先把项目复制到同级临时目录，在其中完成模板渲染和全部生成器；所有权冲突或生成失败时不会写回项目。提交阶段逐文件使用原子替换，后续失败会回滚已写内容；若开发者或另一 codegen 进程在提交窗口修改了目标文件，命令拒绝覆盖并保留新内容。同步完成后会重新解析 core、kit、skill 的最新版本；也可以只更新依赖：
+同步先把项目复制到同级临时目录，在其中完成模板渲染和全部生成器；所有权冲突或生成失败时不会写回项目。提交阶段逐文件使用原子替换，后续失败会回滚已写内容；若开发者或另一 codegen 进程在提交窗口修改了目标文件，命令拒绝覆盖并保留新内容。同步完成后会重新解析 Core 模块版本；也可以只更新依赖：
 
 ```bash
 roost project sync
 roost project deps
 ```
 
-三个模块在一条 `go get` 中作为直接依赖联合更新，随后自动执行 `GOWORK=off go mod tidy`。因此依赖图选择最高版本，kit/skill 不会把 core 或 kit 降到旧版本。整个解析在同级临时项目完成，只提交最终 `go.mod/go.sum`；失败不会触碰原依赖文件，业务输入或依赖文件并发变化时拒绝覆盖。若需提高最低版本，可用 `project upgrade -core vX.Y.Z -kit vX.Y.Z -skill vX.Y.Z -codegen vX.Y.Z`；core、kit、skill 的明确值是 MVS 下限而不是上限，且必须满足 codegen 的兼容门槛。`latest` 始终直接通过静态版本门禁。
+合仓后只解析 `roost-core` 一个模块，随后自动执行 `GOWORK=off go mod tidy`；kit/skill/codegen 都是其中的包。解析在同级暂存项目完成，通常只提交最终 `go.mod/go.sum`。检测到旧模块或旧 Core import 布局时，先在暂存项目执行框架 consolidation，再把明确改动的 Go 文件、必要 manifest 和依赖文件一起提交（RR-20260930-14）；不会回写依赖命令对其他业务文件的任意改动。迁移或依赖解析失败时原项目保持，检测到应用输入或待提交文件的并发修改会拒绝覆盖。合仓迁移不处理映射之外的业务 API，错误诊断要求手工改符号时先修正再重跑。需要预览显式迁移可用 `project upgrade --consolidate --dry-run`；提高 Core 下限用 `project upgrade -core vX.Y.Z`，版本仍须满足 codegen 兼容门槛，`latest` 通过静态版本门禁。这里的逐文件回滚不能替代进程强杀/磁盘故障验证。
 
 ### 1.3 升级旧项目模板
 
