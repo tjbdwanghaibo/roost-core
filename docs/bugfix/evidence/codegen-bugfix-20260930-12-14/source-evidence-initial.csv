@@ -1,0 +1,6 @@
+"path","sha256","source_head","evidence"
+"codegen/internal/cfggen/main.go","c8eb2467a9adc5677e75c77d5b094459833ad6422f153d2d6eff7464526bdf1c","2f68aa22","current source; formal regression; generation consumer where applicable"
+"codegen/internal/cfggen/consumer_promises_test.go","17886a01eb4b5af862033050007049bb5a1552c8a2ec4bee1f2cd27cba365182","2f68aa22","current source; formal regression; generation consumer where applicable"
+"codegen/internal/cfggen/namespace_promises_test.go","b7f5f2e6d0275e0ca6108c3f81840fc97b35774c2de80de36c5babe54484d7d1","2f68aa22","current source; formal regression; generation consumer where applicable"
+"codegen/internal/roost/dependencies.go","214971ea78cd7f3ce24211247c284dcd2f62727175f6d96a801cbb05b52dc3d2","2f68aa22","current source; formal regression; generation consumer where applicable"
+"codegen/internal/roost/dependencies_consolidation_promises_test.go","85cd32b36275d7fc0dd9a50f3b1aa453c9bd6db09b4745b852ef17f415b04233","2f68aa22","current source; formal regression; generation consumer where applicable"

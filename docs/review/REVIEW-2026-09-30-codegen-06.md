@@ -4,6 +4,8 @@
 
 收尾 fetch 发现远端到 `904d6d25`，另一工作线新增 Remote marker 前缀 RR-19、集成补测和文档；没有 Codegen 源码变化。本轮正常整合其提交并保留索引/CHANGELOG，不将 RR-19 当成自己的修复或独立验收。五个本轮 Go 文件的摘要确认整合后测试对象保持；合并后的真实生成工程再次编译通过，验证新依赖源码仍能被本轮消费者使用，见 merged-consumer-test.log。
 
+随后远端前进至 `d4ef0a3b`，新增 Nest/Entity 修复、Codegen 配置行尾/compose 检查/demo 模板等。`9299e94c` 更正编号后，正常合并为 `56d4b805`，保留双方完整记录。此版本重建正式 CLI、重新创建并迁移独立工程（包括新增 deploy/docker 检查包），生成消费编译通过；DAO/Entity 双模式 Sync 重新生成后 race 通过，Codegen vet 与 glsvet 通过。生成的 compose 运行检查因未设置 `ROOST_COMPOSE_CHECK` 按其设计跳过，不能将编译通过当成 Docker 语义验收。最终合并证据使用 final-* 日志，初轮日志及源码摘要另存不覆盖。
+
 ## 行为与验收
 
 编号映射：第五轮原 Codegen RR-12/13/14 → 当前 RR-22/23/24。远端另一工作线重新使用了旧编号；原报告、红绿日志和三次源码提交消息保持历史原样，修复文档及当前导航使用新编号，避免与 Nest/Entity 的独立问题混淆。
@@ -34,5 +36,7 @@ Tier 2，roost-core index_status ready，起点 HEAD 对齐 `4784ef82`；coverag
 没有数据库、wire、公开 API 迁移；namespace 校验有明确收紧，冲突 schema 需改名。deps 的旧布局现在确实迁移必要 Go/manifest，映射外业务符号仍需手工处理。没有自动发布、部署或操作生产数据。
 
 ## 后续停点
+
+最终基线 `56d4b805` 的 `go test -race ./codegen/... -skip TestDeployScriptsCarryNoKnownShellcheckFindings -count=1` 全包通过（roost 包约 172 秒），见 final-codegen-race.log。Codegen 的三项本轮修复均保留正式回归，原始红测与初轮绿测独立归档；远端相关修改已纳入这次回归，但不冒称其他工作线各 RR 均由本轮独立验收。
 
 RR-22～24 已在上述范围关闭，不能因此把整个 Codegen 标为完成。下一次 review 继续真实配置加载/required/ref/skipempty/索引值往返，显式 upgrade 的旧版本消费者、正式 Webroute 服务启动；强杀/磁盘/rollback 失败与旧客户端兼容仍未验证。本轮同步[进度](PROGRESS.md)与[机制学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md)，不替这些边界补写“已验”。

@@ -2,6 +2,8 @@
 
 起点 Core `4784ef820cab599e0b1321a96a5843af2ab95e58`；五个最终 Go 文件见 [source-evidence.csv](source-evidence.csv)，源码收口 `2f68aa22`。Go 1.27.0 / Windows；仅临时消费者有 local replace，未改 Core go.mod/toolchain 或 go.work。
 
+编号映射：日志名 RR12/13/14 是第五轮原 Codegen 编号，当前为 RR22/23/24，原始日志不改写。初轮摘要见 [source-evidence-initial.csv](source-evidence-initial.csv)；source-evidence.csv 记录编号更正并整合远端后的 `56d4b805` 源码。新增 final-* 记录该基线上的重复验证，保持原轮次证据独立。
+
 | 文件 | 实际结果 |
 | --- | --- |
 | [RR12-red.log](RR12-red.log) | 修前真实消费包两个失败（strconv unused）、两个控制通过 |
@@ -19,7 +21,11 @@
 
 修前运行的是本次新建的正式测试，在生产修复前执行，不靠 stash 或修改旧失败。18 个新叶子只代表具名场景；全包通过仍不能证明所有 schema、升级版本或故障模式。
 
+最终整合后的日志：final-vet.log / final-glsvet.log 静态检查 exit0；final-consumer-test.log 为初轮工程再次消费最新 Core；final-consumer-new.log / final-consumer-deps.log / final-fresh-consumer-test.log 为最新 CLI 新建工程、真实 get/tidy 迁移与消费编译；final-sync-dao.log / final-sync-entity.log / final-sync-consumer.log 为重新生成后的 periodic/on_change race。生成工程中 compose 检查包编译通过，但 Docker 执行依其环境开关跳过，没有实际启动容器。
+
 ## 正式回归复跑
+
+[final-codegen-race.log](final-codegen-race.log) 是 `56d4b805` 整合后的全 Codegen race：全部通过，仍显式跳过 TestDeployScriptsCarryNoKnownShellcheckFindings。生成消费者的 Docker compose 运行检查按环境开关跳过；上述结果不代替 Linux 部署工具验证。
 
 ```powershell
 $env:GOWORK='off'
