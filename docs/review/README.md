@@ -1,6 +1,7 @@
 # Roost 持续 Review 与学习记录
 
 [09-30 Codegen 第三轮](REVIEW-2026-09-30-codegen-03.md)：[RR-04 Entity 修复](../bugfix/RR-20260930-04.md)、[RR-05 Nest 修复](../bugfix/RR-20260930-05.md)按声明场景通过；主生成器入口盘点及五个隔离 CLI 新反例见 [RR-06～10](../bug/REVIEW-2026-09-30-codegen-03.md)，未修。[实现机制](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [证据](evidence/codegen-review-20260930-03/README.md) · [进度](PROGRESS.md)。整体 Codegen 尚未收敛。
+[09-30 问题存档](ARCHIVE-2026-09-30.md)：v1.17.0 之后两条工作线逐编号状态、OPEN-ITEMS / REMAINING 去向、仍开放事项、证据索引与不一致清单。存档时 B 线的 RR-20260930-04/05 尚未修复；当前修复状态以上方第三轮记录为准。C01 24 小时长稳改由 fable 执行：[C01-RUNBOOK](C01-RUNBOOK-2026-09-30.md)。
 
 [09-30 Codegen 第二轮](REVIEW-2026-09-30-codegen-02.md)：[RR-01/02 原触发修复](../bugfix/RR-20260930-01.md)并核对 Protocol 上层提交；[新 RR-04/05 Entity/Nest 退役旧文件](../bug/REVIEW-2026-09-30-codegen-02.md)只记录未实施。[Protocol 修复](../bugfix/RR-20260930-02.md) · [复跑](evidence/codegen-review-20260930-02/README.md) · [机制更新](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [进度](PROGRESS.md)。
 
