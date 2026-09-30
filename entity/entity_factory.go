@@ -342,6 +342,10 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if err := validateBuiltEntityPolicy(bp, e); err != nil {
 		return nil, err
 	}
+	// 注册的 builder 构建出的实体必须是指针（RR-20260930-15）：Guard 按实例比较，值类型实现进入 Guard 后才 panic 太晚。
+	if err := requirePointerEntity(e); err != nil {
+		return nil, fmt.Errorf("entity kind %d: %w", bp.Kind, err)
+	}
 	if param.RemoteRestore != nil {
 		remote, ok := e.(IThreadSafeRemoteEntity)
 		if !ok {

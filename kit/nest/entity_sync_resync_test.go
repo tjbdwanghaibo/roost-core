@@ -22,7 +22,7 @@ type reloadLoader struct {
 func (loader *reloadLoader) LoadEntity(ctx context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	base := entity.NewEntityBase(id, entity.EntityCategory(1), false)
 	base.SetSyncState(reloadTestState(id))
-	fresh := reloadedEntity{base}
+	fresh := &reloadedEntity{base}
 	var addErr error
 	onFast := false
 	if err := entity.RunLocal(ctx, func() {
@@ -72,7 +72,7 @@ func TestEntitySyncModResyncsSubscribersAfterUnload(t *testing.T) {
 	const id = 4101
 	base := entity.NewEntityBase(id, entity.EntityCategory(1), false)
 	base.SetSyncState(reloadTestState(id))
-	stale := reloadedEntity{base}
+	stale := &reloadedEntity{base}
 	manager.Add(stale)
 	syncMgr := mod.EntitySync()
 	if err := syncMgr.Register(stale.Sync()); err != nil {
