@@ -22,9 +22,9 @@
 
 ### Fixed
 
-- **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-22）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-22.md)。
-- **cfggen 写入前拒绝生成名称冲突（RR-20260930-23）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-23.md)。
-- **依赖事务同时提交明确的合仓迁移（RR-20260930-24）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-24.md)。
+- **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-CG-12）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-CG-12.md)。
+- **cfggen 写入前拒绝生成名称冲突（RR-20260930-CG-13）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-CG-13.md)。
+- **依赖事务同时提交明确的合仓迁移（RR-20260930-CG-14）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-CG-14.md)。
 - **回滚后 release hook panic 的回复保留业务错误**（RR-20260930-20，P2，B27 第 2 批端到端暴露）：handler 返回业务错误、事务回滚后 `OnEntityRelease` 钩子 panic，回复现在是 `errors.Join(业务错误, hook 错误)`，`errors.Is` 对两者都成立，且不带 `ErrAfterCommitFailed`；之前回复只剩 hook 错误。已提交路径（handler 成功、提交后 hook 失败）的 `ErrAfterCommitFailed` 回复逐字不变。记录：[bug](docs/bug/RR-20260930-20.md) / [bugfix](docs/bugfix/RR-20260930-20.md)。
 - **`roost add mod` / `add saga` 给 CRLF 检出的服务配置追加 Mod 段时沿用原行尾**（RR-20260930-16，N23）：开发配置与生产示例之前一律按 LF 追加，一份文件行尾混用；现在与 Secret 示例同一条路径（`lfText` / `restoreLineEndings`），LF 与空文件保持 LF。[记录](docs/bugfix/RR-20260930-16.md)
 - **game-demo：`Service.Shutdown` 把 App 的停机 ctx 传给 `Scene.Close`**（RR-20260930-18，N31）：停止“卸载后重载”与 replication manager 排空受 `shutdown.total_timeout` 约束，不再用 `context.Background()` 等到部署侧 SIGKILL。demo 文件应用所有，已有工程手改两处。[记录](docs/bugfix/RR-20260930-18.md)

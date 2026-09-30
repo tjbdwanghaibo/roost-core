@@ -1,6 +1,6 @@
 # Roost Review 跨轮进度
 
-## 2026-09-30 Codegen 第六轮：RR-22～24 修复验收
+## 2026-09-30 Codegen 第六轮：RR-CG-12～14 修复验收
 
 [运行/停点](REVIEW-2026-09-30-codegen-06.md) · [三项修复](../bugfix/README.md) · [原始证据](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。起点 `4784ef82`，源码修复收口 `2f68aa22`。用户本轮明确 bugfix；三项原触发与具名邻接场景已验，未发版，下方第五轮“未修”保留历史。
 
@@ -11,9 +11,9 @@
 | 相邻生成消费 | 正式 DAO → Entity → periodic/on_change Sync，native Go 等价脚本链 race | 不是完整业务进程运行或真实外部资源矩阵 |
 | 全 Codegen/静态 | 全 Codegen race/vet、glsvet 通过；具名 shell 项跳过 | sh/shellcheck PATH 工具限制；发布 tag 未含新修复 |
 
-RR-22～24 按本表范围关闭；整个 Codegen 仍有下方具名未审项，继续入口是配置运行期、显式 upgrade 消费者、正式 Webroute 启动。新测试 graph coverage not_tracked、旧路径 metadata_changed，当前源码和执行补证，不称图谱全域同代。
+RR-CG-12～14 按本表范围关闭；整个 Codegen 仍有下方具名未审项，继续入口是配置运行期、显式 upgrade 消费者、正式 Webroute 启动。新测试 graph coverage not_tracked、旧路径 metadata_changed，当前源码和执行补证，不称图谱全域同代。
 
-编号映射：第五轮原 Codegen RR-12/13/14 → RR-22/23/24，避免与并行 Nest/Entity 记录重号；原报告和证据保留。正常整合远端 `d4ef0a3b` 至 `56d4b805`，重新构建 CLI、迁移新工程与 DAO/Entity 双模式消费者，均通过；生成 compose 的 Docker 运行检查未执行。完整收尾结果见第六轮记录及 final-* 日志。
+编号映射：第五轮原 Codegen RR-12/13/14 → RR-CG-12/13/14，避免与并行 Nest/Entity 记录重号；原报告和证据保留。正常整合远端 `d4ef0a3b` 至 `56d4b805`，重新构建 CLI、迁移新工程与 DAO/Entity 双模式消费者，均通过；生成 compose 的 Docker 运行检查未执行。完整收尾结果见第六轮记录及 final-* 日志。
 
 ## 2026-09-30 Codegen 第五轮：cfggen 与依赖自动迁移
 

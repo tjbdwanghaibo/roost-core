@@ -96,7 +96,7 @@ roost project sync
 roost project deps
 ```
 
-合仓后只解析 `roost-core` 一个模块，随后自动执行 `GOWORK=off go mod tidy`；kit/skill/codegen 都是其中的包。解析在同级暂存项目完成，通常只提交最终 `go.mod/go.sum`。检测到旧模块或旧 Core import 布局时，先在暂存项目执行框架 consolidation，再把明确改动的 Go 文件、必要 manifest 和依赖文件一起提交（RR-20260930-24）；不会回写依赖命令对其他业务文件的任意改动。迁移或依赖解析失败时原项目保持，检测到应用输入或待提交文件的并发修改会拒绝覆盖。合仓迁移不处理映射之外的业务 API，错误诊断要求手工改符号时先修正再重跑。需要预览显式迁移可用 `project upgrade --consolidate --dry-run`；提高 Core 下限用 `project upgrade -core vX.Y.Z`，版本仍须满足 codegen 兼容门槛，`latest` 通过静态版本门禁。这里的逐文件回滚不能替代进程强杀/磁盘故障验证。
+合仓后只解析 `roost-core` 一个模块，随后自动执行 `GOWORK=off go mod tidy`；kit/skill/codegen 都是其中的包。解析在同级暂存项目完成，通常只提交最终 `go.mod/go.sum`。检测到旧模块或旧 Core import 布局时，先在暂存项目执行框架 consolidation，再把明确改动的 Go 文件、必要 manifest 和依赖文件一起提交（RR-20260930-CG-14）；不会回写依赖命令对其他业务文件的任意改动。迁移或依赖解析失败时原项目保持，检测到应用输入或待提交文件的并发修改会拒绝覆盖。合仓迁移不处理映射之外的业务 API，错误诊断要求手工改符号时先修正再重跑。需要预览显式迁移可用 `project upgrade --consolidate --dry-run`；提高 Core 下限用 `project upgrade -core vX.Y.Z`，版本仍须满足 codegen 兼容门槛，`latest` 通过静态版本门禁。这里的逐文件回滚不能替代进程强杀/磁盘故障验证。
 
 ### 1.3 升级旧项目模板
 

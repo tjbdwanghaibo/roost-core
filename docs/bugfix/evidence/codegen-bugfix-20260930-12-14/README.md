@@ -1,4 +1,4 @@
-# RR-20260930-22～24 修前与修后证据
+# RR-20260930-CG-12～24 修前与修后证据
 
 起点 Core `4784ef820cab599e0b1321a96a5843af2ab95e58`；五个最终 Go 文件见 [source-evidence.csv](source-evidence.csv)，源码收口 `2f68aa22`。Go 1.27.0 / Windows；仅临时消费者有 local replace，未改 Core go.mod/toolchain 或 go.work。
 

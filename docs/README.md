@@ -1,6 +1,6 @@
 # Roost 文档中心
 
-**09-30 Codegen 第六轮：**[RR-22～24 修复与正式消费者](review/REVIEW-2026-09-30-codegen-06.md) 3/3 已修、具名场景验证，未发版。[逐项修复](bugfix/README.md) · [进度](review/PROGRESS.md)。未把 Codegen 整体标为审查完成。
+**09-30 Codegen 第六轮：**[RR-CG-12～14 修复与正式消费者](review/REVIEW-2026-09-30-codegen-06.md) 3/3 已修、具名场景验证，未发版。[逐项修复](bugfix/README.md) · [进度](review/PROGRESS.md)。未把 Codegen 整体标为审查完成。
 
 **09-30 Codegen 第五轮：**[cfggen 消费者与依赖自动迁移](review/REVIEW-2026-09-30-codegen-05.md)新增[三个未修 P2](bug/REVIEW-2026-09-30-codegen-05.md)；四个反例/四个控制归档，包回归与定向 race 通过。[机制学习](review/IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [进度](review/PROGRESS.md)。只审查未改源码，整体尚未收敛。
 

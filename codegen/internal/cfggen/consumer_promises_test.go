@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// RR-20260930-22：显式关闭索引也必须生成可编译的消费包；
+// RR-20260930-CG-12：显式关闭索引也必须生成可编译的消费包；
 // 旧实现只移除了标签/accessor，却留下未使用的 strconv import。
 func TestCfggenDisabledIndexesCompile(t *testing.T) {
 	var disabled strings.Builder

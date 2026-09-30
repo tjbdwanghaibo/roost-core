@@ -1,12 +1,12 @@
 # Roost Review 问题索引
 
-**09-30 Codegen 第六轮修复：RR-22～24 3/3 已修、具名场景已验，未发版。**[运行/消费证据](../review/REVIEW-2026-09-30-codegen-06.md) · [复跑](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。下方第五轮“均未修”为原 review 时点。
+**09-30 Codegen 第六轮修复：RR-CG-12～14 3/3 已修、具名场景已验，未发版。**[运行/消费证据](../review/REVIEW-2026-09-30-codegen-06.md) · [复跑](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。下方第五轮“均未修”为原 review 时点。
 
 | 编号 | 问题 | 当前状态 |
 | --- | --- | --- |
-| [RR-20260930-22](REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 false 索引生成无用 strconv 导入 | [已修复/真实消费者验证](../bugfix/RR-20260930-22.md)，未发版 |
-| [RR-20260930-23](REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 bean 与生成函数/import 冲突 | [已修复/拒绝与正常消费者验证](../bugfix/RR-20260930-23.md)，未发版 |
-| [RR-20260930-24](REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 依赖事务丢失自动迁移回写 | [已修复/迁移与隔离验证](../bugfix/RR-20260930-24.md)，未发版 |
+| [RR-20260930-CG-12](REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 false 索引生成无用 strconv 导入 | [已修复/真实消费者验证](../bugfix/RR-20260930-CG-12.md)，未发版 |
+| [RR-20260930-CG-13](REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 bean 与生成函数/import 冲突 | [已修复/拒绝与正常消费者验证](../bugfix/RR-20260930-CG-13.md)，未发版 |
+| [RR-20260930-CG-14](REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 依赖事务丢失自动迁移回写 | [已修复/迁移与隔离验证](../bugfix/RR-20260930-CG-14.md)，未发版 |
 
 **09-30 Codegen 第五轮：三个新 P2，均未修。**[RR-20260930-12 false 索引无用导入、RR-13 bean 命名冲突、RR-14 依赖事务丢失自动迁移](REVIEW-2026-09-30-codegen-05.md)。四个隔离反例对应三个根因，四个正常/失败保护控制通过；[运行](../review/REVIEW-2026-09-30-codegen-05.md) · [复现](../review/evidence/codegen-review-20260930-05/README.md)。本轮只写文档，Codegen 尚未整体收敛。
 
