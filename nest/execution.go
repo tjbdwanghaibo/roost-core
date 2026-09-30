@@ -292,6 +292,9 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 				msg.markNestedTransactionCommitted()
 				// 与消息自己的事务同一规则：返回业务之前 fence 引擎（同 invokeHandlerTransaction 的 mgr.Fence 入口与错误）。
 				// 旧实现只在消息自己的事务返回结果未知时 fence，业务吞掉嵌套事务的错误后引擎照常受理新请求（RR-20260926-76）。
+				// 契约（REMAINING §3 N22，维护者 2026-09-30 决定不加哨兵）：业务吞掉这个错误、而外层自己没有要持久的记录
+				// （含 memory handler；带 Remote 批次的从 RR-20260930-12 起被 fence 拒绝，不在此列）时，回复是成功——
+				// 结果未知只能从此后请求得到的 ErrNestFenced 得知。嵌套事务的错误应当原样带进回复（判别表第 1 / 5 行）。
 				msg.fenceEngine(err)
 			}
 			if msg != nil && msg.RemoteWriteBatch != nil {

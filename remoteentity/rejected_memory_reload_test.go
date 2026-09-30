@@ -72,7 +72,9 @@ func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity
 	authority, err := l.store.readAuthority(ctx, fullID)
 	switch {
 	case err == nil:
-		e.SetEntityVersion(authority.Version)
+		if err := e.SetEntityVersion(authority.Version); err != nil {
+			return nil, err
+		}
 	case !errors.Is(err, fmongo.ErrNotFound):
 		return nil, err
 	}

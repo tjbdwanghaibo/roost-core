@@ -53,6 +53,22 @@ sh deploy/shell/healthcheck.sh http://127.0.0.1:9100/readyz
 
 unit 的 `WorkingDirectory` 是 `$APP_ROOT/current`，即当前 release（systemd 在进程启动时解析这个链接，切换 `current` 在随后的重启生效；运行中的进程一直读自己 release 里的文件），布局与镜像的 `WORKDIR /app` 一致。生成配置里的相对路径都按它解析：启用 configdata 的 Service 安装时把工程里的 `configs/data`（可用 `CONFIG_DATA` 环境变量指定，必须含 `_manifest.json`，缺失时在创建 release 之前就拒绝）拷进 release，数据表与生成它的二进制同一版本、随 `rollback.sh` 一起回退（RR-20260928-05；之前只装二进制与配置，`WorkingDirectory=$APP_ROOT` 下没有 `configs/data`，服务启动即失败）；release 在 `ProtectSystem=strict` 下只读，安装器把每个 release 里的 `log` 链接到实例日志目录 `/var/log/roost/<instance>`（`LOG_ROOT`，属于运行用户且在 `ReadWritePaths` 里），`stats_log.dir: log` 的统计文件落在那里（RR-20260928-04）。本版之前安装的 release 没有这两样。
 
+统计文件不轮转：statslog 以 `O_APPEND` 打开 `$LOG_ROOT/<service>-<sid>.stats.log`，进程运行期间不关闭、不重开。长期运行的实例由运维配 logrotate，**必须用 `copytruncate`**——`create` / 改名的方式会让进程继续写已改名的旧文件，新文件一直是空的；也没有可发的 reload 信号。示例 `/etc/logrotate.d/roost-stats`（REMAINING §3 N30，[RR-20260928-04 后续](bugfix/RR-20260928-04.md)；生成的 `deploy/shell/README.md` 带同样的片段）：
+
+```text
+/var/log/roost/*/*.stats.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+`copytruncate` 在复制与截断之间追加的记录会丢（默认 `stats_log.interval` 1 分钟一条，丢的至多是那一条）；同一份数据每次采集都已发布为 metrics gauge 与 ops `/statsz`，统计文件只是旁路留档。
+
 每个 release 在它自己安装时写的 unit 下运行：安装器把 unit 记在 `$APP_ROOT/units/<version>.service`，覆盖 `/etc/systemd/system/<instance>.service` 之前先把正在用的那份记给当前 release（它若还没有记录）；install.sh 的自动回滚与 `rollback.sh` 切换 `current` 时一并装回目标 release 的 unit 并 `daemon-reload`（RR-20260928-10）。切换顺序是 `systemctl stop`（按正在用的 unit）→ 切 `current` → 装入目标 unit → `systemctl start`：正在运行的版本按它自己 unit 的 `TimeoutStopSec` 停机，不会被换成另一个 release 的停机预算（RR-20260928-12；之前装入目标 unit 后再 `restart`，停机用的是目标 unit 的预算，回滚到停机预算更短的旧版本时在途请求可能被提前 SIGKILL）；目标 unit 装不上（install / `daemon-reload` 失败）时切回上一 release 及其 unit 再启动，并以非零退出报错。所以第一次用新 install.sh 升级失败时，本版之前安装的 release 回到旧 unit（`WorkingDirectory=$APP_ROOT`）下运行，与升级前相同——为旧 unit 手工放在 `$APP_ROOT/configs/data` 的数据表照样可用（修前 unit 不跟着回退，旧 release 回滚后按 release 目录找 `configs/data` 起不来，报 `rollback also failed readiness`）。没有 unit 记录的 release（新 install.sh 第一次升级之前更早的版本）回退时沿用当前 unit，并打印 `no unit recorded for release`。
 
 建议由配置管理系统管理 unit 和配置；不要在大量机器上手工执行脚本。Journal 日志应转发到集中系统并限制磁盘占用。
@@ -84,6 +100,22 @@ docker run --rm --name planet-game-1001 \
 ```
 
 只读根文件系统下，相对的 `stats_log.dir: log`（`/app/log`）必须挂可写卷：镜像里 `/app/log` 是属于 65532 的空目录，命名卷第一次挂载时按它初始化属主；生产 compose 为每个 Service 挂 `<app>-<service>-log` 命名卷，k8s 挂 `stats-log` emptyDir（sizeLimit 1Gi）。目录写不进去时 statslog 在启动时即 WARN（同一错误只告警一次，恢复时 INFO），每次失败计入 `stats_log.write_failures`；之前这些错误被吞掉，容器里统计文件从不落盘（RR-20260928-04）。
+
+命名卷里的统计文件同样不轮转（进程以 `O_APPEND` 追加写、不重开文件，也没有可发的 reload 信号）。宿主机上按卷的挂载点配 logrotate，同样必须 `copytruncate`：卷名用 `docker volume ls` 看（compose 给 `<app>-<service>-log` 加了项目名前缀），挂载点用 `docker volume inspect -f '{{ .Mountpoint }}' <卷名>` 看，默认在 `/var/lib/docker/volumes/<卷名>/_data`。示例（生成的 `deploy/docker/README.md` 带同样的片段）：
+
+```text
+/var/lib/docker/volumes/*planet-*-log/_data/*.stats.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+Docker Desktop 这类把卷放在虚拟机里的环境宿主机够不到挂载点，改用日志采集 sidecar 或调大 `stats_log.interval`。k8s 的 `stats-log` emptyDir 由 `sizeLimit` 兜底（超出即驱逐 Pod），不配 logrotate；要长期保留时按 §6 改 PVC 或接日志采集。
 
 本地 `deploy/dev/docker-compose.yaml` 只用于开发依赖，不是生产编排。生产镜像流水线还应输出 SBOM、漏洞扫描结果和签名，并在准入控制中验证 digest/签名。
 

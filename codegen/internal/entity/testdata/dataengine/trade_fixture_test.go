@@ -105,6 +105,20 @@ func newTradeFixture(t *testing.T, ctx context.Context, client fmongo.IMongo, ro
 // newTradeFixtureWith 额外接收 Nest 选项（例如 NestOptionWithEntitySync），其余与 newTradeFixture 相同。
 func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, nestOptions []nest.NestOption, configure ...func(*engine.ProjectorOptions)) *tradeFixture {
 	t.Helper()
+	return newTradeFixtureFull(t, ctx, client, root, scenario, policy, ackHook, nestOptions, nil, configure...)
+}
+
+// b27HandlerNames 是 B27 第 2 批用例经 register 登记的 handler；先放进 pipelined 允许清单，pipelined 策略下才走正式 pipelined 路径。
+var b27HandlerNames = []string{"trade_nested", "trade_nested_memory", "trade_fence_outer", "trade_create", "trade_cross_0", "trade_cross_1"}
+
+// newTradeFixtureRegistering 在 Nest 启动前让用例登记自己的 handler（B27 第 2 批），其余与 newTradeFixture 相同。
+func newTradeFixtureRegistering(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, register func(*tradeFixture), configure ...func(*engine.ProjectorOptions)) *tradeFixture {
+	t.Helper()
+	return newTradeFixtureFull(t, ctx, client, root, scenario, policy, ackHook, nil, register, configure...)
+}
+
+func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, nestOptions []nest.NestOption, register func(*tradeFixture), configure ...func(*engine.ProjectorOptions)) *tradeFixture {
+	t.Helper()
 	h := &tradeFixture{ctx: ctx, client: client, database: NewWalletDao().DbName(), fatal: make(chan error, 1), ackFailed: make(chan struct{}, 1)}
 	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: h.database})
 	if err != nil {
@@ -162,6 +176,7 @@ func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo
 	h.access = entity.NewManagerAccess(entity.NewEntityManager())
 	names := []string{"trade_seed", "trade_buy", "trade_transfer", "trade_reject", "trade_panic"}
 	allow := append(slices.Clone(names), "trade_fenced")
+	allow = append(allow, b27HandlerNames...)
 	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: allow, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +233,9 @@ func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo
 			}
 			return nil, nil
 		}, meta)
+	}
+	if register != nil {
+		register(h)
 	}
 	if err = h.scheduler.Start(); err != nil {
 		t.Fatal(err)

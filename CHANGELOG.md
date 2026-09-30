@@ -4,15 +4,30 @@
 
 ## [Unreleased]
 
+> 维护者 2026-09-30 对 [REMAINING §3](docs/review/REMAINING-2026-09-28.md) 的 13 条待决定项拍板：N21 / N23 / N24 / N25 / N26 / N28 / N31 / N32 做，N20 / N22 / N27 / N29 写进契约（N29 另加入口校验），N30 写部署文档。
+
+### Changed（行为收紧 / API 变化）
+
+- **Go API 签名变化（源码不兼容）**：`entity.IThreadSafeRemoteEntity.SetEntityVersion(int64)` → `SetEntityVersion(int64) error`（RR-20260930-13，N26）。同一 fence 下写更小的 StateVersion 现在返回 `ErrRemoteVersionConflict` 且不写入；生成实体经嵌入 `RemoteEntityBase` 获得该方法、不受影响，仓外自行实现该接口的类型需改签名。[记录](docs/bugfix/RR-20260930-13.md)
+- **fence 之后拒绝 Durability 0 的 Remote 直写（RR-20260930-12，P2，N21）**：带 Remote 批次、没有 effect 的 memory handler 在引擎 fence 后回复 `nest.ErrNestFenced` + `ErrCommitRejected`（判别表第 12 行）、Remote 批次 Abort，权威不再被写；此前成功并写权威。[记录](docs/bugfix/RR-20260930-12.md)
+- **广播每个目标自己的锁作用域（RR-20260930-14，N28）**：`broadcastDispatch` 在目标结束时释放它取得的全部锁（含 Destroy 后同 ID 重建的实例、Cast 取得的实体）与 Sync post-release 回调，不再跨后续目标持有。每目标多一次 Guard 池取还，未做基准。[记录](docs/bugfix/RR-20260930-14.md)
+- **实体实现必须是指针（RR-20260930-15，N29）**：`BuildEntity` 与 `EntityManager.Add` / `TryAdd` 拒绝值类型实现，新增 `entity.ErrEntityNotPointer`（错误点名类型）；生成实体都是指针。[记录](docs/bugfix/RR-20260930-15.md)
+- 契约文字（无行为变化）：USER_GUIDE §4 判别表外补 N20（`refuseCommitAfterFence` 是交给 committer 前的一次性检查，跨 goroutine 的窗口由 WAL terminal 兜底）、N22（业务吞掉嵌套事务结果未知得到的成功回复不加哨兵）、N27（Guard 锁账本按 ID，一个 handler 不跨 Manager 持有同 ID 实体）；B40 回归 `state_strict` 断言加强为每个 follower 各至少一次（N32）。
+
+### Added
+
+- **生成工程自带 compose 结构检查 `deploy/docker/compose_check_test.go`，CI 与 `make compose-check` 跑它**（RR-20260930-17，N24）：读 `docker compose config --format json` 的解析结果，断言每个 Service 的 tmpfs 恰好一条绝对路径挂载、read_only / user / cap_drop / security_opt、stop_grace_period、healthcheck、config bind 与命名卷；只在 `ROOST_COMPOSE_CHECK` 设置时执行（CI generated-and-deployment 作业与 Makefile 设置），没设置时跳过。已有工程 `project sync` 新建该文件并更新 Makefile / ci.yml。[记录](docs/bugfix/RR-20260930-17.md)
+- **部署文档：stats_log 统计文件不轮转，给出 `copytruncate` 的 logrotate 示例**（REMAINING N30）：`docs/DEPLOYMENT.md` §4 / §5 与生成的 `deploy/shell|docker/README.md`；文件以 `O_APPEND` 打开且进程不重开，`create` / 改名式轮转无效。[记录](docs/bugfix/RR-20260928-04.md)
+- **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。
+
 ### Fixed
 
 - **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-22）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-22.md)。
 - **cfggen 写入前拒绝生成名称冲突（RR-20260930-23）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-23.md)。
 - **依赖事务同时提交明确的合仓迁移（RR-20260930-24）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-24.md)。
-
-### Added
-
-- **Remote 非 authority 兼容装配的所有权标记键可加部署前缀**（RR-20260930-19，REMAINING N25，维护者 09-30 拍板）：新增 `remoteentity.NewRedisMarkerWithKeyPrefix(redis, prefix)` 与 `ValidateMarkerKeyPrefix`，非空时键为 `<prefix>:remote_entity:marks`，与 L2 快照前缀同形；空值键逐字不变，与 `NewRedisMarker(redis, "")` 互读。正式 kit 装配不写这把键（所有权存储是 Mongo 权威），kit 配置面不变；USER_GUIDE §6 新增 Remote 三类 Redis 键清单，写明 `remote_entity.lock_key` 缺省 `e` 不隔离、共用 Redis 的部署须各配不同值。记录：[bug](docs/bug/RR-20260930-19.md) / [bugfix](docs/bugfix/RR-20260930-19.md)。
+- **回滚后 release hook panic 的回复保留业务错误**（RR-20260930-20，P2，B27 第 2 批端到端暴露）：handler 返回业务错误、事务回滚后 `OnEntityRelease` 钩子 panic，回复现在是 `errors.Join(业务错误, hook 错误)`，`errors.Is` 对两者都成立，且不带 `ErrAfterCommitFailed`；之前回复只剩 hook 错误。已提交路径（handler 成功、提交后 hook 失败）的 `ErrAfterCommitFailed` 回复逐字不变。记录：[bug](docs/bug/RR-20260930-20.md) / [bugfix](docs/bugfix/RR-20260930-20.md)。
+- **`roost add mod` / `add saga` 给 CRLF 检出的服务配置追加 Mod 段时沿用原行尾**（RR-20260930-16，N23）：开发配置与生产示例之前一律按 LF 追加，一份文件行尾混用；现在与 Secret 示例同一条路径（`lfText` / `restoreLineEndings`），LF 与空文件保持 LF。[记录](docs/bugfix/RR-20260930-16.md)
+- **game-demo：`Service.Shutdown` 把 App 的停机 ctx 传给 `Scene.Close`**（RR-20260930-18，N31）：停止“卸载后重载”与 replication manager 排空受 `shutdown.total_timeout` 约束，不再用 `context.Background()` 等到部署侧 SIGKILL。demo 文件应用所有，已有工程手改两处。[记录](docs/bugfix/RR-20260930-18.md)
 
 ## [v1.18.0] - 2026-09-30
 

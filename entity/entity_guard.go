@@ -81,6 +81,9 @@ type EntityGuard struct {
 	// eMap 以 ID 记当前持有的实例。同 ID 的另一实例若换了锁（handler 内 Destroy 后 LockManager 摘掉了旧锁，
 	// 重建的实例拿到新锁），取得新锁后新实例进 eMap，旧实例连同它仍被本 Guard 持有的锁移到 superseded，
 	// Guard 释放时一并解锁（RR-20260926-67）。
+	// 契约（REMAINING §3 N27，维护者 2026-09-30 定）：账本只按 ID、不按 EntityManager——一个 handler 不跨 Manager 持有同 ID 的
+	// 实体。同一 Guard 先持有 Manager A 上的 X、再对 Manager B 上同 ID 的 X 取锁时，按“同 ID 换了实例”处理（B 上的 X 进 eMap、
+	// A 上的转入 superseded），锁序判断同样按 eMap 条目；这不是支持的用法，框架不为它收紧也不为它扩大记账。
 	eMap        map[int64]IThreadSafeEntity
 	superseded  []heldEntity
 	postRelease []func()
@@ -314,9 +317,26 @@ func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
 	return true
 }
 
+// requirePointerEntity 校验实体实现是指针（RR-20260930-15，契约）。holding 与 doReleaseEntity 直接比较接口值
+// （current == ent）：指针恒可比较；值类型实现若含 func / map / slice 字段，同 ID 两个实例在同一 Guard 相遇时 == 在运行期
+// panic（"comparing uncomparable type"，RR-20260927-25 / 30 只处理了 Mutex 的比较）。维护者决定不改热路径的比较，改为在
+// 实体进入框架的入口（BuildEntity、EntityManager.TryAdd）校验一次：只看动态类型的 Kind，不做逐字段反射；可比较的值类型
+// 同样拒绝——值类型实体每次经接口传递都是一份拷贝，"同一实例"没有意义。
+func requirePointerEntity(ent IThreadSafeEntity) error {
+	if ent == nil {
+		return ErrEntityNil
+	}
+	if reflect.TypeOf(ent).Kind() != reflect.Pointer {
+		return fmt.Errorf("%w: %T is a value type (the guard compares entity instances)", ErrEntityNotPointer, ent)
+	}
+	return nil
+}
+
 // holding 按实例判断本 Guard 是否已持有 ent 的锁（RR-20260926-67）：同一实例，或同 ID 且共用同一把锁的另一实例
 // （Destroy 之前重复构建的实例）都算已持有。同 ID 但锁不同的旧实例作为 stale 返回——它的锁仍由本 Guard 持有，
 // 但不代表 ent 的锁：只按 ID 判断会让新实例在未加锁的情况下被当作已持有。
+// current == ent 直接比较接口值：实体实现必须是指针（契约，入口由 requirePointerEntity 校验，RR-20260930-15），
+// 这里不再做可比较性判断。
 func (e *EntityGuard) holding(ent IThreadSafeEntity) (held bool, stale IThreadSafeEntity) {
 	current, ok := e.eMap[ent.GUId()]
 	if !ok {

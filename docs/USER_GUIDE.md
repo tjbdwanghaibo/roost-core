@@ -44,6 +44,7 @@ DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。�
 - 不把 Entity、DAO、可变 map/slice 指针带出锁作用域。
 - 异步 goroutine 只接收不可变值或 snapshot，不能闭包捕获 Entity。
 - ID 默认不复用；删除使用高版本 tombstone，旧 save/ACK 不能复活对象。
+- **实体实现必须是指针**（RR-20260930-15）：Guard 按实例比较接口值，值类型实现（尤其含 func / map / slice 字段、不可比较的）会在同 ID 两个实例相遇时 panic。注册的 builder 构建出值类型实体时 `BuildEntity` 拒绝，手工构造的值类型实体在 `EntityManager.Add` / `TryAdd` 处拒绝（`errors.Is(err, entity.ErrEntityNotPointer)`，错误里点名类型）；生成实体都是指针，不受影响。
 
 ## 4. Nest 请求与事务
 
@@ -147,7 +148,11 @@ strict（以及带 Remote 批次、随 strict 路径提交的 pipelined）的 Re
 
 第 10、11 行是 `RunIsolatedTransaction` 返回给业务的错误；业务原样回复时，消息自己的事务是否提交仍按其余行判断（这两种情况下嵌套事务
 什么都没提交，不会触发第 5 行）。`ErrNestFenced` 表示实例已 fence、请求未执行，或 handler 已执行但消息自己的事务在交给 committer 之前被拒绝（例如 handler 内嵌套独立事务结果未知、fence 之后，RR-20260927-06；回复同时带 `ErrCommitRejected`，按第 12 行），等实例恢复后可重试；链上同时有前 5 行的哨兵时按那一行。
-被拒绝时可回滚事务已回滚；不能回滚的 handler（带 Remote 批次、emit 了 effect 的 memory handler——只有它会把记录交给 committer，因而走到这一检查）内存修改不撤销，按第 6 行的语义确认幂等后再重试（RR-20260927-32 更正：此前这里写“已回滚”，对 RollbackNone 不成立）。
+被拒绝时可回滚事务已回滚；不能回滚的 handler（带 Remote 批次的 memory handler——emit 了 effect 的把记录交给 committer 前被拒，没有 effect 的在 Durability 0 直写 Remote 前被拒，RR-20260930-12）内存修改不撤销，按第 6 行的语义确认幂等后再重试（RR-20260927-32 更正：此前这里写“已回滚”，对 RollbackNone 不成立）。
+fence 之后的 Remote 直写（RR-20260930-12，维护者 2026-09-30 收紧）：引擎 fence 之后，带 Remote 批次、没有 effect 的 memory handler 的 Durability 0 直写同样被拒绝——回复 `ErrNestFenced` + `ErrCommitRejected`（第 12 行）、Remote 批次 Abort，权威不再被写；此前这类消息在 fence 之后仍成功并写了权威。
+fence 检查的时间窗（REMAINING §3 N20，维护者 2026-09-30 接受并写入契约）：`refuseCommitAfterFence` 是消息自己的事务交给 committer（或 Remote 直写）之前的一次性检查，不是临界区。别的 goroutine 在检查之后、committer 接受之前 fence 引擎的那个窗口不由它拦：那种 fence 来自另一笔事务的结果未知，本笔记录进入 WAL 后由 WAL terminal 兜底；嵌套场景（同一 goroutine 里独立事务结果未知后外层再提交）时序确定，检查必然命中。fence 原因以文本写进错误（`%v`），不能再 `errors.As` 取到——这是有意的，原因链上的 `ErrCommitIndeterminate` 会让调用方误走结果未知分支。
+吞掉嵌套事务结果未知时的成功回复（REMAINING §3 N22，维护者 2026-09-30 决定不加哨兵）：第 1 行已写明——handler 内嵌套独立事务结果未知、业务吞掉这个错误、外层自己没有要持久的记录（含 memory handler）时，回复是成功，结果未知只能从此后请求得到的 `ErrNestFenced` 得知。框架不会给这种回复加哨兵：**业务不要吞掉 `RunIsolatedTransaction` / `RunDetachedTransaction` 的错误**，原样带进回复才能命中第 1 / 5 行；吞掉后调用方看到的“成功”只对外层的内存修改成立，嵌套事务的持久结果由 WAL 恢复决定。
+Guard 锁账本按 ID（REMAINING §3 N27，维护者 2026-09-30 定为契约）：**一个 handler 不跨 EntityManager 持有同 ID 的实体**。Guard 的 eMap 以 ID 记当前持有的实例，不区分 EntityManager；同一 handler 先持有 Manager A 上的 X、再对 Manager B 上同 ID 的 X 取锁时按“同 ID 换了实例”处理（B 上的进 eMap、A 上的转入 superseded，Guard 释放时一并解锁），锁序判断同样只看 eMap 条目。这不是支持的用法，框架不为它收紧也不为它扩大记账；撤销记录（RR-20260928-02）已按（Manager, ID）区分，与此无关。
 
 `RunIsolatedTransaction`（以及新建事务的 `RunDetachedTransaction`）在消息里从不认领消息：消息自己的事务结束之后（提交、回滚或失败），
 在它的收尾阶段（Guard post-release 回调、解锁后回调）调用时，同样按嵌套独立事务处理——带 Remote 批次的消息返回第 11 行的错误；

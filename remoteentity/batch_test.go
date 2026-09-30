@@ -247,7 +247,9 @@ func TestRemoteWriteBatchMemoryCommitPublishesImmutableSnapshot(t *testing.T) {
 	mgr.SetOwnershipStore(newMockMarkerStore())
 
 	live := newTestRemoteEntity(1401, 1, kind)
-	live.SetEntityVersion(0)
+	if err := live.SetEntityVersion(0); err != nil {
+		t.Fatal(err)
+	}
 	live.dirty.set(true)
 	loader.add(live)
 

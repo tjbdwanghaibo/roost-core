@@ -18,6 +18,15 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20260930-21](RR-20260930-21.md)：**P2** 提交后释放 Redis 锁失败，`versionedLock` 本地 `acquired` 不清，同一实体在本进程内永久 `versioned lock already acquired`（B27 第 2 批端到端暴露，RR-20260926-46 后续）（**已确认，未修复**）。
+[RR-20260930-20](RR-20260930-20.md)：**P2** handler 业务失败后 release hook panic，回复丢失业务错误、只剩 `release hook failed after commit`（B27 第 2 批端到端暴露，RR-20260926-53 / 32 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-20.md)）。
+[RR-20260930-18](RR-20260930-18.md)：P3 game-demo 模板 `Service.Shutdown` 用 `context.Background()` 关场景，停止重载不受 App 停机时限约束（REMAINING §3 N31，维护者 09-30 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20260930-18.md)）。
+[RR-20260930-17](RR-20260930-17.md)：P3 生成工程 CI 只跑 `docker compose config --quiet`，RR-20260927-33 那种语法合法、语义错的 tmpfs 抓不到（REMAINING §3 N24）（已修复：生成工程自带 `deploy/docker/compose_check_test.go`，未发版；[修复记录](../bugfix/RR-20260930-17.md)）。
+[RR-20260930-16](RR-20260930-16.md)：P4 `add mod` / `add saga` 给 CRLF 的服务配置追加 Mod 段时用 LF，行尾混用（REMAINING §3 N23）（已修复，未发版；[修复记录](../bugfix/RR-20260930-16.md)）。
+[RR-20260930-15](RR-20260930-15.md)：P3 Guard `holding` 直接比较实体接口值，值类型且不可比较的实体实现会 panic（REMAINING N29，维护者 09-30 拍板；已修复：契约“实体必须是指针”+ `BuildEntity` / `TryAdd` 入口校验、`entity.ErrEntityNotPointer`，未发版；[修复记录](../bugfix/RR-20260930-15.md)）。
+[RR-20260930-14](RR-20260930-14.md)：P3 广播 handler 内 Destroy 后同 ID 重建，`broadcastDispatch` 按 ID 释放、一把锁跨后续目标持有（REMAINING N28；已修复：每目标自己的 Guard 作用域、按实例释放，未发版；[修复记录](../bugfix/RR-20260930-14.md)）。
+[RR-20260930-13](RR-20260930-13.md)：P3 `SetEntityVersion` 不做检查改写 StateVersion，同 fence 可回退（REMAINING N26；已修复：拒绝回退并改为返回 error——签名变化，未发版；[修复记录](../bugfix/RR-20260930-13.md)）。
+[RR-20260930-12](RR-20260930-12.md)：**P2** 引擎 fence 后带 Remote 批次、无 effect 的 memory handler 仍以 Durability 0 直写权威（REMAINING N21；已修复：fence 后同样拒绝，`ErrNestFenced` + `ErrCommitRejected`，未发版；[修复记录](../bugfix/RR-20260930-12.md)）。
 [RR-20260930-19](RR-20260930-19.md)：P3 Remote 其余 Redis 键不带部署前缀——非 authority 兼容装配的 `remote_entity:marks` 缺省键跨部署串租约；锁键 `remote_entity.lock_key` 已可配但缺省不隔离、文档未写（REMAINING §3 N25，维护者 09-30 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20260930-19.md)）。
 [RR-20260930-11](RR-20260930-11.md)：P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 只等到 `loads > 0` 就放行加载器，晚到的 goroutine 再加载一次（`-race -count=400` 每轮约 1% 红，测试假设过强，实现不动）（已修复，v1.18.0；[修复记录](../bugfix/RR-20260930-11.md)）。
 

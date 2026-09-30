@@ -344,6 +344,15 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（v1.17.2） |
 | [RR-20260928-15](bug/RR-20260928-15.md) | P4 生成 TCP / scene 测试未等会话登记 | [修复](bugfix/RR-20260928-15.md)（v1.18.0） |
 | [RR-20260930-03](bug/RR-20260930-03.md) | P2 `AtomicLocalStore` 覆盖写无限追加时钟记录（C01 堆增长） | [修复](bugfix/RR-20260930-03.md)（v1.18.0） |
+| [RR-20260930-12](bug/RR-20260930-12.md) | P2 fence 后无 effect 的 memory handler 仍以 Durability 0 直写 Remote（N21） | [修复](bugfix/RR-20260930-12.md)（未发布；行为收紧） |
+| [RR-20260930-13](bug/RR-20260930-13.md) | P3 `SetEntityVersion` 同 fence 可回退 StateVersion（N26） | [修复](bugfix/RR-20260930-13.md)（未发布；接口签名改为返回 error） |
+| [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
+| [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
+| [RR-20260930-20](bug/RR-20260930-20.md) | P2 回滚后 release hook panic 吞掉业务错误（B27 第 2 批暴露） | [修复](bugfix/RR-20260930-20.md)（未发布；`nest/nest_dispatch.go` `joinRecoveredError`） |
+| [RR-20260930-21](bug/RR-20260930-21.md) | P2 解锁失败后本地 `acquired` 不清，实体本进程内永久不可写（B27 第 2 批暴露） | 未修复 |
+| [RR-20260930-16](bug/RR-20260930-16.md) | P4 CRLF 配置追加 Mod 段用 LF（N23） | [修复](bugfix/RR-20260930-16.md)（未发布） |
+| [RR-20260930-17](bug/RR-20260930-17.md) | P3 生成工程 CI 抓不到 compose 语义错误（N24） | [修复](bugfix/RR-20260930-17.md)（未发布；生成工程自带结构检查） |
+| [RR-20260930-18](bug/RR-20260930-18.md) | P3 game-demo `Scene.Close` 不受停机时限约束（N31） | [修复](bugfix/RR-20260930-18.md)（未发布） |
 | [RR-20260930-19](bug/RR-20260930-19.md) | P3 Remote 标记键无部署前缀、锁键隔离要求未写（N25） | [修复](bugfix/RR-20260930-19.md)（未发布；缺省键逐字不变、kit 配置面不变） |
 | [RR-20260930-11](bug/RR-20260930-11.md) | P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发（测试只钉住领头者） | [修复](bugfix/RR-20260930-11.md)（只改测试，v1.18.0） |
 | [RR-20260930-22](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 cfggen false 索引生成无用导入 | [修复/真实消费回归](bugfix/RR-20260930-22.md)（未发版） |

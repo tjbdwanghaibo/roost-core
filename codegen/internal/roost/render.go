@@ -64,6 +64,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")
 		add(path, body, owned)
 	}
+	// RR-20260930-17：生成工程自带的 compose 结构检查，CI 与 make compose-check 跑它。
+	if err := addGo("deploy/docker/compose_check_test.go", renderComposeCheckTest(m), true); err != nil {
+		return nil, err
+	}
 	add("docs/IMPLEMENTATION.zh-CN.md", renderImplementationGuide(m), true)
 	add("docs/DEPLOYMENT.zh-CN.md", renderDeploymentGuide(m), true)
 	if err := addGo("main.go", renderMain(m), false); err != nil {
@@ -614,11 +618,16 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		if err != nil {
 			return changed, err
 		}
-		body, appended := appendMissingConfigBlocks(string(raw), sections, target.production)
+		// RR-20260930-16：按文件原有的行尾追加。CRLF 检出的配置之前一律按 LF 追加新段，
+		// 一份文件里两种行尾混用；Secret 示例（下面 editKubernetesSecretExampleConfig）
+		// 早已按原行尾写回，这两份文件走同一对 lfText / restoreLineEndings。
+		// 空文件与 LF 文件保持 LF。
+		text, crlf := lfText(raw)
+		body, appended := appendMissingConfigBlocks(text, sections, target.production)
 		if !appended {
 			continue
 		}
-		if err := writeAtomic(path, []byte(body), 0o644); err != nil {
+		if err := writeAtomic(path, restoreLineEndings(body, crlf), 0o644); err != nil {
 			return changed, err
 		}
 		changed = append(changed, target.rel)
@@ -862,6 +871,7 @@ image-build:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t $(APP_NAME):$(VERSION) .
 compose-check:
 	ROOST_IMAGE=ghcr.io/example/$(APP_NAME)@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=$(CURDIR)/configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+	`+composeCheckEnv+`=1 go test -count=1 ./deploy/docker/
 k8s-render:
 	kubectl kustomize deploy/k8s/overlays/$(ENV)
 k8s-check:
@@ -994,6 +1004,10 @@ jobs:
           ROOST_IMAGE: ghcr.io/example/{{APP}}@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           ROOST_CONFIG_ROOT: ${{ github.workspace }}/configs/service
         run: docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+      - name: production compose resolves to the shape the deployment relies on
+        env:
+          `+composeCheckEnv+`: "1"
+        run: go test -count=1 ./deploy/docker/
       - name: kubernetes manifests render
         run: |
           kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"

@@ -587,6 +587,16 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 	// Memory-only handlers persist through entity release hooks. Avoid
 	// materializing after-images when no WAL/outbox admission is involved.
 	if tx.durability == DurabilityMemory && len(tx.effects) == 0 {
+		if tx.dispatch != nil && tx.dispatch.RemoteWriteBatch != nil {
+			// 带 Remote 批次、没有 effect 的 memory handler：没有记录交给 committer，但返回 nil 会让 commitDurable 置
+			// remoteCommitted，finishRemoteWriteBatch 随即以 Durability 0 直写权威。引擎已 fence 时这条写同样要拒绝
+			// （RR-20260930-12，维护者收紧 N21）：之前 fence 检查只在下面交给 committer 之前做，这条路径在此就返回了，
+			// 别的消息 fence 引擎之后它仍把 Remote 写了。返回 ErrNestFenced 后 commitDurable 按明确拒绝 Abort 批次并
+			// 加 ErrCommitRejected；RollbackNone 不撤销内存修改（与 RR-20260927-32 同）。
+			if err := tx.refuseCommitAfterFence(); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	record, err := tx.prepareCommitRecord()
@@ -687,6 +697,13 @@ func (tx *RollbackTx) preparedMutationKey(key mutationKey) bool {
 // 错误里不带 fence 原因的哨兵（%v）：原因链上的 ErrCommitIndeterminate 会让调用方误走结果未知分支（abandon 而不回滚）。
 // 嵌套独立事务（dispatch 为 nil）不在此列：C07 的约束只针对外层自己的提交。只读一次 lifecycleMu 保护的字段，不等待、不做 I/O，
 // 与派发入口 runNestLogic 在快 worker 上读 FenceError 相同。
+// 带 Remote 批次、没有 effect 的 memory handler 没有记录交给 committer，但它的 Durability 0 Remote 直写同样经这里拒绝
+// （durableCommit 的 memory 分支，RR-20260930-12）。
+//
+// 契约（REMAINING §3 N20，维护者 2026-09-30 接受）：这是交给 committer 之前的一次性检查，不是临界区。别的 goroutine 在检查之后、
+// committer 接受之前 fence 引擎的窗口不在这里拦：那种 fence 来自另一笔事务的结果未知，本笔记录进入 WAL 后由 WAL terminal
+// （引擎 fence 后 WAL 拒绝 / 停止推进）兜底；嵌套场景（同一 goroutine 先 fence 再提交外层）时序确定，本检查必然命中。
+// 不把检查放进 committer 的临界区：那会让 WAL 准入依赖 Nest 的生命周期锁，且对已越过提交点的记录无法撤销。
 func (tx *RollbackTx) refuseCommitAfterFence() error {
 	if tx.dispatch == nil || tx.dispatch.engine == nil {
 		return nil

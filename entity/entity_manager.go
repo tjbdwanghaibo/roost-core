@@ -39,6 +39,9 @@ var (
 	ErrDeleteAdmitterExists = errors.New("entity manager: delete admitter already registered")
 	ErrDeleteAdmitterNeeded = errors.New("entity manager: delete admitter is required")
 	ErrDeleteIndeterminate  = errors.New("entity manager: delete admission outcome is indeterminate")
+	// ErrEntityNotPointer：实体实现不是指针（RR-20260930-15）。Guard 按实例比较接口值，值类型实现若不可比较会在运行期 panic；
+	// 实体进入框架的入口（BuildEntity、TryAdd / Add）拒绝这种实现并点名类型。
+	ErrEntityNotPointer = errors.New("entity: entity implementation must be a pointer")
 )
 
 // NewEntityManager creates an EntityManager with default bucket count.
@@ -106,6 +109,10 @@ func (m *EntityManager) Add(e IThreadSafeEntity) {
 func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 	if e == nil || e.Base() == nil {
 		return ErrEntityNil
+	}
+	// 手工构造、不经注册 builder 的实体在这里进入框架：同样要求是指针（RR-20260930-15）。
+	if err := requirePointerEntity(e); err != nil {
+		return err
 	}
 	id := e.ID()
 	m.addMu.Lock()

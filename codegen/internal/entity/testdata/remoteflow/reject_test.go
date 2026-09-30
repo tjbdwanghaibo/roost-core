@@ -242,6 +242,7 @@ type rejectRig struct {
 	database  string
 	policy    nest.DurabilityPolicy
 	access    *entity.ManagerAccess
+	redis     *scopedRedis
 	committer *unreachableCommitter
 	projector *rejectingProjection
 	manager   *remoteentity.Manager
@@ -261,11 +262,12 @@ type rejectRig struct {
 	ref frame.ObjectRef
 }
 
-// newRejectRig 装配一套正式链路；register 在 Nest 启动前登记用例自己的 handler（可为 nil）。
-func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis fredis.IRedis, database string, policy nest.DurabilityPolicy, walOptions func(*nestwal.Options), register func(*rejectRig)) *rejectRig {
+// newRejectRig 装配一套正式链路；register 在 Nest 启动前登记用例自己的 handler（可为 nil）；extra 追加 Nest 选项（例如阶段指标）。
+func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis fredis.IRedis, database string, policy nest.DurabilityPolicy, walOptions func(*nestwal.Options), register func(*rejectRig), extra ...nest.NestOption) *rejectRig {
 	t.Helper()
 	rig := &rejectRig{ctx: ctx, mongo: mongo, database: database, policy: policy, recorder: &vaultFrames{}, fatal: make(chan error, 8)}
 	scoped := &scopedRedis{IRedis: redis, prefix: database + ":reject:" + policy.String() + ":"}
+	rig.redis = scoped
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -379,6 +381,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	options := append(rig.runtime.NestOptions(), nest.NestOptionWithGetter(rig.access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
 		nest.NestOptionWithEntitySync(rig.sync), nest.NestOptionWithWorkerNumAndMsgCap(4, 1, 256),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}))
+	options = append(options, extra...)
 	rig.scheduler = nest.NewEngine(options...)
 	rig.scheduler.MustRegisterHandlerWithMeta(rig.write, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		for _, e := range es {

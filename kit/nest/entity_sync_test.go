@@ -65,9 +65,10 @@ func (provider dataEngineReloadProvider) OnEntityLoaded(hook func(entity.IThread
 	return func() { *provider.unhooked = true }, nil
 }
 
+// reloadedEntity 是指针实体（RR-20260930-15 契约：实体实现必须是指针，值类型在 EntityManager.Add / BuildEntity 处被拒绝）。
 type reloadedEntity struct{ *entity.EntityBase }
 
-func (value reloadedEntity) Base() *entity.EntityBase { return value.EntityBase }
+func (value *reloadedEntity) Base() *entity.EntityBase { return value.EntityBase }
 
 func reloadTestState(id int64) *entity.SubjectSyncState {
 	pack := func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
@@ -111,11 +112,11 @@ func TestEntitySyncModRebindsReloadedEntities(t *testing.T) {
 	evicted.Close()
 	base := entity.NewEntityBase(id, entity.EntityCategory(1), false)
 	base.SetSyncState(reloadTestState(id))
-	hook(reloadedEntity{base})
+	hook(&reloadedEntity{base})
 	if err := mod.EntitySync().Rebind(reloadTestState(id)); !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		t.Fatalf("the reloaded state was not bound to the subject: rebind of another state=%v", err)
 	}
-	hook(reloadedEntity{entity.NewEntityBase(id+1, entity.EntityCategory(1), false)}) // 未登记、无同步状态：忽略
+	hook(&reloadedEntity{entity.NewEntityBase(id+1, entity.EntityCategory(1), false)}) // 未登记、无同步状态：忽略
 	if err := mod.StopWithContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}

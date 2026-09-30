@@ -263,12 +263,21 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 				}
 				return "created", MarkPersist(value.(*rollbackTestEntity).dao, 1)
 			}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
-			var attempts, decided atomic.Int64
+			var attempts atomic.Int64
+			// decidedBy 按 follower（声明的 pilot）记“第一次 Create 已返回”（audit6 疑点 N32）：之前只数 Create 返回总次数，
+			// state_strict 的 follower 锁冲突回滚后会重排再 Create，一个 follower 重试几次就凑够 workers，“每个 follower 都已进入
+			// Create 并做出判定、占满快池”的前提因此变弱。现在要求每个 follower 至少各一次。
+			var decidedBy sync.Map
+			decidedFollowers := func() int {
+				n := 0
+				decidedBy.Range(func(any, any) bool { n++; return true })
+				return n
+			}
 			follower := NewHandlerName("rr48_same_id_follower_" + tc.name)
-			mgr.MustRegisterHandlerWithMeta(follower, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+			mgr.MustRegisterHandlerWithMeta(follower, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 				attempts.Add(1)
 				_, err := access.Create(createParam(x))
-				decided.Add(1) // Create 已返回：对 X 的取锁判定已做出（B40）
+				decidedBy.Store(es[0].GUId(), struct{}{}) // 这个 follower 的 Create 已返回：对 X 的取锁判定已做出（B40）
 				if errors.Is(err, entity.ErrEntityExists) {
 					return "exists", nil
 				}
@@ -289,12 +298,12 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			// memory 子用例的断言依赖 follower 在 creator 提交之前对 X 做出取锁判定（RR-20260926-64）。只等 handler 入口不够：
 			// Create 内的 try-lock 可能被调度到放开提交之后（OPEN-ITEMS B40）。
 			deadline := time.Now().Add(10 * time.Second)
-			for decided.Load() < workers && time.Now().Before(deadline) {
+			for decidedFollowers() < workers && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-			if decided.Load() < workers {
+			if n := decidedFollowers(); n < workers {
 				close(committer.release)
-				t.Fatalf("followers' Create did not all return within 10s while the creator held X (attempts=%d decided=%d)", attempts.Load(), decided.Load())
+				t.Fatalf("followers' Create did not all return within 10s while the creator held X (attempts=%d followers decided=%d/%d)", attempts.Load(), n, workers)
 			}
 			done := make(chan requestResult, 1)
 			sendRequest(mgr, "unrelated", unrelated, ids[workers+1], done)

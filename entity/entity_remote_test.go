@@ -64,7 +64,9 @@ func TestRemoteEntityBase_Interface(t *testing.T) {
 	if e.EntityVersion() != 0 {
 		t.Fatal("initial entity version should be 0")
 	}
-	e.SetEntityVersion(42)
+	if err := e.SetEntityVersion(42); err != nil {
+		t.Fatal(err)
+	}
 	if e.EntityVersion() != 42 {
 		t.Fatalf("expected version 42, got %d", e.EntityVersion())
 	}

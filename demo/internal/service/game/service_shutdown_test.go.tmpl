@@ -1,0 +1,47 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	gamescene "{{MODULE}}/game/scene"
+)
+
+// RR-20260930-18：Service.Shutdown 把 App 给的停机 ctx 传给 Scene.Close，所以停止“卸载后重载”
+// （stopUnloadResync）和关闭 replication manager 都受 shutdown.total_timeout 约束。旧行为是
+// Shutdown 忽略参数、用 context.Background() 关场景：一次卡住的 stop 让停机越过 App 的时限，
+// 直到部署侧的 SIGKILL（compose stop_grace_period / systemd TimeoutStopSec）。
+//
+// 场景由既有 harness 建（没有实体运行时，所以 stopUnloads 为 nil），这里放一个记下 ctx 的替身：
+// Close 一定经过它，它看到的就是 Close 收到的 ctx。
+func TestShutdownClosesTheSceneUnderTheAppsStopDeadline(t *testing.T) {
+	scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	if err := scene.Start(context.Background()); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	var seen context.Context
+	scene.stopUnloads = func(ctx context.Context) error {
+		seen = ctx
+		return nil
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	service := &Service{scene: scene}
+	if err := service.Shutdown(stopCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if seen == nil {
+		t.Fatal("Shutdown did not close the scene (the reload stop was never called)")
+	}
+	if _, ok := seen.Deadline(); !ok {
+		t.Fatalf("Scene.Close ran under a context with no deadline; Shutdown must pass the App's stop context on, not context.Background()")
+	}
+	if service.scene != nil {
+		t.Fatal("Shutdown left the scene set after closing it")
+	}
+}

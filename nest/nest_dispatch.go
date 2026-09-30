@@ -49,11 +49,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	var ret any
 	defer func() {
 		if r := recover(); r != nil {
-			if recoveredErr, ok := r.(error); ok {
-				err = recoveredErr
-			} else {
-				err = errors.New(fmt.Sprint(r))
-			}
+			err = joinRecoveredError(err, r)
 			slog.Error("nest dispatch panic", "err", err)
 		}
 		if !remoteStage && errors.Is(err, errDeclaredTargetCold) && mgr.dispatcher.remoteHandler != nil {
@@ -201,11 +197,8 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			if recoveredErr, ok := r.(error); ok {
-				err = recoveredErr
-			} else {
-				err = errors.New(fmt.Sprint(r))
-			}
+			// 收尾（Guard 作用域释放、解锁后回调）里的 panic 到这里时 err 已经是 handler 的结果：并进去，不覆盖（RR-20260930-20）。
+			err = joinRecoveredError(err, r)
 		}
 	}()
 	_, releaseGuardScope := entity.NewGuardScope("nest:" + msg.Name)
@@ -374,7 +367,7 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 // dispatchLoadedEntities 统一普通调用的组迁移检查、排序加锁和执行收尾。
 // 调用方负责配对 Touch/UnTouch；这里先释放锁，再返回调用方归还引用。
 // es 是业务参数，lockEs 是已 Touch 的锁集合；多实体时两者不可共用底层数组。
-func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, lockEs []entity.IThreadSafeEntity, params []any, opts ...HandlerOption) (any, error) {
+func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, lockEs []entity.IThreadSafeEntity, params []any, opts ...HandlerOption) (ret any, err error) {
 	if err := rejectPendingEntityGroupTransition(lockEs); err != nil {
 		return nil, err
 	}
@@ -402,10 +395,41 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 	// Once.Do 只执行一次，OnceFunc 会在后续调用中重放第一次的 panic。
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(releaseLocks) }
-	defer release()
+	defer func() {
+		// 兜底释放在自己的 recover 边界里跑：release hook 的 panic 并进已在途的返回值，而不是把它整个抛掉。
+		// 之前 `defer release()` 直接 panic，handler 返回的业务错误随返回值一起丢失，runNestLogic 的 recover 再把 err 换成
+		// hook 错误，回滚后的回复只剩 `release hook failed`，调用方无法判别（RR-20260930-20）。已提交路径不受影响：
+		// 那时 err 为 nil，回复仍是 hook 错误本身，再由 dispatchNest 按提交事实包 ErrAfterCommitFailed（RR-20260926-53）。
+		// 只包住这一次释放：业务阶段沿函数体传出的 panic 不在这里 recover，仍交给 runNestLogic。
+		if r := recoverRelease(release); r != nil {
+			err = joinRecoveredError(err, r)
+			slog.Error("nest entity release panic", "handler", name, "err", err)
+		}
+	}()
 	return mgr.invokeHandlerTransaction(entry.meta, es, name, release, func() (any, error) {
 		return entry.handler(es, params, opts...)
 	})
+}
+
+// recoverRelease 执行 release 并返回它 panic 的值（没有 panic 返回 nil）。
+func recoverRelease(release func()) (recovered any) {
+	defer func() { recovered = recover() }()
+	release()
+	return nil
+}
+
+// joinRecoveredError 把 recover 到的 panic 值并进在途的错误：err 为 nil 时结果就是 panic 的错误本身（文本与旧行为一致）；
+// err 非 nil 时两者以 errors.Join 并列，errors.Is 对业务错误与 panic 原因都成立（RR-20260930-20）。
+// 之前的 recover 一律 `err = recoveredErr`，收尾阶段的 panic 会把 handler 已经返回的错误整个覆盖。
+func joinRecoveredError(err error, r any) error {
+	recovered, ok := r.(error)
+	if !ok {
+		recovered = errors.New(fmt.Sprint(r))
+	}
+	if err == nil {
+		return recovered
+	}
+	return errors.Join(err, recovered)
 }
 
 func firstDispatchEntityMissing(es []entity.IThreadSafeEntity) bool {
@@ -475,13 +499,16 @@ func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThrea
 	}
 }
 
+// broadcastDispatch 对每个目标各执行一次 handler（每个目标一个事务）。每个目标在自己的 Guard 作用域里取锁、执行、释放
+// （RR-20260930-14）：目标结束时它取得的全部锁——声明的目标实例、handler 内 Destroy 后同 ID 重建的新实例（旧实例转入
+// superseded）、Cast 取得的实体——连同 post-release 回调一起释放，不跨后续目标持有。之前整轮广播共用 runNestLogic 的
+// 一把 Guard、目标结束时按 ID 释放：Destroy 后同 ID 重建时按 ID 放掉的是新实例的锁，旧实例回到 eMap，它的锁一直持有到
+// 整轮广播结束（RR-20260927-26 §未验证项，REMAINING §3 N28）。
 func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
 		return
 	}
-	guard := entity.GetEntityGuard()
-	defer entity.EntityGuardRelease(guard)
 
 	oneEntity := make([]entity.IThreadSafeEntity, 1)
 	for _, id := range ids {
@@ -516,14 +543,19 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 		if e == nil || !e.Touch() {
 			continue
 		}
-		lockStart := startNestStage(mgr.stageMetrics)
-		locked := guard.RequireEntity(e)
-		observeNestStage(name, "lock", lockStart)
-		if !locked {
-			e.UnTouch()
-			continue
-		}
 		func() {
+			// 目标自己的 Guard 作用域：handler 看到的 CurrentGuardScope 就是它；作用域结束释放本目标取得的全部锁与
+			// post-release 回调，与单目标派发的边界一致。
+			scope, releaseScope := entity.NewGuardScope("nest:broadcast:" + name)
+			defer releaseScope()
+			guard := scope.Guard()
+			lockStart := startNestStage(mgr.stageMetrics)
+			locked := guard.RequireEntity(e)
+			observeNestStage(name, "lock", lockStart)
+			if !locked {
+				e.UnTouch()
+				return
+			}
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("nest broadcast handler panic", "id", meta.FullID, "handler", name, "err", r)
@@ -534,7 +566,8 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			defer e.UnTouch()
 			defer func() {
 				defer observeNestStage(name, "release", startNestStage(mgr.stageMetrics))
-				guard.ReleaseEntity(e.GUId())
+				// 按实例释放本目标的实例（被同 ID 新实例取代时只放旧锁）；新实例等其余锁随作用域结束一起释放。
+				guard.ReleaseEntityInstance(e)
 			}()
 			oneEntity[0] = e
 			// Broadcast has no early-release closure: pipelined handlers run
