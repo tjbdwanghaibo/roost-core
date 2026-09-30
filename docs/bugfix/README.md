@@ -2,6 +2,7 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20260930-20](RR-20260930-20.md)：`dispatchLoadedEntities` 兜底释放在自己的 recover 边界里跑，hook panic 以 `errors.Join` 并进在途业务错误；`runNestLogic` / `dispatchNest` 的 recover 改并入不覆盖；已提交路径 `ErrAfterCommitFailed` 语义与文本不变；两条生成链路端到端用例去 Skip（未发版）。
 [RR-20260930-18](RR-20260930-18.md)：game-demo `Service.Shutdown(ctx)` 把 App 停机 ctx 传给 `Scene.Close`；回归模板 `service_shutdown_test.go`；已有工程需手改（demo 文件应用所有）（未发版）。
 [RR-20260930-17](RR-20260930-17.md)：生成工程新增受控文件 `deploy/docker/compose_check_test.go`，对 `docker compose config --format json` 断言 tmpfs / read_only / user / cap_drop / security_opt / stop_grace_period / healthcheck / config bind / 命名卷；`ROOST_COMPOSE_CHECK` 开关，CI 与 `make compose-check` 设置它（未发版）。
 [RR-20260930-16](RR-20260930-16.md)：`appendModConfigSections` 走 `lfText` / `restoreLineEndings`，CRLF 配置按 CRLF 追加（未发版）。
