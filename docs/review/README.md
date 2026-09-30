@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-30 Codegen 第一轮](REVIEW-2026-09-30-codegen-01.md)：当前生成器在 Core `codegen/`；审查暂存/提交、servicerpc、protocol 与 DAO 退役对照。确认两个未修 P2：RPC 标记删除后 `-check` 假通过、协议定义清空后旧产物保留。[问题/实施交接](../bug/REVIEW-2026-09-30-codegen-01.md) · [机制学习](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [复现](evidence/codegen-review-20260930-01/README.md) · [进度](PROGRESS.md)。
+
 [09-30 Service 第十三轮真实代理/HA/积压/热点](REVIEW-2026-09-30-services-13.md)：原 Toxiproxy 3 项从 skip 变成真实代理下 race/count2 6 pass；Session/Match 写后丢回复、六 owner 无 WAIT 故障接管、Redis 游标跨进程、Match 四客户端一分钟样本均有实际证据。无新增确认生产 bug，外部资源与跨机器/长稳继续待验。[机制](IMPLEMENTATION-SERVICE-FAULT-AND-CONTENTION.md) · [复跑](evidence/service-review-20260930-02/README.md) · [进度](PROGRESS.md)。
 
 [09-30 Service 第十二轮故障/容量专项](REVIEW-2026-09-30-services-12.md)：跨进程强杀恢复、3主3从 Redis 单 master 切换、250 owner 积压轮转、Match 历史 64～16384 与短时热点样本已在隔离本机实测；无新增确认生产 bug。Toxiproxy 3 项仍 skip，真实外部资源/跨机器 HA/长稳仍待验。[机制学习](IMPLEMENTATION-SERVICE-CRASH-HA-AND-CAPACITY.md) · [复跑](evidence/service-review-20260930-01/README.md) · [进度](PROGRESS.md)。

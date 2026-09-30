@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第一轮：当前 Core 生成链与输入退役
+
+[本轮审查](REVIEW-2026-09-30-codegen-01.md) · [两项未修复问题](../bug/REVIEW-2026-09-30-codegen-01.md) · [实现学习](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [隔离复现](evidence/codegen-review-20260930-01/README.md)。三仓 fetch 后不变；Core `1b7a2fc5`、Kit `f0e5b67a`、冻结独立 Codegen `1e028fa4`。实际入口为 Core `codegen/`。上一轮 Service 本机场景已留档，外部真实资源/跨机 HA/生产长稳仍另待环境，不把本轮 Codegen 回归冒称 Service 验收。
+
+| Codegen 范围 | 当前证据与状态 | 未覆盖/下轮入口 |
+| --- | --- | --- |
+| roost 暂存提交链 | 源码读 `GenerateTransactional`、input snapshot、commit planner/guard/rollback；相关既有回归。已验证部分场景，无新增本链确认 bug | 进程强杀、磁盘失败、跨文件提交与旧生成物归属 |
+| servicerpc 输入/检查/双半 | 源码、现有测试、隔离生成→删 marker→`-check`；[RR-20260930-01 P2](../bug/REVIEW-2026-09-30-codegen-01.md) 未修复 | 改名、跨包 `-out` 双半孤儿处理、消费者注册/构建 |
+| protocol 定义与固定输出 | 源码、隔离生成→删最后定义；[RR-20260930-02 P2](../bug/REVIEW-2026-09-30-codegen-01.md) 未修复 | 单条消息/handler 退役、协议兼容窗口、生成项目消费 |
+| dao 退役对照 | 源码和既有孤儿回归；这里只核对差异，未对 DAO 做本轮新故障枚举 | 定义变化/损坏输出/并发故障仍未专项 |
+| 其它生成器 | `go test ./codegen/... -skip TestDeployScriptsCarryNoKnownShellcheckFindings` 全部有测试包通过；尚未开展相同深度的源码/动态审查 | entity/nest、event/registry、table/config、webroute/errcode |
+
+图谱 Core HEAD 对齐，但相关路径 coverage 为 `metadata_changed`；已读当前源码补证。以上是本轮有界源码与场景覆盖，不是 Codegen 全量/行覆盖率。具名 shell 静态检查因本机无 `sh` 未通过，单独记录；其余包回归通过，详见[本轮运行记录](REVIEW-2026-09-30-codegen-01.md)。
+
 ## 2026-09-30 Service 第十三轮：真实代理故障与持续热点
 
 [审查结论](REVIEW-2026-09-30-services-13.md) · [机制学习](IMPLEMENTATION-SERVICE-FAULT-AND-CONTENTION.md) · [复跑/日志校验](evidence/service-review-20260930-02/README.md)。Core `d91d8a30`、Kit `f0e5b67a`、Codegen `1e028fa4` 三仓 fetch 后 HEAD 未变。**本轮无新增确认生产 bug，生产代码未改。**Service 原 10/10 域主链阶段整理维持；新增的是下列有界场景，不改称生产故障全验收。

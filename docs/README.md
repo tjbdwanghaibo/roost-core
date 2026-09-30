@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**09-30 Codegen 第一轮：**[运行/进度](review/REVIEW-2026-09-30-codegen-01.md) · [两个未修 P2 与实施建议](bug/REVIEW-2026-09-30-codegen-01.md) · [生成暂存与退役机制](review/IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md)。当前生成器位于 Core `codegen/`；删除 RPC 标记/最后协议定义的隔离反例已复现，生产源码未修改。上一轮 Service 实测及外部环境待办见下方归档。
+
 **09-30 Service 第十三轮：**[真实 Toxiproxy 故障、多 owner HA、积压恢复与热点容量审查](review/REVIEW-2026-09-30-services-13.md)，[机制学习](review/IMPLEMENTATION-SERVICE-FAULT-AND-CONTENTION.md)、[复跑证据](review/evidence/service-review-20260930-02/README.md)。原 3 项网络测试已实际通过；外部资源、跨机器 HA 和生产长稳尚未验收。
 
 **09-30 Service 专项：**[强杀恢复、Redis HA 与容量审查](review/REVIEW-2026-09-30-services-12.md)，[机制学习](review/IMPLEMENTATION-SERVICE-CRASH-HA-AND-CAPACITY.md)、[复跑证据](review/evidence/service-review-20260930-01/README.md)。本机列明场景已实测；Toxiproxy、真实外部资源与生产长稳仍未验收。
