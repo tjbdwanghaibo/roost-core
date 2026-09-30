@@ -352,7 +352,7 @@ func validateMeta(meta *Meta) error {
 		"RegisterConfigData":              "generated function",
 		"configdata":                      "generated import",
 	}
-	// RR-20260930-13: import names share this file's namespace with beans.
+	// RR-20260930-23: import names share this file's namespace with beans.
 	// Keep strconv available as a bean name when no accessor needs it.
 	if usesStrconv(meta) {
 		identifiers["strconv"] = "generated import"
@@ -614,7 +614,7 @@ func fieldByName(fields []FieldMeta, name string) (FieldMeta, bool) {
 	return FieldMeta{}, false
 }
 
-// RR-20260930-12: imports must follow enabled accessors, not merely the
+// RR-20260930-22: imports must follow enabled accessors, not merely the
 // presence of an index option (false is a non-nil YAML value).
 func usesStrconv(meta *Meta) bool {
 	for _, table := range meta.Tables {

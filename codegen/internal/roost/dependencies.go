@@ -60,7 +60,7 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 		if result.Manifest {
 			rels = append(rels, ManifestName)
 		}
-		// RR-20260930-14: freeze only the migration's own output before the
+		// RR-20260930-24: freeze only the migration's own output before the
 		// resolver runs. Arbitrary stage edits by go commands stay isolated.
 		migrationChanges, err = planExplicitStagedFiles(absRoot, stage, rels...)
 		if err != nil {

@@ -6,9 +6,9 @@
 
 ### Fixed
 
-- **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-12）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-12.md)。
-- **cfggen 写入前拒绝生成名称冲突（RR-20260930-13）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-13.md)。
-- **依赖事务同时提交明确的合仓迁移（RR-20260930-14）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-14.md)。
+- **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-22）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-22.md)。
+- **cfggen 写入前拒绝生成名称冲突（RR-20260930-23）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-23.md)。
+- **依赖事务同时提交明确的合仓迁移（RR-20260930-24）**：在 resolver 前冻结框架迁移的 Go/manifest 变化，与最终模块文件共同验证/提交；依赖命令的任意业务改写仍隔离。普通 deps 仍只更新模块文件，映射外业务 API 手工处理。[事务边界与正式消费者](docs/bugfix/RR-20260930-24.md)。
 
 ### Added
 

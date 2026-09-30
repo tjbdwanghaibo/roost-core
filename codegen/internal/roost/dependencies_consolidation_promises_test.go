@@ -28,7 +28,7 @@ func legacyDependencyProject(t *testing.T) (string, Manifest, map[string]string)
 	return root, manifest, files
 }
 
-// RR-20260930-14：成功提交依赖时，框架自身的 import/manifest
+// RR-20260930-24：成功提交依赖时，框架自身的 import/manifest
 // 迁移也必须回写；依赖命令对业务文件的任意改动仍须隔离。
 func TestFrameworkDependencyConsolidationCommitsOnlyPlannedMigration(t *testing.T) {
 	root, manifest, _ := legacyDependencyProject(t)

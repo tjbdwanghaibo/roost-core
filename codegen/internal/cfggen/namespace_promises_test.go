@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// RR-20260930-13：生成函数/import 与 bean 共用 Go 命名空间；
+// RR-20260930-23：生成函数/import 与 bean 共用 Go 命名空间；
 // 冲突必须在写输出前报错，不能把 gofmt 的成功当编译成功。
 func TestCfggenRejectsReservedBeanNamesBeforeWriting(t *testing.T) {
 	for _, name := range []string{"RegisterConfigData", "RegisterGeneratedConfigData", "MustRegisterGeneratedConfigData", "configdata", "strconv"} {

@@ -2,7 +2,7 @@
 
 ## 2026-09-30 第六轮修复后的补充
 
-下方是第五轮修前快照；RR-12～14 已在源码 `2f68aa22` 及其父提交修复，[逐项行为/兼容](../bugfix/README.md)、[正式验收](REVIEW-2026-09-30-codegen-06.md)。现在 usesStrconv 复用 indexSpec 的 enabled，固定 wrapper/configdata 与条件 strconv 名在完整 meta 校验时登记；冲突在写入前拒绝，正常 schema 真实消费包编译通过。
+下方是第五轮修前快照；RR-22～24 已在源码 `2f68aa22` 及其父提交修复，[逐项行为/兼容](../bugfix/README.md)、[正式验收](REVIEW-2026-09-30-codegen-06.md)。现在 usesStrconv 复用 indexSpec 的 enabled，固定 wrapper/configdata 与条件 strconv 名在完整 meta 校验时登记；冲突在写入前拒绝，正常 schema 真实消费包编译通过。
 
 依赖事务现在在外层 stage 做 ConsolidateProject，按明确 Files/Manifest 名单提前规划并冻结迁移字节；模块 get/tidy 在其后运行，最终模块变化与迁移一起用既有输入核对/commitSyncChanges 提交。提前冻结是关键：即使 resolver 随后任意覆盖名单内业务 Go/manifest，也不把覆盖内容提交回 root。现有无迁移隔离语义保持。正式 CLI get/tidy 加源 head local replace 的消费者也通过，不等同发布验证。
 

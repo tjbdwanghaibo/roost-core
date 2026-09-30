@@ -346,6 +346,6 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260930-03](bug/RR-20260930-03.md) | P2 `AtomicLocalStore` 覆盖写无限追加时钟记录（C01 堆增长） | [修复](bugfix/RR-20260930-03.md)（v1.18.0） |
 | [RR-20260930-19](bug/RR-20260930-19.md) | P3 Remote 标记键无部署前缀、锁键隔离要求未写（N25） | [修复](bugfix/RR-20260930-19.md)（未发布；缺省键逐字不变、kit 配置面不变） |
 | [RR-20260930-11](bug/RR-20260930-11.md) | P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发（测试只钉住领头者） | [修复](bugfix/RR-20260930-11.md)（只改测试，v1.18.0） |
-| [RR-20260930-12](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 cfggen false 索引生成无用导入 | [修复/真实消费回归](bugfix/RR-20260930-12.md)（未发版） |
-| [RR-20260930-13](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 cfggen bean 与函数/import 名冲突 | [修复/写入前拒绝](bugfix/RR-20260930-13.md)（未发版） |
-| [RR-20260930-14](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 deps 事务遗漏合仓迁移文件回写 | [修复/隔离与正式 CLI 消费](bugfix/RR-20260930-14.md)（未发版） |
+| [RR-20260930-22](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 cfggen false 索引生成无用导入 | [修复/真实消费回归](bugfix/RR-20260930-22.md)（未发版） |
+| [RR-20260930-23](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 cfggen bean 与函数/import 名冲突 | [修复/写入前拒绝](bugfix/RR-20260930-23.md)（未发版） |
+| [RR-20260930-24](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 deps 事务遗漏合仓迁移文件回写 | [修复/隔离与正式 CLI 消费](bugfix/RR-20260930-24.md)（未发版） |
