@@ -343,3 +343,4 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260928-14](bug/RR-20260928-14.md) | P3 `codegen/internal/roost` 在 Windows CI 超时 | [修复](bugfix/RR-20260928-14.md)（v1.17.2） |
 | [RR-20260928-15](bug/RR-20260928-15.md) | P4 生成 TCP / scene 测试未等会话登记 | [修复](bugfix/RR-20260928-15.md)（未发布） |
 | [RR-20260930-03](bug/RR-20260930-03.md) | P2 `AtomicLocalStore` 覆盖写无限追加时钟记录（C01 堆增长） | [修复](bugfix/RR-20260930-03.md)（未发布） |
+| [RR-20260930-11](bug/RR-20260930-11.md) | P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 偶发（测试只钉住领头者） | [修复](bugfix/RR-20260930-11.md)（只改测试，未发布） |

@@ -4,13 +4,144 @@
 
 ## [Unreleased]
 
-### Fixed
+## [v1.18.0] - 2026-09-30
+
+> 本版合并两条工作线：A 线（core cache、生成链路测试、CI 门禁：RR-20260928-15、RR-20260930-03/11）与 B 线（Service 十域、Redis driver、Codegen 退役旧产物：RR-20260929-01～34、RR-20260930-01/02/04～10）。B 线有源码不兼容的 Go API 变化（`Mail.CancelClaim`、`session.ClaimStore`、`platform.Admin`），所以是次版本而非补丁；生成器 Core 下限与 framework-compat 的 minimum 同步升到 v1.18.0。两条线的逐编号状态见 [ARCHIVE-2026-09-30](docs/review/ARCHIVE-2026-09-30.md)。
+> B 线（Service / Redis driver / Codegen review→bugfix 循环，2026-09-29～09-30）：Service 十域主链审查 RR-20260929-01～34 全部修复（另补三条旧 RR 残余），Redis driver 一项，Codegen 生成物退役 RR-20260930-01/02/04～10 九项。总记录见 [SERVICE-BUGFIX-2026-09-29](docs/bugfix/SERVICE-BUGFIX-2026-09-29.md) 与第三～九批 [03](docs/bugfix/SERVICE-BUGFIX-2026-09-29-03.md) / [04](docs/bugfix/SERVICE-BUGFIX-2026-09-29-04.md) / [05](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md) / [06](docs/bugfix/SERVICE-BUGFIX-2026-09-29-06.md) / [07](docs/bugfix/SERVICE-BUGFIX-2026-09-29-07.md) / [08](docs/bugfix/SERVICE-BUGFIX-2026-09-29-08.md) / [09](docs/bugfix/SERVICE-BUGFIX-2026-09-29-09.md)，阶段结论见 [REVIEW-2026-09-29-services-11](docs/review/REVIEW-2026-09-29-services-11.md)。**这批修复只改代码与生成模板，没有自动迁移任何存量数据**：Rank 去重账本、Activity pending proof、Platform 待办、Account 建角计划等都要求相关 owner 停写后一起升级，不支持新旧写者混跑；各条的旧数据对账边界见对应记录。
+
+### 行为与 API 变化（升级前必读）
+
+**Go API 签名变化（源码不兼容，调用方必须改）**
+
+- **`service/mail.Mail.CancelClaim` 增加 `attempts int32` 参数（RR-20260929-20）**：旧 `CancelClaim(ctx, playerID, mailID, token)` → 新 `CancelClaim(ctx, playerID, mailID, token, attempts)`；`Service` / `BusClient` / `capability` 三个实现与 `kit/service/mail` 别名同步。调用方传 `claim.Attempts`（`ReserveClaim` 返回的 Claim 上已有），`attempts <= 0` 或 RPC JSON 缺 `attempts` 字段返回 `CodeRequestInvalid`，不能降级为 token-only。仓内 `kit/service/examples/split/consumer.go` 与 demo 模板 `demo/game/controllers/player/claim_mail.go.tmpl` 已改；**已生成工程的 `claim_mail.go` 是业务文件，`roost project sync` 不会更新，需手工补参数**。滚动顺序：先升级全部 mail owner，再升级调用方（旧 owner 忽略 attempts，新客户端连旧 owner 仍不安全）。
+- **`service/session.ClaimStore` 由类型别名改为接口（RR-20260909-02 残余）**：旧 `type ClaimStore = versionstore.Store[int64, Claim]` → 新 `interface { versionstore.Store[int64, Claim]; versionstore.ConditionalDeleter[int64, Claim] }`。自定义 ClaimStore / 包装器必须实现并转发 `DeleteIf`，不提供“先 Get 再 Delete”的回退；内置 Memory / Redis store 已实现。
+- **`kit/service/directory.New` 与 `kit/service/account.New` 要求 store 支持 `versionstore.ConditionalDeleter`（RR-20260929-21 / 19）**：Directory 的 state store、Account 的 `Slots` 不满足时构造返回错误（`directory: state store must support atomic identity-checked DeleteIf` / `Slots (atomic identity-checked DeleteIf is required)`）。计数 / 故障注入等包装器要显式转发该能力。
+- **`service/mail.NewRedisEnvelopes` 的客户端窄接口由 `MGet` 改为 `Pipeline() redis.IPipeline`（RR-20260929-33）**：只实现 `SetNX/Get/MGet` 的自定义客户端需补 `Pipeline` 或改接正式 `IRedis`；传正式 driver 的调用方不受影响。自定义 `EnvelopeStore` 不受影响。
+- **`kit/service/platform.Admin` 接口新增方法 `ResolvePendingAttempts(ctx, orderID, note string) (Order, error)`（RR-20260929-01）**：`Service` 已实现；仓外若有自己实现 `Admin` 的类型需补该方法。owner-only，不暴露到 bus。
+- **`kit/service/global/activity.OpeningEntry` 新增 `Intent *Activity`、`Window` 新增 `ScanAfter *Key`（RR-20260914-02 残余）**：使用位置复合字面量构造这两个结构的仓外代码需改为命名字段。JSON 均 `omitempty`。
+
+**新增导出（向后兼容）**
+
+- `kit/service/platform.ErrDeliveryNotApplied`（RR-20260929-23）：collaborator 侧“确定没有外部效果”的哨兵，`Deliverer.Deliver` 返回时 wrap 它才会移除当前 pending attempt 并按原预算重试；其他错误一律保留 pending 进入 `exhausted` 等人工对账。`Deliverer` 接口签名不变。
+- `versionstore.ConditionalDeleter[K, T]` 接口（`DeleteIf(ctx, key, expect, match func(T) bool) error`），`MemoryStore.DeleteIf`、`RedisStore.DeleteIf`（Lua 内比对完整原始字节后删值与索引）；`RedisStore.IndexRemoveIfAbsent(ctx, key) (bool, error)`（值 key EXISTS 才不删固定索引成员，RR-20260929-28）。原 `Delete` / `IndexRemove` 语义不变。
+- `service/session`：`Config.Owners OwnerSource`、`OwnerSource` 接口（`SweepOwners(ctx, limit) ([]int64, error)`）、`OwnerSourceFunc`、`Service.SweepPending(ctx, limit)`、`Service.BackgroundSweepEnabled()`；`kit/service/session`：`ModOption`、`WithSweepOwners(source)`，`NewMod(release, reporter, options ...ModOption)`（变参追加，旧两参调用不变），别名 `OwnerSource` / `OwnerSourceFunc`（RR-20260929-09）。未配置 source 时后台 sweep 明确禁用，保留 lazy 清理。
+- `kit/mods.ValidateClusterKeyPrefix(cfg, service, prefix) error`（RR-20260929-29 / 30 / 31）。
+- `kit/service/account.RoleCreation` 类型，`Role.CreationID`、`Slot.Creation` 字段（RR-20260929-19）；`kit/service/platform.Order.AttemptSequence` / `PendingAttempts`（RR-20260929-01）；`activity.Participant.PendingRequestIDs` / `ProgressProofVersion`（RR-20260929-02）；`service/mail.Entry.EnvelopeExpiresAtUnix`（RR-20260929-04）、`SentRecord.Intent`（RR-20260929-16）、`SettledClaim.Deleted`（RR-20260910-02 残余）。均为 JSON `omitempty` 新字段，旧记录零值按旧语义读取、不猜测。
+
+**配置与启动行为**
+
+- **Rank / Platform / Activity 在 Redis Cluster 下拒绝无有效 hash tag 的前缀（RR-20260929-29 / 30 / 31）**：`redis.cluster_addrs` 非空时，`rank.key_prefix` / `platform.key_prefix` / `activity.key_prefix` 必须有非空、闭合的**第一个** `{...}`（空首对不能被后面的 tag 挽救），否则 `Mod.Init` 失败并点名配置键。单机前缀不变；此前被错误接受的配置现在启动失败，改配置前要按旧 key 空间做迁移计划，直接加 tag 不等于旧数据已迁移。
+- **session Attach 拒绝携带释放态的资源（RR-20260929-14）**：`Resource.ReleasedAtUnix != 0` 或 `ForcedRelease` 返回 `ErrRunInvalid`；客户端回传服务端快照前须清掉管理字段。
+- **account 已验证身份键编码（RR-20260929-11）**：`Identity.AccountID()` 对规范化 channel 中的 `%` / `:` 转义；普通 channel 的账号 ID 不变，含这两个字符的 channel 派生 ID 变化，读旧 ID 只有 Channel / OpenID 与 verifier 结果一致才复用。
+- **chat 自定义频道键编码（RR-20260929-07）**：Kind 中的 `%` / `:` 可逆转义；含这两个字符的旧自定义频道需停写后按明确类型复制到新键，不读歧义旧键。`Page.Gap` 语义扩大为“本页跨越的任何缺口”（含页内 / 尾部洞），`HasMore=false` 不再等于从未丢消息（RR-20260929-27）。
+- **rank Redis 去重账本字段 `applied` → `applied_v2`（JSON 数组，RR-20260929-05）**：读时兼容旧格式，下一次写入升级，损坏账本拒绝更新；新旧节点不能并发写同一榜键。
+- **`redis.IPipeline.Exec` 契约（RR-20260929-34）**：签名不变，但现在 aggregate 为 nil / `redis.Nil` 时逐命令返回首个非 Nil 错误——没有 future 的写命令（HSet / RPush / ZAdd…）失败时 `Exec` 不再返回 nil。以前把 nil 当写成功的调用方会开始收到真实错误；已执行的命令不回滚。
+- **`ReserveClaim` 对 `ClaimAttempts < 0` 或 `== MaxInt32` 的条目拒绝（RR-20260929-20）**，防止代次回绕重用。
+
+**生成物形状变化（Codegen，需 `roost generate` / 手工合并）**
+
+- **各生成器删除最后一个输入 / 标记后退役旧产物（RR-20260930-01/02/04～09）**：servicerpc `-check` 把不在预期集合、带自身生成头且记录同一 regenerate 命令的 `_rpc_gen.go` / `_rpc_assembly_gen.go` 报为 `STALE: x (orphan)` 并失败，普通运行删除；protocol 定义清空时退役 proto / PB / msgid / JSON manifest / bind / robot / handler；entity 退役 `_gen_wire.go` / `_gen_wire_test.go`（同包首实体退休时剩余实体接管 `RegisterEntity`）；nest 退役 wrapper / 两个 sender / guard test（`-sender=false` 退役 sender 半边）；attribute 退役 `gen_*_attribute.go`；eventgen 退役三份 `event_*_gen.go` 与孤儿 `_event_gen.go`（handler 仍引用退役事件时报错不删）；webroute 退役无路由的 `webroute_gen.go`。只删带各自生成头的文件，手写同名文件与改过生成头的文件保留。`roost generate` 的暂存快照 / `--check` 漂移把无 `Code generated` 注释的默认 `protocol.proto` / manifest 也纳入（`protocol.IsGeneratedArtifact`，internal 包）。
+- **attribute `-output` 只允许单个 profile（RR-20260930-06）**：多个 profile 共用一个 `-output` 现在报错（此前后写覆盖前写）。
+- **tablegen `_manifest.json` 升到 v2（RR-20260930-09）**：`{"version":2,"generated_at":…,"tables":{"<name>.json":"<sha256>"}}`，据此退役未改动的孤儿 JSON，已改动的报错要求人工处理，手写未登记的 JSON 保留。**旧 v1 manifest 目录若有当前 meta 未认领的 JSON 会明确失败**（v1 没有归属记录，不能判断是旧生成物还是手工数据）：v1 工程先在 meta 齐全时跑一次生成升级 manifest。新脚手架直接写 v2 空 manifest；`roost` 在 CSV 目录为空但 manifest 存在时不再跳过 config-data 步骤。
+- **errcode 改为 Go AST 提取（RR-20260930-10）**：注释 / 字符串里的 `errcode.Define(...)` 示例不再入表；含候选文本但语法错误的文件现在报解析错误。
+- **game-demo 平台模板（RR-20260929-23 / 32，write-once，`roost project sync` 不更新，已生成工程需手工合并）**：`internal/service/platform/collaborators.go` 的 `grantStore` 接口由 `HSet` 改为 `HGet` + `Eval`，首次 durable grant 单键 Lua 原子首写并核验身份，未绑定 / 未知商品 / 编码失败 wrap `platform.ErrDeliveryNotApplied`；新增脚手架步骤 `internal/service/platform/purchase_delivery_test.go`。混合旧 producer 仍会无条件覆盖字段，需升级全部投递 owner。
+
+### Fixed — Core、生成链路与 CI（A 线）
 
 - **integration 覆盖门禁识别 Redis Cluster 套件**：`kit/service/mail/batch_cluster_integration_test.go`（RR-20260929-33）以 `ROOST_REVIEW_CLUSTER` 准入，此前被门禁归为全环境套件、要求故障矩阵运行它，main 的 `ci` / `nightly` 因 `TestFaultMatrixScriptNamesEveryFullEnvironmentSuite` 一直红。现在门禁分三类：`REDIS_ADDR` → ci.yml Redis job，`ROOST_DATAENGINE_IT` → `dataengine-env.sh test`，`ROOST_REVIEW_CLUSTER` → 新增的手动入口 `kit/scripts/integration/redis-cluster-suites.sh`（CI 无集群，这些用例在 CI 里一律 skip，由 `TestRedisClusterScriptNamesEveryClusterKeyedSuite` 钉住包清单）。
 - **`cache.AtomicLocalStore` 时钟记录随存活键数有界（RR-20260930-03，P2）**：此前覆盖写、Delete、过期都不回收时钟记录，键数远低于上限、永不淘汰的 Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆涨到 4.7GB，v1.10.0 起即有）；现在超过 `2 × 存活键数 + 1024` 时就地压缩，准入规则与淘汰顺序不变。覆盖写约多 11ns、0 B/op。remoteflow 负载 harness 新增 `ROOST_REMOTE_HEAP_PROFILE_MINUTES`（默认关闭）。
 
 - **生成的 player TCP 与 game-demo 场景连接测试先等会话登记（RR-20260928-15）**：生成的服务器先写认证 ack、再登记会话，`server_gen_test.go` 的 6 个用例与 `scene_connections_test.go` 的两个用例原来拨号后直接断言，高负载下偶发 `active sessions = 1, want 2`（framework-compat source-head lane）。只改测试；已生成工程 sync 更新 `server_gen_test.go`，`scene_connections_test.go` 是业务文件需手工补。
 - **测试**：remoteflow 生成链路补 Remote 持久拒绝与收尾的端到端用例（REMAINING C34、B27 第 1 批）——装配改用正式 `ManagerAccess` 作 Remote loader 并接 entitysync，覆盖 Durability 0～3 持久拒绝后的卸载、重载全量与重载后可写，strict 确认截止后的延迟回调，结果未知后停机 / fence，嵌套 / 收尾阶段独立事务的拒绝，快 worker 删除 Remote 实体；`scripts/test-remote-generated.sh` 默认一起运行，新增 `ROOST_REMOTE_COUNT` / `ROOST_REMOTE_RUN`。
+
+### Fixed — Service
+
+#### account
+
+- **建角补偿不再误删别人已提交的名字（RR-20260929-03，P2）**：名字 owner 只用 accountID，跨服同账号复用已提交名字，失败后释放的是他人角色的名字；现在 nameOwner 用 account/server slotKey，任何已提交的同 owner claim 都拒绝复用，失败只清理自身暂占 slot。旧 bare-account owner 名字保持原状。[记录](docs/bugfix/RR-20260929-03.md)
+- **已验证身份键碰撞（RR-20260929-11，P2）**：channel/openID 的冒号边界未编码，两个不同身份可映射同一账号；现在转义 channel 中的 `%` / `:`，读旧 ID 只有 Channel/OpenID 与 verifier 结果一致才复用，不匹配拒绝而不合并。既有歧义碰撞需人工拆分。[记录](docs/bugfix/RR-20260929-11.md)
+- **slot 写后响应丢失不再补偿删角色（RR-20260929-12，P2）**：`Update` 返回 error 被当作未落盘，角色 / 名字先删再用旧版本删 v2 的 slot；现在失败先 Get 核对 PlayerID/account/server，已应用返回成功，读失败返回角色与 unknown 错误保留数据，确认未提交才补偿。[记录](docs/bugfix/RR-20260929-12.md)
+- **建角未知结果向前恢复（RR-20260929-19，P2）**：初始 Slots.Create / Roles.Create / Names.Commit 的错误都可能发生在写入后，旧流程留下空 slot、孤儿角色或无角色的 committed 名字。现在 slot 持久保存 `RoleCreation` 计划（随机 ID、预分配 PlayerID、名字、Claim、Admitted），同名重试共享计划与 PlayerID、幂等返回原角色；一旦 Admitted 不再删除可能已提交的角色，只有确定的建角前名字冲突或 foreign allocator ID 才补偿；未发布角色被 SelectRole / ValidateSession / UpdateProfile 拒绝。旧空 slot 无 CreationID 返回 ErrConflict 等对账，无后台扫描器。[记录](docs/bugfix/RR-20260929-19.md)
+- **Profile 返回值不再别名 MemoryStore（RR-20260929-22，P3）**：UpdateProfile / ValidateSession / CreateRole 重放返回私有 clone，修改返回值不再绕过 CAS 改存储。[记录](docs/bugfix/RR-20260929-22.md)
+
+#### mail
+
+- **过期不可见条目不再占满邮箱（RR-20260929-04，P2）**：条目没有正文到期信息，列表隐藏正文但不回收 unread 与容量；新增 `Entry.EnvelopeExpiresAtUnix`，List / Deliver 的 CAS 内按已知期限回收条目、unread 并写 evicted 墓碑，在途未结算 claim 保留。旧条目期限 0 不推测过期。[记录](docs/bugfix/RR-20260929-04.md)
+- **正文写入瞬时失败后同 RequestID 可恢复（RR-20260929-16，P2）**：send ledger 先提交但未保存意图，重试只看到缺失 ID；现在 `SentRecord.Intent` 保存独立克隆的 Envelope，同 RequestID 恢复固定 MailID / 正文 / 原期限并读回确认后投递。旧 ledger 无 Intent 且缺正文仍 ErrConflict。[记录](docs/bugfix/RR-20260929-16.md)
+- **取消预约按代次校验（RR-20260929-20，P2）**：稳定 Token 表示同一奖励，旧 `CancelClaim` 仅按 Token 清 Deadline，迟到的旧取消会解除新一次预约；现在 CAS 内同时匹配 Token 与 ClaimAttempts，旧代次取消返回 false、重复取消 no-op，`CommitClaim` 仍按稳定 Token 确认。Go API 变化见上节。[记录](docs/bugfix/RR-20260929-20.md)
+- **未领取直接删除的邮件不再被重投复活（旧 RR-20260910-02 残余，P2）**：复用 SettledClaims 墓碑加 `deleted` 标记，淘汰 Entry 时保留删除身份与 envelope expiry；Deliver 不复活、Reserve/Commit 维持 Missing，容量不足拒绝新投递，已到期证明可回收。所有 mailbox owner 一起升级，旧节点会按 legacy 策略丢掉新删除证明。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-04.md)
+- **Cluster 下多封分页不再 CROSSSLOT（RR-20260929-33，P2）**：普通 prefix 下单 key CAS 都能成功，信封页的多 key `MGET` 却要求同槽；`GetMany` 改为经既有 `IPipeline` 排队单 key GET、一次 Exec、逐 future 取结果，`ErrNil` 才是缺失，空字节 / 坏 JSON / WRONGTYPE 明确报错。键、JSON、TTL、`EnvelopeStore` / RPC 不变；不强制共同 tag。[记录](docs/bugfix/RR-20260929-33.md)
+
+#### platform
+
+- **迟到发货与人工结算按 attempt 身份归档（RR-20260929-01，P1）**：计时 backoff 耗尽不等于外部调用已停止，旧成功回包无条件写 delivered；现在 Order 持久化单调 `AttemptSequence` 与 `PendingAttempts`，结算 / 重开拒绝未知在途结果，回包按 attempt 归档；新增 owner-only `ResolvePendingAttempts`，人工确认全部外部请求已停止并对账后才清理。旧订单没有 PendingAttempts，不能凭零值证明无在途请求。[记录](docs/bugfix/RR-20260929-01.md)
+- **外部发货未知错误不再清除 pending 允许再发货（RR-20260929-23，P1）**：新增 `ErrDeliveryNotApplied`，只有 collaborator 明确证明无外部效果才移除当前 pending 并按原预算重试；其他错误保留 PendingAttempts 进入 exhausted 停止自动重试，退避到期但仍有在途证明时同样转人工，迟到成功仍能完成原 generation。`DeliveryExhausted` 现在也表示结果待对账，Attempts 可能小于 MaxAttempts。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-04.md)
+- **重复 HandleCallback 的 receipt 不再共享切片（RR-20260929-24，P3）**：构造 receipt 时 clone Order（含错误分支），修改 PendingAttempts 不再绕过 MemoryStore CAS。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-04.md)
+- **缺失订单索引原子退休（RR-20260929-28，P1）**：迟到 ghost 退休的无条件 ZREM 会删掉新 paid 订单的 pending 入口；`RetirePending` 改用 `versionstore.RedisStore.IndexRemoveIfAbsent`，值 key EXISTS 才决定是否移除，同一段 Lua。原无条件 API 保留；旧丢索引订单不自动修复。[记录](docs/bugfix/RR-20260929-28.md)
+- **Cluster 有效 tag 准入（RR-20260929-30，P2）**：原“包含左括号”判断替换为 `mods.ValidateClusterKeyPrefix`，空 / 未闭合首 tag 启动失败。[记录](docs/bugfix/RR-20260929-30.md)
+- **game-demo 购买首次 durable grant 保留（RR-20260929-32，P2）**：稳定 OrderID 不能使可变 grant 内容幂等，catalog 升级后重试把 Count10 覆盖为 3；`grantDeliverer.Deliver` 先 HGet 已有字段核对身份恢复，只有 ErrNil 才查商品并经单键 Lua 原子首写，始终返回 durable winner 并检查身份；读取错误 / 写后回复丢失 / 坏内容一律不带 `ErrDeliveryNotApplied`。只改 demo 模板与生成测试，不改 Platform RPC / 订单 JSON。[记录](docs/bugfix/RR-20260929-32.md)
+
+#### activity（kit/service/global/activity）
+
+- **未确认进度不再被 ring 淘汰重复计入（RR-20260929-02，P1）**：最近 32 次 ring 会淘汰已应用但 ledger 尚未确认的请求；现在单独保存最多 32 个 `PendingRequestIDs`，未确认不淘汰、满则背压，Applies 快照 CAS 拦住迟到的 reserved 读者。旧 ring 升级保守转 pending；不能与旧写者混跑。[记录](docs/bugfix/RR-20260929-02.md)
+- **最后一次 ACK 窗口不再被重试提前关闭（RR-20260929-08，P2）**：`AttemptDispatch` 先判断 NextAttemptAt 是否到期，最后一个 token 的 ACK 期限内返回 `ErrDispatchNotDue`，期限过后再耗尽预算。[记录](docs/bugfix/RR-20260929-08.md)
+- **非负累加不再回绕为负（RR-20260929-15，P2）**：participant CAS 内检查 Score/Progress > MaxInt64-delta 或 Applies==MaxUint64，拒绝 `ErrRequestInvalid` 并保留旧状态。[记录](docs/bugfix/RR-20260929-15.md)
+- **Opening 名额持久恢复、不再按超时回收（旧 RR-20260914-02 残余，P2）**：两个独立 CAS 无法证明已开始的 Create 在 grace 后不会落库；`OpeningEntry.Intent` 保存完整创建计划，Create 错误 / 超时不释放已承诺名额，超过 OpeningGrace 的 sweep 帮助同计划创建与确认，第 257 次准入被拒；旧超容量 Window 用持久 `ScanAfter` 有界轮转（每批 ≤256）。全部 owner 升级并排空旧调用后再启用；不猜测无 Intent 的 legacy 意图。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md)
+- **Cluster 前缀准入（RR-20260929-31，P2）**：`Mod.Init` 调用 `mods.ValidateClusterKeyPrefix`，无 tag / 空 tag / 未闭合 / 空首对配置启动拒绝并点名 `activity.key_prefix`；多 key dispatch / owed 原子写需要同槽。不迁移历史错误前缀。[记录](docs/bugfix/RR-20260929-31.md)
+
+#### rank
+
+- **带逗号的 requestID 可去重（RR-20260929-05，P2）**：逗号连接的字符串无法表示含分隔符的请求；新 `applied_v2` 字段存 JSON 数组，读取兼容 legacy，下一次写入升级，损坏账本 fail-closed。[记录](docs/bugfix/RR-20260929-05.md)
+- **并发 no-op 不再覆盖幂等记录（RR-20260929-06，P2）**：只 CAS member 时分数不变检测不到去重 ring 的并发变动；Lua 同时比较 member 与完整 tagged ring，no-op CAS 失败也退避重读，Remove 同时删两个格式字段。高竞争可返回 ErrConflict。[记录](docs/bugfix/RR-20260929-06.md)
+- **Around 最大半径不再被页上限拒绝（RR-20260929-10，P3）**：radius=100 被接受但内部 Page limit=201 被拒；Around 委托 Page 时限制到 MaxPageSize=200，极限结果窗口远端少一条。[记录](docs/bugfix/RR-20260929-10.md)
+- **加法溢出拒绝落库（RR-20260929-26，P2）**：nextScore 在 int64 加法溢出时返回 `ErrScoreInvalid`，发生在 Lua CAS 与 ring 写入前，不消耗幂等键；已溢出的历史分数不自动推导。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md)
+- **Cluster 前缀准入（RR-20260929-29，P2）**：`Mod.Init` 使用 `mods.ValidateClusterKeyPrefix`，不改键格式或迁移旧榜；直接构造器调用者自行保证同槽。[记录](docs/bugfix/RR-20260929-29.md)
+
+#### match
+
+- **Grouping 非法 Queue 不再 panic / 伪成功（RR-20260929-25，P2）**：FIFO / ScoreWindow 的公开 Group 先 `Queue.Validate()`，非法模式 / 大小返回既有 `ErrQueueInvalid`。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md)
+
+#### session
+
+- **后台 sweep 有了公开 owner 接线（RR-20260929-09，P2）**：私有 `sweepOwners` 始终 nil，部署无法提供清理 owner 集合；新增 `Config.Owners` / `OwnerSource` / `SweepPending`，kit `NewMod` 接受 `WithSweepOwners`，Server 每 tick 调用。未配置时 `BackgroundSweepEnabled=false`，不扫描全 keyspace。[记录](docs/bugfix/RR-20260929-09.md)
+- **Attach 拒绝伪造的释放字段（RR-20260929-14，P2）**：调用者填 `ReleasedAtUnix` / `ForcedRelease` 可让 Finish 跳过 Releaser；现在任何非零值返回 `ErrRunInvalid`，管理字段只由释放流程写入。[记录](docs/bugfix/RR-20260929-14.md)
+- **Finish 重试成功后释放 claim（RR-20260929-18，P3）**：终态分支 `releasePending` 后直接返回不执行 `releaseClaim`；现在资源全部释放成功才调用身份校验的 releaseClaim，失败继续保留 claim 供恢复。[记录](docs/bugfix/RR-20260929-18.md)
+- **正常 Finish 的 claim 删除按逻辑身份原子校验（旧 RR-20260909-02 残余）**：run 置 terminal 后，旧 releaseClaim 的 Get/RunID 校验与普通 Delete 之间仍可被另一个 Enter 删除重建为同版本新 claim（v1 ABA）；新增 `versionstore.ConditionalDeleter.DeleteIf`（Memory 锁内校验，Redis Lua 比对完整原始字节后删值与索引），`ClaimStore` 显式要求该能力，RunID/OwnerID 校验落入删除原子边界。[记录](docs/bugfix/RR-20260909-02.md#2026-09-29-正常-finish-残留补修)
+
+#### chat
+
+- **自定义频道键不再碰撞私聊（RR-20260929-07，P2）**：Kind 原样拼接冒号，shared 类型可产生 private pair 的同一存储键；现在对 Kind 的 `%` / `:` 做可逆转义，默认频道键不变。已发生的泄露不能靠新代码撤销。[记录](docs/bugfix/RR-20260929-07.md)
+- **时钟偏移不再漏清理、Gap 报告页内洞（RR-20260929-27，P3）**：Prune 遍历有界 Ring 按每条 StoredAtUnix 清理、最多 limit；pageOf 同时报告页内 / 游标边界及清空尾部缺失，Next/PrevCursor/HasMore 含义不变。所有历史读取 owner 一起升级。[记录](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md)
+
+#### directory
+
+- **Cancel / Release 原子校验身份（RR-20260929-21，P2）**：外层 Token/Owner 检查与普通版本 Delete 分离，删除重建后版本重复，旧删除会移除新条目；改用 `ConditionalDeleter.DeleteIf`，Cancel 原子匹配 Token / Owner / reserved，Release 原子匹配 Owner / Token / State；`New` 拒绝不支持身份删除的 store。[记录](docs/bugfix/RR-20260929-21.md)
+
+#### global（kit/service/global）
+
+- **迁移后旧路由 lease 不可续期（RR-20260929-13，P2）**：续期只检查 incarnation，不核对当前 route 的 epoch/global/group；Acquire/Renew 依据 route 快照 CAS 并写后再核验，Lease/LiveGames 同样核验当前绑定。跨模块消息仍须携带 epoch fencing。[记录](docs/bugfix/RR-20260929-13.md)
+- **lease 返回的 Load map 不再污染 MemoryStore（RR-20260929-17，P3）**：Renew/Lease/LiveGames 返回 cloneLease，Load map 独立。[记录](docs/bugfix/RR-20260929-17.md)
+
+### Fixed — Redis driver
+
+- **Pipeline 缺失回复不再掩盖写错误（RR-20260929-34，P2）**：GET 缺失 key 在前、HSET 在后时 go-redis aggregate error 是 `redis.Nil`，wrapper 忽略后不再检查后续命令，`Exec` 返回 nil 而 HSET 实际被 WRONGTYPE 拒绝；现在 `redis/driver/pipeline.go` 先完成全部 future 赋值、保留真实 aggregate / 传输错误，aggregate 为 nil 或 Nil 时逐命令返回首个非 Nil 错误。仅缺失读取仍允许 Exec 为 nil，由对应 future 返回 `ErrNil`；部分执行不回滚。更新二进制即可，无数据迁移。[记录](docs/bugfix/RR-20260929-34.md)
+
+### Fixed — Codegen
+
+- **servicerpc 删除接口标记后 `-check` 不再假通过、孤儿传输文件退役（RR-20260930-01，P2）**：零接口时直接返回、只比较当前所需文件；现在先生成预期集合再扫描输出目录，只认带自身生成头且记录同一 regenerate 命令的 `_rpc_gen.go` / `_rpc_assembly_gen.go`，`-check` 报 `(orphan)` 并失败，普通运行删除。跨包 `-emit assembly -out` 只清装配半边。[记录](docs/bugfix/RR-20260930-01.md)
+- **protocol 清空定义后旧产物退役、`roost generate` 真正提交删除（RR-20260930-02，P2）**：定义集合为空时退役可识别的 proto / PB / msgid / JSON manifest / bind / robot / handler 文件（配置了 player bootstrap 则先验证再写不引用旧 handler 的 bootstrap），定义非空时也按当前 handler 域集合清理消失的域；`codegen/internal/roost` 的暂存快照与 `--check` 通过 `IsGeneratedArtifact` 纳入无 `Code generated` 注释的默认 `protocol.proto` / manifest。[记录](docs/bugfix/RR-20260930-02.md)
+- **entity 删除最后一个 `//roost:entity` 后退役 wire 与 guard test（RR-20260930-04，P2）**：原来只扫描当前含标记的目录；现在带 `tool/entity` 生成头的旧 wire / companion test 也使其目录进入对账，同包首实体退休时剩余实体接管 `RegisterEntity`，显式 `-output` 只退役指定文件。[记录](docs/bugfix/RR-20260930-04.md)
+- **nest 删除最后一个 `//roost:nest` 后退役四类产物（RR-20260930-05，P2）**：wrapper、异步 / 同步 sender、sender guard test 按本次预期集合对账，`-sender=false` 退役 sender 两半；清理在扫描与 bootstrap 成功后进行。[记录](docs/bugfix/RR-20260930-05.md)
+- **attribute 删最后一个 profile 后退役旧实现（RR-20260930-06，P2）**：生成成功后扫描同目录 `gen_*_attribute.go`，只删带 `tool/attribute` 生成头且不在当前集合的文件；多个 profile 共用一个 `-output` 现在报错。[记录](docs/bugfix/RR-20260930-06.md)
+- **eventgen 删除最后定义 / handler 后退役旧类型与派发（RR-20260930-07，P2）**：零定义时先验证 `-game` 范围内 handler 仍引用退役事件则报错不删，通过后删三份固定文件；`handler.go` 对当前 receiver 集合与 `_event_gen.go` 对账删除孤儿。[记录](docs/bugfix/RR-20260930-07.md)
+- **webroute 删除最后标记后退役 `webroute_gen.go`（RR-20260930-08，P2）**：只删带 `roost webroute` 生成头、当前包已无路由的文件；扫描根目录不再因名称以点开头被跳过。[记录](docs/bugfix/RR-20260930-08.md)
+- **tablegen 元数据清空后旧 JSON 退役并记录所有权（RR-20260930-09，P2）**：`_manifest.json` 升至 v2 记录输出文件名与 SHA-256，未改动的孤儿才删，手写未登记的保留，已改动的报错；JSON 文件名限制为输出目录直接子文件。旧 v1 manifest 遇未认领 JSON 明确失败要求人工确认。[记录](docs/bugfix/RR-20260930-09.md)
+- **errcode 只提取真实 `errcode.Define` 调用（RR-20260930-10，P3）**：改用 Go AST，注释 / 字符串内的示例不再入 CSV；含候选文本但语法错误的文件明确报解析错误。[记录](docs/bugfix/RR-20260930-10.md)
+
+### 其他
+
+- `AGENTS.md` 新增一段：用户明确请求修复 review/bug 时使用 [roost-bugfix](docs/agent-skills/roost-bugfix/SKILL.md) skill；普通 roost-review 仍只审查记录（提交 `83c04243`）。
+- 正式回归全部进包（`rr_20260929_round{1,2,3}_test.go`、`bugfix_*_test.go`、`retirement_test.go` 等），最终 service+driver integration/race 19 包 1035 pass 事件（3 个 Toxiproxy 用例因环境缺失 skip），见各批记录。未做真实 Broker 发奖 / Redis HA / 多进程强杀 / 生产迁移验证。
 
 ## [v1.17.2] - 2026-09-28
 

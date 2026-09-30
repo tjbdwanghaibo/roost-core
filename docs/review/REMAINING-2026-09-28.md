@@ -181,4 +181,4 @@ OPEN-ITEMS §H 把批次 8（长跑与性能：B29、B30、C01、C03）定为“
 
 B27 第 1 批的观察：生成链路上 `Nest.Request` 的调用方与 Remote 确认等待共用同一请求 ctx，调用方总是先拿到判别表第 14 行（`nest: sync canceled` + `DeadlineExceeded`），RR-20260927-24 新加的第 2 行哨兵送不到调用方；两行结论同为“结果未知”，已写入 RR-37 / RR-20260927-24 记录。
 
-另：`cache` 包 `TestReadThroughStoreCoalescesMisses` 既有偶发（race 二进制 5×400 次基线失败 26 次，用例只等到 `loads>0` 就放行、晚到的 goroutine 再发起一次加载），与 RR-20260930-03 无关，待另行处理。
+另：`cache` 包 `TestReadThroughStoreCoalescesMisses` 既有偶发（race 二进制 5×400 次基线失败 26 次，用例只等到 `loads>0` 就放行、晚到的 goroutine 再发起一次加载），与 RR-20260930-03 无关，待另行处理。 **更新（2026-09-30）**：已按 [RR-20260930-11](../bug/RR-20260930-11.md) 收敛——测试假设过强（只钉住领头者），改为把 8 个 goroutine 钉到合并点再放行，实现不动；`-race -count=400` 三轮全绿。
