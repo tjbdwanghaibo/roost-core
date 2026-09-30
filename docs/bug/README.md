@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**09-30 Codegen 第三轮：**[RR-04/05](REVIEW-2026-09-30-codegen-02.md) 原触发已[修复](../bugfix/RR-20260930-04.md)/[Nest 修复](../bugfix/RR-20260930-05.md)；[新 RR-06～10](REVIEW-2026-09-30-codegen-03.md) 包含 Attribute、Event、Webroute、Tablegen 退役旧产物四项 P2，Errcode 注释误提取一项 P3，均未修。[运行](../review/REVIEW-2026-09-30-codegen-03.md)。
+
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
 [RR-20260930-03](RR-20260930-03.md)：**P2** `cache.AtomicLocalStore` 覆盖写无限追加时钟记录，Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆 4.7GB，v1.10.0 起即有）（已修复，未发版；[修复记录](../bugfix/RR-20260930-03.md)）。

@@ -1,5 +1,7 @@
 # Codegen 第二轮新增问题：Entity / Nest 输入退役后留旧生成物
 
+**后续状态（第三轮）：**RR-20260930-04 与 RR-20260930-05 的原触发已分别[修复并验证](../bugfix/RR-20260930-04.md)、[修复并验证](../bugfix/RR-20260930-05.md)；以下“未修复”保留第二轮发现时点。[第三轮继续审查](../review/REVIEW-2026-09-30-codegen-03.md)。
+
 基线 Core `f6566d4e0a9026484d66d78f53036bbd9bc5f3fc`，Core 内 `codegen/` 为当前实现。本轮先修 [RR-20260930-01/02](../bugfix/RR-20260930-01.md) 后继续审未覆盖的 entity、nest、registry 输入删除链；以下两项只记录，**未修复**。[运行](../review/REVIEW-2026-09-30-codegen-02.md) · [隔离复现](../review/evidence/codegen-review-20260930-02/README.md)。
 
 ## RR-20260930-04 · P2 · entity 最后标记删除后旧 wire 与注册仍留存

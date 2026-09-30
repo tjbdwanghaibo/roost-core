@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+## 2026-09-30 Codegen 第三轮：主入口盘点，整体未收敛
+
+[运行及各生成器矩阵](REVIEW-2026-09-30-codegen-03.md) · [RR-04/05 修复](../bugfix/RR-20260930-04.md) / [Nest](../bugfix/RR-20260930-05.md) · [新 RR-06～10](../bug/REVIEW-2026-09-30-codegen-03.md) · [复现/限制](evidence/codegen-review-20260930-03/README.md)。Core `5fedc652`、Kit `f0e5b67a`、独立 Codegen `1e028fa4` 拉取核对；实际生成器在 Core `codegen/`。RR-04/05 **2/2 原触发修复并按声明场景验证**；新四项 P2、一项 P3 未修。
+
+| 本轮范围 | 已执行 | 仍待完成 |
+| --- | --- | --- |
+| Entity/Nest 删除最后标记 | 修前正式用例红；修后零标记、同包首实体、`-sender=false`、手写保护及暂存提交测试通过；定向 race 通过 | 真实外部工程 `go mod tidy` 被本机模块缓存权限挡住，消费者编译/部署另验 |
+| Attribute/Event/Webroute/Tablegen 输入退役、Errcode 误提取 | 五个隔离 CLI 反例、当前源码与图谱入口调用链；RR-06～10 分别登记 | 五项尚未实施；Event 部分 receiver、启动路由、配置加载消费者需动态验 |
+| Codegen 主入口盘点 | DAO、RPC、Protocol、Entity、Nest、registry、Attribute、Event、Webroute、Tablegen、cfggen、errcode、roost 暂存顺序均归位，详见矩阵 | 不是逐行/分支审计；cfggen 复杂 schema、脚手架/升级、进程强杀/磁盘故障和版本兼容未收敛 |
+
+图谱覆盖 generation 为 `2026-09-29T14:50:03Z`、相关路径 freshness `metadata_changed`；最新源码和 CLI/正式测试补证。下方第二轮“RR-04/05 未修”保留历史时点。
+
 ## 2026-09-30 Codegen 第二轮：修复两项并继续退役审查
 
 [运行/停点](REVIEW-2026-09-30-codegen-02.md) · [RR-01 修复](../bugfix/RR-20260930-01.md) · [RR-02 修复](../bugfix/RR-20260930-02.md) · [新 RR-04/05](../bug/REVIEW-2026-09-30-codegen-02.md) · [复跑](evidence/codegen-review-20260930-02/README.md)。Core `f6566d4e` 基线，Kit/独立 Codegen 无新源码；工作在 Core `codegen/`。原两项 **2/2 修复/声明场景验证**，生产发布/部署未做；新两项 Entity/Nest 退役缺陷未修。其他 agent 的 RR-20260930-03 是独立 Cache/长稳问题，本轮未触碰。

@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[09-30 Codegen 第三轮](REVIEW-2026-09-30-codegen-03.md)：[RR-04 Entity 修复](../bugfix/RR-20260930-04.md)、[RR-05 Nest 修复](../bugfix/RR-20260930-05.md)按声明场景通过；主生成器入口盘点及五个隔离 CLI 新反例见 [RR-06～10](../bug/REVIEW-2026-09-30-codegen-03.md)，未修。[实现机制](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [证据](evidence/codegen-review-20260930-03/README.md) · [进度](PROGRESS.md)。整体 Codegen 尚未收敛。
+
 [09-30 Codegen 第二轮](REVIEW-2026-09-30-codegen-02.md)：[RR-01/02 原触发修复](../bugfix/RR-20260930-01.md)并核对 Protocol 上层提交；[新 RR-04/05 Entity/Nest 退役旧文件](../bug/REVIEW-2026-09-30-codegen-02.md)只记录未实施。[Protocol 修复](../bugfix/RR-20260930-02.md) · [复跑](evidence/codegen-review-20260930-02/README.md) · [机制更新](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [进度](PROGRESS.md)。
 
 [09-30 Codegen 第一轮](REVIEW-2026-09-30-codegen-01.md)：当前生成器在 Core `codegen/`；审查暂存/提交、servicerpc、protocol 与 DAO 退役对照。确认两个未修 P2：RPC 标记删除后 `-check` 假通过、协议定义清空后旧产物保留。[问题/实施交接](../bug/REVIEW-2026-09-30-codegen-01.md) · [机制学习](IMPLEMENTATION-CODEGEN-STAGING-AND-RETIREMENT.md) · [复现](evidence/codegen-review-20260930-01/README.md) · [进度](PROGRESS.md)。

@@ -17,3 +17,9 @@
 上文是 `1b7a2fc5` 修前机制快照；RR-20260930-01/02 在 Core `f6566d4e` 之后已[修复并验证](REVIEW-2026-09-30-codegen-02.md)。新的 `servicerpc` 先把本次应有的传输/装配文件列出，再只把同半边、同生成头、同 regenerate 命令而不在预期集合内的文件当孤儿；检查模式失败，普通模式删除。具体实现和跨包保留边界见 [RPC 修复](../bugfix/RR-20260930-01.md)。
 
 Protocol 空定义会主动移走可识别旧输出；有 bootstrap 时保留重新生成的空 bootstrap。没有 Go 生成头的 proto/JSON manifest 由 `protocol.IsGeneratedArtifact` 以固定路径与内容结构识别，`roost` 暂存提交规划及 `--check` 使用相同规则。这一层补齐后，生成器在暂存树的删除才能落到真实项目。其他生成器不能自动继承该行为：第二轮新复现表明 Entity/Nest 仍留旧文件，[RR-04/05](../bug/REVIEW-2026-09-30-codegen-02.md) 待实施。业务协议兼容窗口与旧调用方清理仍是接入方责任。
+
+## 2026-09-30 第三轮：所有权对账的边界
+
+上段 RR-04/05 的“待实施”是第二轮历史时点；当前 [Entity](../bugfix/RR-20260930-04.md) 与 [Nest](../bugfix/RR-20260930-05.md) 已修复。Entity 在扫描目录时既认当前 marker，也认带自身生成头的旧 wire/guard test，解析完当前实体后清理不在当前集合的文件；同包首实体删除会把唯一包级 `RegisterEntity` 转移到剩余实体的 wire。Nest 在全部扫描与 game bootstrap 成功后才按当前源文件和 `-sender` 模式清理自身旧 wrapper/sender/guard test。两者均要求可识别生成头、限定文件名及扫描范围；手写同名文件保留。`roost` 上层因这些 Go 文件有 `Code generated` 头，现有暂存规划会提交删除，本轮以真实生成项目的暂存规划/提交测试验证 Entity。
+
+退役责任仍须逐生成器审查。Attribute 零 profile 提前返回，Event 零定义提前返回且 handler 只写当前 receiver，Webroute 只遍历当前有路由的包，Tablegen 零 meta/空 CSV 分支不清旧 JSON；隔离 CLI 证实四个最后输入删除后均留旧文件，[RR-06～09](../bug/REVIEW-2026-09-30-codegen-03.md) 未实施。对这些路径的安全修复应先定义归属：Go 文件可以结合固定命名、生成头、扫描范围；JSON/CSV 缺生成头，不可仅凭后缀删除业务数据，需可审查的 manifest 或严格形状及路径规则。下层先从当前输入求期望文件集合并显式退役，`roost` 上层再把可识别删除纳入暂存提交和 `--check`。旧协议 ID、路由与配置生命周期不能由文件清理自动决定发布兼容窗口。
