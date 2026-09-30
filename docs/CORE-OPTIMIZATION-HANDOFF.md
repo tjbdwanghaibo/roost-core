@@ -308,7 +308,7 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260927-14](bug/RR-20260927-14.md) | P4 卸载后重载最坏延迟文档不实 | [修复](bugfix/RR-20260927-14.md)（v1.17.2） |
 | [RR-20260927-15](bug/RR-20260927-15.md) | P3 同 fence 下 Remote 版本向量可回退 | [修复](bugfix/RR-20260927-15.md)（v1.17.2） |
 | [RR-20260927-16](bug/RR-20260927-16.md) | P4 saga 收件箱 `markCompleted` 失败静默 | [修复](bugfix/RR-20260927-16.md)（v1.17.2） |
-| [RR-20260927-17](bug/RR-20260927-17.md) | P4 Remote L2 快照键不带部署前缀 | [修复](bugfix/RR-20260927-17.md)（v1.17.2） |
+| [RR-20260927-17](bug/RR-20260927-17.md) | P3 Remote L2 快照键不带部署前缀 | [修复](bugfix/RR-20260927-17.md)（v1.17.2） |
 | [RR-20260927-18](bug/RR-20260927-18.md) | P3 demo 场景 Manager 未接卸载后重载 | [修复](bugfix/RR-20260927-18.md)（v1.17.2） |
 | [RR-20260927-19](bug/RR-20260927-19.md) | P4 场景重开复制会话失败无计数 | [修复](bugfix/RR-20260927-19.md)（v1.17.2） |
 | [RR-20260927-20](bug/RR-20260927-20.md) | P4 nest 单用例 `-count>1` panic duplicate handler | [修复](bugfix/RR-20260927-20.md)（v1.17.2） |
