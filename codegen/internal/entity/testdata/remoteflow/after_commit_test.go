@@ -146,7 +146,6 @@ func TestGeneratedRemoteReleaseHookPanicAfterDurableCommitStillCommits(t *testin
 // pipelined 同样）。hook 的 panic 从 dispatchLoadedEntities 的 `defer release()`（nest/nest_dispatch.go:404-406）经 Guard.ReleaseEntity
 // 传到 runNestLogic 的 recover（nest/nest_dispatch.go:203-209 `err = recoveredErr`），在途的 handler 错误被整个替换。
 func TestGeneratedRemoteRolledBackReleaseHookPanicKeepsBusinessError(t *testing.T) {
-	t.Skip("RR-20260930-20：带 Remote 批次的 strict 消息业务失败后 release hook panic，回复丢失业务错误，只剩 hook 错误")
 	rig, name := newAfterCommitRig(t)
 	id := rig.seed(t, 9705)
 	if err := rig.request(rig.ctx, id); err != nil {
