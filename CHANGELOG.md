@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **`cache.AtomicLocalStore` 时钟记录随存活键数有界（RR-20260930-03，P2）**：此前覆盖写、Delete、过期都不回收时钟记录，键数远低于上限、永不淘汰的 Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆涨到 4.7GB，v1.10.0 起即有）；现在超过 `2 × 存活键数 + 1024` 时就地压缩，准入规则与淘汰顺序不变。覆盖写约多 11ns、0 B/op。remoteflow 负载 harness 新增 `ROOST_REMOTE_HEAP_PROFILE_MINUTES`（默认关闭）。
+
 - **生成的 player TCP 与 game-demo 场景连接测试先等会话登记（RR-20260928-15）**：生成的服务器先写认证 ack、再登记会话，`server_gen_test.go` 的 6 个用例与 `scene_connections_test.go` 的两个用例原来拨号后直接断言，高负载下偶发 `active sessions = 1, want 2`（framework-compat source-head lane）。只改测试；已生成工程 sync 更新 `server_gen_test.go`，`scene_connections_test.go` 是业务文件需手工补。
 - **测试**：remoteflow 生成链路补 Remote 持久拒绝与收尾的端到端用例（REMAINING C34、B27 第 1 批）——装配改用正式 `ManagerAccess` 作 Remote loader 并接 entitysync，覆盖 Durability 0～3 持久拒绝后的卸载、重载全量与重载后可写，strict 确认截止后的延迟回调，结果未知后停机 / fence，嵌套 / 收尾阶段独立事务的拒绝，快 worker 删除 Remote 实体；`scripts/test-remote-generated.sh` 默认一起运行，新增 `ROOST_REMOTE_COUNT` / `ROOST_REMOTE_RUN`。
 
