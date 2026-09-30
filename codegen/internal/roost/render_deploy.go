@@ -464,6 +464,20 @@ func renderShellReadme(m Manifest) string {
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
 安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和按 Service 生成的 SIGTERM 停机预算：TimeoutStopSec = max(该 Service 按实际注册的 Mod 生成的 shutdown.total_timeout, 配置里实际的 total_timeout) + 5s，当前为 {{STOP_BUDGETS}}；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload；切换前先按正在用的 unit 停掉当前进程，正在运行的版本按它自己 unit 的 TimeoutStopSec 停机，再装入目标 unit 启动。readiness 未在预算内成功、或目标 unit 装不上（install / daemon-reload 失败）时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本（版本号不能是 . 或 ..），目标版本 readiness 失败或 unit 装不上会恢复原版本并以非零退出。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+
+统计文件 LOG_ROOT/<service>-<sid>.stats.log 不轮转：statslog 以 O_APPEND 打开它、进程运行期间不重开，长期运行的实例由运维配 logrotate，必须用 copytruncate（create / 改名式轮转会让进程继续写旧文件，新文件一直是空的；也没有可发的 reload 信号）。示例 /etc/logrotate.d/{{APP}}-stats：
+
+    /var/log/roost/*/*.stats.log {
+        daily
+        rotate 14
+        compress
+        delaycompress
+        missingok
+        notifempty
+        copytruncate
+    }
+
+copytruncate 在复制与截断之间追加的记录会丢，至多一条（默认 stats_log.interval 1 分钟）；同一份数据每次采集都已发布为 metrics gauge 与 ops /statsz，统计文件只是旁路留档。
 `, m)
 	// audit8 D3：停机预算按 Service 的 Mod 生成（RR-20260926-66），与 install.sh 的
 	// STOP_TIMEOUT 同一来源；这里原来写死“45 秒”，是 RR-66 之前的固定值。
@@ -498,6 +512,20 @@ func renderDockerReadme(m Manifest) string {
       {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
 
 配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。只读根文件系统下 stats_log.dir（相对的 log，即 /app/log）必须挂可写卷，否则统计文件写不进去（进程启动时 WARN，计入 stats_log.write_failures）；生产 compose 已为每个 Service 挂 <app>-<service>-log 命名卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
+
+命名卷里的统计文件 <service>-<sid>.stats.log 不轮转（进程以 O_APPEND 追加写、不重开文件，也没有可发的 reload 信号）。宿主机上按卷的挂载点配 logrotate，必须用 copytruncate：卷名用 docker volume ls 看（compose 给 {{APP}}-<service>-log 加了项目名前缀），挂载点用 docker volume inspect -f '{{ .Mountpoint }}' <卷名> 看，默认在 /var/lib/docker/volumes/<卷名>/_data。示例：
+
+    /var/lib/docker/volumes/*{{APP}}-*-log/_data/*.stats.log {
+        daily
+        rotate 14
+        compress
+        delaycompress
+        missingok
+        notifempty
+        copytruncate
+    }
+
+Docker Desktop 这类把卷放在虚拟机里的环境宿主机够不到挂载点，改用日志采集 sidecar 或调大 stats_log.interval。复制与截断之间追加的记录会丢，至多一条；同一份数据已发布为 metrics gauge 与 ops /statsz。
 %s
 生产 Compose：
 
