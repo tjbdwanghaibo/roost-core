@@ -6,7 +6,7 @@
 
 ## [v1.18.0] - 2026-09-30
 
-> 本版合并两条工作线：A 线（core cache、生成链路测试、CI 门禁：RR-20260928-15、RR-20260930-03/11）与 B 线（Service 十域、Redis driver、Codegen 退役旧产物：RR-20260929-01～34、RR-20260930-01/02/04～10）。B 线有源码不兼容的 Go API 变化（`Mail.CancelClaim`、`session.ClaimStore`、`platform.Admin`），所以是次版本而非补丁；生成器 Core 下限与 framework-compat 的 minimum 同步升到 v1.18.0。两条线的逐编号状态见 [ARCHIVE-2026-09-30](docs/review/ARCHIVE-2026-09-30.md)。
+> 本版合并两条工作线：A 线（core cache、生成链路测试、CI 门禁：RR-20260928-15、RR-20260930-03/11）与 B 线（Service 十域、Redis driver、Codegen 退役旧产物：RR-20260929-01～34、RR-20260930-01/02/04～10）。B 线有源码不兼容的 Go API 变化（`Mail.CancelClaim`、`session.ClaimStore`、`platform.Admin`），所以是次版本而非补丁；生成器 Core 下限与 framework-compat 的 minimum 同步升到 v1.18.0。两条线的逐编号状态见 [ARCHIVE-2026-09-30](docs/review/ARCHIVE-2026-09-30.md)。发版前验证：`scripts/pretag.sh` 通过（干净 worktree）；Remote 故障矩阵 21/21 PASS（`artifacts/perf/remote/matrix-v1180-30085d62`，本地）。tag → `4b277176`。
 > B 线（Service / Redis driver / Codegen review→bugfix 循环，2026-09-29～09-30）：Service 十域主链审查 RR-20260929-01～34 全部修复（另补三条旧 RR 残余），Redis driver 一项，Codegen 生成物退役 RR-20260930-01/02/04～10 九项。总记录见 [SERVICE-BUGFIX-2026-09-29](docs/bugfix/SERVICE-BUGFIX-2026-09-29.md) 与第三～九批 [03](docs/bugfix/SERVICE-BUGFIX-2026-09-29-03.md) / [04](docs/bugfix/SERVICE-BUGFIX-2026-09-29-04.md) / [05](docs/bugfix/SERVICE-BUGFIX-2026-09-29-05.md) / [06](docs/bugfix/SERVICE-BUGFIX-2026-09-29-06.md) / [07](docs/bugfix/SERVICE-BUGFIX-2026-09-29-07.md) / [08](docs/bugfix/SERVICE-BUGFIX-2026-09-29-08.md) / [09](docs/bugfix/SERVICE-BUGFIX-2026-09-29-09.md)，阶段结论见 [REVIEW-2026-09-29-services-11](docs/review/REVIEW-2026-09-29-services-11.md)。**这批修复只改代码与生成模板，没有自动迁移任何存量数据**：Rank 去重账本、Activity pending proof、Platform 待办、Account 建角计划等都要求相关 owner 停写后一起升级，不支持新旧写者混跑；各条的旧数据对账边界见对应记录。
 
 ### 行为与 API 变化（升级前必读）

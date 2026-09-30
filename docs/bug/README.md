@@ -1,14 +1,16 @@
 # Roost Review 问题索引
 
+**v1.18.0 已发布（2026-09-30，tag → `4b277176`）**：A 线 RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。逐编号状态见 [ARCHIVE-2026-09-30](../review/ARCHIVE-2026-09-30.md)。
+
 **09-30 Codegen 第四轮修复更新：**[RR-06～10](REVIEW-2026-09-30-codegen-03.md) 五项原触发已修并按声明场景验证，逐项记录见 [Attribute](../bugfix/RR-20260930-06.md)、[Event](../bugfix/RR-20260930-07.md)、[Webroute](../bugfix/RR-20260930-08.md)、[Tablegen](../bugfix/RR-20260930-09.md)、[Errcode](../bugfix/RR-20260930-10.md)。旧 manifest 手工判定、正式 HTTP 启动消费、旧客户端兼容仍待处理；未发版。下方“未修”保留第三轮历史时点。
 
 **09-30 Codegen 第三轮：**[RR-04/05](REVIEW-2026-09-30-codegen-02.md) 原触发已[修复](../bugfix/RR-20260930-04.md)/[Nest 修复](../bugfix/RR-20260930-05.md)；[新 RR-06～10](REVIEW-2026-09-30-codegen-03.md) 包含 Attribute、Event、Webroute、Tablegen 退役旧产物四项 P2，Errcode 注释误提取一项 P3，均未修。[运行](../review/REVIEW-2026-09-30-codegen-03.md)。
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
-[RR-20260930-11](RR-20260930-11.md)：P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 只等到 `loads > 0` 就放行加载器，晚到的 goroutine 再加载一次（`-race -count=400` 每轮约 1% 红，测试假设过强，实现不动）（已修复，未发版；[修复记录](../bugfix/RR-20260930-11.md)）。
+[RR-20260930-11](RR-20260930-11.md)：P3 `cache` 包 `TestReadThroughStoreCoalescesMisses` 只等到 `loads > 0` 就放行加载器，晚到的 goroutine 再加载一次（`-race -count=400` 每轮约 1% 红，测试假设过强，实现不动）（已修复，v1.18.0；[修复记录](../bugfix/RR-20260930-11.md)）。
 
-[RR-20260930-03](RR-20260930-03.md)：**P2** `cache.AtomicLocalStore` 覆盖写无限追加时钟记录，Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆 4.7GB，v1.10.0 起即有）（已修复，未发版；[修复记录](../bugfix/RR-20260930-03.md)）。
+[RR-20260930-03](RR-20260930-03.md)：**P2** `cache.AtomicLocalStore` 覆盖写无限追加时钟记录，Remote 快照 L1 缓存随写入次数线性增长（C01 24 小时堆 4.7GB，v1.10.0 起即有）（已修复，v1.18.0；[修复记录](../bugfix/RR-20260930-03.md)）。
 
 **09-30 Codegen 第一轮：新增两个未修 P2。**[RR-20260930-01 servicerpc 删除标记后 `-check` 假通过；RR-20260930-02 protocol 清空定义后旧产物保留](REVIEW-2026-09-30-codegen-01.md)。均有 Core 当前 CLI 隔离复现；[运行](../review/REVIEW-2026-09-30-codegen-01.md) · [原始结果](../review/evidence/codegen-review-20260930-01/README.md)。下方 Service 第十一轮“无新增”是当轮事实，不代表 Codegen 新问题已修复。
 
@@ -75,7 +77,7 @@
 | [RR-20260929-09](REVIEW-2026-09-29-services.md#rr-20260929-09) | P2 | session sweep 缺少公开 owner 来源接线 |
 | [RR-20260929-10](REVIEW-2026-09-29-services.md#rr-20260929-10) | P3 | rank Around 最大半径与页上限矛盾 |
 
-[RR-20260928-15](RR-20260928-15.md)：P4 生成 TCP / scene 测试未等会话登记（framework-compat 偶发）（已修复，未发版）。
+[RR-20260928-15](RR-20260928-15.md)：P4 生成 TCP / scene 测试未等会话登记（framework-compat 偶发）（已修复，v1.18.0）。
 
 [RR-20260928-14](RR-20260928-14.md)：P3 `codegen/internal/roost` 在 Windows CI 超时（已修复，v1.17.2）。
 
