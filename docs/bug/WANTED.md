@@ -743,7 +743,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **来源**：game-demo 第十一批做 B10（实时）时选型发现。demo 最终走了 `lockstep`（帧同步）那条路——它的服务端 `Room` 与客户端
   `robot.LockstepBot` 都是完整的，业务只需接线，两小时就跑通了；状态同步这条路相比之下没有入口。
 
-### W-2026-10-01-01：account 建角的 pending slot 没有任何 owner-only 释放入口
+### W-2026-10-01-01（已登记 RR-20261001-06，2026-10-01 维护者拍板“做”）：account 建角的 pending slot 没有任何 owner-only 释放入口
 
 - **位置**：`kit/service/account`（RR-20260929-19 的持久建角计划，`create_role.go` / `service.go` 的 `Slots` 与 `RoleCreation`），基线 `2308e37f`。
 - **现象**：名字租约过期后被他人提交，该账号在该区服的建角 slot 永远停在 pending，没有任何入口释放；platform 同类场景有 `ResolvePendingAttempts`，account 没有对等入口。
@@ -752,7 +752,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：owner-only `ResolvePendingCreation(ctx, accountID, sid, note)`，与 platform 对齐；或租约过期且名字已被占时自动把 pending 置为失败。
 - **来源**：[B 线 service 修复独立复审 §4 疑点 1](../review/REVIEW-2026-10-01-bline-audit-service-1.md)。
 
-### W-2026-10-01-02：game-demo `PlayerOwners.Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 仍会把 `interrupted` 清掉并延长租约
+### W-2026-10-01-02（已登记 RR-20261001-07，2026-10-01 维护者拍板“做”）：game-demo `PlayerOwners.Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 仍会把 `interrupted` 清掉并延长租约
 
 - **位置**：`demo/internal/service/game/playerowner.go.tmpl`（`Claim` 的 `errStaleCopyKept` 结局与 `confirmRenewal`），基线 `2308e37f`（RR-20260930-23 修复之后）。
 - **现象**：`Claim` 认领成功但副本在预算内扔不掉时注释说“nothing refreshes it”，但 `snapshot()` 仍含该玩家，下一轮 `Refresh`（CompareAndExpire 自己 token）返回 Held → `confirmRenewal` 清掉 `interrupted` 并延长 `validUntil`，之后 `Admit` 对仍驻留的 stale 副本放行。
@@ -761,7 +761,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：`errStaleCopyKept` 后把该玩家从 `snapshot()` 的续期集合里摘掉，直到副本真正销毁。
 - **来源**：[RR-20260930-23 修复记录 §未验证项](../bugfix/RR-20260930-23.md)。
 
-### W-2026-10-01-03：chat 无游标的最新页在普通容量淘汰后也报 `Gap=true`，并每次打 `history.gap.<kind>` 指标
+### W-2026-10-01-03（已登记 RR-20261001-08，2026-10-01 维护者拍板“做”）：chat 无游标的最新页在普通容量淘汰后也报 `Gap=true`，并每次打 `history.gap.<kind>` 指标
 
 - **位置**：`kit/service/chat`（RR-20260929-27 的 `Page.Gap` 语义扩大），基线 `24d15652`。
 - **现象**：复审探针实证——只是正常容量淘汰、没有洞的最新页也 `Gap=true`，指标每次都计；记录与 CHANGELOG 只提“页内 / 尾部洞”。
@@ -770,7 +770,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：只有游标落在已淘汰区间、或页内序号不连续时才 `Gap=true`；无游标最新页不算。
 - **来源**：[B 线 service 修复独立复审（后半）§4.2](../review/REVIEW-2026-10-01-bline-audit-service-2.md)。
 
-### W-2026-10-01-04：activity 残余——无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让该 group 的 `AdvanceExpired` 每 tick 整体失败
+### W-2026-10-01-04（已登记 RR-20261001-09，2026-10-01 维护者拍板“做”）：activity 残余——无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让该 group 的 `AdvanceExpired` 每 tick 整体失败
 
 - **位置**：`kit/service/global/activity`（RR-20260914-02 残余与 RR-20260929-02 之后的 `OpeningEntry.Intent`），基线 `24d15652`。
 - **现象**：复审读码结论——没有 `Intent` 的旧 Opening 条目不会被回收；一条 Intent 解析失败会让整组推进失败并每 tick 重试。
