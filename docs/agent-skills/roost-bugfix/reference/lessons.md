@@ -85,7 +85,7 @@
 - `kit/service/global/activity`（包在 `kit/service/global/` 下，不是 `kit/service/activity`）：`Server` 是生成代码（`coordinator_rpc_gen.go`），不能加字段，
   跨 sweep 的状态放 `Service`；窗口记录 `Window{Keys, Opening, Delivering}` 一个 key 一个 CAS，跨 key 生命周期靠"条目分段 + 回收只删观察到的那一段"；
   harness `newActivityService(t)` 返回可推进的 `activityClock`，`Server{service: s}` 直接调 `sweepGroup`（`server_run.go`）。
-- **service 的 Redis 变体挂在五个变量上**（RR-20261001-01）：本地跑要同时导出 `REDIS_ADDR`、`ROOST_REDIS_TEST_ADDR`、`ROOST_REVIEW_REDIS`（同一地址）、`ROOST_REVIEW3_BACKEND=redis`、`ROOST_REVIEW4_BACKEND=redis`，只设 `REDIS_ADDR` 时 account / mail / platform / chat / directory / rank / activity / session 的 Redis 变体静默 SKIP 或落回 Memory；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 钉住 ci.yml。
+- **service 的 Redis 变体挂在五个变量上**（RR-20261001-01）：本地跑要同时导出 `REDIS_ADDR`、`ROOST_REDIS_TEST_ADDR`、`ROOST_REVIEW_REDIS`（同一地址）、`ROOST_REVIEW3_BACKEND=redis`、`ROOST_REVIEW4_BACKEND=redis`、`ROOST_BUGFIX5_BACKEND=redis`，只设 `REDIS_ADDR` 时 account / mail / platform / chat / directory / rank / activity / session 的 Redis 变体静默 SKIP 或落回 Memory；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 钉住 ci.yml。
 - kit 的 Redis 用例需 `-tags integration`；新加 Redis 存储 / 索引要把键空间登记进 `kit/service/integration` 的 `everyNamespace`（U-0263，`redis_test.go`）。
 
 ## codegen
