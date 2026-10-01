@@ -18,6 +18,7 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20261001-05](RR-20261001-05.md)：**P2** activity `applyProgress` 在 ledger 条目被 TTL 删除后永不回收 `PendingRequestIDs`，32 个孤儿后该参与者每个新请求永久 `ErrConflict`，无对账入口（B 线 service 修复复审，RR-20260929-02 修法引入）（已确认，未修复）。
 [RR-20261001-04](RR-20261001-04.md)：P3 v1 manifest 工程有手写 JSON 时生成链路失败于 `untracked table JSON … migrate it explicitly`，无文档无命令说明迁移（B 线 codegen 修复复审 D2）（已确认，未修复）。
 [RR-20261001-03](RR-20261001-03.md)：**P2** schema 已写、`configs/table` 还没有 CSV 的工程在 v1.18.0 上 `generate` / `sync` / `--check` 全部失败——`153cac3d` 让空 CSV 目录也跑 tablegen，v1.17.2 通过（B 线 codegen 修复复审 D1，回归）（已确认，未修复）。
 [RR-20261001-02](RR-20261001-02.md)：P3 `service/mail` `sameSendIntent` 用 `reflect.DeepEqual`，nil 与空切片判为不同，自定义 EnvelopeStore 下同 RequestID 恢复永久 `ErrConflict`（B 线 service 修复复审）（已确认，未修复）。

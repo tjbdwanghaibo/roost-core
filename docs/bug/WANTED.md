@@ -761,3 +761,21 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：`errStaleCopyKept` 后把该玩家从 `snapshot()` 的续期集合里摘掉，直到副本真正销毁。
 - **来源**：[RR-20260930-23 修复记录 §未验证项](../bugfix/RR-20260930-23.md)。
 
+### W-2026-10-01-03：chat 无游标的最新页在普通容量淘汰后也报 `Gap=true`，并每次打 `history.gap.<kind>` 指标
+
+- **位置**：`kit/service/chat`（RR-20260929-27 的 `Page.Gap` 语义扩大），基线 `24d15652`。
+- **现象**：复审探针实证——只是正常容量淘汰、没有洞的最新页也 `Gap=true`，指标每次都计；记录与 CHANGELOG 只提“页内 / 尾部洞”。
+- **为何可疑**：调用方按 `Gap` 决定是否提示“消息可能丢失”，正常淘汰会被误报；指标失去告警价值。
+- **会红的测试草稿**：写满容量 + 1 条，无游标取最新页 → 期望 `Gap=false` 且无指标；实际 true。
+- **候选修法**：只有游标落在已淘汰区间、或页内序号不连续时才 `Gap=true`；无游标最新页不算。
+- **来源**：[B 线 service 修复独立复审（后半）§4.2](../review/REVIEW-2026-10-01-bline-audit-service-2.md)。
+
+### W-2026-10-01-04：activity 残余——无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让该 group 的 `AdvanceExpired` 每 tick 整体失败
+
+- **位置**：`kit/service/global/activity`（RR-20260914-02 残余与 RR-20260929-02 之后的 `OpeningEntry.Intent`），基线 `24d15652`。
+- **现象**：复审读码结论——没有 `Intent` 的旧 Opening 条目不会被回收；一条 Intent 解析失败会让整组推进失败并每 tick 重试。
+- **为何可疑**：升级后存量数据必然有无 Intent 的 Opening；单条坏数据放大成整组停摆。
+- **会红的测试草稿**：种一条无 Intent 的 Opening + 一条坏 Intent → `AdvanceExpired` 应跳过坏条目、回收 legacy 条目。
+- **候选修法**：legacy 条目按旧规则（期限）回收；坏 Intent 记日志并跳过，不阻塞同组其他条目。
+- **来源**：[B 线 service 修复独立复审（后半）§4.4](../review/REVIEW-2026-10-01-bline-audit-service-2.md)。
+
