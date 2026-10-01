@@ -21,7 +21,7 @@
 [RR-20261001-05](RR-20261001-05.md)：**P2** activity `applyProgress` 在 ledger 条目被 TTL 删除后永不回收 `PendingRequestIDs`，32 个孤儿后该参与者每个新请求永久 `ErrConflict`，无对账入口（B 线 service 修复复审，RR-20260929-02 修法引入）（已确认，未修复）。
 [RR-20261001-04](RR-20261001-04.md)：P3 v1 manifest 工程有手写 JSON 时生成链路失败于 `untracked table JSON … migrate it explicitly`，无文档无命令说明迁移（B 线 codegen 修复复审 D2）（已确认，未修复）。
 [RR-20261001-03](RR-20261001-03.md)：**P2** schema 已写、`configs/table` 还没有 CSV 的工程在 v1.18.0 上 `generate` / `sync` / `--check` 全部失败——`153cac3d` 让空 CSV 目录也跑 tablegen，v1.17.2 通过（B 线 codegen 修复复审 D1，回归）（已确认，未修复）。
-[RR-20261001-02](RR-20261001-02.md)：P3 `service/mail` `sameSendIntent` 用 `reflect.DeepEqual`，nil 与空切片判为不同，自定义 EnvelopeStore 下同 RequestID 恢复永久 `ErrConflict`（B 线 service 修复复审）（已确认，未修复）。
+[RR-20261001-02](RR-20261001-02.md)：P3 `service/mail` `sameSendIntent` 用 `reflect.DeepEqual`，nil 与空切片判为不同，自定义 EnvelopeStore 下同 RequestID 恢复永久 `ErrConflict`（B 线 service 修复复审）（已修复，未发版；[修复记录](../bugfix/RR-20261001-02.md)）。
 [RR-20261001-01](RR-20261001-01.md)：**P2** ci.yml 的 Redis job 只设 `REDIS_ADDR`，09-29 service 修复的 Redis 变体（`ROOST_REVIEW_REDIS` / `ROOST_REDIS_TEST_ADDR` / `ROOST_REVIEW3_BACKEND` / `ROOST_REVIEW4_BACKEND`，9 个测试文件）静默 SKIP 或落回 Memory（B 线修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261001-01.md)）。
 [RR-20260930-24](RR-20260930-24.md)：P3 game-demo 活动租约丢失后永不重取，`activity: lease not renewed` 每 5s 一条直到停机（B27 第 3 批真实环境暴露）（已修复，未发版；[修复记录](../bugfix/RR-20260930-24.md)）。
 [RR-20260930-23](RR-20260930-23.md)：**P2** 进程续租中断后重取租约，仍连着的玩家被当作过期副本 Destroy，连接活着却脱离场景，Rebind 在此路径无效（B27 第 3 批真实环境暴露，RR-20260927-23 / RR-20260926-70 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-23.md)，T-179）。

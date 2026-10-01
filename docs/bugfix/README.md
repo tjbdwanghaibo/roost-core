@@ -4,6 +4,7 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20261001-02](RR-20261001-02.md)：`sameSendIntent` 去掉 `reflect.DeepEqual` 改逐字段比较（切片 `slices.Equal` / `bytes.Equal`，nil 与空等价），自定义 EnvelopeStore 还原空切片时 RR-20260929-16 的同 RequestID 恢复不再永久 `ErrConflict`；替换正文 / 期限 / 收件人仍拒绝（未发版）。
 [RR-20261001-01](RR-20261001-01.md)：Redis job `env:` 补四个门变量、守卫正则扩展；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 把测试文件里 `os.Getenv` 的 Redis 门变量钉到 ci.yml（未发版）。
 [RR-20260930-24](RR-20260930-24.md)：game-demo 活动租约续租失败按 `errors.Is` 分类——过期 / 不持有立刻 `AcquireLease`，拿不到进 standby 每心跳重试，瞬时错误下周期再续，日志只在状态变化时打（未发版）。
 [RR-20260930-23](RR-20260930-23.md)：game-demo `PlayerOwners.renew` 取回失效租约后像围栏一样 `CloseSessions`（日志加 `sessions_closed`），副本扔不掉的结局（`errStaleCopyKept`）同样关连接；两进程 + SIGSTOP 40s 演练实跑通过；T-179；已生成工程须手工合并 playerowner.go（未发版）。

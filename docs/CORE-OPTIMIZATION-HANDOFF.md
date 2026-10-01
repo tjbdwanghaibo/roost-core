@@ -349,7 +349,7 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
 | [RR-20261001-05](bug/RR-20261001-05.md) | P2 activity pending 名额在 ledger TTL 后永不回收（复审 B 线） | 未修复 |
-| [RR-20261001-02](bug/RR-20261001-02.md) | P3 mail `sameSendIntent` nil / 空切片判不同（复审 B 线） | 未修复 |
+| [RR-20261001-02](bug/RR-20261001-02.md) | P3 mail `sameSendIntent` nil / 空切片判不同（复审 B 线） | [修复](bugfix/RR-20261001-02.md)（未发布） |
 | [RR-20261001-03](bug/RR-20261001-03.md) | P2 空 CSV 目录也跑 tablegen，新工程生成链路失败（复审 B 线，回归） | 未修复 |
 | [RR-20261001-04](bug/RR-20261001-04.md) | P3 v1 manifest + 手写 JSON 无迁移说明（复审 B 线） | 未修复 |
 | [RR-20261001-01](bug/RR-20261001-01.md) | P2 ci Redis job 漏设四个门变量，service Redis 变体静默不跑 | [修复](bugfix/RR-20261001-01.md)（未发布） |
