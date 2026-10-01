@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -40,6 +41,13 @@ type Admin interface {
 	// ReopenDispatch returns an exhausted dispatch to the retry queue with a
 	// fresh attempt budget. Use it after the receiving game server is back.
 	ReopenDispatch(ctx context.Context, key Key, gameSID int32, note string) (dispatch Dispatch, err error)
+
+	// ReconcileProgress completes the ledger confirmations a participant's
+	// pending progress proofs are waiting on and releases the proofs, so a
+	// participant refused with ErrProgressBacklog after a ledger outage can
+	// score again before the entries expire. Use it once the ledger is
+	// writable again.
+	ReconcileProgress(ctx context.Context, key Key, participantID string, note string) (participant Participant, err error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. It is stored on the dispatch and
@@ -125,6 +133,84 @@ func (s *Service) ReopenDispatch(ctx context.Context, key Key, gameSID int32, no
 	}
 	s.report.Accepted("admin.reopen_dispatch")
 	return reopened, nil
+}
+
+// ReconcileProgress implements Admin.
+//
+// A participant's pending set holds request ids whose participant write
+// LANDED — an id joins it inside the very compare-and-set that moved the
+// score — and whose ledger mark did not. So the confirmation each one lacks is
+// a fact this service already knows, and writing the mark is finishing the
+// two-step ApplyProgress could not finish, not asserting anything about the
+// client. That is what makes this safe to run at any time: once the mark is
+// written a replay of that id is answered by the ledger before it reaches the
+// participant record, exactly as if the original call had completed.
+//
+// Why an operator entry at all, when ApplyProgress reclaims a proof by itself
+// once the ledger's TTL reaps the entry (RR-20261001-05): the TTL is the
+// client retry horizon, thirty minutes by default, and a ledger outage that
+// strands a busy participant with MaxProgressWindow lost marks would refuse it
+// for that long. Writing the marks ends the refusal now.
+//
+// Marks are written one by one before the participant is touched, and a mark
+// that fails stops the call with nothing released: the marks already written
+// are idempotent, so a retry resumes where this one stopped. An entry the
+// ledger has already reaped needs no mark — its proof is past the horizon —
+// and markReservationApplied leaves it gone rather than resurrecting it.
+//
+// Like ReopenDispatch this is owner-only (no bus transport) and records the
+// operator's note on the record it changed.
+func (s *Service) ReconcileProgress(ctx context.Context, key Key, participantID string, note string) (Participant, error) {
+	participantKey := ParticipantKey{Activity: key, ParticipantID: participantID}
+	if err := participantKey.Validate(); err != nil {
+		return Participant{}, err
+	}
+	note, err := validateAdminNote(note)
+	if err != nil {
+		return Participant{}, err
+	}
+	nowUnix := s.cfg.Now().Unix()
+	observed, found, err := s.lookupParticipant(ctx, participantKey)
+	if err != nil {
+		return Participant{}, err
+	}
+	if !found {
+		return Participant{}, fmt.Errorf("%w: participant %q of activity %s", ErrMissing, participantID, key)
+	}
+	pending := observed.PendingRequestIDs
+	if observed.ProgressProofVersion == 0 {
+		// A record written before the pending set existed: its recent ring
+		// is the conservative pending set ApplyProgress would derive.
+		pending = observed.AppliedRequestIDs
+	}
+	for _, id := range pending {
+		if err := s.markReservationApplied(ctx, RequestKey{Activity: key, ParticipantID: participantID, RequestID: id}, nowUnix); err != nil {
+			return Participant{}, fmt.Errorf("activity: reconcile progress of %q: mark request %q: %w", participantID, id, err)
+		}
+	}
+	var result Participant
+	_, _, err = s.cfg.Participants.Update(ctx, participantKey, func(current Participant, found bool) (Participant, bool, error) {
+		if !found {
+			return current, false, fmt.Errorf("%w: participant %q of activity %s", ErrMissing, participantID, key)
+		}
+		next := current.clone()
+		if next.ProgressProofVersion == 0 {
+			next.PendingRequestIDs = cloneStrings(next.AppliedRequestIDs)
+			next.ProgressProofVersion = 1
+		}
+		// Only the ids whose marks this call wrote are released; one that
+		// joined the pending set since the read above keeps its proof.
+		next.PendingRequestIDs = slices.DeleteFunc(next.PendingRequestIDs, func(id string) bool { return slices.Contains(pending, id) })
+		next.AdminNote = note
+		next.AdminActionAtUnix = nowUnix
+		result = next.clone()
+		return next, true, nil
+	})
+	if err != nil {
+		return Participant{}, err
+	}
+	s.report.Accepted("admin.reconcile_progress")
+	return result, nil
 }
 
 // validateAdminNote requires a reason and bounds it.

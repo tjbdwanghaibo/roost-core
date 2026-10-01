@@ -92,6 +92,11 @@ const (
 	// have — the per-game owed index is the first (RR-20260919-10). It is a
 	// deployment fact, not a request error, so it is worth its own code.
 	CodeUnsupported int32 = 620118
+	// CodeProgressBacklog is a participant's full pending-proof window
+	// (RR-20261001-05). It is its own code because it is not CodeConflict: a
+	// conflict is cleared by retrying now, a backlog by the ledger
+	// confirming, by its entries expiring, or by an operator reconciling.
+	CodeProgressBacklog int32 = 620119
 )
 
 var (
@@ -159,6 +164,13 @@ var (
 	ErrNotResolvable = errcode.Define(CodeNotResolvable, "activity: dispatch is not in a resolvable state", "")
 	// ErrAdminNoteRequired reports a missing or oversized operator note.
 	ErrAdminNoteRequired = errcode.Define(CodeAdminNoteRequired, "activity: an operator note is required", "")
+
+	// ErrProgressBacklog reports that a participant holds MaxProgressWindow
+	// progress proofs whose ledger marks have not landed, so no further apply
+	// is admitted until some clear. It is backpressure with a horizon of at
+	// most ReservationTTL, not contention: retrying immediately does not help,
+	// and a caller must be able to tell the two apart (RR-20261001-05).
+	ErrProgressBacklog = errcode.Define(CodeProgressBacklog, "activity: participant's unconfirmed progress window is full", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -505,13 +517,22 @@ type Participant struct {
 	// horizons.
 	AppliedRequestIDs []string `json:"applied_request_ids,omitempty"`
 	// PendingRequestIDs pins proofs until their ledger confirmations land.
-	// Unlike the recent ring, a full pending set applies backpressure.
+	// Unlike the recent ring, a full pending set applies backpressure
+	// (ErrProgressBacklog). A proof is released when the ledger marks its
+	// request applied, when the ledger's TTL has reaped the entry — the
+	// request is then past its retry horizon — or by Admin.ReconcileProgress.
 	PendingRequestIDs    []string `json:"pending_request_ids,omitempty"`
 	ProgressProofVersion int      `json:"progress_proof_version,omitempty"`
 	// Applies counts accepted applies. A replay does not increment it, which
 	// is what makes "the replay was a no-op" observable rather than inferred.
 	Applies       uint64 `json:"applies"`
 	UpdatedAtUnix int64  `json:"updated_at_unix"`
+
+	// AdminNote and AdminActionAtUnix record the last Admin.ReconcileProgress
+	// on this participant, the way a Dispatch records its reopen. Empty until
+	// an operator intervened; older readers ignore the fields.
+	AdminNote         string `json:"admin_note,omitempty"`
+	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
 }
 
 // Applied reports whether requestID is still inside the participant's ring.

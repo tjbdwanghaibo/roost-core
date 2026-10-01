@@ -86,7 +86,9 @@ func TestUnconfirmedProgressBackpressureNeverEvictsProof(t *testing.T) {
 	if err != nil || before.Score != MaxProgressWindow || len(before.PendingRequestIDs) != MaxProgressWindow {
 		t.Fatal(before, err)
 	}
-	if _, err = s.ApplyProgress(ctx, key, "p", "extra", ProgressDelta{Score: 1}); !errors.Is(err, versionstore.ErrConflict) {
+	// Full inside the TTL is backpressure (ErrProgressBacklog since
+	// RR-20261001-05; it was versionstore.ErrConflict before), never eviction.
+	if _, err = s.ApplyProgress(ctx, key, "p", "extra", ProgressDelta{Score: 1}); !errors.Is(err, ErrProgressBacklog) {
 		t.Fatalf("full proof ignored: %v", err)
 	}
 	after, _, err := s.LookupParticipant(ctx, key, "p")

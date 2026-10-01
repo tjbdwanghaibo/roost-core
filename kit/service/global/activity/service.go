@@ -37,6 +37,13 @@ type Config struct {
 	// Ledger holds the insert-only progress reservations. Wire it with a TTL
 	// matching ReservationTTL; see ProgressReservation for why the bound is
 	// time and what that costs.
+	//
+	// The store's TTL must not be SHORTER than ReservationTTL (NewRedisStores
+	// sets both from one value). ApplyProgress treats a pending proof whose
+	// ledger entry is gone as past every client's retry horizon and reclaims
+	// it (RR-20261001-05); a ledger that forgets entries earlier than the
+	// configured horizon would make that reclaim early. New cannot check
+	// this — a Store does not expose its TTL — so it is a wiring invariant.
 	Ledger versionstore.Store[RequestKey, ProgressReservation]
 	// Audits holds the append-only refusal log, one record per activity.
 	Audits versionstore.Store[Key, NotifyAuditLog]
@@ -1069,12 +1076,25 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 		pending = observed.AppliedRequestIDs
 	}
 	var confirmed []string
+	expired := 0
 	for _, id := range pending {
 		proof, found, err := s.cfg.Ledger.Get(ctx, RequestKey{Activity: key, ParticipantID: participantID, RequestID: id})
 		if err != nil {
 			return Participant{}, err
 		}
-		if found && proof.Value.State == ReservationApplied {
+		switch {
+		case !found:
+			// An id joins the pending set only after its ledger entry was
+			// created (Create precedes the participant CAS below), so an entry
+			// that is gone is one the ledger's TTL reaped. That TTL is
+			// ReservationTTL — the far side of every client's retry horizon —
+			// and past it the ledger itself answers a replay as a new request.
+			// There is nothing left for this proof to protect; keeping it only
+			// counted toward MaxProgressWindow, which is how a participant with
+			// 32 lost marks was refused forever (RR-20261001-05).
+			expired++
+			confirmed = append(confirmed, id)
+		case proof.Value.State == ReservationApplied:
 			confirmed = append(confirmed, id)
 		}
 	}
@@ -1123,6 +1143,7 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 	}
 
 	var result Participant
+	reclaimed := false
 	_, _, err = s.cfg.Participants.Update(ctx, participantKey, func(current Participant, found bool) (Participant, bool, error) {
 		if found && current.Applied(requestID) {
 			// The apply already landed. Returning the current state without a
@@ -1145,8 +1166,16 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 		}
 		next.PendingRequestIDs = slices.DeleteFunc(next.PendingRequestIDs, func(id string) bool { return slices.Contains(confirmed, id) })
 		if len(next.PendingRequestIDs) >= MaxProgressWindow {
-			return current, false, fmt.Errorf("%w: pending progress confirmations are full", versionstore.ErrConflict)
+			// Backpressure, not contention: every proof here is a request
+			// whose ledger mark has not landed and whose entry is still inside
+			// ReservationTTL. It clears when the ledger confirms them (a replay
+			// does that), when their entries expire, or through
+			// Admin.ReconcileProgress — none of which an immediate retry
+			// brings closer, so this is not reported as ErrConflict.
+			return current, false, fmt.Errorf("%w: %d progress proofs of participant %q await ledger confirmation",
+				ErrProgressBacklog, len(next.PendingRequestIDs), participantID)
 		}
+		reclaimed = true
 		if next.Score > math.MaxInt64-delta.Score || next.Progress > math.MaxInt64-delta.Progress || next.Applies == math.MaxUint64 {
 			return current, false, fmt.Errorf("%w: progress total would overflow", ErrRequestInvalid)
 		}
@@ -1161,6 +1190,9 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 	})
 	if err != nil {
 		return Participant{}, err
+	}
+	if reclaimed && expired > 0 {
+		s.report.Dropped("apply_progress.proof_expired", expired)
 	}
 
 	// Mark the claim applied, so a replay is answered by the ledger and never

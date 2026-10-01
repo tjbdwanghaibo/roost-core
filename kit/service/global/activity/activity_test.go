@@ -1392,6 +1392,11 @@ func TestEveryClientMistakeHasItsOwnCode(t *testing.T) {
 		{"conflict", ErrConflict, CodeConflict},
 		{"not resolvable", ErrNotResolvable, CodeNotResolvable},
 		{"admin note", ErrAdminNoteRequired, CodeAdminNoteRequired},
+		// CodeUnsupported (620118) was declared without a row here, which the
+		// contiguity check could not see while it was the segment's last code;
+		// RR-20261001-05 added 620119 behind it and exposed the gap.
+		{"unsupported", ErrUnsupported, CodeUnsupported},
+		{"progress backlog", ErrProgressBacklog, CodeProgressBacklog},
 	} {
 		if got := Code(fmt.Errorf("wrapped: %w", testCase.err)); got != testCase.want {
 			t.Fatalf("%s: code = %d, want %d", testCase.label, got, testCase.want)
@@ -1418,7 +1423,7 @@ func TestEveryClientMistakeHasItsOwnCode(t *testing.T) {
 	// made "which package owns this number" a question with two answers.
 	const (
 		segmentFirst     = 620101
-		segmentAllocated = 17
+		segmentAllocated = 19
 	)
 	if len(codes) != segmentAllocated {
 		t.Fatalf("%d codes are paired, want %d; a code was added or removed without updating "+
