@@ -908,8 +908,9 @@ func TestEveryOwnerOnlyCapabilityIsThePublicNamePlusLocal(t *testing.T) {
 //
 // Each Admin method is more dangerous than anything on its service's
 // cross-process interface — one can cause a second grant of paid goods, one
-// re-delivers an activity result, one declares an external resource gone —
-// and the bus carries no caller identity these services can verify. So none of
+// re-delivers an activity result, one declares an external resource gone, one
+// frees a one-role-per-server slot — and the bus carries no caller identity
+// these services can verify. So none of
 // them has a //roost:rpc marker, and the capability other processes hold must
 // not satisfy Admin.
 //
@@ -931,6 +932,7 @@ func TestTheOperatorSurfacesAreNotReachableThroughTheBusCapability(t *testing.T)
 		{"platform", mods.ModPlatform, has[platform.Admin], platform.LocalCapabilityName},
 		{"session", mods.ModSession, has[session.Admin], session.LocalCapabilityName},
 		{"activity", mods.ModGlobalActivity, has[activity.Admin], activity.LocalCapabilityName},
+		{"account", mods.ModAccount, has[account.Admin], account.LocalCapabilityName},
 	} {
 		t.Run(probe.pkg, func(t *testing.T) {
 			if probe.asAdmin(registry, probe.public) {

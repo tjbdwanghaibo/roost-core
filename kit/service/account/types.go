@@ -75,6 +75,12 @@ const (
 	// answering that with CodeInternal would report a caller's malformed
 	// request as a server fault.
 	CodeRequestInvalid int32 = 560114
+	// CodeNotResolvable and CodeAdminNoteRequired belong to the operator
+	// surface in admin.go (RR-20261001-06). They are separate codes because
+	// they are separate answers: "this slot is not in a state a human may
+	// release" and "you did not say why".
+	CodeNotResolvable     int32 = 560115
+	CodeAdminNoteRequired int32 = 560116
 )
 
 var (
@@ -98,6 +104,13 @@ var (
 	// generated transport returns it for a frame it cannot read, which is the
 	// one refusal the transport itself has to be able to make.
 	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "account: request is invalid", "")
+	// ErrNotResolvable reports that a role slot is not in a state an operator
+	// may release: there is no pending plan, the plan already published its
+	// role, the slot predates creation identities, or the plan still holds
+	// its own name and can complete by an ordinary same-name CreateRole.
+	ErrNotResolvable = errcode.Define(CodeNotResolvable, "account: slot is not in a resolvable state", "")
+	// ErrAdminNoteRequired reports a missing or oversized operator note.
+	ErrAdminNoteRequired = errcode.Define(CodeAdminNoteRequired, "account: an operator note is required", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -199,6 +212,12 @@ type Account struct {
 	Banned          bool  `json:"banned"`
 	CreatedAtUnix   int64 `json:"created_at_unix"`
 	LastLoginAtUnix int64 `json:"last_login_at_unix"`
+	// AdminNote and AdminActionAtUnix record the last operator intervention
+	// on this account (Admin.ResolvePendingCreation). They live here rather
+	// than on the slot because the intervention removes the slot; the account
+	// is the record that remains for the next reader.
+	AdminNote         string `json:"admin_note,omitempty"`
+	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
 }
 
 // ServerStatus says whether a server accepts new roles.
@@ -279,6 +298,12 @@ type Slot struct {
 	PlayerID int64 `json:"player_id,omitempty"`
 	// Creation is retained until publication and identifies retries after an
 	// uncertain write. A legacy empty slot cannot be safely inferred from it.
+	//
+	// A pending plan leaves the slot by one of three doors, all identity- and
+	// version-fenced deletes: a definite pre-admission refusal (name taken,
+	// foreign allocator id), a same-name retry that finds the name COMMITTED
+	// to another owner (the plan can never commit it, RR-20261001-06), or an
+	// operator's Admin.ResolvePendingCreation.
 	Creation RoleCreation `json:"creation,omitempty"`
 }
 

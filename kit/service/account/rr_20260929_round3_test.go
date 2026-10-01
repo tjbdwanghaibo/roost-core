@@ -347,7 +347,12 @@ func TestAccountRequiresIdentityCheckedSlotCleanup(t *testing.T) {
 	}
 }
 
-func TestPendingRoleNameConflictRetainsRecoveryProof(t *testing.T) {
+// RR-20261001-06 changed this contract: a name COMMITTED to another owner
+// releases the pending slot (the plan can never commit it), while the orphan
+// role the lost reply created stays unplayable. A name merely RESERVED by
+// someone else still retains the proof — see
+// TestNameReservedElsewhereKeepsThePendingSlot.
+func TestPendingRoleNameConflictReleasesSlotButNotTheOrphanRole(t *testing.T) {
 	var roles *review3LostRole
 	s, clock, cfg := newService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
 	ctx := context.Background()
@@ -367,11 +372,15 @@ func TestPendingRoleNameConflictRetainsRecoveryProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	slot, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1))
-	if err != nil || !found || !slot.Value.Creation.Admitted {
-		t.Fatal(slot, found, err)
+	if err != nil || found {
+		t.Fatalf("slot retained after its name was committed elsewhere: %+v found=%v err=%v", slot, found, err)
 	}
 	if _, err = s.SelectRole(ctx, a.ID, roles.first); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflicted pending role became playable: %v", err)
+	}
+	orphan, found, err := cfg.Roles.Get(ctx, roles.first)
+	if err != nil || !found || orphan.Value.Name != "Hero" {
+		t.Fatalf("orphan role record was deleted or changed: %+v found=%v err=%v", orphan, found, err)
 	}
 }
 

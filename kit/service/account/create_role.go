@@ -80,7 +80,19 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	if err != nil {
 		if errors.Is(err, directory.ErrKeyTaken) {
 			s.report.Refused("create_role", "name_taken")
-			cleanup := s.releaseCreationSlot(ctx, key, slot, false)
+			// An admitted plan whose lapsed reservation was merely RE-RESERVED
+			// by someone else keeps its slot: that reservation can expire and
+			// the plan can still complete. A name COMMITTED to another owner
+			// is final for this plan — Commit needs the token the entry now
+			// carries, and a committed entry leaves only by its owner's
+			// Release, which nothing here calls — so the plan can never
+			// publish, and holding the slot would block this account on this
+			// server for good (RR-20261001-06).
+			dead, lookupErr := s.nameCommittedElsewhere(ctx, plan.Name, owner)
+			cleanup := errors.Join(lookupErr, s.releaseCreationSlot(ctx, key, slot, dead))
+			if dead && cleanup == nil {
+				s.report.Dropped("create_role.plan_released", 1)
+			}
 			return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), cleanup)
 		}
 		return Role{}, err
@@ -175,20 +187,32 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	return role.clone(), nil
 }
 
-// releaseCreationSlot only compensates a definite pre-role refusal or a
-// foreign allocator ID. Ordinary/unknown storage failures never enter here.
-func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot versionstore.Versioned[Slot], foreignID bool) error {
+// releaseCreationSlot only compensates a definite pre-role refusal, or a plan
+// that is provably dead — a foreign allocator ID, or a name committed to
+// another owner — in which case admission no longer protects the slot.
+// Ordinary/unknown storage failures never enter here.
+func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot versionstore.Versioned[Slot], planDead bool) error {
 	deleter, ok := s.cfg.Slots.(versionstore.ConditionalDeleter[string, Slot])
 	if !ok {
 		return fmt.Errorf("account: slot store must support atomic identity-checked DeleteIf")
 	}
 	err := deleter.DeleteIf(ctx, key, slot, func(current Slot) bool {
-		return current.PlayerID == 0 && current.Creation.ID == slot.Value.Creation.ID && (foreignID || !current.Creation.Admitted)
+		return current.PlayerID == 0 && current.Creation.ID == slot.Value.Creation.ID && (planDead || !current.Creation.Admitted)
 	})
 	if errors.Is(err, versionstore.ErrVersionMismatch) {
 		return nil
 	}
 	return err
+}
+
+// nameCommittedElsewhere reports whether name is permanently held by an owner
+// other than ours. A reservation, ours or anyone's, is not that: it lapses.
+func (s *Service) nameCommittedElsewhere(ctx context.Context, name string, owner directory.Owner) (bool, error) {
+	entry, found, err := s.cfg.Names.Lookup(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return found && entry.State == directory.StateCommitted && entry.Owner != owner, nil
 }
 
 // Pending roles are not playable. Legacy published roles have no CreationID.

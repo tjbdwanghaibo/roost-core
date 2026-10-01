@@ -600,7 +600,7 @@ roost-service/
     而且同样是包装器这个改动引起的。**给一个包写的性质测试,要么覆盖全部,要么它保护
     的就只是那一个包。**
 
-15. **运维面 `admin.go`**。✅ 已完成，三个服务。
+15. **运维面 `admin.go`**。✅ 已完成，三个服务；10-01 account 补了第四个（RR-20261001-06）。
 
     规划时列了五条死路，逐条核实后**只有三条成立**，另两条我说错了：
 
@@ -610,6 +610,7 @@ roost-service/
     | `global/activity` | dispatch 耗尽 = 某个 game 服永远收不到活动结果 | `ReopenDispatch` |
     | owner-only，为 participant 的每个 pending 证明补 ledger mark 后释放名额，写 `admin_note`（RR-20261001-05） |
     | `session` | Releaser 永远不可能成功的资源 | `ForceRelease` |
+    | `account` | 建角计划的名字被别的账号 committed = 该账号在该区服永远建不了角色（committed 由同名重试自动释放；只被 reserved、或玩家要放弃仍可完成的计划时走这里） | `ResolvePendingCreation`（owner-only，备注写 `Account.admin_note`，RR-20261001-06） |
 
     - `global` 卡在 migrating：**不是死路**。`AbortMigration` 就能救回（状态必须是
       `RouteMigrating`、epoch 从 `Resolve` 拿），而且它本来就在跨进程接口上。
