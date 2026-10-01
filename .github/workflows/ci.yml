@@ -107,6 +107,7 @@ jobs:
       ROOST_REVIEW_REDIS: 127.0.0.1:6379
       ROOST_REVIEW3_BACKEND: redis
       ROOST_REVIEW4_BACKEND: redis
+      ROOST_BUGFIX5_BACKEND: redis
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -123,7 +124,7 @@ jobs:
         run: jq -r 'select(.Action=="output") | .Output' test.json | grep -vE '^(=== RUN|--- PASS|PASS|ok )' | tail -200
       - name: no Redis test was skipped
         run: |
-          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR|ROOST_REVIEW_REDIS|ROOST_REDIS_TEST_ADDR|ROOST_REVIEW[0-9]*_BACKEND"))) | .Package + " " + .Test' test.json | sort -u)
+          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR|ROOST_REVIEW_REDIS|ROOST_REDIS_TEST_ADDR|ROOST_[A-Z0-9]*_BACKEND"))) | .Package + " " + .Test' test.json | sort -u)
           if [ -n "$skipped" ]; then
             echo "these tests skipped because a Redis gate variable was unset — the job must run them:"
             echo "$skipped"

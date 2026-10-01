@@ -163,10 +163,10 @@ func TestCIRedisJobRunsEveryRedisIntegrationSuite(t *testing.T) {
 }
 
 // RR-20261001-01：service 测试把 Redis 变体挂在哪个环境变量上是各轮审查自己定的
-// （REDIS_ADDR、ROOST_REVIEW_REDIS、ROOST_REDIS_TEST_ADDR、ROOST_REVIEW3_BACKEND…），
+// （REDIS_ADDR、ROOST_REVIEW_REDIS、ROOST_REDIS_TEST_ADDR、ROOST_REVIEW3_BACKEND、ROOST_BUGFIX5_BACKEND…），
 // 没设的变量让用例静默 SKIP 或落回 Memory 替身，Redis job 看起来绿、其实没跑。
 // 这条测试把测试文件里 os.Getenv 到的每个 Redis 门变量钉到 ci.yml Redis job 的 env 上。
-var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z0-9_]*)|(?:ROOST_REVIEW[0-9]*_BACKEND))"\)`)
+var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z0-9_]*)|(?:ROOST_[A-Z0-9]*_BACKEND))"\)`)
 
 func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 	wanted := map[string][]string{}

@@ -4,6 +4,7 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20261001-08](RR-20261001-08.md)：chat `pageOf` 去掉“到达 ring 头部且头部序号 > 1”这条洞判定，普通容量淘汰后的无游标最新页 / 翻到保留边缘 `Gap=false`、不计 `history.gap`；Gap 只剩页内洞、游标点名消息已不在、尾部缺失三种；Memory + 真实 Redis 先红后绿（未发版）。
 [RR-20261001-07](RR-20261001-07.md)：game-demo `PlayerOwners.Claim` 扔副本失败后 `abandon` 本地租约状态——刷新循环不再续、`confirmRenewal` 不再清 `interrupted`、`Admit` 持续拒绝，租约自然过期，恢复点是之后的 `Claim` 等清除完成；模板回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
 [RR-20261001-05](RR-20261001-05.md)：activity `applyProgress` 把 ledger 条目已过期的 pending 证明回收（条目消失即越过 ReservationTTL 重试地平线）；满窗改报 `ErrProgressBacklog`（620119）不再是 `ErrConflict`；新 owner-only `Admin.ReconcileProgress` 补 ledger mark 后释放证明；Memory + 真实 Redis 真等 TTL 先红后绿；T-180（未发版）。
 [RR-20261001-04](RR-20261001-04.md)：v1 manifest 遇未认领 JSON 的错误文本写明两条恢复路径（旧生成物删除；手写 JSON 移出 → 生成升 v2 → 移回）并指向 `CODEGEN_REFERENCE.zh-CN.md` §9.1（新增 manifest / 退役 / v1 升级一节）；失败设计不变（未发版）。
