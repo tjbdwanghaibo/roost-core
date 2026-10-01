@@ -608,6 +608,7 @@ roost-service/
     | --- | --- | --- |
     | `platform` | 订单尝试耗尽 = 玩家付了钱、货永远不发 | `ReopenDelivery` / `SettleOutOfBand` |
     | `global/activity` | dispatch 耗尽 = 某个 game 服永远收不到活动结果 | `ReopenDispatch` |
+    | owner-only，为 participant 的每个 pending 证明补 ledger mark 后释放名额，写 `admin_note`（RR-20261001-05） |
     | `session` | Releaser 永远不可能成功的资源 | `ForceRelease` |
 
     - `global` 卡在 migrating：**不是死路**。`AbortMigration` 就能救回（状态必须是

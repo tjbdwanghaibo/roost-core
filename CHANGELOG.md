@@ -8,6 +8,7 @@
 
 ### Changed（行为收紧 / API 变化）
 
+- **activity 参与者不再因过期的 pending 证明永久被拒**（RR-20261001-05，P2，复审 B 线发现）：`applyProgress` 把 ledger 条目已被 `reservation_ttl` 删除的 pending 证明回收（条目消失即越过客户端重试地平线，ledger 本就把之后的重放当新请求），指标 `apply_progress.proof_expired`；pending 满 32 改报 `activity.ErrProgressBacklog`（新码 620119）而不是 `versionstore.ErrConflict`，调用方可区分背压与 CAS 争用。新增 owner-only `activity.Admin.ReconcileProgress(key, participantID, note)`，把每个 pending 证明缺的 ledger mark 补上再释放（补后同 requestID 重放是 no-op），`Participant` 新增 `admin_note` / `admin_action_at_unix`；`activity.Admin` 接口多一方法（仓外自实现需补）。[记录](docs/bugfix/RR-20261001-05.md)、T-180
 - **Go API 签名变化（源码不兼容）**：`entity.IThreadSafeRemoteEntity.SetEntityVersion(int64)` → `SetEntityVersion(int64) error`（RR-20260930-13，N26）。同一 fence 下写更小的 StateVersion 现在返回 `ErrRemoteVersionConflict` 且不写入；生成实体经嵌入 `RemoteEntityBase` 获得该方法、不受影响，仓外自行实现该接口的类型需改签名。[记录](docs/bugfix/RR-20260930-13.md)
 - **fence 之后拒绝 Durability 0 的 Remote 直写（RR-20260930-12，P2，N21）**：带 Remote 批次、没有 effect 的 memory handler 在引擎 fence 后回复 `nest.ErrNestFenced` + `ErrCommitRejected`（判别表第 12 行）、Remote 批次 Abort，权威不再被写；此前成功并写权威。[记录](docs/bugfix/RR-20260930-12.md)
 - **广播每个目标自己的锁作用域（RR-20260930-14，N28）**：`broadcastDispatch` 在目标结束时释放它取得的全部锁（含 Destroy 后同 ID 重建的实例、Cast 取得的实体）与 Sync post-release 回调，不再跨后续目标持有。每目标多一次 Guard 池取还，未做基准。[记录](docs/bugfix/RR-20260930-14.md)
