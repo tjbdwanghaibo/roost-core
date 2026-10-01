@@ -285,6 +285,14 @@ type leaseState struct {
 // owns the player right now.
 var ErrLeaseNotHeld = errors.New("player owners: this process does not hold a confirmed lease on the player")
 
+// errStaleCopyKept is Claim's answer when the lease IS ours in Redis but the
+// copy from before the gap could not be dropped in budget, so the player was
+// not taken into service. The refresh loop tells it apart from a re-claim
+// Redis did not answer: in this ending the drop has already started and its
+// first step is to leave the scene, so the player's connections cannot stay
+// (RR-20260930-23); in the other nothing has happened to the player yet.
+var errStaleCopyKept = errors.New("the stale copy could not be dropped")
+
 // AdmissionGuard is how much of the lease is reserved for work already in
 // flight. A transaction admitted at the last confirmed moment must finish
 // before the lease can lapse, so admission stops this long before the
@@ -504,13 +512,42 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 			owners.interrupt(result.PlayerID)
 			mine, err := owners.Claim(ctx, result.PlayerID)
 			switch {
+			case errors.Is(err, errStaleCopyKept):
+				// The lease is ours in Redis again, but the copy could not be
+				// dropped in budget and the lease is not confirmed: nothing
+				// is admitted. The drop is still running (or failed), and
+				// its first step is to leave the scene — so a player who is
+				// connected here is, or is about to be, out of the scene on
+				// an open connection with every write refused. That is the
+				// same silence as below, so the connections end the same
+				// way; the login they come back with waits for the drop and
+				// is refused if it still cannot be shown (RR-20260930-23).
+				closed := owners.closeSessions(result.PlayerID, "the lease lapsed and the copy from before the gap could not be dropped; log in again")
+				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err, "sessions_closed", closed)
 			case err != nil:
+				// Redis did not answer the re-claim. Nothing was dropped and
+				// the player is still in the scene; admission runs out on
+				// its own and the next pass asks again.
 				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err)
 			case mine:
 				// Claim dropped the copy from before the gap on the way
 				// through, so this process resumes on a reload rather than on
 				// whatever it still had in memory.
-				slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", result.PlayerID)
+				//
+				// The copy took the player's scene membership with it (the
+				// evictor leaves the scene before it destroys) — but not
+				// their connections. Before this, a session that lived
+				// through the gap stayed open and bound to nothing: no frame
+				// reached it and nobody saw the player again until the
+				// client happened to log in again; the reload hook could not
+				// help, this is a destroy and not a reload (RR-20260930-23).
+				// So the connections go the way a fence sends them: closed,
+				// and the client reconnects into an ordinary login, which
+				// lands back here because the lease is ours again. Closed
+				// AFTER the claim, so a reconnect that is quick finds the
+				// lease confirmed and the copy already gone.
+				closed := owners.closeSessions(result.PlayerID, "the lease lapsed and was retaken; log in again")
+				slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", result.PlayerID, "sessions_closed", closed)
 			default:
 				owners.fence(result.PlayerID, "another process holds the lease now")
 			}
@@ -660,6 +697,24 @@ func (owners *PlayerOwners) interrupt(playerID int64) {
 	if state := owners.local[playerID]; state != nil {
 		state.interrupted = true
 	}
+}
+
+// closeSessions ends the player's connections on this process, if the
+// transport is installed, and reports how many it closed. The reason reaches
+// the session-close path as the error the sessions were closed with.
+//
+// It is for the refresh loop only. A login-time Claim crosses the same gap
+// (this process had nothing of the player before it) and drops the copy the
+// same way, but the connection that is logging in is the one just
+// registered — closing there would close the login itself (RR-20260930-23).
+func (owners *PlayerOwners) closeSessions(playerID int64, reason string) int {
+	owners.mu.Lock()
+	fencer := owners.fencer
+	owners.mu.Unlock()
+	if fencer == nil {
+		return 0
+	}
+	return fencer.CloseSessions(playerID, fmt.Errorf("player owners: %s", reason))
 }
 
 // fence stops this process from serving a player it can no longer prove it
@@ -816,7 +871,7 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 			// same ending as a process that died holding it.
 			slog.Error("player owners: claimed a player whose stale copy could not be dropped; leaving the lease to lapse",
 				"player_id", playerID, "err", err)
-			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w", playerID, err)
+			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w: %w", playerID, errStaleCopyKept, err)
 		}
 	}
 	owners.confirmClaim(playerID)

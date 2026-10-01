@@ -84,8 +84,9 @@ type fakeFencer struct {
 
 func (f *fakeFencer) CloseSessions(playerID int64, _ error) int {
 	f.closed = append(f.closed, playerID)
+	closed := f.online[playerID]
 	delete(f.online, playerID)
-	return 1
+	return closed
 }
 
 func (f *fakeFencer) ActiveSessions(playerID int64) int { return f.online[playerID] }
@@ -231,10 +232,14 @@ func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
 	}
 }
 
-// 租约只是"没了"（我们的续租断过一段），而没有别人接手：重新取回来，不要把玩家踢掉。
+// 租约只是"没了"（我们的续租断过一段），而没有别人接手：重新取回来，不要把租约丢掉。
 // SetNX 是原子的，所以"没人拿着"这个判断和取回是同一件事。
+//
+// 取回和围栏的区别在租约的归属，不在连接：取回之后租约仍是这个进程的，重连落回这里；
+// 围栏之后租约是别人的、本地也不再持有。连接在两条路上都会关——跨过间断的副本已经
+// 扔掉，连着的会话没有场景可待（RR-20260930-23，见下面的用例）。
 func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
-	owners, table, fencer, _ := ownersUnderTest(t)
+	owners, table, _, _ := ownersUnderTest(t)
 	// Retaking means dropping the copy from before the gap, so a table that
 	// can retake is a table that can forget (RR-20260920-09). This used to
 	// pass without an evictor, which was the defect: the retake was treated
@@ -251,11 +256,92 @@ func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
 	if err := owners.Admit(42); err != nil {
 		t.Fatalf("a lease that merely lapsed was not retaken: %v", err)
 	}
-	if len(fencer.closed) != 0 {
-		t.Fatalf("the player was disconnected although nobody else had taken them: %v", fencer.closed)
+	if table.owner[42] != 1000 {
+		t.Fatalf("the table does not show this process as the owner: %v", table.owner)
+	}
+	if len(table.released) != 0 {
+		t.Fatalf("a lease nobody else had taken was given up instead of retaken: released=%v", table.released)
+	}
+}
+
+// RR-20260930-23：续租中断、租约重新取回之后，还连着的玩家不能"连接活着却脱离场景"。
+//
+// Claim 跨过间断时把常驻副本整个扔掉（RR-20260920-09），玩家在场景里的成员身份跟着
+// 副本一起没了——可他的连接还在：此后他收不到任何帧、别人也看不到他，直到他自己
+// 重新登录（真实环境里 SIGSTOP 40s 之后仍连着的观察者就是这样）。重载钩子
+// （RR-20260927-23 的 OnEntityLoaded → Rebind）救不了他：这里是 Destroy，不是重载。
+// 所以取回租约之后要像围栏那样关掉这个玩家的连接，让客户端重连、走正常登录重新
+// 加载并进场；租约仍是这个进程的，重连就落回这里。
+func TestARetakenLeaseClosesTheSessionsThatLivedThroughTheGap(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// Logged in here, and still connected when the renewals lapse.
+	fencer.connect(42)
+	evictor.forget()
+
+	// The key vanished — our renewals lapsed — and nobody took the player.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if dropped := evictor.taken(); len(dropped) != 1 || dropped[0] != 42 {
+		t.Fatalf("the copy from before the gap was kept: dropped=%v", dropped)
+	}
+	if len(fencer.closed) != 1 || fencer.closed[0] != 42 {
+		t.Fatalf("the player's connection outlived the copy it was bound to: the stale copy was dropped, but the session stayed open and detached from the scene; closed=%v", fencer.closed)
+	}
+	// And the lease is still ours: the reconnect lands back here and goes
+	// through an ordinary login, not a fence.
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("the retaken lease is not in service: %v", err)
 	}
 	if table.owner[42] != 1000 {
 		t.Fatalf("the table does not show this process as the owner: %v", table.owner)
+	}
+}
+
+// 同一条路径的另一个结局：租约在 Redis 里取回来了，副本却没能在预算内扔掉。扔副本
+// 的第一步就是离开场景，所以这个玩家的场景成员身份已经（或马上要）没了，而租约没有
+// 确认、每条写都被拒——连接留着同样是"活着却脱离场景"。连接照样关掉；重连的登录
+// 会等那次还在进行的清除，等不到就被拒绝，客户端得到明确的答复而不是沉默。
+func TestARetakeWhoseCopyCannotBeDroppedStillClosesTheSessions(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	owners.Evict(&evictorStub{})
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	fencer.connect(42)
+	// From here on the entity is busy and the drop runs out of budget.
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if len(fencer.closed) != 1 || fencer.closed[0] != 42 {
+		t.Fatalf("the player stayed connected to a copy this process could neither drop nor serve: closed=%v", fencer.closed)
+	}
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("writes are admitted for a player whose stale copy is still resident: %v", err)
+	}
+}
+
+// 关连接只属于刷新循环里的取回。登录路径的 Claim 同样跨间断（这个进程之前没有他），
+// 但正在登录的那条连接就是刚登记的会话——在那里关会把登录本身关掉。
+func TestAClaimAtLoginDoesNotCloseTheConnectionThatIsLoggingIn(t *testing.T) {
+	owners, _, fencer, _ := ownersUnderTest(t)
+	owners.Evict(&evictorStub{})
+	// The login's own connection is registered before enter_game runs.
+	fencer.connect(42)
+	if mine, err := owners.Claim(context.Background(), 42); err != nil || !mine {
+		t.Fatalf("claim = %v, %v", mine, err)
+	}
+	if len(fencer.closed) != 0 {
+		t.Fatalf("a login-time claim closed the connection that was logging in: %v", fencer.closed)
 	}
 }
 
