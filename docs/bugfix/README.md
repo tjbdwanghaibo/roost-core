@@ -4,6 +4,8 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20261001-04](RR-20261001-04.md)：v1 manifest 遇未认领 JSON 的错误文本写明两条恢复路径（旧生成物删除；手写 JSON 移出 → 生成升 v2 → 移回）并指向 `CODEGEN_REFERENCE.zh-CN.md` §9.1（新增 manifest / 退役 / v1 升级一节）；失败设计不变（未发版）。
+[RR-20261001-03](RR-20261001-03.md)：`roost generate` config-data 在 `configs/table` 没有 CSV 时只有 manifest `tables` 非空才跑 tablegen（新增 `tablegen.ManifestOwnsJSON`），schema 已写、CSV 未写的工程恢复 v1.17.2 的通过；RR-09 退役回归不变（未发版）。
 [RR-20261001-02](RR-20261001-02.md)：`sameSendIntent` 去掉 `reflect.DeepEqual` 改逐字段比较（切片 `slices.Equal` / `bytes.Equal`，nil 与空等价），自定义 EnvelopeStore 还原空切片时 RR-20260929-16 的同 RequestID 恢复不再永久 `ErrConflict`；替换正文 / 期限 / 收件人仍拒绝（未发版）。
 [RR-20261001-01](RR-20261001-01.md)：Redis job `env:` 补四个门变量、守卫正则扩展；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 把测试文件里 `os.Getenv` 的 Redis 门变量钉到 ci.yml（未发版）。
 [RR-20260930-24](RR-20260930-24.md)：game-demo 活动租约续租失败按 `errors.Is` 分类——过期 / 不持有立刻 `AcquireLease`，拿不到进 standby 每心跳重试，瞬时错误下周期再续，日志只在状态变化时打（未发版）。
