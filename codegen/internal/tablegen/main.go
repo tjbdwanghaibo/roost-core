@@ -396,7 +396,10 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 			if entry.IsDir() || name == "_manifest.json" || !strings.HasSuffix(name, ".json") || manifest.Tables[name] != "" {
 				continue
 			}
-			return fmt.Errorf("untracked table JSON %s from legacy manifest: remove or migrate it explicitly", filepath.Join(jsonDir, name))
+			// There is no migrate command: the owner decides. Say so here
+			// because this is the only place a v1 project learns about it
+			// (RR-20261001-04).
+			return fmt.Errorf("untracked table JSON %s from legacy manifest (v1 recorded no ownership): delete it if an earlier generation produced it; if it is hand-maintained, move it out of %s, run generate once to upgrade _manifest.json to v2, then move it back (codegen/docs/CODEGEN_REFERENCE.zh-CN.md §9)", filepath.Join(jsonDir, name), jsonDir)
 		}
 	}
 	if previous.Version != 0 && previous.Version != 1 && previous.Version != 2 {
