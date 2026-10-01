@@ -183,6 +183,8 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
+    收件人查的是 Player DAO 自己的库和集合（`db.PlayerDaoDBName` / `db.PlayerDaoCollection`，即 DAO 标记的 `db=game`），不是 `dataengine.database`——
+    后者只给原生步骤的 inbox 用（RR-20260930-22 之前两处只在默认 `game` 时碰巧一致）。
     所以留在 `saga.SubscribeMongoStep`：Mongo inbox 先占命令 id，第二层幂等是 mail 服务自己的（Send 按 RequestID 去重，
     而 RequestID 就是命令的 IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
   - 这条分界是规则不是权宜：原生路径给"业务本来就经 Nest 提交"的步骤用；拿它去包一次跨服务调用，等于把回执绑在一个
@@ -509,7 +511,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222 -nats-prefix
 
 `dataengine.effects.max_bytes` 要调小是因为隔离集群只预留了 1GB 存储，默认 8GB 会报 `insufficient storage`。
 
-看四处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
+看四处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`；送礼 deliver 的收件人检查也读这里，所以改 `dataengine.database` 不影响赠礼，RR-20260930-22）；重启 game 再跑一轮，items 与 level 在原值上累加；
 mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长；
 chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello。
 

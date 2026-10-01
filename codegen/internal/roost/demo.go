@@ -605,6 +605,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/playerowner_test.go", why: "租约丢了要停服务：失去时围栏、不确定时让准入自然走到头、未经确认的 sid 不算所有权"},
 		{write: "internal/service/game/gift_handoff_test.go", why: "the handoff decisions: admit the owner's own step, refuse and forward a foreign one, never claim an idle player to have somewhere to send it"},
 		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里"},
+		{write: "internal/service/game/gift_recipient_test.go", why: "RR-20260930-22：收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
 		{write: "internal/service/game/presence.go", why: "the other half of RR-20260918-06: chat presence follows the same session-close source the scene does"},
 		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
