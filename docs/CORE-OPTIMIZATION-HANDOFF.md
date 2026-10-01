@@ -350,7 +350,7 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
 | [RR-20261001-06](bug/RR-20261001-06.md) | P2 account pending slot 无释放入口（W-01 拍板） | 未修复 |
-| [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | 未修复 |
+| [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | [修复](bugfix/RR-20261001-07.md)（未发布；已生成工程手工合并） |
 | [RR-20261001-08](bug/RR-20261001-08.md) | P3 chat 最新页 `Gap=true` 误报（W-03 拍板） | 未修复 |
 | [RR-20261001-09](bug/RR-20261001-09.md) | P3 activity legacy Opening / 坏 Intent（W-04 拍板） | 未修复 |
 | [RR-20261001-05](bug/RR-20261001-05.md) | P2 activity pending 名额在 ledger TTL 后永不回收（复审 B 线） | [修复](bugfix/RR-20261001-05.md)（未发布；新码 620119、`Admin.ReconcileProgress`、T-180） |

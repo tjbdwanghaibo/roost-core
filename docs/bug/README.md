@@ -20,7 +20,7 @@
 
 [RR-20261001-09](RR-20261001-09.md)：P3 activity 无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让整组 `AdvanceExpired` 每 tick 失败（W-2026-10-01-04 拍板）（已确认，未修复）。
 [RR-20261001-08](RR-20261001-08.md)：P3 chat 无游标最新页在正常容量淘汰后也报 `Gap=true` 并每次打指标（W-2026-10-01-03 拍板）（已确认，未修复）。
-[RR-20261001-07](RR-20261001-07.md)：P3 game-demo `Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 清掉 `interrupted`、stale 副本又被 `Admit` 放行（W-2026-10-01-02 拍板）（已确认，未修复）。
+[RR-20261001-07](RR-20261001-07.md)：P3 game-demo `Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 清掉 `interrupted`、stale 副本又被 `Admit` 放行（W-2026-10-01-02 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-07.md)）。
 [RR-20261001-06](RR-20261001-06.md)：**P2** account 建角 pending slot 没有 owner-only 释放入口，名字被他人拿走后该账号在该区服永久建不了角色（W-2026-10-01-01 拍板）（已确认，未修复）。
 [RR-20261001-05](RR-20261001-05.md)：**P2** activity `applyProgress` 在 ledger 条目被 TTL 删除后永不回收 `PendingRequestIDs`，32 个孤儿后该参与者每个新请求永久 `ErrConflict`，无对账入口（B 线 service 修复复审，RR-20260929-02 修法引入）（已修复，未发版；[修复记录](../bugfix/RR-20261001-05.md)，T-180）。
 [RR-20261001-04](RR-20261001-04.md)：P3 v1 manifest 工程有手写 JSON 时生成链路失败于 `untracked table JSON … migrate it explicitly`，无文档无命令说明迁移（B 线 codegen 修复复审 D2）（已修复：错误文本给出恢复步骤 + 参考文档 §9.1，未发版；[修复记录](../bugfix/RR-20261001-04.md)）。
