@@ -348,6 +348,7 @@ bash scripts/test-remote-matrix.sh
 | [RR-20260930-13](bug/RR-20260930-13.md) | P3 `SetEntityVersion` 同 fence 可回退 StateVersion（N26） | [修复](bugfix/RR-20260930-13.md)（未发布；接口签名改为返回 error） |
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
+| [RR-20261001-01](bug/RR-20261001-01.md) | P2 ci Redis job 漏设四个门变量，service Redis 变体静默不跑 | [修复](bugfix/RR-20261001-01.md)（未发布） |
 | [RR-20260930-22](bug/RR-20260930-22.md) | P2 game-demo gift 收件人检查读错库（B27 第 3 批暴露） | 未修复 |
 | [RR-20260930-23](bug/RR-20260930-23.md) | P2 续租中断重取后在线玩家被 Destroy、脱离场景（B27 第 3 批暴露） | 未修复 |
 | [RR-20260930-24](bug/RR-20260930-24.md) | P3 活动租约丢失后永不重取（B27 第 3 批暴露） | 未修复 |

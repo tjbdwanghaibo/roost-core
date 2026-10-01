@@ -100,6 +100,13 @@ jobs:
           --health-retries 15
     env:
       REDIS_ADDR: 127.0.0.1:6379
+      # RR-20261001-01：09-29 的 service 修复把 Redis 变体挂在另外四个变量上；只设
+      # REDIS_ADDR 时它们静默 SKIP 或落回 Memory 替身，这个 job 等于没跑它们。
+      # integration_coverage_promises_test.go 把这组名字钉在测试文件里的 os.Getenv 上。
+      ROOST_REDIS_TEST_ADDR: 127.0.0.1:6379
+      ROOST_REVIEW_REDIS: 127.0.0.1:6379
+      ROOST_REVIEW3_BACKEND: redis
+      ROOST_REVIEW4_BACKEND: redis
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -116,9 +123,9 @@ jobs:
         run: jq -r 'select(.Action=="output") | .Output' test.json | grep -vE '^(=== RUN|--- PASS|PASS|ok )' | tail -200
       - name: no Redis test was skipped
         run: |
-          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR"))) | .Package + " " + .Test' test.json | sort -u)
+          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR|ROOST_REVIEW_REDIS|ROOST_REDIS_TEST_ADDR|ROOST_REVIEW[0-9]*_BACKEND"))) | .Package + " " + .Test' test.json | sort -u)
           if [ -n "$skipped" ]; then
-            echo "these tests skipped because REDIS_ADDR was unset — the job must run them:"
+            echo "these tests skipped because a Redis gate variable was unset — the job must run them:"
             echo "$skipped"
             exit 1
           fi

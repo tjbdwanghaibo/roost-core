@@ -18,6 +18,7 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20261001-01](RR-20261001-01.md)：**P2** ci.yml 的 Redis job 只设 `REDIS_ADDR`，09-29 service 修复的 Redis 变体（`ROOST_REVIEW_REDIS` / `ROOST_REDIS_TEST_ADDR` / `ROOST_REVIEW3_BACKEND` / `ROOST_REVIEW4_BACKEND`，9 个测试文件）静默 SKIP 或落回 Memory（B 线修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261001-01.md)）。
 [RR-20260930-24](RR-20260930-24.md)：P3 game-demo 活动租约丢失后永不重取，`activity: lease not renewed` 每 5s 一条直到停机（B27 第 3 批真实环境暴露）（**已确认，未修复**）。
 [RR-20260930-23](RR-20260930-23.md)：**P2** 进程续租中断后重取租约，仍连着的玩家被当作过期副本 Destroy，连接活着却脱离场景，Rebind 在此路径无效（B27 第 3 批真实环境暴露，RR-20260927-23 / RR-20260926-70 后续）（**已确认，未修复**）。
 [RR-20260930-22](RR-20260930-22.md)：**P2** game-demo gift 发放的收件人检查读 `dataengine.database`，而 Player DAO 固定 `db=game`；库名一改所有赠礼都被补偿（B27 第 3 批真实环境暴露）（**已确认，未修复**）。

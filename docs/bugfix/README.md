@@ -4,6 +4,7 @@
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。
 
+[RR-20261001-01](RR-20261001-01.md)：Redis job `env:` 补四个门变量、守卫正则扩展；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 把测试文件里 `os.Getenv` 的 Redis 门变量钉到 ci.yml（未发版）。
 [RR-20260930-21](RR-20260930-21.md)：释放 Redis 锁没有明确答复（错误用尽重试 / ctx 到期）后锁进入“持有状态未知”，下一次 `TryLock` 以 Redis 为准——租约仍是自己的就在同一条 Lua 里换新 token / 新 fence 重新取得，被别人持有走 NotAcquired；端到端用例去掉 Skip；T-178（未发版）。
 [RR-20260930-20](RR-20260930-20.md)：`dispatchLoadedEntities` 兜底释放在自己的 recover 边界里跑，hook panic 以 `errors.Join` 并进在途业务错误；`runNestLogic` / `dispatchNest` 的 recover 改并入不覆盖；已提交路径 `ErrAfterCommitFailed` 语义与文本不变；两条生成链路端到端用例去 Skip（未发版）。
 [RR-20260930-18](RR-20260930-18.md)：game-demo `Service.Shutdown(ctx)` 把 App 停机 ctx 传给 `Scene.Close`；回归模板 `service_shutdown_test.go`；已有工程需手改（demo 文件应用所有）（未发版）。

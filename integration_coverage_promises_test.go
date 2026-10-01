@@ -162,6 +162,52 @@ func TestCIRedisJobRunsEveryRedisIntegrationSuite(t *testing.T) {
 	}
 }
 
+// RR-20261001-01：service 测试把 Redis 变体挂在哪个环境变量上是各轮审查自己定的
+// （REDIS_ADDR、ROOST_REVIEW_REDIS、ROOST_REDIS_TEST_ADDR、ROOST_REVIEW3_BACKEND…），
+// 没设的变量让用例静默 SKIP 或落回 Memory 替身，Redis job 看起来绿、其实没跑。
+// 这条测试把测试文件里 os.Getenv 到的每个 Redis 门变量钉到 ci.yml Redis job 的 env 上。
+var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z0-9_]*)|(?:ROOST_REVIEW[0-9]*_BACKEND))"\)`)
+
+func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
+	wanted := map[string][]string{}
+	for _, root := range []string{filepath.Join("kit", "service"), "service"} {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return walkErr
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range redisGateVariable.FindAllStringSubmatch(string(raw), -1) {
+				name := m[1]
+				// A real Redis Cluster has its own manual runner (redis-cluster-suites.sh).
+				if name == "ROOST_REVIEW_CLUSTER" {
+					continue
+				}
+				wanted[name] = append(wanted[name], filepath.ToSlash(path))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(wanted) == 0 {
+		t.Fatal("no service test reads a Redis gate variable; the regexp or the layout changed")
+	}
+	raw, err := os.ReadFile(filepath.Join(".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := string(raw)
+	for name, files := range wanted {
+		if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(name) + `:\s*\S`).MatchString(ci) {
+			t.Errorf("ci.yml never sets %s, but %v gate their Redis variants on it (they skip or fall back to the in-memory store, and the job reports green for nothing)", name, files)
+		}
+	}
+}
+
 // The fault-matrix script runs `go test` from the module root and must name
 // exactly the full-environment suites:
 // every one of them (a missing package is a silently empty cell) and nothing
