@@ -291,6 +291,11 @@ var ErrLeaseNotHeld = errors.New("player owners: this process does not hold a co
 // Redis did not answer: in this ending the drop has already started and its
 // first step is to leave the scene, so the player's connections cannot stay
 // (RR-20260930-23); in the other nothing has happened to the player yet.
+//
+// A player in this ending is out of service entirely: this process forgets
+// its local lease state for them (see abandon), so the refresh loop does not
+// renew the lease and nothing confirms it — it lapses in Redis on its own.
+// Until a later Claim finds the drop finished, Admit keeps refusing.
 var errStaleCopyKept = errors.New("the stale copy could not be dropped")
 
 // AdmissionGuard is how much of the lease is reserved for work already in
@@ -515,7 +520,9 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 			case errors.Is(err, errStaleCopyKept):
 				// The lease is ours in Redis again, but the copy could not be
 				// dropped in budget and the lease is not confirmed: nothing
-				// is admitted. The drop is still running (or failed), and
+				// is admitted, and Claim has forgotten the player's local
+				// state, so the next pass does not renew the lease it just
+				// took (RR-20261001-07). The drop is still running (or failed), and
 				// its first step is to leave the scene — so a player who is
 				// connected here is, or is about to be, out of the scene on
 				// an open connection with every write refused. That is the
@@ -774,6 +781,20 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
 	state := owners.local[playerID]
+	if err := owners.refusalLocked(playerID, state); err != nil {
+		return err
+	}
+	// Admitting is using. This is what keeps a lease that is doing work from
+	// being handed back underneath it, and it is free: the lock is already
+	// held.
+	state.lastUsed = owners.now()
+	return nil
+}
+
+// refusalLocked is Admit's judgement without its side effect: why this
+// process may not start work on the player right now, or nil. The caller
+// holds mu; state is the player's entry in local and may be nil.
+func (owners *PlayerOwners) refusalLocked(playerID int64, state *leaseState) error {
 	if state == nil || state.lost {
 		return fmt.Errorf("%w: player %d", ErrLeaseNotHeld, playerID)
 	}
@@ -792,10 +813,6 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	if remaining := state.validUntil.Sub(owners.now()); remaining <= owners.guard {
 		return fmt.Errorf("%w: player %d, confirmed lease has %s left and admission needs %s", ErrLeaseNotHeld, playerID, remaining, owners.guard)
 	}
-	// Admitting is using. This is what keeps a lease that is doing work from
-	// being handed back underneath it, and it is free: the lock is already
-	// held.
-	state.lastUsed = owners.now()
 	return nil
 }
 
@@ -866,9 +883,21 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	if !continuous {
 		if err := owners.dropResident(ctx, playerID); err != nil {
 			// The lease is ours in Redis and this process still cannot use
-			// it. Not confirming is the whole answer: nothing is admitted,
-			// nothing refreshes it, and it lapses on its own — which is the
-			// same ending as a process that died holding it.
+			// it. Not confirming is half the answer: nothing is admitted.
+			// The other half is forgetting the lease state this process
+			// may still have for the player, so that nothing refreshes it
+			// and it lapses on its own — the same ending as a process that
+			// died holding it. "Not confirming" alone was not enough: a
+			// state left behind by the refresh loop (interrupted, then
+			// re-claimed here) stayed in the renewal set, the next pass
+			// was told Held — the re-claim had put our token back — and
+			// confirmRenewal cleared the interruption and extended the
+			// window, admitting writes to the very copy that could not be
+			// dropped (RR-20261001-07). The player comes back into service
+			// at exactly one point: a later Claim whose dropResident finds
+			// the drop finished (it joins the one in flight, or runs one
+			// that finds nothing resident) and confirms.
+			owners.abandon(playerID)
 			slog.Error("player owners: claimed a player whose stale copy could not be dropped; leaving the lease to lapse",
 				"player_id", playerID, "err", err)
 			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w: %w", playerID, errStaleCopyKept, err)
@@ -876,6 +905,26 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	}
 	owners.confirmClaim(playerID)
 	return mine, nil
+}
+
+// abandon forgets this process's lease state for a player whose claim could
+// not be taken into service, so that the refresh loop stops renewing a lease
+// nobody here may use. It leaves the state alone if, in the meantime, another
+// claim of the same player was confirmed — that claim waited for the same
+// drop and saw it finish, so its lease is in service and the copy is gone.
+//
+// The claim in Redis is not released: the drop that failed may still be
+// running, and until it finishes this process does hold a copy — one it
+// refuses to serve. Letting the lease lapse keeps the next owner out for as
+// long as a dead process would have.
+func (owners *PlayerOwners) abandon(playerID int64) {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.local[playerID]
+	if state == nil || owners.refusalLocked(playerID, state) == nil {
+		return
+	}
+	delete(owners.local, playerID)
 }
 
 // Release gives up a claim. The caller is stating that this process no longer

@@ -756,6 +756,81 @@ func TestAClaimWaitsAtMostTheBudgetForABusyEntity(t *testing.T) {
 	}
 }
 
+// RR-20261001-07：认领成功但副本扔不掉的玩家，下一次心跳的续租不能把他"续"回服务。
+//
+// 刷新循环取回租约、副本却没能在预算内扔掉之后，租约在 Redis 里是这个进程的，但没有
+// 确认：Admit 拒绝，连接已关（RR-20260930-23）。这时他的本地状态若还留在续期集合
+// 里，下一次心跳的 Refresh（用自己的 token 续）会被告知 Held，confirmRenewal 把
+// interrupted 清掉、把 validUntil 往后推——于是 Admit 对那份还没销毁的 stale 副本
+// 放行，RR-20260920-09 整个契约被续租绕过。承诺：没被取回服务的租约不续、不确认；
+// 恢复点只有一个——下一次 Claim 等到那次清除做完（或发现已无常驻副本）再确认。
+func TestAClaimWhoseCopyCannotBeDroppedIsNotRevivedByTheNextRenewal(t *testing.T) {
+	owners, table, fencer, clock := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	fencer.connect(42)
+	// From here on the entity is busy: the drop starts, and does not finish
+	// within the budget.
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+
+	// The key vanished — our renewals lapsed — and nobody took the player.
+	// The pass retakes the lease in Redis, cannot drop the copy, and leaves
+	// the player out of service.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+	if table.owner[42] != 1000 {
+		t.Fatalf("the re-claim did not happen at all: %v", table.owner)
+	}
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("writes are admitted right after a retake whose copy is still resident: %v", err)
+	}
+
+	// The next heartbeat. Redis still shows the lease as ours — the re-claim
+	// did happen — so a refresh that asks about this player is told Held.
+	var asked []int64
+	table.refresh = func(playerID int64) playerroute.RefreshResult {
+		asked = append(asked, playerID)
+		return playerroute.RefreshResult{PlayerID: playerID, Held: table.owner[playerID] == table.sid}
+	}
+	*clock = clock.Add(playerroute.RefreshInterval)
+	owners.renew(ctx)
+
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("the next renewal put the player back in service while the stale copy is still resident: %v", err)
+	}
+	for _, playerID := range asked {
+		if playerID == 42 {
+			t.Fatalf("the lease of a player this process is not serving was renewed: refreshed=%v", asked)
+		}
+	}
+	// And the local window was not extended: the lease is left to lapse,
+	// exactly as if the process had died holding it.
+	*clock = clock.Add(playerroute.Lease)
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("the lease was extended for a player this process is not serving: %v", err)
+	}
+
+	// Recovery: once the entity is free the drop completes, and the next
+	// login's Claim — which joins or re-runs the drop — is served by it.
+	close(evictor.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mine, err := owners.Claim(ctx, 42)
+		if mine && err == nil {
+			if err := owners.Admit(42); err != nil {
+				t.Fatalf("the player is not served after the drop finally completed: %v", err)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the player was never taken into service after the entity was released")
+}
+
 // A second caller joins the eviction already in flight instead of starting a
 // second one — which is also what keeps a claim from being confirmed while an
 // older drop of the same player is still running.
