@@ -805,7 +805,9 @@ type Window struct {
 	// confirmed (U-0191, RR-20260914-02). A sweep that finds no activity for
 	// one of these cannot tell "not created yet" from "never will be".
 	// After Config.OpeningGrace it helps the durable intent forward; it never
-	// frees a capacity slot on the strength of a timeout.
+	// frees a slot that holds a plan on the strength of a timeout. An entry
+	// with no plan (legacy, pre-plan build) has nothing to help and is
+	// reclaimed after the same grace (RR-20261001-09).
 	Opening []OpeningEntry `json:"opening,omitempty"`
 	// ScanAfter rotates bounded reads across legacy oversized windows.
 	// Persisted so rebuilding the service does not restart at the same prefix.
@@ -827,7 +829,10 @@ type OpeningEntry struct {
 	AdmittedAtUnix int64 `json:"admitted_at_unix"`
 	// Intent is the immutable creation plan. A timeout cannot revoke a
 	// possibly in-flight Create; the sweep helps this plan forward instead.
-	// Nil identifies a legacy admission requiring a same-key Open retry.
+	// Nil identifies a legacy admission: a same-key Open retry supplies a
+	// plan, and failing that the sweep reclaims the slot after
+	// Config.OpeningGrace (RR-20261001-09). A plan the sweep cannot execute
+	// is skipped and reported, never executed and never reclaimed.
 	Intent *Activity `json:"intent,omitempty"`
 }
 

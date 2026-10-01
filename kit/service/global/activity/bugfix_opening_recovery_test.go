@@ -264,6 +264,10 @@ func TestBugfix5OversizedLegacyWindowRotatesAcrossServiceRebuild(t *testing.T) {
 	}
 }
 
+// 2026-10-01 更正（RR-20261001-09）：这条原来钉的是"legacy 条目过 grace 不回收、
+// 等同 key Open 补计划"。那让升级前已孤儿化的条目永久占名额，而其 owner 按升级契约
+// 已排空、不会再有人确认它。现在：grace 内保留（同 key Open 仍能补计划），过 grace
+// 且活动不存在则回收；之后同 key Open 走正常准入。
 func TestBugfix5LegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim(t *testing.T) {
 	s, clock := bugfix5Activity(t, nil)
 	ctx := context.Background()
@@ -271,13 +275,20 @@ func TestBugfix5LegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim(t *testing.T) {
 	if _, _, err := s.cfg.Windows.Create(ctx, key.GroupID, Window{GroupID: key.GroupID, Opening: []OpeningEntry{{Key: key, AdmittedAtUnix: clock.Now().Unix()}}}); err != nil {
 		t.Fatal(err)
 	}
-	clock.advance(s.cfg.OpeningGrace + time.Second)
 	if _, err := s.AdvanceExpired(ctx, key.GroupID, 1); err != nil {
 		t.Fatal(err)
 	}
 	window, _, err := s.cfg.Windows.Get(ctx, key.GroupID)
 	if err != nil || window.Value.pending() != 1 {
-		t.Fatal(window, err)
+		t.Fatalf("a legacy entry inside its grace was reclaimed: %+v %v", window, err)
+	}
+	clock.advance(s.cfg.OpeningGrace + time.Second)
+	if _, err := s.AdvanceExpired(ctx, key.GroupID, 1); err != nil {
+		t.Fatal(err)
+	}
+	window, _, err = s.cfg.Windows.Get(ctx, key.GroupID)
+	if err != nil || window.Value.pending() != 0 {
+		t.Fatalf("a legacy entry past its grace still holds a slot: %+v %v", window, err)
 	}
 	if _, err := s.OpenActivity(ctx, key, []int32{1, 2}); err != nil {
 		t.Fatal(err)

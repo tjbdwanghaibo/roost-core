@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sort"
@@ -78,7 +79,9 @@ type Config struct {
 	// by OpenActivity, Activities.Create not yet observed — before a sweep
 	// helps its durable creation intent forward. A timeout cannot prove an
 	// in-flight Create will never commit, so it does not release the slot.
-	// Legacy entries without an intent require a same-key Open retry.
+	// A legacy entry without an intent (written by a build before the plan
+	// existed, whose openers were drained before upgrading) has nothing to
+	// help forward and is reclaimed after this grace instead (RR-20261001-09).
 	// Zero selects DefaultOpeningGrace.
 	OpeningGrace time.Duration
 
@@ -139,6 +142,13 @@ type Service struct {
 	// the same head (U-0192).
 	deliveryMu     sync.Mutex
 	deliveryCursor map[string]Key
+
+	// openingMu / malformedOpening remember which opening entries the sweep
+	// has already reported as unusable, so the report is written once when
+	// the problem appears and once when it is gone rather than every tick
+	// (RR-20261001-09). The Server is generated code and cannot carry this.
+	openingMu        sync.Mutex
+	malformedOpening map[Key]string
 
 	cfg    Config
 	report servicemetrics.Sink
@@ -784,9 +794,33 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		classify(key, current.Value)
 	}
 	// Help durable openings after grace; absence or a deadline cannot prove
-	// a slow Create is cancelled. Legacy entries without a plan stay visible
-	// until a same-key Open retry supplies the immutable creation intent.
+	// a slow Create is cancelled, so an entry WITH a plan keeps its slot and
+	// the sweep executes the plan. Three kinds of entry cannot be helped
+	// (RR-20261001-09), and each is handled on its own so that none of them
+	// stalls the group's other activities:
+	//
+	//   - no plan at all: a legacy admission from a build before
+	//     RR-20260914-02. Its openers were drained before the upgrade (the
+	//     09-29 record's upgrade contract), so nothing can still confirm it
+	//     and nothing can ever help it; it is reclaimed after OpeningGrace
+	//     the way the old code reclaimed it — and only if it still has no
+	//     plan when the compare-and-set runs, since a same-key Open in
+	//     between gives it one;
+	//   - a plan this code cannot execute (key mismatch, not pending, invalid
+	//     expected set): corruption, which this code never writes. It is
+	//     skipped, counted every tick and logged once, and its slot is KEPT:
+	//     the opener's own Create of the original plan may still land, and a
+	//     record whose slot was given away would never be swept (the exact
+	//     hole RR-20260914-02 closed). An operator repairs or removes it;
+	//   - a plan whose Create keeps failing: the error is still reported —
+	//     the slot stays, the caller learns the plan is unmade — but after
+	//     the rest of the group has been served, not instead of it.
 	openingGraceUnix := int64(s.cfg.OpeningGrace / time.Second)
+	var (
+		reclaim   []Key
+		malformed = make(map[Key]string)
+		helpErr   error
+	)
 	for _, entry := range snapshot.Opening {
 		if _, scan := selected[entry.Key]; !scan {
 			continue
@@ -796,23 +830,29 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			return nil, err
 		}
 		if !exists {
-			if entry.Intent == nil || nowUnix-entry.AdmittedAtUnix < openingGraceUnix {
+			if nowUnix-entry.AdmittedAtUnix < openingGraceUnix {
 				continue
 			}
-			if entry.Intent.Key != entry.Key || entry.Intent.Status != StatusPending {
-				return nil, fmt.Errorf("%w: malformed opening intent for %s", ErrConflict, entry.Key)
+			if entry.Intent == nil {
+				reclaim = append(reclaim, entry.Key)
+				continue
 			}
-			if err := validateExpectedGames(entry.Intent.ExpectedGameSIDs); err != nil {
-				return nil, err
+			if reason := openingIntentProblem(entry); reason != "" {
+				malformed[entry.Key] = reason
+				continue
 			}
 			current, _, err = s.cfg.Activities.Create(ctx, entry.Key, entry.Intent.clone())
 			if err != nil {
-				return nil, err
+				if helpErr == nil {
+					helpErr = fmt.Errorf("help opening %s: %w", entry.Key, err)
+				}
+				continue
 			}
 		}
 		confirm = append(confirm, entry.Key)
 		classify(entry.Key, current.Value)
 	}
+	s.noteMalformedOpenings(groupID, snapshot, selected, malformed)
 	for _, key := range confirm {
 		if err := s.confirmWindow(ctx, key); err != nil {
 			return nil, err
@@ -852,12 +892,72 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		delivering = append(delivering, activity.Key)
 	}
-	if len(prune) > 0 {
-		if err := s.retireFromWindow(ctx, groupID, prune, delivering); err != nil {
+	if len(prune)+len(reclaim) > 0 {
+		reclaimed, err := s.retireFromWindow(ctx, groupID, prune, delivering, reclaim)
+		if err != nil {
 			return completed, err
 		}
+		if reclaimed > 0 {
+			s.report.Dropped("sweep.opening_legacy_reclaimed", reclaimed)
+			slog.Info("activity: legacy opening entries without a plan reclaimed after grace",
+				"group_id", groupID, "count", reclaimed)
+		}
 	}
-	return completed, nil
+	return completed, helpErr
+}
+
+// openingIntentProblem says why an opening entry's plan cannot be executed,
+// or "" when it can. OpenActivity validates the same things before it writes
+// the plan, so a non-empty answer means the stored record was changed by
+// something other than this package.
+func openingIntentProblem(entry OpeningEntry) string {
+	switch {
+	case entry.Intent.Key != entry.Key:
+		return fmt.Sprintf("intent key %s does not match entry key", entry.Intent.Key)
+	case entry.Intent.Status != StatusPending:
+		return fmt.Sprintf("intent status is %q, not pending", entry.Intent.Status)
+	}
+	if err := validateExpectedGames(entry.Intent.ExpectedGameSIDs); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// noteMalformedOpenings counts this tick's unusable opening plans and logs
+// each one when it first appears and once more when it is gone — repaired,
+// confirmed, or removed from the window — rather than on every sweep
+// (RR-20261001-09). A key outside this tick's bounded scan is left as it was:
+// not seeing it is not the same as seeing it healthy.
+func (s *Service) noteMalformedOpenings(groupID string, snapshot Window, scanned map[Key]struct{}, malformed map[Key]string) {
+	s.report.Dropped("sweep.opening_intent_malformed", len(malformed))
+	s.openingMu.Lock()
+	defer s.openingMu.Unlock()
+	if s.malformedOpening == nil {
+		s.malformedOpening = make(map[Key]string)
+	}
+	for key, reason := range malformed {
+		if s.malformedOpening[key] == reason {
+			continue
+		}
+		s.malformedOpening[key] = reason
+		slog.Warn("activity: opening intent is malformed; entry skipped and its slot kept until repaired",
+			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase, "reason", reason)
+	}
+	for key := range s.malformedOpening {
+		if key.GroupID != groupID {
+			continue
+		}
+		if _, still := malformed[key]; still {
+			continue
+		}
+		_, scan := scanned[key]
+		if snapshot.openingIndex(key) >= 0 && !scan {
+			continue
+		}
+		delete(s.malformedOpening, key)
+		slog.Info("activity: opening intent is usable again or the entry is gone",
+			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase)
+	}
 }
 
 // pendingScanBatch bounds backend reads and rotates a legacy oversized
@@ -931,7 +1031,8 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 	if err := s.ensureDispatches(ctx, activity); err != nil {
 		return err
 	}
-	return s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key})
+	_, err := s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key}, nil)
+	return err
 }
 
 // retireFromWindow is the one compare-and-set that moves keys out of the
@@ -940,15 +1041,27 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 //   - prune leaves Keys (and Opening, should a confirm have been skipped);
 //   - delivering (a subset of prune: the complete ones) joins Delivering so
 //     the sweep keeps retrying their dispatches (U-0192);
-func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering []Key) error {
-	if len(prune) == 0 {
-		return nil
+//   - reclaim leaves Opening only, and only while the entry still has no
+//     plan: the sweep observed a legacy admission past its grace, and a
+//     same-key Open that supplied a plan since then owns the slot now, so
+//     the reclaim would be acting on a generation that no longer exists
+//     (RR-20261001-09; the same guard U-0191 gave the pre-plan reclaim).
+//
+// reclaimed is how many reclaim entries the write that won actually removed.
+func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering, reclaim []Key) (reclaimed int, err error) {
+	if len(prune)+len(reclaim) == 0 {
+		return 0, nil
 	}
 	remove := make(map[Key]struct{}, len(prune))
 	for _, key := range prune {
 		remove[key] = struct{}{}
 	}
-	_, _, err := s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
+	legacy := make(map[Key]struct{}, len(reclaim))
+	for _, key := range reclaim {
+		legacy[key] = struct{}{}
+	}
+	_, _, err = s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
+		reclaimed = 0
 		if !found {
 			return current, false, nil
 		}
@@ -965,9 +1078,13 @@ func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, d
 		next.Keys = cloneActivityKeys(kept)
 		opening := next.Opening[:0]
 		for _, entry := range next.Opening {
-			_, drop := remove[entry.Key]
-			if drop {
+			if _, drop := remove[entry.Key]; drop {
 				changed = true
+				continue
+			}
+			if _, drop := legacy[entry.Key]; drop && entry.Intent == nil {
+				changed = true
+				reclaimed++
 				continue
 			}
 			opening = append(opening, entry)
@@ -984,7 +1101,10 @@ func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, d
 		}
 		return next, true, nil
 	})
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return reclaimed, nil
 }
 
 // --- participant progress ---
