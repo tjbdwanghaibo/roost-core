@@ -588,8 +588,14 @@ func pageOf(state channelState, query HistoryQuery) Page {
 	}
 
 	// Age pruning may leave holes inside the sequence-ordered ring. Report
-	// only the range this page crossed, including its cursor boundary and
-	// the missing tail when no later retained message remains.
+	// only the range this page crossed: holes between its messages, a cursor
+	// naming a message that is no longer retained, and the missing tail when
+	// no later retained message remains. Reaching the head of the ring is not
+	// a gap: a ring that no longer starts at sequence 1 is ordinary capacity
+	// eviction, and a client opening a channel asked for what is current, not
+	// for what was evicted. Counting it made every latest page of a channel
+	// that had ever overflowed report Gap and bump history.gap each time
+	// (RR-20261001-08).
 	if query.AfterSeq > 0 {
 		cursor := query.AfterSeq
 		for _, message := range selected {
@@ -613,8 +619,7 @@ func pageOf(state channelState, query HistoryQuery) Page {
 		}
 		if len(selected) == 0 {
 			page.Gap = upper > 0
-		} else if selected[len(selected)-1].Seq < upper ||
-			(!page.HasMore && selected[0].Seq > 1) {
+		} else if selected[len(selected)-1].Seq < upper {
 			page.Gap = true
 		}
 	}

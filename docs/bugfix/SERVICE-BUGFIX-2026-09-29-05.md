@@ -63,3 +63,7 @@ go test -race -count=1 -run '^TestBugfix5' ./service/match ./kit/service/rank ./
 图谱 Verify 使用 search/双向 trace/snippet/coverage，原 generation 05:34:58Z；已改路径 metadata_changed、新工作树测试 missing，全部按当前源码补证。主仓同步后再请求索引刷新，实际结果在后续 service review 记录，不声称尚未完成的刷新成功。
 
 本批四项收敛不等于“所有 service 无 bug”。随后继续邻接 review 与完成矩阵更新，旧历史容量/真实业务效果/HA/强杀/性能专项仍有具名边界。
+
+## 后续（2026-10-01）
+
+RR-20260929-27 的 `Page.Gap` 语义收口（[RR-20261001-08](RR-20261001-08.md)，复审 [§4.2](../review/REVIEW-2026-10-01-bline-audit-service-2.md) 探针实证）：本批 `pageOf` 除了页内 / 尾部洞，还把"本页到达 ring 头部且头部序号 > 1"当作洞，而容量淘汰永远从头部丢，于是任何溢出过的频道无游标取最新页、或 `BeforeSeq` 翻到保留边缘都 `Gap=true`，`history.gap.<kind>` 每次 +1——上文与 CHANGELOG 只写了"页内 / 尾部洞"，没写这条。已删去该条件：`Gap` 只在页内序号不连续、游标点名的消息已不在、尾部缺失时为真，普通容量淘汰后的最新页 `Gap=false`、不计指标；本批两条 `TestBugfix5` 回归不改、仍绿。

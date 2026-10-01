@@ -573,9 +573,12 @@ type Page struct {
 	// HasMore reports that more retained messages exist in the direction this
 	// page was paging.
 	HasMore bool `json:"has_more"`
-	// Gap reports missing sequences crossed by this page, including holes
-	// left by age pruning, its cursor boundary, and an exhausted retained
-	// tail. The client can resynchronise instead of treating loss as current.
+	// Gap reports missing sequences crossed by this page: holes left by age
+	// pruning between its messages, a cursor naming a message that is no
+	// longer retained, and an exhausted retained tail. Ordinary capacity
+	// eviction ahead of the oldest retained message is not a gap — the newest
+	// page of a channel that overflowed its ring reports Gap=false. The client
+	// can resynchronise instead of treating loss as current.
 	Gap bool `json:"gap"`
 	// OldestSeq is the oldest sequence still retained, zero when nothing is.
 	OldestSeq uint64 `json:"oldest_seq"`
