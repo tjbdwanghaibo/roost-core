@@ -8,7 +8,7 @@
 | [RR-20260930-CG-13](REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 bean 与生成函数/import 冲突 | [已修复/拒绝与正常消费者验证](../bugfix/RR-20260930-CG-13.md)，未发版 |
 | [RR-20260930-CG-14](REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 依赖事务丢失自动迁移回写 | [已修复/迁移与隔离验证](../bugfix/RR-20260930-CG-14.md)，未发版 |
 
-**09-30 Codegen 第五轮：三个新 P2，均未修。**[RR-20260930-12 false 索引无用导入、RR-13 bean 命名冲突、RR-14 依赖事务丢失自动迁移](REVIEW-2026-09-30-codegen-05.md)。四个隔离反例对应三个根因，四个正常/失败保护控制通过；[运行](../review/REVIEW-2026-09-30-codegen-05.md) · [复现](../review/evidence/codegen-review-20260930-05/README.md)。本轮只写文档，Codegen 尚未整体收敛。
+**09-30 Codegen 第五轮：三个新 P2，均未修。**[RR-20260930-CG-12 false 索引无用导入、RR-CG-13 bean 命名冲突、RR-CG-14 依赖事务丢失自动迁移](REVIEW-2026-09-30-codegen-05.md)（原编号 12～14 与 A 线撞号，已改为 CG-）。四个隔离反例对应三个根因，四个正常/失败保护控制通过；[运行](../review/REVIEW-2026-09-30-codegen-05.md) · [复现](../review/evidence/codegen-review-20260930-05/README.md)。本轮只写文档，Codegen 尚未整体收敛。
 
 **v1.18.0 已发布（2026-09-30，tag → `4b277176`）**：A 线 RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。逐编号状态见 [ARCHIVE-2026-09-30](../review/ARCHIVE-2026-09-30.md)。
 
@@ -18,6 +18,9 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20261001-04](RR-20261001-04.md)：P3 v1 manifest 工程有手写 JSON 时生成链路失败于 `untracked table JSON … migrate it explicitly`，无文档无命令说明迁移（B 线 codegen 修复复审 D2）（已确认，未修复）。
+[RR-20261001-03](RR-20261001-03.md)：**P2** schema 已写、`configs/table` 还没有 CSV 的工程在 v1.18.0 上 `generate` / `sync` / `--check` 全部失败——`153cac3d` 让空 CSV 目录也跑 tablegen，v1.17.2 通过（B 线 codegen 修复复审 D1，回归）（已确认，未修复）。
+[RR-20261001-02](RR-20261001-02.md)：P3 `service/mail` `sameSendIntent` 用 `reflect.DeepEqual`，nil 与空切片判为不同，自定义 EnvelopeStore 下同 RequestID 恢复永久 `ErrConflict`（B 线 service 修复复审）（已确认，未修复）。
 [RR-20261001-01](RR-20261001-01.md)：**P2** ci.yml 的 Redis job 只设 `REDIS_ADDR`，09-29 service 修复的 Redis 变体（`ROOST_REVIEW_REDIS` / `ROOST_REDIS_TEST_ADDR` / `ROOST_REVIEW3_BACKEND` / `ROOST_REVIEW4_BACKEND`，9 个测试文件）静默 SKIP 或落回 Memory（B 线修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261001-01.md)）。
 [RR-20260930-24](RR-20260930-24.md)：P3 game-demo 活动租约丢失后永不重取，`activity: lease not renewed` 每 5s 一条直到停机（B27 第 3 批真实环境暴露）（已修复，未发版；[修复记录](../bugfix/RR-20260930-24.md)）。
 [RR-20260930-23](RR-20260930-23.md)：**P2** 进程续租中断后重取租约，仍连着的玩家被当作过期副本 Destroy，连接活着却脱离场景，Rebind 在此路径无效（B27 第 3 批真实环境暴露，RR-20260927-23 / RR-20260926-70 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-23.md)，T-179）。

@@ -1,6 +1,6 @@
 # 2026-09-30 Codegen 第五轮：schema 消费者与合仓依赖回写
 
-本轮确认[三个新 P2](../bug/REVIEW-2026-09-30-codegen-05.md)：RR-20260930-12 false 索引无用导入、RR-13 bean 生成命名空间遗漏、RR-14 依赖事务丢弃自动迁移的 Go/manifest 改动。没有修源码；[可复跑证据](evidence/codegen-review-20260930-05/README.md)、[机制学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md)、[跨轮进度](PROGRESS.md)一起归档。
+本轮确认[三个新 P2](../bug/REVIEW-2026-09-30-codegen-05.md)：RR-20260930-CG-12 false 索引无用导入、RR-CG-13 bean 生成命名空间遗漏、RR-CG-14 依赖事务丢弃自动迁移的 Go/manifest 改动。没有修源码；[可复跑证据](evidence/codegen-review-20260930-05/README.md)、[机制学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md)、[跨轮进度](PROGRESS.md)一起归档。
 
 ## 同步与上轮状态
 

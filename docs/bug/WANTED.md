@@ -742,3 +742,22 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
   写明"这三段谁负责接"，并给 `NewRoomSink` 的生成加一句说明。
 - **来源**：game-demo 第十一批做 B10（实时）时选型发现。demo 最终走了 `lockstep`（帧同步）那条路——它的服务端 `Room` 与客户端
   `robot.LockstepBot` 都是完整的，业务只需接线，两小时就跑通了；状态同步这条路相比之下没有入口。
+
+### W-2026-10-01-01：account 建角的 pending slot 没有任何 owner-only 释放入口
+
+- **位置**：`kit/service/account`（RR-20260929-19 的持久建角计划，`create_role.go` / `service.go` 的 `Slots` 与 `RoleCreation`），基线 `2308e37f`。
+- **现象**：名字租约过期后被他人提交，该账号在该区服的建角 slot 永远停在 pending，没有任何入口释放；platform 同类场景有 `ResolvePendingAttempts`，account 没有对等入口。
+- **为何可疑**：RR-19 承诺“建角计划可恢复”，但恢复只覆盖“自己再来”这条路，不覆盖“名字被别人拿走”。
+- **会红的测试草稿**：两个账号抢同一名字，A 的租约过期、B 提交成功后，A 再 `CreateRole` 任何名字 → 期望能继续建角（或得到明确可处置的错误），实际永久 pending。
+- **候选修法**：owner-only `ResolvePendingCreation(ctx, accountID, sid, note)`，与 platform 对齐；或租约过期且名字已被占时自动把 pending 置为失败。
+- **来源**：[B 线 service 修复独立复审 §4 疑点 1](../review/REVIEW-2026-10-01-bline-audit-service-1.md)。
+
+### W-2026-10-01-02：game-demo `PlayerOwners.Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 仍会把 `interrupted` 清掉并延长租约
+
+- **位置**：`demo/internal/service/game/playerowner.go.tmpl`（`Claim` 的 `errStaleCopyKept` 结局与 `confirmRenewal`），基线 `2308e37f`（RR-20260930-23 修复之后）。
+- **现象**：`Claim` 认领成功但副本在预算内扔不掉时注释说“nothing refreshes it”，但 `snapshot()` 仍含该玩家，下一轮 `Refresh`（CompareAndExpire 自己 token）返回 Held → `confirmRenewal` 清掉 `interrupted` 并延长 `validUntil`，之后 `Admit` 对仍驻留的 stale 副本放行。
+- **为何可疑**：属 RR-20260920-09 所有权契约；RR-20260930-23 已把这条结局的连接关掉，但副本本身仍可能被当作有效。
+- **会红的测试草稿**：evictor 替身让 `dropResident` 超时 → 下一心跳 Refresh → 断言 `Admit` 仍拒绝该玩家。
+- **候选修法**：`errStaleCopyKept` 后把该玩家从 `snapshot()` 的续期集合里摘掉，直到副本真正销毁。
+- **来源**：[RR-20260930-23 修复记录 §未验证项](../bugfix/RR-20260930-23.md)。
+

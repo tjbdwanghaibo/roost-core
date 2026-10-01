@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-01 B 线修复独立复审](REVIEW-2026-10-01-bline-audit-service-1.md)：service 前半（account / mail / platform）16 条——通过 15、缺陷 1（→ RR-20261001-02），12 组回退探针全部变红；[codegen 12 条](REVIEW-2026-10-01-bline-audit-codegen.md)——通过 11、缺陷 1（→ RR-20261001-03 回归）+ 文档 1（→ RR-20261001-04），17 个回归在 v1.17.2 上独立复证为红，9 个生成器的退役只删带自身生成头的文件；另发现 ci Redis job 漏设四个门变量（→ RR-20261001-01，已修）。service 后半 + redis driver 的复审另文。
+
 [09-30 Codegen 第六轮修复/验收](REVIEW-2026-09-30-codegen-06.md)：[RR-CG-12](../bugfix/RR-20260930-CG-12.md)/[CG-13](../bugfix/RR-20260930-CG-13.md)/[CG-14](../bugfix/RR-20260930-CG-14.md) 3/3 修复、具名场景通过，未发版。全 Codegen race/vet、glsvet、正式 deps 消费与 DAO/Entity 双模式 Sync 通过；shell 项明确跳过。[证据](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md) · [机制更新](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [进度](PROGRESS.md)。
 
 [09-30 Codegen 第五轮](REVIEW-2026-09-30-codegen-05.md)：深入 cfggen 分组/复合 schema/消费者与依赖合仓回写，新增[三个未修 P2](../bug/REVIEW-2026-09-30-codegen-05.md)。正式 CLI 与独立消费者、依赖 overlay 四个反例/四个控制已归档；Codegen 包回归和定向 race 通过，shell 检查明确跳过。[实现学习](IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [证据](evidence/codegen-review-20260930-05/README.md) · [进度](PROGRESS.md)。
