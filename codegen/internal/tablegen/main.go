@@ -449,6 +449,28 @@ type tableJSONManifest struct {
 	Tables      map[string]string `json:"tables"`
 }
 
+// ManifestOwnsJSON reports whether jsonDir/_manifest.json still records
+// generated JSON files. `roost generate` asks this when configs/table has no
+// CSV: only a manifest that owns outputs has something to retire
+// (RR-20260930-09). A missing manifest, the scaffold's empty v2 manifest and a
+// legacy v1 manifest (which never recorded ownership) all mean the project
+// has simply not written its CSVs yet, and running tablegen would fail on the
+// first meta's missing CSV (RR-20261001-03).
+func ManifestOwnsJSON(jsonDir string) (bool, error) {
+	raw, err := os.ReadFile(filepath.Join(jsonDir, "_manifest.json"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var manifest tableJSONManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return false, fmt.Errorf("read table manifest: %w", err)
+	}
+	return len(manifest.Tables) > 0, nil
+}
+
 func safeTableJSONName(name string) bool {
 	return name != "_manifest.json" && filepath.Base(name) == name && strings.HasSuffix(name, ".json")
 }

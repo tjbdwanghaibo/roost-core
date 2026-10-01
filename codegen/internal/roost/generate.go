@@ -104,13 +104,21 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv-template", "./configs/table_template", "-force"}, w)
 		}},
 		{Feature: "config", Name: "config-data", Prefixes: []string{"configs/schema/", "configs/table/"}, Run: func(w io.Writer) error {
+			// A schema without any CSV yet is the normal state between
+			// `roost project new` and the first planner table, and tablegen
+			// reads one CSV per meta unconditionally, so config-data is
+			// skipped until a CSV exists (v1.17.2 behavior). The manifest
+			// alone cannot be the trigger: the scaffold always writes an
+			// empty one, which made that skip dead and failed every such
+			// project (RR-20261001-03). Only a manifest that still owns
+			// JSON files has retirement work to do (RR-20260930-09).
 			if empty, err := dirHasNoDataFiles("./configs/table"); err != nil {
 				return err
 			} else if empty {
-				if _, err := os.Stat("./configs/data/_manifest.json"); os.IsNotExist(err) {
-					return nil
-				} else if err != nil {
+				if owns, err := tablegen.ManifestOwnsJSON("./configs/data"); err != nil {
 					return err
+				} else if !owns {
+					return nil
 				}
 			}
 			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv", "./configs/table", "-json", "./configs/data", "-force"}, w)
