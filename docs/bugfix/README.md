@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-04 非三大核心第一批修复：RR-20261003-NC-01～04 4/4 已修、具名场景验证，未发版。** [单 Mod](RR-20261003-NC-01.md) · [Clone timeout](RR-20261003-NC-02.md) · [HTTP 错误分类](RR-20261003-NC-03.md) · [完整 JSON](RR-20261003-NC-04.md) · [红/绿证据](evidence/noncore-bugfix-20261004-01/README.md)。正式原 30 场景转绿，父 client/自定义 client/并发与错误原因对照通过；七包 race/vet 通过。
+
 **09-30 Codegen 第四批：**[RR-CG-12 false 索引](RR-20260930-CG-12.md)、[RR-CG-13 命名空间](RR-20260930-CG-13.md)、[RR-CG-14 依赖迁移](RR-20260930-CG-14.md) **3/3 已修复并在具名场景验证，未发版**。正式回归先红后绿；全 Codegen race/vet、glsvet、正式 project deps 消费与双模式 Sync 生成链通过，具名 shell 环境项跳过。[运行/进度](../review/REVIEW-2026-09-30-codegen-06.md) · [原始证据](evidence/codegen-bugfix-20260930-12-14/README.md)。
 
 **v1.18.0 已发布（2026-09-30）**：RR-20260928-15、RR-20260930-03/11 与 B 线 RR-20260929-01～34、RR-20260930-01/02/04～10 随本版发布；下面各行的“未发版”均指本版之前的状态。

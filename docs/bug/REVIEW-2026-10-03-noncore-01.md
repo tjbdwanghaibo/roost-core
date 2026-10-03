@@ -1,6 +1,6 @@
 # 非三大核心模块审查第一轮：App 与 HTTP
 
-2026-10-03，`roost-core/main`，源码基线 `746567ff37cf69878b74331cb9bcc69b159dfb63`。四项 P2 均已复现，**未修复**。编号使用 NC 命名空间，避免与并行核心工作线碰撞。本轮只产出文档。
+2026-10-03，`roost-core/main`，源码基线 `746567ff37cf69878b74331cb9bcc69b159dfb63`。原审查时四项 P2 均已复现、未修复；**2026-10-04 四项已修复并在具名场景验证，未发版**，更新见本页末尾。编号使用 NC 命名空间，避免与并行核心工作线碰撞。原审查只产出文档，保留修前证据。
 
 [运行记录](../review/REVIEW-2026-10-03-noncore-01.md) · [原始反例与复跑](../review/evidence/noncore-review-20261003-01/README.md) · [后续计划](../review/NONCORE-REVIEW-PLAN-2026-10-03.md)。Tier 2 图谱定位、双向 trace、片段与 coverage；图谱 metadata_changed，全部关键结论回读当前源码并实跑。
 
@@ -57,3 +57,14 @@ ReadBody 已取得整段限长 body，但 BindJSON 只调用一次 Decoder.Decod
 - Client 响应 `io.ReadAll` 未限制字节数。这是容量/接入策略缺口，尚无既定上限与失败 SLO，未单独分配功能 bug 编号；后续 N02 要明确允许的响应体规模和错误体截断策略。
 - App 的 Service/Mod 停机超时会保留尚可能被使用的依赖。这是当前源码的保护策略，不按资源未立即释放重复登记 bug。
 - 本轮不覆盖真实代理/TLS/重定向、完整 gateway/auth/Webroute 启动、生产集群、HA 和长期容量；这些不由本机 7 包通过替代。
+
+## 2026-10-04 修复更新
+
+四项原正式反例从 12 fail/18 pass 转为 30/30 通过；追加父 client/显式 client/并发 Clone、HTTP 读取与解码原因保留对照，七包 race/vet 通过。
+
+- NC-01：[单元素进入现有校验](../bugfix/RR-20261003-NC-01.md)。
+- NC-02：[库拥有 client 副本 timeout 与父/外部所有权](../bugfix/RR-20261003-NC-02.md)。
+- NC-03：[StatusError 与读取/解码原因共存](../bugfix/RR-20261003-NC-03.md)。
+- NC-04：[完整单值校验先于业务](../bugfix/RR-20261003-NC-04.md)。
+
+[实际红/绿与边界](../bugfix/evidence/noncore-bugfix-20261004-01/README.md)。本更新关闭四项声明触发，不表示 App/HTTP 整体无问题或生产环境已验收。

@@ -6,6 +6,10 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-183 | 单 Mod 工程缺少基础设施却继续进入 Init，或 nil Mod 导致启动 panic | NC-01：单元素排序旧快速返回跳过名字/依赖/环校验 | `unknown mod dependency` / Mod 装配集合 | 使用含 NC-01 修复的版本；按声明补齐硬依赖、修正单元素环/名字，不删除依赖校验 |
+| T-184 | Clone 设置短 timeout，实际仍等到父 client 的长 timeout | NC-02：包装层改了 timeout，内部 HTTP client 仍共享父配置 | New / Clone 的 WithTimeout 与是否显式 WithHTTPClient | 使用含 NC-02 修复的版本；自定义 client 的 Timeout 仍优先，应自行提供正确配置 |
+| T-185 | 上游 503/401 返回文本或异型 JSON，消费者只收到 JSON 错误、无法取状态码 | NC-03：解码先于状态分类 | `errors.As` 到 httpclient.StatusError / JSON 错误 | 使用含 NC-03 修复的版本并使用 errors.As/Is；状态错误与读取/解码原因可能同时存在 |
+| T-186 | JSON 请求尾随第二个值或垃圾却仍产生业务写入 | NC-04：BindJSON 只解析首值 | 请求完整 body 与业务调用记录 | 使用含 NC-04 修复的版本；将请求改为单个 JSON 值，合法尾随空白仍可用 |
 | T-01 | 进程启动后立刻熔断退出，日志有 `ErrCommitIndeterminate` | 上次 fsync 结果不确定，框架按不变量②（结果不确定时 fence，不猜）主动 fail-stop，避免内存回滚制造与 WAL 冲突的第二条历史 | 启动日志里的 WAL replay 记录；`OBSERVABILITY.md` "调度与事务"节的 fence / pipelined verdict 指标 | 让新进程完成 WAL replay 判定权威结果。**不要**手动删 WAL、不要改内存状态后重启；如果 fail-stop 反复发生，查磁盘（写满、只读、fsync 延迟） |
 | T-02 | Remote Entity 写被拒，错误含 fence / marker epoch / route epoch 不匹配 | 旧 owner 的延迟写，或租约过期后恢复的进程仍持有旧 fence；存储端按 (marker, route, version) 三元 CAS 拒绝 | `OBSERVABILITY.md` "跨服实体"节的 remote write gate 指标；ownership marker 当前值 | 这是正确行为。从当前 owner 重新发起操作，不要绕过重试；如果是刚迁移完 ownership 的实体，等路由 epoch 传播 |
 | T-03 | `roost generate` 报 `unknown kit mod "xxx"` | `roost.yaml` 用了当前 codegen 版本 catalog 不含的名字，通常是升级后名字变了 | `roost.yaml` 的 `mods` / `shared_mods`；`roost version` | `roost project upgrade`；旧名（`sync`、`replication-*`、`checkpoint`）会在加载时归一化并打弃用告警，其余名字按 codegen README 的生成器总览改 |

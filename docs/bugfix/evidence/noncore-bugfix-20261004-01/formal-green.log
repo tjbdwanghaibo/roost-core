@@ -1,0 +1,131 @@
+=== RUN   TestSingleModValidation
+=== RUN   TestSingleModValidation/empty
+    mod_validation_promises_test.go:33: mods=0 error=<nil>
+=== RUN   TestSingleModValidation/valid_single
+    mod_validation_promises_test.go:33: mods=1 error=<nil>
+=== RUN   TestSingleModValidation/single_nil
+    mod_validation_promises_test.go:33: mods=1 error=mod entry 0 is nil
+=== RUN   TestSingleModValidation/single_unnamed
+    mod_validation_promises_test.go:33: mods=1 error=mod entry 0 has empty name
+=== RUN   TestSingleModValidation/single_missing_hard
+    mod_validation_promises_test.go:33: mods=1 error=mod a depends on missing: unknown mod dependency "missing"
+=== RUN   TestSingleModValidation/single_hard_self_cycle
+    mod_validation_promises_test.go:33: mods=1 error=mod a depends on a: mod dependency cycle at "a"
+=== RUN   TestSingleModValidation/single_optional_self_cycle
+    mod_validation_promises_test.go:33: mods=1 error=mod a optionally depends on a: mod dependency cycle at "a"
+=== RUN   TestSingleModValidation/missing_optional_allowed
+    mod_validation_promises_test.go:33: mods=1 error=<nil>
+=== RUN   TestSingleModValidation/external_hard_allowed
+    mod_validation_promises_test.go:33: mods=1 error=<nil>
+=== RUN   TestSingleModValidation/pair_missing_hard_rejected
+    mod_validation_promises_test.go:33: mods=2 error=mod a depends on missing: unknown mod dependency "missing"
+--- PASS: TestSingleModValidation (0.00s)
+    --- PASS: TestSingleModValidation/empty (0.00s)
+    --- PASS: TestSingleModValidation/valid_single (0.00s)
+    --- PASS: TestSingleModValidation/single_nil (0.00s)
+    --- PASS: TestSingleModValidation/single_unnamed (0.00s)
+    --- PASS: TestSingleModValidation/single_missing_hard (0.00s)
+    --- PASS: TestSingleModValidation/single_hard_self_cycle (0.00s)
+    --- PASS: TestSingleModValidation/single_optional_self_cycle (0.00s)
+    --- PASS: TestSingleModValidation/missing_optional_allowed (0.00s)
+    --- PASS: TestSingleModValidation/external_hard_allowed (0.00s)
+    --- PASS: TestSingleModValidation/pair_missing_hard_rejected (0.00s)
+=== RUN   TestSingleModExecuteFailsBeforeInit
+=== RUN   TestSingleModExecuteFailsBeforeInit/shared
+2026/10/04 06:58:59 WARN default config file not found, using development defaults path=configs/service/config.game.yaml err="open configs/service/config.game.yaml: The system cannot find the path specified."
+time=2026-10-04T06:58:59.7907116+08:00 level=INFO goId=21 frame=0 server_time_ms=1791068339790 msg="starting server" name=roost-test version=0.0.0 type=game sid=1000 config=configs/service/config.game.yaml
+Error: mod consumer depends on missing: unknown mod dependency "missing"
+Usage:
+  roost-test game [flags]
+
+Flags:
+  -h, --help   help for game
+
+Global Flags:
+  -c, --config string   config file path; empty uses configs/service/config.<service>.yaml
+      --sid int         server id (default 1000)
+
+    mod_validation_promises_test.go:62: scope=shared initialized=false error=mod consumer depends on missing: unknown mod dependency "missing"
+=== RUN   TestSingleModExecuteFailsBeforeInit/service
+time=2026-10-04T06:58:59.812749+08:00 level=WARN goId=34 frame=0 server_time_ms=1791068339812 msg="default config file not found, using development defaults" path=configs/service/config.game.yaml err="open configs/service/config.game.yaml: The system cannot find the path specified."
+time=2026-10-04T06:58:59.812749+08:00 level=INFO goId=34 frame=0 server_time_ms=1791068339812 msg="starting server" name=roost-test version=0.0.0 type=game sid=1000 config=configs/service/config.game.yaml
+Error: mod consumer depends on missing: unknown mod dependency "missing"
+Usage:
+  roost-test game [flags]
+
+Flags:
+  -h, --help   help for game
+
+Global Flags:
+  -c, --config string   config file path; empty uses configs/service/config.<service>.yaml
+      --sid int         server id (default 1000)
+
+    mod_validation_promises_test.go:62: scope=service initialized=false error=mod consumer depends on missing: unknown mod dependency "missing"
+--- PASS: TestSingleModExecuteFailsBeforeInit (0.09s)
+    --- PASS: TestSingleModExecuteFailsBeforeInit/shared (0.07s)
+    --- PASS: TestSingleModExecuteFailsBeforeInit/service (0.02s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/app	1.346s
+=== RUN   TestClientDeadlines
+=== RUN   TestClientDeadlines/base
+    client_boundaries_promises_test.go:62: requested=300ms transport_deadline_remaining=300ms
+=== RUN   TestClientDeadlines/clone_inherit
+    client_boundaries_promises_test.go:62: requested=300ms transport_deadline_remaining=300ms
+=== RUN   TestClientDeadlines/new_short_timeout
+    client_boundaries_promises_test.go:62: requested=20ms transport_deadline_remaining=20ms
+=== RUN   TestClientDeadlines/clone_short_timeout
+    client_boundaries_promises_test.go:62: requested=20ms transport_deadline_remaining=20ms
+--- PASS: TestClientDeadlines (0.00s)
+    --- PASS: TestClientDeadlines/base (0.00s)
+    --- PASS: TestClientDeadlines/clone_inherit (0.00s)
+    --- PASS: TestClientDeadlines/new_short_timeout (0.00s)
+    --- PASS: TestClientDeadlines/clone_short_timeout (0.00s)
+=== RUN   TestCloneHeaderIsolation
+--- PASS: TestCloneHeaderIsolation (0.00s)
+=== RUN   TestStatusErrorClassification
+=== RUN   TestStatusErrorClassification/success
+    client_boundaries_promises_test.go:122: http_status=200 error_type=<nil> classified_status=false
+=== RUN   TestStatusErrorClassification/plaintext_503
+    client_boundaries_promises_test.go:122: http_status=503 error_type=*errors.joinError classified_status=true
+=== RUN   TestStatusErrorClassification/incompatible_json_401
+    client_boundaries_promises_test.go:122: http_status=401 error_type=*errors.joinError classified_status=true
+=== RUN   TestStatusErrorClassification/compatible_json_502
+    client_boundaries_promises_test.go:122: http_status=502 error_type=*httpclient.StatusError classified_status=true
+=== RUN   TestStatusErrorClassification/plaintext_503_without_out
+    client_boundaries_promises_test.go:122: http_status=503 error_type=*httpclient.StatusError classified_status=true
+=== RUN   TestStatusErrorClassification/bad_json_success
+    client_boundaries_promises_test.go:122: http_status=200 error_type=*json.SyntaxError classified_status=false
+--- PASS: TestStatusErrorClassification (0.01s)
+    --- PASS: TestStatusErrorClassification/success (0.01s)
+    --- PASS: TestStatusErrorClassification/plaintext_503 (0.00s)
+    --- PASS: TestStatusErrorClassification/incompatible_json_401 (0.00s)
+    --- PASS: TestStatusErrorClassification/compatible_json_502 (0.00s)
+    --- PASS: TestStatusErrorClassification/plaintext_503_without_out (0.00s)
+    --- PASS: TestStatusErrorClassification/bad_json_success (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/httpclient	1.703s
+=== RUN   TestJSONRequestBoundary
+=== RUN   TestJSONRequestBoundary/valid
+    json_boundary_promises_test.go:40: status=200 business_calls=1 response="1\n"
+=== RUN   TestJSONRequestBoundary/trailing_whitespace
+    json_boundary_promises_test.go:40: status=200 business_calls=1 response="1\n"
+=== RUN   TestJSONRequestBoundary/trailing_garbage
+    json_boundary_promises_test.go:40: status=400 business_calls=0 response="{\"error\":\"decode request\",\"ok\":false}\n"
+=== RUN   TestJSONRequestBoundary/second_json_value
+    json_boundary_promises_test.go:40: status=400 business_calls=0 response="{\"error\":\"decode request\",\"ok\":false}\n"
+=== RUN   TestJSONRequestBoundary/invalid_prefix
+    json_boundary_promises_test.go:40: status=400 business_calls=0 response="{\"error\":\"decode request\",\"ok\":false}\n"
+=== RUN   TestJSONRequestBoundary/oversize
+    json_boundary_promises_test.go:40: status=413 business_calls=0 response="{\"error\":\"request body too large\",\"ok\":false}\n"
+=== RUN   TestJSONRequestBoundary/empty_current_contract
+    json_boundary_promises_test.go:40: status=200 business_calls=1 response="0\n"
+--- PASS: TestJSONRequestBoundary (0.00s)
+    --- PASS: TestJSONRequestBoundary/valid (0.00s)
+    --- PASS: TestJSONRequestBoundary/trailing_whitespace (0.00s)
+    --- PASS: TestJSONRequestBoundary/trailing_garbage (0.00s)
+    --- PASS: TestJSONRequestBoundary/second_json_value (0.00s)
+    --- PASS: TestJSONRequestBoundary/invalid_prefix (0.00s)
+    --- PASS: TestJSONRequestBoundary/oversize (0.00s)
+    --- PASS: TestJSONRequestBoundary/empty_current_contract (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/httpserver	0.888s

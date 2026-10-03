@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,12 +23,13 @@ const requestIDContextKey contextKey = "httpclient.request_id"
 type Option func(*Client)
 
 type Client struct {
-	baseURL       string
-	client        *http.Client
-	timeout       time.Duration
-	signHeader    string
-	signSecret    string
-	defaultHeader http.Header
+	baseURL        string
+	client         *http.Client
+	ownsHTTPClient bool
+	timeout        time.Duration
+	signHeader     string
+	signSecret     string
+	defaultHeader  http.Header
 }
 
 type StatusError struct {
@@ -55,6 +57,7 @@ func New(opts ...Option) *Client {
 	}
 	if c.client == nil {
 		c.client = &http.Client{Timeout: c.timeout}
+		c.ownsHTTPClient = true
 	}
 	return c
 }
@@ -64,12 +67,13 @@ func (c *Client) Clone(opts ...Option) *Client {
 		return New(opts...)
 	}
 	next := &Client{
-		baseURL:       c.baseURL,
-		client:        c.client,
-		timeout:       c.timeout,
-		signHeader:    c.signHeader,
-		signSecret:    c.signSecret,
-		defaultHeader: cloneHeader(c.defaultHeader),
+		baseURL:        c.baseURL,
+		client:         c.client,
+		ownsHTTPClient: c.ownsHTTPClient,
+		timeout:        c.timeout,
+		signHeader:     c.signHeader,
+		signSecret:     c.signSecret,
+		defaultHeader:  cloneHeader(c.defaultHeader),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -78,6 +82,12 @@ func (c *Client) Clone(opts ...Option) *Client {
 	}
 	if next.client == nil {
 		next.client = &http.Client{Timeout: next.timeout}
+		next.ownsHTTPClient = true
+	} else if next.ownsHTTPClient && next.timeout != c.timeout {
+		// RR-20261003-NC-02：只复制库拥有的 client，保留 Transport/连接池，不能改父实例。
+		client := *next.client
+		client.Timeout = next.timeout
+		next.client = &client
 	}
 	return next
 }
@@ -88,6 +98,8 @@ func WithBaseURL(baseURL string) Option {
 	}
 }
 
+// WithTimeout sets the timeout for the library-owned HTTP client. An explicit
+// WithHTTPClient retains its own timeout and takes precedence over this option.
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
 		if timeout > 0 {
@@ -100,6 +112,7 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(c *Client) {
 		if client != nil {
 			c.client = client
+			c.ownsHTTPClient = false
 		}
 	}
 }
@@ -174,18 +187,26 @@ func (c *Client) DoJSON(ctx context.Context, method string, path string, req any
 	}
 	defer resp.Body.Close()
 	body, readErr := io.ReadAll(resp.Body)
+	var statusErr error
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		statusErr = &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: body}
+	}
 	if readErr != nil {
+		if statusErr != nil {
+			return errors.Join(statusErr, readErr)
+		}
 		return readErr
 	}
 	if out != nil && len(body) > 0 {
 		if err := json.Unmarshal(body, out); err != nil {
+			// RR-20261003-NC-03：坏错误体不能吞掉已收到的 HTTP 状态，同时保留解码错误。
+			if statusErr != nil {
+				return errors.Join(statusErr, err)
+			}
 			return err
 		}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: body}
-	}
-	return nil
+	return statusErr
 }
 
 func (c *Client) url(path string) string {

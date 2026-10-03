@@ -1,13 +1,13 @@
 # Roost Review 问题索引
 
-**10-03 非三大核心第一批：四项新 P2，均未修。**[运行](../review/REVIEW-2026-10-03-noncore-01.md) · [复现](../review/evidence/noncore-review-20261003-01/README.md) · [后续计划](../review/NONCORE-REVIEW-PLAN-2026-10-03.md)。12 个失败反例、18 个通过控制；七包既有 race/vet 通过。
+**10-04 更新：10-03 非三大核心第一批四项 P2 已修、具名场景验证，未发版。**[修复运行](../review/REVIEW-2026-10-04-noncore-01.md) · [红/绿](../bugfix/evidence/noncore-bugfix-20261004-01/README.md) · [原审查](../review/REVIEW-2026-10-03-noncore-01.md) · [后续计划](../review/NONCORE-REVIEW-PLAN-2026-10-03.md)。原 30 场景全部转绿，邻接对照通过；历史原12个失败保留。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261003-NC-01](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-01p2-单-mod-绕过依赖和输入校验) | 单 Mod 跳过缺失依赖、环和输入校验 | 已确认，未修复 |
-| [RR-20261003-NC-02](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-02p2-clone-的-withtimeout-不生效) | Clone 的 WithTimeout 不生效 | 已确认，未修复 |
-| [RR-20261003-NC-03](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-03p2-错误响应解码失败掩盖-http-状态和原文) | 非 2xx 坏/异型 body 丢 StatusError | 已确认，未修复 |
-| [RR-20261003-NC-04](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-04p2-bindjson-接受首个-json-后的垃圾或第二个值) | 尾随垃圾/第二 JSON 仍调用业务 | 已确认，未修复 |
+| [RR-20261003-NC-01](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-01p2-单-mod-绕过依赖和输入校验) | 单 Mod 跳过缺失依赖、环和输入校验 | [已修/具名场景验证](../bugfix/RR-20261003-NC-01.md)，未发版 |
+| [RR-20261003-NC-02](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-02p2-clone-的-withtimeout-不生效) | Clone 的 WithTimeout 不生效 | [已修/具名场景验证](../bugfix/RR-20261003-NC-02.md)，未发版 |
+| [RR-20261003-NC-03](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-03p2-错误响应解码失败掩盖-http-状态和原文) | 非 2xx 坏/异型 body 丢 StatusError | [已修/具名场景验证](../bugfix/RR-20261003-NC-03.md)，未发版 |
+| [RR-20261003-NC-04](REVIEW-2026-10-03-noncore-01.md#rr-20261003-nc-04p2-bindjson-接受首个-json-后的垃圾或第二个值) | 尾随垃圾/第二 JSON 仍调用业务 | [已修/具名场景验证](../bugfix/RR-20261003-NC-04.md)，未发版 |
 
 **09-30 Codegen 第六轮修复：RR-CG-12～14 3/3 已修、具名场景已验，未发版。**[运行/消费证据](../review/REVIEW-2026-09-30-codegen-06.md) · [复跑](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。下方第五轮“均未修”为原 review 时点。
 

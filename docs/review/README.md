@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 App/HTTP 四项修复](REVIEW-2026-10-04-noncore-01.md)：RR-20261003-NC-01～04 4/4 已修、声明场景验证，未发版。45 个新增正式场景和原 review 场景通过，11 包 race/vet 通过。[修复记录](../bugfix/README.md) · [证据](../bugfix/evidence/noncore-bugfix-20261004-01/README.md) · [进度](PROGRESS.md)。下方 10-03 “未修”为历史时点。
+
 [10-03 非三大核心第一批](REVIEW-2026-10-03-noncore-01.md)：App/HTTP 确认[四个未修 P2](../bug/REVIEW-2026-10-03-noncore-01.md)，12 失败反例/18 通过控制；七包 race/vet 通过。[15 单元后续范围与完成时间计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [机制学习](IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md) · [进度](PROGRESS.md) · [可复跑证据/当前清单](evidence/noncore-review-20261003-01/README.md)。Service 复用完成矩阵，Codegen 接续缺口；Nest/Sync/DataEngine 主域由另一线接续。
 
 [10-01 B29 性能对照](REVIEW-2026-10-01-b29.md)：6 组 RR 修复（10 对提交）修前 / 修后 benchstat n=10 交替 + E / F 端到端，无新退化；RR-16 / 28-11 / 74 / 25 / 30 的代价如实记录。

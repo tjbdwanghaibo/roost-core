@@ -1,5 +1,11 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 非三大核心第一批修复
+
+[本轮修复运行](REVIEW-2026-10-04-noncore-01.md) · [四项 bugfix](../bugfix/README.md) · [红/绿与复跑](../bugfix/evidence/noncore-bugfix-20261004-01/README.md)。起点 `183b0bdd`。RR-20261003-NC-01～04 **4/4 已修，声明场景验证，未发版**；下方 10-03 “未修”保留历史。
+
+正式新增 45 个叶子/独立场景通过；原 review 30 场景原文通过；最终 11 个关联包 race、194 个 test pass 事件、0 fail/skip，同包 vet 通过。源码阶段与修复状态分开：N01/N02 仍部分完成，继续 lifecycle/manager/admin/health 与 Kit Ops，再接 security/gateway。没有因为回归通过将整域升级为审完。
+
 ## 2026-10-03 非三大核心第一批：App / HTTP 与剩余计划
 
 [本轮运行](REVIEW-2026-10-03-noncore-01.md) · [四项未修 P2](../bug/REVIEW-2026-10-03-noncore-01.md) · [机制学习](IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md) · [15 单元完成计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [复跑/清单](evidence/noncore-review-20261003-01/README.md)。源码基线 `746567ff`。

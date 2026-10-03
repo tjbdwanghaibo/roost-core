@@ -31,3 +31,13 @@ New 在未注入 HTTP client 时创建内部 client，Timeout 来自包装层选
 BindJSON 当前先读完整 body，再用 Decoder 只解码首个值，因此“Decode 成功”不等于“整个 body 是合法单个 JSON”（NC-04）。写业务 fn 是明确的副作用边界，应在调用之前完成单值校验。合法尾随空白继续接受；空 body 返回零值是现有行为，应由契约/业务必填校验决定是否另行限制。
 
 设计评价：App、HTTP 都已有可复用的能力与边界，本轮四项修复方向可基于现有 Mod/Option/StatusError/JSON reader 完成。没有依据建议替换框架或新增接入层。性能评价限于源码机制：请求/响应全量 materialize、JSON 编解码与 clone header 都有分配成本；没有本轮 benchmark、生产负载或 SLO，故不量化吞吐与延迟。
+
+## 10-04 修复后的实际机制
+
+上文“当前”描述的是 10-03 审查基线，原失败证据保留。[NC-01～04](../bugfix/README.md) 本轮已经修复、具名场景验证，尚未发版。
+
+`sortMods` 仅对空集合快速返回；单元素复用原有校验和排序，不复制一套规则。Client 记录内部 client 的所有权；Clone 仅在内部 client 的 timeout 改变时复制 `http.Client` 值，保留共享 Transport，避免改变父实例。外部 client 仍由调用者配置，选项顺序不改变这一优先级。
+
+`DoJSON` 先建立非 2xx 的 `StatusError`，读取/解码出错再 Join 原因；可兼容解码的错误响应仍填入 out，200 的读/解码错误保持直接返回。BindJSON 对已经受限读入的完整 body 执行 Unmarshal，业务副作用前完成整段校验。没有增加额外无界 reader。
+
+原 30 场景全部转绿，补充 15 项父子配置、外部 client、context、并发 Clone、partial body/Close 和错误原因对照。最终 11 个关联包 race / vet 通过，194 个 test pass 事件包含父/子/Example，不等于 194 条独立业务场景。原 review overlay 也全部通过。[执行证据](../bugfix/evidence/noncore-bugfix-20261004-01/README.md)。

@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -236,8 +235,8 @@ func BindJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	if !ok || len(raw) == 0 {
 		return out, ok
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&out); err != nil {
+	// RR-20261003-NC-04：已读完整 body，必须整段为单个 JSON 值才能进入业务函数。
+	if err := json.Unmarshal(raw, &out); err != nil {
 		JSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "decode request"})
 		return out, false
 	}

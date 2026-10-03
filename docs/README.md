@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-04 App/HTTP 修复：**[四项运行](review/REVIEW-2026-10-04-noncore-01.md)、[逐项记录](bugfix/README.md)、[红/绿与复跑](bugfix/evidence/noncore-bugfix-20261004-01/README.md)。原 NC-01～04 已修、具名场景验证，45 个新增正式场景和 11 包 race/vet 通过，未发版；下方“未修”是历史状态。[进度](review/PROGRESS.md)。
+
 **10-03 非三大核心 Review：**[App/HTTP 四项未修 P2](bug/REVIEW-2026-10-03-noncore-01.md)、[运行与实证](review/REVIEW-2026-10-03-noncore-01.md)、[实现学习](review/IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md)、[15 单元后续计划与完成窗口](review/NONCORE-REVIEW-PLAN-2026-10-03.md)。Service 复用已有完成记录，Codegen 接续缺口；本批 12 失败反例/18 通过控制，七包 race/vet 通过。源码阶段与 bug 修复、外部验证分别管理。
 
 **09-30 Codegen 第六轮：**[RR-CG-12～14 修复与正式消费者](review/REVIEW-2026-09-30-codegen-06.md) 3/3 已修、具名场景验证，未发版。[逐项修复](bugfix/README.md) · [进度](review/PROGRESS.md)。未把 Codegen 整体标为审查完成。

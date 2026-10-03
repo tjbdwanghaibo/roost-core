@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **App 单 Mod 也做完整依赖校验（RR-20261003-NC-01）**：仅空集合快速返回，单 Mod 拒绝 nil/空名、缺失硬依赖和自循环，错误图不进入 Init。合法外部共享/optional 行为不变。[记录](docs/bugfix/RR-20261003-NC-01.md)
+- **HTTP Clone 超时和错误分类（RR-20261003-NC-02/03）**：库拥有 client 的 Clone timeout 修改作用于副本，父实例和连接池保持；自定义 client 自己的 Timeout 优先。非 2xx 坏/异型或读取失败的 body 仍可 errors.As 提取 StatusError，并保留解码/读取原因。[超时](docs/bugfix/RR-20261003-NC-02.md)、[分类](docs/bugfix/RR-20261003-NC-03.md)
+- **JSON 请求必须为完整单值（RR-20261003-NC-04）**：BindJSON 拒绝合法首值后的垃圾/第二值，返回 400 且不调用业务；合法尾随空白、现有空 body 与限长行为保持。[记录](docs/bugfix/RR-20261003-NC-04.md)
+
 > 维护者 2026-09-30 对 [REMAINING §3](docs/review/REMAINING-2026-09-28.md) 的 13 条待决定项拍板：N21 / N23 / N24 / N25 / N26 / N28 / N31 / N32 做，N20 / N22 / N27 / N29 写进契约（N29 另加入口校验），N30 写部署文档。
 
 ### Changed（行为收紧 / API 变化）

@@ -619,7 +619,8 @@ func (a *App) emitLifecycle(ctx context.Context, event lifecycle.Event) error {
 }
 
 func sortMods(mods []Mod, external map[ModName]struct{}) ([]Mod, error) {
-	if len(mods) <= 1 {
+	// RR-20261003-NC-01：单 Mod 也必须校验名字、依赖和环，只有空集合可直接返回。
+	if len(mods) == 0 {
 		return append([]Mod(nil), mods...), nil
 	}
 

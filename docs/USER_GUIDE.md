@@ -1,5 +1,11 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 App / HTTP 使用边界（main，尚未发版）
+
+只有一个 Mod 时也会执行名称、依赖和环校验；不要依赖单 Mod 跳过缺失依赖检查。HTTP `Clone(WithTimeout(...))` 对库创建的 client 生效，并保留父实例配置；显式 `WithHTTPClient` 的 Timeout 优先，由调用者配置，Clone 不会重配外部 client。Transport 仍可共享连接池。
+
+`DoJSON` 的非 2xx 响应会保留 `StatusError`；读取或解码也失败时两类错误通过 Join 返回，调用者应使用 `errors.As` / `errors.Is` 分类。`BindJSON` 必须接收完整、单个合法 JSON，尾随垃圾或第二个 JSON 返回 400，不调用业务；合法尾随空白和现有空 body 零值行为保持。详见 [四项修复记录](bugfix/README.md) 与 [实际机制](review/IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md)。
+
 本文面向熟悉 Go、网络服务和数据库的开发者。示例版本基线：core/kit v1.8.0、skill v1.7.0、codegen v1.7.0。
 
 ## 1. 先理解边界
