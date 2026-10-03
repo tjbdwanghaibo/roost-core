@@ -1,5 +1,22 @@
 # Roost Review 跨轮进度
 
+## 2026-10-03 非三大核心第一批：App / HTTP 与剩余计划
+
+[本轮运行](REVIEW-2026-10-03-noncore-01.md) · [四项未修 P2](../bug/REVIEW-2026-10-03-noncore-01.md) · [机制学习](IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md) · [15 单元完成计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [复跑/清单](evidence/noncore-review-20261003-01/README.md)。源码基线 `746567ff`。
+
+用户说明 Nest/Sync/DataEngine 已由另一线基本跑过，本线接续其他模块。当前清单 783 个 Go 候选，其中核心与紧邻共享边界 155，其他 628 映射 15 单元；不是未读数或逻辑覆盖率。历史 Service 十域阶段完成证据、10-01 Service/Codegen 独立复审复用；下方 09-30 停点保留为历史，不遗漏更新的文档。
+
+| 范围 | 本批实证 | 当前状态 / 下一入口 |
+| --- | --- | --- |
+| N01 App 主链 | 5 个生产文件读取；12 单 Mod/helper/真实 Execute 场景，7 fail/5 pass | NC-01 未修；N01 部分完成，接 lifecycle/manager 注册/启动/停止竞争、admin/health |
+| N02 HTTP 接入 | 两主文件完整读取；client 11 场景 3 fail/8 pass、server 7 场景 2 fail/5 pass | NC-02～04 未修；N02 部分完成，接 security/gateway/正式 Webroute |
+| 关联包回归 | 7 包 race、123 test pass 事件、0 fail/skip；同包 vet 通过 | 仅回归证据，manager/lifecycle/security 等不因此计为源码审查完成 |
+| 其他 13 单元 | 旧证据关联、当前 blob 清单和分阶段预算已归档 | 尚未执行本轮新增主链；按计划接续，不自动计算完成百分比 |
+
+30 具名新场景/控制 = 12 失败反例 + 18 通过控制，归为四个根因；七包回归全绿没有覆盖这些边界。图谱 generation 09-30、freshness metadata_changed，当前源码和 overlay 补证；不称整个模块图谱/源码同代闭环。
+
+最新 Wanted 10-01 四条已有 RR-06～09/bugfix 去向，本轮未重验，也未重复登记。剩余源码阶段与本机验证初估 54～92 有效小时，每天 4～6 小时约 9～23 投入日；完整假设、日期窗口和批次见计划。bug 修复、外部 HA/长稳另外验收。下轮从 N01 的 lifecycle/manager 接着读，用户表示未修时直接继续新范围。
+
 ## 2026-09-30 Codegen 第六轮：RR-CG-12～14 修复验收
 
 [运行/停点](REVIEW-2026-09-30-codegen-06.md) · [三项修复](../bugfix/README.md) · [原始证据](../bugfix/evidence/codegen-bugfix-20260930-12-14/README.md)。起点 `4784ef82`，源码修复收口 `2f68aa22`。用户本轮明确 bugfix；三项原触发与具名邻接场景已验，未发版，下方第五轮“未修”保留历史。

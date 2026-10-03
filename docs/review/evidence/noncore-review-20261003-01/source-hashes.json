@@ -1,0 +1,30 @@
+[
+  {
+    "Path": "D:\\whb_s\\cube-core\\app\\app.go",
+    "Hash": "C9E8B39B4F6C0CB02777A82A6182317626C925E3C081C481A5AA6616ED170D2F"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\app\\mod.go",
+    "Hash": "CE3049CFC64B1024A3B2F6CDB1B8E203C84CFF928EF1BD7847715088D1DE7DE1"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\app\\service.go",
+    "Hash": "ACC1261C13A369EA7CD5C7AF4A0973DB7C332D2D0125DDFF69CCA57C02B0E9E9"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\app\\registry.go",
+    "Hash": "5E9D7071355FAD4F6DA2877F4449C783586B31163E700518EBCADC6E73AE73DC"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\app\\runtime_failure.go",
+    "Hash": "FCC125C7734772271B7392E132776004B415922B661F05FC2B27E48BA636B6BA"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\httpclient\\client.go",
+    "Hash": "97A36501F12F3406F979B284CD329F7AA19334026ACE929B1C194CD35C34BB35"
+  },
+  {
+    "Path": "D:\\whb_s\\cube-core\\httpserver\\server.go",
+    "Hash": "45542D38EC59BD441E5CE44C617BB87461B884DED010BF4378F30F9F02B87EF9"
+  }
+]

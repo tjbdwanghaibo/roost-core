@@ -1,0 +1,88 @@
+{
+  "source_head": "746567ff37cf69878b74331cb9bcc69b159dfb63",
+  "candidate_go": 783,
+  "candidate_templates": 0,
+  "unassigned": 0,
+  "units": [
+    {
+      "unit": "CORE-BOUNDARY",
+      "go": 155,
+      "templates": 0
+    },
+    {
+      "unit": "N01",
+      "go": 15,
+      "templates": 0
+    },
+    {
+      "unit": "N02",
+      "go": 8,
+      "templates": 0
+    },
+    {
+      "unit": "N03",
+      "go": 39,
+      "templates": 0
+    },
+    {
+      "unit": "N04",
+      "go": 40,
+      "templates": 0
+    },
+    {
+      "unit": "N05",
+      "go": 24,
+      "templates": 0
+    },
+    {
+      "unit": "N06",
+      "go": 36,
+      "templates": 0
+    },
+    {
+      "unit": "N07",
+      "go": 10,
+      "templates": 0
+    },
+    {
+      "unit": "N08",
+      "go": 102,
+      "templates": 0
+    },
+    {
+      "unit": "N09",
+      "go": 182,
+      "templates": 0
+    },
+    {
+      "unit": "N10",
+      "go": 18,
+      "templates": 0
+    },
+    {
+      "unit": "N11",
+      "go": 7,
+      "templates": 0
+    },
+    {
+      "unit": "N12",
+      "go": 23,
+      "templates": 0
+    },
+    {
+      "unit": "N13",
+      "go": 18,
+      "templates": 0
+    },
+    {
+      "unit": "N14",
+      "go": 99,
+      "templates": 0
+    },
+    {
+      "unit": "N15",
+      "go": 7,
+      "templates": 0
+    }
+  ]
+}

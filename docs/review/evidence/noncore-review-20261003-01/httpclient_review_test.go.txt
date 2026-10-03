@@ -1,0 +1,134 @@
+package httpclient
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+type noncoreDeadlineTransport struct {
+	remaining time.Duration
+	headers   http.Header
+}
+
+func (rt *noncoreDeadlineTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	deadline, ok := req.Context().Deadline()
+	if ok {
+		rt.remaining = time.Until(deadline)
+	}
+	rt.headers = req.Header.Clone()
+	return &http.Response{StatusCode: 200, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"ok"}`)), Request: req}, nil
+}
+
+// Observe the deadline net/http actually delivers to a transport. No sleeps and
+// no inspection of Client.timeout or http.Client.Timeout are needed.
+func TestNoncoreClientDeadlines(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		clone     bool
+		requested time.Duration
+		want      time.Duration
+	}{
+		{"base", false, 300 * time.Millisecond, 300 * time.Millisecond},
+		{"clone_inherit", true, 0, 300 * time.Millisecond},
+		{"new_short_timeout", false, 20 * time.Millisecond, 20 * time.Millisecond},
+		{"clone_short_timeout", true, 20 * time.Millisecond, 20 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &noncoreDeadlineTransport{}
+			timeout := tc.requested
+			if tc.clone {
+				timeout = 300 * time.Millisecond
+			}
+			c := New(WithBaseURL("http://review.invalid"), WithTimeout(timeout))
+			c.client.Transport = rt // retain the library-created http.Client and its timeout
+			if tc.clone {
+				c = c.Clone(WithTimeout(tc.requested))
+			}
+			var out struct {
+				Message string `json:"message"`
+			}
+			if err := c.PostJSON(context.Background(), "/test", nil, &out); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("requested=%s transport_deadline_remaining=%s", tc.want, rt.remaining)
+			if rt.remaining <= 0 || rt.remaining > tc.want+5*time.Millisecond || rt.remaining < tc.want-15*time.Millisecond {
+				t.Fatalf("transport deadline=%s, want approximately %s", rt.remaining, tc.want)
+			}
+		})
+	}
+}
+
+func TestNoncoreCloneHeaderIsolation(t *testing.T) {
+	rt := &noncoreDeadlineTransport{}
+	base := New(WithBaseURL("http://review.invalid"), WithHeader("X-Test", "base"))
+	base.client.Transport = rt
+	clone := base.Clone(WithHeader("X-Test", "clone"))
+	if err := clone.PostJSON(context.Background(), "/test", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rt.headers.Get("X-Test") != "clone" {
+		t.Fatal(rt.headers)
+	}
+	if err := base.PostJSON(context.Background(), "/test", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rt.headers.Get("X-Test") != "base" {
+		t.Fatal("clone changed parent headers")
+	}
+}
+
+func TestNoncoreStatusErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		nilOut     bool
+		wantStatus bool
+		wantDecode bool
+	}{
+		{"success", 200, `{"message":"ok"}`, false, false, false},
+		{"plaintext_503", 503, "upstream unavailable", false, true, false},
+		{"incompatible_json_401", 401, `{"message":123}`, false, true, false},
+		{"compatible_json_502", 502, `{"message":"failed"}`, false, true, false},
+		{"plaintext_503_without_out", 503, "upstream unavailable", true, true, false},
+		{"bad_json_success", 200, "bad JSON", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			c := New(WithBaseURL(server.URL), WithTimeout(time.Second))
+			var out struct {
+				Message string `json:"message"`
+			}
+			var target any = &out
+			if tc.nilOut {
+				target = nil
+			}
+			err := c.PostJSON(context.Background(), "/test", nil, target)
+			var statusErr *StatusError
+			classified := errors.As(err, &statusErr)
+			t.Logf("http_status=%d error_type=%T classified_status=%v", tc.status, err, classified)
+			if classified != tc.wantStatus {
+				t.Fatalf("error=%v (%T), StatusError=%v, want %v", err, err, classified, tc.wantStatus)
+			}
+			if tc.wantStatus && (statusErr.StatusCode != tc.status || string(statusErr.Body) != tc.body) {
+				t.Fatalf("lost status/body: %+v", statusErr)
+			}
+			if tc.wantDecode && err == nil {
+				t.Fatal("invalid success JSON accepted")
+			}
+			if !tc.wantStatus && !tc.wantDecode && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

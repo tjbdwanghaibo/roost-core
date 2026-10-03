@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-03 非三大核心 Review：**[App/HTTP 四项未修 P2](bug/REVIEW-2026-10-03-noncore-01.md)、[运行与实证](review/REVIEW-2026-10-03-noncore-01.md)、[实现学习](review/IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md)、[15 单元后续计划与完成窗口](review/NONCORE-REVIEW-PLAN-2026-10-03.md)。Service 复用已有完成记录，Codegen 接续缺口；本批 12 失败反例/18 通过控制，七包 race/vet 通过。源码阶段与 bug 修复、外部验证分别管理。
+
 **09-30 Codegen 第六轮：**[RR-CG-12～14 修复与正式消费者](review/REVIEW-2026-09-30-codegen-06.md) 3/3 已修、具名场景验证，未发版。[逐项修复](bugfix/README.md) · [进度](review/PROGRESS.md)。未把 Codegen 整体标为审查完成。
 
 **09-30 Codegen 第五轮：**[cfggen 消费者与依赖自动迁移](review/REVIEW-2026-09-30-codegen-05.md)新增[三个未修 P2](bug/REVIEW-2026-09-30-codegen-05.md)；四个反例/四个控制归档，包回归与定向 race 通过。[机制学习](review/IMPLEMENTATION-CFGGEN-NAMESPACE-AND-DEPENDENCY-MIGRATION.md) · [进度](review/PROGRESS.md)。只审查未改源码，整体尚未收敛。

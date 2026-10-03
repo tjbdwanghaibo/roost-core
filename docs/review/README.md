@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-03 非三大核心第一批](REVIEW-2026-10-03-noncore-01.md)：App/HTTP 确认[四个未修 P2](../bug/REVIEW-2026-10-03-noncore-01.md)，12 失败反例/18 通过控制；七包 race/vet 通过。[15 单元后续范围与完成时间计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [机制学习](IMPLEMENTATION-APP-AND-HTTP-BOUNDARIES.md) · [进度](PROGRESS.md) · [可复跑证据/当前清单](evidence/noncore-review-20261003-01/README.md)。Service 复用完成矩阵，Codegen 接续缺口；Nest/Sync/DataEngine 主域由另一线接续。
+
 [10-01 B29 性能对照](REVIEW-2026-10-01-b29.md)：6 组 RR 修复（10 对提交）修前 / 修后 benchstat n=10 交替 + E / F 端到端，无新退化；RR-16 / 28-11 / 74 / 25 / 30 的代价如实记录。
 
 [10-01 B 线修复独立复审](REVIEW-2026-10-01-bline-audit-service-1.md)：service 前半（account / mail / platform）16 条——通过 15、缺陷 1（→ RR-20261001-02），12 组回退探针全部变红；[codegen 12 条](REVIEW-2026-10-01-bline-audit-codegen.md)——通过 11、缺陷 1（→ RR-20261001-03 回归）+ 文档 1（→ RR-20261001-04），17 个回归在 v1.17.2 上独立复证为红，9 个生成器的退役只删带自身生成头的文件；另发现 ci Redis job 漏设四个门变量（→ RR-20261001-01，已修）。[service 后半 + redis driver 21 条](REVIEW-2026-10-01-bline-audit-service-2.md)——通过 20、缺陷 1（→ RR-20261001-05，activity pending 名额永不回收）、4 组回退探针全部变红，疑点分流到 W-2026-10-01-03 / 04。
