@@ -1,5 +1,21 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 非三大核心第二批：N01 生命周期与 Ops
+
+[本轮运行](REVIEW-2026-10-04-noncore-02.md) · [四个新 RR](../bug/REVIEW-2026-10-04-noncore-02.md) · [机制与建议](IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md) · [复跑/源文件清单](evidence/noncore-review-20261004-02/README.md)。源码 `3529a569`，和下方第一批四项修复分开；新问题三个 P2、一个 P3 **均未修**。
+
+| 范围 | 本批新增证据 | 状态 / 接续 |
+| --- | --- | --- |
+| N01 生产源文 | 本轮补十文件，与上批 App 五文件合计 15/15；另读两个 Kit adapter | 源码读取完成，场景验证部分完成；不是整个单元收口 |
+| Manager 生命周期 | 5 个新叶子/独立项，4 fail/1 pass | Stop panic、重复 Start 两 RR；并发双 Start、失败重试、停止竞争待验 |
+| Lifecycle Hook / Admin | Hook 2 pass；metadata 7 项 6 fail/1 pass | schema 所有权 RR；Group 阻塞/预算与完整权限/审计链待验 |
+| Ops / Health | 真实取消关闭 1 fail、正常控制 1 pass、空 Status+Err 1 观察 | Ops 所有权 RR；Health 观察尚非 RR；deadline/hijack/并发停机待验 |
+| 正常回归 | 关联六包 race / 54 test pass 事件、0 fail/skip，vet 通过 | 不包括未修的新反例，不推定全模块覆盖 |
+
+新增 17 个具名叶子/独立项 = 11 fail + 5 正常 pass + 1 仅观察。Manager/Admin/Ops 源码未改。图谱 09-30 generation、metadata_changed / 新附件 not_tracked 以当前源码补证，没有重启共享索引。
+
+下一入口 **N02 security/gateway/正式 Webroute**，同行补 N01 具名状态/阻塞/故障剩余项；用户说未修时继续新范围。其余 14 单元不因本轮回归标完成，15 单元计划仍为有界源码阶段计划。10-03 的 54～92 有效小时只是初估，需在 N02 补齐后按实际新主链重新校准，不能从 15/15 阅读或 bug 数算总覆盖率。
+
 ## 2026-10-04 非三大核心第一批修复
 
 [本轮修复运行](REVIEW-2026-10-04-noncore-01.md) · [四项 bugfix](../bugfix/README.md) · [红/绿与复跑](../bugfix/evidence/noncore-bugfix-20261004-01/README.md)。起点 `183b0bdd`。RR-20261003-NC-01～04 **4/4 已修，声明场景验证，未发版**；下方 10-03 “未修”保留历史。

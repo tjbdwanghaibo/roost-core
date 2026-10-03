@@ -1,0 +1,109 @@
+{
+  "source_baseline": "3529a569920f08f3f42a45da9a2119e5935b45ae",
+  "note": "Executed before source commit on identical product working tree; git blobs and worktree SHA256 use different line-ending normalization.",
+  "sources": [
+    {
+      "path": "app/app.go",
+      "git_blob": "c71ae68c4d35872db1dcb125317661fcfe69ff87",
+      "worktree_sha256": "2FAEF2DA9142318D951A6FC9101D9B99F909785696A32C94091B8DEE21F768BE"
+    },
+    {
+      "path": "app/mod.go",
+      "git_blob": "1670ffc9c4f81fcb3e9d79af5c886476019ceb82",
+      "worktree_sha256": "CE3049CFC64B1024A3B2F6CDB1B8E203C84CFF928EF1BD7847715088D1DE7DE1"
+    },
+    {
+      "path": "app/service.go",
+      "git_blob": "2b320e9844530a6e220207ec7512332cfbcc498e",
+      "worktree_sha256": "ACC1261C13A369EA7CD5C7AF4A0973DB7C332D2D0125DDFF69CCA57C02B0E9E9"
+    },
+    {
+      "path": "app/registry.go",
+      "git_blob": "f4be71f06fbc505200154a84bd7379bb21cf7b90",
+      "worktree_sha256": "5E9D7071355FAD4F6DA2877F4449C783586B31163E700518EBCADC6E73AE73DC"
+    },
+    {
+      "path": "app/runtime_failure.go",
+      "git_blob": "6e52e6a9946400e4ce87f561d1791a66fdd405a9",
+      "worktree_sha256": "FCC125C7734772271B7392E132776004B415922B661F05FC2B27E48BA636B6BA"
+    },
+    {
+      "path": "app/manager.go",
+      "git_blob": "0ebe356638b066793625e5ba26a7a4b58bc4a55e",
+      "worktree_sha256": "56F07E993EC403CBA8EABA6E5AED3F5BA45732D21FA020A3300BFE4AA300970A"
+    },
+    {
+      "path": "app/config_validation.go",
+      "git_blob": "852a94dc2456432fd06432bf9789a379658d108c",
+      "worktree_sha256": "908D0EE48E85D681C12D58D7EAD983634DBF3B6F87EF7D125843F963C9DBAA91"
+    },
+    {
+      "path": "app/name.go",
+      "git_blob": "c5307f7918ff431bd42c318d9d5d80e2dcd03bc2",
+      "worktree_sha256": "46A4B2C2F1C5540C0488BC018545DFB4D06586E8F192EA2F4E68ED2AF2EC8BB6"
+    },
+    {
+      "path": "app/buildinfo/buildinfo.go",
+      "git_blob": "912b320c6372129d97aa137f111242c67e6592e8",
+      "worktree_sha256": "75456DADF270883AFF18D986479315AF7F7C78A8EF589789C8558429D75B2238"
+    },
+    {
+      "path": "lifecycle/lifecycle.go",
+      "git_blob": "f7b4167f731c39e6691ca97307935a256db8a3f0",
+      "worktree_sha256": "F205122979EE7360807B00FE2D705347711DF893F71C135247D8A73CF42E46EF"
+    },
+    {
+      "path": "lifecycle/manager_group.go",
+      "git_blob": "273ba3ad259b41a7ff490c91bfaaa78cda975d90",
+      "worktree_sha256": "D413A7B53D25ED85AFC76E39E60474CC7C65EE13BEAD396DA875336F420B2860"
+    },
+    {
+      "path": "manager/engine.go",
+      "git_blob": "9f273f39b72af55c75c7411e369dc40458923714",
+      "worktree_sha256": "E40BC258EDDF9239A427CE8416A89728B9AEDC23328882A54D729F4DF707F496"
+    },
+    {
+      "path": "manager/order.go",
+      "git_blob": "1152c51a96800a026ec46b371936eda538624bfa",
+      "worktree_sha256": "0A5FE3228F574904A3067D129CE1A9B7A4718EE2E9BBB17EA6A2EA225C032F66"
+    },
+    {
+      "path": "health/health.go",
+      "git_blob": "e67f3510f455144121928fbec758e74136c9db75",
+      "worktree_sha256": "832B49FA210032E5B3A71C1CD2AF95F8B19536AFD92485EA9D18679B640BD8CE"
+    },
+    {
+      "path": "admin/admin.go",
+      "git_blob": "a78f02864522a7cd3dc60e57c5784558b49475a0",
+      "worktree_sha256": "1BD2EDD70FF76F643A5BB20658E16B779E9139314E56BAA98EC94937554015C3"
+    },
+    {
+      "path": "kit/manager/manager_mod.go",
+      "git_blob": "cece1ffa0d8d5a8cdec2ff1e3c959e7a9e910ca3",
+      "worktree_sha256": "9018525E4FEA1E14D97432A39FD99035B83FC6491920A2870D6A7DC76EC7D048"
+    },
+    {
+      "path": "kit/ops/ops_mod.go",
+      "git_blob": "3d40f5371921cc7f6015d4e35af228f091db059e",
+      "worktree_sha256": "8ED39D3D2C817F1545104BBC04EAC52EF3C18351E1DF20ABC40D9D5310712F04"
+    }
+  ],
+  "probes": [
+    {
+      "path": "manager_review_test.go.txt",
+      "sha256": "C0181936EF1E4A0A2A9E6FB97139CC1090CDDBC12D9A6655B6FC87E9DACF31B3"
+    },
+    {
+      "path": "admin_review_test.go.txt",
+      "sha256": "C578B69E1EB4731824A7DFF5B80C00B4894873F93848BC910B895323D44F7D6D"
+    },
+    {
+      "path": "lifecycle_review_test.go.txt",
+      "sha256": "573491AABFE9DFADE6F4ED7C32FAA93DA3A7AFDDC53ACFF19DA8B048CE6172A0"
+    },
+    {
+      "path": "ops_review_test.go.txt",
+      "sha256": "0E50A1FCE38004810E53D915F0D125775E8124A585E0FC4163F121A937F7D50E"
+    }
+  ]
+}
