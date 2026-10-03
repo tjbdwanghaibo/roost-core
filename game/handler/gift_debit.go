@@ -1,0 +1,37 @@
+package handler
+
+import (
+	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/gift"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerGiftDebit is the gift saga's debit step: take count of itemID out of
+// the sender's Bag, and — in the same transaction — record that this command
+// ran and what it decided.
+//
+// That last part is what makes the step exactly-once. The Bag change, the
+// command's receipt and the completion the coordinator waits for are one WAL
+// record: a redelivery finds the receipt and replays the stored completion
+// instead of debiting again, and a crash before the commit leaves none of the
+// three. With the Mongo step inbox these were two commits with a window
+// between them (see gift.NativeStep).
+//
+// A business refusal (the sender no longer has the items) also commits: no
+// mutation, just the receipt and a failed completion, because a refusal the
+// coordinator never hears is a saga that waits out its deadline. Only an
+// infrastructure error returns — that rolls everything back and lets the
+// delivery retry.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step gift.NativeStep) (int32, error) {
+	left, err := target.BagComp().RemoveItem(itemID, count)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			return 0, err
+		}
+		return 0, step.Complete(false, reason)
+	}
+	return left, step.Complete(true, "")
+}

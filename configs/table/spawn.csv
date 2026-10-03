@@ -1,0 +1,5 @@
+id,template,count,hp,center_x,center_y,radius,respawn_seconds
+ID,Template,Count,HP,CenterX,CenterY,Radius,RespawnSeconds
+int32,int32,int32,int64,int64,int64,int64,int64
+required;unique,required,required,required,required,required,required,required
+1,9001,3,30,520,500,40,20

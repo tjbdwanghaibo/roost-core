@@ -1,0 +1,212 @@
+// Package Platform supplies the collaborators the platform service needs from
+// this project. The game-demo template wrote this file once; roost-codegen
+// will not overwrite it.
+package Platform
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
+	"example.com/planet/game/purchase"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/platform"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+	redis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// demoCredentialPrefix: the "proof" that this channel account is who it says
+// it is, in a demo that has no store to ask. It mirrors the account service's
+// demo verifier, and it is the same non-verification: anyone can present
+// anyone's open id.
+const demoCredentialPrefix = "demo:"
+
+// Verify checks a channel credential.
+//
+// THIS IS NOT VERIFICATION. A real one calls the store's session endpoint and
+// fails closed when it cannot reach it (platform.ErrVerifierDown), so an
+// outage is not reported to players as a bad credential. What this does keep
+// is the shape that matters: it refuses every channel it does not know, and
+// it returns the identity it confirmed rather than the one it was handed.
+func Verify() platform.Verifier {
+	return platform.VerifierFunc(func(_ context.Context, credential platform.Credential) (platform.Verified, error) {
+		if credential.Channel != purchase.Channel {
+			return platform.Verified{}, fmt.Errorf("%w: channel %q is not a payment channel of this demo (only %q is)",
+				platform.ErrIdentityDenied, credential.Channel, purchase.Channel)
+		}
+		openID := strings.TrimSpace(credential.OpenID)
+		if openID == "" || credential.Secret != demoCredentialPrefix+openID {
+			return platform.Verified{}, fmt.Errorf("%w: credential does not match open id %q", platform.ErrIdentityDenied, openID)
+		}
+		return platform.Verified{Channel: credential.Channel, OpenID: openID}, nil
+	})
+}
+
+// Players maps a verified channel account to this server's player id.
+//
+// In this demo the channel open id IS the player id, because the demo's only
+// login path already produced that id through the account service. A real
+// project keeps a table — channel + open id → player — and creates the row on
+// first sight if that is its policy; what it must not do is read the player
+// id out of the request, which is what makes this a resolver rather than a
+// parameter.
+func Players() platform.PlayerResolver {
+	return platform.PlayerResolverFunc(func(_ context.Context, verified platform.Verified) (int64, error) {
+		playerID, err := strconv.ParseInt(verified.OpenID, 10, 64)
+		if err != nil || playerID <= 0 {
+			return 0, fmt.Errorf("%w: open id %q is not a player id of this demo", platform.ErrIdentityDenied, verified.OpenID)
+		}
+		return playerID, nil
+	})
+}
+
+// grants is the one collaborator with state: where the deliverer writes what
+// it owes.
+var grants = &grantDeliverer{}
+
+// Deliver grants what was paid for.
+//
+// It cannot put the items in the bag itself: the bag is an Entity in the game
+// process, and this is the platform process, which holds Redis and the bus
+// and nothing else. So what it does is the part that has to be durable —
+// record the resolved grant where the game process will find it — and the
+// game grants it into the bag under the Player's lock, exactly once, keyed by
+// this order id.
+//
+// That split is why "delivered" is honest here. The deliverer returns nil
+// only after the grant is durable, so an order marked delivered is one whose
+// goods are owed by a record that survives every process involved. If it
+// returned nil after a fire-and-forget push, a crash between push and grant
+// would leave a paid order the service believes it finished.
+//
+// The first durable field wins. A retry restores that resolved grant even if
+// the catalog changed or the product was removed while the reply was lost.
+type grantDeliverer struct {
+	mu     sync.Mutex
+	client grantStore
+	prefix string
+}
+
+// BindRegistry implements platform.RegistryBound.
+func (deliverer *grantDeliverer) BindRegistry(registry *app.Registry) error {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return err
+	}
+	prefix, err := mods.KeyPrefix(registry.Config(), "platform")
+	if err != nil {
+		return err
+	}
+	deliverer.mu.Lock()
+	defer deliverer.mu.Unlock()
+	deliverer.client, deliverer.prefix = client, prefix
+	return nil
+}
+
+// grantStore keeps the read and atomic insert boundary injectable in tests.
+type grantStore interface {
+	HGet(ctx context.Context, key, field string) ([]byte, error)
+	Eval(ctx context.Context, script string, keys []string, args ...any) (any, error)
+}
+
+// One hash is one Cluster key. The returned bytes are the durable winner,
+// including when another process inserted between our read and this script.
+const recordGrantScript = `
+local existing = redis.call('HGET', KEYS[1], ARGV[1])
+if existing then return existing end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+return ARGV[2]
+`
+
+func (deliverer *grantDeliverer) handle() (grantStore, string) {
+	deliverer.mu.Lock()
+	defer deliverer.mu.Unlock()
+	return deliverer.client, deliverer.prefix
+}
+
+// Deliver implements platform.Deliverer.
+func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Order) error {
+	client, prefix := deliverer.handle()
+	if client == nil {
+		return fmt.Errorf("%w: purchase delivery: not bound to a registry", platform.ErrDeliveryNotApplied)
+	}
+	key := purchase.GrantsKey(prefix, order.PlayerID)
+	existing, err := client.HGet(ctx, key, order.OrderID)
+	if err == nil {
+		return validateStoredGrant(string(existing), order)
+	}
+	if !errors.Is(err, redis.ErrNil) {
+		// A failed read is not proof that no grant was previously applied.
+		return fmt.Errorf("purchase delivery: read grant %s: %w", order.OrderID, err)
+	}
+	product, ok := purchase.Lookup(order.ProductID)
+	if !ok {
+		// The payment was for something this build cannot deliver. Failing is
+		// the only honest answer: the order stays undelivered and visible,
+		// and someone has to either ship the product or settle the order by
+		// hand. Succeeding would close a paid order having granted nothing.
+		return fmt.Errorf("%w: purchase delivery: order %s bought unknown product %q", platform.ErrDeliveryNotApplied, order.OrderID, order.ProductID)
+	}
+	grant, err := purchase.Encode(purchase.Grant{
+		OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: product.ID,
+		ItemID: product.ItemID, Count: product.Count, PaidAtUnix: order.PaidAtUnix,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", platform.ErrDeliveryNotApplied, err)
+	}
+	stored, err := client.Eval(ctx, recordGrantScript, []string{key}, order.OrderID, grant)
+	if err != nil {
+		return fmt.Errorf("purchase delivery: record grant %s: %w", order.OrderID, err)
+	}
+	switch raw := stored.(type) {
+	case string:
+		return validateStoredGrant(raw, order)
+	case []byte:
+		return validateStoredGrant(string(raw), order)
+	default:
+		return fmt.Errorf("purchase delivery: unexpected grant reply for %s: %T", order.OrderID, stored)
+	}
+}
+
+func validateStoredGrant(raw string, order platform.Order) error {
+	grant, err := purchase.Decode(raw)
+	if err != nil {
+		return err
+	}
+	if grant.OrderID != order.OrderID || grant.PlayerID != order.PlayerID ||
+		grant.ProductID != strings.TrimSpace(order.ProductID) || grant.PaidAtUnix != order.PaidAtUnix {
+		// Preserve inconsistent evidence; never overwrite it or claim non-application.
+		return fmt.Errorf("purchase delivery: stored grant identity differs from order %s", order.OrderID)
+	}
+	return nil
+}
+
+// Deliver is the collaborator the Mod takes.
+func Deliver() platform.Deliverer { return grants }
+
+// Pending is where the background retry loop gets its candidates.
+//
+// nil, and that is now the right answer: the order store keeps the pending
+// index itself, in the SAME Redis write as the order (kit's NewRedisOrders,
+// RR-20260919-04), so the service has one by default and it is atomic with
+// the record. A deployment-side index cannot be — it can only write after the
+// order is stored, and a process that dies in between leaves a paid order no
+// loop can enumerate.
+//
+// What a deployment supplies one FOR, still: orders that live somewhere other
+// than this Redis, or a deliberate "no background retry" (which the Server
+// then says at start rather than miming).
+func Pending() platform.PendingOrders { return nil }
+
+// Metrics receives the service's counters. nil means no reporting and never
+// fails an operation; wire the project's servicemetrics.Reporter here.
+func Metrics() servicemetrics.Reporter { return nil }
+
+var (
+	_ platform.Deliverer     = (*grantDeliverer)(nil)
+	_ platform.RegistryBound = (*grantDeliverer)(nil)
+)

@@ -1,0 +1,28 @@
+# Prometheus + Grafana for a developer machine. The game, mail and match
+# processes run on the host and expose /metrics on their ops ports; this
+# compose scrapes them through host.docker.internal and provisions the demo
+# dashboard. It is separate from deploy/dev/docker-compose.yaml (the
+# generated infrastructure compose) on purpose: observability is optional,
+# and that file is regenerated.
+#
+#   docker compose -f deploy/dev/observability/docker-compose.yaml up -d
+#   open http://127.0.0.1:3000   (admin / admin)
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2d"]
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]

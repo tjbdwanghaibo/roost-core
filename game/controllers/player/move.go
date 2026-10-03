@@ -1,0 +1,55 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "example.com/planet/game/entities/player"
+	syncsender "example.com/planet/game/handler/syncsender"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+// HandleMove moves the player one point.
+//
+// The endpoint resolves WHICH scene and the transaction does the rest: the
+// position the client asked for is checked against the map inside the
+// transaction that writes it, so two players racing for the same point cannot
+// both win — the Scene Entity is locked by both transactions and one of them
+// finds the ground taken.
+//
+// The response carries the position the server settled on, read back after
+// the transaction. A refused move answers with a code and the position the
+// player still has, so a client can snap back instead of drifting.
+func (controller *Controller) HandleMove(context *player_agent.Context, request *pb.MoveRequest) (*pb.MoveResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("move endpoint: context and request are required")
+	}
+	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("move endpoint: %w", err)
+	}
+	if err := syncsender.NewMovePlayerSender(controller.NestClient()).MultiSync_MovePlayer(context.Context(), playerEntityID, controller.WorldSceneID(), request.X, request.Y); err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("move failed", "player_id", context.PlayerID, "x", request.X, "y", request.Y, "err", err)
+		}
+		// Refused: answer with where the player actually is, so the client
+		// can correct itself.
+		position, readErr := syncsender.NewPlayerPositionSender(controller.NestClient()).Sync_PlayerPosition(context.Context(), playerEntityID)
+		if readErr != nil {
+			return &pb.MoveResponse{Code: code, Reason: reason}, nil
+		}
+		return &pb.MoveResponse{Code: code, Reason: reason, X: position.X, Y: position.Y}, nil
+	}
+	// The map moved; tell the replication side so interest follows. It is
+	// after the transaction on purpose: the DAO is the authority and the
+	// interest index follows it, never the other way round.
+	if scene, err := controller.Scene(); err == nil {
+		scene.Moved(context.Context(), playerEntityID, spatial.Point{X: request.X, Y: request.Y})
+	}
+	return &pb.MoveResponse{X: request.X, Y: request.Y}, nil
+}

@@ -1,0 +1,41 @@
+# Scrape targets are the ops endpoints (ops.addr in configs/service/*.yaml:
+# the business service from 9100, the hosted services after it in name order)
+# and the load test's -metrics-addr. Every roost process serves the same
+# in-process registry at /metrics in Prometheus text format; there is no
+# exporter sidecar.
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: game
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+  - job_name: account
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+  - job_name: activity
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
+  - job_name: chat
+    static_configs:
+      - targets: ["host.docker.internal:9103"]
+  - job_name: global
+    static_configs:
+      - targets: ["host.docker.internal:9104"]
+  - job_name: mail
+    static_configs:
+      - targets: ["host.docker.internal:9105"]
+  - job_name: match
+    static_configs:
+      - targets: ["host.docker.internal:9106"]
+  - job_name: platform
+    static_configs:
+      - targets: ["host.docker.internal:9107"]
+  - job_name: rank
+    static_configs:
+      - targets: ["host.docker.internal:9108"]
+  - job_name: session
+    static_configs:
+      - targets: ["host.docker.internal:9109"]
+  - job_name: loadtest
+    static_configs:
+      - targets: ["host.docker.internal:9300"]

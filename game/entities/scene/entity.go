@@ -1,0 +1,101 @@
+package scene
+
+import (
+	"fmt"
+	"sync/atomic"
+
+	gamescene "example.com/planet/game/scene"
+	sceneruntime "example.com/planet/game/scene/runtime"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindScene entity.EntityKind = 3
+
+// Scene is the map as an Entity: it has an id, a lifecycle the framework
+// drives, and it is addressable by GM commands and (later) by another
+// process. What it does NOT have is a DAO — a scene is rebuilt from
+// configuration on every start, so `noPersist=true lifetime=runtime_rebuild`
+// says exactly that and no storage is touched.
+//
+// The Entity owns a runtime made of systems and hands them out by interface
+// (Terrain, PathFind, …). The systems carry their own locks, so these
+// accessors are safe to call from anywhere: an endpoint, the spawner's timer,
+// the AOI tick. The Entity's own lock orders transactions over entity STATE,
+// which is a different question from "can I stand here".
+//
+// Category: rank 2, the same rank as World — a scene is world-scoped and is
+// locked before any Player in a transaction that touches both.
+//
+//roost:entity id=3 entityKind=EntityKindScene category=entity.EntityCategoryWorld noPersist=true lifetime=runtime_rebuild
+type Scene struct {
+	*entity.EntityBase
+	entity.ComponentManager
+
+	runtime   atomic.Pointer[sceneruntime.Runtime]
+	destroyed atomic.Bool
+}
+
+// OnInitFinish builds the runtime. A scene that cannot build its map is not a
+// scene: the error stops the Entity from being created rather than producing
+// one whose Terrain() answers nil.
+func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
+	config := gamescene.DefaultConfig()
+	if param != nil {
+		if supplied, ok := param.Param.(gamescene.Config); ok {
+			config = supplied
+		}
+	}
+	runtime, err := sceneruntime.New(s, config)
+	if err != nil {
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	if err := runtime.Start(); err != nil {
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	s.runtime.Store(runtime)
+	return nil
+}
+
+// OnDestroy stops the systems in reverse order. It is idempotent: the
+// framework can destroy an entity from more than one path.
+func (s *Scene) OnDestroy(reason entity.EntityDestroyReason) {
+	if !s.destroyed.CompareAndSwap(false, true) {
+		return
+	}
+	if runtime := s.runtime.Swap(nil); runtime != nil {
+		runtime.Stop(reason)
+	}
+}
+
+// Terrain and PathFind are the exported systems. They answer nil once the
+// scene is destroyed, which callers must handle — a scene can go away while a
+// request that found it is still in flight.
+func (s *Scene) Terrain() gamescene.Terrain {
+	if runtime := s.runtime.Load(); runtime != nil {
+		return runtime.Terrain()
+	}
+	return nil
+}
+
+func (s *Scene) PathFind() gamescene.PathFind {
+	if runtime := s.runtime.Load(); runtime != nil {
+		return runtime.PathFind()
+	}
+	return nil
+}
+
+func (s *Scene) Refresh() gamescene.Refresh {
+	if runtime := s.runtime.Load(); runtime != nil {
+		return runtime.Refresh()
+	}
+	return nil
+}
+
+// ISceneEntity is the lock-safe business view for Nest handlers that address
+// a Scene.
+type ISceneEntity interface {
+	entity.IThreadSafeEntity
+	Terrain() gamescene.Terrain
+	PathFind() gamescene.PathFind
+	Refresh() gamescene.Refresh
+}

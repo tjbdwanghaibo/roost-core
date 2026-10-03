@@ -1,0 +1,7 @@
+name,enabled,note
+Name,Enabled,Note
+string,bool,string
+required;unique,,
+purchase,true,"The store. Off refuses Purchase with a coded answer; paid orders already recorded still settle."
+monster_spawn,true,"Scene monsters. Off stops respawns; monsters already alive stay until killed."
+activity,true,"The timed server-wide event. Off stops opening new windows; a window already open still settles."

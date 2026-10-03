@@ -1,0 +1,131 @@
+package Game
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	player "example.com/planet/game/entities/player"
+	syncsender "example.com/planet/game/handler/syncsender"
+	"example.com/planet/game/purchase"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// PurchaseCapability is the name the drain is published under, so an endpoint
+// can reach it without importing this package.
+const PurchaseCapability app.ModName = "game.purchases"
+
+// The game side of a paid order.
+//
+// The platform service runs in its own process and cannot touch an Entity, so
+// it records what it owes as a durable grant (internal/service/platform) and
+// this drains it: read the player's grants, run the transaction that puts the
+// items in the bag and records the order id in the same WAL record, then
+// delete the grant.
+//
+// The order of those two writes is the whole design. The grant is deleted
+// AFTER the transaction commits, so a crash in between leaves a grant that
+// will be read again — and the second read finds the order id already in the
+// Player's ledger and grants nothing. The other order (delete first) would
+// lose a paid grant to any crash. This is the same "authoritative state plus a
+// claim ledger in the same transaction" the dungeon clear and the mail
+// attachment use; what changes is only who wrote the request down.
+//
+// Draining is pull, not push, and that is deliberate: a player who bought
+// something while offline has a grant waiting, and the drain runs when they
+// are next in hand (login, and after their own purchase call). Nothing in the
+// platform process has to know whether this player is online, or which
+// process they are on.
+type PurchaseDrain struct {
+	redis  fredis.IRedis
+	nest   corenest.Client
+	prefix string
+}
+
+// NewPurchaseDrain builds the drain from what the process publishes.
+func NewPurchaseDrain(registry *app.Registry) (*PurchaseDrain, error) {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return nil, fmt.Errorf("purchase drain: %w", err)
+	}
+	nest, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nest == nil {
+		return nil, fmt.Errorf("purchase drain: nest client is unavailable")
+	}
+	// The same prefix the platform service keeps its orders under. It is
+	// configuration on both sides rather than a constant, because a
+	// deployment that runs two worlds against one Redis separates them here.
+	prefix, err := mods.KeyPrefix(registry.Config(), "platform")
+	if err != nil {
+		return nil, fmt.Errorf("purchase drain: %w", err)
+	}
+	return &PurchaseDrain{redis: client, nest: nest, prefix: prefix}, nil
+}
+
+// DrainPlayer grants everything waiting for one player and reports what it
+// settled.
+//
+// A failure on one grant does not stop the others: the grants are independent
+// purchases, and one product this build cannot deliver must not hold up the
+// rest. What it does do is leave that grant in place, so it is retried and
+// stays visible.
+func (drain *PurchaseDrain) DrainPlayer(ctx context.Context, playerID int64) ([]purchase.Settlement, error) {
+	if drain == nil || playerID <= 0 {
+		return nil, nil
+	}
+	key := purchase.GrantsKey(drain.prefix, playerID)
+	stored, err := drain.redis.HGetAll(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("purchase drain: read grants of player %d: %w", playerID, err)
+	}
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	entityID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("purchase drain: %w", err)
+	}
+	sender := syncsender.NewGrantPurchaseSender(drain.nest)
+	settled := make([]purchase.Settlement, 0, len(stored))
+	for orderID, raw := range stored {
+		grant, err := purchase.Decode(raw)
+		if err != nil {
+			// A grant this build cannot read is left in place rather than
+			// deleted: deleting it would destroy the only record that the
+			// player paid.
+			slog.Error("purchase drain: unreadable grant", "player_id", playerID, "order_id", orderID, "err", err)
+			continue
+		}
+		result, err := sender.Sync_GrantPurchase(ctx, entityID, grant.OrderID, grant.ItemID, grant.Count, grant.PaidAtUnix, time.Now().Unix())
+		switch {
+		case err != nil:
+			// The grant STAYS. There is no failure here that makes a paid
+			// order undeliverable — a full bag, a Mongo blip, a process going
+			// down mid-transaction are all things that pass — so nothing in
+			// this loop may drop one (RR-20260919-06). It is read again on the
+			// player's next login.
+			slog.Error("purchase drain: grant failed; it stays for the next drain",
+				"player_id", playerID, "order_id", grant.OrderID, "err", err)
+			continue
+		default:
+			settled = append(settled, purchase.Settlement{
+				OrderID: grant.OrderID, ItemID: grant.ItemID, Count: grant.Count,
+				BagCount: result.BagCount, Granted: result.Granted,
+			})
+		}
+		// Delete only after the transaction is durable (or is known to be
+		// impossible). A delete before the commit loses the grant to a crash;
+		// a delete that fails after it costs one extra read, which the ledger
+		// answers with "already claimed".
+		if _, err := drain.redis.HDel(ctx, key, grant.OrderID); err != nil {
+			slog.Warn("purchase drain: granted but the grant was not removed",
+				"player_id", playerID, "order_id", grant.OrderID, "err", err)
+		}
+	}
+	return settled, nil
+}

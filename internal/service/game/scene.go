@@ -1,0 +1,878 @@
+package Game
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/lifecycle"
+	gamescene "example.com/planet/game/scene"
+	accessplayertcp "example.com/planet/internal/access/player/tcp"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
+)
+
+// The scene is the demo's server-authoritative replication: every online
+// player is a SUBJECT whose state the server owns, and every online player is
+// a SESSION that receives the others' changes. It is the other half of the
+// entity's `sync=true` — the entity produces versioned deltas, the framework
+// decides who gets them and puts them on the wire.
+//
+// Three layers, each from the framework (ARCH-10):
+//
+//	Player.Sync()            the subject: version, dirty mask, packer — content only
+//	entitysync.Manager       the mechanism: every subject, every session, one frame per session per tick
+//	policy.Interest          the organization: distance plus relationships → who subscribes to whom
+//
+// This file is what is left for the game: the lane (a frame is one TCP push),
+// the session lifecycle (a player joins held, says ready, leaves), and the
+// facts only the game knows (the map's size, the interest radii, the team).
+const (
+	// sceneReplicationInterval is how often dirty subjects become frames. It
+	// is a batching window, not a latency budget: a change is visible to
+	// everyone within one interval.
+	sceneReplicationInterval = 50 * time.Millisecond
+
+	// Interest radii. BlockSize is the AOI grid's cell (the scene's Config)
+	// and the number of cells an observer subscribes to is
+	// (⌈2·LeaveRadius/BlockSize⌉+1)², so a cell about the size of the view
+	// radius gives the classic nine cells. EnterRadius < LeaveRadius is the
+	// hysteresis that keeps a player on the boundary from re-sending a
+	// snapshot every step.
+	sceneEnterRadius = 120
+	sceneLeaveRadius = 150
+
+	// relationTeam is the demo's one social relationship: the members of a
+	// formed match see each other wherever they are.
+	relationTeam = "team"
+
+	// A replication session the transport could not open yet — it is still
+	// closing the player's previous one, which a quick reconnect over a
+	// SessionLifecycle transport runs into (entitysync.SessionOpenRetryable) —
+	// is opened again with a doubling delay, a bounded number of times
+	// (RR-20260926-55). Past the last attempt the player keeps its place and
+	// its own view comes back with its next login.
+	sessionReopenAttempts   = 8
+	sessionReopenFirstDelay = 25 * time.Millisecond
+	sessionReopenMaxDelay   = time.Second
+
+	// sceneReopenFailedMetric counts the players whose replication session
+	// could not be reopened — attempts used up (reason "exhausted") or a
+	// refusal that is not "not yet" (reason "refused", e.g. the session
+	// limit). Each one stays in the scene without its own view until its next
+	// login; a warning per player was the only trace (RR-20260927-19).
+	sceneReopenFailedMetric = "scene_session_reopen_failed_total"
+)
+
+// SceneCapability is the name the scene is published under, so an endpoint
+// can reach it without importing this package.
+const SceneCapability app.ModName = "game.scene"
+
+// Scene holds the manager, the interest policy and who is in the scene.
+type Scene struct {
+	manager  *entitysync.Manager
+	interest *policy.Interest
+
+	sessions scenePusher
+	// unsubscribe releases this bridge's session-close subscription.
+	unsubscribe func()
+
+	// unloads is the entity runtime's reload of an instance unloaded from
+	// memory only; Start wires it to this manager and stopUnloads is what
+	// that returned (see Start). Nil in a test that builds no runtime.
+	unloads     unloadResyncer
+	stopUnloads func(context.Context) error
+	// loads is the Data Engine's notice of an entity loaded from the
+	// authority; Start hooks rebindLoaded on it and unhookLoads is what that
+	// returned (RR-20260927-23). Nil in a test that builds no Data Engine.
+	loads       entityLoadNotifier
+	unhookLoads func()
+
+	// transitions serializes what changes a player's membership — Join,
+	// Ready, Leave and the disconnect-driven settle — so a removal decided for
+	// an old connection cannot interleave with the Join of a new one
+	// (RR-20260926-40). It is held across manager and policy calls; none of
+	// them calls back into the scene (SessionLost only schedules a settle).
+	transitions sync.Mutex
+
+	mu      sync.Mutex
+	members map[int64]sceneMember // subject (entity) id → the Join it is in the scene under
+	joins   uint64                // last Join generation handed out
+	closed  bool                  // Close was called: a retry still scheduled does nothing
+
+	// async runs a settle off the caller's goroutine. Nil means a goroutine
+	// of its own; a test sets it to decide when a settle runs.
+	async func(func())
+	// after runs a session-open retry after a delay. Nil means
+	// time.AfterFunc; a test sets it to decide when a retry runs.
+	after func(time.Duration, func())
+}
+
+// sceneMember is one player's place in the scene. generation names the Join
+// that put it there: every Join — a first login or a reconnect — gets a new
+// one, and a disconnect is only acted on for the generation that was current
+// when it was reported. ready is whether that Join's client has said
+// scene_ready, which is what a reopened session has to go back to.
+// reopening says the member's replication session is not open yet and a
+// retry is scheduled (reopenLater).
+type sceneMember struct {
+	generation uint64
+	ready      bool
+	reopening  bool
+}
+
+// sceneLane is the demo's entitysync.Transport: one frame is one push on the
+// player's TCP connection. The manager's session id IS the player id — the
+// access layer mints it that way and pushes to every connection the player
+// has — so no translation happens here.
+type sceneLane struct {
+	transport scenePusher
+}
+
+// scenePusher is the slice of the player TCP Runtime the scene needs — the
+// same shape the battle rooms use. It is an interface so a test can watch the
+// frames without a socket.
+type scenePusher interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+// unloadResyncer is the slice of the entity runtime (entity.ManagerAccess)
+// the scene needs to have a player unloaded from memory only reloaded for
+// the ones watching it.
+type unloadResyncer interface {
+	ConfigureUnloadResync(coreentity.UnloadedSubjectSync, coreentity.UnloadResyncConfig) (func(context.Context) error, error)
+}
+
+// entityLoadNotifier is the Data Engine's notice of an entity loaded from the
+// authority and published (kit/dataengine Mod.OnEntityLoaded) — the same
+// optional capability the kit's Nest Mod hooks for the manager it owns. The
+// hook runs where the load is published, on the Nest fast pool: it must not
+// block.
+type entityLoadNotifier interface {
+	OnEntityLoaded(func(coreentity.IThreadSafeEntity)) (func(), error)
+}
+
+// sessionSource is the access layer's session lifecycle source. It is an
+// interface so a test can close a session without a socket, and it is
+// separate from scenePusher because a deployment could plausibly have one
+// without the other.
+type sessionSource interface {
+	OnSessionClosed(func(accessplayertcp.SessionClosed)) func()
+}
+
+// Push classifies the only two failures a push can have. The access layer
+// being gone (starting up, shutting down) is nobody's fault: the manager keeps
+// every subject dirty and tries the tick again. Anything else — no session,
+// a socket that will not take the frame — is this player's alone: the
+// manager closes the session and tells us through sessionLost.
+func (lane sceneLane) Push(ctx context.Context, session entitysync.SessionID, frame []byte) error {
+	err := lane.transport.PushPlayer(ctx, int64(session), msgid.MsgEntitySync, &pb.EntitySyncPush{Payload: frame})
+	if errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
+	}
+	return err
+}
+
+// NewScene assembles the manager, the policy and the lane from the process's
+// capabilities.
+func NewScene(registry *app.Registry) (*Scene, error) {
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return nil, errors.New("scene: player tcp runtime is unavailable")
+	}
+	var watermark func() uint64
+	if source, ok := app.Lookup[interface{ DurableLSN() uint64 }](registry, mods.ModDataEngine); ok && source != nil {
+		watermark = source.DurableLSN
+	} else {
+		slog.Warn("scene: no data engine watermark; replication will not wait for durability")
+	}
+	// The scene's manager is its own, so the framework's reload of a player
+	// unloaded from memory only is wired here, not by the Nest Mod (Start).
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, errors.New("scene: entity runtime is unavailable, so an unloaded player could never be reloaded for the ones watching it")
+	}
+	// The other half of following a reloaded player (RR-20260927-23): a load
+	// nobody's watching triggered — the business touching a player it had
+	// unloaded while nobody watched — is rebound here (Start).
+	loads, ok := app.Lookup[entityLoadNotifier](registry, mods.ModDataEngine)
+	if !ok || loads == nil {
+		return nil, errors.New("scene: the data engine does not report entity loads, so a player loaded again after an unload would stay unbound from the scene")
+	}
+	scene, err := newScene(transport, watermark, lifecycle.WorldSceneConfig())
+	if err != nil {
+		return nil, err
+	}
+	scene.unloads, scene.loads = access, loads
+	// The connection telling us it is gone beats waiting to fail a push to
+	// it: a player who logs off while nothing is happening used to stay in
+	// the scene until somebody else's frame tried to reach them
+	// (RR-20260918-06).
+	scene.watchSessions(transport)
+	return scene, nil
+}
+
+// watchSessions subscribes to connection closes. The handler does the least
+// possible on that goroutine — it is shared with every other subscriber — so
+// the actual removal runs on its own.
+func (bridge *Scene) watchSessions(source sessionSource) {
+	if bridge == nil || source == nil {
+		return
+	}
+	bridge.unsubscribe = source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+		if bridge.sessions.ActiveSessions(event.PlayerID) > 0 {
+			// Another connection of the same player is still up; the player
+			// is still here.
+			return
+		}
+		// Checked again when the settle runs, together with the generation:
+		// the player may have logged in again in between (RR-20260926-40).
+		bridge.settleLater(event.PlayerID, false)
+	})
+}
+
+func newScene(transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
+	return newSceneOn(sceneLane{transport: transport}, transport, watermark, config)
+}
+
+// newSceneOn builds the scene on a given replication lane. newScene's lane is
+// the player's TCP push; a test puts a SessionLifecycle transport under the
+// scene through here.
+func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
+	config = config.Normalize()
+	scene := &Scene{members: make(map[int64]sceneMember), sessions: transport}
+	// The durability gate: a pipelined deployment acknowledges a transaction
+	// before its WAL record is durable, so content can be newer than what
+	// survives a crash. The Data Engine names the watermark and the manager
+	// holds a subject back until it reaches the commit that produced it.
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+		Transport:        lane,
+		Interval:         sceneReplicationInterval,
+		DurableWatermark: watermark,
+		SessionLost:      scene.sessionLost,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scene: replication manager: %w", err)
+	}
+	// The policy: distance on the map's grid, plus the team. Ids everywhere
+	// in it are ENTITY ids — unique across kinds, so a Player 42 and a
+	// Monster 42 never collide — and sessionFor is the one translation to
+	// the transport's player id. Bands are deliberately not configured: a
+	// band only means something once the packer can pack less for a far
+	// subject, and the demo's packer is mask-opaque (ARCH-06).
+	interest, err := policy.NewInterest(policy.InterestConfig{
+		Manager: manager,
+		AOI: policy.AOIConfig{
+			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
+			BlockSize:   config.BlockSize,
+			EnterRadius: sceneEnterRadius,
+			LeaveRadius: sceneLeaveRadius,
+		},
+		Session:   sessionFor,
+		Relations: []string{relationTeam},
+	})
+	if err != nil {
+		_ = manager.Close(context.Background())
+		return nil, fmt.Errorf("scene: interest policy: %w", err)
+	}
+	scene.manager, scene.interest = manager, interest
+	return scene, nil
+}
+
+// Start brings the tick up. It is separate from NewScene so a process that
+// failed later in assembly never leaves a replication loop running.
+//
+// It also wires the reload of a player unloaded from memory only — the Data
+// Engine evicting it after a native step it skipped (the gift debit is one,
+// RR-20260926-30), or a Remote write the authority refused (RR-20260926-39).
+// Unloading closes the player's sync state; while anyone still watches it,
+// the framework reloads it from the authority off the fast pool and rebinds
+// this manager's subject to the new instance, so the watchers get its
+// authoritative state as a full update and its changes after that; if it
+// cannot be reloaded they get a remove (RR-20260926-59). The kit's Nest Mod
+// only wires the manager it owns; without this the scene's subject stayed on
+// the closed state and the others kept the last content they had received —
+// possibly an effect that never became the authority — until the player left
+// (RR-20260927-18). One entity runtime takes one such wiring.
+//
+// The framework reloads only while someone watches. A player unloaded while
+// nobody did — its own session dropped and not reopened, nobody near — is
+// loaded again by whatever touches it next, and the Data Engine reports that
+// load; Start hooks it (rebindLoaded) the way the kit's Nest Mod does for its
+// own manager. Without it the subject stayed on the closed state and a
+// watcher who came into view later never received the player
+// (RR-20260927-23).
+//
+// Both are wired before the replication loop starts, and a failure takes
+// back what was wired, so a scene that did not start leaves nothing hooked.
+func (bridge *Scene) Start(ctx context.Context) error {
+	if bridge == nil {
+		return errors.New("scene: nil")
+	}
+	if bridge.unloads != nil && bridge.stopUnloads == nil {
+		stop, err := bridge.unloads.ConfigureUnloadResync(bridge.manager, coreentity.UnloadResyncConfig{})
+		if err != nil {
+			return fmt.Errorf("scene: reload of unloaded players: %w", err)
+		}
+		bridge.stopUnloads = stop
+	}
+	if bridge.loads != nil && bridge.unhookLoads == nil {
+		unhook, err := bridge.loads.OnEntityLoaded(bridge.rebindLoaded)
+		if err != nil {
+			return errors.Join(fmt.Errorf("scene: rebind of reloaded players: %w", err), bridge.stopUnloadResync(ctx))
+		}
+		bridge.unhookLoads = unhook
+	}
+	if err := bridge.manager.Start(ctx); err != nil {
+		bridge.unhookEntityLoads()
+		return errors.Join(fmt.Errorf("scene: start replication: %w", err), bridge.stopUnloadResync(ctx))
+	}
+	return nil
+}
+
+// rebindLoaded binds the scene's subject to an instance just loaded from the
+// authority, if the subject is still on a closed one: the watchers get it as
+// a full update and follow the new instance (RR-20260927-23). Any other load
+// is none of the scene's business and answers one of the ignored errors — a
+// player not in the scene (not registered), the instance the subject is
+// already on or another live one (registered), a leave still owing removes
+// (retiring: the rejoin registers after it), or a manager already closed.
+// It runs where the load is published, on the Nest fast pool; Rebind does not
+// wait.
+func (bridge *Scene) rebindLoaded(loaded coreentity.IThreadSafeEntity) {
+	if loaded == nil || loaded.Base() == nil {
+		return
+	}
+	state := loaded.Base().Sync()
+	if state == nil || !state.Enabled() {
+		return
+	}
+	switch err := bridge.manager.Rebind(state); {
+	case err == nil,
+		errors.Is(err, entitysync.ErrSubjectNotRegistered),
+		errors.Is(err, entitysync.ErrSubjectRegistered),
+		errors.Is(err, entitysync.ErrSubjectRetiring),
+		errors.Is(err, entitysync.ErrManagerClosed):
+	default:
+		slog.Warn("scene: a reloaded player was not rebound", "entity", loaded.ID(), "err", err)
+	}
+}
+
+// unhookEntityLoads releases the Data Engine load hook.
+func (bridge *Scene) unhookEntityLoads() {
+	if bridge.unhookLoads != nil {
+		bridge.unhookLoads()
+		bridge.unhookLoads = nil
+	}
+}
+
+// stopUnloadResync stops the reload: in-flight reloads are abandoned (no
+// remove is sent) and no unload is picked up after it returns.
+func (bridge *Scene) stopUnloadResync(ctx context.Context) error {
+	if bridge.stopUnloads == nil {
+		return nil
+	}
+	err := bridge.stopUnloads(ctx)
+	bridge.stopUnloads = nil
+	if err != nil {
+		return fmt.Errorf("scene: stop the reload of unloaded players: %w", err)
+	}
+	return nil
+}
+
+func (bridge *Scene) Close(ctx context.Context) error {
+	if bridge == nil {
+		return nil
+	}
+	if bridge.unsubscribe != nil {
+		bridge.unsubscribe()
+		bridge.unsubscribe = nil
+	}
+	bridge.mu.Lock()
+	bridge.closed = true
+	bridge.mu.Unlock()
+	// The reload first, the way the kit's Nest Mod stops its own before the
+	// Nest: nothing rebinds or retracts on a manager being closed, and a
+	// reload never runs into a Nest that is stopping (the service shuts down
+	// before its Mods). Its timeout does not keep the manager open. Then the
+	// load hook (RR-20260927-23), before the manager closes: the Nest is still
+	// running, and a load it publishes from here on is not rebound.
+	resyncErr := bridge.stopUnloadResync(ctx)
+	bridge.unhookEntityLoads()
+	bridge.interest.Close()
+	return errors.Join(resyncErr, bridge.manager.Close(ctx))
+}
+
+// Flush runs one replication tick now. The loop does this on its own every
+// interval; tests call it to see the result at once.
+func (bridge *Scene) Flush(ctx context.Context) error {
+	if bridge == nil {
+		return errors.New("scene: nil")
+	}
+	return bridge.manager.Flush(ctx)
+}
+
+// CheckHealth is the manager's: capacity and tick failures.
+func (bridge *Scene) CheckHealth(ctx context.Context) health.Result {
+	if bridge == nil {
+		return health.Result{Status: health.StatusFail, Message: "scene is nil"}
+	}
+	return bridge.manager.CheckHealth(ctx)
+}
+
+// sessionFor is the one translation this bridge makes: the policy and the
+// subjects speak entity ids, the transport speaks player ids, and the
+// manager's session id is the latter.
+func sessionFor(entityID int64) entitysync.SessionID {
+	return entitysync.SessionID(coreentity.GetUniqueIDFromEntityID(entityID))
+}
+
+// Join registers the player as a replicated subject, opens their session HELD
+// and puts them into the interest policy. Held: subscribed, receiving
+// nothing. The client installs its state decoder only after the login
+// answer, so the first snapshot waits for Ready — the message the client
+// sends once it listens. Nothing here decides who sees whom; the policy does.
+//
+// A quick reconnect can find the previous Join's leave still in flight
+// (RR-20260926-55): the subject is retiring — the others are owed its
+// ObjectRemove — or the transport is still closing the old session. Neither
+// loses this Join: the registration waits for the retirement
+// (RegisterAfterRetirement) and the session open is retried (reopenLater).
+func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatial.Point) error {
+	if bridge == nil || bridge.manager == nil {
+		return errors.New("scene: not started")
+	}
+	if subject == nil {
+		return errors.New("scene: join needs a player")
+	}
+	bridge.transitions.Lock()
+	defer bridge.transitions.Unlock()
+	bridge.sweepLocked()
+
+	subjectID := subject.ID()
+	bridge.mu.Lock()
+	bridge.joins++
+	generation := bridge.joins
+	bridge.mu.Unlock()
+	// A reconnecting player whose session is still open keeps it, held and
+	// reset to snapshots. One the manager dropped after a failed push — or a
+	// first join — gets a new session, and the policy says the player's pairs
+	// again: the manager forgot them, the policy did not.
+	session := sessionFor(subjectID)
+	reopened, reopening := false, false
+	if err := bridge.manager.HoldSession(session); errors.Is(err, entitysync.ErrSessionUnknown) {
+		switch err := bridge.manager.OpenHeldSession(session); {
+		case err == nil:
+			reopened = true
+		case entitysync.SessionOpenRetryable(err):
+			reopening = true
+		default:
+			return fmt.Errorf("scene: open session for %d: %w", subjectID, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("scene: hold session for %d: %w", subjectID, err)
+	}
+	queued, err := bridge.manager.RegisterAfterRetirement(subject.Sync(), bridge.registeredLater(subjectID, generation))
+	if err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
+	}
+	if queued {
+		slog.Info("scene: rejoin waits for the previous leave's removes to go out", "subject_id", subjectID)
+	}
+	bridge.mu.Lock()
+	bridge.members[subjectID] = sceneMember{generation: generation, reopening: reopening}
+	bridge.mu.Unlock()
+
+	if err := bridge.interest.Enter(subjectID, at); err != nil {
+		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
+	}
+	if reopened {
+		bridge.interest.Resubscribe(subjectID)
+	}
+	bridge.apply()
+	if reopening {
+		bridge.reopenLater(subjectID, generation, 2) // this Join made attempt 1
+	}
+	return nil
+}
+
+// registeredLater is the done of a registration queued behind a retirement.
+// Pairs the policy said while the subject was retiring were refused and wait
+// on its retry list; once the subject is registered they are said again. It
+// runs on the manager's goroutine, so the work goes to its own.
+func (bridge *Scene) registeredLater(subjectID int64, generation uint64) func(error) {
+	return func(err error) {
+		bridge.runLater(func() {
+			bridge.transitions.Lock()
+			defer bridge.transitions.Unlock()
+			if _, current := bridge.memberLocked(subjectID, generation); !current {
+				return
+			}
+			if err != nil {
+				slog.Warn("scene: a rejoined player's subject was not registered", "subject_id", subjectID, "err", err)
+				return
+			}
+			bridge.apply()
+		})
+	}
+}
+
+// memberLocked reports the member's entry and whether it is still the Join
+// named by generation. Called with transitions held.
+func (bridge *Scene) memberLocked(subjectID int64, generation uint64) (sceneMember, bool) {
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	member, present := bridge.members[subjectID]
+	return member, present && !bridge.closed && member.generation == generation
+}
+
+// Ready releases a player's held session: the client's decoder is up and the
+// next tick sends its first snapshot.
+func (bridge *Scene) Ready(playerID int64) error {
+	if bridge == nil || bridge.manager == nil {
+		return errors.New("scene: not started")
+	}
+	bridge.transitions.Lock()
+	defer bridge.transitions.Unlock()
+	subjectID, idErr := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	bridge.mu.Lock()
+	member, present := bridge.members[subjectID]
+	bridge.mu.Unlock()
+	present = present && idErr == nil
+	if err := bridge.manager.ReadySession(entitysync.SessionID(playerID)); err != nil {
+		// The session is still to be opened (reopenLater): it opens ready.
+		if !(errors.Is(err, entitysync.ErrSessionUnknown) && present && member.reopening) {
+			return err
+		}
+	}
+	if present {
+		bridge.mu.Lock()
+		if current, still := bridge.members[subjectID]; still && current.generation == member.generation {
+			current.ready = true
+			bridge.members[subjectID] = current
+		}
+		bridge.mu.Unlock()
+	}
+	return nil
+}
+
+// Moved tells the policy where a player is now. It is called after the move
+// transaction committed — the DAO is the authority and the index follows it,
+// never the other way round.
+func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point) {
+	if bridge == nil {
+		return
+	}
+	if err := bridge.interest.Move(subjectID, to); err != nil {
+		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
+		return
+	}
+	bridge.apply()
+}
+
+// apply lets the policy say its changes to the manager and logs what the
+// manager refused. The first refusal of a pair is the one worth reading (a
+// subject that has not joined yet, a session that is gone); the repeats are
+// the policy trying again, and would bury that line if logged at the same
+// level (RR-20260920-06).
+func (bridge *Scene) apply() {
+	for _, refusal := range bridge.interest.Apply() {
+		// A subject still retiring from a leave is a rejoin whose registration
+		// is queued (Join): the pair is said again once it is registered.
+		if refusal.Retry || errors.Is(refusal.Err, entitysync.ErrSubjectRetiring) {
+			slog.Debug("scene: subscribe still refused", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
+		} else {
+			slog.Warn("scene: subscribe", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
+		}
+	}
+}
+
+// Leave takes a player out of the policy, retires their subject and closes
+// their session. The policy produces the unsubscribes for everyone who could
+// see them — this method does not have to remember who was watching.
+// Unregister is what tells the others the object is gone (an ObjectRemove on
+// their next frame); closing the session drops the leaver's own
+// subscriptions without owing them a frame there is nobody to send.
+//
+// Leave is unconditional: it is for a caller that has decided the player
+// must go (the ownership evictor). A disconnect goes through settle, which
+// first checks that the player really is gone.
+func (bridge *Scene) Leave(_ context.Context, subjectID int64) {
+	if bridge == nil || bridge.manager == nil {
+		return
+	}
+	bridge.transitions.Lock()
+	defer bridge.transitions.Unlock()
+	bridge.leaveLocked(subjectID)
+}
+
+// leaveLocked is Leave with transitions held.
+func (bridge *Scene) leaveLocked(subjectID int64) {
+	bridge.mu.Lock()
+	_, present := bridge.members[subjectID]
+	delete(bridge.members, subjectID)
+	bridge.mu.Unlock()
+	if !present {
+		return
+	}
+	if err := bridge.interest.Leave(subjectID); err != nil {
+		slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
+	}
+	bridge.apply()
+	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
+		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
+	}
+	bridge.manager.CloseSession(sessionFor(subjectID))
+}
+
+// ShowSubject registers something that is seen but does not see: a monster, a
+// dropped item. It is the Join path without the session half — and without
+// the membership bookkeeping, because these are not connections that can go
+// away on their own.
+func (bridge *Scene) ShowSubject(_ context.Context, state *coreentity.SubjectSyncState, subjectID int64, at spatial.Point) error {
+	if bridge == nil || bridge.manager == nil {
+		return errors.New("scene: not started")
+	}
+	if err := bridge.manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
+	}
+	if err := bridge.interest.Show(subjectID, at); err != nil {
+		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
+	}
+	bridge.apply()
+	return nil
+}
+
+// HideSubject is the reverse: the thing is gone, everyone watching is told on
+// their next frame, and the manager stops holding it.
+func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
+	if bridge == nil || bridge.manager == nil {
+		return
+	}
+	if err := bridge.interest.Hide(subjectID); err != nil {
+		slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
+	}
+	bridge.apply()
+	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
+		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
+	}
+}
+
+// SetTeam makes a formed match a relationship: each member is interested in
+// the others wherever they are. Player ids in, entity ids out — the policy
+// keys on the id that is unique across kinds, and this is one of the two
+// places the demo crosses that boundary (the other is sessionFor, in the
+// other direction).
+func (bridge *Scene) SetTeam(members []int64) {
+	if bridge == nil {
+		return
+	}
+	team := bridge.interest.Relation(relationTeam)
+	if team == nil {
+		return
+	}
+	subjects := make([]int64, 0, len(members))
+	for _, member := range members {
+		subjectID, err := coreentity.BuildEntityID(member, player.EntityKindPlayer)
+		if err != nil {
+			continue
+		}
+		subjects = append(subjects, subjectID)
+	}
+	for index, observer := range subjects {
+		peers := make([]int64, 0, len(subjects)-1)
+		for other, subject := range subjects {
+			if other != index {
+				peers = append(peers, subject)
+			}
+		}
+		team.Set(observer, peers)
+	}
+	bridge.apply()
+}
+
+// sweepLocked removes members whose connection is gone. The session-close
+// source is the primary path; this catches what it missed, at the one moment
+// a player is arriving. Called with transitions held.
+func (bridge *Scene) sweepLocked() {
+	bridge.mu.Lock()
+	candidates := make([]int64, 0, len(bridge.members))
+	for subjectID := range bridge.members {
+		candidates = append(candidates, subjectID)
+	}
+	bridge.mu.Unlock()
+	for _, subjectID := range candidates {
+		if bridge.sessions.ActiveSessions(coreentity.GetUniqueIDFromEntityID(subjectID)) == 0 {
+			bridge.leaveLocked(subjectID)
+		}
+	}
+}
+
+// sessionLost is the manager telling us a push to a player failed and their
+// session was closed. A leaver is ordinary churn, not an error, but a scene
+// that silently loses members is how RR-20260922-01 stayed invisible — so one
+// Info line. The push goes to every connection the player has and fails only
+// when none of them took it (the ones that could not are closed,
+// RR-20260926-52); a new connection may have come up since (RR-20260926-40),
+// and settle tells the two apart. It runs inside the manager's tick, so the
+// settle goes to its own goroutine.
+func (bridge *Scene) sessionLost(session entitysync.SessionID, cause error) {
+	slog.Info("scene: push to player failed, its replication session was closed", "player_id", int64(session), "err", cause)
+	bridge.settleLater(int64(session), true)
+}
+
+// settleLater records which Join a disconnect was reported against and runs
+// settle for it off the caller's goroutine (the session-close source and the
+// manager's tick are both shared). A player who is not a member has nothing
+// to settle.
+func (bridge *Scene) settleLater(playerID int64, sessionDropped bool) {
+	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return
+	}
+	bridge.mu.Lock()
+	member, present := bridge.members[subjectID]
+	bridge.mu.Unlock()
+	if !present {
+		return
+	}
+	bridge.runLater(func() { bridge.settle(subjectID, member.generation, sessionDropped) })
+}
+
+// runLater runs fn off the caller's goroutine.
+func (bridge *Scene) runLater(fn func()) {
+	if bridge.async != nil {
+		bridge.async(fn)
+		return
+	}
+	go fn()
+}
+
+// settle decides what a disconnect means for the member table, with
+// transitions held so no Join runs in between (RR-20260926-40):
+//
+//   - the Join it was reported against is no longer current (the player
+//     logged in again, or already left): the event speaks for a connection
+//     that no longer represents this player, and is dropped;
+//   - the player still has an active connection: it stays. If the manager
+//     dropped its replication session (sessionDropped: a push failed on every
+//     connection the player had at that moment — the transport closes a
+//     connection that cannot take a frame and fails the push only when none
+//     took it, RR-20260926-52 — and a new connection came up since), the
+//     session is opened again and the policy says the player's
+//     pairs again, so the live client gets a fresh snapshot instead of
+//     silence. The failed connections are gone, so this happens at most once
+//     per failure. Nobody else is told anything — the player never left;
+//   - otherwise the player is gone and leaves.
+func (bridge *Scene) settle(subjectID int64, generation uint64, sessionDropped bool) {
+	bridge.transitions.Lock()
+	defer bridge.transitions.Unlock()
+	bridge.mu.Lock()
+	member, present := bridge.members[subjectID]
+	bridge.mu.Unlock()
+	if !present || member.generation != generation {
+		slog.Debug("scene: disconnect for a superseded join ignored", "subject_id", subjectID, "reported", generation, "current", member.generation)
+		return
+	}
+	if bridge.sessions.ActiveSessions(coreentity.GetUniqueIDFromEntityID(subjectID)) > 0 {
+		if sessionDropped && !member.reopening {
+			bridge.reopenLocked(subjectID, member, 1)
+		}
+		return
+	}
+	bridge.leaveLocked(subjectID)
+}
+
+// reopenLocked opens a member's replication session again after the manager
+// dropped it, or after the transport refused to open it yet, in the state its
+// client was in: held until scene_ready, or ready. A new session starts a new
+// lifetime, so the client's next frame is a full snapshot of everything it
+// sees. A refusal that only means "not yet" (the transport is still closing
+// the previous session, RR-20260926-55) is retried with a growing delay, up to
+// sessionReopenAttempts; anything else, or the last attempt, leaves the player
+// in the scene (others still see it) with its own view to come back with its
+// next login — a warning and one count on sceneReopenFailedMetric per player
+// (RR-20260927-19). Called with transitions held.
+func (bridge *Scene) reopenLocked(subjectID int64, member sceneMember, attempt int) {
+	session := sessionFor(subjectID)
+	open := bridge.manager.OpenHeldSession
+	if member.ready {
+		open = bridge.manager.OpenSession
+	}
+	err := open(session)
+	if err != nil && entitysync.SessionOpenRetryable(err) && attempt < sessionReopenAttempts {
+		bridge.setReopening(subjectID, member.generation, true)
+		slog.Debug("scene: replication session not open yet, retrying", "subject_id", subjectID, "attempt", attempt, "err", err)
+		bridge.reopenLater(subjectID, member.generation, attempt+1)
+		return
+	}
+	bridge.setReopening(subjectID, member.generation, false)
+	if err != nil {
+		reason := "refused"
+		if entitysync.SessionOpenRetryable(err) {
+			reason = "exhausted"
+		}
+		metrics.IncCounter(sceneReopenFailedMetric, metrics.Labels{"reason": reason}, 1)
+		slog.Warn("scene: replication session not reopened", "subject_id", subjectID, "attempts", attempt, "reason", reason, "err", err)
+		return
+	}
+	queued := bridge.interest.Resubscribe(subjectID)
+	bridge.apply()
+	slog.Info("scene: player still connected, replication session reopened", "subject_id", subjectID, "pairs", queued, "attempts", attempt)
+}
+
+// reopenLater schedules attempt number attempt of reopenLocked. The retry is
+// for one Join: a member that left, logged in again or whose session was
+// opened meanwhile is not touched, and nothing runs after Close.
+func (bridge *Scene) reopenLater(subjectID int64, generation uint64, attempt int) {
+	delay := min(sessionReopenFirstDelay<<(attempt-2), sessionReopenMaxDelay)
+	retry := func() {
+		bridge.transitions.Lock()
+		defer bridge.transitions.Unlock()
+		member, current := bridge.memberLocked(subjectID, generation)
+		if !current || !member.reopening {
+			return
+		}
+		bridge.reopenLocked(subjectID, member, attempt)
+	}
+	if bridge.after != nil {
+		bridge.after(delay, retry)
+		return
+	}
+	time.AfterFunc(delay, retry)
+}
+
+// setReopening records whether a member's session open is pending, for the
+// Join named by generation only.
+func (bridge *Scene) setReopening(subjectID int64, generation uint64, reopening bool) {
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if member, present := bridge.members[subjectID]; present && member.generation == generation {
+		member.reopening = reopening
+		bridge.members[subjectID] = member
+	}
+}
+
+// Members reports who the scene currently replicates; the GM command and the
+// tests read it.
+func (bridge *Scene) Members() int {
+	if bridge == nil {
+		return 0
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	return len(bridge.members)
+}

@@ -1,0 +1,131 @@
+package Game
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	kitsyncbus "github.com/tjbdwanghaibo/roost-core/kit/syncbus"
+)
+
+// RR-20260926-12：生成的配置里声明的同步总线，必须是进程真正用上的那一个。
+//
+// 生成器写的是 `syncbus:` 段，kit 曾经只读 `room:` / `sync:`：整段被忽略，配置的
+// JetStream 静默退回至多一次的普通 NATS，功能在无故障时照常工作，唯一的痕迹是启动
+// 日志 "syncbus mod: started" 里的 transport。所以这里用本工程生成的配置文件初始化
+// 真实的 kit Mod，断言那条启动日志报出的正是配置的 transport，并且没有任何“配置未被
+// 读取”的告警（弃用段、被遮住的键、不认识的键）。
+//
+// RR-20260926-56：JetStream 的流名决定与谁共享消息和游标，所以同一条日志还要说出
+// 实际流名——未显式配置时由 prefix 派生，生成的 prefix roost.sync 仍是 ROOST_SYNC。
+//
+// RR-20260927-35：期望流名用 kit 导出的 kitsyncbus.JetStreamStreamFromConfig 推（与 Mod 同一规则），
+// 不在测试里重抄。之前按 driver.JetStreamSyncStream(prefix) 推，漏了 kit 对 roost.room 的兼容映射：
+// 从旧版升级、按迁移说明保留 prefix: roost.room 的工程，期望 ROOST_ROOM、实际 ROOST_SYNC，测试误报失败。
+// 第二个用例把 prefix 分别换成 roost.room、roost.sync 与非默认前缀，逐一对照写死的流名。
+func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
+	for _, file := range []string{
+		"../../../configs/service/config.game.yaml",
+		"../../../configs/service/config.game.prod.example.yaml",
+	} {
+		t.Run(file, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigFile(file)
+			if err := cfg.ReadInConfig(); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.ToLower(strings.TrimSpace(cfg.GetString("syncbus.transport")))
+			switch want {
+			case "":
+				t.Fatalf("%s has no syncbus.transport, so the process would run on the default", file)
+			case "js":
+				want = "jetstream"
+			}
+
+			wantStream := ""
+			if want == "jetstream" {
+				wantStream = kitsyncbus.JetStreamStreamFromConfig(cfg)
+				prefix := cfg.GetString("syncbus.prefix")
+				if !cfg.IsSet("syncbus.stream") && (prefix == "roost.sync" || prefix == "roost.room") && wantStream != "ROOST_SYNC" {
+					t.Fatalf("prefix %s must keep the deployed stream ROOST_SYNC, derived %q", prefix, wantStream)
+				}
+			}
+
+			started, startedStream := startSyncBusMod(t, cfg)
+			if started != want {
+				t.Fatalf("%s configures syncbus.transport=%s but the mod started on %q", file, want, started)
+			}
+			if startedStream != wantStream {
+				t.Fatalf("%s: the start log names stream %q, want %q", file, startedStream, wantStream)
+			}
+		})
+	}
+}
+
+// RR-20260927-35：同一份生成配置换三种 prefix（旧版兼容的 roost.room、生成默认 roost.sync、
+// 与别的部署隔离的非默认前缀），启动日志里的流名逐一对照写死的值。
+func TestTheSyncBusStreamFollowsThePrefixRules(t *testing.T) {
+	for _, tc := range []struct{ prefix, stream string }{
+		{prefix: "roost.room", stream: "ROOST_SYNC"},
+		{prefix: "roost.sync", stream: "ROOST_SYNC"},
+		{prefix: "zz35.sync", stream: "ZZ35_SYNC"},
+	} {
+		t.Run(tc.prefix, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigFile("../../../configs/service/config.game.yaml")
+			if err := cfg.ReadInConfig(); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.IsSet("syncbus.stream") {
+				t.Skip("the project pins syncbus.stream; the prefix no longer decides the stream")
+			}
+			cfg.Set("syncbus.transport", "jetstream")
+			cfg.Set("syncbus.prefix", tc.prefix)
+			if got := kitsyncbus.JetStreamStreamFromConfig(cfg); got != tc.stream {
+				t.Fatalf("JetStreamStreamFromConfig = %q, want %q", got, tc.stream)
+			}
+			if _, stream := startSyncBusMod(t, cfg); stream != tc.stream {
+				t.Fatalf("prefix %s: the start log names stream %q, want %q", tc.prefix, stream, tc.stream)
+			}
+		})
+	}
+}
+
+// startSyncBusMod initializes and starts the real kit Mod on cfg and returns
+// the transport and stream its "syncbus mod: started" log line names; any
+// WARN / ERROR line fails the test (a key was not read as written).
+func startSyncBusMod(t *testing.T, cfg *viper.Viper) (transport, stream string) {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	mod := kitsyncbus.NewSyncBusMod(0)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.Lines(logs.String()) {
+		var entry struct {
+			Level     string `json:"level"`
+			Msg       string `json:"msg"`
+			Transport string `json:"transport"`
+			Stream    string `json:"stream"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Level == slog.LevelWarn.String() || entry.Level == slog.LevelError.String() {
+			t.Errorf("the generated syncbus config is not read as written: %s", entry.Msg)
+		}
+		if entry.Msg == "syncbus mod: started" {
+			transport, stream = entry.Transport, entry.Stream
+		}
+	}
+	return transport, stream
+}
