@@ -140,6 +140,7 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
+[RR-20261004-12](RR-20261004-12.md)：P3 生成器运行期间 `os.Chdir` 整个进程，并发启动的子进程继承 `.roost-sync-*` 为工作目录（Windows 上暂存目录删不掉，W-2026-10-04-05）（已修复，未发版；[修复记录](../bugfix/RR-20261004-12.md)）。
 [RR-20261004-09](RR-20261004-09.md)：**P2** RefHMap 注册表 guard 逐字节比较，无 schema 变化的并发首次创建 / 并发删除也误报 `ErrRefHMapRegistryChanged`；经 Layered 时 L1 留着已被删除的值（NC-30 引入，v1.19.1 回归）（已修复，未发版；[修复记录](../bugfix/RR-20261004-09.md)）。
 [RR-20261004-08](RR-20261004-08.md)：P3 NatsMod 连接 drain 超预算（或连接已关闭）后保留已硬关闭的 Assembly，重试永远 `ErrConnectionClosed`（W-2026-10-04-02，RR-20261004-07 同族）（已修复，未发版；[修复记录](../bugfix/RR-20261004-08.md)）。
 [RR-20261004-07](RR-20261004-07.md)：P3 NatsMod 停止时 Bus 超过预算后保留 bus / asm 以便重试，但 `Bus.StopWithContext` 第一次就丢了 pool 并缓存超时错误，重试永远失败，Assembly（NATS 连接、RPC 回调池）永不关闭（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-07.md)）。

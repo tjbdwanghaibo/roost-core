@@ -827,3 +827,10 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **来源**：10-04 两次 CI 失败日志。
 - **分流（2026-10-04）**：登记为 [RR-20261004-12](RR-20261004-12.md) 并修复（未发版）。审查未见遗留句柄或未 `Wait` 的子进程；进程内唯一的占用来源是 `runGenerators` 的进程级 `os.Chdir`——生成器窗口里同进程其他 goroutine 不设 `Dir` 启动的子进程继承暂存树为工作目录（macOS 探针：4919 个并发 `pwd` 中 72 个落在 `.roost-sync-*`）。CI 失败要求占用持续到用例结束后 2 秒以上，本包并行阶段唯一不设 Dir 的子进程 `docker compose version` 是短命的，所以未证明这是两次失败的全部原因；修复后若 windows-compatibility 仍以同样文本失败，按记录里的步骤用 `handle.exe` 找进程外占用者。
 
+### W-2026-10-04-06：`runDoctorGoCommand` / `runDependencyCommand` 用 `exec.CommandContext` 却没设 `WaitDelay`，超时只杀 `go` 进程，编译 / 链接孙进程可能继续持有暂存目录
+
+- **位置**：`codegen/internal/roost/doctor.go` `runDoctorGoCommand`、`codegen/internal/roost/dependencies.go` `runDependencyCommand`。
+- **现象**（读码，未复现）：ctx 超时只 kill `go` 本身，它起的 compile / link 子进程可能继续持有 `Dir`（`project deps` 期间是 `.roost-deps-*` / `.roost-generate-*` 暂存目录），`Wait` 也可能被孙进程握着的管道拖住。
+- **候选修法**：设 `cmd.WaitDelay`，并按平台杀整个进程组（Unix `Setpgid` + kill(-pgid)，Windows job object 或 `taskkill /T`）。
+- **来源**：RR-20261004-12 调查报告。
+

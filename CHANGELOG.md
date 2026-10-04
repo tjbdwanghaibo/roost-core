@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`roost generate` / `project sync` 不再改变进程工作目录**（RR-20261004-12，P3，来源 W-2026-10-04-05）：生成器原先在运行期间 `os.Chdir` 进被生成的工程（常是 `.roost-sync-*` 暂存树），同进程其他 goroutine 此时不设 `Dir` 启动的子进程会继承它；Windows 上这会让暂存目录删不掉而残留。生成器现在拿工程根下的绝对路径，生成物逐字节不变；两行生成器提示从相对路径变为绝对路径。Windows CI 上的两次清理失败是否全由此引起未在 Windows 上证实。[记录](docs/bugfix/RR-20261004-12.md)
+
 ## [v1.19.2] - 2026-10-04
 
 > 补丁版本：v1.19.1 回归 RR-20261004-09（RefHMap 注册表 guard 误报）、NC-30 复审发现的 RR-20261004-08、历史遗留核实（[open-triage](docs/review/REVIEW-2026-10-04-open-triage.md)）仍存在的 RR-20260921-03（P1）/ 04 / 05。无源码不兼容的 API 变化；`natsdriver.Assembly.Close` 在 drain 失败时返回包裹原错误的 `ErrClosedUndrained`（`errors.Is` 原错误仍成立）；game-demo 已生成工程须手工合并 `playerowner.go`（RR-20260921-03 / 04）。
