@@ -1,0 +1,32 @@
+package consumer
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/webroute"
+)
+
+type Service struct{ Calls atomic.Int32 }
+type Request struct {
+	Value int `json:"value"`
+}
+type Response struct {
+	Value int `json:"value"`
+}
+
+//roost:web method=POST path=__ROOST_PATH__ body=json
+func handleJSON(_ context.Context, svc *Service, request Request) (Response, error) {
+	svc.Calls.Add(1)
+	if request.Value < 0 {
+		return Response{}, errors.New("consumer rejected input")
+	}
+	return Response{Value: request.Value}, nil
+}
+
+//roost:web method=GET path=/raw body=raw
+func handleRaw(_ context.Context, svc *Service, request webroute.RawRequest) (Response, error) {
+	svc.Calls.Add(1)
+	return Response{Value: len(request.Body)}, nil
+}

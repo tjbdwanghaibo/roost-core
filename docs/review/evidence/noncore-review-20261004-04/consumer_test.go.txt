@@ -1,0 +1,116 @@
+package consumer
+
+import (
+	"flag"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/httpserver"
+	"github.com/tjbdwanghaibo/roost-core/webroute"
+)
+
+var reviewMode = flag.String("review-mode", "normal", "normal, invalid, or retired")
+
+func consumerRegister(engine *httpserver.Engine, svc *Service) (err error, panicked any) {
+	defer func() { panicked = recover() }()
+	if module, ok := any(svc).(webroute.Module); ok {
+		err = webroute.RegisterModules(webroute.NewRegistrar(engine), module)
+	}
+	return
+}
+
+func TestGeneratedRuntimeStartup(t *testing.T) {
+	if *reviewMode != "invalid" {
+		t.Skip("invalid-path consumer phase only")
+	}
+	svc := &Service{}
+	engine := httpserver.NewEngine()
+	err, panicked := consumerRegister(engine, svc)
+	t.Logf("generated startup error=%v panic=%v business_calls=%d", err, panicked, svc.Calls.Load())
+	if panicked != nil || err == nil {
+		t.Fatal("generated invalid path compiled but did not return a normal startup error")
+	}
+}
+
+func TestGeneratedHTTPConsumer(t *testing.T) {
+	if *reviewMode == "invalid" {
+		t.Skip("normal/retired consumer phase only")
+	}
+	if *reviewMode == "retired" {
+		for _, route := range []struct{ method, path string }{{"POST", "/generated/json"}, {"GET", "/raw"}} {
+			t.Run(route.path, func(t *testing.T) {
+				engine := httpserver.NewEngine()
+				svc := &Service{}
+				if err, panicked := consumerRegister(engine, svc); err != nil || panicked != nil {
+					t.Fatalf("startup=%v panic=%v", err, panicked)
+				}
+				server := httptest.NewServer(engine)
+				defer server.Close()
+				request, _ := http.NewRequest(route.method, server.URL+route.path, nil)
+				response, err := server.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				if response.StatusCode != 404 || svc.Calls.Load() != 0 {
+					t.Fatalf("retired HTTP=%d calls=%d", response.StatusCode, svc.Calls.Load())
+				}
+			})
+		}
+		return
+	}
+	for _, mode := range []string{"valid", "empty", "trailing_whitespace", "trailing_garbage", "second_object", "oversized", "handler_error", "raw_get"} {
+		t.Run(mode, func(t *testing.T) {
+			engine := httpserver.NewEngine(httpserver.WithMaxBodyBytes(32))
+			svc := &Service{}
+			if _, ok := any(svc).(webroute.Module); !ok {
+				t.Fatal("generated service did not implement Module")
+			}
+			if err, panicked := consumerRegister(engine, svc); err != nil || panicked != nil {
+				t.Fatalf("startup=%v panic=%v", err, panicked)
+			}
+			server := httptest.NewServer(engine)
+			defer server.Close()
+			method, path, body := "POST", "/generated/json", `{"value":1}`
+			want, calls := 200, int32(1)
+			switch mode {
+			case "empty":
+				body = ""
+			case "trailing_whitespace":
+				body += " \n\t"
+			case "trailing_garbage":
+				body += "junk"
+				want = 400
+				calls = 0
+			case "second_object":
+				body += `{}`
+				want = 400
+				calls = 0
+			case "oversized":
+				body = strings.Repeat("x", 33)
+				want = 413
+				calls = 0
+			case "handler_error":
+				body = `{"value":-1}`
+				want = 400
+			case "raw_get":
+				method = "GET"
+				path = "/raw"
+				body = "raw"
+			}
+			request, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			raw, _ := io.ReadAll(response.Body)
+			if response.StatusCode != want || svc.Calls.Load() != calls {
+				t.Fatalf("HTTP=%d calls=%d body=%s", response.StatusCode, svc.Calls.Load(), raw)
+			}
+		})
+	}
+}

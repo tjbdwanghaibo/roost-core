@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 N02 请求链与正式生成消费](REVIEW-2026-10-04-noncore-04.md)：8/8 清单生产源文已读、场景部分完成；发现[三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-04.md)。限流/Recover/路由反例与真实 HTTP、旧 URL 退役控制留档，六包 race/vet 通过。[机制学习](IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [复跑](evidence/noncore-review-20261004-04/README.md) · [进度](PROGRESS.md) · [预算与下一步 N03](NONCORE-REVIEW-PLAN-2026-10-03.md)。
+
 [10-04 第二批四项修复](REVIEW-2026-10-04-noncore-03.md)：Manager 清理/一次启动、Admin schema、Ops 排空 4/4 已修、声明场景验证，35正式叶子/独立项与11包race/vet通过，未发版。[记录](../bugfix/README.md) · [证据](../bugfix/evidence/noncore-bugfix-20261004-02/README.md) · [进度](PROGRESS.md)。下方原第二批“未修”为历史时点。
 
 [10-04 N01 生命周期与 Ops](REVIEW-2026-10-04-noncore-02.md)：确认[四个新未修问题](../bug/REVIEW-2026-10-04-noncore-02.md)，11 fail / 5 正常 pass / 1 仅观察，六包 race/vet 通过。N01 15/15 生产源码已读，场景仍部分完成；下一步 N02 与 N01 具名余项。[学习/实施建议](IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md) · [证据](evidence/noncore-review-20261004-02/README.md) · [进度](PROGRESS.md)。

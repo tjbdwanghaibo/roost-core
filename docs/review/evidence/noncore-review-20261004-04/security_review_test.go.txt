@@ -1,0 +1,123 @@
+package security
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestReview4OversizedRequestDoesNotReserveKeyCapacity(t *testing.T) {
+	limiter := NewRateLimiter(RateLimitConfig{Capacity: 1, Refill: 1, Interval: time.Hour, MaxKeys: 1})
+	if limiter.AllowN(RateLimitKey{OwnerID: 1}, 2) {
+		t.Fatal("oversized request was allowed")
+	}
+	allowed := limiter.Allow(RateLimitKey{OwnerID: 2})
+	t.Logf("valid_new_key_allowed=%v stats=%+v", allowed, limiter.Stats())
+	if !allowed {
+		t.Fatal("rejected oversized request occupied the only key slot")
+	}
+}
+
+func TestReview4TokenAndPayloadBoundaries(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, mode := range []string{"valid", "before_expiry", "at_expiry", "wrong_player", "wrong_secret", "tampered", "empty_verify_secret", "signature_valid", "signature_bad_body", "signature_empty_secret"} {
+		t.Run(mode, func(t *testing.T) {
+			token, err := SignSessionToken(42, "secret", time.Minute, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "signature_valid", "signature_bad_body", "signature_empty_secret":
+				raw := []byte("payload")
+				signature := "sha256=" + SignPayload(raw, "secret")
+				secret := "secret"
+				if mode == "signature_bad_body" {
+					raw = []byte("different")
+				}
+				if mode == "signature_empty_secret" {
+					secret = ""
+				}
+				if got := VerifyPayloadSignature(raw, signature, secret); got != (mode == "signature_valid") {
+					t.Fatalf("signature accepted=%v", got)
+				}
+				return
+			}
+			at, player, secret := now, int64(42), "secret"
+			var want error
+			switch mode {
+			case "before_expiry":
+				at = now.Add(time.Minute - time.Millisecond)
+			case "at_expiry":
+				at = now.Add(time.Minute)
+				want = ErrTokenExpired
+			case "wrong_player":
+				player = 43
+				want = ErrTokenInvalid
+			case "wrong_secret":
+				secret = "wrong"
+				want = ErrTokenInvalid
+			case "tampered":
+				token = "A" + token[1:]
+				want = ErrTokenInvalid
+			case "empty_verify_secret":
+				secret = ""
+				want = ErrTokenInvalid
+			}
+			claims, err := VerifySessionToken(token, secret, player, at)
+			if want != nil {
+				if !errors.Is(err, want) {
+					t.Fatalf("verify=%v want=%v", err, want)
+				}
+				return
+			}
+			if err != nil || claims.PlayerID != 42 || claims.Nonce == "" {
+				t.Fatalf("claims=%+v error=%v", claims, err)
+			}
+		})
+	}
+}
+
+func TestReview4LimiterControls(t *testing.T) {
+	for _, mode := range []string{"continuous_refill", "key_cap", "concurrent_capacity", "oversized_existing_tokens"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Unix(100, 0)
+			limiter := NewRateLimiter(RateLimitConfig{Capacity: 2, Refill: 2, Interval: time.Second, MaxKeys: 2, IdleTTL: time.Hour})
+			limiter.now = func() time.Time { return now }
+			key := RateLimitKey{OwnerID: 1}
+			switch mode {
+			case "continuous_refill":
+				if !limiter.AllowN(key, 2) || limiter.Allow(key) {
+					t.Fatal("burst invalid")
+				}
+				now = now.Add(500 * time.Millisecond)
+				if !limiter.Allow(key) || limiter.Allow(key) {
+					t.Fatal("continuous refill invalid")
+				}
+			case "key_cap":
+				if !limiter.Allow(key) || !limiter.Allow(RateLimitKey{OwnerID: 2}) || limiter.Allow(RateLimitKey{OwnerID: 3}) || limiter.Size() != 2 {
+					t.Fatal(limiter.Stats())
+				}
+			case "oversized_existing_tokens":
+				if limiter.AllowN(key, 3) || !limiter.AllowN(key, 2) {
+					t.Fatal("oversized demand consumed tokens")
+				}
+			case "concurrent_capacity":
+				var group sync.WaitGroup
+				var accepted atomic.Int32
+				for range 16 {
+					group.Go(func() {
+						if limiter.Allow(key) {
+							accepted.Add(1)
+						}
+					})
+				}
+				group.Wait()
+				if accepted.Load() != 2 {
+					t.Fatalf("accepted=%d", accepted.Load())
+				}
+			}
+		})
+	}
+}

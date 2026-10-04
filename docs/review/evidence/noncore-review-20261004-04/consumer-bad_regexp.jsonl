@@ -1,0 +1,15 @@
+{"Time":"2026-10-04T08:23:19.6869737+08:00","Action":"start","Package":"example.com/roost-webroute-consumer"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"=== RUN   TestGeneratedRuntimeStartup\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"    consumer_test.go:32: generated startup error=\u003cnil\u003e panic=chi: invalid regexp pattern '^[$' in route param business_calls=0\n"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"    consumer_test.go:34: generated invalid path compiled but did not return a normal startup error\n","OutputType":"error"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"--- FAIL: TestGeneratedRuntimeStartup (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5164967+08:00","Action":"fail","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Elapsed":0}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer"}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Output":"=== RUN   TestGeneratedHTTPConsumer\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Output":"    consumer_test.go:40: normal/retired consumer phase only\n"}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Output":"--- SKIP: TestGeneratedHTTPConsumer (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"skip","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Elapsed":0}
+{"Time":"2026-10-04T08:23:20.5170394+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5193818+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Output":"FAIL\texample.com/roost-webroute-consumer\t0.832s\n","OutputType":"frame"}
+{"Time":"2026-10-04T08:23:20.5193818+08:00","Action":"fail","Package":"example.com/roost-webroute-consumer","Elapsed":0.832}

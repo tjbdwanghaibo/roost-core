@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-04 N02 接续 Review：**[请求边界与正式 Webroute 消费](review/REVIEW-2026-10-04-noncore-04.md)新增[三个未修 P2](bug/REVIEW-2026-10-04-noncore-04.md)：拒绝请求占限流 key、Recover 上报 panic、非法路径注册 panic。正常生成/真实 HTTP/退役控制通过，六包 race/vet 通过。[学习和建议](review/IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [复跑](review/evidence/noncore-review-20261004-04/README.md) · [进度](review/PROGRESS.md) · [剩余计划](review/NONCORE-REVIEW-PLAN-2026-10-03.md)。
+
 **10-04 第二批修复：**[Manager/Admin/Ops 四项修复与兼容](review/REVIEW-2026-10-04-noncore-03.md)，正式35项与11包race/vet通过，已修/声明场景验证，未发版。[逐项记录](bugfix/README.md) · [证据](bugfix/evidence/noncore-bugfix-20261004-02/README.md) · [进度](review/PROGRESS.md)。下方原第二批未修结论保留历史。
 
 **10-04 继续 Review：**[N01 生命周期/Manager/Admin/Ops](review/REVIEW-2026-10-04-noncore-02.md) 新增[四个未修问题](bug/REVIEW-2026-10-04-noncore-02.md)，与下方已修四项分开。N01 生产源码 15/15 已读，新增 17 项含 11 个失败反例，场景仍部分完成。[机制和实施建议](review/IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md) · [复跑](review/evidence/noncore-review-20261004-02/README.md) · [进度](review/PROGRESS.md)。

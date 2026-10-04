@@ -1,0 +1,97 @@
+package gateway
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func review4Call(endpoint Endpoint, ctx context.Context) (result any, err error, panicked any) {
+	defer func() { panicked = recover() }()
+	result, err = endpoint.Handle(ctx, nil, Request{})
+	return
+}
+
+func TestReview4RecoverySurvivesReporterFailure(t *testing.T) {
+	for _, mode := range []string{"nil_reporter", "normal_reporter", "panic_reporter", "healthy_endpoint"} {
+		t.Run(mode, func(t *testing.T) {
+			reports := 0
+			var report func(context.Context, any)
+			if mode != "nil_reporter" {
+				report = func(context.Context, any) {
+					reports++
+					if mode == "panic_reporter" {
+						panic("reporter failed")
+					}
+				}
+			}
+			endpoint := Chain(EndpointFunc(func(context.Context, Session, Request) (any, error) {
+				if mode == "healthy_endpoint" {
+					return "ok", nil
+				}
+				panic("private endpoint details")
+			}), Recover(report))
+			result, err, panicked := review4Call(endpoint, context.Background())
+			t.Logf("result=%v error=%v panic=%v reports=%d", result, err, panicked, reports)
+			if mode == "healthy_endpoint" {
+				if result != "ok" || err != nil || panicked != nil || reports != 0 {
+					t.Fatal("healthy path changed")
+				}
+				return
+			}
+			if panicked != nil || !errors.Is(err, ErrEndpointPanic) || result != nil {
+				t.Fatal("report callback broke endpoint panic boundary")
+			}
+		})
+	}
+}
+
+func TestReview4DeadlineAndAuthenticationControls(t *testing.T) {
+	for _, mode := range []string{"short_parent_deadline", "added_deadline", "anonymous_nil_limiter", "canceled_authenticated"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			base := EndpointFunc(func(ctx context.Context, _ Session, _ Request) (any, error) {
+				calls++
+				deadline, ok := ctx.Deadline()
+				if mode == "short_parent_deadline" || mode == "added_deadline" {
+					if !ok {
+						t.Fatal("missing deadline")
+					}
+					return deadline, nil
+				}
+				return "business", nil
+			})
+			if mode == "short_parent_deadline" {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				want, _ := ctx.Deadline()
+				result, err := Chain(base, Timeout(time.Hour)).Handle(ctx, nil, Request{})
+				if err != nil || !result.(time.Time).Equal(want) {
+					t.Fatalf("deadline changed: %v %v", result, err)
+				}
+				return
+			}
+			if mode == "added_deadline" {
+				_, err := Chain(base, Timeout(time.Second)).Handle(nil, nil, Request{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var caller Session
+			var want error = ErrUnauthenticated
+			if mode == "canceled_authenticated" {
+				caller = &testSession{principal: Principal{PlayerID: 42, SessionID: "stable"}}
+				cancel()
+				want = context.Canceled
+			}
+			_, err := Chain(base, RequireAuthenticated, RateLimit(nil)).Handle(ctx, caller, Request{})
+			if !errors.Is(err, want) || calls != 0 {
+				t.Fatalf("boundary error=%v calls=%d", err, calls)
+			}
+		})
+	}
+}

@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-04 N02 接续审查：三个新 P2 已复现、未修。**[运行与范围](../review/REVIEW-2026-10-04-noncore-04.md) · [复跑/正式生成消费者](../review/evidence/noncore-review-20261004-04/README.md) · [机制和实施建议](../review/IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md)。下方四项修复不包含本批三个新问题。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-05](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-05) | P2 超 burst 的拒绝请求占用限流 key 名额 | 已复现、未修 |
+| [RR-20261004-NC-06](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-06) | P2 Recover 的 report panic 外逃 | 已复现、未修 |
+| [RR-20261004-NC-07](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-07) | P2 非法路由生成成功，注册时 panic | 已复现、未修 |
+
 **10-04 第二批修复更新：RR-20261004-NC-01～04 4/4 已修、声明场景验证，未发版。**[原问题](REVIEW-2026-10-04-noncore-02.md) · [修复运行](../review/REVIEW-2026-10-04-noncore-03.md) · [正式红绿](../bugfix/evidence/noncore-bugfix-20261004-02/README.md)。原14项转绿，正式35项/11包race/vet通过；原审查11个失败与Health契约观察保留，后者尚非RR。
 
 | 编号 | 问题 | 状态 |

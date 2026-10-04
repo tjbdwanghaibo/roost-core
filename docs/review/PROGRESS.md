@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 非三大核心第三批：N02 请求链与真实生成消费
+
+[本轮运行](REVIEW-2026-10-04-noncore-04.md) · [三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-04.md) · [学习与实施建议](IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [反例/控制/源文件清单](evidence/noncore-review-20261004-04/README.md)。源码 `483350ca`，下方 NC-01～04 已修；本批 NC-05～07 未修。
+
+N02 8/8 生产源文已读（本批 security3/gateway2/webroute1，复用当前未变化 HTTP2），另查四个 Webroute 生成链文件。34 个 overlay 叶子/独立项为 5 失败、28 控制通过、1 契约观察；六包 race/vet 通过、111 test pass 事件。正式 CLI 在四个独立业务 module 生成、编译、注册，实际 HTTP/退役共 10 控制通过，三类非法模式 3 失败；五个阶段选择 skip 不计场景。补齐 RR-20260930-08 的正常 HTTP 消费与退役旧 URL 404 缺口，不把新模式校验 bug 混为旧修复失败。
+
+N01 15/15 与 N02 8/8 仅代表清单源码读取，两域场景均部分完成；不据此给出全仓业务覆盖率或 completed/15。N01 仍缺 Group 阻塞预算、完整 App 故障进程、Ops bind/hijack/权限与 Health 策略；N02 仍缺容量/非协作回调、完整业务鉴权与跨模块矩阵。新 RR 单独修复，下一批 **N03 bus/nats/servicerpc/etcd** 请求关联、取消、关闭与恢复，Kit 同行。[计划](NONCORE-REVIEW-PLAN-2026-10-03.md)按已补证缺口更新为约 50～90 个有效工作小时；仍非实测速率、完成日期或后台任务承诺。
+
 ## 2026-10-04 第二批修复：NC-01～04
 
 [修复运行](REVIEW-2026-10-04-noncore-03.md) · [逐项记录](../bugfix/README.md) · [正式红绿/复跑](../bugfix/evidence/noncore-bugfix-20261004-02/README.md)。源码起点 `7e0d6ee2`，四项均已修、声明场景验证，未发版；下方第二批“未修”保留历史。
