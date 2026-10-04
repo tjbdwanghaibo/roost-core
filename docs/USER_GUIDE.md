@@ -233,6 +233,10 @@ Data Engine 是唯一保存入口。字段变化先进入当前 Nest transaction
 
 Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带 schema version；加载失败不允许生成“空玩家”覆盖旧数据。
 
+普通 DAO 的 `MigrationRunner.Migrate` 在写 WAL 前验证 BSON / `_id`、目标 `PersistedDaoLoader.RestorePersisted` 解码及 `Id()`；缺装载/身份能力的手写 DAO 返回 `ErrMigrationUnsupported`（[NC-31](bugfix/RR-20261004-NC-31.md)）。直接调用时必须传未发布候选，不能传在线 DAO；预校验用目标 schema 和旧持久 version，可能改变候选字段，失败后应丢弃。BSON int32/int64 ID 兼容保留，`_schema` / `_version` 仍由正式 Put 归一化，不要求迁移步骤自行更新版本。
+
+多 DAO schema 迁移逐 DAO 持久提交，不承诺全有或全无；后序失败时前序有效升级保留，但完整聚合验证前不发布实体。修正错误迁移/源数据后重新冷加载会接续未完成 DAO。等待取消不等于未提交；以新读取确认权威状态，不回滚已提交的有效迁移。竞争写可淘汰旧迁移记录，Repository 重读后最多再迁移一轮；持续竞争超出预算返回 `dataengine.ErrMigrationConflict`，不能放宽 CAS 或直接发布旧候选。
+
 ## 6. Remote Entity
 
 Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是共享 snapshot store。`Cached` 不回源，`Monotonic` 在版本不足时 singleflight 回源，`Linearizable` 每次读权威存储。高频展示、排行榜引用和 AOI 属性优先 Cached/Monotonic；结算前校验使用 Linearizable 或转成 owner 命令。

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const MigrationHandler = "__dataengine_migration"
@@ -32,6 +34,7 @@ func NewMigrationRunner(committer coredata.SystemCommitter) (*MigrationRunner, e
 }
 
 // Migrate 将普通 DAO 的 schema 升级作为带版本的全量 mutation 提交，并等待投影可见。
+// dao 必须是尚未发布的加载候选；提交前会恢复其目标字段和旧版本，失败后应丢弃。
 // 等待被取消不证明提交未生效；调用方应重读权威存储，不能用旧数据直接补偿。
 // Remote 信封必须经持有所有权租约的 RemoteCommit 迁移，此入口拒绝它以保护聚合版本向量。
 func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredata.RawDocument) (bool, error) {
@@ -53,6 +56,11 @@ func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredat
 	if doc.Enveloped {
 		return false, ErrRemoteMigrationLeaseRequired
 	}
+	candidate, candidateOK := dao.(interface{ Id() int64 })
+	hydrator, hydratorOK := dao.(entity.PersistedDaoLoader)
+	if !candidateOK || !hydratorOK {
+		return false, ErrMigrationUnsupported
+	}
 	payload, schema, err := persistedPayload(doc)
 	if err != nil {
 		return false, err
@@ -60,6 +68,22 @@ func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredat
 	payload, err = migrator.Migrate(payload, schema)
 	if err != nil {
 		return false, fmt.Errorf("dataengine migration: resource=%s id=%d schema=%d->%d: %w", doc.Key.Resource, doc.Key.ID, schema, target, err)
+	}
+	// RR-20261004-NC-31：WAL 准入后才发现坏 BSON/字段/身份已经太晚。
+	// 先对照正式 Mongo Put 的 BSON/ID 契约，再复用目标 DAO 解码；以目标
+	// schema 恢复避免重复迁移，旧 version 不冒充尚未投影的新版本。
+	var output bson.M
+	if err := bson.Unmarshal(payload, &output); err != nil {
+		return false, fmt.Errorf("dataengine migration: validate %s/%d BSON: %w", doc.Key.Resource, doc.Key.ID, err)
+	}
+	if outputID, ok := documentInt64(output["_id"]); !ok || outputID != doc.Key.ID {
+		return false, fmt.Errorf("dataengine migration: validate %s/%d identity: %w", doc.Key.Resource, doc.Key.ID, coredata.ErrInvalidDocumentKey)
+	}
+	if err := hydrator.RestorePersisted(payload, target, doc.Version); err != nil {
+		return false, fmt.Errorf("dataengine migration: validate %s/%d schema %d: %w", doc.Key.Resource, doc.Key.ID, target, err)
+	}
+	if candidate.Id() != doc.Key.ID {
+		return false, fmt.Errorf("dataengine migration: decoded %s/%d identity: %w", doc.Key.Resource, doc.Key.ID, coredata.ErrInvalidDocumentKey)
 	}
 	id, err := runner.newID()
 	if err != nil {

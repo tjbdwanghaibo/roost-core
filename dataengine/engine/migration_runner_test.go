@@ -21,6 +21,18 @@ func (migrationDAO) Migrate(raw []byte, from uint32) ([]byte, error) {
 	return bson.Marshal(doc)
 }
 
+// 正常提交夹具与 Repository 一样持有未发布、可装载的 DAO；缺少装载契约
+// 的 migrationDAO 单独用于 unsupported 回归，不能靠弱替身绕过准入校验。
+type loadableMigrationDAO struct {
+	migrationDAO
+	dataEngineRepositoryDAO
+}
+
+func (d *loadableMigrationDAO) SchemaVersion() uint32 { return d.migrationDAO.SchemaVersion() }
+func (d *loadableMigrationDAO) Migrate(raw []byte, from uint32) ([]byte, error) {
+	return d.migrationDAO.Migrate(raw, from)
+}
+
 type projectedSystemTicket struct{ done chan struct{} }
 
 func (ticket projectedSystemTicket) Done() <-chan struct{} { return ticket.done }
@@ -42,7 +54,8 @@ func TestMigrationRunnerCommitsVersionedFullMutationAndWaitsForProjection(t *tes
 		t.Fatal(err)
 	}
 	raw, _ := bson.Marshal(bson.M{"_id": int64(7), "_schema": uint32(1), "name": "old"})
-	migrated, err := runner.Migrate(context.Background(), migrationDAO{}, coredata.RawDocument{
+	dao := &loadableMigrationDAO{dataEngineRepositoryDAO: dataEngineRepositoryDAO{id: 7}}
+	migrated, err := runner.Migrate(context.Background(), dao, coredata.RawDocument{
 		Key: coredata.DocumentKey{Database: "game", Resource: "heroes", ID: 7}, Version: 9, Schema: 1, Data: raw,
 	})
 	if err != nil {

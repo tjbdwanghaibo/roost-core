@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-05 第十一批：[NC-31](RR-20261004-NC-31.md) 已修复、声明场景验证，未发版。** 目标BSON/装载/身份在CommitSystem前检查；12新正式、原生成消费11全绿，接续含多DAO/CAS/进程恢复17消费通过。五包race421pass/1helper skip、根包14及build/vet/glsvet通过；Kit integration仅编译，真实Mongo/HA待验。[证据](evidence/noncore-bugfix-20261004-11/README.md) · [review](../review/REVIEW-2026-10-05-noncore-21.md)。T-210；未运行生产数据迁移。
+
 **v1.19.2 已发布（2026-10-04，tag → `4ee44f34`）**：RR-20261004-08 / 09、RR-20260921-03 / 04 / 05 随本版发布。
 
 **v1.19.1 已发布（2026-10-04，tag → `d3e69336`）**：RR-20261004-02～07（NC 修复复审确认，其中 02 / 03 / 06 是 v1.19.0 回归）与 RR-20261004-NC-30 随本版发布。

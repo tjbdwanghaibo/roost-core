@@ -1,0 +1,137 @@
+{
+  "status": "fulfilled",
+  "value": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"project\":\"roost-core\",\"signal\":\"best_effort\",\"indexed_at\":\"2026-09-30T11:58:14Z\",\"metadata\":{\"generation\":\"2026-09-30T11:58:14Z\",\"index_mode\":\"full\",\"recorded_at\":\"2026-09-30T11:58:15Z\",\"recording_status\":\"complete\",\"ignored_files_stored\":1,\"ignored_files_total\":1,\"hash_records_complete\":true,\"coverage_version\":3,\"generation_matches\":true},\"paths\":[{\"requested_path\":\"dataengine/engine/migration_runner.go\",\"path\":\"dataengine/engine/migration_runner.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/migration_runner_test.go\",\"path\":\"dataengine/engine/migration_runner_test.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/entity_repository.go\",\"path\":\"dataengine/engine/entity_repository.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/entity_repository_test.go\",\"path\":\"dataengine/engine/entity_repository_test.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"entity/entity.go\",\"path\":\"entity/entity.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"codegen/internal/dao/template_dao.go\",\"path\":\"codegen/internal/dao/template_dao.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/mongo_store.go\",\"path\":\"dataengine/engine/mongo_store.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/mongo_projection.go\",\"path\":\"dataengine/engine/mongo_projection.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/mongo_load.go\",\"path\":\"dataengine/engine/mongo_load.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/engine/projector.go\",\"path\":\"dataengine/engine/projector.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"migration/migration.go\",\"path\":\"migration/migration.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]},{\"requested_path\":\"dataengine/migration.go\",\"path\":\"dataengine/migration.go\",\"status\":\"no_recorded_issue\",\"freshness\":\"metadata_changed\",\"recommended_action\":\"read_source_and_reindex\",\"coverage\":[]}],\"scopes\":[{\"requested_scope\":\"dataengine/engine/migration_runner\",\"scope\":\"dataengine/engine/migration_runner\",\"total\":0,\"has_more\":false,\"entries\":[],\"status\":\"no_recorded_issue\"}],\"caveat\":\"Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable.\"}"
+      }
+    ],
+    "structuredContent": {
+      "project": "roost-core",
+      "signal": "best_effort",
+      "indexed_at": "2026-09-30T11:58:14Z",
+      "metadata": {
+        "generation": "2026-09-30T11:58:14Z",
+        "index_mode": "full",
+        "recorded_at": "2026-09-30T11:58:15Z",
+        "recording_status": "complete",
+        "ignored_files_stored": 1,
+        "ignored_files_total": 1,
+        "hash_records_complete": true,
+        "coverage_version": 3,
+        "generation_matches": true
+      },
+      "paths": [
+        {
+          "requested_path": "dataengine/engine/migration_runner.go",
+          "path": "dataengine/engine/migration_runner.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/migration_runner_test.go",
+          "path": "dataengine/engine/migration_runner_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/entity_repository.go",
+          "path": "dataengine/engine/entity_repository.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/entity_repository_test.go",
+          "path": "dataengine/engine/entity_repository_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "entity/entity.go",
+          "path": "entity/entity.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "codegen/internal/dao/template_dao.go",
+          "path": "codegen/internal/dao/template_dao.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/mongo_store.go",
+          "path": "dataengine/engine/mongo_store.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/mongo_projection.go",
+          "path": "dataengine/engine/mongo_projection.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/mongo_load.go",
+          "path": "dataengine/engine/mongo_load.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/engine/projector.go",
+          "path": "dataengine/engine/projector.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "migration/migration.go",
+          "path": "migration/migration.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "dataengine/migration.go",
+          "path": "dataengine/migration.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        }
+      ],
+      "scopes": [
+        {
+          "requested_scope": "dataengine/engine/migration_runner",
+          "scope": "dataengine/engine/migration_runner",
+          "total": 0,
+          "has_more": false,
+          "entries": [],
+          "status": "no_recorded_issue"
+        }
+      ],
+      "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+    },
+    "isError": false
+  }
+}

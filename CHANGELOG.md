@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **迁移输出在WAL准入前验证目标装载与身份**（RR-20261004-NC-31，P2）：复用 Mongo BSON/ID 和目标 RestorePersisted；坏 BSON、字段类型或身份不再先持久提交。手写候选须提供 loader / Id，预校验使用目标 schema、旧 version；正常 CAS/投影等待/整聚合重读与 int32 ID 兼容保持。已有坏 WAL 不自动跳过或删除。[记录](docs/bugfix/RR-20261004-NC-31.md)
+
 - **game-demo 玩家租约的本地准入窗口不再越过 Redis 键**（RR-20261004-14，P3，W-2026-10-04-07）：确认改为从 SetNX / Refresh 发出的时刻起算 Lease，跨间断认领的撤离等待和慢 Refresh 不再吃掉 AdmissionGuard；跨间断认领 Redis 没答复（SetNX 可能已落地）时玩家记为 interrupted，下一轮续租答 Held 也会先重新认领、扔掉间断前的副本再放行。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20261004-14.md)
 - **roost 替用户跑的 go 命令超时 / 取消时连同子进程一起结束**（RR-20261004-13，P3，来源 W-2026-10-04-06）：doctor 的 `go mod verify` / `go list` / `go test` 与 project deps / generate 的 `go get` / `go mod tidy` 原先超时只杀 go，它起的 compile / link / git 进程继续以 `.roost-deps-*` / `.roost-generate-*` 暂存树为工作目录（Windows 上删不掉），输出被缓冲时调用还要等它们结束，超时不起作用。现在按进程树取消（Unix 进程组，Windows `taskkill /T`），Wait 最多再等 5 秒；Unix 上 go 在独立进程组运行，roost 接住 Ctrl-C 后先杀树再按原样退出。[记录](docs/bugfix/RR-20261004-13.md)
 - **game-demo 玩家副本撤离进行中拒绝准入**（RR-20261004-11，P3，W-2026-10-04-04）：归还撤离超时后租约回到服务、撤离在后台继续时，`Admit` 现在拒绝该玩家直到撤离结束，登录的 Claim 因此加入撤离而不是在将被销毁的实体上进场。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20261004-11.md)

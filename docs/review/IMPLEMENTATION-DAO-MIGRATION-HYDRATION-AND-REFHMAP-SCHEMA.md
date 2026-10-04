@@ -45,3 +45,34 @@ Repository先在一致读回调内建立完整DAO清单，读取持久schema/ver
 单DAO/scalar生成消费的正常升级、当前/较新schema、步骤失败、目标无效、取消恢复已有实际证据；实际Mongo snapshot、unknown commit、primary failover、进程强杀/重启与多DAO并发升级仍未在此机器验收。mongotest仅作正式MongoStore消费后端，不能冒认真实数据库的事务/网络保证。
 
 **RefHMap旧段更正**：上文逐字节guard与Cached Delete拒绝时保留L1是旧基线描述。另一线[RR-09](../bugfix/RR-20261004-09.md)已将guard改为清理清单覆盖检查，正常同布局并发放行，真正遗漏键仍拒绝；Layered.Delete即使远端报错也丢L1。原记录保留历史，不以本节迁移消费测试冒认该RefHMap组合全矩阵验收。
+
+## 2026-10-05 迁移准入、多DAO与CAS恢复
+
+基线3127d37c + NC-31修复，[实现/兼容](../bugfix/RR-20261004-NC-31.md)、[运行与六项增量](REVIEW-2026-10-05-noncore-21.md)。上段“目标校验晚于提交”和“多DAO/进程未验”是修前时点；本节只覆盖明确的新证据。
+
+### 实际调用顺序
+
+1. Repository.readAggregate 在一致性读回调中重新建立所有 DAO 候选，先 SetId，再收集文档/schema/version；回调重试时重置累积状态。
+2. 普通旧schema进入Runner：Migrate返回内存payload，先BSON/ID检查，然后以目标schema、旧持久version调用候选RestorePersisted，最后再检查解码Id。缺能力返回unsupported，无效结果不能进入CommitSystem。
+3. 通过后strict SystemCommit→WaitProjection；候选tracker仍表示旧持久version，不冒充未来版本。完成之后丢弃该轮候选并重读完整聚合；正式装载恢复实际投影version。
+4. 全部候选装载/身份检查完成后，经RunLocal在本地执行阶段构建/发布Entity。任何DAO失败都不发布半初始化Entity。
+
+Runner接收的dao必须尚未发布；它不是无副作用的validator，预装载可能改变候选字段，失败后应丢弃，不能对在线业务DAO调用。框架只要求验证所需的loader与Id，不要求与此验证无关的DbName/Dirty方法；生成DAO已提供这些能力，Kit手写集成夹具同步补Id装载。
+
+### 多DAO不是一次迁移事务
+
+现有每个DAO独立一笔系统Put和投影确认。profile升级成功后inventory失败，profile仍保持新schema；Manager中仍无Entity。修正源数据或迁移步骤后，新冷加载看到profile已升级，只提交inventory，再重读/发布。本轮两种后序失败加正式CAS修正重试都通过；没有补偿前序持久升级，也不要求迁移回到旧schema。
+
+如果业务要求两个DAO跨schema组合永远原子可见，须另定升级兼容/存储策略，不能根据“Entity发布原子”推断数据库迁移也原子。业务请求应在完整Entity加载成功后进入业务执行。
+
+### 竞争淘汰与恢复
+
+MongoStore对MigrationHandler的普通单笔CAS冲突作为已淘汰记录结算，以便WAL前缀前进；它不说明本payload已写入。Repository必须重读：竞争者已是目标schema时保留其权威值，竞争者仍旧schema时用新的version重新迁移。三次读取预算保证有界，不能承诺持续竞争一定收敛。
+
+本轮用投影通道控制事件，竞争者通过正式Store.Project写入：schema3/score99保留，schema1竞争者使profile第二次迁移到v9；两场景都重载验证且unacked=0。普通业务record没有因此取得“CAS冲突也成功”的语义。
+
+strict CommitSystem返回证明同步Append已fsync；DurableLSN是Enqueue票据水位，不能用其0值断言strict记录没持久。进程恢复场景在投影受阻时强杀独占子进程，重开真实WAL验证一笔原记录并重放，再无迁移器冷加载成功。后端是重新建立相同未投影旧文档的mongotest，不冒认真Mongo掉电/事务未知/HA。
+
+### 成本与剩余
+
+预校验增加冷迁移时的BSON和目标解码成本，保持当前分包/公开签名/持久格式，未做性能benchmark。多DAO往返、嵌套字段类型变化、持续竞争、真实Mongo事务重试/网络未知、Cluster/HA/长期容量仍分别留项；本轮17消费者和12新正式回归不代表N04或整个DataEngine已穷尽。

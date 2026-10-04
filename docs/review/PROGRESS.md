@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 NC-31修复与N04多DAO / CAS / 进程恢复
+
+起点edf85be9，干净main快进3127d37c；本轮修改/验证身份以[摘要](evidence/noncore-review-20261004-21/source-hashes.csv)及交付提交为准。[运行](REVIEW-2026-10-05-noncore-21.md) · [NC-31修复](../bugfix/RR-20261004-NC-31.md) · [证据](evidence/noncore-review-20261004-21/README.md)。**NC-31已修，声明场景验证，未发版；接续review无新增确认RR。**
+
+| 范围 | 本轮证据 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 迁移准入 | 可信正式5红/3控制、生成3红/8控制；12新正式及原11消费全绿 | 坏BSON/目标类型/身份不进入CommitSystem；兼容int32 ID/旧payload schema |
+| 多DAO | 正常两个提交，后序坏类型/步骤失败不发布；前序保留，正式CAS修正后只接续剩余DAO | 3新增消费通过；逐DAO持久迁移，不承诺全有或全无 |
+| 并发CAS | 目标schema竞争者保留score99，旧schema竞争者重读后再迁移；旧WAL结算/unacked=0 | 2新增消费通过；持续竞争达到预算尚待正式生成消费补证 |
+| 进程恢复 | strict CommitSystem返回后强杀独占子进程，重开同目录WAL并重放/新Manager加载 | 1新增消费通过；真实文件恢复，mongotest不证明Mongo/HA |
+| 本地验证 | 合计17生成叶子、五包race421pass/1helper skip、根包14、build/vet/glsvet通过；Kit integration仅编译 | 不等待/查询GitHub CI；历史17外部skip不关闭 |
+
+N04仍为历史41/41源文累计已读、**业务场景部分完成，不计completed/15**。六项增量场景已补，不双计原11，不往产品文件分母加入核心同行和测试。下一N04嵌套/类型变化及持续CAS竞争生成消费、具名清单收口→N05路由/mirror增量。收尾远端42059469仅文档：W-2026-10-04-08按维护者静态sid绑定新前提归类“简化后不适用”，新方案未实施，不算旧实现修复/独立验收。[增量说明](REVIEW-2026-10-05-noncore-21.md#交付前上游增量)。真实Mongo副本集/未知提交、Cluster/HA、真实部署断电/强杀矩阵、长容量保留；没有按本轮测试数重算全仓百分比或完成日期。
+
 ## 2026-10-04 N04 正式迁移写回与重载接入
 
 基线`34137925`，从`04d679b8`干净main快进；[本轮记录](REVIEW-2026-10-04-noncore-20.md)、[证据/复跑](evidence/noncore-review-20261004-20/README.md)、[实现学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。**新P2 [NC-31](../bug/RR-20261004-NC-31.md)已确认、未修**：迁移结果先提交，坏BSON/ID进WAL，错误目标字段写成不可加载的schema3/version8。

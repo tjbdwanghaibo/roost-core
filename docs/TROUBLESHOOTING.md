@@ -1,5 +1,9 @@
 # 问题快速定位
 
+| 编号 | 现象 | 原因 | 看哪里 | 处置 |
+| --- | --- | --- | --- | --- |
+| T-210 | 旧schema冷加载出现坏BSON/目标字段错误、迁移返回unsupported，或旧版升级后投影backlog/重载失败 | RR-20261004-NC-31：旧版目标校验晚于持久提交；新版提前拒绝缺loader/身份或错误结果 | 迁移错误的resource/id/schema、CommitSystem次数、原文档schema/version、WAL未确认和投影错误 | 使用预提交验证修复；手写候选补RestorePersisted和Id，不能传在线对象。已有坏WAL/污染文档先备份定位，再制定具名恢复，不自动跳过日志/删生产数据 |
+
 按**你看到的症状**索引。每行四列：最可能的原因、看哪里、怎么处理。找不到症状时先看 [OBSERVABILITY.md](../OBSERVABILITY.md) 的指标清单，再到 [USER_GUIDE.md](USER_GUIDE.md) 第 12 章。
 
 这份文档与 bug 收敛绑定：每个[工作单元](history/ledger.md)必须为它加一行（编号 `T-xx`，单元日志里回填）。所以它随收敛增长，不是一次写完就过期的文件。"看哪里"引用的指标名、错误值、命令都必须真实存在——文档漂移检查会核对。

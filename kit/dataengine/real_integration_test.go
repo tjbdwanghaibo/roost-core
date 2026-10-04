@@ -168,11 +168,13 @@ func TestRealLoadAndMigrationRestoresTrackerVersion(t *testing.T) {
 }
 
 type realMigrationDAO struct {
+	id       int64
 	tracker  coredata.Tracker
 	schema   uint32
 	migrated bool
 }
 
+func (dao *realMigrationDAO) Id() int64         { return dao.id }
 func (*realMigrationDAO) SchemaVersion() uint32 { return 2 }
 
 func (*realMigrationDAO) Migrate(raw []byte, from uint32) ([]byte, error) {
@@ -188,12 +190,16 @@ func (*realMigrationDAO) Migrate(raw []byte, from uint32) ([]byte, error) {
 }
 
 func (dao *realMigrationDAO) RestorePersisted(raw []byte, schema uint32, version uint64) error {
-	var doc bson.M
+	var doc struct {
+		ID       int64 `bson:"_id"`
+		Migrated bool  `bson:"migrated"`
+	}
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
+	dao.id = doc.ID
 	dao.schema = schema
-	dao.migrated, _ = doc["migrated"].(bool)
+	dao.migrated = doc.Migrated
 	dao.tracker.SetVersion(version)
 	dao.tracker.SelfClean()
 	return nil

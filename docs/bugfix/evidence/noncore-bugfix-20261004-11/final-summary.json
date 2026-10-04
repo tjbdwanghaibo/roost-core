@@ -1,0 +1,26 @@
+{
+  "final-root": {
+    "fail": 0,
+    "pass": 14,
+    "skip": 0,
+    "infra": 0
+  },
+  "final-consumer": {
+    "fail": 0,
+    "pass": 17,
+    "skip": 0,
+    "infra": 0
+  },
+  "final-packages": {
+    "fail": 0,
+    "pass": 421,
+    "skip": 1,
+    "infra": 0
+  },
+  "formal-nc31": {
+    "fail": 0,
+    "pass": 12,
+    "skip": 0,
+    "infra": 0
+  }
+}

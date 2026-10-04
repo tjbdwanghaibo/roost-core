@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-05 NC-31修复与N04接续](REVIEW-2026-10-05-noncore-21.md)：12新正式、17生成消费通过；多DAO、两种CAS淘汰与真实子进程强杀后WAL恢复六项无新增确认缺陷。五包race421pass/1helper skip、根包14、build/vet/glsvet通过，真实Mongo/HA不冒认；N04仍部分完成。[修复](../bugfix/RR-20261004-NC-31.md) · [证据/复跑](evidence/noncore-review-20261004-21/README.md) · [机制](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md#2026-10-05-迁移准入多dao与cas恢复)。
+
 [10-04 N04正式迁移消费](REVIEW-2026-10-04-noncore-20.md)：新增[NC-31 P2未修](../bug/RR-20261004-NC-31.md)，输出未在提交前校验，3反例/8控制；真实文件WAL和正式MongoStore接生成DAO，后端mongotest。全仓本地编译、34定向race、根包14及vet通过；中文注释与skill更新，后续以本地验收收尾，不等待GitHub CI。N04仍场景部分完成。[证据](evidence/noncore-review-20261004-20/README.md) · [学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。
 
 [10-04 开放条目现状核实](REVIEW-2026-10-04-open-triage.md)：17 条历史开放项——已修复 12（WANTED 09-16～09-18）、已过时 2、**仍存在 3**（RR-20260921-03 P1 playerowner 归还 / 重新认领、04 P2 归还回合超过租约、05 P2 CI 不校验 go:generate），另有新候选：4 个 codegen 运行期守卫脚本因 `core_pin` 被删而默认失败且无 CI 调用。CARRYOVER A1/A2/A6/A7/A8/A14 与 N03/N04 留项只列出。

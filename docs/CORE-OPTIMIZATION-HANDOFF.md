@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**10-05 N04接续**：[NC-31已修](bugfix/RR-20261004-NC-31.md)，未发版；提交前校验目标BSON/装载/身份，12新正式、17生成消费通过。多DAO/CAS/真实文件WAL子进程强杀恢复六项增量无新确认缺陷；五包race421pass/1helper skip、根包14、build/vet/glsvet通过，Kit integration仅编译。N04仍部分完成，下一嵌套/类型变化与持续竞争消费→具名收口→N05路由/mirror；真实Mongo/HA/长容量不冒认。[运行/进度](review/REVIEW-2026-10-05-noncore-21.md)。下方NC-31未修为10-04原发现时点。
+
 **10-04 N04正式迁移写回接续**：[本轮](review/REVIEW-2026-10-04-noncore-20.md)确认[NC-31 P2未修](bug/RR-20261004-NC-31.md)：目标解码晚于CommitSystem，坏迁移进入WAL或写成不可加载的新schema。生成消费11叶子3fail/8控制，真实文件WAL/Projector+MongoStore、后端mongotest；build/34既有定向race/根包14/vet通过，未宣称真实Mongo/HA。3文件仅补中文注释；review与共同skill已明确必要中文说明和本地验收收尾，不等待GitHub CI。N04仍部分完成，下一多DAO/CAS消费与具名缺口收口；行为修复另走bugfix。
 
 **10-04 用户要求的复审核对与改进**：[独立复盘](review/REVIEW-2026-10-04-fix-audit-retrospective.md)确认RR-02～07成立且六修复已包含；d3四项历史28红/4控制、定向36绿，外部限制分列。规范/本机skill接入组合契约复核，修正README残留降级说明。收尾另一线Wanted分流RR-08已修并整合，45普通NATS叶子race/vet及最终根包独立通过；本机未冒认真实broker。无产品行为修改、未增加域完成数。
@@ -168,6 +170,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+10-05第十一批：[NC-31](bug/RR-20261004-NC-31.md) **已修复、声明场景验证，未发版**；[决策/兼容性](bugfix/RR-20261004-NC-31.md)、[红绿](bugfix/evidence/noncore-bugfix-20261004-11/README.md)、[多DAO/CAS/进程恢复](review/REVIEW-2026-10-05-noncore-21.md)。T-210。缺Loader/Id的手写候选现在unsupported；不改在线对象，不自动修坏WAL/生产数据，不重开另一线核心完整专项。
 
 10-04第十批修复/非三大核心第十一批：[NC-30 P2](bug/RR-20261004-NC-30.md)已确认并修复，registry在Lua副作用前裁决；12正式、六包race/vet221叶子、16新review、11正式生成消费者通过。[红绿](bugfix/evidence/noncore-bugfix-20261004-10/README.md) · [迁移/schema学习](review/IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。无新增待修RR，T-208，未发版。N04仍41候选累计源文已读、场景部分完成；下一Repository持久迁移/重载消费（复用核心另一线证据）→N04收口→N05增量。类型迁移/Mongo/Cluster/HA/弱网/长容量留项；NC-26～29只补索引状态遗漏。
 
