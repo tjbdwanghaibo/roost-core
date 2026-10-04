@@ -433,7 +433,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   (b) 如果是，`//roost:dao` 是否该支持一个"无集合"的声明，让全 nopersist 的 DAO 不必编造一个 Mongo 集合名。
 - **来源**：game-demo 第十三批第三批实施时撞上（§9.4.3）。
 
-### W-2026-09-18-10 原始候选：刷出来的实体 id 由进程本地计数器生成，第二个进程会撞
+### W-2026-09-18-10 原始候选：刷出来的实体 id 由进程本地计数器生成，第二个进程会撞（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `demo/internal/service/game/spawner.go`（`monsterUniqueIDBase` + `mintID()`，一个进程内自增）。
 - **现象**：怪物是 `noPersist` 的运行期实体，没有账号服务那样的 id 分配器给它发号。demo 用"基数 + 进程内自增"，
@@ -444,7 +444,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   而刷怪在热路径上）、或者让运行期实体的 id 里带上进程标识（改 id 布局，破坏性最大）。
 - **来源**：game-demo 第十三批第三批（§9.4.3）。实现侧已在文件头注明这是单进程限制。
 
-### W-2026-09-18-08 原始候选：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定
+### W-2026-09-18-08 原始候选：多来源的兴趣（空间 + 社会关系）合并成一份订阅，合并规则与关系数据来源没有定（2026-10-04 核实：**已过时**——多来源聚合已进 Core（`sync/entitysync/policy/source.go`），原“不提升到 Core”的决定已被超越；见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-core `spatial/interest.go`（空间来源，事件形如 `{Observer, Subject, Enter/Leave/BandChanged, Band}`）；
   `entitysync/subscription.go:178`（`Subscribe` 是幂等的"设定"语义：同键同 profile 直接返回，不同 profile 做切换并重发快照）；
@@ -467,7 +467,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   实现侧先在 demo 里落一版，跑通了再提；不想在没有第二个使用方之前就把它定成框架 API。
 - **来源**：用户在第十三批第二批设计讨论中提出（§9.4.2）。
 
-### W-2026-09-18-05 原始候选：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界
+### W-2026-09-18-05 原始候选：`spatial.InterestConfig` 对"一个观察者订阅多少格"没有任何上界（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-core `spatial/interest.go:60`（`InterestConfig.validate`：只校验 `EnterRadius > 0`、`LeaveRadius >= EnterRadius`、
   `LeaveRadius < 2^62`、`Bands` 递增）、`:276`（`resubscribe` 用 `±LeaveRadius` 的盒子取格）、
@@ -485,7 +485,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   `AddObserver` 一个观察者后数 `len(observer.blocks)`。
 - **来源**：game-demo 第十三批准备 AOI 接线时对照 cube `BlockAOI` 发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.4.2）。
 
-### W-2026-09-18-06 原始候选：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约（**id 空间部分用户已定**）
+### W-2026-09-18-06 原始候选：AOI 的 id 空间与 entitysync/room 的 id 空间没有契约（**id 空间部分用户已定**）（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-core `spatial/interest.go:392`（`evaluatePair` 第一行 `if observer.id == subject { return }`——自观察靠**同一个 id 空间**判定）；
   `entitysync/subscription.go:42`（`SubscriberRef{Kind, ID, Sid, Key}`）与 `:178`（`Subscribe(ctx, subscriber, state, profile)`，
@@ -511,7 +511,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   W-2026-09-18-08。
 - **来源**：game-demo 第十三批设计 AOI → 订阅桥接时发现（§9.4.2）。
 
-### W-2026-09-18-07 原始候选："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里
+### W-2026-09-18-07 原始候选："subject" 跨两层同名不同物，且 AOI 的点不是实体的 pos——两处都只在实现者脑子里（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-core `spatial/interest.go`（subject = 一个 `int64` + 一个 `Point`，包对"实体"一无所知；
   observer/subject 是**角色**不是类型，同一个 id 可以两者都是、都不是——`:184` 的注释只写了
@@ -532,7 +532,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
   改名是破坏性的，取舍归 review。
 - **来源**：game-demo 第十三批（§9.4.2）。与 W-2026-09-18-06 同源，可一并分流。
 
-### W-2026-09-18-02 原始候选：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
+### W-2026-09-18-02 原始候选：生成的同步字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `internal/dao/template_dao.go`（`{{fieldMaskName $.Dao.Name .Name}}` 生成 `varietyDaoFieldSyncOnly`
   一类**未导出**常量，见 `internal/dao/testdata/golden/gen_variety_dao.go:59-63`）；消费侧的形状见
@@ -548,7 +548,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：在生成工程里新建一个包，写 `if mask & db.PlayerDaoFieldLevel != 0`——编译不过（未导出）。
 - **来源**：第十二批给 game-demo 接实体同步时发现（`docs/feature/GAME_DEMO_TEMPLATE.md` §9.3.1）。
 
-### W-2026-09-18-03 原始候选：生成的接入层没有会话关闭回调，所有"谁还在线"的东西只能靠推送失败懒清理
+### W-2026-09-18-03 原始候选：生成的接入层没有会话关闭回调，所有"谁还在线"的东西只能靠推送失败懒清理（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen 生成的 `internal/access/player/tcp/server_gen.go`（`Runtime` 只导出 `PushPlayer` / `PushSession` /
   `ActiveSessions`，`internal/roost/render_player_tcp.go` 是模板）；使用方 game-demo 的 `game/chatroom` presence
@@ -565,7 +565,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：起 demo，杀掉一个机器人进程，观察 `scene` / presence 什么时候才把它摘掉——直到下一次有人向它推送为止。
 - **来源**：第十二批（§9.3.1）。
 
-### W-2026-09-18-04 原始候选：`//roost:entity` 的 syncTopic 只认带包名的常量，裸标识符被静默当成字面量
+### W-2026-09-18-04 原始候选：`//roost:entity` 的 syncTopic 只认带包名的常量，裸标识符被静默当成字面量（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `internal/entity/gen.go:225` `syncTopicExpr` → `isConstExpr`（要求含 `.` 且点后首字母大写）。
 - **现象**：`syncTopic=SyncTopicPlayer`（同包常量）生成出来的是 `Topic: "SyncTopicPlayer"`——**常量的名字**，不是它的值。
@@ -579,7 +579,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **复现**：`roost add entity X -sync` 类路径上给 syncTopic 传一个同包常量名，看生成物里的 `Topic:`。
 - **来源**：第十二批（§9.3.1）。
 
-### W-2026-09-18-01 原始候选：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形
+### W-2026-09-18-01 原始候选：邮件附件账本的界仍然押在"别的服务会忘掉"上，要不要改成与副本同形（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `demo/game/rewards/rewards.go.tmpl`（`ClaimRetentionSeconds = 31 天`、`ClaimExpired(claimedAt, nowUnix)`）
   与 `demo/game/entities/player/bag_component.go.tmpl:104-120`（`ClaimMailReward` 按领取时刻清理）。
@@ -601,7 +601,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-04.md)，不再属于待审表。确认的是策略注入承诺无效；原草稿预设 Enqueue/Sweep 自动成组，与当前 Store 契约不符，不直接作为修复测试。建议保留调用方驱动，移除无效 Mod/Config/codegen 注入入口。具体实施与验收以链接文档为准。
 
-### W-2026-09-16-01 原始候选（仅保留来源，不代表最终方案）
+### W-2026-09-16-01 原始候选（仅保留来源，不代表最终方案）（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-kit `527eecd`，`service/match/match_mod.go`（`NewMod(grouping Grouping, …)`，头注释"Grouping is a constructor
   argument because 'which candidates form a match' is the whole of a game's matchmaking policy"）；`service/match/queue_store.go:118`
@@ -666,7 +666,7 @@ W-2026-09-16-01 已于 2026-09-16 登记为 [RR-20260916-05](REVIEW-2026-09-16-0
 
 Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（attribute 契约），Wanted-04 → RR-20260917-07（原生 Saga 完成订阅）。全部未修复；[确认问题与实施交接](REVIEW-2026-09-17-03.md) · [完整复现](REPRO-2026-09-17-03.md)。以下仅归档原始候选，不再属于待审表。
 
-### W-2026-09-17-02：dao 嵌套里的嵌套（map / slice / struct 字段的元素）从存储解码后没有 dirty 传播接线
+### W-2026-09-17-02：dao 嵌套里的嵌套（map / slice / struct 字段的元素）从存储解码后没有 dirty 传播接线（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `internal/dao/template_nested.go`——`Set<Field>` 对 Kind 2（map）只 `s.<f>.Set(key, val)`、Kind 3（struct）只 `s.<f> = v`，
   以及 U-0224 新增的 `set<Field>RawMap`，都没有对元素调用 `SetNotify`；对照 `template_dao.go` 的 DAO 层：`setXRawMap` / `SetX` 对每个嵌套值
@@ -679,7 +679,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **来源**：U-0224 修 BSON 表示时发现（`docs/bugfix/U-0224-dao-nested-bson.md` 未做一节）。
 
 
-### W-2026-09-17-03：attribute 生成器的输出依赖"所在包需提供"的七个类型，而 attribute feature 的脚手架不提供它们
+### W-2026-09-17-03：attribute 生成器的输出依赖"所在包需提供"的七个类型，而 attribute feature 的脚手架不提供它们（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-codegen `internal/attribute/gen.go`（生成物引用 `AttrID` / `AttrValue` / `AttributeMeta` / `AttributeProfile`，容器访问器还引用
   `Snapshot` / `Container` / `Selector`，都不带包名）；`internal/roost/render.go:138-160`（feature `attribute` 的脚手架只写 `package attribute` 一行的 `doc.go`）；
@@ -695,7 +695,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **来源**：2026-09-17 实施 game-demo B8（attribute 演示）时发现。
 
 
-### W-2026-09-17-04：原生 Nest saga 步骤的完成效果没有消费者
+### W-2026-09-17-04：原生 Nest saga 步骤的完成效果没有消费者（2026-10-04 核实：**已修复**，见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 
 - **位置**：roost-core `saga/nest.go` `NewCompletionEffect`（Topic `saga.result.<sagaID>`，经 Nest 事务的 Data Engine outbox 发到
   `<dataengine.effects.subject_prefix>.saga.result.<id>`，即 `ROOST_EFFECTS` 流的 `roost.effect.saga.result.*`）；
@@ -719,7 +719,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 
 已完成候选分流：生成 sync=true 与 Core 不兼容 → RR-20260918-01；房间内部 coordinator 缺持久化水位接线 → RR-20260918-02，均 P2 未修复。[确定结论与实施方向](REVIEW-2026-09-18.md)。公开 API 手动组合八场景通过，因此不采纳“没有公开路径”的笼统前提；自动生成和生产端到端尚未完成。Kit Mod 仍属设计选择，应先修契约并提供可执行样例。下面保留原文及 09-17 当时观察，不再属于待审候选。
 
-### W-2026-09-17-05：实体状态同步（room 广播 + entitysync 订阅）没有装配入口，框架里一个使用方都没有
+### W-2026-09-17-05：实体状态同步（room 广播 + entitysync 订阅）没有装配入口，框架里一个使用方都没有（2026-10-04 核实：**已过时**——room 包已被 ARCH-10 删除，水位门控在 `sync/entitysync/flush.go`、由 `kit/nest/entity_sync.go` 自动接线；见 [open-triage](../review/REVIEW-2026-10-04-open-triage.md)）
 **09-17 第三轮复核：继续观察。** `EntityBase.Sync()` 是公开入口，`RoomManager.Create` / `RoomBroadcaster.RegisterSubject` 可组合，且 broadcaster 已拥有自己的 SubscriptionCoordinator。因此下方候选的“没有任何公开路径”不是本轮结论，也不建议再建第二个 coordinator。仍缺真实生成实体→房间→会话→sink 的运行证据，先补例子及锁/持久化水位/卸载关闭验证，再定 Kit 装配。见 [审查及修正](REVIEW-2026-09-17-03.md) 与 [机制](../review/IMPLEMENTATION-GENERATED-FEATURE-CONTRACTS.md)。以下保留实现侧原始候选。
 
 - **位置**：`roost-core/room`（`NewRoomManager` / `NewRoomBroadcaster` / `NewRoomTransportSink` / `RoomBroadcaster.RegisterSubject`）、
