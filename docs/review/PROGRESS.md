@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第五批修复 + 非三大核心第六批 N04
+
+基线`3560a19b`，pull无增量。[NC-11/12修复](REVIEW-2026-10-04-noncore-09.md) · [N04运行](REVIEW-2026-10-04-noncore-10.md) · [三个新未修RR](../bug/REVIEW-2026-10-04-noncore-10.md) · [机制与实施交接](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)。下方旧未修为历史时点，未发版。
+
+| 范围 | 实际新增证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-11/12 | 修前8项2fail转绿；最终15正式项、两个测试包race61 test pass事件0fail/skip、KitEtcd编译/vet及三包vet；真实SDK Grant取消/超时、双收尾/重试 | 2/2已修、声明场景验证；正常Resign预算/服务端回收与集群恢复仍留项 |
+| N04源文 | 20/40完整读取：cache10、migration1、Mongo5、Redis4；KitRedis/KitMongo2同行，RefHMap/mongotest/driver client仅具名范围 | 源文与场景部分完成；[逐文件清单/blob](evidence/noncore-review-20261004-10/inventory.csv)，不是50%业务覆盖 |
+| N04普通场景 | overlay26叶子=9行为失败/16控制/1容量观察；五测试包race113 test pass事件0fail/7skip，另三个包无测试；八包vet | NC-13/14 P2、NC-15 P3待修；容量只观察，完整场景分母尚未收口 |
+| 真实Redis补测 | 专属Redis8.8.0原7skip逐项实际通过；正式cache/driver实际Redis6叶子2fail/4pass补证NC-15，独占进程已退出 | 原skip日志保留、补测另列；不声称Cluster/HA/长稳或Mongo/etcd真实部署通过 |
+
+下一新入口 **N04 RefHMap完整反射/patch/schema与Lua未知结果 → Redis assembly/锁/pubsub/cluster恢复 → Mongo真实cursor/partial bulk/事务重试与正式DAO/codegen迁移消费**。用户说未修时直接接续新内容，不重验NC-13～15；明确bugfix时先修这些RR。N03仍39/39源文已读、场景部分完成；N01～N04均不计completed/15。[约50～90有效小时计划](NONCORE-REVIEW-PLAN-2026-10-03.md)仍是风险预算，本批未核定剩余风险新工时，不按20/40源文比例扣减。[修复证据](../bugfix/evidence/noncore-bugfix-20261004-05/README.md) · [新审查证据](evidence/noncore-review-20261004-10/README.md) · [外部/预算留项](../bug/CARRYOVER.md)。
+
 ## 2026-10-04 第四批修复 + 非三大核心第五批
 
 [修复运行](REVIEW-2026-10-04-noncore-07.md) · [etcd/KitEtcd审查](REVIEW-2026-10-04-noncore-08.md) · [两个新未修P2](../bug/REVIEW-2026-10-04-noncore-08.md) · [机制学习](IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md)。源码起点`e62729ac`，下方NC-08～10已修，本批NC-11/12未修，未发版。

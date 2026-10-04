@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-04 etcd修复与N04接续：** [NC-11/12修复](review/REVIEW-2026-10-04-noncore-09.md)两项已修、15正式生命周期场景通过；[N04缓存/Redis/Mongo/迁移](review/REVIEW-2026-10-04-noncore-10.md)20/40源文已读、场景部分完成，确认[三个新未修问题](bug/REVIEW-2026-10-04-noncore-10.md)，专属真实Redis7补测通过。[机制与实施交接](review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) · [进度](review/PROGRESS.md) · [证据](review/evidence/noncore-review-20261004-10/README.md)。未发版，下方未修结论为历史时点。
+
 **10-04 RPC修复与etcd接续：**[NC-08～10修复](review/REVIEW-2026-10-04-noncore-07.md)3/3已修、声明场景验证，28正式项/17原overlay/六包race/vet通过；[etcd/KitEtcd审查](review/REVIEW-2026-10-04-noncore-08.md)将N03清单源文推进到39/39、场景仍部分完成，确认[两个新未修P2](bug/REVIEW-2026-10-04-noncore-08.md)。[机制学习](review/IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md) · [进度](review/PROGRESS.md) · [新反例/复跑](review/evidence/noncore-review-20261004-08/README.md)。下一新范围N04，未发版。
 
 **10-04 N03 通信 Review：**[RPC协议、预算与退出责任](review/REVIEW-2026-10-04-noncore-06.md)，N03清单源文25/39已读、场景部分完成；[NC-08～10三个新未修P2](bug/REVIEW-2026-10-04-noncore-06.md)与下方已修问题分开。17项4失败/13控制，六包race/vet通过，下一步剩余etcd主链与KitEtcd。[学习与实施方向](review/IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md) · [复跑](review/evidence/noncore-review-20261004-06/README.md) · [进度](review/PROGRESS.md) · [计划](review/NONCORE-REVIEW-PLAN-2026-10-03.md)。

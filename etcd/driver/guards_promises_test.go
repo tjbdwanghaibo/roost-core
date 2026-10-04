@@ -59,7 +59,7 @@ func TestElectionResignAndLeaderRefuseWithoutALeadership(t *testing.T) {
 
 	// 对照：真有 leader 键时返回它的值，主动 Resign 成功并放弃领导权。
 	held := &election{leaderCh: make(chan struct{})}
-	held.create = func() (electionSession, electionBackend, error) {
+	held.create = func(context.Context) (electionSession, electionBackend, error) {
 		return newFakeElectionSession(), &leaderValueBackend{value: "server-9"}, nil
 	}
 	if err := held.Campaign(ctx, "server-9"); err != nil {

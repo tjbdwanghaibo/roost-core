@@ -77,7 +77,7 @@ func (e *fakeElectionBackend) Leader(context.Context) (*clientv3.GetResponse, er
 func newTestElection() (*election, *[]*fakeElectionSession) {
 	sessions := make([]*fakeElectionSession, 0, 2)
 	e := &election{leaderCh: make(chan struct{})}
-	e.create = func() (electionSession, electionBackend, error) {
+	e.create = func(context.Context) (electionSession, electionBackend, error) {
 		session := newFakeElectionSession()
 		sessions = append(sessions, session)
 		return session, &fakeElectionBackend{rev: int64(len(sessions))}, nil

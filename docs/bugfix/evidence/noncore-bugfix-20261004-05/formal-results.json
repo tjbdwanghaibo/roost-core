@@ -1,0 +1,77 @@
+[
+  {
+    "Test": "TestEtcdLifetimeConcurrentCloseWaitsForHandlerAndWatcherAndPreservesError",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeParentCancellationStartsCleanupBeforeHandlerReturns",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeCallbackCloseBudgetIncludesOwnedWatcher",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeCallbackErrorAndExplicitCloseOwnership",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeCancellationBeforeLeadershipPublication",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeCanceledCampaignNeverStartsSetup",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeNormalResignDoesNotCancelRevoke",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeCampaignCancellationReachesSessionGrant",
+    "Action": "pass",
+    "Elapsed": 0.01
+  },
+  {
+    "Test": "TestEtcdLifetimeCampaignDeadlinePreservesCause",
+    "Action": "pass",
+    "Elapsed": 0.25
+  },
+  {
+    "Test": "TestEtcdLifetimeWatcherReadinessAndTerminalCauses/created",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeWatcherReadinessAndTerminalCauses/compacted",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeWatcherReadinessAndTerminalCauses/closed",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeWatcherCloseUnblocksFullDeliveryQueue",
+    "Action": "pass",
+    "Elapsed": 0
+  },
+  {
+    "Test": "TestEtcdLifetimeMirrorReadCopyCASAndStaleRevision",
+    "Action": "pass",
+    "Elapsed": 0
+  }
+]

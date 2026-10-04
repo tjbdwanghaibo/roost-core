@@ -6,6 +6,8 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-197 | Campaign取消仍等LeaseGrant，或setup超时只见context canceled | RR-20261004-NC-11：旧NewSession使用client context；setup与长期session混在一起 | caller Err与实际Grant入场/退出、IsLeader/Fence、session Done | 使用setup取消桥修复；成功后caller取消保持领导权，真实lease回收仍看服务端/TTL，正常Resign预算另验 |
+| T-198 | WatchCallback.CloseWithContext取消仍卡底层Close，或关闭错误消失 | RR-20261004-NC-12：旧requestClose同步watcher.Close且吞错误 | CloseWithContext ctx错误、subscription Done/Err、handler/watcher真实退出 | 保留同一subscription，以新预算再次排空；处理底层关闭错误；callback不得无期限等自身 |
 | T-194 | JS无handler拒绝变成unsupported rpc response version 0 | RR-20261004-NC-08：旧分支直接发code/reason | request MsgName与回包version/error envelope | 使用含本批修复的代码；修正handler/订阅声明，不放宽客户端版本门禁 |
 | T-195 | Assembly.Close取消仍卡callback，或取消后再次Stop过早返回 | RR-20261004-NC-09：旧Stop等待pool/fallback且没有共同收尾 | StopWithContext返回ctx错误、callback入场/退出、pending/队列 | 使用同一Assembly/Kit以新预算再次排空；业务callback必须最终退出，callback内不无期限等待自身 |
 | T-196 | ServiceRPC配置20ms，发现卡顿却等待更长父期限 | RR-20261004-NC-10：旧组合调用先发现再创建transport timeout | CallDiscoveredChecked配置与Discover/picker收到的deadline | 使用共同预算修复；独立PickServer由调用者提供ctx，确认dependency响应取消，未知结果不自动重试 |

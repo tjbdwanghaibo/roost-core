@@ -27,4 +27,6 @@
 
 ## 观察而非新增 RR
 
+**10-04 第五批修复追加：NC-11/12均已修复、声明场景验证，尚未发版。** [选主](../bugfix/RR-20261004-NC-11.md) · [callback关闭](../bugfix/RR-20261004-NC-12.md) · [运行/红绿](../review/REVIEW-2026-10-04-noncore-09.md)。原报告的“未修”为修前时点，原始反例保留；正常Resign预算/真实服务端lease回收等观察仍未关闭。
+
 Discovery.Deregister等待lifecycleMu/loopDone未带ctx，选主Resign的session.Close还有独立TTL等待，后续应验证调用和取消责任，尚未新增稳定反例。Mirror Snapshot/JSON Clone是O(n)或与值大小相关的复制成本；每订阅有界队列不会限制订阅总数。Snapshot+revision+1、陈旧事件门禁、CAS与克隆机制不能替代真实集群恢复或事务业务幂等。本批没有benchmark或生产容量结论。

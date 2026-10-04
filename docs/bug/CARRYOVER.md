@@ -49,15 +49,26 @@
 
 ### 2026-10-04 N03 新增验证留项
 
-以下是NC-08～10修复后的证据缺口，不是新RR，也不改变下方历史B项状态。
+以下是NC-08～12修复后的证据缺口，不是新RR，也不改变下方历史B项状态。
 
 | 范围 | 当前已证明 | 尚待执行 / 入口 |
 | --- | --- | --- |
 | NC-08协议消费 | 正式CallReliable进程内请求/回包/关联/解码、marshal/publish失败cause | 真实NATS/JetStream往返、重投/业务幂等；[记录](../bugfix/RR-20261004-NC-08.md) |
 | NC-09停止所有权 | 真pool、满队列fallback、停止前已领取终态、并发/取消重试与callback内可取消等待 | connected Assembly/Kit停止、断线与长期容量；新增短锁/计数暂无bench，[记录](../bugfix/RR-20261004-NC-09.md) |
 | NC-10发现预算 | 协作发现/picker/transport同一deadline，短parent/晚到候选拒绝 | 真实etcd发现及生成服务进程消费者；[记录](../bugfix/RR-20261004-NC-10.md) |
+| NC-11选主生命周期 | 真SDK LeaseGrant取消/超时、成功后的caller解绑、旧session隔离、正常Close先Revoke后释放ctx | 真实etcd租约/选主恢复、正常Resign的Revoke预算及失败Grant的服务端未知结果；[记录](../bugfix/RR-20261004-NC-11.md) |
+| NC-12订阅关闭 | 唯一watcher清理、caller有界等待、parent取消、并发重试、handler/watch退出后Done、关闭错误 | 真实etcd watch集成和非协作依赖的长期清理容量；[记录](../bugfix/RR-20261004-NC-12.md) |
 
-同日etcd审查另确认NC-11/12未修，真实etcd集成选择项缺PATH binary而skip；完整N03恢复矩阵仍部分完成，见[最新进度](../review/PROGRESS.md)。
+NC-11/12现已修复，最终15项新增正式用例通过；真实etcd集成仍缺本机binary，完整N03恢复矩阵仍部分完成，见[最新进度](../review/PROGRESS.md)。
+
+### 2026-10-04 N04 验证留项
+
+| 范围 | 当前已证明 | 尚待执行 / 入口 |
+| --- | --- | --- |
+| Redis与缓存 | 原7项Redis集成在本机隔离Redis 8.8.0全部通过；6项真实cache→driver→Redis探针复现NC-15的Raw/Hash两项错误契约并通过4项控制 | Redis Cluster/HA/断线恢复、生产平台差异；NC-13～15仍待修，不能以底层集成通过替代缓存一致性修复；[审查](../review/REVIEW-2026-10-04-noncore-10.md) |
+| Layered容量 | 冷TTL键观察到expiry元数据增长，未据此新增RR | 明确容量约束、回收策略和长期压力验证；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
+| Mongo | 本轮已读cursor/bulk/session等源码，driver回归通过 | 真实Mongo cursor关闭、部分bulk/未知结果、transaction retry及HA；[审查](../review/REVIEW-2026-10-04-noncore-10.md) |
+| Migration | 4项Registry/DAO版本、取消、克隆隔离与失败控制通过 | 正式DAO/codegen迁移消费者和真实持久化故障路径；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
 
 这一类本轮**不判定**：它们缺的是证据，而给不出证据的判定就是猜。
 

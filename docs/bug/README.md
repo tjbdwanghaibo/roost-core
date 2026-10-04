@@ -1,11 +1,21 @@
 # Roost Review 问题索引
 
+**10-04 N04第一批：三个新RR已确认、未修。** [运行/20源文件范围](../review/REVIEW-2026-10-04-noncore-10.md) · [机制/实施方向](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) · [普通反例与专属真实Redis](../review/evidence/noncore-review-20261004-10/README.md)。9普通失败对应3根因，真实Redis追加2失败同属NC-15；7原环境skip已逐项补测通过。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-13](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-13) | P2 ReadThrough Get/Delete吞掉fatal一致性裁决 | 已确认、未修 |
+| [RR-20261004-NC-14](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-14) | P2 Layered交付L1一致性门禁拒绝的回填 | 已确认、未修 |
+| [RR-20261004-NC-15](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-15) | P3 四Store拒绝旧版本写入却返回成功 | 已确认、未修 |
+
+**10-04 第五批修复：NC-11/12 2/2已修、声明场景验证，未发版。** [NC-11](../bugfix/RR-20261004-NC-11.md) · [NC-12](../bugfix/RR-20261004-NC-12.md) · [15正式项/红绿](../bugfix/evidence/noncore-bugfix-20261004-05/README.md)。下方原N03审查散文保留其修前时点。
+
 **10-04 N03第五批：NC-11/12两个新P2已确认、未修。**[运行/范围](../review/REVIEW-2026-10-04-noncore-08.md) · [反例与控制](../review/evidence/noncore-review-20261004-08/README.md) · [生命周期学习与方向](../review/IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md)。N03源文39/39已读、场景部分完成。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261004-NC-11](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-11) | P2 Campaign取消不传递到session LeaseGrant | 已确认、未修 |
-| [RR-20261004-NC-12](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-12) | P2 WatchCallback关闭预算被第三方watcher.Close阻塞 | 已确认、未修 |
+| [RR-20261004-NC-11](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-11) | P2 Campaign取消不传递到session LeaseGrant | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-11.md) |
+| [RR-20261004-NC-12](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-12) | P2 WatchCallback关闭预算被第三方watcher.Close阻塞 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-12.md) |
 
 **10-04 第四批修复：NC-08～10 3/3已修、声明场景验证，未发版。**[运行](../review/REVIEW-2026-10-04-noncore-07.md) · [正式红绿/消费](../bugfix/evidence/noncore-bugfix-20261004-04/README.md)。下方N03第四批“未修”是原审查时点。
 

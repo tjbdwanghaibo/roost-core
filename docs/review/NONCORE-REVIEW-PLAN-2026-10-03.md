@@ -23,6 +23,10 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 
 ## 当前完成矩阵与预算
 
+### 10-04 N03修复与N04第一批接续
+
+[第五批修复](REVIEW-2026-10-04-noncore-09.md)关闭NC-11/12，15正式生命周期项与原反例通过；N03正常Resign预算、真实服务端回收/恢复仍开放。[N04第一批](REVIEW-2026-10-04-noncore-10.md)20/40源文已读、两个Kit文件同行，26普通场景9fail/16控制/1观察，NC-13～15未修。五测试包race/八包vet通过；原7Redis skip用专属真实Redis全部补测，另6正式缓存场景2fail/4pass同属NC-15。接续RefHMap余项、Redis恢复、Mongo及正式迁移消费者，不转域、不重审Service十域。剩余风险没有逐项新估时，仍沿用约50～90有效小时预算，20/40不代表业务覆盖率或工时减半。
+
 ### 10-04 修复与 N02 接续更新
 
 [N01 第二批](REVIEW-2026-10-04-noncore-02.md) 补齐十个生产文件，合并上一批为 15/15 源文读取，另查 Kit ManagerMod/OpsMod；原 17 项含 11 失败/5 控制/1 观察。随后[四项修复](REVIEW-2026-10-04-noncore-03.md)与 35 个正式场景补齐 Manager 状态竞争、schema 副本和 Ops 排空/重试，11 包 race/vet 通过。App/HTTP 原四项也已修。两批修复不关闭永久阻塞/Group 预算、完整 App 故障进程或 Ops bind/hijack 等余项。
@@ -39,8 +43,8 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | --- | --- | --- | --- |
 | N01 | app/lifecycle/manager/health/admin，15 | 源文15/15已读，四个本域新RR已修/35正式场景通过；场景部分完成，补 Group 阻塞预算、完整 App 故障/Ops bind及hijack/权限与Health策略 | 2～4 |
 | N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
-| N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～10已修/声明场景验证，NC-11/12未修；真实NATS/etcd、选主清理、关闭/重连/lease恢复与容量矩阵待补 | 6～10 |
-| N04 | redis/mongo/cache/migration，40 | Service 驱动专项与 cache 部分已查；剩余事务/批次、游标、过期/容量、回调所有权、迁移失败 | 6～10 |
+| N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～12已修/声明场景验证；真实NATS/etcd、正常Resign预算/服务端清理、重连/lease恢复与容量矩阵待补 | 6～10 |
+| N04 | redis/mongo/cache/migration，40 | 源文20/40已读、场景部分完成，NC-13～15待修；Redis7真实补测通过；接续RefHMap完整反射/patch/schema、Redis恢复、Mongo游标/partial bulk/事务与正式迁移消费者 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | 历史多轮、与另一线交叠；只接续未覆盖镜像/路由接入与最新变更，不重审核心提交链 | 2～4 |
 | N06 | service/saga/servicemetrics，36 | Service 十域主链已有完成记录；仅增量、Saga 补偿/重试/关停与未涵盖指标边界 | 2～4 |
 | N07 | configdata/attribute/event/errcode，10 | 运行配置与生成邻接已查；真实热更新/校验、属性变更传播、事件订阅与错误映射补证 | 2～4 |

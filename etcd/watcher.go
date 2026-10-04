@@ -31,8 +31,11 @@ type IWatcherReady interface {
 type WatchHandler func(ctx context.Context, event *WatchEvent) error
 
 // IWatchSubscription owns a callback consumer and its lifecycle. Err is nil
-// for an explicit Close and otherwise reports context cancellation, watcher
+// for a clean explicit Close and otherwise reports context cancellation, watcher
 // termination, callback failure, callback panic, or subscriber backpressure.
+// WatchCallback also reports an owned watcher's Close error through Err and
+// the completed Close/CloseWithContext call. A canceled close wait does not
+// complete Done: cleanup continues until the handler and watcher have exited.
 type IWatchSubscription interface {
 	Done() <-chan struct{}
 	Err() error

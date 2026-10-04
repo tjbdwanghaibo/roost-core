@@ -37,7 +37,7 @@ var _ fetcd.IElectionFactory = (*ElectionFactory)(nil)
 type election struct {
 	cli      *clientv3.Client
 	prefix   string
-	create   func() (electionSession, electionBackend, error)
+	create   func(context.Context) (electionSession, electionBackend, error)
 	session  electionSession
 	elect    electionBackend
 	isLeader atomic.Bool
@@ -63,8 +63,8 @@ type electionBackend interface {
 	Rev() int64
 }
 
-func (e *election) createWithEtcd() (electionSession, electionBackend, error) {
-	session, err := concurrency.NewSession(e.cli)
+func (e *election) createWithEtcd(ctx context.Context) (electionSession, electionBackend, error) {
+	session, err := concurrency.NewSession(e.cli, concurrency.WithContext(ctx))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -72,6 +72,12 @@ func (e *election) createWithEtcd() (electionSession, electionBackend, error) {
 }
 
 func (e *election) Campaign(ctx context.Context, value string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	if e.campaign {
 		e.mu.Unlock()
@@ -88,14 +94,32 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	if create == nil {
 		create = e.createWithEtcd
 	}
-	session, elect, err := create()
+	// RR-20261004-NC-11: setup follows the caller's cancellation, while a
+	// successful session follows the client lifetime. Detach the cancellation
+	// bridge before publishing leadership; using ctx as the lifetime directly
+	// would revoke leadership when the successful caller stops waiting.
+	lifetime := context.Background()
+	if e.cli != nil {
+		lifetime = e.cli.Ctx()
+	}
+	sessionCtx, cancelSession := context.WithCancel(lifetime)
+	stopCancellation := context.AfterFunc(ctx, cancelSession)
+	defer stopCancellation()
+	session, elect, err := create(sessionCtx)
 	if err != nil {
+		cancelSession()
 		e.finish(nil)
+		if callerErr := ctx.Err(); callerErr != nil {
+			return errors.Join(callerErr, err)
+		}
 		return err
 	}
+	owned := &campaignSession{electionSession: session, cancel: cancelSession}
+	session = owned
 	e.mu.Lock()
 	if !e.campaign {
 		e.mu.Unlock()
+		cancelSession()
 		_ = session.Close()
 		return fetcd.ErrNotLeader
 	}
@@ -105,16 +129,33 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 
 	// Campaign blocks until elected or context cancelled
 	if err := elect.Campaign(ctx, value); err != nil {
+		cancelSession()
 		_ = session.Close()
 		e.finish(session)
 		return err
+	}
+	if !stopCancellation() || ctx.Err() != nil {
+		cancelSession()
+		_ = session.Close()
+		e.finish(session)
+		return ctx.Err()
 	}
 
 	e.mu.Lock()
 	if e.session != session || !e.campaign {
 		e.mu.Unlock()
+		cancelSession()
 		_ = session.Close()
 		return fetcd.ErrNotLeader
+	}
+	select {
+	case <-session.Done():
+		e.mu.Unlock()
+		cancelSession()
+		_ = session.Close()
+		e.finish(session)
+		return fetcd.ErrNotLeader
+	default:
 	}
 	// Publish the fencing token before the leadership flag: a caller that
 	// observes IsLeader must be able to read the token of that term.
@@ -126,9 +167,37 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	go func() {
 		<-session.Done()
 		e.finish(session)
+		owned.releaseContext()
 	}()
 
 	return nil
+}
+
+// campaignSession releases the detached lifetime on session loss or Close.
+// Session.Close closes Done before its lease Revoke RPC. Serialize cancellation
+// with Close so the expiry observer cannot cancel that RPC during normal Resign.
+type campaignSession struct {
+	electionSession
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (s *campaignSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeOnce.Do(func() {
+		s.closeErr = s.electionSession.Close()
+		s.cancel()
+	})
+	return s.closeErr
+}
+
+func (s *campaignSession) releaseContext() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancel()
 }
 
 func (e *election) Resign(ctx context.Context) error {

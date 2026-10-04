@@ -1,0 +1,72 @@
+[
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration",
+    "Output": "    cas_delete_promises_test.go:19: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration",
+    "Output": "--- SKIP: TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestIndexIsMaintainedInTheSameWriteIntegration",
+    "Output": "    cas_index_promises_test.go:64: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestIndexIsMaintainedInTheSameWriteIntegration",
+    "Output": "--- SKIP: TestIndexIsMaintainedInTheSameWriteIntegration (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestIndexScorePrecisionSurvivesLuaIntegration",
+    "Output": "    cas_index_promises_test.go:129: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis",
+    "Test": "TestIndexScorePrecisionSurvivesLuaIntegration",
+    "Output": "--- SKIP: TestIndexScorePrecisionSurvivesLuaIntegration (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestDistLockExpiryAndReacquireIntegration",
+    "Output": "    lock_integration_test.go:18: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestDistLockExpiryAndReacquireIntegration",
+    "Output": "--- SKIP: TestDistLockExpiryAndReacquireIntegration (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetReturnsOneElementPerKeyIncludingMisses",
+    "Output": "    mget_integration_test.go:43: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetReturnsOneElementPerKeyIncludingMisses",
+    "Output": "--- SKIP: TestMGetReturnsOneElementPerKeyIncludingMisses (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetWithNoKeysMakesNoRoundTrip",
+    "Output": "    mget_integration_test.go:88: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetWithNoKeysMakesNoRoundTrip",
+    "Output": "--- SKIP: TestMGetWithNoKeysMakesNoRoundTrip (0.00s)\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetPreservesBinaryValues",
+    "Output": "    mget_integration_test.go:103: ROOST_REDIS_TEST_ADDR is not set\n"
+  },
+  {
+    "Package": "github.com/tjbdwanghaibo/roost-core/redis/driver",
+    "Test": "TestMGetPreservesBinaryValues",
+    "Output": "--- SKIP: TestMGetPreservesBinaryValues (0.00s)\n"
+  }
+]

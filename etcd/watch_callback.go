@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -27,12 +28,14 @@ func WatchCallback(ctx context.Context, watcher IWatcher, handler WatchHandler) 
 	}
 	callbackCtx, cancel := context.WithCancel(ctx)
 	subscription := &watchCallbackSubscription{
-		ctx:     callbackCtx,
-		cancel:  cancel,
-		watcher: watcher,
-		handler: handler,
-		done:    make(chan struct{}),
+		ctx:         callbackCtx,
+		cancel:      cancel,
+		watcher:     watcher,
+		handler:     handler,
+		done:        make(chan struct{}),
+		watcherDone: make(chan struct{}),
 	}
+	context.AfterFunc(callbackCtx, subscription.startWatcherClose)
 	go subscription.run()
 	return subscription, nil
 }
@@ -44,10 +47,13 @@ type watchCallbackSubscription struct {
 	handler WatchHandler
 	done    chan struct{}
 
-	closeOnce sync.Once
-	errMu     sync.RWMutex
-	err       error
-	closing   atomic.Bool
+	closeOnce        sync.Once
+	errMu            sync.RWMutex
+	err              error
+	closing          atomic.Bool
+	watcherCloseOnce sync.Once
+	watcherDone      chan struct{}
+	watcherErr       error
 }
 
 func (s *watchCallbackSubscription) Done() <-chan struct{} { return s.done }
@@ -61,7 +67,7 @@ func (s *watchCallbackSubscription) Err() error {
 func (s *watchCallbackSubscription) Close() error {
 	s.requestClose()
 	<-s.done
-	return nil
+	return s.watcherErr
 }
 
 func (s *watchCallbackSubscription) CloseWithContext(ctx context.Context) error {
@@ -71,7 +77,7 @@ func (s *watchCallbackSubscription) CloseWithContext(ctx context.Context) error 
 	s.requestClose()
 	select {
 	case <-s.done:
-		return nil
+		return s.watcherErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -81,20 +87,30 @@ func (s *watchCallbackSubscription) requestClose() {
 	s.closeOnce.Do(func() {
 		s.closing.Store(true)
 		s.cancel()
-		_ = s.watcher.Close()
+	})
+	s.startWatcherClose()
+}
+
+// RR-20261004-NC-12: callers only start the unique cleanup and wait with
+// their own budget. Done remains open until both handler and watcher exit.
+func (s *watchCallbackSubscription) startWatcherClose() {
+	s.watcherCloseOnce.Do(func() {
+		go func() {
+			s.watcherErr = s.watcher.Close()
+			close(s.watcherDone)
+		}()
 	})
 }
 
 func (s *watchCallbackSubscription) run() {
 	var terminalErr error
 	defer func() {
-		if terminalErr != nil {
-			s.errMu.Lock()
-			s.err = terminalErr
-			s.errMu.Unlock()
-		}
 		s.cancel()
-		_ = s.watcher.Close()
+		s.startWatcherClose()
+		<-s.watcherDone
+		s.errMu.Lock()
+		s.err = errors.Join(terminalErr, s.watcherErr)
+		s.errMu.Unlock()
 		close(s.done)
 	}()
 
@@ -108,6 +124,10 @@ func (s *watchCallbackSubscription) run() {
 		case event, ok := <-s.watcher.EventChan():
 			if !ok {
 				if s.closing.Load() {
+					return
+				}
+				if err := s.ctx.Err(); err != nil {
+					terminalErr = err
 					return
 				}
 				terminalErr = ErrWatchClosed

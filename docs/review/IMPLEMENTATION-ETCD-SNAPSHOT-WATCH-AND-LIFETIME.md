@@ -1,6 +1,6 @@
 # etcd：快照接续、镜像隔离与生命周期预算
 
-2026-10-04，etcd产品等于`e62729ac`。本文解释现有实现；[审查范围/实证](REVIEW-2026-10-04-noncore-08.md)，[两个待修问题](../bug/REVIEW-2026-10-04-noncore-08.md)。以下修法建议尚未实施。
+2026-10-04，首次审查时etcd产品等于`e62729ac`；后续以`3560a19b`为基线修复NC-11/12，本文已同步本轮实现。见[原审查范围/实证](REVIEW-2026-10-04-noncore-08.md)、[修复与验证](REVIEW-2026-10-04-noncore-09.md)、[NC-11记录](../bugfix/RR-20261004-NC-11.md)和[NC-12记录](../bugfix/RR-20261004-NC-12.md)。快照/镜像实现本轮未修改。
 
 ## 服务发现与选主各自拥有什么
 
@@ -8,7 +8,9 @@ Assembly共用一个clientv3连接，KitEtcd只读配置、声明三项能力、
 
 Election session独立于一次Campaign等待；获得领导权时先发布CreateRevision fence再置IsLeader，session结束/Resign通过finish清理并关闭LeaderChan。第一次Campaign保留之前已取走的LeaderChan，重新竞选换新通道，旧session完成不能清掉新session。IsLeader有网络观察滞后，敏感写必须在权威路径比较fence，不能仅凭bool授权。
 
-NC-11在session建立阶段：NewSession默认使用client生命周期ctx，Campaign的ctx只传入之后的elect.Campaign。建议把setup预算与成功后的长session分开，通过已有租约/session与可解除的取消连接建立所有权；简单将长期session绑定短Campaign ctx会破坏成功后caller取消仍保持领导权的契约。失败清理/Resign时session.Close还可能等待revoke，不能从一处Grant修复推断整条生命周期有界。
+NC-11原先在session建立阶段：NewSession默认使用client生命周期ctx，Campaign的ctx只传入之后的elect.Campaign。现在为session建立独立生命周期ctx，通过context.AfterFunc将caller取消接到setup，并把该ctx传给concurrency.WithContext；成功后解除连接，避免caller稍后取消撤销已获得的领导权。失败先取消session再清理，创建失败时保留caller取消/超时与SDK错误两种cause。campaignSession统一Close/释放责任，并避免SDK在Revoke前发出的Done让正常Close提前取消其清理ctx。
+
+本轮证明建立阶段可取消、成功后caller取消不失去领导权，以及旧session退出不清掉新session。正常Resign仍可能等待SDK默认TTL 60秒的Revoke；失败取消不等于服务端租约已立即撤销，也不证明超时Grant一定未创建租约。不能从一处Grant修复推断整条生命周期有界。
 
 ## Snapshot 后从哪个 revision 接续
 
@@ -20,6 +22,8 @@ Publish/Delete不直接修改本地镜像，权威watch才推进本地状态。C
 
 ## 关闭请求与实际退出分开
 
-默认driver watcher取消ctx后在接收/发送处都可退出；本批128事件、64容量的关闭控制通过。WatchCallback对外支持任意IWatcher且提供CloseWithContext，但requestClose先同步调用底层Close，NC-12因此成立。建议每subscription唯一收尾任务承担底层关闭和callback结束，caller只按自己的ctx等待同一个完成信号；Done不得提前关闭，重试不得另派无界任务。不能以丢弃handler/错误或立即返回nil换预算。
+默认driver watcher取消ctx后在接收/发送处都可退出；原审查128事件、64容量的关闭控制通过。NC-12原先源于requestClose同步调用第三方IWatcher.Close，使caller尚未进入ctx等待就可能卡住。现在每subscription用sync.Once启动唯一底层关闭任务；关闭请求和parent取消都能触发它，caller按自己的ctx等待同一个完成信号，重试不会重复关闭。callback循环必须等handler和watcher关闭实际结束后才关闭Done；Err保留handler/生命周期错误并合并底层Close错误，Close返回底层关闭错误。
 
-本轮实际gRPC LeaseGrant验证了NC-11所依赖的真正SDK调用，但server只实现故障注入接口，不能代表完整etcd一致性。NC-12使用受支持第三方watcher门闩；不误报core watcher永久阻塞。O(n)快照、JSON克隆、subscriber数量/队列总内存是后续容量观察，尚无benchmark/HA/长稳结论。
+关闭调用预算到期只终止该caller的等待，subscription继续拥有清理责任。非协作handler或第三方watcher仍可无限期占用该责任，本轮未提供强制终止，也不把提前返回当作已关闭。
+
+修复保留原8项探针的红/绿证据，并新增控制，最终15项正式用例通过，两个etcd测试包race回归和三包vet通过。实际gRPC LeaseGrant验证了真正SDK调用，但server只实现故障注入接口，不能代表完整etcd一致性。NC-12使用受支持第三方watcher门闩，不误报core watcher永久阻塞。O(n)快照、JSON克隆、subscriber数量/队列总内存是后续容量观察，尚无benchmark/HA/长稳结论。

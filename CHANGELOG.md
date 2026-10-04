@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **etcd setup与关闭预算（RR-20261004-NC-11/12）**：Campaign取消连接覆盖session创建，成功前解除以保留长期领导权，deadline保留caller与SDK原因；WatchCallback使用唯一底层关闭任务，Done等handler/watcher真实退出，取消只结束等待。完成关闭现在返回过去被吞掉的底层Close错误，公开签名/存储格式不变；正常Resign的TTL级Revoke及真实集群恢复尚未验证。[选主](docs/bugfix/RR-20261004-NC-11.md)、[关闭兼容](docs/bugfix/RR-20261004-NC-12.md)
+
 - **RPC协议与预算（RR-20261004-NC-08/09/10）**：JetStream无handler拒绝复用版本envelope；RPCClient.StopWithContext以每实例唯一扫尾保留回调责任，Assembly/Kit取消后保留资源供再次排空；ServiceRPC组合调用从发现开始共用deadline，不向过期候选发业务。[协议](docs/bugfix/RR-20261004-NC-08.md)、[停止兼容](docs/bugfix/RR-20261004-NC-09.md)、[发现预算](docs/bugfix/RR-20261004-NC-10.md)
 - **请求准入与异常边界（RR-20261004-NC-05/06）**：超 burst 需求不占限流 key、不续 idle 活性；Recover 保持固定错误，上报与失败日志 panic 独立隔离，不引入异步重试。[限流](docs/bugfix/RR-20261004-NC-05.md)、[Recover](docs/bugfix/RR-20261004-NC-06.md)
 - **生成路由模式校验（RR-20261004-NC-07）**：新增 webroute.ValidatePath 复用 chi 解析，生成扫描和运行期共同拒绝非法模式；安装成功才写 seen，installer panic 转 error。正常生成形状与原基础路径错误文本不变，自定义 router 半安装仍须重建。[兼容与验证](docs/bugfix/RR-20261004-NC-07.md)

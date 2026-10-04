@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-04 第五批修复：NC-11/12 2/2已修、声明场景验证，未发版。** [setup/长期session](RR-20261004-NC-11.md) · [关闭等待/实际退出](RR-20261004-NC-12.md) · [运行](../review/REVIEW-2026-10-04-noncore-09.md) · [红绿/15正式项](evidence/noncore-bugfix-20261004-05/README.md)。最终两测试包race61 test pass事件、0fail/skip，KitEtcd仅编译/vet，三包vet通过；原overlay8项转绿，T-197/198。正常Resign的TTL级等待和真实etcd恢复仍未验证。下方“NC-11/12尚未修复”为第四批时点；本轮新[NC-13～15](../bug/REVIEW-2026-10-04-noncore-10.md)未修。
+
 **10-04 第四批修复：NC-08～10 3/3已修、声明场景验证，未发版。**[JS协议](RR-20261004-NC-08.md) · [停止预算/排空](RR-20261004-NC-09.md) · [发现预算](RR-20261004-NC-10.md) · [运行](../review/REVIEW-2026-10-04-noncore-07.md) · [修前/修后/正式消费](evidence/noncore-bugfix-20261004-04/README.md)。17项4fail转绿，最终28正式项、17原overlay与六包race/vet通过。继续etcd审查的[NC-11/12](../bug/REVIEW-2026-10-04-noncore-08.md)尚未修复，不属本次3/3关闭。
 
 **10-04 第三批修复：NC-05～07 3/3 已修、声明场景验证，未发版。**[限流key准入](RR-20261004-NC-05.md) · [Recover观察隔离](RR-20261004-NC-06.md) · [chi模式共用校验](RR-20261004-NC-07.md) · [运行/兼容](../review/REVIEW-2026-10-04-noncore-05.md) · [红绿和正式消费者](evidence/noncore-bugfix-20261004-03/README.md)。正式原29项中14失败转绿，最终30项通过；原overlay34项转绿、13消费者控制通过、非法生成3次直接拒绝。最终20测试包race/754事件、vet通过；9原测试skip与Windows缺sh排除项明确保留，T-191～193。
