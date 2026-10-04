@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 N03 通信/RPC审查](REVIEW-2026-10-04-noncore-06.md)：25/39清单源文已读，场景部分完成；确认[三个新未修P2](../bug/REVIEW-2026-10-04-noncore-06.md)：JS错误envelope、callback关闭预算、服务发现预算。17项4失败/13控制，六包race/vet通过；真实资源受限，接续剩余14个etcd文件与KitEtcd。[学习与实施方向](IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md) · [证据](evidence/noncore-review-20261004-06/README.md) · [进度](PROGRESS.md) · [计划](NONCORE-REVIEW-PLAN-2026-10-03.md)。
+
 [10-04 N02 三项修复](REVIEW-2026-10-04-noncore-05.md)：NC-05～07 已修、声明场景验证，正式最终30项与原overlay/生成消费者通过；20测试包race/vet完成，具名shell限制和9原skip保留，未发版。[记录](../bugfix/README.md) · [证据](../bugfix/evidence/noncore-bugfix-20261004-03/README.md) · [学习更新](IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [进度](PROGRESS.md)。
 
 [10-04 N02 请求链与正式生成消费](REVIEW-2026-10-04-noncore-04.md)：8/8 清单生产源文已读、场景部分完成；发现[三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-04.md)。限流/Recover/路由反例与真实 HTTP、旧 URL 退役控制留档，六包 race/vet 通过。[机制学习](IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [复跑](evidence/noncore-review-20261004-04/README.md) · [进度](PROGRESS.md) · [预算与下一步 N03](NONCORE-REVIEW-PLAN-2026-10-03.md)。

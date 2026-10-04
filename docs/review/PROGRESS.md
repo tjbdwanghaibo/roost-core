@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 非三大核心第四批：N03 通信与 RPC
+
+[运行](REVIEW-2026-10-04-noncore-06.md) · [三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-06.md) · [机制与实施方向](IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md) · [反例/源文件清单](evidence/noncore-review-20261004-06/README.md)。产品提交`49796514`，下方NC-05～07已修；新NC-08～10未修，未发版。
+
+N03 39个清单源文件中完整读取25个：Bus8、NATS13、ServiceRPC3、etcd接口1；另读Kit NatsMod1，worker.Pool与etcd.driver.Discover只计具名范围。17个overlay叶子/独立项=4失败/13控制，对应JS无handler协议、callback停止预算、发现预算3根因。六包race/vet通过、93 test pass事件、0fail/skip；没有真实NATS/etcd/Redis、HA、长稳或性能实测。
+
+N01/N02/N03均为场景部分完成，25/39只表示N03清单源文读取，不能当业务覆盖率或完成单元数。下一入口是剩余14个etcd文件（driver/discovery仅查Discover，仍在余项）与KitEtcd：watcher/election/local_mirror/订阅、snapshot/watch readiness、租约恢复与关闭；N03真实JS往返、满队列fallback与RPC剩余预算也保留。[计划](NONCORE-REVIEW-PLAN-2026-10-03.md)仍采用约50～90有效小时风险预算，未从文件数扣小时。
+
 ## 2026-10-04 第三批修复：N02 NC-05～07
 
 [修复运行](REVIEW-2026-10-04-noncore-05.md) · [记录](../bugfix/README.md) · [红绿/消费者](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。起点 `c4aa1e7d`，三个P2已修、声明场景验证，未发版。正式29项14失败转绿，最终30项、原overlay34项通过；正常/退役及旧坏模式生成物13次消费者全绿，三个坏模式生成阶段拒绝。受影响最终20测试包race/754事件、vet通过；9原测试skip和缺sh的具名检查不当作通过。N02仍为场景部分完成，接N03通信域；下方“未修”保留原时点。

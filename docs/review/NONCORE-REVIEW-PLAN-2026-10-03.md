@@ -17,7 +17,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 ## 复用历史证据，避免重新从零审查
 
 - **Service**：[09-29 完成矩阵](SERVICE-REVIEW-COMPLETION-2026-09-29.md) 已声明 10/10 域主链阶段完成；[09-30 外部专项](REVIEW-2026-09-30-services-13.md) 扩展本机恢复/HA/容量；[10-01 前半独立复审](REVIEW-2026-10-01-bline-audit-service-1.md) 与[后半独立复审](REVIEW-2026-10-01-bline-audit-service-2.md)已有证据。本线只审这些证据之后的变更、已列缺口和 Saga 等不被该矩阵覆盖的链；不再全量重做十域。
-- **Codegen**：[第六轮](REVIEW-2026-09-30-codegen-06.md) 和[10-01 独立复审](REVIEW-2026-10-01-bline-audit-codegen.md)可复用。[10-04 N02](REVIEW-2026-10-04-noncore-04.md)已补正式 Webroute CLI/消费者编译/注册/实际 HTTP 与退役旧 URL 404。仍需 cfggen required/ref/skipempty 与真实 JSON/索引往返、显式 upgrade 的旧消费者，以及此前明确跳过的 shell/失败恢复边界；N02 的新非法模式 RR 独立待修，不是整个 Codegen 已完成。
+- **Codegen**：[第六轮](REVIEW-2026-09-30-codegen-06.md) 和[10-01 独立复审](REVIEW-2026-10-01-bline-audit-codegen.md)可复用。[10-04 N02](REVIEW-2026-10-04-noncore-04.md)已补正式 Webroute CLI/消费者编译/注册/实际 HTTP 与退役旧 URL 404；其非法模式 RR 随后在[第三批修复](REVIEW-2026-10-04-noncore-05.md)关闭。仍需 cfggen required/ref/skipempty 与真实 JSON/索引往返、显式 upgrade 的旧消费者，以及此前明确跳过的 shell/失败恢复边界；不是整个 Codegen 已完成。
 - **App、remoteentity/cache、manager、robot**：09-09、09-13、09-14、09-16 等记录已查部分机制，保留其历史 SHA/场景；仅“文档出现过路径”不能将模块升级为完成。Remote 与核心工作线重叠的提交确认链复用对方结论，本线接续镜像/接入等有界缺口。
 - **最新 Wanted**：10-01 四条 Wanted 已分流为 RR-20261001-06～09 并有修复记录；这是文档关联状态，本轮没有重新执行四项修复验收，也未把它们写成新发现。它们不阻断其余模块的源码审查。每次有新 Wanted 再单独分流。
 
@@ -27,7 +27,9 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 
 [N01 第二批](REVIEW-2026-10-04-noncore-02.md) 补齐十个生产文件，合并上一批为 15/15 源文读取，另查 Kit ManagerMod/OpsMod；原 17 项含 11 失败/5 控制/1 观察。随后[四项修复](REVIEW-2026-10-04-noncore-03.md)与 35 个正式场景补齐 Manager 状态竞争、schema 副本和 Ops 排空/重试，11 包 race/vet 通过。App/HTTP 原四项也已修。两批修复不关闭永久阻塞/Group 预算、完整 App 故障进程或 Ops bind/hijack 等余项。
 
-[N02 第三批](REVIEW-2026-10-04-noncore-04.md)本批读六个生产文件，复用未变化 HTTP 两文件，现 8/8 源文已读；34 个 overlay 项、13 次真实生成消费者叶子执行和六包 race/vet 留证，NC-05～07 三个新 P2 未修。N01/N02 均仍为“场景部分完成”，不能计入 completed/15。下一批 N03；新 RR 修复与剩余风险场景分开登记。
+[N02 第三批](REVIEW-2026-10-04-noncore-04.md)读六个生产文件，复用未变化 HTTP 两文件，现 8/8 源文已读；34 个 overlay 项、13 次真实生成消费者叶子执行和六包 race/vet 留证，当时 NC-05～07 三个新 P2 未修。随后[第三批修复](REVIEW-2026-10-04-noncore-05.md)关闭这三项，正式最终30项与原反例通过，13消费者全绿；20测试包race/vet通过，9原skip和缺sh的具名检查不计通过。N01/N02仍为“场景部分完成”，不能计入completed/15。
+
+[N03 第四批](REVIEW-2026-10-04-noncore-06.md)完整读取25/39清单生产文件：Bus8、NATS13、ServiceRPC3、etcd接口1，另读Kit NatsMod；worker.Pool与etcd.driver.Discover只计范围。17项4失败/13控制归为NC-08～10三个新未修P2，六包race/vet通过。下一入口剩余14个etcd文件与KitEtcd，补watch/election/local_mirror/订阅、租约恢复和关闭；真实JS往返、满队列callback fallback、调用剩余预算继续待验。N03场景亦部分完成；本次尚无按风险项核定的新工时，保持原预算，不以25/39比例扣减。
 
 下表 N01/N02 因上述具名缺口已有实际证据，分别由 3～5 调整为 2～4、1～3 小时；其他 13 行沿用初估，合计 51～89 小时，概括为约 50～90。这是剩余风险工作项估算，不是按文件数扣减、测试覆盖率或测得的审查速度；当前仍不能承诺一次聊天完成多少小时。“未建立完整矩阵”表示本次尚未核定完整历史证据，并非断言过去无人看过。预算包含源码补证、反例/对照、相关回归和文档；生成/装配文件随主链验证，不按文件平均计时。
 
@@ -35,7 +37,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | --- | --- | --- | --- |
 | N01 | app/lifecycle/manager/health/admin，15 | 源文15/15已读，四个本域新RR已修/35正式场景通过；场景部分完成，补 Group 阻塞预算、完整 App 故障/Ops bind及hijack/权限与Health策略 | 2～4 |
 | N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
-| N03 | bus/nats/servicerpc/etcd，39 | 有历史关联证据，未建立全域矩阵；请求关联、超时/取消、重连、订阅关闭、租约/watch 恢复 | 6～10 |
+| N03 | bus/nats/servicerpc/etcd，39 | 源文25/39已读、场景部分完成，NC-08～10三项未修；接续14个etcd文件/KitEtcd、真实JS往返、callback fallback、剩余预算、重连与租约/watch恢复 | 6～10 |
 | N04 | redis/mongo/cache/migration，40 | Service 驱动专项与 cache 部分已查；剩余事务/批次、游标、过期/容量、回调所有权、迁移失败 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | 历史多轮、与另一线交叠；只接续未覆盖镜像/路由接入与最新变更，不重审核心提交链 | 2～4 |
 | N06 | service/saga/servicemetrics，36 | Service 十域主链已有完成记录；仅增量、Saga 补偿/重试/关停与未涵盖指标边界 | 2～4 |
@@ -54,7 +56,7 @@ N14 的 Kit 文件数字按目录统计，业务链会纳入 N01～N13；场景�
 
 ## 执行顺序与可提前得到的结果
 
-1. **运行与请求关键链**：N01 → N02 → N03 → N04，Kit 同行，剩余约 15～27 小时（原估 18～30）。每批先解决证据缺口与确认 bug，再设计/性能观察。N01/N02 源文已补齐，下一批进入 **N03 bus/nats/servicerpc/etcd**，同步保留两域具名场景余项，不能把源码读完视为闭环。
+1. **运行与请求关键链**：N01 → N02 → N03 → N04，Kit 同行，剩余约 15～27 小时（原估 18～30）。每批先解决证据缺口与确认 bug，再设计/性能观察。N01/N02源文已补齐、N03已读25/39，下一批接续 **N03剩余14个etcd文件与KitEtcd**；同时补N03具名场景并保留前两域余项，不能把源码读完视为闭环。
 2. **复用历史后补齐增量**：N05、N06、N07、N08，预计 10～19 小时。只检查尚未覆盖主链和已审 SHA 后的变更；避免再次停在同一批旧 Service bug。
 3. **技能与游戏通用能力**：N09 → N10 → N11，预计 16～26 小时。N09 子包按执行、数据/属性、事务/结算、同步/接入拆分，超过一批就记录停点，不能整个 skill 以一条测试标完成。
 4. **运维、基础设施和最终闭环**：N12/N13/N14/N15，预计 10～17 小时。N14 与前几阶段已有同行检查这里只补剩余闭环，N15 工具按作用域处理，不扩大成全量 demo 审计。

@@ -1,0 +1,83 @@
+package driver
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+)
+
+func TestReview6AssemblyCloseBoundsCallbackDrain(t *testing.T) {
+	r := NewRPCClient(nil, fnats.DefaultRetryPolicy(), 1)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }); r.Stop() })
+	r.pending.Store(int64(1), &pendingCall{cb: func([]byte, error) { close(entered); <-release }})
+	r.finishPending(1, nil, nil)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("callback never entered; not a bug counterexample")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	asm := &Assembly{RPC: r}
+	closed := make(chan error, 1)
+	go func() { closed <- asm.Close(ctx) }()
+	returned := false
+	var err error
+	select {
+	case err = <-closed:
+		returned = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	if !returned {
+		select {
+		case err = <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("close did not finish even after releasing callback")
+		}
+	}
+	t.Logf("returned_before_callback_release=%v close_error=%v", returned, err)
+	if !returned || !errors.Is(err, context.Canceled) {
+		t.Fatal("Assembly.Close ignored cancellation while draining a confirmed running callback")
+	}
+}
+
+func TestReview6PendingTerminalRacesCompleteOnce(t *testing.T) {
+	r := NewRPCClient(nil, fnats.DefaultRetryPolicy(), 2)
+	defer r.Stop()
+	var calls atomic.Int32
+	done := make(chan struct{}, 1)
+	r.pending.Store(int64(7), &pendingCall{cb: func([]byte, error) { calls.Add(1); done <- struct{}{} }})
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-start; r.finishPending(7, nil, fnats.ErrTimeout) }()
+	}
+	close(start)
+	wg.Wait()
+	r.Stop()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("terminal callback lost")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls=%d", calls.Load())
+	}
+}
+
+func TestReview6AssemblyClosesCompletedPool(t *testing.T) {
+	r := NewRPCClient(nil, fnats.DefaultRetryPolicy(), 1)
+	if err := (&Assembly{RPC: r}).Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -164,6 +164,7 @@ bash scripts/test-remote-matrix.sh
 
 | 问题 | 主题 | 修复记录 |
 | --- | --- | --- |
+| [RR-20261004-NC-08～10](bug/REVIEW-2026-10-04-noncore-06.md) | JS无handler回包协议、Assembly callback停止预算、ServiceRPC发现预算；三个P2已确认、未修 | [运行/范围](review/REVIEW-2026-10-04-noncore-06.md)、[反例](review/evidence/noncore-review-20261004-06/README.md)、[复用现有工具的实施方向](review/IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md)；下一审查为剩余etcd主链与KitEtcd |
 | [RR-20261004-NC-05～07](bug/REVIEW-2026-10-04-noncore-04.md) | 限流拒绝占 key、Recover report panic、非法生成路由注册 panic；3/3已修、声明场景验证，未发版 | [05](bugfix/RR-20261004-NC-05.md)、[06](bugfix/RR-20261004-NC-06.md)、[07](bugfix/RR-20261004-NC-07.md)，[运行/环境边界](review/REVIEW-2026-10-04-noncore-05.md) |
 | [RR-20261003-NC-01～04](bug/REVIEW-2026-10-03-noncore-01.md) | 10-04 单 Mod 校验、Clone timeout、错误 HTTP 状态与完整 JSON 绑定；四项已修、具名场景验证，未发版 | [01](bugfix/RR-20261003-NC-01.md)、[02](bugfix/RR-20261003-NC-02.md)、[03](bugfix/RR-20261003-NC-03.md)、[04](bugfix/RR-20261003-NC-04.md) |
 | [RR-20261004-NC-01～04](bug/REVIEW-2026-10-04-noncore-02.md) | Manager Stop panic / 重复 Start、Admin schema 引用与 Ops 取消关闭；4/4 已修、声明场景验证，未发版，Health 空 Status 仍为观察 | [01](bugfix/RR-20261004-NC-01.md)、[02](bugfix/RR-20261004-NC-02.md)、[03](bugfix/RR-20261004-NC-03.md)、[04](bugfix/RR-20261004-NC-04.md)，[运行](review/REVIEW-2026-10-04-noncore-03.md) |

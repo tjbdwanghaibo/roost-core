@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-04 N03 接续审查：NC-08～10 三个新 P2 已确认、未修。**[运行与范围](../review/REVIEW-2026-10-04-noncore-06.md) · [反例/控制](../review/evidence/noncore-review-20261004-06/README.md) · [机制与实施方向](../review/IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md)。本批17项为4失败/13控制，归为3根因；下方NC-05～07修复不含这三项。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-08](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-08) | P2 JetStream 无 handler 回包缺少协议 envelope | 已确认、未修 |
+| [RR-20261004-NC-09](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-09) | P2 Assembly.Close 的 callback 排空绕过 ctx | 已确认、未修 |
+| [RR-20261004-NC-10](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-10) | P2 服务发现不受配置 call timeout 约束 | 已确认、未修 |
+
 **10-04 第三批修复更新：NC-05～07 3/3 已修、声明场景验证，未发版。**[运行](../review/REVIEW-2026-10-04-noncore-05.md) · [红绿/消费者](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。下方 N02“未修”为原审查时点。
 
 | 编号 | 问题 | 状态 |
