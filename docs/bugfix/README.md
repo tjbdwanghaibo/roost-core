@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**v1.19.1 已发布（2026-10-04，tag → `d3e69336`）**：RR-20261004-02～07（NC 修复复审确认，其中 02 / 03 / 06 是 v1.19.0 回归）与 RR-20261004-NC-30 随本版发布。
+
 **最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](../review/REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。
 
 **10-04 第十批：[NC-30](RR-20261004-NC-30.md) 已修复，未发版。** RefHMap Set/Delete在Lua副作用前比对registry，变化返回ErrRefHMapRegistryChanged；不自动重试/清理历史孤儿。12正式、六包race/vet221叶子及11正式生成消费者通过。[红绿/复跑](evidence/noncore-bugfix-20261004-10/README.md) · [review](../review/REVIEW-2026-10-04-noncore-19.md)。T-208，无新增待修RR，真实资源/持久迁移仍有验证缺口。
