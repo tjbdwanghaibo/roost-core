@@ -390,7 +390,7 @@ type Collection struct {
 	docs     map[string]bson.M
 	order    []string
 
-	uniqueIndexes map[string][]string
+	uniqueIndexes map[string]uniqueIndex
 	Indexes       []fmongo.IndexModel
 
 	// Errors injects a failure for a method name ("FindOne", "UpdateOne",
@@ -904,19 +904,20 @@ func (c *Collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexMo
 		}
 		// RR-20261004-NC-27：先验证存量文档，再发布本个索引；前面成功的索引保留。
 		if index.Unique {
+			unique := uniqueIndex{fields: fields, sparse: index.Sparse}
 			for key, doc := range c.docs {
-				if err := c.checkUniqueFieldsLocked(doc, key, fields); err != nil {
+				if err := c.checkUniqueFieldsLocked(doc, key, unique); err != nil {
 					return err
 				}
 			}
 			if c.uniqueIndexes == nil {
-				c.uniqueIndexes = make(map[string][]string)
+				c.uniqueIndexes = make(map[string]uniqueIndex)
 			}
 			name := index.Name
 			if name == "" {
 				name = strings.Join(fields, "_")
 			}
-			c.uniqueIndexes[name] = fields
+			c.uniqueIndexes[name] = unique
 		}
 		c.Indexes = append(c.Indexes, index)
 		c.revision++
@@ -948,39 +949,65 @@ func (c *Collection) HasIndex(fields ...string) bool {
 	return false
 }
 
+// uniqueIndex is the part of a unique IndexModel the duplicate check needs.
+// The fake has no partial indexes: fmongo.IndexModel carries no
+// PartialFilterExpression, so Unique + Sparse is the whole definition.
+type uniqueIndex struct {
+	fields []string
+	sparse bool
+}
+
 func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
-	for _, fields := range c.uniqueIndexes {
-		if err := c.checkUniqueFieldsLocked(doc, selfKey, fields); err != nil {
+	for _, index := range c.uniqueIndexes {
+		if err := c.checkUniqueFieldsLocked(doc, selfKey, index); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, fields []string) error {
-	values := make([]any, 0, len(fields))
-	for _, field := range fields {
-		value, ok := lookupPath(doc, field)
-		if !ok {
-			values = nil
-			break
+// uniqueKey returns the index key a document is stored under, or ok=false
+// when the index holds no entry for it.
+//
+// RR-20261004-05: Mongo keys a missing field (including a dotted path that
+// runs through a scalar or absent parent) as BSON null, equal to an explicit
+// null. A sparse index leaves a document out only when every indexed field is
+// missing; one present field — even an explicit null — indexes the document
+// and the missing ones still count as null. Checked on a real replica set
+// (8.0.28). The fake used to skip a document whenever any field was missing
+// and ignored Sparse, so it accepted duplicate null keys real Mongo rejects.
+// Array values (multikey) are still compared whole, not per element.
+func uniqueKey(doc bson.M, index uniqueIndex) (values []any, ok bool) {
+	values = make([]any, len(index.fields))
+	present := false
+	for i, field := range index.fields {
+		if value, found := lookupPath(doc, field); found {
+			values[i] = value
+			present = true
 		}
-		values = append(values, value)
 	}
-	if values == nil {
+	if index.sparse && !present {
+		return nil, false
+	}
+	return values, true
+}
+
+func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, index uniqueIndex) error {
+	values, ok := uniqueKey(doc, index)
+	if !ok {
 		return nil
 	}
 	for key, existing := range c.docs {
 		if key == selfKey {
 			continue
 		}
-		same := true
-		for i, field := range fields {
-			other, ok := lookupPath(existing, field)
-			if !ok {
-				same = false
-				break
-			}
+		// Same rule as uniqueKey, inline so the scan does not allocate per
+		// stored document: a missing field compares as null, and a sparse
+		// index skips a stored document none of whose fields exist.
+		same, present := true, false
+		for i, field := range index.fields {
+			other, found := lookupPath(existing, field)
+			present = present || found
 			eq, err := valuesEqual(other, values[i])
 			if err != nil {
 				return err
@@ -990,7 +1017,7 @@ func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, fields 
 				break
 			}
 		}
-		if same {
+		if same && (present || !index.sparse) {
 			return duplicateKeyError()
 		}
 	}
