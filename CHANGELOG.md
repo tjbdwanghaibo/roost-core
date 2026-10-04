@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **mongotest 唯一索引的 null / sparse 语义**（RR-20261004-05，P3，NC 复审发现）：替身以前缺任一唯一字段就跳过检查、也不看 `Sparse`，比真实 Mongo 宽松。现在非 sparse 唯一索引把缺字段（含穿过标量父字段的点路径）当 BSON null、与显式 null 相等，建索引与写入报 `ErrDuplicateKey`；sparse 只在全部索引字段都缺时跳过。仅测试替身行为收紧，需要允许缺字段的测试应设 `Sparse: true`（真实部署同样需要）。[记录](docs/bugfix/RR-20261004-05.md)
+
 ## [v1.19.0] - 2026-10-04
 
 > v1.18.0 之后两条工作线的修复：A 线——B27 端到端补测暴露的 RR-20260930-20～24、维护者拍板的 N20～N32（RR-20260930-12～19）、对 B 线修复的独立复审发现的 RR-20261001-01～09、RR-20261004-01（取锁结果未知），以及 C01 长稳通过（1 小时 0 错误、全量核验通过、内存平台）与 B29 性能对照（无新退化）；B 线——非核心模块审查 RR-20261003/04-NC-01～29（runtime / request / RPC / etcd / cache / Mongo 测试替身）与 codegen CG-12～14。**次版本而非补丁**：`entity.IThreadSafeRemoteEntity.SetEntityVersion` 改为返回 `error`（RR-20260930-13），`activity.Admin` 增加 `ReconcileProgress`（RR-20261001-05），新增 `account.Admin`；另外 B 线下列行为收紧升级前要核对：`manager.Engine` 只能 Start 一次（新错误 `ErrStartState`，RR-20261004-NC-02）、运行中的 Ops 再次 Start 报错（NC-04）、`BindJSON` 拒绝合法首值后的尾随内容（RR-20261003-NC-04）、单 Mod 应用缺依赖 / 自循环即启动失败（RR-20261003-NC-01）、`httpclient` 部分错误改为 `errors.Join`（NC-03，`errors.Is` 仍成立）、RefHMap Eval 失败不再降级为非原子写且 `cache.refhmap.write_degraded_total` 指标移除（NC-21）；新增 `webroute.ValidatePath`。生成的 game-demo 仍能对 v1.18.0 编译，生成器 Core 下限不变。
