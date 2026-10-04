@@ -1,0 +1,188 @@
+{
+  "project": "roost-core",
+  "signal": "best_effort",
+  "indexed_at": "2026-09-30T11:58:14Z",
+  "metadata": {
+    "generation": "2026-09-30T11:58:14Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-30T11:58:15Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "paths": [
+    {
+      "requested_path": "cache/layered.go",
+      "path": "cache/layered.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/read_through.go",
+      "path": "cache/read_through.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/local.go",
+      "path": "cache/local.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/ref_hmap.go",
+      "path": "cache/ref_hmap.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "mongo/mongotest/mongotest.go",
+      "path": "mongo/mongotest/mongotest.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "etcd/driver/election.go",
+      "path": "etcd/driver/election.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "bus/bus.go",
+      "path": "bus/bus.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/nats/nats_mod.go",
+      "path": "kit/nats/nats_mod.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "nats/driver/rpc.go",
+      "path": "nats/driver/rpc.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "nats/driver/assembly.go",
+      "path": "nats/driver/assembly.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "nats/driver/client.go",
+      "path": "nats/driver/client.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "codegen/internal/webroute/parse.go",
+      "path": "codegen/internal/webroute/parse.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "dependency_boundary_test.go",
+      "path": "dependency_boundary_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/ref_hmap_test.go",
+      "path": "cache/ref_hmap_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/ref_hmap_schema_promises_test.go",
+      "path": "cache/ref_hmap_schema_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/layered_expired_veto_promises_test.go",
+      "path": "cache/layered_expired_veto_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/read_through_loader_fill_promises_test.go",
+      "path": "cache/read_through_loader_fill_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "cache/ref_hmap_patch_ttl_promises_test.go",
+      "path": "cache/ref_hmap_patch_ttl_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "mongo/mongotest/unique_null_promises_test.go",
+      "path": "mongo/mongotest/unique_null_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "etcd/driver/election_revoke_promises_test.go",
+      "path": "etcd/driver/election_revoke_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "kit/nats/nats_mod_stop_retry_promises_test.go",
+      "path": "kit/nats/nats_mod_stop_retry_promises_test.go",
+      "status": "no_recorded_issue",
+      "freshness": "not_tracked",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    }
+  ],
+  "scopes": [],
+  "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+}

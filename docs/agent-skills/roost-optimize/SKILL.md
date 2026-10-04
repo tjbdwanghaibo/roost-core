@@ -14,3 +14,5 @@ description: 优化 roost-core 的 Nest、DataEngine、Sync 和 Remote；用于�
 涉及快慢池交接、预算公平或并行投影时，执行共同规范中对应的防回归要求；最新核实示例见 `docs/review/REVIEW-2026-09-26-followup.md`，不能只凭默认配置单测或统计数量相等验收。
 
 提交、重载、关闭、装配或配置变更还应核对共同规范的“生命周期与装配的复审要点”，相关实证见 `docs/review/REVIEW-2026-09-26-release-fixes.md`；历史性能记录须区分直连存储与正式 Backend 装配。
+
+修复或复审改变错误返回、有效期、取消/关闭所有权时，按共同规范的[组合契约复核](../roost-coding/references/fix-contract-review.md)检查调用方与恢复后状态；包测试通过不代替这些行为证据。

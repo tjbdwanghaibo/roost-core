@@ -1,0 +1,53 @@
+{"Time":"2026-10-04T21:15:02.1006702+08:00","Action":"start","Package":"github.com/tjbdwanghaibo/roost-core"}
+{"Time":"2026-10-04T21:15:02.450998+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowPackagePathsExist"}
+{"Time":"2026-10-04T21:15:02.450998+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowPackagePathsExist","Output":"=== RUN   TestCIWorkflowPackagePathsExist\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:02.4526523+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowPackagePathsExist","Output":"    ci_paths_test.go:33: workflows checked: ci.yml, nightly-gapmap.yml, nightly.yml, security.yml\n"}
+{"Time":"2026-10-04T21:15:02.4537637+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowPackagePathsExist","Output":"--- PASS: TestCIWorkflowPackagePathsExist (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:02.4537637+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowPackagePathsExist","Elapsed":0}
+{"Time":"2026-10-04T21:15:02.4537637+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip"}
+{"Time":"2026-10-04T21:15:02.4537637+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip","Output":"=== RUN   TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:02.4543073+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip","Output":"--- PASS: TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:02.4543073+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip","Elapsed":0}
+{"Time":"2026-10-04T21:15:02.4543073+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreDependencyBoundary"}
+{"Time":"2026-10-04T21:15:02.4543073+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreDependencyBoundary","Output":"=== RUN   TestCoreDependencyBoundary\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.1658669+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreDependencyBoundary","Output":"--- PASS: TestCoreDependencyBoundary (0.71s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.1658669+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreDependencyBoundary","Elapsed":0.71}
+{"Time":"2026-10-04T21:15:03.1658669+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreContractsDoNotLinkDrivers"}
+{"Time":"2026-10-04T21:15:03.1658669+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreContractsDoNotLinkDrivers","Output":"=== RUN   TestCoreContractsDoNotLinkDrivers\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5180321+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreContractsDoNotLinkDrivers","Output":"--- PASS: TestCoreContractsDoNotLinkDrivers (0.35s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCoreContractsDoNotLinkDrivers","Elapsed":0.35}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestLayerViolation"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestLayerViolation","Output":"=== RUN   TestLayerViolation\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestLayerViolation","Output":"--- PASS: TestLayerViolation (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestLayerViolation","Elapsed":0}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestModuleLayer"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestModuleLayer","Output":"=== RUN   TestModuleLayer\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestModuleLayer","Output":"--- PASS: TestModuleLayer (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestModuleLayer","Elapsed":0}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestForbiddenCoreImport"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestForbiddenCoreImport","Output":"=== RUN   TestForbiddenCoreImport\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestForbiddenCoreImport","Output":"--- PASS: TestForbiddenCoreImport (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestForbiddenCoreImport","Elapsed":0}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobRunsEveryRedisIntegrationSuite"}
+{"Time":"2026-10-04T21:15:03.5187798+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobRunsEveryRedisIntegrationSuite","Output":"=== RUN   TestCIRedisJobRunsEveryRedisIntegrationSuite\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.9635018+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobRunsEveryRedisIntegrationSuite","Output":"--- PASS: TestCIRedisJobRunsEveryRedisIntegrationSuite (0.44s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:03.9635018+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobRunsEveryRedisIntegrationSuite","Elapsed":0.44}
+{"Time":"2026-10-04T21:15:03.9635018+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobSetsEveryRedisGateVariable"}
+{"Time":"2026-10-04T21:15:03.9635018+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobSetsEveryRedisGateVariable","Output":"=== RUN   TestCIRedisJobSetsEveryRedisGateVariable\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.014011+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobSetsEveryRedisGateVariable","Output":"--- PASS: TestCIRedisJobSetsEveryRedisGateVariable (0.06s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.0194259+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestCIRedisJobSetsEveryRedisGateVariable","Elapsed":0.06}
+{"Time":"2026-10-04T21:15:04.0194259+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestFaultMatrixScriptNamesEveryFullEnvironmentSuite"}
+{"Time":"2026-10-04T21:15:04.0194259+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestFaultMatrixScriptNamesEveryFullEnvironmentSuite","Output":"=== RUN   TestFaultMatrixScriptNamesEveryFullEnvironmentSuite\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.4589244+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestFaultMatrixScriptNamesEveryFullEnvironmentSuite","Output":"--- PASS: TestFaultMatrixScriptNamesEveryFullEnvironmentSuite (0.44s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.4589244+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestFaultMatrixScriptNamesEveryFullEnvironmentSuite","Elapsed":0.44}
+{"Time":"2026-10-04T21:15:04.4589244+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestRedisClusterScriptNamesEveryClusterKeyedSuite"}
+{"Time":"2026-10-04T21:15:04.4589244+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestRedisClusterScriptNamesEveryClusterKeyedSuite","Output":"=== RUN   TestRedisClusterScriptNamesEveryClusterKeyedSuite\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.9071571+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestRedisClusterScriptNamesEveryClusterKeyedSuite","Output":"--- PASS: TestRedisClusterScriptNamesEveryClusterKeyedSuite (0.45s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.9071571+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestRedisClusterScriptNamesEveryClusterKeyedSuite","Elapsed":0.45}
+{"Time":"2026-10-04T21:15:04.9071571+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestSomeWorkflowRunsTheFaultMatrix"}
+{"Time":"2026-10-04T21:15:04.9071571+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestSomeWorkflowRunsTheFaultMatrix","Output":"=== RUN   TestSomeWorkflowRunsTheFaultMatrix\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.9104354+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestSomeWorkflowRunsTheFaultMatrix","Output":"--- PASS: TestSomeWorkflowRunsTheFaultMatrix (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.9104354+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Test":"TestSomeWorkflowRunsTheFaultMatrix","Elapsed":0}
+{"Time":"2026-10-04T21:15:04.9104354+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T21:15:04.9159615+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core","Output":"ok  \tgithub.com/tjbdwanghaibo/roost-core\t2.815s\n"}
+{"Time":"2026-10-04T21:15:04.9159615+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core","Elapsed":2.815}

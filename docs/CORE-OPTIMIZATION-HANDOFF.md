@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**10-04 用户要求的复审核对与改进**：[独立复盘](review/REVIEW-2026-10-04-fix-audit-retrospective.md)确认RR-02～07成立且六修复已包含；d3四项历史28红/4控制、定向36绿，外部限制分列。规范/本机skill接入组合契约复核，修正README残留降级说明。收尾另一线Wanted分流RR-08已修并整合，45普通NATS叶子race/vet及最终根包独立通过；本机未冒认真实broker。无产品行为修改、未增加域完成数。
+
 **最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](review/REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。
 
 **Service第九批/第十一轮阶段完成（2026-09-29）**：[RR-34 Pipeline修复/验证](bugfix/RR-20260929-34.md)，[10域主链完成/34项新编号台账/具名剩余事项](review/REVIEW-2026-09-29-services-11.md)，本轮无新确认缺陷。原3/3绿、正式58叶子执行/整体19包951pass叶子、3Toxiproxy skip分列；100Service源blob未变，Core/consumer编译、vet、12RPC check通过。[机制](review/IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。后续是归档/fulfilled与外部/HA/长稳具名设计验收，不再泛化重开其余service。未发布/迁移，不升级其他核心性能专项；下方为历史时点。

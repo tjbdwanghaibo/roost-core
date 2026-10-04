@@ -63,6 +63,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
    审查附录的测试拿来改：去掉 `Review` 前缀、按包内 harness 重写。新 API 的红：用 `git stash push -- <impl files>` 或暂时截掉新 API 用例，只走旧 API 拿红文本。
 5. **修**：最小改动，注释写"为什么这样、之前为什么错、RR 编号"。
 6. **验证矩阵**（全部 `GOWORK=off`，从模块根跑；按影响面选，通过后只因新增修改或未解风险扩大检查）：
+   - 错误、TTL/版本、取消/关闭改动按[组合契约复核](../roost-coding/references/fix-contract-review.md)补调用方/邻近分支及恢复后状态；先列行为场景再给包测试数量。“保留资源”必须验再次停止最终收敛，明确退化不得仅写未验证。合并状态与独立验收状态分列。
    - 目标包 `-race`，再跑受影响的相邻包（如 kit 的 Mod 转发 core Assembly）；并发变更必跑 race。
    - **每批都跑一次根包 `GOWORK=off go test -count=1 .`**：分层边界（`TestCoreDependencyBoundary`）、CI / 故障矩阵 / Redis 门变量的覆盖门禁都在根包里，只跑目标包看不见。10-01～04 两条线各有一次越界或门禁破坏，都是因为没跑根包，又被已经红的 CI 遮住。推送后看一眼 `gh run list --branch main --limit 3`，红了当轮处理。
    - 静态：`go vet`；三大模块加 `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`。

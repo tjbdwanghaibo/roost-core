@@ -396,9 +396,9 @@ Put/Patch/Delete 都携带 `ExpectedVersion` 与 `NextVersion`。Mongo projectio
 
 每次 dispatch 记录该 handler 从获得实体锁到释放（pipelined 提前放锁按提前点计）的时长 `nest.handler.lock_hold{handler}`（obs 的 timer 只有 count/sum/max/last，**没有分位数**——看均值用 sum/count，max 是进程生命期高水位永不衰减；需要分位数的时长用 `metrics.ObserveHistogram`——17 桶指数直方图，1ms 起逐桶翻倍，`HistogramQuantile` 线性插值取 p50–p99，Prometheus 侧导出累积 `_bucket{le}`）；超过阈值（`NestOptionWithSlowLockThreshold`，默认 100ms，0 关闭告警）另计 `nest.handler.lock_hold.slow.total` 并记日志。这是选择 `DurabilityPipelined` 灰度对象的运营依据——锁内耗时被 fsync 主导的 handler 是最先受益者；灰度扩大到默认档的完整路线见 [NEST_PIPELINED_COMMIT.md](NEST_PIPELINED_COMMIT.md) §12。
 
-### 8. 冷加载合并与缓存降级可见性 —— `entity/manager_access.go`、`cache/ref_hmap.go`
+### 8. 冷加载合并与缓存写入结果 —— `entity/manager_access.go`、`cache/ref_hmap.go`
 
-`ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。`cache` 的 Redis Lua 写失败会降级为非原子回退——降级保留（可用性优先），但通过 ~~`cache.refhmap.write_degraded_total`~~（v1.19.0 起已移除，RR-20261004-NC-21：Eval 失败直接返回错误） 指标与 Warn 日志强制可见：非原子窗口是运维必须知道的事实。
+`ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。RefHMap 从 v1.19.0 起在 Redis Eval 失败时保留原始错误，不再降级为非原子 DEL+HSET，也不自动重放（RR-20261004-NC-21）；失败可能是结果未知，不能直接判未写入或回滚。旧 `cache.refhmap.write_degraded_total` 指标已移除，应按业务权威值/版本和错误分类恢复，见 [使用说明](docs/USER_GUIDE.md)。
 
 ### 9. tick 回调与 handler 注册的作用域 —— `nest/ticker.go`、`nest/nest_dispatch.go`
 
@@ -424,7 +424,7 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 
 ### 13. 缓存分层与选型 —— `cache/`
 
-八种 store 按需组合：`LocalStore`（精确 LRU）、`AtomicLocalStore`（分片 + 读路径零锁竞争：读只取 RLock 不动 LRU 链，淘汰用插入时钟近似；**MaxBytes 按 shard 均分，单条超过 `MaxBytes/shards` 直接 `ErrEntryTooLarge`**）、`GroupedLocalStore`（O(1) 整组失效）、`LayeredStore`（write-through + 回读校验：写 remote 后回读填 L1，回读不存在则删本地——remote 是权威）、`ReadThroughStore`（single-flight 不开 goroutine，领航者在自己调用栈里加载；每 key 等待者上限超限**拒绝**而非排队）、四种 Redis 后端（JSON/Hash/Raw/SortedSet）、`RedisRefHMapStore`（反射把嵌套 struct 铺成多个 Redis hash + `Patch` 单字段更新 + Lua 原子重写，key 用 `{hash tag}` 保证 Cluster 同 slot）。两个通用陷阱：**配了 `Stale` 的 Redis store 每次写都先读一次做版本比较且读写不原子**；RefHMap 的 Lua 失败降级为非原子 DEL+HSET（保可用性，Warn + ~~`cache.refhmap.write_degraded_total`~~（v1.19.0 起已移除，RR-20261004-NC-21：Eval 失败直接返回错误） 强制可见——降级窗口内可能读到空值）。
+八种 store 按需组合：`LocalStore`（精确 LRU）、`AtomicLocalStore`（分片 + 读路径零锁竞争：读只取 RLock 不动 LRU 链，淘汰用插入时钟近似；**MaxBytes 按 shard 均分，单条超过 `MaxBytes/shards` 直接 `ErrEntryTooLarge`**）、`GroupedLocalStore`（O(1) 整组失效）、`LayeredStore`（write-through + 回读校验：写 remote 后回读填 L1，回读不存在则删本地——remote 是权威）、`ReadThroughStore`（single-flight 不开 goroutine，领航者在自己调用栈里加载；每 key 等待者上限超限**拒绝**而非排队）、四种 Redis 后端（JSON/Hash/Raw/SortedSet）、`RedisRefHMapStore`（反射把嵌套 struct 铺成多个 Redis hash + `Patch` 单字段更新 + Lua 原子重写，key 用 `{hash tag}` 保证 Cluster 同 slot）。两个通用陷阱：**配了 `Stale` 的 Redis store 每次写都先读一次做版本比较且读写不原子**；RefHMap Eval 返回错误可能已经应用写入，当前不会退回 DEL+HSET 或自动重放，必须按业务权威值/版本恢复未知结果，不能把错误直接当作未提交。
 
 ### 14. bus 的四条易踩契约 —— `bus/bus.go`、`bus/jetstream_rpc.go`
 

@@ -1,0 +1,14 @@
+[
+  {
+    "mode": "red",
+    "leaf_pass": 4,
+    "leaf_fail": 28,
+    "leaf_skip": 0
+  },
+  {
+    "mode": "green",
+    "leaf_pass": 36,
+    "leaf_fail": 0,
+    "leaf_skip": 0
+  }
+]

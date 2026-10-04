@@ -1,0 +1,7 @@
+{
+  "historical_source": "74e1ba39",
+  "selector": "^(TestLayeredExpiredLocalCopyDoesNotVetoAuthority.*|TestReadThroughLoaderFillRefusalIsNotReadFailure|TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis|TestRefHMapGetTreatsAMissingReferencedHashAsMiss|TestUniqueIndexMissingFieldPromises|TestElectionRevoke.*|TestNatsModStopRetry.*)$",
+  "test_exit": 0,
+  "mode": "Green",
+  "current_source": "d3e69336e7b4cddca6365a07d373d5d9696a62dd"
+}
