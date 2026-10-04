@@ -779,3 +779,12 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：legacy 条目按旧规则（期限）回收；坏 Intent 记日志并跳过，不阻塞同组其他条目。
 - **来源**：[B 线 service 修复独立复审（后半）§4.4](../review/REVIEW-2026-10-01-bline-audit-service-2.md)。
 
+### W-2026-10-04-01：`versionedLock.TryLock` 在 Redis Eval 因 ctx 截止返回错误时不记录 token，若脚本其实已执行，锁会一直留到 LockTTL
+
+- **位置**：`remoteentity/versioned_lock.go` `TryLock`（RR-20260930-21 之后的形状），基线 `e3118640` 之后。
+- **现象**：harness 区间核验的负对照里，`ROOST_REMOTE_REQUEST_TIMEOUT=15ms` 的一次运行在负载后的 reject 校验失败于 `remote_entity: shared lock …: versioned lock not acquired`，同参数复跑未复现（结果目录 `artifacts/perf/remote/errsplit-after-timeout15ms/`，本地）。
+- **为何可疑**：RR-20260930-21 处理了“释放无明确答复”，但“取锁无明确答复”（Eval 已在 Redis 执行、回复因 ctx 截止丢失）时本地不记 token，下一次 TryLock 拿新 token 去争锁，Redis 上旧 token 仍是 owner，只能等 LockTTL（压测与正式缺省 24h）。RR-20260930-21 的“未验证项”也提到这条。
+- **会红的测试草稿**：Eval 替身执行脚本（Redis 状态变为本 token 持有）后返回 `context.DeadlineExceeded` → 下一次 TryLock 应能以 Redis 为准重新取得（同 RR-21 的 `releaseUnknownToken` 机制），而不是 NotAcquired 到 TTL。
+- **候选修法**：Eval 返回非 Redis 明确答复的错误时，把本次 token 记为 `acquireUnknownToken`，下一次 TryLock 交给 Lua 的 `ARGV[3]` 让 Redis 判定（与 RR-21 共用一条路径）。
+- **来源**：harness 区间核验改造（`42ba5725` 之后）负对照。
+

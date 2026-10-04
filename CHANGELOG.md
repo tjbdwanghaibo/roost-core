@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- **Remote 负载 harness 有错误时仍做区间一致性核验**（测试 harness，不是 RR）：失败请求按 USER_GUIDE §4 判别表用 `errors.Is` 分成“确定未生效”和“结果未知”两类，每个实体按 `[成功回复数, 成功回复数 + 结果未知数]` 区间核验 Mongo / NATS / outbox，无错误时与原来的精确核验逐字相同。`result.json` 新增 `ErrorsNotApplied` / `ErrorsUncertain` / `ErrorClasses` / `ErrorClassFirst`；`.verified` 先写出，之后再以负载错误让测试失败；`scripts/perf/remote.sh` 在核验通过但有错误时输出 `consistency verified; load errors=…` 并退出 3。新增 `ROOST_REMOTE_REQUEST_TIMEOUT`（缺省 30s，仅用于构造结果未知）。见 [REMOTE-ACCEPTANCE §负载有错误时的区间核验](docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)、C01-RUNBOOK §5。
 - **隔离集成环境的 mongod 有了 WiredTiger 缓存上限**（`ROOST_IT_MONGO_CACHE_GB`，缺省 1）：三个副本同机，缺省缓存（物理内存的一半）合计超过内存，24 小时长跑中宿主机换页、被测进程停顿数秒，C01 第 3、4 次的写许可拒绝都来自这里。已在跑的环境要 `down` 再 `up` 才生效。见 `kit/scripts/integration/README.md`。
 - **cfggen 显式 `index: false` 生成可编译绑定（RR-20260930-CG-12）**：strconv 导入复用索引 enabled 判断；数字/bool 禁用不再留下无用导入，真索引转换保持。重生成绑定即可，无持久格式变化。[修复与消费回归](docs/bugfix/RR-20260930-CG-12.md)。
 - **cfggen 写入前拒绝生成名称冲突（RR-20260930-CG-13）**：保留默认注册 wrapper、configdata import 与实际需要的 strconv 名；已冲突 schema 必须改 bean 名和引用，拒绝时保留旧输出，不静默改公开 API。[兼容与回归](docs/bugfix/RR-20260930-CG-13.md)。
