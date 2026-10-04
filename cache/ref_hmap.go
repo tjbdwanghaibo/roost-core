@@ -25,6 +25,10 @@ var (
 	ErrRefHMapCycle       = errors.New("cache: redis ref hmap cycle")
 	ErrRefHMapMaxDepth    = errors.New("cache: redis ref hmap max depth exceeded")
 	ErrRefHMapUnsupported = errors.New("cache: redis ref hmap unsupported field")
+	// ErrRefHMapRegistryChanged means the key registry changed after it was
+	// read. This attempt wrote nothing; read the current record before retrying.
+	// It is a schema/key-set conflict, not a value/version compare-and-set.
+	ErrRefHMapRegistryChanged = errors.New("cache: redis ref hmap registry changed")
 )
 
 // errRefHMapPartialRecord：根引用了一个必然非空的子 hash，它却已不存在。
@@ -41,7 +45,11 @@ var (
 const refHMapWriteScript = `
 local ttl_ms = tonumber(ARGV[1])
 local write_count = tonumber(ARGV[2])
-local arg = 3
+-- RR-20261004-NC-30: refuse an obsolete cleanup snapshot before any DEL.
+if (redis.call("HGET", KEYS[1], "__keys") or "") ~= ARGV[3] then
+	return 0
+end
+local arg = 4
 for i = 1, #KEYS do
 	redis.call("DEL", KEYS[i])
 end
@@ -62,6 +70,16 @@ for i = 1, write_count do
 		end
 	end
 end
+return 1
+`
+
+// RR-20261004-NC-30：清理清单与根 registry 在同槽 Lua 内一起裁决。
+// 不在脚本里发现未声明键，不自动重试或补偿未知结果。
+const refHMapDeleteScript = `
+if (redis.call("HGET", KEYS[1], "__keys") or "") ~= ARGV[1] then
+	return 0
+end
+for i = 1, #KEYS do redis.call("DEL", KEYS[i]) end
 return 1
 `
 
@@ -216,19 +234,15 @@ func (s *RedisRefHMapStore[K, V]) Delete(ctx context.Context, key K) error {
 	if err != nil {
 		return err
 	}
-	keys, err := s.registeredKeys(ctx, plan)
+	keys, registry, err := s.registeredKeys(ctx, plan)
 	if err != nil {
 		return err
 	}
 	if len(keys) == 0 {
 		return nil
 	}
-	if pipe := s.redis.Pipeline(); pipe != nil {
-		pipe.Del(ctx, keys...)
-		return pipe.Exec(ctx)
-	}
-	_, err = s.redis.Del(ctx, keys...)
-	return err
+	result, err := s.redis.Eval(ctx, refHMapDeleteScript, keys, registry)
+	return refHMapWriteResult(result, err)
 }
 
 // layout builds the reflective type tree and the key prefix template once per
@@ -359,37 +373,38 @@ func (s *RedisRefHMapStore[K, V]) loadHashes(ctx context.Context, plan *refHMapP
 
 func (s *RedisRefHMapStore[K, V]) writeHashes(ctx context.Context, plan *refHMapPlan, writes []refHMapWrite) error {
 	writes = plan.withRegistry(writes)
-	deleteKeys, err := s.registeredKeys(ctx, plan)
+	deleteKeys, registry, err := s.registeredKeys(ctx, plan)
 	if err != nil {
 		return err
 	}
 	keys := uniqueRefHMapKeys(append(deleteKeys, plan.keys()...))
-	return s.evalWriteHashes(ctx, keys, writes)
+	return s.evalWriteHashes(ctx, keys, writes, registry)
 }
 
-func (s *RedisRefHMapStore[K, V]) registeredKeys(ctx context.Context, plan *refHMapPlan) ([]string, error) {
+func (s *RedisRefHMapStore[K, V]) registeredKeys(ctx context.Context, plan *refHMapPlan) ([]string, string, error) {
 	fallback := plan.keys()
 	raw, err := s.redis.HGet(ctx, plan.key(plan.root), refHMapRegistryField)
 	if err != nil {
 		if errors.Is(err, fredis.ErrNil) {
-			return fallback, nil
+			return fallback, "", nil
 		}
-		return nil, err
+		return nil, "", err
 	}
 	keys := parseRefHMapRegistry(string(raw))
 	if len(keys) == 0 {
-		return fallback, nil
+		return fallback, string(raw), nil
 	}
-	return uniqueRefHMapKeys(append(keys, plan.key(plan.root))), nil
+	// The Lua guard always checks KEYS[1], regardless of legacy registry order.
+	return uniqueRefHMapKeys(append([]string{plan.key(plan.root)}, keys...)), string(raw), nil
 }
 
-func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []string, writes []refHMapWrite) error {
+func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []string, writes []refHMapWrite, registry string) error {
 	keyIndex := make(map[string]int, len(keys))
 	for i, key := range keys {
 		keyIndex[key] = i + 1
 	}
 	args := make([]any, 0, 2+len(writes)*4)
-	args = append(args, strconv.FormatInt(s.cfg.TTL.Milliseconds(), 10), strconv.Itoa(len(writes)))
+	args = append(args, strconv.FormatInt(s.cfg.TTL.Milliseconds(), 10), strconv.Itoa(len(writes)), registry)
 	for _, write := range writes {
 		idx, ok := keyIndex[write.key]
 		if !ok {
@@ -402,8 +417,22 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 	}
 	// RR-20261004-NC-21：错误不能证明 Lua 未执行；无身份重放会覆盖后续写。
 	// 保留原始原因，让调用方区分失败与结果未知，不自动回滚或降级。
-	_, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...)
-	return err
+	result, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...)
+	return refHMapWriteResult(result, err)
+}
+
+func refHMapWriteResult(result any, err error) error {
+	if err != nil {
+		return err
+	}
+	switch result {
+	case int64(1):
+		return nil
+	case int64(0):
+		return ErrRefHMapRegistryChanged
+	default:
+		return fmt.Errorf("%w: unexpected write reply %v", ErrRefHMapUnsupported, result)
+	}
 }
 
 type refHMapPlan struct {

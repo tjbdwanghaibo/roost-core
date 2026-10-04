@@ -1,0 +1,256 @@
+package cache
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"os"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+)
+
+type review19Part struct{ Score int64 }
+type review19Value struct {
+	ID, Version int64
+	Left, Right *review19Part
+}
+
+// Pipeline=nil is a supported IRedis shape; force a write between actual reads.
+type review19SequentialRedis struct {
+	fredis.IRedis
+	root      string
+	afterRoot func() error
+}
+
+func (*review19SequentialRedis) Pipeline() fredis.IPipeline { return nil }
+func (r *review19SequentialRedis) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+	hash, err := r.IRedis.HGetAll(ctx, key)
+	if key == r.root && r.afterRoot != nil {
+		hook := r.afterRoot
+		r.afterRoot = nil
+		if hookErr := hook(); hookErr != nil {
+			return nil, hookErr
+		}
+	}
+	return hash, err
+}
+
+func TestReview19RefHMap(t *testing.T) {
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Fatal("requires an isolated Redis")
+	}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, scenario := range []string{
+		"patch_then_set", "set_then_patch", "distinct_leaf_patches", "same_leaf_patches",
+		"patch_unknown_applied_readback", "patch_unknown_unapplied_readback", "patch_unknown_later_set",
+		"set_nil_branch_removes_old_hash", "old_schema_ignores_added_field", "new_schema_absent_field_default",
+		"unknown_then_delete", "delete_then_patch_refused", "schema_publish_then_old_patch",
+		"torn_read_observation", "sibling_expiry_observation", "advisory_stale_race_observation",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			prefix := "roost:review19:" + rand.Text()
+			cfg := RefHMapConfig[int64, review19Value]{Prefix: prefix, Name: "record", TTL: time.Hour, StoreConfig: StoreConfig[int64, review19Value]{KeyOf: func(v review19Value) int64 { return v.ID }}}
+			store := NewRedisRefHMapStore(client, cfg)
+			plan, err := store.plan(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _, _ = client.Del(context.Background(), plan.keys()...) })
+			initial := review19Value{ID: 1, Version: 1, Left: &review19Part{Score: 1}, Right: &review19Part{Score: 2}}
+			if err := store.Set(ctx, initial); err != nil {
+				t.Fatal(err)
+			}
+			get := func() review19Value {
+				t.Helper()
+				v, held, err := store.Get(ctx, 1)
+				if err != nil || !held {
+					t.Fatalf("Get: %+v %v %v", v, held, err)
+				}
+				return v
+			}
+			switch scenario {
+			case "patch_then_set", "set_then_patch":
+				next := review19Value{ID: 1, Version: 2, Left: &review19Part{Score: 10}, Right: &review19Part{Score: 20}}
+				if scenario == "patch_then_set" {
+					if err := store.Patch(ctx, 1, "Left.Score", int64(9)); err != nil {
+						t.Fatal(err)
+					}
+					if err := store.Set(ctx, next); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(get(), next) {
+						t.Fatal("last full Set not visible")
+					}
+				} else {
+					if err := store.Set(ctx, next); err != nil {
+						t.Fatal(err)
+					}
+					if err := store.Patch(ctx, 1, "Left.Score", int64(9)); err != nil {
+						t.Fatal(err)
+					}
+					got := get()
+					if got.Version != 2 || got.Left.Score != 9 || got.Right.Score != 20 {
+						t.Fatalf("last Patch: %+v", got)
+					}
+				}
+			case "distinct_leaf_patches", "same_leaf_patches":
+				start := make(chan struct{})
+				results := make(chan error, 2)
+				var wg sync.WaitGroup
+				paths := []string{"Left.Score", "Right.Score"}
+				if scenario == "same_leaf_patches" {
+					paths[1] = paths[0]
+				}
+				for i, path := range paths {
+					wg.Go(func() { <-start; results <- store.Patch(ctx, 1, path, int64(10+i)) })
+				}
+				close(start)
+				wg.Wait()
+				close(results)
+				for err := range results {
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				got := get()
+				if scenario == "distinct_leaf_patches" {
+					if got.Left.Score != 10 || got.Right.Score != 11 {
+						t.Fatalf("lost distinct leaf: %+v", got)
+					}
+				} else if got.Left.Score != 10 && got.Left.Score != 11 {
+					t.Fatalf("same leaf: %+v", got)
+				}
+			case "patch_unknown_applied_readback", "patch_unknown_unapplied_readback", "patch_unknown_later_set":
+				wrapped := &refSchemaHookRedis{IRedis: client}
+				if scenario == "patch_unknown_unapplied_readback" {
+					wrapped.beforeEval = context.DeadlineExceeded
+				} else {
+					wrapped.afterEval = context.DeadlineExceeded
+				}
+				opErr := NewRedisRefHMapStore(wrapped, cfg).Patch(ctx, 1, "Left.Score", int64(9))
+				if !errors.Is(opErr, context.DeadlineExceeded) {
+					t.Fatalf("lost cause: %v", opErr)
+				}
+				if scenario == "patch_unknown_later_set" {
+					if err := store.Set(ctx, review19Value{ID: 1, Version: 3, Left: &review19Part{Score: 30}}); err != nil {
+						t.Fatal(err)
+					}
+					got := get()
+					if got.Version != 3 || got.Left.Score != 30 {
+						t.Fatalf("later authority: %+v", got)
+					}
+				} else {
+					want := int64(9)
+					if scenario == "patch_unknown_unapplied_readback" {
+						want = 1
+					}
+					got := get()
+					if got.Left.Score != want || got.Right.Score != 2 {
+						t.Fatalf("readback: %+v want=%d", got, want)
+					}
+				}
+			case "set_nil_branch_removes_old_hash":
+				if err := store.Set(ctx, review19Value{ID: 1, Version: 2, Left: initial.Left}); err != nil {
+					t.Fatal(err)
+				}
+				got := get()
+				if got.Right != nil {
+					t.Fatalf("nil branch revived: %+v", got)
+				}
+				if n, err := client.Exists(ctx, plan.base+":right"); err != nil || n != 0 {
+					t.Fatalf("old hash: %d %v", n, err)
+				}
+			case "old_schema_ignores_added_field", "new_schema_absent_field_default", "schema_publish_then_old_patch":
+				oldCfg := RefHMapConfig[int64, refSchemaOld]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refSchemaOld]{KeyOf: func(v refSchemaOld) int64 { return v.ID }}}
+				old := NewRedisRefHMapStore(client, oldCfg)
+				if scenario == "new_schema_absent_field_default" {
+					if err := old.Set(ctx, refSchemaOld{ID: 1, Version: 2}); err != nil {
+						t.Fatal(err)
+					}
+					got := get()
+					if got.Version != 2 || got.Left != nil || got.Right != nil {
+						t.Fatalf("added defaults: %+v", got)
+					}
+				} else if scenario == "old_schema_ignores_added_field" {
+					got, held, err := old.Get(ctx, 1)
+					if err != nil || !held || got.Version != 1 {
+						t.Fatalf("old decode: %+v %v %v", got, held, err)
+					}
+				} else {
+					if err := old.Patch(ctx, 1, "Version", int64(5)); err != nil {
+						t.Fatal(err)
+					}
+					got := get()
+					if got.Version != 5 || got.Left.Score != 1 || got.Right.Score != 2 {
+						t.Fatalf("old Patch damaged new fields: %+v", got)
+					}
+				}
+			case "unknown_then_delete":
+				wrapped := &refSchemaHookRedis{IRedis: client, afterEval: context.DeadlineExceeded}
+				if err := NewRedisRefHMapStore(wrapped, cfg).Set(ctx, review19Value{ID: 1, Version: 2}); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal(err)
+				}
+				if err := store.Delete(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+				if n, err := client.Exists(ctx, plan.keys()...); err != nil || n != 0 {
+					t.Fatalf("reconciled Delete: %d %v", n, err)
+				}
+			case "delete_then_patch_refused":
+				if err := store.Delete(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Patch(ctx, 1, "Left.Score", int64(9)); !errors.Is(err, ErrRefHMapUnsupported) {
+					t.Fatalf("missing root Patch: %v", err)
+				}
+				if n, err := client.Exists(ctx, plan.keys()...); err != nil || n != 0 {
+					t.Fatalf("Patch recreated deleted record: %d %v", n, err)
+				}
+			case "torn_read_observation":
+				wrapped := &review19SequentialRedis{IRedis: client, root: plan.key(plan.root), afterRoot: func() error {
+					return store.Set(ctx, review19Value{ID: 1, Version: 2, Left: &review19Part{Score: 20}, Right: &review19Part{Score: 30}})
+				}}
+				v, held, err := NewRedisRefHMapStore(wrapped, cfg).Get(ctx, 1)
+				if err != nil || !held || v.Version != 1 || v.Left.Score != 20 || v.Right.Score != 30 {
+					t.Fatalf("observation fixture drift: %+v %v %v", v, held, err)
+				}
+				t.Logf("non-atomic read combines root v%d with later children %d/%d; not a snapshot contract", v.Version, v.Left.Score, v.Right.Score)
+			case "sibling_expiry_observation":
+				// RR-20261004-03 merged: an expired referenced scalar child is a whole-record miss.
+				if _, err := client.Eval(ctx, `return redis.call('PEXPIREAT',KEYS[1],1)`, []string{plan.base + ":right"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Patch(ctx, 1, "Left.Score", int64(9)); err != nil {
+					t.Fatal(err)
+				}
+				if got, held, err := store.Get(ctx, 1); err != nil || held {
+					t.Fatalf("expired sibling must miss after RR-03: held=%v value=%+v err=%v", held, got, err)
+				}
+			case "advisory_stale_race_observation":
+				cfg.StoreConfig.Stale = VersionStale(func(v review19Value) int64 { return v.Version })
+				wrapped := &refSchemaHookRedis{IRedis: client, afterRegistry: func() error {
+					return store.Set(ctx, review19Value{ID: 1, Version: 3, Left: initial.Left, Right: initial.Right})
+				}}
+				if err := NewRedisRefHMapStore(wrapped, cfg).Set(ctx, review19Value{ID: 1, Version: 2, Left: initial.Left, Right: initial.Right}); err != nil {
+					t.Fatal(err)
+				}
+				if got := get(); got.Version != 2 {
+					t.Fatalf("advisory fixture: %+v", got)
+				}
+				t.Log("registry guard is not a value CAS; Stale remains advisory under concurrent writers")
+			}
+		})
+	}
+}

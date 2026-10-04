@@ -1,0 +1,56 @@
+{"Time":"2026-10-04T19:33:17.4074537+08:00","Action":"start","Package":"example.com/roostrefconsumer/db"}
+{"Time":"2026-10-04T19:33:18.5091562+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration"}
+{"Time":"2026-10-04T19:33:18.5091562+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration","Output":"=== RUN   TestGeneratedMigrationHydration\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5091562+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/success"}
+{"Time":"2026-10-04T19:33:18.5097323+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/success","Output":"=== RUN   TestGeneratedMigrationHydration/success\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5102791+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/success","Output":"--- PASS: TestGeneratedMigrationHydration/success (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5102791+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/success","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5102791+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/current_schema"}
+{"Time":"2026-10-04T19:33:18.5102791+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/current_schema","Output":"=== RUN   TestGeneratedMigrationHydration/current_schema\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5108203+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/current_schema","Output":"--- PASS: TestGeneratedMigrationHydration/current_schema (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5108203+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/current_schema","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5108203+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/newer_schema"}
+{"Time":"2026-10-04T19:33:18.5108203+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/newer_schema","Output":"=== RUN   TestGeneratedMigrationHydration/newer_schema\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5114154+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/newer_schema","Output":"--- PASS: TestGeneratedMigrationHydration/newer_schema (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5114154+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/newer_schema","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5114154+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/first_failure"}
+{"Time":"2026-10-04T19:33:18.5114154+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/first_failure","Output":"=== RUN   TestGeneratedMigrationHydration/first_failure\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.511945+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/first_failure","Output":"--- PASS: TestGeneratedMigrationHydration/first_failure (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.511945+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/first_failure","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.511945+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/second_failure"}
+{"Time":"2026-10-04T19:33:18.511945+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/second_failure","Output":"=== RUN   TestGeneratedMigrationHydration/second_failure\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.511945+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/second_failure","Output":"--- PASS: TestGeneratedMigrationHydration/second_failure (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/second_failure","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/missing_path"}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/missing_path","Output":"=== RUN   TestGeneratedMigrationHydration/missing_path\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/missing_path","Output":"--- PASS: TestGeneratedMigrationHydration/missing_path (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/missing_path","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/bad_output"}
+{"Time":"2026-10-04T19:33:18.5124813+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/bad_output","Output":"=== RUN   TestGeneratedMigrationHydration/bad_output\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/bad_output","Output":"--- PASS: TestGeneratedMigrationHydration/bad_output (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration/bad_output","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration","Output":"--- PASS: TestGeneratedMigrationHydration (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedMigrationHydration","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict"}
+{"Time":"2026-10-04T19:33:18.5130105+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict","Output":"=== RUN   TestGeneratedRegistryConflict\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5135511+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_set"}
+{"Time":"2026-10-04T19:33:18.5135511+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_set","Output":"=== RUN   TestGeneratedRegistryConflict/direct_set\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.527568+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_set","Output":"--- PASS: TestGeneratedRegistryConflict/direct_set (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.527568+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_set","Elapsed":0.01}
+{"Time":"2026-10-04T19:33:18.527568+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_delete"}
+{"Time":"2026-10-04T19:33:18.527568+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_delete","Output":"=== RUN   TestGeneratedRegistryConflict/direct_delete\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.531859+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_delete","Output":"--- PASS: TestGeneratedRegistryConflict/direct_delete (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.531859+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/direct_delete","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.531859+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_set"}
+{"Time":"2026-10-04T19:33:18.531859+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_set","Output":"=== RUN   TestGeneratedRegistryConflict/cached_set\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5368434+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_set","Output":"--- PASS: TestGeneratedRegistryConflict/cached_set (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5368434+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_set","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5368434+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_delete"}
+{"Time":"2026-10-04T19:33:18.5368434+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_delete","Output":"=== RUN   TestGeneratedRegistryConflict/cached_delete\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5414059+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_delete","Output":"--- PASS: TestGeneratedRegistryConflict/cached_delete (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5414059+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict/cached_delete","Elapsed":0}
+{"Time":"2026-10-04T19:33:18.5419392+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict","Output":"--- PASS: TestGeneratedRegistryConflict (0.03s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:18.5419392+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRegistryConflict","Elapsed":0.03}
+{"Time":"2026-10-04T19:33:18.5419392+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T19:33:19.5588427+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"ok  \texample.com/roostrefconsumer/db\t2.151s\n"}
+{"Time":"2026-10-04T19:33:19.5588427+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Elapsed":2.151}

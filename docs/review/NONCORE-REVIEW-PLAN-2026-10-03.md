@@ -60,7 +60,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | N01 | app/lifecycle/manager/health/admin，15 | 源文15/15已读，四个本域新RR已修/35正式场景通过；场景部分完成，补 Group 阻塞预算、完整 App 故障/Ops bind及hijack/权限与Health策略 | 2～4 |
 | N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
 | N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～12已修/声明场景验证；真实NATS/etcd、正常Resign预算/服务端清理、重连/lease恢复与容量矩阵待补 | 6～10 |
-| N04 | redis/mongo/cache/migration，当前41（原40+事务实现） | 源文41/41累计已读、场景部分完成；NC-13～29已修，Redis锁/续租/订阅14新场景通过；接续schema/并发/未知恢复、正式迁移、真实Mongo与Cluster/HA/长稳 | 6～10 |
+| N04 | redis/mongo/cache/migration，当前41（原40+事务实现） | 源文41/41累计已读、场景部分完成；NC-13～30已修；schema/并发/未知16新场景、12正式清理回归、11生成消费者通过；接续Repository持久迁移/重载、真实Mongo与Cluster/HA/长容量 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | 历史多轮、与另一线交叠；只接续未覆盖镜像/路由接入与最新变更，不重审核心提交链 | 2～4 |
 | N06 | service/saga/servicemetrics，36 | Service 十域主链已有完成记录；仅增量、Saga 补偿/重试/关停与未涵盖指标边界 | 2～4 |
 | N07 | configdata/attribute/event/errcode，10 | 运行配置与生成邻接已查；真实热更新/校验、属性变更传播、事件订阅与错误映射补证 | 2～4 |
@@ -77,6 +77,8 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 N14 的 Kit 文件数字按目录统计，业务链会纳入 N01～N13；场景证据只能计入相应主链一次。核心域的 Kit adapter 只核对公开接入契约与增量，底层 Nest/Sync/DataEngine 所有权问题交回另一线，不能冒认其已验证。
 
 ## 执行顺序与可提前得到的结果
+
+2026-10-04 第19轮最后同步到b9625f4f：另一线RR-02～07均已实施，合并后缓存/生成消费和mongotest独立检查通过；真实etcd/Mongo对照只引用另一线记录。NC-30已修、未发版。下一优先W-2026-10-04-02真实NATS drain超时复现/分流，再正式迁移接入/N04收口，然后N05。[最终接手状态](REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方按域顺序保留，不以回归通过计整域review完成。
 
 1. **运行与请求关键链**：N01 → N02 → N03 → N04，Kit同行，剩余约15～27小时（原估18～30）。每批先解决证据缺口与确认bug，再设计/性能观察。N01/N02/N03清单源文均已补齐，下一新范围 **N04 redis/mongo/cache/migration**；明确bugfix时先处理最新RR。保留前三域具名场景、真实资源与关闭恢复余项，不能把源码读完视为闭环。
 2. **复用历史后补齐增量**：N05、N06、N07、N08，预计 10～19 小时。只检查尚未覆盖主链和已审 SHA 后的变更；避免再次停在同一批旧 Service bug。

@@ -30,6 +30,8 @@ Redis pipeline减少批次网络往返，既不是事务也不是跨key原子快
 
 ## Migration 的版本、数据与失败责任
 
+2026-10-04补证：[正式CLI生成RestorePersisted消费](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)7场景已验：成功/当前与较新schema、首/次步失败、缺路径、坏输出；失败不发布部分scalar DAO/版本，原字节保留。不证明Repository持久写回/重载/进程故障或复杂解码所有错误的原子性。registry竞争NC-30已修，下一沿正式消费接入补证。
+
 Registry维护From唯一且To递增的step，在ctx检查后逐步Apply，并在每个成功step后SetDataVersion；RunFrom不是事务，失败callback对对象已做的修改不会自动回滚。业务应使用离线副本或在正式业务事务里负责恢复，不能仅把version保持旧值称为回滚成功。
 
 DAORegistry按collection+From登记，在输入、传入step和获得输出时复制bytes；失败返回nil bytes、已完成版本cur和可errors.Is提取的原因。本批证明输入不被step改写、返回不与step保留buffer别名、第二步失败不发布partial bytes和取消不进下一step。cur说明成功前缀，不代表调用方已经持久化该前缀；没输出不能自行把cur写回数据库。全局MigrateDAO使用Background，不等于外部提供的业务预算自动传播。

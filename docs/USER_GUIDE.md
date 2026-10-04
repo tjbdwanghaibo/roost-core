@@ -1,5 +1,7 @@
 # Roost 开发者完整使用说明
 
+RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示键登记在读取后改变、此次Lua明确未写。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
+
 ## 2026-10-04 Mongo替身事务与Redis锁接入（main，未发版）
 
 NC-26～29现已修：BSON.D dotted路径可读写且保留兄弟字段，unique建立拒绝已有重复，非法bulk Type在写前拒绝。事务ctx使用私有快照，事务外Lookup/Documents/Seed只见已提交数据；集合粒度冲突可重跑callback，callback须幂等并等待自身操作结束。finished ctx不能留给后台继续写，事务内EnsureIndexes明确ErrUnsupported。完整Mongo索引/数组路径、Drop/namespace并发、未知commit/HA不由替身证明。[限制与消费者](bugfix/RR-20261004-NC-29.md)。

@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](review/REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。
+
 **Service第九批/第十一轮阶段完成（2026-09-29）**：[RR-34 Pipeline修复/验证](bugfix/RR-20260929-34.md)，[10域主链完成/34项新编号台账/具名剩余事项](review/REVIEW-2026-09-29-services-11.md)，本轮无新确认缺陷。原3/3绿、正式58叶子执行/整体19包951pass叶子、3Toxiproxy skip分列；100Service源blob未变，Core/consumer编译、vet、12RPC check通过。[机制](review/IMPLEMENTATION-SERVICE-PIPELINE-AND-REVIEW-CLOSURE.md)。后续是归档/fulfilled与外部/HA/长稳具名设计验收，不再泛化重开其余service。未发布/迁移，不升级其他核心性能专项；下方为历史时点。
 
 **Service第八批/第十轮（2026-09-29）**：[RR-33 Mail Cluster批读修复/验证](bugfix/RR-20260929-33.md)，正式Mod跨3owner分页/claim；[新RR-34 P2 Pipeline首缺失掩盖写错误](bug/REVIEW-2026-09-29-services-10.md)只交接未改driver。[运行/停点](review/REVIEW-2026-09-29-services-10.md) · [机制/兼容](review/IMPLEMENTATION-SERVICE-MAIL-BATCH-AND-PIPELINE-ERRORS.md)。10域主链有界整理完成，965pass事件/3Toxiproxy skip分列；无key迁移、未发布/部署，不改其他核心性能专项验收。下方保留历史。
@@ -160,6 +162,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+10-04第十批修复/非三大核心第十一批：[NC-30 P2](bug/RR-20261004-NC-30.md)已确认并修复，registry在Lua副作用前裁决；12正式、六包race/vet221叶子、16新review、11正式生成消费者通过。[红绿](bugfix/evidence/noncore-bugfix-20261004-10/README.md) · [迁移/schema学习](review/IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。无新增待修RR，T-208，未发版。N04仍41候选累计源文已读、场景部分完成；下一Repository持久迁移/重载消费（复用核心另一线证据）→N04收口→N05增量。类型迁移/Mongo/Cluster/HA/弱网/长容量留项；NC-26～29只补索引状态遗漏。
 
 最终整合更新：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮4真实Redis探针+13正式race/vet+3真实Redis集成独立通过。[验收](review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。下方本轮新wanted未修为发现时点；原双方证据保留，未发版，未替代authority/三资源/HA/长稳验收。
 

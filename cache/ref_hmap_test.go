@@ -503,7 +503,17 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 		}
 		return int64(1), nil
 	}
-	if len(keys) == 0 || len(args) < 2 {
+	if script == refHMapDeleteScript {
+		if r.hashes[keys[0]][refHMapRegistryField] != toRefHMapFakeString(args[0]) {
+			return int64(0), nil
+		}
+		_, err := r.Del(context.Background(), keys...)
+		return int64(1), err
+	}
+	if len(keys) == 0 || len(args) < 3 {
+		return int64(0), nil
+	}
+	if r.hashes[keys[0]][refHMapRegistryField] != toRefHMapFakeString(args[2]) {
 		return int64(0), nil
 	}
 	for _, key := range keys {
@@ -512,7 +522,7 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 	}
 	ttl, _ := strconv.ParseInt(toRefHMapFakeString(args[0]), 10, 64)
 	writeCount, _ := strconv.Atoi(toRefHMapFakeString(args[1]))
-	arg := 2
+	arg := 3
 	for i := 0; i < writeCount; i++ {
 		keyIndex, _ := strconv.Atoi(toRefHMapFakeString(args[arg]))
 		arg++

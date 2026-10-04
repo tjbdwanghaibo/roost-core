@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+**最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。
+
+## 2026-10-04 第十批修复与非三大核心第十一批 N04
+
+main从25ef4c1e快进e7027a65（仅C01文档增量），新[NC-30](../bug/RR-20261004-NC-30.md)确认并修复，无新增待修RR。[运行](REVIEW-2026-10-04-noncore-19.md) · [学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)，未发版。
+
+| 范围 | 本批实际证据 | 当前状态 / 接续 |
+| --- | --- | --- |
+| registry清理 | 旧树及overlay各2fail/4控制；12正式、六包221叶子race/vet通过 | NC-30已修；不是值CAS，历史孤儿不自动清理 |
+| Patch/Set/schema/恢复 | 16新review场景通过，其中3个观察展示混读、旁支过期和Stale竞争 | 类型变更、真实弱网、Cluster/HA/长容量待验 |
+| 正式生成消费 | 7 RestorePersisted迁移+4直接/Cached错误透传，11叶子race/vet通过 | Repository持久写回/重载/进程故障未验，不称数据库已迁移 |
+| N04源码 | 41候选，40同hash复用第18轮，ref_hmap.go全文/diff；18材料路径coverage/hash | 累计源文41/41，业务场景部分完成，不计completed/15 |
+
+下一 **正式迁移的Repository/持久确认/重载接入（复用另一线核心证据，仅补消费）→N04缺口收口→N05路由/mirror增量**。本机Mongo/Cluster/HA/真实弱网不可用；原17环境skip未被本批0skip关闭。另一线C01已有1h通过记录，本机未独立复跑。跨域50～90有效小时组织估计未重算。[计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [留项](../bug/CARRYOVER.md)。下方旧未修保留原时点。
+
 **最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
 
 提交前同步补充：整合远端4提交（`cfe878fe`），新wanted已登记[RR-20261004-01](../bug/RR-20261004-01.md) P2未修；[追加结论](REVIEW-2026-10-04-noncore-18.md#提交前新增wanted)。原修复/普通Redis14场景证据保留3d3b22c9基线，未受远端代码影响，不声称远端负载harness/长稳已本机验证。
