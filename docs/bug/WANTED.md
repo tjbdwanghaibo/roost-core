@@ -419,7 +419,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 
 以下保留原始候选供追溯，均不再属于活动待判项。
 
-### W-2026-09-18-09 原始候选：怪物没有 DAO 的话"位置权威在 DAO"这条就不成立——demo 的解法是给它一个全 nopersist 的 DAO
+### W-2026-09-18-09 原始候选：怪物没有 DAO 的话"位置权威在 DAO"这条就不成立——demo 的解法是给它一个全 nopersist 的 DAO（2026-10-04 维护者选 A，已实施：[方案](../feature/DAO-NO-COLLECTION-2026-10-04.md)）
 
 - **位置**：roost-codegen `demo/db/def/monster.go`（`MonsterDao` 的四个字段全是 `dao:"nopersist,sync"`）、
   `demo/game/entities/monster/entity.go`（`noPersist=true lifetime=ephemeral`）。

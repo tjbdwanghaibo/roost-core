@@ -94,6 +94,68 @@ Entity 生成物：无集合 DAO 在 `param.Dao[...]`、`DaoManager.Set(...)`、
 - **把位置放进组件普通字段（W 条目的另一种形状）**：维护者已否决——会出现两种位置权威。
 - **改 `entity.DaoInterface` / DaoManager 的键语义**：超出范围（不改 Entity 持久化框架本身）。
 
-## 7. 实施与验证
+## 7. 实施结果
 
-见下文“实施结果”，随提交更新。
+已实施（worktree 提交，未推送）：方案 `9630f0f5`，实现 `12f855a7`，demo `f3f6e947`。本地 Go 1.27.0 darwin/arm64。
+
+| 位置 | 改动 |
+| --- | --- |
+| `codegen/internal/dao/parse.go` | `DaoDef.NoCollection`；`parseFlags` 收集裸词；`noCollectionParam` 实现 R1/R2；R5 错误文本追加 nocoll 提示 |
+| `codegen/internal/dao/gen.go` | `validateNoCollectionFields`（R3）；模板函数 `daoKeyConst` → `<Dao>RegistryKey` |
+| `codegen/internal/dao/template_dao.go` | 按 `.Dao.NoCollection` 分支：import、类型注释、`RegistryKey` 常量、`DbName`/`CollName`，跳过全部持久化方法；有集合分支字节不变 |
+| `codegen/internal/entity/nocoll_dao.go` | `resolveNoCollectionDaos`（R4 + 标记 `DaoField.NoCollection`），`declaresConst` 读 DAO 包生成源码 |
+| `codegen/internal/entity/remote_dao_scope.go` | 抽出 `daoSourceDir`（与 RR-20260926-45 的作用域检查共用 DAO 包定位） |
+| `codegen/internal/entity/gen.go` / `main.go` / `parse.go` | 非 Remote 接线三处（`param.Dao[...]`、`DaoManager.Set`、`MapDAOSyncChanges`）改用 `daoKey`；生成前整包解析 |
+| `codegen/internal/dao/testdata/def/wraith.go` + golden + `runtime/nocoll_test.go` | 无集合 fixture、逐字 golden、真实 roost-core 上的 daoruntime 门 |
+| `demo/db/def/monster.go.tmpl` 等 | `//roost:dao nocoll`；monster 测试补无存储能力门；README / 步骤说明 / `roost help dao` / CODEGEN_REFERENCE §4.1 / USER_GUIDE §3 |
+
+### 先红后绿
+
+修前（基线 `9bf20e28`，新语法）：
+
+```text
+$ go run ./codegen/cmd/dao -def <scratch>/def -out <scratch>/out -pkg db   # def: //roost:dao nocoll，两个 nopersist,sync 字段
+parse definitions: ghost.go: line 3: //roost:dao on GhostDao requires coll= and db=
+exit status 1
+```
+
+`codegen/internal/dao/nocoll_promises_test.go` 修前（只加 `NoCollection` 字段让测试编译）：5 个用例全红，例如
+`a nocoll DAO whose fields are all nopersist must generate: parse definitions: ghost.go: line 5: //roost:dao on GhostDao requires coll= and db=`、
+`//roost:dao nocoll coll=ghosts db=game parsed`（nocoll 被静默忽略，生成为有集合 DAO）。
+`codegen/internal/entity/nocoll_dao_promises_test.go` 修前：`wire is missing "param.Dao[db.GhostDaoRegistryKey]"`、
+`wire still references the collection constant a nocoll DAO does not have`、`a stored entity with a nocoll DAO was generated`（持久 / remote=managed 两例）。
+
+修后：
+
+| 命令 | 结果 |
+| --- | --- |
+| `GOWORK=off go test -count=1 ./codegen/internal/dao/`（含 golden；`hero`/`variety` 等既有 golden 未改一字节） | ok |
+| `GOWORK=off go test -count=1 ./codegen/internal/entity/` | ok |
+| `codegen/scripts/dao-golden-runtime.sh` 等价流程（临时模块 `replace` 到本 worktree，含 `nocoll_test.go`） | vet ok；`TestANoCollectionDao{ReplicatesAndNeverPersists,RollsBackInMemory,HasNoStorageCapability}` PASS，全包 ok |
+| `GOWORK=off go test -count=1 ./codegen/...` | 全部 ok |
+| `GOWORK=off go vet ./codegen/...`、`gofmt -l`（含 testdata） | 干净 |
+| `GOWORK=off go test -count=1 .`（含 `TestCoreDependencyBoundary`） | ok |
+| `GOWORK=off go generate ./...` | 工作树无新增改动 |
+
+### 生成工程（game-demo）
+
+`roost project new planet -skip-deps -module example.com/planet -template game-demo`（scratchpad）+ `go mod edit -replace` 到本 worktree + `go mod tidy`：
+
+- `GOWORK=off go build ./... && go vet ./... && go test ./...`：全绿；`game/entities/monster` 的
+  `TestAnEphemeralMonsterReplicatesButNeverPersists`、`TestMonsterFarViewOmitsHP`、`TestTheMonsterDaoHasNoCollection` PASS。
+- `db/gen_monster_dao.go` 只有 `MonsterDaoRegistryKey = "MonsterDao"`；`monster_gen_wire.go` 用 `db.MonsterDaoRegistryKey`。
+  全工程 `grep '"monsters"\|coll=monsters\|MonsterDaoCollection'` 无命中；`grep -rn monsters --include=*.go` 只剩 spawner 的 map 字段名与注释。
+- `roost generate --check`：`generated files are up to date`。
+- 迁移演练：把 `db/def/monster.go` 改回 `coll=monsters db=game` 再 `roost generate`（两文件出现 `MonsterDaoCollection`/`RestorePersisted`，仍可编译）；
+  再改回 `nocoll`：`--check` 报 `db/gen_monster_dao.go, game/entities/monster/monster_gen_wire.go` 过期，`roost generate` 原地重写二者，
+  旧常量与持久化方法清零，`db/` 无残留文件，build / monster 测试 / `--check` 绿。
+- 误用演练：去掉 Monster 的 `noPersist=true lifetime=ephemeral` 后 `roost generate` 失败：
+  `entity Monster: DAO field dao (*db.MonsterDao) is declared //roost:dao nocoll and is never stored, but the entity is persistent; mark the entity noPersist=true, or give the DAO coll= and db= and regenerate`。
+
+### 未验证 / 边界
+
+- DAO 位于实体所在模块之外时 R4 无法生成期判定，靠 `undefined: …Collection` 编译失败兜底（§3）；手写 builder 把无集合 DAO 注册进持久实体时，
+  只会在加载（`does not implement PersistedDaoLoader` / 空库名查询）或删除（`does not implement nest.MutationParticipant`）时失败，没有启动期检查——
+  加启动期检查需要改 Entity 注册框架，超出本次范围。
+- 未跑 Mongo / NATS 实跑（`make dev-run` + loadtest）；本改动不触及运行期框架，怪物原本就不写库。
+- 未刷新 codebase-memory 索引（索引根是主仓 checkout，不是本 worktree）。
