@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- **NatsMod 连接 drain 超预算或连接已关闭后，停止能够收敛**（RR-20261004-08，P3，来源 W-2026-10-04-02）：之前 `Assembly.Close` 硬关闭连接后只返回 ctx 错误，NatsMod 保留引用，重试永远拿到 `ErrConnectionClosed`。现在 `Assembly.Close` 返回包裹原错误的终态 `natsdriver.ErrClosedUndrained`（`errors.Is` 原错误仍成立，错误文本多一个前缀），NatsMod 报告该错误并释放引用，之后的 Stop 返回 nil；RPC 回调等待超预算时仍保留并可重试。[记录](docs/bugfix/RR-20261004-08.md)
 - **Bus 停止超预算后可再次排空，NatsMod 重试最终关闭 Assembly**（RR-20261004-07，P3，NC 复审发现，NC-09 引入）：`Bus.StopWithContext` 超预算只返回 ctx 错误并保留 worker pool，之后的调用继续等同一次排空；NatsMod 只在 ctx 错误时保留 Bus / Assembly，退订失败等终态错误照常关闭连接。**行为变化**：`Bus.Stop()` / `RPCClient.Stop()` 在停止已发起后立即返回、不再等待（回调内再调 `Stop()` 不再自锁），要等待同一次排空请用 `StopWithContext`；RPC 停止排空不再漏掉 reply / timeout 刚领取的终态 callback。[记录](docs/bugfix/RR-20261004-07.md)
 - **etcd 竞选失败或取消后即时撤销 lease**（RR-20261004-06，P2，NC 复审发现，NC-11 回退）：v1.19.0 的失败清理先取消 session context 再 Close，SDK 的 Revoke 因此立即失败，候选 / 领导键留到 TTL（缺省 60s），其他候选选不上。现在由 election 用 client context 派生、5s 截止的独立 Revoke 撤销（caller 在等时等它，已取消时立即返回，下一次 Campaign 等它结束）；正常 Resign 与“setup 取消与长期 session 分离”不变。[记录](docs/bugfix/RR-20261004-06.md)、T-208
 - **Layered / ReadThrough 准入拒绝不再否决权威或让读取失败**（RR-20261004-02 P2、RR-20261004-04 P3，NC 复审发现）：`LayeredStore` 的 L1 副本只在 TTL 窗口内能以 stale 拒绝回填，窗口外（含 ttl≤0）删掉旧副本、交付并回填权威值；`Set` 在远端已生效时不再因 L1 拒绝返回 `ErrStaleWrite`（生成的带版本 Cached Redis DAO 受益）。`ReadThroughStore` 的 loader 回填被 L1 拒绝时交付 L1 已准入值或 miss（conflict 无值仍拒绝），loader 结果回写 L2 的 stale 不再让 `Get` 失败。[02](docs/bugfix/RR-20261004-02.md)、[04](docs/bugfix/RR-20261004-04.md)
