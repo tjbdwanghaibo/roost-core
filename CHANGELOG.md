@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.19.2] - 2026-10-04
+
+> 补丁版本：v1.19.1 回归 RR-20261004-09（RefHMap 注册表 guard 误报）、NC-30 复审发现的 RR-20261004-08、历史遗留核实（[open-triage](docs/review/REVIEW-2026-10-04-open-triage.md)）仍存在的 RR-20260921-03（P1）/ 04 / 05。无源码不兼容的 API 变化；`natsdriver.Assembly.Close` 在 drain 失败时返回包裹原错误的 `ErrClosedUndrained`（`errors.Is` 原错误仍成立）；game-demo 已生成工程须手工合并 `playerowner.go`（RR-20260921-03 / 04）。
+
 ### Fixed
 
 - **game-demo 一次闲置归还回合不再把刷新循环占住超过租约**（RR-20260921-04，P2）：新增回合时间预算 `handBackPassBudget`（Lease − RefreshInterval − AdmissionGuard = 15s），撤离与投影等待都在预算内，没轮到的玩家留在服务、下一轮再归还；此前最坏 8×5s + 5s = 45s > Lease 30s，本进程其余租约会全部过期。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20260921-04.md)
