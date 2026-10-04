@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -159,12 +158,16 @@ func normalizedVersionPolicy(version string) string {
 }
 
 func runDependencyCommand(ctx context.Context, root string, stdout, stderr io.Writer, args ...string) error {
-	command := exec.CommandContext(ctx, "go", args...)
-	command.Dir = root
-	command.Env = appendWithoutGoWork(os.Environ(), "GOWORK=off")
-	command.Stdout = stdout
-	command.Stderr = stderr
-	if err := command.Run(); err != nil {
+	return runDependencyBinary(ctx, "go", root, stdout, stderr, args...)
+}
+
+// runDependencyBinary is runDependencyCommand with the binary as a parameter,
+// so tests can stand in for the go tool.
+func runDependencyBinary(ctx context.Context, binary, root string, stdout, stderr io.Writer, args ...string) error {
+	// RR-20261004-13: a tree, so cancellation also kills the compile / git
+	// processes go started inside root (a .roost-deps-* / .roost-generate-*
+	// staging tree) instead of leaving them running there.
+	if err := runCommandTree(ctx, root, appendWithoutGoWork(os.Environ(), "GOWORK=off"), stdout, stderr, binary, args...); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("go %s timed out after %s: %w", strings.Join(args, " "), dependencyUpdateTimeout, ctx.Err())
 		}

@@ -131,16 +131,22 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 }
 
 func runDoctorGoCommand(root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
+	return runDoctorCommand("go", root, name, timeout, success, fix, args...)
+}
+
+// runDoctorCommand is runDoctorGoCommand with the binary as a parameter, so
+// tests can stand in for the go tool.
+func runDoctorCommand(binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", args...)
-	command.Dir = root
-	command.Env = append(os.Environ(), "GOWORK=off")
-	output, err := command.CombinedOutput()
+	// RR-20261004-13: a tree, so the timeout also kills go's compile / link
+	// children and their copy of the output pipe cannot hold the call open.
+	var output bytes.Buffer
+	err := runCommandTree(ctx, root, append(os.Environ(), "GOWORK=off"), &output, &output, binary, args...)
 	if err == nil {
 		return CheckItem{Name: name, Status: StatusOK, Detail: success}
 	}
-	detail := strings.TrimSpace(string(output))
+	detail := strings.TrimSpace(output.String())
 	if len(detail) > 2048 {
 		detail = detail[len(detail)-2048:]
 	}
