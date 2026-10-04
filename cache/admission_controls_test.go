@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // RR-20261004-NC-13～15：验证fatal与普通故障分流，以及拒绝后的读取失败不交付旧值。
@@ -71,10 +72,16 @@ func TestCacheAdmissionRemoteErrorCompatibility(t *testing.T) {
 type admissionFailingLocal struct {
 	Store[int, staleValue]
 	setErr, getErr error
+	// cleanGets 是前几次 Get 正常返回 miss 的次数，之后才返回 getErr。
+	cleanGets, gets int
 }
 
 func (s *admissionFailingLocal) Set(context.Context, staleValue) error { return s.setErr }
 func (s *admissionFailingLocal) Get(context.Context, int) (staleValue, bool, error) {
+	s.gets++
+	if s.gets <= s.cleanGets {
+		return staleValue{}, false, nil
+	}
 	return staleValue{}, false, s.getErr
 }
 
@@ -99,6 +106,14 @@ func TestCacheAdmissionLayeredRejectedReadFailures(t *testing.T) {
 				local.setErr = errors.New("L1 unavailable")
 			}
 			store := NewLayeredStore[int, staleValue](local, remote, 0, cfg)
+			if mode == "stale_read_error" {
+				// RR-20261004-02：stale 拒绝只在 L1 窗口有效时才读回 L1；窗口外
+				// （含 ttl≤0）过期副本没有否决权，交付权威值。这里验证窗口内读回
+				// 失败的情形：第一次 L1 检查正常 miss，回填被拒后的读回失败。
+				store = NewLayeredStore[int, staleValue](local, remote, time.Minute, cfg)
+				store.setLocalExpiry(1, time.Now())
+				local.cleanGets = 1
+			}
 			got, held, err := store.Get(ctx, 1)
 			if mode == "outage" {
 				if err != nil || !held || got.Payload != "rejected" {

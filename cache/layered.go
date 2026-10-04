@@ -53,6 +53,21 @@ func (s *LayeredStore[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	}
 	if s.local != nil {
 		backfillErr := s.local.Set(ctx, value)
+		// RR-20261004-02：L1 的副本只在自己的 TTL 窗口内算“已准入”。窗口外
+		// （ttl≤0 时永远在窗口外）它只是旧缓存，没有否决权威的资格：不同生命周期
+		// 的旧版本（删除后重建、Redis TTL 到期后晚到的写）会让它永久拒绝回填。
+		// 先删掉它再回填一次；再次被拒说明是删除后才落下的新状态（较新的删除墓碑、
+		// 并发 Set），交给下面 NC-14 的规则处理。
+		if errors.Is(backfillErr, ErrStaleWrite) && !s.localValid(key, time.Now()) {
+			if err := s.local.Delete(ctx, key); err != nil {
+				metrics.IncCounter("cache.layered.backfill_failed.total", nil, 1)
+				return value, true, nil
+			}
+			if s.ttl <= 0 {
+				return value, true, nil
+			}
+			backfillErr = s.local.Set(ctx, value)
+		}
 		// RR-20261004-NC-14：准入拒绝不是L1可用性故障，不能交付被拒的值。
 		// 读取已准入值；较新删除造成的miss保持miss，不续被拒回填的TTL。
 		if errors.Is(backfillErr, ErrStaleWrite) || errors.Is(backfillErr, ErrConflictingWrite) {
@@ -114,6 +129,14 @@ func (s *LayeredStore[K, V]) Set(ctx context.Context, value V) error {
 	}
 	if s.local != nil {
 		if err := s.local.Set(ctx, value); err != nil {
+			// RR-20261004-02：远端已经接受这次写，L1 以 stale 拒绝的只是它自己的
+			// 旧副本（或并发写入的更新副本）。写已生效，不能报成拒绝；删掉 L1
+			// 让下一次 Get 回到权威。没有远端时 L1 就是存储本身，拒绝照常返回。
+			if s.remote != nil && errors.Is(err, ErrStaleWrite) {
+				_ = s.local.Delete(ctx, key)
+				s.clearLocalExpiry(key)
+				return nil
+			}
 			return err
 		}
 		s.setLocalExpiry(key, time.Now())
