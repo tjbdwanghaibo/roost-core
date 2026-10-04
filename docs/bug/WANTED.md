@@ -818,7 +818,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：撤离超时的玩家像 RR-20261001-07 一样 `abandon` 本地租约状态，直到 eviction 真正结束。
 - **来源**：RR-20260921-03 修复记录 §未验证项、RR-20261001-07 记录。
 
-### W-2026-10-04-05：Windows 上 `project sync` 返回后 `.roost-sync-*` 暂存目录仍被占用，demo 模板测试的 TempDir 清理失败（两次）
+### W-2026-10-04-05：Windows 上 `project sync` 返回后 `.roost-sync-*` 暂存目录仍被占用，demo 模板测试的 TempDir 清理失败（两次）（已登记 [RR-20261004-12](RR-20261004-12.md)，已修复；是否为 Windows CI 两次失败的全部原因待 Windows 实跑确认）
 
 - **位置**：`codegen/internal/roost/project.go:181`（`os.MkdirTemp(filepath.Dir(absRoot), ".roost-sync-*")`）及 sync 期间启动的子进程 / 打开的文件。
 - **现象**：GitHub windows-compatibility 上 `TestDemoTemplateGeneratesABuildableWritePath`（10-04 12:09Z）与 `TestDemoTemplateFollowsTheGameServiceName`（10-04 晚）各失败一次：测试断言全部通过，结束时 `TempDir RemoveAll cleanup: unlinkat …\.roost-sync-…: The process cannot access the file because it is being used by another process.` 重跑通过；macOS / Linux 未见。
