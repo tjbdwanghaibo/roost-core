@@ -7,6 +7,7 @@ import (
 	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -35,9 +36,12 @@ var _ fetcd.IElectionFactory = (*ElectionFactory)(nil)
 
 // election implements fetcd.IElection using concurrency.Election.
 type election struct {
-	cli      *clientv3.Client
-	prefix   string
-	create   func(context.Context) (electionSession, electionBackend, error)
+	cli    *clientv3.Client
+	prefix string
+	create func(context.Context) (electionSession, electionBackend, error)
+	// revoke overrides the lease Revoke of an abandoned campaign (tests); nil
+	// uses cli.
+	revoke   func(context.Context, clientv3.LeaseID) error
 	session  electionSession
 	elect    electionBackend
 	isLeader atomic.Bool
@@ -46,12 +50,27 @@ type election struct {
 	leaderCh chan struct{}
 	closed   bool
 	campaign bool
+	// revoking is closed when the Revoke of the last abandoned campaign
+	// session ends; nil when none is pending. See abandon.
+	revoking chan struct{}
 }
 
 type electionSession interface {
 	Done() <-chan struct{}
 	Close() error
 }
+
+// leaseSession is the part of concurrency.Session that lets a failed campaign
+// stop the keepalive and revoke the lease under a context of its own.
+type leaseSession interface {
+	Orphan()
+	Lease() clientv3.LeaseID
+}
+
+// abandonedLeaseRevokeTimeout bounds the Revoke of a campaign session that
+// failed before leadership was published. The lease still expires at its TTL
+// if this Revoke does not get through.
+const abandonedLeaseRevokeTimeout = 5 * time.Second
 
 type electionBackend interface {
 	Campaign(ctx context.Context, value string) error
@@ -79,6 +98,19 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 		return err
 	}
 	e.mu.Lock()
+	for e.revoking != nil && !e.campaign {
+		// RR-20261004-06: a new session would queue its key behind the stale
+		// one still being revoked; waiting also keeps at most one abandoned
+		// Revoke per election.
+		pending := e.revoking
+		e.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		e.mu.Lock()
+	}
 	if e.campaign {
 		e.mu.Unlock()
 		return fmt.Errorf("etcd election: campaign already active")
@@ -116,11 +148,15 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	}
 	owned := &campaignSession{electionSession: session, cancel: cancelSession}
 	session = owned
+	// RR-20261004-06: every failure branch below hands the session to
+	// abandon. Canceling sessionCtx before session.Close (as 1502f973 did)
+	// made the SDK send its Revoke on that canceled context, so the lease and
+	// the candidate or leader key stayed until TTL and blocked other
+	// candidates.
 	e.mu.Lock()
 	if !e.campaign {
 		e.mu.Unlock()
-		cancelSession()
-		_ = session.Close()
+		e.abandon(ctx, owned, lifetime)
 		return fetcd.ErrNotLeader
 	}
 	e.session = session
@@ -129,14 +165,12 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 
 	// Campaign blocks until elected or context cancelled
 	if err := elect.Campaign(ctx, value); err != nil {
-		cancelSession()
-		_ = session.Close()
+		e.abandon(ctx, owned, lifetime)
 		e.finish(session)
 		return err
 	}
 	if !stopCancellation() || ctx.Err() != nil {
-		cancelSession()
-		_ = session.Close()
+		e.abandon(ctx, owned, lifetime)
 		e.finish(session)
 		return ctx.Err()
 	}
@@ -144,15 +178,13 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	e.mu.Lock()
 	if e.session != session || !e.campaign {
 		e.mu.Unlock()
-		cancelSession()
-		_ = session.Close()
+		e.abandon(ctx, owned, lifetime)
 		return fetcd.ErrNotLeader
 	}
 	select {
 	case <-session.Done():
 		e.mu.Unlock()
-		cancelSession()
-		_ = session.Close()
+		e.abandon(ctx, owned, lifetime)
 		e.finish(session)
 		return fetcd.ErrNotLeader
 	default:
@@ -198,6 +230,72 @@ func (s *campaignSession) releaseContext() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cancel()
+}
+
+// orphan ends a session whose campaign failed: it stops the keepalive and
+// releases the session context, and returns the lease still to revoke (ok
+// false when the session was already closed or has no lease handle, in which
+// case it is closed here). It shares closeOnce with Close.
+func (s *campaignSession) orphan() (lease clientv3.LeaseID, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeOnce.Do(func() {
+		leased, isLeased := s.electionSession.(leaseSession)
+		if !isLeased {
+			s.closeErr = s.electionSession.Close()
+			s.cancel()
+			return
+		}
+		leased.Orphan()
+		s.cancel()
+		lease, ok = leased.Lease(), true
+	})
+	return lease, ok
+}
+
+// abandon releases the session of a campaign that failed before leadership
+// was published (RR-20261004-06). The keepalive stops at once; the lease
+// Revoke runs under its own deadline derived from lifetime (the client
+// context, so closing the client cancels it), never from sessionCtx, which the
+// caller's cancellation may already have canceled. While the caller still
+// waits it waits for the Revoke, so a failed Campaign returns with its keys
+// gone, as before NC-11; a caller that has gone returns at once and the
+// election owns the single Revoke, which the next Campaign waits for.
+func (e *election) abandon(ctx context.Context, s *campaignSession, lifetime context.Context) {
+	lease, ok := s.orphan()
+	if !ok {
+		return
+	}
+	done := make(chan struct{})
+	e.mu.Lock()
+	e.revoking = done
+	e.mu.Unlock()
+	go func() {
+		revokeCtx, cancel := context.WithTimeout(lifetime, abandonedLeaseRevokeTimeout)
+		_ = e.revokeLease(revokeCtx, lease) // On failure the lease expires at its TTL.
+		cancel()
+		e.mu.Lock()
+		if e.revoking == done {
+			e.revoking = nil
+		}
+		e.mu.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+func (e *election) revokeLease(ctx context.Context, lease clientv3.LeaseID) error {
+	if e.revoke != nil {
+		return e.revoke(ctx, lease)
+	}
+	if e.cli == nil {
+		return nil
+	}
+	_, err := e.cli.Revoke(ctx, lease)
+	return err
 }
 
 func (e *election) Resign(ctx context.Context) error {

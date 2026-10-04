@@ -6,6 +6,7 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-208 | 某节点 Campaign 失败或被取消（超时重试的候补节点尤其常见）后，其他候选约一分钟内都选不上，或 etcd 里堆着无主 lease；`etcdctl lease list` / `lease timetolive` 显示剩余 TTL 接近 60s；客户端日志 `LeaseRevoke` 报 `context canceled` | RR-20261004-06：v1.19.0 竞选失败清理先取消 session context 再 Close，SDK 用这个已取消的 context 发 Revoke，lease 与候选 / 领导键留到 TTL | 失败 Campaign 的返回错误、竞选前缀下的键与其 lease（`etcdctl get --prefix <prefix> -w json` 的 `lease`、`etcdctl lease timetolive <id>`）、客户端 `LeaseRevoke` 告警 | 升级到含修复的 core（失败分支由 election 用独立、5s 截止的 context 撤销 lease，下一次 Campaign 等它结束）；未升级时等 TTL 自然过期，或运维 `etcdctl lease revoke <id>` 撤掉确认已无主的 lease，不要删在位领导者的键 |
 | T-206 | RefHMap Set超时后较新写被覆盖，或升级后Lua失败明确返错 | RR-20261004-NC-21：旧Eval错误无身份重放 | Set原始error/errors.Is、权威读回、版本；旧degraded计数已移除 | 使用停止重放的修复；未知不等于未应用，不无条件DEL/重试；adapter需支持已有Lua，按业务现有权威/版本能力恢复 |
 | T-202 | RefHMap指针根Get panic，或nil根进入业务KeyOf | RR-20261004-NC-16：根内容类型与V形状不同 | 根V、nil输入、ErrRefHMapUnsupported | 使用保留根形状的修复；nil根明确拒绝，不转成功miss |
 | T-203 | 自定义文本字段Set成功却Get解码失败 | RR-20261004-NC-17：旧编码漏指针receiver codec | MarshalText方法集、实际Redis字节、解码错误 | 使用地址副本编码；已写坏字节需显式兼容/迁移，不自动重编码 |
