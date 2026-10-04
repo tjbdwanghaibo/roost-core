@@ -791,3 +791,13 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **独立review（2026-10-04）**：真实Lua4场景2fail/2控制确认同一RR，见 [本轮反例](../review/evidence/noncore-review-20261004-18/README.md#新增wanted)。提交前另线已提交3bb901fb/5d386146修复，本轮将补独立验收；不覆盖原根因和实现记录。
 
 - **最终验收（2026-10-04）**：RR-20261004-01已修，本轮同一4真实Redis场景、13正式回归race/vet、3真实Redis集成全部通过，旧分流/红证据保留；见 [独立验收](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。上方“将补验收”为同步过程时点，不是待修状态。
+
+### W-2026-10-04-02：NatsMod 在连接 drain 超时后保留已硬关闭的 Assembly，重试永远拿到 `ErrConnectionClosed`
+
+- **位置**：`kit/nats/nats_mod.go`（`3560a19b` 加的 `return err` 保留 `m.asm`）与 `Assembly.Close` 的连接 drain 路径，基线 RR-20261004-07 修复之后。
+- **现象**：连接 drain 超时后，`Assembly.Close` 已经硬关闭连接并返回 ctx 错误，但 NatsMod 仍保留 `m.asm`；重试时 `Client.DrainWithContext` 对已关闭连接拿到 `ErrConnectionClosed`（nats.go `Conn.Drain` 第一个分支），重试永远失败、引用不置空。资源其实已释放。
+- **为何可疑**：与 RR-20261004-07 同族——“取消后保留资源供再次排空”在连接这一层不成立；停止流程报错但无法收敛。
+- **会红的测试草稿**：真实 NATS 上让 drain 超过预算（大量未确认消息 + 极短预算）→ 第一次 Stop 返回 ctx 错误 → 第二次 Stop 期望 nil 且 `m.asm == nil`。
+- **候选修法**：`Assembly.Close` 硬关闭后返回可识别的“已关闭（未完整排空）”终态错误，NatsMod 据此置空引用；或重试时把 `ErrConnectionClosed` 视为排空已结束。
+- **来源**：RR-20261004-07 修复记录 §未验证项。
+

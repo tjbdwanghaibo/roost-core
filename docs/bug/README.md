@@ -128,7 +128,7 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
-[RR-20261004-07](RR-20261004-07.md)：P3 NatsMod 停止时 Bus 超过预算后保留 bus / asm 以便重试，但 `Bus.StopWithContext` 第一次就丢了 pool 并缓存超时错误，重试永远失败，Assembly（NATS 连接、RPC 回调池）永不关闭（NC 修复复审发现）（已确认，未修复）。
+[RR-20261004-07](RR-20261004-07.md)：P3 NatsMod 停止时 Bus 超过预算后保留 bus / asm 以便重试，但 `Bus.StopWithContext` 第一次就丢了 pool 并缓存超时错误，重试永远失败，Assembly（NATS 连接、RPC 回调池）永不关闭（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-07.md)）。
 [RR-20261004-06](RR-20261004-06.md)：**P2** etcd Campaign 在 session 建好后的失败 / 取消分支不再撤销 lease，候选键或领导键残留到 TTL（缺省 60s），其他候选选不上（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-06.md)）。
 [RR-20261004-05](RR-20261004-05.md)：P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-05.md)）。
 [RR-20261004-04](RR-20261004-04.md)：P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-04.md)）。

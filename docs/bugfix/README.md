@@ -33,6 +33,7 @@
 [RR-20261004-04](RR-20261004-04.md)：ReadThrough loader 回填复用 L2 回填的准入规则（stale / conflict 读回 L1，无值则 miss / 拒绝），L2 回写的 stale 不再让读取失败（未发版）。
 [RR-20261004-02](RR-20261004-02.md)：Layered 回填遇 stale 只在 L1 窗口有效时读回 L1，窗口外（含 ttl≤0）删 L1 后以权威值回填；远端已生效的 `Set` 不再因 L1 拒绝报错；NC-14 / NC-15 复核补修（未发版）。
 [RR-20261004-06](RR-20261004-06.md)：etcd Campaign 失败 / 取消分支先 Orphan 停 keepalive，再由 election 持有唯一、5s 截止、client ctx 派生的独立 Revoke；caller 在等时等它、已取消时立即返回，下一次 Campaign 先等它；真实 etcd 3 条先红后绿；T-208（未发版）。
+[RR-20261004-07](RR-20261004-07.md)：`Bus.StopWithContext` 超预算只返回 ctx 错误并保留 pool，之后的调用继续等同一次排空；NatsMod 只在 ctx 错误时保留 bus / asm、终态错误照常关闭 Assembly；`Bus.Stop()` / `RPCClient.Stop()` 停止已发起时立即返回（复审 S2）；RPC 停止排空加 `callbackMu` 屏障（S1，确定性红）；两条回归由挂起改为断言失败（S4）（未发版）。
 [RR-20261004-01](RR-20261004-01.md)：取锁 token 按锁对象分代（随机前缀 + 递增序号），owner 是本锁对象更早一代时下一次 TryLock 由 Lua 换新 token / 新 fence 取回，别人持有照旧 NotAcquired、迟到旧代脚本挤不掉新代；RR-20260930-21 的 `releaseUnknownToken` 并入同一判定；T-207（未发版）。
 [RR-20261001-06](RR-20261001-06.md)：名字被别的账号 committed 后同名重试自动释放 pending slot（仍答 `ErrNameTaken`，孤儿未发布角色记录保留且不可玩）；新 owner-only `Admin.ResolvePendingCreation` 备注写 `Account.admin_note`、版本 + 身份围栏 DeleteIf 释放，名字仍被本计划 reserved / committed、已发布、legacy 空 slot 拒绝 `ErrNotResolvable`（560115）；Memory + 真实 Redis 真等租约过期先红后绿；T-182（未发版）。
 [RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（未发版）。
