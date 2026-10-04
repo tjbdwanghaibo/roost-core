@@ -1587,3 +1587,277 @@ func TestARefreshPassStopsWaitingForRetakesWhenItsBudgetRunsOut(t *testing.T) {
 		}
 	}
 }
+
+// RR-20261004-14：本地准入窗口从 Redis 设下键 TTL 的那次请求起算，不从确认那一刻起算。
+//
+// 跨间断的认领先 SetNX（键已是自己的则 CompareAndExpire）——键的 TTL 在这一刻设好——
+// 再扔掉间断前的副本，这一步最多等 evictBudget(5s)。旧实现等完之后才按当时的 now 起算
+// Lease，本地窗口比键多活一整份撤离等待。AdmissionGuard 是留给在途事务的：准入在键
+// 可能过期之前 guard 那么久收口，最后一刻放行的事务才来得及在别的进程合法接手之前
+// 结束；撤离等满时，准入一直开到键过期那一刻，这段保护整个被吃掉。续租同理：键的
+// TTL 在 Refresh 被问的时候设好，Refresh 本身慢（逐个玩家往返、Redis 卡顿）时确认
+// 时刻的 now 晚于键。与 RR-20261004-10 修掉的"续租确认排在等待之后"同形。
+// 承诺：准入在"设键那次请求发出的时刻 + Lease − AdmissionGuard"之前收口。
+func TestAdmissionStopsAGuardBeforeTheKeyRedisSetCanExpire(t *testing.T) {
+	// recordAsks makes the table note, on the table's clock, when this
+	// process asked Redis to claim; Redis sets the TTL no earlier than that.
+	recordAsks := func(owners *PlayerOwners, table *fakeLeaseTable, clock *time.Time) (askedAt func() time.Time) {
+		var (
+			mu sync.Mutex
+			at time.Time
+		)
+		owners.store = claimHookTable{fakeLeaseTable: table, before: func(int64) error {
+			mu.Lock()
+			at = *clock
+			mu.Unlock()
+			return nil
+		}}
+		return func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return at
+		}
+	}
+	// slowDrop is the drop of an entity a transaction is holding: it ends
+	// after a whole evictBudget on the table's clock.
+	slowDrop := func(clock *time.Time) residentEvictor {
+		return evictorFunc(func(context.Context, int64) error {
+			*clock = clock.Add(evictBudget)
+			return nil
+		})
+	}
+	requireAdmissionEndsByTheKey := func(t *testing.T, owners *PlayerOwners, clock *time.Time, setAt time.Time, how string) {
+		t.Helper()
+		owners.mu.Lock()
+		validUntil := owners.local[42].validUntil
+		owners.mu.Unlock()
+		if keyExpires := setAt.Add(playerroute.Lease); validUntil.After(keyExpires) {
+			t.Errorf("%s: the local window ends %s after the key Redis set can expire (asked at +0s, Lease %s, local window until +%s)",
+				how, validUntil.Sub(keyExpires), playerroute.Lease, validUntil.Sub(setAt))
+		}
+		*clock = setAt.Add(playerroute.Lease - AdmissionGuard + time.Second)
+		if err := owners.Admit(42); err == nil {
+			t.Errorf("%s: a transaction was admitted %s before the key can expire, inside the guard band (%s) reserved for work in flight",
+				how, AdmissionGuard-time.Second, AdmissionGuard)
+		}
+	}
+
+	t.Run("login", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		askedAt := recordAsks(owners, table, clock)
+		owners.Evict(slowDrop(clock))
+		if mine, err := owners.Claim(context.Background(), 42); !mine || err != nil {
+			t.Fatalf("claim: %v %v", mine, err)
+		}
+		requireAdmissionEndsByTheKey(t, owners, clock, askedAt(), "a login across a gap")
+	})
+
+	t.Run("background-claim", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		askedAt := recordAsks(owners, table, clock)
+		owners.Evict(slowDrop(clock))
+		if owned, err := owners.Owns(context.Background(), 42); !owned || err != nil {
+			t.Fatalf("owns: %v %v", owned, err)
+		}
+		requireAdmissionEndsByTheKey(t, owners, clock, askedAt(), "a background consumer's claim")
+	})
+
+	t.Run("refresh-retake", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		askedAt := recordAsks(owners, table, clock)
+		ctx := context.Background()
+		if mine, err := owners.Claim(ctx, 42); !mine || err != nil {
+			t.Fatalf("claim: %v %v", mine, err)
+		}
+		// The key lapsed and nobody took it: the pass re-takes it, and the
+		// drop of the copy from before the gap waits on a busy entity.
+		owners.Evict(slowDrop(clock))
+		delete(table.owner, 42)
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		if err := owners.Admit(42); err != nil {
+			t.Fatalf("precondition: the lapsed lease should have been re-taken: %v", err)
+		}
+		requireAdmissionEndsByTheKey(t, owners, clock, askedAt(), "a re-take by the refresh loop")
+	})
+
+	t.Run("renewal", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		ctx := context.Background()
+		if mine, err := owners.Claim(ctx, 42); !mine || err != nil {
+			t.Fatalf("claim: %v %v", mine, err)
+		}
+		// A slow Refresh: the key's TTL is set when it is asked, and the
+		// answer comes back seconds later.
+		table.refresh = func(playerID int64) playerroute.RefreshResult {
+			*clock = clock.Add(3 * time.Second)
+			return playerroute.RefreshResult{PlayerID: playerID, Held: true}
+		}
+		*clock = clock.Add(playerroute.RefreshInterval)
+		asked := *clock
+		owners.renew(ctx)
+		requireAdmissionEndsByTheKey(t, owners, clock, asked, "a renewal")
+	})
+}
+
+// claimHookTable is the fake table with a step before each Claim: where a
+// test notes the moment Redis was asked, or makes a Claim fail AFTER it has
+// landed — a SetNX whose reply was lost.
+type claimHookTable struct {
+	*fakeLeaseTable
+	before func(playerID int64) error
+}
+
+func (table claimHookTable) Claim(ctx context.Context, playerID int64) (playerroute.Route, error) {
+	fail := table.before(playerID)
+	route, err := table.fakeLeaseTable.Claim(ctx, playerID)
+	if fail != nil {
+		return playerroute.Route{}, fail
+	}
+	return route, err
+}
+
+// RR-20261004-14（同一修复单元的另一半）：认领的 SetNX 落地了、回复却丢了，下一轮
+// 续租答 Held 也不能把一份没扔掉的副本当成连续持有。
+//
+// token 按进程固定（RR-20260920-03），Refresh 分不出"续的是间断前的键，还是本进程
+// 刚重新 SetNX 的键"。旧实现里跨间断的认领在 store.Claim 报错时什么都不记：刷新循环
+// 那条路径上玩家仍是 interrupted、Admit 拒绝，可下一轮 Refresh 答 Held，confirmRenewal
+// 就清掉 interrupted、延长窗口——间断前的副本从没扔过，却被重新放行；后台 Owns 那条
+// 路径（续租一直 Err、窗口跑完、键过期之后认领）同样被下一轮 Held 续回服务。承诺：
+// 跨间断的认领报错时本地状态记为 interrupted；对 interrupted 的租约，Held 不是确认，
+// 只说明"键又是我们的了"——按丢失的租约重新认领，扔掉副本再确认。
+func TestAClaimRedisDidNotAnswerIsNotConfirmedByTheNextRenewal(t *testing.T) {
+	replyLost := errors.New("the reply was lost (the SetNX landed)")
+	// lossyClaims arms the next Claim to land in the table and still fail.
+	lossyClaims := func(owners *PlayerOwners, table *fakeLeaseTable) (loseNextReply func()) {
+		var armed atomic.Bool
+		owners.store = claimHookTable{fakeLeaseTable: table, before: func(int64) error {
+			if armed.CompareAndSwap(true, false) {
+				return replyLost
+			}
+			return nil
+		}}
+		return func() { armed.Store(true) }
+	}
+	requireDroppedBeforeServed := func(t *testing.T, owners *PlayerOwners, evictor *evictorStub) {
+		t.Helper()
+		if err := owners.Admit(42); err == nil && len(evictor.taken()) == 0 {
+			t.Fatalf("the next renewal put player 42 back in service on the copy from before the gap, which was never dropped: dropped=%v", evictor.taken())
+		}
+		if err := owners.Admit(42); err != nil {
+			t.Fatalf("player 42 did not come back into service once the copy was dropped: %v", err)
+		}
+		if dropped := evictor.taken(); len(dropped) != 1 || dropped[0] != 42 {
+			t.Fatalf("the copy from before the gap should be dropped exactly once before serving: dropped=%v", dropped)
+		}
+	}
+
+	t.Run("refresh-retake", func(t *testing.T) {
+		owners, table, fencer, clock := ownersUnderTest(t)
+		loseNextReply := lossyClaims(owners, table)
+		evictor := &evictorStub{}
+		owners.Evict(evictor)
+		ctx := context.Background()
+		if mine, err := owners.Claim(ctx, 42); !mine || err != nil {
+			t.Fatalf("claim: %v %v", mine, err)
+		}
+		// Logged in, so no pass hands the lease back on the way.
+		fencer.connect(42)
+		evictor.forget()
+		// The key lapsed; the pass re-takes it, and the reply is lost.
+		delete(table.owner, 42)
+		loseNextReply()
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+			t.Fatalf("precondition: a re-take Redis did not answer must not be admitted: %v", err)
+		}
+		if table.owner[42] != table.sid || len(evictor.taken()) != 0 {
+			t.Fatalf("precondition: the SetNX should have landed with nothing dropped: owner=%v dropped=%v", table.owner, evictor.taken())
+		}
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		requireDroppedBeforeServed(t, owners, evictor)
+	})
+
+	t.Run("background-claim", func(t *testing.T) {
+		owners, table, fencer, clock := ownersUnderTest(t)
+		loseNextReply := lossyClaims(owners, table)
+		evictor := &evictorStub{}
+		owners.Evict(evictor)
+		ctx := context.Background()
+		if mine, err := owners.Claim(ctx, 42); !mine || err != nil {
+			t.Fatalf("claim: %v %v", mine, err)
+		}
+		fencer.connect(42)
+		evictor.forget()
+		// This process cannot reach Redis for longer than the lease: every
+		// renewal is unknown, admission runs out, the key lapses.
+		table.refresh = func(playerID int64) playerroute.RefreshResult {
+			return playerroute.RefreshResult{PlayerID: playerID, Err: errors.New("redis unreachable")}
+		}
+		for i := 0; i < 4; i++ {
+			*clock = clock.Add(playerroute.RefreshInterval)
+			owners.renew(ctx)
+		}
+		delete(table.owner, 42)
+		// Redis is back. A background consumer asks; its claim lands and the
+		// reply does not.
+		table.refresh = nil
+		loseNextReply()
+		if owned, err := owners.Owns(ctx, 42); owned || !errors.Is(err, replyLost) {
+			t.Fatalf("precondition: the claim should have failed: owned=%v err=%v", owned, err)
+		}
+		if table.owner[42] != table.sid || len(evictor.taken()) != 0 {
+			t.Fatalf("precondition: the SetNX should have landed with nothing dropped: owner=%v dropped=%v", table.owner, evictor.taken())
+		}
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		requireDroppedBeforeServed(t, owners, evictor)
+	})
+
+	// The other side of the mark: a claim Redis did not answer, for a lease
+	// whose key never stopped being ours, changes nothing. Here Admit refuses
+	// only because a hand-back's drop is still running (RR-20261004-11); the
+	// player comes back when the drop ends, without a re-take.
+	t.Run("a-lease-that-never-lapsed", func(t *testing.T) {
+		owners, table, fencer, clock := ownersUnderTest(t)
+		loseNextReply := lossyClaims(owners, table)
+		owners.evictWait = 50 * time.Millisecond
+		ctx := context.Background()
+		if owned, err := owners.Owns(ctx, 77); !owned || err != nil {
+			t.Fatalf("owns: %v %v", owned, err)
+		}
+		evictor := newBlockingEvictor()
+		owners.Evict(evictor)
+		var once sync.Once
+		endDrop := func() { once.Do(func() { close(evictor.release) }) }
+		t.Cleanup(endDrop)
+		*clock = clock.Add(HandBackIdle + time.Second)
+		owners.renew(ctx)
+		if !dropRunning(owners, 77) || table.owner[77] != table.sid {
+			t.Fatalf("precondition: the hand-back's drop should still be running with the lease kept: owner=%v", table.owner)
+		}
+		loseNextReply()
+		if mine, err := owners.Claim(ctx, 77); mine || !errors.Is(err, replyLost) {
+			t.Fatalf("precondition: the claim should have failed: mine=%v err=%v", mine, err)
+		}
+		endDrop()
+		waitDropEnded(t, owners, 77)
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("a claim Redis did not answer took a lease that never lapsed out of service: %v", err)
+		}
+		// The next renewal confirms it as the renewal it is: no re-take, no
+		// second drop. (Connected, so the pass does not hand it back.)
+		fencer.connect(77)
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("player 77 is out of service after the next renewal: %v", err)
+		}
+		if drops := len(evictor.calls); drops != 1 {
+			t.Fatalf("the next renewal re-took a lease that never lapsed: %d drops, want only the hand-back's", drops)
+		}
+	})
+}

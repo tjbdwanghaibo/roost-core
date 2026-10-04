@@ -834,7 +834,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：设 `cmd.WaitDelay`，并按平台杀整个进程组（Unix `Setpgid` + kill(-pgid)，Windows job object 或 `taskkill /T`）。
 - **来源**：RR-20261004-12 调查报告。
 
-### W-2026-10-04-07：playerowner 跨间断的 `claim` 在撤离等待之后才按 `now` 起算本地窗口，而 SetNX 在等待之前就设了键 TTL，本地窗口最多越过键 ≤5s
+### W-2026-10-04-07：playerowner 跨间断的 `claim` 在撤离等待之后才按 `now` 起算本地窗口，而 SetNX 在等待之前就设了键 TTL，本地窗口最多越过键 ≤5s（已登记 RR-20261004-14，含“另记”，已修复未发版）
 
 - **位置**：`demo/internal/service/game/playerowner.go.tmpl` `claim` → `confirmClaim`（RR-20261004-10 之后）。
 - **现象**（读码）：SetNX 在 `dropResident` 等待之前落地并设 TTL；`confirmClaim` 在等待之后按当时的 `now` 起算窗口，本地准入比键多活最多一个 `evictBudget`。与 RR-20261004-10 修掉的“续租确认排在等待之后”同形。

@@ -277,7 +277,9 @@ type leaseState struct {
 	// operator, a failover, a flushed Redis — makes the lease somebody else's
 	// to take while this process's own window still looks open. Redis is the
 	// authority on that question, so its answer sticks until a fresh claim
-	// clears it (RR-20260920-09).
+	// clears it (RR-20260920-09) — a renewal does not, though it used to
+	// (RR-20261004-14). A claim across a gap that Redis did not answer sets
+	// it as well (see markUnansweredClaim).
 	interrupted bool
 	// lastUsed is when this lease last answered a question — a message
 	// through the gate, a consumer asking Owns, a fresh claim. A lease
@@ -551,12 +553,27 @@ func (owners *PlayerOwners) refreshLoop(ctx context.Context) {
 //     flushed Redis) held the loop for longer than the leases it had just
 //     renewed — the same shape as the hand-back pass in RR-20260921-04, and
 //     now under the same budget.
+//
+// And a confirmed renewal's window starts when Redis was ASKED, not when the
+// answer came back (RR-20261004-14): Refresh renews one player after another,
+// each key's TTL set on the way, and a slow Redis returns the batch seconds
+// after the first of them started to run down.
 func (owners *PlayerOwners) renew(ctx context.Context) {
 	var lost []int64
+	asked := owners.now()
 	for _, result := range owners.store.Refresh(ctx, owners.snapshot()) {
 		switch {
 		case result.Held:
-			owners.confirmRenewal(result.PlayerID)
+			if !owners.confirmRenewal(result.PlayerID, asked) {
+				// Held, for a lease Redis had already said was not ours:
+				// the key is ours again only because a claim of this
+				// process put the token back without confirming — one
+				// whose reply was lost, or one still dropping the copy.
+				// That is a claim across a gap, not a renewal, and it goes
+				// the way of the lost leases: re-claimed, the copy
+				// dropped, then confirmed.
+				lost = append(lost, result.PlayerID)
+			}
 		case result.Err != nil:
 			// UNKNOWN. The lease may still be ours, so this does not give it
 			// up — but it does not extend the deadline either, and admission
@@ -662,7 +679,10 @@ func (owners *PlayerOwners) retakeOne(ctx context.Context, pass refreshPass, pla
 	case err != nil:
 		// Redis did not answer the re-claim. Nothing was dropped and
 		// the player is still in the scene; admission runs out on
-		// its own and the next pass asks again.
+		// its own and the next pass asks again. The SetNX may have
+		// landed all the same: the player stays interrupted, so the
+		// next pass's Held for them is a re-take, not a renewal
+		// (RR-20261004-14).
 		slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", playerID, "err", err)
 	case mine:
 		// Claim dropped the copy from before the gap on the way
@@ -857,10 +877,23 @@ func (owners *PlayerOwners) finishHandBack(chosen handBack, released bool) {
 // A renewal is NOT use. If it were, every lease this process holds would look
 // busy forever and none would ever be handed back — which is the whole of
 // RR-20260920-10.
-func (owners *PlayerOwners) confirmRenewal(playerID int64) {
+//
+// asked is when the renewal was sent; the window starts there (see
+// confirmLocked). It reports false, and confirms nothing, for a lease that is
+// interrupted: Redis said it was not ours, and Held now only means our token
+// is back in the key. The token is fixed per process (RR-20260920-03), so the
+// renewal cannot tell the key from before the gap from one a claim of this
+// process set again — a claim whose reply was lost, which never dropped the
+// copy from before the gap. Confirming it here cleared the interruption and
+// admitted writes to that copy (RR-20261004-14). The caller re-takes it.
+func (owners *PlayerOwners) confirmRenewal(playerID int64, asked time.Time) bool {
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
-	owners.confirmLocked(playerID, false)
+	if state := owners.local[playerID]; state != nil && state.interrupted {
+		return false
+	}
+	owners.confirmLocked(playerID, false, asked)
+	return true
 }
 
 // confirmClaim records a FRESH claim, which IS use: somebody asked for this
@@ -873,19 +906,27 @@ func (owners *PlayerOwners) confirmRenewal(playerID int64) {
 // step it had just admitted. "When was this lease last USED" and "when was it
 // last renewed" are different questions, and every caller knows which one it
 // is answering.
-func (owners *PlayerOwners) confirmClaim(playerID int64) {
+func (owners *PlayerOwners) confirmClaim(playerID int64, asked time.Time) {
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
-	owners.confirmLocked(playerID, true)
+	owners.confirmLocked(playerID, true, asked)
 }
 
-func (owners *PlayerOwners) confirmLocked(playerID int64, used bool) {
+// confirmLocked records a confirmation of a lease whose key Redis was asked to
+// set at asked. The window runs from asked, not from now: Redis set the key's
+// TTL while answering that request, so the key lives at least until
+// asked + Lease, and the window must not end later — AdmissionGuard, the time
+// left for work in flight, is measured back from it. Counted from the
+// confirmation, a claim across a gap, which drops the copy between the two
+// and may wait evictBudget for it, admitted writes right up to the moment the
+// key could expire (RR-20261004-14).
+func (owners *PlayerOwners) confirmLocked(playerID int64, used bool, asked time.Time) {
 	state := owners.local[playerID]
 	if state == nil {
 		state = &leaseState{}
 		owners.local[playerID] = state
 	}
-	state.validUntil = owners.now().Add(playerroute.Lease)
+	state.validUntil = asked.Add(playerroute.Lease)
 	state.lost = false
 	state.interrupted = false
 	// handingBack is not touched: it belongs to the hand-back that set it
@@ -1115,8 +1156,18 @@ func (owners *PlayerOwners) claim(ctx, dropCtx context.Context, playerID int64) 
 	// refusing for as long as that drop runs, and joins it the same way
 	// (RR-20261004-11).
 	continuous := owners.Admit(playerID) == nil && !waited
+	// The key's TTL is set by the request below; the window this claim
+	// confirms starts here, before it, and not after the drop that may wait
+	// evictBudget in between (RR-20261004-14).
+	asked := owners.now()
 	route, err := owners.store.Claim(ctx, playerID)
 	if err != nil {
+		if !continuous {
+			// The SetNX may have landed with only its reply lost, putting
+			// this process's token back in the key with the copy from
+			// before the gap still resident (RR-20261004-14).
+			owners.markUnansweredClaim(playerID)
+		}
 		return false, err
 	}
 	mine := route.SID == owners.store.SID()
@@ -1146,8 +1197,33 @@ func (owners *PlayerOwners) claim(ctx, dropCtx context.Context, playerID int64) 
 			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w: %w", playerID, errStaleCopyKept, err)
 		}
 	}
-	owners.confirmClaim(playerID)
+	owners.confirmClaim(playerID, asked)
 	return mine, nil
+}
+
+// markUnansweredClaim records that a claim across a gap got no answer from
+// Redis, for a player this process still has lease state for. The claim may
+// have landed — the token is fixed per process, so the next renewal would
+// then be told Held — and nothing of the gap has been dealt with: the copy
+// from before it was not dropped. Marked interrupted, the lease is refused
+// by Admit and the next renewal's Held is not a confirmation but a re-take
+// (see confirmRenewal), which drops the copy before anything is admitted.
+// Before, only a re-claim by the refresh loop left the player interrupted,
+// and the next Held cleared it anyway; a claim by a login or a background
+// consumer, for a lease whose window had run out, left nothing at all.
+//
+// A lease Admit refuses only because a drop is running (RR-20261004-11), or
+// one the claim found serviceable after waiting for a hand-back, is left
+// alone: its key never stopped being ours, so the claim cannot have
+// re-created it.
+func (owners *PlayerOwners) markUnansweredClaim(playerID int64) {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.local[playerID]
+	if state == nil || owners.refusalLocked(playerID, state) == nil {
+		return
+	}
+	state.interrupted = true
 }
 
 // enterClaim lets a Claim of the player go ahead: it waits for a hand-back of
