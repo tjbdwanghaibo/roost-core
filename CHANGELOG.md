@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **Layered / ReadThrough 准入拒绝不再否决权威或让读取失败**（RR-20261004-02 P2、RR-20261004-04 P3，NC 复审发现）：`LayeredStore` 的 L1 副本只在 TTL 窗口内能以 stale 拒绝回填，窗口外（含 ttl≤0）删掉旧副本、交付并回填权威值；`Set` 在远端已生效时不再因 L1 拒绝返回 `ErrStaleWrite`（生成的带版本 Cached Redis DAO 受益）。`ReadThroughStore` 的 loader 回填被 L1 拒绝时交付 L1 已准入值或 miss（conflict 无值仍拒绝），loader 结果回写 L2 的 stale 不再让 `Get` 失败。[02](docs/bugfix/RR-20261004-02.md)、[04](docs/bugfix/RR-20261004-04.md)
 - **RefHMap Patch 不再让同一条记录的 hash 分开过期**（RR-20261004-03，P2，NC 复审发现）：Patch 原先只续期根到叶路径上的 hash，兄弟 hash 先过期后 `Get` 报 `ok=true` 返回部分记录（写入的值读回零值），NC-18 把它扩大到所有嵌套路径。现在 Patch 续期整条记录的全部布局 hash，并把它们并入 `__keys`（顺带修复旧数据 Patch 后 Delete 漏删）；`Get` 遇到被引用、按布局必然非空却已缺失的子 hash 时整条报 miss，修复前写入的这类数据会按缺失重载。存储格式不变。[记录](docs/bugfix/RR-20261004-03.md)
 - **mongotest 唯一索引的 null / sparse 语义**（RR-20261004-05，P3，NC 复审发现）：替身以前缺任一唯一字段就跳过检查、也不看 `Sparse`，比真实 Mongo 宽松。现在非 sparse 唯一索引把缺字段（含穿过标量父字段的点路径）当 BSON null、与显式 null 相等，建索引与写入报 `ErrDuplicateKey`；sparse 只在全部索引字段都缺时跳过。仅测试替身行为收紧，需要允许缺字段的测试应设 `Sparse: true`（真实部署同样需要）。[记录](docs/bugfix/RR-20261004-05.md)
 

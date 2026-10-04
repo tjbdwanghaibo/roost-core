@@ -30,6 +30,8 @@
 
 [RR-20261004-05](RR-20261004-05.md)：mongotest 唯一索引登记 `Sparse`；缺字段按 BSON null 与显式 null 相等，sparse 只跳过全部字段都缺的文档（复合语义经隔离副本集 8.0.28 核对）；NC-27 先验存量保持，8 个 mongotest 消费包 race 全绿、无 fixture 改动（未发版）。
 [RR-20261004-03](RR-20261004-03.md)：RefHMap Patch 续期整条记录的全部布局 hash（同槽、全部声明在 KEYS），注册表并入布局全集；Get 遇到被引用、按布局必然非空却缺失的子 hash 整条报 miss；真实 Redis 5 子项 + 替身 1 条先红后绿，临时 3 主 Cluster 探针通过（未发版）。
+[RR-20261004-04](RR-20261004-04.md)：ReadThrough loader 回填复用 L2 回填的准入规则（stale / conflict 读回 L1，无值则 miss / 拒绝），L2 回写的 stale 不再让读取失败（未发版）。
+[RR-20261004-02](RR-20261004-02.md)：Layered 回填遇 stale 只在 L1 窗口有效时读回 L1，窗口外（含 ttl≤0）删 L1 后以权威值回填；远端已生效的 `Set` 不再因 L1 拒绝报错；NC-14 / NC-15 复核补修（未发版）。
 [RR-20261004-01](RR-20261004-01.md)：取锁 token 按锁对象分代（随机前缀 + 递增序号），owner 是本锁对象更早一代时下一次 TryLock 由 Lua 换新 token / 新 fence 取回，别人持有照旧 NotAcquired、迟到旧代脚本挤不掉新代；RR-20260930-21 的 `releaseUnknownToken` 并入同一判定；T-207（未发版）。
 [RR-20261001-06](RR-20261001-06.md)：名字被别的账号 committed 后同名重试自动释放 pending slot（仍答 `ErrNameTaken`，孤儿未发布角色记录保留且不可玩）；新 owner-only `Admin.ResolvePendingCreation` 备注写 `Account.admin_note`、版本 + 身份围栏 DeleteIf 释放，名字仍被本计划 reserved / committed、已发布、legacy 空 slot 拒绝 `ErrNotResolvable`（560115）；Memory + 真实 Redis 真等租约过期先红后绿；T-182（未发版）。
 [RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（未发版）。
