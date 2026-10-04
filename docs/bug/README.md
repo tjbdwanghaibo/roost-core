@@ -1,13 +1,13 @@
 # Roost Review 问题索引
 
-**10-04 非三大核心第二批：三个 P2、一个 P3 均已复现、未修。**[问题与实施建议](REVIEW-2026-10-04-noncore-02.md) · [运行/范围](../review/REVIEW-2026-10-04-noncore-02.md) · [复跑证据](../review/evidence/noncore-review-20261004-02/README.md)。11 个失败反例、5 个正常控制及 1 个 Health 契约观察，既有六包 race/vet 通过。上一批四项 NC 已修，编号日期不同。
+**10-04 第二批修复更新：RR-20261004-NC-01～04 4/4 已修、声明场景验证，未发版。**[原问题](REVIEW-2026-10-04-noncore-02.md) · [修复运行](../review/REVIEW-2026-10-04-noncore-03.md) · [正式红绿](../bugfix/evidence/noncore-bugfix-20261004-02/README.md)。原14项转绿，正式35项/11包race/vet通过；原审查11个失败与Health契约观察保留，后者尚非RR。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261004-NC-01](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-01) | P2 Manager 停止 panic 跳过清理 / 回滚丢失 Start 错误 | 未修复；3 个反例 |
-| [RR-20261004-NC-02](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-02) | P2 重复 Start 重复执行 singleton 生命周期 | 未修复；1 个反例 |
-| [RR-20261004-NC-03](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-03) | P3 Admin 空 map / 数组内 map 泄漏 schema 引用 | 未修复；6 个反例，不是鉴权绕过 |
-| [RR-20261004-NC-04](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-04) | P2 Ops 取消 Shutdown 后遗忘活跃 server | 未修复；1 个真实回环 HTTP 反例 |
+| [RR-20261004-NC-01](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-01) | P2 Manager 停止 panic 跳过清理 / 回滚丢失 Start 错误 | [已修/声明场景验证](../bugfix/RR-20261004-NC-01.md)，未发版 |
+| [RR-20261004-NC-02](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-02) | P2 重复 Start 重复执行 singleton 生命周期 | [已修/声明场景验证](../bugfix/RR-20261004-NC-02.md)，未发版 |
+| [RR-20261004-NC-03](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-03) | P3 Admin 空 map / 数组内 map 泄漏 schema 引用 | [已修/声明场景验证](../bugfix/RR-20261004-NC-03.md)，未发版 |
+| [RR-20261004-NC-04](REVIEW-2026-10-04-noncore-02.md#rr-20261004-nc-04) | P2 Ops 取消 Shutdown 后遗忘活跃 server | [已修/声明场景验证](../bugfix/RR-20261004-NC-04.md)，未发版 |
 
 **10-04 更新：10-03 非三大核心第一批四项 P2 已修、具名场景验证，未发版。**[修复运行](../review/REVIEW-2026-10-04-noncore-01.md) · [红/绿](../bugfix/evidence/noncore-bugfix-20261004-01/README.md) · [原审查](../review/REVIEW-2026-10-03-noncore-01.md) · [后续计划](../review/NONCORE-REVIEW-PLAN-2026-10-03.md)。原 30 场景全部转绿，邻接对照通过；历史原12个失败保留。
 

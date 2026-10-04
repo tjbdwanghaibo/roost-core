@@ -1,0 +1,90 @@
+=== RUN   TestStopPanicKeepsCleanupChain
+=== RUN   TestStopPanicKeepsCleanupChain/plain
+2026/10/04 08:07:14 INFO manager start name=older
+2026/10/04 08:07:14 INFO manager started name=older elapsed=40.5805ms
+2026/10/04 08:07:14 INFO manager start name=broken
+2026/10/04 08:07:14 INFO manager started name=broken elapsed=0s
+2026/10/04 08:07:14 INFO manager stop name=broken
+    engine_lifecycle_promises_test.go:64: panic=stop boom error=<nil> older_stops=0 retry=<nil> retry_panic=<nil>
+    engine_lifecycle_promises_test.go:66: stop failure skipped cleanup: panic=stop boom error=<nil> older_stops=0
+=== RUN   TestStopPanicKeepsCleanupChain/context
+2026/10/04 08:07:14 INFO manager start name=older
+2026/10/04 08:07:14 INFO manager started name=older elapsed=0s
+2026/10/04 08:07:14 INFO manager start name=broken
+2026/10/04 08:07:14 INFO manager started name=broken elapsed=0s
+2026/10/04 08:07:14 INFO manager stop name=broken
+    engine_lifecycle_promises_test.go:64: panic=stop boom error=<nil> older_stops=0 retry=<nil> retry_panic=<nil>
+    engine_lifecycle_promises_test.go:66: stop failure skipped cleanup: panic=stop boom error=<nil> older_stops=0
+--- FAIL: TestStopPanicKeepsCleanupChain (0.04s)
+    --- FAIL: TestStopPanicKeepsCleanupChain/plain (0.04s)
+    --- FAIL: TestStopPanicKeepsCleanupChain/context (0.00s)
+=== RUN   TestRollbackPanicKeepsStartFailureAndCleanup
+2026/10/04 08:07:14 INFO manager start name=older
+2026/10/04 08:07:14 INFO manager started name=older elapsed=0s
+2026/10/04 08:07:14 INFO manager start name=broken
+2026/10/04 08:07:14 INFO manager started name=broken elapsed=0s
+2026/10/04 08:07:14 INFO manager start name=failed
+2026/10/04 08:07:14 INFO manager stop name=broken
+    engine_lifecycle_promises_test.go:82: panic=stop boom error=<nil> older_stops=0 failed_stops=0
+    engine_lifecycle_promises_test.go:84: rollback lost cause/cleanup: panic=stop boom error=<nil> older_stops=0 failed_stops=0
+--- FAIL: TestRollbackPanicKeepsStartFailureAndCleanup (0.00s)
+=== RUN   TestReturnedStopErrorContinuesCleanup
+2026/10/04 08:07:14 INFO manager start name=older
+2026/10/04 08:07:14 INFO manager started name=older elapsed=0s
+2026/10/04 08:07:14 INFO manager start name=broken
+2026/10/04 08:07:14 INFO manager started name=broken elapsed=0s
+2026/10/04 08:07:14 INFO manager stop name=broken
+2026/10/04 08:07:14 INFO manager stop name=older
+--- PASS: TestReturnedStopErrorContinuesCleanup (0.00s)
+=== RUN   TestRepeatedStartDoesNotDuplicateManagers
+2026/10/04 08:07:14 INFO manager start name=once
+2026/10/04 08:07:14 INFO manager started name=once elapsed=0s
+2026/10/04 08:07:14 INFO manager start name=once
+2026/10/04 08:07:14 INFO manager started name=once elapsed=0s
+2026/10/04 08:07:14 INFO manager stop name=once
+2026/10/04 08:07:14 INFO manager stop name=once
+    engine_lifecycle_promises_test.go:115: second_start=<nil> stop=<nil> starts=2 stops=2
+    engine_lifecycle_promises_test.go:117: one lifecycle executed twice: starts=2 stops=2
+--- FAIL: TestRepeatedStartDoesNotDuplicateManagers (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/manager	1.354s
+=== RUN   TestMetadataOwnership
+=== RUN   TestMetadataOwnership/empty_input
+    schema_ownership_promises_test.go:40: stored_schema=map[type:injected]
+    schema_ownership_promises_test.go:43: external mutation changed empty stored schema: map[type:injected]
+=== RUN   TestMetadataOwnership/empty_get
+    schema_ownership_promises_test.go:40: stored_schema=map[type:injected]
+    schema_ownership_promises_test.go:43: external mutation changed empty stored schema: map[type:injected]
+=== RUN   TestMetadataOwnership/empty_list
+    schema_ownership_promises_test.go:40: stored_schema=map[type:injected]
+    schema_ownership_promises_test.go:43: external mutation changed empty stored schema: map[type:injected]
+=== RUN   TestMetadataOwnership/array_input
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:injected]]]
+    schema_ownership_promises_test.go:48: external mutation changed schema inside array: injected
+=== RUN   TestMetadataOwnership/array_get
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:injected]]]
+    schema_ownership_promises_test.go:48: external mutation changed schema inside array: injected
+=== RUN   TestMetadataOwnership/array_list
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:injected]]]
+    schema_ownership_promises_test.go:48: external mutation changed schema inside array: injected
+=== RUN   TestMetadataOwnership/ordinary_map_control
+    schema_ownership_promises_test.go:40: stored_schema=map[properties:map[kind:string]]
+--- FAIL: TestMetadataOwnership (0.00s)
+    --- FAIL: TestMetadataOwnership/empty_input (0.00s)
+    --- FAIL: TestMetadataOwnership/empty_get (0.00s)
+    --- FAIL: TestMetadataOwnership/empty_list (0.00s)
+    --- FAIL: TestMetadataOwnership/array_input (0.00s)
+    --- FAIL: TestMetadataOwnership/array_get (0.00s)
+    --- FAIL: TestMetadataOwnership/array_list (0.00s)
+    --- PASS: TestMetadataOwnership/ordinary_map_control (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/admin	0.494s
+=== RUN   TestInterruptedShutdownKeepsServerOwnership
+    shutdown_ownership_promises_test.go:80: first=context canceled server_retained=false handler_active=true
+    shutdown_ownership_promises_test.go:83: lost in-flight server: retry=<nil> handler_active=true
+--- FAIL: TestInterruptedShutdownKeepsServerOwnership (0.01s)
+=== RUN   TestIdleShutdownAndReadinessControls
+--- PASS: TestIdleShutdownAndReadinessControls (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/ops	1.030s
+FAIL

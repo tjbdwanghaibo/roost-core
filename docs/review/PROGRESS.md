@@ -1,5 +1,11 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第二批修复：NC-01～04
+
+[修复运行](REVIEW-2026-10-04-noncore-03.md) · [逐项记录](../bugfix/README.md) · [正式红绿/复跑](../bugfix/evidence/noncore-bugfix-20261004-02/README.md)。源码起点 `7e0d6ee2`，四项均已修、声明场景验证，未发版；下方第二批“未修”保留历史。
+
+原14项（11fail/3pass）全转绿，新增正式集合35叶子/独立项通过；11包race、233test pass事件、0fail/skip，vet通过。补齐 Manager 重复/并发/失败重试与最后Start接管、schema nil/空/并发副本、Ops取消/期限/重试/并发关闭。原 Health观察未改。N01源文15/15仍成立，场景依然部分完成：永久阻塞/Group预算、完整App故障进程、Opsbind/hijack及权限链尚缺；继续N02，不由四项关闭推定整域完成。
+
 ## 2026-10-04 非三大核心第二批：N01 生命周期与 Ops
 
 [本轮运行](REVIEW-2026-10-04-noncore-02.md) · [四个新 RR](../bug/REVIEW-2026-10-04-noncore-02.md) · [机制与建议](IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md) · [复跑/源文件清单](evidence/noncore-review-20261004-02/README.md)。源码 `3529a569`，和下方第一批四项修复分开；新问题三个 P2、一个 P3 **均未修**。

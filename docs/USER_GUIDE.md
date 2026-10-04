@@ -1,5 +1,11 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 Manager / Admin / Ops 边界（main，尚未发版）
+
+同一 Manager Engine 在确认 Provide 后只允许一次启动尝试；再次调用、Order/Start 失败后的重试或 Stop 后调用返回 ErrStartState（Kit 的 ErrManagerStartState 同值）。需要新生命周期时新建 Engine，并按业务契约准备 manager；没有 Provide 的前置失败可以补装配后启动。Stop panic 会转换为 error，清理其他对象并保留原因，但出错对象须自行保证资源退出。
+
+MetadataRegistry 在 Register/Get/List 复制 JSON schema 容器；非 JSON 自定义对象须不可变，注册过程中不要并发改输入。Ops Shutdown 取消/超时后保留 server 供再次排空，active/draining 时 Start 返回错误；成功排空后才可启新 server。[四项修复/兼容记录](review/REVIEW-2026-10-04-noncore-03.md)。
+
 ## 2026-10-04 App / HTTP 使用边界（main，尚未发版）
 
 只有一个 Mod 时也会执行名称、依赖和环校验；不要依赖单 Mod 跳过缺失依赖检查。HTTP `Clone(WithTimeout(...))` 对库创建的 client 生效，并保留父实例配置；显式 `WithHTTPClient` 的 Timeout 优先，由调用者配置，Clone 不会重配外部 client。Transport 仍可共享连接池。

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **Manager 生命周期错误与启动权（RR-20261004-NC-01/02）**：逐对象 Stop panic 转 error，清理/rollback 继续并保留原因；Engine 在 Provide 后只允许一次启动尝试，再次/停止后的 Start 返回 ErrStartState（Kit ErrManagerStartState 同值），缺 Provide 拒绝不消耗启动权。[清理](docs/bugfix/RR-20261004-NC-01.md)、[启动](docs/bugfix/RR-20261004-NC-02.md)
+- **Admin JSON schema 隔离（RR-20261004-NC-03）**：非 nil 空 map 与嵌套数组内 JSON 容器递归复制，Register/Get/List 的副本互不改写；nil/空保持，非 JSON 扩展值需不可变。[记录](docs/bugfix/RR-20261004-NC-03.md)
+- **Ops 关闭后再释放 server（RR-20261004-NC-04）**：取消/超时保留同一 server，成功排空才释放；Start 拒绝未关闭实例、监听 goroutine 捕获实例，状态短锁与各 caller 的 Shutdown context 分离。[记录](docs/bugfix/RR-20261004-NC-04.md)
+
 - **App 单 Mod 也做完整依赖校验（RR-20261003-NC-01）**：仅空集合快速返回，单 Mod 拒绝 nil/空名、缺失硬依赖和自循环，错误图不进入 Init。合法外部共享/optional 行为不变。[记录](docs/bugfix/RR-20261003-NC-01.md)
 - **HTTP Clone 超时和错误分类（RR-20261003-NC-02/03）**：库拥有 client 的 Clone timeout 修改作用于副本，父实例和连接池保持；自定义 client 自己的 Timeout 优先。非 2xx 坏/异型或读取失败的 body 仍可 errors.As 提取 StatusError，并保留解码/读取原因。[超时](docs/bugfix/RR-20261003-NC-02.md)、[分类](docs/bugfix/RR-20261003-NC-03.md)
 - **JSON 请求必须为完整单值（RR-20261003-NC-04）**：BindJSON 拒绝合法首值后的垃圾/第二值，返回 400 且不调用业务；合法尾随空白、现有空 body 与限长行为保持。[记录](docs/bugfix/RR-20261003-NC-04.md)

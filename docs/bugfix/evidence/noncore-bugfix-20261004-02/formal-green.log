@@ -1,0 +1,79 @@
+=== RUN   TestStopPanicKeepsCleanupChain
+=== RUN   TestStopPanicKeepsCleanupChain/plain
+2026/10/04 08:08:47 INFO manager start name=older
+2026/10/04 08:08:47 INFO manager started name=older elapsed=45.348ms
+2026/10/04 08:08:47 INFO manager start name=broken
+2026/10/04 08:08:47 INFO manager started name=broken elapsed=0s
+2026/10/04 08:08:47 INFO manager stop name=broken
+2026/10/04 08:08:47 INFO manager stop name=older
+    engine_lifecycle_promises_test.go:64: panic=<nil> error=manager broken stop panic: stop boom older_stops=1 retry=<nil> retry_panic=<nil>
+=== RUN   TestStopPanicKeepsCleanupChain/context
+2026/10/04 08:08:47 INFO manager start name=older
+2026/10/04 08:08:47 INFO manager started name=older elapsed=0s
+2026/10/04 08:08:47 INFO manager start name=broken
+2026/10/04 08:08:47 INFO manager started name=broken elapsed=0s
+2026/10/04 08:08:47 INFO manager stop name=broken
+2026/10/04 08:08:47 INFO manager stop name=older
+    engine_lifecycle_promises_test.go:64: panic=<nil> error=manager broken stop panic: stop boom older_stops=1 retry=<nil> retry_panic=<nil>
+--- PASS: TestStopPanicKeepsCleanupChain (0.05s)
+    --- PASS: TestStopPanicKeepsCleanupChain/plain (0.05s)
+    --- PASS: TestStopPanicKeepsCleanupChain/context (0.00s)
+=== RUN   TestRollbackPanicKeepsStartFailureAndCleanup
+2026/10/04 08:08:47 INFO manager start name=older
+2026/10/04 08:08:47 INFO manager started name=older elapsed=0s
+2026/10/04 08:08:47 INFO manager start name=broken
+2026/10/04 08:08:47 INFO manager started name=broken elapsed=0s
+2026/10/04 08:08:47 INFO manager start name=failed
+2026/10/04 08:08:47 INFO manager stop name=broken
+2026/10/04 08:08:47 INFO manager stop name=older
+    engine_lifecycle_promises_test.go:82: panic=<nil> error=manager failed start: start failed
+        rollback: manager broken stop panic: stop boom older_stops=1 failed_stops=0
+--- PASS: TestRollbackPanicKeepsStartFailureAndCleanup (0.00s)
+=== RUN   TestReturnedStopErrorContinuesCleanup
+2026/10/04 08:08:47 INFO manager start name=older
+2026/10/04 08:08:47 INFO manager started name=older elapsed=0s
+2026/10/04 08:08:47 INFO manager start name=broken
+2026/10/04 08:08:47 INFO manager started name=broken elapsed=0s
+2026/10/04 08:08:47 INFO manager stop name=broken
+2026/10/04 08:08:47 INFO manager stop name=older
+--- PASS: TestReturnedStopErrorContinuesCleanup (0.00s)
+=== RUN   TestRepeatedStartDoesNotDuplicateManagers
+2026/10/04 08:08:47 INFO manager start name=once
+2026/10/04 08:08:47 INFO manager started name=once elapsed=0s
+2026/10/04 08:08:47 INFO manager stop name=once
+    engine_lifecycle_promises_test.go:115: second_start=manager: lifecycle already started or stopped stop=<nil> starts=1 stops=1
+--- PASS: TestRepeatedStartDoesNotDuplicateManagers (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/manager	0.932s
+=== RUN   TestMetadataOwnership
+=== RUN   TestMetadataOwnership/empty_input
+    schema_ownership_promises_test.go:40: stored_schema=map[]
+=== RUN   TestMetadataOwnership/empty_get
+    schema_ownership_promises_test.go:40: stored_schema=map[]
+=== RUN   TestMetadataOwnership/empty_list
+    schema_ownership_promises_test.go:40: stored_schema=map[]
+=== RUN   TestMetadataOwnership/array_input
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:string]]]
+=== RUN   TestMetadataOwnership/array_get
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:string]]]
+=== RUN   TestMetadataOwnership/array_list
+    schema_ownership_promises_test.go:40: stored_schema=map[oneOf:[map[type:string]]]
+=== RUN   TestMetadataOwnership/ordinary_map_control
+    schema_ownership_promises_test.go:40: stored_schema=map[properties:map[kind:string]]
+--- PASS: TestMetadataOwnership (0.00s)
+    --- PASS: TestMetadataOwnership/empty_input (0.00s)
+    --- PASS: TestMetadataOwnership/empty_get (0.00s)
+    --- PASS: TestMetadataOwnership/empty_list (0.00s)
+    --- PASS: TestMetadataOwnership/array_input (0.00s)
+    --- PASS: TestMetadataOwnership/array_get (0.00s)
+    --- PASS: TestMetadataOwnership/array_list (0.00s)
+    --- PASS: TestMetadataOwnership/ordinary_map_control (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/admin	0.281s
+=== RUN   TestInterruptedShutdownKeepsServerOwnership
+    shutdown_ownership_promises_test.go:80: first=context canceled server_retained=true handler_active=true
+--- PASS: TestInterruptedShutdownKeepsServerOwnership (0.01s)
+=== RUN   TestIdleShutdownAndReadinessControls
+--- PASS: TestIdleShutdownAndReadinessControls (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/kit/ops	1.251s

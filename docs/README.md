@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-04 第二批修复：**[Manager/Admin/Ops 四项修复与兼容](review/REVIEW-2026-10-04-noncore-03.md)，正式35项与11包race/vet通过，已修/声明场景验证，未发版。[逐项记录](bugfix/README.md) · [证据](bugfix/evidence/noncore-bugfix-20261004-02/README.md) · [进度](review/PROGRESS.md)。下方原第二批未修结论保留历史。
+
 **10-04 继续 Review：**[N01 生命周期/Manager/Admin/Ops](review/REVIEW-2026-10-04-noncore-02.md) 新增[四个未修问题](bug/REVIEW-2026-10-04-noncore-02.md)，与下方已修四项分开。N01 生产源码 15/15 已读，新增 17 项含 11 个失败反例，场景仍部分完成。[机制和实施建议](review/IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md) · [复跑](review/evidence/noncore-review-20261004-02/README.md) · [进度](review/PROGRESS.md)。
 
 **10-04 App/HTTP 修复：**[四项运行](review/REVIEW-2026-10-04-noncore-01.md)、[逐项记录](bugfix/README.md)、[红/绿与复跑](bugfix/evidence/noncore-bugfix-20261004-01/README.md)。原 NC-01～04 已修、具名场景验证，45 个新增正式场景和 11 包 race/vet 通过，未发版；下方“未修”是历史状态。[进度](review/PROGRESS.md)。

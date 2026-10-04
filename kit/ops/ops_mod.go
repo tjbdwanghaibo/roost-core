@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,7 @@ type OpsMod struct {
 	metrics       *metrics.Registry
 	commands      *admin.Registry
 	lifecycle     *lifecycle.Registry
+	serverMu      sync.Mutex
 	server        *http.Server
 	registry      *app.Registry
 	ready         atomic.Bool
@@ -117,6 +119,11 @@ func (m *OpsMod) Start() error {
 	if !m.enabled {
 		return nil
 	}
+	m.serverMu.Lock()
+	defer m.serverMu.Unlock()
+	if m.server != nil {
+		return errors.New("ops: server already started or awaiting shutdown")
+	}
 	engine := httpserver.NewEngine(httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes))
 	engine.Get("/healthz", m.handleHealth)
 	engine.Get("/readyz", m.handleReady)
@@ -124,9 +131,10 @@ func (m *OpsMod) Start() error {
 	engine.Get("/statsz", m.handleStats)
 	engine.Get("/admin/commands", m.handleAdminCommands)
 	engine.Post("/admin/execute", m.handleAdminExecute)
-	m.server = httpserver.NewServer(m.addr, engine, httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes))
+	server := httpserver.NewServer(m.addr, engine, httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes))
+	m.server = server
 	go func() {
-		if err := m.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("ops: http server failed", "addr", m.addr, "err", err)
 		}
 	}()
@@ -143,7 +151,10 @@ func (m *OpsMod) Stop() {
 }
 
 func (m *OpsMod) StopWithContext(ctx context.Context) error {
-	if m.server == nil {
+	m.serverMu.Lock()
+	server := m.server
+	m.serverMu.Unlock()
+	if server == nil {
 		return nil
 	}
 	if ctx == nil {
@@ -152,9 +163,17 @@ func (m *OpsMod) StopWithContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	err := m.server.Shutdown(ctx)
-	m.server = nil
-	return err
+	// RR-20261004-NC-04：取消/超时不等于 handler 已排空，错误时保留同一 server 供重试。
+	// Shutdown 在锁外等待，不能阻塞其他调用取得自己的 context/关闭结果。
+	if err := server.Shutdown(ctx); err != nil {
+		return err
+	}
+	m.serverMu.Lock()
+	if m.server == server {
+		m.server = nil
+	}
+	m.serverMu.Unlock()
+	return nil
 }
 
 func (m *OpsMod) handleHealth(w http.ResponseWriter, _ *http.Request) {

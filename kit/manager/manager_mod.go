@@ -30,6 +30,9 @@ import (
 // for callers comparing against either.
 var ErrManagerRegisterAfterStart = coremanager.ErrRegisterAfterStart
 
+// ErrManagerStartState preserves the engine's one-attempt lifecycle error.
+var ErrManagerStartState = coremanager.ErrStartState
+
 // ManagerMod starts a service's managers in dependency order and stops them in
 // reverse. Layers: Service -> Mod (ManagerMod) -> Engine -> IManager.
 type ManagerMod struct {

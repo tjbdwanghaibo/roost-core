@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -55,11 +56,13 @@ const (
 )
 
 type CommandMeta struct {
-	Name             string         `json:"name"`
-	Title            string         `json:"title,omitempty"`
-	Description      string         `json:"description,omitempty"`
-	TargetScope      []string       `json:"target_scope,omitempty"`
-	Risk             RiskLevel      `json:"risk,omitempty"`
+	Name        string    `json:"name"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	TargetScope []string  `json:"target_scope,omitempty"`
+	Risk        RiskLevel `json:"risk,omitempty"`
+	// PayloadSchema clones JSON maps/arrays and []string at registration and
+	// retrieval. Other value types must be immutable; cyclic values are not JSON.
 	PayloadSchema    map[string]any `json:"payload_schema,omitempty"`
 	ApprovalRequired bool           `json:"approval_required,omitempty"`
 	DryRunSupported  bool           `json:"dry_run_supported,omitempty"`
@@ -253,30 +256,41 @@ func DecodePayload[T any](cmd Command) (T, error) {
 }
 
 func cloneMeta(meta CommandMeta) CommandMeta {
-	if len(meta.TargetScope) > 0 {
-		meta.TargetScope = append([]string(nil), meta.TargetScope...)
-	}
-	if len(meta.PayloadSchema) > 0 {
-		meta.PayloadSchema = cloneMap(meta.PayloadSchema)
-	}
+	meta.TargetScope = slices.Clone(meta.TargetScope)
+	// RR-20261004-NC-03：非 nil 空 map 同样可变，数组中的 JSON 容器也必须递归隔离。
+	meta.PayloadSchema = cloneMap(meta.PayloadSchema)
 	return meta
 }
 
 func cloneMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
 	out := make(map[string]any, len(in))
 	for key, value := range in {
-		switch typed := value.(type) {
-		case []string:
-			out[key] = append([]string(nil), typed...)
-		case []any:
-			out[key] = append([]any(nil), typed...)
-		case map[string]any:
-			out[key] = cloneMap(typed)
-		default:
-			out[key] = value
-		}
+		out[key] = cloneSchemaValue(value)
 	}
 	return out
+}
+
+func cloneSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case []string:
+		return slices.Clone(typed)
+	case []any:
+		if typed == nil {
+			return []any(nil)
+		}
+		out := make([]any, len(typed))
+		for i, element := range typed {
+			out[i] = cloneSchemaValue(element)
+		}
+		return out
+	case map[string]any:
+		return cloneMap(typed)
+	default:
+		return value
+	}
 }
 
 func MustPayload(v any) json.RawMessage {

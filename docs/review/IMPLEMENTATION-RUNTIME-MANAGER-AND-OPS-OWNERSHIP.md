@@ -29,3 +29,11 @@ OpsMod 用 health/lifecycle/admin/metrics 能力提供运维 HTTP，维护自己
 修复优先保留现有 server 和预算：错误时仍持有同一实例，排空成功才释放；若允许并发 Start/Stop，需要让旧操作无法清除新实例。不要以强制 Close 忽略 handler 或后台无限重试兑现假成功。测试顺序应由 handler 入场、listener Close、context cancel 和 handler 退出事件控制，超时只作 harness 上限，不是失败判定来源。WebSocket/hijacked 连接还需单独所有权契约。
 
 本批真实回环请求只证明取消中的引用丢失；Manager 回调漏清理和 schema 外部修改是其他独立资源问题。下一步修复可沿用 docs 中反例转为正式 promises 测试，分别先红后绿，并补各条列出的邻接场景。
+
+## 第二批修复后的实际实现
+
+上文“尚未实施”为原审查时点，本批 NC-01～04 已修、声明场景验证，未发版。[运行与兼容](REVIEW-2026-10-04-noncore-03.md)。stopOne 内 recover 保护逐对象清理与启动 rollback；error panic cause 保留。Engine 原 starting/stopping 门槛在锁内取得唯一 Start 权，不新建状态机，已开始后的重试显式 ErrStartState，缺 Provide 不取得权。
+
+schema 在现有 helpers 中递归复制 JSON 容器，包括空 map/嵌套数组，nilness 保持；非 JSON 类型不可变规则已经写入 API 注释。Ops 状态短锁与标准库 Shutdown 等待分开，错误保留实例、成功比较后释放，Start 不覆盖未关闭实例，ListenAndServe 捕获局部实例。
+
+正式原14项全绿，追加并发与取消/超时/重试等共35叶子/独立项通过，11包race/vet通过。Health 空 Status/Err 策略仍仅观察；永久阻塞与完整 App 故障、hijack/bind/生产HA尚未验证。复制成本随schema大小增长，未增加本批性能结论。

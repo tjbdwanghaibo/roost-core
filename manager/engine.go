@@ -35,6 +35,10 @@ import (
 // refuses instead of silently dropping it.
 var ErrRegisterAfterStart = errors.New("manager: Register after Start")
 
+// ErrStartState is returned after an engine has claimed its startup attempt or
+// received Stop. A new lifecycle requires a new Engine, including after failure.
+var ErrStartState = errors.New("manager: lifecycle already started or stopped")
+
 // Engine starts a service's managers in dependency order and stops them in
 // reverse. Layers: Service -> Mod (kit ManagerMod) -> Engine -> IManager.
 type Engine struct {
@@ -115,20 +119,26 @@ func (e *Engine) Provide(r *app.Registry) error {
 // Start starts every registered manager in dependency order. A failure rolls
 // back the managers that reported success (newest first) and leaves the one
 // that failed alone; a shutdown requested while Start is still working aborts
-// the remaining managers instead of racing the stop.
+// the remaining managers instead of racing the stop. Once Provide is available,
+// an engine admits one startup attempt; subsequent calls return ErrStartState.
 func (e *Engine) Start() error {
 	e.mu.Lock()
+	// RR-20261004-NC-02：在快照前取得唯一启动权，不能重复调用 singleton 的 Start。
+	if e.starting || e.stopping {
+		e.mu.Unlock()
+		return ErrStartState
+	}
 	registry := e.registry
-	pending := append([]app.IManager(nil), e.managers...)
-	e.starting = true
-	e.mu.Unlock()
-
 	// A manager's only handle on the rest of the service is the registry it
 	// receives from Start. Starting without one hands every manager a nil
 	// registry, which fails much later and far from the cause.
 	if registry == nil {
+		e.mu.Unlock()
 		return fmt.Errorf("manager: Start before Provide, no registry available")
 	}
+	pending := append([]app.IManager(nil), e.managers...)
+	e.starting = true
+	e.mu.Unlock()
 
 	ordered, err := Order(pending)
 	if err != nil {
@@ -220,11 +230,23 @@ func (e *Engine) stopStarted(ctx context.Context) error {
 // stopOne stops a single manager, preferring the bounded hook. It is shared
 // by the reverse-order drain and by a Start that finished after Stop had
 // already drained (RR-20260916-06), so both paths stop a manager the same way.
-func stopOne(ctx context.Context, manager app.IManager) error {
-	slog.Info("manager stop", "name", manager.Name())
+func stopOne(ctx context.Context, manager app.IManager) (err error) {
+	name := "<unknown>"
+	// RR-20261004-NC-01：逐 manager 隔离 panic，回滚和逆序停机都必须继续清理其余对象。
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if cause, ok := recovered.(error); ok {
+				err = fmt.Errorf("manager %s stop panic: %w", name, cause)
+			} else {
+				err = fmt.Errorf("manager %s stop panic: %v", name, recovered)
+			}
+		}
+	}()
+	name = manager.Name()
+	slog.Info("manager stop", "name", name)
 	if stopper, ok := manager.(app.IManagerStopperWithContext); ok {
 		if err := stopper.StopWithContext(ctx); err != nil {
-			return fmt.Errorf("manager %s stop: %w", manager.Name(), err)
+			return fmt.Errorf("manager %s stop: %w", name, err)
 		}
 		return nil
 	}

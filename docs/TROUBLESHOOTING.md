@@ -6,6 +6,10 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-187 | 一个 manager Stop panic 后更早 manager 没被清理，rollback 原 Start error 消失 | RR-20261004-NC-01：原 stopOne 没有逐对象保护 | `manager ... stop panic` 与 Join 内 Start cause、对象退出记录 | 使用本批修复；panic 会报告并继续其余清理，仍需修该对象的回调，不把 recover 当资源已释放 |
+| T-188 | manager singleton 的 Start/Stop 被重复调用，或现在 Start 返回 ErrStartState | RR-20261004-NC-02：旧 Engine 无重复启动门槛；新版为一次启动尝试 | `manager.ErrStartState` / `kit/manager.ErrManagerStartState`、装配调用次数 | 去掉同 Engine 重复 Start；失败后新建生命周期实例，缺 Provide 的前置拒绝可补装配再启动 |
+| T-189 | Admin schema 无重新注册就变了、oneOf 内字段被面板代码改写 | RR-20261004-NC-03：空 map / 数组内 map 旧复制共享 | MetadataRegistry Register/Get/List、PayloadSchema 的 JSON 容器 | 使用本批递归复制；自定义非 JSON 值保持不可变，Register 过程中不并发改输入 |
+| T-190 | Ops Shutdown 超时后重试直接 nil，但原请求仍在运行 | RR-20261004-NC-04：旧实现错误后清空 server | StopWithContext 返回 context.Canceled/DeadlineExceeded 与实际 handler 退出 | 使用本批修复保留同一 server，预算内再次排空；未排空不重启替换，不立即强关掩盖问题 |
 | T-183 | 单 Mod 工程缺少基础设施却继续进入 Init，或 nil Mod 导致启动 panic | NC-01：单元素排序旧快速返回跳过名字/依赖/环校验 | `unknown mod dependency` / Mod 装配集合 | 使用含 NC-01 修复的版本；按声明补齐硬依赖、修正单元素环/名字，不删除依赖校验 |
 | T-184 | Clone 设置短 timeout，实际仍等到父 client 的长 timeout | NC-02：包装层改了 timeout，内部 HTTP client 仍共享父配置 | New / Clone 的 WithTimeout 与是否显式 WithHTTPClient | 使用含 NC-02 修复的版本；自定义 client 的 Timeout 仍优先，应自行提供正确配置 |
 | T-185 | 上游 503/401 返回文本或异型 JSON，消费者只收到 JSON 错误、无法取状态码 | NC-03：解码先于状态分类 | `errors.As` 到 httpclient.StatusError / JSON 错误 | 使用含 NC-03 修复的版本并使用 errors.As/Is；状态错误与读取/解码原因可能同时存在 |

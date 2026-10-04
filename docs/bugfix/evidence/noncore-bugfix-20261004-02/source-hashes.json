@@ -1,0 +1,30 @@
+[
+  {
+    "path": "manager/engine.go",
+    "sha256": "13E67B9278E241A5146283DCDD2F75AD94C519ACA85030792817594822E2BE27"
+  },
+  {
+    "path": "admin/admin.go",
+    "sha256": "F964A0E052BC7651C95AC439B8AD09472DF680C576FBC7C96D54DE5FF577AA37"
+  },
+  {
+    "path": "kit/ops/ops_mod.go",
+    "sha256": "6BA5371985F0B16FC05DDEBD73D696871CF63BE1808E8C966F952E4B87CEEA36"
+  },
+  {
+    "path": "kit/manager/manager_mod.go",
+    "sha256": "8E64AC636AA9E58BDE1F2551B1BA334A1AD35F19A77A1922219AD23E11DDD1A4"
+  },
+  {
+    "path": "manager/engine_lifecycle_promises_test.go",
+    "sha256": "6924FF81B5F84D5F4EE3ACF442C768A6709326A2DA59486AD23FEFF573E8A432"
+  },
+  {
+    "path": "admin/schema_ownership_promises_test.go",
+    "sha256": "1C22FE1BA7B0A68784A65C13D1B2195DB59CC61C38D12032AB695812EC522809"
+  },
+  {
+    "path": "kit/ops/shutdown_ownership_promises_test.go",
+    "sha256": "93C6C69151F9768BF5DD509538A8079584F86499B19C7BE4A0EE2BAE88FFE699"
+  }
+]

@@ -48,3 +48,7 @@
 ## 契约观察，尚未升级为 RR
 
 health.checkOne 在 Status 为空时默认 StatusOK，即使 Err 非 nil。自定义 checker 只返回 Err 时，本批观察 `/readyz` 为 200、ok=true，依赖明细有 error；内置 checker 通常显式返回 StatusFail。需先说明 Status 是否必填、Err 是否应当默认失败以及 warn 的策略，再决定改动。没有把观察测试 PASS 当作该行为正确的验收。
+
+## 第二批修复更新（2026-10-04）
+
+上文为原审查时点，失败和根因保留。本轮用户明确要求修复，NC-01～04 现已修、声明场景验证，未发版。[01](../bugfix/RR-20261004-NC-01.md) · [02](../bugfix/RR-20261004-NC-02.md) · [03](../bugfix/RR-20261004-NC-03.md) · [04](../bugfix/RR-20261004-NC-04.md)。正式原 14 项（11 fail/3 pass）全部转绿，后补共35正式叶子/独立项，11包race/vet通过；[红绿证据与复跑](../bugfix/evidence/noncore-bugfix-20261004-02/README.md)。Health 观察没有被本批改动或升级为确认问题。T-187～190。

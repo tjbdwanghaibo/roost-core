@@ -165,7 +165,7 @@ bash scripts/test-remote-matrix.sh
 | 问题 | 主题 | 修复记录 |
 | --- | --- | --- |
 | [RR-20261003-NC-01～04](bug/REVIEW-2026-10-03-noncore-01.md) | 10-04 单 Mod 校验、Clone timeout、错误 HTTP 状态与完整 JSON 绑定；四项已修、具名场景验证，未发版 | [01](bugfix/RR-20261003-NC-01.md)、[02](bugfix/RR-20261003-NC-02.md)、[03](bugfix/RR-20261003-NC-03.md)、[04](bugfix/RR-20261003-NC-04.md) |
-| [RR-20261004-NC-01～04](bug/REVIEW-2026-10-04-noncore-02.md) | Manager Stop panic / 重复 Start、Admin schema 引用与 Ops 取消关闭；3 P2 / 1 P3 均已复现、未修，Health 空 Status 为观察 | [机制与实施建议](review/IMPLEMENTATION-RUNTIME-MANAGER-AND-OPS-OWNERSHIP.md)、[范围/余项](review/REVIEW-2026-10-04-noncore-02.md) |
+| [RR-20261004-NC-01～04](bug/REVIEW-2026-10-04-noncore-02.md) | Manager Stop panic / 重复 Start、Admin schema 引用与 Ops 取消关闭；4/4 已修、声明场景验证，未发版，Health 空 Status 仍为观察 | [01](bugfix/RR-20261004-NC-01.md)、[02](bugfix/RR-20261004-NC-02.md)、[03](bugfix/RR-20261004-NC-03.md)、[04](bugfix/RR-20261004-NC-04.md)，[运行](review/REVIEW-2026-10-04-noncore-03.md) |
 | [RR-20260923-01](bug/RR-20260923-01.md) | 等待新快照的订阅被当作从未交付，退订后残留客户端对象 | [修复](bugfix/RR-20260923-01.md) |
 | [RR-20260923-02](bug/RR-20260923-02.md) | tick 部分交付后重试，内容基线和帧时钟与客户端分叉 | [修复](bugfix/RR-20260923-02.md) |
 | [RR-20260923-03](bug/RR-20260923-03.md) | 满容量会话合法替换对象，因 subject ID 排序被关闭 | [修复](bugfix/RR-20260923-03.md) |
