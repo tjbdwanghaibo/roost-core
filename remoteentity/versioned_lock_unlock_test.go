@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,12 +34,8 @@ func (s *unlockEvalStub) Eval(_ context.Context, script string, _ []string, args
 	defer s.mu.Unlock()
 	switch script {
 	case versionedTryLockLua:
-		// ARGV[3]：上一次释放结果未知的 token，owner 仍是它时同样可取得（RR-20260930-21）。
-		reclaim := ""
-		if len(args) > 2 {
-			reclaim, _ = args[2].(string)
-		}
-		if owner, held := s.hash["owner"]; held && (reclaim == "" || owner != reclaim) {
+		// ARGV[3] / ARGV[4]：owner 是同一锁对象更早序号的 token 时同样可取得（RR-20261004-01，与 versionedTryLockLua 同一判定）。
+		if owner, held := s.hash["owner"]; held && !earlierOwnGeneration(owner, args) {
 			return []any{int64(0), int64(0), int64(0)}, nil
 		}
 		s.hash["owner"] = args[0].(string)
@@ -70,6 +67,23 @@ func (s *unlockEvalStub) Eval(_ context.Context, script string, _ []string, args
 	default:
 		return nil, fmt.Errorf("stub: unexpected script")
 	}
+}
+
+// earlierOwnGeneration 是 versionedTryLockLua 里 earlier 判定的 Go 版：owner 带 ARGV[3] 前缀且序号小于 ARGV[4]。
+func earlierOwnGeneration(owner string, args []any) bool {
+	if len(args) < 4 {
+		return false
+	}
+	prefix, _ := args[2].(string)
+	if prefix == "" || !strings.HasPrefix(owner, prefix) {
+		return false
+	}
+	held, err := strconv.ParseUint(strings.TrimPrefix(owner, prefix), 10, 64)
+	if err != nil {
+		return false
+	}
+	current, err := strconv.ParseUint(fmt.Sprint(args[3]), 10, 64)
+	return err == nil && held < current
 }
 
 func TestVersionedLockUnlockRetryAfterLostResponseSucceeds(t *testing.T) {

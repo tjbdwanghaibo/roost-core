@@ -779,7 +779,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：legacy 条目按旧规则（期限）回收；坏 Intent 记日志并跳过，不阻塞同组其他条目。
 - **来源**：[B 线 service 修复独立复审（后半）§4.4](../review/REVIEW-2026-10-01-bline-audit-service-2.md)。
 
-### W-2026-10-04-01：`versionedLock.TryLock` 在 Redis Eval 因 ctx 截止返回错误时不记录 token，若脚本其实已执行，锁会一直留到 LockTTL
+### W-2026-10-04-01：`versionedLock.TryLock` 在 Redis Eval 因 ctx 截止返回错误时不记录 token，若脚本其实已执行，锁会一直留到 LockTTL（已登记 RR-20261004-01）
 
 - **位置**：`remoteentity/versioned_lock.go` `TryLock`（RR-20260930-21 之后的形状），基线 `e3118640` 之后。
 - **现象**：harness 区间核验的负对照里，`ROOST_REMOTE_REQUEST_TIMEOUT=15ms` 的一次运行在负载后的 reject 校验失败于 `remote_entity: shared lock …: versioned lock not acquired`，同参数复跑未复现（结果目录 `artifacts/perf/remote/errsplit-after-timeout15ms/`，本地）。

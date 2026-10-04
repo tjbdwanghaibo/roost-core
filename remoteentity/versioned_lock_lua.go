@@ -3,12 +3,19 @@ package remoteentity
 // versionedTryLockLua acquires the lease and allocates a fence from a separate
 // non-expiring counter. The counter must never share the lock hash TTL.
 //
-// ARGV[3]（可空）是本地上一次释放结果未知的 token（RR-20260930-21）：owner 仍是它时同样视为可取得，
-// 在同一条脚本里换成新 token 并分配新 fence——是新的一代，不是延续旧代；owner 是别人时照旧返回 {0,0,0}。
+// ARGV[3] 是锁对象的 token 前缀，ARGV[4] 是本次取锁的序号（ARGV[1] = ARGV[3] .. ARGV[4]）。owner 带同一前缀且序号
+// 小于本次时，它是这个锁对象更早一代"结果未知"留下的租约（取锁回复丢失或迟到 RR-20261004-01、释放无答复 RR-20260930-21）：
+// 同样视为可取得，在同一条脚本里换成新 token 并分配新 fence——是新的一代，不是延续旧代。序号不小于本次（迟到落地的旧代脚本
+// 遇到新代际）或 owner 是别人时照旧返回 {0,0,0}。ARGV[3] 为空时不做这项判定。
 // version 字段不动：失败的那次释放没有写进版本缓存，这里也不替它补写。
 const versionedTryLockLua = `
 local owner = redis.call("HGET", KEYS[1], "owner")
-if owner == false or (ARGV[3] ~= "" and owner == ARGV[3]) then
+local earlier = false
+if owner ~= false and ARGV[3] ~= "" and string.sub(owner, 1, #ARGV[3]) == ARGV[3] then
+    local seq = tonumber(string.sub(owner, #ARGV[3] + 1))
+    earlier = seq ~= nil and seq < tonumber(ARGV[4])
+end
+if owner == false or earlier then
     -- Lua 报错不会回滚前面的写入。先分配 fence，失败时不能留下没有 TTL 的 owner。
     redis.call("INCR", KEYS[2])
     -- Lua number 不能精确表达完整 int64；INCR 的返回值也不能直接传回 Go。

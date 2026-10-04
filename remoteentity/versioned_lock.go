@@ -37,12 +37,15 @@ type versionedLock struct {
 	fence    uint64
 	grant    WriteGrant
 
-	// releaseUnknownToken 是上一次释放没有得到 Redis 明确答复的代际（RR-20260930-21）：UnlockWithRetry 的 Redis 错误
-	// 用尽重试或 ctx 到期后，本地不再算持有（acquired=false，Touch / Refresh / IsAcquired / Close 都按未持有处理），
-	// 但 Redis 上 owner 可能仍是它、也可能已过期或被别人取得。下一次 TryLock 把它交给 Lua 以 Redis 为准：owner 仍是它
-	// 就视为重新取得（新 token、新 fence、新代际），被别人持有走 NotAcquired，已过期正常取锁；Redis 给出明确答复后清空。
-	// 不能伪造"已释放"（Redis 上锁可能仍在），也不能留着 acquired=true（TryLock 不问 Redis 就拒绝，实体在本进程内永久不可写）。
-	releaseUnknownToken string
+	// 取锁 token 按锁对象分代（RR-20261004-01）：token = tokenPrefix + 十进制 tokenSeq。tokenPrefix 在创建锁对象时随机生成、
+	// 只有这个锁对象会铸造带它的 token；tokenSeq 每次 TryLock 加一（l.mu 下），所以同一锁对象的 token 有先后。
+	// 本地不持有（acquired=false）时，Redis 上 owner 若是本锁对象较早一代的 token，它一定是"结果未知"留下的：
+	// 取锁脚本执行了但回复丢失或迟到（RR-20261004-01）、释放没有得到明确答复（RR-20260930-21）、或放弃未准入许可的清理失败。
+	// TryLock 把 tokenPrefix 与本次序号交给 Lua，由 Redis 判定：owner 是本锁对象更早的序号就视为可取得（新 token、新 fence、
+	// 新代际），被别人持有走 NotAcquired，空闲正常取锁。只认"更早"，迟到落地的旧代脚本挤不掉已经取得的新代际（RR-20260924-20）。
+	// 不在本地记"哪几个 token 结果未知"：连续多次没有答复时每一个都可能是 owner，只记一个会取不回真正的 owner，全记又无界。
+	tokenPrefix string
+	tokenSeq    uint64
 
 	// 异步续期按锁代际绑定（RR-20260926-43）。touchGeneration 是当前登记的续期 goroutine
 	// 所服务的 token，空表示没有登记。旧代际 goroutine 只续期、只判失效自己的 token，退出时
@@ -60,11 +63,12 @@ func newVersionedLock(redis fredis.IRedis, id int64, opts fredis.VersionedLockOp
 	key := "lock:" + opts.Key + ":" + strconv.FormatInt(id, 10)
 
 	l := &versionedLock{
-		redis: redis,
-		id:    id,
-		key:   key,
-		ttl:   opts.TTL,
-		opts:  opts,
+		redis:       redis,
+		id:          id,
+		key:         key,
+		ttl:         opts.TTL,
+		opts:        opts,
+		tokenPrefix: generateToken() + ".",
 	}
 	if redis == nil {
 		l.initErr = fmt.Errorf("%w: redis client is nil", ErrVersionedLockConfig)
@@ -117,9 +121,12 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	}
 
 	ttlMs := l.ttl.Milliseconds()
-	token := generateToken()
-	// 上一次释放结果未知的代际交给 Lua：owner 仍是它就在同一条脚本里换成新 token（RR-20260930-21）。
-	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.releaseUnknownToken)
+	l.tokenSeq++
+	seq := l.tokenSeq
+	token := l.tokenPrefix + strconv.FormatUint(seq, 10)
+	// 本锁对象更早一代留在 Redis 上的租约交给 Lua 以 Redis 为准取回（RR-20261004-01 / RR-20260930-21）。
+	// Eval 出错时脚本可能已经执行（owner 已是 token）：本地不记录，下一次 TryLock 的序号更大，同一条判定会把它取回。
+	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.tokenPrefix, seq)
 	if err != nil {
 		return fmt.Errorf("versioned lock redis error: %w", err)
 	}
@@ -128,8 +135,6 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("versioned lock parse error: %w", err)
 	}
-	// Redis 已对上一代 token 给出明确答复：要么被本次取得替换，要么已不是 owner；之后不再拿它去问。
-	l.releaseUnknownToken = ""
 	if len(vals) < 3 || vals[0] == 0 {
 		return ErrVersionedLockNotAcquired
 	}
@@ -297,7 +302,8 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 }
 
 // releaseOutcomeUnknown 记录一次没有拿到 Redis 明确答复的释放（RR-20260930-21）：只对仍是当前代际的 token 生效
-// （Touch / Refresh 已看到失效的代际不再改），本地不再算持有，token 留给下一次 TryLock 交 Lua 裁决。
+// （Touch / Refresh 已看到失效的代际不再改），本地不再算持有。Redis 上 owner 可能仍是 token，下一次 TryLock 按
+// 分代规则（tokenPrefix / tokenSeq，RR-20261004-01）交 Lua 裁决。
 // 调用时续期 goroutine 已由 stopAsyncTouch 停掉并等待退出，不会再有人为这个 token 续期。
 func (l *versionedLock) releaseOutcomeUnknown(token string) {
 	l.mu.Lock()
@@ -306,7 +312,6 @@ func (l *versionedLock) releaseOutcomeUnknown(token string) {
 		return
 	}
 	l.acquired = false
-	l.releaseUnknownToken = token
 }
 
 // writeGrant 返回当前锁代际已确认的许可；失效或 Redis-only 锁不提供持久证明。

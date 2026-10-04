@@ -1,7 +1,7 @@
 package remoteentity
 
 // RR-20260930-21：释放 Redis 锁没有拿到 Redis 的明确答复（Redis 错误用尽 UnlockWithRetry 重试，或 ctx 到期）之后，
-// 本地进入"持有状态未知"：不再算持有，但保留上一代 token；下一次 TryLock 以 Redis 为准——owner 仍是上一代 token 就重新取得
+// 本地进入"持有状态未知"：不再算持有；下一次 TryLock 以 Redis 为准（RR-20261004-01 起按锁对象分代判定）——owner 仍是上一代 token 就重新取得
 // （新 token、新 fence、新代际，续期 goroutine 按代际登记），被别人持有走既有的 NotAcquired 路径，已过期就正常取锁。
 // 旧行为：UnlockWithRetry 只在 Redis 答复 0 时清本地 acquired，失败后 acquired 一直为 true，TryLock 不问 Redis 就回
 // "versioned lock already acquired"，同一锁对象（同一实体）在本进程内永久不可写，只能重启。
