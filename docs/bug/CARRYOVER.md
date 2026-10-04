@@ -66,9 +66,9 @@ NC-11/12现已修复，最终15项新增正式用例通过；真实etcd集成仍
 | 范围 | 当前已证明 | 尚待执行 / 入口 |
 | --- | --- | --- |
 | Redis与缓存 | NC-13～15已修，41正式准入叶子通过；本机隔离Redis8.8.0原七集成与六缓存探针全部通过；正式DAO CLI两个准入消费者通过并复跑 | Redis Cluster/HA/断线恢复、生产平台差异；Redis旧写比较仍非CAS；[修复](../review/REVIEW-2026-10-04-noncore-11.md) |
-| RefHMap | NC-16～19已修；真实Redis正式类型/codec/Patch/TTL/registry/布局边界通过，正式生成消费已补；未知Lua回复反例确认NC-21未修 | 全量Set未知结果停止无身份重放；schema兼容、Patch与全量Set并发、真实弱网/Cluster仍需矩阵；[机制](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) |
+| RefHMap | NC-16～19/21已修；真实Redis类型/codec/Patch/TTL/registry/布局与未知回复保留v3、正式生成消费通过 | schema兼容、Patch与全量Set并发、未知结果恢复、真实弱网/Cluster待验；[机制](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) |
 | Layered容量 | 冷TTL键观察到expiry元数据增长，未据此新增RR | 明确容量约束、回收策略和长期压力验证；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
-| Mongo | mongotest已补全文，NC-20分页已修/20正式项通过；新十项5fail/5控制确认NC-22～25未修；正常相邻回归通过 | 替身深复制/精度/身份按RR修，BSON.D路径、索引建立/bulk/并发事务继续验证；真实Mongo cursor关闭、部分bulk/未知结果、transaction retry及HA；[审查](../review/REVIEW-2026-10-04-noncore-14.md) |
+| Mongo | NC-20/22～25已修；复制/成员/精度/返回身份声明场景通过；新13场景确认NC-26～29四P3未修 | 按RR处理D路径/索引建立/bulk Type预检/并发全库restore；真实Mongo cursor/partial bulk/未知结果/事务与HA留项；[审查](../review/REVIEW-2026-10-04-noncore-16.md) |
 | Migration | 4项Registry/DAO版本、取消、克隆隔离与失败控制通过 | 正式DAO/codegen迁移消费者和真实持久化故障路径；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
 
 这一类本轮**不判定**：它们缺的是证据，而给不出证据的判定就是猜。

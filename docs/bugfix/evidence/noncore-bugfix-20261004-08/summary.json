@@ -1,0 +1,56 @@
+[
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-08/red.jsonl",
+    "test_packages": 0,
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 6,
+    "leaf_skip": 0,
+    "formal_new_pass": 6
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-08/red-replay.jsonl",
+    "test_packages": 0,
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 6,
+    "leaf_skip": 0,
+    "formal_new_pass": 6
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-08/green.jsonl",
+    "test_packages": 7,
+    "test_pass_events": 317,
+    "leaf_pass": 292,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_new_pass": 40
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-08/consumer.jsonl",
+    "test_packages": 1,
+    "test_pass_events": 2,
+    "leaf_pass": 2,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_new_pass": 0
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-08/affected-consumers.jsonl",
+    "test_packages": 14,
+    "test_pass_events": 728,
+    "leaf_pass": 674,
+    "leaf_fail": 0,
+    "leaf_skip": 17,
+    "formal_new_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-16/review.jsonl",
+    "test_packages": 0,
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 7,
+    "leaf_skip": 0,
+    "formal_new_pass": 0
+  }
+]

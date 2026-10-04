@@ -5,7 +5,6 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
@@ -381,46 +379,10 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 		args = append(args, strconv.Itoa(idx), strconv.Itoa(len(write.values)/2))
 		args = append(args, write.values...)
 	}
-	if _, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...); err == nil {
-		return nil
-	} else {
-		// The fallbacks below are NOT atomic: a concurrent reader can observe
-		// the delete before the re-write lands. Degrading silently would hide
-		// exactly the window operators need to know about, so it is logged
-		// and counted before availability is chosen over atomicity.
-		slog.Warn("cache: redis ref hmap Lua write failed, degrading to non-atomic fallback", "keys", len(keys), "err", err)
-		metrics.IncCounter("cache.refhmap.write_degraded_total", nil, 1)
-	}
-	if pipe := s.redis.Pipeline(); pipe != nil {
-		pipe.Del(ctx, keys...)
-		for _, write := range writes {
-			if len(write.values) == 0 {
-				continue
-			}
-			pipe.HSet(ctx, write.key, write.values...)
-			if s.cfg.TTL > 0 {
-				pipe.Expire(ctx, write.key, s.cfg.TTL)
-			}
-		}
-		return pipe.Exec(ctx)
-	}
-	if _, err := s.redis.Del(ctx, keys...); err != nil {
-		return err
-	}
-	for _, write := range writes {
-		if len(write.values) == 0 {
-			continue
-		}
-		if err := s.redis.HSet(ctx, write.key, write.values...); err != nil {
-			return err
-		}
-		if s.cfg.TTL > 0 {
-			if _, err := s.redis.Expire(ctx, write.key, s.cfg.TTL); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	// RR-20261004-NC-21：错误不能证明 Lua 未执行；无身份重放会覆盖后续写。
+	// 保留原始原因，让调用方区分失败与结果未知，不自动回滚或降级。
+	_, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...)
+	return err
 }
 
 type refHMapPlan struct {

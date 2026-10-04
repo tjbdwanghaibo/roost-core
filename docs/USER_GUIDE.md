@@ -1,12 +1,18 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 未知Lua写与Mongo替身（main，尚未发版）
+
+RefHMap全量Set和Patch遇Eval错误均不自动重放，原始原因保留errors.Is；错误不证明数据未应用。不要无条件DEL补偿或忽略超时，应按业务的权威读回/现有版本能力确认再决定恢复。普通Stale检查仍是建议性，不新增CAS/原子Get。Lua不支持的adapter需实现已有Eval接口；旧write_degraded_total和降级告警已移除，查看Set错误与T-206。[NC-21/正式生成消费](bugfix/RR-20261004-NC-21.md)。
+
+公开mongotest现在隔离嵌套BSON读结果/快照/写工作副本，_id $in每物理文档一次，整数与有限float精确比较，ReturnAfter返回同一更新/插入身份；非有限float明确unsupported。并非服务端Mongo认证：当前[D路径、唯一索引建立、非法bulk Type、并发全库rollback](bug/REVIEW-2026-10-04-noncore-16.md)仍有四个未修P3，使用这些场景验证业务时不能把替身成功作为上线证明。[修复矩阵](review/REVIEW-2026-10-04-noncore-15.md)。
+
 ## 2026-10-04 RefHMap类型、Patch与名称（main，尚未发版）
 
 RefHMap支持struct/单层指针根（含命名指针），nil根在KeyOf前返ErrRefHMapUnsupported；指针TextMarshaler用于值根和Patch，编码错误不写数据，历史错误编码不会自动迁移。仅scalar本身地址副本，不承诺任意引用对象深拷贝。[16](bugfix/RR-20261004-NC-16.md) · [17](bugfix/RR-20261004-NC-17.md)。
 
 Patch要求已有root，nil嵌套父可原子创建引用；单一同槽Lua先检查路径键类型，再维护叶、registry及路径祖先TTL，不续旁支TTL。缺root明确报错，Eval错误不自动重放；不提供版本CAS或原子Get快照，依赖敏感版本裁决时使用现有权威版本能力。[18/生成消费](bugfix/RR-20261004-NC-18.md)。
 
-内部root物理键碰撞、根__keys、同hash字段重复和冒号/换行存储名称在I/O前拒绝；合法格式保持。旧非法布局读/删也被拒，需导出现有确定键和布局后显式迁移，不自动删/改业务数据。[19](bugfix/RR-20261004-NC-19.md)。公开mongotest分页已统一排序→Skip→Limit，但并非真实Mongo/事务隔离认证，当前[新替身问题](bug/REVIEW-2026-10-04-noncore-14.md)仍需处理。
+内部root物理键碰撞、根__keys、同hash字段重复和冒号/换行存储名称在I/O前拒绝；合法格式保持。旧非法布局读/删也被拒，需导出现有确定键和布局后显式迁移，不自动删/改业务数据。[19](bugfix/RR-20261004-NC-19.md)。公开mongotest分页已统一排序→Skip→Limit，但并非真实Mongo/事务隔离认证，当前[新替身问题](bug/REVIEW-2026-10-04-noncore-16.md)仍需处理。
 
 ## 2026-10-04 缓存准入与旧写结果（main，尚未发版）
 

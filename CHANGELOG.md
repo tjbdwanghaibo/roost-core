@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **RefHMap未知写与Mongo替身契约（RR-20261004-NC-21～25）**：Eval失败保留原始原因，停止无条件DEL重放；已应用写不自动回滚，旧降级告警/计数移除，依赖fallback的adapter需支持现有Lua。替身深复制BSON容器、稳定去重_id候选、精确比较整数/有限float并按目标身份返回post-image；非有限float明确unsupported。40新增正式叶子、真实Redis及生成DAO验证通过；[记录](docs/review/REVIEW-2026-10-04-noncore-15.md)。
+
 - **RefHMap与替身分页（RR-20261004-NC-16～20）**：保留根指针类型、nil根写前拒绝、指针文本codec用地址副本；Patch同槽维护nil父引用/登记键/路径TTL，缺root或Eval失败明确返错。布局名称碰撞/重复/分隔符在I/O前拒绝；mongotest分页统一skip→limit。合法存储格式保持，旧非法布局/错误字节不自动迁移。[类型/编码](docs/bugfix/RR-20261004-NC-17.md)、[Patch/生成消费者](docs/bugfix/RR-20261004-NC-18.md)、[名称兼容](docs/bugfix/RR-20261004-NC-19.md)、[分页](docs/bugfix/RR-20261004-NC-20.md)
 
 - **缓存准入与拒写结果（RR-20261004-NC-13～15）**：ReadThrough的Get/Delete保留fatal裁决，Layered不交付L1拒绝的回填、不续拒绝TTL；Local/Grouped/RawJSON/JSONHash旧写现在返回ErrStaleWrite，容忍晚到写的调用方需显式errors.Is。普通故障策略、公开签名与存储格式保持；Redis读前比较仍非CAS。[fatal](docs/bugfix/RR-20261004-NC-13.md)、[Layered](docs/bugfix/RR-20261004-NC-14.md)、[兼容与消费者](docs/bugfix/RR-20261004-NC-15.md)

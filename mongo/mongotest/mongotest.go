@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -693,11 +694,17 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 		return fmongo.ErrNotFound
 	}
 	var before bson.M
+	var selectedKey string
 	if len(matched) > 0 {
-		before = cloneDoc(c.docs[matched[0]])
+		selectedKey = matched[0]
+		before = cloneDoc(c.docs[selectedKey])
 	}
-	if _, err := c.updateLocked(filter, update, option.Upsert, false); err != nil {
+	updated, err := c.updateLocked(filter, update, option.Upsert, false)
+	if err != nil {
 		return err
+	}
+	if updated.UpsertedCount > 0 {
+		selectedKey = updated.UpsertedID
 	}
 	if result == nil {
 		return nil
@@ -708,23 +715,12 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 		}
 		return decodeInto(before, result)
 	}
-	after, err := c.matchLocked(filter)
-	if err != nil {
-		return err
-	}
-	if len(after) == 0 {
-		// The update moved the document out of its own filter (a version CAS
-		// bump does exactly this); return it by identity instead.
-		if before != nil {
-			if key, keyErr := docKey(before); keyErr == nil {
-				if doc, ok := c.docs[key]; ok {
-					return decodeInto(doc, result)
-				}
-			}
-		}
+	// RR-20261004-NC-25：post-image 属于被更新的身份，不能用旧谓词另选文档。
+	doc, ok := c.docs[selectedKey]
+	if !ok {
 		return fmongo.ErrNotFound
 	}
-	return decodeInto(c.docs[after[0]], result)
+	return decodeInto(doc, result)
 }
 
 func (c *Collection) FindOneAndDelete(ctx context.Context, filter any, result any) (err error) {
@@ -1013,12 +1009,17 @@ func (c *Collection) idCandidatesLocked(filter bson.M) ([]string, bool) {
 			return nil, false
 		}
 		keys := make([]string, 0, len(values))
+		seen := make(map[string]bool, len(values))
 		for _, value := range values {
 			key, err := idKey(value)
 			if err != nil {
 				return nil, false
 			}
-			keys = append(keys, key)
+			// RR-20261004-NC-23：按规范化物理键去重，保留首次出现顺序。
+			if !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+			}
 		}
 		return keys, true
 	}
@@ -1200,9 +1201,57 @@ func normalizeDoc(doc any) (bson.M, error) {
 func cloneDoc(doc bson.M) bson.M {
 	out := make(bson.M, len(doc))
 	for k, v := range doc {
-		out[k] = v
+		out[k] = cloneBSONValue(v)
 	}
 	return out
+}
+
+// RR-20261004-NC-22：复制 BSON 容器并保持 M/D 形状，避免快照和读结果共享数据。
+// 存储值经真实 BSON codec 归一；其他 BSON 标量是值类型，无可变子对象。
+func cloneBSONValue(value any) any {
+	switch v := value.(type) {
+	case bson.M:
+		return cloneDoc(v)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, entry := range v {
+			out[key] = cloneBSONValue(entry)
+		}
+		return out
+	case bson.D:
+		out := make(bson.D, len(v))
+		for i, entry := range v {
+			out[i] = bson.E{Key: entry.Key, Value: cloneBSONValue(entry.Value)}
+		}
+		return out
+	case bson.A:
+		out := make(bson.A, len(v))
+		for i, entry := range v {
+			out[i] = cloneBSONValue(entry)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, entry := range v {
+			out[i] = cloneBSONValue(entry)
+		}
+		return out
+	case bson.Binary:
+		v.Data = append([]byte(nil), v.Data...)
+		return v
+	case bson.CodeWithScope:
+		v.Scope = cloneBSONValue(v.Scope)
+		return v
+	case bson.Raw:
+		return append(bson.Raw(nil), v...)
+	case bson.RawValue:
+		v.Value = append([]byte(nil), v.Value...)
+		return v
+	case []byte:
+		return append([]byte(nil), v...)
+	default:
+		return value
+	}
 }
 
 func decodeInto(value any, result any) error {
@@ -1694,12 +1743,13 @@ func valuesEqual(left any, right any) (bool, error) {
 		}
 		return string(leftBytes) == string(rightBytes), nil
 	}
-	if leftNum, ok := asFloat(left); ok {
-		rightNum, ok := asFloat(right)
+	if _, ok := asFloat(left); ok {
+		_, ok := asFloat(right)
 		if !ok {
 			return false, nil
 		}
-		return leftNum == rightNum, nil
+		cmp, err := compareNumbers(left, right)
+		return cmp == 0 && err == nil, err
 	}
 	switch typed := left.(type) {
 	case string:
@@ -1729,19 +1779,12 @@ func compareValues(left any, right any) (int, error) {
 	if right == nil {
 		return 1, nil
 	}
-	if leftNum, ok := asFloat(left); ok {
-		rightNum, ok := asFloat(right)
+	if _, ok := asFloat(left); ok {
+		_, ok := asFloat(right)
 		if !ok {
 			return 0, fmt.Errorf("%w: compare %T with %T", ErrUnsupported, left, right)
 		}
-		switch {
-		case leftNum < rightNum:
-			return -1, nil
-		case leftNum > rightNum:
-			return 1, nil
-		default:
-			return 0, nil
-		}
+		return compareNumbers(left, right)
 	}
 	if leftTime, ok := asTime(left); ok {
 		rightTime, ok := asTime(right)
@@ -1756,6 +1799,49 @@ func compareValues(left any, right any) (int, error) {
 		return strings.Compare(leftText, rightText), nil
 	}
 	return 0, fmt.Errorf("%w: compare %T with %T", ErrUnsupported, left, right)
+}
+
+// RR-20261004-NC-24：整数和有限浮点按精确值比较，不先舍入到 float64。
+// 非有限浮点显式拒绝，避免 NaN 在排序中冒充相等。
+func compareNumbers(left, right any) (int, error) {
+	a, err := exactNumber(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := exactNumber(right)
+	if err != nil {
+		return 0, err
+	}
+	return a.Cmp(b), nil
+}
+
+func exactNumber(value any) (*big.Rat, error) {
+	n := new(big.Rat)
+	switch v := value.(type) {
+	case uint:
+		return n.SetInt(new(big.Int).SetUint64(uint64(v))), nil
+	case uint8:
+		return n.SetInt64(int64(v)), nil
+	case uint16:
+		return n.SetInt64(int64(v)), nil
+	case uint32:
+		return n.SetInt64(int64(v)), nil
+	case uint64:
+		return n.SetInt(new(big.Int).SetUint64(v)), nil
+	case float32:
+		if n.SetFloat64(float64(v)) != nil {
+			return n, nil
+		}
+	case float64:
+		if n.SetFloat64(v) != nil {
+			return n, nil
+		}
+	default:
+		if v, ok := asInt64(value); ok {
+			return n.SetInt64(v), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: numeric value %v (%T)", ErrUnsupported, value, value)
 }
 
 func asFloat(value any) (float64, bool) {

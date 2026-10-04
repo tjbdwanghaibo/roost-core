@@ -6,6 +6,7 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-206 | RefHMap Set超时后较新写被覆盖，或升级后Lua失败明确返错 | RR-20261004-NC-21：旧Eval错误无身份重放 | Set原始error/errors.Is、权威读回、版本；旧degraded计数已移除 | 使用停止重放的修复；未知不等于未应用，不无条件DEL/重试；adapter需支持已有Lua，按业务现有权威/版本能力恢复 |
 | T-202 | RefHMap指针根Get panic，或nil根进入业务KeyOf | RR-20261004-NC-16：根内容类型与V形状不同 | 根V、nil输入、ErrRefHMapUnsupported | 使用保留根形状的修复；nil根明确拒绝，不转成功miss |
 | T-203 | 自定义文本字段Set成功却Get解码失败 | RR-20261004-NC-17：旧编码漏指针receiver codec | MarshalText方法集、实际Redis字节、解码错误 | 使用地址副本编码；已写坏字节需显式兼容/迁移，不自动重编码 |
 | T-204 | nil父Patch返回成功却不可读，或缺root现在返错 | RR-20261004-NC-18：原只写叶hash | root/父引用、键类型、registry、路径TTL | 使用单一Lua可见性修复，先Set建立root；Eval失败保留原因，不无条件重放 |

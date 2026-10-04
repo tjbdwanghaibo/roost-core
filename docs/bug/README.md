@@ -1,14 +1,25 @@
 # Roost Review 问题索引
 
+**10-04 N04第四批：NC-26～29四个P3已确认、未修，仅Mongo测试替身。** [运行](../review/REVIEW-2026-10-04-noncore-16.md) · [13叶子7fail/6控制](../review/evidence/noncore-review-20261004-16/README.md) · [机制/实施方案](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-26](REVIEW-2026-10-04-noncore-16.md#rr-20261004-nc-26) | P3 BSON.D嵌套路径查询漏匹配、set丢兄弟、unset未执行 | 已确认、未修 |
+| [RR-20261004-NC-27](REVIEW-2026-10-04-noncore-16.md#rr-20261004-nc-27) | P3 唯一索引建立接受已有重复数据 | 已确认、未修 |
+| [RR-20261004-NC-28](REVIEW-2026-10-04-noncore-16.md#rr-20261004-nc-28) | P3 bulk非法Type预检前提交合法前缀 | 已确认、未修 |
+| [RR-20261004-NC-29](REVIEW-2026-10-04-noncore-16.md#rr-20261004-nc-29) | P3 A全库abort擦除B已提交及新集合数据 | 已确认、未修 |
+
+**10-04第八批修复：NC-21～25 5/5已修、声明场景验证，未发版。** [40新增正式叶子/红绿/真实生成消费](../bugfix/evidence/noncore-bugfix-20261004-08/README.md)，十包race/vet、扩展消费者回归通过；17扩展环境skip留项。下方“第三批未修”保留历史。
+
 **10-04 N04第三批：NC-21～25五项已确认、未修。** Lua未知结果重放一P2；mongotest浅复制、重复候选、大整数比较和ReturnAfter身份四P3。[运行/40源文范围](../review/REVIEW-2026-10-04-noncore-14.md) · [机制/实施交接](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) · [真实Redis/替身反例](../review/evidence/noncore-review-20261004-14/README.md)。十二叶子6fail/6控制，五根因；场景部分完成。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261004-NC-21](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-21) | P2 RefHMap未知Lua结果重放覆盖另一完成写且返成功 | 已确认、未修 |
-| [RR-20261004-NC-22](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-22) | P3 mongotest浅复制破坏嵌套abort与读输出隔离 | 已确认、未修 |
-| [RR-20261004-NC-23](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-23) | P3 _id $in快速候选重复同一文档 | 已确认、未修 |
-| [RR-20261004-NC-24](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-24) | P3 浮点化整数使不同int64版本相等 | 已确认、未修 |
-| [RR-20261004-NC-25](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-25) | P3 ReturnAfter重匹配旧filter返回另一文档 | 已确认、未修 |
+| [RR-20261004-NC-21](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-21) | P2 RefHMap未知Lua结果重放覆盖另一完成写且返成功 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-21.md) |
+| [RR-20261004-NC-22](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-22) | P3 mongotest浅复制破坏嵌套abort与读输出隔离 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-22.md) |
+| [RR-20261004-NC-23](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-23) | P3 _id $in快速候选重复同一文档 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-23.md) |
+| [RR-20261004-NC-24](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-24) | P3 浮点化整数使不同int64版本相等 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-24.md) |
+| [RR-20261004-NC-25](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-25) | P3 ReturnAfter重匹配旧filter返回另一文档 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-25.md) |
 
 **10-04第七批修复：NC-16～20 5/5已修、声明场景验证，未发版。** [41正式项/红绿/真实生成消费](../bugfix/evidence/noncore-bugfix-20261004-07/README.md)，十包race/vet通过。下方“第二批未修”保留历史时点。
 

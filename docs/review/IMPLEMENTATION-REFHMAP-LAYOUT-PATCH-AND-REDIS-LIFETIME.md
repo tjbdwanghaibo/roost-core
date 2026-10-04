@@ -1,6 +1,6 @@
 # RefHMap 布局、Patch 可见性与 Redis 生命周期
 
-2026-10-04，首次RefHMap/Redis/Mongo源文基线`1502f973`，随后在`08d18be9`起点[修复NC-16～20](REVIEW-2026-10-04-noncore-13.md)并[接续N04](REVIEW-2026-10-04-noncore-14.md)。[原反例](evidence/noncore-review-20261004-12/README.md)保留；下文已同步当前实现，新NC-21～25建议尚未实施。
+2026-10-04，首次RefHMap/Redis/Mongo源文基线`1502f973`，随后[修复NC-16～20](REVIEW-2026-10-04-noncore-13.md)，并在`ce90e90d`起点[修复NC-21～25](REVIEW-2026-10-04-noncore-15.md)、[继续N04](REVIEW-2026-10-04-noncore-16.md)。[原反例](evidence/noncore-review-20261004-12/README.md)保留；新NC-26～29仍未修。
 
 ## 类型树与物理键
 
@@ -12,7 +12,7 @@ Get用reflect.New(root.typ).Elem构造内容，再按根V返回struct或指针�
 
 ## 全量 Set 与字段 Patch
 
-Set验证/keyOf，Stale时先Get（建议性比较），encode各节点，添加registry，再执行同槽Lua：删除登记键→写所有新hash→设置每hashTTL。Lua错误当前全部走pipeline/串行DEL+HSET fallback并告警/计数；降级非原子、网络未知和Lua运行时错误不具备回滚保证。后续真实Lua+执行后丢回复注入已确认[NC-21](../bug/REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-21)未修：fallback覆盖另一完成写并吞原错误。它不是整体CAS承诺，应先停止无身份未知重放。
+Set验证/keyOf，Stale时先Get（建议性比较），encode各节点，添加registry，再执行同槽Lua：删除登记键→写所有新hash→设置每hashTTL。[NC-21现已修](../bugfix/RR-20261004-NC-21.md)：Eval错误直接保留原始原因，不再DEL重放/降级返成功，旧degraded告警/计数移除。真实Lua后丢回复注入、另一正式写者v3与生成消费者已验；没有整体CAS、网络未知自动回滚或真实TCP故障证明。
 
 Patch找scalar路径，由patchTarget列出根到叶的键与引用；NC-18修后单一同槽Lua先检查全部路径TYPE、要求root已存在，再维护父引用、目标字段、registry和路径TTL。nil parent可以建立，缺整条root明确Unsupported，错误不降级重放。local/raw生成DAO仍Get→PatchStructPath→Set，ref-hmap直接转Patch；正式生成ref-hmap的nil父与已有路径更新已实测，两种模式缺root等边界仍各守其契约。
 
@@ -30,4 +30,4 @@ Patch找scalar路径，由patchTarget列出根到叶的键与引用；NC-18修�
 
 正式[driver collection](../../mongo/driver/collection.go)把Skip传给SDK，生产cursor与Bulk/transaction结果仍需真实Mongo。公开[mongotest](../../mongo/mongotest/mongotest.go)的NC-20已修，两入口共用排序后skip→limit，越界为空且大int64不先窄化；20个正式分页场景通过，不把替身修复说成服务端认证。
 
-mongotest全文现已读，NC-22～25复制/身份/精度问题仍未修，见[机制学习](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。它的内存快照不是服务端隔离级别/HA证明；仍需BSON嵌套、索引/bulk/并发事务与差分测试。N04源文40/40、场景部分完成，下一轮继续具名留项。[缓存准入及迁移](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)沿用既有NC-13～15结论。
+mongotest累计源文已读，NC-22～25复制/身份/精度已修，见[机制学习及新方案](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。其D路径/索引建立/bulk Type/并发restore已确认NC-26～29四项未修；内存快照不是服务端隔离级别/HA证明。N04源文40/40、场景部分完成，下一轮继续Redis真实故障、schema/恢复及正式迁移消费。[缓存准入及迁移](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)沿用既有NC-13～15结论。

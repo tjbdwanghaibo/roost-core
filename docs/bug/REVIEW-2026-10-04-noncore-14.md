@@ -1,5 +1,7 @@
 # N04第三批新问题：未知写与Mongo测试契约
 
+**后续状态（2026-10-04）：NC-21～25均已修复、声明场景验证，未发版。** [修复运行](../review/REVIEW-2026-10-04-noncore-15.md) · [NC-21](../bugfix/RR-20261004-NC-21.md) · [NC-22](../bugfix/RR-20261004-NC-22.md) · [NC-23](../bugfix/RR-20261004-NC-23.md) · [NC-24](../bugfix/RR-20261004-NC-24.md) · [NC-25](../bugfix/RR-20261004-NC-25.md)。原始失败及下文未修时点保留；后续[NC-26～29](REVIEW-2026-10-04-noncore-16.md)独立未修。
+
 2026-10-04，main基线`08d18be9608598c042a58b3658aa4735d88f8c7b`，同树NC-16～20已修；**以下NC-21～25已确认、未修**。[运行](../review/REVIEW-2026-10-04-noncore-14.md) · [十二叶子6fail/6控制](../review/evidence/noncore-review-20261004-14/README.md) · [机制/建议](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。
 
 ## RR-20261004-NC-21

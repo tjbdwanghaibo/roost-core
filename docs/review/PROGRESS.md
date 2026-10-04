@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第八批修复 + 非三大核心第九批 N04
+
+main起点`ce90e90d`，fetch/pull无增量。[NC-21～25修复](REVIEW-2026-10-04-noncore-15.md) · [N04第四批](REVIEW-2026-10-04-noncore-16.md) · [NC-26～29未修](../bug/REVIEW-2026-10-04-noncore-16.md) · [机制/实施交接](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。下方旧未修为历史时点，未发版。
+
+| 范围 | 本批证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-21～25 | 原12叶子6fail/6控制、旧产品overlay复跑相同；40新增正式叶子通过，十包race/vet292叶子pass/0fail/skip | 五项已修，未知Lua错误/复制/唯一成员/精确比较/post-image身份已验 |
+| 正式与受影响消费者 | DAO CLI独立module生成、两个真实Redis消费者race/vet通过；DataEngine/Kit/Service14测试包674叶子pass/17skip | 仅已有回归，不重审核心三模块；17环境skip单列，不计通过 |
+| N04源文 | 固定清单累计40/40已读；38同hash复用、两项未变范围复用+当前diff补证 | [inventory/hash/来源](evidence/noncore-review-20261004-16/inventory.csv)，不是本轮新读40文件或业务100% |
+| 新审查 | 13叶子7fail/6控制：D路径、已有重复的unique建立、非法bulk Type预检、并发全库restore | NC-26～29四P3，仅公开Mongo替身，已确认未修 |
+
+下一新范围 **Redis锁/AutoExtend/pubsub真实故障 → RefHMap schema与未知结果恢复 → 正式迁移消费**，真实Mongo cursor/partial bulk/事务与Cluster/HA继续留项。用户说没有修复则跳过NC-26～29验收；要求bugfix先处理四项。N01～N04仍不计completed/15，约50～90有效小时风险预算保持，未以文件或测试数扣减。[证据](evidence/noncore-review-20261004-16/README.md) · [计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [CARRYOVER](../bug/CARRYOVER.md)。
+
 ## 2026-10-04 第七批修复 + 非三大核心第八批 N04
 
 基线`08d18be9`，fetch/pull无增量。[NC-16～20修复](REVIEW-2026-10-04-noncore-13.md) · [N04第三批](REVIEW-2026-10-04-noncore-14.md) · [五新未修RR](../bug/REVIEW-2026-10-04-noncore-14.md) · [机制学习](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。下方旧未修保留历史，未发版。

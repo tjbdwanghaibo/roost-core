@@ -22,7 +22,7 @@ ReadThrough此前已针对已有L1较新value与stale墓碑做回填控制；不
 
 已有AtomicLocal适合不可变值的低争用命中；Local精确LRU的命中锁和RefHMap反射/多key网络代价应结合实际负载比较，本批无benchmark，不宣称哪个“更快”。Atomic使用每片容量带来碎片/大对象限制，需按部署分片数定容。
 
-Layered expiry只在相同key重查/显式删除时回收；两层各1条数据而1000个短TTL历史key留下1000条expiry是首次审查观察。现有API没有expiry单独上限，不能凭L1 MaxEntries推断整个组合内存有界。可优先在支持ExpiringStore时复用entry TTL，其他store走有界清理/显式容量策略；先定兼容规则并测高基数长期内存，再实施优化。RefHMap的NC-16～19后续已修、正式真实Redis与生成消费验证，见[layout/Patch机制与交接](IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)；全量Set未知结果已升级为未修NC-21，跨版本schema与并发故障仍需补证。
+Layered expiry只在相同key重查/显式删除时回收；两层各1条数据而1000个短TTL历史key留下1000条expiry是首次审查观察。现有API没有expiry单独上限，不能凭L1 MaxEntries推断整个组合内存有界。可优先在支持ExpiringStore时复用entry TTL，其他store走有界清理/显式容量策略；先定兼容规则并测高基数长期内存，再实施优化。RefHMap的NC-16～19后续已修、正式真实Redis与生成消费验证，见[layout/Patch机制与交接](IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)；全量Set未知结果NC-21也已修，错误不重放，跨版本schema/恢复与并发故障仍需补证。
 
 Redis pipeline减少批次网络往返，既不是事务也不是跨key原子快照；Exec要检查所有command/future错误，已执行命令不回滚。CAS索引与value在同一Lua脚本维护，需要同slot；同脚本的隔离不意味着发生runtime错误后自动撤销前缀写入。对于超时未知结果，应按记录身份/当前值恢复，不能盲目当未应用后重做副作用。
 
@@ -42,4 +42,4 @@ BulkWrite转换支持四类model，未知类型先拒绝，驱动错误保留dup
 
 KitRedis主要解析配置、发布core Assembly并转发生命周期；KitMongo仍持有client、配置与health/启动/部署校验逻辑。只读这两文件不证明所有Kit只做组装，也未将它们的connected生命周期列为已测试。
 
-下一入口依次是：mongotest BSON嵌套/索引/bulk/并发事务矩阵 → RefHMap未知结果恢复与schema → Redis锁/续租/pubsub真实故障与Cluster → Mongo真实cursor与partial bulk/transaction重试 → 正式DAO/codegen迁移消费。现N04累计40/40清单源文已读、场景部分完成，NC-16～20已修、NC-21～25未修；复用Service既有SHA的驱动故障证据，补缺口而不全量重跑十域。固定文件清单不等于业务覆盖分母。
+mongotest BSON嵌套/索引/bulk/并发事务矩阵已在[第四批](REVIEW-2026-10-04-noncore-16.md)确认NC-26～29未修。下一新入口是Redis锁/续租/pubsub真实故障与Cluster → RefHMap未知结果恢复与schema → Mongo真实cursor/partial bulk/transaction重试 → 正式DAO/codegen迁移消费。N04累计40/40清单源文已读、场景部分完成，NC-13～25已修；复用Service既有SHA驱动故障证据，补缺口而不全量重跑十域。固定文件清单不等于业务覆盖分母。

@@ -1,0 +1,12 @@
+{"Time":"2026-10-04T14:19:10.526028+08:00","Action":"start","Package":"example.com/roostrefconsumer/db"}
+{"Time":"2026-10-04T14:19:11.7991058+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer"}
+{"Time":"2026-10-04T14:19:11.7991058+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Output":"=== RUN   TestGeneratedRefHMapPatchConsumer\n","OutputType":"frame"}
+{"Time":"2026-10-04T14:19:11.812791+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Output":"--- PASS: TestGeneratedRefHMapPatchConsumer (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T14:19:11.812791+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Elapsed":0.01}
+{"Time":"2026-10-04T14:19:11.8133303+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapUnknownWriteConsumer"}
+{"Time":"2026-10-04T14:19:11.8133303+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapUnknownWriteConsumer","Output":"=== RUN   TestGeneratedRefHMapUnknownWriteConsumer\n","OutputType":"frame"}
+{"Time":"2026-10-04T14:19:11.8205652+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapUnknownWriteConsumer","Output":"--- PASS: TestGeneratedRefHMapUnknownWriteConsumer (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T14:19:11.8205652+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapUnknownWriteConsumer","Elapsed":0.01}
+{"Time":"2026-10-04T14:19:11.8205652+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T14:19:12.8457258+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"ok  \texample.com/roostrefconsumer/db\t2.320s\n"}
+{"Time":"2026-10-04T14:19:12.8457258+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Elapsed":2.32}

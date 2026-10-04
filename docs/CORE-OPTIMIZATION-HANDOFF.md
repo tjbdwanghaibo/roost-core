@@ -160,6 +160,15 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 
+2026-10-04 B线第八批修复与N04第四批接续（起点`ce90e90d`，未发版）：
+
+| 问题 | 当前状态 | 证据 |
+| --- | --- | --- |
+| NC-21～25 | 五项已修、声明场景验证；Eval不重放，替身复制/成员/精度/post-image正确 | [修复](review/REVIEW-2026-10-04-noncore-15.md)，40新增正式叶子/十包race-vet/两个生成DAO真实消费者；扩展消费17skip留项 |
+| NC-26～29 | 四个P3已确认未修，仅mongotest；D路径、unique建立、bulk预检、并发restore | [审查/13叶子](review/REVIEW-2026-10-04-noncore-16.md) · [问题](bug/REVIEW-2026-10-04-noncore-16.md) · [方案](review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) |
+
+N04源文40/40累计复用已读、场景部分完成；另一线三大核心只跑受影响回归，不重审或改实现。下方旧未修保留当时时点，真实Mongo/Cluster/HA/长稳及性能不由本次宣布完成。
+
 以下索引覆盖此次核心优化阶段2026-09-23～26的RR记录；保留独立问题与修复文件，修复记录内有原始复现、验证和限制，不把索引等同于本轮逐项复验。更早记录继续查 [bug索引](bug/README.md)、[bugfix索引](bugfix/README.md) 和 [review索引](review/README.md)。
 
 | 问题 | 主题 | 修复记录 |
