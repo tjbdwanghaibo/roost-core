@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -994,4 +995,222 @@ func TestAHandBackWaitsForThePlayersWritesToReachTheDatabase(t *testing.T) {
 	if asked != 3 {
 		t.Fatalf("hand-back asked about the projection %d times, want once per pass (3)", asked)
 	}
+}
+
+// RR-20260921-03：归还进行到一半时同一玩家登录，Claim 的回答必须与共享表一致。
+//
+// 闲置归还在选中玩家的那把锁里置 handingBack，然后撤离副本、等投影落库、Release。
+// 旧实现里 Claim 不看 handingBack：只把 Admit 当"是否连续持有"的探针，此时 Redis
+// 里的认领还是本进程的，store.Claim 回答 ours，confirmClaim 再把 handingBack 清掉；
+// 归还流程随后不回头确认，无条件 Release——登录方拿到 mine=true，共享表里却已无人
+// 拥有这个玩家，另一个进程可以合法地装载第二份副本。两种交错都出现过：确认先于
+// Release（admitted=false，玩家登录成功却每条消息被拒），Release 先于确认
+// （admitted=true，本进程放行写入而 Redis 无主）。
+//
+// 承诺：Claim 返回 mine=true 时，共享表里这个玩家归本进程、本地准入放行；归还进行中
+// 的 Claim 等这次归还结束再决定（受调用方 ctx 约束），归还不会在它脚下 Release。
+
+type claimAnswer struct {
+	mine bool
+	err  error
+}
+
+func claimInBackground(ctx context.Context, owners *PlayerOwners, playerID int64) <-chan claimAnswer {
+	answered := make(chan claimAnswer, 1)
+	go func() {
+		mine, err := owners.Claim(ctx, playerID)
+		answered <- claimAnswer{mine, err}
+	}()
+	return answered
+}
+
+// parkedOnHandBack is closed when a Claim of the player starts waiting for
+// the hand-back in progress.
+func parkedOnHandBack(owners *PlayerOwners, playerID int64) <-chan struct{} {
+	parked := make(chan struct{})
+	var once sync.Once
+	owners.onHandBackWait = func(waiting int64) {
+		if waiting == playerID {
+			once.Do(func() { close(parked) })
+		}
+	}
+	return parked
+}
+
+// waitAsked returns once the hand-back has reached the projection wait for
+// the player: the copy is gone and the release is still to come.
+func waitAsked(t *testing.T, stub *projectionStub, playerID int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stub.mu.Lock()
+		for _, asked := range stub.asked {
+			if asked == playerID {
+				stub.mu.Unlock()
+				return
+			}
+		}
+		stub.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("the hand-back never reached the projection wait for %d", playerID)
+}
+
+// handBackHeldAtTheProjectionWait owns 77 through a background claim, lets it
+// go idle and starts a refresh pass whose hand-back stops after the copy was
+// dropped and before the release. The returned func lets the writes land; the
+// channel closes when the pass is over.
+func handBackHeldAtTheProjectionWait(t *testing.T, owners *PlayerOwners, clock *time.Time) (land func(), renewed <-chan struct{}) {
+	t.Helper()
+	projections := newProjectionStub()
+	owners.Projections(projections)
+	owners.projectionWait = time.Minute
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	land = projections.inFlight()
+	t.Cleanup(land)
+	*clock = clock.Add(HandBackIdle + time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); owners.renew(ctx) }()
+	waitAsked(t, projections, 77)
+	return land, done
+}
+
+func requireClaimMatchesTheTable(t *testing.T, owners *PlayerOwners, table *fakeLeaseTable, playerID int64, got claimAnswer) {
+	t.Helper()
+	held := table.owner[playerID] == table.sid
+	admitted := owners.Admit(playerID) == nil
+	t.Logf("mine=%v err=%v admitted=%v redis_owner_held=%v released=%v", got.mine, got.err, admitted, held, table.released)
+	if got.mine && !held {
+		t.Fatalf("Claim reported mine=true, but the shared table has no owner for %d (another process may load a second copy): admitted=%v released=%v", playerID, admitted, table.released)
+	}
+	if got.mine && !admitted {
+		t.Fatalf("Claim reported mine=true, but this process refuses the player's writes: released=%v", table.released)
+	}
+	// Nobody else wants this player, so the login must end up served.
+	if !got.mine || got.err != nil {
+		t.Fatalf("a login during a hand-back was not taken into service: mine=%v err=%v", got.mine, got.err)
+	}
+}
+
+func TestAClaimDuringAHandBackNeverEndsWithAnUnownedPlayer(t *testing.T) {
+	// The claim would be confirmed while the hand-back waits for the
+	// projection, and the release would come after it.
+	t.Run("confirm-before-release", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		parked := parkedOnHandBack(owners, 77)
+		land, renewed := handBackHeldAtTheProjectionWait(t, owners, clock)
+
+		answered := claimInBackground(context.Background(), owners, 77)
+		var got claimAnswer
+		select {
+		case <-parked: // waiting for the hand-back to finish
+			land()
+			<-renewed
+			got = <-answered
+		case got = <-answered: // answered inside the window
+			land()
+			<-renewed
+		}
+		requireClaimMatchesTheTable(t, owners, table, 77, got)
+	})
+
+	// The claim's store.Claim answers "ours" inside the window, and its own
+	// drop of the copy is still running when the hand-back releases.
+	t.Run("release-before-confirm", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		parked := parkedOnHandBack(owners, 77)
+		// Evictions: the background claim's (finds nothing), the hand-back's,
+		// then the login claim's, which is held until the test lets it go.
+		var calls atomic.Int32
+		claimDropStarted := make(chan struct{})
+		letClaimDropFinish := make(chan struct{})
+		owners.Evict(evictorFunc(func(context.Context, int64) error {
+			if calls.Add(1) == 3 {
+				close(claimDropStarted)
+				<-letClaimDropFinish
+			}
+			return nil
+		}))
+		land, renewed := handBackHeldAtTheProjectionWait(t, owners, clock)
+
+		answered := claimInBackground(context.Background(), owners, 77)
+		select {
+		case <-parked:
+		case <-claimDropStarted: // store.Claim already answered "ours"
+		}
+		land()
+		<-renewed
+		close(letClaimDropFinish)
+		requireClaimMatchesTheTable(t, owners, table, 77, <-answered)
+	})
+
+	// The hand-back gives up (the copy could not be dropped): the lease stays
+	// in service, and the claim that waited for it is served by it — after
+	// joining the drop, because a copy a hand-back started to drop is not a
+	// copy to keep serving.
+	t.Run("hand-back-gives-up", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		owners.evictWait = time.Minute
+		parked := parkedOnHandBack(owners, 77)
+		ctx := context.Background()
+		if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+			t.Fatalf("owns: %v %v", owned, err)
+		}
+		handBackDropStarted := make(chan struct{})
+		letHandBackDropFail := make(chan struct{})
+		var calls atomic.Int32
+		owners.Evict(evictorFunc(func(context.Context, int64) error {
+			if calls.Add(1) == 1 {
+				close(handBackDropStarted)
+				<-letHandBackDropFail
+				return errors.New("the entity is busy")
+			}
+			return nil
+		}))
+		*clock = clock.Add(HandBackIdle + time.Second)
+		renewed := make(chan struct{})
+		go func() { defer close(renewed); owners.renew(ctx) }()
+		<-handBackDropStarted
+
+		answered := claimInBackground(ctx, owners, 77)
+		<-parked
+		close(letHandBackDropFail)
+		<-renewed
+		requireClaimMatchesTheTable(t, owners, table, 77, <-answered)
+		if len(table.released) != 0 {
+			t.Fatalf("a hand-back that gave up released the claim: %v", table.released)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("the claim that waited did not drop the copy the hand-back had started on: evictions=%d", calls.Load())
+		}
+	})
+
+	// The wait belongs to the caller: a login whose budget runs out gets an
+	// error it can tell apart (login_timeout), and the hand-back carries on.
+	t.Run("the-wait-ends-with-the-callers-context", func(t *testing.T) {
+		owners, table, _, clock := ownersUnderTest(t)
+		parked := parkedOnHandBack(owners, 77)
+		land, renewed := handBackHeldAtTheProjectionWait(t, owners, clock)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		answered := claimInBackground(ctx, owners, 77)
+		<-parked
+		cancel()
+		got := <-answered
+		if got.mine || !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("a claim whose caller gave up waiting answered mine=%v err=%v, want the caller's context error", got.mine, got.err)
+		}
+		land()
+		<-renewed
+		if _, held := table.owner[77]; held || len(table.released) != 1 {
+			t.Fatalf("the hand-back did not complete after the waiting claim gave up: owner=%v released=%v", table.owner, table.released)
+		}
+		// And the claim that gave up does not keep the next one out.
+		if mine, err := owners.Claim(context.Background(), 77); !mine || err != nil {
+			t.Fatalf("a later login was not served: mine=%v err=%v", mine, err)
+		}
+	})
 }

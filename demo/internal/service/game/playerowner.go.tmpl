@@ -74,6 +74,10 @@ type PlayerOwners struct {
 	projections    projectionBarrier
 	projectionWait time.Duration
 	now            func() time.Time
+	// onHandBackWait, when set, is told that a Claim has started waiting for
+	// a hand-back of the player. It is for tests, which have no other way to
+	// see a goroutine park; nothing in the process sets it.
+	onHandBackWait func(playerID int64)
 
 	mu    sync.Mutex
 	local map[int64]*leaseState
@@ -82,8 +86,13 @@ type PlayerOwners struct {
 	// still running: every caller joins the one in flight instead of starting
 	// a second.
 	evictions map[int64]*eviction
-	stop      chan struct{}
-	done      chan struct{}
+	// claiming counts the Claims of each player between their decision to go
+	// ahead and their return. A hand-back does not pick a player with one in
+	// progress; a Claim does not go ahead while a hand-back of the player is
+	// in progress. The two never overlap on one player (RR-20260921-03).
+	claiming map[int64]int
+	stop     chan struct{}
+	done     chan struct{}
 }
 
 // leaseTable is the shared table as these owners use it. The interface exists
@@ -278,7 +287,16 @@ type leaseState struct {
 	// consumer admitted in it would load a fresh copy of a player this
 	// process is about to hand to somebody else (RR-20260920-11). A hand-back
 	// that does not complete clears the flag and the lease stays in service.
+	//
+	// The flag belongs to the hand-back that set it: only finishHandBack
+	// clears it. A confirmation used to clear it as well, which let a Claim
+	// that landed in the middle of a hand-back erase the mark — and the
+	// hand-back, never looking back, then released the lease the Claim had
+	// just answered "mine" for (RR-20260921-03).
 	handingBack bool
+	// handBackDone is closed when the hand-back marked by handingBack ends,
+	// whichever way. A Claim of the player waits on it.
+	handBackDone chan struct{}
 }
 
 // ErrLeaseNotHeld is what a write path gets when this process cannot prove it
@@ -355,6 +373,7 @@ func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Tim
 		evictWait: evictBudget, projectionWait: evictBudget,
 		local:     map[int64]*leaseState{},
 		evictions: map[int64]*eviction{},
+		claiming:  map[int64]int{},
 	}
 }
 
@@ -587,69 +606,128 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 // waits for this player's projections (RR-20260926-31). Evicting first means
 // no new write can join them; admission is already stopped by handingBack. A
 // wait that fails or runs out of budget keeps the lease, and the next pass
-// tries again. One budget covers the whole pass: a stalled database costs the
-// refresh loop one projectionWait, not one per player.
+// tries again. One projectionWait covers the whole pass: a stalled database
+// costs the refresh loop one projectionWait, not one per player.
+//
+// A Claim of a player being handed back waits for the hand-back to end, and a
+// hand-back does not pick a player a Claim is working on (see enterClaim), so
+// the two never decide about one player at the same time (RR-20260921-03).
+// This pass runs on the refresh loop's goroutine and ends every hand-back it
+// starts before it returns; the loop's own Claims (a lapsed lease being
+// retaken) therefore never find one in progress and never wait on themselves.
 func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 	owners.mu.Lock()
 	sessions := owners.fencer
 	projections := owners.projections
 	projectionWait := owners.projectionWait
-	now := owners.now()
-	var idle []int64
+	started := owners.now()
+	var chosen []handBack
 	if sessions != nil {
 		for playerID, state := range owners.local {
-			if state.lost || state.handingBack || now.Sub(state.lastUsed) < HandBackIdle {
+			if state.lost || state.handingBack || owners.claiming[playerID] > 0 || started.Sub(state.lastUsed) < HandBackIdle {
 				continue
 			}
 			// Marked while the lock that chose it is still held, so no
-			// admission can slip between the choice and the stop.
+			// admission and no claim can slip between the choice and the stop.
 			state.handingBack = true
-			idle = append(idle, playerID)
-			if len(idle) == handBackBudget {
+			state.handBackDone = make(chan struct{})
+			chosen = append(chosen, handBack{playerID: playerID, state: state})
+			if len(chosen) == handBackBudget {
 				break
 			}
 		}
 	}
 	owners.mu.Unlock()
-	if len(idle) == 0 {
+	if len(chosen) == 0 {
 		return
 	}
+	pending := chosen
+	// Whatever the pass did not get to goes back into service, so that no
+	// lease is left refusing everything and no Claim is left waiting.
+	defer func() {
+		for _, untouched := range pending {
+			owners.finishHandBack(untouched, false)
+		}
+	}()
 	projected, cancel := context.WithTimeout(ctx, projectionWait)
 	defer cancel()
-	for _, playerID := range idle {
-		// Asked outside the lock, and asked last: a player who reconnected
-		// while this pass was deciding keeps their lease.
-		if sessions.ActiveSessions(playerID) > 0 {
-			owners.cancelHandBack(playerID)
-			continue
-		}
-		if err := owners.dropResident(ctx, playerID); err != nil {
-			slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
-			owners.cancelHandBack(playerID)
-			continue
-		}
-		if projections == nil {
-			slog.Warn("player owners: idle lease kept because nothing can show its player's writes reached the database", "player_id", playerID)
-			owners.cancelHandBack(playerID)
-			continue
-		}
-		if err := projections.WaitPlayerProjection(projected, playerID); err != nil {
-			slog.Warn("player owners: idle lease kept because its player's writes have not reached the database yet", "player_id", playerID, "err", err)
-			owners.cancelHandBack(playerID)
-			continue
-		}
-		owners.Release(ctx, playerID)
-		slog.Info("player owners: idle lease handed back", "player_id", playerID)
+	for len(pending) > 0 {
+		next := pending[0]
+		pending = pending[1:]
+		owners.handBackOne(ctx, projected, sessions, projections, next)
 	}
 }
 
-// cancelHandBack puts a lease back in service after a hand-back that did not
-// happen. Admission resumes; the next pass will consider it again.
-func (owners *PlayerOwners) cancelHandBack(playerID int64) {
+// handBack is one lease a pass decided to give back, with the state it marked.
+type handBack struct {
+	playerID int64
+	state    *leaseState
+}
+
+// handBackOne gives one lease back, or puts it back in service. projected
+// bounds the projection wait; ctx is the refresh loop's.
+func (owners *PlayerOwners) handBackOne(ctx, projected context.Context, sessions sessionFencer, projections projectionBarrier, chosen handBack) {
+	playerID := chosen.playerID
+	// Asked outside the lock, and asked last: a player who reconnected while
+	// this pass was deciding keeps their lease.
+	if sessions.ActiveSessions(playerID) > 0 {
+		owners.finishHandBack(chosen, false)
+		return
+	}
+	if err := owners.dropResident(ctx, playerID); err != nil {
+		slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
+		owners.finishHandBack(chosen, false)
+		return
+	}
+	if projections == nil {
+		slog.Warn("player owners: idle lease kept because nothing can show its player's writes reached the database", "player_id", playerID)
+		owners.finishHandBack(chosen, false)
+		return
+	}
+	if err := projections.WaitPlayerProjection(projected, playerID); err != nil {
+		slog.Warn("player owners: idle lease kept because its player's writes have not reached the database yet", "player_id", playerID, "err", err)
+		owners.finishHandBack(chosen, false)
+		return
+	}
+	// The decision was taken a while ago; check that it still stands before
+	// acting on it. Claims are kept out for the whole hand-back, but this is
+	// the line the hand-back used to cross without looking (RR-20260921-03):
+	// if the lease is no longer the one this pass marked, something else has
+	// ended it, and releasing now could release somebody else's.
+	owners.mu.Lock()
+	stillOurs := owners.local[playerID] == chosen.state && chosen.state.handingBack
+	owners.mu.Unlock()
+	if !stillOurs {
+		slog.Warn("player owners: idle lease not released, it changed hands during the hand-back", "player_id", playerID)
+		owners.finishHandBack(chosen, false)
+		return
+	}
+	// The state stays marked through the release, so a Claim that arrives now
+	// waits for it rather than reading the claim this is about to delete.
+	if err := owners.store.Release(ctx, playerID); err != nil {
+		// The copy is gone and its writes have landed; the lease lapses on its
+		// own, since nothing here renews it any more.
+		slog.Warn("player owners: claim not released", "player_id", playerID, "err", err)
+	}
+	owners.finishHandBack(chosen, true)
+	slog.Info("player owners: idle lease handed back", "player_id", playerID)
+}
+
+// finishHandBack ends one hand-back. released means the claim was given up,
+// so the local state goes with it; otherwise the lease goes back into service
+// and the next pass will consider it again. Either way, a Claim waiting for
+// this hand-back goes ahead.
+func (owners *PlayerOwners) finishHandBack(chosen handBack, released bool) {
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
-	if state := owners.local[playerID]; state != nil {
-		state.handingBack = false
+	state := chosen.state
+	if released && owners.local[chosen.playerID] == state {
+		delete(owners.local, chosen.playerID)
+	}
+	state.handingBack = false
+	if state.handBackDone != nil {
+		close(state.handBackDone)
+		state.handBackDone = nil
 	}
 }
 
@@ -689,7 +767,9 @@ func (owners *PlayerOwners) confirmLocked(playerID int64, used bool) {
 	state.validUntil = owners.now().Add(playerroute.Lease)
 	state.lost = false
 	state.interrupted = false
-	state.handingBack = false
+	// handingBack is not touched: it belongs to the hand-back that set it
+	// (see leaseState). No confirmation can meet one in progress — a Claim
+	// waits for it, and renewals run on the goroutine that runs it.
 	if used || state.lastUsed.IsZero() {
 		state.lastUsed = owners.now()
 	}
@@ -860,6 +940,16 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	if owners == nil {
 		return false, nil
 	}
+	// A hand-back of this player in progress is waited out first, and none
+	// starts until this returns (RR-20260921-03). Before, a Claim that landed
+	// in a hand-back found the claim in Redis still ours, answered "mine" —
+	// and the hand-back then released it: the caller loaded the player while
+	// the shared table said nobody owned them.
+	waited, err := owners.enterClaim(ctx, playerID)
+	if err != nil {
+		return false, err
+	}
+	defer owners.leaveClaim(playerID)
 	// Whether this process has held the player WITHOUT INTERRUPTION up to
 	// this moment, asked before the claim rather than after it — afterwards
 	// the answer is yes either way.
@@ -871,7 +961,11 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	// player. The copy from before the gap has to go before this process
 	// writes anything again (RR-20260920-09); for a player who was never
 	// here it costs one call that finds nothing to do.
-	continuous := owners.Admit(playerID) == nil
+	//
+	// A hand-back this claim waited for counts as a gap too, whatever its
+	// ending: it set out to drop the copy, and a drop that outlived its wait
+	// is still running. Joining it costs nothing when it has finished.
+	continuous := owners.Admit(playerID) == nil && !waited
 	route, err := owners.store.Claim(ctx, playerID)
 	if err != nil {
 		return false, err
@@ -905,6 +999,62 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	}
 	owners.confirmClaim(playerID)
 	return mine, nil
+}
+
+// enterClaim lets a Claim of the player go ahead: it waits for a hand-back of
+// the player that is in progress to end, then registers the claim so that no
+// hand-back picks the player until leaveClaim. waited reports whether there
+// was a hand-back to wait for.
+//
+// The check and the registration are one critical section, and the hand-back
+// marks its choice in one too — so for each player either the Claim sees the
+// hand-back and waits, or the hand-back sees the Claim and passes the player
+// over. Lock and wait order: mu is never held while waiting, and a hand-back
+// never waits for a Claim, so the wait cannot close a cycle. It ends when the
+// hand-back does — at the latest when the pass that chose the player ends —
+// or when ctx does: a login's budget is player_access.tcp.login_timeout, and
+// its caller answers login_timeout on the context error, which the client
+// retries.
+//
+// Where it blocks: the login (on its connection's goroutine, not a Nest
+// worker), and Owns from a saga step's admission (on the consumer's
+// goroutine) — and Owns only reaches Claim once Redis has stopped answering
+// with this process, which during a hand-back is the last round trip of it.
+func (owners *PlayerOwners) enterClaim(ctx context.Context, playerID int64) (waited bool, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		owners.mu.Lock()
+		state := owners.local[playerID]
+		if state == nil || !state.handingBack {
+			owners.claiming[playerID]++
+			owners.mu.Unlock()
+			return waited, nil
+		}
+		done, parked := state.handBackDone, owners.onHandBackWait
+		owners.mu.Unlock()
+		waited = true
+		if parked != nil {
+			parked(playerID)
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return true, fmt.Errorf("player owners: player %d is being handed back: %w", playerID, ctx.Err())
+		}
+	}
+}
+
+// leaveClaim ends what enterClaim registered.
+func (owners *PlayerOwners) leaveClaim(playerID int64) {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if owners.claiming[playerID] <= 1 {
+		delete(owners.claiming, playerID)
+		return
+	}
+	owners.claiming[playerID]--
 }
 
 // abandon forgets this process's lease state for a player whose claim could
