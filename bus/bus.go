@@ -90,8 +90,14 @@ type Bus struct {
 	started  bool // a successful Start happened; guarded by lifeMu
 	stopped  bool // a started Bus was stopped; guarded by lifeMu
 	stopping bool
-	stopDone chan struct{}
-	stopErr  error
+	// RR-20261004-07：停止分两段。teardown（退订、JetStream RPC 收尾）只由第一个
+	// 调用者做一次；pool 排空可以被多次等待——超出预算的调用只返回 ctx 错误，
+	// drainPool 保留到真正排空，之后的调用继续等同一次排空，排空完成才把结果定为终态。
+	stopDone     chan struct{} // closed once teardown ran and the pool drained
+	stopErr      error         // terminal result (teardown errors); valid after stopDone
+	teardownDone chan struct{} // closed when the first caller finished teardown
+	teardownErr  error
+	drainPool    *worker.Pool[*incomingTask]
 
 	// subscriptions
 	subs []nats.ISubscription
@@ -303,32 +309,39 @@ func (b *Bus) startLocked() (func() error, error) {
 	return nil, nil
 }
 
-// Stop unsubscribes and stops the worker pool.
+// Stop requests the stop and, when it is the first request, waits without a
+// deadline for the drain. Once a stop has been requested it returns
+// immediately: a business handler calling Stop after a budgeted stop must not
+// wait for the drain that is waiting for that handler (RR-20261004-07). Callers
+// that need to keep waiting for the same drain use StopWithContext.
 func (b *Bus) Stop() {
+	b.lifeMu.Lock()
+	requested := b.stopDone != nil
+	b.lifeMu.Unlock()
+	if requested {
+		return
+	}
 	_ = b.StopWithContext(context.Background())
 }
 
+// StopWithContext unsubscribes, stops the worker pool and waits for it to
+// drain within ctx. A ctx error only means this caller stopped waiting: the Bus
+// keeps the pool and a later call continues waiting for the same drain
+// (RR-20261004-07). Any other error is terminal and returned by every later
+// call, as is nil once the drain finished.
 func (b *Bus) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	b.lifeMu.Lock()
 	if b.stopDone != nil {
-		done := b.stopDone
+		done, teardown := b.stopDone, b.teardownDone
 		b.lifeMu.Unlock()
-		select {
-		case <-done:
-			b.lifeMu.Lock()
-			err := b.stopErr
-			b.lifeMu.Unlock()
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return b.awaitStop(ctx, done, teardown)
 	}
 	b.stopping = true
 	b.stopDone = make(chan struct{})
-	done := b.stopDone
+	b.teardownDone = make(chan struct{})
 	if b.cancel != nil {
 		b.cancel()
 		b.cancel = nil
@@ -342,32 +355,75 @@ func (b *Bus) StopWithContext(ctx context.Context) error {
 	b.subs = nil
 	pool := b.pool
 	b.pool = nil
+	b.drainPool = pool
 	b.lifeMu.Unlock()
 
-	err := b.stopResources(ctx, subs, pool)
+	teardownErr, drainErr := b.stopResources(ctx, subs, pool)
 	b.lifeMu.Lock()
-	b.stopErr = err
-	close(done)
+	b.teardownErr = teardownErr
+	close(b.teardownDone)
+	if drainErr == nil {
+		b.finishStopLocked()
+	}
 	b.lifeMu.Unlock()
-	return err
+	return errors.Join(teardownErr, drainErr)
 }
 
-func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool *worker.Pool[*incomingTask]) error {
-	var err error
+// awaitStop continues a stop an earlier call started. It waits for that
+// caller's teardown, then for the retained pool; the pool supports repeated
+// bounded waits, so a caller whose ctx expires leaves the drain to the next.
+func (b *Bus) awaitStop(ctx context.Context, done, teardown <-chan struct{}) error {
+	select {
+	case <-done:
+	case <-teardown:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	b.lifeMu.Lock()
+	pool := b.drainPool
+	b.lifeMu.Unlock()
+	if pool != nil {
+		if err := pool.StopWithContext(ctx); err != nil {
+			return err
+		}
+	}
+	b.lifeMu.Lock()
+	defer b.lifeMu.Unlock()
+	b.finishStopLocked()
+	return b.stopErr
+}
+
+// finishStopLocked makes the stop terminal once teardown ran and the pool
+// drained. Called with lifeMu held; later calls are no-ops.
+func (b *Bus) finishStopLocked() {
+	select {
+	case <-b.stopDone:
+		return
+	default:
+	}
+	b.stopErr = b.teardownErr
+	b.drainPool = nil
+	close(b.stopDone)
+}
+
+// stopResources tears down subscriptions and the pool. teardownErr carries the
+// unsubscribe failures, which are final; drainErr is only the ctx error of
+// waiting for the pool, after which the pool can be waited for again.
+func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool *worker.Pool[*incomingTask]) (teardownErr, drainErr error) {
 	for _, sub := range subs {
 		if sub == nil || !sub.IsValid() {
 			continue
 		}
 		if unsubscribeErr := sub.Unsubscribe(); unsubscribeErr != nil {
 			slog.Warn("bus: unsubscribe failed", "err", unsubscribeErr)
-			err = errors.Join(err, unsubscribeErr)
+			teardownErr = errors.Join(teardownErr, unsubscribeErr)
 		}
 	}
 	if pool != nil {
-		err = errors.Join(err, pool.StopWithContext(ctx))
+		drainErr = pool.StopWithContext(ctx)
 	}
 	b.stopJetStreamRPCSubscriptions()
-	return err
+	return teardownErr, drainErr
 }
 
 // detachLocked cancels the run context and takes the subscriptions and pool
@@ -392,7 +448,8 @@ func (b *Bus) detachLocked() func() error {
 	pool := b.pool
 	b.pool = nil
 	return func() error {
-		return b.stopResources(context.Background(), subs, pool)
+		teardownErr, drainErr := b.stopResources(context.Background(), subs, pool)
+		return errors.Join(teardownErr, drainErr)
 	}
 }
 

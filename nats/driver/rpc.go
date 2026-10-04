@@ -31,6 +31,12 @@ type RPCClient struct {
 	stopDone   chan struct{}
 	callbackMu sync.Mutex // freezes pending admission and terminal accounting against Stop
 	callbacks  sync.WaitGroup
+
+	// Test seams, nil in production: testBeforeDrain runs on the stop task
+	// before it ranges pending; testAfterClaim runs inside finishPending's
+	// critical section after the entry is removed and before it is counted.
+	testBeforeDrain func()
+	testAfterClaim  func()
 }
 
 type pendingCall struct {
@@ -234,7 +240,15 @@ func (r *RPCClient) Reply(replySubject string, resp []byte) error {
 	return r.client.Publish(replySubject, resp)
 }
 
+// Stop requests the stop and, when it is the first request, waits without a
+// deadline for the drain. Once a stop has been requested it returns
+// immediately, as it did before NC-09: RR-20261004-07（复审 S2）—— callback
+// 里的 Stop() 若去等唯一停止任务，而停止任务正在等这个 callback 退出，就会
+// 永久互等。需要继续等待同一次排空的调用方用 StopWithContext。
 func (r *RPCClient) Stop() {
+	if r == nil || r.stopped.Load() {
+		return
+	}
 	_ = r.StopWithContext(context.Background())
 }
 
@@ -271,6 +285,9 @@ func (r *RPCClient) StopWithContext(ctx context.Context) error {
 
 func (r *RPCClient) drainCallbacks() {
 	defer close(r.stopDone)
+	if r.testBeforeDrain != nil {
+		r.testBeforeDrain()
+	}
 	r.pending.Range(func(key, _ any) bool {
 		if sid, ok := key.(int64); ok {
 			// 队列拒绝时 fallback 在这里同步执行。隔离其 panic，后续
@@ -279,9 +296,16 @@ func (r *RPCClient) drainCallbacks() {
 		}
 		return true
 	})
-	// A reply/timeout may already have removed its pending entry but still be
-	// executing synchronous queue-rejection fallback. Its terminal accounting
-	// was added under callbackMu before deletion, so it remains part of drain.
+	// A reply/timeout may already have removed its pending entry, so Range
+	// skipped it. finishPending removes the entry and only then counts it in
+	// callbacks, both inside callbackMu; a removal Range missed may therefore
+	// still be uncounted here. Taking callbackMu once waits out any such
+	// critical section, so its Add happens before Wait (RR-20261004-07, 复审
+	// S1). stopped is already set, so no new pending can appear afterwards and
+	// one barrier is enough. A claimed callback still running its synchronous
+	// queue-rejection fallback is counted and stays part of the drain.
+	r.callbackMu.Lock()
+	r.callbackMu.Unlock() //nolint:staticcheck // empty critical section is the barrier
 	r.callbacks.Wait()
 	if r.pool != nil {
 		_ = r.pool.StopWithContext(context.Background())
@@ -302,6 +326,9 @@ func (r *RPCClient) finishPending(sid int64, resp []byte, err error) bool {
 	if !ok || pc == nil {
 		r.callbackMu.Unlock()
 		return false
+	}
+	if r.testAfterClaim != nil {
+		r.testAfterClaim()
 	}
 	r.callbacks.Add(1)
 	r.callbackMu.Unlock()

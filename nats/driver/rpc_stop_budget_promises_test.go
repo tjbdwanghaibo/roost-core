@@ -114,8 +114,16 @@ func TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	asm := &Assembly{RPC: r}
-	if err := asm.Close(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("close=%v", err)
+	// RR-20261004-07（复审 S4）：有界等待，让一个忽略取消的 Close 变成断言失败而不是挂到 -timeout。
+	closed := make(chan error, 1)
+	go func() { closed <- asm.Close(ctx) }()
+	select {
+	case err := <-closed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("close=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Assembly.Close with a canceled budget blocked on the full-queue fallback instead of returning")
 	}
 	select {
 	case <-fallbackEntered:

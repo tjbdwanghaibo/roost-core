@@ -163,12 +163,28 @@ func TestRPCBudgetDiscoveryPickerTransportShareDeadline(t *testing.T) {
 
 func TestRPCBudgetLateDiscoveryDoesNotStartTransport(t *testing.T) {
 	b := &recordingBus{}
+	// RR-20261004-07（复审 S4）：discovery 若拿不到带期限的 ctx 会一直等；testDone 让它
+	// 在测试结束时退出，有界等待让这种回退变成断言失败而不是挂到 -timeout。
+	testDone := make(chan struct{})
+	t.Cleanup(func() { close(testDone) })
 	d := budgetDiscovery{inspect: func(ctx context.Context) ([]*fetcd.ServiceInfo, error) {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-testDone:
+		}
 		// 即使依赖在取消后返回成功候选，也不能再开始业务传输。
 		return []*fetcd.ServiceInfo{{Sid: 7}}, nil
 	}}
-	err := NewDiscoveredBusClient(b, "game", 10*time.Millisecond, d).CallDiscoveredChecked(context.Background(), "join", nil, statusResponse{}, "")
+	result := make(chan error, 1)
+	go func() {
+		result <- NewDiscoveredBusClient(b, "game", 10*time.Millisecond, d).CallDiscoveredChecked(context.Background(), "join", nil, statusResponse{}, "")
+	}()
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(2 * time.Second):
+		t.Fatal("discovery was not bounded by the configured 10ms call timeout")
+	}
 	if !errors.Is(err, context.DeadlineExceeded) || len(b.calls) != 0 {
 		t.Fatalf("err=%v calls=%v", err, b.calls)
 	}

@@ -159,8 +159,13 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	if m.bus != nil {
 		if stopper, ok := any(m.bus).(interface{ StopWithContext(context.Context) error }); ok {
 			if stopErr := stopper.StopWithContext(ctx); stopErr != nil {
-				// Bus 仍持有连接上的订阅；取消等待后保留引用供再次排空。
-				return stopErr
+				if busDrainPending(stopErr) {
+					// Bus 的 handler 仍在运行、连接仍在使用；保留 bus / asm，
+					// 再次停止会继续等同一次排空（RR-20261004-07）。
+					return stopErr
+				}
+				// 终态错误（如退订失败）：Bus 已不会再有进展，照常关闭 Assembly。
+				err = errors.Join(err, stopErr)
 			}
 		} else {
 			m.bus.Stop()
@@ -177,6 +182,14 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	}
 	slog.Info("nats mod: stopped")
 	return err
+}
+
+// busDrainPending reports whether a Bus stop error only means the caller's
+// budget ran out. Bus.StopWithContext returns a ctx error exactly when its pool
+// has not drained yet and keeps that drain for a later call; every other error
+// is terminal.
+func busDrainPending(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func jetStreamRPCConfigFromViper(cfg *viper.Viper) (bus.JetStreamRPCConfig, bool) {
