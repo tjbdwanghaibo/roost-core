@@ -93,15 +93,15 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 
 | 东西 | 在哪 | 当前接续 |
 | --- | --- | --- |
-| RR 编号 | `docs/bug/README.md` 头部散文与表，`RR-YYYYMMDD-NN` | 最新 RR-20260930-11（A 线）。**两条工作线共用日期段**（09-30：01/02/04/05/06～10 属 B 线，03 属 A 线），登记前先 fetch 看头部，撞号就顺延；修的一侧不自造 RR |
+| RR 编号 | `docs/bug/README.md` 头部散文与表，`RR-YYYYMMDD-NN` | 最新 RR-20261004-01（A 线）；B 线另有 `RR-<日期>-NC-NN` / `RR-<日期>-CG-NN` 带前缀的编号段。**两条工作线共用日期段**（09-30：01/02/04/05/06～10 属 B 线，03 属 A 线），登记前先 fetch 看头部，撞号就顺延；修的一侧不自造 RR |
 | 用户直接提出、无 RR 的缺陷 | `docs/bugfix/U-xxxx-<topic>.md` 或 roost-coding 的 `<issue-id>` | U 最后 U-0278（09-22） |
 | W 候选 | `docs/bug/WANTED.md`（`W-YYYY-MM-DD-NN`） | — |
 | T 行 | `docs/TROUBLESHOOTING.md` | 最后 T-44，按最后一行接续 |
 | M / REFACTOR（重构，不占 RR） | 旧 `docs/bugfix/M-*.md`，现行 `docs/feature/REFACTOR-YYYY-MM-DD-<topic>.md` | 旧 M 最后 M-18 |
-| 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.18.0**（09-30，tag 指向 `4b277176`）；之后在 main 的修复未发版 |
+| 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.19.0**（10-04，tag 指向 `74e1ba39`）；之后在 main 的修复未发版 |
 | 版本同步点 | `codegen/internal/roost/manifest.go` 的 `Core` 默认版本（现 v1.18.0）与 `.github/workflows/framework-compat.yml` 的 `minimum` 行（`-roost-core-version v1.18.0`） | 发版时两处同步；生成的 game-demo 用到本版新增 API 时下限要升，先用上一版 tag 实编生成工程判断 |
 
-发版细节：pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
+发版细节：**打 tag 前先确认 main 的 `ci` 是绿的**（10-01～04 ci 红了三天没人看，发版时才发现）；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
 发完在 bug README / 交接把"未发版"改成版本号，并对着 tag 做一次无 go.work 的生成 + 编译（`GOWORK=off go run ./codegen/cmd/roost project new X -module example.com/X -out <scratch>/X -template game-demo` → `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo go get github.com/tjbdwanghaibo/roost-core@vX.Y.Z` → `go build ./... && go vet ./...`）。proxy 对新 tag 有几分钟延迟，用 `GOPROXY=direct` 重试，不要因此改代码。
 
 ## 6. 本轮新增规则（2026-09-28～30）
