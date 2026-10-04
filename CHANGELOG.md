@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **game-demo 一次闲置归还回合不再把刷新循环占住超过租约**（RR-20260921-04，P2）：新增回合时间预算 `handBackPassBudget`（Lease − RefreshInterval − AdmissionGuard = 15s），撤离与投影等待都在预算内，没轮到的玩家留在服务、下一轮再归还；此前最坏 8×5s + 5s = 45s > Lease 30s，本进程其余租约会全部过期。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20260921-04.md)
+- **game-demo 归还租约途中到来的登录不再拿到一个共享表里无主的“是你的”**（RR-20260921-03，P1，09-21 登记、10-04 核实仍存在）：Claim 发现该玩家正在归还就等这次归还结束（受 `login_timeout` 约束，超时回 `login_timeout`），归还不挑有在途认领的玩家；归还的标记只由它自己清除，Release 前复核、释放完才解除。此前确认先于 / 后于 Release 两种交错都让 Claim 回答 `mine=true` 而 Redis 无主，另一进程可装载第二份副本。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20260921-03.md)
 - **RefHMap 同布局并发不再误报 `ErrRefHMapRegistryChanged`；Cached DAO 的 Delete 失败不再留 L1**（RR-20261004-09，P2，修 v1.19.1 回归，NC-30 复审发现）：Set / Delete 的 Lua guard 由逐字节比较改为“当前注册表的每个键都在本次清理清单里就放行”，并发首次创建、并发删除、Set 与 Delete 交错、记录到期恢复成功；另一布局登记了新键的 schema 竞争仍拒绝。`LayeredStore.Delete` 在远端删除报错时也删除 L1，再返回错误。v1.19.1 旧进程与新进程混跑时旧进程仍会误报。[记录](docs/bugfix/RR-20261004-09.md)
 - **NatsMod 连接 drain 超预算或连接已关闭后，停止能够收敛**（RR-20261004-08，P3，来源 W-2026-10-04-02）：之前 `Assembly.Close` 硬关闭连接后只返回 ctx 错误，NatsMod 保留引用，重试永远拿到 `ErrConnectionClosed`。现在 `Assembly.Close` 返回包裹原错误的终态 `natsdriver.ErrClosedUndrained`（`errors.Is` 原错误仍成立，错误文本多一个前缀），NatsMod 报告该错误并释放引用，之后的 Stop 返回 nil；RPC 回调等待超预算时仍保留并可重试。[记录](docs/bugfix/RR-20261004-08.md)
 - **CI 现在校验本仓的生成物，并运行 codegen 运行期守卫**（RR-20260921-05，P2，09-21 登记、10-04 核实仍存在）：ci.yml 新 job `generated-code`——`go generate ./...` 后工作树有变化（含未提交的新产物）即失败；随后跑 `codegen/scripts` 的 dao-golden / attribute / entity-sync / cfggen-golden 四个运行期守卫。守卫的 roost-core pin 改由 `codegen/scripts/core-pin.sh` 从 `minimumVersions.Core` 读取（此前读的那一行在合仓时被删，四个脚本默认 exit 2）；`attribute-runtime.sh` 的本地 core 目录缺省改为模块根。[记录](docs/bugfix/RR-20260921-05.md)
