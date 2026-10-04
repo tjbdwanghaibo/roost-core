@@ -175,8 +175,16 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	if m.asm != nil {
 		if closeErr := m.asm.Close(ctx); closeErr != nil {
 			err = errors.Join(err, closeErr)
-			slog.Warn("nats mod: drain interrupted", "err", closeErr)
-			return err
+			if assemblyClosePending(closeErr) {
+				// RPC 回调仍在运行、连接仍在使用；保留 asm，再次停止会继续
+				// 等同一次回调排空。
+				slog.Warn("nats mod: drain interrupted", "err", closeErr)
+				return err
+			}
+			// 连接已被硬关闭（drain 超预算，或连接早已关闭 / 正在重连）：报告
+			// 错误并释放引用。旧实现在这里也保留 asm，重试只能拿到 nats.go 的
+			// ErrConnectionClosed，永远失败、引用永不置空（RR-20261004-08）。
+			slog.Warn("nats mod: connection closed before drain finished", "err", closeErr)
 		}
 		m.asm = nil
 	}
@@ -190,6 +198,14 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 // is terminal.
 func busDrainPending(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// assemblyClosePending reports whether Assembly.Close only ran out of budget
+// waiting for RPC callbacks and still owns the connection for a later Close.
+// ErrClosedUndrained may wrap a ctx error as well, but by then the connection
+// is closed and nothing is left to drain.
+func assemblyClosePending(err error) bool {
+	return busDrainPending(err) && !errors.Is(err, natsdriver.ErrClosedUndrained)
 }
 
 func jetStreamRPCConfigFromViper(cfg *viper.Viper) (bus.JetStreamRPCConfig, bool) {

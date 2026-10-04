@@ -792,7 +792,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 
 - **最终验收（2026-10-04）**：RR-20261004-01已修，本轮同一4真实Redis场景、13正式回归race/vet、3真实Redis集成全部通过，旧分流/红证据保留；见 [独立验收](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。上方“将补验收”为同步过程时点，不是待修状态。
 
-### W-2026-10-04-02：NatsMod 在连接 drain 超时后保留已硬关闭的 Assembly，重试永远拿到 `ErrConnectionClosed`
+### W-2026-10-04-02：NatsMod 在连接 drain 超时后保留已硬关闭的 Assembly，重试永远拿到 `ErrConnectionClosed`（已登记 RR-20261004-08）
 
 - **位置**：`kit/nats/nats_mod.go`（`3560a19b` 加的 `return err` 保留 `m.asm`）与 `Assembly.Close` 的连接 drain 路径，基线 RR-20261004-07 修复之后。
 - **现象**：连接 drain 超时后，`Assembly.Close` 已经硬关闭连接并返回 ctx 错误，但 NatsMod 仍保留 `m.asm`；重试时 `Client.DrainWithContext` 对已关闭连接拿到 `ErrConnectionClosed`（nats.go `Conn.Drain` 第一个分支），重试永远失败、引用不置空。资源其实已释放。

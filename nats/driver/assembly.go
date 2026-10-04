@@ -2,9 +2,19 @@ package driver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
+
+// ErrClosedUndrained reports that Assembly.Close closed the connection hard
+// because draining it failed: the budget ran out, or the connection was
+// already closed or reconnecting. It wraps the drain error, so a budget that
+// ran out still matches context.DeadlineExceeded / context.Canceled. Unlike the
+// ctx error of RPC callback waiting it is terminal: the connection is gone and
+// a later Close cannot drain it again (RR-20261004-08).
+var ErrClosedUndrained = errors.New("nats: connection closed before drain finished")
 
 // rpcCallbackWorkers is the size of the RPC callback pool every process
 // assembles; it was a literal in the kit Mod before P3b.
@@ -48,9 +58,11 @@ func (a *Assembly) Connected() bool {
 // Close stops the RPC client (failing every pending call with ErrCancelled)
 // and waits for callbacks within ctx before draining the connection. When
 // callback waiting expires, the assembly retains ownership for a later Close.
-// When the connection drain does not finish in
-// time the connection is closed hard and the ctx error is returned. The bus
-// must already be stopped by the caller — it owns subscriptions on Client.
+// When the connection drain fails or does not finish in time, the connection
+// is closed hard and the drain error is returned wrapped in
+// ErrClosedUndrained; that result is terminal, the assembly then owns nothing
+// a later Close could still release. The bus must already be stopped by the
+// caller — it owns subscriptions on Client.
 func (a *Assembly) Close(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -65,8 +77,11 @@ func (a *Assembly) Close(ctx context.Context) error {
 	}
 	if a.Client != nil {
 		if err := a.Client.DrainWithContext(ctx); err != nil {
+			// The connection is closed from here on. Returning the bare ctx
+			// error made callers keep the assembly for a retry whose drain can
+			// only fail with nats.go's ErrConnectionClosed (RR-20261004-08).
 			a.Client.Close()
-			return err
+			return fmt.Errorf("%w: %w", ErrClosedUndrained, err)
 		}
 	}
 	return nil
