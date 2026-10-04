@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.19.0] - 2026-10-04
+
+> v1.18.0 之后两条工作线的修复：A 线——B27 端到端补测暴露的 RR-20260930-20～24、维护者拍板的 N20～N32（RR-20260930-12～19）、对 B 线修复的独立复审发现的 RR-20261001-01～09、RR-20261004-01（取锁结果未知），以及 C01 长稳通过（1 小时 0 错误、全量核验通过、内存平台）与 B29 性能对照（无新退化）；B 线——非核心模块审查 RR-20261003/04-NC-01～29（runtime / request / RPC / etcd / cache / Mongo 测试替身）与 codegen CG-12～14。**次版本而非补丁**：`entity.IThreadSafeRemoteEntity.SetEntityVersion` 改为返回 `error`（RR-20260930-13），`activity.Admin` 增加 `ReconcileProgress`（RR-20261001-05），新增 `account.Admin`；生成的 game-demo 仍能对 v1.18.0 编译，生成器 Core 下限不变。
+
 - **Mongo测试替身边界（RR-20261004-NC-26～29）**：D嵌套路径保留同级字段，unique索引验证存量后逐个发布，BulkWrite先验证全部模型Type；事务使用私有快照，abort不擦除并发提交，集合revision冲突按既有限制重试。事务内索引明确unsupported，新增ErrTransactionConflict；集合粒度比真实Mongo保守。28正式回归及受影响消费者通过，生产Mongo/DataEngine未改。[修复与限制](docs/review/REVIEW-2026-10-04-noncore-17.md)。
 
 - **RefHMap未知写与Mongo替身契约（RR-20261004-NC-21～25）**：Eval失败保留原始原因，停止无条件DEL重放；已应用写不自动回滚，旧降级告警/计数移除，依赖fallback的adapter需支持现有Lua。替身深复制BSON容器、稳定去重_id候选、精确比较整数/有限float并按目标身份返回post-image；非有限float明确unsupported。40新增正式叶子、真实Redis及生成DAO验证通过；[记录](docs/review/REVIEW-2026-10-04-noncore-15.md)。
