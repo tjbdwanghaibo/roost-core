@@ -6,7 +6,7 @@
 
 ## [v1.19.1] - 2026-10-04
 
-> 补丁版本：对 v1.19.0 中 B 线 NC 修复的独立复审（[NC-01～07](docs/review/REVIEW-2026-10-04-nc-audit-1.md)、[NC-08～12](docs/review/REVIEW-2026-10-04-nc-audit-2.md)、[NC-13～29](docs/review/REVIEW-2026-10-04-nc-audit-3.md)）确认的 6 个缺陷——其中 RR-20261004-02 / 03 / 06 是 v1.19.0 带出的回归——以及 B 线 RR-20261004-NC-30。无源码不兼容的 API 变化；行为变化见 RR-20261004-07（`Bus.Stop()` / `RPCClient.Stop()` 在停止已发起后立即返回）。
+> 补丁版本：对 v1.19.0 中 B 线 NC 修复的独立复审（[NC-01～07](docs/review/REVIEW-2026-10-04-nc-audit-1.md)、[NC-08～12](docs/review/REVIEW-2026-10-04-nc-audit-2.md)、[NC-13～29](docs/review/REVIEW-2026-10-04-nc-audit-3.md)）确认的 6 个缺陷——其中 RR-20261004-02 / 03 / 06 是 v1.19.0 带出的回归——以及 B 线 RR-20261004-NC-30。无源码不兼容的 API 变化；行为变化见 RR-20261004-07（`Bus.Stop()` / `RPCClient.Stop()` 在停止已发起后立即返回）与 NC-30（RefHMap Set / Delete 在注册表变化时返回新错误 `ErrRefHMapRegistryChanged`，Delete 现在要求 adapter 支持 Eval；**已知回归**：无 schema 变化的并发首次创建 / 删除也会误报，见 RR-20261004-09，下一版修复）。
 
 ### Fixed
 

@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 NC-30 复审](REVIEW-2026-10-04-nc30-audit.md)：NC-30 实现与记录一致、与 RR-20261004-03 合并无冲突，但逐字节注册表 guard 误报并发创建 / 删除 → RR-20261004-09（P2，v1.19.1 回归）；W-2026-10-04-02 已作为 RR-20261004-08 修复。
+
 **最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。
 
 [10-04 N04第六批](REVIEW-2026-10-04-noncore-19.md)：新NC-30 schema清理竞争已修，12正式、16新review、11正式生成消费者通过。[迁移/schema学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md) · [review证据](evidence/noncore-review-20261004-19/README.md) · [修复红绿](../bugfix/evidence/noncore-bugfix-20261004-10/README.md)。41候选累计源文已读，40同hash复用/1当前补证；场景仍部分完成。下一正式Repository持久迁移/重载接入→N04收口→N05增量，未发版。
