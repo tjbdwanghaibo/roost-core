@@ -380,6 +380,10 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20260930-13](bug/RR-20260930-13.md) | P3 `SetEntityVersion` 同 fence 可回退 StateVersion（N26） | [修复](bugfix/RR-20260930-13.md)（未发布；接口签名改为返回 error） |
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
+| [RR-20261004-02](bug/RR-20261004-02.md) | P2 `LayeredStore` 的 L1 过期后（或 ttl≤0 时）仍永久否决权威值；远端写已生效却报 `ErrStaleWrite`（NC 复审） | 未修复 |
+| [RR-20261004-03](bug/RR-20261004-03.md) | P2 RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 复审） | 未修复 |
+| [RR-20261004-04](bug/RR-20261004-04.md) | P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 复审） | 未修复 |
+| [RR-20261004-05](bug/RR-20261004-05.md) | P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 复审） | 未修复 |
 | [RR-20261004-01](bug/RR-20261004-01.md) | P2 TryLock 取锁结果未知不记 token，实体卡到 LockTTL | [修复](bugfix/RR-20261004-01.md)（未发布；token 格式 `<base32>.<seq>`，TryLock 脚本 ARGV 3 → 4；T-207） |
 | [RR-20261001-06](bug/RR-20261001-06.md) | P2 account pending slot 无释放入口（W-01 拍板） | [修复](bugfix/RR-20261001-06.md)（未发布；新码 560115 / 560116、`Admin.ResolvePendingCreation`、committed 自动释放、T-182） |
 | [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | [修复](bugfix/RR-20261001-07.md)（未发布；已生成工程手工合并） |
