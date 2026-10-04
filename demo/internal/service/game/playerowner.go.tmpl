@@ -347,8 +347,12 @@ const HandBackIdle = 2 * playerroute.RefreshInterval
 // on the loop that also renews everybody else's lease.
 const handBackBudget = 8
 
-// handBackPassBudget bounds how long one refresh pass spends giving leases
-// back — every eviction wait and the projection wait together.
+// handBackPassBudget bounds how long one refresh pass spends after its
+// renewals — re-taking the leases Redis said are lost, then giving idle ones
+// back: every eviction wait and the projection wait together. The name is
+// from when only the hand-back had a budget; the re-claims ran outside it and
+// held the loop the same way, one evictBudget per lost lease
+// (RR-20261004-10), so they now spend the same one, first.
 //
 // A count is not a bound on time: handBackBudget evictions of evictBudget
 // each, plus the projection wait, came to 45s, and the refresh loop renews
@@ -363,7 +367,10 @@ const handBackBudget = 8
 //
 // The releases themselves are outside it: each is one Redis round trip for a
 // player whose copy is already gone and whose writes have landed, and giving
-// up at that point would only make the lease lapse 30 seconds later.
+// up at that point would only make the lease lapse 30 seconds later. So are
+// the re-claims' own round trips (one SetNX each): giving up on one that may
+// already have landed would leave this process holding a claim it does not
+// know about.
 const handBackPassBudget = playerroute.Lease - playerroute.RefreshInterval - AdmissionGuard
 
 // NewPlayerOwners builds the table from what the process publishes.
@@ -525,7 +532,25 @@ func (owners *PlayerOwners) refreshLoop(ctx context.Context) {
 
 // renew is one pass of the refresh loop, factored out so a test can drive it
 // without waiting for a ticker.
+//
+// Every answer that only records something is taken first; everything that
+// may wait — re-taking lost leases, then giving idle ones back — comes after,
+// on one time budget (handBackPassBudget, see refreshPass). Both halves of
+// that order matter (RR-20261004-10):
+//
+//   - A renewal's local window starts when it is confirmed, and Redis set the
+//     key's TTL when it was asked. Confirmed after a run of re-claims, a lease
+//     got a window that ran past its key: the pass that held the loop for 40s
+//     handed later leases a local deadline 40s beyond the one Redis kept, so
+//     this process admitted writes after another one could have taken over.
+//   - Each re-claim across a gap drops the copy from before it, which waits up
+//     to evictBudget. One per lost lease, in series, with nothing renewed
+//     meanwhile: a batch of leases lost together (a stalled process, a
+//     flushed Redis) held the loop for longer than the leases it had just
+//     renewed — the same shape as the hand-back pass in RR-20260921-04, and
+//     now under the same budget.
 func (owners *PlayerOwners) renew(ctx context.Context) {
+	var lost []int64
 	for _, result := range owners.store.Refresh(ctx, owners.snapshot()) {
 		switch {
 		case result.Held:
@@ -539,72 +564,126 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 			slog.Warn("player owners: lease renewal failed; admission is running out", "player_id", result.PlayerID, "err", result.Err)
 		default:
 			// Redis answered, and the answer is that the lease is not ours.
-			// Two different situations wear that answer, and they deserve
-			// different endings:
-			//
-			//   nobody holds it   our renewals lapsed while the player stayed
-			//                     here. Taking it again is atomic (SetNX), it
-			//                     is correct, and it does not disturb anyone.
-			//   somebody holds it another process owns this player now; this
-			//                     one must stop serving them.
-			//
-			// The re-claim decides which it is, so this does not have to
-			// guess — and a lost re-claim is exactly the case that must
-			// fence.
-			//
-			// Marked first, because from here on this process cannot prove it
+			// Marked now, because from here on this process cannot prove it
 			// held the player without interruption, and Admit must say so
-			// even if the local window still looks open.
+			// even if the local window still looks open — whether or not this
+			// pass gets as far as re-claiming them.
 			owners.interrupt(result.PlayerID)
-			mine, err := owners.Claim(ctx, result.PlayerID)
-			switch {
-			case errors.Is(err, errStaleCopyKept):
-				// The lease is ours in Redis again, but the copy could not be
-				// dropped in budget and the lease is not confirmed: nothing
-				// is admitted, and Claim has forgotten the player's local
-				// state, so the next pass does not renew the lease it just
-				// took (RR-20261001-07). The drop is still running (or failed), and
-				// its first step is to leave the scene — so a player who is
-				// connected here is, or is about to be, out of the scene on
-				// an open connection with every write refused. That is the
-				// same silence as below, so the connections end the same
-				// way; the login they come back with waits for the drop and
-				// is refused if it still cannot be shown (RR-20260930-23).
-				closed := owners.closeSessions(result.PlayerID, "the lease lapsed and the copy from before the gap could not be dropped; log in again")
-				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err, "sessions_closed", closed)
-			case err != nil:
-				// Redis did not answer the re-claim. Nothing was dropped and
-				// the player is still in the scene; admission runs out on
-				// its own and the next pass asks again.
-				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err)
-			case mine:
-				// Claim dropped the copy from before the gap on the way
-				// through, so this process resumes on a reload rather than on
-				// whatever it still had in memory.
-				//
-				// The copy took the player's scene membership with it (the
-				// evictor leaves the scene before it destroys) — but not
-				// their connections. Before this, a session that lived
-				// through the gap stayed open and bound to nothing: no frame
-				// reached it and nobody saw the player again until the
-				// client happened to log in again; the reload hook could not
-				// help, this is a destroy and not a reload (RR-20260930-23).
-				// So the connections go the way a fence sends them: closed,
-				// and the client reconnects into an ordinary login, which
-				// lands back here because the lease is ours again. Closed
-				// AFTER the claim, so a reconnect that is quick finds the
-				// lease confirmed and the copy already gone.
-				closed := owners.closeSessions(result.PlayerID, "the lease lapsed and was retaken; log in again")
-				slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", result.PlayerID, "sessions_closed", closed)
-			default:
-				owners.fence(result.PlayerID, "another process holds the lease now")
-			}
+			lost = append(lost, result.PlayerID)
 		}
 	}
+	pass := owners.beginPass(ctx)
+	defer pass.end()
+	owners.retakeLost(ctx, pass, lost)
 	// And give back what this process is holding for nobody. After the
 	// renewals, so that a lease handed back in this pass was renewed on the
 	// way past and cannot expire between the two halves.
-	owners.handBackIdle(ctx)
+	owners.handBackIdle(ctx, pass)
+}
+
+// refreshPass is the time one refresh pass may spend after its renewals:
+// re-taking lost leases first, then giving idle ones back, handBackPassBudget
+// for the two together.
+//
+// Two clocks, one budget: the table's clock is what the pass is accounted on,
+// like every other time decision here; ctx is what actually ends a wait,
+// because a timer does not read that clock. In a running process they are the
+// same clock.
+type refreshPass struct {
+	ctx     context.Context
+	end     context.CancelFunc
+	owners  *PlayerOwners
+	started time.Time
+	budget  time.Duration
+}
+
+func (owners *PlayerOwners) beginPass(ctx context.Context) refreshPass {
+	owners.mu.Lock()
+	budget := owners.handBackPassWait
+	owners.mu.Unlock()
+	passCtx, end := context.WithTimeout(ctx, budget)
+	return refreshPass{ctx: passCtx, end: end, owners: owners, started: owners.now(), budget: budget}
+}
+
+// outOfTime reports whether the pass has used its budget up.
+func (pass refreshPass) outOfTime() bool {
+	return pass.owners.now().Sub(pass.started) >= pass.budget || pass.ctx.Err() != nil
+}
+
+// retakeLost re-claims the leases Redis just said are not ours, as many as the
+// pass has time for. The rest stay as they are — interrupted, so Admit refuses
+// them, their copy untouched and their connections open — and the next pass
+// asks Redis about them again: the same ending as a re-claim Redis did not
+// answer. Nothing is admitted on a copy from before the gap either way.
+func (owners *PlayerOwners) retakeLost(ctx context.Context, pass refreshPass, lost []int64) {
+	for i, playerID := range lost {
+		if pass.outOfTime() {
+			slog.Warn("player owners: refresh pass out of time; the remaining lost leases are retaken by the next pass",
+				"remaining", len(lost)-i, "budget", pass.budget)
+			return
+		}
+		owners.retakeOne(ctx, pass, playerID)
+	}
+}
+
+// retakeOne settles one lease Redis said is not ours. Two different situations
+// wear that answer, and they deserve different endings:
+//
+//	nobody holds it   our renewals lapsed while the player stayed
+//	                  here. Taking it again is atomic (SetNX), it
+//	                  is correct, and it does not disturb anyone.
+//	somebody holds it another process owns this player now; this
+//	                  one must stop serving them.
+//
+// The re-claim decides which it is, so this does not have to guess — and a
+// lost re-claim is exactly the case that must fence. The re-claim asks Redis
+// on the loop's context and waits for the drop of the copy on the pass's: a
+// drop the budget cuts short is a drop that did not finish in time, with the
+// same ending as one that ran out of evictBudget.
+func (owners *PlayerOwners) retakeOne(ctx context.Context, pass refreshPass, playerID int64) {
+	mine, err := owners.claim(ctx, pass.ctx, playerID)
+	switch {
+	case errors.Is(err, errStaleCopyKept):
+		// The lease is ours in Redis again, but the copy could not be
+		// dropped in budget and the lease is not confirmed: nothing
+		// is admitted, and Claim has forgotten the player's local
+		// state, so the next pass does not renew the lease it just
+		// took (RR-20261001-07). The drop is still running (or failed), and
+		// its first step is to leave the scene — so a player who is
+		// connected here is, or is about to be, out of the scene on
+		// an open connection with every write refused. That is the
+		// same silence as below, so the connections end the same
+		// way; the login they come back with waits for the drop and
+		// is refused if it still cannot be shown (RR-20260930-23).
+		closed := owners.closeSessions(playerID, "the lease lapsed and the copy from before the gap could not be dropped; log in again")
+		slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", playerID, "err", err, "sessions_closed", closed)
+	case err != nil:
+		// Redis did not answer the re-claim. Nothing was dropped and
+		// the player is still in the scene; admission runs out on
+		// its own and the next pass asks again.
+		slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", playerID, "err", err)
+	case mine:
+		// Claim dropped the copy from before the gap on the way
+		// through, so this process resumes on a reload rather than on
+		// whatever it still had in memory.
+		//
+		// The copy took the player's scene membership with it (the
+		// evictor leaves the scene before it destroys) — but not
+		// their connections. Before this, a session that lived
+		// through the gap stayed open and bound to nothing: no frame
+		// reached it and nobody saw the player again until the
+		// client happened to log in again; the reload hook could not
+		// help, this is a destroy and not a reload (RR-20260930-23).
+		// So the connections go the way a fence sends them: closed,
+		// and the client reconnects into an ordinary login, which
+		// lands back here because the lease is ours again. Closed
+		// AFTER the claim, so a reconnect that is quick finds the
+		// lease confirmed and the copy already gone.
+		closed := owners.closeSessions(playerID, "the lease lapsed and was retaken; log in again")
+		slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", playerID, "sessions_closed", closed)
+	default:
+		owners.fence(playerID, "another process holds the lease now")
+	}
 }
 
 // handBackIdle gives back the leases this process is holding for nobody.
@@ -631,9 +710,11 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 // tries again. One projectionWait covers the whole pass: a stalled database
 // costs the refresh loop one projectionWait, not one per player.
 //
-// And the pass as a whole has a time budget, handBackPassBudget: the
-// evictions and the projection wait all end by it, and the players it does
-// not reach stay in service until the next pass (RR-20260921-04).
+// And the pass as a whole has a time budget, handBackPassBudget, shared with
+// the re-claims that run before it in the same refresh pass: the evictions and
+// the projection wait all end by it, and the players it does not reach stay in
+// service until the next pass (RR-20260921-04, RR-20261004-10). A pass the
+// re-claims used up does not pick anybody.
 //
 // A Claim of a player being handed back waits for the hand-back to end, and a
 // hand-back does not pick a player a Claim is working on (see enterClaim), so
@@ -641,17 +722,19 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 // This pass runs on the refresh loop's goroutine and ends every hand-back it
 // starts before it returns; the loop's own Claims (a lapsed lease being
 // retaken) therefore never find one in progress and never wait on themselves.
-func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
+func (owners *PlayerOwners) handBackIdle(ctx context.Context, pass refreshPass) {
+	if pass.outOfTime() {
+		return
+	}
 	owners.mu.Lock()
 	sessions := owners.fencer
 	projections := owners.projections
 	projectionWait := owners.projectionWait
-	passWait := owners.handBackPassWait
-	started := owners.now()
+	now := owners.now()
 	var chosen []handBack
 	if sessions != nil {
 		for playerID, state := range owners.local {
-			if state.lost || state.handingBack || owners.claiming[playerID] > 0 || started.Sub(state.lastUsed) < HandBackIdle {
+			if state.lost || state.handingBack || owners.claiming[playerID] > 0 || now.Sub(state.lastUsed) < HandBackIdle {
 				continue
 			}
 			// Marked while the lock that chose it is still held, so no
@@ -676,23 +759,17 @@ func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 			owners.finishHandBack(untouched, false)
 		}
 	}()
-	pass, cancelPass := context.WithTimeout(ctx, passWait)
-	defer cancelPass()
-	projected, cancel := context.WithTimeout(pass, projectionWait)
+	projected, cancel := context.WithTimeout(pass.ctx, projectionWait)
 	defer cancel()
 	for len(pending) > 0 {
-		// Two clocks, one budget: the table's clock is what this pass is
-		// accounted on, like every other time decision here; the context is
-		// what actually ends a wait, because a timer does not read that
-		// clock. In a running process they are the same clock.
-		if owners.now().Sub(started) >= passWait || pass.Err() != nil {
+		if pass.outOfTime() {
 			slog.Warn("player owners: hand-back pass out of time; the rest stay in service until the next pass",
-				"remaining", len(pending), "budget", passWait)
+				"remaining", len(pending), "budget", pass.budget)
 			return
 		}
 		next := pending[0]
 		pending = pending[1:]
-		owners.handBackOne(ctx, pass, projected, sessions, projections, next)
+		owners.handBackOne(ctx, pass.ctx, projected, sessions, projections, next)
 	}
 }
 
@@ -976,6 +1053,14 @@ func (owners *PlayerOwners) Stop() {
 // logs it, because refusing a login over a stale lease is worse than two
 // processes briefly disagreeing about a player who is doing nothing.
 func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, error) {
+	return owners.claim(ctx, ctx, playerID)
+}
+
+// claim is Claim with the wait for the drop of the copy on its own context,
+// dropCtx: the refresh loop asks Redis on its own context and waits for the
+// drop on its pass's budget (see retakeOne). Every other caller passes one
+// context for both.
+func (owners *PlayerOwners) claim(ctx, dropCtx context.Context, playerID int64) (bool, error) {
 	if owners == nil {
 		return false, nil
 	}
@@ -1014,7 +1099,7 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 		return false, nil
 	}
 	if !continuous {
-		if err := owners.dropResident(ctx, playerID); err != nil {
+		if err := owners.dropResident(dropCtx, playerID); err != nil {
 			// The lease is ours in Redis and this process still cannot use
 			// it. Not confirming is half the answer: nothing is admitted.
 			// The other half is forgetting the lease state this process

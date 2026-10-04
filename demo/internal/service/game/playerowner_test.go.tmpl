@@ -1322,3 +1322,133 @@ func TestAHandBackPassStopsWaitingWhenItsBudgetRunsOut(t *testing.T) {
 		}
 	}
 }
+
+// RR-20261004-10：同一回合里"租约丢失 → 重新认领"也要在回合预算之内，而且旁观者的
+// 续租确认不能排在这些等待之后。
+//
+// 每把丢失的租约重新认领时都要扔掉间断前的副本，最多等 evictBudget(5s)。旧实现在
+// Refresh 结果的循环里逐个做：一批租约同时丢失（进程停顿、Redis 被清）时串行相乘，
+// 8 把就是 40s，超过 Lease(30s)——与 RR-20260921-04 的归还回合同形。更糟的是同一个
+// 循环里排在后面的 Held 结果到这时才确认：本地窗口从确认时刻起算 Lease，而 Redis 在
+// Refresh 时就设好了 TTL，于是本地准入比键多活了几十秒，别的进程此间可以合法接手。
+// 承诺：先确认所有续租，再在同一份回合预算（handBackPassBudget）内重新认领、然后
+// 归还；预算用完时没轮到的丢失租约保持 interrupted（Admit 拒绝、不碰副本），下一轮
+// 再问 Redis；已轮到但副本扔不掉的仍按 RR-20261001-07 abandon，不放行 stale 副本。
+func TestARefreshPassRetakingLostLeasesHoldsTheLoopLessThanTheLeaseAllows(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	const lost = handBackBudget
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		if mine, err := owners.Claim(ctx, playerID); err != nil || !mine {
+			t.Fatalf("claim %d: %v %v", playerID, mine, err)
+		}
+	}
+	const bystander = int64(100)
+	if mine, err := owners.Claim(ctx, bystander); err != nil || !mine {
+		t.Fatalf("claim bystander: %v %v", mine, err)
+	}
+	var (
+		mu      sync.Mutex
+		evicted []int64
+	)
+	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
+		mu.Lock()
+		defer mu.Unlock()
+		*clock = clock.Add(evictBudget)
+		evicted = append(evicted, playerID)
+		return errors.New("the entity is busy")
+	}))
+	// Every lease but the bystander's is lost at once, and nobody else took
+	// them: each one the pass reaches is re-claimed and has its copy dropped.
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		delete(table.owner, playerID)
+	}
+	start := *clock
+	owners.renew(ctx)
+	held := clock.Sub(start)
+
+	mu.Lock()
+	started := len(evicted)
+	mu.Unlock()
+	if limit := playerroute.Lease - playerroute.RefreshInterval; held >= limit {
+		t.Errorf("one refresh pass re-claiming lost leases held the refresh loop for %s (%d evictions at evictBudget %s each), not below Lease(%s) - RefreshInterval(%s) = %s",
+			held, started, evictBudget, playerroute.Lease, playerroute.RefreshInterval, limit)
+	}
+	// The bystander was renewed by this pass: its local window ends when the
+	// key Redis just extended does, not later, and it is still in service.
+	owners.mu.Lock()
+	window := owners.local[bystander].validUntil.Sub(start)
+	owners.mu.Unlock()
+	if window > playerroute.Lease {
+		t.Errorf("the bystander's local window ends %s after the renewal that set its key's TTL (Lease %s): it was confirmed after the re-claims, and admits writes after the key can have expired", window, playerroute.Lease)
+	}
+	if err := owners.Admit(bystander); err != nil {
+		t.Errorf("a bystander renewed at the start of the pass is out of service after it: %v", err)
+	}
+	// Nobody whose lease was lost is admitted, reached or not.
+	var deferred []int64
+	owners.mu.Lock()
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		if owners.local[playerID] != nil {
+			deferred = append(deferred, playerID)
+		}
+	}
+	owners.mu.Unlock()
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		if err := owners.Admit(playerID); !errors.Is(err, ErrLeaseNotHeld) {
+			t.Fatalf("player %d, whose lease was lost and whose copy was not dropped, is admitted: %v", playerID, err)
+		}
+	}
+	if len(deferred) == 0 || len(deferred) == lost {
+		t.Fatalf("the pass should have reached some of the lost leases and left the rest: started=%d deferred=%v", started, deferred)
+	}
+
+	// The next pass, with the entities free again, re-takes the ones this
+	// pass did not reach.
+	owners.Evict(&evictorStub{})
+	*clock = clock.Add(playerroute.RefreshInterval)
+	owners.renew(ctx)
+	for _, playerID := range deferred {
+		if err := owners.Admit(playerID); err != nil {
+			t.Fatalf("player %d, left for the next pass, was not re-taken by it: %v", playerID, err)
+		}
+		if table.owner[playerID] != table.sid {
+			t.Fatalf("player %d's lease is not this process's after the re-take: %v", playerID, table.owner)
+		}
+	}
+}
+
+// The shared budget ends the real waits too: drops that never finish stop
+// holding the pass when its budget runs out. Scaled down like the hand-back
+// one — an eviction wait of 100ms against a pass of 150ms.
+func TestARefreshPassStopsWaitingForRetakesWhenItsBudgetRunsOut(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.evictWait = 100 * time.Millisecond
+	owners.handBackPassWait = 150 * time.Millisecond
+	ctx := context.Background()
+	const lost = handBackBudget
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		if mine, err := owners.Claim(ctx, playerID); err != nil || !mine {
+			t.Fatalf("claim %d: %v %v", playerID, mine, err)
+		}
+	}
+	evictor := newBlockingEvictor()
+	evictor.calls = make(chan int64, 64)
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		delete(table.owner, playerID)
+	}
+
+	start := time.Now()
+	owners.renew(ctx)
+	elapsed := time.Since(start)
+	if unbudgeted := time.Duration(lost) * owners.evictWait; elapsed >= unbudgeted/2 {
+		t.Fatalf("re-claiming lost leases held the refresh loop for %s with a budget of %s (without one it would be %s)", elapsed, owners.handBackPassWait, unbudgeted)
+	}
+	for playerID := int64(1); playerID <= lost; playerID++ {
+		if err := owners.Admit(playerID); !errors.Is(err, ErrLeaseNotHeld) {
+			t.Fatalf("player %d, whose lease was lost and whose copy was not dropped, is admitted: %v", playerID, err)
+		}
+	}
+}

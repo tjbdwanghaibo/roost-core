@@ -803,7 +803,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 
 - **B线本轮分流（2026-10-04，noncore-19）**：再观察、优先独立真实NATS复现；已接手修复侧给出的链路/测试草稿，但本轮没有connected NATS的drain超时红证据。合并后的四相关普通包114叶子race/vet通过，不含该外部场景，不能据此判非问题或已修。当前不创建新RR、不改实现，下一先验“硬关闭后资源已释放”和“第二次Stop应收敛”的具体结果，再按现有Assembly/Client工具定修法。[最终接手与验证范围](../review/REVIEW-2026-10-04-noncore-19.md#最后增量同步)。
 
-### W-2026-10-04-03：playerowner `renew` 的“租约丢失 → 重新 Claim”分支对每个丢失的租约串行跑一次 `dropResident`，与 RR-20260921-04 同形
+### W-2026-10-04-03：playerowner `renew` 的“租约丢失 → 重新 Claim”分支对每个丢失的租约串行跑一次 `dropResident`，与 RR-20260921-04 同形（已登记 RR-20261004-10）
 
 - **位置**：`demo/internal/service/game/playerowner.go.tmpl` `renew`（RR-20260921-03 / 04 修复之后）。
 - **现象**：RR-20260921-04 给闲置归还回合加了时间预算，但刷新循环里“租约丢失后重新认领”的分支仍逐个 `dropResident`（每个最多 `evictBudget` 5s），一批租约同时丢失（例如进程停顿后）时同样可能把刷新循环占住超过 Lease。
