@@ -162,7 +162,8 @@ type residentEvictor interface {
 // So the eviction now runs on its own goroutine and runs to completion, and
 // this is the bound on waiting for it. A caller that times out has NOT had the
 // copy dropped and must act accordingly: Claim refuses to take the player into
-// service, the hand-back keeps the lease.
+// service, the hand-back keeps the lease — and until the drop ends, Admit
+// refuses the player whatever the lease says (RR-20261004-11).
 const evictBudget = 5 * time.Second
 
 // eviction is one in-flight drop, shared by everyone waiting for it.
@@ -467,7 +468,8 @@ func (owners *PlayerOwners) dropResident(ctx context.Context, playerID int64) er
 	case <-timer.C:
 		// Still waiting on the entity. Say so as a failure — the copy is NOT
 		// gone — and leave the eviction running: it will finish when the
-		// transaction does, and until then every caller joins this same one.
+		// transaction does, and until then every caller joins this same one
+		// and Admit refuses the player (RR-20261004-11).
 		return fmt.Errorf("player owners: dropping player %d is taking longer than %s; it continues in the background", playerID, wait)
 	case <-ctx.Done():
 		return ctx.Err()
@@ -791,6 +793,9 @@ func (owners *PlayerOwners) handBackOne(ctx, pass, projected context.Context, se
 		return
 	}
 	if err := owners.dropResident(pass, playerID); err != nil {
+		// The lease goes back into service; a drop that outlived the wait
+		// is still running, and Admit refuses the player until it ends
+		// (RR-20261004-11).
 		slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
 		owners.finishHandBack(chosen, false)
 		return
@@ -980,6 +985,21 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	if err := owners.refusalLocked(playerID, state); err != nil {
 		return err
 	}
+	// A drop of the player's copy is running: whatever is admitted now lands
+	// on an entity that is about to be destroyed under it. The lease itself
+	// is fine — this is the hand-back whose drop outlived its wait: the lease
+	// went back into service, and the drop carried on, because nothing can
+	// cancel it (RR-20260920-12). Admitting through that window let a
+	// background step work on the dying copy, and let a login's Claim call
+	// itself continuous, skip the drop and join the scene with an entity the
+	// drop then took away (RR-20261004-11). Refused, the Claim crosses a gap
+	// instead and joins the drop. The player comes back into service the
+	// moment the drop ends (runEviction), on the lease this process never
+	// stopped renewing — so it is not part of refusalLocked: it is no reason
+	// for abandon to forget the lease.
+	if _, dropping := owners.evictions[playerID]; dropping {
+		return fmt.Errorf("%w: player %d, the copy is still being dropped", ErrLeaseNotHeld, playerID)
+	}
 	// Admitting is using. This is what keeps a lease that is doing work from
 	// being handed back underneath it, and it is free: the lock is already
 	// held.
@@ -987,9 +1007,11 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	return nil
 }
 
-// refusalLocked is Admit's judgement without its side effect: why this
-// process may not start work on the player right now, or nil. The caller
-// holds mu; state is the player's entry in local and may be nil.
+// refusalLocked is Admit's judgement of the lease, without its side effect:
+// why this process may not start work on the player under the lease it holds
+// right now, or nil. Admit also refuses while a drop of the copy is running,
+// which is about the copy rather than the lease and ends on its own. The
+// caller holds mu; state is the player's entry in local and may be nil.
 func (owners *PlayerOwners) refusalLocked(playerID int64, state *leaseState) error {
 	if state == nil || state.lost {
 		return fmt.Errorf("%w: player %d", ErrLeaseNotHeld, playerID)
@@ -1088,7 +1110,10 @@ func (owners *PlayerOwners) claim(ctx, dropCtx context.Context, playerID int64) 
 	//
 	// A hand-back this claim waited for counts as a gap too, whatever its
 	// ending: it set out to drop the copy, and a drop that outlived its wait
-	// is still running. Joining it costs nothing when it has finished.
+	// is still running. Joining it costs nothing when it has finished. A
+	// claim that arrives after such a hand-back has ended finds Admit
+	// refusing for as long as that drop runs, and joins it the same way
+	// (RR-20261004-11).
 	continuous := owners.Admit(playerID) == nil && !waited
 	route, err := owners.store.Claim(ctx, playerID)
 	if err != nil {

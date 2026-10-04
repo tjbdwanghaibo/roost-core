@@ -1313,13 +1313,148 @@ func TestAHandBackPassStopsWaitingWhenItsBudgetRunsOut(t *testing.T) {
 	if unbudgeted := time.Duration(handBackBudget) * owners.evictWait; elapsed >= unbudgeted/2 {
 		t.Fatalf("the pass held the refresh loop for %s with a budget of %s (without one it would be %s)", elapsed, owners.handBackPassWait, unbudgeted)
 	}
+	inService := 0
 	for playerID := int64(1); playerID <= players; playerID++ {
 		if table.owner[playerID] != table.sid {
 			t.Fatalf("player %d's lease was given away by a pass that did not hand it back: %v", playerID, table.owner)
 		}
-		if err := owners.Admit(playerID); err != nil {
+		// The players the pass reached have a drop that never finishes:
+		// they keep the lease, and stay out of service until the drop ends
+		// (RR-20261004-11). Everybody else is in service.
+		err := owners.Admit(playerID)
+		if dropRunning(owners, playerID) {
+			if !errors.Is(err, ErrLeaseNotHeld) {
+				t.Fatalf("player %d is admitted while the drop the pass started is still running: %v", playerID, err)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatalf("player %d is out of service after the pass: %v", playerID, err)
 		}
+		inService++
+	}
+	if inService == 0 {
+		t.Fatal("the pass reached every player; nobody was left for the next pass")
+	}
+}
+
+// RR-20261004-11：归还的撤离等超时、租约回到服务之后，后台那次撤离还在销毁实体——
+// 在它结束之前，谁都不能被放行到这份副本上。
+//
+// 撤离不可取消（RR-20260920-12）：归还等满 evictWait 就放弃、租约留在服务，而撤离在
+// 后台继续，最后把实体 Destroy 掉。旧实现在这段时间里 Admit 照常放行：后台消费者
+// （Owns → Admitted）的事务落在一份即将被销毁的副本上；登录的 Claim 看 Admit 通过就
+// 当作"没有间断"、不扔副本，直接确认——登录随后取到这份常驻实体、进场，然后被晚到
+// 的 Destroy 从脚下拿走（RR-20260921-03 只让"等过归还"的 Claim 加入撤离，归还已经
+// 结束才到的登录不在其列）。承诺：撤离进行中 Admit 拒绝；登录的 Claim 因此跨间断、
+// 加入那次撤离，等不到就不确认；恢复点是撤离真正结束——租约一直是本进程的、照常
+// 续租，结束后自动回到服务（副本已没了就冷加载），不需要谁重新认领。
+func TestAHandBackWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testing.T) {
+	// The hand-back of an idle background claim gives up on the drop after
+	// evictWait; the drop itself is still running when this returns.
+	handBackGaveUp := func(t *testing.T) (owners *PlayerOwners, table *fakeLeaseTable, clock *time.Time, endDrop func()) {
+		t.Helper()
+		owners, table, _, clock = ownersUnderTest(t)
+		owners.evictWait = 50 * time.Millisecond
+		ctx := context.Background()
+		if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+			t.Fatalf("owns: %v %v", owned, err)
+		}
+		evictor := newBlockingEvictor()
+		owners.Evict(evictor)
+		var once sync.Once
+		endDrop = func() { once.Do(func() { close(evictor.release) }) }
+		t.Cleanup(endDrop)
+		*clock = clock.Add(HandBackIdle + time.Second)
+		owners.renew(ctx)
+		select {
+		case <-evictor.calls:
+		default:
+			t.Fatal("the hand-back never started the drop")
+		}
+		if !dropRunning(owners, 77) || table.owner[77] != table.sid || len(table.released) != 0 {
+			t.Fatalf("precondition: the drop should still be running and the lease kept: running=%v owner=%v released=%v",
+				dropRunning(owners, 77), table.owner, table.released)
+		}
+		return owners, table, clock, endDrop
+	}
+
+	t.Run("background-work", func(t *testing.T) {
+		owners, table, clock, endDrop := handBackGaveUp(t)
+		if err := owners.Admit(77); err == nil {
+			t.Fatal("Admit let work start on player 77 while the hand-back's drop is still destroying the copy in the background")
+		}
+		if owned, err := owners.Owns(context.Background(), 77); owned || err != nil {
+			t.Fatalf("a background consumer was told it owns player 77 while the copy is being destroyed: owned=%v err=%v", owned, err)
+		}
+		// The lease is not given up meanwhile: the next pass renews it.
+		var asked []int64
+		table.refresh = func(playerID int64) playerroute.RefreshResult {
+			asked = append(asked, playerID)
+			return playerroute.RefreshResult{PlayerID: playerID, Held: table.owner[playerID] == table.sid}
+		}
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(context.Background())
+		if len(asked) != 1 || asked[0] != 77 || table.owner[77] != table.sid {
+			t.Fatalf("the lease of a player whose drop is running was not renewed: refreshed=%v owner=%v", asked, table.owner)
+		}
+		if err := owners.Admit(77); err == nil {
+			t.Fatal("the next pass put player 77 back in service while the drop is still running")
+		}
+		// The drop ends: that is the point the player comes back, with no
+		// re-claim needed — the lease never left this process.
+		endDrop()
+		waitDropEnded(t, owners, 77)
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("player 77 did not come back into service when the drop ended: %v", err)
+		}
+	})
+
+	t.Run("login", func(t *testing.T) {
+		owners, _, _, endDrop := handBackGaveUp(t)
+		mine, err := owners.Claim(context.Background(), 77)
+		if mine && dropRunning(owners, 77) {
+			t.Fatalf("a login was taken into service (mine=%v err=%v) on a copy whose drop is still running; it would load and join an entity the drop then destroys", mine, err)
+		}
+		if mine || !errors.Is(err, errStaleCopyKept) {
+			t.Fatalf("a login during the drop answered mine=%v err=%v, want the drop's refusal", mine, err)
+		}
+		// The lease had no gap, so the refused login does not make this
+		// process forget it (abandon is for a lease that did): it is still
+		// renewed, and the player comes back when the drop ends.
+		owners.mu.Lock()
+		kept := owners.local[77] != nil
+		owners.mu.Unlock()
+		if !kept {
+			t.Fatal("a login that could not wait for the drop made this process forget a lease it never stopped holding")
+		}
+		// Once the drop has ended, the next login is served.
+		endDrop()
+		waitDropEnded(t, owners, 77)
+		if mine, err := owners.Claim(context.Background(), 77); !mine || err != nil {
+			t.Fatalf("a login after the drop ended was not served: mine=%v err=%v", mine, err)
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("player 77 is not in service after the login: %v", err)
+		}
+	})
+}
+
+func dropRunning(owners *PlayerOwners, playerID int64) bool {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	_, running := owners.evictions[playerID]
+	return running
+}
+
+func waitDropEnded(t *testing.T, owners *PlayerOwners, playerID int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for dropRunning(owners, playerID) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drop of %d never ended", playerID)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
