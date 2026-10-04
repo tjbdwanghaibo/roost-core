@@ -159,7 +159,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 			// replace it, and the caller sees what L1 holds (RR-20260913-06).
 			switch err := s.setLocal(ctx, value); {
 			case errors.Is(err, ErrConflictingWrite):
-				if current, held, getErr := s.local.Get(ctx, key); getErr == nil && held {
+				if current, held := s.localAdmitted(ctx, key); held {
 					return current, true, nil
 				}
 			case errors.Is(err, ErrStaleWrite):
@@ -167,7 +167,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 				// newer version while this read was in flight, RR-20260913-01
 				// 复核). The captured L2 value is the past: hand out what L1
 				// holds, or a miss — never the value L1 just refused.
-				if current, held, getErr := s.local.Get(ctx, key); getErr == nil && held {
+				if current, held := s.localAdmitted(ctx, key); held {
 					return current, true, nil
 				}
 				return zero, false, nil
@@ -184,14 +184,43 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		return value, ok, err
 	}
 	if s.remote != nil {
-		if err := s.remote.Set(ctx, value); err != nil && !s.degradable(err) {
+		// RR-20261004-04：L2 以 stale 拒绝回写，说明 loader 执行期间 L2 已经收到
+		// 更新的值；这是写入准入的结论，不是读取失败。loader 的结果照常交给 L1
+		// 准入，由下面同一条规则决定交付什么。
+		err := s.remote.Set(ctx, value)
+		if err != nil && !errors.Is(err, ErrStaleWrite) && !s.degradable(err) {
 			return zero, false, err
 		}
 	}
-	if err := s.setLocal(ctx, value); err != nil {
+	// RR-20261004-04：loader 回填与 L2 回填是同一类 L1 写入口，准入拒绝按同一
+	// 条规则处理：交付 L1 已准入的值；L1 没有值时 stale 是 miss（被更新的删除
+	// 取代），conflict 是拒绝。之前这里把拒绝原样返回，读取因“写被拒”而失败。
+	switch err := s.setLocal(ctx, value); {
+	case err == nil:
+		return value, true, nil
+	case errors.Is(err, ErrStaleWrite), errors.Is(err, ErrConflictingWrite):
+		if current, held := s.localAdmitted(ctx, key); held {
+			return current, true, nil
+		}
+		if errors.Is(err, ErrStaleWrite) {
+			return zero, false, nil
+		}
+		return zero, false, err
+	default:
 		return zero, false, err
 	}
-	return value, true, nil
+}
+
+// localAdmitted reads back what L1 admitted after it refused a fill. A failed
+// read counts as nothing held; each fill path decides what "nothing held"
+// means for its refusal.
+func (s *ReadThroughStore[K, V]) localAdmitted(ctx context.Context, key K) (V, bool) {
+	current, held, err := s.local.Get(ctx, key)
+	if err != nil || !held {
+		var zero V
+		return zero, false
+	}
+	return current, true
 }
 
 // degradable reports whether an L2 error may be absorbed under
