@@ -333,9 +333,12 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = scheduler.Shutdown(context.Background()) })
-			expected := make(map[int64]int64, len(ids))
+			// 每个实体的期望是区间 [Min, Max]；短业务流与无错误的负载里 Min == Max，与点期望逐字相同。
+			expected := make(map[int64]remoteExpect, len(ids))
+			var load remoteLoadResult
 			if remoteLoadEnabled() {
-				expected = runRemoteLoad(t, ctx, scheduler, update, warmup, ids, keys, receiver, assembly.Manager, projector, wal)
+				load = runRemoteLoad(t, ctx, scheduler, update, warmup, ids, keys, receiver, assembly.Manager, projector, wal)
+				expected = load.Expected
 			} else {
 				for step := 1; step <= 3; step++ {
 					if step == 2 {
@@ -347,7 +350,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 					}
 				}
 				for _, id := range ids {
-					expected[id] = 3
+					expected[id] = remoteExpect{Min: 3, Max: 3}
 				}
 			}
 			if _, err := scheduler.RequestMulti(ctx, reject, ids[:2], nil); !errors.Is(err, businessErr) {
@@ -359,14 +362,20 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			if err := runtime.Flush(ctx); err != nil {
 				t.Fatal(err)
 			}
+			// settled 是排空后实体的实际计数：必须落在期望区间内，且 Mongo 投影 / 版本、NATS 快照都与它逐一相等。
+			// 区间是点时 settled 就是原来的精确期望值。
+			settled := make(map[int64]int64, len(ids))
+			var settledAboveSuccess int64
 			for _, id := range ids {
 				vault := loader.values[id]
 				vault.GetMutex().Lock()
 				balance, items := vault.balance.GetValue(), vault.items.GetValue()
 				vault.GetMutex().Unlock()
-				if balance != expected[id] || items != expected[id] {
-					t.Fatalf("rollback lost id=%d %d/%d", id, balance, items)
+				if balance != items || !expected[id].contains(balance) {
+					t.Fatalf("rollback lost id=%d %d/%d%s", id, balance, items, expected[id].suffix())
 				}
+				settled[id] = balance
+				settledAboveSuccess += balance - expected[id].Min
 				for _, collection := range []string{"remote_balances", "remote_items"} {
 					var doc struct {
 						Version uint64 `bson:"_ver"`
@@ -381,8 +390,8 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 					if err := bson.Unmarshal(doc.Data, &data); err != nil {
 						t.Fatal(err)
 					}
-					if doc.Version != uint64(expected[id]) || data.Value != expected[id] {
-						t.Fatalf("Mongo %s/%d version=%d value=%d", collection, id, doc.Version, data.Value)
+					if doc.Version != uint64(settled[id]) || data.Value != settled[id] {
+						t.Fatalf("Mongo %s/%d version=%d value=%d%s", collection, id, doc.Version, data.Value, expected[id].suffix())
 					}
 				}
 			}
@@ -390,18 +399,18 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			defer ticker.Stop()
 			for _, key := range keys {
 				for {
-					snapshot, found, err := receiver.ReadRemoteSnapshot(ctx, key, readConsistency, uint64(expected[key.EntityID]))
+					snapshot, found, err := receiver.ReadRemoteSnapshot(ctx, key, readConsistency, uint64(settled[key.EntityID]))
 					if err != nil {
 						t.Fatal(err)
 					}
-					if found && snapshot.StateVersion == uint64(expected[key.EntityID]) {
+					if found && snapshot.StateVersion == uint64(settled[key.EntityID]) {
 						var payload struct {
 							Value int64 `bson:"value"`
 						}
 						if err := bson.Unmarshal(snapshot.Payload.BytesCopy(), &payload); err != nil {
 							t.Fatal(err)
 						}
-						if payload.Value != expected[key.EntityID] {
+						if payload.Value != settled[key.EntityID] {
 							t.Fatalf("snapshot value=%d", payload.Value)
 						}
 						break
@@ -418,7 +427,12 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			}
 			t.Logf("%s: %d entities x 2 DAOs, rejection/panic rollback, all Mongo versions/values and %d snapshots verified; authoritative_refill=%t loads=%d", policy, len(ids), len(keys), remoteFaultRefill(), refill.loads.Load())
 			if remoteLoadEnabled() {
-				markRemoteVerified(t)
+				// 先写 .verified 再报告负载错误：数据一致与负载有错误分开判定，错误不再遮住核验结果。
+				markRemoteVerified(t, load, settledAboveSuccess)
+				if load.Errors != 0 {
+					t.Errorf("load errors=%d not_applied=%d uncertain=%d first=%s; final consistency verified within [success, success+uncertain] for %d entities (%d widened, settled_above_success=%d)",
+						load.Errors, load.NotApplied, load.Uncertain, load.FirstError, load.Entities, load.Widened, settledAboveSuccess)
+				}
 			}
 		})
 	}

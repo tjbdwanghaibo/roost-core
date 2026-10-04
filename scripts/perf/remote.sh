@@ -23,6 +23,19 @@ cd "$repo_dir"
 bash kit/scripts/integration/dataengine-env.sh heal > "$output/preflight.log" 2>&1
 { go version; git rev-parse HEAD; git status --short; shasum -a 256 codegen/internal/entity/testdata/remoteflow/*.go remoteentity/*.go nest/*.go dataengine/engine/*.go redis/driver/cluster_recovery.go; env | sort | sed -n '/^ROOST_REMOTE_/p'; printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"; } > "$output/env.txt"
 # 慢请求原始堆栈保留，但压缩以免长稳产生巨量文本文件。
-bash scripts/test-remote-generated.sh 2>&1 | gzip > "$output/run.log.gz"
-[[ -f "$output/result.json.verified" ]] || { echo 'Final data verification missing' >&2; exit 1; }
+status=0
+bash scripts/test-remote-generated.sh 2>&1 | gzip > "$output/run.log.gz" || status=$?
+# 一致性与负载错误分开判定：.verified 只说明全量核验（区间核验）通过；负载有错误时测试在写完 .verified 之后失败。
+# 退出码：0 = 核验通过且无错误；3 = 核验通过但负载有错误（同一次运行的其他失败仍看 run.log.gz）；1 = .verified 缺失（核验未通过 / 未执行），或无负载错误但测试另有失败。
+[[ -f "$output/result.json.verified" ]] || { echo "Final data verification missing (test exit=$status)" >&2; exit 1; }
+field() { sed -n "s/^  \"$1\": \\([0-9]*\\),\$/\\1/p" "$output/result.json"; }
+errors="$(field Errors)"
+if [[ "$status" -ne 0 ]]; then
+  if [[ "${errors:-0}" -gt 0 ]]; then
+    printf 'consistency verified; load errors=%s not_applied=%s uncertain=%s: %s\n' "$errors" "$(field ErrorsNotApplied)" "$(field ErrorsUncertain)" "$output"
+    exit 3
+  fi
+  echo "consistency verified, but the test failed (load errors=0, test exit=$status); see $output/run.log.gz" >&2
+  exit 1
+fi
 printf 'Verified results: %s\n' "$output"

@@ -149,3 +149,39 @@ ROOST_REMOTE_LABEL=hot-20 ROOST_REMOTE_DURATION=30s \
 ## 图谱与证据范围
 
 本轮采用 Verify，源码定位结合 source fallback；图谱对同名方法的启发式连边不作为真实调用证明。索引已刷新至 `2026-09-24T16:04:30Z`，18,144 nodes / 143,835 edges，本轮生产源码与集成测试 metadata_match、无记录缺口；这仍不是无遗漏保证。testdata、scripts、docs 和性能产物按配置排除，已直接读取、生成、编译或执行。三处历史模板 parse_partial 不在本轮范围。
+
+## 负载有错误时的区间核验（2026-10-04）
+
+C01 第 1、3 次 24 小时长稳都因约 0.01～0.02% 的环境错误（宿主机停顿导致的写许可拒绝 `remote entity: capacity exceeded` 与 `nest: sync timeout`）在负载结束时直接 `final consistency not verified`，Mongo / NATS 全量核验从未执行（[C01-RUNBOOK](../review/C01-RUNBOOK-2026-09-30.md)）。原因是旧 harness 把成功回复次数当作每个实体的精确期望值，而超时后事务仍可能提交。这是测试 harness 的改进，不是框架缺陷，不登记 RR。
+
+**两类错误**：`load_test.go` 的 `classifyRemoteLoadError` 对每笔失败请求按 [USER_GUIDE §4 回复错误判别表](../USER_GUIDE.md) 从上到下取第一个命中的行（全部 `errors.Is`，不匹配文本）：
+
+| 结果语义 | 判别表行 | 哨兵 | 区间 |
+| --- | --- | --- | --- |
+| 结果未知（uncertain） | 1～5 | `nest.ErrCommitIndeterminate`、`entity.ErrRemotePersistenceIndeterminate`、`entity.ErrRemoteCommitTimeout`、`nest.ErrAfterCommitFailed`（已提交，上界覆盖）、`nest.ErrRemotePartRejected`、`nest.ErrNestedTransactionCommitted` | 两个实体上界各 +1 |
+| 结果未知 | 6、7 | `nest.ErrNonRollbackNotRequeued`、不带 `ErrLockTimeout` 的 `nest.ErrCreatedEntityLockConflict`（修改未回滚） | 同上 |
+| 确定未生效（not_applied） | 8、9 | 带 `ErrLockTimeout` 的 `ErrCreatedEntityLockConflict`、`nest.ErrLockTimeout`、`ErrEntityLockGroupChanged`、`ErrEntityGroupTransitionPending` | 不计 |
+| 确定未生效 | 12 | `nest.ErrCommitRejected`（本夹具 handler 均为 `RollbackState`，已整条回滚） | 不计 |
+| 结果未知 | 14 | `nest.ErrNestTimeout`、`nest.ErrNestCanceled`（只说明没等到回复） | 上界 +1 |
+| 确定未生效 | 15（准入前） | `entity.ErrRemoteOverloaded`（写许可 / 批次 / wrapper 容量，`PrepareRemoteWriteBatch` 在 handler 之前返回；Commit 阶段的同名错误已带第 2 / 4 行哨兵、先命中）、`nest.ErrNestFenced`、`nest.ErrQueueFull`、`nest.ErrNestStopped` | 不计 |
+| 结果未知（保守兜底） | — | 不命中以上任何一条的错误（`unclassified`），包括第 10、11、13 行与其余第 15 行情形 | 上界 +1 |
+
+**区间核验**：每个实体的期望为 `[成功回复数, 成功回复数 + 结果未知的失败请求数]`。`runtime.Flush` 之后先读内存权威计数，要求 `balance == items` 且落在区间内，再要求 Mongo 投影的 `_ver` 与值、NATS 快照的 `StateVersion` 与值都与它逐一相等，outbox 无待处理——即“落在区间内”加“各层一致”。没有结果未知的错误时区间退化为点，核验与之前逐字相同（失败文本只在区间被放宽时追加 ` want=[min,max]`）。
+
+**报告**：`result.json` 新增 `ErrorsNotApplied`、`ErrorsUncertain`、按类别的 `ErrorClasses`（键形如 `not_applied row15 entity.ErrRemoteOverloaded`、`uncertain row14 nest.ErrNestTimeout`；续订 Interest、写采样、ctx 结束等 harness 自身错误记 `harness`，不影响区间）与每个类别第一次出现的错误文本 `ErrorClassFirst`（用来核对分类，`unclassified` 尤其要看）。`Errors` = 三类之和；`ErrorDetails` 仍限 32 条。
+
+**一致性与错误分开报告**：核验通过后先写 `result.json.verified`（第二行 `interval check: entities=… widened=… settled_above_success=…; load errors=… not_applied=… uncertain=… harness=…`，`widened` 是区间被放宽的实体数，`settled_above_success` 是各实体实际计数超出成功回复数之和，即结果未知的请求里事后实际提交的部分 ×2），**之后**若 `Errors > 0` 再 `t.Errorf` 让测试失败。`scripts/perf/remote.sh` 的退出码：`0` 核验通过且无错误；`3` 核验通过但负载有错误，输出一行 `consistency verified; load errors=… not_applied=… uncertain=…: <目录>`（同一次运行的其他失败仍看 `run.log.gz`）；`1` `.verified` 缺失（核验失败或未执行），或无负载错误但测试另有失败。`Dropped > 0`（请求根本没发出）仍按原口径直接失败、不做核验。
+
+**负对照用的调用方截止**：`ROOST_REMOTE_REQUEST_TIMEOUT`（正的 Go duration，缺省 30s，与之前写死的值相同）只改计时请求的调用方截止，预热仍是 30s；调小后请求以 `nest.ErrNestCanceled`（第 14 行）结束而事务照常提交，用来验证区间上界。正式验收不设。
+
+**验证（2026-10-04，隔离环境 `~/.roost-it/roost-dataengine-it`，worktree 基于 `3d3b22c9`，strict、200 实体、100 会话、2 分钟；结果目录 `artifacts/perf/remote/errsplit-*`）**：
+
+| label | 条件 | 结果 |
+| --- | --- | --- |
+| `errsplit-before-w4` | **修前**，200 TPS、`ROOST_REMOTE_WRITE_LIMIT=4`、预热并发 2 | `load errors=18890 dropped=0 first=remote entity: capacity exceeded; final consistency not verified`，无 `.verified`，`remote.sh` 退出 1 |
+| `errsplit-after-w4-r2` | 修后，同上 | 18820 个错误全部 `not_applied row15 entity.ErrRemoteOverloaded`；`.verified` 写出，`widened=0 settled_above_success=0`（写许可拒绝确实未生效，点期望逐一成立）；测试以错误失败，`remote.sh` 输出 `consistency verified; load errors=18820 not_applied=18820 uncertain=0` 并退出 3 |
+| `errsplit-after-timeout80ms-r2` | 修后，100 TPS、`ROOST_REMOTE_REQUEST_TIMEOUT=80ms` | 11995 个错误全部 `uncertain row14 nest.ErrNestCanceled`，只有 5 笔成功回复；`.verified` 写出，`widened=200 settled_above_success=23986`——11995 笔“超时”请求里 11993 笔事后实际提交，旧的点期望在这里必然误判；退出 3 |
+| `errsplit-after-timeout15ms-r2` | 修后，100 TPS、`ROOST_REMOTE_REQUEST_TIMEOUT=15ms` | 11619 个 `ErrNestCanceled` 与 381 个 `unclassified`（`remote_entity: shared lock …: remote entity: writer fenced` + `write concern error: (MaxTimeMSExpired)`，准备阶段取写许可超时，按保守兜底计结果未知）；`.verified` 写出，`settled_above_success=44`；退出 3 |
+| `errsplit-after-clean` | 修后，20 TPS、默认许可 | 2400 笔完成、0 错误，`.verified` 第二行 `widened=0 settled_above_success=0; load errors=0`，测试 PASS，`remote.sh` 输出 `Verified results: …` 退出 0（与修前口径相同） |
+
+同一批改动下 `GOWORK=off bash scripts/test-remote-generated.sh`（功能验收，带 race）全部通过。观察：第一次 15ms 运行（`errsplit-after-timeout15ms`）在负载之后的 reject 校验得到 `remote_entity: shared lock …: versioned lock not acquired`、未进入核验；同参数复跑（`-r2`）未复现。只记为观察，未定位、未登记。

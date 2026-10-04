@@ -59,6 +59,8 @@ Remote 容量阶梯入口：`ROOST_REMOTE_CAPACITY_LABEL=<唯一标签> ROOST_RE
 
 Remote 资源预算验证新增 `ROOST_REMOTE_WRITE_LIMIT`（正整数，未设使用正式默认 128）、`ROOST_REMOTE_WAL_LIMIT`（正整数，未设保持 WAL 不设记录数上限）。它们独立于快/慢 worker 数；历史 4096 预算对照可显式设 `ROOST_REMOTE_WRITE_LIMIT=4096`，前提是 `AsyncFinalizeCapacity` 足够。最新[预算与集中恢复验收](../docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)披露拒绝和成功 TPS。
 
+`scripts/perf/remote.sh` 的一致性与负载错误分开报告（2026-10-04）：负载有错误时仍做区间核验并写 `result.json.verified`，之后测试再以错误失败；退出码 0 = 核验通过且无错误，3 = 核验通过但负载有错误（输出 `consistency verified; load errors=…`），1 = `.verified` 缺失。`ROOST_REMOTE_REQUEST_TIMEOUT`（缺省 30s）只用于区间核验负对照。口径见 [REMOTE-ACCEPTANCE §负载有错误时的区间核验](../docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md#负载有错误时的区间核验2026-10-04)。
+
 
 Sync 长尾诊断：AOI 压测增加 `-trace-capacity=262144`，输出固定内存环形记录的逐批
 `trace.jsonl`；随后运行 `python3 scripts/perf/sync-trace.py <sample-N目录>`，关联
