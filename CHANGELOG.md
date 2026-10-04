@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.19.1] - 2026-10-04
+
+> 补丁版本：对 v1.19.0 中 B 线 NC 修复的独立复审（[NC-01～07](docs/review/REVIEW-2026-10-04-nc-audit-1.md)、[NC-08～12](docs/review/REVIEW-2026-10-04-nc-audit-2.md)、[NC-13～29](docs/review/REVIEW-2026-10-04-nc-audit-3.md)）确认的 6 个缺陷——其中 RR-20261004-02 / 03 / 06 是 v1.19.0 带出的回归——以及 B 线 RR-20261004-NC-30。无源码不兼容的 API 变化；行为变化见 RR-20261004-07（`Bus.Stop()` / `RPCClient.Stop()` 在停止已发起后立即返回）。
+
 ### Fixed
 
 - **Bus 停止超预算后可再次排空，NatsMod 重试最终关闭 Assembly**（RR-20261004-07，P3，NC 复审发现，NC-09 引入）：`Bus.StopWithContext` 超预算只返回 ctx 错误并保留 worker pool，之后的调用继续等同一次排空；NatsMod 只在 ctx 错误时保留 Bus / Assembly，退订失败等终态错误照常关闭连接。**行为变化**：`Bus.Stop()` / `RPCClient.Stop()` 在停止已发起后立即返回、不再等待（回调内再调 `Stop()` 不再自锁），要等待同一次排空请用 `StopWithContext`；RPC 停止排空不再漏掉 reply / timeout 刚领取的终态 callback。[记录](docs/bugfix/RR-20261004-07.md)
