@@ -27,10 +27,18 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute"
 )
 
-// os.Chdir is process-wide. Serializing generator execution prevents two
-// library callers from parsing or writing relative paths in each other's
-// projects. Cross-process conflicts are handled by the commit guards.
-var generatorWorkingDirectory sync.Mutex
+// generatorRuns serializes generator execution within the process. The
+// generators were written as one-shot commands and have not been audited for
+// concurrent runs; cross-process conflicts are handled by the commit guards.
+//
+// It no longer guards a working directory: runGenerators used to os.Chdir the
+// whole process into the tree it generated (often a .roost-sync-* or
+// .roost-generate-* staging tree), so every child process another goroutine
+// started without exec.Cmd.Dir during that window inherited the staging tree
+// as its working directory. On Windows a process's working directory cannot be
+// deleted while it runs, so the stage outlived the command that made it
+// (RR-20261004-12). Generators now receive paths under the root instead.
+var generatorRuns sync.Mutex
 
 type GenerateOptions struct {
 	Changed bool
@@ -54,7 +62,15 @@ type generator struct {
 	// code that another generator in this same run just emitted — so neither
 	// the feature gate nor a changed-file prefix can decide for it.
 	Always bool
-	Run    func(io.Writer) error
+	// Run generates into the project at root, an absolute path. Generators
+	// get paths under root, never the process working directory.
+	Run func(root string, w io.Writer) error
+}
+
+// under names a project-relative path (slash-separated, as the generator
+// defaults spell it) inside root.
+func under(root, rel string) string {
+	return filepath.Join(root, filepath.FromSlash(rel))
 }
 
 func forceArg(args []string, force bool) []string {
@@ -66,44 +82,55 @@ func forceArg(args []string, force bool) []string {
 
 func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
-		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(w io.Writer) error {
-			return dao.Run(forceArg([]string{"-def", dao.DefaultDefDir, "-out", dao.DefaultOutDir}, force), w)
+		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
+			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
 		}},
-		{Feature: "event", Name: "event", Prefixes: []string{"event/def/"}, Run: func(w io.Writer) error {
-			args := forceArg([]string{"-def", eventgen.DefaultDefDir, "-out", eventgen.DefaultOutDir}, force)
-			if info, err := os.Stat("./game"); err == nil && info.IsDir() {
-				args = append(args, "-game", "./game")
+		{Feature: "event", Name: "event", Prefixes: []string{"event/def/"}, Run: func(root string, w io.Writer) error {
+			args := forceArg([]string{"-def", under(root, eventgen.DefaultDefDir), "-out", under(root, eventgen.DefaultOutDir)}, force)
+			if info, err := os.Stat(under(root, "game")); err == nil && info.IsDir() {
+				args = append(args, "-game", under(root, "game"))
 			}
 			return eventgen.Run(args, w)
 		}},
-		{Feature: "errcode", Name: "errcode", Prefixes: []string{"game/", "internal/", "service/"}, Run: func(w io.Writer) error {
-			return codeerr.Run([]string{"-root", ".", "-out", codeerr.DefaultOutFile}, w)
+		{Feature: "errcode", Name: "errcode", Prefixes: []string{"game/", "internal/", "service/"}, Run: func(root string, w io.Writer) error {
+			return codeerr.Run([]string{"-root", root, "-out", under(root, codeerr.DefaultOutFile)}, w)
 		}},
-		{Feature: "protocol", Name: "protocol", Prefixes: []string{"protocol/def/"}, Run: func(w io.Writer) error {
-			args := []string{"-def", protocol.DefaultDefDir, "-robot-protocol", ""}
+		{Feature: "protocol", Name: "protocol", Prefixes: []string{"protocol/def/"}, Run: func(root string, w io.Writer) error {
+			args := []string{
+				"-def", under(root, protocol.DefaultDefDir),
+				"-proto", under(root, "protocol/proto"),
+				"-pb", under(root, "protocol/pb"),
+				"-msgid", under(root, "protocol/msgid"),
+				"-manifest", under(root, "protocol/protocol_manifest.json"),
+				"-robot-protocol", "",
+			}
 			if _, enabled := m.Access["player"]; enabled {
 				args = append(args,
-					"-bind", protocol.DefaultBindDir,
-					"-handlers", protocol.DefaultHandlerDir,
-					"-handler-bootstrap", "./game/protocol_bootstrap/protocol_gen.go",
+					"-bind", under(root, protocol.DefaultBindDir),
+					"-handlers", under(root, protocol.DefaultHandlerDir),
+					"-handler-bootstrap", under(root, "game/protocol_bootstrap/protocol_gen.go"),
 				)
 			} else {
 				args = append(args, "-bind", "", "-handlers", "", "-handler-bootstrap", "")
 			}
 			return protocol.Run(forceArg(args, force), w)
 		}},
-		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(w io.Writer) error { return entity.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
-		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(w io.Writer) error { return nest.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
-		{Feature: "attribute", Name: "attribute", Prefixes: []string{"game/gameplay/attribute/"}, Run: func(w io.Writer) error {
-			return attribute.Run(forceArg([]string{"-dir", "./game/gameplay/attribute"}, force), w)
+		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(root string, w io.Writer) error {
+			return entity.Run(forceArg([]string{"-dir", under(root, "game")}, force), w)
+		}},
+		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(root string, w io.Writer) error {
+			return nest.Run(forceArg([]string{"-dir", under(root, "game")}, force), w)
+		}},
+		{Feature: "attribute", Name: "attribute", Prefixes: []string{"game/gameplay/attribute/"}, Run: func(root string, w io.Writer) error {
+			return attribute.Run(forceArg([]string{"-dir", under(root, "game/gameplay/attribute")}, force), w)
 		}},
 		// tablegen keeps its historical unconditional -force: its outputs use
 		// exists-refuses-overwrite semantics rather than content hashing, so
 		// dropping force would fail every regeneration after a schema change.
-		{Feature: "config", Name: "config-template", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
-			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv-template", "./configs/table_template", "-force"}, w)
+		{Feature: "config", Name: "config-template", Prefixes: []string{"configs/schema/"}, Run: func(root string, w io.Writer) error {
+			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-csv-template", under(root, "configs/table_template"), "-force"}, w)
 		}},
-		{Feature: "config", Name: "config-data", Prefixes: []string{"configs/schema/", "configs/table/"}, Run: func(w io.Writer) error {
+		{Feature: "config", Name: "config-data", Prefixes: []string{"configs/schema/", "configs/table/"}, Run: func(root string, w io.Writer) error {
 			// A schema without any CSV yet is the normal state between
 			// `roost project new` and the first planner table, and tablegen
 			// reads one CSV per meta unconditionally, so config-data is
@@ -112,28 +139,32 @@ func generatorsFor(m Manifest, force bool) []generator {
 			// empty one, which made that skip dead and failed every such
 			// project (RR-20261001-03). Only a manifest that still owns
 			// JSON files has retirement work to do (RR-20260930-09).
-			if empty, err := dirHasNoDataFiles("./configs/table"); err != nil {
+			if empty, err := dirHasNoDataFiles(under(root, "configs/table")); err != nil {
 				return err
 			} else if empty {
-				if owns, err := tablegen.ManifestOwnsJSON("./configs/data"); err != nil {
+				if owns, err := tablegen.ManifestOwnsJSON(under(root, "configs/data")); err != nil {
 					return err
 				} else if !owns {
 					return nil
 				}
 			}
-			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv", "./configs/table", "-json", "./configs/data", "-force"}, w)
+			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-csv", under(root, "configs/table"), "-json", under(root, "configs/data"), "-force"}, w)
 		}},
-		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
-			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-out", "./configs/generated", "-force"}, w)
+		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/"}, Run: func(root string, w io.Writer) error {
+			return tablegen.Run([]string{"-meta", under(root, tablegen.DefaultMetaDir), "-out", under(root, "configs/generated"), "-force"}, w)
 		}},
-		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
+		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(root string, w io.Writer) error {
+			return webroute.Run(forceArg([]string{"-dir", under(root, "service")}, force), w)
+		}},
 		// The project's own cross-process services (roost add rpc): each
 		// internal/rpc/<name> package is one servicerpc run — transport and
 		// assembly halves from its //roost:rpc interface. servicerpc writes
 		// only when the content changed, so -force is not needed.
-		{Feature: "rpc", Name: "servicerpc", Prefixes: []string{"internal/rpc/"}, Run: func(w io.Writer) error {
-			for _, dir := range projectRPCDirs(".", m) {
-				if err := servicerpc.Run([]string{"-dir", "./" + dir}, w); err != nil {
+		{Feature: "rpc", Name: "servicerpc", Prefixes: []string{"internal/rpc/"}, Run: func(root string, w io.Writer) error {
+			for _, dir := range projectRPCDirs(root, m) {
+				// "./" + dir, relative to root: servicerpc writes the flag
+				// into the generated header as the command to rerun.
+				if err := servicerpc.RunIn(root, []string{"-dir", "./" + dir}, w); err != nil {
 					return fmt.Errorf("%s: %w", dir, err)
 				}
 			}
@@ -141,8 +172,8 @@ func generatorsFor(m Manifest, force bool) []generator {
 		}},
 		// Last, and unconditional: the aggregate collects //roost:register
 		// markers, including the ones the generators above just wrote.
-		{Name: "registry", Always: true, Run: func(w io.Writer) error {
-			return registry.Run(".", m.Project.Module, w)
+		{Name: "registry", Always: true, Run: func(root string, w io.Writer) error {
+			return registry.Run(root, m.Project.Module, w)
 		}},
 	}
 }
@@ -326,21 +357,13 @@ func replayStagedOutput(writer io.Writer, value, stage, root string) {
 	_, _ = io.WriteString(writer, value)
 }
 
-func runGenerators(root string, manifest Manifest, generators []generator, options GenerateOptions) (returnErr error) {
-	generatorWorkingDirectory.Lock()
-	defer generatorWorkingDirectory.Unlock()
-	old, err := os.Getwd()
+func runGenerators(root string, manifest Manifest, generators []generator, options GenerateOptions) error {
+	generatorRuns.Lock()
+	defer generatorRuns.Unlock()
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
 	}
-	if err := os.Chdir(root); err != nil {
-		return err
-	}
-	defer func() {
-		if err := os.Chdir(old); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("restore generator working directory: %w", err))
-		}
-	}()
 	if legacy, err := marker.FindLegacy(root); err != nil {
 		return fmt.Errorf("scan for deprecated markers: %w", err)
 	} else if len(legacy) > 0 {
@@ -360,7 +383,7 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 			continue
 		}
 		fmt.Fprintf(options.Stdout, "==> %s\n", gen.Name)
-		if err := gen.Run(options.Stdout); err != nil {
+		if err := gen.Run(root, options.Stdout); err != nil {
 			return fmt.Errorf("generator %s: %w", gen.Name, err)
 		}
 	}

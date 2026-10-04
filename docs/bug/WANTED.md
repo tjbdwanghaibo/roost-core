@@ -825,4 +825,5 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **为何可疑**：两次都落在 sync 的暂存目录，可能是 sync 返回前没有等子进程（`go mod tidy` / `go build`）退出或没关闭文件句柄——在用户的 Windows 机器上会表现为暂存目录残留。
 - **会红的测试草稿**：Windows 上 `project sync` 后立即 `os.RemoveAll(stage 的父目录)`，断言成功；或在 sync 返回时检查所有 `exec.Cmd` 已 `Wait`。
 - **来源**：10-04 两次 CI 失败日志。
+- **分流（2026-10-04）**：登记为 [RR-20261004-12](RR-20261004-12.md) 并修复（未发版）。审查未见遗留句柄或未 `Wait` 的子进程；进程内唯一的占用来源是 `runGenerators` 的进程级 `os.Chdir`——生成器窗口里同进程其他 goroutine 不设 `Dir` 启动的子进程继承暂存树为工作目录（macOS 探针：4919 个并发 `pwd` 中 72 个落在 `.roost-sync-*`）。CI 失败要求占用持续到用例结束后 2 秒以上，本包并行阶段唯一不设 Dir 的子进程 `docker compose version` 是短命的，所以未证明这是两次失败的全部原因；修复后若 windows-compatibility 仍以同样文本失败，按记录里的步骤用 `handle.exe` 找进程外占用者。
 

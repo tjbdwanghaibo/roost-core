@@ -20,8 +20,9 @@ package roost
 //
 // 同一编号还给本包耗时 0.5s 以上、且满足下列条件的用例加了 t.Parallel：只读写自己 t.TempDir 里的工程，
 // 路径全是绝对路径，不用 t.Setenv / chdir / 包级钩子（syncProjectBeforeCommit、buildVersion），
-// 不改 os.Stdout / os.Stderr。Generate 内部的 os.Chdir 由 generatorWorkingDirectory 串行化，
-// 这正是它为库调用方并发而设的保护。顶层并行用例只会在全部串行用例结束后一起跑，
+// 不改 os.Stdout / os.Stderr。生成器执行由 generatorRuns 串行化；生成器拿 root 下的绝对路径，
+// 不再 os.Chdir 整个进程（RR-20261004-12：旧做法让并行用例不设 Dir 启动的子进程继承别的用例的
+// .roost-sync-* 暂存树为工作目录，Windows 上暂存目录因此删不掉）。顶层并行用例只会在全部串行用例结束后一起跑，
 // 所以留在串行的用例（用钩子的 TestSyncRefusesAConfigEditedWhileItRuns、读相对路径的
 // literal_coupling_test.go、RR-20260927-01 在 Windows 上靠持有句柄注入写失败的两条）不受影响。
 

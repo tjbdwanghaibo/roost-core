@@ -13,6 +13,23 @@ import (
 )
 
 func Run(args []string, stdout io.Writer) error {
+	return RunIn("", args, stdout)
+}
+
+// RunIn is Run with relative -dir and -out taken under base instead of the
+// process working directory, so a library caller (roost generate / sync)
+// never has to os.Chdir the whole process into the tree it generates
+// (RR-20261004-12). The flags themselves are kept as given: the generated
+// header records them as the command to rerun, and orphan detection matches
+// on that header, so "-dir ./internal/rpc/guild" must stay relative. An empty
+// base is Run.
+func RunIn(base string, args []string, stdout io.Writer) error {
+	local := func(path string) string {
+		if base == "" || path == "" || filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(base, path)
+	}
 	flags := flag.NewFlagSet("servicerpc", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	dir := flags.String("dir", ".", "package directory to scan for //roost:rpc interfaces")
@@ -49,11 +66,19 @@ func Run(args []string, stdout io.Writer) error {
 	outDir := ""
 	if *out != "" {
 		var err error
-		if outDir, err = filepath.Abs(*out); err != nil {
+		if outDir, err = filepath.Abs(local(*out)); err != nil {
 			return fmt.Errorf("resolve out: %w", err)
 		}
 	}
-	absDir, err := resolveDir(*dir, outDir)
+	dirPath := *dir
+	if info, statErr := os.Stat(local(dirPath)); statErr == nil && info.IsDir() {
+		dirPath = local(dirPath)
+	}
+	moduleDir := outDir
+	if moduleDir == "" {
+		moduleDir = base
+	}
+	absDir, err := resolveDir(dirPath, moduleDir)
 	if err != nil {
 		return err
 	}
