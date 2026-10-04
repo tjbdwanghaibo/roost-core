@@ -65,7 +65,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 6. **验证矩阵**（全部 `GOWORK=off`，从模块根跑；按影响面选，通过后只因新增修改或未解风险扩大检查）：
    - 错误、TTL/版本、取消/关闭改动按[组合契约复核](../roost-coding/references/fix-contract-review.md)补调用方/邻近分支及恢复后状态；先列行为场景再给包测试数量。“保留资源”必须验再次停止最终收敛，明确退化不得仅写未验证。合并状态与独立验收状态分列。
    - 目标包 `-race`，再跑受影响的相邻包（如 kit 的 Mod 转发 core Assembly）；并发变更必跑 race。
-   - **每批都跑一次根包 `GOWORK=off go test -count=1 .`**：分层边界（`TestCoreDependencyBoundary`）、CI / 故障矩阵 / Redis 门变量的覆盖门禁都在根包里，只跑目标包看不见。10-01～04 两条线各有一次越界或门禁破坏，都是因为没跑根包，又被已经红的 CI 遮住。推送后看一眼 `gh run list --branch main --limit 3`，红了当轮处理。
+   - **每批都跑一次根包 `GOWORK=off go test -count=1 .`**：分层边界（`TestCoreDependencyBoundary`）、CI / 故障矩阵 / Redis 门变量的覆盖门禁都在根包里，只跑目标包看不见。10-01～04 两条线各有一次越界或门禁破坏，都是因为没跑根包，又被已经红的 CI 遮住。推送后不等 GitHub CI；下一次顺带看一眼 `gh run list --branch main --limit 3`，红了再处理。
    - 静态：`go vet`；三大模块加 `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`。
    - 协议 / 生成器 / 存储变更：`bash scripts/test-sync-modes-generated.sh`；
      有隔离 Mongo / Redis / NATS 时 `scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`；
@@ -103,7 +103,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 | 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.19.1**（10-04，tag 指向 `d3e69336`）；之后在 main 的修复未发版 |
 | 版本同步点 | `codegen/internal/roost/manifest.go` 的 `Core` 默认版本（现 v1.18.0）与 `.github/workflows/framework-compat.yml` 的 `minimum` 行（`-roost-core-version v1.18.0`） | 发版时两处同步；生成的 game-demo 用到本版新增 API 时下限要升，先用上一版 tag 实编生成工程判断 |
 
-发版细节：**打 tag 前先确认 main 的 `ci` 是绿的**（10-01～04 ci 红了三天没人看，发版时才发现）；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
+发版细节：**验收以本地为准**（维护者 10-04：本地编译 / vet / 相关测试 / 根包 `go test -count=1 .` 通过即可，推送和打 tag 都不等 GitHub CI；之后顺带看一眼 `gh run list`，红了再处理）；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
 发完在 bug README / 交接把"未发版"改成版本号，并对着 tag 做一次无 go.work 的生成 + 编译（`GOWORK=off go run ./codegen/cmd/roost project new X -module example.com/X -out <scratch>/X -template game-demo` → `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo go get github.com/tjbdwanghaibo/roost-core@vX.Y.Z` → `go build ./... && go vet ./...`）。proxy 对新 tag 有几分钟延迟，用 `GOPROXY=direct` 重试，不要因此改代码。
 
 ## 6. 本轮新增规则（2026-09-28～30）
