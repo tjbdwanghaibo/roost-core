@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-04 第三批修复：NC-05～07 3/3 已修、声明场景验证，未发版。**[限流key准入](RR-20261004-NC-05.md) · [Recover观察隔离](RR-20261004-NC-06.md) · [chi模式共用校验](RR-20261004-NC-07.md) · [运行/兼容](../review/REVIEW-2026-10-04-noncore-05.md) · [红绿和正式消费者](evidence/noncore-bugfix-20261004-03/README.md)。正式原29项中14失败转绿，最终30项通过；原overlay34项转绿、13消费者控制通过、非法生成3次直接拒绝。最终20测试包race/754事件、vet通过；9原测试skip与Windows缺sh排除项明确保留，T-191～193。
+
 **10-04 第二批修复：RR-20261004-NC-01～04 4/4 已修、声明场景验证，未发版。**[Manager清理](RR-20261004-NC-01.md) · [一次启动权](RR-20261004-NC-02.md) · [schema复制](RR-20261004-NC-03.md) · [Ops排空](RR-20261004-NC-04.md) · [运行/兼容](../review/REVIEW-2026-10-04-noncore-03.md) · [证据](evidence/noncore-bugfix-20261004-02/README.md)。正式原14项从11fail转绿，追加21项后35叶子/独立项通过，11包233事件race/vet通过，T-187～190。开始后的Engine失败重试需新实例，Ops保留未关闭server，Health观察未改。
 
 **10-04 非三大核心第一批修复：RR-20261003-NC-01～04 4/4 已修、具名场景验证，未发版。** [单 Mod](RR-20261003-NC-01.md) · [Clone timeout](RR-20261003-NC-02.md) · [HTTP 错误分类](RR-20261003-NC-03.md) · [完整 JSON](RR-20261003-NC-04.md) · [红/绿证据](evidence/noncore-bugfix-20261004-01/README.md)。正式原 30 场景转绿，父 client/自定义 client/并发与错误原因对照通过；最终十一包 race/vet 通过（更正此索引原先只写初次七包，执行证据未改）。

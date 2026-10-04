@@ -1,5 +1,9 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第三批修复：N02 NC-05～07
+
+[修复运行](REVIEW-2026-10-04-noncore-05.md) · [记录](../bugfix/README.md) · [红绿/消费者](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。起点 `c4aa1e7d`，三个P2已修、声明场景验证，未发版。正式29项14失败转绿，最终30项、原overlay34项通过；正常/退役及旧坏模式生成物13次消费者全绿，三个坏模式生成阶段拒绝。受影响最终20测试包race/754事件、vet通过；9原测试skip和缺sh的具名检查不当作通过。N02仍为场景部分完成，接N03通信域；下方“未修”保留原时点。
+
 ## 2026-10-04 非三大核心第三批：N02 请求链与真实生成消费
 
 [本轮运行](REVIEW-2026-10-04-noncore-04.md) · [三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-04.md) · [学习与实施建议](IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md) · [反例/控制/源文件清单](evidence/noncore-review-20261004-04/README.md)。源码 `483350ca`，下方 NC-01～04 已修；本批 NC-05～07 未修。

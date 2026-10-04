@@ -29,3 +29,9 @@ JSON handler先DecodeJSON、再调用业务、最后WriteResult；完整第二�
 ## 本批覆盖与成本
 
 34个runtime项含5fail/28控制/1观察；13个生成消费者执行含3fail/10控制，三个非法路径是同一个根因在两个层次的证据。六包race/vet通过不关闭新RR。body/string/JSON分配、full key sweep、schema复制的成本没有本批benchmark。N02源文8/8读取但完整鉴权/限流容量/非协作回调/跨模块路由仍待验证，后续接N03通信链，保留具名余项。
+
+## 2026-10-04 已实施的三个修复
+
+后续[修复运行](REVIEW-2026-10-04-noncore-05.md)落实了NC-05～07：AllowN按实际burst在key/idle副作用前拒绝不可满足需求；Recover先固定结果，再分别保护report与失败日志；新增ValidatePath在scratch chi router复用正式解析，生成扫描与运行期同一规则，seen在安装成功后登记。原有基础路径错误文本保持，生成文件形状未改。上文描述旧实现与拟议修法为原审查时点。
+
+正式最终30项、原overlay34项及13次真实生成消费者均通过；非法模式生成1且未写产物，旧已生成文件仍可编译并在注册时返回error。保护不终止阻塞report，不回滚任意自定义installer的半安装，不禁止不同参数名的语义等价模式；这些没有因本次修复变成已实现功能。满表扫描与scratch-router启动分配未做benchmark。[复跑与限制](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。

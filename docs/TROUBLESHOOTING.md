@@ -6,6 +6,9 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-191 | 超 burst 请求被拒绝后正常新 key 仍被容量挡住 | RR-20261004-NC-05：旧 AllowN 先建桶再检查需求 | RateLimiter.Stats Keys/CapacityRejected、AllowN 需求与实际 burst | 使用本批修复；超额需求不占名额或保活，真实满表仍需检查 MaxKeys/IdleTTL |
+| T-192 | Recover 的 report panic 导致外层拿不到 ErrEndpointPanic | RR-20261004-NC-06：旧报告先于固定返回结果 | `gateway: panic reporter failed` 与请求返回 ErrEndpointPanic | 使用独立保护的报告；日志 handler 失败也不能改变结果，阻塞回调由业务自行约束 |
+| T-193 | Webroute 生成成功但启动注册 panic，或新版生成时出现 invalid route path | RR-20261004-NC-07：旧生成/注册只检查路径前缀 | 生成错误内 handler/path、webroute.ValidatePath 和 Registrar.Register 返回值 | 修正括号/正则/通配符；新版在生成前拒绝，旧生成物也受运行期校验；自定义 installer 半安装需重建 router |
 | T-187 | 一个 manager Stop panic 后更早 manager 没被清理，rollback 原 Start error 消失 | RR-20261004-NC-01：原 stopOne 没有逐对象保护 | `manager ... stop panic` 与 Join 内 Start cause、对象退出记录 | 使用本批修复；panic 会报告并继续其余清理，仍需修该对象的回调，不把 recover 当资源已释放 |
 | T-188 | manager singleton 的 Start/Stop 被重复调用，或现在 Start 返回 ErrStartState | RR-20261004-NC-02：旧 Engine 无重复启动门槛；新版为一次启动尝试 | `manager.ErrStartState` / `kit/manager.ErrManagerStartState`、装配调用次数 | 去掉同 Engine 重复 Start；失败后新建生命周期实例，缺 Provide 的前置拒绝可补装配再启动 |
 | T-189 | Admin schema 无重新注册就变了、oneOf 内字段被面板代码改写 | RR-20261004-NC-03：空 map / 数组内 map 旧复制共享 | MetadataRegistry Register/Get/List、PayloadSchema 的 JSON 容器 | 使用本批递归复制；自定义非 JSON 值保持不可变，Register 过程中不并发改输入 |

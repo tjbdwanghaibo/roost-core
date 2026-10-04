@@ -109,6 +109,11 @@ func (l *RateLimiter) AllowN(key RateLimitKey, n int64) bool {
 	if n <= 0 {
 		return true
 	}
+	// RR-20261004-NC-05：不可满足的需求不占 key，也不刷新 idle 活性。
+	// 先按实际 burst 拒绝，避免把非法需求误计为 key 容量耗尽。
+	if n > int64(l.burst) {
+		return false
+	}
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -132,11 +137,6 @@ func (l *RateLimiter) AllowN(key RateLimitKey, n int64) bool {
 		l.bkt[key] = b
 	}
 	b.lastSeen = now
-	if n > int64(l.burst) {
-		// x/time/rate reports false for n > burst too; say so without
-		// consuming anything, exactly as the hand-rolled bucket did.
-		return false
-	}
 	return b.limiter.AllowN(now, int(n))
 }
 

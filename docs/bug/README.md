@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-04 第三批修复更新：NC-05～07 3/3 已修、声明场景验证，未发版。**[运行](../review/REVIEW-2026-10-04-noncore-05.md) · [红绿/消费者](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。下方 N02“未修”为原审查时点。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-05](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-05) | P2 限流超额需求占 key | [已修/声明场景验证](../bugfix/RR-20261004-NC-05.md)，未发版 |
+| [RR-20261004-NC-06](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-06) | P2 Recover report panic 外逃 | [已修/声明场景验证](../bugfix/RR-20261004-NC-06.md)，未发版 |
+| [RR-20261004-NC-07](REVIEW-2026-10-04-noncore-04.md#rr-20261004-nc-07) | P2 非法生成路由注册 panic | [已修/声明场景验证](../bugfix/RR-20261004-NC-07.md)，未发版 |
+
 **10-04 N02 接续审查：三个新 P2 已复现、未修。**[运行与范围](../review/REVIEW-2026-10-04-noncore-04.md) · [复跑/正式生成消费者](../review/evidence/noncore-review-20261004-04/README.md) · [机制和实施建议](../review/IMPLEMENTATION-REQUEST-ADMISSION-AND-GENERATED-WEBROUTES.md)。下方四项修复不包含本批三个新问题。
 
 | 编号 | 问题 | 状态 |

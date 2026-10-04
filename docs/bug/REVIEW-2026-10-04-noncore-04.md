@@ -41,3 +41,7 @@ nil reporter、正常 reporter 的 endpoint panic 均返回固定 sentinel，健
 同 method 的 `/items/{id}` 与 `/items/{name}` 都注册成功，`GET /items/42` 返回后者：当前 duplicate 契约按字面路径，底层 chi 按匹配形状，存在静默覆盖风险。本批保留为契约观察，需先决定是否禁止语义等价路径再升级，未登记第四个 RR。
 
 满 key 表每个未知 key 在锁内进行一次全 idle sweep，存在 O(MaxKeys) 拒绝成本；本轮仅源码机制分析，没有 benchmark/SLO。Timeout 只传 context，不杀不配合的 endpoint。Stateless session token 的撤销/nonce 单次使用与 webhook 的防重放属于业务协议，不能由 HMAC 校验成功推出已解决。
+
+## 2026-10-04 修复接续
+
+NC-05～07 **3/3 已修、声明场景验证，未发版**：[限流](../bugfix/RR-20261004-NC-05.md)、[Recover](../bugfix/RR-20261004-NC-06.md)、[生成路由](../bugfix/RR-20261004-NC-07.md)，[正式红绿和消费者](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。上文未修与失败保留原审查时点；原34项已转绿，形状覆盖仍是观察，不把它当作已禁止。新通信链问题不属本批修复。

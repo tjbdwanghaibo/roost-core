@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **请求准入与异常边界（RR-20261004-NC-05/06）**：超 burst 需求不占限流 key、不续 idle 活性；Recover 保持固定错误，上报与失败日志 panic 独立隔离，不引入异步重试。[限流](docs/bugfix/RR-20261004-NC-05.md)、[Recover](docs/bugfix/RR-20261004-NC-06.md)
+- **生成路由模式校验（RR-20261004-NC-07）**：新增 webroute.ValidatePath 复用 chi 解析，生成扫描和运行期共同拒绝非法模式；安装成功才写 seen，installer panic 转 error。正常生成形状与原基础路径错误文本不变，自定义 router 半安装仍须重建。[兼容与验证](docs/bugfix/RR-20261004-NC-07.md)
 - **Manager 生命周期错误与启动权（RR-20261004-NC-01/02）**：逐对象 Stop panic 转 error，清理/rollback 继续并保留原因；Engine 在 Provide 后只允许一次启动尝试，再次/停止后的 Start 返回 ErrStartState（Kit ErrManagerStartState 同值），缺 Provide 拒绝不消耗启动权。[清理](docs/bugfix/RR-20261004-NC-01.md)、[启动](docs/bugfix/RR-20261004-NC-02.md)
 - **Admin JSON schema 隔离（RR-20261004-NC-03）**：非 nil 空 map 与嵌套数组内 JSON 容器递归复制，Register/Get/List 的副本互不改写；nil/空保持，非 JSON 扩展值需不可变。[记录](docs/bugfix/RR-20261004-NC-03.md)
 - **Ops 关闭后再释放 server（RR-20261004-NC-04）**：取消/超时保留同一 server，成功排空才释放；Start 拒绝未关闭实例、监听 goroutine 捕获实例，状态短锁与各 caller 的 Shutdown context 分离。[记录](docs/bugfix/RR-20261004-NC-04.md)

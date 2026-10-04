@@ -1,0 +1,117 @@
+{
+  "project": "roost-core",
+  "signal": "best_effort",
+  "indexed_at": "2026-09-30T11:58:14Z",
+  "metadata": {
+    "generation": "2026-09-30T11:58:14Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-30T11:58:15Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "paths": [
+    {
+      "requested_path": "security/ratelimit.go",
+      "path": "security/ratelimit.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "gateway/middleware.go",
+      "path": "gateway/middleware.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "webroute/route.go",
+      "path": "webroute/route.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "httpserver/server.go",
+      "path": "httpserver/server.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "codegen/internal/webroute/parse.go",
+      "path": "codegen/internal/webroute/parse.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "codegen/internal/webroute/gen.go",
+      "path": "codegen/internal/webroute/gen.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "codegen/internal/webroute/main.go",
+      "path": "codegen/internal/webroute/main.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "codegen/cmd/webroute/main.go",
+      "path": "codegen/cmd/webroute/main.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    }
+  ],
+  "scopes": [
+    {
+      "requested_scope": "security",
+      "scope": "security",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "gateway",
+      "scope": "gateway",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "webroute",
+      "scope": "webroute",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    },
+    {
+      "requested_scope": "codegen/internal/webroute",
+      "scope": "codegen/internal/webroute",
+      "total": 0,
+      "has_more": false,
+      "entries": [],
+      "status": "no_recorded_issue"
+    }
+  ],
+  "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+}

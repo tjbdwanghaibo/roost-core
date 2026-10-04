@@ -1,0 +1,27 @@
+[
+  {
+    "scenario": "normal",
+    "generation_exit": 0,
+    "consumer_exit": 0
+  },
+  {
+    "scenario": "retired",
+    "generation_exit": 0,
+    "consumer_exit": 0
+  },
+  {
+    "scenario": "missing_brace",
+    "generation_exit": 1,
+    "consumer_exit": 0
+  },
+  {
+    "scenario": "bad_regexp",
+    "generation_exit": 1,
+    "consumer_exit": 0
+  },
+  {
+    "scenario": "wildcard_tail",
+    "generation_exit": 1,
+    "consumer_exit": 0
+  }
+]

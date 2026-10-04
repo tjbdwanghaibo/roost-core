@@ -1,0 +1,45 @@
+{"Time":"2026-10-04T09:18:32.4707243+08:00","Action":"start","Package":"example.com/roost-webroute-consumer"}
+{"Time":"2026-10-04T09:18:33.3091934+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"=== RUN   TestGeneratedRuntimeStartup\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"    consumer_test.go:27: invalid-path consumer phase only\n"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Output":"--- SKIP: TestGeneratedRuntimeStartup (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"skip","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedRuntimeStartup","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Output":"=== RUN   TestGeneratedHTTPConsumer\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/valid"}
+{"Time":"2026-10-04T09:18:33.3097334+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/valid","Output":"=== RUN   TestGeneratedHTTPConsumer/valid\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3155504+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/valid","Output":"--- PASS: TestGeneratedHTTPConsumer/valid (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3155504+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/valid","Elapsed":0.01}
+{"Time":"2026-10-04T09:18:33.3155504+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/empty"}
+{"Time":"2026-10-04T09:18:33.3155504+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/empty","Output":"=== RUN   TestGeneratedHTTPConsumer/empty\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.316675+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/empty","Output":"--- PASS: TestGeneratedHTTPConsumer/empty (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.316675+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/empty","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.316675+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_whitespace"}
+{"Time":"2026-10-04T09:18:33.316675+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_whitespace","Output":"=== RUN   TestGeneratedHTTPConsumer/trailing_whitespace\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3172142+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_whitespace","Output":"--- PASS: TestGeneratedHTTPConsumer/trailing_whitespace (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3172142+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_whitespace","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.3172142+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_garbage"}
+{"Time":"2026-10-04T09:18:33.3172142+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_garbage","Output":"=== RUN   TestGeneratedHTTPConsumer/trailing_garbage\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3188925+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_garbage","Output":"--- PASS: TestGeneratedHTTPConsumer/trailing_garbage (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3188925+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/trailing_garbage","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.3188925+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/second_object"}
+{"Time":"2026-10-04T09:18:33.3188925+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/second_object","Output":"=== RUN   TestGeneratedHTTPConsumer/second_object\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3199468+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/second_object","Output":"--- PASS: TestGeneratedHTTPConsumer/second_object (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.3199468+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/second_object","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.3199468+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/oversized"}
+{"Time":"2026-10-04T09:18:33.3199468+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/oversized","Output":"=== RUN   TestGeneratedHTTPConsumer/oversized\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8212167+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/oversized","Output":"--- PASS: TestGeneratedHTTPConsumer/oversized (0.50s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8212167+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/oversized","Elapsed":0.5}
+{"Time":"2026-10-04T09:18:33.8212167+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/handler_error"}
+{"Time":"2026-10-04T09:18:33.8212167+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/handler_error","Output":"=== RUN   TestGeneratedHTTPConsumer/handler_error\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.822326+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/handler_error","Output":"--- PASS: TestGeneratedHTTPConsumer/handler_error (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.822326+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/handler_error","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.822326+08:00","Action":"run","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/raw_get"}
+{"Time":"2026-10-04T09:18:33.822326+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/raw_get","Output":"=== RUN   TestGeneratedHTTPConsumer/raw_get\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8233901+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/raw_get","Output":"--- PASS: TestGeneratedHTTPConsumer/raw_get (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8233901+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer/raw_get","Elapsed":0}
+{"Time":"2026-10-04T09:18:33.8233901+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Output":"--- PASS: TestGeneratedHTTPConsumer (0.51s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8233901+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Test":"TestGeneratedHTTPConsumer","Elapsed":0.51}
+{"Time":"2026-10-04T09:18:33.8233901+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T09:18:33.8295394+08:00","Action":"output","Package":"example.com/roost-webroute-consumer","Output":"ok  \texample.com/roost-webroute-consumer\t1.359s\n"}
+{"Time":"2026-10-04T09:18:33.8295394+08:00","Action":"pass","Package":"example.com/roost-webroute-consumer","Elapsed":1.359}

@@ -1,5 +1,11 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 请求边界（main，尚未发版）
+
+AllowN 超过实际 burst 的需求直接拒绝，不占 key、刷新 idle 或计作 key 容量拒绝；需要有效需求或显式 GC 维护活性。Gateway Recover 返回固定 ErrEndpointPanic，即使报告回调或失败日志 panic；同步报告仍需业务保证不永久阻塞。
+
+Codegen 和运行期 Registrar 共用 webroute.ValidatePath 的 chi 模式规则，坏路径在写生成物前拒绝，旧生成物注册也返回 error。正常参数/正则/通配符及生成形状保留，基础路径错误文本兼容；自定义 installer 半安装后的 error 不代表外部 router 已回滚，应重建。注册用于启动阶段，不与请求并发热改 router。[三项修复与证据](review/REVIEW-2026-10-04-noncore-05.md)。
+
 ## 2026-10-04 Manager / Admin / Ops 边界（main，尚未发版）
 
 同一 Manager Engine 在确认 Provide 后只允许一次启动尝试；再次调用、Order/Start 失败后的重试或 Stop 后调用返回 ErrStartState（Kit 的 ErrManagerStartState 同值）。需要新生命周期时新建 Engine，并按业务契约准备 manager；没有 Provide 的前置失败可以补装配后启动。Stop panic 会转换为 error，清理其他对象并保留原因，但出错对象须自行保证资源退出。

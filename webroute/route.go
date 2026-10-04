@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/tjbdwanghaibo/roost-core/httpserver"
 )
 
@@ -50,7 +51,23 @@ func NewRegistrar(routes httpserver.RouteRegistrar) *Registrar {
 	return &Registrar{routes: routes, seen: make(map[string]struct{})}
 }
 
-func (r *Registrar) Register(method, path string, handler http.HandlerFunc) error {
+// ValidatePath validates a chi route pattern without modifying the application
+// router. Code generators and runtime registrars share chi's actual grammar.
+func ValidatePath(path string) (err error) {
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("webroute: invalid route path %q", path)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("webroute: invalid route path %q: %v", path, recovered)
+		}
+	}()
+	// RR-20261004-NC-07：chi 解析会 panic，只允许它修改一次性校验 router。
+	chi.NewRouter().Get(path, func(http.ResponseWriter, *http.Request) {})
+	return nil
+}
+
+func (r *Registrar) Register(method, path string, handler http.HandlerFunc) (err error) {
 	if r == nil || r.routes == nil {
 		return errors.New("webroute: route registrar is required")
 	}
@@ -59,8 +76,8 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) erro
 	}
 	method = strings.ToUpper(strings.TrimSpace(method))
 	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("webroute: invalid route path %q", path)
+	if err := ValidatePath(path); err != nil {
+		return err
 	}
 	if method != http.MethodGet && method != http.MethodPost {
 		return fmt.Errorf("webroute: unsupported method %q", method)
@@ -72,7 +89,15 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) erro
 	if _, exists := r.seen[key]; exists {
 		return fmt.Errorf("webroute: duplicate route %s", key)
 	}
-	r.seen[key] = struct{}{}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if cause, ok := recovered.(error); ok {
+				err = fmt.Errorf("webroute: install route %s: %w", key, cause)
+			} else {
+				err = fmt.Errorf("webroute: install route %s: %v", key, recovered)
+			}
+		}
+	}()
 
 	switch method {
 	case http.MethodGet:
@@ -80,6 +105,9 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) erro
 	case http.MethodPost:
 		r.routes.Post(path, handler)
 	}
+	// 成功安装后才登记。自定义 installer 失败可能半安装；调用方应重建
+	// 该 router，而不是把 error 当作对外部 router 的完整回滚。
+	r.seen[key] = struct{}{}
 	return nil
 }
 

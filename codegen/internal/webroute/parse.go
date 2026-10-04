@@ -3,6 +3,7 @@ package webroute
 import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
+	runtimewebroute "github.com/tjbdwanghaibo/roost-core/webroute"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -109,6 +110,10 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 	}
 	if path == "" || !strings.HasPrefix(path, "/") {
 		return Route{}, fmt.Errorf("invalid path %q", path)
+	}
+	// 与正式运行期共用 chi 校验，在扫描阶段拒绝，尚未写任何生成物。
+	if err := runtimewebroute.ValidatePath(path); err != nil {
+		return Route{}, err
 	}
 	if bodyMode != bodyJSON && bodyMode != bodyRaw {
 		return Route{}, fmt.Errorf("unsupported body mode %q", bodyMode)

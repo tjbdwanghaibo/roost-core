@@ -34,7 +34,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | 单元 | 范围 / Go 候选数 | 当前状态与优先缺口 | 剩余小时 |
 | --- | --- | --- | --- |
 | N01 | app/lifecycle/manager/health/admin，15 | 源文15/15已读，四个本域新RR已修/35正式场景通过；场景部分完成，补 Group 阻塞预算、完整 App 故障/Ops bind及hijack/权限与Health策略 | 2～4 |
-| N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07 未修；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
+| N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
 | N03 | bus/nats/servicerpc/etcd，39 | 有历史关联证据，未建立全域矩阵；请求关联、超时/取消、重连、订阅关闭、租约/watch 恢复 | 6～10 |
 | N04 | redis/mongo/cache/migration，40 | Service 驱动专项与 cache 部分已查；剩余事务/批次、游标、过期/容量、回调所有权、迁移失败 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | 历史多轮、与另一线交叠；只接续未覆盖镜像/路由接入与最新变更，不重审核心提交链 | 2～4 |

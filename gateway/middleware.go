@@ -9,8 +9,10 @@ package gateway
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/security"
+	"log/slog"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/security"
 )
 
 var (
@@ -69,14 +71,26 @@ func Recover(report func(context.Context, any)) Middleware {
 		return EndpointFunc(func(ctx context.Context, session Session, request Request) (ret any, err error) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					if report != nil {
-						report(ctx, recovered)
-					}
 					ret = nil
 					err = ErrEndpointPanic
+					if report != nil {
+						reportBoundaryPanic(report, ctx, recovered)
+					}
 				}
 			}()
 			return next.Handle(ctx, session, request)
 		})
 	}
+}
+
+// RR-20261004-NC-06：上报和上报失败的日志都不能替换请求的固定错误。
+// 同步执行保留原 context；阻塞回调仍须由调用方自行约束。
+func reportBoundaryPanic(report func(context.Context, any), ctx context.Context, value any) {
+	defer func() { _ = recover() }() // 自定义 slog handler 也可能 panic。
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("gateway: panic reporter failed", "panic", recovered)
+		}
+	}()
+	report(ctx, value)
 }
