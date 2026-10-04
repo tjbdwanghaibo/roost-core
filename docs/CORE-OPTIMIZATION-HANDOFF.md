@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**10-04 N04正式迁移写回接续**：[本轮](review/REVIEW-2026-10-04-noncore-20.md)确认[NC-31 P2未修](bug/RR-20261004-NC-31.md)：目标解码晚于CommitSystem，坏迁移进入WAL或写成不可加载的新schema。生成消费11叶子3fail/8控制，真实文件WAL/Projector+MongoStore、后端mongotest；build/34既有定向race/根包14/vet通过，未宣称真实Mongo/HA。3文件仅补中文注释；review与共同skill已明确必要中文说明和本地验收收尾，不等待GitHub CI。N04仍部分完成，下一多DAO/CAS消费与具名缺口收口；行为修复另走bugfix。
+
 **10-04 用户要求的复审核对与改进**：[独立复盘](review/REVIEW-2026-10-04-fix-audit-retrospective.md)确认RR-02～07成立且六修复已包含；d3四项历史28红/4控制、定向36绿，外部限制分列。规范/本机skill接入组合契约复核，修正README残留降级说明。收尾另一线Wanted分流RR-08已修并整合，45普通NATS叶子race/vet及最终根包独立通过；本机未冒认真实broker。无产品行为修改、未增加域完成数。
 
 **最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](review/REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。

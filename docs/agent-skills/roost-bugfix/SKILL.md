@@ -5,7 +5,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 
 # Roost bugfix：把 review 登记的 RR 问题收敛掉
 
-审查那一半是 `roost-review`（只审不改码，产出 `docs/bug/RR-*.md`）；本 skill 是修的那一半，修法记进 `docs/bugfix/`。
+审查那一半是 `roost-review`（只审查行为、可补必要中文注释，产出 `docs/bug/RR-*.md`）；本 skill 是修的那一半，修法记进 `docs/bugfix/`。
 用户指定问题、模块或 review 轮次时，完成该范围的修复、回归、文档与已授权的提交推送。
 
 ## 0. 规则源与优先级
@@ -53,8 +53,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 
 ## 3. 一轮的步骤
 
-1. **拉代码**：fetch / `--ff-only`，`git log --oneline -10` 看 review agent 或另一条工作线的新提交；
-   `gh run list --branch main --limit 5`——审查没新发现时，红的 CI 就是这一轮的活。
+1. **拉代码**：fetch / `--ff-only`，`git log --oneline -10` 看 review agent 或另一条工作线的新提交；普通收尾以本地编译及适用验证为准，不等待或轮询 GitHub CI，不自动把在线 CI 红转成本轮任务。
 2. **读规则源**（§0），再读发现：`docs/bug/README.md` 头部散文与表（新在上）→ 未修复条目的 `docs/bug/RR-*.md`；
    老轮次 `REVIEW-*.md` / `REPRO-*.md` 聚合报告仍可能是主记录；
    也看 `docs/bug/WANTED.md`、`docs/bug/CARRYOVER.md` 与交接 §5 里被 review 升级成 RR 的项。
@@ -65,7 +64,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 6. **验证矩阵**（全部 `GOWORK=off`，从模块根跑；按影响面选，通过后只因新增修改或未解风险扩大检查）：
    - 错误、TTL/版本、取消/关闭改动按[组合契约复核](../roost-coding/references/fix-contract-review.md)补调用方/邻近分支及恢复后状态；先列行为场景再给包测试数量。“保留资源”必须验再次停止最终收敛，明确退化不得仅写未验证。合并状态与独立验收状态分列。
    - 目标包 `-race`，再跑受影响的相邻包（如 kit 的 Mod 转发 core Assembly）；并发变更必跑 race。
-   - **每批都跑一次根包 `GOWORK=off go test -count=1 .`**：分层边界（`TestCoreDependencyBoundary`）、CI / 故障矩阵 / Redis 门变量的覆盖门禁都在根包里，只跑目标包看不见。10-01～04 两条线各有一次越界或门禁破坏，都是因为没跑根包，又被已经红的 CI 遮住。推送后不等 GitHub CI；下一次顺带看一眼 `gh run list --branch main --limit 3`，红了再处理。
+   - **每批都跑一次根包 `GOWORK=off go test -count=1 .`**：分层边界（`TestCoreDependencyBoundary`）、CI / 故障矩阵 / Redis 门变量的覆盖门禁都在根包里，只跑目标包看不见。保留本地编译、行为回归和门禁证据；推送后确认远端包含提交即可，不等待或轮询 GitHub CI。
    - 静态：`go vet`；三大模块加 `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`。
    - 协议 / 生成器 / 存储变更：`bash scripts/test-sync-modes-generated.sh`；
      有隔离 Mongo / Redis / NATS 时 `scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`；
@@ -103,7 +102,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 | 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.19.2**（10-04，tag 指向 `4ee44f34`）；之后在 main 的修复未发版 |
 | 版本同步点 | `codegen/internal/roost/manifest.go` 的 `Core` 默认版本（现 v1.18.0）与 `.github/workflows/framework-compat.yml` 的 `minimum` 行（`-roost-core-version v1.18.0`） | 发版时两处同步；生成的 game-demo 用到本版新增 API 时下限要升，先用上一版 tag 实编生成工程判断 |
 
-发版细节：**验收以本地为准**（维护者 10-04：本地编译 / vet / 相关测试 / 根包 `go test -count=1 .` 通过即可，推送和打 tag 都不等 GitHub CI；之后顺带看一眼 `gh run list`，红了再处理）；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
+发版细节：发版仍须单独授权，构建验收以本地编译及适用验证为准，不等待或轮询 GitHub CI；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
 发完在 bug README / 交接把"未发版"改成版本号，并对着 tag 做一次无 go.work 的生成 + 编译（`GOWORK=off go run ./codegen/cmd/roost project new X -module example.com/X -out <scratch>/X -template game-demo` → `GOPROXY=direct GONOSUMDB=github.com/tjbdwanghaibo go get github.com/tjbdwanghaibo/roost-core@vX.Y.Z` → `go build ./... && go vet ./...`）。proxy 对新 tag 有几分钟延迟，用 `GOPROXY=direct` 重试，不要因此改代码。
 
 ## 6. 本轮新增规则（2026-09-28～30）
@@ -125,7 +124,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 - `docs/bug/WANTED.md` 是实现侧写给 review agent 的候选表（`W-YYYY-MM-DD-NN`，无状态、不进矩阵）。修 RR 时看到"签名承诺了但实现没履行 / 跨包契约对不上"，
   **不要顺手改**，写一条（位置到 SHA+行、现象、为何可疑、会红的测试草稿、候选修法），等 review 三选一（登记 RR / 判非问题 / 再观察）。判为 RR 的按正常流程修，判非问题的删条目。
   roost-coding 已授权的历史 bug **复现确认后**直接修，不因旧"待拍板"重复请示。
-- `roost-review`：只审不改，登记 RR 与分流 Wanted，本 skill 的另一半。
+- `roost-review`：只审查行为、可补必要中文注释，登记 RR 与分流 Wanted，本 skill 的另一半。
   `roost-coding`（共同规范）/ `roost-optimize`（优化入口）：重构 / 性能优化按它们走，纯重构先写 `docs/feature/REFACTOR-*.md`。
   `roost-consolidate`：合仓已完成，只剩历史参考，不要再按三仓 / cherry-pick 到 `consolidation-v3` 的流程工作。
 

@@ -109,6 +109,9 @@ func newEntityRepository(manager *entity.EntityManager, store coredata.Store, mi
 	}, nil
 }
 
+// LoadEntity 先复用已加载实体；冷加载等待恢复与投影屏障，迁移后重读完整聚合再发布。
+// 同一实体共享首个调用者发起的加载；其他等待者取消只退出自身等待，不取消该次共享加载。
+// 冷加载包含 I/O，不允许从快池进入；初始化和发布经 RunLocal 返回本地执行阶段。
 func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	if repository == nil || repository.manager == nil || repository.store == nil {
 		return nil, coredata.ErrStoreRequired

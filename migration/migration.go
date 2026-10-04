@@ -155,6 +155,8 @@ func MustRegisterDAO(step DAOStep) {
 	defaultDAORegistry.MustRegisterDAO(step)
 }
 
+// MigrateDAO 是生成 DAO 的内存转换入口，按集合使用默认注册表，不写回存储。
+// 此入口使用 Background；迁移步骤不会自动继承外层请求的取消或超时预算。
 func MigrateDAO(collection string, raw []byte, from uint32, target uint32) ([]byte, error) {
 	out, _, err := defaultDAORegistry.MigrateDAO(context.Background(), collection, raw, from, target)
 	return out, err
@@ -196,6 +198,8 @@ func (r *DAORegistry) MustRegisterDAO(step DAOStep) {
 	}
 }
 
+// MigrateDAO 按版本路径逐步转换独立的字节副本；失败返回已到达的版本，但不返回部分结果。
+// 调用方负责校验输出及持久提交；成功转换不等于持久 schema 已升级。
 func (r *DAORegistry) MigrateDAO(ctx context.Context, collection string, raw []byte, from uint32, target uint32) ([]byte, uint32, error) {
 	if r == nil {
 		return nil, from, fmt.Errorf("%w: dao registry nil", ErrStepInvalid)

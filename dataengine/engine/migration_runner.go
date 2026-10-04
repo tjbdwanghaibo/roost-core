@@ -31,10 +31,9 @@ func NewMigrationRunner(committer coredata.SystemCommitter) (*MigrationRunner, e
 	return &MigrationRunner{committer: committer, now: time.Now, newID: newSystemTransactionID}, nil
 }
 
-// Migrate persists an ordinary DAO schema upgrade as a versioned full
-// mutation and waits until projection is visible. Remote envelopes are
-// deliberately rejected here: they must be migrated through the lease-aware
-// RemoteCommit path so the aggregate version vector remains coherent.
+// Migrate 将普通 DAO 的 schema 升级作为带版本的全量 mutation 提交，并等待投影可见。
+// 等待被取消不证明提交未生效；调用方应重读权威存储，不能用旧数据直接补偿。
+// Remote 信封必须经持有所有权租约的 RemoteCommit 迁移，此入口拒绝它以保护聚合版本向量。
 func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredata.RawDocument) (bool, error) {
 	if runner == nil || runner.committer == nil {
 		return false, errors.New("dataengine migration: runner is not configured")

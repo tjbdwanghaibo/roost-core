@@ -31,3 +31,17 @@ NC-30 修前 registry 的 HGet 与 DEL 分离。新版 [Set/Delete](../../cache/
 **提交前更正/关联**：上游独立审计已把第2项登记为[RR-20261004-03 P2未修](../bug/RR-20261004-03.md)，约束是Patch续全部登记键∪路径、Get可进一步拒绝缺失的引用节点。本轮实际观察与其现象一致，不能因为此前文档已写“旁支不续”就推定用户接受错误记录；本页保留观察事实，后续按RR-03修复/回归。第1/3项仍是当前未承诺的快照/CAS边界，NC-30修复不改变它们。
 
 **最终同步更新**：RR-03已由上游5c1647c6实施（见[修复](../bugfix/RR-20261004-03.md)），本轮合并后真实Redis正式回归及当前16场景通过，缺失必然非空的引用子hash现在整条miss，Patch续全部当前布局声明键。原观察是修前事实，不再描述当前错误行为；全指针空子hash仍可合法省略。第1/3项没有因此成为快照/CAS承诺。[独立合并证据](../bugfix/evidence/noncore-bugfix-20261004-10/merged/README.md)。
+
+## 2026-10-04 正式 Repository 写回与重载消费
+
+基线`34137925`，[本轮验证](REVIEW-2026-10-04-noncore-20.md)。普通持久DAO与Redis ref-hmap是两条不同机制：此节只补前者的正式消费链，不增加另一线核心全域完成数。
+
+Repository先在一致读回调内建立完整DAO清单，读取持久schema/version；任何目标schema不同的DAO交给MigrationRunner。Runner调用生成Migrate→默认DAORegistry纯字节转换，构造ExpectedVersion=v、NextVersion=v+1、Schema=target的全量Put，经SystemCommit进入同一文件WAL/Projector，等待投影票据。投影可见后Repository重读整个聚合，才调用生成RestorePersisted恢复值/版本、清dirty并由RunLocal发布。普通迁移不是release阶段另写一份，也没有直接写collection的旁路。
+
+成功转换和持久成功是两个阶段。生成RestorePersisted作为单独API只做内存加载；它不写回旧schema。Runner则先提交再重载，不能据“加载返回error、Manager没有Entity”推定持久文档没变。本轮确认[NC-31](../bug/RR-20261004-NC-31.md)：转换返回nil error而目标字段不能解码时，目标schema/version已被存下；非法BSON或ID错只在投影才拒绝，WAL里已经有记录。改进应复用生成目标decoder与PersistedDaoLoader在提交前验证，不能用删除坏日志/自动补偿解决。
+
+取消也不等于撤销：票据等待使用caller context，Projector投影生命周期独立。本轮门闩阻塞投影时没有发布Entity；取消caller返回Canceled，随后投影完成，新Manager加载到schema3/version8。业务遇超时应重读并判断当前版本，不能把旧数据写回“恢复”。无context的生成Migrate仍不会自动继承caller预算；迁移步骤须按现有文档作为纯、确定的转换，不将网络等待藏在该接口中。
+
+单DAO/scalar生成消费的正常升级、当前/较新schema、步骤失败、目标无效、取消恢复已有实际证据；实际Mongo snapshot、unknown commit、primary failover、进程强杀/重启与多DAO并发升级仍未在此机器验收。mongotest仅作正式MongoStore消费后端，不能冒认真实数据库的事务/网络保证。
+
+**RefHMap旧段更正**：上文逐字节guard与Cached Delete拒绝时保留L1是旧基线描述。另一线[RR-09](../bugfix/RR-20261004-09.md)已将guard改为清理清单覆盖检查，正常同布局并发放行，真正遗漏键仍拒绝；Layered.Delete即使远端报错也丢L1。原记录保留历史，不以本节迁移消费测试冒认该RefHMap组合全矩阵验收。

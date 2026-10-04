@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 N04 正式迁移写回与重载接入
+
+基线`34137925`，从`04d679b8`干净main快进；[本轮记录](REVIEW-2026-10-04-noncore-20.md)、[证据/复跑](evidence/noncore-review-20261004-20/README.md)、[实现学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。**新P2 [NC-31](../bug/RR-20261004-NC-31.md)已确认、未修**：迁移结果先提交，坏BSON/ID进WAL，错误目标字段写成不可加载的schema3/version8。
+
+| 范围 | 本轮增量 | 当前状态 / 下一入口 |
+| --- | --- | --- |
+| 正式生成DAO→Repository→Runner→文件WAL/Projector→MongoStore→重载 | 11叶子3fail/8控制pass；目标解码与提交时序差异确认；后端mongotest | 新缺陷未修，不冒认真实Mongo/HA |
+| 成功/取消恢复 | 新Manager无迁移器重载成功；caller取消但晚投影成功后可重新加载；较新schema/步骤失败不提交 | 单DAO/scalar链已验证，多DAO/并发CAS/重启仍待验 |
+| 本地验证 | 全仓build0，既有34定向race、根包14、相关vet通过 | 不等待或查询GitHub CI；普通构建条件已满足，新反例不能称绿 |
+| 规范/源码说明 | 本机review及共同skill明确中文注释和本地验收；3个Go文件仅补中文契约注释 | 未改行为/接口/正式测试，不新增产品文件分母 |
+
+N04历史候选源文41/41累计保留，**业务场景仍部分完成，不计completed/15**。接续多DAO迁移/并发CAS淘汰和正式重载→N04具名缺口收口→N05路由/mirror增量；用户要求bugfix时先NC-31。真实资源/长期容量等既有留项保持，不据本批计数折算全仓覆盖率或重算日期。
+
 **10-04 复审复盘**：只核对既有RR-02～07与流程，不新增功能域完成计数。六修复提交祖先关系确认；d3历史四项28fail/4控制，定向36pass，vet及根包通过。收尾aa35已将新Wanted分流RR-08并修复，Kit/NatsDriver45普通叶子race/vet及最终根包独立通过；外部验收不冒认。[复盘/改进](REVIEW-2026-10-04-fix-audit-retrospective.md) · [证据](evidence/noncore-audit-followup-20261004/README.md)。下一迁移接入/N04收口，08真实资源/组合留项单列。
 
 **最终接手状态（b9625f4f）**：NC-30已修、未发版；上游RR-20261004-02～07均已实施。合并后241相关叶子、12 NC-30正式、16 review、11生成消费、根包12及mongotest115叶子通过；真实etcd/Mongo对照不冒认本机验收。新W-2026-10-04-02连接drain超时重试候选留待真实NATS复现，优先于迁移接入。[最终同步记录](REVIEW-2026-10-04-noncore-19.md#最后增量同步)。下方旧“未修”及RR-07待修为接手时点。

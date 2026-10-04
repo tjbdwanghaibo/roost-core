@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 N04正式迁移消费](REVIEW-2026-10-04-noncore-20.md)：新增[NC-31 P2未修](../bug/RR-20261004-NC-31.md)，输出未在提交前校验，3反例/8控制；真实文件WAL和正式MongoStore接生成DAO，后端mongotest。全仓本地编译、34定向race、根包14及vet通过；中文注释与skill更新，后续以本地验收收尾，不等待GitHub CI。N04仍场景部分完成。[证据](evidence/noncore-review-20261004-20/README.md) · [学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。
+
 [10-04 开放条目现状核实](REVIEW-2026-10-04-open-triage.md)：17 条历史开放项——已修复 12（WANTED 09-16～09-18）、已过时 2、**仍存在 3**（RR-20260921-03 P1 playerowner 归还 / 重新认领、04 P2 归还回合超过租约、05 P2 CI 不校验 go:generate），另有新候选：4 个 codegen 运行期守卫脚本因 `core_pin` 被删而默认失败且无 CI 调用。CARRYOVER A1/A2/A6/A7/A8/A14 与 N03/N04 留项只列出。
 
 [10-04 NC-30 复审](REVIEW-2026-10-04-nc30-audit.md)：NC-30 实现与记录一致、与 RR-20261004-03 合并无冲突，但逐字节注册表 guard 误报并发创建 / 删除 → RR-20261004-09（P2，v1.19.1 回归，另一线0bd8a9f3已修，详见对应bugfix；本轮未独立全矩阵验收）；W-2026-10-04-02 已作为 RR-20261004-08 修复。
