@@ -22,6 +22,7 @@ bash kit/scripts/integration/dataengine-env.sh reset   # 停进程并删除根�
 | --- | --- | --- |
 | `ROOST_IT_HOME` | `/tmp` | 已存在的绝对路径父目录。根目录是 `$ROOST_IT_HOME/roost-dataengine-it`，按物理路径解析（macOS 上 `/tmp` 解析为 `/private/tmp`）。 |
 | `ROOST_IT_PORT_OFFSET` | `0` | 十进制非负整数，所有端口统一加上它；上限是 `65535 - 27119 = 38416`。 |
+| `ROOST_IT_MONGO_CACHE_GB` | `1` | 每个 mongod 的 `--wiredTigerCacheSizeGB`。三个副本在同一台机器上，缺省缓存（物理内存的一半）合计会超过内存，长跑时宿主机换页、被测进程停顿数秒。只在 `up` 启动 mongod 时生效，已在跑的节点要 `down` 再 `up`。 |
 
 两个都不设时与之前完全一致：根目录 `/tmp/roost-dataengine-it`，端口如下表的“偏移 0”列。
 

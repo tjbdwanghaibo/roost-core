@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 
 readonly ROOST_IT_MONGO_REPLICA_SET="roost-it"
+# 三个副本跑在同一台机器上。mongod 缺省把 WiredTiger 缓存设成 (物理内存 - 1GB) / 2，
+# 32GB 的开发机上三个节点合计会要到约 46GB：长跑里缓存逐步填满，宿主机开始换页，
+# 被测进程整体停顿数秒（C01 第 3、4 次的写许可拒绝都来自这种停顿）。每个节点给一个
+# 固定上限，集成测试的数据集远小于它。改大请写进 ROOST_IT_MONGO_CACHE_GB。
+readonly ROOST_IT_MONGO_CACHE_GB="${ROOST_IT_MONGO_CACHE_GB:-1}"
+[[ "$ROOST_IT_MONGO_CACHE_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+	printf 'ROOST_IT_MONGO_CACHE_GB=%q: want a positive number of GB (for example 1 or 0.5)\n' "$ROOST_IT_MONGO_CACHE_GB" >&2
+	exit 2
+}
 
 # 基准端口 27117-27119，经 roost_it_port 统一平移（ROOST_IT_PORT_OFFSET）。
 mongo_node_port() {
@@ -42,6 +51,7 @@ mongo_start_node() {
 		--logpath "$node/mongod.log" \
 		--pidfilepath "$pid_file" \
 		--oplogSize 128 \
+		--wiredTigerCacheSizeGB "$ROOST_IT_MONGO_CACHE_GB" \
 		--setParameter shutdownTimeoutMillisForSignaledShutdown=1000 \
 		--fork >/dev/null
 	wait_until 30 "mongo-$index ping" mongo_ping_port "$port" || status=$?
