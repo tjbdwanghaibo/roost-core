@@ -842,7 +842,7 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **另记（修前就存在、同源于 RR-20261001-07 记录“token 按进程固定”）**：`store.Claim` 返回错误但 SetNX 实际已落地时，下一轮 `Refresh` 会答 Held，`confirmRenewal` 会确认一份没被扔掉的副本。
 - **来源**：RR-20261004-10 / 11 修复报告。
 
-### W-2026-10-04-08：playerowner 剩余三处窄交错（RR-20261004-14 修复报告列出）
+### W-2026-10-04-08：playerowner 剩余三处窄交错（RR-20261004-14 修复报告列出）（2026-10-05 前提不成立：玩家静态绑定到 sid，按 [静态绑定方案](../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md) 简化后不再适用）
 
 - **位置**：`demo/internal/service/game/playerowner.go.tmpl`、`demo/internal/route/playerroute.go.tmpl`（RR-20261004-14 之后）。
 - **候选**：

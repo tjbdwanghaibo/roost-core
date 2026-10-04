@@ -1,5 +1,7 @@
 # game-demo 玩家所有权租约：状态机方案（2026-10-04）
 
+> **已被取代（2026-10-05）**：维护者确认玩家静态绑定到单进程 sid，改按静态绑定简化，见 [PLAYEROWNER-STATIC-BINDING-2026-10-05.md](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)；本文保留作历史分析。
+
 - 范围：`demo/internal/service/game/playerowner.go.tmpl`（`PlayerOwners`）与 `demo/game/playerroute/playerroute.go.tmpl`（Redis 共享表 `Store`），以及它们的调用方 `enter_game.go.tmpl`、`gift_saga.go.tmpl`、`matchmaker.go.tmpl`、`service.go.tmpl`。
   （任务说明与 WANTED W-2026-10-04-08 写的 `demo/internal/route/playerroute.go.tmpl` 不存在，实际路径是 `demo/game/playerroute/playerroute.go.tmpl`。）
 - 基线：main `64529e39`。`playerowner.go.tmpl` 最后一次改动是 `890abdda`（RR-20261004-14），与基线逐字相同；下文 `po:N` 指 `playerowner.go.tmpl` 第 N 行，`pr:N` 指 `playerroute.go.tmpl`，`eg:N` 指 `demo/game/controllers/player/enter_game.go.tmpl`，`test:N` 指 `playerowner_test.go.tmpl`。
