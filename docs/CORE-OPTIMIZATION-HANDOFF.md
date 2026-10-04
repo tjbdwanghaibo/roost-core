@@ -380,6 +380,8 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20260930-13](bug/RR-20260930-13.md) | P3 `SetEntityVersion` 同 fence 可回退 StateVersion（N26） | [修复](bugfix/RR-20260930-13.md)（未发布；接口签名改为返回 error） |
 | [RR-20260930-14](bug/RR-20260930-14.md) | P3 广播路径按 ID 释放、一把锁跨后续目标（N28） | [修复](bugfix/RR-20260930-14.md)（未发布；每目标自己的 Guard 作用域） |
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
+| [RR-20261004-06](bug/RR-20261004-06.md) | P2 etcd Campaign 在 session 建好后的失败 / 取消分支不再撤…（NC 复审） | 未修复 |
+| [RR-20261004-07](bug/RR-20261004-07.md) | P3 NatsMod 停止时 Bus 超过预算后保留 bus / asm 以便重试，但…（NC 复审） | 未修复 |
 | [RR-20261004-02](bug/RR-20261004-02.md) | P2 `LayeredStore` 的 L1 过期后（或 ttl≤0 时）仍永久否决权威值；远端写已生效却报 `ErrStaleWrite`（NC 复审） | 未修复 |
 | [RR-20261004-03](bug/RR-20261004-03.md) | P2 RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 复审） | 未修复 |
 | [RR-20261004-04](bug/RR-20261004-04.md) | P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 复审） | 未修复 |
