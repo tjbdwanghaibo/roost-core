@@ -1,0 +1,66 @@
+[
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-06/red.jsonl",
+    "test_pass_events": 12,
+    "leaf_pass": 12,
+    "leaf_fail": 9,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 12
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-06/red-replay.jsonl",
+    "test_pass_events": 12,
+    "leaf_pass": 12,
+    "leaf_fail": 9,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 12
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-06/green.jsonl",
+    "test_pass_events": 186,
+    "leaf_pass": 170,
+    "leaf_fail": 0,
+    "leaf_skip": 7,
+    "formal_cache_admission_pass": 41
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-06/consumer.jsonl",
+    "test_pass_events": 2,
+    "leaf_pass": 2,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-12/integration.jsonl",
+    "test_pass_events": 7,
+    "leaf_pass": 7,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-12/cache-redis.jsonl",
+    "test_pass_events": 10,
+    "leaf_pass": 9,
+    "leaf_fail": 5,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-12/mongotest-review.jsonl",
+    "test_pass_events": 3,
+    "leaf_pass": 3,
+    "leaf_fail": 5,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-12/review-regression.jsonl",
+    "test_pass_events": 34,
+    "leaf_pass": 34,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_cache_admission_pass": 0
+  }
+]

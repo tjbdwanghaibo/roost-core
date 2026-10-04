@@ -1,0 +1,48 @@
+package cache
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+)
+
+func TestReview10RedisStaleContract(t *testing.T) {
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" { t.Skip("ROOST_REDIS_TEST_ADDR must identify an isolated Redis") }
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil { t.Fatal(err) }
+	for _, kind := range []string{"raw", "hash", "json"} {
+		for _, version := range []int64{4, 6} {
+			name := "newer"
+			if version < 5 { name = "stale" }
+			t.Run(kind+"/"+name, func(t *testing.T) {
+				key := "roost:n04:review10:"+rand.Text()
+				t.Cleanup(func() { _, _ = client.Del(context.Background(), key) })
+				var store Store[int, staleValue]
+				switch kind {
+				case "raw": store = NewRedisRawJSONStore(client, time.Minute, func(int) string { return key }, staleConfig())
+				case "hash": store = NewRedisJSONHashStore(client, time.Minute, func(int) RedisHashKey { return RedisHashKey{Key: key, Field: "record"} }, staleConfig())
+				case "json": store = NewRedisJSONStore(client, time.Minute, func(int) string { return key }, staleConfig())
+				}
+				if err := store.Set(ctx, staleValue{Key: 1, Version: 5, Payload: "held"}); err != nil { t.Fatal(err) }
+				err := store.Set(ctx, staleValue{Key: 1, Version: version, Payload: "incoming"})
+				got, ok, getErr := store.Get(ctx, 1)
+				t.Logf("real Redis kind=%s requested=%d SetErr=%v Get=%+v", kind, version, err, got)
+				if getErr != nil || !ok { t.Fatal(getErr) }
+				if version < 5 {
+					if got.Version != 5 || !errors.Is(err, ErrStaleWrite) { t.Fatal("real Redis refused stale data but Set reported success") }
+				} else if got.Version != version || err != nil { t.Fatal("newer write did not apply") }
+			})
+		}
+	}
+}

@@ -1,5 +1,7 @@
 # N04 第一批：缓存拒绝、回填与结果契约
 
+**后续状态（2026-10-04）：NC-13～15均已修复、声明场景验证、尚未发版。** [13](../bugfix/RR-20261004-NC-13.md) · [14](../bugfix/RR-20261004-NC-14.md) · [15](../bugfix/RR-20261004-NC-15.md) · [运行/41正式项与消费者](../review/REVIEW-2026-10-04-noncore-11.md)。下方原始失败和“未修”保留首次审查时点，新NC-16～20另见[第二批](REVIEW-2026-10-04-noncore-12.md)。
+
 2026-10-04，N04源文等于main`3560a19b5c2b2fbeb936bf1bb6a9c1fa0be1f956`，本工作树仅先修NC-11/12，**以下三个新RR已确认、未修复**。Tier2图谱发现/双向trace/snippet及coverage后以当前源码补证；旧代际、启发式重名边不支持全域穷尽。
 
 26个普通overlay叶子/独立项：9行为失败、16控制通过、1容量观察；3根因。五个有测试包race/vet通过，113 test pass事件、0fail、7skip；随后专属真实Redis8.8.0将原7skip逐项补测通过，另6个真实缓存场景2fail/4pass补证NC-15。Mongo接口包/KitRedis/KitMongo无测试，仅编译/vet。真实Mongo/etcd、Cluster/HA与长稳未执行。 [运行](../review/REVIEW-2026-10-04-noncore-10.md) · [复跑/原始日志](../review/evidence/noncore-review-20261004-10/README.md) · [机制与实施方向](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)。

@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第六批修复 + 非三大核心第七批 N04
+
+基线`1502f973`，fetch/pull无增量。[NC-13～15修复](REVIEW-2026-10-04-noncore-11.md) · [N04第二批审查](REVIEW-2026-10-04-noncore-12.md) · [五个新未修RR](../bug/REVIEW-2026-10-04-noncore-12.md) · [RefHMap机制与实施交接](IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)。下方旧未修保留历史时点，未发版。
+
+| 范围 | 实际新增证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-13～15 | 修前21叶子9fail/12控制，旧实现overlay复跑相同；最终41正式准入叶子通过，五包race/vet：170叶子pass、186 pass事件、0fail/7skip | 3/3已修；fatal分类、Layered被拒回填与四store旧写错误契约已验证，Redis比较仍是建议性而非CAS |
+| 真实Redis与正式DAO消费 | 原七Redis集成7pass、Raw/Hash/JSON旧/新写6pass；正式DAO CLI在独立module生成，两消费者race/vet通过并复跑 | 七skip另列补证，不覆盖旧日志；不包括Cluster/HA、真实Mongo或正式迁移消费者 |
+| N04源文 | 新补19个完整候选，累计39/40已读；两Kit文件此前已同行；mongotest仅1–595行 | [清单/blob/当前hash](evidence/noncore-review-20261004-12/inventory.csv)，39/40不是业务覆盖率；场景仍部分完成 |
+| RefHMap与mongotest新场景 | 真实Redis8叶子5fail/3控制，mongotest8叶子5fail/3控制；正常Mongo/migration三测试包race34pass、五包vet通过 | NC-16～19四P2、NC-20一P3未修；Redis独占进程已退出，替身分页失败不冒称真实Mongo失败 |
+
+下一新入口 **mongotest595以后 → RefHMap Eval未知结果/Patch TTL/schema → Redis订阅/续租真实故障与Cluster → Mongo真实cursor/partial bulk/事务重试及正式迁移消费**。用户声明未修则跳过NC-16～20验收，要求bugfix时先修本轮五项。N01～N04均仍不计completed/15；[约50～90有效小时计划](NONCORE-REVIEW-PLAN-2026-10-03.md)是跨域风险预算，本批没有按39/40源文比例扣工时或承诺完成日期。[修复证据](../bugfix/evidence/noncore-bugfix-20261004-06/README.md) · [新审查证据](evidence/noncore-review-20261004-12/README.md) · [外部/容量留项](../bug/CARRYOVER.md)。
+
 ## 2026-10-04 第五批修复 + 非三大核心第六批 N04
 
 基线`3560a19b`，pull无增量。[NC-11/12修复](REVIEW-2026-10-04-noncore-09.md) · [N04运行](REVIEW-2026-10-04-noncore-10.md) · [三个新未修RR](../bug/REVIEW-2026-10-04-noncore-10.md) · [机制与实施交接](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)。下方旧未修为历史时点，未发版。

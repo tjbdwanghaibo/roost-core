@@ -1,5 +1,7 @@
 # Roost 持续 Review 与学习记录
 
+[10-04 N04三项修复](REVIEW-2026-10-04-noncore-11.md)：NC-13～15已修、41正式项/五包race-vet、真实Redis及两个正式生成DAO消费者通过。[N04第二批](REVIEW-2026-10-04-noncore-12.md)补19候选，累计39/40源文；确认[NC-16～20五项未修](../bug/REVIEW-2026-10-04-noncore-12.md)，真实RefHMap/公开mongotest十失败叶子五根因。[机制与实施交接](IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md) · [证据](evidence/noncore-review-20261004-12/README.md) · [进度](PROGRESS.md)。mongotest595以后、真实故障/Cluster/Mongo/迁移消费者继续待验，场景部分完成；下方旧状态保留历史时点。
+
 [10-04 N03两个修复](REVIEW-2026-10-04-noncore-09.md)：NC-11/12已修、15正式项与原反例验证，未发版。[N04第一批](REVIEW-2026-10-04-noncore-10.md)完整读20/40清单源文及两个Kit同行文件，普通overlay26项9fail/16控制/1观察，确认[NC-13～15三个未修问题](../bug/REVIEW-2026-10-04-noncore-10.md)；真实Redis7补测通过、6缓存场景补证同根因。[机制/交接](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) · [证据/复跑](evidence/noncore-review-20261004-10/README.md) · [进度](PROGRESS.md)。下一入口RefHMap余下反射/patch/schema、Redis恢复与Mongo/正式DAO迁移消费者；N03/N04仍场景部分完成。下方旧未修状态保留历史时点。
 
 [10-04 N03三项修复](REVIEW-2026-10-04-noncore-07.md)：NC-08～10已修/声明场景验证，28正式项、17原overlay、六包race/vet通过。[接续etcd/KitEtcd](REVIEW-2026-10-04-noncore-08.md)完整读余下14源文，N03累计39/39，但场景仍部分完成；[新NC-11/12未修](../bug/REVIEW-2026-10-04-noncore-08.md)。[etcd学习](IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261004-04/README.md) · [审查证据](evidence/noncore-review-20261004-08/README.md) · [进度/下一入口N04](PROGRESS.md)。

@@ -65,9 +65,10 @@ NC-11/12现已修复，最终15项新增正式用例通过；真实etcd集成仍
 
 | 范围 | 当前已证明 | 尚待执行 / 入口 |
 | --- | --- | --- |
-| Redis与缓存 | 原7项Redis集成在本机隔离Redis 8.8.0全部通过；6项真实cache→driver→Redis探针复现NC-15的Raw/Hash两项错误契约并通过4项控制 | Redis Cluster/HA/断线恢复、生产平台差异；NC-13～15仍待修，不能以底层集成通过替代缓存一致性修复；[审查](../review/REVIEW-2026-10-04-noncore-10.md) |
+| Redis与缓存 | NC-13～15已修，41正式准入叶子通过；本机隔离Redis8.8.0原七集成与六缓存探针全部通过；正式DAO CLI两个准入消费者通过并复跑 | Redis Cluster/HA/断线恢复、生产平台差异；Redis旧写比较仍非CAS；[修复](../review/REVIEW-2026-10-04-noncore-11.md) |
+| RefHMap | 全文读取，真实Redis八叶子5fail/3控制确认NC-16～19，四项未修 | 根指针、codec寻址、nil父Patch及名称碰撞先按RR修复；另外Lua失败/未知结果、Patch TTL与schema兼容仍需故障矩阵；[机制](../review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md) |
 | Layered容量 | 冷TTL键观察到expiry元数据增长，未据此新增RR | 明确容量约束、回收策略和长期压力验证；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
-| Mongo | 本轮已读cursor/bulk/session等源码，driver回归通过 | 真实Mongo cursor关闭、部分bulk/未知结果、transaction retry及HA；[审查](../review/REVIEW-2026-10-04-noncore-10.md) |
+| Mongo | 接口/config与driver七文件已补全文；mongotest只读1–595行，分页八叶子5fail/3控制确认未修NC-20；三测试包race34项通过、五包vet通过 | 替身595以后filter/update/bulk/index/snapshot事务忠实性；真实Mongo cursor关闭、部分bulk/未知结果、transaction retry及HA；[审查](../review/REVIEW-2026-10-04-noncore-12.md) |
 | Migration | 4项Registry/DAO版本、取消、克隆隔离与失败控制通过 | 正式DAO/codegen迁移消费者和真实持久化故障路径；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
 
 这一类本轮**不判定**：它们缺的是证据，而给不出证据的判定就是猜。

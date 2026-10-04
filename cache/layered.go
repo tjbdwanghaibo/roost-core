@@ -52,12 +52,27 @@ func (s *LayeredStore[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 		return value, ok, err
 	}
 	if s.local != nil {
-		// A failed L1 backfill must not fail the read, but it must not be
-		// invisible either: a store that never accepts a backfill turns every
-		// read into a remote round trip with no signal that it is happening.
-		// ErrStaleWrite is not a degradation — it means a newer value is
-		// already cached, which is the outcome we wanted.
-		if err := s.local.Set(ctx, value); err != nil && !errors.Is(err, ErrStaleWrite) {
+		backfillErr := s.local.Set(ctx, value)
+		// RR-20261004-NC-14：准入拒绝不是L1可用性故障，不能交付被拒的值。
+		// 读取已准入值；较新删除造成的miss保持miss，不续被拒回填的TTL。
+		if errors.Is(backfillErr, ErrStaleWrite) || errors.Is(backfillErr, ErrConflictingWrite) {
+			if errors.Is(backfillErr, ErrConflictingWrite) {
+				metrics.IncCounter("cache.layered.backfill_failed.total", nil, 1)
+			}
+			current, held, getErr := s.local.Get(ctx, key)
+			if getErr != nil {
+				return zero, false, errors.Join(backfillErr, getErr)
+			}
+			if held {
+				return current, true, nil
+			}
+			if errors.Is(backfillErr, ErrStaleWrite) {
+				return zero, false, nil
+			}
+			return zero, false, backfillErr
+		}
+		// 普通L1故障仍允许交付L2结果，并保留失败指标。
+		if backfillErr != nil {
 			metrics.IncCounter("cache.layered.backfill_failed.total", nil, 1)
 		} else {
 			s.setLocalExpiry(key, time.Now())

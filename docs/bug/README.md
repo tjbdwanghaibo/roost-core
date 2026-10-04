@@ -1,12 +1,24 @@
 # Roost Review 问题索引
 
+**10-04 N04第二批：NC-16～20五项已确认、未修。** RefHMap指针根、文本codec、nil父Patch与内部名称碰撞四P2；mongotest分页一P3。[运行/39源文范围](../review/REVIEW-2026-10-04-noncore-12.md) · [机制/实施交接](../review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md) · [真实Redis/分页证据](../review/evidence/noncore-review-20261004-12/README.md)。十失败叶子五根因，场景仍部分完成。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-16](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-16) | P2 RefHMap指针根Set成功后Get panic | 已确认、未修 |
+| [RR-20261004-NC-17](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-17) | P2 指针TextMarshaler未执行导致编码/解码不一致 | 已确认、未修 |
+| [RR-20261004-NC-18](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-18) | P2 nil父结构Patch返回成功但更新不可见 | 已确认、未修 |
+| [RR-20261004-NC-19](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-19) | P2 root/__keys内部名称碰撞改变业务值 | 已确认、未修 |
+| [RR-20261004-NC-20](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-20) | P3 公开mongotest漏/误应用分页Skip | 已确认、未修 |
+
+**10-04 第六批修复：NC-13～15 3/3已修、声明场景验证，未发版。** [运行](../review/REVIEW-2026-10-04-noncore-11.md) · [41正式项/红绿/真实消费者](../bugfix/evidence/noncore-bugfix-20261004-06/README.md)。下方“第一批未修”保留历史时点。
+
 **10-04 N04第一批：三个新RR已确认、未修。** [运行/20源文件范围](../review/REVIEW-2026-10-04-noncore-10.md) · [机制/实施方向](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) · [普通反例与专属真实Redis](../review/evidence/noncore-review-20261004-10/README.md)。9普通失败对应3根因，真实Redis追加2失败同属NC-15；7原环境skip已逐项补测通过。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261004-NC-13](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-13) | P2 ReadThrough Get/Delete吞掉fatal一致性裁决 | 已确认、未修 |
-| [RR-20261004-NC-14](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-14) | P2 Layered交付L1一致性门禁拒绝的回填 | 已确认、未修 |
-| [RR-20261004-NC-15](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-15) | P3 四Store拒绝旧版本写入却返回成功 | 已确认、未修 |
+| [RR-20261004-NC-13](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-13) | P2 ReadThrough Get/Delete吞掉fatal一致性裁决 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-13.md) |
+| [RR-20261004-NC-14](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-14) | P2 Layered交付L1一致性门禁拒绝的回填 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-14.md) |
+| [RR-20261004-NC-15](REVIEW-2026-10-04-noncore-10.md#rr-20261004-nc-15) | P3 四Store拒绝旧版本写入却返回成功 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-15.md) |
 
 **10-04 第五批修复：NC-11/12 2/2已修、声明场景验证，未发版。** [NC-11](../bugfix/RR-20261004-NC-11.md) · [NC-12](../bugfix/RR-20261004-NC-12.md) · [15正式项/红绿](../bugfix/evidence/noncore-bugfix-20261004-05/README.md)。下方原N03审查散文保留其修前时点。
 

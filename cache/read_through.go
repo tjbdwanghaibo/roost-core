@@ -147,7 +147,8 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		value, ok, err := s.remote.Get(ctx, key)
 		if err != nil {
 			s.remoteError.Add(1)
-			if !s.opts.IgnoreRemoteError {
+			// RR-20261004-NC-13：读取的一致性裁决也不能绕过后调用loader。
+			if !s.degradable(err) {
 				return zero, false, err
 			}
 		} else if ok {
@@ -253,6 +254,11 @@ func (s *ReadThroughStore[K, V]) Delete(ctx context.Context, key K) error {
 		defer cancel()
 		if err := s.remote.Delete(remoteCtx, key); err != nil {
 			s.remoteError.Add(1)
+			// RR-20261004-NC-13：权威明确拒绝删除时保留L1。
+			// 普通故障仍沿用既有策略：清掉L1，strict模式同时返回错误。
+			if s.opts.FatalRemoteError != nil && s.opts.FatalRemoteError(err) {
+				return err
+			}
 			if !s.opts.IgnoreRemoteError {
 				joined = errors.Join(joined, err)
 			}

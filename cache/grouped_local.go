@@ -56,7 +56,8 @@ func (s *GroupedLocalStore[G, K, V]) Set(_ context.Context, value V) error {
 	}
 	old, ok := group[key]
 	if ok && s.cfg.Stale != nil && s.cfg.Stale(old, value) {
-		return nil
+		// RR-20261004-NC-15：与其他Store保持同一拒写结果契约。
+		return ErrStaleWrite
 	}
 	group[key] = value
 	return nil

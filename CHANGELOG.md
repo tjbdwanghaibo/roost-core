@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **缓存准入与拒写结果（RR-20261004-NC-13～15）**：ReadThrough的Get/Delete保留fatal裁决，Layered不交付L1拒绝的回填、不续拒绝TTL；Local/Grouped/RawJSON/JSONHash旧写现在返回ErrStaleWrite，容忍晚到写的调用方需显式errors.Is。普通故障策略、公开签名与存储格式保持；Redis读前比较仍非CAS。[fatal](docs/bugfix/RR-20261004-NC-13.md)、[Layered](docs/bugfix/RR-20261004-NC-14.md)、[兼容与消费者](docs/bugfix/RR-20261004-NC-15.md)
+
 - **etcd setup与关闭预算（RR-20261004-NC-11/12）**：Campaign取消连接覆盖session创建，成功前解除以保留长期领导权，deadline保留caller与SDK原因；WatchCallback使用唯一底层关闭任务，Done等handler/watcher真实退出，取消只结束等待。完成关闭现在返回过去被吞掉的底层Close错误，公开签名/存储格式不变；正常Resign的TTL级Revoke及真实集群恢复尚未验证。[选主](docs/bugfix/RR-20261004-NC-11.md)、[关闭兼容](docs/bugfix/RR-20261004-NC-12.md)
 
 - **RPC协议与预算（RR-20261004-NC-08/09/10）**：JetStream无handler拒绝复用版本envelope；RPCClient.StopWithContext以每实例唯一扫尾保留回调责任，Assembly/Kit取消后保留资源供再次排空；ServiceRPC组合调用从发现开始共用deadline，不向过期候选发业务。[协议](docs/bugfix/RR-20261004-NC-08.md)、[停止兼容](docs/bugfix/RR-20261004-NC-09.md)、[发现预算](docs/bugfix/RR-20261004-NC-10.md)

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -29,8 +30,8 @@ func TestLocalStoreRejectsStaleVersion(t *testing.T) {
 	if err := store.Set(ctx, testItem{ID: 1, Version: 2, Data: "new"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Set(ctx, testItem{ID: 1, Version: 1, Data: "old"}); err != nil {
-		t.Fatal(err)
+	if err := store.Set(ctx, testItem{ID: 1, Version: 1, Data: "old"}); !errors.Is(err, ErrStaleWrite) {
+		t.Fatalf("RR-20261004-NC-15: stale write err=%v, want ErrStaleWrite", err)
 	}
 	got, ok, err := store.Get(ctx, 1)
 	if err != nil {

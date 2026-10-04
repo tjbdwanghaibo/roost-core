@@ -23,6 +23,10 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 
 ## 当前完成矩阵与预算
 
+### 10-04 N04第二批与NC-13～15修复
+
+[第六批修复](REVIEW-2026-10-04-noncore-11.md)关闭NC-13～15：41正式准入叶子、五包race/vet通过，真实Redis原七集成与六缓存控制全绿，正式DAO CLI生成的两个消费者通过并复跑。[N04第二批](REVIEW-2026-10-04-noncore-12.md)补19个完整源文件，累计39/40已读，mongotest仅1–595行；RefHMap/分页16新场景10fail/6控制，新增NC-16～20四P2一P3未修。39/40只表示源文读取；N04仍场景部分完成，不计completed/15。接续替身余文、RefHMap Lua未知结果/Patch TTL/schema、Redis故障与Cluster、Mongo真实资源和正式迁移消费者；保持约50～90有效小时风险预算，未根据文件比例或本轮测试数自动扣减。
+
 ### 10-04 N03修复与N04第一批接续
 
 [第五批修复](REVIEW-2026-10-04-noncore-09.md)关闭NC-11/12，15正式生命周期项与原反例通过；N03正常Resign预算、真实服务端回收/恢复仍开放。[N04第一批](REVIEW-2026-10-04-noncore-10.md)20/40源文已读、两个Kit文件同行，26普通场景9fail/16控制/1观察，NC-13～15未修。五测试包race/八包vet通过；原7Redis skip用专属真实Redis全部补测，另6正式缓存场景2fail/4pass同属NC-15。接续RefHMap余项、Redis恢复、Mongo及正式迁移消费者，不转域、不重审Service十域。剩余风险没有逐项新估时，仍沿用约50～90有效小时预算，20/40不代表业务覆盖率或工时减半。
@@ -44,7 +48,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | N01 | app/lifecycle/manager/health/admin，15 | 源文15/15已读，四个本域新RR已修/35正式场景通过；场景部分完成，补 Group 阻塞预算、完整 App 故障/Ops bind及hijack/权限与Health策略 | 2～4 |
 | N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
 | N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～12已修/声明场景验证；真实NATS/etcd、正常Resign预算/服务端清理、重连/lease恢复与容量矩阵待补 | 6～10 |
-| N04 | redis/mongo/cache/migration，40 | 源文20/40已读、场景部分完成，NC-13～15待修；Redis7真实补测通过；接续RefHMap完整反射/patch/schema、Redis恢复、Mongo游标/partial bulk/事务与正式迁移消费者 | 6～10 |
+| N04 | redis/mongo/cache/migration，40 | 源文39/40已读、场景部分完成；NC-13～15已修，NC-16～20未修；真实Redis/正式DAO准入消费已补，接续mongotest595以后、Lua未知结果/Patch TTL/schema、Redis故障与Cluster、真实Mongo和正式迁移消费者 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | 历史多轮、与另一线交叠；只接续未覆盖镜像/路由接入与最新变更，不重审核心提交链 | 2～4 |
 | N06 | service/saga/servicemetrics，36 | Service 十域主链已有完成记录；仅增量、Saga 补偿/重试/关停与未涵盖指标边界 | 2～4 |
 | N07 | configdata/attribute/event/errcode，10 | 运行配置与生成邻接已查；真实热更新/校验、属性变更传播、事件订阅与错误映射补证 | 2～4 |

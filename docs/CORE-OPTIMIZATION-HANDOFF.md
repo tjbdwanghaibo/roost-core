@@ -164,7 +164,8 @@ bash scripts/test-remote-matrix.sh
 
 | 问题 | 主题 | 修复记录 |
 | --- | --- | --- |
-| [RR-20261004-NC-13～15](bug/REVIEW-2026-10-04-noncore-10.md) | ReadThrough fatal裁决、Layered一致性回填、四Store旧写错误；两个P2/一个P3已确认、未修 | [运行/20源文范围](review/REVIEW-2026-10-04-noncore-10.md)、[机制/实施交接](review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)、[反例/真实Redis](review/evidence/noncore-review-20261004-10/README.md)；N04场景部分完成 |
+| [RR-20261004-NC-16～20](bug/REVIEW-2026-10-04-noncore-12.md) | RefHMap根形状、文本codec、nil父Patch与名称碰撞四P2，mongotest分页一P3；已确认、未修 | [运行/39源文范围](review/REVIEW-2026-10-04-noncore-12.md)、[机制/实施交接](review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)、[真实Redis/分页](review/evidence/noncore-review-20261004-12/README.md)；场景部分完成 |
+| [RR-20261004-NC-13～15](bug/REVIEW-2026-10-04-noncore-10.md) | ReadThrough fatal裁决、Layered一致性回填、四Store旧写错误；3/3已修、声明场景验证，未发版 | [13](bugfix/RR-20261004-NC-13.md)、[14](bugfix/RR-20261004-NC-14.md)、[15](bugfix/RR-20261004-NC-15.md)、[运行](review/REVIEW-2026-10-04-noncore-11.md)；41正式项、真实Redis、两个正式生成消费者，T-199～201 |
 | [RR-20261004-NC-11/12](bug/REVIEW-2026-10-04-noncore-08.md) | Campaign setup预算/第三方watcher关闭；2/2已修、声明场景验证，未发版 | [11](bugfix/RR-20261004-NC-11.md)、[12](bugfix/RR-20261004-NC-12.md)、[运行/限制](review/REVIEW-2026-10-04-noncore-09.md)；15正式项、T-197/198，正常Resign预算/真实服务端回收仍开放 |
 | [RR-20261004-NC-08～10](bug/REVIEW-2026-10-04-noncore-06.md) | JS无handler回包协议、Assembly callback停止预算、ServiceRPC发现预算；3/3已修、声明场景验证，未发版 | [08](bugfix/RR-20261004-NC-08.md)、[09](bugfix/RR-20261004-NC-09.md)、[10](bugfix/RR-20261004-NC-10.md)、[运行/限制](review/REVIEW-2026-10-04-noncore-07.md) |
 | [RR-20261004-NC-05～07](bug/REVIEW-2026-10-04-noncore-04.md) | 限流拒绝占 key、Recover report panic、非法生成路由注册 panic；3/3已修、声明场景验证，未发版 | [05](bugfix/RR-20261004-NC-05.md)、[06](bugfix/RR-20261004-NC-06.md)、[07](bugfix/RR-20261004-NC-07.md)，[运行/环境边界](review/REVIEW-2026-10-04-noncore-05.md) |

@@ -1,0 +1,12 @@
+{"Time":"2026-10-04T12:46:33.7753552+08:00","Action":"start","Package":"example.com/roostcacheconsumer/db"}
+{"Time":"2026-10-04T12:46:34.3192965+08:00","Action":"run","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedLocalDAOReportsStale"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedLocalDAOReportsStale","Output":"=== RUN   TestGeneratedLocalDAOReportsStale\n","OutputType":"frame"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedLocalDAOReportsStale","Output":"--- PASS: TestGeneratedLocalDAOReportsStale (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"pass","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedLocalDAOReportsStale","Elapsed":0}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"run","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedCachedDAOUsesAdmittedValue"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedCachedDAOUsesAdmittedValue","Output":"=== RUN   TestGeneratedCachedDAOUsesAdmittedValue\n","OutputType":"frame"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedCachedDAOUsesAdmittedValue","Output":"--- PASS: TestGeneratedCachedDAOUsesAdmittedValue (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"pass","Package":"example.com/roostcacheconsumer/db","Test":"TestGeneratedCachedDAOUsesAdmittedValue","Elapsed":0}
+{"Time":"2026-10-04T12:46:34.3198307+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T12:46:35.3414456+08:00","Action":"output","Package":"example.com/roostcacheconsumer/db","Output":"ok  \texample.com/roostcacheconsumer/db\t1.566s\n"}
+{"Time":"2026-10-04T12:46:35.3418744+08:00","Action":"pass","Package":"example.com/roostcacheconsumer/db","Elapsed":1.567}

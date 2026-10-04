@@ -6,6 +6,9 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-199 | Get遇一致性拒绝仍调用loader，或Delete失败却清L1/返回成功 | RR-20261004-NC-13：旧Get/Delete遗漏FatalRemoteError | wrapped错误、loader次数、删除前后L1 | 使用本轮分类修复并配置fatal判别；普通故障按原strict/degrade策略，不无条件重试 |
+| T-200 | Layered回填已stale/conflict拒绝，调用方仍拿captured旧值 | RR-20261004-NC-14：旧Get吸收一致性拒绝 | L1准入结果、当前值/miss、TTL | 使用返回已准入值/错误的修复；不要把一致性拒绝当outage或自行生成墓碑 |
+| T-201 | 替换Store后旧写Set返回结果变化，生成DAO开始返回ErrStaleWrite | RR-20261004-NC-15：四Store旧写从静默成功收紧 | errors.Is(ErrStaleWrite)、存储版本、实际业务意图 | 仅对有意接受晚到旧写的场景显式容忍；该修复不使Redis读前比较变CAS |
 | T-197 | Campaign取消仍等LeaseGrant，或setup超时只见context canceled | RR-20261004-NC-11：旧NewSession使用client context；setup与长期session混在一起 | caller Err与实际Grant入场/退出、IsLeader/Fence、session Done | 使用setup取消桥修复；成功后caller取消保持领导权，真实lease回收仍看服务端/TTL，正常Resign预算另验 |
 | T-198 | WatchCallback.CloseWithContext取消仍卡底层Close，或关闭错误消失 | RR-20261004-NC-12：旧requestClose同步watcher.Close且吞错误 | CloseWithContext ctx错误、subscription Done/Err、handler/watcher真实退出 | 保留同一subscription，以新预算再次排空；处理底层关闭错误；callback不得无期限等自身 |
 | T-194 | JS无handler拒绝变成unsupported rpc response version 0 | RR-20261004-NC-08：旧分支直接发code/reason | request MsgName与回包version/error envelope | 使用含本批修复的代码；修正handler/订阅声明，不放宽客户端版本门禁 |

@@ -1,0 +1,8 @@
+package def
+
+//roost:redisdao mode=raw key=ID version=Version prefix=roost:cache:consumer ttl=1m
+type Record struct {
+	ID int64
+	Version int64
+	Payload string
+}

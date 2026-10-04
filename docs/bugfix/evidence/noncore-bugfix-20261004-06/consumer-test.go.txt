@@ -1,0 +1,28 @@
+package db
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/cache"
+)
+
+func TestGeneratedLocalDAOReportsStale(t *testing.T) {
+	ctx := context.Background()
+	dao := NewLocalRecordRedisDAO()
+	if err := dao.SetRecord(ctx, Record{ID: 1, Version: 5}); err != nil { t.Fatal(err) }
+	if err := dao.SetRecord(ctx, Record{ID: 1, Version: 4}); !errors.Is(err, cache.ErrStaleWrite) { t.Fatalf("generated DAO swallowed refusal: %v", err) }
+	got, held, err := dao.GetRecord(ctx, 1)
+	if err != nil || !held || got.Version != 5 { t.Fatalf("generated DAO value: %+v %v %v", got, held, err) }
+}
+
+func TestGeneratedCachedDAOUsesAdmittedValue(t *testing.T) {
+	ctx := context.Background()
+	local, remote := NewLocalRecordRedisDAO(), NewLocalRecordRedisDAO()
+	if err := local.SetRecord(ctx, Record{ID: 1, Version: 5}); err != nil { t.Fatal(err) }
+	if err := remote.SetRecord(ctx, Record{ID: 1, Version: 4}); err != nil { t.Fatal(err) }
+	dao := NewCachedRecordRedisDAO(local, remote)
+	got, held, err := dao.GetRecord(ctx, 1)
+	if err != nil || !held || got.Version != 5 { t.Fatalf("generated cached DAO returned refused value: %+v %v %v", got, held, err) }
+}

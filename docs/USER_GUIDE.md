@@ -1,5 +1,11 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 缓存准入与旧写结果（main，尚未发版）
+
+ReadThrough配置FatalRemoteError后，Get遇fatal不会调用loader/发布L1，Delete遇fatal保留L1并返回原错；普通故障仍按IgnoreRemoteError策略处理，strict删除仍清L1并返回错误。Layered对L1明确stale/conflict拒绝不返回捕获旧值，而读取已准入当前值；stale且miss保持miss，conflict且miss/读回失败明确报错，拒绝不续TTL。正常TTL缓存与普通回填可用性故障保持既有行为。[NC-13](bugfix/RR-20261004-NC-13.md) · [NC-14](bugfix/RR-20261004-NC-14.md)。
+
+Local、Grouped、RedisRawJSON、RedisJSONHash的Stale拒写现在返回ErrStaleWrite，和Atomic/RedisJSON一致；仅当业务有意容忍旧写时用errors.Is显式处理，不忽略所有错误、不无条件重试。正式生成Redis DAO透传该错误。公开接口/存储格式保持；Get→Stale→Set不是Redis原子CAS，正确性依赖版本裁决时使用正式CompareAndSet能力。[NC-15/实测与兼容](bugfix/RR-20261004-NC-15.md)。
+
 ## 2026-10-04 etcd setup与关闭责任（main，尚未发版）
 
 Campaign的caller取消/期限覆盖session创建与竞选等待；成功取得领导权后，原caller取消不结束长期session。真正的session loss/Resign仍结束领导权，敏感写必须校验fence。取消停止等待/keepalive不代表服务端租约已即时撤销，未知结果不要自动重试副作用；正常Resign的SDK Revoke仍可能TTL级等待，不承诺全链按caller期限返回。[NC-11](bugfix/RR-20261004-NC-11.md)。
