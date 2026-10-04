@@ -148,18 +148,26 @@ func (s *LayeredStore[K, V]) Delete(ctx context.Context, key K) error {
 	if s == nil || !s.cfg.validKey(key) {
 		return nil
 	}
+	var remoteErr error
 	if s.remote != nil {
-		if err := s.remote.Delete(ctx, key); err != nil {
-			return err
-		}
+		remoteErr = s.remote.Delete(ctx, key)
 	}
+	// RR-20261004-09：远端删除报错（明确拒绝、并发方已先删、网络 / 结果未知）
+	// 时也要丢掉 L1。原先直接返回，记录在 Redis 里已被删掉，本进程 L1 却在 TTL
+	// 窗口内继续返回它。丢缓存总是安全的：远端没删成，下一次 Get 读回权威值。
+	// 远端错误照常返回；Get / Set 的回填规则（RR-20261004-02）不变。
+	var localErr error
 	if s.local != nil {
-		if err := s.local.Delete(ctx, key); err != nil {
-			return err
-		}
+		localErr = s.local.Delete(ctx, key)
 	}
 	s.clearLocalExpiry(key)
-	return nil
+	if remoteErr != nil && localErr != nil {
+		return errors.Join(remoteErr, localErr)
+	}
+	if remoteErr != nil {
+		return remoteErr // 原样透传，不包一层
+	}
+	return localErr
 }
 
 // localValid reports whether the L1 copy of key may be served without

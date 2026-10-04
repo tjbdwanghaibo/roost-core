@@ -25,9 +25,12 @@ var (
 	ErrRefHMapCycle       = errors.New("cache: redis ref hmap cycle")
 	ErrRefHMapMaxDepth    = errors.New("cache: redis ref hmap max depth exceeded")
 	ErrRefHMapUnsupported = errors.New("cache: redis ref hmap unsupported field")
-	// ErrRefHMapRegistryChanged means the key registry changed after it was
-	// read. This attempt wrote nothing; read the current record before retrying.
-	// It is a schema/key-set conflict, not a value/version compare-and-set.
+	// ErrRefHMapRegistryChanged means that, after the key registry was read,
+	// it came to register a hash outside this operation's cleanup list (another
+	// layout published keys this writer does not know). This attempt wrote
+	// nothing; read the current record before retrying. It is a schema/key-set
+	// conflict, not a value/version compare-and-set: same-layout concurrency
+	// (concurrent create/delete, expiry) does not produce it (RR-20261004-09).
 	ErrRefHMapRegistryChanged = errors.New("cache: redis ref hmap registry changed")
 )
 
@@ -42,11 +45,42 @@ var (
 	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
 )
 
-const refHMapWriteScript = `
+// refHMapRegistryGuardLua 是 Set / Delete 脚本在任何 DEL 之前的注册表裁决。
+//
+// RR-20261004-NC-30 要防的是“清理清单漏了键”：调用方读完 root.__keys 之后，
+// 别的布局登记了本次 KEYS 之外的 hash，按旧清单 DEL 会把它变成无 TTL、再也
+// 找不到的孤儿。所以放行条件是“当前注册表里的每个键都在本次 KEYS 里”。
+//
+// RR-20261004-09：NC-30 原先逐字节比较当前注册表与调用方读到的快照，同布局的
+// 正常并发（并发首次创建、并发删除、Set 与 Delete 交错、记录整条到期）也会
+// 让字节变化，被误报成 ErrRefHMapRegistryChanged；可这些情形里清理清单仍覆盖
+// 注册表的全部键，DEL 不会漏。字节相等只保留为快路径（相等时必然覆盖）。
+// 脚本只读 KEYS[1]，不访问未声明的键；root 固定为 KEYS[1]（registeredKeys）。
+const refHMapRegistryGuardLua = `
+local function registry_covered(snapshot)
+	local current = redis.call("HGET", KEYS[1], "__keys") or ""
+	if current == snapshot then
+		return true
+	end
+	local declared = {}
+	for i = 1, #KEYS do
+		declared[KEYS[i]] = true
+	end
+	for key in string.gmatch(current, "[^\n]+") do
+		key = string.match(key, "^%s*(.-)%s*$")
+		if key ~= "" and not declared[key] then
+			return false
+		end
+	end
+	return true
+end
+`
+
+const refHMapWriteScript = refHMapRegistryGuardLua + `
 local ttl_ms = tonumber(ARGV[1])
 local write_count = tonumber(ARGV[2])
--- RR-20261004-NC-30: refuse an obsolete cleanup snapshot before any DEL.
-if (redis.call("HGET", KEYS[1], "__keys") or "") ~= ARGV[3] then
+-- RR-20261004-NC-30 / RR-20261004-09: refuse an uncovered registry before any DEL.
+if not registry_covered(ARGV[3]) then
 	return 0
 end
 local arg = 4
@@ -75,8 +109,8 @@ return 1
 
 // RR-20261004-NC-30：清理清单与根 registry 在同槽 Lua 内一起裁决。
 // 不在脚本里发现未声明键，不自动重试或补偿未知结果。
-const refHMapDeleteScript = `
-if (redis.call("HGET", KEYS[1], "__keys") or "") ~= ARGV[1] then
+const refHMapDeleteScript = refHMapRegistryGuardLua + `
+if not registry_covered(ARGV[1]) then
 	return 0
 end
 for i = 1, #KEYS do redis.call("DEL", KEYS[i]) end

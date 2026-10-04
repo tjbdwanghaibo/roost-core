@@ -504,7 +504,7 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 		return int64(1), nil
 	}
 	if script == refHMapDeleteScript {
-		if r.hashes[keys[0]][refHMapRegistryField] != toRefHMapFakeString(args[0]) {
+		if !r.registryCovered(keys, toRefHMapFakeString(args[0])) {
 			return int64(0), nil
 		}
 		_, err := r.Del(context.Background(), keys...)
@@ -513,7 +513,7 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 	if len(keys) == 0 || len(args) < 3 {
 		return int64(0), nil
 	}
-	if r.hashes[keys[0]][refHMapRegistryField] != toRefHMapFakeString(args[2]) {
+	if !r.registryCovered(keys, toRefHMapFakeString(args[2])) {
 		return int64(0), nil
 	}
 	for _, key := range keys {
@@ -542,6 +542,26 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 	}
 	return int64(1), nil
 }
+
+// registryCovered 仿真 refHMapRegistryGuardLua：当前注册表的每个键都在 KEYS 里
+// 才放行（RR-20261004-09），字节相等只是快路径。
+func (r *refHMapFakeRedis) registryCovered(keys []string, snapshot string) bool {
+	current := r.hashes[keys[0]][refHMapRegistryField]
+	if current == snapshot {
+		return true
+	}
+	declared := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		declared[key] = true
+	}
+	for _, key := range parseRefHMapRegistry(current) {
+		if !declared[key] {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *refHMapFakeRedis) EvalSha(context.Context, string, []string, ...any) (any, error) {
 	return nil, nil
 }
