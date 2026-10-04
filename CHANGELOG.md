@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **codegen：`//roost:dao nocoll` 声明无集合的内存 DAO**（W-2026-09-18-09，维护者 10-04 选 A，[方案](docs/feature/DAO-NO-COLLECTION-2026-10-04.md)）：全部字段须 `nopersist`；生成物保留读写、undo、回滚快照与 `MarshalSync` / `ApplySync`，不生成集合 / 库名常量和任何 Mongo 读写、迁移、加载路径，以 `<Dao>RegistryKey` 在 DaoManager 登记。与 `coll=` / `db=` 同时出现、`nocoll=<值>`、含持久字段，以及持久实体或 `remote=managed` 实体使用它时，都在生成期报错并点名。game-demo 的 `MonsterDao` 已改用该声明，不再编造 `monsters` 集合；已生成工程把 marker 改成 `nocoll` 后 `roost generate` 即可原地迁移。
+
 ### Fixed
 
 - **game-demo 玩家副本撤离进行中拒绝准入**（RR-20261004-11，P3，W-2026-10-04-04）：归还撤离超时后租约回到服务、撤离在后台继续时，`Admit` 现在拒绝该玩家直到撤离结束，登录的 Claim 因此加入撤离而不是在将被销毁的实体上进场。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20261004-11.md)
