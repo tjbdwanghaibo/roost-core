@@ -35,3 +35,5 @@ JSON handler先DecodeJSON、再调用业务、最后WriteResult；完整第二�
 后续[修复运行](REVIEW-2026-10-04-noncore-05.md)落实了NC-05～07：AllowN按实际burst在key/idle副作用前拒绝不可满足需求；Recover先固定结果，再分别保护report与失败日志；新增ValidatePath在scratch chi router复用正式解析，生成扫描与运行期同一规则，seen在安装成功后登记。原有基础路径错误文本保持，生成文件形状未改。上文描述旧实现与拟议修法为原审查时点。
 
 正式最终30项、原overlay34项及13次真实生成消费者均通过；非法模式生成1且未写产物，旧已生成文件仍可编译并在注册时返回error。保护不终止阻塞report，不回滚任意自定义installer的半安装，不禁止不同参数名的语义等价模式；这些没有因本次修复变成已实现功能。满表扫描与scratch-router启动分配未做benchmark。[复跑与限制](../bugfix/evidence/noncore-bugfix-20261004-03/README.md)。
+
+**更正（2026-10-04，A 线）**：上文“生成扫描与运行期同一 `ValidatePath`”在 `74e1ba39` 之后不再成立——生成器 import core 运行时包违反层次边界（`TestCoreDependencyBoundary`），改为 `codegen/internal/webroute/parse.go` 的 `validateChiPath` 直接调用 chi 解析器，与运行期 `webroute.ValidatePath` 同一语法、两份调用。见 `docs/bugfix/RR-20261004-NC-07.md` 末尾“复核后的补修”。

@@ -274,40 +274,6 @@
       }
     },
     {
-      "type": "stat",
-      "title": "refhmap 非原子降级 (应为 0)",
-      "gridPos": {
-        "h": 8,
-        "w": 4,
-        "x": 0,
-        "y": 35
-      },
-      "datasource": {
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "targets": [
-        {
-          "expr": "cache_refhmap_write_degraded_total"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
       "type": "timeseries",
       "title": "总线吞吐与死信",
       "gridPos": {

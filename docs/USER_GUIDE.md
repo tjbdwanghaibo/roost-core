@@ -42,7 +42,7 @@ RPCClient提供可选StopWithContext；取消仅结束caller等待，同一实�
 
 AllowN 超过实际 burst 的需求直接拒绝，不占 key、刷新 idle 或计作 key 容量拒绝；需要有效需求或显式 GC 维护活性。Gateway Recover 返回固定 ErrEndpointPanic，即使报告回调或失败日志 panic；同步报告仍需业务保证不永久阻塞。
 
-Codegen 和运行期 Registrar 共用 webroute.ValidatePath 的 chi 模式规则，坏路径在写生成物前拒绝，旧生成物注册也返回 error。正常参数/正则/通配符及生成形状保留，基础路径错误文本兼容；自定义 installer 半安装后的 error 不代表外部 router 已回滚，应重建。注册用于启动阶段，不与请求并发热改 router。[三项修复与证据](review/REVIEW-2026-10-04-noncore-05.md)。
+Codegen 与运行期 Registrar 用同一套 chi 模式语法校验（运行期 `webroute.ValidatePath`；生成器不能 import core 运行时包，内部 `validateChiPath` 直接调用 chi，两处是同一解析器的两次调用，见 RR-20261004-NC-07 复核后的补修），坏路径在写生成物前拒绝，旧生成物注册也返回 error。正常参数/正则/通配符及生成形状保留，基础路径错误文本兼容；自定义 installer 半安装后的 error 不代表外部 router 已回滚，应重建。注册用于启动阶段，不与请求并发热改 router。[三项修复与证据](review/REVIEW-2026-10-04-noncore-05.md)。
 
 ## 2026-10-04 Manager / Admin / Ops 边界（main，尚未发版）
 

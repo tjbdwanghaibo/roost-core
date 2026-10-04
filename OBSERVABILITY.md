@@ -70,7 +70,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
-| `cache.refhmap.write_degraded_total` | Counter | Redis Lua 失败降级为非原子写（**非零需告警**：存在读到中间态的窗口） |
+| ~~`cache.refhmap.write_degraded_total`~~ | — | **v1.19.0 起已移除**（RR-20261004-NC-21）：RefHMap Eval 失败不再降级为非原子写，而是保留原始错误返回调用方；按业务判别结果未知（USER_GUIDE §4）。旧面板 / 告警请删除这一项 |
 | `bus_dispatch_total` / `bus_dispatch_drop_total` / `bus_dispatch_duration` | C/C/D | 总线吞吐与丢弃 |
 | `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
 | `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位 |
@@ -119,7 +119,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 ## 告警基线建议
 
 1. `nest.pipelined.async_total{result="indeterminate"} > 0` —— 立即告警（fence 事故）。
-2. `cache.refhmap.write_degraded_total` 增长 —— 告警（非原子窗口开启）。
+2. ~~`cache.refhmap.write_degraded_total` 增长~~ —— v1.19.0 起该指标已移除（RR-20261004-NC-21，Eval 失败直接返回错误，不再有非原子降级窗口）。
 3. `nestwal.reject.total` 增长 —— 容量预算不足。
 4. `nestwal.pending.tickets` 持续爬升 —— durable 落后于提交，检查磁盘。
 5. `nest.handler.lock_hold.slow.total` 新增 handler label —— 该 handler 是下一个 pipelined 灰度对象（见 NEST_PIPELINED_COMMIT.md §12）。
