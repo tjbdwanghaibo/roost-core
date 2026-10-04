@@ -14,8 +14,9 @@
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-core_pin="${ROOST_CORE_PIN:-$(sed -n 's/^core_pin="\${ROOST_CORE_PIN:-\(v[0-9.]*\)}"$/\1/p' "$here/scripts/source-head-check.sh")}"
-[ -n "$core_pin" ] || { echo "cannot determine the roost-core pin" >&2; exit 2; }
+# The generator's minimum roost-core unless ROOST_CORE_PIN says otherwise;
+# core-pin.sh says why that is the pin (RR-20260921-05).
+core_pin=$(sh "$here/scripts/core-pin.sh")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/attribute-runtime.XXXXXX")
 trap 'rm -rf "$work"' EXIT
@@ -42,7 +43,13 @@ cd "$work"
 # roost-core/attribute is newer than the pinned release while this feature is
 # being landed: point at the local checkout when it has the package and the
 # pin does not. ROOST_CORE_DIR overrides the location.
-core_dir="${ROOST_CORE_DIR:-$here/../roost-core}"
+#
+# Since the consolidation the checkout IS roost-core: the module root, one
+# level above codegen/. The old default, a sibling roost-core directory from
+# the three-repository layout, no longer exists, so the replace silently never
+# applied (RR-20260921-05). With it, the attribute half comes from this working
+# tree — the same commit, and so the same tag, the generator ships in.
+core_dir="${ROOST_CORE_DIR:-$(cd "$here/.." && pwd)}"
 if [ -d "$core_dir/attribute" ]; then
 	cat >> "$work/go.mod" <<EOF
 

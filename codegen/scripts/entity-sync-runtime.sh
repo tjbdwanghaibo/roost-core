@@ -7,13 +7,14 @@
 # has neither, and named a constant Core removed — every text test stayed
 # green while no project with sync=true could build (RR-20260918-01). This
 # script generates from internal/entity/testdata/syncruntime into a throwaway
-# module with roost-core (the pin from scripts/source-head-check.sh unless
-# ROOST_CORE_PIN says otherwise) and runs the roundtrip test there.
+# module with roost-core (the generator's minimum from scripts/core-pin.sh
+# unless ROOST_CORE_PIN says otherwise) and runs the roundtrip test there.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-core_pin="${ROOST_CORE_PIN:-$(sed -n 's/^core_pin="\${ROOST_CORE_PIN:-\(v[0-9.]*\)}"$/\1/p' "$here/scripts/source-head-check.sh")}"
-[ -n "$core_pin" ] || { echo "cannot determine the roost-core pin" >&2; exit 2; }
+# The generator's minimum roost-core unless ROOST_CORE_PIN says otherwise;
+# core-pin.sh says why that is the pin (RR-20260921-05).
+core_pin=$(sh "$here/scripts/core-pin.sh")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/entity-sync-runtime.XXXXXX")
 trap 'rm -rf "$work"' EXIT

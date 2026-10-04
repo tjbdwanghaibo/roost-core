@@ -37,6 +37,47 @@ jobs:
       - run: go test -run '^$' -bench BenchmarkRemoteSnapshotCacheL1Get4K -benchtime=1s ./entity
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
+  # RR-20260921-05: what this repository generates, and the guards that run
+  # what the generator emits, are checked here and nowhere else.
+  #
+  # The //go:generate outputs under kit/service and service/ are committed; a
+  # stale or hand-edited *_gen.go builds, vets and tests green, and only
+  # regenerating shows it (`generate --check` runs in generated projects, not
+  # here). `git status --porcelain` also catches an output nobody committed.
+  #
+  # The codegen runtime guards compile the generators' output against the
+  # roost-core release the generator promises as its minimum
+  # (codegen/scripts/core-pin.sh) and run it: codegen's own tests only compare
+  # text. They exited 2 from the consolidation to 10-04 and no workflow ran
+  # them. ci_generated_code_test.go pins both halves of this job.
+  generated-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go generate leaves the tree unchanged
+        run: |
+          go generate ./...
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            echo "::error::go generate ./... changed the tree: run it and commit the result"
+            echo "$dirty"
+            git --no-pager diff
+            exit 1
+          fi
+      - name: dao goldens against roost-core (U-0224, RR-20260917-05)
+        run: sh codegen/scripts/dao-golden-runtime.sh
+      - name: attribute scaffold and generator against roost-core (RR-20260917-06)
+        run: sh codegen/scripts/attribute-runtime.sh
+      - name: sync=true entity against roost-core (RR-20260918-01)
+        run: sh codegen/scripts/entity-sync-runtime.sh
+      - name: cfggen output against roost-core configdata
+        run: sh codegen/scripts/cfggen-golden-runtime.sh
+
   # The test suite runs in shards because the single job that used to run it
   # will not hold the merged module: kit and codegen are about to move in
   # (ARCHITECTURE_V3_SINGLE_MODULE_PLAN P1) and Core's test time roughly

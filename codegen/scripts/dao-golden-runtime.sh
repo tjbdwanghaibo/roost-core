@@ -6,14 +6,16 @@
 # can only compare generated text. That is how U-0224 stayed invisible: the
 # nested structs it generated were byte-for-byte what the goldens said, and
 # what they persisted was {"dirtyhook": {}}. This script is the missing half:
-# a throwaway module with the goldens as a package, roost-core (the pin from
-# scripts/source-head-check.sh unless ROOST_CORE_PIN says otherwise) and the
-# driver, running internal/dao/testdata/runtime/roundtrip_test.go.
+# a throwaway module with the goldens as a package, roost-core (the
+# generator's minimum from scripts/core-pin.sh unless ROOST_CORE_PIN says
+# otherwise) and the driver, running
+# internal/dao/testdata/runtime/roundtrip_test.go.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-core_pin="${ROOST_CORE_PIN:-$(sed -n 's/^core_pin="\${ROOST_CORE_PIN:-\(v[0-9.]*\)}"$/\1/p' "$here/scripts/source-head-check.sh")}"
-[ -n "$core_pin" ] || { echo "cannot determine the roost-core pin" >&2; exit 2; }
+# The generator's minimum roost-core unless ROOST_CORE_PIN says otherwise;
+# core-pin.sh says why that is the pin (RR-20260921-05).
+core_pin=$(sh "$here/scripts/core-pin.sh")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/dao-golden-runtime.XXXXXX")
 trap 'rm -rf "$work"' EXIT

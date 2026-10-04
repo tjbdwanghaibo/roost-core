@@ -9,13 +9,14 @@
 # its json tags, key types, index and ref metadata are only ever compared as
 # strings. This script is the missing half: generate from
 # internal/cfggen/testdata/runtime/cfg.yaml into a throwaway module with
-# roost-core (the pin from scripts/source-head-check.sh unless ROOST_CORE_PIN
-# says otherwise) and run the roundtrip test against the real runtime.
+# roost-core (the generator's minimum from scripts/core-pin.sh unless
+# ROOST_CORE_PIN says otherwise) and run the roundtrip test against the real runtime.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-core_pin="${ROOST_CORE_PIN:-$(sed -n 's/^core_pin="\${ROOST_CORE_PIN:-\(v[0-9.]*\)}"$/\1/p' "$here/scripts/source-head-check.sh")}"
-[ -n "$core_pin" ] || { echo "cannot determine the roost-core pin" >&2; exit 2; }
+# The generator's minimum roost-core unless ROOST_CORE_PIN says otherwise;
+# core-pin.sh says why that is the pin (RR-20260921-05).
+core_pin=$(sh "$here/scripts/core-pin.sh")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/cfggen-golden-runtime.XXXXXX")
 trap 'rm -rf "$work"' EXIT
