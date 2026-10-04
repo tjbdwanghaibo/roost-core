@@ -132,7 +132,7 @@
 [RR-20261004-06](RR-20261004-06.md)：**P2** etcd Campaign 在 session 建好后的失败 / 取消分支不再撤销 lease，候选键或领导键残留到 TTL（缺省 60s），其他候选选不上（NC 修复复审发现）（已确认，未修复）。
 [RR-20261004-05](RR-20261004-05.md)：P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-05.md)）。
 [RR-20261004-04](RR-20261004-04.md)：P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 修复复审发现）（已确认，未修复）。
-[RR-20261004-03](RR-20261004-03.md)：**P2** RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 修复复审发现）（已确认，未修复）。
+[RR-20261004-03](RR-20261004-03.md)：**P2** RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-03.md)）。
 [RR-20261004-02](RR-20261004-02.md)：**P2** `LayeredStore` 的 L1 过期后（或 ttl≤0 时）仍永久否决权威值；远端写已生效却报 `ErrStaleWrite`（NC 修复复审发现）（已确认，未修复）。
 [RR-20261004-01](RR-20261004-01.md)：**P2** `versionedLock.TryLock` 取锁无明确答复（Eval 因 ctx 截止 / 网络错误返回而脚本已在 Redis 执行）时不记 token，实体本进程内不可写直到 LockTTL（缺省 24h）（W-2026-10-04-01，harness 区间核验负对照暴露）（已修复，未发版；[修复记录](../bugfix/RR-20261004-01.md)，T-207）。
 [RR-20261001-09](RR-20261001-09.md)：P3 activity 无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让整组 `AdvanceExpired` 每 tick 失败（W-2026-10-01-04 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-09.md)，T-181）。

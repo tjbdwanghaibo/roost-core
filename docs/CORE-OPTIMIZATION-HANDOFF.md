@@ -383,7 +383,7 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20261004-06](bug/RR-20261004-06.md) | P2 etcd Campaign 在 session 建好后的失败 / 取消分支不再撤…（NC 复审） | 未修复 |
 | [RR-20261004-07](bug/RR-20261004-07.md) | P3 NatsMod 停止时 Bus 超过预算后保留 bus / asm 以便重试，但…（NC 复审） | 未修复 |
 | [RR-20261004-02](bug/RR-20261004-02.md) | P2 `LayeredStore` 的 L1 过期后（或 ttl≤0 时）仍永久否决权威值；远端写已生效却报 `ErrStaleWrite`（NC 复审） | 未修复 |
-| [RR-20261004-03](bug/RR-20261004-03.md) | P2 RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 复审） | 未修复 |
+| [RR-20261004-03](bug/RR-20261004-03.md) | P2 RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 复审） | [修复](bugfix/RR-20261004-03.md)（未发布；Patch KEYS 变为整条记录；Get 部分记录改报 miss） |
 | [RR-20261004-04](bug/RR-20261004-04.md) | P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 复审） | 未修复 |
 | [RR-20261004-05](bug/RR-20261004-05.md) | P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 复审） | [修复](bugfix/RR-20261004-05.md)（未发布；替身行为收紧） |
 | [RR-20261004-01](bug/RR-20261004-01.md) | P2 TryLock 取锁结果未知不记 token，实体卡到 LockTTL | [修复](bugfix/RR-20261004-01.md)（未发布；token 格式 `<base32>.<seq>`，TryLock 脚本 ARGV 3 → 4；T-207） |

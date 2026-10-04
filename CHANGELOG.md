@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **RefHMap Patch 不再让同一条记录的 hash 分开过期**（RR-20261004-03，P2，NC 复审发现）：Patch 原先只续期根到叶路径上的 hash，兄弟 hash 先过期后 `Get` 报 `ok=true` 返回部分记录（写入的值读回零值），NC-18 把它扩大到所有嵌套路径。现在 Patch 续期整条记录的全部布局 hash，并把它们并入 `__keys`（顺带修复旧数据 Patch 后 Delete 漏删）；`Get` 遇到被引用、按布局必然非空却已缺失的子 hash 时整条报 miss，修复前写入的这类数据会按缺失重载。存储格式不变。[记录](docs/bugfix/RR-20261004-03.md)
 - **mongotest 唯一索引的 null / sparse 语义**（RR-20261004-05，P3，NC 复审发现）：替身以前缺任一唯一字段就跳过检查、也不看 `Sparse`，比真实 Mongo 宽松。现在非 sparse 唯一索引把缺字段（含穿过标量父字段的点路径）当 BSON null、与显式 null 相等，建索引与写入报 `ErrDuplicateKey`；sparse 只在全部索引字段都缺时跳过。仅测试替身行为收紧，需要允许缺字段的测试应设 `Sparse: true`（真实部署同样需要）。[记录](docs/bugfix/RR-20261004-05.md)
 
 ## [v1.19.0] - 2026-10-04
