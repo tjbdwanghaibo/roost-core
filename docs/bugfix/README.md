@@ -51,6 +51,7 @@
 [RR-20261004-10](RR-20261004-10.md)：game-demo `renew` 先确认全部续租、再在同一份 `handBackPassBudget` 内先重新认领后归还；可控时钟与缩放回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
 [RR-20261004-11](RR-20261004-11.md)：game-demo `Admit` 在玩家撤离进行中拒绝，撤离结束即回到服务（不 abandon 无间断租约）；RR-20260921-04 缩放用例断言按新承诺改写；已生成工程手工合并 playerowner.go（未发版）。
 [RR-20261004-13](RR-20261004-13.md)：新增 `runCommandTree`——`WaitDelay` 5s；Unix 进程组 + `kill(-pgid)`，运行期间接住 SIGINT / SIGTERM / SIGHUP 杀树后重发信号（Ctrl-C 行为不变）；Windows `taskkill /T /F`；doctor 与依赖命令都改用它（未发版）。
+[RR-20261004-14](RR-20261004-14.md)：窗口从设键那次请求（SetNX / Refresh 发出时刻）起算；未答复的跨间断认领记 interrupted，interrupted 的 Held 改为重新认领；已生成工程手工合并 playerowner.go（未发版）。
 [RR-20261004-01](RR-20261004-01.md)：取锁 token 按锁对象分代（随机前缀 + 递增序号），owner 是本锁对象更早一代时下一次 TryLock 由 Lua 换新 token / 新 fence 取回，别人持有照旧 NotAcquired、迟到旧代脚本挤不掉新代；RR-20260930-21 的 `releaseUnknownToken` 并入同一判定；T-207（未发版）。
 [RR-20261001-06](RR-20261001-06.md)：名字被别的账号 committed 后同名重试自动释放 pending slot（仍答 `ErrNameTaken`，孤儿未发布角色记录保留且不可玩）；新 owner-only `Admin.ResolvePendingCreation` 备注写 `Account.admin_note`、版本 + 身份围栏 DeleteIf 释放，名字仍被本计划 reserved / committed、已发布、legacy 空 slot 拒绝 `ErrNotResolvable`（560115）；Memory + 真实 Redis 真等租约过期先红后绿；T-182（未发版）。
 [RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（未发版）。

@@ -842,3 +842,13 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **另记（修前就存在、同源于 RR-20261001-07 记录“token 按进程固定”）**：`store.Claim` 返回错误但 SetNX 实际已落地时，下一轮 `Refresh` 会答 Held，`confirmRenewal` 会确认一份没被扔掉的副本。
 - **来源**：RR-20261004-10 / 11 修复报告。
 
+### W-2026-10-04-08：playerowner 剩余三处窄交错（RR-20261004-14 修复报告列出）
+
+- **位置**：`demo/internal/service/game/playerowner.go.tmpl`、`demo/internal/route/playerroute.go.tmpl`（RR-20261004-14 之后）。
+- **候选**：
+  1. RR-20261001-07 记录里那条窄交错只剩一支：撤离以错误结束、副本仍常驻时的确认路径。
+  2. `Refresh` 与 `abandon` / 公开 `Release` 并发时，`confirmLocked` 会给已删掉的本地状态重新建一份。
+  3. `playerroute.Store.Claim` 在 `CompareAndExpire` 返回 `applied=false` 时仍回答“是我们的”。
+- **为何可疑**：三处都可能让本地以为持有而共享表不认（或反之），与 RR-20260921-03 / RR-20261004-10 / 14 同族。读码所得，均未写出红测试。
+- **来源**：RR-20261004-14 修复报告 §没验证的。
+
