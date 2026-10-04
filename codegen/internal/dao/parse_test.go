@@ -22,9 +22,12 @@ func TestParseDefDir(t *testing.T) {
 		t.Fatalf("parseDefDir: %v", err)
 	}
 
-	// Should find 1 DAO
-	if len(defs.Daos) != 2 {
-		t.Fatalf("expected 2 daos, got %d", len(defs.Daos))
+	// HeroDao, VarietyDao and the nocoll WraithDao.
+	if len(defs.Daos) != 3 {
+		t.Fatalf("expected 3 daos, got %d", len(defs.Daos))
+	}
+	if wraith := defs.Daos[2]; wraith.Name != "WraithDao" || !wraith.NoCollection || wraith.Coll != "" || wraith.Db != "" {
+		t.Fatalf("expected the nocoll WraithDao last, got %+v", wraith)
 	}
 	if len(defs.RedisDaos) != 2 {
 		t.Fatalf("expected 2 redis daos, got %d", len(defs.RedisDaos))

@@ -233,6 +233,29 @@ dao.DelItems(10001)
 
 持久化 setter/map mutator 不能在事务外调用，`durability=memory` handler 也不能修改 persistent 字段。新建、migration/replace、全字段修改生成 Put；普通字段或安全 map key 修改生成 Patch；删除生成带版本 tombstone 的 Delete。Patch 不携带整文档 fallback。启用这些生成物前必须保证目标集群所有 WAL reader 支持 v2 且 writer 已切到 v2。
 
+### 4.1 无集合 DAO：`//roost:dao nocoll`
+
+只给 `noPersist=true` 实体（例如刷出来的怪）用的内存 DAO：位置等状态仍住在 DAO 里、经组件读写、随事务回滚、经 `MarshalSync(mask)` 复制，但不存储，所以不编造集合名：
+
+```go
+//roost:dao nocoll
+type MonsterDao struct {
+    PosX int64 `bson:"pos_x" dao:"nopersist,sync"`
+    PosY int64 `bson:"pos_y" dao:"nopersist,sync"`
+    HP   int64 `bson:"hp" dao:"nopersist,sync"`
+}
+```
+
+- `nocoll` 是裸标志：不能写成 `nocoll=true`，也不能与 `coll=`、`db=`、`dbscope=`、`schema=` 同时出现（生成期报错并点名冲突的键）。
+- **全部字段**（`dao:"-"` 除外）必须 `nopersist`；没写 dao tag 的字段默认 `persist,sync`，同样算持久字段。违反时报错并点名每个持久字段。
+- 生成物保留字段 mask、getter/mutator、undo、`CaptureRollbackState`/`RestoreRollbackState`、`<Dao>SyncFields`、`MarshalSync`/`ApplySync`；
+  **不生成** `<Dao>DBName`/`<Dao>Collection`/`<Dao>SchemaVersion`、`DbScope`、`Migrate`、`PrepareMutation`/`AcceptMutation`、`Marshal*`、`Unmarshal`、`RestorePersisted`。
+  `entity.DaoInterface` 仍满足：`DbName()` 返回 `""`，`CollName()` 返回 `<Dao>RegistryKey`（值为类型名，只是实体 DaoManager 的登记键，不是集合名）。
+- Entity 生成器读 DAO 包的生成源码认出它（`<Dao>RegistryKey` 常量），接线改用该常量；持久实体或 `remote=managed` 实体使用它时生成期报错。
+  DAO 在实体所在模块之外时无法在生成期判定，接线仍引用 `<Dao>Collection`，编译期失败。
+- 有集合改无集合：改 marker、确认字段全 `nopersist`、确认实体 `noPersist=true`，`roost generate` 原地重写 `gen_<name>_dao.go` 与实体接线；
+  业务里对 `XxxDaoCollection` 等常量或持久化方法的引用会在编译期暴露。方案与取舍见 `docs/feature/DAO-NO-COLLECTION-2026-10-04.md`。
+
 Redis DAO 使用 `//roost:redisdao`，生成类型化 Get/Set/Delete 包装；具体 marker 参数与 fail-fast 规则见根 README 的 DAO 章节。
 
 ## 5. Entity 生成器

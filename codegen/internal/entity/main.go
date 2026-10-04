@@ -110,9 +110,13 @@ func run(args []string, stdout io.Writer) error {
 		// the first entity's file (by name) and calls every sibling's own
 		// registration, so several entities in one package compile together.
 		siblings := make([]string, 0, len(entities))
-		for _, ent := range entities {
+		for i := range entities {
+			ent := &entities[i]
 			// 先校验整包，拒绝时本包不落任何文件。
-			if err := validateRemoteDaoScopes(ent, dir); err != nil {
+			if err := validateRemoteDaoScopes(*ent, dir); err != nil {
+				return err
+			}
+			if err := resolveNoCollectionDaos(ent, dir); err != nil {
 				return err
 			}
 			siblings = append(siblings, ent.Name)

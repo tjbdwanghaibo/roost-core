@@ -96,6 +96,8 @@ Entity 是锁、生命周期和路由的边界；Component 是领域能力；DAO
 
 DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。写方法在当前 Nest 事务中登记 undo、标记 persist/sync dirty、生成字段级 patch。Map 使用框架生成的受控容器，避免业务获得内部引用后绕过 dirty tracking。
 
+不落库的实体（`noPersist=true`，例如刷出来的怪）也用 DAO 承载位置等状态，保证“位置在 DAO、经组件读写”对所有实体一致；这类 DAO 写 `//roost:dao nocoll`：全部字段必须 `nopersist`，生成物只有读写方法、回滚快照与 `MarshalSync` 复制，没有集合名常量与任何 Mongo 读写 / 迁移 / 加载路径，DaoManager 以 `<Dao>RegistryKey` 登记。持久实体或 `remote=managed` 实体使用它会在生成期报错。详见 codegen 参考 §4.1 与 [方案](feature/DAO-NO-COLLECTION-2026-10-04.md)。
+
 必须遵守：
 
 - handler 进入前 Nest 已按全局顺序获取 Entity mutex；业务不再加同一把锁。

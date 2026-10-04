@@ -204,7 +204,7 @@ services:
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>
 go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
-		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
+		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]；只给 noPersist 实体用、全字段 nopersist 的内存 DAO 写 //roost:dao nocoll（不编造集合名，不生成持久化路径）。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
 		Example: `//roost:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
     Name  string          ` + "`dao:\"persist,sync\"`" + `

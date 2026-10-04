@@ -35,7 +35,12 @@ type DaoDef struct {
 	// migration.MigrateDAO, and with a constant version those two could
 	// never differ.
 	Schema uint32
-	Fields []FieldDef
+	// NoCollection is `//roost:dao nocoll`: an in-memory DAO with no
+	// collection, no database and no storage path. Every field must be
+	// nopersist; Coll, Db, DbScope and Schema stay empty
+	// (docs/feature/DAO-NO-COLLECTION-2026-10-04.md).
+	NoCollection bool
+	Fields       []FieldDef
 }
 
 // RedisDaoDef is a Redis DAO struct definition.
@@ -129,6 +134,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 	type daoMarker struct {
 		line     int
 		params   map[string]string
+		flags    map[string]bool
 		consumed bool
 	}
 	var markers []daoMarker
@@ -149,6 +155,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				markers = append(markers, daoMarker{
 					line:   fset.Position(c.Pos()).Line,
 					params: parseKV(m[1]),
+					flags:  parseFlags(m[1]),
 				})
 			}
 			if m := redisDaoMarkerRe.FindStringSubmatch(c.Text); m != nil {
@@ -222,12 +229,24 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				}
 				m.consumed = true
 
-				if m.params["coll"] == "" || m.params["db"] == "" {
-					return fmt.Errorf("line %d: //roost:dao on %s requires coll= and db=", m.line, typeSpec.Name.Name)
+				noCollection, err := noCollectionParam(m.params, m.flags)
+				if err != nil {
+					return fmt.Errorf("line %d: //roost:dao on %s: %w", m.line, typeSpec.Name.Name, err)
+				}
+				if !noCollection && (m.params["coll"] == "" || m.params["db"] == "") {
+					return fmt.Errorf("line %d: //roost:dao on %s requires coll= and db= (or nocoll for an in-memory DAO whose fields are all nopersist)", m.line, typeSpec.Name.Name)
 				}
 				fields, err := extractFieldDefs(structType, defs)
 				if err != nil {
 					return fmt.Errorf("dao %s: %w", typeSpec.Name.Name, err)
+				}
+				if noCollection {
+					defs.Daos = append(defs.Daos, DaoDef{
+						Name:         typeSpec.Name.Name,
+						NoCollection: true,
+						Fields:       fields,
+					})
+					break
 				}
 				dbScope := m.params["dbscope"]
 				if dbScope == "" {
@@ -536,6 +555,46 @@ func parseKV(s string) map[string]string {
 		}
 	}
 	return params
+}
+
+// parseFlags collects the bare words of a marker (tokens without "="). Only
+// `nocoll` means anything to //roost:dao; other bare words keep their
+// historical "ignored" behavior.
+func parseFlags(s string) map[string]bool {
+	flags := make(map[string]bool)
+	for _, p := range strings.Fields(s) {
+		if !strings.Contains(p, "=") {
+			flags[p] = true
+		}
+	}
+	return flags
+}
+
+// noCollectionStorageKeys are the marker keys that describe storage. A nocoll
+// DAO never writes anywhere, so naming a collection, database, scope or schema
+// for it is a contradiction, not a default to ignore.
+var noCollectionStorageKeys = []string{"coll", "db", "dbscope", "schema"}
+
+// noCollectionParam reads `nocoll`. It is a bare flag: `nocoll=true` is
+// refused so that no spelling of it can look like a collection name, and it
+// may not appear next to any key that describes storage.
+func noCollectionParam(params map[string]string, flags map[string]bool) (bool, error) {
+	if value, ok := params["nocoll"]; ok {
+		return false, fmt.Errorf("nocoll is a bare flag, write //roost:dao nocoll (got nocoll=%s)", value)
+	}
+	if !flags["nocoll"] {
+		return false, nil
+	}
+	var conflicts []string
+	for _, key := range noCollectionStorageKeys {
+		if _, ok := params[key]; ok {
+			conflicts = append(conflicts, key+"=")
+		}
+	}
+	if len(conflicts) > 0 {
+		return false, fmt.Errorf("nocoll declares a DAO without a collection, but the marker also has %s; remove them (they describe storage this DAO never writes) or drop nocoll", strings.Join(conflicts, ", "))
+	}
+	return true, nil
 }
 
 func resolveFieldPathType(root *ast.StructType, allStructs map[string]*ast.StructType, path string) string {

@@ -63,6 +63,11 @@ type DaoField struct {
 	CollName   string // collection name, e.g. "players"
 	Cold       bool   // skip startup creation unless explicitly supplied
 	GetterName string
+
+	// NoCollection: the DAO is `//roost:dao nocoll` (detected from its
+	// generated package by resolveNoCollectionDaos); it is keyed by
+	// <Dao>RegistryKey instead of <Dao>Collection.
+	NoCollection bool
 }
 
 // parseDir scans all .go files in dir for entity markers.

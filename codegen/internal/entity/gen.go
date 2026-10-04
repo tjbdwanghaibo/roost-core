@@ -57,6 +57,7 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 		"syncNamespace":      syncNamespaceExpr,
 		"syncPackerFactory":  syncPackerFactoryExpr,
 		"daoCollectionConst": daoCollectionConstExpr,
+		"daoKey":             daoKeyExpr,
 		"hasMethod":          hasMethod,
 		"join":               strings.Join,
 	}).Parse(wireTemplate)
@@ -252,13 +253,27 @@ func unquoteGoString(s string) (string, bool) {
 }
 
 func daoCollectionConstExpr(typeName string) string {
+	return daoConstExpr(typeName, "Collection")
+}
+
+// daoKeyExpr is the DaoManager / param.Dao key of one DAO field: its
+// collection constant, or for a `//roost:dao nocoll` DAO its registry key
+// constant (that DAO has no collection; see resolveNoCollectionDaos).
+func daoKeyExpr(dao DaoField) string {
+	if dao.NoCollection {
+		return daoConstExpr(dao.TypeName, noCollectionKeySuffix)
+	}
+	return daoCollectionConstExpr(dao.TypeName)
+}
+
+func daoConstExpr(typeName, suffix string) string {
 	name := derefType(typeName)
 	qualifier := ""
 	if idx := strings.LastIndex(name, "."); idx >= 0 {
 		qualifier = name[:idx+1]
 		name = name[idx+1:]
 	}
-	return qualifier + name + "Collection"
+	return qualifier + name + suffix
 }
 
 func isConstExpr(s string) bool {
@@ -448,7 +463,7 @@ func New{{.Entity.Name}}(param *entity.EntityCreateParam) (*{{.Entity.Name}}, er
 {{- range .Entity.Daos}}
 
 	// DAO: {{.FieldName}}
-	if raw, ok := param.Dao[{{daoCollectionConst .TypeName}}]; ok {
+	if raw, ok := param.Dao[{{daoKey .}}]; ok {
 		e.{{.FieldName}} = raw.({{.TypeName}})
 	} else {
 {{- if .Cold}}
@@ -459,7 +474,7 @@ func New{{.Entity.Name}}(param *entity.EntityCreateParam) (*{{.Entity.Name}}, er
 {{- end}}
 	}
 	if e.{{.FieldName}} != nil {
-		e.DaoManager.Set({{daoCollectionConst .TypeName}}, e.{{.FieldName}})
+		e.DaoManager.Set({{daoKey .}}, e.{{.FieldName}})
 	}
 {{- end}}
 
@@ -515,7 +530,7 @@ func (e *{{.Entity.Name}}) TakeEntitySyncChanges() uint64 {
  var mask uint64
 {{- range .Entity.Daos}}
  if e.{{.FieldName}} != nil {
-  mask |= entity.MapDAOSyncChanges(e, {{daoCollectionConst .TypeName}}, e.{{.FieldName}}.DirtyTracker().TakeEntitySyncDirty(), {{eq (len $.Entity.Daos) 1}})
+  mask |= entity.MapDAOSyncChanges(e, {{daoKey .}}, e.{{.FieldName}}.DirtyTracker().TakeEntitySyncDirty(), {{eq (len $.Entity.Daos) 1}})
  }
 {{- end}}
  return mask

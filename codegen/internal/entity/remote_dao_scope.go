@@ -22,20 +22,9 @@ func validateRemoteDaoScopes(ent EntityDef, dir string) error {
 		return nil
 	}
 	for _, dao := range ent.Daos {
-		typeName := derefType(dao.TypeName)
-		pkgDir := dir
-		if alias := qualifier(typeName); alias != "" {
-			typeName = strings.TrimPrefix(typeName, alias+".")
-			pkgDir = ""
-			for _, imp := range ent.Imports {
-				if imp.Alias == alias {
-					pkgDir = moduleDirForImport(dir, imp.Path)
-					break
-				}
-			}
-			if pkgDir == "" {
-				continue
-			}
+		pkgDir, typeName := daoSourceDir(ent, dir, dao.TypeName)
+		if pkgDir == "" {
+			continue
 		}
 		file, err := serverScopedDaoFile(pkgDir, typeName)
 		if err != nil {
@@ -47,6 +36,23 @@ func validateRemoteDaoScopes(ent EntityDef, dir string) error {
 		}
 	}
 	return nil
+}
+
+// daoSourceDir 返回 DAO 类型所在包的目录与不带包限定的类型名：同包类型就是实体目录；
+// 带限定的类型按实体的 import 映射到模块内目录，模块外返回空目录（生成期无法读取源码）。
+func daoSourceDir(ent EntityDef, dir, daoType string) (string, string) {
+	typeName := derefType(daoType)
+	alias := qualifier(typeName)
+	if alias == "" {
+		return dir, typeName
+	}
+	typeName = strings.TrimPrefix(typeName, alias+".")
+	for _, imp := range ent.Imports {
+		if imp.Alias == alias {
+			return moduleDirForImport(dir, imp.Path), typeName
+		}
+	}
+	return "", typeName
 }
 
 // moduleDirForImport 把实体所在模块内的 import path 映射到目录；模块外返回空串。

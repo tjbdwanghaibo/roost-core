@@ -5,18 +5,27 @@ package {{.Package}}
 
 import (
 	"fmt"
+{{- if not .Dao.NoCollection}}
 	"sort"
+{{- end}}
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+{{- if not .Dao.NoCollection}}
 	"github.com/tjbdwanghaibo/roost-core/migration"
+{{- end}}
 	"github.com/tjbdwanghaibo/roost-core/nest"
 {{- if .HasMaps}}
 	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 {{- end}}
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
-
+{{if .Dao.NoCollection}}
+// {{.Dao.Name}} has no collection (//roost:dao nocoll): it is never stored,
+// only read and written through its entity's components, rolled back with
+// the transaction and replicated through MarshalSync.
+{{- else}}
 // {{.Dao.Name}} is the DAO for collection "{{.Dao.Coll}}".
+{{- end}}
 type {{.Dao.Name}} struct {
 	id      int64
 	tracker dataengine.Tracker
@@ -28,6 +37,12 @@ type {{.Dao.Name}} struct {
 // Ensure interface compliance.
 var _ entity.DaoInterface = (*{{.Dao.Name}})(nil)
 var _ nest.RollbackSnapshotter = (*{{.Dao.Name}})(nil)
+{{- if .Dao.NoCollection}}
+
+// {{daoKeyConst .Dao.Name}} is the key this DAO is registered under in its
+// entity's DaoManager. It is not a collection name: nothing is stored.
+const {{daoKeyConst .Dao.Name}} = "{{.Dao.Name}}"
+{{- else}}
 var _ nest.MutationParticipant = (*{{.Dao.Name}})(nil)
 
 const (
@@ -35,6 +50,7 @@ const (
 	{{daoCollConst .Dao.Name}} = "{{.Dao.Coll}}"
 	{{.Dao.Name}}SchemaVersion uint32 = {{schemaVersion .Dao}}
 )
+{{- end}}
 
 // New{{.Dao.Name}} creates a new {{.Dao.Name}} instance with initialized maps/slices.
 func New{{.Dao.Name}}() *{{.Dao.Name}} {
@@ -57,11 +73,18 @@ func New{{.Dao.Name}}() *{{.Dao.Name}} {
 
 func (d *{{.Dao.Name}}) Id() int64        { return d.id }
 func (d *{{.Dao.Name}}) SetId(id int64)   { d.id = id }
+{{- if .Dao.NoCollection}}
+// DbName is empty and CollName is the registry key: entity.DaoInterface asks
+// for both, and this DAO has neither a database nor a collection.
+func (d *{{.Dao.Name}}) DbName() string   { return "" }
+func (d *{{.Dao.Name}}) CollName() string  { return {{daoKeyConst .Dao.Name}} }
+{{- else}}
 func (d *{{.Dao.Name}}) DbName() string   { return {{daoDBConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) DbScope() dataengine.DatabaseScope { return {{dbScope .Dao}} }
 func (d *{{.Dao.Name}}) CollName() string  { return {{daoCollConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) SchemaVersion() uint32 { return {{.Dao.Name}}SchemaVersion }
 func (d *{{.Dao.Name}}) Migrate(raw []byte, from uint32) ([]byte, error) { return migration.MigrateDAO(d.CollName(), raw, from, {{.Dao.Name}}SchemaVersion) }
+{{- end}}
 func (d *{{.Dao.Name}}) Dirty() entity.IDirty { return &d.tracker }
 func (d *{{.Dao.Name}}) CleanDirty()      { d.tracker.SelfClean() }
 func (d *{{.Dao.Name}}) DirtyTracker() *dataengine.Tracker { return &d.tracker }
@@ -526,6 +549,7 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	d.Init()
 	return nil
 }
+{{- if not .Dao.NoCollection}}
 
 func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
 	doc := bson.M{
@@ -654,6 +678,7 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 	}
 	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
+{{- end}}
 
 {{- if syncFields .Dao.Fields}}
 
@@ -733,6 +758,7 @@ func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 	d.Init()
 	return nil
 }
+{{- if not .Dao.NoCollection}}
 
 // --- Unmarshal ---
 
@@ -780,6 +806,7 @@ func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, versi
 	d.CleanDirty()
 	return nil
 }
+{{- end}}
 
 // compile-time import guards
 var (

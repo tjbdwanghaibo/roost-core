@@ -16,6 +16,9 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	if err := validateDatabaseScope(dao); err != nil {
 		return false, err
 	}
+	if err := validateNoCollectionFields(dao); err != nil {
+		return false, err
+	}
 	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker"); err != nil {
 		return false, err
 	}
@@ -285,6 +288,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"lower1":        lower1,
 		"daoDBConst":    daoDBConstName,
 		"daoCollConst":  daoCollectionConstName,
+		"daoKeyConst":   daoRegistryKeyConstName,
 		"dbScope":       databaseScopeExpr,
 		"isNested":      func(typeName string) bool { return isNestedType(defs, typeName) },
 		"wireType":      func(f FieldDef) string { return wireType(defs, f) },
@@ -318,6 +322,27 @@ func validateDatabaseScope(dao DaoDef) error {
 	return fmt.Errorf("dao %s has unsupported dbscope %q (want global or sid)", dao.Name, dao.DbScope)
 }
 
+// validateNoCollectionFields refuses a nocoll DAO with a persistent field. A
+// field that persists needs somewhere to persist to; without a collection the
+// write would have nowhere to go, so it is a configuration error and every
+// such field is named (including untagged ones, which default to persist).
+func validateNoCollectionFields(dao DaoDef) error {
+	if !dao.NoCollection {
+		return nil
+	}
+	var persistent []string
+	for _, field := range dao.Fields {
+		if field.Tag.Persist {
+			persistent = append(persistent, field.Name)
+		}
+	}
+	if len(persistent) == 0 {
+		return nil
+	}
+	return fmt.Errorf("dao %s is declared nocoll but fields %s persist (a field without a dao tag defaults to persist,sync); tag them dao:\"nopersist,sync\" (or nopersist,nosync), or give the DAO coll= and db=",
+		dao.Name, strings.Join(persistent, ", "))
+}
+
 func databaseScopeExpr(dao DaoDef) string {
 	if dao.DbScope == "sid" {
 		return "dataengine.DatabaseServer"
@@ -331,6 +356,13 @@ func fieldMaskName(daoName, fieldName string) string {
 
 func daoDBConstName(daoName string) string {
 	return derefDaoTypeName(daoName) + "DBName"
+}
+
+// daoRegistryKeyConstName names a nocoll DAO's DaoManager registry key. The
+// entity generator recognizes a nocoll DAO by this constant, so the suffix is
+// part of the contract between the two generators.
+func daoRegistryKeyConstName(daoName string) string {
+	return derefDaoTypeName(daoName) + "RegistryKey"
 }
 
 func daoCollectionConstName(daoName string) string {
