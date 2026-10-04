@@ -1,5 +1,11 @@
 # Roost 持续 Review 与学习记录
 
+**最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
+
+提交前新增wanted已审：versioned TryLock执行后丢回复丢失token，登记[RR-20261004-01](../bug/RR-20261004-01.md) P2未修；[追加4场景/方案边界](../review/REVIEW-2026-10-04-noncore-18.md#提交前新增wanted)。普通锁/订阅14项通过的结论仅限其原范围，不包含此新反例。
+
+[10-04 NC-26～29四项修复](REVIEW-2026-10-04-noncore-17.md)：28新正式叶子通过，私有事务不再抹他人提交；必要消费者夹具适配后回归通过，17skip单列。[N04第五批 Redis](REVIEW-2026-10-04-noncore-18.md)14新增场景全通过，无新RR；[锁续租/订阅学习](IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md)。当前N04源文分母因新事务文件增为41、累计41/41，场景仍部分完成。[证据](evidence/noncore-review-20261004-18/README.md) · [进度](PROGRESS.md)，未发版。
+
 [10-04 NC-21～25五项修复](REVIEW-2026-10-04-noncore-15.md)：40新增正式叶子、十包race/vet、两个生成DAO真实Redis消费者与受影响消费回归通过；17环境skip独立保留。[N04第四批](REVIEW-2026-10-04-noncore-16.md)新13叶子7fail/6控制，确认[NC-26～29四个替身P3未修](../bug/REVIEW-2026-10-04-noncore-16.md)。源文40/40累计复用已读，场景部分完成。[机制/实施交接](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) · [证据](evidence/noncore-review-20261004-16/README.md) · [进度](PROGRESS.md)。旧记录保留历史时点，不发版。
 
 [10-04 N04五项修复](REVIEW-2026-10-04-noncore-13.md)：NC-16～20已修、41正式项/十包race-vet/生成ref-hmap真实消费通过。[N04第三批](REVIEW-2026-10-04-noncore-14.md)补mongotest余文，清单40/40全文已读，场景仍部分完成；确认[NC-21～25五项未修](../bug/REVIEW-2026-10-04-noncore-14.md)，未知Lua重放一P2、替身复制/身份/数值四P3。[机制/建议](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) · [证据](evidence/noncore-review-20261004-14/README.md) · [进度](PROGRESS.md)。下方旧状态保留历史时点。

@@ -1,5 +1,7 @@
 # N04第四批：Mongo替身的嵌套路径、索引与事务隔离
 
+**状态更新（2026-10-04，第九批修复）：NC-26～29 4/4已修、声明场景验证，未发版。** [运行](../review/REVIEW-2026-10-04-noncore-17.md) · [NC-26](../bugfix/RR-20261004-NC-26.md) · [NC-27](../bugfix/RR-20261004-NC-27.md) · [NC-28](../bugfix/RR-20261004-NC-28.md) · [NC-29](../bugfix/RR-20261004-NC-29.md)。原始失败和下文未修时点保留；本轮[Redis接续](../review/REVIEW-2026-10-04-noncore-18.md)没有新确认RR，不是全域收敛。
+
 2026-10-04，main起点 `ce90e90d43cfaf7b71d3487a84ea2f3d32f97d0b`，同树NC-21～25已修；以下四项 **已确认、未修**。只针对公开 `mongo/mongotest`，不是生产Mongo故障结论。[运行](../review/REVIEW-2026-10-04-noncore-16.md) · [13场景7fail/6控制](../review/evidence/noncore-review-20261004-16/README.md) · [实施交接](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。
 
 ## RR-20261004-NC-26

@@ -70,9 +70,9 @@ func TestStageEffectDuplicateAfterSnapshotMissIsRetryable(t *testing.T) {
 				t.Fatal("transaction marker of the aborted projection transaction is visible")
 			}
 
-			// 并发写者已提交（伪 Mongo 的回滚是全局快照恢复，会一并抹掉注入的文档，这里按已提交重新放回），重试由快照读裁决。
-			if err := client.Collection(testDatabase, OutboxCollection).Seed(concurrentDoc); err != nil {
-				t.Fatal(err)
+			// RR-20261004-NC-29：abort 不得抹掉并发已提交文档，不再用 Seed 重建它。
+			if doc, ok := client.Collection(testDatabase, OutboxCollection).Lookup(record.Effects[0].ID); !ok || doc["transaction_id"] != owner {
+				t.Fatalf("concurrent commit erased by abort: %v", doc)
 			}
 			err = store.Project(context.Background(), record)
 			tc.retry(t, err)
@@ -88,12 +88,13 @@ func TestStageEffectDuplicateAfterSnapshotMissIsRetryable(t *testing.T) {
 	}
 }
 
-// outboxInsertRace 在 outbox 集合的 FindOne 未命中之后、返回之前，按注入的文档直接写入同 _id（绕过事务），
-// 让随后的 InsertOne 撞键；只注入一次。
+// outboxInsertRace 在 outbox 集合的 FindOne 未命中之后、返回之前，写入一次事务外并发提交，
+// 并明确注入随后的 InsertOne 重复键错误；两项都只注入一次。
 type outboxInsertRace struct {
 	*mongotest.Client
-	inject   atomic.Pointer[bson.M]
-	injected atomic.Int32
+	inject    atomic.Pointer[bson.M]
+	injected  atomic.Int32
+	duplicate atomic.Bool
 }
 
 func (m *outboxInsertRace) Database(name string) fmongo.IDatabase {
@@ -128,7 +129,17 @@ func (c racingCollection) FindOne(ctx context.Context, filter any, result any) e
 				return seedErr
 			}
 			c.race.injected.Add(1)
+			c.race.duplicate.Store(true)
 		}
 	}
 	return err
+}
+
+// RR-20261004-NC-29：私有快照不靠看到并发 Seed 制造重复键。
+// 明确注入本测试承诺的写错误，保留真实的事务外提交，让回滚/重试断言独立于替身隔离实现。
+func (c racingCollection) InsertOne(ctx context.Context, doc any) (string, error) {
+	if c.race.duplicate.Swap(false) {
+		return "", fmongo.ErrDuplicateKey
+	}
+	return c.ICollection.InsertOne(ctx, doc)
 }

@@ -1,12 +1,12 @@
 # 测试替身的身份、复制与未知写结果
 
-2026-10-04，首次源码起点`08d18be9`；随后在`ce90e90d`起点[修复NC-21～25](REVIEW-2026-10-04-noncore-15.md)，[接续审查](REVIEW-2026-10-04-noncore-16.md)确认NC-26～29四项未修。下文区分已实施和待实施；[旧反例](evidence/noncore-review-20261004-14/README.md)保留。
+2026-10-04，首次源码起点`08d18be9`；随后在`ce90e90d`起点[修复NC-21～25](REVIEW-2026-10-04-noncore-15.md)，[接续审查](REVIEW-2026-10-04-noncore-16.md)确认NC-26～29，随后在`3d3b22c9`起点[四项已实施](REVIEW-2026-10-04-noncore-17.md)。下文记录当前实现和未证明边界；[旧反例](evidence/noncore-review-20261004-14/README.md)保留。
 
 ## 框架现有链路
 
-公开[mongotest](../../mongo/mongotest/mongotest.go)按真实BSON规范化输入，collections维护docs/order和uniqueIndexes；transaction context记录首个write error，后续操作拒绝NoSuchTransaction，WithTransaction以snapshot/restore负责abort与forced/transient retry。它不是生产Mongo，但Repository、Remote和业务测试可能把它的结果作为正确性证据；本页不复审核心另一线实现。
+公开[mongotest](../../mongo/mongotest/mongotest.go)按真实BSON规范化输入，collections维护docs/order和uniqueIndexes；transaction context记录首个write error，后续操作拒绝NoSuchTransaction，WithTransaction以私有snapshot、revision检查及整体发布负责abort与forced/transient retry，不再restore共享全库。它不是生产Mongo，但Repository、Remote和业务测试可能把它的结果作为正确性证据；本页不复审核心另一线实现。
 
-原cloneDoc浅copy导致嵌套M污染快照、D切片读输出改库存储。NC-22现已递归复制BSON可变容器、保持M/D及二进制/数组/scope形状，不靠重复codec转换或失败时浅copy退路；正常codec归一的BSON标量按值保留，不是任意Go interface深复制。嵌套abort、读输出和身份拒写工作副本通过；[正式红绿](../bugfix/evidence/noncore-bugfix-20261004-08/README.md)。并发snapshot仍是全库级，NC-29已实测会擦除另一成功事务；深复制不提供逻辑隔离。
+原cloneDoc浅copy导致嵌套M污染快照、D切片读输出改库存储。NC-22现已递归复制BSON可变容器、保持M/D及二进制/数组/scope形状，不靠重复codec转换或失败时浅copy退路；正常codec归一的BSON标量按值保留，不是任意Go interface深复制。嵌套abort、读输出和身份拒写工作副本通过；[正式红绿](../bugfix/evidence/noncore-bugfix-20261004-08/README.md)。NC-29现已用私有快照隔离，abort只丢弃本次数据，集合粒度冲突比真实Mongo保守；深复制本身不提供隔离。
 
 ## 查询优化仍要守物理身份
 
@@ -24,16 +24,14 @@ NC-18修后的Patch已经采用单一同槽Lua，没有全量Set的fallback；�
 
 ## 代价与继续审查
 
-复制会增加内存成本；Patch多维护祖先键；ID去重需要有界临时候选集合。没有benchmark，本轮不给加速百分比。先保住接口真实语义，再同机比较；不能为测试速度把隔离、精度或身份校验删掉。N04清单全文40/40、场景仍部分完成，真实资源见[留项](../bug/CARRYOVER.md)。
+复制会增加内存成本；Patch多维护祖先键；ID去重需要有界临时候选集合。没有benchmark，本轮不给加速百分比。先保住接口真实语义，再同机比较；不能为测试速度把隔离、精度或身份校验删掉。原N04清单40/40；新增事务实现后当前41/41累计已读、场景仍部分完成，真实资源见[留项](../bug/CARRYOVER.md)。
 
-## 新问题的实施交接（未实施）
+## NC-26～29实施回顾与边界
 
-[NC-26～29](../bug/REVIEW-2026-10-04-noncore-16.md)已用13场景7fail/6控制确认，仅测试替身，不能当生产Mongo故障。
+[四项修复](REVIEW-2026-10-04-noncore-17.md)原13场景7fail/6控制已转绿，追加后28正式叶子通过。路径lookup直接支持D，set/unset沿路转换保留兄弟；未访问数组形状不改，不承诺完整数组路径。唯一索引复用精确比较检查存量，单项成功才发布，前项成功不因后项失败撤回；缺字段/null/sparse/同名定义完整服务端语义未核定。bulk只前置Type预检，正常ordered重复键仍保留成功前缀。
 
-路径首先协调BSON形状：真实codec把嵌套解为D，访问器却只认M/maps。建议复用现有lookup/set/unset统一支持D，保持兄弟字段；若统一规范化为M，需要审查对公开读输出和codec形状的兼容，而不能靠测前手工转换。查询、排序、unique和更新共享路径访问器，新增测试要跟随这些调用。
+事务复用context、collection身份和深复制：attempt私有docs/order，操作持collection锁时切换视图并在退出恢复；计数和错误注入留原对象。实际写/索引发布递增revision，提交按database/name固定锁序，先验全部写集合再整体发布。冲突标TransientTransactionError、保留ErrTransactionConflict并按既有限额重试；abort/forced retry不恢复共享数据，取消或panic丢弃，finished context拒绝。Seed/Lookup/Documents是事务外已提交视图。
 
-唯一索引要检查建立前已有数据，候选定义校验完成并拒绝冲突后再发布；复用精确数值和现有唯一字段组合。正式driver逐个CreateOne，不默认整批索引全原子。Sparse、缺字段/null、复合及重建策略仍需声明。
+旧消费者“snapshot miss后Seed制造duplicate”改为明确注入其原承诺的ErrDuplicateKey，同时保留真实事务外Seed，新增abort不抹并发提交断言；原身份分类、mutation/marker回滚和幂等重试断言保留。只改必要测试夹具，生产DataEngine不改，674pass/17环境skip单列。
 
-非法bulk模型Type先做全量预检，然后执行既有ordered流程；不要把正常服务端duplicate-key造成的部分成功改成回滚。正式driver在调用底层BulkWrite前完成模型转换，因此这个预检可以按实际调用契约补齐；filter/update支持范围另列。
-
-并发事务是最需要先定模型的一项：A的全库snapshot覆盖B提交，连B新建集合也被清空。当前collection锁只是保护数据访问，不提供事务隔离。优先复用transaction context记写所有权和未提交状态，明确读可见性、冲突与重试；abort只能撤销自身数据。替身若选择限制并发，必须明确拒绝或定义行为，不能全局锁持有期间运行任意callback后宣称等价，否则callback等待另一事务会死锁，事务外写仍会被恢复覆盖。正式Nest/DataEngine核心链本轮只跑回归，不由此改其生产实现。
+全client已存在集合每attempt深复制，冲突粒度为集合而非真实Mongo文档；Drop/namespace并发替换、真正服务端写冲突时点、UnknownTransactionCommitResult、HA不建模。事务内索引明确unsupported，aborted新集合可保留空句柄，callback必须等待自身操作结束。没有benchmark，不把修复转换为新分包/业务协议。后续[Redis学习](IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md)与schema/未知恢复/正式迁移消费继续按现有工具验证。

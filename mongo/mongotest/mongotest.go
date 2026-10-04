@@ -12,7 +12,7 @@
 // The contract that makes it trustworthy: an unsupported construct returns
 // ErrUnsupported instead of silently matching, scalars round-trip through the
 // real bson codec rather than hand-written widening rules, and
-// WithTransaction snapshots every collection so an abort really rolls back.
+// WithTransaction keeps private collection snapshots; abort discards only its own writes.
 package mongotest
 
 import (
@@ -41,8 +41,8 @@ type Client struct {
 
 	// TransientRetries makes WithTransaction re-invoke the callback this many
 	// extra times before the final attempt, reproducing the documented
-	// "automatic retry" of ISession.WithTransaction (the mongo driver retries
-	// on TransientTransactionError / UnknownTransactionCommitResult). Callback
+	// callback retry of ISession.WithTransaction (TransientTransactionError).
+	// This test knob does not model UnknownTransactionCommitResult. Callback
 	// bodies must be idempotent; this switch proves it.
 	TransientRetries int
 
@@ -63,7 +63,7 @@ func (c *Client) Database(name string) fmongo.IDatabase {
 	}
 	db := c.dbs[name]
 	if db == nil {
-		db = &Database{name: name, collections: make(map[string]*Collection)}
+		db = &Database{name: name, client: c, collections: make(map[string]*Collection)}
 		c.dbs[name] = db
 	}
 	return db
@@ -171,8 +171,11 @@ type transactionKey struct{}
 // carried in the callback's context, so only operations issued with that
 // context (or a context derived from it) belong to the transaction.
 type transaction struct {
-	mu    sync.Mutex
-	cause error
+	mu       sync.Mutex
+	cause    error
+	client   *Client
+	views    map[*Collection]*collectionSnapshot
+	finished bool
 }
 
 func transactionFrom(ctx context.Context) *transaction {
@@ -190,6 +193,9 @@ func (tx *transaction) refuse() error {
 	}
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
+	if tx.finished {
+		return ErrNoSuchTransaction
+	}
 	if tx.cause == nil {
 		return nil
 	}
@@ -235,19 +241,46 @@ func (s *session) WithTransaction(ctx context.Context, fn func(context.Context) 
 	s.client.mu.Unlock()
 	forced, transient := 0, 0
 	for {
-		snapshot := s.client.snapshot()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		tx := &transaction{client: s.client, views: make(map[*Collection]*collectionSnapshot)}
+		for _, snap := range s.client.snapshot() {
+			tx.views[snap.coll] = snap
+		}
 		s.client.mu.Lock()
 		s.client.attempts++
 		s.client.mu.Unlock()
-		tx := &transaction{}
-		err := fn(context.WithValue(ctx, transactionKey{}, tx))
+		err := func() (err error) {
+			completed := false
+			defer func() {
+				if !completed {
+					tx.finish()
+				}
+			}()
+			err = fn(context.WithValue(ctx, transactionKey{}, tx))
+			completed = true
+			return err
+		}()
 		if err == nil {
 			// Committing an aborted transaction is refused by the server.
 			err = tx.refuse()
 		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err == nil && forced < retries {
+			// 测试强制重跑尚未发布的 attempt，不恢复共享库，也不模拟未知提交。
+			forced++
+			tx.finish()
+			continue
+		}
+		if err == nil {
+			err = tx.commit()
+		}
+		tx.finish()
 		if err != nil {
-			// Abort: the callback's writes never became visible.
-			s.client.restore(snapshot)
+			// RR-20261004-NC-29：abort 只丢弃私有状态，不撤回他人已提交写。
 			if !hasErrorLabel(err, TransientTransactionError) {
 				return err
 			}
@@ -260,13 +293,6 @@ func (s *session) WithTransaction(ctx context.Context, fn func(context.Context) 
 			}
 			continue
 		}
-		if forced < retries {
-			// The commit outcome was unknown, so the driver re-runs the whole
-			// callback against the original state.
-			forced++
-			s.client.restore(snapshot)
-			continue
-		}
 		return nil
 	}
 }
@@ -275,45 +301,33 @@ func (s *session) EndSession(context.Context) {}
 
 // collectionSnapshot is one collection's documents at a point in time.
 type collectionSnapshot struct {
-	coll  *Collection
-	docs  map[string]bson.M
-	order []string
+	coll         *Collection
+	docs         map[string]bson.M
+	order        []string
+	baseRevision uint64
+	revision     uint64
 }
 
-// snapshot captures every collection so an aborted transaction can be undone.
-func (c *Client) snapshot() []collectionSnapshot {
-	var out []collectionSnapshot
-	for _, coll := range c.collections() {
+// snapshot captures committed data under the same lock order used by commit.
+func (c *Client) snapshot() []*collectionSnapshot {
+	collections := c.collections()
+	for _, coll := range collections {
 		coll.mu.Lock()
+	}
+	defer func() {
+		for i := len(collections) - 1; i >= 0; i-- {
+			collections[i].mu.Unlock()
+		}
+	}()
+	out := make([]*collectionSnapshot, 0, len(collections))
+	for _, coll := range collections {
 		docs := make(map[string]bson.M, len(coll.docs))
 		for key, doc := range coll.docs {
 			docs[key] = cloneDoc(doc)
 		}
-		out = append(out, collectionSnapshot{coll: coll, docs: docs, order: append([]string(nil), coll.order...)})
-		coll.mu.Unlock()
+		out = append(out, &collectionSnapshot{coll: coll, docs: docs, order: append([]string(nil), coll.order...), baseRevision: coll.revision, revision: coll.revision})
 	}
 	return out
-}
-
-func (c *Client) restore(snapshots []collectionSnapshot) {
-	restored := make(map[*Collection]bool, len(snapshots))
-	for _, snap := range snapshots {
-		snap.coll.mu.Lock()
-		snap.coll.docs = snap.docs
-		snap.coll.order = snap.order
-		snap.coll.mu.Unlock()
-		restored[snap.coll] = true
-	}
-	// A collection created inside the aborted transaction never existed.
-	for _, coll := range c.collections() {
-		if restored[coll] {
-			continue
-		}
-		coll.mu.Lock()
-		coll.docs = make(map[string]bson.M)
-		coll.order = nil
-		coll.mu.Unlock()
-	}
 }
 
 func (c *Client) collections() []*Collection {
@@ -331,7 +345,7 @@ func (c *Client) collections() []*Collection {
 		}
 		db.mu.Unlock()
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	sort.Slice(out, func(i, j int) bool { return collectionLess(out[i], out[j]) })
 	return out
 }
 
@@ -339,6 +353,7 @@ func (c *Client) collections() []*Collection {
 type Database struct {
 	mu          sync.Mutex
 	name        string
+	client      *Client
 	collections map[string]*Collection
 }
 
@@ -352,7 +367,7 @@ func (d *Database) Collection(name string) fmongo.ICollection {
 	}
 	coll := d.collections[name]
 	if coll == nil {
-		coll = &Collection{name: name, docs: make(map[string]bson.M), Errors: make(map[string]error), Calls: make(map[string]int)}
+		coll = &Collection{name: name, database: d.name, client: d.client, docs: make(map[string]bson.M), Errors: make(map[string]error), Calls: make(map[string]int)}
 		d.collections[name] = coll
 	}
 	return coll
@@ -367,10 +382,13 @@ func (d *Database) Drop(context.Context) error {
 
 // Collection is an in-memory collection with real query semantics.
 type Collection struct {
-	mu    sync.Mutex
-	name  string
-	docs  map[string]bson.M
-	order []string
+	mu       sync.Mutex
+	name     string
+	database string
+	client   *Client
+	revision uint64
+	docs     map[string]bson.M
+	order    []string
 
 	uniqueIndexes map[string][]string
 	Indexes       []fmongo.IndexModel
@@ -396,6 +414,9 @@ func (c *Collection) enter(tx *transaction, method string) error {
 	if err := c.fail(method); err != nil {
 		return err
 	}
+	if tx != nil && tx.client != c.client {
+		return fmt.Errorf("%w: transaction belongs to another client", ErrUnsupported)
+	}
 	return tx.refuse()
 }
 
@@ -416,6 +437,7 @@ func (c *Collection) Seed(doc any) error {
 		c.order = append(c.order, key)
 	}
 	c.docs[key] = normalized
+	c.revision++
 	return nil
 }
 
@@ -457,8 +479,8 @@ func (c *Collection) Lookup(id any) (bson.M, bool) {
 func (c *Collection) InsertOne(ctx context.Context, doc any) (id string, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	if err := c.enter(tx, "InsertOne"); err != nil {
 		return "", err
 	}
@@ -481,6 +503,7 @@ func (c *Collection) insertLocked(doc any) (string, error) {
 		return "", err
 	}
 	c.docs[key] = normalized
+	c.revision++
 	c.order = append(c.order, key)
 	return key, nil
 }
@@ -488,8 +511,8 @@ func (c *Collection) insertLocked(doc any) (string, error) {
 func (c *Collection) InsertMany(ctx context.Context, docs []any) (inserted []string, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	if err := c.enter(tx, "InsertMany"); err != nil {
 		return nil, err
 	}
@@ -505,10 +528,11 @@ func (c *Collection) InsertMany(ctx context.Context, docs []any) (inserted []str
 }
 
 func (c *Collection) FindOne(ctx context.Context, filter any, result any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	tx := transactionFrom(ctx)
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
-	if err := c.enter(transactionFrom(ctx), "FindOne"); err != nil {
+	if err := c.enter(tx, "FindOne"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -522,10 +546,11 @@ func (c *Collection) FindOne(ctx context.Context, filter any, result any) error 
 }
 
 func (c *Collection) Find(ctx context.Context, filter any, results any, opts ...fmongo.FindOption) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	tx := transactionFrom(ctx)
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
-	if err := c.enter(transactionFrom(ctx), "Find"); err != nil {
+	if err := c.enter(tx, "Find"); err != nil {
 		return err
 	}
 	matched, err := c.matchLocked(filter)
@@ -548,20 +573,21 @@ func (c *Collection) Find(ctx context.Context, filter any, results any, opts ...
 // StreamFind implements fmongo.IStreamingCollection so loaders exercise their
 // production cursor path rather than silently falling back to Find.
 func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]byte) error, opts ...fmongo.FindOption) error {
-	c.mu.Lock()
+	tx := transactionFrom(ctx)
+	unlock := c.lockFor(tx)
 	c.LastFilter = filter
-	if err := c.enter(transactionFrom(ctx), "StreamFind"); err != nil {
-		c.mu.Unlock()
+	if err := c.enter(tx, "StreamFind"); err != nil {
+		unlock()
 		return err
 	}
 	matched, err := c.matchLocked(filter)
 	if err != nil {
-		c.mu.Unlock()
+		unlock()
 		return err
 	}
 	if len(opts) > 0 {
 		if matched, err = c.sortLocked(matched, opts[0].Sort); err != nil {
-			c.mu.Unlock()
+			unlock()
 			return err
 		}
 		matched = paginateMatches(matched, opts[0])
@@ -570,12 +596,12 @@ func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]
 	for _, key := range matched {
 		raw, err := bson.Marshal(c.docs[key])
 		if err != nil {
-			c.mu.Unlock()
+			unlock()
 			return err
 		}
 		raws = append(raws, raw)
 	}
-	c.mu.Unlock()
+	unlock()
 	for _, raw := range raws {
 		if err := consume(raw); err != nil {
 			return err
@@ -601,8 +627,8 @@ func paginateMatches(matched []string, option fmongo.FindOption) []string {
 func (c *Collection) UpdateOne(ctx context.Context, filter any, update any) (result *fmongo.UpdateResult, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter, c.LastUpdate = filter, update
 	if err := c.enter(tx, "UpdateOne"); err != nil {
 		return nil, err
@@ -613,8 +639,8 @@ func (c *Collection) UpdateOne(ctx context.Context, filter any, update any) (res
 func (c *Collection) UpdateMany(ctx context.Context, filter any, update any) (result *fmongo.UpdateResult, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter, c.LastUpdate = filter, update
 	if err := c.enter(tx, "UpdateMany"); err != nil {
 		return nil, err
@@ -625,8 +651,8 @@ func (c *Collection) UpdateMany(ctx context.Context, filter any, update any) (re
 func (c *Collection) ReplaceOne(ctx context.Context, filter any, replacement any) (result *fmongo.UpdateResult, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter, c.LastUpdate = filter, replacement
 	if err := c.enter(tx, "ReplaceOne"); err != nil {
 		return nil, err
@@ -637,8 +663,8 @@ func (c *Collection) ReplaceOne(ctx context.Context, filter any, replacement any
 func (c *Collection) DeleteOne(ctx context.Context, filter any) (deleted int64, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
 	if err := c.enter(tx, "DeleteOne"); err != nil {
 		return 0, err
@@ -657,8 +683,8 @@ func (c *Collection) DeleteOne(ctx context.Context, filter any) (deleted int64, 
 func (c *Collection) DeleteMany(ctx context.Context, filter any) (deleted int64, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
 	if err := c.enter(tx, "DeleteMany"); err != nil {
 		return 0, err
@@ -676,8 +702,8 @@ func (c *Collection) DeleteMany(ctx context.Context, filter any) (deleted int64,
 func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) (err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter, c.LastUpdate = filter, update
 	if err := c.enter(tx, "FindOneAndUpdate"); err != nil {
 		return err
@@ -726,8 +752,8 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 func (c *Collection) FindOneAndDelete(ctx context.Context, filter any, result any) (err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
 	if err := c.enter(tx, "FindOneAndDelete"); err != nil {
 		return err
@@ -750,8 +776,8 @@ func (c *Collection) FindOneAndDelete(ctx context.Context, filter any, result an
 func (c *Collection) FindOneAndReplace(ctx context.Context, filter any, replacement any, result any) (err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter, c.LastUpdate = filter, replacement
 	if err := c.enter(tx, "FindOneAndReplace"); err != nil {
 		return err
@@ -774,10 +800,11 @@ func (c *Collection) FindOneAndReplace(ctx context.Context, filter any, replacem
 }
 
 func (c *Collection) CountDocuments(ctx context.Context, filter any) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	tx := transactionFrom(ctx)
+	unlock := c.lockFor(tx)
+	defer unlock()
 	c.LastFilter = filter
-	if err := c.enter(transactionFrom(ctx), "CountDocuments"); err != nil {
+	if err := c.enter(tx, "CountDocuments"); err != nil {
 		return 0, err
 	}
 	matched, err := c.matchLocked(filter)
@@ -790,9 +817,10 @@ func (c *Collection) CountDocuments(ctx context.Context, filter any) (int64, err
 // Aggregate is intentionally unsupported: no kit production path uses it, and
 // returning an empty result would be indistinguishable from a passing query.
 func (c *Collection) Aggregate(ctx context.Context, _ any, _ any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.enter(transactionFrom(ctx), "Aggregate"); err != nil {
+	tx := transactionFrom(ctx)
+	unlock := c.lockFor(tx)
+	defer unlock()
+	if err := c.enter(tx, "Aggregate"); err != nil {
 		return err
 	}
 	return fmt.Errorf("%w: Aggregate", ErrUnsupported)
@@ -801,10 +829,18 @@ func (c *Collection) Aggregate(ctx context.Context, _ any, _ any) error {
 func (c *Collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) (bulk *fmongo.BulkWriteResult, err error) {
 	tx := transactionFrom(ctx)
 	defer func() { err = tx.writeFailed(err) }()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock := c.lockFor(tx)
+	defer unlock()
 	if err := c.enter(tx, "BulkWrite"); err != nil {
 		return nil, err
+	}
+	// RR-20261004-NC-28：正式 driver 在提交任何模型前先验证全部 Type。
+	for i, model := range models {
+		switch model.Type {
+		case fmongo.WriteModelInsertOne, fmongo.WriteModelUpdateOne, fmongo.WriteModelReplaceOne, fmongo.WriteModelDeleteOne:
+		default:
+			return nil, fmt.Errorf("%w: bulk model type %d at index %d", ErrUnsupported, model.Type, i)
+		}
 	}
 	result := &fmongo.BulkWriteResult{}
 	for i := range models {
@@ -850,29 +886,40 @@ func (c *Collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) 
 	return result, nil
 }
 
-func (c *Collection) EnsureIndexes(_ context.Context, indexes []fmongo.IndexModel) error {
+func (c *Collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexModel) (err error) {
+	tx := transactionFrom(ctx)
+	defer func() { err = tx.writeFailed(err) }()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.fail("EnsureIndexes"); err != nil {
+	if err := c.enter(tx, "EnsureIndexes"); err != nil {
 		return err
 	}
-	c.Indexes = append(c.Indexes, indexes...)
+	if tx != nil {
+		return fmt.Errorf("%w: transactional EnsureIndexes", ErrUnsupported)
+	}
 	for _, index := range indexes {
-		if !index.Unique {
-			continue
-		}
 		fields, err := indexFields(index.Keys)
 		if err != nil {
 			return err
 		}
-		if c.uniqueIndexes == nil {
-			c.uniqueIndexes = make(map[string][]string)
+		// RR-20261004-NC-27：先验证存量文档，再发布本个索引；前面成功的索引保留。
+		if index.Unique {
+			for key, doc := range c.docs {
+				if err := c.checkUniqueFieldsLocked(doc, key, fields); err != nil {
+					return err
+				}
+			}
+			if c.uniqueIndexes == nil {
+				c.uniqueIndexes = make(map[string][]string)
+			}
+			name := index.Name
+			if name == "" {
+				name = strings.Join(fields, "_")
+			}
+			c.uniqueIndexes[name] = fields
 		}
-		name := index.Name
-		if name == "" {
-			name = strings.Join(fields, "_")
-		}
-		c.uniqueIndexes[name] = fields
+		c.Indexes = append(c.Indexes, index)
+		c.revision++
 	}
 	return nil
 }
@@ -903,37 +950,48 @@ func (c *Collection) HasIndex(fields ...string) bool {
 
 func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
 	for _, fields := range c.uniqueIndexes {
-		values := make([]any, 0, len(fields))
-		for _, field := range fields {
-			value, ok := lookupPath(doc, field)
-			if !ok {
-				values = nil
-				break
-			}
-			values = append(values, value)
+		if err := c.checkUniqueFieldsLocked(doc, selfKey, fields); err != nil {
+			return err
 		}
-		if values == nil {
+	}
+	return nil
+}
+
+func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, fields []string) error {
+	values := make([]any, 0, len(fields))
+	for _, field := range fields {
+		value, ok := lookupPath(doc, field)
+		if !ok {
+			values = nil
+			break
+		}
+		values = append(values, value)
+	}
+	if values == nil {
+		return nil
+	}
+	for key, existing := range c.docs {
+		if key == selfKey {
 			continue
 		}
-		for key, existing := range c.docs {
-			if key == selfKey {
-				continue
+		same := true
+		for i, field := range fields {
+			other, ok := lookupPath(existing, field)
+			if !ok {
+				same = false
+				break
 			}
-			same := true
-			for i, field := range fields {
-				other, ok := lookupPath(existing, field)
-				if !ok {
-					same = false
-					break
-				}
-				if eq, err := valuesEqual(other, values[i]); err != nil || !eq {
-					same = false
-					break
-				}
+			eq, err := valuesEqual(other, values[i])
+			if err != nil {
+				return err
 			}
-			if same {
-				return duplicateKeyError()
+			if !eq {
+				same = false
+				break
 			}
+		}
+		if same {
+			return duplicateKeyError()
 		}
 	}
 	return nil
@@ -941,6 +999,7 @@ func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
 
 func (c *Collection) removeLocked(key string) {
 	delete(c.docs, key)
+	c.revision++
 	for i, existing := range c.order {
 		if existing == key {
 			c.order = append(c.order[:i], c.order[i+1:]...)
@@ -1090,6 +1149,7 @@ func (c *Collection) updateLocked(filter any, update any, upsert bool, many bool
 			return nil, err
 		}
 		c.docs[key] = updated
+		c.revision++
 		c.order = append(c.order, key)
 		return &fmongo.UpdateResult{UpsertedCount: 1, UpsertedID: key}, nil
 	}
@@ -1113,6 +1173,7 @@ func (c *Collection) updateLocked(filter any, update any, upsert bool, many bool
 			return nil, err
 		}
 		c.docs[key] = updated
+		c.revision++
 		result.MatchedCount++
 		result.ModifiedCount++
 	}
@@ -1152,6 +1213,7 @@ func (c *Collection) replaceLocked(filter any, replacement any, upsert bool) (*f
 			return nil, err
 		}
 		c.docs[key] = normalized
+		c.revision++
 		c.order = append(c.order, key)
 		return &fmongo.UpdateResult{UpsertedCount: 1, UpsertedID: key}, nil
 	}
@@ -1170,6 +1232,7 @@ func (c *Collection) replaceLocked(filter any, replacement any, upsert bool) (*f
 		return nil, err
 	}
 	c.docs[key] = normalized
+	c.revision++
 	return &fmongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil
 }
 
@@ -1555,15 +1618,23 @@ func lookupPath(doc bson.M, path string) (any, bool) {
 	parts := strings.Split(path, ".")
 	var current any = doc
 	for _, part := range parts {
-		container, ok := current.(bson.M)
-		if !ok {
-			if plain, isMap := current.(map[string]any); isMap {
-				container = bson.M(plain)
-			} else {
-				return nil, false
+		var value any
+		var exists bool
+		switch container := current.(type) {
+		case bson.M:
+			value, exists = container[part]
+		case map[string]any:
+			value, exists = container[part]
+		case bson.D:
+			for _, entry := range container {
+				if entry.Key == part {
+					value, exists = entry.Value, true
+					break
+				}
 			}
+		default:
+			return nil, false
 		}
-		value, exists := container[part]
 		if !exists {
 			return nil, false
 		}
@@ -1576,11 +1647,11 @@ func setPath(doc bson.M, path string, value any) {
 	parts := strings.Split(path, ".")
 	current := doc
 	for _, part := range parts[:len(parts)-1] {
-		next, ok := current[part].(bson.M)
+		next, ok := pathMap(current[part])
 		if !ok {
 			next = bson.M{}
-			current[part] = next
 		}
+		current[part] = next
 		current = next
 	}
 	current[parts[len(parts)-1]] = value
@@ -1590,13 +1661,33 @@ func unsetPath(doc bson.M, path string) {
 	parts := strings.Split(path, ".")
 	current := doc
 	for _, part := range parts[:len(parts)-1] {
-		next, ok := current[part].(bson.M)
+		next, ok := pathMap(current[part])
 		if !ok {
 			return
 		}
+		current[part] = next
 		current = next
 	}
 	delete(current, parts[len(parts)-1])
+}
+
+// RR-20261004-NC-26：BSON 解码产生 D；修改所经容器时保留同级字段。
+// 数组下标及位置运算符不在替身的已支持路径语法中。
+func pathMap(value any) (bson.M, bool) {
+	switch value := value.(type) {
+	case bson.M:
+		return value, true
+	case map[string]any:
+		return bson.M(value), true
+	case bson.D:
+		out := make(bson.M, len(value))
+		for _, entry := range value {
+			out[entry.Key] = entry.Value
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 func applyUpdate(doc bson.M, update any) (bson.M, error) {

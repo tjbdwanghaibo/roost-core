@@ -1,5 +1,22 @@
 # Roost Review 跨轮进度
 
+**最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
+
+提交前同步补充：整合远端4提交（`cfe878fe`），新wanted已登记[RR-20261004-01](../bug/RR-20261004-01.md) P2未修；[追加结论](REVIEW-2026-10-04-noncore-18.md#提交前新增wanted)。原修复/普通Redis14场景证据保留3d3b22c9基线，未受远端代码影响，不声称远端负载harness/长稳已本机验证。
+
+## 2026-10-04 第九批修复 + 非三大核心第十批 N04
+
+main 基线 `3d3b22c9`，fetch/pull 无 main 增量。[NC-26～29 修复](REVIEW-2026-10-04-noncore-17.md) · [Redis 锁/续租/订阅审查](REVIEW-2026-10-04-noncore-18.md) · [学习](IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md)。下方旧未修保留历史，未发版。
+
+| 范围 | 本批新增证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-26～29 | 修改前及旧产品 overlay 13 叶子均 7 fail/6 控制；28 正式叶子转绿，十包 race/vet 320 pass、0 fail/skip | 四个替身 P3 已修；D 路径、unique 建立、bulk Type、私有事务隔离/冲突 |
+| 受影响消费者 | 首次旧夹具 2 fail；明确错误注入并加并发提交保留断言后，14 测试包674 pass/17 环境 skip，race/vet 通过；两个生成 DAO 消费者通过 | 仅必要测试夹具调整，核心产品未改；17 skip 不计通过 |
+| Redis 新审查 | 14 新场景全通过：实际 Lua 后丢回复注入、stale token、续租跨 TTL/丢锁、满队列/并发 Close/channel 映射 | 本批无新 RR；真实弱网、重连、租期时钟、HA/Cluster/长稳未验 |
+| N04 源文清单 | 原40/40历史快照；新增事务实现文件后当前41/41累计已读，39同hash复用+旧文件diff/新文件全读 | [inventory/hash/coverage](evidence/noncore-review-20261004-18/README.md)；不是本轮新读41文件或业务100% |
+
+下一优先 **RefHMap schema/Patch 与全量 Set 并发及未知结果恢复 → 正式迁移消费者**。真实 Mongo/Redis Cluster/HA/长期容量另留项，N01～N04 仍不计 completed/15。约50～90有效小时跨域风险预算未重新按余项估算，本轮不按文件/测试比例扣减。[计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [CARRYOVER](../bug/CARRYOVER.md)。提交前fetch到cfe878fe后新增wanted已分流RR-20261004-01 P2未修：真实Lua4叶子2fail/2控制。新增Remote范围不算N04分母，远端harness/长稳改动未在本机验收。
+
 ## 2026-10-04 第八批修复 + 非三大核心第九批 N04
 
 main起点`ce90e90d`，fetch/pull无增量。[NC-21～25修复](REVIEW-2026-10-04-noncore-15.md) · [N04第四批](REVIEW-2026-10-04-noncore-16.md) · [NC-26～29未修](../bug/REVIEW-2026-10-04-noncore-16.md) · [机制/实施交接](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。下方旧未修为历史时点，未发版。

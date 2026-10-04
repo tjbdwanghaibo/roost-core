@@ -788,3 +788,6 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法**：Eval 返回非 Redis 明确答复的错误时，把本次 token 记为 `acquireUnknownToken`，下一次 TryLock 交给 Lua 的 `ARGV[3]` 让 Redis 判定（与 RR-21 共用一条路径）。
 - **来源**：harness 区间核验改造（`42ba5725` 之后）负对照。
 
+- **独立review（2026-10-04）**：真实Lua4场景2fail/2控制确认同一RR，见 [本轮反例](../review/evidence/noncore-review-20261004-18/README.md#新增wanted)。提交前另线已提交3bb901fb/5d386146修复，本轮将补独立验收；不覆盖原根因和实现记录。
+
+- **最终验收（2026-10-04）**：RR-20261004-01已修，本轮同一4真实Redis场景、13正式回归race/vet、3真实Redis集成全部通过，旧分流/红证据保留；见 [独立验收](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。上方“将补验收”为同步过程时点，不是待修状态。

@@ -1,10 +1,16 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 Mongo替身事务与Redis锁接入（main，未发版）
+
+NC-26～29现已修：BSON.D dotted路径可读写且保留兄弟字段，unique建立拒绝已有重复，非法bulk Type在写前拒绝。事务ctx使用私有快照，事务外Lookup/Documents/Seed只见已提交数据；集合粒度冲突可重跑callback，callback须幂等并等待自身操作结束。finished ctx不能留给后台继续写，事务内EnsureIndexes明确ErrUnsupported。完整Mongo索引/数组路径、Drop/namespace并发、未知commit/HA不由替身证明。[限制与消费者](bugfix/RR-20261004-NC-29.md)。
+
+Redis普通锁无fencing；uncertain要按token校验清理再复用。AutoExtend生命周期不绑定Acquire请求ctx，长任务保留wrapper并检查Err、最终Release；Err不是下游写权限证明。Subscribe返回不代表就绪或可靠投递，保存并独立Close每个subscription。[14新场景与学习](review/IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md)；真实弱网/重连/Cluster/长期容量仍未验。
+
 ## 2026-10-04 未知Lua写与Mongo替身（main，尚未发版）
 
 RefHMap全量Set和Patch遇Eval错误均不自动重放，原始原因保留errors.Is；错误不证明数据未应用。不要无条件DEL补偿或忽略超时，应按业务的权威读回/现有版本能力确认再决定恢复。普通Stale检查仍是建议性，不新增CAS/原子Get。Lua不支持的adapter需实现已有Eval接口；旧write_degraded_total和降级告警已移除，查看Set错误与T-206。[NC-21/正式生成消费](bugfix/RR-20261004-NC-21.md)。
 
-公开mongotest现在隔离嵌套BSON读结果/快照/写工作副本，_id $in每物理文档一次，整数与有限float精确比较，ReturnAfter返回同一更新/插入身份；非有限float明确unsupported。并非服务端Mongo认证：当前[D路径、唯一索引建立、非法bulk Type、并发全库rollback](bug/REVIEW-2026-10-04-noncore-16.md)仍有四个未修P3，使用这些场景验证业务时不能把替身成功作为上线证明。[修复矩阵](review/REVIEW-2026-10-04-noncore-15.md)。
+公开mongotest现在隔离嵌套BSON读结果/快照/写工作副本，_id $in每物理文档一次，整数与有限float精确比较，ReturnAfter返回同一更新/插入身份；非有限float明确unsupported。并非服务端Mongo认证：此前[D路径、唯一索引建立、非法bulk Type、并发全库rollback](bug/REVIEW-2026-10-04-noncore-16.md)四个P3已在第九批修复，使用这些场景验证业务时不能把替身成功作为上线证明。[修复矩阵](review/REVIEW-2026-10-04-noncore-15.md)。
 
 ## 2026-10-04 RefHMap类型、Patch与名称（main，尚未发版）
 

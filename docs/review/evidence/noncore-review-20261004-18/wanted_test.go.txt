@@ -1,0 +1,81 @@
+package remoteentity
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	driver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+	"os"
+	"testing"
+	"time"
+)
+
+type wantedAcquireReplyLoss struct {
+	fredis.IRedis
+	drop   bool
+	before bool
+}
+
+func (r *wantedAcquireReplyLoss) Eval(ctx context.Context, s string, k []string, a ...any) (any, error) {
+	if s == versionedTryLockLua && r.drop && r.before {
+		r.drop = false
+		return nil, context.DeadlineExceeded
+	}
+	result, err := r.IRedis.Eval(ctx, s, k, a...)
+	if s == versionedTryLockLua && r.drop && err == nil {
+		r.drop = false
+		return nil, context.DeadlineExceeded
+	}
+	return result, err
+}
+func TestWantedAcquireUnknown(t *testing.T) {
+	for _, mode := range []string{"healthy_control", "not_applied_control", "applied_reply_lost", "reclaim_reply_lost"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+			if addr == "" {
+				t.Fatal("wanted review requires owned Redis")
+			}
+			client, err := driver.NewClient(&fredis.Config{Addr: addr, MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			wire := &wantedAcquireReplyLoss{IRedis: client}
+			lock := newVersionedLock(wire, 1, fredis.VersionedLockOptions{Key: "wanted:" + rand.Text(), TTL: 24 * time.Hour})
+			defer client.Del(ctx, lock.key, lock.key+":fence")
+			if mode == "reclaim_reply_lost" {
+				if err := lock.TryLock(ctx); err != nil {
+					t.Fatal(err)
+				}
+				lock.releaseOutcomeUnknown(lock.token)
+			}
+			wire.drop = mode != "healthy_control"
+			wire.before = mode == "not_applied_control"
+			err = lock.TryLock(ctx)
+			if mode == "healthy_control" {
+				if err != nil || !lock.IsAcquired() {
+					t.Fatalf("healthy=%v", err)
+				}
+				return
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || lock.IsAcquired() {
+				t.Fatalf("initial err=%v held=%v", err, lock.IsAcquired())
+			}
+			if mode != "not_applied_control" {
+				owner, err := client.HGet(ctx, lock.key, "owner")
+				if err != nil || len(owner) == 0 {
+					t.Fatalf("premise: real script did not acquire owner=%q err=%v", owner, err)
+				}
+				ttl, err := client.TTL(ctx, lock.key)
+				if err != nil || ttl < 23*time.Hour {
+					t.Fatalf("premise ttl=%v err=%v", ttl, err)
+				}
+			}
+			if err := lock.TryLock(ctx); err != nil {
+				t.Fatalf("healthy Redis cannot reconcile our applied acquisition before TTL: %v", err)
+			}
+		})
+	}
+}

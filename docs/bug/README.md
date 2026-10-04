@@ -1,5 +1,11 @@
 # Roost Review 问题索引
 
+**最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
+
+**提交前新增wanted结论：W-2026-10-04-01 → [RR-20261004-01](RR-20261004-01.md)，P2已确认未修。** versioned TryLock实际取得后丢回复遗失token，自占长TTL租约无法取回；真实Lua4场景2fail/2控制，[证据](../review/evidence/noncore-review-20261004-18/README.md#新增wanted)。与已修NC-26～29分开，留下一轮修复。
+
+**10-04 第九批修复：NC-26～29 四项已修、声明场景验证，未发版。** [NC-26](../bugfix/RR-20261004-NC-26.md) · [NC-27](../bugfix/RR-20261004-NC-27.md) · [NC-28](../bugfix/RR-20261004-NC-28.md) · [NC-29](../bugfix/RR-20261004-NC-29.md) · [28正式回归/红绿](../bugfix/evidence/noncore-bugfix-20261004-09/README.md)。[N04第五批](../review/REVIEW-2026-10-04-noncore-18.md)Redis14新场景通过，无新RR，场景仍部分完成。下方“第四批未修”是历史时点。
+
 **10-04 N04第四批：NC-26～29四个P3已确认、未修，仅Mongo测试替身。** [运行](../review/REVIEW-2026-10-04-noncore-16.md) · [13叶子7fail/6控制](../review/evidence/noncore-review-20261004-16/README.md) · [机制/实施方案](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。
 
 | 编号 | 问题 | 状态 |

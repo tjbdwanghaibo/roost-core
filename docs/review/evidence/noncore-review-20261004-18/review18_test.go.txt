@@ -1,0 +1,339 @@
+package driver
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	goredis "github.com/redis/go-redis/v9"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+var review18WireError = errors.New("review: reply lost after real Redis execution")
+
+type review18ReplyLoss struct {
+	goredis.UniversalClient
+	op string
+}
+
+func (r *review18ReplyLoss) SetNX(ctx context.Context, k string, v any, ttl time.Duration) *goredis.BoolCmd {
+	cmd := r.UniversalClient.SetNX(ctx, k, v, ttl)
+	if cmd.Err() == nil && r.op == "acquire" {
+		r.op = ""
+		cmd.SetErr(review18WireError)
+	}
+	return cmd
+}
+func (r *review18ReplyLoss) Eval(ctx context.Context, s string, k []string, a ...any) *goredis.Cmd {
+	cmd := r.UniversalClient.Eval(ctx, s, k, a...)
+	if cmd.Err() == nil && r.op != "" {
+		r.op = ""
+		cmd.SetErr(review18WireError)
+	}
+	return cmd
+}
+
+type review18Renewal struct {
+	fredis.IDistLock
+	events   chan error
+	mu       sync.Mutex
+	failures int
+	forever  bool
+}
+
+func (r *review18Renewal) Extend(ctx context.Context, ttl time.Duration) (bool, error) {
+	r.mu.Lock()
+	fail := r.forever || r.failures > 0
+	if r.failures > 0 {
+		r.failures--
+	}
+	r.mu.Unlock()
+	ok := false
+	err := review18WireError
+	if !fail {
+		ok, err = r.IDistLock.Extend(ctx, ttl)
+	}
+	select {
+	case r.events <- err:
+	default:
+	}
+	return ok, err
+}
+func review18Redis(t *testing.T) *Client {
+	t.Helper()
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Fatal("review requires owned real Redis")
+	}
+	c := NewRedisClient(&fredis.Config{Addr: addr, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxRetries: -1})
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+func review18Until(t *testing.T, fn func() bool) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
+	for {
+		if fn() {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("bounded observation timed out")
+		case <-poll.C:
+		}
+	}
+}
+func TestReview18RedisLeaseAndPubSub(t *testing.T) {
+	ctx := context.Background()
+	for _, op := range []string{"acquire", "release", "extend"} {
+		t.Run("reply_loss_"+op, func(t *testing.T) {
+			c := review18Redis(t)
+			key := "review18:" + rand.Text()
+			t.Cleanup(func() { _ = c.rdb.Del(ctx, key).Err() })
+			wire := &review18ReplyLoss{UniversalClient: c.rdb}
+			lock := NewDistLockFactory(wire).NewLock(key, time.Second)
+			if op == "acquire" {
+				wire.op = op
+				ok, err := lock.Acquire(ctx)
+				if ok || !errors.Is(err, review18WireError) {
+					t.Fatalf("ok=%v err=%v", ok, err)
+				}
+			} else {
+				if ok, err := lock.Acquire(ctx); !ok || err != nil {
+					t.Fatal(err)
+				}
+				wire.op = op
+				if op == "release" {
+					if err := lock.Release(ctx); !errors.Is(err, review18WireError) {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := lock.Extend(ctx, time.Second); !errors.Is(err, review18WireError) {
+						t.Fatal(err)
+					}
+				}
+			}
+			if ok, err := lock.Acquire(ctx); ok || !errors.Is(err, ErrDistLockStateUncertain) {
+				t.Fatalf("uncertain reused: %v %v", ok, err)
+			}
+			err := lock.Release(ctx)
+			if op == "release" {
+				if !errors.Is(err, fredis.ErrLockNotHeld) {
+					t.Fatal(err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := lock.Acquire(ctx); !ok || err != nil {
+				t.Fatalf("not reusable: %v %v", ok, err)
+			}
+			if err := lock.Release(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, op := range []string{"release", "extend"} {
+		t.Run("stale_token_"+op, func(t *testing.T) {
+			c := review18Redis(t)
+			key := "review18:" + rand.Text()
+			t.Cleanup(func() { _ = c.rdb.Del(ctx, key).Err() })
+			f := NewDistLockFactory(c.rdb)
+			old := f.NewLock(key, time.Second)
+			next := f.NewLock(key, time.Second)
+			if ok, err := old.Acquire(ctx); !ok || err != nil {
+				t.Fatal(err)
+			}
+			// Redis itself expires the old owner; this is not replacing script logic with a fake.
+			if err := c.rdb.PExpireAt(ctx, key, time.Unix(0, 0)).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := next.Acquire(ctx); !ok || err != nil {
+				t.Fatal(err)
+			}
+			owner, err := c.rdb.Get(ctx, key).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if op == "release" {
+				if err := old.Release(ctx); !errors.Is(err, fredis.ErrLockNotHeld) {
+					t.Fatal(err)
+				}
+			} else {
+				if ok, err := old.Extend(ctx, time.Second); ok || err != nil {
+					t.Fatalf("stale extend %v %v", ok, err)
+				}
+			}
+			got, err := c.rdb.Get(ctx, key).Result()
+			if err != nil || got != owner {
+				t.Fatalf("new token changed: %q %v", got, err)
+			}
+			if err := next.Release(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, mode := range []string{"healthy", "caller_cancel", "transient", "persistent", "server_loss"} {
+		t.Run("auto_"+mode, func(t *testing.T) {
+			c := review18Redis(t)
+			key := "review18:" + rand.Text()
+			t.Cleanup(func() { _ = c.rdb.Del(ctx, key).Err() })
+			ttl := time.Second
+			if mode == "persistent" {
+				ttl = 120 * time.Millisecond
+			}
+			if mode == "healthy" {
+				ttl = 200 * time.Millisecond
+			}
+			observed := &review18Renewal{IDistLock: NewDistLockFactory(c.rdb).NewLock(key, ttl), events: make(chan error, 100)}
+			if mode == "transient" {
+				observed.failures = 2
+			}
+			if mode == "persistent" {
+				observed.forever = true
+			}
+			lock := NewAutoExtendLock(observed, ttl, 20*time.Millisecond)
+			acquireCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			if ok, err := lock.Acquire(acquireCtx); !ok || err != nil {
+				t.Fatalf("acquire %v %v", ok, err)
+			}
+			t.Cleanup(func() { _ = lock.Release(ctx) })
+			if mode == "caller_cancel" {
+				cancel()
+			}
+			if mode == "server_loss" {
+				if err := c.rdb.Del(ctx, key).Err(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "persistent" || mode == "server_loss" {
+				review18Until(t, func() bool { return lock.Err() != nil })
+				want := review18WireError
+				if mode == "server_loss" {
+					want = fredis.ErrLockNotHeld
+				}
+				if !errors.Is(lock.Err(), want) {
+					t.Fatal(lock.Err())
+				}
+				return
+			}
+			successes := 0
+			deadline := time.NewTimer(3 * time.Second)
+			defer deadline.Stop()
+			for successes < 3 {
+				select {
+				case err := <-observed.events:
+					if err == nil {
+						successes++
+					}
+				case <-deadline.C:
+					t.Fatal("renewal did not execute")
+				}
+			}
+			if mode == "healthy" {
+				timer := time.NewTimer(2 * ttl)
+				<-timer.C
+			}
+			if lock.Err() != nil {
+				t.Fatal(lock.Err())
+			}
+			pttl, err := c.rdb.PTTL(ctx, key).Result()
+			if err != nil || pttl <= 0 {
+				t.Fatalf("pttl=%v err=%v", pttl, err)
+			}
+			if err := lock.Release(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := c.rdb.Exists(ctx, key).Result(); n != 0 || err != nil {
+				t.Fatalf("release n=%d err=%v", n, err)
+			}
+			if ok, err := lock.Acquire(ctx); !ok || err != nil {
+				t.Fatalf("reacquire %v %v", ok, err)
+			}
+		})
+	}
+	for _, mode := range []string{"delivery", "full_queue_close", "concurrent_close", "multiple_channels"} {
+		t.Run("pubsub_"+mode, func(t *testing.T) {
+			c := review18Redis(t)
+			channel := "review18:" + rand.Text()
+			channels := []string{channel}
+			if mode == "multiple_channels" {
+				channels = append(channels, channel+":second")
+			}
+			sub := c.Subscribe(ctx, channels...)
+			t.Cleanup(func() { _ = sub.Close() })
+			// Subscribe has no readiness acknowledgement API: wait for server NUMSUB explicitly.
+			review18Until(t, func() bool {
+				counts, err := c.rdb.PubSubNumSub(ctx, channels...).Result()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, ch := range channels {
+					if counts[ch] != 1 {
+						return false
+					}
+				}
+				return true
+			})
+			messages := len(channels)
+			if mode == "full_queue_close" {
+				messages = 3*cap(sub.Channel()) + 10
+			}
+			for i := 0; i < messages; i++ {
+				if err := c.Publish(ctx, channels[i%len(channels)], "payload"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "full_queue_close" {
+				review18Until(t, func() bool { return len(sub.Channel()) == cap(sub.Channel()) })
+			}
+			if mode == "delivery" || mode == "multiple_channels" {
+				seen := map[string]int{}
+				for i := 0; i < messages; i++ {
+					select {
+					case msg := <-sub.Channel():
+						if msg == nil || msg.Payload != "payload" {
+							t.Fatal(msg)
+						}
+						seen[msg.Channel]++
+					case <-time.After(3 * time.Second):
+						t.Fatal("delivery timed out")
+					}
+				}
+				for _, ch := range channels {
+					if seen[ch] != 1 {
+						t.Fatalf("channel routing=%v", seen)
+					}
+				}
+			}
+			if mode == "concurrent_close" {
+				var wg sync.WaitGroup
+				for i := 0; i < 16; i++ {
+					wg.Add(1)
+					go func() { defer wg.Done(); _ = sub.Close() }()
+				}
+				wg.Wait()
+			} else if err := sub.Close(); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.NewTimer(3 * time.Second)
+			defer deadline.Stop()
+			for {
+				select {
+				case _, ok := <-sub.Channel():
+					if !ok {
+						return
+					}
+				case <-deadline.C:
+					t.Fatal("closed subscription channel remained live")
+				}
+			}
+		})
+	}
+}

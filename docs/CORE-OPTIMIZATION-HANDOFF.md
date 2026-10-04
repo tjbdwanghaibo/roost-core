@@ -160,6 +160,19 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 
+最终整合更新：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮4真实Redis探针+13正式race/vet+3真实Redis集成独立通过。[验收](review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。下方本轮新wanted未修为发现时点；原双方证据保留，未发版，未替代authority/三资源/HA/长稳验收。
+
+提交前fetch到cfe878fe并整合四个远端提交；新W-2026-10-04-01已登记[RR-20261004-01](bug/RR-20261004-01.md) P2未修：实际取锁后丢回复遗失token。4叶子2fail/2控制，产品未改；连续未知/authority/代际验证留项。原N0414项无新RR的结论不包括此追加wanted，远端harness/长稳仅接手未本机验收。
+
+2026-10-04 B线第九批修复与N04第五批（起点`3d3b22c9`，未发版）：
+
+| 范围 | 当前状态 | 证据 |
+| --- | --- | --- |
+| NC-26～29 | 四P3已修、声明场景验证；BSON路径/unique/bulk预检/私有事务 | [运行](review/REVIEW-2026-10-04-noncore-17.md)，28正式回归/红重放；消费者夹具2初始失败已适配，674pass/17skip |
+| Redis锁/AutoExtend/pubsub | 14新增场景全通过，本批未确认新RR，域仍部分完成 | [审查](review/REVIEW-2026-10-04-noncore-18.md) · [学习](review/IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md) |
+
+N04新增事务实现文件后当前源文41/41累计已读；真实弱网/租期时钟/订阅总体关闭/Cluster/HA/长稳留项。下一schema/并发/未知恢复→正式迁移；下方历史未修不作当前状态。三大核心生产实现未改，只调整必要消费者测试夹具。
+
 2026-10-04 B线第八批修复与N04第四批接续（起点`ce90e90d`，未发版）：
 
 | 问题 | 当前状态 | 证据 |

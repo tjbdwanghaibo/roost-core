@@ -1,5 +1,9 @@
 # 遗留清单：修完之后剩下的东西
 
+**最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
+
+提交前追加：W-2026-10-04-01已分流[RR-20261004-01](RR-20261004-01.md) P2未修，取锁结果未知的token恢复需先处理；真实Lua两反例确认，连续未知/authority/代际/Close矩阵待补。本轮未递归修新问题。
+
 > 2026-09-21 整理，同日第二轮完成第一次分流。各 bugfix 记录末尾的"未做 / 边界"共 44 条，
 > 其中真正的缺口 19 条曾列在这里。本轮把 **A 类 14 条全部判掉**，**B 类 5 条原样保留**
 > （它们缺的是证据，不是判断），C 类过时条目已在原记录更正、从本文移出。
@@ -63,12 +67,14 @@ NC-11/12现已修复，最终15项新增正式用例通过；真实etcd集成仍
 
 ### 2026-10-04 N04 验证留项
 
+第五批更新：NC-26～29已修。Redis锁/续租/pubsub新增14场景通过，包含实际满队列和跨原TTL；[证据](../review/evidence/noncore-review-20261004-18/README.md)。执行后错误注入不等于真实弱网；toxiproxy/重连、Client与subscription整体关闭、租期时钟/长暂停、手动TTL组合、Cluster/HA、长期连接/goroutine容量与benchmark未验。下一优先RefHMap schema/Patch与全量Set并发/未知结果恢复→正式迁移消费者。原40候选因新事务实现增为41，源文累计41/41不代表场景完成。
+
 | 范围 | 当前已证明 | 尚待执行 / 入口 |
 | --- | --- | --- |
 | Redis与缓存 | NC-13～15已修，41正式准入叶子通过；本机隔离Redis8.8.0原七集成与六缓存探针全部通过；正式DAO CLI两个准入消费者通过并复跑 | Redis Cluster/HA/断线恢复、生产平台差异；Redis旧写比较仍非CAS；[修复](../review/REVIEW-2026-10-04-noncore-11.md) |
 | RefHMap | NC-16～19/21已修；真实Redis类型/codec/Patch/TTL/registry/布局与未知回复保留v3、正式生成消费通过 | schema兼容、Patch与全量Set并发、未知结果恢复、真实弱网/Cluster待验；[机制](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) |
 | Layered容量 | 冷TTL键观察到expiry元数据增长，未据此新增RR | 明确容量约束、回收策略和长期压力验证；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
-| Mongo | NC-20/22～25已修；复制/成员/精度/返回身份声明场景通过；新13场景确认NC-26～29四P3未修 | 按RR处理D路径/索引建立/bulk Type预检/并发全库restore；真实Mongo cursor/partial bulk/未知结果/事务与HA留项；[审查](../review/REVIEW-2026-10-04-noncore-16.md) |
+| Mongo | NC-20/22～29已修；28新增边界/私有事务回归、消费适配后674pass/17skip | 数组路径/完整索引、Drop/namespace、真实cursor/partial bulk/未知commit/事务与HA未验；[修复](../review/REVIEW-2026-10-04-noncore-17.md) |
 | Migration | 4项Registry/DAO版本、取消、克隆隔离与失败控制通过 | 正式DAO/codegen迁移消费者和真实持久化故障路径；[机制](../review/IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md) |
 
 这一类本轮**不判定**：它们缺的是证据，而给不出证据的判定就是猜。

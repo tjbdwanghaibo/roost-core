@@ -1,0 +1,8 @@
+package def
+
+//roost:redisdao mode=ref-hmap key=ID version=Version prefix=roost:ref:consumer
+type Record struct {
+	ID int64; Version uint64
+	Meta *Meta
+}
+type Meta struct { Label string }

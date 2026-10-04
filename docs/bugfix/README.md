@@ -1,5 +1,11 @@
 # Bugfix 记录
 
+**最终状态更新（2026-10-04）：RR-20261004-01已由上游3bb901fb/5d386146修复，本轮独立验收通过，未发版。** 本轮原4场景在真实Redis全部转绿；13条取锁/释放未知正式回归race与Remote vet通过，另3条真实Redis集成通过。下方本轮“新wanted未修”保留发现时点，以本条及独立验收为准；三资源生成消费者、authority故障矩阵与长稳未在本机验收。 [验收证据](../review/evidence/noncore-review-20261004-18/README.md#独立验收上游修复)。
+
+提交前新增wanted已审：versioned TryLock执行后丢回复丢失token，登记[RR-20261004-01](../bug/RR-20261004-01.md) P2未修；[追加4场景/方案边界](../review/REVIEW-2026-10-04-noncore-18.md#提交前新增wanted)。普通锁/订阅14项通过的结论仅限其原范围，不包含此新反例。
+
+**10-04 第九批：NC-26～29 四个公开Mongo替身P3已修，未发版。** [D路径](RR-20261004-NC-26.md) · [索引](RR-20261004-NC-27.md) · [bulk](RR-20261004-NC-28.md) · [隔离](RR-20261004-NC-29.md) · [运行](../review/REVIEW-2026-10-04-noncore-17.md) · [证据](evidence/noncore-bugfix-20261004-09/README.md)。28新正式叶子、十包race/vet、受影响消费与正式DAO消费通过；17消费者环境skip单列。Redis接续14场景通过、无新RR；无新线上排障分支，T-206保持。
+
 **10-04第八批：NC-21～25 5/5已修、声明场景验证，未发版。** [未知写](RR-20261004-NC-21.md) · [复制](RR-20261004-NC-22.md) · [候选](RR-20261004-NC-23.md) · [精度](RR-20261004-NC-24.md) · [返回身份](RR-20261004-NC-25.md) · [运行](../review/REVIEW-2026-10-04-noncore-15.md) · [40正式叶子/红绿/消费者](evidence/noncore-bugfix-20261004-08/README.md)。十包race/vet292叶子pass，两个生成DAO消费者通过；扩展14测试包674叶子pass/17环境skip。新[NC-26～29](../bug/REVIEW-2026-10-04-noncore-16.md)四P3仅审查未修，T-206。
 
 **10-04 第七批修复：NC-16～20 5/5已修、声明场景验证，未发版。** [16](RR-20261004-NC-16.md) · [17](RR-20261004-NC-17.md) · [18](RR-20261004-NC-18.md) · [19](RR-20261004-NC-19.md) · [20](RR-20261004-NC-20.md) · [运行](../review/REVIEW-2026-10-04-noncore-13.md) · [红绿/41正式项/生成ref-hmap消费](evidence/noncore-bugfix-20261004-07/README.md)。十包race/vet、252叶子pass/0fail/skip；原16项10fail转绿，真实Redis Lua、codec和非法布局补证。T-202～205，nil根/缺root与布局拒绝、路径TTL和历史编码兼容已记。继续review确认[NC-21～25](../bug/REVIEW-2026-10-04-noncore-14.md)未修，不属本批修复；下方“NC-16～20未修”为历史时点。

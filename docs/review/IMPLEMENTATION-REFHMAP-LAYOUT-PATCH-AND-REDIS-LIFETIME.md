@@ -1,5 +1,7 @@
 # RefHMap 布局、Patch 可见性与 Redis 生命周期
 
+当前更新（2026-10-04）：NC-26～29已修，[私有事务/28正式回归](REVIEW-2026-10-04-noncore-17.md)及[Redis14新场景](REVIEW-2026-10-04-noncore-18.md)已留证；下文旧未修为历史时点。N04当前41候选累计源文已读，场景部分完成；接续schema/并发/未知恢复→正式迁移消费者。
+
 2026-10-04，首次RefHMap/Redis/Mongo源文基线`1502f973`，随后[修复NC-16～20](REVIEW-2026-10-04-noncore-13.md)，并在`ce90e90d`起点[修复NC-21～25](REVIEW-2026-10-04-noncore-15.md)、[继续N04](REVIEW-2026-10-04-noncore-16.md)。[原反例](evidence/noncore-review-20261004-12/README.md)保留；新NC-26～29仍未修。
 
 ## 类型树与物理键
