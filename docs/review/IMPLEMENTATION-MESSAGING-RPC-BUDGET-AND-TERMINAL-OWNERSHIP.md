@@ -27,3 +27,9 @@ Bus停止先关闭准入/取消base，再在lifeMu外unsubscribe/drain。不能�
 ## 本批证明与未证明
 
 17项包括4失败/13控制，三个根因待修；六包race/vet通过。证明了正式JS分支产物的协议不一致、真实pool的取消等待缺失、组合调用没给discovery预算；没有真实NATS/etcd/Redis、跨机器故障或吞吐验证。Affinity复制+插入排序O(n²)、每call订阅/计时器与DLQ批次是成本观察，未有benchmark，先围绕正式业务路径建立预算和容量场景再优化。
+
+## 同日后续：三项已实施
+
+上述为第六轮时点。[第七轮](REVIEW-2026-10-04-noncore-07.md)已修NC-08～10：无handler复用encodeRPCFailure；发现/picker/transport共用child deadline并拒绝晚到候选；RPC停止由sync.Once/stopDone保留唯一收尾，pending准入与终态责任在短锁中登记，实际callback一次完成后释放责任，之后复用Pool.StopWithContext。Assembly/Kit等待失败保留资源供重试，不以caller取消冒认callback退出。完整28正式项与原17项通过；正式CallReliable进程内往返、full queue与停止前已领取的fallback均有实证。
+
+该停止任务数量按client生命周期有界，不按请求或每次重试增长；业务callback永久阻塞仍保留责任。Stop/Background在callback内等待自身退出不被允许，callback内可取消的StopWithContext已验；真实连接和长期容量仍待验。后续[etcd机制](IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md)延续“等待预算不同于资源退出”的同一判断口径。

@@ -1,0 +1,25 @@
+# etcd：快照接续、镜像隔离与生命周期预算
+
+2026-10-04，etcd产品等于`e62729ac`。本文解释现有实现；[审查范围/实证](REVIEW-2026-10-04-noncore-08.md)，[两个待修问题](../bug/REVIEW-2026-10-04-noncore-08.md)。以下修法建议尚未实施。
+
+## 服务发现与选主各自拥有什么
+
+Assembly共用一个clientv3连接，KitEtcd只读配置、声明三项能力、转发生命周期。Discovery注册时Grant→PutWithLease→独立KeepAlive，keepalive结束后按退避重注册；Deregister停止循环和keepalive，再revoke当前lease。业务使用ServiceInfo定位实例，不以“本地仍有sid”证明租约有效。其等待lifecycleMu/loopDone与网络revoke预算是不同阶段，需继续补关闭证明。
+
+Election session独立于一次Campaign等待；获得领导权时先发布CreateRevision fence再置IsLeader，session结束/Resign通过finish清理并关闭LeaderChan。第一次Campaign保留之前已取走的LeaderChan，重新竞选换新通道，旧session完成不能清掉新session。IsLeader有网络观察滞后，敏感写必须在权威路径比较fence，不能仅凭bool授权。
+
+NC-11在session建立阶段：NewSession默认使用client生命周期ctx，Campaign的ctx只传入之后的elect.Campaign。建议把setup预算与成功后的长session分开，通过已有租约/session与可解除的取消连接建立所有权；简单将长期session绑定短Campaign ctx会破坏成功后caller取消仍保持领导权的契约。失败清理/Resign时session.Close还可能等待revoke，不能从一处Grant修复推断整条生命周期有界。
+
+## Snapshot 后从哪个 revision 接续
+
+Client.GetPrefixSnapshot返回一致前缀KV和header revision R；LocalMirror先decode/clone，形成独立本地值，再从R+1 watch，处理成功Created/终止错误后更新Synced。watch关闭/compaction/坏解码会置错误并退避重快照，snapshot revision倒退被拒绝。Ready通道在建立或终止时都解开，必须一起看WatchError，不能Ready关闭就断言成功。
+
+Get/Snapshot在锁外clone不可变内部值，订阅注册和初始snapshot由callbackMu与更新串联，避免注册缝隙丢事件；回调不在镜像状态锁内运行。每subscription独立环队列，慢消费者只终止自己，停止watch不会等待不协作handler退出；订阅自己的Done才代表其回调结束。镜像Close与订阅Close是两种完成责任。
+
+Publish/Delete不直接修改本地镜像，权威watch才推进本地状态。CAS期望revision=0比较Version=0，否则比较ModRevision；失败/未知结果不能直接从本地“还没变化”判断权威未写，更不能自动重试副作用。旧watch事件低于当前revision被忽略，同revision多key事件仍逐项交付；本文不宣称任意调用时Snapshot已经具备跨多个watch事件的事务批次原子性。
+
+## 关闭请求与实际退出分开
+
+默认driver watcher取消ctx后在接收/发送处都可退出；本批128事件、64容量的关闭控制通过。WatchCallback对外支持任意IWatcher且提供CloseWithContext，但requestClose先同步调用底层Close，NC-12因此成立。建议每subscription唯一收尾任务承担底层关闭和callback结束，caller只按自己的ctx等待同一个完成信号；Done不得提前关闭，重试不得另派无界任务。不能以丢弃handler/错误或立即返回nil换预算。
+
+本轮实际gRPC LeaseGrant验证了NC-11所依赖的真正SDK调用，但server只实现故障注入接口，不能代表完整etcd一致性。NC-12使用受支持第三方watcher门闩；不误报core watcher永久阻塞。O(n)快照、JSON克隆、subscriber数量/队列总内存是后续容量观察，尚无benchmark/HA/长稳结论。

@@ -158,7 +158,10 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	var err error
 	if m.bus != nil {
 		if stopper, ok := any(m.bus).(interface{ StopWithContext(context.Context) error }); ok {
-			err = errors.Join(err, stopper.StopWithContext(ctx))
+			if stopErr := stopper.StopWithContext(ctx); stopErr != nil {
+				// Bus 仍持有连接上的订阅；取消等待后保留引用供再次排空。
+				return stopErr
+			}
 		} else {
 			m.bus.Stop()
 		}
@@ -168,6 +171,7 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 		if closeErr := m.asm.Close(ctx); closeErr != nil {
 			err = errors.Join(err, closeErr)
 			slog.Warn("nats mod: drain interrupted", "err", closeErr)
+			return err
 		}
 		m.asm = nil
 	}

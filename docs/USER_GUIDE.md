@@ -1,5 +1,11 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 RPC 协议与停止预算（main，尚未发版）
+
+JetStream无handler拒绝也使用版本1 response envelope，保持远端错误status，不按本地ErrNoHandler做errors.Is。ServiceRPC.CallDiscoveredChecked的配置timeout覆盖发现、picker与传输，较短父期限保留；独立PickServer仍使用调用方ctx，timeout/未知结果不代表业务未执行，不能自动重试副作用。
+
+RPCClient提供可选StopWithContext；取消仅结束caller等待，同一实例的唯一停止任务继续负责pending、终态callback和pool排空。Assembly.Close与KitNats保留未完成资源，使用新预算再次等待同一对象。业务callback必须最终退出；callback内不要用Stop/Background等待自身，采用可取消等待并由外部生命周期最终排空。旧Stop依然无期限，重复Stop现在等待同一收尾任务，不再直接返回。[三项修复与验证限制](review/REVIEW-2026-10-04-noncore-07.md)。
+
 ## 2026-10-04 请求边界（main，尚未发版）
 
 AllowN 超过实际 burst 的需求直接拒绝，不占 key、刷新 idle 或计作 key 容量拒绝；需要有效需求或显式 GC 维护活性。Gateway Recover 返回固定 ErrEndpointPanic，即使报告回调或失败日志 panic；同步报告仍需业务保证不永久阻塞。

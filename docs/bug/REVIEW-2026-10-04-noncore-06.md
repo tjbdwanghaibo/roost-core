@@ -37,3 +37,7 @@
 ## 观察与余项
 
 同步RetryPolicy默认1次；显式开启多次时timeout不能证明业务未执行，需要业务幂等。JetStream handler→response publish失败可引发重投，同RequestID的业务副作用必须自己幂等，当前async ReliableStore明确不包RPC。异步RPC每call持有pending/sub/timer，源码未有独立max-pending门槛，callback队列有界不代表在途调用有界；未压测，作为容量观察。Affinity排序为复制后插入排序，O(n²)；affinity不是共享状态CAS替代。本批不新增第四个RR或声称N03完整收口。
+
+## 同日后续修复状态
+
+NC-08～10三项已修、声明场景验证、未发版：[08](../bugfix/RR-20261004-NC-08.md)、[09](../bugfix/RR-20261004-NC-09.md)、[10](../bugfix/RR-20261004-NC-10.md)。原始反例保留；正式17项4fail转绿、最终28项与上轮原文17项通过，六测试包race/vet通过。[运行/实际限制](../review/REVIEW-2026-10-04-noncore-07.md) · [修前/修后证据](../bugfix/evidence/noncore-bugfix-20261004-04/README.md)。继续etcd审查的新NC-11/12另记，不混为本三项修复失败。

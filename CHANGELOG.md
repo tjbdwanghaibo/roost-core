@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **RPC协议与预算（RR-20261004-NC-08/09/10）**：JetStream无handler拒绝复用版本envelope；RPCClient.StopWithContext以每实例唯一扫尾保留回调责任，Assembly/Kit取消后保留资源供再次排空；ServiceRPC组合调用从发现开始共用deadline，不向过期候选发业务。[协议](docs/bugfix/RR-20261004-NC-08.md)、[停止兼容](docs/bugfix/RR-20261004-NC-09.md)、[发现预算](docs/bugfix/RR-20261004-NC-10.md)
 - **请求准入与异常边界（RR-20261004-NC-05/06）**：超 burst 需求不占限流 key、不续 idle 活性；Recover 保持固定错误，上报与失败日志 panic 独立隔离，不引入异步重试。[限流](docs/bugfix/RR-20261004-NC-05.md)、[Recover](docs/bugfix/RR-20261004-NC-06.md)
 - **生成路由模式校验（RR-20261004-NC-07）**：新增 webroute.ValidatePath 复用 chi 解析，生成扫描和运行期共同拒绝非法模式；安装成功才写 seen，installer panic 转 error。正常生成形状与原基础路径错误文本不变，自定义 router 半安装仍须重建。[兼容与验证](docs/bugfix/RR-20261004-NC-07.md)
 - **Manager 生命周期错误与启动权（RR-20261004-NC-01/02）**：逐对象 Stop panic 转 error，清理/rollback 继续并保留原因；Engine 在 Provide 后只允许一次启动尝试，再次/停止后的 Start 返回 ErrStartState（Kit ErrManagerStartState 同值），缺 Provide 拒绝不消耗启动权。[清理](docs/bugfix/RR-20261004-NC-01.md)、[启动](docs/bugfix/RR-20261004-NC-02.md)

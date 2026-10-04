@@ -1,0 +1,34 @@
+[
+  {
+    "sha256": "86B7387AD1E65CED6E3141D30935730BA6E136105A578D21848D7A453F26D110",
+    "path": "bus/jetstream_rpc.go"
+  },
+  {
+    "sha256": "43C30BEB59912906BDDCD2F0C47194AB784AF446C7B6BE2DC0D8855E81C62FB5",
+    "path": "bus/rpc_envelope_promises_test.go"
+  },
+  {
+    "sha256": "9683A995B88EFB5A3DC2BDA776D35BDAC28D6323D7D7F43C78CC676E3D51A7A3",
+    "path": "nats/driver/rpc.go"
+  },
+  {
+    "sha256": "4E351C940BD81F050316482CF8E8EC5FD2CA2C770AA7B642566F5410085F4EA5",
+    "path": "nats/driver/assembly.go"
+  },
+  {
+    "sha256": "0E1DB367A03B3042C5D2057F69026D28506AD8ABFFDE6D50F5CDE38AE9418B0F",
+    "path": "nats/driver/rpc_stop_budget_promises_test.go"
+  },
+  {
+    "sha256": "C72435AB9B14F22FC85002D264E01CF2BE6C65C77DCD08D8A8DC216DC5E7EDAB",
+    "path": "servicerpc/client.go"
+  },
+  {
+    "sha256": "047E6C5531DCA793A39696897E0BEDE46770ADCE580EF524C79594C6C8E223D6",
+    "path": "servicerpc/discovery_budget_promises_test.go"
+  },
+  {
+    "sha256": "9B9A057F39739CE35DB3A60D0FA2A3B643570E944728E9797D616677D417C974",
+    "path": "kit/nats/nats_mod.go"
+  }
+]

@@ -400,7 +400,8 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if !ok {
 		slog.Warn("bus: no jetstream rpc handler", "method", req.MsgName)
 		b.recordJetStreamRPCRequest(req.MsgName, "no_handler")
-		data, err := b.codec.Marshal(rpcErrorResponse(fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName)))
+		// RR-20261004-NC-08：拒绝也要走客户端要求的版本 envelope。
+		data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName))
 		if err != nil {
 			return err
 		}

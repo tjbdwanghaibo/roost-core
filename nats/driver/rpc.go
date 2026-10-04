@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/worker"
@@ -22,10 +23,14 @@ type RPCClient struct {
 	policy fnats.RetryPolicy
 
 	// async RPC state
-	pending   sync.Map // sessionId → *pendingCall
-	sessionId atomic.Int64
-	stopped   atomic.Bool
-	pool      *worker.Pool[*rpcTask]
+	pending    sync.Map // sessionId → *pendingCall
+	sessionId  atomic.Int64
+	stopped    atomic.Bool
+	pool       *worker.Pool[*rpcTask]
+	stopOnce   sync.Once
+	stopDone   chan struct{}
+	callbackMu sync.Mutex // freezes pending admission and terminal accounting against Stop
+	callbacks  sync.WaitGroup
 }
 
 type pendingCall struct {
@@ -78,6 +83,7 @@ type rpcTask struct {
 	err  error
 	// arrivals is both the exactly-once guard and the observation of it.
 	arrivals atomic.Int32
+	done     func()
 }
 
 // complete runs the terminal callback exactly once.
@@ -98,6 +104,9 @@ func (t *rpcTask) complete() {
 	}
 	if t.arrivals.Add(1) > 1 {
 		return
+	}
+	if t.done != nil {
+		defer t.done()
 	}
 	if t.cb != nil {
 		t.cb(t.resp, t.err)
@@ -194,9 +203,19 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	}
 	sub.AutoUnsubscribe(1)
 	pc := &pendingCall{cb: cb, sub: sub, startedAt: time.Now()}
+	r.callbackMu.Lock()
+	if r.stopped.Load() {
+		r.callbackMu.Unlock()
+		pc.closeResources()
+		if cb != nil {
+			cb(nil, fnats.ErrCancelled)
+		}
+		return
+	}
 	r.pending.Store(sid, pc)
 	metrics.IncCounter("nats.rpc.started.total", nil, 1)
 	metrics.AddGauge("nats.rpc.pending", nil, 1)
+	r.callbackMu.Unlock()
 	pc.setTimer(time.AfterFunc(5*time.Second, func() {
 		r.finishPending(sid, nil, fnats.ErrTimeout)
 	}))
@@ -216,19 +235,56 @@ func (r *RPCClient) Reply(replySubject string, resp []byte) error {
 }
 
 func (r *RPCClient) Stop() {
-	if !r.stopped.CompareAndSwap(false, true) {
-		return
-	}
+	_ = r.StopWithContext(context.Background())
+}
 
-	r.pending.Range(func(key, value any) bool {
+// StopWithContext closes admission once and bounds the caller's wait.
+// RR-20261004-NC-09：取消等待不能丢弃 callback；同一 client 只有一个
+// 停止任务负责 pending 的同步 fallback 与 pool 排空，后续调用继续等它。
+// Callback 内再次停止须用可取消的 ctx，不能同步等待自身退出。
+func (r *RPCClient) StopWithContext(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.stopOnce.Do(func() {
+		r.callbackMu.Lock()
+		r.stopped.Store(true)
+		r.callbackMu.Unlock()
+		r.stopDone = make(chan struct{})
+		go r.drainCallbacks()
+	})
+	select {
+	case <-r.stopDone:
+		return nil
+	default:
+	}
+	select {
+	case <-r.stopDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *RPCClient) drainCallbacks() {
+	defer close(r.stopDone)
+	r.pending.Range(func(key, _ any) bool {
 		if sid, ok := key.(int64); ok {
-			r.finishPending(sid, nil, fnats.ErrCancelled)
+			// 队列拒绝时 fallback 在这里同步执行。隔离其 panic，后续
+			// pending 仍须取消；阻塞则由这个唯一停止任务保留责任。
+			goroutine.SafeFunc(func() { r.finishPending(sid, nil, fnats.ErrCancelled) })
 		}
 		return true
 	})
-
+	// A reply/timeout may already have removed its pending entry but still be
+	// executing synchronous queue-rejection fallback. Its terminal accounting
+	// was added under callbackMu before deletion, so it remains part of drain.
+	r.callbacks.Wait()
 	if r.pool != nil {
-		r.pool.Stop()
+		_ = r.pool.StopWithContext(context.Background())
 	}
 }
 
@@ -236,21 +292,26 @@ func (r *RPCClient) Stop() {
 // LoadAndDelete elects exactly one winner among reply, timeout, publish error,
 // and Stop; losers perform no callback or resource cleanup a second time.
 func (r *RPCClient) finishPending(sid int64, resp []byte, err error) bool {
+	r.callbackMu.Lock()
 	value, ok := r.pending.LoadAndDelete(sid)
 	if !ok {
+		r.callbackMu.Unlock()
 		return false
 	}
 	pc, ok := value.(*pendingCall)
 	if !ok || pc == nil {
+		r.callbackMu.Unlock()
 		return false
 	}
+	r.callbacks.Add(1)
+	r.callbackMu.Unlock()
 	metrics.AddGauge("nats.rpc.pending", nil, -1)
 	metrics.IncCounter("nats.rpc.completed.total", nil, 1)
 	if !pc.startedAt.IsZero() {
 		metrics.ObserveHistogram("nats.rpc.callback.latency", nil, time.Since(pc.startedAt))
 	}
 	pc.closeResources()
-	r.dispatchCallback(sid, &rpcTask{cb: pc.cb, resp: resp, err: err})
+	r.dispatchCallback(sid, &rpcTask{cb: pc.cb, resp: resp, err: err, done: r.callbacks.Done})
 	return true
 }
 

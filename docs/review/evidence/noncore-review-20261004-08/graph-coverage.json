@@ -1,0 +1,237 @@
+{
+  "checks": [
+    {
+      "project": "roost-core",
+      "signal": "best_effort",
+      "indexed_at": "2026-09-30T11:58:14Z",
+      "metadata": {
+        "generation": "2026-09-30T11:58:14Z",
+        "index_mode": "full",
+        "recorded_at": "2026-09-30T11:58:15Z",
+        "recording_status": "complete",
+        "ignored_files_stored": 1,
+        "ignored_files_total": 1,
+        "hash_records_complete": true,
+        "coverage_version": 3,
+        "generation_matches": true
+      },
+      "paths": [
+        {
+          "requested_path": "etcd/client.go",
+          "path": "etcd/client.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/config.go",
+          "path": "etcd/config.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/election.go",
+          "path": "etcd/election.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/errors.go",
+          "path": "etcd/errors.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/local_mirror.go",
+          "path": "etcd/local_mirror.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/watch_callback.go",
+          "path": "etcd/watch_callback.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/watcher.go",
+          "path": "etcd/watcher.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/assembly.go",
+          "path": "etcd/driver/assembly.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/client.go",
+          "path": "etcd/driver/client.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/discovery.go",
+          "path": "etcd/driver/discovery.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/election.go",
+          "path": "etcd/driver/election.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/local_mirror.go",
+          "path": "etcd/driver/local_mirror.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/local_mirror_subscription.go",
+          "path": "etcd/driver/local_mirror_subscription.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/watcher.go",
+          "path": "etcd/driver/watcher.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "kit/etcd/etcd_mod.go",
+          "path": "kit/etcd/etcd_mod.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        }
+      ],
+      "scopes": [
+        {
+          "requested_scope": "etcd",
+          "scope": "etcd",
+          "total": 0,
+          "has_more": false,
+          "entries": [],
+          "status": "no_recorded_issue"
+        },
+        {
+          "requested_scope": "kit/etcd",
+          "scope": "kit/etcd",
+          "total": 0,
+          "has_more": false,
+          "entries": [],
+          "status": "no_recorded_issue"
+        }
+      ],
+      "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+    },
+    {
+      "project": "roost-core",
+      "signal": "best_effort",
+      "indexed_at": "2026-09-30T11:58:14Z",
+      "metadata": {
+        "generation": "2026-09-30T11:58:14Z",
+        "index_mode": "full",
+        "recorded_at": "2026-09-30T11:58:15Z",
+        "recording_status": "complete",
+        "ignored_files_stored": 1,
+        "ignored_files_total": 1,
+        "hash_records_complete": true,
+        "coverage_version": 3,
+        "generation_matches": true
+      },
+      "paths": [
+        {
+          "requested_path": "etcd/driver/local_mirror_test.go",
+          "path": "etcd/driver/local_mirror_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/election_test.go",
+          "path": "etcd/driver/election_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/watch_callback_test.go",
+          "path": "etcd/watch_callback_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "etcd/driver/watcher_ready_test.go",
+          "path": "etcd/driver/watcher_ready_test.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "docs/review/evidence/noncore-review-20261004-08/driver_review_test.go.txt",
+          "path": "docs/review/evidence/noncore-review-20261004-08/driver_review_test.go.txt",
+          "status": "no_recorded_issue",
+          "freshness": "not_tracked",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "docs/review/evidence/noncore-review-20261004-08/etcd_review_test.go.txt",
+          "path": "docs/review/evidence/noncore-review-20261004-08/etcd_review_test.go.txt",
+          "status": "no_recorded_issue",
+          "freshness": "not_tracked",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        },
+        {
+          "requested_path": "bus/codec.go",
+          "path": "bus/codec.go",
+          "status": "no_recorded_issue",
+          "freshness": "metadata_changed",
+          "recommended_action": "read_source_and_reindex",
+          "coverage": []
+        }
+      ],
+      "scopes": [],
+      "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+    }
+  ]
+}

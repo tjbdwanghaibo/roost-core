@@ -161,11 +161,24 @@ func CheckResponse(resp any, fallback string) error {
 }
 
 func (c *BusClient) CallDiscoveredChecked(ctx context.Context, method string, req any, resp any, fallback string) error {
-	serverID, err := c.PickServer(ctx)
+	if c == nil || c.bus == nil {
+		return ErrBusNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// RR-20261004-NC-10：发现、选择和传输共用预算；Call 的子期限
+	// 不会延长这个 parent，发现耗时不会换来一份新的完整 transport 预算。
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	serverID, err := c.PickServer(callCtx)
 	if err != nil {
 		return err
 	}
-	return c.CallChecked(ctx, serverID, method, req, resp, fallback)
+	if err := callCtx.Err(); err != nil {
+		return err
+	}
+	return c.CallChecked(callCtx, serverID, method, req, resp, fallback)
 }
 
 func (c *BusClient) PickServer(ctx context.Context) (int32, error) {

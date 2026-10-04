@@ -1,5 +1,20 @@
 # Roost Review 问题索引
 
+**10-04 N03第五批：NC-11/12两个新P2已确认、未修。**[运行/范围](../review/REVIEW-2026-10-04-noncore-08.md) · [反例与控制](../review/evidence/noncore-review-20261004-08/README.md) · [生命周期学习与方向](../review/IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md)。N03源文39/39已读、场景部分完成。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-11](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-11) | P2 Campaign取消不传递到session LeaseGrant | 已确认、未修 |
+| [RR-20261004-NC-12](REVIEW-2026-10-04-noncore-08.md#rr-20261004-nc-12) | P2 WatchCallback关闭预算被第三方watcher.Close阻塞 | 已确认、未修 |
+
+**10-04 第四批修复：NC-08～10 3/3已修、声明场景验证，未发版。**[运行](../review/REVIEW-2026-10-04-noncore-07.md) · [正式红绿/消费](../bugfix/evidence/noncore-bugfix-20261004-04/README.md)。下方N03第四批“未修”是原审查时点。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-08](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-08) | JS无handler回包缺少协议envelope | [已修/声明场景验证](../bugfix/RR-20261004-NC-08.md)，未发版 |
+| [RR-20261004-NC-09](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-09) | callback停止等待无预算 | [已修/声明场景验证](../bugfix/RR-20261004-NC-09.md)，未发版 |
+| [RR-20261004-NC-10](REVIEW-2026-10-04-noncore-06.md#rr-20261004-nc-10) | 服务发现绕过配置timeout | [已修/声明场景验证](../bugfix/RR-20261004-NC-10.md)，未发版 |
+
 **10-04 N03 接续审查：NC-08～10 三个新 P2 已确认、未修。**[运行与范围](../review/REVIEW-2026-10-04-noncore-06.md) · [反例/控制](../review/evidence/noncore-review-20261004-06/README.md) · [机制与实施方向](../review/IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md)。本批17项为4失败/13控制，归为3根因；下方NC-05～07修复不含这三项。
 
 | 编号 | 问题 | 状态 |

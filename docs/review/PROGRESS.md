@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第四批修复 + 非三大核心第五批
+
+[修复运行](REVIEW-2026-10-04-noncore-07.md) · [etcd/KitEtcd审查](REVIEW-2026-10-04-noncore-08.md) · [两个新未修P2](../bug/REVIEW-2026-10-04-noncore-08.md) · [机制学习](IMPLEMENTATION-ETCD-SNAPSHOT-WATCH-AND-LIFETIME.md)。源码起点`e62729ac`，下方NC-08～10已修，本批NC-11/12未修，未发版。
+
+| 范围 | 本批新增证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-08～10修复 | 17正式项4fail转绿，最终28正式项、17原overlay通过；六测试包race/vet、126 test pass事件0fail/skip；正式CallReliable进程内消费 | 三项已修/声明场景验证；真实broker/connected Kit/长期容量未验 |
+| N03清单源文 | 剩余14个etcd文件完整读取，合并上批为39/39；KitEtcd1同行 | 源文已读，场景仍部分完成，不是业务覆盖100%或completed/15 |
+| etcd新场景 | 8项2fail/6控制；真实SDK→本机gRPC LeaseGrant，第三方watcher Close、readiness/队列关闭/镜像copy/CAS/stale | NC-11/12待修；两测试包race45 pass事件，KitEtcd仅编译/vet，无测试 |
+| 外部环境 | 真实etcd集成选中1项因PATH缺etcd而skip | 不计通过；真实NATS/etcd、HA、长稳继续待验 |
+
+[修复证据](../bugfix/evidence/noncore-bugfix-20261004-04/README.md) · [新审查证据/清单](evidence/noncore-review-20261004-08/README.md)。下一新范围 **N04 redis/mongo/cache/migration**，复用Service旧专项；N03真实资源/lease恢复、选主清理和callback关闭余项独立保留。用户说“没有修复”时直接进入N04，明确bugfix时先修新RR。约50～90有效小时仍为风险工作量粗估，本批未按39/39比例扣减，[计划](NONCORE-REVIEW-PLAN-2026-10-03.md)维护同一口径。
+
 ## 2026-10-04 非三大核心第四批：N03 通信与 RPC
 
 [运行](REVIEW-2026-10-04-noncore-06.md) · [三个新未修 P2](../bug/REVIEW-2026-10-04-noncore-06.md) · [机制与实施方向](IMPLEMENTATION-MESSAGING-RPC-BUDGET-AND-TERMINAL-OWNERSHIP.md) · [反例/源文件清单](evidence/noncore-review-20261004-06/README.md)。产品提交`49796514`，下方NC-05～07已修；新NC-08～10未修，未发版。

@@ -47,6 +47,18 @@
 
 ## B. 没跑过的（不是干不了，是还没有证据）—— 原样保留
 
+### 2026-10-04 N03 新增验证留项
+
+以下是NC-08～10修复后的证据缺口，不是新RR，也不改变下方历史B项状态。
+
+| 范围 | 当前已证明 | 尚待执行 / 入口 |
+| --- | --- | --- |
+| NC-08协议消费 | 正式CallReliable进程内请求/回包/关联/解码、marshal/publish失败cause | 真实NATS/JetStream往返、重投/业务幂等；[记录](../bugfix/RR-20261004-NC-08.md) |
+| NC-09停止所有权 | 真pool、满队列fallback、停止前已领取终态、并发/取消重试与callback内可取消等待 | connected Assembly/Kit停止、断线与长期容量；新增短锁/计数暂无bench，[记录](../bugfix/RR-20261004-NC-09.md) |
+| NC-10发现预算 | 协作发现/picker/transport同一deadline，短parent/晚到候选拒绝 | 真实etcd发现及生成服务进程消费者；[记录](../bugfix/RR-20261004-NC-10.md) |
+
+同日etcd审查另确认NC-11/12未修，真实etcd集成选择项缺PATH binary而skip；完整N03恢复矩阵仍部分完成，见[最新进度](../review/PROGRESS.md)。
+
 这一类本轮**不判定**：它们缺的是证据，而给不出证据的判定就是猜。
 
 | # | 条目 | 为什么重要 | 本轮进展 |

@@ -46,7 +46,9 @@ func (a *Assembly) Connected() bool {
 }
 
 // Close stops the RPC client (failing every pending call with ErrCancelled)
-// and drains the connection within ctx; when the drain does not finish in
+// and waits for callbacks within ctx before draining the connection. When
+// callback waiting expires, the assembly retains ownership for a later Close.
+// When the connection drain does not finish in
 // time the connection is closed hard and the ctx error is returned. The bus
 // must already be stopped by the caller — it owns subscriptions on Client.
 func (a *Assembly) Close(ctx context.Context) error {
@@ -57,7 +59,9 @@ func (a *Assembly) Close(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	if a.RPC != nil {
-		a.RPC.Stop()
+		if err := a.RPC.StopWithContext(ctx); err != nil {
+			return err
+		}
 	}
 	if a.Client != nil {
 		if err := a.Client.DrainWithContext(ctx); err != nil {

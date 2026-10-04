@@ -6,6 +6,9 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-194 | JS无handler拒绝变成unsupported rpc response version 0 | RR-20261004-NC-08：旧分支直接发code/reason | request MsgName与回包version/error envelope | 使用含本批修复的代码；修正handler/订阅声明，不放宽客户端版本门禁 |
+| T-195 | Assembly.Close取消仍卡callback，或取消后再次Stop过早返回 | RR-20261004-NC-09：旧Stop等待pool/fallback且没有共同收尾 | StopWithContext返回ctx错误、callback入场/退出、pending/队列 | 使用同一Assembly/Kit以新预算再次排空；业务callback必须最终退出，callback内不无期限等待自身 |
+| T-196 | ServiceRPC配置20ms，发现卡顿却等待更长父期限 | RR-20261004-NC-10：旧组合调用先发现再创建transport timeout | CallDiscoveredChecked配置与Discover/picker收到的deadline | 使用共同预算修复；独立PickServer由调用者提供ctx，确认dependency响应取消，未知结果不自动重试 |
 | T-191 | 超 burst 请求被拒绝后正常新 key 仍被容量挡住 | RR-20261004-NC-05：旧 AllowN 先建桶再检查需求 | RateLimiter.Stats Keys/CapacityRejected、AllowN 需求与实际 burst | 使用本批修复；超额需求不占名额或保活，真实满表仍需检查 MaxKeys/IdleTTL |
 | T-192 | Recover 的 report panic 导致外层拿不到 ErrEndpointPanic | RR-20261004-NC-06：旧报告先于固定返回结果 | `gateway: panic reporter failed` 与请求返回 ErrEndpointPanic | 使用独立保护的报告；日志 handler 失败也不能改变结果，阻塞回调由业务自行约束 |
 | T-193 | Webroute 生成成功但启动注册 panic，或新版生成时出现 invalid route path | RR-20261004-NC-07：旧生成/注册只检查路径前缀 | 生成错误内 handler/path、webroute.ValidatePath 和 Registrar.Register 返回值 | 修正括号/正则/通配符；新版在生成前拒绝，旧生成物也受运行期校验；自定义 installer 半安装需重建 router |
