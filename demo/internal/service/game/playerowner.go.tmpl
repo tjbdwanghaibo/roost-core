@@ -73,7 +73,10 @@ type PlayerOwners struct {
 	// hand-back pass waits for that answer (RR-20260926-31).
 	projections    projectionBarrier
 	projectionWait time.Duration
-	now            func() time.Time
+	// handBackPassWait is handBackPassBudget, as a field for the same reason
+	// as evictWait.
+	handBackPassWait time.Duration
+	now              func() time.Time
 	// onHandBackWait, when set, is told that a Claim has started waiting for
 	// a hand-back of the player. It is for tests, which have no other way to
 	// see a goroutine park; nothing in the process sets it.
@@ -344,6 +347,25 @@ const HandBackIdle = 2 * playerroute.RefreshInterval
 // on the loop that also renews everybody else's lease.
 const handBackBudget = 8
 
+// handBackPassBudget bounds how long one refresh pass spends giving leases
+// back — every eviction wait and the projection wait together.
+//
+// A count is not a bound on time: handBackBudget evictions of evictBudget
+// each, plus the projection wait, came to 45s, and the refresh loop renews
+// nobody while it is handing back — so one slow batch outlived Lease (30s)
+// and cost this process every other lease it held (RR-20260921-04). The
+// renewal just before the pass confirms each lease for Lease from now; if
+// that renewal could not be confirmed, the window is what the one before it
+// left — Lease − RefreshInterval — and admission stops AdmissionGuard before
+// its end. A pass that is over by then has not cut anybody's admission short,
+// even with one renewal lost. Players the pass does not reach keep their
+// lease and are considered again by the next pass.
+//
+// The releases themselves are outside it: each is one Redis round trip for a
+// player whose copy is already gone and whose writes have landed, and giving
+// up at that point would only make the lease lapse 30 seconds later.
+const handBackPassBudget = playerroute.Lease - playerroute.RefreshInterval - AdmissionGuard
+
 // NewPlayerOwners builds the table from what the process publishes.
 func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
 	client, err := mods.Redis(registry)
@@ -370,7 +392,7 @@ func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Tim
 	}
 	return &PlayerOwners{
 		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
-		evictWait: evictBudget, projectionWait: evictBudget,
+		evictWait: evictBudget, projectionWait: evictBudget, handBackPassWait: handBackPassBudget,
 		local:     map[int64]*leaseState{},
 		evictions: map[int64]*eviction{},
 		claiming:  map[int64]int{},
@@ -609,6 +631,10 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 // tries again. One projectionWait covers the whole pass: a stalled database
 // costs the refresh loop one projectionWait, not one per player.
 //
+// And the pass as a whole has a time budget, handBackPassBudget: the
+// evictions and the projection wait all end by it, and the players it does
+// not reach stay in service until the next pass (RR-20260921-04).
+//
 // A Claim of a player being handed back waits for the hand-back to end, and a
 // hand-back does not pick a player a Claim is working on (see enterClaim), so
 // the two never decide about one player at the same time (RR-20260921-03).
@@ -620,6 +646,7 @@ func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 	sessions := owners.fencer
 	projections := owners.projections
 	projectionWait := owners.projectionWait
+	passWait := owners.handBackPassWait
 	started := owners.now()
 	var chosen []handBack
 	if sessions != nil {
@@ -649,12 +676,23 @@ func (owners *PlayerOwners) handBackIdle(ctx context.Context) {
 			owners.finishHandBack(untouched, false)
 		}
 	}()
-	projected, cancel := context.WithTimeout(ctx, projectionWait)
+	pass, cancelPass := context.WithTimeout(ctx, passWait)
+	defer cancelPass()
+	projected, cancel := context.WithTimeout(pass, projectionWait)
 	defer cancel()
 	for len(pending) > 0 {
+		// Two clocks, one budget: the table's clock is what this pass is
+		// accounted on, like every other time decision here; the context is
+		// what actually ends a wait, because a timer does not read that
+		// clock. In a running process they are the same clock.
+		if owners.now().Sub(started) >= passWait || pass.Err() != nil {
+			slog.Warn("player owners: hand-back pass out of time; the rest stay in service until the next pass",
+				"remaining", len(pending), "budget", passWait)
+			return
+		}
 		next := pending[0]
 		pending = pending[1:]
-		owners.handBackOne(ctx, projected, sessions, projections, next)
+		owners.handBackOne(ctx, pass, projected, sessions, projections, next)
 	}
 }
 
@@ -664,9 +702,10 @@ type handBack struct {
 	state    *leaseState
 }
 
-// handBackOne gives one lease back, or puts it back in service. projected
-// bounds the projection wait; ctx is the refresh loop's.
-func (owners *PlayerOwners) handBackOne(ctx, projected context.Context, sessions sessionFencer, projections projectionBarrier, chosen handBack) {
+// handBackOne gives one lease back, or puts it back in service. pass bounds
+// the eviction wait and projected the projection wait; ctx is the refresh
+// loop's, for the release.
+func (owners *PlayerOwners) handBackOne(ctx, pass, projected context.Context, sessions sessionFencer, projections projectionBarrier, chosen handBack) {
 	playerID := chosen.playerID
 	// Asked outside the lock, and asked last: a player who reconnected while
 	// this pass was deciding keeps their lease.
@@ -674,7 +713,7 @@ func (owners *PlayerOwners) handBackOne(ctx, projected context.Context, sessions
 		owners.finishHandBack(chosen, false)
 		return
 	}
-	if err := owners.dropResident(ctx, playerID); err != nil {
+	if err := owners.dropResident(pass, playerID); err != nil {
 		slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
 		owners.finishHandBack(chosen, false)
 		return
@@ -1011,8 +1050,8 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 // hand-back and waits, or the hand-back sees the Claim and passes the player
 // over. Lock and wait order: mu is never held while waiting, and a hand-back
 // never waits for a Claim, so the wait cannot close a cycle. It ends when the
-// hand-back does — at the latest when the pass that chose the player ends —
-// or when ctx does: a login's budget is player_access.tcp.login_timeout, and
+// hand-back does — at the latest when the pass that chose the player ends,
+// handBackPassBudget plus that pass's release round trips — or when ctx does: a login's budget is player_access.tcp.login_timeout, and
 // its caller answers login_timeout on the context error, which the client
 // retries.
 //

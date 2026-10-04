@@ -1214,3 +1214,111 @@ func TestAClaimDuringAHandBackNeverEndsWithAnUnownedPlayer(t *testing.T) {
 		}
 	})
 }
+
+// RR-20260921-04：一次刷新回合里，闲置归还占住刷新循环的时间必须短于
+// Lease − RefreshInterval。
+//
+// 归还跑在续租的那条 goroutine 上。旧实现只按"个数"收界：至多 handBackBudget(8)
+// 人，每人撤离等 evictBudget(5s)，再加一份投影等待——最坏 45s，超过 Lease(30s)。
+// 续租刚在回合之前发过一次，回合期间不再续，本进程其余每一把租约都会在 Redis 里
+// 过期、准入先行耗尽。承诺：整个回合有一个时间预算，撤离与投影等待都在预算内；
+// 预算用完时没轮到的玩家留到下一轮——租约保留、继续服务，不 Release。
+//
+// 时间用表自己的时钟记账：每次撤离把时钟拨过一整份 evictBudget 再失败，正是一个
+// 卡在长事务后面的实体让刷新循环付出的代价。
+func TestAHandBackPassHoldsTheRefreshLoopLessThanTheLeaseAllows(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	const players = handBackBudget + 2
+	for playerID := int64(1); playerID <= players; playerID++ {
+		if owned, err := owners.Owns(ctx, playerID); err != nil || !owned {
+			t.Fatalf("owns %d: %v %v", playerID, owned, err)
+		}
+	}
+	var (
+		mu      sync.Mutex
+		evicted []int64
+	)
+	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
+		mu.Lock()
+		defer mu.Unlock()
+		*clock = clock.Add(evictBudget)
+		evicted = append(evicted, playerID)
+		return errors.New("the entity is busy")
+	}))
+	*clock = clock.Add(HandBackIdle + time.Second)
+	start := *clock
+	owners.renew(ctx)
+	held := clock.Sub(start)
+
+	mu.Lock()
+	started := len(evicted)
+	mu.Unlock()
+	if limit := playerroute.Lease - playerroute.RefreshInterval; held >= limit {
+		t.Errorf("one hand-back pass held the refresh loop for %s (%d evictions at evictBudget %s each), not below Lease(%s) - RefreshInterval(%s) = %s",
+			held, started, evictBudget, playerroute.Lease, playerroute.RefreshInterval, limit)
+	}
+	// Every player the pass did not give back keeps the lease and stays in
+	// service: the next pass considers them again.
+	for playerID := int64(1); playerID <= players; playerID++ {
+		if table.owner[playerID] != table.sid {
+			t.Fatalf("player %d's lease was given away by a pass that did not hand it back: %v", playerID, table.owner)
+		}
+		if err := owners.Admit(playerID); err != nil {
+			t.Fatalf("player %d is out of service after the pass: %v", playerID, err)
+		}
+	}
+	if len(table.released) != 0 {
+		t.Fatalf("a pass whose evictions all failed released claims: %v", table.released)
+	}
+}
+
+// The budget itself, as relations between the constants: change any of them
+// and this decides again. Below Lease − RefreshInterval so the pass ends
+// before a lease renewed one interval ago runs out; at least one eviction
+// budget, or no hand-back could ever complete.
+func TestTheHandBackPassBudgetFitsInsideTheLease(t *testing.T) {
+	if limit := playerroute.Lease - playerroute.RefreshInterval; handBackPassBudget >= limit {
+		t.Errorf("handBackPassBudget = %s, not below Lease(%s) - RefreshInterval(%s) = %s", handBackPassBudget, playerroute.Lease, playerroute.RefreshInterval, limit)
+	}
+	if handBackPassBudget < evictBudget {
+		t.Errorf("handBackPassBudget = %s is less than one evictBudget (%s): a busy entity would use up every pass", handBackPassBudget, evictBudget)
+	}
+}
+
+// The budget also ends the real waits, not only the accounting: evictions
+// that never finish stop holding the pass when its budget runs out. Scaled
+// down — an eviction wait of 100ms against a pass of 150ms — so the shipped
+// count (8 x 100ms) and the budget are far apart.
+func TestAHandBackPassStopsWaitingWhenItsBudgetRunsOut(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	owners.evictWait = 100 * time.Millisecond
+	owners.handBackPassWait = 150 * time.Millisecond
+	ctx := context.Background()
+	const players = handBackBudget + 2
+	for playerID := int64(1); playerID <= players; playerID++ {
+		if owned, err := owners.Owns(ctx, playerID); err != nil || !owned {
+			t.Fatalf("owns %d: %v %v", playerID, owned, err)
+		}
+	}
+	evictor := newBlockingEvictor()
+	evictor.calls = make(chan int64, 64)
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	*clock = clock.Add(HandBackIdle + time.Second)
+
+	start := time.Now()
+	owners.renew(ctx)
+	elapsed := time.Since(start)
+	if unbudgeted := time.Duration(handBackBudget) * owners.evictWait; elapsed >= unbudgeted/2 {
+		t.Fatalf("the pass held the refresh loop for %s with a budget of %s (without one it would be %s)", elapsed, owners.handBackPassWait, unbudgeted)
+	}
+	for playerID := int64(1); playerID <= players; playerID++ {
+		if table.owner[playerID] != table.sid {
+			t.Fatalf("player %d's lease was given away by a pass that did not hand it back: %v", playerID, table.owner)
+		}
+		if err := owners.Admit(playerID); err != nil {
+			t.Fatalf("player %d is out of service after the pass: %v", playerID, err)
+		}
+	}
+}
