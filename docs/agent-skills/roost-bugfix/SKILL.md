@@ -100,7 +100,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 | W 候选 | `docs/bug/WANTED.md`（`W-YYYY-MM-DD-NN`） | — |
 | T 行 | `docs/TROUBLESHOOTING.md` | 最后 T-44，按最后一行接续 |
 | M / REFACTOR（重构，不占 RR） | 旧 `docs/bugfix/M-*.md`，现行 `docs/feature/REFACTOR-YYYY-MM-DD-<topic>.md` | 旧 M 最后 M-18 |
-| 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.19.1**（10-04，tag 指向 `d3e69336`）；之后在 main 的修复未发版 |
+| 发布 | `codegen/ci/framework-release.yaml` `release:` → `scripts/pretag.sh vX.Y.Z` → `git tag -a` → push tag | 最新 **v1.19.2**（10-04，tag 指向 `4ee44f34`）；之后在 main 的修复未发版 |
 | 版本同步点 | `codegen/internal/roost/manifest.go` 的 `Core` 默认版本（现 v1.18.0）与 `.github/workflows/framework-compat.yml` 的 `minimum` 行（`-roost-core-version v1.18.0`） | 发版时两处同步；生成的 game-demo 用到本版新增 API 时下限要升，先用上一版 tag 实编生成工程判断 |
 
 发版细节：**验收以本地为准**（维护者 10-04：本地编译 / vet / 相关测试 / 根包 `go test -count=1 .` 通过即可，推送和打 tag 都不等 GitHub CI；之后顺带看一眼 `gh run list`，红了再处理）；pretag 要在干净 worktree 跑（仓库根的 `artifacts/` 里保存的源码备份会让 `go build ./...` 失败）；发版前在最终 HEAD 跑一次故障矩阵 `scripts/test-remote-matrix.sh`（v1.17.2 起的做法，结果目录写进 CHANGELOG 或交接）；
