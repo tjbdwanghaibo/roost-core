@@ -1,22 +1,22 @@
 # RefHMap 布局、Patch 可见性与 Redis 生命周期
 
-2026-10-04，RefHMap/Redis/Mongo源文基线`1502f973`；[运行](REVIEW-2026-10-04-noncore-12.md)、[问题](../bug/REVIEW-2026-10-04-noncore-12.md)、[实际Redis和分页证据](evidence/noncore-review-20261004-12/README.md)。本文件解释现有实现；NC-16～20建议尚未实施。
+2026-10-04，首次RefHMap/Redis/Mongo源文基线`1502f973`，随后在`08d18be9`起点[修复NC-16～20](REVIEW-2026-10-04-noncore-13.md)并[接续N04](REVIEW-2026-10-04-noncore-14.md)。[原反例](evidence/noncore-review-20261004-12/README.md)保留；下文已同步当前实现，新NC-21～25建议尚未实施。
 
 ## 类型树与物理键
 
 [RedisRefHMapStore](../../cache/ref_hmap.go)用sync.Once为V建立layoutRoot和prefix。递归field分为scalar/struct，检测类型cycle和MaxDepth；redisdao/json标签决定名称，未导出或`-`跳过。每节点suffix由字段路径决定，plan把entity key放在同槽标签内；root内`__keys`登记物理键，下一次Set/Delete包含旧schema登记的key。Get对当前plan所有key做HGetAll，再按parent中的引用存在与否恢复子结构；它不把任意被篡改的引用当远端重定向地址。
 
-同槽仅保障脚本/Cluster路由条件，不能证明不同节点的逻辑key唯一，也不能隔离root保留字段。NC-19的Root/id与__keys反例说明目前layout接受了会别名的名字。建议先在plan建成前校验存储名称，保留已有合法持久格式；需要逃逸或换根名称时单独版本化，不能为了修错键静默换所有业务键。
+同槽仅保障脚本/Cluster路由条件，不能证明不同节点的逻辑key唯一，也不能隔离root保留字段。NC-19修后layout在任何I/O前检查全树键唯一，并拒绝根__keys、同hash字段重复和冒号/换行名称；原合法持久格式保持，非法旧布局不自动改名/清理。需要支持这些名字时单独版本化，不能为了修错键静默换所有业务键。
 
-Get用reflect.New(root.typ).Elem构造struct，V=*struct时最后类型断言不匹配（NC-16）。修复应把根形状作为V契约的一部分，明确typed nil和不支持形状，不把panic变成成功miss。文本scalar判断支持*typ的MarshalText/UnmarshalText，但普通value字段不可寻址时编码未调用指针方法（NC-17）；安全地址副本应保持业务值不被MarshalText意外改写，Patch编码也需同样规则。
+Get用reflect.New(root.typ).Elem构造内容，再按根V返回struct或指针（NC-16）；nil根Set在KeyOf前拒绝，miss仍返回零值/false。文本scalar判断支持*typ的MarshalText/UnmarshalText，NC-17修后为指针receiver建立地址副本，不再依赖原value可寻址；Patch复用同一codec，失败写前返回。副本只隔离scalar本身，不宣称任意引用字段深copy；历史坏字节需显式兼容。
 
 ## 全量 Set 与字段 Patch
 
-Set验证/keyOf，Stale时先Get（建议性比较），encode各节点，添加registry，再执行同槽Lua：删除登记键→写所有新hash→设置每hashTTL。Lua错误当前全部走pipeline/串行DEL+HSET fallback并告警/计数；降级非原子、网络未知和Lua运行时错误不具备回滚保证。尚未故障注入，不把源码风险说成新的实测RR；需要按错误分类/权威结果恢复，不能默认“错误就未写”。
+Set验证/keyOf，Stale时先Get（建议性比较），encode各节点，添加registry，再执行同槽Lua：删除登记键→写所有新hash→设置每hashTTL。Lua错误当前全部走pipeline/串行DEL+HSET fallback并告警/计数；降级非原子、网络未知和Lua运行时错误不具备回滚保证。后续真实Lua+执行后丢回复注入已确认[NC-21](../bug/REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-21)未修：fallback覆盖另一完成写并吞原错误。它不是整体CAS承诺，应先停止无身份未知重放。
 
-Patch只找scalar路径并HSET目标hash，最多续目标TTL；它不补nil parent引用，也不校验版本。在已存在记录Meta=nil时写Meta.Label返回nil但Get看不到（NC-18）。local/raw生成DAO路径则Get→PatchStructPath（分配nil parent）→Set；ref-hmap模板直接转Patch，因此类型化接口并不自动让两种模式等价。
+Patch找scalar路径，由patchTarget列出根到叶的键与引用；NC-18修后单一同槽Lua先检查全部路径TYPE、要求root已存在，再维护父引用、目标字段、registry和路径TTL。nil parent可以建立，缺整条root明确Unsupported，错误不降级重放。local/raw生成DAO仍Get→PatchStructPath→Set，ref-hmap直接转Patch；正式生成ref-hmap的nil父与已有路径更新已实测，两种模式缺root等边界仍各守其契约。
 
-实施优先复用plan、patchTarget与同槽脚本，维护引用可见性/registry/TTL，明确不存在根记录与并发全量Set的行为。禁止无版本读改写掩盖Patch拒绝；若选择不支持nil祖先，应写前明确拒绝。只更新叶TTL可能造成root先过期的取舍尚未本轮实测，需独立场景。
+修复复用plan、patchTarget与同槽脚本，不进行Get→全量重写；祖先和目标TTL一起续，旁支TTL不续。当前不校验版本、Get跨hash也非原子快照；Patch与并发Set/schema发布仍需矩阵，不能由单一Lua把所有读写宣布线性化。
 
 ## Redis 锁、订阅与恢复责任
 
@@ -28,6 +28,6 @@ Patch只找scalar路径并HSET目标hash，最多续目标TTL；它不补nil par
 
 ## Mongo 测试证据不能超出替身能力
 
-正式[driver collection](../../mongo/driver/collection.go)把Skip传给SDK，生产cursor与Bulk/transaction结果仍需真实Mongo。公开[mongotest](../../mongo/mongotest/mongotest.go)Find在Skip>=结果数时不切片、StreamFind漏Skip（NC-20），使基于它的分页测试偏离正式语义。修复应共用排序后skip→limit，不无限扩展查询模拟，也不把这个替身缺陷说成服务端缺陷。
+正式[driver collection](../../mongo/driver/collection.go)把Skip传给SDK，生产cursor与Bulk/transaction结果仍需真实Mongo。公开[mongotest](../../mongo/mongotest/mongotest.go)的NC-20已修，两入口共用排序后skip→limit，越界为空且大int64不先窄化；20个正式分页场景通过，不把替身修复说成服务端认证。
 
-mongotest snapshot/restore前缀已读，后半filter/update/bulk/index及并发事务忠实性还没全读。它的内存快照不是服务端隔离级别/HA证明；需要差分测试与明确unsupported矩阵。N04源文39/40、场景部分完成，下一轮继续这些留项。[缓存准入及迁移](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)已同步NC-13～15修复，不混淆本页未实施建议。
+mongotest全文现已读，NC-22～25复制/身份/精度问题仍未修，见[机制学习](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。它的内存快照不是服务端隔离级别/HA证明；仍需BSON嵌套、索引/bulk/并发事务与差分测试。N04源文40/40、场景部分完成，下一轮继续具名留项。[缓存准入及迁移](IMPLEMENTATION-CACHE-ADMISSION-AND-MIGRATION.md)沿用既有NC-13～15结论。

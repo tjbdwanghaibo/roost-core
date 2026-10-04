@@ -6,6 +6,10 @@
 
 | 编号 | 症状（你看到的） | 最可能的原因 | 看哪里 | 怎么处理 |
 | --- | --- | --- | --- | --- |
+| T-202 | RefHMap指针根Get panic，或nil根进入业务KeyOf | RR-20261004-NC-16：根内容类型与V形状不同 | 根V、nil输入、ErrRefHMapUnsupported | 使用保留根形状的修复；nil根明确拒绝，不转成功miss |
+| T-203 | 自定义文本字段Set成功却Get解码失败 | RR-20261004-NC-17：旧编码漏指针receiver codec | MarshalText方法集、实际Redis字节、解码错误 | 使用地址副本编码；已写坏字节需显式兼容/迁移，不自动重编码 |
+| T-204 | nil父Patch返回成功却不可读，或缺root现在返错 | RR-20261004-NC-18：原只写叶hash | root/父引用、键类型、registry、路径TTL | 使用单一Lua可见性修复，先Set建立root；Eval失败保留原因，不无条件重放 |
+| T-205 | RefHMap使用Root/__keys等布局后业务值改变，升级后被拒 | RR-20261004-NC-19：内部名称/路径或字段别名 | ErrRefHMapUnsupported、标签与物理hash路径 | 修复在I/O前拒绝；导出历史确定键/布局后显式迁移，不能直接改存储格式 |
 | T-199 | Get遇一致性拒绝仍调用loader，或Delete失败却清L1/返回成功 | RR-20261004-NC-13：旧Get/Delete遗漏FatalRemoteError | wrapped错误、loader次数、删除前后L1 | 使用本轮分类修复并配置fatal判别；普通故障按原strict/degrade策略，不无条件重试 |
 | T-200 | Layered回填已stale/conflict拒绝，调用方仍拿captured旧值 | RR-20261004-NC-14：旧Get吸收一致性拒绝 | L1准入结果、当前值/miss、TTL | 使用返回已准入值/错误的修复；不要把一致性拒绝当outage或自行生成墓碑 |
 | T-201 | 替换Store后旧写Set返回结果变化，生成DAO开始返回ErrStaleWrite | RR-20261004-NC-15：四Store旧写从静默成功收紧 | errors.Is(ErrStaleWrite)、存储版本、实际业务意图 | 仅对有意接受晚到旧写的场景显式容忍；该修复不使Redis读前比较变CAS |

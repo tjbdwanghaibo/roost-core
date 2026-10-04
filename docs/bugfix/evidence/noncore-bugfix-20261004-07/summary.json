@@ -1,0 +1,42 @@
+[
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-07/red.jsonl",
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 10,
+    "leaf_skip": 0,
+    "formal_new_pass": 6
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-07/red-replay.jsonl",
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 10,
+    "leaf_skip": 0,
+    "formal_new_pass": 6
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-07/green.jsonl",
+    "test_pass_events": 273,
+    "leaf_pass": 252,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_new_pass": 41
+  },
+  {
+    "file": "docs/bugfix/evidence/noncore-bugfix-20261004-07/consumer.jsonl",
+    "test_pass_events": 1,
+    "leaf_pass": 1,
+    "leaf_fail": 0,
+    "leaf_skip": 0,
+    "formal_new_pass": 0
+  },
+  {
+    "file": "docs/review/evidence/noncore-review-20261004-14/review.jsonl",
+    "test_pass_events": 6,
+    "leaf_pass": 6,
+    "leaf_fail": 6,
+    "leaf_skip": 0,
+    "formal_new_pass": 0
+  }
+]

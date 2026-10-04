@@ -1,5 +1,13 @@
 # Roost 开发者完整使用说明
 
+## 2026-10-04 RefHMap类型、Patch与名称（main，尚未发版）
+
+RefHMap支持struct/单层指针根（含命名指针），nil根在KeyOf前返ErrRefHMapUnsupported；指针TextMarshaler用于值根和Patch，编码错误不写数据，历史错误编码不会自动迁移。仅scalar本身地址副本，不承诺任意引用对象深拷贝。[16](bugfix/RR-20261004-NC-16.md) · [17](bugfix/RR-20261004-NC-17.md)。
+
+Patch要求已有root，nil嵌套父可原子创建引用；单一同槽Lua先检查路径键类型，再维护叶、registry及路径祖先TTL，不续旁支TTL。缺root明确报错，Eval错误不自动重放；不提供版本CAS或原子Get快照，依赖敏感版本裁决时使用现有权威版本能力。[18/生成消费](bugfix/RR-20261004-NC-18.md)。
+
+内部root物理键碰撞、根__keys、同hash字段重复和冒号/换行存储名称在I/O前拒绝；合法格式保持。旧非法布局读/删也被拒，需导出现有确定键和布局后显式迁移，不自动删/改业务数据。[19](bugfix/RR-20261004-NC-19.md)。公开mongotest分页已统一排序→Skip→Limit，但并非真实Mongo/事务隔离认证，当前[新替身问题](bug/REVIEW-2026-10-04-noncore-14.md)仍需处理。
+
 ## 2026-10-04 缓存准入与旧写结果（main，尚未发版）
 
 ReadThrough配置FatalRemoteError后，Get遇fatal不会调用loader/发布L1，Delete遇fatal保留L1并返回原错；普通故障仍按IgnoreRemoteError策略处理，strict删除仍清L1并返回错误。Layered对L1明确stale/conflict拒绝不返回捕获旧值，而读取已准入当前值；stale且miss保持miss，conflict且miss/读回失败明确报错，拒绝不续TTL。正常TTL缓存与普通回填可用性故障保持既有行为。[NC-13](bugfix/RR-20261004-NC-13.md) · [NC-14](bugfix/RR-20261004-NC-14.md)。

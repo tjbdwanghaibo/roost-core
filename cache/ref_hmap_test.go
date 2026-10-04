@@ -469,7 +469,34 @@ func (r *refHMapFakeRedis) SIsMember(context.Context, string, any) (bool, error)
 func (r *refHMapFakeRedis) Pipeline() fredis.IPipeline {
 	return &refHMapFakePipeline{redis: r}
 }
-func (r *refHMapFakeRedis) Eval(_ context.Context, _ string, keys []string, args ...any) (any, error) {
+func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
+	if script == refHMapPatchScript {
+		if len(keys) == 0 || len(args) != 3+len(keys)-1 {
+			return nil, errors.New("invalid patch arguments")
+		}
+		for _, key := range keys {
+			if _, exists := r.kv[key]; exists {
+				return nil, errors.New("WRONGTYPE")
+			}
+		}
+		if len(r.hashes[keys[0]]) == 0 {
+			return int64(0), nil
+		}
+		registry := parseRefHMapRegistry(r.hashes[keys[0]][refHMapRegistryField])
+		registry = uniqueRefHMapKeys(append(registry, keys...))
+		for i := 0; i < len(keys)-1; i++ {
+			_ = r.HSet(context.Background(), keys[i], args[3+i], keys[i+1])
+		}
+		_ = r.HSet(context.Background(), keys[len(keys)-1], args[1], args[2])
+		_ = r.HSet(context.Background(), keys[0], refHMapRegistryField, strings.Join(registry, "\n"))
+		ttl, _ := strconv.ParseInt(toRefHMapFakeString(args[0]), 10, 64)
+		if ttl > 0 {
+			for _, key := range keys {
+				r.expires[key] = time.Duration(ttl) * time.Millisecond
+			}
+		}
+		return int64(1), nil
+	}
 	if len(keys) == 0 || len(args) < 2 {
 		return int64(0), nil
 	}

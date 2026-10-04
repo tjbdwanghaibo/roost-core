@@ -61,6 +61,37 @@ end
 return 1
 `
 
+// RR-20261004-NC-18：同槽内先检查类型，再补齐祖先引用和叶字段。
+// 不创建缺失的整条记录；错误/未知结果不降级为非原子重写。
+const refHMapPatchScript = `
+for i = 1, #KEYS do
+	local kind = redis.call("TYPE", KEYS[i]).ok
+	if kind ~= "none" and kind ~= "hash" then
+		return redis.error_reply("WRONGTYPE ref hmap patch requires hashes")
+	end
+end
+if redis.call("EXISTS", KEYS[1]) == 0 then
+	return 0
+end
+local registry = redis.call("HGET", KEYS[1], "__keys") or ""
+for i = 1, #KEYS do
+	if not string.find("\n" .. registry .. "\n", "\n" .. KEYS[i] .. "\n", 1, true) then
+		if registry ~= "" then registry = registry .. "\n" end
+		registry = registry .. KEYS[i]
+	end
+end
+for i = 1, #KEYS - 1 do
+	redis.call("HSET", KEYS[i], ARGV[3+i], KEYS[i+1])
+end
+redis.call("HSET", KEYS[#KEYS], ARGV[2], ARGV[3])
+redis.call("HSET", KEYS[1], "__keys", registry)
+local ttl_ms = tonumber(ARGV[1])
+if ttl_ms > 0 then
+	for i = 1, #KEYS do redis.call("PEXPIRE", KEYS[i], ttl_ms) end
+end
+return 1
+`
+
 type RefHMapKeyStringFunc[K comparable] func(K) string
 
 type RefHMapPatcher[K comparable] interface {
@@ -114,12 +145,22 @@ func (s *RedisRefHMapStore[K, V]) Get(ctx context.Context, key K) (V, bool, erro
 	if err := decodeRefHMapNode(value, plan.root, hashes, plan.base); err != nil {
 		return zero, false, err
 	}
+	// RR-20261004-NC-16：layout保留struct内容，返回仍须匹配调用方的V形状。
+	rootType := reflect.TypeOf((*V)(nil)).Elem()
+	if rootType.Kind() == reflect.Pointer {
+		return value.Addr().Convert(rootType).Interface().(V), true, nil
+	}
 	return value.Interface().(V), true, nil
 }
 
 func (s *RedisRefHMapStore[K, V]) Set(ctx context.Context, value V) error {
 	if s == nil || s.redis == nil {
 		return nil
+	}
+	// nil根不能交给业务KeyOf，也不能由反射偷偷分配并修改调用方。
+	rv := reflect.ValueOf(value)
+	if rv.IsValid() && rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return fmt.Errorf("%w: nil root value", ErrRefHMapUnsupported)
 	}
 	if s.cfg.StoreConfig.ValidateValue != nil {
 		if err := s.cfg.StoreConfig.ValidateValue(value); err != nil {
@@ -212,6 +253,13 @@ func (s *RedisRefHMapStore[K, V]) layout() (*refHMapNode, string, error) {
 			s.layoutErr = err
 			return
 		}
+		// RR-20261004-NC-19：在任何I/O之前拒绝物理hash键的别名。
+		var keys []string
+		root.collectKeys("", &keys)
+		if len(uniqueRefHMapKeys(keys)) != len(keys) {
+			s.layoutErr = fmt.Errorf("%w: duplicate hash paths", ErrRefHMapUnsupported)
+			return
+		}
 		s.layoutRoot = root
 		s.layoutPrefix = prefix + ":{" + name + ":"
 	})
@@ -246,20 +294,18 @@ func (s *RedisRefHMapStore[K, V]) Patch(ctx context.Context, key K, path string,
 	if err != nil {
 		return err
 	}
-	if pipe := s.redis.Pipeline(); pipe != nil {
-		pipe.HSet(ctx, target.key, target.field.name, raw)
-		if s.cfg.TTL > 0 {
-			pipe.Expire(ctx, target.key, s.cfg.TTL)
-		}
-		return pipe.Exec(ctx)
+	args := []any{strconv.FormatInt(s.cfg.TTL.Milliseconds(), 10), target.field.name, raw}
+	for _, name := range target.references {
+		args = append(args, name)
 	}
-	if err := s.redis.HSet(ctx, target.key, target.field.name, raw); err != nil {
+	applied, err := s.redis.Eval(ctx, refHMapPatchScript, target.keys, args...)
+	if err != nil {
 		return err
 	}
-	if s.cfg.TTL > 0 {
-		_, err = s.redis.Expire(ctx, target.key, s.cfg.TTL)
+	if applied != int64(1) {
+		return fmt.Errorf("%w: patch %q requires an existing root", ErrRefHMapUnsupported, path)
 	}
-	return err
+	return nil
 }
 
 func (s *RedisRefHMapStore[K, V]) loadHashes(ctx context.Context, plan *refHMapPlan) (map[string]map[string]string, error) {
@@ -423,6 +469,8 @@ func (p *refHMapPlan) patchTarget(path string) (refHMapPatchTarget, error) {
 	}
 	parts := strings.Split(strings.TrimSpace(path), ".")
 	node := p.root
+	keys := []string{p.key(node)}
+	var references []string
 	for i, part := range parts {
 		if part == "" {
 			return refHMapPatchTarget{}, fmt.Errorf("%w: empty patch path %q", ErrRefHMapUnsupported, path)
@@ -435,20 +483,24 @@ func (p *refHMapPlan) patchTarget(path string) (refHMapPatchTarget, error) {
 			if field.kind != refHMapScalarField {
 				return refHMapPatchTarget{}, fmt.Errorf("%w: patch path %q is not scalar", ErrRefHMapUnsupported, path)
 			}
-			return refHMapPatchTarget{node: node, field: field, key: p.key(node)}, nil
+			return refHMapPatchTarget{node: node, field: field, key: p.key(node), keys: keys, references: references}, nil
 		}
 		if field.kind != refHMapStructField || field.child == nil {
 			return refHMapPatchTarget{}, fmt.Errorf("%w: patch path %q crosses non-struct field", ErrRefHMapUnsupported, path)
 		}
+		references = append(references, field.name)
 		node = field.child
+		keys = append(keys, p.key(node))
 	}
 	return refHMapPatchTarget{}, fmt.Errorf("%w: empty patch path", ErrRefHMapUnsupported)
 }
 
 type refHMapPatchTarget struct {
-	node  *refHMapNode
-	field refHMapField
-	key   string
+	node       *refHMapNode
+	field      refHMapField
+	key        string
+	keys       []string
+	references []string
 }
 
 // refHMapNode describes one Redis hash in the flattened struct. It holds a
@@ -526,6 +578,7 @@ func buildRefHMapNode(typ reflect.Type, path []string, maxDepth int, depth int, 
 		typ:    typ,
 		suffix: suffix,
 	}
+	fieldNames := make(map[string]bool)
 	for i := 0; i < typ.NumField(); i++ {
 		sf := typ.Field(i)
 		if sf.PkgPath != "" {
@@ -535,6 +588,11 @@ func buildRefHMapNode(typ reflect.Type, path []string, maxDepth int, depth int, 
 		if !ok {
 			continue
 		}
+		// RR-20261004-NC-19：同hash字段别名与路径分隔符不能静默覆盖数据。
+		if fieldNames[name] || strings.ContainsAny(name, ":\n\r") || (len(path) == 0 && name == refHMapRegistryField) {
+			return nil, fmt.Errorf("%w: reserved or duplicate field %s.%s (%q)", ErrRefHMapUnsupported, typ.Name(), sf.Name, name)
+		}
+		fieldNames[name] = true
 		fieldType := sf.Type
 		if isRefHMapScalar(fieldType) {
 			node.fields = append(node.fields, refHMapField{
@@ -805,12 +863,13 @@ func encodeRefHMapTextScalar(value reflect.Value) (string, bool, error) {
 		raw, err := value.Interface().(encoding.TextMarshaler).MarshalText()
 		return string(raw), true, err
 	}
-	if value.CanAddr() {
-		ptr := value.Addr()
-		if ptr.Type().Implements(textMarshalerType) {
-			raw, err := ptr.Interface().(encoding.TextMarshaler).MarshalText()
-			return string(raw), true, err
-		}
+	if reflect.PointerTo(value.Type()).Implements(textMarshalerType) {
+		// RR-20261004-NC-17：值根字段不可寻址也要调用已识别的codec。
+		// 使用独立值副本，避免指针receiver改写调用方的scalar本身。
+		ptr := reflect.New(value.Type())
+		ptr.Elem().Set(value)
+		raw, err := ptr.Interface().(encoding.TextMarshaler).MarshalText()
+		return string(raw), true, err
 	}
 	return "", false, nil
 }

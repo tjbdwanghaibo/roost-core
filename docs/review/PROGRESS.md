@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-04 第七批修复 + 非三大核心第八批 N04
+
+基线`08d18be9`，fetch/pull无增量。[NC-16～20修复](REVIEW-2026-10-04-noncore-13.md) · [N04第三批](REVIEW-2026-10-04-noncore-14.md) · [五新未修RR](../bug/REVIEW-2026-10-04-noncore-14.md) · [机制学习](IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)。下方旧未修保留历史，未发版。
+
+| 范围 | 新证据 | 状态 / 接续 |
+| --- | --- | --- |
+| NC-16～20 | 原16叶子10fail/6控制实际红、旧产品overlay红复跑；最终41新正式叶子通过，十包race/vet252叶子pass/0fail/skip | 5/5已修；nil根/codec、深层Patch/root miss/类型冲突/祖先TTL/registry/非法布局/分页大值具名验证 |
+| 正式生成消费 | 当前DAO CLI独立module生成ref-hmap DAO，真实Redis实际nil父Patch和已有路径更新 | 一个消费者race/vet通过，补上前轮仅模板可达的缺口；无模板或格式迁移 |
+| N04源文 | 补mongotest595以后与当前前段/RefHMap，固定候选累计40/40全文已读；38项按前轮hash复用 | [清单/blob/来源](evidence/noncore-review-20261004-14/inventory.csv)；源文阅读完成，场景部分完成，不是100%业务覆盖 |
+| 新审查场景 | 十二叶子6fail/6控制：真实Lua+执行后丢回复注入2项，公开替身10项 | NC-21一P2、NC-22～25四P3未修；初版BSON类型假设错误已修探针，不计产品失败 |
+
+下一新入口 **BSON.D嵌套路径/unique-index/bulk/并发事务隔离 → Redis锁/续租/pubsub真实故障与Cluster → Mongo真实cursor/partial bulk/事务重试及正式迁移消费**。用户声明未修跳过NC-21～25验收，要求bugfix先修本轮五项。N01～N04仍不计completed/15；约50～90有效小时跨域风险预算保持，未按40/40扣减或承诺日期。[证据](evidence/noncore-review-20261004-14/README.md) · [计划](NONCORE-REVIEW-PLAN-2026-10-03.md) · [留项](../bug/CARRYOVER.md)。
+
 ## 2026-10-04 第六批修复 + 非三大核心第七批 N04
 
 基线`1502f973`，fetch/pull无增量。[NC-13～15修复](REVIEW-2026-10-04-noncore-11.md) · [N04第二批审查](REVIEW-2026-10-04-noncore-12.md) · [五个新未修RR](../bug/REVIEW-2026-10-04-noncore-12.md) · [RefHMap机制与实施交接](IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)。下方旧未修保留历史时点，未发版。

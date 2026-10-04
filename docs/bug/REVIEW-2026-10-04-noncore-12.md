@@ -1,5 +1,7 @@
 # N04 第二批：RefHMap 类型、Patch、存储名称与测试替身分页
 
+**后续状态（2026-10-04）：NC-16～20五项已修、声明场景验证，未发版。** [16](../bugfix/RR-20261004-NC-16.md) · [17](../bugfix/RR-20261004-NC-17.md) · [18](../bugfix/RR-20261004-NC-18.md) · [19](../bugfix/RR-20261004-NC-19.md) · [20](../bugfix/RR-20261004-NC-20.md) · [红绿/生成消费](../bugfix/evidence/noncore-bugfix-20261004-07/README.md)。以下原失败与未修结论保留历史时点。
+
 2026-10-04，源码基线main`1502f97372139a238e73850ff7337b9454146f9e`；同一工作树先修NC-13～15，**本页五个新RR已确认、未修**。RefHMap/mongotest产品未修改。[运行/范围](../review/REVIEW-2026-10-04-noncore-12.md) · [真实Redis/分页日志与复跑](../review/evidence/noncore-review-20261004-12/README.md) · [机制与实施交接](../review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md)。
 
 真实Redis八项RefHMap场景5fail/3控制；mongotest八项分页5fail/3控制，十个失败叶子归为五根因，不当十bug。原缓存六项和Redis七项全部通过，是修复验证，不新增RR。

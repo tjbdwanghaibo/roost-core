@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-04 第七批修复：NC-16～20 5/5已修、声明场景验证，未发版。** [16](RR-20261004-NC-16.md) · [17](RR-20261004-NC-17.md) · [18](RR-20261004-NC-18.md) · [19](RR-20261004-NC-19.md) · [20](RR-20261004-NC-20.md) · [运行](../review/REVIEW-2026-10-04-noncore-13.md) · [红绿/41正式项/生成ref-hmap消费](evidence/noncore-bugfix-20261004-07/README.md)。十包race/vet、252叶子pass/0fail/skip；原16项10fail转绿，真实Redis Lua、codec和非法布局补证。T-202～205，nil根/缺root与布局拒绝、路径TTL和历史编码兼容已记。继续review确认[NC-21～25](../bug/REVIEW-2026-10-04-noncore-14.md)未修，不属本批修复；下方“NC-16～20未修”为历史时点。
+
 **10-04 第六批修复：NC-13～15 3/3已修、声明场景验证，未发版。** [fatal Get/Delete](RR-20261004-NC-13.md) · [Layered准入回填](RR-20261004-NC-14.md) · [四Store旧写](RR-20261004-NC-15.md) · [运行](../review/REVIEW-2026-10-04-noncore-11.md) · [红绿/41正式项/消费者](evidence/noncore-bugfix-20261004-06/README.md)。五包race/vet通过，原7Redis集成与6缓存场景实测全绿；正式DAO CLI两个消费者通过。T-199～201，普通故障兼容和旧写行为收紧已记录。继续审查确认[NC-16～20](../bug/REVIEW-2026-10-04-noncore-12.md)未修；下方旧“NC-13～15未修”是第五批时点。
 
 **10-04 第五批修复：NC-11/12 2/2已修、声明场景验证，未发版。** [setup/长期session](RR-20261004-NC-11.md) · [关闭等待/实际退出](RR-20261004-NC-12.md) · [运行](../review/REVIEW-2026-10-04-noncore-09.md) · [红绿/15正式项](evidence/noncore-bugfix-20261004-05/README.md)。最终两测试包race61 test pass事件、0fail/skip，KitEtcd仅编译/vet，三包vet通过；原overlay8项转绿，T-197/198。正常Resign的TTL级等待和真实etcd恢复仍未验证。下方“NC-11/12尚未修复”为第四批时点；本轮新[NC-13～15](../bug/REVIEW-2026-10-04-noncore-10.md)未修。

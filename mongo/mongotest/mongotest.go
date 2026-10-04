@@ -535,12 +535,7 @@ func (c *Collection) Find(ctx context.Context, filter any, results any, opts ...
 		if matched, err = c.sortLocked(matched, opts[0].Sort); err != nil {
 			return err
 		}
-		if opts[0].Skip > 0 && int(opts[0].Skip) < len(matched) {
-			matched = matched[opts[0].Skip:]
-		}
-		if opts[0].Limit > 0 && int(opts[0].Limit) < len(matched) {
-			matched = matched[:opts[0].Limit]
-		}
+		matched = paginateMatches(matched, opts[0])
 	}
 	docs := make([]bson.M, 0, len(matched))
 	for _, key := range matched {
@@ -568,9 +563,7 @@ func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]
 			c.mu.Unlock()
 			return err
 		}
-		if opts[0].Limit > 0 && int(opts[0].Limit) < len(matched) {
-			matched = matched[:opts[0].Limit]
-		}
+		matched = paginateMatches(matched, opts[0])
 	}
 	raws := make([][]byte, 0, len(matched))
 	for _, key := range matched {
@@ -588,6 +581,20 @@ func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]
 		}
 	}
 	return nil
+}
+
+// RR-20261004-NC-20：排序后先skip再limit，页外为空；比较完成后再缩窄int64。
+func paginateMatches(matched []string, option fmongo.FindOption) []string {
+	if option.Skip > 0 {
+		if option.Skip >= int64(len(matched)) {
+			return matched[:0]
+		}
+		matched = matched[option.Skip:]
+	}
+	if option.Limit > 0 && option.Limit < int64(len(matched)) {
+		matched = matched[:option.Limit]
+	}
+	return matched
 }
 
 func (c *Collection) UpdateOne(ctx context.Context, filter any, update any) (result *fmongo.UpdateResult, err error) {

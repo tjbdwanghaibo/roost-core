@@ -1,0 +1,8 @@
+{"Time":"2026-10-04T13:30:59.2914042+08:00","Action":"start","Package":"example.com/roostrefconsumer/db"}
+{"Time":"2026-10-04T13:31:00.368596+08:00","Action":"run","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer"}
+{"Time":"2026-10-04T13:31:00.368596+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Output":"=== RUN   TestGeneratedRefHMapPatchConsumer\n","OutputType":"frame"}
+{"Time":"2026-10-04T13:31:00.3818022+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Output":"--- PASS: TestGeneratedRefHMapPatchConsumer (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-10-04T13:31:00.3818022+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Test":"TestGeneratedRefHMapPatchConsumer","Elapsed":0.01}
+{"Time":"2026-10-04T13:31:00.3818022+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-04T13:31:01.4043367+08:00","Action":"output","Package":"example.com/roostrefconsumer/db","Output":"ok  \texample.com/roostrefconsumer/db\t2.112s\n"}
+{"Time":"2026-10-04T13:31:01.4043367+08:00","Action":"pass","Package":"example.com/roostrefconsumer/db","Elapsed":2.113}

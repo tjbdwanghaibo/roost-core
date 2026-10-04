@@ -1,14 +1,26 @@
 # Roost Review 问题索引
 
+**10-04 N04第三批：NC-21～25五项已确认、未修。** Lua未知结果重放一P2；mongotest浅复制、重复候选、大整数比较和ReturnAfter身份四P3。[运行/40源文范围](../review/REVIEW-2026-10-04-noncore-14.md) · [机制/实施交接](../review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md) · [真实Redis/替身反例](../review/evidence/noncore-review-20261004-14/README.md)。十二叶子6fail/6控制，五根因；场景部分完成。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261004-NC-21](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-21) | P2 RefHMap未知Lua结果重放覆盖另一完成写且返成功 | 已确认、未修 |
+| [RR-20261004-NC-22](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-22) | P3 mongotest浅复制破坏嵌套abort与读输出隔离 | 已确认、未修 |
+| [RR-20261004-NC-23](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-23) | P3 _id $in快速候选重复同一文档 | 已确认、未修 |
+| [RR-20261004-NC-24](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-24) | P3 浮点化整数使不同int64版本相等 | 已确认、未修 |
+| [RR-20261004-NC-25](REVIEW-2026-10-04-noncore-14.md#rr-20261004-nc-25) | P3 ReturnAfter重匹配旧filter返回另一文档 | 已确认、未修 |
+
+**10-04第七批修复：NC-16～20 5/5已修、声明场景验证，未发版。** [41正式项/红绿/真实生成消费](../bugfix/evidence/noncore-bugfix-20261004-07/README.md)，十包race/vet通过。下方“第二批未修”保留历史时点。
+
 **10-04 N04第二批：NC-16～20五项已确认、未修。** RefHMap指针根、文本codec、nil父Patch与内部名称碰撞四P2；mongotest分页一P3。[运行/39源文范围](../review/REVIEW-2026-10-04-noncore-12.md) · [机制/实施交接](../review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md) · [真实Redis/分页证据](../review/evidence/noncore-review-20261004-12/README.md)。十失败叶子五根因，场景仍部分完成。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261004-NC-16](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-16) | P2 RefHMap指针根Set成功后Get panic | 已确认、未修 |
-| [RR-20261004-NC-17](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-17) | P2 指针TextMarshaler未执行导致编码/解码不一致 | 已确认、未修 |
-| [RR-20261004-NC-18](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-18) | P2 nil父结构Patch返回成功但更新不可见 | 已确认、未修 |
-| [RR-20261004-NC-19](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-19) | P2 root/__keys内部名称碰撞改变业务值 | 已确认、未修 |
-| [RR-20261004-NC-20](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-20) | P3 公开mongotest漏/误应用分页Skip | 已确认、未修 |
+| [RR-20261004-NC-16](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-16) | P2 RefHMap指针根Set成功后Get panic | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-16.md) |
+| [RR-20261004-NC-17](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-17) | P2 指针TextMarshaler未执行导致编码/解码不一致 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-17.md) |
+| [RR-20261004-NC-18](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-18) | P2 nil父结构Patch返回成功但更新不可见 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-18.md) |
+| [RR-20261004-NC-19](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-19) | P2 root/__keys内部名称碰撞改变业务值 | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-19.md) |
+| [RR-20261004-NC-20](REVIEW-2026-10-04-noncore-12.md#rr-20261004-nc-20) | P3 公开mongotest漏/误应用分页Skip | 已修复、声明场景验证，未发版；[记录](../bugfix/RR-20261004-NC-20.md) |
 
 **10-04 第六批修复：NC-13～15 3/3已修、声明场景验证，未发版。** [运行](../review/REVIEW-2026-10-04-noncore-11.md) · [41正式项/红绿/真实消费者](../bugfix/evidence/noncore-bugfix-20261004-06/README.md)。下方“第一批未修”保留历史时点。
 
