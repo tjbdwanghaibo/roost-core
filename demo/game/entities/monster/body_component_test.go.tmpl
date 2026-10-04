@@ -5,6 +5,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"testing"
 
+	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
@@ -89,5 +90,26 @@ func TestMonsterFarViewOmitsHP(t *testing.T) {
 	}
 	if _, exists := doc["template"]; !exists {
 		t.Fatal("far view lost template")
+	}
+}
+
+// `//roost:dao nocoll` (W-2026-09-18-09): the monster's DAO has no collection,
+// so it has nothing that could reach storage — not a mutation participant,
+// not loadable — and it is registered with its entity under a key that is
+// not a collection name.
+func TestTheMonsterDaoHasNoCollection(t *testing.T) {
+	subject := newMonster(t)
+	var dao any = subject.Dao()
+	if _, ok := dao.(nest.MutationParticipant); ok {
+		t.Fatal("the monster DAO can prepare persistence mutations")
+	}
+	if _, ok := dao.(entity.PersistedDaoLoader); ok {
+		t.Fatal("the monster DAO can be loaded from storage")
+	}
+	if got := subject.Dao().CollName(); got != db.MonsterDaoRegistryKey {
+		t.Fatalf("monster DAO registered as %q, want %q", got, db.MonsterDaoRegistryKey)
+	}
+	if subject.DaoManager.Get(db.MonsterDaoRegistryKey) == nil {
+		t.Fatal("the monster DAO is not in its entity's DaoManager")
 	}
 }

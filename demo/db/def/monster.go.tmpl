@@ -13,7 +13,13 @@ package dbdef
 // The generated marshaller is the same one the Player uses, so the packer is
 // the same shape too: `MarshalSync(mask)` in, bytes out.
 //
-//roost:dao coll=monsters db=game
+// `nocoll` says there is no collection: no Mongo collection name is invented
+// for it, and the generator emits no storage path (no collection constant,
+// no PrepareMutation, no RestorePersisted) — only the accessors, the rollback
+// snapshot and the sync marshaller. Every field must stay `nopersist`, and only
+// a `noPersist=true` entity may use it; both are checked at generation time.
+//
+//roost:dao nocoll
 type MonsterDao struct {
 	// Template is which row of the spawn table this monster came from; a
 	// client needs it to know what to draw.

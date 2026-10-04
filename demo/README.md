@@ -273,6 +273,10 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   这个进程余下的时间里都会少一只，而且没人会说。
 - **怪的 DAO 每个字段都是 `nopersist,sync`**：不存，但复制。这是为了让"位置住在 DAO 里、经组件读写"对**所有**实体一致——
   否则 demo 里会出现两种位置权威，而第一段要同时处理玩家和怪的代码就会挑错一种。
+  它用 `//roost:dao nocoll` 声明**没有集合**：不编造 Mongo 集合名，生成物里没有集合常量、`PrepareMutation`、`RestorePersisted`
+  这条永远不会写东西的持久化路径，只有读写方法、回滚快照与 `MarshalSync`；DaoManager 里以 `db.MonsterDaoRegistryKey` 登记。
+  生成器保证它全字段 `nopersist`、且只被 `noPersist=true` 的实体使用（W-2026-09-18-09，方案见 roost-core
+  `docs/feature/DAO-NO-COLLECTION-2026-10-04.md`）。
 - **计时器在装配层**，不在 system 里：system 仍是纯状态机（`Due(now)` 的时间是传进去的），所以它可测、可重放。
 - GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒后回到满员且是一个**新 id**。
 - **没做**：怪不动（没有 AI），战斗只有 GM 的"杀掉"，id 由进程本地计数器生成（第二个进程会撞，见 WANTED）。
@@ -513,6 +517,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222 -nats-prefix
 
 看四处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`；送礼 deliver 的收件人检查也读这里，所以改 `dataengine.database` 不影响赠礼，RR-20260930-22）；重启 game 再跑一轮，items 与 level 在原值上累加；
 mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长；
+怪物不落库——`game` 库里没有怪的集合（`MonsterDao` 是 `//roost:dao nocoll`），GM `gm.scene.population` 才是看它们的地方；
 chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello。
 
 **给每次实跑一个独立的 `nats.prefix`**（五个进程一致）。共享的 JetStream 集群里若残留了别的测试建的流、
