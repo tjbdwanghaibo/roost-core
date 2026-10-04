@@ -2,8 +2,8 @@ package webroute
 
 import (
 	"fmt"
+	"github.com/go-chi/chi/v5"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
-	runtimewebroute "github.com/tjbdwanghaibo/roost-core/webroute"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -111,8 +111,8 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 	if path == "" || !strings.HasPrefix(path, "/") {
 		return Route{}, fmt.Errorf("invalid path %q", path)
 	}
-	// 与正式运行期共用 chi 校验，在扫描阶段拒绝，尚未写任何生成物。
-	if err := runtimewebroute.ValidatePath(path); err != nil {
+	// 与正式运行期共用 chi 的路由语法，在扫描阶段拒绝，尚未写任何生成物。
+	if err := validateChiPath(path); err != nil {
 		return Route{}, err
 	}
 	if bodyMode != bodyJSON && bodyMode != bodyRaw {
@@ -143,4 +143,18 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 		RequestType:  requestType,
 		ResponseType: types.ExprString(function.Type.Results.List[0].Type),
 	}, nil
+}
+
+// validateChiPath 用 chi 自己的解析器校验路由模式，与运行期 webroute.ValidatePath
+// （RR-20261004-NC-07）同一语法。生成器不得 import core 运行时包
+// （dependency_boundary_test.go 的 codegen 层规则），所以这里直接调用 chi，
+// 而不是引用 roost-core/webroute。chi 解析非法模式会 panic，只让它改一次性 router。
+func validateChiPath(path string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("invalid path %q: %v", path, recovered)
+		}
+	}()
+	chi.NewRouter().Get(path, func(http.ResponseWriter, *http.Request) {})
+	return nil
 }

@@ -2,6 +2,7 @@ package roostcore_test
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,11 +21,16 @@ func TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip(t *testing.T) {
 	for _, want := range []string{
 		"REDIS_ADDR: 127.0.0.1:6379",
 		"go test -tags integration",
-		`.Output|test("REDIS_ADDR")`,
 		"go vet -tags integration ./...",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("workflow lost %q", want)
 		}
+	}
+	// The skip guard's jq filter must still match REDIS_ADDR. RR-20261001-01
+	// widened it to an alternation of every Redis gate variable, so match the
+	// filter's shape rather than its old literal text.
+	if !regexp.MustCompile(`\.Output\|test\("[^"]*\bREDIS_ADDR\b[^"]*"\)`).MatchString(workflow) {
+		t.Errorf("workflow lost the skip guard's REDIS_ADDR filter (.Output|test(\"…REDIS_ADDR…\"))")
 	}
 }

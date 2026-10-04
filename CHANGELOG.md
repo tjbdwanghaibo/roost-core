@@ -50,6 +50,7 @@
 
 ### Fixed
 
+- **CI 恢复绿色**：main 的 ci / nightly 自 10-01 起红——RR-20261001-01 改宽守卫正则后既有测试按旧字面查找（已改为按形状匹配），10-04 起 `codegen/internal/webroute` 为复用 `ValidatePath` import 了 core 运行时包、违反生成器边界（改为直接调用 chi），以及 grpc 由间接依赖变为直接依赖未 tidy。见 [RR-20261001-01](docs/bugfix/RR-20261001-01.md)、[RR-20261004-NC-07](docs/bugfix/RR-20261004-NC-07.md) 的“复核后的补修”。
 - **Remote 锁取锁没有拿到 Redis 答复后不再卡到 LockTTL**（RR-20261004-01，P2）：取锁脚本 Eval 因 ctx 截止 / 网络错误返回错误而脚本已在 Redis 执行时，旧版本之后每次写都回 `versioned lock not acquired`，直到 `lock_ttl`（缺省 24h）。现在 token 按锁对象分代（随机前缀 + 递增序号），下一次 TryLock 由 Lua 判定：owner 是本锁对象更早一代就换成新 token、新 fence 取回，别人持有照旧 NotAcquired，迟到的旧代脚本挤不掉新代际；RR-20260930-21 的释放未知路径并入同一判定。token 格式变为 `<base32>.<seq>`，TryLock 脚本多一个 ARGV（KEYS 不变），新旧二进制混跑时互相视为“别人持有”。[记录](docs/bugfix/RR-20261004-01.md)、T-207
 - **Remote 负载 harness 有错误时仍做区间一致性核验**（测试 harness，不是 RR）：失败请求按 USER_GUIDE §4 判别表用 `errors.Is` 分成“确定未生效”和“结果未知”两类，每个实体按 `[成功回复数, 成功回复数 + 结果未知数]` 区间核验 Mongo / NATS / outbox，无错误时与原来的精确核验逐字相同。`result.json` 新增 `ErrorsNotApplied` / `ErrorsUncertain` / `ErrorClasses` / `ErrorClassFirst`；`.verified` 先写出，之后再以负载错误让测试失败；`scripts/perf/remote.sh` 在核验通过但有错误时输出 `consistency verified; load errors=…` 并退出 3。新增 `ROOST_REMOTE_REQUEST_TIMEOUT`（缺省 30s，仅用于构造结果未知）。见 [REMOTE-ACCEPTANCE §负载有错误时的区间核验](docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)、C01-RUNBOOK §5。
 - **隔离集成环境的 mongod 有了 WiredTiger 缓存上限**（`ROOST_IT_MONGO_CACHE_GB`，缺省 1）：三个副本同机，缺省缓存（物理内存的一半）合计超过内存，24 小时长跑中宿主机换页、被测进程停顿数秒，C01 第 3、4 次的写许可拒绝都来自这里。已在跑的环境要 `down` 再 `up` 才生效。见 `kit/scripts/integration/README.md`。
