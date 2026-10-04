@@ -27,6 +27,12 @@ var (
 	ErrRefHMapUnsupported = errors.New("cache: redis ref hmap unsupported field")
 )
 
+// errRefHMapPartialRecord：根引用了一个必然非空的子 hash，它却已不存在。
+// RR-20261004-03：子 hash 单独过期（修复前 Patch 只续期路径）或被外部删除，
+// 读到的只是半条记录；Get 把它当整条 miss，让上层按缺失重载，而不是返回
+// ok=true 的部分值。它不是持久损坏：下一次 Set 会整条重写。
+var errRefHMapPartialRecord = errors.New("cache: redis ref hmap referenced hash missing")
+
 var (
 	textMarshalerType   = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
 	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
@@ -61,8 +67,18 @@ return 1
 
 // RR-20261004-NC-18：同槽内先检查类型，再补齐祖先引用和叶字段。
 // 不创建缺失的整条记录；错误/未知结果不降级为非原子重写。
+//
+// KEYS[1..ARGV[4]] 是根到叶的路径，其后是布局里其余的 hash；全部同属一个
+// {name:key} hash tag，脚本只访问声明过的键。ARGV：1 TTL 毫秒，2 叶字段，
+// 3 叶值，4 路径长度，5.. 路径上每一层的引用字段名。
+//
+// RR-20261004-03：续期覆盖整条记录的全部布局 hash，而不只是路径。原先兄弟
+// hash 保留上一次 Set 的 TTL，过期后 Get 读出 ok=true 的部分记录。注册表并入
+// 全部布局键（与 Set 写的注册表一致），没有 __keys 的旧数据被 Patch 后，
+// Delete 仍能找到兄弟 hash。
 const refHMapPatchScript = `
-for i = 1, #KEYS do
+local path_count = tonumber(ARGV[4])
+for i = 1, path_count do
 	local kind = redis.call("TYPE", KEYS[i]).ok
 	if kind ~= "none" and kind ~= "hash" then
 		return redis.error_reply("WRONGTYPE ref hmap patch requires hashes")
@@ -78,10 +94,10 @@ for i = 1, #KEYS do
 		registry = registry .. KEYS[i]
 	end
 end
-for i = 1, #KEYS - 1 do
-	redis.call("HSET", KEYS[i], ARGV[3+i], KEYS[i+1])
+for i = 1, path_count - 1 do
+	redis.call("HSET", KEYS[i], ARGV[4+i], KEYS[i+1])
 end
-redis.call("HSET", KEYS[#KEYS], ARGV[2], ARGV[3])
+redis.call("HSET", KEYS[path_count], ARGV[2], ARGV[3])
 redis.call("HSET", KEYS[1], "__keys", registry)
 local ttl_ms = tonumber(ARGV[1])
 if ttl_ms > 0 then
@@ -141,6 +157,9 @@ func (s *RedisRefHMapStore[K, V]) Get(ctx context.Context, key K) (V, bool, erro
 	}
 	value := reflect.New(plan.root.typ).Elem()
 	if err := decodeRefHMapNode(value, plan.root, hashes, plan.base); err != nil {
+		if errors.Is(err, errRefHMapPartialRecord) {
+			return zero, false, nil
+		}
 		return zero, false, err
 	}
 	// RR-20261004-NC-16：layout保留struct内容，返回仍须匹配调用方的V形状。
@@ -292,11 +311,13 @@ func (s *RedisRefHMapStore[K, V]) Patch(ctx context.Context, key K, path string,
 	if err != nil {
 		return err
 	}
-	args := []any{strconv.FormatInt(s.cfg.TTL.Milliseconds(), 10), target.field.name, raw}
+	args := []any{strconv.FormatInt(s.cfg.TTL.Milliseconds(), 10), target.field.name, raw, strconv.Itoa(len(target.keys))}
 	for _, name := range target.references {
 		args = append(args, name)
 	}
-	applied, err := s.redis.Eval(ctx, refHMapPatchScript, target.keys, args...)
+	// RR-20261004-03：路径之后声明布局里其余的 hash，脚本把整条记录一起续期。
+	keys := uniqueRefHMapKeys(append(append([]string(nil), target.keys...), plan.keys()...))
+	applied, err := s.redis.Eval(ctx, refHMapPatchScript, keys, args...)
 	if err != nil {
 		return err
 	}
@@ -476,6 +497,10 @@ type refHMapNode struct {
 	typ    reflect.Type
 	suffix string
 	fields []refHMapField
+	// alwaysWritten：这一层有非指针字段，Set 写它时 hash 必然非空。
+	// RR-20261004-03：被引用却不存在的这种 hash 只能是过期或被删，Get 据此报 miss；
+	// 字段全是指针的层全 nil 时只被引用、不写 hash，缺失是合法状态。
+	alwaysWritten bool
 }
 
 func (n *refHMapNode) collectKeys(base string, keys *[]string) {
@@ -592,6 +617,12 @@ func buildRefHMapNode(typ reflect.Type, path []string, maxDepth int, depth int, 
 		}
 		return nil, fmt.Errorf("%w: %s.%s %s", ErrRefHMapUnsupported, typ.Name(), sf.Name, fieldType)
 	}
+	for _, field := range node.fields {
+		if !field.ptr {
+			node.alwaysWritten = true
+			break
+		}
+	}
 	return node, nil
 }
 
@@ -646,6 +677,9 @@ func decodeRefHMapNode(value reflect.Value, node *refHMapNode, hashes map[string
 		case refHMapStructField:
 			if !ok || raw == "" {
 				continue
+			}
+			if field.child.alwaysWritten && len(hashes[base+field.child.suffix]) == 0 {
+				return errRefHMapPartialRecord
 			}
 			if field.ptr {
 				if fv.IsNil() {

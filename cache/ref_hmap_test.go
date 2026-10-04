@@ -471,10 +471,16 @@ func (r *refHMapFakeRedis) Pipeline() fredis.IPipeline {
 }
 func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
 	if script == refHMapPatchScript {
-		if len(keys) == 0 || len(args) != 3+len(keys)-1 {
+		// KEYS[:pathCount] 是根到叶路径，其后是布局里其余的 hash（RR-20261004-03）。
+		pathCount := 0
+		if len(args) > 3 {
+			pathCount, _ = strconv.Atoi(toRefHMapFakeString(args[3]))
+		}
+		if pathCount <= 0 || pathCount > len(keys) || len(args) != 4+pathCount-1 {
 			return nil, errors.New("invalid patch arguments")
 		}
-		for _, key := range keys {
+		path := keys[:pathCount]
+		for _, key := range path {
 			if _, exists := r.kv[key]; exists {
 				return nil, errors.New("WRONGTYPE")
 			}
@@ -484,10 +490,10 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 		}
 		registry := parseRefHMapRegistry(r.hashes[keys[0]][refHMapRegistryField])
 		registry = uniqueRefHMapKeys(append(registry, keys...))
-		for i := 0; i < len(keys)-1; i++ {
-			_ = r.HSet(context.Background(), keys[i], args[3+i], keys[i+1])
+		for i := 0; i < len(path)-1; i++ {
+			_ = r.HSet(context.Background(), path[i], args[4+i], path[i+1])
 		}
-		_ = r.HSet(context.Background(), keys[len(keys)-1], args[1], args[2])
+		_ = r.HSet(context.Background(), path[len(path)-1], args[1], args[2])
 		_ = r.HSet(context.Background(), keys[0], refHMapRegistryField, strings.Join(registry, "\n"))
 		ttl, _ := strconv.ParseInt(toRefHMapFakeString(args[0]), 10, 64)
 		if ttl > 0 {
