@@ -14,7 +14,7 @@ const (
 	// defaultTransactionTimeout 是 Config.TransactionTimeout 未设置（<=0）时的窗口，
 	// 与驱动便捷 API 的 withTransactionTimeout 相同。
 	defaultTransactionTimeout = 120 * time.Second
-	// transactionAbortTimeout 限住回调失败后的尽力 abort。abort 不影响正确性（服务端到
+	// transactionAbortTimeout 限住回调失败后、以及 EndSession 里的尽力 abort。abort 不影响正确性（服务端到
 	// transactionLifetimeLimitSeconds 也会自己中止），不能让它在网络黑洞时无限阻塞。
 	transactionAbortTimeout = 5 * time.Second
 	// 回调整体重跑（TransientTransactionError）之间的退避，取值同驱动。
@@ -43,8 +43,11 @@ type session struct {
 // TransientTransactionError 时重跑回调——只是把同一个带截止的 ctx 交给提交。
 //
 // 截止时间落在提交中途时返回驱动的错误（错误链与标签保留）：服务端可能已经提交，
-// 调用方必须按结果未知处理，不能当成未提交。提交失败后不 abort（驱动同样不这么做：
-// 失败的提交可能已解除 session 的服务器绑定，abort 可能与提交并发执行）。
+// 调用方必须按结果未知处理，不能当成未提交。这里提交失败后不 abort（驱动同样不这么做：
+// 失败的提交可能已解除 session 的服务器绑定，abort 可能与提交并发执行）。但提交因截止失败时
+// 驱动不更新事务状态（CommitTransaction 的 IsTimeout 分支），之后的 EndSession 仍会对它补发
+// abortTransaction；副本集上同一 txnNumber 的提交与 abort 由服务端串行裁决，结果仍是二者之一，
+// 所以未知结果的含义不变。EndSession 的上限见下。
 func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -130,6 +133,18 @@ func hasErrorLabel(err error, label string) bool {
 	return errors.As(err, &labeled) && labeled.HasErrorLabel(label)
 }
 
+// EndSession 结束会话。事务仍在进行时驱动会在这里先 abort——典型是提交因截止失败之后
+// （见 WithTransaction）。调用方传入的通常是自己的长期 ctx（投影器、committer、saga、
+// effect inbox 都是 defer EndSession(ctx)，没有截止），网络黑洞时这次 abort 会一直阻塞到网络
+// 恢复，让 transaction_timeout 对调用方失效（RR-20261005-NC-101 复审）。所以与回调失败后的
+// abort 相同：不受调用方取消影响，但有 transactionAbortTimeout 上限。没有进行中的事务时不发命令。
+// 上限内没送达的 abort 留下的服务端事务由服务端在 transactionLifetimeLimitSeconds（缺省 60s）后
+// 中止；在此之前写同一文档的事务得到 WriteConflict，按 TransientTransactionError 重跑。
 func (s *session) EndSession(ctx context.Context) {
-	s.sess.EndSession(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	endCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), transactionAbortTimeout)
+	defer cancel()
+	s.sess.EndSession(endCtx)
 }

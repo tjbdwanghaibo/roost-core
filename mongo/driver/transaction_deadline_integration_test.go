@@ -171,3 +171,70 @@ func resultUnknown(err error) bool {
 	}
 	return errors.Is(err, context.DeadlineExceeded)
 }
+
+// driverSession 让用例在局部变量 session 遮住类型名时仍能取到驱动会话。
+type driverSession = session
+
+// 调用方看到的事务以 EndSession 结束：DataEngine 投影 / 加载、Remote committer、saga、effect inbox
+// 都是 `defer session.EndSession(ctx)`，ctx 是调用方自己的（投影器是常驻 ctx，没有截止）。
+// 提交因截止失败时驱动不更新事务状态（mongo.Session.CommitTransaction 的 IsTimeout 分支），
+// EndSession 于是对“仍在进行”的事务补发 abortTransaction，用的正是这个 ctx——网络黑洞时它与
+// NC-101 修前的提交一样阻塞到网络恢复。承诺：transaction_timeout 加上 abort 的上限之内，调用方
+// 从 WithTransaction + EndSession 返回。网络只由看门狗在 30s 后恢复，不在测量窗口内恢复。
+func TestRealMongoEndSessionAfterCommitTimeoutIsBounded(t *testing.T) {
+	const transactionTimeout = 2 * time.Second
+	for _, stream := range []string{"upstream", "downstream"} {
+		t.Run(stream, func(t *testing.T) {
+			uri, proxy := proxiedPrimary(t)
+			client := connect(t, uri, false, IndexMigrationPolicy{})
+			client.txnTimeout = transactionTimeout
+			database := fmt.Sprintf("nc101end_%d_%d", os.Getpid(), time.Now().UnixNano())
+			direct := connect(t, replicaSetURI(t), true, IndexMigrationPolicy{})
+			t.Cleanup(func() { _ = direct.Database(database).Drop(context.Background()) })
+			ctx := context.Background()
+			coll := client.Database(database).Collection("c")
+			if _, err := coll.InsertOne(ctx, bson.M{"_id": "seed"}); err != nil {
+				t.Fatal(err)
+			}
+			heal := func() { proxy.call(t, http.MethodDelete, "/proxies/"+proxy.name+"/toxics/hole", nil) }
+			watchdog := time.AfterFunc(30*time.Second, heal)
+			defer watchdog.Stop()
+			defer heal()
+
+			session, err := client.StartSession(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			started := time.Now()
+			err = session.WithTransaction(ctx, func(txCtx context.Context) error {
+				calls++
+				if _, err := coll.InsertOne(txCtx, bson.M{"_id": fmt.Sprintf("x%d", calls)}); err != nil {
+					return err
+				}
+				if calls == 1 {
+					proxy.call(t, http.MethodPost, "/proxies/"+proxy.name+"/toxics", map[string]any{
+						"name": "hole", "type": "timeout", "stream": stream, "attributes": map[string]any{"timeout": 0},
+					})
+				}
+				return nil
+			})
+			returned := time.Since(started)
+			// 上限内放弃的 abort 留下服务端事务，持锁到 transactionLifetimeLimitSeconds；测量后只杀本会话，
+			// 让清理里的 dropDatabase 不必等它（不用 killAllSessions，副本集是共享的）。
+			lsid := session.(*driverSession).sess.ID()
+			t.Cleanup(func() {
+				_ = direct.cli.Database("admin").RunCommand(context.Background(), bson.D{{Key: "killSessions", Value: bson.A{lsid}}}).Err()
+			})
+			session.EndSession(ctx) // 与正式调用方相同：调用方 ctx、网络仍黑洞
+			ended := time.Since(started)
+			t.Logf("%s: WithTransaction=%s EndSession done at %s err=%v", stream, returned.Round(10*time.Millisecond), ended.Round(10*time.Millisecond), err)
+			if err == nil {
+				t.Fatal("WithTransaction returned success although the network swallowed the commit")
+			}
+			if bound := transactionTimeout + transactionAbortTimeout + 2*time.Second; ended > bound {
+				t.Fatalf("WithTransaction + EndSession with transaction_timeout=%s returned after %s (bound %s); EndSession's abort of the timed-out commit is unbounded", transactionTimeout, ended.Round(10*time.Millisecond), bound)
+			}
+		})
+	}
+}
