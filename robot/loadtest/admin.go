@@ -159,6 +159,9 @@ func renderMarkdown(run RunSnapshot) string {
 			verdict := "pass"
 			if t.Violated {
 				verdict = "**FAIL**"
+				if t.Reason != "" {
+					verdict += " (" + t.Reason + ")"
+				}
 			}
 			fmt.Fprintf(&b, "| %s | %g | %g | %s |\n", t.Metric, t.Max, t.Actual, verdict)
 		}

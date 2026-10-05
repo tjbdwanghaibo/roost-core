@@ -94,6 +94,11 @@ type Config struct {
 	// default reads obs' robot.runner.scenario.cost histogram for this
 	// run's scenario with result=ok.
 	Quantile func(runID string, profile string, scenarioName string, q float64) time.Duration
+	// SampleCount reads how many observations the quantiles above are computed
+	// from. The default reads the same histogram series as the default
+	// Quantile; with a custom Quantile and no SampleCount only the runner's
+	// Success count is checked. Zero samples fail every quantile threshold.
+	SampleCount func(runID string, profile string, scenarioName string) int64
 }
 
 type StartRequest struct {
@@ -154,7 +159,16 @@ type ThresholdResult struct {
 	Threshold
 	Actual   float64 `json:"actual"`
 	Violated bool    `json:"violated"`
+	// Reason explains a violation that is not "Actual > Max": no_samples when
+	// there was nothing to judge, unknown_metric for an unsupported Metric.
+	Reason string `json:"reason,omitempty"`
 }
+
+// Threshold violation reasons other than exceeding Max.
+const (
+	ThresholdReasonNoSamples     = "no_samples"
+	ThresholdReasonUnknownMetric = "unknown_metric"
+)
 
 type RunSnapshot struct {
 	RunID       string            `json:"run_id"`
@@ -181,9 +195,10 @@ type StatsSnapshot struct {
 }
 
 type Manager struct {
-	cfg      Config
-	factory  RunnerFactory
-	quantile func(string, string, string, float64) time.Duration
+	cfg         Config
+	factory     RunnerFactory
+	quantile    func(string, string, string, float64) time.Duration
+	sampleCount func(string, string, string) int64
 
 	mu      sync.Mutex
 	rootCtx context.Context
@@ -236,13 +251,23 @@ func New(cfg Config) *Manager {
 		}
 	}
 	quantile := cfg.Quantile
+	sampleCount := cfg.SampleCount
 	if quantile == nil {
 		quantile = func(runID string, profile string, scenarioName string, q float64) time.Duration {
-			return metrics.HistogramQuantile("robot.runner.scenario.cost",
-				metrics.Labels{"profile": profile, "run": runID, "scenario": scenarioName, "result": "ok"}, q)
+			return metrics.HistogramQuantile("robot.runner.scenario.cost", scenarioCostLabels(runID, profile, scenarioName), q)
+		}
+		if sampleCount == nil {
+			sampleCount = func(runID string, profile string, scenarioName string) int64 {
+				return metrics.HistogramCount("robot.runner.scenario.cost", scenarioCostLabels(runID, profile, scenarioName))
+			}
 		}
 	}
-	return &Manager{cfg: cfg, factory: factory, quantile: quantile, rootCtx: context.Background(), history: make([]RunSnapshot, 0, cfg.HistoryLimit)}
+	return &Manager{cfg: cfg, factory: factory, quantile: quantile, sampleCount: sampleCount, rootCtx: context.Background(), history: make([]RunSnapshot, 0, cfg.HistoryLimit)}
+}
+
+// scenarioCostLabels selects the ok-result scenario cost series of one run.
+func scenarioCostLabels(runID, profile, scenarioName string) metrics.Labels {
+	return metrics.Labels{"profile": profile, "run": runID, "scenario": scenarioName, "result": "ok"}
 }
 
 // Serve installs the root context and auto-starts ActiveProfile when set,
@@ -500,16 +525,30 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]int64, []ThresholdResult)
 		quantiles[q.name] = m.quantile(rec.RunID, rec.Profile, scenarioName, q.v).Milliseconds()
 	}
 	stats := statsSnapshot(rec.runner.Stats())
+	// 没有样本就没有可判定的值，阈值判违反而不是按 0 通过（RR-20261005-NC-161）：
+	// error_rate 的分母是完成的场景数（取消不计）；分位数来自成功场景的耗时直方图，
+	// 序列不存在（从未观测或被每指标序列上限丢弃）时 HistogramQuantile 返回 0，同样不可判。
+	completed := stats.Success + stats.Failure
+	latencySamples := stats.Success
+	if m.sampleCount != nil {
+		latencySamples = min(latencySamples, m.sampleCount(rec.RunID, rec.Profile, scenarioName))
+	}
 	results := make([]ThresholdResult, 0, len(rec.Config.Thresholds))
 	for _, threshold := range rec.Config.Thresholds {
-		actual := 0.0
-		switch strings.ToLower(strings.TrimSpace(threshold.Metric)) {
+		metric := strings.ToLower(strings.TrimSpace(threshold.Metric))
+		var actual float64
+		var samples int64
+		switch metric {
 		case "error_rate":
-			actual = stats.FailureRate
+			actual, samples = stats.FailureRate, completed
 		case "p50", "p90", "p95", "p99":
-			actual = float64(quantiles[strings.ToLower(threshold.Metric)]) / 1000.0
+			actual, samples = float64(quantiles[metric])/1000.0, latencySamples
 		default:
-			results = append(results, ThresholdResult{Threshold: threshold, Violated: true})
+			results = append(results, ThresholdResult{Threshold: threshold, Violated: true, Reason: ThresholdReasonUnknownMetric})
+			continue
+		}
+		if samples <= 0 {
+			results = append(results, ThresholdResult{Threshold: threshold, Violated: true, Reason: ThresholdReasonNoSamples})
 			continue
 		}
 		results = append(results, ThresholdResult{Threshold: threshold, Actual: actual, Violated: actual > threshold.Max})

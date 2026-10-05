@@ -187,6 +187,12 @@ func HistogramQuantile(name string, labels Labels, q float64) time.Duration {
 	return DefaultRegistry().HistogramQuantile(name, labels, q)
 }
 
+// HistogramCount returns how many observations one histogram series holds
+// (zero when the series does not exist).
+func HistogramCount(name string, labels Labels) int64 {
+	return DefaultRegistry().HistogramCount(name, labels)
+}
+
 func Snapshot() []Metric {
 	return DefaultRegistry().Snapshot()
 }
@@ -290,6 +296,24 @@ func (r *Registry) HistogramQuantile(name string, labels Labels, q float64) time
 		return 0
 	}
 	return h.quantile(q)
+}
+
+// HistogramCount returns the observation count of one histogram series.
+// Zero means "no data" — the series was never observed or was dropped by the
+// series limit — which a caller judging a quantile must not read as "0 ms"
+// (RR-20261005-NC-161).
+func (r *Registry) HistogramCount(name string, labels Labels) int64 {
+	if r == nil || name == "" {
+		return 0
+	}
+	key := metricKey(name, labels)
+	r.mu.RLock()
+	h := r.histograms[key]
+	r.mu.RUnlock()
+	if h == nil {
+		return 0
+	}
+	return h.count.Load()
 }
 
 func (r *Registry) histogram(name string, labels Labels) *histogram {
