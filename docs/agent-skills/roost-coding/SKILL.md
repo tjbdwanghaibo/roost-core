@@ -65,6 +65,8 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 
 WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/Commit，超时仍保留目录/资源所有权。创建者负责关闭自己创建的 WAL；测试须覆盖旧实例退出、新实例接管及旧 Ack 被拒绝。同 SessionID 不代表同 lifetime，旧发送未结束时新 Open 必须明确失败或建立独立资源，不能吞注册冲突。
 
+停止入口按三步审（RR-20261004-NC-04 Ops、RR-20261005-NC-83 player TCP）：①发起关闭，幂等；②在调用方 ctx 内等待真实排空，超时返回错误并保留对象，用新 ctx 重试会再等；③排空后才释放对象与依赖。不要用“字段已置空 / once 已执行 / 列表已取走”表示已停——第一次超时后的重试会在工作仍运行时报告成功，并提前释放它的依赖。标准库已提供①②时（`http.Server.Shutdown`）直接用；不为此抽公共框架类型。不配合 ctx 的回调不能被杀，契约只要求停机如实超时并保留责任。
+
 性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。停机预算的生成值（`shutdown.total_timeout` 与部署宽限期）只计入生成器 Manifest 已知的 Mod：手写 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget` 也不计入，doctor 也不检查它，新增这类 Mod 时须手工调大 total 与宽限期（RR-20260926-66，OPEN-ITEMS C31）。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
 
 当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像（它是 no-op）。投影时被跳过 / 持久拒绝后的在线恢复已有定案契约（RR-20260926-30 / 39，维护者批准），新路径沿用它，不另建机制：

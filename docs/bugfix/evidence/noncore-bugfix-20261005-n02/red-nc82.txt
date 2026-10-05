@@ -1,0 +1,11 @@
+--- FAIL: TestOneOwnerCannotFillTheKeyTableForOthers (0.00s)
+    owner_capacity_promises_test.go:22: another owner's first request was refused after owner 1 admitted 1000 actions: {Keys:1000 MaxKeys:1000 CapacityRejected:1 Evicted:0}
+--- FAIL: TestFullTableRejectionDoesNotSweepBeforeTheSweepInterval (0.00s)
+    owner_capacity_promises_test.go:52: the full-table path swept before the sweep interval: {Keys:2 MaxKeys:4 CapacityRejected:0 Evicted:3}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/security	0.486s
+--- FAIL: TestOnePlayerSprayingMessageIDsDoesNotRateLimitOthers (0.00s)
+    ratelimit_owner_promises_test.go:30: victim's first request = gateway: rate limited after player 1 sprayed 1000 message IDs (stats {Keys:1000 MaxKeys:1000 CapacityRejected:1 Evicted:0})
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gateway	0.697s
+FAIL

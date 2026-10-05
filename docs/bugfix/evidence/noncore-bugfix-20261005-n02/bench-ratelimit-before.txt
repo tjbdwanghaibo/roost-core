@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/security
+cpu: Apple M5
+BenchmarkRateLimiterFullTableUnseenKey/keys=1000-10         	     200	      5774 ns/op
+BenchmarkRateLimiterFullTableUnseenKey/keys=1000-10         	     200	      5726 ns/op
+BenchmarkRateLimiterFullTableUnseenKey/keys=1000-10         	     200	      5744 ns/op
+BenchmarkRateLimiterFullTableUnseenKey/keys=100000-10       	     200	    527202 ns/op
+BenchmarkRateLimiterFullTableUnseenKey/keys=100000-10       	     200	    531269 ns/op
+BenchmarkRateLimiterFullTableUnseenKey/keys=100000-10       	     200	    529009 ns/op

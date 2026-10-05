@@ -51,3 +51,24 @@ go build -o /tmp/roost ./codegen/cmd/roost
 ```
 
 没有使用 Redis/Mongo/NATS 等外部依赖，也没有写共享库/流；所有 listener 是随机回环端口，只关闭自己创建的对象。
+
+## 合并前复核（2026-10-05，分支 n02final）
+
+rebase 到 origin/main（`45d4bc1c`）之后，改进与 NC-82 修复先在 N02 提交（`149f0d18` 树，httpserver/security/gateway 与 rebase 后相同）上跑红，再实施跑绿。
+
+| 文件 | 内容 |
+| --- | --- |
+| `red-httpserver-refine.txt` / `green-httpserver-refine.txt` | NC-80 分配上界（`TestJSONDoesNotCopyTheEncodedBodyPerResponse`）、NC-81 FlushError 两叶子 |
+| `red-nc82.txt` / `green-nc82.txt` | NC-82 三个修前红（security 2、gateway 1）与修后 4 个用例 |
+| `bench-json.txt` / `json_bench_test.go.txt` | 修前 Encoder / N02 Marshal / 采用的推迟写状态，三者同一二进制 `-count 6` |
+| `bench-ratelimit-before.txt` / `bench-ratelimit-after.txt` | 满表陌生 key：修前 5.7µs（1k）/ 529µs（100k），修后 <0.11µs |
+
+合并结果上的本地矩阵（HEAD `eef7822e`，工作树干净，`GOWORK=off`）：
+
+- `gofmt -l`（全部受控 .go）为空；`go vet ./httpserver ./webroute ./kit/ops ./gateway ./security ./httpclient ./codegen/internal/roost` 通过。
+- `go test -race -count=3 ./httpserver ./webroute ./kit/ops ./gateway ./security ./httpclient`：459 个 test pass 事件，0 fail/skip（`TestJSONDoesNotCopyTheEncodedBodyPerResponse` 为 `!race`，不在其中；非 race 下单独通过）。
+- 根包 `go test -count=1 .` ok（文档提交后复跑仍 ok）；`go test -count=1 ./codegen/...` 15 包 ok；`go generate ./...` 后 porcelain 0 行；`go build ./... && go vet ./...` 通过。
+- game-demo（`roost project new n02demo -module example.com/n02demo -template game-demo -skip-deps`，`go mod edit -replace` 指向 worktree，`go mod tidy`）：生成的 `server_gen.go` / `server_gen_test.go` 含 NC-83 修复；`go build ./... && go vet ./...` 通过；`go test -count=1 ./...` 18 包 ok、0 fail；`internal/access/player/tcp` race×3 99 pass、0 fail（本次只跑正式生成测试，未放 overlay，故少于续审时的 117）。
+
+计数只对应本次命令。
+

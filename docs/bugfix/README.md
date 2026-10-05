@@ -77,13 +77,14 @@
 | --- | --- | --- |
 | [RR-20261005-01](RR-20261005-01.md) | activity 启动时拒绝注定开不出窗口的候选集 | 已修复，未发版 |
 
-**10-05 N02续审：NC-80/81/83已修复、声明场景验证，未发版；NC-82未修。** 正式回归在旧产品上7+4+3红、修后全绿；race×3 六包438 pass、生成TCP包race×3 117 pass、根包/build/vet/codegen与game-demo全工程通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](evidence/noncore-bugfix-20261005-n02/README.md)。T-242/243。已生成工程需重新生成 player TCP 文件。
+**10-05 N02续审：NC-80/81/83已修复、声明场景验证，未发版；合并前复核：NC-80改为Encoder+推迟写状态（不再复制响应体）、NC-81补FlushError透传、NC-82按每主体上限+满表O(1)拒绝修复，NC-83评估为当前最好。** 正式回归在旧产品上7+4+3红、修后全绿；race×3 六包438 pass、生成TCP包race×3 117 pass、根包/build/vet/codegen与game-demo全工程通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](evidence/noncore-bugfix-20261005-n02/README.md)。T-242/243/244。已生成工程需重新生成 player TCP 文件。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
 | [NC-80](RR-20261005-NC-80.md) | JSON先编码后写状态，失败回500 | 已修复，未发版 |
 | [NC-81](RR-20261005-NC-81.md) | recover只在响应开始前改写为500，否则中止连接 | 已修复，未发版 |
 | [NC-83](RR-20261005-NC-83.md) | player TCP停机保留所有权直到真实排空 | 已修复（生成器），未发版 |
+| [NC-82](RR-20261005-NC-82.md) | RateLimiter每主体key上限（默认256），满表陌生key O(1)拒绝 | 已修复，未发版 |
 
 **10-05 N07第一批：NC-60～63已修复、声明场景验证，未发版。** 快照读锁内复制；模板属性组件登记事务逆操作；生成期拒绝不可表示属性；errcode扫描按导入名解析并要求字面量、查重名。[本轮](../review/REVIEW-2026-10-05-noncore-n07.md) · [证据](evidence/noncore-bugfix-20261005-n07/README.md)。
 

@@ -49,3 +49,15 @@ N02 包在仓内的真实消费者：`httpserver` ← Kit Ops 与用户手写的
 ## 停点
 
 N02 仍为场景部分完成：本轮补齐不配合回调（认证/命令/订阅者/endpoint）、连接与请求容量、业务鉴权全链、跨模块配置主项；余项为 NC-82 待选择、O1/O2 建议、Dispatch handler 不配合的单独用例、HTTP/2 与外部清单。
+
+## 合并前复核（2026-10-05，维护者指示“看下当前还有更好的解决方式吗”）
+
+分支 `revn02` rebase 到 origin/main 后在 `n02final` 上复核，逐条列替代方案比较正确性、契约、改动面、性能与调用方：
+
+- **NC-80 → 换成更好的方案**：`json.Encoder` 本来就完整缓冲、成功后一次 Write，修前的问题只在“先 WriteHeader”。改为 Encoder 写入“首次 Write 才写状态”的适配器：语义与 N02 相同，成功字节即 Encoder 输出，且不再为每个响应复制一份响应体（~285KiB 响应 290KB/op → 0.5KB/op）。流式中止、分档、缓冲池均不如它（[比较](../bugfix/RR-20261005-NC-80.md#评估与取舍2026-10-05-合并前复核)）。
+- **NC-81 → 当前方案保留 + 补一处缺口**：标准库没有“响应是否已开始”的查询，`http.ResponseController` 只能沿 Unwrap 找能力，包装 writer 是最简单的正确做法；chi 自带包装不追踪 Hijack。复核发现包装只有 `Flush()`，`ResponseController.Flush` 的 `ErrNotSupported` / 写失败被吞成 nil，已补 `FlushError`。Pusher 不透传维持（[比较](../bugfix/RR-20261005-NC-81.md#评估与取舍2026-10-05-合并前复核)）。
+- **NC-83 → 当前就是最好**：Ops 的①②由 `http.Server.Shutdown` 提供，TCP 是唯一手写排空的停止入口，抽 helper 只有一个使用方；“三步停机”写入 roost-coding 生命周期复审要点。只读核对出 6 处同形候选（manager、nest、syncbus、bus JetStream RPC、etcd、remoteentity），未修、未登记，列在 [NC-83 记录](../bugfix/RR-20261005-NC-83.md#仓内其他同形停机实现只读核对未修)。
+- **NC-82 → 已修**：每主体 key 上限（默认 256，依据 demo 29 个请求协议与默认表 100000）+ 满表陌生 key O(1) 拒绝；“限流前校验 MessageID 已注册”评估为互补的应用组装手段（[修复](../bugfix/RR-20261005-NC-82.md)）。
+
+TROUBLESHOOTING 原 T-229/T-230 与 N06 撞号，改为 T-242/T-243，NC-82 为 T-244。上文“NC-82 待选择”“O6 影响仅限外部采用者”等为当时结论，保留。
+

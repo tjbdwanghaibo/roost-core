@@ -10,11 +10,11 @@ RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登�
 
 ## 2026-10-05 HTTP 响应完整性与 TCP 接入停机（main，未发版）
 
-`httpserver.JSON`（Webroute `WriteResult`、Ops 管理面同一出口）先完整编码再写状态：值里有 NaN/±Inf、channel/func 或 MarshalJSON 报错时回 500 `{"error":"encode response","ok":false}` 并记日志，而不是 2xx 空体（NC-80）。业务此时可能已经执行，客户端按幂等键核对再重试；从源头避免不可编码值（如 0/0 胜率）。Engine 的 recover 只在响应开始之前回 500；写过头/体、Flush 或 Hijack 之后 panic 会中止连接，`panic(http.ErrAbortHandler)` 保持标准库语义（NC-81）。handler 拿到的 `w` 是包装 writer，`http.Flusher`、`http.ResponseController` 和（原 writer 支持时）`http.Hijacker` 照常可用，`http.Pusher` 不透传。
+`httpserver.JSON`（Webroute `WriteResult`、Ops 管理面同一出口）先完整编码再写状态：值里有 NaN/±Inf、channel/func 或 MarshalJSON 报错时回 500 `{"error":"encode response","ok":false}` 并记日志，而不是 2xx 空体（NC-80）。业务此时可能已经执行，客户端按幂等键核对再重试；从源头避免不可编码值（如 0/0 胜率）。Engine 的 recover 只在响应开始之前回 500；写过头/体、Flush 或 Hijack 之后 panic 会中止连接，`panic(http.ErrAbortHandler)` 保持标准库语义（NC-81）。handler 拿到的 `w` 是包装 writer，`http.Flusher`、`http.ResponseController`（Flush 的错误照常返回）和（原 writer 支持时）`http.Hijacker` 照常可用，`http.Pusher` 不透传。
 
 生成的 player TCP 接入：Stop/StopWithContext 超时后保留 server，用新 context 再调会等到所有连接 goroutine 真实返回；会话关闭订阅者的等待也受 ctx 约束（NC-83）。升级生成器后重新生成 `internal/access/player/tcp/server_gen*.go`。不配合 ctx 的认证回调/handler 不会被强行终止，只会让停机如实超时。
 
-Ops `/admin/execute` 不给命令设期限，超过 15s 写超时的命令照常执行而客户端只看到传输错误：把“传输失败”当作“结果未知”。`gateway.RateLimit`/`security.RateLimiter` 的 key 表全局共享，单个主体变化 MessageID 即可占满，接入前先看 [NC-82](bug/RR-20261005-NC-82.md)。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
+Ops `/admin/execute` 不给命令设期限，超过 15s 写超时的命令照常执行而客户端只看到传输错误：把“传输失败”当作“结果未知”。`gateway.RateLimit`/`security.RateLimiter` 每个主体最多 `MaxKeysPerOwner`（默认 256）个 key，单个主体变化 MessageID 只会用完自己的名额；共享表（`MaxKeys`）满时陌生 key 立即拒绝，闲置名额最多晚一个 `SweepInterval` 回收；有协议注册表时把“拒绝未注册 MessageID”放在 RateLimit 之前（[NC-82](bug/RR-20261005-NC-82.md)）。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
 
 ## 2026-10-05 App 单实例锁（main，未发版）
 

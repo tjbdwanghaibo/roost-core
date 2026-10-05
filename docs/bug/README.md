@@ -74,13 +74,13 @@
 | --- | --- | --- |
 | [RR-20261005-01](RR-20261005-01.md) | P2 activity.game_sids 重复 / 超上限时启动成功、此后永不开窗 | 已修复（[记录](../bugfix/RR-20261005-01.md)），未发版 |
 
-**10-05 N02续审：NC-80/83两个P2、NC-81 P3已修复、声明场景验证，未发版；NC-82 P3已复现、未修（需维护者选择）。** 生成Webroute/Ops响应编码失败不再回2xx空体，响应开始后panic中止连接，生成TCP接入停机超时保留所有权直到排空；业务鉴权全链与连接/请求容量控制通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n02/README.md)。真实网关/客户端单列未验。
+**10-05 N02续审：NC-80/83两个P2、NC-81 P3已修复、声明场景验证，未发版；NC-82 P3合并前复核按维护者指示修复（每主体key上限+满表O(1)拒绝），声明场景验证，未发版。** 生成Webroute/Ops响应编码失败不再回2xx空体，响应开始后panic中止连接，生成TCP接入停机超时保留所有权直到排空；业务鉴权全链与连接/请求容量控制通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n02/README.md)。真实网关/客户端单列未验。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
 | [RR-20261005-NC-80](RR-20261005-NC-80.md) | P2 httpserver.JSON先写状态再编码，编码失败成2xx空体 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-81](RR-20261005-NC-81.md) | P3 recover把响应开始后的panic改写成完整2xx、吞ErrAbortHandler | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-82](RR-20261005-NC-82.md) | P3 RateLimiter全局key表可被单主体占满、满表O(N)锁内扫描 | 已复现，未修，需维护者选择 |
+| [RR-20261005-NC-82](RR-20261005-NC-82.md) | P3 RateLimiter全局key表可被单主体占满、满表O(N)锁内扫描 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-83](RR-20261005-NC-83.md) | P2 生成TCP停机超时后丢所有权、重试假成功、订阅者阻塞不受ctx | 已修复（生成器）、声明场景验证，未发版 |
 
 **10-05 N07第一批：NC-60/61/63三个P2与NC-62 P3已修复、声明场景验证，未发版。** attribute快照锁、game-demo属性层随事务回滚、属性生成器拒绝不可表示声明、errcode扫描拒绝读不懂的Define并查重名；4组反例红→绿。event/configdata本批无确认缺陷，矩阵与观察见[本轮](../review/REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。

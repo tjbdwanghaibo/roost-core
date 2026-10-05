@@ -116,12 +116,14 @@
 | 项 | 本轮 | 状态 |
 | --- | --- | --- |
 | 不配合回调 | 认证回调、Ops命令、会话关闭订阅者、gateway endpoint四类；正式Kit/生成工程真实传输 | NC-83修复；Ops/Timeout控制通过；Dispatch handler单独用例未加 |
-| 连接/请求容量 | 握手/连接/per-IP名额、超限帧、限流key表 | 生成TCP控制通过；NC-82未修 |
+| 连接/请求容量 | 握手/连接/per-IP名额、超限帧、限流key表 | 生成TCP控制通过；NC-82合并前复核修复 |
 | 业务鉴权 | 真实account.Service签票据→TCP握手→demo认证器→Dispatch，7拒绝形状+过期 | 控制通过；票据复用/撤销属N06 S1 |
 | 跨模块配置 | dispatch/login/shutdown预算、Ops写超时、TCP派生上限 | O1/O2观察，非RR |
 | 响应结果判定 | 生成Webroute/Ops/Engine | NC-80/81修复 |
 
-旧产品正式回归7+4+3红→绿；race×3六包438 pass、生成TCP包117 pass，根包/build/vet/codegen、game-demo全工程通过。N02仍场景部分完成：余NC-82选择、O1/O2建议、HTTP/2与外部清单（真实网关/客户端/跨进程account RPC/卡死回调资源）。
+旧产品正式回归7+4+3红→绿；race×3六包438 pass、生成TCP包117 pass，根包/build/vet/codegen、game-demo全工程通过。N02仍场景部分完成：余O1/O2建议、HTTP/2与外部清单（真实网关/客户端/跨进程account RPC/卡死回调资源）。
+
+**合并前复核（分支n02final，rebase到origin/main后）**：逐条比较替代方案（[NC-80](../bugfix/RR-20261005-NC-80.md#评估与取舍2026-10-05-合并前复核) / [NC-81](../bugfix/RR-20261005-NC-81.md#评估与取舍2026-10-05-合并前复核) / [NC-83](../bugfix/RR-20261005-NC-83.md#评估与取舍2026-10-05-合并前复核)）。NC-80改为Encoder+推迟写状态（大响应每次少分配一份响应体），NC-81补FlushError透传，NC-82按每主体上限+满表O(1)拒绝修复；6红→绿（NC-80 1、NC-81 2、NC-82 3；另1个用到新字段的NC-82用例无修前红）。NC-83当前最好，不抽helper；同形未修候选6处（manager/nest/syncbus/bus JetStream RPC/etcd/remoteentity）列在NC-83记录，待review复现。T-229/230改为T-242/243，NC-82为T-244。
 
 ## 2026-10-05 N07第一批（configdata/attribute/event/errcode）
 
