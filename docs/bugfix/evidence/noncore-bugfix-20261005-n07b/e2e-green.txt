@@ -1,0 +1,16 @@
+## G1 fresh project generated from revn07b: GET /admin/commands exposes only names; the operator text lives in the generated source
+## G2 follow it: edit configs/data/feature_flag.json purchase -> false, reload
+{"name":"gm.config.reload","ok":true,"data":{"flags":2,"reason":"g2-json","version":2},"started_at":1791199487511,"ended_at":1791199487517}
+
+flags version 2 {'activity': True, 'monster_spawn': True, 'purchase': False}
+
+-- generated internal/service/game/gm.go descriptions now:
+internal/service/game/flags.go:28://     way to flip one. "The table" at run time is configs/data/feature_flag.json
+internal/service/game/flags.go:30://     configs/table/feature_flag.csv takes effect after `roost generate` has
+game/flags/flags.go:12:// configs/table/feature_flag.csv with a note for the operator. `roost generate`
+game/flags/flags.go:13:// converts it to configs/data/feature_flag.json, which is what a config reload
+internal/service/game/gm.go:417:			// configs/table/featureflag.csv (a name that does not exist), so an
+internal/service/game/gm.go:421:				"(config_data.dir), which is also how a kill switch takes effect: edit configs/data/feature_flag.json, " +
+internal/service/game/gm.go:422:				"or in a checkout edit configs/table/feature_flag.csv and run `roost generate` first — the reload never reads the CSV. " +
+internal/service/game/gm.go:465:				"to make it stick, edit configs/data/feature_flag.json (or the CSV plus `roost generate`) and reload.",
+{"commands":["bus.dlq.list","bus.dlq.purge","bus.dlq.requeue","gm.activity.close","gm.config.reload","gm.flag.list","gm.

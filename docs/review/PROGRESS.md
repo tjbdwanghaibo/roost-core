@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N07第二批（configdata真实热更与handler快照）
+
+基线3d4fe9f3，分支revn07b，图谱generation 09-30（ActiveSnapshot调用方都在模板里，入边为0），以源码补证。[本轮](REVIEW-2026-10-05-noncore-n07b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。NC-65 P2、NC-64 P3已修复、声明场景验证，未发版。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| GM热更端到端 | 隔离Mongo/NATS/Redis+私有etcd起global+game，H0～H4：成功、四种失败（原子拒绝、scene不读失败代）、探针rollback、CSV+generate | 契约成立；NC-64说明修正；缺required被接受与generate不跳过.dev/移交N08 |
+| handler快照 | K1～K7：两次读之间reload/rollback不跨代、下个请求读新代、判别反例、准入早于rollback读旧代 | 无缺陷；新增生成工程控制用例；C-O9观察 |
+| 属性×配置 | A8加载后Gear/attr_final、A9热更不重算在线玩家 | NC-65修复；C-O8观察；方向判断见本轮 |
+| 第一批观察 | C-O1/C-O2/C-O3/E-O4在真实进程无触发路径 | 维持观察，不改行为 |
+
+新增2条生成工程正式回归（attribute 1、handler config snapshot 1）。本分支全新生成工程build/vet/`go test ./...`与4包race×3、codegen、根包、全仓build/vet通过（详见证据）。N07场景部分完成，只剩维护者决定项；下一N08（带两条移交）。不等待CI，不发版。
+
 ## 2026-10-05 N09 skill 第一批（执行/状态 + 事务/结算）
 
 基线 `be7bcc18`（origin/main），分支 `revn09`，NC 段 110～119（用 110～113）；图谱 generation 2026-09-30，skill 自 09-27 无代码提交，以当前源码补证。[本轮/清单/矩阵](REVIEW-2026-10-05-n09-batch1.md) · [修复](../bugfix/RR-20261005-NC-110.md)。NC-110/111/112（P2）、NC-113（P3）已修复、声明场景验证，未发版。

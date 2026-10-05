@@ -1,5 +1,12 @@
 # Roost Review 问题索引
 
+**10-05 N07第二批：NC-65 P2与NC-64 P3已修复、声明场景验证，未发版。** 生成game-demo起global+game真实进程经`gm.config.reload`热更：成功/四种失败/rollback与flags、scene refresh读取符合契约；handler内两次读不跨代（新增控制用例，含判别反例）。确认的两条在模板层：玩家加载后Gear层与attr_final没重建（NC-65）、开关热更说明指向CSV照做无效（NC-64）。[本轮](../review/REVIEW-2026-10-05-noncore-n07b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-64](RR-20261005-NC-64.md) | P3 game-demo开关热更说明指向configs/table CSV，reload只读configs/data JSON | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-65](RR-20261005-NC-65.md) | P2 game-demo玩家加载后不按穿戴重建Gear层、attr_final为空 | 已修复、声明场景验证，未发版 |
+
 **10-05 N09 skill 第一批（revn09）：NC-110 P2、NC-111 P2、NC-112 P2、NC-113 P3 已修复、声明场景验证，未发版。** 施法终止路径各自手写收尾：启动失败复用 cast ID 却留下排程任务、Cancel / Release 中途出错停在半终止占住施法者、失败的 policy cast 不释放槽位；combatcomponent 的 Combatant 副本共享 map。combat 状态随 Nest 回滚恢复（NC-61 同形已核对，不成立）。[本轮](../review/REVIEW-2026-10-05-n09-batch1.md)。
 
 **10-05 N03 通信 / etcd（revn03）：NC-90 / 91 / 92 三个 P2 与 NC-93 P3，已复现，未修复。** 真实 JetStream 停止时在途 handler 不被排空、回包注定丢失；轻量 RPC 被派发队列拒绝不回包并误入死信；JetStream 部署里的轻量调用被请求流截获“报错却执行”；选主 Resign 不受预算约束。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](../review/evidence/noncore-review-20261005-n03/README.md)

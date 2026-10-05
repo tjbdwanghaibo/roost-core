@@ -92,3 +92,5 @@ event 不属于“反复出问题”，但它是零接线的库（E8）：继续
 - **本批完成**：上面矩阵 C1～C11、A1～A7、E1～E8、R1～R5；NC-60～63 已修复、声明场景验证。
 - **未做**：cfggen 生成的 ref/required/skipempty 与真实 JSON / 索引往返（归 N08）；`roost id` 扫描改 AST（NC-63 残余，N08）；configdata 在正式 Kit 进程里经 GM `gm.config.reload` 的端到端热更新（需起生成工程服务，本批只到包级与源码）；event 接入方向待维护者决定；Luban 外部表（`examples/lubanreal`）的真实工具链。
 - **下一入口**：N07 第二批——configdata 的 GM 热更新端到端（生成工程起服务，改 `configs/data` 后 reload / 失败 / rollback，检查 flags 与 scene refresh 的读取），以及 tablegen 生成 getter 在 Nest handler 内的快照一致性；然后转 N08。
+
+- **续（10-05 第二批）**：GM 热更端到端与 handler 快照一致性见 [REVIEW-2026-10-05-noncore-n07b](REVIEW-2026-10-05-noncore-n07b.md)；NC-64 / NC-65 已修复，C-O1～C-O3 在真实进程里无触发路径。

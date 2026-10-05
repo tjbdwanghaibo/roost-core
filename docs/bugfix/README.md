@@ -1,5 +1,12 @@
 # Bugfix 记录
 
+**10-05 N07第二批：NC-64/65已修复、声明场景验证，未发版。** 开关热更说明改为configs/data JSON（CSV需先roost generate）；玩家加载时按穿戴重建Gear并写attr_final。[本轮](../review/REVIEW-2026-10-05-noncore-n07b.md) · [证据](evidence/noncore-bugfix-20261005-n07b/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-64](RR-20261005-NC-64.md) | gm.config.reload/gm.flag.set说明与flags注释改成reload实际读取的文件 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-65](RR-20261005-NC-65.md) | OnInitFinish按穿戴装Gear、重组后写attr_final | 已修复、声明场景验证，未发版 |
+
 **10-05 N09 skill 第一批（revn09）：NC-110～113 已修复、声明场景验证，未发版。** 施法失败统一走 `failCastLocked`（撤本 cast 全部排程任务、停进程、释放 policy 槽位、记 finished），对外 API 先判终态；Combatant 进出组件都复制 map。6 个新正式用例修前红 → 修后绿，skill 5 包 race×3、examples / sync-e2e、build/vet、根包通过。[本轮](../review/REVIEW-2026-10-05-n09-batch1.md)。
 
 | 编号 | 修复 | 状态 |

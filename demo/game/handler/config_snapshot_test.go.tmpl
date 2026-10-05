@@ -1,0 +1,184 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// A handler reads config through the generated accessors
+// (generated.ItemByID and friends), and those read the snapshot Nest pinned
+// to the request when it was admitted — not whatever the store holds now. So
+// a hot reload, or a rollback, landing between two reads inside ONE handler
+// cannot make them disagree: both reads price the item by the same table.
+// The next request sees the new table.
+//
+// The handler below parks between its two reads so the test can reload at
+// exactly that moment; real handlers do not wait, and this one only does so
+// on the single worker of a test engine.
+
+// swordAttack is what one handler observed, read twice.
+type swordAttack struct {
+	first, second       int64
+	firstGen, secondGen uint64
+}
+
+func writeItemTable(t *testing.T, dir string, attack int64) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "data", "item.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range rows {
+		if id, _ := row["id"].(float64); int64(id) == ironSwordID {
+			row["attack"] = attack
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("configs/data/item.json has no item %d", ironSwordID)
+	}
+	out, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const ironSwordID = int64(2001)
+
+func TestAHandlerReadsOneConfigGenerationAcrossAReload(t *testing.T) {
+	// The project's own tables, in a directory the test may rewrite.
+	dir := t.TempDir()
+	entries, err := os.ReadDir(filepath.Join("..", "..", "configs", "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "data", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeItemTable(t, dir, 15)
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	store := configdata.NewStore(registry, dir)
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(9191, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(multiEntityGetter{id: subject}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	between := make(chan struct{}, 1)
+	resume := make(chan struct{}, 1)
+	name := nest.NewHandlerName("config_snapshot_two_reads")
+	// Instance-scoped: the package-level table is shared with the generated
+	// handlers this package registers.
+	engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+		var seen swordAttack
+		item, _ := generated.ItemByID(ironSwordID)
+		seen.first, seen.firstGen = item.Attack, configdata.ActiveSnapshot().Version
+		between <- struct{}{}
+		<-resume
+		item, _ = generated.ItemByID(ironSwordID)
+		seen.second, seen.secondGen = item.Attack, configdata.ActiveSnapshot().Version
+		return seen, nil
+	}, nest.HandlerMeta{})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	// Like the player access and admin paths, the caller's goroutine has no
+	// request context of its own.
+	request := func(change func()) swordAttack {
+		t.Helper()
+		done := make(chan swordAttack, 1)
+		failed := make(chan error, 1)
+		go func() {
+			ret, err := engine.Request(context.Background(), name, id, nil)
+			if err != nil {
+				failed <- err
+				return
+			}
+			done <- ret.(swordAttack)
+		}()
+		select {
+		case <-between:
+		case err := <-failed:
+			t.Fatalf("request: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the handler never reached its first read")
+		}
+		change()
+		resume <- struct{}{}
+		select {
+		case seen := <-done:
+			return seen
+		case err := <-failed:
+			t.Fatalf("request: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the handler never finished")
+		}
+		return swordAttack{}
+	}
+
+	reloaded := request(func() {
+		writeItemTable(t, dir, 99)
+		if _, err := store.ReloadWithReason(context.Background(), "between-reads"); err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+	})
+	if reloaded.first != 15 || reloaded.second != 15 || reloaded.firstGen != reloaded.secondGen {
+		t.Fatalf("a reload between two reads of one handler was seen: %+v; both reads must come from the pinned generation", reloaded)
+	}
+
+	rolledBack := request(func() {
+		if _, err := store.Rollback(context.Background(), "between-reads"); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+	})
+	// The request was admitted while the reloaded table (attack 99) was
+	// current; the rollback after its first read must not reach its second.
+	if rolledBack.first != 99 || rolledBack.second != 99 || rolledBack.firstGen != rolledBack.secondGen {
+		t.Fatalf("a rollback between two reads of one handler was seen: %+v", rolledBack)
+	}
+
+	after := request(func() {})
+	if after.first != 15 || after.firstGen != store.Current().Version {
+		t.Fatalf("the request after the rollback read %+v, want the rolled-back-to table (attack 15, generation %d)", after, store.Current().Version)
+	}
+}

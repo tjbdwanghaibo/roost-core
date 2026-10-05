@@ -1,0 +1,11 @@
+# Scratch probe (game/handler/zz_probe_snapshot_test.go in a generated game-demo, not committed):
+# a memory handler on a 1-worker NestMgr reads generated.ItemByID(2001).Attack, parks, reads again.
+# The store is a real configdata.Store over a copy of configs/data; sword attack 15 -> 99 -> rollback -> 42 -> 7.
+=== RUN   TestZZProbeReloadMidHandler
+    zz_probe_snapshot_test.go:106: store now v2, generated getter outside any request: 99
+    zz_probe_snapshot_test.go:109: V1 sync Request, reload between reads: {first:15 second:15 version1:1 version2:1}
+    zz_probe_snapshot_test.go:124: V3 blocker: {first:99 second:99 version1:2 version2:2}
+    zz_probe_snapshot_test.go:127: V3 admitted before rollback, ran after it (store now v1): {first:99 second:99 version1:2 version2:2}
+    zz_probe_snapshot_test.go:140: V5 caller context bound before reload (store now v3): {first:15 second:15 version1:1 version2:1}
+--- PASS: TestZZProbeReloadMidHandler (0.11s)
+# V2 (async Dispatch, reload between reads) ran without a result channel; not counted.

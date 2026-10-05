@@ -1,0 +1,96 @@
+## S0 operator flow from GM description: edit configs/table/feature_flag.csv (purchase -> false), no roost generate, then gm.config.reload
+purchase,false,"The store. Off refuses Purchase with a coded answer; paid orders already recorded still settle."
+{"name":"gm.config.reload","ok":true,"data":{"flags":2,"reason":"s0-csv-only","version":2},"started_at":1791198481710,"ended_at":1791198481710}
+
+flags version 2 {'activity': True, 'monster_spawn': True, 'purchase': True}
+
+## S1 success: configs/data/spawn.json count 3->5, feature_flag.json purchase -> false, then gm.config.reload
+{"name":"gm.scene.population","ok":true,"data":{"alive":3,"ids":[2323435195258110993,2323435195258112017,2323435195258113041]},"started_at":1791198508011,"ended_at":1791198508011}
+
+{"name":"gm.config.reload","ok":true,"data":{"flags":3,"reason":"s1-success","version":3},"started_at":1791198508018,"ended_at":1791198508019}
+
+flags version 3 {'activity': True, 'monster_spawn': True, 'purchase': False}
+{"name":"gm.scene.population","ok":true,"data":{"alive":5,"ids":[2323435195258113041,2323435195258114065,2323435195258115089,2323435195258110993,2323435195258112017]},"started_at":1791198511051,"ended_at":1791198511051}
+
+configdata_reload_total{reason="manual",result="ok"} 1
+configdata_reload_total{reason="s0-csv-only",result="ok"} 1
+configdata_reload_total{reason="s1-success",result="ok"} 1
+configdata_version 3
+{"time":"2026-10-05T19:08:28.018986+08:00","level":"INFO","msg":"feature flags published","goId":9438,"frame":0,"count":3,"off":["purchase"],"version":3}
+
+## S2a failure: spawn count 5->2 and purchase -> true, but item.json truncated (malformed JSON) in the same edit
+{"name":"gm.config.reload","ok":false,"message":"configdata: load table item: configdata: configs/data/item.json: unexpected end of JSON input","started_at":1791198527996,"ended_at":1791198527996}
+
+flags version 3 {'activity': True, 'monster_spawn': True, 'purchase': False}
+alive 5
+configdata_version 3
+
+## S2b failure: item.json duplicate id 1001 (spawn/flags edits still pending)
+{"name":"gm.config.reload","ok":false,"message":"configdata: table item duplicate key 1001","started_at":1791198530089,"ended_at":1791198530089}
+
+flags version 3 {'activity': True, 'monster_spawn': True, 'purchase': False}
+alive 5
+configdata_version 3
+
+## S2c feature_flag.json removed (spawn/flags edits pending, item.json restored)
+{"name":"gm.config.reload","ok":false,"message":"configdata: load table featureflag: open configs/data/feature_flag.json: no such file or directory","started_at":1791198530155,"ended_at":1791198530155}
+
+flags version 3 {'activity': True, 'monster_spawn': True, 'purchase': False}
+alive 5
+
+## S2d failure that would RAISE the population: spawn count -> 7 with item.json malformed
+{"name":"gm.config.reload","ok":false,"message":"configdata: load table item: configdata: configs/data/item.json: unexpected end of JSON input","started_at":1791198545164,"ended_at":1791198545164}
+
+alive 5
+flags version 3 {'activity': True, 'monster_spawn': True, 'purchase': False}
+configdata_reload_total{reason="manual",result="ok"} 1
+configdata_reload_total{reason="s0-csv-only",result="ok"} 1
+configdata_reload_total{reason="s1-success",result="ok"} 1
+configdata_version 3
+-- game log lines mentioning the failed reloads:
+0
+
+## S2e spawn row without template (required:true in schema) via JSON, item.json restored
+15:	Template int32 `csv:"template" json:"template" title:"Template" required:"true"`
+{"name":"gm.config.reload","ok":true,"data":{"flags":4,"reason":"s2e-missing-required","version":8},"started_at":1791198548346,"ended_at":1791198548346}
+
+alive 7
+flags version 4 {'activity': True, 'monster_spawn': True, 'purchase': True}
+
+## S3 explicit Store.Rollback (scratch-only probe admin command zz.probe.config.rollback; the generated game has no rollback entry)
+{"name":"zz.probe.config.rollback","ok":true,"data":{"flags":5,"version":3},"started_at":1791198568330,"ended_at":1791198568333}
+
+flags version 5 {'activity': True, 'monster_spawn': True, 'purchase': False}
+alive 7
+configdata_reload_total{reason="manual",result="ok"} 1
+configdata_reload_total{reason="probe",result="ok"} 1
+configdata_reload_total{reason="s0-csv-only",result="ok"} 1
+configdata_reload_total{reason="s1-success",result="ok"} 1
+configdata_reload_total{reason="s2e-missing-required",result="ok"} 1
+configdata_version 3
+{"time":"2026-10-05T19:09:28.330798+08:00","level":"INFO","msg":"feature flags published","goId":22275,"frame":0,"count":3,"off":["purchase"],"version":5}
+-- kill one monster: respawn timer must come from the rolled-back table (respawn_seconds 20) and Count 5 < alive 6 means no refill
+{"name":"gm.scene.kill","ok":true,"data":{"alive":6,"killed":2323435195258110993},"started_at":1791198568446,"ended_at":1791198568446}
+
+alive 6
+-- second rollback
+{"name":"zz.probe.config.rollback","ok":false,"message":"configdata: previous snapshot not found","started_at":1791198571492,"ended_at":1791198571492}
+
+flags version 5 {'activity': True, 'monster_spawn': True, 'purchase': False}
+
+## S4 (first attempt; void) corrected operator flow: edit configs/table/feature_flag.csv (monster_spawn -> false), run roost generate (rewrites configs/data/*.json from the CSVs), then gm.config.reload
+0
+{'purchase': True, 'monster_spawn': True, 'activity': True}
+{"name":"gm.config.reload","ok":true,"data":{"flags":6,"reason":"s4-csv-generate","version":9},"started_at":1791198604566,"ended_at":1791198604568}
+
+flags version 6 {'activity': True, 'monster_spawn': True, 'purchase': True}
+
+## note: the first S4 attempt is void — roost generate refused ("project inputs changed while code generation was running: .n07b/game.log"), because this probe kept the game log inside the project dir; the JSON was never rewritten, so the reload republished the same switches.
+## S4 (rerun after moving probe logs outside the project; game restarted, config version 1): CSV monster_spawn=false -> roost generate -> gm.config.reload
+generate exit 0
+3
+==> registry
+json now {'purchase': True, 'monster_spawn': False, 'activity': True}
+{"name":"gm.config.reload","ok":true,"data":{"flags":2,"reason":"s4-csv-generate","version":2},"started_at":1791198729590,"ended_at":1791198729611}
+
+flags version 2 {'activity': True, 'monster_spawn': False, 'purchase': True}

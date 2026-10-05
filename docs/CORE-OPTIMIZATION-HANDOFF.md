@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N07第二批**：[NC-64/65](review/REVIEW-2026-10-05-noncore-n07b.md)已修复、声明场景验证，未发版。生成game-demo真实进程经`gm.config.reload`热更（成功/失败/rollback、flags与scene refresh读取）符合契约，handler内两次读不跨代（新增控制用例）；修的是模板层：玩家加载后重建Gear与attr_final、开关热更说明改指configs/data JSON。第一批C-O1/2/3与event未接线在真实进程里无触发路径，维持观察；generate不跳过`.dev/`与运行时不查required移交N08。
+
 **10-05 N06 S1/S2/S3/S6 复核（revn06）**：[NC-50/51/52 与 RR-20261001-06 残余](review/REVIEW-2026-10-05-n06-revn06.md)已修复、声明场景验证，未发版；versionstore 退避后重读（所有 Redis 服务的伪冲突），隔离真实 Redis 集成 891 pass/23 环境 skip。S4/S5 由其他 agent 接续，N06 仍部分完成；默认生成工程无指标落点（观察 1）待功能决定。
 
 **10-05 N07第一批**：[NC-60～63](review/REVIEW-2026-10-05-noncore-n07.md)已修复、声明场景验证，未发版。attribute快照锁、game-demo属性层随事务回滚（已污染存量不自动修正）、属性生成器与errcode扫描的生成期拒绝；8相关包race、根包、build/vet、codegen、全新生成game-demo消费通过。event零接线与configdata发布后回调可见性记为观察，N07未整体完成。
@@ -186,6 +188,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N07第二批：[NC-64](bug/RR-20261005-NC-64.md) / [NC-65](bug/RR-20261005-NC-65.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。模板改动需 `roost project sync`；NC-65 不改存储格式，存量玩家下次加载即正确；T-231。
+
 10-05 N09 skill 第一批（revn09）：[NC-110](bug/RR-20261005-NC-110.md) / [NC-111](bug/RR-20261005-NC-111.md) / [NC-112](bug/RR-20261005-NC-112.md)（P2）与 [NC-113](bug/RR-20261005-NC-113.md)（P3）**已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n09-batch1.md)、[修复](bugfix/RR-20261005-NC-110.md)。施法失败统一走 `failCastLocked`；手动 Release 失败改为终止 cast（行为收紧），无格式 / wire 变化。施法终止路径收尾不一致（方向判断见本轮 §7）；combat 状态随 Nest 回滚恢复。
 10-05 N03 revn03：[NC-90](bug/RR-20261005-NC-90.md) / [NC-91](bug/RR-20261005-NC-91.md) / [NC-92](bug/RR-20261005-NC-92.md) 三个 P2 与 [NC-93](bug/RR-20261005-NC-93.md) P3 **已复现，未修复**——JetStream 停止不排空在途 handler、轻量 RPC 被派发拒绝不回包、轻量调用被 JetStream 请求流截获、选主 Resign 不受预算约束；[本轮](review/REVIEW-2026-10-05-noncore-n03.md)（含方向判断：Bus 停止 / 排空与 etcd 选主各自连续多轮出缺陷）。
 

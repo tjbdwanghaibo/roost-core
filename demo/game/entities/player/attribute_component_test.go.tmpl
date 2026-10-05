@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/db"
 	gameattr "{{MODULE}}/game/gameplay/attribute"
 )
 
@@ -261,5 +262,70 @@ func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
 				t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
 			}
 		})
+	}
+}
+
+// RR-20261005-NC-65：attr_final 的 DAO 注释承诺“实体加载时重算，并复制给客户端”。之前 OnInitFinish 只装一个
+// 空的 Gear 层再重组，既不按身上穿的装备重建 Gear，也不把重组结果写回 attr_final：穿着铁剑的玩家重新
+// 加载（重启、冷卸载后再访问）后 Final.Attack 从 Base+剑 掉回 Base，复制出去的 attr_final 是空的，直到下一次
+// 换装或升级才恢复。新建玩家的 attr_final 也一样是空的。这里走生成 DAO 的持久化往返（Marshal →
+// RestorePersisted → 非创建构建），断言加载后的 Final 与加载前相同、attr_final 已填好。
+func TestFinalIsRecomputedFromWornGearWhenThePlayerLoads(t *testing.T) {
+	subject := newAttributePlayer(t, 7101)
+	if subject.Dao().AttrFinalLen() == 0 {
+		t.Error("a new player's attr_final is empty: the composed view was never handed to replication")
+	}
+	const ironSword = int64(2001)
+	item, found := generated.ItemByID(ironSword)
+	if !found || item.Attack <= 0 {
+		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip the sword: %v", err)
+	}
+	worn, _ := subject.AttributeComp().Final()
+	base, _ := gameattr.CombatLive(subject.AttributeComp().Container(), coreattr.Base)
+	if worn.Attack != base.Attack+item.Attack {
+		t.Fatalf("worn attack = %d, want base %d + sword %d", worn.Attack, base.Attack, item.Attack)
+	}
+
+	// What storage holds and the loader hands back: attr_final is nopersist,
+	// so it does not survive the round trip and must be recomputed.
+	stored := db.NewPlayerDao()
+	if err := stored.RestorePersisted(subject.Dao().Marshal(), db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore the stored document: %v", err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{
+		IsCreate: false, Kind: EntityKindPlayer, Id: subject.ID(),
+		Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: stored},
+	})
+	if err != nil {
+		t.Fatalf("load the player: %v", err)
+	}
+	loaded := built.(*Player)
+	final, _ := loaded.AttributeComp().Final()
+	if final.Attack != worn.Attack || final.HP != worn.HP || final.Power != worn.Power {
+		t.Fatalf("after load final = attack %d HP %d power %d, want what the worn set gives: attack %d HP %d power %d",
+			final.Attack, final.HP, final.Power, worn.Attack, worn.HP, worn.Power)
+	}
+	attackMeta, ok := final.MetaByName("attack")
+	if !ok {
+		t.Fatal("the combat profile has no attack attribute")
+	}
+	replicated, ok := loaded.Dao().GetAttrFinal(int32(attackMeta.ID))
+	if !ok || replicated != final.Attack {
+		t.Fatalf("after load attr_final[attack] = %d (present %v), want %d: replication would draw the wrong number", replicated, ok, final.Attack)
 	}
 }

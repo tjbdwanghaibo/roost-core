@@ -98,6 +98,13 @@
   M-05 连出两条（import 收集漏 category、别名保留集漏 entity）。加字段就检查 clone / 序列化 / import 收集这类"逐项列举"的地方；
   用条数给"必须活到某个时刻"的东西收界一定错。
 
+- **game-demo 起真实进程**（N07 第二批）：game 的 `Service.Init` 要先绑 global（activity），只起 game 会 `nats: no responders` 退出，先起 `global`。
+  生成工程不带 etcd 隔离实例，自起一个私有 etcd（scratch 目录、非默认端口）。运行日志别写在工程目录里：`roost generate` 把工程内文件当输入，
+  进程写日志期间会一直报 `project inputs changed while code generation was running`（`.dev/` 也不在跳过名单，已移交 N08）。
+  `/admin/commands` 只返回命令名，命令 Description 只在生成源码里；显式 `Store.Rollback` 没有 GM 入口，要测得在 scratch 工程临时加命令（不提交）。
+- **属性容器是组件内存**：改 game-demo 属性组件时同时看三处——事务回滚（NC-61）、加载重建与 `attr_final` 回写（NC-65）、热更后的重算（观察 C-O8）；
+  用生成 DAO 的 `Marshal` → `RestorePersisted` → `IsCreate=false` 构建做加载往返，不要只测新建玩家。
+
 ## 方法手法（跨包）
 
 - **卡在"造不出那个状态"时的两个手法**：**select 屏障**——select 阻塞前会求值所有 channel 操作数，所以传一个 `Done()` 会阻塞的 context

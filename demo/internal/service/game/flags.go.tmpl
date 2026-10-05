@@ -25,7 +25,10 @@ import (
 //   - at startup, so a process that comes up during an incident comes up with
 //     the switches as the operator left them, not with everything on;
 //   - on every config reload, so editing the table and reloading is the normal
-//     way to flip one.
+//     way to flip one. "The table" at run time is configs/data/feature_flag.json
+//     (config_data.dir): the reload reads JSON only, so an edit to
+//     configs/table/feature_flag.csv takes effect after `roost generate` has
+//     rewritten the JSON, never on its own (RR-20261005-NC-64).
 //
 // A GM command can also flip one (gm.flag.set) for the case where editing a
 // file is too slow. That write is deliberately NOT written back to the table:

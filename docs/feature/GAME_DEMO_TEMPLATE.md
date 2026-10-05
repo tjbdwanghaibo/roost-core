@@ -549,7 +549,7 @@ kit 的 `global` + `global/activity`（路由 / 租约〔租约 2026-10-05 已�
 
 #### 9.9.1 开关的源是配置表，不是常量
 
-- **形状**：`configs/table/feature_flag.csv` 是源，`featureflag.DefaultStore()` 是游戏读的内存态，
+- **形状**：`configs/table/feature_flag.csv` 是源（运行时 reload 只读 `roost generate` 转出的 `configs/data/feature_flag.json`，只改 CSV 不生成就 reload 不会生效，RR-20261005-NC-64），`featureflag.DefaultStore()` 是游戏读的内存态，
   `internal/service/<game>/flags.go` 是连接两者的唯一一处：启动时发布一次，
   之后挂在**配置存储自己的 reload 钩子**（`AddReloadListener` 的 `AfterApply`）上，每次 reload 重新发布。
 - **启动就要发布**，而不是等第一次 reload：incident 期间重启的进程必须带着运维留下的开关起来，

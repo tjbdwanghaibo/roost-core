@@ -9,8 +9,9 @@ package flags
 import "github.com/tjbdwanghaibo/roost-core/featureflag"
 
 // The flags this game has. Each one is also a row in
-// configs/table/featureflag.csv with a note for the operator; the table is the
-// source and the store is rebuilt from it on every config reload.
+// configs/table/feature_flag.csv with a note for the operator. `roost generate`
+// converts it to configs/data/feature_flag.json, which is what a config reload
+// reads; the store is rebuilt from that JSON on every reload.
 const (
 	// Purchase gates the store's entry point. Off refuses new purchases with
 	// a coded answer; orders the platform service already recorded still

@@ -64,6 +64,15 @@ func (component *AttributeComponent) Owner() *Player { return component.owner }
 // right moment: the generated builder attaches the DAO before it initializes
 // components, so the stored values are already here. A new player has none
 // and starts from the level curve.
+//
+// The gear layer is rebuilt from what the stored equipment says is worn, and
+// the composed Final is written to attr_final, because attr_final is
+// nopersist: nothing else brings it back after a load. Before
+// RR-20261005-NC-65 this installed an empty gear layer and never wrote
+// attr_final, so a player wearing a sword came back from a restart (or a cold
+// unload) with Final = Base and replicated an empty attr_final until the next
+// equip or level-up. Only attr_final is written here: it is replication-only,
+// so marking it changes no stored document and needs no transaction.
 func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, isCreate bool) error {
 	dao := component.owner.Dao()
 	base := &gameattr.Combat{}
@@ -78,8 +87,14 @@ func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, i
 		base.LoadValues(values)
 	}
 	component.container.Install(coreattr.Base, base)
-	component.container.Install(Gear, &gameattr.Combat{})
+	gear := &gameattr.Combat{}
+	attack, hp := component.wornGear()
+	gear.SetAttack(attack)
+	gear.SetHP(hp)
+	gear.Update()
+	component.container.Install(Gear, gear)
 	component.recompose()
+	component.writeFinal()
 	return nil
 }
 
@@ -120,19 +135,7 @@ func (component *AttributeComponent) RefreshGear() {
 	if !ok {
 		return
 	}
-	attack, hp := int64(0), int64(0)
-	// From what is WORN, not from the whole bag: carrying a sword in the bag
-	// should not make a player stronger, and the earlier version of this
-	// counted every stack (there was nowhere else to read equipment from).
-	component.owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
-		item, found := generated.ItemByID(itemID)
-		if !found {
-			return true
-		}
-		attack += item.Attack * int64(level)
-		hp += item.HP * int64(level)
-		return true
-	})
+	attack, hp := component.wornGear()
 	if gear.Attack == attack && gear.HP == hp {
 		return
 	}
@@ -142,6 +145,24 @@ func (component *AttributeComponent) RefreshGear() {
 	gear.Update()
 	component.recompose()
 	component.persist()
+}
+
+// wornGear sums what the worn pieces are worth in the item table: from what is
+// WORN, not from the whole bag — carrying a sword in the bag should not make a
+// player stronger, and the earlier version of this counted every stack (there
+// was nowhere else to read equipment from). It reads the config snapshot
+// pinned to the current request, so every piece is priced by the same table.
+func (component *AttributeComponent) wornGear() (attack, hp int64) {
+	component.owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
+		item, found := generated.ItemByID(itemID)
+		if !found {
+			return true
+		}
+		attack += item.Attack * int64(level)
+		hp += item.HP * int64(level)
+		return true
+	})
+	return attack, hp
 }
 
 // attributeLayersUndo is the one undo slot the container takes per
@@ -221,10 +242,15 @@ func (component *AttributeComponent) persist() {
 	if base, ok := gameattr.CombatLive(component.container, coreattr.Base); ok {
 		writeAttrMap(base, dao.SetAttrBase)
 	}
-	if final, ok := gameattr.CombatLive(component.container, coreattr.Final); ok {
-		writeAttrMap(final, dao.SetAttrFinal)
-	}
+	component.writeFinal()
 	component.owner.PublishSyncDirty()
+}
+
+// writeFinal hands the composed view to replication (attr_final is nopersist).
+func (component *AttributeComponent) writeFinal() {
+	if final, ok := gameattr.CombatLive(component.container, coreattr.Final); ok {
+		writeAttrMap(final, component.owner.Dao().SetAttrFinal)
+	}
 }
 
 func writeAttrMap(profile coreattr.Profile, set func(int32, int64)) {
