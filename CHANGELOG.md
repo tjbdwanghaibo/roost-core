@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- **attribute.Container.Snapshot 在读锁内复制**（RR-20261005-NC-60）：之前先释放读锁再 CloneProfile，并发 Apply / ClearDirty 能改写正在复制的 profile，快照撕裂、-race 报竞争。现在复制期间持读锁；CloneProfile 不得回调同一容器。[记录](docs/bugfix/RR-20261005-NC-60.md)
+- **game-demo 属性层随事务回滚**（RR-20261005-NC-61）：升级 / 换装改的是组件内存里的属性层，Nest 只撤回 DAO；失败或提交被拒绝后容器保留新值，下一次成功提交把虚高的 Base 持久化。模板 AttributeComponent 改层前用 `RecordUndo` 登记层的副本。已生成工程需 `roost project sync`；已污染的存量不自动修正。[记录](docs/bugfix/RR-20261005-NC-61.md)
+- **attribute 生成器拒绝无法表示的声明**（RR-20261005-NC-62）：float / bool / string 字段、`max` 超过 64、`index+max-1` 超过 AttrID 在生成期报错；此前 float 被静默截断（0.15 导出为 0），超限声明到编译期才失败。[记录](docs/bugfix/RR-20261005-NC-62.md)
+- **errcode 扫描不再静默跳过**（RR-20261005-NC-63）：按导入名识别 `Define`（含别名 / 点导入），编号、名字、消息不是字面量时报 `file:line`，并检查重复 name；此前这些定义不进导出表、逃过重复检查。用常量编号的业务工程需改为字面量。[记录](docs/bugfix/RR-20261005-NC-63.md)
 - **Saga outbox领取遵守并发更新的重试期限**（RR-20261005-NC-41）：原子领取复查next_attempt_at与lease，陈旧候选不能绕过另一发布者Nack退避；到期恢复及旧token围栏保持。[记录](docs/bugfix/RR-20261005-NC-41.md)
 - **Activity恢复前验证持久计划**（RR-20261005-NC-42、RR-20261001-09残余）：公开Open在Create前拒绝异键/非pending/非法expected计划；sweep在访问Activities前跳过非法键/跨组opening，保留名额且正常组继续。诊断按所属窗口清理，不自动修坏存量，API/格式不变。[记录](docs/bugfix/RR-20261005-NC-42.md)
 - **原生 saga 步骤的过期命令不再无限重投**（U-0281）：`SubscribeDataEngineStep` 收到已过 `DeadlineAt` 且没有回执的命令时 ack（计数 `saga.step.expired_unexecuted_total`，Info 日志），不再返回 `context.DeadlineExceeded` 按退避 nak 到 MaxDeliver（默认约 8.7 天）、长期占住共享 durable 的 MaxAckPending。协调器本来就按超时自行重试或补偿；尝试的结果经 WAL 投影与 completion effect 送达，不依赖这条消息，所以 ack 不会丢掉已提交未投影的尝试。读回执出错仍重投；不执行业务、不调用 Admit。[记录](docs/bugfix/U-0281-saga-expired-command-nak-forever.md)

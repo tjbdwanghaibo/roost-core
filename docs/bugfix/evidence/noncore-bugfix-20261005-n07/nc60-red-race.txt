@@ -1,0 +1,136 @@
+==================
+WARNING: DATA RACE
+Read at 0x00c00011e750 by goroutine 8:
+  runtime.deductAssistCredit()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/runtime/malloc_stubs.go:169 +0x6c
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:22 +0x114
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:24 +0x1f4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Snapshot()
+      <scratch>/wt-revn07/attribute/container.go:113 +0xd4
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func1()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x48
+
+Previous write at 0x00c00011e750 by goroutine 9:
+  runtime.mapaccess2()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/internal/runtime/maps/runtime.go:63 +0x2fc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:34 +0x168
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetDirectAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:38 +0x1c4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:46 +0xfc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:29 +0x1dc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Apply()
+      <scratch>/wt-revn07/attribute/container.go:143 +0x104
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func2()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0xbc
+
+Goroutine 8 (running) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x32c
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+
+Goroutine 9 (finished) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0x4a0
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+==================
+==================
+WARNING: DATA RACE
+Read at 0x00c00015e130 by goroutine 8:
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:22 +0x164
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:24 +0x1f4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Snapshot()
+      <scratch>/wt-revn07/attribute/container.go:113 +0xd4
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func1()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x48
+
+Previous write at 0x00c00015e130 by goroutine 9:
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:34 +0x174
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetDirectAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:38 +0x1c4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:46 +0xfc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:29 +0x1dc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Apply()
+      <scratch>/wt-revn07/attribute/container.go:143 +0x104
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func2()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0xbc
+
+Goroutine 8 (running) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x32c
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+
+Goroutine 9 (finished) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0x4a0
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+==================
+==================
+WARNING: DATA RACE
+Read at 0x00c00011e728 by goroutine 8:
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:25 +0x1cc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).CloneProfile()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:24 +0x1f4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Snapshot()
+      <scratch>/wt-revn07/attribute/container.go:113 +0xd4
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func1()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x48
+
+Previous write at 0x00c00011e728 by goroutine 9:
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:35 +0x19c
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).SetDirectAttr()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:38 +0x1c4
+  github.com/tjbdwanghaibo/roost-core/attribute.(*stubProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_promises_test.go:46 +0xfc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*gatedProfile).LoadValues()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:29 +0x1dc
+  github.com/tjbdwanghaibo/roost-core/attribute.(*Container).Apply()
+      <scratch>/wt-revn07/attribute/container.go:143 +0x104
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock.func2()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0xbc
+
+Goroutine 8 (running) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:43 +0x32c
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+
+Goroutine 9 (finished) created at:
+  github.com/tjbdwanghaibo/roost-core/attribute.TestSnapshotCopiesUnderTheContainerLock()
+      <scratch>/wt-revn07/attribute/container_snapshot_promises_test.go:51 +0x4a0
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.27.0/libexec/src/testing/testing.go:2258 +0x34
+==================
+--- FAIL: TestSnapshotCopiesUnderTheContainerLock (0.00s)
+    container_snapshot_promises_test.go:59: Apply entered LoadValues while Snapshot was still copying the same profile: the copy is not taken under the container lock
+    testing.go:1865: race detected during execution of test
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/attribute	0.645s
+FAIL

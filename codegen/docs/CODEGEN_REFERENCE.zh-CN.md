@@ -534,6 +534,8 @@ go run .../cmd/attribute@latest -dir ./game/attribute
 生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone 以及包级访问器
 `<Name>Of(Snapshot)` / `<Name>In(*Container, Selector)` / `<Name>Live(*Container, Selector)`。
 
+属性统一以 `AttrValue`（int64）进出框架，所以字段只能是整数类型；`float32/float64`、`bool`、`string` 在生成期报错（float 以前会被静默截断，RR-20261005-NC-62），小数用缩放整数（如万分比）。`max` 不超过 64（dirty mask 位数），`index+max-1` 不超过 65535（AttrID）。
+
 **框架半在 `roost-core/attribute`**：`AttrID`、`AttrValue`、`Meta`、`Profile` 接口、`Selector`、`Snapshot`、`Container`。
 启用 `attribute` feature 的工程会拿到 codegen 受控的 `game/gameplay/attribute/runtime.go`，把这些以别名再导出成
 生成物使用的名字（`AttributeMeta`、`AttributeProfile`、`Snapshot`、`Container`、`Selector`），所以声明一个 profile 之后直接就能编译——

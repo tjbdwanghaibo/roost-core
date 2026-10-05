@@ -1,0 +1,22 @@
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead/code_from_a_constant
+    scan_promises_test.go:59: scan accepted it and exported 0 definitions: []errcode.Definition(nil)
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead/name_from_a_constant
+    scan_promises_test.go:59: scan accepted it and exported 0 definitions: []errcode.Definition(nil)
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead/aliased_import_with_a_constant_code
+    scan_promises_test.go:59: scan accepted it and exported 0 definitions: []errcode.Definition(nil)
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead/aliased_import_duplicating_a_code
+    scan_promises_test.go:59: scan accepted it and exported 1 definitions: []errcode.Definition{errcode.Definition{Code:500101, Name:"guild.b", Message:"b", File:"game/guild/errors.go"}}
+=== RUN   TestExtractDefinitionsRefusesWhatItCannotRead/one_name_for_two_codes
+    scan_promises_test.go:59: scan accepted it and exported 2 definitions: []errcode.Definition{errcode.Definition{Code:500101, Name:"shared", Message:"a", File:"game/shop/errors.go"}, errcode.Definition{Code:500102, Name:"shared", Message:"b", File:"game/guild/errors.go"}}
+=== NAME  TestExtractDefinitionsRefusesWhatItCannotRead
+    scan_promises_test.go:83: definitions = []errcode.Definition{errcode.Definition{Code:500102, Name:"guild.b", Message:"b", File:"game/guild/errors.go"}}
+--- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead (0.01s)
+    --- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead/code_from_a_constant (0.00s)
+    --- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead/name_from_a_constant (0.00s)
+    --- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead/aliased_import_with_a_constant_code (0.00s)
+    --- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead/aliased_import_duplicating_a_code (0.00s)
+    --- FAIL: TestExtractDefinitionsRefusesWhatItCannotRead/one_name_for_two_codes (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	0.557s
+FAIL

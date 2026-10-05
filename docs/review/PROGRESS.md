@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N07第一批（configdata/attribute/event/errcode）
+
+基线50e9a4e8（origin/main），分支revn07，图谱generation 2026-09-30、以源码补证。[本轮/矩阵](REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。NC-60/61/63（P2）、NC-62（P3）已修复、声明场景验证，未发版。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| configdata | C1～C11：热更新/回滚/DryRun、失败与panic回滚、跨Store、并发、Kit gauge；3观察 | 无确认缺陷；GM reload端到端与tablegen getter在handler内一致性待第二批 |
+| attribute | A1～A7 | NC-60快照锁、NC-61模板回滚、NC-62生成期拒绝；方向判断见本轮 |
+| event | E1～E8 | 无框架/模板接线，4观察不登记RR；接入还是移除待维护者 |
+| errcode | R1～R5 | NC-63扫描拒绝非字面量/别名并查重名；id扫描AST化留N08 |
+
+新增4组正式回归（attribute 1、codegen attribute 1、codegen errcode 1、game-demo模板 1）；修前红与修后绿原文入证据。8相关包race、根包、build/vet、codegen、attribute-runtime、全新game-demo消费通过。N07场景部分完成，不计completed/15；下一N07第二批→N08。不等待CI，不发版。
+
 ## 2026-10-05 N06第三批/第十七批修复
 
 起点12726715，fetch/pull后主分支未变，无新Wanted/skill镜像差异。[本轮](REVIEW-2026-10-05-noncore-27.md) · [机制](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。NC-41 P2（outbox候选→并发Nack→原子领取）、NC-42 P3（Open持久坏计划）及RR-09非法/跨组sweep残余已修复、声明场景验证，未发版。

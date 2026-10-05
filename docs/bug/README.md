@@ -1,5 +1,14 @@
 # Roost Review 问题索引
 
+**10-05 N07第一批：NC-60/61/63三个P2与NC-62 P3已修复、声明场景验证，未发版。** attribute快照锁、game-demo属性层随事务回滚、属性生成器拒绝不可表示声明、errcode扫描拒绝读不懂的Define并查重名；4组反例红→绿。event/configdata本批无确认缺陷，矩阵与观察见[本轮](../review/REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-60](RR-20261005-NC-60.md) | P2 Container.Snapshot锁外复制，与Apply/ClearDirty竞争 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-61](RR-20261005-NC-61.md) | P2 game-demo属性层不随事务回滚，下次提交持久化虚高属性 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-62](RR-20261005-NC-62.md) | P3 attribute生成器接受float/超64位/超AttrID声明 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-63](RR-20261005-NC-63.md) | P2 errcode扫描静默跳过非字面量/别名Define，不查重名 | 已修复、声明场景验证，未发版 |
+
 **10-05 N06第三批：NC-41 P2、NC-42 P3及RR-20261001-09残余已修复、声明场景验证，未发版。** outbox并发领取复查due，公开Open拒绝畸形持久计划、sweep非法键/跨组写前隔离；7反例红→绿，含恢复/诊断/对账13新增叶子。[本轮](../review/REVIEW-2026-10-05-noncore-27.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。外部Mongo/Redis/HA未验，不自动迁移坏记录。
 
 | 编号 | 问题 | 状态 |

@@ -99,14 +99,19 @@ func (c *Container) Live(selector Selector) (Profile, bool) {
 
 // Snapshot copies a layer out. The copy is taken under the container's lock,
 // so a snapshot never catches a profile mid-write from this container's own
-// mutators.
+// mutators (Apply / ClearDirty). Writes through a profile obtained from Live
+// are the owner's and are not covered: the owner serializes them with its own
+// lock.
+//
+// 复制必须在读锁内完成：之前先 RUnlock 再 CloneProfile，Apply 能在复制中途拿到写锁改写同一份
+// profile，快照读到撕裂状态，-race 下是数据竞争（RR-20261005-NC-60）。
 func (c *Container) Snapshot(selector Selector) Snapshot {
 	if c == nil {
 		return Snapshot{Selector: selector}
 	}
 	c.mu.RLock()
+	defer c.mu.RUnlock()
 	profile, ok := c.layers[selector.key()]
-	c.mu.RUnlock()
 	if !ok || profile == nil {
 		return Snapshot{Selector: selector}
 	}

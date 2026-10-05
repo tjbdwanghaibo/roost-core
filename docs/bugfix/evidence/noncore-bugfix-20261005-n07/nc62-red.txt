@@ -1,0 +1,23 @@
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/float64_field
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (float64 field)
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/float32_field
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (float32 field)
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/bool_field
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (bool field)
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/string_field
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (string field)
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/max_beyond_the_dirty_mask
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (max beyond the dirty mask)
+=== RUN   TestParseDirRejectsAttributesTheWireCannotCarry/ids_beyond_AttrID
+    representable_promises_test.go:33: accepted a profile the framework cannot represent (ids beyond AttrID)
+--- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry (0.01s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/float64_field (0.00s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/float32_field (0.00s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/bool_field (0.00s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/string_field (0.00s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/max_beyond_the_dirty_mask (0.00s)
+    --- FAIL: TestParseDirRejectsAttributesTheWireCannotCarry/ids_beyond_AttrID (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute	0.494s
+FAIL

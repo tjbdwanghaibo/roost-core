@@ -1,0 +1,31 @@
+== gofmt
+== vet changed
+vet=0
+== race changed
+ok  	github.com/tjbdwanghaibo/roost-core/attribute	1.549s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute	1.687s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	1.460s
+ok  	github.com/tjbdwanghaibo/roost-core/event	2.059s
+ok  	github.com/tjbdwanghaibo/roost-core/configdata	1.651s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/configdata	2.086s
+ok  	github.com/tjbdwanghaibo/roost-core/errcode	2.549s
+ok  	github.com/tjbdwanghaibo/roost-core/servicerpc	3.121s
+== root
+ok  	github.com/tjbdwanghaibo/roost-core	0.783s
+== build/vet all
+buildvet=0
+== codegen
+codegen_done
+== attribute-runtime.sh
+generated: <tmp>/attribute-runtime.PYRV2J/combat/gen_combat_attribute.go
+ok  	attributeruntime/combat	0.497s
+art=0
+== fresh game-demo
+gen=0
+tidy=0
+demo_buildvet=0
+ok  	example.com/n07demo2/game/entities/player	2.476s
+ok  	example.com/n07demo2/game/gameplay/attribute	1.965s
+ok  	example.com/n07demo2/game/handler	3.007s
+errcode_gen=0
+      22 docs/generated/errcode.csv

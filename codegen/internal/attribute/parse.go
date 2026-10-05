@@ -134,6 +134,16 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 	if err != nil {
 		return rawProfile{}, err
 	}
+	// The declaration has to fit the framework's representation: one dirty
+	// bit per attribute in a uint64, and ids in AttrID (uint16). Past either
+	// limit the generator used to write `1 << 64` or an overflowing id and
+	// leave the compiler to report it (RR-20261005-NC-62).
+	if maxCount > maxAttributeBits {
+		return rawProfile{}, fmt.Errorf("%s: max=%d exceeds the %d bits of the dirty mask", name, maxCount, maxAttributeBits)
+	}
+	if last := indexBegin + maxCount - 1; last > maxAttributeID {
+		return rawProfile{}, fmt.Errorf("%s: index=%d max=%d puts ids up to %d, beyond the AttrID range (max %d)", name, indexBegin, maxCount, last, maxAttributeID)
+	}
 	raw := rawProfile{
 		def: ProfileDef{
 			Name:       name,
@@ -171,6 +181,9 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 			if skip {
 				continue
 			}
+			if notCarried[fieldType] {
+				return rawProfile{}, fmt.Errorf("%s.%s has type %s: every attribute travels as AttrValue (int64), so only integer fields are carried — store a scaled integer (e.g. basis points) instead", name, fieldName.Name, fieldType)
+			}
 			if attrName == "" {
 				attrName = toSnake(fieldName.Name)
 			}
@@ -198,6 +211,25 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 		return rawProfile{}, fmt.Errorf("%s must declare an unexported `dirtyMask uint64` field: the generated setters write through it", name)
 	}
 	return raw, nil
+}
+
+const (
+	// maxAttributeBits is the width of the generated dirtyMask.
+	maxAttributeBits = 64
+	// maxAttributeID is the largest value of attribute.AttrID (uint16).
+	maxAttributeID = 1<<16 - 1
+)
+
+// notCarried lists the builtin field types AttrValue cannot hold. Floats are
+// the dangerous ones: they compile, and GetAttr / ExportValues truncate them,
+// so 0.15 is exported, persisted and replayed as 0 (RR-20261005-NC-62). The
+// others would not compile; refusing them here names the field instead.
+// Named types are taken on trust — the parser sees syntax, not their
+// underlying type.
+var notCarried = map[string]bool{
+	"float32": true, "float64": true,
+	"complex64": true, "complex128": true,
+	"bool": true, "string": true,
 }
 
 func attachFormulas(raw *rawProfile) error {

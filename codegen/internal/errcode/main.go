@@ -68,10 +68,11 @@ func extractDefinitions(root string) ([]Definition, error) {
 		if err != nil {
 			return err
 		}
-		if !bytes.Contains(raw, []byte("errcode.Define")) {
+		if !bytes.Contains(raw, []byte(errcodeImportPath)) && !bytes.Contains(raw, []byte("errcode.Define")) {
 			return nil
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, raw, 0)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, raw, 0)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
@@ -79,51 +80,32 @@ func extractDefinitions(root string) ([]Definition, error) {
 		if err != nil {
 			rel = path
 		}
+		rel = filepath.ToSlash(rel)
+		local, ok := errcodeLocalName(file)
+		if !ok {
+			return nil
+		}
 		var visitErr error
 		ast.Inspect(file, func(node ast.Node) bool {
 			if visitErr != nil {
 				return false
 			}
 			call, ok := node.(*ast.CallExpr)
-			if !ok || len(call.Args) != 3 {
+			if !ok || !isErrcodeDefine(call.Fun, local) {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Define" {
-				return true
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok || ident.Name != "errcode" {
-				return true
-			}
-			code, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || code.Kind != token.INT || strings.Trim(code.Value, "0123456789") != "" {
-				return true
-			}
-			nameLit, ok := call.Args[1].(*ast.BasicLit)
-			if !ok || nameLit.Kind != token.STRING {
-				return true
-			}
-			messageLit, ok := call.Args[2].(*ast.BasicLit)
-			if !ok || messageLit.Kind != token.STRING {
-				return true
-			}
-			code64, err := strconv.ParseInt(code.Value, 10, 32)
-			if err != nil {
-				visitErr = fmt.Errorf("%s: parse errcode %q: %w", rel, code.Value, err)
+			// Every Define has to be readable here: the exported table is what
+			// clients map codes from, and the duplicate checks below are only
+			// as complete as this scan. A Define whose code, name or message
+			// is not a literal used to be skipped silently — missing from the
+			// table and invisible to the duplicate check (RR-20261005-NC-63).
+			def, ok := literalDefinition(call)
+			if !ok {
+				visitErr = fmt.Errorf("%s:%d: errcode.Define must be called with integer and string literals (code, name, message) so the error table can be exported and checked", rel, fset.Position(call.Pos()).Line)
 				return false
 			}
-			name, err := strconv.Unquote(nameLit.Value)
-			if err != nil {
-				visitErr = fmt.Errorf("%s: parse errcode name: %w", rel, err)
-				return false
-			}
-			message, err := strconv.Unquote(messageLit.Value)
-			if err != nil {
-				visitErr = fmt.Errorf("%s: parse errcode message: %w", rel, err)
-				return false
-			}
-			defs = append(defs, Definition{Code: int32(code64), Name: name, Message: message, File: rel})
+			def.File = rel
+			defs = append(defs, def)
 			return true
 		})
 		if visitErr != nil {
@@ -145,7 +127,81 @@ func extractDefinitions(root string) ([]Definition, error) {
 			return nil, fmt.Errorf("duplicate errcode %d: %s and %s", defs[i].Code, defs[i-1].File, defs[i].File)
 		}
 	}
+	// A name is a client-facing identifier too (and the reason ClientError
+	// falls back to when a message is empty): one name for two codes is the
+	// same conflict seen from the other side.
+	byName := make(map[string]Definition, len(defs))
+	for _, def := range defs {
+		if first, exists := byName[def.Name]; exists {
+			return nil, fmt.Errorf("duplicate errcode name %q: %d in %s and %d in %s", def.Name, first.Code, first.File, def.Code, def.File)
+		}
+		byName[def.Name] = def
+	}
 	return defs, nil
+}
+
+const errcodeImportPath = "github.com/tjbdwanghaibo/roost-core/errcode"
+
+// errcodeLocalName reports the name roost-core's errcode package goes by in
+// this file ("errcode", an alias, or "." for a dot import). A file that does
+// not import it is read as `errcode.` — what the scan has always matched —
+// and a blank import defines nothing.
+func errcodeLocalName(file *ast.File) (string, bool) {
+	if len(file.Imports) == 0 {
+		return "errcode", true
+	}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || importPath != errcodeImportPath {
+			continue
+		}
+		if spec.Name == nil {
+			return "errcode", true
+		}
+		if spec.Name.Name == "_" {
+			return "", false
+		}
+		return spec.Name.Name, true
+	}
+	return "errcode", true
+}
+
+func isErrcodeDefine(fun ast.Expr, local string) bool {
+	switch fn := fun.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := fn.X.(*ast.Ident)
+		return ok && local != "." && ident.Name == local && fn.Sel.Name == "Define"
+	case *ast.Ident:
+		return local == "." && fn.Name == "Define"
+	}
+	return false
+}
+
+func literalDefinition(call *ast.CallExpr) (Definition, bool) {
+	if len(call.Args) != 3 {
+		return Definition{}, false
+	}
+	code, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || code.Kind != token.INT {
+		return Definition{}, false
+	}
+	code64, err := strconv.ParseInt(code.Value, 10, 32)
+	if err != nil {
+		return Definition{}, false
+	}
+	var texts [2]string
+	for i, arg := range call.Args[1:] {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return Definition{}, false
+		}
+		text, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return Definition{}, false
+		}
+		texts[i] = text
+	}
+	return Definition{Code: int32(code64), Name: texts[0], Message: texts[1]}, true
 }
 
 func writeCSV(path string, defs []Definition) error {

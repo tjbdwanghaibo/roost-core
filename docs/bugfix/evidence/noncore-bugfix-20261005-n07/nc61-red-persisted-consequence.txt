@@ -1,0 +1,15 @@
+=== RUN   TestAttributeLayersRollBackWithTheTransaction
+=== RUN   TestAttributeLayersRollBackWithTheTransaction/a_later_step_fails
+    attribute_component_test.go:238: rolled back to level 0 but the base layer kept the level-up: HP 110 attack 12, want HP 100 attack 10
+    attribute_component_test.go:242: rolled back but the final layer kept the level-up: HP 110 power 35, want HP 100 power 30
+    attribute_component_test.go:261: level 1 stored base HP 120, want 110
+=== RUN   TestAttributeLayersRollBackWithTheTransaction/the_commit_is_rejected
+    attribute_component_test.go:238: rolled back to level 0 but the base layer kept the level-up: HP 110 attack 12, want HP 100 attack 10
+    attribute_component_test.go:242: rolled back but the final layer kept the level-up: HP 110 power 35, want HP 100 power 30
+    attribute_component_test.go:261: level 1 stored base HP 120, want 110
+--- FAIL: TestAttributeLayersRollBackWithTheTransaction (0.00s)
+    --- FAIL: TestAttributeLayersRollBackWithTheTransaction/a_later_step_fails (0.00s)
+    --- FAIL: TestAttributeLayersRollBackWithTheTransaction/the_commit_is_rejected (0.00s)
+FAIL
+FAIL	example.com/n07demo/game/entities/player	0.524s
+FAIL

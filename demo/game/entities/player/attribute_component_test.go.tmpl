@@ -22,6 +22,12 @@ type attributeCommitter struct{}
 
 func (attributeCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
 
+// rejectingCommitter refuses every record, the way a failed WAL admission
+// does: the handler body already ran, and Nest has to take it all back.
+type rejectingCommitter struct{ err error }
+
+func (c rejectingCommitter) Commit(context.Context, nest.CommitRecord) error { return c.err }
+
 // The attribute system's claim in this project is the composition rule:
 // Final = Base + Gear, with the derived attribute computed once over the
 // composed inputs. These assert that rule and the two storage intents that
@@ -186,5 +192,74 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 	}
 	if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "typo"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
 		t.Fatal(err)
+	}
+}
+
+// RR-20261005-NC-61：属性层是组件内存，不是 DAO 字段。AddExp 升级时先改 Base、重组 Final，再把两层
+// 写回 DAO；之后的步骤失败或提交被拒绝，Nest 只按 undo 记录撤回 DAO（等级、经验、attr_base），
+// 容器里的 Base / Final 却留在升级后的数值上。下一次成功的写回再把这份虚高的 Base 持久化，
+// 等级与属性从此对不上。承诺：事务回滚时属性层随它一起回到事务开始时的样子。
+func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		uniqueID  int64
+		committer nest.TransactionCommitter
+		failAfter bool
+	}{
+		{name: "a later step fails", uniqueID: 7201, committer: attributeCommitter{}, failAfter: true},
+		{name: "the commit is rejected", uniqueID: 7202, committer: rejectingCommitter{err: errors.New("admission refused")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subject := newAttributePlayer(t, tc.uniqueID)
+			component := subject.AttributeComp()
+			level := subject.Dao().GetLevel()
+			start := gameattr.ForLevel(level)
+
+			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "level_up_then_fail", func() (any, error) {
+				if _, err := subject.ProfileComp().AddExp(ExpPerLevel); err != nil {
+					return nil, err
+				}
+				if tc.failAfter {
+					return nil, errors.New("a later step of the same handler failed")
+				}
+				return nil, nil
+			})
+			if err == nil {
+				t.Fatal("the transaction was expected to fail")
+			}
+			if got := subject.Dao().GetLevel(); got != level {
+				t.Fatalf("the level was not rolled back: %d, want %d", got, level)
+			}
+			base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
+			if !ok {
+				t.Fatal("the base layer disappeared on rollback")
+			}
+			if base.HP != start.HP || base.Attack != start.Attack {
+				t.Fatalf("rolled back to level %d but the base layer kept the level-up: HP %d attack %d, want HP %d attack %d",
+					level, base.HP, base.Attack, start.HP, start.Attack)
+			}
+			if final, _ := component.Final(); final.HP != start.HP || final.Power != start.Power {
+				t.Fatalf("rolled back but the final layer kept the level-up: HP %d power %d, want HP %d power %d",
+					final.HP, final.Power, start.HP, start.Power)
+			}
+
+			// The consequence that made this an asset bug: the next level-up that
+			// DOES commit must store the numbers of the level it reached, not one
+			// level-up on top of a rolled-back one.
+			if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
+				return subject.ProfileComp().AddExp(ExpPerLevel)
+			}); err != nil {
+				t.Fatalf("the retry failed: %v", err)
+			}
+			want := gameattr.ForLevel(subject.Dao().GetLevel())
+			stored := make(map[int32]int64)
+			subject.Dao().RangeAttrBase(func(id int32, value int64) bool {
+				stored[id] = value
+				return true
+			})
+			if got := stored[int32(gameattr.AttrHP)]; got != want.HP {
+				t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
+			}
+		})
 	}
 }

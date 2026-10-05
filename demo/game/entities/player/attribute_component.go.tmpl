@@ -7,6 +7,7 @@ import (
 	generated "{{MODULE}}/configs/generated"
 	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 //roost:component type=2003
@@ -104,6 +105,7 @@ func (component *AttributeComponent) LevelUp(levels int32) {
 	if !ok {
 		return
 	}
+	component.captureRollback()
 	base.LevelUp(levels)
 	component.recompose()
 	component.persist()
@@ -134,11 +136,54 @@ func (component *AttributeComponent) RefreshGear() {
 	if gear.Attack == attack && gear.HP == hp {
 		return
 	}
+	component.captureRollback()
 	gear.SetAttack(attack)
 	gear.SetHP(hp)
 	gear.Update()
 	component.recompose()
 	component.persist()
+}
+
+// attributeLayersUndo is the one undo slot the container takes per
+// transaction: Nest keeps the first inverse recorded for (component, slot),
+// so a handler that levels up and then re-equips restores the layers as they
+// were before either.
+const attributeLayersUndo uint64 = 1
+
+// captureRollback makes the container part of the running transaction. Call
+// it before the first change to any layer.
+//
+// The layers are component memory, not DAO fields. The DAO's own undo puts
+// level, exp and attr_base back when the handler fails or its commit is
+// refused; without this the container would keep the new numbers, and the
+// next write-back that does commit would persist them on top of the old
+// level (RR-20261005-NC-61). The inverse reinstalls copies taken here, so it
+// is exact whatever the layers held. Outside a rollback-capable transaction
+// there is nothing to roll back into, and nothing is recorded.
+func (component *AttributeComponent) captureRollback() {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil || tx.Policy() == nest.RollbackNone {
+		return
+	}
+	saved := make(map[coreattr.Selector]coreattr.Profile)
+	for _, selector := range component.container.Layers() {
+		if profile, ok := component.container.Live(selector); ok {
+			saved[selector] = profile.CloneProfile()
+		}
+	}
+	// The only error is a transaction that is no longer open; a mutation
+	// made then is not part of any rollback either.
+	_ = tx.RecordUndo(component, attributeLayersUndo, func() error {
+		for _, selector := range component.container.Layers() {
+			if _, kept := saved[selector]; !kept {
+				component.container.Remove(selector)
+			}
+		}
+		for selector, profile := range saved {
+			component.container.Install(selector, profile)
+		}
+		return nil
+	})
 }
 
 // recompose rebuilds Final from every other layer.

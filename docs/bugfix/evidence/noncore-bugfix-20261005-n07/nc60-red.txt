@@ -1,0 +1,6 @@
+=== RUN   TestSnapshotCopiesUnderTheContainerLock
+    container_snapshot_promises_test.go:59: Apply entered LoadValues while Snapshot was still copying the same profile: the copy is not taken under the container lock
+--- FAIL: TestSnapshotCopiesUnderTheContainerLock (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/attribute	0.235s
+FAIL

@@ -1,0 +1,32 @@
+=== RUN   TestSnapshotHandsOutACopy
+--- PASS: TestSnapshotHandsOutACopy (0.00s)
+=== RUN   TestEmptyLayerAnswersInsteadOfPanicking
+--- PASS: TestEmptyLayerAnswersInsteadOfPanicking (0.00s)
+=== RUN   TestZeroSelectorIsBase
+--- PASS: TestZeroSelectorIsBase (0.00s)
+=== RUN   TestLayersAreIsolated
+--- PASS: TestLayersAreIsolated (0.00s)
+=== RUN   TestSnapshotCopiesUnderTheContainerLock
+--- PASS: TestSnapshotCopiesUnderTheContainerLock (0.10s)
+=== RUN   TestSnapshotHandsOutACopy
+--- PASS: TestSnapshotHandsOutACopy (0.00s)
+=== RUN   TestEmptyLayerAnswersInsteadOfPanicking
+--- PASS: TestEmptyLayerAnswersInsteadOfPanicking (0.00s)
+=== RUN   TestZeroSelectorIsBase
+--- PASS: TestZeroSelectorIsBase (0.00s)
+=== RUN   TestLayersAreIsolated
+--- PASS: TestLayersAreIsolated (0.00s)
+=== RUN   TestSnapshotCopiesUnderTheContainerLock
+--- PASS: TestSnapshotCopiesUnderTheContainerLock (0.10s)
+=== RUN   TestSnapshotHandsOutACopy
+--- PASS: TestSnapshotHandsOutACopy (0.00s)
+=== RUN   TestEmptyLayerAnswersInsteadOfPanicking
+--- PASS: TestEmptyLayerAnswersInsteadOfPanicking (0.00s)
+=== RUN   TestZeroSelectorIsBase
+--- PASS: TestZeroSelectorIsBase (0.00s)
+=== RUN   TestLayersAreIsolated
+--- PASS: TestLayersAreIsolated (0.00s)
+=== RUN   TestSnapshotCopiesUnderTheContainerLock
+--- PASS: TestSnapshotCopiesUnderTheContainerLock (0.10s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/attribute	1.787s
