@@ -180,6 +180,9 @@ type fakeCASCall struct {
 	next     []byte
 	ttl      time.Duration
 	at       time.Time
+	// timeout 是调用方 ctx 在进入调用时剩下的时长（没有截止时间为 0）；钩子用它模拟“一直没有回复，
+	// 直到单次超时到期”。
+	timeout time.Duration
 }
 
 func newFakeSingletonStore(clock *fakeClock) *fakeSingletonStore {
@@ -244,9 +247,12 @@ func (s *fakeSingletonStore) isClosed() bool {
 	return s.closed
 }
 
-func (s *fakeSingletonStore) CompareAndSet(_ context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
+func (s *fakeSingletonStore) CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
 	s.mu.Lock()
 	call := fakeCASCall{key: key, expected: append([]byte(nil), expected...), next: append([]byte(nil), next...), ttl: ttl, at: s.clock.Now()}
+	if deadline, ok := ctx.Deadline(); ok {
+		call.timeout = time.Until(deadline)
+	}
 	if expected == nil {
 		call.expected = nil
 	}
@@ -875,6 +881,62 @@ func TestSingletonUnknownRenewalsLoseOnlyAtTheEndOfTheWindow(t *testing.T) {
 	}
 	if err := runErr; !errors.Is(err, ErrSingletonLost) || !errors.Is(err, storeDown) {
 		t.Fatalf("run error = %v, want ErrSingletonLost wrapping the store error", err)
+	}
+}
+
+// #6 / §3.3 关系 1：续期一直 Unknown 时，Lost 必须不晚于 validUntil 判定——键最早在 validUntil 过期，
+// 之后新进程就可能拿到锁。前几拍快速报错（连接被拒）、结论落在窗口内，于是进入
+// [validUntil−guard, validUntil) 的那一拍才发起；这一拍若是超时，它的单次超时不能越过 validUntil，
+// 否则 Lost 判定晚于键过期：只有 renew_interval ≤ guard 不够，结论最晚会落在 validUntil−guard+2×renew_interval。
+func TestSingletonUnknownRenewalTimeoutLosesNoLaterThanTheWindowEnd(t *testing.T) {
+	const ttl, guard = 14 * time.Second, 3 * time.Second
+	h := newSingletonHarness(t, nil, nil)
+	// 满足 ValidateServiceConfig 的三条关系：renew 3s ≤ guard 3s；2×3s ≤ 14s−3s；startup_wait 30s ≥ 14s+2×3s。
+	h.app.cfg.Set("singleton.ttl", ttl)
+	h.app.cfg.Set("singleton.guard", guard)
+	var lostAt atomic.Pointer[time.Time]
+	h.svc.onInit = func(r *Registry) error {
+		MustLookup[*RuntimeFailure](r, ModRuntimeFailure).OnFail(func(error) {
+			now := h.clock.Now()
+			lostAt.Store(&now)
+		})
+		return nil
+	}
+	result := h.start()
+	h.awaitServed(t, result)
+	validUntil := h.status(t).validUntil
+	if want := h.store.calls()[0].at.Add(ttl); !validUntil.Equal(want) {
+		t.Fatalf("test setup: validUntil = %v, want acquire asked + ttl (%v)", validUntil, want)
+	}
+	refused := errors.New("dial tcp: connection refused")
+	h.store.setOnCAS(func(call fakeCASCall, _ func() (bool, []byte)) (bool, []byte, error) {
+		if call.at.Before(validUntil.Add(-guard)) {
+			return false, nil, refused // 立即失败，结论仍在窗口内 → Unknown
+		}
+		// 进入窗口末段的这一拍：请求发出后一直没有回复，直到调用方给的单次超时到期。
+		h.clock.Advance(call.timeout)
+		return false, nil, context.DeadlineExceeded
+	})
+	var runErr error
+	for done := false; !done; {
+		select {
+		case runErr = <-result:
+			done = true
+		case <-h.clock.timerReady(1):
+			h.clock.AdvanceToNext(t)
+		case <-time.After(testWaitLimit):
+			t.Fatal("renewal neither rescheduled nor lost the lock")
+		}
+	}
+	if !errors.Is(runErr, ErrSingletonLost) || !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("run error = %v, want ErrSingletonLost wrapping the renewal timeout", runErr)
+	}
+	at := lostAt.Load()
+	if at == nil {
+		t.Fatal("the lock was lost without the OnFail hook running")
+	}
+	if at.After(validUntil) {
+		t.Fatalf("lost at validUntil+%v: the key may already belong to a new process while this one still serves", at.Sub(validUntil))
 	}
 }
 

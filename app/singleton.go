@@ -116,8 +116,8 @@ func readSingletonSettings(cfg *viper.Viper) singletonSettings {
 }
 
 // validate 检查启用时的配置（ValidateServiceConfig 调用）。三条时间关系的理由见方案 §3.3：
-//  1. renew_interval ≤ guard：续期一直 Unknown 时，进入 [validUntil−guard, validUntil) 之后一个节拍内
-//     一定有一次结论落在键过期之前，Lost 先于别人能拿到锁判定。
+//  1. renew_interval ≤ guard：续期一直 Unknown 时，进入 [validUntil−guard, validUntil) 之后的第一拍
+//     在 validUntil 之前发起；配合 cas 把单次超时截到 validUntil，Lost 不晚于 validUntil 判定。
 //  2. 2 × renew_interval ≤ ttl − guard：一次续期超时之后下一次仍在窗口内发起，一次抖动不判 Lost。
 //  3. startup_wait ≥ ttl + 2 × renew_interval：卡住的旧持有者最后一次续期可能在新进程启动前后才被
 //     处理，键最晚约 ttl 后过期，新进程的重试间隔又是一个 renew_interval。
@@ -266,10 +266,19 @@ type casReply struct {
 	replied time.Time
 }
 
-// cas 发起一次 CompareAndSet(key, expected, value, ttl)，单次超时等于 renew_interval。
+// cas 发起一次 CompareAndSet(key, expected, value, ttl)。单次超时等于 renew_interval，持有期间
+// 还不越过 validUntil：固定节拍下，前一拍的报错可能很快回来（结论仍在窗口内），下一拍于是在
+// [validUntil−guard, validUntil) 里才发起，若再给它一整个 renew_interval，超时结论最晚落在
+// validUntil−guard+2×renew_interval，可能晚于键过期。截到 validUntil，Unknown→Lost 就一定不晚于
+// validUntil 判定。asked 已不早于 validUntil（卡住后恢复）时不截：那次续期 Applied 仍证明键一直是
+// 自己的（方案 §3.4），报错则按窗口末尾判 Lost。启动获取时 validUntil 为零值，不受影响。
 func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 	asked := l.clock.Now()
-	callCtx, cancel := context.WithTimeout(ctx, l.settings.renewInterval)
+	timeout := l.settings.renewInterval
+	if validUntil := l.snapshot().validUntil; asked.Before(validUntil) {
+		timeout = min(timeout, validUntil.Sub(asked))
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	applied, current, err := l.store.CompareAndSet(callCtx, l.key, expected, l.value, l.settings.ttl)
 	cancel()
 	return casReply{applied: applied, current: current, err: err, asked: asked, replied: l.clock.Now()}
@@ -400,8 +409,9 @@ func (l *singletonLock) startRenewal() {
 }
 
 // renewLoop 是持有期间唯一的写者。调度按固定节拍：节拍点是上一次 Applied 的 asked + k × renew_interval，
-// 单次超时等于 renew_interval，超时或报错就在下一个节拍点重试、不额外再睡一个间隔，所以相邻两次结论
-// 最多隔一个 renew_interval（配合 renew_interval ≤ guard，Lost 一定先于键过期判定）。
+// 单次超时等于 renew_interval，超时或报错就在下一个节拍点重试、不额外再睡一个间隔。最后一个结论落在
+// validUntil−guard 之前的节拍之后，下一拍在 validUntil−guard+renew_interval ≤ validUntil 之前发起，
+// 它的单次超时又截到 validUntil（见 cas），所以 Lost 一定不晚于 validUntil 判定。
 //
 // 结论：
 //   - 及时 Applied → Held，validUntil = asked + ttl。
