@@ -113,11 +113,18 @@ type StepBudgets struct {
 }
 
 // Resolve 返回补齐预算后的定义副本，不校验结果（Engine.Register 会校验）。
+//
+// 覆盖先按 {Type, Step} 原样查找，查不到再按全小写查找：配置键经 viper 一律转成小写，kit 的
+// saga Mod 没拿到定义时（kitsaga.NewMod() 无参数、定义之后经 Register 登记）只能以小写键保存覆盖，
+// 原样查找会让大小写混写的类型 / 步骤名的覆盖静默不生效（RR-20261005-NC-194）。
 func (budgets StepBudgets) Resolve(definition Definition) Definition {
 	builtin := DefaultStepBudget()
 	steps := make([]Step, len(definition.Steps))
 	for i, step := range definition.Steps {
-		override := budgets.Overrides[StepKey{Type: definition.Type, Step: step.Name}]
+		override, ok := budgets.Overrides[StepKey{Type: definition.Type, Step: step.Name}]
+		if !ok {
+			override = budgets.Overrides[StepKey{Type: strings.ToLower(definition.Type), Step: strings.ToLower(step.Name)}]
+		}
 		step.Timeout = firstDuration(override.Timeout, step.Timeout, budgets.Defaults.Timeout, builtin.Timeout)
 		step.MaxAttempts = firstAttempts(override.MaxAttempts, step.MaxAttempts, budgets.Defaults.MaxAttempts, builtin.MaxAttempts)
 		step.BackoffMin = firstDuration(override.BackoffMin, step.BackoffMin, budgets.Defaults.BackoffMin, builtin.BackoffMin)

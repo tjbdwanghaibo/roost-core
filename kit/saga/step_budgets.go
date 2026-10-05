@@ -29,6 +29,8 @@ var stepBudgetFields = map[string]struct{}{"timeout": {}, "max_attempts": {}, "b
 //
 // definitions 非空时，saga.steps 下每个类型与步骤必须对应其中某个定义的步骤：写错名字的覆盖不会
 // 静默失效，而是让 Init 失败。未知字段同样拒绝。生成工程的测试可以用它在单元测试里得到与运行时相同的预算。
+// definitions 为空时无法核对名字，覆盖以 viper 给出的小写键保存；Engine.Register 的 StepBudgets.Resolve
+// 原样查不到时按小写回退，大小写混写的类型 / 步骤名照样生效（RR-20261005-NC-194）。
 func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition) (coresaga.StepBudgets, error) {
 	budgets := coresaga.StepBudgets{Defaults: coresaga.DefaultStepBudget()}
 	if cfg == nil {
