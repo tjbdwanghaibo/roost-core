@@ -105,7 +105,12 @@ func (l *RedisList) AppendRaw(ctx context.Context, key string, raw []byte) error
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if l.tryAppendWithScript(ctx, key, raw) {
+	handled, err := l.tryAppendWithScript(ctx, key, raw)
+	if err != nil {
+		metrics.IncCounter("failurelog_append_total", l.labels("error"), 1)
+		return err
+	}
+	if handled {
 		metrics.IncCounter("failurelog_append_total", l.labels("ok"), 1)
 		return nil
 	}
@@ -190,11 +195,16 @@ func (l *RedisList) DeleteRaw(ctx context.Context, key string, raws [][]byte) (i
 	if len(args) == 0 {
 		return 0, nil
 	}
-	if n, ok := l.tryDeleteWithScript(ctx, key, args); ok {
+	n, handled, err := l.tryDeleteWithScript(ctx, key, args)
+	if err != nil {
+		metrics.IncCounter("failurelog_delete_total", l.labels("error"), 1)
+		return 0, err
+	}
+	if handled {
 		metrics.IncCounter("failurelog_delete_total", l.labels("ok"), n)
 		return n, nil
 	}
-	n, err := l.deleteRawFallback(ctx, key, args)
+	n, err = l.deleteRawFallback(ctx, key, args)
 	if err != nil {
 		metrics.IncCounter("failurelog_delete_total", l.labels("error"), 1)
 		return 0, err
@@ -217,26 +227,42 @@ func (l *RedisList) labels(result string) metrics.Labels {
 	return labels
 }
 
-// degraded marks one atomic-script miss: the operation falls back to a
-// non-atomic command sequence. The fallback is kept (availability first) but
-// must stay visible — a Warn when the script actually failed, and a counter
-// either way, mirroring the cache.refhmap.write_degraded_total convention.
-func (l *RedisList) degraded(op string, err error) {
+// 原子脚本与非原子降级（RR-20261005-NC-160）。
+//
+// 每个写操作先发一条 Lua 脚本。降级路径（RPUSH+LTRIM、LREM、LLEN+DEL）只为“适配器没有 Lua”
+// 准备：替身的 Eval 返回 (nil, nil)，表示脚本根本没有执行。生产驱动的 Eval 不会这样返回
+// （脚本回复为空时驱动报 redis.Nil 错误）。
+//
+// Eval 返回错误时不再降级：连接断开、读超时、ctx 到期都可能发生在服务端已经执行完脚本之后，
+// 再走降级就是第二次执行——追加两次、多删同值记录、把清空之后新到的死信也删掉。结果未知原样交给
+// 调用方（bus 的 DeadLetter 会返回错误，由消息重投决定下一步），与 cache RefHMap（NC-21）和
+// 驱动脚本不重放（NC-100）同一契约。脚本执行了但返回值解析不了，同样按“已执行、结果未知”报错。
+
+// errUnexpectedScriptResult 表示脚本已执行，但返回值不是约定的整数。
+var errUnexpectedScriptResult = errors.New("failurelog: unexpected script result")
+
+// degraded 记录一次“适配器没有 Lua、走了非原子降级”。降级仍保留（可用性优先），但计数可见，
+// 沿用 failurelog_degraded_total。
+func (l *RedisList) degraded(op string) {
 	labels := l.labels("")
 	if labels == nil {
 		labels = metrics.Labels{}
 	}
 	labels["op"] = op
 	metrics.IncCounter("failurelog_degraded_total", labels, 1)
-	if err != nil {
-		slog.Warn("failurelog: atomic script failed, falling back to non-atomic commands",
-			"op", op, "namespace", l.cfg.Namespace, "err", err)
-	}
 }
 
-func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []byte) bool {
+// scriptError 给脚本错误补上操作与命名空间，保留 errors.Is。
+func (l *RedisList) scriptError(op string, err error) error {
+	slog.Warn("failurelog: script result unknown, not falling back to non-atomic commands",
+		"op", op, "namespace", l.cfg.Namespace, "err", err)
+	return fmt.Errorf("failurelog: %s script: %w", op, err)
+}
+
+// tryAppendWithScript 返回 handled=false 且 err=nil 表示适配器没有 Lua，调用方走降级。
+func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []byte) (bool, error) {
 	if l == nil || l.redis == nil {
-		return false
+		return false, nil
 	}
 	ttlMillis := int64(0)
 	if l.cfg.TTL > 0 {
@@ -246,32 +272,41 @@ func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []b
 		}
 	}
 	ret, err := l.redis.Eval(ctx, appendTrimScript, []string{key}, string(raw), l.cfg.MaxEntries, ttlMillis)
-	if err == nil && ret != nil {
-		return true
+	if err != nil {
+		return false, l.scriptError("append", err)
 	}
-	l.degraded("append", err)
-	return false
+	if ret == nil {
+		l.degraded("append")
+		return false, nil
+	}
+	return true, nil
 }
 
-func (l *RedisList) tryDeleteWithScript(ctx context.Context, key string, args []any) (int64, bool) {
+func (l *RedisList) tryDeleteWithScript(ctx context.Context, key string, args []any) (int64, bool, error) {
 	if l == nil || l.redis == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	ret, err := l.redis.Eval(ctx, deleteRawScript, []string{key}, args...)
-	if err != nil || ret == nil {
-		l.degraded("delete", err)
-		return 0, false
+	if err != nil {
+		return 0, false, l.scriptError("delete", err)
+	}
+	if ret == nil {
+		l.degraded("delete")
+		return 0, false, nil
 	}
 	n, err := redisInt64(ret)
 	if err != nil {
-		l.degraded("delete", err)
-		return 0, false
+		return 0, false, l.scriptError("delete", fmt.Errorf("%w: %v", errUnexpectedScriptResult, err))
 	}
-	return n, true
+	return n, true, nil
 }
 
 func (l *RedisList) purgeRaw(ctx context.Context, key string) (int64, error) {
-	if n, ok := l.tryPurgeWithScript(ctx, key); ok {
+	n, handled, err := l.tryPurgeWithScript(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	if handled {
 		return n, nil
 	}
 	count, err := l.redis.LLen(ctx, key)
@@ -287,21 +322,23 @@ func (l *RedisList) purgeRaw(ctx context.Context, key string) (int64, error) {
 	return count, nil
 }
 
-func (l *RedisList) tryPurgeWithScript(ctx context.Context, key string) (int64, bool) {
+func (l *RedisList) tryPurgeWithScript(ctx context.Context, key string) (int64, bool, error) {
 	if l == nil || l.redis == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	ret, err := l.redis.Eval(ctx, purgeRawScript, []string{key})
-	if err != nil || ret == nil {
-		l.degraded("purge", err)
-		return 0, false
+	if err != nil {
+		return 0, false, l.scriptError("purge", err)
+	}
+	if ret == nil {
+		l.degraded("purge")
+		return 0, false, nil
 	}
 	n, err := redisInt64(ret)
 	if err != nil {
-		l.degraded("purge", err)
-		return 0, false
+		return 0, false, l.scriptError("purge", fmt.Errorf("%w: %v", errUnexpectedScriptResult, err))
 	}
-	return n, true
+	return n, true, nil
 }
 
 func (l *RedisList) deleteRawFallback(ctx context.Context, key string, args []any) (int64, error) {
