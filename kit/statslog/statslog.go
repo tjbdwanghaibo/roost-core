@@ -107,6 +107,13 @@ type StatsLogMod struct {
 	// reportWrite 去重告警（RR-20260928-04）。受 mu 保护。
 	writeErr string
 
+	// gaugeMu 保护 publishedCategories / publishedKinds：发布过 gauge 的实体分类与 kind。
+	// 某个键在本次采集里不再出现（实体全部卸载）时要把它的 gauge 写回 0（RR-20261005-NC-164）。
+	// 键的数量受实体 kind / category 定义个数约束，不随实体数增长。
+	gaugeMu             sync.Mutex
+	publishedCategories map[string]struct{}
+	publishedKinds      map[string]struct{}
+
 	started  bool
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -188,12 +195,30 @@ func (m *StatsLogMod) publishGauges(record StatsRecord) {
 	m.metrics.SetGauge("runtime.sys_bytes", nil, int64(record.Runtime.SysBytes))
 	m.metrics.SetGauge("runtime.num_gc", nil, int64(record.Runtime.NumGC))
 	m.metrics.SetGauge("entity.count", nil, int64(record.Entity.Total))
-	for category, count := range record.Entity.ByCategory {
-		m.metrics.SetGauge("entity.count_by_category", metrics.Labels{"category": category}, int64(count))
+	// 记录里只有当前还有实体的键；之前发布过、这次缺席的键写 0，否则 gauge 停在最后一次的
+	// 非零值，与 JSONL（缺席即 0）不一致（RR-20261005-NC-164）。
+	m.gaugeMu.Lock()
+	defer m.gaugeMu.Unlock()
+	m.publishedCategories = m.publishCounts("entity.count_by_category", "category", record.Entity.ByCategory, m.publishedCategories)
+	m.publishedKinds = m.publishCounts("entity.count_by_kind", "kind", record.Entity.ByKind, m.publishedKinds)
+}
+
+// publishCounts 写出 counts 中的每个键，并把 published 里本次缺席的键写成 0；返回更新后的键集合。
+// 调用方持有 gaugeMu。
+func (m *StatsLogMod) publishCounts(name, label string, counts map[string]int, published map[string]struct{}) map[string]struct{} {
+	if published == nil {
+		published = make(map[string]struct{}, len(counts))
 	}
-	for kind, count := range record.Entity.ByKind {
-		m.metrics.SetGauge("entity.count_by_kind", metrics.Labels{"kind": kind}, int64(count))
+	for key := range published {
+		if _, present := counts[key]; !present {
+			m.metrics.SetGauge(name, metrics.Labels{label: key}, 0)
+		}
 	}
+	for key, count := range counts {
+		m.metrics.SetGauge(name, metrics.Labels{label: key}, int64(count))
+		published[key] = struct{}{}
+	}
+	return published
 }
 
 func (m *StatsLogMod) Start() error {
