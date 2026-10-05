@@ -5,6 +5,12 @@
 - 性质：**只出方案**，仓库代码没改。
 - 取代：状态机文档 §7 推荐的“重写核心、外部接口不变”（选项 A）。那份文档的前提是“玩家可以在进程间动态迁移”，维护者 2026-10-05 确认这个前提不成立。它对现状的分析（§1～§4）仍然是本文删除清单的依据。
 
+> **2026-10-05 维护者决定**（本文其余部分保留原文，与下列决定冲突处以决定为准）：
+> 1. **已生成工程不考虑**：不写迁移步骤，不做兼容旧 payload 的兜底。§5 作废；§3.3 的旧 payload 兜底与 D4 作废。
+> 2. **D1～D3 按推荐**：启动拿不到锁就等，上限 2×TTL；TTL / 续期 / 保护带 15 / 3 / 5s；D3 的对象换成 App 锁之后，[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §3.4 建议简化为“窗口耗尽即 fail-stop”，列为该方案的 D-A 请维护者确认。
+> 3. **D4 作废**（随第 1 条）。
+> 4. **D5 改为“App 层单实例锁，只覆盖崩溃重启短暂并存，不做模块级 fencing”**：同一服务类型 + sid 的进程锁由 core `app` 在任何 Mod `Init` 之前获取、在全部 Mod 停完之后释放，失锁走 App 统一的 fail-stop；DataEngine、activity、PlayerOwners 等模块不感知锁。见 [APP-SINGLETON-LOCK-2026-10-05.md](APP-SINGLETON-LOCK-2026-10-05.md)。本文 §2 的 `game/sidlock` 包、“`Service.Init` 第一步获取”、§2.5 的 `Held()` 检查、§2.6 的可选项 F 都被它取代；§6 的实施拆分改用该方案 §9 的合并拆分。
+
 ## 0. 结论先行
 
 1. 维护者给的两条事实：**玩家建角时由 account 绑定到一个 game server（`Role.ServerID`），之后不迁移；一个 sid 正常只有一个进程，只有崩溃重启时可能短暂并存两个。** 这样一来，“同一玩家同一时刻至多一个写者”就等价于“同一 sid 同一时刻至多一个写者”。现在的按玩家 Redis 租约、续租、跨间断撤离、归还、重新认领，解决的是“玩家在进程间漂移”这个不存在的问题。今天连修的 7 条 RR，以及状态机文档里新推出的 8 个违例场景，全都发生在这套机制内部。
@@ -63,6 +69,8 @@
 ---
 
 ## 2. sid 进程锁
+
+> **已被取代（2026-10-05）**：本节的锁改由 core `app` 统一提供（[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)），在任何 Mod `Init` 之前获取，而不是放在 `Service.Init` 第一步；不新增 `game/sidlock` 包，业务不检查 `Held()`，失锁由 App 统一围栏 Nest 并 fail-stop。本节的后端比较（§2.1，结论仍是 Redis 单键）、键值与 CAS 语义（§2.2）、时间参数（§2.3）、单写者状态机与“窗口从 `asked` 起算”（§2.4）被该方案沿用；§2.4 的放置位置、§2.5 的四个后台循环检查、§2.6 的“锁获取的位置”与可选项 F 不再适用。activity 以 standby 启动的改动仍然保留（该方案 §7.2）。
 
 ### 2.1 放在哪里：三个后端的比较
 
@@ -129,7 +137,7 @@ Starting ───────────────▶ Held ◀────�
 - **单写者**：获取、续期以及它们的结论，都在同一个 goroutine 里顺序执行：发出 CAS、等它返回、应用结论，然后才发下一次。所以不存在“旧回复作用在新状态上”这种交错，也就不需要世代号（状态机文档 W08-2 那一类问题，根因是多个 goroutine 按玩家 id 插入或更新，这里不存在）。`Lost` 是吸收态：之后到达的任何结论都不会把它改回去。
 - **本地窗口从请求发出时刻起算**（RR-20261004-14 的教训）：每次 CAS 之前先记下 `asked := now()`；Applied 之后 `validUntil = max(validUntil, asked + TTL)`。Redis 的 TTL 从它处理请求的那一刻起算，不早于 `asked`，所以本地窗口不会晚于键过期。
 - **`Admitted()`**：`state ∈ {Held} ∧ now < validUntil − AdmissionGuard`。`validUntil` 和 `state` 用原子量保存，`Admit` 不加锁、不阻塞（I11）。`Unconfirmed` 只表示“窗口已经过了、还没得到确定答复”，这时 `Admitted()` 已经按时间返回 false。
-- **启动获取（P3 的后半句）**：放在 `Service.Init` 的**第一步**，在 `EnsureWorld`（`sv:69`）之前，因为 World 也是按 sid 的实体（`WorldUniqueID = sid`，GAME_DEMO_TEMPLATE §9.11.4）。循环如下：
+- **启动获取（P3 的后半句）**（**已被取代**：改由 App 在任何 Mod `Init` 之前获取，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §3.5；下面的循环步骤被沿用）：放在 `Service.Init` 的**第一步**，在 `EnsureWorld`（`sv:69`）之前，因为 World 也是按 sid 的实体（`WorldUniqueID = sid`，GAME_DEMO_TEMPLATE §9.11.4）。循环如下：
   1. `Acquire`。Applied 就进入 Held，启动续期 goroutine，继续 Init。
   2. 没生效，并且 `Current` 等于自己的值：说明上一次 `Acquire` 已经落地、只是回复丢了（RR-20261004-14 的“丢回复”在锁上的形态）。这个值只有本实例设过，而且还没有开始服务，可以直接认领。认领之后立即 `Renew` 一次，用这次的 `asked` 起算窗口。
   3. 没生效，并且 `Current` 是别人的值：记一条日志（只在持有者的值变化时记，带上值里的 hostname / pid），等 `min(RenewInterval, 键的剩余 TTL)` 后重试。
@@ -139,6 +147,8 @@ Starting ───────────────▶ Held ◀────�
 - **activity 的配合**（RR-20260930-24 的形状）：新进程拿到 sid 锁之后，旧进程的 activity 全局租约可能还没过期。它每 5s 续一次（`ac:41`），TTL 是 30s，所以最多还活 30s。现在 `bindAndLease`（`ac:189-212`）遇到 `held` 冲突会让 `Init` 失败。要改成：冲突时以 `leaseStandby` 启动，`renewLease` 已经会在每次心跳时重试 `AcquireLease`（`ac:541-551`）。这是本方案里唯一一处 activity 改动，现有 `activity_lease_test` 的承诺不变，再加一条“启动遇到活租约就以 standby 开始”的回归。
 
 ### 2.5 失锁时的自我围栏
+
+> **已被取代（2026-10-05）**：失锁动作由 App 统一执行（`RuntimeFailure.Fail` → 登记的回调围栏 Nest → `Service.Shutdown` 关闭连接），不在业务里实现；下表“窗口耗尽先停准入”与四个后台循环检查 `Held()` 都删除，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §3.4、§5、§7.1。
 
 | 触发 | 动作 | 进程是否退出 |
 | --- | --- | --- |
@@ -154,8 +164,8 @@ Starting ───────────────▶ Held ◀────�
 
 - **窗口外不再提交**：围栏之后 Nest 拒绝一切新派发；窗口耗尽时 `Admit` 拒绝。真正的漏洞只剩 A2：事务在准入之后、提交之前被暂停（这正是“旧进程卡住”的形态），恢复之后照样提交到 WAL。
 - **同主机重启已经天然互斥**：WAL 目录按 sid 划分（`kit/dataengine/mod.go:110`，`data/wal/dataengine/<sid>`），`nestwal.Open` 用 `flock(LOCK_EX|LOCK_NB)` 锁 `writer.lock`（`nestwal/wal.go:222-228`）。旧进程只要还活着（哪怕被 SIGSTOP），新进程在 DataEngine Mod 的 Init 就会失败（`ErrLocked`）并退出。旧进程死后锁才释放，新进程启动时先**重放**旧 WAL，再做任何装载。所以同主机的并存不会产生两个 DataEngine 写者，A5 自动成立。sid 锁真正要防的，是**跨主机**并存（容器换节点重调度、节点分区），以及 DataEngine 以外的副作用：bus 寻址 `<prefix>.svc.<type>.<sid>` 上两个进程同时订阅、按 sid 的 World 定时器、activity、matchmaker 和 gift 消费者。
-- **锁获取的位置**：Mod 先于 `Service.Init` 启动，所以 DataEngine 重放本机 WAL、outbox worker（owner 默认是 `dataengine-<sid>`，`kit/dataengine/mod.go:182`）都在获取 sid 锁之前就开始了。同主机时由 `flock` 兜底；跨主机时，本机 WAL 是本机上次运行留下的，重放它与远端旧进程是否还活着无关。v1 把获取放在 `Service.Init` 第一步就够了。如果要把这一段也盖住，需要把 sid 锁做成一个 kit Mod，排在 DataEngine 之前（要改 codegen 的 mod catalog 和停机预算），列为后续（§7 D5 的备注）。
-- **DataEngine 层 fencing token（可选项 F，不推荐本次做）**：core 已经有现成的机制 `dataengine.LeaseFence`（`dataengine/lease_fence.go`）：WAL 记录携带一个 Mongo 协调文档的 `owner` / `token` 前提，投影时在同一个 Mongo 事务里校验并写确认，前提不成立就把整条记录当成幂等空操作。如果把 sid 锁的 `(sid, epoch)` 写进一个 Mongo 文档（获取时 epoch 加一），让每条玩家 / World 记录都带上它，就能关掉 A1、A2 和跨主机的 A5。代价是：每个投影事务多一次条件写；被围栏的记录变成“已确认但没生效”（丢的是已经确认的写入，而不是 fatal 冲突）。这需要先定义“已确认写入被围栏后怎么告知客户端”，属于跨进程移交那条 feature 线（状态机文档 §8 D3、CARRYOVER A6 / C24），在这里登记，不并入本方案。
+- **锁获取的位置**（**已被取代**：App 锁在所有 Mod 之前获取，本条描述的缺口不再存在，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §2、§4）：Mod 先于 `Service.Init` 启动，所以 DataEngine 重放本机 WAL、outbox worker（owner 默认是 `dataengine-<sid>`，`kit/dataengine/mod.go:182`）都在获取 sid 锁之前就开始了。同主机时由 `flock` 兜底；跨主机时，本机 WAL 是本机上次运行留下的，重放它与远端旧进程是否还活着无关。v1 把获取放在 `Service.Init` 第一步就够了。如果要把这一段也盖住，需要把 sid 锁做成一个 kit Mod，排在 DataEngine 之前（要改 codegen 的 mod catalog 和停机预算），列为后续（§7 D5 的备注）。
+- **DataEngine 层 fencing token（可选项 F，不推荐本次做）**（**维护者 2026-10-05 决定不做**：只覆盖崩溃重启的短暂并存，由 App 锁 + 同目录 WAL `flock` 保证，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §4）：core 已经有现成的机制 `dataengine.LeaseFence`（`dataengine/lease_fence.go`）：WAL 记录携带一个 Mongo 协调文档的 `owner` / `token` 前提，投影时在同一个 Mongo 事务里校验并写确认，前提不成立就把整条记录当成幂等空操作。如果把 sid 锁的 `(sid, epoch)` 写进一个 Mongo 文档（获取时 epoch 加一），让每条玩家 / World 记录都带上它，就能关掉 A1、A2 和跨主机的 A5。代价是：每个投影事务多一次条件写；被围栏的记录变成“已确认但没生效”（丢的是已经确认的写入，而不是 fatal 冲突）。这需要先定义“已确认写入被围栏后怎么告知客户端”，属于跨进程移交那条 feature 线（状态机文档 §8 D3、CARRYOVER A6 / C24），在这里登记，不并入本方案。
 
 ---
 
@@ -317,31 +327,13 @@ Starting ───────────────▶ Held ◀────�
 
 ## 5. 已生成工程的迁移
 
-demo 文件归应用所有，`project sync` 不更新它们，所以已生成的工程需要手工合并。
-
-### 5.1 步骤
-
-1. **整体停服再切换，不能滚动升级。** 旧版本进程会按玩家认领任何玩家（包括绑定在别的 sid 上的），新版本只看静态绑定。两者混跑会让同一玩家在两个 sid 上各有一份副本。
-2. 切换前**排空赠礼 saga**：停止发起新赠礼，等待 `gift.Deadline` 以及补偿全部结束（§3.3）。
-3. 替换文件：删除 `game/playerroute/`，新增 `game/sidlock/`；替换 `internal/service/<game>/playerowner.go` 和它的测试；修改 `service.go`、`enter_game.go`、`controller.go`（接口）、`gift_saga.go`、`gift_handoff_test.go`、`matchmaker.go`、`activity.go`（standby 启动，加上 `Held()` 检查）、`spawner.go`（`Held()` 检查）、`internal/access/player/tcp/auth.go`（Claims）、`game/gift/gift.go`（`FromSID`）、`game/handler/start_gift.go`（加参数），然后重新生成 sender；更新 `internal/errors/player_elsewhere.go` 的文案。
-4. `go build ./... && go vet ./... && go test -race ./internal/service/<game>/ ./game/sidlock/ ./game/controllers/player/`。
-
-### 5.2 影响面
-
-| 方面 | 影响 |
-| --- | --- |
-| 配置项 | **无新增**。继续用 `sid` 和 `game_route.key_prefix`。sid 锁的参数是常量（§2.3）。`demo_prod_config_promises_test.go:91` 对 `game_route.key_prefix` 的检查保留，注释改指 sid 锁 |
-| Redis 键 | 新键 `<prefix>:sid:<sid>`，每个进程一个。旧的 `<prefix>:owner:<playerID>` 不再写入，最多 30s 后自然过期，不需要清理 |
-| 错误码 | 不新增。`player_elsewhere`（100015）的含义收窄，客户端**不要在本服重试**；sid 锁未就绪时登录回 `login_timeout`（100021，可重试） |
-| 客户端 | 按 `SelectRole` 返回的 `Session.ServerID` 连接对应的服；收到 `player_elsewhere` 时改连 `owner_sid`，或者重新 `SelectRole`。压测客户端 `cmd/loadtest` 的 `-server-id` 必须和 `-endpoint` 对应的进程 sid 一致（两进程演练时，第二个进程要用 `-server-id <SECOND_SID>`，并且先 `accountctl upsert-server -sid <SECOND_SID>`） |
-| 消息格式 | `gift.State` 增加 `from_sid`，`giftStepHandoff` 增加 `FromSID`（JSON 新字段，旧消费者忽略） |
-| 启动时长 | 崩溃重启时，`Service.Init` 可能阻塞到旧锁过期（≤ TTL，最多等到 2×TTL 的上限）。部署的 startup probe 要允许至少 `2×TTL` 加上正常的启动时间 |
-| 运行行为 | 后台准入不再有 Redis 往返；玩家闲置 5 分钟才卸载（原来是 20s 就交还）；Redis 丢键或长时间失联会让进程退出（原来是按玩家撤离、重新认领） |
-| 文档 | GAME_DEMO_TEMPLATE 新增一节，取代 §9.11.2 的“所有权表”；demo README；CHANGELOG |
+维护者 2026-10-05 决定不考虑已生成工程，本节作废。
 
 ---
 
 ## 6. 工作量与实施拆分
+
+> **已被取代（2026-10-05）**：实施改用 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §9 的合并拆分（App 锁一笔、codegen 一笔、本文的第 2～4 笔去掉 sid 锁部分）。下表第 1 笔 `game/sidlock` 取消，保留原文作对照。
 
 | # | 提交 | 内容 | 验证 | 估时（agent 日） |
 | --- | --- | --- | --- | --- |
@@ -361,8 +353,8 @@ demo 文件归应用所有，`project sync` 不更新它们，所以已生成的
 | D1 | 启动拿不到 sid 锁 | 在 `Init` 里等到旧锁过期，有上限（2×TTL），超过上限失败 / 立即失败，交给外部重启 | **等待**。崩溃重启时，停服时长就是剩余 TTL，不会被 CrashLoopBackOff 拉长；对方一直在续期才会失败，那时失败是对的（§2.4） |
 | D2 | sid 锁的 TTL / 续期间隔 / 准入保护带 | 15s / 3s / 5s，或沿用 30s / 10s / 5s | **15 / 3 / 5**。崩溃重启最多停服 15s；能容忍连续两次续期失败；每个进程每 3s 一次 Redis 操作，开销可以忽略 |
 | D3 | 窗口耗尽，但 Redis 没有给出确定答复（Unknown） | 先停准入、继续续期，答 Held 就恢复、宽限（1×TTL）用完就 fail-stop / 窗口一耗尽就 fail-stop | **先停准入再等**。Redis 短暂抖动不会让整个服重启；只有被确定告知 NotHeld 才退出。代价是按 sid 运行的 4 个后台循环要各自检查 `Held()` |
-| D4 | 赠礼的旧 payload（没有 `from_sid`） | 切换前排空 + 兜底（发送方在本进程有驻留记录就本服处理） / 只排空 / 只兜底 | **排空 + 兜底** |
-| D5 | DataEngine 层 fencing token（§2.6 可选项 F）：关掉 A1 / A2 / 跨主机的 A5 | 本次不做，登记到跨进程移交的 feature 线（与状态机文档 §8 D3 合并） / 一起做 | **不做**。另外，sid 锁做成排在 DataEngine 之前的 kit Mod（盖住 Mod 启动阶段，需要改 codegen）也一并列为后续 |
+| D4（**作废**：维护者决定不考虑已生成工程） | 赠礼的旧 payload（没有 `from_sid`） | 切换前排空 + 兜底（发送方在本进程有驻留记录就本服处理） / 只排空 / 只兜底 | **排空 + 兜底** |
+| D5（**维护者 2026-10-05 决定：App 层单实例锁，只覆盖崩溃重启短暂并存，不做模块级 fencing**，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)） | DataEngine 层 fencing token（§2.6 可选项 F）：关掉 A1 / A2 / 跨主机的 A5 | 本次不做，登记到跨进程移交的 feature 线（与状态机文档 §8 D3 合并） / 一起做 | **不做**。另外，sid 锁做成排在 DataEngine 之前的 kit Mod（盖住 Mod 启动阶段，需要改 codegen）也一并列为后续 |
 
 **仍然未知、本方案没有验证的**：
 - 没有实现，也没有跑演练。§2.4 的时间论证、§2.6 关于同主机 `flock` 互斥的结论来自读码（`nestwal/wal.go:222-228`），实施的第 4 笔提交要用真实进程验证。
