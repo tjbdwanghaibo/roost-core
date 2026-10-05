@@ -1200,25 +1200,76 @@ func TestSingletonIsReleasedAfterAStartupFailureStopsTheMods(t *testing.T) {
 	}
 }
 
-// §5：启动期间发生的 RuntimeFailure 让 run 停在下一个阶段边界，不再启动后面的 Mod。
+// §5：启动期间发生的 RuntimeFailure 让 run 停在下一个阶段边界，不再启动后面的 Mod。单实例锁开启时
+// 同样如此，而且这种失败不是失锁：已启动的 Mod 停完后照常 Release。
 func TestRunStopsStartingModsAfterARuntimeFailure(t *testing.T) {
+	for _, singleton := range []bool{false, true} {
+		t.Run(fmt.Sprintf("singleton_%v", singleton), func(t *testing.T) {
+			first := &singletonProbeMod{name: "probe_first"}
+			second := &singletonProbeMod{name: "probe_second"}
+			h := newSingletonHarness(t, []Mod{first, second}, nil)
+			h.app.cfg.Set("singleton.enabled", singleton)
+			cause := errors.New("dataengine fatal during replay")
+			first.onStart = func() {
+				MustLookup[*RuntimeFailure](first.registry, ModRuntimeFailure).Fail(cause)
+			}
+			err := awaitRunResult(t, h.start())
+			if !errors.Is(err, cause) {
+				t.Fatalf("run error = %v, want the runtime failure", err)
+			}
+			if n := second.starts.Load(); n != 0 {
+				t.Fatalf("a later mod started %d times after the runtime failure", n)
+			}
+			if first.stops.Load() != 1 {
+				t.Fatal("started mod was not stopped")
+			}
+			if !singleton {
+				return
+			}
+			if errors.Is(err, ErrSingletonLost) {
+				t.Fatalf("run error = %v, want a non-singleton failure", err)
+			}
+			if len(h.store.releaseCalls()) != 1 || h.store.value(testSingletonKey) != nil || !h.store.isClosed() {
+				t.Fatalf("releases=%+v key=%q closed=%v, want released and closed after the mods stopped",
+					h.store.releaseCalls(), h.store.value(testSingletonKey), h.store.isClosed())
+			}
+		})
+	}
+}
+
+// 启动期间失锁（例如 DataEngine 重放很长、卡住期间键被新进程拿走）：run 停在下一个阶段边界，
+// 停掉已启动的 Mod，但不 Release——键已是别人的。
+func TestSingletonLostDuringStartupStopsTheModsWithoutReleasing(t *testing.T) {
 	first := &singletonProbeMod{name: "probe_first"}
 	second := &singletonProbeMod{name: "probe_second"}
 	h := newSingletonHarness(t, []Mod{first, second}, nil)
-	h.app.cfg.Set("singleton.enabled", false)
-	cause := errors.New("dataengine fatal during replay")
 	first.onStart = func() {
-		MustLookup[*RuntimeFailure](first.registry, ModRuntimeFailure).Fail(cause)
+		lost := make(chan struct{})
+		MustLookup[*RuntimeFailure](first.registry, ModRuntimeFailure).OnFail(func(error) { close(lost) })
+		<-h.clock.timerReady(1) // 续期 goroutine 停在下一拍
+		h.store.set(testSingletonKey, testOtherHolder, 0)
+		h.clock.AdvanceToNext(t)
+		select {
+		case <-lost:
+		case <-time.After(testWaitLimit):
+			t.Error("renewal did not lose the lock during startup")
+		}
 	}
 	err := awaitRunResult(t, h.start())
-	if !errors.Is(err, cause) {
-		t.Fatalf("run error = %v, want the runtime failure", err)
+	if !errors.Is(err, ErrSingletonLost) || !errors.Is(err, ErrSingletonNotHeld) {
+		t.Fatalf("run error = %v, want ErrSingletonLost wrapping ErrSingletonNotHeld", err)
 	}
 	if n := second.starts.Load(); n != 0 {
-		t.Fatalf("a later mod started %d times after the runtime failure", n)
+		t.Fatalf("a later mod started %d times after the lock was lost", n)
 	}
 	if first.stops.Load() != 1 {
 		t.Fatal("started mod was not stopped")
+	}
+	if len(h.store.releaseCalls()) != 0 || string(h.store.value(testSingletonKey)) != testOtherHolder {
+		t.Fatalf("releases=%+v key=%q, want the new holder's key untouched", h.store.releaseCalls(), h.store.value(testSingletonKey))
+	}
+	if !h.store.isClosed() {
+		t.Fatal("store not closed after every mod stopped")
 	}
 }
 
