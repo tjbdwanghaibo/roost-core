@@ -1,0 +1,2 @@
+--- PASS: TestPushCaptureIsReinstalledOnTheSessionAfterReconnect (0.01s)
+ok  	github.com/tjbdwanghaibo/roost-core/robot	0.541s

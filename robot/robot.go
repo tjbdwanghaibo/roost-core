@@ -60,6 +60,9 @@ type Context struct {
 	mu      sync.RWMutex
 	session *session.Session
 	onClose []func() error
+
+	// captureMu 串行化 EnsurePushCapture 的“查标记→注册→写标记”，同 key 并发安装不重复注册。
+	captureMu sync.Mutex
 }
 
 func NewContext(cfg Config) *Context {
@@ -144,26 +147,38 @@ func (c *Context) Close() error {
 }
 
 // EnsurePushCapture idempotently installs a standing push handler under a
-// blackboard key: the first call registers it (and hooks the unregister
-// into Close), repeated calls are no-ops. This replaces the hand-written
-// ensureXxxCapture family from cube.
+// blackboard key on the current session: the first call registers it (and
+// hooks the unregister into Close), repeated calls on the same session are
+// no-ops. This replaces the hand-written ensureXxxCapture family from cube.
+//
+// 标记记住的是注册时的会话（RR-20261005-NC-162）。重连（再跑一次 connect）经 SetSession
+// 换上新会话、关闭旧会话，旧会话关闭时清空了自己的 handler；旧实现只看“标记存在”，重连后再次
+// 安装被当成已装过，新会话上没有 handler，之后的 push 被静默丢掉。现在标记指向的会话不是当前
+// 会话时，就在当前会话上重新注册。重连本身不会自动搬迁 capture：剧本在重连后再执行一次安装步骤。
 func (c *Context) EnsurePushCapture(key string, msgID uint32, handler session.PushHandler) error {
 	if c == nil || key == "" || handler == nil {
 		return errors.New("robot: capture key and handler are required")
 	}
+	c.captureMu.Lock()
+	defer c.captureMu.Unlock()
 	marker := "capture:" + key
-	if _, exists := c.Blackboard.Get(marker); exists {
-		return nil
-	}
 	s := c.Session()
 	if s == nil {
 		return session.ErrClosed
 	}
+	if installed, exists := c.Blackboard.Get(marker); exists && installed == s {
+		return nil
+	}
 	unregister := s.RegisterPushHandler(msgID, handler)
-	c.Blackboard.Set(marker, true)
+	c.Blackboard.Set(marker, s)
 	c.AddCloseHook(func() error {
 		unregister()
-		c.Blackboard.Delete(marker)
+		// 只删本次注册写下的标记；重连后的新注册有自己的 hook。
+		c.captureMu.Lock()
+		if installed, exists := c.Blackboard.Get(marker); exists && installed == s {
+			c.Blackboard.Delete(marker)
+		}
+		c.captureMu.Unlock()
 		return nil
 	})
 	return nil
