@@ -3,7 +3,9 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -185,4 +187,65 @@ func TestActivityRefusesToStartWithoutTheAppLockLiveness(t *testing.T) {
 	if !strings.Contains(err.Error(), string(app.ModSingleton)) || !strings.Contains(err.Error(), "singleton.enabled") {
 		t.Fatalf("startActivity error %q does not name the missing capability and the setting that publishes it", err)
 	}
+}
+
+// RR-20261005-01：activity.game_sids 是启动时就确定的候选集，它若注定让每个窗口都开不出来，就在启动时
+// 按配置键名拒绝，而不是每 5 秒记一条 Warn、活动永远不开：
+//   - 重复的 sid：两个都活时 Live 原样返回重复项，协调器拒绝带重复项的 expected 集合（ErrInvalid）；
+//   - 超出 int32 的 sid：转换后悄悄变成另一个服的 sid；
+//   - 本服加上配置的 sid 超过 Live 单次上限（app.SingletonLiveMaxSIDs）：每一拍的 Live 都报错。
+// 本服自己、非正数照旧跳过，不算错误。
+func TestActivityRefusesACandidateListNoWindowCouldOpenWith(t *testing.T) {
+	tooMany := make([]int, 0, app.SingletonLiveMaxSIDs)
+	for sid := 2000; len(tooMany) < app.SingletonLiveMaxSIDs; sid++ {
+		tooMany = append(tooMany, sid) // 加上本服共 SingletonLiveMaxSIDs+1 个候选
+	}
+	start := func(t *testing.T, gameSIDs []int) error {
+		t.Helper()
+		config := viper.New()
+		config.Set("sid", 1300)
+		config.Set("server_type", "game")
+		config.Set("activity.game_sids", gameSIDs)
+		registry := app.NewRegistry(config)
+		if err := registry.Register(app.ModSingleton, app.SingletonLiveness(&liveSource{})); err != nil {
+			t.Fatal(err)
+		}
+		_, stop, err := startActivity(context.Background(), registry)
+		if stop != nil {
+			stop()
+		}
+		return err
+	}
+	type refusal struct {
+		name     string
+		gameSIDs []int
+	}
+	refusals := []refusal{
+		{"a-repeated-sid", []int{1302, 1301, 1302}},
+		{"more-candidates-than-one-live-query", tooMany},
+	}
+	if strconv.IntSize == 64 {
+		// 只有 64 位的 int 能写出超出 int32 的配置值；它转成 int32 后会是 1302。
+		refusals = append(refusals, refusal{"a-sid-beyond-int32", []int{int(int64(math.MaxUint32) + 1 + 1302)}})
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			err := start(t, tc.gameSIDs)
+			if err == nil || !strings.Contains(err.Error(), "activity.game_sids") {
+				t.Fatalf("startActivity with activity.game_sids=%v: error %v does not refuse the list by name; "+
+					"every window it would try to open would fail", tc.gameSIDs[:min(len(tc.gameSIDs), 4)], err)
+			}
+		})
+	}
+	// 本服自己与非正数照旧跳过：这样的列表通过候选检查（随后因为这个夹具没有其他能力而失败，失败原因不是它）。
+	t.Run("own-sid-and-non-positive-entries-are-skipped", func(t *testing.T) {
+		if err := start(t, []int{1300, 0, -1, 1302}); err != nil && strings.Contains(err.Error(), "activity.game_sids") {
+			t.Fatalf("a list naming this server and non-positive entries was refused: %v", err)
+		}
+	})
+	t.Run("exactly-one-live-query-is-accepted", func(t *testing.T) {
+		if err := start(t, tooMany[:app.SingletonLiveMaxSIDs-1]); err != nil && strings.Contains(err.Error(), "activity.game_sids") {
+			t.Fatalf("%d candidates (one Live query's limit) were refused: %v", app.SingletonLiveMaxSIDs, err)
+		}
+	})
 }

@@ -331,7 +331,8 @@ func demoActivityKeys(root, gameService string) error {
 	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
 		"\n  # Every game server this deployment may run. The App singleton lock's\n" +
 		"  # Live query narrows it to the ones whose process is up, and those are\n" +
-		"  # what an activity waits for.\n" +
+		"  # what an activity waits for. List each sid once: the game refuses to\n" +
+		"  # start on a repeated sid or on more candidates than one Live query takes.\n" +
 		"  game_sids:\n    - 1000\n"
 	return appendDemoGameConfig(root, gameService, "activity", block, block)
 }
@@ -619,7 +620,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
 		{write: "internal/service/game/gift_saga_budget_test.go", why: "退款（debit 的补偿）的重试窗口覆盖发送方 sid 的一次崩溃重启：startup_wait + ttl + 拉起余量，按生成的 singleton 配置核对"},
 		{write: "internal/service/game/gift_handoff_test.go", why: "赠礼步骤按发送方绑定的 sid（FromSID）准入与转交：本服的离线发送方照常执行，别的服的转交给其 sid、不在本进程接入，FromSID=0 拒绝，接收端非本服静默丢弃"},
-		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动"},
+		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动；activity.game_sids 含重复 sid、超出 int32 或超过一次 Live 的上限时按键名拒绝启动（RR-20261005-01）"},
 		{write: "internal/service/game/gift_recipient_test.go", why: "RR-20260930-22：收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
 		{write: "internal/service/game/presence.go", why: "the other half of RR-20260918-06: chat presence follows the same session-close source the scene does"},
 		{write: "internal/service/game/activity.go", why: "the World tick, the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},

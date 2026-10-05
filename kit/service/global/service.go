@@ -54,8 +54,9 @@ func New(cfg Config) (*Service, error) {
 // --- route binding ---
 
 // Bind creates the first binding for a game server. It is insert-only: a
-// game server that already has a binding must be rebound through Rebind,
-// which requires the current epoch.
+// game server that already has a binding is refused with ErrConflict, and
+// moving it goes through BeginMigration / CompleteMigration, which require
+// the current epoch. (There is no Rebind.)
 func (s *Service) Bind(ctx context.Context, gameSID int32, groupID string, globalSID int32) (RouteBinding, error) {
 	binding := RouteBinding{
 		GameSID: gameSID, GlobalGroupID: groupID, GlobalSID: globalSID,

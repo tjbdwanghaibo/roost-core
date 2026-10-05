@@ -184,7 +184,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
-10-05 N01 / N06-S4 审查：[RR-20261005-01](bug/RR-20261005-01.md) P2 **未修复**——game-demo activity 的 `activity.game_sids` 含重复 sid 或候选超过 `app.SingletonLiveMaxSIDs` 时启动成功、此后每个窗口被协调器 / `Live` 拒绝。单实例锁本体无新确认缺陷，观察 9 条见[运行记录](review/REVIEW-2026-10-05-n01s4.md)。
+10-05 N01 / N06-S4 审查：[RR-20261005-01](bug/RR-20261005-01.md) P2 **已修复，未发版**（[修复](bugfix/RR-20261005-01.md)）——game-demo activity 的 `activity.game_sids` 含重复 sid 或候选超过 `app.SingletonLiveMaxSIDs` 时修复前启动成功、此后每个窗口被协调器 / `Live` 拒绝，现在启动时按键名拒绝。单实例锁本体无新确认缺陷，观察 9 条见[运行记录](review/REVIEW-2026-10-05-n01s4.md)。
 
 10-05 N07第一批：[NC-60](bug/RR-20261005-NC-60.md) / [NC-61](bug/RR-20261005-NC-61.md) / [NC-62](bug/RR-20261005-NC-62.md) / [NC-63](bug/RR-20261005-NC-63.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。模板改动需 `roost project sync`；用常量编号的 errcode / float 属性声明在生成期失败；T-227/228。
 

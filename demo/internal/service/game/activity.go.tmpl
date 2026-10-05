@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"time"
 
@@ -93,6 +94,22 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if !ok || liveness == nil {
 		return nil, nil, fmt.Errorf("activity: capability %q not found; the activity's expected servers come from the App singleton lock, which needs singleton.enabled=true for this service", app.ModSingleton)
 	}
+	config := registry.Config()
+	gameSID := int32(config.GetInt("sid"))
+	if gameSID <= 0 {
+		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot take part in an activity", gameSID)
+	}
+	// server_type 是 App 写进配置的本进程服务类型（同一部署的 game 进程跑同一个子命令，所以相同）；
+	// 用它查 Live，不写死 "game"——game 服务名由生成参数决定。
+	serverType := config.GetString("server_type")
+	if serverType == "" {
+		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
+	}
+	// 候选集在任何远端调用之前检查：一份注定让每个窗口都开不出来的配置在这里按键名拒绝（RR-20261005-01）。
+	candidates, err := candidateSIDs(config.GetIntSlice("activity.game_sids"), gameSID)
+	if err != nil {
+		return nil, nil, err
+	}
 	coordinator, err := Activity(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
@@ -117,23 +134,12 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
 	}
-	config := registry.Config()
-	gameSID := int32(config.GetInt("sid"))
-	if gameSID <= 0 {
-		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot take part in an activity", gameSID)
-	}
-	// server_type 是 App 写进配置的本进程服务类型（同一部署的 game 进程跑同一个子命令，所以相同）；
-	// 用它查 Live，不写死 "game"——game 服务名由生成参数决定。
-	serverType := config.GetString("server_type")
-	if serverType == "" {
-		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
-	}
 	runner := &ActivityRunner{
 		coordinator: coordinator, routing: routing, liveness: liveness, serverType: serverType,
 		mailer: mailer, nest: nestClient,
 		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
 		worldID: worldID, gameSID: gameSID,
-		candidates: candidateSIDs(config.GetIntSlice("activity.game_sids"), gameSID),
+		candidates: candidates,
 		now:        time.Now,
 	}
 	if runner.prefix == "" {
@@ -154,15 +160,43 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 }
 
 // candidateSIDs is the configured deployment, always including this server.
-func candidateSIDs(configured []int, own int32) []int32 {
+// This server's own sid and non-positive entries are skipped, as they always
+// were.
+//
+// A list no window could ever open with is refused here, by its config key,
+// instead of starting and then failing every pass with a warning
+// (RR-20261005-01):
+//   - a repeated sid: when it is live, Live answers it twice, and the
+//     coordinator refuses an expected set with a repeated server (it refuses
+//     rather than de-duplicates, so a configuration mistake shows);
+//   - a sid that does not fit an int32: it would silently become another
+//     server's sid;
+//   - more candidates than one Live query takes (app.SingletonLiveMaxSIDs):
+//     every query would fail.
+func candidateSIDs(configured []int, own int32) ([]int32, error) {
 	out := []int32{own}
+	seen := map[int32]bool{own: true}
 	for _, sid := range configured {
-		if int32(sid) == own || sid <= 0 {
+		if sid <= 0 {
 			continue
 		}
+		if sid > math.MaxInt32 {
+			return nil, fmt.Errorf("activity: activity.game_sids entry %d is not a server id (it does not fit an int32)", sid)
+		}
+		if int32(sid) == own {
+			continue
+		}
+		if seen[int32(sid)] {
+			return nil, fmt.Errorf("activity: activity.game_sids lists game %d twice; the coordinator refuses an expected set with a repeated server, so no window would ever open", sid)
+		}
+		seen[int32(sid)] = true
 		out = append(out, int32(sid))
 	}
-	return out
+	if len(out) > app.SingletonLiveMaxSIDs {
+		return nil, fmt.Errorf("activity: activity.game_sids with this server makes %d candidates, more than one Live query takes (%d), so no window would ever open",
+			len(out), app.SingletonLiveMaxSIDs)
+	}
+	return out, nil
 }
 
 // bindGroup establishes this server's route into the activity group. It is
