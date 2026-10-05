@@ -1,5 +1,17 @@
 # Roost Review 问题索引
 
+**10-05 N09 skill 第四批（revn09d）：NC-210、NC-211、NC-214 三个 P2 与 NC-212、NC-213、NC-215、NC-216 四个 P3，未修复。** memory 效果名字不查声明、落到槽位 0；移交后的 area 回调 finish 让 Advance 报 ErrProgramInvariant；status / attribute / resource 名字不查 catalog、落到 handle 0；catalog key 不查唯一；chain 间隔 / 重复与 modifier 叠层只编译不传 Host；Host 都拒绝的取值能编译；NegotiateSchema 接受空区间。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)（含编译 ⇒ 可执行的变异性质测试与方向判断）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-216](RR-20261005-NC-216.md) | P3 skillsync NegotiateSchema 在一边 Min 为 0（空区间）时仍返回版本 | 已复现，未修复 |
+| [RR-20261005-NC-215](RR-20261005-NC-215.md) | P3 skill 两个参考 Host 与 Runtime 都拒绝的取值能编译（modifier operation / 时长、status 时长 0、resource operation、负 cost、compare op） | 已复现，未修复 |
+| [RR-20261005-NC-214](RR-20261005-NC-214.md) | P2 skill status / attribute / resource 名字不查 catalog，lower 兜底成 handle 0：施法失败或静默作用在 handle 0 | 已复现，未修复 |
+| [RR-20261005-NC-213](RR-20261005-NC-213.md) | P3 skill chain allow_repeat / hop_interval_ticks、attribute_modifier stack_policy / max_stacks 只编译不传 Host | 已确认，未修复 |
+| [RR-20261005-NC-212](RR-20261005-NC-212.md) | P3 skill CompileEnvironment 不查 catalog key 唯一，同一 key 被解析成两个条目 | 已复现，未修复 |
+| [RR-20261005-NC-211](RR-20261005-NC-211.md) | P2 skill 施法先结束后，移交的 area 回调 finish 让 Advance 返回 ErrProgramInvariant | 已复现，未修复 |
+| [RR-20261005-NC-210](RR-20261005-NC-210.md) | P2 skill set / add / clear_memory 的名字不查声明，落到槽位 0（静默改写或 ErrProgramInvariant） | 已复现，未修复 |
+
 **10-05 N15 scripts / cmd 与非 Go 资产（revn15）：NC-200（P2）与 NC-201～208（P3）已修复、声明场景验证，未发版（NC-208 的 kit/dataengine 部分留给核心线）。** gapmap 收尾丢未提交修改；Cluster 套件脚本、toxiproxy pid、验收锁、toxic 用例全局 reset 让并行会话互相干扰共享隔离环境；glsvet / pretag / 故障矩阵三处门禁对没检查到的东西报通过；生成的 .gitignore 不忽略 WAL。[本轮](../review/REVIEW-2026-10-05-n15.md)（含方向判断）。
 
 | 编号 | 问题 | 状态 |
