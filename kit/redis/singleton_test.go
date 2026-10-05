@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/viper"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
 )
 
 // 启用单实例锁的服务必须显式配置 Redis：opener 不沿用 RedisMod 的 localhost:6379 兜底。
@@ -35,11 +34,10 @@ func TestRedisModKeepsTheLocalhostDefault(t *testing.T) {
 // Close 幂等：App 的收尾与 bootstrap 自己的清理可能各关一次，第二次不能报 client closed。
 // 不需要 Redis：客户端建立时不拨号，Close 只关本地连接池。
 func TestSingletonStoreCloseIsIdempotent(t *testing.T) {
-	client, err := redisdriver.NewClient(&fredis.Config{Addr: "127.0.0.1:1"})
+	store, err := newSingletonStore(&fredis.Config{Addr: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &singletonStore{client: client}
 	for i := range 2 {
 		if err := store.Close(); err != nil {
 			t.Fatalf("Close #%d = %v, want nil", i+1, err)

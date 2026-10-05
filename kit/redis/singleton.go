@@ -17,13 +17,23 @@ import (
 // singletonPingTimeout 是打开 SingletonStore 时首次 Ping 的超时。
 const singletonPingTimeout = 5 * time.Second
 
+// 两个客户端各自的连接池大小（MinIdleConns 0）。锁操作只有一个写者顺序调用（启动获取、续期、
+// 最后的 Release），留 2 条给 Cluster 拓扑刷新与超时后重拨的余量；Live 查询可能并发，但只是
+// 只读的活性查询，超出时排队等连接即可。
+const (
+	singletonLockPoolSize = 2
+	singletonLivePoolSize = 2
+)
+
 // SingletonStore 是 App 单实例锁的 Redis 后端（app.SingletonOpener），在 bootstrap 里这样安装：
 //
 //	app.New(...).Singleton(kitredis.SingletonStore)
 //
-// 它在任何 Mod 之前被调用，只依赖已读完的 redis.* 配置，自己建一条独立的小连接
-// （PoolSize 2、MinIdleConns 0），不依赖 Redis Mod。缺 redis.addr 与 redis.cluster_addrs 时报错——
-// 不沿用 RedisMod 的 localhost:6379 兜底，否则一个忘了配 Redis 的服务会对着本机的 Redis 加锁。
+// 它在任何 Mod 之前被调用，只依赖已读完的 redis.* 配置，自己建两个独立的小客户端，不依赖 Redis Mod：
+// 一个只给 CAS / 认领 / 按值删除（锁操作），一个只给 Live 查询的 Get。二者不共用连接池：Redis 变慢时
+// 并发的 Live 查询可能占满连接，续期若和它们抢连接，就会等不到连接而超时（Unknown），一直如此会被
+// 误判 Lost、进程 fail-stop。缺 redis.addr 与 redis.cluster_addrs 时报错——不沿用 RedisMod 的
+// localhost:6379 兜底，否则一个忘了配 Redis 的服务会对着本机的 Redis 加锁。
 //
 // CAS 只涉及单键，不需要 hash tag。驱动的自动重试关闭（MaxRetries -1）：每次 CAS 是一次往返，
 // 重试与“丢回复”的判定由 App 的状态机按节拍负责；单次调用的超时由调用方的 ctx 截止时间决定
@@ -36,33 +46,52 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 	if strings.TrimSpace(conn.Addr) == "" && !conn.IsCluster() {
 		return nil, errors.New("kitredis: singleton store: redis.addr or redis.cluster_addrs is required when singleton.enabled=true")
 	}
-	conn.PoolSize = 2
-	conn.MinIdleConns = 0
-	conn.MaxRetries = -1
-	client, err := redisdriver.NewClient(conn)
+	store, err := newSingletonStore(conn)
 	if err != nil {
 		return nil, fmt.Errorf("kitredis: singleton store: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), singletonPingTimeout)
 	defer cancel()
-	if err := client.Ping(ctx); err != nil {
-		_ = client.Close()
+	if err := store.lock.Ping(ctx); err != nil {
+		_ = store.Close()
 		return nil, fmt.Errorf("kitredis: singleton store: ping: %w", err)
 	}
-	return &singletonStore{client: client}, nil
+	return store, nil
+}
+
+// newSingletonStore 按 conn 建锁操作与 Live 两个客户端（不拨号）。
+func newSingletonStore(conn *fredis.Config) (*singletonStore, error) {
+	client := func(poolSize int) (fredis.IRedis, error) {
+		c := *conn
+		c.PoolSize = poolSize
+		c.MinIdleConns = 0
+		c.MaxRetries = -1
+		return redisdriver.NewClient(&c)
+	}
+	lock, err := client(singletonLockPoolSize)
+	if err != nil {
+		return nil, err
+	}
+	live, err := client(singletonLivePoolSize)
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return &singletonStore{lock: lock, live: live}, nil
 }
 
 // singletonStore 把 app.SingletonStore 转到 core 的 redis.CompareAndSet / CompareAndDelete。
-// go-redis 客户端并发安全，续期 goroutine 与 Live 查询可以同时调用。
+// go-redis 客户端并发安全，续期 goroutine 与 Live 查询可以同时调用；二者走不同的客户端，互不占连接。
 type singletonStore struct {
-	client fredis.IRedis
+	lock fredis.IRedis // CompareAndSet / CompareAndDelete
+	live fredis.IRedis // Get
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
 func (s *singletonStore) CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
-	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{Key: key, Expected: expected, Next: next, TTL: ttl})
+	result, err := fredis.CompareAndSet(ctx, s.lock, fredis.CompareAndSetCommand{Key: key, Expected: expected, Next: next, TTL: ttl})
 	if err != nil {
 		return false, nil, err
 	}
@@ -70,7 +99,7 @@ func (s *singletonStore) CompareAndSet(ctx context.Context, key string, expected
 }
 
 func (s *singletonStore) CompareAndDelete(ctx context.Context, key string, expected []byte) (bool, error) {
-	result, err := fredis.CompareAndDelete(ctx, s.client, key, expected)
+	result, err := fredis.CompareAndDelete(ctx, s.lock, key, expected)
 	if err != nil {
 		return false, err
 	}
@@ -83,7 +112,7 @@ func (s *singletonStore) Get(ctx context.Context, keys []string) ([][]byte, erro
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	pipe := s.client.Pipeline()
+	pipe := s.live.Pipeline()
 	futures := make([]*fredis.FutureBytes, len(keys))
 	for i, key := range keys {
 		futures[i] = pipe.Get(ctx, key)
@@ -105,9 +134,9 @@ func (s *singletonStore) Get(ctx context.Context, keys []string) ([][]byte, erro
 	return out, nil
 }
 
-// Close 幂等：只有第一次真正关闭客户端，之后的调用返回第一次的结果。
+// Close 幂等：只有第一次真正关闭两个客户端，之后的调用返回第一次的结果。
 func (s *singletonStore) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.client.Close() })
+	s.closeOnce.Do(func() { s.closeErr = errors.Join(s.lock.Close(), s.live.Close()) })
 	return s.closeErr
 }
 
