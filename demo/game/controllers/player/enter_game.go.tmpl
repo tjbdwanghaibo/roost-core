@@ -15,6 +15,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	"github.com/tjbdwanghaibo/roost-core/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
 	svcchat "github.com/tjbdwanghaibo/roost-core/kit/service/chat"
 )
 
@@ -41,7 +42,7 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		code, reason := errcode.ClientError(ownersErr)
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
-	boundSID, bound := boundServerID(context.Session)
+	boundSID, bound := BoundServerID(context.Session)
 	if !bound {
 		slog.Error("enter_game: the session carries no server_id claim; refusing the login (the authenticator must record the role's server)", "player_id", context.PlayerID)
 		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", 0))
@@ -165,17 +166,17 @@ func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameRespons
 	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
 }
 
-// serverIDClaim 是认证器（internal/access/player/tcp/auth.go 的 newPrincipal）把角色绑定的 sid 写进
-// Principal.Claims 用的键。两边各写一份字面量：传输包引用协议绑定，控制器包不能反过来引用它。
-const serverIDClaim = "server_id"
-
-// boundServerID 读会话里 account 给出的角色绑定 sid。没有会话、没有这个 claim、或值不是正整数都
-// 回答 false，由调用方 fail-closed。
-func boundServerID(session gateway.Session) (int32, bool) {
+// BoundServerID 读会话里 account 给出的角色绑定 sid：认证器（internal/access/player/tcp/auth.go 的
+// newPrincipal）以 svcaccount.ServerIDClaim 为键写进 Principal.Claims 的那个值。没有会话、没有这个
+// claim、或值不是正整数都回答 false，由调用方 fail-closed。
+//
+// 导出是为了让认证器那一侧的测试（tcp/auth_test.go）用登录端点真正使用的读取函数核对自己写的
+// Principal：认证器归应用所有、可以被改写，两边对不上时登录会一律 fail-closed。
+func BoundServerID(session gateway.Session) (int32, bool) {
 	if session == nil {
 		return 0, false
 	}
-	raw, ok := session.Principal().Claims[serverIDClaim]
+	raw, ok := session.Principal().Claims[svcaccount.ServerIDClaim]
 	if !ok {
 		return 0, false
 	}

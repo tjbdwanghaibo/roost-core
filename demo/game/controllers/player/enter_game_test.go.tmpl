@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	"github.com/tjbdwanghaibo/roost-core/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -51,7 +53,7 @@ func (boundSession) Reply(context.Context, any) error { return nil }
 func (boundSession) Close(error) error                { return nil }
 
 func boundTo(sid int32) boundSession {
-	return boundSession{claims: map[string]string{serverIDClaim: strconv.FormatInt(int64(sid), 10)}}
+	return boundSession{claims: map[string]string{svcaccount.ServerIDClaim: strconv.FormatInt(int64(sid), 10)}}
 }
 
 // fixedLoginBudget stands in for the player TCP Runtime's LoginTimeout.
@@ -268,7 +270,7 @@ func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 	}{
 		{"no-session", nil},
 		{"no-claim", boundSession{}},
-		{"unreadable-claim", boundSession{claims: map[string]string{serverIDClaim: "sid-1000"}}},
+		{"unreadable-claim", boundSession{claims: map[string]string{svcaccount.ServerIDClaim: "sid-1000"}}},
 		{"zero", boundTo(0)},
 	} {
 		t.Run("missing-server-id/"+missing.name, func(t *testing.T) {
@@ -290,4 +292,35 @@ func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 			t.Fatalf("the ownership table was asked about %v, want the session's bound sid 2000", owners.served)
 		}
 	})
+}
+
+// unloadOutlivesTheWait 是玩家上一份副本的卸载超过等待预算时的驻留表：Serve 回答的正是
+// PlayerOwners.Serve 那时的错误形状——包着 context.DeadlineExceeded，记录不变、可以重试
+// （internal/service/game/playerowner.go）。controller 包不能引用服务包，所以这里替身它。
+type unloadOutlivesTheWait struct{ asked int }
+
+func (*unloadOutlivesTheWait) SID() int32 { return 1000 }
+
+func (owners *unloadOutlivesTheWait) Serve(_ context.Context, playerID int64, _ int32) error {
+	owners.asked++
+	return fmt.Errorf("player owners: player %d is still being unloaded after %s: %w", playerID, 5*time.Second, context.DeadlineExceeded)
+}
+
+// Serve 等卸载超时：登录回 login_timeout（客户端重试），不是内部错误，也不往下装载——controller 没有
+// Players，走到装载会 panic。驻留表在卸载期间拒绝准入，装载一个马上被销毁的副本正是它要防的事。
+func TestEnterGameAnswersLoginTimeoutWhenTheUnloadOutlivesTheWait(t *testing.T) {
+	owners := &unloadOutlivesTheWait{}
+	controller := &Controller{registry: app.NewRegistry(viper.New())}
+	var published playerOwners = owners
+	controller.owners.Store(&published)
+	response, err := controller.HandleEnterGame(&player_agent.Context{BaseCtx: context.Background(), Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+	if err != nil {
+		t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
+	}
+	if owners.asked != 1 {
+		t.Fatalf("the ownership table was asked %d times, want once", owners.asked)
+	}
+	if response.Code != apperrors.ErrLoginTimeout.Code() {
+		t.Fatalf("code=%d reason=%q, want login_timeout (%d): a login that waited out its unload budget must be told to retry", response.Code, response.Reason, apperrors.ErrLoginTimeout.Code())
+	}
 }

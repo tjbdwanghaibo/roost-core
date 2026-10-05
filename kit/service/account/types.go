@@ -284,6 +284,15 @@ type Session struct {
 	ExpiresAtUnix int64  `json:"expires_at_unix"`
 }
 
+// ServerIDClaim 是游戏网关的认证器把 ValidateSession 返回的 Role.ServerID 记进
+// gateway.Principal.Claims 用的键（值是十进制 sid）。
+//
+// 写的一方是认证器（game-demo 的 internal/access/player/tcp/auth.go），读的一方是登录端点
+// （game/controllers/player/enter_game.go 的 BoundServerID），后者据此判断这个玩家是不是绑定在
+// 本服。两边分属传输包与控制器包，后者不能引用前者，所以键放在两边本来就依赖的 account 包里：
+// 它说的正是 account 返回的那个 ServerID。
+const ServerIDClaim = "server_id"
+
 // Slot records that an account occupies its role allowance on one server.
 //
 // It exists as its own record — rather than being derived by counting roles —

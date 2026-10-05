@@ -424,6 +424,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
 		{write: "internal/access/player/tcp/auth.go", why: "session tickets validated by the account service, plus a terminal shortcut"},
+		{write: "internal/access/player/tcp/auth_test.go", why: "the authenticator's principal read back by the login endpoint's BoundServerID: the bound sid's claim key cannot drift between the two"},
 		{run: enableDemoPlayerTCP, why: "a listener that is actually on; doctor's player-tcp workflow passes on the generated project"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters; response with code and count"},
