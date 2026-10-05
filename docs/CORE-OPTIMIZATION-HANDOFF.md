@@ -115,6 +115,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 **10-05 N06 S1/S2/S3/S6 复核（revn06）**：[NC-50/51/52 与 RR-20261001-06 残余](review/REVIEW-2026-10-05-n06-revn06.md)已修复、声明场景验证，未发版；versionstore 退避后重读（所有 Redis 服务的伪冲突），隔离真实 Redis 集成 891 pass/23 环境 skip。S4/S5 由其他 agent 接续，N06 仍部分完成；默认生成工程无指标落点（观察 1）待功能决定。
 
+**10-05 N02续审**：[NC-80/81/83](review/REVIEW-2026-10-05-noncore-n02.md)已修复、声明场景验证，未发版；NC-82未修待选择。HTTP 响应编码失败/响应开始后panic不再被报告为成功，生成TCP接入停机可重试；业务鉴权全链与连接/请求容量控制通过。真实网关/客户端/跨进程account RPC单列未验；N02仍场景部分完成。
+
 **10-05 N07第一批**：[NC-60～63](review/REVIEW-2026-10-05-noncore-n07.md)已修复、声明场景验证，未发版。attribute快照锁、game-demo属性层随事务回滚（已污染存量不自动修正）、属性生成器与errcode扫描的生成期拒绝；8相关包race、根包、build/vet、codegen、全新生成game-demo消费通过。event零接线与configdata发布后回调可见性记为观察，N07未整体完成。
 
 **10-05 N06第三批**：[NC-41/42与RR-09残余](review/REVIEW-2026-10-05-noncore-27.md)已修复、声明场景验证，未发版；13新增正式回归、7行为红/overlay红绿，race420/2Cluster skip、根包14/build/vet及两生成消费通过。坏持久计划保留不自动迁移，N06未整体完成。交给另一agent的[全部后续review清单](review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)从global RPC/Mod/App.Live增量接续，外部专项单列。
@@ -206,6 +208,8 @@ bash scripts/test-remote-matrix.sh
 10-05 N06 revn06：[NC-50](bug/RR-20261005-NC-50.md) / [NC-51](bug/RR-20261005-NC-51.md) / [NC-52](bug/RR-20261005-NC-52.md) 与 [RR-20261001-06 残余](bugfix/RR-20261001-06.md#复核后的补修2026-10-05) **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n06-revn06.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。T-229/230，T-182 追加。无格式/API/wire 变化，NC-52 只在输掉 CAS 后多一次 GET。
 
 10-05 N01 / N06-S4 审查：[RR-20261005-01](bug/RR-20261005-01.md) P2 **已修复，未发版**（[修复](bugfix/RR-20261005-01.md)）——game-demo activity 的 `activity.game_sids` 含重复 sid 或候选超过 `app.SingletonLiveMaxSIDs` 时修复前启动成功、此后每个窗口被协调器 / `Live` 拒绝，现在启动时按键名拒绝。单实例锁本体无新确认缺陷，观察 9 条见[运行记录](review/REVIEW-2026-10-05-n01s4.md)。
+
+10-05 N02续审：[NC-80](bug/RR-20261005-NC-80.md) / [NC-81](bug/RR-20261005-NC-81.md) / [NC-83](bug/RR-20261005-NC-83.md) **已修复、声明场景验证，未发版**（NC-83 改生成器，已生成工程需重新生成 player TCP 文件）；[NC-82](bug/RR-20261005-NC-82.md) **已复现、未修，需维护者选择 per-owner 语义**。T-242/243。
 
 10-05 N07第一批：[NC-60](bug/RR-20261005-NC-60.md) / [NC-61](bug/RR-20261005-NC-61.md) / [NC-62](bug/RR-20261005-NC-62.md) / [NC-63](bug/RR-20261005-NC-63.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。模板改动需 `roost project sync`；用常量编号的 errcode / float 属性声明在生成期失败；T-227/228。
 

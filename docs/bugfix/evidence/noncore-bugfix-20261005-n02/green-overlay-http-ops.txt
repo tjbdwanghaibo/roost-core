@@ -1,0 +1,30 @@
+    zz_review_n02_test.go:69: status=500 body="{\"error\":\"encode response\",\"ok\":false}\n"
+    zz_review_n02_test.go:73: httpclient err=http client: status 500 Internal Server Error out={Ratio:0}
+    zz_review_n02_test.go:69: status=500 body="{\"error\":\"internal server error\",\"ok\":false}\n"
+    zz_review_n02_test.go:73: httpclient err=http client: status 500 Internal Server Error out={Ratio:0}
+    zz_review_n02_test.go:69: status=500 body="{\"error\":\"encode response\",\"ok\":false}\n"
+    zz_review_n02_test.go:73: httpclient err=http client: status 500 Internal Server Error out={Ratio:0}
+    zz_review_n02_test.go:69: status=500 body="{\"error\":\"encode response\",\"ok\":false}\n"
+    zz_review_n02_test.go:73: httpclient err=http client: status 500 Internal Server Error out={Ratio:0}
+    zz_review_n02_test.go:69: status=500 body="{\"error\":\"encode response\",\"ok\":false}\n"
+    zz_review_n02_test.go:73: httpclient err=http client: status 500 Internal Server Error out={Ratio:0}
+--- PASS: TestReviewN02UnencodableSuccessIsNot2xx (0.00s)
+    --- PASS: TestReviewN02UnencodableSuccessIsNot2xx/marshal_error (0.00s)
+    --- PASS: TestReviewN02UnencodableSuccessIsNot2xx/marshal_panic (0.00s)
+    --- PASS: TestReviewN02UnencodableSuccessIsNot2xx/channel (0.00s)
+    --- PASS: TestReviewN02UnencodableSuccessIsNot2xx/nan (0.00s)
+    --- PASS: TestReviewN02UnencodableSuccessIsNot2xx/inf (0.00s)
+--- PASS: TestReviewN02EncodableSuccessUnchanged (0.00s)
+    zz_review_n02_test.go:133: status=200 body="{\"items\":[1,2" readErr=unexpected EOF
+--- PASS: TestReviewN02PanicAfterResponseStartedAborts (0.00s)
+--- PASS: TestReviewN02ErrAbortHandlerKeepsAbortSemantics (0.00s)
+--- PASS: TestReviewN02PanicBeforeResponseIs500 (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/webroute	5.216s
+2026/10/05 18:57:44 INFO ops: serving addr=127.0.0.1:50470 admin_enabled=true
+    zz_review_n02_test.go:88: executed=1 status=500 body="{\"error\":\"encode response\",\"ok\":false}\n"
+--- PASS: TestReviewN02OpsAdminUnencodableResultIsNot2xx (0.00s)
+2026/10/05 18:57:44 INFO ops: serving addr=127.0.0.1:50473 admin_enabled=true
+--- PASS: TestReviewN02OpsNonCooperativeCommandStopRetry (0.10s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/kit/ops	5.576s

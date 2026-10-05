@@ -8,6 +8,14 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-05 HTTP 响应完整性与 TCP 接入停机（main，未发版）
+
+`httpserver.JSON`（Webroute `WriteResult`、Ops 管理面同一出口）先完整编码再写状态：值里有 NaN/±Inf、channel/func 或 MarshalJSON 报错时回 500 `{"error":"encode response","ok":false}` 并记日志，而不是 2xx 空体（NC-80）。业务此时可能已经执行，客户端按幂等键核对再重试；从源头避免不可编码值（如 0/0 胜率）。Engine 的 recover 只在响应开始之前回 500；写过头/体、Flush 或 Hijack 之后 panic 会中止连接，`panic(http.ErrAbortHandler)` 保持标准库语义（NC-81）。handler 拿到的 `w` 是包装 writer，`http.Flusher`、`http.ResponseController` 和（原 writer 支持时）`http.Hijacker` 照常可用，`http.Pusher` 不透传。
+
+生成的 player TCP 接入：Stop/StopWithContext 超时后保留 server，用新 context 再调会等到所有连接 goroutine 真实返回；会话关闭订阅者的等待也受 ctx 约束（NC-83）。升级生成器后重新生成 `internal/access/player/tcp/server_gen*.go`。不配合 ctx 的认证回调/handler 不会被强行终止，只会让停机如实超时。
+
+Ops `/admin/execute` 不给命令设期限，超过 15s 写超时的命令照常执行而客户端只看到传输错误：把“传输失败”当作“结果未知”。`gateway.RateLimit`/`security.RateLimiter` 的 key 表全局共享，单个主体变化 MessageID 即可占满，接入前先看 [NC-82](bug/RR-20261005-NC-82.md)。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
+
 ## 2026-10-05 App 单实例锁（main，未发版）
 
 `singleton.enabled=true` 的服务在任何 Mod Init 之前先拿 `<key_prefix>:<server_type>:<sid>` 的锁，别人持有就等，失锁即 fail-stop，全部 Mod 停完才释放；`RuntimeFailure.OnFail` 让任何 fail-stop 先围栏 Nest（Remote Entity fatal 从此也会围栏，行为变化）；`app.ModSingleton` 提供只读的 `Live` 活性查询。配置、行为与约束见 [§2 单实例锁](#单实例锁singleton)。codegen 生成装配与配置（方案第 2 笔）：项目有 redis Mod 或带 dataengine 的服务时 bootstrap 安装 `kitredis.SingletonStore`，带 dataengine 的服务默认 `singleton.enabled: true`。

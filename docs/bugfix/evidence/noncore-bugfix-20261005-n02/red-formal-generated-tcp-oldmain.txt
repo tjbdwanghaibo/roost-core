@@ -1,0 +1,9 @@
+    server_gen_test.go:979: retry Stop reported success while the authenticator was still running
+--- FAIL: TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain (0.05s)
+    server_gen_test.go:995: first StopWithContext = player tcp: shutdown: context deadline exceeded, server kept = false
+--- FAIL: TestAModStopRetryKeepsTheServerUntilItDrains (0.05s)
+    server_gen_test.go:1032: StopWithContext ignored its context while a subscriber blocked
+--- FAIL: TestABlockingCloseSubscriberDoesNotHoldStopPastItsContext (2.00s)
+FAIL
+FAIL	example.com/n02demo/internal/access/player/tcp	2.689s
+FAIL

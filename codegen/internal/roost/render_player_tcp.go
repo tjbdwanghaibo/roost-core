@@ -373,18 +373,24 @@ func (mod *Mod) Stop() {
 // i.e. not declared.
 func (mod *Mod) StopBudget() time.Duration { return mod.config.ShutdownTimeout }
 
+// StopWithContext stops the listener and waits, within ctx, for every
+// connection goroutine and then the session-close dispatcher to finish.
+// A ctx that ends first returns its error and keeps the server: a handler or
+// authenticator that ignores its context is still running, so a later call
+// with a fresh ctx waits for it again instead of reporting a drain that did
+// not happen (RR-20261005-NC-83). Session-close subscribers are waited for
+// within the same ctx.
 func (mod *Mod) StopWithContext(ctx context.Context) error {
+	if ctx == nil { ctx = context.Background() }
 	if mod.transportRuntime != nil { mod.transportRuntime.server.Store(nil) }
-	if mod.server == nil {
-		if mod.transportRuntime != nil { mod.transportRuntime.stopLifecycle() }
-		return nil
+	if mod.server != nil {
+		if err := mod.server.Stop(ctx); err != nil { return err }
+		mod.server = nil
 	}
-	err := mod.server.Stop(ctx)
-	mod.server = nil
 	// After the server: the closes it produced on the way down are still
 	// worth delivering.
-	if mod.transportRuntime != nil { mod.transportRuntime.stopLifecycle() }
-	return err
+	if mod.transportRuntime != nil { return mod.transportRuntime.stopLifecycleContext(ctx) }
+	return nil
 }
 
 // Runtime is the application-facing active publish boundary. It encodes one
@@ -519,14 +525,30 @@ func (runtime *Runtime) publishClosed(event SessionClosed) {
 	}
 }
 
-func (runtime *Runtime) stopLifecycle() {
-	if runtime == nil || runtime.lifecycleStop == nil { return }
-	select {
-	case <-runtime.lifecycleStop:
-	default:
-		close(runtime.lifecycleStop)
+func (runtime *Runtime) stopLifecycle() { _ = runtime.stopLifecycleContext(context.Background()) }
+
+// stopLifecycleContext ends the session-close dispatcher after it delivers
+// what is queued, waiting at most until ctx ends: a subscriber that blocks
+// must not hold shutdown past its budget. Calling it again waits again.
+func (runtime *Runtime) stopLifecycleContext(ctx context.Context) error {
+	if runtime == nil { return nil }
+	runtime.lifecycleMu.Lock()
+	stop, done := runtime.lifecycleStop, runtime.lifecycleDone
+	if stop != nil {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
 	}
-	if runtime.lifecycleDone != nil { <-runtime.lifecycleDone }
+	runtime.lifecycleMu.Unlock()
+	if done == nil { return nil }
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("player tcp: session-close subscribers still running: %%w", ctx.Err())
+	}
 }
 
 func (runtime *Runtime) PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error {
@@ -641,18 +663,24 @@ func (server *Server) Start() error {
 	return nil
 }
 
+// Stop closes the listener and every connection, then waits within ctx for
+// the accept loop and connection goroutines to return. The first call does
+// the closing; a call after a ctx that ended first only waits again, so it
+// reports success only once everything has actually returned
+// (RR-20261005-NC-83). Stop on a server that never started returns nil.
 func (server *Server) Stop(ctx context.Context) error {
 	if ctx == nil { ctx = context.Background() }
 	server.mu.Lock()
 	listener, cancel := server.listener, server.cancel
 	server.listener, server.cancel = nil, nil
 	server.stopping = true
+	started := server.started
 	if cancel != nil { cancel() }
 	connections := make([]net.Conn, 0, len(server.connections))
 	for connection := range server.connections { connections = append(connections, connection) }
 	server.mu.Unlock()
-	if listener == nil { return nil }
-	_ = listener.Close()
+	if !started { return nil }
+	if listener != nil { _ = listener.Close() }
 	for _, connection := range connections { _ = connection.Close() }
 	done := make(chan struct{})
 	go func() { server.wait.Wait(); close(done) }()
@@ -1869,6 +1897,134 @@ func TestServerRejectsInvalidConstruction(t *testing.T) {
 	}
 	if _, err := NewServer(Config{MaxConnections: 1, MaxPayloadBytes: 1}, &accessplayer.Runtime{Protocols: player_agent.NewProtocolRegistry()}, nil); err == nil {
 		t.Fatal("nil authenticator unexpectedly accepted")
+	}
+}
+
+// stalledAuthServer starts a server whose authenticator ignores its context:
+// it returns only after release is closed, and then still works for a while
+// before it does. entered receives once per handshake that reached it.
+func stalledAuthServer(t *testing.T) (*Server, chan struct{}, <-chan struct{}, <-chan struct{}) {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
+	cfg.Set("player_access.tcp.handshake_timeout", "5s")
+	config, err := configFromViper(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, entered, returned := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
+	server, err := NewServer(config, &accessplayer.Runtime{Protocols: player_agent.NewProtocolRegistry()}, AuthenticatorFunc(func(context.Context, string, net.Addr) (gateway.Principal, error) {
+		entered <- struct{}{}
+		<-release
+		time.Sleep(100 * time.Millisecond)
+		close(returned)
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.RLock()
+	addr := server.listener.Addr().String()
+	server.mu.RUnlock()
+	connection, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := &session{connection: connection, writeTimeout: time.Second}
+	if err := client.writeFrame(context.Background(), 0, 0, 1, []byte("token")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handshake never reached the authenticator")
+	}
+	return server, release, entered, returned
+}
+
+// RR-20261005-NC-83: a Stop whose context ends before an authenticator that
+// ignores its context returns must not leave a later Stop to report a drain
+// that did not happen. The retry waits for the goroutine and only then
+// succeeds.
+func TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain(t *testing.T) {
+	server, release, _, returned := stalledAuthServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	first := server.Stop(ctx)
+	cancel()
+	if !errors.Is(first, context.DeadlineExceeded) {
+		t.Fatalf("first Stop = %%v, want the deadline", first)
+	}
+	close(release)
+	retry, cancelRetry := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelRetry()
+	if err := server.Stop(retry); err != nil {
+		t.Fatalf("retry Stop = %%v", err)
+	}
+	select {
+	case <-returned:
+	default:
+		t.Fatal("retry Stop reported success while the authenticator was still running")
+	}
+}
+
+// RR-20261005-NC-83: the Mod keeps the server after a Stop that ran out of
+// time, so the retry has something to wait for.
+func TestAModStopRetryKeepsTheServerUntilItDrains(t *testing.T) {
+	server, release, _, returned := stalledAuthServer(t)
+	runtime := &Runtime{}
+	runtime.startLifecycle()
+	runtime.server.Store(server)
+	mod := &Mod{config: server.config, server: server, transportRuntime: runtime}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	first := mod.StopWithContext(ctx)
+	cancel()
+	if !errors.Is(first, context.DeadlineExceeded) || mod.server != server {
+		t.Fatalf("first StopWithContext = %%v, server kept = %%v", first, mod.server == server)
+	}
+	close(release)
+	if err := mod.StopWithContext(context.Background()); err != nil {
+		t.Fatalf("retry StopWithContext = %%v", err)
+	}
+	select {
+	case <-returned:
+	default:
+		t.Fatal("retry StopWithContext reported success while the authenticator was still running")
+	}
+	if mod.server != nil {
+		t.Fatal("the drained server is still held")
+	}
+}
+
+// RR-20261005-NC-83: a session-close subscriber that blocks holds the
+// dispatcher, not the Stop budget; once it returns a retry completes.
+func TestABlockingCloseSubscriberDoesNotHoldStopPastItsContext(t *testing.T) {
+	runtime := &Runtime{}
+	block, entered := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	runtime.OnSessionClosed(func(SessionClosed) { once.Do(func() { close(entered) }); <-block })
+	runtime.publishClosed(SessionClosed{PlayerID: 1, SessionID: "s"})
+	<-entered
+	mod := &Mod{transportRuntime: runtime}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- mod.StopWithContext(ctx) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("StopWithContext = %%v, want the deadline", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(block)
+		t.Fatal("StopWithContext ignored its context while a subscriber blocked")
+	}
+	close(block)
+	if err := mod.StopWithContext(context.Background()); err != nil {
+		t.Fatalf("retry StopWithContext = %%v", err)
 	}
 }
 `, generatedHeader, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAgentImportSuffix)

@@ -1,0 +1,27 @@
+package web
+
+import (
+	"context"
+	"math"
+	"sync/atomic"
+)
+
+type Service struct{ Calls atomic.Int32 }
+
+type StatsRequest struct {
+	Wins  int `json:"wins"`
+	Games int `json:"games"`
+}
+
+type StatsResponse struct {
+	WinRate float64 `json:"win_rate"`
+}
+
+// 业务按定义计算胜率；0 场时得到 NaN（真实业务常见的 0/0）。
+//roost:web method=POST path=/gm/stats body=json
+func stats(_ context.Context, svc *Service, req StatsRequest) (StatsResponse, error) {
+	svc.Calls.Add(1)
+	return StatsResponse{WinRate: float64(req.Wins) / float64(req.Games)}, nil
+}
+
+var _ = math.NaN

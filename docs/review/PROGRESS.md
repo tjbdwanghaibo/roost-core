@@ -109,6 +109,20 @@
 
 9 个新正式叶子（含 3 子用例）+ 2 组组合控制；7 原红。相关 race、真实 Redis 集成 891 pass/23 环境 skip/0 fail、根包、build/vet 通过，不累计作覆盖率。N06 仍部分完成，不计 completed/15。方向判断：activity 窗口条目验证第四次在相邻循环被打破、account 建角判定只在部分入口生效，建议收敛为单一入口 / 决策表（见本轮记录）。不等待 CI，不发版。
 
+## 2026-10-05 N02续审（不配合回调/容量/业务鉴权/跨模块配置）
+
+基线50e9a4e8，分支revn02。[本轮](REVIEW-2026-10-05-noncore-n02.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n02/README.md)。NC-80（P2）、NC-81（P3）、NC-83（P2）已修复、声明场景验证，未发版；NC-82（P3）已复现未修，需维护者定per-owner语义。
+
+| 项 | 本轮 | 状态 |
+| --- | --- | --- |
+| 不配合回调 | 认证回调、Ops命令、会话关闭订阅者、gateway endpoint四类；正式Kit/生成工程真实传输 | NC-83修复；Ops/Timeout控制通过；Dispatch handler单独用例未加 |
+| 连接/请求容量 | 握手/连接/per-IP名额、超限帧、限流key表 | 生成TCP控制通过；NC-82未修 |
+| 业务鉴权 | 真实account.Service签票据→TCP握手→demo认证器→Dispatch，7拒绝形状+过期 | 控制通过；票据复用/撤销属N06 S1 |
+| 跨模块配置 | dispatch/login/shutdown预算、Ops写超时、TCP派生上限 | O1/O2观察，非RR |
+| 响应结果判定 | 生成Webroute/Ops/Engine | NC-80/81修复 |
+
+旧产品正式回归7+4+3红→绿；race×3六包438 pass、生成TCP包117 pass，根包/build/vet/codegen、game-demo全工程通过。N02仍场景部分完成：余NC-82选择、O1/O2建议、HTTP/2与外部清单（真实网关/客户端/跨进程account RPC/卡死回调资源）。
+
 ## 2026-10-05 N07第一批（configdata/attribute/event/errcode）
 
 基线50e9a4e8（origin/main），分支revn07，图谱generation 2026-09-30、以源码补证。[本轮/矩阵](REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。NC-60/61/63（P2）、NC-62（P3）已修复、声明场景验证，未发版。

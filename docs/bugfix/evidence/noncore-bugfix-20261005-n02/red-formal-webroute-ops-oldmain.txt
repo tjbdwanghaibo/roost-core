@@ -1,0 +1,12 @@
+    result_encoding_promises_test.go:54: NaN result: err=<nil> out={WinRate:0}, want StatusError 500
+--- FAIL: TestUnencodableRouteResultReachesTheClientAs500 (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/webroute	0.504s
+2026/10/05 18:52:13 INFO ops: serving addr=127.0.0.1:49323 admin_enabled=true
+    response_encoding_promises_test.go:92: executed=1 status=200 body="", want one execution answered 500
+--- FAIL: TestAdminResultThatCannotBeEncodedIsNotReportedAsSuccess (0.00s)
+2026/10/05 18:52:13 INFO ops: serving addr=127.0.0.1:49326 admin_enabled=true
+--- PASS: TestNonCooperativeAdminCommandStopRetryDrains (0.10s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/ops	1.410s
+FAIL

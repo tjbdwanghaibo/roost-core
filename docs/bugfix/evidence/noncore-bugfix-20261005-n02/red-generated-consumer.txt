@@ -1,0 +1,6 @@
+    consumer_test.go:31: calls=2 err=<nil> out={WinRate:0}
+    consumer_test.go:34: generated route with unencodable result: want 500 StatusError, got err=<nil> out={WinRate:0}
+--- FAIL: TestGeneratedRouteUnencodableResult (0.00s)
+FAIL
+FAIL	example.com/n02consumer/web	0.633s
+FAIL

@@ -1,0 +1,30 @@
+package httpserver
+
+import (
+	"io"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+)
+
+// 观察：handler 超过 WriteTimeout 仍继续执行（ctx 未取消），客户端只看到传输错误。
+func TestReviewN02WriteTimeoutDoesNotBoundHandler(t *testing.T) {
+	finished := make(chan error, 1)
+	engine := NewEngine()
+	engine.Post("/cmd", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		finished <- r.Context().Err()
+		JSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	server := NewServer("", engine, WithTimeouts(time.Second, time.Second, 100*time.Millisecond, time.Second))
+	go server.Serve(l)
+	defer server.Close()
+	resp, err := http.Post("http://"+l.Addr().String()+"/cmd", "application/json", nil)
+	if err == nil {
+		b, _ := io.ReadAll(resp.Body)
+		t.Logf("status=%d body=%q", resp.StatusCode, b)
+	}
+	t.Logf("client err=%v handler_ctx_err_at_finish=%v", err, <-finished)
+}

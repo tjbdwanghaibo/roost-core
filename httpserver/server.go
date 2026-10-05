@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -208,10 +210,21 @@ func RequestID(ctx context.Context) string {
 	return v
 }
 
+// JSON 先完整编码，再写状态码和响应体。编码失败（NaN/Inf、不可编码类型、
+// MarshalJSON 返回错误）时改回 500 固定错误体并记录日志：状态码一旦发出就不能
+// 再改，先写 2xx 再编码会让调用方把空体当成功（RR-20261005-NC-80）。
+// MarshalJSON panic 发生在写头之前，交给 Engine 的 recover 中间件回 500。
+// 成功时字节形状与 json.Encoder 相同（HTML 转义、结尾换行）。
 func JSON(w http.ResponseWriter, status int, value any) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		slog.Error("http server: encode response", "status", status, "err", err)
+		status = http.StatusInternalServerError
+		body = []byte(`{"error":"encode response","ok":false}`)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 func HandleJSON[TReq any, TResp any](fn func(context.Context, TReq) (TResp, error)) http.HandlerFunc {
@@ -275,21 +288,88 @@ func (e *Engine) requestContextMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// recoverMiddleware 把响应开始之前的 handler panic 转成 500 JSON。
+//
+// 响应已经开始（写过状态码/响应体、Flush 或 Hijack）后状态无法更改，再追加错误体
+// 会让客户端收到一个“完整”的 2xx 拼接体；这时记录日志后以 http.ErrAbortHandler
+// 重新 panic，由 net/http 中止连接，客户端看到传输失败。handler 自己用
+// http.ErrAbortHandler 中止时保持标准库语义，原样传播（RR-20261005-NC-81）。
 func (e *Engine) recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tracked, state := trackResponse(w)
 		defer func() {
-			if recovered := recover(); recovered != nil {
-				slog.Error("http server panic",
-					"request_id", RequestID(r.Context()),
-					"path", r.URL.Path,
-					"err", recovered,
-					"stack", string(debug.Stack()),
-				)
-				JSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "internal server error"})
+			recovered := recover()
+			if recovered == nil {
+				return
 			}
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			slog.Error("http server panic",
+				"request_id", RequestID(r.Context()),
+				"path", r.URL.Path,
+				"err", recovered,
+				"response_started", state.started,
+				"stack", string(debug.Stack()),
+			)
+			if state.started {
+				panic(http.ErrAbortHandler)
+			}
+			JSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "internal server error"})
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(tracked, r)
 	})
+}
+
+// responseState 记录响应是否已经开始，只给 recoverMiddleware 判断能否改写为 500。
+// 它保留 Flusher、io.ReaderFrom 和 Unwrap（http.ResponseController 经此取得原
+// writer）；仅当原 writer 支持时才暴露 Hijacker，类型断言结果与原 writer 一致。
+type responseState struct {
+	http.ResponseWriter
+	started bool
+}
+
+type hijackableResponseState struct{ *responseState }
+
+func trackResponse(w http.ResponseWriter) (http.ResponseWriter, *responseState) {
+	state := &responseState{ResponseWriter: w}
+	if _, ok := w.(http.Hijacker); ok {
+		return hijackableResponseState{state}, state
+	}
+	return state, state
+}
+
+func (w *responseState) WriteHeader(code int) {
+	// 1xx 信息性响应（101 除外）不提交最终状态。
+	if code < 100 || code > 199 || code == http.StatusSwitchingProtocols {
+		w.started = true
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *responseState) Write(p []byte) (int, error) {
+	w.started = true
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *responseState) ReadFrom(src io.Reader) (int64, error) {
+	w.started = true
+	return io.Copy(w.ResponseWriter, src)
+}
+
+func (w *responseState) Flush() {
+	w.started = true
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *responseState) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w hijackableResponseState) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, buffered, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	if err == nil {
+		w.started = true
+	}
+	return conn, buffered, err
 }
 
 func maxBodyBytes(ctx context.Context) int64 {

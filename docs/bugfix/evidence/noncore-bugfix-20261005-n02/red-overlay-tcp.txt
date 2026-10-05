@@ -1,0 +1,25 @@
+--- PASS: TestReviewN02BusinessAuthChain (0.00s)
+    zz_review_n02_test.go:116: third closed after 201.23925ms (handshake capacity)
+--- PASS: TestReviewN02NonCooperativeAuthenticatorCapacity (0.26s)
+    zz_review_n02_test.go:164: first=player tcp: shutdown: context deadline exceeded second=<nil> authenticator_inside_after_second=1
+    zz_review_n02_test.go:166: retry Stop reported success while the connection goroutine was still running
+--- FAIL: TestReviewN02StopRetryAfterNonCooperativeAuthenticator (0.11s)
+    zz_review_n02_test.go:194: first=player tcp: shutdown: context deadline exceeded second=<nil> inside_after_second=1
+    zz_review_n02_test.go:199: Mod retry Stop reported success while the connection goroutine was still running
+--- FAIL: TestReviewN02ModStopRetryKeepsServerOwnership (0.11s)
+--- PASS: TestReviewN02PerIPAndRequestSizeCapacity (0.00s)
+    zz_review_n02_test.go:256: observation: StopWithContext still blocked 1s after a 100ms ctx (blocking subscriber)
+--- PASS: TestReviewN02BlockingCloseSubscriberStopBudget (1.00s)
+    zz_review_n02_test.go:270: max_connections=1 err=player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:272: max_connections=1 alone rejected: player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:270: max_connections=100 err=player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:272: max_connections=100 alone rejected: player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:270: max_connections=127 err=player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:272: max_connections=127 alone rejected: player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:270: max_connections=1000 err=player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:272: max_connections=1000 alone rejected: player tcp: addr, limits and timeouts are outside safe bounds
+    zz_review_n02_test.go:284: explicit contradiction err=player tcp: addr, limits and timeouts are outside safe bounds
+--- FAIL: TestReviewN02SmallMaxConnectionsAloneIsAccepted (0.00s)
+FAIL
+FAIL	example.com/n02demo/internal/access/player/tcp	2.038s
+FAIL

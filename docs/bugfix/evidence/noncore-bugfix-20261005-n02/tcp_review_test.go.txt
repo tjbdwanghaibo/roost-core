@@ -1,0 +1,288 @@
+package tcp
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
+	accessplayer "example.com/n02demo/internal/access/player"
+	"example.com/n02demo/game/player_agent"
+)
+
+func reviewN02Server(t *testing.T, set map[string]any, auth AuthenticatorFunc, handler func(*player_agent.Context, string) (string, error)) *Server {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
+	for k, v := range set {
+		cfg.Set("player_access.tcp."+k, v)
+	}
+	config, err := configFromViper(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocols := player_agent.NewProtocolRegistry()
+	if handler == nil {
+		handler = func(*player_agent.Context, string) (string, error) { return "ok", nil }
+	}
+	if err := player_agent.RegisterProtocol[string, string](protocols, stuckRequestID, stuckResponseID,
+		func(p []byte) (string, error) { return string(p), nil },
+		func(v string) ([]byte, error) { return []byte(v), nil }, handler); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocols.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	if auth == nil {
+		auth = func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+			return gateway.Principal{PlayerID: 7, SessionID: token}, nil
+		}
+	}
+	server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func reviewN02Addr(server *Server) string {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return server.listener.Addr().String()
+}
+
+func reviewN02SendAuth(t *testing.T, addr, token string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	client := &session{connection: c, writeTimeout: time.Second}
+	if err := client.writeFrame(context.Background(), 0, 0, 1, []byte(token)); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// closedByServer reports whether the server closed the connection within d.
+func closedByServer(c net.Conn, d time.Duration) bool {
+	_ = c.SetReadDeadline(time.Now().Add(d))
+	var b [1]byte
+	_, err := c.Read(b[:])
+	return errors.Is(err, io.EOF) || (err != nil && !isTimeout(err))
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// N02-T1：认证回调不配合 context 时：握手名额被占满的连接按 handshake_timeout 被拒；
+// 连接总量满时新连接立即关闭；回调返回后名额全部归还。
+func TestReviewN02NonCooperativeAuthenticatorCapacity(t *testing.T) {
+	release := make(chan struct{})
+	var entered atomic.Int32
+	server := reviewN02Server(t, map[string]any{"max_connections": 3, "max_connections_per_ip": 3, "max_handshakes": 2, "handshake_timeout": "200ms"},
+		func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+			entered.Add(1)
+			<-release // 故意忽略 ctx
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}, nil)
+	defer func() { ctx, c := context.WithTimeout(context.Background(), 3*time.Second); defer c(); _ = server.Stop(ctx) }()
+	addr := reviewN02Addr(server)
+	a := reviewN02SendAuth(t, addr, "a")
+	b := reviewN02SendAuth(t, addr, "b")
+	for deadline := time.Now().Add(2 * time.Second); entered.Load() < 2 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if entered.Load() != 2 {
+		t.Fatalf("authenticators entered = %d", entered.Load())
+	}
+	third := reviewN02SendAuth(t, addr, "c") // 取得连接名额，等不到握手名额
+	start := time.Now()
+	if !closedByServer(third, 2*time.Second) {
+		t.Fatal("third connection not closed after handshake_timeout")
+	}
+	t.Logf("third closed after %v (handshake capacity)", time.Since(start))
+	if entered.Load() != 2 {
+		t.Fatal("third connection reached the authenticator")
+	}
+	// 第三条已释放名额，第四条占用最后一个连接名额，第五条应立即被拒。
+	fourth := reviewN02SendAuth(t, addr, "d")
+	time.Sleep(50 * time.Millisecond)
+	fifth, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fifth.Close()
+	if !closedByServer(fifth, time.Second) {
+		t.Fatal("connection over max_connections was not closed")
+	}
+	close(release)
+	for _, c := range []net.Conn{a, b, fourth} {
+		if !closedByServer(c, 2*time.Second) {
+			t.Fatal("rejected authentication left the connection open")
+		}
+	}
+	waitReleased(t, server, 0)
+}
+
+// N02-T2：认证回调不配合时 Stop 超时；回调结束后用新 context 重试，必须等真正排空才报告成功。
+func TestReviewN02StopRetryAfterNonCooperativeAuthenticator(t *testing.T) {
+	release := make(chan struct{})
+	var inside atomic.Int32
+	server := reviewN02Server(t, map[string]any{"handshake_timeout": "5s"},
+		func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+			inside.Add(1)
+			<-release
+			time.Sleep(200 * time.Millisecond) // 回调结束前还有一段不可中断的工作
+			inside.Add(-1)
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}, nil)
+	reviewN02SendAuth(t, reviewN02Addr(server), "a")
+	for deadline := time.Now().Add(2 * time.Second); inside.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	first := server.Stop(ctx)
+	cancel()
+	if !errors.Is(first, context.DeadlineExceeded) {
+		t.Fatalf("first stop = %v", first)
+	}
+	close(release)
+	second := server.Stop(context.Background())
+	t.Logf("first=%v second=%v authenticator_inside_after_second=%d", first, second, inside.Load())
+	if second == nil && inside.Load() != 0 {
+		t.Fatal("retry Stop reported success while the connection goroutine was still running")
+	}
+}
+
+// N02-T3：同一 Mod：首次 StopWithContext 超时后重试不能凭“已丢弃 server”直接返回 nil。
+func TestReviewN02ModStopRetryKeepsServerOwnership(t *testing.T) {
+	release := make(chan struct{})
+	var inside atomic.Int32
+	server := reviewN02Server(t, map[string]any{"handshake_timeout": "5s"},
+		func(context.Context, string, net.Addr) (gateway.Principal, error) {
+			inside.Add(1)
+			<-release
+			time.Sleep(200 * time.Millisecond)
+			inside.Add(-1)
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}, nil)
+	mod := &Mod{config: server.config, server: server, transportRuntime: &Runtime{}}
+	mod.transportRuntime.startLifecycle()
+	mod.transportRuntime.server.Store(server)
+	reviewN02SendAuth(t, reviewN02Addr(server), "a")
+	for deadline := time.Now().Add(2 * time.Second); inside.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	first := mod.StopWithContext(ctx)
+	cancel()
+	close(release)
+	second := mod.StopWithContext(context.Background())
+	t.Logf("first=%v second=%v inside_after_second=%d", first, second, inside.Load())
+	if !errors.Is(first, context.DeadlineExceeded) {
+		t.Fatalf("first = %v", first)
+	}
+	if second == nil && inside.Load() != 0 {
+		t.Fatal("Mod retry Stop reported success while the connection goroutine was still running")
+	}
+}
+
+// 控制：per-IP 名额满时同 IP 新连接被拒，关闭一条后名额恢复；超限请求帧关闭连接。
+func TestReviewN02PerIPAndRequestSizeCapacity(t *testing.T) {
+	server := reviewN02Server(t, map[string]any{"max_connections": 4, "max_connections_per_ip": 1, "max_handshakes": 2, "max_payload_bytes": 64}, nil, nil)
+	defer func() { ctx, c := context.WithTimeout(context.Background(), 3*time.Second); defer c(); _ = server.Stop(ctx) }()
+	first := dialAuthenticated(t, server, "s1")
+	second, err := net.Dial("tcp", reviewN02Addr(server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if !closedByServer(second, time.Second) {
+		t.Fatal("second same-IP connection was not rejected")
+	}
+	client := &session{connection: first, writeTimeout: time.Second}
+	big := make([]byte, 65)
+	header := []byte{frameMagic[0], frameMagic[1], protocolVersion, 0, 0, 0, 0x27, 0x11, 0, 0, 0, 2, 0, 0, 0, byte(len(big))}
+	_ = client
+	if _, err := first.Write(append(header, big...)); err != nil {
+		t.Fatal(err)
+	}
+	if !closedByServer(first, time.Second) {
+		t.Fatal("over-limit request frame did not close the connection")
+	}
+	waitReleased(t, server, 0)
+	third := dialAuthenticated(t, server, "s3")
+	_ = third
+	waitReleased(t, server, 1)
+}
+
+// 观察：会话关闭订阅者不配合（阻塞）时，Mod.StopWithContext 是否受 ctx 约束。
+func TestReviewN02BlockingCloseSubscriberStopBudget(t *testing.T) {
+	server := reviewN02Server(t, nil, nil, nil)
+	runtime := &Runtime{}
+	server.transport = runtime
+	mod := &Mod{config: server.config, server: server, transportRuntime: runtime}
+	runtime.startLifecycle()
+	runtime.server.Store(server)
+	block := make(chan struct{})
+	var once sync.Once
+	entered := make(chan struct{})
+	runtime.OnSessionClosed(func(SessionClosed) { once.Do(func() { close(entered) }); <-block })
+	c := dialAuthenticated(t, server, "s1")
+	waitRegistered(t, runtime, 7, 1)
+	_ = c.Close()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- mod.StopWithContext(ctx) }()
+	select {
+	case err := <-done:
+		t.Logf("StopWithContext returned %v within budget", err)
+	case <-time.After(time.Second):
+		t.Logf("observation: StopWithContext still blocked 1s after a 100ms ctx (blocking subscriber)")
+		close(block)
+		<-done
+		return
+	}
+	close(block)
+}
+
+// N02-T4：只调小 max_connections（合法的小容量部署）时，未显式设置的派生上限不能让启动失败。
+func TestReviewN02SmallMaxConnectionsAloneIsAccepted(t *testing.T) {
+	for _, n := range []int{1, 100, 127, 1000} {
+		cfg := viper.New()
+		cfg.Set("player_access.tcp.max_connections", n)
+		config, err := configFromViper(cfg)
+		t.Logf("max_connections=%d err=%v", n, err)
+		if err != nil {
+			t.Errorf("max_connections=%d alone rejected: %v", n, err)
+			continue
+		}
+		if config.MaxConnectionsPerIP > n || config.MaxHandshakes > n {
+			t.Errorf("derived limits exceed max_connections: %+v", config)
+		}
+	}
+	// 显式设置且矛盾的组合仍须拒绝，并点名字段。
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.max_connections", 100)
+	cfg.Set("player_access.tcp.max_handshakes", 200)
+	_, err := configFromViper(cfg)
+	t.Logf("explicit contradiction err=%v", err)
+	if err == nil {
+		t.Error("explicit max_handshakes > max_connections accepted")
+	}
+}
