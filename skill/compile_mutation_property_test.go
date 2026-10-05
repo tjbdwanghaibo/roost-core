@@ -70,6 +70,12 @@ func mutationSeeds(t *testing.T) []mutationSeed {
 		mutationSeed{name: "seed.modify_process", data: []byte(numericProcessSkillJSON(numericLinearProcess(), `{"type":"modify_process","process":"$process","property":"speed","operation":"mul_bp","value":8500,"over_ticks":6}`)), fixture: none},
 		// RR-20261005-NC-211 的原触发：施法先结束，area 停止时 leave 回调 finish。
 		mutationSeed{name: "seed.area_handoff", data: withEnter("none", "{}", `{"flow":"sequence","steps":[`+area+`,{"flow":"finish"}]}`), fixture: none},
+		// N09 第五批：快照点的采样上下文（NC-220 / NC-223）与被动的事件输入（NC-221）。
+		// 变异会把 current 换成 cast_start / process_start、把 `$owner` 换成 `$input.target` 等，
+		// 覆盖“采样点求不出实体”的形状。
+		mutationSeed{name: "seed.local_attribute_read", data: withEnter("none", "{}", `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2},"consume":{"mode":"each","as":"t","do":{"flow":"effect","effect":{"type":"damage","target":"$local.t","amount":{"read_attribute":{"entity":"$local.t","attribute":"ability_power","snapshot":"current"}},"damage_type":"physical"}}}},{"flow":"finish"}]}`), fixture: none},
+		mutationSeed{name: "seed.process_start_read", data: withEnter("entity", "{}", `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":{"read_attribute":{"entity":"$caster","attribute":"ability_power","snapshot":"cast_start"}},"damage_type":"physical"}},{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"process":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":{"flow":"effect","effect":{"type":"damage","target":"$event.target","amount":{"read_attribute":{"entity":"$owner","attribute":"ability_power","snapshot":"process_start"}},"damage_type":"physical"}}}},{"flow":"finish"}]}`), fixture: entity},
+		mutationSeed{name: "seed.passive_entity_input", data: []byte(strings.Replace(passiveSkillJSON(1, `[]`, `[]`), `"input_schema":{"type":"none"}`, `"input_schema":{"type":"entity"}`, 1)), fixture: fixtureCase{passive: true, expectedCast: CastFinished}},
 	)
 }
 

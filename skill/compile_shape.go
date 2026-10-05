@@ -71,8 +71,14 @@ func runShapePass(context *compileContext) {
 		if activation.cooldownScope != "caster" && activation.cooldownScope != "target" {
 			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cooldown_scope", "passive cooldown_scope must be caster or target")
 		}
-		if activation.procPolicy.maxDepth < 0 {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.proc_policy.max_depth", "proc max depth must be non-negative")
+		// 被动由 ActivatePassive 按触发事件启动（runtime_proc.go）：事件深度 >= max_depth 时
+		// 压制，施法输入只有事件的 target（passiveCastInput）。max_depth 0 或需要位置 / 方向
+		// 输入的被动每次触发都被压制，编译通过却永远不生效（RR-20261005-NC-221）。
+		if activation.procPolicy.maxDepth < 1 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.proc_policy.max_depth", "proc max depth must be at least 1; a passive with max_depth 0 never activates")
+		}
+		if kind := context.artifacts.ir.input.kind; kind != inputNone && kind != inputEntity {
+			context.addDiagnostic(DiagnosticInputUnavailable, "$.input_schema", fmt.Sprintf("a passive cast only receives the triggering event's target; input_schema %q can never be filled", kind))
 		}
 	}
 	context.artifacts.ir.walkFlows(func(flow flowIR) {
@@ -84,6 +90,18 @@ func runShapePass(context *compileContext) {
 		case *parallelFlowIR:
 			if len(typed.branches) == 0 {
 				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path, "parallel branches must not be empty")
+			}
+		case *effectFlowIR:
+			// 只有 spawn 会启动实体进程（executeOwnedSpawn → startEntityProcess）。其他效果上的
+			// process / on 会被 lower 成进程模板，但 Runtime 从不启动、回调从不执行
+			// （RR-20261005-NC-222）。
+			if _, spawn := typed.effect.(*spawnEffectIR); !spawn {
+				if typed.process != nil {
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".process", "only a spawn effect starts a process")
+				}
+				if typed.callbacks != nil {
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".on", "only a spawn effect has process callbacks")
+				}
 			}
 		case *selectFlowIR:
 			if typed.selectPlan.limit <= 0 {

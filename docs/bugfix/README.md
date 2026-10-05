@@ -27,10 +27,17 @@
 
 **10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192 已修复，NC-203 含复核残余补修，均声明场景验证、未发版。** 生产校验删去九组无读取方的要求、USER_GUIDE 写明 `env: production` 校验范围；框架配置一律经 `app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigReader` 严格读取，`ValidateServiceConfig` 按三份登记检查全部类型化的键，守卫测试扫描源码；`dataengine-env.sh` 的全局命令、`remote-fault.sh`、带故障的生成工程验收与 failover 用例运行期间持锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [证据](evidence/a4-config-20261005/README.md)
 
+**10-06 N09 skill 第五批（revn09e）：NC-220～224 已修复、声明场景验证，未发版。** 快照点按采样上下文检查；被动的 max_depth 至少 1、输入只能是 none / entity；process / on 只能写在 spawn 上；快照计划的实体取读取处 lower 出的值（修 B3 回归，既有定义 digest 不变）；spawn 进程每步重新求值的字段不能读施法输入 / memory / 局部变量（方向 A，方向 B 冻结施法输入留给维护者）。[本轮](../review/REVIEW-2026-10-06-n09-batch5.md)。
+
 **10-05 N09 skill 第四批（revn09d）：NC-210～216 已修复、声明场景验证，未发版。** memory 效果名字在类型检查统一检查、add_memory 要求 int；移交后 area 回调 finish 只结束本 area 进程；catalog key 非空唯一；chain 间隔 / 重复与 modifier 叠层只接受默认值（方向 B）；effect / filter / cost 里的 status / attribute / resource 名字查 catalog；Host 都拒绝的取值编译期拒绝；NegotiateSchema 拒绝空区间。新增编译 ⇒ 可执行的变异性质测试。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-224](RR-20261005-NC-224.md) | spawn 进程每步重新求值的字段里 `$input` / `$memory` / `$local` 编译期报 INPUT_UNAVAILABLE（方向 A） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-223](RR-20261005-NC-223.md) | 快照计划的实体取读取处 lower 出的值；恢复 v1.20.1 可编译的定义，既有定义输出不变 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-222](RR-20261005-NC-222.md) | 非 spawn 效果上的 process / on 报 SHAPE_INVALID | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-221](RR-20261005-NC-221.md) | 被动 max_depth < 1 报 SHAPE_INVALID，input_schema 不是 none / entity 报 INPUT_UNAVAILABLE | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-220](RR-20261005-NC-220.md) | 缓存型快照点的实体不能是局部变量，process_start 只能写在 spawn 进程回调里 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-216](RR-20261005-NC-216.md) | 任一边 Min 为 0 或 Min > Max 时协商失败 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-215](RR-20261005-NC-215.md) | modifier operation / 时长、status 时长 0、resource operation、负 cost 字面量、compare op 编译期拒绝 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-214](RR-20261005-NC-214.md) | `validateCatalogReferences` 与 filter 校验补 status / attribute / resource 名字 | 已修复、声明场景验证，未发版 |

@@ -19,6 +19,9 @@ type loweringContext struct {
 	// failures 收集查找失败（B3 ①）。lower 不在第一处失败就返回，以便一次报出全部未解析的
 	// 名字；有任何失败时 lowerProgram 不交出 Program。
 	failures []Diagnostic
+	// readEntities 记下每个 read_attribute 在读取处（带作用域）lower 出的实体，按源路径。
+	// lowerSnapshots 用它生成快照计划的实体，见那里的说明（RR-20261005-NC-223）。
+	readEntities map[string]programValue
 }
 
 // resolveName 是 lower 里“名字 → 槽位 / handle”查找的唯一入口（维护者决定 B3 ①）：查不到时
@@ -86,7 +89,7 @@ func lowerProgram(artifacts *compileArtifacts) (*Program, []Diagnostic) {
 		globalCooldownTicks:       artifacts.ir.globalCooldownTicks,
 		limits:                    artifacts.limits,
 	}
-	context := loweringContext{artifacts: artifacts, program: program, memory: make(map[string]MemoryIndex), input: make(map[string]uint16)}
+	context := loweringContext{artifacts: artifacts, program: program, memory: make(map[string]MemoryIndex), input: make(map[string]uint16), readEntities: make(map[string]programValue)}
 	context.lowerInput()
 	context.lowerAbilityProperties()
 	context.lowerProcessProperties()
@@ -265,7 +268,19 @@ func (c *loweringContext) lowerSnapshots() {
 	sort.Strings(paths)
 	for _, path := range paths {
 		plan := c.artifacts.snapshots.reads[path]
-		c.program.snapshots = append(c.program.snapshots, attributeSnapshotProgram{slot: plan.SnapshotSlot, entity: c.lowerValue(plan.Entity, nil), attribute: plan.Attribute, point: plan.Snapshot})
+		// 计划的实体取读取处 lower 出的值。cast_start / phase_start / process_start 在采样点
+		// 求值，snapshot pass 已拒绝其中的 `$local.` 引用（NC-220），读取处与空作用域 lower
+		// 出的值相同；current 等运行期不采样的计划只是随 Program 记录（进 gameplay digest），
+		// 它们的实体可以是读取处的局部变量。此前一律用空作用域 lower，B3 之后局部变量查不到
+		// 就报 LOWER_UNRESOLVED，“对每个选中目标读它自己的属性”编译失败（RR-20261005-NC-223）。
+		// 读取处没有 lower 过的计划（不应出现）仍按空作用域 lower，查不到照样报错。
+		entity, lowered := c.readEntities[path]
+		if !lowered {
+			restore := c.at(path)
+			entity = c.lowerValue(plan.Entity, nil)
+			restore()
+		}
+		c.program.snapshots = append(c.program.snapshots, attributeSnapshotProgram{slot: plan.SnapshotSlot, entity: entity, attribute: plan.Attribute, point: plan.Snapshot})
 	}
 	sort.SliceStable(c.program.snapshots, func(i, j int) bool { return c.program.snapshots[i].slot < c.program.snapshots[j].slot })
 }
@@ -755,7 +770,9 @@ func (c *loweringContext) lowerValue(value valueIR, scope lowerScope) programVal
 		// handle 0 and silently read the wrong (or no) attribute at runtime —
 		// the walkValues traversal must cover every value site.
 		plan := resolveName(c, c.artifacts.snapshots.reads, "attribute snapshot plan at", typed.source.Path)
-		return attributeReadProgramValue{entity: c.lowerValue(typed.entity, scope), attribute: plan.Attribute, snapshot: plan.Snapshot, snapshotSlot: plan.SnapshotSlot, typ: typed.resolvedType}
+		entity := c.lowerValue(typed.entity, scope)
+		c.readEntities[typed.source.Path] = entity
+		return attributeReadProgramValue{entity: entity, attribute: plan.Attribute, snapshot: plan.Snapshot, snapshotSlot: plan.SnapshotSlot, typ: typed.resolvedType}
 	case *stateReadValueIR:
 		return stateReadProgramValue{state: c.lowerStateReference(typed.state), binding: c.lowerStateBinding(typed.owner, typed.subject, typed.teamOf, scope), snapshot: typed.snapshot, typ: typed.resolvedType}
 	case *abilityStateReadValueIR:

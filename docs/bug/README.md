@@ -27,10 +27,17 @@
 
 **10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192（P2）按方案 1 已修复，NC-203 含 A5 残余补修，均声明场景验证、未发版。** 生产校验只要求有读取方的设置；框架配置一律严格读取（A4，接 NC-190）；隔离环境的全局运维命令运行期间持有验收锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192 修复](../bugfix/RR-20261005-NC-192.md)。
 
+**10-06 N09 skill 第五批（revn09e）：NC-220、NC-223、NC-224 三个 P2 与 NC-221、NC-222 两个 P3 已修复、声明场景验证，未发版。** 缓存型快照点（cast_start / phase_start / process_start）不按采样上下文检查；被动的 max_depth 0 与位置 / 方向输入永不触发；非 spawn 效果上的 process / on 被丢弃；B3 回归：以局部变量为实体的 read_attribute 从 v1.20.2 起编译失败；spawn 进程每步重新求值的字段读施法输入 / memory / 局部变量，下一 tick 起 ErrProgramInvariant。[本轮](../review/REVIEW-2026-10-06-n09-batch5.md)。
+
 **10-05 N09 skill 第四批（revn09d）：NC-210、NC-211、NC-214 三个 P2 与 NC-212、NC-213、NC-215、NC-216 四个 P3 已修复、声明场景验证，未发版。** memory 效果名字不查声明、落到槽位 0；移交后的 area 回调 finish 让 Advance 报 ErrProgramInvariant；status / attribute / resource 名字不查 catalog、落到 handle 0；catalog key 不查唯一；chain 间隔 / 重复与 modifier 叠层只编译不传 Host；Host 都拒绝的取值能编译；NegotiateSchema 接受空区间。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)（含编译 ⇒ 可执行的变异性质测试与方向判断）。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-224](RR-20261005-NC-224.md) | P2 skill spawn 进程每一步重新求值的字段（area 选择、follow / tracking / carry 目标、path 点、parabola 目的地等）读 `$input` / `$memory` / `$local` 能编译，下一 tick 起 ErrProgramInvariant | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-223](RR-20261005-NC-223.md) | P2 skill B3 回归（v1.20.2）：lowerSnapshots 用空作用域 lower 全部快照计划的实体，以局部变量为实体的 read_attribute 编译失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-222](RR-20261005-NC-222.md) | P3 skill 非 spawn 效果上的 process / on 能编译，Runtime 从不启动进程、回调从不执行 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-221](RR-20261005-NC-221.md) | P3 skill max_depth 0、输入不是 none / entity 的被动能编译，每次触发都被静默压制 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-220](RR-20261005-NC-220.md) | P2 skill 缓存型快照点不按采样上下文检查：phase 流程里的 process_start 有 owned spawn 时每次施法 ErrProgramInvariant；实体是局部变量时 LOWER_UNRESOLVED at `$` | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-216](RR-20261005-NC-216.md) | P3 skillsync NegotiateSchema 在一边 Min 为 0（空区间）时仍返回版本 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-215](RR-20261005-NC-215.md) | P3 skill 两个参考 Host 与 Runtime 都拒绝的取值能编译（modifier operation / 时长、status 时长 0、resource operation、负 cost、compare op） | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-214](RR-20261005-NC-214.md) | P2 skill status / attribute / resource 名字不查 catalog，lower 兜底成 handle 0：施法失败或静默作用在 handle 0 | 已修复、声明场景验证，未发版 |

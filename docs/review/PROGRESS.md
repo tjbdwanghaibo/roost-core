@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N09 skill 第五批（random / snapshot / temporal / graph / effect_result / proc / quantity 逐分支；直接分支用例；B4 文档）
+
+基线 `57c0b3b6`（含 B3 `023eb276`），分支 `revn09e`，NC 段 220～229（用 220～224）；图谱 generation 2026-09-30，`lower.go` metadata_changed 以当前源码补证。[本轮/矩阵](REVIEW-2026-10-06-n09-batch5.md) · [修复](../bugfix/README.md)。NC-220 / 223 / 224（P2）、NC-221 / 222（P3）已修复、声明场景验证，未发版；NC-223 是 B3（v1.20.2）回归。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 数据/属性：编译器剩余 pass | C1～C7：random、snapshot、temporal、graph、effect_result、proc、quantity 对照 Runtime / Host 执行点 | NC-220、221、222、223；O27～O33 |
+| 护栏 | C8：性质测试补 3 个“求值上下文”种子；C9：每个 pass 的直接分支用例 | 新种子当场变异出 NC-224；`compile_pass_branches_test.go`、`compile_capture_context_promises_test.go` |
+| 决定落实 | B4：Runtime 不进事务的约束写入 docs/skill、skill README、roost-coding A1 例外；glsvet A1 提示不命中 skill（新守卫用例） | 已落实 |
+
+5 个缺陷 23 个修前红子用例 + 性质测试 1 条 → 修后绿，3 条控制修前修后都绿；NC-223 的用例在 `023eb276^` 上通过（回归证据）；42 个既有种子 digest 修前修后逐一相同。skill 5 包 race×3、`SKILL_MUTATION_FULL=1`（52359 / 20615）、cmd/glsvet race×3、examples / sync-e2e、build / vet、根包、codegen Skill 用例通过。N09 部分完成，不计 completed/15。方向判断：编译器作用域与 Runtime 求值上下文各自维护第五次，建议做“求值上下文 → 可用引用”单一表；NC-224 方向 B（冻结施法输入）待维护者定。下一入口：`compile_ability` / `input` / `state` / `tags` / `optional` 逐分支，`compile_typecheck` 作用域模型对照 Runtime 求值上下文。
 ## 2026-10-06 N10 第二批（ai 节点、actionflow 池化与 B7 留项、hotcode 真实插件）
 
 基线 `81d7cb16`，分支 `revn10b`，NC 段 240～249（用 240～247）；图谱 generation 09-30 落后于三个包的 `556d156d` / `a9b7075b`，全部以当前源码通读补证。[本轮/矩阵](REVIEW-2026-10-06-noncore-n10b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261006-n10b/README.md)。NC-241～245（P2）、NC-240 / 246 / 247（P3）已修复、声明场景验证，未发版。

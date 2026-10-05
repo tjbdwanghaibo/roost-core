@@ -101,16 +101,15 @@ func TestMotionPipelineAggregatesStageSignalsAndEmitsTargetLostOnce(t *testing.T
 
 func TestMotionPayloadsControlTrajectoryAndSteering(t *testing.T) {
 	t.Run("path speed advances through segments", func(t *testing.T) {
-		inputSchema := `{"type":"path","maximum_points":4,"maximum_total_length":40,"minimum_segment_length":1,"simplification_policy":"reject","clamp_policy":"reject"}`
-		program := compileMotionTestProgram(t, inputSchema, `"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"path","points":"$input.path","speed":4},"completion":{"type":"end"}}`)
-		runtime, cast, process := newMotionTestRuntime(program, map[string]RuntimeValue{"$input.path": PathRuntimeValue([]Position{{}, {X: 10}, {X: 10, Y: 10}})})
+		// 实体进程的字段在移交后按进程上下文求值，读不到施法输入（RR-20261005-NC-224），
+		// 所以 `points: "$input.path"` 不再能编译；这里直接驱动路径推进的算术。
+		points := []Position{{}, {X: 10}, {X: 10, Y: 10}}
+		position, index := Position{}, 0
 		want := []Position{{X: 4}, {X: 8}, {X: 10, Y: 2}}
-		for index, expected := range want {
-			if _, err := runtime.stepProcessMotion(cast, process); err != nil {
-				t.Fatal(err)
-			}
-			if process.Motion.Position != expected {
-				t.Fatalf("step %d position = %#v, want %#v", index+1, process.Motion.Position, expected)
+		for step, expected := range want {
+			position = advanceMotionPath(position, points, 4, &index)
+			if position != expected {
+				t.Fatalf("step %d position = %#v, want %#v", step+1, position, expected)
 			}
 		}
 	})
@@ -133,9 +132,12 @@ func TestMotionPayloadsControlTrajectoryAndSteering(t *testing.T) {
 	})
 
 	t.Run("parabola uses height and reaches destination at duration", func(t *testing.T) {
-		inputSchema := `{"type":"position","maximum_range":20,"clamp_policy":"reject"}`
-		program := compileMotionTestProgram(t, inputSchema, `"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"parabola","destination":"$input.position","height":4,"duration_ticks":4},"completion":{"type":"end"}}`)
-		runtime, cast, process := newMotionTestRuntime(program, map[string]RuntimeValue{"$input.position": PositionRuntimeValue(Position{X: 8})})
+		// 目的地取施法者位置：实体进程字段读不到施法输入（RR-20261005-NC-224）。
+		program := compileMotionTestProgram(t, `{"type":"none"}`, `"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"parabola","destination":"$caster.position","height":4,"duration_ticks":4},"completion":{"type":"end"}}`)
+		runtime, cast, process := newMotionTestRuntime(program, nil)
+		cast.caster = 1
+		runtime.host.(*MemoryHost).UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{X: 8}})
+		cast.visibleRevision = runtime.host.CurrentRevision()
 		want := []Position{{X: 2, Y: 3}, {X: 4, Y: 4}, {X: 6, Y: 3}, {X: 8}}
 		for index, expected := range want {
 			if _, err := runtime.stepProcessMotion(cast, process); err != nil {
@@ -1053,11 +1055,13 @@ func TestMotionValuesUseTypeAndMemoryValidation(t *testing.T) {
 		requireDiagnostic(t, diagnostics, DiagnosticTypeMismatch)
 	})
 
-	t.Run("rejects uninitialized motion memory target", func(t *testing.T) {
+	t.Run("rejects a motion memory target", func(t *testing.T) {
+		// 实体进程每一步在脱离施法的上下文里求 motion 的值，那里没有 cast memory：
+		// 未初始化与否都不能读（RR-20261005-NC-224，此前报 MEMORY_MAYBE_UNINITIALIZED）。
 		input := motionSkillJSON(`"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"steering":{"type":"tracking","target":"$memory.target","duration_ticks":10},"trajectory":{"type":"linear","speed":10},"completion":{"type":"end"}}`)
 		input = strings.Replace(input, `"memory":{}`, `"memory":{"target":{"type":"entity","default":null}}`, 1)
 		_, diagnostics := compileToArtifacts(mustParseJSON(t, input), DefaultCompileEnvironment())
-		requireDiagnostic(t, diagnostics, DiagnosticMemoryMaybeUninitialized)
+		requireDiagnostic(t, diagnostics, DiagnosticInputUnavailable)
 	})
 }
 

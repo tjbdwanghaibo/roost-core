@@ -30,6 +30,9 @@ func runOwnedEntityPass(context *compileContext) {
 					allowAreaFinish := typed.process != nil && typed.process.kind == "area"
 					validateDetachedCallbacks(context, typed.callbacks, allowAreaFinish)
 				}
+				if typed.process != nil {
+					validateDetachedProcessFields(context, typed.process)
+				}
 				validateSpawnBindings(context, effect, template)
 			case *entityCommandEffectIR:
 				validateOwnedEntityCommand(context, effect)
@@ -183,6 +186,90 @@ func validateDetachedCallbacks(context *compileContext, callbacks *processCallba
 			}
 		})
 	}
+}
+
+// validateDetachedProcessFields 检查 spawn 进程里每一步都要重新求值的字段（RR-20261005-NC-224）。
+// 进程启动那一步用施法本身求值，之后每一步用 detachedProcessCast（process_owned.go
+// advanceOwnedProcesses）：那里没有施法的输入、memory 与局部变量（`$input.*` / `$memory.*`
+// 越界即 ErrProgramInvariant，局部变量全是 missing）。旧实现按施法作用域检查这些字段，于是
+// `area.from: "$input.target"` 这类定义能编译，Activate 正常，下一 tick 起 Advance 返回
+// ErrProgramInvariant。
+//
+// 每一步求值的是：area 选择（from / shape / filters）、motion 的 follow / tracking / carry
+// 目标、path 点、orbit 锚点、parabola 目的地，以及没有绑定到进程数值属性的数值字段。
+// numeric track 的值和绑定到属性的数值字段只在启动时（initializeProcessNumeric，用施法）求值
+// 一次，不在此限。`$caster` 系列在两个上下文里都是施法者，仍然允许。
+func validateDetachedProcessFields(context *compileContext, process *processIR) {
+	visit := func(value valueIR) {
+		reference, ok := value.(*referenceValueIR)
+		if !ok {
+			return
+		}
+		for _, prefix := range []string{"$input.", "$memory.", "$local."} {
+			if strings.HasPrefix(reference.reference, prefix) {
+				context.addDiagnostic(DiagnosticInputUnavailable, reference.source.Path, "an owned entity process re-evaluates this field on every step after the cast hands it off; cast input, memory and locals are not available there")
+				return
+			}
+		}
+	}
+	if process.area != nil {
+		process.area.walkValues(visit)
+	}
+	motion, ok := process.motion.(*canonicalMotionIR)
+	if !ok || motion == nil {
+		return
+	}
+	perStepNumeric := func(value valueIR, stage, variant, field string) {
+		if !processNumericFieldBound(context.environment, process.kind, stage, variant, field) {
+			walkValue(value, visit)
+		}
+	}
+	motion.frame.walkValues(visit)
+	if motion.steering != nil {
+		motion.steering.walkValues(visit)
+	}
+	if motion.carry != nil {
+		motion.carry.walkValues(visit)
+	}
+	switch trajectory := motion.trajectory.(type) {
+	case linearTrajectoryIR:
+		perStepNumeric(trajectory.speed, "trajectory", "linear", "speed")
+	case pathTrajectoryIR:
+		walkValue(trajectory.points, visit)
+		perStepNumeric(trajectory.speed, "trajectory", "path", "speed")
+	case orbitTrajectoryIR:
+		walkValue(trajectory.anchor, visit)
+		perStepNumeric(trajectory.radius, "trajectory", "orbit", "radius")
+		perStepNumeric(trajectory.angularSpeed, "trajectory", "orbit", "angular_speed")
+	case parabolaTrajectoryIR:
+		walkValue(trajectory.destination, visit)
+		perStepNumeric(trajectory.height, "trajectory", "parabola", "height")
+	}
+	for _, offset := range motion.offsets {
+		switch typed := offset.(type) {
+		case zigzagOffsetIR:
+			perStepNumeric(typed.amplitude, "offset", "zigzag", "amplitude")
+		case circularOffsetIR:
+			perStepNumeric(typed.radius, "offset", "circular", "radius")
+			perStepNumeric(typed.angularSpeed, "offset", "circular", "angular_speed")
+		}
+	}
+}
+
+// processNumericFieldBound 报告环境里是否有适用于该进程种类的数值属性绑定到这个 motion 槽位；
+// 绑定的槽位由进程数值状态在启动时取值（resolveProcessNumeric 先查绑定）。
+func processNumericFieldBound(environment CompileEnvironment, kind, stage, variant, field string) bool {
+	for _, policy := range environment.ProcessProperties.Properties {
+		if !containsString(policy.ProcessKinds, kind) {
+			continue
+		}
+		for _, binding := range policy.SlotBindings {
+			if binding.Stage == stage && binding.Variant == variant && binding.Field == field {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func detachedReferenceAllowed(reference string) bool {
