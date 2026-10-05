@@ -561,10 +561,10 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 | 6b | 1300 上 10 个机器人赠礼进行中 kill -9 P9 → 立刻起 P10 | kill 时 7 个 saga 在途（`status=2` Waiting，debit / refund 阶段）；P10 上线后（`player_tcp_connections 0`，发送方全部离线）Q1 按 `FromSID` 转交、P10 执行，7 个全部 compensated（`attempt=0`），没有 `manual_required` | kill 到 P10 就绪 15.87s；最后一个在途 saga 在 P10 就绪后 0.55s 终结 |
 
 - 结论：§8.2 六步全部符合预期，等待时长与参数一致。kill -9 / SIGSTOP 之后“立刻”起新进程实测都是 15.0s：获取按 `启动 + k × renew_interval` 重试，键在最后一次续期后 `ttl` 过期，而最后一次续期在停之前 0～3s，过期时刻落在 `(启动+12s, 启动+15s]`，于是总在 `启动+15s` 那一拍拿到；§8.2 第 4 步写的“约 18s”是上界 `ttl + renew_interval`，新进程晚于停机启动时等待相应缩短。跨服赠礼按 `FromSID` 转交、离线发送方在其绑定 sid 上执行都在真实进程上成立。
-- 与方案预期的偏差（都不是代码缺陷，已写进文档）：
+- 与方案预期的偏差（都不是代码缺陷，已写进文档；更正：第 3 条是代码缺陷，已修，见该条）：
   1. §8.2 第 5 步“SIGTERM 后立即拉起新进程不等待”只在旧进程**已经停完**时成立；旧进程还在停机时新进程等到释放后的下一拍（≤ `renew_interval`，实测 3.0s）——重试不监听删除。USER_GUIDE 与 T-212 已改为精确表述。
   2. §8.2 第 2 步期望“日志里有 Nest 被围栏”：`NestMgr.Fence` 不打日志，可见的只有 `runtime infrastructure failure`（`OnFail` 回调在它之前同步执行完）；连接关闭可见（`disconnected the players this process served`，前提是失锁时还有服务中的连接——1b 那次机器人在暂停期间已超时断开，没有这条）。
-  3. P1 暂停超过 `etcd.lease_ttl`（10s）后恢复：`etcd Discovery: lease lost`，停机时 `mod etcd stop: etcd Discovery: revoke: etcdserver: requested lease not found` 记为 Mod 停机失败并并入退出错误。不影响 Release（只有超时算停机不完整）；同样的情况发生在一次正常停机里会让退出码变成非零。未修，记为观察。
+  3. P1 暂停超过 `etcd.lease_ttl`（10s）后恢复：`etcd Discovery: lease lost`，停机时 `mod etcd stop: etcd Discovery: revoke: etcdserver: requested lease not found` 记为 Mod 停机失败并并入退出错误。不影响 Release（只有超时算停机不完整）；同样的情况发生在一次正常停机里会让退出码变成非零。未修，记为观察。**已修（`b67d5945`）**：这其实是代码缺陷——租约已不存在时键已随租约删除，注销已经达成。`etcd/driver/discovery.go` 的 Revoke 路径把 `rpctypes.ErrLeaseNotFound`（及未转换 / 被包裹的 gRPC NotFound 同描述）视为注销已达成、记 Info，其他错误照旧报告；`Deregister` 在注册循环退出后再取消一次 keepalive（停机期间才完成的重注册不再留下续期中的 keepalive）。kit `EtcdMod` 停机的错误只来自 `Assembly.Close`，无需另改。“不影响 Release”已用 `TestSingletonIsReleasedWhenAModStopReturnsAnOrdinaryError` 钉住；真机回归 `TestRealEtcdCloseAfterLeaseVanishedIsClean`（`-tags integration`，修前红文本与演练日志相同）。
 - 观察（未改）：
   - 两个 sid 同时跑时，demo 场景的成本 p95 落进 16.384s 的桶，超过 loadtest 缺省 `-max-p95 16`，两边都 `rc=1`（机器人全部成功）：赠礼步骤落到非发送方进程要弹一两次才转交到位。单 sid 时整轮 7.4s。
   - 开窗是先写者赢：P9 先以 `[1300]` 打开 `race-1791168300`，Q1 随后日志 `activity: window open … expected_game_sids [1302, 1300]` 是它自己算的，协调器记录仍是 `[1300]`。日志易误读，已写进 GAME_DEMO_TEMPLATE §9.15.3。
