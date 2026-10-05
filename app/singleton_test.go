@@ -623,12 +623,21 @@ func TestSingletonGivesUpAtStartupWaitWithoutTakingTheKey(t *testing.T) {
 func TestSingletonTakesOverAfterTheHolderExpires(t *testing.T) {
 	h := newSingletonHarness(t, nil, nil)
 	h.store.set(testSingletonKey, testOtherHolder, testSingletonTTL) // 对方已经卡住、不再续期
+	// 拿锁之后的启动可能很慢（DataEngine 重放）：Service.Init 挡住，期间续期节拍照常登记。
+	initGate := make(chan struct{})
+	var openGate sync.Once
+	h.svc.onInit = func(*Registry) error { <-initGate; return nil }
 	started := h.clock.Now()
 	result := h.start()
-	for served := false; !served; {
+	t.Cleanup(func() { openGate.Do(func() { close(initGate) }) })
+	// 只推进启动等待的定时器，键成了自己的就停：拿锁之后登记的是续期节拍，若一直推进到 Serve 开始，
+	// 启动稍慢时时钟会被续期节拍推过 startup_wait，误报“没接手”。刚推进完 Acquire 的定时器、CAS 还没
+	// 落地时可能多推进一个续期节拍，无害。
+	for {
+		if value := h.store.value(testSingletonKey); len(value) > 0 && string(value) != testOtherHolder {
+			break
+		}
 		select {
-		case <-h.svc.served:
-			served = true
 		case <-h.clock.timerReady(1):
 			if h.clock.Now().Sub(started) > testSingletonWait {
 				t.Fatal("never took over the expired key")
@@ -637,9 +646,11 @@ func TestSingletonTakesOverAfterTheHolderExpires(t *testing.T) {
 		case err := <-result:
 			t.Fatalf("run returned before taking over: %v", err)
 		case <-time.After(testWaitLimit):
-			t.Fatal("run neither waited nor served")
+			t.Fatal("run neither waited nor took over the key")
 		}
 	}
+	openGate.Do(func() { close(initGate) })
+	h.awaitServed(t, result)
 	var acquiredAt time.Time
 	for _, call := range h.store.calls() {
 		if call.expected == nil {
