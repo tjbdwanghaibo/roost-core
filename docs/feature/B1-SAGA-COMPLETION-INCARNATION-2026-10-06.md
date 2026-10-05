@@ -102,7 +102,7 @@ Mongo 步骤（`MongoCommandInbox`）的跨尝试幂等不在本方案内（DECI
 
 ## 8. 实施状态
 
-**已实施，未发版**（提交见 DECISIONS-PENDING B1 行）。改动面与第 6 节一致；`command_consumer.go`、kit/saga 未改，原生收件箱只把代际解析换成共用函数。
+**已实施，未发版**（`3fabe34d`）。改动面与第 6 节一致；`command_consumer.go`、kit/saga 未改，原生收件箱只把代际解析换成共用函数。
 
 **先红后绿**（基线 `3a71321c`，全文 [red-before.txt](../bugfix/evidence/B1/red-before.txt)）：E1 拒绝被新一生接收、saga Failed；E2 一个迟到成功告警 3 次；
 E3 Resume 后到达的旧成功告警 1 次且 saga 停在第 0 步；E4 人工 Compensate 复用 `gift-4:2:0:1`，投递报 `idempotency identity conflict`。修后全绿。
