@@ -1,0 +1,3 @@
+    zz_probe_revn03_test.go:325: call refused by full queue: err=remote.1: server error elapsed=293.375µs
+--- PASS: TestRevn03ProbeLightweightRPCFullQueue (0.62s)
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	1.239s

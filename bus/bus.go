@@ -788,7 +788,7 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 	if pool == nil {
 		task.OnRelease()
 		slog.Warn("bus: drop message because dispatcher is not running")
-		b.deadLetter(task.natsMsg, "dispatcher not running")
+		b.refuseTask(task, "dispatcher not running", errDispatcherNotRunning)
 		return
 	}
 	if err := pool.Dispatch(key, task); err != nil {
@@ -803,7 +803,32 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 			"msg":    task.natsMsg.MsgName,
 			"reason": err.Error(),
 		}, 1)
-		b.deadLetter(task.natsMsg, "dispatch failed: "+err.Error())
+		b.refuseTask(task, "dispatch failed: "+err.Error(), err)
+	}
+}
+
+// refuseTask settles a task the dispatcher did not admit. An RPC request is
+// answered with a failure envelope at once: it was definitely not executed, so
+// the caller must not wait out its timeout and treat the outcome as unknown.
+// It also stays out of the dead-letter queue — that queue holds async messages
+// a requeue can deliver again, and an RPC entry has neither its reply subject
+// nor its session, so a requeue could only turn it into a module message no
+// handler matches (RR-20261005-NC-91). Messages still go to the DLQ.
+func (b *Bus) refuseTask(task *incomingTask, reason string, cause error) {
+	if !task.isRpc {
+		b.deadLetter(task.natsMsg, reason)
+		return
+	}
+	if task.replySubject == "" || b.rpc == nil {
+		return
+	}
+	data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s: %w", errRPCNotAdmitted, task.natsMsg.MsgName, cause))
+	if err != nil {
+		slog.Error("bus: marshal rpc refusal failed", "method", task.natsMsg.MsgName, "err", err)
+		return
+	}
+	if err := b.rpc.Reply(task.replySubject, data); err != nil {
+		slog.Error("bus: reply rpc refusal failed", "method", task.natsMsg.MsgName, "err", err)
 	}
 }
 
@@ -1066,3 +1091,10 @@ var _ IBus = (*Bus)(nil)
 
 // ErrNoHandler is returned when no handler is registered for a message.
 var ErrNoHandler = errors.New("bus: no handler registered")
+
+var (
+	// errRPCNotAdmitted causes the refusal an RPC caller receives when the
+	// dispatcher did not admit its request (RR-20261005-NC-91).
+	errRPCNotAdmitted       = errors.New("bus: rpc request not admitted")
+	errDispatcherNotRunning = errors.New("bus: dispatcher not running")
+)
