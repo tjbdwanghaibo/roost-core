@@ -16,7 +16,7 @@
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-208](RR-20261005-NC-208.md) | P3 toxic 用例 POST /reset 清掉同一 toxiproxy 上别人的毒 | 已修复（kit/dataengine 部分留核心线），未发版 |
+| [RR-20261005-NC-208](RR-20261005-NC-208.md) | P3 toxic 用例 POST /reset 清掉同一 toxiproxy 上别人的毒 | 已修复（kit/dataengine 部分已补修），未发版 |
 | [RR-20261005-NC-207](RR-20261005-NC-207.md) | P3 故障矩阵把 no tests to run 的格记为 PASS | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-206](RR-20261005-NC-206.md) | P3 生成的 .gitignore 不忽略 data/wal | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-205](RR-20261005-NC-205.md) | P3 origin 不可达时 pretag 跳过远端同名 tag 检查 | 已修复、声明场景验证，未发版 |

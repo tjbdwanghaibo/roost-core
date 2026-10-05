@@ -1,0 +1,9 @@
+before: bystander toxics=["someone-elses-latency"] proxies=["bystander-nc208b","nats-1","nats-2","nats-3"]
+ok  	github.com/tjbdwanghaibo/roost-core/kit/dataengine	1.355s
+after TestToxicNATSLatencyKeepsTheCommitOnTheDurablePath: bystander toxics=["someone-elses-latency"] proxies=["bystander-nc208b","nats-1","nats-2","nats-3"]
+ok  	github.com/tjbdwanghaibo/roost-core/kit/dataengine	1.138s
+after TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce: bystander toxics=["someone-elses-latency"] proxies=["bystander-nc208b","nats-1","nats-2","nats-3"]
+ok  	github.com/tjbdwanghaibo/roost-core/kit/dataengine	13.191s
+after TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce: bystander toxics=["someone-elses-latency"] proxies=["bystander-nc208b","nats-1","nats-2","nats-3"]
+jq: error (at <stdin>:1): Cannot index string with string "name"
+cleanup: bystander toxics= proxies=[]

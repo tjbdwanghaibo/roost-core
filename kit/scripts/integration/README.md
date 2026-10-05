@@ -75,8 +75,10 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
   `heal` / `remote-fault.sh` 照常执行（RR-20261005-NC-203）。
 - 自写的故障用例不要在环境的共享代理（`redis`、`nats-1..3`）上加毒，也不要 `POST /reset`：
   在 `ROOST_DATAENGINE_IT_TOXIPROXY_URL` 上自建唯一命名、`listen: 127.0.0.1:0` 的代理，
-  只删自己的毒、清理时删掉代理（`redis/driver`、`kit/nats`、`versionstore`、`mongo/driver`
-  的 toxic 用例都是这样；RR-20261005-NC-208）。
+  只删自己的毒、清理时删掉代理（`redis/driver`、`kit/nats`、`kit/dataengine`、`versionstore`、
+  `mongo/driver`、`remoteentity` 的 toxic 用例都是这样；RR-20261005-NC-208）。`kit/dataengine`
+  的三条 `TestToxicNATS*` 曾经仍会 `/reset`、须独占环境，已修复，现在可与其他会话并行。
+  仍会 `POST /reset` 的只有 `up` / `heal`（`toxiproxy_heal`），它们本来就是清空整套环境的命令。
 - 端口被根目录之外的进程占着时，`up` 拒绝启动，不会复用别人的服务。
 
 脚本自检：`bash kit/scripts/integration/dataengine_env_test.sh`。它只 source 库、只写

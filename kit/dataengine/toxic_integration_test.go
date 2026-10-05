@@ -10,6 +10,7 @@ import (
 	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,33 +20,64 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// toxiproxyClient is the slice of the toxiproxy HTTP API these tests need.
-// No client library: three requests are not worth a dependency in go.mod.
-type toxiproxyClient struct{ base string }
+// natsToxiproxy drives the proxies these tests created on the environment's
+// toxiproxy, one per isolated NATS node. No client library: a handful of
+// requests are not worth a dependency in go.mod. RR-20261005-NC-208: the tests
+// used the environment's shared nats-1..3 proxies and POST /reset, which
+// removes every toxic on every proxy of that toxiproxy — other sessions'
+// faults included. Each test now owns uniquely named proxies on ephemeral
+// ports in front of the direct node URLs, adds and removes toxics only on them
+// and deletes them at cleanup; the fixture ignores discovered servers, so it
+// only ever dials these proxies.
+type natsToxiproxy struct {
+	base    string
+	proxies []string
+}
 
-// toxiproxyEnv returns the toxiproxy API and the proxied NATS URL the
-// environment script exported, or skips — unless ROOST_IT_TOXIPROXY=1 (the
-// nightly fault matrix), where a missing proxy is a failure, not a skip.
-func toxiproxyEnv(t *testing.T) (toxiproxyClient, string) {
+// toxiproxyEnv creates this test's own NATS proxies on the toxiproxy the
+// environment script exported and returns them with the nats:// URL list that
+// goes through them, or skips — unless ROOST_IT_TOXIPROXY=1 (the nightly fault
+// matrix), where a missing toxiproxy is a failure, not a skip.
+func toxiproxyEnv(t *testing.T) (natsToxiproxy, string) {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
 	}
 	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
-	natsURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_PROXIED_URL")
-	if api == "" || natsURL == "" {
+	directURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if api == "" || directURL == "" {
 		if os.Getenv("ROOST_IT_TOXIPROXY") == "1" {
 			t.Fatal("ROOST_IT_TOXIPROXY=1 but the environment exported no toxiproxy; install toxiproxy-server and rerun dataengine-env.sh up")
 		}
 		t.Skip("toxiproxy-server not installed; network fault tests need it (brew install toxiproxy)")
 	}
-	client := toxiproxyClient{base: api}
-	client.reset(t)
-	t.Cleanup(func() { client.reset(t) })
-	return client, natsURL
+	proxy := natsToxiproxy{base: api}
+	var proxied []string
+	for index, raw := range strings.Split(directURL, ",") {
+		upstream := strings.TrimPrefix(strings.TrimSpace(raw), "nats://")
+		if upstream == "" {
+			continue
+		}
+		name := fmt.Sprintf("kit-dataengine-toxic-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), index)
+		var created struct {
+			Listen string `json:"listen"`
+		}
+		body := proxy.call(t, http.MethodPost, "/proxies", map[string]any{"name": name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+		if err := json.Unmarshal(body, &created); err != nil || created.Listen == "" {
+			t.Fatalf("toxiproxy create %s: %v %s", name, err, body)
+		}
+		// Deleting the proxy removes its toxics with it.
+		t.Cleanup(func() { proxy.call(t, http.MethodDelete, "/proxies/"+name, nil) })
+		proxy.proxies = append(proxy.proxies, name)
+		proxied = append(proxied, "nats://"+created.Listen)
+	}
+	if len(proxied) == 0 {
+		t.Fatalf("no NATS URL in %q", directURL)
+	}
+	return proxy, strings.Join(proxied, ",")
 }
 
-func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
+func (c natsToxiproxy) call(t *testing.T, method, path string, body any) []byte {
 	t.Helper()
 	var payload bytes.Buffer
 	if body != nil {
@@ -53,7 +85,7 @@ func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
 			t.Fatal(err)
 		}
 	}
-	req, err := http.NewRequest(method, c.base+path, &payload)
+	req, err := http.NewRequest(method, strings.TrimRight(c.base, "/")+path, &payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,18 +95,35 @@ func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
 		t.Fatalf("toxiproxy %s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		t.Fatalf("toxiproxy %s %s: status %d", method, path, resp.StatusCode)
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	if resp.StatusCode >= 300 && !(method == http.MethodDelete && resp.StatusCode == http.StatusNotFound) {
+		t.Fatalf("toxiproxy %s %s: status %d %s", method, path, resp.StatusCode, out.String())
+	}
+	return out.Bytes()
+}
+
+// heal removes every toxic on this test's own proxies and nothing else.
+func (c natsToxiproxy) heal(t *testing.T) {
+	t.Helper()
+	for _, name := range c.proxies {
+		var toxics []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(c.call(t, http.MethodGet, "/proxies/"+name+"/toxics", nil), &toxics); err != nil {
+			t.Fatalf("toxiproxy list toxics of %s: %v", name, err)
+		}
+		for _, toxic := range toxics {
+			c.call(t, http.MethodDelete, "/proxies/"+name+"/toxics/"+toxic.Name, nil)
+		}
 	}
 }
 
-func (c toxiproxyClient) reset(t *testing.T) { c.do(t, http.MethodPost, "/reset", nil) }
-
-// addToxic applies one toxic to every NATS proxy.
-func (c toxiproxyClient) addToxic(t *testing.T, name, kind string, attributes map[string]any) {
+// addToxic applies one toxic to every NATS proxy this test owns.
+func (c natsToxiproxy) addToxic(t *testing.T, name, kind string, attributes map[string]any) {
 	t.Helper()
-	for index := 1; index <= 3; index++ {
-		c.do(t, http.MethodPost, fmt.Sprintf("/proxies/nats-%d/toxics", index), map[string]any{
+	for _, proxy := range c.proxies {
+		c.call(t, http.MethodPost, "/proxies/"+proxy+"/toxics", map[string]any{
 			"name": name, "type": kind, "stream": "downstream", "toxicity": 1.0, "attributes": attributes,
 		})
 	}
@@ -128,7 +177,7 @@ func TestToxicNATSLatencyKeepsTheCommitOnTheDurablePath(t *testing.T) {
 	}
 	assertDocumentVersion(t, fx, "toxic_players", 701, 1)
 
-	proxy.reset(t)
+	proxy.heal(t)
 	waitFor(t, 30*time.Second, "effect delivery after latency cleared", func() bool {
 		return collectionCount(fx, engine.OutboxCollection) == 0 && handled.Load() == 1
 	})
@@ -165,7 +214,7 @@ func TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce(t *testing.T) {
 		return collectionCount(fx, engine.OutboxCollection) == 1
 	})
 
-	proxy.reset(t)
+	proxy.heal(t)
 	waitFor(t, 30*time.Second, "outbox replay after the network healed", func() bool {
 		return collectionCount(fx, engine.OutboxCollection) == 0 && handled.Load() == 1
 	})
@@ -220,7 +269,7 @@ func TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce(t *testing.T) {
 		t.Fatalf("effect handled %d times before the network healed", got)
 	}
 
-	proxy.reset(t)
+	proxy.heal(t)
 	waitFor(t, 30*time.Second, "outbox replay after the network healed", func() bool {
 		return collectionCount(fx, engine.OutboxCollection) == 0 && handled.Load() >= 1
 	})
