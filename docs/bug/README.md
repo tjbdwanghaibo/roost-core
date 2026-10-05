@@ -12,6 +12,16 @@
 
 **v1.20.1 已发布（2026-10-05，tag → `be7407ab`）**：U-0279 / U-0280（含复审补修）/ U-0281、NC-100 / NC-101（含复审补修）、RR-20261005-01，以及截至 `be7407ab` 的非核心 review 修复（NC-50～52、60～65、70～75、80～83、90～93、100～102、110～117、120～123、140～147）随本版发布；`be7407ab` 之后提交的（如 N05 的 NC-130 / NC-131 / RR-20260913-01 残余）未发版。下方“未发版”指发布前状态。
 
+**10-05 同形停机核实（stopshape）：NC-170～174 五个 P3 已修复、声明场景验证（NC-172 含真实 NATS、NC-173 含真实 etcd），未发版；NC-83 记录的第 4 处（bus JetStream RPC）已由 NC-90 修掉。** 停机超时后把“已停止”记成清空的字段 / 取走的列表、退订不等在途回调、等待不看 ctx。统一按三步停机修复。[证据与方向判断](../bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-174](RR-20261005-NC-174.md) | P3 remoteentity Assembly.Stop 停复制只退订，不等已进入 ApplyReplica 的 handler | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-173](RR-20261005-NC-173.md) | P3 etcd Deregister 等注册循环不看 ctx；Assembly.Close 注销失败仍关 client，重试必然失败 | 已修复、声明场景验证（含真实 etcd），未发版 |
+| [RR-20261005-NC-172](RR-20261005-NC-172.md) | P3 JetStream 同步总线 Stop 不等在途 handler，NATS 连接在 handler 底下关闭 | 已修复、声明场景验证（含真实 NATS），未发版 |
+| [RR-20261005-NC-171](RR-20261005-NC-171.md) | P3 Nest Mod 卸载后重载停止超时即丢句柄，重试关闭 entitysync 时 worker 可能仍在运行 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-170](RR-20261005-NC-170.md) | P3 manager Engine 停止超时后重试报告成功，同一次调用在过期 ctx 下继续停依赖 | 已修复、声明场景验证，未发版 |
+
 **10-05 N12 metrics / log / failurelog / robot（revn12）：NC-160、NC-161 P2 与 NC-162～165 P3 已修复、声明场景验证（含真实 Redis / 真实网关），未发版。** failurelog 把脚本“结果未知”当“没执行”再走非原子降级（真实 Redis 上一条死信写两份）；loadtest 阈值把没有样本判通过（真实网关 `-duration 1s` 零完成仍退出码 0）；robot 重连后 push capture 不再注册（真实网关重连后 0 帧）；websocket 拨号不看 ctx / DialTimeout；statslog 实体计数 gauge 清空不归零；log.Close 后默认 logger 写已关闭文件。[运行记录](../review/REVIEW-2026-10-05-n12-revn12.md) · [红证据](../review/evidence/noncore-review-20261005-n12/) · [修复](../bugfix/README.md)。审查 `b248a199`，修复 `f750ce43`～`e798a759`。
 
 | 编号 | 问题 | 状态 |

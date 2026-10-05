@@ -1,5 +1,15 @@
 # Bugfix 记录
 
+**10-05 同形停机核实（stopshape）：NC-170～174 已修复、声明场景验证（含真实 NATS / etcd），未发版。** 统一套用 roost-coding 三步停机：超时返回 ctx 错误并保留对象，重试在 ctx 内再等，排空后才释放。bus JetStream RPC（NC-83 第 4 处）已由 NC-90 修掉。[证据与方向判断](evidence/noncore-bugfix-20261005-stopshape/README.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-174](RR-20261005-NC-174.md) | mirror Replicator 每次订阅一个准入门 + `StopWithContext`；Assembly.Stop 等复制排空 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-173](RR-20261005-NC-173.md) | Discovery 执行权按 ctx 等待、`waitLoopDone(ctx)`；Assembly.Close 注销成功才关 client | 已修复、声明场景验证（含真实 etcd），未发版 |
+| [RR-20261005-NC-172](RR-20261005-NC-172.md) | JetStream 同步总线投递准入 / 在途计数 + `StopWithContext`，停止后拒绝 Subscribe | 已修复、声明场景验证（含真实 NATS），未发版 |
+| [RR-20261005-NC-171](RR-20261005-NC-171.md) | 重载停止句柄保留到 worker 退出，entitysync 排空后才关闭 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-170](RR-20261005-NC-170.md) | 停完一个才移除，ctx 错误立即返回并保留其余；停止执行权按 ctx 等待 | 已修复、声明场景验证，未发版 |
+
 **10-05 N12 metrics / log / failurelog / robot（revn12）：NC-160～165 已修复、声明场景验证（含真实 Redis / 真实网关），未发版。** failurelog 的 Eval 错误原样返回、降级只给没有 Lua 的适配器；loadtest 阈值没有样本判违反（`no_samples`），metrics 新增 `HistogramCount`；robot capture 标记绑定会话；websocket 拨号走 `DialContext`；statslog 缺席的 kind / category 写 0；`log.Close` 重建默认 logger 写控制台 / stderr。[运行记录](../review/REVIEW-2026-10-05-n12-revn12.md) · [绿证据](evidence/noncore-bugfix-20261005-n12/)。
 
 | 编号 | 修复 | 状态 |

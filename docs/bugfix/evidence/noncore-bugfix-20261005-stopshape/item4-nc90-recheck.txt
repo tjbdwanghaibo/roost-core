@@ -1,0 +1,8 @@
+=== RUN   TestJetStreamStopWaitsForInFlightHandlerAndDeliversItsResponse
+--- PASS: TestJetStreamStopWaitsForInFlightHandlerAndDeliversItsResponse (0.05s)
+=== RUN   TestJetStreamStopHandsInterruptedRequestBackToBroker
+--- PASS: TestJetStreamStopHandsInterruptedRequestBackToBroker (0.00s)
+=== RUN   TestJetStreamDeliveryAfterStopDoesNotRunBusiness
+--- PASS: TestJetStreamDeliveryAfterStopDoesNotRunBusiness (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/bus	0.524s

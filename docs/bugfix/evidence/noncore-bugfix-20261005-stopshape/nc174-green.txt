@@ -1,0 +1,4 @@
+=== RUN   TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler
+--- PASS: TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler (0.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/remoteentity	0.552s

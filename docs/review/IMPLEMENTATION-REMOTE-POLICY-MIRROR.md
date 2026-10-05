@@ -83,7 +83,7 @@ Owner 可以是已有 Managed 路径，也可以是普通本地权威 Entity。�
 
 对跨服务消息校验来源权限、key 内外身份、schema、payload 大小和租户/profile 可见性。Envelope 一致性校验与 checksum 不是身份认证。完整业务 key 是最终判断依据，传输 hash 不能作为唯一授权或身份依据。
 
-停机顺序：停止新读/订阅准入，取消续租与回填，解绑消息入口，等待已准入 apply/fetch 退出，再释放缓存与依赖。将自身 context 传入 loader；Replicator.Stop 仅解绑订阅，不能假设它已等待所有 handler。启动失败要逆序回收已启动资源，重试不得留下重复订阅。
+停机顺序：停止新读/订阅准入，取消续租与回填，解绑消息入口，等待已准入 apply/fetch 退出，再释放缓存与依赖。将自身 context 传入 loader；Replicator.Stop 仅解绑订阅，不能假设它已等待所有 handler。（2026-10-05 补充：`Replicator.Stop` 仍只关准入并解绑；新增 `Replicator.StopWithContext` 在 ctx 内等已准入的 handler，remoteentity `Assembly.Stop` 已改用它，见 [NC-174](../bugfix/RR-20261005-NC-174.md)。）启动失败要逆序回收已启动资源，重试不得留下重复订阅。
 
 ### 性能评价与分阶段验收
 

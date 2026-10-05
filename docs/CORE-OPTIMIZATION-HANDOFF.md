@@ -197,6 +197,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 同形停机核实（stopshape）：[NC-170](bug/RR-20261005-NC-170.md) / [NC-171](bug/RR-20261005-NC-171.md) / [NC-172](bug/RR-20261005-NC-172.md) / [NC-173](bug/RR-20261005-NC-173.md) / [NC-174](bug/RR-20261005-NC-174.md) 五个 P3 **已修复、声明场景验证（NC-172 真实 NATS、NC-173 真实 etcd），未发版**；[证据与方向判断](bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)。NC-83 记录的 6 处同形停机：5 处确认并按三步停机修复，bus JetStream RPC 已由 NC-90 修掉。行为变化：这些停止入口超预算时如实返回 ctx 错误并保留对象（App 判定停机不完整、不释放其依赖），不再报告成功；新增 syncbus JetStream / mirror Replicator 的 `StopWithContext`。方向：第二类（退订不等在途回调）已有三份相同的准入门实现，建议抽共用小类型或把排空下沉到 ISyncBus 退订契约；T-251。
+
 10-05 N14 revn14：[NC-190](bug/RR-20261005-NC-190.md) / [NC-191](bug/RR-20261005-NC-191.md) / [NC-192](bug/RR-20261005-NC-192.md) 三个 P2 与 [NC-193](bug/RR-20261005-NC-193.md) / [NC-194](bug/RR-20261005-NC-194.md) 两个 P3 **已登记，未修复**；NC-192（生产校验要求的开关无读取方）待维护者选方案。[本轮](review/REVIEW-2026-10-05-n14.md)（含配置 schema 方向判断）。
 
 10-05 N12 revn12：[NC-160](bug/RR-20261005-NC-160.md) / [NC-161](bug/RR-20261005-NC-161.md)（P2）与 [NC-162～165](review/REVIEW-2026-10-05-n12-revn12.md)（P3）**已修复、声明场景验证，未发版**（审查 `b248a199`，修复 `f750ce43` / `5fea59ce` / `efeede0f` / `92547035` / `2a9e0c2c` / `e798a759`）；[修复](bugfix/README.md)。

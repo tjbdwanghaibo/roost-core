@@ -1,0 +1,6 @@
+=== RUN   TestJetStreamSyncBusStopWaitsForAnInFlightHandler
+--- PASS: TestJetStreamSyncBusStopWaitsForAnInFlightHandler (0.00s)
+=== RUN   TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable
+--- PASS: TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver	0.482s

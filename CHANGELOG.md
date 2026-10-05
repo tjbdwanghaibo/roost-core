@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **停机入口超预算时如实返回 ctx 错误并保留对象，重试继续等到真实排空**（RR-20261005-NC-170～174，行为收紧）：`manager.Engine` / `kit/manager` 不再在第一次超时后清空列表（重试曾报成功），也不在过期 ctx 下继续停依赖；kit Nest Mod 的卸载后重载停止句柄保留到 worker 退出、entitysync 排空后才关闭；JetStream 同步总线新增 `StopWithContext`（`Stop` 现在等在途 handler 返回），停止后的投递 NAK 交还 broker、停止后拒绝 `Subscribe`；etcd `Discovery.Deregister` 在 ctx 内等注册循环，`Assembly.Close` 只在注销成功后关闭 client；`mirror.Replicator` 新增 `StopWithContext`，remoteentity `Assembly.Stop` 等已进入 ApplyReplica 的 handler。[证据](docs/bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)
 - **failurelog 在脚本结果未知时不再走非原子降级**（RR-20261005-NC-160，行为收紧）：`AppendRaw` / `DeleteRaw` / `Purge` 的 Lua 脚本报错（连接断开、读超时、ctx 到期）时原样返回错误，不再补做 RPUSH / LREM / LLEN+DEL——那会让同一条死信写两份、多删一条同值记录、把清空之后新到的死信删掉。降级只留给 Eval 返回 `(nil, nil)` 的无 Lua 适配器。bus 侧表现为 `bus: write dead letter failed`。[记录](docs/bugfix/RR-20261005-NC-160.md)
 - **robot loadtest 阈值没有样本时判失败**（RR-20261005-NC-161，行为收紧）：没有完成的场景时 `error_rate`、没有成功场景或耗时直方图序列缺失时分位数阈值判违反，`ThresholdResult.reason` 写 `no_samples`；此前按 0 通过（`-duration` 短于场景耗时的运行退出码 0）。新增 `metrics.HistogramCount` 与可选 `loadtest.Config.SampleCount`。[记录](docs/bugfix/RR-20261005-NC-161.md)
 - **robot 重连后再次 `EnsurePushCapture` 在新会话上注册**（RR-20261005-NC-162）：之前标记残留让安装变成空操作，重连后的推送被丢弃。[记录](docs/bugfix/RR-20261005-NC-162.md)

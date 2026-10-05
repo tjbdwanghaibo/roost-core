@@ -1,0 +1,29 @@
+# 代码提交 c99a687d（在 61414371 上跑，rebase 只带入上游文档提交 efe219c1，代码相同）
+== gofmt -l (changed dirs)
+== go vet changed pkgs
+vet-ok
+vet-integration-ok
+== go test -race -count=3
+ok  	github.com/tjbdwanghaibo/roost-core/manager	1.755s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/manager	2.092s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nest	2.549s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/syncbus	3.856s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus	4.824s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver	3.017s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror	4.324s
+ok  	github.com/tjbdwanghaibo/roost-core/etcd	5.297s
+ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	8.271s
+?   	github.com/tjbdwanghaibo/roost-core/kit/etcd	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/remoteentity	46.763s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/remoteentity	5.886s
+ok  	github.com/tjbdwanghaibo/roost-core/cache	8.195s
+== importers go test -count=1
+ok  	github.com/tjbdwanghaibo/roost-core/kit	1.812s
+ok  	github.com/tjbdwanghaibo/roost-core/dataengine/engine	5.170s
+ok  	github.com/tjbdwanghaibo/roost-core/app	1.696s
+== glsvet
+glsvet-ok
+== root go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	0.835s
+== go build ./... && go vet ./...
+build-vet-ok

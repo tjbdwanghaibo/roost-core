@@ -1,0 +1,8 @@
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_deregister_budget_promises_test.go:55: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=500ms client_open=false
+    real_etcd_deregister_budget_promises_test.go:64: retry Close after the thaw: err=etcd Discovery: revoke: rpc error: code = Canceled desc = grpc: the client connection is closing
+    real_etcd_deregister_budget_promises_test.go:66: the timed-out Close released the client, or the retry could not revoke the lease
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (3.32s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	3.862s
+FAIL

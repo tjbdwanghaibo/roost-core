@@ -1,0 +1,9 @@
+--- FAIL: TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain (0.00s)
+    stop_retry_promises_test.go:84: dependency stopped 1 time(s) while its dependent was still draining (stopped under usage=true)
+    stop_retry_promises_test.go:91: retry Stop reported success while manager "dependent" was still running (calls=1)
+    stop_retry_promises_test.go:100: dependent still running after a successful Stop
+--- FAIL: TestEngineConcurrentStopWaitsWithinItsOwnContext (0.00s)
+    stop_retry_promises_test.go:131: concurrent Stop reported success while the first Stop was still draining
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/manager	0.650s
+FAIL
