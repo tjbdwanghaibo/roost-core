@@ -81,3 +81,17 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | B2 | 按推荐：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约 | **已实施（`f376bba0`、`7d49e54d`）**：L1 写入一律先经 L2 版本 CAS / 带版本删除，L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness`（缺省 = `snapshot_cache_ttl`）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（O5）；O4 容量、L2 落后于权威（写 L2 失败）、生成配置模板留作后续。[方案](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) |
 | C4 | 活动组（参与同一全服活动的 game sid 集合）应由一个配置文件定义；每组上限暂定 64，启动 / 加载时校验 | **已实施（`277e1252`，分支 `c4c6`）**：`configs/activity_groups.yaml`（`groups: [{id, game_sids}]`）由生成器为托管 activity 协调器的工程创建，协调器与 game-demo 的 game 经 `activity.groups_file` 读同一文件、用同一个 `kit/service/global/activity.LoadGroupsFile` 校验（每组 ≤ `MaxExpectedGames` = 64、sid 唯一且只属于一个组、正的 int32、本服 sid 必须在组里）；协调器 `sweep_groups` 为空时扫文件里的全部组；game 配置 `activity.game_sids` 删除，已生成工程不迁移。kit activity 除导出上限外还改了 Mod 读取组文件（为了“协调器读同一份定义”，Service 逻辑不变）。新生成的 game-demo 需要 core ≥ v1.20.2。[方案](../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md) |
 | B7 | actionflow 回调重入：按推荐（b）——回调里对 runner 的变更进延后命令队列，回调返回后按序执行，判定集中一处 | **已实施（`a9b7075b`）**：判定集中在 `ActionRunner.submit`，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），拿到 ID 必有 OnEnded；`MaxDeferredCommands` / `MaxDeferredSteps` 有界防失控；O-A2 / O-A3 消失并钉住，O-A1 定义为“EndAll 先结束全部、回调变更随后执行”；`MissionRunner` 未改。[方案](../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md) |
+
+## 维护者决定（2026-10-06，第四轮）
+
+| # | 决定 | 实施状态 |
+| --- | --- | --- |
+| 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | 待实施 |
+| B4 | skill Runtime 状态**不进**事务：保持现状，文档写明约束（handler 失败回滚后 Runtime 状态不回退，业务按此设计） | 待实施（文档） |
+| B6 | CLI 信号统一接管：CLI 入口接管信号 → ctx 取消 → 正常回滚后再重抛 | 待实施 |
+| B9 | activity 窗口条目统一读入口 + 持有方修复入口；account 建角改为“名额状态 × 名字状态 → 动作”判定表 | 待实施 |
+| B10 | 维护者询问含义，已解释，待决定 | 待决定 |
+| C2 | “需要可见”：按协调者理解——保持新快照即刻可见的语义并写进契约；同时让热更失败 / 回滚可见（日志 + 指标，N07 C-O5） | 待实施 |
+| C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | 待实施（文档） |
+| C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | 待实施 |
+| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 排队 |
