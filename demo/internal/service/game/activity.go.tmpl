@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"strconv"
 	"time"
 
@@ -73,10 +72,13 @@ type ActivityRunner struct {
 	prefix     string
 	worldID    int64
 	gameSID    int32
-	// candidates is the set of game servers this deployment may run. The
-	// coordinator's expected set is drawn from the ones whose process holds
-	// the App singleton lock, so an activity does not wait on a server nobody
-	// started.
+	// groupID is the activity group configs/activity_groups.yaml puts this
+	// server in: the coordinator's Key.GroupID for every window it opens,
+	// contributes to and settles.
+	groupID string
+	// candidates is that group's members. The coordinator's expected set is
+	// drawn from the ones whose process holds the App singleton lock, so an
+	// activity does not wait on a server nobody started.
 	candidates []int32
 	// now is the clock every window id is derived from. It is a field so a
 	// test can put a contribution and a lookup on opposite sides of a window
@@ -105,8 +107,9 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if serverType == "" {
 		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
 	}
-	// 候选集在任何远端调用之前检查：一份注定让每个窗口都开不出来的配置在这里按键名拒绝（RR-20261005-01）。
-	candidates, err := candidateSIDs(config.GetIntSlice("activity.game_sids"), gameSID)
+	// 活动组在任何远端调用之前确定：组文件不合格、本服不在任何组里，都在这里点名拒绝（C4，取代
+	// RR-20261005-01 对 activity.game_sids 的检查）。
+	group, err := activityGroup(config.GetString("activity.groups_file"), gameSID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,8 +142,8 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 		mailer: mailer, nest: nestClient,
 		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
 		worldID: worldID, gameSID: gameSID,
-		candidates: candidates,
-		now:        time.Now,
+		groupID: group.ID, candidates: group.GameSIDs,
+		now: time.Now,
 	}
 	if runner.prefix == "" {
 		return nil, nil, errors.New("activity: activity.key_prefix is empty; the game reads the coordinator's keyspace to keep its own board beside it")
@@ -159,44 +162,36 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	}, nil
 }
 
-// candidateSIDs is the configured deployment, always including this server.
-// This server's own sid and non-positive entries are skipped, as they always
-// were.
+// activityGroup is the group this server takes part in, read from the
+// activity groups file the coordinator reads too (decision C4).
 //
-// A list no window could ever open with is refused here, by its config key,
-// instead of starting and then failing every pass with a warning
-// (RR-20261005-01):
-//   - a repeated sid: when it is live, Live answers it twice, and the
-//     coordinator refuses an expected set with a repeated server (it refuses
-//     rather than de-duplicates, so a configuration mistake shows);
-//   - a sid that does not fit an int32: it would silently become another
-//     server's sid;
-//   - more candidates than one Live query takes (app.SingletonLiveMaxSIDs):
-//     every query would fail.
-func candidateSIDs(configured []int, own int32) ([]int32, error) {
-	out := []int32{own}
-	seen := map[int32]bool{own: true}
-	for _, sid := range configured {
-		if sid <= 0 {
-			continue
-		}
-		if sid > math.MaxInt32 {
-			return nil, fmt.Errorf("activity: activity.game_sids entry %d is not a server id (it does not fit an int32)", sid)
-		}
-		if int32(sid) == own {
-			continue
-		}
-		if seen[int32(sid)] {
-			return nil, fmt.Errorf("activity: activity.game_sids lists game %d twice; the coordinator refuses an expected set with a repeated server, so no window would ever open", sid)
-		}
-		seen[int32(sid)] = true
-		out = append(out, int32(sid))
+// svcactivity.LoadGroupsFile refuses a file no window could open with — a
+// group larger than one window's expected set (svcactivity.MaxExpectedGames),
+// a repeated sid, a sid in two groups, a sid that is not a positive int32 —
+// and a server whose sid is in no group is refused here: it would open
+// windows for a group the file does not have. Either way the process stops at
+// start, naming the file, instead of starting and then failing every pass with
+// a warning (RR-20261005-01).
+func activityGroup(path string, gameSID int32) (svcactivity.Group, error) {
+	if path == "" {
+		return svcactivity.Group{}, errors.New("activity: activity.groups_file is empty; it names the activity groups file (configs/activity_groups.yaml) that says which game servers take part together")
 	}
-	if len(out) > app.SingletonLiveMaxSIDs {
-		return nil, fmt.Errorf("activity: activity.game_sids with this server makes %d candidates, more than one Live query takes (%d), so no window would ever open",
-			len(out), app.SingletonLiveMaxSIDs)
+	groups, err := svcactivity.LoadGroupsFile(path)
+	if err != nil {
+		return svcactivity.Group{}, fmt.Errorf("activity: activity.groups_file: %w", err)
 	}
-	return out, nil
+	group, ok := groups.Of(gameSID)
+	if !ok {
+		return svcactivity.Group{}, fmt.Errorf("activity: game %d is in no group of %s (groups %v); add it to the group it takes part in", gameSID, path, groups.IDs())
+	}
+	// One Live query answers the whole group. A group is bounded by the
+	// coordinator's window limit, which is far below the query's; this only
+	// fails if one of the two limits is changed without the other.
+	if len(group.GameSIDs) > app.SingletonLiveMaxSIDs {
+		return svcactivity.Group{}, fmt.Errorf("activity: group %q of %s has %d game servers, more than one Live query takes (%d)",
+			group.ID, path, len(group.GameSIDs), app.SingletonLiveMaxSIDs)
+	}
+	return group, nil
 }
 
 // bindGroup establishes this server's route into the activity group. It is
@@ -214,7 +209,7 @@ func (runner *ActivityRunner) bindGroup(ctx context.Context) error {
 	// the service's own sentinel value; the code is what both forms carry.
 	// (errors.Is against the sentinel also holds — IntError.Is compares
 	// codes; the comparison here says the same thing.)
-	if _, err := runner.routing.Bind(ctx, runner.gameSID, gameactivity.GroupID, 1); err != nil && svcglobal.Code(err) != svcglobal.CodeConflict {
+	if _, err := runner.routing.Bind(ctx, runner.gameSID, runner.groupID, 1); err != nil && svcglobal.Code(err) != svcglobal.CodeConflict {
 		return fmt.Errorf("activity: bind game %d: %w", runner.gameSID, err)
 	}
 	return nil
@@ -270,16 +265,9 @@ func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
 	}
 	now := time.Now()
 	activityID := gameactivity.ID(now.Unix())
-	key := gameactivity.Key(activityID)
-	expected, err := runner.expectedGameSIDs(ctx)
+	expected, err := runner.openWindow(ctx, activityID)
 	if err != nil {
-		slog.Warn("activity: live games unavailable; window not opened", "activity_id", activityID, "err", err)
-		return
-	}
-	// Already open is the normal answer on every pass but the first, and it
-	// is recognised by code for the same reason Bind's conflict is.
-	if _, err := runner.coordinator.OpenActivity(ctx, key, expected); err != nil && svcactivity.Code(err) != svcactivity.CodeExists {
-		slog.Warn("activity: window not opened", "activity_id", activityID, "err", err)
+		slog.Warn("activity: window not opened", "activity_id", activityID, "group", runner.groupID, "err", err)
 		return
 	}
 	closeAt, ok := gameactivity.CloseAt(activityID)
@@ -296,6 +284,26 @@ func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
 		slog.Info("activity: window open", "activity_id", activityID,
 			"closes_at", closeAt.Unix(), "expected_game_sids", expected)
 	}
+}
+
+// openWindow asks the coordinator to open activityID in this server's group,
+// expecting the group's live members, and returns that expected set. Already
+// open is the normal answer on every pass but the first, and it is
+// recognised by code for the same reason Bind's conflict is.
+func (runner *ActivityRunner) openWindow(ctx context.Context, activityID string) ([]int32, error) {
+	expected, err := runner.expectedGameSIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("live games unavailable: %w", err)
+	}
+	if _, err := runner.coordinator.OpenActivity(ctx, runner.key(activityID), expected); err != nil && svcactivity.Code(err) != svcactivity.CodeExists {
+		return nil, err
+	}
+	return expected, nil
+}
+
+// key is activityID's aggregation key in this server's group.
+func (runner *ActivityRunner) key(activityID string) svcactivity.Key {
+	return gameactivity.Key(runner.groupID, activityID)
 }
 
 // expectedGameSIDs is the candidates whose process holds the App singleton
@@ -324,7 +332,7 @@ func (runner *ActivityRunner) expectedGameSIDs(ctx context.Context) ([]int32, er
 // NotifyPhaseDue tells the coordinator this server reached an activity's close
 // phase. It is called by the effect consumer, never from inside a lock.
 func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID string) error {
-	activityState, err := runner.coordinator.NotifyPhase(ctx, gameactivity.Key(activityID), runner.gameSID)
+	activityState, err := runner.coordinator.NotifyPhase(ctx, runner.key(activityID), runner.gameSID)
 	switch svcactivity.Code(err) {
 	case svcactivity.CodeNotifyLate, svcactivity.CodeStatus:
 		// The phase is already closed — an operator closed the window early
@@ -360,7 +368,7 @@ func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID str
 func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error) {
 	activityID := gameactivity.ID(runner.clock().Unix())
 	participant, err := runner.coordinator.ApplyProgress(ctx,
-		gameactivity.Key(activityID), strconv.FormatInt(playerID, 10),
+		runner.key(activityID), strconv.FormatInt(playerID, 10),
 		gameactivity.ProgressRequestID(runID),
 		svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
 	if err != nil {
@@ -372,7 +380,7 @@ func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, ru
 	// the coordinator has no enumeration and settlement needs one. The score
 	// written is the coordinator's, not a local count, so a replay that
 	// changed nothing there changes nothing here.
-	if _, err := runner.redis.ZAdd(ctx, gameactivity.BoardKey(runner.prefix, activityID),
+	if _, err := runner.redis.ZAdd(ctx, gameactivity.BoardKey(runner.prefix, runner.groupID, activityID),
 		fredis.Z{Score: float64(participant.Score), Member: strconv.FormatInt(playerID, 10)}); err != nil {
 		slog.Warn("activity: contributor not recorded on the board",
 			"activity_id", activityID, "player_id", playerID, "err", err)
@@ -392,7 +400,7 @@ func (runner *ActivityRunner) clock() time.Time {
 // Standing is one player's place in the current window, for the endpoint.
 func (runner *ActivityRunner) Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error) {
 	activityID := gameactivity.ID(runner.clock().Unix())
-	key := gameactivity.Key(activityID)
+	key := runner.key(activityID)
 	state, _, err := runner.coordinator.LookupActivity(ctx, key)
 	if err != nil {
 		return activityID, svcactivity.Activity{}, svcactivity.Participant{}, err
@@ -432,7 +440,7 @@ func (runner *ActivityRunner) Settled(ctx context.Context, activityID string) (b
 // Acking first would be the other order, and the crash that follows it costs
 // every player their reward with no record that anything was owed.
 func (runner *ActivityRunner) applyDispatches(ctx context.Context) {
-	owed, err := runner.coordinator.OwedDispatches(ctx, gameactivity.GroupID, runner.gameSID, activityDrainBatch)
+	owed, err := runner.coordinator.OwedDispatches(ctx, runner.groupID, runner.gameSID, activityDrainBatch)
 	if err != nil {
 		slog.Warn("activity: could not read what this server is owed", "err", err)
 		return
@@ -457,7 +465,7 @@ func (runner *ActivityRunner) applyDispatches(ctx context.Context) {
 
 func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dispatch svcactivity.Dispatch) error {
 	board, err := runner.redis.ZRevRangeWithScores(ctx,
-		gameactivity.BoardKey(runner.prefix, activityID), 0, int64(gameactivity.PaidRanks-1))
+		gameactivity.BoardKey(runner.prefix, runner.groupID, activityID), 0, int64(gameactivity.PaidRanks-1))
 	if err != nil {
 		return fmt.Errorf("read board: %w", err)
 	}
@@ -489,7 +497,7 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 	if err != nil {
 		return fmt.Errorf("record settlement: %w", err)
 	}
-	if _, err := runner.coordinator.AckDispatch(ctx, gameactivity.Key(activityID), runner.gameSID, dispatch.Token); err != nil {
+	if _, err := runner.coordinator.AckDispatch(ctx, runner.key(activityID), runner.gameSID, dispatch.Token); err != nil {
 		return fmt.Errorf("ack dispatch: %w", err)
 	}
 	slog.Info("activity: settled", "activity_id", activityID, "paid", len(board),

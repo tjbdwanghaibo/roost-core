@@ -16,12 +16,13 @@ import (
 	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
 )
 
-// GroupID is the coordination group this deployment's game servers belong to.
-// A group's pending window is one versioned entry, so every activity in a
-// group commits through the same compare-and-set — which is why the service
+// The coordination group a game server belongs to is not a constant here: it
+// is the group configs/activity_groups.yaml puts this server's sid in
+// (svcactivity.LoadGroupsFile, decision C4), the same file the coordinator
+// reads. A group's pending window is one versioned entry, so every activity in
+// a group commits through the same compare-and-set — which is why the service
 // routes a group's traffic to one instance, and why a deployment that wants
 // independent throughput uses more than one group.
-const GroupID = "{{PROJECT}}"
 
 const (
 	// WindowSeconds is how long one window lasts. Short in this demo so a
@@ -73,10 +74,11 @@ func CloseAt(activityID string) (time.Time, bool) {
 	return time.Unix(start+WindowSeconds, 0), true
 }
 
-// Key is the aggregation key for one activity's close phase. Only one phase is
-// used here; a game with a separate settlement round opens settle the same way.
-func Key(activityID string) svcactivity.Key {
-	return svcactivity.Key{GroupID: GroupID, ActivityID: activityID, Phase: svcactivity.PhaseClose}
+// Key is the aggregation key for one activity's close phase in groupID. Only
+// one phase is used here; a game with a separate settlement round opens settle
+// the same way.
+func Key(groupID, activityID string) svcactivity.Key {
+	return svcactivity.Key{GroupID: groupID, ActivityID: activityID, Phase: svcactivity.PhaseClose}
 }
 
 // ProgressRequestID is the idempotency key for one contribution.
@@ -119,8 +121,12 @@ func RewardFor(rank int) (Reward, bool) {
 // enumeration over an aggregation is unbounded. So the game keeps the index it
 // needs, and it keeps it as a board, because that is also the shape
 // settlement reads: the top PaidRanks, not everyone.
-func BoardKey(prefix, activityID string) string {
-	return prefix + ":board:" + activityID
+//
+// Every game server of a group writes the same board, and every group derives
+// the same window ids from the clock, so the group is part of the key: two
+// groups under one prefix must not settle each other's contributors.
+func BoardKey(prefix, groupID, activityID string) string {
+	return prefix + ":board:" + groupID + ":" + activityID
 }
 
 // MailRequestID makes one settlement mail per (activity, player), so a

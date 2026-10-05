@@ -332,15 +332,15 @@ func blockKeyPrefix(serviceConfig, service string) string {
 }
 
 // demoActivityKeys tells the game process where the activity coordinator's
-// keyspace is and which game servers this deployment may run.
+// keyspace is and which activity groups file says what group it is in.
 //
 // The prefix is read from the coordinator's own config rather than written
 // twice: the game keeps its contributor board BESIDE the coordinator's keys,
 // and two files that can disagree about where that is means a settlement
-// reading an empty board. The sid list is the candidate set the activity asks
-// the App singleton lock's Live query about — a deployment with three game
-// processes lists all three here, and the ones whose process holds the lock
-// are the ones an activity waits for.
+// reading an empty board. The group comes from the activity groups file the
+// coordinator reads too (decision C4); it replaced a per-service
+// activity.game_sids list, so the game servers of one activity are written
+// down once.
 func demoActivityKeys(root, gameService string) error {
 	activityPath := filepath.Join(root, "configs", "service", "config.activity.yaml")
 	activityRaw, err := os.ReadFile(activityPath)
@@ -348,15 +348,14 @@ func demoActivityKeys(root, gameService string) error {
 		return err
 	}
 	// The same text for the production configs: neither value is a secret,
-	// and 1000 is the sid the production example starts with. A deployment
-	// lists the sid of every game process it runs (the --sid each one is
-	// started with).
+	// and the image and the shell release carry the groups file at the same
+	// relative path.
 	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
-		"\n  # Every game server this deployment may run. The App singleton lock's\n" +
-		"  # Live query narrows it to the ones whose process is up, and those are\n" +
-		"  # what an activity waits for. List each sid once: the game refuses to\n" +
-		"  # start on a repeated sid or on more candidates than one Live query takes.\n" +
-		"  game_sids:\n    - 1000\n"
+		"\n  # The activity groups file: this server takes part in the group that\n" +
+		"  # lists its sid, and the members whose process is up (the App singleton\n" +
+		"  # lock's Live query) are what an activity waits for. The game refuses to\n" +
+		"  # start when its sid is in no group or the file breaks a rule in it.\n" +
+		"  groups_file: " + activityGroupsFile + "\n"
 	return appendDemoGameConfig(root, gameService, "activity", block, block)
 }
 
@@ -651,7 +650,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
 		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
 		{write: "internal/service/platform/purchase_delivery_test.go", why: "the first durable grant survives retries, lost replies and catalog changes"},
-		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and the candidate sid set is the deployment's"},
+		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and its activity group comes from the groups file the coordinator reads too"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/account/collaborators_test.go", why: "the id counter is the deployment's (under account.key_prefix) and an upgraded demo keeps counting from the old fixed key"},

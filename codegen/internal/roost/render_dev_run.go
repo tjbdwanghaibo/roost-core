@@ -255,6 +255,19 @@ derive_config() {
   echo "wrote $TARGET (sid $SID, ops $OPS_PORT, client $CLIENT_PORT, its own WAL directory)"
 }
 
+# A game that runs activities reads an activity groups file (activity.groups_file)
+# and stops at start when its sid is in no group there. Say so before starting,
+# with the file to edit, rather than leaving it to the log.
+check_activity_group() {
+  groups=$(awk '/^activity:/{a=1;next} a&&/^  groups_file:/{print $2;exit} a&&/^[^ ]/{a=0}' "$TARGET" | tr -d '"')
+  [ -n "$groups" ] || return 0
+  [ -f "$groups" ] || { echo "activity groups file $groups not found; run from the project root" >&2; exit 1; }
+  if ! sed 's/#.*//' "$groups" | grep -Eq "(^|[^0-9])$SID([^0-9]|\$)"; then
+    echo "sid $SID is in no group of $groups; add it to the game_sids of the group it takes part in" >&2
+    exit 1
+  fi
+}
+
 ready_url() {
   addr=$(awk '/^ops:/{o=1;next} o&&/^  addr:/{print $2;exit} o&&/^[^ ]/{o=0}' "$TARGET" | tr -d '"')
   [ -n "$addr" ] || addr="127.0.0.1:$OPS_PORT"
@@ -263,6 +276,7 @@ ready_url() {
 
 cmd_start() {
   derive_config
+  check_activity_group
   mkdir -p "$DEV_DIR"
   if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "${SERVICE}2 already running (pid $(cat "$PID_FILE"))"; return 0

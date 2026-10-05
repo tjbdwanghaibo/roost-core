@@ -203,7 +203,12 @@ func Pending() platform.PendingOrders { return nil }
 			// twice. Only the caller's transport knows that number, so the
 			// service refuses to pick one — and a starter config that omits
 			// it is a process that cannot start.
-			return "activity:\n  key_prefix: roost:" + project + ":activity\n  reservation_ttl: 30m\n  grace_window: 60s\n  dispatch_attempts: 5\n  dispatch_backoff: 5s\n  sweep_groups: []\n"
+			//
+			// groups_file is the activity groups file (C4): the groups the
+			// game servers open windows in, validated here at start and swept
+			// by this process, so their ids are not written a second time
+			// under sweep_groups.
+			return "activity:\n  key_prefix: roost:" + project + ":activity\n  reservation_ttl: 30m\n  grace_window: 60s\n  dispatch_attempts: 5\n  dispatch_backoff: 5s\n  groups_file: " + activityGroupsFile + "\n"
 		},
 	},
 	"rank": {

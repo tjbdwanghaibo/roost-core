@@ -2,7 +2,7 @@ package roost
 
 // RR-20260928-06：game-demo 的生产示例配置与 k8s Secret 示例必须能让 game 通过 Init 的配置校验。
 // demo 的 game 在 Init 里要求 platform.payment_secret 非空、App 单实例锁打开（activity 从它的 Live
-// 查询取 expected 集合）、activity.key_prefix 非空（按这个顺序失败），activity.game_sids 给出候选 sid，
+// 查询取 expected 集合）、activity.key_prefix 非空（按这个顺序失败），activity.groups_file 指向活动组文件（C4，取代 activity.game_sids），
 // platform.key_prefix 按 kit/mods.KeyPrefix 的规则非空且无空白。旧行为：demo 只把追加段写进开发配置，
 // 按生产示例起 game（本机 compose 实测）依次报 "platform.payment_secret is empty" →
 // "game_route.key_prefix is empty" → "activity.key_prefix is empty"。
@@ -99,8 +99,11 @@ func checkDemoGameInitConfig(body string) error {
 	if cfg.GetString("activity.key_prefix") == "" {
 		return fmt.Errorf("activity: activity.key_prefix is empty")
 	}
-	if len(cfg.GetIntSlice("activity.game_sids")) == 0 {
-		return fmt.Errorf("activity: activity.game_sids lists no game server")
+	if cfg.GetString("activity.groups_file") == "" {
+		return fmt.Errorf("activity: activity.groups_file is empty")
+	}
+	if cfg.IsSet("activity.game_sids") {
+		return fmt.Errorf("activity: activity.game_sids is the removed per-service list; the group comes from activity.groups_file (C4)")
 	}
 	// internal/service/<game>/purchase_drain.go: mods.KeyPrefix(cfg, "platform")
 	if prefix := strings.TrimSpace(cfg.GetString("platform.key_prefix")); prefix == "" || strings.ContainsAny(prefix, " \t\n") {

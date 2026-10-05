@@ -226,6 +226,8 @@ exit 1
 	value = strings.ReplaceAll(value, "{{STATS_LOG_LINK}}", renderStatsLogLink(m))
 	value = strings.ReplaceAll(value, "{{UNIT_RECORD}}", renderShellUnitRecord())
 	guard, copyData := renderShellConfigData(m)
+	groupsGuard, copyGroups := renderShellActivityGroups(m)
+	guard, copyData = guard+groupsGuard, copyData+copyGroups
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_GUARD}}", guard)
 	value = strings.ReplaceAll(value, "{{CONFIG_DATA_INSTALL}}", copyData)
 	var stopTimeouts strings.Builder

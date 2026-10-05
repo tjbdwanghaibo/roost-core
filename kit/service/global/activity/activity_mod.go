@@ -55,7 +55,16 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  grace_window: 60s            # optional
 //	  dispatch_attempts: 5         # optional
 //	  dispatch_backoff: 5s         # optional
+//	  groups_file: configs/activity_groups.yaml  # optional; see below
 //	  sweep_groups: [alliance-a]   # groups whose grace windows THIS process back-stops
+//
+// groups_file is the activity groups file the game servers read too
+// (LoadGroupsFile, decision C4). When it is set it is validated here, so a
+// coordinator never starts beside a group definition no window could open
+// with, and an empty sweep_groups means "every group in the file" — the group
+// ids are then written once, in that file, instead of again in this config.
+// An explicit sweep_groups still decides, for a deployment that splits the
+// back-stop across replicas.
 //
 // Redis Cluster requires a common non-empty hash tag in key_prefix, for
 // example {roost:activity}; dispatch records and their owed index share a CAS.
@@ -104,6 +113,15 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	for _, group := range cfg.GetStringSlice("activity.sweep_groups") {
 		if group = strings.TrimSpace(group); group != "" {
 			m.sweepGroups = append(m.sweepGroups, group)
+		}
+	}
+	if path := strings.TrimSpace(cfg.GetString("activity.groups_file")); path != "" {
+		groups, err := LoadGroupsFile(path)
+		if err != nil {
+			return fmt.Errorf("activity mod: activity.groups_file: %w", err)
+		}
+		if len(m.sweepGroups) == 0 {
+			m.sweepGroups = groups.IDs()
 		}
 	}
 	return nil

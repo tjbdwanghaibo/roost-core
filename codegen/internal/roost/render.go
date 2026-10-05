@@ -142,6 +142,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		add("configs/service/config."+name+".yaml", renderServiceConfig(m, name, false), false)
 		add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
 	}
+	if hostsActivityCoordinator(m) {
+		// C4：活动组文件只创建一次，之后归项目（列出真实部署的 game sid）。
+		add(activityGroupsFile, renderActivityGroups(m), false)
+	}
 	if hasFeature(m, "config") {
 		if err := addGo("configs/schema/doc.go", "package schema\n", false); err != nil {
 			return nil, err
@@ -1207,6 +1211,10 @@ func renderDockerfile(m Manifest) string {
 	configData := ""
 	if contains(allMods, "configdata") {
 		configData = "COPY --from=build /src/" + defaultConfigDataDir + " /app/" + defaultConfigDataDir + "\n"
+	}
+	// C4：活动组文件与 configs/data 一样是随代码版本发布的内容，协调器与 game 都按相对路径读它。
+	if hostsActivityCoordinator(m) {
+		configData += "COPY --from=build /src/" + activityGroupsFile + " /app/" + activityGroupsFile + "\n"
 	}
 	mkdirs := ""
 	if len(buildDirs) > 0 {

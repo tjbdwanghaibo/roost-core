@@ -929,11 +929,24 @@ demo 代码里没有任何“持有锁吗”的检查——这正是维护者要
 #### 9.15.3 activity 用 `Live`
 
 activity 不再持有 global 租约。开窗时的预期集合是
-`app.SingletonLiveness.Live(本进程 server_type, activity.game_sids ∪ 本 sid)`：持有锁的 sid 就算活
+`app.SingletonLiveness.Live(本进程 server_type, 本服所在活动组的成员)`：持有锁的 sid 就算活
 （从拿锁到全部 Mod 停完，崩溃的进程最多再算 ttl 秒）；查询为空时只等自己，查询报错这一拍不开窗。
 `routing.Bind` 的组绑定保留。前提：同一部署的 game 进程共用一个 `redis.*` 与 `singleton.key_prefix`，
 且 game 没有关掉 singleton（关掉后 `Live` 恒空，activity 退化为只等自己）。开窗是先写者赢
 （`OpenActivity` 已存在即返回），后到的进程日志里的 `expected_game_sids` 是它自己算的，以协调器记录为准。
+
+活动组（维护者决定 C4，[方案](C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)）来自 `configs/activity_groups.yaml`，game 与协调器都经
+`activity.groups_file` 读它：
+
+- game 按本服 sid 找所属组；组 id 是 Key 的 GroupID（开窗、贡献、phase、派发、ack 都用它），也进了贡献榜的 Redis 键
+  （`<activity.key_prefix>:board:<组>:<窗口>`，同一前缀下两个组不会结算对方的贡献者）；组成员是 `Live` 的候选。
+- 生成的文件只有一个以工程名为 id 的组（与之前的 `GroupID` 常量同名），成员是生成的各部署方式给 game 的 sid：
+  本机 `run.sh` / k8s / shell 的 1000、`second-game.sh` 的 1001、生产 compose 的 1000+N。部署更多 game 时把它们的
+  `--sid` 加进组里；要独立的活动组就加一个组，每组至多 64 个（协调器单窗口上限）。
+- `second-game.sh` 启动前检查 `SECOND_SID` 在组文件里，不在就提示要改的文件并退出；game 自己在启动时同样拒绝
+  sid 不在任何组里的配置，错误点名文件。
+- 协调器的配置写 `groups_file` 而不再写 `sweep_groups: []`：之前生成的 demo 没有任何进程兜底宽限窗口
+  （T-46 的情形），现在协调器扫文件里的全部组。
 
 #### 9.15.4 赠礼按 `FromSID` 路由
 
