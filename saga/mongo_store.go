@@ -377,27 +377,29 @@ func (s *MongoStore) operations() fmongo.ICollection {
 }
 
 type recordDoc struct {
-	ID                string    `bson:"_id"`
-	Type              string    `bson:"type"`
-	DefinitionVersion uint32    `bson:"definition_version"`
-	BusinessKey       string    `bson:"business_key"`
-	Status            Status    `bson:"status"`
-	Phase             Phase     `bson:"phase"`
-	Step              int       `bson:"step"`
-	CompletedSteps    int       `bson:"completed_steps"`
-	Attempt           uint32    `bson:"attempt"`
-	Version           uint64    `bson:"version"`
-	Data              []byte    `bson:"data,omitempty"`
-	LastError         string    `bson:"last_error,omitempty"`
-	OperationKey      string    `bson:"operation_key,omitempty"`
-	CommandID         string    `bson:"command_id,omitempty"`
-	NextRunAt         time.Time `bson:"next_run_at,omitempty"`
-	DeadlineAt        time.Time `bson:"deadline_at,omitempty"`
-	CreatedAt         time.Time `bson:"created_at"`
-	UpdatedAt         time.Time `bson:"updated_at"`
-	LeaseOwner        string    `bson:"lease_owner,omitempty"`
-	LeaseToken        uint64    `bson:"lease_token,omitempty"`
-	LeaseUntil        time.Time `bson:"lease_until,omitempty"`
+	ID                string `bson:"_id"`
+	Type              string `bson:"type"`
+	DefinitionVersion uint32 `bson:"definition_version"`
+	BusinessKey       string `bson:"business_key"`
+	Status            Status `bson:"status"`
+	Phase             Phase  `bson:"phase"`
+	Step              int    `bson:"step"`
+	CompletedSteps    int    `bson:"completed_steps"`
+	Attempt           uint32 `bson:"attempt"`
+	// RR-20261005-NC-38：Resume 代际属于持久派发身份，遗漏会在重读后复用旧 CommandID。
+	Incarnation  uint32    `bson:"incarnation,omitempty"`
+	Version      uint64    `bson:"version"`
+	Data         []byte    `bson:"data,omitempty"`
+	LastError    string    `bson:"last_error,omitempty"`
+	OperationKey string    `bson:"operation_key,omitempty"`
+	CommandID    string    `bson:"command_id,omitempty"`
+	NextRunAt    time.Time `bson:"next_run_at,omitempty"`
+	DeadlineAt   time.Time `bson:"deadline_at,omitempty"`
+	CreatedAt    time.Time `bson:"created_at"`
+	UpdatedAt    time.Time `bson:"updated_at"`
+	LeaseOwner   string    `bson:"lease_owner,omitempty"`
+	LeaseToken   uint64    `bson:"lease_token,omitempty"`
+	LeaseUntil   time.Time `bson:"lease_until,omitempty"`
 }
 
 func toRecordDoc(r Record) recordDoc {
@@ -405,14 +407,14 @@ func toRecordDoc(r Record) recordDoc {
 	if leaseUntil.IsZero() {
 		leaseUntil = time.Unix(0, 0).UTC()
 	}
-	return recordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt, Version: r.Version, Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID, NextRunAt: r.NextRunAt, DeadlineAt: r.DeadlineAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, LeaseOwner: r.Lease.Owner, LeaseToken: r.Lease.Token, LeaseUntil: leaseUntil}
+	return recordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt, Incarnation: r.Incarnation, Version: r.Version, Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID, NextRunAt: r.NextRunAt, DeadlineAt: r.DeadlineAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, LeaseOwner: r.Lease.Owner, LeaseToken: r.Lease.Token, LeaseUntil: leaseUntil}
 }
 func (d recordDoc) record() Record {
 	lease := Lease{Owner: d.LeaseOwner, Token: d.LeaseToken, Until: d.LeaseUntil}
 	if lease.Owner == "" {
 		lease = Lease{}
 	}
-	return Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt, Version: d.Version, Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID, NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, Lease: lease}
+	return Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt, Incarnation: d.Incarnation, Version: d.Version, Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID, NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, Lease: lease}
 }
 
 func validatedRecord(doc recordDoc) (Record, error) {

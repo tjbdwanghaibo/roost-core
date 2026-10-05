@@ -1,0 +1,22 @@
+=== RUN   TestDeployScriptsCarryNoKnownShellcheckFindings
+=== RUN   TestDeployScriptsCarryNoKnownShellcheckFindings/stateful
+    deploy_hygiene_test.go:87: deploy/shell/build.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/docker/deploy.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/rollback.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/docker/rollback.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/k8s/deploy.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/install.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/healthcheck.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:94: shellcheck not installed; the generated project's CI runs it
+--- FAIL: TestDeployScriptsCarryNoKnownShellcheckFindings/stateful (0.93s)
+=== RUN   TestDeployScriptsCarryNoKnownShellcheckFindings/stateless
+    deploy_hygiene_test.go:87: deploy/shell/build.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/healthcheck.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/rollback.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/docker/deploy.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/docker/rollback.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/k8s/deploy.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:87: deploy/shell/install.sh: sh -n: exec: "sh": executable file not found in %PATH%
+    deploy_hygiene_test.go:94: shellcheck not installed; the generated project's CI runs it
+--- FAIL: TestDeployScriptsCarryNoKnownShellcheckFindings/stateless (0.94s)
+--- FAIL: TestDeployScriptsCarryNoKnownShellcheckFindings (1.87s)

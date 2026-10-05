@@ -1,0 +1,11 @@
+{
+  "check": "race",
+  "command": "go test -race -count=1 -json ./saga ./kit/saga ./sync/syncbus/... ./ownerroute ./remoteentity ./kit/remoteentity ./nats/driver ./health ./servicemetrics",
+  "exit": 0,
+  "passedTestEvents": 546,
+  "passedLeaves": 498,
+  "skipped": [
+    "github.com/tjbdwanghaibo/roost-core/remoteentity::TestRemoteAsyncFinalizerProjectionLoad"
+  ],
+  "failed": []
+}

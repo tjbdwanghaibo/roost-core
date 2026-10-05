@@ -74,10 +74,9 @@ func defaultNestResultDurable(startDurable string) string {
 	return startDurable + "-result"
 }
 
-// Assembly owns the Saga runtime's construction and lifecycle: store,
-// transport and engine at Provide time; infrastructure, the two durable
-// consumers and the engine loop at Start; drain-then-stop at Stop. The kit
-// Mod only parses configuration, publishes Engine and forwards calls (P3b).
+// Assembly 在构造时建立 store、transport 和 engine；Start 建立基础设施、
+// 普通完成、启动意图、原生 Nest 完成三个持久消费者，并启动协调循环。
+// Stop 先排空消费者再停止循环；Kit 仅解析配置、发布能力和转发生命周期。
 type Assembly struct {
 	Store     *MongoStore
 	Transport *JetStreamPublisher
@@ -193,7 +192,7 @@ func (a *Assembly) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop drains both consumers (waiting for their closure within ctx), cancels
+// Stop drains all three consumers (waiting for their closure within ctx), cancels
 // the loop, stops the engine and waits for the loop to exit. When the drain
 // does not finish in time the consumers are stopped hard and ctx's error is
 // returned.
@@ -245,16 +244,16 @@ func (a *Assembly) Stop(ctx context.Context) error {
 // Running reports whether the engine loop is up.
 func (a *Assembly) Running() bool { return a != nil && a.running.Load() }
 
-// ConsumersClosed reports whether either durable consumer has stopped —
-// a running loop with a dead consumer is not healthy.
+// ConsumersClosed 检查三个必需消费者：缺失或任意一个退出都不是健康运行。
+// 原生 Nest 完成消费者遗漏时，循环仍能运行但无法接收业务回执（RR-20261005-NC-37）。
 func (a *Assembly) ConsumersClosed() bool {
 	if a == nil {
 		return true
 	}
 	a.stateMu.RLock()
-	resultSub, startSub := a.resultSub, a.startSub
+	resultSub, startSub, nestResults := a.resultSub, a.startSub, a.nestResults
 	a.stateMu.RUnlock()
-	return subscriptionClosed(resultSub) || subscriptionClosed(startSub)
+	return subscriptionClosed(resultSub) || subscriptionClosed(startSub) || subscriptionClosed(nestResults)
 }
 
 // RunError is the error the engine loop exited with, if it exited on its own.

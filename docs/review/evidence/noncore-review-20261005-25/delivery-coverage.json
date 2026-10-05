@@ -1,0 +1,36 @@
+{
+  "project": "roost-core",
+  "signal": "best_effort",
+  "indexed_at": "2026-09-30T11:58:14Z",
+  "metadata": {
+    "generation": "2026-09-30T11:58:14Z",
+    "index_mode": "full",
+    "recorded_at": "2026-09-30T11:58:15Z",
+    "recording_status": "complete",
+    "ignored_files_stored": 1,
+    "ignored_files_total": 1,
+    "hash_records_complete": true,
+    "coverage_version": 3,
+    "generation_matches": true
+  },
+  "paths": [
+    {
+      "requested_path": "codegen/internal/roost/manifest.go",
+      "path": "codegen/internal/roost/manifest.go",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    },
+    {
+      "requested_path": "scripts/pretag.sh",
+      "path": "scripts/pretag.sh",
+      "status": "no_recorded_issue",
+      "freshness": "metadata_changed",
+      "recommended_action": "read_source_and_reindex",
+      "coverage": []
+    }
+  ],
+  "scopes": [],
+  "caveat": "Best-effort signal only. No recorded issue does not prove graph or source completeness; read flagged source and qualify claims when metadata is changed or unavailable."
+}

@@ -100,6 +100,8 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 | 状态同步 | player 接入层或 nettransport 作为 `entitysync.Transport`；业务装 `entitysync.Manager`，`policy.Interest / Group / Direct` 作为订阅政策（Manager 因传输失败丢掉会话而观察者仍在时，重开会话后 `Interest.Resubscribe` 恢复其订阅，见 RR-20260926-40；实体卸载后重载不了被框架退回 remove、之后重新登记时，三种政策自动重新提交仍持有的订阅，见 RR-20260926-70） |
 | 确定性帧同步 | lockstep + KCP/QUIC/UDP transport |
 
+Saga恢复与健康：三个持久消费者（普通完成、Nest启动意图、原生Nest完成）都是必需资源，任意一个关闭会使Saga健康项fail（NC-37）；不要仅凭协调循环运行判断可用。Resume代际由Mongo `incarnation` 保存，恢复后重载派发使用r1/r2命令身份（NC-38）；历史缺字段为0，参与写入的协调器应统一升级，旧writer完整Replace可能丢新字段。没有自动修复历史waiting/回执，不删除回执或修改版本来绕过冲突；按业务结果与既有超时/Resume流程恢复。[健康](bugfix/RR-20261005-NC-37.md) · [持久兼容与处置](bugfix/RR-20261005-NC-38.md)。
+
 ### 单实例锁（singleton.*）
 
 同一服务类型 + sid 同一时刻只让一个进程跑 Mod。它只针对**同一 sid 崩溃重启时短暂出现两个进程**：旧进程卡住（SIGSTOP、长 GC、调试器）或没完全退出，新进程已被拉起。跨主机 / 换卷并存、网络分区、Redis failover 丢键不在保证范围内（[方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) §1）。模块不感知锁、也不应各自检查：fail-stop 由 App 统一触发。

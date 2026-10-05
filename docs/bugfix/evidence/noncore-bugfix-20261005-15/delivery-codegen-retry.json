@@ -1,0 +1,8 @@
+{
+  "command": "go test -count=1 -json ./codegen/internal/roost",
+  "exit": 0,
+  "sourceParent": "3f29a921749e23f4d8958863288eec155e9c86f0",
+  "raw": "D:/whb_s/.tmp/noncore-review-20261005-25/delivery-codegen-retry.log",
+  "nativeBash": "C:/Program Files/Git/bin",
+  "childTemp": "D:/whb_s/.tmp/noncore-review-20261005-25/child-temp"
+}

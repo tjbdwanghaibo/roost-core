@@ -1,0 +1,23 @@
+[
+  {
+    "check": "build",
+    "command": "go build ./...",
+    "exit": 0,
+    "sourceParent": "3f29a921749e23f4d8958863288eec155e9c86f0",
+    "raw": "D:\\whb_s\\.tmp\\noncore-review-20261005-25\\delivery-build.log"
+  },
+  {
+    "check": "root",
+    "command": "go test -count=1 -json .",
+    "exit": 0,
+    "sourceParent": "3f29a921749e23f4d8958863288eec155e9c86f0",
+    "raw": "D:\\whb_s\\.tmp\\noncore-review-20261005-25\\delivery-root.log"
+  },
+  {
+    "check": "codegen",
+    "command": "go test -count=1 -json ./codegen/internal/roost",
+    "exit": 1,
+    "sourceParent": "3f29a921749e23f4d8958863288eec155e9c86f0",
+    "raw": "D:\\whb_s\\.tmp\\noncore-review-20261005-25\\delivery-codegen.log"
+  }
+]

@@ -61,8 +61,8 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | N02 | httpclient/httpserver/security/gateway/webroute，8 | 源文8/8已读、正式生成 HTTP/退役已验，NC-05～07已修/声明场景验证；场景部分完成，补容量/非协作回调/完整业务鉴权与跨模块矩阵 | 1～3 |
 | N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～12已修/声明场景验证；真实NATS/etcd、正常Resign预算/服务端清理、重连/lease恢复与容量矩阵待补 | 6～10 |
 | N04 | redis/mongo/cache/migration，当前41（原40+事务实现） | 源文41/41累计已读、场景部分完成；NC-13～30已修；schema/并发/未知16新场景、12正式清理回归、11生成消费者通过；接续Repository持久迁移/重载、真实Mongo与Cluster/HA/长容量 | 6～10 |
-| N05 | remoteentity/ownerroute，24 | 10-05接入增量11生产文件、13新正式叶子；NC-33/34已修，仍场景部分完成；接续重订阅/回调交错/权威回填组合，真实broker/水位/HA容量待验，不重审核心完整提交链 | 2～4 |
-| N06 | service/saga/servicemetrics，36 | Service 十域主链已有完成记录；仅增量、Saga 补偿/重试/关停与未涵盖指标边界 | 2～4 |
+| N05 | remoteentity/ownerroute，24 | NC-33～36及旧快照过期残余已修；回填/重订阅/在途退订具名本机证据已补，仍场景部分完成；真实broker/水位/HA容量与Mirror DTO留项，接续N06，不重审核心完整提交链 | 2～4 |
+| N06 | service/saga/servicemetrics，36 | 第25轮补Saga三消费者health、持久Resume/两次恢复与关停20新叶子，NC-37/38已修；仍场景部分完成；接续启动意图重投/完成信封/收件箱/取消组合及Service增量/指标，复用十域旧证据 | 2～4 |
 | N07 | configdata/attribute/event/errcode，10 | 运行配置与生成邻接已查；真实热更新/校验、属性变更传播、事件订阅与错误映射补证 | 2～4 |
 | N08 | codegen，102 | 多轮已查，整体仍部分完成；复用 N02 正式 Webroute消费/退役，不双计，接续 cfggen required/ref/skipempty/JSON及索引往返、旧工程upgrade/工具限制 | 4～7 |
 | N09 | skill（含 cmd），182 | 最大单元；先建立子包矩阵，再技能状态/结算/事务接入/同步/组合能力，按职责拆 3～5 批 | 10～16 |

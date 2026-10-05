@@ -2,6 +2,8 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-219 | Saga Resume返回新代际，但重读为0、命令ID复用，完成后仍waiting或identity conflict | RR-20261005-NC-38：旧Mongo记录转换丢Incarnation；旧writer也可能完整Replace掉新增字段 | 同一Saga的持久incarnation、状态/version、outbox CommandID与历史completion receipt | 协调writer统一升级；先保留记录/回执按既有超时与Resume流程处理，不删回执/改版本；历史waiting不自动修复，见NC-38兼容记录 |
+| T-218 | 原生Nest完成消费者已退出，旧版本Saga健康仍ok；新版报durable consumer stopped | RR-20261005-NC-37：旧ConsumersClosed只检查前两个消费者 | 普通完成、Nest启动、原生完成三个订阅的Closed与实际消费者状态，不能只看Engine Running/Mongo Ping | 使用三消费者健康修复；定位底层消费者/连接错误，按明确生命周期恢复；本修复不自动重订阅或改变ACK |
 | T-217 | 权威读取/副本回填出现 ErrRemoteSnapshotStale，旧版曾成功返回低于minVersion的结果 | RR-20261005-NC-36：旧版只验权威原始版本，Publish可能保留较新epoch的另一份L1 | 请求minVersion、权威与最终L1的完整key/epoch/version | 使用最终版本检查修复；恢复正确epoch/版本的权威结果后重读，不放宽epoch保护或把低版本当成功 |
 | T-216 | 权威加载出现 result key does not match requested key，或旧版把结果写进另一视图 | RR-20261005-NC-35：loader结果身份未绑定请求 | callback请求与返回的Tenant/EntityID/Kind/Scope/Policy、实际L1/L2 | 使用写前绑定修复，修正loader完整身份映射，不忽略错误；历史污染按权威来源核对，不批量删生产键 |
 | T-215 | interest消息返回identity不匹配，或旧版本发生另一scope/SID被续租/撤销 | RR-20261005-NC-34：旧接收只解码，未绑定payload到信封 | payload完整key/SID、信封哈希key、ExpiresAt/version及Upsert；Generation另作代际比较 | 使用写前校验修复，统一发送端格式；错误消息不盲重试，不删其他订阅；校验不替代内部topic发布权限 |

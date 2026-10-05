@@ -1,0 +1,21 @@
+{
+  "pass": 278,
+  "fail": 2,
+  "skip": 10,
+  "failed": [
+    "TestDeployScriptsCarryNoKnownShellcheckFindings/stateful",
+    "TestDeployScriptsCarryNoKnownShellcheckFindings/stateless"
+  ],
+  "skipped": [
+    "TestCorePinScriptPrintsTheGeneratorMinimum",
+    "TestDevRunRegistersTheGameServerInTheAccountServicesRedisDatabase",
+    "TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent/generated_values",
+    "TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent/keys_absent",
+    "TestDoctorPlayerTCPPassesAfterAuthAndConfig",
+    "TestShellRollbackRejectsDotVersions",
+    "TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit",
+    "TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled",
+    "TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit",
+    "TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses"
+  ]
+}

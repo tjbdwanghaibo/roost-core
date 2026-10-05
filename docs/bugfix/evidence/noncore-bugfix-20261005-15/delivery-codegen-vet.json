@@ -1,0 +1,5 @@
+{
+  "command": "go vet ./codegen/internal/roost",
+  "exit": 0,
+  "sourceParent": "3f29a921749e23f4d8958863288eec155e9c86f0"
+}

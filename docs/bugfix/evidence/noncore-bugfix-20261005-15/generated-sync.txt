@@ -1,0 +1,10 @@
+generated: D:\whb_s\.tmp\noncore-review-20261005-25\generated-sync\gen_state_dao.go
+generated: D:\whb_s\.tmp\noncore-review-20261005-25\generated-sync\avatar_gen_wire.go
+=== RUN   TestGeneratedDAOChangesReachBothSyncModes
+=== RUN   TestGeneratedDAOChangesReachBothSyncModes/periodic
+=== RUN   TestGeneratedDAOChangesReachBothSyncModes/on_change
+--- PASS: TestGeneratedDAOChangesReachBothSyncModes (0.01s)
+    --- PASS: TestGeneratedDAOChangesReachBothSyncModes/periodic (0.00s)
+    --- PASS: TestGeneratedDAOChangesReachBothSyncModes/on_change (0.00s)
+PASS
+ok  	syncmodes	1.891s

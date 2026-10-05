@@ -1,0 +1,9 @@
+{
+  "check": "vet",
+  "command": "go vet ./saga ./kit/saga ./sync/syncbus/... ./ownerroute ./remoteentity ./kit/remoteentity ./nats/driver ./health ./servicemetrics",
+  "exit": 0,
+  "passedTestEvents": 0,
+  "passedLeaves": 0,
+  "skipped": [],
+  "failed": []
+}

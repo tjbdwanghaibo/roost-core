@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Saga三消费者健康检查**（RR-20261005-NC-37）：`ConsumersClosed` 纳入原生Nest完成消费者，任意必需订阅缺失/退出均使Kit健康项fail；修正过时的两消费者注释。正式装配与停止后重启恢复已验证。[记录](docs/bugfix/RR-20261005-NC-37.md)
+- **Saga Resume持久代际**（RR-20261005-NC-38）：Mongo记录增补兼容字段`incarnation,omitempty`并双向保存，重载后派发不复用旧命令/回执ID；旧缺字段为0。参与写入的协调器需统一升级，旧writer完整Replace会丢新字段；不自动修复历史waiting/回执。[兼容与证据](docs/bugfix/RR-20261005-NC-38.md)
+
 ## [v1.20.0] - 2026-10-05
 
 > 功能版本：App 层同一服务类型 + sid 单实例锁（`app.Singleton`、`RuntimeFailure.OnFail`、`SingletonLiveness.Live`），只覆盖崩溃重启短暂并存，失锁由 App 统一 fail-stop（[方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md)）；game-demo 玩家所有权改为按角色 `server_id` 静态绑定（删除按玩家 Redis 租约 `playerroute`），activity 改用 App 的 `Live`，赠礼按发送方 sid 路由。**破坏性变更**：删除 kit `service/global` 的租约 API（错误码 570105～570109 退役）、停止发布 `ModEtcdElection` / `ModRedisLock` capability；RemoteEntity fatal 现在也围栏 Nest；生成器 Core 下限升到 v1.20.0。已生成工程不提供迁移（维护者决定）。另含 RR-20261004-10～14、DAO `//roost:dao nocoll` 等自 v1.19.2 以来的修复。
@@ -33,6 +38,7 @@
 - **破坏性变更：kit `service/global` 删除游戏服租约 API**（[App 单实例锁方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) 第 3b 笔，§12）：`Routing` 接口与 `Service` 删除 `AcquireLease` / `RenewLease` / `ReleaseLease` / `Lease` / `LiveGames`（RPC 方法 `global.AcquireLease` 等五个随之从生成的传输层删除，`Methods` 只剩路由五个），删除类型 `GameLease` / `LeaseState`（`LeaseActive` / `LeaseReleased` / `LeaseLapsed`）、`Config.Leases` / `Config.LeaseTTL` / `Config.NewIncarnation`、`DefaultLeaseTTL`、`MaxPageSize` / `MaxLoadEntries`、`RedisStores.Leases`；错误码 570105～570108（`ErrLeaseInvalid` / `ErrLeaseMissing` / `ErrLeaseNotHolder` / `ErrLeaseExpired`）与只由 `LiveGames` 产生的 570109（`ErrRangeInvalid`）退役、不复用。`global.lease_ttl` 不再读取（旧配置里留着也不报错），codegen 生成的 `global:` 段不再写它。路由 `Bind` / `Resolve` / `BeginMigration` / `CompleteMigration` / `AbortMigration` 与错误码 570101～570104、570110、570125 不变。仓库内最后一个调用方（game-demo activity）已在第 3 笔改用 App 的 `Live`。迁移：进程存活改用 App 单实例锁——被查的服务配置 `singleton.enabled: true`（bootstrap 调 `App.Singleton(kitredis.SingletonStore)`），查询方 `app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)` 后调 `Live(ctx, serverType, sids)`，返回持有锁的 sid；原 `AcquireLease` + 心跳 + `ReleaseLease` 的生命周期由 App 锁的获取 / 续期 / 释放代替，不需要应用代码。`Live` 不按 global 组与路由世代过滤、不带负载快照，需要时由应用自己维护。旧部署 Redis 里 `<global.key_prefix>:lease:*` 的键不再被读写，可以删除。
 
 ### Fixed
+
 
 - **codegen：生成的 `etcd.service_prefix` 带结尾 `/`**（2026-10-05 App 单实例锁第 5 笔真实进程演练发现）：etcd Discovery 的键是 `service_prefix + server_type + "/" + sid`，自己不补分隔符（core 缺省 `/service/`），生成值 `/roost/services` 让 game 1300 注册成 `/roost/servicesgame/1300`。新工程改为 `/roost/services/`；已生成工程的配置归应用所有，不自动改写——需要时手工补上 `/`（同一部署的所有进程一起改，注册与查询用同一个前缀，混跑期间互相看不见）。回归 `TestGeneratedEtcdServicePrefixSeparatesTheServerType`。
 - **权威快照加载在写缓存前绑定完整请求键**（RR-20261005-NC-35，P2）：异键结果明确拒绝，不写其他视图，合法加载可恢复；API/wire不变。[记录](docs/bugfix/RR-20261005-NC-35.md)

@@ -1,5 +1,23 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N05停机补证与N06第一批/第十五批修复
+
+7949da08干净快进af2f67fb，新增仅演练清理文档，无新Wanted或skill包差异。[本轮](REVIEW-2026-10-05-noncore-25.md) · [机制与漏检复盘](IMPLEMENTATION-SAGA-CONSUMER-HEALTH-AND-DURABLE-RESUME.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-15/README.md)。NC-37/38两个P2已修复、声明场景验证，未发版。
+
+| 范围 | 新证据 | 状态 / 下一入口 |
+| --- | --- | --- |
+| N05在途停止 | 正式JetStreamSyncBus/Replicator退订、重订阅与旧callback交错1叶子 | Stop不承诺drain；底层broker/Store为替身，不声称真实transport验收 |
+| N06健康 | 三消费者缺失/退出与实际Kit停止/重新启动，10叶子4红→绿 | NC-37关闭；不是只证明循环活着 |
+| N06持久恢复 | 正向/补偿两次恢复、重读/派发/回执，2红→绿；4代际兼容 | NC-38关闭；旧缺字段为0，混跑旧writer未支持 |
+| N06生命周期 | 第二/第三订阅失败清理后重试；第三Drain取消后再次Stop | 3控制通过，无新确认关闭bug |
+| 本地矩阵 | 合计20新正式叶子；相关race498/1skip、根包14、build/vet/glsvet；生成periodic/on_change2叶子 | 原红与overlay保留；真实Mongo/NATS/HA/容量单列 |
+
+N05本机停机契约补证后转N06，**两域仍场景部分完成，不计completed/15**。接续Saga启动意图重投与运行Data/DeadlineAt变化、完成信封/收件箱和事务取消组合→Service增量/servicemetrics→N07。新方案Mirror DTO仍未实施，真实broker ACK/重连、L2跨节点水位/HA、长期容量保留；不据包测试数重算全仓覆盖率或承诺完成日期。App最新变更仅文档整合，本轮未独立重做其外部演练。不等待GitHub CI。
+
+收尾正常整合3f29a921的v1.20.0发布/生成器下限与pretag记录；旧NC-31～36随上游tag发布，本轮NC-37/38仍Unreleased。33证据源码LF哈希相同，原正式/race矩阵保持；最终补检查与完整本地bugfix skill镜像同步见[交付同步](REVIEW-2026-10-05-noncore-25.md#交付同步v1200发布记录)。合并与验收分列，没有本轮发布动作。
+
+最新编译/根包14/codegen vet通过；codegen/internal/roost普通包复跑280叶子/10环境skip，首跑缺sh的两环境失败保留。不是全codegen树重审，原20新增和498相关race不累加，不关闭外部留项。
+
 ## 2026-10-05 N05权威回填与第十四批修复
 
 be4eb0fa干净快进40d89ac6；无新增bugfix/Wanted/skill待验收。[本轮](REVIEW-2026-10-05-noncore-24.md) · [机制](IMPLEMENTATION-AUTHORITATIVE-SNAPSHOT-POSTCONDITIONS.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-14/README.md)。NC-35/36两个P2与旧RR08残余已修复、声明场景验证，未发版。
