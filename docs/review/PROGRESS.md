@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N14 Kit 跨域装配（revn14）
+
+基线 `f6245613`，分支 `revn14`，NC 段 190～199（用 190～194）；图谱 generation 2026-09-30，引用的 20 个路径中 17 个 metadata_changed / not_tracked，以当前源码补证；开工时 `remote-acceptance.lock` 存在，未跑 integration。[本轮](REVIEW-2026-10-05-n14.md) · [审查证据](evidence/noncore-review-20261005-n14/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n14/README.md)。审查 `efe219c1`，修复 `f9367785` / `e1a6b01d` / `d6550a16` / `48b3311a`。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| App 单实例锁装配 | bootstrap 安装、opener 时机、kitredis 双客户端资源、缺配置 fail-closed、模板与读取一致 | 成立；`enabled: on` 与不带单位的时长 **NC-190 已修** |
+| 配置读取 | 框架 GetBool 开关、`validateDurationIfSet`、`mods.Duration`、saga 步骤预算、`cluster_addrs` | **NC-190 已修**；O1（kit 其余约 80 处 GetDuration）待 schema 方向 |
+| saga 步骤预算 | 模板、未知字段 / 名字拒绝、覆盖大小写 | **NC-194 已修**；O2（只差大小写的类型）观察 |
+| 生产校验 → 读取方 | `env: production` 的服务名分支逐键查读取方 | **NC-192 待维护者选方案** |
+| 生命周期 | Service.Init 失败与启动失败收尾、Nest `OnFail` 登记、Mongo / Redis / NATS Mod | **NC-193 已修**；Mongo 日志口令 **NC-191 已修**；O3 / O4 观察 |
+| 限流器 MaxKeysPerOwner | 装配方 | 仓内无装配方（同 N02 O6），不重复登记 |
+
+新增正式回归：app 7 个顶层用例（含 GetBool 清单同步守卫）、kit/mods 1、kit/redis 1、kit/saga 3、kit/mongo 2，修前红 → 修后绿（守卫、接受类对照与精确优先用例无修前红）。改动包 race×3、`./app/... ./kit/... ./saga/...`、根包、codegen、全仓 build/vet、生成 game-demo build/vet/test 通过。N14 本机场景收口；**方向判断**：配置读取缺少 schema（宽松转换与生产校验脱节反复出现），建议维护者在“Mod 声明配置键与类型”与“逐 Mod 改用严格读取器”之间选择。
+
 ## 2026-10-05 N15 scripts / cmd 与非 Go 资产（revn15）
 
 基线 `8597046c`，分支 `revn15`，NC 段 200～209（用 200～208）；脚本目录按设计不进图谱，Go 证据文件（generation 2026-09-30，三处 metadata_changed）以当前源码补证。[本轮](REVIEW-2026-10-05-n15.md) · [审查证据](evidence/noncore-review-20261005-n15/) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n15/)。审查 `345488e4`，修复见 Git 历史 `fix(scripts,glsvet,codegen)：RR-20261005-NC-200～208`。

@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N14 Kit 跨域装配（revn14）：NC-190、NC-191（P2）与 NC-193、NC-194（P3）已修复、声明场景验证，未发版；NC-192 未修（待维护者选方案，见文末）。** 布尔开关与时长严格读取（`app.ConfigBool` / `ConfigDuration`，`singleton.enabled: on` 与不带单位的时长启动即报错）、`cluster_addrs` 接受 YAML 列表；Mongo 连接日志去口令；启动失败先收回 Service 已启动的部分、收不回就保留 Mod 与锁；saga 步骤覆盖按小写回退。[本轮](../review/REVIEW-2026-10-05-n14.md) · [证据](evidence/noncore-bugfix-20261005-n14/README.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-194](RR-20261005-NC-194.md) | `StepBudgets.Resolve` 原样查不到时按小写回退 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-193](RR-20261005-NC-193.md) | Init 失败与之后的启动失败共用 `shutdownAfterStartupFailure`：先 Shutdown（5s），未完成不停 Mod、不释放锁 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-191](RR-20261005-NC-191.md) | `redactedURI`：连接日志的 URI 口令换成 `***` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-190](RR-20261005-NC-190.md) | `app.ConfigBool` / `ConfigDuration`；单实例锁、启动校验开关清单与时长、`mods.Duration`、saga 步骤预算改用；`mods.RedisClusterAddrs` | 已修复、声明场景验证，未发版（行为收紧） |
+
 **10-05 N13 container / safemap / goroutine / misc / internal（revn13）：NC-180～185 已修复、声明场景验证，未发版。** BucketHolder 遍历先复制桶快照再在锁外调回调、false 跨桶停止；FastMap 改已有键不重排、Range 识别表被换掉；TaskPool 受理与关闭互斥；拓扑排序按全部节点判环；KeyMap 遍历每桶先复制。[本轮](../review/REVIEW-2026-10-05-n13.md) · [证据](evidence/noncore-bugfix-20261005-revn13/README.md)。
 
 | 编号 | 修复 | 状态 |
@@ -875,3 +884,7 @@ RR-20260919-02 与 RR-20260919-04 在同一天的第二轮里收敛：前者定�
 
 RR-20260919-10 在同一天收敛（U-0257）：owed 索引 + `OwedDispatches` RPC + `AttemptDispatch` 交给取走
 payload 的一方 + sweep 收回本分。当时写下的"要先在 kit 加一个按 gameSID 的待交付 RPC"就是这次做的事。
+
+## 2026-10-05 N14：NC-192 为什么没修
+
+[RR-20261005-NC-192](../bug/RR-20261005-NC-192.md)：生产配置校验（`env: production`）要求的九个开关没有任何读取方。修法取决于产品决定：删去无效要求并写明 `env: production` 校验什么（方案 1），还是先在生成接入里装配按请求限流 / 真实鉴权开关、把 WAL 要求换成 `dataengine.*`，再让校验指向它们（方案 2，属于 N02 / N08 的功能工作）。两者都改变“生产校验”对运维的承诺，需要维护者选择；在此之前不改行为。

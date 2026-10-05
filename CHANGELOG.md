@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- **布尔开关与时长严格读取**（RR-20261005-NC-190，行为收紧）：`singleton.enabled: on` / `yes`（以及 `nats.reliable.enabled`、`mongo.require_replica_set`、`ops.*`、`log.*` 等框架开关的非布尔写法）启动校验报错，不再被读成 false——单实例锁曾因此静默关闭；`singleton.*` 时长、`ValidateServiceConfig` 列出的时长键、`saga.step_defaults` / `saga.steps` 与服务 Mod 的 `mods.Duration` / `RequiredDuration` 拒绝不带单位的数字（以前读成纳秒并通过校验）。新增 `app.ConfigBool` / `app.ConfigDuration`、`mods.RedisClusterAddrs`；`redis.cluster_addrs` 接受逗号串或 YAML 列表（以前列表读成空串、Redis Mod 退回 localhost）。[记录](docs/bugfix/RR-20261005-NC-190.md)
+- **Mongo Mod 连接日志不再含口令**（RR-20261005-NC-191）：`mongo mod: connected` 的 `uri` 把 userinfo 口令换成 `***`。[记录](docs/bugfix/RR-20261005-NC-191.md)
+- **启动失败先收回 Service 已启动的部分**（RR-20261005-NC-193，契约补充）：`Service.Init` 返回错误时 App 同样调用 `Shutdown`（限时 5s），再停 Mod、释放单实例锁；Shutdown 没在时限内结束（含不配合 ctx、panic）时不停 Mod、不释放锁，与正常停机一致。以前 Init 失败直接拆依赖，Init 之后的收尾不配合 ctx 会让进程挂住。`Shutdown` 须容忍部分初始化。[记录](docs/bugfix/RR-20261005-NC-193.md)
+- **saga 步骤覆盖按小写回退**（RR-20261005-NC-194）：`kitsaga.NewMod()` 不带定义时，`saga.steps.GiftItem.Debit` 这类大小写混写的覆盖不再静默失效。[记录](docs/bugfix/RR-20261005-NC-194.md)
 - **隔离环境入口尊重 Remote 验收锁**（RR-20261005-NC-203，行为收紧）：`<根>/remote-acceptance.lock` 被别的运行持有时，`dataengine-env.sh` 的 up / down / reset / fault / heal / test 与 `scripts/remote-fault.sh` 以 2 拒绝（status 照常）；`test` 运行期间自己持锁；矩阵与 `scripts/perf/remote.sh` 取得锁后导出 `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`，自己调起的 heal / remote-fault 照常执行。之前 reset 能在矩阵运行中删掉整个根（含锁）。[记录](docs/bugfix/RR-20261005-NC-203.md)
 - **toxiproxy pid 按所有权认领、toxic 用例不再 /reset 共享 toxiproxy**（RR-20261005-NC-202 / NC-208）：pid 文件指向的进程须是 `toxiproxy-server -port <本环境 API 端口>`，否则 down / reset 拒绝而不是杀掉复用该 pid 的进程；`redis/driver`、`kit/nats` 的 toxic 用例改为自建随机端口代理、只删自己的毒（`kit/dataengine` 的三条 `TestToxicNATS*` 同根因待核心线处理，跑时仍须独占环境）。[记录](docs/bugfix/RR-20261005-NC-208.md)
 - **redis-cluster-suites.sh 不再把全环境故障套件跑到共享环境**（RR-20261005-NC-201）：脚本清掉 `ROOST_DATAENGINE_IT` / `REDIS_ADDR`，只跑 Cluster 准入的用例。[记录](docs/bugfix/RR-20261005-NC-201.md)

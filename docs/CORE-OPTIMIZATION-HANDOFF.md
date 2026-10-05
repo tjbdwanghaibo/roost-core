@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N14 Kit 跨域装配（revn14）**：[NC-190/191/193/194](review/REVIEW-2026-10-05-n14.md)已修复、声明场景验证，未发版；NC-192 待维护者选方案。行为收紧：框架布尔开关的 `on` / `yes` 与不带单位的时长启动即报错（`singleton.enabled: on` 曾静默关闭单实例锁）；Mongo 连接日志去口令；启动失败时 App 先调用 `Service.Shutdown`（Init 失败也调用，Shutdown 须容忍部分初始化），5s 内没结束就不停 Mod、不释放锁。生产校验（`env: production`）要求的九个开关无读取方（NC-192），通过它不代表限流 / 鉴权 / WAL 持久生效。kit 其余约 80 处 `GetDuration` 仍宽松，配置 schema 方向待定。
+
 **10-05 N13 container / safemap / goroutine / misc / internal（revn13）**：[NC-180～185](review/REVIEW-2026-10-05-n13.md)已修复、声明场景验证（NC-180/181 含 EntityManager 组合，NC-182 含生成 DAO 组合与全新生成 game-demo），未发版。BucketHolder 遍历改为快照、锁外回调（EntityManager.Range 回调里 Destroy 不再卡死），false 跨桶停止；FastMap 改已有键不重排、遍历识别表被换掉；TaskPool / 拓扑排序 / KeyMap 三处零调用方 API 修复。遍历契约统一与零调用方 API 去留见方向判断，待维护者。
 
 **10-05 N12 metrics / log / failurelog / robot（revn12）**：[NC-160～165](review/REVIEW-2026-10-05-n12-revn12.md)已修复、声明场景验证（NC-160 含真实 Redis + 生产驱动，NC-161 / 162 含生成 game-demo 真实网关），未发版。failurelog 结果未知不再降级补写；loadtest 没有样本的阈值判失败；robot 重连后 capture 重新注册、ws 拨号受超时约束；statslog 清空的实体计数归零；log.Close 后日志写控制台 / stderr。生产 servicemetrics 仍无落点（观察 O1）、per-run 序列无删除入口（O2）待维护者定；真实弱网、Cluster、长期容量未验。
@@ -199,6 +201,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N14 revn14：[NC-190](bug/RR-20261005-NC-190.md) / [NC-191](bug/RR-20261005-NC-191.md)（P2）与 [NC-193](bug/RR-20261005-NC-193.md) / [NC-194](bug/RR-20261005-NC-194.md)（P3）**已修复、声明场景验证，未发版**（`f9367785` / `e1a6b01d` / `d6550a16` / `48b3311a`，审查 `efe219c1`）；[NC-192](bug/RR-20261005-NC-192.md)（P2，生产校验要求的开关无读取方）已确认、待维护者选方案。[本轮](review/REVIEW-2026-10-05-n14.md)（含配置 schema 方向判断）。T-256/257。
+
 10-05 N09 skill 第四批（revn09d）：[NC-210](bug/RR-20261005-NC-210.md) / [NC-211](bug/RR-20261005-NC-211.md) / [NC-214](bug/RR-20261005-NC-214.md)（P2）与 [NC-212](bug/RR-20261005-NC-212.md) / [NC-213](bug/RR-20261005-NC-213.md) / [NC-215](bug/RR-20261005-NC-215.md) / [NC-216](bug/RR-20261005-NC-216.md)（P3）**未修复**——编译器对 memory / catalog 名字用 map 零值兜底、移交后 area finish 的不变量失败、catalog key 唯一、只编译不传 Host 的字段、Host 都拒绝的取值、schema 协商空区间；[本轮](review/REVIEW-2026-10-05-n09-batch4.md)（编译 ⇒ 可执行的变异性质测试已落地；方向判断：编译器接受集合与 Runtime / Host 可执行集合各自维护，第四次出现）。
 
 10-05 N15 revn15：[NC-200](bug/RR-20261005-NC-200.md)（P2）与 [NC-201～208](review/REVIEW-2026-10-05-n15.md#2-确认的缺陷)（P3）**已修复、声明场景验证，未发版**（审查 `345488e4`；NC-208 的 kit/dataengine 部分留核心线）——scripts / cmd / 生成 .gitignore / toxic 用例；[修复](bugfix/README.md)；T-252～255；[本轮](review/REVIEW-2026-10-05-n15.md)（含方向判断：隔离环境独占 vs 共享）。
@@ -206,8 +210,6 @@ bash scripts/test-remote-matrix.sh
 10-05 N13 revn13：[NC-180](bug/RR-20261005-NC-180.md) P2（潜伏）与 [NC-181～185](review/REVIEW-2026-10-05-n13.md#3-确认的缺陷) P3 **已修复、声明场景验证，未发版**（审查 `e7bbac3d`，修复 `7e4ed438` / `20400337` / `1d600b9b` / `4c26b4b5`）；[本轮](review/REVIEW-2026-10-05-n13.md)（含方向判断）。行为变化：`BucketHolder` / `EntityManager.Range` 回调看到快照、false 立即停止；`FastMap` 遍历中写 map 的语义（README §16）。
 
 10-05 同形停机核实（stopshape）：[NC-170](bug/RR-20261005-NC-170.md) / [NC-171](bug/RR-20261005-NC-171.md) / [NC-172](bug/RR-20261005-NC-172.md) / [NC-173](bug/RR-20261005-NC-173.md) / [NC-174](bug/RR-20261005-NC-174.md) 五个 P3 **已修复、声明场景验证（NC-172 真实 NATS、NC-173 真实 etcd），未发版**；[证据与方向判断](bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)。NC-83 记录的 6 处同形停机：5 处确认并按三步停机修复，bus JetStream RPC 已由 NC-90 修掉。行为变化：这些停止入口超预算时如实返回 ctx 错误并保留对象（App 判定停机不完整、不释放其依赖），不再报告成功；新增 syncbus JetStream / mirror Replicator 的 `StopWithContext`。方向：第二类（退订不等在途回调）已有三份相同的准入门实现，建议抽共用小类型或把排空下沉到 ISyncBus 退订契约；T-251。
-
-10-05 N14 revn14：[NC-190](bug/RR-20261005-NC-190.md) / [NC-191](bug/RR-20261005-NC-191.md) / [NC-192](bug/RR-20261005-NC-192.md) 三个 P2 与 [NC-193](bug/RR-20261005-NC-193.md) / [NC-194](bug/RR-20261005-NC-194.md) 两个 P3 **已登记，未修复**；NC-192（生产校验要求的开关无读取方）待维护者选方案。[本轮](review/REVIEW-2026-10-05-n14.md)（含配置 schema 方向判断）。
 
 10-05 N12 revn12：[NC-160](bug/RR-20261005-NC-160.md) / [NC-161](bug/RR-20261005-NC-161.md)（P2）与 [NC-162～165](review/REVIEW-2026-10-05-n12-revn12.md)（P3）**已修复、声明场景验证，未发版**（审查 `b248a199`，修复 `f750ce43` / `5fea59ce` / `efeede0f` / `92547035` / `2a9e0c2c` / `e798a759`）；[修复](bugfix/README.md)。
 

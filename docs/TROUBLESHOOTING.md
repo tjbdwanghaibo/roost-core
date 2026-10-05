@@ -2,6 +2,8 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-257 | 启动失败后进程返回 `service <name> cleanup after startup failure incomplete: ...`，日志里没有 `mod stop`，也没有 `singleton: released`（有 `shutdown incomplete; leaving the key to expire`） | 启动失败（`Service.Init` 返回错误、启动期间 RuntimeFailure 等）时 App 先调用 `Service.Shutdown` 收回 Init 已启动的部分，5s 内没结束（不配合 ctx、按 ctx 超时、panic）；NC-193 起此时保留 Mod 与锁，不在仍在跑的组件底下拆依赖 | 错误里的第一段是真正的启动失败原因；第二段指出收尾卡住，看 Shutdown 里哪一步不看 ctx | 修启动失败的原因；Shutdown 里的停止步骤要受 ctx 约束、对部分初始化判 nil。重启需等锁 `ttl` 过期（≤ `startup_wait` 内自动接手） |
+| T-256 | 启动即失败：`config: singleton.enabled must be true or false, got "on"`，或 `config: singleton.ttl = 15 needs a unit (for example 15s or 500ms)`、`servicemods: config: mail.claim_ttl = 30 needs a unit`、`config: saga.step_defaults.timeout = 5 needs a unit` | NC-190 起框架开关只接受 `true` / `false`（及 `1` / `0`），时长必须带单位；以前 `on` 被读成 false（单实例锁、可靠总线静默关闭）、不带单位的数字被读成纳秒 | 报错里的键名 | 改成 `true` / `false` 与 `15s` / `500ms` 这样的写法；`redis.cluster_addrs` 逗号串与 YAML 列表都可以 |
 | T-255 | `scripts/gapmap.sh` 退出 2：`tracked files have uncommitted changes; commit or stash them first` | RR-20261005-NC-200：取样器原地改源码、收尾用 `git checkout -- .` 恢复，分不清运行前就有的修改；旧版会把它们一起丢掉 | `git status --short --untracked-files=no` | 提交或 stash 后再跑；CI 的干净 checkout 不受影响 |
 | T-254 | `go run ./cmd/glsvet …` 退出 2：`glsvet: … no such file or directory` / `… input(s) could not be vetted` | RR-20261005-NC-204：参数目录不存在、`<dir>/...` 根不存在或有 .go 文件解析失败；旧版按 0 违例放行 | 输出里点名的目录 / 文件 | 改正路径（包改名后同步 CI 与脚本里的参数）或修好语法错误 |
 | T-253 | `dataengine-env.sh down` / `reset` 报 `refuse foreign pid <n> from …/toxiproxy/toxiproxy.pid: <别的命令>` | RR-20261005-NC-202：toxiproxy 已退出、pid 被别的进程复用；旧版会直接 kill 它 | `ps -p <n> -o command=` 不是 `toxiproxy-server -port <本环境 API 端口>` | 确认后删掉该 pid 文件再执行；不要 kill 那个进程 |
