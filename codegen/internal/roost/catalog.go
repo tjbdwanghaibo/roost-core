@@ -44,7 +44,7 @@ var modCatalog = map[string]modSpec{
 	},
 	"etcd": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/etcd", Alias: "kitetcd", Constructor: "kitetcd.NewEtcdMod()",
-		Config:     "etcd:\n  endpoints: 127.0.0.1:2379\n  username: \"\"\n  password: \"\"\n  service_prefix: /roost/services\n  lease_ttl: 10\n  advertise_addr: 127.0.0.1:9000\n",
+		Config:     "etcd:\n  endpoints: 127.0.0.1:2379\n  username: \"\"\n  password: \"\"\n  service_prefix: /roost/services/\n  lease_ttl: 10\n  advertise_addr: 127.0.0.1:9000\n",
 		DevService: "etcd",
 	},
 	"redis": {

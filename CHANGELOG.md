@@ -29,6 +29,8 @@
 
 ### Fixed
 
+- **codegen：生成的 `etcd.service_prefix` 带结尾 `/`**（2026-10-05 App 单实例锁第 5 笔真实进程演练发现）：etcd Discovery 的键是 `service_prefix + server_type + "/" + sid`，自己不补分隔符（core 缺省 `/service/`），生成值 `/roost/services` 让 game 1300 注册成 `/roost/servicesgame/1300`。新工程改为 `/roost/services/`；已生成工程的配置归应用所有，不自动改写——需要时手工补上 `/`（同一部署的所有进程一起改，注册与查询用同一个前缀，混跑期间互相看不见）。回归 `TestGeneratedEtcdServicePrefixSeparatesTheServerType`。
+
 - **缓存副本写入前绑定业务key/version**（RR-20261005-NC-33，P2）：配置的提取器与信封不一致时明确拒绝、Store不变；含身份null更新在回调前拒绝。无VersionOf与普通Delete兼容保持，不增加版本墓碑。[记录](docs/bugfix/RR-20261005-NC-33.md)
 
 - **Remote interest写注册表前绑定完整消息身份**（RR-20261005-NC-34，P2）：校验完整snapshot key/SID哈希、ExpiresAt及Upsert操作，避免信封A操作订阅B。合法Generation=0和旧release代际保护保持；不增加发布权限认证。[记录](docs/bugfix/RR-20261005-NC-34.md)
