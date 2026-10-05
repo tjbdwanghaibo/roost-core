@@ -1,0 +1,3 @@
+ok  	github.com/tjbdwanghaibo/roost-core/goroutine	0.695s
+ok  	github.com/tjbdwanghaibo/roost-core/goroutine	0.441s
+ok  	github.com/tjbdwanghaibo/roost-core/goroutine	0.433s

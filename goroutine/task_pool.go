@@ -164,7 +164,12 @@ func (tp *TaskPool) hashTaskID(taskID int64) int {
 type taskWorker struct {
 	id       int
 	taskChan chan Task
-	closed   atomic.Bool
+	// closeMu 让“检查 closed + 发送”与“置 closed + 关闭 channel”互斥
+	// （RR-20261005-NC-183）：之前两步之间 Shutdown 关闭 channel，Submit 向已
+	// 关闭的 channel 发送即 panic。发送是非阻塞的，读锁不会挡住 close 太久。
+	// 与 worker.Worker.closeMu 同一做法：受理即进入 channel，必被排空执行。
+	closeMu sync.RWMutex
+	closed  atomic.Bool
 }
 
 func newTaskWorker(id int, bufferSize int) *taskWorker {
@@ -178,6 +183,8 @@ func newTaskWorker(id int, bufferSize int) *taskWorker {
 }
 
 func (w *taskWorker) submitTask(task Task) error {
+	w.closeMu.RLock()
+	defer w.closeMu.RUnlock()
 	if w.closed.Load() {
 		return fmt.Errorf("worker[%d] is closed", w.id)
 	}
@@ -190,6 +197,8 @@ func (w *taskWorker) submitTask(task Task) error {
 }
 
 func (w *taskWorker) close() {
+	w.closeMu.Lock()
+	defer w.closeMu.Unlock()
 	if w.closed.CompareAndSwap(false, true) {
 		close(w.taskChan)
 	}
