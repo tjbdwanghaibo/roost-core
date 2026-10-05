@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N06第三批**：[NC-41/42与RR-09残余](review/REVIEW-2026-10-05-noncore-27.md)已修复、声明场景验证，未发版；13新增正式回归、7行为红/overlay红绿，race420/2Cluster skip、根包14/build/vet及两生成消费通过。坏持久计划保留不自动迁移，N06未整体完成。交给另一agent的[全部后续review清单](review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)从global RPC/Mod/App.Live增量接续，外部专项单列。
+
 **10-05 N06第二批**：[NC-39/40](review/REVIEW-2026-10-05-noncore-26.md)已修复、声明场景验证，未发版。启动摘要/原生完成路由11反例红→绿，含兼容和取消恢复26新正式叶子；本地矩阵见证据。旧已推进缺摘要记录启动重投明确冲突，不自动迁移；N06仍部分完成，Service增量/跨协调器/真实Mongo/NATS/HA待补。不改变下表历史性能边界。
 
 **10-05 N06第一批**：[NC-37/38](review/REVIEW-2026-10-05-noncore-25.md)已修复、声明场景验证，未发版；Saga三消费者健康、持久代际/两次恢复与相邻关停共20新正式叶子，相关race498/1skip、根包14、build/vet/glsvet及生成双模式通过。N05在途退订契约本机补证后接续N06；两域仍部分完成，真实Mongo/NATS/HA/容量、旧writer混跑与历史waiting处置未验收。
@@ -180,6 +182,9 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+10-05第十七批：[NC-41](bug/RR-20261005-NC-41.md) / [NC-42](bug/RR-20261005-NC-42.md) **已修复、声明场景验证，未发版**；[outbox修复](bugfix/RR-20261005-NC-41.md)、[opening修复](bugfix/RR-20261005-NC-42.md)。[RR-20261001-09残余](bugfix/RR-20261001-09.md#复核后的补修2026-10-05)追加、未发版，T-181修订，本轮T-223/224；无格式/API/自动迁移。
+
 10-05 U-0279：[Nest 暂时性冲突重排加抖动](bugfix/U-0279-nest-requeue-jitter.md) **已修复，未发版**。v1.20.0 整体验证 `TestGeneratedDataEngineCrossCreateResolvesOnRealWAL` 耗尽 400 次上限，正常负载下 v1.20.0 / v1.19.2 失败率 35%～53%（既有问题，满载时反而罕见）；固定 5ms 重排 + 单定时器延迟队列让对称交叉创建每轮重演（活锁），改为 5ms + [0, 5ms) 抖动（OPEN-ITEMS C09 预案），上限与最短窗口不变。T-220。
 
 10-05第十六批：[NC-39](bug/RR-20261005-NC-39.md) / [NC-40](bug/RR-20261005-NC-40.md) **已修复、声明场景验证，未发版**。[启动修复/兼容](bugfix/RR-20261005-NC-39.md)、[路由修复](bugfix/RR-20261005-NC-40.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-16/README.md)、[机制](review/IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md)。T-221/222；optional持久字段要求统一升级writer，不自动补旧已推进记录，拒绝消息不自动改路由。

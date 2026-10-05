@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **Saga outbox领取遵守并发更新的重试期限**（RR-20261005-NC-41）：原子领取复查next_attempt_at与lease，陈旧候选不能绕过另一发布者Nack退避；到期恢复及旧token围栏保持。[记录](docs/bugfix/RR-20261005-NC-41.md)
+- **Activity恢复前验证持久计划**（RR-20261005-NC-42、RR-20261001-09残余）：公开Open在Create前拒绝异键/非pending/非法expected计划；sweep在访问Activities前跳过非法键/跨组opening，保留名额且正常组继续。诊断按所属窗口清理，不自动修坏存量，API/格式不变。[记录](docs/bugfix/RR-20261005-NC-42.md)
+
 - **Saga启动幂等身份独立持久化**（RR-20261005-NC-39）：`StartDigest` / `start_digest,omitempty` 保存规范化原始意图，步骤Data与Resume截止时间变化不再改变启动身份；原请求返回当前进度，异意图明确冲突。旧已推进缺摘要记录不能证明原始身份，重投收紧为冲突，不自动迁移；自定义Store/协调writer须保存新增字段。[兼容与证据](docs/bugfix/RR-20261005-NC-39.md)
 - **原生Saga完成路由绑定**（RR-20261005-NC-40）：解码后精确匹配Topic与payload SagaID，在Complete和回执副作用前Permanent拒绝异键。合法发送与wire不变，复用既有NATS settle；不提供发布鉴权或自动改路由。[记录](docs/bugfix/RR-20261005-NC-40.md)
 

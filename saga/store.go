@@ -52,6 +52,7 @@ type Store interface {
 	CompletionRecorded(context.Context, Completion) (bool, error)
 	ClaimDue(context.Context, ClaimRequest) ([]Record, error)
 	Apply(context.Context, ApplyRequest) (ApplyOutcome, error)
+	// ClaimOutbox 必须原子检查到期时间与租约；候选扫描不能绕过并发 Nack 的退避。
 	ClaimOutbox(context.Context, ClaimRequest) ([]OutboxRecord, error)
 	AckOutbox(context.Context, string, Lease) error
 	NackOutbox(context.Context, string, Lease, time.Time, string) error

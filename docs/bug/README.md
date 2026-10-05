@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-05 N06第三批：NC-41 P2、NC-42 P3及RR-20261001-09残余已修复、声明场景验证，未发版。** outbox并发领取复查due，公开Open拒绝畸形持久计划、sweep非法键/跨组写前隔离；7反例红→绿，含恢复/诊断/对账13新增叶子。[本轮](../review/REVIEW-2026-10-05-noncore-27.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。外部Mongo/Redis/HA未验，不自动迁移坏记录。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-41](RR-20261005-NC-41.md) | P2 陈旧outbox候选绕过并发Nack退避 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-42](RR-20261005-NC-42.md) | P3 Open重投执行畸形持久Intent | 已修复、声明场景验证，未发版 |
+| [RR-20261001-09残余](RR-20261001-09.md#复核后的补修2026-10-05) | 非法/跨组opening仍执行或阻塞组 | 已修复（含残余补修，未发版） |
+
 **10-05 N06第二批：NC-39/40两个P2已修复、声明场景验证，未发版。** 原始启动身份与运行状态分离、原生完成路由写前校验；11行为反例红→绿，含兼容/事务/原生取消共26新正式叶子。[本轮](../review/REVIEW-2026-10-05-noncore-26.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-16/README.md)。旧已推进缺摘要记录不自动回填，明确启动身份冲突；N06仍部分完成。
 
 | 编号 | 问题 | 状态 |
@@ -192,7 +200,7 @@
 [RR-20261004-03](RR-20261004-03.md)：**P2** RefHMap Patch 只续期根到叶路径上的 hash，兄弟 hash 过期后 `Get` 返回部分记录且 `ok=true`（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-03.md)）。
 [RR-20261004-02](RR-20261004-02.md)：**P2** `LayeredStore` 的 L1 过期后（或 ttl≤0 时）仍永久否决权威值；远端写已生效却报 `ErrStaleWrite`（NC 修复复审发现）（已修复，未发版；[修复记录](../bugfix/RR-20261004-02.md)）。
 [RR-20261004-01](RR-20261004-01.md)：**P2** `versionedLock.TryLock` 取锁无明确答复（Eval 因 ctx 截止 / 网络错误返回而脚本已在 Redis 执行）时不记 token，实体本进程内不可写直到 LockTTL（缺省 24h）（W-2026-10-04-01，harness 区间核验负对照暴露）（已修复，未发版；[修复记录](../bugfix/RR-20261004-01.md)，T-207）。
-[RR-20261001-09](RR-20261001-09.md)：P3 activity 无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让整组 `AdvanceExpired` 每 tick 失败（W-2026-10-01-04 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-09.md)，T-181）。
+[RR-20261001-09](RR-20261001-09.md)：P3 activity 无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让整组 `AdvanceExpired` 每 tick 失败（W-2026-10-01-04 拍板）（已修复，含10-05残余补修未发版；[修复记录](../bugfix/RR-20261001-09.md)，T-181）。
 [RR-20261001-08](RR-20261001-08.md)：P3 chat 无游标最新页在正常容量淘汰后也报 `Gap=true` 并每次打指标（W-2026-10-01-03 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-08.md)）。
 [RR-20261001-07](RR-20261001-07.md)：P3 game-demo `Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 清掉 `interrupted`、stale 副本又被 `Admit` 放行（W-2026-10-01-02 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-07.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261001-06](RR-20261001-06.md)：**P2** account 建角 pending slot 没有 owner-only 释放入口，名字被他人拿走后该账号在该区服永久建不了角色（W-2026-10-01-01 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-06.md)，T-182）。

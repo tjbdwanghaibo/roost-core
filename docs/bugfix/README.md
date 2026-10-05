@@ -1,5 +1,13 @@
 # Bugfix 记录
 
+**10-05第十七批：NC-41/42与RR-09残余已修复、声明场景验证，未发版。** 7原始/overlay行为反例红→绿，13新增正式叶子、race420/2Cluster skip、根包14/build/vet及两生成消费通过。[本轮](../review/REVIEW-2026-10-05-noncore-27.md) · [证据](evidence/noncore-bugfix-20261005-17/README.md)。T-223/224、旧T-181追加；完整待审交接见[清单](../review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-41](RR-20261005-NC-41.md) | 原子领取due/lease联合检查 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-42](RR-20261005-NC-42.md) | 持久opening执行前校验及安全恢复 | 已修复、声明场景验证，未发版 |
+| [RR-20261001-09残余](RR-20261001-09.md#复核后的补修2026-10-05) | 非法/跨组写前隔离和所属窗口诊断清理 | 已修复（含残余补修，未发版） |
+
 **10-05第十六批：NC-39/40已修复、声明场景验证，未发版。** 持久启动摘要与完成路由写前校验；11行为反例/旧源码overlay全红→绿，含兼容和取消/重试共26新正式叶子。[本轮](../review/REVIEW-2026-10-05-noncore-26.md) · [矩阵/复跑](evidence/noncore-bugfix-20261005-16/README.md)。T-221/222；旧已推进记录明确冲突，不自动迁移，真实Mongo/NATS/HA保持待验。
 
 | 编号 | 修复 | 状态 |
@@ -94,7 +102,7 @@
 [RR-20261004-14](RR-20261004-14.md)：窗口从设键那次请求（SetNX / Refresh 发出时刻）起算；未答复的跨间断认领记 interrupted，interrupted 的 Held 改为重新认领；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261004-01](RR-20261004-01.md)：取锁 token 按锁对象分代（随机前缀 + 递增序号），owner 是本锁对象更早一代时下一次 TryLock 由 Lua 换新 token / 新 fence 取回，别人持有照旧 NotAcquired、迟到旧代脚本挤不掉新代；RR-20260930-21 的 `releaseUnknownToken` 并入同一判定；T-207（未发版）。
 [RR-20261001-06](RR-20261001-06.md)：名字被别的账号 committed 后同名重试自动释放 pending slot（仍答 `ErrNameTaken`，孤儿未发布角色记录保留且不可玩）；新 owner-only `Admin.ResolvePendingCreation` 备注写 `Account.admin_note`、版本 + 身份围栏 DeleteIf 释放，名字仍被本计划 reserved / committed、已发布、legacy 空 slot 拒绝 `ErrNotResolvable`（560115）；Memory + 真实 Redis 真等租约过期先红后绿；T-182（未发版）。
-[RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（未发版）。
+[RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（含10-05非法键/跨组残余补修，未发版）。
 [RR-20261001-08](RR-20261001-08.md)：chat `pageOf` 去掉“到达 ring 头部且头部序号 > 1”这条洞判定，普通容量淘汰后的无游标最新页 / 翻到保留边缘 `Gap=false`、不计 `history.gap`；Gap 只剩页内洞、游标点名消息已不在、尾部缺失三种；Memory + 真实 Redis 先红后绿（未发版）。
 [RR-20261001-07](RR-20261001-07.md)：game-demo `PlayerOwners.Claim` 扔副本失败后 `abandon` 本地租约状态——刷新循环不再续、`confirmRenewal` 不再清 `interrupted`、`Admit` 持续拒绝，租约自然过期，恢复点是之后的 `Claim` 等清除完成；模板回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261001-05](RR-20261001-05.md)：activity `applyProgress` 把 ledger 条目已过期的 pending 证明回收（条目消失即越过 ReservationTTL 重试地平线）；满窗改报 `ErrProgressBacklog`（620119）不再是 `ErrConflict`；新 owner-only `Admin.ReconcileProgress` 补 ledger mark 后释放证明；Memory + 真实 Redis 真等 TTL 先红后绿；T-180（未发版）。

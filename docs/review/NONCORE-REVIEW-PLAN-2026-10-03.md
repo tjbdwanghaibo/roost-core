@@ -62,7 +62,7 @@ Review 完成意味着对固定快照的已声明主链建立调用/状态/资�
 | N03 | bus/nats/servicerpc/etcd，39 | 源文39/39已读、场景部分完成；NC-08～12已修/声明场景验证；真实NATS/etcd、正常Resign预算/服务端清理、重连/lease恢复与容量矩阵待补 | 6～10 |
 | N04 | redis/mongo/cache/migration，当前41（原40+事务实现） | 源文41/41累计已读、场景部分完成；NC-13～30已修；schema/并发/未知16新场景、12正式清理回归、11生成消费者通过；接续Repository持久迁移/重载、真实Mongo与Cluster/HA/长容量 | 6～10 |
 | N05 | remoteentity/ownerroute，24 | NC-33～36及旧快照过期残余已修；回填/重订阅/在途退订具名本机证据已补，仍场景部分完成；真实broker/水位/HA容量与Mirror DTO留项，接续N06，不重审核心完整提交链 | 2～4 |
-| N06 | service/saga/servicemetrics，36 | 第25/26轮补三消费者/Resume、原始启动身份/完成路由与取消恢复；NC-37～40已修，第26轮新增26叶子；仍场景部分完成。接续Service相对db4b7009的account/chat/activity/global增量、实际指标落点与Saga跨协调器/receipt余项，复用十域旧证据；真实Mongo/NATS/HA另验 | 2～4 |
+| N06 | service/saga/servicemetrics，36 | 第25～27轮补三消费者/Resume、启动身份/路由/取消、outbox并发退避与Activity持久计划；NC-37～42及RR-09残余已修，第27轮13新叶子。仍部分完成，下一global RPC/Mod/App.Live实际消费→Saga跨协调器/晚receipt/TTL/发布未知→N07/08；全部余项见[交接清单](REMAINING-REVIEW-HANDOFF-2026-10-05.md)，不重做Service十域/不以本机绿关闭外部专项 | 2～4 |
 | N07 | configdata/attribute/event/errcode，10 | 运行配置与生成邻接已查；真实热更新/校验、属性变更传播、事件订阅与错误映射补证 | 2～4 |
 | N08 | codegen，102 | 多轮已查，整体仍部分完成；复用 N02 正式 Webroute消费/退役，不双计，接续 cfggen required/ref/skipempty/JSON及索引往返、旧工程upgrade/工具限制 | 4～7 |
 | N09 | skill（含 cmd），182 | 最大单元；先建立子包矩阵，再技能状态/结算/事务接入/同步/组合能力，按职责拆 3～5 批 | 10～16 |

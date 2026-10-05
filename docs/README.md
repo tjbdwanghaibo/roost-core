@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-05第27轮及完整接力：** [本轮修复/review](review/REVIEW-2026-10-05-noncore-27.md)、[后续全部review清单](review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)、[进度](review/PROGRESS.md)。NC-41/42及RR-09残余已修、未发版；另一agent下一从N06 global RPC/Mod/App.Live增量接续，外部专项与核心线接口单列。
+
 **10-04 N04修复与第三批：** [NC-16～20已修/正式消费者](review/REVIEW-2026-10-04-noncore-13.md)、[源码40/40与新审查](review/REVIEW-2026-10-04-noncore-14.md)、[五新未修RR](bug/REVIEW-2026-10-04-noncore-14.md)、[机制学习](review/IMPLEMENTATION-MONGOTEST-IDENTITY-COPY-AND-UNKNOWN-WRITES.md)、[进度](review/PROGRESS.md)。未发版，源码阅读数不代表业务覆盖率。
 
 **10-04 缓存修复与N04第二批：** [NC-13～15已修](review/REVIEW-2026-10-04-noncore-11.md)，41正式项/真实Redis/生成DAO消费者通过；[新审查](review/REVIEW-2026-10-04-noncore-12.md)累计39/40源文、场景部分完成，确认[NC-16～20五个未修问题](bug/REVIEW-2026-10-04-noncore-12.md)。[学习/实施方向](review/IMPLEMENTATION-REFHMAP-LAYOUT-PATCH-AND-REDIS-LIFETIME.md) · [进度](review/PROGRESS.md)。未发版，下方为历史轮次。

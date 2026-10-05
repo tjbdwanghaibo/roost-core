@@ -1,5 +1,13 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N06第三批/第十七批修复
+
+起点12726715，fetch/pull后主分支未变，无新Wanted/skill镜像差异。[本轮](REVIEW-2026-10-05-noncore-27.md) · [机制](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。NC-41 P2（outbox候选→并发Nack→原子领取）、NC-42 P3（Open持久坏计划）及RR-09非法/跨组sweep残余已修复、声明场景验证，未发版。
+
+13新增正式叶子；原9叶子7红/2控制与旧产品overlay一致。race矩阵420 pass/2Cluster skip/0fail，根包14、build/vet、正式CLI两同步消费通过，计数不累计作覆盖率。account/chat/global/Mail具名增量已读/相关回归分列，N06仍场景部分完成。下一global RPC/Mod/Redis/App.Live实际消费→Saga剩余跨协调器/晚receipt/TTL及发布未知结果→N07/08。
+
+用户要求交给另一agent的[全部后续review清单](REMAINING-REVIEW-HANDOFF-2026-10-05.md)已按N01～N15列出具体待查项，N06 S1～S6给精确停点，核心另一线接口和真实Mongo/Redis/Cluster/NATS/etcd/HA/长容量另列；候选CSV只用于定位。未声明整域/全仓完成，无新完成日期承诺，不等待CI，不发版。
+
 ## 2026-10-05 N06第二批/第十六批修复
 
 47fca740干净快进cb11be90；新增codegen信号补修已整合，Unix压力结论未在Windows独立重做，无新Wanted/skill包差异。[本轮](REVIEW-2026-10-05-noncore-26.md) · [机制/漏检复盘](IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-16/README.md)。NC-39/40两个P2已修、声明场景验证，未发版。

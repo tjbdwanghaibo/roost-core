@@ -322,7 +322,8 @@ func (s *MongoStore) ClaimOutbox(ctx context.Context, request ClaimRequest) ([]O
 	}
 	out := make([]OutboxRecord, 0, len(candidates))
 	for i := range candidates {
-		claimFilter := bson.M{"_id": candidates[i].ID, "lease_until": bson.M{"$lte": request.Now}}
+		// RR-20261005-NC-41：Find 后另一发布者可能 Nack 并延后重试；领取时复查期限。
+		claimFilter := bson.M{"_id": candidates[i].ID, "next_attempt_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
 		update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
 		var claimed outboxDoc
 		err := s.outbox().FindOneAndUpdate(ctx, claimFilter, update, &claimed, fmongo.FindOneAndUpdateOption{ReturnAfter: true})

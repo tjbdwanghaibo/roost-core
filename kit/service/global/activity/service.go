@@ -149,8 +149,9 @@ type Service struct {
 	// has already reported as unusable, so the report is written once when
 	// the problem appears and once when it is gone rather than every tick
 	// (RR-20261001-09). The Server is generated code and cannot carry this.
-	openingMu        sync.Mutex
-	malformedOpening map[Key]string
+	openingMu sync.Mutex
+	// 按所属窗口分组；坏条目的 Key.GroupID 本身可能不可信，不能用它决定日志清理归属。
+	malformedOpening map[string]map[Key]string
 
 	cfg    Config
 	report servicemetrics.Sink
@@ -326,6 +327,10 @@ func (s *Service) admitToWindow(ctx context.Context, activity Activity) (Activit
 		if next.contains(key) {
 			if i := next.openingIndex(key); i >= 0 {
 				if next.Opening[i].Intent != nil {
+					// NC-42：恢复复用持久意图前验证；坏记录只能拒绝，不能写出另一个活动。
+					if reason := openingIntentProblem(next.Opening[i], key.GroupID); reason != "" {
+						return current, false, fmt.Errorf("%w: malformed opening intent for %s: %s", ErrConflict, key, reason)
+					}
 					planned = next.Opening[i].Intent.clone()
 				} else {
 					intent := planned.clone()
@@ -827,6 +832,15 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		if _, scan := selected[entry.Key]; !scan {
 			continue
 		}
+		// RR-20261001-09 残余：键合法且属于本组才可读写 Activities/其他窗口。
+		if err := entry.Key.Validate(); err != nil {
+			malformed[entry.Key] = err.Error()
+			continue
+		}
+		if entry.Key.GroupID != groupID {
+			malformed[entry.Key] = "entry key belongs to a different group"
+			continue
+		}
 		current, exists, err := s.cfg.Activities.Get(ctx, entry.Key)
 		if err != nil {
 			return nil, err
@@ -839,7 +853,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 				reclaim = append(reclaim, entry.Key)
 				continue
 			}
-			if reason := openingIntentProblem(entry); reason != "" {
+			if reason := openingIntentProblem(entry, groupID); reason != "" {
 				malformed[entry.Key] = reason
 				continue
 			}
@@ -912,8 +926,16 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 // or "" when it can. OpenActivity validates the same things before it writes
 // the plan, so a non-empty answer means the stored record was changed by
 // something other than this package.
-func openingIntentProblem(entry OpeningEntry) string {
+func openingIntentProblem(entry OpeningEntry, groupID string) string {
+	if err := entry.Key.Validate(); err != nil {
+		return err.Error()
+	}
+	if entry.Key.GroupID != groupID {
+		return "entry key belongs to a different group"
+	}
 	switch {
+	case entry.Intent == nil:
+		return "intent is missing"
 	case entry.Intent.Key != entry.Key:
 		return fmt.Sprintf("intent key %s does not match entry key", entry.Intent.Key)
 	case entry.Intent.Status != StatusPending:
@@ -935,20 +957,22 @@ func (s *Service) noteMalformedOpenings(groupID string, snapshot Window, scanned
 	s.openingMu.Lock()
 	defer s.openingMu.Unlock()
 	if s.malformedOpening == nil {
-		s.malformedOpening = make(map[Key]string)
+		s.malformedOpening = make(map[string]map[Key]string)
+	}
+	known := s.malformedOpening[groupID]
+	if known == nil {
+		known = make(map[Key]string)
+		s.malformedOpening[groupID] = known
 	}
 	for key, reason := range malformed {
-		if s.malformedOpening[key] == reason {
+		if known[key] == reason {
 			continue
 		}
-		s.malformedOpening[key] = reason
+		known[key] = reason
 		slog.Warn("activity: opening intent is malformed; entry skipped and its slot kept until repaired",
 			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase, "reason", reason)
 	}
-	for key := range s.malformedOpening {
-		if key.GroupID != groupID {
-			continue
-		}
+	for key := range known {
 		if _, still := malformed[key]; still {
 			continue
 		}
@@ -956,9 +980,12 @@ func (s *Service) noteMalformedOpenings(groupID string, snapshot Window, scanned
 		if snapshot.openingIndex(key) >= 0 && !scan {
 			continue
 		}
-		delete(s.malformedOpening, key)
+		delete(known, key)
 		slog.Info("activity: opening intent is usable again or the entry is gone",
 			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase)
+	}
+	if len(known) == 0 {
+		delete(s.malformedOpening, groupID)
 	}
 }
 

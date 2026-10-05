@@ -320,6 +320,10 @@ Write 模式使用 Mongo 持久所有权；共享写先竞争 Redis 协调锁，
 
 ## 7. 跨服务 Saga
 
+outbox候选扫描不授予发布权：自定义Store的ClaimOutbox也必须原子检查next_attempt_at与lease，避免另一发布者Nack延后后仍被陈旧候选领取（NC-41）。到期可重试、旧token不能Ack/Nack新持有者，不通过缩短退避解决该竞争。[说明](bugfix/RR-20261005-NC-41.md)。
+
+Activity的持久opening若畸形，Open重投返回ErrConflict且不写活动；sweep保留坏名额/指标并跳过非法键或跨组条目。先核对原始计划并修正，再用合法Open或sweep恢复；不盲删生产记录、不把坏计划成功当正常进度。[NC-42与升级边界](bugfix/RR-20261005-NC-42.md)。
+
 启动重投比较原始意图，不比较当前业务状态（NC-39）：新记录的 `StartDigest` / Mongo `start_digest` 与可变 `Data`、`DeadlineAt` 分离。相同 type/business_key/definition_version/data/deadline 返回已有进度；不同意图或显式ID不符返回 `ErrIdentityConflict`，不会重置 Saga。自定义 Store 必须保留摘要，协调 writer 统一升级；旧已推进缺摘要记录无法证明原意图，重投明确冲突，应先 Get/List 查进度，不换业务键盲重做、不自动从当前 Data 回填摘要。[兼容/迁移边界](bugfix/RR-20261005-NC-39.md)。
 
 原生完成 effect 的 Topic 必须是 `saga.result.<payload SagaID>`（NC-40），不一致在状态/回执写入前永久拒绝；正式 `NewCompletionEffect/EmitCompletion` 本来满足该格式。自定义发布源修正路由后再按幂等协议发送；这不是内部发布鉴权。[说明](bugfix/RR-20261005-NC-40.md)。取消消费等待不代表业务已撤销，原生收件箱保留可能在途的lease，按权威receipt与既有屏障恢复，不删WAL/回执。[取消学习](review/IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md)。

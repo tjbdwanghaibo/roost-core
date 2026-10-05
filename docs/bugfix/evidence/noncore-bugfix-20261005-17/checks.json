@@ -1,0 +1,49 @@
+[
+  {
+    "check": "red",
+    "command": "GOWORK=off go test -count=1 -json -run \"TestOutboxClaimRechecksDueAfterAnotherPublisher|TestOpenActivityRejectsMalformedPersistedIntentBeforeCreate|TestOpeningSweepRejectsInvalidOrForeignGroupBeforeSideEffects\" ./saga ./kit/service/global/activity",
+    "exit": 1,
+    "result": "7 behavior fail / 2 control pass"
+  },
+  {
+    "check": "overlay-red",
+    "command": "Run-Repro.ps1 -Scratch D:/whb_s/.tmp/noncore-review-20261005-27/repro",
+    "exit": 1,
+    "result": "7 behavior fail / 2 control pass"
+  },
+  {
+    "check": "formal",
+    "command": "GOWORK=off go test -race -count=1 -json -run \"TestOutboxClaimRechecksDueAfterAnotherPublisher|TestOpenActivityRejectsMalformedPersistedIntentBeforeCreate|TestOpeningSweepRejectsInvalidOrForeignGroupBeforeSideEffects|TestOpeningRecoveryKeepsValidIntentAndLegacyAdmission|TestMalformedForeignOpeningDiagnosticsClearWithItsWindow|TestProgressReconcileRetainsAConcurrentNewProof\" ./saga ./kit/service/global/activity",
+    "exit": 0
+  },
+  {
+    "check": "race",
+    "command": "GOWORK=off go test -race -count=1 -json ./saga ./kit/saga ./kit/service/account ./kit/service/chat ./kit/service/global/... ./servicemetrics ./kit/service/servicemetrics",
+    "exit": 0
+  },
+  {
+    "check": "root",
+    "command": "GOWORK=off go test -count=1 -json .",
+    "exit": 0
+  },
+  {
+    "check": "build",
+    "command": "GOWORK=off go build ./...",
+    "exit": 0
+  },
+  {
+    "check": "vet",
+    "command": "GOWORK=off go vet ./saga ./kit/saga ./kit/service/account ./kit/service/chat ./kit/service/global/... ./servicemetrics ./kit/service/servicemetrics",
+    "exit": 0
+  },
+  {
+    "check": "mail",
+    "command": "GOWORK=off go test -race -count=1 -json ./service/mail ./kit/service/mail",
+    "exit": 0
+  },
+  {
+    "check": "generated-sync",
+    "command": "Run-GeneratedSync.ps1 -Scratch D:/whb_s/.tmp/noncore-review-20261005-27/generated-sync",
+    "exit": 0
+  }
+]

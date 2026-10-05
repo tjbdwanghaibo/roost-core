@@ -1,0 +1,84 @@
+# 后续 Review 清单与接手说明
+
+更新：2026-10-05，第27轮完成时点。仓库 `D:/whb_s/cube-core`，单模块 `github.com/tjbdwanghaibo/roost-core`；源码基线 `12726715` 加本轮 NC-41/42 与 RR-09 残余修复。最终提交在 Git 历史查 `fix(saga,activity)`，接手先 fetch/pull，按差异更新本表。[本轮](REVIEW-2026-10-05-noncore-27.md) · [跨轮进度](PROGRESS.md) · [原分域计划](NONCORE-REVIEW-PLAN-2026-10-03.md)。
+
+这份清单覆盖本线全部15个非核心单元的剩余工作，并单列与另一核心工作线的接口。它是待审场景清单，不是未读文件总数或“全仓无 bug”证明。历史源文已读、修复已验证与真实环境验收分别记录；已完成的反例不要重新登记。当前 main 的 Go 路径目录见[候选清单](evidence/noncore-review-20261005-27/current-candidates.csv)，仅用于定位，不能把每一行当未审或已完成。模板、脚本和部署配置须随对应主链补查。
+
+本次重新盘点784个跟踪Go候选：155为核心共享边界、629归入N01～N15，0未分配；排除tests/testdata/demo/examples/docs和隐藏/产物目录，包含生成Go与cmd。不统计非Go资产，不是784个文件逐一审完的证明，也不是629项未完成任务。Kit目录候选属于N14定位，实际场景归主域且只计一次。
+
+## 接手先做什么
+
+1. 读取仓库 AGENTS、canonical roost-coding/roost-bugfix、交接 §4/§5/§7 和本表；核对完整 skill 包与本机镜像。沿用用户“修复并继续 review”的授权，先红后绿、留 bug/bugfix/学习/进度文档、提交推送，不发版，不等待 GitHub CI。
+2. 先看最新 Wanted 与提交增量。本轮没有新的 Wanted；NC-41/42 和 RR-09 残余已有原红/overlay/绿证据。用户之后明确“没有修复”时跳过旧修复验收，直接推进新内容；明确要求复核时才恢复对应验收。
+3. 图谱项目用 roost-core，默认 Verify。当前共享 generation 仍为2026-09-30，index_status→search_graph/trace/snippet→coverage→当前源码补证。不要信 D-whb_s 汇总项目代表最新 HEAD，不删索引锁/停其他实例。
+4. **下一首选 N06 的 global RPC/Mod 与 App liveness 替代增量**，随后剩余 Saga 跨协调器/消息重投场景；把本机有界矩阵整理好后转 N07→N08。外部环境受限项留独立清单，不因资源缺失无限阻塞新单元，也不把它算通过。
+5. 已整合 `b4152f15` 的 skill 新规则：同模块反复缺陷要报告方向判断。Saga/Activity 本轮修复链和方向建议见[学习文档](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md#反复缺陷的方向判断)；接续时先建立剩余身份/期限契约矩阵，避免继续补孤立分支。
+
+## 全部非核心剩余单元
+
+| 单元 | 当前证据状态 | 后续具体入口和问题 | 优先级/环境 |
+| --- | --- | --- | --- |
+| N01 app/lifecycle/manager/health/admin | 既有15文件清单与多轮修复；App singleton 为后续增量，已有另一线实现/演练记录，不能由合并推定本线独立验收 | Group 非协作回调/停止预算；Ops bind/hijack 与权限/关闭；singleton 初始化失败/丢回复/续期迟到/失锁 OnFail 围栏 Nest/停机后释放/Live 能力的完整进程链，先比对最新 App 方案与已做场景 | 高；预算/异常本机，真实失锁与进程演练需独占 Redis/多进程 |
+| N02 httpclient/httpserver/security/gateway/webroute | 8文件已读；正式 Webroute CLI、HTTP消费、退役URL与3RR已验证，仍部分完成 | 非协作 callback、连接/请求容量、业务鉴权与跨模块配置；生成器输出→Kit注册→实际HTTP→拒绝/取消/关闭，不只编译 | 中高；本机HTTP可做，真实网关/客户端另验 |
+| N03 bus/nats/servicerpc/etcd | 原39文件清单已读；NC-08～12、真实NATS停机若干路径有后续记录 | 真实JS发布/ACK/Term/重投/重连、满队列 fallback/消息在途关闭与再次Stop；ServiceRPC发现+请求剩余期限；etcd选主正常Resign预算、服务端资源清理、watch/lease恢复。先核对 W-2026-10-04-02 后续RR记录，勿重复登记 | 高；替身控制本机，connected NATS/etcd、HA需外部 |
+| N04 redis/mongo/cache/migration | 原41源文与多轮schema/清理/正式迁移消费已读/有界执行；NC-13～32已修 | 真实Mongo唯一索引/事务重试/未知提交与驱动-替身对照；Redis Lua/Cluster跨slot、TTL/多hash、重连/故障/持久恢复；正式Repository迁移→文件WAL→投影→卸载重载。复用第21/22轮已有反例，不重审整个mongotest | 高；真实Mongo/Cluster/Toxiproxy/HA需独占环境 |
+| N05 remoteentity/ownerroute | 24原候选域，多轮权威键/版本/有效期、消费者/Stop控制已补，Mirror DTO仍未实施 | DTO Mirror 方案与实现是不同状态；审现有mirror/ownerroute正式接入、interest生命周期、L2跨节点最低水位、delete/recreate防复活、真实broker重投/旧callback/Stop、迁移接管/HA与容量。复用主核心线的提交确认，别改其正在处理的代码 | 高；本机组合+外部多节点，设计实现须按当前授权区分 |
+| **N06 service/saga/servicemetrics** | 旧Service十域主链已阶段完成；第25～27轮接续Saga/Service增量。最新13新增回归，NC-37～42与RR-09具名修复，不计整域完成 | **详见下表 S1～S6**；当前先global→Saga剩余→指标实际落点；旧Mail/Match/Session/Rank/Platform只查最新差异和已列缺口，别重做十域 | **下一入口**；大部分本机，外部后端/HA另列 |
+| N07 configdata/attribute/event/errcode | 有生成/配置邻接证据，未建立本域完整矩阵 | configdata真实热更新/失败校验与读取可见性；attribute变更/传播/回滚；event订阅、退订/重入/取消/关闭；跨包错误映射/包装与正式RPC输出。Kit/codegen同行，先界定正常/故障/并发分母 | 下一主域；优先本机 |
+| N08 codegen | 多轮生成消费和N02/N04回归已做，仍部分完成；Windows普通测试不能验Unix进程树 | cfggen required/ref/skipempty、真实JSON/索引往返；旧工程显式upgrade、文件改名/退役、失败回滚和依赖整理；doctor/deps/generate/sync取消与stage清理。Unix signal/process-tree用例在Linux/macOS独立跑；shell部署/rollback的10具名环境skip按记录补测 | 下一主域；正式CLI/消费本机，POSIX/shell部分跨平台 |
+| N09 skill（含cmd） | 原182候选，是最大单元；不是从引用路径证明已审 | 先按执行/状态、数据/属性、事务/结算、同步/接入建立子包清单；技能开始/打断/结束/重复、组合/伤害与资源结算、Nest快池/提交回滚、DataEngine持久化、Sync和生成接线。拆数批，每批留明确停点 | 高业务价值，N07/08之后；先本机正式链 |
+| N10 ai/actionflow/featureflag/hotcode | 有历史/相邻证据，本线未建立完整矩阵 | 执行图/行为树状态、取消/失败传播/重入；feature flag运行期变更；hotcode注册/替换的并发可见性、旧请求生命周期与回滚。只在真实使用处补抽象，未获授权不纯重构 | 中高；本机 |
+| N11 spatial/timer/clock/index | 本线未建立完整矩阵 | 空间边界与查询/更新一致性；timer重入/取消/重复Stop/关闭后注册；真实时钟同值、注入时钟和期限；index插入/删除/遍历的一致性。用可控事件，别靠任意sleep | 中；本机 |
+| N12 metrics/log/failurelog/robot | robot/指标有历史实证，本线未全域收口 | 标签基数、Depth/gauge生命周期与并发；日志/失败日志排空、失败/磁盘/关闭预算；robot连接/认证/会话/重连/取消/批量压力与真实网关消息恢复 | 中；本机控制，真实网络/长期容量另验 |
+| N13 container/safemap/goroutine/misc/internal | 本线未建立完整矩阵 | 从上层实际使用追踪容器可变值所有权、遍历/删除/关闭并发、goroutine退出和异常传播；公开契约与真实调用方组合。无证据的风格/度数问题不立RR | 中；本机 |
+| N14 Kit跨域装配 | kit按主功能域同行；历史业务实现仍有逻辑，不能叫全是转发 | options/config→实际能力→依赖顺序→Init/Provide/Start/Stop/Health；新增字段是否经过正式模板、默认值/缺配置、停止超时重试和资源创建者。每条证据计入所属主域一次；核心adapter只核对接口/增量 | 同行收口，不重复计算 |
+| N15 scripts/cmd与非Go资产 | Go候选之外的支持资源尚需完整按用途盘点 | 每个脚本/命令的输入/参数/退出码/取消/子进程树、临时文件和工作目录；部署/rollback/pretag/生成/故障脚本的边界，配置与生成值一致。可能破坏数据的脚本只在明确隔离环境执行；不是扩大成所有demo独立业务审计 | 末期收口，随主域提前审高风险脚本 |
+
+“原文件数”均是10-03清单的历史定位数，不是今日未审分母，也不按文件数扣审查工时。没有依据承诺全部 review 的完成日期；下一 agent 完成每个有界场景单元后更新状态即可，不靠换口径宣称100%。
+
+## N06 的精确停点
+
+| 项 | 本轮已完成 | 下一步 |
+| --- | --- | --- |
+| S1 account | 读取create_role/admin新增恢复契约；foreign committed/reserved分流、DeleteIf版本/身份、备注先写；相关既有公开用例race复跑 | 不重跑正常链当新审；补最新差异、丢回复/并发admin与建角组合、跨进程持久恢复；真实Redis条件另记 |
+| S2 chat | 读取最新pageOf/Gap变化，相关容量/游标/洞/指标既有正式用例race复跑 | 补真实Redis/Cluster分页与prune交错、返回对象隔离/客户端恢复组合；新接口变化才重新进入 |
+| S3 activity | Open畸形计划3形状红绿；sweep非法键/跨组3形状红绿；合法/legacy、日志清理；ReconcileProgress读后新证明保留并最终收敛 | confirmed Keys/存量窗口异常、oversized轮转与故障、请求ID/TTL边界及旧操作对新reservation的身份隔离；真实Redis/Cluster/升级旧writer排空。NC-42不自动修已污染记录 |
+| **S4 global/App替代** | global租约API删除后的Service/类型/Mod主结构已读，现有普通回归跑过；App其他线演练只引用 | **下一优先**读global_rpc/生成routing RPC/server_run/redis_store/integration增量，验证route epoch→RPC affinity→capability注册、缺旧lease入口、game-demo/activity使用App.Live的实际调用。App singleton事故链与核心线协调 |
+| S5 Saga | 三订阅health、Resume BSON代际、StartDigest、完成Topic、事务取消/重试与本轮outbox扫描→Nack→再领取已具名验证 | coordinator A租约过期→B接管→A晚Apply、deadline/compensation/Resume与晚receipt；多个completion不同结果/旧attempt、receipt/operation TTL后重投；发布失败/成功但Ack未知/并发supersede、批量时间预算、真实broker和Mongo跨进程恢复 |
+| S6 servicemetrics/Mail其余Service | Sink/Recorder seam已有源码与回归；新路径使用已有低基数标签。Mail nil/empty逐字段比较增量已读 | 指标追到每个真实错误/取消/恢复落点；Mail最新比较的真实EnvelopeStore/恢复消费组合；十域旧已完成内容复用10-01独立审计，仅差异/未验证专项重开 |
+
+## 三大核心模块与另一线的边界
+
+用户说明 Nest、Sync、DataEngine 已由另一 agent 基本 review。这里只沿集成需要读取，不把“基本跑过”写成全部完成。接手的 agent 先索取该线具名交接或读仓库记录，按以下缺口核对所有权，避免同时改同一生产文件：
+
+- K1 Nest/Entity/lock/worker/fctx：快池禁止阻塞、冷加载/慢续行、动态声明/组迁移、交叉创建抖动、局部回滚/关闭结算；U-0279生成工程压力有作者记录，本线只作本地集成，不冒认独立千轮验证。
+- K2 DataEngine/nestwal/versionstore：正式DAO→文件WAL→准入/durable/投影→checkpoint→卸载重载；未知结果/强杀、连续成功前缀、schema、并行投影与跨实例恢复。
+- K3 Remote实体权限：owner/grant/fence与Mongo正式写权限、未知结果finalizer、版本/墓碑/删除重建、多实体/多DAO原子提交；本线N05只补mirror/ownerroute接入等范围。
+- K4 Sync/lockstep/entitysync/syncstream：复制/客户端ACK与恢复、水位、epoch/lifetime、remove-before-create、公平预算、两模式生成链、满载和停机；已有独立完成记录优先复用，缺记录标未知。
+
+以上是核对入口，并非本轮又发现四大核心新bug；其他线已经覆盖的场景不重新安排，真正未覆盖项再纳入其清单。
+
+## 外部验证单独排期
+
+本机可先完成：可控并发/取消/恢复、普通race/vet/build/根包门禁、正式CLI生成消费、HTTP与文件WAL/子进程控制。它们不替代以下验收：
+
+| 环境/专项 | 待做验证 | 结果应证明 |
+| --- | --- | --- |
+| 真实Mongo replica set | transaction callback/commit重试、UnknownTransactionCommitResult、网络丢回复、唯一/稀疏索引与迁移消费 | 最终DAO/版本/receipt/outbox/checkpoint一致，不能取消即假定未提交 |
+| 隔离Redis单点/Cluster/Toxiproxy | Lua实际落地后丢回复、TTL边界、跨slot键布局、断网/重连/部分完成 | 不误放权、不永久残留、合法新ctx/新实例可恢复；本轮两Cluster skip补实跑 |
+| 真实NATS/etcd | JS ACK/Term/重投/drain/关闭、etcdResign/lease/watch恢复与服务端资源 | 成功/失败/结果未知分清，再次Stop或接管收敛 |
+| Linux/macOS + Windows | codegen取消/信号/进程树、暂存目录清理、shell部署/rollback | 构建/生成进程与子孙不遗留；未编入Windows的Unix用例另验 |
+| 多节点HA/强杀 | owner/route/lease迁移、双实例/失锁、旧callback/旧ack、冷恢复和跨服业务 | 不双写/防复活、责任与回执可恢复，已有其他线实测标明来源 |
+| 同配置容量/长稳 | 峰值/持续流量、积压/GC/队列、标签/缓存/历史数据增长、磁盘/WAL水位 | 同机前后对照、真实业务TPS与p99/max、最终数据；不以短测当长期保证 |
+
+不使用另一 agent 的端口/库/目录做破坏性清理，不输出 env.sh/凭据；只关闭自己创建的实例。环境缺失写明条件和入口即可，不编造绿灯。
+
+## 交付与收口标准
+
+每个待审项给出源码SHA、调用/数据/资源所有权链、适用场景和实际结果；确认bug有原红与修复绿，观察/设计/外部未验证单列。更新 PROGRESS、学习文档和本表的停点，提交推送确认远端包含该提交。不要将包测试数、CSV行数或文档引用率作为业务覆盖率。
+
+当15个单元都有有界源码/行为记录、确认问题收敛且受限场景已具名交接后，建立固定快照的 NONCORE-REVIEW-COMPLETION；外部未验仍明确留项，再与核心工作线完成表合并。期间新增功能另列增量，避免移动基线覆盖掉历史结论。
+
+可以直接给另一 agent 的任务：
+
+> 使用仓库 roost-coding/roost-bugfix 与已安装 roost-review，先 fetch/pull；读取本清单和 PROGRESS，从 N06 S4 global RPC/Mod 与 App.Live 替代增量接续，然后 Saga 具名余项→N07→N08→N09～N15。复用旧Service十域与已闭合RR，不重做全域。确认bug先红后绿修复、留中文关键注释/bugfix/学习/进度，提交推送但不发版、不等CI。外部资源受限项单列；与核心另一线避免重叠修改。用户明确“没有修复”时跳过旧验收，推进新内容。
