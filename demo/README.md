@@ -191,6 +191,10 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     并不包含那次副作用的事务上。
   - 业务拒绝也**提交**：不动数据，只写回执和一个失败的完成结果——协调器听不到的拒绝会让 saga 空等到 deadline。
     只有基础设施错误才返回 error（回滚，让投递退避重试）。
+- **在哪个进程执行**：debit / refund 改的是发送方的 Player，只在发送方绑定的 sid 上执行。`StartGift` 把发起进程的 sid
+  写进 saga 状态（`from_sid`；能发起赠礼的玩家一定在本服服务，也就一定绑定在这个 sid 上）。步骤消费者共用一个 durable，
+  落到别的 sid 的进程上时，准入拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它自己认领执行；
+  发送方离线、内存里没有副本也照常执行。没有 `from_sid` 的载荷不能路由，一律拒绝并记 Error。
 - **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
   终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
 - **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →

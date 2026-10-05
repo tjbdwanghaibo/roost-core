@@ -39,6 +39,7 @@ import (
 type alwaysOwner struct{}
 
 func (alwaysOwner) Serve(context.Context, int64, int32) error { return nil }
+func (alwaysOwner) SID() int32                                 { return 1000 }
 
 // boundSession 是一条已认证的会话，Claims 里带着认证器从 account 取来的角色绑定 sid。
 type boundSession struct{ claims map[string]string }
@@ -233,6 +234,8 @@ func TestEnterGameColdLoadStuckOnProjectionAnswersWithinTheLoginBudget(t *testin
 
 // recordingOwners 记下登录端点交给驻留表的绑定 sid，并按“本服是 1000”回答。
 type recordingOwners struct{ served []int32 }
+
+func (*recordingOwners) SID() int32 { return 1000 }
 
 func (owners *recordingOwners) Serve(_ context.Context, playerID int64, boundSID int32) error {
 	owners.served = append(owners.served, boundSID)

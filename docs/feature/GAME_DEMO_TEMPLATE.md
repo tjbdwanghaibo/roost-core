@@ -731,6 +731,16 @@ matchmaker 在分组前按所有权过滤候选票（`OwnedHere`，**不**认领
 
 ### 9.12 第二十批（2026-09-19）：拒绝变成转交，`ownerroute` 有了第一个使用方
 
+> **部分取代（2026-10-05）**：“拒绝 + 转交、没有收据就不 ack、`runHandoff` 自己认领”的结构不变，
+> 改变的是**按什么路由**：持有者不再查按玩家的 Redis 表，赠礼命令自己携带发送方绑定的 sid
+> （`gift.State.FromSID`，json `from_sid`，由发起赠礼的进程写入本进程 sid；`start_gift` 多一个 `fromSID` 参数）。
+> 准入与转交接收方都用 `PlayerOwners.AdmitBound(From, FromSID)`：是本服就接入并执行（**离线、没有副本的发送方
+> 也照常在其绑定 sid 上 debit / refund**，Nest 在慢池冷加载）；不是本服就转交给 `FromSID` 后拒绝，本进程不建驻留
+> 记录；`FromSID == 0` 视为非法载荷，拒绝并记 Error，不兜底。`ownerroute.Router` 的键换成 sid、解析器是
+> 静态的 `GetRoute(sid) = (sid, sid > 0)`。下文“无人持有时不认领”“所有权读不出来时拒绝”两条测试承诺已随
+> 静态绑定改写或删除，现行的 `gift_handoff_test` 见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §13 第 4 笔记录。
+> 下文保留作历史记录。
+
 §9.11.6 的第一条。上一批把不归自己的步骤**拒掉**，靠 durable 的重投最终落到持有者身上；
 这一批把拒绝改成**拒绝 + 转交**，于是 `ownerroute` 这个此前零覆盖的包有了真实使用方。
 

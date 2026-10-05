@@ -50,7 +50,7 @@ func seedRecipient(t *testing.T, mongo *mongotest.Client, playerID int64) int64 
 // 成功，不管 dataengine.database 配成什么。
 func TestDeliverFindsTheRecipientInThePlayerDaoDatabase(t *testing.T) {
 	mongo := mongotest.NewClient()
-	command := giftCommand(t, 42) // To = 43
+	command := giftCommand(t, 42, 1000) // To = 43
 	seedRecipient(t, mongo, 43)
 	mailer := &sendingMailer{}
 	steps := giftSteps{mongo: mongo, mailer: mailer}
@@ -71,7 +71,7 @@ func TestDeliverFindsTheRecipientInThePlayerDaoDatabase(t *testing.T) {
 // 拒绝、不是基础设施错误——否则投递会一直退避重试到 deadline。
 func TestDeliverStillRefusesARecipientWhoNeverEnteredTheGame(t *testing.T) {
 	mongo := mongotest.NewClient()
-	command := giftCommand(t, 42)
+	command := giftCommand(t, 42, 1000)
 	seedRecipient(t, mongo, 42) // 发送方在，收件人 43 不在
 	mailer := &sendingMailer{}
 	steps := giftSteps{mongo: mongo, mailer: mailer}

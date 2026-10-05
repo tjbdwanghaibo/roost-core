@@ -88,10 +88,15 @@ func (step NativeStep) Complete(success bool, reason string) error {
 // compensation. It is JSON because the saga runtime stores and ships it as
 // bytes and an operator reads it from the saga record.
 type State struct {
-	From   int64 `json:"from"`
-	To     int64 `json:"to"`
-	ItemID int64 `json:"item_id"`
-	Count  int32 `json:"count"`
+	From int64 `json:"from"`
+	// FromSID 是发送方绑定的 game sid，由发起赠礼的进程写入自己的 sid：赠礼只能由在线的发送方在
+	// 他的会话所在的进程上发起，而玩家只在自己绑定的 sid 上服务，所以发起进程的 sid 就是发送方的
+	// 绑定 sid。debit / refund 改的是发送方的 Player，按它决定在哪个进程执行（gift_saga 的准入与
+	// 转交）；为 0 的状态不能路由，步骤准入一律拒绝。
+	FromSID int32 `json:"from_sid"`
+	To      int64 `json:"to"`
+	ItemID  int64 `json:"item_id"`
+	Count   int32 `json:"count"`
 }
 
 // Validate is what every step trusts about the state it decodes.
@@ -102,10 +107,16 @@ func (state State) Validate() error {
 	return nil
 }
 
-// Encode renders the state for StartRequest.Data.
+// Encode renders the state for StartRequest.Data. A new gift must name the
+// sender's sid: without it neither the debit nor the refund can be routed.
+// Decode does not ask for it, so the step consumers can tell that payload
+// apart from an unreadable one and refuse it by name.
 func Encode(state State) ([]byte, error) {
 	if err := state.Validate(); err != nil {
 		return nil, err
+	}
+	if state.FromSID <= 0 {
+		return nil, fmt.Errorf("gift: state %+v names no sender sid", state)
 	}
 	return json.Marshal(state)
 }

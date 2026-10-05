@@ -18,8 +18,9 @@ import (
 // the saga start intent is committed in the same WAL record, so a gift is
 // either started durably or refused — never started for items the player
 // did not have. The saga id is the sender, session and frame sequence, so a
-// client retrying the frame does not start a second saga. What happens next
-// is asynchronous; the client polls GiftStatus.
+// client retrying the frame does not start a second saga, and the gift
+// carries this process's sid as the sender's bound sid. What happens next is
+// asynchronous; the client polls GiftStatus.
 func (controller *Controller) HandleSendGift(context *player_agent.Context, request *pb.SendGiftRequest) (*pb.SendGiftResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("send_gift endpoint: context and request are required")
@@ -29,7 +30,17 @@ func (controller *Controller) HandleSendGift(context *player_agent.Context, requ
 		return nil, fmt.Errorf("send_gift endpoint: %w", err)
 	}
 	sagaID := gift.SagaID(context.PlayerID, context.Session.Principal().SessionID, context.Seq)
-	started, err := syncsender.NewStartGiftSender(controller.NestClient()).Sync_StartGift(context.Context(), entityID, context.PlayerID, request.ToPlayerID, request.ItemID, request.Count, sagaID)
+	// The sender's bound sid is this process's: the write gate only lets a
+	// player this process serves reach here, and Serve only serves players
+	// bound to this sid. The steps that change the sender's Player are routed
+	// by it (internal/service/<game>/gift_saga.go).
+	owners, err := controller.PlayerOwners()
+	if err != nil {
+		slog.Error("send_gift: ownership unavailable", "player_id", context.PlayerID, "err", err)
+		code, reason := errcode.ClientError(err)
+		return &pb.SendGiftResponse{Code: code, Reason: reason}, nil
+	}
+	started, err := syncsender.NewStartGiftSender(controller.NestClient()).Sync_StartGift(context.Context(), entityID, context.PlayerID, owners.SID(), request.ToPlayerID, request.ItemID, request.Count, sagaID)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

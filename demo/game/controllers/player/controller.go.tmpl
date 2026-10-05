@@ -91,10 +91,13 @@ type sceneJoiner interface {
 	Leave(ctx context.Context, subjectID int64)
 }
 
-// playerOwners 是登录端点用到的那部分驻留表：把绑定在本服的玩家接入本进程服务。
+// playerOwners 是端点用到的那部分驻留表：登录把绑定在本服的玩家接入本进程服务，赠礼取本进程 sid。
 // 绑定在别的服时 Serve 返回 ErrPlayerElsewhere。按能力名查找，理由与场景相同。
 type playerOwners interface {
 	Serve(ctx context.Context, playerID int64, boundSID int32) error
+	// SID 是本进程的 sid。send_gift 把它作为发送方绑定的 sid 写进赠礼：能在本进程发起赠礼的玩家
+	// 一定经过了 Serve，也就一定绑定在这个 sid 上。
+	SID() int32
 }
 
 // activityRunner is the slice of the game service's activity runner the

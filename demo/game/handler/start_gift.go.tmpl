@@ -25,15 +25,21 @@ import (
 // retried frame reaches the coordinator as the same start and is folded
 // into the existing saga.
 //
+// fromSID is the sid of the process running this transaction — the sender's
+// bound sid, because a player is only served on the sid their role is bound
+// to. The debit and its refund change the sender's Player, so the step
+// consumers route them by it (gift_saga.go); a gift that names no sid could
+// not be routed, and Encode refuses it.
+//
 //roost:nest rollback=undo durability=strict
-func handlerStartGift(target player.IBagEntity, fromPlayerID int64, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
+func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int32, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
 	if count <= 0 {
 		return "", errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
 	}
 	if have := target.BagComp().ItemCount(itemID); have < count {
 		return "", errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", itemID, "have", have, "want", count)
 	}
-	state, err := gift.Encode(gift.State{From: fromPlayerID, To: toPlayerID, ItemID: itemID, Count: count})
+	state, err := gift.Encode(gift.State{From: fromPlayerID, FromSID: fromSID, To: toPlayerID, ItemID: itemID, Count: count})
 	if err != nil {
 		return "", err
 	}
