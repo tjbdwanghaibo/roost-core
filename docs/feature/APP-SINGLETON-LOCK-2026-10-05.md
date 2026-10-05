@@ -570,7 +570,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
   - 开窗是先写者赢：P9 先以 `[1300]` 打开 `race-1791168300`，Q1 随后日志 `activity: window open … expected_game_sids [1302, 1300]` 是它自己算的，协调器记录仍是 `[1300]`。日志易误读，已写进 GAME_DEMO_TEMPLATE §9.15.3。
   - cobra 在 `server exit` 之后打印 `Usage:`，与运行期错误无关的噪音。
 - 演练产物：日志、时间线、玩家快照、生成工程在 scratchpad `c5-drill/`（不进仓库）。
-- 清理：演练进程、etcd 均已停止。Mongo 库（`drill5_202610051033_*` 预演、`drill5_202610051039_*` 正式各 3 个）、JetStream 流（各 3 个 `DRILL5_…`）、Redis 键（`drill5_20261005103*:*`）以及预演误写进共享 `game` 库的四个集合，删除操作被本机的自动权限分类器拦下，**未删除**，交由维护者处理（命令见第 5 笔报告）。
+- 清理：演练进程、etcd 均已停止。Mongo 库（`drill5_202610051033_*` 预演、`drill5_202610051039_*` 正式各 3 个）、JetStream 流（各 3 个 `DRILL5_…`）、Redis 键（`drill5_20261005103*:*`）以及预演误写进共享 `game` 库的四个集合，删除操作被本机的自动权限分类器拦下，**未删除**，交由维护者处理（命令见第 5 笔报告）。**更正（2026-10-05）**：维护者授权后已全部删除——6 个 `drill5_*` Mongo 库 dropDatabase；共享 `game` 库的 `player` / `guild` / `world` / `_guild_id_sequence` 四个集合 drop（删除前用 oplog 核对：四者的全部写入都在 10-05 02:35 UTC 预演窗口内，oplog 覆盖自 10-04 起；`game.players` 保留，仍 2 条）；6 个 `DRILL5_*` JetStream 流删除；Redis `drill5_20261005103*` 共 1240 个键 UNLINK。复查：无 `drill5_*` 库、流、键残留。
 - 验证（`GOWORK=off`）：见提交说明。
 - 未验证：Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围内）；`c493a791` 与 obs34 的补偿预算调整之后的代码没有重跑演练（6b 在 `64acd782` 上测）。
 
