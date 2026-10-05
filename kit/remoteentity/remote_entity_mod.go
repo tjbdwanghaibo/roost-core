@@ -128,11 +128,11 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
 		m.cfg.SnapshotL2TTL = ttl
 	}
-	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4 / NC-190）：
-	// 不带单位的数字、0 与负数都报错；不配置时取 snapshot_cache_ttl。
+	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4）：
+	// 不带单位的数字报错；设置了就必须为正；不配置时取 snapshot_cache_ttl。
 	if cfg.IsSet("remote_entity.cached_max_staleness") {
-		staleness, err := app.ConfigDuration(cfg, "remote_entity.cached_max_staleness")
-		if err != nil {
+		staleness := read.Duration("remote_entity.cached_max_staleness")
+		if err := read.Err(); err != nil {
 			return err
 		}
 		if staleness <= 0 {

@@ -111,3 +111,7 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 ## 2026-10-05 revn05：方案与实现状态
 
 方案本身未改。实现仍未实施（无只读 DTO reader / snapshot client、无订阅确认与首载缓冲、无 MaxStaleness）。本轮修的是现有接入：L2 CAS 落败不再把旧快照装进 L1（[NC-130](../bugfix/RR-20261005-NC-130.md)），版本化删除在共享 L2 留墓碑（[RR-20260913-01 残余](../bugfix/RR-20260913-01.md)）——后者对应本方案“有界墓碑与恢复”里的共享层水位，不等于第 4 步完成。重放 / 首载问题见[审查 O5](REVIEW-2026-10-05-n05-revn05.md)。
+
+## 2026-10-06 B2：方案与实现状态
+
+维护者选了 B2 方向 (a)（[实施记录](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）：共享 L2 为水位权威、L1 只是有界副本，`cached_max_staleness` 落地为配置与契约（对应本方案“读取和关闭”里的 MaxStaleness），DeliverAll 重放的过老快照按发布时刻丢弃。本方案的只读 DTO reader、观察 token、订阅代际与首载缓冲仍未实施。

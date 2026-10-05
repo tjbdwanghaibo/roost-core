@@ -312,7 +312,9 @@ Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带
 
 Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是共享 snapshot store。`Cached` 不回源，`Monotonic` 在版本不足时 singleflight 回源，`Linearizable` 每次读权威存储。高频展示、排行榜引用和 AOI 属性优先 Cached/Monotonic；结算前校验使用 Linearizable 或转成 owner 命令。
 
-共享 L2 是版本水位的共同参照（main 未发版，[NC-130](bugfix/RR-20261005-NC-130.md) / [RR-20260913-01 残余](bugfix/RR-20260913-01.md)）：L2 拒绝更旧的快照时返回 `cache.ErrStaleWrite`，本机 L1 改取 L2 的较新值；版本化删除在 L2 留与 `snapshot_l2_ttl` 同 TTL 的墓碑，任何节点写入不新于它的快照都会被拒，重建（更新的版本）照常写入。`Cached` 没有成文的最大陈旧时间：上限由 L1 TTL（`snapshot_cache_ttl`）、L2 TTL 与 JetStream 同步总线的历史重放共同决定（[审查 O5/O6](review/REVIEW-2026-10-05-n05-revn05.md)）。
+共享 L2 是快照水位（已知最新版本 / 是否已删除）的唯一权威，L1 只是它的有界副本（main 未发版，[B2](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）：每次 L1 写入都先在 L2 上以版本 CAS（删除走带版本删除，留与 `snapshot_l2_ttl` 同 TTL 的墓碑）落地，L1 只记 L2 接受或已持有的值并带确认时刻；L2 拒绝时 L1 改取 L2 的较新值。L2 断网或结果未知时写入不失败，L1 照记但标为未确认。
+
+`Cached` / `Monotonic` 的陈旧上限是 `remote_entity.cached_max_staleness`（core `Config.CachedMaxStaleness`，缺省等于 `snapshot_cache_ttl`；必须是带单位的正时长）：交出的快照在交出前这段时间之内被 L2 或权威确认过“没有更新的版本或删除”。超过上限或未确认的 L1 条目先重新确认——读 L2（一次 HGET），L2 落后时把本机的新版本 / 删除补进 L2，L2 回答不了或已没有值时回源权威；都失败时读取返回错误，不交出旧值（行为收紧：之前 L2 断网时写入的条目会一直交出到 L1 TTL）。`Cached` 在 L1 与 L2 都没有该 key 时仍是“未找到”，不回源。不覆盖：owner 提交后写 L2 失败或结果未知时，L2 本身最长落后 `snapshot_l2_ttl`。复制消息带发布时刻，早于 `snapshot_l2_ttl / 2` 的快照更新（JetStream 同步总线给新 sid 重放的历史）不再被接受（[审查 O5](review/REVIEW-2026-10-05-n05-revn05.md)）。
 
 L2 快照键默认是 `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<policy>`，不带部署前缀。多个部署共用一个 Redis db 时，给每个部署配置不同的
 `remote_entity.snapshot_l2_key_prefix`（例如 `roost:<工程名>`，core 为 `Config.SnapshotL2KeyPrefix`），键变为 `<prefix>:remote_entity:snapshot:…`，

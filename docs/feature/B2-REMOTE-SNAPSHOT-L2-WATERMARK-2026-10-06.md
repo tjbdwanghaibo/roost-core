@@ -91,7 +91,7 @@ L2 不可用时的语义因此是“**继续降级、标为不可信**”：写�
 | `remoteentity/snapshot_l2.go` | `DeleteAtVersion` 在 L2 持有更新快照时返回 `cache.ErrStaleWrite`；两个 Lua 脚本不变 |
 | `remoteentity/syncer.go` | 复制 wire 增加 `published_at`；`ApplyReplica` 丢弃早于 `snapshot_l2_ttl / 2` 的快照更新（计数 `remote_entity.snapshot_replica_historic_dropped_total`） |
 | `remoteentity/config.go`、`transaction_manager.go` | `Config.CachedMaxStaleness` 传给缓存 |
-| `kit/remoteentity/remote_entity_mod.go` | `remote_entity.cached_max_staleness` 用 `app.ConfigDuration` 严格读取（A4 尚未推送，`app.ConfigDuration` 已在 main，NC-190）；必须为正 |
+| `kit/remoteentity/remote_entity_mod.go`、`app/config_validation.go` | `remote_entity.cached_max_staleness` 用 A4 的 `app.ConfigReader` 严格读取（A4 `3e3350d5` 已推送），登记进 `frameworkDurationKeys`（启动前校验）；设置了就必须为正 |
 | `cache/store.go`、`cache/read_through.go` | 只加注释：Remote 快照不再使用 `Superseded` / `FatalRemoteError`，二者作为通用能力保留 |
 
 ### 先红后绿

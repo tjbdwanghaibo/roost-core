@@ -281,6 +281,7 @@ var (
 		"remote_entity.finalize_projection_timeout", "remote_entity.snapshot_cache_ttl", "remote_entity.snapshot_l2_ttl",
 		"remote_entity.snapshot_interest_ttl", "remote_entity.marker_cache_ttl", "remote_entity.snapshot_load_timeout",
 		"remote_entity.transaction_track_ttl", "remote_entity.wrapper_idle_ttl", "remote_entity.mongo.transaction_ttl",
+		"remote_entity.cached_max_staleness",
 		"saga.completion_receipt_ttl", "saga.lease_duration", "saga.store_timeout", "saga.poll_interval",
 		"saga.publish_timeout", "saga.publish_backoff_min", "saga.publish_backoff_max",
 		"saga.stream_max_age", "saga.duplicate_window",

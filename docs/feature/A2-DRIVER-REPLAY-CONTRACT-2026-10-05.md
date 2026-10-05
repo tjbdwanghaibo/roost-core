@@ -121,7 +121,7 @@ GOWORK=off go test -race -count=1 ./kit/redis/ ./versionstore/ ./failurelog/ ./s
 
 - **bus / syncbus（不在本次范围，归别的 agent）**：`bus/reliable.go` 的 `BeginConsume` 用 SETNX 去重。修前回复丢失后被重放，第一次投递会看到自己写的 "processing"，被当成重复消息跳过；现在返回错误、触发重投，但重投时仍会看到 "processing"（这把键是否已写入属于结果未知），处理方式与消费者崩溃后留下 "processing" 相同，要等 InboxTTL。是否改成带 token 的认领，由 bus 负责方决定。
 - **kit/service/global `Bind`**：`Create` 结果未知后，外层再调一次 Bind 会得到 `ErrConflict "already bound"`，尽管存的就是自己那条绑定。这是只插入 API 在结果未知后重试时的误报，不会重复写。这个问题从 NC-100 起就存在，与本次无关。需要时可以改成回读后比较 group / sid。
-- **L2 快照 DEL**：见上表。如果要在结果未知时也保证删除，应该给 Delete 一个带版本的脚本（`DeleteAtVersion` 已经有），并让 `entity/remote_snapshot.go` 不再吞掉它的错误。这两处属于 Remote 本体，本次没有改。
+- **L2 快照 DEL**：见上表。如果要在结果未知时也保证删除，应该给 Delete 一个带版本的脚本（`DeleteAtVersion` 已经有），并让 `entity/remote_snapshot.go` 不再吞掉它的错误。这两处属于 Remote 本体，本次没有改。（2026-10-06 追加：[B2](B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 已处理——带版本删除结果未知时 L1 留未确认的删除标记，下一次读取重发（幂等）；收到复制删除的每个节点也会重发。）
 - **Redis Cluster**：本机没有 Cluster 环境。`noReplay` 在 `ClusterClient.process` 里的 MOVED / ASK 跟随与换节点行为只按源码核对过，没有实测；连同 NC-100 一起留在外部验证清单。
 - **versionstore 一次性写令牌（③）**：维护者决定暂不做。
 - Redis 连接握手阶段的失败（例如新建连接时在 HELLO 上遇到 EOF）在错误值上无法和写出之后的失败区分，保守归为结果未知，不重发。
