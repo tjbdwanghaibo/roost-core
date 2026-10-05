@@ -11,6 +11,8 @@ output="$repo_dir/artifacts/perf/remote/$label"
 lock="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
 mkdir "$lock" || { echo 'Another Remote acceptance run owns the isolated environment' >&2; exit 2; }
 trap 'rmdir "$lock"' EXIT
+# 持锁标记：自己调起的 heal / remote-fault.sh 据此放行，别的会话的入口拒绝（RR-20261005-NC-203）。
+export ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$lock"
 mkdir -p "$output"
 export GOWORK=off GOMAXPROCS="${ROOST_REMOTE_CPU:-4}"
 export ROOST_REMOTE_LOAD=1 ROOST_REMOTE_OUTPUT="$output/result.json"

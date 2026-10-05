@@ -32,6 +32,11 @@ Commands:
   fault nats-all             Stop all isolated NATS nodes
   heal                       Restart missing nodes, clear toxics, wait for full health
 
+Every command except status refuses (exit 2) while ROOT/remote-acceptance.lock is
+held by another run (scripts/test-remote-matrix.sh, scripts/perf/remote.sh, or a
+running `test`); the holder exports ROOST_REMOTE_ACCEPTANCE_LOCK_HELD for its own
+children.
+
 Network faults: when toxiproxy-server is installed, up also starts toxiproxy
 with one proxy per NATS node and exports ROOST_DATAENGINE_IT_TOXIPROXY_URL and
 ROOST_DATAENGINE_IT_NATS_PROXIED_URL; the Toxic* integration tests use them.
@@ -51,6 +56,7 @@ USAGE
 
 preflight() {
 	require_safe_root
+	require_acceptance_lock_free_or_held
 	require_commands mongod mongosh nats-server redis-server redis-cli curl jq nc ps
 }
 
@@ -77,6 +83,7 @@ environment_status() {
 
 environment_down() {
 	require_safe_root
+	require_acceptance_lock_free_or_held
 	toxiproxy_down
 	redis_down
 	nats_down
@@ -85,6 +92,7 @@ environment_down() {
 
 environment_reset() {
 	require_safe_root
+	require_acceptance_lock_free_or_held
 	environment_down
 	if [[ "$ROOST_IT_ROOT" != "$ROOST_IT_CANONICAL_ROOT" ]]; then
 		roost_it_error "refuse unsafe root: $ROOST_IT_ROOT"
@@ -124,6 +132,11 @@ environment_heal() {
 }
 
 environment_test() {
+	# 整套 integration 含故障用例（停节点、给代理加毒），运行期间持有验收锁，与矩阵 / 长稳互斥。
+	require_safe_root
+	mkdir -p "$ROOST_IT_ROOT"
+	record_port_offset
+	acquire_acceptance_lock
 	environment_up
 	# shellcheck disable=SC1091
 	source "$ROOST_IT_ROOT/env.sh"

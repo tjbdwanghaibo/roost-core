@@ -23,10 +23,29 @@ toxiproxy_required() {
 	[[ "${ROOST_IT_TOXIPROXY:-0}" == "1" ]]
 }
 
-toxiproxy_running() {
-	local pid_file
+# toxiproxy_owned_pid 打印 pid 文件里、确实属于本环境的 toxiproxy 进程号：返回 1 表示没有
+# （文件缺失或进程已退出），2 表示 pid 已被别的进程占用（拒绝）。toxiproxy-server 的命令行里
+# 没有根目录，不能走 read_owned_pid；但 API 端口按 ROOST_IT_PORT_OFFSET 平移、每套环境唯一，
+# 命令名加 "-port <API 端口>" 就足以认领。
+# RR-20261005-NC-202：之前只看 pid 是否存活，toxiproxy 退出后 pid 被复用时，down / reset 会
+# kill 掉无关进程，running 为真还会让 up 跳过启动、env.sh 导出不存在的代理地址。
+toxiproxy_owned_pid() {
+	local pid_file pid command_line
 	pid_file="$(toxiproxy_pid_file)"
-	[[ -f "$pid_file" ]] && pid_is_running "$(cat "$pid_file")"
+	[[ -f "$pid_file" ]] || return 1
+	pid="$(tr -d '[:space:]' < "$pid_file")"
+	pid_is_running "$pid" || return 1
+	command_line="$(pid_command "$pid")"
+	# 末尾补一个空格再匹配，避免 -port 19474 认领 -port 194740。
+	if [[ "$command_line" != *toxiproxy-server* || "$command_line " != *" -port $(toxiproxy_api_port) "* ]]; then
+		roost_it_error "refuse foreign pid $pid from $pid_file: $command_line"
+		return 2
+	fi
+	printf '%s\n' "$pid"
+}
+
+toxiproxy_running() {
+	toxiproxy_owned_pid >/dev/null 2>&1
 }
 
 toxiproxy_api_ready() {
@@ -84,14 +103,19 @@ toxiproxy_heal() {
 }
 
 toxiproxy_down() {
-	local pid_file pid
+	local pid_file pid status=0
 	pid_file="$(toxiproxy_pid_file)"
-	[[ -f "$pid_file" ]] || return 0
-	pid="$(cat "$pid_file")"
-	if pid_is_running "$pid"; then
-		kill -TERM "$pid" 2>/dev/null || true
-		wait_until 10 "toxiproxy to exit" bash -c "! kill -0 $pid 2>/dev/null" || true
+	pid="$(toxiproxy_owned_pid)" || status=$?
+	if [[ "$status" -eq 1 ]]; then
+		rm -f -- "$pid_file"
+		return 0
 	fi
+	if [[ "$status" -ne 0 ]]; then
+		# 与 stop_owned_pid 一致：不杀别人的进程，保留 pid 文件等人确认。
+		return "$status"
+	fi
+	kill -TERM "$pid" 2>/dev/null || true
+	wait_until 10 "toxiproxy to exit" bash -c "! kill -0 $pid 2>/dev/null" || true
 	rm -f -- "$pid_file"
 }
 

@@ -11,7 +11,8 @@
 // go statements and common async wrapper .Go calls, and recognizes direct
 // roost-core/worker Pool variables as the allowed .Go implementation. Test
 // files are skipped by default; pass -tests to include them. Exit status is 1
-// when any finding is reported.
+// when any finding is reported and 2 when an argument could not be vetted (a
+// missing directory or a file that does not parse).
 package main
 
 import (
@@ -57,28 +58,63 @@ func main() {
 	}
 	fileSet := token.NewFileSet()
 	findings := 0
+	// RR-20261005-NC-204：没能检查的输入（目录不存在、`<dir>/...` 的根不存在、文件解析失败）
+	// 单独计数并以 2 退出。之前它们被当成“不是 Go 目录”按 0 个违例放行，CI 里路径拼错或
+	// 包改名后门禁永远是绿的。
+	failures := 0
 	for _, argument := range flag.Args() {
-		for _, directory := range expandArgument(argument) {
-			findings += vetDirectory(fileSet, directory)
+		directories, err := expandArgument(argument)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "glsvet: %v\n", err)
+			failures++
+			continue
+		}
+		for _, directory := range directories {
+			count, err := vetDirectory(fileSet, directory)
+			findings += count
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "glsvet: %s: %v\n", directory, err)
+				failures++
+			}
 		}
 	}
 	if findings > 0 {
 		fmt.Fprintf(os.Stderr, "glsvet: %d finding(s)\n", findings)
+	}
+	if failures > 0 {
+		fmt.Fprintf(os.Stderr, "glsvet: %d input(s) could not be vetted\n", failures)
+		os.Exit(2)
+	}
+	if findings > 0 {
 		os.Exit(1)
 	}
 }
 
-func expandArgument(argument string) []string {
+// expandArgument turns one command-line argument into the directories to vet.
+// A plain argument must be an existing directory; `<root>/...` walks root,
+// which must exist. Directories without Go files are returned too — they are
+// not errors, vetDirectory finds nothing in them.
+func expandArgument(argument string) ([]string, error) {
 	if !strings.HasSuffix(argument, "/...") {
-		return []string{argument}
+		info, err := os.Stat(argument)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("%s is not a directory", argument)
+		}
+		return []string{argument}, nil
 	}
 	root := strings.TrimSuffix(argument, "/...")
 	if root == "" {
 		root = "."
 	}
 	var directories []string
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || !entry.IsDir() {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
 			return nil
 		}
 		name := entry.Name()
@@ -88,16 +124,20 @@ func expandArgument(argument string) []string {
 		directories = append(directories, path)
 		return nil
 	})
-	return directories
+	if err != nil {
+		return nil, err
+	}
+	return directories, nil
 }
 
-func vetDirectory(fileSet *token.FileSet, directory string) int {
-	packages, err := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
+// vetDirectory reports the findings in one directory. parser.ParseDir returns
+// no error for a directory without Go files; an error means the directory
+// could not be read or a file did not parse, and the caller must not count
+// that as clean. Packages that did parse are still vetted.
+func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
+	packages, parseErr := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
 		return *includeTests || !strings.HasSuffix(info.Name(), "_test.go")
 	}, 0)
-	if err != nil {
-		return 0 // not a Go directory; nothing to vet
-	}
 	findings := 0
 	for _, pkg := range packages {
 		voidAdmissionMethods := collectVoidAdmissionMethods(pkg)
@@ -117,7 +157,7 @@ func vetDirectory(fileSet *token.FileSet, directory string) int {
 			})
 		}
 	}
-	return findings
+	return findings, parseErr
 }
 
 func collectReturningAdmissionMethods(pkg *ast.Package) map[string]bool {

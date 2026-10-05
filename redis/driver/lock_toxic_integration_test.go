@@ -12,15 +12,23 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
 
-type toxiproxyClient struct{ base string }
+// toxiproxyClient drives one proxy this test created on the environment's
+// toxiproxy. RR-20261005-NC-208: the suite used the environment's shared
+// "redis" proxy and POST /reset, which removes every toxic on every proxy of
+// that toxiproxy — other sessions' faults included. Each test now owns a
+// uniquely named proxy on an ephemeral port, adds toxics only to it, heals by
+// deleting only its own toxics and deletes the proxy at cleanup (the pattern
+// versionstore and mongo/driver already use).
+type toxiproxyClient struct{ base, name string }
 
-func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
+func (c toxiproxyClient) call(t *testing.T, method, path string, body any) []byte {
 	t.Helper()
 	var payload bytes.Buffer
 	if body != nil {
@@ -28,7 +36,7 @@ func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
 			t.Fatal(err)
 		}
 	}
-	req, err := http.NewRequest(method, c.base+path, &payload)
+	req, err := http.NewRequest(method, strings.TrimRight(c.base, "/")+path, &payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,34 +46,65 @@ func (c toxiproxyClient) do(t *testing.T, method, path string, body any) {
 		t.Fatalf("toxiproxy %s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		t.Fatalf("toxiproxy %s %s: status %d", method, path, resp.StatusCode)
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	if resp.StatusCode >= 300 && !(method == http.MethodDelete && resp.StatusCode == http.StatusNotFound) {
+		t.Fatalf("toxiproxy %s %s: status %d %s", method, path, resp.StatusCode, out.String())
+	}
+	return out.Bytes()
+}
+
+// addToxic adds a downstream toxic to this test's own proxy.
+func (c toxiproxyClient) addToxic(t *testing.T, name, kind string, attributes map[string]any) {
+	t.Helper()
+	c.call(t, http.MethodPost, "/proxies/"+c.name+"/toxics", map[string]any{
+		"name": name, "type": kind, "stream": "downstream", "toxicity": 1.0, "attributes": attributes,
+	})
+}
+
+// heal removes every toxic on this test's own proxy and nothing else.
+func (c toxiproxyClient) heal(t *testing.T) {
+	t.Helper()
+	var toxics []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(c.call(t, http.MethodGet, "/proxies/"+c.name+"/toxics", nil), &toxics); err != nil {
+		t.Fatalf("toxiproxy list toxics of %s: %v", c.name, err)
+	}
+	for _, toxic := range toxics {
+		c.call(t, http.MethodDelete, "/proxies/"+c.name+"/toxics/"+toxic.Name, nil)
 	}
 }
 
 // toxicRedis returns a go-redis client that reaches the isolated Redis through
-// toxiproxy, plus the toxiproxy API; it skips without toxiproxy and fails
-// when ROOST_IT_TOXIPROXY=1 demands it.
+// a proxy of its own on the environment's toxiproxy, plus that proxy; it skips
+// without toxiproxy and fails when ROOST_IT_TOXIPROXY=1 demands it.
 func toxicRedis(t *testing.T) (goredis.UniversalClient, toxiproxyClient) {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
 	}
 	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
-	addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR")
-	if api == "" || addr == "" {
+	upstream := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
+	if api == "" || upstream == "" {
 		if os.Getenv("ROOST_IT_TOXIPROXY") == "1" {
-			t.Fatal("ROOST_IT_TOXIPROXY=1 but the environment exported no proxied Redis; install toxiproxy-server and rerun dataengine-env.sh up")
+			t.Fatal("ROOST_IT_TOXIPROXY=1 but the environment exported no toxiproxy / isolated Redis; install toxiproxy-server and rerun dataengine-env.sh up")
 		}
 		t.Skip("toxiproxy-server not installed; network fault tests need it (brew install toxiproxy)")
 	}
-	proxy := toxiproxyClient{base: api}
-	proxy.do(t, http.MethodPost, "/reset", nil)
-	t.Cleanup(func() { proxy.do(t, http.MethodPost, "/reset", nil) })
+	proxy := toxiproxyClient{base: api, name: fmt.Sprintf("redis-driver-toxic-%d-%s", os.Getpid(), rand.Text())}
+	var created struct {
+		Listen string `json:"listen"`
+	}
+	raw := proxy.call(t, http.MethodPost, "/proxies", map[string]any{"name": proxy.name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+	if err := json.Unmarshal(raw, &created); err != nil || created.Listen == "" {
+		t.Fatalf("toxiproxy create %s: %v %s", proxy.name, err, raw)
+	}
+	t.Cleanup(func() { proxy.call(t, http.MethodDelete, "/proxies/"+proxy.name, nil) })
 	// Built through the kit's own constructor so the fixture carries the
 	// production client options (context deadlines on the wire included),
 	// not a hand-rolled approximation of them.
-	rdb := NewRedisClient(&fredis.Config{Addr: addr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
+	rdb := NewRedisClient(&fredis.Config{Addr: created.Listen, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}).rdb
 	t.Cleanup(func() { _ = rdb.Close() })
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("proxied redis: %v", err)
@@ -107,9 +146,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 	}
 
 	// Swallow every reply from Redis.
-	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
-		"name": "blackhole", "type": "timeout", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"timeout": 0},
-	})
+	proxy.addToxic(t, "blackhole", "timeout", map[string]any{"timeout": 0})
 	releaseCtx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
 	err := lock.Release(releaseCtx)
 	cancel()
@@ -121,7 +158,7 @@ func TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled(t *t
 		t.Fatalf("Acquire after a lost Release reply: ok=%v err=%v, want ErrDistLockStateUncertain", ok, err)
 	}
 
-	proxy.do(t, http.MethodPost, "/reset", nil)
+	proxy.heal(t)
 	// A second owner: the key is still held (the lost Release did not run) or
 	// already gone (it did); either way the answer is honest, never a crash.
 	other := factory.NewLock(key, 5*time.Second)
@@ -160,9 +197,7 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	ctx := context.Background()
 	key := toxicLockKey(t, rdb, "acquire")
 	lock := NewDistLockFactory(rdb).NewLock(key, 5*time.Second)
-	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
-		"name": "blackhole", "type": "timeout", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"timeout": 0},
-	})
+	proxy.addToxic(t, "blackhole", "timeout", map[string]any{"timeout": 0})
 	acquireCtx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
 	ok, err := lock.Acquire(acquireCtx)
 	cancel()
@@ -172,7 +207,7 @@ func TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried(t *testing.T) {
 	if ok, err := lock.Acquire(ctx); !errors.Is(err, ErrDistLockStateUncertain) || ok {
 		t.Fatalf("re-Acquire after a lost SETNX reply: ok=%v err=%v, want ErrDistLockStateUncertain", ok, err)
 	}
-	proxy.do(t, http.MethodPost, "/reset", nil)
+	proxy.heal(t)
 	if err := lock.Release(ctx); err != nil && !errors.Is(err, fredis.ErrLockNotHeld) {
 		t.Fatalf("reconciling Release: %v", err)
 	}
@@ -199,9 +234,7 @@ func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
 	factory := NewDistLockFactory(rdb)
 	lock := factory.NewLock(toxicLockKey(t, rdb, "slow"), 5*time.Second)
 
-	proxy.do(t, http.MethodPost, "/proxies/redis/toxics", map[string]any{
-		"name": "slow", "type": "latency", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"latency": 3000, "jitter": 0},
-	})
+	proxy.addToxic(t, "slow", "latency", map[string]any{"latency": 3000, "jitter": 0})
 	acquireCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	started := time.Now()
 	ok, err := lock.Acquire(acquireCtx)
@@ -215,7 +248,7 @@ func TestToxicRedisLatencyKeepsAcquireWithinItsDeadline(t *testing.T) {
 		t.Fatalf("Acquire took %s under a 500ms deadline; it waited for the slow reply instead of honouring the caller", elapsed)
 	}
 
-	proxy.do(t, http.MethodPost, "/reset", nil)
+	proxy.heal(t)
 	// The timed-out SETNX may or may not have been executed; the lock object
 	// says so and is reconciled through Release, never by a blind retry.
 	if ok, err := lock.Acquire(ctx); ok && err == nil {

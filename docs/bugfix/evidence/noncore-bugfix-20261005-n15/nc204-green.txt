@@ -1,0 +1,5 @@
+--- PASS: TestMissingDirectoryArgumentFails (0.01s)
+--- PASS: TestUnparsableFileFailsInsteadOfSkippingTheDirectory (0.00s)
+--- PASS: TestDirectoryWithoutGoFilesStillPasses (0.01s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/glsvet	0.506s

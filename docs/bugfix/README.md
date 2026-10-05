@@ -44,6 +44,20 @@
 
 **v1.20.1 已发布（2026-10-05，tag → `be7407ab`）**：U-0279 / U-0280（含复审补修）/ U-0281、NC-100 / NC-101（含复审补修）、RR-20261005-01，以及截至 `be7407ab` 的非核心 review 修复（NC-50～52、60～65、70～75、80～83、90～93、100～102、110～117、120～123、140～147）随本版发布；`be7407ab` 之后提交的（如 N05 的 NC-130 / NC-131 / RR-20260913-01 残余）未发版。下方“未发版”指发布前状态。
 
+**10-05 N15 scripts / cmd 与非 Go 资产（revn15）：NC-200（P2）与 NC-201～208（P3）已修复、声明场景验证，未发版。** gapmap 跟踪文件不干净时拒绝启动；Cluster 套件脚本清掉全环境准入变量；toxiproxy 按命令名 + API 端口认领 pid；隔离环境入口尊重验收锁（持锁者导出 `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`）；glsvet / pretag / 故障矩阵对没检查到的输入报失败；生成 .gitignore 加 `/data/wal/`；redis/driver 与 kit/nats 的 toxic 用例自建代理、不再 `/reset`（kit/dataengine 同根因留核心线）。[本轮](../review/REVIEW-2026-10-05-n15.md) · [证据](evidence/noncore-bugfix-20261005-n15/)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-208](RR-20261005-NC-208.md) | toxic 用例自建随机端口代理、只删自己的毒 | 已修复（kit/dataengine 部分留核心线），未发版 |
+| [RR-20261005-NC-207](RR-20261005-NC-207.md) | 矩阵格含 no tests to run / no test files 记 FAIL | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-206](RR-20261005-NC-206.md) | 生成 .gitignore 加 `/data/wal/` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-205](RR-20261005-NC-205.md) | pretag 按 ls-remote 退出码区分不存在 / 无法核对 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-204](RR-20261005-NC-204.md) | glsvet 缺失目录 / 解析失败以 2 退出 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-203](RR-20261005-NC-203.md) | `require_acceptance_lock_free_or_held` / `acquire_acceptance_lock`，持锁标记 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-202](RR-20261005-NC-202.md) | `toxiproxy_owned_pid` 按命令名 + API 端口认领 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-201](RR-20261005-NC-201.md) | redis-cluster-suites.sh `unset ROOST_DATAENGINE_IT REDIS_ADDR` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-200](RR-20261005-NC-200.md) | gapmap.sh 跟踪文件不干净时 exit 2 | 已修复、声明场景验证，未发版 |
+
 **10-05 N05 remoteentity mirror（revn05）：NC-130、NC-131 两个 P3 与 RR-20260913-01 残余已修复、声明场景验证（含真实 Redis / 自起 Redis Cluster），未发版。** L2 CAS 落败报 `cache.ErrStaleWrite`，Publish 改从 L2 取较新值装 L1；表满时 Stats 先清理过期兴趣；版本化删除在共享 L2 留与快照同 TTL 的墓碑。[本轮](../review/REVIEW-2026-10-05-n05-revn05.md) · [证据](evidence/noncore-bugfix-20261005-n05/README.md)
 
 | 编号 | 修复 | 状态 |

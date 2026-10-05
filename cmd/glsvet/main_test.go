@@ -13,7 +13,11 @@ func vetSource(t *testing.T, source string) int {
 	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return vetDirectory(token.NewFileSet(), dir)
+	findings, err := vetDirectory(token.NewFileSet(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return findings
 }
 
 func TestHandlerRawGoroutineIsRejected(t *testing.T) {

@@ -1,0 +1,2 @@
+--- PASS: TestGeneratedGitignoreIgnoresTheRuntimeOutputGenerationSkips (0.40s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.966s

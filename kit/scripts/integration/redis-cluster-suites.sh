@@ -14,4 +14,8 @@ cd "$repo_dir"
 export GOWORK=off
 # -p 1：这些包共用同一个集群，串行避免互相干扰。同包里以 REDIS_ADDR / ROOST_DATAENGINE_IT
 # 准入的用例在这里照常 skip，它们各自的入口是 ci.yml 的 Redis job 与 dataengine-env.sh test。
+# RR-20261005-NC-201：“照常 skip”要靠这里清掉准入变量，不能靠调用者的环境。之前在 source 过
+# 隔离环境 env.sh 的 shell 里运行，./redis/driver 的 toxic 用例与 ./remoteentity 的进程杀死 /
+# 分区用例会整包跑到共享隔离环境上（没有 -run 限制），还会 /reset 共享 toxiproxy。
+unset ROOST_DATAENGINE_IT REDIS_ADDR
 go test -tags=integration -count=1 -p 1 ./kit/redis ./kit/service/mail ./redis/driver ./remoteentity ./service/mail

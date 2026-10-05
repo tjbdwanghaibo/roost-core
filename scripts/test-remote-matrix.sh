@@ -6,6 +6,8 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lock="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
 mkdir "$lock" || { echo 'Another Remote acceptance run owns the isolated environment' >&2; exit 2; }
 trap 'rmdir "$lock"' EXIT
+# 持锁标记：自己调起的 heal / remote-fault.sh 据此放行，别的会话的入口拒绝（RR-20261005-NC-203）。
+export ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$lock"
 label="${ROOST_REMOTE_MATRIX_LABEL:-matrix-$(date +%Y%m%d-%H%M%S)}"
 [[ "$label" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
 output="$repo_dir/artifacts/perf/remote/$label"
@@ -27,7 +29,11 @@ run_case() {
     exit 1
    fi ;;
  esac
- if [[ "$code" == 0 ]] && ! grep -q -- '--- SKIP:' "$output/$name.log"; then
+ # RR-20261005-NC-207：-run 一个用例都没匹配到时 go test 退出 0、只打印 "no tests to run"；
+ # 之前这种格记 PASS（用例改名 / 搬包后整格静默变空绿），违背首行“不把缺失计为通过”。
+ if [[ "$code" == 0 ]] && grep -q -e 'no tests to run' -e '\[no test files\]' "$output/$name.log"; then
+  printf '%s\tFAIL(no tests ran)\n' "$name" | tee -a "$output/results.tsv";status=1
+ elif [[ "$code" == 0 ]] && ! grep -q -- '--- SKIP:' "$output/$name.log"; then
   printf '%s\tPASS\n' "$name" | tee -a "$output/results.tsv"
  else
   printf '%s\tFAIL(exit=%s)\n' "$name" "$code" | tee -a "$output/results.tsv";status=1

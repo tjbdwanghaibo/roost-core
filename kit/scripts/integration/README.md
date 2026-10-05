@@ -67,7 +67,16 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 - 根目录与偏移绑定：首次 `up` 把偏移写进 `<根目录>/port-offset`，之后换偏移会被拒绝，
   防止新端口上的进程去抢同一数据目录。改动前建的根没有这个文件，只认偏移 0。
 - pid 文件对应的进程，只有命令行里带 `" <根目录>/"` 参数时才被认作本环境的进程；
-  toxiproxy 的命令行不带根目录，所以它的 API 端口被别的进程占着时，`up` 直接拒绝。
+  toxiproxy 的命令行不带根目录，按 `toxiproxy-server … -port <本环境 API 端口>` 认领
+  （RR-20261005-NC-202），它的 API 端口被别的进程占着时，`up` 直接拒绝。
+- `<根目录>/remote-acceptance.lock`（Remote 验收锁）被别的运行持有时，除 `status` 外的命令
+  与 `scripts/remote-fault.sh` 都以 2 拒绝；`test` 运行期间自己持锁。故障矩阵和
+  `scripts/perf/remote.sh` 取得锁后导出 `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`，它们调起的
+  `heal` / `remote-fault.sh` 照常执行（RR-20261005-NC-203）。
+- 自写的故障用例不要在环境的共享代理（`redis`、`nats-1..3`）上加毒，也不要 `POST /reset`：
+  在 `ROOST_DATAENGINE_IT_TOXIPROXY_URL` 上自建唯一命名、`listen: 127.0.0.1:0` 的代理，
+  只删自己的毒、清理时删掉代理（`redis/driver`、`kit/nats`、`versionstore`、`mongo/driver`
+  的 toxic 用例都是这样；RR-20261005-NC-208）。
 - 端口被根目录之外的进程占着时，`up` 拒绝启动，不会复用别人的服务。
 
 脚本自检：`bash kit/scripts/integration/dataengine_env_test.sh`。它只 source 库、只写
@@ -76,7 +85,9 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 ## 需要 Redis Cluster 的套件：`redis-cluster-suites.sh`
 
 以 `ROOST_REVIEW_CLUSTER` 为准入的 integration 用例（`kit/service/mail`、`redis/driver`、
-`service/mail` 各一个文件）需要真实的 Redis Cluster。CI 的 Redis job 只有单实例，
+`service/mail` 各一个文件）需要真实的 Redis Cluster。脚本会清掉 `ROOST_DATAENGINE_IT` /
+`REDIS_ADDR`，在 source 过 env.sh 的 shell 里运行也不会把全环境故障套件跑到隔离环境上
+（RR-20261005-NC-201）。CI 的 Redis job 只有单实例，
 `dataengine-env.sh` 也不起集群，所以它们在 CI 里一律 skip；本机对着 3 主 3 从集群跑：
 
 ```bash

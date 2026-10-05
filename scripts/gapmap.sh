@@ -4,6 +4,14 @@
 # Usage: scripts/gapmap.sh [--max N] [pkg...]   (default: every package with tests)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# RR-20261005-NC-200：收尾会用 `git checkout -- .` 恢复取样器留下的跟踪文件修改，它分不清
+# “取样留下的”和“运行前就有的”。之前没有这道检查，本地带着未提交的修改运行会把它们一起丢掉
+# （checkout 不进 stash / reflog，无法找回）。所以要求跟踪文件干净再开始；未跟踪文件不受影响。
+if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+  echo "gapmap: tracked files have uncommitted changes; commit or stash them first (the sampler edits sources in place and restores tracked files with git checkout when it finishes):" >&2
+  git status --short --untracked-files=no >&2
+  exit 2
+fi
 max=20
 if [[ "${1:-}" == "--max" ]]; then max="$2"; shift 2; fi
 pkgs=("$@")

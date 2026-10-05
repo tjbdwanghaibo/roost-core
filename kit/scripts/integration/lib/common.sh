@@ -63,6 +63,35 @@ readonly ROOST_IT_ROOT="${ROOST_DATAENGINE_IT_ROOT:-$ROOST_IT_CANONICAL_ROOT}"
 # 已存在但没有记录的旧根按偏移 0 处理（之前唯一的取值）。
 readonly ROOST_IT_PORT_OFFSET_FILE="$ROOST_IT_ROOT/port-offset"
 
+# Remote 验收锁（REMOTE-ACCEPTANCE §共用集群串行）：scripts/test-remote-matrix.sh、
+# scripts/perf/remote.sh 与本脚本的 test 用 mkdir 取得它，取得后导出
+# ROOST_REMOTE_ACCEPTANCE_LOCK_HELD=<锁路径>，自己调起的 heal / remote-fault.sh 据此放行。
+# RR-20261005-NC-203：之前只有持锁者自己看这把锁，别的会话在矩阵 / 长稳运行期间照常
+# fault / down / up / heal / reset（reset 连锁目录带整个根一起删），验收结果失真。
+readonly ROOST_IT_ACCEPTANCE_LOCK="$ROOST_IT_ROOT/remote-acceptance.lock"
+
+# require_acceptance_lock_free_or_held：会改动环境的入口先调它；锁被别人持有时以 2 拒绝。
+# 只读的 status 不调。锁是“目录存在即持有”，进程被强杀后残留的锁要先查清再手工删除。
+require_acceptance_lock_free_or_held() {
+	[[ -d "$ROOST_IT_ACCEPTANCE_LOCK" ]] || return 0
+	[[ "${ROOST_REMOTE_ACCEPTANCE_LOCK_HELD:-}" == "$ROOST_IT_ACCEPTANCE_LOCK" ]] && return 0
+	roost_it_error "refuse: $ROOST_IT_ACCEPTANCE_LOCK is held by a running Remote acceptance / fault run; wait for it (do not delete the lock until you know who holds it)"
+	return 2
+}
+
+# acquire_acceptance_lock 让当前进程在退出前持有验收锁（已由上层持有时直接沿用）。
+acquire_acceptance_lock() {
+	if [[ "${ROOST_REMOTE_ACCEPTANCE_LOCK_HELD:-}" == "$ROOST_IT_ACCEPTANCE_LOCK" && -d "$ROOST_IT_ACCEPTANCE_LOCK" ]]; then
+		return 0
+	fi
+	if ! mkdir "$ROOST_IT_ACCEPTANCE_LOCK" 2>/dev/null; then
+		roost_it_error "refuse: $ROOST_IT_ACCEPTANCE_LOCK is held by a running Remote acceptance / fault run"
+		return 2
+	fi
+	trap 'rmdir "$ROOST_IT_ACCEPTANCE_LOCK" 2>/dev/null || true' EXIT
+	export ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$ROOST_IT_ACCEPTANCE_LOCK"
+}
+
 # roost_it_port 把基准端口平移 ROOST_IT_PORT_OFFSET；所有端口都必须经过它。
 roost_it_port() {
 	printf '%d\n' "$(($1 + ROOST_IT_PORT_OFFSET_VALUE))"

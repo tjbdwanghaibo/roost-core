@@ -46,9 +46,17 @@ fi
 if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
   fail "$version already exists locally"
 fi
-if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
-  fail "$version already exists on origin"
-fi
+# --exit-code 返回 2 才表示“远端没有这个 ref”；网络 / 认证 / 远端错误是 128 等其他值。
+# RR-20261005-NC-205：之前把任何非 0 都当成“不存在”，origin 不可达时这条检查被静默跳过，
+# pretag 照样报告 ready to tag。
+remote_code=0
+remote_err="$(git ls-remote --exit-code --tags origin "refs/tags/$version" 2>&1 >/dev/null)" || remote_code=$?
+case "$remote_code" in
+  0) fail "$version already exists on origin" ;;
+  2) ;;
+  *) printf '%s\n' "$remote_err" >&2
+     fail "cannot check origin for an existing $version tag (git ls-remote exit $remote_code); fix the remote or the network and rerun" ;;
+esac
 
 # 3. A releasable module has no replace directives and a clean tree.
 if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then

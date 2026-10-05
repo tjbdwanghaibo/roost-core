@@ -1,0 +1,6 @@
+held: fault nats-all exit=0
+held: remote-fault nats-all exit=0
+held: down exit=0
+acquire(free) exit=0 held=yes lockdir=present
+second acquire exit=2
+after exit: lock released

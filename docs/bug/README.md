@@ -1,18 +1,18 @@
 # Roost Review 问题索引
 
-**10-05 N15 scripts / cmd 与非 Go 资产（revn15）：NC-200（P2）与 NC-201～208（P3）已复现，未修复。** gapmap 收尾丢未提交修改；Cluster 套件脚本、toxiproxy pid、验收锁、toxic 用例全局 reset 让并行会话互相干扰共享隔离环境；glsvet / pretag / 故障矩阵三处门禁对没检查到的东西报通过；生成的 .gitignore 不忽略 WAL。[本轮](../review/REVIEW-2026-10-05-n15.md)（含方向判断）。
+**10-05 N15 scripts / cmd 与非 Go 资产（revn15）：NC-200（P2）与 NC-201～208（P3）已修复、声明场景验证，未发版（NC-208 的 kit/dataengine 部分留给核心线）。** gapmap 收尾丢未提交修改；Cluster 套件脚本、toxiproxy pid、验收锁、toxic 用例全局 reset 让并行会话互相干扰共享隔离环境；glsvet / pretag / 故障矩阵三处门禁对没检查到的东西报通过；生成的 .gitignore 不忽略 WAL。[本轮](../review/REVIEW-2026-10-05-n15.md)（含方向判断）。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-208](RR-20261005-NC-208.md) | P3 toxic 用例 POST /reset 清掉同一 toxiproxy 上别人的毒 | 已复现，未修复 |
-| [RR-20261005-NC-207](RR-20261005-NC-207.md) | P3 故障矩阵把 no tests to run 的格记为 PASS | 已复现（替身），未修复 |
-| [RR-20261005-NC-206](RR-20261005-NC-206.md) | P3 生成的 .gitignore 不忽略 data/wal | 已复现，未修复 |
-| [RR-20261005-NC-205](RR-20261005-NC-205.md) | P3 origin 不可达时 pretag 跳过远端同名 tag 检查 | 已复现，未修复 |
-| [RR-20261005-NC-204](RR-20261005-NC-204.md) | P3 glsvet 对不存在 / 解析失败的目录退出 0 | 已复现，未修复 |
-| [RR-20261005-NC-203](RR-20261005-NC-203.md) | P3 验收锁只有持锁者看，其他入口照常改环境，reset 连锁一起删 | 已复现，未修复 |
-| [RR-20261005-NC-202](RR-20261005-NC-202.md) | P3 toxiproxy pid 不校验所有权，down 杀掉复用该 pid 的进程 | 已复现，未修复 |
-| [RR-20261005-NC-201](RR-20261005-NC-201.md) | P3 redis-cluster-suites.sh 继承 ROOST_DATAENGINE_IT，把全环境故障套件跑到共享环境 | 已复现，未修复 |
-| [RR-20261005-NC-200](RR-20261005-NC-200.md) | P2 gapmap.sh 收尾 git checkout 丢掉运行前已有的未提交修改 | 已复现，未修复 |
+| [RR-20261005-NC-208](RR-20261005-NC-208.md) | P3 toxic 用例 POST /reset 清掉同一 toxiproxy 上别人的毒 | 已修复（kit/dataengine 部分留核心线），未发版 |
+| [RR-20261005-NC-207](RR-20261005-NC-207.md) | P3 故障矩阵把 no tests to run 的格记为 PASS | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-206](RR-20261005-NC-206.md) | P3 生成的 .gitignore 不忽略 data/wal | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-205](RR-20261005-NC-205.md) | P3 origin 不可达时 pretag 跳过远端同名 tag 检查 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-204](RR-20261005-NC-204.md) | P3 glsvet 对不存在 / 解析失败的目录退出 0 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-203](RR-20261005-NC-203.md) | P3 验收锁只有持锁者看，其他入口照常改环境，reset 连锁一起删 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-202](RR-20261005-NC-202.md) | P3 toxiproxy pid 不校验所有权，down 杀掉复用该 pid 的进程 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-201](RR-20261005-NC-201.md) | P3 redis-cluster-suites.sh 继承 ROOST_DATAENGINE_IT，把全环境故障套件跑到共享环境 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-200](RR-20261005-NC-200.md) | P2 gapmap.sh 收尾 git checkout 丢掉运行前已有的未提交修改 | 已修复、声明场景验证，未发版 |
 
 **10-05 N14 Kit 跨域装配（revn14）：登记 NC-190～194（三个 P2、两个 P3），未修复；NC-192 待维护者选方案。** 写错类型的配置值被 viper 静默读成零值（`singleton.enabled: on` 关掉单实例锁、不带单位的时长读成纳秒并通过校验、`redis.cluster_addrs` 列表退回本机单点）；Mongo 启动日志带口令；生产配置校验要求的九个开关无读取方；启动失败时 Service 组件未停完就拆 Mod、释放锁；无定义时大小写混写的 saga 步骤覆盖不生效。[本轮](../review/REVIEW-2026-10-05-n14.md)
 

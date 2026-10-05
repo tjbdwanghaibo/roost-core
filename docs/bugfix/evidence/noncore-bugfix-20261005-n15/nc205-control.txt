@@ -1,0 +1,4 @@
+pretag: example.com/pretagctl@v1.99.0 is ready to tag
+reachable, no tag: exit=0
+pretag: v1.99.0 already exists on origin
+tag on origin: exit=1

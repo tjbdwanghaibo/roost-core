@@ -1,0 +1,5 @@
+stub go test -tags=integration -count=1 -p 1 ./kit/redis ./kit/service/mail ./redis/driver ./remoteentity ./service/mail
+ROOST_DATAENGINE_IT=<unset>
+REDIS_ADDR=<unset>
+ROOST_REVIEW_CLUSTER=127.0.0.1:2
+exit=0

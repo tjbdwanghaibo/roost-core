@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,9 +23,19 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
-type rpcToxiproxy struct{ base string }
+// rpcToxiproxy drives the proxies this test created on the environment's
+// toxiproxy, one per isolated NATS node. RR-20261005-NC-208: the test used the
+// environment's shared nats-1..3 proxies and POST /reset, which removes every
+// toxic on every proxy of that toxiproxy — other sessions' faults included.
+// It now owns uniquely named proxies on ephemeral ports in front of the direct
+// node URLs, adds and removes toxics only on them and deletes them at cleanup.
+// The bus ignores discovered servers, so it only ever dials these proxies.
+type rpcToxiproxy struct {
+	base    string
+	proxies []string
+}
 
-func (c rpcToxiproxy) do(t *testing.T, method, path string, body any) {
+func (c rpcToxiproxy) call(t *testing.T, method, path string, body any) []byte {
 	t.Helper()
 	var payload bytes.Buffer
 	if body != nil {
@@ -32,7 +43,7 @@ func (c rpcToxiproxy) do(t *testing.T, method, path string, body any) {
 			t.Fatal(err)
 		}
 	}
-	req, err := http.NewRequest(method, c.base+path, &payload)
+	req, err := http.NewRequest(method, strings.TrimRight(c.base, "/")+path, &payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +53,56 @@ func (c rpcToxiproxy) do(t *testing.T, method, path string, body any) {
 		t.Fatalf("toxiproxy %s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		t.Fatalf("toxiproxy %s %s: status %d", method, path, resp.StatusCode)
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	if resp.StatusCode >= 300 && !(method == http.MethodDelete && resp.StatusCode == http.StatusNotFound) {
+		t.Fatalf("toxiproxy %s %s: status %d %s", method, path, resp.StatusCode, out.String())
+	}
+	return out.Bytes()
+}
+
+// newRPCToxiproxy creates one proxy per direct NATS URL in directURLs and
+// returns the client plus the nats:// URL list that goes through them.
+func newRPCToxiproxy(t *testing.T, api, directURLs string) (rpcToxiproxy, string) {
+	t.Helper()
+	proxy := rpcToxiproxy{base: api}
+	var proxied []string
+	for index, raw := range strings.Split(directURLs, ",") {
+		upstream := strings.TrimPrefix(strings.TrimSpace(raw), "nats://")
+		if upstream == "" {
+			continue
+		}
+		name := fmt.Sprintf("kit-nats-rpc-toxic-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), index)
+		var created struct {
+			Listen string `json:"listen"`
+		}
+		body := proxy.call(t, http.MethodPost, "/proxies", map[string]any{"name": name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+		if err := json.Unmarshal(body, &created); err != nil || created.Listen == "" {
+			t.Fatalf("toxiproxy create %s: %v %s", name, err, body)
+		}
+		t.Cleanup(func() { proxy.call(t, http.MethodDelete, "/proxies/"+name, nil) })
+		proxy.proxies = append(proxy.proxies, name)
+		proxied = append(proxied, "nats://"+created.Listen)
+	}
+	if len(proxied) == 0 {
+		t.Fatalf("no NATS URL in %q", directURLs)
+	}
+	return proxy, strings.Join(proxied, ",")
+}
+
+// heal removes every toxic on this test's own proxies and nothing else.
+func (c rpcToxiproxy) heal(t *testing.T) {
+	t.Helper()
+	for _, name := range c.proxies {
+		var toxics []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(c.call(t, http.MethodGet, "/proxies/"+name+"/toxics", nil), &toxics); err != nil {
+			t.Fatalf("toxiproxy list toxics of %s: %v", name, err)
+		}
+		for _, toxic := range toxics {
+			c.call(t, http.MethodDelete, "/proxies/"+name+"/toxics/"+toxic.Name, nil)
+		}
 	}
 }
 
@@ -78,8 +137,8 @@ func deleteRPCStreams(t *testing.T, proxiedURL string, streams ...string) {
 
 func (c rpcToxiproxy) blackholeNATS(t *testing.T) {
 	t.Helper()
-	for index := 1; index <= 3; index++ {
-		c.do(t, http.MethodPost, fmt.Sprintf("/proxies/nats-%d/toxics", index), map[string]any{
+	for _, name := range c.proxies {
+		c.call(t, http.MethodPost, "/proxies/"+name+"/toxics", map[string]any{
 			"name": "halfopen", "type": "timeout", "stream": "downstream", "toxicity": 1.0, "attributes": map[string]any{"timeout": 0},
 		})
 	}
@@ -95,16 +154,15 @@ func TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen(t *testing.T) {
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
 	}
-	api, natsURL := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL"), os.Getenv("ROOST_DATAENGINE_IT_NATS_PROXIED_URL")
-	if api == "" || natsURL == "" {
+	api, directURL := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if api == "" || directURL == "" {
 		if os.Getenv("ROOST_IT_TOXIPROXY") == "1" {
 			t.Fatal("ROOST_IT_TOXIPROXY=1 but the environment exported no toxiproxy")
 		}
 		t.Skip("toxiproxy-server not installed; network fault tests need it")
 	}
-	proxy := rpcToxiproxy{base: api}
-	proxy.do(t, http.MethodPost, "/reset", nil)
-	t.Cleanup(func() { proxy.do(t, http.MethodPost, "/reset", nil) })
+	proxy, natsURL := newRPCToxiproxy(t, api, directURL)
+	t.Cleanup(func() { proxy.heal(t) })
 
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
 	cfg := viper.New()
@@ -173,7 +231,7 @@ func TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen(t *testing.T) {
 		t.Fatalf("call took %s under a 500ms deadline; the caller's timeout was not honoured", elapsed)
 	}
 
-	proxy.do(t, http.MethodPost, "/reset", nil)
+	proxy.heal(t)
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		if err := baseline(); err == nil && resp["pong"] == "ok" {

@@ -29,7 +29,12 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
 	add(".gitattributes", renderGitattributes(), true)
-	add(".gitignore", "bin/\ndist/\nlog/\n.dev/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
+	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/dataengine，
+	// second-game.sh 的 data/wal/dataengine-<sid>）是运行期输出。RR-20261005-NC-206：之前
+	// 只有 .dev/，dev-run 之后 git add -A 会把 WAL 段提交进仓库。只忽略 WAL 目录，不忽略
+	// data/（configs/data 是要提交的生成物，根目录 data/ 下也可能有使用者自己的文件）。
+	// .gitignore 归使用者所有，sync 不覆盖，已有工程需手工补这一行。
+	add(".gitignore", "bin/\ndist/\nlog/\n.dev/\n/data/wal/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)

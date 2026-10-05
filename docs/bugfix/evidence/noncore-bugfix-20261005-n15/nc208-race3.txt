@@ -1,0 +1,8 @@
+   1 --- PASS: TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen (1.57s)
+   2 --- PASS: TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen (1.66s)
+   2 --- PASS: TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried (0.70s)
+   1 --- PASS: TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried (0.71s)
+   3 --- PASS: TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled (0.71s)
+   3 --- PASS: TestToxicRedisLatencyKeepsAcquireWithinItsDeadline (0.51s)
+   1 ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	6.492s
+   1 ok  	github.com/tjbdwanghaibo/roost-core/redis/driver	7.285s

@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N15 scripts / cmd 与非 Go 资产（revn15）
+
+基线 `8597046c`，分支 `revn15`，NC 段 200～209（用 200～208）；脚本目录按设计不进图谱，Go 证据文件（generation 2026-09-30，三处 metadata_changed）以当前源码补证。[本轮](REVIEW-2026-10-05-n15.md) · [审查证据](evidence/noncore-review-20261005-n15/) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n15/)。审查 `345488e4`，修复见 Git 历史 `fix(scripts,glsvet,codegen)：RR-20261005-NC-200～208`。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 发版 / 门禁 | pretag 各步、glsvet 输入、故障矩阵判格 | NC-205、NC-204、NC-207 已修；O2/O3 观察 |
+| 隔离环境脚本 | 根 / 偏移 / pid 所有权、验收锁、Cluster 套件准入、toxic 用例 | NC-201、202、203、208 已修（kit/dataengine 留核心线）；方向判断：独占 vs 共享待维护者定 |
+| 生成 / 本地工具 | source-head-check、*-runtime.sh、gapmap、生成 .gitignore | NC-200（P2）、NC-206 已修；O1（source-head-check 吞 add 错误、与 CI 漂移） |
+| CI / 版本 | workflows 与 manifest / release / minimum 一致性 | 一致，无缺陷 |
+
+新增正式回归：glsvet 3（2 红 + 1 控制）、codegen 1；其余脚本类为可复跑 harness（证据目录），修前红 → 修后绿并各有控制。全部在临时根与本 agent 自起进程上执行，没跑故障矩阵、没 reset 共享 toxiproxy。N15 本机场景收口；真实隔离环境上的修后矩阵 / heal、Linux 上的 pid 认领、kit/dataengine toxic 用例未做。不等待 CI，不发版。
 ## 2026-10-05 N13 container / safemap / goroutine / misc / internal（revn13）
 
 基线 `f6245613`，独立 worktree 分支 `revn13`，NC 段 180～189（用 180～185）；图谱 generation 2026-09-30，五个包此后无代码提交，调用方按 import / 符号 `rg` 穷举（图谱对泛型方法与同名 `Range` 的调用边不可靠）。[本轮](REVIEW-2026-10-05-n13.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn13/README.md)。审查 `e7bbac3d`，修复 `7e4ed438` / `20400337` / `1d600b9b` / `4c26b4b5`。

@@ -199,7 +199,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
-10-05 N15 revn15：[NC-200](bug/RR-20261005-NC-200.md)（P2）与 [NC-201～208](review/REVIEW-2026-10-05-n15.md#2-确认的缺陷)（P3）**已复现，未修复**——scripts / cmd / 生成 .gitignore / toxic 用例；[本轮](review/REVIEW-2026-10-05-n15.md)（含方向判断：隔离环境独占 vs 共享）。
+10-05 N15 revn15：[NC-200](bug/RR-20261005-NC-200.md)（P2）与 [NC-201～208](review/REVIEW-2026-10-05-n15.md#2-确认的缺陷)（P3）**已修复、声明场景验证，未发版**（审查 `345488e4`；NC-208 的 kit/dataengine 部分留核心线）——scripts / cmd / 生成 .gitignore / toxic 用例；[修复](bugfix/README.md)；T-252～255；[本轮](review/REVIEW-2026-10-05-n15.md)（含方向判断：隔离环境独占 vs 共享）。
 
 10-05 N13 revn13：[NC-180](bug/RR-20261005-NC-180.md) P2（潜伏）与 [NC-181～185](review/REVIEW-2026-10-05-n13.md#3-确认的缺陷) P3 **已修复、声明场景验证，未发版**（审查 `e7bbac3d`，修复 `7e4ed438` / `20400337` / `1d600b9b` / `4c26b4b5`）；[本轮](review/REVIEW-2026-10-05-n13.md)（含方向判断）。行为变化：`BucketHolder` / `EntityManager.Range` 回调看到快照、false 立即停止；`FastMap` 遍历中写 map 的语义（README §16）。
 
