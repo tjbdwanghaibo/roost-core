@@ -131,11 +131,13 @@ const (
 // notifications from games, participant progress, refusal audit, and result
 // dispatch.
 //
-// It is separate from Service because the two halves share no state — routing
-// and leases answer "where does this game belong and is it alive", this
-// answers "has every game reached the phase yet" — and joining them would give
-// the activity half a reason to reach into the lease store, which is the kind
-// of coupling that turns two bounded services into one unbounded one.
+// It is separate from global's Service because the two halves share no state
+// — routing answers "which group does this game belong to", this answers "has
+// every game reached the phase yet" — and joining them would give the
+// activity half a reason to reach into the route store, which is the kind of
+// coupling that turns two bounded services into one unbounded one. Neither
+// half answers "is this game alive": that is the App singleton lock's Live
+// query (app.SingletonLiveness), which a game asks for itself.
 type Service struct {
 	// deliveryMu / deliveryCursor rotate DeliveringActivities through a
 	// group's list across sweeps so a long list is not always served from

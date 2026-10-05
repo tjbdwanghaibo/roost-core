@@ -48,8 +48,10 @@ import (
 //
 // It lived inside package global until the transport generator made the
 // packaging visible: global publishes two capabilities and app.Service is one
-// per process, so routing/leases and activity coordination were always two
-// deployments sharing one Go package. They share no type and no store.
+// per process, so routing and activity coordination were always two
+// deployments sharing one Go package. They share no type and no store. (Global
+// only groups games now; whether a game is alive comes from the App singleton
+// lock's Live query, not from global.)
 
 // Error codes.
 //
