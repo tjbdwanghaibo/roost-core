@@ -1,0 +1,67 @@
+package db
+
+import (
+ "context"
+ "errors"
+ "sync/atomic"
+ "testing"
+ "time"
+
+ coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+ "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
+ "go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// 不伪造 Migrator 的成功回执：每次迁移投影前用正式 MongoStore CAS 提交竞争者。
+// 私有 store 字段避免嵌入后 ProjectFenced 意外绕过注入入口。
+type contentionProjection struct {
+ store *engine.MongoStore
+ attempts atomic.Int32
+}
+
+func (p *contentionProjection) Project(ctx context.Context, r coredata.CommitRecord) error {
+ if r.Handler == engine.MigrationHandler {
+  n := p.attempts.Add(1)
+  if n <= 2 {
+   m := r.Mutations[0]
+   raw, err := bson.Marshal(bson.M{"_id": m.Key.ID, "name": "competitor", "score": int64(100+n), "mode": "success"})
+   if err != nil { return err }
+   var id coredata.TransactionID
+   id[0], id[1] = 22, byte(n)
+   if err := p.store.Project(ctx, coredata.CommitRecord{ID: id, Handler: "review22_competitor", Mutations: []coredata.Mutation{{
+    Key: m.Key, Kind: coredata.MutationPut, ExpectedVersion: m.ExpectedVersion, NextVersion: m.ExpectedVersion+1,
+    Mask: coredata.AllFields, Schema: 1, Codec: "bson-v2", Data: raw,
+   }}}); err != nil { return err }
+  }
+ }
+ return p.store.Project(ctx, r)
+}
+
+func TestGeneratedSustainedCASExhaustionThenRecovery(t *testing.T) {
+ p := &contentionProjection{}
+ s := setupConsumerForKind(t, "success", 1, nil, reviewKind, p)
+ p.store = s.store
+ ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+ defer cancel()
+ value, err := s.repository.LoadEntity(ctx, s.id, reviewKind)
+ if !errors.Is(err, coredata.ErrMigrationConflict) || value != nil || s.manager.Get(s.id) != nil {
+  t.Fatalf("bounded contention result: value=%T error=%v", value, err)
+ }
+ // WaitProjection 完成票不等于 Stats 的瞬时未确认计数已经刷新，Flush 是检查 barrier。
+ if err := s.committer.Flush(ctx); err != nil { t.Fatal(err) }
+ doc := s.stored(t)
+ if doc.Schema != 1 || doc.Version != 9 || s.committer.calls.Load() != 2 || s.committer.Stats().WALUnacked != 0 {
+  t.Fatalf("competitor/old WAL not settled: doc=%+v commits=%d stats=%+v", doc, s.committer.calls.Load(), s.committer.Stats())
+ }
+ var data bson.M
+ if err := bson.Unmarshal(doc.Data, &data); err != nil { t.Fatal(err) }
+ if data["score"] != int64(102) { t.Fatalf("competitor lost: %+v", data) }
+ // 第二次 LoadEntity 必须清除失败 flight，从最新 version 再试，而非永久缓存冲突。
+ value, err = s.repository.LoadEntity(ctx, s.id, reviewKind)
+ if err != nil { t.Fatal(err) }
+ if err := s.committer.Flush(ctx); err != nil { t.Fatal(err) }
+ d := value.(*reviewEntity).dao
+ if d.GetScore() != 42 || d.DirtyTracker().Version() != 10 || s.committer.calls.Load() != 3 || s.committer.Stats().WALUnacked != 0 {
+  t.Fatalf("retry failed to recover latest CAS: score=%d version=%d commits=%d", d.GetScore(), d.DirtyTracker().Version(), s.committer.calls.Load())
+ }
+}

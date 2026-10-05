@@ -76,3 +76,15 @@ strict CommitSystem返回证明同步Append已fsync；DurableLSN是Enqueue票据
 ### 成本与剩余
 
 预校验增加冷迁移时的BSON和目标解码成本，保持当前分包/公开签名/持久格式，未做性能benchmark。多DAO往返、嵌套字段类型变化、持续竞争、真实Mongo事务重试/网络未知、Cluster/HA/长期容量仍分别留项；本轮17消费者和12新正式回归不代表N04或整个DataEngine已穷尽。
+
+## 2026-10-05：值恢复不等于运行期关系恢复
+
+[NC-32修复](../bugfix/RR-20261005-NC-32.md)揭示了旧测试盲区：独立 nested.UnmarshalBSON 是原址恢复，而正式 DAO 使用 FromBSONDoc 的按值转换。转换期间绑定的子回调捕获临时父地址，即使字段 roundtrip 完全相同，也不能证明加载后仍能写回。最终父对象的通知槽被更新不会影响临时副本的通知槽。
+
+正确恢复分两步：loadBSONDoc 只把 wire 数据转换成尚未绑定的树；树到达最终 DAO 字段 / 容器后，bindDirty 检查唯一父归属并递归 bindChildren。独立 UnmarshalBSON 则在最终接收者上恢复后绑定。这里没有新 undo、脏标记或持久化入口，不能用跳过归属冲突来“修正”复制。
+
+回归的终点是加载后的下一次真实事务：九种正式容器组合红→绿；独立消费者补指针/值父对象六种，并在 Repository 迁移完成后把深层 leaf 改99，经实际文件 WAL/Projector/MongoStore 写回，再用新 Manager 无迁移器读到 version9。保持 wire 值的测试仍有用，但只是此承诺的前半段。
+
+持续 CAS 本轮也补正式生成消费：两次迁移前由正式Store CAS竞争，第三次读取仍旧schema则返回有界冲突，未发布实体；竞争停下后的再次Load从最新version9迁移到10。检查WAL清零前必须Flush：投影票完成与Stats计数刷新存在短窗口，瞬时WALUnacked不是落库失败证明。测试不应把该窗口变成误报。
+
+类型变化成功、错误目标类型、坏源数值、null子项和持续CAS五项已补；N04整体外部资源/HA/容量仍待验。绑定阶段增加可达树遍历但无I/O，未做benchmark。部署时重生成关联nested代码，仅替换runtime不会修旧生成物。

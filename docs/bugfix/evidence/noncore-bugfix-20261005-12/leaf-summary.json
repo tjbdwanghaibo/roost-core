@@ -1,0 +1,62 @@
+[
+  {
+    "file": "golden-red.jsonl",
+    "pass": 0,
+    "fail": 9,
+    "skip": 0
+  },
+  {
+    "file": "consumer-red.jsonl",
+    "pass": 17,
+    "fail": 6,
+    "skip": 0
+  },
+  {
+    "file": "golden-green.jsonl",
+    "pass": 53,
+    "fail": 0,
+    "skip": 0
+  },
+  {
+    "file": "tests.jsonl",
+    "pass": 909,
+    "fail": 67,
+    "skip": 11
+  },
+  {
+    "file": "root.jsonl",
+    "pass": 14,
+    "fail": 0,
+    "skip": 0
+  },
+  {
+    "file": "roost-environment-retry.jsonl",
+    "pass": 259,
+    "fail": 2,
+    "skip": 10
+  },
+  {
+    "file": "roost-native-retry.jsonl",
+    "pass": 273,
+    "fail": 0,
+    "skip": 10
+  },
+  {
+    "file": "consumer.jsonl",
+    "pass": 28,
+    "fail": 0,
+    "skip": 0
+  },
+  {
+    "file": "sync-modes.jsonl",
+    "pass": 2,
+    "fail": 0,
+    "skip": 0
+  },
+  {
+    "file": "golden-controls.jsonl",
+    "pass": 2,
+    "fail": 0,
+    "skip": 0
+  }
+]

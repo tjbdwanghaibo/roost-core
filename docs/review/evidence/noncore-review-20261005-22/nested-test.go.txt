@@ -1,0 +1,37 @@
+package db
+
+import (
+ "context"
+ "testing"
+ "github.com/tjbdwanghaibo/roost-core/nest"
+ "go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type nestedCommitter struct { records []nest.CommitRecord }
+func (c *nestedCommitter) Commit(_ context.Context, r nest.CommitRecord) error { c.records = append(c.records, r); return nil }
+
+// 使用正式生成的 DAO 恢复两层嵌套对象；独立对象的 BSON roundtrip 不能替代此承诺。
+func TestGeneratedRestoredDescendantDirty(t *testing.T) {
+ for _, parent := range []string{"node", "value"} {
+  for _, child := range []string{"leaf", "items", "kids"} {
+   t.Run(parent+"/"+child, func(t *testing.T) {
+    leaf := bson.M{"score": int64(42), "label": "old"}
+    branch := bson.M{"name": "branch", "leaf": leaf, "items": bson.M{"7": leaf}, "kids": bson.A{leaf}}
+    raw, err := bson.Marshal(bson.M{"_id": int64(2020), "node": branch, "value": branch})
+    if err != nil { t.Fatal(err) }
+    d := NewNestedMigrationDao()
+    if err := d.RestorePersisted(raw, 3, 7); err != nil { t.Fatal(err) }
+    if d.Dirty().Dirty() { t.Fatal("restore must start clean") }
+    p := d.GetNode()
+    if parent == "value" { p = d.GetValue() }
+    l := p.GetLeaf()
+    if child == "items" { l, _ = p.GetItems(7) }
+    if child == "kids" { l, _ = p.GetKids(0) }
+    if l == nil { t.Fatal("loaded descendant missing") }
+    c := &nestedCommitter{}
+    if _, err := nest.RunIsolatedTransaction(context.Background(), c, "nested_child_update", func() (any, error) { l.SetScore(99); return nil, nil }); err != nil { t.Fatal(err) }
+    if len(c.records) != 1 { t.Errorf("persisted descendant changed to %d but commit records=%d, want 1", l.GetScore(), len(c.records)) }
+   })
+  }
+ }
+}

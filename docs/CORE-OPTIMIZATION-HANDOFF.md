@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**10-05 第十二批/N04具名本机缺口收口**：[NC-32](bugfix/RR-20261005-NC-32.md)已修、声明场景验证，未发版；深层更新通知不再绑临时父副本，应用须重生成关联代码。9正式/6消费红转绿，完整金样53、消费28通过，其中11新消费覆盖嵌套迁移与持续CAS预算/恢复。N04全域仍部分完成，下一N05路由/mirror增量；真实Mongo/Cluster/HA/容量等保留。[范围/证据](review/REVIEW-2026-10-05-noncore-22.md)。
+
 **10-05 N04接续**：[NC-31已修](bugfix/RR-20261004-NC-31.md)，未发版；提交前校验目标BSON/装载/身份，12新正式、17生成消费通过。多DAO/CAS/真实文件WAL子进程强杀恢复六项增量无新确认缺陷；五包race421pass/1helper skip、根包14、build/vet/glsvet通过，Kit integration仅编译。N04仍部分完成，下一嵌套/类型变化与持续竞争消费→具名收口→N05路由/mirror；真实Mongo/HA/长容量不冒认。[运行/进度](review/REVIEW-2026-10-05-noncore-21.md)。下方NC-31未修为10-04原发现时点。
 
 **10-04 N04正式迁移写回接续**：[本轮](review/REVIEW-2026-10-04-noncore-20.md)确认[NC-31 P2未修](bug/RR-20261004-NC-31.md)：目标解码晚于CommitSystem，坏迁移进入WAL或写成不可加载的新schema。生成消费11叶子3fail/8控制，真实文件WAL/Projector+MongoStore、后端mongotest；build/34既有定向race/根包14/vet通过，未宣称真实Mongo/HA。3文件仅补中文注释；review与共同skill已明确必要中文说明和本地验收收尾，不等待GitHub CI。N04仍部分完成，下一多DAO/CAS消费与具名缺口收口；行为修复另走bugfix。
@@ -170,6 +172,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+10-05第十二批：[NC-32](bug/RR-20261005-NC-32.md) **已修复、声明场景验证，未发版**；[决策/重新生成要求](bugfix/RR-20261005-NC-32.md)、[红绿](bugfix/evidence/noncore-bugfix-20261005-12/README.md)。T-211。唯一父归属保护保留，无BSON/WAL格式或公开签名变更，不补历史漏写数据。
 
 10-05第十一批：[NC-31](bug/RR-20261004-NC-31.md) **已修复、声明场景验证，未发版**；[决策/兼容性](bugfix/RR-20261004-NC-31.md)、[红绿](bugfix/evidence/noncore-bugfix-20261004-11/README.md)、[多DAO/CAS/进程恢复](review/REVIEW-2026-10-05-noncore-21.md)。T-210。缺Loader/Id的手写候选现在unsupported；不改在线对象，不自动修坏WAL/生产数据，不重开另一线核心完整专项。
 

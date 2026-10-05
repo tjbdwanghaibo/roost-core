@@ -42,6 +42,7 @@ func (s *{{.Nested.Name}}) bindDirty(owner daoDirtyOwner, notify func()) {
 		return
 	}
 	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "{{.Nested.Name}}", notify)
+	s.bindChildren()
 }
 
 func (s *{{.Nested.Name}}) unbindDirty(owner daoDirtyOwner) {
@@ -81,22 +82,38 @@ func (s {{.Nested.Name}}) bsonDoc() {{lower1 .Nested.Name}}BSONDoc {
 	}
 }
 
-func (s *{{.Nested.Name}}) setBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
+// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
+func (s *{{.Nested.Name}}) loadBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
 {{- range .Nested.Fields}}
 {{- if eq .Kind 2}}
-	s.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
+	src{{.Name}} := {{fromWire . (printf "doc.%s" .Name)}}
+	s.{{fieldVar .Name}} = {{mapNewExpr . (printf "len(src%s)" .Name)}}
+	for key, val := range src{{.Name}} {
+		s.{{fieldVar .Name}}.Set(key, val)
+	}
 {{- else}}
 	s.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
-{{- if hasHook .}}
-	s.bind{{.Name}}()
-{{- end}}
 {{- end}}
 {{- end}}
 }
 
+func (s *{{.Nested.Name}}) bindChildren() {
+{{- range .Nested.Fields}}
+{{- if hasHook .}}
+	s.bind{{.Name}}()
+{{- end}}
+{{- end}}
+}
+
+func (s *{{.Nested.Name}}) setBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
+	s.loadBSONDoc(doc)
+	s.bindChildren()
+}
+
 func {{lower1 .Nested.Name}}FromBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {{.Nested.Name}} {
 	var s {{.Nested.Name}}
-	s.setBSONDoc(doc)
+	s.loadBSONDoc(doc)
 	return s
 }
 

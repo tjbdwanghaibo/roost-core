@@ -36,6 +36,7 @@ func (s *GemInfo) bindDirty(owner daoDirtyOwner, notify func()) {
 		return
 	}
 	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "GemInfo", notify)
+	s.bindChildren()
 }
 
 func (s *GemInfo) unbindDirty(owner daoDirtyOwner) {
@@ -69,14 +70,24 @@ func (s GemInfo) bsonDoc() gemInfoBSONDoc {
 	}
 }
 
-func (s *GemInfo) setBSONDoc(doc gemInfoBSONDoc) {
+// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
+func (s *GemInfo) loadBSONDoc(doc gemInfoBSONDoc) {
 	s.id = doc.ID
 	s.level = doc.Level
 }
 
+func (s *GemInfo) bindChildren() {
+}
+
+func (s *GemInfo) setBSONDoc(doc gemInfoBSONDoc) {
+	s.loadBSONDoc(doc)
+	s.bindChildren()
+}
+
 func gemInfoFromBSONDoc(doc gemInfoBSONDoc) GemInfo {
 	var s GemInfo
-	s.setBSONDoc(doc)
+	s.loadBSONDoc(doc)
 	return s
 }
 

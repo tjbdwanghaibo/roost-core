@@ -2,6 +2,7 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-211 | DAO加载后深层子字段内存已改，Nest没有该DAO提交记录，重载仍为旧值 | RR-20261005-NC-32：旧wire转换先绑定子通知再复制父对象，回调指向临时副本 | 在正式Nest事务内验加载后setter、提交mutation与fresh Manager重载；不能只验BSON值roundtrip | 升级生成工具并重生成关联DAO/nested代码，再验证；仅升级runtime无效，历史漏写按业务来源恢复，不删除WAL或放宽唯一父保护 |
 | T-210 | 旧schema冷加载出现坏BSON/目标字段错误、迁移返回unsupported，或旧版升级后投影backlog/重载失败 | RR-20261004-NC-31：旧版目标校验晚于持久提交；新版提前拒绝缺loader/身份或错误结果 | 迁移错误的resource/id/schema、CommitSystem次数、原文档schema/version、WAL未确认和投影错误 | 使用预提交验证修复；手写候选补RestorePersisted和Id，不能传在线对象。已有坏WAL/污染文档先备份定位，再制定具名恢复，不自动跳过日志/删生产数据 |
 
 按**你看到的症状**索引。每行四列：最可能的原因、看哪里、怎么处理。找不到症状时先看 [OBSERVABILITY.md](../OBSERVABILITY.md) 的指标清单，再到 [USER_GUIDE.md](USER_GUIDE.md) 第 12 章。

@@ -36,6 +36,7 @@ func (s *Position) bindDirty(owner daoDirtyOwner, notify func()) {
 		return
 	}
 	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "Position", notify)
+	s.bindChildren()
 }
 
 func (s *Position) unbindDirty(owner daoDirtyOwner) {
@@ -69,14 +70,24 @@ func (s Position) bsonDoc() positionBSONDoc {
 	}
 }
 
-func (s *Position) setBSONDoc(doc positionBSONDoc) {
+// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
+func (s *Position) loadBSONDoc(doc positionBSONDoc) {
 	s.x = doc.X
 	s.y = doc.Y
 }
 
+func (s *Position) bindChildren() {
+}
+
+func (s *Position) setBSONDoc(doc positionBSONDoc) {
+	s.loadBSONDoc(doc)
+	s.bindChildren()
+}
+
 func positionFromBSONDoc(doc positionBSONDoc) Position {
 	var s Position
-	s.setBSONDoc(doc)
+	s.loadBSONDoc(doc)
 	return s
 }
 

@@ -1,0 +1,12 @@
+{"Time":"2026-10-05T08:45:12.6937259+08:00","Action":"start","Package":"example.com/roostgolden22"}
+{"Time":"2026-10-05T08:45:13.4093696+08:00","Action":"run","Package":"example.com/roostgolden22","Test":"TestNestedValuesSurviveTheCommitDocument"}
+{"Time":"2026-10-05T08:45:13.4098895+08:00","Action":"output","Package":"example.com/roostgolden22","Test":"TestNestedValuesSurviveTheCommitDocument","Output":"=== RUN   TestNestedValuesSurviveTheCommitDocument\n","OutputType":"frame"}
+{"Time":"2026-10-05T08:45:13.4109589+08:00","Action":"output","Package":"example.com/roostgolden22","Test":"TestNestedValuesSurviveTheCommitDocument","Output":"--- PASS: TestNestedValuesSurviveTheCommitDocument (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-05T08:45:13.4114897+08:00","Action":"pass","Package":"example.com/roostgolden22","Test":"TestNestedValuesSurviveTheCommitDocument","Elapsed":0}
+{"Time":"2026-10-05T08:45:13.4114897+08:00","Action":"run","Package":"example.com/roostgolden22","Test":"TestNestedChildChangeMarksItsParentThroughEveryEntry"}
+{"Time":"2026-10-05T08:45:13.4114897+08:00","Action":"output","Package":"example.com/roostgolden22","Test":"TestNestedChildChangeMarksItsParentThroughEveryEntry","Output":"=== RUN   TestNestedChildChangeMarksItsParentThroughEveryEntry\n","OutputType":"frame"}
+{"Time":"2026-10-05T08:45:13.4120205+08:00","Action":"output","Package":"example.com/roostgolden22","Test":"TestNestedChildChangeMarksItsParentThroughEveryEntry","Output":"--- PASS: TestNestedChildChangeMarksItsParentThroughEveryEntry (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-05T08:45:13.4120205+08:00","Action":"pass","Package":"example.com/roostgolden22","Test":"TestNestedChildChangeMarksItsParentThroughEveryEntry","Elapsed":0}
+{"Time":"2026-10-05T08:45:13.4120205+08:00","Action":"output","Package":"example.com/roostgolden22","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-05T08:45:14.4292105+08:00","Action":"output","Package":"example.com/roostgolden22","Output":"ok  \texample.com/roostgolden22\t1.735s\n"}
+{"Time":"2026-10-05T08:45:14.4292105+08:00","Action":"pass","Package":"example.com/roostgolden22","Elapsed":1.7349999999999999}

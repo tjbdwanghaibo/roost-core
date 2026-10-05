@@ -1,0 +1,402 @@
+package db
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/migration"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+const aggregateKind entity.EntityKind = 246
+const inventoryCollection = "roost_review_20261004_21_inventory"
+
+var aggregateOnce sync.Once
+
+type crashCommitter struct {
+	*engine.Projector
+	admitted chan struct{}
+}
+
+func (c *crashCommitter) CommitSystem(ctx context.Context, record coredata.CommitRecord) (coredata.ProjectionTicket, error) {
+	ticket, err := c.Projector.CommitSystem(ctx, record)
+	if err == nil {
+		close(c.admitted)
+	}
+	return ticket, err
+}
+
+type aggregateEntity struct {
+	*reviewEntity
+	inventory *MigratingInventoryDao
+}
+
+// 子进程的迁移已经 strict durable，但投影被通道挡住；父进程仅在该事件后
+// 强杀自己创建的消费者，再从同一真实目录重开 WAL，不走正常 Close。
+func TestGeneratedMigrationCrashRecovery(t *testing.T) {
+	registerConsumer()
+	id, err := entity.BuildEntityID(2020, reviewKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newStore := func() *engine.MongoStore {
+		client := mongotest.NewClient()
+		if err := client.Collection("review", collection).Seed(bson.M{"_id": id, "_schema": uint32(1), "_version": int64(7), "name": "old", "score": int64(1), "mode": "success"}); err != nil {
+			t.Fatal(err)
+		}
+		store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: "review"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	if dir := os.Getenv("ROOST_REVIEW21_CRASH_DIR"); dir != "" {
+		store := newStore()
+		opts := nestwal.DefaultOptions(dir)
+		opts.WriterVersion = nestwal.WriterVersionV2
+		wal, err := nestwal.Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate := &gatedProjection{store: store, entered: make(chan struct{}), release: make(chan struct{})}
+		projector, err := engine.NewProjector(wal, gate, engine.ProjectorOptions{CloseWAL: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		committer := &crashCommitter{projector, make(chan struct{})}
+		runner, err := engine.NewMigrationRunner(committer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := entity.NewEntityManager()
+		repository, err := engine.NewEntityRepository(manager, store, runner, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { _, e := repository.LoadEntity(context.Background(), id, reviewKind); done <- e }()
+		select {
+		case <-gate.entered:
+		case e := <-done:
+			t.Fatalf("load returned before durable projection gate: %v", e)
+		case <-time.After(5 * time.Second):
+			t.Fatal("child did not reach durable projection gate")
+		}
+		select {
+		case <-committer.admitted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("strict CommitSystem did not return")
+		}
+		// DurableLSN 只覆盖 Enqueue 票据，不是同步 Append 的持久性指标。
+		if projector.Stats().Committed != 1 || manager.Get(id) != nil {
+			t.Fatal("not admitted/unpublished at crash point")
+		}
+		fmt.Println("ROOST_REVIEW21_DURABLE_READY")
+		select {} // 等父进程终止，不正常关闭或释放投影。
+	}
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGeneratedMigrationCrashRecovery$", "-test.v")
+	cmd.Env = append(os.Environ(), "ROOST_REVIEW21_CRASH_DIR="+dir)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+	ready := make(chan bool, 1)
+	go func() {
+		scanner := bufio.NewScanner(output)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "ROOST_REVIEW21_DURABLE_READY") {
+				ready <- true
+				return
+			}
+		}
+		ready <- false
+	}()
+	select {
+	case ok := <-ready:
+		if !ok {
+			_ = cmd.Wait()
+			t.Fatalf("crash child exited before readiness: %s", stderr.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("crash child readiness deadline")
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("child unexpectedly exited cleanly")
+	}
+	t.Log("owned child killed after strict durability and before projection")
+	opts := nestwal.DefaultOptions(dir)
+	opts.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := 0
+	if err := wal.Replay(ctx, func(_ nest.CommitFence, record nest.CommitRecord) error {
+		records++
+		if record.Handler != engine.MigrationHandler || record.Durability != nest.DurabilityStrict {
+			return fmt.Errorf("unexpected crash record: %+v", record)
+		}
+		return nil
+	}); err != nil || records != 1 {
+		_ = wal.Close(context.Background())
+		t.Fatalf("durable migration lost across process termination: records=%d error=%v", records, err)
+	}
+	store := newStore() // 未投影的后端仍是相同旧文档；替身不证明真实 Mongo 持久性。
+	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{CloseWAL: true})
+	if err != nil {
+		_ = wal.Close(context.Background())
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer closeCancel()
+		if err := projector.Close(closeCtx); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := projector.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := engine.NewEntityRepository(entity.NewEntityManager(), store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := repository.LoadEntity(ctx, id, reviewKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := value.(*reviewEntity).dao
+	if dao.GetScore() != 42 || dao.DirtyTracker().Version() != 8 || projector.Stats().WALUnacked != 0 {
+		t.Fatalf("crash replay did not settle: score=%d version=%d stats=%+v", dao.GetScore(), dao.DirtyTracker().Version(), projector.Stats())
+	}
+}
+
+func registerAggregate() {
+	registerConsumer()
+	aggregateOnce.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: aggregateKind,
+			DaoBuilders: []entity.DaoBuilderFunc{
+				func() entity.DaoInterface { return NewMigratingDao() },
+				func() entity.DaoInterface { return NewMigratingInventoryDao() },
+			},
+			Builder: func(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				return &aggregateEntity{
+					&reviewEntity{entity.NewEntityBaseWithMutex(p.Id, p.Category, false, p.Mutex, p.Kind), p.Dao[collection].(*MigratingDao)},
+					p.Dao[inventoryCollection].(*MigratingInventoryDao),
+				}, nil
+			},
+		})
+		for _, from := range []uint32{1, 2} {
+			migration.MustRegisterDAO(migration.DAOStep{Collection: inventoryCollection, From: from, To: from + 1,
+				Apply: func(ctx context.Context, raw []byte) ([]byte, error) {
+					var doc bson.M
+					if err := bson.Unmarshal(raw, &doc); err != nil {
+						return nil, err
+					}
+					if doc["mode"] == "step_failure" {
+						return nil, stepFailure
+					}
+					doc["name"], doc["score"], doc["_schema"] = "inventory migrated", int64(84), from+1
+					if from == 2 && doc["mode"] == "bad_type" {
+						doc["score"] = "invalid int64"
+					}
+					return bson.Marshal(doc)
+				},
+			})
+		}
+	})
+}
+
+func setupAggregate(t *testing.T, mode string, gate *gatedProjection) *consumerSetup {
+	t.Helper()
+	registerAggregate()
+	s := setupConsumerForKind(t, "success", 1, gate, aggregateKind)
+	if err := s.client.Collection("review", inventoryCollection).Seed(bson.M{
+		"_id": s.id, "_schema": uint32(1), "_version": int64(9), "name": "old inventory", "score": int64(2), "mode": mode,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func writeOrdinary(t *testing.T, s *consumerSetup, resource string, expected uint64, schema uint32, score int64, mode string) {
+	t.Helper()
+	raw, err := bson.Marshal(bson.M{"_id": s.id, "name": "concurrent writer", "score": score, "mode": mode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id coredata.TransactionID
+	id[0], id[1] = byte(expected), byte(score)
+	if err := s.store.Project(context.Background(), coredata.CommitRecord{
+		ID: id, Handler: "review21_business_writer",
+		Mutations: []coredata.Mutation{{
+			Key:  coredata.DocumentKey{Database: "review", Resource: resource, ID: s.id},
+			Kind: coredata.MutationPut, ExpectedVersion: expected, NextVersion: expected + 1,
+			Mask: coredata.AllFields, Schema: schema, Codec: "bson-v2", Data: raw,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkAggregate(t *testing.T, s *consumerSetup, value entity.IThreadSafeEntity, profileScore int64, profileVersion, inventoryVersion uint64) {
+	t.Helper()
+	e, ok := value.(*aggregateEntity)
+	if !ok {
+		t.Fatalf("wrong loaded entity %T", value)
+	}
+	if e.dao.GetScore() != profileScore || e.dao.DirtyTracker().Version() != profileVersion || e.inventory.GetScore() != 84 || e.inventory.DirtyTracker().Version() != inventoryVersion {
+		t.Fatalf("mixed/stale aggregate: profile score=%d version=%d inventory score=%d version=%d", e.dao.GetScore(), e.dao.DirtyTracker().Version(), e.inventory.GetScore(), e.inventory.DirtyTracker().Version())
+	}
+	// fresh Manager 无迁移器重载，排除加载 flight/原实体缓存掩盖持久状态。
+	repo, err := engine.NewEntityRepository(entity.NewEntityManager(), s.store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reload, err := repo.LoadEntity(context.Background(), s.id, aggregateKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := reload.(*aggregateEntity)
+	if fresh.dao.GetScore() != profileScore || fresh.dao.DirtyTracker().Version() != profileVersion || fresh.inventory.GetScore() != 84 || fresh.inventory.DirtyTracker().Version() != inventoryVersion {
+		t.Fatal("fresh Manager reload differs")
+	}
+}
+
+func TestGeneratedMultiDAOMigration(t *testing.T) {
+	s := setupAggregate(t, "success", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	value, err := s.repository.LoadEntity(ctx, s.id, aggregateKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkAggregate(t, s, value, 42, 8, 10)
+	if s.committer.calls.Load() != 2 {
+		t.Fatalf("commits=%d want 2", s.committer.calls.Load())
+	}
+}
+
+func TestGeneratedMultiDAOPartialMigrationThenRetry(t *testing.T) {
+	for _, mode := range []string{"bad_type", "step_failure"} {
+		t.Run(mode, func(t *testing.T) {
+			s := setupAggregate(t, mode, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			value, err := s.repository.LoadEntity(ctx, s.id, aggregateKind)
+			if err == nil || value != nil || s.manager.Get(s.id) != nil {
+				t.Fatal("published incomplete migration")
+			}
+			if mode == "step_failure" && !errors.Is(err, stepFailure) {
+				t.Fatal(err)
+			}
+			profile := s.stored(t)
+			inventory, readErr := s.store.Load(ctx, coredata.LoadSpec{Database: "review", Resource: inventoryCollection, Filter: map[string]any{"_id": s.id}})
+			if readErr != nil || len(inventory) != 1 {
+				t.Fatalf("read inventory: %v", readErr)
+			}
+			// DAO 逐笔迁移，不承诺多 DAO 全有或全无；先提交的有效迁移保留，坏 DAO 不提交。
+			if profile.Schema != 3 || profile.Version != 8 || inventory[0].Schema != 1 || inventory[0].Version != 9 || s.committer.calls.Load() != 1 {
+				t.Fatalf("partial state: profile=%+v inventory=%+v calls=%d", profile, inventory, s.committer.calls.Load())
+			}
+			// 用正式 CAS 写修正源数据后重试，不能靠删除 WAL/重新造实体来通过。
+			writeOrdinary(t, s, inventoryCollection, 9, 1, 2, "success")
+			value, err = s.repository.LoadEntity(ctx, s.id, aggregateKind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkAggregate(t, s, value, 42, 8, 11)
+			if s.committer.calls.Load() != 2 {
+				t.Fatalf("valid first DAO was unnecessarily remigrated: calls=%d", s.committer.calls.Load())
+			}
+		})
+	}
+}
+
+func TestGeneratedMigrationCASObsoleteThenReload(t *testing.T) {
+	for _, competitorSchema := range []uint32{1, 3} {
+		name := "target_schema"
+		if competitorSchema == 1 {
+			name = "old_schema_retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			gate := &gatedProjection{entered: make(chan struct{}), release: make(chan struct{})}
+			s := setupAggregate(t, "success", gate)
+			var once sync.Once
+			release := func() { once.Do(func() { close(gate.release) }) }
+			defer release()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			type result struct {
+				value entity.IThreadSafeEntity
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() { v, e := s.repository.LoadEntity(ctx, s.id, aggregateKind); done <- result{v, e} }()
+			select {
+			case <-gate.entered:
+			case <-ctx.Done():
+				t.Fatal("migration projection gate not reached")
+			}
+			if s.manager.Get(s.id) != nil {
+				t.Fatal("published before projection")
+			}
+			writeOrdinary(t, s, collection, 7, competitorSchema, 99, "success")
+			release()
+			var got result
+			select {
+			case got = <-done:
+			case <-ctx.Done():
+				t.Fatal("load did not converge after obsolete migration")
+			}
+			if got.err != nil {
+				t.Fatal(got.err)
+			}
+			score, version, commits := int64(99), uint64(8), int32(2)
+			if competitorSchema == 1 {
+				score, version, commits = 42, 9, 3
+			}
+			checkAggregate(t, s, got.value, score, version, 10)
+			if err := s.committer.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			stats := s.committer.Stats()
+			if s.committer.calls.Load() != commits || stats.WALUnacked != 0 {
+				t.Fatalf("obsolete WAL did not settle: calls=%d stats=%+v", s.committer.calls.Load(), stats)
+			}
+		})
+	}
+}

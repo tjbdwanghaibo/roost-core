@@ -1,0 +1,7 @@
+{
+  "sh": "C:/Program Files/Git/bin/sh.exe",
+  "execution": "outside sandbox",
+  "test_exit": 0,
+  "TEMP": "D:/whb_s/.tmp/noncore-bugfix-review-20261005-22-checks/native-test-temp",
+  "parallel": 4
+}

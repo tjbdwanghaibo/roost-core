@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **生成 DAO 恢复后深层嵌套修改进入持久提交**（RR-20261005-NC-32，P2）：wire 转换先恢复未绑定数据，父对象到最终位置后再递归接线，避免子通知指向按值返回前的临时副本。唯一父归属保护和BSON/版本格式保持；应用须重生成关联DAO/nested代码，历史漏写不自动补回。[记录](docs/bugfix/RR-20261005-NC-32.md)
+
 - **迁移输出在WAL准入前验证目标装载与身份**（RR-20261004-NC-31，P2）：复用 Mongo BSON/ID 和目标 RestorePersisted；坏 BSON、字段类型或身份不再先持久提交。手写候选须提供 loader / Id，预校验使用目标 schema、旧 version；正常 CAS/投影等待/整聚合重读与 int32 ID 兼容保持。已有坏 WAL 不自动跳过或删除。[记录](docs/bugfix/RR-20261004-NC-31.md)
 
 - **game-demo 玩家租约的本地准入窗口不再越过 Redis 键**（RR-20261004-14，P3，W-2026-10-04-07）：确认改为从 SetNX / Refresh 发出的时刻起算 Lease，跨间断认领的撤离等待和慢 Refresh 不再吃掉 AdmissionGuard；跨间断认领 Redis 没答复（SetNX 可能已落地）时玩家记为 interrupted，下一轮续租答 Held 也会先重新认领、扔掉间断前的副本再放行。已生成工程须手工合并 `playerowner.go`。[记录](docs/bugfix/RR-20261004-14.md)

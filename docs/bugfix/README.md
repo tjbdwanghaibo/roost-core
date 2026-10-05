@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-05 第十二批：[NC-32](RR-20261005-NC-32.md) 已修复、声明场景验证，未发版。** wire 转换只恢复未绑定数据，最终父对象就位后递归绑定；保留唯一父保护。9正式/6消费红转绿，完整金样53与消费28叶子通过。[证据](evidence/noncore-bugfix-20261005-12/README.md) · [接续review](../review/REVIEW-2026-10-05-noncore-22.md)。T-211；应用须重生成嵌套关联代码，无生产数据修补。
+
 **10-05 第十一批：[NC-31](RR-20261004-NC-31.md) 已修复、声明场景验证，未发版。** 目标BSON/装载/身份在CommitSystem前检查；12新正式、原生成消费11全绿，接续含多DAO/CAS/进程恢复17消费通过。五包race421pass/1helper skip、根包14及build/vet/glsvet通过；Kit integration仅编译，真实Mongo/HA待验。[证据](evidence/noncore-bugfix-20261004-11/README.md) · [review](../review/REVIEW-2026-10-05-noncore-21.md)。T-210；未运行生产数据迁移。
 
 **v1.19.2 已发布（2026-10-04，tag → `4ee44f34`）**：RR-20261004-08 / 09、RR-20260921-03 / 04 / 05 随本版发布。

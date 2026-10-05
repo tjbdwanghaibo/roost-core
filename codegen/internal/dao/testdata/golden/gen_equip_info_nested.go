@@ -41,6 +41,7 @@ func (s *EquipInfo) bindDirty(owner daoDirtyOwner, notify func()) {
 		return
 	}
 	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "EquipInfo", notify)
+	s.bindChildren()
 }
 
 func (s *EquipInfo) unbindDirty(owner daoDirtyOwner) {
@@ -82,21 +83,36 @@ func (s EquipInfo) bsonDoc() equipInfoBSONDoc {
 	}
 }
 
-func (s *EquipInfo) setBSONDoc(doc equipInfoBSONDoc) {
+// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
+func (s *EquipInfo) loadBSONDoc(doc equipInfoBSONDoc) {
 	s.level = doc.Level
 	s.star = doc.Star
-	s.setGemsRawMap(daoMapDocs(doc.Gems, gemInfoPtrFromBSONDoc))
+	srcGems := daoMapDocs(doc.Gems, gemInfoPtrFromBSONDoc)
+	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(srcGems))
+	for key, val := range srcGems {
+		s.gems.Set(key, val)
+	}
 	s.runes = daoSliceDocs(doc.Runes, gemInfoPtrFromBSONDoc)
-	s.bindRunes()
 	s.core = gemInfoPtrFromBSONDoc(doc.Core)
-	s.bindCore()
 	s.shape = positionFromBSONDoc(doc.Shape)
+}
+
+func (s *EquipInfo) bindChildren() {
+	s.bindGems()
+	s.bindRunes()
+	s.bindCore()
 	s.bindShape()
+}
+
+func (s *EquipInfo) setBSONDoc(doc equipInfoBSONDoc) {
+	s.loadBSONDoc(doc)
+	s.bindChildren()
 }
 
 func equipInfoFromBSONDoc(doc equipInfoBSONDoc) EquipInfo {
 	var s EquipInfo
-	s.setBSONDoc(doc)
+	s.loadBSONDoc(doc)
 	return s
 }
 
