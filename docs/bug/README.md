@@ -1,5 +1,14 @@
 # Roost Review 问题索引
 
+**10-05 N09 skill 第二批（revn09b）：NC-114 P2、NC-115 P2、NC-116 P3、NC-117 P2，已复现，未修复。** skillsync 的 presentation reset 不经过可见性策略、state 快照与增量的可见性口径不一致（ability handle、三类 remove）、Applier 被一个畸形 full 包永久卡死；提交前失败的 cast 不进完成队列、永不回收，超过 CompletedCastLimit 后 checkpoint 无法恢复。[本轮](../review/REVIEW-2026-10-05-n09-batch2.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-117](RR-20261005-NC-117.md) | P2 skill 提交前失败的 cast 不进完成队列、永不回收，超过 CompletedCastLimit 后 checkpoint 无法恢复 | 已复现，未修复 |
+| [RR-20261005-NC-116](RR-20261005-NC-116.md) | P3 skillsync Applier 拒绝 BaseSequence 非零的 full 包后永久 ErrApplyInProgress | 已复现，未修复 |
+| [RR-20261005-NC-115](RR-20261005-NC-115.md) | P2 skillsync state 可见性快照与增量口径不一致：ability handle、cast / process / persistent remove 放行不可见实体 | 已复现，未修复 |
+| [RR-20261005-NC-114](RR-20261005-NC-114.md) | P2 skillsync presentation reset 不经过 VisibilityPolicy，不可见施法者的持续表现发给所有 observer | 已复现，未修复 |
+
 **10-05 N04 接续（revn04）：NC-100 P1、NC-101 P2、NC-102 P3 已修复、声明场景验证，未发版。** Redis 驱动在回复丢失后自动重放 Lua 脚本，versionstore 一次 Update 把 mutate 写两次并返回成功；`mongo.transaction_timeout` 不约束提交，网络黑洞时事务阻塞到恢复为止；mongotest 唯一索引把数组当一个值比较。[本轮](../review/REVIEW-2026-10-05-n04-revn04.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn04/README.md)
 
 | 编号 | 问题 | 状态 |
