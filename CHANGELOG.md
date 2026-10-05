@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- **skillsync presentation reset 按 observer 可见性过滤**（RR-20261005-NC-114）：presentation 游标过期的 Flush 与 Recover 生成的 reset 现在把每条持续表现交给 observer 的 `VisibilityPolicy.FilterPresentation`（复用现有方法，自定义策略无需改动）；此前 reset 原样投影 `Runtime.PresentationSnapshot()`，不可见施法者的持续表现、目标与坐标发给所有 observer。[记录](docs/bugfix/RR-20261005-NC-114.md)
+- **skillsync state 快照与增量的可见性一致**（RR-20261005-NC-115）：ability 快照与增量一样按具体 handle 问 `FieldVisible`；cast / process remove mutation 带上归属实体（追加 `caster` / `owner` 字段），persistent remove 按 `Binding` 判断，不可见实体的 remove 不再下发。行为收紧：observer 可见性在 upsert 与 remove 之间变化时，以 remove 时的可见性为准，业务应在可见性变化时重发快照。[记录](docs/bugfix/RR-20261005-NC-114.md)
+- **skillsync Applier 不再被一个畸形 full 包卡死**（RR-20261005-NC-116）：开新 epoch 的状态只在准入成功时置位；此前 BaseSequence 非零的 full 包被拒绝后，Applier 对之后每个包（包括合法的恢复 full）都返回 `ErrApplyInProgress`。[记录](docs/bugfix/RR-20261005-NC-116.md)
+- **skill 提交前失败的 cast 按 CompletedCastLimit 回收**（RR-20261005-NC-117）：commit 时付费不足、Cancel / Release 回调失败等提交前失败的 cast 与其他终态 cast 一样进入完成队列；此前它们永不回收，累计超过上限（默认 2048）后 checkpoint 恢复判 corrupt。[记录](docs/bugfix/RR-20261005-NC-117.md)
 - **Redis 驱动不再自动重放回复丢失的 Lua 脚本**（RR-20261005-NC-100）：`MaxRetries`（缺省 3）此前在 EOF / 读超时后把 EVAL 换连接重发，脚本可能执行两次；versionstore 的 compare-and-set 第二次执行看到自己的写，`Update` 于是把 mutate 再叠一次并返回成功（真实 Redis 上一次 Update 写入两条相同消息）。`redis/driver` 的 `Eval` / `EvalSha` / `EvalBatchDurable` 改为不可重放命令，回复丢失时返回传输错误；普通读写命令的重试不变。依赖驱动“救回”脚本调用的代码现在会看到该错误。[记录](docs/bugfix/RR-20261005-NC-100.md)
 - **`mongo.transaction_timeout` 现在也约束事务提交**（RR-20261005-NC-101）：此前驱动便捷 API 用 background ctx 提交，网络在回调之后黑洞时事务阻塞到网络恢复（3s 窗口实测 40s / 150s）。`mongo/driver` 的 session 以相同重试规则自实现循环，提交使用带截止的 ctx；到时返回的错误可能已提交，按结果未知处理。[记录](docs/bugfix/RR-20261005-NC-101.md)
 - **mongotest 唯一索引路径上遇到数组时返回 `ErrUnsupported`**（RR-20261005-NC-102）：此前把数组当一个值比较，放过真实 Mongo 会拒绝的重复、又误报真实 Mongo 接受的写入。[记录](docs/bugfix/RR-20261005-NC-102.md)

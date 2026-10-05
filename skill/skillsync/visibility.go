@@ -119,19 +119,22 @@ func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Obs
 			}
 		}
 	}
-	abilities, err := policy.fieldVisible(observer, VisibilityAbilities, "")
-	if err != nil {
-		return result, err
-	}
-	if abilities {
-		for _, value := range snapshot.Abilities {
-			allowed, err := policy.visible(observer, value.Owner)
-			if err != nil {
-				return result, err
-			}
-			if allowed {
-				result.Abilities = append(result.Abilities, value)
-			}
+	// ability 与增量一样按具体 handle 问 FieldVisible（mutationVisibilityField），快照与增量才得到同一可见集合。
+	// 之前快照只问一次空 handle，按 handle 隐藏的 ability 经快照完整下发（NC-115）。
+	for _, value := range snapshot.Abilities {
+		fieldAllowed, err := policy.fieldVisible(observer, VisibilityAbilities, abilityHandleReference(value.Handle))
+		if err != nil {
+			return result, err
+		}
+		if !fieldAllowed {
+			continue
+		}
+		allowed, err := policy.visible(observer, value.Owner)
+		if err != nil {
+			return result, err
+		}
+		if allowed {
+			result.Abilities = append(result.Abilities, value)
 		}
 	}
 	processes, err := policy.fieldVisible(observer, VisibilityProcesses, "")
@@ -238,6 +241,17 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 	}
 	if entity == 0 && mutation.Persistent != nil {
 		entity = mutation.Persistent.Binding.Owner
+	}
+	// persistent remove 不带 Persistent，按 mutation 自身的 Binding 判断，与 upsert / 快照一样要求
+	// owner 与 subject 都可见。之前 remove 推不出实体、按“无主”放行，连同不可见实体的 Binding 下发（NC-115）。
+	if mutation.Kind == skill.StateMutationPersistentRemove && mutation.Persistent == nil {
+		if entity == 0 {
+			entity = mutation.Binding.Owner
+		}
+		subject, err := policy.visible(observer, mutation.Binding.Subject)
+		if err != nil || !subject {
+			return mutation, false, err
+		}
 	}
 	allowed, err := policy.visible(observer, entity)
 	if err != nil || !allowed {
@@ -349,7 +363,7 @@ func mutationVisibilityField(mutation skill.StateMutation) (VisibilityField, str
 	case skill.StateMutationResourceUpsert, skill.StateMutationResourceRemove:
 		return VisibilityResources, ""
 	case skill.StateMutationAbilityUpsert, skill.StateMutationAbilityRemove:
-		return VisibilityAbilities, fmt.Sprint(mutation.AbilityHandle)
+		return VisibilityAbilities, abilityHandleReference(mutation.AbilityHandle)
 	case skill.StateMutationProcessUpsert, skill.StateMutationProcessRemove:
 		return VisibilityProcesses, ""
 	case skill.StateMutationPolicyUpsert, skill.StateMutationPolicyRemove:
@@ -364,6 +378,9 @@ func mutationVisibilityField(mutation skill.StateMutation) (VisibilityField, str
 		return VisibilityField("unknown"), ""
 	}
 }
+
+// abilityHandleReference 是 ability 字段可见性的 handle 键，快照与增量共用。
+func abilityHandleReference(handle skill.AbilityHandle) string { return fmt.Sprint(handle) }
 
 func stateHandleReference(handle skill.StateHandle) string {
 	return fmt.Sprintf("%s:%d:%d", handle.GameplayDigest, handle.Slot, handle.Shared)

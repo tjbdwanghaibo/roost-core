@@ -133,6 +133,13 @@ Coordinator 对每个 observer/key 保存独立的 Runtime source cursor。可�
 推进该 observer 的 source cursor，不会进入其 History。Packet 一旦 Append 成功，即使
 Publisher 随后失败也仍可由 Resync 重放；如果 Append 失败，source cursor 不前进。
 
+state full、state delta、presentation 增量与 presentation reset 都经过同一 observer 的
+VisibilityPolicy：reset 的每条持续表现按它对应的增量事件交给 `FilterPresentation`；ability
+在快照与增量里都按具体 handle 问 `FieldVisible`；cast / process / persistent 的 remove 按归属
+实体（`caster` / `owner` / `binding`）过滤。过滤按下发当时的可见性逐条判断，observer 的可见性
+发生变化（进入 / 离开视野、阵营变化）时，业务应调用 `PublishSnapshot` 重发 state full，
+否则客户端会保留不再可见的旧条目或缺少新可见的条目。
+
 ## 5. History 恢复与持久化
 
 `syncstream.History` 为每个 `Observer + Stream` 独立排序。核心不变量：

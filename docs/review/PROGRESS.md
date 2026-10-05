@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N09 skill 第二批（同步/接入 + 执行/状态余项）
+
+基线 `855c2a38`（origin/main），分支 `revn09b`，NC 段 114～119（用 114～117）；图谱 generation 2026-09-30，早于第一批修复，按当前源码逐行补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch2.md) · [修复](../bugfix/RR-20261005-NC-114.md)。NC-114/115/117（P2）、NC-116（P3）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 同步/接入 | Y1～Y5：Coordinator、outbox、文件 outbox（unix / windows）、Applier、可见性三条下发路径 | NC-114 reset 不过滤、NC-115 快照 / 增量口径不一、NC-116 Applier 卡死；O5 全局超龄停发、O6 tmp 残留、O8～O10、O12 可见性变化无重发入口 |
+| 执行/状态余项 | Y6～Y10：增量 mutation / baseline、checkpoint、NC-110 后终止路径与 checkpoint 一致性、owned 进程、回放 | NC-117 提交前失败 cast 无界保留、checkpoint 恢复不了；O7 checkpoint 字节不确定、O11 RecordingHost |
+| 数据/属性（107） | 未审（只读 Parse 入口与生成的 CompileAll） | 第三批：Parse + Compile 拒绝路径、skillcompose；process_motion / area / numeric |
+
+8 条新正式用例：7 条修前红 → 修后绿（skill 2、skillsync 5）+ 1 条控制；skill 5 包 race×3、examples / sync-e2e、build/vet、根包通过，不累计作覆盖率。N09 部分完成，不计 completed/15。方向判断：“同一事实多条路径各写一套规则”在两批反复出现（终止路径 → 保留集合；快照 / 增量 / reset 的可见性），建议终态登记与可见性规则各收敛到唯一入口，本批按此做最小收敛。O1～O4 未找到新触发路径。不等待 CI，不发版。
+
 ## 2026-10-05 N04 接续（revn04）
 
 起点 `be7bcc18`，独立 worktree 分支 `revn04`；图谱 generation 2026-09-30、以当前源码补证。[本轮](REVIEW-2026-10-05-n04-revn04.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn04/README.md)。NC-100 P1、NC-101 P2、NC-102 P3 已修复、声明场景验证，未发版。

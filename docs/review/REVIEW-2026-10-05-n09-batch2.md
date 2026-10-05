@@ -64,3 +64,18 @@ skill 的“同一事实经多条路径下发 / 收尾，每条路径手写一�
 1. 数据/属性：game-demo 启动链实际用到的 `Parse`（`rejectDuplicateKeysWithLimits`、`decodeStrictSingle`、各 `parse*` 的拒绝分支）与 `Compile` 的 error diagnostic 路径；`skillcompose/`。
 2. `process_motion.go` / `process_area.go` / `process_numeric.go` 与 `presentation_asset_cache.go`。
 3. O5 / O12 若维护者决定改契约，再回到 skillsync。
+
+## 7. 修复与验证（审查提交之后追加）
+
+审查提交 `1b2a51c4`（`docs(review)`）之后按授权修复，单独一笔 `fix(skill,skillsync)`。修复单元：NC-114 + NC-115（[记录](../bugfix/RR-20261005-NC-114.md)）、NC-116（[记录](../bugfix/RR-20261005-NC-116.md)）、NC-117（[记录](../bugfix/RR-20261005-NC-117.md)）。
+
+| 命令（`GOWORK=off`，模块根） | 结果 |
+| --- | --- |
+| 8 条新用例修前：7 条 NC 回归（skill 2、skillsync 5）+ 1 条控制（skill `TestFailedStartLeavesNoCompletedQueueEntry`） | 7 FAIL，原文见 NC-114～117；控制修前 ok |
+| 同一组修后 | 全部 ok |
+| `gofmt -l skill` | 空 |
+| `go vet ./skill/... && go test -race -count=3 ./skill/...` | skill / combat / combatcomponent / skillcompose / skillsync 全部 ok（skill 包全量在 `stateMutationVerifyIncremental` 影子校验下运行，覆盖 remove 新字段） |
+| `go build ./... && go vet ./...`；`go test -count=1 .` | 通过 |
+| `skill/examples`：`go build ./...`、`go run ./fireball`；`skill/integration/sync-e2e`：`go test -count=1 ./...` | 通过 |
+
+修复后的组合契约复核：reset 的新错误只经 `prepareFlush` 与 `Recover` 的 provider 返回，两处调用方本来就处理 state 快照的同类错误（fail-closed、计 `VisibilityFailures`）；remove 新字段由同一 `StateMutation` 结构体编码，`ApplyStateMutation` 与 Applier 不依赖；完成队列的变化只影响终态 cast 的回收时机，`castEvictableLocked` 的“仍被引用不回收”条件不变，恢复规则与 live 现在一致（`TestUncommittedFailedCastsStayWithinTheCompletedCastLimit` 断言重新 checkpoint 的完成队列相同）。没有改生成形状（模板、codegen 未动），没有跑 codegen 测试与 game-demo 生成：game-demo 只用 Parse + Compile（O3）。外部依赖（Mongo / Redis / NATS）本批没有用到。

@@ -472,7 +472,8 @@ func diffCastStates(result []StateMutation, before, after []CastStateSnapshot) [
 	}
 	for _, value := range before {
 		if _, ok := afterCasts[value.ID]; !ok {
-			result = append(result, StateMutation{Kind: StateMutationCastRemove, CastID: value.ID})
+			// remove 带上 upsert 用过的归属实体，skillsync 的可见性过滤才能按同一实体判断（NC-115）。
+			result = append(result, StateMutation{Kind: StateMutationCastRemove, CastID: value.ID, Caster: value.Caster})
 		}
 	}
 	return result
@@ -582,9 +583,10 @@ func diffProcessStates(result []StateMutation, before, after []ProcessStateSnaps
 			result = append(result, StateMutation{Kind: StateMutationProcessUpsert, ProcessID: value.ID, Process: &copyValue})
 		}
 	}
-	for id := range beforeProcesses {
+	for id, value := range beforeProcesses {
 		if _, ok := afterProcesses[id]; !ok {
-			result = append(result, StateMutation{Kind: StateMutationProcessRemove, ProcessID: id})
+			// 同 cast remove：带上 owner 供可见性过滤（NC-115）。
+			result = append(result, StateMutation{Kind: StateMutationProcessRemove, ProcessID: id, Owner: value.Owner})
 		}
 	}
 	return result

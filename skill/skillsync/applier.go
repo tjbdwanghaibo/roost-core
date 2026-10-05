@@ -180,6 +180,10 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 	if _, busy := applier.inflight[packet.Stream]; busy {
 		return packet, ApplyResult{}, ErrApplyInProgress
 	}
+	// 开新 epoch 只在这里判定，pendingEpoch 等全部准入检查通过、真正占用 inflight 时才置位：被拒绝的包
+	// 不能改变 Applier 状态。之前先置 pendingEpoch 再查 BaseSequence，拒绝后没人复位，之后每个包都得到
+	// ErrApplyInProgress，Applier 永久卡死（NC-116）。
+	switchesEpoch := false
 	if applier.epoch != 0 && packet.Epoch != applier.epoch {
 		if !packet.Full {
 			return packet, ApplyResult{}, ErrEpochMismatch
@@ -187,12 +191,12 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 		if len(applier.inflight) > 0 {
 			return packet, ApplyResult{}, ErrApplyInProgress
 		}
-		applier.pendingEpoch = packet.Epoch
+		switchesEpoch = true
 	} else if applier.epoch == 0 {
 		if !packet.Full || len(applier.inflight) > 0 {
 			return packet, ApplyResult{}, ErrEpochMismatch
 		}
-		applier.pendingEpoch = packet.Epoch
+		switchesEpoch = true
 	}
 	current := applier.sequences[packet.Stream]
 	if applier.epoch != packet.Epoch {
@@ -210,6 +214,9 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 		// sequence its epoch has handed out, so it is not necessarily 1.
 	} else if (current.epoch != 0 && (packet.BaseSequence != current.sequence || packet.Sequence != current.sequence+1)) || (current.epoch == 0 && packet.BaseSequence != 0) {
 		return packet, ApplyResult{}, fmt.Errorf("%w: current=%d base=%d sequence=%d", ErrSequenceGap, current.sequence, packet.BaseSequence, packet.Sequence)
+	}
+	if switchesEpoch {
+		applier.pendingEpoch = packet.Epoch
 	}
 	applier.inflight[packet.Stream] = struct{}{}
 	return packet, ApplyResult{}, nil

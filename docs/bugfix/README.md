@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N09 skill 第二批（revn09b）：NC-114～117 已修复、声明场景验证，未发版。** skillsync 的 presentation reset 经 `Coordinator.presentationReset` 复用 observer 的 `FilterPresentation`；ability 快照按 handle 过滤、cast / process remove 带归属实体、persistent remove 按 Binding 过滤；Applier 只在准入成功时开新 epoch；提交前失败的 cast 进完成队列按 `CompletedCastLimit` 回收，checkpoint 恢复与 live 保留集合一致。[本轮](../review/REVIEW-2026-10-05-n09-batch2.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-117](RR-20261005-NC-117.md) | 完成队列收所有终态 cast；失败启动删除时撤掉队列条目 | 已修复，未发版 |
+| [RR-20261005-NC-116](RR-20261005-NC-116.md) | `admit` 全部检查通过后才置 pendingEpoch | 已修复，未发版 |
+| [RR-20261005-NC-115](RR-20261005-NC-115.md) | ability 快照按 handle；remove 带实体 / 按 Binding 过滤 | 已修复，未发版 |
+| [RR-20261005-NC-114](RR-20261005-NC-114.md) | presentation reset 经 `presentationReset` 复用 `FilterPresentation` | 已修复，未发版 |
+
 **10-05 N04 接续（revn04）：NC-100/101/102 已修复、声明场景验证，未发版。** Redis 驱动的脚本命令不再自动重放（真实 Redis + 自建 toxiproxy 代理红→绿）；事务提交受 `transaction_timeout` 约束（真实副本集 upstream / downstream 黑洞红→绿）；mongotest 唯一索引遇数组明确拒绝。真实 Redis 集成 1008 pass / 30 环境 skip，第 22 轮正式 Repository 链路 28 叶子在真实副本集上通过。[证据](evidence/noncore-bugfix-20261005-revn04/README.md)。
 
 | 编号 | 修复 | 状态 |

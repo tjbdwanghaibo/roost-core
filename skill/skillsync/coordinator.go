@@ -319,7 +319,10 @@ func (coordinator *Coordinator) prepareFlush(view observerKey) error {
 	}
 	presentation := coordinator.runtime.PollPresentation(cursor.presentation, remaining)
 	if presentation.CursorExpired {
-		snapshot := coordinator.runtime.PresentationSnapshot()
+		snapshot, err := coordinator.presentationReset(view.observer)
+		if err != nil {
+			return err
+		}
 		packet, err := coordinator.projector.PresentationResetPacket(view.observer, view.key, snapshot)
 		if err != nil {
 			return err
@@ -452,10 +455,54 @@ func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest)
 		}
 		return coordinator.projector.StateSnapshotPacket(request.Observer, request.Stream.Key, snapshot)
 	case TopicPresentation:
-		return coordinator.projector.PresentationResetPacket(request.Observer, request.Stream.Key, coordinator.runtime.PresentationSnapshot())
+		snapshot, err := coordinator.presentationReset(request.Observer)
+		if err != nil {
+			return syncstream.Packet{}, err
+		}
+		return coordinator.projector.PresentationResetPacket(request.Observer, request.Stream.Key, snapshot)
 	default:
 		return syncstream.Packet{}, fmt.Errorf("%w: %s", ErrTopicUnsupported, request.Stream.Topic)
 	}
+}
+
+// presentationReset 是 presentation reset 的唯一构造点：每条持续表现按它对应的增量事件交给 observer 的
+// VisibilityPolicy.FilterPresentation，不可见的整条去掉，可见的取回过滤后的 Anchor（目标清零、空间字段按策略清除）。
+// 游标过期的 Flush 与 Recover 都走这里。之前两处直接投影 Runtime.PresentationSnapshot()，不可见施法者的持续
+// 表现、目标与坐标发给所有 observer（NC-114）。复用 FilterPresentation 而不在接口上加方法，自定义策略无需改动。
+func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) (skill.PresentationRecoverySnapshot, error) {
+	snapshot := coordinator.runtime.PresentationSnapshot()
+	active := make([]skill.ActivePresentation, 0, len(snapshot.Active))
+	for _, entry := range snapshot.Active {
+		filtered, allowed, err := coordinator.visibility.FilterPresentation(observer, activePresentationEvent(snapshot, entry))
+		if err != nil {
+			coordinator.counters.visibilityFailures.Add(1)
+			return skill.PresentationRecoverySnapshot{}, err
+		}
+		if !allowed {
+			coordinator.counters.filtered.Add(1)
+			continue
+		}
+		entry.Anchor = filtered.Anchor
+		active = append(active, entry)
+	}
+	snapshot.Active = active
+	return snapshot, nil
+}
+
+// activePresentationEvent 把一条持续表现还原成 Runtime 会为它发出的增量事件形状（presentation.go 的
+// appendPresentation：Source 是施法者 / owner，PrimaryTarget 与 Anchor.Target 是目标 / lifecycle 实体），
+// 让 reset 与增量经过同一条过滤规则。
+func activePresentationEvent(snapshot skill.PresentationRecoverySnapshot, entry skill.ActivePresentation) skill.PresentationEvent {
+	event := skill.PresentationEvent{
+		Sequence: snapshot.LatestPresentationSequence, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision,
+		Kind: skill.PresentationCast, ProgramID: entry.ProgramID, GameplayDigest: entry.GameplayDigest, PresentationDigest: entry.PresentationDigest,
+		CastID: entry.CastID, VisualIndex: entry.VisualIndex, Source: entry.Anchor.Source, PrimaryTarget: entry.Anchor.Target, Anchor: entry.Anchor,
+	}
+	if entry.Kind == skill.ActivePresentationProcess {
+		event.Kind = skill.PresentationProcessUpdate
+		event.ProcessID, event.ProcessTemplate, event.HasProcess, event.ProcessStatus = entry.ProcessID, entry.ProcessTemplate, true, entry.ProcessStatus
+	}
+	return event
 }
 
 func (coordinator *Coordinator) publishDue(observer syncstream.Observer, stream syncstream.Stream) error {
