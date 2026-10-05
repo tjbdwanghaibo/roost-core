@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.20.0] - 2026-10-05
+
+> 功能版本：App 层同一服务类型 + sid 单实例锁（`app.Singleton`、`RuntimeFailure.OnFail`、`SingletonLiveness.Live`），只覆盖崩溃重启短暂并存，失锁由 App 统一 fail-stop（[方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md)）；game-demo 玩家所有权改为按角色 `server_id` 静态绑定（删除按玩家 Redis 租约 `playerroute`），activity 改用 App 的 `Live`，赠礼按发送方 sid 路由。**破坏性变更**：删除 kit `service/global` 的租约 API（错误码 570105～570109 退役）、停止发布 `ModEtcdElection` / `ModRedisLock` capability；RemoteEntity fatal 现在也围栏 Nest；生成器 Core 下限升到 v1.20.0。已生成工程不提供迁移（维护者决定）。另含 RR-20261004-10～14、DAO `//roost:dao nocoll` 等自 v1.19.2 以来的修复。
+
 ### Added
 
 - **App 单实例锁：同一服务类型 + sid 只跑一个进程**（[方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) 第 1 笔，维护者 10-05 决定 D-A / D-B）：`singleton.enabled=true` 时 App 在 `NewRegistry` 之后、第一个 Mod `Init` 之前用后端单键 CAS 获取 `<singleton.key_prefix>:<server_type>:<sid>`（值 `token|hostname|pid|started_unix_ms`）；键被别人持有就等待（每 `renew_interval` 重试，最多 `startup_wait`，到上限返回 `app.ErrSingletonHeld`，最后一次是报错则 `app.ErrSingletonStoreUnavailable`，不抢锁），丢回复后键是自己的值则认领。持有期间一个 goroutine 按固定节拍续期，窗口从请求发出时刻起算，迟到的 Applied 不作数；续期答“不是我的”或续期失败已到 `validUntil − guard` 即 `RuntimeFailure.Fail(app.ErrSingletonLost …)` fail-stop（Redis 连续不可用约 10s 以上进程会退出重启）。全部 Mod 停完才释放（Mod 停机截止时间为此提前至多 3s）；`Service.Shutdown` 超时、Mod 停机不完整、失锁三条路径不释放、键在 TTL 内过期；进入停机时已失锁则不为 Release 预留时间，停机不完整时后端连接留到进程退出（仍在跑的组件调 `Live` 不报 client closed）。配置 `singleton.{enabled,key_prefix,ttl,renew_interval,guard,startup_wait}`（默认 15s / 3s / 5s / 2×ttl），`ValidateServiceConfig` 钉住 `renew_interval ≤ guard`、`2×renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2×renew_interval`；启用而 bootstrap 没调 `App.Singleton` 时启动失败（`app.ErrSingletonOpenerMissing`）。后端 `app.SingletonStore` / `app.SingletonOpener`，Redis 实现 `kitredis.SingletonStore`（从同一份 `redis.*` 建两个独立小客户端，CAS 与 `Live` 各一，Redis 变慢时并发的 `Live` 占满连接也不拖住续期；`Close` 幂等；缺 `redis.addr` / `redis.cluster_addrs` 报错，不用 localhost 兜底）。`/readyz` 多一项 `singleton` 健康检查。codegen 生成装配与配置在第 2 笔，本版需要手工在 bootstrap 调用 `Singleton(kitredis.SingletonStore)` 并写配置。[使用说明](docs/USER_GUIDE.md#单实例锁singleton)、T-212 / T-213
