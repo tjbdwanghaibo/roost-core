@@ -1209,6 +1209,71 @@ func TestRunStopsStartingModsAfterARuntimeFailure(t *testing.T) {
 	}
 }
 
+// deadlineSingletonMod 记下 StopWithContext 收到的截止时间。
+type deadlineSingletonMod struct {
+	name     ModName
+	deadline atomic.Pointer[time.Time]
+}
+
+func (m *deadlineSingletonMod) Name() ModName           { return m.name }
+func (m *deadlineSingletonMod) Init(*viper.Viper) error { return nil }
+func (m *deadlineSingletonMod) Provide(*Registry) error { return nil }
+func (m *deadlineSingletonMod) Start() error            { return nil }
+func (m *deadlineSingletonMod) Stop()                   {}
+func (m *deadlineSingletonMod) StopWithContext(ctx context.Context) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		m.deadline.Store(&deadline)
+	}
+	return nil
+}
+
+// 停机时 Mod 的截止时间只为 Release 提前 singletonReleaseBudget；已 Lost 不会 Release，
+// 这段预算还给 Mod 停机（收尾审查 3）。
+func TestSingletonLostLockLeavesTheReleaseBudgetToModStop(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lose    bool
+		reserve time.Duration
+	}{
+		{name: "held", reserve: singletonReleaseBudget},
+		{name: "lost", lose: true, reserve: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mod := &deadlineSingletonMod{name: "probe_deadline"}
+			h := newSingletonHarness(t, []Mod{mod}, nil)
+			h.app.cfg.Set("shutdown.total_timeout", 20*time.Second)
+			var shutdownDeadline atomic.Pointer[time.Time]
+			h.svc.onShutdown = func(ctx context.Context) error {
+				if deadline, ok := ctx.Deadline(); ok {
+					shutdownDeadline.Store(&deadline)
+				}
+				return nil
+			}
+			result := h.start()
+			h.awaitServed(t, result)
+			var err error
+			if tc.lose {
+				h.awaitWaiting(t, result, true)
+				h.store.set(testSingletonKey, testOtherHolder, 0)
+				h.clock.AdvanceToNext(t)
+				err = awaitRunResult(t, result)
+				if !errors.Is(err, ErrSingletonLost) {
+					t.Fatalf("run error = %v, want ErrSingletonLost", err)
+				}
+			} else if err = h.stop(t, result); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			shutdownAt, modAt := shutdownDeadline.Load(), mod.deadline.Load()
+			if shutdownAt == nil || modAt == nil {
+				t.Fatalf("deadlines not recorded: shutdown=%v mod=%v", shutdownAt, modAt)
+			}
+			if got := shutdownAt.Sub(*modAt); got != tc.reserve {
+				t.Fatalf("mod stop deadline is %v before the shutdown deadline, want %v", got, tc.reserve)
+			}
+		})
+	}
+}
+
 // #11：enabled=true 无 opener → 启动失败（fail-closed）；enabled=false → 不调用 opener。
 func TestSingletonOpenerIsRequiredOnlyWhenEnabled(t *testing.T) {
 	t.Run("enabled_without_opener", func(t *testing.T) {

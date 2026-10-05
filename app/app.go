@@ -388,12 +388,17 @@ func (a *App) run(serverType ServiceName) error {
 	defer shutdownCancel()
 	// 启用单实例锁时，Mod 停机用的截止时间提前 releaseReserve，留给全部 Mod 停完之后的 Release：
 	// stopModsReverseBefore 会把截止前的剩余时间全部分给 Mod。预留不超过总时长的一半，避免很小的
-	// total_timeout 被预留吃光（codegen 会把 Release 的 3s 计入 total_timeout）。
+	// total_timeout 被预留吃光（codegen 会把 Release 的 3s 计入 total_timeout）。此刻已 Lost
+	// （失锁触发的 fail-stop）就不会 Release，不预留，整段时间留给 Mod 停机；停机期间才失锁的，
+	// 预留照旧，只是用不上。
 	modStopCtx := shutdownCtx
 	if singleton != nil {
 		deadline, _ := shutdownCtx.Deadline()
 		singletonReleaseDeadline = deadline
 		releaseReserve := min(singletonReleaseBudget, shutdownTimeout/2)
+		if singleton.snapshot().state == singletonLost {
+			releaseReserve = 0
+		}
 		var modStopCancel context.CancelFunc
 		modStopCtx, modStopCancel = context.WithDeadline(shutdownCtx, deadline.Add(-releaseReserve))
 		defer modStopCancel()
