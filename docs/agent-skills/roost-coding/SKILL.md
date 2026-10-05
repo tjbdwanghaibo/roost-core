@@ -127,7 +127,7 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 - 保留失败和退化样本。不能删样本、换口径、放宽门禁、增加负载特判或无效代码强行过关；优化没有收益就撤回或如实记录代价。用户接受某项偏差时，记录范围、具体数值和决定，保留原始失败结果；不得扩张成以后任何退化都可接受。
 - 目前负载背景与已接受指标从交接文档读取，不把 1000/10000/50、20Hz、worker1024 等写死进生产逻辑。新业务目标改变时重新验证。
 - 测试写进程级注册表（entity kind / builder、nest 包级 handler、hotcode 等）时，同包 kind 号互不冲突（取新号前先查同包已用号，常量注释写明为什么不能撞号），注册用 `sync.Once`、按用例快照恢复或 `t.Cleanup` 撤销，保证单用例和整包 `-count>1` 都可重复运行；nest 包级 handler 注册后 `t.Cleanup(ResetHandlersForTest)` 或改用实例级 `mgr.RegisterHandlerWithMeta`；不用清空整张表的 `entity.ResetEntityRegistryForTest`（已弃用）。没有集中的 kind 占用清单，以同包源码为准（RR-20260926-82/83、RR-20260927-20，OPEN-ITEMS C31）。
-- 本地测试依赖使用隔离库/实例；环境脚本可能含凭据，不输出或提交。将可携带的小型脱敏证据写入 docs，原始 profile、二进制和大日志保留在被忽略的 artifacts。不可用环境/未执行测试明确标记。
+- 本地测试依赖使用隔离库/实例；环境脚本可能含凭据，不输出或提交。共享隔离环境（`~/.roost-it/roost-dataengine-it`）允许多个会话并行：integration 一律加 `-run`，故障注入一律自建代理或进程，全局运维命令（up/down/heal/reset/fault、故障矩阵）必须持有 `remote-acceptance.lock`（维护者决定 A5，规则源 `kit/scripts/integration/README.md`）。将可携带的小型脱敏证据写入 docs，原始 profile、二进制和大日志保留在被忽略的 artifacts。不可用环境/未执行测试明确标记。
 
 ## 接力与提交
 

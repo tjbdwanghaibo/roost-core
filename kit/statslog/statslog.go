@@ -137,7 +137,8 @@ func (m *StatsLogMod) Init(cfg *viper.Viper) error {
 	if cfg == nil {
 		cfg = viper.New()
 	}
-	m.enabled = cfg.GetBool("stats_log.enabled")
+	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
+	m.enabled = read.Bool("stats_log.enabled")
 	m.service = cfg.GetString("server_type")
 	if m.service == "" {
 		m.service = "roost"
@@ -151,9 +152,12 @@ func (m *StatsLogMod) Init(cfg *viper.Viper) error {
 	if m.filename == "" {
 		m.filename = fmt.Sprintf("%s-%d.stats.log", m.service, m.sid)
 	}
-	m.interval = cfg.GetDuration("stats_log.interval")
+	m.interval = read.Duration("stats_log.interval")
 	if m.interval <= 0 {
 		m.interval = time.Minute
+	}
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("stats_log: %w", err)
 	}
 	return nil
 }

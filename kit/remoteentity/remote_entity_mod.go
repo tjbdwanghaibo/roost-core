@@ -2,10 +2,12 @@ package remoteentity
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 	"log/slog"
 	"strings"
+
+	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -64,11 +66,13 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 		cfg = viper.New()
 	}
 	m.cfg = coreremote.DefaultConfig()
+	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认，返回前一并报出。
+	read := app.NewConfigReader(cfg)
 	if m.localSid == 0 {
 		m.localSid = cfg.GetInt32("sid")
 	}
 
-	if ttl := cfg.GetDuration("remote_entity.lock_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.lock_ttl"); ttl > 0 {
 		m.cfg.LockTTL = ttl
 	}
 	if key := cfg.GetString("remote_entity.lock_key"); key != "" {
@@ -82,46 +86,46 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 			return fmt.Errorf("remote_entity: Redis Cluster requires a non-empty hash tag in remote_entity.lock_key (for example {roost:remote}); got %q", m.cfg.LockKey)
 		}
 	}
-	if retry := cfg.GetInt("remote_entity.retry_count"); retry > 0 {
+	if retry := read.Int("remote_entity.retry_count"); retry > 0 {
 		m.cfg.RetryCount = retry
 	}
-	if delay := cfg.GetDuration("remote_entity.retry_delay"); delay > 0 {
+	if delay := read.Duration("remote_entity.retry_delay"); delay > 0 {
 		m.cfg.RetryDelay = delay
 	}
-	if timeout := cfg.GetDuration("remote_entity.op_timeout"); timeout > 0 {
+	if timeout := read.Duration("remote_entity.op_timeout"); timeout > 0 {
 		m.cfg.OpTimeout = timeout
 	}
-	if vttl := cfg.GetDuration("remote_entity.version_ttl"); vttl > 0 {
+	if vttl := read.Duration("remote_entity.version_ttl"); vttl > 0 {
 		m.cfg.VersionTTL = vttl
 	}
-	if uRetry := cfg.GetInt("remote_entity.unlock_retry_count"); uRetry > 0 {
+	if uRetry := read.Int("remote_entity.unlock_retry_count"); uRetry > 0 {
 		m.cfg.UnlockRetryCount = uRetry
 	}
-	if uInterval := cfg.GetDuration("remote_entity.unlock_retry_interval"); uInterval > 0 {
+	if uInterval := read.Duration("remote_entity.unlock_retry_interval"); uInterval > 0 {
 		m.cfg.UnlockRetryInterval = uInterval
 	}
-	if interval := cfg.GetDuration("remote_entity.finalize_retry_interval"); interval > 0 {
+	if interval := read.Duration("remote_entity.finalize_retry_interval"); interval > 0 {
 		m.cfg.FinalizeRetryInterval = interval
 	}
-	if wait := cfg.GetDuration("remote_entity.finalize_projection_timeout"); wait > 0 {
+	if wait := read.Duration("remote_entity.finalize_projection_timeout"); wait > 0 {
 		m.cfg.FinalizeProjectionTimeout = wait
 	}
-	if limit := cfg.GetInt("remote_entity.max_write_batch"); limit > 0 {
+	if limit := read.Int("remote_entity.max_write_batch"); limit > 0 {
 		m.cfg.MaxWriteBatch = limit
 	}
-	if shards := cfg.GetInt("remote_entity.snapshot_cache_shards"); shards > 0 {
+	if shards := read.Int("remote_entity.snapshot_cache_shards"); shards > 0 {
 		m.cfg.SnapshotCacheShards = shards
 	}
-	if entries := cfg.GetInt("remote_entity.snapshot_cache_entries"); entries > 0 {
+	if entries := read.Int("remote_entity.snapshot_cache_entries"); entries > 0 {
 		m.cfg.SnapshotCacheEntries = entries
 	}
-	if bytes := cfg.GetInt64("remote_entity.snapshot_cache_bytes"); bytes > 0 {
+	if bytes := read.Int64("remote_entity.snapshot_cache_bytes"); bytes > 0 {
 		m.cfg.SnapshotCacheBytes = bytes
 	}
-	if ttl := cfg.GetDuration("remote_entity.snapshot_cache_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.snapshot_cache_ttl"); ttl > 0 {
 		m.cfg.SnapshotCacheTTL = ttl
 	}
-	if ttl := cfg.GetDuration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
 		m.cfg.SnapshotL2TTL = ttl
 	}
 	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
@@ -133,47 +137,47 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 		}
 		m.cfg.SnapshotL2KeyPrefix = prefix
 	}
-	if ttl := cfg.GetDuration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
 		m.cfg.SnapshotInterestTTL = ttl
 	}
-	if limit := cfg.GetInt("remote_entity.snapshot_interest_keys"); limit > 0 {
+	if limit := read.Int("remote_entity.snapshot_interest_keys"); limit > 0 {
 		m.cfg.SnapshotInterestKeys = limit
 	}
-	if limit := cfg.GetInt("remote_entity.snapshot_interest_subs"); limit > 0 {
+	if limit := read.Int("remote_entity.snapshot_interest_subs"); limit > 0 {
 		m.cfg.SnapshotInterestSubs = limit
 	}
-	if ttl := cfg.GetDuration("remote_entity.marker_cache_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.marker_cache_ttl"); ttl > 0 {
 		m.cfg.MarkerCacheTTL = ttl
 	}
-	if timeout := cfg.GetDuration("remote_entity.snapshot_load_timeout"); timeout > 0 {
+	if timeout := read.Duration("remote_entity.snapshot_load_timeout"); timeout > 0 {
 		m.cfg.SnapshotLoadTimeout = timeout
 	}
-	if limit := cfg.GetInt("remote_entity.snapshot_max_waiters"); limit > 0 {
+	if limit := read.Int("remote_entity.snapshot_max_waiters"); limit > 0 {
 		m.cfg.SnapshotMaxWaiters = limit
 	}
-	if capacity := cfg.GetInt("remote_entity.async_finalize_capacity"); capacity > 0 {
+	if capacity := read.Int("remote_entity.async_finalize_capacity"); capacity > 0 {
 		m.cfg.AsyncFinalizeCapacity = capacity
 	}
 	if cfg.IsSet("remote_entity.max_concurrent_writes") {
-		limit := cfg.GetInt("remote_entity.max_concurrent_writes")
+		limit := read.Int("remote_entity.max_concurrent_writes")
 		if limit < 0 {
-			return fmt.Errorf("remote_entity.max_concurrent_writes must not be negative")
+			return errors.Join(read.Err(), errors.New("remote_entity.max_concurrent_writes must not be negative"))
 		}
 		m.cfg.MaxConcurrentWrites = limit
 	}
-	if workers := cfg.GetInt("remote_entity.async_finalize_workers"); workers > 0 {
+	if workers := read.Int("remote_entity.async_finalize_workers"); workers > 0 {
 		m.cfg.AsyncFinalizeWorkers = workers
 	}
-	if limit := cfg.GetInt("remote_entity.transaction_track_limit"); limit > 0 {
+	if limit := read.Int("remote_entity.transaction_track_limit"); limit > 0 {
 		m.cfg.TransactionTrackLimit = limit
 	}
-	if ttl := cfg.GetDuration("remote_entity.transaction_track_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.transaction_track_ttl"); ttl > 0 {
 		m.cfg.TransactionTrackTTL = ttl
 	}
-	if limit := cfg.GetInt("remote_entity.wrapper_capacity"); limit > 0 {
+	if limit := read.Int("remote_entity.wrapper_capacity"); limit > 0 {
 		m.cfg.WrapperCapacity = limit
 	}
-	if ttl := cfg.GetDuration("remote_entity.wrapper_idle_ttl"); ttl > 0 {
+	if ttl := read.Duration("remote_entity.wrapper_idle_ttl"); ttl > 0 {
 		m.cfg.WrapperIdleTTL = ttl
 	}
 	if m.localSid == 0 {
@@ -181,12 +185,14 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	}
 	m.mongoConfig = coreremote.MongoBackendConfig{
 		Database:       cfg.GetString("remote_entity.mongo.database"),
-		TransactionTTL: cfg.GetDuration("remote_entity.mongo.transaction_ttl"),
+		TransactionTTL: read.Duration("remote_entity.mongo.transaction_ttl"),
 	}
 	if m.mongoConfig.Database == "" {
 		m.mongoConfig.Database = "remote_entity"
 	}
-
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("remote_entity mod: %w", err)
+	}
 	return nil
 }
 

@@ -3,6 +3,10 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+
 	"github.com/tjbdwanghaibo/roost-core/admin"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
@@ -12,8 +16,6 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	"log/slog"
-	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -50,7 +52,11 @@ func (m *NatsMod) Init(cfg *viper.Viper) error {
 	m.cfg = fnats.DefaultConfig(url)
 	// nats.ignore_discovered_servers: stay on the configured URLs instead of
 	// following cluster gossip — for proxies, NAT, and fault injection.
-	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: cfg.GetBool("nats.ignore_discovered_servers")}
+	ignoreDiscovered, err := app.ConfigBool(cfg, "nats.ignore_discovered_servers")
+	if err != nil {
+		return fmt.Errorf("nats mod: %w", err)
+	}
+	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: ignoreDiscovered}
 	return nil
 }
 
@@ -77,16 +83,28 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
 	}))
-	// Create bus
+	// Create bus。类型化的键先全部严格读完（维护者决定 A4），写错类型时在建 bus 之前报错。
+	read := app.NewConfigReader(r.Config())
 	sid := r.Config().GetInt32("sid")
 	svcType := r.Config().GetString("server_type")
 	prefix := r.Config().GetString("nats.prefix")
 	if prefix == "" {
 		prefix = "roost"
 	}
-	workerNum := r.Config().GetInt("nats.worker_num")
+	workerNum := read.Int("nats.worker_num")
 	if workerNum <= 0 {
 		workerNum = 8
+	}
+	rpcCfg, rpcEnabled := jetStreamRPCConfigFromViper(r.Config(), read)
+	reliable := bus.ReliableConfig{
+		Enabled:  true,
+		Prefix:   r.Config().GetString("nats.reliable.prefix"),
+		InboxTTL: read.Duration("nats.reliable.inbox_ttl"),
+		DLQTTL:   read.Duration("nats.reliable.dlq_ttl"),
+	}
+	reliableEnabled := read.Bool("nats.reliable.enabled")
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("nats mod: %w", err)
 	}
 
 	m.bus = bus.New(m.asm.Client, m.asm.RPC, m.codec, bus.Config{
@@ -96,7 +114,7 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		WorkerNum: workerNum,
 		QueueCap:  1024,
 	})
-	if rpcCfg, enabled := jetStreamRPCConfigFromViper(r.Config()); enabled {
+	if rpcEnabled {
 		if err := m.bus.EnableJetStreamRPC(fnats.IJetStream(m.asm.JetStream), rpcCfg); err != nil {
 			return err
 		}
@@ -105,22 +123,12 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 			"response_stream", rpcCfg.ResponseStream,
 		)
 	}
-	if r.Config().GetBool("nats.reliable.enabled") {
+	if reliableEnabled {
 		redisClient, ok := app.Lookup[fredis.IRedis](r, mods.ModRedis)
 		if !ok || redisClient == nil {
 			return errors.New("nats reliable bus requires redis mod")
 		}
-		m.bus.EnableReliable(bus.NewRedisReliableStore(redisClient, bus.ReliableConfig{
-			Enabled:  true,
-			Prefix:   r.Config().GetString("nats.reliable.prefix"),
-			InboxTTL: r.Config().GetDuration("nats.reliable.inbox_ttl"),
-			DLQTTL:   r.Config().GetDuration("nats.reliable.dlq_ttl"),
-		}), bus.ReliableConfig{
-			Enabled:  true,
-			Prefix:   r.Config().GetString("nats.reliable.prefix"),
-			InboxTTL: r.Config().GetDuration("nats.reliable.inbox_ttl"),
-			DLQTTL:   r.Config().GetDuration("nats.reliable.dlq_ttl"),
-		})
+		m.bus.EnableReliable(bus.NewRedisReliableStore(redisClient, reliable), reliable)
 	}
 	if err := bus.RegisterAdminCommands(adminReg, m.bus); err != nil {
 		return err
@@ -208,7 +216,8 @@ func assemblyClosePending(err error) bool {
 	return busDrainPending(err) && !errors.Is(err, natsdriver.ErrClosedUndrained)
 }
 
-func jetStreamRPCConfigFromViper(cfg *viper.Viper) (bus.JetStreamRPCConfig, bool) {
+// jetStreamRPCConfigFromViper 读取 JetStream RPC 配置；类型化的键经 read 严格读取，错误由调用方从 read.Err 取。
+func jetStreamRPCConfigFromViper(cfg *viper.Viper, read *app.ConfigReader) (bus.JetStreamRPCConfig, bool) {
 	if cfg == nil {
 		return bus.JetStreamRPCConfig{}, false
 	}
@@ -220,14 +229,14 @@ func jetStreamRPCConfigFromViper(cfg *viper.Viper) (bus.JetStreamRPCConfig, bool
 	return bus.JetStreamRPCConfig{
 		RequestStream:  cfg.GetString("nats.rpc.request_stream"),
 		ResponseStream: cfg.GetString("nats.rpc.response_stream"),
-		AckWait:        cfg.GetDuration("nats.rpc.ack_wait"),
-		MaxDeliver:     cfg.GetInt("nats.rpc.max_deliver"),
-		RequestTTL:     cfg.GetDuration("nats.rpc.request_ttl"),
-		CallTimeout:    cfg.GetDuration("nats.rpc.call_timeout"),
-		StreamMaxAge:   cfg.GetDuration("nats.rpc.stream_max_age"),
-		Duplicates:     cfg.GetDuration("nats.rpc.duplicates"),
-		Replicas:       cfg.GetInt("nats.rpc.replicas"),
-		MaxBytes:       cfg.GetInt64("nats.rpc.max_bytes"),
-		SetupTimeout:   cfg.GetDuration("nats.rpc.setup_timeout"),
+		AckWait:        read.Duration("nats.rpc.ack_wait"),
+		MaxDeliver:     read.Int("nats.rpc.max_deliver"),
+		RequestTTL:     read.Duration("nats.rpc.request_ttl"),
+		CallTimeout:    read.Duration("nats.rpc.call_timeout"),
+		StreamMaxAge:   read.Duration("nats.rpc.stream_max_age"),
+		Duplicates:     read.Duration("nats.rpc.duplicates"),
+		Replicas:       read.Int("nats.rpc.replicas"),
+		MaxBytes:       read.Int64("nats.rpc.max_bytes"),
+		SetupTimeout:   read.Duration("nats.rpc.setup_timeout"),
 	}, true
 }

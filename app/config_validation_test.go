@@ -47,38 +47,26 @@ func TestValidateServiceConfigRejectsUnsafeProductionAccountConfig(t *testing.T)
 	cfg.Set("server_type", "account")
 	cfg.Set("sid", 9201)
 	cfg.Set("env", "production")
+	cfg.Set("redis.addr", "127.0.0.1:6379")
 	cfg.Set("account.session_secret", "dev-session-secret")
-	cfg.Set("account.ops_token", "")
 
 	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want unsafe production account config")
-	}
-	for _, token := range []string{"account.session_secret", "account.ops_token"} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
-		}
+	if err == nil || !strings.Contains(err.Error(), "account.session_secret") {
+		t.Fatalf("ValidateServiceConfig error = %v, want account.session_secret", err)
 	}
 }
 
-func TestValidateServiceConfigRejectsProductionAccountWithoutRedisStore(t *testing.T) {
+func TestValidateServiceConfigRejectsProductionAccountWithoutRedis(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("server_type", "account")
 	cfg.Set("sid", 9201)
 	cfg.Set("env", "production")
 	cfg.Set("account.session_secret", "session-secret")
-	cfg.Set("account.ops_token", "ops-token")
-	cfg.Set("account.redis_required", false)
 	cfg.Set("redis.addr", "")
 
 	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want missing account redis store")
-	}
-	for _, token := range []string{"account.redis_required", "redis.addr"} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
-		}
+	if err == nil || !strings.Contains(err.Error(), "redis.addr") {
+		t.Fatalf("ValidateServiceConfig error = %v, want redis.addr", err)
 	}
 }
 
@@ -124,131 +112,39 @@ func TestValidateServiceConfigRejectsUnsafeProductionAdminGatewayConfig(t *testi
 	}
 }
 
-func TestValidateServiceConfigRejectsProductionGameWithoutRuntimeGuards(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "game")
-	cfg.Set("sid", 2001)
-	cfg.Set("env", "production")
-	cfg.Set("redis.addr", "127.0.0.1:6379")
-	cfg.Set("player.login_auth_required", true)
-	cfg.Set("player.login_secret", "login-secret")
-	cfg.Set("save_load.wal.enabled", true)
-	cfg.Set("save_load.wal.required", true)
-	cfg.Set("save_load.wal.mode", "async")
-	cfg.Set("player_protocol.rate_limit.enabled", false)
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want missing runtime guards")
-	}
-	for _, token := range []string{"player_protocol.rate_limit.enabled", "save_load.wal.mode"} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
+// RR-20261005-NC-192（维护者决定 C1 方案 1）：生产校验只要求有读取方的设置。旧行为：game 必须写
+// player.login_auth_required / player.login_secret / player_protocol.rate_limit.enabled / save_load.wal.*，
+// instance 要 instance.state_store_required，account 要 account.ops_token / account.redis_required，
+// global / match_group 要 <service>.redis_required——没有任何代码读取它们，写上只为让校验放行。
+// 现在不写它们照样通过；写成 false 也不改变结果（它们不控制任何行为）。
+func TestValidateServiceConfigDoesNotRequireSwitchesNothingReads(t *testing.T) {
+	for _, serverType := range []string{"game", "instance", "account", "global", "match_group"} {
+		cfg := productionServiceConfig(serverType)
+		if err := ValidateServiceConfig(cfg); err != nil {
+			t.Errorf("production %s without the unread switches: %v", serverType, err)
+		}
+		for _, key := range []string{
+			"player.login_auth_required", "player_protocol.rate_limit.enabled", "save_load.wal.enabled",
+			"save_load.wal.required", "instance.state_store_required", "account.redis_required",
+			"global.redis_required", "match_group.redis_required",
+		} {
+			cfg.Set(key, false)
+		}
+		cfg.Set("save_load.wal.mode", "async")
+		cfg.Set("instance.client_mode", "local")
+		if err := ValidateServiceConfig(cfg); err != nil {
+			t.Errorf("production %s with the unread switches off: %v", serverType, err)
 		}
 	}
 }
 
-func TestValidateServiceConfigRejectsProductionGameWithoutRedis(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "game")
-	cfg.Set("sid", 2001)
-	cfg.Set("env", "production")
-	cfg.Set("player.login_auth_required", true)
-	cfg.Set("player.login_secret", "login-secret")
-	cfg.Set("player_protocol.rate_limit.enabled", true)
-	cfg.Set("save_load.wal.enabled", true)
-	cfg.Set("save_load.wal.required", true)
-	cfg.Set("save_load.wal.mode", "durable")
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil || !strings.Contains(err.Error(), "redis.addr") {
-		t.Fatalf("ValidateServiceConfig error = %v, want redis.addr", err)
-	}
-}
-
-func TestValidateServiceConfigRejectsProductionGameLocalInstanceClient(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "game")
-	cfg.Set("sid", 2001)
-	cfg.Set("env", "production")
-	cfg.Set("redis.addr", "127.0.0.1:6379")
-	cfg.Set("player.login_auth_required", true)
-	cfg.Set("player.login_secret", "login-secret")
-	cfg.Set("player_protocol.rate_limit.enabled", true)
-	cfg.Set("save_load.wal.enabled", true)
-	cfg.Set("save_load.wal.required", true)
-	cfg.Set("save_load.wal.mode", "durable")
-	cfg.Set("instance.client_mode", "local")
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil || !strings.Contains(err.Error(), "instance.client_mode") {
-		t.Fatalf("ValidateServiceConfig error = %v, want instance.client_mode", err)
-	}
-}
-
-func TestValidateServiceConfigRejectsProductionInstanceWithoutRuntimeGuards(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "instance")
-	cfg.Set("sid", 8001)
-	cfg.Set("env", "production")
-	cfg.Set("redis.addr", "")
-	cfg.Set("save_load.wal.enabled", true)
-	cfg.Set("save_load.wal.required", false)
-	cfg.Set("save_load.wal.mode", "async")
-	cfg.Set("worldstage.state_store_required", false)
-	cfg.Set("capitol.state_store_required", false)
-	cfg.Set("warwarn.state_store_required", false)
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want missing production instance guards")
-	}
-	for _, token := range []string{
-		"redis.addr",
-		"save_load.wal.required",
-		"save_load.wal.mode",
-		"instance.state_store_required",
-	} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
-		}
-	}
-}
-
-func TestValidateServiceConfigRejectsProductionMatchGroupWithoutRedis(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "match_group")
-	cfg.Set("sid", 9101)
-	cfg.Set("env", "production")
-	cfg.Set("match_group.redis_required", false)
-	cfg.Set("redis.addr", "")
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want missing match_group redis store")
-	}
-	for _, token := range []string{"match_group.redis_required", "redis.addr"} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
-		}
-	}
-}
-
-func TestValidateServiceConfigRejectsProductionGlobalWithoutRedis(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("server_type", "global")
-	cfg.Set("sid", 9301)
-	cfg.Set("env", "production")
-	cfg.Set("global.redis_required", false)
-	cfg.Set("redis.addr", "")
-
-	err := ValidateServiceConfig(cfg)
-	if err == nil {
-		t.Fatal("ValidateServiceConfig error = nil, want missing global redis store")
-	}
-	for _, token := range []string{"global.redis_required", "redis.addr"} {
-		if !strings.Contains(err.Error(), token) {
-			t.Fatalf("ValidateServiceConfig error = %v, want %s", err, token)
+func TestValidateServiceConfigRejectsProductionServicesWithoutRedis(t *testing.T) {
+	for _, serverType := range []string{"game", "instance", "account", "global", "match_group"} {
+		cfg := productionServiceConfig(serverType)
+		cfg.Set("redis.addr", "")
+		err := ValidateServiceConfig(cfg)
+		if err == nil || !strings.Contains(err.Error(), "production "+serverType+" requires redis.addr") {
+			t.Errorf("production %s without redis.addr: ValidateServiceConfig error = %v, want redis.addr", serverType, err)
 		}
 	}
 }
@@ -262,12 +158,7 @@ func productionServiceConfig(serverType string) *viper.Viper {
 	cfg.Set("sid", 2001)
 	cfg.Set("env", "production")
 	cfg.Set("redis.addr", "127.0.0.1:6379")
-	cfg.Set("player.login_auth_required", true)
-	cfg.Set("player.login_secret", "login-secret")
-	cfg.Set("player_protocol.rate_limit.enabled", true)
-	cfg.Set("save_load.wal.enabled", true)
-	cfg.Set("save_load.wal.required", true)
-	cfg.Set("save_load.wal.mode", "durable")
+	cfg.Set("account.session_secret", "session-secret")
 	return cfg
 }
 

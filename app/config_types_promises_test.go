@@ -1,10 +1,6 @@
 package app
 
 import (
-	"io/fs"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -90,37 +86,14 @@ func TestValidateServiceConfigAcceptsDurationsWithUnits(t *testing.T) {
 	}
 }
 
-// 守住 frameworkBoolKeys 与实际读取点同步：app 与 kit 里每个 GetBool("…") 读取的键都要在清单里
-// （singleton.enabled 由 singletonSettings 自己严格读取）。新增开关忘了登记时这里报出键名。
-// config_validation.go 自己的 GetBool 不扫：生产校验要求它们为 true，`on` 读成 false 就报错（fail-closed），
-// 而且其中一批键没有读取方（RR-20261005-NC-192），不该被登记成“框架开关”。
+// 守住 frameworkBoolKeys 与实际读取点同步（RR-20261005-NC-190，A4 扩到全部读取形式）：app、kit 与生成模板里
+// 每个按布尔读取的键——GetBool、ConfigBool、ConfigReader.Bool——都要在清单里（singleton.enabled 由
+// singletonSettings 自己严格读取）。新增开关忘了登记时这里报出键名。时长与整数键见
+// config_strict_reads_promises_test.go。
 func TestEveryFrameworkBoolSwitchIsCheckedStrictly(t *testing.T) {
-	listed := map[string]bool{"singleton.enabled": true}
-	for _, key := range frameworkBoolKeys {
-		listed[key] = true
-	}
-	pattern := regexp.MustCompile(`GetBool\("([^"]+)"\)`)
-	for _, root := range []string{".", "../kit"} {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || path == "config_validation.go" {
-				return nil
-			}
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for _, match := range pattern.FindAllStringSubmatch(string(body), -1) {
-				if !listed[match[1]] {
-					t.Errorf("%s reads the switch %q with GetBool; add it to frameworkBoolKeys so `%s: on` is refused instead of read as false", path, match[1], match[1])
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+	for _, read := range scanFrameworkConfigReads(t) {
+		if read.kind == "bool" && !registeredConfigKey(read.kind, read.key) {
+			t.Errorf("%s reads the switch %q as a bool; add it to frameworkBoolKeys so `%s: on` is refused instead of read as false", read.file, read.key, read.key)
 		}
 	}
 }

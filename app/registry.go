@@ -120,11 +120,6 @@ func metricsMaxSeriesPerMetric(cfg *viper.Viper) int {
 	if cfg == nil {
 		return 0
 	}
-	if cfg.IsSet("metrics.max_series_per_metric") {
-		return cfg.GetInt("metrics.max_series_per_metric")
-	}
-	if cfg.IsSet("metrics.max_series_per_metric") {
-		return cfg.GetInt("metrics.max_series_per_metric")
-	}
-	return 0
+	value, _ := ConfigInt(cfg, "metrics.max_series_per_metric") // ValidateServiceConfig 已严格检查
+	return value
 }

@@ -5,8 +5,15 @@ set -euo pipefail
 : "${ROOST_DATAENGINE_IT_REDIS_ADDR:?isolated Redis required}"
 : "${ROOST_DATAENGINE_IT_NATS_URL:?isolated NATS required}"
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# A5：带 ROOST_REMOTE_FAULT 时用例会经 remote-fault.sh 停共享环境的节点再 heal，整段是全局操作，
+# 运行期间持有验收锁（矩阵 / 长稳调起时沿用它们的锁），别人持锁时在生成工程之前以 2 拒绝。
+if [[ -n "${ROOST_REMOTE_FAULT:-}" ]]; then
+  source "$repo_dir/kit/scripts/integration/lib/common.sh"
+  require_safe_root
+  acquire_acceptance_lock
+fi
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/roost-remote-generated.XXXXXX")"
-trap 'rm -rf "$work_dir"' EXIT
+trap 'rm -rf "$work_dir"; if declare -F release_acceptance_lock >/dev/null; then release_acceptance_lock; fi' EXIT
 export GOWORK=off
 export ROOST_REMOTE_FAULT_SCRIPT="$repo_dir/scripts/remote-fault.sh"
 mkdir -p "$work_dir/def"

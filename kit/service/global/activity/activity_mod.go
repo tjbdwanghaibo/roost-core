@@ -90,7 +90,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	}
 	dispatchAttempts := DefaultDispatchAttempts
 	if cfg.IsSet("activity.dispatch_attempts") {
-		dispatchAttempts = cfg.GetInt("activity.dispatch_attempts")
+		dispatchAttempts, err = app.ConfigInt(cfg, "activity.dispatch_attempts")
+		if err != nil {
+			return fmt.Errorf("activity mod: %w", err)
+		}
 		if dispatchAttempts <= 0 {
 			return fmt.Errorf("activity mod: activity.dispatch_attempts must be positive, got %d", dispatchAttempts)
 		}

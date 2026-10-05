@@ -1,0 +1,18 @@
+FAIL: fault mongo-primary: ran without holding the acceptance lock:
+mongosh lock=free
+FAIL: heal: ran without holding the acceptance lock:
+nc lock=free
+mongod lock=free
+FAIL: remote-fault.sh mongo-primary: ran without holding the acceptance lock:
+mongosh lock=free
+FAIL: test-remote-generated.sh with ROOST_REMOTE_FAULT: ran without holding the acceptance lock:
+go lock=free
+dataengine environment shell tests passed
+--- FAIL: TestGlobalEnvironmentOperationsHoldTheAcceptanceLock (0.07s)
+    acceptance_lock_promises_test.go:50: kit/dataengine/failover_integration_test.go: TestRealMongoPrimaryFailoverContinuesProjection stops shared environment nodes / heals the environment without holding remote-acceptance.lock for the whole run; call holdAcceptanceLock(t) before registering the heal
+    acceptance_lock_promises_test.go:50: kit/dataengine/failover_integration_test.go: TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox stops shared environment nodes / heals the environment without holding remote-acceptance.lock for the whole run; call holdAcceptanceLock(t) before registering the heal
+    acceptance_lock_promises_test.go:50: kit/dataengine/failover_integration_test.go: TestRealJetStreamLeaderFailoverPreservesDedupAndOrder stops shared environment nodes / heals the environment without holding remote-acceptance.lock for the whole run; call holdAcceptanceLock(t) before registering the heal
+    acceptance_lock_promises_test.go:74: scripts/test-remote-generated.sh changes the shared isolated environment (dataengine-env.sh / remote-fault.sh) without holding remote-acceptance.lock
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	0.527s
+FAIL

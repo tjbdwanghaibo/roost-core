@@ -95,22 +95,27 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if _, err := mods.ResolvePersistenceEngine(cfg); err != nil {
 		return err
 	}
+	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认。
+	read := app.NewConfigReader(cfg)
 	m.config = engineConfig{
-		fast:          corenest.WorkerPoolConfig{Workers: cfg.GetInt("nest.fast.workers"), QueueCap: cfg.GetInt("nest.fast.queue_capacity")},
-		slow:          corenest.WorkerPoolConfig{Workers: cfg.GetInt("nest.slow.workers"), QueueCap: cfg.GetInt("nest.slow.queue_capacity")},
-		workerNum:     cfg.GetInt("nest.worker_num"),
-		hbWorkerNum:   cfg.GetInt("nest.heartbeat_worker_num"),
-		remoteWorkers: cfg.GetInt("nest.remote_workers"),
-		queueCap:      cfg.GetInt("nest.queue_capacity"),
-		tick:          cfg.GetDuration("nest.tick_duration"),
-		timeout:       cfg.GetDuration("nest.request_timeout"),
-		delayedCap:    cfg.GetInt("nest.delayed_capacity"),
-		maxDelay:      cfg.GetDuration("nest.max_delay"),
+		fast:          corenest.WorkerPoolConfig{Workers: read.Int("nest.fast.workers"), QueueCap: read.Int("nest.fast.queue_capacity")},
+		slow:          corenest.WorkerPoolConfig{Workers: read.Int("nest.slow.workers"), QueueCap: read.Int("nest.slow.queue_capacity")},
+		workerNum:     read.Int("nest.worker_num"),
+		hbWorkerNum:   read.Int("nest.heartbeat_worker_num"),
+		remoteWorkers: read.Int("nest.remote_workers"),
+		queueCap:      read.Int("nest.queue_capacity"),
+		tick:          read.Duration("nest.tick_duration"),
+		timeout:       read.Duration("nest.request_timeout"),
+		delayedCap:    read.Int("nest.delayed_capacity"),
+		maxDelay:      read.Duration("nest.max_delay"),
 		unloadResync: entity.UnloadResyncConfig{
-			Workers:       cfg.GetInt("nest.unload_resync.workers"),
-			Attempts:      cfg.GetInt("nest.unload_resync.attempts"),
-			QueueCapacity: cfg.GetInt("nest.unload_resync.queue_capacity"),
+			Workers:       read.Int("nest.unload_resync.workers"),
+			Attempts:      read.Int("nest.unload_resync.attempts"),
+			QueueCapacity: read.Int("nest.unload_resync.queue_capacity"),
 		},
+	}
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("nest mod: %w", err)
 	}
 	if err := m.initEntityLoadConfig(cfg); err != nil {
 		return err
@@ -132,7 +137,10 @@ func (m *Mod) initEntityLoadConfig(cfg *viper.Viper) error {
 			return fmt.Errorf("nest mod: %s must not be negative (0 or unset uses the framework default), got %d", key, value)
 		}
 	}
-	loadTimeout := cfg.GetDuration("nest.entity_load_timeout")
+	loadTimeout, err := app.ConfigDuration(cfg, "nest.entity_load_timeout")
+	if err != nil {
+		return fmt.Errorf("nest mod: %w", err)
+	}
 	if loadTimeout < 0 {
 		return fmt.Errorf("nest mod: nest.entity_load_timeout must not be negative (0 or unset uses %s), got %s", entity.DefaultEntityLoadTimeout, loadTimeout)
 	}

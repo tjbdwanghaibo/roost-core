@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
 )
 
 const (
@@ -33,7 +34,11 @@ func ResolvePersistenceEngine(cfg *viper.Viper) (PersistenceSelection, error) {
 	if cfg.IsSet("checkpoint.enabled") {
 		return PersistenceSelection{}, fmt.Errorf("%w: checkpoint.enabled was removed", ErrPersistenceEngineSelection)
 	}
-	if cfg.IsSet("dataengine.enabled") && !cfg.GetBool("dataengine.enabled") {
+	enabled, err := app.ConfigBool(cfg, "dataengine.enabled")
+	if err != nil {
+		return PersistenceSelection{}, err
+	}
+	if cfg.IsSet("dataengine.enabled") && !enabled {
 		return PersistenceSelection{}, fmt.Errorf("%w: dataengine.enabled=false", ErrPersistenceEngineSelection)
 	}
 	return PersistenceSelection{Engine: PersistenceDataEngine, DataEngineEnabled: true}, nil

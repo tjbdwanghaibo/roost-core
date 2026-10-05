@@ -113,6 +113,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 - **集成环境在 `~/.roost-it/roost-dataengine-it`**（`ROOST_IT_HOME=$HOME/.roost-it`、`ROOST_IT_PORT_OFFSET=1000`，
   脚本 `kit/scripts/integration/dataengine-env.sh`）。旧 `/tmp/roost-dataengine-it` 仍被另一会话的 demo 使用：**不要停、不要重置、不要对它跑脚本**；
   同一 shell 不要同时 source 两份 env.sh。env 文件含凭据，只 source，不输出、不提交。C01 / B30 与其他 Remote 验收共用 `remote-acceptance.lock`，只能串行。
+  环境按共享模式使用（A5）：integration 一律加 `-run`，故障一律自建代理 / 进程，全局运维命令持锁，锁存在时不跑真实依赖用例；细则见 `reference/lessons.md`“环境与工具”。
 - **合并时按行并集的自动合并只用于 `docs/bug`、`docs/bugfix` 索引**这类只追加的文件；USER_GUIDE 判别表等正文冲突手工合并，合并后核对表行编号连续。
   规则源 ARCHIVE-2026-09-30 §7。
 - **删 worktree 前先把 `artifacts/perf/*`、pprof、日志复制到主检出的 `artifacts/perf/remote/`**；`--force` 只能在复制之后用；报告写结果目录绝对路径。

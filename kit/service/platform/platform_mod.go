@@ -116,7 +116,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	}
 	attempts := MaxDeliveryAttempts
 	if cfg.IsSet("platform.delivery_attempts") {
-		attempts = cfg.GetInt("platform.delivery_attempts")
+		attempts, err = app.ConfigInt(cfg, "platform.delivery_attempts")
+		if err != nil {
+			return fmt.Errorf("platform mod: %w", err)
+		}
 		if attempts <= 0 {
 			return fmt.Errorf("platform mod: platform.delivery_attempts must be positive, got %d", attempts)
 		}

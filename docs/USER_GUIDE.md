@@ -8,6 +8,10 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-05 配置严格读取与生产校验范围（A4 / C1，main，未发版）
+
+框架读取的布尔、时长、整数配置一律严格：`on` / `yes`、不带单位的时长（`ttl: 15`）、`8k` / `1.5` / `10s` 这样的整数，App 启动时（`ValidateServiceConfig`，任何 Mod Init 之前）点名报错，不再静默读成 false / 纳秒 / 0（取默认）。自己写 Mod 读配置时用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt`，一次读多个键用 `app.NewConfigReader(cfg)` 读完再看 `Err()`。`env: production` 只校验有读取方的设置，原先要求的 `player.login_auth_required`、`player_protocol.rate_limit.enabled`、`save_load.wal.*` 等开关已删除——它们从来不控制任何行为，生成的游戏服接入层既没有按请求限流也只有演示凭据，上线前要自己接入。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192](bugfix/RR-20261005-NC-192.md)
+
 ## 2026-10-05 驱动重放与超时契约（A2，main，未发版）
 
 Redis 写命令（含脚本、含写的 pipeline、DistLock）不再由驱动在回复丢失后重放：错误就是“结果未知”，命令可能已经执行。要重试，先让这次写可以安全重复执行（请求 ID、版本 CAS、值守卫令牌），或者先回读再裁决。只有错误证明命令没执行时（拨号失败、池超时、LOADING 等），驱动才会自己重发；需要在业务里做同样判断时，用 `redis/driver.IsDefinitelyNotExecuted`。读命令照常重试。写命令的返回值（SETNX 的 bool、各种计数）只在没有错误时可信。Mongo `WithTransaction` 返回的错误满足 `errors.Is(err, mongo.ErrCommitResultUnknown)` 时，表示提交已经发出、可能已经生效，要按持久回执裁决；不带这个哨兵的错误都是确定没提交。完整的驱动行为契约（会重放的命令、错误分类、ctx 替换、默认超时）见 [redis/driver/README.md](../redis/driver/README.md) 和 [mongo/driver/README.md](../mongo/driver/README.md)，新增调用点时先对照它们。[方案](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)
@@ -144,7 +148,7 @@ redis:
 ```
 
 - **后端**：`kitredis.SingletonStore` 从同一份 `redis.*` 建两个独立的小客户端（不依赖 Redis Mod）：一个只做 CAS（获取 / 续期 / 释放），一个只做 `Live` 的读，Redis 变慢时并发的 `Live` 占满自己的连接也不会让续期等连接、误判失锁。CAS 复用 `redis.CompareAndSet` / `CompareAndDelete`；缺 `redis.addr` 与 `redis.cluster_addrs` 时启动失败（不沿用 Redis Mod 的 `localhost:6379` 兜底）。`enabled=true` 而 bootstrap 没调 `Singleton` 时启动失败，错误是 `app.ErrSingletonOpenerMissing`。
-- **写法**（`ValidateServiceConfig` 校验，RR-20261005-NC-190）：`enabled` 只接受 `true` / `false`（以及 `1` / `0`、`"true"`），`on` / `yes` / `off` / `no` 启动失败——宽松读取曾把它们读成 false、静默关掉锁；四个时长必须带单位（`15s`、`500ms`），不带单位的数字启动失败，不再当作纳秒。框架读取的其他布尔开关（`nats.reliable.enabled`、`mongo.require_replica_set`、`ops.*`、`log.*` 等）与 `ValidateServiceConfig` 列出的时长键同样严格；`redis.cluster_addrs` 可以写逗号分隔串或 YAML 列表。
+- **写法**（`ValidateServiceConfig` 校验，RR-20261005-NC-190）：`enabled` 只接受 `true` / `false`（以及 `1` / `0`、`"true"`），`on` / `yes` / `off` / `no` 启动失败——宽松读取曾把它们读成 false、静默关掉锁；四个时长必须带单位（`15s`、`500ms`），不带单位的数字启动失败，不再当作纳秒。框架读取的其他布尔、时长与整数键同样严格（A4，见 [§10](#配置写法与启动校验)）；`redis.cluster_addrs` 可以写逗号分隔串或 YAML 列表。
 - **时间关系**（`ValidateServiceConfig` 校验，违反即启动失败）：`renew_interval ≤ guard`、`2 × renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2 × renew_interval`。默认 15 / 3 / 5 / 30s 全部满足。
 - **启动**：键被别人持有时等待，每 `renew_interval` 重试，持有者变化时打一条 `singleton: waiting for the current holder to release or expire`（带对方的值，含 hostname / pid）；等待期间什么 Mod 都不 Init。对方已经停完（键已释放）时新进程立即拿到；对方还在优雅停机时，新进程在对方释放后的下一个节拍拿到（最多再等一个 `renew_interval`，重试不监听删除）；对方崩溃或卡住时最多等 `ttl + renew_interval`（2026-10-05 真实进程演练：kill -9 / SIGSTOP 后实测都是 15.0s，见[方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) §13 第 5 笔）。到 `startup_wait` 仍被持有返回 `app.ErrSingletonHeld`——对方一直在续期，说明两个健康进程配了同一个服务类型 + sid，是部署错误，App 不会抢锁；最后一次是报错 / 超时则返回 `app.ErrSingletonStoreUnavailable`。等待期间 SIGTERM 按默认处置直接终止进程（还没持有锁）。
 - **持有**：一个 goroutine 按固定节拍续期（上一次成功的请求发出时刻 + k × `renew_interval`），窗口 `validUntil` 从请求发出时刻起算；回复迟到（晚于 `asked + ttl − guard`）不作数、立即再续一次。续期答“键已不是我的”，或续期失败且已到 `validUntil − guard`，即 `RuntimeFailure.Fail(app.ErrSingletonLost …)`：Nest 立即围栏、`Service.Shutdown`、Mod 逆序停、非零退出。代价是 Redis 连续不可用约 `ttl − guard`（默认 10s）以上时进程会退出重启；需要更宽容时调大 `ttl`。
@@ -393,6 +397,29 @@ Lockstep 适合客户端确定性模拟的 MOBA/RTS：服务器排序输入帧�
 ## 10. 配置、协议与错误码
 
 开发与生产配置分离。生产配置必须经过 `roost project doctor`，不得含 `CHANGE_ME`、localhost、开发 token 或明文仓库 Secret。环境差异使用部署系统挂载完整配置；不要靠构建不同镜像改变配置。
+
+### 配置写法与启动校验
+
+App 在任何 Mod Init 之前调用 `ValidateServiceConfig`，按严格规则检查框架读取的全部类型化的键（`app/config_validation.go` 的 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`，另有 syncbus 的 `syncbus` / `room` / `sync` 三段与所有 `<service>.call_timeout`）：
+
+| 类型 | 接受 | 拒绝（启动失败并点名键） |
+| --- | --- | --- |
+| 布尔 | `true` / `false`（大小写不限）、`"true"`、`1` / `0` | `on` / `off` / `yes` / `no`、拼写错误 |
+| 时长 | `15s`、`500ms`、`1m30s`、`0` | 不带单位的非零数字（`15`、`"15"`，以前读成 15ns）、解析不了的值 |
+| 整数 | 整数、`1e3` 这样没有小数部分的数、十进制字符串（环境变量覆盖） | `8k`、`1.5`、`10s`、布尔值（以前读成 0 后取默认或被截断） |
+
+kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动的调用方同样拿到错误。业务 Mod 读配置用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigInt64`，或 `app.NewConfigReader(cfg)` 连续读、最后检查 `Err()`（一次报出全部写错的键）。框架内新增读取必须走这些函数并登记到上面的清单，app 的守卫测试会扫描源码。
+
+### `env: production` 校验什么
+
+配置里 `env` / `app.env` / `environment` 为 `prod` / `production` 时，`ValidateServiceConfig` 追加以下检查，其余照常：
+
+- `ops.enabled` 时 `ops.addr` 只能绑回环地址；要绑 `0.0.0.0`（k8s 探针、Prometheus 抓取）须同时写 `ops.allow_public_addr: true`，表示端点已放在鉴权代理之后。生成的生产示例绑 `0.0.0.0:9100`，打开生产模式时要加这一行。
+- game / instance / account / match_group / global 必须写 `redis.addr`。
+- `account.session_secret`、`platform.session_secret`、`platform.payment_secret` 不能为空或以 `dev-` 开头。
+- admin_gateway：`admin_gateway.tokens` 非空且不是 dev 令牌；`local_ops` 目标没有自己的 `ops_token` 时 `default_ops_admin_token` 必须是非 dev 值。
+
+它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；配置里留着也没有影响。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
 
 协议定义保持单一来源，由 codegen 生成 pb、msgid、绑定和 manifest。变更遵循向后兼容：字段只新增、不复用编号；先发布兼容 reader，再发布 writer，最后清理旧字段。错误码 ID 空间由 `roost id` 检查，不在多个服务手工分配。
 

@@ -53,16 +53,20 @@ func NewOpsMod() *OpsMod {
 func (m *OpsMod) Name() app.ModName { return mods.ModOps }
 
 func (m *OpsMod) Init(cfg *viper.Viper) error {
-	m.enabled = cfg.GetBool("ops.enabled")
+	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
+	m.enabled = read.Bool("ops.enabled")
 	m.addr = cfg.GetString("ops.addr")
 	if m.addr == "" {
 		m.addr = "127.0.0.1:9100"
 	}
-	m.adminEnabled = cfg.GetBool("ops.admin_enabled")
+	m.adminEnabled = read.Bool("ops.admin_enabled")
 	m.adminToken = cfg.GetString("ops.admin_token")
-	m.allowDevToken = cfg.GetBool("ops.allow_dev_token")
+	m.allowDevToken = read.Bool("ops.allow_dev_token")
 	m.sid = cfg.GetInt32("sid")
 	m.service = cfg.GetString("server_type")
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("ops: %w", err)
+	}
 	if m.adminEnabled {
 		if m.adminToken == "" {
 			return errors.New("ops: admin_enabled requires admin_token")

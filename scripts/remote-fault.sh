@@ -7,8 +7,9 @@ source "$repo_dir/kit/scripts/integration/lib/mongo.sh"
 source "$repo_dir/kit/scripts/integration/lib/nats.sh"
 require_safe_root
 [[ "${ROOST_DATAENGINE_IT:-}" == 1 ]] || { echo 'isolated test environment required' >&2; exit 2; }
-# RR-20261005-NC-203：只给持锁的矩阵 / 验收用；别人持锁时不注入故障。
-require_acceptance_lock_free_or_held
+# RR-20261005-NC-203 / A5：注入故障是全局操作，运行期间持锁；矩阵 / 验收调起时沿用它们的锁，
+# 别人持锁时以 2 拒绝。
+acquire_acceptance_lock
 case "${1:-}" in
   heal) mongo_heal; nats_heal ;;
   mongo-primary) mongo_fault_primary ;;

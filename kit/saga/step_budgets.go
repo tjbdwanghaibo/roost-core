@@ -122,7 +122,10 @@ func readStepBudget(cfg *viper.Viper, prefix string) (coresaga.StepBudget, error
 		*item.target = value
 	}
 	if key := prefix + ".max_attempts"; cfg.IsSet(key) {
-		attempts := cfg.GetInt(key)
+		attempts, err := app.ConfigInt(cfg, key)
+		if err != nil {
+			return coresaga.StepBudget{}, err
+		}
 		if attempts <= 0 || attempts > 1000 {
 			return coresaga.StepBudget{}, fmt.Errorf("%s: want 1..1000, got %q", key, cfg.GetString(key))
 		}

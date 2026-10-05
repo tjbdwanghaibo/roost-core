@@ -109,7 +109,7 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
-**10-05 N14 Kit 跨域装配（revn14）**：[NC-190/191/193/194](review/REVIEW-2026-10-05-n14.md)已修复、声明场景验证，未发版；NC-192 待维护者选方案。行为收紧：框架布尔开关的 `on` / `yes` 与不带单位的时长启动即报错（`singleton.enabled: on` 曾静默关闭单实例锁）；Mongo 连接日志去口令；启动失败时 App 先调用 `Service.Shutdown`（Init 失败也调用，Shutdown 须容忍部分初始化），5s 内没结束就不停 Mod、不释放锁。生产校验（`env: production`）要求的九个开关无读取方（NC-192），通过它不代表限流 / 鉴权 / WAL 持久生效。kit 其余约 80 处 `GetDuration` 仍宽松，配置 schema 方向待定。
+**10-05 N14 Kit 跨域装配（revn14）**：[NC-190/191/193/194](review/REVIEW-2026-10-05-n14.md)已修复、声明场景验证，未发版；NC-192 待维护者选方案。行为收紧：框架布尔开关的 `on` / `yes` 与不带单位的时长启动即报错（`singleton.enabled: on` 曾静默关闭单实例锁）；Mongo 连接日志去口令；启动失败时 App 先调用 `Service.Shutdown`（Init 失败也调用，Shutdown 须容忍部分初始化），5s 内没结束就不停 Mod、不释放锁。生产校验（`env: production`）要求的九个开关无读取方（NC-192，已按维护者决定 C1 方案 1 修复，见 §7 A4 / C1 / A5 行），通过它不代表限流 / 鉴权 / WAL 持久生效。kit 其余约 80 处 `GetDuration` 仍宽松，配置 schema 方向待定。
 
 **10-05 N13 container / safemap / goroutine / misc / internal（revn13）**：[NC-180～185](review/REVIEW-2026-10-05-n13.md)已修复、声明场景验证（NC-180/181 含 EntityManager 组合，NC-182 含生成 DAO 组合与全新生成 game-demo），未发版。BucketHolder 遍历改为快照、锁外回调（EntityManager.Range 回调里 Destroy 不再卡死），false 跨桶停止；FastMap 改已有键不重排、遍历识别表被换掉；TaskPool / 拓扑排序 / KeyMap 三处零调用方 API 修复。遍历契约统一与零调用方 API 去留见方向判断，待维护者。
 
@@ -205,6 +205,8 @@ bash scripts/test-remote-matrix.sh
 10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
 
 10-06 C7（维护者决定）：遍历回调定为仓库级契约（回调里可读写同一容器、false 立即停止），写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）。**已实施，未发版**（[方案与实施](feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md)）。
+
+10-05 A4 / C1 / A5（维护者决定）：框架配置一律严格读取——新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`，kit 各 Mod 与 app 不再用 viper 宽松 getter，`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（含 syncbus 三段与 `<service>.call_timeout`）在任何 Mod Init 之前检查，守卫测试扫描源码（[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md)；kit/redis 三个整数键留给 A2 之后，生成的 player TCP / RPC 客户端代码为兼容已发布 core 仍用 getter，均由启动校验兜住）。[NC-192](bugfix/RR-20261005-NC-192.md) 按 C1 方案 1 修复：`env: production` 只校验有读取方的设置，生成的生产示例与 Secret 示例打开生产模式可以启动。A5：隔离环境按共享模式使用，全局运维命令运行期间持有 `remote-acceptance.lock`（[NC-203 复核补修](bugfix/RR-20261005-NC-203.md#复核后的补修2026-10-05维护者决定-a5)），规则见 `kit/scripts/integration/README.md`“共享使用规则”。行为收紧，未发版。
 
 10-05 A2（维护者决定）：Redis 驱动默认不再重放写命令，只在确定没执行时重发（脚本在这类错误上同样重发）；新增 `driver.IsDefinitelyNotExecuted`；Mongo 提交发出之后的失败带 `mongo.ErrCommitResultUnknown`；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。**已实施，未发版**。契约表见 [redis/driver](../redis/driver/README.md) 和 [mongo/driver](../mongo/driver/README.md)，[方案、红绿与调用方核对](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)。Redis Cluster 与 bus 的 SETNX 去重仍在外部验证或归属方待办里。
 

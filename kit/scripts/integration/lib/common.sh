@@ -63,33 +63,41 @@ readonly ROOST_IT_ROOT="${ROOST_DATAENGINE_IT_ROOT:-$ROOST_IT_CANONICAL_ROOT}"
 # 已存在但没有记录的旧根按偏移 0 处理（之前唯一的取值）。
 readonly ROOST_IT_PORT_OFFSET_FILE="$ROOST_IT_ROOT/port-offset"
 
-# Remote 验收锁（REMOTE-ACCEPTANCE §共用集群串行）：scripts/test-remote-matrix.sh、
-# scripts/perf/remote.sh 与本脚本的 test 用 mkdir 取得它，取得后导出
-# ROOST_REMOTE_ACCEPTANCE_LOCK_HELD=<锁路径>，自己调起的 heal / remote-fault.sh 据此放行。
-# RR-20261005-NC-203：之前只有持锁者自己看这把锁，别的会话在矩阵 / 长稳运行期间照常
-# fault / down / up / heal / reset（reset 连锁目录带整个根一起删），验收结果失真。
+# Remote 验收锁（REMOTE-ACCEPTANCE §共用集群串行）。隔离环境是共享的（维护者决定 A5 ②）：多个会话
+# 可以同时跑各自 `-run` 选定、自建代理 / 进程注入故障的用例；会改动整套环境的全局入口——本脚本的
+# up / down / heal / reset / fault / test、scripts/remote-fault.sh、故障矩阵 scripts/test-remote-matrix.sh、
+# 长稳 scripts/perf/remote.sh、带 ROOST_REMOTE_FAULT 的 scripts/test-remote-generated.sh、调用这些命令的
+# Go 故障用例（kit/dataengine 的 failover 用例）——在运行期间持有这把锁，彼此串行。
+# 取得后导出 ROOST_REMOTE_ACCEPTANCE_LOCK_HELD=<锁路径>，持锁者自己调起的命令据此沿用，不重复取锁。
+# RR-20261005-NC-203：之前只有持锁者自己看这把锁，别的会话在矩阵 / 长稳运行期间照常 fault / down / up /
+# heal / reset。A5 核对（2026-10-05）：NC-203 之后这些命令只“检查”锁空闲、自己并不持有，两个会话的
+# fault 与 heal 仍可交错，Go 故障用例在 fault 与 heal 之间也不受保护；现在一律持有。
 readonly ROOST_IT_ACCEPTANCE_LOCK="$ROOST_IT_ROOT/remote-acceptance.lock"
 
-# require_acceptance_lock_free_or_held：会改动环境的入口先调它；锁被别人持有时以 2 拒绝。
-# 只读的 status 不调。锁是“目录存在即持有”，进程被强杀后残留的锁要先查清再手工删除。
-require_acceptance_lock_free_or_held() {
-	[[ -d "$ROOST_IT_ACCEPTANCE_LOCK" ]] || return 0
-	[[ "${ROOST_REMOTE_ACCEPTANCE_LOCK_HELD:-}" == "$ROOST_IT_ACCEPTANCE_LOCK" ]] && return 0
-	roost_it_error "refuse: $ROOST_IT_ACCEPTANCE_LOCK is held by a running Remote acceptance / fault run; wait for it (do not delete the lock until you know who holds it)"
-	return 2
-}
-
-# acquire_acceptance_lock 让当前进程在退出前持有验收锁（已由上层持有时直接沿用）。
+# acquire_acceptance_lock 让当前进程在退出前持有验收锁：上层已持有时直接沿用；锁被别人持有时以 2 拒绝。
+# 根目录还不存在时没有可保护的环境，也没有别的持有者，直接放行（up 会先建根再取锁）。
+# 锁是“目录存在即持有”，进程被强杀后残留的锁要先查清持有者再手工删除。退出时由 EXIT trap 释放；
+# 调用方要装自己的 EXIT trap 时，在 trap 里一并调用 release_acceptance_lock。
 acquire_acceptance_lock() {
 	if [[ "${ROOST_REMOTE_ACCEPTANCE_LOCK_HELD:-}" == "$ROOST_IT_ACCEPTANCE_LOCK" && -d "$ROOST_IT_ACCEPTANCE_LOCK" ]]; then
 		return 0
 	fi
+	[[ -d "$ROOST_IT_ROOT" ]] || return 0
 	if ! mkdir "$ROOST_IT_ACCEPTANCE_LOCK" 2>/dev/null; then
-		roost_it_error "refuse: $ROOST_IT_ACCEPTANCE_LOCK is held by a running Remote acceptance / fault run"
+		roost_it_error "refuse: $ROOST_IT_ACCEPTANCE_LOCK is held by a running Remote acceptance / fault run; wait for it (do not delete the lock until you know who holds it)"
 		return 2
 	fi
-	trap 'rmdir "$ROOST_IT_ACCEPTANCE_LOCK" 2>/dev/null || true' EXIT
+	ROOST_IT_ACCEPTANCE_LOCK_OWNED=1
+	trap release_acceptance_lock EXIT
 	export ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$ROOST_IT_ACCEPTANCE_LOCK"
+}
+
+# release_acceptance_lock 释放本进程取得的锁；沿用上层的锁时什么也不做。
+release_acceptance_lock() {
+	if [[ "${ROOST_IT_ACCEPTANCE_LOCK_OWNED:-}" == 1 ]]; then
+		rmdir "$ROOST_IT_ACCEPTANCE_LOCK" 2>/dev/null || true
+		ROOST_IT_ACCEPTANCE_LOCK_OWNED=
+	fi
 }
 
 # roost_it_port 把基准端口平移 ROOST_IT_PORT_OFFSET；所有端口都必须经过它。

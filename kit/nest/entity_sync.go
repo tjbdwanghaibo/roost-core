@@ -3,9 +3,9 @@ package nest
 import (
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
@@ -37,14 +37,18 @@ func (m *Mod) initEntitySync(cfg *viper.Viper) error {
 		config.Mode = mode
 	}
 	if cfg.IsSet("sync.entity.interval") {
-		interval, err := time.ParseDuration(cfg.GetString("sync.entity.interval"))
+		interval, err := app.ConfigDuration(cfg, "sync.entity.interval")
 		if err != nil {
-			return fmt.Errorf("sync.entity.interval: %w", err)
+			return err
 		}
 		config.Interval = interval
 	}
 	if cfg.IsSet("sync.entity.max_frozen_bytes") {
-		config.MaxFrozenBytes = cfg.GetInt64("sync.entity.max_frozen_bytes")
+		maxFrozen, err := app.ConfigInt64(cfg, "sync.entity.max_frozen_bytes")
+		if err != nil {
+			return err
+		}
+		config.MaxFrozenBytes = maxFrozen
 	}
 	if m.syncSetup.Configure != nil {
 		m.syncSetup.Configure(&config)

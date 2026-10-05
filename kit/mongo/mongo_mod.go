@@ -35,29 +35,32 @@ func (m *MongoMod) Init(cfg *viper.Viper) error {
 		uri = "mongodb://localhost:27017"
 	}
 	m.cfg = fmongo.DefaultConfig(uri)
+	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
 
-	if timeout := cfg.GetDuration("mongo.connect_timeout"); timeout > 0 {
+	if timeout := read.Duration("mongo.connect_timeout"); timeout > 0 {
 		m.cfg.ConnectTimeout = timeout
 	}
-	if maxPool := cfg.GetUint64("mongo.max_pool_size"); maxPool > 0 {
-		m.cfg.MaxPoolSize = maxPool
+	if maxPool := read.Int64("mongo.max_pool_size"); maxPool > 0 {
+		m.cfg.MaxPoolSize = uint64(maxPool)
 	}
-	if minPool := cfg.GetUint64("mongo.min_pool_size"); minPool > 0 {
-		m.cfg.MinPoolSize = minPool
+	if minPool := read.Int64("mongo.min_pool_size"); minPool > 0 {
+		m.cfg.MinPoolSize = uint64(minPool)
 	}
-	if maxIdle := cfg.GetDuration("mongo.max_idle_time"); maxIdle > 0 {
+	if maxIdle := read.Duration("mongo.max_idle_time"); maxIdle > 0 {
 		m.cfg.MaxIdleTime = maxIdle
 	}
-	if timeout := cfg.GetDuration("mongo.transaction_timeout"); timeout > 0 {
+	if timeout := read.Duration("mongo.transaction_timeout"); timeout > 0 {
 		m.cfg.TransactionTimeout = timeout
 	}
 	if cfg.IsSet("mongo.require_replica_set") {
-		m.cfg.RequireReplicaSet = cfg.GetBool("mongo.require_replica_set")
+		m.cfg.RequireReplicaSet = read.Bool("mongo.require_replica_set")
 	}
 	m.policy = mongodriver.IndexMigrationPolicy{
-		AllowRecreate: cfg.GetBool("mongo.index.allow_recreate"),
+		AllowRecreate: read.Bool("mongo.index.allow_recreate"),
 	}
-
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("mongo mod: %w", err)
+	}
 	return nil
 }
 

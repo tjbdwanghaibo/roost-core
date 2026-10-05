@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192 已修复，NC-203 含复核残余补修，均声明场景验证、未发版。** 生产校验删去九组无读取方的要求、USER_GUIDE 写明 `env: production` 校验范围；框架配置一律经 `app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigReader` 严格读取，`ValidateServiceConfig` 按三份登记检查全部类型化的键，守卫测试扫描源码；`dataengine-env.sh` 的全局命令、`remote-fault.sh`、带故障的生成工程验收与 failover 用例运行期间持锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [证据](evidence/a4-config-20261005/README.md)
+
 **10-05 N09 skill 第四批（revn09d）：NC-210～216 已修复、声明场景验证，未发版。** memory 效果名字在类型检查统一检查、add_memory 要求 int；移交后 area 回调 finish 只结束本 area 进程；catalog key 非空唯一；chain 间隔 / 重复与 modifier 叠层只接受默认值（方向 B）；effect / filter / cost 里的 status / attribute / resource 名字查 catalog；Host 都拒绝的取值编译期拒绝；NegotiateSchema 拒绝空区间。新增编译 ⇒ 可执行的变异性质测试。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)。
 
 | 编号 | 修复 | 状态 |
@@ -19,6 +21,7 @@
 | [RR-20261005-NC-194](RR-20261005-NC-194.md) | `StepBudgets.Resolve` 原样查不到时按小写回退 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-193](RR-20261005-NC-193.md) | Init 失败与之后的启动失败共用 `shutdownAfterStartupFailure`：先 Shutdown（5s），未完成不停 Mod、不释放锁 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-191](RR-20261005-NC-191.md) | `redactedURI`：连接日志的 URI 口令换成 `***` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-192](RR-20261005-NC-192.md) | 生产校验只保留有读取方的要求；A4 严格读取的验证一并记在这里 | 已修复、声明场景验证，未发版（C1 方案 1） |
 | [RR-20261005-NC-190](RR-20261005-NC-190.md) | `app.ConfigBool` / `ConfigDuration`；单实例锁、启动校验开关清单与时长、`mods.Duration`、saga 步骤预算改用；`mods.RedisClusterAddrs` | 已修复、声明场景验证，未发版（行为收紧） |
 
 **10-05 N13 container / safemap / goroutine / misc / internal（revn13）：NC-180～185 已修复、声明场景验证，未发版。** BucketHolder 遍历先复制桶快照再在锁外调回调、false 跨桶停止；FastMap 改已有键不重排、Range 识别表被换掉；TaskPool 受理与关闭互斥；拓扑排序按全部节点判环；KeyMap 遍历每桶先复制。[本轮](../review/REVIEW-2026-10-05-n13.md) · [证据](evidence/noncore-bugfix-20261005-revn13/README.md)。
@@ -74,7 +77,7 @@
 | [RR-20261005-NC-206](RR-20261005-NC-206.md) | 生成 .gitignore 加 `/data/wal/` | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-205](RR-20261005-NC-205.md) | pretag 按 ls-remote 退出码区分不存在 / 无法核对 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-204](RR-20261005-NC-204.md) | glsvet 缺失目录 / 解析失败以 2 退出 | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-203](RR-20261005-NC-203.md) | `require_acceptance_lock_free_or_held` / `acquire_acceptance_lock`，持锁标记 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-203](RR-20261005-NC-203.md) | `acquire_acceptance_lock`（全局命令运行期间持锁）/ 持锁标记 / failover 用例 `holdAcceptanceLock` | 已修复（含 A5 残余补修），未发版 |
 | [RR-20261005-NC-202](RR-20261005-NC-202.md) | `toxiproxy_owned_pid` 按命令名 + API 端口认领 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-201](RR-20261005-NC-201.md) | redis-cluster-suites.sh `unset ROOST_DATAENGINE_IT REDIS_ADDR` | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-200](RR-20261005-NC-200.md) | gapmap.sh 跟踪文件不干净时 exit 2 | 已修复、声明场景验证，未发版 |
@@ -898,5 +901,7 @@ RR-20260919-10 在同一天收敛（U-0257）：owed 索引 + `OwedDispatches` R
 payload 的一方 + sweep 收回本分。当时写下的"要先在 kit 加一个按 gameSID 的待交付 RPC"就是这次做的事。
 
 ## 2026-10-05 N14：NC-192 为什么没修
+
+（2026-10-05 更新：维护者选方案 1（决定 C1），已修复，见 [记录](RR-20261005-NC-192.md)。下文保留原说明。）
 
 [RR-20261005-NC-192](../bug/RR-20261005-NC-192.md)：生产配置校验（`env: production`）要求的九个开关没有任何读取方。修法取决于产品决定：删去无效要求并写明 `env: production` 校验什么（方案 1），还是先在生成接入里装配按请求限流 / 真实鉴权开关、把 WAL 要求换成 `dataengine.*`，再让校验指向它们（方案 2，属于 N02 / N08 的功能工作）。两者都改变“生产校验”对运维的承诺，需要维护者选择；在此之前不改行为。

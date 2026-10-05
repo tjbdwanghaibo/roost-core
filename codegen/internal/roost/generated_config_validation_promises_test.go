@@ -1,0 +1,153 @@
+package roost
+
+// 维护者决定 A4 / C1（RR-20261005-NC-192 方案 1）：生成工程的每份服务配置——开发配置、生产示例、k8s Secret
+// 示例里的 config.yaml——都要通过 roost-core 的 app.ValidateServiceConfig（框架键严格按类型检查），生产示例与
+// Secret 示例再加上 `env: production` 也要通过。
+//
+// 旧行为：生产校验要求 player.login_auth_required、player_protocol.rate_limit.enabled、save_load.wal.*、
+// account.ops_token、account.redis_required、global.redis_required 等没有任何代码读取的开关；生成的生产
+// 配置没有它们（也不该有），打开 `env: production` 后 game / account / global 起不来。
+//
+// 生成器不导入它生成的运行时（TestCoreDependencyBoundary），所以这里与 player_tcp_stop_contract_promises_test.go
+// 一样：在 game-demo 夹具的私有副本上把 roost-core replace 到本仓库，加一个只在本用例存在的测试包，用真实的
+// app.ValidateServiceConfig 读生成的文件。生产示例的 ops.addr 绑 0.0.0.0（k8s 探针要从 Pod 外访问），
+// 打开生产模式时运维同时声明 ops.allow_public_addr: true（端点放在鉴权代理之后），用例照此设置。
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+const generatedConfigValidationTest = `package configcheck
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"gopkg.in/yaml.v3"
+)
+
+func TestA4GeneratedConfigsPassValidation(t *testing.T) {
+	root := "../.."
+	type config struct{ name, service, body string; prod bool }
+	var configs []config
+	service, _ := filepath.Glob(filepath.Join(root, "configs", "service", "config.*.yaml"))
+	for _, path := range service {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(path)
+		svc := strings.TrimSuffix(strings.TrimPrefix(name, "config."), ".yaml")
+		prod := strings.HasSuffix(svc, ".prod.example")
+		configs = append(configs, config{name, strings.TrimSuffix(svc, ".prod.example"), string(body), prod})
+	}
+	secrets, _ := filepath.Glob(filepath.Join(root, "deploy", "k8s", "base", "secret.*.example.yaml"))
+	for _, path := range secrets {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var secret struct {
+			StringData map[string]string ` + "`yaml:\"stringData\"`" + `
+		}
+		if err := yaml.Unmarshal(body, &secret); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		name := filepath.Base(path)
+		svc := strings.TrimSuffix(strings.TrimPrefix(name, "secret."), ".example.yaml")
+		configs = append(configs, config{name, svc, secret.StringData["config.yaml"], true})
+	}
+	if len(service) < 4 || len(secrets) < 2 {
+		t.Fatalf("found %d service configs and %d secret examples; the project layout moved", len(service), len(secrets))
+	}
+	load := func(t *testing.T, c config) *viper.Viper {
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(strings.NewReader(c.body)); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		cfg.Set("server_type", c.service) // App.run 按命令设置
+		return cfg
+	}
+	for _, c := range configs {
+		t.Run(c.name, func(t *testing.T) {
+			if err := app.ValidateServiceConfig(load(t, c)); err != nil {
+				t.Errorf("%s does not pass ValidateServiceConfig:\n%v", c.name, err)
+			}
+			if !c.prod {
+				return
+			}
+			cfg := load(t, c)
+			cfg.Set("env", "production")
+			cfg.Set("ops.allow_public_addr", true)
+			if err := app.ValidateServiceConfig(cfg); err != nil {
+				t.Errorf("%s with env: production is refused:\n%v", c.name, err)
+			}
+		})
+	}
+}
+`
+
+func TestGeneratedConfigsPassStrictAndProductionValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles and runs a test inside the generated game-demo")
+	}
+	t.Parallel()
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if override := os.Getenv("ROOST_A4_CORE_REPLACE"); override != "" {
+		repo = override // 取修前证据时指向基线检出
+	}
+	root := copyOfNewProject(t, "game-demo")
+	goModPath := filepath.Join(root, "go.mod")
+	goMod, err := os.ReadFile(goModPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`)
+	goMod = replace.ReplaceAll(goMod, nil)
+	goMod = append(goMod, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
+	for rel, body := range map[string][]byte{
+		"go.mod":                                 goMod,
+		"internal/configcheck/a4_config_test.go": []byte(generatedConfigValidationTest),
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		goName += ".exe"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", goName), "test", "-mod=mod", "-count=1", "-v", "-run", "TestA4GeneratedConfigsPassValidation", "./internal/configcheck/")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated configs against app.ValidateServiceConfig: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "--- PASS: TestA4GeneratedConfigsPassValidation") {
+		t.Errorf("TestA4GeneratedConfigsPassValidation did not run and pass:\n%s", out)
+	}
+}

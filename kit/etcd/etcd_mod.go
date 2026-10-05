@@ -3,14 +3,16 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	etcddriver "github.com/tjbdwanghaibo/roost-core/etcd/driver"
 	"github.com/tjbdwanghaibo/roost-core/health"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/spf13/viper"
 )
@@ -47,14 +49,18 @@ func (m *EtcdMod) Init(cfg *viper.Viper) error {
 	if prefix := cfg.GetString("etcd.service_prefix"); prefix != "" {
 		m.cfg.ServicePrefix = prefix
 	}
-	if ttl := cfg.GetInt64("etcd.lease_ttl"); ttl > 0 {
+	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
+	if ttl := read.Int64("etcd.lease_ttl"); ttl > 0 {
 		m.cfg.LeaseTTL = ttl
 	}
-	if retryMin := cfg.GetDuration("etcd.register_retry_min_interval"); retryMin > 0 {
+	if retryMin := read.Duration("etcd.register_retry_min_interval"); retryMin > 0 {
 		m.cfg.RegisterRetryMinInterval = retryMin
 	}
-	if retryMax := cfg.GetDuration("etcd.register_retry_max_interval"); retryMax > 0 {
+	if retryMax := read.Duration("etcd.register_retry_max_interval"); retryMax > 0 {
 		m.cfg.RegisterRetryMaxInterval = retryMax
+	}
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("etcd mod: %w", err)
 	}
 
 	// Build service info for auto-registration

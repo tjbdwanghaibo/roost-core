@@ -5,6 +5,7 @@ package dataengine
 import (
 	"context"
 	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,7 @@ import (
 func TestRealMongoPrimaryFailoverContinuesProjection(t *testing.T) {
 	fx := newRealFixture(t)
 	defer fx.close()
+	holdAcceptanceLock(t)
 	t.Cleanup(func() { healEnvironment(t) })
 
 	if err := fx.runtime.Store.Project(fx.context(), realRecord(20, []coredata.Mutation{
@@ -61,6 +63,7 @@ func TestRealMongoPrimaryFailoverContinuesProjection(t *testing.T) {
 func TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox(t *testing.T) {
 	fx := newRealFixture(t)
 	defer fx.close()
+	holdAcceptanceLock(t)
 	t.Cleanup(func() { healEnvironment(t) })
 
 	var handled atomic.Int32
@@ -106,6 +109,7 @@ func TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox(t *testing.T) {
 func TestRealJetStreamLeaderFailoverPreservesDedupAndOrder(t *testing.T) {
 	fx := newRealFixture(t)
 	defer fx.close()
+	holdAcceptanceLock(t)
 	t.Cleanup(func() { healEnvironment(t) })
 
 	var mu sync.Mutex
@@ -194,6 +198,29 @@ func waitFor(t *testing.T, timeout time.Duration, description string, predicate 
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for %s", description)
+}
+
+// holdAcceptanceLock 让用例在停共享环境节点（fault）到 heal 结束的整段时间里持有验收锁（维护者决定 A5）：
+// 这三个用例停的是共享隔离环境的 Mongo 主节点 / NATS，是全局操作，与故障矩阵、长稳以及别的会话的
+// fault / heal 串行。经 dataengine-env.sh test 运行时沿用它持有的锁；手工 `-run` 运行时自己取锁，别人持有
+// 时直接失败、不注入故障。锁随 t.Cleanup 在 heal 之后释放（先登记锁、后登记 heal）。
+func holdAcceptanceLock(t *testing.T) {
+	t.Helper()
+	root := os.Getenv("ROOST_DATAENGINE_IT_ROOT")
+	if root == "" {
+		t.Fatal("ROOST_DATAENGINE_IT_ROOT is not set; source the isolated environment env.sh")
+	}
+	lock := filepath.Join(root, "remote-acceptance.lock")
+	if os.Getenv("ROOST_REMOTE_ACCEPTANCE_LOCK_HELD") == lock {
+		if _, err := os.Stat(lock); err == nil {
+			return
+		}
+	}
+	if err := os.Mkdir(lock, 0o755); err != nil {
+		t.Fatalf("refuse: %s is held by another run (Remote acceptance, fault matrix or another session's fault / heal): %v", lock, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(lock) })
+	t.Setenv("ROOST_REMOTE_ACCEPTANCE_LOCK_HELD", lock)
 }
 
 func runEnvironment(t *testing.T, arguments ...string) string {

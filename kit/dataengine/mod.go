@@ -100,6 +100,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if _, err := mods.ResolvePersistenceEngine(cfg); err != nil {
 		return err
 	}
+	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认，返回前一并报出。
+	read := app.NewConfigReader(cfg)
 	sid := cfg.GetInt32("sid")
 	database := strings.TrimSpace(cfg.GetString("dataengine.database"))
 	if database == "" {
@@ -110,7 +112,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
 	}
 	wal := nestwal.DefaultOptions(dir)
-	switch cfg.GetInt("dataengine.wal.writer_version") {
+	switch read.Int("dataengine.wal.writer_version") {
 	case 0:
 		wal.WriterVersion = nestwal.WriterVersionV2
 	case 1:
@@ -118,55 +120,55 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	case 2:
 		wal.WriterVersion = nestwal.WriterVersionV2
 	default:
-		return errors.New("dataengine mod: wal.writer_version must be 1 or 2")
+		return errors.Join(read.Err(), errors.New("dataengine mod: wal.writer_version must be 1 or 2"))
 	}
-	if value := cfg.GetInt64("dataengine.wal.segment_bytes"); value > 0 {
+	if value := read.Int64("dataengine.wal.segment_bytes"); value > 0 {
 		wal.SegmentBytes = value
 	}
-	if value := cfg.GetInt("dataengine.wal.queue_capacity"); value > 0 {
+	if value := read.Int("dataengine.wal.queue_capacity"); value > 0 {
 		wal.QueueCapacity = value
 	}
-	if value := cfg.GetDuration("dataengine.wal.group_commit_interval"); value > 0 {
+	if value := read.Duration("dataengine.wal.group_commit_interval"); value > 0 {
 		wal.GroupCommitInterval = value
 	}
-	if value := cfg.GetInt64("dataengine.wal.max_disk_bytes"); value > 0 {
+	if value := read.Int64("dataengine.wal.max_disk_bytes"); value > 0 {
 		wal.MaxDiskBytes = value
 	}
-	if value := cfg.GetDuration("dataengine.wal.max_unacked_age"); value > 0 {
+	if value := read.Duration("dataengine.wal.max_unacked_age"); value > 0 {
 		wal.MaxUnackedAge = value
 	}
 	wal.OnFatal = mod.onFatal
 	projector := engine.DefaultProjectorOptions()
 	if cfg.IsSet("dataengine.projection.remote_workers") {
-		value := cfg.GetInt("dataengine.projection.remote_workers")
+		value := read.Int("dataengine.projection.remote_workers")
 		if value < 1 || value > 64 {
-			return errors.New("dataengine mod: projection.remote_workers must be between 1 and 64")
+			return errors.Join(read.Err(), errors.New("dataengine mod: projection.remote_workers must be between 1 and 64"))
 		}
 		projector.RemoteProjectionWorkers = value
 	}
-	if value := cfg.GetDuration("dataengine.projection.retry_min"); value > 0 {
+	if value := read.Duration("dataengine.projection.retry_min"); value > 0 {
 		projector.RetryMin = value
 	}
-	if value := cfg.GetDuration("dataengine.projection.retry_max"); value > 0 {
+	if value := read.Duration("dataengine.projection.retry_max"); value > 0 {
 		projector.RetryMax = value
 	}
-	if value := cfg.GetInt("dataengine.projection.batch_records"); value > 0 {
+	if value := read.Int("dataengine.projection.batch_records"); value > 0 {
 		projector.ReplayBatchRecords = value
 	}
-	if value := cfg.GetInt("dataengine.projection.batch_bytes"); value > 0 {
+	if value := read.Int("dataengine.projection.batch_bytes"); value > 0 {
 		projector.ReplayBatchBytes = value
 	}
-	if value := cfg.GetInt("dataengine.projection.read_bytes"); value < 0 {
-		return errors.New("dataengine mod: projection.read_bytes must not be negative")
+	if value := read.Int("dataengine.projection.read_bytes"); value < 0 {
+		return errors.Join(read.Err(), errors.New("dataengine mod: projection.read_bytes must not be negative"))
 	} else if value > 0 {
 		projector.ReplayReadBytes = value
 	}
-	checkpointRecords := cfg.GetInt("dataengine.projection.checkpoint_records")
-	checkpointInterval := cfg.GetDuration("dataengine.projection.checkpoint_interval")
-	maxUnacked := cfg.GetInt64("dataengine.projection.max_unacked_records")
-	warnUnacked := cfg.GetInt64("dataengine.projection.warn_unacked_records")
+	checkpointRecords := read.Int("dataengine.projection.checkpoint_records")
+	checkpointInterval := read.Duration("dataengine.projection.checkpoint_interval")
+	maxUnacked := read.Int64("dataengine.projection.max_unacked_records")
+	warnUnacked := read.Int64("dataengine.projection.warn_unacked_records")
 	if checkpointRecords < 0 || checkpointInterval < 0 || maxUnacked < 0 || warnUnacked < 0 || (maxUnacked > 0 && warnUnacked > maxUnacked) {
-		return errors.New("dataengine mod: invalid projection checkpoint or backlog limits")
+		return errors.Join(read.Err(), errors.New("dataengine mod: invalid projection checkpoint or backlog limits"))
 	}
 	if checkpointRecords > 0 {
 		projector.CheckpointRecords = checkpointRecords
@@ -182,14 +184,14 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		owner = fmt.Sprintf("dataengine-%d", sid)
 	}
 	outbox := engine.OutboxWorkerOptions{
-		Owner: owner, Workers: positive(cfg.GetInt("dataengine.outbox.workers"), 2),
-		BatchSize:     positive(cfg.GetInt("dataengine.outbox.batch_size"), 64),
-		LeaseDuration: duration(cfg.GetDuration("dataengine.outbox.lease_duration"), 30*time.Second),
-		PollInterval:  duration(cfg.GetDuration("dataengine.outbox.poll_interval"), 100*time.Millisecond),
-		RetryMin:      duration(cfg.GetDuration("dataengine.outbox.retry_min"), time.Second),
-		RetryMax:      duration(cfg.GetDuration("dataengine.outbox.retry_max"), time.Minute),
-		MaxPending:    cfg.GetInt64("dataengine.outbox.max_pending"), MaxOldestAge: cfg.GetDuration("dataengine.outbox.max_oldest_age"),
-		BacklogInterval: duration(cfg.GetDuration("dataengine.outbox.backlog_interval"), time.Second),
+		Owner: owner, Workers: positive(read.Int("dataengine.outbox.workers"), 2),
+		BatchSize:     positive(read.Int("dataengine.outbox.batch_size"), 64),
+		LeaseDuration: duration(read.Duration("dataengine.outbox.lease_duration"), 30*time.Second),
+		PollInterval:  duration(read.Duration("dataengine.outbox.poll_interval"), 100*time.Millisecond),
+		RetryMin:      duration(read.Duration("dataengine.outbox.retry_min"), time.Second),
+		RetryMax:      duration(read.Duration("dataengine.outbox.retry_max"), time.Minute),
+		MaxPending:    read.Int64("dataengine.outbox.max_pending"), MaxOldestAge: read.Duration("dataengine.outbox.max_oldest_age"),
+		BacklogInterval: duration(read.Duration("dataengine.outbox.backlog_interval"), time.Second),
 		OnHardLimit:     mod.onFatal,
 	}
 	prefix := strings.Trim(strings.TrimSpace(cfg.GetString("dataengine.effects.subject_prefix")), ".")
@@ -202,22 +204,25 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	mod.cfg = modConfig{
 		mongo: engine.MongoStoreConfig{DefaultDatabase: database, ServerID: sid,
-			TransactionReceiptTTL: duration(cfg.GetDuration("dataengine.transaction_receipt_ttl"), 30*24*time.Hour),
-			ReceiptTTL:            duration(cfg.GetDuration("dataengine.receipt_ttl"), 30*24*time.Hour)},
+			TransactionReceiptTTL: duration(read.Duration("dataengine.transaction_receipt_ttl"), 30*24*time.Hour),
+			ReceiptTTL:            duration(read.Duration("dataengine.receipt_ttl"), 30*24*time.Hour)},
 		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix,
 		effectStream: fnats.JetStreamConfig{
 			Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
-			MaxAge:     duration(cfg.GetDuration("dataengine.effects.max_age"), 7*24*time.Hour),
-			Duplicates: duration(cfg.GetDuration("dataengine.effects.duplicate_window"), 10*time.Minute),
-			Replicas:   positive(cfg.GetInt("dataengine.effects.replicas"), 1),
-			MaxBytes:   positiveInt64(cfg.GetInt64("dataengine.effects.max_bytes"), 8<<30),
+			MaxAge:     duration(read.Duration("dataengine.effects.max_age"), 7*24*time.Hour),
+			Duplicates: duration(read.Duration("dataengine.effects.duplicate_window"), 10*time.Minute),
+			Replicas:   positive(read.Int("dataengine.effects.replicas"), 1),
+			MaxBytes:   positiveInt64(read.Int64("dataengine.effects.max_bytes"), 8<<30),
 		},
-		startupTimeout:  duration(cfg.GetDuration("dataengine.startup_timeout"), 30*time.Second),
-		shutdownTimeout: duration(cfg.GetDuration("dataengine.shutdown_timeout"), 30*time.Second),
+		startupTimeout:  duration(read.Duration("dataengine.startup_timeout"), 30*time.Second),
+		shutdownTimeout: duration(read.Duration("dataengine.shutdown_timeout"), 30*time.Second),
 		pipelined: engine.PipelinedRuntimeConfig{
-			Allowlist: cfg.GetStringSlice("nest.pipelined.allowlist"), Async: cfg.GetBool("nest.pipelined.async"),
-			AsyncWorkers: cfg.GetInt("nest.pipelined.async_workers"), AsyncQueueCap: cfg.GetInt("nest.pipelined.async_queue_capacity"),
+			Allowlist: cfg.GetStringSlice("nest.pipelined.allowlist"), Async: read.Bool("nest.pipelined.async"),
+			AsyncWorkers: read.Int("nest.pipelined.async_workers"), AsyncQueueCap: read.Int("nest.pipelined.async_queue_capacity"),
 		},
+	}
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	return nil
 }

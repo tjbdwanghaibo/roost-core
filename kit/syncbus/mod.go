@@ -91,11 +91,17 @@ func configWarnings(cfg *viper.Viper) []string {
 }
 
 func cfgGetString(cfg *viper.Viper, key string) string { return cfg.GetString(configKey(cfg, key)) }
-func cfgGetInt(cfg *viper.Viper, key string) int       { return cfg.GetInt(configKey(cfg, key)) }
-func cfgGetInt64(cfg *viper.Viper, key string) int64   { return cfg.GetInt64(configKey(cfg, key)) }
-func cfgGetBool(cfg *viper.Viper, key string) bool     { return cfg.GetBool(configKey(cfg, key)) }
-func cfgGetDuration(cfg *viper.Viper, key string) time.Duration {
-	return cfg.GetDuration(configKey(cfg, key))
+
+// 类型化的键经 app.ConfigReader 严格读取（维护者决定 A4）：先按 syncbus / room / sync 的优先级
+// 找到实际生效的完整键名，再读，报错时点名的是部署里写的那个键。
+func cfgInt(cfg *viper.Viper, read *app.ConfigReader, key string) int {
+	return read.Int(configKey(cfg, key))
+}
+func cfgInt64(cfg *viper.Viper, read *app.ConfigReader, key string) int64 {
+	return read.Int64(configKey(cfg, key))
+}
+func cfgDuration(cfg *viper.Viper, read *app.ConfigReader, key string) time.Duration {
+	return read.Duration(configKey(cfg, key))
 }
 
 // SyncBusMod implements app.Mod, providing the service-to-service ISyncBus over NATS or JetStream.
@@ -128,19 +134,23 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 	for _, warning := range configWarnings(cfg) {
 		slog.Warn("syncbus mod: " + warning)
 	}
+	read := app.NewConfigReader(cfg)
 	m.jsCfg = driver.JetStreamSyncConfig{
 		LocalSid:     m.localSid,
 		Prefix:       m.prefix,
 		Stream:       jetStreamStream(cfgGetString(cfg, "stream"), m.prefix),
 		Storage:      parseJetStreamSyncStorage(cfgGetString(cfg, "storage")),
-		AckWait:      cfgGetDuration(cfg, "ack_wait"),
-		MaxDeliver:   cfgGetInt(cfg, "max_deliver"),
-		StreamMaxAge: cfgGetDuration(cfg, "stream_max_age"),
-		Duplicates:   cfgGetDuration(cfg, "duplicates"),
-		Replicas:     cfgGetInt(cfg, "replicas"),
-		MaxBytes:     cfgGetInt64(cfg, "max_bytes"),
-		SetupTimeout: cfgGetDuration(cfg, "setup_timeout"),
-		PublishTime:  cfgGetDuration(cfg, "publish_timeout"),
+		AckWait:      cfgDuration(cfg, read, "ack_wait"),
+		MaxDeliver:   cfgInt(cfg, read, "max_deliver"),
+		StreamMaxAge: cfgDuration(cfg, read, "stream_max_age"),
+		Duplicates:   cfgDuration(cfg, read, "duplicates"),
+		Replicas:     cfgInt(cfg, read, "replicas"),
+		MaxBytes:     cfgInt64(cfg, read, "max_bytes"),
+		SetupTimeout: cfgDuration(cfg, read, "setup_timeout"),
+		PublishTime:  cfgDuration(cfg, read, "publish_timeout"),
+	}
+	if err := read.Err(); err != nil {
+		return fmt.Errorf("syncbus mod: %w", err)
 	}
 	return nil
 }

@@ -169,6 +169,13 @@
   env 文件含凭据，只 source、不输出、不提交；残留的 `ROOST_IT_HOME` 会让脚本报 "refuse unsafe root"。DataEngine 隔离依赖的准备另见 `docs/feature/DATAENGINE-RECOVERY-2026-09-24.md`。
 - Remote 长跑 / 验收（C01、B30、`scripts/perf/remote.sh`）共用 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`，只能串行；中止后按 C01-RUNBOOK §8 清理
   `roost_remote_generated_*` 库与同名前缀 Redis 键，其他库一律不动。
+- **隔离环境是共享的**（维护者决定 A5，2026-10-05；规则源 `kit/scripts/integration/README.md`“共享使用规则”）：多个会话可以并行跑测试。
+  ① 跑 integration 一律加 `-run`，只跑自己的用例；② 故障注入一律自建代理（toxiproxy 上唯一命名、`listen: 127.0.0.1:0`，只删自己的毒）或自起进程，
+  不给共享代理加毒、不 `POST /reset`、不停共享节点；③ Mongo 库 / NATS 流 / Redis 键用自己的前缀并用完删除，生成工程的 DAO 库名改唯一；
+  ④ 全局运维命令（`dataengine-env.sh` 的 up / down / heal / reset / fault / test、`scripts/remote-fault.sh`、故障矩阵、长稳、带 `ROOST_REMOTE_FAULT`
+  的 `test-remote-generated.sh`、调用 fault / heal 的 Go 用例）运行期间必须持有 `remote-acceptance.lock`——脚本自己取锁，Go 用例用
+  `holdAcceptanceLock(t)`（`kit/dataengine/failover_integration_test.go`），新增全局入口照此做；⑤ 锁存在时不跑真实依赖用例。
+  N03 的 1s 事故与 NC-201～203、NC-207 / 208 都是违反其中一条造成的。
 
 ## 历史（包已删除，只留教训）
 

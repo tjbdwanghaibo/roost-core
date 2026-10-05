@@ -1,9 +1,11 @@
 package nats
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/bus"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/bus"
 
 	"github.com/spf13/viper"
 )
@@ -22,7 +24,7 @@ func TestJetStreamRPCConfigFromViper(t *testing.T) {
 	cfg.Set("nats.rpc.replicas", 2)
 	cfg.Set("nats.rpc.max_bytes", int64(1024))
 
-	got, enabled := jetStreamRPCConfigFromViper(cfg)
+	got, enabled := jetStreamRPCConfigFromViper(cfg, app.NewConfigReader(cfg))
 	if !enabled {
 		t.Fatal("jetstream rpc config should be enabled")
 	}
@@ -38,7 +40,7 @@ func TestJetStreamRPCConfigFromViper(t *testing.T) {
 }
 
 func TestJetStreamRPCConfigFromViperDisabledByDefault(t *testing.T) {
-	got, enabled := jetStreamRPCConfigFromViper(viper.New())
+	got, enabled := jetStreamRPCConfigFromViper(viper.New(), app.NewConfigReader(nil))
 	if enabled {
 		t.Fatalf("jetstream rpc config should be disabled by default: %+v", got)
 	}

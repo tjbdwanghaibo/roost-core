@@ -69,10 +69,10 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 - pid 文件对应的进程，只有命令行里带 `" <根目录>/"` 参数时才被认作本环境的进程；
   toxiproxy 的命令行不带根目录，按 `toxiproxy-server … -port <本环境 API 端口>` 认领
   （RR-20261005-NC-202），它的 API 端口被别的进程占着时，`up` 直接拒绝。
-- `<根目录>/remote-acceptance.lock`（Remote 验收锁）被别的运行持有时，除 `status` 外的命令
-  与 `scripts/remote-fault.sh` 都以 2 拒绝；`test` 运行期间自己持锁。故障矩阵和
-  `scripts/perf/remote.sh` 取得锁后导出 `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`，它们调起的
-  `heal` / `remote-fault.sh` 照常执行（RR-20261005-NC-203）。
+- `<根目录>/remote-acceptance.lock`（Remote 验收锁）：除 `status` 外的命令与 `scripts/remote-fault.sh`
+  运行期间都**持有**它，被别的运行持有时以 2 拒绝。取得锁的进程导出
+  `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`，它调起的 `heal` / `fault` / `remote-fault.sh` 沿用这把锁
+  （RR-20261005-NC-203，A5 复核补修）。规则见下一节。
 - 自写的故障用例不要在环境的共享代理（`redis`、`nats-1..3`）上加毒，也不要 `POST /reset`：
   在 `ROOST_DATAENGINE_IT_TOXIPROXY_URL` 上自建唯一命名、`listen: 127.0.0.1:0` 的代理，
   只删自己的毒、清理时删掉代理（`redis/driver`、`kit/nats`、`kit/dataengine`、`versionstore`、
@@ -80,6 +80,29 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
   的三条 `TestToxicNATS*` 曾经仍会 `/reset`、须独占环境，已修复，现在可与其他会话并行。
   仍会 `POST /reset` 的只有 `up` / `heal`（`toxiproxy_heal`），它们本来就是清空整套环境的命令。
 - 端口被根目录之外的进程占着时，`up` 拒绝启动，不会复用别人的服务。
+
+## 共享使用规则（维护者决定 A5，2026-10-05）
+
+这套隔离环境是**共享**的：多个会话（人或 agent）可以同时对它跑测试。为此：
+
+1. **跑 integration 一律加 `-run`**，只跑自己的用例，例如
+   `go test -tags integration -count=1 -run 'TestToxicNATSPartition' ./kit/dataengine/`。不加 `-run` 会把别人
+   的故障用例一起跑起来；整套故障矩阵走 `dataengine-env.sh test`（它持锁）。
+2. **故障注入一律自建代理或进程**：网络故障在 `ROOST_DATAENGINE_IT_TOXIPROXY_URL` 上建自己唯一命名、
+   `listen: 127.0.0.1:0` 的代理，只删自己的毒，清理时删掉代理；要杀进程就自己起一个进程再杀（如
+   `remoteentity` 的 lease 子进程、Redis Cluster 用例自起的节点）。不要给共享代理（`redis`、`nats-1..3`）
+   加毒，不要 `POST /reset`，不要停共享节点。
+3. **资源用自己的前缀，用完删除**：Mongo 库 / 集合、NATS 流与 durable、Redis 键都带本会话唯一的前缀；
+   生成工程的 DAO 库名是编译期常量，跑真实依赖前改成唯一名字。
+4. **全局运维命令必须持有 `remote-acceptance.lock`**：`dataengine-env.sh` 的 `up` / `down` / `heal` /
+   `reset` / `fault` / `test`、`scripts/remote-fault.sh`、故障矩阵 `scripts/test-remote-matrix.sh`、长稳
+   `scripts/perf/remote.sh`、带 `ROOST_REMOTE_FAULT` 的 `scripts/test-remote-generated.sh`，以及调用
+   `dataengine-env.sh fault` / `heal` 的 Go 用例（`kit/dataengine` 的三个 failover 用例经
+   `holdAcceptanceLock(t)` 从 fault 到 heal 整段持锁）。这些入口都自己取锁、别人持有时以 2 拒绝；新增
+   全局入口照此实现，根包 `TestGlobalEnvironmentOperationsHoldTheAcceptanceLock` 与
+   `dataengine_env_test.sh` 会检查。
+5. **锁存在时不跑真实依赖用例**：看到 `<根目录>/remote-acceptance.lock` 说明矩阵、长稳或别人的全局命令
+   正在改环境，等它结束再跑。强杀后残留的锁按 TROUBLESHOOTING T-252 查清持有者后手工 `rmdir`。
 
 脚本自检：`bash kit/scripts/integration/dataengine_env_test.sh`。它只 source 库、只写
 临时目录，不启动进程；开头那次 `status` 只读，会指向当前变量选中的环境。

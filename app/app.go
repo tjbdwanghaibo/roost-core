@@ -118,7 +118,6 @@ func (a *App) run(serverType ServiceName) error {
 	a.cfg.SetDefault("log.dir", "log")
 	a.cfg.SetDefault("log.caller", false)
 	a.cfg.SetDefault("log.rotate_interval", "24h")
-	a.cfg.SetDefault("player_protocol.rate_limit.enabled", false)
 
 	if err := a.cfg.ReadInConfig(); err != nil {
 		if explicitConfig || !isMissingConfig(err) {
@@ -133,18 +132,20 @@ func (a *App) run(serverType ServiceName) error {
 	if err := ValidateServiceConfig(a.cfg); err != nil {
 		return err
 	}
-	clock.SetOffset(a.cfg.GetDuration("time.logic_offset"))
+	// 类型已由 ValidateServiceConfig 严格检查过；这里同样严格读取，不再经宽松 getter（维护者决定 A4）。
+	read := NewConfigReader(a.cfg)
+	clock.SetOffset(read.Duration("time.logic_offset"))
 	fctx.SetRuntimeConfig(a.cfg)
 	if err := flog.Init(flog.Options{
 		LevelText:        a.cfg.GetString("log.level"),
-		JSON:             a.cfg.GetBool("log.json"),
-		Stdout:           a.cfg.GetBool("log.stdout"),
-		File:             a.cfg.GetBool("log.file"),
+		JSON:             read.Bool("log.json"),
+		Stdout:           read.Bool("log.stdout"),
+		File:             read.Bool("log.file"),
 		Dir:              a.cfg.GetString("log.dir"),
 		Service:          string(serverType),
-		Sid:              a.cfg.GetInt("sid"),
-		Caller:           a.cfg.GetBool("log.caller"),
-		RotateInterval:   a.cfg.GetDuration("log.rotate_interval"),
+		Sid:              read.Int("sid"),
+		Caller:           read.Bool("log.caller"),
+		RotateInterval:   read.Duration("log.rotate_interval"),
 		RotateTimeFormat: a.cfg.GetString("log.rotate_time_format"),
 		FrameFunc:        nest.CurTick,
 	}); err != nil {
@@ -158,7 +159,7 @@ func (a *App) run(serverType ServiceName) error {
 		"name", a.name,
 		"version", a.version,
 		"type", serverType,
-		"sid", a.cfg.GetInt("sid"),
+		"sid", read.Int("sid"),
 		"config", cfgPath,
 	)
 
@@ -169,7 +170,7 @@ func (a *App) run(serverType ServiceName) error {
 		Service: string(serverType),
 		Name:    a.name,
 		Data: map[string]any{
-			"sid":    a.cfg.GetInt("sid"),
+			"sid":    read.Int("sid"),
 			"config": cfgPath,
 		},
 	}); err != nil {
@@ -385,7 +386,7 @@ func (a *App) run(serverType ServiceName) error {
 	cancel()
 
 	// --- Graceful shutdown ---
-	shutdownTimeout := a.cfg.GetDuration("shutdown.total_timeout")
+	shutdownTimeout, _ := ConfigDuration(a.cfg, "shutdown.total_timeout") // 启动时已严格检查
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = 30 * time.Second
 	}

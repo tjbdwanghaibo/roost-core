@@ -131,4 +131,63 @@ require_safe_root && printf "%s %s\n" "$ROOST_IT_ROOT" "$(roost_it_port 27117)"
 ' _ "$scratch" "$lib")"
 [[ "$sourced_output" == "$scratch/roost-dataengine-it 28117" ]] || fail "sourced env.sh does not select its own root: $sourced_output"
 
+# 验收锁（维护者决定 A5，接 RR-20261005-NC-203）：会改动整套环境的全局入口在运行期间持有
+# <根>/remote-acceptance.lock，别人持有时以 2 拒绝，持锁者的子进程沿用。用临时根（偏移 31000，没有任何进程）
+# 加 PATH 垫片观察：垫片命令被调用时记下锁目录在不在，然后失败退出，所以不会碰到任何真实服务。
+# 修前：fault / heal / remote-fault 只检查锁空闲、自己不持有，垫片记下的是 free。
+lock_home="$scratch/lockhome"
+lock_root="$lock_home/roost-dataengine-it"
+lock_dir="$lock_root/remote-acceptance.lock"
+shims="$scratch/shims"
+observed="$scratch/observed"
+mkdir -p "$lock_root" "$shims"
+printf '31000\n' > "$lock_root/port-offset"
+for shim in mongod mongosh nats-server redis-server redis-cli curl jq nc go; do
+	cat > "$shims/$shim" <<SHIM
+#!/usr/bin/env bash
+if [[ -d "$lock_dir" ]]; then state=held; else state=free; fi
+printf '%s lock=%s\\n' "$shim" "\$state" >> "$observed"
+exit 1
+SHIM
+	chmod +x "$shims/$shim"
+done
+# run_locked NAME COMMAND...：在临时根上跑，返回退出码；垫片记录写进 $observed。
+run_locked() {
+	local code=0
+	: > "$observed"
+	env -u ROOST_REMOTE_ACCEPTANCE_LOCK_HELD PATH="$shims:$PATH" ROOST_IT_HOME="$lock_home" ROOST_IT_PORT_OFFSET=31000 \
+		ROOST_DATAENGINE_IT_ROOT="$lock_root" ROOST_DATAENGINE_IT=1 \
+		ROOST_DATAENGINE_IT_MONGO_URI=mongodb://127.0.0.1:1 ROOST_DATAENGINE_IT_REDIS_ADDR=127.0.0.1:1 ROOST_DATAENGINE_IT_NATS_URL=nats://127.0.0.1:1 \
+		"$@" >/dev/null 2>&1 || code=$?
+	return "$code"
+}
+expect_held_while_running() {
+	local name="$1"
+	shift
+	run_locked "$@" || true
+	[[ -s "$observed" ]] || fail "$name: no shim was reached, the check observed nothing"
+	! grep -q 'lock=free' "$observed" || fail "$name: ran without holding the acceptance lock:
+$(cat "$observed")"
+	[[ ! -d "$lock_dir" ]] || fail "$name: left $lock_dir behind after exiting"
+}
+expect_held_while_running "fault mongo-primary" "$script" fault mongo-primary
+expect_held_while_running "heal" "$script" heal
+expect_held_while_running "remote-fault.sh mongo-primary" bash "$repo_root/../scripts/remote-fault.sh" mongo-primary
+expect_held_while_running "test-remote-generated.sh with ROOST_REMOTE_FAULT" env ROOST_REMOTE_FAULT=nats-node bash "$repo_root/../scripts/test-remote-generated.sh"
+# 别人持锁：拒绝（2），不碰服务，锁原样保留。
+mkdir "$lock_dir"
+for command in "fault mongo-primary" "heal" "down"; do
+	code=0
+	# shellcheck disable=SC2086
+	run_locked "$script" $command || code=$?
+	[[ "$code" -eq 2 && ! -s "$observed" && -d "$lock_dir" ]] || fail "$command while another run holds the lock: code $code, observed $(cat "$observed")"
+done
+# 持锁者的子进程（ROOST_REMOTE_ACCEPTANCE_LOCK_HELD 指向这把锁）沿用它，退出时不释放。
+: > "$observed"
+env PATH="$shims:$PATH" ROOST_IT_HOME="$lock_home" ROOST_IT_PORT_OFFSET=31000 ROOST_DATAENGINE_IT_ROOT="$lock_root" \
+	ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$lock_dir" "$script" fault mongo-primary >/dev/null 2>&1 || true
+grep -q 'mongosh lock=held' "$observed" || fail "the holder's child was refused: $(cat "$observed")"
+[[ -d "$lock_dir" ]] || fail "the holder's child released the holder's lock"
+rmdir "$lock_dir"
+
 echo "dataengine environment shell tests passed"
