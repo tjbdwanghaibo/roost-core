@@ -1,0 +1,11 @@
+table go: <scratch>/tablegen-runtime.pQ2pvp/configs/generated/gen_table_config.go
+--- PASS: TestGeneratedLoaderReadsTheTables (0.00s)
+    roundtrip_test.go:73: reload with a dangling scene_id = <nil>, want a reference error
+    roundtrip_test.go:73: reload with a dangling scene_id = <nil>, want a reference error
+--- FAIL: TestDanglingRefIsRejectedOnLoadAndReload (0.00s)
+    --- FAIL: TestDanglingRefIsRejectedOnLoadAndReload/monster_points_at_no_scene (0.00s)
+    --- FAIL: TestDanglingRefIsRejectedOnLoadAndReload/the_scene_it_points_at_is_removed (0.00s)
+FAIL
+FAIL	tablegenruntime/configs/generated	0.754s
+FAIL
+exit=1

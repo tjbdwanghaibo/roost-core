@@ -1,0 +1,4 @@
+--- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput (2.44s)
+    --- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/generate_while_dev-run_writes_logs_and_WAL (1.20s)
+        runtime_dirs_promises_test.go:85: runtime output .dev/quoted.log did not survive: stat <tmp>: no such file or directory
+    --- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/sync_while_dev-run_writes_logs_and_WAL (0.42s)
