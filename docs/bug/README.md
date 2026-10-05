@@ -18,14 +18,14 @@
 
 **10-05 N09 skill 第一批（revn09）：NC-110 P2、NC-111 P2、NC-112 P2、NC-113 P3 已修复、声明场景验证，未发版。** 施法终止路径各自手写收尾：启动失败复用 cast ID 却留下排程任务、Cancel / Release 中途出错停在半终止占住施法者、失败的 policy cast 不释放槽位；combatcomponent 的 Combatant 副本共享 map。combat 状态随 Nest 回滚恢复（NC-61 同形已核对，不成立）。[本轮](../review/REVIEW-2026-10-05-n09-batch1.md)。
 
-**10-05 N03 通信 / etcd（revn03）：NC-90 / 91 / 92 三个 P2 与 NC-93 P3，已复现，未修复。** 真实 JetStream 停止时在途 handler 不被排空、回包注定丢失；轻量 RPC 被派发队列拒绝不回包并误入死信；JetStream 部署里的轻量调用被请求流截获“报错却执行”；选主 Resign 不受预算约束。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](../review/evidence/noncore-review-20261005-n03/README.md)
+**10-05 N03 通信 / etcd（revn03）：NC-90 / 91 / 92 三个 P2 与 NC-93 P3，已修复、声明场景验证（含真实 NATS / etcd），未发版。** 真实 JetStream 停止时在途 handler 不被排空、回包注定丢失；轻量 RPC 被派发队列拒绝不回包并误入死信；JetStream 部署里的轻量调用被请求流截获“报错却执行”；选主 Resign 不受预算约束。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](../review/evidence/noncore-review-20261005-n03/README.md)
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-93](RR-20261005-NC-93.md) | P3 etcd 选主正常 Resign 不受调用方预算约束，etcd 无响应时阻塞到 session TTL | 已复现，未修复 |
-| [RR-20261005-NC-92](RR-20261005-NC-92.md) | P2 JetStream 部署里的轻量 RPC 被请求流截获：调用方得到 version 0 错误，请求却被无期限执行 | 已复现，未修复 |
-| [RR-20261005-NC-91](RR-20261005-NC-91.md) | P2 轻量 RPC 被派发队列拒绝时不回包（调用方等满超时），开可靠总线时误入死信 | 已复现，未修复 |
-| [RR-20261005-NC-90](RR-20261005-NC-90.md) | P2 Bus 停止不等在途 JetStream RPC handler，回包注定丢失、连接在 handler 底下关闭 | 已复现，未修复 |
+| [RR-20261005-NC-93](RR-20261005-NC-93.md) | P3 etcd 选主正常 Resign 不受调用方预算约束，etcd 无响应时阻塞到 session TTL | 已修复（[记录](../bugfix/RR-20261005-NC-93.md)），未发版 |
+| [RR-20261005-NC-92](RR-20261005-NC-92.md) | P2 JetStream 部署里的轻量 RPC 被请求流截获：调用方得到 version 0 错误，请求却被无期限执行 | 已修复（[记录](../bugfix/RR-20261005-NC-92.md)），未发版 |
+| [RR-20261005-NC-91](RR-20261005-NC-91.md) | P2 轻量 RPC 被派发队列拒绝时不回包（调用方等满超时），开可靠总线时误入死信 | 已修复（[记录](../bugfix/RR-20261005-NC-91.md)），未发版 |
+| [RR-20261005-NC-90](RR-20261005-NC-90.md) | P2 Bus 停止不等在途 JetStream RPC handler，回包注定丢失、连接在 handler 底下关闭 | 已修复（[记录](../bugfix/RR-20261005-NC-90.md)），未发版 |
 
 **10-05 N06 S1/S2/S3/S6 复核（revn06）：NC-50 P3、NC-51 P3、NC-52 P2 与 RR-20261001-06 残余已修复、声明场景验证，未发版。** 换名也释放名字已被他人提交的死建角计划、补偿失败重新计数；activity sweep 对已确认 Keys 先验证键合法/归属；versionstore RedisStore 退避后重读，消除伪 ErrConflict。[本轮](../review/REVIEW-2026-10-05-n06-revn06.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。
 

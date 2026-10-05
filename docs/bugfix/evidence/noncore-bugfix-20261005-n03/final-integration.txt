@@ -1,0 +1,2 @@
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	5.033s
+ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	9.193s

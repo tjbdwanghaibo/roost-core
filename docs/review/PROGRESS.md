@@ -1,5 +1,21 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N03 bus / nats / servicerpc / etcd（revn03）
+
+基线 `be7bcc18`，分支 `revn03`，NC 段 90～99（用 90～93）；图谱 generation 2026-09-30 早于 N03 全部 10-04 / 10-05 修复，以当前源码补证。[本轮](REVIEW-2026-10-05-noncore-n03.md) · [审查证据](evidence/noncore-review-20261005-n03/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n03/README.md)。审查 `e81d81bc`，修复 `ae742984` / `64179ad5` / `25646001` / `89a102db`。
+
+| 子域 | 场景（真实依赖） | 状态 / 下一入口 |
+| --- | --- | --- |
+| JetStream 发布 / ACK / Term / 重投 | 共享隔离 NATS：业务错误单次 ACK、解码失败 5 次后 Term、回包失败重投 5 次、AckWait < handler 重复执行 | 契约成立；O1～O3 观察 |
+| 重连 | 自起 nats-server 重启：中断期调用按期限返回、约 1.1s 恢复 | 成立；多节点集群未验 |
+| 在途关闭 / 再次 Stop | Stop 不等 JetStream handler、回包随停止取消 | **NC-90 已修**；真实 NATS 停止返回 ctx 错误并保留、重试收敛、ACK 一次 |
+| 满队列 fallback | Bus 派发池拒绝 RPC 不回包、进死信；RPC callback 池 fallback 复用 NC-09 回归 | **NC-91 已修**（2.0s 超时 → 0.3ms 拒绝） |
+| 传输混用 | JetStream 部署里的轻量调用被请求流截获、报错却执行 | **NC-92 已修** |
+| ServiceRPC 发现 + 剩余期限 | 真实 etcd 注册 + 真实 NATS：JetStream handler 看到 796 / 800ms | 成立；轻量路径不传期限（O8） |
+| etcd Resign / Deregister 预算 | SIGSTOP 临时 etcd：Resign 阻塞 >20s；Deregister 500ms 返回 | **NC-93 已修**；Deregister 成立 |
+| 服务端清理 / lease / watch 恢复 | 正常 Resign lease 撤销、键清零；lease 消失后 1.2s 重注册；断网 + 压缩后 Mirror 恢复 | 成立；O5～O7 观察 |
+
+新增正式回归：bus 7（NC-90 3、NC-91 2、NC-92 2）、etcd/driver 2，integration 4（kit/nats 2、etcd/driver 2），均修前红 → 修后绿。改动包 race×3、integration race、全仓 build/vet、根包、18 个依赖包测试通过。N03 本单元的真实依赖场景收口；多节点 NATS / etcd HA、长时容量仍为外部项。方向判断（Bus 停止 / 排空、etcd 选主）见本轮末节。
 ## 2026-10-05 N08 codegen（revn08，macOS）
 
 起点 `50e9a4e8`，交付前快进到 `be7bcc18`；独立 worktree 分支 `revn08`。cb11be90 的重发信号 / 进程树补修直接复用未重审；`add saga` 生成部分与赠礼 demo 步骤属 U-0280，未读改。[本轮](REVIEW-2026-10-05-n08-codegen.md) · [证据](evidence/noncore-review-20261005-n08/README.md)。NC-70～73 四个 P3 已修复、声明场景验证，未发版。

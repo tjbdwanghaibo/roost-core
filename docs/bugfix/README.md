@@ -1,5 +1,13 @@
 # Bugfix 记录
 
+**10-05 N03 通信 / etcd（revn03）：NC-90～92 三个 P2 与 NC-93 P3 已修复、声明场景验证（含真实 NATS / etcd），未发版。** Bus 停止把在途 JetStream handler 纳入排空、回包不随停止取消；派发池拒绝的轻量 RPC 立即回失败包、不进死信；被 JetStream 请求流截获的轻量调用不执行并返回 `bus.ErrRPCCapturedByJetStream`；Resign 按调用方期限返回。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](evidence/noncore-bugfix-20261005-n03/README.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-93](RR-20261005-NC-93.md) | Resign 改走 election 持有的有界撤销（RR-06 的 abandon），按调用方期限返回 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-92](RR-20261005-NC-92.md) | 服务端拒绝没有 ReplySubject 的 JetStream RPC 请求；调用端识别 PubAck 返回 ErrRPCCapturedByJetStream | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-91](RR-20261005-NC-91.md) | 派发池拒绝的轻量 RPC 立即回失败 envelope，不写死信 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-90](RR-20261005-NC-90.md) | JetStream 请求准入 / 在途计数并入 Bus 停止；回包预算改为调用方期限 | 已修复、声明场景验证，未发版 |
 **10-05 N08 codegen（revn08）：NC-70～73 四个 P3 已修复、声明场景验证，未发版。** 5 条正式入口回归修前红、修后绿（中断 deps / generate 两子测试、diff / dry-run 两条、cfggen 帮助一条、ID 扫描一条），正式 CLI 中断实验与旧工程 upgrade 预览复跑一致；cfggen 正式运行期门补 skipempty / 显式索引名 / uint64 / string 前向 ref 形状（含负对照）。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md) · [证据](../review/evidence/noncore-review-20261005-n08/README.md)
 
 | 编号 | 修复 | 状态 |

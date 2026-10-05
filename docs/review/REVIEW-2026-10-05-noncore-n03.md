@@ -55,3 +55,27 @@
 **NATS / Bus 停止与排空**：近两天同一不变量（“停止返回 = 回调已静止、资源可释放；重试收敛”）连续被打破——[RR-20261004-07](../bug/RR-20261004-07.md)（Bus pool 超预算后重试永远失败）、[NC-09](../bugfix/RR-20261004-NC-09.md)（RPC 回调停止预算）、[RR-20261004-08](../bug/RR-20261004-08.md)（连接 drain 后重试永不收敛），本轮 NC-90（JS handler 根本不在排空范围内）。修复一直在加状态（`stopDone` / `teardownDone` / `drainPool` / `ErrClosedUndrained`）。根因是实现方向：Bus 有四个执行入口（worker pool、core 订阅回调、JetStream consume 回调、RPC callback 池），各自的生命周期由不同层零散地停。建议方向：**所有 Bus 拥有的回调入口经同一个“准入 + 在途计数”门，停止只有一个状态机**（先关准入、再按序停订阅、再等在途归零、最后交还连接）；或者把 JetStream handler 也投进 pool，使 pool 成为唯一排空点（代价：JetStream 的顺序 / 背压语义要改成“池满即 NAK”）。NC-90 的修复按前者的最小形态实现（JS 请求入口的准入 / 在途门并入现有停止），没有做全面重构。
 
 **etcd 选主**：NC-11 → RR-20261004-06（NC-11 的回退）→ NC-12 → `b67d5945` → 本轮 NC-93，五个问题都在“取消 / 撤销 lease 的所有权与预算”上。`71c6fb6b` 之后 kit 已不再发布选举工厂，进程级单例由 App 单实例锁承担，选举代码在仓内没有生产调用方。建议维护者考虑：**弃用或移出 core 的选举 API**（保留 Discovery / Mirror），而不是继续为无人使用的路径打补丁；若保留，正常 Resign 与失败放弃应只走同一条撤销路径（NC-93 的修复即合并到 RR-06 的 `abandon`，减少一个分支）。
+
+## 修复与验证（同日）
+
+审查记录先提交（`e81d81bc`），再逐条修复：
+
+| 问题 | 提交 | 修前红 | 修后绿 |
+| --- | --- | --- | --- |
+| [NC-90](../bug/RR-20261005-NC-90.md) | `ae742984` | 包内 3 例中 2 例红（控制例保持绿）；真实 NATS `budgeted stop ... err=<nil> asm_retained=false` | 包内 3 例；真实 NATS 停止返回 ctx 错误并保留、重试 nil、调用方拿到回包、ack_pending=0 |
+| [NC-91](../bug/RR-20261005-NC-91.md) | `64179ad5` | 无回包、1 / 48 条 RPC 进死信；真实 NATS 2.0s 超时 | 立即失败回包、不进死信；真实 NATS 0.3ms |
+| [NC-92](../bug/RR-20261005-NC-92.md) | `25646001` | 业务执行、version 0；真实 NATS handler runs=2 | `ErrRPCCapturedByJetStream`、runs=0、ack_pending=0 |
+| [NC-93](../bug/RR-20261005-NC-93.md) | `89a102db` | 包内 2s 仍阻塞；真实 etcd 5s 仍阻塞 | 51ms / 502ms 返回 DeadlineExceeded，解冻后另一候选当选 |
+
+组合复核（[fix-contract-review](../agent-skills/roost-coding/references/fix-contract-review.md)）：
+
+- NC-90 新错误（`errJetStreamRPCStopping`、中断返回）只交给 driver 的 settle，均为非永久错误 → NAK 重投；已到 MaxDeliver 时 Term，与修前一致。停止超预算 → 放行 handler → 新 ctx 重试 → 连接关闭，真实 NATS 有界回归覆盖；Start 失败清理路径修前已停掉全部 JetStream 订阅，本条未改变。
+- NC-91 调用方从“超时 / 未知”变为“远端错误 / 未执行”，错误码与无 handler 拒绝相同（`CodeInternal`），无法仅凭码与业务错误区分——在修复记录里写明，未新增线协议错误码。
+- NC-92 旧版服务端仍会执行被截获的请求；错误注释写明滚动升级期间不能凭它判断“未执行”。
+- NC-93 健康 etcd 上 Background ctx 的 Revoke 截止由 60s 变 5s；超时时 lease 随 TTL 回收。
+
+修复后探针全量复跑（[NATS](../bugfix/evidence/noncore-bugfix-20261005-n03/probe-nats-after-fix.txt) / [etcd](../bugfix/evidence/noncore-bugfix-20261005-n03/probe-etcd-after-fix.txt)）：四条反例转绿，其余控制结果不变。`GOWORK=off`：gofmt 空；`go build ./... && go vet ./...`；`go vet -tags integration ./bus/ ./kit/nats/ ./etcd/...`；`go test -race -count=3 ./bus/ ./kit/nats/ ./nats/... ./etcd/... ./servicerpc/`；`go test -tags integration -race -count=1 ./kit/nats/ ./etcd/driver/`；根包 `go test -count=1 .`；导入改动包的 18 个包 `go test -count=1` 全部通过。未改生成形状，未跑 codegen / game-demo 生成。
+
+**环境事故（如实记录）**：最后一次 `go test -tags integration -race ./kit/nats/`（整包，没有 `-run`）带上了既有的 `TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen`：env.sh 导出了 toxiproxy，它对共享 toxiproxy 做了两次 `/reset`、给 nats-1～3 代理加了约 1s 的半开 toxic，并创建 / 删除了 `ROOST_IT_RPC_*` 两条流。事后核对：toxiproxy 四个代理均无 toxic，共享 NATS 上没有 `ROOST_IT_RPC_*` / `REVN03_*` / `RR_NC9*` 残留流。其间若有别的 agent 经代理 URL 访问 NATS，会遇到约 1s 中断、其自设的 toxic 会被清掉。下一位在共享环境跑 kit/nats integration 时用 `-run` 限定，不要整包跑。
+
+清理：共享 NATS 上本轮流（`REVN03_*`、`RR_NC90_*`、`RR_NC92_*`）已按前缀列出确认为空；自起 nats-server（15322）已停、store 已删；临时 etcd 均随用例 kill，数据目录为 `t.TempDir()`；探针文件已删除未提交。

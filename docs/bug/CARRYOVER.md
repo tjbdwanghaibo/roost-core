@@ -66,7 +66,7 @@
 | NC-08协议消费 | 正式CallReliable进程内请求/回包/关联/解码、marshal/publish失败cause | 真实NATS/JetStream往返、重投/业务幂等；[记录](../bugfix/RR-20261004-NC-08.md) |
 | NC-09停止所有权 | 真pool、满队列fallback、停止前已领取终态、并发/取消重试与callback内可取消等待 | connected Assembly/Kit停止、断线与长期容量；新增短锁/计数暂无bench，[记录](../bugfix/RR-20261004-NC-09.md) |
 | NC-10发现预算 | 协作发现/picker/transport同一deadline，短parent/晚到候选拒绝 | 真实etcd发现及生成服务进程消费者；[记录](../bugfix/RR-20261004-NC-10.md) |
-| NC-11选主生命周期 | 真SDK LeaseGrant取消/超时、成功后的caller解绑、旧session隔离、正常Close先Revoke后释放ctx | 真实etcd租约/选主恢复、正常Resign的Revoke预算及失败Grant的服务端未知结果；[记录](../bugfix/RR-20261004-NC-11.md) |
+| NC-11选主生命周期 | 真SDK LeaseGrant取消/超时、成功后的caller解绑、旧session隔离、正常Close先Revoke后释放ctx | 真实etcd租约/选主恢复、正常Resign的Revoke预算及失败Grant的服务端未知结果；[记录](../bugfix/RR-20261004-NC-11.md)。10-05 revn03：真实etcd上lease恢复、正常Resign服务端清理已验证，Resign预算登记并修复为[NC-93](RR-20261005-NC-93.md)；失败Grant的服务端未知结果与HA仍开放 |
 | NC-12订阅关闭 | 唯一watcher清理、caller有界等待、parent取消、并发重试、handler/watch退出后Done、关闭错误 | 真实etcd watch集成和非协作依赖的长期清理容量；[记录](../bugfix/RR-20261004-NC-12.md) |
 
 NC-11/12现已修复，最终15项新增正式用例通过；真实etcd集成仍缺本机binary，完整N03恢复矩阵仍部分完成，见[最新进度](../review/PROGRESS.md)。

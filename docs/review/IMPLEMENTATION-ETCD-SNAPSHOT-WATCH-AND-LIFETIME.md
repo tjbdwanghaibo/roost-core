@@ -27,3 +27,7 @@ Publish/Delete不直接修改本地镜像，权威watch才推进本地状态。C
 关闭调用预算到期只终止该caller的等待，subscription继续拥有清理责任。非协作handler或第三方watcher仍可无限期占用该责任，本轮未提供强制终止，也不把提前返回当作已关闭。
 
 修复保留原8项探针的红/绿证据，并新增控制，最终15项正式用例通过，两个etcd测试包race回归和三包vet通过。实际gRPC LeaseGrant验证了真正SDK调用，但server只实现故障注入接口，不能代表完整etcd一致性。NC-12使用受支持第三方watcher门闩，不误报core watcher永久阻塞。O(n)快照、JSON克隆、subscriber数量/队列总内存是后续容量观察，尚无benchmark/HA/长稳结论。
+
+## 10-05 后续（revn03）
+
+上文“正常Resign仍可能等待SDK默认TTL 60秒的Revoke”在真实etcd上复现（SIGSTOP后Resign(500ms)阻塞>20s），登记并修复为[NC-93](../bug/RR-20261005-NC-93.md)：正常Resign与失败放弃现在走同一个`abandon`——Orphan停keepalive，Revoke由election持有、5s截止，caller在等就拿结果，期限先到返回ctx错误。同轮在真实etcd上验证了lease消失后约1.2s重注册、断网期间写入+压缩后Mirror重载恢复；Mirror的`Synced`表示watch已建立而非连接可达（断网期间仍为true），见[本轮观察O6](REVIEW-2026-10-05-noncore-n03.md#观察未登记-rr)。选举API在仓内已无生产调用方，去留见本轮方向判断。
