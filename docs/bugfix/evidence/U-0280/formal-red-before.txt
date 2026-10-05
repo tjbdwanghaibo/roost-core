@@ -1,0 +1,44 @@
+# 基线 50e9a4e8，GOWORK=off go test -count=1 -run TestNativeStep -v ./saga/（正式用例，修前）
+=== RUN   TestNativeStepCancellationAndFenceRecovery
+=== RUN   TestNativeStepCancellationAndFenceRecovery/cancelled_delivery
+=== RUN   TestNativeStepCancellationAndFenceRecovery/fenced_before_wal
+--- PASS: TestNativeStepCancellationAndFenceRecovery (0.00s)
+    --- PASS: TestNativeStepCancellationAndFenceRecovery/cancelled_delivery (0.00s)
+    --- PASS: TestNativeStepCancellationAndFenceRecovery/fenced_before_wal (0.00s)
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation/a:_late_result_accepted_while_k+1_waits,_k+1_replays_it
+    step_operation_promises_test.go:56: operation gift-1:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-1:1:0:1 gift-1:1:0:2] (handler ran 2 times)
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation/b:_late_result_dropped_during_backoff,_k+1_replays_it
+    step_operation_promises_test.go:78: operation gift-2:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-2:1:0:1 gift-2:1:0:2] (handler ran 2 times)
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation/c:_replay_after_the_deadline_is_skipped,_nothing_takes_effect
+    step_operation_promises_test.go:93: attempt gift-3:1:0:1 was replayed 55s after its deadline and still took effect: the claim lease outlived the command deadline, so the saga stays failed with an uncompensated debit
+    step_operation_promises_test.go:97: operation gift-3:1:0 took effect 1 time(s) with 1 success receipt(s), want 0: debits by [gift-3:1:0:1] (handler ran 1 times)
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation/c':_success_projected_before_the_deadline_but_delivered_after_abandonment_is_alarmed,_not_reopened
+    step_operation_promises_test.go:117: success of gift-4:1:0:1 arrived after the coordinator abandoned the step; saga.completion.late_after_abandon_total grew by 0, want 1 (duplicates grew by 1): an effective but uncompensated step must be visible
+=== RUN   TestNativeStepTakesEffectAtMostOncePerOperation/d:_projection_backlog,_k+1_supersedes_the_unprojected_k
+    step_operation_promises_test.go:133: attempt gift-5:1:0:1 was projected after attempt gift-5:1:0:2 superseded it: the step took effect twice
+    step_operation_promises_test.go:139: operation gift-5:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-5:1:0:2 gift-5:1:0:1] (handler ran 2 times)
+--- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation (0.00s)
+    --- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation/a:_late_result_accepted_while_k+1_waits,_k+1_replays_it (0.00s)
+    --- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation/b:_late_result_dropped_during_backoff,_k+1_replays_it (0.00s)
+    --- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation/c:_replay_after_the_deadline_is_skipped,_nothing_takes_effect (0.00s)
+    --- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation/c':_success_projected_before_the_deadline_but_delivered_after_abandonment_is_alarmed,_not_reopened (0.00s)
+    --- FAIL: TestNativeStepTakesEffectAtMostOncePerOperation/d:_projection_backlog,_k+1_supersedes_the_unprojected_k (0.00s)
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions/Resume_after_a_late_effective_step_replays_it_instead_of_running_it_again
+    step_operation_promises_test.go:169: operation gift-6:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-6:1:0:1 gift-6:1:0:r1:1] (handler ran 2 times)
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions/saga_deadline_abandons_a_step_whose_success_arrives_later:_alarm,_no_reopen
+    step_operation_promises_test.go:188: late success after the saga deadline grew the alarm by 0, want 1
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions/a_retryable_failure_does_not_stop_a_later_attempt_from_running
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions/a_refusal_dropped_during_backoff_is_replayed_in_the_same_life,_not_in_a_resumed_one
+    step_operation_promises_test.go:253: a refused step ran 2 times in one life, want 1
+=== RUN   TestNativeStepOperationInterleavingsWithCoordinatorDecisions/after_receipt_and_tombstone_TTL_a_late_success_is_not_recorded,_not_alarmed,_not_applied
+--- FAIL: TestNativeStepOperationInterleavingsWithCoordinatorDecisions (0.00s)
+    --- FAIL: TestNativeStepOperationInterleavingsWithCoordinatorDecisions/Resume_after_a_late_effective_step_replays_it_instead_of_running_it_again (0.00s)
+    --- FAIL: TestNativeStepOperationInterleavingsWithCoordinatorDecisions/saga_deadline_abandons_a_step_whose_success_arrives_later:_alarm,_no_reopen (0.00s)
+    --- PASS: TestNativeStepOperationInterleavingsWithCoordinatorDecisions/a_retryable_failure_does_not_stop_a_later_attempt_from_running (0.00s)
+    --- FAIL: TestNativeStepOperationInterleavingsWithCoordinatorDecisions/a_refusal_dropped_during_backoff_is_replayed_in_the_same_life,_not_in_a_resumed_one (0.00s)
+    --- PASS: TestNativeStepOperationInterleavingsWithCoordinatorDecisions/after_receipt_and_tombstone_TTL_a_late_success_is_not_recorded,_not_alarmed,_not_applied (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	0.270s
+FAIL

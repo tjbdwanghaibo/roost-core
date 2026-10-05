@@ -195,7 +195,7 @@ bash scripts/test-remote-matrix.sh
 
 10-05 N07第一批：[NC-60](bug/RR-20261005-NC-60.md) / [NC-61](bug/RR-20261005-NC-61.md) / [NC-62](bug/RR-20261005-NC-62.md) / [NC-63](bug/RR-20261005-NC-63.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。模板改动需 `roost project sync`；用常量编号的 errcode / float 属性声明在生成期失败；T-227/228。
 
-10-05 drill6 saga：[U-0281](bugfix/U-0281-saga-expired-command-nak-forever.md) **已修复，未发版**——原生步骤消费者对过期且无回执的命令改为 ack（修前返回 `context.DeadlineExceeded` 无限 nak，占满共享 durable 的 MaxAckPending），T-225。[U-0280](bugfix/U-0280-saga-step-reexecuted-after-crash.md) **已定位、已确定性复现，方案待维护者决定，未实施**——收件箱按 CommandID 去重、命令截止只有一次 Timeout 而 claim 租约 2 分钟、协调器丢弃 / 吞掉迟到结果，崩溃或投影积压后同一步骤再执行一次、或放弃后迟到生效；v1.19.2 同样存在；记录含候选 A～F、推荐与“saga 方向判断”（身份 / 时间 / 最终性三处设计未对齐，建议先定步骤执行契约再修），T-226。
+10-05 drill6 saga：[U-0281](bugfix/U-0281-saga-expired-command-nak-forever.md) **已修复，未发版**——原生步骤消费者对过期且无回执的命令改为 ack（修前返回 `context.DeadlineExceeded` 无限 nak，占满共享 durable 的 MaxAckPending），T-225。[U-0280](bugfix/U-0280-saga-step-reexecuted-after-crash.md) **已修复，未发版**（维护者 10-05 决定按推荐 A + B + C'）——原生步骤执行契约写进 SAGA.md：同一操作实例（saga + 步骤 + 方向）最多生效一次（收件箱按操作实例互斥并回放、过期旧尝试被接替后 fence 跳过）、claim 租约封顶到命令截止（投影积压超过 Timeout 时步骤停住而不是重复执行）、协调器放弃后才到的成功只告警（`saga.completion.late_after_abandon_total`）；步骤超时与重试次数改由 `saga.step_defaults` / `saga.steps.<type>.<step>` 配置，game-demo debit 15 次改为配置覆盖；kill -9 复现修前重复扣款 7 / 重复退款 3、修后 0；混跑只在全部升级后成立，Mongo 步骤仍按业务幂等，T-226。
 
 10-05第十七批：[NC-41](bug/RR-20261005-NC-41.md) / [NC-42](bug/RR-20261005-NC-42.md) **已修复、声明场景验证，未发版**；[outbox修复](bugfix/RR-20261005-NC-41.md)、[opening修复](bugfix/RR-20261005-NC-42.md)。[RR-20261001-09残余](bugfix/RR-20261001-09.md#复核后的补修2026-10-05)追加、未发版，T-181修订，本轮T-223/224；无格式/API/自动迁移。
 

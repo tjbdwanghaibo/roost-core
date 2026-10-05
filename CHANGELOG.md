@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **原生 saga 步骤同一操作最多生效一次，kill -9 / 投影积压后不再以新尝试再执行一次，放弃后迟到的成功不再静默**（U-0280，维护者 10-05 决定按推荐 A + B + C'）：协调器按超时发出的新尝试（新 `CommandID`、同一 `IdempotencyKey`）以前看不到旧尝试的 claim / 回执，已写进 WAL 的旧尝试又能在 2 分钟 claim 租约内重放生效，于是重复扣款 / 重复退款，或已扣款却 Failed（drill6）。现在 `DataEngineStepInbox.Reserve` 以操作实例为单位：同一操作已有成功（任何一生）或本生的拒绝就不执行、把那次的 completion 经 saga 结果流重发给协调器；旧尝试仍持有效租约时返回可重试错误；租约过期时接替它（`status=superseded`、`lease_token+1`），它未投影的记录随后被 fence 跳过；同一操作的并发 Reserve 由守卫文档串行化。claim 租约封顶到命令截止（见 Changed），截止后重放的记录被跳过、不留回执。协调器在重试用尽 / saga 截止（含退避中）/ 人工 `Compensate` 时把操作记为“放弃关闭”，之后才到的成功记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{saga_type,phase}`，不重开终态、不自动补偿；带结果关闭的旧结果仍按重复处理，U-0280 之前写的 tombstone 不告警。另修：原生 handler 返回零值 `Completion`（生成模板的写法）不再让每次成功执行多一次 nak 与重投。契约见 [SAGA.md「原生步骤执行契约」](SAGA.md)，[记录](docs/bugfix/U-0280-saga-step-reexecuted-after-crash.md)、T-226。
 - **skill 施法失败只走一个终态入口**（RR-20261005-NC-110 / NC-111 / NC-112）：启动失败的 cast 被删除、ID 复用前先撤掉它的全部排程任务（此前旧任务会落到下一个拿到同一 ID 的 cast 上，失败启动后的 checkpoint 也恢复不了）；Cancel / Interrupt / Release 在改动 cast 后出错时 cast 进入 failed 终态（此前停在半终止，施法者永久 `ErrCasterBusy`）；排程失败的 toggle / hold / charge 释放 policy 槽位，对 failed cast 的 Cancel / Interrupt / Release 返回 `ErrCastInputRejected`（此前下一次激活会对失败 cast 执行 toggle-off）。行为收紧：手动 Release 付费失败后不能再重试，与 auto release 一致。[记录](docs/bugfix/RR-20261005-NC-110.md)
 - **combatcomponent Combatant 副本不再共享 map**（RR-20261005-NC-113）：`Combatant()` 返回、`InitCombatant` 存入的 `ElementMultipliersBP` 都是拷贝；此前改副本或改共用的配置模板会在事务、逆操作与脏标记之外改掉权威战斗状态。[记录](docs/bugfix/RR-20261005-NC-113.md)
 - **versionstore RedisStore 输掉 compare-and-set 后退避再重读**（RR-20261005-NC-52）：此前退避后仍用退避前 CompareAndSet 带回的值重试，竞争写落在退避窗口里时每次重试必输，同键并发（如 chat 世界频道）出现伪 `ErrConflict`。现在只在输掉 CAS 后多一次 GET，尝试次数与退避策略不变。[记录](docs/bugfix/RR-20261005-NC-52.md)
@@ -27,6 +28,12 @@
 - **Saga三消费者健康检查**（RR-20261005-NC-37）：`ConsumersClosed` 纳入原生Nest完成消费者，任意必需订阅缺失/退出均使Kit健康项fail；修正过时的两消费者注释。正式装配与停止后重启恢复已验证。[记录](docs/bugfix/RR-20261005-NC-37.md)
 - **Saga Resume持久代际**（RR-20261005-NC-38）：Mongo记录增补兼容字段`incarnation,omitempty`并双向保存，重载后派发不复用旧命令/回执ID；旧缺字段为0。参与写入的协调器需统一升级，旧writer完整Replace会丢新字段；不自动修复历史waiting/回执。[兼容与证据](docs/bugfix/RR-20261005-NC-38.md)
 - **Ctrl-C 打断 roost 跑的 go 命令后，roost 照旧死于该信号**（RR-20261004-13 补修）：杀掉 go 的进程树后重发给自己的信号是异步生效的，满载时调用方会先跑下去（回滚、打印错误、以自己的退出码结束）；现在重发后等信号生效再说。同时修掉 doctor / 依赖命令进程树用例在满载下的偶发红（计时器与替身 exec 赛跑），改为等替身报告孙进程后再触发超时或取消。[记录](docs/bugfix/RR-20261004-13.md#补修2026-10-05满载偶发红与重发信号的竞态)
+
+### Changed
+
+- **步骤超时与重试次数改由配置提供**（U-0280，维护者“重试次数可以是一个配置，一次操作可以有多次尝试”）：`saga.Step` 的 `Timeout` / `MaxAttempts` / `BackoffMin` / `BackoffMax` 留空时由 `Engine.Register` 按 `Options.StepBudgets` 补齐（按步骤覆盖 > 定义 > 配置默认 > 框架默认 5s / 5 次 / 100ms..5s）；kit saga Mod 读 `saga.step_defaults.*` 与 `saga.steps.<type>.<step>.*`，写错类型 / 步骤 / 字段时 `Init` 失败；`kitsaga.StepBudgetsFromConfig` 供生成工程测试使用。codegen `add saga` 生成的定义不再写预算，saga Mod 的生成配置带 `step_defaults` 与 `steps: {}`；game-demo 的 debit 预算从“生成后改 definition.go 为 MaxAttempts 15”（`ac5acfbe`）改为 game 服务三份配置里的 `saga.steps.gift_item.debit.max_attempts: 15`，`gift_saga_budget_test.go` 读配置核对。已生成工程不迁移：旧 definition.go 里写死的值照旧生效，配置的按步骤覆盖优先于它。
+- **原生步骤 claim 租约封顶到命令截止时间**（U-0280 B）：`lease_until = min(now + LeaseDuration, Command.DeadlineAt)`，新建与接管都一样，`LeaseDuration` 只是上限；已过截止的命令 `Reserve` 返回 `saga.ErrCommandExpired`。代价：Mongo 投影积压超过步骤 `Timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是重复执行；依赖进程间时钟偏差远小于 `Timeout`。
+- **持久格式增量**（U-0280）：`_dataengine_inbox_claims` 的 claim 多 `operation_key` / `incarnation` / `superseded_by` 字段、`superseded` 状态与新索引 `by_operation`，并存放操作守卫文档（`namespace=saga-step-op`）；`_saga_operations` tombstone 多 `closure`（`result` / `abandoned`）。新增可选接口 `saga.CompletionHistoryStore`（`MongoStore` 实现），`Store` 接口不变。契约只在全部步骤进程与协调器升级后成立：旧进程的 claim 不参与跨尝试判断、租约不封顶，旧 tombstone 不告警。
 
 ## [v1.20.0] - 2026-10-05
 

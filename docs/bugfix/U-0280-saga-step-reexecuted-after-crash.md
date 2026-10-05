@@ -4,7 +4,8 @@
 `saga/mongo_store.go` `CompletionRecorded`。
 **来源**：真实进程演练 drill6（2026-10-05，代码 `47a9132c`，生成 game-demo，赠礼 saga）。维护者授权按先红后绿修；10-05 追加指示：
 **修法若要改设计、公开语义或协调器状态机，写完方案就停下交回**。
-**状态**：**已定位、已确定性复现；方案待维护者决定，未实施**（理由见「为什么停在方案」）。**定位文档**：TROUBLESHOOTING T-226。
+**状态**：**已修复，未发版**（维护者 2026-10-05 决定按推荐 A + B + C' 实施，并要求重试次数做成配置；见文末「实施」）。
+修前的方案讨论保留在下面，原文不改。**定位文档**：TROUBLESHOOTING T-226。
 同一演练的另一缺陷 [U-0281](U-0281-saga-expired-command-nak-forever.md) 已修复。
 
 ## 现象（演练证据）
@@ -184,3 +185,156 @@ A 改了框架对原生步骤的公开承诺（SAGA.md 明写“不同 CommandID
 ## 验证
 
 本轮只做了复现，没有修改 U-0280 相关代码。U-0281 的修复先行提交（`96720a05`），验证见 U-0281 记录。复现用例在 C01 结束后又以 `-count=20` 跑过，三个子用例每次都红（确定性）。
+
+## 实施（2026-10-05，维护者决定按推荐处理）
+
+维护者决定：A + B + C'，并补充“**框架重试的次数可以是一个配置，一次操作可以有多次尝试**”；已生成工程不迁移，仓库内模板与生成物同步。
+授权直接实现。代码 `054fdd66`，文档与证据见同分支随后的提交；CHANGELOG `[Unreleased]` Fixed / Changed。
+
+### 原生步骤执行契约（正文在 SAGA.md「原生步骤执行契约」）
+
+1. 最多生效一次的单位是**操作实例**（saga + 步骤 + 方向，即 `Command.IdempotencyKey`）；一次操作可以有 `MaxAttempts` 次尝试（配置），
+   跨 Resume 的代际也是同一操作实例。
+2. 每次尝试的生效窗口包含在协调器等它的窗口内：claim 租约 `lease_until = min(now + LeaseDuration, Command.DeadlineAt)`，截止后才投影的记录被跳过。
+3. 新尝试先看同一操作实例的其他尝试：成功（任何一生）或本生的拒绝 → 回放那次的 completion；可重试失败 → 执行；
+   pending 且租约有效 → nak 等待；租约过期 → 接替（`superseded` + `lease_token+1`），它未投影的记录 fence 失败被跳过。
+4. 协调器放弃之后才到的成功只告警（ERROR + `saga.completion.late_after_abandon_total{saga_type,phase}` + `Stats().LateAfterAbandon`），
+   不重开终态、不自动补偿；tombstone 区分“带结果关闭 / 放弃关闭”避免误报。
+5. 分工：框架兑现原生步骤的跨尝试幂等，模板不再需要自己按 `IdempotencyKey` 做业务幂等；Mongo 步骤不在本契约内（见「与推荐的差异」）。
+
+### 选定方案：A，而不是“超时不换 CommandID”
+
+评估了记录里的简化方向（协调器对超时只重发同一 CommandID，只有可重试失败才换新 ID）。它能把“同一命令最多一次”直接变成“同一操作最多一次”，
+状态更少，但在本仓库里代价更大，所以没有选：
+
+- **身份格式变化**：`commandDigest` 是整条命令的 JSON 摘要（含 `DeadlineAt`、`Attempt`、`CreatedAt`），同时用在 Mongo 收件箱回执、原生 claim、
+  Nest 步骤回执（`BindCommand`）与 lease fence 上。同一 ID 重发而截止时间不同，要么改摘要定义（所有在途命令与回执的身份在升级瞬间对不上，
+  要么得做新旧双摘要比较），要么撞 `ErrIdentityConflict`。A 不碰 wire 与摘要。
+- **“一次操作多次尝试”的配置要重新定义**：`Attempt` 不再等于派发次数，`MaxAttempts` 变成“超时重发次数 + 可重试失败次数”的混合，
+  演练里看的“尝试号”也失去意义。A 下 `MaxAttempts` 仍是“这次操作最多派发几次尝试”，与维护者的说法一致。
+- **Resume 仍会重做**：Resume 进入新代际、换新 ID，上一生里已生效（放弃后迟到）的步骤会被再执行一次；A 按操作实例跨代际回放成功，
+  反而给 C' 的告警提供了一条安全的处置路径（`Resume` 回放而不是重做）。
+- 两者都需要“命中旧结果时经 saga 结果流重发 completion”与 B；A 多出的状态是守卫文档与 claim 的三个字段，局限在收件箱里。
+
+### 配置设计
+
+- core：`saga.StepBudget{Timeout, MaxAttempts, BackoffMin, BackoffMax}`、`saga.StepBudgets{Defaults, Overrides map[StepKey]StepBudget}`，
+  `Options.StepBudgets`（`DefaultOptions` 带框架默认 5s / 5 次 / 100ms..5s）。`Engine.Register` 用 `StepBudgets.Resolve` 补齐每个字段：
+  按步骤覆盖 > 定义里写的值 > 配置默认 > 框架默认；`NewEngine` 校验默认值与覆盖（负数、超过 1000 次、退避上限小于下限）。
+- kit：saga Mod 读 `saga.step_defaults.{timeout,max_attempts,backoff_min,backoff_max}` 与 `saga.steps.<type>.<step>.<字段>`
+  （`kit/saga/step_budgets.go`）。`saga.steps` 下的类型、步骤必须对应注册的定义，字段必须是这四个，否则 `Init` 失败。
+  `StepBudgetsFromConfig(cfg, definitions...)` 导出，生成工程的测试用它得到与运行时相同的预算。
+- codegen：`add saga` 生成的步骤只写名字与 topic（定义的注释说明预算来自配置），saga Mod 的生成配置带 `step_defaults` 与 `steps: {}`。
+- demo：`ac5acfbe` 的“生成后把 definition.go 里 debit 的 MaxAttempts 改成 15”换成 `demoGiftRefundBudget` 改 game 服务的
+  dev 配置、prod example 与 k8s Secret example，写入 `saga.steps.gift_item.debit.max_attempts: 15`（带理由注释）。
+  `gift_saga_budget_test.go` 保留原承诺（退款重试窗口 ≥ startup_wait + ttl + 45s），改为经 `kitsaga.StepBudgetsFromConfig` 读两份配置再核对；
+  把配置改回 5 次时它照原文红（`a refund gets at least 25.75s of retries (max_attempts 5 x timeout 5s ...) ... = 1m30s`）。
+
+### 与推荐的差异 / 补充
+
+- **C' 的覆盖面**：推荐只说“tombstone 区分带结果关闭 / 放弃关闭”。实施中发现**退避期间被 saga 截止或人工 `Compensate` 结束的步骤根本没有 tombstone**
+  （`closedOperation` 只关闭 Waiting 记录的 OperationKey），迟到成功会以 `ErrNotWaiting` 被 Nest 完成消费者当永久错误丢弃，告警看不到它。
+  所以这两条路径在当前步骤 `Attempt > 0` 时也写放弃关闭的 tombstone（既有 `CloseOperation` 机制，不加状态、不改状态转移）。
+  Resume 之后新一生带结果关闭同一操作时，tombstone 改记为“带结果”，旧尝试迟到的结果按重复处理。
+- **回放规则区分代际**：成功跨代际回放（Resume 不重做已生效的步骤）；业务拒绝只在同一生里回放（Resume 的目的就是修复原因后重新执行）。
+- **顺带修复**：`SubscribeDataEngineStep` 校验原生 handler 的返回值，生成模板返回零值 `Completion`，于是每次成功执行后都多一次 nak 与重投
+  （重投读到回执才 ack）。返回值本来就不使用，现在不再校验（`TestNativeStepConsumerHandlesOperationOutcomes/zero completion`）。
+- **Mongo 步骤不在本契约内**：`MongoCommandInbox` 的提交点在 handler 的 Mongo 事务里，与命令截止时间没有绑定，跨尝试仍按 `IdempotencyKey`
+  做业务幂等（模板的 deliver 用 mail `RequestID`）。若要 Mongo 步骤也按操作实例最多一次，需要另一份方案（守卫 + 截止时间约束提交），需维护者决定。
+
+### 先红后绿
+
+正式用例 `saga/step_operation_promises_test.go`（evidence 的复现移入并改成走真实 `SubscribeDataEngineStep` 与真实
+`dataengine/engine.MongoStore.Project`：业务写往 `debits` 插一份文档，文档数就是生效次数）。基线 `50e9a4e8` 的红
+（全文 [formal-red-before.txt](evidence/U-0280/formal-red-before.txt)）：
+
+```text
+a: operation gift-1:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-1:1:0:1 gift-1:1:0:2] (handler ran 2 times)
+b: operation gift-2:1:0 took effect 2 time(s) with 2 success receipt(s), want 1: debits by [gift-2:1:0:1 gift-2:1:0:2] (handler ran 2 times)
+c: attempt gift-3:1:0:1 was replayed 55s after its deadline and still took effect: the claim lease outlived the command deadline, ...
+c': success of gift-4:1:0:1 arrived after the coordinator abandoned the step; saga.completion.late_after_abandon_total grew by 0, want 1 (duplicates grew by 1)
+d: attempt gift-5:1:0:1 was projected after attempt gift-5:1:0:2 superseded it: the step took effect twice
+Resume: operation gift-6:1:0 took effect 2 time(s) ... debits by [gift-6:1:0:1 gift-6:1:0:r1:1]
+saga 截止: late success after the saga deadline grew the alarm by 0, want 1
+同生拒绝: a refused step ran 2 times in one life, want 1
+```
+
+“可重试失败不挡新尝试”“TTL 之后的迟到成功不告警不生效”是守卫用例，修前即绿。B 之后 (c) 断言“截止后重放的记录被跳过、没有回执、没有业务写”，
+(c') 断言告警计数 +1 且 saga 仍 Failed。另加：`TestNativeStepLeaseNeverOutlivesTheCommandDeadline`（新建 / 接管都封顶、过期命令 `ErrCommandExpired`）、
+`TestNativeStepConsumerHandlesOperationOutcomes`（被接替尝试 ack 不执行、他人租约有效时 `errOperationAttemptInFlight`、零值 Completion 不再 nak）、
+人工 `Compensate` 放弃退避中步骤后的迟到成功告警、`TestMongoStoreTombstoneTellsAbandonedFromResolved`（MongoStore 上 abandoned / result / 旧 tombstone /
+Resume 升级）、kit `TestStepBudgetsComeFromConfigWithPerStepOverrides` 与 `TestStepBudgetConfigRejectsTyposAndImpossibleValues`。
+既有用例按新契约改写两处：`TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`（第一次尝试租约有效时新尝试得到
+`errOperationAttemptInFlight`，截止后接替）、`TestDataEngineStepInboxUsesAbsoluteClaimExpiry`（索引 3 → 4）。
+
+真实 Mongo（`-tags integration`，隔离副本集，库 `roost_u0280_<pid>_<ns>` 用后删除）`saga/step_operation_real_mongo_integration_test.go`：
+- 6 个尝试并发 Reserve 同一操作 × 20 轮，每轮恰好 1 个拿到新租约。**去掉守卫的负对照**（临时让 `guardOperation` 直接返回，验证后还原）：
+  `round 1: 6 attempts of one operation reserved a live lease at the same time, want exactly 1 (results=[<nil> <nil> <nil> <nil> <nil> <nil>])`
+  （[real-mongo-guard-disabled-red.txt](evidence/U-0280/real-mongo-guard-disabled-red.txt)）——mongotest 按集合检测写冲突，证明不了守卫，必须在真实服务端看。
+- “接替 vs 投影”并发 40 轮：每轮要么 k 生效、k+1 回放 k，要么 k 被跳过、k+1 执行，从未两者都生效（本次 39 / 1）。
+
+### kill -9 复现（生成 game-demo，修前 / 修后）
+
+工具在 [evidence/U-0280/kill9/harness](evidence/U-0280/kill9/harness)：从给定的 roost-core 树生成 game-demo（replace 指向该树），把开发配置隔离到
+本次前缀（库 `<tag>_game / _saga / _remote`、DAO 编译期库名常量、流 `<TAG>_SAGA / _EFFECTS / _SYNC`、NATS 前缀、Redis 独立 db 与键前缀），
+单 sid 1000、全部服务按 `deploy/dev/run.sh` 启动；一个机器人 `add_item` 30 个药水后每 60ms 向从未进过游戏的玩家 1 赠 1 个（debit → deliver 拒绝 → 退款，
+每个 saga 以 compensated 结束，背包守恒 = 每个机器人 30）。每轮 `u0280watch` 等到一个本轮新认领、还没有回执的 debit claim，再等 WAL 增长
+（那次 Nest 事务已写进 WAL），立即 `kill -9` game 并马上重启（重启等单实例锁约 15s）；三轮后等全部 saga 终结，统计回执与背包。
+
+| 运行 | 代码 | saga | 状态 | debit 回执 >1 | 退款回执 >1 | 背包（每个机器人应为 30） | not waiting 丢弃 | 放弃后迟到告警 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [u0280a](evidence/U-0280/kill9/u0280a/analysis.txt)（修前，第一版 watcher） | origin/main `7922e428` | 154 | 154 compensated | 6 | 0 | 28 / 27 / 29（少 6） | 12 | 0 |
+| [u0280c](evidence/U-0280/kill9/u0280c/analysis.txt)（修前，与修后同一 watcher） | origin/main `7922e428` | 154 | 154 compensated | 7 | 3 | 30 / 27 / 29（少 4 = −7 + 3） | 20 | 0 |
+| [u0280b](evidence/U-0280/kill9/u0280b/analysis.txt)（修后） | 本分支 | 164 | 164 compensated | **0** | **0** | **30 / 30 / 30** | 2 | 0 |
+
+u0280a 的第一版 watcher 没有按认领时间过滤，第 2、3 轮是被第 1 轮留下的旧 pending claim 触发的（kill 时机仍在赠礼中、WAL 增长之后），所以修前又用
+修后同一版 watcher 跑了 u0280c。修后仍有 2 次 `not waiting` 丢弃（(b) 交错照常发生），但下一次尝试回放了结果，没有重复执行；三轮里没有出现
+“截止前已投影、放弃后才送达”，告警为 0。演练窗口的 oplog 只写了 `u0280a_* / u0280b_* / u0280c_*`，共享 `game / saga / remote_entity` 为 0
+（[oplog-check.txt](evidence/U-0280/kill9/oplog-check.txt)）；结束后按清单删除了 9 个库、9 条流（`^U0280[ABC]_`，删前列出、全部只匹配本次前缀）、
+Redis db 9 / 10 / 11 里 58 个 `u0280[abc]*` 键（删前核对没有其他前缀的键）。
+
+### 组合契约复核（fix-contract-review）
+
+1. **新增错误追到调用方**：`Reserve` 新增 `ErrCommandExpired`、`errAttemptSuperseded`（消费者 ack，计 `saga.step.expired_unexecuted_total`）与
+   `errOperationAttemptInFlight`（消费者返回、nak 重投，受旧尝试截止约束）。其他调用方：codegen 夹具 `fenced_step_test.go`（截止 1 小时，行为不变，
+   `test-dataengine-generated.sh` 通过）、benchmark（不同操作，通过）。`Engine.Complete` 新分支返回 `record, nil`，两个完成消费者都 ack。
+2. **取消与关闭**：`releaseLease`（屏障时交还租约）之后的重投走“自己的 claim 已过期 → 先看其他尝试 → 接管”，被接替的旧尝试不会挡住它；
+   U-0281 的过期 ack 分支不变（过期命令不进 `Reserve`），B 之后过期命令的 claim 必然已失效，ack 无条件安全。
+3. **有效期**：claim 租约现在 ≤ 命令截止；`LeaseDuration > AckWait` 校验保留（截止后的重投被过期分支 ack，租约短于 AckWait 不会让第二个进程执行同一命令）。
+   守卫文档与 claim 一样有 `expires_at`（ReceiptTTL）。claim / 回执 TTL 后同一操作的新尝试看不到旧尝试——与回执 TTL 的既有约束相同（TTL 远长于 saga 生命周期）。
+4. **已知退化不降格**：投影积压超过步骤 Timeout 时原生步骤停住（修前是重复执行）——维护者已接受（B），写进 SAGA.md、USER_GUIDE、T-226；
+   每次新建 / 接管 claim 多一次守卫 upsert 与一次索引查询，mongotest 上 `BenchmarkDataEngineStepReservation/new_command` 0.52 → 1.33 ms/op
+   （替身按集合快照，集合越大越慢，不代表真实 Mongo；`duplicate_active_claim` 4.8 → 5.5 µs/op），真实 Mongo 上的开销未测。
+5. **混跑**：契约只在全部步骤进程与协调器升级后成立（旧进程的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`，新协调器把缺字段的
+   tombstone 按“未知”处理、不告警）。维护者决定已生成工程不迁移。
+
+### 验证（`GOWORK=off`，分支基于 `855c2a38`；全套在 `e81d81bc` 上跑过，之后上游只改 skill / combatcomponent，rebase 后重跑 build、vet、saga 与根包）
+
+- `gofmt -l` 空；`go vet ./saga/... ./kit/saga/... ./codegen/...`；`go build ./... && go vet ./...`；`go generate ./...` 后 porcelain 不变；
+  `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` 通过。
+- `go test -race -count=3 ./saga/... ./kit/saga/...` 通过；新用例 `-race -count=200 -run 'TestNativeStep|TestDataEngineStepInbox|TestStepBudget'` 通过；
+  `go test -count=1 ./codegen/...` 通过；根包 `go test -count=1 .` 通过。
+- 真实 Mongo：`go test -tags integration -run 'TestRealMongo(ConcurrentAttempts|SupersedeAndProjection)' ./saga/` 通过。
+- `bash scripts/test-dataengine-generated.sh`（隔离 Mongo）通过。
+- 生成 game-demo（replace 指向本 worktree）`go build ./... && go vet ./... && go test ./...` 通过，`TestARefundOutlastsACrashRestartOfTheSendersSid` 读配置通过。
+- kill -9 复现见上表。
+
+### 兼容
+
+- 公开 API 增量：`saga.StepBudget` / `StepBudgets` / `StepKey` / `DefaultStepBudget`、`Options.StepBudgets`、`Stats.LateAfterAbandon`、
+  `OperationClosure` / `CompletionHistory` / `CompletionHistoryStore`（可选接口，`Store` 不变）、`ErrCommandExpired`、`MongoStore.CompletionHistory`；
+  kit `StepBudgetsFromConfig`。行为变化：零值预算字段由 `Register` 补齐（以前是 `ErrInvalidDefinition`）；租约封顶；原生 handler 返回值不再校验。
+- 持久格式增量：见 SAGA.md「原生步骤执行契约」代价一节；没有删除或改名字段，wire（`WireVersion=1`）与摘要不变。
+- 指标：新增 `saga.completion.late_after_abandon_total{saga_type,phase}`、`saga.step_inbox.superseded_total`、`saga.step.attempt_replayed_total`；
+  kit saga 健康消息多 `late_after_abandon=`。
+- 已生成工程不迁移：旧 `definition.go` 里写死的预算照旧生效，配置的按步骤覆盖优先于它。
+
+### 未验证项 / 风险
+
+- 混跑（新旧步骤进程 / 协调器并存）没有实跑，只按源码说明了语义。
+- “截止前已投影、放弃后才送达”的告警路径只在单元测试里构造；三轮 kill -9 里没有自然出现。
+- 时钟偏差（协调器、步骤进程、投影进程）对 B 的影响只做了说明，没有注入偏差实测。
+- 真实进程下的投影积压超过 Timeout（步骤停住）没有实跑，只有单元用例 (d)。
+- 真实 Mongo 上 Reserve 新增读写的延迟开销没有测；S5 的其余项（coordinator 租约过期接管后晚 Apply、发布成功但 Ack 未知、真实 broker 跨进程恢复）
+  与 U-0280 不重叠，本轮未覆盖。
+- Mongo 步骤的跨尝试幂等仍靠业务（见「与推荐的差异」），是否纳入框架需维护者另行决定。

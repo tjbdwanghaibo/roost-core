@@ -332,6 +332,35 @@ Saga 用于无法放进同一 Mongo transaction 的多阶段流程，例如跨�
 
 Saga 不是分布式 ACID：补偿可能延迟，外部系统可能需要人工处理。步骤 handler 要区分可重试错误、永久错误和结果未知；补偿同样必须幂等。
 
+### Saga 步骤预算
+
+步骤的超时与重试次数是配置，一次操作（同一步骤、同一方向）可以有多次尝试（U-0280）。kit 的 saga Mod 读取：
+
+```yaml
+saga:
+  step_defaults:          # 定义里没写的字段取这里；不写取框架默认 5s / 5 次 / 100ms..5s
+    timeout: 5s
+    max_attempts: 5
+    backoff_min: 100ms
+    backoff_max: 5s
+  steps:                  # 按步骤覆盖，优先于定义与 step_defaults
+    gift_item:            # Definition.Type
+      debit:              # Step.Name
+        max_attempts: 15
+```
+
+取值顺序：`saga.steps.<type>.<step>` > 定义里写的值 > `saga.step_defaults` > 框架默认。`saga.steps` 下写了不存在的 saga 类型、
+步骤或字段，`Init` 失败（不会静默不生效）。`roost add saga` 生成的定义不再写预算，生成配置带 `step_defaults` 与空的 `steps: {}`；
+game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` 覆盖为 15，让退款（debit 的补偿）的重试窗口覆盖发送方 sid 的
+一次崩溃重启，`internal/service/game/gift_saga_budget_test.go` 用 `kitsaga.StepBudgetsFromConfig` 读同一份配置核对。不用 kit Mod 时
+设置 `saga.Options.StepBudgets`，`Engine.Register` 按它补齐。
+
+预算正反两个方向共用；重试次数只决定协调器等多久，不会让同一次操作生效多次：原生步骤（`SubscribeDataEngineStep`）保证同一
+操作实例的所有尝试里最多一次生效，尝试只在命令截止前生效，协调器放弃后才到的成功记 `saga.completion.late_after_abandon_total` 告警，
+不重开终态（[SAGA.md「原生步骤执行契约」](../SAGA.md#原生步骤执行契约u-0280维护者-2026-10-05-决定)）。代价：Mongo 投影积压超过步骤
+`timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是像以前那样重复执行；Mongo 步骤
+（`SubscribeMongoStep`）仍按 `IdempotencyKey` 做业务幂等。
+
 ## 8. 实时同步怎么选
 
 状态同步适合 ARPG/MMO/大多数房间服：服务器权威模拟，按 20 Hz 产生全局 snapshot 或 delta，按 AOI/LOD 给不同客户端裁剪字段；可靠通道发基线和关键事件，datagram 发可丢弃最新状态。技能的权威结果进入状态 mutation，施法表现、音效和轨迹进入 presentation event，因此能覆盖技能游戏而不要求把所有表现塞进 Entity snapshot。

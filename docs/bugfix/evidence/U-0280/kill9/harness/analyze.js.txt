@@ -1,0 +1,37 @@
+// U-0280 演练统计：每个赠礼 saga 每个方向的成功回执数、状态、背包守恒。
+const tag = process.env.TAG_NAME;
+const game = db.getSiblingDB(tag + "_game");
+const sagaDB = db.getSiblingDB(tag + "_saga");
+const sagas = sagaDB.getCollection("_sagas").find({ type: "gift_item" }).toArray();
+const receipts = game.getCollection("_dataengine_receipts").find({ namespace: "saga-step" }).toArray();
+function success(r) {
+  try { return Buffer.from(r.payload.buffer).toString().includes('"success":true'); } catch (e) { return false; }
+}
+const byOp = {};
+for (const r of receipts) {
+  const id = r.receipt_id; // <saga>:<phase>:<step>:<n> 或 <saga>:<phase>:<step>:r<i>:<n>
+  const parts = id.split(":");
+  const tail = parts[parts.length - 2].startsWith("r") ? 3 : 2;
+  const op = parts.slice(0, parts.length - tail + 1).join(":"); // <saga>:<phase>:<step>
+  byOp[op] = byOp[op] || { ok: 0, ids: [] };
+  if (success(r)) { byOp[op].ok++; byOp[op].ids.push(id); }
+}
+const status = {};
+let debitDup = 0, refundDup = 0, failedWithDebit = 0, compensatedWithoutRefund = 0, debits = 0, refunds = 0;
+const anomalies = [];
+for (const s of sagas) {
+  status[s.status] = (status[s.status] || 0) + 1;
+  const d = (byOp[s._id + ":1:0"] || { ok: 0, ids: [] });
+  const r = (byOp[s._id + ":2:0"] || { ok: 0, ids: [] });
+  debits += d.ok; refunds += r.ok;
+  if (d.ok > 1) { debitDup++; anomalies.push(s._id + " debit x" + d.ok + " " + d.ids.join(",")); }
+  if (r.ok > 1) { refundDup++; anomalies.push(s._id + " refund x" + r.ok + " " + r.ids.join(",")); }
+  if (s.status === 6 && d.ok > 0) { failedWithDebit++; anomalies.push(s._id + " failed with debit " + d.ids.join(",")); }
+  if (s.status === 5 && d.ok !== r.ok) { compensatedWithoutRefund++; anomalies.push(s._id + " compensated debit=" + d.ok + " refund=" + r.ok); }
+}
+const players = game.player.find({}, { items: 1 }).toArray();
+const bag = players.map(p => (p.items && (p.items["1001"] || 0)) || 0).reduce((a, b) => a + b, 0);
+print(`tag=${tag} sagas=${sagas.length} status=${JSON.stringify(status)} (4=completed 5=compensated 6=failed 7=manual)`);
+print(`success receipts: debit=${debits} refund=${refunds}; sagas with debit>1=${debitDup} refund>1=${refundDup} failed_with_debit=${failedWithDebit} compensated_debit!=refund=${compensatedWithoutRefund}`);
+print(`players=${players.length} bag(1001) total=${bag} per player=${JSON.stringify(players.map(p => [p._id.toString(), (p.items && p.items["1001"]) || 0]))} (each robot run adds 30; conserved when every player has 30)`);
+for (const a of anomalies) print("ANOMALY " + a);

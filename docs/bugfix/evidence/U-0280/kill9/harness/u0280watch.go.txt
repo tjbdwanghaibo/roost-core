@@ -1,0 +1,89 @@
+// watcher：等到一个原生步骤 claim 处于 pending（已 Reserve、还没有回执），再等 WAL 增长（该步骤的
+// Nest 事务已写进 WAL），立即 kill -9 game 进程。用于 U-0280 的“debit WAL 提交后 kill -9”。
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+func walSize(dir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if info, e := d.Info(); e == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
+}
+
+func main() {
+	uri := flag.String("mongo", "", "mongo uri")
+	database := flag.String("db", "", "dataengine database")
+	wal := flag.String("wal", "", "wal dir")
+	pid := flag.Int("pid", 0, "game pid")
+	phase := flag.String("phase", ":1:0:", "command id infix to wait for (:1:0: = debit forward)")
+	timeout := flag.Duration("timeout", 60*time.Second, "give up after")
+	flag.Parse()
+	ctx := context.Background()
+	client, err := mongo.Connect(options.Client().ApplyURI(*uri))
+	if err != nil {
+		panic(err)
+	}
+	defer client.Disconnect(ctx)
+	claims := client.Database(*database).Collection("_dataengine_inbox_claims")
+	receipts := client.Database(*database).Collection("_dataengine_receipts")
+	started := time.Now().UTC()
+	deadline := started.Add(*timeout)
+	seen := map[string]bool{}
+	for time.Now().Before(deadline) {
+		// 只看本次 watcher 启动之后才认领的尝试：之前留下的 pending claim（被跳过、被接替的旧尝试）不算。
+		cursor, err := claims.Find(ctx, bson.M{"namespace": "saga-step", "status": "pending", "created_at": bson.M{"$gte": started}})
+		if err != nil {
+			panic(err)
+		}
+		var docs []bson.M
+		_ = cursor.All(ctx, &docs)
+		for _, doc := range docs {
+			id, _ := doc["command_id"].(string)
+			if !strings.Contains(id, *phase) || seen[id] {
+				continue
+			}
+			seen[id] = true
+			if n, _ := receipts.CountDocuments(ctx, bson.M{"_id": "saga-step/" + id}); n > 0 {
+				continue
+			}
+			before := walSize(*wal)
+			waitUntil := time.Now().Add(300 * time.Millisecond)
+			for walSize(*wal) == before && time.Now().Before(waitUntil) {
+				time.Sleep(100 * time.Microsecond)
+			}
+			grown := walSize(*wal) > before
+			if err := syscall.Kill(*pid, syscall.SIGKILL); err != nil {
+				panic(err)
+			}
+			at := time.Now().UTC().Format(time.RFC3339Nano)
+			time.Sleep(200 * time.Millisecond)
+			n, _ := receipts.CountDocuments(ctx, bson.M{"_id": "saga-step/" + id})
+			fmt.Printf("killed pid=%d at=%s command=%s wal_grew=%v receipt_at_kill=%v\n", *pid, at, id, grown, n > 0)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fmt.Fprintln(os.Stderr, "watcher: no pending native step seen before timeout")
+	os.Exit(2)
+}

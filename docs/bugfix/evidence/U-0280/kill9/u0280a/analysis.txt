@@ -1,0 +1,15 @@
+tag=u0280a sagas=154 status={"5":154} (4=completed 5=compensated 6=failed 7=manual)
+success receipts: debit=160 refund=154; sagas with debit>1=6 refund>1=0 failed_with_debit=0 compensated_debit!=refund=6
+players=3 bag(1001) total=84 per player=[["102401028",28],["102402052",27],["102403076",29]] (each robot run adds 30; conserved when every player has 30)
+ANOMALY gift-100001-demo-100001-1791-49 debit x2 gift-100001-demo-100001-1791-49:1:0:6,gift-100001-demo-100001-1791-49:1:0:7
+ANOMALY gift-100001-demo-100001-1791-49 compensated debit=2 refund=1
+ANOMALY gift-100001-demo-100001-1791-57 debit x2 gift-100001-demo-100001-1791-57:1:0:6,gift-100001-demo-100001-1791-57:1:0:8
+ANOMALY gift-100001-demo-100001-1791-57 compensated debit=2 refund=1
+ANOMALY gift-100002-demo-100002-1791-41 debit x2 gift-100002-demo-100002-1791-41:1:0:1,gift-100002-demo-100002-1791-41:1:0:3
+ANOMALY gift-100002-demo-100002-1791-41 compensated debit=2 refund=1
+ANOMALY gift-100002-demo-100002-1791-48 debit x2 gift-100002-demo-100002-1791-48:1:0:2,gift-100002-demo-100002-1791-48:1:0:3
+ANOMALY gift-100002-demo-100002-1791-48 compensated debit=2 refund=1
+ANOMALY gift-100002-demo-100002-1791-9 debit x2 gift-100002-demo-100002-1791-9:1:0:5,gift-100002-demo-100002-1791-9:1:0:6
+ANOMALY gift-100002-demo-100002-1791-9 compensated debit=2 refund=1
+ANOMALY gift-100003-demo-100003-1791-27 debit x2 gift-100003-demo-100003-1791-27:1:0:4,gift-100003-demo-100003-1791-27:1:0:6
+ANOMALY gift-100003-demo-100003-1791-27 compensated debit=2 refund=1

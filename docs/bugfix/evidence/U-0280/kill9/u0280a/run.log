@@ -1,0 +1,14 @@
+11:10:43 start all services (u0280a)
+11:10:51 cycle 1: robot gifting
+11:10:56 cycle 1: restarting game immediately
+11:11:11 cycle 1: game ready again
+11:11:11 cycle 2: robot gifting
+11:11:15 cycle 2: restarting game immediately
+11:11:34 cycle 2: game ready again
+11:11:34 cycle 3: robot gifting
+11:11:38 cycle 3: restarting game immediately
+11:11:57 cycle 3: game ready again
+11:11:57 settle: waiting for every gift saga to end
+11:20:06 settle: open sagas=
+11:20:09 stop all services
+late_after_abandon=0 expired_acks=473 not_waiting=12
