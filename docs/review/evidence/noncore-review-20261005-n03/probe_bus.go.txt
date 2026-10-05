@@ -1,0 +1,27 @@
+package bus
+
+import (
+	"context"
+	"testing"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+)
+
+func TestRevn03ProbeRefusedRPCGoesToDLQAndRequeuesAsMessage(t *testing.T) {
+	store := newReliableMemoryStore()
+	rpc := &lifecycleRpc{replies: make(chan []byte, 4)}
+	b := New(&lifecycleClient{}, rpc, nil, Config{Sid: 7, SvcType: "mail"})
+	b.EnableReliable(store, ReliableConfig{Enabled: true})
+	// dispatcher not running: refused
+	b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX.x", natsMsg: &fnats.NatsMsg{MsgName: "mail.Send", SessionId: "s1", MsgID: "m1"}})
+	select {
+	case r := <-rpc.replies:
+		t.Logf("reply sent: %s", r)
+	default:
+		t.Logf("no reply sent to the RPC caller")
+	}
+	entries, _ := store.ListDeadLetters(context.Background(), DeadLetterQuery{MsgName: "mail.Send"})
+	t.Logf("dead letters for the RPC request: %d %+v", len(entries), entries)
+	msg := entries[0].toNatsMsg("requeue:x")
+	t.Logf("requeue would publish to %s as module message to_module=%q msg_name=%q session_id=%q", b.deadLetterSubject(entries[0]), msg.ToModule, msg.MsgName, msg.SessionId)
+}

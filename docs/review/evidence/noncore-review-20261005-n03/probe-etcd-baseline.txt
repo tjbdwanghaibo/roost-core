@@ -1,0 +1,29 @@
+=== RUN   TestRevn03ProbeResignBudgetFrozenEtcd
+{"level":"warn","ts":"2026-10-05T19:24:21.081013+0800","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x2f04261d4000/127.0.0.1:55176","peer":"Peer{Addr: '127.0.0.1:55176', LocalAddr: '127.0.0.1:55184', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    zz_probe_revn03_test.go:96: Resign(500ms) with frozen etcd: err=still blocked after 20s elapsed=20.000663958s is_leader=false
+    zz_probe_revn03_test.go:98: Resign ignored its 500ms budget: 20.000663958s
+{"level":"warn","ts":"2026-10-05T19:24:40.581126+0800","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x2f04261d4000/127.0.0.1:55176","peer":"Peer{Addr: '127.0.0.1:55176', LocalAddr: '127.0.0.1:55184', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = Canceled desc = context canceled"}
+--- FAIL: TestRevn03ProbeResignBudgetFrozenEtcd (20.52s)
+=== RUN   TestRevn03ProbeResignCleansServerState
+    zz_probe_revn03_test.go:114: resign err=<nil> lease_ttl=-1 keys=0
+--- PASS: TestRevn03ProbeResignCleansServerState (1.05s)
+=== RUN   TestRevn03ProbeDeregisterBudgetFrozenEtcd
+{"level":"warn","ts":"2026-10-05T19:24:42.786640+0800","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x2f04261d4400/127.0.0.1:55272","peer":"Peer{Addr: '127.0.0.1:55272', LocalAddr: '127.0.0.1:55276', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    zz_probe_revn03_test.go:135: Deregister(500ms) with frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501.517ms
+    zz_probe_revn03_test.go:139: retry Deregister after thaw: err=<nil>
+    zz_probe_revn03_test.go:143: keys left=0
+--- PASS: TestRevn03ProbeDeregisterBudgetFrozenEtcd (1.24s)
+=== RUN   TestRevn03ProbeAssemblyCloseTwice
+    zz_probe_revn03_test.go:160: close#1=<nil> close#2=context canceled
+--- PASS: TestRevn03ProbeAssemblyCloseTwice (1.12s)
+=== RUN   TestRevn03ProbeLeaseRecoveryAfterPause
+2026/10/05 19:24:45 WARN etcd Discovery: lease lost key=/revn03/rec/rvn/3
+    zz_probe_revn03_test.go:187: re-registered with lease 7190a10bcf191813 (old 7190a10bcf191803) after 1.217214167s
+--- PASS: TestRevn03ProbeLeaseRecoveryAfterPause (1.99s)
+=== RUN   TestRevn03ProbeMirrorRecoversFromCompactionAfterCut
+    zz_probe_revn03_test.go:302: while cut: status={Revision:2 Synced:true LastError:<nil>}
+    zz_probe_revn03_test.go:308: mirror recovered: map[/revn03/mirror/a:2 /revn03/mirror/b:x /revn03/mirror/unrelated-tail:z] status={Revision:5 Synced:true LastError:<nil>}
+--- PASS: TestRevn03ProbeMirrorRecoversFromCompactionAfterCut (2.65s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	29.132s
+FAIL

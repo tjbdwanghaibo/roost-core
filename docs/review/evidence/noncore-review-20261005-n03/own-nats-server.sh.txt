@@ -1,0 +1,10 @@
+#!/bin/bash
+# own nats-server for revn03 reconnect probe: port 15322, restarts when ctl file says so
+D=$(dirname "$0")
+start() { nats-server -js -p 15322 -sd "$D/store" -a 127.0.0.1 > "$D/server.log" 2>&1 & echo $! > "$D/pid"; }
+start
+while [ ! -f "$D/stop" ]; do
+  if [ -f "$D/ctl" ]; then rm -f "$D/ctl"; kill "$(cat $D/pid)"; wait "$(cat $D/pid)" 2>/dev/null; sleep 2; start; echo restarted >> "$D/events"; fi
+  sleep 0.1
+done
+kill "$(cat $D/pid)"

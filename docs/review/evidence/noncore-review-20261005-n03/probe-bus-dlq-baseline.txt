@@ -1,0 +1,8 @@
+=== RUN   TestRevn03ProbeRefusedRPCGoesToDLQAndRequeuesAsMessage
+2026/10/05 19:26:29 WARN bus: drop message because dispatcher is not running
+    zz_probe_revn03_test.go:21: no reply sent to the RPC caller
+    zz_probe_revn03_test.go:24: dead letters for the RPC request: 1 [{MsgID:m1 FromSid:0 ToSid:0 ToModule: MsgName:mail.Send Broadcast:0 Attempt:0 Consumer:mail:7 CreatedAt:0 Reason:dispatcher not running Payload:[] FailedAt:0}]
+    zz_probe_revn03_test.go:26: requeue would publish to roost.srv.7 as module message to_module="" msg_name="mail.Send" session_id=""
+--- PASS: TestRevn03ProbeRefusedRPCGoesToDLQAndRequeuesAsMessage (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/bus	0.260s

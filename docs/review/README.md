@@ -2,6 +2,8 @@
 
 [全部后续review交接清单](REMAINING-REVIEW-HANDOFF-2026-10-05.md)：另一agent从N06 global RPC/Mod/App.Live增量接续；全部15个非核心单元、核心工作线接口、外部专项和收口标准已列出。
 
+[10-05 N03 通信 / etcd（revn03）](REVIEW-2026-10-05-noncore-n03.md)：真实 JetStream / etcd 矩阵，NC-90～92（P2）与 NC-93（P3）；方向判断见末节。[证据](evidence/noncore-review-20261005-n03/README.md)。
+
 [10-05第27轮](REVIEW-2026-10-05-noncore-27.md)：NC-41/42及RR-09残余修复，7反例红绿、13新增回归；[恢复机制/漏检复盘](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。
 
 [10-05 N06启动/路由与取消恢复](REVIEW-2026-10-05-noncore-26.md)：NC-39/40两个P2已修，11原反例/旧源码overlay红→绿，含兼容/事务/原生取消共26新正式叶子；旧已推进缺摘要明确冲突，真实Mongo/NATS/HA未验。N06仍部分完成。[机制](IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-16/README.md) · [进度](PROGRESS.md)。

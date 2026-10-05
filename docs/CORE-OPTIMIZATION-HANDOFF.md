@@ -186,6 +186,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N03 revn03：[NC-90](bug/RR-20261005-NC-90.md) / [NC-91](bug/RR-20261005-NC-91.md) / [NC-92](bug/RR-20261005-NC-92.md) 三个 P2 与 [NC-93](bug/RR-20261005-NC-93.md) P3 **已复现，未修复**——JetStream 停止不排空在途 handler、轻量 RPC 被派发拒绝不回包、轻量调用被 JetStream 请求流截获、选主 Resign 不受预算约束；[本轮](review/REVIEW-2026-10-05-noncore-n03.md)（含方向判断：Bus 停止 / 排空与 etcd 选主各自连续多轮出缺陷）。
+
 10-05 N06 revn06：[NC-50](bug/RR-20261005-NC-50.md) / [NC-51](bug/RR-20261005-NC-51.md) / [NC-52](bug/RR-20261005-NC-52.md) 与 [RR-20261001-06 残余](bugfix/RR-20261001-06.md#复核后的补修2026-10-05) **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n06-revn06.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。T-229/230，T-182 追加。无格式/API/wire 变化，NC-52 只在输掉 CAS 后多一次 GET。
 
 10-05 N01 / N06-S4 审查：[RR-20261005-01](bug/RR-20261005-01.md) P2 **已修复，未发版**（[修复](bugfix/RR-20261005-01.md)）——game-demo activity 的 `activity.game_sids` 含重复 sid 或候选超过 `app.SingletonLiveMaxSIDs` 时修复前启动成功、此后每个窗口被协调器 / `Live` 拒绝，现在启动时按键名拒绝。单实例锁本体无新确认缺陷，观察 9 条见[运行记录](review/REVIEW-2026-10-05-n01s4.md)。
