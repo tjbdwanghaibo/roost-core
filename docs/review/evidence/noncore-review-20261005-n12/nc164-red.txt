@@ -1,0 +1,7 @@
+=== RUN   TestEntityGaugesReturnToZeroWhenAKindEmpties
+    gauge_lifecycle_promises_test.go:95: entity.count_by_kind{kind=2} = 2 after every kind-2 entity unloaded; the record says 0
+    gauge_lifecycle_promises_test.go:98: entity.count_by_category{category=2} = 2 after the category emptied; the record says 0
+--- FAIL: TestEntityGaugesReturnToZeroWhenAKindEmpties (0.03s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/statslog	0.575s
+FAIL

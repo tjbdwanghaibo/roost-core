@@ -1,0 +1,11 @@
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext/dial_timeout
+    dial_bounds_promises_test.go:78: websocket dial still blocked after 3s (ctx 1m0s, DialTimeout 200ms): the handshake ignores both
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext/ctx_cancel
+    dial_bounds_promises_test.go:78: websocket dial still blocked after 3s (ctx 200ms, DialTimeout 1m0s): the handshake ignores both
+--- FAIL: TestWebSocketDialHonorsDialTimeoutAndContext (6.00s)
+    --- FAIL: TestWebSocketDialHonorsDialTimeoutAndContext/dial_timeout (3.00s)
+    --- FAIL: TestWebSocketDialHonorsDialTimeoutAndContext/ctx_cancel (3.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/transport	6.504s
+FAIL

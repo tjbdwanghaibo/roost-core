@@ -2,6 +2,17 @@
 
 **v1.20.1 已发布（2026-10-05，tag → `be7407ab`）**：U-0279 / U-0280（含复审补修）/ U-0281、NC-100 / NC-101（含复审补修）、RR-20261005-01，以及截至 `be7407ab` 的非核心 review 修复（NC-50～52、60～65、70～75、80～83、90～93、100～102、110～117、120～123、140～147）随本版发布；`be7407ab` 之后提交的（如 N05 的 NC-130 / NC-131 / RR-20260913-01 残余）未发版。下方“未发版”指发布前状态。
 
+**10-05 N12 metrics / log / failurelog / robot（revn12）：NC-160、NC-161 P2 与 NC-162～165 P3 已复现，未修复。** failurelog 把脚本“结果未知”当“没执行”再走非原子降级（真实 Redis 上一条死信写两份）；loadtest 阈值把没有样本判通过（真实网关 `-duration 1s` 零完成仍退出码 0）；robot 重连后 push capture 不再注册（真实网关重连后 0 帧）；websocket 拨号不看 ctx / DialTimeout；statslog 实体计数 gauge 清空不归零；log.Close 后默认 logger 写已关闭文件。[运行记录](../review/REVIEW-2026-10-05-n12-revn12.md) · [证据](../review/evidence/noncore-review-20261005-n12/)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-165](RR-20261005-NC-165.md) | P3 log.Close 只关文件，只配文件 sink 时退出原因与停机尾部日志丢失 | 已复现，未修复 |
+| [RR-20261005-NC-164](RR-20261005-NC-164.md) | P3 statslog entity.count_by_kind / by_category 在实体清空后停在旧值 | 已复现，未修复 |
+| [RR-20261005-NC-163](RR-20261005-NC-163.md) | P3 robot websocket 拨号不看 ctx 与 DialTimeout，握手不回时永久阻塞 | 已复现，未修复 |
+| [RR-20261005-NC-162](RR-20261005-NC-162.md) | P3 robot 重连后再次 EnsurePushCapture 是空操作，新会话推送被丢弃 | 已复现（含真实网关），未修复 |
+| [RR-20261005-NC-161](RR-20261005-NC-161.md) | P2 loadtest 阈值把没有样本判通过，CI 门禁假绿 | 已复现（含真实网关），未修复 |
+| [RR-20261005-NC-160](RR-20261005-NC-160.md) | P2 failurelog 脚本结果未知时再走非原子降级：死信重复 / 多删 / 清空时删掉新死信 | 已复现（含真实 Redis），未修复 |
+
 **10-05 N05 remoteentity mirror / ownerroute（revn05）：NC-130、NC-131 两个 P3 与 RR-20260913-01 跨节点 L2 删除水位残余已修复、声明场景验证（含真实 Redis / 自起 Redis Cluster），未发版。** 共享 L2 以 CAS 拒绝旧快照时 L1 冷的节点仍装下它、读取停在比 L2 旧的版本（含迁移后旧 route epoch）；本机兴趣表被过期条目占满后健康检查一直 Fail；版本化删除只在本机留墓碑，别的节点的在途加载 / 迟到消息把已删除快照写回 L2。ownerroute 与赠礼静态 sid 路由核对无缺陷；真实 JetStream 重放、兴趣容量为观察。[本轮](../review/REVIEW-2026-10-05-n05-revn05.md) · [证据](../review/evidence/noncore-review-20261005-n05/README.md)
 
 | 编号 | 问题 | 状态 |
