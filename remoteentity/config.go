@@ -19,7 +19,12 @@ type Config struct {
 	SnapshotInterestSubs int
 	MarkerCacheTTL       time.Duration
 	SnapshotLoadTimeout  time.Duration
-	SnapshotMaxWaiters   int
+	// CachedMaxStaleness 是 Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间
+	// （kit：remote_entity.cached_max_staleness，B2）。超过它的 L1 条目先重新确认（读 L2，必要时回源权威），
+	// 确认不了就不交出。零值取 SnapshotCacheTTL。不覆盖 L2 本身落后于权威的情形（owner 写 L2 失败或
+	// 结果未知时最长到 SnapshotL2TTL），见 docs/feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md。
+	CachedMaxStaleness time.Duration
+	SnapshotMaxWaiters int
 	// MaxConcurrentWrites 限制从 Prepare 到真正释放的写批次，包括后台收尾。
 	// 不等待额度；满额直接 ErrRemoteOverloaded。零值沿用收尾容量，默认配置为 128。
 	MaxConcurrentWrites   int

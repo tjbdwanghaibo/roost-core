@@ -2,9 +2,11 @@ package remoteentity
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
@@ -30,8 +32,9 @@ func TestRemoteSnapshotL2DeleteAtVersionKeepsNewerSnapshot(t *testing.T) {
 		}
 	}
 	put(3)
-	if err := store.DeleteAtVersion(ctx, key, 2); err != nil {
-		t.Fatal(err)
+	// B2：被更新快照拒绝的删除报 cache.ErrStaleWrite（之前把脚本的 0 当成功），缓存据此改取 L2 的快照。
+	if err := store.DeleteAtVersion(ctx, key, 2); !errors.Is(err, cache.ErrStaleWrite) {
+		t.Fatalf("delete older than the stored snapshot = %v, want cache.ErrStaleWrite", err)
 	}
 	if got, ok, _ := store.Get(ctx, key); !ok || got.StateVersion != 3 {
 		t.Fatalf("old delete removed newer L2: found=%v version=%d", ok, got.StateVersion)
@@ -44,8 +47,8 @@ func TestRemoteSnapshotL2DeleteAtVersionKeepsNewerSnapshot(t *testing.T) {
 	}
 	// 精度:2^53+1 存着,delete 2^53 不能删(float64 下两者相等)。
 	put(1<<53 + 1)
-	if err := store.DeleteAtVersion(ctx, key, 1<<53); err != nil {
-		t.Fatal(err)
+	if err := store.DeleteAtVersion(ctx, key, 1<<53); !errors.Is(err, cache.ErrStaleWrite) {
+		t.Fatalf("delete at 2^53 below 2^53+1 = %v, want cache.ErrStaleWrite", err)
 	}
 	if _, ok, _ := store.Get(ctx, key); !ok {
 		t.Fatal("delete at 2^53 removed the snapshot at 2^53+1: version compared as float")

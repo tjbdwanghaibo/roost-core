@@ -114,7 +114,7 @@ func TestPublishSurfacesAnL2VersionConflictAndKeepsItOutOfL1(t *testing.T) {
 	if !errors.Is(err, ErrRemoteVersionConflict) {
 		t.Fatalf("publishing a conflicting same-version value = %v, want ErrRemoteVersionConflict", err)
 	}
-	if got, ok, _ := c.local.Get(context.Background(), key); ok {
+	if got, ok, _ := c.l1Snapshot(context.Background(), key); ok {
 		t.Fatalf("the conflicting value reached L1: %q", got.Payload.BytesCopy())
 	}
 
@@ -125,7 +125,7 @@ func TestPublishSurfacesAnL2VersionConflictAndKeepsItOutOfL1(t *testing.T) {
 	if err := degraded.Publish(context.Background(), snapshotAt(key, 5, "B")); err != nil {
 		t.Fatalf("an L2 outage must still degrade to L1: %v", err)
 	}
-	if _, ok, _ := degraded.local.Get(context.Background(), key); !ok {
+	if _, ok, _ := degraded.l1Snapshot(context.Background(), key); !ok {
 		t.Fatal("degraded publish did not populate L1")
 	}
 }
@@ -181,7 +181,7 @@ func TestL2BackfillCannotOverwriteAPublishedSameVersionValue(t *testing.T) {
 	if err := c.Publish(context.Background(), snapshotAt(key, 5, "B")); err != nil {
 		t.Fatalf("publishing B: %v", err)
 	}
-	if got, ok, _ := c.local.Get(context.Background(), key); !ok || string(got.Payload.BytesCopy()) != "B" {
+	if got, ok, _ := c.l1Snapshot(context.Background(), key); !ok || string(got.Payload.BytesCopy()) != "B" {
 		t.Fatalf("control: L1 does not hold B after publish (ok=%v)", ok)
 	}
 
@@ -190,7 +190,7 @@ func TestL2BackfillCannotOverwriteAPublishedSameVersionValue(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("the paused read failed: %v", r.err)
 	}
-	if got, ok, _ := c.local.Get(context.Background(), key); !ok || string(got.Payload.BytesCopy()) != "B" {
+	if got, ok, _ := c.l1Snapshot(context.Background(), key); !ok || string(got.Payload.BytesCopy()) != "B" {
 		t.Fatalf("the L2 backfill overwrote the published same-version value: L1=%q", got.Payload.BytesCopy())
 	}
 }

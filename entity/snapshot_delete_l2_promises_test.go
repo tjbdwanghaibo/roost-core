@@ -45,7 +45,7 @@ func TestDeleteFenceCoversInflightL2Refill(t *testing.T) {
 		t.Fatal(err)
 	}
 	ok := <-done
-	_, cached, _ := c.local.Get(ctx, key)
+	_, cached, _ := c.l1Snapshot(ctx, key)
 	if ok || cached {
 		t.Fatalf("deleted v1 refilled through live tombstone: returned=%v cached=%v", ok, cached)
 	}
@@ -77,32 +77,23 @@ func TestColdL1DeletePreservesNewerL2(t *testing.T) {
 	}
 }
 
+// B2：L1 冷时的 L2 预查已删除（它只为提前发现同版本冲突），同版本异值由 L2 CAS 的裁决
+// （ErrRemoteVersionConflict）直接返回，不再有“预查之后、写入之前”的窗口。
 func TestPublishConflictAfterPreflight(t *testing.T) {
 	ctx := context.Background()
 	key := l2ConflictKey(t, 242, 9803)
 	l2 := newL2Fake()
 	c := NewRemoteSnapshotCache(RemoteSnapshotCacheConfig{TTL: time.Minute}, l2, nil)
-	entered, resume := make(chan struct{}), make(chan struct{})
-	l2.getEntered, l2.getResume = entered, resume
-	done := make(chan error, 1)
-	go func() { done <- c.Publish(ctx, snapshotAt(key, 5, "B")) }()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("no preflight")
-	}
 	a := snapshotAt(key, 5, "A")
 	a.Checksum = RemoteSnapshotChecksum(a.Payload.data)
-	err := l2.Set(ctx, a)
-	close(resume)
-	if err != nil {
+	if err := l2.Set(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	err = <-done
-	local, ok, _ := c.local.Get(ctx, key)
+	err := c.Publish(ctx, snapshotAt(key, 5, "B"))
+	local, ok, _ := c.l1Snapshot(ctx, key)
 	remote, _, _ := l2.Get(ctx, key)
 	if !errors.Is(err, ErrRemoteVersionConflict) || ok {
-		t.Fatalf("conflict swallowed after preflight: err=%v L1=%q L2=%q", err, local.Payload.BytesCopy(), remote.Payload.BytesCopy())
+		t.Fatalf("conflict swallowed: err=%v L1=%q L2=%q", err, local.Payload.BytesCopy(), remote.Payload.BytesCopy())
 	}
 	// 降级契约保留:L2 纯故障时 Publish 仍成功并写 L1。
 	outage := newL2Fake()
@@ -111,7 +102,7 @@ func TestPublishConflictAfterPreflight(t *testing.T) {
 	if err := degraded.Publish(ctx, snapshotAt(key, 6, "C")); err != nil {
 		t.Fatalf("an L2 outage must still degrade to L1: %v", err)
 	}
-	if _, ok, _ := degraded.local.Get(ctx, key); !ok {
+	if _, ok, _ := degraded.l1Snapshot(ctx, key); !ok {
 		t.Fatal("degraded publish did not reach L1")
 	}
 }

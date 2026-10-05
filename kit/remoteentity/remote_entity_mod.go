@@ -128,6 +128,18 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
 		m.cfg.SnapshotL2TTL = ttl
 	}
+	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4 / NC-190）：
+	// 不带单位的数字、0 与负数都报错；不配置时取 snapshot_cache_ttl。
+	if cfg.IsSet("remote_entity.cached_max_staleness") {
+		staleness, err := app.ConfigDuration(cfg, "remote_entity.cached_max_staleness")
+		if err != nil {
+			return err
+		}
+		if staleness <= 0 {
+			return fmt.Errorf("remote_entity.cached_max_staleness must be positive, got %v", cfg.Get("remote_entity.cached_max_staleness"))
+		}
+		m.cfg.CachedMaxStaleness = staleness
+	}
 	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
 	// nats.prefix 只管 NATS 且缺省即 "roost"，remote_entity.lock_key 是锁身份（Cluster 下必须带 hash tag）。
 	// 从后两者派生都会让已配置它们的部署升级后换键，所以单列一项、缺省为空：不配置时键与旧版本逐字相同。

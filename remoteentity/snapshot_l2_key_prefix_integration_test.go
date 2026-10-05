@@ -149,9 +149,9 @@ func TestRealSnapshotL2KeyPrefixOnRedis(t *testing.T) {
 	if err := store.Set(ctx, l2Envelope(key, 5, "b")); !errors.Is(err, entity.ErrRemoteVersionConflict) {
 		t.Fatalf("same version different content: err=%v", err)
 	}
-	// DeleteAtVersion 的 Lua 只看前缀键：更低版本不删、相等版本删。
-	if err := store.DeleteAtVersion(ctx, key, 4); err != nil {
-		t.Fatal(err)
+	// DeleteAtVersion 的 Lua 只看前缀键：更低版本不删（B2：报 cache.ErrStaleWrite）、相等版本删。
+	if err := store.DeleteAtVersion(ctx, key, 4); !errors.Is(err, cache.ErrStaleWrite) {
+		t.Fatalf("DeleteAtVersion(4) below version 5 = %v, want cache.ErrStaleWrite", err)
 	}
 	if !b27Exists(t, r, prefixedKey) {
 		t.Fatal("DeleteAtVersion(4) removed a version-5 snapshot")
@@ -308,8 +308,8 @@ func TestRealSnapshotL2KeyPrefixOnRedisCluster(t *testing.T) {
 				if v := b27HashField(t, client, realKeys[i], "version"); v != "5" {
 					t.Fatalf("stale Set %d overwrote version: %q", i, v)
 				}
-				if err := store.DeleteAtVersion(ctx, key, 4); err != nil {
-					t.Fatalf("DeleteAtVersion(4) %d: %v", i, err)
+				if err := store.DeleteAtVersion(ctx, key, 4); !errors.Is(err, cache.ErrStaleWrite) {
+					t.Fatalf("DeleteAtVersion(4) %d: %v, want cache.ErrStaleWrite", i, err)
 				}
 				if n, _ := client.Exists(ctx, realKeys[i]); n != 1 {
 					t.Fatalf("DeleteAtVersion(4) removed key %d", i)

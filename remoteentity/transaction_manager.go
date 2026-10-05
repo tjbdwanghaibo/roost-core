@@ -136,6 +136,7 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 		Shards: cfg.SnapshotCacheShards, MaxEntries: cfg.SnapshotCacheEntries,
 		MaxBytes: cfg.SnapshotCacheBytes, TTL: cfg.SnapshotCacheTTL,
 		LoadTimeout: cfg.SnapshotLoadTimeout, MaxWaiters: cfg.SnapshotMaxWaiters,
+		MaxStaleness: cfg.CachedMaxStaleness,
 	}, l2, func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 		if mgr == nil || mgr.backend == nil {
 			return entity.RemoteSnapshotEnvelope{}, false, nil

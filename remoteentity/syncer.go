@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 	"hash/fnv"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 const SyncTopicSnapshot = "remote_entity_snapshot"
@@ -28,6 +31,9 @@ type remoteSnapshotWire struct {
 	Delete bool                        `json:"delete,omitempty"`
 	Key    entity.RemoteSnapshotKey    `json:"key"`
 	Update entity.RemoteSnapshotRecord `json:"update,omitempty"`
+	// PublishedAt 是发布方发出这条消息的时刻（Unix 纳秒，B2 新增，omitempty）。接收方据此丢弃比共享 L2
+	// 能担保的窗口更老的快照更新（ApplyReplica）。旧发布者不带它，旧接收方忽略它。
+	PublishedAt int64 `json:"published_at,omitempty"`
 }
 
 func (s *remoteSyncer) PublishRemoteSnapshot(ctx context.Context, update entity.RemoteSnapshotRecord) error {
@@ -37,7 +43,7 @@ func (s *remoteSyncer) PublishRemoteSnapshot(ctx context.Context, update entity.
 	if s.mgr != nil && s.mgr.remote != nil && !s.mgr.remote.interests.interested(update.Key) {
 		return nil
 	}
-	raw, err := json.Marshal(remoteSnapshotWire{Key: update.Key, Update: update.Clone()})
+	raw, err := json.Marshal(remoteSnapshotWire{Key: update.Key, Update: update.Clone(), PublishedAt: time.Now().UnixNano()})
 	if err != nil {
 		return err
 	}
@@ -62,7 +68,7 @@ func (s *remoteSyncer) DeleteRemoteSnapshot(ctx context.Context, key entity.Remo
 	if s == nil || s.snapshotRep == nil {
 		return nil
 	}
-	raw, err := json.Marshal(remoteSnapshotWire{Delete: true, Key: key})
+	raw, err := json.Marshal(remoteSnapshotWire{Delete: true, Key: key, PublishedAt: time.Now().UnixNano()})
 	if err != nil {
 		return err
 	}
@@ -113,12 +119,30 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		}
 		return s.mgr.remote.cache.DeleteAtVersion(ctx, wire.Key, uint64(env.Version))
 	}
+	if s.historic(wire.PublishedAt, time.Now()) {
+		// N05 O5：同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
+		// 一次写入（更新的版本或删除墓碑）的记忆只有 snapshot_l2_ttl 那么长；比这更老的快照，L2 的 CAS 已经
+		// 无法替它担保——键过期后会接受它，旧版本同时写进 L2 与 L1、所有冷节点都读到。丢掉它只意味着之后
+		// 按需读取。窗口取 L2 TTL 的一半，另一半留给跨节点时钟偏差与投递延迟。删除不过滤：带版本删除的
+		// 重放无害。
+		metrics.IncCounter("remote_entity.snapshot_replica_historic_dropped_total", nil, 1)
+		return nil
+	}
 	err := s.mgr.remote.cache.ApplyUpdate(ctx, wire.Update)
 	if errors.Is(err, entity.ErrRemoteSnapshotGap) || errors.Is(err, entity.ErrRemoteSnapshotEpochMismatch) || errors.Is(err, entity.ErrRemoteSnapshotSchemaMismatch) {
 		_, _, loadErr := s.mgr.remote.cache.LoadAuthoritative(ctx, wire.Update.Key, entity.RemoteReadMonotonic, wire.Update.StateVersion)
 		return loadErr
 	}
 	return err
+}
+
+// historic 报告一条带发布时刻的快照更新是否已老到共享 L2 无法担保（见 ApplyReplica）。没有发布时刻
+// （旧发布者）或没有配置 L2 TTL 时不过滤。
+func (s SnapshotReplicaStore) historic(publishedAt int64, now time.Time) bool {
+	if publishedAt <= 0 || s.mgr == nil || s.mgr.cfg == nil || s.mgr.cfg.SnapshotL2TTL <= 0 {
+		return false
+	}
+	return now.UnixNano()-publishedAt > (s.mgr.cfg.SnapshotL2TTL / 2).Nanoseconds()
 }
 
 // validateSnapshotWireIdentity binds the payload's own identity to the

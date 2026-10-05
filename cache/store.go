@@ -68,7 +68,9 @@ type StoreConfig[K comparable, V any] struct {
 	// because that is exactly the state a delete leaves behind. Checked
 	// under the same lock as Stale and Conflict, so publish, loader fill and
 	// L2 backfill share one admission rule (RR-20260913-01 复核). Refused
-	// writes return ErrStaleWrite. Optional.
+	// writes return ErrStaleWrite. Optional. The Remote snapshot cache no
+	// longer uses it: since B2 (2026-10-06) its delete watermark lives in the
+	// shared L2 and in L1 delete markers ordered by Stale.
 	Superseded func(next V) bool
 }
 

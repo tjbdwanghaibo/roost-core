@@ -240,13 +240,22 @@ func (s *remoteSnapshotL2Store) Delete(ctx context.Context, key entity.RemoteSna
 
 // DeleteAtVersion implements entity.RemoteSnapshotVersionedDeleter: the
 // comparison and the delete run in one script, so a newer snapshot that lands
-// between "read version" and "DEL" cannot be lost.
+// between "read version" and "DEL" cannot be lost. A stored snapshot newer
+// than version refuses the delete; that is reported as cache.ErrStaleWrite so
+// the cache adopts the newer snapshot (B2). The script is idempotent — the
+// tombstone only ever rises — so re-sending it after an unknown result is safe.
 func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.RemoteSnapshotKey, version uint64) error {
 	if s == nil || s.redis == nil || !key.Valid() {
 		return nil
 	}
-	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10), s.ttl.Milliseconds())
-	return err
+	result, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10), s.ttl.Milliseconds())
+	if err != nil {
+		return err
+	}
+	if fmt.Sprint(result) == "0" {
+		return fmt.Errorf("%w: L2 holds a snapshot newer than the delete", cache.ErrStaleWrite)
+	}
+	return nil
 }
 
 var _ entity.RemoteSnapshotVersionedDeleter = (*remoteSnapshotL2Store)(nil)

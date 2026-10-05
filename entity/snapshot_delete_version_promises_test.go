@@ -72,10 +72,8 @@ func TestRemoteSnapshotDeleteAtVersionPromiseFencesOlderSnapshot(t *testing.T) {
 	if err != nil || !ok || got.StateVersion != 3 {
 		t.Fatalf("newer snapshot did not revive the key: found=%v version=%d err=%v", ok, got.StateVersion, err)
 	}
-	c.tombMu.Lock()
-	_, still := c.tombstones[key]
-	c.tombMu.Unlock()
-	if still {
+	// B2：删除标记是 L1 里的一个条目，更新的快照取代它。
+	if entry, ok := c.l1Entry(context.Background(), key); !ok || entry.deleted {
 		t.Fatal("tombstone survived a newer snapshot")
 	}
 }

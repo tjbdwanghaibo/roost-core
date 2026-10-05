@@ -344,9 +344,13 @@ func TestRemoteSnapshotPublishDoesNotPinShardOnUnresponsiveL2(t *testing.T) {
 		t.Fatalf("L2 sets=%d, want 1", l2.sets.Load())
 	}
 	// L1 must still hold the snapshot: degrading means skipping L2, not
-	// losing the publish.
-	if got, ok, err := cache.Get(context.Background(), key, RemoteReadCached, 0); err != nil || !ok || got.StateVersion != 1 {
+	// losing the publish. B2: it is held unconfirmed, so a Cached read does
+	// not serve it until L2 or the authority confirms it.
+	if got, ok, err := cache.l1Snapshot(context.Background(), key); err != nil || !ok || got.StateVersion != 1 {
 		t.Fatalf("degraded publish did not populate L1: snapshot=%+v ok=%v err=%v", got, ok, err)
+	}
+	if got, ok, _ := cache.Get(context.Background(), key, RemoteReadCached, 0); ok {
+		t.Fatalf("an unconfirmed L1 entry was served while L2 is unresponsive: version=%d", got.StateVersion)
 	}
 	// The shard is free: a second publish proceeds without waiting on the
 	// first one's dead L2 call.

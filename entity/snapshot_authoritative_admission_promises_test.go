@@ -46,10 +46,10 @@ func TestAuthoritativeLoaderRejectsForeignKeyBeforePublish(t *testing.T) {
 				if err == nil || found || leaked || l2Err != nil {
 					t.Fatalf("foreign authority accepted: found=%v version=%d err=%v foreignL2=%v/%d l2err=%v", found, got.StateVersion, err, leaked, wrong.StateVersion, l2Err)
 				}
-				if _, leaked, _ := c.local.Get(context.Background(), foreign); leaked {
+				if _, leaked, _ := c.l1Snapshot(context.Background(), foreign); leaked {
 					t.Fatal("foreign result reached L1")
 				}
-				before, found, err := c.local.Get(context.Background(), key)
+				before, found, err := c.l1Snapshot(context.Background(), key)
 				if err != nil || !found || before.StateVersion != 2 || string(before.Payload.BytesCopy()) != "before" {
 					t.Fatal("rejection changed requested cache")
 				}
@@ -83,7 +83,7 @@ func TestAuthoritativeReadChecksStoredMinimumVersion(t *testing.T) {
 			if !errors.Is(err, ErrRemoteSnapshotStale) || found {
 				t.Fatalf("minimum version violated after admission: found=%v version=%d err=%v", found, got.StateVersion, err)
 			}
-			kept, found, err := c.local.Get(context.Background(), key)
+			kept, found, err := c.l1Snapshot(context.Background(), key)
 			if err != nil || !found || kept.MarkerEpoch != 2 || kept.StateVersion != 2 || string(kept.Payload.BytesCopy()) != "new-epoch" {
 				t.Fatal("older epoch overwrote current cache")
 			}

@@ -159,8 +159,8 @@ func TestAuthoritativeLoadThatLosesTheL2RaceReturnsTheNewerSnapshot(t *testing.T
 	}
 }
 
-// 对照：L2 不可达仍是“降级到只写 L1”，迟到的复制消息照常装进 L1（既有策略不变）；同一份快照的
-// 重复发布仍被接受。
+// 对照：L2 不可达仍是“降级到只写 L1”，迟到的复制消息照常装进 L1、复制不失败；B2 之后这份条目是未确认的，
+// Cached 读要先确认（L2 没有值、读节点没有权威时就是未找到）。同一份快照的重复发布仍被接受。
 func TestStaleBackfillControls(t *testing.T) {
 	ctx := context.Background()
 	t.Run("L2 outage still degrades to L1", func(t *testing.T) {
@@ -169,9 +169,14 @@ func TestStaleBackfillControls(t *testing.T) {
 		if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, staleBackfillReplica(t, key, 1, 1, "v1")); err != nil {
 			t.Fatalf("an L2 outage must not fail replication: %v", err)
 		}
-		got, found, err := reader.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
-		if err != nil || !found || got.StateVersion != 1 {
-			t.Fatalf("L1 after an L2 outage: version=%d found=%v err=%v", got.StateVersion, found, err)
+		// WaitForVersion 只看 L1 是否持有该版本（不论是否确认）：已持有时立即返回。
+		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		defer cancel()
+		if err := reader.remote.cache.WaitForVersion(waitCtx, key, 1); err != nil {
+			t.Fatalf("L1 after an L2 outage does not hold v1: %v", err)
+		}
+		if got, found, _ := reader.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0); found {
+			t.Fatalf("an unconfirmed entry was served: version=%d", got.StateVersion)
 		}
 	})
 	t.Run("identical republish is accepted", func(t *testing.T) {

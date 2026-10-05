@@ -33,6 +33,8 @@ type ReadThroughOptions struct {
 	// verdict (this version already holds a different value); treating that
 	// as an outage writes the rejected value into L1 and reports success
 	// (RR-20260913-05 复核). Optional; nil means every error is an outage.
+	// The Remote snapshot cache no longer goes through ReadThroughStore
+	// (B2, 2026-10-06); it classifies L2 verdicts in its own admission path.
 	FatalRemoteError func(error) bool
 }
 
