@@ -264,6 +264,12 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 // DeleteAtVersion: delete only if the stored snapshot is not newer than
 // version, compared atomically on the L2 side. An L2 without it is deleted
 // unconditionally, which is the pre-U-0187 behaviour for that layer.
+//
+// The local tombstone below fences only this process. A shared L2 should
+// therefore keep the delete's version itself and refuse later writes that are
+// not newer (reporting cache.ErrStaleWrite), or another node that has not seen
+// the delete yet writes the deleted snapshot back for every cold reader; the
+// Redis L2 does (RR-20260913-01 复核, 2026-10-05).
 type RemoteSnapshotVersionedDeleter interface {
 	DeleteAtVersion(ctx context.Context, key RemoteSnapshotKey, version uint64) error
 }

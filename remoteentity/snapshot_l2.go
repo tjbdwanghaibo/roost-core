@@ -36,7 +36,12 @@ local function cmp(a, b)
 end
 `
 
-const remoteSnapshotL2CAS = remoteSnapshotL2Lua + `local oldMarker = redis.call("HGET", KEYS[1], "marker") or "0"
+const remoteSnapshotL2CAS = remoteSnapshotL2Lua + `-- A versioned delete leaves a tombstone (deleted_version) instead of nothing:
+-- a snapshot not newer than it is the past, whoever writes it
+-- (RR-20260913-01 复核, 2026-10-05).
+local deleted = redis.call("HGET", KEYS[1], "deleted_version")
+if deleted and cmp(ARGV[3], deleted) <= 0 then return 0 end
+local oldMarker = redis.call("HGET", KEYS[1], "marker") or "0"
 local oldRoute = redis.call("HGET", KEYS[1], "route") or "0"
 local oldVersion = redis.call("HGET", KEYS[1], "version") or "0"
 local oldChecksum = redis.call("HGET", KEYS[1], "checksum") or ""
@@ -56,6 +61,7 @@ if sameEpoch and versionCmp == 0 and oldChecksum ~= "" and
    (oldChecksum ~= ARGV[4] or oldSchema ~= ARGV[7] or oldCodec ~= ARGV[8]) then return -1 end
 redis.call("HSET", KEYS[1], "marker", ARGV[1], "route", ARGV[2], "version", ARGV[3],
   "checksum", ARGV[4], "schema", ARGV[7], "codec", ARGV[8], "data", ARGV[5])
+if deleted then redis.call("HDEL", KEYS[1], "deleted_version") end
 local ttl = tonumber(ARGV[6])
 if ttl and ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
 return 1
@@ -65,10 +71,28 @@ return 1
 // snapshot newer than ARGV[1]. Compared as an exact decimal string like the
 // CAS above; a delete is ordered against the versions of one key only, so
 // epochs are not part of it (U-0187 复核补修, RR-20260913-01).
+//
+// The key is not simply removed: it becomes a tombstone holding only
+// deleted_version, with the snapshot TTL (ARGV[2], milliseconds). The local
+// tombstone of the node that applied the delete fences only that node; another
+// node that has not seen the delete yet — its authoritative load read the old
+// value first, or a late replica arrived before the delete message — used to
+// write the deleted snapshot back into the empty key, and every node with a
+// cold L1 then read the deleted entity until the L2 TTL (RR-20260913-01 复核,
+// 2026-10-05). An older delete never lowers a newer tombstone. Without a TTL
+// the key is dropped as before rather than leaving a tombstone forever.
 const remoteSnapshotL2DeleteAtVersion = remoteSnapshotL2Lua + `
 local stored = redis.call("HGET", KEYS[1], "version")
 if stored and cmp(stored, ARGV[1]) > 0 then return 0 end
+local tomb = ARGV[1]
+local deleted = redis.call("HGET", KEYS[1], "deleted_version")
+if deleted and cmp(deleted, tomb) > 0 then tomb = deleted end
 redis.call("DEL", KEYS[1])
+local ttl = tonumber(ARGV[2])
+if ttl and ttl > 0 then
+  redis.call("HSET", KEYS[1], "deleted_version", tomb)
+  redis.call("PEXPIRE", KEYS[1], ttl)
+end
 return 1
 `
 
@@ -221,7 +245,7 @@ func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.
 	if s == nil || s.redis == nil || !key.Valid() {
 		return nil
 	}
-	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10))
+	_, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10), s.ttl.Milliseconds())
 	return err
 }
 

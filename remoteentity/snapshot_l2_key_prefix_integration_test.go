@@ -159,8 +159,12 @@ func TestRealSnapshotL2KeyPrefixOnRedis(t *testing.T) {
 	if err := store.DeleteAtVersion(ctx, key, 5); err != nil {
 		t.Fatal(err)
 	}
-	if b27Exists(t, r, prefixedKey) {
-		t.Fatal("DeleteAtVersion(5) left the prefixed key")
+	// RR-20260913-01 复核（2026-10-05）：版本化删除留下只有 deleted_version 的墓碑，仍在前缀键上。
+	if b27HashField(t, r, prefixedKey, "data") != "" || b27HashField(t, r, prefixedKey, "deleted_version") != "5" {
+		t.Fatal("DeleteAtVersion(5) did not leave a data-less tombstone on the prefixed key")
+	}
+	if _, ok, err := store.Get(ctx, key); err != nil || ok {
+		t.Fatalf("Get after DeleteAtVersion(5): ok=%v err=%v", ok, err)
 	}
 	// Delete 同样只触前缀键。
 	if err := store.Set(ctx, l2Envelope(key, 6, "c")); err != nil {
@@ -199,8 +203,8 @@ func TestRealSnapshotL2KeyPrefixOnRedis(t *testing.T) {
 	if err := legacy.DeleteAtVersion(ctx, key, 1); err != nil {
 		t.Fatal(err)
 	}
-	if b27Exists(t, r, legacyKey) {
-		t.Fatal("legacy DeleteAtVersion left the legacy key")
+	if b27HashField(t, r, legacyKey, "data") != "" || b27HashField(t, r, legacyKey, "deleted_version") != "1" {
+		t.Fatal("legacy DeleteAtVersion did not leave a data-less tombstone on the legacy key")
 	}
 }
 
@@ -313,8 +317,8 @@ func TestRealSnapshotL2KeyPrefixOnRedisCluster(t *testing.T) {
 				if err := store.DeleteAtVersion(ctx, key, 5); err != nil {
 					t.Fatalf("DeleteAtVersion(5) %d: %v", i, err)
 				}
-				if n, _ := client.Exists(ctx, realKeys[i]); n != 0 {
-					t.Fatalf("DeleteAtVersion(5) left key %d", i)
+				if b27HashField(t, client, realKeys[i], "data") != "" || b27HashField(t, client, realKeys[i], "deleted_version") != "5" {
+					t.Fatalf("DeleteAtVersion(5) did not leave a data-less tombstone on key %d", i)
 				}
 				if err := store.Set(ctx, l2Envelope(key, 6, "again")); err != nil {
 					t.Fatalf("second Set %d: %v", i, err)

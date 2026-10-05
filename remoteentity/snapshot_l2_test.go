@@ -59,16 +59,29 @@ func (f *snapshotRedisFake) Eval(_ context.Context, script string, keys []string
 	arg := func(value any) string { return fmt.Sprint(value) }
 	if script == remoteSnapshotL2DeleteAtVersion {
 		existing, held := f.values[keys[0]]
-		if held && cmp(string(existing["version"]), arg(args[0])) > 0 {
+		if held && existing["version"] != nil && cmp(string(existing["version"]), arg(args[0])) > 0 {
 			return int64(0), nil
 		}
+		tomb := arg(args[0])
+		if held && existing["deleted_version"] != nil && cmp(string(existing["deleted_version"]), tomb) > 0 {
+			tomb = string(existing["deleted_version"])
+		}
 		delete(f.values, keys[0])
+		// The tombstone (RR-20260913-01 复核): only deleted_version, never
+		// lowered, kept while a TTL is configured. The fake does not expire keys.
+		if ttl, _ := args[1].(int64); ttl > 0 {
+			f.values[keys[0]] = map[string][]byte{"deleted_version": []byte(tomb)}
+		}
 		return int64(1), nil
 	}
 	fields := f.values[keys[0]]
 	if fields == nil {
 		fields = make(map[string][]byte)
 		f.values[keys[0]] = fields
+	}
+	deleted := fields["deleted_version"]
+	if deleted != nil && cmp(arg(args[2]), string(deleted)) <= 0 {
+		return int64(0), nil
 	}
 	oldMarker, oldRoute, oldVersion := string(fields["marker"]), string(fields["route"]), string(fields["version"])
 	marker, route, version := arg(args[0]), arg(args[1]), arg(args[2])
@@ -93,6 +106,7 @@ func (f *snapshotRedisFake) Eval(_ context.Context, script string, keys []string
 	fields["schema"] = []byte(schema)
 	fields["codec"] = []byte(codec)
 	fields["data"] = append([]byte(nil), args[4].([]byte)...)
+	delete(fields, "deleted_version")
 	return int64(1), nil
 }
 
