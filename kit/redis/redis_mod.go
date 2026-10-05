@@ -29,7 +29,11 @@ func NewRedisMod() *RedisMod {
 func (m *RedisMod) Name() app.ModName { return mods.ModRedis }
 
 func (m *RedisMod) Init(cfg *viper.Viper) error {
-	m.cfg = redisConfig(cfg)
+	conn, err := redisConfig(cfg)
+	if err != nil {
+		return err
+	}
+	m.cfg = conn
 	if m.cfg.Addr == "" {
 		m.cfg.Addr = "localhost:6379"
 	}
@@ -38,19 +42,26 @@ func (m *RedisMod) Init(cfg *viper.Viper) error {
 
 // redisConfig 把 redis.* 解析成连接配置，RedisMod 与单实例锁的 SingletonStore 共用。
 // redis.addr 缺省时 Addr 留空：RedisMod 自己兜底 localhost:6379，SingletonStore 则报错。
-func redisConfig(cfg *viper.Viper) *fredis.Config {
+//
+// 三个整数键严格读取（维护者决定 A4 的留项）：8k、1.5、10s 这样的值点名报错，而不是被 viper 的宽松
+// getter 读成 0（db 0、连接池取默认）。未设置或 ≤ 0 的 pool_size / min_idle_conns 仍取驱动默认值。
+func redisConfig(cfg *viper.Viper) (*fredis.Config, error) {
+	read := app.NewConfigReader(cfg)
 	out := fredis.DefaultConfig(cfg.GetString("redis.addr"))
 	out.Password = cfg.GetString("redis.password")
-	out.DB = cfg.GetInt("redis.db")
-	if poolSize := cfg.GetInt("redis.pool_size"); poolSize > 0 {
+	out.DB = read.Int("redis.db")
+	if poolSize := read.Int("redis.pool_size"); poolSize > 0 {
 		out.PoolSize = poolSize
 	}
-	if minIdle := cfg.GetInt("redis.min_idle_conns"); minIdle > 0 {
+	if minIdle := read.Int("redis.min_idle_conns"); minIdle > 0 {
 		out.MinIdleConns = minIdle
+	}
+	if err := read.Err(); err != nil {
+		return nil, fmt.Errorf("redis mod: %w", err)
 	}
 	// Cluster mode：逗号分隔或 YAML 列表（mods.RedisClusterAddrs，RR-20261005-NC-190）。
 	out.ClusterAddrs = mods.RedisClusterAddrs(cfg)
-	return out
+	return out, nil
 }
 
 func (m *RedisMod) Provide(r *app.Registry) error {

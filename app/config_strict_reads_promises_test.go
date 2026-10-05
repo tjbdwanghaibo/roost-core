@@ -134,14 +134,11 @@ func TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly(t *testing.T) {
 // 框架代码（app、kit）不再用 viper 的宽松 getter 读类型化的配置。例外：
 //   - sid：ValidateServiceConfig 严格检查过，读取点遍布各 Mod；
 //   - 生成文件（kit/service 的 *_rpc_assembly_gen.go）：生成工程要兼容已发布的 roost-core，读的 <service>.call_timeout
-//     由 frameworkDurationSuffixes 在启动时检查；
-//   - kit/redis/redis_mod.go 的三个整数键：kit/redis 正由维护者决定 A2 的驱动改造修改，A2 合入后再改成严格读取，
-//     现在由 frameworkIntKeys 在启动时检查。
+//     由 frameworkDurationSuffixes 在启动时检查。
+//
+// kit/redis/redis_mod.go 的三个整数键（redis.db / pool_size / min_idle_conns）曾在 A2 合入前放行，现已改为严格读取。
 func TestFrameworkCodeDoesNotReadConfigLeniently(t *testing.T) {
 	lenient := regexp.MustCompile(`\.(GetBool|GetDuration|GetInt|GetInt8|GetInt16|GetInt32|GetInt64|GetUint|GetUint8|GetUint16|GetUint32|GetUint64|GetFloat32|GetFloat64|GetSizeInBytes)\(([^)]*)\)`)
-	pendingA2 := map[string]bool{
-		"../kit/redis/redis_mod.go:redis.db": true, "../kit/redis/redis_mod.go:redis.pool_size": true, "../kit/redis/redis_mod.go:redis.min_idle_conns": true,
-	}
 	for _, file := range frameworkGoSources(t) {
 		body := readSource(t, file)
 		generated := strings.Contains(body, "// Code generated")
@@ -152,7 +149,6 @@ func TestFrameworkCodeDoesNotReadConfigLeniently(t *testing.T) {
 				case strings.Contains(line, "Flags()."): // cobra 命令行参数，不是配置
 				case key == "sid":
 				case generated && matchesDurationSuffix(key):
-				case pendingA2[file+":"+key]:
 				default:
 					t.Errorf("%s: %s reads config leniently (%s); use app.ConfigBool / ConfigDuration / ConfigInt or an app.ConfigReader", file, strings.TrimSpace(line), match[1])
 				}

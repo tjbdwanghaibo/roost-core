@@ -45,7 +45,10 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 	if cfg == nil {
 		return nil, errors.New("kitredis: singleton store: nil config")
 	}
-	conn := redisConfig(cfg)
+	conn, err := redisConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("kitredis: singleton store: %w", err)
+	}
 	if strings.TrimSpace(conn.Addr) == "" && !conn.IsCluster() {
 		return nil, errors.New("kitredis: singleton store: redis.addr or redis.cluster_addrs is required when singleton.enabled=true")
 	}
