@@ -1,5 +1,7 @@
 # Bugfix 记录
 
+**v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
+
 **10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192 已修复，NC-203 含复核残余补修，均声明场景验证、未发版。** 生产校验删去九组无读取方的要求、USER_GUIDE 写明 `env: production` 校验范围；框架配置一律经 `app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigReader` 严格读取，`ValidateServiceConfig` 按三份登记检查全部类型化的键，守卫测试扫描源码；`dataengine-env.sh` 的全局命令、`remote-fault.sh`、带故障的生成工程验收与 failover 用例运行期间持锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [证据](evidence/a4-config-20261005/README.md)
 
 **10-05 N09 skill 第四批（revn09d）：NC-210～216 已修复、声明场景验证，未发版。** memory 效果名字在类型检查统一检查、add_memory 要求 int；移交后 area 回调 finish 只结束本 area 进程；catalog key 非空唯一；chain 间隔 / 重复与 modifier 叠层只接受默认值（方向 B）；effect / filter / cost 里的 status / attribute / resource 名字查 catalog；Host 都拒绝的取值编译期拒绝；NegotiateSchema 拒绝空区间。新增编译 ⇒ 可执行的变异性质测试。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)。

@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
+
 **10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192（P2）按方案 1 已修复，NC-203 含 A5 残余补修，均声明场景验证、未发版。** 生产校验只要求有读取方的设置；框架配置一律严格读取（A4，接 NC-190）；隔离环境的全局运维命令运行期间持有验收锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192 修复](../bugfix/RR-20261005-NC-192.md)。
 
 **10-05 N09 skill 第四批（revn09d）：NC-210、NC-211、NC-214 三个 P2 与 NC-212、NC-213、NC-215、NC-216 四个 P3 已修复、声明场景验证，未发版。** memory 效果名字不查声明、落到槽位 0；移交后的 area 回调 finish 让 Advance 报 ErrProgramInvariant；status / attribute / resource 名字不查 catalog、落到 handle 0；catalog key 不查唯一；chain 间隔 / 重复与 modifier 叠层只编译不传 Host；Host 都拒绝的取值能编译；NegotiateSchema 接受空区间。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)（含编译 ⇒ 可执行的变异性质测试与方向判断）。
