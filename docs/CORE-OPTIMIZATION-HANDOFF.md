@@ -203,6 +203,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 B10 / C2（维护者决定）：配置规则（required / unique / min / enum / ref）统一由 configdata 加载层在每次 Load / Reload 强制，表示与检查只有一份（叶子包 `configdata/rules`，tablegen 的 CSV 转换 / `-check` / 生成 loader 与 cfggen 的 `cfg` 标签共用），直接改 JSON 再 reload 也绕不过（NC-75 运行时 required 留项完成）；热更失败与撤回 / 回滚经 `Store.OnReloadOutcome` 留日志与低基数指标。新生成代码需要下一版 core，发版时上调生成器下限。**已实施，未发版**（`b12216ed`，[方案与实施](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)，T-261）。
+
 10-06 B9 / C5（维护者决定，[方案](feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md)）：activity 读已存窗口条目只走 `readWindowEntries` 一个入口（`PendingActivities` / `DeliveringActivities` / `RetireDelivered` / `AdvanceExpired`），坏条目跳过、保留、按列表计数（新增 `sweep.delivering_key_malformed`），持有方专用 `Admin.MalformedWindowEntries` / `RemoveMalformedWindowEntry` 供运维清除；`RetireDelivered` 只在本次移走时回报 true——[NC-51 复核补修](bugfix/RR-20261005-NC-51.md#复核后的补修2026-10-06维护者决定-b9)。account 建角改为“名额状态 × 入口 × 名字状态 → 动作”判定表 `decideCreation`（create_role 同名 / 换名、Admin 共用 `classifySlot` / `classifyName`），行为不变；`plan_released` 只在本次真的删掉时计——[NC-50 复核补修](bugfix/RR-20261005-NC-50.md#复核后的补修2026-10-06维护者决定-b9)。C5：`Live` 契约写明停机中仍算活、activity 窗口可能等到宽限期，用例钉住。未发版。
 
 10-06 B6 / C9（维护者决定）：roost CLI 入口 `roost.Main` 统一接管 SIGINT / SIGTERM / SIGHUP——第一次信号取消 ctx，deps / sync / upgrade / new / generate / doctor 在复制、生成器、go 命令或提交点前停下并按原路径回滚、删暂存树，已开始的提交做完，最后重抛信号（退出码不变）；`runCommandTree` 只剩进程组杀树与 WaitDelay，NC-70 登记表与 cb11be90 的重发等待删除。顺带 N08 O2 / O3 / O6；C9：codegen 两条联网用例由 `ROOST_NETWORK_TESTS=1` 打开，在 framework-compat `codegen-network` job 跑。**已实施，未发版**（[方案与实施](feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)）。
