@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -341,14 +343,25 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			return err
 		}
 		if !time.Now().Before(command.DeadlineAt) {
+			// 过了截止时间：协调器已按超时自行进入下一次尝试或补偿，不再等这次尝试的回答，
+			// 这里也不再开始业务。有回执就把 claim 标成完成后 ack（completion 本身随投影的
+			// effect 送达协调器）；没有回执同样 ack。
+			//
+			// 无回执时 ack 不会丢掉“已执行、回执还没投影”的尝试：那次尝试的结果走 WAL → 投影 →
+			// completion effect，从不依赖这条消息，ack 不影响它投影与送达。旧实现在这里返回
+			// context.DeadlineExceeded，按退避一直 nak 到 MaxDeliver（默认约 8.7 天），长期占住
+			// 共享 durable 的 MaxAckPending，新命令全部超时（U-0281）。读回执出错时仍返回错误重投：
+			// 那时无法判断有没有回执。
 			_, found, replayErr := inbox.Replay(messageCtx, command)
 			if replayErr != nil {
 				return replayErr
 			}
-			if found {
-				return nil
+			if !found {
+				metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
+				slog.Info("saga: step command expired before it ran; acknowledged without executing",
+					"command_id", command.ID, "saga_id", command.SagaID, "deadline_at", command.DeadlineAt)
 			}
-			return context.DeadlineExceeded
+			return nil
 		}
 		if config.Admit != nil {
 			if err := config.Admit(messageCtx, command); err != nil {

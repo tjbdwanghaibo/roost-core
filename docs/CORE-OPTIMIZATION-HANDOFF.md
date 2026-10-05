@@ -182,6 +182,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 drill6 saga：[U-0281](bugfix/U-0281-saga-expired-command-nak-forever.md) **已修复，未发版**——原生步骤消费者对过期且无回执的命令改为 ack（修前返回 `context.DeadlineExceeded` 无限 nak，占满共享 durable 的 MaxAckPending），T-225。
 
 10-05第十七批：[NC-41](bug/RR-20261005-NC-41.md) / [NC-42](bug/RR-20261005-NC-42.md) **已修复、声明场景验证，未发版**；[outbox修复](bugfix/RR-20261005-NC-41.md)、[opening修复](bugfix/RR-20261005-NC-42.md)。[RR-20261001-09残余](bugfix/RR-20261001-09.md#复核后的补修2026-10-05)追加、未发版，T-181修订，本轮T-223/224；无格式/API/自动迁移。
 

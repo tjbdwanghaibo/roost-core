@@ -177,6 +177,11 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 - 监控 `nats.jetstream.terminal.total{reason="max_deliver"}`、consumer 的重投计数与 `Projector.Stats().FencedAdmissionRejected`：
   屏障拒绝持续增长同时出现 `max_deliver` 终止，说明投影积压已超过投递预算。
 
+**过期命令直接确认（U-0281）。** 命令过了 `DeadlineAt`，协调器已按超时自行重试或补偿；两种步骤消费者都不再开始业务。
+有回执时让结果送达（Mongo 路径重发 completion，原生路径的 completion 随投影 effect 送达），没有回执时直接 ack 并累加
+`saga.step.expired_unexecuted_total`，不 nak、不占 `MaxAckPending`。原生步骤的结果经 WAL → 投影 → completion effect 送达，
+不依赖这条消息，所以 ack 不会丢掉已提交、还没投影的尝试。读回执出错时仍按退避重投。
+
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
 必须长于 stream 最大保留时间。上线门禁需要在目标 Mongo/NATS 拓扑上验证持续吞吐、
