@@ -3,6 +3,9 @@ package etcd
 import "context"
 
 // IElection provides leader election for exclusive services.
+//
+// 进程 / sid 级单例（同一服务类型 + sid 只跑一个进程）请用 App 单实例锁（app.Singleton），
+// 不要用选举自建；选举留给按键选主之类的用途。kit 的 etcd Mod 不再发布选举工厂。
 type IElection interface {
 	// Campaign starts a campaign to become leader.
 	// Blocks until elected or context cancelled.

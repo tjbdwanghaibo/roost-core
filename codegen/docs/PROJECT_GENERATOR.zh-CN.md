@@ -278,7 +278,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `statslog` | — | 运行时、Entity 和 Nest 周期统计 |
 | `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线） |
 | `etcd` | — | 注册发现、watch、选主和本地镜像 |
-| `redis` | — | Redis、pipeline、pub/sub 和分布式锁 |
+| `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
 | `sync` | `nats` | NATS 或 JetStream 同步 Bus |

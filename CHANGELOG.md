@@ -17,6 +17,10 @@
 - **Remote Entity fatal 现在也会围栏 Nest**（行为变化，App 单实例锁方案 §5）：kit Nest Mod 在 `Provide` 里把 `NestMgr.Fence` 登记进 `RuntimeFailure.OnFail`，任何 fail-stop（单实例锁丢失、DataEngine fatal、Remote Entity 释放失败 fatal）都在唤醒停机之前立即拒绝新的和排队中的 Nest 派发（`nest.ErrNestFenced`）。此前 Remote Entity fatal 只调 `Fail`、Nest 在优雅停机开始前仍接受派发。DataEngine `onFatal` 里显式的 `Fence` 保持不变（幂等）。
 - **kit/redis 的 Redis 集成套件进入 CI Redis job**：`kit/redis` 新增以 `REDIS_ADDR` 准入的 integration 用例（单实例锁 store），ci.yml 的 `service-redis` 与 `kit/scripts/integration/redis-cluster-suites.sh` 都列入 `./kit/redis`。
 
+### Removed
+
+- **破坏性变更：kit 不再发布 `redis.lock` 与 `etcd.election` capability**（[App 单实例锁方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) 第 2b 笔，§12）：`kitredis.RedisMod` 不再登记 `mods.ModRedisLock`（`redis.IDistLockFactory`），`kitetcd.EtcdMod` 不再登记 `mods.ModEtcdElection`（`etcd.IElectionFactory`），两个常量从 `kit/mods` 删除。仓库内（core、kit、codegen、demo 模板）没有使用者；“同一服务类型 + sid 只跑一个进程”由 App 单实例锁（`app.Singleton`）统一提供。core 原语保留：`redis.IDistLock` / `IDistLockFactory`、`etcd.IElection` / `IFencedElection` / `IElectionFactory` 及 `redis/driver`、`etcd/driver` 的实现不变，注释写明进程 / sid 级单例改用 App 单实例锁。迁移：仍需要键级锁 / 选主的应用用 `redisdriver.Assemble(cfg).Locks`、`etcddriver.Assemble(cfg).Election` 自行装配，进程级单例改为配置 `singleton.enabled: true` 并在 bootstrap 调用 `App.Singleton(kitredis.SingletonStore)`。
+
 ### Fixed
 
 - **缓存副本写入前绑定业务key/version**（RR-20261005-NC-33，P2）：配置的提取器与信封不一致时明确拒绝、Store不变；含身份null更新在回调前拒绝。无VersionOf与普通Delete兼容保持，不增加版本墓碑。[记录](docs/bugfix/RR-20261005-NC-33.md)

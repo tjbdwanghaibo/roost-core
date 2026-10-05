@@ -80,7 +80,6 @@ func (m *RedisMod) Provide(r *app.Registry) error {
 
 	return mods.RegisterAll(r,
 		mods.Capability{Name: mods.ModRedis, Value: fredis.IRedis(m.asm.Client)},
-		mods.Capability{Name: mods.ModRedisLock, Value: fredis.IDistLockFactory(m.asm.Locks)},
 	)
 }
 

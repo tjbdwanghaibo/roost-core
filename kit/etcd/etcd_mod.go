@@ -137,7 +137,6 @@ func (m *EtcdMod) Provide(r *app.Registry) error {
 	return mods.RegisterAll(r,
 		mods.Capability{Name: mods.ModEtcd, Value: fetcd.IEtcd(m.asm.Client)},
 		mods.Capability{Name: mods.ModEtcdDiscov, Value: fetcd.IDiscovery(m.asm.Discovery)},
-		mods.Capability{Name: mods.ModEtcdElection, Value: fetcd.IElectionFactory(m.asm.Election)},
 	)
 }
 

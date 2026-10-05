@@ -136,6 +136,7 @@ redis:
 - **fail-stop 统一围栏**：`RuntimeFailure.OnFail(hook)` 登记首次失败时的回调（恰好一次、按登记顺序、在调用 `Fail` 的 goroutine 上同步执行，执行完才唤醒 `run`）。kit Nest Mod 登记了 `NestMgr.Fence`，所以失锁、DataEngine fatal、Remote Entity fatal 都会立即拒绝新的和排队中的派发（`nest.ErrNestFenced`）。回调必须快速、不阻塞、不做 I/O。启动期间发生的 fail-stop 让 `run` 停在下一个阶段边界，不再启动后面的 Mod。
 - **活性查询**：`app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)`，`Live(ctx, serverType, sids)` 返回其中持有锁的 sid（按入参顺序，一次最多 200 个）。“活”= 进程持有锁：从任何 Mod Init 之前到全部 Mod 停完，崩溃的进程最多再算 `ttl`。只能看见开了 `singleton.enabled` 的服务类型，且要求查询方与被查方共用同一个 Redis 与 `key_prefix`；`serverType` 传自己的 `server_type`（`registry.Config().GetString("server_type")`），不要写死。`enabled=false` 时不登记，依赖它的模块应在 Init 报错。
 - **观测**：`/readyz` 多一项 `singleton`：持有为 ok，窗口内续期结果未知为 degraded，失锁或未持有为 fail（`/healthz` 不受影响）。
+- **不要自建进程级单例**：kit 不再以 capability 发布 `redis.lock`（`mods.ModRedisLock`）与 `etcd.election`（`mods.ModEtcdElection`），两个常量已删除（破坏性变更，方案 §12 / 第 2b 笔）。core 的 `redis.IDistLock`、`etcd.IFencedElection` 仍在，只用于 cron 去重、按键选主这类键级用途，需要时用 `redis/driver.Assemble(cfg).Locks`、`etcd/driver.Assemble(cfg).Election` 自行装配。
 
 ## 3. Entity、Component 与 DAO
 

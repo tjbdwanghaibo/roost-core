@@ -17,6 +17,9 @@ import (
 // storage commits — must use IVersionedLock, whose fence token makes writes
 // verifiable. roost-kit provides an auto-extending wrapper for long-running
 // holders of this interface.
+//
+// 进程 / sid 级单例（同一服务类型 + sid 只跑一个进程）请用 App 单实例锁（app.Singleton），
+// 不要用这把锁自建；它留给 cron 去重之类的键级用途。kit 的 Redis Mod 不再发布它的工厂。
 type IDistLock interface {
 	// Acquire attempts to acquire the lock. Returns true if acquired.
 	Acquire(ctx context.Context) (bool, error)

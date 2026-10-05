@@ -20,10 +20,10 @@
 | --- | --- | --- | --- |
 | `dataengine/` | 统一的 Nest 事务持久化：本地 WAL、Put/Patch/Delete Mongo CAS projection、receipt/effect outbox、聚合 load、schema migration、Saga native step 与 Remote commit | 本地独占磁盘 + MongoDB replica set + NATS JetStream | 新服务与完成迁移的 Entity 服务 |
 | `nest/` | 装配实例级 core Nest 引擎，并从 Data Engine 取得唯一 transaction committer | 无 | 所有 Nest 服务 |
-| `redis/` | Redis 客户端、pipeline、pub/sub、分布式锁（`SetNX`）与 `AutoExtendLock` 自动续期包装；`EvalDurable`/`EvalBatchDurable` 保留为通用 durable Lua 能力 | Redis | 缓存、去重、可容忍双写的互斥 |
+| `redis/` | Redis 客户端、pipeline、pub/sub；`EvalDurable`/`EvalBatchDurable` 保留为通用 durable Lua 能力；App 单实例锁的后端 `SingletonStore`。core 的分布式锁（`SetNX`、`AutoExtendLock`）仍在 `roost-core/redis`，Mod 不再以 capability 发布锁工厂 | Redis | 缓存、去重、单实例锁后端 |
 | `mongo/` | MongoDB 客户端、collection、session/事务封装。写关注硬编码 majority+journal、事务读关注 snapshot；**启动预检拒绝无逻辑会话的部署（单机 mongod 起不来），`require_replica_set` 可再收紧**；索引冲突重建需全局与单索引双开关 | MongoDB（副本集或分片集） | 一切持久化 |
 | `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
-| `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、`IFencedElection` 选主（CreateRevision 栅栏）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化） | etcd | 多实例部署的发现、选主与配置镜像 |
+| `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化）。core 的 `IFencedElection` 选主（CreateRevision 栅栏）仍在 `roost-core/etcd`，Mod 不再以 capability 发布选举工厂 | etcd | 多实例部署的发现与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 幂等步骤 inbox（先占位再执行）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
 | `syncbus/` | 服务间状态同步总线：`SyncBusMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一；实现在 roost-core `sync/syncbus/driver`）。客户端方向的实体同步在 roost-core `sync/entitysync`（`Manager`：subject 私有订阅者表、按会话组帧、逐帧准入、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |
 | `manager/` | `ManagerMod`：一个 Service 的内存单例 manager 生命周期的 **Mod 包装**——Mod 名 `mods.ModManager`、capability 登记、Mod 形状的 Stop / StopWithContext。引擎（按 `DependsOn` 稳定拓扑序启动、逆序停止、启动失败只回滚已成功者、启动中收到 shutdown 中止启动、`Start` 后 `Register` 报错）**在 roost-core/manager.Engine**（M-09） | 无 | 场景注册表、路由表、缓存这类进程内单例逻辑 |
@@ -340,7 +340,7 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 | `ModManager`（`manager`） | manager Mod | `*manager.ManagerMod`（包装 roost-core/manager.Engine） |
 | `ModSyncBus`（`syncbus`） | syncbus Mod | `fsyncbus.ISyncBus` |
 
-其余（`ModRedis`/`ModRedisLock`/`ModMongo`/`ModNats`/`ModNatsJetStream`/`ModNatsRpc`/`ModBus`/`ModEtcd`/`ModEtcdDiscov`/`ModEtcdElection`/`ModLock`/`ModOps`/`ModStatsLog`/`ModRemoteEntity`）与直觉一致，注册者即同名 Mod。
+其余（`ModRedis`/`ModMongo`/`ModNats`/`ModNatsJetStream`/`ModNatsRpc`/`ModBus`/`ModEtcd`/`ModEtcdDiscov`/`ModLock`/`ModOps`/`ModStatsLog`/`ModRemoteEntity`）与直觉一致，注册者即同名 Mod。`ModRedisLock`（`redis.lock`）与 `ModEtcdElection`（`etcd.election`）已删除：“同一服务类型 + sid 只跑一个进程”由 App 单实例锁（`app.Singleton`，见 USER_GUIDE §2 单实例锁）提供；键级去重 / 选主直接用 core 的 `redis/driver.Assemble().Locks`、`etcd/driver.Assemble().Election` 自建。
 
 ### 3.4 停机语义
 
@@ -442,6 +442,8 @@ Remote 路径使用显式 delete intent，并继续经过 ownership marker、loc
 只有 admission 成功才完成内存移除；rollback 保持实体存活，结果不确定则触发 fail-stop。
 
 ### 分布式锁与选主（实现均在 roost-core：redis / remoteentity / etcd；kit 只装配 Mod）
+
+**进程 / sid 级单例不在这里选**：同一服务类型 + sid 只跑一个进程用 App 单实例锁（`app.Singleton`，配置 `singleton.*`），kit 不再以 capability 发布 `redis.lock` / `etcd.election`。下面的原语留给键级互斥与选主。
 
 **先做二选一**（两套锁并存是刻意的分层，不是重复实现）：
 

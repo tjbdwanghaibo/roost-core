@@ -13,8 +13,10 @@ const (
 	ModRuntimeFailure app.ModName = app.ModRuntimeFailure
 	ModSingleton      app.ModName = app.ModSingleton
 
+	// redis.lock（IDistLockFactory）与 etcd.election（IElectionFactory）不再作为 capability 发布：
+	// 进程 / sid 级单例由 App 单实例锁（app.Singleton）提供；键级用途直接用 core 的
+	// redis/driver、etcd/driver 装配。
 	ModRedis      app.ModName = "redis"
-	ModRedisLock  app.ModName = "redis.lock"
 	ModRedisVLock app.ModName = "redis.versioned_lock"
 
 	ModNats          app.ModName = "nats"
@@ -22,9 +24,8 @@ const (
 	ModNatsJetStream app.ModName = "nats.jetstream"
 	ModBus           app.ModName = "bus"
 
-	ModEtcd         app.ModName = "etcd"
-	ModEtcdDiscov   app.ModName = "etcd.discovery"
-	ModEtcdElection app.ModName = "etcd.election"
+	ModEtcd       app.ModName = "etcd"
+	ModEtcdDiscov app.ModName = "etcd.discovery"
 
 	ModSyncBus                 app.ModName = "syncbus"
 	ModDataEngine              app.ModName = "dataengine"
