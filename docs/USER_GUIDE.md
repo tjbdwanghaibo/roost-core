@@ -26,7 +26,7 @@ Redis 写命令（含脚本、含写的 pipeline、DistLock）不再由驱动在
 
 生成的 player TCP 接入：Stop/StopWithContext 超时后保留 server，用新 context 再调会等到所有连接 goroutine 真实返回；会话关闭订阅者的等待也受 ctx 约束（NC-83）。升级生成器后重新生成 `internal/access/player/tcp/server_gen*.go`。不配合 ctx 的认证回调/handler 不会被强行终止，只会让停机如实超时。
 
-Ops `/admin/execute` 不给命令设期限，超过 15s 写超时的命令照常执行而客户端只看到传输错误：把“传输失败”当作“结果未知”。`gateway.RateLimit`/`security.RateLimiter` 每个主体最多 `MaxKeysPerOwner`（默认 256）个 key，单个主体变化 MessageID 只会用完自己的名额；共享表（`MaxKeys`）满时陌生 key 立即拒绝，闲置名额最多晚一个 `SweepInterval` 回收；有协议注册表时把“拒绝未注册 MessageID”放在 RateLimit 之前（[NC-82](bug/RR-20261005-NC-82.md)）。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
+Ops `/admin/execute` 给命令的 ctx 带 `ops.admin_timeout`（缺省 10s）的期限，写超时 = max(15s, admin_timeout + 5s)：配合 ctx 的命令到期回 **504**（`its effects are unknown`），按 trace_id 核对后再决定是否重试；不配合 ctx 的命令仍可能跑过写超时、客户端只看到传输错误——同样是“结果未知”，不等于没执行（2026-10-06，[方案](feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)；之前没有期限、写超时固定 15s）。`ops.enabled` 时 Ops 在 Start 里 bind `ops.addr`，端口被占用即启动失败，同机多实例须各配各的端口（[NC-230](bug/RR-20261005-NC-230.md)）。Mod 的停机之外，`service.stopping` / `service.stopped` 的 lifecycle hook 也在 `shutdown.total_timeout` 内等，hook 不配合 ctx 时 App 按停机不完整保留依赖、不释放单实例锁（[NC-231](bug/RR-20261005-NC-231.md)）；停机期间发生的 fail-stop 让进程非零退出（[NC-232](bug/RR-20261005-NC-232.md)）。`gateway.RateLimit`/`security.RateLimiter` 每个主体最多 `MaxKeysPerOwner`（默认 256）个 key，单个主体变化 MessageID 只会用完自己的名额；共享表（`MaxKeys`）满时陌生 key 立即拒绝，闲置名额最多晚一个 `SweepInterval` 回收；有协议注册表时把“拒绝未注册 MessageID”放在 RateLimit 之前（[NC-82](bug/RR-20261005-NC-82.md)）。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
 
 ## 2026-10-05 App 单实例锁（main，未发版）
 

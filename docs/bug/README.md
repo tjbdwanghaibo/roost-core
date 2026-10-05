@@ -2,6 +2,16 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N01 留项 + N14 O3 / O4（revn01b）：NC-230～234（均 P3）已修复、声明场景验证，未发版。** ops 端口 bind 失败时 Start 仍返回 nil；停机阶段的 lifecycle hook 不受 `shutdown.total_timeout` 约束；停机开始之后的 RuntimeFailure 不进 run 的返回值（以 0 退出）；Redis Mod 关闭出错后再调 Stop 永远失败；remote_entity Mod 停止失败仍记 stopped。N02 O1 以 `ops.admin_timeout` 落实（不占 RR），Health 的 Degraded 映射待维护者决定（DECISIONS-PENDING D1）。[本轮](../review/REVIEW-2026-10-06-n01b.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-234](RR-20261005-NC-234.md) | P3 remote_entity Mod 停止失败时仍记 “stopped” | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-233](RR-20261005-NC-233.md) | P3 Redis Mod 关闭出错后，再调 Stop 永远不会成功 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-232](RR-20261005-NC-232.md) | P3 停机开始之后的 RuntimeFailure 不进 run 的返回值，进程以 0 退出 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-231](RR-20261005-NC-231.md) | P3 停机阶段的 lifecycle hook 不受 shutdown.total_timeout 约束，忽略 ctx 的 hook 让停机永远不返回 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-230](RR-20261005-NC-230.md) | P3 ops 端口 bind 失败时 OpsMod.Start 仍返回 nil，进程在没有探针端点的情况下运行 | 已修复、声明场景验证，未发版 |
+
 **10-05 维护者决定 A4 / C1 / A5（a4config）：NC-192（P2）按方案 1 已修复，NC-203 含 A5 残余补修，均声明场景验证、未发版。** 生产校验只要求有读取方的设置；框架配置一律严格读取（A4，接 NC-190）；隔离环境的全局运维命令运行期间持有验收锁。[A4 方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192 修复](../bugfix/RR-20261005-NC-192.md)。
 
 **10-05 N09 skill 第四批（revn09d）：NC-210、NC-211、NC-214 三个 P2 与 NC-212、NC-213、NC-215、NC-216 四个 P3 已修复、声明场景验证，未发版。** memory 效果名字不查声明、落到槽位 0；移交后的 area 回调 finish 让 Advance 报 ErrProgramInvariant；status / attribute / resource 名字不查 catalog、落到 handle 0；catalog key 不查唯一；chain 间隔 / 重复与 modifier 叠层只编译不传 Host；Host 都拒绝的取值能编译；NegotiateSchema 接受空区间。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)（含编译 ⇒ 可执行的变异性质测试与方向判断）。

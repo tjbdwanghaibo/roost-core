@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N01 留项 + N14 O3 / O4（revn01b）
+
+基线 `c8ecbabb`，分支 `revn01b`，NC 段 230～239（用 230～234）；图谱 generation 2026-09-30，相关文件 metadata_changed，全部按当前源码补证。[本轮](REVIEW-2026-10-06-n01b.md) · [修复](../bugfix/README.md)。NC-230～234（P3）已修复、声明场景验证，未发版；N02 O1 以 `ops.admin_timeout` 落实（[方案](../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)）。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| Group 停止预算 | `lifecycle.ManagerGroup` 无 ctx、无生产调用方，骨架不适用（注释写明）；App 停机路径上的 hook 不受预算 | NC-231 |
+| Ops | bind 失败、hijack（不适用）、权限、关闭（A3 骨架套 OpsMod，绿）、命令期限 / 写超时 | NC-230；N02 O1 落实；O-P1 / O-P2 观察 |
+| Health | Degraded / Fail → `/readyz` / `/healthz` 映射与 k8s 探针核对，与文档一致 | DECISIONS-PENDING D1（Degraded 是否算就绪，含 n01s4 O2）；O-H1 |
+| n01s4 余项 | O1 是缺陷；O7 在 NC-193 后无残余；O8 维持现状（§3.4） | NC-232 |
+| N14 O3 / O4 | Redis Mod 停止重试、remoteentity 停止日志 | NC-233、NC-234 |
+
+5 个新正式用例文件 + 1 个骨架用例；修前红 6 条（含两个子用例），对照 1 条修前即绿。app / kit/ops / kit/redis / kit/remoteentity race×3、`./kit/...`、lifecycle / manager / health / admin、根包、build / vet 通过。N01 剩外部项（Redis Cluster、真实进程演练）与 D1，不计 completed。
+
 ## 2026-10-05 N09 skill 第四批（编译器其余 pass 对照 Runtime、lower / digest、presentation、skillsync schema；变异性质测试）
 
 基线 `c10cc9ac`（skill 与 `bfd353c0` 相同），分支 `revn09d`，NC 段 210～219（用 210～216）；图谱 generation 2026-09-30，三处 metadata_changed 以当前源码补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch4.md) · [修复](../bugfix/README.md)。审查 `caf9837e`；NC-210 / 211 / 214（P2）、NC-212 / 213 / 215 / 216（P3）已修复、声明场景验证，未发版。

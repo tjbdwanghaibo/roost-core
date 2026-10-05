@@ -311,7 +311,12 @@ func (m *RemoteEntityMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
 	}
-	err := m.asm.Stop(ctx)
+	// 停止失败（ctx 到期时 finalizer / 复制 handler 还没排空）保留 Assembly，之后的 Stop 再等；只有真的
+	// 停完才记 “stopped”（RR-20261005-NC-234）。
+	if err := m.asm.Stop(ctx); err != nil {
+		slog.Warn("remote_entity mod: stop incomplete", "err", err)
+		return err
+	}
 	slog.Info("remote_entity mod: stopped")
-	return err
+	return nil
 }

@@ -99,7 +99,7 @@ func (a *App) RootCmd() *cobra.Command {
 	return a.rootCmd
 }
 
-func (a *App) run(serverType ServiceName) error {
+func (a *App) run(serverType ServiceName) (runErr error) {
 	// --- Load config ---
 	cfgPath, _ := a.rootCmd.Flags().GetString("config")
 	explicitConfig := a.rootCmd.PersistentFlags().Changed("config")
@@ -177,10 +177,25 @@ func (a *App) run(serverType ServiceName) error {
 		return err
 	}
 	runtimeFailure, _ := Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
+	// failureReturned 记录 RuntimeFailure 是否已经进了返回值（启动检查点、或 select 的 Done 分支）。
+	// 没进的——停机开始之后才失败、启动失败收尾期间才失败——在 run 返回时并入：返回值是进程退出码
+	// 与部署脚本看得到的唯一信号，fail-stop 不能以 0 退出（RR-20261005-NC-232）。围栏、失锁不 Release
+	// 这些安全动作由 RuntimeFailure / 单实例锁自己完成，这里只补报告。这个 defer 登记在单实例锁的
+	// finish 之前，因而在它之后执行，收尾期间的失败也看得到。
+	failureReturned := false
+	defer func() {
+		if failureReturned {
+			return
+		}
+		if err := runtimeFailure.Err(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("app: runtime failure after shutdown began: %w", err))
+		}
+	}()
 	// startupFailure 在启动各阶段之间检查：启动期间（例如 DataEngine 重放很长时）发生的 fail-stop
 	// （失锁、DataEngine / Remote fatal）不等进入 Serve 的 select，按启动失败路径停掉已启动的 Mod。
 	startupFailure := func() error {
 		if err := runtimeFailure.Err(); err != nil {
+			failureReturned = true
 			return fmt.Errorf("app: runtime failure during startup: %w", err)
 		}
 		return nil
@@ -376,6 +391,7 @@ func (a *App) run(serverType ServiceName) error {
 	case err := <-runtimeFailure.Done():
 		slog.Error("runtime infrastructure failure, shutting down", "err", err)
 		serviceErr = errors.Join(serviceErr, err)
+		failureReturned = true
 	case err := <-serveErr:
 		serveDone = true
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -412,12 +428,18 @@ func (a *App) run(serverType ServiceName) error {
 
 	slog.Info("service shutdown", "service", svc.Name())
 	var shutdownErr error
-	if err := a.emitLifecycle(shutdownCtx, lifecycle.Event{
+	stoppingFinished, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
 		Phase:   lifecycle.PhaseServiceStopping,
 		Service: string(serverType),
 		Name:    string(svc.Name()),
-	}); err != nil {
+	})
+	if err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
+	}
+	if !stoppingFinished {
+		// service.stopping 的 hook 在停机预算内没返回，可能还在用 Service 与 Mod：和 Service.Shutdown
+		// 不完整相同，不调 Shutdown、不停 Mod、不释放单实例锁（RR-20261005-NC-231）。
+		return errors.Join(serviceErr, shutdownErr)
 	}
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- svc.Shutdown(shutdownCtx) }()
@@ -466,7 +488,9 @@ func (a *App) run(serverType ServiceName) error {
 	}
 
 	slog.Info("server stopped", "type", serverType)
-	if err := a.emitLifecycle(shutdownCtx, lifecycle.Event{
+	// Mod 已经停完，singletonReleasable 已按 Mod 的结果定好；这里卡住的 hook 只让 run 按预算返回
+	// （剩余时间不够时 Release 跳过，键在 ttl 内过期），不改变释放规则（RR-20261005-NC-231）。
+	if _, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
 		Phase:   lifecycle.PhaseServiceStopped,
 		Service: string(serverType),
 		Name:    string(svc.Name()),
@@ -754,6 +778,27 @@ func stopModSafely(ctx context.Context, mod Mod) error {
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// emitLifecycleWithin 是停机阶段（service.stopping / service.stopped）的 hook 派发：在 ctx（停机总预算）
+// 内等全部 hook 返回。hook 不配合 ctx 时 App 杀不掉它——到期返回 finished=false 与 ctx 错误，hook 留在
+// 自己的 goroutine 里继续跑，调用方按“停机不完整”保留依赖；与 Service.Shutdown、Mod 停机的处理相同
+// （roost-coding 三步停机②，RR-20261005-NC-231）。hook 自己返回的错误（包括配合 ctx 返回的 ctx 错误）
+// 算已返回，finished=true。启动阶段的 hook 没有停机预算，仍同步派发。
+func (a *App) emitLifecycleWithin(ctx context.Context, event lifecycle.Event) (finished bool, err error) {
+	result := make(chan error, 1)
+	go func() { result <- a.emitLifecycle(ctx, event) }()
+	select {
+	case err := <-result:
+		return true, err
+	case <-ctx.Done():
+		select {
+		case err := <-result: // 与到期同时返回的，按已返回算
+			return true, err
+		default:
+		}
+		return false, fmt.Errorf("app: lifecycle %s hooks did not return within the shutdown budget: %w", event.Phase, ctx.Err())
 	}
 }
 

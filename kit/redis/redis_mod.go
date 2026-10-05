@@ -108,16 +108,21 @@ func (m *RedisMod) Stop() {
 	}
 }
 
+// StopWithContext 关闭连接池。go-redis 的 Close 不等在途命令（它们随之失败），先把连接池标记为关闭、
+// 清空连接，再返回逐个关连接时遇到的第一个错误：返回错误时资源同样已经释放，再调 Close 只会得到
+// “client is closed”。所以第一次 Close 之后不论结果都交出 asm，错误只报告这一次，之后的 Stop 返回 nil
+// （停机契约“再调用返回 nil”，RR-20261005-NC-233；旧实现只在成功时置空，出错后的每次重试都失败）。
 func (m *RedisMod) StopWithContext(_ context.Context) error {
 	if m == nil || m.asm == nil {
 		return nil
 	}
-	err := m.asm.Close()
-	if err == nil {
-		slog.Info("redis mod: closed")
-		m.asm = nil
+	asm := m.asm
+	m.asm = nil
+	if err := asm.Close(); err != nil {
+		return fmt.Errorf("redis mod: close (the connection pool is closed regardless): %w", err)
 	}
-	return err
+	slog.Info("redis mod: closed")
+	return nil
 }
 
 var _ app.ModStopperWithContext = (*RedisMod)(nil)

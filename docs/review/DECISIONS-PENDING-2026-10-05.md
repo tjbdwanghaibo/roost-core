@@ -95,3 +95,9 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | **已实施（`bd6df5e5`）**：`app/singleton.go` 的 `SingletonLiveness` 注释、USER_GUIDE §2、APP-SINGLETON-LOCK §3.6 / §7.2 写明契约与对 activity 的影响（窗口可能等到宽限期）；用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住 |
 | C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | **已实施（`f556049c`）**：常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），根包 `TestNetworkCodegenTestsRunInSomeWorkflow` 钉住；两条用例本机联网实跑通过（v1.20.2 刚发布，需 `GOPROXY=direct`）。默认 `go test` 不联网。 |
 | Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 排队 |
+
+## 新增待决定（2026-10-06，N01 留项 revn01b）
+
+| # | 事项 | 来由 | 选项 | 推荐 |
+| --- | --- | --- | --- | --- |
+| D1 | `/readyz` 对 Degraded 的处理：现在 Degraded 与 Fail 一样回 503（README 写明“degraded 在聚合层等同失败”），k8s readiness 摘掉该 Pod 的 Service endpoint；生成的服务都是单副本 | N01/S4 O2；[revn01b §3](REVIEW-2026-10-06-n01b.md) | (a) 保持现状（Degraded = 摘流量）(b) Degraded 算就绪：`/readyz` 回 200、`ok` 仍为 true，`dependencies` 照样列出 degraded，只有 Fail 让它 503 (c) 每个 checker 自己声明 Degraded 是否影响就绪 | (b)：四个 Degraded 来源（续期结果未知 ≤ renew_interval、entitysync ≥ 80% 容量、remoteentity 写许可用满、DataEngine 积压告警）都是“还能服务、需要关注”；单副本摘 endpoint 没有可切的副本，entitysync 在 80% 边界上无滞回会来回翻转。代价：靠 readiness 做 80% 容量卸载的部署会失去这个效果（目前仓内没有依赖它的配置） |

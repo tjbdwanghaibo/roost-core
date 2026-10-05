@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,12 +28,21 @@ import (
 
 const opsMaxJSONBodyBytes int64 = 1 << 20
 
+// defaultAdminTimeout 是 /admin/execute 交给命令的 ctx 期限（ops.admin_timeout 未配置时）。
+// adminWriteMargin 是 HTTP 写超时比它多出的部分：配合 ctx 的命令到期返回之后，回复还来得及写出去。
+const (
+	defaultAdminTimeout = 10 * time.Second
+	adminWriteMargin    = 5 * time.Second
+	defaultWriteTimeout = 15 * time.Second // 与 httpserver 的默认写超时相同
+)
+
 type OpsMod struct {
 	enabled       bool
 	addr          string
 	adminEnabled  bool
 	adminToken    string
 	allowDevToken bool
+	adminTimeout  time.Duration
 	sid           int32
 	service       string
 	health        *health.Registry
@@ -41,6 +51,7 @@ type OpsMod struct {
 	lifecycle     *lifecycle.Registry
 	serverMu      sync.Mutex
 	server        *http.Server
+	boundAddr     string // server 实际监听的地址（ops.addr 写端口 0 时由系统分配），serverMu 保护
 	registry      *app.Registry
 	ready         atomic.Bool
 	readyMsg      atomic.Value
@@ -62,6 +73,12 @@ func (m *OpsMod) Init(cfg *viper.Viper) error {
 	m.adminEnabled = read.Bool("ops.admin_enabled")
 	m.adminToken = cfg.GetString("ops.admin_token")
 	m.allowDevToken = read.Bool("ops.allow_dev_token")
+	m.adminTimeout = defaultAdminTimeout
+	if timeout := read.Duration("ops.admin_timeout"); timeout > 0 {
+		m.adminTimeout = timeout
+	} else if cfg.IsSet("ops.admin_timeout") && read.Err() == nil {
+		return fmt.Errorf("ops: ops.admin_timeout must be positive, got %s", cfg.GetString("ops.admin_timeout"))
+	}
 	m.sid = cfg.GetInt32("sid")
 	m.service = cfg.GetString("server_type")
 	if err := read.Err(); err != nil {
@@ -135,15 +152,47 @@ func (m *OpsMod) Start() error {
 	engine.Get("/statsz", m.handleStats)
 	engine.Get("/admin/commands", m.handleAdminCommands)
 	engine.Post("/admin/execute", m.handleAdminExecute)
-	server := httpserver.NewServer(m.addr, engine, httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes))
+	// 写超时比命令期限多出 adminWriteMargin：配合 ctx 的命令到期返回后，504 回复还写得出去（N02 O1）。
+	writeTimeout := max(defaultWriteTimeout, m.commandTimeout()+adminWriteMargin)
+	server := httpserver.NewServer(m.addr, engine,
+		httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes),
+		httpserver.WithTimeouts(0, 0, writeTimeout, 0))
+	// 在 Start 里同步 bind（RR-20261005-NC-230）：Start 返回 nil 就表示探针与运维端点已经在监听。
+	// 端口被占用时启动失败，而不是让进程在没有 /healthz、/readyz 的情况下继续跑——同机部署的健康检查
+	// 那时探到的是占着端口的另一个进程。
+	listener, err := net.Listen("tcp", m.addr)
+	if err != nil {
+		return fmt.Errorf("ops: listen on ops.addr %s: %w", m.addr, err)
+	}
 	m.server = server
+	m.boundAddr = listener.Addr().String()
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("ops: http server failed", "addr", m.addr, "err", err)
+		// Serve 在 Shutdown 之后返回 ErrServerClosed，并关闭 listener（Shutdown 早于 Serve 登记 listener 时
+		// 也由 Serve 关闭）。
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("ops: http server failed", "addr", m.boundAddr, "err", err)
 		}
 	}()
-	slog.Info("ops: serving", "addr", m.addr, "admin_enabled", m.adminEnabled)
+	slog.Info("ops: serving", "addr", m.boundAddr, "admin_enabled", m.adminEnabled, "admin_timeout", m.commandTimeout())
 	return nil
+}
+
+// listenAddr 返回 server 实际监听的地址；没有在跑的 server 时为空。
+func (m *OpsMod) listenAddr() string {
+	m.serverMu.Lock()
+	defer m.serverMu.Unlock()
+	if m.server == nil {
+		return ""
+	}
+	return m.boundAddr
+}
+
+// commandTimeout 是交给 admin 命令的期限；没经 Init 直接装配的 OpsMod 用默认值。
+func (m *OpsMod) commandTimeout() time.Duration {
+	if m.adminTimeout > 0 {
+		return m.adminTimeout
+	}
+	return defaultAdminTimeout
 }
 
 func (m *OpsMod) Stop() {
@@ -287,8 +336,18 @@ func (m *OpsMod) handleAdminExecute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "admin registry unavailable"})
 		return
 	}
-	result, err := m.commands.Execute(r.Context(), cmd)
+	// 命令在 ops.admin_timeout 内执行（N02 O1）。到期时命令可能已经做了一部分：回 504 并写明结果未知，
+	// 运维按 trace_id 核对后再决定是否重试。不配合 ctx 的命令 Ops 杀不掉，它跑过写超时后回复写不出去，
+	// 客户端看到传输错误——同样是结果未知，不等于没执行。
+	ctx, cancel := context.WithTimeout(r.Context(), m.commandTimeout())
+	defer cancel()
+	result, err := m.commands.Execute(ctx, cmd)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Message = fmt.Sprintf("command did not finish within ops.admin_timeout (%s); its effects are unknown: %v", m.commandTimeout(), err)
+			writeJSON(w, http.StatusGatewayTimeout, result)
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, result)
 		return
 	}

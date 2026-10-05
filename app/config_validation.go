@@ -262,6 +262,7 @@ var (
 	}
 	frameworkDurationKeys = []string{
 		"time.logic_offset", "log.rotate_interval", "shutdown.total_timeout",
+		"ops.admin_timeout",
 		"stats_log.interval",
 		"etcd.register_retry_min_interval", "etcd.register_retry_max_interval",
 		"mongo.connect_timeout", "mongo.max_idle_time", "mongo.transaction_timeout",

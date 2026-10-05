@@ -37,3 +37,10 @@ OpsMod 用 health/lifecycle/admin/metrics 能力提供运维 HTTP，维护自己
 schema 在现有 helpers 中递归复制 JSON 容器，包括空 map/嵌套数组，nilness 保持；非 JSON 类型不可变规则已经写入 API 注释。Ops 状态短锁与标准库 Shutdown 等待分开，错误保留实例、成功比较后释放，Start 不覆盖未关闭实例，ListenAndServe 捕获局部实例。
 
 正式原14项全绿，追加并发与取消/超时/重试等共35叶子/独立项通过，11包race/vet通过。Health 空 Status/Err 策略仍仅观察；永久阻塞与完整 App 故障、hijack/bind/生产HA尚未验证。复制成本随schema大小增长，未增加本批性能结论。
+
+## 2026-10-06 更新（revn01b）
+
+- Ops 的 bind 从后台 goroutine 移到 `Start`：`Start` 返回 nil 才表示探针端点已在监听（NC-230）。关闭仍是 `http.Server.Shutdown`，A3 骨架套到 OpsMod 后绿；Ops 没有 hijack 入口。admin 命令带 `ops.admin_timeout` 期限，写超时比它长 5s，到期 504 = 结果未知（N02 O1）。
+- 停机路径上的每个回调（Service.Shutdown、Mod 停止、service.stopping / stopped hook）都是“goroutine + 在 shutdownCtx 内等，超时保留依赖”（NC-231 补上 hook）；启动阶段的 hook 与 `ManagerGroup` 的回调没有预算，前者由 startupProbe 兜底，后者无生产调用方、注释写明不要用于需要预算的对象。
+- `run` 的返回值包含整个生命周期里的 RuntimeFailure（NC-232），退出码因此能反映停机期间的 fail-stop。
+- Health：`/healthz` 无条件 200，`/readyz` = 就绪位 ∧ 全部 checker OK（Degraded 同 Fail）。Degraded 是否算就绪待 DECISIONS-PENDING D1。[本轮](REVIEW-2026-10-06-n01b.md)

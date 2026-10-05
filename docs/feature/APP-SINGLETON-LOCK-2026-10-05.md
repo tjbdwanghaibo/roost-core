@@ -35,7 +35,7 @@
 | --- | --- | --- |
 | P2 启动 | 所有 Mod 立即 Init / Start：连接 Redis / Mongo / NATS，RemoteEntity 恢复，订阅 bus；直到 DataEngine `Start` 打开 WAL 时才因 `flock` 失败（`nestwal/wal.go:222-228`，`ErrLocked`），然后退出 | 在任何 Mod Init 之前等锁。P1 的键还在，P2 什么都不做 |
 | P1 卡住超过 TTL | — | P1 的键过期，P2 拿到锁，开始启动 Mod |
-| P2 的 DataEngine `Start` | — | P1 仍然活着（卡住的进程仍持有 `flock`）：P2 在打开 WAL 时失败，正常停掉已启动的 Mod、释放锁、非零退出，由外部重启重试（同一网络命名空间里 P2 的 ops 端口 bind 会先失败，但 `OpsMod.Start` 在 goroutine 里 `ListenAndServe`、只记错误日志，`kit/ops/ops_mod.go:136-139`，不会让 P2 在 DataEngine 之前退出；player TCP 的 `net.Listen` 在 access Mod 的 `Start` 里，排在 DataEngine 之后）。P1 已经死了：`flock` 拿到，先重放 P1 留下的 WAL（`dataengine/engine/runtime.go:86`），再开始服务 |
+| P2 的 DataEngine `Start` | — | P1 仍然活着（卡住的进程仍持有 `flock`）：P2 在打开 WAL 时失败，正常停掉已启动的 Mod、释放锁、非零退出，由外部重启重试（同一网络命名空间里 P2 的 ops 端口 bind 会先失败，但 `OpsMod.Start` 在 goroutine 里 `ListenAndServe`、只记错误日志，`kit/ops/ops_mod.go:136-139`，不会让 P2 在 DataEngine 之前退出；player TCP 的 `net.Listen` 在 access Mod 的 `Start` 里，排在 DataEngine 之后）。**更正（2026-10-06，RR-20261005-NC-230）**：`OpsMod.Start` 改为同步 bind，P2 现在在 ops Start（DataEngine 之前）就失败、停掉已启动的 Mod、释放锁、非零退出。P1 已经死了：`flock` 拿到，先重放 P1 留下的 WAL（`dataengine/engine/runtime.go:86`），再开始服务 |
 | P1 恢复（SIGCONT） | P1 照常服务，继续写自己的 WAL，订阅、定时器、matchmaker 全部照旧 | P1 的续期 goroutine 下一次 CAS 得到“不是我的”（键已过期或是 P2 的值），立即 `RuntimeFailure.Fail`：Nest 围栏、优雅停机、非零退出，释放 `flock` |
 
 App 锁在这个场景里提供的东西：
@@ -210,7 +210,7 @@ App 锁在这之上补的是：P2 不会在 P1 的键还活着时启动 DataEngi
 - P1 卡住后一直不恢复（SIGSTOP 之后没人发 SIGCONT）：P2 每次都在 DataEngine 打开 WAL 时失败退出、由外部重启重试。App 锁不替代杀掉旧进程；运维看到的是 P2 日志里的 `nestwal: directory is already locked`。
 - P2 拿锁之后、DataEngine 打开 WAL 之前启动的 Mod：只有在 P1 卡住超过 TTL 时才会出现，P2 随后在 `flock` 处退出。按生成的 game-demo bootstrap（共享 `lock, ops, statslog`；game 专属按 `sortMods` 的 DFS，`app/app.go:621-700`，依赖见下）逐个核对（审查时生成工程实测 bootstrap）：
   - 顺序：所有 Mod 先整体 Init、再整体 Provide、再整体 Start；Start 顺序为 `lock → ops → statslog →` `configdata → mongo → redis → nats`（NATS 可选依赖 Redis）`→ syncbus → remote_entity`（DataEngine 开了远端投影，可选依赖它；它硬依赖 redis / syncbus / mongo）`→ dataengine → etcd → manager → nest → saga → 九个 ClientMod → accessplayer → accessplayertcp`。DataEngine 之后的 Mod 不会 Start，但它们的 Provide 已经执行过（只构造对象、登记能力，未见监听或订阅）。
-  - `lock`：只登记进程内锁管理器（`kit/lock/lock_mod.go:23-27`）。`ops`：HTTP 监听在 goroutine 里，失败只记日志（`kit/ops/ops_mod.go:118-142`）。`configdata` / `mongo` / `redis`：读配置、建连接、Ping。
+  - `lock`：只登记进程内锁管理器（`kit/lock/lock_mod.go:23-27`）。`ops`：HTTP 监听在 goroutine 里，失败只记日志（`kit/ops/ops_mod.go:118-142`）。（2026-10-06 起 Start 同步 bind，失败即启动失败，NC-230。）`configdata` / `mongo` / `redis`：读配置、建连接、Ping。
   - `nats`：`bus.Start` 对 `Server(sid)`、`ServiceInstance(type, sid)`、`ServiceAll(type)`、`All()` 做**非队列**订阅（`bus/bus.go:287-306`）。这是唯一确定的按 sid 外部动作：P1 卡住期间发给本 sid 的消息 P2 也会收到；此时业务 handler 还没注册，按 `bus: no handler` 走死信（`bus/bus.go:802-807`）。core NATS 的非队列订阅是扇出，P1 恢复后仍会收到同一条，不会因此丢消息；开了 `nats.reliable` 时死信会多一条记录。接受。
   - `syncbus`：JetStream 模式只建对象、打日志；core NATS 模式同样只建对象（`kit/syncbus/mod.go:204-218`）。
   - `remote_entity`：启动 snapshot / interest 复制订阅，`RecoverOutbox` 扫的是**全部** sid 的 `state=applied` 远端事务（`remoteentity/mongo_committer.go:280-288`，不按 sid，幂等发布后标记 published），`StartFinalizer` 只处理本进程登记的事务。写由它自己的 Mongo 权威（`_owner_epoch` / `_grant_fence`，`remoteentity/mongo_committer.go:416-418`）校验。不构成按 sid 的副作用。
