@@ -1,0 +1,10 @@
+=== RUN   TestElectionResignHonoursTheCallerBudget
+    election_resign_budget_promises_test.go:49: Resign(50ms) against a hanging Revoke: err=context deadline exceeded elapsed=52ms
+--- PASS: TestElectionResignHonoursTheCallerBudget (0.10s)
+=== RUN   TestElectionResignWaitsForTheRevokeWhenEtcdAnswers
+--- PASS: TestElectionResignWaitsForTheRevokeWhenEtcdAnswers (0.00s)
+=== RUN   TestElectionResignClearsLifecycleBeforeReturning
+--- PASS: TestElectionResignClearsLifecycleBeforeReturning (0.00s)
+=== RUN   TestElectionResignAndLeaderRefuseWithoutALeadership
+--- PASS: TestElectionResignAndLeaderRefuseWithoutALeadership (0.01s)
+ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	0.465s

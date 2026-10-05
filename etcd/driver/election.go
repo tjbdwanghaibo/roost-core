@@ -67,9 +67,10 @@ type leaseSession interface {
 	Lease() clientv3.LeaseID
 }
 
-// abandonedLeaseRevokeTimeout bounds the Revoke of a campaign session that
-// failed before leadership was published. The lease still expires at its TTL
-// if this Revoke does not get through.
+// abandonedLeaseRevokeTimeout bounds the Revoke the election owns when a
+// session ends: a campaign that failed before leadership was published, or a
+// Resign (RR-20261005-NC-93). The lease still expires at its TTL if this Revoke
+// does not get through.
 const abandonedLeaseRevokeTimeout = 5 * time.Second
 
 type electionBackend interface {
@@ -232,6 +233,13 @@ func (s *campaignSession) releaseContext() {
 	s.cancel()
 }
 
+// closeError reports the result of a Close that already ran.
+func (s *campaignSession) closeError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeErr
+}
+
 // orphan ends a session whose campaign failed: it stops the keepalive and
 // releases the session context, and returns the lease still to revoke (ok
 // false when the session was already closed or has no lease handle, in which
@@ -253,26 +261,30 @@ func (s *campaignSession) orphan() (lease clientv3.LeaseID, ok bool) {
 	return lease, ok
 }
 
-// abandon releases the session of a campaign that failed before leadership
-// was published (RR-20261004-06). The keepalive stops at once; the lease
-// Revoke runs under its own deadline derived from lifetime (the client
-// context, so closing the client cancels it), never from sessionCtx, which the
-// caller's cancellation may already have canceled. While the caller still
-// waits it waits for the Revoke, so a failed Campaign returns with its keys
-// gone, as before NC-11; a caller that has gone returns at once and the
-// election owns the single Revoke, which the next Campaign waits for.
-func (e *election) abandon(ctx context.Context, s *campaignSession, lifetime context.Context) {
+// abandon releases a session: one whose campaign failed before leadership was
+// published (RR-20261004-06), and since RR-20261005-NC-93 also the session a
+// Resign gives up. The keepalive stops at once; the lease Revoke runs under its
+// own deadline derived from lifetime (the client context, so closing the
+// client cancels it), never from sessionCtx, which the caller's cancellation
+// may already have canceled, and never from the SDK's Session.Close, whose
+// Revoke waits up to the session TTL whatever the caller's budget is. While the
+// caller still waits it waits for the Revoke and gets its result, so the call
+// returns with the keys gone; a caller whose ctx ends first gets ctx.Err() at
+// once and the election owns the single Revoke, which the next Campaign waits
+// for. The result is nil or the Revoke error when the Revoke finished first.
+func (e *election) abandon(ctx context.Context, s *campaignSession, lifetime context.Context) error {
 	lease, ok := s.orphan()
 	if !ok {
-		return
+		return s.closeError()
 	}
 	done := make(chan struct{})
+	var revokeErr error
 	e.mu.Lock()
 	e.revoking = done
 	e.mu.Unlock()
 	go func() {
 		revokeCtx, cancel := context.WithTimeout(lifetime, abandonedLeaseRevokeTimeout)
-		_ = e.revokeLease(revokeCtx, lease) // On failure the lease expires at its TTL.
+		revokeErr = e.revokeLease(revokeCtx, lease) // On failure the lease expires at its TTL.
 		cancel()
 		e.mu.Lock()
 		if e.revoking == done {
@@ -283,7 +295,9 @@ func (e *election) abandon(ctx context.Context, s *campaignSession, lifetime con
 	}()
 	select {
 	case <-done:
+		return revokeErr
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -307,8 +321,23 @@ func (e *election) Resign(ctx context.Context) error {
 	if !active || elect == nil || session == nil {
 		return fetcd.ErrNotLeader
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	err := elect.Resign(ctx)
-	closeErr := session.Close()
+	// RR-20261005-NC-93：SDK Session.Close 用 session 自己的 context 加 TTL 秒发 Revoke，不看调用方
+	// ctx，etcd 无响应时 Resign 会阻塞到 TTL（默认 60s）。改走 abandon：调用方在等就等 Revoke 的
+	// 结果，预算先到就返回 ctx 错误，Revoke 由 election 持有并自带截止，下一次 Campaign 等它。
+	var closeErr error
+	if owned, ok := session.(*campaignSession); ok {
+		lifetime := context.Background()
+		if e.cli != nil {
+			lifetime = e.cli.Ctx()
+		}
+		closeErr = e.abandon(ctx, owned, lifetime)
+	} else {
+		closeErr = session.Close()
+	}
 	e.finish(session)
 	if err == nil {
 		err = closeErr

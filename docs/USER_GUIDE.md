@@ -40,7 +40,7 @@ Local、Grouped、RedisRawJSON、RedisJSONHash的Stale拒写现在返回ErrStale
 
 ## 2026-10-04 etcd setup与关闭责任（main，尚未发版）
 
-Campaign的caller取消/期限覆盖session创建与竞选等待；成功取得领导权后，原caller取消不结束长期session。真正的session loss/Resign仍结束领导权，敏感写必须校验fence。取消停止等待/keepalive不代表服务端租约已即时撤销，未知结果不要自动重试副作用；正常Resign的SDK Revoke仍可能TTL级等待，不承诺全链按caller期限返回。[NC-11](bugfix/RR-20261004-NC-11.md)。
+Campaign的caller取消/期限覆盖session创建与竞选等待；成功取得领导权后，原caller取消不结束长期session。真正的session loss/Resign仍结束领导权，敏感写必须校验fence。取消停止等待/keepalive不代表服务端租约已即时撤销，未知结果不要自动重试副作用；Resign按caller期限返回：期限先到时返回ctx错误、本地领导权已结束，lease撤销由election持有（自带5s截止，失败则等TTL），下一次Campaign等它结束（[NC-93](bugfix/RR-20261005-NC-93.md)；修复前SDK Revoke可能TTL级等待）。[NC-11](bugfix/RR-20261004-NC-11.md)。
 
 WatchCallback.CloseWithContext取消/超时只结束本次等待，同一subscription继续承担handler和底层watcher收尾；Done关闭才代表它们实际退出，可用新预算再次等待。底层watcher.Close错误现在由完成后的Close/CloseWithContext返回并通过Err保留，handler失败仍通过Err提取；干净显式关闭保持nil。第三方watcher/handler必须最终退出，callback内不无期限等自己的Done，应使用可取消等待，由外部最终排空。[NC-12](bugfix/RR-20261004-NC-12.md)。
 
