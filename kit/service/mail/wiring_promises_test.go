@@ -65,6 +65,26 @@ func TestGeneratedWiringRefusesEachMisassembledProcess(t *testing.T) {
 		cfg.Set("mail.call_timeout", -time.Second)
 		expectWiringErr(t, NewClientMod().Init(cfg), "mail.call_timeout must not be negative")
 	})
+	// A4：生成的客户端 Mod 严格读取 call_timeout。不带单位的数字以前被读成纳秒（5 → 5ns，
+	// 每次调用都超时），写错的词被读成 0（取默认）；现在 Init 点名拒绝。
+	for _, value := range []string{"5", "soon"} {
+		t.Run("client mod with call_timeout "+value, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigType("yaml")
+			if err := cfg.ReadConfig(strings.NewReader("mail:\n  call_timeout: " + value + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			expectWiringErr(t, NewClientMod().Init(cfg), "mail.call_timeout")
+		})
+	}
+	t.Run("client mod with call_timeout 2s", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("mail.call_timeout", "2s")
+		mod := NewClientMod()
+		if err := mod.Init(cfg); err != nil || mod.timeout != 2*time.Second {
+			t.Fatalf("Init = %v, timeout = %v; want nil and 2s", err, mod.timeout)
+		}
+	})
 	t.Run("client mod without a bus", func(t *testing.T) {
 		mod := NewClientMod()
 		if err := mod.Init(viper.New()); err != nil {

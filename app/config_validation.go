@@ -244,9 +244,9 @@ func isJetStreamTransport(value string) bool {
 // 这里列出框架代码——app、kit 的各 Mod 与生成器写进工程的接入层（player TCP、RPC 客户端 Mod）——用
 // 类型化读取的全部键。ValidateServiceConfig 在任何 Mod Init 之前按严格规则读一遍：宽松读取会把
 // `enabled: on` 读成 false、`ttl: 15` 读成 15ns、`workers: 8k` 读成 0（取默认），保护静默失效。
-// kit 自己也用 app.ConfigReader 严格读取，这份登记的作用是：错误在启动第一步一次报全；生成工程的代码
-// 为了兼容已发布的 roost-core 仍用 viper 的 getter，靠这里在新版本上得到同样的检查；kit/redis 的三个
-// 整数键在 A2 之后才改成严格读取，现在也由这里兜住。
+// kit 与生成的接入层（生成器 Core 下限 v1.20.2 起）自己也用 app.ConfigReader / ConfigDuration 严格读取，
+// 这份登记的作用是：错误在启动第一步一次报全；下限之前生成、未重新生成的工程代码仍用 viper 的 getter，
+// 靠这里在新版本上得到同样的检查。
 //
 // app 的 TestFrameworkCodeDoesNotReadConfigLeniently 与 TestEvery*IsCheckedStrictly 扫描 app、kit 与生成模板的源码：读到未登记的
 // 键、或在框架代码里新增宽松读取，测试变红。singleton.* 由 readSingletonSettings 检查，不在这里重复。

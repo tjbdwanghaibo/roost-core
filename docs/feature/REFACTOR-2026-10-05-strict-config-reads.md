@@ -24,7 +24,7 @@
 **范围例外**
 
 - `kit/redis/redis_mod.go` 的 `redis.db` / `redis.pool_size` / `redis.min_idle_conns` 三处 `GetInt`：kit/redis 当时由 A2 的 agent 修改，本批不动；三个键已在 `frameworkIntKeys` 里，启动时由 `ValidateServiceConfig` 严格检查。守卫测试按“文件 + 键”逐个放行这三处，新增读取照样变红。**留给 A2 之后**改成 `app.ConfigReader`。（2026-10-06 已改，见文末“A4 留项：kit/redis”。）
-- 生成进工程的代码（player TCP 接入层 `codegen/internal/roost/render_player_tcp.go`、RPC 客户端 Mod 模板 `codegen/internal/servicerpc/template.go` 及其在 `kit/service/*_rpc_assembly_gen.go` 的产物）仍用 viper 的 getter：生成工程按生成器的下限（`manifest.go` 的 `Core`，现为 v1.20.1）解析 roost-core，`app.ConfigReader` 只在下一版里有，改成严格读取会让按默认下限生成的工程编译失败、兼容矩阵 minimum 变红。它们读的键都已登记（`player_access.tcp.*` 字面登记，`<service>.call_timeout` 按后缀），新版 roost-core 上由启动校验兜住；下限升到 v1.20.2 之后可以再改成严格读取。
+- 生成进工程的代码（player TCP 接入层 `codegen/internal/roost/render_player_tcp.go`、RPC 客户端 Mod 模板 `codegen/internal/servicerpc/template.go` 及其在 `kit/service/*_rpc_assembly_gen.go` 的产物）本批仍用 viper 的 getter：生成工程按生成器的下限（`manifest.go` 的 `Core`，当时为 v1.20.1）解析 roost-core，`app.ConfigReader` 只在下一版里有。它们读的键都已登记（`player_access.tcp.*` 字面登记，`<service>.call_timeout` 按后缀），新版 roost-core 上由启动校验兜住。~~下限升到 v1.20.2 之后再改成严格读取。~~ 已完成（2026-10-06，见文末“A4 留项：生成进工程的代码”）。
 - `sid` 的读取点遍布各 Mod，保留 `GetInt32("sid")`：启动校验先严格检查它是 int32 范围内的正整数。
 - `GetString` / `GetStringSlice` 不在本批范围（字符串没有类型问题；`redis.cluster_addrs` 的列表写法已由 NC-190 处理）。
 
@@ -45,7 +45,7 @@
 
 - 维护者决定 A4 ①：每个 Mod 声明自己的配置键与类型（键名、类型、默认值、是否必填、是否生产必需），校验 / 生成器 / doctor 共用一份声明。本批的三份登记加守卫是过渡形态：登记集中在 app，靠源码扫描与读取点保持同步。
 - ~~A2 之后：kit/redis 三处整数读取改为 `app.ConfigReader`，删掉守卫里的放行。~~ 已完成（2026-10-06，见文末）。
-- 生成器下限升到包含 `app.ConfigReader` 的版本之后：生成的 player TCP 接入层与 RPC 客户端 Mod 改用严格读取。
+- ~~生成器下限升到包含 `app.ConfigReader` 的版本之后：生成的 player TCP 接入层与 RPC 客户端 Mod 改用严格读取。~~ 已完成（2026-10-06，随 v1.20.2 下限，见文末）。
 
 ## A4 留项：kit/redis（2026-10-06）
 
@@ -58,3 +58,16 @@
 - 绿：同一用例（三键 × 三种坏值，Mod 与 SingletonStore 都拒绝；合法的 2 / 16 / 3 读对）；`go test -race -count=3 ./kit/redis ./app`；根包。
 - 兼容：经 App 启动的进程此前已由 `ValidateServiceConfig` 拒绝这些值，行为不变；只有绕过 App 直接装配 Mod 的调用方（测试、工具）从“读成 0”变成报错。
 
+## A4 留项：生成进工程的代码（2026-10-06）
+
+生成器 Core 下限随 v1.20.2 升到包含 `app.ConfigReader` 的版本，两份模板改为严格读取：
+
+- player TCP 接入层（`render_player_tcp.go` 的 `configFromViper`）：`read := app.NewConfigReader(cfg)` 读 `player_access.tcp.*` 的布尔、整数、时长与 `nest.request_timeout`，全部读完后 `read.Err()` 一次报出所有写错的键（`player tcp: config: player_access.tcp.enabled must be true or false, got "on"` …）。`max_handshake_bytes` / `max_payload_bytes` 先按 int 读，负数或超过 16 MiB 点名拒绝，再转 uint32（以前 `GetUint32(-1)` 读成 0、取默认）。`addr` 仍是 `GetString`。合法配置行为不变：未设置取默认，dispatch / login 预算的回退规则不变。
+- RPC 客户端 Mod 模板：`app.ConfigDuration(cfg, "<service>.call_timeout")`，错误包成 `<pkg> client mod: config: <service>.call_timeout …`；负数仍按原文案拒绝。kit/service 的九份 `*_rpc_assembly_gen.go` 经 `go generate ./...` 重生成，servicerpc golden 刷新。
+- 守卫：`TestFrameworkCodeDoesNotReadConfigLeniently` 把两份模板纳入扫描，删掉“生成文件的 `*.call_timeout`”放行，例外只剩 `sid`；`playerTCPReadPattern` 改认 `read.X(key + "…")`。生成工程测试新增 `TestConfigValuesOfTheWrongTypeAreRefusedByName`（`server_gen_test.go`）。
+
+验证（worktree `rel122`，基线 `cb3e2549`）：
+
+- 先红（修前生成器 + 本仓 core）：game-demo 里同一用例，`enabled: on`、`max_payload_bytes: 8k`、`max_handshake_bytes: -1`、`idle_timeout: 90`、`handshake_timeout: soon`、`nest.request_timeout: 7` 六项 `Init returned <nil>`（解析结果分别是 `Enabled:false`、默认 1048576、默认 8192、`IdleTimeout:90ns`、默认 5s、`DispatchTimeout:7ns LoginTimeout:7ns`），`max_connections: 1.5` 只报不点名的 `addr, limits and timeouts are outside safe bounds`；kit/service/mail 的 `mail.call_timeout: 5` / `soon` 两项 `error = <nil>`。
+- 绿：同一用例 7 项全部点名拒绝，合法的字符串写法（`enabled: "true"`、`max_payload_bytes: "65536"`）照常读取；mail 两项点名拒绝、`2s` 读对。生成的 dev / prod example / k8s Secret 三份 game 配置经新 `Mod.Init` 与 `ValidateServiceConfig` 通过。新生成 game-demo（replace 到 worktree）`go build ./... && go vet ./... && go test ./...` 通过；`go test -count=1 ./codegen/...`、`./app ./kit/service/...` 通过；`go generate ./...` 之后 porcelain 干净。
+- 兼容：经 App 启动的进程在 v1.20.2 core 上此前已由 `ValidateServiceConfig` 在启动第一步点名拒绝这些值（修前生成的 game-demo 用同一份坏配置启动，同样报 `config: player_access.tcp.enabled must be true or false, got "on"` 与 `max_payload_bytes must be a whole number, got "8k"`），行为不变；变化在绕过 App 直接调用 Mod Init 的路径（测试、工具），以及生成代码不再依赖登记表兜底。新生成的代码需要 core ≥ v1.20.2；已生成工程不迁移。

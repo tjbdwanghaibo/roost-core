@@ -220,23 +220,25 @@ func (m *ClientMod) Init(cfg *viper.Viper) error {
 	if m.serviceType == "" {
 		m.serviceType = ServiceType
 	}
-	// Read inline rather than through a shared helper, so the generated
-	// transport depends on nothing but roost-core and roost-kit and works in
-	// any repository.
+	// Read strictly through app.ConfigDuration (maintainer decision A4): a
+	// bare number is refused rather than read as nanoseconds (5 → 5ns, every
+	// call times out) and a word that is not a duration is refused rather
+	// than read as 0 (the default). The error names the key.
 	//
 	// A negative value is refused rather than clamped: a caller that wrote -1
 	// meant something, and silently reading it as the default hides the
 	// mistake.
 	m.timeout = DefaultCallTimeout
-	if cfg.IsSet("rank.call_timeout") {
-		timeout := cfg.GetDuration("rank.call_timeout")
-		if timeout < 0 {
-			return fmt.Errorf("rank client mod: rank.call_timeout must not be "+
-				"negative, got %s", timeout)
-		}
-		if timeout > 0 {
-			m.timeout = timeout
-		}
+	timeout, err := app.ConfigDuration(cfg, "rank.call_timeout")
+	if err != nil {
+		return fmt.Errorf("rank client mod: %w", err)
+	}
+	if timeout < 0 {
+		return fmt.Errorf("rank client mod: rank.call_timeout must not be "+
+			"negative, got %s", timeout)
+	}
+	if timeout > 0 {
+		m.timeout = timeout
 	}
 	return nil
 }

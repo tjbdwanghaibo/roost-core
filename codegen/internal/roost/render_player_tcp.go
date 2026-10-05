@@ -231,33 +231,52 @@ func defaultConfig() Config {
 	}
 }
 
+// configFromViper reads player_access.tcp.* strictly through app.ConfigReader
+// (maintainer decision A4): a value of the wrong type — "enabled: on",
+// "max_payload_bytes: 8k", a duration without a unit — is refused by key
+// instead of being read as false / 0 (the default) / nanoseconds. Every bad
+// key is reported at once. An unset key keeps its default.
 func configFromViper(cfg *viper.Viper) (Config, error) {
 	result := defaultConfig()
 	if cfg == nil { return result, errors.New("player tcp: config is nil") }
 	const key = "player_access.tcp."
-	result.Enabled = cfg.GetBool(key + "enabled")
+	read := app.NewConfigReader(cfg)
+	result.Enabled = read.Bool(key + "enabled")
 	if value := cfg.GetString(key + "addr"); value != "" { result.Addr = value }
-	if value := cfg.GetInt(key + "max_connections"); value != 0 { result.MaxConnections = value }
-	if value := cfg.GetInt(key + "max_connections_per_ip"); value != 0 { result.MaxConnectionsPerIP = value }
-	if value := cfg.GetInt(key + "max_handshakes"); value != 0 { result.MaxHandshakes = value }
-	if value := cfg.GetUint32(key + "max_handshake_bytes"); value != 0 { result.MaxHandshakeBytes = value }
-	if value := cfg.GetUint32(key + "max_payload_bytes"); value != 0 { result.MaxPayloadBytes = value }
-	if value := cfg.GetDuration(key + "handshake_timeout"); value != 0 { result.HandshakeTimeout = value }
-	if value := cfg.GetDuration(key + "idle_timeout"); value != 0 { result.IdleTimeout = value }
-	if value := cfg.GetDuration(key + "write_timeout"); value != 0 { result.WriteTimeout = value }
-	if value := cfg.GetDuration(key + "shutdown_timeout"); value != 0 { result.ShutdownTimeout = value }
+	if value := read.Int(key + "max_connections"); value != 0 { result.MaxConnections = value }
+	if value := read.Int(key + "max_connections_per_ip"); value != 0 { result.MaxConnectionsPerIP = value }
+	if value := read.Int(key + "max_handshakes"); value != 0 { result.MaxHandshakes = value }
+	handshakeBytes := read.Int(key + "max_handshake_bytes")
+	payloadBytes := read.Int(key + "max_payload_bytes")
+	if value := read.Duration(key + "handshake_timeout"); value != 0 { result.HandshakeTimeout = value }
+	if value := read.Duration(key + "idle_timeout"); value != 0 { result.IdleTimeout = value }
+	if value := read.Duration(key + "write_timeout"); value != 0 { result.WriteTimeout = value }
+	if value := read.Duration(key + "shutdown_timeout"); value != 0 { result.ShutdownTimeout = value }
 	// The dispatch budget follows the Nest request budget unless it is set on
 	// its own: a request is at least one Nest call, and a transport deadline
 	// shorter than that call's own would cut it off for no stated reason.
-	if value := cfg.GetDuration(key + "dispatch_timeout"); value != 0 {
+	if value := read.Duration(key + "dispatch_timeout"); value != 0 {
 		result.DispatchTimeout = value
-	} else if value := cfg.GetDuration("nest.request_timeout"); value > 0 {
+	} else if value := read.Duration("nest.request_timeout"); value > 0 {
 		result.DispatchTimeout = value
 	}
-	if value := cfg.GetDuration(key + "login_timeout"); value != 0 {
+	if value := read.Duration(key + "login_timeout"); value != 0 {
 		result.LoginTimeout = value
 	} else {
 		result.LoginTimeout = min(defaultLoginTimeout, result.DispatchTimeout)
+	}
+	if err := read.Err(); err != nil { return Config{}, fmt.Errorf("player tcp: %%w", err) }
+	// The byte limits are uint32 on the wire. A negative value is refused by
+	// name rather than wrapped or read as the default.
+	for _, limit := range []struct {
+		name string
+		value int
+		field *uint32
+	}{{"max_handshake_bytes", handshakeBytes, &result.MaxHandshakeBytes}, {"max_payload_bytes", payloadBytes, &result.MaxPayloadBytes}} {
+		if limit.value < 0 || limit.value > hardMaxPayload {
+			return Config{}, fmt.Errorf("player tcp: %%s%%s = %%d is outside 1..%%d", key, limit.name, limit.value, hardMaxPayload)
+		}
+		if limit.value != 0 { *limit.field = uint32(limit.value) }
 	}
 	if err := validateConfig(result); err != nil { return Config{}, err }
 	return result, nil
@@ -1120,6 +1139,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -1328,6 +1348,48 @@ func TestDispatchBudgetFollowsTheNestRequestTimeout(t *testing.T) {
 	}))
 	if err != nil || server.config.DispatchTimeout != defaultDispatchTimeout || server.config.LoginTimeout != defaultLoginTimeout {
 		t.Fatalf("legacy config: err=%%v dispatch=%%v login=%%v", err, server.config.DispatchTimeout, server.config.LoginTimeout)
+	}
+}
+
+// A4: player_access.tcp.* is read strictly. A value of the wrong type used to
+// be read as false / 0 (the default) / nanoseconds and pass every check; Init
+// now refuses it and names the key, and a valid value written as a string (an
+// environment override) still reads.
+func TestConfigValuesOfTheWrongTypeAreRefusedByName(t *testing.T) {
+	newMod := func() *Mod {
+		return &Mod{authenticator: AuthenticatorFunc(func(context.Context, string, net.Addr) (gateway.Principal, error) {
+			return gateway.Principal{}, nil
+		})}
+	}
+	yamlConfig := func(t *testing.T, text string) *viper.Viper {
+		t.Helper()
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(strings.NewReader(text)); err != nil { t.Fatal(err) }
+		return cfg
+	}
+	for _, tc := range []struct{ name, yaml, key string }{
+		{"enabled_on", "player_access:\n  tcp:\n    enabled: on\n", "player_access.tcp.enabled"},
+		{"payload_8k", "player_access:\n  tcp:\n    max_payload_bytes: 8k\n", "player_access.tcp.max_payload_bytes"},
+		{"handshake_bytes_negative", "player_access:\n  tcp:\n    max_handshake_bytes: -1\n", "player_access.tcp.max_handshake_bytes"},
+		{"connections_fraction", "player_access:\n  tcp:\n    max_connections: 1.5\n", "player_access.tcp.max_connections"},
+		{"idle_unitless", "player_access:\n  tcp:\n    idle_timeout: 90\n", "player_access.tcp.idle_timeout"},
+		{"handshake_word", "player_access:\n  tcp:\n    handshake_timeout: soon\n", "player_access.tcp.handshake_timeout"},
+		{"nest_request_unitless", "nest:\n  request_timeout: 7\n", "nest.request_timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mod := newMod()
+			err := mod.Init(yamlConfig(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("%%s: Init returned %%v, want a refusal naming %%s (parsed config: %%+v)", strings.TrimSpace(tc.yaml), err, tc.key, mod.config)
+			}
+		})
+	}
+	mod := newMod()
+	valid := "player_access:\n  tcp:\n    enabled: \"true\"\n    max_payload_bytes: \"65536\"\n    max_handshake_bytes: 4096\n    idle_timeout: 30s\n"
+	if err := mod.Init(yamlConfig(t, valid)); err != nil { t.Fatalf("valid config refused: %%v", err) }
+	if !mod.config.Enabled || mod.config.MaxPayloadBytes != 65536 || mod.config.MaxHandshakeBytes != 4096 || mod.config.IdleTimeout != 30*time.Second {
+		t.Fatalf("valid config read as %%+v", mod.config)
 	}
 }
 

@@ -131,24 +131,23 @@ func TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly(t *testing.T) {
 	}
 }
 
-// 框架代码（app、kit）不再用 viper 的宽松 getter 读类型化的配置。例外：
-//   - sid：ValidateServiceConfig 严格检查过，读取点遍布各 Mod；
-//   - 生成文件（kit/service 的 *_rpc_assembly_gen.go）：生成工程要兼容已发布的 roost-core，读的 <service>.call_timeout
-//     由 frameworkDurationSuffixes 在启动时检查。
+// 框架代码（app、kit）与生成进工程的两份模板（player TCP 接入层、RPC 客户端 Mod）不再用 viper 的宽松
+// getter 读类型化的配置。例外只有 sid：ValidateServiceConfig 严格检查过，读取点遍布各 Mod。
 //
-// kit/redis/redis_mod.go 的三个整数键（redis.db / pool_size / min_idle_conns）曾在 A2 合入前放行，现已改为严格读取。
+// kit/redis/redis_mod.go 的三个整数键（redis.db / pool_size / min_idle_conns）曾在 A2 合入前放行，现已改为严格读取；
+// 生成文件（kit/service 的 *_rpc_assembly_gen.go 读 <service>.call_timeout）与生成的 player TCP 接入层曾因生成器
+// Core 下限低于 v1.20.2（没有 app.ConfigReader）放行，下限升到 v1.20.2 后改为严格读取。
 func TestFrameworkCodeDoesNotReadConfigLeniently(t *testing.T) {
 	lenient := regexp.MustCompile(`\.(GetBool|GetDuration|GetInt|GetInt8|GetInt16|GetInt32|GetInt64|GetUint|GetUint8|GetUint16|GetUint32|GetUint64|GetFloat32|GetFloat64|GetSizeInBytes)\(([^)]*)\)`)
-	for _, file := range frameworkGoSources(t) {
+	files := append(frameworkGoSources(t), generatedConfigTemplates...)
+	for _, file := range files {
 		body := readSource(t, file)
-		generated := strings.Contains(body, "// Code generated")
 		for _, line := range strings.Split(body, "\n") {
 			for _, match := range lenient.FindAllStringSubmatch(line, -1) {
 				key := strings.Trim(match[2], `"`)
 				switch {
 				case strings.Contains(line, "Flags()."): // cobra 命令行参数，不是配置
 				case key == "sid":
-				case generated && matchesDurationSuffix(key):
 				default:
 					t.Errorf("%s: %s reads config leniently (%s); use app.ConfigBool / ConfigDuration / ConfigInt or an app.ConfigReader", file, strings.TrimSpace(line), match[1])
 				}
@@ -166,15 +165,18 @@ var (
 	intReadPattern      = regexp.MustCompile(`(?:GetU?[Ii]nt(?:8|16|32|64)?|ConfigInt(?:64)?|read\.Int(?:64)?)\((?:[\w.]+, )?"([^"]+)"\)`)
 	// kit/syncbus 先按段优先级解析键名再读：cfgDuration(cfg, read, "ack_wait")。
 	syncBusReadPattern = regexp.MustCompile(`cfg(Duration|Int|Int64)\(cfg, read, "([^"]+)"\)`)
-	// 生成的 player TCP 接入层：const key = "player_access.tcp."，cfg.GetDuration(key + "idle_timeout")。
-	playerTCPReadPattern = regexp.MustCompile(`Get(Bool|Duration|Int|Uint32)\(key \+ "([^"]+)"\)`)
+	// 生成的 player TCP 接入层：const key = "player_access.tcp."，read.Duration(key + "idle_timeout")。
+	playerTCPReadPattern = regexp.MustCompile(`read\.(Bool|Duration|Int)\(key \+ "([^"]+)"\)`)
+
+	// 生成进工程、读类型化配置的模板：player TCP 接入层与 RPC 客户端 Mod。
+	generatedConfigTemplates = []string{"../codegen/internal/roost/render_player_tcp.go", "../codegen/internal/servicerpc/template.go"}
 )
 
 // scanFrameworkConfigReads 找出 app、kit 与生成模板（player TCP 接入层、RPC 客户端 Mod）里按类型读取的配置键。
 func scanFrameworkConfigReads(t *testing.T) []frameworkConfigRead {
 	t.Helper()
 	var reads []frameworkConfigRead
-	files := append(frameworkGoSources(t), "../codegen/internal/roost/render_player_tcp.go", "../codegen/internal/servicerpc/template.go")
+	files := append(frameworkGoSources(t), generatedConfigTemplates...)
 	for _, file := range files {
 		body := readSource(t, file)
 		for kind, pattern := range map[string]*regexp.Regexp{"bool": boolReadPattern, "duration": durationReadPattern, "int": intReadPattern} {
@@ -189,7 +191,7 @@ func scanFrameworkConfigReads(t *testing.T) []frameworkConfigRead {
 			}
 		}
 		for _, match := range playerTCPReadPattern.FindAllStringSubmatch(body, -1) {
-			kind := map[string]string{"Bool": "bool", "Duration": "duration", "Int": "int", "Uint32": "int"}[match[1]]
+			kind := map[string]string{"Bool": "bool", "Duration": "duration", "Int": "int"}[match[1]]
 			reads = append(reads, frameworkConfigRead{file, kind, "player_access.tcp." + match[2]})
 		}
 	}
