@@ -589,3 +589,5 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - **优雅停机时先断会话、listener 仍开着**：`Service.Shutdown` 第一步 `CloseServedSessions` 断开服务中的玩家，但传输层 Mod 要到后面逆序停止时才关 listener；这段时间里立即重连的客户端可能在本进程再登录一次（`Serve` 建记录、装载），随后在传输层停止时再被断开、到接替的进程重登。只是多一次重登，不形成两个写者（同一 sid 只有本进程持锁，接替进程要等本进程释放），维持现状。
 
 验证（`GOWORK=off`，独立 worktree，rebase 到 `10e2e0ea` 之后）：`gofmt -l` 空；`go build ./... && go vet ./...` 通过；`go generate ./...` 后 porcelain 只有本节文档；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 87s）；根包 `go test -count=1 .` 通过。生成 game-demo（`project new sobs -template game-demo` + `go mod edit -replace` 指向本 worktree）：`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/ ./internal/access/...`、`go test ./...` 全绿，新用例 `-race -count=50` 稳定。没有重跑真实进程演练。
+
+**发布（2026-10-05）**：随 v1.20.0 发布（tag → `999dc672`）。
