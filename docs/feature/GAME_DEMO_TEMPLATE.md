@@ -513,6 +513,9 @@ kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，ki
   中途重启的服务器**重新加入它本来就在贡献的那个活动**，不需要任何人告诉它。
 - **租约来自 `global`**：进程启动 `Bind`（只插不改，第二次起冲突就是围栏）+ `AcquireLease`，循环里续约，
   停机时归还。活动的预期集合取自 `LiveGames(候选集)`——**没起来的服务器不能被等**，否则每个窗口都要等到宽限期。
+  （**已被取代（2026-10-05）**：activity 不再持有 global 租约，预期集合改为 App 单实例锁的
+  `app.SingletonLiveness.Live(本进程 server_type, 候选集)`，`Bind` 的组绑定保留；见
+  [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §7.2。）
 - **贡献的幂等锚是 dungeon run id**，和清关奖励用的是同一个：重投的贡献被 coordinator 的 reservation 挡掉，
   而不是记两次。机器人断言的是精确的 1（清关一次 + 重放一次），不是"至少 1"。
 - **结算的顺序是 邮件 → 记录 → ack**，每一步都能重复：邮件按 (活动, 玩家) 幂等；World 上的记录让整张榜
@@ -661,6 +664,13 @@ dataengine fatal storage outcome: ... fatal projection version conflict: game/pl
 
 #### 9.11.2 所有权表：`game/playerroute`
 
+> **已被取代（2026-10-05）**：本节描述的按玩家 Redis 租约表 `game/playerroute` 及 `PlayerOwners` 的租约、续租、
+> 归还已删除，改为静态绑定——玩家只在 account 绑定的 sid（`Role.ServerID`）上服务，登录按会话 Claims 里的
+> `server_id` 判定，同一 sid 只有一个进程由 App 单实例锁保证，`PlayerOwners` 只剩本地驻留表与闲置卸载；
+> `player_elsewhere` 的含义收窄为“玩家绑定在另一个服，不要在本服重试”。见
+> [静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)、[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)
+> §7；完整的新节在该方案第 5 笔补写。下文保留作历史记录。
+
 一个 Redis key 一个玩家，值是持有者 sid，带 30 秒租约、10 秒续约。`Claim` 是 insert-only（SetNX），
 所以"没人持有"时两个进程抢同一份工作只会有一个赢；`GetRoute` 把无人持有报成 **NOT FOUND** 而不是"我"——
 报"我"就等于每个进程都是每个空闲玩家的持有者，正是这张表要防的事。
@@ -693,6 +703,7 @@ World 从 `const WorldUniqueID int64 = 1` 变成 `WorldUniqueID(registry) = sid`
 各有一个"，只是 id 没有兑现这句话。Scene 是 `noPersist`，两个进程各有一份内存对象不写同一个文档，不动。
 
 matchmaker 在分组前按所有权过滤候选票（`OwnedHere`，**不**认领——只是看一眼就把空闲玩家拉进自己进程是错的）。
+（2026-10-05 起改为 `Resident`：只看本地驻留表，见 §9.11.2 的取代说明。）
 代价写在这里：**跨进程的匹配做不了**，它需要一个战斗宿主和把另一方输入路由过去的能力，demo 没有；
 现在的失败形态是"队列多等一会儿"，而不是"建出一场谁都打不了的战斗"。
 

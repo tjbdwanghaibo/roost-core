@@ -1,19 +1,19 @@
 package roost
 
 // RR-20260928-06：game-demo 的生产示例配置与 k8s Secret 示例必须能让 game 通过 Init 的配置校验。
-// demo 的 game 在 Init 里要求 platform.payment_secret、game_route.key_prefix、activity.key_prefix
-// 非空（按这个顺序失败），activity.game_sids 给出候选 sid，platform.key_prefix 按 kit/mods.KeyPrefix
-// 的规则非空且无空白。旧行为：demo 只把这三段追加进开发配置，按生产示例起 game（本机 compose 实测）
-// 依次报 "platform.payment_secret is empty" → "game_route.key_prefix is empty" →
-// "activity.key_prefix is empty"。
+// demo 的 game 在 Init 里要求 platform.payment_secret 非空、App 单实例锁打开（activity 从它的 Live
+// 查询取 expected 集合）、activity.key_prefix 非空（按这个顺序失败），activity.game_sids 给出候选 sid，
+// platform.key_prefix 按 kit/mods.KeyPrefix 的规则非空且无空白。旧行为：demo 只把追加段写进开发配置，
+// 按生产示例起 game（本机 compose 实测）依次报 "platform.payment_secret is empty" →
+// "game_route.key_prefix is empty" → "activity.key_prefix is empty"。
 // 这里同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的
 // 这三段与生产示例一致；前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里
 // 是 CHANGE_ME，由运维填）。
 // Secret 示例这里只比这三段；Secret 与生产示例整体同源（含 add saga / player TCP 事后追加的 saga、
 // player_access 段）由 RR-20260928-07 的 k8s_secret_config_promises_test.go 守。
 // App 单实例锁（APP-SINGLETON-LOCK-2026-10-05 §6.3）：game 带 dataengine，三份配置都要
-// singleton.enabled: true、key_prefix 为 roost:<project>:singleton，取值满足 App 启动校验的三条关系；
-// game_route 段仍由当前 playerowner 读取，随按玩家 Redis 表在方案第 3 笔删除。
+// singleton.enabled: true、key_prefix 为 roost:<project>:singleton，取值满足 App 启动校验的三条关系。
+// 静态绑定方案第 3 笔删除了按玩家的 Redis 表，game_route 段随之删除：三份配置里都不能再有它。
 
 import (
 	"fmt"
@@ -91,11 +91,11 @@ func checkDemoGameInitConfig(body string) error {
 	if cfg.GetString("platform.payment_secret") == "" {
 		return fmt.Errorf("player controller: platform.payment_secret is empty")
 	}
-	// internal/service/<game>/playerowner.go NewPlayerOwners
-	if cfg.GetString("game_route.key_prefix") == "" {
-		return fmt.Errorf("player owners: game_route.key_prefix is empty")
+	// internal/service/<game>/activity.go: app.ModSingleton is published only
+	// when the App singleton lock is on.
+	if !cfg.GetBool("singleton.enabled") {
+		return fmt.Errorf("activity: capability %q not found; needs singleton.enabled=true", "singleton")
 	}
-	// internal/service/<game>/activity.go
 	if cfg.GetString("activity.key_prefix") == "" {
 		return fmt.Errorf("activity: activity.key_prefix is empty")
 	}
@@ -112,7 +112,7 @@ func checkDemoGameInitConfig(body string) error {
 // demoGameSection reports whether a dotted key belongs to one of the sections
 // the demo appends to the game service's configs.
 func demoGameSection(key string) bool {
-	for _, section := range []string{"game_route", "activity", "platform", "singleton"} {
+	for _, section := range []string{"activity", "platform", "singleton"} {
 		if key == section || strings.HasPrefix(key, section+".") {
 			return true
 		}
@@ -177,6 +177,11 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
 			}
 			assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
+			for key := range leaves {
+				if key == "game_route" || strings.HasPrefix(key, "game_route.") {
+					t.Errorf("%s still has %s; the per-player route table and its keyspace were removed with static binding", rel, key)
+				}
+			}
 			// The prefixes the game borrows are the owning services' own.
 			for owner, key := range map[string]string{"activity": "activity.key_prefix", "platform": "platform.key_prefix"} {
 				ownerRel := "configs/service/config." + owner + ".prod.example.yaml"

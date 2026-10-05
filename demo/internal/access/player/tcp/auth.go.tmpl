@@ -84,14 +84,24 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 		slog.Debug("session ticket rejected", "player_id", playerID, "err", err)
 		return gateway.Principal{}, gateway.ErrUnauthenticated
 	}
-	return newPrincipal(role.PlayerID), nil
+	return newPrincipal(role.PlayerID, role.ServerID), nil
 }
+
+// ServerIDClaim 是 Principal.Claims 里记录角色绑定 sid 的键。登录端点
+// （game/controllers/player/enter_game.go 的 serverIDClaim）读它，与本进程的 sid 比较：不相等就
+// 按名拒绝（player_elsewhere）。两边各写一份字面量，因为控制器包不能引用传输包。
+const ServerIDClaim = "server_id"
 
 // newPrincipal mints a SessionID unique per connection: the access layer uses
 // it to tell two logins of the same player apart.
-func newPrincipal(playerID int64) gateway.Principal {
+//
+// serverID 是 account 校验会话时返回的角色 ServerID（建角时写入、之后不变），是权威值，不是客户端
+// 声称的值；认证器只负责记下它，不负责拒绝——握手失败只能断开连接，客户端得不到原因，拒绝由登录端点
+// 以 player_elsewhere 给出。
+func newPrincipal(playerID int64, serverID int32) gateway.Principal {
 	return gateway.Principal{
 		PlayerID:  playerID,
 		SessionID: fmt.Sprintf("demo-%d-%d", playerID, time.Now().UnixNano()),
+		Claims:    map[string]string{ServerIDClaim: strconv.FormatInt(int64(serverID), 10)},
 	}
 }

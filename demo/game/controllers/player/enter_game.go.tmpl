@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"{{MODULE}}/game/chatroom"
 	apperrors "{{MODULE}}/internal/errors"
@@ -13,6 +14,7 @@ import (
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
 	svcchat "github.com/tjbdwanghaibo/roost-core/kit/service/chat"
 )
 
@@ -25,32 +27,34 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
-	// Ownership FIRST, before the Entity is loaded, because loading it is the
-	// thing being gated. A Player may be resident in exactly one process: two
-	// copies means two version counters over one document, and the loser of
-	// that race is a `fatal projection version conflict` that takes the whole
-	// process down (GAME_DEMO_TEMPLATE §9.11).
+	// 先校验绑定，再装载实体，因为装载正是被把关的那件事。玩家建角时由 account 绑定到一个 game sid
+	// （Role.ServerID），之后不迁移；一个 Player 只能在他绑定的 sid 上驻留，同一 sid 只有一个进程（App
+	// 单实例锁）。所以“这次登录该不该在这里服务”是一个静态判断：会话 Claims 里认证器从 account 取来的
+	// server_id 是否等于本进程的 sid（GAME_DEMO_TEMPLATE §9.11；docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.1）。
 	//
-	// So a login that lands on a process which does not own this player is
-	// REFUSED by name. It is fail-closed on purpose: the demo has no way to
-	// move a resident Entity between processes, so the alternatives are a
-	// named refusal the client can act on (reconnect to the owner's gateway,
-	// or wait out a dead process's lease) and silent corruption. When the
-	// owner is gone the lease lapses within playerroute.Lease and the next
-	// attempt succeeds here.
+	// 不是本服的登录按名拒绝（player_elsewhere，带 owner_sid），客户端改连那个服的网关，不要在本服重试。
+	// Claims 里没有 server_id 说明认证器被换掉了、没有记下绑定：fail-closed，同样拒绝（owner_sid=0，
+	// 客户端重新 SelectRole），并记 Error 日志，因为这是部署 / 代码问题，不是客户端连错了服。
 	owners, ownersErr := controller.PlayerOwners()
 	if ownersErr != nil {
 		slog.Error("enter_game: ownership unavailable", "player_id", context.PlayerID, "err", ownersErr)
 		code, reason := errcode.ClientError(ownersErr)
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
-	// Taking the player into service — the claim and the load — runs on its
-	// own budget, a share of this request's dispatch deadline
-	// (player_access.tcp.login_timeout, RR-20260926-36). A cold load waits
-	// for this player's projections to reach the store; if the store is down
-	// that wait does not end on its own, and it must not hold the connection:
-	// the client gets login_timeout and retries. What is left of the dispatch
-	// budget covers the answer and the placement steps below.
+	boundSID, bound := boundServerID(context.Session)
+	if !bound {
+		slog.Error("enter_game: the session carries no server_id claim; refusing the login (the authenticator must record the role's server)", "player_id", context.PlayerID)
+		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", 0))
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	// Taking the player into service — waiting out an unload of their
+	// previous copy, then the load — runs on its own budget, a share of this
+	// request's dispatch deadline (player_access.tcp.login_timeout,
+	// RR-20260926-36). A cold load waits for this player's projections to
+	// reach the store; if the store is down that wait does not end on its
+	// own, and it must not hold the connection: the client gets login_timeout
+	// and retries. What is left of the dispatch budget covers the answer and
+	// the placement steps below.
 	//
 	// Running out of budget stops the WAITING, nothing else. A load another
 	// login of the same player is sharing goes on for them; nothing admitted
@@ -58,19 +62,16 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	// timed-out attempt may have created.
 	loginCtx, cancelLogin := controller.loginContext(context.Context())
 	defer cancelLogin()
-	mine, claimErr := owners.Claim(loginCtx, context.PlayerID)
-	if claimErr != nil {
-		if answer, cutShort := loginCutShort(context.PlayerID, "claim", claimErr); cutShort {
+	if err := owners.Serve(loginCtx, context.PlayerID, boundSID); err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "serve", err); cutShort {
 			return answer, nil
 		}
-		slog.Error("enter_game: ownership not claimed", "player_id", context.PlayerID, "err", claimErr)
-		code, reason := errcode.ClientError(claimErr)
-		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
-	}
-	if !mine {
-		sid, _ := owners.OwnerSID(context.Context(), context.PlayerID)
-		slog.Warn("enter_game: player is owned by another process", "player_id", context.PlayerID, "owner_sid", sid)
-		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", sid))
+		if errors.Is(err, apperrors.ErrPlayerElsewhere) {
+			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
+		} else {
+			slog.Error("enter_game: player not taken into service", "player_id", context.PlayerID, "err", err)
+		}
+		code, reason := errcode.ClientError(err)
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
 	subject, created, err := controller.Players().GetOrCreate(loginCtx, context.PlayerID)
@@ -145,7 +146,7 @@ func (controller *Controller) loginContext(parent stdcontext.Context) (stdcontex
 	return stdcontext.WithCancel(parent)
 }
 
-// loginCutShort answers a claim or load whose wait was cut short: the login
+// loginCutShort answers a serve or load whose wait was cut short: the login
 // budget ran out, or the connection closed under it (a newer login of the
 // same session replaced it, and the answer goes nowhere). Both are named —
 // login_timeout, retry — rather than reported as a server error, and logged
@@ -162,4 +163,25 @@ func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameRespons
 	}
 	code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrLoginTimeout, err, "player_id", playerID))
 	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
+}
+
+// serverIDClaim 是认证器（internal/access/player/tcp/auth.go 的 newPrincipal）把角色绑定的 sid 写进
+// Principal.Claims 用的键。两边各写一份字面量：传输包引用协议绑定，控制器包不能反过来引用它。
+const serverIDClaim = "server_id"
+
+// boundServerID 读会话里 account 给出的角色绑定 sid。没有会话、没有这个 claim、或值不是正整数都
+// 回答 false，由调用方 fail-closed。
+func boundServerID(session gateway.Session) (int32, bool) {
+	if session == nil {
+		return 0, false
+	}
+	raw, ok := session.Principal().Claims[serverIDClaim]
+	if !ok {
+		return 0, false
+	}
+	sid, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || sid <= 0 {
+		return 0, false
+	}
+	return int32(sid), true
 }

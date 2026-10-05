@@ -45,3 +45,31 @@ func TestShutdownClosesTheSceneUnderTheAppsStopDeadline(t *testing.T) {
 		t.Fatal("Shutdown left the scene set after closing it")
 	}
 }
+
+// RR-20260930-23 转写（App 单实例锁方案 §7.3）：原承诺是“租约间断之后不留下脱离场景的连接”。按玩家
+// 的租约删除之后，同一 sid 的间断只会以进程 fail-stop 的形式出现（失锁、DataEngine / Remote fatal：
+// RuntimeFailure → Nest 围栏 → Service.Shutdown），承诺变成：停机时本进程服务中的每个玩家的连接都被
+// 断开，客户端重连到接替的进程，而不是挂在一个不再处理请求的进程上。
+func TestShutdownClosesTheConnectionsOfEveryServedPlayer(t *testing.T) {
+	owners, fencer, _ := ownersUnderTest(t)
+	for _, playerID := range []int64{42, 43} {
+		if err := owners.Serve(context.Background(), playerID, ownSID); err != nil {
+			t.Fatalf("serve %d: %v", playerID, err)
+		}
+		fencer.connect(playerID)
+	}
+	service := &Service{owners: owners}
+	if err := service.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	closed := map[int64]bool{}
+	for _, playerID := range fencer.closedPlayers() {
+		closed[playerID] = true
+	}
+	if !closed[42] || !closed[43] {
+		t.Fatalf("Shutdown left served players connected: closed %v, want 42 and 43", fencer.closedPlayers())
+	}
+	if fencer.ActiveSessions(42) != 0 || fencer.ActiveSessions(43) != 0 {
+		t.Fatal("a served player still has a connection after Shutdown")
+	}
+}

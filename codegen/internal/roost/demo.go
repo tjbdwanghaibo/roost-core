@@ -229,8 +229,7 @@ func demoPaymentSecrets(root, gameService string) error {
 // the production example under config.yaml (RR-20260928-06). Only the dev
 // config used to get these sections, so a game started from the production
 // example — or from the Secret — stopped at Init ("platform.payment_secret is
-// empty", then "game_route.key_prefix is empty", then "activity.key_prefix is
-// empty"). The production text goes through productionizeConfig like the rest
+// empty", then "activity.key_prefix is empty"). The production text goes through productionizeConfig like the rest
 // of the example. A file that already has the key is left alone, so hand
 // edits stay; a missing file (no k8s deploy target) is skipped.
 func appendDemoGameConfig(root, gameService, key, dev, production string) error {
@@ -266,16 +265,6 @@ func appendDemoGameConfig(root, gameService, key, dev, production string) error 
 	return nil
 }
 
-// gameRoutePrefix is the game's own Redis namespace, derived from a prefix the
-// project already has so a deployment does not have to keep two in step: the
-// activity service's `roost:<project>:activity` becomes `roost:<project>:route`.
-func gameRoutePrefix(serviceKeyPrefix string) string {
-	if cut := strings.LastIndex(serviceKeyPrefix, ":"); cut > 0 {
-		return serviceKeyPrefix[:cut] + ":route"
-	}
-	return "roost:route"
-}
-
 // blockKeyPrefix reads a service's key prefix out of that service's own
 // config, so two processes cannot be given different ones by an edit to one
 // file.
@@ -294,22 +283,14 @@ func blockKeyPrefix(serviceConfig, service string) string {
 // The prefix is read from the coordinator's own config rather than written
 // twice: the game keeps its contributor board BESIDE the coordinator's keys,
 // and two files that can disagree about where that is means a settlement
-// reading an empty board. The sid list is what the candidate set for
-// LiveGames is drawn from — a deployment with three game processes lists all
-// three here, and the ones that are actually up are the ones an activity
-// waits for.
+// reading an empty board. The sid list is the candidate set the activity asks
+// the App singleton lock's Live query about — a deployment with three game
+// processes lists all three here, and the ones whose process holds the lock
+// are the ones an activity waits for.
 func demoActivityKeys(root, gameService string) error {
 	activityPath := filepath.Join(root, "configs", "service", "config.activity.yaml")
 	activityRaw, err := os.ReadFile(activityPath)
 	if err != nil {
-		return err
-	}
-	// The game's own keyspace, for facts that are the GAME's rather than a
-	// framework service's: which process owns which player (game/playerroute).
-	// It is per deployment, like every other prefix, so two deployments on one
-	// Redis do not decide each other's ownership.
-	routeBlock := "game_route:\n  key_prefix: " + gameRoutePrefix(blockKeyPrefix(string(activityRaw), "activity")) + "\n"
-	if err := appendDemoGameConfig(root, gameService, "game_route", routeBlock, routeBlock); err != nil {
 		return err
 	}
 	// The same text for the production configs: neither value is a secret,
@@ -317,8 +298,9 @@ func demoActivityKeys(root, gameService string) error {
 	// lists the sid of every game process it runs (the --sid each one is
 	// started with).
 	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
-		"\n  # Every game server this deployment may run. LiveGames narrows it to\n" +
-		"  # the ones holding a lease, and those are what an activity waits for.\n" +
+		"\n  # Every game server this deployment may run. The App singleton lock's\n" +
+		"  # Live query narrows it to the ones whose process is up, and those are\n" +
+		"  # what an activity waits for.\n" +
 		"  game_sids:\n    - 1000\n"
 	return appendDemoGameConfig(root, gameService, "activity", block, block)
 }
@@ -371,7 +353,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/scene_position.go", why: "one code for out of bounds / taken / not on a map: a client that learns which points are occupied has everyone's positions"},
 		{write: "internal/errors/dungeon_claim_window.go", why: "a reward refused for being too old has to be a named refusal, not a quiet zero"},
 		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
-		{write: "internal/errors/player_elsewhere.go", why: "a login that lands on a process which does not own the player is refused by name, not served from a second copy of their Entity"},
+		{write: "internal/errors/player_elsewhere.go", why: "a login that lands on a server the player is not bound to is refused by name, not served from a second copy of their Entity"},
 		{write: "internal/errors/login_timeout.go", why: "a login whose claim or cold load outlived its budget is answered by name and retried, not held on the connection (RR-20260926-36)"},
 		{write: "game/gameplay/attribute/combat.go", why: "the attribute profile: three attributes, one derived by formula, plus the dirty mask the generator writes through"},
 		{write: "game/gameplay/attribute/combat_test.go", why: "the derived attribute follows its inputs and a container snapshot is a copy"},
@@ -543,7 +525,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/guild.go", why: "read against the dungeon endpoints: the remote entity changes nothing at this layer"},
 		{write: "game/controllers/player/guild_ids.go", why: "persistent guild IDs must survive process restarts"},
 		{write: "game/controllers/player/guild_ids_test.go", why: "same-sid restarts and concurrent creators must not reuse guild IDs"},
-		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running (RR-20260926-36)"},
+		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running (RR-20260926-36); a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
@@ -580,7 +562,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "deploy/dev/observability/grafana/dashboards/roost-demo.json", why: "the dashboard, one row per step of the chain"},
 		{write: "deploy/dev/observability/README.md", why: "metric ↔ chain step ↔ what to look at"},
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
-		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout (RR-20260930-18)"},
+		{write: "internal/service/game/service_shutdown_test.go", why: "Shutdown closes the scene under the App's stop context, so stopping the reload is bounded by shutdown.total_timeout (RR-20260930-18); a fail-stop or graceful Shutdown disconnects every served player first (RR-20260930-23)"},
 		{write: "internal/service/game/syncbus_config_test.go", why: "the generated syncbus section is the transport the kit Mod actually starts on, with no unread-config warnings (RR-20260926-12)"},
 		{write: "internal/service/game/level_up_mail.go", why: "the consumer: JetStream durable + Mongo inbox → mail.Send keyed by EffectID"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
@@ -599,16 +581,13 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/game/flags_test.go", why: "启动即表里的值、reload 跟着变、表里删掉的开关消失、缺表时拒绝发布"},
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
-		{write: "game/playerroute/playerroute.go", why: "who owns which player: a Redis claim with a lease, because two processes sharing one database are two writers of the same documents"},
-		{write: "game/playerroute/playerroute_test.go", why: "the ownership rules: one owner at a time, refresh and release only our own, a lapsed lease frees the player"},
-		{write: "internal/service/game/playerowner.go", why: "claim at login, refresh while online, release on the last close, and the question the shared consumers ask before touching a player"},
-		{write: "internal/service/game/playerowner_test.go", why: "租约丢了要停服务：失去时围栏、不确定时让准入自然走到头、未经确认的 sid 不算所有权"},
-		{write: "internal/service/game/gift_handoff_test.go", why: "the handoff decisions: admit the owner's own step, refuse and forward a foreign one, never claim an idle player to have somewhere to send it"},
-		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里"},
+		{write: "internal/service/game/playerowner.go", why: "static binding: serve only the players bound to this sid (server_id from account), a local resident table behind the write gate, and idle unload as plain memory management"},
+		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
+		{write: "internal/service/game/gift_handoff_test.go", why: "the handoff decisions: admit a step for a player served here, refuse and forward a foreign one, never take an unserved player to have somewhere to run it"},
+		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动"},
 		{write: "internal/service/game/gift_recipient_test.go", why: "RR-20260930-22：收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
-		{write: "internal/service/game/activity_lease_test.go", why: "RR-20260930-24：活动租约过期后下一次心跳重取、别人持有时按周期重试、瞬时错误不放弃租约"},
 		{write: "internal/service/game/presence.go", why: "the other half of RR-20260918-06: chat presence follows the same session-close source the scene does"},
-		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},
+		{write: "internal/service/game/activity.go", why: "the World tick, the window loop (expected servers from the App singleton lock's Live query), the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
 		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
 		{write: "internal/service/platform/purchase_delivery_test.go", why: "the first durable grant survives retries, lost replies and catalog changes"},

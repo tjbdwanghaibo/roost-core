@@ -11,7 +11,6 @@ import (
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/playerroute"
 	"{{MODULE}}/game/gift"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/rewards"
@@ -131,26 +130,15 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	}
 	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, inbox: nativeInbox, owners: owners}
 	// The handoff path: a step that lands on the wrong process is sent to the
-	// one that owns the player instead of only being refused.
+	// one that serves the player instead of only being refused.
 	//
-	// Router is core's ownerroute: it resolves the owner from the same table
-	// the admission predicate reads, runs the step here when the owner turns
-	// out to be us, and otherwise addresses the owner's process directly
-	// (`<prefix>.svc.{{GAME_SERVICE}}.<sid>`). A player nobody owns resolves
-	// to ErrRouteNotFound and is left alone — claiming an idle player just to
-	// have somewhere to send a message is how every process ends up owning
-	// every player.
+	// 过渡状态（静态绑定方案第 3 笔）：按玩家的 Redis 路由表已删除，发送方绑定在哪个 sid 要等第 4 笔把
+	// FromSID 写进赠礼命令之后才知道，所以这里暂时不装发送半边（steps.handoff 为 nil）：不在本进程服务
+	// 的步骤只拒绝、靠共享 durable 的重投送到服务这个玩家的进程（原来的 back-pressure 兜底）。接收
+	// 半边照常注册，地址与消息名不变。
 	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
 	if !ok || busClient == nil {
 		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModBus)
-	}
-	steps.handoff = &ownerroute.Router[giftStepHandoff, int64, playerroute.Route]{
-		LocalSid:  owners.SID(),
-		Routes:    owners.Routes(),
-		Transport: ownerroute.NewBusTransport[giftStepHandoff](busClient, "{{GAME_SERVICE}}", giftHandoffModule),
-		Executor:  steps.runHandoff,
-		KeyOf:     func(cmd *giftStepHandoff) int64 { return cmd.PlayerID },
-		ValidKey:  func(playerID int64) bool { return playerID > 0 },
 	}
 	// The receiving half. It is registered before the consumers subscribe, so
 	// a process cannot forward to a peer that is not listening yet — the peer
@@ -211,17 +199,22 @@ func processOwnerSuffix() string {
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
 }
 
-// playerOwnership is the part of PlayerOwners these steps ask about: three
-// questions, no claiming. Declared here rather than taking *PlayerOwners so
-// the admission and handoff decisions can be tested without a Redis.
+// playerOwnership is the part of PlayerOwners these steps ask about. Declared
+// here rather than taking *PlayerOwners so the admission and handoff decisions
+// can be tested on their own.
+//
+// 过渡状态（第 3 笔）：命令里还没有发送方绑定的 sid，所以只能问本地驻留表——发送方此刻在本进程服务
+// （有驻留记录、没有在卸载）就放行，否则拒绝。驻留记录只在绑定校验通过后建立，所以放行的一定是绑定在
+// 本服的玩家，不会出现两个写者；代价是发送方不在任何进程驻留时（离线且已被卸载、或进程重启后）步骤
+// 只能等他重新登录或等到 saga 截止。第 4 笔改为 AdmitBound(From, FromSID) 并按 FromSID 转交。
 type playerOwnership interface {
-	// Owns may claim a player nobody owns; it is the question a consumer
-	// asks about work that has to happen somewhere.
-	Owns(ctx context.Context, playerID int64) (bool, error)
-	// OwnedHere never claims; it is the question asked about work that
-	// belongs to whoever already has the player.
-	OwnedHere(ctx context.Context, playerID int64) (bool, error)
-	OwnerSID(ctx context.Context, playerID int64) (int32, error)
+	// Admit is the write gate's question: is the player served here right
+	// now? Admitting counts as use, so a step being retried keeps its player
+	// from being unloaded under it.
+	Admit(playerID int64) error
+	// Resident asks the same thing without counting as use; it is the
+	// question asked about work another process handed over.
+	Resident(playerID int64) bool
 }
 
 // giftStepHandoff is a step that arrived at the wrong process, on its way to
@@ -256,10 +249,18 @@ type giftSteps struct {
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
 	owners playerOwnership
-	// handoff sends a step to the process that owns its player. nil disables
+	// handoff sends a step to the process that serves its player. nil disables
 	// forwarding, which leaves plain back-pressure: correct, just slower.
-	handoff *ownerroute.Router[giftStepHandoff, int64, playerroute.Route]
+	handoff *ownerroute.Router[giftStepHandoff, int64, sidRoute]
 }
+
+// sidRoute is a game server's address as core's ownerroute sees it: the sid
+// whose `<prefix>.svc.{{GAME_SERVICE}}.<sid>` subject a handed-over step is
+// sent to.
+type sidRoute struct{ sid int32 }
+
+// OwnerRouteSid implements ownerroute.OwnerRoute.
+func (route sidRoute) OwnerRouteSid() int32 { return route.sid }
 
 // runHandoff executes a step this process was handed by another one.
 //
@@ -277,19 +278,13 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	if cmd == nil {
 		return fmt.Errorf("gift saga: empty handoff")
 	}
-	// Check ownership again rather than trusting the address. The sender's
-	// view of the route is a moment old, and running a step for a player who
-	// has since moved is the corruption all of this exists to prevent.
-	if steps.owners != nil {
-		owned, err := steps.owners.OwnedHere(ctx, cmd.PlayerID)
-		if err != nil {
-			return fmt.Errorf("gift saga: handoff ownership of player %d: %w", cmd.PlayerID, err)
-		}
-		if !owned {
-			// Not ours either. Do nothing: the holder of the message keeps
-			// redelivering, and the next route lookup will be fresher.
-			return nil
-		}
+	// Check again rather than trusting the address: running a step for a
+	// player this process does not serve is the corruption all of this exists
+	// to prevent.
+	if steps.owners != nil && !steps.owners.Resident(cmd.PlayerID) {
+		// Not served here. Do nothing: the holder of the message keeps
+		// redelivering.
+		return nil
 	}
 	// The phase decides which transaction runs, so a phase this process does
 	// not know is refused BEFORE the claim — the same rule as admission. A
@@ -392,23 +387,19 @@ func (steps giftSteps) admitPhase(ctx context.Context, phase string, command sag
 		slog.Warn("gift saga: admitting a step whose payload is not a gift", "command", command.ID, "err", err)
 		return nil
 	}
-	owned, err := steps.owners.Owns(ctx, state.From)
-	if err != nil {
-		return fmt.Errorf("gift saga: ownership of player %d: %w", state.From, err)
-	}
-	if !owned {
-		sid, _ := steps.owners.OwnerSID(ctx, state.From)
+	if err := steps.owners.Admit(state.From); err != nil {
 		// Hand it over, then refuse. The two halves do different jobs: the
-		// handoff gets the work started on the owner NOW, and the refusal
-		// keeps this message — unacknowledged — until a receipt exists. If
-		// the handoff never arrives, the redelivery still converges on the
-		// owner the slow way, which is why this is safe to be fire and
-		// forget.
+		// handoff gets the work started on the right process NOW, and the
+		// refusal keeps this message — unacknowledged — until a receipt
+		// exists. If the handoff never arrives (or, until the command carries
+		// the sender's sid, is not installed), the redelivery still converges
+		// on the process serving the player the slow way, which is why this
+		// is safe to be fire and forget.
 		steps.handOver(ctx, phase, state.From, command)
 		// Logged, because otherwise this is invisible: the refusal travels
 		// back as a nak and nothing in the process says the work moved.
-		slog.Info("gift saga: step left to the player's owner", "player_id", state.From, "owner_sid", sid, "command", command.ID)
-		return fmt.Errorf("gift saga: player %d is owned by sid %d, not by this process; leaving the step for them", state.From, sid)
+		slog.Info("gift saga: step left to the process serving the player", "player_id", state.From, "command", command.ID, "reason", err)
+		return fmt.Errorf("gift saga: player %d is not served by this process; leaving the step: %w", state.From, err)
 	}
 	return nil
 }

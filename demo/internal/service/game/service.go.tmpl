@@ -2,6 +2,7 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -114,47 +115,31 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopSpawner, s.spawner = stopSpawner, spawn
-	// Who owns which player, published BEFORE the consumers that ask it. The
-	// matchmaker and the gift saga's steps both look this capability up once,
-	// when they start, and either of them finding nothing there runs
-	// unguarded — which is exactly the two-process corruption the table
-	// exists to prevent, and it fails silently. Started below, once
-	// everything that uses it is wired.
+	// 本进程为哪些玩家服务（playerowner.go），在问它的消费者之前发布：matchmaker 和赠礼步骤在启动时
+	// 各查一次这个能力，查不到就拒绝启动。玩家绑定在哪个 sid 是 account 写进角色的静态事实，同一 sid
+	// 只有一个进程由 App 单实例锁保证，所以这里只是一张本地驻留表，不碰 Redis。下面装好卸载与连接之后
+	// 才 Start。
 	owners, err := NewPlayerOwners(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	// What to drop when a lease ends, installed before the table is published
-	// so that no login can arrive without it. Disconnecting a player stops
-	// this process being asked to do anything for them; it does not make the
-	// copy in memory match a document another process is now writing, and
-	// nothing reloads a resident entity. The lease and the copy therefore end
-	// together (RR-20260920-09). The scene is above, because dropping a
-	// player means taking them off it first.
+	// 闲置卸载丢副本用的东西，在发布之前装上：丢一个玩家就是先让他离开场景、再移出实体管理器，所以
+	// 场景在上面先建好。卸载只是本地内存管理，不交出任何东西；之后在本进程重新装载时，DataEngine 的
+	// 冷加载会先等这个实体在途的投影。
 	players, err := lifecycle.PlayerFromRegistry(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: player lifecycle for eviction: %w", err)
 	}
 	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
 	if !ok || access == nil || access.Manager() == nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so a lease could never drop its player")
+		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so an idle player could never be unloaded")
 	}
 	owners.Evict(playerEvictor{scene: scene, players: players, manager: access.Manager()})
-	// And what a hand-back waits for between dropping the copy and releasing
-	// the claim: this process's writes for the player reaching Mongo, which
-	// is all the next owner will read (RR-20260926-31).
-	projections, ok := app.Lookup[entityProjectionWaiter](registry, mods.ModDataEngine)
-	if !ok || projections == nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: data engine is unavailable, so a lease could never be handed back safely")
-	}
-	owners.Projections(playerProjections{engine: projections})
 	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
 	}
-	// The same table, under the access boundary's optional gate name: from
-	// here every player request is checked before it reaches a handler, so a
-	// process whose lease has lapsed stops acting on that player everywhere
-	// at once (RR-20260920-04).
+	// 同一张表，再以接入边界的可选闸门名发布：从这里起每个玩家请求在到达 handler 之前都先检查，没有
+	// 在本进程接入服务（登录时校验 server_id）的玩家，所有端点一起拒绝。
 	if err := registry.Register(accessplayer.WriteGateCapability, accessplayer.WriteGate(owners)); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player write gate: %w", err)
 	}
@@ -201,15 +186,13 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopPresence = stopPresence
-	// The transport is up by now, so the owners can fence: a player this
-	// process can no longer prove it owns gets disconnected rather than
-	// served (RR-20260920-04).
+	// 传输层此时已经起来：卸载要用它判断玩家还有没有连接，停机要用它断开服务中的玩家。没有它就不卸载。
 	if runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && runtime != nil {
 		owners.Fence(runtime)
 	}
 	owners.Start(context.Background())
-	// The timed server-wide event: this server's lease, the World's timer
-	// heap and the coordinator loop (activity.go). After the scene, because
+	// The timed server-wide event: the World's timer heap and the coordinator
+	// loop (activity.go). After the scene, because
 	// the settlement mails players who are already in the world, and before
 	// the GM commands, which can close a window by hand.
 	runner, stopActivity, err := startActivity(context.Background(), registry)
@@ -245,7 +228,16 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 // closes under it (RR-20260930-18), so stopping the reload of unloaded
 // players and closing the replication manager cannot outlive the deployment's
 // grace period. It used to close under context.Background().
+//
+// 第一件事是断开本进程服务中的全部玩家连接（RR-20260930-23 在 App 单实例锁之下的形态）：停机可能
+// 是 fail-stop（失锁、DataEngine / Remote fatal，此时 Nest 已被围栏），进程不再处理请求，连接不能
+// 留在这里，客户端重连到接替的进程。会话关闭事件照常走到场景、在线状态，此时它们都还开着。
 func (s *Service) Shutdown(ctx context.Context) error {
+	if s.owners != nil {
+		if closed := s.owners.CloseServedSessions(errServiceStopping); closed > 0 {
+			slog.Info("{{GAME_SERVICE}}: disconnected the players this process served", "sessions_closed", closed)
+		}
+	}
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
@@ -302,5 +294,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	return nil
 }
+
+// errServiceStopping 是停机时断开玩家连接的原因。
+var errServiceStopping = errors.New("{{GAME_SERVICE}}: this process is stopping; reconnect")
 
 var _ app.Service = (*Service)(nil)

@@ -36,8 +36,8 @@ const (
 	// of every server-wide deadline, not a load knob: a deadline is late by
 	// at most one tick.
 	worldTickInterval = time.Second
-	// activityLoopInterval is how often this server opens the current window,
-	// renews its lease and looks for a result to apply.
+	// activityLoopInterval is how often this server opens the current window
+	// and looks for a result to apply.
 	activityLoopInterval = 5 * time.Second
 	// activitySettleMailExpiresIn is how long a settlement mail stays
 	// readable.
@@ -62,50 +62,37 @@ const (
 type ActivityRunner struct {
 	coordinator svcactivity.Coordinator
 	routing     svcglobal.Routing
-	mailer      svcmail.Mail
-	nest        corenest.Client
-	redis       fredis.IRedis
-	prefix      string
-	worldID     int64
-	gameSID     int32
+	// liveness 是 App 单实例锁的只读查询（app.ModSingleton）：同一服务类型下哪些 sid 有进程持有锁。
+	// 协调器的 expected 集合从这里来，activity 不再持有自己的租约（App 单实例锁方案 §7.2）。
+	liveness   app.SingletonLiveness
+	serverType string
+	mailer     svcmail.Mail
+	nest       corenest.Client
+	redis      fredis.IRedis
+	prefix     string
+	worldID    int64
+	gameSID    int32
 	// candidates is the set of game servers this deployment may run. The
-	// coordinator's expected set is drawn from the ones that actually hold a
-	// live lease, so an activity does not wait on a server nobody started.
+	// coordinator's expected set is drawn from the ones whose process holds
+	// the App singleton lock, so an activity does not wait on a server nobody
+	// started.
 	candidates []int32
 	// now is the clock every window id is derived from. It is a field so a
 	// test can put a contribution and a lookup on opposite sides of a window
 	// boundary — which is the one case the wall clock makes unreproducible,
 	// and the one that was failing in CI (RR-20260921-01).
 	now func() time.Time
-	// incarnation is this process's lease. A previous holder's incarnation
-	// stops being able to renew, which is what makes "this sid is mine" a
-	// fact rather than a convention.
-	incarnation string
-	// lease is where this process stands with its lease; renewLease is the
-	// only writer after Init. It is what keeps the heartbeat's logging to
-	// changes of state rather than one line per tick.
-	lease leaseStanding
 }
 
-// leaseStanding is what the last heartbeat learned about this server's lease.
-type leaseStanding int
-
-const (
-	// leaseHeld: the lease is ours and the last heartbeat renewed it.
-	leaseHeld leaseStanding = iota
-	// leaseUnrenewed: the last heartbeat failed for a reason that says
-	// nothing about the lease (bus timeout, global restarting). It is still
-	// presumed ours; the next heartbeat renews it or finds out.
-	leaseUnrenewed
-	// leaseStandby: the lease is NOT ours — it lapsed or another incarnation
-	// holds it — and the attempt to take it back was refused. Every
-	// heartbeat tries again.
-	leaseStandby
-)
-
-// startActivity builds the runner, takes this server's lease and starts the
+// startActivity builds the runner, binds this server's route and starts the
 // loops. It returns the runner so Init can publish it, and a stop function.
 func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner, func(), error) {
+	// 先查这个：哪些 game 服还活着由 App 单实例锁回答；singleton.enabled=false 时 App 不登记这个能力，这里
+	// fail-closed，而不是退化成“只等自己”悄悄少等别的服。
+	liveness, ok := app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)
+	if !ok || liveness == nil {
+		return nil, nil, fmt.Errorf("activity: capability %q not found; the activity's expected servers come from the App singleton lock, which needs singleton.enabled=true for this service", app.ModSingleton)
+	}
 	coordinator, err := Activity(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
@@ -133,10 +120,17 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	config := registry.Config()
 	gameSID := int32(config.GetInt("sid"))
 	if gameSID <= 0 {
-		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot hold a lease", gameSID)
+		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot take part in an activity", gameSID)
+	}
+	// server_type 是 App 写进配置的本进程服务类型（同一部署的 game 进程跑同一个子命令，所以相同）；
+	// 用它查 Live，不写死 "game"——game 服务名由生成参数决定。
+	serverType := config.GetString("server_type")
+	if serverType == "" {
+		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
 	}
 	runner := &ActivityRunner{
-		coordinator: coordinator, routing: routing, mailer: mailer, nest: nestClient,
+		coordinator: coordinator, routing: routing, liveness: liveness, serverType: serverType,
+		mailer: mailer, nest: nestClient,
 		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
 		worldID: worldID, gameSID: gameSID,
 		candidates: candidateSIDs(config.GetIntSlice("activity.game_sids"), gameSID),
@@ -145,7 +139,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if runner.prefix == "" {
 		return nil, nil, errors.New("activity: activity.key_prefix is empty; the game reads the coordinator's keyspace to keep its own board beside it")
 	}
-	if err := runner.bindAndLease(ctx); err != nil {
+	if err := runner.bindGroup(ctx); err != nil {
 		return nil, nil, err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -156,20 +150,6 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 		cancel()
 		<-done
 		<-done
-		// Give the lease back rather than letting it lapse: a shutdown that
-		// only stops renewing leaves this sid looking alive for a whole TTL,
-		// and an activity opened in that window waits on a server that is
-		// gone.
-		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer releaseCancel()
-		if runner.lease == leaseStandby {
-			// Nothing to give back: the lease is somebody else's or nobody's,
-			// and releasing with a stale incarnation is just a refusal.
-			return
-		}
-		if err := runner.routing.ReleaseLease(releaseCtx, runner.gameSID, runner.incarnation); err != nil {
-			slog.Warn("activity: lease not released", "game_sid", runner.gameSID, "err", err)
-		}
 	}, nil
 }
 
@@ -185,8 +165,10 @@ func candidateSIDs(configured []int, own int32) []int32 {
 	return out
 }
 
-// bindAndLease establishes this server's route and takes its lease.
-func (runner *ActivityRunner) bindAndLease(ctx context.Context) error {
+// bindGroup establishes this server's route into the activity group. It is
+// group membership, not liveness: whether this server is running is the App
+// singleton lock's answer (expectedGameSIDs).
+func (runner *ActivityRunner) bindGroup(ctx context.Context) error {
 	// Bind is insert-only: a second Bind for a game that already has one is
 	// refused, and that refusal IS the fence — it cannot move a live game. So
 	// "already bound" is the normal answer on every start after the first,
@@ -197,18 +179,10 @@ func (runner *ActivityRunner) bindAndLease(ctx context.Context) error {
 	// remote error arrives as errcode.Remote (`remote.570110`) rather than as
 	// the service's own sentinel value; the code is what both forms carry.
 	// (errors.Is against the sentinel also holds — IntError.Is compares
-	// codes — which is what renewLease relies on; the comparison here
-	// predates that and says the same thing.)
+	// codes; the comparison here says the same thing.)
 	if _, err := runner.routing.Bind(ctx, runner.gameSID, gameactivity.GroupID, 1); err != nil && svcglobal.Code(err) != svcglobal.CodeConflict {
 		return fmt.Errorf("activity: bind game %d: %w", runner.gameSID, err)
 	}
-	lease, err := runner.routing.AcquireLease(ctx, runner.gameSID)
-	if err != nil {
-		return fmt.Errorf("activity: acquire lease for game %d: %w", runner.gameSID, err)
-	}
-	runner.incarnation = lease.Incarnation
-	runner.lease = leaseHeld
-	slog.Info("activity: lease acquired", "game_sid", runner.gameSID, "incarnation", lease.Incarnation)
 	return nil
 }
 
@@ -239,7 +213,6 @@ func (runner *ActivityRunner) runActivity(ctx context.Context, done chan<- struc
 	for {
 		runner.openCurrentWindow(ctx)
 		runner.applyDispatches(ctx)
-		runner.renewLease(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -291,20 +264,22 @@ func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
 	}
 }
 
-// expectedGameSIDs is the candidates that hold a live lease. A server that is
-// not running must not be waited on: the phase would sit collecting until the
-// grace window expired, every window.
+// expectedGameSIDs is the candidates whose process holds the App singleton
+// lock (app.SingletonLiveness.Live, queried with this process's own
+// server_type). A server that is not running must not be waited on: the phase
+// would sit collecting until the grace window expired, every window.
+//
+// "Live" covers a process from the moment it takes the lock — before any Mod
+// starts — until every Mod has stopped; a crashed process counts for at most
+// singleton.ttl. A query that fails opens no window this pass (the caller
+// logs it and the next pass asks again).
 func (runner *ActivityRunner) expectedGameSIDs(ctx context.Context) ([]int32, error) {
-	leases, err := runner.routing.LiveGames(ctx, gameactivity.GroupID, runner.candidates, len(runner.candidates))
+	live, err := runner.liveness.Live(ctx, runner.serverType, runner.candidates)
 	if err != nil {
 		return nil, err
 	}
-	live := make([]int32, 0, len(leases))
-	for _, lease := range leases {
-		live = append(live, lease.GameSID)
-	}
 	if len(live) == 0 {
-		// This server is running, whatever the lease store says. Opening an
+		// This server is running, whatever the lock store says. Opening an
 		// activity nobody is expected to notify would complete instantly on
 		// an empty set.
 		live = append(live, runner.gameSID)
@@ -486,79 +461,6 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 	slog.Info("activity: settled", "activity_id", activityID, "paid", len(board),
 		"reason", dispatch.Result.Reason, "first_settlement", recorded)
 	return nil
-}
-
-// renewLease is the heartbeat, and the place a lost lease is taken back.
-//
-// The incarnation is required, so a process that lost its lease and did not
-// notice cannot keep it alive — and the other half of that rule is that the
-// process has to notice. A renewal has three answers, with three endings:
-//
-//   - renewed: the normal case.
-//   - not ours any more (lapsed, released, or another incarnation holds it):
-//     renewing cannot fix this — an expired lease is not renewable by design,
-//     and this incarnation can never renew somebody else's. The way back is
-//     AcquireLease, which takes a lease nobody holds and refuses a live one;
-//     so the re-acquire itself decides between "it lapsed, take it back"
-//     (this process stalled past the TTL: SIGSTOP, a long GC pause, a
-//     partition from global) and "someone else has it, stand by". Standby
-//     tries again on every heartbeat. The loop keeps running meanwhile — the
-//     window ids come from the clock and what is owed is read from the
-//     coordinator — it is only absent from the expected set until it holds a
-//     lease again.
-//   - anything else (bus timeout, global restarting): the lease may well still
-//     be ours, and the next heartbeat will say.
-//
-// The first version only logged. A game that stalled 30s lost its lease for
-// good: every window after that was opened without it, nothing it
-// contributed was waited on, and the log said so every 5s until shutdown
-// (RR-20260930-24).
-//
-// The classification is errors.Is against the service's sentinels. The error
-// crosses the bus as errcode.Remote, and IntError.Is compares codes, so the
-// sentinel matches the remote form as well as the in-process one; it is not a
-// string match. Logs are written when the standing CHANGES, not per tick.
-func (runner *ActivityRunner) renewLease(ctx context.Context) {
-	if runner.lease != leaseStandby {
-		_, err := runner.routing.RenewLease(ctx, runner.gameSID, runner.incarnation, nil)
-		switch {
-		case err == nil:
-			if runner.lease == leaseUnrenewed {
-				slog.Info("activity: lease renewed again", "game_sid", runner.gameSID, "incarnation", runner.incarnation)
-			}
-			runner.lease = leaseHeld
-			return
-		case leaseNotOurs(err):
-			slog.Warn("activity: lease lost; retaking", "game_sid", runner.gameSID, "incarnation", runner.incarnation, "err", err)
-		default:
-			if runner.lease != leaseUnrenewed {
-				slog.Warn("activity: lease not renewed; retrying next heartbeat", "game_sid", runner.gameSID, "err", err)
-			}
-			runner.lease = leaseUnrenewed
-			return
-		}
-	}
-	lease, err := runner.routing.AcquireLease(ctx, runner.gameSID)
-	if err != nil {
-		if runner.lease != leaseStandby {
-			slog.Warn("activity: lease could not be retaken; standing by", "game_sid", runner.gameSID, "err", err)
-		}
-		runner.lease = leaseStandby
-		return
-	}
-	runner.incarnation = lease.Incarnation
-	runner.lease = leaseHeld
-	slog.Info("activity: lease retaken", "game_sid", runner.gameSID, "incarnation", lease.Incarnation)
-}
-
-// leaseNotOurs is the renewal refusals that mean "this incarnation does not
-// hold the lease": it lapsed or was released (ErrLeaseExpired), another
-// incarnation or binding holds it (ErrLeaseNotHolder), or there is no lease
-// record to renew (ErrLeaseMissing). Everything else is a failure to ask.
-func leaseNotOurs(err error) bool {
-	return errors.Is(err, svcglobal.ErrLeaseExpired) ||
-		errors.Is(err, svcglobal.ErrLeaseNotHolder) ||
-		errors.Is(err, svcglobal.ErrLeaseMissing)
 }
 
 const (

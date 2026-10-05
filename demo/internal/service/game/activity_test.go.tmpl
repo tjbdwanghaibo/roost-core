@@ -2,10 +2,17 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	gameactivity "{{MODULE}}/game/activity"
+	"{{MODULE}}/game/flags"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/featureflag"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
 )
@@ -95,5 +102,87 @@ func TestAContributionSaysWhichWindowTookIt(t *testing.T) {
 	// 而那一点仍然在它落进的窗口里，没有丢。
 	if coordinator.scores[contributed] != 1 {
 		t.Fatalf("the point left the window it landed in: %v", coordinator.scores)
+	}
+}
+
+// liveSource 是 App 单实例锁的 Live 查询的替身：回答固定的活 sid 集合或一个错误，并记下被问了什么。
+type liveSource struct {
+	live       []int32
+	err        error
+	serverType string
+	asked      []int32
+}
+
+func (source *liveSource) Live(_ context.Context, serverType string, sids []int32) ([]int32, error) {
+	source.serverType, source.asked = serverType, append([]int32(nil), sids...)
+	if source.err != nil {
+		return nil, source.err
+	}
+	return append([]int32(nil), source.live...), nil
+}
+
+// openRecorder 记下 OpenActivity 是否被调用；其余方法嵌入接口，没想到的调用直接 panic。
+type openRecorder struct {
+	svcactivity.Coordinator
+	opened int
+}
+
+func (c *openRecorder) OpenActivity(context.Context, svcactivity.Key, []int32) (svcactivity.Activity, error) {
+	c.opened++
+	return svcactivity.Activity{}, nil
+}
+
+// App 单实例锁方案 §7.2 / §8.1：activity 不再持有自己的全局租约，协调器的 expected 集合来自 App 锁的
+// Live 查询（取代 RR-20260930-24 的三条租约用例：租约本身删除了，承诺换成下面这三条）。
+func TestTheExpectedServersAreTheOnesTheAppLockSeesAlive(t *testing.T) {
+	ctx := context.Background()
+	newRunner := func(source *liveSource) *ActivityRunner {
+		return &ActivityRunner{liveness: source, serverType: "game", gameSID: 1300, candidates: []int32{1300, 1301, 1302}}
+	}
+
+	t.Run("the-live-sids", func(t *testing.T) {
+		source := &liveSource{live: []int32{1300, 1302}}
+		expected, err := newRunner(source).expectedGameSIDs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(expected, []int32{1300, 1302}) {
+			t.Fatalf("expected %v, want exactly the live sids [1300 1302]: a candidate the lock does not see must not be waited on", expected)
+		}
+		if source.serverType != "game" || !slices.Equal(source.asked, []int32{1300, 1301, 1302}) {
+			t.Fatalf("Live was asked about %q %v, want this process's server type and every candidate", source.serverType, source.asked)
+		}
+	})
+	t.Run("nobody-live-means-only-this-server", func(t *testing.T) {
+		expected, err := newRunner(&liveSource{}).expectedGameSIDs(ctx)
+		if err != nil || !slices.Equal(expected, []int32{1300}) {
+			t.Fatalf("expected %v (err %v), want [1300]: this server is running whatever the lock store says", expected, err)
+		}
+	})
+	t.Run("an-unanswered-query-opens-no-window", func(t *testing.T) {
+		featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: true})
+		t.Cleanup(func() { featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: false}) })
+		coordinator := &openRecorder{}
+		runner := newRunner(&liveSource{err: errors.New("redis: i/o timeout")})
+		runner.coordinator = coordinator
+		if _, err := runner.expectedGameSIDs(ctx); err == nil {
+			t.Fatal("a Live query that failed produced an expected set")
+		}
+		runner.openCurrentWindow(ctx)
+		if coordinator.opened != 0 {
+			t.Fatalf("a window was opened %d times without knowing which servers are alive", coordinator.opened)
+		}
+	})
+}
+
+// singleton.enabled=false 时 App 不登记 app.ModSingleton：activity 启动失败并说明原因，而不是退化成
+// 只等自己。
+func TestActivityRefusesToStartWithoutTheAppLockLiveness(t *testing.T) {
+	_, _, err := startActivity(context.Background(), app.NewRegistry(viper.New()))
+	if err == nil {
+		t.Fatal("the activity started with no way to tell which game servers are alive")
+	}
+	if !strings.Contains(err.Error(), string(app.ModSingleton)) || !strings.Contains(err.Error(), "singleton.enabled") {
+		t.Fatalf("startActivity error %q does not name the missing capability and the setting that publishes it", err)
 	}
 }

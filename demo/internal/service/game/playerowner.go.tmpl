@@ -10,166 +10,422 @@ import (
 
 	"{{MODULE}}/protocol/msgid"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/playerroute"
 	player "{{MODULE}}/game/entities/player"
-	"github.com/tjbdwanghaibo/roost-core/ownerroute"
+	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 // PlayerOwnerCapability is the name the ownership table is published under, so
 // an endpoint can reach it without importing this package.
 const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 
-// Who owns which player, in a deployment with more than one game process.
+// PlayerOwners 记录本进程正在为哪些玩家服务（驻留表），并据此回答写准入、做闲置卸载。
 //
-// The rule this enforces is one sentence: **a Player is written only by the
-// process that owns it.** Everything else here follows from it.
+// 前提是静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md）：玩家建角时由 account
+// 绑定到一个 game sid（Role.ServerID），之后不迁移；同一 sid 同一时刻只有一个进程，崩溃重启时的
+// 短暂并存由 App 单实例锁处理（app.Singleton：任何 Mod Init 之前获取，失锁 fail-stop，见
+// docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）。于是“同一玩家至多一个写者”就等于“只在玩家
+// 绑定的 sid 上为他服务”，不再需要按玩家的共享租约。本类型不感知那把锁，也不访问 Redis。
 //
-//	login          claim the player for this process (game/playerroute)
-//	while loaded   refresh the claim, so a resident player is never re-owned
-//	process gone   the lease lapses and somebody else may take them
-//	background     ask before touching a player at all
+// 驻留记录只在通过绑定校验之后建立：登录走 Serve（会话 Claims 里 account 给出的 server_id），
+// 后台步骤走 AdmitBound（命令携带的 sid）。WriteGate 的 Admit 只看记录和卸载状态，所以“这个玩家
+// 是不是本服的”由“只有校验通过才会有记录”来保证，网关不需要知道 sid。
 //
-// Note what is NOT in that list: the connection closing. The claim tracks
-// where the Player ENTITY lives, not where its socket is. A Player stays
-// resident in the process that loaded it after the player disconnects —
-// nothing in the demo evicts one — so a process that gave the claim up at
-// session close would still be holding the document, and the next process to
-// take the claim would load a second copy of it. That is the same corruption
-// as below, reached the slow way; measured on the two-process run, six gift
-// steps for logged-out players moved to the other process within seconds of
-// their robots finishing. Ownership therefore ends when the entity does
-// (Release, from a destroy) or when the lease lapses because the process is
-// gone — and those are the only two honest statements about a resident entity.
+// 闲置卸载只是本地内存管理：没有连接、IdleUnload 内没被使用过的玩家，丢掉内存副本并删掉记录，
+// 不交出任何东西；之后在本进程重新装载，等待的是 DataEngine 冷加载已有的投影屏障。卸载进行中
+// Admit / AdmitBound 拒绝，Serve 等它结束再装载。
 //
-// The last line of the table is the one that matters for correctness, and it
-// is the reason this exists at all: the saga step consumers and the effect consumers share
-// one JetStream durable across every game process, so a message about player X
-// is delivered to WHICHEVER process is free — not to the one that has X
-// loaded. Before this, that process would load X too, and the two of them
-// would write the same document with two independent version counters. The
-// first run of the demo with two processes ended in
-// `fatal projection version conflict` and a dead process, within seconds.
-//
-// One more rule, and it is the one that makes the table worth anything:
-// **holding a claim is not the same as knowing you still hold it.** A renewal
-// that fails leaves this process in the dark, and 30 seconds later another
-// process may legitimately take the player. Writing until somebody tells you
-// to stop is therefore not an option — nobody will. Every write path asks
-// Admit, which answers from the last renewal Redis CONFIRMED, and refuses as
-// the confirmed lease runs out (RR-20260920-04).
+// 锁：mu 保护 residents 与 evictions，从不跨等待持有。Admit 在 Nest 快池上被调用，只做一次加锁读写。
 type PlayerOwners struct {
-	store    leaseTable
-	fencer   sessionFencer
-	evict    residentEvictor
-	guard    time.Duration
-	// evictWait is evictBudget, as a field so a test does not have to spend
-	// five seconds proving that the wait is bounded.
+	sid    int32
+	fencer sessionFencer
+	evict  residentEvictor
+	// evictWait 是 evictBudget；做成字段，测试不必真等五秒来证明等待有界。
 	evictWait time.Duration
-	// projections answers whether this process's committed writes for a
-	// player have reached the database; projectionWait bounds how long one
-	// hand-back pass waits for that answer (RR-20260926-31).
-	projections    projectionBarrier
-	projectionWait time.Duration
-	// handBackPassWait is handBackPassBudget, as a field for the same reason
-	// as evictWait.
-	handBackPassWait time.Duration
-	now              func() time.Time
-	// onHandBackWait, when set, is told that a Claim has started waiting for
-	// a hand-back of the player. It is for tests, which have no other way to
-	// see a goroutine park; nothing in the process sets it.
-	onHandBackWait func(playerID int64)
+	now       func() time.Time
+	// onUnloadWait 在 Serve 开始等某个玩家的卸载时被调用。只给测试用：测试没有别的办法看到一个
+	// goroutine 停在等待上；进程里没有人设置它。
+	onUnloadWait func(playerID int64)
 
-	mu    sync.Mutex
-	local map[int64]*leaseState
-	// evictions dedupes in-flight drops by player. It is what keeps a claim
-	// from being confirmed while an older eviction of the same player is
-	// still running: every caller joins the one in flight instead of starting
-	// a second.
+	mu        sync.Mutex
+	residents map[int64]*resident
+	// evictions 是按玩家去重的在途卸载（单航班）：同一玩家同时至多一个，Serve 加入它而不是再起一个。
 	evictions map[int64]*eviction
-	// claiming counts the Claims of each player between their decision to go
-	// ahead and their return. A hand-back does not pick a player with one in
-	// progress; a Claim does not go ahead while a hand-back of the player is
-	// in progress. The two never overlap on one player (RR-20260921-03).
-	claiming map[int64]int
-	stop     chan struct{}
-	done     chan struct{}
+
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
-// leaseTable is the shared table as these owners use it. The interface exists
-// so the fencing rules can be tested without a Redis; *playerroute.Store is
-// the implementation.
-type leaseTable interface {
-	Claim(ctx context.Context, playerID int64) (playerroute.Route, error)
-	Owner(ctx context.Context, playerID int64) (playerroute.Route, error)
-	Owns(ctx context.Context, playerID int64) (bool, error)
-	// GetRoute is the addressing question — who should this work go to —
-	// which is the table's view, not this process's admission. A router that
-	// asked the gate here would refuse to address work to anybody.
-	GetRoute(ctx context.Context, playerID int64) (playerroute.Route, bool, error)
-	Refresh(ctx context.Context, playerIDs []int64) []playerroute.RefreshResult
-	Release(ctx context.Context, playerID int64) error
-	SID() int32
+// resident 是本进程为之服务过的一个玩家：已经通过绑定校验，最近一次被使用是什么时候。
+type resident struct {
+	// lastUsed 是这个玩家最近一次被准入或接入服务的时间（Admit / AdmitBound / Serve）。只读的
+	// 查看（Resident）不算使用，否则被 matchmaker 看过一眼的玩家永远不会闲置。
+	lastUsed time.Time
 }
 
-// sessionFencer is this process's connections to a player: how many there
-// are, and how to end them.
+// eviction 是一次在途卸载，所有等它的人共享同一个结果。
+type eviction struct {
+	done chan struct{}
+	err  error
+}
+
+// sessionFencer 是本进程到某个玩家的连接：有几条，以及怎样断开。
 //
-// Disconnecting is how a process stops serving a player it can no longer
-// prove it owns; the player reconnects — to whichever process owns them by
-// then, which is the point. Counting is how the table knows whether a lease
-// is still doing anything for anybody (see handBackIdle).
+// 卸载用 ActiveSessions 判断玩家还在不在玩；停机用 CloseSessions 断开全部服务中的玩家。
 type sessionFencer interface {
 	CloseSessions(playerID int64, reason error) int
 	ActiveSessions(playerID int64) int
 }
 
-// residentEvictor drops this process's copy of a player: off the scene, out
-// of the entity manager. It exists because a lease and the entity it protects
-// must not have different lifetimes.
-//
-// Holding a lease is what makes a resident Player safe to write. The moment
-// this process cannot prove it has held the lease WITHOUT INTERRUPTION, the
-// copy in memory is no longer known to match the document: during the gap
-// another process could legitimately have owned the player and written to
-// them — that is exactly what the gap permits, and what `fence` invites by
-// disconnecting them. Nothing reloads a resident entity (the manager returns
-// the instance it has), so a lease that comes back without the copy being
-// dropped puts this process back to work on a stale one: a lost update, or
-// the `fatal projection version conflict` this whole table exists to prevent
-// (RR-20260920-09).
+// residentEvictor 丢掉本进程内存里某个玩家的副本：离开场景、移出实体管理器。
 type residentEvictor interface {
-	// EvictPlayer removes the player from this process. It must be safe to
-	// call for a player who is not resident, and it must return an error
-	// rather than half-evicting: the caller refuses to serve a player whose
-	// copy it could not drop.
+	// EvictPlayer 把玩家从本进程移除。玩家不在内存里时也必须安全；不能“删一半”，失败要返回错误：
+	// 调用方据此保留驻留记录，玩家继续在本进程服务。
 	EvictPlayer(ctx context.Context, playerID int64) error
 }
 
-// evictBudget is how long a CALLER waits for an eviction — not how long the
-// eviction takes.
+// ErrNotServedHere 是写入路径在本进程此刻不为这个玩家服务时得到的错误：没有驻留记录（没登录到
+// 本服、或绑定在别的服），或者他的内存副本正在被卸载。
+var ErrNotServedHere = errors.New("player owners: this process is not serving the player right now")
+
+// IdleUnload 是一个玩家在本进程没有连接、也没有被使用多久之后，内存副本被卸载。
 //
-// The distinction is the whole of RR-20260920-12. Dropping a player ends in
-// EntityManager.Destroy, which waits for the entity's mutex and does not look
-// at a context: whatever transaction is on that entity, the eviction waits for
-// it. A ctx timeout around that call therefore bounded nothing, while the call
-// itself sat on the refresh loop's goroutine with every other player's renewal
-// queued behind it — one busy entity could cost this process the leases of
-// everybody else (Lease 30s, RefreshInterval 10s).
+// 只关系到内存和重新装载的开销，不关系正确性：卸载不交出任何东西，下一次使用在本进程冷加载。
+const IdleUnload = 5 * time.Minute
+
+// unloadScanInterval 是卸载 goroutine 扫一次驻留表的间隔。
+const unloadScanInterval = 30 * time.Second
+
+// evictBudget 是调用方等一次卸载的上限，不是卸载本身的上限。
 //
-// So the eviction now runs on its own goroutine and runs to completion, and
-// this is the bound on waiting for it. A caller that times out has NOT had the
-// copy dropped and must act accordingly: Claim refuses to take the player into
-// service, the hand-back keeps the lease — and until the drop ends, Admit
-// refuses the player whatever the lease says (RR-20261004-11).
+// 卸载最终走到 EntityManager.Destroy，它等实体的互斥锁、不看 context：实体上有事务，卸载就等着
+// 它。所以卸载在自己的 goroutine 上跑到结束，这里只限制“等多久”（RR-20260920-12）。等超时的调用方
+// 必须当作副本还在：卸载 goroutine 去处理下一个玩家，Serve 返回可重试的超时；卸载结束之前 Admit
+// 一直拒绝这个玩家（RR-20261004-11）。
 const evictBudget = 5 * time.Second
 
-// eviction is one in-flight drop, shared by everyone waiting for it.
-type eviction struct {
-	done chan struct{}
-	err  error
+// NewPlayerOwners 用本进程配置里的 sid 建驻留表。
+func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
+	sid := int32(registry.Config().GetInt("sid"))
+	if sid <= 0 {
+		return nil, fmt.Errorf("player owners: sid is %d; a game process serves the players bound to its sid and needs one", sid)
+	}
+	return newPlayerOwners(sid, nil, time.Now), nil
+}
+
+// newPlayerOwners 是测试构造的入口。
+func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *PlayerOwners {
+	if now == nil {
+		now = time.Now
+	}
+	return &PlayerOwners{
+		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,
+		residents: map[int64]*resident{},
+		evictions: map[int64]*eviction{},
+	}
+}
+
+// Evict 设置丢掉玩家副本的实现。和 Fence 一样与构造分开：场景和实体运行时在驻留表之后才起来。
+// 没有它就不卸载任何玩家（内存多占一些，但不会出错）。
+func (owners *PlayerOwners) Evict(evictor residentEvictor) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.evict = evictor
+	owners.mu.Unlock()
+}
+
+// Fence 设置本进程的连接（玩家 TCP Runtime）。与构造分开，因为传输层在驻留表之后才起来。没有它
+// 就不卸载任何玩家：不知道玩家有没有连接，就不能说他闲置。
+func (owners *PlayerOwners) Fence(fencer sessionFencer) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.fencer = fencer
+	owners.mu.Unlock()
+}
+
+// SID 是本进程的 sid，也就是本进程服务的玩家绑定的那个 sid。
+func (owners *PlayerOwners) SID() int32 {
+	if owners == nil {
+		return 0
+	}
+	return owners.sid
+}
+
+// Serve 是登录时把玩家接入本进程服务：boundSID 是 account 校验会话时给出的角色 ServerID。
+//
+// 三种结果：
+//   - boundSID 不是本进程的 sid（含 0，即不知道绑定在哪）：返回 ErrPlayerElsewhere（owner_sid=boundSID），
+//     不建记录、不装载。玩家只能在自己绑定的服上服务，客户端改连那个服，不要在本服重试。
+//   - 这个玩家的内存副本正在被卸载，并且在 evictWait 或 ctx 之内没有结束：返回包着
+//     context.DeadlineExceeded / ctx 错误的错误，登录回 login_timeout，客户端重试；记录不变。
+//   - 否则建立或刷新驻留记录（算一次使用），返回 nil，调用方随后装载实体。
+//
+// 等卸载是因为卸载会把副本连同场景成员关系一起拿走：先装载、再被卸载拿走，玩家就在一条打开的
+// 连接上没有了实体。它在登录连接的 goroutine 上等，不在 Nest worker 上。
+func (owners *PlayerOwners) Serve(ctx context.Context, playerID int64, boundSID int32) error {
+	if owners == nil {
+		return nil
+	}
+	if boundSID != owners.sid {
+		return errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", playerID, "owner_sid", boundSID)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	budget := time.NewTimer(owners.evictWait)
+	defer budget.Stop()
+	for {
+		owners.mu.Lock()
+		inFlight, unloading := owners.evictions[playerID]
+		if !unloading {
+			owners.touchLocked(playerID)
+			owners.mu.Unlock()
+			return nil
+		}
+		parked := owners.onUnloadWait
+		owners.mu.Unlock()
+		if parked != nil {
+			parked(playerID)
+		}
+		select {
+		case <-inFlight.done:
+			// 卸载结束（成功时记录已随它删掉，失败时记录还在）；回到循环开头重新判断。
+		case <-budget.C:
+			return fmt.Errorf("player owners: player %d is still being unloaded after %s: %w", playerID, owners.evictWait, context.DeadlineExceeded)
+		case <-ctx.Done():
+			return fmt.Errorf("player owners: waiting for player %d to be unloaded: %w", playerID, ctx.Err())
+		}
+	}
+}
+
+// AdmitBound 是后台工作（赠礼步骤之类）的准入：boundSID 是命令里携带的玩家绑定的 sid。
+//
+// local=false 表示玩家不是本服的，调用方把工作交给 boundSID 那个服；local=true 且 err=nil 表示
+// 已建立或刷新驻留记录（算一次使用），可以在本进程执行；local=true 且 err!=nil 表示玩家是本服的、
+// 但副本正在卸载，调用方拒绝这一次（消息重投），不转交。不阻塞，可以在任何 goroutine 上调用。
+func (owners *PlayerOwners) AdmitBound(playerID int64, boundSID int32) (bool, error) {
+	if owners == nil {
+		return true, nil
+	}
+	if boundSID != owners.sid {
+		return false, nil
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if _, unloading := owners.evictions[playerID]; unloading {
+		return true, fmt.Errorf("%w: player %d, the copy is being unloaded", ErrNotServedHere, playerID)
+	}
+	owners.touchLocked(playerID)
+	return true, nil
+}
+
+// touchLocked 建立或刷新玩家的驻留记录，记一次使用。调用方持有 mu，并且已经确认绑定在本服。
+func (owners *PlayerOwners) touchLocked(playerID int64) {
+	state := owners.residents[playerID]
+	if state == nil {
+		state = &resident{}
+		owners.residents[playerID] = state
+	}
+	state.lastUsed = owners.now()
+}
+
+// Admit 是写准入：本进程此刻能不能在这个玩家身上开始一个新事务？
+//
+// 只看本地状态：有驻留记录，并且副本没有在卸载。放行算一次使用，正在干活的玩家因此不会被卸载。
+// 只加一次锁，不阻塞（快池上调用）。
+func (owners *PlayerOwners) Admit(playerID int64) error {
+	if owners == nil {
+		// 没有驻留表：单进程部署，每个玩家都是本进程的。
+		return nil
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.residents[playerID]
+	if state == nil {
+		return fmt.Errorf("%w: player %d has not been taken into service here", ErrNotServedHere, playerID)
+	}
+	if _, unloading := owners.evictions[playerID]; unloading {
+		// 写进去的东西会落在一个马上被销毁的实体上（RR-20261004-11）。卸载结束后：成功则记录已删，
+		// 下一次使用重新接入；失败则记录还在，从那一刻起照常放行。
+		return fmt.Errorf("%w: player %d, the copy is being unloaded", ErrNotServedHere, playerID)
+	}
+	state.lastUsed = owners.now()
+	return nil
+}
+
+// AdmitMessage 是接入边界的闸门（accessplayer.WriteGate）：本进程能不能处理这个请求？
+//
+// 登录豁免：它就是建立驻留记录的那条消息（Serve 在里面做绑定校验）。其余消息一律按 Admit 判，
+// 这样以后新增的端点也被覆盖，检查因此放在这里而不是每个 handler 里。
+func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error {
+	if owners == nil {
+		return nil
+	}
+	if messageID == msgid.MsgEnterGame {
+		return nil
+	}
+	return owners.Admit(playerID)
+}
+
+// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，并且副本没有在卸载。
+// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。
+func (owners *PlayerOwners) Resident(playerID int64) bool {
+	if owners == nil {
+		return true
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if owners.residents[playerID] == nil {
+		return false
+	}
+	_, unloading := owners.evictions[playerID]
+	return !unloading
+}
+
+// CloseServedSessions 断开本进程服务中的全部玩家的连接，返回断开的条数。
+//
+// 停机（包括失锁、DataEngine fatal 之类的 fail-stop）时由 Service.Shutdown 第一个调用：进程要退出了，
+// 连接不能留在一个已经不再处理请求的进程上，客户端重连到接替的进程（RR-20260930-23 的承诺在
+// App 单实例锁之下的形态）。只有经过 Serve 的玩家能在本进程做事，所以断开有驻留记录的玩家就覆盖了
+// 所有能做事的连接；其余连接随传输层 Mod 停止关闭。连接在锁外关闭：关闭会触发会话关闭事件。
+func (owners *PlayerOwners) CloseServedSessions(reason error) int {
+	if owners == nil {
+		return 0
+	}
+	owners.mu.Lock()
+	fencer := owners.fencer
+	served := make([]int64, 0, len(owners.residents))
+	for playerID := range owners.residents {
+		served = append(served, playerID)
+	}
+	owners.mu.Unlock()
+	if fencer == nil {
+		return 0
+	}
+	closed := 0
+	for _, playerID := range served {
+		closed += fencer.CloseSessions(playerID, reason)
+	}
+	return closed
+}
+
+// Start 启动卸载 goroutine。它只做闲置卸载，别的什么都不做。
+func (owners *PlayerOwners) Start(ctx context.Context) {
+	if owners == nil {
+		return
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	owners.cancel, owners.done = cancel, make(chan struct{})
+	go owners.unloadLoop(loopCtx)
+}
+
+// Stop 停止卸载 goroutine 并等它返回。正在跑的卸载不被打断（它不看 context），只是不再等它。
+func (owners *PlayerOwners) Stop() {
+	if owners == nil || owners.cancel == nil {
+		return
+	}
+	owners.cancel()
+	<-owners.done
+	owners.cancel = nil
+}
+
+func (owners *PlayerOwners) unloadLoop(ctx context.Context) {
+	defer close(owners.done)
+	ticker := time.NewTicker(unloadScanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		owners.unloadIdle(ctx)
+	}
+}
+
+// unloadIdle 是一轮闲置卸载，单独拆出来，测试可以不等 ticker 直接驱动。
+//
+// 选中的条件：没有连接、IdleUnload 内没被使用、没有在卸载。逐个处理，每个最多等 evictWait；等超时的
+// 卸载在后台继续，这一轮去处理下一个玩家。
+func (owners *PlayerOwners) unloadIdle(ctx context.Context) {
+	owners.mu.Lock()
+	sessions, evictor := owners.fencer, owners.evict
+	now := owners.now()
+	var idle []int64
+	if sessions != nil && evictor != nil {
+		for playerID, state := range owners.residents {
+			if _, unloading := owners.evictions[playerID]; !unloading && now.Sub(state.lastUsed) >= IdleUnload {
+				idle = append(idle, playerID)
+			}
+		}
+	}
+	owners.mu.Unlock()
+	for _, playerID := range idle {
+		if ctx.Err() != nil {
+			return
+		}
+		owners.unloadOne(ctx, sessions, evictor, playerID)
+	}
+}
+
+// unloadOne 卸载一个闲置的玩家。
+//
+// 连接数在锁外问（传输层有自己的锁），并且在标记之前问。标记时在锁内重新确认仍然闲置：在两者之间
+// 登录的玩家，Serve 已经刷新了 lastUsed，这里就放过他；标记之后才到的登录加入这次卸载，结束后重新装载。
+func (owners *PlayerOwners) unloadOne(ctx context.Context, sessions sessionFencer, evictor residentEvictor, playerID int64) {
+	if sessions.ActiveSessions(playerID) > 0 {
+		return
+	}
+	owners.mu.Lock()
+	state := owners.residents[playerID]
+	_, unloading := owners.evictions[playerID]
+	if state == nil || unloading || owners.now().Sub(state.lastUsed) < IdleUnload {
+		owners.mu.Unlock()
+		return
+	}
+	inFlight := &eviction{done: make(chan struct{})}
+	owners.evictions[playerID] = inFlight
+	wait := owners.evictWait
+	owners.mu.Unlock()
+	go owners.runEviction(evictor, playerID, inFlight)
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-inFlight.done:
+		if inFlight.err != nil {
+			slog.Warn("player owners: idle player kept in service because its copy could not be dropped", "player_id", playerID, "err", inFlight.err)
+			return
+		}
+		slog.Info("player owners: idle player unloaded", "player_id", playerID)
+	case <-timer.C:
+		slog.Warn("player owners: unloading an idle player is taking longer than the wait; it continues in the background", "player_id", playerID, "wait", wait)
+	case <-ctx.Done():
+	}
+}
+
+// runEviction 执行一次卸载，并把结果交给所有等它的人。
+//
+// 用 Background context：它最终走到的 Destroy 不看 context（见 evictBudget），传截止时间只是一个
+// 没人兑现的承诺。成功时驻留记录在关闭 done 之前、同一个临界区里删除：卸载进行中没有人能改这条记录
+// （Serve 在等，Admit / AdmitBound 拒绝），而 done 关闭之后醒来的 Serve 建的是一条新记录，不会被这里删掉。
+func (owners *PlayerOwners) runEviction(evictor residentEvictor, playerID int64, in *eviction) {
+	in.err = evictor.EvictPlayer(context.Background(), playerID)
+	owners.mu.Lock()
+	if owners.evictions[playerID] == in {
+		delete(owners.evictions, playerID)
+	}
+	if in.err == nil {
+		delete(owners.residents, playerID)
+	}
+	owners.mu.Unlock()
+	close(in.done)
 }
 
 // playerEvictor is the demo's answer to "drop this process's copy of a
@@ -222,1190 +478,3 @@ func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) er
 }
 
 var _ residentEvictor = playerEvictor{}
-
-// projectionBarrier is the other half of "this process has nothing of that
-// player left": evicting forgets the copy in memory, but the transactions
-// that copy committed may still be in this process's write-ahead log on
-// their way to Mongo. The next owner loads the player from Mongo, so a lease
-// handed over before those writes land hands over a document that is behind
-// what this process already acknowledged — and the two processes' version
-// counters meet in a `fatal projection version conflict` (RR-20260926-31).
-//
-// It blocks, and it is only ever called from the refresh loop's goroutine,
-// never from a Nest worker.
-type projectionBarrier interface {
-	// WaitPlayerProjection returns nil once every write this process has
-	// committed for the player is in the database, or an error when that
-	// cannot be shown before ctx ends — in which case the caller keeps the
-	// lease.
-	WaitPlayerProjection(ctx context.Context, playerID int64) error
-}
-
-// entityProjectionWaiter is what the data engine Mod publishes under
-// mods.ModDataEngine for this question (kit/dataengine Mod.WaitEntityProjection).
-type entityProjectionWaiter interface {
-	WaitEntityProjection(ctx context.Context, entityID int64) error
-}
-
-// playerProjections asks the data engine about the Player entity of a
-// player id. The engine tracks in-flight projections by full entity id.
-type playerProjections struct{ engine entityProjectionWaiter }
-
-func (projections playerProjections) WaitPlayerProjection(ctx context.Context, playerID int64) error {
-	if projections.engine == nil {
-		return fmt.Errorf("player projections: data engine is not assembled")
-	}
-	entityID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
-	if err != nil {
-		return err
-	}
-	return projections.engine.WaitEntityProjection(ctx, entityID)
-}
-
-var _ projectionBarrier = playerProjections{}
-
-// leaseState is what this process knows about one lease, and when it stops
-// being able to claim it knows it. validUntil is a LOCAL deadline computed
-// from the last confirmation, never from the value in Redis: the two clocks
-// are different and the local one is the one the writes race against.
-type leaseState struct {
-	validUntil time.Time
-	lost       bool
-	// interrupted records that Redis has told us, at least once since the
-	// last confirmation, that this lease is not ours. It is separate from the
-	// deadline because the two can disagree: a key that vanishes early — an
-	// operator, a failover, a flushed Redis — makes the lease somebody else's
-	// to take while this process's own window still looks open. Redis is the
-	// authority on that question, so its answer sticks until a fresh claim
-	// clears it (RR-20260920-09) — a renewal does not, though it used to
-	// (RR-20261004-14). A claim across a gap that Redis did not answer sets
-	// it as well (see markUnansweredClaim).
-	interrupted bool
-	// lastUsed is when this lease last answered a question — a message
-	// through the gate, a consumer asking Owns, a fresh claim. A lease
-	// nothing has asked about, for a player with no connection here, is a
-	// lease this process is holding for no reason (RR-20260920-10).
-	lastUsed time.Time
-	// handingBack means this process has decided to give the lease up and is
-	// in the middle of doing so. Admission stops HERE, before the eviction
-	// rather than after the release: between dropping the copy and releasing
-	// the claim there is a window in which Admit would still say yes, and a
-	// consumer admitted in it would load a fresh copy of a player this
-	// process is about to hand to somebody else (RR-20260920-11). A hand-back
-	// that does not complete clears the flag and the lease stays in service.
-	//
-	// The flag belongs to the hand-back that set it: only finishHandBack
-	// clears it. A confirmation used to clear it as well, which let a Claim
-	// that landed in the middle of a hand-back erase the mark — and the
-	// hand-back, never looking back, then released the lease the Claim had
-	// just answered "mine" for (RR-20260921-03).
-	handingBack bool
-	// handBackDone is closed when the hand-back marked by handingBack ends,
-	// whichever way. A Claim of the player waits on it.
-	handBackDone chan struct{}
-}
-
-// ErrLeaseNotHeld is what a write path gets when this process cannot prove it
-// owns the player right now.
-var ErrLeaseNotHeld = errors.New("player owners: this process does not hold a confirmed lease on the player")
-
-// errStaleCopyKept is Claim's answer when the lease IS ours in Redis but the
-// copy from before the gap could not be dropped in budget, so the player was
-// not taken into service. The refresh loop tells it apart from a re-claim
-// Redis did not answer: in this ending the drop has already started and its
-// first step is to leave the scene, so the player's connections cannot stay
-// (RR-20260930-23); in the other nothing has happened to the player yet.
-//
-// A player in this ending is out of service entirely: this process forgets
-// its local lease state for them (see abandon), so the refresh loop does not
-// renew the lease and nothing confirms it — it lapses in Redis on its own.
-// Until a later Claim finds the drop finished, Admit keeps refusing.
-var errStaleCopyKept = errors.New("the stale copy could not be dropped")
-
-// AdmissionGuard is how much of the lease is reserved for work already in
-// flight. A transaction admitted at the last confirmed moment must finish
-// before the lease can lapse, so admission stops this long before the
-// deadline; anything slower than the guard is the one thing this cannot
-// protect, and it is far outside what a Nest transaction takes.
-const AdmissionGuard = 5 * time.Second
-
-// HandBackIdle is how long a lease may sit unused, with no connection to the
-// player on this process, before it is given back.
-//
-// Ownership has to be takeable for an offline player: their mail, their saga
-// steps and their paid orders cannot wait for them to log in, and `Owns`
-// therefore claims one on the spot. What that claim must NOT be is permanent.
-// Nothing releases it — `Release` is for a destroy, and a Player is never
-// destroyed by the demo — so before this the first background step to touch
-// an offline player pinned them to that process for as long as it lived, and
-// a login anywhere else was refused by name, forever (RR-20260920-10).
-//
-// Two refresh intervals is long enough that a step, its retries and its
-// completion all sit inside one, and short enough that a player who logs in
-// somewhere else waits seconds rather than for a deployment.
-const HandBackIdle = 2 * playerroute.RefreshInterval
-
-// handBackBudget bounds how many players one refresh pass gives back. Each
-// hand-back evicts an entity, which can wait on a transaction, and this runs
-// on the loop that also renews everybody else's lease.
-const handBackBudget = 8
-
-// handBackPassBudget bounds how long one refresh pass spends after its
-// renewals — re-taking the leases Redis said are lost, then giving idle ones
-// back: every eviction wait and the projection wait together. The name is
-// from when only the hand-back had a budget; the re-claims ran outside it and
-// held the loop the same way, one evictBudget per lost lease
-// (RR-20261004-10), so they now spend the same one, first.
-//
-// A count is not a bound on time: handBackBudget evictions of evictBudget
-// each, plus the projection wait, came to 45s, and the refresh loop renews
-// nobody while it is handing back — so one slow batch outlived Lease (30s)
-// and cost this process every other lease it held (RR-20260921-04). The
-// renewal just before the pass confirms each lease for Lease from now; if
-// that renewal could not be confirmed, the window is what the one before it
-// left — Lease − RefreshInterval — and admission stops AdmissionGuard before
-// its end. A pass that is over by then has not cut anybody's admission short,
-// even with one renewal lost. Players the pass does not reach keep their
-// lease and are considered again by the next pass.
-//
-// The releases themselves are outside it: each is one Redis round trip for a
-// player whose copy is already gone and whose writes have landed, and giving
-// up at that point would only make the lease lapse 30 seconds later. So are
-// the re-claims' own round trips (one SetNX each): giving up on one that may
-// already have landed would leave this process holding a claim it does not
-// know about.
-const handBackPassBudget = playerroute.Lease - playerroute.RefreshInterval - AdmissionGuard
-
-// NewPlayerOwners builds the table from what the process publishes.
-func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
-	client, err := mods.Redis(registry)
-	if err != nil {
-		return nil, fmt.Errorf("player owners: %w", err)
-	}
-	config := registry.Config()
-	sid := int32(config.GetInt("sid"))
-	prefix := config.GetString("game_route.key_prefix")
-	if prefix == "" {
-		return nil, fmt.Errorf("player owners: game_route.key_prefix is empty; ownership is a shared fact and needs a keyspace")
-	}
-	store, err := playerroute.NewStore(client, prefix, sid)
-	if err != nil {
-		return nil, fmt.Errorf("player owners: %w", err)
-	}
-	return newPlayerOwners(store, nil, time.Now), nil
-}
-
-// newPlayerOwners is the seam the tests build through.
-func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Time) *PlayerOwners {
-	if now == nil {
-		now = time.Now
-	}
-	return &PlayerOwners{
-		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
-		evictWait: evictBudget, projectionWait: evictBudget, handBackPassWait: handBackPassBudget,
-		local:     map[int64]*leaseState{},
-		evictions: map[int64]*eviction{},
-		claiming:  map[int64]int{},
-	}
-}
-
-// Projections sets what tells a hand-back that this process's writes for a
-// player have reached the database. Like Evict it is installed after
-// construction, before the table is published. A table without one never
-// hands a lease back: it cannot show that the next owner would load a
-// current document (RR-20260926-31).
-func (owners *PlayerOwners) Projections(barrier projectionBarrier) {
-	if owners == nil {
-		return
-	}
-	owners.mu.Lock()
-	owners.projections = barrier
-	owners.mu.Unlock()
-}
-
-// Evict sets what drops this process's copy of a player. Like Fence it is
-// separate from construction: the scene and the entity runtime come up after
-// the table does.
-//
-// A table without one still refuses to serve a player whose lease was
-// interrupted — it simply cannot take the claim back, so the lease lapses
-// instead. That is the safe default, and it is what a single-process
-// deployment gets.
-func (owners *PlayerOwners) Evict(evictor residentEvictor) {
-	if owners == nil {
-		return
-	}
-	owners.mu.Lock()
-	owners.evict = evictor
-	owners.mu.Unlock()
-}
-
-// dropResident drops this process's copy of a player, with a bounded budget.
-// It reports whether the copy is now gone: "no evictor" is NOT gone.
-func (owners *PlayerOwners) dropResident(ctx context.Context, playerID int64) error {
-	owners.mu.Lock()
-	evictor := owners.evict
-	if evictor == nil {
-		owners.mu.Unlock()
-		return fmt.Errorf("player owners: no evictor is installed, so the copy of player %d cannot be dropped", playerID)
-	}
-	inFlight, running := owners.evictions[playerID]
-	if !running {
-		inFlight = &eviction{done: make(chan struct{})}
-		owners.evictions[playerID] = inFlight
-	}
-	wait := owners.evictWait
-	owners.mu.Unlock()
-	if !running {
-		go owners.runEviction(evictor, playerID, inFlight)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-inFlight.done:
-		return inFlight.err
-	case <-timer.C:
-		// Still waiting on the entity. Say so as a failure — the copy is NOT
-		// gone — and leave the eviction running: it will finish when the
-		// transaction does, and until then every caller joins this same one
-		// and Admit refuses the player (RR-20261004-11).
-		return fmt.Errorf("player owners: dropping player %d is taking longer than %s; it continues in the background", playerID, wait)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// runEviction performs one drop and hands the result to everyone waiting.
-//
-// It is given a background context on purpose: the thing it ends in does not
-// read one (see evictBudget), so passing a deadline here would only be a
-// promise nothing keeps.
-func (owners *PlayerOwners) runEviction(evictor residentEvictor, playerID int64, in *eviction) {
-	in.err = evictor.EvictPlayer(context.Background(), playerID)
-	owners.mu.Lock()
-	if owners.evictions[playerID] == in {
-		delete(owners.evictions, playerID)
-	}
-	owners.mu.Unlock()
-	close(in.done)
-}
-
-// Fence sets what disconnects a player this process may no longer serve. It
-// is separate from construction because the transport comes up after the
-// table does.
-func (owners *PlayerOwners) Fence(fencer sessionFencer) {
-	if owners == nil {
-		return
-	}
-	owners.mu.Lock()
-	owners.fencer = fencer
-	owners.mu.Unlock()
-}
-
-// Start begins refreshing this process's claims.
-//
-// It deliberately does not subscribe to session closes. See the type comment:
-// the Player entity outlives the connection, so releasing here would give the
-// claim away while this process still holds the document.
-func (owners *PlayerOwners) Start(ctx context.Context) {
-	if owners == nil {
-		return
-	}
-	owners.stop, owners.done = make(chan struct{}), make(chan struct{})
-	go owners.refreshLoop(ctx)
-}
-
-func (owners *PlayerOwners) refreshLoop(ctx context.Context) {
-	defer close(owners.done)
-	ticker := time.NewTicker(playerroute.RefreshInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-owners.stop:
-			return
-		case <-ticker.C:
-		}
-		owners.renew(ctx)
-	}
-}
-
-// renew is one pass of the refresh loop, factored out so a test can drive it
-// without waiting for a ticker.
-//
-// Every answer that only records something is taken first; everything that
-// may wait — re-taking lost leases, then giving idle ones back — comes after,
-// on one time budget (handBackPassBudget, see refreshPass). Both halves of
-// that order matter (RR-20261004-10):
-//
-//   - A renewal's local window starts when it is confirmed, and Redis set the
-//     key's TTL when it was asked. Confirmed after a run of re-claims, a lease
-//     got a window that ran past its key: the pass that held the loop for 40s
-//     handed later leases a local deadline 40s beyond the one Redis kept, so
-//     this process admitted writes after another one could have taken over.
-//   - Each re-claim across a gap drops the copy from before it, which waits up
-//     to evictBudget. One per lost lease, in series, with nothing renewed
-//     meanwhile: a batch of leases lost together (a stalled process, a
-//     flushed Redis) held the loop for longer than the leases it had just
-//     renewed — the same shape as the hand-back pass in RR-20260921-04, and
-//     now under the same budget.
-//
-// And a confirmed renewal's window starts when Redis was ASKED, not when the
-// answer came back (RR-20261004-14): Refresh renews one player after another,
-// each key's TTL set on the way, and a slow Redis returns the batch seconds
-// after the first of them started to run down.
-func (owners *PlayerOwners) renew(ctx context.Context) {
-	var lost []int64
-	asked := owners.now()
-	for _, result := range owners.store.Refresh(ctx, owners.snapshot()) {
-		switch {
-		case result.Held:
-			if !owners.confirmRenewal(result.PlayerID, asked) {
-				// Held, for a lease Redis had already said was not ours:
-				// the key is ours again only because a claim of this
-				// process put the token back without confirming — one
-				// whose reply was lost, or one still dropping the copy.
-				// That is a claim across a gap, not a renewal, and it goes
-				// the way of the lost leases: re-claimed, the copy
-				// dropped, then confirmed.
-				lost = append(lost, result.PlayerID)
-			}
-		case result.Err != nil:
-			// UNKNOWN. The lease may still be ours, so this does not give it
-			// up — but it does not extend the deadline either, and admission
-			// runs out on its own if the next renewals keep failing. That is
-			// the whole difference between a process that stops in time and
-			// one that is still writing when somebody else takes over.
-			slog.Warn("player owners: lease renewal failed; admission is running out", "player_id", result.PlayerID, "err", result.Err)
-		default:
-			// Redis answered, and the answer is that the lease is not ours.
-			// Marked now, because from here on this process cannot prove it
-			// held the player without interruption, and Admit must say so
-			// even if the local window still looks open — whether or not this
-			// pass gets as far as re-claiming them.
-			owners.interrupt(result.PlayerID)
-			lost = append(lost, result.PlayerID)
-		}
-	}
-	pass := owners.beginPass(ctx)
-	defer pass.end()
-	owners.retakeLost(ctx, pass, lost)
-	// And give back what this process is holding for nobody. After the
-	// renewals, so that a lease handed back in this pass was renewed on the
-	// way past and cannot expire between the two halves.
-	owners.handBackIdle(ctx, pass)
-}
-
-// refreshPass is the time one refresh pass may spend after its renewals:
-// re-taking lost leases first, then giving idle ones back, handBackPassBudget
-// for the two together.
-//
-// Two clocks, one budget: the table's clock is what the pass is accounted on,
-// like every other time decision here; ctx is what actually ends a wait,
-// because a timer does not read that clock. In a running process they are the
-// same clock.
-type refreshPass struct {
-	ctx     context.Context
-	end     context.CancelFunc
-	owners  *PlayerOwners
-	started time.Time
-	budget  time.Duration
-}
-
-func (owners *PlayerOwners) beginPass(ctx context.Context) refreshPass {
-	owners.mu.Lock()
-	budget := owners.handBackPassWait
-	owners.mu.Unlock()
-	passCtx, end := context.WithTimeout(ctx, budget)
-	return refreshPass{ctx: passCtx, end: end, owners: owners, started: owners.now(), budget: budget}
-}
-
-// outOfTime reports whether the pass has used its budget up.
-func (pass refreshPass) outOfTime() bool {
-	return pass.owners.now().Sub(pass.started) >= pass.budget || pass.ctx.Err() != nil
-}
-
-// retakeLost re-claims the leases Redis just said are not ours, as many as the
-// pass has time for. The rest stay as they are — interrupted, so Admit refuses
-// them, their copy untouched and their connections open — and the next pass
-// asks Redis about them again: the same ending as a re-claim Redis did not
-// answer. Nothing is admitted on a copy from before the gap either way.
-func (owners *PlayerOwners) retakeLost(ctx context.Context, pass refreshPass, lost []int64) {
-	for i, playerID := range lost {
-		if pass.outOfTime() {
-			slog.Warn("player owners: refresh pass out of time; the remaining lost leases are retaken by the next pass",
-				"remaining", len(lost)-i, "budget", pass.budget)
-			return
-		}
-		owners.retakeOne(ctx, pass, playerID)
-	}
-}
-
-// retakeOne settles one lease Redis said is not ours. Two different situations
-// wear that answer, and they deserve different endings:
-//
-//	nobody holds it   our renewals lapsed while the player stayed
-//	                  here. Taking it again is atomic (SetNX), it
-//	                  is correct, and it does not disturb anyone.
-//	somebody holds it another process owns this player now; this
-//	                  one must stop serving them.
-//
-// The re-claim decides which it is, so this does not have to guess — and a
-// lost re-claim is exactly the case that must fence. The re-claim asks Redis
-// on the loop's context and waits for the drop of the copy on the pass's: a
-// drop the budget cuts short is a drop that did not finish in time, with the
-// same ending as one that ran out of evictBudget.
-func (owners *PlayerOwners) retakeOne(ctx context.Context, pass refreshPass, playerID int64) {
-	mine, err := owners.claim(ctx, pass.ctx, playerID)
-	switch {
-	case errors.Is(err, errStaleCopyKept):
-		// The lease is ours in Redis again, but the copy could not be
-		// dropped in budget and the lease is not confirmed: nothing
-		// is admitted, and Claim has forgotten the player's local
-		// state, so the next pass does not renew the lease it just
-		// took (RR-20261001-07). The drop is still running (or failed), and
-		// its first step is to leave the scene — so a player who is
-		// connected here is, or is about to be, out of the scene on
-		// an open connection with every write refused. That is the
-		// same silence as below, so the connections end the same
-		// way; the login they come back with waits for the drop and
-		// is refused if it still cannot be shown (RR-20260930-23).
-		closed := owners.closeSessions(playerID, "the lease lapsed and the copy from before the gap could not be dropped; log in again")
-		slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", playerID, "err", err, "sessions_closed", closed)
-	case err != nil:
-		// Redis did not answer the re-claim. Nothing was dropped and
-		// the player is still in the scene; admission runs out on
-		// its own and the next pass asks again. The SetNX may have
-		// landed all the same: the player stays interrupted, so the
-		// next pass's Held for them is a re-take, not a renewal
-		// (RR-20261004-14).
-		slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", playerID, "err", err)
-	case mine:
-		// Claim dropped the copy from before the gap on the way
-		// through, so this process resumes on a reload rather than on
-		// whatever it still had in memory.
-		//
-		// The copy took the player's scene membership with it (the
-		// evictor leaves the scene before it destroys) — but not
-		// their connections. Before this, a session that lived
-		// through the gap stayed open and bound to nothing: no frame
-		// reached it and nobody saw the player again until the
-		// client happened to log in again; the reload hook could not
-		// help, this is a destroy and not a reload (RR-20260930-23).
-		// So the connections go the way a fence sends them: closed,
-		// and the client reconnects into an ordinary login, which
-		// lands back here because the lease is ours again. Closed
-		// AFTER the claim, so a reconnect that is quick finds the
-		// lease confirmed and the copy already gone.
-		closed := owners.closeSessions(playerID, "the lease lapsed and was retaken; log in again")
-		slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", playerID, "sessions_closed", closed)
-	default:
-		owners.fence(playerID, "another process holds the lease now")
-	}
-}
-
-// handBackIdle gives back the leases this process is holding for nobody.
-//
-// A lease qualifies when the player has no connection here AND nothing has
-// used the lease for HandBackIdle. That is the description of a lease taken
-// by a background consumer for one piece of work that has since finished —
-// and of a player who logged out, whose entity would otherwise sit here
-// keeping everyone else from serving them.
-//
-// The order is the whole safety argument: the copy goes FIRST, the claim
-// second. Releasing a claim while the entity is still resident is what
-// U-0259 refused to do, and rightly: it invites a second copy in another
-// process. Evicting first makes the release honest — after it, this process
-// has nothing of that player left. An eviction that fails therefore keeps the
-// lease.
-//
-// "Nothing left" includes the log. The copy's committed transactions may still
-// be in this process's write-ahead log on their way to Mongo, and Mongo is all
-// the next owner reads — so between the eviction and the release the pass
-// waits for this player's projections (RR-20260926-31). Evicting first means
-// no new write can join them; admission is already stopped by handingBack. A
-// wait that fails or runs out of budget keeps the lease, and the next pass
-// tries again. One projectionWait covers the whole pass: a stalled database
-// costs the refresh loop one projectionWait, not one per player.
-//
-// And the pass as a whole has a time budget, handBackPassBudget, shared with
-// the re-claims that run before it in the same refresh pass: the evictions and
-// the projection wait all end by it, and the players it does not reach stay in
-// service until the next pass (RR-20260921-04, RR-20261004-10). A pass the
-// re-claims used up does not pick anybody.
-//
-// A Claim of a player being handed back waits for the hand-back to end, and a
-// hand-back does not pick a player a Claim is working on (see enterClaim), so
-// the two never decide about one player at the same time (RR-20260921-03).
-// This pass runs on the refresh loop's goroutine and ends every hand-back it
-// starts before it returns; the loop's own Claims (a lapsed lease being
-// retaken) therefore never find one in progress and never wait on themselves.
-func (owners *PlayerOwners) handBackIdle(ctx context.Context, pass refreshPass) {
-	if pass.outOfTime() {
-		return
-	}
-	owners.mu.Lock()
-	sessions := owners.fencer
-	projections := owners.projections
-	projectionWait := owners.projectionWait
-	now := owners.now()
-	var chosen []handBack
-	if sessions != nil {
-		for playerID, state := range owners.local {
-			if state.lost || state.handingBack || owners.claiming[playerID] > 0 || now.Sub(state.lastUsed) < HandBackIdle {
-				continue
-			}
-			// Marked while the lock that chose it is still held, so no
-			// admission and no claim can slip between the choice and the stop.
-			state.handingBack = true
-			state.handBackDone = make(chan struct{})
-			chosen = append(chosen, handBack{playerID: playerID, state: state})
-			if len(chosen) == handBackBudget {
-				break
-			}
-		}
-	}
-	owners.mu.Unlock()
-	if len(chosen) == 0 {
-		return
-	}
-	pending := chosen
-	// Whatever the pass did not get to goes back into service, so that no
-	// lease is left refusing everything and no Claim is left waiting.
-	defer func() {
-		for _, untouched := range pending {
-			owners.finishHandBack(untouched, false)
-		}
-	}()
-	projected, cancel := context.WithTimeout(pass.ctx, projectionWait)
-	defer cancel()
-	for len(pending) > 0 {
-		if pass.outOfTime() {
-			slog.Warn("player owners: hand-back pass out of time; the rest stay in service until the next pass",
-				"remaining", len(pending), "budget", pass.budget)
-			return
-		}
-		next := pending[0]
-		pending = pending[1:]
-		owners.handBackOne(ctx, pass.ctx, projected, sessions, projections, next)
-	}
-}
-
-// handBack is one lease a pass decided to give back, with the state it marked.
-type handBack struct {
-	playerID int64
-	state    *leaseState
-}
-
-// handBackOne gives one lease back, or puts it back in service. pass bounds
-// the eviction wait and projected the projection wait; ctx is the refresh
-// loop's, for the release.
-func (owners *PlayerOwners) handBackOne(ctx, pass, projected context.Context, sessions sessionFencer, projections projectionBarrier, chosen handBack) {
-	playerID := chosen.playerID
-	// Asked outside the lock, and asked last: a player who reconnected while
-	// this pass was deciding keeps their lease.
-	if sessions.ActiveSessions(playerID) > 0 {
-		owners.finishHandBack(chosen, false)
-		return
-	}
-	if err := owners.dropResident(pass, playerID); err != nil {
-		// The lease goes back into service; a drop that outlived the wait
-		// is still running, and Admit refuses the player until it ends
-		// (RR-20261004-11).
-		slog.Warn("player owners: idle lease kept because its player could not be dropped", "player_id", playerID, "err", err)
-		owners.finishHandBack(chosen, false)
-		return
-	}
-	if projections == nil {
-		slog.Warn("player owners: idle lease kept because nothing can show its player's writes reached the database", "player_id", playerID)
-		owners.finishHandBack(chosen, false)
-		return
-	}
-	if err := projections.WaitPlayerProjection(projected, playerID); err != nil {
-		slog.Warn("player owners: idle lease kept because its player's writes have not reached the database yet", "player_id", playerID, "err", err)
-		owners.finishHandBack(chosen, false)
-		return
-	}
-	// The decision was taken a while ago; check that it still stands before
-	// acting on it. Claims are kept out for the whole hand-back, but this is
-	// the line the hand-back used to cross without looking (RR-20260921-03):
-	// if the lease is no longer the one this pass marked, something else has
-	// ended it, and releasing now could release somebody else's.
-	owners.mu.Lock()
-	stillOurs := owners.local[playerID] == chosen.state && chosen.state.handingBack
-	owners.mu.Unlock()
-	if !stillOurs {
-		slog.Warn("player owners: idle lease not released, it changed hands during the hand-back", "player_id", playerID)
-		owners.finishHandBack(chosen, false)
-		return
-	}
-	// The state stays marked through the release, so a Claim that arrives now
-	// waits for it rather than reading the claim this is about to delete.
-	if err := owners.store.Release(ctx, playerID); err != nil {
-		// The copy is gone and its writes have landed; the lease lapses on its
-		// own, since nothing here renews it any more.
-		slog.Warn("player owners: claim not released", "player_id", playerID, "err", err)
-	}
-	owners.finishHandBack(chosen, true)
-	slog.Info("player owners: idle lease handed back", "player_id", playerID)
-}
-
-// finishHandBack ends one hand-back. released means the claim was given up,
-// so the local state goes with it; otherwise the lease goes back into service
-// and the next pass will consider it again. Either way, a Claim waiting for
-// this hand-back goes ahead.
-func (owners *PlayerOwners) finishHandBack(chosen handBack, released bool) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	state := chosen.state
-	if released && owners.local[chosen.playerID] == state {
-		delete(owners.local, chosen.playerID)
-	}
-	state.handingBack = false
-	if state.handBackDone != nil {
-		close(state.handBackDone)
-		state.handBackDone = nil
-	}
-}
-
-// confirmRenewal records that Redis just said the lease is still ours.
-//
-// A renewal is NOT use. If it were, every lease this process holds would look
-// busy forever and none would ever be handed back — which is the whole of
-// RR-20260920-10.
-//
-// asked is when the renewal was sent; the window starts there (see
-// confirmLocked). It reports false, and confirms nothing, for a lease that is
-// interrupted: Redis said it was not ours, and Held now only means our token
-// is back in the key. The token is fixed per process (RR-20260920-03), so the
-// renewal cannot tell the key from before the gap from one a claim of this
-// process set again — a claim whose reply was lost, which never dropped the
-// copy from before the gap. Confirming it here cleared the interruption and
-// admitted writes to that copy (RR-20261004-14). The caller re-takes it.
-func (owners *PlayerOwners) confirmRenewal(playerID int64, asked time.Time) bool {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	if state := owners.local[playerID]; state != nil && state.interrupted {
-		return false
-	}
-	owners.confirmLocked(playerID, false, asked)
-	return true
-}
-
-// confirmClaim records a FRESH claim, which IS use: somebody asked for this
-// player and is about to work on them.
-//
-// The two are separate functions because one shared one with an
-// `if lastUsed.IsZero()` inside it got this wrong (RR-20260920-11): a lease
-// retaken for new work kept the timestamp of the work before it, so the very
-// next refresh pass called it idle and handed it back — out from under the
-// step it had just admitted. "When was this lease last USED" and "when was it
-// last renewed" are different questions, and every caller knows which one it
-// is answering.
-func (owners *PlayerOwners) confirmClaim(playerID int64, asked time.Time) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	owners.confirmLocked(playerID, true, asked)
-}
-
-// confirmLocked records a confirmation of a lease whose key Redis was asked to
-// set at asked. The window runs from asked, not from now: Redis set the key's
-// TTL while answering that request, so the key lives at least until
-// asked + Lease, and the window must not end later — AdmissionGuard, the time
-// left for work in flight, is measured back from it. Counted from the
-// confirmation, a claim across a gap, which drops the copy between the two
-// and may wait evictBudget for it, admitted writes right up to the moment the
-// key could expire (RR-20261004-14).
-func (owners *PlayerOwners) confirmLocked(playerID int64, used bool, asked time.Time) {
-	state := owners.local[playerID]
-	if state == nil {
-		state = &leaseState{}
-		owners.local[playerID] = state
-	}
-	state.validUntil = asked.Add(playerroute.Lease)
-	state.lost = false
-	state.interrupted = false
-	// handingBack is not touched: it belongs to the hand-back that set it
-	// (see leaseState). No confirmation can meet one in progress — a Claim
-	// waits for it, and renewals run on the goroutine that runs it.
-	if used || state.lastUsed.IsZero() {
-		state.lastUsed = owners.now()
-	}
-}
-
-// interrupt records that Redis says this lease is not ours right now. It does
-// not decide anything by itself: the caller either retakes the lease (and the
-// claim drops the copy from before the gap) or fences.
-func (owners *PlayerOwners) interrupt(playerID int64) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	if state := owners.local[playerID]; state != nil {
-		state.interrupted = true
-	}
-}
-
-// closeSessions ends the player's connections on this process, if the
-// transport is installed, and reports how many it closed. The reason reaches
-// the session-close path as the error the sessions were closed with.
-//
-// It is for the refresh loop only. A login-time Claim crosses the same gap
-// (this process had nothing of the player before it) and drops the copy the
-// same way, but the connection that is logging in is the one just
-// registered — closing there would close the login itself (RR-20260930-23).
-func (owners *PlayerOwners) closeSessions(playerID int64, reason string) int {
-	owners.mu.Lock()
-	fencer := owners.fencer
-	owners.mu.Unlock()
-	if fencer == nil {
-		return 0
-	}
-	return fencer.CloseSessions(playerID, fmt.Errorf("player owners: %s", reason))
-}
-
-// fence stops this process from serving a player it can no longer prove it
-// owns: the lease is dropped locally, every write path starts refusing, and
-// the player's connections are closed so they stop sending work. Their
-// session-close path then runs the ordinary cleanups.
-//
-// It does NOT release the claim in Redis: either somebody else already holds
-// it — in which case releasing would delete THEIR lease — or the state is
-// unknown, where the safe move is to let it lapse.
-func (owners *PlayerOwners) fence(playerID int64, reason string) {
-	owners.mu.Lock()
-	state := owners.local[playerID]
-	if state == nil || state.lost {
-		owners.mu.Unlock()
-		return
-	}
-	state.lost = true
-	delete(owners.local, playerID)
-	fencer := owners.fencer
-	owners.mu.Unlock()
-	closed := 0
-	if fencer != nil {
-		closed = fencer.CloseSessions(playerID, fmt.Errorf("player owners: %s", reason))
-	}
-	// And the copy goes with the lease. Disconnecting stops this process
-	// being TOLD to do anything; it does not make the resident entity match
-	// the document, which the new owner is now writing. The eviction is not
-	// waited on: nothing here depends on it having finished, the gate already
-	// refuses every write, and this runs on the refresh loop's goroutine
-	// where a slow entity would hold up other players' renewals. A failure
-	// leaves a copy that the next Claim refuses to serve until it can drop it
-	// (RR-20260920-09).
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), evictBudget)
-		defer cancel()
-		if err := owners.dropResident(ctx, playerID); err != nil {
-			slog.Error("player owners: fenced player's copy not dropped", "player_id", playerID, "err", err)
-		}
-	}()
-	slog.Warn("player owners: fenced a player this process no longer owns", "player_id", playerID, "reason", reason, "sessions_closed", closed)
-}
-
-// Admit is the write gate: may this process start a new transaction on this
-// player right now?
-//
-// It answers from local state on purpose — a Redis round trip per action
-// would cost more than the lease is worth, and would not be more true: the
-// answer can go stale a microsecond after any read. What makes the local
-// answer sound is that it is derived from the last renewal Redis CONFIRMED,
-// and that it expires on its own.
-func (owners *PlayerOwners) Admit(playerID int64) error {
-	if owners == nil {
-		// No table: a single-process deployment, where every player is ours.
-		return nil
-	}
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	state := owners.local[playerID]
-	if err := owners.refusalLocked(playerID, state); err != nil {
-		return err
-	}
-	// A drop of the player's copy is running: whatever is admitted now lands
-	// on an entity that is about to be destroyed under it. The lease itself
-	// is fine — this is the hand-back whose drop outlived its wait: the lease
-	// went back into service, and the drop carried on, because nothing can
-	// cancel it (RR-20260920-12). Admitting through that window let a
-	// background step work on the dying copy, and let a login's Claim call
-	// itself continuous, skip the drop and join the scene with an entity the
-	// drop then took away (RR-20261004-11). Refused, the Claim crosses a gap
-	// instead and joins the drop. The player comes back into service the
-	// moment the drop ends (runEviction), on the lease this process never
-	// stopped renewing — so it is not part of refusalLocked: it is no reason
-	// for abandon to forget the lease.
-	if _, dropping := owners.evictions[playerID]; dropping {
-		return fmt.Errorf("%w: player %d, the copy is still being dropped", ErrLeaseNotHeld, playerID)
-	}
-	// Admitting is using. This is what keeps a lease that is doing work from
-	// being handed back underneath it, and it is free: the lock is already
-	// held.
-	state.lastUsed = owners.now()
-	return nil
-}
-
-// refusalLocked is Admit's judgement of the lease, without its side effect:
-// why this process may not start work on the player under the lease it holds
-// right now, or nil. Admit also refuses while a drop of the copy is running,
-// which is about the copy rather than the lease and ends on its own. The
-// caller holds mu; state is the player's entry in local and may be nil.
-func (owners *PlayerOwners) refusalLocked(playerID int64, state *leaseState) error {
-	if state == nil || state.lost {
-		return fmt.Errorf("%w: player %d", ErrLeaseNotHeld, playerID)
-	}
-	if state.handingBack {
-		// Being given away right now. Admitting here would put work on a
-		// player this process is in the middle of letting go of.
-		return fmt.Errorf("%w: player %d, the lease is being handed back", ErrLeaseNotHeld, playerID)
-	}
-	if state.interrupted {
-		// Redis has said the lease is not ours since the last confirmation.
-		// The local window may still look open — it is computed from our own
-		// clock — but the authority has answered, and what it answered is
-		// that somebody else could be writing this player.
-		return fmt.Errorf("%w: player %d, the lease was interrupted and has not been reclaimed", ErrLeaseNotHeld, playerID)
-	}
-	if remaining := state.validUntil.Sub(owners.now()); remaining <= owners.guard {
-		return fmt.Errorf("%w: player %d, confirmed lease has %s left and admission needs %s", ErrLeaseNotHeld, playerID, remaining, owners.guard)
-	}
-	return nil
-}
-
-// AdmitMessage is the access boundary's gate (accessplayer.WriteGate): may
-// this process act on this request at all?
-//
-// Login is exempt, and it has to be: it is the message that TAKES ownership,
-// so gating it on already having ownership would lock every player out. Every
-// other message is refused while this process cannot prove it owns the
-// player — which covers endpoints that do not exist yet, the reason the check
-// lives here rather than in each handler.
-func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error {
-	if owners == nil {
-		return nil
-	}
-	if messageID == msgid.MsgEnterGame {
-		return nil
-	}
-	return owners.Admit(playerID)
-}
-
-// Admitted reports Admit as a boolean, for callers that only branch on it.
-func (owners *PlayerOwners) Admitted(playerID int64) bool { return owners.Admit(playerID) == nil }
-
-// Stop ends the refresh loop. Claims are left to expire rather than released:
-// a process going down does not know whether it is coming back, and a lease
-// that runs out is the only statement that is true either way.
-func (owners *PlayerOwners) Stop() {
-	if owners == nil || owners.stop == nil {
-		return
-	}
-	close(owners.stop)
-	<-owners.done
-	owners.stop = nil
-}
-
-// Claim takes ownership at login and reports whether this process got it.
-//
-// Losing the claim is not an error here: it means the player is still owned by
-// another process — usually because they logged in there and their session has
-// not finished closing. The caller decides; the login path lets them in and
-// logs it, because refusing a login over a stale lease is worse than two
-// processes briefly disagreeing about a player who is doing nothing.
-func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, error) {
-	return owners.claim(ctx, ctx, playerID)
-}
-
-// claim is Claim with the wait for the drop of the copy on its own context,
-// dropCtx: the refresh loop asks Redis on its own context and waits for the
-// drop on its pass's budget (see retakeOne). Every other caller passes one
-// context for both.
-func (owners *PlayerOwners) claim(ctx, dropCtx context.Context, playerID int64) (bool, error) {
-	if owners == nil {
-		return false, nil
-	}
-	// A hand-back of this player in progress is waited out first, and none
-	// starts until this returns (RR-20260921-03). Before, a Claim that landed
-	// in a hand-back found the claim in Redis still ours, answered "mine" —
-	// and the hand-back then released it: the caller loaded the player while
-	// the shared table said nobody owned them.
-	waited, err := owners.enterClaim(ctx, playerID)
-	if err != nil {
-		return false, err
-	}
-	defer owners.leaveClaim(playerID)
-	// Whether this process has held the player WITHOUT INTERRUPTION up to
-	// this moment, asked before the claim rather than after it — afterwards
-	// the answer is yes either way.
-	//
-	// Admit is exactly that question: it passes only inside a window Redis
-	// confirmed, with the guard band already subtracted. So a claim that
-	// Admit would have refused is a claim across a gap, whether the gap came
-	// from a fence, a lapse, a restart, or simply never having owned this
-	// player. The copy from before the gap has to go before this process
-	// writes anything again (RR-20260920-09); for a player who was never
-	// here it costs one call that finds nothing to do.
-	//
-	// A hand-back this claim waited for counts as a gap too, whatever its
-	// ending: it set out to drop the copy, and a drop that outlived its wait
-	// is still running. Joining it costs nothing when it has finished. A
-	// claim that arrives after such a hand-back has ended finds Admit
-	// refusing for as long as that drop runs, and joins it the same way
-	// (RR-20261004-11).
-	continuous := owners.Admit(playerID) == nil && !waited
-	// The key's TTL is set by the request below; the window this claim
-	// confirms starts here, before it, and not after the drop that may wait
-	// evictBudget in between (RR-20261004-14).
-	asked := owners.now()
-	route, err := owners.store.Claim(ctx, playerID)
-	if err != nil {
-		if !continuous {
-			// The SetNX may have landed with only its reply lost, putting
-			// this process's token back in the key with the copy from
-			// before the gap still resident (RR-20261004-14).
-			owners.markUnansweredClaim(playerID)
-		}
-		return false, err
-	}
-	mine := route.SID == owners.store.SID()
-	if !mine {
-		return false, nil
-	}
-	if !continuous {
-		if err := owners.dropResident(dropCtx, playerID); err != nil {
-			// The lease is ours in Redis and this process still cannot use
-			// it. Not confirming is half the answer: nothing is admitted.
-			// The other half is forgetting the lease state this process
-			// may still have for the player, so that nothing refreshes it
-			// and it lapses on its own — the same ending as a process that
-			// died holding it. "Not confirming" alone was not enough: a
-			// state left behind by the refresh loop (interrupted, then
-			// re-claimed here) stayed in the renewal set, the next pass
-			// was told Held — the re-claim had put our token back — and
-			// confirmRenewal cleared the interruption and extended the
-			// window, admitting writes to the very copy that could not be
-			// dropped (RR-20261001-07). The player comes back into service
-			// at exactly one point: a later Claim whose dropResident finds
-			// the drop finished (it joins the one in flight, or runs one
-			// that finds nothing resident) and confirms.
-			owners.abandon(playerID)
-			slog.Error("player owners: claimed a player whose stale copy could not be dropped; leaving the lease to lapse",
-				"player_id", playerID, "err", err)
-			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w: %w", playerID, errStaleCopyKept, err)
-		}
-	}
-	owners.confirmClaim(playerID, asked)
-	return mine, nil
-}
-
-// markUnansweredClaim records that a claim across a gap got no answer from
-// Redis, for a player this process still has lease state for. The claim may
-// have landed — the token is fixed per process, so the next renewal would
-// then be told Held — and nothing of the gap has been dealt with: the copy
-// from before it was not dropped. Marked interrupted, the lease is refused
-// by Admit and the next renewal's Held is not a confirmation but a re-take
-// (see confirmRenewal), which drops the copy before anything is admitted.
-// Before, only a re-claim by the refresh loop left the player interrupted,
-// and the next Held cleared it anyway; a claim by a login or a background
-// consumer, for a lease whose window had run out, left nothing at all.
-//
-// A lease Admit refuses only because a drop is running (RR-20261004-11), or
-// one the claim found serviceable after waiting for a hand-back, is left
-// alone: its key never stopped being ours, so the claim cannot have
-// re-created it.
-func (owners *PlayerOwners) markUnansweredClaim(playerID int64) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	state := owners.local[playerID]
-	if state == nil || owners.refusalLocked(playerID, state) == nil {
-		return
-	}
-	state.interrupted = true
-}
-
-// enterClaim lets a Claim of the player go ahead: it waits for a hand-back of
-// the player that is in progress to end, then registers the claim so that no
-// hand-back picks the player until leaveClaim. waited reports whether there
-// was a hand-back to wait for.
-//
-// The check and the registration are one critical section, and the hand-back
-// marks its choice in one too — so for each player either the Claim sees the
-// hand-back and waits, or the hand-back sees the Claim and passes the player
-// over. Lock and wait order: mu is never held while waiting, and a hand-back
-// never waits for a Claim, so the wait cannot close a cycle. It ends when the
-// hand-back does — at the latest when the pass that chose the player ends,
-// handBackPassBudget plus that pass's release round trips — or when ctx does: a login's budget is player_access.tcp.login_timeout, and
-// its caller answers login_timeout on the context error, which the client
-// retries.
-//
-// Where it blocks: the login (on its connection's goroutine, not a Nest
-// worker), and Owns from a saga step's admission (on the consumer's
-// goroutine) — and Owns only reaches Claim once Redis has stopped answering
-// with this process, which during a hand-back is the last round trip of it.
-func (owners *PlayerOwners) enterClaim(ctx context.Context, playerID int64) (waited bool, err error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		owners.mu.Lock()
-		state := owners.local[playerID]
-		if state == nil || !state.handingBack {
-			owners.claiming[playerID]++
-			owners.mu.Unlock()
-			return waited, nil
-		}
-		done, parked := state.handBackDone, owners.onHandBackWait
-		owners.mu.Unlock()
-		waited = true
-		if parked != nil {
-			parked(playerID)
-		}
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return true, fmt.Errorf("player owners: player %d is being handed back: %w", playerID, ctx.Err())
-		}
-	}
-}
-
-// leaveClaim ends what enterClaim registered.
-func (owners *PlayerOwners) leaveClaim(playerID int64) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	if owners.claiming[playerID] <= 1 {
-		delete(owners.claiming, playerID)
-		return
-	}
-	owners.claiming[playerID]--
-}
-
-// abandon forgets this process's lease state for a player whose claim could
-// not be taken into service, so that the refresh loop stops renewing a lease
-// nobody here may use. It leaves the state alone if, in the meantime, another
-// claim of the same player was confirmed — that claim waited for the same
-// drop and saw it finish, so its lease is in service and the copy is gone.
-//
-// The claim in Redis is not released: the drop that failed may still be
-// running, and until it finishes this process does hold a copy — one it
-// refuses to serve. Letting the lease lapse keeps the next owner out for as
-// long as a dead process would have.
-func (owners *PlayerOwners) abandon(playerID int64) {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	state := owners.local[playerID]
-	if state == nil || owners.refusalLocked(playerID, state) == nil {
-		return
-	}
-	delete(owners.local, playerID)
-}
-
-// Release gives up a claim. The caller is stating that this process no longer
-// holds the Player entity — a destroy, or an operator moving them — NOT that
-// the player disconnected. Releasing a resident entity's claim invites a
-// second copy of it in another process.
-func (owners *PlayerOwners) Release(ctx context.Context, playerID int64) {
-	if owners == nil {
-		return
-	}
-	owners.mu.Lock()
-	delete(owners.local, playerID)
-	owners.mu.Unlock()
-	if err := owners.store.Release(ctx, playerID); err != nil {
-		slog.Warn("player owners: claim not released", "player_id", playerID, "err", err)
-	}
-}
-
-// Owns is the question a background consumer asks before touching a player.
-//
-// "Nobody owns them" answers TRUE: an offline player has no process to defer
-// to, and refusing would leave their mail, their saga steps and their paid
-// orders undone forever. The claim that goes with it is what keeps two
-// processes from both deciding that — Claim is insert-only, so exactly one of
-// them wins and the other sees the winner.
-func (owners *PlayerOwners) Owns(ctx context.Context, playerID int64) (bool, error) {
-	if owners == nil {
-		return true, nil
-	}
-	// Already ours and still admitted: no round trip, and — more importantly
-	// — the same answer every other write path gets. A consumer that asked
-	// Redis directly could be admitted here while Admit refuses two lines
-	// later, which is how you end up with half a rule.
-	if owners.Admitted(playerID) {
-		return true, nil
-	}
-	route, err := owners.store.Owner(ctx, playerID)
-	if err != nil {
-		return false, err
-	}
-	if route.SID == 0 {
-		mine, claimErr := owners.Claim(ctx, playerID)
-		return mine, claimErr
-	}
-	if route.SID != owners.store.SID() {
-		return false, nil
-	}
-	// Redis says this sid owns them but this process has no confirmed lease:
-	// it is a previous incarnation's claim, or one this process gave up. Not
-	// ours to write through until a Claim confirms it.
-	return false, nil
-}
-
-// OwnedHere answers the same question as Owns without the claim. It is for
-// callers that are only deciding whether to act on a player they did not ask
-// for — a matchmaker draining a shared queue, an operator surface — where
-// taking ownership as a side effect of looking would pull idle players into
-// whichever process happened to glance at them.
-func (owners *PlayerOwners) OwnedHere(ctx context.Context, playerID int64) (bool, error) {
-	if owners == nil {
-		return true, nil
-	}
-	// The gate first, for the same reason as Owns: one answer, one rule.
-	if owners.Admitted(playerID) {
-		return true, nil
-	}
-	held, err := owners.store.Owns(ctx, playerID)
-	if err != nil || !held {
-		return false, err
-	}
-	// Redis agrees it is this sid's, but there is no confirmed local lease
-	// behind it. Answering true here would let a caller act on a lease this
-	// process cannot prove it still holds.
-	return false, nil
-}
-
-// OwnerSID reports who owns a player, or 0 for nobody. It is what an operator
-// surface answers with when the work belongs somewhere else.
-func (owners *PlayerOwners) OwnerSID(ctx context.Context, playerID int64) (int32, error) {
-	if owners == nil {
-		return 0, nil
-	}
-	route, err := owners.store.Owner(ctx, playerID)
-	return route.SID, err
-}
-
-// SID is this process's server id, which is what the router compares a route
-// against to decide local or remote.
-func (owners *PlayerOwners) SID() int32 {
-	if owners == nil {
-		return 0
-	}
-	return owners.store.SID()
-}
-
-// Routes is the resolver the core router uses.
-func (owners *PlayerOwners) Routes() ownerroute.Resolver[int64, playerroute.Route] {
-	return owners.store
-}
-
-func (owners *PlayerOwners) snapshot() []int64 {
-	owners.mu.Lock()
-	defer owners.mu.Unlock()
-	out := make([]int64, 0, len(owners.local))
-	for playerID := range owners.local {
-		out = append(out, playerID)
-	}
-	return out
-}

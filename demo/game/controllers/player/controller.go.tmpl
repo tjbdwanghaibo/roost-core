@@ -91,12 +91,10 @@ type sceneJoiner interface {
 	Leave(ctx context.Context, subjectID int64)
 }
 
-// playerOwners is the slice of the game service's ownership table an endpoint
-// uses: claim this player for this process at login. Looked up by capability
-// name for the same reason the scene is.
+// playerOwners 是登录端点用到的那部分驻留表：把绑定在本服的玩家接入本进程服务。
+// 绑定在别的服时 Serve 返回 ErrPlayerElsewhere。按能力名查找，理由与场景相同。
 type playerOwners interface {
-	Claim(ctx context.Context, playerID int64) (bool, error)
-	OwnerSID(ctx context.Context, playerID int64) (int32, error)
+	Serve(ctx context.Context, playerID int64, boundSID int32) error
 }
 
 // activityRunner is the slice of the game service's activity runner the

@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +19,8 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -35,8 +38,20 @@ import (
 
 type alwaysOwner struct{}
 
-func (alwaysOwner) Claim(context.Context, int64) (bool, error)     { return true, nil }
-func (alwaysOwner) OwnerSID(context.Context, int64) (int32, error) { return 0, nil }
+func (alwaysOwner) Serve(context.Context, int64, int32) error { return nil }
+
+// boundSession 是一条已认证的会话，Claims 里带着认证器从 account 取来的角色绑定 sid。
+type boundSession struct{ claims map[string]string }
+
+func (session boundSession) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: stuckPlayerID, SessionID: "test-session", Claims: session.claims}
+}
+func (boundSession) Reply(context.Context, any) error { return nil }
+func (boundSession) Close(error) error                { return nil }
+
+func boundTo(sid int32) boundSession {
+	return boundSession{claims: map[string]string{serverIDClaim: strconv.FormatInt(int64(sid), 10)}}
+}
 
 // fixedLoginBudget stands in for the player TCP Runtime's LoginTimeout.
 type fixedLoginBudget time.Duration
@@ -143,7 +158,7 @@ func (login *stuckLogin) enter(t *testing.T) {
 	dispatchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	began := time.Now()
-	response, err := login.controller.HandleEnterGame(&player_agent.Context{BaseCtx: dispatchCtx, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+	response, err := login.controller.HandleEnterGame(&player_agent.Context{BaseCtx: dispatchCtx, Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
 	elapsed := time.Since(began)
 	if err != nil {
 		t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
@@ -212,6 +227,64 @@ func TestEnterGameColdLoadStuckOnProjectionAnswersWithinTheLoginBudget(t *testin
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("the shared load did not end when the projector closed")
+		}
+	})
+}
+
+// recordingOwners 记下登录端点交给驻留表的绑定 sid，并按“本服是 1000”回答。
+type recordingOwners struct{ served []int32 }
+
+func (owners *recordingOwners) Serve(_ context.Context, playerID int64, boundSID int32) error {
+	owners.served = append(owners.served, boundSID)
+	if boundSID != 1000 {
+		return errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", playerID, "owner_sid", boundSID)
+	}
+	return nil
+}
+
+// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.1）：登录只在玩家绑定的服上服务。
+// Claims 里没有 server_id → fail-closed，按名拒绝、不问驻留表、不装载；绑定在别的服 → 驻留表回答
+// player_elsewhere，端点原样转给客户端、不装载。两种情况都在装载之前结束（controller 没有 Players，
+// 走到装载会 panic）。
+func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
+	enter := func(t *testing.T, session gateway.Session) (*pb.EnterGameResponse, *recordingOwners) {
+		t.Helper()
+		owners := &recordingOwners{}
+		controller := &Controller{registry: app.NewRegistry(viper.New())}
+		var published playerOwners = owners
+		controller.owners.Store(&published)
+		response, err := controller.HandleEnterGame(&player_agent.Context{BaseCtx: context.Background(), Session: session, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+		if err != nil {
+			t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
+		}
+		return response, owners
+	}
+	for _, missing := range []struct {
+		name    string
+		session gateway.Session
+	}{
+		{"no-session", nil},
+		{"no-claim", boundSession{}},
+		{"unreadable-claim", boundSession{claims: map[string]string{serverIDClaim: "sid-1000"}}},
+		{"zero", boundTo(0)},
+	} {
+		t.Run("missing-server-id/"+missing.name, func(t *testing.T) {
+			response, owners := enter(t, missing.session)
+			if response.Code != apperrors.ErrPlayerElsewhere.Code() {
+				t.Fatalf("code=%d reason=%q, want player_elsewhere (%d): a login whose binding is unknown must fail closed", response.Code, response.Reason, apperrors.ErrPlayerElsewhere.Code())
+			}
+			if len(owners.served) != 0 {
+				t.Fatalf("a login with no server_id reached the ownership table with %v", owners.served)
+			}
+		})
+	}
+	t.Run("bound-elsewhere", func(t *testing.T) {
+		response, owners := enter(t, boundTo(2000))
+		if response.Code != apperrors.ErrPlayerElsewhere.Code() {
+			t.Fatalf("code=%d reason=%q, want player_elsewhere (%d)", response.Code, response.Reason, apperrors.ErrPlayerElsewhere.Code())
+		}
+		if len(owners.served) != 1 || owners.served[0] != 2000 {
+			t.Fatalf("the ownership table was asked about %v, want the session's bound sid 2000", owners.served)
 		}
 	})
 }

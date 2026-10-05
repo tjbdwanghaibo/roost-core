@@ -60,7 +60,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	// are not gives them `battle not found` for every input they send, which
 	// is what the two-process run showed before this (GAME_DEMO_TEMPLATE
 	// §9.11). Matches are therefore formed only among the players THIS
-	// process owns, so the battle is always born where its players live.
+	// process serves, so the battle is always born where its players live.
 	owners, ok := app.Lookup[*PlayerOwners](registry, PlayerOwnerCapability)
 	if !ok || owners == nil {
 		return nil, errors.New("matchmaker: player ownership is unavailable; it must be published before the matchmaker starts")
@@ -95,29 +95,27 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	}, nil
 }
 
-// ownedCandidates keeps the tickets whose player belongs to this process.
+// ownedCandidates keeps the tickets whose player this process serves: a
+// resident record here, and no unload in progress (PlayerOwners.Resident — a
+// look, not a use, so being matched-over does not keep an idle player loaded).
 //
-// A ticket the owner has not seen yet is left in the queue rather than
-// dropped: it is not this process's to match, and the owner's next pass will
-// pick it up. Nothing is removed from the service, so a player whose owner
-// disappears is matched by whoever takes the claim after the lease lapses.
+// A ticket can only be written by JoinQueue, which goes through the write
+// gate, so its player was taken into service on the sid they are bound to.
+// Another sid's tickets are not visible here and stay in the queue for that
+// sid's own pass. A player who logs out and is unloaded leaves the ticket to
+// run out its TTL.
 //
 // What this gives up is a match across two processes. That needs a battle
 // host the losing side's inputs are routed to, which the demo does not have;
 // the honest failure is "the queue takes a little longer" rather than a
 // battle nobody can play.
-func ownedCandidates(ctx context.Context, owners *PlayerOwners, candidates []svcmatch.Ticket) []svcmatch.Ticket {
+func ownedCandidates(owners *PlayerOwners, candidates []svcmatch.Ticket) []svcmatch.Ticket {
 	if owners == nil {
 		return candidates
 	}
 	kept := candidates[:0]
 	for _, ticket := range candidates {
-		owned, err := owners.OwnedHere(ctx, ticket.Subject.ID)
-		if err != nil {
-			slog.Warn("matchmaker: ownership unknown, leaving the ticket", "player_id", ticket.Subject.ID, "err", err)
-			continue
-		}
-		if owned {
+		if owners.Resident(ticket.Subject.ID) {
 			kept = append(kept, ticket)
 		}
 	}
@@ -133,7 +131,7 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatc
 	if err != nil {
 		return fmt.Errorf("candidates: %w", err)
 	}
-	candidates = ownedCandidates(ctx, owners, candidates)
+	candidates = ownedCandidates(owners, candidates)
 	for len(candidates) >= queue.GroupSize {
 		group, formed, err := grouping.Group(queue, candidates)
 		if err != nil {
