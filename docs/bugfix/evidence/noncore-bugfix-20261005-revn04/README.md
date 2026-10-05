@@ -15,3 +15,7 @@
 其他执行（结果见各 bugfix 记录）：`REDIS_ADDR=127.0.0.1:17379 GOWORK=off go test -tags integration -count=1 -p 1 ./kit/service/... ./service/... ./versionstore/ ./cache/...` 1008 pass / 30 skip / 0 fail（原始 json 1MB，留在本机未提交）；`GOWORK=off go test -race -count=3 ./mongo/... ./redis/... ./versionstore/ ./cache/...`；mongotest 消费包 `./dataengine/engine ./kit/dataengine ./kit/saga ./nestwal ./remoteentity ./saga`；`GOWORK=off go build ./... && go vet ./...`；根包 `GOWORK=off go test -count=1 .`。
 
 探针（`zz_probe_*`）跑完即删。未执行：Redis Cluster、mongos、kit/dataengine 真实集成套件（写 `ROOST_IT_EFFECTS_*` 流且含主节点切换）、`redis/driver/lock_toxic_integration_test.go`（会 `/reset` 共享 toxiproxy）。
+
+## 共享 toxiproxy 事故的影响核对（协调方 10-05 通知）
+
+N03 一次未加 `-run` 的 `./kit/nats/` integration 运行重置过两次共享 toxiproxy。本轮结果不受影响：NC-100 / NC-101 的绿要求毒在本用例自建的代理上确实生效（修后分别观察到 `EOF` 与 2s 截止错误；毒被清掉时两条用例会因“成功写入 / 提交成功”而失败），红是两次独立运行（探针 + 正式用例）一致的确定性结果；推送后在 `81659082` 上用 `-run` 只跑本轮用例复跑，NC-100、NC-101 与既有事务重试用例全部通过。本轮未加 `-run` 的集成运行是 `./kit/service/... ./service/... ./versionstore/ ./cache/...` 与 `./mongo/driver/` 整包：其中只有本轮自建代理的 `versionstore/lost_reply_integration_test.go` 碰 toxiproxy，没有 `/reset` 或共享代理注入；今后按共同要求一律加 `-run`。
