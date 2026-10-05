@@ -16,6 +16,9 @@ import (
 // 另加 200µs / 1ms / 3ms 持锁变体，记录见 bf-48 §后续验证）没有出现耗尽，最多 234 次，所以 C09 按推荐不加抖动。
 // 这里是轻量版本：一次运行里 4 对同时对称冲突，每对都在重排上限内解开（一方成功、一方 ErrEntityExists），没有请求以锁超时耗尽。
 // 大样本统计（-count=500）不放进常规门禁。
+// 更正（2026-10-05，U-0279）：v1.20.0 生成工程 TestGeneratedDataEngineCrossCreateResolvesOnRealWAL 正常负载下 35%～53% 的运行耗尽 400 次上限
+// （v1.19.2 同样），按 C09 的预案给重排加了抖动（transientRequeueDelay：5ms 下限 + [0, 5ms) 均匀抖动）；
+// 打破对称的确定性回归见 requeue_jitter_promises_test.go。
 func TestSymmetricCrossCreatePairsResolveWithinRequeueBudget(t *testing.T) {
 	const pairs = 4
 	manager := entity.NewEntityManager()

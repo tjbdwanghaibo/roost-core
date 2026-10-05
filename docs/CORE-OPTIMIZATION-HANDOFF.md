@@ -178,6 +178,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 U-0279：[Nest 暂时性冲突重排加抖动](bugfix/U-0279-nest-requeue-jitter.md) **已修复，未发版**。v1.20.0 整体验证 `TestGeneratedDataEngineCrossCreateResolvesOnRealWAL` 耗尽 400 次上限，正常负载下 v1.20.0 / v1.19.2 失败率 35%～53%（既有问题，满载时反而罕见）；固定 5ms 重排 + 单定时器延迟队列让对称交叉创建每轮重演（活锁），改为 5ms + [0, 5ms) 抖动（OPEN-ITEMS C09 预案），上限与最短窗口不变。T-220。
 
 10-05第十五批：[NC-37](bug/RR-20261005-NC-37.md) / [NC-38](bug/RR-20261005-NC-38.md) **已修复、声明场景验证，未发版**。三个消费者health与incarnation持久映射；[健康修复](bugfix/RR-20261005-NC-37.md)、[代际修复/兼容](bugfix/RR-20261005-NC-38.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-15/README.md)、[机制/复盘](review/IMPLEMENTATION-SAGA-CONSUMER-HEALTH-AND-DURABLE-RESUME.md)。T-218/219。新BSON字段不需要重生成，但旧writer完整Replace会丢字段；不自动修历史回执或生产记录。
 

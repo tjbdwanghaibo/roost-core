@@ -3,6 +3,7 @@ package nest
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 )
 
 const (
+	// entityGroupDispatchRequeueDelay 是暂时性错误重新准入延迟的下限，实际延迟见 transientRequeueDelay。
 	entityGroupDispatchRequeueDelay = 5 * time.Millisecond
 	entityGroupDispatchRequeueMax   = 400
 
@@ -390,8 +392,20 @@ func requeueNestDispatch(mgr *NestMgr, msg *Msg, reason string) bool {
 		"reason": reason,
 		"type":   msg.Type.String(),
 	}, 1)
-	mgr.dispatcher.delaySendMsg(entityGroupDispatchRequeueDelay, next)
+	mgr.dispatcher.delaySendMsg(transientRequeueDelay(), next)
 	return true
+}
+
+// transientRequeueDelay 返回一次重新准入的延迟：下限 entityGroupDispatchRequeueDelay，加 [0, 下限) 的均匀抖动（U-0279）。
+//
+// 抖动用来打破对称冲突。交叉创建（RR-20260926-48）、交叉 Cast 这类冲突里两条消息互相持有对方要的锁、一起回滚，
+// 固定延迟会让它们在同一时刻重新准入；延迟队列只有一个定时器，醒来晚了会把所有已到期消息背靠背放出，两侧残留的
+// 错开也被抹平，于是每一轮都重演同一冲突，只能等调度噪声偶然错开（生成工程实测正常负载下 35%～53% 的运行耗尽 400 次上限）。
+// 每次独立取样后，两侧下一轮仍落进同一冲突窗口的概率小于 1 且与上一轮无关，连续 400 轮都撞上的概率可以忽略。
+// 下限不变，所以 400 次上限对应的最短重排窗口（约 2s）不缩短；平均延迟从 5ms 变为 7.5ms。
+// 延迟只决定消息何时回到准入队列，不占用 worker、不持锁。
+func transientRequeueDelay() time.Duration {
+	return entityGroupDispatchRequeueDelay + rand.N(entityGroupDispatchRequeueDelay)
 }
 
 func errorsIsEntityGroupPending(err error) bool {

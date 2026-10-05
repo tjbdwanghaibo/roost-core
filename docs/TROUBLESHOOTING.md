@@ -2,6 +2,7 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-220 | 两条可回滚消息在 handler 内交叉新建实体（一条先建 X 再建 Y、另一条反过来）时，一方偶尔以 `nest: lock timeout: nest: created entity is locked by another holder: entity … cannot be waited for in lock order` 失败，而不是 `ErrEntityExists`；机器空闲时反而更常见 | U-0279：≤ v1.20.0 的重排延迟固定 5ms，同一轮冲突的两侧总是同时重新准入、每轮重演同一冲突，直到 400 次上限 | `nest.dispatch.requeue.total{reason="lock_timeout"}` 在故障时段陡增；失败消息的 handler 执行了约 401 次 | 升级到含 U-0279 的版本（重排加抖动）。业务侧可按相同顺序新建多个实体（例如按 ID 升序）从源头避免交叉；不要靠调大重排上限掩盖 |
 | T-219 | Saga Resume返回新代际，但重读为0、命令ID复用，完成后仍waiting或identity conflict | RR-20261005-NC-38：旧Mongo记录转换丢Incarnation；旧writer也可能完整Replace掉新增字段 | 同一Saga的持久incarnation、状态/version、outbox CommandID与历史completion receipt | 协调writer统一升级；先保留记录/回执按既有超时与Resume流程处理，不删回执/改版本；历史waiting不自动修复，见NC-38兼容记录 |
 | T-218 | 原生Nest完成消费者已退出，旧版本Saga健康仍ok；新版报durable consumer stopped | RR-20261005-NC-37：旧ConsumersClosed只检查前两个消费者 | 普通完成、Nest启动、原生完成三个订阅的Closed与实际消费者状态，不能只看Engine Running/Mongo Ping | 使用三消费者健康修复；定位底层消费者/连接错误，按明确生命周期恢复；本修复不自动重订阅或改变ACK |
 | T-217 | 权威读取/副本回填出现 ErrRemoteSnapshotStale，旧版曾成功返回低于minVersion的结果 | RR-20261005-NC-36：旧版只验权威原始版本，Publish可能保留较新epoch的另一份L1 | 请求minVersion、权威与最终L1的完整key/epoch/version | 使用最终版本检查修复；恢复正确epoch/版本的权威结果后重读，不放宽epoch保护或把低版本当成功 |
