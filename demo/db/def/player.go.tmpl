@@ -42,8 +42,17 @@ type PlayerDao struct {
 	// deliberately `nopersist,sync`: storing a value that is derivable from
 	// what is already stored buys nothing and creates a second truth that can
 	// disagree with the first. It is recomputed when the entity loads, and
-	// replicated because it is what a client draws.
+	// replicated because it is what a client draws. Being a DAO field is
+	// also what rolls it back: the transaction that moved it restores it.
 	AttrFinal map[int32]int64 `bson:"attr_final" dao:"nopersist,sync,map=fast"`
+	// AttrGear is the gear layer: what the worn pieces add, priced by the
+	// item table. Derived like AttrFinal, but nothing draws it, so it is
+	// `nopersist,nosync` — kept only so that it is IN the transaction: a
+	// failed equip or a refused commit puts it back with the equipment it
+	// was computed from, by the DAO's own rollback. The attribute component
+	// holds no layer of its own (A1: state a transaction changes lives in
+	// the DAO; see game/entities/player/attribute_component.go).
+	AttrGear map[int32]int64 `bson:"attr_gear" dao:"nopersist,nosync,map=fast"`
 	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
 	// MailClaims is the same ledger for mail attachments: mail id → the
 	// MAIL's expiry, as the mail service reported it with the reservation. It closes the window the three-step claim leaves open —

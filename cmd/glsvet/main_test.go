@@ -1,9 +1,11 @@
 package main
 
 import (
+	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -157,5 +159,59 @@ func AfterCommit(func()) bool { return true }
 func handlerMove() { AfterCommit(func(){}) }
 `); findings != 0 {
 		t.Fatalf("findings = %d, want 0", findings)
+	}
+}
+
+// A1：组件方法里直接登记 undo 只给提示（不计入 findings、不改退出码）；DAO 自己的方法登记 undo 是生成 setter 的正常形状，不提示。
+func TestComponentRecordingItsOwnUndoIsHinted(t *testing.T) {
+	dir := t.TempDir()
+	source := `package player
+import (
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+type AttributeComponent struct {
+	entity.ComponentBase
+	layers map[int]int
+}
+func (c *AttributeComponent) capture() {
+	tx := nest.CurrentRollbackTx()
+	_ = tx.RecordUndo(c, 1, func() error { return nil })
+}
+type Scheduler struct{ entity.ComponentBase }
+func (s Scheduler) arm() { nest.RecordUndoToken(s, 1, 2, func() error { return nil }) }
+type PlayerDao struct{ level int32 }
+func (d *PlayerDao) SetLevel(v int32) {
+	nest.RecordUndo(d, 1, func() error { return nil })
+	d.level = v
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "component.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	findings, err := vetDirectory(fileSet, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings != 0 {
+		t.Fatalf("findings = %d, want 0: the component undo check is a hint, not a gate", findings)
+	}
+	packages, err := parser.ParseDir(fileSet, dir, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hints := componentUndoHints(fileSet, packages["player"])
+	if len(hints) != 2 {
+		t.Fatalf("hints = %q, want the two component methods (not the DAO setter)", hints)
+	}
+	for _, want := range []string{"AttributeComponent.capture", "Scheduler.arm"} {
+		found := false
+		for _, hint := range hints {
+			found = found || strings.Contains(hint, want)
+		}
+		if !found {
+			t.Fatalf("no hint for %s in %q", want, hints)
+		}
 	}
 }

@@ -249,6 +249,17 @@ func (d *WraithDao) TrailLen() int {
 	return len(d.trail)
 }
 
+func (d *WraithDao) SetScratch(v int64) {
+	if d.scratch != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.scratch
+			d.recordUndo(tx, wraithDaoFieldScratch, func() error { d.scratch = old; return nil })
+		}
+		d.scratch = v
+		d.markScratchDirty()
+	}
+}
+
 func (d *WraithDao) wraithDaoBuffsRawMap() map[int32]int64 {
 	if d.buffs == nil {
 		return nil

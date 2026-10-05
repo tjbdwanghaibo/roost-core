@@ -116,6 +116,7 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 
 `combatcomponent` 把 combat 电池接入 roost-core 实体模型：
 
-- `CombatDao`：持有战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口。
-- `CombatComponent`：全部 mutator 在 nest 事务内记录 `nest.RecordUndo` 逆操作并按字段掩码（vitals / attributes / buffs）标脏——handler 失败回滚后实体字节一致。
+- `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
+- `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
+- **Runtime 不在事务里**（N09 O1，A1 §4.4 列为后续）：`skill.Runtime` 的冷却、ammo、cast、proc 账本、state mutation 流与 revision 是 Runtime 自己的内存，不是 DAO，Nest 回滚不会撤回它们。在 handler 里推进 Runtime 时，handler 失败或提交被拒会出现“法力已回滚、技能已进冷却”。接入前需自行保证：只在提交确认后推进 Runtime，或在失败时用 `Checkpoint` / `RestoreRuntime` 恢复；DAO 化的接入形态待维护者定。
 - `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。

@@ -19,6 +19,7 @@ type VarietyDao struct {
 	persistOnly int64
 	syncOnly    int64
 	neither     int64
+	pending     *fmap.FastMap[int32, int64]
 	fastItems   *fmap.FastMap[int64, int32]
 	shardedTags *fmap.ShardedSafeMap[int32, string]
 }
@@ -37,6 +38,7 @@ const (
 // NewVarietyDao creates a new VarietyDao instance with initialized maps/slices.
 func NewVarietyDao() *VarietyDao {
 	d := &VarietyDao{}
+	d.pending = fmap.NewFastMap[int32, int64](0, fmap.HashInteger[int32])
 	d.fastItems = fmap.NewFastMap[int64, int32](0, fmap.HashInteger[int64])
 	d.shardedTags = fmap.NewShardedSafeMap[int32, string](32, fmap.HashInteger[int32])
 	// Wire the nested callbacks here, not only on the hydration paths. A
@@ -67,6 +69,7 @@ const (
 	varietyDaoFieldPersistOnly uint64 = 1 << iota
 	varietyDaoFieldSyncOnly    uint64 = 1 << iota
 	varietyDaoFieldNeither     uint64 = 1 << iota
+	varietyDaoFieldPending     uint64 = 1 << iota
 	varietyDaoFieldFastItems   uint64 = 1 << iota
 	varietyDaoFieldShardedTags uint64 = 1 << iota
 )
@@ -84,6 +87,9 @@ func (d *VarietyDao) markSyncOnlyDirty() {
 func (d *VarietyDao) markNeitherDirty() {
 }
 
+func (d *VarietyDao) markPendingDirty() {
+}
+
 func (d *VarietyDao) markFastItemsDirty() {
 	if err := nest.MarkPersist(d, varietyDaoFieldFastItems); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
@@ -96,6 +102,12 @@ func (d *VarietyDao) markShardedTagsDirty() {
 		panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 	}
 	d.tracker.MarkSync(varietyDaoFieldShardedTags)
+}
+
+func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) {
+}
+
+func (d *VarietyDao) markPendingKeyDeleted(key int32) {
 }
 
 func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
@@ -199,6 +211,76 @@ func (d *VarietyDao) SetSyncOnly(v int64) {
 		d.syncOnly = v
 		d.markSyncOnlyDirty()
 	}
+}
+
+func (d *VarietyDao) SetNeither(v int64) {
+	if d.neither != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.neither
+			d.recordUndo(tx, varietyDaoFieldNeither, func() error { d.neither = old; return nil })
+		}
+		d.neither = v
+		d.markNeitherDirty()
+	}
+}
+
+func (d *VarietyDao) GetPending(key int32) (int64, bool) {
+	if d.pending == nil {
+		var zero int64
+		return zero, false
+	}
+	return d.pending.Get(key)
+}
+
+func (d *VarietyDao) SetPending(key int32, val int64) {
+	if d.pending == nil {
+		d.pending = fmap.NewFastMap[int32, int64](0, fmap.HashInteger[int32])
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.pending.Get(key)
+		d.recordUndoToken(tx, varietyDaoFieldPending, key, func() error {
+			if existed {
+				d.pending.Set(key, old)
+			} else {
+				d.pending.Delete(key)
+			}
+			return nil
+		})
+	}
+	d.pending.Set(key, val)
+	d.markPendingKeyDirty(key, val)
+}
+
+func (d *VarietyDao) DelPending(key int32) {
+	if d.pending == nil {
+		return
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.pending.Get(key)
+		d.recordUndoToken(tx, varietyDaoFieldPending, key, func() error {
+			if existed {
+				d.pending.Set(key, old)
+			}
+			return nil
+		})
+	}
+	if d.pending.Delete(key) {
+		d.markPendingKeyDeleted(key)
+	}
+}
+
+func (d *VarietyDao) RangePending(f func(key int32, val int64) bool) {
+	if d.pending == nil || f == nil {
+		return
+	}
+	d.pending.Range(f)
+}
+
+func (d *VarietyDao) PendingLen() int {
+	if d.pending == nil {
+		return 0
+	}
+	return d.pending.Len()
 }
 
 func (d *VarietyDao) GetFastItems(key int64) (int32, bool) {
@@ -319,6 +401,25 @@ func (d *VarietyDao) ShardedTagsLen() int {
 	return d.shardedTags.Len()
 }
 
+func (d *VarietyDao) varietyDaoPendingRawMap() map[int32]int64 {
+	if d.pending == nil {
+		return nil
+	}
+	ret := make(map[int32]int64, d.pending.Len())
+	d.pending.Range(func(key int32, val int64) bool {
+		ret[key] = val
+		return true
+	})
+	return ret
+}
+
+func (d *VarietyDao) setPendingRawMap(src map[int32]int64) {
+	d.pending = fmap.NewFastMap[int32, int64](len(src), fmap.HashInteger[int32])
+	for key, val := range src {
+		d.pending.Set(key, val)
+	}
+}
+
 func (d *VarietyDao) varietyDaoFastItemsRawMap() map[int64]int32 {
 	if d.fastItems == nil {
 		return nil
@@ -367,6 +468,7 @@ func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
 		PersistOnly int64            `bson:"persist_only"`
 		SyncOnly    int64            `bson:"sync_only"`
 		Neither     int64            `bson:"neither"`
+		Pending     map[int32]int64  `bson:"pending"`
 		FastItems   map[int64]int32  `bson:"fast_items"`
 		ShardedTags map[int32]string `bson:"sharded_tags"`
 	}
@@ -375,6 +477,7 @@ func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
 		PersistOnly: d.persistOnly,
 		SyncOnly:    d.syncOnly,
 		Neither:     d.neither,
+		Pending:     d.varietyDaoPendingRawMap(),
 		FastItems:   d.varietyDaoFastItemsRawMap(),
 		ShardedTags: d.varietyDaoShardedTagsRawMap(),
 	}
@@ -387,6 +490,7 @@ func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 		PersistOnly int64            `bson:"persist_only"`
 		SyncOnly    int64            `bson:"sync_only"`
 		Neither     int64            `bson:"neither"`
+		Pending     map[int32]int64  `bson:"pending"`
 		FastItems   map[int64]int32  `bson:"fast_items"`
 		ShardedTags map[int32]string `bson:"sharded_tags"`
 	}
@@ -398,6 +502,7 @@ func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 	d.persistOnly = doc.PersistOnly
 	d.syncOnly = doc.SyncOnly
 	d.neither = doc.Neither
+	d.setPendingRawMap(doc.Pending)
 	d.setFastItemsRawMap(doc.FastItems)
 	d.setShardedTagsRawMap(doc.ShardedTags)
 	d.Init()

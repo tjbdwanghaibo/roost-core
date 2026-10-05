@@ -296,7 +296,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"fromWire":      func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
 		"persistFields": func(fields []FieldDef) []FieldDef { return filterPersist(fields) },
 		"syncFields":    func(fields []FieldDef) []FieldDef { return filterSync(fields) },
-		"dirtyFields":   func(fields []FieldDef) []FieldDef { return filterDirty(fields) },
+		"mutableFields": func(fields []FieldDef) []FieldDef { return filterMutable(fields) },
 		"bsonKey":       func(name string) string { return toSnake(name) },
 		"fieldMaskName": fieldMaskName,
 		"fieldType":     fieldType,
@@ -500,14 +500,17 @@ func filterSync(fields []FieldDef) []FieldDef {
 	return out
 }
 
-func filterDirty(fields []FieldDef) []FieldDef {
-	var out []FieldDef
-	for _, f := range fields {
-		if f.Tag.Persist || f.Tag.Sync {
-			out = append(out, f)
-		}
-	}
-	return out
+// filterMutable is every field that gets mutators: all of them. A field
+// excluded with dao:"-" never reaches FieldDef. A `nopersist,nosync` field is
+// transaction-only state — its setter records the inverse like any other and
+// the rollback snapshot covers it, while its mark function is empty, so it
+// never reaches the commit record, storage or sync (A1, maintainer
+// 2026-10-05: state a transaction changes lives in the DAO, so that the DAO's
+// rollback is the only rollback). This used to keep only persist or sync
+// fields, which left such a field with a getter and no way to change it, and
+// a map with neither.
+func filterMutable(fields []FieldDef) []FieldDef {
+	return fields
 }
 
 func isNestedType(defs *Definitions, typeName string) bool {

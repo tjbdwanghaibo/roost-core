@@ -1,0 +1,65 @@
+package world
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+type benchCommitter struct{}
+
+func (benchCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+// The once-a-second tick with one pending deadline that is not due.
+func BenchmarkA1TimerIdleTick(b *testing.B) {
+	subject := newWorld(&testing.T{})
+	now := time.Unix(1_800_000_000, 0)
+	if _, err := nest.RunIsolatedTransaction(context.Background(), benchCommitter{}, "arm", func() (any, error) {
+		subject.TimerComp().ScheduleActivityPhase("race", now.Add(time.Hour), now)
+		return nil, nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := nest.RunIsolatedTransaction(context.Background(), benchCommitter{}, "tick", func() (any, error) {
+			return subject.TimerComp().Tick(now.Add(time.Second)), nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Arm then fire, two transactions per iteration, with 16 other deadlines pending.
+func BenchmarkA1TimerArmAndFire(b *testing.B) {
+	subject := newWorld(&testing.T{})
+	now := time.Unix(1_800_000_000, 0)
+	for k := 0; k < 16; k++ {
+		id := "far-" + string(rune('a'+k))
+		if _, err := nest.RunIsolatedTransaction(context.Background(), benchCommitter{}, "arm", func() (any, error) {
+			subject.TimerComp().ScheduleActivityPhase(id, now.Add(24*time.Hour), now)
+			return nil, nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		at := now.Add(time.Duration(i) * time.Minute)
+		if _, err := nest.RunIsolatedTransaction(context.Background(), benchCommitter{}, "arm", func() (any, error) {
+			subject.TimerComp().ScheduleActivityPhase("race", at.Add(time.Second), at)
+			return nil, nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := nest.RunIsolatedTransaction(context.Background(), benchCommitter{}, "tick", func() (any, error) {
+			return subject.TimerComp().Tick(at.Add(2 * time.Second)), nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

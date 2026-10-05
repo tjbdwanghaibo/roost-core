@@ -153,6 +153,11 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 	}, 0)
 	findings := 0
 	for _, pkg := range packages {
+		// Hints are advice, not findings: they are printed and do not change
+		// the exit status (A1, like the A3 review prompts).
+		for _, hint := range componentUndoHints(fileSet, pkg) {
+			fmt.Println(hint)
+		}
 		voidAdmissionMethods := collectVoidAdmissionMethods(pkg)
 		returningAdmissionMethods := collectReturningAdmissionMethods(pkg)
 		var functions map[string][]*ast.FuncDecl
@@ -656,4 +661,102 @@ func reportBoundCalls(fileSet *token.FileSet, body *ast.BlockStmt) int {
 		return true
 	})
 	return findings
+}
+
+// componentUndoCalls are the ways to put an inverse operation into a Nest
+// transaction by hand.
+var componentUndoCalls = map[string]bool{
+	"RecordUndo":      true,
+	"RecordUndoToken": true,
+	"DeferRollback":   true,
+}
+
+// componentUndoHints reports a component method that registers its own undo.
+// The rule (A1, maintainer 2026-10-05,
+// docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md): state a
+// transaction changes lives in a DAO — a `nopersist` field when it must not be
+// stored — so the DAO's rollback is the only rollback, and a component keeps
+// no state of its own that needs one. A component is a type in this package
+// that embeds ComponentBase or whose name ends in "Component". A DAO's own
+// methods may record undo; that is how a generated setter works.
+func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
+	components := make(map[string]bool)
+	for _, file := range pkg.Files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			spec, ok := node.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			if strings.HasSuffix(spec.Name.Name, "Component") {
+				components[spec.Name.Name] = true
+				return true
+			}
+			if structType, ok := spec.Type.(*ast.StructType); ok {
+				for _, field := range structType.Fields.List {
+					if len(field.Names) == 0 && embedsComponentBase(field.Type) {
+						components[spec.Name.Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	var hints []string
+	for _, file := range pkg.Files {
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv == nil || len(function.Recv.List) == 0 || function.Body == nil {
+				continue
+			}
+			receiver := receiverTypeName(function.Recv.List[0].Type)
+			if !components[receiver] {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := ""
+				switch fun := call.Fun.(type) {
+				case *ast.SelectorExpr:
+					name = fun.Sel.Name
+				case *ast.Ident:
+					name = fun.Name
+				}
+				if componentUndoCalls[name] {
+					hints = append(hints, fmt.Sprintf("%s: hint: component %s.%s registers its own undo (%s); keep transaction state in the DAO (a nopersist field if it must not be stored) so the DAO's rollback covers it",
+						fileSet.Position(call.Pos()), receiver, function.Name.Name, name))
+				}
+				return true
+			})
+		}
+	}
+	return hints
+}
+
+func embedsComponentBase(expression ast.Expr) bool {
+	switch typed := expression.(type) {
+	case *ast.StarExpr:
+		return embedsComponentBase(typed.X)
+	case *ast.SelectorExpr:
+		return typed.Sel.Name == "ComponentBase"
+	case *ast.Ident:
+		return typed.Name == "ComponentBase"
+	}
+	return false
+}
+
+func receiverTypeName(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(typed.X)
+	case *ast.Ident:
+		return typed.Name
+	case *ast.IndexExpr:
+		return receiverTypeName(typed.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(typed.X)
+	}
+	return ""
 }

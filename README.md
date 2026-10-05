@@ -314,6 +314,8 @@ Rollback 三档：
 
 两种策略都会自动快照并恢复 `dataengine.Tracker` 的同步掩码与版本，回滚后实体回到事务前。
 
+两种策略都只回滚 DAO，这也是唯一的回滚（维护者决定 A1，[方案](docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：事务内会改的状态一律放进 DAO——不该落库的用 `dao:"nopersist,sync"` / `dao:"nopersist,nosync"` 字段，派生值也一样；组件不持有需要回滚的内存状态，不自己登记 undo。上面 `AddGold` 那样由 DAO 自己的方法登记逆操作是允许的。
+
 Durability 四档：
 
 | 策略 | commit point | 说明 |

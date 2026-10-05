@@ -8,7 +8,6 @@ import (
 	"{{MODULE}}/game/effects"
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/timer"
 )
 
@@ -34,20 +33,15 @@ const activityPhaseRetry = 30 * time.Second
 // the resolution the node is stored at.
 const overdueDeadlineDelay = time.Millisecond
 
-// timerHeapUndo is the one undo slot the heap takes per transaction: Nest
-// keeps the first inverse recorded for (component, slot), so a handler that
-// arms and then ticks restores the heap as it was before either.
-const timerHeapUndo uint64 = 1
-
 // TimerComponent is the World's scheduler: deadlines that belong to the
 // server rather than to a player.
 //
 // Three things make it different from a `time.AfterFunc` in the process:
 //
-//   - **It survives a restart.** The heap is rebuilt from the DAO on load, so
-//     "close the activity at 20:00" is still due after a deploy at 19:58. An
-//     in-process timer loses every pending deadline with the process, and
-//     loses it silently.
+//   - **It survives a restart.** The deadlines are the DAO's Timers map and
+//     nothing else, so "close the activity at 20:00" is still due after a
+//     deploy at 19:58. An in-process timer loses every pending deadline with
+//     the process, and loses it silently.
 //   - **It fires inside the transaction.** Tick runs under the World's Nest
 //     lock, so what a handler changes and the removal of the node it fired
 //     are one WAL record. A timer that fired and a state change that did not
@@ -56,10 +50,22 @@ const timerHeapUndo uint64 = 1
 //     rides the same transaction to the outbox and a consumer makes the bus
 //     call. Calling another service from inside an entity lock is how one
 //     slow service stops a whole process.
+//
+// It keeps no schedule of its own (A1, docs/feature/REFACTOR-2026-10-05-
+// dao-unified-rollback.md: state a transaction changes lives in the DAO).
+// Arming and firing build a timer.Scheduler from the stored nodes for that
+// one call; its change hook writes every add, fire and removal back to the
+// DAO, and the scheduler is dropped. The only derived value, the earliest
+// deadline, is the nopersist DAO field timer_next_due, so the once-a-second
+// tick that finds nothing due reads one number and builds nothing. A handler
+// that fails, or whose commit is refused, rolls the nodes, the seed and that
+// number back together — Nest's rollback of the DAO is the whole of it, and
+// there is no undo to register here. Before this the heap lived in the
+// component and every path had to copy it into the transaction by hand
+// (RR-20261005-NC-140).
 type TimerComponent struct {
 	entity.ComponentBase
-	owner     *World
-	scheduler *timer.Scheduler
+	owner *World
 }
 
 // ITimerEntity is the narrow lock-safe view for Nest handlers using this
@@ -83,13 +89,37 @@ func (component *TimerComponent) Name() string { return "timer" }
 
 func (component *TimerComponent) Owner() *World { return component.owner }
 
-// OnInitFinish rebuilds the heap from what was stored. It runs after the DAO
-// is attached and before anything can call Tick, which is the only order in
+// OnInitFinish derives timer_next_due from the stored nodes: it is nopersist,
+// so the stored document does not bring it back. It runs after the DAO is
+// attached and before anything can call Tick, which is the only order in
 // which a restored deadline is not briefly invisible.
 //
-// Nothing here writes: restoring a node must not mark the World dirty, or
-// every load would produce a save of state that did not change.
+// Writing a nopersist field marks nothing for storage, so a load does not
+// produce a save of state that did not change.
 func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	dao := component.owner.Dao()
+	earliest := int64(0)
+	dao.RangeTimers(func(_ int64, stored *db.TimerNode) bool {
+		if stored != nil && stored.GetEndUnixMilli() > 0 && (earliest == 0 || stored.GetEndUnixMilli() < earliest) {
+			earliest = stored.GetEndUnixMilli()
+		}
+		return true
+	})
+	dao.SetTimerNextDue(earliest)
+	return nil
+}
+
+// scheduler builds the World's schedule from the DAO for one call, reading
+// the caller's time. Both entry points already carry the moment they act at
+// — the tick carries the tick's time, arming carries the transaction's — and
+// letting the scheduler read time.Now() inside them would date a deadline by
+// when the entity's lock happened to be acquired rather than by the tick that
+// armed it. Pinned, the World's schedule is a function of what it was told,
+// which is also what makes it testable without waiting.
+//
+// Only typed timers can be stored (a closure is not data), so only typed
+// timers are armed here.
+func (component *TimerComponent) scheduler(now time.Time) *timer.Scheduler {
 	dao := component.owner.Dao()
 	saved := make([]timer.Node, 0, dao.TimersLen())
 	dao.RangeTimers(func(id int64, stored *db.TimerNode) bool {
@@ -104,41 +134,19 @@ func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, _ boo
 		})
 		return true
 	})
-	component.rebuild(dao.GetTimerSeed(), saved)
-	return nil
+	scheduler := timer.NewScheduler(component.owner.ID(), dao.GetTimerSeed(), saved, component.persist)
+	scheduler.RegisterHandler(TimerTypeActivityPhase, component.onActivityPhase)
+	scheduler.SetClock(func() time.Time { return now })
+	return scheduler
 }
 
-// rebuild replaces the heap with one holding exactly these nodes. Loading
-// and rolling back are the same operation: the heap is a cache of the DAO's
-// timers, and both put it back in line with them.
-func (component *TimerComponent) rebuild(seed int64, nodes []timer.Node) {
-	component.scheduler = timer.NewScheduler(component.owner.ID(), seed, nodes, component.persist)
-	component.scheduler.RegisterHandler(TimerTypeActivityPhase, component.onActivityPhase)
-}
-
-// captureRollback makes the heap part of the running transaction. Call it
-// before the first change to the heap.
-//
-// The heap is component memory, not a DAO field. The DAO's own undo puts the
-// stored timers back when the handler fails or its commit is refused;
-// without this the heap would not follow (RR-20261005-NC-140): a rolled-back
-// arm left a node in memory that the DAO never kept, so every later arm was
-// refused as a repeat and a restart lost the deadline; a rolled-back tick had
-// already popped the node, so the deadline whose effect was rolled back never
-// fired again until a restart. The inverse rebuilds the heap from copies
-// taken here. The World arms only typed timers, which is all Nodes returns.
-func (component *TimerComponent) captureRollback() {
-	tx := nest.CurrentRollbackTx()
-	if tx == nil || tx.Policy() == nest.RollbackNone {
-		return
+// settle records the earliest deadline the scheduler is left with.
+func (component *TimerComponent) settle(scheduler *timer.Scheduler) {
+	next := int64(0)
+	if due := scheduler.NextTime(); !due.IsZero() {
+		next = due.UnixMilli()
 	}
-	saved, seed := component.scheduler.Nodes(), component.scheduler.Seed()
-	// The only error is a transaction that is no longer open; a change made
-	// then is not part of any rollback either.
-	_ = tx.RecordUndo(component, timerHeapUndo, func() error {
-		component.rebuild(seed, saved)
-		return nil
-	})
+	component.owner.Dao().SetTimerNextDue(next)
 }
 
 // persist is the scheduler's change hook: every add, fire and removal comes
@@ -166,34 +174,21 @@ func (component *TimerComponent) persist(change timer.ChangeType, node timer.Nod
 	}
 }
 
-// pin makes the scheduler read the caller's time instead of the wall clock.
-//
-// Both entry points already carry the moment they act at — the tick carries
-// the tick's time, arming carries the transaction's — and letting the
-// scheduler read time.Now() inside them would date a deadline by when the
-// entity's lock happened to be acquired rather than by the tick that armed
-// it. Pinned, the World's schedule is a function of what it was told, which
-// is also what makes it testable without waiting.
-func (component *TimerComponent) pin(now time.Time) {
-	component.scheduler.SetClock(func() time.Time { return now })
-}
-
 // ScheduleActivityPhase arms the close deadline for one activity window, and
 // reports whether this call is the one that armed it.
 //
 // It is idempotent per activity id: every game process that loads this World
 // tries to arm the current window, and a second node for the same window
 // would fire the phase twice. (Firing twice is survivable — NotifyPhase is
-// idempotent per game sid — but a heap that grows by one node per restart is
-// not.)
+// idempotent per game sid — but a schedule that grows by one node per restart
+// is not.)
 func (component *TimerComponent) ScheduleActivityPhase(activityID string, at time.Time, now time.Time) (int64, bool) {
-	if activityID == "" || component.scheduler == nil {
+	if activityID == "" {
 		return 0, false
 	}
 	if id, armed := component.PendingActivityPhase(activityID); armed {
 		return id, false
 	}
-	component.pin(now)
 	delay := at.Sub(now)
 	if delay <= 0 {
 		// Already due: arm it for the next tick rather than refusing, so a
@@ -202,37 +197,38 @@ func (component *TimerComponent) ScheduleActivityPhase(activityID string, at tim
 		// node, which used to be reported here as armed (RR-20261005-NC-142).
 		delay = overdueDeadlineDelay
 	}
-	component.captureRollback()
-	id := component.scheduler.NewTimer(delay, TimerTypeActivityPhase, 0, 0, []byte(activityID))
+	scheduler := component.scheduler(now)
+	id := scheduler.NewTimer(delay, TimerTypeActivityPhase, 0, 0, []byte(activityID))
+	component.settle(scheduler)
 	return id, id != 0
 }
 
 // PendingActivityPhase reports the node armed for an activity, if any.
 func (component *TimerComponent) PendingActivityPhase(activityID string) (int64, bool) {
-	if component.scheduler == nil {
-		return 0, false
-	}
-	for _, node := range component.scheduler.Nodes() {
-		if node.Type == TimerTypeActivityPhase && string(node.Payload) == activityID {
-			return node.ID, true
+	found := int64(0)
+	component.owner.Dao().RangeTimers(func(id int64, stored *db.TimerNode) bool {
+		if stored != nil && stored.GetType() == TimerTypeActivityPhase && stored.GetPayload() == activityID {
+			found = id
+			return false
 		}
-	}
-	return 0, false
+		return true
+	})
+	return found, found != 0
 }
 
 // Tick fires everything due at now and returns how many nodes remain.
+//
+// The tick that finds nothing due — almost every tick — reads
+// timer_next_due and returns: no scheduler is built and nothing is written.
 func (component *TimerComponent) Tick(now time.Time) int {
-	if component.scheduler == nil {
-		return 0
+	dao := component.owner.Dao()
+	if next := dao.GetTimerNextDue(); next == 0 || now.UnixMilli() < next {
+		return dao.TimersLen()
 	}
-	component.pin(now)
-	// Only a tick that fires something changes the heap; the once-a-second
-	// tick that finds nothing due takes no copy.
-	if next := component.scheduler.NextTime(); !next.IsZero() && !now.Before(next) {
-		component.captureRollback()
-	}
-	component.scheduler.Tick(now)
-	return len(component.scheduler.Nodes())
+	scheduler := component.scheduler(now)
+	scheduler.Tick(now)
+	component.settle(scheduler)
+	return dao.TimersLen()
 }
 
 // onActivityPhase records the phase effect and retires the node.

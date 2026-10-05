@@ -232,8 +232,8 @@ Entity 或 Component 加 mutex，也不要绕过 Sender 直接并发调用 handl
 ## 4. 哪些数据放在哪里
 
 - Entity：身份、生命周期和聚合边界，不堆放可变业务字段。
-- Component：玩法行为和对 Entity/DAO 的编排；普通字段默认只在内存中，重启后不会恢复。
-- DAO：需要 save/load、rollback 或 sync 的状态，必须声明 persist/sync 意图。
+- Component：玩法行为和对 Entity/DAO 的编排；不持有事务里会改的状态。组件普通字段既不随事务回滚，重启后也不会恢复，只放与事务无关的东西（只读引用、配置句柄）。
+- DAO：需要 save/load、rollback 或 sync 的状态，必须声明 persist/sync 意图。事务内会改的状态一律放进 DAO：不该落库的用 dao:"nopersist,sync"（只同步）或 dao:"nopersist,nosync"（只参与事务），派生值也一样——回滚由 DAO 统一完成，组件不要自己登记 undo（go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet 会提示）。
 - Config：策划静态数据，放 configs/schema 与 configs/table，不写进 Entity。
 - Remote Entity：只有跨服所有权场景才启用；普通房间内 Entity 不要默认使用。
 

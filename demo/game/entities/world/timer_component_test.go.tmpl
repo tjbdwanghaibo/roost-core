@@ -10,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // A deadline that does not survive a restart is not a deadline.
@@ -303,4 +304,185 @@ func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A1（回滚统一走 DAO，docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md）：定时器的回滚就是 DAO 的回滚。
+// 经真实 Nest 派发，两种回滚策略 × 两条失败路径，分别撤回一次武装和一次触发。承诺：回滚后 DAO 与组件看到的
+// 待触发节点一致（撤回的武装不再“已武装”，撤回的触发还能再触发），并且之后的一次成功操作照常写一条记录。
+// 组件里没有任何逆操作登记，能通过只因为定时器的全部状态都在 DAO 里。
+func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	const activityID = "race-1800000000"
+	policies := []struct {
+		name   string
+		policy nest.RollbackPolicy
+	}{
+		{name: "undo", policy: nest.RollbackUndo},
+		{name: "state", policy: nest.RollbackState},
+	}
+	failures := []struct {
+		name      string
+		committer nest.TransactionCommitter
+		failAfter bool
+	}{
+		{name: "handler fails", committer: &worldCommitter{}, failAfter: true},
+		{name: "commit rejected", committer: rejectingWorldCommitter{err: errors.New("admission refused")}},
+	}
+	for _, policy := range policies {
+		meta := nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}
+		for _, failure := range failures {
+			t.Run("arm/"+policy.name+"/"+failure.name, func(t *testing.T) {
+				subject := newWorld(t)
+				err := runWorldHandler(t, subject, meta, failure.committer, func(w *World) error {
+					w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+					if failure.failAfter {
+						return errors.New("a later step of the same handler failed")
+					}
+					return nil
+				})
+				if err == nil {
+					t.Fatal("the transaction was expected to fail")
+				}
+				if got := subject.Dao().TimersLen(); got != 0 {
+					t.Fatalf("the DAO kept %d timer nodes after the rollback", got)
+				}
+				if id, armed := subject.TimerComp().PendingActivityPhase(activityID); armed {
+					t.Fatalf("rolled back, but node %d is still pending", id)
+				}
+				// Nothing is due: a tick after the rolled-back arm fires nothing.
+				if remaining := subject.TimerComp().Tick(now.Add(2 * time.Minute)); remaining != 0 {
+					t.Fatalf("a tick after the rolled-back arm reports %d nodes", remaining)
+				}
+				committer := &worldCommitter{}
+				if err := runWorldHandler(t, subject, meta, committer, func(w *World) error {
+					if _, armed := w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now); !armed {
+						return errors.New("the arm after a rolled-back one was refused as a repeat")
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("arm: %v", err)
+				}
+				if got := subject.Dao().TimersLen(); got != 1 || len(committer.records) != 1 {
+					t.Fatalf("after a committed arm: %d nodes, %d records; want 1 and 1", got, len(committer.records))
+				}
+			})
+			t.Run("tick/"+policy.name+"/"+failure.name, func(t *testing.T) {
+				subject := newWorld(t)
+				if err := runWorldHandler(t, subject, meta, &worldCommitter{}, func(w *World) error {
+					w.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+					return nil
+				}); err != nil {
+					t.Fatalf("arm: %v", err)
+				}
+				err := runWorldHandler(t, subject, meta, failure.committer, func(w *World) error {
+					w.TimerComp().Tick(now.Add(2 * time.Minute))
+					if failure.failAfter {
+						return errors.New("a later step of the same handler failed")
+					}
+					return nil
+				})
+				if err == nil {
+					t.Fatal("the transaction was expected to fail")
+				}
+				if got := subject.Dao().TimersLen(); got != 1 {
+					t.Fatalf("the DAO holds %d timer nodes after the rolled-back tick, want the deadline back", got)
+				}
+				if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+					t.Fatal("the rolled-back tick took the deadline away")
+				}
+				committer := &worldCommitter{}
+				if err := runWorldHandler(t, subject, meta, committer, func(w *World) error {
+					w.TimerComp().Tick(now.Add(3 * time.Minute))
+					return nil
+				}); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+				if len(committer.records) != 1 || len(committer.records[0].Effects) != 1 {
+					t.Fatalf("the retried tick did not fire the deadline: %d records", len(committer.records))
+				}
+				if got := subject.Dao().TimersLen(); got != 0 {
+					t.Fatalf("the fired node is still stored (%d)", got)
+				}
+			})
+		}
+	}
+}
+
+// A1：定时器只把节点与种子写进提交记录（也就是 WAL 收到的记录）；组件为空转 Tick 记的最早到期时间是
+// 非持久字段，不在记录里。重启后从存储构建的 World 照样按时触发（TestADeadlineSurvivesARestartAndFires）。
+func TestTimerBookkeepingStaysOutOfTheCommitRecord(t *testing.T) {
+	subject := newWorld(t)
+	committer := &worldCommitter{}
+	now := time.Unix(1_800_000_000, 0)
+	for _, activityID := range []string{"race-a", "race-b"} {
+		if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
+			subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+			return nil, nil
+		}); err != nil {
+			t.Fatalf("arm %s: %v", activityID, err)
+		}
+	}
+	if len(committer.records) != 2 {
+		t.Fatalf("%d records, want 2", len(committer.records))
+	}
+	for index, record := range committer.records {
+		for _, mutation := range record.Mutations {
+			raw := mutation.Data
+			if len(raw) == 0 {
+				raw = mutation.Patch.SetBSON
+			}
+			var doc bson.M
+			if err := bson.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if _, leaked := doc["timer_next_due"]; leaked {
+				t.Fatalf("record %d carries the non-persistent timer_next_due: %v", index, doc)
+			}
+		}
+	}
+}
+
+// worldGetter hands Nest the one World under test.
+type worldGetter struct{ subject *World }
+
+func (g worldGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if id != g.subject.ID() {
+		return nil, nest.ErrEntityNotFound
+	}
+	return g.subject, nil
+}
+
+func (g worldGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// runWorldHandler runs body as one Nest handler on subject: admission,
+// capture, rollback and commit are the engine's own.
+func runWorldHandler(t *testing.T, subject *World, meta nest.HandlerMeta, committer nest.TransactionCommitter, body func(*World) error) error {
+	t.Helper()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(worldGetter{subject: subject}),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	name := nest.NewHandlerName("world_timer_rollback_probe")
+	if err := engine.RegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, body(es[0].(*World))
+	}, meta); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	defer func() { _ = engine.Shutdown(context.Background()) }()
+	_, err := engine.Request(context.Background(), name, subject.ID(), nil)
+	return err
 }

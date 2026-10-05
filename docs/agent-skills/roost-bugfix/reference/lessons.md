@@ -102,8 +102,8 @@
   生成工程不带 etcd 隔离实例，自起一个私有 etcd（scratch 目录、非默认端口）。运行日志别写在工程目录里：`roost generate` 把工程内文件当输入，
   进程写日志期间会一直报 `project inputs changed while code generation was running`（`.dev/` 也不在跳过名单，已移交 N08）。
   `/admin/commands` 只返回命令名，命令 Description 只在生成源码里；显式 `Store.Rollback` 没有 GM 入口，要测得在 scratch 工程临时加命令（不提交）。
-- **属性容器是组件内存**：改 game-demo 属性组件时同时看三处——事务回滚（NC-61）、加载重建与 `attr_final` 回写（NC-65）、热更后的重算（观察 C-O8）；
-  用生成 DAO 的 `Marshal` → `RestorePersisted` → `IsCreate=false` 构建做加载往返，不要只测新建玩家。
+- **回滚统一走 DAO（A1，10-05）**：game-demo 属性三层（`attr_base` / `attr_gear` / `attr_final`）与 World 定时器（`timers` / `timer_seed` / `timer_next_due`）都在 DAO，组件不持有状态、不登记 undo。改这类组件时看三处——两种回滚策略 × handler 失败 / 提交被拒（真实 Nest 派发，用例 `TestAttributeRollbackIsTheDaoRollback` / `TestTimerRollbackIsTheDaoRollback`）、加载时非持久字段的 derive（NC-65）、热更后的重算（观察 C-O8）；
+  用生成 DAO 的 `Marshal` → `RestorePersisted` → `IsCreate=false` 构建做加载往返，不要只测新建玩家。非持久字段是否进 WAL 用真实 `nestwal` 写入后 `Replay` 检查（patch 路径是 `attr_base.1` 这种带点的键）。
 
 ## core ai / actionflow / hotcode（N10，2026-10-05）
 

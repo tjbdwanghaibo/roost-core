@@ -1,10 +1,12 @@
 // Package combatcomponent wires the combat content battery into roost-core
 // entities: the CombatDao holds the authoritative combat state behind a
 // dataengine.Tracker, and the CombatComponent exposes mutators that are
-// transaction-safe inside nest handlers — every mutation records its inverse
-// with nest.RecordUndo and marks field-level dirty bits, so a rolled-back
-// handler leaves the entity byte-identical and persistence sees exactly what
-// committed.
+// transaction-safe inside nest handlers. Every mutation goes through the DAO:
+// the DAO records the inverse of its own fields (rollback=undo) or is
+// restored from its snapshot (rollback=state) and marks field-level dirty
+// bits, so a rolled-back handler leaves the entity byte-identical and
+// persistence sees exactly what committed. The component registers no undo
+// of its own: rollback is the DAO's rollback (A1, maintainer 2026-10-05).
 //
 // The component is deliberately owner-agnostic: generated entity factories
 // construct the DAO, register it with the entity's DaoManager (it implements
@@ -204,8 +206,9 @@ func (dao *CombatDao) applyState(state persistedCombatState) error {
 }
 
 // CombatComponent is the behavior wrapper generated entity factories attach
-// to an entity. All mutators must run inside a nest handler (they record
-// undo operations); reads are safe anywhere the entity lock is held.
+// to an entity. It holds nothing but its DAO. All mutators must run inside a
+// nest handler (the DAO records their inverse); reads are safe anywhere the
+// entity lock is held.
 type CombatComponent struct {
 	dao *CombatDao
 }
@@ -227,7 +230,7 @@ func (component *CombatComponent) Combatant() combat.Combatant {
 // cloneCombatant copies the only reference-typed field of the vitals block.
 // The DAO never mutates ElementMultipliersBP in place, so every value that
 // crosses the component boundary owning its own map keeps the stored map
-// immutable — which also keeps undoVitals' shallow "before" copy exact.
+// immutable — which also keeps beginChange's shallow "before" copy of the vitals exact.
 func cloneCombatant(combatant combat.Combatant) combat.Combatant {
 	if combatant.ElementMultipliersBP != nil {
 		multipliers := make(map[combat.Element]int64, len(combatant.ElementMultipliersBP))
@@ -259,151 +262,151 @@ func (component *CombatComponent) HasBuffTag(tag combat.Tag) bool {
 	return component.dao.buffs.HasTag(tag)
 }
 
-func (component *CombatComponent) markDirty(mask uint64) {
-	if err := nest.MarkPersist(component.dao, mask); err != nil {
-		panic(fmt.Errorf("combatcomponent: mark persistence: %w", err))
-	}
-	component.dao.tracker.MarkSync(mask)
-}
-
-// undoVitals registers the inverse of a vitals mutation once per transaction:
-// the first record per field wins, so the closure captures transaction-start
-// state and later mutations in the same handler need no further records.
-func (component *CombatComponent) undoVitals() {
-	component.requireTransaction()
-	dao := component.dao
-	before := dao.combatant
-	nest.RecordUndo(dao, FieldVitals, func() error {
-		dao.combatant = before
-		return nil
-	})
-}
-
-func (component *CombatComponent) undoAttributes() {
-	component.requireTransaction()
-	dao := component.dao
-	before := dao.attributes.BaseState()
-	nest.RecordUndo(dao, FieldAttributes, func() error {
-		dao.attributes.RestoreBase(before)
-		return nil
-	})
-}
-
-func (component *CombatComponent) undoBuffs() {
-	component.requireTransaction()
-	dao := component.dao
-	before := dao.buffs.State()
-	nest.RecordUndo(dao, FieldBuffs, func() error {
-		// Revoke the grants of whatever is active now, then rebuild the
-		// container; relinking re-grants the restored instances.
-		restored, err := combat.RestoreBuffContainer(before)
-		if err != nil {
-			// before is a State() of a live container, which satisfies the
-			// invariants by construction; failing here means memory corruption.
-			return err
-		}
-		for _, instance := range dao.buffs.Active() {
-			dao.attributes.Revoke(combat.ModifierHandle(instance.Instance))
-		}
-		dao.buffs = restored
-		dao.buffs.LinkAttributes(dao.attributes)
-		return nil
-	})
-}
-
-func (component *CombatComponent) requireTransaction() {
+// beginChange makes the fields in mask part of the running transaction before
+// the first change to them. It is the DAO's own half of every mutation, the
+// same shape as a generated DAO setter: the DAO records the inverse of its
+// own state, so the component that drives it registers nothing (A1,
+// maintainer 2026-10-05: rollback is the DAO's rollback;
+// docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md). Under
+// rollback=undo each field records once per transaction (Nest keeps the
+// first inverse per DAO and field), so the inverse restores transaction-start
+// state however many mutations follow; under rollback=state the DAO snapshot
+// covers it and nothing is recorded. Outside a transaction it panics before
+// anything changes.
+func (dao *CombatDao) beginChange(mask uint64) {
 	if nest.CurrentRollbackTx() == nil {
 		panic(fmt.Errorf("combatcomponent: persistence mutation outside transaction: %w", nest.ErrTransactionClosed))
 	}
+	if mask&FieldVitals != 0 {
+		before := dao.combatant
+		nest.RecordUndo(dao, FieldVitals, func() error {
+			dao.combatant = before
+			return nil
+		})
+	}
+	if mask&FieldAttributes != 0 {
+		before := dao.attributes.BaseState()
+		nest.RecordUndo(dao, FieldAttributes, func() error {
+			dao.attributes.RestoreBase(before)
+			return nil
+		})
+	}
+	if mask&FieldBuffs != 0 {
+		before := dao.buffs.State()
+		nest.RecordUndo(dao, FieldBuffs, func() error {
+			// Revoke the grants of whatever is active now, then rebuild the
+			// container; relinking re-grants the restored instances.
+			restored, err := combat.RestoreBuffContainer(before)
+			if err != nil {
+				// before is a State() of a live container, which satisfies the
+				// invariants by construction; failing here means memory corruption.
+				return err
+			}
+			for _, instance := range dao.buffs.Active() {
+				dao.attributes.Revoke(combat.ModifierHandle(instance.Instance))
+			}
+			dao.buffs = restored
+			dao.buffs.LinkAttributes(dao.attributes)
+			return nil
+		})
+	}
+}
+
+// markChanged marks the fields in mask for persistence and replication.
+func (dao *CombatDao) markChanged(mask uint64) {
+	if err := nest.MarkPersist(dao, mask); err != nil {
+		panic(fmt.Errorf("combatcomponent: mark persistence: %w", err))
+	}
+	dao.tracker.MarkSync(mask)
 }
 
 // InitCombatant replaces the vitals block (spawn/config load). The caller's
 // element multiplier map is copied, so a template shared across entities
 // stays independent of every stored combatant (RR-20261005-NC-113).
 func (component *CombatComponent) InitCombatant(combatant combat.Combatant) {
-	component.undoVitals()
+	component.dao.beginChange(FieldVitals)
 	component.dao.combatant = cloneCombatant(combatant)
-	component.markDirty(FieldVitals)
+	component.dao.markChanged(FieldVitals)
 }
 
 // SetAttributeBase sets an attribute's base value.
 func (component *CombatComponent) SetAttributeBase(id combat.AttributeID, value int64) {
-	component.undoAttributes()
+	component.dao.beginChange(FieldAttributes)
 	component.dao.attributes.SetBase(id, value)
-	component.markDirty(FieldAttributes)
+	component.dao.markChanged(FieldAttributes)
 }
 
 // SetAttributeBounds sets an attribute's clamp bounds.
 func (component *CombatComponent) SetAttributeBounds(id combat.AttributeID, bounds combat.AttributeBounds) {
-	component.undoAttributes()
+	component.dao.beginChange(FieldAttributes)
 	component.dao.attributes.SetBounds(id, bounds)
-	component.markDirty(FieldAttributes)
+	component.dao.markChanged(FieldAttributes)
 }
 
 // ApplyBuff applies a buff at the given tick.
 func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source int64) (combat.BuffInstanceID, combat.BuffApplyOutcome) {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	id, outcome := component.dao.buffs.Apply(spec, tick, source)
 	if outcome != combat.BuffBlockedImmune {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return id, outcome
 }
 
 // RemoveBuff drops one buff instance by id.
 func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.BuffInstance, bool) {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	instance, removed := component.dao.buffs.Remove(id)
 	if removed {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return instance, removed
 }
 
 // SetBuffStacks pins a buff instance's stack count (zero removes it).
 func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetStacks(id, stacks)
 	if ok {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return instance, ok
 }
 
 // SetBuffDueTick pins a buff instance's expiry.
 func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTick int64) (combat.BuffInstance, bool) {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetDueTick(id, dueTick)
 	if ok {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return instance, ok
 }
 
 // AdoptBuff injects a copied or transferred instance under a fresh id.
 func (component *CombatComponent) AdoptBuff(instance combat.BuffInstance) combat.BuffInstanceID {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	id := component.dao.buffs.Adopt(instance)
-	component.markDirty(FieldBuffs)
+	component.dao.markChanged(FieldBuffs)
 	return id
 }
 
 // DispelBuffs removes up to limit buffs carrying the tag, newest first.
 func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []combat.BuffInstance {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	removed := component.dao.buffs.Dispel(tag, limit)
 	if len(removed) > 0 {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return removed
 }
 
 // TickBuffs expires due buffs and returns them.
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
-	component.undoBuffs()
+	component.dao.beginChange(FieldBuffs)
 	expired := component.dao.buffs.Tick(now)
 	if len(expired) > 0 {
-		component.markDirty(FieldBuffs)
+		component.dao.markChanged(FieldBuffs)
 	}
 	return expired
 }
@@ -411,39 +414,39 @@ func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 // ApplyDamage runs one damage instance against this component. A nil source
 // means world-sourced damage. Both sides' vitals are undo-protected.
 func (component *CombatComponent) ApplyDamage(source *CombatComponent, input combat.DamageInput, hooks combat.Hooks) (combat.DamageOutcome, bool) {
-	component.undoVitals()
+	component.dao.beginChange(FieldVitals)
 	var sourceCombatant *combat.Combatant
 	if source != nil {
-		source.undoVitals()
+		source.dao.beginChange(FieldVitals)
 		sourceCombatant = &source.dao.combatant
 	}
 	outcome, ok := combat.ResolveDamage(sourceCombatant, &component.dao.combatant, input, hooks)
 	if !ok {
 		return outcome, false
 	}
-	component.markDirty(FieldVitals)
+	component.dao.markChanged(FieldVitals)
 	if source != nil && outcome.VampHeal > 0 {
-		source.markDirty(FieldVitals)
+		source.dao.markChanged(FieldVitals)
 	}
 	return outcome, true
 }
 
 // Heal applies a heal capped at missing health.
 func (component *CombatComponent) Heal(amount int64) (combat.HealOutcome, bool) {
-	component.undoVitals()
+	component.dao.beginChange(FieldVitals)
 	outcome, ok := combat.ResolveHeal(&component.dao.combatant, amount)
 	if ok && outcome.Effective > 0 {
-		component.markDirty(FieldVitals)
+		component.dao.markChanged(FieldVitals)
 	}
 	return outcome, ok
 }
 
 // AddShield grants shield points.
 func (component *CombatComponent) AddShield(amount int64) (int64, bool) {
-	component.undoVitals()
+	component.dao.beginChange(FieldVitals)
 	added, ok := combat.AddShield(&component.dao.combatant, amount)
 	if ok && added > 0 {
-		component.markDirty(FieldVitals)
+		component.dao.markChanged(FieldVitals)
 	}
 	return added, ok
 }

@@ -12,19 +12,25 @@ type WorldDao struct {
 	// ExpGranted moves in the same Nest transaction as a Player's Exp: one
 	// WAL record, two entities, two lock ranks.
 	ExpGranted int64 `bson:"exp_granted" dao:"persist,sync"`
-	// Timers is the World's timer heap, persisted: node id -> node. The
-	// scheduler in memory is rebuilt from this on load, which is what makes a
-	// timer survive a restart — an in-process heap loses every pending
-	// deadline when the process does, and the deadlines here are things like
-	// "close the activity at 20:00" that nobody re-creates.
-	//
-	// It is written by the scheduler's change hook, inside the transaction
-	// that scheduled or fired the timer, so the heap and the state change it
-	// belongs to are one WAL record.
+	// Timers is the World's pending deadlines, persisted: node id -> node.
+	// This map IS the schedule — there is no heap kept beside it. Arming or
+	// firing builds a scheduler from these nodes for that one call and its
+	// change hook writes every add, fire and removal back here, inside the
+	// transaction that did it, so the deadline and the state change it
+	// belongs to are one WAL record and roll back together. A timer survives
+	// a restart because nothing about it lives anywhere else.
 	Timers map[int64]*TimerNode `bson:"timers" dao:"persist,map=fast"`
 	// TimerSeed is the highest node id ever minted. Persisted so a restart
 	// does not hand out an id a stored node already has.
 	TimerSeed int64 `bson:"timer_seed" dao:"persist"`
+	// TimerNextDue is the earliest End among Timers (UnixMilli, 0 for none):
+	// what lets the once-a-second tick decide "nothing is due" without
+	// walking the map. It is derived, so it is `nopersist,nosync` — never
+	// stored, never replicated — and recomputed when the World loads; but it
+	// is a DAO field, so a rolled-back arm or fire takes it back with the
+	// nodes, and no component keeps a copy of the schedule that could
+	// disagree with them (A1: transaction state lives in the DAO).
+	TimerNextDue int64 `bson:"timer_next_due" dao:"nopersist,nosync"`
 	// SettledActivities is activity id -> when this server acked its result
 	// dispatch. It is what makes settlement once-per-activity across
 	// restarts, and it is on the World rather than in the coordinator because

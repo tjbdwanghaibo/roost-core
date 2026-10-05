@@ -321,8 +321,11 @@ import (
 //roost:component type=%d
 const CompType%s entity.ComponentType = %d
 
-// %sComponent owns %s gameplay logic. Persistent or replicated state should
-// be changed through generated DAO methods so dirty tracking remains correct.
+// %sComponent owns %s gameplay logic. It keeps no state a transaction
+// changes: such state lives in the DAO and moves through the generated
+// mutators — a nopersist field when it must not be stored — so the DAO's
+// rollback is the only rollback and dirty tracking stays correct. Do not
+// register undo here.
 type %sComponent struct {
 	entity.ComponentBase
 	owner *%s

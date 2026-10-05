@@ -219,7 +219,7 @@ func (d *{{.Dao.Name}}) recordUndoToken(tx *nest.RollbackTx, field uint64, token
 		panic(fmt.Errorf("{{.Dao.Name}}: record undo: %w", err))
 	}
 }
-{{range dirtyFields .Dao.Fields}}
+{{range mutableFields .Dao.Fields}}
 {{- if eq .Kind 0}}
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 	if d.{{fieldVar .Name}} != v {

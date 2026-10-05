@@ -36,6 +36,7 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 - 冷目标用正式 Slow option 并声明所需 ID，由慢阶段准备。快阶段 Getter 只读已加载实体；自定义 Getter 必须遵守 LoadedEntitiesOnly 契约。不能把执行一半的 handler 搬到慢池或自动重试来掩盖冷加载错误；任意 handler 内的阻塞 RPC 也不会自动隔离。
 - 执行位置与请求数据分离：快 worker 标记由接收阶段建立，嵌套 fctx 继承，但 ContextSnapshot 不传递；慢 executor 在快阶段屏蔽、返回慢阶段后恢复。不能只检查传入 ctx 或 msg.getter；直接 ManagerAccess、Repository、生成 lifecycle、保存的慢 ctx 和 Background ctx 都要核对。RunLocal 在实际快阶段就地执行。
 - 快池检查须早于等待和副作用。保留 Nest.Request 返回 ErrSyncInHandler 的契约；Guard/本地锁、回滚、Finalize 和既有锁内 WAL 准入是明确豁免，不因本条改变持久语义。列出实际保护的入口，不把定向保护称为全局 I/O 拦截。
+- **回滚统一走 DAO**（维护者 2026-10-05 决定 A1，[方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：事务内会改的状态一律放在 DAO（必要时用非持久字段：只同步 `nopersist,sync`、只参与事务 `nopersist,nosync`），组件不得自行维护需要回滚的内存状态，不在组件里调 `RecordUndo` / `RecordUndoToken` / `DeferRollback`。派生值同样是 DAO 字段，由组件里唯一的 derive 在加载与改源字段的事务里写；回滚不是重算触发点。组件需要的索引 / 堆在一次调用内从 DAO 构建，不常驻。`cmd/glsvet` 对组件方法里的 undo 登记打印 `hint:`（不计入失败）。手写 DAO 的方法自己登记逆操作是允许的（与生成 setter 同形，如 `skill/combatcomponent.CombatDao`）。
 - 准入失败与结果不确定要分清；成功准入后不能因释放/回复失败回滚已接受事务。取消等待不等于撤销业务。保持 Cast、组锁、引用、完成 ticket 和关闭排空的唯一收尾责任。
 - worker 数、等待容量与 Remote/数据库写预算分开配置。不能推断慢 worker 越多、队列越短就必然越快。锁内 WAL 准入沿用当前契约，不以移出锁或降低持久级别换吞吐。
 

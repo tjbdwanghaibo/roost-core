@@ -312,7 +312,9 @@ func (d *HeroDao) SetLevel(v int32) {
 }
 ```
 
-`recordUndo` 注册失败会直接 panic：一次逃出回滚覆盖范围的修改会静默破坏事务保证，宁可炸在现场。同理，`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败也会 panic——接口没有错误位，返回 nil 等于把数据静默丢掉。
+`recordUndo` 注册失败会直接 panic：一次逃出回滚覆盖范围的修改会静默破坏事务保证，宁可炸在现场。
+
+**回滚统一走 DAO**（维护者决定 A1，2026-10-05，[方案](../docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：生成 DAO 的 undo（`rollback=undo`）与快照（`rollback=state`）是唯一的回滚机制。事务内会改的状态一律放进 DAO——不该落库的用 `nopersist`（只同步 `nopersist,sync`、只参与事务 `nopersist,nosync`），派生值也一样；组件不持有这类内存状态，不自己调 `RecordUndo` / `DeferRollback`（`cmd/glsvet` 对组件方法里的这类调用打印 `hint:`，不计入失败）。同理，`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败也会 panic——接口没有错误位，返回 nil 等于把数据静默丢掉。
 
 **③ patch——map 的键级修改记录在当前事务的 `PersistChange` 中，投影为 MongoDB 路径级 `$set`/`$unset`**，而不是整字段重写：
 
@@ -350,7 +352,7 @@ func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 | 无 tag | 默认 persist + sync 全开（安全默认值） |
 | `dao:"-"` | 完全排除该字段 |
 | `dao:"persist"` / `dao:"sync"` | 只开列出的能力，未列出的关闭 |
-| `dao:"nopersist,nosync"` | 显式全关（字段仍在内存中，但不落库不同步） |
+| `dao:"nopersist,nosync"` | 只参与事务：生成与其他字段同形的 mutator（undo 策略登记逆操作，state 快照覆盖），不落库、不进 WAL、不同步。组件里事务会改、又不该存的状态（派生层、调度索引）放这里 |
 | `map=small\|fast\|sharded` | map 存储实现：`small`（默认，`fmap.SmallSafeMap`）、`fast`（`fmap.FastMap`）、`sharded`（`fmap.ShardedSafeMap`）；`fast`/`sharded` 仅支持 string 或整数 key |
 
 **tag 一旦出现就必须表明 persist/sync 意图**：`map=...` 是辅助选项，必须与 persist/sync 意图同写。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、指向非本地命名类型的指针会在生成期被拒绝（提示用 `dao:"-"` 排除）。

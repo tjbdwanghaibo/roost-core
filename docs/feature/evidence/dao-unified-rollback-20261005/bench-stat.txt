@@ -1,0 +1,44 @@
+goos: darwin
+goarch: arm64
+pkg: example.com/a1demo/game/entities/player
+cpu: Apple M5
+                                │ bench-base.txt │           bench-green.txt           │
+                                │     sec/op     │    sec/op     vs base               │
+A1AttributeLevelUpCommit-10         5.168µ ±  9%   5.163µ ±  2%        ~ (p=0.721 n=8)
+A1AttributeLevelUpRollback-10       3.016µ ± 17%   2.440µ ±  1%  -19.10% (p=0.000 n=8)
+A1AttributeRefreshGearCommit-10     6.658µ ±  1%   4.951µ ± 12%  -25.63% (p=0.000 n=8)
+geomean                             4.699µ         3.966µ        -15.61%
+
+                                │ bench-base.txt │           bench-green.txt           │
+                                │      B/op      │     B/op      vs base               │
+A1AttributeLevelUpCommit-10         8.553Ki ± 0%   8.388Ki ± 0%   -1.93% (p=0.000 n=8)
+A1AttributeLevelUpRollback-10       4.569Ki ± 0%   4.155Ki ± 0%   -9.06% (p=0.000 n=8)
+A1AttributeRefreshGearCommit-10    11.009Ki ± 0%   8.285Ki ± 0%  -24.74% (p=0.000 n=8)
+geomean                             7.549Ki        6.610Ki       -12.44%
+
+                                │ bench-base.txt │           bench-green.txt           │
+                                │   allocs/op    │ allocs/op   vs base                 │
+A1AttributeLevelUpCommit-10           130.0 ± 0%   134.0 ± 0%   +3.08% (p=0.000 n=8)
+A1AttributeLevelUpRollback-10         64.00 ± 0%   64.00 ± 0%        ~ (p=1.000 n=8) ¹
+A1AttributeRefreshGearCommit-10       146.0 ± 0%   118.0 ± 0%  -19.18% (p=0.000 n=8)
+geomean                               106.7        100.4        -5.91%
+¹ all samples are equal
+
+pkg: example.com/a1demo/game/entities/world
+                     │ bench-base.txt │          bench-green.txt           │
+                     │     sec/op     │    sec/op     vs base              │
+A1TimerIdleTick-10        416.9n ± 2%   387.9n ± 11%       ~ (p=0.083 n=8)
+A1TimerArmAndFire-10      6.351µ ± 1%   6.661µ ±  2%  +4.89% (p=0.000 n=8)
+geomean                   1.627µ        1.607µ        -1.22%
+
+                     │ bench-base.txt │           bench-green.txt           │
+                     │      B/op      │     B/op      vs base               │
+A1TimerIdleTick-10        1008.0 ± 0%     849.0 ± 0%  -15.77% (p=0.000 n=8)
+A1TimerArmAndFire-10     12.19Ki ± 0%   13.37Ki ± 0%   +9.65% (p=0.000 n=8)
+geomean                  3.464Ki        3.329Ki        -3.90%
+
+                     │ bench-base.txt │          bench-green.txt          │
+                     │   allocs/op    │ allocs/op   vs base               │
+A1TimerIdleTick-10         8.000 ± 0%   5.000 ± 0%  -37.50% (p=0.000 n=8)
+A1TimerArmAndFire-10       154.0 ± 0%   173.0 ± 0%  +12.34% (p=0.000 n=8)
+geomean                    35.10        29.41       -16.21%

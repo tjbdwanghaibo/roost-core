@@ -1,0 +1,36 @@
+--- FAIL: TestAttributeLayersRollBackWithTheTransaction (0.00s)
+    --- FAIL: TestAttributeLayersRollBackWithTheTransaction/a_later_step_fails (0.00s)
+        attribute_component_test.go:241: rolled back to level 0 but the base layer kept the level-up: HP 110 attack 12, want HP 100 attack 10
+    --- FAIL: TestAttributeLayersRollBackWithTheTransaction/the_commit_is_rejected (0.00s)
+        attribute_component_test.go:241: rolled back to level 0 but the base layer kept the level-up: HP 110 attack 12, want HP 100 attack 10
+--- FAIL: TestAttributeRollbackIsTheDaoRollback (0.00s)
+    --- FAIL: TestAttributeRollbackIsTheDaoRollback/undo/handler_fails (0.00s)
+        attribute_component_test.go:399: base after rollback = &{HP:110 Attack:12 Power:35 dirtyMask:7} (present true), want HP 100 attack 10
+    --- FAIL: TestAttributeRollbackIsTheDaoRollback/undo/commit_rejected (0.00s)
+        attribute_component_test.go:399: base after rollback = &{HP:110 Attack:12 Power:35 dirtyMask:7} (present true), want HP 100 attack 10
+    --- FAIL: TestAttributeRollbackIsTheDaoRollback/state/handler_fails (0.00s)
+        attribute_component_test.go:399: base after rollback = &{HP:110 Attack:12 Power:35 dirtyMask:7} (present true), want HP 100 attack 10
+    --- FAIL: TestAttributeRollbackIsTheDaoRollback/state/commit_rejected (0.00s)
+        attribute_component_test.go:399: base after rollback = &{HP:110 Attack:12 Power:35 dirtyMask:7} (present true), want HP 100 attack 10
+FAIL
+FAIL	example.com/a1demo/game/entities/player	0.969s
+--- FAIL: TestTimerRollbackIsTheDaoRollback (0.00s)
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/arm/undo/handler_fails (0.00s)
+        timer_component_test.go:350: rolled back, but node 1 is still pending
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/tick/undo/handler_fails (0.00s)
+        timer_component_test.go:391: the rolled-back tick took the deadline away
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/arm/undo/commit_rejected (0.00s)
+        timer_component_test.go:350: rolled back, but node 1 is still pending
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/tick/undo/commit_rejected (0.00s)
+        timer_component_test.go:391: the rolled-back tick took the deadline away
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/arm/state/handler_fails (0.00s)
+        timer_component_test.go:350: rolled back, but node 1 is still pending
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/tick/state/handler_fails (0.00s)
+        timer_component_test.go:391: the rolled-back tick took the deadline away
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/arm/state/commit_rejected (0.00s)
+        timer_component_test.go:350: rolled back, but node 1 is still pending
+    --- FAIL: TestTimerRollbackIsTheDaoRollback/tick/state/commit_rejected (0.00s)
+        timer_component_test.go:391: the rolled-back tick took the deadline away
+FAIL
+FAIL	example.com/a1demo/game/entities/world	0.489s
+FAIL
