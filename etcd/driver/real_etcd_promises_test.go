@@ -78,3 +78,31 @@ func TestRealEtcdGetOfAMissingKeyIsNotFound(t *testing.T) {
 		t.Fatalf("Get of a written key = (%+v, %v)", kv, err)
 	}
 }
+
+// 第 5 笔演练偏差 3 的真机复现：租约在 etcd 一侧已不存在（进程暂停超过 lease_ttl 后恢复，这里用带外
+// Revoke 代替等待过期，效果相同：租约与挂在上面的键都没了），停机时 Assembly.Close（kit EtcdMod
+// 停机的唯一错误来源）对已不存在的租约 Revoke 得到 “requested lease not found”，必须视为注销已达成。
+func TestRealEtcdCloseAfterLeaseVanishedIsClean(t *testing.T) {
+	endpoint := startEtcd(t)
+	asm, err := Assemble(&fetcd.Config{Endpoints: []string{endpoint}, DialTimeout: 3 * time.Second,
+		ServicePrefix: "/roost/it/svc/", LeaseTTL: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asm.Discovery.SetRetryIntervals(time.Hour, time.Hour) // 停机前不重注册：Close 面对的是消失的那个租约
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := asm.Start(ctx, &fetcd.ServiceInfo{ServiceType: "game", Sid: 7, Addr: "127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	lease := asm.Discovery.currentLeaseID()
+	if err := asm.Client.Revoke(ctx, int64(lease)); err != nil {
+		t.Fatalf("out-of-band revoke: %v", err)
+	}
+	if _, err := asm.Client.Get(ctx, "/roost/it/svc/game/7"); !errors.Is(err, fetcd.ErrKeyNotFound) {
+		t.Fatalf("registered key after its lease vanished: %v, want ErrKeyNotFound", err)
+	}
+	if err := asm.Close(ctx); err != nil {
+		t.Fatalf("Close after the lease vanished = %v, want nil", err)
+	}
+}

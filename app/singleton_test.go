@@ -1155,6 +1155,38 @@ func TestSingletonIsNotReleasedWhenShutdownIsIncomplete(t *testing.T) {
 	}
 }
 
+// erroringStopSingletonMod 的 StopWithContext 立即返回一个普通错误（不是 ctx 取消 / 超时）。
+type erroringStopSingletonMod struct {
+	name ModName
+	err  error
+}
+
+func (m *erroringStopSingletonMod) Name() ModName                         { return m.name }
+func (m *erroringStopSingletonMod) Init(*viper.Viper) error               { return nil }
+func (m *erroringStopSingletonMod) Provide(*Registry) error               { return nil }
+func (m *erroringStopSingletonMod) Start() error                          { return nil }
+func (m *erroringStopSingletonMod) Stop()                                 {}
+func (m *erroringStopSingletonMod) StopWithContext(context.Context) error { return m.err }
+
+// 第 5 笔演练偏差 3 的影响核实：Mod 停机返回普通错误（如 etcd 注销时的 “requested lease not found”）
+// 算已停完——错误并入 run 的返回值（退出码非零），但单实例锁照常 Release，下一个进程不用等 TTL。
+// 只有 ctx 取消 / 超时（stopIncomplete）才不 Release，见上一个用例。
+func TestSingletonIsReleasedWhenAModStopReturnsAnOrdinaryError(t *testing.T) {
+	stopErr := errors.New("etcd Discovery: revoke: etcdserver: requested lease not found")
+	h := newSingletonHarness(t, []Mod{&erroringStopSingletonMod{name: "erroring_shared", err: stopErr}}, nil)
+	result := h.start()
+	h.awaitServed(t, result)
+	mine := h.store.value(testSingletonKey)
+	mustBeMine(t, mine)
+	if err := h.stop(t, result); !errors.Is(err, stopErr) {
+		t.Fatalf("run error = %v, want the mod stop error", err)
+	}
+	releases := h.store.releaseCalls()
+	if len(releases) != 1 || !bytes.Equal(releases[0].expected, mine) || h.store.value(testSingletonKey) != nil {
+		t.Fatalf("releases = %+v, key = %q; want this process's value released", releases, h.store.value(testSingletonKey))
+	}
+}
+
 // #10：Mod Start 失败、Service.Init 失败：已启动的 Mod 停完后 Release。
 func TestSingletonIsReleasedAfterAStartupFailureStopsTheMods(t *testing.T) {
 	for _, tc := range []struct {
