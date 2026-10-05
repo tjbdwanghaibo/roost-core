@@ -79,7 +79,7 @@ roost project new hello_roost -module example.com/hello_roost \
 ### 1.2 同步、预览和诊断
 
 ```bash
-roost project diff                 # 只显示将发生的变化
+roost project diff                 # 预览 sync 将改写的模板与配置 shutdown: 块（不含生成器输出）
 roost project sync                 # 按 roost.yaml 更新生成文件
 roost project doctor               # 含生成物新鲜度检查
 roost project doctor -strict=false # 只检查结构、版本和配置
@@ -406,11 +406,13 @@ go run .../cmd/protocol@latest \
 
 ```bash
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen@latest \
-  -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated
+  -meta ./configs/schema/cfg.yaml -out ./configs/cfg -pkg cfg
 ```
 
+`configs/generated` 是 tablegen（`roost generate` 的 config 步骤）的输出目录，两者同目录会重复声明 `RegisterConfigData`，所以 cfggen 输出到独立的 `configs/cfg`（RR-20261005-NC-72）。
+
 ```yaml
-package: generated
+package: cfg
 beans:
   - name: DropItem
     fields:

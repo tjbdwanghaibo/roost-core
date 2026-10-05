@@ -2,7 +2,9 @@
 # awkward shapes, not the pretty ones: a bean inside a slice, a secondary
 # index, a cross-table ref, a required field, a keyword-named field, and a
 # global. Everything here must survive the real configdata runtime, not just
-# gofmt.
+# gofmt. spawn / item add the index options (skipempty, an explicit index
+# name, uint64 / bool / string / negative int64 values) and a string-keyed
+# ref that points forward to a table declared after it.
 package: cfg
 beans:
   - name: DropItem
@@ -10,6 +12,14 @@ beans:
       - { name: item_id, type: int32 }
       - { name: weight,  type: int32 }
 tables:
+  - name: spawn
+    key: id
+    fields:
+      - { name: id,        type: int32 }
+      - { name: zone_id,   type: uint64, index: true, skipempty: true }
+      - { name: item_code, type: string, ref: item }
+      - { name: elite,     type: bool,   index: true, skipempty: true }
+      - { name: tag,       type: string, index: true }
   - name: drop
     key: id
     comment: drop groups
@@ -27,6 +37,12 @@ tables:
       # "range" is a Go keyword: the generated accessor parameters and struct
       # field must still compile.
       - { name: range,    type: int32 }
+  - name: item
+    key: code
+    fields:
+      - { name: code,  type: string }
+      - { name: rare,  type: bool,  index: rarity }
+      - { name: level, type: int64, index: true }
 globals:
   - name: world
     fields:

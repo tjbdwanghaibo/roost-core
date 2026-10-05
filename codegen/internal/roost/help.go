@@ -70,7 +70,7 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [--consolidate] [-core version] [-kit version] [-codegen version]
 make project-upgrade；跨过收敛边界（core v1.14.0 / kit v1.13.0）先执行 roost project upgrade --consolidate [--dry-run] 改写 import`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、chat、mail、match、session 五个 roost-service 服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器，并带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。-template game-demo 在 game 之上再生成一条可运行的写入链路：Player 带 Profile / Bag 两个组件与 PlayerDao 持久化字段，一个 //roost:nest rollback=undo durability=strict 的加道具事务，以及 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 auth.go 是**演示用凭据**（认 player:<id>），上线前必须换成真实校验。demo 源码在 codegen 仓的 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、chat、mail、match、session 五个 roost-service 服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器，并带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。-template game-demo 在 game 之上再生成一条可运行的写入链路：Player 带 Profile / Bag 两个组件与 PlayerDao 持久化字段，一个 //roost:nest rollback=undo durability=strict 的加道具事务，以及 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 auth.go 是**演示用凭据**（认 player:<id>），上线前必须换成真实校验。demo 源码在 codegen 仓的 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
 roost project next
@@ -256,9 +256,9 @@ type GameProtocol interface {
 	{
 		Name: "cfggen", Aliases: []string{"configgen", "config-data"},
 		Summary:       "从 YAML schema 生成强类型配置表、对象、bean、索引和引用校验",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/cfg -pkg cfg`,
 		Configuration: `schema 支持 package、beans、tables、globals；字段支持 type、key、index、ref、required、skipempty。运行时通过 RegisterGeneratedConfigData 注册到 roost-core/configdata。`,
-		Example: `package: generated
+		Example: `package: cfg
 tables:
   - name: monster
     key: id

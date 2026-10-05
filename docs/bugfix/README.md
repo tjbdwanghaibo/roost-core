@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N08 codegen（revn08）：NC-70～73 四个 P3 已修复、声明场景验证，未发版。** 5 条正式入口回归修前红、修后绿（中断 deps / generate 两子测试、diff / dry-run 两条、cfggen 帮助一条、ID 扫描一条），正式 CLI 中断实验与旧工程 upgrade 预览复跑一致；cfggen 正式运行期门补 skipempty / 显式索引名 / uint64 / string 前向 ref 形状（含负对照）。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md) · [证据](../review/evidence/noncore-review-20261005-n08/README.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-73](RR-20261005-NC-73.md) | roost id 错误码改用生成器的 AST 扫描 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-72](RR-20261005-NC-72.md) | cfggen 帮助改用独立 `configs/cfg` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-71](RR-20261005-NC-71.md) | 预览先做 sync 的 shutdown 块刷新，文档写准改写范围 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-70](RR-20261005-NC-70.md) | 中断时删掉命令所在的暂存树再重发信号 | 已修复、声明场景验证，未发版 |
+
 **10-05 N07第二批：NC-64/65已修复、声明场景验证，未发版。** 开关热更说明改为configs/data JSON（CSV需先roost generate）；玩家加载时按穿戴重建Gear并写attr_final。[本轮](../review/REVIEW-2026-10-05-noncore-n07b.md) · [证据](evidence/noncore-bugfix-20261005-n07b/README.md)。
 
 | 编号 | 修复 | 状态 |

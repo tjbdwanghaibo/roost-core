@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,6 +70,7 @@ func runCommandTree(ctx context.Context, dir string, env []string, stdout, stder
 		cancel()
 		err := <-waited
 		signal.Stop(interrupts)
+		removeInterruptedStage(dir)
 		if self, findErr := os.FindProcess(os.Getpid()); findErr == nil {
 			_ = self.Signal(sig)
 			// kill(2) on our own pid does not wait for the default action: in
@@ -92,4 +96,62 @@ func watchedInterrupts() []os.Signal {
 		}
 	}
 	return watched
+}
+
+// interruptStages are the staging trees (.roost-deps-*, .roost-generate-*)
+// whose owners run go commands inside them. A registered tree is removed when
+// runCommandTree catches an interrupt for a command running in it.
+var interruptStages struct {
+	sync.Mutex
+	dirs map[string]int
+}
+
+// removeOnInterrupt registers stage for removal should roost be interrupted
+// while a command runs inside it; release deregisters it. It complements, not
+// replaces, the owner's defer os.RemoveAll(stage), which covers every exit
+// that does not die of a signal.
+func removeOnInterrupt(stage string) (release func()) {
+	stage = filepath.Clean(stage)
+	interruptStages.Lock()
+	if interruptStages.dirs == nil {
+		interruptStages.dirs = make(map[string]int)
+	}
+	interruptStages.dirs[stage]++
+	interruptStages.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			interruptStages.Lock()
+			defer interruptStages.Unlock()
+			if interruptStages.dirs[stage]--; interruptStages.dirs[stage] <= 0 {
+				delete(interruptStages.dirs, stage)
+			}
+		})
+	}
+}
+
+// removeInterruptedStage deletes the registered staging tree that contains
+// dir, best effort: the process is about to die of a signal and has no one to
+// report a failure to.
+func removeInterruptedStage(dir string) {
+	if dir == "" {
+		return
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	interruptStages.Lock()
+	var owner string
+	for stage := range interruptStages.dirs {
+		rel, relErr := filepath.Rel(stage, dir)
+		if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			owner = stage
+			break
+		}
+	}
+	interruptStages.Unlock()
+	if owner != "" {
+		_ = os.RemoveAll(owner)
+	}
 }

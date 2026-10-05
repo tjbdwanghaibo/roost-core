@@ -61,3 +61,7 @@ codegen 近期修复链：RR-20261004-12（生成器 chdir 让子进程继承暂
 3. **暂存树放进可回收位置**：例如工程内 `.roost/stage/`（已被 `skippedProjectDirectory` 跳过、可在下次运行时清理旧树），配合方向 1。
 
 建议维护者在下一次碰这条链时考虑方向 2，避免再在 `runCommandTree` 上叠加分支。
+
+## 修复（同日）
+
+四条均按先红后绿修复、声明场景验证，未发版：[NC-70](../bugfix/RR-20261005-NC-70.md)（中断时删掉命令所在的暂存树再重发信号）、[NC-71](../bugfix/RR-20261005-NC-71.md)（预览先做 sync 的 shutdown 块刷新，文档写准）、[NC-72](../bugfix/RR-20261005-NC-72.md)（cfggen 帮助改用 `configs/cfg`）、[NC-73](../bugfix/RR-20261005-NC-73.md)（`roost id` 复用生成器的 AST 扫描）。另把 cfggen 运行期往返的新形状并入正式门 `codegen/scripts/cfggen-golden-runtime.sh` 的夹具（测试覆盖，不改行为）。上表“已复现”是审查时点的状态。

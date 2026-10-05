@@ -41,6 +41,9 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 		return err
 	}
 	defer os.RemoveAll(stage)
+	// RR-20261005-NC-70: go get / go mod tidy run in stage; a Ctrl-C there
+	// ends roost by the signal, which skips the defer above.
+	defer removeOnInterrupt(stage)()
 	if err := copyProject(absRoot, stage); err != nil {
 		return fmt.Errorf("stage framework dependencies: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -849,8 +850,43 @@ func DiffProject(root string, stdout io.Writer) error {
 	return diffManifest(root, m, false, stdout)
 }
 
+// diffManifest previews what SyncProject would write for manifest m: the
+// codegen-owned templates, and the generated shutdown: blocks in the
+// application-owned configs that sync refreshes before it renders
+// (RR-20260926-66/80). Generator outputs are not previewed; roost generate
+// --check reports those.
+//
+// RR-20261005-NC-71: the preview used to render from the configs on disk and
+// skip every existing application-owned file, so a Mod change (or an upgrade
+// across a stop-budget formula change) left out the three configs sync was
+// about to rewrite. The refresh now runs on copies of just those configs in a
+// throwaway directory, and the templates render from the refreshed totals,
+// exactly as SyncProject's staging tree does.
 func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Writer) error {
-	plan, err := renderProject(m.withConfiguredShutdown(root))
+	shutdownStage, err := os.MkdirTemp("", "roost-diff-shutdown-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(shutdownStage)
+	for _, service := range sortedServiceNames(m) {
+		for _, target := range shutdownConfigTargets(service) {
+			raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.rel)))
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			if readErr != nil {
+				return readErr
+			}
+			if err := writeAtomic(filepath.Join(shutdownStage, filepath.FromSlash(target.rel)), raw, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	refreshed, err := refreshGeneratedShutdownConfigs(shutdownStage, m)
+	if err != nil {
+		return fmt.Errorf("preview shutdown.total_timeout refresh: %w", err)
+	}
+	plan, err := renderProject(m.withConfiguredShutdown(shutdownStage))
 	if err != nil {
 		return err
 	}
@@ -859,7 +895,8 @@ func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Write
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	changed := make([]string, 0, len(paths)+1)
+	manifestChanged := false
+	changed := make([]string, 0, len(paths)+len(refreshed))
 	if includeManifest {
 		prospective, marshalErr := m.Marshal()
 		if marshalErr != nil {
@@ -869,9 +906,7 @@ func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Write
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return readErr
 		}
-		if readErr != nil || !bytes.Equal(current, prospective) {
-			changed = append(changed, ManifestName)
-		}
+		manifestChanged = readErr != nil || !bytes.Equal(current, prospective)
 	}
 	for _, path := range paths {
 		file := plan[path]
@@ -888,6 +923,15 @@ func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Write
 		if readErr != nil || string(current) != string(file.Body) {
 			changed = append(changed, path)
 		}
+	}
+	for _, rel := range refreshed {
+		if !slices.Contains(changed, rel) {
+			changed = append(changed, rel)
+		}
+	}
+	sort.Strings(changed)
+	if manifestChanged {
+		changed = append([]string{ManifestName}, changed...)
 	}
 	for _, path := range changed {
 		fmt.Fprintln(stdout, path)

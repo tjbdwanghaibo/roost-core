@@ -1,0 +1,5 @@
+   1 --- PASS: TestAddProtocolAllocatesIDAndCheckDetectsDuplicate (1.32s)
+   1 --- PASS: TestIDToolsSeeErrcodeDefinitionsTheWayTheGeneratorDoes (0.47s)
+   1 --- PASS: TestManifestRejectsIDsOutsideFrameworkEncoding (0.00s)
+   1 --- PASS: TestNormalizeNextIDArgsAcceptsFlagsBeforeOrAfterKind (0.00s)
+   1 ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	2.364s

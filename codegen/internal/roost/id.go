@@ -9,10 +9,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	codeerr "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode"
 )
 
 var markerIDPattern = regexp.MustCompile(`//[a-z]+:(msg|push|entity|component|errcode)[^\n]*\b(id|kind|type|code)=([0-9]+)`)
-var errcodeDefinePattern = regexp.MustCompile(`errcode\.Define\(\s*([0-9]+)\s*,`)
 
 type IDUse struct {
 	Kind string
@@ -49,13 +50,24 @@ func ScanIDs(root string) ([]IDUse, error) {
 			rel, _ := filepath.Rel(root, path)
 			uses = append(uses, IDUse{Kind: kind, ID: id, File: filepath.ToSlash(rel)})
 		}
-		for _, match := range errcodeDefinePattern.FindAllSubmatch(raw, -1) {
-			id, _ := strconv.ParseInt(string(match[1]), 10, 64)
-			rel, _ := filepath.Rel(root, path)
-			uses = append(uses, IDUse{Kind: "errcode", ID: id, File: filepath.ToSlash(rel)})
-		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// RR-20261005-NC-73: error codes are read by the errcode generator's own
+	// AST scan. A regex here used to miss `ec.Define(…)` under an aliased
+	// import (so roost id next / roost add errcode handed out a code that
+	// generation then rejected as a duplicate) and count `errcode.Define(…`
+	// inside comments and strings (so roost id check reported duplicates that
+	// do not exist).
+	defs, err := codeerr.ScanDefinitions(root)
+	if err != nil {
+		return nil, fmt.Errorf("scan errcode definitions: %w", err)
+	}
+	for _, def := range defs {
+		uses = append(uses, IDUse{Kind: "errcode", ID: int64(def.Code), File: def.File})
+	}
 	sort.Slice(uses, func(i, j int) bool {
 		if uses[i].Kind == uses[j].Kind {
 			return uses[i].ID < uses[j].ID

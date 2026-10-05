@@ -17,6 +17,7 @@ package cfg
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +28,7 @@ import (
 func load(t *testing.T) (*configdata.Store, *configdata.Snapshot, string) {
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"drop.json", "monster.json", "world.json"} {
+	for _, name := range []string{"drop.json", "monster.json", "world.json", "spawn.json", "item.json"} {
 		raw, err := os.ReadFile(filepath.Join("data", name))
 		if err != nil {
 			t.Fatalf("read fixture %s: %v", name, err)
@@ -156,5 +157,100 @@ func TestReloadPublishesNewContent(t *testing.T) {
 	old, _ := MonsterTableFrom(snapshot)
 	if wolf, ok := old.Get(1); !ok || wolf.Name != "wolf" {
 		t.Fatalf("the pinned snapshot changed under the reader: %+v", wolf)
+	}
+}
+
+func spawnIDs(rows []SpawnCfg) []int32 {
+	out := make([]int32, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
+func sameIDs(got []int32, want ...int32) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The index options round-trip through real JSON: skipempty keeps zero values
+// (0, false) out while a string index without it keeps "" rows in file order;
+// an explicit index name is what the accessor queries; uint64 at its maximum,
+// negative int64 and bool stringify the way the runtime index does. spawn is
+// declared before item, so its string-keyed ref points forward.
+func TestIndexOptionsAndStringRefsRoundTrip(t *testing.T) {
+	store, snapshot, dir := load(t)
+	if got := spawnIDs(SpawnByZoneID(snapshot, math.MaxUint64)); !sameIDs(got, 1) {
+		t.Fatalf("zone MaxUint64 = %v, want [1]", got)
+	}
+	if got := SpawnByZoneID(snapshot, 0); len(got) != 0 {
+		t.Fatalf("skipempty indexed zone 0: %v", spawnIDs(got))
+	}
+	if got := spawnIDs(SpawnByElite(snapshot, true)); !sameIDs(got, 1) {
+		t.Fatalf("elite=true = %v, want [1]", got)
+	}
+	if got := SpawnByElite(snapshot, false); len(got) != 0 {
+		t.Fatalf("skipempty indexed elite=false: %v", spawnIDs(got))
+	}
+	if got := spawnIDs(SpawnByTag(snapshot, "")); !sameIDs(got, 1, 3) {
+		t.Fatalf("tag \"\" = %v, want [1 3] (no skipempty keeps empty values)", got)
+	}
+	if got := ItemByRarity(snapshot, false); len(got) != 1 || got[0].Code != "rock" {
+		t.Fatalf("explicit index rarity=false = %+v", got)
+	}
+	if got := ItemByLevel(snapshot, -5); len(got) != 1 || got[0].Code != "sword" {
+		t.Fatalf("level -5 = %+v", got)
+	}
+	if got := ItemByLevel(snapshot, 0); len(got) != 1 || got[0].Code != "rock" {
+		t.Fatalf("level 0 without skipempty = %+v", got)
+	}
+
+	// A dangling string ref and a removed target key are refused; the live
+	// snapshot and its indexes stay as they were.
+	for name, rewrite := range map[string][2]string{
+		"dangling string ref": {"spawn.json", `[{"id":1,"item_code":"axe"}]`},
+		"target key removed":  {"item.json", `[{"code":"rock"}]`},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, rewrite[0]), []byte(rewrite[1]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Reload(context.Background()); err == nil {
+			t.Fatalf("%s: reload accepted it", name)
+		}
+		if got := spawnIDs(SpawnByZoneID(store.Current(), math.MaxUint64)); !sameIDs(got, 1) || store.Current().Version != snapshot.Version {
+			t.Fatalf("%s: the refused reload moved the live snapshot (zone index %v)", name, got)
+		}
+		raw, err := os.ReadFile(filepath.Join("data", rewrite[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rewrite[0]), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A good reload rebuilds the indexes; the pinned snapshot keeps its own.
+	if err := os.WriteFile(filepath.Join(dir, "spawn.json"), []byte(`[{"id":9,"zone_id":5,"item_code":"rock","tag":"x"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := spawnIDs(SpawnByZoneID(next, 5)); !sameIDs(got, 9) {
+		t.Fatalf("new zone 5 = %v", got)
+	}
+	if got := SpawnByZoneID(next, math.MaxUint64); len(got) != 0 {
+		t.Fatalf("stale index entry survived the reload: %v", spawnIDs(got))
+	}
+	if got := spawnIDs(SpawnByZoneID(snapshot, math.MaxUint64)); !sameIDs(got, 1) {
+		t.Fatalf("the pinned snapshot's index changed: %v", got)
 	}
 }

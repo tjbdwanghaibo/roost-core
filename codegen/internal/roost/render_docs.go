@@ -520,7 +520,8 @@ ComponentType 不能超过 65535；Protocol 消息 ID 不能超过 4294967295。
     make doctor
     make ci
 
-project diff 只预览受控模板；sync 不覆盖业务拥有的 Service 实现和配置。升级整个模板使用
+project diff 预览 sync 将改写的受控模板，以及配置里未手改、随 Mod 计划刷新的生成 shutdown: 块
+（生成器输出用 roost generate --check 检查）；sync 不覆盖业务拥有的 Service 实现，配置只刷新这一块。升级整个模板使用
 make project-upgrade，更新框架依赖使用 make deps-update，更新完整项目依赖图使用 make roost-up。
 
 ## 11. 常见错误

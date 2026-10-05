@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N08 codegen（revn08，macOS）
+
+起点 `50e9a4e8`，交付前快进到 `be7bcc18`；独立 worktree 分支 `revn08`。cb11be90 的重发信号 / 进程树补修直接复用未重审；`add saga` 生成部分与赠礼 demo 步骤属 U-0280，未读改。[本轮](REVIEW-2026-10-05-n08-codegen.md) · [证据](evidence/noncore-review-20261005-n08/README.md)。NC-70～73 四个 P3 已修复、声明场景验证，未发版。
+
+| 项 | 本轮 | 状态/边界 |
+| --- | --- | --- |
+| cfggen required/ref/skipempty 与真实 JSON/索引往返 | 当前 core 上 9 叶子 race×3；正式门夹具新增 skipempty/显式索引名/uint64/负 int64/bool/string 前向 ref 形状，对 pin v1.20.0 5/5，负对照红 | 完成本机部分；Luban 外部表未做 |
+| 旧工程显式 upgrade / 改名退役 / 失败回滚 / 依赖整理 | v1.18.0 生成工程→当前 CLI upgrade 后 build/vet/test/doctor/check 通过；DAO 改名、退役；生成器失败回滚 manifest、依赖失败半升级后 `project deps` 收敛 | NC-71（预览漏列配置）已修；O2 半升级提示未改 |
+| 取消与暂存树清理 | 正式 CLI 五条命令 SIGINT/TERM/HUP | NC-70 已修；生成器/复制/提交窗口残余（O6） |
+| Unix 信号/进程树 | macOS 单独 race×3 21/21 | Windows taskkill 路径仍只 vet |
+| 10 具名环境 skip、shell 部署/rollback | 9 条实跑通过（含真实 docker compose config、四条 shell）；shellcheck 9 脚本 1 note | 第 10 条为过期常量门（O1），翻转后 2/2 通过但未提交（联网） |
+| N07 移交：roost id 错误码 AST 化 | NC-73 已修 | protocol/entity 标记 ID 未改 |
+
+方向判断：“同级暂存树 + 外部 go 进程 + 信号”近期第四次出缺陷（RR-20261004-12/13、cb11be90、NC-70），建议下次改为 CLI 入口统一接管信号转 ctx 取消（详见本轮记录）。N08 仍**场景部分完成**：真实 systemd/k8s 部署、Windows 进程树、离线代理、强杀/磁盘故障未做。不等待 GitHub CI，不发版。
+
 ## 2026-10-05 N07第二批（configdata真实热更与handler快照）
 
 基线3d4fe9f3，分支revn07b，图谱generation 09-30（ActiveSnapshot调用方都在模板里，入边为0），以源码补证。[本轮](REVIEW-2026-10-05-noncore-n07b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。NC-65 P2、NC-64 P3已修复、声明场景验证，未发版。

@@ -15,6 +15,8 @@
 | `cfggen-runtime-gate.txt` | `sh codegen/scripts/cfggen-golden-runtime.sh -count=1 -race -v`（pin v1.20.0）5/5 通过，含新增 `TestIndexOptionsAndStringRefsRoundTrip` |
 | `cfggen-runtime-gate-negative.txt` | 负对照：临时让生成器不写 `skipempty`，新用例红（`skipempty indexed zone 0: [2]`），随后恢复 |
 | `cfggen-head-roundtrip/` | 当前 core（`replace` 到 worktree）上的往返探针：meta、数据与测试（`rt_test.go.txt`，改名避免被本仓编译）；9 叶子 `-race -count=3` 通过 |
+| `nc73-red.txt` / `nc73-green.txt` | `TestIDToolsSeeErrcodeDefinitionsTheWayTheGeneratorDoes` 修前三处红 / 修后与既有 ID 用例一起绿 |
+| `cli-id-errcode.txt` | 正式 CLI：别名导入定义被漏、注释被计入（修前）与修后结果 |
 | `shellcheck-game-demo.txt` | `shellcheck 0.11.0 -s sh` 对生成 game-demo 的 9 个脚本：仅 1 条 note SC2086（有意拆分） |
 
 ## 主要命令与结果

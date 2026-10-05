@@ -48,6 +48,35 @@ func Run(args []string, stdout io.Writer) error {
 }
 
 func extractDefinitions(root string) ([]Definition, error) {
+	defs, err := ScanDefinitions(root)
+	if err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(defs); i++ {
+		if defs[i].Code == defs[i-1].Code {
+			return nil, fmt.Errorf("duplicate errcode %d: %s and %s", defs[i].Code, defs[i-1].File, defs[i].File)
+		}
+	}
+	// A name is a client-facing identifier too (and the reason ClientError
+	// falls back to when a message is empty): one name for two codes is the
+	// same conflict seen from the other side.
+	byName := make(map[string]Definition, len(defs))
+	for _, def := range defs {
+		if first, exists := byName[def.Name]; exists {
+			return nil, fmt.Errorf("duplicate errcode name %q: %d in %s and %d in %s", def.Name, first.Code, first.File, def.Code, def.File)
+		}
+		byName[def.Name] = def
+	}
+	return defs, nil
+}
+
+// ScanDefinitions returns every errcode.Define under root exactly as the
+// generator reads it — through the AST, under whatever name the file imports
+// roost-core's errcode package as, ignoring comments and strings — sorted by
+// code, duplicates included. extractDefinitions adds the duplicate checks;
+// `roost id` (codegen/internal/roost/id.go) uses the same scan so the IDs it
+// hands out and checks are the ones generation will see (RR-20261005-NC-73).
+func ScanDefinitions(root string) ([]Definition, error) {
 	root = filepath.Clean(root)
 	var defs []Definition
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -122,21 +151,6 @@ func extractDefinitions(root string) ([]Definition, error) {
 		}
 		return defs[i].Code < defs[j].Code
 	})
-	for i := 1; i < len(defs); i++ {
-		if defs[i].Code == defs[i-1].Code {
-			return nil, fmt.Errorf("duplicate errcode %d: %s and %s", defs[i].Code, defs[i-1].File, defs[i].File)
-		}
-	}
-	// A name is a client-facing identifier too (and the reason ClientError
-	// falls back to when a message is empty): one name for two codes is the
-	// same conflict seen from the other side.
-	byName := make(map[string]Definition, len(defs))
-	for _, def := range defs {
-		if first, exists := byName[def.Name]; exists {
-			return nil, fmt.Errorf("duplicate errcode name %q: %d in %s and %d in %s", def.Name, first.Code, first.File, def.Code, def.File)
-		}
-		byName[def.Name] = def
-	}
 	return defs, nil
 }
 

@@ -226,6 +226,9 @@ func GenerateTransactional(root string, options GenerateOptions, stderr io.Write
 		return err
 	}
 	defer os.RemoveAll(stage)
+	// RR-20261005-NC-70: go mod tidy runs in stage; a Ctrl-C there ends roost
+	// by the signal, which skips the defer above.
+	defer removeOnInterrupt(stage)()
 	if err := copyProject(absRoot, stage); err != nil {
 		return fmt.Errorf("stage generation: %w", err)
 	}
