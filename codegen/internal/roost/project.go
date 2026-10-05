@@ -295,8 +295,16 @@ func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChang
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != root && (entry.Name() == ".git" || entry.Name() == "bin" || entry.Name() == "dist" || entry.Name() == "log") {
-				return filepath.SkipDir
+			// Same boundary as copyProject (RR-20261005-NC-74): a directory the
+			// staging tree never received holds nothing this plan may delete.
+			if path != root {
+				rel, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					return relErr
+				}
+				if skippedProjectDirectory(rel) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

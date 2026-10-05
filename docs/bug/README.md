@@ -26,10 +26,12 @@
 | [RR-20261005-NC-101](RR-20261005-NC-101.md) | P2 transaction_timeout 不约束提交，网络黑洞时无界阻塞 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-102](RR-20261005-NC-102.md) | P3 mongotest 唯一索引数组语义与真实 Mongo 不一致 | 已修复、声明场景验证，未发版 |
 
-**10-05 N08 codegen（revn08）：NC-70～73 四个 P3 已修复、声明场景验证，未发版。** 中断 go 命令窗口后暂存树（整份工程副本）留在工程旁；`roost id` 的错误码扫描与生成器口径不同（NC-63 残余）；`project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；`roost help cfggen` 指向 tablegen 的输出目录。cfggen 运行期往返、旧工程显式 upgrade / 改名退役 / 失败回滚、Unix 信号用例与 9 条具名环境 skip 在 macOS 实跑通过。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md)
+**10-05 N08 codegen（revn08）：NC-70～74 五个 P3 与 NC-75 P2 已修复、声明场景验证，未发版（NC-75 运行时 required 待决定）。** 中断 go 命令窗口后暂存树（整份工程副本）留在工程旁；`roost id` 的错误码扫描与生成器口径不同（NC-63 残余）；`project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；`roost help cfggen` 指向 tablegen 的输出目录。cfggen 运行期往返、旧工程显式 upgrade / 改名退役 / 失败回滚、Unix 信号用例与 9 条具名环境 skip 在 macOS 实跑通过。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md)
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-75](RR-20261005-NC-75.md) | P2 tablegen `ref=` 哪里都不查；`-check` 不按 schema 校验 JSON | ref / -check 已修复、声明场景验证，未发版；运行时 required 待决定 |
+| [RR-20261005-NC-74](RR-20261005-NC-74.md) | P3 dev-run 的 `.dev/` 与 `data/wal` 被当成应用输入，generate / sync 报 inputs changed | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-73](RR-20261005-NC-73.md) | P3 `roost id` / `add errcode` 漏别名导入定义、把注释算成占用 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-72](RR-20261005-NC-72.md) | P3 `roost help cfggen` 输出到 `configs/generated`，与 tablegen 同包重复声明 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-71](RR-20261005-NC-71.md) | P3 `project diff` / `upgrade --dry-run` 漏列 sync 刷新的应用自有配置 | 已修复、声明场景验证，未发版 |

@@ -77,6 +77,8 @@ jobs:
         run: sh codegen/scripts/entity-sync-runtime.sh
       - name: cfggen output against roost-core configdata
         run: sh codegen/scripts/cfggen-golden-runtime.sh
+      - name: tablegen output against roost-core configdata (RR-20261005-NC-75)
+        run: sh codegen/scripts/tablegen-runtime.sh
 
   # The test suite runs in shards because the single job that used to run it
   # will not hold the merged module: kit and codegen are about to move in

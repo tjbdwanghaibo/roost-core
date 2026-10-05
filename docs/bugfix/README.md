@@ -34,10 +34,13 @@
 | [RR-20261005-NC-92](RR-20261005-NC-92.md) | 服务端拒绝没有 ReplySubject 的 JetStream RPC 请求；调用端识别 PubAck 返回 ErrRPCCapturedByJetStream | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-91](RR-20261005-NC-91.md) | 派发池拒绝的轻量 RPC 立即回失败 envelope，不写死信 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-90](RR-20261005-NC-90.md) | JetStream 请求准入 / 在途计数并入 Bus 停止；回包预算改为调用方期限 | 已修复、声明场景验证，未发版 |
-**10-05 N08 codegen（revn08）：NC-70～73 四个 P3 已修复、声明场景验证，未发版。** 5 条正式入口回归修前红、修后绿（中断 deps / generate 两子测试、diff / dry-run 两条、cfggen 帮助一条、ID 扫描一条），正式 CLI 中断实验与旧工程 upgrade 预览复跑一致；cfggen 正式运行期门补 skipempty / 显式索引名 / uint64 / string 前向 ref 形状（含负对照）。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md) · [证据](../review/evidence/noncore-review-20261005-n08/README.md)
+
+**10-05 N08 codegen（revn08）：NC-70～75 已修复、声明场景验证，未发版（NC-75 运行时 required 待决定）。** 5 条正式入口回归修前红、修后绿（中断 deps / generate 两子测试、diff / dry-run 两条、cfggen 帮助一条、ID 扫描一条），正式 CLI 中断实验与旧工程 upgrade 预览复跑一致；cfggen 正式运行期门补 skipempty / 显式索引名 / uint64 / string 前向 ref 形状（含负对照）。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md) · [证据](../review/evidence/noncore-review-20261005-n08/README.md)
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-75](RR-20261005-NC-75.md) | 生成 loader 查 ref；-check 按 schema 规则校验 JSON；tablegen 运行期门 | ref / -check 已修复，未发版；运行时 required 待决定 |
+| [RR-20261005-NC-74](RR-20261005-NC-74.md) | 复制 / 快照 / 提交计划共用工程边界，跳过 .dev 与 data/wal | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-73](RR-20261005-NC-73.md) | roost id 错误码改用生成器的 AST 扫描 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-72](RR-20261005-NC-72.md) | cfggen 帮助改用独立 `configs/cfg` | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-71](RR-20261005-NC-71.md) | 预览先做 sync 的 shutdown 块刷新，文档写准改写范围 | 已修复、声明场景验证，未发版 |

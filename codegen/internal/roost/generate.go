@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -301,8 +302,14 @@ func snapshotProjectInputs(root string, manifest Manifest) (map[string][sha256.S
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != root && skippedProjectDirectory(entry.Name()) {
-				return filepath.SkipDir
+			if path != root {
+				rel, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					return relErr
+				}
+				if skippedProjectDirectory(rel) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -436,7 +443,7 @@ func copyProject(src, dst string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			if skippedProjectDirectory(entry.Name()) {
+			if skippedProjectDirectory(rel) {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
@@ -452,9 +459,24 @@ func copyProject(src, dst string) error {
 	})
 }
 
-func skippedProjectDirectory(name string) bool {
+// skippedProjectDirectory reports whether the directory at rel (slash
+// separated, relative to the project root) is outside what generation reads
+// and commits: VCS metadata, build output, roost's own staging trees, and
+// what the running project writes into its own tree. copyProject,
+// snapshotProjectInputs and planStagedProjectCommit's walk of the real project
+// all use it, so the three agree on what the project is.
+//
+// RR-20261005-NC-74: `make dev-run` logs to .dev/ and DataEngine's default WAL
+// directory is data/wal/dataengine (the generated config.<svc>.yaml); while the
+// project ran, every generate / sync failed with "project inputs changed".
+// data/wal is matched by path: configs/data is generator output and must not
+// be skipped by name.
+func skippedProjectDirectory(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	name := path.Base(rel)
 	return name == ".git" || name == "bin" || name == "dist" || name == "log" ||
-		name == ".testcache" || strings.HasPrefix(name, ".roost-")
+		name == ".testcache" || strings.HasPrefix(name, ".roost-") ||
+		rel == ".dev" || rel == "data/wal"
 }
 
 func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {

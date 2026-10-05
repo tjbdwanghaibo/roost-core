@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
@@ -478,6 +479,13 @@ func safeTableJSONName(name string) bool {
 	return name != "_manifest.json" && filepath.Base(name) == name && strings.HasSuffix(name, ".json")
 }
 
+// checkJSONFiles is `-json <dir> -check`: the JSON a server will load is held
+// to the rules the schema declares, the same ones readCSVRecords enforces on
+// the sheet — a required column present and not null, unique / key values not
+// repeated, min respected. RR-20261005-NC-75: it used to stop at "is valid
+// JSON", so an operator who edited configs/data directly (the documented hot
+// reload path) had nothing that checked the schema before reload; configdata
+// itself only sees typed rows and cannot tell a missing column from zero.
 func checkJSONFiles(metas []Meta, jsonDir string) error {
 	for _, meta := range metas {
 		path := filepath.Join(jsonDir, meta.JSON)
@@ -485,12 +493,58 @@ func checkJSONFiles(metas []Meta, jsonDir string) error {
 		if err != nil {
 			return err
 		}
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
+		rows, err := jsonRows(raw, meta.Kind)
+		if err != nil {
 			return fmt.Errorf("check %s: %w", path, err)
+		}
+		file := filepath.Base(path)
+		for index, row := range rows {
+			for _, field := range meta.Fields {
+				if !field.Required {
+					continue
+				}
+				if value, ok := row[field.JSON]; !ok || value == nil {
+					return fmt.Errorf("check %s: data row %d: required field %s is missing or null", file, index+1, field.JSON)
+				}
+			}
+		}
+		if err := validateRows(file, meta, rows); err != nil {
+			return fmt.Errorf("check %w", err)
 		}
 	}
 	return nil
+}
+
+// jsonRows reads a table file the way configdata does — a list of rows, or
+// one object holding the list under rows / records / data — and an object
+// file as its single row.
+func jsonRows(raw []byte, kind TableKind) ([]map[string]any, error) {
+	if kind != KindTable {
+		var object map[string]any
+		if err := json.Unmarshal(raw, &object); err != nil {
+			return nil, err
+		}
+		return []map[string]any{object}, nil
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err == nil {
+		return rows, nil
+	}
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		return nil, err
+	}
+	if len(wrapper) == 1 {
+		for _, key := range []string{"rows", "records", "data"} {
+			if inner, ok := wrapper[key]; ok {
+				if err := json.Unmarshal(inner, &rows); err != nil {
+					return nil, err
+				}
+				return rows, nil
+			}
+		}
+	}
+	return nil, errors.New("a table file must be a list of rows, or one object holding it under rows / records / data")
 }
 
 func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
@@ -550,7 +604,8 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 // row of the CSV — and enforced by nothing: a duplicate id was written into
 // the JSON and the generated loader silently kept the last row (U-0033).
 // `ref=` names another table and is not checked here; that needs every
-// table loaded and is the generated loader's job.
+// table loaded and is the generated loader's job (its ValidateTable, see
+// resolveRefs, RR-20261005-NC-75).
 func validateRows(file string, meta Meta, rows []map[string]any) error {
 	for _, field := range meta.Fields {
 		unique := field.Unique || (meta.Kind == KindTable && field.Name == meta.Key)
@@ -667,8 +722,13 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.W
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
+	refs, err := resolveRefs(metas)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	tmpl := template.Must(template.New("go").Funcs(template.FuncMap{
+		"refs":       func(meta Meta) []refSpec { return refs[meta.Name] },
 		"upper":      firstUpper,
 		"quote":      strconv.Quote,
 		"keyType":    keyType,
@@ -725,10 +785,41 @@ var (
 func RegisterGeneratedConfigData(r *configdata.Registry) error {
 {{- range .Metas}}
 {{- if eq .Kind "table"}}
+{{- $meta := .}}
 	if err := configdata.RegisterTable(r, configdata.TableDef[{{keyType .}}, {{.Alias}}.{{.TypeName}}]{
 		Name: configdata.Name({{quote .Name}}),
 		File: {{quote .JSON}},
 		Key: func(v {{.Alias}}.{{.TypeName}}) {{keyType .}} { return v.{{keyField .}} },
+{{- with refs .}}
+		// ref= checks (RR-20261005-NC-75): every non-zero value must be a key
+		// of the target table, on every load and reload.
+		ValidateTable: func(ctx *configdata.BuildContext, table *configdata.Table[{{keyType $meta}}, {{$meta.Alias}}.{{$meta.TypeName}}]) error {
+{{- range $i, $ref := .}}
+			target{{$i}}, ok := configdata.TableFrom[{{$ref.TargetKeyType}}, {{$ref.TargetAlias}}.{{$ref.TargetType}}](ctx.Snapshot, configdata.Name({{quote $ref.Target}}))
+			if !ok {
+				return fmt.Errorf("field {{$ref.JSON}} references table {{$ref.Target}}, which is not loaded")
+			}
+{{- end}}
+			for _, row := range table.Rows() {
+{{- range $i, $ref := .}}
+{{- if $ref.Pointer}}
+				if row.{{$ref.Field}} != nil {
+					if _, ok := target{{$i}}.Get(*row.{{$ref.Field}}); !ok {
+						return fmt.Errorf("row {{keyField $meta}}=%v: field {{$ref.JSON}} references missing {{$ref.Target}} key %v", row.{{keyField $meta}}, *row.{{$ref.Field}})
+					}
+				}
+{{- else}}
+				if row.{{$ref.Field}} != *new({{$ref.TargetKeyType}}) {
+					if _, ok := target{{$i}}.Get(row.{{$ref.Field}}); !ok {
+						return fmt.Errorf("row {{keyField $meta}}=%v: field {{$ref.JSON}} references missing {{$ref.Target}} key %v", row.{{keyField $meta}}, row.{{$ref.Field}})
+					}
+				}
+{{- end}}
+{{- end}}
+			}
+			return nil
+		},
+{{- end}}
 	}); err != nil {
 		return err
 	}
@@ -916,6 +1007,55 @@ func parseExpr(field Field, raw string) string {
 	default:
 		return fmt.Sprintf("tablegenParseJSON[%s](%s)", field.Type, raw)
 	}
+}
+
+// refSpec is one `ref:"<table>"` field resolved against the tables of this
+// run, for the generated loader's ValidateTable.
+type refSpec struct {
+	Field, JSON   string
+	Pointer       bool
+	Target        string
+	TargetAlias   string
+	TargetType    string
+	TargetKeyType string
+}
+
+// resolveRefs checks every ref= declaration and returns them per table name.
+// RR-20261005-NC-75: ref= was printed into the CSV rule row and enforced by
+// nothing — validateRows left it to "the generated loader", which never
+// checked it. A target must be a table of this run and the field's type its
+// key type; anything else is a schema error at generation time.
+func resolveRefs(metas []Meta) (map[string][]refSpec, error) {
+	tables := make(map[string]Meta, len(metas))
+	for _, meta := range metas {
+		if meta.Kind == KindTable {
+			tables[meta.Name] = meta
+		}
+	}
+	out := make(map[string][]refSpec)
+	for _, meta := range metas {
+		for _, field := range meta.Fields {
+			if field.Ref == "" {
+				continue
+			}
+			if meta.Kind != KindTable {
+				return nil, fmt.Errorf("object %s field %s: ref is only checked on table rows", meta.Name, field.Name)
+			}
+			target, ok := tables[field.Ref]
+			if !ok {
+				return nil, fmt.Errorf("table %s field %s: ref target %q is not a table in this schema", meta.Name, field.Name, field.Ref)
+			}
+			fieldType := strings.TrimPrefix(field.Type, "*")
+			if fieldType != keyType(target) {
+				return nil, fmt.Errorf("table %s field %s: ref type %s does not match %s key type %s", meta.Name, field.Name, field.Type, target.Name, keyType(target))
+			}
+			out[meta.Name] = append(out[meta.Name], refSpec{
+				Field: field.Name, JSON: field.JSON, Pointer: strings.HasPrefix(field.Type, "*"),
+				Target: target.Name, TargetAlias: target.Alias, TargetType: target.TypeName, TargetKeyType: keyType(target),
+			})
+		}
+	}
+	return out, nil
 }
 
 func keyType(meta Meta) string {

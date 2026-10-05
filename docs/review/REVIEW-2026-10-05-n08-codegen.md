@@ -14,8 +14,10 @@
 | [RR-20261005-NC-71](../bug/RR-20261005-NC-71.md) | P3 | `project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；生成文档与 help 称 sync / upgrade 不改配置 | 已复现 |
 | [RR-20261005-NC-72](../bug/RR-20261005-NC-72.md) | P3 | `roost help cfggen` 让输出落到 tablegen 的 `configs/generated`，照做即重复声明、`roost generate` 失败 | 已复现 |
 | [RR-20261005-NC-73](../bug/RR-20261005-NC-73.md) | P3 | `roost id` / `roost add errcode` 用正则找错误码：别名导入的定义被漏掉（分配到已占用的码）、注释里的文字被算成占用（误报重复）；NC-63 交给 N08 的残余 | 已复现 |
+| [RR-20261005-NC-74](../bug/RR-20261005-NC-74.md) | P3 | dev-run 期间 `.dev/` 日志与默认 WAL `data/wal` 被当成应用输入，generate / sync 报 inputs changed（N07 第二批移交） | 已复现 |
+| [RR-20261005-NC-75](../bug/RR-20261005-NC-75.md) | P2 | tablegen `ref=` 在 CSV 与生成 loader 里都不检查；`-check` 只验语法，直接改 JSON 绕过 required / unique / min（N07 第二批移交 H2e） | 已复现 |
 
-四条都是 codegen 工具链的可用性 / 文档缺陷，没有发现会损坏工程或生成错误运行时行为的问题。
+NC-70～74 是 codegen 工具链的可用性 / 文档缺陷；NC-75 让悬空引用的配置能加载上线，定 P2。
 
 ## 已核对项
 
@@ -64,4 +66,15 @@ codegen 近期修复链：RR-20261004-12（生成器 chdir 让子进程继承暂
 
 ## 修复（同日）
 
-四条均按先红后绿修复、声明场景验证，未发版：[NC-70](../bugfix/RR-20261005-NC-70.md)（中断时删掉命令所在的暂存树再重发信号）、[NC-71](../bugfix/RR-20261005-NC-71.md)（预览先做 sync 的 shutdown 块刷新，文档写准）、[NC-72](../bugfix/RR-20261005-NC-72.md)（cfggen 帮助改用 `configs/cfg`）、[NC-73](../bugfix/RR-20261005-NC-73.md)（`roost id` 复用生成器的 AST 扫描）。另把 cfggen 运行期往返的新形状并入正式门 `codegen/scripts/cfggen-golden-runtime.sh` 的夹具（测试覆盖，不改行为）。上表“已复现”是审查时点的状态。
+NC-70～73 按先红后绿修复、声明场景验证，未发版：[NC-70](../bugfix/RR-20261005-NC-70.md)（中断时删掉命令所在的暂存树再重发信号）、[NC-71](../bugfix/RR-20261005-NC-71.md)（预览先做 sync 的 shutdown 块刷新，文档写准）、[NC-72](../bugfix/RR-20261005-NC-72.md)（cfggen 帮助改用 `configs/cfg`）、[NC-73](../bugfix/RR-20261005-NC-73.md)（`roost id` 复用生成器的 AST 扫描）。另把 cfggen 运行期往返的新形状并入正式门 `codegen/scripts/cfggen-golden-runtime.sh` 的夹具（测试覆盖，不改行为）。上表“已复现”是审查时点的状态。
+
+## N07 第二批移交项（同日追加）
+
+协调方转来 N07 第二批（`197f7bb9`，[记录](REVIEW-2026-10-05-noncore-n07b.md#移交-n08不在本批修)）的两条，以及原本就移交的 NC-63 残余（已是 NC-73）：
+
+| 项 | 所有权 / 调用链 | 实际执行与结果 | 结论 |
+| --- | --- | --- | --- |
+| generate 输入快照不跳过 `.dev/` / WAL | `skippedProjectDirectory`（`generate.go`）→ `copyProject` / `snapshotProjectInputs`；`planStagedProjectCommit` 对真实工程另有名单（`project.go`） | 替身 `go mod tidy` 与 sync 钩子扮演写日志 / WAL 的进程：generate、sync 都报 inputs changed；只改快照不改提交计划时运行期文件被当成退役生成物删除（负对照） | [NC-74](../bug/RR-20261005-NC-74.md) 已修 |
+| 运行时不查 `required` | tablegen 规则只在 CSV 转换时查；生成的 `RegisterTable` 无校验；`-check` 只验语法 | 新运行期门：ref 悬空 reload 被接受；`-check` 6 种违规全放过 | [NC-75](../bug/RR-20261005-NC-75.md)：ref 与 `-check` 已修；运行时 required 存在性需选 A（configdata 新 API + 发版升下限）或 B（二次读原始 JSON） |
+
+方向判断补充：tablegen 的“规则在 CSV 时查、loader 不查、`-check` 不查”与 cfggen（运行时查 ref / required）是两套口径；N07 第二批 NC-64 又把运维热更路径指向直接改 JSON。建议维护者统一“配置规则在哪一层强制”：要么 configdata 承担（cfggen 已是），tablegen 生成同一套声明；要么明确运维只能经 CSV + generate。

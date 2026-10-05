@@ -1,0 +1,8 @@
+table go: <scratch>/tablegen-runtime.Vqcjk9/configs/generated/gen_table_config.go
+--- PASS: TestGeneratedLoaderReadsTheTables (0.00s)
+--- PASS: TestDanglingRefIsRejectedOnLoadAndReload (0.00s)
+    --- PASS: TestDanglingRefIsRejectedOnLoadAndReload/monster_points_at_no_scene (0.00s)
+    --- PASS: TestDanglingRefIsRejectedOnLoadAndReload/the_scene_it_points_at_is_removed (0.00s)
+PASS
+ok  	tablegenruntime/configs/generated	1.706s
+exit=0

@@ -17,6 +17,9 @@
 | `cfggen-head-roundtrip/` | 当前 core（`replace` 到 worktree）上的往返探针：meta、数据与测试（`rt_test.go.txt`，改名避免被本仓编译）；9 叶子 `-race -count=3` 通过 |
 | `nc73-red.txt` / `nc73-green.txt` | `TestIDToolsSeeErrcodeDefinitionsTheWayTheGeneratorDoes` 修前三处红 / 修后与既有 ID 用例一起绿 |
 | `cli-id-errcode.txt` | 正式 CLI：别名导入定义被漏、注释被计入（修前）与修后结果 |
+| `nc74-red.txt` / `nc74-negative.txt` / `nc74-green.txt` | `TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput` 修前红 / 只改快照不改提交计划时运行期文件被删 / 修后绿 |
+| `nc75-gate-red.txt` / `nc75-gate-green.txt` | `codegen/scripts/tablegen-runtime.sh`（pin v1.20.0）修前悬空 ref 两种情形 reload 被接受 / 修后 `-race` 绿 |
+| `nc75-check-red.txt` | `TestCheckJSONEnforcesTheDeclaredRules` 修前 6 子测试红 |
 | `shellcheck-game-demo.txt` | `shellcheck 0.11.0 -s sh` 对生成 game-demo 的 9 个脚本：仅 1 条 note SC2086（有意拆分） |
 
 ## 主要命令与结果

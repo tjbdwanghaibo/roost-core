@@ -56,7 +56,7 @@
 新增正式回归：bus 7（NC-90 3、NC-91 2、NC-92 2）、etcd/driver 2，integration 4（kit/nats 2、etcd/driver 2），均修前红 → 修后绿。改动包 race×3、integration race、全仓 build/vet、根包、18 个依赖包测试通过。N03 本单元的真实依赖场景收口；多节点 NATS / etcd HA、长时容量仍为外部项。方向判断（Bus 停止 / 排空、etcd 选主）见本轮末节。
 ## 2026-10-05 N08 codegen（revn08，macOS）
 
-起点 `50e9a4e8`，交付前快进到 `be7bcc18`；独立 worktree 分支 `revn08`。cb11be90 的重发信号 / 进程树补修直接复用未重审；`add saga` 生成部分与赠礼 demo 步骤属 U-0280，未读改。[本轮](REVIEW-2026-10-05-n08-codegen.md) · [证据](evidence/noncore-review-20261005-n08/README.md)。NC-70～73 四个 P3 已修复、声明场景验证，未发版。
+起点 `50e9a4e8`，交付前快进到 `be7bcc18`；独立 worktree 分支 `revn08`。cb11be90 的重发信号 / 进程树补修直接复用未重审；`add saga` 生成部分与赠礼 demo 步骤属 U-0280，未读改。[本轮](REVIEW-2026-10-05-n08-codegen.md) · [证据](evidence/noncore-review-20261005-n08/README.md)。NC-70～74 五个 P3 与 NC-75 P2 已修复、声明场景验证，未发版（NC-75 运行时 required 待决定）。
 
 | 项 | 本轮 | 状态/边界 |
 | --- | --- | --- |
@@ -66,6 +66,7 @@
 | Unix 信号/进程树 | macOS 单独 race×3 21/21 | Windows taskkill 路径仍只 vet |
 | 10 具名环境 skip、shell 部署/rollback | 9 条实跑通过（含真实 docker compose config、四条 shell）；shellcheck 9 脚本 1 note | 第 10 条为过期常量门（O1），翻转后 2/2 通过但未提交（联网） |
 | N07 移交：roost id 错误码 AST 化 | NC-73 已修 | protocol/entity 标记 ID 未改 |
+| N07 第二批移交：dev-run 期间 generate、运行时 required | NC-74 已修；NC-75 ref 与 `-check` 已修，tablegen 运行期门入 CI | 运行时 required 存在性待维护者选 A/B |
 
 方向判断：“同级暂存树 + 外部 go 进程 + 信号”近期第四次出缺陷（RR-20261004-12/13、cb11be90、NC-70），建议下次改为 CLI 入口统一接管信号转 ctx 取消（详见本轮记录）。N08 仍**场景部分完成**：真实 systemd/k8s 部署、Windows 进程树、离线代理、强杀/磁盘故障未做。不等待 GitHub CI，不发版。
 

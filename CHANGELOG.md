@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **tablegen 的 `ref:"<table>"` 由生成的 loader 在每次加载 / reload 时检查**（RR-20261005-NC-75，行为收紧）：此前 ref 只被写进 CSV 规则行、在哪里都不检查，悬空引用的配置能加载上线。现在非零值必须是目标表主键，目标须是同一 schema 的表、字段类型等于其主键类型，否则 `roost generate` 失败；`tablegen -json <dir> -check` 也按 schema 的 required / unique / min 校验 JSON（此前只验语法），直接改 `configs/data` 后 reload 前可用它把关。运行时仍不检查 required 列是否出现（待决定）。[记录](docs/bugfix/RR-20261005-NC-75.md)
+- **`make dev-run` 运行期间 `roost generate` / `project sync` 不再报 inputs changed**（RR-20261005-NC-74）：`.dev/`（dev-run 日志）与默认 WAL 目录 `data/wal` 不再算应用输入、不再复制进暂存树；复制、输入快照与提交计划共用同一条工程边界。[记录](docs/bugfix/RR-20261005-NC-74.md)
 - **ai Controller 冻结期间不再丢弃结束通知**（RR-20261005-NC-120）：`Freeze` 只暂停 Tick；动作 / 任务结束照常交给策略。此前通知被丢，BehaviorStrategy 里等该动作的 TaskflowAction 叶子在 Recover 后永远 Running。[记录](docs/bugfix/RR-20261005-NC-120.md)
 - **actionflow 丢弃排队动作时发 OnEnded，启动失败的 Cancel 重入不再留下孤儿**（RR-20261005-NC-121 / NC-122）：`ClearQueue` / `EndAll` / `ClearMission` 为每个被丢弃的排队项发一次取消状态的 OnEnded（不调 Cancel、不发切换）；启动失败后 Cancel 里重入装上的动作留在当前位，外层返回 `ErrReentrantMutation`。[记录](docs/bugfix/RR-20261005-NC-121.md) · [NC-122](docs/bugfix/RR-20261005-NC-122.md)
 - **hotcode 补丁点状态整体发布**（RR-20261005-NC-123）：当前函数、Meta、代数合成一个不可变状态原子替换，写者按点串行。此前并发 Replace / Revert 可永久留下 Patched 与 Meta 互相矛盾的点，`hotcode.list` 误报。[记录](docs/bugfix/RR-20261005-NC-123.md)

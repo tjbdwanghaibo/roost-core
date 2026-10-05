@@ -469,6 +469,8 @@ go run .../cmd/tablegen@latest \
   -meta ./configs/schema -json ./configs/data -check
 ```
 
+`-check` 按 schema 规则校验 JSON：required 列必须出现且不为 null，unique / 主键不重复，min 不越界（与 CSV 转换同一套规则）；直接改 `configs/data` 后、reload 之前跑它（RR-20261005-NC-75）。`ref:"<table>"` 由生成的 loader 在每次加载 / reload 时检查：非零值必须是目标表的主键，目标必须是同一 schema 里的表、字段类型等于它的主键类型，否则生成失败。运行时不检查 required 是否出现（configdata 分不清缺列与零值）。
+
 CSV 前四行依次为字段名、标题、类型和规则；转换会校验 required、数字格式等并生成 `_manifest.json`。`cfggen` 适合 YAML schema 单一来源，`tablegen` 适合已有 Go 类型和策划 CSV 流程，两者通常二选一。
 
 ### 9.1 `_manifest.json` 与 JSON 退役

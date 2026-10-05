@@ -270,7 +270,7 @@ tables:
 		Name: "tablegen", Aliases: []string{"table", "csv"},
 		Summary:       "从 Go metadata 生成配置类型、CSV 模板并转换/校验 JSON",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen@latest -meta ./configs/schema [-out dir] [-csv-template dir] [-csv dir -json dir] [-check] [-force]`,
-		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title/required/unique/ref tag 描述。`,
+		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title/required/unique/min/ref tag 描述：required/unique/min 在 CSV 转 JSON 时检查，ref 由生成的 loader 在每次加载 / reload 时检查（非零值必须是目标表的主键）。直接改 configs/data 下的 JSON 后，reload 前先跑 -json ./configs/data -check，它按同一套规则校验 JSON。`,
 		Example: `//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
     ID   int32  ` + "`csv:\"id\" json:\"id\" required:\"true\" unique:\"true\"`" + `

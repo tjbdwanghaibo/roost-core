@@ -1,0 +1,5 @@
+--- PASS: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput (2.34s)
+    --- PASS: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/generate_while_dev-run_writes_logs_and_WAL (1.18s)
+    --- PASS: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/sync_while_dev-run_writes_logs_and_WAL (0.35s)
+    --- PASS: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/an_application_input_edited_during_generate_is_still_refused (0.82s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	3.053s
