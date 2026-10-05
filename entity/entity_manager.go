@@ -329,15 +329,19 @@ func (m *EntityManager) Len() int {
 }
 
 // Range iterates all entities across all buckets. Return false from fn to stop early.
+//
+// 遍历按桶快照进行、回调在桶锁外（RR-20261005-NC-180），fn 里可以 Add / Destroy。
+// 交给 fn 的实体在 fn 返回前持有引用（Touch），并发或 fn 自己的 Destroy 把清理
+// 推迟到引用归还，fn 读到的 ID / 分类 / 种类始终有效；遍历到达前已被摘除的实体
+// 不交出。实体仍可能在 fn 期间被摘除：要改它，照常在实体锁内复核 IsRemoved。
 func (m *EntityManager) Range(fn func(IThreadSafeEntity) bool) {
-	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool {
-		return fn(e)
-	})
+	m.rangeHeld(fn)
 }
 
-// RangeByCategory iterates entities of a specific category.
+// RangeByCategory iterates entities of a specific category, with the same
+// snapshot and reference rules as Range.
 func (m *EntityManager) RangeByCategory(category EntityCategory, fn func(IThreadSafeEntity) bool) {
-	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool {
+	m.rangeHeld(func(e IThreadSafeEntity) bool {
 		if e.GetEntityCategory() == category {
 			return fn(e)
 		}
@@ -348,13 +352,28 @@ func (m *EntityManager) RangeByCategory(category EntityCategory, fn func(IThread
 // CountByCategory returns the number of entities of a specific category.
 func (m *EntityManager) CountByCategory(category EntityCategory) int {
 	count := 0
-	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool {
+	m.rangeHeld(func(e IThreadSafeEntity) bool {
 		if e.GetEntityCategory() == category {
 			count++
 		}
 		return true
 	})
 	return count
+}
+
+// rangeHeld 遍历桶快照，对每个实体先 Touch 再调用 fn、返回后 UnTouch。
+//
+// 桶快照在锁外回调，快照里的实体可能已被 Destroy 摘除、甚至已被 doClear 清零；
+// Touch 失败（已摘除）就跳过。持有引用期间 Destroy 的 ClearBase 不会清理，
+// 最后一个 UnTouch 才清理——与 nest 分发持有实体引用是同一协议。
+func (m *EntityManager) rangeHeld(fn func(IThreadSafeEntity) bool) {
+	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool {
+		if e == nil || !e.Touch() {
+			return true
+		}
+		defer e.UnTouch()
+		return fn(e)
+	})
 }
 
 func (m *EntityManager) addGroupIndexLockedByManager(e IThreadSafeEntity) {
