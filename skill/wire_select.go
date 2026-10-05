@@ -522,7 +522,10 @@ func decodeFilter(data []byte) (FilterDefinition, error) {
 		}
 		return OwnedEntityTagFilterDefinition{Tag: raw.Tag}, nil
 	case "status_id":
-		var raw struct{ Type, Status string }
+		var raw struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		}
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err
 		}
@@ -591,8 +594,9 @@ func decodeFilter(data []byte) (FilterDefinition, error) {
 		return StatusInstanceFilterDefinition{Type: raw.Type, Value: &value}, nil
 	case "status_stack_compare", "status_duration_compare":
 		var raw struct {
-			Type, Op string
-			Value    json.RawMessage `json:"value"`
+			Type  string          `json:"type"`
+			Op    string          `json:"op"`
+			Value json.RawMessage `json:"value"`
 		}
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err

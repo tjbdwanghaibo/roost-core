@@ -70,3 +70,19 @@
 1. 编译器其余 pass 的逐分支审（§4 列表），优先 `compile_motion.go` 后半、`compile_owned_entity.go`、`compile_status.go`，每个 pass 对照 Runtime 的执行点核对“编译接受 ⇒ 运行可执行”；
 2. `presentation_assets.go` / `presentation.go`、`observability.go`、`schema.go` 迁移图；
 3. 维护者决定 NC-151 方向 A（实现 phase timeout / recast）或保持 B，以及 O1 / O2 / O5 / O12 / O14 后回到对应子包。
+
+## 7. 修复与验证（审查提交之后追加）
+
+审查提交 `7a874663`（`docs(review)`）之后按授权修复，单独一笔 `fix(skill,skillcompose)`。每条一个修复单元：[NC-150](../bugfix/RR-20261005-NC-150.md)、[NC-151](../bugfix/RR-20261005-NC-151.md)、[NC-152](../bugfix/RR-20261005-NC-152.md)、[NC-153](../bugfix/RR-20261005-NC-153.md)、[NC-154](../bugfix/RR-20261005-NC-154.md)。NC-151 采用方向 B（编译期 fail-closed），方向 A（实现 phase 计时与 recast）留给维护者。
+
+| 命令（`GOWORK=off`，模块根） | 结果 |
+| --- | --- |
+| 新增 6 个正式用例文件修前：NC-150 10 子用例、NC-151 4 条、NC-152 6 子用例、NC-153 2 条、NC-154 3 子用例 | 全部 FAIL，原文见各修复记录 |
+| 同一组修前控制：`TestParseKeepsNameKeyedMapsAndCanonicalKeys`、`TestCompileAcceptsZeroTicks`、`TestVisualPlanCacheWaiterSeesRealLoadFailureAndOwnCancellation`、`TestGeneratedSkillDefinitionsCompileWithoutDiagnostics` | 修前修后都 ok |
+| 修后全部 | ok |
+| `gofmt -l skill` | 空 |
+| `go vet ./skill/... && go test -race -count=3 ./skill/...` | skill / combat / combatcomponent / skillcompose / skillsync 全部 ok |
+| `skill/examples`：`go build ./...`、`go run ./fireball`；`skill/integration/sync-e2e`：`go test -count=1 ./...` | 通过 |
+| `go build ./... && go vet ./...`；`go test -count=1 .`；`go test -count=1 ./codegen/internal/roost -run Skill` | 通过 |
+
+组合契约复核：NC-150 的新错误只经 `Parse` / `ParseGenerated` / `RuntimeValue.UnmarshalJSON` 返回——game-demo 的 CompileAll 把它当启动失败（本来就处理解析错误），checkpoint 恢复与 skillsync Applier 的 RuntimeValue JSON 由 Go `Marshal` 产生、字段名逐字一致（skillsync / combatcomponent / checkpoint 往返用例 race×3 通过）。NC-151 / 152 的新诊断走既有 CompileAll 分支；首次出现的 warning 进入 `Catalog.Diagnostics`，game-demo 机器人断言 `Warnings == 0`，生成的骨架与 fireball 均为 0（控制用例钉住）。NC-153 的重试只在别人的取消之后发生，失败条目本来就删除，plan 层用例断言释放后 asset 引用归零。测试辅助里 5 处依赖 `timeout_ticks` 豁免的 JSON 改为 `wait + finish` 结尾，`recast_combo.json` 删除（README / 实现指南的 fixture 数 37 → 36）。没有改生成形状（模板、生成器未动），未跑生成工程编译；外部依赖（Mongo / Redis / NATS）本批没有用到（v1.20.1 发版故障矩阵运行期间未触碰共享环境）。T-248。

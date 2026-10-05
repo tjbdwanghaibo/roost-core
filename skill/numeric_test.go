@@ -547,8 +547,8 @@ func numericProcessSkillJSON(process, callbackEffect string) string {
 		callback = `,"on":{"tick":{"flow":"effect","effect":` + callbackEffect + `}}`
 	}
 	effect := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{` + process + `}` + callback + `}`
-	result := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, effect, 1)
-	return strings.Replace(result, `"timeout_ticks":0`, `"timeout_ticks":10`, 1)
+	// enter 以 wait + finish 结束：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
+	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[`+effect+`,{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
 }
 
 func numericLinearProcess() string {

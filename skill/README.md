@@ -227,7 +227,7 @@ event tick=5 kind=tick_advanced entity=0
 
 ## 技能定义 JSON：权威参考的入口
 
-完整语法以代码为准：wire 层是封闭的（未知字段即解析错误），所以 [`skill/wire_*.go`](skill) 就是语法的穷举定义；[`skill/testdata/`](skill/testdata) 的 37 个 fixture 每个都是可独立编译运行的样例（弹道、光环、引导、蓄力、召唤物、被动 proc、时间回溯……），并被 `acceptance_test.go` 全量执行。施法语义详见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md)。
+完整语法以代码为准：wire 层是封闭的（未知字段即解析错误），所以 [`skill/wire_*.go`](skill) 就是语法的穷举定义；[`skill/testdata/`](skill/testdata) 的 36 个 fixture 每个都是可独立编译运行的样例（弹道、光环、引导、蓄力、召唤物、被动 proc、时间回溯……），并被 `acceptance_test.go` 全量执行。施法语义详见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md)。
 
 ### 顶层字段（[wire_definition.go](skill/wire_definition.go) / [parse.go](skill/parse.go)）
 
@@ -244,7 +244,7 @@ event tick=5 kind=tick_advanced entity=0
 | `costs` | `[{"resource": ..., "amount": ...}]`，amount 可为表达式；在 commit 时原子支付 |
 | `memory` | 施法内可变变量声明（类型 + 默认值） |
 | `persistent_state` | 跨施法持久状态声明 |
-| `initial_phase` / `phases` | 相位机；每个 phase 的 `on` 支持 `enter`/`recast`/`cancel`/`direction_changed`/`target_changed`/`timeout`/`release`/`pulse` 事件挂 flow |
+| `initial_phase` / `phases` | 相位机；每个 phase 的 `on` 支持 `enter`/`cancel`/`direction_changed`/`target_changed`/`release`/`pulse` 事件挂 flow（`recast`、`timeout` 能解析但 Runtime 没有派发点，编译期拒绝；`timeout_ticks` 不被执行，非零时给 warning，phase 只能以 finish / goto 结束，见 RR-20261005-NC-151） |
 
 ### cast_window 字段（[wire_cast_window.go](skill/wire_cast_window.go)）
 

@@ -22,15 +22,15 @@
 | [RR-20261005-NC-146](RR-20261005-NC-146.md) | P3 零值 OrderedIndex 丢写、nil 写入 panic | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-147](RR-20261005-NC-147.md) | P3 重入 Tick 提前结束外层推迟语义 | 已修复、声明场景验证，未发版 |
 
-**10-05 N09 skill 第三批（revn09c）：NC-150 P2、NC-151 P2、NC-152 P3、NC-153 P3、NC-154 P3，未修复。** 严格 Parse 被 encoding/json 大小写不敏感匹配绕过；phase 的 recast / timeout 事件与 `timeout_ticks` 只编译不执行、`timeout_ticks` 让 fallthrough 通过编译；tick 非负规则五处缺口；VisualPlanCache 共享加载用第一个调用者的 ctx；skillcompose 对空 / 重复 source 无诊断。[本轮](../review/REVIEW-2026-10-05-n09-batch3.md)。
+**10-05 N09 skill 第三批（revn09c）：NC-150 P2、NC-151 P2、NC-152 P3、NC-153 P3、NC-154 P3 已修复、声明场景验证，未发版。** 严格 Parse 被 encoding/json 大小写不敏感匹配绕过；phase 的 recast / timeout 事件与 `timeout_ticks` 只编译不执行、`timeout_ticks` 让 fallthrough 通过编译；tick 非负规则五处缺口；VisualPlanCache 共享加载用第一个调用者的 ctx；skillcompose 对空 / 重复 source 无诊断。[本轮](../review/REVIEW-2026-10-05-n09-batch3.md)。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-154](RR-20261005-NC-154.md) | P3 skillcompose ValidateCandidate 对空 / 重复 candidate source 判 invalid 却无诊断 | 已复现，未修复 |
-| [RR-20261005-NC-153](RR-20261005-NC-153.md) | P3 skill VisualPlanCache 共享加载用第一个调用者的 ctx，它取消后其他等待者也失败 | 已复现，未修复 |
-| [RR-20261005-NC-152](RR-20261005-NC-152.md) | P3 skill tick 非负校验缺口：cooldown / phase timeout / repeat interval / add_status 时长 / chain hop 间隔负值能编译，负 wait 定位到 `$` | 已复现，未修复 |
-| [RR-20261005-NC-151](RR-20261005-NC-151.md) | P2 skill phase 的 recast / timeout 事件与 `timeout_ticks` 只编译不执行，`timeout_ticks` 让 fallthrough 通过编译、tap 施法 ErrProgramInvariant | 已复现，未修复 |
-| [RR-20261005-NC-150](RR-20261005-NC-150.md) | P2 skill 严格 Parse 被大小写不敏感匹配绕过（`id` + `ID`、`Cooldown_Ticks`） | 已复现，未修复 |
+| [RR-20261005-NC-154](RR-20261005-NC-154.md) | P3 skillcompose ValidateCandidate 对空 / 重复 candidate source 判 invalid 却无诊断 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-153](RR-20261005-NC-153.md) | P3 skill VisualPlanCache 共享加载用第一个调用者的 ctx，它取消后其他等待者也失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-152](RR-20261005-NC-152.md) | P3 skill tick 非负校验缺口：cooldown / phase timeout / repeat interval / add_status 时长 / chain hop 间隔负值能编译，负 wait 定位到 `$` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-151](RR-20261005-NC-151.md) | P2 skill phase 的 recast / timeout 事件与 `timeout_ticks` 只编译不执行，`timeout_ticks` 让 fallthrough 通过编译、tap 施法 ErrProgramInvariant | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-150](RR-20261005-NC-150.md) | P2 skill 严格 Parse 被大小写不敏感匹配绕过（`id` + `ID`、`Cooldown_Ticks`） | 已修复、声明场景验证，未发版 |
 
 **10-05 N10 第一批（revn10）：NC-120 / NC-121 P2、NC-122 / NC-123 P3 已修复、声明场景验证，未发版。** ai Controller 冻结时丢结束通知、行为树 Recover 后永远 Running；actionflow 丢弃排队动作不发 OnEnded、启动失败的 Cancel 重入留下孤儿动作；hotcode 并发 Replace / Revert 留下 Patched 与 Meta 矛盾的补丁点。ai / actionflow 目前无生产使用方。[本轮](../review/REVIEW-2026-10-05-noncore-n10.md)（含方向判断）。
 

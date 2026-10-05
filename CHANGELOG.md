@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **skill 的编译器只接受 Runtime 真正会执行的形状**（RR-20261005-NC-150 / NC-151 / NC-152，行为收紧）：`Parse` 要求字段名逐字匹配（此前 `encoding/json` 的大小写不敏感匹配让 `"id"` 与 `"ID"` 同时被接受、后者生效，`"Cooldown_Ticks"` 被当作 `cooldown_ticks`）；phase 的 `on.recast` / `on.timeout` 编译期拒绝（Runtime 从不派发它们），enter 落空不再以 `timeout_ticks` 豁免（Runtime 没有 phase 计时，此前这类 tap 技能每次施法 `ErrProgramInvariant`），非零 `timeout_ticks` 给 warning；`cooldown_ticks`、phase `timeout_ticks`、wait、repeat `interval_ticks`、chain `hop_interval_ticks`、add_status `duration_ticks` 为负时按字段报错。带这些形状的定义在游戏服启动期 CompileAll 失败（错误带 JSON 路径）；删除了从未执行 recast 分支的 `recast_combo.json` fixture。[记录](docs/bugfix/RR-20261005-NC-150.md) · [NC-151](docs/bugfix/RR-20261005-NC-151.md) · [NC-152](docs/bugfix/RR-20261005-NC-152.md)
+- **VisualPlanCache 的共享加载不再把第一个调用者的取消传给其他等待者**（RR-20261005-NC-153）：创建者取消后，ctx 仍有效的等待者重新加载（plan 层与资产层），之前它们也拿到 `context.Canceled`。[记录](docs/bugfix/RR-20261005-NC-153.md)
+- **skillcompose.ValidateCandidate 对空 / 重复 source 给出 `PROVENANCE_MISMATCH` 诊断**（RR-20261005-NC-154）：之前报告 `Valid=false` 却没有诊断。[记录](docs/bugfix/RR-20261005-NC-154.md)
 - **Remote 快照共享 L2 的旧写与删除水位对所有节点生效**（RR-20261005-NC-130、RR-20260913-01 残余补修，行为收紧，L2 键格式增加字段）：`remoteSnapshotL2Store.Set` 在 CAS 落败（L2 已有更新版本 / 更新 epoch）时返回 `cache.ErrStaleWrite`（之前是 nil），`RemoteSnapshotCache.Publish` 不再把这份旧快照装进 L1，改取 L2 的较新值——L1 冷的节点收到迟到复制消息或权威加载输给新提交时不再读到比 L2 旧的版本。版本化删除在 L2 留下只含 `deleted_version`、与 `snapshot_l2_ttl` 同 TTL 的墓碑，任何节点写入不新于它的快照都被拒绝，更新的写（重建）清墓碑；之前另一节点的在途加载或迟到消息会把已删除实体写回 L2，冷节点读到它直到 L2 TTL。滚动升级期间旧节点仍可能写回（修复前行为），新节点的下一次删除会收敛。[NC-130](docs/bugfix/RR-20261005-NC-130.md) · [残余](docs/bugfix/RR-20260913-01.md)
 - **Remote Mod 健康检查不再被过期兴趣钉在 Fail**（RR-20261005-NC-131）：本机兴趣表满时 `Manager.Stats` 先清理过期条目再计数；之前一阵读取把 `snapshot_interest_keys` 读满后，空闲进程的健康一直报 `capacity exhausted`。[记录](docs/bugfix/RR-20261005-NC-131.md)
 

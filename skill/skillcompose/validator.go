@@ -24,7 +24,10 @@ func ValidateCandidate(contract SkillCompositionContract, candidate SkillProfile
 	gotSources := make(map[string]string, len(candidate.Sources))
 	for _, source := range candidate.Sources {
 		if source.SkillID == "" || source.GameplayDigest == "" || gotSources[source.SkillID] != "" {
+			// 每个拒绝都带诊断：被跳过的条目可能让去重后的集合恰好等于合同，
+			// 下面的集合比较就不会再报（RR-20261005-NC-154）。
 			report.Valid = false
+			report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "PROVENANCE_MISMATCH", Message: "candidate source is blank or duplicated"})
 			continue
 		}
 		gotSources[source.SkillID] = source.GameplayDigest

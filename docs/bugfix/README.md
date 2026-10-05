@@ -1,5 +1,15 @@
 # Bugfix 记录
 
+**10-05 N09 skill 第三批（revn09c）：NC-150～154 已修复、声明场景验证，未发版。** wire 层字段名逐字匹配；编译期拒绝 Runtime 不派发的 phase 事件、`timeout_ticks` 不再豁免 fallthrough（非零给 warning）；作者 tick 非负集中在 shape pass；VisualPlanCache 等待者不继承创建者的取消；skillcompose 每个拒绝带诊断。[本轮](../review/REVIEW-2026-10-05-n09-batch3.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-154](RR-20261005-NC-154.md) | 空 / 重复 candidate source 追加 `PROVENANCE_MISMATCH` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-153](RR-20261005-NC-153.md) | 条目记 `abandoned`，创建者取消时 ctx 有效的等待者重新加载（plan 层与资产层） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-152](RR-20261005-NC-152.md) | shape pass `requireNonNegativeAuthoredTicks`：cooldown / phase timeout / wait / repeat interval / chain hop / add_status 时长 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-151](RR-20261005-NC-151.md) | `requireDispatchedPhaseEvents`：recast / timeout 报 error、非零 timeout_ticks 报 warning、fallthrough 不再豁免；删 recast_combo fixture | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-150](RR-20261005-NC-150.md) | `decodeStrictSingle` 后 `requireExactFieldNames` 逐字核对键名；两个过滤器补 tag | 已修复、声明场景验证，未发版 |
+
 **v1.20.1 已发布（2026-10-05，tag → `be7407ab`）**：U-0279 / U-0280（含复审补修）/ U-0281、NC-100 / NC-101（含复审补修）、RR-20261005-01，以及截至 `be7407ab` 的非核心 review 修复（NC-50～52、60～65、70～75、80～83、90～93、100～102、110～117、120～123、140～147）随本版发布；`be7407ab` 之后提交的（如 N05 的 NC-130 / NC-131 / RR-20260913-01 残余）未发版。下方“未发版”指发布前状态。
 
 **10-05 N05 remoteentity mirror（revn05）：NC-130、NC-131 两个 P3 与 RR-20260913-01 残余已修复、声明场景验证（含真实 Redis / 自起 Redis Cluster），未发版。** L2 CAS 落败报 `cache.ErrStaleWrite`，Publish 改从 L2 取较新值装 L1；表满时 Stats 先清理过期兴趣；版本化删除在共享 L2 留与快照同 TTL 的墓碑。[本轮](../review/REVIEW-2026-10-05-n05-revn05.md) · [证据](evidence/noncore-bugfix-20261005-n05/README.md)

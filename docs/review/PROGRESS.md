@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N09 skill 第三批（Parse + Compile 拒绝路径、skillcompose、process、VisualPlanCache）
+
+基线 `45d4bc1c`（origin/main），分支 `revn09c`，NC 段 150～159（用 150～154）；图谱 generation 2026-09-30，本批文件之后无提交，runtime / scheduler 按当前源码补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch3.md) · [修复](../bugfix/RR-20261005-NC-150.md)。审查 `7a874663`；NC-150 / 151（P2）、NC-152～154（P3）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 数据/属性：启动链 | P1～P4：game-demo Init → CompileAll；`roost add skill` 骨架与 fireball；Parse 拒绝路径；Compile error 诊断 | NC-150 大小写绕过、NC-151 recast / timeout 只编译不执行、NC-152 tick 非负缺口；O13 Parse 路径前缀、O19 生成定义无编译测试（已补控制用例）、O20 checkpoint 的 phase_timeout |
+| 数据/属性：skillcompose | P5：15 文件全文 | NC-154；O14 因果图 / 来源校验是声明式 |
+| 执行/状态：process | P6～P8：area / motion / numeric | 无确认缺陷；O15 enter_count 恒 1、O16 reflect / pierce 计数语义、O17 numeric 快照与运动不同源 |
+| 同步/接入：表现 | P9：VisualPlanCache | NC-153；O18 取消不触发空闲淘汰 |
+
+6 个新正式用例文件 25 个修前红子用例 → 修后绿，4 条控制修前修后都绿；skill 5 包 race×3、examples / sync-e2e、build/vet、根包、codegen Skill 用例通过，不累计作覆盖率。N09 部分完成，不计 completed/15。方向判断：“同一事实多份规则”第三批仍在，这次是编译器接受集合与 Runtime 可执行集合各自维护（phase 事件、tick 符号、键名比较），建议事件派发表单一来源 + “编译通过 ⇒ 不出 ErrProgramInvariant”的性质测试。NC-151 方向 A（实现 phase 计时 / recast）与 O1 / O2 / O5 / O12 / O14 待维护者定。不等待 CI，不发版。
+
 ## 2026-10-05 N05 remoteentity mirror / ownerroute（revn05）
 
 基线 `a80be80c`，分支 `revn05`，NC 段 130～139（用 130、131）；图谱 generation 2026-09-30，10 个证据路径 metadata_changed 以当前源码补证。[本轮](REVIEW-2026-10-05-n05-revn05.md) · [审查证据](evidence/noncore-review-20261005-n05/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n05/README.md)。审查 `be2713ad`，修复 `6f06f0da` / `c3475150` / `366058a7`。

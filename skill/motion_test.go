@@ -1062,6 +1062,6 @@ func TestMotionValuesUseTypeAndMemoryValidation(t *testing.T) {
 }
 
 func motionSkillJSON(process string) string {
-	result := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{`+process+`}}`, 1)
-	return strings.Replace(result, `"timeout_ticks":0`, `"timeout_ticks":10`, 1)
+	// enter 以 wait + finish 结束：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
+	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{`+process+`}},{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
 }

@@ -123,7 +123,6 @@ func discoveredFixtureCases(t *testing.T) []fixtureCase {
 		"carry_dash.json":                 {input: CastInput{Caster: 1}, expectedCast: CastFinished},
 		"tracking_boomerang.json":         {input: CastInput{Caster: 1}, expectedCast: CastFinished},
 		"path_projectile.json":            {input: CastInput{Caster: 1, Path: []Position{{}, {X: 4}, {X: 8}}}, expectedCast: CastFinished},
-		"recast_combo.json":               {input: CastInput{Caster: 1, Target: 2}, expectedCast: CastFinished},
 		"beam.json":                       {input: CastInput{Caster: 1, Target: 2}, expectedCast: CastFinished},
 		"projectile_area.json":            {input: CastInput{Caster: 1}, expectedCast: CastFinished},
 		"heroic_swing.json":               {input: CastInput{Caster: 1, Target: 2}, expectedCast: CastFinished},

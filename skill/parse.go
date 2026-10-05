@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 const SchemaV2 = "roost.skill/v2"
@@ -173,6 +174,8 @@ func parseDefinition(data []byte) (*Definition, error) {
 	return &Definition{Schema: raw.Schema, ID: raw.ID, Name: raw.Name, Description: raw.Description, Presentation: raw.Presentation, GameplayTags: raw.GameplayTags, Activation: activation, InputSchema: inputSchema, CooldownTicks: *raw.CooldownTicks, GlobalCooldownTicks: raw.GlobalCooldownTicks, Costs: costs, Memory: memory, PersistentState: persistentState, InitialPhase: raw.InitialPhase, Phases: phases}, nil
 }
 
+// decodeStrictSingle 是 wire 层每个对象的唯一解码入口：拒绝未知字段、尾随数据，
+// 并要求结构体字段名逐字匹配（见 requireExactFieldNames）。
 func decodeStrictSingle(data []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -186,7 +189,11 @@ func decodeStrictSingle(data []byte, destination any) error {
 		}
 		return errors.New("multiple JSON values are not allowed")
 	}
-	return nil
+	// encoding/json 按大小写不敏感匹配字段：DisallowUnknownFields 放过 "ID"、
+	// "Cooldown_Ticks"，同一字段的大小写变体出现两次时后者静默覆盖前者，而
+	// 重复键扫描按字节比较看不出来（RR-20261005-NC-150）。解码成功后再按
+	// 目标类型逐字核对一遍键名。
+	return requireExactFieldNames(data, reflect.TypeOf(destination))
 }
 
 func decodeCosts(raw []json.RawMessage) ([]Cost, error) {

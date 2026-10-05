@@ -57,6 +57,10 @@ type visualCacheEntry struct {
 	catalogRevision string
 	catalogDigest   string
 	assetKeys       []string
+	// abandoned marks a load that failed because its creator's context ended,
+	// not because of the plan's content. Waiters whose own context is still
+	// live load again instead of inheriting that cancellation (NC-153).
+	abandoned bool
 }
 
 type visualAssetEntry struct {
@@ -66,6 +70,7 @@ type visualAssetEntry struct {
 	refs        int
 	fingerprint string
 	aliasKey    string
+	abandoned   bool // same meaning as visualCacheEntry.abandoned
 }
 
 type VisualPlanCache struct {
@@ -106,6 +111,12 @@ func NewVisualPlanCache(options VisualPlanCacheOptions) (*VisualPlanCache, error
 	return &VisualPlanCache{resolver: options.Resolver, trust: options.Trust, loader: options.Loader, requireTrust: options.RequireTrust, concurrency: options.PreloadConcurrency, maxIdle: options.MaxIdlePlans, entries: make(map[string]*visualCacheEntry), assets: make(map[string]*visualAssetEntry)}, nil
 }
 
+// Acquire returns a lease on plan, loading it once for all concurrent callers.
+// The first caller runs the shared load with its own ctx. If that load ends
+// only because the first caller's ctx ended, the entry is dropped and every
+// waiter whose ctx is still live retries (becoming the next loader), so one
+// caller's cancellation never decides another caller's result
+// (RR-20261005-NC-153). A waiter's own cancellation still returns at once.
 func (cache *VisualPlanCache) Acquire(ctx context.Context, plan PresentationPlan) (*VisualPlanLease, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -118,39 +129,48 @@ func (cache *VisualPlanCache) Acquire(ctx context.Context, plan PresentationPlan
 	if err != nil {
 		return nil, err
 	}
-	cache.mutex.Lock()
-	entry := cache.entries[digest]
-	if entry == nil {
-		entry = &visualCacheEntry{ready: make(chan struct{}), refs: 1, fingerprint: fingerprint, catalogRevision: plan.Manifest.CatalogRevision, catalogDigest: plan.Manifest.CatalogDigest}
-		cache.entries[digest] = entry
-		cache.mutex.Unlock()
-		cache.load(ctx, entry, plan)
-	} else {
-		if entry.fingerprint != fingerprint {
+	for {
+		cache.mutex.Lock()
+		entry := cache.entries[digest]
+		if entry == nil {
+			entry = &visualCacheEntry{ready: make(chan struct{}), refs: 1, fingerprint: fingerprint, catalogRevision: plan.Manifest.CatalogRevision, catalogDigest: plan.Manifest.CatalogDigest}
+			cache.entries[digest] = entry
 			cache.mutex.Unlock()
-			return nil, ErrVisualDigestCollision
+			cache.load(ctx, entry, plan)
+		} else {
+			if entry.fingerprint != fingerprint {
+				cache.mutex.Unlock()
+				return nil, ErrVisualDigestCollision
+			}
+			// Reserve before dropping the cache lock. A concurrent final Release
+			// cannot evict/unload the plan while this acquire waits on ready.
+			entry.refs++
+			cache.mutex.Unlock()
 		}
-		// Reserve before dropping the cache lock. A concurrent final Release
-		// cannot evict/unload the plan while this acquire waits on ready.
-		entry.refs++
+		select {
+		case <-entry.ready:
+		case <-ctx.Done():
+			cache.cancelAcquireReservation(digest, entry)
+			return nil, ctx.Err()
+		}
+		cache.mutex.Lock()
+		if entry.err != nil {
+			if entry.refs > 0 {
+				entry.refs--
+			}
+			retry := entry.abandoned && ctx.Err() == nil
+			err := entry.err
+			cache.mutex.Unlock()
+			if retry {
+				continue
+			}
+			return nil, err
+		}
+		entry.lastUsed = time.Now()
+		lease := &VisualPlanLease{cache: cache, digest: digest, resolved: cloneResolvedPlan(entry.resolved)}
 		cache.mutex.Unlock()
+		return lease, nil
 	}
-	select {
-	case <-entry.ready:
-	case <-ctx.Done():
-		cache.cancelAcquireReservation(digest, entry)
-		return nil, ctx.Err()
-	}
-	cache.mutex.Lock()
-	defer cache.mutex.Unlock()
-	if entry.err != nil {
-		if entry.refs > 0 {
-			entry.refs--
-		}
-		return nil, entry.err
-	}
-	entry.lastUsed = time.Now()
-	return &VisualPlanLease{cache: cache, digest: digest, resolved: cloneResolvedPlan(entry.resolved)}, nil
 }
 
 func (cache *VisualPlanCache) cancelAcquireReservation(digest string, entry *visualCacheEntry) {
@@ -181,6 +201,7 @@ func (cache *VisualPlanCache) load(ctx context.Context, entry *visualCacheEntry,
 	}
 	cache.mutex.Lock()
 	entry.resolved, entry.err, entry.lastUsed = resolved, err, time.Now()
+	entry.abandoned = err != nil && ctx.Err() != nil
 	close(entry.ready)
 	if err != nil {
 		delete(cache.entries, plan.Identity.PresentationDigest)
@@ -241,17 +262,29 @@ func drainAssetKeys(values <-chan string) []string {
 	return result
 }
 
+// acquireAsset shares one Preload per asset key the same way Acquire shares a
+// plan load: a waiter retries when the creator's load was abandoned by the
+// creator's context (its plan's ctx, or a sibling failure that cancelled it).
 func (cache *VisualPlanCache) acquireAsset(ctx context.Context, requested VisualAsset) (VisualAsset, string, error) {
 	fingerprint, err := visualAssetFingerprint(requested)
 	if err != nil {
 		return VisualAsset{}, "", err
 	}
+	for {
+		asset, key, retry, err := cache.acquireAssetOnce(ctx, requested, fingerprint)
+		if !retry {
+			return asset, key, err
+		}
+	}
+}
+
+func (cache *VisualPlanCache) acquireAssetOnce(ctx context.Context, requested VisualAsset, fingerprint string) (VisualAsset, string, bool, error) {
 	key := requested.Key
 	cache.mutex.Lock()
 	entry := cache.assets[key]
 	if entry != nil && entry.fingerprint != fingerprint {
 		cache.mutex.Unlock()
-		return VisualAsset{}, "", fmt.Errorf("%w: %s", ErrVisualAssetCollision, key)
+		return VisualAsset{}, "", false, fmt.Errorf("%w: %s", ErrVisualAssetCollision, key)
 	}
 	creator := entry == nil
 	if creator {
@@ -276,6 +309,7 @@ func (cache *VisualPlanCache) acquireAsset(ctx context.Context, requested Visual
 		}
 		cache.mutex.Lock()
 		entry.asset, entry.err = asset, loadErr
+		entry.abandoned = loadErr != nil && ctx.Err() != nil
 		if loadErr == nil {
 			entry.refs = 1
 		} else {
@@ -284,23 +318,23 @@ func (cache *VisualPlanCache) acquireAsset(ctx context.Context, requested Visual
 		close(entry.ready)
 		cache.mutex.Unlock()
 		if loadErr != nil {
-			return VisualAsset{}, "", fmt.Errorf("preload %q: %w", requested.Key, loadErr)
+			return VisualAsset{}, "", false, fmt.Errorf("preload %q: %w", requested.Key, loadErr)
 		}
-		return cloneVisualAsset(asset), key, nil
+		return cloneVisualAsset(asset), key, false, nil
 	}
 
 	select {
 	case <-entry.ready:
 	case <-ctx.Done():
-		return VisualAsset{}, "", ctx.Err()
+		return VisualAsset{}, "", false, ctx.Err()
 	}
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
 	if entry.err != nil {
-		return VisualAsset{}, "", entry.err
+		return VisualAsset{}, "", entry.abandoned && ctx.Err() == nil, entry.err
 	}
 	entry.refs++
-	return cloneVisualAsset(entry.asset), key, nil
+	return cloneVisualAsset(entry.asset), key, false, nil
 }
 
 func (lease *VisualPlanLease) Plan() ResolvedPresentationPlan {

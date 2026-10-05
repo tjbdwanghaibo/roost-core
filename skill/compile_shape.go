@@ -1,5 +1,7 @@
 package skill
 
+import "fmt"
+
 func runShapePass(context *compileContext) {
 	if context.artifacts.ir == nil {
 		context.addDiagnostic(DiagnosticShapeInvalid, "$", "normalized IR is required")
@@ -8,6 +10,7 @@ func runShapePass(context *compileContext) {
 	if context.artifacts.ir.globalCooldownTicks < 0 {
 		context.addDiagnostic(DiagnosticShapeInvalid, "$.global_cooldown_ticks", "global cooldown ticks must be non-negative")
 	}
+	requireNonNegativeAuthoredTicks(context)
 	activation := context.artifacts.ir.activation
 	if activation.kind == "active" {
 		window := activation.castWindow
@@ -94,4 +97,43 @@ func runShapePass(context *compileContext) {
 		}
 	})
 	context.artifacts.shape.checked = !context.hasErrors()
+}
+
+// requireNonNegativeAuthoredTicks 是“作者写的 tick 不能为负”在 shape pass 里的
+// 集中检查（RR-20261005-NC-152）。Tick 是 int64，wire 不限制符号；此前只有
+// global_cooldown、cast window、policy 等字段在这里检查，其余字段要么不检查
+// （负 cooldown 让冷却立即结束、负 repeat 间隔在运行时排到过去而
+// ErrProgramInvariant、负状态时长每次被 Host 拒绝），要么靠预算 pass 把负数
+// 饱和成 MaxInt64 后在 `$` 报一个误导的生命期超限。motion、process、numeric
+// track、状态生命期等字段仍由各自 pass 检查，这里只补没有检查的字段。
+func requireNonNegativeAuthoredTicks(context *compileContext) {
+	ir := context.artifacts.ir
+	if ir.cooldownTicks < 0 {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.cooldown_ticks", "cooldown_ticks must be non-negative")
+	}
+	for index, phase := range ir.phases {
+		if phase.timeoutTicks < 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, fmt.Sprintf("$.phases[%d].timeout_ticks", index), "timeout_ticks must be non-negative")
+		}
+	}
+	ir.walkFlows(func(flow flowIR) {
+		switch typed := flow.(type) {
+		case *waitFlowIR:
+			if typed.ticks < 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".ticks", "wait ticks must be non-negative")
+			}
+		case *repeatFlowIR:
+			if typed.intervalTicks < 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".interval_ticks", "repeat interval_ticks must be non-negative")
+			}
+		case *selectFlowIR:
+			if chain, ok := typed.selectPlan.shape.(*chainShapeIR); ok && chain.hopIntervalTicks < 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".select.shape.hop_interval_ticks", "chain hop_interval_ticks must be non-negative")
+			}
+		case *effectFlowIR:
+			if status, ok := typed.effect.(*addStatusEffectIR); ok && status.durationTicks < 0 {
+				context.addDiagnostic(DiagnosticShapeInvalid, status.source.Path+".duration_ticks", "status duration_ticks must be non-negative")
+			}
+		}
+	})
 }

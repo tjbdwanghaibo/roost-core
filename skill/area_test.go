@@ -212,7 +212,9 @@ func TestAreaCallbackFinishStopsRemainingSignals(t *testing.T) {
 	finish := `{"flow":"finish","reason":"area_complete"}`
 	command := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
 	flow := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":` + finish + `,"tick":` + command + `}}`
-	input := strings.Replace(strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1), `"timeout_ticks":0`, `"timeout_ticks":10`, 1)
+	// enter 以 wait + finish 兜底：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
+	flow = `{"flow":"sequence","steps":[` + flow + `,{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
+	input := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
 	program, diagnostics := Compile(mustParseJSON(t, input), DefaultCompileEnvironment())
 	requireNoErrors(t, diagnostics)
 
@@ -249,7 +251,7 @@ func TestAreaFinalLeaveFinishSuppressesTerminalCallback(t *testing.T) {
 	finish := `{"flow":"finish","reason":"area_complete"}`
 	command := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":1}},"on":{"leave":` + finish + `,"cancel":` + command + `}},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
-	input := strings.Replace(strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1), `"timeout_ticks":0`, `"timeout_ticks":10`, 1)
+	input := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
 	program, diagnostics := Compile(mustParseJSON(t, input), DefaultCompileEnvironment())
 	requireNoErrors(t, diagnostics)
 
@@ -373,7 +375,7 @@ func TestAreaBudget(t *testing.T) {
 func areaProcessSkillJSON(maxMembers int) string {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":2,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":` + intToDecimal(maxMembers) + `}},"on":{"enter":` + callback + `,"leave":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
-	return strings.Replace(strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1), `"timeout_ticks":0`, `"timeout_ticks":10`, 1)
+	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
 }
 
 func assertEntityIDs(t *testing.T, got, want []EntityID) {

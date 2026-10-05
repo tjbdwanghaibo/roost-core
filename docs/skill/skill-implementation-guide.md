@@ -182,7 +182,7 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 | Temporal/Result | `temporal_rewind`、`effect_result_kill_branch` | `compile_temporal.go`、`runtime_temporal.go`、`runtime_effect_result.go` |
 | Passive proc | `passive_counter`、`passive_proc_guard`、`ammo_on_kill` | `compile_proc.go`、`runtime_proc.go` |
 
-所有 37 个 fixture 位于 [testdata](../../skill/testdata)。
+所有 36 个 fixture 位于 [testdata](../../skill/testdata)。
 `acceptance_test.go` 使用目录发现机制：新增 JSON 若没有明确的输入、推进 tick、release
 或 passive 配置，测试会失败。因此 fixture 既是可运行示例，也是变更清单。
 

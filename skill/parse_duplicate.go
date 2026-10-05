@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
 )
 
 func rejectDuplicateKeys(data []byte) error {
@@ -120,4 +124,115 @@ func jsonObjectPath(path, key string) string {
 		return "$." + key
 	}
 	return path + "." + key
+}
+
+var jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()
+
+// exactFieldNames caches, per struct type, the canonical JSON name of every
+// field and the type its value decodes into.
+var exactFieldNames sync.Map // reflect.Type -> map[string]reflect.Type
+
+// requireExactFieldNames walks data along destination's type and rejects any
+// object key that names a struct field only case-insensitively. Duplicate keys
+// that differ only in case therefore fail too: at most one of them can be the
+// canonical spelling. Types with their own UnmarshalJSON (json.RawMessage,
+// SkillPresentation, VisualRef, RuntimeValue) are skipped because they decode
+// through decodeStrictSingle again; map keys are names chosen by the author
+// (memory, persistent_state, attribute_overrides…) and stay case-sensitive.
+// It runs after a successful strict Decode, so shape errors are already
+// reported and any re-decode failure here is unreachable.
+func requireExactFieldNames(data []byte, typ reflect.Type) error {
+	if typ == nil {
+		return nil
+	}
+	for typ.Kind() == reflect.Pointer {
+		if typ.Implements(jsonUnmarshalerType) {
+			return nil
+		}
+		typ = typ.Elem()
+	}
+	if typ.Implements(jsonUnmarshalerType) || reflect.PointerTo(typ).Implements(jsonUnmarshalerType) {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &object); err != nil {
+			return err
+		}
+		fields := structFieldNames(typ)
+		keys := make([]string, 0, len(object))
+		for key := range object {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fieldType, ok := fields[key]
+			if !ok {
+				return fmt.Errorf("json: unknown field %q (field names are case-sensitive)", key)
+			}
+			if err := requireExactFieldNames(object[key], fieldType); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if typ.Elem().Kind() == reflect.Uint8 {
+			return nil
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return err
+		}
+		for _, item := range items {
+			if err := requireExactFieldNames(item, typ.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &object); err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(object))
+		for key := range object {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := requireExactFieldNames(object[key], typ.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func structFieldNames(typ reflect.Type) map[string]reflect.Type {
+	if cached, ok := exactFieldNames.Load(typ); ok {
+		return cached.(map[string]reflect.Type)
+	}
+	fields := make(map[string]reflect.Type)
+	for _, field := range reflect.VisibleFields(typ) {
+		if !field.IsExported() {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if field.Anonymous && name == "" && field.Type.Kind() == reflect.Struct {
+			continue // promoted fields are listed by VisibleFields themselves
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+	exactFieldNames.Store(typ, fields)
+	return fields
 }
