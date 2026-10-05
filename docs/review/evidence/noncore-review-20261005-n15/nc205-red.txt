@@ -1,0 +1,7 @@
+pretag: framework release manifest names v1.99.0
+pretag: building with GOWORK=off
+pretag: vetting with GOWORK=off
+pretag: checking go.mod / go.sum are tidy
+pretag: testing with GOWORK=off
+pretag: example.com/pretagred@v1.99.0 is ready to tag
+pretag exit=0

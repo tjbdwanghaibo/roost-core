@@ -1,0 +1,6 @@
+bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh fault nats-all exit=0  
+bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh down exit=0  
+bash <scratch>/wt-revn15/scripts/remote-fault.sh nats-all exit=0  
+bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh reset exit=0  [roost-it] removing <scratch>/n15-lock.pg25S9/roost-dataengin
+RESULT: lock dir (and root) REMOVED by reset while held
+bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh status exit=1  [roost-it] Mongo replica set is not ready [roost-it] NATS JetStream cluster is not ready [roost-it] redis=DOWN [roost-it] toxiproxy=absent

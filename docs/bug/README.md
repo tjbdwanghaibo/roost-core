@@ -1,5 +1,19 @@
 # Roost Review 问题索引
 
+**10-05 N15 scripts / cmd 与非 Go 资产（revn15）：NC-200（P2）与 NC-201～208（P3）已复现，未修复。** gapmap 收尾丢未提交修改；Cluster 套件脚本、toxiproxy pid、验收锁、toxic 用例全局 reset 让并行会话互相干扰共享隔离环境；glsvet / pretag / 故障矩阵三处门禁对没检查到的东西报通过；生成的 .gitignore 不忽略 WAL。[本轮](../review/REVIEW-2026-10-05-n15.md)（含方向判断）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-208](RR-20261005-NC-208.md) | P3 toxic 用例 POST /reset 清掉同一 toxiproxy 上别人的毒 | 已复现，未修复 |
+| [RR-20261005-NC-207](RR-20261005-NC-207.md) | P3 故障矩阵把 no tests to run 的格记为 PASS | 已复现（替身），未修复 |
+| [RR-20261005-NC-206](RR-20261005-NC-206.md) | P3 生成的 .gitignore 不忽略 data/wal | 已复现，未修复 |
+| [RR-20261005-NC-205](RR-20261005-NC-205.md) | P3 origin 不可达时 pretag 跳过远端同名 tag 检查 | 已复现，未修复 |
+| [RR-20261005-NC-204](RR-20261005-NC-204.md) | P3 glsvet 对不存在 / 解析失败的目录退出 0 | 已复现，未修复 |
+| [RR-20261005-NC-203](RR-20261005-NC-203.md) | P3 验收锁只有持锁者看，其他入口照常改环境，reset 连锁一起删 | 已复现，未修复 |
+| [RR-20261005-NC-202](RR-20261005-NC-202.md) | P3 toxiproxy pid 不校验所有权，down 杀掉复用该 pid 的进程 | 已复现，未修复 |
+| [RR-20261005-NC-201](RR-20261005-NC-201.md) | P3 redis-cluster-suites.sh 继承 ROOST_DATAENGINE_IT，把全环境故障套件跑到共享环境 | 已复现，未修复 |
+| [RR-20261005-NC-200](RR-20261005-NC-200.md) | P2 gapmap.sh 收尾 git checkout 丢掉运行前已有的未提交修改 | 已复现，未修复 |
+
 **10-05 N14 Kit 跨域装配（revn14）：登记 NC-190～194（三个 P2、两个 P3），未修复；NC-192 待维护者选方案。** 写错类型的配置值被 viper 静默读成零值（`singleton.enabled: on` 关掉单实例锁、不带单位的时长读成纳秒并通过校验、`redis.cluster_addrs` 列表退回本机单点）；Mongo 启动日志带口令；生产配置校验要求的九个开关无读取方；启动失败时 Service 组件未停完就拆 Mod、释放锁；无定义时大小写混写的 saga 步骤覆盖不生效。[本轮](../review/REVIEW-2026-10-05-n14.md)
 
 | 编号 | 问题 | 状态 |
@@ -398,7 +412,6 @@
 
 **最新第十轮：RR-33已修/原触发及声明场景已验；新[RR-34 P2 Pipeline先缺失后写错误却返回成功](REVIEW-2026-09-29-services-10.md)未实施。**[第八批修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-08.md) · [运行](../review/REVIEW-2026-09-29-services-10.md)。下方“RR-33未修”为历史时点。
 
-
 **最新第九轮：RR-31/32 2/2已修/声明场景验证；新[RR-33 P2 Mail Cluster多封页CROSSSLOT](REVIEW-2026-09-29-services-09.md)未实施。**[修复与升级](../bugfix/SERVICE-BUGFIX-2026-09-29-07.md) · [service阶段收口](../review/REVIEW-2026-09-29-services-09.md)。原8/8、新正式33叶子、最终17包909事件通过；新Mail反例/Pipeline候选有真实Cluster证据。下方为历史时点。
 
 **最新：第六批已关闭 RR-28/29/30 原触发，继续 review 新开两个 P2。**[RR-31 Activity Cluster 完成聚合但无 dispatch；RR-32 demo 购买 catalog 升级重试覆盖首次 grant](REVIEW-2026-09-29-services-08.md)，均未实施。[三项修复/兼容](../bugfix/SERVICE-BUGFIX-2026-09-29-06.md) · [第八轮运行](../review/REVIEW-2026-09-29-services-08.md)。原15/15转绿、新正式43叶子与17包826事件通过；新3控制通过/5反例失败属两个RR。下方为历史时点。
@@ -410,7 +423,6 @@
 **最新：09-29 Service 第五轮**，[问题与实施交接](REVIEW-2026-09-29-services-05.md)。RR-20260929-25 P2 Grouping 非法 Queue panic/伪成功；RR-20260929-26 P2 Rank 加法溢出落库；RR-20260929-27 P3 Chat 时钟偏移漏清理；旧 RR-20260914-02 P2 追加 Opening 回收晚确认的容量/扫描残余。四项均未实施，有可复跑反例。[阶段完成与未验证边界](../review/SERVICE-REVIEW-COMPLETION-2026-09-29.md)。下方历史“未修”以对应 review 时点理解。
 
 [第四批 service 修复](../bugfix/SERVICE-BUGFIX-2026-09-29-04.md)：RR-23/24 和旧 RR-20260910-02 删除残余已修，保留原反例与未验证边界。
-
 
 **09-29 Service 第四轮**：[问题与交接](REVIEW-2026-09-29-services-04.md)：**RR-20260929-23 P1** 外部发货未知错误清除 pending、允许再发货/结算；**RR-20260929-24 P3** Platform 回包切片共享（仅 Memory）。另补 **RR-20260910-02 P2** 未领取直接删除后重投复活，不另编号。均未修；[Memory/Redis 反例及对照](../review/evidence/service-review-20260929-04/README.md)。旧 RR-19～22 当前源码核对与现有回归通过，新反例独立登记。
 
@@ -808,7 +820,6 @@
 > [三仓合一仓：给 review 的交接](../feature/SINGLE_MODULE_MIGRATION.md)——它写明哪些东西只是位置变了、
 > 哪些**确实**改了行为、已经查过什么（重复逻辑、层次依赖已全仓扫过）、以及层次依赖该用哪个工具判定
 > （**不要用知识图谱**，它会把同名符号连成调用边）。
-
 
 09-22：维护者要求用本机真实环境把 CARRYOVER 里"没跑过的"跑起来。B1 / B3 / B5 跑了，B2 / B4 未做。新增 **1 个 P1、2 个 P2**——P1 那条**推翻了上一轮的一个闭环**：W-2026-09-20-02 的 3/16 缺 `pos_x` 不是 RR-20260920-06，U-0267 在位、零 subscribe 拒绝，症状照旧。[问题与实施方向](REVIEW-2026-09-22.md) · [独立复现](REPRO-2026-09-22.md)
 

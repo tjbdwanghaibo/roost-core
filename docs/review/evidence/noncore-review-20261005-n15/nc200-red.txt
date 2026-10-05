@@ -1,0 +1,6 @@
+gapmap exit=0
+NOTES.txt now: notes v1
+RESULT: uncommitted work LOST
+gapmap: tracked files left modified after sampling — a neutralized guard had a side effect; restoring:
+ M NOTES.txt
+gapmap: note — untracked files present (left alone):
