@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-05 N08 codegen（revn08）：NC-70 / NC-71 / NC-72 三个 P3 已复现，未修复。** 中断 go 命令窗口后暂存树（整份工程副本）留在工程旁；`project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；`roost help cfggen` 指向 tablegen 的输出目录。cfggen 运行期往返、旧工程显式 upgrade / 改名退役 / 失败回滚、Unix 信号用例与 9 条具名环境 skip 在 macOS 实跑通过。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-72](RR-20261005-NC-72.md) | P3 `roost help cfggen` 输出到 `configs/generated`，与 tablegen 同包重复声明 | 已复现，未修复 |
+| [RR-20261005-NC-71](RR-20261005-NC-71.md) | P3 `project diff` / `upgrade --dry-run` 漏列 sync 刷新的应用自有配置 | 已复现，未修复 |
+| [RR-20261005-NC-70](RR-20261005-NC-70.md) | P3 Ctrl-C 打断 go 命令后 `.roost-deps-*` / `.roost-generate-*` 残留 | 已复现，未修复 |
+
 **10-05 N07第二批：NC-65 P2与NC-64 P3已修复、声明场景验证，未发版。** 生成game-demo起global+game真实进程经`gm.config.reload`热更：成功/四种失败/rollback与flags、scene refresh读取符合契约；handler内两次读不跨代（新增控制用例，含判别反例）。确认的两条在模板层：玩家加载后Gear层与attr_final没重建（NC-65）、开关热更说明指向CSV照做无效（NC-64）。[本轮](../review/REVIEW-2026-10-05-noncore-n07b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。
 
 | 编号 | 问题 | 状态 |

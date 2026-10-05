@@ -1,0 +1,27 @@
+package: cfg
+groups:
+  names: [c, s]
+  target: [s]
+tables:
+  - name: monster
+    key: id
+    fields:
+      - { name: id,        type: int32 }
+      - { name: scene_id,  type: uint64, index: true, skipempty: true }
+      - { name: drop_id,   type: int32,  ref: drop, required: true }
+      - { name: item_code, type: string, ref: item }
+      - { name: boss,      type: bool,   index: true, skipempty: true }
+      - { name: tag,       type: string, index: true }
+      - { name: icon,      type: string, group: c }
+  - name: item
+    key: code
+    fields:
+      - { name: code,  type: string }
+      - { name: kind,  type: string, index: true, skipempty: true }
+      - { name: rare,  type: bool,   index: rarity }
+      - { name: level, type: int64,  index: true }
+  - name: drop
+    key: id
+    fields:
+      - { name: id,     type: int32 }
+      - { name: weight, type: uint32, index: true }

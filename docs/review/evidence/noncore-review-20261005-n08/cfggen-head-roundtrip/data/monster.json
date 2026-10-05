@@ -1,0 +1,3 @@
+[{"id":1,"scene_id":18446744073709551615,"drop_id":10,"item_code":"sword","boss":true,"tag":"","icon":"a.png"},
+ {"id":2,"scene_id":0,"drop_id":20,"item_code":"","boss":false,"tag":"elite","icon":"b.png"},
+ {"id":3,"scene_id":7,"drop_id":10,"boss":false,"tag":""}]

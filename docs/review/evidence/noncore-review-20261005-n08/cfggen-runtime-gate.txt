@@ -1,0 +1,14 @@
+cfggen: wrote <scratch>/cfggen-golden-runtime.jeFmAm/cfg/cfg_gen.go (4 tables, 1 globals, 1 beans)
+=== RUN   TestGeneratedAccessorsReadTheDataOnDisk
+--- PASS: TestGeneratedAccessorsReadTheDataOnDisk (0.24s)
+=== RUN   TestDanglingRefIsRejectedAndTheLiveSnapshotSurvives
+--- PASS: TestDanglingRefIsRejectedAndTheLiveSnapshotSurvives (0.31s)
+=== RUN   TestRequiredFieldIsEnforcedByTheRuntime
+--- PASS: TestRequiredFieldIsEnforcedByTheRuntime (0.26s)
+=== RUN   TestReloadPublishesNewContent
+--- PASS: TestReloadPublishesNewContent (0.25s)
+=== RUN   TestIndexOptionsAndStringRefsRoundTrip
+--- PASS: TestIndexOptionsAndStringRefsRoundTrip (0.39s)
+PASS
+ok  	cfggenruntime/cfg	3.225s
+exit=0

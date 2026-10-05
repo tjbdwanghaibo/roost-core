@@ -1,0 +1,11 @@
+    diff_preview_promises_test.go:134: upgrade --dry-run previewed 11 files, the upgrade rewrote 14
+         missing from the preview: [configs/service/config.game.prod.example.yaml configs/service/config.game.yaml deploy/k8s/base/secret.game.example.yaml]
+         previewed but not rewritten: []
+    diff_preview_promises_test.go:93: project diff previewed 11 files, the sync rewrote 14
+         missing from the preview: [configs/service/config.game.prod.example.yaml configs/service/config.game.yaml deploy/k8s/base/secret.game.example.yaml]
+         previewed but not rewritten: []
+--- FAIL: TestUpgradeDryRunListsEveryFileTheUpgradeRewrites (5.27s)
+--- FAIL: TestProjectDiffListsEveryFileTheNextSyncRewrites (5.27s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	6.350s
+FAIL

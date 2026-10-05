@@ -1,0 +1,5 @@
+    cfggen_help_promises_test.go:54: roost generate after following roost help cfggen (-out ./configs/generated): generator registry: registry: example.com/planet/configs/generated.RegisterConfigData is marked twice (<tmp>:40 and <tmp>:34)
+--- FAIL: TestCfggenHelpUsageCoexistsWithTheProjectGenerators (2.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	2.942s
+FAIL
