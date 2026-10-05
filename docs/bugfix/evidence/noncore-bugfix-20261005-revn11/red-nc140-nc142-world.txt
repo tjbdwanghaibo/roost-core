@@ -1,0 +1,19 @@
+--- FAIL: TestTheTimerHeapRollsBackWithTheTransaction (0.00s)
+    --- FAIL: TestTheTimerHeapRollsBackWithTheTransaction/arm/the_commit_is_rejected (0.00s)
+        timer_rollback_test.go:49: rolled back, but the heap still holds node 1: every later arm is refused as a repeat and the stored World has no deadline
+    --- FAIL: TestTheTimerHeapRollsBackWithTheTransaction/tick/the_commit_is_rejected (0.00s)
+        timer_rollback_test.go:86: the rolled-back tick took the deadline out of the heap: its effect was rolled back too, so nothing reports the phase until a restart
+    --- FAIL: TestTheTimerHeapRollsBackWithTheTransaction/arm/a_later_step_fails (0.00s)
+        timer_rollback_test.go:49: rolled back, but the heap still holds node 1: every later arm is refused as a repeat and the stored World has no deadline
+    --- FAIL: TestTheTimerHeapRollsBackWithTheTransaction/tick/a_later_step_fails (0.00s)
+        timer_rollback_test.go:86: the rolled-back tick took the deadline out of the heap: its effect was rolled back too, so nothing reports the phase until a restart
+--- FAIL: TestAnOverdueDeadlineIsArmedAndFires (0.00s)
+    --- FAIL: TestAnOverdueDeadlineIsArmedAndFires/an_hour_late (0.00s)
+        timer_rollback_test.go:131: ScheduleActivityPhase reported armed with node id 0
+        timer_rollback_test.go:134: reported armed, but no node is pending: the window this deadline closes is never reported
+    --- FAIL: TestAnOverdueDeadlineIsArmedAndFires/due_this_instant (0.00s)
+        timer_rollback_test.go:131: ScheduleActivityPhase reported armed with node id 0
+        timer_rollback_test.go:134: reported armed, but no node is pending: the window this deadline closes is never reported
+FAIL
+FAIL	example.com/n11demo/game/entities/world	0.277s
+FAIL

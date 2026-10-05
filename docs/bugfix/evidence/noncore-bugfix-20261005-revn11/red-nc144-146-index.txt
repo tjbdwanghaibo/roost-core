@@ -1,0 +1,15 @@
+## TestUpsertAcceptsAValueThatIsNotEqualToItself
+--- FAIL: TestUpsertAcceptsAValueThatIsNotEqualToItself (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+panic({0x1047a62a8?, 0x1047e0f50?})
+FAIL	github.com/tjbdwanghaibo/roost-core/index	0.268s
+## TestDefaultOrderHandlesKeysOfDifferentDynamicTypes
+--- FAIL: TestDefaultOrderHandlesKeysOfDifferentDynamicTypes (0.00s)
+    index_promises_test.go:50: rotation 0: Query panicked: reflect: call of reflect.Value.Uint on string Value
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/index	0.269s
+## TestZeroOrderedIndexIsUsable
+--- FAIL: TestZeroOrderedIndexIsUsable (0.00s)
+    index_promises_test.go:86: Get after Upsert on a zero OrderedIndex = "", false
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/index	0.254s

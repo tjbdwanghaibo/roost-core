@@ -1,0 +1,8 @@
+--- FAIL: TestBlockRectsStayInsideBoundsAtTheInt64Edge (0.00s)
+    --- FAIL: TestBlockRectsStayInsideBoundsAtTheInt64Edge/upper_edge,_two_huge_blocks (0.00s)
+        block_index_promises_test.go:45: block 1 rect {Min:{X:4611686018427387904 Y:0} Max:{X:-9223372036854775808 Y:1}} is empty or inverted
+    --- FAIL: TestBlockRectsStayInsideBoundsAtTheInt64Edge/upper_edge_on_both_axes (0.00s)
+        block_index_promises_test.go:45: block 1 rect {Min:{X:4611686018427387905 Y:1} Max:{X:-9223372036854775807 Y:4611686018427387905}} is empty or inverted
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/spatial	0.484s
+FAIL
