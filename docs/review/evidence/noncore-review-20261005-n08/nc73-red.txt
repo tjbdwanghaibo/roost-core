@@ -1,0 +1,7 @@
+    id_errcode_scan_promises_test.go:48: roost id next errcode handed out 100000 again although ec.Define(100000, …) (aliased import) already uses it
+    id_errcode_scan_promises_test.go:55: roost id check with 100000 defined twice (aliased and plain import) = <nil>, want a duplicate
+    id_errcode_scan_promises_test.go:64: roost id check counted a comment / string as a definition: duplicate errcode id 100000: internal/errorsprobe/lookalike.go and internal/errorsprobe/lookalike.go
+--- FAIL: TestIDToolsSeeErrcodeDefinitionsTheWayTheGeneratorDoes (0.35s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.907s
+FAIL

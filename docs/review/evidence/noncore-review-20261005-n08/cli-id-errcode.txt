@@ -1,0 +1,18 @@
+# game-demo 副本，internal/errors 下加一份别名导入的定义：
+#   import ec "github.com/tjbdwanghaibo/roost-core/errcode"
+#   var ErrAliased = ec.Define(100000, "aliased", "aliased import")
+
+## 修前（id next / add / id check 用 50e9a4e8 构建，id.go 到 be7bcc18 未变；generate 一行用 be7bcc18 构建，含 NC-63 的 AST 生成器）
+$ roost id next errcode            -> 100000            (已被 ec.Define 占用)
+$ roost add errcode Probe          -> exit 0, internal/errors/probe.go: errcode.Define(100000, "probe", "TODO")
+$ roost id check                   -> IDs are valid
+$ roost generate                   -> exit 1: generator errcode: duplicate errcode 100000: internal/errors/aliased.go and internal/errors/probe.go
+# 另加只有注释的文件  // Old code kept for reference: errcode.Define(100003, "bag_full_old", "x")
+$ roost id check                   -> duplicate errcode id 100003: internal/errors/bag_full.go and internal/errors/commented.go
+
+## 修后
+$ roost id next errcode            -> 100022            (跳过 100000)
+$ roost add errcode Probe2         -> errcode.Define(100022, "probe2", "TODO")
+# 注释文件 // errcode.Define(100003, "old", "x") 在场
+$ roost id check                   -> IDs are valid
+$ roost generate                   -> exit 0

@@ -13,8 +13,9 @@
 | [RR-20261005-NC-70](../bug/RR-20261005-NC-70.md) | P3 | go 命令窗口被 Ctrl-C / SIGTERM / SIGHUP 打断后，`.roost-deps-*` / `.roost-generate-*` 整份工程副本留在工程父目录 | 已复现 |
 | [RR-20261005-NC-71](../bug/RR-20261005-NC-71.md) | P3 | `project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；生成文档与 help 称 sync / upgrade 不改配置 | 已复现 |
 | [RR-20261005-NC-72](../bug/RR-20261005-NC-72.md) | P3 | `roost help cfggen` 让输出落到 tablegen 的 `configs/generated`，照做即重复声明、`roost generate` 失败 | 已复现 |
+| [RR-20261005-NC-73](../bug/RR-20261005-NC-73.md) | P3 | `roost id` / `roost add errcode` 用正则找错误码：别名导入的定义被漏掉（分配到已占用的码）、注释里的文字被算成占用（误报重复）；NC-63 交给 N08 的残余 | 已复现 |
 
-三条都是 codegen 工具链的可用性 / 文档缺陷，没有发现会损坏工程或生成错误运行时行为的问题。
+四条都是 codegen 工具链的可用性 / 文档缺陷，没有发现会损坏工程或生成错误运行时行为的问题。
 
 ## 已核对项
 
@@ -28,6 +29,7 @@
 | 失败回滚 | 生成器失败：`commitManifestSyncResult` 回滚 manifest；deps 失败：`rollbackDependencyUpdate` 恢复暂存树 go.mod/go.sum，不提交 | (R1) 加一个语法错误的 DAO 定义后 upgrade：退出 1，`roost.yaml` 回到 v1.18.0，工程零改动，无暂存残留。(R2) PATH 上放失败的 go 后 upgrade：退出 1，“project upgraded but framework resolution failed”，manifest 与模板已升级、go.mod 未变；随后 `roost project deps` 收敛，build 通过 | 同上 |
 | 依赖整理 | `updateFrameworkDependenciesTransactional`（`dependencies.go:31-80`）：暂存树里 consolidation + `go get` + `go mod tidy`，只提交迁移产物与 go.mod/go.sum，提交前核对应用输入 | 上面两次 upgrade 与 R2 恢复；`go get` 超时 5 分钟走错误路径时暂存树被删（对照） | 同上 |
 | 取消与暂存树清理 | `runCommandTree`（`command_tree.go`）接住中断、杀树、重发信号；暂存树只靠 defer | 正式 CLI 上 deps / generate / sync / upgrade / new 五条命令在 go 命令窗口收到 SIGINT：都死于 SIGINT、go 子树不在，但暂存树全部残留 → NC-70 | 同上 |
+| ID 工具与 errcode 生成器（N07 移交） | `id.go:15` 正则 → `ScanIDs` → `NextID` / `CheckIDs` / `add.go` 显式冲突检查；生成器 `codegen/internal/errcode/main.go` AST 扫描（NC-63） | game-demo 副本上别名导入定义被漏掉、注释被计入 → NC-73 | [CLI](evidence/noncore-review-20261005-n08/cli-id-errcode.txt) |
 | Unix 信号 / 进程树用例 | `go_command_tree_promises_test.go`、`generator_cwd_promises_test.go`（`//go:build unix`，Windows 跑不到） | macOS 单独 `-race -count=3`：7 用例 21 次全部通过（doctor 超时两条、deps 取消两条、Ctrl-C 一条、生成器 cwd 两条） | 同上 |
 | 10 个具名环境 skip | 记录：`docs/bugfix/evidence/noncore-bugfix-20261005-14/codegen-summary.json` | macOS 全 codegen 树：9 条实际执行通过（core-pin 脚本、dev-run 三叶子、compose 形状检查（真实 docker compose config）、shell rollback / release switch 四条）。第 10 条 `TestDoctorPlayerTCPPassesAfterAuthAndConfig` 不是环境 skip，是编译期常量门（见观察 O1） | 同上 |
 | shell 部署 / rollback | 生成的 `deploy/shell/{install,rollback,build,healthcheck}.sh`、`deploy/dev`、`deploy/docker`、`deploy/k8s` 脚本 | 四条 shell 用例在真实 sh / mv / install 下通过；`shellcheck -s sh` 对 game-demo 全部 9 个脚本：1 条 note SC2086（`run.sh` 有意按空白拆分 `$SERVICES`），无 warning / error | 同上 |
