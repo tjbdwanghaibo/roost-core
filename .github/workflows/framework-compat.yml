@@ -257,3 +257,28 @@ jobs:
         if: always() && (matrix.scenario == 'full' || matrix.scenario == 'demo')
         working-directory: ${{ runner.temp }}/planet
         run: docker compose -f deploy/dev/docker-compose.yaml down -v || true
+
+  # 维护者决定 C9：codegen 里有两条用例要从模块代理解析已发布的框架——事务 generate 跑
+  # go mod tidy、doctor 用解析到的版本编译生成工程（GOWORK=off）。默认 go test 不联网，由
+  # ROOST_NETWORK_TESTS=1 打开；这个 lane 本来就从 proxy 解析依赖，所以在这里打开。
+  # 设了变量还 SKIP 就算失败：门开了却没跑，和没有这条 lane 一样。根包
+  # TestNetworkCodegenTestsRunInSomeWorkflow 钉住变量与用例名。
+  codegen-network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: codegen tests that resolve the published framework
+        env:
+          GOWORK: "off"
+          ROOST_NETWORK_TESTS: "1"
+        run: |
+          go test -count=1 -v -run '^(TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint|TestDoctorPlayerTCPPassesAfterAuthAndConfig)$' ./codegen/internal/roost/ 2>&1 | tee network-tests.log
+          if grep -q -- '--- SKIP' network-tests.log; then
+            echo "::error::a network codegen test skipped although ROOST_NETWORK_TESTS=1"
+            exit 1
+          fi

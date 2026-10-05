@@ -8,9 +8,10 @@ import (
 	"strconv"
 )
 
-// treeInterruptSignals is empty on Windows: the command stays in roost's
-// console process group, so Ctrl-C reaches it and its children directly.
-var treeInterruptSignals []os.Signal
+// interruptSignals is empty on Windows: the command stays in roost's console
+// process group, so Ctrl-C reaches it and its children directly, and the CLI
+// entry does not take the signal over.
+var interruptSignals []os.Signal
 
 func startAsTree(*exec.Cmd) {}
 

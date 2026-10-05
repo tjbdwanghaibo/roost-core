@@ -15,7 +15,7 @@ func main() {
 		args = append([]string{"new"}, args...)
 	}
 	args = append([]string{"project"}, args...)
-	if err := roost.Run(args, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+	if err := roost.Main(args, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }

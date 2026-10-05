@@ -38,7 +38,7 @@ func TestFrameworkDependencyUpdateStagesAndCommitsOnlyModuleFiles(t *testing.T) 
 		}
 		return os.WriteFile(filepath.Join(stage, "go.sum"), []byte("checksum\n"), 0o644)
 	}
-	if err := updateFrameworkDependenciesTransactional(root, manifest, io.Discard, io.Discard, runner); err != nil {
+	if err := updateFrameworkDependenciesTransactional(context.Background(), root, manifest, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
 	goMod, err := os.ReadFile(filepath.Join(root, "go.mod"))
@@ -74,7 +74,7 @@ func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.
 		commands = append(commands, append([]string(nil), args...))
 		return nil
 	}
-	if err := updateFrameworkDependencies(root, manifest, io.Discard, io.Discard, runner); err != nil {
+	if err := updateFrameworkDependencies(context.Background(), root, manifest, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
 	// One module since the consolidation: kit is a package path inside
@@ -107,7 +107,7 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		}
 		return nil
 	}
-	if err := updateFrameworkDependencies(root, manifest, io.Discard, io.Discard, runner); err != nil {
+	if err := updateFrameworkDependencies(context.Background(), root, manifest, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(get, " ")
@@ -142,7 +142,7 @@ func TestUpdateFrameworkDependenciesRollsBackModuleFiles(t *testing.T) {
 		}
 		return errors.New("registry unavailable")
 	}
-	err := updateFrameworkDependencies(root, DefaultManifest("planet", "example.com/planet", nil, nil, nil), io.Discard, io.Discard, runner)
+	err := updateFrameworkDependencies(context.Background(), root, DefaultManifest("planet", "example.com/planet", nil, nil, nil), io.Discard, io.Discard, runner)
 	if err == nil || !strings.Contains(err.Error(), "registry unavailable") {
 		t.Fatalf("expected resolver error, got %v", err)
 	}
@@ -160,7 +160,7 @@ func TestTidyProjectDependenciesDoesNotUpgradeFramework(t *testing.T) {
 		commands = append(commands, append([]string(nil), args...))
 		return nil
 	}
-	if err := tidyProjectDependencies(root, io.Discard, io.Discard, runner); err != nil {
+	if err := tidyProjectDependencies(context.Background(), root, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
 	want := [][]string{{"mod", "tidy"}}
@@ -189,7 +189,7 @@ func TestTidyProjectDependenciesRollsBackModuleFiles(t *testing.T) {
 		}
 		return errors.New("proxy unavailable")
 	}
-	err := tidyProjectDependencies(root, io.Discard, io.Discard, runner)
+	err := tidyProjectDependencies(context.Background(), root, io.Discard, io.Discard, runner)
 	if err == nil || !strings.Contains(err.Error(), "proxy unavailable") {
 		t.Fatalf("expected tidy error, got %v", err)
 	}

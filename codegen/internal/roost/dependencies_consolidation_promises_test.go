@@ -59,7 +59,7 @@ func TestFrameworkDependencyConsolidationCommitsOnlyPlannedMigration(t *testing.
 		}
 		return nil
 	}
-	if err := updateFrameworkDependenciesTransactional(root, manifest, io.Discard, io.Discard, runner); err != nil {
+	if err := updateFrameworkDependenciesTransactional(context.Background(), root, manifest, io.Discard, io.Discard, runner); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, filepath.Join(root, "business.go"), migratedSource)
@@ -95,7 +95,7 @@ func TestFrameworkDependencyConsolidationFailurePreservesInputs(t *testing.T) {
 				}
 				return nil
 			}
-			if err := updateFrameworkDependenciesTransactional(root, manifest, io.Discard, io.Discard, runner); err == nil {
+			if err := updateFrameworkDependenciesTransactional(context.Background(), root, manifest, io.Discard, io.Discard, runner); err == nil {
 				t.Fatal("expected failure")
 			}
 			for rel, before := range files {
@@ -119,7 +119,7 @@ func TestFrameworkDependencyConsolidationRejectsConcurrentInputChanges(t *testin
 				}
 				return nil
 			}
-			err := updateFrameworkDependenciesTransactional(root, manifest, io.Discard, io.Discard, runner)
+			err := updateFrameworkDependenciesTransactional(context.Background(), root, manifest, io.Discard, io.Discard, runner)
 			if err == nil || !strings.Contains(err.Error(), "changed") {
 				t.Fatalf("concurrent input not rejected: %v", err)
 			}

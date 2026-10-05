@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"go/format"
@@ -319,11 +320,13 @@ func restoreFilesIfCurrent(root string, backups, expected map[string]fileBackup,
 }
 
 func commitManifestSync(root string, manifestBefore []byte, manifest Manifest) error {
-	_, err := commitManifestSyncResult(root, manifestBefore, manifest)
+	_, err := commitManifestSyncResult(context.Background(), root, manifestBefore, manifest)
 	return err
 }
 
-func commitManifestSyncResult(root string, manifestBefore []byte, manifest Manifest) (SyncResult, error) {
+// commitManifestSyncResult writes manifest and syncs the project from it; when
+// the sync fails or ctx ends before its commit, the manifest is rolled back.
+func commitManifestSyncResult(ctx context.Context, root string, manifestBefore []byte, manifest Manifest) (SyncResult, error) {
 	manifestPath := filepath.Join(root, ManifestName)
 	manifestRaw, err := manifest.Marshal()
 	if err != nil {
@@ -336,7 +339,7 @@ func commitManifestSyncResult(root string, manifestBefore []byte, manifest Manif
 	if err := writeAtomic(manifestPath, manifestRaw, 0o644); err != nil {
 		return SyncResult{}, err
 	}
-	result, err := SyncProject(root)
+	result, err := SyncProjectContext(ctx, root)
 	if err != nil {
 		rollbackErr := rollbackSync([]syncChange{manifestChange})
 		if rollbackErr != nil {

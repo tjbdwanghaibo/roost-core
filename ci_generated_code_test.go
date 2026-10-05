@@ -21,10 +21,11 @@ import (
 
 // workflowStep is the part of a GitHub Actions step these checks read.
 type workflowStep struct {
-	Name            string `yaml:"name"`
-	Run             string `yaml:"run"`
-	If              string `yaml:"if"`
-	ContinueOnError any    `yaml:"continue-on-error"`
+	Name            string            `yaml:"name"`
+	Run             string            `yaml:"run"`
+	If              string            `yaml:"if"`
+	ContinueOnError any               `yaml:"continue-on-error"`
+	Env             map[string]string `yaml:"env"`
 }
 
 type workflowFile struct {
@@ -174,4 +175,43 @@ func TestEveryCodegenRuntimeGuardRunsInSomeWorkflow(t *testing.T) {
 			t.Errorf("no workflow step runs %s unconditionally; it is the only runtime proof of what the generator emits, and codegen's own tests only compare text (RR-20260921-05)", want)
 		}
 	}
+}
+
+// 维护者决定 C9：codegen 里要从模块代理解析已发布框架的用例由 ROOST_NETWORK_TESTS=1 打开，
+// 默认 go test 不联网。它们之前被一个早已过时的常量永久关掉，没有人发现；门开在 workflow 里，
+// 这条测试把“某个 workflow 步骤设了变量并点名跑这些用例”钉住，删掉那一步或改了用例名会在
+// 普通 go test 里红。
+func TestNetworkCodegenTestsRunInSomeWorkflow(t *testing.T) {
+	const gate = "ROOST_NETWORK_TESTS"
+	source, err := os.ReadFile(filepath.Join("codegen", "internal", "roost", "roost_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), `const networkTestsEnv = "`+gate+`"`) {
+		t.Fatalf("codegen/internal/roost/roost_test.go no longer gates its network tests on %s; update this test with the new gate", gate)
+	}
+	gated := []string{
+		"TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint",
+		"TestDoctorPlayerTCPPassesAfterAuthAndConfig",
+	}
+	for _, name := range gated {
+		if !strings.Contains(string(source), "func "+name+"(") {
+			t.Errorf("network-gated test %s no longer exists; update this test", name)
+		}
+	}
+	for _, ref := range workflowSteps(t, "*.yml") {
+		if !ref.unconditional() || ref.step.Env[gate] != "1" {
+			continue
+		}
+		missing := 0
+		for _, name := range gated {
+			if !strings.Contains(ref.step.Run, name) {
+				missing++
+			}
+		}
+		if missing == 0 && strings.Contains(ref.step.Run, "./codegen/internal/roost/") {
+			return
+		}
+	}
+	t.Errorf("no workflow step sets %s=1 and runs %s in ./codegen/internal/roost/ unconditionally; the default go test skips them, so nothing would ever run them", gate, strings.Join(gated, ", "))
 }

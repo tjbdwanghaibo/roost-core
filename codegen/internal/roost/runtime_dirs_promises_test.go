@@ -10,6 +10,7 @@ package roost
 // 输入在生成期间被改仍然拒绝提交。不能按目录名跳过 data（configs/data 是生成器的输出）。
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,7 +80,7 @@ func TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput(t *testing.T) {
 		root := copyOfNewProject(t, "configdata")
 		seedRuntimeOutput(t, root)
 		fakeTidyGo(t, "printf 'tick\\n' >> '"+filepath.Join(root, ".dev", "game.log")+"'; printf 'tick\\n' >> '"+filepath.Join(root, "data", "wal", "dataengine", "000001.wal")+"'")
-		if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
+		if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
 			t.Fatalf("generate while the project runs: %v", err)
 		}
 		assertRuntimeOutputKept(t, root)
@@ -98,7 +99,7 @@ func TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput(t *testing.T) {
 		root := copyOfNewProject(t, "configdata")
 		rel := "configs/service/config.game.yaml"
 		fakeTidyGo(t, "printf '# developer edit\\n' >> '"+filepath.Join(root, filepath.FromSlash(rel))+"'")
-		err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard)
+		err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), rel) {
 			t.Fatalf("generate with %s edited concurrently = %v, want the inputs-changed refusal", rel, err)
 		}

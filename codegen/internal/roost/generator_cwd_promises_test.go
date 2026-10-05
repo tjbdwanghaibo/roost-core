@@ -11,6 +11,7 @@ package roost
 // 本用例直接断言承诺本身（窗口内的子进程不在 root 里），任何平台都会红。
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -43,7 +44,7 @@ func TestGeneratorsDoNotMoveTheProcessIntoTheTreeTheyGenerate(t *testing.T) {
 		childGoMod = strings.TrimSpace(string(out))
 		return nil
 	}}
-	if err := runGenerators(root, DefaultManifest("planet", "example.com/planet", nil, nil, nil), []generator{probe}, GenerateOptions{Stdout: io.Discard}); err != nil {
+	if err := runGenerators(context.Background(), root, DefaultManifest("planet", "example.com/planet", nil, nil, nil), []generator{probe}, GenerateOptions{Stdout: io.Discard}); err != nil {
 		t.Fatal(err)
 	}
 	if !sameDir(t, generatorRoot, root) {

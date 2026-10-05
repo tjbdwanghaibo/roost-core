@@ -13,9 +13,13 @@ package roost
 // 承诺：中断照旧以该信号结束 roost、照旧不留 go 子树；被中断命令自己的暂存树在重发信号之前删除，
 // 工程本身不被改动。roost 由重新执行的本测试二进制扮演，PATH 上的替身 go 起长寿孙进程后等待，
 // 测试等替身报告后才发信号，没有按时间赛跑的步骤。
+//
+// B6（维护者决定，2026-10-06）之后信号由 CLI 入口 Main 统一接管：子进程经 Main 跑正式命令行，
+// 断言不变。其余阶段（复制、生成器、提交）见 interrupt_phases_promises_test.go。
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,12 +42,9 @@ func TestInterruptedCommandRemovesItsStagingTree(t *testing.T) {
 		var err error
 		switch command {
 		case "deps":
-			var manifest Manifest
-			if manifest, err = LoadManifest(root); err == nil {
-				err = UpdateFrameworkDependencies(root, manifest, io.Discard, io.Discard)
-			}
+			err = Main([]string{"project", "deps", "--root", root}, io.Discard, os.Stderr)
 		case "generate":
-			err = GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard)
+			err = Main([]string{"generate", "--root", root}, io.Discard, os.Stderr)
 		default:
 			err = fmt.Errorf("unknown child command %q", command)
 		}
@@ -158,9 +159,9 @@ func TestInterruptedCommandRemovesItsStagingTree(t *testing.T) {
 				if loadErr != nil {
 					t.Fatal(loadErr)
 				}
-				err = UpdateFrameworkDependencies(root, manifest, io.Discard, io.Discard)
+				err = UpdateFrameworkDependencies(context.Background(), root, manifest, io.Discard, io.Discard)
 			case "generate":
-				err = GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard)
+				err = GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard)
 			}
 			if err != nil {
 				t.Fatalf("rerun %s after the interrupt: %v", tc.command, err)

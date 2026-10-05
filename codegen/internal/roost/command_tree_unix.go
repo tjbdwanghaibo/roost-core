@@ -9,9 +9,9 @@ import (
 	"syscall"
 )
 
-// treeInterruptSignals are the terminal and supervisor signals that no longer
-// reach a command started in its own process group.
-var treeInterruptSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+// interruptSignals are the terminal and supervisor signals the CLI entry owns
+// (Main): a command started in its own process group no longer receives them.
+var interruptSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 
 // startAsTree puts the command in a new process group led by itself, so its
 // pid names the group its children inherit.

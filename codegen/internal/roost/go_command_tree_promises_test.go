@@ -250,7 +250,7 @@ func TestDoctorGoCommandTimeoutIsItsOwnDeadline(t *testing.T) {
 	started := time.Now()
 	go func() {
 		defer close(done)
-		item = runDoctorCommand(fake.binary, fake.dir, "compile:go-test", time.Second, "ok", "retry", "test", "./...")
+		item = runDoctorCommand(context.Background(), fake.binary, fake.dir, "compile:go-test", time.Second, "ok", "retry", "test", "./...")
 	}()
 	fake.awaitReturn(t, "runDoctorGoCommand", started.Add(time.Second), done)
 	if elapsed := time.Since(started); elapsed < time.Second {
@@ -340,10 +340,14 @@ const interruptChildEnv = "ROOST_TEST_COMMAND_TREE_INTERRUPT"
 // still kill roost (by the signal, as before) and now take go's tree with it,
 // or an interrupted `roost project deps` would leave `go get` running alone.
 // The signal is fatal by design, so roost is played by a re-exec of this test.
+// Since B6 the signal belongs to the CLI entry (runInterruptible, what Main
+// runs), which cancels the command's ctx and re-raises after it returns.
 func TestDependencyCommandInterruptKillsTheGoTreeAndStillKillsRoost(t *testing.T) {
 	if binary := os.Getenv(interruptChildEnv); binary != "" {
 		dir := os.Getenv(interruptChildEnv + "_DIR")
-		err := runDependencyBinary(context.Background(), binary, dir, io.Discard, io.Discard, "mod", "tidy")
+		err := runInterruptible(os.Stderr, func(ctx context.Context) error {
+			return runDependencyBinary(ctx, binary, dir, io.Discard, io.Discard, "mod", "tidy")
+		})
 		// Only reached if the re-raised signal did not end the process.
 		fmt.Fprintf(os.Stderr, "runDependencyBinary returned instead of dying of the signal: %v\n", err)
 		os.Exit(3)

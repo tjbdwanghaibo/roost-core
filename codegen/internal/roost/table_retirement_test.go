@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,11 +47,11 @@ func TestStagedProjectCommitAndCheckSeeTableJSONRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkGenerated(root, manifest, io.Discard); err == nil || !strings.Contains(err.Error(), "configs/data/monster.json") {
+	if err := checkGenerated(context.Background(), root, manifest, io.Discard); err == nil || !strings.Contains(err.Error(), "configs/data/monster.json") {
 		t.Fatalf("check missed retired JSON: %v", err)
 	}
 	stage := filepath.Join(t.TempDir(), "stage")
-	if err := copyProject(root, stage); err != nil {
+	if err := copyProject(context.Background(), root, stage); err != nil {
 		t.Fatal(err)
 	}
 	if err := tablegen.Run([]string{"-meta", filepath.Join(stage, "configs", "schema"), "-csv", filepath.Join(stage, "configs", "table"), "-json", filepath.Join(stage, "configs", "data"), "-force"}, io.Discard); err != nil {

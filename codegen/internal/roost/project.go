@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -52,7 +53,16 @@ type syncChange struct {
 	remove  bool
 }
 
+// NewProject is NewProjectContext without cancellation.
 func NewProject(options NewOptions) (SyncResult, string, error) {
+	return NewProjectContext(context.Background(), options)
+}
+
+// NewProjectContext renders and generates the project in a staging tree beside
+// the target and renames it into place. When ctx ends before the rename,
+// nothing is created and the staging tree is removed; the template scaffolding
+// after the rename runs to completion.
+func NewProjectContext(ctx context.Context, options NewOptions) (SyncResult, string, error) {
 	if !validName(options.Name) {
 		return SyncResult{}, "", fmt.Errorf("invalid project name %q", options.Name)
 	}
@@ -107,8 +117,11 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 	if err != nil {
 		return SyncResult{}, "", err
 	}
-	if err := Generate(stage, GenerateOptions{Stdout: io.Discard}); err != nil {
+	if err := generate(ctx, stage, GenerateOptions{Stdout: io.Discard}); err != nil {
 		return SyncResult{}, "", fmt.Errorf("generate initial artifacts: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return SyncResult{}, "", fmt.Errorf("project not created: %w", err)
 	}
 	if err := renameProjectStage(stage, absTarget); err != nil {
 		return SyncResult{}, "", fmt.Errorf("commit project: %w", err)
@@ -169,7 +182,16 @@ func renameProjectStage(stage, target string) error {
 	}
 }
 
+// SyncProject is SyncProjectContext without cancellation.
 func SyncProject(root string) (SyncResult, error) {
+	return SyncProjectContext(context.Background(), root)
+}
+
+// SyncProjectContext re-renders the codegen-owned files and generated outputs
+// in a staging tree and commits them as one batch. When ctx ends before the
+// commit, nothing is committed and the staging tree is removed; a commit that
+// started is finished.
+func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return SyncResult{}, err
@@ -183,7 +205,7 @@ func SyncProject(root string) (SyncResult, error) {
 		return SyncResult{}, err
 	}
 	defer os.RemoveAll(stage)
-	if err := copyProject(absRoot, stage); err != nil {
+	if err := copyProject(ctx, absRoot, stage); err != nil {
 		return SyncResult{}, fmt.Errorf("stage project sync: %w", err)
 	}
 	inputs, err := snapshotProjectInputs(stage, manifest)
@@ -203,14 +225,14 @@ func SyncProject(root string) (SyncResult, error) {
 	// the real project.
 	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("refresh shutdown.total_timeout: %w", err)
+		return SyncResult{}, inProjectPaths(fmt.Errorf("refresh shutdown.total_timeout: %w", err), stage, absRoot)
 	}
 	result, err := syncManifest(stage, manifest)
 	if err != nil {
-		return SyncResult{}, err
+		return SyncResult{}, inProjectPaths(err, stage, absRoot)
 	}
-	if err := Generate(stage, GenerateOptions{Stdout: io.Discard}); err != nil {
-		return SyncResult{}, fmt.Errorf("refresh generated artifacts: %w", err)
+	if err := generate(ctx, stage, GenerateOptions{Stdout: io.Discard}); err != nil {
+		return SyncResult{}, inProjectPaths(fmt.Errorf("refresh generated artifacts: %w", err), stage, absRoot)
 	}
 	// An obsolete output is expressed as "absent from the staging tree";
 	// planStagedProjectCommit then mirrors the deletion into the project,
@@ -238,9 +260,13 @@ func SyncProject(root string) (SyncResult, error) {
 	if syncProjectBeforeCommit != nil {
 		syncProjectBeforeCommit()
 	}
+	if err := ctx.Err(); err != nil {
+		return SyncResult{}, fmt.Errorf("project sync not committed: %w", err)
+	}
 	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
 		return SyncResult{}, err
 	}
+	reachStagePhase(ctx, "commit")
 	if err := commitSyncChanges(changes); err != nil {
 		return SyncResult{}, err
 	}

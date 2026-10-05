@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,7 +15,15 @@ import (
 
 var buildVersion string
 
+// Run is RunContext without cancellation; the command-line entry is Main.
 func Run(args []string, stdout, stderr io.Writer) error {
+	return RunContext(context.Background(), args, stdout, stderr)
+}
+
+// RunContext runs one roost command. The staged commands (project new / sync /
+// upgrade / deps, generate) and doctor stop at their next cancellation check
+// when ctx ends, roll back and remove their staging trees; see Main.
+func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printHelpOverview(stdout)
 		return nil
@@ -31,9 +40,9 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "project":
-		return runProject(args[1:], stdout, stderr)
+		return runProject(ctx, args[1:], stdout, stderr)
 	case "generate":
-		return runGenerate(args[1:], stdout, stderr)
+		return runGenerate(ctx, args[1:], stdout, stderr)
 	case "add":
 		return runAdd(args[1:], stdout, stderr)
 	case "config":
@@ -86,7 +95,7 @@ func runFramework(args []string, stdout, stderr io.Writer) error {
 	return VerifyFrameworkRelease(*manifest, *expected, *lock, *githubOutput, stdout)
 }
 
-func runProject(args []string, stdout, stderr io.Writer) error {
+func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: roost project <new|sync|diff|doctor|next|upgrade|deps>")
 	}
@@ -122,7 +131,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProject(NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen}, Template: *template})
+		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen}, Template: *template})
 		if err != nil {
 			return err
 		}
@@ -134,7 +143,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "project files ready: %s\n", target)
 		if *newSkipDeps {
 			fmt.Fprintln(stdout, "new: --skip-deps, framework dependencies not resolved")
-		} else if err := UpdateFrameworkDependencies(target, manifest, stdout, stderr); err != nil {
+		} else if err := UpdateFrameworkDependencies(ctx, target, manifest, stdout, stderr); err != nil {
 			return fmt.Errorf("project files created at %s but framework resolution failed; after connectivity recovers run roost project deps --root %s: %w", target, target, err)
 		}
 		fmt.Fprintf(stdout, "project ready: %s\n", target)
@@ -181,7 +190,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		}
 		switch args[0] {
 		case "sync":
-			result, err := SyncProject(root)
+			result, err := SyncProjectContext(ctx, root)
 			if err != nil {
 				return err
 			}
@@ -191,15 +200,15 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			}
 			if *skipDeps {
 				fmt.Fprintln(stdout, "sync: --skip-deps, framework dependencies not resolved")
-			} else if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
-				return fmt.Errorf("project files synchronized but framework resolution failed: %w", err)
+			} else if err := UpdateFrameworkDependencies(ctx, root, manifest, stdout, stderr); err != nil {
+				return fmt.Errorf("project files synchronized but framework resolution failed; after the cause is fixed run roost project deps --root %s: %w", root, err)
 			}
 			printSyncResult(stdout, result)
 			return nil
 		case "diff":
 			return DiffProject(root, stdout)
 		case "doctor":
-			return DoctorWithOptions(root, DoctorOptions{Strict: *strict, JSONOutput: *jsonOutput, Workflow: *workflow}, stdout)
+			return DoctorWithOptions(ctx, root, DoctorOptions{Strict: *strict, JSONOutput: *jsonOutput, Workflow: *workflow}, stdout)
 		case "next":
 			return PrintNextStep(root, *workflow, stdout)
 		case "deps":
@@ -207,7 +216,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if err != nil {
 				return err
 			}
-			return UpdateFrameworkDependencies(root, manifest, stdout, stderr)
+			return UpdateFrameworkDependencies(ctx, root, manifest, stdout, stderr)
 		case "upgrade":
 			if *skill != "" || *serviceVersion != "" {
 				return errors.New("-skill and -service no longer exist: skill ships inside roost-core (v1.14.0+) and the services inside roost-kit (v1.13.0+); run roost project upgrade --consolidate to rewrite the project's imports")
@@ -242,7 +251,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if err != nil {
 				return err
 			}
-			result, err := commitManifestSyncResult(root, manifestBefore, m)
+			result, err := commitManifestSyncResult(ctx, root, manifestBefore, m)
 			if err != nil {
 				return err
 			}
@@ -252,8 +261,10 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			}
 			if *skipDeps {
 				fmt.Fprintln(stdout, "upgrade: --skip-deps, framework dependencies not resolved")
-			} else if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
-				return fmt.Errorf("project upgraded but framework resolution failed: %w", err)
+			} else if err := UpdateFrameworkDependencies(ctx, root, manifest, stdout, stderr); err != nil {
+				// N08 O2: roost.yaml and the templates are already upgraded,
+				// go.mod is not; deps is the step that converges the two.
+				return fmt.Errorf("project upgraded but framework resolution failed; after the cause is fixed run roost project deps --root %s: %w", root, err)
 			}
 			printSyncResult(stdout, result)
 			return nil
@@ -262,7 +273,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 	return fmt.Errorf("unknown project command %q", args[0])
 }
 
-func runGenerate(args []string, stdout, stderr io.Writer) error {
+func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rootFlag := fs.String("root", ".", "project directory")
@@ -280,7 +291,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return GenerateTransactional(root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Force: *force, Stdout: stdout}, stderr)
+	return GenerateTransactional(ctx, root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Force: *force, Stdout: stdout}, stderr)
 }
 
 func runAdd(args []string, stdout, stderr io.Writer) error {

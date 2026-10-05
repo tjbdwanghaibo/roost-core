@@ -8,7 +8,7 @@ import (
 )
 
 // Platforms without process groups or taskkill only get the WaitDelay bound.
-var treeInterruptSignals []os.Signal
+var interruptSignals []os.Signal
 
 func startAsTree(*exec.Cmd) {}
 

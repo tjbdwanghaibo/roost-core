@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func TestGenerateSkipsConfigDataWhenSchemaHasNoCSVYet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkGenerated(root, manifest, io.Discard); err != nil {
+	if err := checkGenerated(context.Background(), root, manifest, io.Discard); err != nil {
 		t.Fatalf("generate --check with schema but no CSV: %v", err)
 	}
 }

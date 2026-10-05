@@ -78,3 +78,7 @@ NC-70～73 按先红后绿修复、声明场景验证，未发版：[NC-70](../b
 | 运行时不查 `required` | tablegen 规则只在 CSV 转换时查；生成的 `RegisterTable` 无校验；`-check` 只验语法 | 新运行期门：ref 悬空 reload 被接受；`-check` 6 种违规全放过 | [NC-75](../bug/RR-20261005-NC-75.md)：ref 与 `-check` 已修；运行时 required 存在性需选 A（configdata 新 API + 发版升下限）或 B（二次读原始 JSON） |
 
 方向判断补充：tablegen 的“规则在 CSV 时查、loader 不查、`-check` 不查”与 cfggen（运行时查 ref / required）是两套口径；N07 第二批 NC-64 又把运维热更路径指向直接改 JSON。建议维护者统一“配置规则在哪一层强制”：要么 configdata 承担（cfggen 已是），tablegen 生成同一套声明；要么明确运维只能经 CSV + generate。
+
+## 维护者决定 B6 / C9 实施（2026-10-06）
+
+方向判断采用方向 2（整命令信号所有权）：[方案与实施](../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)。O6（生成器 / 复制 / 提交窗口）、O2（upgrade / sync 依赖失败提示 `roost project deps`）、O3（错误指向暂存路径）已按先红后绿修复；O1 改为 `ROOST_NETWORK_TESTS=1` 门并在 framework-compat `codegen-network` job 打开（C9），两条用例本机联网实跑通过。O4、O5 未动。未发版。

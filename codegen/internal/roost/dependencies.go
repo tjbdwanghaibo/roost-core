@@ -24,11 +24,13 @@ type dependencyFileSnapshot struct {
 
 // UpdateFrameworkDependencies stages legacy import consolidation and resolves
 // the single Core module, then commits the planned migration and module files.
-func UpdateFrameworkDependencies(root string, manifest Manifest, stdout, stderr io.Writer) error {
-	return updateFrameworkDependenciesTransactional(root, manifest, stdout, stderr, runDependencyCommand)
+// When ctx ends before the commit, nothing is committed and the staging tree is
+// removed; a commit that started is finished.
+func UpdateFrameworkDependencies(ctx context.Context, root string, manifest Manifest, stdout, stderr io.Writer) error {
+	return updateFrameworkDependenciesTransactional(ctx, root, manifest, stdout, stderr, runDependencyCommand)
 }
 
-func updateFrameworkDependenciesTransactional(root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {
+func updateFrameworkDependenciesTransactional(ctx context.Context, root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -40,11 +42,10 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 	if err != nil {
 		return err
 	}
+	// Every exit removes the stage, an interrupted one included: the CLI entry
+	// turns the signal into ctx and dies of it only after this returns (B6).
 	defer os.RemoveAll(stage)
-	// RR-20261005-NC-70: go get / go mod tidy run in stage; a Ctrl-C there
-	// ends roost by the signal, which skips the defer above.
-	defer removeOnInterrupt(stage)()
-	if err := copyProject(absRoot, stage); err != nil {
+	if err := copyProject(ctx, absRoot, stage); err != nil {
 		return fmt.Errorf("stage framework dependencies: %w", err)
 	}
 	inputs, err := snapshotProjectInputs(stage, manifest)
@@ -56,7 +57,7 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 		fmt.Fprintln(stdout, "framework dependencies: staging import consolidation before resolving modules")
 		result, err := ConsolidateProject(stage, false, stdout)
 		if err != nil {
-			return fmt.Errorf("consolidate project before resolving dependencies: %w", err)
+			return inProjectPaths(fmt.Errorf("consolidate project before resolving dependencies: %w", err), stage, absRoot)
 		}
 		rels := result.Files
 		if result.Manifest {
@@ -69,27 +70,31 @@ func updateFrameworkDependenciesTransactional(root string, manifest Manifest, st
 			return err
 		}
 	}
-	if err := updateFrameworkDependencies(stage, manifest, stdout, stderr, run); err != nil {
-		return err
+	if err := updateFrameworkDependencies(ctx, stage, manifest, stdout, stderr, run); err != nil {
+		return inProjectPaths(err, stage, absRoot)
 	}
 	changes, err := planExplicitStagedFiles(absRoot, stage, "go.mod", "go.sum")
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("framework dependencies not committed: %w", err)
+	}
 	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
 		return err
 	}
+	reachStagePhase(ctx, "commit")
 	return commitSyncChanges(append(migrationChanges, changes...))
 }
 
 // TidyProjectDependencies records module checksums introduced by newly
 // generated imports without upgrading framework versions. This keeps the
 // beginner workflow buildable immediately after `roost generate`.
-func TidyProjectDependencies(root string, stdout, stderr io.Writer) error {
-	return tidyProjectDependencies(root, stdout, stderr, runDependencyCommand)
+func TidyProjectDependencies(ctx context.Context, root string, stdout, stderr io.Writer) error {
+	return tidyProjectDependencies(ctx, root, stdout, stderr, runDependencyCommand)
 }
 
-func tidyProjectDependencies(root string, stdout, stderr io.Writer, run dependencyCommandRunner) error {
+func tidyProjectDependencies(ctx context.Context, root string, stdout, stderr io.Writer, run dependencyCommandRunner) error {
 	if run == nil {
 		return errors.New("dependency command runner is nil")
 	}
@@ -105,7 +110,7 @@ func tidyProjectDependencies(root string, stdout, stderr io.Writer, run dependen
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), dependencyUpdateTimeout)
+	ctx, cancel := context.WithTimeout(ctx, dependencyUpdateTimeout)
 	defer cancel()
 	if err := run(ctx, absRoot, stdout, stderr, "mod", "tidy"); err != nil {
 		return rollbackDependencyUpdate(snapshots, fmt.Errorf("tidy generated dependencies: %w", err))
@@ -113,7 +118,7 @@ func tidyProjectDependencies(root string, stdout, stderr io.Writer, run dependen
 	return nil
 }
 
-func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {
+func updateFrameworkDependencies(ctx context.Context, root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -133,7 +138,7 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), dependencyUpdateTimeout)
+	ctx, cancel := context.WithTimeout(ctx, dependencyUpdateTimeout)
 	defer cancel()
 	// One module. kit lives at roost-core/kit/ since the consolidation, which
 	// is a PACKAGE path, not a module path — asking `go get` for it would be
@@ -173,6 +178,9 @@ func runDependencyBinary(ctx context.Context, binary, root string, stdout, stder
 	if err := runCommandTree(ctx, root, appendWithoutGoWork(os.Environ(), "GOWORK=off"), stdout, stderr, binary, args...); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("go %s timed out after %s: %w", strings.Join(args, " "), dependencyUpdateTimeout, ctx.Err())
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("go %s interrupted: %w", strings.Join(args, " "), ctx.Err())
 		}
 		return fmt.Errorf("go %s: %w", strings.Join(args, " "), err)
 	}

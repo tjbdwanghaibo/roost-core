@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	if err := roost.Run(os.Args[1:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+	if err := roost.Main(os.Args[1:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }

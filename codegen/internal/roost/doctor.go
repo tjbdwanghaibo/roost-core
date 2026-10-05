@@ -46,11 +46,10 @@ type DoctorOptions struct {
 	Workflow   string
 }
 
-func Doctor(root string, strict, jsonOutput bool, stdout io.Writer) error {
-	return DoctorWithOptions(root, DoctorOptions{Strict: strict, JSONOutput: jsonOutput}, stdout)
-}
-
-func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) error {
+// DoctorWithOptions checks the project and prints the report. When ctx ends
+// (roost was interrupted), it returns the interruption instead of a report
+// whose go checks were cut short.
+func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, stdout io.Writer) error {
 	m, err := LoadManifest(root)
 	if err != nil {
 		return err
@@ -69,11 +68,11 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 	}
 	if goAvailable {
 		report.Items = append(report.Items,
-			runDoctorGoCommand(root, "dependencies:go-mod-verify", 2*time.Minute, "go mod verify passed", "run GOWORK=off go mod download, then retry", "mod", "verify"),
-			runDoctorGoCommand(root, "compile:go-list", 2*time.Minute, "all packages loaded with -mod=readonly", "fix package/import errors without changing go.mod, then retry", "list", "-buildvcs=false", "-mod=readonly", "./..."),
+			runDoctorGoCommand(ctx, root, "dependencies:go-mod-verify", 2*time.Minute, "go mod verify passed", "run GOWORK=off go mod download, then retry", "mod", "verify"),
+			runDoctorGoCommand(ctx, root, "compile:go-list", 2*time.Minute, "all packages loaded with -mod=readonly", "fix package/import errors without changing go.mod, then retry; after a failed or interrupted project upgrade run roost project deps first", "list", "-buildvcs=false", "-mod=readonly", "./..."),
 		)
 		if options.Strict {
-			report.Items = append(report.Items, runDoctorGoCommand(root, "compile:go-test", 5*time.Minute, "all packages and tests compiled", "run GOWORK=off go test -buildvcs=false -mod=readonly -run=^$ ./... and fix the reported compiler error", "test", "-buildvcs=false", "-mod=readonly", "-run=^$", "./..."))
+			report.Items = append(report.Items, runDoctorGoCommand(ctx, root, "compile:go-test", 5*time.Minute, "all packages and tests compiled", "run GOWORK=off go test -buildvcs=false -mod=readonly -run=^$ ./... and fix the reported compiler error", "test", "-buildvcs=false", "-mod=readonly", "-run=^$", "./..."))
 		}
 	}
 	for _, service := range sortedServiceNames(m) {
@@ -100,7 +99,7 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		report.Items = append(report.Items, items...)
 	}
 	if options.Strict {
-		if err := Generate(root, GenerateOptions{Check: true, Stdout: io.Discard}); err != nil {
+		if err := generate(ctx, root, GenerateOptions{Check: true, Stdout: io.Discard}); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "generated", Status: StatusFail, Detail: err.Error()})
 		} else {
 			report.Items = append(report.Items, CheckItem{Name: "generated", Status: StatusOK, Detail: "up to date"})
@@ -113,6 +112,9 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		} else {
 			report.Items = append(report.Items, CheckItem{Name: "project-templates", Status: StatusOK, Detail: "up to date"})
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("doctor interrupted, no report: %w", err)
 	}
 	if options.JSONOutput {
 		raw, _ := json.MarshalIndent(report, "", "  ")
@@ -131,14 +133,14 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 	return errors.Join(failed...)
 }
 
-func runDoctorGoCommand(root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
-	return runDoctorCommand("go", root, name, timeout, success, fix, args...)
+func runDoctorGoCommand(ctx context.Context, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
+	return runDoctorCommand(ctx, "go", root, name, timeout, success, fix, args...)
 }
 
 // runDoctorCommand is runDoctorGoCommand with the binary as a parameter, so
 // tests can stand in for the go tool.
-func runDoctorCommand(binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runDoctorCommand(ctx context.Context, binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return runDoctorCommandUntil(ctx, binary, root, name, timeout, success, fix, args...)
 }

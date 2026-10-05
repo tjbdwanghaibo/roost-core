@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -12,11 +13,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Flip this gate only after the minimum published core/kit versions contain
-// the Data Engine packages emitted by the DAO/Entity generators. Until then
-// source-head compilation is covered by the cross-repository matrix, while
-// GOWORK=off can only validate the last published generator contract.
-const publishedDataEngineGeneratorDependencies = false
+// networkTestsEnv opts into the tests that resolve the published framework
+// from the module proxy: transactional generate runs go mod tidy, and doctor
+// compiles the generated project against what it resolved (GOWORK=off). The
+// default go test stays offline; the codegen-network job in
+// .github/workflows/framework-compat.yml sets it (维护者决定 C9). It replaced
+// the constant publishedDataEngineGeneratorDependencies, whose condition — the
+// minimum published core carrying the Data Engine packages — had long held.
+const networkTestsEnv = "ROOST_NETWORK_TESTS"
+
+func networkTestsEnabled() bool { return os.Getenv(networkTestsEnv) == "1" }
 
 func TestResolveModsAddsRequiredDependencies(t *testing.T) {
 	got, err := resolveMods([]string{"remote_entity", "syncbus"})
@@ -458,12 +464,12 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			}
 		}
 	}
-	if publishedDataEngineGeneratorDependencies {
-		if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
+	if networkTestsEnabled() {
+		if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
 			t.Fatalf("generate first business workflow: %v", err)
 		}
 		var doctorOutput bytes.Buffer
-		if err := DoctorWithOptions(root, DoctorOptions{Strict: true, Workflow: "first-business"}, &doctorOutput); err != nil {
+		if err := DoctorWithOptions(context.Background(), root, DoctorOptions{Strict: true, Workflow: "first-business"}, &doctorOutput); err != nil {
 			t.Fatalf("doctor first business workflow: %v\n%s", err, doctorOutput.String())
 		}
 	} else if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
@@ -509,7 +515,7 @@ func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
 	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
 	var output bytes.Buffer
-	err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "first-business"}, &output)
+	err := DoctorWithOptions(context.Background(), root, DoctorOptions{Strict: false, Workflow: "first-business"}, &output)
 	if err == nil {
 		t.Fatal("incomplete first business workflow unexpectedly passed")
 	}
@@ -528,7 +534,7 @@ func TestDoctorFailsWhenGeneratedProjectDoesNotCompile(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	err := DoctorWithOptions(root, DoctorOptions{Strict: false}, &output)
+	err := DoctorWithOptions(context.Background(), root, DoctorOptions{Strict: false}, &output)
 	if err == nil {
 		t.Fatalf("non-compiling project unexpectedly passed doctor:\n%s", output.String())
 	}
@@ -694,7 +700,7 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 		t.Fatalf("duplicate transport error = %v", err)
 	}
 	var output bytes.Buffer
-	if err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err == nil {
+	if err := DoctorWithOptions(context.Background(), root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err == nil {
 		t.Fatal("default reject auth and disabled listener unexpectedly passed player-tcp doctor")
 	}
 	for _, want := range []string{"workflow:tcp-auth", "workflow:tcp-config"} {
@@ -718,8 +724,8 @@ func TestDockerReadmePublishesPlayerPortForOwningService(t *testing.T) {
 }
 
 func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
-	if !publishedDataEngineGeneratorDependencies {
-		t.Skip("GOWORK=off doctor gate resumes after the Data Engine framework release")
+	if !networkTestsEnabled() {
+		t.Skip("resolves the published framework from the module proxy; set " + networkTestsEnv + "=1 to run it")
 	}
 	root := copyOfNewProject(t, "configdata")
 	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
@@ -744,11 +750,11 @@ func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
 	// Doctor is intentionally non-mutating and requires committed dependency
 	// checksums. Transactional generation performs the explicit dependency
 	// sync step without exposing a partially updated project.
-	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
+	if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
 		t.Fatalf("generate before doctor: %v", err)
 	}
 	var output bytes.Buffer
-	if err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err != nil {
+	if err := DoctorWithOptions(context.Background(), root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err != nil {
 		t.Fatalf("doctor player-tcp: %v\n%s", err, output.String())
 	}
 }
@@ -862,7 +868,7 @@ func TestProjectInputSnapshotRejectsConcurrentBusinessEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := t.TempDir()
-	if err := copyProject(root, stage); err != nil {
+	if err := copyProject(context.Background(), root, stage); err != nil {
 		t.Fatal(err)
 	}
 	inputs, err := snapshotProjectInputs(stage, manifest)
@@ -1775,7 +1781,7 @@ func TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure(t *tes
 	if err := os.WriteFile(invalidHandler, []byte("package handler\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken("), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err == nil {
+	if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err == nil {
 		t.Fatal("invalid later generator unexpectedly succeeded")
 	}
 	generatedAfter, err := os.ReadFile(generatedPath)

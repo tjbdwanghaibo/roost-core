@@ -10,6 +10,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -124,7 +125,7 @@ func TestUpgradeDryRunListsEveryFileTheUpgradeRewrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	mergeVersions(&m.Versions, VersionSpec{Core: "latest"})
-	result, err := commitManifestSyncResult(root, manifestBefore, m)
+	result, err := commitManifestSyncResult(context.Background(), root, manifestBefore, m)
 	if err != nil {
 		t.Fatal(err)
 	}

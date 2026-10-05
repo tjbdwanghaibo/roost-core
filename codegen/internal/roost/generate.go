@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -179,7 +180,12 @@ func generatorsFor(m Manifest, force bool) []generator {
 	}
 }
 
+// Generate runs the generators in place (or, with Check, in a throwaway copy).
 func Generate(root string, options GenerateOptions) error {
+	return generate(context.Background(), root, options)
+}
+
+func generate(ctx context.Context, root string, options GenerateOptions) error {
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
 	}
@@ -188,7 +194,7 @@ func Generate(root string, options GenerateOptions) error {
 		return err
 	}
 	if options.Check {
-		return checkGenerated(root, manifest, options.Stdout)
+		return checkGenerated(ctx, root, manifest, options.Stdout)
 	}
 	selected := generatorsFor(manifest, options.Force)
 	if options.Changed {
@@ -198,13 +204,15 @@ func Generate(root string, options GenerateOptions) error {
 		}
 		selected = filterChanged(selected, changed)
 	}
-	return runGenerators(root, manifest, selected, options)
+	return runGenerators(ctx, root, manifest, selected, options)
 }
 
 // GenerateTransactional runs every selected generator and go mod tidy in a
 // sibling staging tree. Only generated artifacts and dependency metadata are
 // committed, as one rollback-capable batch, after the whole pipeline succeeds.
-func GenerateTransactional(root string, options GenerateOptions, stderr io.Writer) error {
+// When ctx ends before the commit, nothing is committed and the staging tree is
+// removed; a commit that started is finished.
+func GenerateTransactional(ctx context.Context, root string, options GenerateOptions, stderr io.Writer) error {
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
 	}
@@ -212,7 +220,7 @@ func GenerateTransactional(root string, options GenerateOptions, stderr io.Write
 		stderr = io.Discard
 	}
 	if options.Check || options.DryRun {
-		return Generate(root, options)
+		return generate(ctx, root, options)
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -226,11 +234,10 @@ func GenerateTransactional(root string, options GenerateOptions, stderr io.Write
 	if err != nil {
 		return err
 	}
+	// Every exit removes the stage, an interrupted one included: the CLI entry
+	// turns the signal into ctx and dies of it only after this returns (B6).
 	defer os.RemoveAll(stage)
-	// RR-20261005-NC-70: go mod tidy runs in stage; a Ctrl-C there ends roost
-	// by the signal, which skips the defer above.
-	defer removeOnInterrupt(stage)()
-	if err := copyProject(absRoot, stage); err != nil {
+	if err := copyProject(ctx, absRoot, stage); err != nil {
 		return fmt.Errorf("stage generation: %w", err)
 	}
 	inputs, err := snapshotProjectInputs(stage, manifest)
@@ -249,14 +256,14 @@ func GenerateTransactional(root string, options GenerateOptions, stderr io.Write
 	stagedOptions := options
 	stagedOptions.Changed = false
 	stagedOptions.Stdout = &stagedStdout
-	if err := runGenerators(stage, manifest, selected, stagedOptions); err != nil {
+	if err := runGenerators(ctx, stage, manifest, selected, stagedOptions); err != nil {
 		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
-		return err
+		return inProjectPaths(err, stage, absRoot)
 	}
-	if err := TidyProjectDependencies(stage, &stagedStdout, &stagedStderr); err != nil {
+	if err := TidyProjectDependencies(ctx, stage, &stagedStdout, &stagedStderr); err != nil {
 		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
 		replayStagedOutput(stderr, stagedStderr.String(), stage, absRoot)
-		return err
+		return inProjectPaths(err, stage, absRoot)
 	}
 	changes, err := planStagedProjectCommit(absRoot, stage, manifest)
 	if err != nil {
@@ -271,9 +278,16 @@ func GenerateTransactional(root string, options GenerateOptions, stderr io.Write
 		return err
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].rel < changes[j].rel })
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("generated files not committed: %w", err)
+	}
 	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
 		return err
 	}
+	// The commit is not cut short by ctx: once it starts it finishes (or rolls
+	// itself back on its own failure), so an interrupt leaves either nothing
+	// or the whole batch committed.
+	reachStagePhase(ctx, "commit")
 	if err := commitSyncChanges(changes); err != nil {
 		return err
 	}
@@ -358,6 +372,29 @@ func verifyProjectInputs(root string, manifest Manifest, expected map[string][sh
 	return fmt.Errorf("project inputs changed while code generation was running: %s; rerun the command", detail)
 }
 
+// inProjectPaths reports err with the staging tree's paths replaced by the
+// project's (N08 O3): a generator or go command fails on a file it read in the
+// stage, and by the time the message is read the stage no longer exists. It
+// keeps err for errors.Is / As.
+func inProjectPaths(err error, stage, root string) error {
+	if err == nil {
+		return nil
+	}
+	return &stagePathError{err: err, stage: stage, root: root}
+}
+
+type stagePathError struct {
+	err         error
+	stage, root string
+}
+
+func (e *stagePathError) Error() string {
+	message := strings.ReplaceAll(e.err.Error(), e.stage, e.root)
+	return strings.ReplaceAll(message, filepath.ToSlash(e.stage), filepath.ToSlash(e.root))
+}
+
+func (e *stagePathError) Unwrap() error { return e.err }
+
 func replayStagedOutput(writer io.Writer, value, stage, root string) {
 	if value == "" {
 		return
@@ -367,7 +404,10 @@ func replayStagedOutput(writer io.Writer, value, stage, root string) {
 	_, _ = io.WriteString(writer, value)
 }
 
-func runGenerators(root string, manifest Manifest, generators []generator, options GenerateOptions) error {
+// runGenerators runs the generators in order and stops before the next one
+// once ctx ends; a generator that started runs to completion (they are short
+// and in-process).
+func runGenerators(ctx context.Context, root string, manifest Manifest, generators []generator, options GenerateOptions) error {
 	generatorRuns.Lock()
 	defer generatorRuns.Unlock()
 	root, err := filepath.Abs(root)
@@ -392,7 +432,11 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 			fmt.Fprintf(options.Stdout, "would run: %s\n", gen.Name)
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("generator %s not started: %w", gen.Name, err)
+		}
 		fmt.Fprintf(options.Stdout, "==> %s\n", gen.Name)
+		reachStagePhase(ctx, "generator")
 		if err := gen.Run(root, options.Stdout); err != nil {
 			return fmt.Errorf("generator %s: %w", gen.Name, err)
 		}
@@ -400,13 +444,13 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 	return nil
 }
 
-func checkGenerated(root string, manifest Manifest, stdout io.Writer) error {
+func checkGenerated(ctx context.Context, root string, manifest Manifest, stdout io.Writer) error {
 	tmp, err := os.MkdirTemp("", "roost-generated-check-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	if err := copyProject(root, tmp); err != nil {
+	if err := copyProject(ctx, root, tmp); err != nil {
 		return err
 	}
 	before, err := snapshotGenerated(tmp)
@@ -415,8 +459,8 @@ func checkGenerated(root string, manifest Manifest, stdout io.Writer) error {
 	}
 	// The staleness check compares content snapshots, so hash-short-circuited
 	// writes and forced writes produce the same verdict; skip force here.
-	if err := runGenerators(tmp, manifest, generatorsFor(manifest, false), GenerateOptions{Stdout: io.Discard}); err != nil {
-		return err
+	if err := runGenerators(ctx, tmp, manifest, generatorsFor(manifest, false), GenerateOptions{Stdout: io.Discard}); err != nil {
+		return inProjectPaths(err, tmp, root)
 	}
 	after, err := snapshotGenerated(tmp)
 	if err != nil {
@@ -430,10 +474,15 @@ func checkGenerated(root string, manifest Manifest, stdout io.Writer) error {
 	return nil
 }
 
-func copyProject(src, dst string) error {
+// copyProject copies the project's inputs into dst, stopping when ctx ends.
+func copyProject(ctx context.Context, src, dst string) error {
+	copied := false
 	return filepath.WalkDir(src, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("copy project: %w", err)
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
@@ -455,7 +504,14 @@ func copyProject(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		return writeAtomic(filepath.Join(dst, rel), raw, 0o644)
+		if err := writeAtomic(filepath.Join(dst, rel), raw, 0o644); err != nil {
+			return err
+		}
+		if !copied {
+			copied = true
+			reachStagePhase(ctx, "copy")
+		}
+		return nil
 	})
 }
 

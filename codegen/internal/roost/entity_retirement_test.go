@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestStagedProjectCommitSeesEntityRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := filepath.Join(t.TempDir(), "stage")
-	if err := copyProject(root, stage); err != nil {
+	if err := copyProject(context.Background(), root, stage); err != nil {
 		t.Fatal(err)
 	}
 	if err := entity.Run([]string{"-dir", filepath.Join(stage, "game")}, io.Discard); err != nil {
