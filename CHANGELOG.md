@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **World 定时器堆随 Nest 事务回滚；timer Tick 期间的取消 / 改期 / 重入按承诺生效**（RR-20261005-NC-140～147）：game-demo `TimerComponent` 在武装和到期 Tick 前向当前可回滚事务登记逆操作，事务失败或提交被拒时堆与 DAO 一起恢复（此前撤回的武装留在内存、撤回的触发从堆里消失，截止时间丢到重启）；已过期的截止时间武装为下一次 Tick 触发，不再报告已武装却没有节点。`timer.Scheduler` 在 Tick 期间对仍在堆里的定时器取消 / 改期立即生效（此前它仍按旧期限触发一次），重入 Tick 只由最外层收尾。另修 `spatial.BlockIndex.BlockRect` 在 int64 上界的溢出，`index` 在 NaN 值、混合动态类型接口键、零值 `OrderedIndex` 上的 panic / 丢写。模板改动需 `roost project sync`。见 [N11 记录](docs/review/REVIEW-2026-10-05-n11.md)。
 - **tablegen 的 `ref:"<table>"` 由生成的 loader 在每次加载 / reload 时检查**（RR-20261005-NC-75，行为收紧）：此前 ref 只被写进 CSV 规则行、在哪里都不检查，悬空引用的配置能加载上线。现在非零值必须是目标表主键，目标须是同一 schema 的表、字段类型等于其主键类型，否则 `roost generate` 失败；`tablegen -json <dir> -check` 也按 schema 的 required / unique / min 校验 JSON（此前只验语法），直接改 `configs/data` 后 reload 前可用它把关。运行时仍不检查 required 列是否出现（待决定）。[记录](docs/bugfix/RR-20261005-NC-75.md)
 - **`make dev-run` 运行期间 `roost generate` / `project sync` 不再报 inputs changed**（RR-20261005-NC-74）：`.dev/`（dev-run 日志）与默认 WAL 目录 `data/wal` 不再算应用输入、不再复制进暂存树；复制、输入快照与提交计划共用同一条工程边界。[记录](docs/bugfix/RR-20261005-NC-74.md)
 - **ai Controller 冻结期间不再丢弃结束通知**（RR-20261005-NC-120）：`Freeze` 只暂停 Tick；动作 / 任务结束照常交给策略。此前通知被丢，BehaviorStrategy 里等该动作的 TaskflowAction 叶子在 Recover 后永远 Running。[记录](docs/bugfix/RR-20261005-NC-120.md)

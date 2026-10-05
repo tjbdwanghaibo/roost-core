@@ -1,5 +1,18 @@
 # Bugfix 记录
 
+**10-05 N11 spatial / timer / clock / index（revn11）：NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。** World 定时器堆在武装 / 触发前登记事务逆操作（同 NC-61 做法）；timer Tick 期间对仍在堆里的定时器取消 / 改期立即生效、只有最外层 Tick 收尾；过期截止时间武装为下一次 Tick；BlockRect 饱和计算；index 三处 panic / 丢写。[本轮](../review/REVIEW-2026-10-05-n11.md) · [证据](evidence/noncore-bugfix-20261005-revn11/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-140](RR-20261005-NC-140.md) | TimerComponent 武装 / 到期 Tick 前 `RecordUndo` 快照，回滚按快照重建堆 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-141](RR-20261005-NC-141.md) | Tick 期间 RemoveTimer / ChangeTimer 对仍在堆里的目标立即出堆 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-142](RR-20261005-NC-142.md) | 过期截止时间用 1ms 延迟武装，返回 `(id, id != 0)`；替换空断言用例 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-143](RR-20261005-NC-143.md) | BlockRect 右 / 下边界饱和加块宽再截到 bounds | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-144](RR-20261005-NC-144.md) | 不等于自身的值只进主表 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-145](RR-20261005-NC-145.md) | defaultLess 先比动态类型（nil 最前） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-146](RR-20261005-NC-146.md) | OrderedIndex 按值内嵌 Index，零值可用、nil 为空 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-147](RR-20261005-NC-147.md) | 只有最外层 Tick 清 running、执行推迟操作 | 已修复、声明场景验证，未发版 |
+
 **10-05 N10 第一批（revn10）：NC-120～123 已修复、声明场景验证，未发版。** Controller 拆出 `notifiable()`，冻结只暂停 Tick；排队项丢弃统一走 `discardQueued` 逐个发 OnEnded（取消）；启动失败分支在 Cancel 后识别重入；hotcode 补丁点状态合成一个不可变 `pointState` 整体发布。[本轮](../review/REVIEW-2026-10-05-noncore-n10.md) · [证据](evidence/noncore-bugfix-20261005-n10/README.md)。
 
 | 编号 | 修复 | 状态 |

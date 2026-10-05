@@ -1,0 +1,12 @@
+$ (生成工程 replace 到本分支) GOWORK=off go test -race -count=3 -v ./game/entities/world/ (结果行)
+   3     --- PASS: TestAnOverdueDeadlineIsArmedAndFires/an_hour_late (0.00s)
+   3     --- PASS: TestAnOverdueDeadlineIsArmedAndFires/due_this_instant (0.00s)
+   3     --- PASS: TestTheTimerHeapRollsBackWithTheTransaction/arm/a_later_step_fails (0.00s)
+   3     --- PASS: TestTheTimerHeapRollsBackWithTheTransaction/arm/the_commit_is_rejected (0.00s)
+   3     --- PASS: TestTheTimerHeapRollsBackWithTheTransaction/tick/a_later_step_fails (0.00s)
+   3     --- PASS: TestTheTimerHeapRollsBackWithTheTransaction/tick/the_commit_is_rejected (0.00s)
+   3 --- PASS: TestADeadlineSurvivesARestartAndFires (0.00s)
+   3 --- PASS: TestAnOverdueDeadlineIsArmedAndFires (0.00s)
+   3 --- PASS: TestArmingADeadlineWritesIt (0.00s)
+   3 --- PASS: TestTheTimerHeapRollsBackWithTheTransaction (0.00s)
+   1 ok  	example.com/n11demo/game/entities/world	1.556s

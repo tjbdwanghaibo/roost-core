@@ -124,16 +124,21 @@ func (s *Scheduler) NewClosureTimer(delay time.Duration, h Handler) int64 {
 	return s.add(delay, TypeClosure, 0, 0, nil, h)
 }
 
+// RemoveTimer 取消一个定时器；返回 true 之后它不再触发。
+//
+// Tick 期间（handler 里）调用时：目标仍在堆里（包括本次 Tick 也已到期、还没轮到的）就立即出堆，
+// 不能推迟到 Tick 结束——那样它会先按旧期限触发（RR-20261005-NC-141）。目标不在堆里时——正在触发的
+// 定时器自己，或本次 Tick 里刚新建、尚未入堆的——推迟到最外层 Tick 结束执行，此时返回 true 只表示“已接受”。
 func (s *Scheduler) RemoveTimer(id int64) bool {
 	if s == nil || id <= 0 {
 		return false
 	}
-	if s.running {
-		s.deferred = append(s.deferred, func() { s.RemoveTimer(id) })
-		return true
-	}
 	node := s.byID[id]
 	if node == nil {
+		if s.running {
+			s.deferred = append(s.deferred, func() { s.RemoveTimer(id) })
+			return true
+		}
 		return false
 	}
 	heap.Remove(&s.nodes, node.index)
@@ -144,6 +149,12 @@ func (s *Scheduler) RemoveTimer(id int64) bool {
 	return true
 }
 
+// ChangeTimer 把定时器改到 now+delay（now 为零值时取注入时钟）。
+//
+// Tick 期间调用、目标仍在堆里时，立即把它移出堆，推迟到最外层 Tick 结束再按新期限放回：既不会在本次
+// Tick 按旧期限触发（RR-20261005-NC-141），也不会在本次 Tick 按新期限触发——两个 handler 互相改期
+// 不会在一次 Tick 里循环。移出期间不发持久化变化，放回时发一次 upsert。目标不在堆里（正在触发的自己、
+// 本次 Tick 新建的）时整个操作推迟，与之前相同。
 func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bool {
 	if s == nil || id <= 0 || delay <= 0 {
 		return false
@@ -151,13 +162,26 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 	if now.IsZero() {
 		now = s.now()
 	}
-	if s.running {
-		s.deferred = append(s.deferred, func() { s.ChangeTimer(id, now, delay) })
-		return true
-	}
 	node := s.byID[id]
 	if node == nil {
+		if s.running {
+			s.deferred = append(s.deferred, func() { s.ChangeTimer(id, now, delay) })
+			return true
+		}
 		return false
+	}
+	if s.running {
+		heap.Remove(&s.nodes, node.index)
+		delete(s.byID, id)
+		s.deferred = append(s.deferred, func() {
+			node.Delay = delay
+			node.End = now.Add(delay)
+			s.push(node)
+			if node.Type != TypeClosure {
+				s.emit(ChangeUpsert, *node)
+			}
+		})
+		return true
 	}
 	node.Delay = delay
 	node.End = now.Add(delay)
@@ -175,14 +199,21 @@ func (s *Scheduler) Tick(now time.Time) {
 	if now.IsZero() {
 		now = s.now()
 	}
-	s.running = true
-	defer func() {
-		s.running = false
-		for _, op := range s.deferred {
-			op()
-		}
-		s.deferred = s.deferred[:0]
-	}()
+	// handler 里可以再调 Tick（重入）：内层照常触发到期节点，但只有最外层负责清 running 并执行推迟操作。
+	// 内层若也清掉 running，回到外层 handler 后“取消正在触发的自己”就不再推迟、查不到节点而失效，
+	// 外层随后又按返回值把它重新排上（RR-20261005-NC-147）。
+	if !s.running {
+		s.running = true
+		defer func() {
+			s.running = false
+			// 推迟操作按登记顺序执行（推迟的改期之后再取消，结果是取消）；此时 running 已清，它们直接生效。
+			for i := 0; i < len(s.deferred); i++ {
+				s.deferred[i]()
+			}
+			clear(s.deferred)
+			s.deferred = s.deferred[:0]
+		}()
+	}
 
 	for {
 		node := s.min()

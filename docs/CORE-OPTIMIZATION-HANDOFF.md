@@ -192,7 +192,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
-10-05 N11 revn11：[NC-140](bug/RR-20261005-NC-140.md) / [NC-141](bug/RR-20261005-NC-141.md) P2 与 [NC-142～147](review/REVIEW-2026-10-05-n11.md#3-确认的缺陷) P3 **已复现，未修复**（审查登记）——World 定时器堆不随 Nest 事务回滚、timer Tick 期间取消 / 改期 / 重入语义、过期截止时间未武装、BlockRect 溢出、index 三处 panic / 丢写；[本轮](review/REVIEW-2026-10-05-n11.md)（含方向判断：组件内存回滚契约第三次出现）。
+10-05 N11 revn11：[NC-140](bug/RR-20261005-NC-140.md) / [NC-141](bug/RR-20261005-NC-141.md) P2 与 [NC-142～147](review/REVIEW-2026-10-05-n11.md#3-确认的缺陷) P3 **已修复、声明场景验证，未发版**（[修复](bugfix/README.md)）——World 定时器堆不随 Nest 事务回滚、timer Tick 期间取消 / 改期 / 重入语义、过期截止时间未武装、BlockRect 溢出、index 三处 panic / 丢写；[本轮](review/REVIEW-2026-10-05-n11.md)（含方向判断：组件内存回滚契约第三次出现）。
 
 10-05 N09 skill 第三批（revn09c）：[NC-150](bug/RR-20261005-NC-150.md) / [NC-151](bug/RR-20261005-NC-151.md)（P2）与 [NC-152](bug/RR-20261005-NC-152.md) / [NC-153](bug/RR-20261005-NC-153.md) / [NC-154](bug/RR-20261005-NC-154.md)（P3）**未修复**——严格 Parse 的大小写绕过、phase recast / timeout 只编译不执行、tick 非负缺口、VisualPlanCache 共享加载的 ctx、skillcompose 无诊断拒绝；[本轮](review/REVIEW-2026-10-05-n09-batch3.md)（方向判断：编译器接受集合与 Runtime 可执行集合各自维护）。
 

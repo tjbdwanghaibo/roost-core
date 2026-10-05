@@ -1,17 +1,17 @@
 # Roost Review 问题索引
 
-**10-05 N11 spatial / timer / clock / index（revn11）：NC-140、NC-141 P2 与 NC-142～147 P3，已复现，未修复。** World 定时器堆不随 Nest 事务回滚；Tick 期间取消 / 改期同样到期的定时器仍按旧期限触发；过期截止时间报告已武装却未武装；BlockRect 在 int64 上界溢出；index 在 NaN 值、混合动态类型接口键、零值 OrderedIndex 上 panic 或丢写；重入 Tick 提前结束外层推迟语义。[本轮](../review/REVIEW-2026-10-05-n11.md)。
+**10-05 N11 spatial / timer / clock / index（revn11）：NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。** World 定时器堆不随 Nest 事务回滚；Tick 期间取消 / 改期同样到期的定时器仍按旧期限触发；过期截止时间报告已武装却未武装；BlockRect 在 int64 上界溢出；index 在 NaN 值、混合动态类型接口键、零值 OrderedIndex 上 panic 或丢写；重入 Tick 提前结束外层推迟语义。[本轮](../review/REVIEW-2026-10-05-n11.md)。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-140](RR-20261005-NC-140.md) | P2 World 定时器堆不随 Nest 事务回滚 | 已复现，未修复 |
-| [RR-20261005-NC-141](RR-20261005-NC-141.md) | P2 Tick 期间取消 / 改期同样到期的定时器仍按旧期限触发 | 已复现，未修复 |
-| [RR-20261005-NC-142](RR-20261005-NC-142.md) | P3 ScheduleActivityPhase 对过期截止时间报告已武装却未武装 | 已复现，未修复 |
-| [RR-20261005-NC-143](RR-20261005-NC-143.md) | P3 BlockRect 在 int64 上界附近溢出 | 已复现，未修复 |
-| [RR-20261005-NC-144](RR-20261005-NC-144.md) | P3 index.Upsert 遇到 NaN 值 panic | 已复现，未修复 |
-| [RR-20261005-NC-145](RR-20261005-NC-145.md) | P3 OrderedIndex 默认排序对混合动态类型接口键 panic | 已复现，未修复 |
-| [RR-20261005-NC-146](RR-20261005-NC-146.md) | P3 零值 OrderedIndex 丢写、nil 写入 panic | 已复现，未修复 |
-| [RR-20261005-NC-147](RR-20261005-NC-147.md) | P3 重入 Tick 提前结束外层推迟语义 | 已复现，未修复 |
+| [RR-20261005-NC-140](RR-20261005-NC-140.md) | P2 World 定时器堆不随 Nest 事务回滚 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-141](RR-20261005-NC-141.md) | P2 Tick 期间取消 / 改期同样到期的定时器仍按旧期限触发 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-142](RR-20261005-NC-142.md) | P3 ScheduleActivityPhase 对过期截止时间报告已武装却未武装 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-143](RR-20261005-NC-143.md) | P3 BlockRect 在 int64 上界附近溢出 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-144](RR-20261005-NC-144.md) | P3 index.Upsert 遇到 NaN 值 panic | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-145](RR-20261005-NC-145.md) | P3 OrderedIndex 默认排序对混合动态类型接口键 panic | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-146](RR-20261005-NC-146.md) | P3 零值 OrderedIndex 丢写、nil 写入 panic | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-147](RR-20261005-NC-147.md) | P3 重入 Tick 提前结束外层推迟语义 | 已修复、声明场景验证，未发版 |
 
 **10-05 N09 skill 第三批（revn09c）：NC-150 P2、NC-151 P2、NC-152 P3、NC-153 P3、NC-154 P3，未修复。** 严格 Parse 被 encoding/json 大小写不敏感匹配绕过；phase 的 recast / timeout 事件与 `timeout_ticks` 只编译不执行、`timeout_ticks` 让 fallthrough 通过编译；tick 非负规则五处缺口；VisualPlanCache 共享加载用第一个调用者的 ctx；skillcompose 对空 / 重复 source 无诊断。[本轮](../review/REVIEW-2026-10-05-n09-batch3.md)。
 

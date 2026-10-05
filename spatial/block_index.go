@@ -73,9 +73,13 @@ func (i *BlockIndex) BlockRect(index int64) Rect {
 		return Rect{}
 	}
 	x, y := index%i.cols, index/i.cols
+	// x*blockSize 小于跨度，Min 加它不会溢出；右 / 下边界再饱和加一个块宽，然后截到 bounds。
+	// 旧实现直接算 Min + (x+1)*blockSize：最后一块的乘积可以超过剩余跨度，bounds 贴近 int64 上界时
+	// 溢出成负数，截断判断不成立，返回 Max < Min 的倒置矩形（RR-20261005-NC-143）。
+	minX, minY := i.bounds.Min.X+x*i.blockSize, i.bounds.Min.Y+y*i.blockSize
 	rect := Rect{
-		Min: Point{X: i.bounds.Min.X + x*i.blockSize, Y: i.bounds.Min.Y + y*i.blockSize},
-		Max: Point{X: i.bounds.Min.X + (x+1)*i.blockSize, Y: i.bounds.Min.Y + (y+1)*i.blockSize},
+		Min: Point{X: minX, Y: minY},
+		Max: Point{X: SaturatingAdd(minX, i.blockSize), Y: SaturatingAdd(minY, i.blockSize)},
 	}
 	if rect.Max.X > i.bounds.Max.X {
 		rect.Max.X = i.bounds.Max.X
@@ -205,6 +209,11 @@ func (i *BlockIndex) AppendBlockIDs(dst []int64, index int64) []int64 {
 	return dst
 }
 
+// QueryBlocks 返回这些块里 id 的并集（升序）。
+//
+// 每块各自加读锁、逐块读取，多块查询不是一致快照：与之并发的跨块 Move 可能让一个始终在查询范围内的 id
+// 两块都没读到，或在新旧两块都被读到（并集去重）。需要一致视图的调用方自己串行化更新与查询——
+// sync/entitysync/policy 的 AOI 就是单线程使用本类型。RangeBlocks、QueryRect、QueryRadius 同此。
 func (i *BlockIndex) QueryBlocks(blocks map[int64]Rect) []int64 {
 	seen := make(map[int64]struct{})
 	for index := range blocks {

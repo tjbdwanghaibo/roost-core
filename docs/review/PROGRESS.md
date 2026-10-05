@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N11 spatial / timer / clock / index（revn11）
+
+基线 `23f82dbc`，独立 worktree 分支 `revn11`，NC 段 140～149（用 140～147）；图谱 generation 2026-09-30，四个包此后无代码提交，模板按当前源码读取。[本轮](REVIEW-2026-10-05-n11.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn11/README.md)。NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。
+
+| 子域 | 场景 | 状态 / 边界 |
+| --- | --- | --- |
+| spatial S1～S8 | 半开边界、int64 极值块矩形、查询截取、Move、并发查询、几何饱和、Terrain 原子移动、寻路预算与 game-demo 锁 | NC-143 修复；O1（多块查询非快照，加注释）、O2～O4 观察 |
+| timer T1～T10 | Tick 中取消 / 改期同样到期的定时器、邻近推迟分支、钩子序列、重入、panic、同期限顺序、未注册类型、停止 / 重复停止 | NC-141、NC-147 修复；O5～O8 观察 |
+| World 接线 W1～W4 | 生成与重建、事务失败 / 提交被拒后的堆、过期截止时间、注入时钟 | NC-140、NC-142 修复（生成工程正式用例）；O9 观察 |
+| clock C1～C4 | 偏移读写 / 注入隔离 / 并发、Set 精度、请求上下文冻结 | 新增 4 条控制用例；O10 观察 |
+| index I1～I5 | 插入 / 改值 / 删除 / 查询一致、NaN、混合类型键、零值 / nil、并发 | NC-144～146 修复；零调用方（O11） |
+
+新增正式回归：timer 6、spatial 1、index 3、clock 4、生成工程 world 2（修改 1 条空断言旧用例）。改动包 race×3、生成工程 build/vet/test、全仓 build/vet、根包、codegen 通过。N11 第一批矩阵全部有结论（**本机场景收口**）；真实 WAL / Mongo 三进程拒绝路径未跑。方向判断：组件内存不随 Nest 回滚第三次出现（NC-61 → N09 O1 → NC-140），建议定框架契约（见本轮 §5）。不等待 CI，不发版。
+
 ## 2026-10-05 N10 第一批（ai / actionflow / featureflag / hotcode）
 
 基线 `197f7bb9`，分支 `revn10`，NC 段 120～129（用 120～123）；图谱 generation 09-30，四包此后无提交，模板与 demo 用法以源码补证。[本轮/矩阵](REVIEW-2026-10-05-noncore-n10.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n10/README.md)。NC-120 / 121（P2）、NC-122 / 123（P3）已修复、声明场景验证，未发版。

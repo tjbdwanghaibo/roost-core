@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -159,28 +160,147 @@ func TestADeadlineSurvivesARestartAndFires(t *testing.T) {
 	}
 }
 
-// A deadline already in the past when the process starts still fires, rather
-// than being refused for being late: the window it closes is the one nobody
-// closed while the process was down.
-func TestADeadlineThatIsAlreadyPastStillFires(t *testing.T) {
-	subject := newWorld(t)
-	committer := &worldCommitter{}
-	now := time.Unix(1_800_000_000, 0)
+// rejectingWorldCommitter refuses every record, the way a failed WAL
+// admission does: the handler body already ran and Nest takes it all back.
+type rejectingWorldCommitter struct{ err error }
 
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_late", func() (any, error) {
-		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-1799999000", now.Add(-time.Hour), now); !armed {
-			t.Fatal("a deadline in the past was refused instead of armed")
-		}
-		return nil, nil
-	}); err != nil {
-		t.Fatalf("arm: %v", err)
+func (c rejectingWorldCommitter) Commit(context.Context, dataengine.CommitRecord) error { return c.err }
+
+// RR-20261005-NC-140：定时器堆是组件内存，Nest 的 undo 只撤回 DAO。事务失败或提交被拒绝后，
+// 堆与 DAO 必须一起回到事务开始时的样子：武装被撤回就不能还“已武装”，触发被撤回就必须还能再触发。
+func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	const activityID = "race-1800000000"
+	failures := []struct {
+		name      string
+		committer nest.TransactionCommitter
+		failAfter bool
+	}{
+		{name: "the commit is rejected", committer: rejectingWorldCommitter{err: errors.New("admission refused")}},
+		{name: "a later step fails", committer: &worldCommitter{}, failAfter: true},
 	}
-	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
-		if remaining := subject.TimerComp().Tick(now); remaining != 0 {
-			t.Errorf("the overdue deadline did not fire: %d nodes remain", remaining)
-		}
-		return nil, nil
-	}); err != nil {
-		t.Fatalf("tick: %v", err)
+	for _, tc := range failures {
+		t.Run("arm/"+tc.name, func(t *testing.T) {
+			subject := newWorld(t)
+			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "arm_then_fail", func() (any, error) {
+				subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+				if tc.failAfter {
+					return nil, errors.New("a later step of the same handler failed")
+				}
+				return nil, nil
+			})
+			if err == nil {
+				t.Fatal("the transaction was expected to fail")
+			}
+			if got := subject.Dao().TimersLen(); got != 0 {
+				t.Fatalf("the DAO kept %d timer nodes after the rollback", got)
+			}
+			if id, armed := subject.TimerComp().PendingActivityPhase(activityID); armed {
+				t.Fatalf("rolled back, but the heap still holds node %d: every later arm is refused as a repeat and the stored World has no deadline", id)
+			}
+			committer := &worldCommitter{}
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm", func() (any, error) {
+				if _, armed := subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now); !armed {
+					t.Error("the arm after a rolled-back one was refused as a repeat")
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatalf("arm: %v", err)
+			}
+			if got := subject.Dao().TimersLen(); got != 1 {
+				t.Fatalf("after a committed arm the World stores %d timer nodes, want 1", got)
+			}
+		})
+		t.Run("tick/"+tc.name, func(t *testing.T) {
+			subject := newWorld(t)
+			if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "arm", func() (any, error) {
+				subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+				return nil, nil
+			}); err != nil {
+				t.Fatalf("arm: %v", err)
+			}
+			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "tick_then_fail", func() (any, error) {
+				subject.TimerComp().Tick(now.Add(2 * time.Minute))
+				if tc.failAfter {
+					return nil, errors.New("a later step of the same handler failed")
+				}
+				return nil, nil
+			})
+			if err == nil {
+				t.Fatal("the transaction was expected to fail")
+			}
+			if got := subject.Dao().TimersLen(); got != 1 {
+				t.Fatalf("the DAO holds %d timer nodes after the rolled-back tick, want the deadline back", got)
+			}
+			if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+				t.Fatal("the rolled-back tick took the deadline out of the heap: its effect was rolled back too, so nothing reports the phase until a restart")
+			}
+			committer := &worldCommitter{}
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+				subject.TimerComp().Tick(now.Add(3 * time.Minute))
+				return nil, nil
+			}); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if len(committer.records) != 1 || len(committer.records[0].Effects) != 1 {
+				t.Fatalf("the retried tick did not fire the deadline: %d records", len(committer.records))
+			}
+			if got := subject.Dao().TimersLen(); got != 0 {
+				t.Fatalf("the fired node is still stored (%d)", got)
+			}
+		})
+	}
+}
+
+// A deadline already in the past when the process starts still fires,
+// rather than being refused for being late: the window it closes is the one
+// nobody closed while the process was down. It fires on the next tick.
+//
+// RR-20261005-NC-142：这里原来只断言 armed 与 Tick 后“剩余 0 个节点”——节点根本没建出来时它也通过。
+// 现在断言节点存在、被存储，并且下一次 Tick 带着 effect 触发。
+func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+	}{
+		{name: "an hour late", at: now.Add(-time.Hour)},
+		{name: "due this instant", at: now},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subject := newWorld(t)
+			const activityID = "race-1799999000"
+			committer := &worldCommitter{}
+			var id int64
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "arm_late", func() (any, error) {
+				var armed bool
+				id, armed = subject.TimerComp().ScheduleActivityPhase(activityID, tc.at, now)
+				if !armed {
+					t.Error("the overdue deadline was refused")
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatalf("arm: %v", err)
+			}
+			if id == 0 {
+				t.Error("ScheduleActivityPhase reported armed with node id 0")
+			}
+			if _, armed := subject.TimerComp().PendingActivityPhase(activityID); !armed {
+				t.Fatal("reported armed, but no node is pending: the window this deadline closes is never reported")
+			}
+			if got := subject.Dao().TimersLen(); got != 1 {
+				t.Fatalf("the World stores %d timer nodes, want 1", got)
+			}
+			committer.records = nil
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+				subject.TimerComp().Tick(now.Add(time.Second))
+				return nil, nil
+			}); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if len(committer.records) != 1 || len(committer.records[0].Effects) != 1 {
+				t.Fatalf("the next tick did not fire the overdue deadline: %d records", len(committer.records))
+			}
+		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"{{MODULE}}/game/effects"
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/timer"
 )
 
@@ -26,6 +27,17 @@ const (
 // activityPhaseRetry is how long a phase timer waits before trying again when
 // it could not record its effect.
 const activityPhaseRetry = 30 * time.Second
+
+// overdueDeadlineDelay arms a deadline that is already due. The scheduler
+// refuses a delay that is not positive, so "due now" is armed this far ahead
+// of the transaction's time and fires on the next tick. One millisecond is
+// the resolution the node is stored at.
+const overdueDeadlineDelay = time.Millisecond
+
+// timerHeapUndo is the one undo slot the heap takes per transaction: Nest
+// keeps the first inverse recorded for (component, slot), so a handler that
+// arms and then ticks restores the heap as it was before either.
+const timerHeapUndo uint64 = 1
 
 // TimerComponent is the World's scheduler: deadlines that belong to the
 // server rather than to a player.
@@ -92,9 +104,41 @@ func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, _ boo
 		})
 		return true
 	})
-	component.scheduler = timer.NewScheduler(component.owner.ID(), dao.GetTimerSeed(), saved, component.persist)
-	component.scheduler.RegisterHandler(TimerTypeActivityPhase, component.onActivityPhase)
+	component.rebuild(dao.GetTimerSeed(), saved)
 	return nil
+}
+
+// rebuild replaces the heap with one holding exactly these nodes. Loading
+// and rolling back are the same operation: the heap is a cache of the DAO's
+// timers, and both put it back in line with them.
+func (component *TimerComponent) rebuild(seed int64, nodes []timer.Node) {
+	component.scheduler = timer.NewScheduler(component.owner.ID(), seed, nodes, component.persist)
+	component.scheduler.RegisterHandler(TimerTypeActivityPhase, component.onActivityPhase)
+}
+
+// captureRollback makes the heap part of the running transaction. Call it
+// before the first change to the heap.
+//
+// The heap is component memory, not a DAO field. The DAO's own undo puts the
+// stored timers back when the handler fails or its commit is refused;
+// without this the heap would not follow (RR-20261005-NC-140): a rolled-back
+// arm left a node in memory that the DAO never kept, so every later arm was
+// refused as a repeat and a restart lost the deadline; a rolled-back tick had
+// already popped the node, so the deadline whose effect was rolled back never
+// fired again until a restart. The inverse rebuilds the heap from copies
+// taken here. The World arms only typed timers, which is all Nodes returns.
+func (component *TimerComponent) captureRollback() {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil || tx.Policy() == nest.RollbackNone {
+		return
+	}
+	saved, seed := component.scheduler.Nodes(), component.scheduler.Seed()
+	// The only error is a transaction that is no longer open; a change made
+	// then is not part of any rollback either.
+	_ = tx.RecordUndo(component, timerHeapUndo, func() error {
+		component.rebuild(seed, saved)
+		return nil
+	})
 }
 
 // persist is the scheduler's change hook: every add, fire and removal comes
@@ -151,12 +195,16 @@ func (component *TimerComponent) ScheduleActivityPhase(activityID string, at tim
 	}
 	component.pin(now)
 	delay := at.Sub(now)
-	if delay < 0 {
+	if delay <= 0 {
 		// Already due: arm it for the next tick rather than refusing, so a
 		// process that starts after the deadline still closes the window.
-		delay = 0
+		// Not zero: the scheduler refuses a non-positive delay and returns no
+		// node, which used to be reported here as armed (RR-20261005-NC-142).
+		delay = overdueDeadlineDelay
 	}
-	return component.scheduler.NewTimer(delay, TimerTypeActivityPhase, 0, 0, []byte(activityID)), true
+	component.captureRollback()
+	id := component.scheduler.NewTimer(delay, TimerTypeActivityPhase, 0, 0, []byte(activityID))
+	return id, id != 0
 }
 
 // PendingActivityPhase reports the node armed for an activity, if any.
@@ -178,6 +226,11 @@ func (component *TimerComponent) Tick(now time.Time) int {
 		return 0
 	}
 	component.pin(now)
+	// Only a tick that fires something changes the heap; the once-a-second
+	// tick that finds nothing due takes no copy.
+	if next := component.scheduler.NextTime(); !next.IsZero() && !now.Before(next) {
+		component.captureRollback()
+	}
 	component.scheduler.Tick(now)
 	return len(component.scheduler.Nodes())
 }
