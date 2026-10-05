@@ -2,6 +2,19 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N10 第二批（revn10b）：NC-241～245 P2、NC-240 / 246 / 247 P3 已修复、声明场景验证，未发版。** ai Parallel 结果已定仍 Tick 后面的子节点、策略回调里切换策略让旧树在 Stop 后继续发起动作；actionflow Update 的 fn panic 让 runner 报废、替换时旧动作 Cancel panic 让交出的 ID 永无结论（O-A4）；hotcode 接口变量导出的 PatchBundle 永远加载失败（真实 .so 首次跑到）、插件部分应用不回滚（O-H1）、闭包补丁误报未打补丁（O-H2）、Resolve[T] 静默回落（O-H3）。[本轮](../review/REVIEW-2026-10-06-noncore-n10b.md)（含 MissionRunner / O-A1 的待维护者选项与方向判断）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-247](RR-20261005-NC-247.md) | P3 hotcode Resolve[T] 类型不符时静默回落 fallback | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-246](RR-20261005-NC-246.md) | P3 hotcode.list 用代码指针判 Patched，闭包补丁误报为未打补丁 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-245](RR-20261005-NC-245.md) | P2 hotcode 插件 Apply 中途失败，已替换的点留在插件版本 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-244](RR-20261005-NC-244.md) | P2 hotcode LoadPlugin 的 *Bundle 分支因 ok 被遮蔽永远失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-243](RR-20261005-NC-243.md) | P2 actionflow 替换时旧动作 Cancel panic，交出的 ID 永无结论、组空闲 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-242](RR-20261005-NC-242.md) | P2 actionflow Update 的 fn panic 后 runner 报废（B7 引入） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-241](RR-20261005-NC-241.md) | P2 ai 策略回调里切换策略立即执行，旧树在 Stop 之后继续发起动作 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-240](RR-20261005-NC-240.md) | P3 ai Parallel 结果已定仍 Tick 后面的子节点，发起没人要的动作 | 已修复、声明场景验证，未发版 |
+
 **10-06 N01 留项 + N14 O3 / O4（revn01b）：NC-230～234（均 P3）已修复、声明场景验证，未发版。** ops 端口 bind 失败时 Start 仍返回 nil；停机阶段的 lifecycle hook 不受 `shutdown.total_timeout` 约束；停机开始之后的 RuntimeFailure 不进 run 的返回值（以 0 退出）；Redis Mod 关闭出错后再调 Stop 永远失败；remote_entity Mod 停止失败仍记 stopped。N02 O1 以 `ops.admin_timeout` 落实（不占 RR），Health 的 Degraded 映射待维护者决定（DECISIONS-PENDING D1）。[本轮](../review/REVIEW-2026-10-06-n01b.md)
 
 | 编号 | 问题 | 状态 |

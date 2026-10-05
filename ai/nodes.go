@@ -20,7 +20,13 @@ const (
 	ParallelRequireOne
 )
 
-// Parallel ticks every non-terminal child each tick.
+// Parallel ticks every non-terminal child each tick, in order, until the
+// policy's outcome is decided.
+//
+// 结果一旦确定（RequireAll 出现失败、RequireOne 出现成功）就停止本次 Tick，后面的子节点
+// 不再 Tick，随后 Reset 全部子节点（打断仍在运行的）。之前会把剩下的子节点也 Tick 一遍再
+// Reset：排在后面的 TaskflowAction 先发起一个没人要的动作、紧接着被打断，没配 OnInterrupt
+// 时这个动作成了孤儿（RR-20261005-NC-240）。
 type Parallel[C any] struct {
 	Children []Node[C]
 	Policy   ParallelPolicy
@@ -57,6 +63,9 @@ func (n *Parallel[C]) Tick(ctx *C) Status {
 		default:
 			n.states[index] = StatusRunning
 		}
+		if n.decided(successes, failures) {
+			break
+		}
 	}
 	switch n.Policy {
 	case ParallelRequireOne:
@@ -79,6 +88,15 @@ func (n *Parallel[C]) Tick(ctx *C) Status {
 		}
 	}
 	return StatusRunning
+}
+
+// decided 报告按策略结果是否已经确定：RequireAll 出现任一失败、RequireOne 出现任一成功。
+// 全部完成的情形由循环自然结束覆盖。
+func (n *Parallel[C]) decided(successes, failures int) bool {
+	if n.Policy == ParallelRequireOne {
+		return successes > 0
+	}
+	return failures > 0
 }
 
 func (n *Parallel[C]) Reset() {
@@ -257,7 +275,12 @@ func (n *Cooldown[C]) Reset() {
 	}
 }
 
-// TimeLimit interrupts a child that has been running for more than Ticks.
+// TimeLimit interrupts a child that has been running for Ticks or more.
+//
+// 期限在 Tick 子节点之前判断：now-start >= Ticks 时直接 Reset（打断）并失败，这一拍不再
+// Tick 子节点。BehaviorStrategy 把动作结束缓冲到下一拍送达，所以在最后一拍窗口里（或冻结
+// 期间）已经结束、但要到期限那一拍才送达的动作，会被判为超时并收到一次 OnInterrupt；
+// 冻结期间时钟照走时同理。需要宽限时把 Ticks 留出一拍，或在冻结期间停住 NowTick。
 type TimeLimit[C any] struct {
 	Child Node[C]
 	Ticks int64

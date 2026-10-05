@@ -1,0 +1,16 @@
+--- FAIL: TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided (0.00s)
+    --- FAIL: TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided/require_all_first_child_fails (0.00s)
+        parallel_decision_promises_test.go:43: a child after the deciding one was ticked: launched=1 interrupted=1, want 0/0
+    --- FAIL: TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided/require_one_first_child_succeeds (0.00s)
+        parallel_decision_promises_test.go:43: a child after the deciding one was ticked: launched=1 interrupted=1, want 0/0
+--- FAIL: TestSwitchRequestedInsideATickRunsAfterTheTickReturns (0.00s)
+    --- FAIL: TestSwitchRequestedInsideATickRunsAfterTheTickReturns/set_strategy (0.00s)
+        switch_in_callback_promises_test.go:77: events = [end_actions stop launch], want [launch end_actions stop]: the replaced tree kept launching after it was stopped
+    --- FAIL: TestSwitchRequestedInsideATickRunsAfterTheTickReturns/shutdown (0.00s)
+        switch_in_callback_promises_test.go:77: events = [stop launch], want [launch stop]: the replaced tree kept launching after it was stopped
+--- FAIL: TestDeferredSwitchFailureIsReportedAndKeepsTheCurrentStrategy (0.00s)
+    switch_in_callback_promises_test.go:98: SetStrategy inside Tick = ai: strategy initialization failed: failing: boom, want nil
+    switch_in_callback_promises_test.go:114: reported = [], want one ErrStrategyInit
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/ai	0.464s
+FAIL

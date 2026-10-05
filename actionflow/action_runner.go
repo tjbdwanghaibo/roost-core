@@ -270,7 +270,9 @@ func (r *ActionRunner) Pending(group ActionGroup) []ActionSnapshot {
 }
 
 // Update 对组的当前动作调用 fn。在回调里立即调用；不在回调里时 fn 运行期间同样算回调，
-// fn 里的变更在 fn 返回后执行。
+// fn 里的变更在 fn 返回后执行。fn 的 panic 与动作回调一样恢复成错误返回：fn 运行期间
+// executing 已置位，panic 直接穿出会让它永远不复位，之后的变更全被当成延后命令、再没有
+// 人执行（RR-20261005-NC-242）。
 func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 	if fn == nil {
 		return nil
@@ -280,10 +282,10 @@ func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 		return nil
 	}
 	if r.executing {
-		return fn(unit.cur.Action)
+		return callUpdate(fn, unit.cur.Action)
 	}
 	r.executing = true
-	err := fn(unit.cur.Action)
+	err := callUpdate(fn, unit.cur.Action)
 	return errors.Join(err, r.drain())
 }
 
@@ -491,6 +493,11 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 
 // applyStart 启动一个已构建的动作，替换当前动作。延后的 Start 已把 ID 交出，执行时组被
 // 冻结也要发 OnEnded 收尾。
+//
+// 被替换动作的 Cancel 失败（panic）只经 OnError 报告，不阻止新动作启动：finish 已经把旧
+// 动作结束（清当前位、发 OnEnded），之前在这里整体返回，新动作既不启动也没有 OnEnded——
+// 回调里交出的 ID 永远没有结论，直接调用时组空着、队列也不推进（RR-20261005-NC-243，
+// N10 观察 O-A4）。Start 的错误只表示请求的动作没有在运行。
 func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 	unit := r.group(cmd.group)
 	entry := cmd.entry
@@ -501,8 +508,9 @@ func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 		return ErrActionGroupFrozen
 	}
 	if unit.cur != nil {
+		replaced := unit.cur.ID
 		if err := r.finish(unit, true, NewActionReason("replaced by next action"), false); err != nil {
-			return err
+			r.report(fmt.Errorf("taskflow: replaced action %d: %w", replaced, err))
 		}
 	}
 	return r.start(unit, entry, cmd.now)
@@ -767,6 +775,10 @@ func (r *ActionRunner) report(err error) {
 	}
 }
 
+func callUpdate(fn func(Action) error, action Action) (err error) {
+	defer recoverActionPanic("update", &err)
+	return fn(action)
+}
 func callActionStart(action Action, ctx *ActionContext) (err error) {
 	defer recoverActionPanic("start", &err)
 	return action.Start(ctx)

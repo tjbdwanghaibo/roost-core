@@ -1,0 +1,10 @@
+--- FAIL: TestUpdateWhoseFnPanicsLeavesTheRunnerUsable (0.00s)
+    update_and_replace_promises_test.go:26: runner still reports Deferring() after Update's fn panicked: every later mutation is parked forever
+--- FAIL: TestReplacedActionWhoseCancelPanicsStillLetsTheNewActionStart (0.00s)
+    --- FAIL: TestReplacedActionWhoseCancelPanicsStillLetsTheNewActionStart/deferred_start (0.00s)
+        update_and_replace_promises_test.go:87: the action whose ID was handed out never started: starts=0 ended=0 (B7: an ID always reaches a conclusion)
+    --- FAIL: TestReplacedActionWhoseCancelPanicsStillLetsTheNewActionStart/direct_start (0.00s)
+        update_and_replace_promises_test.go:103: Start replacing an action whose Cancel panics = (0, taskflow: action cancel panic: cancel exploded), want an ID and nil
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/actionflow	0.490s
+FAIL

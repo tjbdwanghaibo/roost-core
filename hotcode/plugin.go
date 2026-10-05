@@ -21,6 +21,9 @@ type Bundle interface {
 // LoadPlugin opens a Go plugin and applies its PatchBundle. The Go runtime does
 // not unload plugins, so rollback must be implemented by the bundle's Revert
 // method or by reverting individual patch points.
+//
+// Apply 失败（错误或 panic）时，已被它替换的补丁点恢复成加载前的那一代，再返回错误
+// （Registry.ApplyBundle，RR-20261005-NC-245）。
 func LoadPlugin(path string) (Bundle, error) {
 	if path == "" {
 		return nil, fmt.Errorf("hotcode: plugin path required")
@@ -38,7 +41,10 @@ func LoadPlugin(path string) (Bundle, error) {
 	}
 	bundle, ok := sym.(Bundle)
 	if !ok {
-		if ptr, ok := sym.(*Bundle); ok && ptr != nil {
+		// 导出成 hotcode.Bundle 接口变量时 Lookup 得到 *Bundle。之前这里写成
+		// `if ptr, ok := ...; ok && ptr != nil { ok = bundle != nil }`，内层 ok 遮住了外层，
+		// 这种导出方式一律被拒（RR-20261005-NC-244）。
+		if ptr, isPtr := sym.(*Bundle); isPtr && ptr != nil {
 			bundle = *ptr
 			ok = bundle != nil
 		}
@@ -46,8 +52,8 @@ func LoadPlugin(path string) (Bundle, error) {
 	if !ok {
 		return nil, fmt.Errorf("hotcode: PatchBundle in %s does not implement hotcode.Bundle", path)
 	}
-	if err := bundle.Apply(Default); err != nil {
-		return nil, fmt.Errorf("hotcode: apply plugin %s: %w", path, err)
+	if restored, err := Default.ApplyBundle(bundle); err != nil {
+		return nil, fmt.Errorf("hotcode: apply plugin %s (rolled back %d patch point(s)): %w", path, restored, err)
 	}
 	return bundle, nil
 }

@@ -45,7 +45,9 @@ func RegisterAdminCommands(reg *admin.Registry) error {
 				if err != nil {
 					return admin.Result{}, err
 				}
-				if err := Revert(payload.Name); err != nil {
+				// 与 hotcode.load_plugin 串行：插件 Apply 失败的恢复按应用前快照判断，交错的
+				// revert 会被一起恢复掉（RR-20261005-NC-245）。
+				if err := Default.revertBetweenApplies(payload.Name); err != nil {
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"name": payload.Name}}, nil

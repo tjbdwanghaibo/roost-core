@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **ai Controller：策略回调里的 SetStrategy / Shutdown 延后到回调返回后执行**（RR-20261005-NC-241，与 B7 同向）：之前立即切换，旧行为树在 Stop 之后接着跑、发起的动作没被切换结束，成为孤儿。回调里调用返回 nil，切换出错经 OnError 报告，回调返回前 `Strategy()` 仍是旧策略。[记录](docs/bugfix/RR-20261005-NC-241.md)
+- **ai Parallel 结果确定即停止本次 Tick**（RR-20261005-NC-240）：RequireAll 出现失败 / RequireOne 出现成功后不再 Tick 后面的子节点，此前会先发起没人要的动作再打断。[记录](docs/bugfix/RR-20261005-NC-240.md)
+- **actionflow 两处 B7 panic 路径收敛**（RR-20261005-NC-242 / NC-243）：`Update` 的 fn panic 恢复成错误，不再让 runner 永远处在“回调中”；替换动作时旧动作 Cancel panic 只经 OnError 报告，新动作照常启动——回调里交出的 ID 一定有结论，直接 Start 返回 (ID, nil)。[NC-242](docs/bugfix/RR-20261005-NC-242.md) · [NC-243](docs/bugfix/RR-20261005-NC-243.md)
+- **hotcode 插件加载修正并可回滚**（RR-20261005-NC-244 / NC-245）：以 `hotcode.Bundle` 接口变量导出的 PatchBundle 之前因变量遮蔽一律被拒；新增 `Registry.ApplyBundle`，Apply 失败或 panic 时把已替换的点恢复成加载前那一代（不是原函数），LoadPlugin 改走它，admin revert 与插件加载串行。新增真实 .so 测试包 `hotcode/plugintest`。[NC-244](docs/bugfix/RR-20261005-NC-244.md) · [NC-245](docs/bugfix/RR-20261005-NC-245.md)
+- **hotcode.list 如实报告补丁**（RR-20261005-NC-246 / NC-247）：`Patched` 由 Replace / Revert 记录（同一工厂产生的闭包补丁不再误报未打补丁）；`Resolve[T]` 在签名相同只差命名时转换后返回补丁，签名不符时仍回落 fallback 并计入新字段 `PointInfo.ResolveMismatches`。[NC-246](docs/bugfix/RR-20261005-NC-246.md) · [NC-247](docs/bugfix/RR-20261005-NC-247.md)
 - **ops 端口 bind 失败时进程启动失败**（RR-20261005-NC-230）：`OpsMod.Start` 在 Start 里同步 `net.Listen`，端口被占用返回 `ops: listen on ops.addr …`，按启动失败收尾；之前 bind 在后台 goroutine 里失败只记日志，进程在没有 `/healthz`、`/readyz` 的情况下继续跑，同机部署的健康检查可能探到占着端口的另一个进程。同机多实例须各配各的 `ops.addr`。[修复记录](docs/bugfix/RR-20261005-NC-230.md)
 - **停机阶段的 lifecycle hook 受 `shutdown.total_timeout` 约束**（RR-20261005-NC-231）：service.stopping / service.stopped 的 hook 在停机预算内等，不配合 ctx 时 `run` 按预算返回错误；service.stopping 卡住时与 Service.Shutdown 不完整相同，不停 Service / Mod、不释放单实例锁。之前一个忽略 ctx 的 hook 让停机永远不返回。[修复记录](docs/bugfix/RR-20261005-NC-231.md)
 - **停机期间发生的 fail-stop 让进程非零退出**（RR-20261005-NC-232）：信号之后才发生的 RuntimeFailure（DataEngine / Remote fatal、失锁）在 `run` 返回时并入错误；之前只写 Error 日志、以 0 退出。安全动作（围栏、失锁不 Release）不变。[修复记录](docs/bugfix/RR-20261005-NC-232.md)

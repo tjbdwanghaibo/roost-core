@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N10 第二批（ai 节点、actionflow 池化与 B7 留项、hotcode 真实插件）
+
+基线 `81d7cb16`，分支 `revn10b`，NC 段 240～249（用 240～247）；图谱 generation 09-30 落后于三个包的 `556d156d` / `a9b7075b`，全部以当前源码通读补证。[本轮/矩阵](REVIEW-2026-10-06-noncore-n10b.md) · [证据](../bugfix/evidence/noncore-bugfix-20261006-n10b/README.md)。NC-241～245（P2）、NC-240 / 246 / 247（P3）已修复、声明场景验证，未发版。
+
+| 子域 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| ai | N1～N13 逐节点状态 / 传播 / 重入 / 冻结 | NC-240、NC-241；O-N1（TimeLimit 注释已改正）、O-N2 |
+| actionflow | P1～P9 池化上下文、Update、B7 留项 | NC-242、NC-243（O-A4）；O-A5 / O-A6；MissionRunner 延后、O-A1 清场待维护者（推荐都保持） |
+| hotcode | H9～H13 真实 .so（本机 macOS）、部分应用、可见性 | NC-244～247（O-H1～O-H3）；Linux / Windows 插件未跑 |
+
+10 条新正式用例（含 2 条真实 .so）修前红 → 修后绿；三包 race×3、`./nest`、全仓 build/vet、根包通过。N10 第二批完成；单元剩余只有外部环境项与待维护者的语义选择。
+
 ## 2026-10-06 N01 留项 + N14 O3 / O4（revn01b）
 
 基线 `c8ecbabb`，分支 `revn01b`，NC 段 230～239（用 230～234）；图谱 generation 2026-09-30，相关文件 metadata_changed，全部按当前源码补证。[本轮](REVIEW-2026-10-06-n01b.md) · [修复](../bugfix/README.md)。NC-230～234（P3）已修复、声明场景验证，未发版；N02 O1 以 `ops.admin_timeout` 落实（[方案](../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)）。

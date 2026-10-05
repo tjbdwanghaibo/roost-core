@@ -2,6 +2,19 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N10 第二批（revn10b）：NC-240～247 已修复、声明场景验证，未发版。** Parallel 结果确定即停；Controller 回调里的切换延后到最外层回调返回（与 B7 同向）；Update 的 fn panic 恢复成错误；替换时旧动作 Cancel 失败只报告、新动作照常启动；LoadPlugin 指针分支去掉变量遮蔽；`Registry.ApplyBundle` 失败回滚到应用前那一代；Patched 由写者记录；Resolve[T] 同签名转换、不符计数。新增真实 .so 测试包 `hotcode/plugintest`。[本轮](../review/REVIEW-2026-10-06-noncore-n10b.md) · [证据](evidence/noncore-bugfix-20261006-n10b/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-247](RR-20261005-NC-247.md) | 同签名不同命名时转换；无法转换时回落并计入 ResolveMismatches | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-246](RR-20261005-NC-246.md) | Patched 由 Replace / Revert 记录在整体发布的状态里 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-245](RR-20261005-NC-245.md) | `Registry.ApplyBundle`：失败或 panic 时恢复成应用前那一代 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-244](RR-20261005-NC-244.md) | 指针分支改用独立变量名，写回外层 ok | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-243](RR-20261005-NC-243.md) | 旧动作 Cancel 失败只报告，新动作照常启动 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-242](RR-20261005-NC-242.md) | fn 的 panic 恢复成错误，executing 照常复位 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-241](RR-20261005-NC-241.md) | 回调里的 SetStrategy / Shutdown 延后到最外层回调返回后执行 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-240](RR-20261005-NC-240.md) | 结果确定即停止本次 Tick（`decided`），再 Reset 全部子节点 | 已修复、声明场景验证，未发版 |
+
 **10-06 N01 留项 + N14 O3 / O4（revn01b）：NC-230～234 已修复、声明场景验证，未发版。** Ops 在 Start 里同步 bind；停机阶段 hook 在停机预算内等、超时保留依赖；停机期 RuntimeFailure 在 run 返回时并入；Redis Mod 第一次 Close 后交出连接池、错误只报一次；remote_entity Mod 停完才记 stopped。另：`ops.admin_timeout` 给 admin 命令期限（[方案](../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)）。[本轮](../review/REVIEW-2026-10-06-n01b.md) · [证据](evidence/noncore-bugfix-20261006-n01b/README.md)
 
 | 编号 | 修复 | 状态 |

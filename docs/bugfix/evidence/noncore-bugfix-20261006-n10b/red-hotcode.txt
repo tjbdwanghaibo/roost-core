@@ -1,0 +1,7 @@
+--- FAIL: TestListReportsAClosurePatchFromTheSameFactoryAsPatched (0.00s)
+    patch_visibility_promises_test.go:24: List = {Name:closure Type:func(int) int Generation:1 Patched:false Meta:{Version:v2 Author: Reason: Source: LoadedAt:2026-10-06 07:36:01.672519 +0800 CST m=+0.000751751}}, want Patched=true with the patch's Meta: the patch is in effect
+--- FAIL: TestResolveConvertsAnIdenticalSignatureAndCountsRealMismatches (0.00s)
+    patch_visibility_promises_test.go:52: Resolve[namedAdder] returned the fallback (2), want the patch (101): a registered patch never takes effect for this caller
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/hotcode	0.483s
+FAIL

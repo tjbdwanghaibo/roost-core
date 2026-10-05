@@ -1,0 +1,18 @@
+--- PASS: TestNodesGuardCooldownRepeatParallel (0.00s)
+--- PASS: TestSetStrategyRefusesNilReentrantAndRejectedSwitches (0.00s)
+--- PASS: TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided (0.00s)
+--- PASS: TestParallelStillInterruptsRunningChildrenWhenItCompletes (0.00s)
+--- PASS: TestSwitchRequestedInsideATickRunsAfterTheTickReturns (0.00s)
+--- PASS: TestDeferredSwitchFailureIsReportedAndKeepsTheCurrentStrategy (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/ai	0.772s
+--- PASS: TestUpdateWhoseFnPanicsLeavesTheRunnerUsable (0.00s)
+--- PASS: TestReplacedActionWhoseCancelPanicsStillLetsTheNewActionStart (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/actionflow	0.327s
+--- PASS: TestListReportsAClosurePatchFromTheSameFactoryAsPatched (0.00s)
+--- PASS: TestResolveConvertsAnIdenticalSignatureAndCountsRealMismatches (0.00s)
+--- PASS: TestApplyBundleRollsBackWhenApplyPanics (0.00s)
+--- PASS: TestLoadPluginRefusesEmptyAndNonSharedObjectPaths (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/hotcode	1.147s
+--- PASS: TestLoadPluginAcceptsABundleExportedAsAnInterfaceVariable (0.72s)
+--- PASS: TestLoadPluginRollsBackAPartiallyAppliedBundle (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/hotcode/plugintest	2.062s

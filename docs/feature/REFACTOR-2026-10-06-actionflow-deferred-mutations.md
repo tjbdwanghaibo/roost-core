@@ -101,3 +101,5 @@ U-0077（冻结组 / 任务独占，`promises_test.go`）、U-0125（`plan_guard
 ## 6. 实施状态
 
 已实施（见 DECISIONS-PENDING B7 行的提交号）。未做：MissionRunner 改延后语义（形态 (a) 保留）；O-A1“清场”语义、O-A4。
+
+**N10 第二批复核（2026-10-06，[记录](../review/REVIEW-2026-10-06-noncore-n10b.md)）**：O-A4 在延后语义下违反“拿到 ID 的动作一定有结论”，按缺陷修复（RR-20261005-NC-243：旧动作 Cancel 失败只报告、新动作照常启动）；另修 B7 引入的 Update fn panic 后 `executing` 不复位（RR-20261005-NC-242）。MissionRunner 延后语义与 O-A1“清场”没有确认缺陷，选项与推荐（都保持现状）见该记录“待维护者”。

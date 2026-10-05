@@ -26,11 +26,29 @@ type ControllerHooks struct {
 // Controller hosts one strategy and provides transactional replacement:
 // a failing new Init leaves the previous strategy installed and active.
 // Calls are externally serialized by the owning Entity mutex.
+//
+// 策略回调（Tick / OnActionEnd / OnMissionEnd）里调用 SetStrategy / Shutdown 不立即切换，
+// 记为待切换，最外层回调返回后执行（RR-20261005-NC-241，与 actionflow B7 的延后方向一致）：
+// 立即切换会在旧 Tick 还没返回时 EndActions、Stop 旧策略，旧树随后接着跑、发起的动作没有
+// 被这次切换结束，结束通知又送给新策略，成了孤儿。回调里的 SetStrategy 返回 nil，切换
+// 出错（旧策略拒绝、新策略 Init 失败）经 OnError 报告；同一轮回调里多次请求以最后一次
+// 为准。回调返回前 Strategy() 仍是旧策略。Freeze / Recover 只置标志，始终立即生效。
 type Controller struct {
 	hooks     ControllerHooks
 	strategy  Strategy
 	frozen    bool
 	switching bool
+	// callbacks 是正在执行的策略回调层数（Tick 里同步送达的 OnActionEnd 会叠一层）。
+	callbacks int
+	// pending 是回调里请求、等最外层回调返回后执行的切换；nil 表示没有。
+	pending *pendingSwitch
+}
+
+// pendingSwitch 是一次延后的切换：shutdown 为真时执行 Shutdown(reason)，否则 SetStrategy(next)。
+type pendingSwitch struct {
+	next     Strategy
+	shutdown bool
+	reason   string
 }
 
 func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks: hooks} }
@@ -39,13 +57,18 @@ func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks
 // 保留旧策略，这是“事务式替换”）→ EndActions 结束现有动作 → Stop 旧策略 → 发布。
 // EndActions 在 Init 成功之后才跑，通常接 ActionList.EndAllAction，所以 Init 里就发起的
 // 动作也会被一并结束，而且切换期间的结束通知不送达策略：策略应在第一次 Tick 里发起
-// 动作，不要在 Init 里发起（BehaviorStrategy.Init 只重置树）。
+// 动作，不要在 Init 里发起（BehaviorStrategy.Init 只重置树）。在策略回调里调用时延后到
+// 回调返回后执行并返回 nil（见 Controller 的说明）。
 func (c *Controller) SetStrategy(next Strategy) error {
 	if c == nil {
 		return ErrStrategyInit
 	}
 	if c.switching {
 		return ErrReentrantSwitch
+	}
+	if c.callbacks > 0 {
+		c.pending = &pendingSwitch{next: next}
+		return nil
 	}
 	canStop, err := callStrategyCanStop(c.strategy, next)
 	if err != nil {
@@ -105,7 +128,10 @@ func (c *Controller) Tick(now time.Time) {
 	if now.IsZero() {
 		now = c.now()
 	}
-	if err := callStrategyTick(c.strategy, c.context(now), now); err != nil {
+	strategy := c.strategy
+	c.enterCallback()
+	defer c.leaveCallback()
+	if err := callStrategyTick(strategy, c.context(now), now); err != nil {
 		c.report(err)
 	}
 }
@@ -115,7 +141,10 @@ func (c *Controller) OnActionEnd(id int64, kind coreflow.ActionKind, reason core
 	if !c.notifiable() {
 		return
 	}
-	if err := callStrategyActionEnd(c.strategy, c.context(c.now()), id, kind, reason); err != nil {
+	strategy := c.strategy
+	c.enterCallback()
+	defer c.leaveCallback()
+	if err := callStrategyActionEnd(strategy, c.context(c.now()), id, kind, reason); err != nil {
 		c.report(err)
 	}
 }
@@ -125,12 +154,19 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 	if !c.notifiable() {
 		return
 	}
-	if err := callStrategyMissionEnd(c.strategy, c.context(c.now()), mission, reason); err != nil {
+	strategy := c.strategy
+	c.enterCallback()
+	defer c.leaveCallback()
+	if err := callStrategyMissionEnd(strategy, c.context(c.now()), mission, reason); err != nil {
 		c.report(err)
 	}
 }
 func (c *Controller) Shutdown(reason string) {
 	if c == nil {
+		return
+	}
+	if c.callbacks > 0 && !c.switching {
+		c.pending = &pendingSwitch{shutdown: true, reason: reason}
 		return
 	}
 	c.switching = true
@@ -142,6 +178,26 @@ func (c *Controller) Shutdown(reason string) {
 	}
 	if previous != nil {
 		c.changed(previous, nil)
+	}
+}
+
+func (c *Controller) enterCallback() { c.callbacks++ }
+
+// leaveCallback 退出一层策略回调；最外层回调返回时执行回调里请求的切换。切换本身引出的
+// 通知在 switching 期间被丢弃，不会再叠回调层。
+func (c *Controller) leaveCallback() {
+	c.callbacks--
+	if c.callbacks > 0 || c.pending == nil {
+		return
+	}
+	request := c.pending
+	c.pending = nil
+	if request.shutdown {
+		c.Shutdown(request.reason)
+		return
+	}
+	if err := c.SetStrategy(request.next); err != nil {
+		c.report(fmt.Errorf("ai: deferred strategy switch: %w", err))
 	}
 }
 
