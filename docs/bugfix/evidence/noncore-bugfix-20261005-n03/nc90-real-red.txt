@@ -1,0 +1,6 @@
+    jetstream_stop_real_promises_test.go:128: budgeted stop with the handler in flight: err=<nil> bus_retained=false asm_retained=false
+    jetstream_stop_real_promises_test.go:130: stop reported success, or released the connection, while the JetStream handler was still running
+--- FAIL: TestRealJetStreamStopWaitsForInFlightHandler (0.39s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/nats	1.001s
+FAIL

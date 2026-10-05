@@ -324,11 +324,13 @@ func (b *Bus) Stop() {
 	_ = b.StopWithContext(context.Background())
 }
 
-// StopWithContext unsubscribes, stops the worker pool and waits for it to
-// drain within ctx. A ctx error only means this caller stopped waiting: the Bus
-// keeps the pool and a later call continues waiting for the same drain
-// (RR-20261004-07). Any other error is terminal and returned by every later
-// call, as is nil once the drain finished.
+// StopWithContext unsubscribes, stops the worker pool and waits within ctx for
+// it and for the JetStream RPC handlers in flight to drain (RR-20261005-NC-90).
+// A ctx error only means this caller stopped waiting: the Bus keeps the pool
+// and the handlers' connection, and a later call continues waiting for the same
+// drain (RR-20261004-07). Any other error is terminal and returned by every
+// later call, as is nil once the drain finished. A handler must not stop its
+// own Bus with an unbounded ctx: that stop waits for the handler itself.
 func (b *Bus) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -387,6 +389,10 @@ func (b *Bus) awaitStop(ctx context.Context, done, teardown <-chan struct{}) err
 			return err
 		}
 	}
+	if err := b.waitJetStreamRPCRequests(ctx); err != nil {
+		return err
+	}
+	b.stopJetStreamRPCResponses()
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
 	b.finishStopLocked()
@@ -408,8 +414,16 @@ func (b *Bus) finishStopLocked() {
 
 // stopResources tears down subscriptions and the pool. teardownErr carries the
 // unsubscribe failures, which are final; drainErr is only the ctx error of
-// waiting for the pool, after which the pool can be waited for again.
+// waiting for the pool or for the JetStream request handlers, after which both
+// can be waited for again.
+//
+// Order (RR-20261005-NC-90): JetStream request admission closes first, then the
+// core subscriptions go, then the pool and the JetStream handlers drain — both
+// run business code on the connection, so a stop only reports success once
+// neither has anything in flight. The response consumer goes last, after the
+// drain, so draining handlers can still finish nested reliable calls.
 func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool *worker.Pool[*incomingTask]) (teardownErr, drainErr error) {
+	b.stopJetStreamRPCRequests()
 	for _, sub := range subs {
 		if sub == nil || !sub.IsValid() {
 			continue
@@ -422,7 +436,12 @@ func (b *Bus) stopResources(ctx context.Context, subs []nats.ISubscription, pool
 	if pool != nil {
 		drainErr = pool.StopWithContext(ctx)
 	}
-	b.stopJetStreamRPCSubscriptions()
+	if drainErr == nil {
+		drainErr = b.waitJetStreamRPCRequests(ctx)
+	}
+	if drainErr == nil {
+		b.stopJetStreamRPCResponses()
+	}
 	return teardownErr, drainErr
 }
 

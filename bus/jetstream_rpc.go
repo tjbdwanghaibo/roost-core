@@ -29,6 +29,10 @@ const (
 var (
 	ErrJetStreamRPCUnavailable = errors.New("bus: jetstream rpc unavailable")
 	ErrJetStreamRPCExpired     = errors.New("bus: jetstream rpc request expired")
+
+	// errJetStreamRPCStopping 让停止开始后才到达的投递回到 broker（driver 据此 NAK），
+	// 由同服务的其他实例处理（RR-20261005-NC-90）。
+	errJetStreamRPCStopping = errors.New("bus: jetstream rpc is stopping; delivery returned to the broker")
 )
 
 type JetStreamRPCConfig struct {
@@ -88,8 +92,60 @@ type jetStreamRPC struct {
 	pendingByMethod sync.Map // method -> *atomic.Int64
 	seq             atomic.Uint64
 
-	mu   sync.Mutex
-	subs []fnats.IJetStreamSubscription
+	mu          sync.Mutex
+	subs        []fnats.IJetStreamSubscription // request consumers
+	responseSub fnats.IJetStreamSubscription
+
+	// RR-20261005-NC-90：请求 handler 在 nats.go 的 consume 回调 goroutine 里同步执行，
+	// 不在 Bus 的 pool 里，pool 排空管不到它们；nats.go 的 ConsumeContext.Stop 也不等在途
+	// 回调。这里是它们自己的准入与在途计数：停止先关准入，再等在途归零，归零之前连接
+	// 不能交还（Bus 的停止返回 ctx 错误、保留责任）。
+	handlerMu       sync.Mutex
+	handlerClosed   bool
+	handlersRunning int
+	handlersIdle    chan struct{} // closed once admission is closed and no handler runs
+}
+
+// beginHandler admits one request delivery; false once the stop closed admission.
+func (r *jetStreamRPC) beginHandler() bool {
+	r.handlerMu.Lock()
+	defer r.handlerMu.Unlock()
+	if r.handlerClosed {
+		return false
+	}
+	r.handlersRunning++
+	return true
+}
+
+func (r *jetStreamRPC) endHandler() {
+	r.handlerMu.Lock()
+	defer r.handlerMu.Unlock()
+	r.handlersRunning--
+	if r.handlerClosed && r.handlersRunning == 0 {
+		r.closeIdleLocked()
+	}
+}
+
+// closeHandlerAdmission is idempotent; it returns the channel that closes when
+// the last admitted handler has returned.
+func (r *jetStreamRPC) closeHandlerAdmission() <-chan struct{} {
+	r.handlerMu.Lock()
+	defer r.handlerMu.Unlock()
+	if !r.handlerClosed {
+		r.handlerClosed = true
+		if r.handlersRunning == 0 {
+			r.closeIdleLocked()
+		}
+	}
+	return r.handlersIdle
+}
+
+func (r *jetStreamRPC) closeIdleLocked() {
+	select {
+	case <-r.handlersIdle:
+	default:
+		close(r.handlersIdle)
+	}
 }
 
 type pendingJetStreamRPCCall struct {
@@ -104,7 +160,7 @@ func (b *Bus) EnableJetStreamRPC(js fnats.IJetStream, cfg JetStreamRPCConfig) er
 		return ErrJetStreamRPCUnavailable
 	}
 	cfg = cfg.normalize()
-	rpc := &jetStreamRPC{js: js, cfg: cfg}
+	rpc := &jetStreamRPC{js: js, cfg: cfg, handlersIdle: make(chan struct{})}
 	b.jsRPC = rpc
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.SetupTimeout)
 	defer cancel()
@@ -173,7 +229,9 @@ func (b *Bus) subscribeJetStreamRPCResponses(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("bus: subscribe jetstream rpc responses: %w", err)
 	}
-	b.addJetStreamRPCSubscription(sub)
+	b.jsRPC.mu.Lock()
+	b.jsRPC.responseSub = sub
+	b.jsRPC.mu.Unlock()
 	return nil
 }
 
@@ -232,10 +290,17 @@ func (b *Bus) addJetStreamRPCSubscription(sub fnats.IJetStreamSubscription) {
 	b.jsRPC.subs = append(b.jsRPC.subs, sub)
 }
 
-func (b *Bus) stopJetStreamRPCSubscriptions() {
+// stopJetStreamRPCRequests closes request admission and stops the request
+// consumers. It runs first in a stop: a delivery that reaches the Bus after this
+// goes back to the broker untouched, and stopping the consumers early keeps this
+// instance from NAKing the same request round after round and burning its
+// MaxDeliver. Handlers already running keep the connection; the stop waits for
+// them with waitJetStreamRPCRequests (RR-20261005-NC-90).
+func (b *Bus) stopJetStreamRPCRequests() {
 	if !b.jetStreamRPCEnabled() {
 		return
 	}
+	b.jsRPC.closeHandlerAdmission()
 	b.jsRPC.mu.Lock()
 	subs := append([]fnats.IJetStreamSubscription(nil), b.jsRPC.subs...)
 	b.jsRPC.subs = nil
@@ -244,6 +309,39 @@ func (b *Bus) stopJetStreamRPCSubscriptions() {
 		if sub != nil {
 			sub.Stop()
 		}
+	}
+}
+
+// waitJetStreamRPCRequests waits within ctx for the admitted request handlers
+// to return. A ctx error only means the caller stopped waiting; a later call
+// waits for the same handlers again.
+func (b *Bus) waitJetStreamRPCRequests(ctx context.Context) error {
+	if !b.jetStreamRPCEnabled() {
+		return nil
+	}
+	idle := b.jsRPC.closeHandlerAdmission()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// stopJetStreamRPCResponses stops the response consumer and fails the calls
+// still waiting for a response. It runs after the handlers drained, so a
+// handler that makes a nested reliable call while it drains still gets its
+// answer.
+func (b *Bus) stopJetStreamRPCResponses() {
+	if !b.jetStreamRPCEnabled() {
+		return
+	}
+	b.jsRPC.mu.Lock()
+	sub := b.jsRPC.responseSub
+	b.jsRPC.responseSub = nil
+	b.jsRPC.mu.Unlock()
+	if sub != nil {
+		sub.Stop()
 	}
 	// Ownership of a pending call is claimed by LoadAndDelete: whoever removes
 	// the entry is the only party allowed to touch its channel. Closing the
@@ -373,6 +471,10 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if msg == nil {
 		return nil
 	}
+	if !b.jsRPC.beginHandler() {
+		return errJetStreamRPCStopping
+	}
+	defer b.jsRPC.endHandler()
 	var req fnats.NatsMsg
 	if err := b.codec.Unmarshal(msg.Data, &req); err != nil {
 		return fmt.Errorf("bus: decode jetstream rpc req: %w", err)
@@ -405,7 +507,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		if err != nil {
 			return err
 		}
-		return b.publishJetStreamRPCResponse(processCtx, req.ReplySubject, req.SessionId, data)
+		return b.publishJetStreamRPCReply(req, data)
 	}
 
 	rpcCtx := &RpcContext{
@@ -438,6 +540,13 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		resp, handlerErr = handler(rpcCtx)
 	}()
 
+	if handlerErr != nil && errors.Is(processCtx.Err(), context.Canceled) {
+		// processCtx 只会因 Bus 停止被取消（期限到达是 DeadlineExceeded）。handler 因此中断时
+		// 不把“已取消”当业务结果回给调用方，消息交还 broker（NAK），由其他实例处理（NC-90）。
+		b.recordJetStreamRPCRequest(req.MsgName, "interrupted")
+		return fmt.Errorf("bus: jetstream rpc %s interrupted by stop: %w", req.MsgName, handlerErr)
+	}
+
 	var data []byte
 	var err error
 	if handlerErr != nil {
@@ -449,7 +558,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		b.recordJetStreamRPCRequest(req.MsgName, "marshal_error")
 		return fmt.Errorf("bus: marshal jetstream rpc resp %s: %w", req.MsgName, err)
 	}
-	if err := b.publishJetStreamRPCResponse(processCtx, req.ReplySubject, req.SessionId, data); err != nil {
+	if err := b.publishJetStreamRPCReply(req, data); err != nil {
 		b.recordJetStreamRPCRequest(req.MsgName, "publish_error")
 		return err
 	}
@@ -473,6 +582,23 @@ func (b *Bus) jetStreamRPCProcessContext(req fnats.NatsMsg) (context.Context, co
 		return ctx, func() {}
 	}
 	return context.WithDeadline(base, deadline)
+}
+
+// publishJetStreamRPCReply publishes the result of a handler that ran to the
+// end. Its budget is the caller's deadline (AckWait when the request carries
+// none), detached from the Bus lifetime: the old code published on processCtx,
+// which the stop cancels first, so a handler that finished within the stop
+// budget always lost its response and was redelivered (RR-20261005-NC-90).
+func (b *Bus) publishJetStreamRPCReply(req fnats.NatsMsg, data []byte) error {
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if req.DeadlineAt > 0 {
+		ctx, cancel = context.WithDeadline(context.Background(), time.UnixMilli(req.DeadlineAt))
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), b.jsRPC.cfg.AckWait)
+	}
+	defer cancel()
+	return b.publishJetStreamRPCResponse(ctx, req.ReplySubject, req.SessionId, data)
 }
 
 func (b *Bus) publishJetStreamRPCResponse(ctx context.Context, replySubject string, requestID string, data []byte) error {
