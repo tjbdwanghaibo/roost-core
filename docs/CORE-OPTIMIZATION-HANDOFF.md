@@ -186,6 +186,7 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N09 skill 第一批（revn09）：[NC-110](bug/RR-20261005-NC-110.md) / [NC-111](bug/RR-20261005-NC-111.md) / [NC-112](bug/RR-20261005-NC-112.md)（P2）与 [NC-113](bug/RR-20261005-NC-113.md)（P3）**已复现，未修复**；[本轮](review/REVIEW-2026-10-05-n09-batch1.md)。施法终止路径收尾不一致（方向判断见本轮 §7）；combat 状态随 Nest 回滚恢复。
 10-05 N03 revn03：[NC-90](bug/RR-20261005-NC-90.md) / [NC-91](bug/RR-20261005-NC-91.md) / [NC-92](bug/RR-20261005-NC-92.md) 三个 P2 与 [NC-93](bug/RR-20261005-NC-93.md) P3 **已复现，未修复**——JetStream 停止不排空在途 handler、轻量 RPC 被派发拒绝不回包、轻量调用被 JetStream 请求流截获、选主 Resign 不受预算约束；[本轮](review/REVIEW-2026-10-05-noncore-n03.md)（含方向判断：Bus 停止 / 排空与 etcd 选主各自连续多轮出缺陷）。
 
 10-05 N06 revn06：[NC-50](bug/RR-20261005-NC-50.md) / [NC-51](bug/RR-20261005-NC-51.md) / [NC-52](bug/RR-20261005-NC-52.md) 与 [RR-20261001-06 残余](bugfix/RR-20261001-06.md#复核后的补修2026-10-05) **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n06-revn06.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。T-229/230，T-182 追加。无格式/API/wire 变化，NC-52 只在输掉 CAS 后多一次 GET。

@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**10-05 N09 skill 第一批（revn09）：NC-110 P2、NC-111 P2、NC-112 P2、NC-113 P3（已复现，未修复）。** 施法终止路径各自手写收尾：启动失败复用 cast ID 却留下排程任务、Cancel / Release 中途出错停在半终止占住施法者、失败的 policy cast 不释放槽位；combatcomponent 的 Combatant 副本共享 map。combat 状态随 Nest 回滚恢复（NC-61 同形已核对，不成立）。[本轮](../review/REVIEW-2026-10-05-n09-batch1.md)。
+
 **10-05 N03 通信 / etcd（revn03）：NC-90 / 91 / 92 三个 P2 与 NC-93 P3，已复现，未修复。** 真实 JetStream 停止时在途 handler 不被排空、回包注定丢失；轻量 RPC 被派发队列拒绝不回包并误入死信；JetStream 部署里的轻量调用被请求流截获“报错却执行”；选主 Resign 不受预算约束。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](../review/evidence/noncore-review-20261005-n03/README.md)
 
 | 编号 | 问题 | 状态 |
@@ -13,6 +15,10 @@
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-113](RR-20261005-NC-113.md) | P3 combatcomponent Combatant / InitCombatant 共享 ElementMultipliersBP，事务外改权威状态 | 已复现，未修复 |
+| [RR-20261005-NC-112](RR-20261005-NC-112.md) | P2 skill 失败的 policy cast 不释放槽位，下次激活变成对失败 cast 的 toggle-off | 已复现，未修复 |
+| [RR-20261005-NC-111](RR-20261005-NC-111.md) | P2 skill Cancel / Interrupt / Release 中途出错，cast 半终止并永久占住施法者 | 已复现，未修复 |
+| [RR-20261005-NC-110](RR-20261005-NC-110.md) | P2 skill 启动失败复用 cast ID 却留下排程任务，旧任务落到新 cast、checkpoint 无法恢复 | 已复现，未修复 |
 | [RR-20261005-NC-52](RR-20261005-NC-52.md) | P2 versionstore RedisStore.Update 退避后用旧值重试，伪 ErrConflict | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-51](RR-20261005-NC-51.md) | P3 activity sweep 不校验已确认 Keys，跨组写与 Delivering 永久残留 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-50](RR-20261005-NC-50.md) | P3 account 建角补偿失败不计 `rollback.failed` | 已修复、声明场景验证，未发版 |
