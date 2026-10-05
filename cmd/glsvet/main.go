@@ -10,7 +10,10 @@
 // The check follows same-file named function calls from a handler, catches raw
 // go statements and common async wrapper .Go calls, and recognizes direct
 // roost-core/worker Pool variables as the allowed .Go implementation. Test
-// files are skipped by default; pass -tests to include them. Exit status is 1
+// files are skipped by default; pass -tests to include them. Stop/close
+// functions with a ctx parameter that receive from a channel outside a select
+// on that ctx get a review hint (-stophints, on by default); hints are printed
+// but never counted as findings. Exit status is 1
 // when any finding is reported and 2 when an argument could not be vetted (a
 // missing directory or a file that does not parse).
 package main
@@ -27,6 +30,13 @@ import (
 )
 
 var includeTests = flag.Bool("tests", false, "also vet _test.go files")
+
+// stopHints 控制停止入口的复审提示（stophints.go，维护者决定 A3）。提示只打印、不计入违例、
+// 不改变退出码；默认打开，-stophints=false 关闭。
+var stopHints = flag.Bool("stophints", true, "print review hints for stop/close functions that receive from a channel without their ctx (hints never fail the run)")
+
+// hintCount 是本次运行打印的提示条数，只用于结尾的汇总。
+var hintCount int
 
 // goroutineBoundCalls are framework entry points whose results are bound to
 // the calling goroutine. The map value documents the failure mode shown to
@@ -77,6 +87,9 @@ func main() {
 				failures++
 			}
 		}
+	}
+	if hintCount > 0 {
+		fmt.Fprintf(os.Stderr, "glsvet: %d stop hint(s) for review; hints do not fail the run\n", hintCount)
 	}
 	if findings > 0 {
 		fmt.Fprintf(os.Stderr, "glsvet: %d finding(s)\n", findings)
@@ -142,9 +155,20 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 	for _, pkg := range packages {
 		voidAdmissionMethods := collectVoidAdmissionMethods(pkg)
 		returningAdmissionMethods := collectReturningAdmissionMethods(pkg)
+		var functions map[string][]*ast.FuncDecl
+		if *stopHints {
+			files := make([]*ast.File, 0, len(pkg.Files))
+			for _, file := range pkg.Files {
+				files = append(files, file)
+			}
+			functions = collectFunctions(files)
+		}
 		for _, file := range pkg.Files {
 			findings += reportHandlerConcurrency(fileSet, file)
 			findings += reportIgnoredAdmission(fileSet, file, voidAdmissionMethods, returningAdmissionMethods)
+			if *stopHints {
+				hintCount += reportStopHints(fileSet, file, functions) // 只提示，不计入 findings
+			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				goStatement, ok := node.(*ast.GoStmt)
 				if !ok {

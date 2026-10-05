@@ -37,7 +37,7 @@
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
 | [RR-20261005-NC-174](RR-20261005-NC-174.md) | mirror Replicator 每次订阅一个准入门 + `StopWithContext`；Assembly.Stop 等复制排空 | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-173](RR-20261005-NC-173.md) | Discovery 执行权按 ctx 等待、`waitLoopDone(ctx)`；Assembly.Close 注销成功才关 client | 已修复、声明场景验证（含真实 etcd），未发版 |
+| [RR-20261005-NC-173](RR-20261005-NC-173.md) | Discovery 执行权按 ctx 等待、`waitLoopDone(ctx)`；Assembly.Close 注销成功才关 client；（A3 复核补修）`Client.Close` 只关一次 | 已修复（含残余补修，未发版），声明场景验证（含真实 etcd） |
 | [RR-20261005-NC-172](RR-20261005-NC-172.md) | JetStream 同步总线投递准入 / 在途计数 + `StopWithContext`，停止后拒绝 Subscribe | 已修复、声明场景验证（含真实 NATS），未发版 |
 | [RR-20261005-NC-171](RR-20261005-NC-171.md) | 重载停止句柄保留到 worker 退出，entitysync 排空后才关闭 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-170](RR-20261005-NC-170.md) | 停完一个才移除，ctx 错误立即返回并保留其余；停止执行权按 ctx 等待 | 已修复、声明场景验证，未发版 |

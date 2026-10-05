@@ -1,0 +1,10 @@
+# glsvet 停止入口提示（只提示、不失败）：NC-173 修前 / 修后的 etcd/driver/discovery.go（单文件目录）
+$ go run ./cmd/glsvet <修前 discovery.go>; echo exit=$?
+pre/discovery.go:205:2: hint: Deregister(ctx) calls waitLoopDone, which receives from a channel and cannot see the ctx; pass the ctx and select on it, or use operation.Lifetime.Wait (A3 stop contract)
+glsvet: 1 stop hint(s) for review; hints do not fail the run
+exit=0
+$ go run ./cmd/glsvet <修后（当前）discovery.go>; echo exit=$?
+exit=0
+$ go run ./cmd/glsvet ./...   # 全仓非测试文件（本分支）
+exit=0
+# 未加 Mutex.Lock 提示的原因：同一规则加上无参 Lock/RLock 后全仓 33 处提示，全部是短临界区（见 cmd/glsvet/stophints.go 文件头）

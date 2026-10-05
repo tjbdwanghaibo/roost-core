@@ -4,8 +4,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **停机对象共用“准入 + 在途计数 + 等待”与停机契约测试骨架**（维护者决定 A3）：bus JetStream RPC、syncbus JetStream、mirror Replicator 三份手写准入门改用 `internal/operation.Lifetime`（新增 `Wait(ctx)`：幂等关准入、在 ctx 内等排空、已排空时任何 ctx 都返回 nil），错误值与停止顺序不变；唯一可观察差异是“已排空且 ctx 已结束”时不再随机返回 ctx 错误。新增测试骨架 `internal/stopcontract.Check`，已套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus 与生成 TCP 的停止入口。`glsvet` 默认对带 ctx 的停止类函数里不受 ctx 约束的通道接收打印 `hint:`（`-stophints=false` 关闭），提示不计入违例、不改退出码。[方案与实施](docs/feature/REFACTOR-2026-10-05-shared-stop-contract.md)
+
 ### Fixed
 
+- **etcd `Assembly.Close` / `EtcdMod.Stop*` 停完后再调用返回 nil**（RR-20261005-NC-173 复核补修，A3 契约骨架发现）：`clientv3.Client.Close` 不幂等，第二次关闭返回 `context canceled`；`driver.Client.Close` 现在只关一次、之后返回第一次的结果。[记录](docs/bugfix/RR-20261005-NC-173.md#复核后的补修2026-10-05a3-停机契约骨架发现)
 - **skill 编译器按 Runtime / Host 实际能执行的范围收紧**（RR-20261005-NC-210 / NC-212～NC-215，行为收紧）：set / add / clear_memory 的名字必须已声明、add_memory 只用于 int memory（此前未声明的名字落到槽位 0，静默改写别的 memory 或运行期 ErrProgramInvariant）；effect、filter、cost 里的 status / attribute / resource 名字必须在 catalog 里（此前兜底成 handle 0）；CompileEnvironment 的九类 catalog key 必须非空唯一；chain 的 `allow_repeat` / `hop_interval_ticks` 与 attribute_modifier 的 `stack_policy` / `max_stacks` 只接受默认值（它们从不传给 Host）；attribute_modifier 的 operation 须为 add / mul_bp 且在属性 catalog 的 `ModifierOperations` 里、时长为正，add_status 时长不能为 0，resource operation 限 set / add / spend / sub，cost 字面量非负，attribute_compare 的 op 须为比较运算。受影响的定义在启动期 CompileAll 失败并指向字段。[记录](docs/bugfix/RR-20261005-NC-214.md)
 - **移交后的 area 回调 `finish` 不再让 Runtime.Advance 返回 ErrProgramInvariant**（RR-20261005-NC-211）：施法先结束、spawn 出的 area 进程已移交时，回调里的 finish 只停止本 area 进程；施法存活时仍结束施法。[记录](docs/bugfix/RR-20261005-NC-211.md)
 - **skillsync.NegotiateSchema 拒绝空区间**（RR-20261005-NC-216）：任一边 `Min` 为 0 或 `Min > Max` 时返回 `ErrSchemaNegotiationFailed`，协商结果必须同时被两边 `Contains`。[记录](docs/bugfix/RR-20261005-NC-216.md)

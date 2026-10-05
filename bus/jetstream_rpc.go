@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"log/slog"
@@ -98,54 +99,9 @@ type jetStreamRPC struct {
 
 	// RR-20261005-NC-90：请求 handler 在 nats.go 的 consume 回调 goroutine 里同步执行，
 	// 不在 Bus 的 pool 里，pool 排空管不到它们；nats.go 的 ConsumeContext.Stop 也不等在途
-	// 回调。这里是它们自己的准入与在途计数：停止先关准入，再等在途归零，归零之前连接
-	// 不能交还（Bus 的停止返回 ctx 错误、保留责任）。
-	handlerMu       sync.Mutex
-	handlerClosed   bool
-	handlersRunning int
-	handlersIdle    chan struct{} // closed once admission is closed and no handler runs
-}
-
-// beginHandler admits one request delivery; false once the stop closed admission.
-func (r *jetStreamRPC) beginHandler() bool {
-	r.handlerMu.Lock()
-	defer r.handlerMu.Unlock()
-	if r.handlerClosed {
-		return false
-	}
-	r.handlersRunning++
-	return true
-}
-
-func (r *jetStreamRPC) endHandler() {
-	r.handlerMu.Lock()
-	defer r.handlerMu.Unlock()
-	r.handlersRunning--
-	if r.handlerClosed && r.handlersRunning == 0 {
-		r.closeIdleLocked()
-	}
-}
-
-// closeHandlerAdmission is idempotent; it returns the channel that closes when
-// the last admitted handler has returned.
-func (r *jetStreamRPC) closeHandlerAdmission() <-chan struct{} {
-	r.handlerMu.Lock()
-	defer r.handlerMu.Unlock()
-	if !r.handlerClosed {
-		r.handlerClosed = true
-		if r.handlersRunning == 0 {
-			r.closeIdleLocked()
-		}
-	}
-	return r.handlersIdle
-}
-
-func (r *jetStreamRPC) closeIdleLocked() {
-	select {
-	case <-r.handlersIdle:
-	default:
-		close(r.handlersIdle)
-	}
+	// 回调。handlers 是它们自己的准入与在途计数（共用的 operation.Lifetime，A3）：停止先关准入，
+	// 再等在途归零，归零之前连接不能交还（Bus 的停止返回 ctx 错误、保留责任）。
+	handlers operation.Lifetime
 }
 
 type pendingJetStreamRPCCall struct {
@@ -160,7 +116,7 @@ func (b *Bus) EnableJetStreamRPC(js fnats.IJetStream, cfg JetStreamRPCConfig) er
 		return ErrJetStreamRPCUnavailable
 	}
 	cfg = cfg.normalize()
-	rpc := &jetStreamRPC{js: js, cfg: cfg, handlersIdle: make(chan struct{})}
+	rpc := &jetStreamRPC{js: js, cfg: cfg}
 	b.jsRPC = rpc
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.SetupTimeout)
 	defer cancel()
@@ -300,7 +256,7 @@ func (b *Bus) stopJetStreamRPCRequests() {
 	if !b.jetStreamRPCEnabled() {
 		return
 	}
-	b.jsRPC.closeHandlerAdmission()
+	b.jsRPC.handlers.Stop()
 	b.jsRPC.mu.Lock()
 	subs := append([]fnats.IJetStreamSubscription(nil), b.jsRPC.subs...)
 	b.jsRPC.subs = nil
@@ -319,13 +275,7 @@ func (b *Bus) waitJetStreamRPCRequests(ctx context.Context) error {
 	if !b.jetStreamRPCEnabled() {
 		return nil
 	}
-	idle := b.jsRPC.closeHandlerAdmission()
-	select {
-	case <-idle:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return b.jsRPC.handlers.Wait(ctx)
 }
 
 // stopJetStreamRPCResponses stops the response consumer and fails the calls
@@ -471,10 +421,10 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if msg == nil {
 		return nil
 	}
-	if !b.jsRPC.beginHandler() {
+	if !b.jsRPC.handlers.Begin() {
 		return errJetStreamRPCStopping
 	}
-	defer b.jsRPC.endHandler()
+	defer b.jsRPC.handlers.End()
 	var req fnats.NatsMsg
 	if err := b.codec.Unmarshal(msg.Data, &req); err != nil {
 		return fmt.Errorf("bus: decode jetstream rpc req: %w", err)

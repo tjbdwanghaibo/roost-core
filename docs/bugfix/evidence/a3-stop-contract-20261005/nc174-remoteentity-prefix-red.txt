@@ -1,0 +1,10 @@
+# 骨架套到修前实现（c99a687d^ 版本的 remoteentity/assemble.go sync/syncbus/mirror/envelope.go）：预期红
+$ GOWORK=off go test -count=1 -run TestRemoteAssemblyStopContract ./remoteentity/
+--- FAIL: TestRemoteAssemblyStopContract (0.00s)
+    stop_contract_test.go:24: stopcontract: first Stop with work in flight = <nil>, want the ctx error (the stop must not report a drain that did not happen)
+    stop_contract_test.go:24: stopcontract: first Stop released the resource while the work was still in flight
+    stop_contract_test.go:24: stopcontract: retry Stop while the work is still in flight = <nil>, want the ctx error (a retry must wait again, not trust state cleared by the first attempt)
+    stop_contract_test.go:24: stopcontract: retry Stop released the resource while the work was still in flight
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/remoteentity	0.535s
+FAIL

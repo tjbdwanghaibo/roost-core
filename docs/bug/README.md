@@ -54,7 +54,7 @@
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
 | [RR-20261005-NC-174](RR-20261005-NC-174.md) | P3 remoteentity Assembly.Stop 停复制只退订，不等已进入 ApplyReplica 的 handler | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-173](RR-20261005-NC-173.md) | P3 etcd Deregister 等注册循环不看 ctx；Assembly.Close 注销失败仍关 client，重试必然失败 | 已修复、声明场景验证（含真实 etcd），未发版 |
+| [RR-20261005-NC-173](RR-20261005-NC-173.md) | P3 etcd Deregister 等注册循环不看 ctx；Assembly.Close 注销失败仍关 client，重试必然失败；（A3 复核）停完后再 Close 返回 context canceled | 已修复（含残余补修，未发版），声明场景验证（含真实 etcd） |
 | [RR-20261005-NC-172](RR-20261005-NC-172.md) | P3 JetStream 同步总线 Stop 不等在途 handler，NATS 连接在 handler 底下关闭 | 已修复、声明场景验证（含真实 NATS），未发版 |
 | [RR-20261005-NC-171](RR-20261005-NC-171.md) | P3 Nest Mod 卸载后重载停止超时即丢句柄，重试关闭 entitysync 时 worker 可能仍在运行 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-170](RR-20261005-NC-170.md) | P3 manager Engine 停止超时后重试报告成功，同一次调用在过期 ctx 下继续停依赖 | 已修复、声明场景验证，未发版 |

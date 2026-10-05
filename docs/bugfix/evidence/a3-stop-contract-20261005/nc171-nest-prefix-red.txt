@@ -1,0 +1,10 @@
+# 骨架套到修前实现（c99a687d^ 版本的 kit/nest/nest_mod.go）：预期红
+$ GOWORK=off go test -count=1 -run TestNestModStopContract ./kit/nest/
+--- FAIL: TestNestModStopContract (0.05s)
+    stop_contract_test.go:23: stopcontract: retry Stop while the work is still in flight = <nil>, want the ctx error (a retry must wait again, not trust state cleared by the first attempt)
+    stop_contract_test.go:23: stopcontract: retry Stop released the resource while the work was still in flight
+    stop_contract_test.go:23: stopcontract: retry Stop after the work returned = entitysync: manager is closed, want nil
+    stop_contract_test.go:23: stopcontract: Stop after a completed stop = entitysync: manager is closed, want nil
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/nest	0.576s
+FAIL

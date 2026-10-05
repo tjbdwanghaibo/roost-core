@@ -1,0 +1,30 @@
+# 基线 origin/main d346b45c，分支 a3stop，GOWORK=off，go version go1.27.0 darwin/arm64
+$ gofmt -l <改动与新增的 .go 文件>
+$ go vet ./internal/operation/ ./internal/stopcontract/ ./bus/ ./sync/syncbus/... ./manager/ ./kit/nest/ ./etcd/... ./remoteentity/ ./cmd/glsvet/ ./kit/syncbus/ ./kit/etcd/ ./nestwal/
+vet ok
+$ go test -race -count=3 ./internal/operation/ ./internal/stopcontract/ ./bus/ ./sync/syncbus/... ./manager/ ./kit/nest/ ./etcd/... ./remoteentity/ ./cmd/glsvet/ ./kit/syncbus/ ./kit/etcd/ ./nestwal/
+ok  	github.com/tjbdwanghaibo/roost-core/internal/operation	1.479s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/stopcontract	4.344s
+ok  	github.com/tjbdwanghaibo/roost-core/bus	2.340s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus	2.065s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver	2.707s
+ok  	github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror	3.120s
+ok  	github.com/tjbdwanghaibo/roost-core/manager	3.795s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nest	4.062s
+ok  	github.com/tjbdwanghaibo/roost-core/etcd	4.167s
+ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	7.217s
+ok  	github.com/tjbdwanghaibo/roost-core/remoteentity	46.700s
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/glsvet	10.212s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/syncbus	4.129s
+?   	github.com/tjbdwanghaibo/roost-core/kit/etcd	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/nestwal	12.226s
+$ go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync; echo exit=$?
+exit=0
+$ go test -count=1 ./dataengine/engine/   # Lifetime 的另一使用方（只加方法）
+ok  	github.com/tjbdwanghaibo/roost-core/dataengine/engine	4.770s
+$ go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	0.902s
+$ go build ./... && go vet ./...
+build+vet ok
+$ go test -count=1 -run 'TestGeneratedPlayerTCPStopContract|TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse' ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	10.219s

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 )
@@ -88,55 +89,14 @@ type jetStreamSyncBus struct {
 	topics map[string]*topicFanout
 
 	// RR-20261005-NC-172：consume 回调（及其中的本地 handler）在 nats.go 的回调 goroutine 上执行，
-	// ConsumeContext.Stop 不等它们。这里是总线自己的准入与在途计数：停止先关准入、停订阅，再在
-	// 调用方 ctx 内等在途归零；归零之前总线与连接都不能交还。
-	deliveryMu      sync.Mutex
-	stopping        bool
-	deliveriesInUse int
-	deliveriesIdle  chan struct{} // 关闭准入且没有在途回调时关闭
+	// ConsumeContext.Stop 不等它们。deliveries 是总线自己的准入与在途计数（共用的 operation.Lifetime，A3）：
+	// 停止先关准入、停订阅，再在调用方 ctx 内等在途归零；归零之前总线与连接都不能交还。
+	deliveries operation.Lifetime
 }
 
 // errJetStreamSyncStopping 让停止开始后才到达的投递回到 broker（driver 据此 NAK），由下一次
 // 消费同一 durable 的实例处理，不在停止中的总线上执行业务 handler。
 var errJetStreamSyncStopping = errors.New("jetstream sync: bus is stopping; delivery returned to the broker")
-
-func (b *jetStreamSyncBus) beginDelivery() bool {
-	b.deliveryMu.Lock()
-	defer b.deliveryMu.Unlock()
-	if b.stopping {
-		return false
-	}
-	b.deliveriesInUse++
-	return true
-}
-
-func (b *jetStreamSyncBus) endDelivery() {
-	b.deliveryMu.Lock()
-	defer b.deliveryMu.Unlock()
-	b.deliveriesInUse--
-	if b.stopping && b.deliveriesInUse == 0 {
-		close(b.deliveriesIdle)
-	}
-}
-
-// closeDeliveries 幂等地关闭准入，返回最后一个在途回调返回时关闭的通道。
-func (b *jetStreamSyncBus) closeDeliveries() <-chan struct{} {
-	b.deliveryMu.Lock()
-	defer b.deliveryMu.Unlock()
-	if !b.stopping {
-		b.stopping = true
-		if b.deliveriesInUse == 0 {
-			close(b.deliveriesIdle)
-		}
-	}
-	return b.deliveriesIdle
-}
-
-func (b *jetStreamSyncBus) deliveriesStopped() bool {
-	b.deliveryMu.Lock()
-	defer b.deliveryMu.Unlock()
-	return b.stopping
-}
 
 // topicFanout is one topic's single durable consumer plus every local
 // handler registered on it (U-0209, RR-20260916-03). ISyncBus.Subscribe is
@@ -184,7 +144,7 @@ func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStream
 	}); err != nil {
 		return nil, fmt.Errorf("jetstream sync: ensure stream %s for %s.>: %w", cfg.Stream, cfg.Prefix, err)
 	}
-	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout), deliveriesIdle: make(chan struct{})}, nil
+	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout)}, nil
 }
 
 func (b *jetStreamSyncBus) Publish(msg *fsyncbus.SyncMsg) error {
@@ -236,7 +196,7 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// 停止开始后不再建消费者：它的投递都会被准入拒绝、一轮轮 NAK 到 MaxDeliver。
-	if b.deliveriesStopped() {
+	if b.deliveries.Stopping() {
 		return nil, fmt.Errorf("jetstream sync: bus is stopping or stopped")
 	}
 	fanout := b.topics[topic]
@@ -260,10 +220,10 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 			if raw == nil {
 				return nil
 			}
-			if !b.beginDelivery() {
+			if !b.deliveries.Begin() {
 				return errJetStreamSyncStopping
 			}
-			defer b.endDelivery()
+			defer b.deliveries.End()
 			var msg fsyncbus.SyncMsg
 			if err := json.Unmarshal(raw.Data, &msg); err != nil {
 				slog.Warn("jetstream sync: unmarshal failed", "topic", topic, "err", err)
@@ -343,14 +303,9 @@ func (b *jetStreamSyncBus) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	idle := b.closeDeliveries()
+	b.deliveries.Stop()
 	b.stopSubscriptions()
-	select {
-	case <-idle:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return b.deliveries.Wait(ctx)
 }
 
 func (b *jetStreamSyncBus) stopSubscriptions() {

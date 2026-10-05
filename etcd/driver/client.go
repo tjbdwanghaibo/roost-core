@@ -3,8 +3,9 @@ package driver
 import (
 	"context"
 	"fmt"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
+	"sync"
 
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -12,6 +13,12 @@ import (
 // Client implements fetcd.IEtcd by wrapping clientv3.Client.
 type Client struct {
 	cli *clientv3.Client
+
+	// clientv3.Client.Close 不幂等：第二次调用关闭已关闭的 gRPC 连接，返回 context.Canceled。
+	// 停止入口按“三步停机”必须幂等（A3 契约骨架发现，RR-20261005-NC-173 复核补修），所以只关一次、
+	// 之后的调用返回第一次的结果。
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Raw exposes the underlying etcd client for assembly code (discovery,
@@ -168,7 +175,8 @@ func (c *Client) WatchPrefix(ctx context.Context, prefix string, opts ...fetcd.W
 // --- Connection ---
 
 func (c *Client) Close() error {
-	return c.cli.Close()
+	c.closeOnce.Do(func() { c.closeErr = c.cli.Close() })
+	return c.closeErr
 }
 
 // --- helpers ---
