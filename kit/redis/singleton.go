@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -55,6 +56,9 @@ func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 // go-redis 客户端并发安全，续期 goroutine 与 Live 查询可以同时调用。
 type singletonStore struct {
 	client fredis.IRedis
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (s *singletonStore) CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
@@ -101,8 +105,10 @@ func (s *singletonStore) Get(ctx context.Context, keys []string) ([][]byte, erro
 	return out, nil
 }
 
+// Close 幂等：只有第一次真正关闭客户端，之后的调用返回第一次的结果。
 func (s *singletonStore) Close() error {
-	return s.client.Close()
+	s.closeOnce.Do(func() { s.closeErr = s.client.Close() })
+	return s.closeErr
 }
 
 var _ app.SingletonStore = (*singletonStore)(nil)
