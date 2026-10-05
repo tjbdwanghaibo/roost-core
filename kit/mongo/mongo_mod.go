@@ -9,6 +9,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/mongo/driver"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -97,7 +98,7 @@ func (m *MongoMod) Start() error {
 			return err
 		}
 	}
-	slog.Info("mongo mod: connected", "uri", m.cfg.URI)
+	slog.Info("mongo mod: connected", "uri", redactedURI(m.cfg.URI))
 	return nil
 }
 
@@ -125,6 +126,30 @@ func (m *MongoMod) StopWithContext(ctx context.Context) error {
 		m.client = nil
 	}
 	return err
+}
+
+// redactedURI 把 URI userinfo 里的口令换成 ***，保留用户名、主机与选项，供日志使用
+// （RR-20261005-NC-191）。fmongo.Config 没有单独的用户名 / 口令字段，凭据只能写在 mongo.uri 里，
+// 原样记录就把口令写进了日志。userinfo 取到 '?' 之前的最后一个 '@' 为止，口令里没转义的 '/' 也盖得住。
+func redactedURI(uri string) string {
+	scheme := strings.Index(uri, "://")
+	if scheme < 0 {
+		return uri
+	}
+	rest := uri[scheme+len("://"):]
+	query := strings.IndexByte(rest, '?')
+	if query < 0 {
+		query = len(rest)
+	}
+	at := strings.LastIndexByte(rest[:query], '@')
+	if at < 0 {
+		return uri
+	}
+	user, _, hasPassword := strings.Cut(rest[:at], ":")
+	if !hasPassword {
+		return uri
+	}
+	return uri[:scheme+len("://")] + user + ":***" + rest[at:]
 }
 
 // Client returns the IMongo instance. Must be called after Start().
