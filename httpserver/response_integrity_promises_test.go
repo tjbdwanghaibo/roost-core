@@ -174,3 +174,41 @@ func TestPanicAfterHijackWritesNothingMore(t *testing.T) {
 		t.Fatalf("status %d body %q", response.StatusCode, body)
 	}
 }
+
+type headerOnlyWriter struct{ header http.Header }
+
+func (w *headerOnlyWriter) Header() http.Header         { return w.header }
+func (w *headerOnlyWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *headerOnlyWriter) WriteHeader(int)             {}
+
+type failingFlushWriter struct {
+	headerOnlyWriter
+	err error
+}
+
+func (w *failingFlushWriter) FlushError() error { return w.err }
+
+// RR-20261005-NC-81 复核：包装 writer 不能吞掉 http.ResponseController.Flush 的错误。
+// 原 writer 不支持 Flush 时应得到 http.ErrNotSupported 且不算响应已开始；
+// 原 writer 的 FlushError 失败（连接已断、写超时）时错误应原样返回。
+func TestResponseControllerFlushErrorsPassThroughTheTracker(t *testing.T) {
+	t.Run("unsupported", func(t *testing.T) {
+		tracked, state := trackResponse(&headerOnlyWriter{header: http.Header{}})
+		if err := http.NewResponseController(tracked).Flush(); !errors.Is(err, http.ErrNotSupported) {
+			t.Fatalf("Flush on a writer without flush support = %v, want http.ErrNotSupported", err)
+		}
+		if state.started {
+			t.Fatal("an unsupported Flush marked the response as started")
+		}
+	})
+	t.Run("flush_error", func(t *testing.T) {
+		broken := errors.New("connection reset")
+		tracked, state := trackResponse(&failingFlushWriter{headerOnlyWriter: headerOnlyWriter{header: http.Header{}}, err: broken})
+		if err := http.NewResponseController(tracked).Flush(); !errors.Is(err, broken) {
+			t.Fatalf("Flush whose underlying FlushError failed = %v, want %v", err, broken)
+		}
+		if !state.started {
+			t.Fatal("a Flush that reached the connection did not mark the response as started")
+		}
+	})
+}

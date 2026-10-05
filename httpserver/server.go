@@ -214,17 +214,36 @@ func RequestID(ctx context.Context) string {
 // MarshalJSON 返回错误）时改回 500 固定错误体并记录日志：状态码一旦发出就不能
 // 再改，先写 2xx 再编码会让调用方把空体当成功（RR-20261005-NC-80）。
 // MarshalJSON panic 发生在写头之前，交给 Engine 的 recover 中间件回 500。
-// 成功时字节形状与 json.Encoder 相同（HTML 转义、结尾换行）。
+//
+// json.Encoder 在池化缓冲里完整编码、成功后才一次性 Write（标准实现与 jsonv2
+// 实现都如此），所以把状态码推迟到第一次 Write 就得到“先编码后写”，不再为每个
+// 响应另复制一份响应体；成功时的字节就是 json.Encoder 的输出（HTML 转义、结尾换行）。
+// 已经写出后才返回的错误只可能是连接写失败，此时客户端已不可达，与原先一样忽略。
 func JSON(w http.ResponseWriter, status int, value any) {
-	body, err := json.Marshal(value)
-	if err != nil {
-		slog.Error("http server: encode response", "status", status, "err", err)
-		status = http.StatusInternalServerError
-		body = []byte(`{"error":"encode response","ok":false}`)
-	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = w.Write(append(body, '\n'))
+	out := &statusOnFirstWrite{ResponseWriter: w, status: status}
+	err := json.NewEncoder(out).Encode(value)
+	if err == nil || out.wrote {
+		return
+	}
+	slog.Error("http server: encode response", "status", status, "err", err)
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = io.WriteString(w, "{\"error\":\"encode response\",\"ok\":false}\n")
+}
+
+// statusOnFirstWrite 把 WriteHeader 推迟到第一次 Write，只给 JSON 使用。
+type statusOnFirstWrite struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (w *statusOnFirstWrite) Write(p []byte) (int, error) {
+	if !w.wrote {
+		w.wrote = true
+		w.ResponseWriter.WriteHeader(w.status)
+	}
+	return w.ResponseWriter.Write(p)
 }
 
 func HandleJSON[TReq any, TResp any](fn func(context.Context, TReq) (TResp, error)) http.HandlerFunc {
@@ -322,8 +341,11 @@ func (e *Engine) recoverMiddleware(next http.Handler) http.Handler {
 }
 
 // responseState 记录响应是否已经开始，只给 recoverMiddleware 判断能否改写为 500。
-// 它保留 Flusher、io.ReaderFrom 和 Unwrap（http.ResponseController 经此取得原
-// writer）；仅当原 writer 支持时才暴露 Hijacker，类型断言结果与原 writer 一致。
+// 它保留 Flusher（含 FlushError）、io.ReaderFrom 和 Unwrap（http.ResponseController
+// 经此取得原 writer）；仅当原 writer 支持时才暴露 Hijacker，类型断言结果与原 writer
+// 一致。标准库没有“响应是否已开始”的查询（ResponseController 只提供 Flush/Hijack/
+// 期限/全双工），所以只能由包装 writer 记录。http.Pusher 不透传：主流浏览器已移除
+// HTTP/2 推送，Go 自带客户端也以 SETTINGS_ENABLE_PUSH=0 关闭，Engine 是 JSON 接口。
 type responseState struct {
 	http.ResponseWriter
 	started bool
@@ -357,10 +379,17 @@ func (w *responseState) ReadFrom(src io.Reader) (int64, error) {
 	return io.Copy(w.ResponseWriter, src)
 }
 
-func (w *responseState) Flush() {
-	w.started = true
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+// FlushError 让 http.ResponseController.Flush 拿到原 writer 的结果：不支持 Flush
+// 时返回 http.ErrNotSupported 且不算响应已开始，连接写失败原样返回。
+func (w *responseState) FlushError() error {
+	err := http.NewResponseController(w.ResponseWriter).Flush()
+	if !errors.Is(err, http.ErrNotSupported) {
+		w.started = true
+	}
+	return err
 }
+
+func (w *responseState) Flush() { _ = w.FlushError() }
 
 func (w *responseState) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 

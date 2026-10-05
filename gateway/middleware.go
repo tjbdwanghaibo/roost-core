@@ -25,6 +25,11 @@ var (
 // principal checks here are a defense-in-depth backstop for the limit key and
 // therefore run regardless of whether a limiter is configured, so disabling
 // rate limiting can never widen the authentication surface.
+//
+// MessageID 由客户端决定：一个玩家变化 MessageID 只会用完 limiter 给它自己的
+// MaxKeysPerOwner 个名额，不会挤占其他玩家（RR-20261005-NC-82）。应用有协议注册表时，
+// 把“拒绝未注册 MessageID”的中间件放在 RateLimit 之前，合法玩家的 key 数就以注册的
+// 协议数为界；两者互补，上限仍是 limiter 自身的保护。
 func RateLimit(limiter *security.RateLimiter) Middleware {
 	return func(next Endpoint) Endpoint {
 		return EndpointFunc(func(ctx context.Context, session Session, request Request) (any, error) {
