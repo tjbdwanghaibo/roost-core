@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：方案。**状态（2026-10-05）：第 1 笔已实施**（提交 `d4ac9853`）；第 2～5 笔（含 2b / 3b）未实施。
+- 性质：方案。**状态（2026-10-05）：第 1、2、2b 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`）；第 3～5 笔（含 3b）未实施。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -449,3 +449,22 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
   7. 测试注入的 `signalSource` 在启动等待期间被监听，收到信号 `run` 返回 nil（生产上等待期间不注册信号，按默认处置终止进程，与方案相同）。
   8. `Live` 拒绝空 `serverType`；空 `sids` 直接返回、不访问 store。
 - 验证：见提交说明；`kitredis` integration 在隔离 Redis 上通过，`Get` 跨槽在本机临时起的 3 主 Redis Cluster（用完即删）上通过。未验证：§8.2 真实进程演练（第 5 笔）、codegen 生成链路（第 2 笔）。
+
+### 第 2 笔（2026-10-05，提交 `6863dbc3`）
+
+- 范围：`codegen/internal/roost` 的 `render.go`（`serviceSingletonEnabled` / `projectInstallsSingleton` / `renderSingletonConfig`、bootstrap、`renderServiceConfig`、`appendModConfigSections` + `turnGeneratedSingletonOn`、开发 compose）、`shutdown_budget.go`（`serviceShutdown.release`、摘要行与解析、doctor 按配置的 `singleton.enabled` 计入）、`render_deploy.go`（`startupAllowance`、install.sh / rollback.sh 的 `DEFAULT_HEALTH_ATTEMPTS`、shell README、k8s `kubernetesStartupFailureThreshold`）、`render_cicd.go`（compose `start_period`）、`catalog.go`（`dataengine.startup_timeout` 取常量）；文档 USER_GUIDE / DEPLOYMENT / PROJECT_GENERATOR / CHANGELOG。
+- 先红后绿：新增 `singleton_promises_test.go` 六条（bootstrap 安装条件、只给 dataengine 服务打开、add mod 翻转与手改保持 + WARN、停机摘要含 Release 且能读回、doctor 计入 Release、部署启动等待）。只加常量与 `release` 字段的骨架下全部在断言上失败，例：`redis without dataengine: bootstrap does not install a.Singleton(kitredis.SingletonStore)`、`configs/service/config.account.yaml: a service without dataengine has singleton.enabled = "" (present false), want an explicit false`、`deploy/shell/install.sh lacks "  game) DEFAULT_HEALTH_ATTEMPTS=60 ;;\n"`、`compose game: start_period is not 60s`、`singleton on, total 105s: ok total_timeout …`。实现后通过；既有停机预算用例的钉住值随公式 +3s 更新（game-demo game 服务 `-mods configdata,mongo,nats,dataengine,nest` 108s / 113s → 111s / 116s，缺省 Mod 集 114s / 119s → 117s / 122s）；`demo_prod_config_promises_test.go` 加查三份 game 配置的 `singleton`（Secret 比对段加 `singleton`）。
+- 与方案的差异：
+  1. bootstrap 生成条件是“项目有 `redis` Mod **或** 有带 `dataengine` 的服务”，比 §6.3 的“有 redis”多一个分支：dataengine 服务不一定带 redis Mod（例如 `-mods configdata,nest`），它默认打开的 singleton 没有 opener 会启动即 fail-closed。同理开发 compose 对这类项目也起 redis。
+  2. 停机摘要行在有 Release 时多一段 `+ 3s for the singleton release`，正则可选匹配；没有 Release 的块文本与旧版逐字相同（sync 照常识别、刷新）。doctor 按**配置**里的 `singleton.enabled` 计入 3s（生成公式按 manifest），`Set it to` 建议值随之 +3s。
+  3. k8s startupProbe 在默认值下不变（60s = 30s + 30s），只在打开 singleton 的服务里加注释、阈值按 `startup_wait + 30s` 计算；shell 的 `HEALTH_ATTEMPTS` 改为按 Service 的 `case`（含 `*)` 兜底 30），README 列出各服务默认值。
+  4. `add mod` 翻转只改与生成文本逐字相同的 `enabled: false` 段；改过且未写 `enabled: true` 的段保持并 WARN。
+- 推迟到第 3 笔（会破坏当前 demo 运行，或去掉仍在用代码的回归）：`demo.go` 删除 `game_route` 段（`playerowner.go.tmpl:387` 仍在 Init 里要求 `game_route.key_prefix`）、`demo.go` 注释与 `activity.game_sids` 注释里 “LiveGames” 的改写（activity 仍用 `LiveGames`）、demo 清单删 `activity_lease_test.go`（它守的租约代码仍在）。`demo_prod_config_promises_test` 因此是“加查 singleton”而非“改为检查 singleton”。
+- 验证：`GOWORK=off go test -count=1 ./codegen/...` 全绿；生成 `roost project new sdemo -template game-demo`，`go mod edit -replace` 指向本地 roost-core 后 `go build ./... && go vet ./...` 通过、`go test ./internal/service/game/` 通过、`shellcheck deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh` 无输出；生成配置 game `singleton.enabled: true`、`key_prefix: roost:sdemo:singleton`、`total_timeout: 117s`，其他服务 `enabled: false`，bootstrap 有 `a.Singleton(kitredis.SingletonStore)`。
+
+### 第 2b 笔（2026-10-05，提交 `71c6fb6b`）
+
+- 范围：`kit/redis/redis_mod.go` 去掉 `ModRedisLock` capability，`kit/etcd/etcd_mod.go` 去掉 `ModEtcdElection`，`kit/mods/name.go` 删除两个常量；`redis/lock.go` 的 `IDistLock`、`etcd/election.go` 的 `IElection` 类型注释写明进程 / sid 级单例请用 `app.Singleton`；CHANGELOG `[Unreleased]` 新增 Removed（破坏性变更与迁移）、USER_GUIDE 单实例锁节、kit README（组件总览、capability 表、分布式锁与选主节）、PROJECT_GENERATOR 的 redis Mod 描述。
+- 使用者核对：`git grep` 两个常量与 `redis.lock` / `etcd.election`，仓库内（core、kit、codegen、demo 模板）除发布点与文档外无引用；`redis/driver`、`etcd/driver` 的 `Assembly.Locks` / `Election` 保留（driver 自身测试在用）。仓外调用无法核对，按破坏性变更登记。
+- 验证：`GOWORK=off go vet` 与 `go test -race -count=1 ./kit/etcd/... ./kit/redis/... ./kit/mods/...` 通过。
+- 两笔合并后在干净 worktree：`gofmt -l` 空、`go build ./...`、`go generate ./...` 后 porcelain 为空、根包 `go test -count=1 .`（含 `TestCoreDependencyBoundary`）与 `go test -count=1 ./codegen/...` 全绿；rebase 到 `b291edb9` 之后复跑 build、根包、`kit/redis` / `kit/mods` 与 codegen 的 singleton / 停机 / demo 用例通过。未验证：生成工程的真实进程启动（拿锁、Release 预留实测，属第 5 笔演练）、kubeconform / `docker compose config` 对新模板的渲染（本机未跑）。
