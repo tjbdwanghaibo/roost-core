@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
@@ -120,8 +121,9 @@ func TestRemoteSnapshotL2RejectsDelayedPublisher(t *testing.T) {
 	stale := newer
 	stale.StateVersion = 7
 	stale.Payload = entity.CopyFrozenRemoteSnapshotPayload([]byte("stale"))
-	if err := store.Set(context.Background(), stale); err != nil {
-		t.Fatal(err)
+	// RR-20261005-NC-130：被拒的旧写报 ErrStaleWrite，L2 仍是较新的那份。
+	if err := store.Set(context.Background(), stale); !errors.Is(err, cache.ErrStaleWrite) {
+		t.Fatalf("delayed publisher = %v, want cache.ErrStaleWrite", err)
 	}
 	got, ok, err := store.Get(context.Background(), key)
 	if err != nil || !ok || got.StateVersion != 8 || string(got.Payload.BytesCopy()) != "new" {

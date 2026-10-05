@@ -203,13 +203,8 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		cfg.TombstoneTTL = 30 * time.Second
 	}
 	storeCfg := cache.StoreConfig[RemoteSnapshotKey, RemoteSnapshotEnvelope]{
-		KeyOf: func(value RemoteSnapshotEnvelope) RemoteSnapshotKey { return value.Key },
-		Stale: func(old, next RemoteSnapshotEnvelope) bool {
-			if old.MarkerEpoch != next.MarkerEpoch || old.RouteEpoch != next.RouteEpoch {
-				return old.MarkerEpoch > next.MarkerEpoch || old.RouteEpoch > next.RouteEpoch
-			}
-			return old.StateVersion > next.StateVersion
-		},
+		KeyOf:         func(value RemoteSnapshotEnvelope) RemoteSnapshotKey { return value.Key },
+		Stale:         remoteSnapshotStale,
 		ValidateKey:   func(key RemoteSnapshotKey) bool { return key.Valid() },
 		ValidateValue: func(value RemoteSnapshotEnvelope) error { return value.Valid() },
 		// One rule for every write into L1 — publish, loader fill and L2
@@ -247,8 +242,13 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		// pre-check in Publish only finds conflicts early, the L2 CAS is
 		// the atomic boundary and its answer is the one that counts.
 		RemoteTimeout: cfg.LoadTimeout, IgnoreRemoteError: true,
+		//
+		// A stale verdict is not an outage either (RR-20261005-NC-130): L2
+		// already holds a newer snapshot, so writing this one into L1 would
+		// leave the local copy behind the shared layer. Set then returns
+		// ErrStaleWrite before touching L1, and Publish adopts what L2 holds.
 		FatalRemoteError: func(err error) bool {
-			return errors.Is(err, ErrRemoteVersionConflict) || errors.Is(err, cache.ErrConflictingWrite)
+			return errors.Is(err, ErrRemoteVersionConflict) || errors.Is(err, cache.ErrConflictingWrite) || errors.Is(err, cache.ErrStaleWrite)
 		},
 	})
 	c.waiters = make(map[RemoteSnapshotKey][]remoteVersionWaiter)
@@ -327,6 +327,17 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
 	return stored.Clone(), true, nil
+}
+
+// remoteSnapshotStale reports that next is older than old and must not
+// replace it: a newer marker or route epoch wins regardless of version (a
+// mixed pair is refused both ways), within one epoch the higher version wins.
+// L1 admission and the L2 CAS script apply the same rule.
+func remoteSnapshotStale(old, next RemoteSnapshotEnvelope) bool {
+	if old.MarkerEpoch != next.MarkerEpoch || old.RouteEpoch != next.RouteEpoch {
+		return old.MarkerEpoch > next.MarkerEpoch || old.RouteEpoch > next.RouteEpoch
+	}
+	return old.StateVersion > next.StateVersion
 }
 
 // remoteSnapshotSameVersionConflict reports that next claims old's version
@@ -478,9 +489,38 @@ func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapsh
 		if !errors.Is(err, cache.ErrStaleWrite) {
 			return err
 		}
+		c.adoptNewerFromL2(ctx, snapshot)
 	}
 	c.notify(snapshot.Key, snapshot.StateVersion)
 	return nil
+}
+
+// adoptNewerFromL2 makes "the stored value is at least as new" true for L1
+// after a publish lost. The refusal came either from L1 (it already holds a
+// newer copy: nothing to do) or from the L2 CAS, which refuses before L1 is
+// written (RR-20261005-NC-130). In the second case L1 may hold nothing or an
+// older copy, so it takes what L2 holds now, through the same admission as
+// every other L1 write (tombstones included). L2 holding nothing means a
+// delete or expiry overtook the publish: L1 stays as it is, the refused
+// snapshot is the past. An L2 read failure degrades the way an outage does
+// everywhere else — L1 takes the publisher's snapshot. Caller holds the key's
+// publish shard lock.
+func (c *RemoteSnapshotCache) adoptNewerFromL2(ctx context.Context, snapshot RemoteSnapshotEnvelope) {
+	if current, held, err := c.local.Get(ctx, snapshot.Key); err == nil && held && !remoteSnapshotStale(snapshot, current) {
+		return
+	}
+	if c.l2 == nil {
+		return
+	}
+	remoteCtx, cancel := context.WithTimeout(ctx, c.loadTimeout)
+	stored, held, err := c.l2.Get(remoteCtx, snapshot.Key)
+	cancel()
+	switch {
+	case err != nil:
+		_ = c.local.Set(ctx, snapshot)
+	case held:
+		_ = c.local.Set(ctx, stored)
+	}
 }
 
 func remoteSnapshotPublishShard(key RemoteSnapshotKey) uint64 {

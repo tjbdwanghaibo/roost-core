@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
@@ -99,8 +100,10 @@ func TestL2ComparesVersionsExactlyBeyondFloatPrecision(t *testing.T) {
 		}
 		older := newer
 		older.StateVersion = lower
-		if err := store.Set(context.Background(), older); err != nil {
-			t.Fatalf("writing the older version = %v, want it silently ignored as stale", err)
+		// RR-20261005-NC-130：被拒的旧写按 cache.Store 约定报 ErrStaleWrite（之前是 nil）；
+		// 这里要证明的仍是比较在 2^53 之上精确、存下的版本不倒退。
+		if err := store.Set(context.Background(), older); !errors.Is(err, cache.ErrStaleWrite) {
+			t.Fatalf("writing the older version = %v, want cache.ErrStaleWrite", err)
 		}
 		stored, ok, err := store.Get(context.Background(), key)
 		if err != nil || !ok {

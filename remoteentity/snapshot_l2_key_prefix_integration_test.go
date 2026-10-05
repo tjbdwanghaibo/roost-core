@@ -12,6 +12,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
@@ -138,9 +139,9 @@ func TestRealSnapshotL2KeyPrefixOnRedis(t *testing.T) {
 	if _, ok, err := legacy.Get(ctx, key); err != nil || ok {
 		t.Fatalf("unprefixed store sees the prefixed snapshot: ok=%v err=%v", ok, err)
 	}
-	// 真实 Lua 的 CAS 分支：更低版本被拒（键不变）、同版本不同内容冲突。
-	if err := store.Set(ctx, l2Envelope(key, 3, "stale")); err != nil {
-		t.Fatal(err)
+	// 真实 Lua 的 CAS 分支：更低版本被拒（键不变，RR-20261005-NC-130 起报 ErrStaleWrite）、同版本不同内容冲突。
+	if err := store.Set(ctx, l2Envelope(key, 3, "stale")); !errors.Is(err, cache.ErrStaleWrite) {
+		t.Fatalf("lower version: err=%v, want cache.ErrStaleWrite", err)
 	}
 	if v := b27HashField(t, r, prefixedKey, "version"); v != "5" {
 		t.Fatalf("lower version overwrote the real key: version=%q", v)
@@ -297,8 +298,8 @@ func TestRealSnapshotL2KeyPrefixOnRedisCluster(t *testing.T) {
 				if got, ok, err := store.Get(ctx, key); err != nil || !ok || string(got.Payload.BytesCopy()) != fmt.Sprintf("v%d", i) {
 					t.Fatalf("Get %d: ok=%v err=%v", i, ok, err)
 				}
-				if err := store.Set(ctx, l2Envelope(key, 3, "stale")); err != nil {
-					t.Fatalf("stale Set %d: %v", i, err)
+				if err := store.Set(ctx, l2Envelope(key, 3, "stale")); !errors.Is(err, cache.ErrStaleWrite) {
+					t.Fatalf("stale Set %d: %v, want cache.ErrStaleWrite", i, err)
 				}
 				if v := b27HashField(t, client, realKeys[i], "version"); v != "5" {
 					t.Fatalf("stale Set %d overwrote version: %q", i, v)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
@@ -194,7 +195,10 @@ func (s *remoteSnapshotL2Store) Set(ctx context.Context, value entity.RemoteSnap
 		return fmt.Errorf("remote_entity: invalid L2 CAS response %q: %w", fmt.Sprint(result), parseErr)
 	}
 	if accepted == 0 {
-		return nil
+		// RR-20261005-NC-130：CAS 落败（L2 已有更新的版本或更新的 epoch）就是被判 stale 的写，
+		// 按 cache.Store 约定返回 ErrStaleWrite。之前返回 nil，ReadThroughStore.Set 把它当成写入成功
+		// 照常写 L1，L1 冷的节点于是停在比 L2 更旧的快照上。
+		return fmt.Errorf("%w: L2 holds a newer snapshot", cache.ErrStaleWrite)
 	}
 	if accepted < 0 {
 		return fmt.Errorf("%w: L2 same version has different content", entity.ErrRemoteVersionConflict)
