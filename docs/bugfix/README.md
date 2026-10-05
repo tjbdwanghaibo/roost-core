@@ -1,5 +1,13 @@
 # Bugfix 记录
 
+**10-05 N05 remoteentity mirror（revn05）：NC-130、NC-131 两个 P3 与 RR-20260913-01 残余已修复、声明场景验证（含真实 Redis / 自起 Redis Cluster），未发版。** L2 CAS 落败报 `cache.ErrStaleWrite`，Publish 改从 L2 取较新值装 L1；表满时 Stats 先清理过期兴趣；版本化删除在共享 L2 留与快照同 TTL 的墓碑。[本轮](../review/REVIEW-2026-10-05-n05-revn05.md) · [证据](evidence/noncore-bugfix-20261005-n05/README.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-131](RR-20261005-NC-131.md) | `Manager.Stats` 表满时先 `pruneLocalInterestsLocked` 再计数 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-130](RR-20261005-NC-130.md) | L2 `Set` CAS 落败返回 `ErrStaleWrite`；`FatalRemoteError` 含 stale；`Publish` 失败后 `adoptNewerFromL2` | 已修复、声明场景验证（含真实 Redis），未发版 |
+| [RR-20260913-01 残余](RR-20260913-01.md#复核后的补修2026-10-05n05-revn05共享-l2-墓碑) | L2 `DeleteAtVersion` 留 `deleted_version` 墓碑（L2 TTL），CAS 拒绝不新于它的写 | 已修复（含残余补修，未发版） |
+
 **10-05 N11 spatial / timer / clock / index（revn11）：NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。** World 定时器堆在武装 / 触发前登记事务逆操作（同 NC-61 做法）；timer Tick 期间对仍在堆里的定时器取消 / 改期立即生效、只有最外层 Tick 收尾；过期截止时间武装为下一次 Tick；BlockRect 饱和计算；index 三处 panic / 丢写。[本轮](../review/REVIEW-2026-10-05-n11.md) · [证据](evidence/noncore-bugfix-20261005-revn11/README.md)。
 
 | 编号 | 修复 | 状态 |
@@ -637,7 +645,7 @@
 | RR-20260911-06 | core | AfterCommit panic 遗漏回复与释放,饱和回退可崩溃 | U-0183 | [RR-20260911-06.md](RR-20260911-06.md) |
 | RR-20260912-02 | core | WAL.Sync 只 fsync 文件,不等队列里已准入的记录 | U-0185 | [RR-20260912-02.md](RR-20260912-02.md) |
 | RR-20260912-01 | core | Committer Flush / Shutdown 等 replay 所有权时不可取消 | U-0186 | [RR-20260912-01.md](RR-20260912-01.md) |
-| RR-20260913-01 | core | Remote 快照删除无版本屏障,迟到删除清新值 / 旧值复活 | U-0187 | [RR-20260913-01.md](RR-20260913-01.md) |
+| RR-20260913-01 | core | Remote 快照删除无版本屏障,迟到删除清新值 / 旧值复活（10-05 N05 共享 L2 墓碑残余补修，未发版） | U-0187 | [RR-20260913-01.md](RR-20260913-01.md) |
 | RR-20260913-09 | core | Transfer 回复丢失被当成没执行,旧 owner 恢复可写 | U-0188 | [RR-20260913-09.md](RR-20260913-09.md) |
 | RR-20260913-12 | core | EnterShared / LeaveShared 回复丢失被当成没执行,恢复旧模式放行独占写 | U-0189 | [RR-20260913-12.md](RR-20260913-12.md) |
 | RR-20260913-13 | core | LeaveShared 回复丢失后普通写重试卡在 `shared -> local_owned` 非法迁移 | U-0189(同一修复覆盖) | [RR-20260913-12.md](RR-20260913-12.md#2026-09-13-第十轮rr-20260913-13-由同一修复覆盖仍归-u-0189) |

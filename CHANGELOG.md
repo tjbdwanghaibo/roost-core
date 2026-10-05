@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remote 快照共享 L2 的旧写与删除水位对所有节点生效**（RR-20261005-NC-130、RR-20260913-01 残余补修，行为收紧，L2 键格式增加字段）：`remoteSnapshotL2Store.Set` 在 CAS 落败（L2 已有更新版本 / 更新 epoch）时返回 `cache.ErrStaleWrite`（之前是 nil），`RemoteSnapshotCache.Publish` 不再把这份旧快照装进 L1，改取 L2 的较新值——L1 冷的节点收到迟到复制消息或权威加载输给新提交时不再读到比 L2 旧的版本。版本化删除在 L2 留下只含 `deleted_version`、与 `snapshot_l2_ttl` 同 TTL 的墓碑，任何节点写入不新于它的快照都被拒绝，更新的写（重建）清墓碑；之前另一节点的在途加载或迟到消息会把已删除实体写回 L2，冷节点读到它直到 L2 TTL。滚动升级期间旧节点仍可能写回（修复前行为），新节点的下一次删除会收敛。[NC-130](docs/bugfix/RR-20261005-NC-130.md) · [残余](docs/bugfix/RR-20260913-01.md)
+- **Remote Mod 健康检查不再被过期兴趣钉在 Fail**（RR-20261005-NC-131）：本机兴趣表满时 `Manager.Stats` 先清理过期条目再计数；之前一阵读取把 `snapshot_interest_keys` 读满后，空闲进程的健康一直报 `capacity exhausted`。[记录](docs/bugfix/RR-20261005-NC-131.md)
+
 ## [v1.20.1] - 2026-10-05
 
 > 补丁版本：v1.20.0 整体验证与后续 review 收敛。saga 原生步骤按操作实例最多生效一次（U-0280，含复审两处补修）、过期无回执命令不再无限 nak（U-0281）、Nest 暂时性冲突重排加抖动（U-0279）；驱动层 Redis 脚本不再被驱动重放（NC-100，P1）、Mongo 事务窗口覆盖提交与 EndSession（NC-101）；非核心 review NC-50～52、NC-60～65、NC-70～75、NC-80～83、NC-90～93、NC-100～102、NC-110～117、NC-120～123、NC-140～147 与 RR-20261005-01。**行为变化**：saga 步骤预算改由配置提供（`saga.step_defaults` / `saga.steps`）、原生步骤租约封顶到命令截止；Redis 脚本回复丢失返回结果未知；限流器每 owner 默认 256 key；生成器 Core 下限升到 v1.20.1。已生成工程不提供迁移（维护者决定）。

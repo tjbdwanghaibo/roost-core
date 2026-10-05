@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N05 mirror / ownerroute（revn05）**：[NC-130/131 与 RR-20260913-01 跨节点 L2 删除水位残余](review/REVIEW-2026-10-05-n05-revn05.md)已修复、声明场景验证（含真实 Redis、自起 Redis Cluster），未发版。L2 CAS 落败报 `ErrStaleWrite` 且不再把旧快照装进 L1；版本化删除在共享 L2 留墓碑（L2 键格式多 `deleted_version`，旧节点混跑时退回修复前行为）。ownerroute / 赠礼静态 sid 路由无缺陷；真实 JetStream 新 sid 重放历史（O5）、兴趣容量是全集群合计（O4）待维护者定；快照缓存删除 / 版本水位的方向判断见本轮记录。Mirror DTO 方案仍未实施。
+
 **10-05 N04 接续（revn04）**：[NC-100/101/102](review/REVIEW-2026-10-05-n04-revn04.md)已修复、声明场景验证，未发版。Redis 驱动脚本不再自动重放（真实 Redis 上修前一次 Update 写两次）、事务提交受 `transaction_timeout` 约束（真实副本集修前阻塞到网络恢复）、mongotest 唯一索引遇数组拒绝；第 22 轮正式 Repository 链路 28 叶子首次在真实副本集上通过。Redis Cluster / mongos 未验，默认 `MaxRetries` 对非脚本写命令的重放待维护者定（运行记录观察 3）。
 
 **10-05 N07第二批**：[NC-64/65](review/REVIEW-2026-10-05-noncore-n07b.md)已修复、声明场景验证，未发版。生成game-demo真实进程经`gm.config.reload`热更（成功/失败/rollback、flags与scene refresh读取）符合契约，handler内两次读不跨代（新增控制用例）；修的是模板层：玩家加载后重建Gear与attr_final、开关热更说明改指configs/data JSON。第一批C-O1/2/3与event未接线在真实进程里无触发路径，维持观察；generate不跳过`.dev/`与运行时不查required移交N08。
@@ -192,6 +194,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N05 revn05：[NC-130](bug/RR-20261005-NC-130.md) / [NC-131](bug/RR-20261005-NC-131.md) 两个 P3 与 [RR-20260913-01 残余](bugfix/RR-20260913-01.md) **已修复、声明场景验证（含真实 Redis），未发版**（`6f06f0da` / `c3475150` / `366058a7`，审查 `be2713ad`）；[本轮](review/REVIEW-2026-10-05-n05-revn05.md)（含方向判断）。T-246/247，T-81 追加。行为收紧：`remoteSnapshotL2Store.Set` 对被拒旧写返回 `cache.ErrStaleWrite`；L2 删除留墓碑。
+
 10-05 N11 revn11：[NC-140](bug/RR-20261005-NC-140.md) / [NC-141](bug/RR-20261005-NC-141.md) P2 与 [NC-142～147](review/REVIEW-2026-10-05-n11.md#3-确认的缺陷) P3 **已修复、声明场景验证，未发版**（[修复](bugfix/README.md)）——World 定时器堆不随 Nest 事务回滚、timer Tick 期间取消 / 改期 / 重入语义、过期截止时间未武装、BlockRect 溢出、index 三处 panic / 丢写；[本轮](review/REVIEW-2026-10-05-n11.md)（含方向判断：组件内存回滚契约第三次出现）。
 
 10-05 N09 skill 第三批（revn09c）：[NC-150](bug/RR-20261005-NC-150.md) / [NC-151](bug/RR-20261005-NC-151.md)（P2）与 [NC-152](bug/RR-20261005-NC-152.md) / [NC-153](bug/RR-20261005-NC-153.md) / [NC-154](bug/RR-20261005-NC-154.md)（P3）**未修复**——严格 Parse 的大小写绕过、phase recast / timeout 只编译不执行、tick 非负缺口、VisualPlanCache 共享加载的 ctx、skillcompose 无诊断拒绝；[本轮](review/REVIEW-2026-10-05-n09-batch3.md)（方向判断：编译器接受集合与 Runtime 可执行集合各自维护）。

@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N05 remoteentity mirror / ownerroute（revn05）
+
+基线 `a80be80c`，分支 `revn05`，NC 段 130～139（用 130、131）；图谱 generation 2026-09-30，10 个证据路径 metadata_changed 以当前源码补证。[本轮](REVIEW-2026-10-05-n05-revn05.md) · [审查证据](evidence/noncore-review-20261005-n05/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n05/README.md)。审查 `be2713ad`，修复 `6f06f0da` / `c3475150` / `366058a7`。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| ownerroute / 赠礼 sid 路由 | Route 本地 / 远程 / 缺依赖；赠礼按 FromSID 转交、本地分支不可达、接收端信封核对 | 无缺陷；O1/O2 |
+| interest 生命周期 | 续租 / 撤销代际、发布门控、容量与健康 | **NC-131 已修**；O3（无主动撤销）、O4（容量全集群合计） |
+| L1 / L2 准入 | 迟到复制消息、权威加载输给新提交、迁移后旧 epoch | **NC-130 已修**（含真实 Redis） |
+| 跨节点删除 / 防复活 | 在途加载、迟到消息写回空 L2；重建版本单调 | **RR-20260913-01 残余已修**（L2 墓碑，真实 Redis + 自起 Cluster） |
+| 真实 broker / Stop | 真实 JetStream：新 sid durable 重放历史快照与兴趣 | O5 观察；Stop 不排空沿用第 25 轮 |
+
+新增正式回归：remoteentity 普通 6 个顶层用例（NC-130 3、残余 3）、integration 2 个（真实 Redis：stale 写 / 墓碑），kit/remoteentity 1 个（NC-131），均修前红 → 修后绿；改动包 race×3、根包、全仓 build/vet、glsvet、相邻包通过。N05 仍**场景部分完成**：方向判断（快照缓存删除 / 版本水位第 N 次补修，建议把水位收敛到共享层或改订阅代际）与 O4/O5 待维护者；多节点 HA、兴趣表满载容量未做。Mirror DTO 方案未改、实现未实施。不等待 CI，不发版。
+
 ## 2026-10-05 N11 spatial / timer / clock / index（revn11）
 
 基线 `23f82dbc`，独立 worktree 分支 `revn11`，NC 段 140～149（用 140～147）；图谱 generation 2026-09-30，四个包此后无代码提交，模板按当前源码读取。[本轮](REVIEW-2026-10-05-n11.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn11/README.md)。NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。

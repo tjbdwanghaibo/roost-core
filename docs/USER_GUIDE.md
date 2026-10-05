@@ -303,6 +303,8 @@ Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带
 
 Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是共享 snapshot store。`Cached` 不回源，`Monotonic` 在版本不足时 singleflight 回源，`Linearizable` 每次读权威存储。高频展示、排行榜引用和 AOI 属性优先 Cached/Monotonic；结算前校验使用 Linearizable 或转成 owner 命令。
 
+共享 L2 是版本水位的共同参照（main 未发版，[NC-130](bugfix/RR-20261005-NC-130.md) / [RR-20260913-01 残余](bugfix/RR-20260913-01.md)）：L2 拒绝更旧的快照时返回 `cache.ErrStaleWrite`，本机 L1 改取 L2 的较新值；版本化删除在 L2 留与 `snapshot_l2_ttl` 同 TTL 的墓碑，任何节点写入不新于它的快照都会被拒，重建（更新的版本）照常写入。`Cached` 没有成文的最大陈旧时间：上限由 L1 TTL（`snapshot_cache_ttl`）、L2 TTL 与 JetStream 同步总线的历史重放共同决定（[审查 O5/O6](review/REVIEW-2026-10-05-n05-revn05.md)）。
+
 L2 快照键默认是 `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<policy>`，不带部署前缀。多个部署共用一个 Redis db 时，给每个部署配置不同的
 `remote_entity.snapshot_l2_key_prefix`（例如 `roost:<工程名>`，core 为 `Config.SnapshotL2KeyPrefix`），键变为 `<prefix>:remote_entity:snapshot:…`，
 否则彼此读写同一份快照。缺省为空时键与旧版本逐字相同，不需要迁移。同一部署的所有节点必须配置同一个值：新设或修改前缀相当于换一套空的 L2（快照会从权威重新发布），

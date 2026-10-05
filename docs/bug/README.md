@@ -1,5 +1,12 @@
 # Roost Review 问题索引
 
+**10-05 N05 remoteentity mirror / ownerroute（revn05）：NC-130、NC-131 两个 P3 与 RR-20260913-01 跨节点 L2 删除水位残余已修复、声明场景验证（含真实 Redis / 自起 Redis Cluster），未发版。** 共享 L2 以 CAS 拒绝旧快照时 L1 冷的节点仍装下它、读取停在比 L2 旧的版本（含迁移后旧 route epoch）；本机兴趣表被过期条目占满后健康检查一直 Fail；版本化删除只在本机留墓碑，别的节点的在途加载 / 迟到消息把已删除快照写回 L2。ownerroute 与赠礼静态 sid 路由核对无缺陷；真实 JetStream 重放、兴趣容量为观察。[本轮](../review/REVIEW-2026-10-05-n05-revn05.md) · [证据](../review/evidence/noncore-review-20261005-n05/README.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-131](RR-20261005-NC-131.md) | P3 本机兴趣表只被过期条目占满时 Remote 健康一直报 capacity exhausted | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-130](RR-20261005-NC-130.md) | P3 L2 CAS 拒绝旧快照后本机 L1 仍装下它，读取停在比 L2 旧的版本 | 已修复、声明场景验证（含真实 Redis），未发版 |
+
 **10-05 N11 spatial / timer / clock / index（revn11）：NC-140、NC-141 P2 与 NC-142～147 P3 已修复、声明场景验证，未发版。** World 定时器堆不随 Nest 事务回滚；Tick 期间取消 / 改期同样到期的定时器仍按旧期限触发；过期截止时间报告已武装却未武装；BlockRect 在 int64 上界溢出；index 在 NaN 值、混合动态类型接口键、零值 OrderedIndex 上 panic 或丢写；重入 Tick 提前结束外层推迟语义。[本轮](../review/REVIEW-2026-10-05-n11.md)。
 
 | 编号 | 问题 | 状态 |
@@ -987,7 +994,7 @@ U-0224 原 BSON 三项、U-0225 所在 Saga 现有 race 测试通过；不代表
 | RR-20260913-06 | P2 | core | L2 回填绕过同版本冲突检查 | 已修复(U-0181,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-06.md) · [09-13 第二轮](REVIEW-2026-09-13-02.md) · [第七轮适配复现通过](../review/REVIEW-2026-09-13-07.md) |
 | RR-20260913-07 | P2 | core | L2 CAS 遗漏 schema/codec 冲突比较 | 已修复(U-0176,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-07.md) · [第二轮](REVIEW-2026-09-13-02.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
 | RR-20260913-08 | P2 | core | 快照 ExpiresAt 未参与缓存读取准入 | 已修复（含10-05残余补修，未发版）；U-0175三个历史残余通过 → [第七轮](../review/REVIEW-2026-09-13-07.md) · [bugfix](../bugfix/RR-20260913-08.md) |
-| RR-20260913-01 | P2 | core | Remote 删除无版本屏障，旧删除清新值/旧值复活 | 已修复(U-0187 + 第七轮残余补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-01.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
+| RR-20260913-01 | P2 | core | Remote 删除无版本屏障，旧删除清新值/旧值复活 | 已修复（含 10-05 N05 跨节点 L2 墓碑残余补修，未发版；[复核](REVIEW-2026-09-13.md)）(U-0187 + 第七轮残余补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-01.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮残余](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
 | RR-20260913-02 | P2 | core | 旧兴趣释放取消重新订阅 | 已修复(U-0184 + 同刻度播种补修,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-02.md) · [09-13](REVIEW-2026-09-13.md) · [第七轮观察](REVIEW-2026-09-13-07.md) · [第八轮原触发/残余验收通过（含边界）](REVIEW-2026-09-13-08.md) |
 | RR-20260913-03 | P2 | core | Remote payload scope 未与信封身份绑定 | 已修复(U-0179,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-03.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |
 | RR-20260913-04 | P2 | core | 快照加载跟随者取消后不归还等待名额 | 已修复(U-0174,已发版 core v1.15.3 / kit v1.14.4 / codegen v1.15.5)→ [bugfix](../bugfix/RR-20260913-04.md) · [09-13](REVIEW-2026-09-13.md) · [第四轮独立验收通过](../review/REVIEW-2026-09-13-04.md) |

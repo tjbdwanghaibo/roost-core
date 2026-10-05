@@ -2,6 +2,8 @@
 
 [全部后续review交接清单](REMAINING-REVIEW-HANDOFF-2026-10-05.md)：另一agent从N06 global RPC/Mod/App.Live增量接续；全部15个非核心单元、核心工作线接口、外部专项和收口标准已列出。
 
+[10-05 N05 mirror / ownerroute（revn05）](REVIEW-2026-10-05-n05-revn05.md)：NC-130/131（P3）与 RR-20260913-01 跨节点 L2 删除水位残余已修复（含真实 Redis / 自起 Cluster），未发版；ownerroute 与赠礼静态 sid 路由无缺陷；真实 JetStream 重放、兴趣容量为观察；快照缓存水位方向判断。
+
 [10-05 N03 通信 / etcd（revn03）](REVIEW-2026-10-05-noncore-n03.md)：真实 JetStream / etcd 矩阵，NC-90～92（P2）与 NC-93（P3）；方向判断见末节。[证据](evidence/noncore-review-20261005-n03/README.md)。
 
 [10-05第27轮](REVIEW-2026-10-05-noncore-27.md)：NC-41/42及RR-09残余修复，7反例红绿、13新增回归；[恢复机制/漏检复盘](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-17/README.md)。
