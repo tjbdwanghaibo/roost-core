@@ -642,6 +642,7 @@ func (s *memoryStore) expireReceiptsAndTombstones() {
 	s.receipts = map[string]Completion{}
 	s.closed = map[string]string{}
 	s.closures = map[string]OperationClosure{}
+	s.lateAlarms = map[string]bool{}
 }
 
 // B：claim 租约封顶到命令截止时间，新建与接管都一样；已过截止的命令不再分配租约。

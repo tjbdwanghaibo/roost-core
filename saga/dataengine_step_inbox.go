@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -435,21 +433,10 @@ func (inbox *DataEngineStepInbox) supersede(ctx context.Context, claim dataEngin
 }
 
 // commandIncarnation 从协调器生成的 CommandID（operationKey:attempt 或 operationKey:rN:attempt）取出
-// Resume 代际；不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。
+// Resume 代际；不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。解析与协调器核对 completion 代际
+// 用同一个函数（commandIDIncarnation，B1），两边对“同一生”的判断不会分叉。
 func commandIncarnation(command Command) uint32 {
-	rest, ok := strings.CutPrefix(command.ID, command.IdempotencyKey+":r")
-	if !ok {
-		return 0
-	}
-	digits, _, ok := strings.Cut(rest, ":")
-	if !ok {
-		return 0
-	}
-	value, err := strconv.ParseUint(digits, 10, 32)
-	if err != nil {
-		return 0
-	}
-	return uint32(value)
+	return commandIDIncarnation(command.IdempotencyKey, command.ID)
 }
 
 // releaseLease 交还本次投递刚拿到、但没有用上的租约：把 lease_until 设为现在，只对仍属于这个

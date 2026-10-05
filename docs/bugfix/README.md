@@ -203,7 +203,7 @@
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
 | [U-0281](U-0281-saga-expired-command-nak-forever.md) | 过期且无回执的原生步骤命令 ack，不再无限 nak | 已修复，未发版 |
-| [U-0280](U-0280-saga-step-reexecuted-after-crash.md) | 原生步骤执行契约：同一操作实例最多生效一次、租约封顶到命令截止、放弃后迟到成功告警；步骤预算改为配置 | 已修复，未发版 |
+| [U-0280](U-0280-saga-step-reexecuted-after-crash.md) | 原生步骤执行契约：同一操作实例最多生效一次、租约封顶到命令截止、放弃后迟到成功告警；步骤预算改为配置；B1（10-06）协调器按代际接收 completion、迟到告警去重、补偿方向人工 Compensate 换代 | 已修复（v1.20.1）；B1 已实施，未发版 |
 
 **10-05第十七批：NC-41/42与RR-09残余已修复、声明场景验证，未发版。** 7原始/overlay行为反例红→绿，13新增正式叶子、race420/2Cluster skip、根包14/build/vet及两生成消费通过。[本轮](../review/REVIEW-2026-10-05-noncore-27.md) · [证据](evidence/noncore-bugfix-20261005-17/README.md)。T-223/224、旧T-181追加；完整待审交接见[清单](../review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
 

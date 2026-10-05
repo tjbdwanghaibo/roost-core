@@ -352,3 +352,23 @@ Redis db 9 / 10 / 11 里 58 个 `u0280[abc]*` 键（删前核对没有其他前�
    过了自己截止（U-0281 过期分支或 Reserve 的 `ErrCommandExpired`），只查自己的回执就 ack，成功再无人送达、协调器放弃且不告警。
    改为两条不执行的分支在 ack 前只读查找同一操作已生效的成功并经 saga 结果流重发。
    红：`... the expired delivery of gift-N:1:0:2 was acknowledged without replaying it: the saga ended failed with CompletedSteps=0 and no late_after_abandon alarm`。
+
+## B1 实施（2026-10-06，维护者决定“协调器接收 completion 时核对代际”）
+
+[方案与实施](../feature/B1-SAGA-COMPLETION-INCARNATION-2026-10-06.md)。独立审查指出协调器 `Engine.Complete` 按 `IdempotencyKey` 接收同一操作任一生、任一次尝试的结果，
+与收件箱的“成功任何一生回放、拒绝只在本生回放”不是同一张表。四个边角各写一条确定性用例（`saga/step_operation_incarnation_promises_test.go`，
+`nativeWorld`：真实 `SubscribeDataEngineStep` 消费者 + mongotest 上真实 `DataEngineStepInbox` + 真实 dataengine `MongoStore.Project`），基线 `3a71321c` 的红
+（全文 [evidence/B1/red-before.txt](evidence/B1/red-before.txt)）：
+
+```text
+E1: the refusal of gift-1:1:0:1 from the previous life was accepted by the resumed life waiting on gift-1:1:0:r1:1: the saga is now failed (step 0, completed 0) ...
+E2: one effective success of gift-2:1:0:1 arrived three times after the coordinator abandoned the step; saga.completion.late_after_abandon_total grew by 3, want 1 ...
+E3: success of gift-3:1:0:1 arrived after Resume, before the new life dispatched the step: late_after_abandon grew by 1 (want 0) and the saga is pending at step 0 with 0 completed ...
+E4: manual Compensate re-dispatched the refund as gift-4:2:0:1, the CommandID of the refused attempt ... delivery of the re-dispatched refund gift-4:2:0:1: saga: idempotency identity conflict
+```
+
+修法（只改协调器）：completion 的代际从 `CommandID` 解析（`commandIDIncarnation`，与铸造 ID 的 `commandID` 同处，收件箱的 `commandIncarnation` 改调它）；
+旧一生的拒绝 / 失败不接收、计 `StaleIncarnation`；旧一生的成功在记录停在该操作上（等它、Resume 后未派发、新一生退避中）时接收为结果；
+放弃后迟到的成功按（操作，代际）在 tombstone 的 `late_alarms` 上只告警一次（可选接口 `LateSuccessAlarmStore`）；
+补偿方向 `ManualRequired` 上的人工 `Compensate` 进入新一生。持久格式只增 `late_alarms`；契约正文已更新（SAGA.md「原生步骤执行契约」第 3、4 条与「失败语义」）。
+修后四条转绿；“补偿方向 ManualRequired 用 Resume 重新执行补偿”的守卫修前修后都绿。验证与兼容见方案文档第 8 节。

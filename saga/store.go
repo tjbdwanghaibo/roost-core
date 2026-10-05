@@ -92,6 +92,14 @@ type CompletionHistoryStore interface {
 	CompletionHistory(context.Context, Completion) (CompletionHistory, error)
 }
 
+// LateSuccessAlarmStore 是 Store 的可选扩展（B1）：在 operation tombstone 上记下“这个操作在第 incarnation 代
+// 放弃之后迟到的成功已经告警”，first=true 表示这是第一次（原子判定，并发调用只有一个得到 true）。
+// 同一个已生效的成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），协调器按（操作，代际）只告警一次。
+// 没有 tombstone 时返回 false。没实现它的 Store 每次送达都告警。
+type LateSuccessAlarmStore interface {
+	MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (first bool, err error)
+}
+
 type Publisher interface {
 	PublishSagaCommand(context.Context, Command) error
 }

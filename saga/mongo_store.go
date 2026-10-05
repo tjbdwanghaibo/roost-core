@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,6 +189,25 @@ func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completio
 		return CompletionHistory{}, ErrIdentityConflict
 	}
 	return CompletionHistory{Recorded: true, Receipt: true}, nil
+}
+
+// MarkLateSuccessAlarm 在 tombstone 的 late_alarms 子文档里记 r<代际>（B1）。条件更新只匹配还没有这个
+// 键的 tombstone，单文档原子：并发送达的同一个迟到成功只有一次 MatchedCount == 1。
+func (s *MongoStore) MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
+	if err := completion.Validate(); err != nil {
+		return false, ErrInvalidRecord
+	}
+	field := lateAlarmField(incarnation)
+	filter := bson.M{"_id": completion.IdempotencyKey, "saga_id": completion.SagaID, field: bson.M{"$exists": false}}
+	result, err := s.operations().UpdateOne(ctx, filter, bson.M{"$set": bson.M{field: time.Now().UTC()}})
+	if err != nil {
+		return false, err
+	}
+	return result != nil && result.MatchedCount == 1, nil
+}
+
+func lateAlarmField(incarnation uint32) string {
+	return "late_alarms.r" + strconv.FormatUint(uint64(incarnation), 10)
 }
 
 func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Record, error) {
@@ -499,12 +519,14 @@ type completionDoc struct {
 }
 
 // operationDoc 是 operation tombstone。Closure 是 U-0280 增加的字段（"result" / "abandoned"），
-// 之前写的 tombstone 没有它，按 OperationClosureUnknown 处理（不告警）。
+// 之前写的 tombstone 没有它，按 OperationClosureUnknown 处理（不告警）。LateAlarms 是 B1 增加的字段：
+// 键 r<代际>，值是第一次告警的时间；之前写的 tombstone 没有它，第一次迟到成功照常告警并补上。
 type operationDoc struct {
-	ID        string    `bson:"_id"`
-	SagaID    string    `bson:"saga_id"`
-	Closure   string    `bson:"closure,omitempty"`
-	CreatedAt time.Time `bson:"created_at"`
+	ID         string               `bson:"_id"`
+	SagaID     string               `bson:"saga_id"`
+	Closure    string               `bson:"closure,omitempty"`
+	LateAlarms map[string]time.Time `bson:"late_alarms,omitempty"`
+	CreatedAt  time.Time            `bson:"created_at"`
 }
 
 const (
@@ -563,3 +585,4 @@ func completionDigest(c Completion) ([]byte, error) {
 
 var _ Store = (*MongoStore)(nil)
 var _ CompletionHistoryStore = (*MongoStore)(nil)
+var _ LateSuccessAlarmStore = (*MongoStore)(nil)

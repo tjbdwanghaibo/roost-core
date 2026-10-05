@@ -66,8 +66,12 @@ type Stats struct {
 	Started, Dispatched, Completed, Compensated, Failed, ManualRequired   uint64
 	Conflicts, Duplicates, PublishFailures, StoreFailures, WorkerFailures uint64
 	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion（U-0280）：那一步已经生效，
-	// 却不在 CompletedSteps 里、不会被补偿。每一次都记 ERROR，需要运维核对（见 TROUBLESHOOTING T-226）。
+	// 却不在 CompletedSteps 里、不会被补偿。按（操作，代际）计一次（Store 实现 LateSuccessAlarmStore 时，B1），
+	// 每次记 ERROR，需要运维核对（见 TROUBLESHOOTING T-226）。
 	LateAfterAbandon uint64
+	// StaleIncarnation 计被协调器拒收的旧一生结果（B1）：Resume 或补偿方向的人工 Compensate 进入新一生之后，
+	// 上一生某次尝试的拒绝 / 失败才到达。收件箱也不回放旧一生的拒绝，新一生照常执行，这些结果只计数。
+	StaleIncarnation uint64
 }
 
 type Engine struct {
@@ -87,6 +91,7 @@ type Engine struct {
 	started, dispatched, completed, compensated, failed, manualRequired atomic.Uint64
 	conflicts, duplicates, publishFailures                              atomic.Uint64
 	storeFailures, workerFailures, lateAfterAbandon                     atomic.Uint64
+	staleIncarnation                                                    atomic.Uint64
 }
 
 func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
@@ -374,6 +379,14 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
 		}
 		after := e.beginCompensation(record, reason, now)
+		if record.Phase == PhaseCompensate {
+			// B1：补偿方向停下（补偿步骤拒绝或重试用尽 → ManualRequired）后再发起补偿，要重新执行的补偿步骤在
+			// 这一生里已经派发过。代际不变、Attempt 归零会让新的第一次尝试复用上一轮第一次尝试的 CommandID：
+			// 原生收件箱按摘要报身份冲突一直 nak，Mongo 收件箱回放旧的拒绝，协调器按回执去重，补偿永远不会
+			// 真正重新执行。与 Resume 一样进入新一生：CommandID 不相交，上一生的拒绝不再回放，上一生已生效的
+			// 补偿（成功迟到）照样回放而不重做。从正向发起的补偿在这一生里还没派发过补偿命令，不需要换代。
+			after.Incarnation++
+		}
 		var abandoned string
 		if record.Attempt > 0 {
 			// 当前步骤正在重试退避：人工补偿同样放弃了它，写放弃关闭的 tombstone（见 processClaimed 的截止分支）。
@@ -393,6 +406,16 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 	return Record{}, ErrConflict
 }
 
+// Complete 接收一次尝试的结果。协调器对每个操作（saga + 方向 + 步骤，即 IdempotencyKey）记着当前代际
+// （Record.Incarnation，Resume / 补偿方向的人工 Compensate 递增）与当前等待的尝试；completion 的代际从
+// CommandID 解析（commandIDIncarnation）。判定顺序（B1，对齐 SAGA.md「原生步骤执行契约」第 3 条）：
+//
+//  1. 旧一生（或比记录还新、不可能由协调器产生）的拒绝 / 失败：不接收，只计数（StaleIncarnation）。
+//     收件箱同样不回放旧一生的拒绝，新一生的尝试照常执行。
+//  2. 旧一生的成功：记录正停在这个操作上（在等它，或 Resume 后还没派发、新一生的尝试在退避）就接收为该操作的
+//     结果——成功在任何一生里都不重做，新一生的尝试在收件箱里看到它也只会回放。
+//  3. 同一生、记录在等这个操作：接收（同一生较早尝试的成功、拒绝、可重试失败都算，与收件箱一致）。
+//  4. 其余按回执与 tombstone 判断重复或“放弃后迟到的成功”（completeNotWaiting）。
 func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
 	if completion.Validate() != nil {
 		return Record{}, ErrInvalidRecord
@@ -403,32 +426,37 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	// Coordinator time owns ordering, deadlines and receipt TTL. A remote step
 	// clock must not move Saga state backwards or expire deduplication records.
 	completion.CompletedAt = time.Now().UTC()
+	incarnation := commandIDIncarnation(completion.IdempotencyKey, completion.CommandID)
 	for attempts := 0; attempts < 8; attempts++ {
 		record, err := e.store.Get(ctx, completion.SagaID)
 		if err != nil {
 			return Record{}, err
 		}
-		if record.Status != StatusWaiting || record.OperationKey != completion.IdempotencyKey {
-			history, receiptErr := e.completionHistory(ctx, completion)
-			if receiptErr != nil {
-				return Record{}, receiptErr
-			}
-			if !history.Recorded {
-				return Record{}, ErrNotWaiting
-			}
-			if completion.Success && !history.Receipt && history.Closure == OperationAbandoned {
-				e.reportLateAfterAbandon(record, completion)
-				return record, nil
-			}
-			e.duplicates.Add(1)
+		var accept bool
+		switch {
+		case incarnation != record.Incarnation && (!completion.Success || incarnation > record.Incarnation):
+			e.reportStaleIncarnation(record, completion, incarnation)
 			return record, nil
+		case incarnation != record.Incarnation:
+			accept = positionedAt(record, completion.IdempotencyKey)
+		default:
+			accept = record.Status == StatusWaiting && record.OperationKey == completion.IdempotencyKey
+		}
+		if !accept {
+			return e.completeNotWaiting(ctx, record, completion, incarnation)
 		}
 		definition, ok := e.definition(record.Type, record.DefinitionVersion)
 		if !ok {
 			return Record{}, fmt.Errorf("%w: %s", ErrDefinitionMissing, record.Type)
 		}
 		after := e.applyCompletion(record, definition, completion)
-		outcome, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, Receipt: &completion, CloseOperation: closedOperation(record, after)})
+		closed := closedOperation(record, after)
+		if completion.Success {
+			// 成功总是关闭这个操作（带结果）。记录停在 Pending / Compensating 时没有 OperationKey，
+			// closedOperation 得不出它，这里显式给出。
+			closed = completion.IdempotencyKey
+		}
+		outcome, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, Receipt: &completion, CloseOperation: closed})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -445,6 +473,63 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 		return after.Clone(), nil
 	}
 	return Record{}, ErrConflict
+}
+
+// positionedAt 判断记录是否正停在这个操作上：在等它的某次尝试，或者下一步就要派发它（Resume 之后还没派发、
+// 本生的尝试在退避）。
+func positionedAt(record Record, operation string) bool {
+	switch record.Status {
+	case StatusWaiting:
+		return record.OperationKey == operation
+	case StatusPending, StatusCompensating:
+		return operationKey(record.ID, record.Phase, record.Step) == operation
+	default:
+		return false
+	}
+}
+
+// completeNotWaiting 处理协调器不接收的 completion：已记录的按重复确认；放弃关闭之后才到的成功告警，
+// 按（操作，completion 的代际）只告警一次（B1）；协调器既不在等、也没有记录的返回 ErrNotWaiting。
+func (e *Engine) completeNotWaiting(ctx context.Context, record Record, completion Completion, incarnation uint32) (Record, error) {
+	history, err := e.completionHistory(ctx, completion)
+	if err != nil {
+		return Record{}, err
+	}
+	if !history.Recorded {
+		return Record{}, ErrNotWaiting
+	}
+	if completion.Success && !history.Receipt && history.Closure == OperationAbandoned {
+		first, err := e.markLateSuccessAlarm(ctx, completion, incarnation)
+		if err != nil {
+			return Record{}, err
+		}
+		if first {
+			e.reportLateAfterAbandon(record, completion)
+			return record, nil
+		}
+	}
+	e.duplicates.Add(1)
+	return record, nil
+}
+
+// markLateSuccessAlarm 在 tombstone 上记下“这个操作在这一代际放弃后迟到的成功已告警”，first=true 表示第一次。
+// 同一个已生效的成功会经 effect 重投、过期投递的回放、JetStream 重投多次送达，告警按步骤计，不按送达计。
+// Store 没实现 LateSuccessAlarmStore 时每次都告警（宁可重复，不丢告警）。
+func (e *Engine) markLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
+	if marker, ok := e.store.(LateSuccessAlarmStore); ok {
+		return marker.MarkLateSuccessAlarm(ctx, completion, incarnation)
+	}
+	return true, nil
+}
+
+// reportStaleIncarnation 记一份被拒收的旧一生结果（B1）。这是 Resume 之后的正常现象，不是故障：只计数、记 WARN。
+func (e *Engine) reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
+	e.staleIncarnation.Add(1)
+	phase, step := operationPosition(completion.IdempotencyKey)
+	metrics.IncCounter("saga.completion.stale_incarnation_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
+	slog.Warn("saga: ignored a step result from an earlier incarnation of the saga",
+		"saga_id", completion.SagaID, "saga_type", record.Type, "phase", phase, "step", step, "command_id", completion.CommandID,
+		"result_incarnation", incarnation, "incarnation", record.Incarnation, "success", completion.Success, "error", completion.Error)
 }
 
 // completionHistory 用 Store 的可选扩展区分重复结果与放弃后到达的成功；没有扩展时退回
@@ -536,7 +621,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 }
 
 func (e *Engine) Stats() Stats {
-	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load()}
+	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load()}
 }
 
 func (e *Engine) coordinatorLoop(ctx context.Context) {
@@ -861,6 +946,25 @@ func commandID(operationKey string, incarnation, attempt uint32) string {
 		return fmt.Sprintf("%s:%d", operationKey, attempt)
 	}
 	return fmt.Sprintf("%s:r%d:%d", operationKey, incarnation, attempt)
+}
+
+// commandIDIncarnation 是 commandID 的逆：从 operationKey:attempt / operationKey:rN:attempt 取出代际 N。
+// 不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。协调器核对 completion 的代际（B1）与原生收件箱
+// 判断拒绝是否同一生（U-0280）都用它，两边对同一个 ID 必须得出同一个代际。
+func commandIDIncarnation(operationKey, commandID string) uint32 {
+	rest, ok := strings.CutPrefix(commandID, operationKey+":r")
+	if !ok {
+		return 0
+	}
+	digits, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return 0
+	}
+	value, err := strconv.ParseUint(digits, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(value)
 }
 func clearLease(record *Record) { record.Lease = Lease{} }
 func canonicalDeadline(value time.Time) time.Time {

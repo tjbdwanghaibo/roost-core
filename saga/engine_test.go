@@ -20,10 +20,25 @@ type memoryStore struct {
 	closed   map[string]string
 	// closures 记 tombstone 的关闭方式（U-0280），与 MongoStore 的 operationDoc.Closure 对应。
 	closures map[string]OperationClosure
+	// lateAlarms 记 tombstone 上已告警的（操作，代际）（B1），与 MongoStore 的 operationDoc.LateAlarms 对应。
+	lateAlarms map[string]bool
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{records: map[string]Record{}, keys: map[string]string{}, outbox: map[string]OutboxRecord{}, receipts: map[string]Completion{}, closed: map[string]string{}, closures: map[string]OperationClosure{}}
+	return &memoryStore{records: map[string]Record{}, keys: map[string]string{}, outbox: map[string]OutboxRecord{}, receipts: map[string]Completion{}, closed: map[string]string{}, closures: map[string]OperationClosure{}, lateAlarms: map[string]bool{}}
+}
+func (s *memoryStore) MarkLateSuccessAlarm(_ context.Context, completion Completion, incarnation uint32) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed[completion.IdempotencyKey] != completion.SagaID {
+		return false, nil
+	}
+	key := fmt.Sprintf("%s/r%d", completion.IdempotencyKey, incarnation)
+	if s.lateAlarms[key] {
+		return false, nil
+	}
+	s.lateAlarms[key] = true
+	return true, nil
 }
 func (s *memoryStore) Create(_ context.Context, r Record) error {
 	s.mu.Lock()

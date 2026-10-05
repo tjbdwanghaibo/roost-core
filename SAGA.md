@@ -158,12 +158,20 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      被接替尝试的迟到投递直接 ack、不执行。
    - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
      **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又在退避期间被丢弃，不重发就没人再送达（审查 2026-10-05）。
+   - **协调器用同一张表接收结果**（B1，维护者决定 2026-10-05）：completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，
+     第 N 代 `<key>:rN:<attempt>`，与铸造 ID 的 `commandID` 同一处），与记录当前代际（`Record.Incarnation`）比较。
+     旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`
+     （新一生照常执行，收件箱也不回放它）；旧一生的成功在记录正停在这个操作上（在等它，或 Resume 之后还没派发、新一生的尝试在退避）时
+     **接收为该操作的结果**，不再派发这一步；同一生的结果按原规则接收。不在这个操作上的旧一生成功按第 4 条处理。
 4. **放弃之后迟到的成功只告警**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
    只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭——协调器在等最后一次尝试时
    可能接收较早尝试晚到的可重试失败而用尽重试，正在执行的最后一次尝试仍会生效（审查 2026-10-05）。放弃关闭之后才到的成功说明那一步已生效、却不在 `CompletedSteps` 里、不会被补偿：
    记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{saga_type,phase}`，**不重开终态、不自动补偿**。
+   同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），告警**按（操作，代际）只记一次**：tombstone 上记
+   `late_alarms.r<代际>`（`LateSuccessAlarmStore`，B1），之后的送达计 `Duplicates`。
    运维按 TROUBLESHOOTING T-226 核对：saga 停在 Failed（这一步前面没有已完成步骤）时可以 `Resume`，新一生的同一步骤
-   （原生收件箱）回放这次成功、继续往后走，而不是再执行；已进入补偿或 Compensated 的，补偿不含这一步，要按业务手工撤销它。
+   （原生收件箱）回放这次成功、继续往后走，而不是再执行；成功若在 Resume 之后、新一生派发之前才到达，协调器直接把它接收为
+   这一步的结果，不告警（第 3 条）。已进入补偿或 Compensated 的，补偿不含这一步，要按业务手工撤销它。
    B 之后这只剩“截止前已投影、completion 在放弃后才送达”（effect 发布延迟）、“较早尝试晚到的失败让协调器在最后一次尝试执行中放弃”
    与时钟偏差三种来源。
 5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），原生步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等。
@@ -178,8 +186,11 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 - 依赖协调器、步骤进程与投影进程的时钟偏差远小于 `Timeout`。
 - 每次新建 / 接管 claim 多一次守卫 upsert 与一次按 `operation_key` 的索引查询（新索引 `by_operation`）。
 - **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by` 字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）；
-  tombstone（`_saga_operations`）多 `closure` 字段。旧数据缺字段：旧 claim 不参与跨尝试判断，旧 tombstone 不告警。
-- **混跑**：契约只在所有步骤进程与协调器都升级后成立。旧进程写的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`。
+  tombstone（`_saga_operations`）多 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）。旧数据缺字段：旧 claim 不参与跨尝试判断，
+  没有 `closure` 的 tombstone 不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。
+- **混跑**：契约只在所有步骤进程与协调器都升级后成立。旧进程写的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`；
+  B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
+  记录本身仍按版本号 fence，新旧协调器不会互相覆盖。
   已生成工程不提供迁移（维护者决定）；仓库内模板与生成物已同步。
 
 ## 失败语义
@@ -190,7 +201,10 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 - 补偿持续失败：进入 `ManualRequired`；
 - `Resume(ResumeRequest)`：故障修复后继续失败或补偿流程；原 deadline 已过期时必须
   显式提供新的未来 deadline，或设置 `ClearDeadline`；
-- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿。
+- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。在补偿方向停下的 `ManualRequired`
+  上调用时与 `Resume` 一样进入新一生（`Incarnation+1`）：要重新执行的补偿步骤在这一生里已经派发过，不换代就会复用上一轮
+  的 `CommandID`，收件箱只会回放旧的拒绝或报身份冲突（B1）。**补偿方向 `ManualRequired` 修复原因后的正确做法是 `Resume`**
+  （它同时处理截止时间）；`Compensate` 在这种状态下与之等价。
 
 运维面通过 `Engine.List` 按 `ManualRequired`/`Failed` 和更新时间分页查询，再使用
 `Get` 查看错误与步骤，修复外部原因后调用 `Resume`。单次查询最多返回 1000 条，
