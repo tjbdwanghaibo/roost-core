@@ -314,6 +314,20 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	if state.From != cmd.PlayerID || state.FromSID != cmd.FromSID {
 		return fmt.Errorf("gift saga: handoff for player %d on sid %d carries a step for player %d on sid %d", cmd.PlayerID, cmd.FromSID, state.From, state.FromSID)
 	}
+	// The phase is envelope too, and it picks the transaction: a debit
+	// envelope around the refund's command would take the items a second
+	// time under the refund's receipt. The command's topic — what the
+	// coordinator published it on, and what the consumer that handed it over
+	// was subscribed to — names the step and its direction, so the two must
+	// agree. An unknown phase ends here as well: a claim taken for work that
+	// cannot be done is a command nobody can run until the lease expires.
+	topic, known := giftHandoffTopic(cmd.Phase)
+	if !known {
+		return fmt.Errorf("gift saga: handoff phase %q is not a step this process runs", cmd.Phase)
+	}
+	if cmd.Command.Topic != topic {
+		return fmt.Errorf("gift saga: handoff phase %q carries a command published on %q, want %q", cmd.Phase, cmd.Command.Topic, topic)
+	}
 	// Check again rather than trusting the address: running a step for a
 	// player bound to another sid is the corruption all of this exists to
 	// prevent. A sid of 0 is never this process's, so a payload with no
@@ -325,13 +339,6 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 			// holder of the message keeps redelivering.
 			return nil
 		}
-	}
-	// The phase decides which transaction runs, so a phase this process does
-	// not know is refused BEFORE the claim — the same rule as admission. A
-	// claim taken for work that cannot be done is a command nobody can run
-	// until the lease expires.
-	if cmd.Phase != giftHandoffPhaseDebit && cmd.Phase != giftHandoffPhaseRefund {
-		return fmt.Errorf("gift saga: handoff phase %q is not a step this process runs", cmd.Phase)
 	}
 	command := cmd.Command
 	if err := command.Validate(); err != nil {
@@ -366,6 +373,20 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	}
 	slog.Info("gift saga: ran a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", command.ID)
 	return nil
+}
+
+// giftHandoffTopic is the saga topic a handoff phase runs: the one its
+// consumer is subscribed to (startGiftSaga). false for a phase this process
+// does not hand over.
+func giftHandoffTopic(phase string) (string, bool) {
+	switch phase {
+	case giftHandoffPhaseDebit:
+		return giftitem.TopicDebit, true
+	case giftHandoffPhaseRefund:
+		return giftitem.TopicDebitCompensation, true
+	default:
+		return "", false
+	}
 }
 
 // nativeStep gathers what a Nest-transaction step carries into its handler.

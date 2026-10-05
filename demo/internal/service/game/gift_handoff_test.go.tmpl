@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"{{MODULE}}/game/gift"
+	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/tjbdwanghaibo/roost-core/saga"
 )
 
@@ -63,9 +64,19 @@ func giftCommand(t *testing.T, from int64, fromSID int32) saga.Command {
 	}
 }
 
+// giftHandoff is a handoff as admitPhase builds it: the phase is the one of
+// the consumer that took the command, so the command carries that step's topic
+// and direction (the debit consumer only sees TopicDebit, the refund consumer
+// only TopicDebitCompensation).
 func giftHandoff(t *testing.T, from int64, fromSID int32, phase string) *giftStepHandoff {
 	t.Helper()
-	return &giftStepHandoff{PlayerID: from, FromSID: fromSID, Phase: phase, Command: giftCommand(t, from, fromSID)}
+	command := giftCommand(t, from, fromSID)
+	if phase == giftHandoffPhaseRefund {
+		command.Topic, command.Phase = giftitem.TopicDebitCompensation, saga.PhaseCompensate
+	} else {
+		command.Topic = giftitem.TopicDebit
+	}
+	return &giftStepHandoff{PlayerID: from, FromSID: fromSID, Phase: phase, Command: command}
 }
 
 // handoffSteps is one game process with sid local: its real ownership table
@@ -266,6 +277,32 @@ func TestAHandoffWhoseEnvelopeDisagreesWithItsPayloadIsRefused(t *testing.T) {
 		if err == nil || reachedTheClaim(err) {
 			t.Fatalf("%s: a handoff whose envelope disagrees with its payload = %v, want a refusal before the claim", name, err)
 		}
+	}
+}
+
+// The phase is part of the envelope too, and it decides which transaction
+// runs: a debit envelope around the refund's command would take the items a
+// second time under the refund's receipt, and the coordinator would read that
+// receipt as "refunded". The command's own topic says which step it is, so a
+// handoff whose phase disagrees with it is refused before anything is recorded
+// or claimed — the same rule as the player and sid above.
+func TestAHandoffWhosePhaseDisagreesWithItsCommandIsRefused(t *testing.T) {
+	for name, swap := range map[string]struct{ envelope, command string }{
+		"debit envelope, refund command": {giftHandoffPhaseDebit, giftHandoffPhaseRefund},
+		"refund envelope, debit command": {giftHandoffPhaseRefund, giftHandoffPhaseDebit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			steps, owners, _ := handoffSteps(t, handoffLocalSID)
+			cmd := giftHandoff(t, 42, handoffLocalSID, swap.command)
+			cmd.Phase = swap.envelope
+			err := steps.runHandoff(context.Background(), cmd)
+			if err == nil || reachedTheClaim(err) {
+				t.Fatalf("a %s handoff carrying the %s command (topic %q) = %v, want a refusal before the claim", swap.envelope, swap.command, cmd.Command.Topic, err)
+			}
+			if owners.Resident(42) {
+				t.Fatal("a handoff refused for its phase still took the sender into service")
+			}
+		})
 	}
 }
 
