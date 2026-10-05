@@ -1,32 +1,26 @@
 // Package global is the cross-server coordination service: it owns which
-// global group a game server belongs to, and the liveness lease each game
-// server holds.
+// global group a game server belongs to.
 //
 // The business boundary document of the implementation this replaces already
-// wrote down the invariants this package must hold — "route binding migration
-// must use epoch CAS, not an in-process lock", "aggregation and participant
-// progress must use a CAS store". They were conventions, and the
-// implementation did not keep them:
+// wrote down the invariant this package must hold — "route binding migration
+// must use epoch CAS, not an in-process lock". It was a convention, and the
+// implementation did not keep it: every store exposed both an unconditional
+// SetXxx and a read-modify-write UpdateXxx. The Redis implementation's Update
+// used compare-and-set; the DAO-backed implementation's Update read and then
+// wrote unconditionally. Both satisfied the same interface, so the type system
+// could not tell them apart and whichever was configured decided whether the
+// documented invariant held.
 //
-//   - Every store exposed both an unconditional SetXxx and a read-modify-write
-//     UpdateXxx. The Redis implementation's Update used compare-and-set; the
-//     DAO-backed implementation's Update read and then wrote unconditionally.
-//     Both satisfied the same interface, so the type system could not tell
-//     them apart and whichever was configured decided whether the documented
-//     invariant held. Four stores, one shape.
-//   - The game lease store had no compare-and-set path at all. Its heartbeat
-//     read the record, computed a next version from it, and wrote
-//     unconditionally — the version field was decorative. Concurrent
-//     heartbeats overwrote each other, and a late heartbeat from a previous
-//     game incarnation could overwrite an active lease with its own start
-//     time and load, because nothing checked that the writer was still the
-//     holder.
+// Here the invariant is held by the types. State goes through versionstore,
+// whose contract has no unconditional write, so a non-CAS implementation
+// cannot exist.
 //
-// Here the invariants are held by the types. State goes through
-// versionstore, whose contract has no unconditional write, so a non-CAS
-// implementation cannot exist. And the lease carries an incarnation token that
-// a renewal must present, so a writer that is no longer the holder is refused
-// rather than silently winning.
+// The package also used to hold a liveness lease per game server
+// (AcquireLease / RenewLease / ReleaseLease / Lease / LiveGames). Process
+// liveness now belongs to the App — the singleton lock every service type
+// takes through app.Singleton, read with app.SingletonLiveness.Live — so the
+// lease API was removed rather than kept as a second, disagreeing answer to
+// "is this game server alive".
 package global
 
 import (
@@ -46,12 +40,12 @@ const (
 	CodeRouteMissing   int32 = 570102
 	CodeRouteStale     int32 = 570103
 	CodeRouteMigrating int32 = 570104
-	CodeLeaseInvalid   int32 = 570105
-	CodeLeaseMissing   int32 = 570106
-	CodeLeaseNotHolder int32 = 570107
-	CodeLeaseExpired   int32 = 570108
-	CodeRangeInvalid   int32 = 570109
-	CodeConflict       int32 = 570110
+	// 570105 through 570109 are RETIRED. 570105-570108 were the lease codes
+	// (invalid, missing, not holder, expired) and 570109 was the range code
+	// whose only producer was LiveGames; they went with the lease API when
+	// process liveness moved to the App's singleton lock. Like the hole
+	// below, they are not reused.
+	CodeConflict int32 = 570110
 	// CodeRequestInvalid reports a request this service could not even read:
 	// a wire frame that failed to decode. The generated transport needs one
 	// coded error for that, and answering it with CodeInternal would report a
@@ -77,28 +71,12 @@ var (
 	ErrRouteStale     = errcode.Define(CodeRouteStale, "global: route epoch is stale", "")
 	ErrRouteMigrating = errcode.Define(CodeRouteMigrating, "global: route binding is migrating", "")
 
-	ErrLeaseInvalid = errcode.Define(CodeLeaseInvalid, "global: lease is invalid", "")
-	ErrLeaseMissing = errcode.Define(CodeLeaseMissing, "global: lease not found", "")
-	// ErrLeaseNotHolder reports that the caller presented an incarnation
-	// token that is not the current holder's. This is the check whose absence
-	// let a previous incarnation's late heartbeat overwrite a live lease.
-	ErrLeaseNotHolder = errcode.Define(CodeLeaseNotHolder, "global: caller does not hold this lease", "")
-	ErrLeaseExpired   = errcode.Define(CodeLeaseExpired, "global: lease has expired", "")
-
-	ErrRangeInvalid = errcode.Define(CodeRangeInvalid, "global: range is invalid", "")
-	ErrConflict     = errcode.Define(CodeConflict, "global: conflict", "")
+	ErrConflict = errcode.Define(CodeConflict, "global: conflict", "")
 	// ErrRequestInvalid reports a request that could not be decoded. The
 	// generated transport returns it for a frame it cannot read, which is the
 	// one refusal the transport itself has to be able to make.
 	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "global: request is invalid", "")
 )
-
-// MaxPageSize bounds a listing, and cannot be bypassed with a zero limit.
-const MaxPageSize = 200
-
-// MaxLoadEntries bounds the load snapshot a game server may report, so a
-// heartbeat cannot grow without limit.
-const MaxLoadEntries = 32
 
 // RouteState is where a binding is in its lifecycle.
 //
@@ -145,85 +123,6 @@ func (b RouteBinding) Validate() error {
 		return fmt.Errorf("%w: global sid must be positive", ErrRouteInvalid)
 	}
 	return nil
-}
-
-// LeaseState is whether a lease is held.
-type LeaseState string
-
-const (
-	LeaseActive   LeaseState = "active"
-	LeaseReleased LeaseState = "released"
-	// LeaseLapsed is a lease whose deadline passed without a heartbeat. It is
-	// a distinct state from released on purpose: "the holder gave it up" and
-	// "the holder stopped answering" call for different operational
-	// responses, and collapsing them loses the only signal that a game server
-	// died rather than shut down cleanly.
-	//
-	// It is never stored — a lapsed lease is stored as active with an elapsed
-	// deadline — so a reader computes it. That is what lets a reader be
-	// correct before anything sweeps.
-	LeaseLapsed LeaseState = "lapsed"
-)
-
-// GameLease is one game server's liveness and load snapshot within its global
-// group.
-//
-// It says nothing about player state and does not replace service discovery —
-// it is how the coordination group knows a game server is alive and how loaded
-// it is.
-type GameLease struct {
-	GameSID int32 `json:"game_sid"`
-	// Incarnation identifies one run of that game server. A renewal must
-	// present it. Without it, a late heartbeat from a process that has since
-	// been replaced overwrites the live lease — the confirmed defect in the
-	// implementation this replaces.
-	Incarnation string `json:"incarnation"`
-	// GlobalGroupID and GlobalSID are the binding this lease was taken under.
-	// A renewal against a different binding is refused, so a lease cannot
-	// outlive the routing decision that created it.
-	GlobalGroupID string     `json:"global_group_id"`
-	GlobalSID     int32      `json:"global_sid"`
-	RouteEpoch    uint64     `json:"route_epoch"`
-	State         LeaseState `json:"state"`
-
-	// Load is an opaque snapshot the game server reports, bounded by
-	// MaxLoadEntries.
-	Load map[string]string `json:"load,omitempty"`
-
-	StartedAtUnix       int64 `json:"started_at_unix"`
-	LastHeartbeatAtUnix int64 `json:"last_heartbeat_at_unix"`
-	ExpiresAtUnix       int64 `json:"expires_at_unix"`
-}
-
-// Expired reports whether an active lease has lapsed.
-func (l GameLease) Expired(nowUnix int64) bool {
-	if l.State != LeaseActive || l.ExpiresAtUnix == 0 {
-		return false
-	}
-	return nowUnix >= l.ExpiresAtUnix
-}
-
-// Held reports whether the lease is currently held by the given incarnation.
-func (l GameLease) Held(incarnation string, nowUnix int64) bool {
-	return l.State == LeaseActive && l.Incarnation == incarnation && !l.Expired(nowUnix)
-}
-
-func validateLoad(load map[string]string) error {
-	if len(load) > MaxLoadEntries {
-		return fmt.Errorf("%w: load has %d entries, limit %d", ErrLeaseInvalid, len(load), MaxLoadEntries)
-	}
-	return nil
-}
-
-func cloneLoad(load map[string]string) map[string]string {
-	if len(load) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(load))
-	for key, value := range load {
-		out[key] = value
-	}
-	return out
 }
 
 // Error maps an error to the code and reason a client sees.

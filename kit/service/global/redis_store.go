@@ -8,8 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
-// RedisStores are the stores this package needs, over Redis: one for routing
-// and one for leases.
+// RedisStores are the stores this package needs, over Redis.
 //
 // There is no storage logic here, and for this package that is the entire
 // point of the design. The implementation this replaces had FOUR hand-written
@@ -20,16 +19,17 @@ import (
 // one implementation, in kit, whose contract has no unconditional write.
 type RedisStores struct {
 	Routes versionstore.Store[int32, RouteBinding]
-	Leases versionstore.Store[int32, GameLease]
 }
 
 // NewRedisStores builds them.
 //
-// Neither gets a TTL, and the lease in particular must not: a TTL on versioned
-// state takes the version with the value, so a lease key that expired and was
-// written again restarts at version 1, and the incarnation fence that a
-// renewal must pass becomes a comparison against a version that just reset.
-// A lease's expiry is a FIELD this package reads.
+// The route store gets no TTL: a TTL on versioned state takes the version with
+// the value, so a binding that expired and was written again would restart at
+// version 1 — and a binding that vanished would let a second Bind succeed.
+//
+// Keys live under <prefix>:route:. The <prefix>:lease: keyspace belonged to
+// the removed lease API; nothing reads or writes it any more, and leftover
+// keys from an older deployment can be deleted.
 func NewRedisStores(client versionstore.RedisClient, prefix string) (RedisStores, error) {
 	if strings.TrimSpace(prefix) == "" {
 		return RedisStores{}, fmt.Errorf("global: redis key prefix is required")
@@ -44,11 +44,6 @@ func NewRedisStores(client versionstore.RedisClient, prefix string) (RedisStores
 		Prefix: prefix + ":route:", KeyOf: int32Key, Codec: versionstore.JSONCodec[RouteBinding]{},
 	}); err != nil {
 		return RedisStores{}, fmt.Errorf("global: route store: %w", err)
-	}
-	if stores.Leases, err = versionstore.NewRedisStore(client, versionstore.RedisConfig[int32, GameLease]{
-		Prefix: prefix + ":lease:", KeyOf: int32Key, Codec: versionstore.JSONCodec[GameLease]{},
-	}); err != nil {
-		return RedisStores{}, fmt.Errorf("global: lease store: %w", err)
 	}
 	return stores, nil
 }

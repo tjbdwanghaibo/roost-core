@@ -1,8 +1,6 @@
 package global
 
 import (
-	"time"
-
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
@@ -10,12 +8,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
-// Mod wires the routing and lease service into an app and registers it as a
+// Mod wires the routing service into an app and registers it as a
 // capability.
 //
 // It used to wire two services and publish two capabilities: routing/leases
 // and cross-server activity coordination lived in one package. They shared no
-// state — routing answers "where does this game belong and is it alive",
+// state — routing answers "where does this game belong",
 // activity coordination answers "has every game reached the phase yet" — and
 // app.Service is one per process, so they were always two deployments. They
 // are now two packages; the activity Mod is activity.NewMod.
@@ -25,8 +23,7 @@ import (
 type Mod struct {
 	metrics servicemetrics.Reporter
 
-	prefix   string
-	leaseTTL time.Duration
+	prefix string
 
 	service *Service
 }
@@ -46,7 +43,9 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //
 //	global:
 //	  key_prefix: roost:global   # required, no default
-//	  lease_ttl: 30s             # optional
+//
+// lease_ttl is no longer read: the lease API it configured was removed, and
+// viper ignores the key if an older configuration still sets it.
 //
 // The activity settings that used to live under this key — reservation_ttl,
 // grace_window, dispatch_attempts, dispatch_backoff — moved with the service,
@@ -56,11 +55,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err != nil {
 		return err
 	}
-	leaseTTL, err := mods.Duration(cfg, "global.lease_ttl", DefaultLeaseTTL)
-	if err != nil {
-		return err
-	}
-	m.prefix, m.leaseTTL = prefix, leaseTTL
+	m.prefix = prefix
 	return nil
 }
 
@@ -74,10 +69,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	service, err := New(Config{
-		Routes: stores.Routes, Leases: stores.Leases,
-		LeaseTTL: m.leaseTTL, Metrics: m.metrics,
-	})
+	service, err := New(Config{Routes: stores.Routes, Metrics: m.metrics})
 	if err != nil {
 		return err
 	}
@@ -88,12 +80,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 	return mods.RegisterAll(r, OwnerCapabilities(service)...)
 }
 
-// Start implements app.Mod.
-//
-// Nothing is started here. Lapsed leases are reclaimed by the Server's run
-// hook, which runs in the process that OWNS this service — a Mod cannot own
-// that loop, because a process that merely holds a global client would then be
-// reclaiming leases it does not own.
+// Start implements app.Mod. Nothing is started here: the routing state has no
+// background work (see Server.run).
 func (m *Mod) Start() error { return nil }
 
 // Stop implements app.Mod. Nothing to stop.

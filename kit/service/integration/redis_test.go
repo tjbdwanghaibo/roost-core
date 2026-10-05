@@ -503,7 +503,7 @@ func TestGlobalRunsOnRedis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := global.New(global.Config{Routes: stores.Routes, Leases: stores.Leases})
+	service, err := global.New(global.Config{Routes: stores.Routes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,17 +517,21 @@ func TestGlobalRunsOnRedis(t *testing.T) {
 	if _, err := service.BeginMigration(ctx, 7, 200, binding.Epoch+9); err == nil {
 		t.Fatal("a stale epoch was accepted against real Redis")
 	}
-	lease, err := service.AcquireLease(ctx, 7)
+	moving, err := service.BeginMigration(ctx, 7, 200, binding.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The incarnation fence: a renewal from a process that is not the holder
-	// must be refused.
-	if _, err := service.RenewLease(ctx, 7, "a-token-from-a-dead-process", nil); err == nil {
-		t.Fatal("a foreign incarnation renewed the lease against real Redis")
-	}
-	if _, err := service.RenewLease(ctx, 7, lease.Incarnation, nil); err != nil {
+	done, err := service.CompleteMigration(ctx, 7, moving.Epoch)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Bind is insert-only: a second Bind loses the Create against real Redis
+	// too, so it cannot move a live game.
+	if _, err := service.Bind(ctx, 7, "group-a", 300); err == nil {
+		t.Fatal("a second bind was accepted against real Redis")
+	}
+	if resolved, err := service.Resolve(ctx, 7); err != nil || resolved.GlobalSID != 200 || resolved.Epoch != done.Epoch {
+		t.Fatalf("Resolve after the migration = %+v, %v; want global sid 200 at epoch %d", resolved, err, done.Epoch)
 	}
 }
 
@@ -695,7 +699,9 @@ var everyNamespace = []string{
 	":account:acct:", ":account:role:", ":account:srv:", ":account:slot:", ":account:names:name:",
 	":chat:ch:",
 	":directory:name:",
-	":global:route:", ":global:lease:",
+	// global's ":global:lease:" went with the lease API (process liveness is
+	// the App's singleton lock now).
+	":global:route:",
 	// activity was part of global until the transport generator made the
 	// packaging visible; these six namespaces were never covered here while
 	// they sat under the global prefix and nothing drove them.
@@ -836,19 +842,16 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 		t.Fatal(err)
 	}
 
-	// global: routes and leases.
+	// global: routes.
 	globalStores, err := global.NewRedisStores(c, root+":global")
 	if err != nil {
 		t.Fatal(err)
 	}
-	globalSvc, err := global.New(global.Config{Routes: globalStores.Routes, Leases: globalStores.Leases})
+	globalSvc, err := global.New(global.Config{Routes: globalStores.Routes})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := globalSvc.Bind(ctx, 7, "group-a", 100); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := globalSvc.AcquireLease(ctx, 7); err != nil {
 		t.Fatal(err)
 	}
 

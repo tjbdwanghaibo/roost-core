@@ -210,7 +210,7 @@ func TestEveryPublishedCapabilityIsUsable(t *testing.T) {
 		if _, err := service.Bind(ctx, 7, "group-a", 100); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := service.AcquireLease(ctx, 7); err != nil {
+		if _, err := service.Resolve(ctx, 7); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -457,9 +457,6 @@ func driveThroughRegistry(t *testing.T, registry *app.Registry, root string) {
 
 	globalSvc := app.MustLookup[global.Routing](registry, mods.ModGlobal)
 	if _, err := globalSvc.Bind(ctx, 7, "group-a", 100); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := globalSvc.AcquireLease(ctx, 7); err != nil {
 		t.Fatal(err)
 	}
 

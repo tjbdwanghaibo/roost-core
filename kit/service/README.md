@@ -69,7 +69,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | `rank/` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 | 35 | 8 |
 | `match/` | 匹配：Mod、sweep 循环、`Matchmaker` RPC 与生成传输；**领域实现（队列状态机、原子成组提交、Redis store、Grouping）在 roost-core/service/match**，此处别名（M-06）；`Matchmaker` 接口与传输半在 core，kit 只有装配半（M-11） | 29 | 10 |
 | `account/` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** | 32 | 11 |
-| `global/` | 跨服路由绑定（epoch CAS 迁移）、游戏服租约（incarnation fence） | 26 | 13† |
+| `global/` | 跨服路由绑定（epoch CAS 迁移）。原有的游戏服租约（incarnation fence）已删除，进程存活统一由 App 单实例锁提供（`app.SingletonLiveness.Live`） | 26 | 13† |
 | `global/activity/` | 跨服活动协调：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 | 47 | 13† |
 | `chat/` | 频道消息：发布/历史/保留。`PublishRequest` 里**没有**发送者或可信字段；系统消息只能经 `PublishSystem` + 服务端签发的 `SystemToken` | 39 | 8 |
 | `mail/` | 邮件：Mod、`Mail` RPC 与生成传输、server run；**领域实现（信封、邮箱状态机、三段式领取、Redis stores、错误码段）在 roost-core/service/mail**，此处别名（M-07）；`Mail` RPC 接口与传输半（wire / handler 表 / `BusClient`）也在 core，kit 从 core 的接口生成装配半 `mail_rpc_assembly_gen.go`（M-11）。claim token 由服务端生成且对同一封邮件恒定——重试换不出新的幂等键 | 6 | 4 |
@@ -138,7 +138,7 @@ go tool servicerpc -dir ./mail -check
 | `global/activity` | 20s 推进过期活动 + 重试到期投递 | 宽限窗是唯一能在某个 game 服永不通知时收尾的东西 |
 | `rank` | 无 | 分数在 CAS 下写入、不会自己过期;`Reset` 清空整榜,是运维动作不是 ticker 的决定 |
 | `account` | 无 | 会话带 `ExpiresAtUnix`,**每次 `ValidateSession` 都在读**;没有任何东西被"占着" |
-| `global` | 无 | 租约同理——过期租约不是"被占着":`AcquireLease` 直接拿走。而且删版本化 key 会让版本从 1 重来,续约要过的 fence 就变成跟一个刚归零的版本比大小 |
+| `global` | 无 | 路由绑定只在调用方的 CAS 里变化,不随时间失效,没有东西要回收。(原先的租约 API 已删除;进程存活归 App 单实例锁) |
 
 ### 接口比进程内 API 小,每个省略都有理由
 
@@ -151,7 +151,7 @@ go tool servicerpc -dir ./mail -check
 | `platform` | 3 / 5 | `ValidateSession` **没有 ctx**——它不做任何 I/O,只用本进程已有的密钥重算一个 MAC。把它做成一次往返 = 全集群的会话校验都排在一个进程后面。`AttemptDelivery` 是重试,归 `run` |
 | `account` | 6 / 7 | `UpsertServer` 是控制面写:它改变**所有玩家能登进哪些服**。同一条总线上的任何进程都能关服,不行 |
 | `chat` | 5 / 8 | `Resolve` 没 ctx,而且 `ChannelRef` 的 key 字段是**未导出的**(这是故意的:ref 只能来自 `Resolve`)——所以它根本过不了总线,任何 codec 都会静默丢掉 key,对面拿到的 ref 指向空。生成器就是按这条拒的。`Prune`/`Stats` 继承了这一点,而且本身是维护动作 |
-| `global` | 9 / 9 | 唯一一个全放出去的。`Bind` 是**仅插入**的,第二次 `Bind` 输在 `Create` 上被拒——那次碰撞就是 fence,它只能建立不存在的绑定,动不了活着的游戏服。三个迁移步骤各带 `expectEpoch`,在 CAS 内部校验 |
+| `global` | 5 / 5 | 唯一一个全放出去的(租约 API 删除前是 9 / 9)。`Bind` 是**仅插入**的,第二次 `Bind` 输在 `Create` 上被拒——那次碰撞就是 fence,它只能建立不存在的绑定,动不了活着的游戏服。三个迁移步骤各带 `expectEpoch`,在 CAS 内部校验 |
 | `global/activity` | 9 / 14 | `AdvanceExpired`/`DueDispatches`/`AttemptDispatch` 是拥有者的周期性工作;`NotifyAudits`/`AuditOverflow` 是诊断面,回答的是运维的问题不是 game 的问题 |
 | `directory` | 0 | **故意不给 RPC 面**:它是被 `account` 嵌入的原语,不是服务 |
 

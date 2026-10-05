@@ -515,7 +515,7 @@ kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，ki
   停机时归还。活动的预期集合取自 `LiveGames(候选集)`——**没起来的服务器不能被等**，否则每个窗口都要等到宽限期。
   （**已被取代（2026-10-05）**：activity 不再持有 global 租约，预期集合改为 App 单实例锁的
   `app.SingletonLiveness.Live(本进程 server_type, 候选集)`，`Bind` 的组绑定保留；见
-  [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §7.2。）
+  [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §7.2；kit `global` 的租约 API 随后在第 3b 笔删除。）
 - **贡献的幂等锚是 dungeon run id**，和清关奖励用的是同一个：重投的贡献被 coordinator 的 reservation 挡掉，
   而不是记两次。机器人断言的是精确的 1（清关一次 + 重放一次），不是"至少 1"。
 - **结算的顺序是 邮件 → 记录 → ack**，每一步都能重复：邮件按 (活动, 玩家) 幂等；World 上的记录让整张榜

@@ -41,11 +41,6 @@ const (
 	MethodBeginMigration    = "global.BeginMigration"
 	MethodCompleteMigration = "global.CompleteMigration"
 	MethodAbortMigration    = "global.AbortMigration"
-	MethodAcquireLease      = "global.AcquireLease"
-	MethodRenewLease        = "global.RenewLease"
-	MethodReleaseLease      = "global.ReleaseLease"
-	MethodLease             = "global.Lease"
-	MethodLiveGames         = "global.LiveGames"
 )
 
 // Methods is every method on Routing, in interface order.
@@ -58,11 +53,6 @@ var Methods = []string{
 	MethodBeginMigration,
 	MethodCompleteMigration,
 	MethodAbortMigration,
-	MethodAcquireLease,
-	MethodRenewLease,
-	MethodReleaseLease,
-	MethodLease,
-	MethodLiveGames,
 }
 
 // rpcStatus is the envelope every response embeds.
@@ -179,91 +169,6 @@ type rpcAbortMigrationResponse struct {
 	Binding RouteBinding `json:"binding"`
 }
 
-// rpcAcquireLeaseRequest is the AcquireLease request on the wire.
-//
-// Its fields are named after the interface method's PARAMETERS, so a payload
-// says what the method says. The client takes those parameters as arguments,
-// which is what keeps a caller's identity something the compiler asks for
-// rather than a struct field whose zero value looks valid.
-type rpcAcquireLeaseRequest struct {
-	GameSID int32 `json:"game_sid"`
-}
-
-// rpcAcquireLeaseResponse is the AcquireLease response on the wire.
-type rpcAcquireLeaseResponse struct {
-	rpcStatus
-	Lease GameLease `json:"lease"`
-}
-
-// rpcRenewLeaseRequest is the RenewLease request on the wire.
-//
-// Its fields are named after the interface method's PARAMETERS, so a payload
-// says what the method says. The client takes those parameters as arguments,
-// which is what keeps a caller's identity something the compiler asks for
-// rather than a struct field whose zero value looks valid.
-type rpcRenewLeaseRequest struct {
-	GameSID     int32             `json:"game_sid"`
-	Incarnation string            `json:"incarnation"`
-	Load        map[string]string `json:"load"`
-}
-
-// rpcRenewLeaseResponse is the RenewLease response on the wire.
-type rpcRenewLeaseResponse struct {
-	rpcStatus
-	Lease GameLease `json:"lease"`
-}
-
-// rpcReleaseLeaseRequest is the ReleaseLease request on the wire.
-//
-// Its fields are named after the interface method's PARAMETERS, so a payload
-// says what the method says. The client takes those parameters as arguments,
-// which is what keeps a caller's identity something the compiler asks for
-// rather than a struct field whose zero value looks valid.
-type rpcReleaseLeaseRequest struct {
-	GameSID     int32  `json:"game_sid"`
-	Incarnation string `json:"incarnation"`
-}
-
-// rpcReleaseLeaseResponse is the ReleaseLease response on the wire.
-type rpcReleaseLeaseResponse struct {
-	rpcStatus
-}
-
-// rpcLeaseRequest is the Lease request on the wire.
-//
-// Its fields are named after the interface method's PARAMETERS, so a payload
-// says what the method says. The client takes those parameters as arguments,
-// which is what keeps a caller's identity something the compiler asks for
-// rather than a struct field whose zero value looks valid.
-type rpcLeaseRequest struct {
-	GameSID int32 `json:"game_sid"`
-}
-
-// rpcLeaseResponse is the Lease response on the wire.
-type rpcLeaseResponse struct {
-	rpcStatus
-	Lease GameLease `json:"lease"`
-	Found bool      `json:"found"`
-}
-
-// rpcLiveGamesRequest is the LiveGames request on the wire.
-//
-// Its fields are named after the interface method's PARAMETERS, so a payload
-// says what the method says. The client takes those parameters as arguments,
-// which is what keeps a caller's identity something the compiler asks for
-// rather than a struct field whose zero value looks valid.
-type rpcLiveGamesRequest struct {
-	GroupID    string  `json:"group_id"`
-	Candidates []int32 `json:"candidates"`
-	Limit      int     `json:"limit"`
-}
-
-// rpcLiveGamesResponse is the LiveGames response on the wire.
-type rpcLiveGamesResponse struct {
-	rpcStatus
-	Leases []GameLease `json:"leases"`
-}
-
 // --- server ---
 
 // RegisterHandlers publishes Routing on a bus.
@@ -319,46 +224,6 @@ func RegisterHandlers(b bus.IBus, service Routing) error {
 			}
 			binding, err := service.AbortMigration(ctx.Context(), wire.GameSID, wire.ExpectEpoch)
 			return rpcAbortMigrationResponse{rpcStatus: statusOf(err), Binding: binding}, nil
-		},
-		MethodAcquireLease: func(ctx *bus.RpcContext) (any, error) {
-			var wire rpcAcquireLeaseRequest
-			if err := ctx.Decode(&wire); err != nil {
-				return rpcAcquireLeaseResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
-			}
-			lease, err := service.AcquireLease(ctx.Context(), wire.GameSID)
-			return rpcAcquireLeaseResponse{rpcStatus: statusOf(err), Lease: lease}, nil
-		},
-		MethodRenewLease: func(ctx *bus.RpcContext) (any, error) {
-			var wire rpcRenewLeaseRequest
-			if err := ctx.Decode(&wire); err != nil {
-				return rpcRenewLeaseResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
-			}
-			lease, err := service.RenewLease(ctx.Context(), wire.GameSID, wire.Incarnation, wire.Load)
-			return rpcRenewLeaseResponse{rpcStatus: statusOf(err), Lease: lease}, nil
-		},
-		MethodReleaseLease: func(ctx *bus.RpcContext) (any, error) {
-			var wire rpcReleaseLeaseRequest
-			if err := ctx.Decode(&wire); err != nil {
-				return rpcReleaseLeaseResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
-			}
-			err := service.ReleaseLease(ctx.Context(), wire.GameSID, wire.Incarnation)
-			return rpcReleaseLeaseResponse{rpcStatus: statusOf(err)}, nil
-		},
-		MethodLease: func(ctx *bus.RpcContext) (any, error) {
-			var wire rpcLeaseRequest
-			if err := ctx.Decode(&wire); err != nil {
-				return rpcLeaseResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
-			}
-			lease, found, err := service.Lease(ctx.Context(), wire.GameSID)
-			return rpcLeaseResponse{rpcStatus: statusOf(err), Lease: lease, Found: found}, nil
-		},
-		MethodLiveGames: func(ctx *bus.RpcContext) (any, error) {
-			var wire rpcLiveGamesRequest
-			if err := ctx.Decode(&wire); err != nil {
-				return rpcLiveGamesResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
-			}
-			leases, err := service.LiveGames(ctx.Context(), wire.GroupID, wire.Candidates, wire.Limit)
-			return rpcLiveGamesResponse{rpcStatus: statusOf(err), Leases: leases}, nil
 		},
 	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -476,66 +341,6 @@ func (c *BusClient) AbortMigration(ctx context.Context, gameSID int32, expectEpo
 	return resp.Binding, err
 }
 
-// AcquireLease takes the lease for a game server, minting a new
-// incarnation. A previous holder's incarnation stops being able to renew.
-// AcquireLease implements Routing.
-func (c *BusClient) AcquireLease(ctx context.Context, gameSID int32) (GameLease, error) {
-	var resp rpcAcquireLeaseResponse
-	err := c.call(ctx, MethodAcquireLease, rpcAcquireLeaseRequest{
-		GameSID: gameSID,
-	}, &resp)
-	return resp.Lease, err
-}
-
-// RenewLease is the heartbeat. The incarnation is required, so a process
-// that lost the lease and did not notice cannot keep it alive.
-// RenewLease implements Routing.
-func (c *BusClient) RenewLease(ctx context.Context, gameSID int32, incarnation string, load map[string]string) (GameLease, error) {
-	var resp rpcRenewLeaseResponse
-	err := c.call(ctx, MethodRenewLease, rpcRenewLeaseRequest{
-		GameSID:     gameSID,
-		Incarnation: incarnation,
-		Load:        load,
-	}, &resp)
-	return resp.Lease, err
-}
-
-// ReleaseLease gives the lease up. The incarnation is required for the
-// same reason.
-// ReleaseLease implements Routing.
-func (c *BusClient) ReleaseLease(ctx context.Context, gameSID int32, incarnation string) error {
-	var resp rpcReleaseLeaseResponse
-	err := c.call(ctx, MethodReleaseLease, rpcReleaseLeaseRequest{
-		GameSID:     gameSID,
-		Incarnation: incarnation,
-	}, &resp)
-	return err
-}
-
-// Lease reads one lease without touching it.
-// Lease implements Routing.
-func (c *BusClient) Lease(ctx context.Context, gameSID int32) (GameLease, bool, error) {
-	var resp rpcLeaseResponse
-	err := c.call(ctx, MethodLease, rpcLeaseRequest{
-		GameSID: gameSID,
-	}, &resp)
-	return resp.Lease, resp.Found, err
-}
-
-// LiveGames reports which of the candidate game servers hold a live
-// lease. The candidate set is the caller's, so this is a bounded read
-// rather than an enumeration.
-// LiveGames implements Routing.
-func (c *BusClient) LiveGames(ctx context.Context, groupID string, candidates []int32, limit int) ([]GameLease, error) {
-	var resp rpcLiveGamesResponse
-	err := c.call(ctx, MethodLiveGames, rpcLiveGamesRequest{
-		GroupID:    groupID,
-		Candidates: candidates,
-		Limit:      limit,
-	}, &resp)
-	return resp.Leases, err
-}
-
 // --- capability ---
 
 // capability is what a Mod puts in the registry.
@@ -576,26 +381,6 @@ func (c capability) CompleteMigration(ctx context.Context, gameSID int32, expect
 
 func (c capability) AbortMigration(ctx context.Context, gameSID int32, expectEpoch uint64) (RouteBinding, error) {
 	return c.inner.AbortMigration(ctx, gameSID, expectEpoch)
-}
-
-func (c capability) AcquireLease(ctx context.Context, gameSID int32) (GameLease, error) {
-	return c.inner.AcquireLease(ctx, gameSID)
-}
-
-func (c capability) RenewLease(ctx context.Context, gameSID int32, incarnation string, load map[string]string) (GameLease, error) {
-	return c.inner.RenewLease(ctx, gameSID, incarnation, load)
-}
-
-func (c capability) ReleaseLease(ctx context.Context, gameSID int32, incarnation string) error {
-	return c.inner.ReleaseLease(ctx, gameSID, incarnation)
-}
-
-func (c capability) Lease(ctx context.Context, gameSID int32) (GameLease, bool, error) {
-	return c.inner.Lease(ctx, gameSID)
-}
-
-func (c capability) LiveGames(ctx context.Context, groupID string, candidates []int32, limit int) ([]GameLease, error) {
-	return c.inner.LiveGames(ctx, groupID, candidates, limit)
 }
 
 // Capability wraps a Routing for registration. Both Mods use it, so the

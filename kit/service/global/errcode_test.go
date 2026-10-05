@@ -21,14 +21,18 @@ import (
 const (
 	segmentFirst     = 570101
 	segmentLast      = 570199
-	segmentAllocated = 11
+	segmentAllocated = 6
 )
 
 // expectedCodes is this package's allocated set, written out.
 //
-// It is a list rather than a contiguous range because 570111 through 570124
-// are a HOLE, and every part of the hole is deliberate:
+// It is a list rather than a contiguous range because 570105 through 570109
+// and 570111 through 570124 are HOLES, and every part of them is deliberate:
 //
+//   - 570105 through 570108 were the lease codes (invalid, missing, not
+//     holder, expired) and 570109 was the range code whose only producer was
+//     LiveGames. They were removed with the lease API when process liveness
+//     moved to the App's singleton lock (app.SingletonLiveness.Live).
 //   - 570111 was a catch-all "store failed" code. It was removed because
 //     nothing could produce it deliberately and an unclassified error is
 //     honestly CodeInternal.
@@ -47,7 +51,9 @@ const (
 // old number a new meaning is not, because a client that still matches on it
 // gets a wrong answer rather than an error.
 var expectedCodes = []int32{
-	570101, 570102, 570103, 570104, 570105, 570106, 570107, 570108, 570109, 570110,
+	570101, 570102, 570103, 570104,
+	// 570105-570109 retired: see above.
+	570110,
 	// 570111-570124 retired: see above.
 	570125,
 }
@@ -62,11 +68,6 @@ var codedSentinels = map[int32]error{
 	CodeRouteMissing:   ErrRouteMissing,
 	CodeRouteStale:     ErrRouteStale,
 	CodeRouteMigrating: ErrRouteMigrating,
-	CodeLeaseInvalid:   ErrLeaseInvalid,
-	CodeLeaseMissing:   ErrLeaseMissing,
-	CodeLeaseNotHolder: ErrLeaseNotHolder,
-	CodeLeaseExpired:   ErrLeaseExpired,
-	CodeRangeInvalid:   ErrRangeInvalid,
 	CodeConflict:       ErrConflict,
 	CodeRequestInvalid: ErrRequestInvalid,
 }
@@ -100,8 +101,8 @@ func TestEverySentinelCarriesItsOwnCode(t *testing.T) {
 
 // The paired codes are exactly the allocated set.
 //
-// An explicit list rather than a contiguity check, because this segment has a
-// documented hole at 570111 — see expectedCodes. The list is strictly stronger
+// An explicit list rather than a contiguity check, because this segment has
+// documented holes at 570105-570109 and 570111-570124 — see expectedCodes. The list is strictly stronger
 // than contiguity anyway: it catches an addition, a removal and a renumbering,
 // where contiguity alone misses a truncation at the end.
 func TestTheCodeSegmentIsExactlyAsAllocated(t *testing.T) {
@@ -125,12 +126,13 @@ func TestTheCodeSegmentIsExactlyAsAllocated(t *testing.T) {
 				"added, removed or renumbered", index, code, expectedCodes[index])
 		}
 	}
-	// And 570111 stays vacant: it once meant "store failed", and a code that
-	// changes meaning is worse than a gap.
+	// And the retired numbers stay vacant: 570105-570109 once meant the lease
+	// and range refusals, 570111 "store failed", and a code that changes
+	// meaning is worse than a gap.
 	for _, code := range codes {
-		if code == 570111 {
-			t.Fatal("570111 was reused; it previously meant \"store failed\" and a code that " +
-				"changes meaning silently breaks any client that matched on it")
+		if (code >= 570105 && code <= 570109) || code == 570111 {
+			t.Fatalf("%d was reused; it is retired and a code that changes meaning "+
+				"silently breaks any client that matched on it", code)
 		}
 	}
 }

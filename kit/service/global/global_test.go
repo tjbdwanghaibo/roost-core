@@ -3,7 +3,6 @@ package global
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -24,20 +23,12 @@ func (c *clock) Now() time.Time {
 	return c.now
 }
 
-func (c *clock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
 func newService(t *testing.T, mutate ...func(*Config)) (*Service, *clock) {
 	t.Helper()
 	c := &clock{now: time.Unix(1_700_000_000, 0)}
 	cfg := Config{
-		Routes:   versionstore.NewMemoryStore[int32, RouteBinding](),
-		Leases:   versionstore.NewMemoryStore[int32, GameLease](),
-		LeaseTTL: 30 * time.Second,
-		Now:      c.Now,
+		Routes: versionstore.NewMemoryStore[int32, RouteBinding](),
+		Now:    c.Now,
 	}
 	for _, m := range mutate {
 		m(&cfg)
@@ -216,468 +207,13 @@ func TestConcurrentMigrationsHaveOneWinner(t *testing.T) {
 	}
 }
 
-// The confirmed defect: a heartbeat from a previous incarnation must not
-// overwrite the live lease. In the implementation this replaces the heartbeat
-// read, computed a next version and wrote unconditionally, so a late
-// heartbeat replaced the live holder's start time and load.
-func TestAStaleIncarnationCannotRenewOrOverwriteALiveLease(t *testing.T) {
-	service, c := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-
-	first, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The first process dies; its lease lapses and a new process takes over.
-	c.advance(31 * time.Second)
-	second, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatalf("the lapsed lease was not re-acquirable: %v", err)
-	}
-	if second.Incarnation == first.Incarnation {
-		t.Fatal("re-acquiring reused the previous incarnation token")
-	}
-	if second.StartedAtUnix == first.StartedAtUnix {
-		t.Fatal("the new incarnation inherited the old start time")
-	}
-
-	// Now the zombie heartbeat arrives.
-	_, err = service.RenewLease(ctx, 100, first.Incarnation, map[string]string{"cpu": "99"})
-	if !errors.Is(err, ErrLeaseNotHolder) {
-		t.Fatalf("a stale incarnation renewed the lease: %v", err)
-	}
-	// And it changed nothing.
-	live, found, err := service.Lease(ctx, 100)
-	if err != nil || !found {
-		t.Fatalf("lease read: found=%v err=%v", found, err)
-	}
-	if live.Incarnation != second.Incarnation {
-		t.Fatalf("the live holder was replaced: %q", live.Incarnation)
-	}
-	if live.StartedAtUnix != second.StartedAtUnix {
-		t.Fatalf("the zombie heartbeat overwrote the start time: %d", live.StartedAtUnix)
-	}
-	if live.Load != nil {
-		t.Fatalf("the zombie heartbeat wrote its load: %+v", live.Load)
-	}
-	// The error must not leak the current token, or a caller that does not
-	// hold the lease learns what would let it renew.
-	if err != nil && (errContains(err.Error(), second.Incarnation) || errContains(err.Error(), first.Incarnation)) {
-		t.Fatalf("the refusal leaked an incarnation token: %v", err)
-	}
-}
-
-func errContains(haystack, needle string) bool {
-	if needle == "" {
-		return false
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
-}
-
-// A live lease cannot be displaced by another process claiming to be the same
-// game server: that is a deployment fault, and letting the second one win
-// silently is how a lease's start time and load become fiction.
-func TestALiveLeaseCannotBeStolen(t *testing.T) {
-	service, c := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-	held, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.AcquireLease(ctx, 100); !errors.Is(err, ErrConflict) {
-		t.Fatalf("a live lease was displaced: %v", err)
-	}
-	// Renewing keeps it alive past the original deadline.
-	c.advance(20 * time.Second)
-	renewed, err := service.RenewLease(ctx, 100, held.Incarnation, map[string]string{"players": "120"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if renewed.ExpiresAtUnix <= held.ExpiresAtUnix {
-		t.Fatalf("renewal did not extend the deadline: %d -> %d", held.ExpiresAtUnix, renewed.ExpiresAtUnix)
-	}
-	if renewed.Load["players"] != "120" {
-		t.Fatalf("the load snapshot was not recorded: %+v", renewed.Load)
-	}
-	if renewed.StartedAtUnix != held.StartedAtUnix {
-		t.Fatal("renewal changed the start time")
-	}
-}
-
-// An expired lease is not renewable: the holder must re-acquire, which mints a
-// new incarnation and a new start time. Extending it instead would hide that
-// the game server was gone.
-func TestAnExpiredLeaseMustBeReacquiredNotRenewed(t *testing.T) {
-	service, c := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-	held, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.advance(31 * time.Second)
-	if _, err := service.RenewLease(ctx, 100, held.Incarnation, nil); !errors.Is(err, ErrLeaseExpired) {
-		t.Fatalf("an expired lease was renewed: %v", err)
-	}
-	// A reader sees it as gone even though nothing swept.
-	lease, found, err := service.Lease(ctx, 100)
-	if err != nil || !found {
-		t.Fatalf("read: found=%v err=%v", found, err)
-	}
-	if lease.State == LeaseActive {
-		t.Fatal("an elapsed lease reads as active")
-	}
-	fresh, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fresh.Incarnation == held.Incarnation {
-		t.Fatal("re-acquiring reused the incarnation")
-	}
-}
-
-// Release is idempotent and must never drop a lease the caller does not hold —
-// the release-races-a-reacquire bug.
-func TestReleaseIsIdempotentAndOwnerScoped(t *testing.T) {
-	service, _ := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-	first, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.ReleaseLease(ctx, 100, first.Incarnation); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.ReleaseLease(ctx, 100, first.Incarnation); err != nil {
-		t.Fatalf("a retried release failed: %v", err)
-	}
-	// A released lease is immediately re-acquirable.
-	second, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatalf("a released lease was not re-acquirable: %v", err)
-	}
-	// The late release from the previous holder must not drop the new one.
-	if err := service.ReleaseLease(ctx, 100, first.Incarnation); err != nil {
-		t.Fatal(err)
-	}
-	live, found, err := service.Lease(ctx, 100)
-	if err != nil || !found {
-		t.Fatalf("read: found=%v err=%v", found, err)
-	}
-	if live.State != LeaseActive || live.Incarnation != second.Incarnation {
-		t.Fatalf("a late release dropped the new holder's lease: %+v", live)
-	}
-	// Releasing an unknown game is a no-op.
-	if err := service.ReleaseLease(ctx, 999, "whatever"); err != nil {
-		t.Fatalf("releasing an unknown lease returned %v", err)
-	}
-}
-
-// Concurrent acquisitions must produce exactly one holder.
-func TestConcurrentAcquireHasOneHolder(t *testing.T) {
-	service, _ := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-
-	const racers = 12
-	var wait sync.WaitGroup
-	var mu sync.Mutex
-	holders := map[string]bool{}
-	refused := 0
-	for i := 0; i < racers; i++ {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			lease, err := service.AcquireLease(ctx, 100)
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case err == nil:
-				holders[lease.Incarnation] = true
-			case errors.Is(err, ErrConflict):
-				refused++
-			default:
-				t.Errorf("unexpected error %v", err)
-			}
-		}()
-	}
-	wait.Wait()
-	if len(holders) != 1 {
-		t.Fatalf("%d incarnations hold the lease, want 1", len(holders))
-	}
-	if refused != racers-1 {
-		t.Fatalf("%d were refused, want %d", refused, racers-1)
-	}
-}
-
-// Concurrent renewals by the holder must not lose a heartbeat, and must not
-// corrupt the record.
-func TestConcurrentRenewalsByTheHolderAllSucceed(t *testing.T) {
-	service, _ := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-	held, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	const writers = 8
-	var wait sync.WaitGroup
-	errs := make([]error, writers)
-	for writer := 0; writer < writers; writer++ {
-		wait.Add(1)
-		go func(index int) {
-			defer wait.Done()
-			for i := 0; i < 5; i++ {
-				if _, err := service.RenewLease(ctx, 100, held.Incarnation,
-					map[string]string{"writer": fmt.Sprint(index)}); err != nil {
-					errs[index] = err
-					return
-				}
-			}
-		}(writer)
-	}
-	wait.Wait()
-	for writer, err := range errs {
-		if err != nil {
-			t.Fatalf("writer %d: %v", writer, err)
-		}
-	}
-	live, found, err := service.Lease(ctx, 100)
-	if err != nil || !found {
-		t.Fatalf("read: found=%v err=%v", found, err)
-	}
-	if live.Incarnation != held.Incarnation || live.State != LeaseActive {
-		t.Fatalf("the record was corrupted by concurrent renewals: %+v", live)
-	}
-	if live.StartedAtUnix != held.StartedAtUnix {
-		t.Fatal("concurrent renewals changed the start time")
-	}
-}
-
-// A lease records the binding it was taken under, so it cannot be read as
-// belonging to a group it does not.
-func TestLeaseCarriesTheBindingItWasTakenUnder(t *testing.T) {
-	service, _ := newService(t)
-	ctx := context.Background()
-	binding := bind(t, service, 100, 7)
-	lease, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lease.GlobalGroupID != binding.GlobalGroupID || lease.GlobalSID != binding.GlobalSID {
-		t.Fatalf("lease = %+v, binding = %+v", lease, binding)
-	}
-	if lease.RouteEpoch != binding.Epoch {
-		t.Fatalf("lease epoch = %d, binding epoch = %d", lease.RouteEpoch, binding.Epoch)
-	}
-	// A lease cannot be taken for an unbound game server: it would have no
-	// group to be live in.
-	if _, err := service.AcquireLease(ctx, 999); !errors.Is(err, ErrRouteMissing) {
-		t.Fatalf("a lease was taken for an unbound game: %v", err)
-	}
-}
-
-func TestLiveGamesIsBoundedAndGroupScoped(t *testing.T) {
-	service, c := newService(t)
-	ctx := context.Background()
-	for gameSID := int32(100); gameSID < 105; gameSID++ {
-		bind(t, service, gameSID, 1)
-		if _, err := service.AcquireLease(ctx, gameSID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	live, err := service.LiveGames(ctx, "group-a", []int32{100, 101, 102, 103, 104}, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(live) != 3 {
-		t.Fatalf("got %d live games, want the requested 3", len(live))
-	}
-	if _, err := service.LiveGames(ctx, "group-b", []int32{100}, 10); err != nil {
-		t.Fatal(err)
-	}
-	if other, _ := service.LiveGames(ctx, "group-b", []int32{100}, 10); len(other) != 0 {
-		t.Fatalf("a lease from another group was returned: %+v", other)
-	}
-	for _, limit := range []int{0, -1, MaxPageSize + 1} {
-		if _, err := service.LiveGames(ctx, "group-a", []int32{100}, limit); !errors.Is(err, ErrRangeInvalid) {
-			t.Fatalf("limit %d returned %v, want ErrRangeInvalid", limit, err)
-		}
-	}
-	// Expired leases are not live.
-	c.advance(31 * time.Second)
-	if live, _ := service.LiveGames(ctx, "group-a", []int32{100, 101}, 10); len(live) != 0 {
-		t.Fatalf("expired leases are reported as live: %+v", live)
-	}
-}
-
-func TestRenewRejectsAnOversizedLoadSnapshot(t *testing.T) {
-	service, _ := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-	held, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	load := map[string]string{}
-	for i := 0; i <= MaxLoadEntries; i++ {
-		load[fmt.Sprintf("k%d", i)] = "v"
-	}
-	if _, err := service.RenewLease(ctx, 100, held.Incarnation, load); !errors.Is(err, ErrLeaseInvalid) {
-		t.Fatalf("an oversized load snapshot was accepted: %v", err)
-	}
-	if _, err := service.RenewLease(ctx, 100, "", nil); !errors.Is(err, ErrLeaseInvalid) {
-		t.Fatal("an empty incarnation was accepted")
-	}
-}
-
 func TestNewRejectsAnIncompleteConfig(t *testing.T) {
-	routes := versionstore.NewMemoryStore[int32, RouteBinding]()
-	leases := versionstore.NewMemoryStore[int32, GameLease]()
-	if _, err := New(Config{Leases: leases}); err == nil {
+	if _, err := New(Config{}); err == nil {
 		t.Fatal("a missing route store was accepted")
 	}
-	if _, err := New(Config{Routes: routes}); err == nil {
-		t.Fatal("a missing lease store was accepted")
-	}
-	if _, err := New(Config{Routes: routes, Leases: leases, LeaseTTL: -time.Second}); err == nil {
-		t.Fatal("a negative lease ttl was accepted")
-	}
 }
 
-// A lease that stopped answering and a lease its holder gave up are different
-// events, and an operator needs to tell them apart: one is a dead game
-// server, the other is a clean shutdown. Collapsing them into one state — as
-// an earlier version of Lease did — loses the only signal that distinguishes
-// them, and it also left the elapsed deadline unreadable.
-func TestALapsedLeaseIsDistinctFromAReleasedOne(t *testing.T) {
-	service, c := newService(t)
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-
-	held, err := service.AcquireLease(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.advance(31 * time.Second)
-	lapsed, found, err := service.Lease(ctx, 100)
-	if err != nil || !found {
-		t.Fatalf("read: found=%v err=%v", found, err)
-	}
-	if lapsed.State != LeaseLapsed {
-		t.Fatalf("an unanswered lease reads as %q, want lapsed", lapsed.State)
-	}
-	// The deadline it missed must still be readable, or a caller cannot see
-	// when the game server stopped answering.
-	if lapsed.ExpiresAtUnix != held.ExpiresAtUnix {
-		t.Fatalf("the elapsed deadline was erased: %d, want %d", lapsed.ExpiresAtUnix, held.ExpiresAtUnix)
-	}
-	if lapsed.LastHeartbeatAtUnix != held.LastHeartbeatAtUnix {
-		t.Fatal("the last heartbeat time was erased")
-	}
-
-	// A clean release reads as released, with no deadline outstanding.
-	bind(t, service, 200, 1)
-	given, err := service.AcquireLease(ctx, 200)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.ReleaseLease(ctx, 200, given.Incarnation); err != nil {
-		t.Fatal(err)
-	}
-	released, found, err := service.Lease(ctx, 200)
-	if err != nil || !found {
-		t.Fatalf("read: found=%v err=%v", found, err)
-	}
-	if released.State != LeaseReleased {
-		t.Fatalf("a released lease reads as %q", released.State)
-	}
-	if released.ExpiresAtUnix != 0 {
-		t.Fatalf("a released lease still carries a deadline: %d", released.ExpiresAtUnix)
-	}
-	// Neither is live, and both are re-acquirable.
-	for _, gameSID := range []int32{100, 200} {
-		if _, err := service.AcquireLease(ctx, gameSID); err != nil {
-			t.Fatalf("game %d was not re-acquirable: %v", gameSID, err)
-		}
-	}
-}
-
-// The incarnation token is minted only when the lease is actually takeable,
-// and only once however many compare-and-set retries the write needs.
-//
-// Minting before the check spends a token on every refused acquire; minting
-// inside the callback spends one per retry, because Update may call the
-// callback more than once. Neither matters for crypto/rand, and both matter
-// for a rate-limited or remote minter — which is exactly the kind of
-// dependency a caller is entitled to inject.
-func TestAcquireMintsAnIncarnationOnlyWhenItCanTakeTheLease(t *testing.T) {
-	var minted int
-	service, c := newService(t, func(cfg *Config) {
-		cfg.NewIncarnation = func() (string, error) {
-			minted++
-			return fmt.Sprintf("token-%d", minted), nil
-		}
-	})
-	ctx := context.Background()
-	bind(t, service, 100, 1)
-
-	if _, err := service.AcquireLease(ctx, 100); err != nil {
-		t.Fatal(err)
-	}
-	if minted != 1 {
-		t.Fatalf("a successful acquire minted %d tokens, want 1", minted)
-	}
-	// Every refused acquire must mint nothing.
-	for attempt := 0; attempt < 5; attempt++ {
-		if _, err := service.AcquireLease(ctx, 100); !errors.Is(err, ErrConflict) {
-			t.Fatalf("attempt %d: %v", attempt, err)
-		}
-	}
-	if minted != 1 {
-		t.Fatalf("five refused acquires minted %d tokens; a refused acquire must mint none", minted-1)
-	}
-	// And an acquire for an unbound game must not mint either: it fails
-	// before the lease is ever considered.
-	if _, err := service.AcquireLease(ctx, 999); !errors.Is(err, ErrRouteMissing) {
-		t.Fatal("an unbound game was accepted")
-	}
-	if minted != 1 {
-		t.Fatalf("an unroutable acquire minted a token")
-	}
-	// A takeable lease mints exactly one more.
-	c.advance(31 * time.Second)
-	if _, err := service.AcquireLease(ctx, 100); err != nil {
-		t.Fatal(err)
-	}
-	if minted != 2 {
-		t.Fatalf("re-acquiring a lapsed lease minted %d tokens total, want 2", minted)
-	}
-	// A minter that fails must fail the acquire rather than storing an empty
-	// incarnation, which nothing could ever present.
-	failing, _ := newService(t, func(cfg *Config) {
-		cfg.NewIncarnation = func() (string, error) { return "", errors.New("minter is down") }
-	})
-	bind(t, failing, 200, 1)
-	if _, err := failing.AcquireLease(ctx, 200); err == nil {
-		t.Fatal("a failing minter produced a lease")
-	}
-	if _, found, _ := failing.Lease(ctx, 200); found {
-		t.Fatal("a failed acquire stored a lease with no incarnation")
-	}
-}
-
-// The two refusals this package exists to make — a stale route epoch and a
-// heartbeat from a process that is no longer the holder — were both
+// The refusal this package exists to make — a stale route epoch — was
 // unobservable in the implementation it replaces. Making them is only half the
 // job; an operator has to be able to see that they are happening, so the
 // reports are asserted rather than assumed.
@@ -707,59 +243,23 @@ func TestRefusalsAndAcceptancesAreReported(t *testing.T) {
 		t.Fatalf("a migration reported %d accepts; %s", got, sink.Events())
 	}
 
-	lease, err := service.AcquireLease(ctx, 7)
+	done, err := service.CompleteMigration(ctx, 7, binding.Epoch+1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := sink.Count("accepted:acquire_lease"); got != 1 {
-		t.Fatalf("an acquire reported %d accepts; %s", got, sink.Events())
+	if got := sink.Count("accepted:complete_migration"); got != 1 {
+		t.Fatalf("a completed migration reported %d accepts; %s", got, sink.Events())
 	}
 
-	// A second process claiming to be the same game server.
-	if _, err := service.AcquireLease(ctx, 7); !errors.Is(err, ErrConflict) {
-		t.Fatalf("a held lease was displaced: %v", err)
+	// A second Bind for a game that is already bound loses the Create.
+	if _, err := service.Bind(ctx, 7, "group-a", 300); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second bind was accepted: %v", err)
 	}
-	if got := sink.Count("refused:acquire_lease:held"); got != 1 {
-		t.Fatalf("a refused acquire reported %d refusals; %s", got, sink.Events())
+	if got := sink.Count("conflict:bind"); got != 1 {
+		t.Fatalf("a refused bind reported %d conflicts; %s", got, sink.Events())
 	}
-
-	// The confirmed defect: a heartbeat from a previous incarnation.
-	if _, err := service.RenewLease(ctx, 7, "a-token-from-a-dead-process", nil); !errors.Is(err, ErrLeaseNotHolder) {
-		t.Fatalf("a foreign incarnation renewed the lease: %v", err)
-	}
-	if got := sink.Count("refused:renew_lease:not_holder"); got != 1 {
-		t.Fatalf("a fenced-off renewal reported %d refusals; %s", got, sink.Events())
-	}
-
-	if _, err := service.RenewLease(ctx, 7, lease.Incarnation, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := sink.Count("accepted:renew_lease"); got != 1 {
-		t.Fatalf("a renewal reported %d accepts; %s", got, sink.Events())
-	}
-
-	// A release from a process that is no longer the holder answers nil, to
-	// avoid dropping the new holder's lease. That is a success answer for an
-	// operation that did nothing, so it is counted.
-	if err := service.ReleaseLease(ctx, 7, "a-token-from-a-dead-process"); err != nil {
-		t.Fatalf("a foreign release failed instead of no-opping: %v", err)
-	}
-	if got := sink.Count("dropped:release_lease.not_ours"); got != 1 {
-		t.Fatalf("a release that did nothing reported %d drops; %s", got, sink.Events())
-	}
-
-	if err := service.ReleaseLease(ctx, 7, lease.Incarnation); err != nil {
-		t.Fatal(err)
-	}
-	if got := sink.Count("accepted:release_lease"); got != 1 {
-		t.Fatalf("a release reported %d accepts; %s", got, sink.Events())
-	}
-	// And a retried release is a replay, not a second release.
-	if err := service.ReleaseLease(ctx, 7, lease.Incarnation); err != nil {
-		t.Fatal(err)
-	}
-	if got := sink.Count("replayed:release_lease"); got != 1 {
-		t.Fatalf("a retried release reported %d replays; %s", got, sink.Events())
+	if done.GlobalSID != 200 {
+		t.Fatalf("binding after migration = %+v", done)
 	}
 }
 
@@ -767,15 +267,15 @@ func TestRefusalsAndAcceptancesAreReported(t *testing.T) {
 func TestANilReporterChangesNothing(t *testing.T) {
 	service, _ := newService(t)
 	ctx := context.Background()
-	bind(t, service, 7, 100)
-	lease, err := service.AcquireLease(ctx, 7)
+	binding := bind(t, service, 7, 100)
+	moving, err := service.BeginMigration(ctx, 7, 200, binding.Epoch)
 	if err != nil {
-		t.Fatalf("a service with no reporter failed to acquire: %v", err)
+		t.Fatalf("a service with no reporter failed to begin a migration: %v", err)
 	}
-	if _, err := service.RenewLease(ctx, 7, lease.Incarnation, nil); err != nil {
+	if _, err := service.CompleteMigration(ctx, 7, moving.Epoch); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.ReleaseLease(ctx, 7, lease.Incarnation); err != nil {
-		t.Fatal(err)
+	if _, err := service.Bind(ctx, 7, "group-a", 300); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second bind with no reporter = %v, want ErrConflict", err)
 	}
 }

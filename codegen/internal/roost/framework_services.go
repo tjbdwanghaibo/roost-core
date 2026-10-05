@@ -176,13 +176,14 @@ func Pending() platform.PendingOrders { return nil }
 		Package: "global", Interface: "Routing", Depends: []string{"redis", "nats"},
 		ModArgs: []string{"Metrics()"},
 		Collabs: `// The global service takes no collaborators: a route is a binding between a
-// game server and a coordination group, and a lease is that server saying it
-// is still alive. Both are state this service owns outright, so there is no
-// policy for a project to supply — what a project decides is who calls Bind
-// and who drives a migration, and those are callers, not collaborators.
+// game server and a coordination group, state this service owns outright, so
+// there is no policy for a project to supply — what a project decides is who
+// calls Bind and who drives a migration, and those are callers, not
+// collaborators. Whether a game server is alive is not asked here: that is
+// the App's singleton lock, read with app.SingletonLiveness.Live.
 `,
 		ConfigFunc: func(project string) string {
-			return "global:\n  key_prefix: roost:" + project + ":global\n  lease_ttl: 30s\n"
+			return "global:\n  key_prefix: roost:" + project + ":global\n"
 		},
 	},
 	"activity": {

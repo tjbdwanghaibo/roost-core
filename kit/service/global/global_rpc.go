@@ -7,7 +7,7 @@ import "context"
 //go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
 // Routing is the cross-process contract: what ANOTHER process may ask of the
-// routing and lease service.
+// routing service.
 //
 // Every method the Service has is here, which is unusual in this repository —
 // every other service holds something back — so it is worth saying why none of
@@ -36,11 +36,15 @@ import "context"
 //     plane.
 //
 // No method carries an affinity key, and here that follows from the data
-// rather than from an absence of options: a route and a lease are one versioned
-// entry PER GAME SERVER, so contention is already per key and two game servers
-// never touch the same one. Routing by game id would move traffic around
-// without removing any contention, and the one method that is not per-game —
-// LiveGames — is a bounded read of candidates the caller names.
+// rather than from an absence of options: a route is one versioned entry PER
+// GAME SERVER, so contention is already per key and two game servers never
+// touch the same one. Routing by game id would move traffic around without
+// removing any contention.
+//
+// There is no liveness here. The lease methods this contract used to carry
+// (AcquireLease, RenewLease, ReleaseLease, Lease, LiveGames) were removed:
+// whether a game server is alive is answered by the App's singleton lock,
+// through app.SingletonLiveness.Live.
 //
 //roost:rpc service_type=global capability=service.global
 type Routing interface {
@@ -62,26 +66,6 @@ type Routing interface {
 
 	// AbortMigration returns a migrating binding to its origin.
 	AbortMigration(ctx context.Context, gameSID int32, expectEpoch uint64) (binding RouteBinding, err error)
-
-	// AcquireLease takes the lease for a game server, minting a new
-	// incarnation. A previous holder's incarnation stops being able to renew.
-	AcquireLease(ctx context.Context, gameSID int32) (lease GameLease, err error)
-
-	// RenewLease is the heartbeat. The incarnation is required, so a process
-	// that lost the lease and did not notice cannot keep it alive.
-	RenewLease(ctx context.Context, gameSID int32, incarnation string, load map[string]string) (lease GameLease, err error)
-
-	// ReleaseLease gives the lease up. The incarnation is required for the
-	// same reason.
-	ReleaseLease(ctx context.Context, gameSID int32, incarnation string) (err error)
-
-	// Lease reads one lease without touching it.
-	Lease(ctx context.Context, gameSID int32) (lease GameLease, found bool, err error)
-
-	// LiveGames reports which of the candidate game servers hold a live
-	// lease. The candidate set is the caller's, so this is a bounded read
-	// rather than an enumeration.
-	LiveGames(ctx context.Context, groupID string, candidates []int32, limit int) (leases []GameLease, err error)
 }
 
 var _ Routing = (*Service)(nil)
