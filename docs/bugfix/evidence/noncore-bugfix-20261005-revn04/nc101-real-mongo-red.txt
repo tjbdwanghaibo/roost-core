@@ -1,0 +1,13 @@
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout/upstream
+    transaction_deadline_integration_test.go:150: upstream: elapsed=30.2s calls=1 committed=1 err=<nil>
+    transaction_deadline_integration_test.go:152: WithTransaction with transaction_timeout=2s returned after 30.2s (bound 4s); the commit is not bounded
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout/downstream
+    transaction_deadline_integration_test.go:150: downstream: elapsed=29.79s calls=1 committed=1 err=server selection error: context deadline exceeded, current topology: { Type: Single, Servers: [{ Addr: 127.0.0.1:56845, Type: Unknown, Last error:  connection(127.0.0.1:56845[-201]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:56949->127.0.0.1:56845: i/o timeout: connection(127.0.0.1:56845[-201]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:56949->127.0.0.1:56845: i/o timeout }, ] }
+    transaction_deadline_integration_test.go:152: WithTransaction with transaction_timeout=2s returned after 29.79s (bound 4s); the commit is not bounded
+--- FAIL: TestRealMongoCommitIsBoundedByTransactionTimeout (61.25s)
+    --- FAIL: TestRealMongoCommitIsBoundedByTransactionTimeout/upstream (30.59s)
+    --- FAIL: TestRealMongoCommitIsBoundedByTransactionTimeout/downstream (30.65s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/mongo/driver	61.781s
+FAIL

@@ -1,0 +1,50 @@
+package db
+
+// revn04：把第21/22轮的 mongotest 后端换成隔离真实 Mongo 副本集（库名 revn04_n04_review，用完删除）。
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/mongo/driver"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+const realDatabase = "revn04_n04_review"
+
+type realClient struct{ *mongodriver.Client }
+
+type realSeeder struct{ coll fmongo.ICollection }
+
+func (s realSeeder) Seed(doc bson.M) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.coll.DeleteOne(ctx, bson.M{"_id": doc["_id"]}); err != nil {
+		return err
+	}
+	_, err := s.coll.InsertOne(ctx, doc)
+	return err
+}
+
+func (c *realClient) Collection(database, name string) realSeeder {
+	return realSeeder{coll: c.Database(database).Collection(name)}
+}
+
+func newRealClient(t *testing.T) *realClient {
+	t.Helper()
+	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	if uri == "" {
+		t.Fatal("ROOST_DATAENGINE_IT_MONGO_URI is required for the revn04 real-Mongo run")
+	}
+	cfg := fmongo.DefaultConfig(uri)
+	cfg.ConnectTimeout = 5 * time.Second
+	cfg.TransactionTimeout = 10 * time.Second
+	client, err := mongodriver.NewClient(cfg, mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	return &realClient{client}
+}

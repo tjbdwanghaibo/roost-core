@@ -1,0 +1,16 @@
+--- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed (0.00s)
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/array_shared_element (0.00s)
+        unique_array_promises_test.go:47: writes [{"tags":[{"$numberInt":"1"},{"$numberInt":"2"}],"_id":{"$numberInt":"1"}} {"tags":[{"$numberInt":"2"},{"$numberInt":"3"}],"_id":{"$numberInt":"2"}}] under unique "tags" ended with <nil>; want ErrUnsupported (real Mongo indexes each array element)
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/array_vs_scalar (0.00s)
+        unique_array_promises_test.go:47: writes [{"_id":{"$numberInt":"1"},"tags":{"$numberInt":"2"}} {"_id":{"$numberInt":"2"},"tags":[{"$numberInt":"1"},{"$numberInt":"2"}]}] under unique "tags" ended with <nil>; want ErrUnsupported (real Mongo indexes each array element)
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/array_of_docs_path (0.00s)
+        unique_array_promises_test.go:47: writes [{"_id":{"$numberInt":"1"},"m":[{"n":{"$numberInt":"1"}}]} {"_id":{"$numberInt":"2"},"m":[{"n":{"$numberInt":"2"}}]}] under unique "m.n" ended with mongo: duplicate key; want ErrUnsupported (real Mongo indexes each array element)
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/index_build_over_stored_array (0.00s)
+        unique_array_promises_test.go:58: unique index build over a stored array = <nil>, want ErrUnsupported
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/update_into_array (0.00s)
+        unique_array_promises_test.go:68: update moving a unique key onto an array = <nil>, want ErrUnsupported
+    --- FAIL: TestUniqueIndexOverAnArrayIsRefusedNotGuessed/controls (0.00s)
+        unique_array_promises_test.go:88: compound unique key with an array member = <nil>, want ErrUnsupported
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/mongo/mongotest	0.511s
+FAIL

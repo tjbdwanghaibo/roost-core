@@ -1,0 +1,12 @@
+=== RUN   TestProbeRevn04RefHMapPatchTTLRealRedis
+    zz_probe_revn04_test.go:40: key :{session:7}:snapshot pttl=2.999s
+    zz_probe_revn04_test.go:40: key :{session:7}:snapshot:inner pttl=2.999s
+    zz_probe_revn04_test.go:40: key :{session:7}:root pttl=2.999s
+    zz_probe_revn04_test.go:40: key :{session:7}:meta pttl=2.999s
+    zz_probe_revn04_test.go:44: after original expiry: ok=true err=<nil> value={ID:7 Snapshot:{State:1 Inner:{Score:9}} Meta:0x3c1b5e01c960 Version:1} meta=&{Label:a}
+    zz_probe_revn04_test.go:48: after patched expiry: ok=false err=<nil> left=0
+    zz_probe_revn04_test.go:50: patch after expiry: cache: redis ref hmap unsupported field: patch "Snapshot.Inner.Score" requires an existing root
+    zz_probe_revn04_test.go:53: after patch of expired record: keys=0
+--- PASS: TestProbeRevn04RefHMapPatchTTLRealRedis (5.51s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/cache	6.048s

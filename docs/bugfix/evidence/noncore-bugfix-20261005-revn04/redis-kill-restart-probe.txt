@@ -1,0 +1,26 @@
+=== RUN   TestProbeRevn04PrivateRedisKillRestart
+    zz_probe_revn04_test.go:43: before kill: [a]/v1 err=<nil>
+    zz_probe_revn04_test.go:45: before kill: [a b]/v2 err=<nil>
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+redis: 2026/10/05 19:43:14 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:27579: connect: connection refused
+    zz_probe_revn04_test.go:49: while down: err=dial tcp 127.0.0.1:27579: connect: connection refused
+    zz_probe_revn04_test.go:56: after restart attempt 0: dial tcp 127.0.0.1:27579: connect: connection refused
+    zz_probe_revn04_test.go:56: after restart attempt 1: dial tcp 127.0.0.1:27579: connect: connection refused
+    zz_probe_revn04_test.go:56: after restart attempt 2: dial tcp 127.0.0.1:27579: connect: connection refused
+    zz_probe_revn04_test.go:59: after restart: update=[a b c]/v3 err=<nil> | stored=[a b c]/v3 err=<nil>
+--- PASS: TestProbeRevn04PrivateRedisKillRestart (2.84s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/versionstore	3.373s

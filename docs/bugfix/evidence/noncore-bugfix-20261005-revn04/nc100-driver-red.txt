@@ -1,0 +1,12 @@
+=== RUN   TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver
+=== RUN   TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver/eval
+    script_no_retry_promises_test.go:153: one eval call executed the script 2 times on the server (reply=1 err=<nil>); want exactly once
+=== RUN   TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver/evalsha
+    script_no_retry_promises_test.go:153: one evalsha call executed the script 2 times on the server (reply=1 err=<nil>); want exactly once
+--- FAIL: TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver (0.04s)
+    --- FAIL: TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver/eval (0.03s)
+    --- FAIL: TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver/evalsha (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/redis/driver	0.383s
+FAIL
+be7bcc1853020d9f744360d78831abd0ddf990a3

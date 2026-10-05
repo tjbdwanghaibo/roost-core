@@ -1,0 +1,6 @@
+=== RUN   TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice
+    lost_reply_integration_test.go:154: one Update wrote its mutation 2 times: stored [hello msg-1 msg-1] / v3 (update returned [hello msg-1 msg-1] / v3 applied=true err=<nil>, mutate ran 2 times)
+--- FAIL: TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice (0.12s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/versionstore	0.668s
+FAIL

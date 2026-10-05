@@ -1,5 +1,13 @@
 # Roost Review 问题索引
 
+**10-05 N04 接续（revn04）：NC-100 P1、NC-101 P2、NC-102 P3 已复现，未修复。** Redis 驱动在回复丢失后自动重放 Lua 脚本，versionstore 一次 Update 把 mutate 写两次并返回成功；`mongo.transaction_timeout` 不约束提交，网络黑洞时事务阻塞到恢复为止；mongotest 唯一索引把数组当一个值比较。[本轮](../review/REVIEW-2026-10-05-n04-revn04.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-100](RR-20261005-NC-100.md) | P1 Redis 驱动回复丢失后重放脚本，versionstore.Update 写两次 | 已复现，未修复 |
+| [RR-20261005-NC-101](RR-20261005-NC-101.md) | P2 transaction_timeout 不约束提交，网络黑洞时无界阻塞 | 已复现，未修复 |
+| [RR-20261005-NC-102](RR-20261005-NC-102.md) | P3 mongotest 唯一索引数组语义与真实 Mongo 不一致 | 已复现，未修复 |
+
 **10-05 N08 codegen（revn08）：NC-70～73 四个 P3 已修复、声明场景验证，未发版。** 中断 go 命令窗口后暂存树（整份工程副本）留在工程旁；`roost id` 的错误码扫描与生成器口径不同（NC-63 残余）；`project diff` / `upgrade --dry-run` 漏列 sync 将刷新的三份应用自有配置；`roost help cfggen` 指向 tablegen 的输出目录。cfggen 运行期往返、旧工程显式 upgrade / 改名退役 / 失败回滚、Unix 信号用例与 9 条具名环境 skip 在 macOS 实跑通过。[本轮](../review/REVIEW-2026-10-05-n08-codegen.md)
 
 | 编号 | 问题 | 状态 |
