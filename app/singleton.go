@@ -54,6 +54,13 @@ type SingletonOpener func(cfg *viper.Viper) (SingletonStore, error)
 // SingletonLiveness 回答“同一服务类型下，这些 sid 中哪些有进程持有单实例锁”。只读，不要求本进程
 // 持有锁。“活”是指进程持有锁：从拿锁（任何 Mod Init 之前）到全部 Mod 停完、Release 为止；
 // 崩溃的进程最多再算 ttl，卡住的进程键过期后不算。
+//
+// 契约：停机中的进程仍算活（维护者决定 C5，2026-10-06）。从收到停机信号、Service.Shutdown、各 Mod
+// Stop，一直到 Release 删掉键为止，键都在、值不变，Live 照常把它算进去；停机不完整（不 Release）时
+// 一直算到键在 ttl 后过期。没有“停机中”这种中间值——活性只有一个事实来源，就是锁本身。代价落在
+// 用 Live 决定“该等谁”的调用方：activity 开窗时的 expected 集合会包含恰在停机的服，它不会再
+// NotifyPhase，这个窗口只能等到宽限期（activity.grace_window）结束才完成；只影响停机那几秒内开的窗口。
+// 需要排除停机中进程的调用方自己判断，不要依赖 Live 区分。
 type SingletonLiveness interface {
 	Live(ctx context.Context, serverType string, sids []int32) ([]int32, error)
 }

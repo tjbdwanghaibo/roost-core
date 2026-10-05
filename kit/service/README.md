@@ -167,7 +167,7 @@ go tool servicerpc -dir ./mail -check
 | 服务 | 死路 | 操作 |
 | --- | --- | --- |
 | `platform` | 订单尝试耗尽 → **玩家付了钱、货永远不发**。`AttemptDelivery` 正确地拒绝它（否则预算就不是预算），唯一痕迹是一行 `slog.Error` —— 那不是工作队列，也活不过日志轮转 | `ReopenDelivery`（重回重试队列）、`SettleOutOfBand`（已退款/已人工发货） |
-| `global/activity` | dispatch 尝试耗尽 → 某个 game 服**永远收不到**它的玩家参与过的活动结果。两条自动路径都拒绝它：`AttemptDispatch` 不再发，`AckDispatch` 拒绝迟到的确认 | `ReopenDispatch` |
+| `global/activity` | dispatch 尝试耗尽 → 某个 game 服**永远收不到**它的玩家参与过的活动结果。两条自动路径都拒绝它：`AttemptDispatch` 不再发，`AckDispatch` 拒绝迟到的确认。另：窗口记录里被外部写坏的条目（别的组的键、不合法的键、不可执行的开窗计划），sweep 只跳过、保留、计数，从不自动删（B9） | `ReopenDispatch`；`MalformedWindowEntries` / `RemoveMalformedWindowEntry`（只删确实坏的条目） |
 | `session` | Releaser 永远不可能成功的资源（副本被带外删了、id 从来无效）→ 与暂时故障**完全无法区分**，sweep 永远重试 | `ForceRelease` |
 
 `session` 那条的后果比看起来严重得多，而且从 `Run.Live` 上**看不出来**：

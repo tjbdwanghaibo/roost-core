@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **activity 读已存窗口条目只走一个入口，运维可清除坏条目**（维护者决定 B9，RR-20261005-NC-51 复核补修）：`PendingActivities`、`DeliveringActivities`、`RetireDelivered` 与后台 sweep 都经 `readWindowEntries` 读窗口，别的组的键或不合法的键在任何列表里都跳过、保留、计数（新增 `sweep.delivering_key_malformed`）；此前 Delivering 里的这种键会让本组 sweep 去写别的组的窗口、自己永远留着，`PendingActivities` 会把它交给 game。`RetireDelivered` 只在本次确实移走时返回 true。新增持有方专用的 `Admin.MalformedWindowEntries` / `RemoveMalformedWindowEntry`（note 必填，只删确实坏的条目）。窗口记录多两个可选字段 `admin_note` / `admin_action_at_unix`。[记录](docs/bugfix/RR-20261005-NC-51.md#复核后的补修2026-10-06维护者决定-b9)
+- **account 建角判定写成一张表**（维护者决定 B9）：create_role 的同名 / 换名、同名被拒后的释放与 `Admin.ResolvePendingCreation` 都查“名额状态 × 入口 × 名字状态 → 动作”的 `decideCreation`，共用同一份归类；对外行为不变。两个换名请求并发释放同一个死计划时 `create_role.plan_released` 不再计两次（RR-20261005-NC-50 复核补修）。[方案](docs/feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md)
+- **`app.SingletonLiveness.Live` 契约写明：停机中的进程仍算活**（维护者决定 C5）：直到 Release 删键为止都算；activity 开窗时可能把正在停机的服算进 expected，那个窗口要等到宽限期。行为不变，用例钉住。
+
 ## [v1.20.2] - 2026-10-06
 
 > 补丁版本：维护者 10-05 第二、三轮决定的实施与 v1.20.1 之后非核心 review 的收敛。决定项：A1 回滚统一走 DAO、A2 Redis / Mongo 驱动不重放写、A3 停机对象共用 `operation.Lifetime` 与契约骨架、A4 框架配置一律严格读取（含 kit/redis 与生成代码两项留项）、A5 隔离环境共享使用、C1 生产校验只查有读取方的设置、B1 saga completion 核对代际、B2 Remote 快照以 L2 为水位权威、B3 skill lower 查找失败 fail-fast、B7 actionflow 回调变更进延后队列、C4 活动组文件、C6 服务指标默认开启、C7 遍历回调契约。非核心 review：N05（NC-130 / 131）、N09 第三批（NC-150～154）与第四批（NC-210～216）、N12（NC-160～165）、停机三步（NC-170～174）、N13（NC-180～185，含 NC-180 / 181 复审补修）、N14（NC-190～194）、N15（NC-200～208，含 NC-208 补修），以及 NC-173 复核补修。**行为变化**：框架与生成代码的布尔 / 时长 / 整数配置严格读取，写错类型启动即点名报错；`env: production` 只校验有读取方的设置；Redis 写命令回复丢失不再重放、返回结果未知；服务指标默认写进 metrics 注册表；actionflow 回调里的变更延后到回调返回后执行；skill 编译按 Runtime 实际执行范围收紧。**破坏性变更**：game 配置键 `activity.game_sids` 删除，改用活动组文件；`ActionRunner` 不再返回 `ErrReentrantMutation`；服务指标的名字与 `Recorder` 事件名变化；以前被接受的配置写法与 skill 定义现在启动失败；生成器 Core 下限升到 v1.20.2。已生成工程不提供迁移（维护者决定）。

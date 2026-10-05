@@ -101,36 +101,47 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 	if err != nil {
 		return RoleCreation{}, err
 	}
-	if !found {
-		return RoleCreation{}, fmt.Errorf("%w: %s holds no role slot on server %d", ErrNotResolvable, accountID, serverID)
-	}
-	if slot.Value.AccountID != accountID || slot.Value.ServerID != serverID {
-		return RoleCreation{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
-	}
-	if slot.Value.PlayerID != 0 {
-		return RoleCreation{}, fmt.Errorf("%w: %s already published role %d on server %d; nothing is pending",
-			ErrNotResolvable, accountID, slot.Value.PlayerID, serverID)
-	}
+	// The creation table decides (B9), from the same classified facts
+	// createRole reads, so a plan createRole treats as alive is never one an
+	// operator can release by mistake, and the reverse.
+	state := classifySlot(slot, found, accountID, serverID)
 	plan := slot.Value.Creation
-	if plan.ID == "" || plan.PlayerID == 0 {
-		return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d predates creation identities; a "+
-			"published legacy role may depend on it, reconcile it offline (RR-20260929-19)", ErrNotResolvable, accountID, serverID)
+	name := nameNotRead
+	action := decideCreation(state, entryResolve, name)
+	var nameEntry directory.Entry
+	if action == actReadName {
+		var held bool
+		nameEntry, held, err = s.cfg.Names.Lookup(ctx, plan.Name)
+		if err != nil {
+			return RoleCreation{}, err
+		}
+		name = classifyName(nameEntry, held, creationOwner(key, plan))
+		action = decideCreation(state, entryResolve, name)
 	}
-	owner := directory.Owner(key + "/" + plan.ID)
-	entry, held, err := s.cfg.Names.Lookup(ctx, plan.Name)
-	if err != nil {
-		return RoleCreation{}, err
-	}
-	if held && entry.Owner == owner {
-		switch entry.State {
-		case directory.StateCommitted:
+	switch action {
+	case actResolveRelease:
+	case actRefuseConflict:
+		return RoleCreation{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
+	case actRefuseUnresolvable:
+		switch {
+		case state == slotAbsent:
+			return RoleCreation{}, fmt.Errorf("%w: %s holds no role slot on server %d", ErrNotResolvable, accountID, serverID)
+		case state == slotPublished:
+			return RoleCreation{}, fmt.Errorf("%w: %s already published role %d on server %d; nothing is pending",
+				ErrNotResolvable, accountID, slot.Value.PlayerID, serverID)
+		case state == slotLegacy:
+			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d predates creation identities; a "+
+				"published legacy role may depend on it, reconcile it offline (RR-20260929-19)", ErrNotResolvable, accountID, serverID)
+		case name == nameCommittedByPlan:
 			return RoleCreation{}, fmt.Errorf("%w: plan %s of %s on server %d already committed name %q; it "+
 				"completes by CreateRole with the same name", ErrNotResolvable, plan.ID, accountID, serverID, plan.Name)
 		default:
 			return RoleCreation{}, fmt.Errorf("%w: plan %s of %s on server %d holds a live reservation of %q "+
 				"until %s; an attempt may be in flight, retry after it lapses", ErrNotResolvable, plan.ID, accountID,
-				serverID, plan.Name, time.Unix(entry.ExpiresAtUnix, 0).UTC().Format(time.RFC3339))
+				serverID, plan.Name, time.Unix(nameEntry.ExpiresAtUnix, 0).UTC().Format(time.RFC3339))
 		}
+	default:
+		return RoleCreation{}, fmt.Errorf("account: creation table answered %d for slot %d, name %d", action, state, name)
 	}
 	nowUnix := s.cfg.Now().Unix()
 	_, _, err = s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {

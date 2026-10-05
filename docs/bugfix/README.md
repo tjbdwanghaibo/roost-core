@@ -172,8 +172,8 @@
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
 | [RR-20261005-NC-52](RR-20261005-NC-52.md) | RedisStore.Update 输掉 CAS 后退避再重读 | 已修复，未发版 |
-| [RR-20261005-NC-51](RR-20261005-NC-51.md) | `windowKeyProblem` 同时约束已确认 Keys 与 Opening，坏条目跳过保留并计数 | 已修复，未发版 |
-| [RR-20261005-NC-50](RR-20261005-NC-50.md) | 建角补偿失败经 `compensated` 计 `rollback.failed` | 已修复，未发版 |
+| [RR-20261005-NC-51](RR-20261005-NC-51.md) | `windowKeyProblem` 同时约束已确认 Keys 与 Opening，坏条目跳过保留并计数；B9 补修：读窗口条目统一入口 `readWindowEntries` + 持有方修复入口 | 已修复（含残余补修，未发版） |
+| [RR-20261005-NC-50](RR-20261005-NC-50.md) | 建角补偿失败经 `compensated` 计 `rollback.failed`；B9 补修：`plan_released` 只在本次真的删掉时计 | 已修复（含残余补修，未发版） |
 | [RR-20261001-06](RR-20261001-06.md#复核后的补修2026-10-05) | 换名请求用同一判死证明释放死计划 | 已修复（含残余补修，未发版） |
 
 **10-05 N01 / N06-S4 审查：RR-20261005-01 已修复，未发版。** game-demo activity 在启动时按键名拒绝重复 sid、超出 int32、超过一次 `Live` 上限的 `activity.game_sids`（修前启动成功、此后每个窗口被拒）。[审查运行记录](../review/REVIEW-2026-10-05-n01s4.md)

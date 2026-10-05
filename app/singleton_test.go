@@ -1073,6 +1073,53 @@ func TestSingletonReleasesOnlyAfterEveryModStopped(t *testing.T) {
 	}
 }
 
+// C5（维护者决定 2026-10-06）：停机中的进程仍算活。Service.Shutdown 与各 Mod Stop 期间查 Live 都得到
+// 本 sid（键在、值是自己的），直到全部 Mod 停完、Release 之后键才不在。没有“停机中”的中间值。
+func TestSingletonLiveCountsAStoppingProcessUntilRelease(t *testing.T) {
+	shared := &singletonProbeMod{name: "probe_shared"}
+	service := &singletonProbeMod{name: "probe_service"}
+	h := newSingletonHarness(t, []Mod{shared}, []Mod{service})
+	type observation struct {
+		sids  []int32
+		err   error
+		value []byte
+	}
+	var mu sync.Mutex
+	seen := map[string]observation{}
+	observe := func(phase string) {
+		live := MustLookup[SingletonLiveness](h.svc.registry, ModSingleton)
+		sids, err := live.Live(context.Background(), "game", []int32{1000, 1001})
+		mu.Lock()
+		defer mu.Unlock()
+		seen[phase] = observation{sids: sids, err: err, value: h.store.value(testSingletonKey)}
+	}
+	h.svc.onShutdown = func(context.Context) error { observe("service shutdown"); return nil }
+	service.onStop = func() { observe("service mod stop") }
+	shared.onStop = func() { observe("shared mod stop") }
+	result := h.start()
+	h.awaitServed(t, result)
+	mine := h.store.value(testSingletonKey)
+	mustBeMine(t, mine)
+	if err := h.stop(t, result); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, phase := range []string{"service shutdown", "service mod stop", "shared mod stop"} {
+		got, ok := seen[phase]
+		if !ok {
+			t.Fatalf("Live was not observed during %s", phase)
+		}
+		if got.err != nil || len(got.sids) != 1 || got.sids[0] != 1000 {
+			t.Fatalf("Live during %s = %v, %v; a stopping process holds the lock and counts as live", phase, got.sids, got.err)
+		}
+		if !bytes.Equal(got.value, mine) {
+			t.Fatalf("during %s the key held %q, want this process's unchanged value %q", phase, got.value, mine)
+		}
+	}
+	if h.store.value(testSingletonKey) != nil {
+		t.Fatal("key still present after a clean shutdown: Live would keep counting a stopped process")
+	}
+}
+
 // hangingSingletonMod 的 StopWithContext 一直挂到用例结束。
 type hangingSingletonMod struct {
 	name    ModName

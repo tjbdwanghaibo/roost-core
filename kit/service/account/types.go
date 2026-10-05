@@ -310,9 +310,11 @@ type Slot struct {
 	//
 	// A pending plan leaves the slot by one of three doors, all identity- and
 	// version-fenced deletes: a definite pre-admission refusal (name taken,
-	// foreign allocator id), a same-name retry that finds the name COMMITTED
-	// to another owner (the plan can never commit it, RR-20261001-06), or an
-	// operator's Admin.ResolvePendingCreation.
+	// foreign allocator id), a create request — same name or another — that
+	// finds the name COMMITTED to another owner (the plan can never commit
+	// it, RR-20261001-06 and its residual), or an operator's
+	// Admin.ResolvePendingCreation. Which door applies is the creation table
+	// (decideCreation, B9).
 	Creation RoleCreation `json:"creation,omitempty"`
 }
 

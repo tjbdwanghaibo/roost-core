@@ -823,6 +823,11 @@ type Window struct {
 	// RefusedOpens counts opens rejected because the window was full — the
 	// backlog signal an operator needs to see before it turns into a stall.
 	RefusedOpens uint64 `json:"refused_opens"`
+	// AdminNote / AdminActionAtUnix record the last operator repair
+	// (Admin.RemoveMalformedWindowEntry): who looks at the window next can
+	// see that an entry was removed by hand, and why.
+	AdminNote         string `json:"admin_note,omitempty"`
+	AdminActionAtUnix int64  `json:"admin_action_at_unix,omitempty"`
 }
 
 // OpeningEntry is a window entry whose activity record is not yet confirmed.

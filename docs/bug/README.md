@@ -168,8 +168,8 @@
 | [RR-20261005-NC-111](RR-20261005-NC-111.md) | P2 skill Cancel / Interrupt / Release 中途出错，cast 半终止并永久占住施法者 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-110](RR-20261005-NC-110.md) | P2 skill 启动失败复用 cast ID 却留下排程任务，旧任务落到新 cast、checkpoint 无法恢复 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-52](RR-20261005-NC-52.md) | P2 versionstore RedisStore.Update 退避后用旧值重试，伪 ErrConflict | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-51](RR-20261005-NC-51.md) | P3 activity sweep 不校验已确认 Keys，跨组写与 Delivering 永久残留 | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-50](RR-20261005-NC-50.md) | P3 account 建角补偿失败不计 `rollback.failed` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-51](RR-20261005-NC-51.md) | P3 activity sweep 不校验已确认 Keys，跨组写与 Delivering 永久残留（B9 补修：Delivering / PendingActivities / RetireDelivered 经统一入口） | 已修复（含残余补修，未发版） |
+| [RR-20261005-NC-50](RR-20261005-NC-50.md) | P3 account 建角补偿失败不计 `rollback.failed`（B9 补修：并发释放同一死计划 `plan_released` 计两次） | 已修复（含残余补修，未发版） |
 | [RR-20261001-06 残余](RR-20261001-06.md#复核后的补修2026-10-05) | P2 死建角计划只在同名重试时释放，换名永远 ErrRoleLimit | 已修复（含残余补修，未发版） |
 
 **10-05 N01 App singleton 增量 + N06-S4 global / App 替代：RR-20261005-01 P2 已修复，未发版。** 单实例锁状态机、`run` 退出路径、`OnFail`、kitredis 后端与生成器装配本轮无新确认缺陷；activity 候选集含重复 sid 或超过 `Live` 单次上限时每个窗口都开不出来。[本轮](../review/REVIEW-2026-10-05-n01s4.md)

@@ -3,12 +3,15 @@ package activity
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 )
 
-// Admin is the operator surface: the one thing a human can do about a result
-// delivery the automatic paths have given up on.
+// Admin is the operator surface: what a human can do about state the
+// automatic paths have given up on — a result delivery whose attempts are
+// exhausted, a participant's stuck progress proofs, and (B9) window entries
+// written by something other than this package, which the sweep only skips.
 //
 // # Why this exists
 //
@@ -48,6 +51,25 @@ type Admin interface {
 	// score again before the entries expire. Use it once the ledger is
 	// writable again.
 	ReconcileProgress(ctx context.Context, key Key, participantID string, note string) (participant Participant, err error)
+
+	// MalformedWindowEntries lists the entries of groupID's stored window
+	// the sweep skips: a key that is invalid or belongs to another group, in
+	// any of the three lists, and an Opening entry whose creation plan cannot
+	// be executed. Nothing in this package writes such an entry and nothing
+	// removes one automatically (B9, NC-42, NC-51): this is how an operator
+	// finds them, the sweep's counters say only that they exist.
+	MalformedWindowEntries(ctx context.Context, groupID string) (entries []MalformedWindowEntry, err error)
+
+	// RemoveMalformedWindowEntry removes one malformed entry — every copy of
+	// key in that list of groupID's window — and records the note on the
+	// window. It refuses a healthy entry with ErrStatus: that would release a
+	// pending slot or stop a delivery from being swept, which is not a
+	// repair. It returns how many copies were removed.
+	//
+	// Removing an Opening entry gives up its slot. If the activity it planned
+	// may still be created by a slow opener, check LookupActivity first: an
+	// activity whose window entry is gone is never swept.
+	RemoveMalformedWindowEntry(ctx context.Context, groupID string, list WindowList, key Key, note string) (removed int, err error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. It is stored on the dispatch and
@@ -211,6 +233,102 @@ func (s *Service) ReconcileProgress(ctx context.Context, key Key, participantID 
 	}
 	s.report.Accepted("admin.reconcile_progress")
 	return result, nil
+}
+
+// MalformedWindowEntries implements Admin.
+func (s *Service) MalformedWindowEntries(ctx context.Context, groupID string) ([]MalformedWindowEntry, error) {
+	if strings.TrimSpace(groupID) == "" {
+		return nil, fmt.Errorf("%w: group id is empty", ErrInvalid)
+	}
+	window, found, err := s.cfg.Windows.Get(ctx, groupID)
+	if err != nil || !found {
+		return nil, err
+	}
+	return storedEntryProblems(groupID, window.Value), nil
+}
+
+// storedEntryProblems is readWindowEntries' malformed list plus the usable
+// Opening entries whose plan cannot be executed (openingIntentProblem): the
+// reader leaves a plan alone because an entry whose activity exists is
+// confirmed whatever its plan says, but for an operator it is still corrupt.
+// A legacy entry with no plan is not listed: the sweep reclaims it.
+func storedEntryProblems(groupID string, stored Window) []MalformedWindowEntry {
+	entries := readWindowEntries(groupID, stored)
+	out := entries.malformed
+	for _, entry := range entries.usable.Opening {
+		if entry.Intent == nil {
+			continue
+		}
+		if reason := openingIntentProblem(entry, groupID); reason != "" {
+			out = append(out, MalformedWindowEntry{List: WindowOpening, Key: entry.Key, Reason: reason})
+		}
+	}
+	return out
+}
+
+// RemoveMalformedWindowEntry implements Admin.
+//
+// Like ReopenDispatch, every decision is inside the compare-and-set: whether
+// the entry is still there and still malformed is judged on the value being
+// replaced, not on an earlier read, so an entry repaired or removed by
+// someone else in between is answered ErrMissing or ErrStatus, never removed
+// twice or removed healthy.
+func (s *Service) RemoveMalformedWindowEntry(ctx context.Context, groupID string, list WindowList, key Key, note string) (int, error) {
+	if strings.TrimSpace(groupID) == "" {
+		return 0, fmt.Errorf("%w: group id is empty", ErrInvalid)
+	}
+	if !list.valid() {
+		return 0, fmt.Errorf("%w: window list %q is not one of keys, opening, delivering", ErrInvalid, list)
+	}
+	note, err := validateAdminNote(note)
+	if err != nil {
+		return 0, err
+	}
+	nowUnix := s.cfg.Now().Unix()
+	var removed int
+	_, _, err = s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
+		removed = 0
+		if !found {
+			return current, false, fmt.Errorf("%w: group %q has no window", ErrMissing, groupID)
+		}
+		malformed := false
+		for _, problem := range storedEntryProblems(groupID, current) {
+			if problem.List == list && problem.Key == key {
+				malformed = true
+				break
+			}
+		}
+		next := current.clone()
+		switch list {
+		case WindowKeys:
+			next.Keys = slices.DeleteFunc(next.Keys, func(k Key) bool { return k == key })
+			removed = len(current.Keys) - len(next.Keys)
+		case WindowOpening:
+			next.Opening = slices.DeleteFunc(next.Opening, func(e OpeningEntry) bool { return e.Key == key })
+			removed = len(current.Opening) - len(next.Opening)
+		case WindowDelivering:
+			next.Delivering = slices.DeleteFunc(next.Delivering, func(k Key) bool { return k == key })
+			removed = len(current.Delivering) - len(next.Delivering)
+		}
+		if removed == 0 {
+			return current, false, fmt.Errorf("%w: %s is not in the %s list of group %q", ErrMissing, key, list, groupID)
+		}
+		if !malformed {
+			removed = 0
+			return current, false, fmt.Errorf("%w: %s in the %s list of group %q is a healthy entry; removing it is "+
+				"not a repair", ErrStatus, key, list, groupID)
+		}
+		next.AdminNote = note
+		next.AdminActionAtUnix = nowUnix
+		return next, true, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	s.report.Accepted("admin.remove_malformed_window_entry")
+	slog.Warn("activity: operator removed a malformed window entry", "group_id", groupID, "list", list,
+		"activity_id", key.ActivityID, "phase", key.Phase, "key_group_id", key.GroupID, "removed", removed, "note", note)
+	return removed, nil
 }
 
 // validateAdminNote requires a reason and bounds it.

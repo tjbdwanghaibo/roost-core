@@ -13,72 +13,96 @@ import (
 // createRole uses the slot itself as the durable intent. Concurrent retries
 // share one plan and one player ID; no side effect lives inside a CAS callback.
 //
-// A request for a different name than the pending plan's is refused with
-// ErrRoleLimit while that plan can still complete. Once the plan's name is
-// committed to another owner it never can, and the slot is released here
-// too, not only on a same-name retry: the refusal never tells the client the
-// pending name, so a player who simply picks another name is the ordinary
-// path to this state (RR-20261001-06 残余).
+// What to do with the slot it finds is decided by the creation table
+// (decideCreation, B9), the same one Admin.ResolvePendingCreation reads: a
+// request for a different name than the pending plan's is refused with
+// ErrRoleLimit while that plan can still complete, and releases the slot once
+// the plan's name is committed to another owner — the refusal never tells the
+// client the pending name, so a player who simply picks another name is the
+// ordinary path to that state (RR-20261001-06 残余).
 func (s *Service) createRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
 	key := slotKeyFor(accountID, serverID)
 	// At most one release per call: a second pass that still meets another
 	// name met a plan some other request just made, which is a live one.
-	for released := false; ; released = true {
-		slot, err := s.creationSlot(ctx, key, accountID, serverID, name)
+	released := false
+	for {
+		slot, found, err := s.cfg.Slots.Get(ctx, key)
 		if err != nil {
 			return Role{}, err
 		}
-		if slot.Value.AccountID != accountID || slot.Value.ServerID != serverID {
-			return Role{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
-		}
-		if slot.Value.PlayerID != 0 {
-			if slot.Value.Creation.ID != "" && slot.Value.Creation.Name == name {
-				stored, found, err := s.cfg.Roles.Get(ctx, slot.Value.PlayerID)
-				if err != nil {
-					return Role{}, err
-				}
-				if !found || stored.Value.CreationID != slot.Value.Creation.ID {
-					return Role{}, fmt.Errorf("%w: completed creation has no matching role", ErrConflict)
-				}
-				return stored.Value.clone(), nil
+		state := classifySlot(slot, found, accountID, serverID)
+		action := decideCreation(state, creationEntryFor(slot.Value, name), nameNotRead)
+		if action == actMakePlan {
+			// The stored plan — this request's, or a concurrent one's that won
+			// the insert — is what the rest of the table decides on.
+			if slot, err = s.makeCreationPlan(ctx, key, accountID, serverID, name); err != nil {
+				return Role{}, err
 			}
-			s.report.Refused("create_role", "role_limit")
-			return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
+			state = classifySlot(slot, true, accountID, serverID)
+			action = decideCreation(state, creationEntryFor(slot.Value, name), nameNotRead)
 		}
-		plan := slot.Value.Creation
-		if plan.ID == "" || plan.PlayerID == 0 {
-			return Role{}, fmt.Errorf("%w: legacy empty slot requires reconciliation", ErrConflict)
+		entry := creationEntryFor(slot.Value, name)
+		var nameAt nameState
+		if action == actReadName {
+			if released {
+				// The plan that took the released slot is a fresh one.
+				return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
+			}
+			entryInDirectory, held, err := s.cfg.Names.Lookup(ctx, slot.Value.Creation.Name)
+			if err != nil {
+				return Role{}, err
+			}
+			nameAt = classifyName(entryInDirectory, held, creationOwner(key, slot.Value.Creation))
+			action = decideCreation(state, entry, nameAt)
 		}
-		if plan.Name == name {
+		switch action {
+		case actReturnRole:
+			stored, found, err := s.cfg.Roles.Get(ctx, slot.Value.PlayerID)
+			if err != nil {
+				return Role{}, err
+			}
+			if !found || stored.Value.CreationID != slot.Value.Creation.ID {
+				return Role{}, fmt.Errorf("%w: completed creation has no matching role", ErrConflict)
+			}
+			return stored.Value.clone(), nil
+		case actResume:
 			return s.resumeRoleCreation(ctx, key, slot)
-		}
-		if released {
+		case actReleaseAndRetry:
+			plan := slot.Value.Creation
+			// 与同名重试同一个证明：名字已 committed 给别的 owner，这个计划再也不能提交名字、
+			// 发布角色；只被 reserved（会过期）或仍归本计划时表答 ErrRoleLimit，slot 保留。
+			done, err := s.releaseCreationSlot(ctx, key, slot, planDead(nameAt))
+			if err := s.compensated(err); err != nil {
+				return Role{}, fmt.Errorf("account: release the pending plan whose name %q was committed elsewhere: %w", plan.Name, err)
+			}
+			if done {
+				s.report.Dropped("create_role.plan_released", 1)
+			}
+			released = true
+			continue
+		case actRefuseRoleLimit:
+			if state == slotPublished {
+				s.report.Refused("create_role", "role_limit")
+				return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
+			}
 			return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
+		case actRefuseConflict:
+			if state == slotForeign {
+				return Role{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
+			}
+			return Role{}, fmt.Errorf("%w: legacy empty slot requires reconciliation", ErrConflict)
+		default:
+			return Role{}, fmt.Errorf("account: creation table answered %d for slot %d, entry %d, name %d", action, state, entry, nameAt)
 		}
-		// 与同名重试同一个证明：名字已 committed 给别的 owner，这个计划再也不能提交名字、
-		// 发布角色；只被 reserved（会过期）或仍归本计划时保留 slot。
-		dead, err := s.nameCommittedElsewhere(ctx, plan.Name, creationOwner(key, plan))
-		if err != nil {
-			return Role{}, err
-		}
-		if !dead {
-			return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
-		}
-		if err := s.compensated(s.releaseCreationSlot(ctx, key, slot, true)); err != nil {
-			return Role{}, fmt.Errorf("account: release the pending plan whose name %q was committed elsewhere: %w", plan.Name, err)
-		}
-		s.report.Dropped("create_role.plan_released", 1)
 	}
 }
 
-// creationSlot reads the slot, creating a fresh plan for name when there is
-// none. Even an initial Create reply can be lost; the persisted plan is
-// enough for the same request to recover on a later call without deleting it.
-func (s *Service) creationSlot(ctx context.Context, key, accountID string, serverID int32, name string) (versionstore.Versioned[Slot], error) {
-	slot, found, err := s.cfg.Slots.Get(ctx, key)
-	if err != nil || found {
-		return slot, err
-	}
+// makeCreationPlan inserts a fresh plan for name into an absent slot and
+// returns the stored slot — this plan, or the one a concurrent request
+// inserted first. Even an initial Create reply can be lost; the persisted
+// plan is enough for the same request to recover on a later call without
+// deleting it.
+func (s *Service) makeCreationPlan(ctx context.Context, key, accountID string, serverID int32, name string) (versionstore.Versioned[Slot], error) {
 	playerID, err := s.cfg.Allocator.Allocate(ctx, serverID)
 	if err != nil {
 		return versionstore.Versioned[Slot]{}, err
@@ -91,7 +115,7 @@ func (s *Service) creationSlot(ctx context.Context, key, accountID string, serve
 	if err != nil || created {
 		return slot, err
 	}
-	slot, found, err = s.cfg.Slots.Get(ctx, key)
+	slot, found, err := s.cfg.Slots.Get(ctx, key)
 	if err != nil {
 		return versionstore.Versioned[Slot]{}, err
 	}
@@ -131,17 +155,16 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 			// An admitted plan whose lapsed reservation was merely RE-RESERVED
 			// by someone else keeps its slot: that reservation can expire and
 			// the plan can still complete. A name COMMITTED to another owner
-			// is final for this plan — Commit needs the token the entry now
-			// carries, and a committed entry leaves only by its owner's
-			// Release, which nothing here calls — so the plan can never
-			// publish, and holding the slot would block this account on this
-			// server for good (RR-20261001-06).
-			dead, lookupErr := s.nameCommittedElsewhere(ctx, plan.Name, owner)
-			cleanup := errors.Join(lookupErr, s.compensated(s.releaseCreationSlot(ctx, key, slot, dead)))
-			if dead && cleanup == nil {
-				s.report.Dropped("create_role.plan_released", 1)
+			// is final for this plan, so holding the slot would block this
+			// account on this server for good (RR-20261001-06). The creation
+			// table says which; a failed read is judged on the weakest fact
+			// the refusal proves — someone else holds the name.
+			name := nameReservedElsewhere
+			entry, held, lookupErr := s.cfg.Names.Lookup(ctx, plan.Name)
+			if lookupErr == nil {
+				name = classifyName(entry, held, owner)
 			}
-			return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), cleanup)
+			return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), lookupErr, s.refuseResumedName(ctx, key, slot, name))
 		}
 		return Role{}, err
 	}
@@ -158,7 +181,8 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 		}
 	}
 	if claim.ExpiresAt.IsZero() && (plan.Claim.Token == "" || claim.Token != plan.Claim.Token) {
-		return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), s.compensated(s.releaseCreationSlot(ctx, key, slot, false)))
+		// Committed under our owner but a token this plan never admitted.
+		return Role{}, errors.Join(fmt.Errorf("%w: %q", ErrNameTaken, plan.Name), s.refuseResumedName(ctx, key, slot, nameCommittedByPlan))
 	}
 	admitted, _, err := s.cfg.Slots.Update(ctx, key, func(current Slot, found bool) (Slot, bool, error) {
 		if !found {
@@ -202,7 +226,8 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	if stored.Value.CreationID != plan.ID || stored.Value.AccountID != role.AccountID || stored.Value.ServerID != role.ServerID || stored.Value.Name != role.Name {
 		// A definitely occupied foreign ID cannot be our uncertain Create.
 		// Cancel is token-fenced; slot removal is fenced by the creation identity.
-		cleanup := errors.Join(s.compensated(s.cfg.Names.Cancel(ctx, claim)), s.compensated(s.releaseCreationSlot(ctx, key, admitted, true)))
+		_, releaseErr := s.releaseCreationSlot(ctx, key, admitted, true)
+		cleanup := errors.Join(s.compensated(s.cfg.Names.Cancel(ctx, claim)), s.compensated(releaseErr))
 		return Role{}, errors.Join(fmt.Errorf("%w: player id %d is already in use", ErrConflict, role.PlayerID), cleanup)
 	}
 	role = stored.Value.clone()
@@ -235,32 +260,47 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 	return role.clone(), nil
 }
 
+// refuseResumedName is the table's answer once a same-name resume was
+// refused its name: release the slot when the plan is dead or was never
+// admitted, keep it otherwise. A dead plan actually released is counted as
+// create_role.plan_released; a failed release as rollback.failed (NC-50).
+func (s *Service) refuseResumedName(ctx context.Context, key string, slot versionstore.Versioned[Slot], name nameState) error {
+	state := classifySlot(slot, true, slot.Value.AccountID, slot.Value.ServerID)
+	if decideCreation(state, entrySameNameRefused, name) != actReleaseRefuseNameTaken {
+		return nil
+	}
+	released, err := s.releaseCreationSlot(ctx, key, slot, planDead(name))
+	if err != nil {
+		return s.compensated(err)
+	}
+	if released && planDead(name) {
+		s.report.Dropped("create_role.plan_released", 1)
+	}
+	return nil
+}
+
 // releaseCreationSlot only compensates a definite pre-role refusal, or a plan
 // that is provably dead — a foreign allocator ID, or a name committed to
 // another owner — in which case admission no longer protects the slot.
 // Ordinary/unknown storage failures never enter here.
-func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot versionstore.Versioned[Slot], planDead bool) error {
+//
+// released reports whether THIS call deleted the slot. A delete fenced out
+// because the slot already moved — another request released it first, or
+// re-admitted it — is not an error and not a release: two different-name
+// requests racing on one dead plan used to count plan_released twice for one
+// delete (N06 S3 observation 4).
+func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot versionstore.Versioned[Slot], planDead bool) (released bool, err error) {
 	deleter, ok := s.cfg.Slots.(versionstore.ConditionalDeleter[string, Slot])
 	if !ok {
-		return fmt.Errorf("account: slot store must support atomic identity-checked DeleteIf")
+		return false, fmt.Errorf("account: slot store must support atomic identity-checked DeleteIf")
 	}
-	err := deleter.DeleteIf(ctx, key, slot, func(current Slot) bool {
+	err = deleter.DeleteIf(ctx, key, slot, func(current Slot) bool {
 		return current.PlayerID == 0 && current.Creation.ID == slot.Value.Creation.ID && (planDead || !current.Creation.Admitted)
 	})
 	if errors.Is(err, versionstore.ErrVersionMismatch) {
-		return nil
+		return false, nil
 	}
-	return err
-}
-
-// nameCommittedElsewhere reports whether name is permanently held by an owner
-// other than ours. A reservation, ours or anyone's, is not that: it lapses.
-func (s *Service) nameCommittedElsewhere(ctx context.Context, name string, owner directory.Owner) (bool, error) {
-	entry, found, err := s.cfg.Names.Lookup(ctx, name)
-	if err != nil {
-		return false, err
-	}
-	return found && entry.State == directory.StateCommitted && entry.Owner != owner, nil
+	return err == nil, err
 }
 
 // Pending roles are not playable. Legacy published roles have no CreationID.

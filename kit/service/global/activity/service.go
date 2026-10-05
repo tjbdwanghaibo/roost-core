@@ -145,15 +145,15 @@ type Service struct {
 	deliveryMu     sync.Mutex
 	deliveryCursor map[string]Key
 
-	// openingMu / malformedOpening remember which opening entries the sweep
-	// has already reported as unusable, so the report is written once when
+	// malformedMu / malformed remember which stored window entries have
+	// already been reported as unusable, so the report is written once when
 	// the problem appears and once when it is gone rather than every tick
-	// (RR-20261001-09). The Server is generated code and cannot carry this.
-	openingMu sync.Mutex
+	// (RR-20261001-09, NC-51, B9; noteMalformed). The Server is generated
+	// code and cannot carry this.
+	malformedMu sync.Mutex
 	// 按所属窗口分组；坏条目的 Key.GroupID 本身可能不可信，不能用它决定日志清理归属。
-	// 已确认 Keys 里的坏条目（NC-51）与 Opening 分开记，同一个键可能同时出现在两处。
-	malformedOpening   map[string]map[Key]string
-	malformedConfirmed map[string]map[Key]string
+	// 同一个键可能同时坏在两个列表里，按（列表，键）分开记。
+	malformed map[string]map[malformedID]string
 
 	cfg    Config
 	report servicemetrics.Sink
@@ -387,12 +387,14 @@ func (s *Service) PendingActivities(ctx context.Context, groupID string, limit i
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	window, found, err := s.cfg.Windows.Get(ctx, groupID)
+	// B9：经统一入口读，坏条目（别的组的键、不合法的键）不交给调用方——game 拿它去查只会查到
+	// 别的组的活动。它们由 sweep 计数并保留给运维。
+	entries, found, err := s.loadWindowEntries(ctx, groupID)
 	if err != nil || !found {
 		return nil, err
 	}
-	keys := window.Value.clone().Keys
-	for _, entry := range window.Value.Opening {
+	keys := entries.usable.Keys
+	for _, entry := range entries.usable.Opening {
 		keys = append(keys, entry.Key)
 	}
 	sortKeys(keys)
@@ -412,11 +414,15 @@ func (s *Service) DeliveringActivities(ctx context.Context, groupID string, limi
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	window, found, err := s.cfg.Windows.Get(ctx, groupID)
+	// B9：经统一入口读。坏条目不交出（否则 sweep 会读别的组的活动、按键自身的 GroupID 写别的组的
+	// 窗口，而本组这一条永远移不走），每次计 sweep.delivering_key_malformed 并保留给运维。
+	// 只有 sweep 调这个方法（不在 Coordinator 上），所以这里就是它的 tick。
+	entries, found, err := s.loadWindowEntries(ctx, groupID)
 	if err != nil || !found {
 		return nil, err
 	}
-	keys := window.Value.clone().Delivering
+	s.noteMalformed(groupID, WindowDelivering, entries.in(WindowDelivering), nil)
+	keys := entries.usable.Delivering
 	sortKeys(keys)
 	if len(keys) <= limit {
 		return keys, nil
@@ -446,11 +452,22 @@ func (s *Service) DeliveringActivities(ctx context.Context, groupID string, limi
 
 // RetireDelivered heals and, once every dispatch of a complete activity is
 // terminal (acked or exhausted), drops it from the group's Delivering list.
-// It reports whether the key was retired. Healing is ensureDispatches: a
-// dispatch whose Create failed after the activity left the aggregation
+// It reports whether THIS call removed the key. Healing is ensureDispatches:
+// a dispatch whose Create failed after the activity left the aggregation
 // window has no other way back.
+//
+// The key must be listed in its own group's Delivering, read through the one
+// window entry reader (B9). A key that is not listed — already retired by an
+// earlier call, or never there — is answered false without reading the
+// activity or writing any window; it used to be answered true, which let a
+// caller holding a foreign entry believe it had retired something (N06 S3
+// observation 4).
 func (s *Service) RetireDelivered(ctx context.Context, key Key) (bool, error) {
 	if err := key.Validate(); err != nil {
+		return false, err
+	}
+	entries, found, err := s.loadWindowEntries(ctx, key.GroupID)
+	if err != nil || !found || !entries.usable.delivering(key) {
 		return false, err
 	}
 	activity, found, err := s.LookupActivity(ctx, key)
@@ -474,8 +491,10 @@ func (s *Service) RetireDelivered(ctx context.Context, key Key) (bool, error) {
 			}
 		}
 	}
+	var retired bool
 	_, _, err = s.cfg.Windows.Update(ctx, key.GroupID, func(current Window, found bool) (Window, bool, error) {
-		if !found || !current.delivering(key) {
+		retired = false
+		if !found || !readWindowEntries(key.GroupID, current).usable.delivering(key) {
 			return current, false, nil
 		}
 		next := current.clone()
@@ -486,9 +505,13 @@ func (s *Service) RetireDelivered(ctx context.Context, key Key) (bool, error) {
 			}
 		}
 		next.Delivering = cloneActivityKeys(kept)
+		retired = true
 		return next, true, nil
 	})
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	return retired, nil
 }
 
 // --- notification and aggregation advance ---
@@ -734,7 +757,10 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	window, found, err := s.cfg.Windows.Get(ctx, groupID)
+	// B9：已确认 Keys 与 Opening 都经统一入口读——键合法且属于本组才读写 Activities、才能进本组
+	// Delivering（RR-20261001-09 残余、NC-51）。坏条目跳过并保留给运维，不自动剪掉：剪掉的依据是
+	// “记录不在了”，而对一个不该在这里的键读出的结论不属于本组。
+	entries, found, err := s.loadWindowEntries(ctx, groupID)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -750,7 +776,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		confirm []Key
 	)
 	nowUnix := s.cfg.Now().Unix()
-	snapshot := window.Value.clone()
+	snapshot := entries.usable
 	batch := pendingScanBatch(snapshot)
 	selected := make(map[Key]struct{}, len(batch))
 	for _, key := range batch {
@@ -786,16 +812,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			due = append(due, candidate{key: key, deadline: activity.GraceDeadlineUnix})
 		}
 	}
-	// NC-51：确认条目与 Opening 守同一条边界——键合法且属于本组才读写 Activities、
-	// 才能进本组 Delivering。坏条目跳过并保留给运维，不自动剪掉：剪掉的依据是
-	// “记录不在了”，而对一个不该在这里的键读出的结论不属于本组。
-	malformedConfirmed := make(map[Key]string)
 	for _, key := range keys {
 		if _, scan := selected[key]; !scan {
-			continue
-		}
-		if reason := windowKeyProblem(key, groupID); reason != "" {
-			malformedConfirmed[key] = reason
 			continue
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, key)
@@ -834,17 +852,15 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	//     the rest of the group has been served, not instead of it.
 	openingGraceUnix := int64(s.cfg.OpeningGrace / time.Second)
 	var (
-		reclaim   []Key
-		malformed = make(map[Key]string)
-		helpErr   error
+		reclaim []Key
+		// Opening entries reported this tick: a bad key (from the reader,
+		// always visible) or a plan this code cannot execute (judged below,
+		// only for entries the bounded batch reached).
+		malformedOpening = entries.in(WindowOpening)
+		helpErr          error
 	)
 	for _, entry := range snapshot.Opening {
 		if _, scan := selected[entry.Key]; !scan {
-			continue
-		}
-		// RR-20261001-09 残余：键合法且属于本组才可读写 Activities/其他窗口。
-		if reason := windowKeyProblem(entry.Key, groupID); reason != "" {
-			malformed[entry.Key] = reason
 			continue
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, entry.Key)
@@ -860,7 +876,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 				continue
 			}
 			if reason := openingIntentProblem(entry, groupID); reason != "" {
-				malformed[entry.Key] = reason
+				malformedOpening = append(malformedOpening, MalformedWindowEntry{List: WindowOpening, Key: entry.Key, Reason: reason})
 				continue
 			}
 			current, _, err = s.cfg.Activities.Create(ctx, entry.Key, entry.Intent.clone())
@@ -874,8 +890,11 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		confirm = append(confirm, entry.Key)
 		classify(entry.Key, current.Value)
 	}
-	s.noteMalformedOpenings(groupID, snapshot, selected, malformed)
-	s.noteMalformedConfirmed(groupID, snapshot, selected, malformedConfirmed)
+	s.noteMalformed(groupID, WindowKeys, entries.in(WindowKeys), nil)
+	s.noteMalformed(groupID, WindowOpening, malformedOpening, func(key Key) bool {
+		_, scanned := selected[key]
+		return !scanned && snapshot.openingIndex(key) >= 0
+	})
 	for _, key := range confirm {
 		if err := s.confirmWindow(ctx, key); err != nil {
 			return nil, err
@@ -964,87 +983,6 @@ func windowKeyProblem(key Key, groupID string) string {
 		return "entry key belongs to a different group"
 	}
 	return ""
-}
-
-// noteMalformedConfirmed is noteMalformedOpenings for confirmed Keys (NC-51):
-// counted every tick, logged when an entry first appears and once when it is
-// gone or usable again, never on every sweep.
-func (s *Service) noteMalformedConfirmed(groupID string, snapshot Window, scanned map[Key]struct{}, malformed map[Key]string) {
-	s.report.Dropped("sweep.window_key_malformed", len(malformed))
-	s.openingMu.Lock()
-	defer s.openingMu.Unlock()
-	if s.malformedConfirmed == nil {
-		s.malformedConfirmed = make(map[string]map[Key]string)
-	}
-	known := s.malformedConfirmed[groupID]
-	if known == nil {
-		known = make(map[Key]string)
-		s.malformedConfirmed[groupID] = known
-	}
-	for key, reason := range malformed {
-		if known[key] == reason {
-			continue
-		}
-		known[key] = reason
-		slog.Warn("activity: confirmed window key is malformed; entry skipped and kept until repaired",
-			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase, "reason", reason)
-	}
-	for key := range known {
-		if _, still := malformed[key]; still {
-			continue
-		}
-		if _, scan := scanned[key]; !scan && slices.Contains(snapshot.Keys, key) {
-			continue
-		}
-		delete(known, key)
-		slog.Info("activity: confirmed window key is usable again or the entry is gone",
-			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase)
-	}
-	if len(known) == 0 {
-		delete(s.malformedConfirmed, groupID)
-	}
-}
-
-// noteMalformedOpenings counts this tick's unusable opening plans and logs
-// each one when it first appears and once more when it is gone — repaired,
-// confirmed, or removed from the window — rather than on every sweep
-// (RR-20261001-09). A key outside this tick's bounded scan is left as it was:
-// not seeing it is not the same as seeing it healthy.
-func (s *Service) noteMalformedOpenings(groupID string, snapshot Window, scanned map[Key]struct{}, malformed map[Key]string) {
-	s.report.Dropped("sweep.opening_intent_malformed", len(malformed))
-	s.openingMu.Lock()
-	defer s.openingMu.Unlock()
-	if s.malformedOpening == nil {
-		s.malformedOpening = make(map[string]map[Key]string)
-	}
-	known := s.malformedOpening[groupID]
-	if known == nil {
-		known = make(map[Key]string)
-		s.malformedOpening[groupID] = known
-	}
-	for key, reason := range malformed {
-		if known[key] == reason {
-			continue
-		}
-		known[key] = reason
-		slog.Warn("activity: opening intent is malformed; entry skipped and its slot kept until repaired",
-			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase, "reason", reason)
-	}
-	for key := range known {
-		if _, still := malformed[key]; still {
-			continue
-		}
-		_, scan := scanned[key]
-		if snapshot.openingIndex(key) >= 0 && !scan {
-			continue
-		}
-		delete(known, key)
-		slog.Info("activity: opening intent is usable again or the entry is gone",
-			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase)
-	}
-	if len(known) == 0 {
-		delete(s.malformedOpening, groupID)
-	}
 }
 
 // pendingScanBatch bounds backend reads and rotates a legacy oversized

@@ -190,6 +190,7 @@ type SingletonLiveness interface {
 - **Redis Cluster**：各 sid 的键散在不同槽，单条 `MGET` 会报 `CROSSSLOT`。`kitredis` 的 `Get` 按键逐个 `GET`（单机走一次 pipeline，Cluster 由客户端按槽拆分），不要求 `key_prefix` 带 hash tag。
 - 能力名 `app.ModSingleton`，`run` 在 `NewRegistry` 之后、任何 Mod 之前登记，模块用 `app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)` 取得。`enabled=false` 时不登记。
 - “活”的含义是**进程持有锁**：从拿锁（任何 Mod Init 之前）到全部 Mod 停完、Release 为止；崩溃的进程最多再算 `ttl` 秒；卡住的进程键过期后不算。与 activity 原来的租约语义的差异见 §7.2。
+- **停机中的进程仍算活**（维护者决定 C5，2026-10-06，写进 `app/singleton.go` 的 `SingletonLiveness` 注释）：收到停机信号、`Service.Shutdown`、各 Mod Stop 期间键都在、值不变，到 Release 删键为止都算；停机不完整（不 Release）时算到键在 `ttl` 后过期。不引入“停机中”的中间值，活性只有锁这一个事实来源。对 activity 的影响：恰在停机那几秒开的窗口会把这个服算进 expected，它不会再 `NotifyPhase`，该窗口要等到宽限期（`activity.grace_window`）结束才完成。用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住（`Service.Shutdown`、服务 Mod Stop、共享 Mod Stop 三处查 `Live` 都得到本 sid，Release 后键不在）。
 - `serverType` 由调用方传入自己的 `server_type`（`run` 写进配置，`app/app.go:125`），所以同一部署里同一子命令的各个 sid 天然对得上；不同服务类型、同一 sid 的键因 `server_type` 段不同而不冲突。
 
 ---
@@ -320,7 +321,7 @@ singleton:
 - **语义差异**（`LiveGames` 现状，`kit/service/global/service.go:450-488`）：
   1. **按组过滤**：`LiveGames` 只要 `lease.GlobalGroupID == groupID`，并且 `checkLeaseBinding`（`:494-503`）要求租约的 `GameSID / RouteEpoch / GlobalSID / GlobalGroupID` 与当前路由绑定一致，过期路由的租约当作不活。`Live` 不知道组和路由。demo 里所有 game 都在启动时 `Bind` 到同一个 `gameactivity.GroupID`，静态绑定方案下路由也不迁移，所以结果一致；候选集合本身就是“本部署的 game”，组过滤是冗余的。若将来一个部署里有多个活动组，需要让 `activity.game_sids` 只列本组的 sid。
   2. **错误语义**：`LiveGames` 对每个候选调 `Resolve`，任一候选**没有路由绑定**会让整次调用报错（`checkLeaseBinding` 只吞 `ErrLeaseNotHolder`），窗口不开；`Live` 只看键，未绑定、未启动的 sid 简单地不算活。比现状宽容，方向是对的。
-  3. **“活”的时间段**：租约从 `Service.Init` 里 `AcquireLease` 起、到停机函数 `ReleaseLease` 止（停机最早阶段）；App 锁从任何 Mod Init 之前起、到全部 Mod 停完止。所以正在启动（含 DataEngine 重放）和正在优雅停机的进程也算活。启动中的进程会被等，它很快会上线并通知，可以接受；停机中的进程若恰在开窗时被算进 expected，这个窗口会等到宽限期结束（只影响那一个窗口，停机时长是秒级，概率低）。崩溃的进程最多算 15s（原来最多 30s），比现状好。
+  3. **“活”的时间段**：租约从 `Service.Init` 里 `AcquireLease` 起、到停机函数 `ReleaseLease` 止（停机最早阶段）；App 锁从任何 Mod Init 之前起、到全部 Mod 停完止。所以正在启动（含 DataEngine 重放）和正在优雅停机的进程也算活。启动中的进程会被等，它很快会上线并通知，可以接受；停机中的进程若恰在开窗时被算进 expected，这个窗口会等到宽限期结束（只影响那一个窗口，停机时长是秒级，概率低）。**维护者决定 C5（2026-10-06）：保持这个语义，写进 `Live` 契约（§3.6）。**崩溃的进程最多算 15s（原来最多 30s），比现状好。
   4. **跨 Redis**：`LiveGames` 经 global 服务查询，与 game 用不用同一个 Redis 无关；`Live` 读的是 App 锁所在的 Redis，要求同一部署的 game 进程共用一个 `redis.*` 与 `singleton.key_prefix`——生成的部署就是这样。
 - **kit `service/global` 的租约 API**（`AcquireLease` / `RenewLease` / `ReleaseLease` / `GameLease` / `LiveGames`）（**已作废**：按 §12 删除，第 3b 笔已实施，见 §13）：demo 不再使用。**推荐保留、不标弃用**，只在 kit service README 与 USER_GUIDE 里写明“生成的 game-demo 改用 App 单实例锁的 Live 查询，这组 API 留给需要经 global 服务跨 Redis 查询、或需要负载快照与路由世代的部署”。理由：它是框架服务对外的 RPC 接口，有负载快照（`RenewLease` 的 `load`）和路由世代校验，`Live` 不能完全替代；本次不删除。
 
@@ -414,7 +415,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - ~~没有实现，也没有跑演练~~：已实现（第 1～4 笔），§1.1 的时间线、§4 的 `flock` 互斥与“先重放后服务”已由第 5 笔真实进程演练验证（§13）。
 - ~~DataEngine 之前启动的 Mod 是否还有按 sid 的副作用~~：审查时已按生成的 game-demo bootstrap 逐个核对，结论见 §4（只有 NATS 非队列订阅造成的死信）。其他项目的 Mod 组合不同，第 1 笔提交在 USER_GUIDE 里写明“拿锁后、WAL `flock` 前启动的 Mod 不应有按 sid 的外部写”这条约定。
 - ~~systemd `TimeoutStartSec`、compose 健康检查时长~~：已核对，见 §6.3（systemd 是 `Type=simple`，不涉及；shell 部署 `HEALTH_ATTEMPTS` 与 compose `start_period` 需要调整）。
-- `Live` 的“停机中仍算活”会让恰在那一刻开的活动窗口等到宽限期（§7.2 差异 3），没有量化；实测若成问题，可让 App 在 `PhaseServiceStopping` 时把键的值改成“停机中”标记、`Live` 不计入（不改释放时机）。
+- ~~`Live` 的“停机中仍算活”会让恰在那一刻开的活动窗口等到宽限期（§7.2 差异 3），没有量化；实测若成问题，可让 App 在 `PhaseServiceStopping` 时把键的值改成“停机中”标记、`Live` 不计入（不改释放时机）。~~ 维护者决定 C5（2026-10-06）：保持现状，写进契约（§3.6）并用例钉住；“停机中”标记方案不做。
 - 生产部署里崩溃重启是否总在同一个 WAL 卷上，取决于部署方式；生成的 k8s 清单用 `volumeClaimTemplates`（`render_deploy.go:964`），其他部署方式不在本文保证范围内（§1.2）。
 
 ## 12. 全仓接管清单（维护者 2026-10-05：“所有这种都需要 app 接管”）
