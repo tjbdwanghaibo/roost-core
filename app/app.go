@@ -322,13 +322,14 @@ func (a *App) run(serverType ServiceName) error {
 	// --- Service lifecycle: Init → Serve ---
 	svc := entry.svc
 	slog.Info("service init", "service", svc.Name())
-	if err := svc.Init(a.registry); err != nil {
-		singletonReleasable = allStopped(
-			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
-			stopModsReverse(startedSharedMods, "mod stop"))
-		return fmt.Errorf("service %s init: %w", svc.Name(), err)
+	// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
+	// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同（RR-20261005-NC-193）。
+	startErr := svc.Init(a.registry)
+	if startErr != nil {
+		startErr = fmt.Errorf("service %s init: %w", svc.Name(), startErr)
+	} else {
+		startErr = startupFailure()
 	}
-	startErr := startupFailure()
 	if startErr == nil {
 		startErr = a.emitLifecycle(context.Background(), lifecycle.Event{
 			Phase:   lifecycle.PhaseServiceStarted,
@@ -337,11 +338,15 @@ func (a *App) run(serverType ServiceName) error {
 		})
 	}
 	if startErr != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if cleanupErr := svc.Shutdown(cleanupCtx); cleanupErr != nil {
-			startErr = errors.Join(startErr, fmt.Errorf("service %s cleanup after startup failure: %w", svc.Name(), cleanupErr))
+		stopped, cleanupErr := shutdownAfterStartupFailure(svc)
+		if cleanupErr != nil {
+			startErr = errors.Join(startErr, cleanupErr)
 		}
-		cleanupCancel()
+		if !stopped {
+			// Service 的组件可能还在用 Mod：不停 Mod、不释放锁（singletonReleasable 保持 false），
+			// 进程退出后键在 TTL 内过期。
+			return startErr
+		}
 		singletonReleasable = allStopped(
 			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
 			stopModsReverse(startedSharedMods, "mod stop"))
@@ -497,6 +502,47 @@ func isMissingConfig(err error) bool {
 // stopModsReverse 是启动失败路径的逆序停止（无总截止时间，每个 Mod 用自己的默认时长）。
 // 返回是否全部停完：某个 Mod 停机超时会中断后续停止、保留它们的依赖，此时返回 false，
 // 调用方据此不释放单实例锁。Mod 返回普通错误仍算停完。
+// startupCleanupTimeout 是启动失败时留给 Service.Shutdown 收回已启动部分的时长。
+const startupCleanupTimeout = 5 * time.Second
+
+// shutdownAfterStartupFailure 在启动失败时调用 Service.Shutdown，收回 Init 已经启动的部分
+// （Init 返回错误时同样调用：Init 可能已经起了后台循环、订阅，App 不知道是哪些）。Shutdown 必须
+// 容忍部分初始化。stopped 为 false 表示 Shutdown 没在 startupCleanupTimeout 内结束（包括不配合
+// ctx、按 ctx 超时返回、panic）：调用方保留 Mod 与单实例锁，和正常停机“Shutdown 不完整就保留
+// 依赖”的规则一致；Shutdown 返回其他错误视为已结束，错误并入启动错误（RR-20261005-NC-193）。
+func shutdownAfterStartupFailure(svc Service) (stopped bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), startupCleanupTimeout)
+	defer cancel()
+	type outcome struct {
+		err      error
+		panicked bool
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				result <- outcome{err: fmt.Errorf("panic: %v", recovered), panicked: true}
+			}
+		}()
+		result <- outcome{err: svc.Shutdown(ctx)}
+	}()
+	select {
+	case out := <-result:
+		switch {
+		case out.panicked:
+			return false, fmt.Errorf("service %s cleanup after startup failure incomplete: %w", svc.Name(), out.err)
+		case out.err == nil:
+			return true, nil
+		case stopIncomplete(out.err):
+			return false, fmt.Errorf("service %s cleanup after startup failure incomplete: %w", svc.Name(), out.err)
+		default:
+			return true, fmt.Errorf("service %s cleanup after startup failure: %w", svc.Name(), out.err)
+		}
+	case <-ctx.Done():
+		return false, fmt.Errorf("service %s cleanup after startup failure incomplete: %w", svc.Name(), ctx.Err())
+	}
+}
+
 func stopModsReverse(mods []Mod, msg string) bool {
 	err := stopModsReverseWithContext(context.Background(), mods, msg)
 	if err != nil {
