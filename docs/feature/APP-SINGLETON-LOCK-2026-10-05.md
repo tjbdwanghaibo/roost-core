@@ -573,3 +573,19 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - 清理：演练进程、etcd 均已停止。Mongo 库（`drill5_202610051033_*` 预演、`drill5_202610051039_*` 正式各 3 个）、JetStream 流（各 3 个 `DRILL5_…`）、Redis 键（`drill5_20261005103*:*`）以及预演误写进共享 `game` 库的四个集合，删除操作被本机的自动权限分类器拦下，**未删除**，交由维护者处理（命令见第 5 笔报告）。
 - 验证（`GOWORK=off`）：见提交说明。
 - 未验证：Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围内）；`c493a791` 与 obs34 的补偿预算调整之后的代码没有重跑演练（6b 在 `64acd782` 上测）。
+
+### 第 3 / 3b / 4 笔审查收尾（2026-10-05，obs34）
+
+审查第 3、3b、4 笔时的观察项，逐条处理（提交按标题，rebase 后提交号以 `git log` 为准）：
+
+1. **两条测试承诺没有被钉住**（`test(demo)：钉住闲置卸载的锁内复核与“删记录先于关闭 done”`）：审查的两处变异——删掉 `unloadOne` 锁内对 `lastUsed` 的复核；把 `runEviction` 删除驻留记录挪到 `close(done)` 之后的另一个临界区——变异后整包仍绿。新增 `TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload`（fencer 的 `ActiveSessions` 回调里 `Serve` / `AdmitBound` 一次，断言不卸载）与 `TestALoginDuringAnUnloadEndsServed/the-record-is-gone-before-the-waiters-wake`（未导出测试缝 `PlayerOwners.afterUnloadDone`，`close(done)` 之后调用，测试在本 goroutine 上驱动 `runEviction`、在钩子里等醒来的 `Serve` 回答）。两处变异分别使新用例红：`a player used between the session check and the mark was unloaded: dropped=[77]`、`the unload deleted the record the login created after it woke`（同一变异下原 `ends-served` `-count=20` 仍绿）。
+2. **认证写入的 claim 键没有测试**（`fix(demo)：认证写入与登录读取共用 server_id claim 键，补两条登录用例`）：键抽成 `kit/service/account.ServerIDClaim`（传输包与控制器包都已依赖 account 包，不引入两者之间的依赖），控制器的读取函数导出为 `BoundServerID`；新增生成工程 `internal/access/player/tcp/auth_test.go`（真实认证器产出的 Principal 被 `BoundServerID` 读出 sid），以及 controller 层“`Serve` 等卸载超时 → `login_timeout`”用例。变异：认证器改写别的键 → `read (0, false) … want the role's server 1300`；去掉 serve 一步的 `loginCutShort` → `code=1 reason="server error", want login_timeout`。
+3. **发送方的 sid 宕机期间退款可能转为 manual_required**（`fix(demo)：赠礼退款的重试预算覆盖发送方 sid 的一次崩溃重启`）：`saga.Step` 的预算正反方向共用、没有按方向的选项，按“不新增机制”把生成的 `saga/gift_item/definition.go` 里 debit 步骤（补偿即退款）`MaxAttempts` 5 → 15（codegen demo 清单的 run 步骤 `demoGiftRefundBudget` 改写 `add saga` 的输出），Timeout 5s、退避 100ms..5s 不变。重试窗口下界 = 15 × 5s + 14 次退避的抖动下界（`d` 从 100ms 翻倍封顶 5s，取 `d/2`：0.05 + 0.1 + 0.2 + 0.4 + 0.8 + 1.6 + 8 × 2.5 = 23.15s）≈ 98.15s，上界 75 + 46.3 = 121.3s；要求 `startup_wait` 30s + `ttl` 15s + 拉起与 Init 余量 45s = 90s（原预算下界 25.75s）。debit 正向随之也是 15 次：扣款失败什么都没扣，只是更晚判失败（仍受 `gift.Deadline` 2 分钟约束）。生成工程测试 `gift_saga_budget_test.go` 按生成的 singleton 配置钉住关系，改预算前红：`a refund gets at least 25.75s of retries … = 1m30s; past that the refund is marked manual_required`。CHANGELOG 加 Changed 一条，并补 `c493a791` 的 Fixed。
+4. **过时注释**（`docs(kit)：global/activity 注释不再说 global 负责存活`）：`kit/service/global/activity/service.go` 的 `Service` 注释与 `activity/types.go` 的包说明改为现状：global 只做路由分组，存活由 App 单实例锁的 `Live` 提供。
+
+观察，未改：
+- **冷加载超过 `IdleUnload` 后实体留在内存、没有驻留记录**：登录 `Serve` 建了记录之后，冷加载（例如等投影屏障）若比 `IdleUnload`（5 分钟）还久，期间登录已回 `login_timeout`、连接可能已断，闲置卸载会选中这条记录；`playerEvictor` 发现内存里还没有实体，按“已经不在”成功返回，记录被删。加载随后完成，实体留在 EntityManager 里却没有驻留记录，闲置卸载只扫记录、不会再收走它。只占内存：没有记录时 WriteGate 照常拒绝，下一次 `Serve` / `AdmitBound` 重新建记录后照常服务、照常闲置卸载。
+- **`Destroy` 永不返回时泄漏**（RR-20261004-11 遗留）：卸载在自己的 goroutine 上跑到结束，等待方只受 `evictBudget` 约束；若 `EntityManager.Destroy` 永远等不到实体锁（实体上的事务永不结束），这个 goroutine 与 `evictions` 里的条目一直留着，该玩家此后 `Admit` / `AdmitBound` 一直拒绝、`Serve` 每次等满预算后回 `login_timeout`，直到进程重启。根因在实体上永不结束的事务，不在驻留表，维持现状。
+- **优雅停机时先断会话、listener 仍开着**：`Service.Shutdown` 第一步 `CloseServedSessions` 断开服务中的玩家，但传输层 Mod 要到后面逆序停止时才关 listener；这段时间里立即重连的客户端可能在本进程再登录一次（`Serve` 建记录、装载），随后在传输层停止时再被断开、到接替的进程重登。只是多一次重登，不形成两个写者（同一 sid 只有本进程持锁，接替进程要等本进程释放），维持现状。
+
+验证（`GOWORK=off`，独立 worktree，rebase 到 `10e2e0ea` 之后）：`gofmt -l` 空；`go build ./... && go vet ./...` 通过；`go generate ./...` 后 porcelain 只有本节文档；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 87s）；根包 `go test -count=1 .` 通过。生成 game-demo（`project new sobs -template game-demo` + `go mod edit -replace` 指向本 worktree）：`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/ ./internal/access/...`、`go test ./...` 全绿，新用例 `-race -count=50` 稳定。没有重跑真实进程演练。
