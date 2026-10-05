@@ -296,6 +296,9 @@ func (s *fakeSingletonStore) Get(_ context.Context, keys []string) ([][]byte, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gets = append(s.gets, append([]string(nil), keys...))
+	if s.closed {
+		return nil, errFakeStoreClosed // 与真实客户端一致：关闭之后的调用报错
+	}
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -307,6 +310,8 @@ func (s *fakeSingletonStore) Get(_ context.Context, keys []string) ([][]byte, er
 	}
 	return out, nil
 }
+
+var errFakeStoreClosed = errors.New("fake singleton store: client is closed")
 
 func (s *fakeSingletonStore) Close() error {
 	s.mu.Lock()
@@ -1132,6 +1137,14 @@ func TestSingletonIsNotReleasedWhenShutdownIsIncomplete(t *testing.T) {
 			}
 			if h.clock.pendingTimers() != 0 {
 				t.Fatal("renewal still scheduled after run returned")
+			}
+			// 还在跑的组件可能继续查 Live：store 留到进程退出，不在 run 返回时关闭（收尾审查 6）。
+			if h.store.isClosed() {
+				t.Fatal("store closed while a component that may still call Live is running")
+			}
+			live := MustLookup[SingletonLiveness](h.svc.registry, ModSingleton)
+			if sids, err := live.Live(context.Background(), "game", []int32{1000}); err != nil || len(sids) != 1 {
+				t.Fatalf("Live after an incomplete shutdown = %v, %v; want [1000]", sids, err)
 			}
 			before := len(h.store.calls())
 			h.clock.Advance(10 * testSingletonRenew)

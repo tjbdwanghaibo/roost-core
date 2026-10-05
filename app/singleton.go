@@ -468,12 +468,16 @@ func (l *singletonLock) lose(cause error, holder []byte) {
 	l.failure.Fail(fmt.Errorf("%w: %w", ErrSingletonLost, cause))
 }
 
-// finish 是 run 的统一收尾：先停续期并等它退出，再决定是否 Release，最后关闭 store。
+// finish 是 run 的统一收尾：先停续期并等它退出，再决定是否 Release，最后在没有组件还会用它时关闭 store。
 //
 // mayRelease 只在“全部 Mod 都停完”的路径上为 true（方案 §3.5）：Service.Shutdown 超时、服务专属或
 // 共享 Mod 停机不完整时还有组件可能在用依赖，不能让新进程提前拿锁，只停续期、等键自然过期。
 // Lost 时键已不是自己的，也不 Release。releaseDeadline 是停机路径 shutdownCtx 的截止时间，Release
 // 用 min(剩余, singletonReleaseBudget)，剩余为零就跳过；零值表示启动失败路径，固定 singletonReleaseBudget。
+//
+// store 同时承载 Live 能力：停机不完整时还在跑的组件（与 run 不等它们、保留它们依赖的理由相同）
+// 可能继续调用 Live，这时不关闭 store，留到进程退出，否则它们会读到 client closed。没拿到锁
+// （还没启动任何 Mod）或全部 Mod 已停完才关闭。
 func (l *singletonLock) finish(mayRelease bool, releaseDeadline time.Time) {
 	if l.stopRenewal != nil {
 		l.stopRenewal()
@@ -488,6 +492,10 @@ func (l *singletonLock) finish(mayRelease bool, releaseDeadline time.Time) {
 		slog.Warn("singleton: shutdown incomplete; leaving the key to expire", "key", l.key, "ttl", l.settings.ttl)
 	default:
 		l.release(releaseDeadline)
+	}
+	if state != singletonWaiting && !mayRelease {
+		slog.Warn("singleton: shutdown incomplete; keeping the store open for components still running", "key", l.key)
+		return
 	}
 	if err := l.store.Close(); err != nil {
 		slog.Warn("singleton: close store failed", "key", l.key, "err", err)
