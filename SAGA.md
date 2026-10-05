@@ -182,6 +182,11 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 `saga.step.expired_unexecuted_total`，不 nak、不占 `MaxAckPending`。原生步骤的结果经 WAL → 投影 → completion effect 送达，
 不依赖这条消息，所以 ack 不会丢掉已提交、还没投影的尝试。读回执出错时仍按退避重投。
 
+**已知缺陷（U-0280，未修复）。** 收件箱只按 `CommandID` 去重，命令截止时间只有一次尝试的 `Timeout`，而 claim 租约是
+`LeaseDuration`：已写进 WAL 的尝试 k 若在截止之后、租约之内才投影（进程崩溃后重放、投影积压超过 `Timeout`），协调器可能已经
+发出 k+1 并让它再执行一次，或已放弃该步骤而不补偿它。原生步骤目前只保证“同一命令最多一次”；需要步骤级至多一次的业务按
+`IdempotencyKey` 自行幂等。方案与取舍见 [U-0280](docs/bugfix/U-0280-saga-step-reexecuted-after-crash.md)。
+
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
 必须长于 stream 最大保留时间。上线门禁需要在目标 Mongo/NATS 拓扑上验证持续吞吐、

@@ -1,10 +1,11 @@
 # Bugfix 记录
 
-**10-05 drill6 saga：U-0281 已修复，未发版。** 真实进程演练（kill -9 / 两个 sid 赠礼）发现过期无回执的原生步骤命令被无限 nak，占满共享 durable 的 MaxAckPending；改为 ack，确定性红→绿，T-225。
+**10-05 drill6 saga 两项：U-0281 已修复，未发版；U-0280 已定位、已确定性复现，方案待维护者决定，未实施。** 真实进程演练（kill -9 / 两个 sid 赠礼）发现：过期无回执的原生步骤命令被无限 nak 占满共享 durable（U-0281，确定性红→绿，T-225）；崩溃 / 投影积压后同一步骤以新尝试再执行、或放弃后迟到生效（U-0280，v1.19.2 同样存在，三种交错确定性复现，T-226）。U-0280 记录含候选方案、推荐（A+B+C'）与 saga 方向判断。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
 | [U-0281](U-0281-saga-expired-command-nak-forever.md) | 过期且无回执的原生步骤命令 ack，不再无限 nak | 已修复，未发版 |
+| [U-0280](U-0280-saga-step-reexecuted-after-crash.md) | 跨尝试重复执行 / 放弃后迟到生效：方案与方向判断 | 已定位、已复现，方案待定，未实施 |
 
 **10-05第十七批：NC-41/42与RR-09残余已修复、声明场景验证，未发版。** 7原始/overlay行为反例红→绿，13新增正式叶子、race420/2Cluster skip、根包14/build/vet及两生成消费通过。[本轮](../review/REVIEW-2026-10-05-noncore-27.md) · [证据](evidence/noncore-bugfix-20261005-17/README.md)。T-223/224、旧T-181追加；完整待审交接见[清单](../review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
 

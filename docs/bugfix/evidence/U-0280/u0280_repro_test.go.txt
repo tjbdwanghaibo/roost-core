@@ -1,0 +1,134 @@
+package saga
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
+)
+
+// U-0280 复现（不提交；方案待维护者决定）：尝试 k 已提交（WAL 里，回执稍后才投影），
+// 协调器按超时发出 k+1；k+1 的 Reserve 拿到新租约，handler 会再执行一次。
+// 三种交错：(a) k 的结果在 k+1 等待期间到达；(b) k 的结果在重试退避期间到达被丢弃；
+// (c) 重试用尽、协调器放弃后 k 的结果才到达，被当成重复吞掉，步骤生效但 saga Failed。
+func TestU0280Repro(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T, key string, attempts uint32) (*Engine, *memoryStore, Definition) {
+		store := newMemoryStore()
+		options := DefaultOptions()
+		options.LeaseDuration, options.StoreTimeout, options.PublishTimeout = time.Second, 100*time.Millisecond, 100*time.Millisecond
+		engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		def := Definition{Type: "gift", Version: 1, Steps: []Step{
+			{Name: "debit", ForwardTopic: "gift.debit", Timeout: 5 * time.Second, MaxAttempts: attempts, BackoffMin: 100 * time.Millisecond, BackoffMax: time.Second},
+			{Name: "deliver", ForwardTopic: "gift.deliver", Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: time.Second},
+		}}
+		if err := engine.Register(def); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.StartSaga(ctx, StartRequest{ID: key, Type: "gift", DefinitionVersion: 1, BusinessKey: key, Data: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+		return engine, store, def
+	}
+	tick := func(t *testing.T, engine *Engine, store *memoryStore, now time.Time) {
+		records, err := store.ClaimDue(ctx, ClaimRequest{Owner: "c", Now: now, LeaseDuration: time.Second, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range records {
+			if err := engine.processClaimed(ctx, r, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	pending := func(store *memoryStore) Command {
+		for _, o := range store.outbox {
+			return o.Command
+		}
+		return Command{}
+	}
+	nativeInbox := func(t *testing.T) (*mongotest.Client, *DataEngineStepInbox) {
+		client := mongotest.NewClient()
+		inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{Owner: "game-1300-pid-a", LeaseDuration: 2 * time.Minute})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client, inbox
+	}
+	commitAndProject := func(t *testing.T, client *mongotest.Client, inbox *DataEngineStepInbox, command Command) Completion {
+		if r, err := inbox.Reserve(ctx, command); err != nil || r.Duplicate {
+			t.Fatalf("reserve attempt %d: %+v %v", command.Attempt, r, err)
+		}
+		completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true}
+		effect, _ := NewCompletionEffect(completion)
+		// 进程重启后重放 WAL：claim 租约 2 分钟仍有效，投影成功，回执出现。
+		if err := inboxReceipts(client).Seed(dataEngineReceipt{ID: dataEngineStepNamespace + "/" + command.ID, Digest: mustCommandDigest(t, command), Payload: effect.Payload}); err != nil {
+			t.Fatal(err)
+		}
+		return completion
+	}
+
+	t.Run("a: late result while k+1 waits", func(t *testing.T) {
+		engine, store, _ := setup(t, "gift-a", 15)
+		client, inbox := nativeInbox(t)
+		t0 := time.Now().UTC()
+		tick(t, engine, store, t0)
+		k := pending(store)
+		tick(t, engine, store, t0.Add(5*time.Second))  // k 超时 → 退避
+		tick(t, engine, store, t0.Add(10*time.Second)) // 发出 k+1
+		k1 := pending(store)
+		completionK := commitAndProject(t, client, inbox, k)
+		if _, err := engine.Complete(ctx, completionK); err != nil {
+			t.Fatalf("late completion of attempt %d: %v", k.Attempt, err)
+		}
+		r, err := inbox.Reserve(ctx, k1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Duplicate {
+			t.Errorf("attempt %d of %s reserved a fresh lease (token=%d) although attempt %d already committed: the debit runs twice", k1.Attempt, k1.IdempotencyKey, r.Token, k.Attempt)
+		}
+	})
+
+	t.Run("b: late result dropped during backoff", func(t *testing.T) {
+		engine, store, _ := setup(t, "gift-b", 15)
+		client, inbox := nativeInbox(t)
+		t0 := time.Now().UTC()
+		tick(t, engine, store, t0)
+		k := pending(store)
+		tick(t, engine, store, t0.Add(5*time.Second)) // k 超时 → 退避（pending）
+		completionK := commitAndProject(t, client, inbox, k)
+		_, err := engine.Complete(ctx, completionK)
+		t.Logf("completion of attempt %d during backoff: %v", k.Attempt, err)
+		tick(t, engine, store, t0.Add(10*time.Second))
+		k1 := pending(store)
+		r, err := inbox.Reserve(ctx, k1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Duplicate {
+			t.Errorf("attempt %d reserved a fresh lease although attempt %d committed and its result was dropped: the debit runs twice", k1.Attempt, k.Attempt)
+		}
+	})
+
+	t.Run("c: late result after the coordinator gave up", func(t *testing.T) {
+		engine, store, _ := setup(t, "gift-c", 1)
+		client, inbox := nativeInbox(t)
+		t0 := time.Now().UTC()
+		tick(t, engine, store, t0)
+		k := pending(store)
+		tick(t, engine, store, t0.Add(5*time.Second)) // 唯一一次尝试超时 → 没有已完成步骤 → Failed
+		completionK := commitAndProject(t, client, inbox, k)
+		record, err := engine.Complete(ctx, completionK)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Status == StatusFailed && record.CompletedSteps == 0 {
+			t.Errorf("step %s took effect (receipt %s) but the saga stays %v with nothing to compensate; Complete returned no error and counted it a duplicate (duplicates=%d)", k.IdempotencyKey, k.ID, record.Status, engine.Stats().Duplicates)
+		}
+	})
+}
