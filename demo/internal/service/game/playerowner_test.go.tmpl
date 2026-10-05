@@ -393,6 +393,68 @@ func TestAPlayerTakenIntoServiceForNewWorkIsNotIdle(t *testing.T) {
 	}
 }
 
+// sessionsProbe 是连接数查询里能插入一次动作的 fencer：unloadOne 在锁外问连接数，测试借这个回调把
+// 一次使用精确地放进“问完连接数”与“锁内标记”之间，不靠调度碰运气。
+type sessionsProbe struct{ onActive func(playerID int64) }
+
+func (probe sessionsProbe) CloseSessions(int64, error) int { return 0 }
+
+func (probe sessionsProbe) ActiveSessions(playerID int64) int {
+	probe.onActive(playerID)
+	return 0
+}
+
+// unloadOne 先在锁外问连接数，再在锁内复核“仍然闲置”才标记：两步之间到达的使用（登录的 Serve、后台
+// 步骤的 AdmitBound）已经刷新了 lastUsed，这次卸载必须放过他。没有锁内复核，刚登录的玩家会在自己的
+// 连接下被卸载，刚放行的步骤会落在一个正被销毁的副本上。
+func TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload(t *testing.T) {
+	for _, entry := range []struct {
+		name string
+		use  func(*PlayerOwners) error
+	}{
+		{"serve", func(owners *PlayerOwners) error { return owners.Serve(context.Background(), 77, ownSID) }},
+		{"admit-bound", func(owners *PlayerOwners) error {
+			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+				return errors.Join(errors.New("not admitted"), err)
+			}
+			return nil
+		}},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			clock := time.Unix(1_700_000_000, 0)
+			var owners *PlayerOwners
+			var used error
+			probed := 0
+			owners = newPlayerOwners(ownSID, sessionsProbe{onActive: func(playerID int64) {
+				if playerID == 77 {
+					probed++
+					used = entry.use(owners)
+				}
+			}}, func() time.Time { return clock })
+			evictor := &evictorStub{}
+			owners.Evict(evictor)
+			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+				t.Fatalf("admit bound: %v %v", local, err)
+			}
+			clock = clock.Add(IdleUnload + time.Second)
+			owners.unloadIdle(context.Background())
+
+			if probed != 1 {
+				t.Fatalf("precondition: the unload pass asked about player 77's sessions %d times, want once", probed)
+			}
+			if used != nil {
+				t.Fatalf("the use between the session check and the mark was refused: %v", used)
+			}
+			if got := evictor.taken(); len(got) != 0 {
+				t.Fatalf("a player used between the session check and the mark was unloaded: dropped=%v", got)
+			}
+			if dropRunning(owners, 77) || owners.Admit(77) != nil {
+				t.Fatalf("the use did not keep player 77 in service: unloading=%v admit=%v", dropRunning(owners, 77), owners.Admit(77))
+			}
+		})
+	}
+}
+
 // 卸载扔不掉副本（实体忙）：记录保留，玩家继续服务，下一轮再试。
 func TestAnUnloadThatCannotDropTheCopyKeepsThePlayerInService(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
@@ -543,6 +605,46 @@ func TestALoginDuringAnUnloadEndsServed(t *testing.T) {
 		}
 		if err := owners.Admit(77); err != nil {
 			t.Fatalf("the login ended with a player this process does not admit: %v", err)
+		}
+	})
+	// runEviction 承诺“成功时删记录与关闭 done 在同一个临界区、删在前”。done 一关，等着的登录就醒来
+	// 建或刷新记录；删除若挪到 close(done) 之后的另一个临界区，它会删掉登录刚刚确认过的那条记录，登录
+	// 回答成功、玩家却不再被准入。afterUnloadDone 把登录精确地放在 close(done) 与 runEviction 返回之间。
+	t.Run("the-record-is-gone-before-the-waiters-wake", func(t *testing.T) {
+		owners, _, _ := ownersUnderTest(t)
+		owners.evictWait = 5 * time.Second
+		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			t.Fatalf("admit bound: %v %v", local, err)
+		}
+		// 标记卸载，与 unloadOne 在锁内做的一样；runEviction 由测试在本 goroutine 上调用，它返回时
+		// 卸载的每一步都已经做完。
+		in := &eviction{done: make(chan struct{})}
+		owners.mu.Lock()
+		owners.evictions[77] = in
+		owners.mu.Unlock()
+		parked := parkedOnUnload(owners, 77)
+		answered := serveInBackground(context.Background(), owners, 77)
+		<-parked
+		var served error
+		woke := false
+		owners.afterUnloadDone = func(playerID int64) {
+			if playerID == 77 {
+				woke = true
+				served = <-answered
+			}
+		}
+		owners.runEviction(&evictorStub{}, 77, in)
+		if !woke {
+			t.Fatal("precondition: the hook after close(done) never ran")
+		}
+		if served != nil {
+			t.Fatalf("the login woken by the unload was not served: %v", served)
+		}
+		if !hasRecord(owners, 77) {
+			t.Fatal("the unload deleted the record the login created after it woke")
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("the login ended served but the player is not admitted: %v", err)
 		}
 	})
 	t.Run("the-wait-ends-with-the-callers-context", func(t *testing.T) {

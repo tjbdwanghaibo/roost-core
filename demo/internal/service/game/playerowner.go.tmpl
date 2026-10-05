@@ -48,6 +48,10 @@ type PlayerOwners struct {
 	// onUnloadWait 在 Serve 开始等某个玩家的卸载时被调用。只给测试用：测试没有别的办法看到一个
 	// goroutine 停在等待上；进程里没有人设置它。
 	onUnloadWait func(playerID int64)
+	// afterUnloadDone 在 runEviction 关闭 done（唤醒等这次卸载的 Serve）之后被调用。只给测试用：
+	// 它让测试在“等待者已被唤醒”与“runEviction 返回”之间插入一次登录，钉住“删除记录必须在关闭
+	// done 之前”；进程里没有人设置它，测试在卸载开始之前设置。
+	afterUnloadDone func(playerID int64)
 
 	mu        sync.Mutex
 	residents map[int64]*resident
@@ -426,6 +430,9 @@ func (owners *PlayerOwners) runEviction(evictor residentEvictor, playerID int64,
 	}
 	owners.mu.Unlock()
 	close(in.done)
+	if hook := owners.afterUnloadDone; hook != nil {
+		hook(playerID)
+	}
 }
 
 // playerEvictor is the demo's answer to "drop this process's copy of a
