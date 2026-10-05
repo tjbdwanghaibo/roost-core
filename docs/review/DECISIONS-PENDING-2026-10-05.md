@@ -54,6 +54,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 待方案 + 实施 |
 | A2～A5 | 按推荐 | 待实施（A5 测试侧已按“共享”改完，补文档与全局命令持锁核对） |
+| A2 | 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做 | **已实施（`cf5721c9`）**：Redis 写命令、含写的 pipeline、EvalBatchDurable、DistLock 都不经驱动重放，只在 `driver.IsDefinitelyNotExecuted` 判为真时重发（脚本同样，NC-101 复审应改项 1）；Mongo 提交发出之后的失败包 `mongo.ErrCommitResultUnknown`（应改项 2）；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。契约表：[redis/driver](../../redis/driver/README.md)、[mongo/driver](../../mongo/driver/README.md)。调用方核对没有发现双写；bus 的 SETNX 去重、global Bind 的误报、L2 快照 DEL 被吞掉、Redis Cluster 实测，留作观察或交给归属方。[方案](../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) |
 | A3 | 按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示 | **已实施（`50f2ac2a`）**：`internal/operation.Lifetime` 补 `Wait(ctx)`，bus / syncbus / mirror 三份迁移；`internal/stopcontract` 骨架套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP；glsvet `-stophints`（Mutex.Lock 误报约 100%，未加）；骨架发现 NC-173 残余并补修。② 排空下沉到 ISyncBus 退订留待下个大版本。[方案](../feature/REFACTOR-2026-10-05-shared-stop-contract.md) |
 | B1 | 协调器接收 completion 时核对代际：做 | 待实施 |
 | B2 | 维护者问“什么意思”，已解释，待决定 | 待决定 |
