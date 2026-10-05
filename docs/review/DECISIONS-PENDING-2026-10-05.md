@@ -61,13 +61,13 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | A3 | 按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示 | **已实施（`50f2ac2a`）**：`internal/operation.Lifetime` 补 `Wait(ctx)`，bus / syncbus / mirror 三份迁移；`internal/stopcontract` 骨架套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP；glsvet `-stophints`（Mutex.Lock 误报约 100%，未加）；骨架发现 NC-173 残余并补修。② 排空下沉到 ISyncBus 退订留待下个大版本。[方案](../feature/REFACTOR-2026-10-05-shared-stop-contract.md) |
 | B1 | 协调器接收 completion 时核对代际：做 | 待实施 |
 | B2 | 维护者问“什么意思”，已解释，待决定 | 待决定 |
-| B3 | lower 查找失败一律报错：做 | 待实施 |
+| B3 | lower 查找失败一律报错：做 | **已实施（`023eb276`）**：① lower 的名字查找经唯一入口 `resolveName`，查不到返回 `LOWER_UNRESOLVED` 编译错误、不交出 Program（回归对全部种子逐表删条目，修前 35 处静默兜底 / 23 处未解析引用 / 4 处 panic）；② phase 事件派发表单一来源 `skill/phase_events.go`（代价小，一并做）。③ 下个大版本，④ 保持 B。[方案](../feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md) |
 | B5 | etcd 选举：保留（不弃用） | — |
-| B7 | ai / actionflow：保留在 core | 重入方向（a/b）仍待定 |
+| B7 | ai / actionflow：保留在 core | 重入方向见第三轮（b），已实施 |
 | C3 / C8 | event、index 与零调用方 API：保留 | — |
 | C4 | 维护者问“什么是活动组 game 服”，已解释，待决定上限 | 待决定 |
 | C6 | 默认 metrics adapter：做 | 待实施 |
-| C7 | 遍历回调语义定为仓库级契约：是 | 待实施 |
+| C7 | 遍历回调语义定为仓库级契约：是 | **已实施（`cd43a5ac`）**：契约写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map 的 `RangeX`；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）；index / lock 无遍历回调。[方案](../feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md) |
 | C10 | N10 临时 worktree：已删除（分支已并入 main） | 完成 |
 | 发布 | v1.20.2 暂不发，上述实施完成后统一发版 | — |
 | 额度 | 额度不足时，先把未完成项记进文档并推送，再停止 | 规则 |
@@ -80,4 +80,4 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | B2 | 按推荐：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约 | **已实施（`f376bba0`、`7d49e54d`）**：L1 写入一律先经 L2 版本 CAS / 带版本删除，L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness`（缺省 = `snapshot_cache_ttl`）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（O5）；O4 容量、L2 落后于权威（写 L2 失败）、生成配置模板留作后续。[方案](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) |
 | C4 | 活动组（参与同一全服活动的 game sid 集合）应由一个配置文件定义；每组上限暂定 64，启动 / 加载时校验 | 待实施 |
-| B7 | actionflow 回调重入：按推荐（b）——回调里对 runner 的变更进延后命令队列，回调返回后按序执行，判定集中一处 | 待实施 |
+| B7 | actionflow 回调重入：按推荐（b）——回调里对 runner 的变更进延后命令队列，回调返回后按序执行，判定集中一处 | **已实施（`a9b7075b`）**：判定集中在 `ActionRunner.submit`，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），拿到 ID 必有 OnEnded；`MaxDeferredCommands` / `MaxDeferredSteps` 有界防失控；O-A2 / O-A3 消失并钉住，O-A1 定义为“EndAll 先结束全部、回调变更随后执行”；`MissionRunner` 未改。[方案](../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md) |
