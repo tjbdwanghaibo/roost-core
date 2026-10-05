@@ -8,6 +8,10 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-05 驱动重放与超时契约（A2，main，未发版）
+
+Redis 写命令（含脚本、含写的 pipeline、DistLock）不再由驱动在回复丢失后重放：错误就是“结果未知”，命令可能已经执行。要重试，先让这次写可以安全重复执行（请求 ID、版本 CAS、值守卫令牌），或者先回读再裁决。只有错误证明命令没执行时（拨号失败、池超时、LOADING 等），驱动才会自己重发；需要在业务里做同样判断时，用 `redis/driver.IsDefinitelyNotExecuted`。读命令照常重试。写命令的返回值（SETNX 的 bool、各种计数）只在没有错误时可信。Mongo `WithTransaction` 返回的错误满足 `errors.Is(err, mongo.ErrCommitResultUnknown)` 时，表示提交已经发出、可能已经生效，要按持久回执裁决；不带这个哨兵的错误都是确定没提交。完整的驱动行为契约（会重放的命令、错误分类、ctx 替换、默认超时）见 [redis/driver/README.md](../redis/driver/README.md) 和 [mongo/driver/README.md](../mongo/driver/README.md)，新增调用点时先对照它们。[方案](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)
+
 ## 2026-10-05 HTTP 响应完整性与 TCP 接入停机（main，未发版）
 
 `httpserver.JSON`（Webroute `WriteResult`、Ops 管理面同一出口）先完整编码再写状态：值里有 NaN/±Inf、channel/func 或 MarshalJSON 报错时回 500 `{"error":"encode response","ok":false}` 并记日志，而不是 2xx 空体（NC-80）。业务此时可能已经执行，客户端按幂等键核对再重试；从源头避免不可编码值（如 0/0 胜率）。Engine 的 recover 只在响应开始之前回 500；写过头/体、Flush 或 Hijack 之后 panic 会中止连接，`panic(http.ErrAbortHandler)` 保持标准库语义（NC-81）。handler 拿到的 `w` 是包装 writer，`http.Flusher`、`http.ResponseController`（Flush 的错误照常返回）和（原 writer 支持时）`http.Hijacker` 照常可用，`http.Pusher` 不透传。

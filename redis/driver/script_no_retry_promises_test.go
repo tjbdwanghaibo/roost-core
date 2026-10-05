@@ -162,7 +162,7 @@ func TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver(t *testing.T) {
 	}
 }
 
-// 只有脚本命令带不可重放标记（克隆后仍带），普通命令保留驱动的自动重试。
+// 不可重放标记克隆后仍在，没加标记的命令保留驱动的自动重试（A2 之后写命令同样加标记，见 write_no_replay_promises_test.go）。
 func TestOnlyScriptCommandsOptOutOfTheDriverRetry(t *testing.T) {
 	server := newDropFirstScriptReply(t)
 	cfg := fredis.DefaultConfig(server.listener.Addr().String())
@@ -172,7 +172,7 @@ func TestOnlyScriptCommandsOptOutOfTheDriverRetry(t *testing.T) {
 	if err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("ping: %v", err)
 	}
-	cmd := newScriptCmd(context.Background(), "eval", "return 1", []string{"k"})
+	cmd := noReplay{newScriptCmd(context.Background(), "eval", "return 1", []string{"k"})}
 	if !cmd.NoRetry() || !cmd.Clone().NoRetry() {
 		t.Fatal("script command (or its clone) is retryable")
 	}

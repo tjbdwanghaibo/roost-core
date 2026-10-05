@@ -89,6 +89,11 @@ func (s *RedisJSONHashStore[K, V]) Set(ctx context.Context, value V) error {
 		return err
 	}
 	if err := s.redis.HSet(ctx, hashKey.Key, hashKey.Field, raw); err != nil {
+		// 驱动不重放写命令（A2）：回复丢失时 HSET 可能已经建出新键。仍补发一次 EXPIRE，
+		// 免得这个键永不过期；键不存在时 EXPIRE 什么也不做。返回的仍是 HSET 的错误（结果未知）。
+		if s.ttl > 0 {
+			_, _ = s.redis.Expire(ctx, hashKey.Key, s.ttl)
+		}
 		return err
 	}
 	if s.ttl > 0 {

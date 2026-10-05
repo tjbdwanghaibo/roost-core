@@ -27,7 +27,7 @@ func Assemble(cfg *fredis.Config) (*Assembly, error) {
 		return nil, fmt.Errorf("redis: addr or cluster addrs are required")
 	}
 	client := NewRedisClient(cfg)
-	return &Assembly{Client: client, Locks: NewDistLockFactory(client.rdb)}, nil
+	return &Assembly{Client: client, Locks: &DistLockFactory{rdb: client.rdb, resends: client.resends}}, nil
 }
 
 // Ping verifies connectivity; the Mod calls it at Start and from its health

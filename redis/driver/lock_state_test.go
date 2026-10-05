@@ -19,7 +19,7 @@ import (
 // reply of a SETNX that the server did or did not apply — the ambiguity the
 // uncertain state exists for.
 type scriptedRedis struct {
-	goredis.UniversalClient
+	builderOnly
 	mu   sync.Mutex
 	held map[string]string
 	// loseNextSetNX makes the next SETNX return an error. applyBeforeLosing
@@ -31,6 +31,28 @@ type scriptedRedis struct {
 }
 
 func newScriptedRedis() *scriptedRedis { return &scriptedRedis{held: map[string]string{}} }
+
+// Process 接住 distLock 经 sendOnce 发出的命令：SET … NX 与 EVAL，按命令名分派到下面两个模拟。
+func (r *scriptedRedis) Process(ctx context.Context, cmd goredis.Cmder) error {
+	args := cmd.Args()
+	inner := cmd.(noReplay).Cmder
+	switch cmd.Name() {
+	case "set":
+		result := r.SetNX(ctx, fmt.Sprint(args[1]), args[2], 0)
+		inner.(*goredis.BoolCmd).SetVal(result.Val())
+		cmd.SetErr(result.Err())
+		return result.Err()
+	case "eval":
+		keys := []string{fmt.Sprint(args[3])}
+		result := r.Eval(ctx, fmt.Sprint(args[1]), keys, args[4:]...)
+		inner.(*goredis.Cmd).SetVal(result.Val())
+		cmd.SetErr(result.Err())
+		return result.Err()
+	}
+	err := fmt.Errorf("scripted redis: unexpected command %v", args)
+	cmd.SetErr(err)
+	return err
+}
 
 func (r *scriptedRedis) SetNX(_ context.Context, key string, value any, _ time.Duration) *goredis.BoolCmd {
 	r.mu.Lock()

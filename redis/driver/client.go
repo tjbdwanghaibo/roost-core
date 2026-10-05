@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"strconv"
@@ -11,8 +12,13 @@ import (
 )
 
 // Client implements fredis.IRedis by wrapping go-redis.
+//
+// 读命令交给 go-redis 自动重试；写命令（含脚本、含写的 pipeline）只发一次，驱动不重放，
+// 仅在错误证明命令没执行时重发（replay.go，A2）。行为契约表见 README.md。
 type Client struct {
 	rdb goredis.UniversalClient
+	// resends 是写命令在“确定未执行”错误上的重发次数，由 Config.MaxRetries 换算（resendsFor）。
+	resends int
 }
 
 // Raw exposes the underlying go-redis client for assembly code (lock
@@ -78,7 +84,7 @@ func NewRedisClient(cfg *fredis.Config) *Client {
 	if cluster, ok := rdb.(*goredis.ClusterClient); ok {
 		cluster.AddHook(clusterRecoveryHook{client: cluster})
 	}
-	return &Client{rdb: rdb}
+	return &Client{rdb: rdb, resends: resendsFor(cfg.MaxRetries)}
 }
 
 // --- String/KV ---
@@ -138,15 +144,15 @@ func (c *Client) MGet(ctx context.Context, keys ...string) ([][]byte, error) {
 }
 
 func (c *Client) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
-	return c.rdb.Set(ctx, key, value, expiration).Err()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.StatusCmd { return p.Set(ctx, key, value, expiration) }).Err()
 }
 
 func (c *Client) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
-	return c.rdb.SetNX(ctx, key, value, expiration).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.BoolCmd { return p.SetNX(ctx, key, value, expiration) }).Result()
 }
 
 func (c *Client) Del(ctx context.Context, keys ...string) (int64, error) {
-	return c.rdb.Del(ctx, keys...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.Del(ctx, keys...) }).Result()
 }
 
 func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
@@ -154,7 +160,7 @@ func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 }
 
 func (c *Client) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
-	return c.rdb.Expire(ctx, key, expiration).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.BoolCmd { return p.Expire(ctx, key, expiration) }).Result()
 }
 
 func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
@@ -162,11 +168,11 @@ func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
 }
 
 func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
-	return c.rdb.Incr(ctx, key).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.Incr(ctx, key) }).Result()
 }
 
 func (c *Client) IncrBy(ctx context.Context, key string, value int64) (int64, error) {
-	return c.rdb.IncrBy(ctx, key, value).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.IncrBy(ctx, key, value) }).Result()
 }
 
 // --- Hash ---
@@ -180,7 +186,7 @@ func (c *Client) HGet(ctx context.Context, key, field string) ([]byte, error) {
 }
 
 func (c *Client) HSet(ctx context.Context, key string, values ...any) error {
-	return c.rdb.HSet(ctx, key, values...).Err()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.HSet(ctx, key, values...) }).Err()
 }
 
 func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, error) {
@@ -188,7 +194,7 @@ func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, er
 }
 
 func (c *Client) HDel(ctx context.Context, key string, fields ...string) (int64, error) {
-	return c.rdb.HDel(ctx, key, fields...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.HDel(ctx, key, fields...) }).Result()
 }
 
 func (c *Client) HExists(ctx context.Context, key, field string) (bool, error) {
@@ -198,15 +204,15 @@ func (c *Client) HExists(ctx context.Context, key, field string) (bool, error) {
 // --- List ---
 
 func (c *Client) LPush(ctx context.Context, key string, values ...any) (int64, error) {
-	return c.rdb.LPush(ctx, key, values...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.LPush(ctx, key, values...) }).Result()
 }
 
 func (c *Client) RPush(ctx context.Context, key string, values ...any) (int64, error) {
-	return c.rdb.RPush(ctx, key, values...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.RPush(ctx, key, values...) }).Result()
 }
 
 func (c *Client) LPop(ctx context.Context, key string) ([]byte, error) {
-	val, err := c.rdb.LPop(ctx, key).Bytes()
+	val, err := write(ctx, c, func(p goredis.Pipeliner) *goredis.StringCmd { return p.LPop(ctx, key) }).Bytes()
 	if err == goredis.Nil {
 		return nil, fredis.ErrNil
 	}
@@ -214,7 +220,7 @@ func (c *Client) LPop(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (c *Client) RPop(ctx context.Context, key string) ([]byte, error) {
-	val, err := c.rdb.RPop(ctx, key).Bytes()
+	val, err := write(ctx, c, func(p goredis.Pipeliner) *goredis.StringCmd { return p.RPop(ctx, key) }).Bytes()
 	if err == goredis.Nil {
 		return nil, fredis.ErrNil
 	}
@@ -232,12 +238,12 @@ func (c *Client) LRange(ctx context.Context, key string, start, stop int64) ([]s
 // LTrim implements ListTrimmer: in-place trim without the DEL+RPUSH
 // loss window of the emulated fallback.
 func (c *Client) LTrim(ctx context.Context, key string, start, stop int64) error {
-	return c.rdb.LTrim(ctx, key, start, stop).Err()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.StatusCmd { return p.LTrim(ctx, key, start, stop) }).Err()
 }
 
 // LRem implements fredis.ListRemover.
 func (c *Client) LRem(ctx context.Context, key string, count int64, value any) (int64, error) {
-	return c.rdb.LRem(ctx, key, count, value).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.LRem(ctx, key, count, value) }).Result()
 }
 
 // --- Sorted Set ---
@@ -247,11 +253,11 @@ func (c *Client) ZAdd(ctx context.Context, key string, members ...fredis.Z) (int
 	for i, m := range members {
 		zs[i] = goredis.Z{Score: m.Score, Member: m.Member}
 	}
-	return c.rdb.ZAdd(ctx, key, zs...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.ZAdd(ctx, key, zs...) }).Result()
 }
 
 func (c *Client) ZRem(ctx context.Context, key string, members ...any) (int64, error) {
-	return c.rdb.ZRem(ctx, key, members...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.ZRem(ctx, key, members...) }).Result()
 }
 
 func (c *Client) ZScore(ctx context.Context, key string, member string) (float64, error) {
@@ -301,11 +307,11 @@ func (c *Client) ZCard(ctx context.Context, key string) (int64, error) {
 // --- Set ---
 
 func (c *Client) SAdd(ctx context.Context, key string, members ...any) (int64, error) {
-	return c.rdb.SAdd(ctx, key, members...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.SAdd(ctx, key, members...) }).Result()
 }
 
 func (c *Client) SRem(ctx context.Context, key string, members ...any) (int64, error) {
-	return c.rdb.SRem(ctx, key, members...).Result()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.SRem(ctx, key, members...) }).Result()
 }
 
 func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
@@ -319,28 +325,11 @@ func (c *Client) SIsMember(ctx context.Context, key string, member any) (bool, e
 // --- Pipeline / Script ---
 
 func (c *Client) Pipeline() fredis.IPipeline {
-	return newPipeline(c.rdb.Pipeline())
+	return newPipeline(c.rdb, c.resends)
 }
 
-// scriptCmd 是一条不让 go-redis 自动重放的脚本命令。
-//
-// 驱动的 MaxRetries 在连接 EOF / 读超时后会把同一条命令换连接再发；对脚本来说，回复丢失时
-// 服务端可能已经执行过，重放就是第二次执行。CompareAndSet 第二次执行看到的是自己刚写的值、
-// 回答“没比上”，versionstore.Update 于是把 mutate 叠在自己那次写上再写一次并返回成功
-// （RR-20261005-NC-100）。结果未知只能由调用方按语义裁决，所以脚本的传输错误原样返回，
-// 由调用方决定是否、怎样重试；普通读写命令仍保留驱动的自动重试。
-// 集群模式下 MOVED / ASK 重定向不受影响（脚本在错误节点上没有执行）。
-type scriptCmd struct{ *goredis.Cmd }
-
-func (scriptCmd) NoRetry() bool { return true }
-
-// Clone 保留不可重放标记；路由层复制命令时不能退回普通 *Cmd。
-func (c scriptCmd) Clone() goredis.Cmder {
-	return scriptCmd{c.Cmd.Clone().(*goredis.Cmd)}
-}
-
-// newScriptCmd 与 go-redis 的 cmdable.eval 组装相同的参数与首键位置，只是带上 NoRetry。
-func newScriptCmd(ctx context.Context, name, payload string, keys []string, args ...any) scriptCmd {
+// newScriptCmd 与 go-redis 的 cmdable.eval 组装相同的参数与首键位置（集群槽位计算不变）。
+func newScriptCmd(ctx context.Context, name, payload string, keys []string, args ...any) *goredis.Cmd {
 	cmdArgs := make([]any, 0, 3+len(keys)+len(args))
 	cmdArgs = append(cmdArgs, name, payload, len(keys))
 	for _, key := range keys {
@@ -351,22 +340,24 @@ func newScriptCmd(ctx context.Context, name, payload string, keys []string, args
 	if len(keys) > 0 {
 		cmd.SetFirstKeyPos(3)
 	}
-	return scriptCmd{cmd}
+	return cmd
 }
 
-// runScript 发一次脚本，不经驱动重放。
-func runScript(ctx context.Context, rdb goredis.UniversalClient, name, payload string, keys []string, args ...any) *goredis.Cmd {
+// runScript 发一次脚本：驱动不重放（回复丢失时脚本可能已执行，第二次执行会把自己的写当成别人的写，
+// RR-20261005-NC-100）；错误证明脚本没执行（LOADING、拨号失败等）时在这里重发，补回 NC-100
+// 关掉驱动重试后丢掉的那部分可用性（NC-101 复审“应改”，A2）。
+func runScript(ctx context.Context, rdb goredis.UniversalClient, resends int, name, payload string, keys []string, args ...any) *goredis.Cmd {
 	cmd := newScriptCmd(ctx, name, payload, keys, args...)
-	_ = rdb.Process(ctx, cmd)
-	return cmd.Cmd
+	_ = sendOnce(ctx, rdb, resends, cmd)
+	return cmd
 }
 
 func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
-	return runScript(ctx, c.rdb, "eval", script, keys, args...).Result()
+	return runScript(ctx, c.rdb, c.resends, "eval", script, keys, args...).Result()
 }
 
 func (c *Client) EvalSha(ctx context.Context, sha string, keys []string, args ...any) (any, error) {
-	return runScript(ctx, c.rdb, "evalsha", sha, keys, args...).Result()
+	return runScript(ctx, c.rdb, c.resends, "evalsha", sha, keys, args...).Result()
 }
 
 // EvalDurable pins a physical connection so WAITAOF observes the replication
@@ -384,6 +375,8 @@ func (c *Client) EvalDurable(ctx context.Context, script string, keys []string, 
 	return results[0], local, replicas, nil
 }
 
+// EvalBatchDurable 把全部脚本与一条 WAITAOF 放在同一条物理连接上流水线发出。整条不经驱动重放；
+// 每条命令的错误都证明没执行（例如取连接时拨号失败）时换一条新连接整条重发。
 func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []fredis.EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
 	if len(calls) == 0 {
 		return nil, 0, 0, nil
@@ -392,21 +385,49 @@ func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []fr
 	if !ok {
 		return nil, 0, 0, fmt.Errorf("redis: same-connection WAITAOF is unsupported for %T; use a single-primary or Sentinel endpoint", c.rdb)
 	}
+	for attempt := 0; ; attempt++ {
+		commands, waitCommand, execErr := evalBatchOnConn(ctx, client, script, calls, numLocal, numReplicas, timeout)
+		if execErr == nil {
+			return durableBatchResults(commands, waitCommand)
+		}
+		sent := append(append([]goredis.Cmder(nil), commandsAsCmders(commands)...), waitCommand)
+		if attempt >= c.resends || !allNotExecuted(sent) {
+			return nil, 0, 0, execErr
+		}
+		if waitErr := waitBeforeResend(ctx, attempt); waitErr != nil {
+			return nil, 0, 0, errors.Join(execErr, waitErr)
+		}
+	}
+}
+
+// evalBatchOnConn 在一条新的独占连接上发一次脚本批次与 WAITAOF。
+func evalBatchOnConn(ctx context.Context, client *goredis.Client, script string, calls []fredis.EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]*goredis.Cmd, *goredis.Cmd, error) {
 	conn := client.Conn()
 	defer func() { _ = conn.Close() }()
 	pipe := conn.Pipeline()
-
 	commands := make([]*goredis.Cmd, 0, len(calls))
 	for _, call := range calls {
 		// 与 Eval 相同，脚本不经驱动重放（RR-20261005-NC-100）：含 NoRetry 命令的流水线整体不重发。
 		command := newScriptCmd(ctx, "eval", script, call.Keys, call.Args...)
-		_ = pipe.Process(ctx, command)
-		commands = append(commands, command.Cmd)
+		_ = pipe.Process(ctx, noReplay{command})
+		commands = append(commands, command)
 	}
-	waitCommand := pipe.Do(ctx, "WAITAOF", numLocal, numReplicas, timeout.Milliseconds())
-	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, 0, 0, err
+	waitCommand := goredis.NewCmd(ctx, "WAITAOF", numLocal, numReplicas, timeout.Milliseconds())
+	_ = pipe.Process(ctx, noReplay{waitCommand})
+	_, err := pipe.Exec(ctx)
+	return commands, waitCommand, err
+}
+
+func commandsAsCmders(commands []*goredis.Cmd) []goredis.Cmder {
+	out := make([]goredis.Cmder, len(commands))
+	for i, command := range commands {
+		out[i] = command
 	}
+	return out
+}
+
+// durableBatchResults 解析 WAITAOF 回复与每条脚本的结果。
+func durableBatchResults(commands []*goredis.Cmd, waitCommand *goredis.Cmd) ([]any, int64, int64, error) {
 	reply, err := waitCommand.Slice()
 	if err != nil {
 		return nil, 0, 0, err
@@ -436,7 +457,7 @@ func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []fr
 // --- PubSub ---
 
 func (c *Client) Publish(ctx context.Context, channel string, message any) error {
-	return c.rdb.Publish(ctx, channel, message).Err()
+	return write(ctx, c, func(p goredis.Pipeliner) *goredis.IntCmd { return p.Publish(ctx, channel, message) }).Err()
 }
 
 func (c *Client) Subscribe(ctx context.Context, channels ...string) fredis.IPubSub {

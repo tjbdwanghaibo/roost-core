@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -156,6 +157,12 @@ func TestRealMongoCommitIsBoundedByTransactionTimeout(t *testing.T) {
 			}
 			if committed > 0 && !resultUnknown(err) {
 				t.Fatalf("the transaction committed but the error does not read as an unknown result: %v", err)
+			}
+			// A2：提交已经发出（两种黑洞都在回调之后才加），调用方要能用专用哨兵可靠识别结果未知，
+			// 不靠时有时无的 UnknownTransactionCommitResult 标签；截止语义保留。
+			if !errors.Is(err, fmongo.ErrCommitResultUnknown) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("commit was sent and cut by the deadline (committed=%d) but err=%v: errors.Is ErrCommitResultUnknown=%v DeadlineExceeded=%v",
+					committed, err, errors.Is(err, fmongo.ErrCommitResultUnknown), errors.Is(err, context.DeadlineExceeded))
 			}
 		})
 	}

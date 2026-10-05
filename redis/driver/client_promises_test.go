@@ -27,8 +27,14 @@ import (
 // nilReplyRedis 对七个读命令一律回答 redis.Nil；其余方法保持 nil 接口指针，
 // 未预期的调用直接 panic。
 type nilReplyRedis struct {
-	goredis.UniversalClient
+	builderOnly
 	wireErr error // 非 nil 时改为返回这个错误，验证非 Nil 错误不得被映射
+}
+
+// Process 接住写路径（LPop / RPop 经 sendOnce 发出）：一律回答同一个错误。
+func (r nilReplyRedis) Process(_ context.Context, cmd goredis.Cmder) error {
+	cmd.SetErr(r.reply())
+	return r.reply()
 }
 
 func (r nilReplyRedis) reply() error {
@@ -197,15 +203,29 @@ func TestRedisIntegerRejectsUnsignedOverflow(t *testing.T) {
 }
 
 // pipelineStub 只实现 pipeline 包装器会调用的 LPop 与 Exec。
+// pipelineStub 收下入队的命令；Exec 像 go-redis 一样把错误写到每条命令上并返回它。
 type pipelineStub struct {
 	goredis.Pipeliner
 	execErr error
+	queued  []goredis.Cmder
 }
 
-func (p pipelineStub) LPop(context.Context, string) *goredis.StringCmd {
-	return goredis.NewStringResult("", goredis.Nil)
+func (p *pipelineStub) Process(_ context.Context, cmd goredis.Cmder) error {
+	p.queued = append(p.queued, cmd)
+	return nil
 }
-func (p pipelineStub) Exec(context.Context) ([]goredis.Cmder, error) { return nil, p.execErr }
+func (p *pipelineStub) Exec(context.Context) ([]goredis.Cmder, error) {
+	cmds := p.queued
+	p.queued = nil
+	for _, cmd := range cmds {
+		cmd.SetErr(p.execErr)
+	}
+	return cmds, p.execErr
+}
+
+func stubPipeline(execErr error) *pipeline {
+	return &pipeline{rdb: builderOnly{}, pipe: &pipelineStub{execErr: execErr}, resends: 3}
+}
 
 // go-redis 的 Pipeline.Exec 会把第一条命令的 redis.Nil 当作整条 pipeline 的错误
 // 返回。对调用方而言"某个键不存在"不是 pipeline 失败：Exec 必须返回 nil，
@@ -213,7 +233,7 @@ func (p pipelineStub) Exec(context.Context) ([]goredis.Cmder, error) { return ni
 func TestPipelineExecToleratesNilButPropagatesRealErrors(t *testing.T) {
 	ctx := context.Background()
 
-	missing := newPipeline(pipelineStub{execErr: goredis.Nil})
+	missing := stubPipeline(goredis.Nil)
 	future := missing.LPop(ctx, "queue")
 	if err := missing.Exec(ctx); err != nil {
 		t.Fatalf("Exec with a Nil reply: err=%v, want nil", err)
@@ -223,9 +243,18 @@ func TestPipelineExecToleratesNilButPropagatesRealErrors(t *testing.T) {
 	}
 
 	wireErr := errors.New("wire: broken pipe")
-	broken := newPipeline(pipelineStub{execErr: wireErr})
+	broken := stubPipeline(wireErr)
 	broken.LPop(ctx, "queue")
 	if err := broken.Exec(ctx); !errors.Is(err, wireErr) {
 		t.Fatalf("Exec with a wire error: err=%v, want %v", err, wireErr)
 	}
 }
+
+// commandBuilder 是一个从不连接的 go-redis 客户端，只用来给替身提供 Pipeline()：
+// 驱动用它组装写命令（参数展开与类型化方法一致），真正发送走替身的 Process。
+var commandBuilder = goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"})
+
+// builderOnly 是只会组装命令的 UniversalClient 替身，其余方法保持 nil 接口指针。
+type builderOnly struct{ goredis.UniversalClient }
+
+func (builderOnly) Pipeline() goredis.Pipeliner { return commandBuilder.Pipeline() }

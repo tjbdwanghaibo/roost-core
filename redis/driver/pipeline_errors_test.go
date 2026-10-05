@@ -42,7 +42,7 @@ func TestPipelineExecChecksEveryCommandError(t *testing.T) {
 				goredis.NewStringResult("", goredis.Nil),
 				goredis.NewStatusResult("", tc.command),
 			}}
-			err := newPipeline(stub).Exec(context.Background())
+			err := (&pipeline{pipe: stub}).Exec(context.Background())
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Exec=%v, want %v", err, tc.want)
 			}
@@ -58,7 +58,7 @@ func TestPipelineExecPopulatesAllFuturesOnFailure(t *testing.T) {
 	integer := goredis.NewIntResult(42, nil)
 	hash := goredis.NewMapStringStringResult(map[string]string{"field": "value"}, nil)
 	stub := &pipelineResultsStub{execErr: goredis.Nil, commands: []goredis.Cmder{missing, str, bad, integer, hash}}
-	pipe := newPipeline(stub)
+	pipe := &pipeline{pipe: stub}
 	// Use the same tracked command/future pairs Get/Incr/HGetAll establish.
 	goodFuture, missingFuture, badFuture := &redis.FutureBytes{}, &redis.FutureBytes{}, &redis.FutureBytes{}
 	intFuture, mapFuture := &redis.FutureInt64{}, &redis.FutureStringMap{}

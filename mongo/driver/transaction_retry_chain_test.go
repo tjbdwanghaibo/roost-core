@@ -52,3 +52,39 @@ func TestWithTransactionKeepsTheLastCallbackErrorWhenTheWindowClosesInBackoff(t 
 			err, calls, errors.Is(err, fmongo.ErrDuplicateKey), hasErrorLabel(err, labelTransient))
 	}
 }
+
+// A2：确定未提交的失败不带 fmongo.ErrCommitResultUnknown——回调失败、截止在提交前到期时不发提交，
+// 调用方可以把它们当作“没提交”。哨兵只属于提交发出之后的失败（真实副本集用例见
+// TestRealMongoCommitIsBoundedByTransactionTimeout）。不需要服务端：回调不做 I/O，Starting 状态的
+// abort 不发命令。
+func TestWithTransactionFailuresBeforeTheCommitAreNotResultUnknown(t *testing.T) {
+	cli, err := drivermongo.Connect(options.Client().ApplyURI("mongodb://127.0.0.1:1/?directConnection=true").SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Disconnect(context.Background()) }()
+	for _, tc := range []struct {
+		name string
+		fn   func(ctx context.Context) error
+		want error
+	}{
+		{"callback error", func(context.Context) error { return fmongo.ErrVersionConflict }, fmongo.ErrVersionConflict},
+		{"deadline before commit", func(ctx context.Context) error { <-ctx.Done(); return nil }, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, err := cli.StartSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &session{sess: sess, timeout: 100 * time.Millisecond, options: options.Transaction()}
+			defer s.EndSession(context.Background())
+			err = s.WithTransaction(context.Background(), tc.fn)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v, want %v", err, tc.want)
+			}
+			if errors.Is(err, fmongo.ErrCommitResultUnknown) {
+				t.Fatalf("a failure before the commit was sent reads as result unknown: %v", err)
+			}
+		})
+	}
+}

@@ -95,6 +95,10 @@ func (s *RedisRawSortedSetStore[M]) SetScore(ctx context.Context, member M, scor
 		return nil
 	}
 	if _, err := s.redis.ZAdd(ctx, s.key, fredis.Z{Score: score, Member: rawSortedSetMember(member)}); err != nil {
+		// 与 RedisJSONHashStore.Set 相同：ZADD 结果未知时仍补发 EXPIRE，不留下永不过期的键（A2）。
+		if s.ttl > 0 {
+			_, _ = s.redis.Expire(ctx, s.key, s.ttl)
+		}
 		return err
 	}
 	if s.ttl > 0 {

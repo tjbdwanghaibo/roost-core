@@ -3,8 +3,11 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -42,8 +45,10 @@ type session struct {
 // UnknownTransactionCommitResult（非 MaxTimeMSExpired）时只重试提交；提交返回
 // TransientTransactionError 时重跑回调——只是把同一个带截止的 ctx 交给提交。
 //
-// 截止时间落在提交中途时返回驱动的错误（错误链与标签保留）：服务端可能已经提交，
-// 调用方必须按结果未知处理，不能当成未提交。这里提交失败后不 abort（驱动同样不这么做：
+// 提交发出之后失败时返回 fmongo.ErrCommitResultUnknown 包着的驱动错误（错误链与标签保留，
+// 截止导致的仍满足 errors.Is(err, context.DeadlineExceeded)）：服务端可能已经提交，
+// 调用方必须按结果未知处理，不能当成未提交。不带这个哨兵的错误都是确定未提交（回调失败、
+// 提交前截止到期、提交被判为暂时性错误后窗口到期）。这里提交失败后不 abort（驱动同样不这么做：
 // 失败的提交可能已解除 session 的服务器绑定，abort 可能与提交并发执行）。但提交因截止失败时
 // 驱动不更新事务状态（CommitTransaction 的 IsTimeout 分支），之后的 EndSession 仍会对它补发
 // abortTransaction；副本集上同一 txnNumber 的提交与 abort 由服务端串行裁决，结果仍是二者之一，
@@ -99,7 +104,13 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 			lastErr = err
 			continue
 		}
-		return err
+		if err != nil {
+			// 提交命令已经发出：服务端可能已经提交。包上专用哨兵，调用方不必再靠标签或
+			// DeadlineExceeded 猜（标签可能被驱动的内部重试覆盖，DeadlineExceeded 也匹配提交前到期，
+			// RR-20261005-NC-101 复审观察）；原错误链保留。
+			return fmt.Errorf("%w: %w", fmongo.ErrCommitResultUnknown, err)
+		}
+		return nil
 	}
 }
 

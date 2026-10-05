@@ -32,6 +32,8 @@ end`
 // DistLockFactory implements fredis.IDistLockFactory.
 type DistLockFactory struct {
 	rdb goredis.UniversalClient
+	// resends 是 SETNX / 脚本在“确定未执行”错误上的重发次数（与 Client 相同，A2）。
+	resends int
 }
 
 // Contract boundary: the locks in this file implement fredis.IDistLock —
@@ -43,24 +45,29 @@ type DistLockFactory struct {
 // entity ownership, anything a store must be able to reject stale writers
 // for — use remote_entity's versionedLock (fence counter outlives the TTL,
 // stores compare fences) or etcd's IFencedElection.
+//
+// 锁的三条命令（SETNX、释放脚本、续期脚本）都不经驱动重放：被重放的 SETNX 会把自己刚拿到的锁
+// 报成“已被占用”、锁一直挂到 TTL；被重放的释放脚本会把成功释放报成 ErrLockNotHeld。
+// 确定未执行的错误（拨号失败、LOADING 等）仍重发，次数取 go-redis 缺省 3。
 func NewDistLockFactory(rdb goredis.UniversalClient) *DistLockFactory {
-	return &DistLockFactory{rdb: rdb}
+	return &DistLockFactory{rdb: rdb, resends: resendsFor(0)}
 }
 
 func (f *DistLockFactory) NewLock(key string, ttl time.Duration) fredis.IDistLock {
 	if f == nil {
 		return &distLock{key: key, ttl: ttl}
 	}
-	return &distLock{rdb: f.rdb, key: key, ttl: ttl}
+	return &distLock{rdb: f.rdb, resends: f.resends, key: key, ttl: ttl}
 }
 
 var _ fredis.IDistLockFactory = (*DistLockFactory)(nil)
 
 // distLock implements fredis.IDistLock.
 type distLock struct {
-	rdb goredis.UniversalClient
-	key string
-	ttl time.Duration
+	rdb     goredis.UniversalClient
+	resends int
+	key     string
+	ttl     time.Duration
 
 	mu    sync.Mutex
 	value string // unique per-acquisition owner identity
@@ -100,7 +107,9 @@ func (l *distLock) Acquire(ctx context.Context) (bool, error) {
 		return false, ErrDistLockStateUncertain
 	}
 	value := generateLockValue()
-	ok, err := l.rdb.SetNX(ctx, l.key, value, l.ttl).Result()
+	setNX := buildWrite(l.rdb, func(p goredis.Pipeliner) *goredis.BoolCmd { return p.SetNX(ctx, l.key, value, l.ttl) })
+	_ = sendOnce(ctx, l.rdb, l.resends, setNX)
+	ok, err := setNX.Result()
 	if err != nil {
 		// SetNX may have reached Redis even when the reply is lost. Preserve the
 		// token so Release can reconcile with a value-guarded delete.
@@ -128,7 +137,7 @@ func (l *distLock) Release(ctx context.Context) error {
 	if l.state == distLockIdle || l.value == "" {
 		return fredis.ErrLockNotHeld
 	}
-	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
+	result, err := runScript(ctx, l.rdb, l.resends, "eval", releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
 		l.state = distLockUncertain
 		return err
@@ -153,7 +162,7 @@ func (l *distLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) 
 	if l.state == distLockIdle || l.value == "" {
 		return false, fredis.ErrLockNotHeld
 	}
-	result, err := l.rdb.Eval(ctx, extendLockScript, []string{l.key}, l.value, ttl.Milliseconds()).Int64()
+	result, err := runScript(ctx, l.rdb, l.resends, "eval", extendLockScript, []string{l.key}, l.value, ttl.Milliseconds()).Int64()
 	if err != nil {
 		l.state = distLockUncertain
 		return false, err
