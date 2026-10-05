@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：方案。**状态（2026-10-05）：第 1、2、2b、3、3b、4 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`、`f051e24a`、`40d89ac6`，第 4 笔见 §13）；第 5 笔未实施。
+- 性质：方案。**状态（2026-10-05）：第 1、2、2b、3、3b、4 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`、`f051e24a`、`40d89ac6`、`5bdac773`）；第 5 笔未实施。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -516,7 +516,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - 验证（`GOWORK=off`，干净 worktree）：`gofmt -l` 空；`go build ./... && go vet ./...`（含 `-tags integration ./kit/service/...`）通过；`go test -race -count=1 ./kit/service/global/...` 通过；`go test -tags integration -count=1 -p 1 ./kit/service/global/... ./kit/service/integration/...` 在 `~/.roost-it` 的隔离 Redis 上通过（`REDIS_ADDR` 取该环境的地址，测试键前缀 `itest:<name>:<纳秒>`、用例结束删除）；`go test -count=1 ./codegen/...` 全绿；根包 `go test -count=1 .` 通过；`go generate ./...` 后 porcelain 为空；生成 game-demo（`project new sdemo3b -template game-demo` + `go mod edit -replace`）`go build ./... && go vet ./...` 通过、`go test ./internal/service/game/` 通过，生成的 `config.global*.yaml` 的 `global:` 段只有 `key_prefix`。
 - 未验证：仓外调用方（按破坏性变更登记）；旧部署 Redis 里遗留的 `<global.key_prefix>:lease:*` 键不自动清理。
 
-### 第 4 笔（2026-10-05）
+### 第 4 笔（2026-10-05，提交 `5bdac773`）
 
 - 范围（静态绑定方案 §3.3，matchmaker 的 §3.4 已在第 3 笔完成）：`demo/game/gift/gift.go.tmpl`（`State.FromSID`，json `from_sid`；`Encode` 拒绝 `FromSID <= 0`，`Decode` 不要求，以便准入点名拒绝）；`demo/game/handler/start_gift.go.tmpl`（`handlerStartGift` 加参数 `fromSID int32`，写进状态；sender 由 `project new` / `roost generate` 从 `//roost:nest` 生成，仓库里没有提交的生成物，生成工程里的 `Sync_StartGift` 随之多一个 `fromSID int32` 参数）；`send_gift.go.tmpl` 传 `owners.SID()`，`controller.go.tmpl` 的 `playerOwners` 加 `SID()`（取不到驻留表时按 enter_game 的方式回错误码并记 Error）；`gift_saga.go.tmpl`：`playerOwnership` 只剩 `AdmitBound`，`admitPhase` 与 `runHandoff` 改为 `AdmitBound(From, FromSID)`，`giftStepHandoff` 带 `FromSID`，`giftHandoffRouter`（`ownerroute.Router[giftStepHandoff, int32, sidRoute]`，`KeyOf` = `cmd.FromSID`，静态解析器 `sidRoutes`：`GetRoute(sid) = (sidRoute{sid}, sid > 0, nil)`）由生产装配与测试共用，生产装配装上发送半边（取代 `handoff=nil`）；core `ownerroute` 未改。codegen `demo.go` 清单加 `send_gift_test.go`、更新 `gift_handoff_test.go` 说明；`demo/README.md` 赠礼节加“在哪个进程执行”；GAME_DEMO_TEMPLATE §9.12 加“部分取代”说明；CHANGELOG `[Unreleased]` Changed 一条。
 - 准入语义：`FromSID == SID()` → `AdmitBound` 建立或刷新驻留记录（算一次使用）并放行，离线、没有副本的发送方也在其绑定 sid 上 debit / refund（Nest 慢池冷加载，驻留记录让闲置卸载之后收走副本），恢复了第 3 笔过渡期失去的执行；`FromSID != SID()` → 转交给 `FromSID` 后拒绝（nak），不建记录；本服但副本正在卸载 → 拒绝、不转交；`FromSID == 0` → 拒绝并记 Error（`gift saga: refusing a step whose payload names no sender sid`），不兜底。转交接收方：`AdmitBound` 返回非本服或卸载中 → 静默丢弃。核对第 3 笔警告：`PlayerOwners.AdmitBound` 只在 `boundSID == owners.sid` 时进入临界区建记录，`boundSID` 为 0 或别的 sid 直接返回 `(false, nil)`，不会为绑定在别的服的玩家建驻留记录；`NewPlayerOwners` 要求 sid > 0，所以 0 永远不是本服。
