@@ -53,7 +53,10 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
 | A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 已实施（5407f127，[方案与实施](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）；skill Runtime 状态进 DAO 列为后续（方案 §4.4） |
-| A2～A5 | 按推荐 | 待实施（A5 测试侧已按“共享”改完，补文档与全局命令持锁核对） |
+| A2～A5 | 按推荐 | A2、A3 见下行；A4、A5 **已实施（`3e3350d5`）**，见下两行 |
+| A4 | 按推荐：先 ②（逐个改严格读取），① schema 作为后续重构 | **已实施（`3e3350d5`）**：新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`；kit 各 Mod 与 app 改严格读取；`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键，含 syncbus 三段与 `<service>.call_timeout`）检查；守卫测试扫描源码。生成工程三份配置在严格校验下全部通过（game-demo 与 CI full 场景）。**未做**：kit/redis 三个整数读取（留给 A2 之后，启动校验已兜住）；生成的 player TCP / RPC 客户端代码改严格读取（等生成器 Core 下限升到 v1.20.2）；① schema。[方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) |
+| A5 | 按推荐：② 共享，全局运维命令保留锁 | **已实施（`3e3350d5`）**：共享使用规则写进 `kit/scripts/integration/README.md`、roost-coding、roost-bugfix（SKILL 与 lessons）；核对发现 NC-203 之后全局命令只检查锁、不持有，failover 用例与带故障的生成工程验收整段不持锁，按先红后绿补修（NC-203 复核补修）。[记录](../bugfix/RR-20261005-NC-203.md#复核后的补修2026-10-05维护者决定-a5) |
+| C1 | 随 A4 按方案 1 | **已实施（`3e3350d5`）**：生产校验删去九组无读取方的要求，USER_GUIDE §10 写明 `env: production` 校验范围；生成的生产示例 / Secret 示例打开生产模式可以启动。[记录](../bugfix/RR-20261005-NC-192.md) |
 | A2 | 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做 | **已实施（`cf5721c9`）**：Redis 写命令、含写的 pipeline、EvalBatchDurable、DistLock 都不经驱动重放，只在 `driver.IsDefinitelyNotExecuted` 判为真时重发（脚本同样，NC-101 复审应改项 1）；Mongo 提交发出之后的失败包 `mongo.ErrCommitResultUnknown`（应改项 2）；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。契约表：[redis/driver](../../redis/driver/README.md)、[mongo/driver](../../mongo/driver/README.md)。调用方核对没有发现双写；bus 的 SETNX 去重、global Bind 的误报、L2 快照 DEL 被吞掉、Redis Cluster 实测，留作观察或交给归属方。[方案](../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) |
 | A3 | 按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示 | **已实施（`50f2ac2a`）**：`internal/operation.Lifetime` 补 `Wait(ctx)`，bus / syncbus / mirror 三份迁移；`internal/stopcontract` 骨架套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP；glsvet `-stophints`（Mutex.Lock 误报约 100%，未加）；骨架发现 NC-173 残余并补修。② 排空下沉到 ISyncBus 退订留待下个大版本。[方案](../feature/REFACTOR-2026-10-05-shared-stop-contract.md) |
 | B1 | 协调器接收 completion 时核对代际：做 | 待实施 |
@@ -69,7 +72,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | 发布 | v1.20.2 暂不发，上述实施完成后统一发版 | — |
 | 额度 | 额度不足时，先把未完成项记进文档并推送，再停止 | 规则 |
 
-未在本轮答复中出现、仍按上表推荐待定的：B4、B6、B8、B9、B10、C1（随 A4 一并按方案 1 做）、C2、C5、C9。
+未在本轮答复中出现、仍按上表推荐待定的：B4、B6、B8、B9、B10、C2、C5、C9（C1 已随 A4 按方案 1 实施）。
 
 ## 维护者决定（2026-10-05，第三轮）
 
