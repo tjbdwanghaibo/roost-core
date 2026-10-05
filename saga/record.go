@@ -111,11 +111,14 @@ type Record struct {
 	Type              string
 	DefinitionVersion uint32
 	BusinessKey       string
-	Status            Status
-	Phase             Phase
-	Step              int
-	CompletedSteps    int
-	Attempt           uint32
+	// StartDigest 是规范化原始启动意图的 SHA-256，不随步骤 Data、Resume 或截止时间变更。
+	// 旧记录可为空；自定义 Store 必须在 Create/Get/Apply/Clone 链完整保留（NC-39）。
+	StartDigest    string
+	Status         Status
+	Phase          Phase
+	Step           int
+	CompletedSteps int
+	Attempt        uint32
 	// Incarnation counts Resume generations. It is folded into CommandID so a
 	// resumed operation can never reuse a CommandID from a previous life of
 	// the same Saga (Resume resets Attempt), which would collide with stale

@@ -1,0 +1,4 @@
+{
+  "command": "go vet ./servicemetrics ./kit/service/servicemetrics",
+  "exit": 0
+}

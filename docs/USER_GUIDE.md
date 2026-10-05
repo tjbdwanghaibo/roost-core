@@ -320,6 +320,10 @@ Write 模式使用 Mongo 持久所有权；共享写先竞争 Redis 协调锁，
 
 ## 7. 跨服务 Saga
 
+启动重投比较原始意图，不比较当前业务状态（NC-39）：新记录的 `StartDigest` / Mongo `start_digest` 与可变 `Data`、`DeadlineAt` 分离。相同 type/business_key/definition_version/data/deadline 返回已有进度；不同意图或显式ID不符返回 `ErrIdentityConflict`，不会重置 Saga。自定义 Store 必须保留摘要，协调 writer 统一升级；旧已推进缺摘要记录无法证明原意图，重投明确冲突，应先 Get/List 查进度，不换业务键盲重做、不自动从当前 Data 回填摘要。[兼容/迁移边界](bugfix/RR-20261005-NC-39.md)。
+
+原生完成 effect 的 Topic 必须是 `saga.result.<payload SagaID>`（NC-40），不一致在状态/回执写入前永久拒绝；正式 `NewCompletionEffect/EmitCompletion` 本来满足该格式。自定义发布源修正路由后再按幂等协议发送；这不是内部发布鉴权。[说明](bugfix/RR-20261005-NC-40.md)。取消消费等待不代表业务已撤销，原生收件箱保留可能在途的lease，按权威receipt与既有屏障恢复，不删WAL/回执。[取消学习](review/IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md)。
+
 Saga 用于无法放进同一 Mongo transaction 的多阶段流程，例如跨区交易、联盟转服、邮件发奖与外部支付。每一步由持久状态机、lease fencing、outbox 和幂等 receipt 驱动；失败执行显式补偿。Nest 事务可写入 start effect，使“本地提交”和“启动 Saga”共享一个 commit point。
 
 Saga 不是分布式 ACID：补偿可能延迟，外部系统可能需要人工处理。步骤 handler 要区分可重试错误、永久错误和结果未知；补偿同样必须幂等。

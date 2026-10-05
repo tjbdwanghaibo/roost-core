@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N06第二批**：[NC-39/40](review/REVIEW-2026-10-05-noncore-26.md)已修复、声明场景验证，未发版。启动摘要/原生完成路由11反例红→绿，含兼容和取消恢复26新正式叶子；本地矩阵见证据。旧已推进缺摘要记录启动重投明确冲突，不自动迁移；N06仍部分完成，Service增量/跨协调器/真实Mongo/NATS/HA待补。不改变下表历史性能边界。
+
 **10-05 N06第一批**：[NC-37/38](review/REVIEW-2026-10-05-noncore-25.md)已修复、声明场景验证，未发版；Saga三消费者健康、持久代际/两次恢复与相邻关停共20新正式叶子，相关race498/1skip、根包14、build/vet/glsvet及生成双模式通过。N05在途退订契约本机补证后接续N06；两域仍部分完成，真实Mongo/NATS/HA/容量、旧writer混跑与历史waiting处置未验收。
 
 以下均为本机 Go1.27.0、Apple M5 的限定负载，不是生产跨机SLA。参数、命令和原始产物路径见[九项报告](feature/REFACTOR-2026-09-26-core-nine-items.md)。可随仓库携带的脱敏汇总、完整28条Sync outlier及结果文件SHA256见[证据JSON](feature/CORE-OPTIMIZATION-2026-09-26-evidence.json)；本地大日志/profile不入Git，也不保证其他checkout存在。
@@ -179,6 +181,8 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 10-05 U-0279：[Nest 暂时性冲突重排加抖动](bugfix/U-0279-nest-requeue-jitter.md) **已修复，未发版**。v1.20.0 整体验证 `TestGeneratedDataEngineCrossCreateResolvesOnRealWAL` 耗尽 400 次上限，正常负载下 v1.20.0 / v1.19.2 失败率 35%～53%（既有问题，满载时反而罕见）；固定 5ms 重排 + 单定时器延迟队列让对称交叉创建每轮重演（活锁），改为 5ms + [0, 5ms) 抖动（OPEN-ITEMS C09 预案），上限与最短窗口不变。T-220。
+
+10-05第十六批：[NC-39](bug/RR-20261005-NC-39.md) / [NC-40](bug/RR-20261005-NC-40.md) **已修复、声明场景验证，未发版**。[启动修复/兼容](bugfix/RR-20261005-NC-39.md)、[路由修复](bugfix/RR-20261005-NC-40.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-16/README.md)、[机制](review/IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md)。T-221/222；optional持久字段要求统一升级writer，不自动补旧已推进记录，拒绝消息不自动改路由。
 
 10-05第十五批：[NC-37](bug/RR-20261005-NC-37.md) / [NC-38](bug/RR-20261005-NC-38.md) **已修复、声明场景验证，未发版**。三个消费者health与incarnation持久映射；[健康修复](bugfix/RR-20261005-NC-37.md)、[代际修复/兼容](bugfix/RR-20261005-NC-38.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-15/README.md)、[机制/复盘](review/IMPLEMENTATION-SAGA-CONSUMER-HEALTH-AND-DURABLE-RESUME.md)。T-218/219。新BSON字段不需要重生成，但旧writer完整Replace会丢字段；不自动修历史回执或生产记录。
 

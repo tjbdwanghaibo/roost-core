@@ -381,11 +381,13 @@ type recordDoc struct {
 	Type              string `bson:"type"`
 	DefinitionVersion uint32 `bson:"definition_version"`
 	BusinessKey       string `bson:"business_key"`
-	Status            Status `bson:"status"`
-	Phase             Phase  `bson:"phase"`
-	Step              int    `bson:"step"`
-	CompletedSteps    int    `bson:"completed_steps"`
-	Attempt           uint32 `bson:"attempt"`
+	// RR-20261005-NC-39：启动摘要属于不可变身份，完整 Replace 不能把它丢掉。
+	StartDigest    string `bson:"start_digest,omitempty"`
+	Status         Status `bson:"status"`
+	Phase          Phase  `bson:"phase"`
+	Step           int    `bson:"step"`
+	CompletedSteps int    `bson:"completed_steps"`
+	Attempt        uint32 `bson:"attempt"`
 	// RR-20261005-NC-38：Resume 代际属于持久派发身份，遗漏会在重读后复用旧 CommandID。
 	Incarnation  uint32    `bson:"incarnation,omitempty"`
 	Version      uint64    `bson:"version"`
@@ -407,14 +409,14 @@ func toRecordDoc(r Record) recordDoc {
 	if leaseUntil.IsZero() {
 		leaseUntil = time.Unix(0, 0).UTC()
 	}
-	return recordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt, Incarnation: r.Incarnation, Version: r.Version, Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID, NextRunAt: r.NextRunAt, DeadlineAt: r.DeadlineAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, LeaseOwner: r.Lease.Owner, LeaseToken: r.Lease.Token, LeaseUntil: leaseUntil}
+	return recordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, StartDigest: r.StartDigest, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt, Incarnation: r.Incarnation, Version: r.Version, Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID, NextRunAt: r.NextRunAt, DeadlineAt: r.DeadlineAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, LeaseOwner: r.Lease.Owner, LeaseToken: r.Lease.Token, LeaseUntil: leaseUntil}
 }
 func (d recordDoc) record() Record {
 	lease := Lease{Owner: d.LeaseOwner, Token: d.LeaseToken, Until: d.LeaseUntil}
 	if lease.Owner == "" {
 		lease = Lease{}
 	}
-	return Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt, Incarnation: d.Incarnation, Version: d.Version, Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID, NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, Lease: lease}
+	return Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, StartDigest: d.StartDigest, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt, Incarnation: d.Incarnation, Version: d.Version, Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID, NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, Lease: lease}
 }
 
 func validatedRecord(doc recordDoc) (Record, error) {

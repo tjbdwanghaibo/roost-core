@@ -2,6 +2,8 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-222 | 原生Saga完成消息返回invalid record/Permanent，或旧版错路由消息推进了payload中的另一个Saga | RR-20261005-NC-40：旧消费者仅检查saga.result前缀，未绑定目标 | EffectEnvelope.Topic应精确等于saga.result加payload SagaID；同时核对状态/version及receipt | 升级写前路由校验，修正自定义发布源，不自动改路由/重写旧回执；历史结算按业务来源核对，校验不替代发布鉴权 |
+| T-221 | Saga已推进或Resume后，原启动重投报identity conflict；旧版把当前Data/期限当成同意图 | RR-20261005-NC-39：旧启动比较可变运行状态；旧已推进记录缺原始摘要也不能证明身份 | 原始WAL/请求、持久start_digest、当前状态/Data/DeadlineAt与writer版本 | 统一升级writer与自定义Store保存摘要；新记录用不可变身份，旧已推进缺摘要明确冲突，先Get/List查进度；不盲换业务键/删Saga，不从运行数据伪造迁移 |
 | T-220 | 两条可回滚消息在 handler 内交叉新建实体（一条先建 X 再建 Y、另一条反过来）时，一方偶尔以 `nest: lock timeout: nest: created entity is locked by another holder: entity … cannot be waited for in lock order` 失败，而不是 `ErrEntityExists`；机器空闲时反而更常见 | U-0279：≤ v1.20.0 的重排延迟固定 5ms，同一轮冲突的两侧总是同时重新准入、每轮重演同一冲突，直到 400 次上限 | `nest.dispatch.requeue.total{reason="lock_timeout"}` 在故障时段陡增；失败消息的 handler 执行了约 401 次 | 升级到含 U-0279 的版本（重排加抖动）。业务侧可按相同顺序新建多个实体（例如按 ID 升序）从源头避免交叉；不要靠调大重排上限掩盖 |
 | T-219 | Saga Resume返回新代际，但重读为0、命令ID复用，完成后仍waiting或identity conflict | RR-20261005-NC-38：旧Mongo记录转换丢Incarnation；旧writer也可能完整Replace掉新增字段 | 同一Saga的持久incarnation、状态/version、outbox CommandID与历史completion receipt | 协调writer统一升级；先保留记录/回执按既有超时与Resume流程处理，不删回执/改版本；历史waiting不自动修复，见NC-38兼容记录 |
 | T-218 | 原生Nest完成消费者已退出，旧版本Saga健康仍ok；新版报durable consumer stopped | RR-20261005-NC-37：旧ConsumersClosed只检查前两个消费者 | 普通完成、Nest启动、原生完成三个订阅的Closed与实际消费者状态，不能只看Engine Running/Mongo Ping | 使用三消费者健康修复；定位底层消费者/连接错误，按明确生命周期恢复；本修复不自动重订阅或改变ACK |

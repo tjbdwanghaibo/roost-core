@@ -119,6 +119,11 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 	if err != nil {
 		return kitnats.Permanent(err)
 	}
+	// RR-20261005-NC-40：宽 subject 订阅不证明信封内路由正确，必须先核对目标 Saga。
+	// 在调用 Complete 前拒绝，避免异键消息推进状态或写入幂等回执。
+	if envelope.Topic != CompletionEffectTopicPrefix+completion.SagaID {
+		return kitnats.Permanent(ErrInvalidRecord)
+	}
 	_, err = completer.Complete(ctx, completion)
 	if err == nil {
 		return nil

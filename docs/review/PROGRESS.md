@@ -1,5 +1,21 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N06第二批/第十六批修复
+
+47fca740干净快进cb11be90；新增codegen信号补修已整合，Unix压力结论未在Windows独立重做，无新Wanted/skill包差异。[本轮](REVIEW-2026-10-05-noncore-26.md) · [机制/漏检复盘](IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-16/README.md)。NC-39/40两个P2已修、声明场景验证，未发版。
+
+| 主链 | 本轮增量 | 状态/边界 |
+| --- | --- | --- |
+| 启动身份 | 两后端四阶段8反例红→绿，8兼容控制 | 原始摘要跨BSON/Replace保存；旧已推进缺摘要明确冲突，不伪造迁移 |
+| 完成路由 | 3合法异键/缺目标反例红→绿，拒绝无状态/回执副作用、合法重投恢复 | 已接公开consumer；不是发布鉴权/真实broker Term验收 |
+| 事务取消 | 三写阶段取消后新ctx重试、一次callback重跑、普通inbox业务取消 | 5新控制通过，后端mongotest，不证明Mongo未知提交 |
+| 原生收件箱 | 普通取消保留lease/晚receipt不重跑、WAL前fenced交还并换token | 2新控制通过，权威receipt注入，不冒认实际WAL/投影 |
+| servicemetrics | core/Kit seam和Recorder当前补证、既有计数/gauge/并发回归 | 两处中文职责注释，未声称每域错误路径都有指标 |
+
+合计26新正式叶子；11原始/overlay行为反例，编译夹具修正单列。相关race/根包/build/vet/glsvet与生成消费结果见证据，不累计跨运行测试数作覆盖率。N06仍场景部分完成，不计completed/15；继续Service相对db4b7009的account/chat/activity/global等增量、实际指标落点及Saga跨协调器/receipt余项，再转N07。真实Mongo/NATS/未知提交/HA/容量与N05 Mirror DTO保留；不等待GitHub CI，不发版，无新的完成日期承诺。
+
+交付正常整合 `47a9132c` 的 Nest U-0279；共享文档保留双方记录，排障编号 T-220 属上游，本轮 T-221/222。33材料路径 LF 摘要未变，合并后 Nest/Saga/Kit Saga race534叶子、0fail/0skip，根包14、全仓build、相关vet/glsvet通过；与原586不同范围，不相加。上游生成工程千轮/负载结论未独立复做，详见[最终整合](REVIEW-2026-10-05-noncore-26.md#最终整合与本地验证)。
+
 ## 2026-10-05 N05停机补证与N06第一批/第十五批修复
 
 7949da08干净快进af2f67fb，新增仅演练清理文档，无新Wanted或skill包差异。[本轮](REVIEW-2026-10-05-noncore-25.md) · [机制与漏检复盘](IMPLEMENTATION-SAGA-CONSUMER-HEALTH-AND-DURABLE-RESUME.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-15/README.md)。NC-37/38两个P2已修复、声明场景验证，未发版。

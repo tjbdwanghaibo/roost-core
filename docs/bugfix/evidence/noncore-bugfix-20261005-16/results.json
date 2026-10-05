@@ -1,0 +1,4748 @@
+[
+  {
+    "run": "red",
+    "pass": 0,
+    "fail": 11,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/progress",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/completed",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_clear",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/progress",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/completed",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear",
+        "Action": "fail"
+      }
+    ]
+  },
+  {
+    "run": "formal",
+    "pass": 24,
+    "fail": 0,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/canonical",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/explicit_auto_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/data",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/version",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/legacy_pristine",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/legacy_progressed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/progress",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/completed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_clear",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/progress",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/completed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/state",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/operation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/callback_retry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically",
+        "Action": "pass"
+      }
+    ]
+  },
+  {
+    "run": "native",
+    "pass": 2,
+    "fail": 0,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNativeStepCancellationAndFenceRecovery/cancelled_delivery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNativeStepCancellationAndFenceRecovery/fenced_before_wal",
+        "Action": "pass"
+      }
+    ]
+  },
+  {
+    "run": "matrix/race",
+    "pass": 586,
+    "fail": 0,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/ordinary_result/closed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/ordinary_result/missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/start/closed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/start/missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/native_result/closed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyHealthIncludesEveryRequiredConsumer/native_result/missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyNativeConsumerClosureIsVisibleAfterFormalStart",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaPartialSubscriptionsCleanUpAndRetry/2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaPartialSubscriptionsCleanUpAndRetry/3",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaThirdConsumerDrainTimeoutCanFinishOnRetry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDrainSubscriptionsWaitsForConsumerClosure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssembleBuildsEngineAndRegistersDefinitions",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxExecutesStepOnceForMessageRedelivery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxAllowsNewSagaAttempt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxRejectsCommandIDReuse",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStorageDigestsUseStableOperationIdentity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStepRefusalMovesSagaIntoCompensationOnMongoStore",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestRetryOrCompensateAdvancesVersionByOne",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestApplyCompletionAdvancesVersionByOne",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestReserveReportsSwallowedMarkCompletedFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepBindCarriesExplicitReservationFence",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepBindRejectsReservationFromAnotherCommand",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepInboxUsesAbsoluteClaimExpiry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineClaimSatisfiesProjectorFencePredicate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandDigestReportsUnmarshalableCommands",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxRefusesCommandsWhoseIdentityCannotBeDigested",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionDigestIsStableForMarshalableReceipts",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineRegisterAndStartRefuseUnknownOrDuplicateDefinitions",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/id_with_wildcard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/clear-deadline_together_with_a_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/deadline_already_passed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/pending_cannot_resume",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/completed_cannot_resume",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineResumeRefusesEachIllegalRequest/definition_gone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineCompensateRefusesInFlightAndNothingToUndo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineCompletesForwardSteps",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineCompensatesInReverseOrder",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartSagaIsIdempotentByBusinessKey",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartSagaRejectsBusinessKeyWithDifferentIntent",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDefinitionVersionsRunSideBySideAndArePartOfIdentity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMissingDefinitionVersionIsFencedForManualRepair",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartSagaIdentityUsesStorageSafeDeadlinePrecision",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestStartEffectHasStableIdentity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestStartEffectRejectsUnknownWireVersion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionEffectHasStableCommandIdentityAndWireVersion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestBindCommandRequiresActiveNestTransactionAndCallerTTL",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestLateDuplicateCompletionIsAcknowledgedAfterNextStep",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestRetryableCompletionCreatesNewDeliveryForSameOperation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionCannotInjectRemoteClockIntoState",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestLateSuccessfulStepIsIncludedInCompensation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestResumeRequiresExplicitExpiredDeadlinePolicy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestResumeMintsCommandIDsDisjointFromPreviousLife",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDefinitionValidation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDefinitionRejectsUnsafeTransportSubject",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestEngineRejectsPublisherBatchWhichCanOutliveLease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartSagaRejectsUnsafeExplicitID",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStoreContractClosesOperationAndRemovesStaleOutbox",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStoreContractNewAttemptSupersedesQueuedAttempt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced/fenced_entity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced/other_handler_errors",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssembleAndStepConsumerRefuseMissingPartsAndForeignEnvelopes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoResumePersistsGenerationAndAcceptsFreshCompletion/forward",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoResumePersistsGenerationAndAcceptsFreshCompletion/compensate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoIncarnationSurvivesEveryRecordReadAndReplace/0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoIncarnationSurvivesEveryRecordReadAndReplace/1",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoIncarnationSurvivesEveryRecordReadAndReplace/17",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoIncarnationSurvivesEveryRecordReadAndReplace/4294967295",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNativeStepCancellationAndFenceRecovery/cancelled_delivery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNativeStepCancellationAndFenceRecovery/fenced_before_wal",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyConsumesNativeNestCompletionEffects",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestAssemblyKeepsItsExistingConsumerSubjects",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsUsesSharedDurableAndDecodesIntent",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestStartRejectsWrongEffectTopic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestJetStreamPublisherUsesVersionedEnvelope",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/blank_stream",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/blank_durable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/prefix_with_wildcard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/process_timeout_not_below_ack_wait",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/max_deliver_above_broker_cap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/max_ack_pending_above_broker_cap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeNestStartsRefusesEachUnsafeConfig/nak_backoff_above_a_day",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestHandleNestStartRefusesEachMalformedEnvelopePermanently/oversized_frame",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestHandleNestStartRefusesEachMalformedEnvelopePermanently/missing_effect_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestHandleNestStartRefusesEachMalformedEnvelopePermanently/foreign_topic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestHandleNestStartRefusesEachMalformedEnvelopePermanently/undecodable_start",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxRefusesUnrepresentableReceiptTTL",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/store_timeout_not_below_lease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/owner_too_long",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/too_many_coordinator_workers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/too_many_publisher_workers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/coordinator_batch_too_large",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/publisher_batch_too_large",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/payload_cap_too_large",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/lease_not_above_publish_timeout",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/coordinator_budget_exhausted",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/publisher_budget_exhausted_by_publish_timeout",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNewEngineRefusesEachUnsafeOption/publisher_budget_exhausted_by_store_timeout",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/saga_type_empty",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/definition_version_zero",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/business_key_padded",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/attempt_zero",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/saga_id_with_wildcard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/step_name_empty",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/phase_out_of_range",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/empty_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/empty_idempotency_key",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/payload_over_4MiB",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/id_too_long",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/saga_type_padded",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/business_key_too_long",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/negative_step",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/topic_with_empty_token",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/zero_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCommandValidateRefusesEachBrokenField/zero_created_at",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/failure_without_error",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/error_too_long",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/data_over_4MiB",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/empty_command_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/empty_idempotency_key",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/saga_id_with_space",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/success_with_error_text",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestCompletionValidateRefusesEachBrokenField/success_marked_retryable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/type_too_long",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/data_over_4MiB",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/empty_type",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/zero_definition",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/empty_business_key",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestEffectCodecsRefuseEachMalformedPayload/start/unsafe_explicit_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/canonical",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/explicit_auto_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/data",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/version",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/legacy_pristine",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentityCompatibilityAndForeignIntents/legacy_progressed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/progress",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/completed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_clear",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/progress",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/completed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStepConsumersAdmitBeforeTakingTheClaim/dataengine",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStepConsumersAdmitBeforeTakingTheClaim/mongo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStepConsumersAdmitBeforeTakingTheClaim/admitted",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/blank_stream",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/blank_durable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/topic_with_wildcard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/max_deliver_above_broker_cap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/max_ack_pending_above_broker_cap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/nak_backoff_above_a_day",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/nil_handler",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/nil_client",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/nil_transport",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeMongoStepRefusesEachUnsafeConfig/nil_inbox",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeDataEngineStepRefusesEachUnsafeConfig/blank_stream",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeDataEngineStepRefusesEachUnsafeConfig/topic_with_wildcard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeDataEngineStepRefusesEachUnsafeConfig/max_deliver_above_broker_cap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSubscribeDataEngineStepRefusesEachUnsafeConfig/lease_not_longer_than_ack_wait",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxReplayRefusesForeignReceipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/state",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/operation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestSagaCompletionTransactionCancellationAndRetry/callback_retry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/saga",
+        "Test": "TestSagaModHealthDetectsEveryConsumerAndRecovers/roost.saga.result.>",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/saga",
+        "Test": "TestSagaModHealthDetectsEveryConsumerAndRecovers/roost.effect.saga.start",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/saga",
+        "Test": "TestSagaModHealthDetectsEveryConsumerAndRecovers/roost.effect.saga.result.>",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats",
+        "Test": "TestPermanentPreservesCauseAndMarker",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats",
+        "Test": "TestPermanentIsIdempotentAndNilSafe",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats",
+        "Test": "TestDefaultRetryPolicyDoesNotRetryNonIdempotentRPC",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestANilReporterIsSafeOnEveryMethod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestEveryEventReachesTheReporter",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestAZeroDropCountIsNotReported",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestASinkIsSafeToShareAcrossGoroutines",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestRecorderTreatsDepthAsAGauge",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestRecorderAccumulatesDrops",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestRecorderKeepsRefusalReasonsApart",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/servicemetrics",
+        "Test": "TestAnEmptyRecorderRendersReadably",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/read_flat_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/read_nested",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/set_flat_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/set_nested",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/unset_flat_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/unset_nested",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/unique_distinct_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/unique_existing_duplicates",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/bulk_valid_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/bulk_unsupported_preflight",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/rollback_serial_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/rollback_concurrent_existing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoBoundaryPromises/rollback_concurrent_new_collection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestFakeCollectionRefusalsMatchTheDriverContract",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestFindAndModifyMissesAreNotFoundEvenWhenAskingForTheAfterImage",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestWritesRefuseIDCollisionsAndIDChanges",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestFiltersFailLoudlyOnShapesTheFakeDoesNotModel",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/duplicate_members_count_and_update",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_array",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_binary",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_scope",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_lookup",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_documents",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/copy_failed_update",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/precise_9007199254740992",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/precise_9223372036854775806",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/precise_-9223372036854775808",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/sort_adjacent_large_integers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_signed_width",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_unsigned_extreme",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_negative_unsigned",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_float_exact",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_float_rounding",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/mixed_fraction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/nonfinite_rejected",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_before",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_after",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_upsert_after",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_upsert_before",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_nil_result",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityBoundaries/image_failure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/flat_abort_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/nested_abort",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/distinct_in_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/duplicate_in",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/small_integer_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/large_integer_equality",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/single_return_after_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/multiple_return_after",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/flat_read_copy_control",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestMongoIdentityPromises/nested_read_copy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/deep_D_siblings_and_unvisited_array",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/failed_unique_is_not_published",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/index_batch_keeps_prior_success",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/invalid_model_0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/invalid_model_1",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/invalid_model_2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestIndexAndBulkBoundaryPromises/valid_ordered_conflict_keeps_prefix",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestInsertRejectsDuplicateIDAndUniqueIndex",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestVersionCASSemantics",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUpsertSeedsFromEqualityFieldsOnly",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestClaimStealUsesTokenCAS",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestFindSortLimitAndOrOperator",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestBulkWriteReportsPerModelMatchCounts",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransientRetryReinvokesCallback",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUnsupportedConstructFailsLoudly",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestErrorInjectionAndCallCounters",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestDatabaseForSidIsDistinct",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestNumericWideningAcrossBSONRoundTrip",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionAbortRollsBackEveryWrite",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionRetryRerunsFromOriginalState",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/all",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/middle",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/last",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/outside",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/huge_skip",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/find/huge_limit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/all",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/middle",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/last",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/outside",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/huge_skip",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationBoundaryPromises/stream/huge_limit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/find/skip0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/find/skip1",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/find/skip2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/find/skip3",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/stream/skip0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/stream/skip1",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/stream/skip2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestPaginationPromises/stream/skip3",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionWriteErrorAbortsLikeTheServer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionCommitAfterSwallowedWriteErrorIsRetried",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionNotFoundDoesNotAbortAndPlainErrorsAreNotRetried",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/private_reads_outside_write_survives_abort",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/conflict_retry_atomic_publish",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/conflict_budget_keeps_outside_write",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/disjoint_commit_survives",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/cancel_discards_and_closes_context",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/panic_discards_and_closes_context",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/foreign_client_rejected",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestTransactionSnapshotPromises/transaction_index_explicitly_unsupported",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/build_two_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/build_missing_and_null",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/insert_two_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/insert_missing_then_null",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/sparse_build_two_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/compound_missing_is_null",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/compound_sparse_partial",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/compound_sparse_build_partial",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/compound_sparse_build_all_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/dotted_scalar_parent_is_null",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/dotted_sparse_scalar_parent_skipped",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/mongo/mongotest",
+        "Test": "TestUniqueIndexMissingFieldPromises/unset_collides_with_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestAssembleRefusesConfigurationWithoutURL",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestNatsClientNilBoundaryFailsClosed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModFatalFencesNestAndSignalsApplication",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/no_entity_access",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/access_without_manager",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/no_mongo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/no_jetstream",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/remote_projection_without_manager",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModProvideRefusesEachMissingCapability/remote_projection_without_atomic_store",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModRefusesLifecycleCallsBeforeProvideAndStart",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModReadsProjectionBatchByteLimit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestInvokeNatsHandlerContainsAndReportsPanic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestSubscriptionValidationRejectsANilHandler",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestClientTranslatesEachTransportErrorToItsSentinel",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestClientRefusesInvalidSubjectsQueuesAndHandlers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModDefaultsToCanonicalWALWriterV2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModKeepsProjectionBatchByteDefaultForNonPositiveValues/zero",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCCallDoesNotRetryANonRetryableError",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModKeepsProjectionBatchByteDefaultForNonPositiveValues/negative",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamClientRefusesMissingClientAndHandler",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamSettleFailureIsCountedPerOperation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamSettleSuccessLeavesFailureCounterUntouched",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamTerminalClassification",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestInvokeJetStreamHandlerContainsPanic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamStreamConfigMapping",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamConsumerConfigMappingDefaults",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamNakBackoffIsBounded",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamDrainKeepsHandlerContextAliveUntilBufferedMessagesFinish",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestJetStreamStopCanForcePendingDrain",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestHandleNatsDisconnectLogsExpectedCloseAsInfo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestHandleNatsDisconnectLogsUnexpectedErrorAsError",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetAssemblyCloseBoundsCallbackDrain",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetPendingTerminalRacesCompleteOnce",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetAssemblyClosesCompletedPool",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineProjectionCheckpointAndBacklogConfig",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetCallbackCanCancelItsOwnStopWait",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetStopFallbackPanicDoesNotLoseOtherPending",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineRemoteProjectionWorkerConfig",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModPublishesEntityProjectionBarrier",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCBudgetStopWaitsForTerminalClaimedBeforeShutdown",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCStopInsideCallbackAfterStopRequestedReturns",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestModForwardsNestLocalExecutorAndReloadHook",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/kit/dataengine",
+        "Test": "TestDataEngineModDeclaresShutdownTimeoutAsStopBudget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRPCStopWaitsForTerminalClaimSkippedByDrainRange",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcClientStopCancelsPendingCalls",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcClientDispatchCallbackCompletesWhenPoolRejects",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcClientCallAsyncAfterStopCancelsImmediately",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcClientPendingHasSingleTerminalWinner",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/no_entity_access",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/access_without_manager",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/no_mongo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/no_jetstream",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/remote_store_without_manager",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/remote_manager_without_store",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssembleRefusesEachMissingDependency/remote_manager_without_applier",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestJetStreamOutboxPublisherRefusesIncompleteEffects/nil_publisher",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestJetStreamOutboxPublisherRefusesIncompleteEffects/publisher_without_client",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestJetStreamOutboxPublisherRefusesIncompleteEffects/effect_without_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestJetStreamOutboxPublisherRefusesIncompleteEffects/effect_without_topic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyKeepsTheRuntimeUntilShutdownCompletes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiBatchCapabilityAndSpecialBoundaries",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointThresholdsAndFailurePrefix/end",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointThresholdsAndFailurePrefix/count",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointThresholdsAndFailurePrefix/time",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointThresholdsAndFailurePrefix/legacy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointThresholdsAndFailurePrefix/failure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointLossKeepsEntireSuccessfulPrefix",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointFlushesBeforeHeldAndOnCancel",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMarkerlessSingleRecordStillCheckpointsImmediately",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectionAdmissionConcurrentLimitAndRecovery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectionAdmissionReturnsCapacityOnAppendFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMultiCheckpointCancellationConfirmsOnlySuccessfulPrefix",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestLocalBatchEligibilityChecksEveryMutation/remote_second",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestLocalBatchEligibilityChecksEveryMutation/receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestLocalBatchEligibilityChecksEveryMutation/effect",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestLocalBatchEligibilityChecksEveryMutation/migration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFastWorkerRemoteDeleteIsDefiniteRejection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionOtherPanicStaysIndeterminate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionRejectsUnconfiguredRuntime/nil_runtime",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionRejectsUnconfiguredRuntime/runtime_without_projector",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionRejectsUnconfiguredRuntime/runtime_without_access",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionRejectsUnconfiguredRuntime/nil_entity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDeleteAdmissionInsideTransactionRequiresPreparerAndDeclaredRemoteTarget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteDeleteAdmissionRequiresRemoteWriteCapability",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestLocalDeleteAdmissionRequiresPreparer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDataEngineDeleteRollbackLeavesEntityLive",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestARepositoryLoadPanicDoesNotWedgeTheAggregate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRepositoryWaitersOfAPanickingLoadAreReleased",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRepositoryRestoresRemoteEnvelopeByKindPolicy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRepositoryRejectsManagedKindRecordWithoutEnvelope",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachUnloadableAggregate/no_builder_for_kind",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachUnloadableAggregate/kind_without_persistent_DAO",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachUnloadableAggregate/DAO_cannot_be_hydrated",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachUnloadableAggregate/DAO_decodes_to_another_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachUnloadableAggregate/stored_schema_without_a_migrator",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryGivesUpAfterThreeNonConvergingMigrations",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachCorruptAggregateShape/two_documents_for_one_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachCorruptAggregateShape/document_keyed_to_another_entity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachCorruptAggregateShape/builder_declares_one_resource_twice",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachCorruptAggregateShape/nil_DAO_builder",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRefusesEachCorruptAggregateShape/remote-managed_entity_without_a_version_envelope",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositorySingleFlightsCompleteAggregate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRejectsTombstone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryTreatsUniformAbsenceAsNotFound/all_missing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryTreatsUniformAbsenceAsNotFound/all_tombstones",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryPreservesRemoteVersionVector",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryMigratesThenReloadsBeforePublishing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryLoadIsIdempotentAcrossTransactionRetries",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryRemoteVectorDoesNotLeakAcrossRetries",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityRepositoryPublishesThroughLocalExecutor",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRepositoryRejectsFastColdLoadBeforeJoiningFlight",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestSkippedFencedStepIsQueuedForEvictionOnce",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestTerminalAckWakesWaitersOfAPendingEviction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestSkippedFencedStepResyncsSubscribersFromMongo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestSkippedFencedStepWithoutAuthorityRetractsSubscribers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcClientCancelsOneHundredThousandPendingExactlyOnce",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcTaskCompletesCallbackExactlyOnce/handler_then_release",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcTaskCompletesCallbackExactlyOnce/release_only",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcTaskCompletesCallbackExactlyOnce/concurrent_arrivals",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/nats/driver",
+        "Test": "TestRpcTaskCompletesCallbackExactlyOnce/nil_callback",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedLocalStepSkippedAfterLeaseExpiryDoesNotFenceNextTransaction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedLocalStepAppliedReleasesBarrierWithoutEviction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepRedeliveryWaitsOnlyUntilThePreviousRecordSettles",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepBarrierIsReleasedOnEveryExit/discard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepBarrierIsReleasedOnEveryExit/fatal",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepBarrierIsReleasedOnEveryExit/close",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepBarrierIsReleasedOnEveryExit/eviction_retries_keep_the_barrier_until_they_succeed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestFencedStepSkippedDuringStartupRecoveryNeedsNoEviction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestSkippedFencedStepEvictsTheResidentEntityOnTheFastPool",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRuntimeRepeatedStartPreservesReadyAndOutbox",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyConcurrentStartsShareRuntime",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyShutdownWaitsForStartingOwner",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyCanceledRecoveryRetainsCleanupOwnership",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyOwnsWALWhenProjectorDoesNot",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyFailedConstructionCanRetry/projector",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestAssemblyFailedConstructionCanRetry/outbox",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerCommitsVersionedFullMutationAndWaitsForProjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerRejectsRemoteEnvelopeWithoutOwnershipLease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerRejectsLoaderFailureAndDecodedIdentity/loader_error",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerRejectsLoaderFailureAndDecodedIdentity/decoded_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/bad_bson",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/wrong_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/bad_type",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/missing_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/int32_id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/valid",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerValidatesBeforeCommit/old_payload_schema",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerHydratesCandidateAtStoredVersion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerRejectsMissingHydrationContract",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMigrationRunnerRejectsMissingIdentityContract",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLoadCopiesVersionSchemaAndRemoteEnvelope",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLoadExcludesTombstonesAndHonoursCallerFilter",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreStreamLoadUsesCursorAndStopsOnConsumerError",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreReadConsistentUsesOneSession",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreReadConsistentRetriesCallback",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreUsesAbsoluteExpiryForReceipts",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceSkipsStaleSagaTransaction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceRejectsExpiredLease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken/exact_match",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken/other_owner",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken/other_token",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken/other_digest",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStorePatchExactVersionAndReplay",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStorePatchRejectsWrongOrMissingBase/wrong_base_version",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStorePatchRejectsWrongOrMissingBase/missing_base_document",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStorePutUpsertsWhenNoBaseVersionExpected",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchUsesOneTransactionAndDurableMarkers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchRollsBackOnCASMismatch",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchDefersThenSingleRecordClassifies",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchSkipsRecordsWithDurableMarker",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchRejectsMarkerDigestMismatch",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchAbsorbsFastPathProjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchValidatesBeforeCheckingEligibility",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectBatchRejectsUnsupportedBeforeSessionOrWrites",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreDeleteWritesVersionedTombstone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreMigrationConflictBecomesObsoleteNoop",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectsRemoteAndOrdinaryMutationInOneSession",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreOlderPutCannotReviveTombstone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreReceiptIdentityIncludesCompletionPayload",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreStageEffectRejectsIdentityDrift",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectIdentityVerdictsAcrossTransactions/identical_receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectIdentityVerdictsAcrossTransactions/receipt_payload_drift",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreProjectIdentityVerdictsAcrossTransactions/effect_id_reused",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoBatchRejectsConflictingDuplicateIDBeforeMarkerLookup",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxCloseBeforeStartIsTerminal",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxConcurrentStartClose",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxRetryDelayStartsAfterFailedPublish",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoOutboxStoreClaimTakesLeaseByTokenCAS",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoOutboxStoreSkipsEffectsNotYetAvailable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoOutboxStoreAckRequiresMatchingLease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoOutboxStoreNackReschedulesAndCountsAttempt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoOutboxStoreBacklogReportsPendingAndOldestAge",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxWorkerLogsStoreFailureStreakOnceAndItsRecovery",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxWorkerDoesNotReportShutdownAsAStoreFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestDataEngineHealthMessageReportsStoreFailures",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxWorkerAcknowledgesSuccessfulPublishByEffectID",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxWorkerHardLimitFencesWithoutTreatingPublishFailureAsProjectionFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxWorkerRateLimitsBacklogProbe",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestOutboxInfrastructureIndexesCoverClaimAndBacklogQueries",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestCommitAndEnqueueRejectAnOversizedRecordAlikeAndLeaveNoAdmission",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorCloseWaitsForExternalProjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityProjectionBarrierTracksAllDAOsAndReleasesOnFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorOnFatalMayCloseProjector/external_flush",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorOnFatalMayCloseProjector/background_loop",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityProjectionFatalWakesEveryPendingWaiter",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestEntityProjectionWaiterSeesFailedPipelinedDurability",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteLeaseFenceRejectedBeforeWALAdmission",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestManualReplayProjectorRunsOnlyExplicitPasses",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRepositoryReloadDoesNotResurrectPendingTombstone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsPreservesMixedOrder",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestBatchProjectionEligibilityMatchesMongoContract/effect",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestBatchProjectionEligibilityMatchesMongoContract/receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestBatchProjectionEligibilityMatchesMongoContract/multiple",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestBatchProjectionEligibilityMatchesMongoContract/remote",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestBatchProjectionEligibilityMatchesMongoContract/migration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsBoundsOrdinaryBatches",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsHonorsMaxRecords",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsPreservesEveryRecordAndFence",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectionPlanSaturatingMultiply",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsRejectsMismatchedFences",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsHandlesOversizedFirstRecord",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestPlanProjectionSegmentsRejectsInvalidLimits",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionIndependentEntityCompletesWhileFirstBlocked",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/independent",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/overlap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/transaction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/effect",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/receipt",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/ordinary",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/mixed",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/migration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/invalid",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/records",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWindowBoundaries/bytes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionCheckpointFailureKeepsWindow",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionRefillsWhileFirstRecordIsBlocked",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionCancellationJoinsWorkers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionWithoutCapabilityRemainsSerial",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestMongoStoreParallelCapabilityRequiresBothAdapters",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorAckNotBlockedByPublisherFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorFatalConflictInvokesFence",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorCommitSystemTicketCompletesAfterProjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorUsesAtomicBatchStoreForBacklog",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorKeepsSingleOrdinarySegmentsOnProjectFastPath",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorSplitsOrdinaryBatchAtLogicalByteLimit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorStopsAfterSegmentAckFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorProjectionOnlyStoreExecutesAndAcknowledgesOrdinaryRecordsOneAtATime",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorProjectionOnlyStoreStopsBeforeSecondOrdinaryRecordWhenFirstAckFails",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorProjectionOnlyStoreAcknowledgesFirstOrdinaryRecordBeforeSecondProjectFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorTransientSpecialFailureRecoversFromAcknowledgedOrdinaryPrefix",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorBatchUnsupportedDoesNotFallbackOrRunLaterSegment",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorAckFailureOverridesHeldReplaySentinel",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorFallsBackToPerRecordWhenBatchDefers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorPerRecordFallbackStillFencesRealConflict",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRemoteCreationConflictFencesProjectorAndKeepsWAL",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestReplayReadBudgetRetainsOnlyBoundedPrefix/before_boundary",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestReplayReadBudgetRetainsOnlyBoundedPrefix/exact_boundary",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestReplayOversizedRecordGetsExclusiveReadWindow",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestReplayBudgetCountsConsumedRecordsAcrossSegments/records",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestReplayBudgetCountsConsumedRecordsAcrossSegments/bytes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorWaitsRespectDeadline/replay",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorWaitsRespectDeadline/flush",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorWaitsRespectDeadline/second_flush",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestProjectorShutdownDeadlineBehindBackgroundProjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestRuntimeConcurrentShutdownHonorsDeadline",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestStageEffectDuplicateAfterSnapshotMissIsRetryable/same_transaction_identity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/dataengine/engine",
+        "Test": "TestStageEffectDuplicateAfterSnapshotMissIsRetryable/other_transaction",
+        "Action": "pass"
+      }
+    ]
+  },
+  {
+    "run": "matrix/root",
+    "pass": 14,
+    "fail": 0,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCIRegeneratesTheCommittedGeneratedCode",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestEveryCodegenRuntimeGuardRunsInSomeWorkflow",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCIWorkflowPackagePathsExist",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCIWorkflowRunsTheRedisSuitesAndRefusesTheirSkip",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCoreDependencyBoundary",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCoreContractsDoNotLinkDrivers",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestLayerViolation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestModuleLayer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestForbiddenCoreImport",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCIRedisJobRunsEveryRedisIntegrationSuite",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestCIRedisJobSetsEveryRedisGateVariable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestFaultMatrixScriptNamesEveryFullEnvironmentSuite",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestRedisClusterScriptNamesEveryClusterKeyedSuite",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core",
+        "Test": "TestSomeWorkflowRunsTheFaultMatrix",
+        "Action": "pass"
+      }
+    ]
+  },
+  {
+    "run": "overlay/overlay-red",
+    "pass": 0,
+    "fail": 11,
+    "skip": 0,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/progress",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/completed",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/memory/resume_clear",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/progress",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/completed",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline",
+        "Action": "fail"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/saga",
+        "Test": "TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear",
+        "Action": "fail"
+      }
+    ]
+  },
+  {
+    "run": "codegen",
+    "pass": 280,
+    "fail": 0,
+    "skip": 10,
+    "tests": [
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddHandlerRequiresNestFeature",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAttributeRuntimeFileIsMarkedGenerated",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedAttributeProjectPassesTheTemplateCheck",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkCollaboratorsImportOnlyWhatTheyUse",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionComposeTmpfsIsOneAbsoluteMountPerService/stateful",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionComposeTmpfsIsOneAbsoluteMountPerService/stateless",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestLayoutStageMovesTheSyncBlock",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestLayoutPathRules",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidateSplitsASingleLineImportIntoAValidSecondDeclaration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSingleModuleStageRunsAfterThePackageTable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSingleModulePathRules",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidateProjectRewritesImportsGoModAndManifest",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidateProjectDryRunWritesNothing",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidateProjectRefusesUnmappedRemovedImports",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationMapMatchesTheGeneratorFloor",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestCorePinScriptPrintsTheGeneratorMinimum",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDemoEmbedCoversEveryFile",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDemoTemplateStepsAndShippedFilesAgree",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDemoTemplateKeepsTheGameTemplateAndItsFeatures",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedMakefileHasLoadtestTarget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationCommitsOnlyPlannedMigration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationFailurePreservesInputs/get",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationFailurePreservesInputs/tidy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationFailurePreservesInputs/consolidate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationRejectsConcurrentInputChanges/business.go",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyConsolidationRejectsConcurrentInputChanges/roost.yaml",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkDependencyUpdateStagesAndCommitsOnlyModuleFiles",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUpdateFrameworkDependenciesUsesExplicitPolicies",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUpdateFrameworkDependenciesRollsBackModuleFiles",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestTidyProjectDependenciesDoesNotUpgradeFramework",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestTidyProjectDependenciesRollsBackModuleFiles",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestManifestVersionPolicies",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDependencyCommandForcesWorkspaceIsolation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionComposeMountsTheConfigAsAnExplicitBind",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedComposeInvocationsUseAnAbsoluteConfigRoot",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDeployScriptsCarryNoKnownShellcheckFindings/stateful",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDeployScriptsCarryNoKnownShellcheckFindings/stateless",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUpgradeCompatHistoryStartsAtTheRoostModulePaths",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestReleaseWorkflowShellHasNoBareNegationsOrGlobs",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestKubernetesBaseIsNotAnAncestorOfItsOverlays",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedGoVersionMatchesTheGeneratorsOwn",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedWorkflowsHaveNoBareNegationsOrGlobs",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDevComposeReplicaSetMemberIsTheAddressTheConfigDials",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDevRunRegistersTheGameServerInTheAccountServicesRedisDatabase",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent/generated_values",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent/keys_absent",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestStagedProjectCommitSeesEntityRetirement",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestHostedServiceChainsItsOptionalCollaborators",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestPlatformConfigCarriesTheSecretsItsModRequires",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDefaultCollaboratorsDefineEveryWiredName",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAServiceNestedUnderAnotherIsHostable",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestActivityConfigCarriesTheTTLItsModRequires",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/schema-2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/legacy-modules",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/unknown",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/latest",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/go",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/old-go",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkReleaseManifestStrictValidation/empty-go",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies/replace",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies/replace-block",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies/pseudo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkGitHubOutputAndBuildVersion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkServiceManifestValidation",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGameTemplateRendersHostingAndClientWiring",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAProjectWithoutFrameworkServicesDoesNotDependOnRoostService",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratorsDoNotMoveTheProcessIntoTheTreeTheyGenerate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncProjectStagesNeverBecomeAChildsWorkingDirectory",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestHelpCatalogIsCompleteAndUnique",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestHelpOverviewListsCapabilities",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/environment",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/beginner",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/project",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/versions",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/framework-release",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/generate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/add",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/access",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/transport",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/lifecycle",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/endpoint",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/skill",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/mods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/dao",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/entity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/nest",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/protocol",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/cfggen",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/tablegen",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/eventgen",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/attribute",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/webroute",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/errcode",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/saga",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/replication",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/config",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/id",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/format",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEveryCapabilityHelpContainsConfigurationAndExample/deploy",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestHelpAliasesAndContextCommands",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUnknownHelpCapabilityFailsWithDiscoveryHint",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestNormalizeNextIDArgsAcceptsFlagsBeforeOrAfterKind",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestHelpAllPrintsEveryTopic",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionImageCarriesConfigDataWhereConfigDataDirResolves/game-demo_on_disk",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionImageCarriesConfigDataWhereConfigDataDirResolves/default_mods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionImageCarriesConfigDataWhereConfigDataDirResolves/configdata_only",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionImageCarriesConfigDataWhereConfigDataDirResolves/without_configdata",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGameDemoKubernetesSecretExamplesMirrorTheProductionExamples",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestOrchestratorDoesNotRepeatGeneratorDefaultPaths",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestValidateRejectsManagerModInSharedMods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDefaultManifestIncludesManagerModAndValidates",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestBootstrapWiresManagerModPerService",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestServiceManagersHookMatchesServicePackageClause",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestValidateCanonicalizesLegacyModAndFeatureNames",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestValidateStillRejectsUnknownModAndFeature",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestOptionalHintsNameWhatTheProjectHasNotUsedYet",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestRollbackSyncReportsAFileItCannotInspect",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestResolveModsAddsRequiredDependencies",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestResolveModsDefaultsNestAndSagaToDataEngine",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestResolveModsRejectsRemovedPersistenceMods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDefaultManifestUsesOnlyDataEnginePersistence",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddProtocolAllocatesIDAndCheckDetectsDuplicate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestLoadManifestRejectsUnknownFields",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUpgradeCanReadVersionsBelowCurrentFloor",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionConfigRejectsDevelopmentValues",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConfigCheckAllValidatesEveryDeclaredService",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddCamelCaseProtocolUsesSnakeFileAndPascalTypes",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddComponentInfersOnlyEntityAndRejectsAmbiguity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDockerReadmePublishesPlayerPortForOwningService",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorPlayerTCPPassesAfterAuthAndConfig",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestPlayerTCPConfigPreservesCRLFAndExistingParentMap",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestCLIRejectsDangerousDefaultsAndUnexpectedArguments",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestMergeSyncChangesDeduplicatesDependencyMetadata",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestRelatedBusinessFilesPreserveConcurrentEntityEdit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRejectsTraversalInRelatedNames",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestManifestRejectsModulePathInjection",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGuardedRollbackDoesNotOverwriteConcurrentEdit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddSkillUsesStablePackageAndNeutralDefinition",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestManifestRejectsIDsOutsideFrameworkEncoding",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestEndpointArgumentsMapNamedRequestFields",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddSagaRequiresSteps",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestFrameworkMinimumVersionGuard",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestReplicationPresetCompilesAsGoSource",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestReplicationRequiresSupportedKitRelease",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionRenderingIncludesDurabilityAndTopologyGuards",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProductionDeploymentRendering",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestBootstrapImportsTransitiveDataEngineDependencies",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestBootstrapWiresDataEngineWithEntityAccess",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestRenderGoModUsesPublishedModulesWithoutReplace",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestRepositoryWorkflowsAreValidAndPinned",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedBeginnerAndManifestDocumentationIsComplete",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDiffIgnoresResolvedUserOwnedGoMod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncConcurrencyGuardRefusesDrift",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncRollbackPreservesConcurrentEdit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellInstallPutsConfigDataWhereConfigDataDirResolves/game-demo_on_disk",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellInstallPutsConfigDataWhereConfigDataDirResolves/default_mods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellInstallPutsConfigDataWhereConfigDataDirResolves/configdata_only",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellInstallPutsConfigDataWhereConfigDataDirResolves/without_configdata",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncRollsTheShutdownRefreshBackWithTheTemplates",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncRefusesAConfigEditedWhileItRuns",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/activity",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/chat",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/global",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/mail",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/match",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/platform",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/rank",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/account",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/game",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutFollowsEachServicesMods/session",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorAdvicePerFileWhenTheConfigsDiffer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedShutdownCountsThePlayerTCPStopBudget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorCountsTheConfiguredPlayerTCPStopBudget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorRejectsANegativePlayerTCPShutdownTimeout",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedDeploymentsGiveStatsLogAWritableDirectory/game-demo_on_disk",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedDeploymentsGiveStatsLogAWritableDirectory/default_mods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedDeploymentsGiveStatsLogAWritableDirectory/stateless_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedDeploymentsGiveStatsLogAWritableDirectory/without_stats_log",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationMapSyncBusLegacyPaths",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationKeepsTheFilesNameForARenamedKitPackage/oldkit-kitonly-unaliased",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationKeepsTheFilesNameForARenamedKitPackage/oldkit-mixed-unaliased",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationKeepsTheFilesNameForARenamedKitPackage/corekitroom-unaliased",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationReportsRemovedSymbolsInsteadOfSucceeding",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConsolidationRemovedSymbolsAreReallyGone",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestStagedProjectCommitAndCheckSeeTableJSONRetirement",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGenerateSkipsConfigDataWhenSchemaHasNoCSVYet",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedProjectCarriesAComposeShapeCheckAndRunsItInCI",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedEtcdServicePrefixSeparatesTheServerType",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorReportsUnimplementedCollaborators",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncRemovesTheLegacyKubernetesBase",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestOneSyncConvergesAfterAServiceGainsAMod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGameDemoProductionConfigsPassTheGameInitChecks",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGameTemplateScaffoldsWorldAndPlayer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUnrecognizedKubernetesSecretExampleIsAVisibleWarningForEveryCommand/add_mod,_no_config.yaml_block",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddManifestMutationRollsBackWhenSyncPreflightFails",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsReachTheKubernetesSecretExample/after_add_mod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectNextRejectsEmptyDAOAndComponentSkeleton",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestBeginnerEntityComponentAndDAOFlowWiresAggregate",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectNextReturnsOnlyTheCurrentSafeAction",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/invalid_name",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/service_exists",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/mod_unknown_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/mod_unknown_kit_mod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/access_unsupported",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/access_ambiguous_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/access_unknown_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/access_exists",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/transport_unsupported",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/transport_wrong_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/transport_exists",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/saga_ambiguous_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/saga_unknown_service",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/protocol_invalid_handler",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRefusesEachInvalidKindParameter/protocol_invalid_group",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddModAppendsItsConfigSectionToExistingServiceConfigs",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddRPCScaffoldsOwnerAndWiresCaller",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_total_timeout_is_not_a_duration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/0s",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/secret_example_dataengine.shutdown_timeout_is_not_a_duration",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsReachTheKubernetesSecretExample/after_add_saga",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse/prod_example_does_not_parse",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorFailsWhenGeneratedProjectDoesNotCompile",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorFirstBusinessReportsActionableMissingSteps",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddPlayerTCPTransportIsExplicitAndProductionGuarded",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorAdviceFollowsTheConfiguredDataEngineBudget",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellRollbackRejectsDotVersions",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestUnrecognizedKubernetesSecretExampleIsAVisibleWarningForEveryCommand/add_transport_tcp,_flow-style_player_access_in_the_Secret_only",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit",
+        "Action": "skip"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDeploymentStartupAllowanceCoversTheSingletonWait",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGeneratedSceneConnectionTestsWaitForEveryDialedPlayer",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectFixtureCopiesMatchAFreshNewProject/bare",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsReachTheKubernetesSecretExample/after_add_access",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorJudgesANonPositiveTotalAsTheAppsFallback/-5s",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorChecksEachServicesShutdownWindow",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectInputSnapshotRejectsConcurrentBusinessEdit",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestOneSyncConvergesAfterAServiceLosesAMod",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestNewProjectSyncPreservesBusinessFiles",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectFixtureCopiesMatchAFreshNewProject/configdata",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncRefusesUnmanagedMakefile",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncUpgradesLegacyGeneratedMakefile",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGenerateCheckToleratesCRLFCheckouts",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsReachTheKubernetesSecretExample/after_add_transport",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestGenerateCheckDetectsMarkerlessProtocolDrift",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddSagaGeneratesValidatedDefinition",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncPreflightsConflictsBeforeWriting",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncCommitsGeneratedOrphanDeletion",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsFollowTheFilesLineEndings/crlf_files_get_crlf_sections",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestSyncCommitsProtocolRetirement",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsFollowTheFilesLineEndings/an_empty_dev_config_gets_lf_sections",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestAddedConfigSectionsFollowTheFilesLineEndings/lf_files_stay_lf",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestConfigEnablePlayerTCPRefusesSkeletonThenPreservesConfig",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDemoTemplateGeneratesABuildableWritePath",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestDemoTemplateFollowsTheGameServiceName",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestCRLFKubernetesSecretExampleGetsTheSameEditsAsLF",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectFixtureCopiesMatchAFreshNewProject/game-demo",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "TestProjectFixtureCopiesMatchAFreshNewProject/saga",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#1",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#2",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#3",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#4",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzValidModulePath/seed#5",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzManifestDecode/seed#0",
+        "Action": "pass"
+      },
+      {
+        "Package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "Test": "FuzzManifestDecode/seed#1",
+        "Action": "pass"
+      }
+    ]
+  }
+]

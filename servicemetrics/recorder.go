@@ -7,16 +7,8 @@ import (
 	"sync"
 )
 
-// Recorder is a Reporter that remembers what it was told, for tests.
-//
-// It lives in the production package rather than in each package's test files
-// because every service package needs the same thing: proof that its report
-// calls are actually reached. Six near-identical hand-written recorders is six
-// places for one to quietly stop asserting, which is the failure mode this
-// whole seam exists to prevent.
-//
-// It is safe for concurrent use, because the paths worth asserting on —
-// compare-and-set conflicts, replays — are the concurrent ones.
+// Recorder 为各服务测试共用的 Reporter，记录事件供行为断言，不替代生产监控后端。
+// 一把内部锁保护并发报告与读取；计数累加、Depth 替换当前值，Snapshot 返回独立副本。
 type Recorder struct {
 	mu     sync.Mutex
 	events map[string]int

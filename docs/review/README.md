@@ -1,5 +1,9 @@
 # Roost 持续 Review 与学习记录
 
+[10-05 N06启动/路由与取消恢复](REVIEW-2026-10-05-noncore-26.md)：NC-39/40两个P2已修，11原反例/旧源码overlay红→绿，含兼容/事务/原生取消共26新正式叶子；旧已推进缺摘要明确冲突，真实Mongo/NATS/HA未验。N06仍部分完成。[机制](IMPLEMENTATION-SAGA-START-IDENTITY-AND-CANCELLATION.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-16/README.md) · [进度](PROGRESS.md)。
+
+前两轮接续：[第25轮三消费者健康与持久Resume](REVIEW-2026-10-05-noncore-25.md)、[第24轮权威回填/版本及交付增量](REVIEW-2026-10-05-noncore-24.md)已归档，历史未发版状态按各轮交付与后续发布记录阅读。
+
 [10-05 N05镜像/路由接入](REVIEW-2026-10-05-noncore-23.md)：NC-33/34两个P2已修，10副作用反例红→绿，13新正式叶子；最终扩大race709叶子/8skip、根包14及build/vet/glsvet通过。11生产文件当前补证，N05仍部分完成，Mirror DTO未实施。[机制](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-13/README.md)。
 
 [10-05 NC-32与N04本机缺口收口](REVIEW-2026-10-05-noncore-22.md)：深层wire恢复绑定修复，正式9/消费6红→绿；53金样、28消费通过，其中11新消费补嵌套迁移/持续CAS预算恢复。N04仍部分完成，下一转N05；应用须重生成关联代码。[修复](../bugfix/RR-20261005-NC-32.md)。

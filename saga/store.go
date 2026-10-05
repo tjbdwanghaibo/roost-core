@@ -43,6 +43,7 @@ const (
 // IdempotencyKey, so timed-out attempts cannot build an unbounded retry fanout.
 // ExpectedVersion and ExpectedLease are fencing conditions; an implementation
 // must return ErrConflict rather than accepting a stale coordinator.
+// StartDigest 是启动身份：实现必须在全部记录读写中原样保存，不能由当前 Data 重新计算。
 type Store interface {
 	Create(context.Context, Record) error
 	Get(context.Context, string) (Record, error)

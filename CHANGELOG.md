@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **Saga启动幂等身份独立持久化**（RR-20261005-NC-39）：`StartDigest` / `start_digest,omitempty` 保存规范化原始意图，步骤Data与Resume截止时间变化不再改变启动身份；原请求返回当前进度，异意图明确冲突。旧已推进缺摘要记录不能证明原始身份，重投收紧为冲突，不自动迁移；自定义Store/协调writer须保存新增字段。[兼容与证据](docs/bugfix/RR-20261005-NC-39.md)
+- **原生Saga完成路由绑定**（RR-20261005-NC-40）：解码后精确匹配Topic与payload SagaID，在Complete和回执副作用前Permanent拒绝异键。合法发送与wire不变，复用既有NATS settle；不提供发布鉴权或自动改路由。[记录](docs/bugfix/RR-20261005-NC-40.md)
+
 - **Nest 暂时性冲突的重新准入加抖动，对称的交叉创建不再靠调度噪声解开**（U-0279，OPEN-ITEMS C09 预案）：锁超时 / 组变化 / 组迁移待定的消息重排延迟从固定 5ms 改为 5ms 下限加 `[0, 5ms)` 均匀抖动。固定延迟让同一轮因同一冲突回滚的两条消息（handler 内交叉新建 X / Y，RR-20260926-48）总在同一时刻重新准入，单定时器的延迟队列晚醒时还会把两侧重新对齐，只能等噪声偶然错开；v1.20.0 / v1.19.2 生成工程 `TestGeneratedDataEngineCrossCreateResolvesOnRealWAL` 频繁耗尽 400 次上限（正常负载下失败率 25%～55%）、调用方收到 `ErrLockTimeout`。400 次上限与最短约 2s 的重排窗口不变，平均延迟 5ms → 7.5ms。[记录](docs/bugfix/U-0279-nest-requeue-jitter.md)
 - **Saga三消费者健康检查**（RR-20261005-NC-37）：`ConsumersClosed` 纳入原生Nest完成消费者，任意必需订阅缺失/退出均使Kit健康项fail；修正过时的两消费者注释。正式装配与停止后重启恢复已验证。[记录](docs/bugfix/RR-20261005-NC-37.md)
 - **Saga Resume持久代际**（RR-20261005-NC-38）：Mongo记录增补兼容字段`incarnation,omitempty`并双向保存，重载后派发不复用旧命令/回执ID；旧缺字段为0。参与写入的协调器需统一升级，旧writer完整Replace会丢新字段；不自动修复历史waiting/回执。[兼容与证据](docs/bugfix/RR-20261005-NC-38.md)

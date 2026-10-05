@@ -1,24 +1,6 @@
-// Package servicemetrics is the reporting seam every service in this
-// repository uses.
-//
-// Why a package rather than a convention: constraint 6 of the repository's
-// design rules requires every service to report queue depth, compare-and-set
-// conflict rate and drop counts. Five of the first six services were written
-// without any reporting at all, by an author who had read the constraint —
-// which is the same lesson the six defect patterns teach. A shared seam makes
-// the omission visible: a service that does not take a Reporter has nowhere to
-// put one.
-//
-// Every path that drops something, refuses something or loses a
-// compare-and-set reports it. Those are precisely the paths that were silent
-// in the implementations being replaced: a cancel that answered OK while the
-// store said matched, an archive that truncated at the first short page, a
-// notification refused with no audit. None of them were discoverable in
-// production because none of them emitted anything.
-//
-// It lives in roost-core so that service domain packages (service/match and
-// the ones that follow it, M-06) can report without importing roost-kit; the
-// kit re-exports it under service/servicemetrics for its existing importers.
+// Package servicemetrics 提供各业务服务共用的事件上报契约，使队列深度、CAS 冲突、
+// 业务拒绝、幂等重放和丢弃可以被观察。领域实现依赖 core，Kit 只保留类型别名与转发。
+// 服务通过 Wrap 保存可选 Reporter；它不改变业务结果，也不自动把所有错误转成指标。
 package servicemetrics
 
 // Reporter receives service events.

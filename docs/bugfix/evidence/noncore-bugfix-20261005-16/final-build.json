@@ -1,0 +1,5 @@
+{
+  "command": "go build ./...",
+  "exit": 0,
+  "reason": "final source including Chinese metric comments"
+}

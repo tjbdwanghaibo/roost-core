@@ -3,6 +3,9 @@ package saga
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -182,11 +185,14 @@ func (e *Engine) Register(definition Definition) error {
 	return nil
 }
 
+// StartSaga 持久创建业务意图；相同身份重投返回当前进度，不重置已执行的步骤。
+// 启动摘要与可变运行数据分离，旧记录不能证明原始身份时返回 ErrIdentityConflict。
 func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, error) {
 	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
 		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
 	}
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
+	request.ID = strings.TrimSpace(request.ID)
 	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
 	if request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > e.opts.MaxPayloadBytes {
 		return Record{}, ErrInvalidRecord
@@ -195,18 +201,30 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	id := strings.TrimSpace(request.ID)
+	id := request.ID
 	if id == "" {
 		id = NewID()
 	}
 	record := Record{ID: id, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
+	// RR-20261005-NC-39：Data/DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
+	intentDigest, err := startIntentDigest(request)
+	if err != nil {
+		return Record{}, err
+	}
+	record.StartDigest = intentDigest
 	if err := record.Validate(); err != nil {
 		return Record{}, err
 	}
 	if err := e.store.Create(ctx, record); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
 			existing, getErr := e.store.GetByBusinessKey(ctx, request.Type, request.BusinessKey)
-			if getErr == nil && request.DefinitionVersion == existing.DefinitionVersion && (request.ID == "" || request.ID == existing.ID) && bytes.Equal(request.Data, existing.Data) && request.DeadlineAt.Equal(canonicalDeadline(existing.DeadlineAt)) {
+			// 只有尚未推进的旧记录能用初始状态判断；已推进记录无法恢复原始意图，明确拒绝。
+			// 不用当前业务数据伪造回填摘要，否则仍会把另一个请求误认成历史重投。
+			sameIntent := existing.StartDigest == intentDigest
+			if existing.StartDigest == "" {
+				sameIntent = existing.Version == 1 && existing.Status == StatusPending && existing.Phase == PhaseForward && existing.Step == 0 && existing.CompletedSteps == 0 && existing.Attempt == 0 && existing.Incarnation == 0 && bytes.Equal(request.Data, existing.Data) && request.DeadlineAt.Equal(canonicalDeadline(existing.DeadlineAt))
+			}
+			if getErr == nil && request.DefinitionVersion == existing.DefinitionVersion && (request.ID == "" || request.ID == existing.ID) && sameIntent {
 				return existing, nil
 			}
 			if getErr == nil {
@@ -218,6 +236,25 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	e.started.Add(1)
 	e.signal(e.dueKick)
 	return record.Clone(), nil
+}
+
+// startIntentDigest 使用规范化后的启动请求；ID 单独校验，Now 只用于首次调度。
+// JSON 的 omitempty 保持既有 nil/空 Data 等价；UTC 毫秒截止时间与 Mongo 精度一致。
+func startIntentDigest(request StartRequest) (string, error) {
+	// 固定摘要格式，不因以后 StartRequest 增加选项而改变既存记录的身份。
+	intent := struct {
+		Type              string    `json:"type"`
+		BusinessKey       string    `json:"business_key"`
+		DefinitionVersion uint32    `json:"definition_version"`
+		Data              []byte    `json:"data,omitempty"`
+		DeadlineAt        time.Time `json:"deadline_at,omitempty"`
+	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt}
+	raw, err := json.Marshal(intent)
+	if err != nil {
+		return "", fmt.Errorf("%w: start intent digest: %v", ErrInvalidRecord, err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (e *Engine) Get(ctx context.Context, id string) (Record, error) { return e.store.Get(ctx, id) }

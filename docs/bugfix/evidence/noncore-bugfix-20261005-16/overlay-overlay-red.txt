@@ -1,0 +1,53 @@
+=== RUN   TestNestCompletionRejectsForeignSagaRouteBeforeMutation
+=== RUN   TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other
+    nest_completion_identity_promises_test.go:53: foreign route="saga.result.other" was not refused permanently: <nil>
+    nest_completion_identity_promises_test.go:60: foreign route mutated saga: version=2 status=pending
+    nest_completion_identity_promises_test.go:64: foreign route recorded completion: recorded=true err=<nil>
+--- FAIL: TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.other (0.00s)
+=== RUN   TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.
+    nest_completion_identity_promises_test.go:53: foreign route="saga.result." was not refused permanently: <nil>
+    nest_completion_identity_promises_test.go:60: foreign route mutated saga: version=2 status=pending
+    nest_completion_identity_promises_test.go:64: foreign route recorded completion: recorded=true err=<nil>
+--- FAIL: TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result. (0.00s)
+=== RUN   TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra
+    nest_completion_identity_promises_test.go:53: foreign route="saga.result.target.extra" was not refused permanently: <nil>
+    nest_completion_identity_promises_test.go:60: foreign route mutated saga: version=2 status=pending
+    nest_completion_identity_promises_test.go:64: foreign route recorded completion: recorded=true err=<nil>
+--- FAIL: TestNestCompletionRejectsForeignSagaRouteBeforeMutation/saga.result.target.extra (0.00s)
+--- FAIL: TestNestCompletionRejectsForeignSagaRouteBeforeMutation (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume
+=== RUN   TestStartIdentitySurvivesProgressAndResume/memory/progress
+    start_identity_promises_test.go:114: original start redelivery rejected after progress: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after progress: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/memory/progress (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/memory/completed
+    start_identity_promises_test.go:114: original start redelivery rejected after completed: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after completed: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/memory/completed (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline
+    start_identity_promises_test.go:114: original start redelivery rejected after resume_deadline: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after resume_deadline: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/memory/resume_deadline (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/memory/resume_clear
+    start_identity_promises_test.go:114: original start redelivery rejected after resume_clear: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after resume_clear: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/memory/resume_clear (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/mongo/progress
+    start_identity_promises_test.go:114: original start redelivery rejected after progress: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after progress: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/mongo/progress (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/mongo/completed
+    start_identity_promises_test.go:114: original start redelivery rejected after completed: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after completed: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/mongo/completed (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline
+    start_identity_promises_test.go:114: original start redelivery rejected after resume_deadline: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after resume_deadline: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/mongo/resume_deadline (0.00s)
+=== RUN   TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear
+    start_identity_promises_test.go:114: original start redelivery rejected after resume_clear: saga: idempotency identity conflict
+    start_identity_promises_test.go:120: runtime state accepted as a new start intent after resume_clear: <nil>
+--- FAIL: TestStartIdentitySurvivesProgressAndResume/mongo/resume_clear (0.00s)
+--- FAIL: TestStartIdentitySurvivesProgressAndResume (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	0.716s
