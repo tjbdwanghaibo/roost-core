@@ -482,6 +482,16 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if req.MsgName == "" {
 		req.MsgName = b.extractRpcMethod(msg.Subject)
 	}
+	if strings.TrimSpace(req.ReplySubject) == "" {
+		// callJetStreamRPC always sets a reply subject. A request without one is a
+		// lightweight Call / CallTo the request stream captured (its subjects cover
+		// <prefix>.rpc.>): that caller already got the stream's PubAck as an error
+		// and nobody can receive this answer, so it must not run — the old code ran
+		// it with no deadline and dropped the reply (RR-20261005-NC-92).
+		slog.Warn("bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport", "method", req.MsgName, "request_id", req.SessionId)
+		b.recordJetStreamRPCRequest(req.MsgName, "no_reply_subject")
+		return nil
+	}
 	if msg.NumDelivered > 0 {
 		metrics.SetGauge("bus_rpc_consumer_delivery", metrics.Labels{
 			"transport": "jetstream",

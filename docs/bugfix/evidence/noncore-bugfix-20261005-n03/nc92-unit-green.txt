@@ -1,0 +1,5 @@
+=== RUN   TestJetStreamRPCRequestWithoutReplySubjectIsNotExecuted
+--- PASS: TestJetStreamRPCRequestWithoutReplySubjectIsNotExecuted (0.00s)
+=== RUN   TestLightweightCallReportsJetStreamCapture
+--- PASS: TestLightweightCallReportsJetStreamCapture (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/bus	0.672s

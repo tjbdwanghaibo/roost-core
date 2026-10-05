@@ -1,0 +1,8 @@
+    jetstream_capture_real_promises_test.go:56: lightweight Call into the JetStream deployment: bus: lightweight rpc was stored by a jetstream stream; the target serves rpc over jetstream (stream RR_NC92_REQ_76054_1791200453325196000, seq 1)
+2026/10/05 19:40:53 WARN bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport method=Grant request_id=nc90:9922:1791200453928723000:1
+    jetstream_capture_real_promises_test.go:56: lightweight CallTo into the JetStream deployment: bus: lightweight rpc was stored by a jetstream stream; the target serves rpc over jetstream (stream RR_NC92_REQ_76054_1791200453325196000, seq 2)
+2026/10/05 19:40:53 WARN bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport method=Grant request_id=nc90:9922:1791200453940156000:2
+    jetstream_capture_real_promises_test.go:80: rpc_nc90_Grant: delivered=1 ack_pending=0
+    jetstream_capture_real_promises_test.go:80: rpc_nc90_9921_Grant: delivered=1 ack_pending=0
+--- PASS: TestRealLightweightCallIntoJetStreamDeploymentIsRefused (2.26s)
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	3.949s

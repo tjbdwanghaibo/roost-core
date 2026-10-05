@@ -428,7 +428,7 @@ lockstep 的丢包策略是**冗余而非重传**：每个广播报文携带最�
 
 ### 14. bus 的四条易踩契约 —— `bus/bus.go`、`bus/jetstream_rpc.go`
 
-① **Bus 是一次性对象**：Stop 会退订包括 RPC 在内的全部订阅，而 Start 只重建基础 subject，所以 Stop 后拒绝重启（Start 失败可重试，成功过才不可重启）。② **`Send(toSid, module)` 是服务类型无关的**——发到 `{prefix}.srv.{sid}`，同 sid 的不同类型进程都会收到；定向到某类型用 `SendByType`。③ 有序性粒度：异步消息按 `ToModule` 哈希到固定 worker（**同 module FIFO、跨 module 并行**），RPC 按 method 哈希。④ **开启 JetStream RPC 后 `HandleRpc` 只注册持久化通道，但 `Call`/`CallTo` 仍走轻量 core-NATS**——要持久化必须显式 `CallReliable`/`CallToReliable`。两类 RPC 使用同一版显式信封，远端业务错误会作为 error 返回，非信封请求/响应 fail-closed；轻量 Call 默认只发送一次，业务若确认操作幂等才应在更高层显式重试。`Handle`/`HandleRpc` 会拒绝空 handler、重复方法和停止期间的注册。另注意可靠消费的崩溃语义是**至多一次**：`BeginConsume` 只 SetNX 占位，handler 执行中崩溃后重投会被判重复而静默跳过（直到 inbox TTL 过期）；需要更强语义由 store 实现提供。
+① **Bus 是一次性对象**：Stop 会退订包括 RPC 在内的全部订阅，而 Start 只重建基础 subject，所以 Stop 后拒绝重启（Start 失败可重试，成功过才不可重启）。② **`Send(toSid, module)` 是服务类型无关的**——发到 `{prefix}.srv.{sid}`，同 sid 的不同类型进程都会收到；定向到某类型用 `SendByType`。③ 有序性粒度：异步消息按 `ToModule` 哈希到固定 worker（**同 module FIFO、跨 module 并行**），RPC 按 method 哈希。④ **开启 JetStream RPC 后 `HandleRpc` 只注册持久化通道，但 `Call`/`CallTo` 仍走轻量 core-NATS**——要持久化必须显式 `CallReliable`/`CallToReliable`；目标服务在 JetStream 模式下时，轻量调用会被它的请求流（`<prefix>.rpc.>`）截获，调用方得到 `bus.ErrRPCCapturedByJetStream`、服务端拒绝执行（RR-20261005-NC-92），两端的 `nats.rpc.transport` 必须一致。两类 RPC 使用同一版显式信封，远端业务错误会作为 error 返回，非信封请求/响应 fail-closed；轻量 Call 默认只发送一次，业务若确认操作幂等才应在更高层显式重试。`Handle`/`HandleRpc` 会拒绝空 handler、重复方法和停止期间的注册。另注意可靠消费的崩溃语义是**至多一次**：`BeginConsume` 只 SetNX 占位，handler 执行中崩溃后重投会被判重复而静默跳过（直到 inbox TTL 过期）；需要更强语义由 store 实现提供。
 
 ### 15. 异步 Context 隔离：业务参数显式传递 —— `ctx/context.go`、`worker/`、`nest/client.go`
 

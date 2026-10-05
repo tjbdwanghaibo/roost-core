@@ -1,12 +1,22 @@
 package bus
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 const rpcWireVersion uint8 = 1
+
+// ErrRPCCapturedByJetStream reports that a lightweight RPC was answered by a
+// JetStream PubAck: the target serves RPC over JetStream, whose request stream
+// covers the lightweight RPC subjects, so the request was stored instead of
+// reaching a handler. Align nats.rpc.transport on both sides (use
+// CallReliable / CallToReliable). A server with RR-20261005-NC-92 refuses such
+// a request without running it; an older server may still run it later.
+var ErrRPCCapturedByJetStream = errors.New("bus: lightweight rpc was stored by a jetstream stream; the target serves rpc over jetstream")
 
 type rpcErrorEnvelope struct {
 	Code   int32  `json:"code"`
@@ -41,12 +51,35 @@ func encodeRPCFailure(codec Codec, cause error) ([]byte, error) {
 	return codec.Marshal(rpcResponseEnvelope{Version: rpcWireVersion, Error: &wireErr})
 }
 
+// jetStreamPubAck is what JetStream answers a core request whose subject a
+// stream stores. It is always JSON, whatever the Bus codec is.
+type jetStreamPubAck struct {
+	Stream string `json:"stream"`
+	Seq    uint64 `json:"seq"`
+}
+
+// jetStreamCapture recognises a PubAck where an RPC response was expected
+// (RR-20261005-NC-92); nil when data is something else.
+func jetStreamCapture(data []byte) error {
+	var ack jetStreamPubAck
+	if json.Unmarshal(data, &ack) != nil || ack.Stream == "" {
+		return nil
+	}
+	return fmt.Errorf("%w (stream %s, seq %d)", ErrRPCCapturedByJetStream, ack.Stream, ack.Seq)
+}
+
 func decodeRPCResponse(codec Codec, data []byte, target any) error {
 	var envelope rpcResponseEnvelope
 	if err := codec.Unmarshal(data, &envelope); err != nil {
+		if captured := jetStreamCapture(data); captured != nil {
+			return captured
+		}
 		return fmt.Errorf("bus: decode rpc response envelope: %w", err)
 	}
 	if envelope.Version != rpcWireVersion {
+		if captured := jetStreamCapture(data); captured != nil {
+			return captured
+		}
 		return fmt.Errorf("bus: unsupported rpc response version %d", envelope.Version)
 	}
 	if !envelope.OK {
@@ -70,9 +103,15 @@ func decodeRPCResponse(codec Codec, data []byte, target any) error {
 func decodeRPCResponseBytes(codec Codec, data []byte) ([]byte, error) {
 	var envelope rpcResponseEnvelope
 	if err := codec.Unmarshal(data, &envelope); err != nil {
+		if captured := jetStreamCapture(data); captured != nil {
+			return nil, captured
+		}
 		return nil, fmt.Errorf("bus: decode rpc response envelope: %w", err)
 	}
 	if envelope.Version != rpcWireVersion {
+		if captured := jetStreamCapture(data); captured != nil {
+			return nil, captured
+		}
 		return nil, fmt.Errorf("bus: unsupported rpc response version %d", envelope.Version)
 	}
 	if !envelope.OK {
