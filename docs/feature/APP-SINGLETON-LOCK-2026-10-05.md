@@ -262,7 +262,7 @@ singleton:
 
 ### 6.2 默认对哪些服务启用
 
-**推荐：生成器对 resolved mods 包含 `dataengine` 的服务默认写 `singleton.enabled: true`**（game-demo 的 game 服务就在其中），其他服务写 `enabled: false` 并留注释。理由：带 DataEngine 的服务按 sid 划分 WAL 目录（`kit/dataengine/mod.go:110`）、outbox owner 也按 sid（`:182`），设计上就是“每个 sid 一个写者”，启用不改变部署形态；没有 DataEngine 的框架服务（account、mail、match 等）是否按 sid 多副本部署，生成器不知道，默认打开可能让现有的多副本部署起不来（D-B）。
+**推荐：生成器对 resolved mods 包含 `dataengine` 的服务默认写 `singleton.enabled: true`**（game-demo 的 game 服务就在其中），其他服务写 `enabled: false` 并留注释。理由：带 DataEngine 的服务按 sid 划分 WAL 目录（`kit/dataengine/mod.go:110`），设计上就是“每个 sid 一个写者”（更正 2026-10-05：原稿还以“outbox owner 按 sid（`:182`）”佐证，不成立——`MongoOutboxStore.Claim` 的过滤条件不含 owner / sid（`dataengine/engine/outbox_store.go:61-66`），owner 只是标签，围栏靠逐记录的 `lease_token`），启用不改变部署形态；没有 DataEngine 的框架服务（account、mail、match 等）是否按 sid 多副本部署，生成器不知道，默认打开可能让现有的多副本部署起不来（D-B）。
 
 ### 6.3 codegen 改动
 
@@ -405,7 +405,7 @@ game-demo（生成工程）：activity 用假 `SingletonLiveness` 的三条—�
 | D-A | 续期一直失败、窗口耗尽时（静态绑定方案 D3 曾推荐“先停准入、宽限 1×TTL”） | 到窗口末尾即 fail-stop / 先停准入再宽限 | **即 fail-stop**（维护者 2026-10-05 按推荐决定，§3.4）：本场景里窗口耗尽的就是旧进程；“暂停”要在每个入口加检查才成立，与“模块不感知锁”冲突。代价是 Redis 连续不可用约 10s 以上时进程重启 |
 | D-B | 默认对哪些服务启用 | 只对带 dataengine 的服务（含 game） / 对所有服务 | **只对带 dataengine 的服务**（维护者 2026-10-05 按推荐决定，§6.2）。其他服务可以手工打开（bootstrap 在项目有 redis 时总会安装 opener，§6.3） |
 
-D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的推荐，只是对象从 sid 锁换成 App 锁；D4 作废；D5 按本文实施。另：activity 不持有自己的租约、改用 App 的 `Live` 查询（维护者追加决定，§7.2）；kit `service/global` 的租约 API 推荐保留、不标弃用（§7.2 末条，如维护者希望标弃用可在实施第 1 笔时加 `Deprecated:` 注释）。
+D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的推荐，只是对象从 sid 锁换成 App 锁；D4 作废；D5 按本文实施。另：activity 不持有自己的租约、改用 App 的 `Live` 查询（维护者追加决定，§7.2）；kit `service/global` 的租约 API **改为删除**（维护者 2026-10-05：“所有这种都需要 app 接管”，见 §12，取代 §7.2 末条的“保留”）。
 
 ## 11. 没有核实的事实
 
@@ -414,3 +414,21 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - ~~systemd `TimeoutStartSec`、compose 健康检查时长~~：已核对，见 §6.3（systemd 是 `Type=simple`，不涉及；shell 部署 `HEALTH_ATTEMPTS` 与 compose `start_period` 需要调整）。
 - `Live` 的“停机中仍算活”会让恰在那一刻开的活动窗口等到宽限期（§7.2 差异 3），没有量化；实测若成问题，可让 App 在 `PhaseServiceStopping` 时把键的值改成“停机中”标记、`Live` 不计入（不改释放时机）。
 - 生产部署里崩溃重启是否总在同一个 WAL 卷上，取决于部署方式；生成的 k8s 清单用 `volumeClaimTemplates`（`render_deploy.go:964`），其他部署方式不在本文保证范围内（§1.2）。
+
+## 12. 全仓接管清单（维护者 2026-10-05：“所有这种都需要 app 接管”）
+
+全仓盘点了“按进程 / 按 sid 的单实例、存活登记、持有者租约、失锁自停”这一类机制（只读盘点，覆盖 core、kit、codegen、demo 模板；`skill/`、`robot/`、`scripts/`、`ai/` 只做关键词扫描）。结论：
+
+| 机制 | 位置 | 处理 | 落在哪一笔 |
+| --- | --- | --- | --- |
+| demo 按玩家租约 `playerroute` / `PlayerOwners` 租约部分 | `demo/game/playerroute/`、`playerowner.go.tmpl` | 删除，改静态绑定（静态绑定方案） | 3 |
+| activity 自己的 global 租约 | `activity.go.tmpl:189-211,297-315,521-551` | 删除，改用 `App.Live`（§7.2） | 3 |
+| kit `service/global` 租约 API（`AcquireLease` / `RenewLease` / `ReleaseLease` / `Lease` / `LiveGames`、`GameLease` / `LeaseState`、`Config.Leases` / `LeaseTTL` / `NewIncarnation`、错误码 570105～570108、codegen 的 `global.lease_ttl`） | `kit/service/global/service.go:253-503`、`types.go:151-210`、`routing_rpc_gen.go:44-48`、`codegen/internal/roost/framework_services.go:185` | **删除**：activity 改完后唯一调用方消失；存活由 App 统一提供。错误码按 `types.go` 惯例标 retired、不复用；RPC 重新生成；CHANGELOG 标破坏性变更。路由 `Bind` / `Resolve` / 迁移是分组归属（epoch CAS），不属于这一类，保留 | 3b（紧跟第 3 笔） |
+| etcd 选举 capability `ModEtcdElection`、Redis 锁 capability `ModRedisLock` | `kit/etcd/etcd_mod.go:140`、`kit/redis/redis_mod.go:81` | **停止发布这两个 capability**：仓库内无使用者，“进程 / sid 级唯一”归 App。core 原语（`etcd/election.go`、`redis/lock.go`）保留给 cron 去重之类的键级用途，注释写明“进程 / sid 级单例请用 App 单实例锁”。CHANGELOG 标破坏性变更 | 2b（紧跟第 2 笔） |
+| etcd Discovery 注册（`<prefix><type>/<sid>`，10s 租约） | `etcd/driver/discovery.go:76-182`、`kit/etcd/etcd_mod.go:59-152` | 保留为**地址 / 元数据发现**，不再承担存活语义：`App.Live` 是唯一的存活权威。Mod Start 在拿锁之后，所以同一 sid 同时只有一个进程注册。代码只改注释 + USER_GUIDE 写分工 | 5 |
+
+不属于这一类、不动（粒度比进程细或语义不同）：WAL `flock`（按目录的最后一道防线，§4 依赖它）、DataEngine outbox worker（逐记录竞争消费，`lease_token` 围栏）、`LeaseFence` / saga 步骤 inbox / saga 引擎认领（逐命令 / 逐记录）、RemoteEntity 所有权与版本锁（按实体，身份用 sid——App 锁是它的前提）、RemoteEntity `RecoverOutbox`（全局幂等）、kit 各定时扫描（本来就无 leader 锁，靠 versionstore CAS 支持多副本）、session / directory / mail / platform 的 claim（按键 CAS）、JetStream 竞争消费 durable、进程内锁。
+
+默认“一个 sid 一个进程”、由 App 锁使之成立而无需改动的代码：World 实体 ID = sid、demo `runtimeid` 以 sid 分片（两个同 sid 进程会撞 ID）、bus 按实例订阅 `svc.<type>.<sid>`、JetStream 按实例 RPC durable、syncbus 每 sid 一个 durable、部署清单单副本。
+
+`Live` 只能看见开了 `singleton.enabled` 的服务类型；activity 的 candidates 都是 game（默认开启）。若项目给 game 关掉 singleton，`Live` 恒空、activity 退化为只等自己——USER_GUIDE 写明这条约束。
