@@ -10,6 +10,8 @@
 > 2. **D1～D3 按推荐**：启动拿不到锁就等，上限 2×TTL；TTL / 续期 / 保护带 15 / 3 / 5s；D3 的对象换成 App 锁之后，[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §3.4 建议简化为“窗口耗尽即 fail-stop”，列为该方案的 D-A 请维护者确认。
 > 3. **D4 作废**（随第 1 条）。
 > 4. **D5 改为“App 层单实例锁，只覆盖崩溃重启短暂并存，不做模块级 fencing”**：同一服务类型 + sid 的进程锁由 core `app` 在任何 Mod `Init` 之前获取、在全部 Mod 停完之后释放，失锁走 App 统一的 fail-stop；DataEngine、activity、PlayerOwners 等模块不感知锁。见 [APP-SINGLETON-LOCK-2026-10-05.md](APP-SINGLETON-LOCK-2026-10-05.md)。本文 §2 的 `game/sidlock` 包、“`Service.Init` 第一步获取”、§2.5 的 `Held()` 检查、§2.6 的可选项 F 都被它取代；§6 的实施拆分改用该方案 §9 的合并拆分。
+> 5. **（追加）activity 不再持有自己的全局租约**：维护者要求“走 App 级别，不需要各个模块单独处理”。activity 的租约只用来算协调器该等哪些 game 服（`LiveGames`），改为调用 App 单实例锁暴露的只读查询 `Live`；`AcquireLease` / `RenewLease` / `ReleaseLease`、`incarnation`、standby/retake 与 `activity_lease_test` 删除。本文 §2.4 末尾“activity 以 `leaseStandby` 启动”及其回归作废，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §3.6、§7.2。
+> 6. D-A（窗口耗尽即 fail-stop）、D-B（默认只对带 dataengine 的服务启用）按推荐决定。
 
 ## 0. 结论先行
 
@@ -70,7 +72,7 @@
 
 ## 2. sid 进程锁
 
-> **已被取代（2026-10-05）**：本节的锁改由 core `app` 统一提供（[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)），在任何 Mod `Init` 之前获取，而不是放在 `Service.Init` 第一步；不新增 `game/sidlock` 包，业务不检查 `Held()`，失锁由 App 统一围栏 Nest 并 fail-stop。本节的后端比较（§2.1，结论仍是 Redis 单键）、键值与 CAS 语义（§2.2）、时间参数（§2.3）、单写者状态机与“窗口从 `asked` 起算”（§2.4）被该方案沿用；§2.4 的放置位置、§2.5 的四个后台循环检查、§2.6 的“锁获取的位置”与可选项 F 不再适用。activity 以 standby 启动的改动仍然保留（该方案 §7.2）。
+> **已被取代（2026-10-05）**：本节的锁改由 core `app` 统一提供（[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)），在任何 Mod `Init` 之前获取，而不是放在 `Service.Init` 第一步；不新增 `game/sidlock` 包，业务不检查 `Held()`，失锁由 App 统一围栏 Nest 并 fail-stop。本节的后端比较（§2.1，结论仍是 Redis 单键）、键值与 CAS 语义（§2.2）、时间参数（§2.3）、单写者状态机与“窗口从 `asked` 起算”（§2.4）被该方案沿用；§2.4 的放置位置、§2.5 的四个后台循环检查、§2.6 的“锁获取的位置”与可选项 F 不再适用。§2.4 末尾“activity 以 standby 启动”也作废：activity 不再持有全局租约，改用 App 锁的 `Live` 查询（该方案 §7.2）。
 
 ### 2.1 放在哪里：三个后端的比较
 
@@ -144,7 +146,7 @@ Starting ───────────────▶ Held ◀────�
   4. 超过启动等待上限仍被别人持有：`Init` 返回错误 `sid %d is held by a live process (%s)`，进程以非零码退出，由外部重启。
 - **为什么推荐“等”而不是“立即失败、由外部重启”（D1）**：崩溃重启时旧进程多半已经死了或卡住了，它的键最多一个 TTL 就会过期。等待的停服时间就是剩余的 TTL；如果立即失败，k8s 的 `CrashLoopBackOff` 会把重启间隔一路退避到几分钟，停服时间反而更长。只有对方一直在续期（真的有两个健康进程配了同一个 sid）才会等到上限，那时失败退出是对的：这是部署错误，不能抢锁。
 - **P2 的时间论证**：新进程只有在 Redis 里旧值消失之后才能 `Acquire`。旧值消失的时刻不早于旧进程最后一次确认续期的 Redis 处理时刻加 TTL，也就不早于 `asked_old + TTL`。旧进程的准入在 `asked_old + TTL − AdmissionGuard` 就已经停止。所以在 A4 下，新进程开始服务时，旧进程已经至少有 `AdmissionGuard` 不再准入新事务，剩下的只有 A2 和 A5。
-- **activity 的配合**（RR-20260930-24 的形状）：新进程拿到 sid 锁之后，旧进程的 activity 全局租约可能还没过期。它每 5s 续一次（`ac:41`），TTL 是 30s，所以最多还活 30s。现在 `bindAndLease`（`ac:189-212`）遇到 `held` 冲突会让 `Init` 失败。要改成：冲突时以 `leaseStandby` 启动，`renewLease` 已经会在每次心跳时重试 `AcquireLease`（`ac:541-551`）。这是本方案里唯一一处 activity 改动，现有 `activity_lease_test` 的承诺不变，再加一条“启动遇到活租约就以 standby 开始”的回归。
+- **activity 的配合**（**已作废**（2026-10-05 维护者追加决定）：activity 删除自己的全局租约，改用 App 锁的 `Live` 查询，下面的 standby 改法不做，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §7.2）（RR-20260930-24 的形状）：新进程拿到 sid 锁之后，旧进程的 activity 全局租约可能还没过期。它每 5s 续一次（`ac:41`），TTL 是 30s，所以最多还活 30s。现在 `bindAndLease`（`ac:189-212`）遇到 `held` 冲突会让 `Init` 失败。要改成：冲突时以 `leaseStandby` 启动，`renewLease` 已经会在每次心跳时重试 `AcquireLease`（`ac:541-551`）。这是本方案里唯一一处 activity 改动，现有 `activity_lease_test` 的承诺不变，再加一条“启动遇到活租约就以 standby 开始”的回归。
 
 ### 2.5 失锁时的自我围栏
 
@@ -163,7 +165,7 @@ Starting ───────────────▶ Held ◀────�
 ### 2.6 与 DataEngine 写入的关系
 
 - **窗口外不再提交**：围栏之后 Nest 拒绝一切新派发；窗口耗尽时 `Admit` 拒绝。真正的漏洞只剩 A2：事务在准入之后、提交之前被暂停（这正是“旧进程卡住”的形态），恢复之后照样提交到 WAL。
-- **同主机重启已经天然互斥**：WAL 目录按 sid 划分（`kit/dataengine/mod.go:110`，`data/wal/dataengine/<sid>`），`nestwal.Open` 用 `flock(LOCK_EX|LOCK_NB)` 锁 `writer.lock`（`nestwal/wal.go:222-228`）。旧进程只要还活着（哪怕被 SIGSTOP），新进程在 DataEngine Mod 的 Init 就会失败（`ErrLocked`）并退出。旧进程死后锁才释放，新进程启动时先**重放**旧 WAL，再做任何装载。所以同主机的并存不会产生两个 DataEngine 写者，A5 自动成立。sid 锁真正要防的，是**跨主机**并存（容器换节点重调度、节点分区），以及 DataEngine 以外的副作用：bus 寻址 `<prefix>.svc.<type>.<sid>` 上两个进程同时订阅、按 sid 的 World 定时器、activity、matchmaker 和 gift 消费者。
+- **同主机重启已经天然互斥**：WAL 目录按 sid 划分（`kit/dataengine/mod.go:110`，`data/wal/dataengine/<sid>`），`nestwal.Open` 用 `flock(LOCK_EX|LOCK_NB)` 锁 `writer.lock`（`nestwal/wal.go:222-228`）。旧进程只要还活着（哪怕被 SIGSTOP），新进程在 DataEngine Mod 的 `Start`（`dataengine/engine/assembly.go:119` 打开 WAL；Mod 的 `Init` 只解析配置）就会失败（`ErrLocked`）并退出。旧进程死后锁才释放，新进程启动时先**重放**旧 WAL，再做任何装载。所以同主机的并存不会产生两个 DataEngine 写者，A5 自动成立。sid 锁真正要防的，是**跨主机**并存（容器换节点重调度、节点分区），以及 DataEngine 以外的副作用：bus 寻址 `<prefix>.svc.<type>.<sid>` 上两个进程同时订阅、按 sid 的 World 定时器、activity、matchmaker 和 gift 消费者。
 - **锁获取的位置**（**已被取代**：App 锁在所有 Mod 之前获取，本条描述的缺口不再存在，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §2、§4）：Mod 先于 `Service.Init` 启动，所以 DataEngine 重放本机 WAL、outbox worker（owner 默认是 `dataengine-<sid>`，`kit/dataengine/mod.go:182`）都在获取 sid 锁之前就开始了。同主机时由 `flock` 兜底；跨主机时，本机 WAL 是本机上次运行留下的，重放它与远端旧进程是否还活着无关。v1 把获取放在 `Service.Init` 第一步就够了。如果要把这一段也盖住，需要把 sid 锁做成一个 kit Mod，排在 DataEngine 之前（要改 codegen 的 mod catalog 和停机预算），列为后续（§7 D5 的备注）。
 - **DataEngine 层 fencing token（可选项 F，不推荐本次做）**（**维护者 2026-10-05 决定不做**：只覆盖崩溃重启的短暂并存，由 App 锁 + 同目录 WAL `flock` 保证，见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §4）：core 已经有现成的机制 `dataengine.LeaseFence`（`dataengine/lease_fence.go`）：WAL 记录携带一个 Mongo 协调文档的 `owner` / `token` 前提，投影时在同一个 Mongo 事务里校验并写确认，前提不成立就把整条记录当成幂等空操作。如果把 sid 锁的 `(sid, epoch)` 写进一个 Mongo 文档（获取时 epoch 加一），让每条玩家 / World 记录都带上它，就能关掉 A1、A2 和跨主机的 A5。代价是：每个投影事务多一次条件写；被围栏的记录变成“已确认但没生效”（丢的是已经确认的写入，而不是 fatal 冲突）。这需要先定义“已确认写入被围栏后怎么告知客户端”，属于跨进程移交那条 feature 线（状态机文档 §8 D3、CARRYOVER A6 / C24），在这里登记，不并入本方案。
 
@@ -319,7 +321,7 @@ Starting ───────────────▶ Held ◀────�
 | RR-20261004-11 | **转写** | 卸载进行中 `Admit` 拒绝；登录加入撤离 |
 | RR-20261004-14 | **转写到 sid 锁** | 窗口从 `asked` 起算；启动获取丢了回复，靠 `Current` 等于自己来认领 |
 
-**新增回归**（sid 锁与静态路由）：`Lost` 是吸收态，迟到的 Held 不会复活（W08-2 的同类问题）；`Applied=false` 一定是 NotHeld（W08-3 的同类问题）；启动遇到活持有者，等到上限后失败，并且不抢锁；启动遇到卡住的持有者，等到键过期后获取；Unconfirmed 之后 Held → 恢复，NotHeld → fail-stop；登录 sid 不匹配 → `player_elsewhere`，并且不装载；Claims 缺 sid → fail-closed；gift `FromSID` 不是本服 → 转交给 `FromSID`、不在本服执行；旧 payload 的兜底；matchmaker 只保留驻留玩家；activity 启动遇到活租约 → 以 standby 开始。
+**新增回归**（sid 锁与静态路由）：`Lost` 是吸收态，迟到的 Held 不会复活（W08-2 的同类问题）；`Applied=false` 一定是 NotHeld（W08-3 的同类问题）；启动遇到活持有者，等到上限后失败，并且不抢锁；启动遇到卡住的持有者，等到键过期后获取；Unconfirmed 之后 Held → 恢复，NotHeld → fail-stop；登录 sid 不匹配 → `player_elsewhere`，并且不装载；Claims 缺 sid → fail-closed；gift `FromSID` 不是本服 → 转交给 `FromSID`、不在本服执行；旧 payload 的兜底；matchmaker 只保留驻留玩家；~~activity 启动遇到活租约 → 以 standby 开始~~（作废，改为 activity 用假 Live 源的 expected 集合用例，见 App 单实例锁方案 §8.1）。
 
 状态机文档 §4 的 8 个探针场景（W08-1 / 2a / 2b / 3、N-OWNS、N-CONT、N-TOLD）所依赖的机制全部删除，所以不转正。其中 W08-2（迟到的结论复活状态）和 W08-3（没生效却回答“是我们的”）在 sid 锁上有同形的风险，由上面前两条新回归钉住。
 
