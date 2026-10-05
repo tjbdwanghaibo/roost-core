@@ -1,0 +1,51 @@
+## gofmt -l（改动包）
+## go vet 改动 / 相邻包
+vet-ok
+## go test -race -count=3 改动 / 相邻包
+ok  	github.com/tjbdwanghaibo/roost-core/container	1.261s
+ok  	github.com/tjbdwanghaibo/roost-core/safemap	1.392s
+ok  	github.com/tjbdwanghaibo/roost-core/goroutine	5.327s
+ok  	github.com/tjbdwanghaibo/roost-core/misc	1.823s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/operation	2.848s
+ok  	github.com/tjbdwanghaibo/roost-core/lock	3.605s
+ok  	github.com/tjbdwanghaibo/roost-core/entity	6.417s
+ok  	github.com/tjbdwanghaibo/roost-core/kit/statslog	2.771s
+ok  	github.com/tjbdwanghaibo/roost-core/worker	2.154s
+
+## go build ./... && go vet ./...
+build-vet-ok
+## go test -count=1 .（根包）
+ok  	github.com/tjbdwanghaibo/roost-core	0.775s
+## go test -race -count=1 ./nest（entity 管理器的主要使用方）
+ok  	github.com/tjbdwanghaibo/roost-core/nest	3.472s
+## go test -count=1 ./codegen/...
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost/cmd/attributeruntime	[no test files]
+codegen-done
+## glsvet
+glsvet-ok
+
+## rebase 到 c35fe606（含 NC-164 statslog 改动）后复跑
+go build ./... ok；go test -race -count=3 ./kit/statslog ./container ./entity ok；go test -count=1 . ok
+
+## 全新生成 game-demo（本分支，replace 到 revn13 worktree）
+build-vet-ok
+ok  	example.com/n13demo/game/controllers/player	5.310s
+ok  	example.com/n13demo/game/dungeon	3.469s
+ok  	example.com/n13demo/game/entities/guild	2.500s
+ok  	example.com/n13demo/game/entities/monster	2.998s
+ok  	example.com/n13demo/game/entities/player	1.503s
+ok  	example.com/n13demo/game/entities/world	0.520s
+ok  	example.com/n13demo/game/gameplay/attribute	0.990s
+ok  	example.com/n13demo/game/handler	3.977s
+ok  	example.com/n13demo/game/handler/sender	2.001s
+ok  	example.com/n13demo/game/rewards	4.733s
+ok  	example.com/n13demo/game/runtimeid	4.994s
+ok  	example.com/n13demo/game/scene/runtime	5.016s
+ok  	example.com/n13demo/internal/service/game	16.035s
+
+## 推送前 rebase 到 ae66d593（含 NC-170～174）后复跑
+go build ./... && go vet ./... ok；go test -count=1 . ok；go test -race -count=1 ./container ./safemap ./goroutine ./entity ./lock ./kit/statslog ./nest ./manager 全部 ok

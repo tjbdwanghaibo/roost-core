@@ -1,5 +1,17 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N13 container / safemap / goroutine / misc / internal（revn13）
+
+基线 `f6245613`，独立 worktree 分支 `revn13`，NC 段 180～189（用 180～185）；图谱 generation 2026-09-30，五个包此后无代码提交，调用方按 import / 符号 `rg` 穷举（图谱对泛型方法与同名 `Range` 的调用边不可靠）。[本轮](REVIEW-2026-10-05-n13.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn13/README.md)。审查 `e7bbac3d`，修复 `7e4ed438` / `20400337` / `1d600b9b` / `4c26b4b5`。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| container C1～C10 | BucketHolder 遍历回调改容器、false 跨桶、写者排队、LockManager builder、游标；拓扑排序；KeyMap 遍历删除；ObjectPool | **NC-180 / 181 / 184 / 185 已修**；O1～O5 |
+| safemap S1～S6 | FastMap 遍历中改 / 插 / 删 / Clear（含生成 DAO 组合）；Sharded / Small 并发与快照；三种 map 在 `RangeX` 下的语义 | **NC-182 已修**；O6 / O7 |
+| goroutine / misc / internal G1～G6 / M1 / I1 | MPSC、SafeFunc 收尾、TaskPool 关闭、Parallel panic、GoID、Hash64、Lifetime 与三个调用方 | **NC-183 已修**；O8～O10；其余成立 |
+
+新增正式回归：container 4 个顶层用例（6 叶）、entity 1（2 叶）、safemap 1（4 叶）、goroutine 1，均修前红 → 修后绿（第一版 TaskPool 用例在基线上不红，已改为受理后再关闭，记录在证据里）。改动与相邻包 race×3、全仓 build/vet、根包、nest race、codegen、glsvet、生成 DAO 组合与全新生成 game-demo 通过。N13 第一批矩阵全部有结论（**本机场景收口**）。零调用方 API 清单与遍历契约统一见方向判断，待维护者。不等待 CI，不发版。
+
 ## 2026-10-05 N12 metrics / log / failurelog / robot（revn12）
 
 基线 `45d4bc1c`，分支 `revn12`，NC 段 160～169（用 160～165）；图谱 generation 2026-09-30，按当前源码补证。[运行记录/矩阵](REVIEW-2026-10-05-n12-revn12.md) · [修复](../bugfix/README.md)。审查 `b248a199`；NC-160 / 161（P2）、NC-162～165（P3）已修复、声明场景验证，未发版。

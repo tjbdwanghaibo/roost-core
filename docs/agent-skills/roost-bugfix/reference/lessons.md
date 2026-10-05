@@ -114,6 +114,14 @@
 - 多个独立原子值描述同一份状态（hotcode current / meta / gen）时，并发写者交错会**永久**撕裂，而不只是读者瞬时看到中间态；修法是合成一个不可变状态整体发布。
   没有调度注入点时用有界轮数对撞做红（NC-123 用 100000 轮，修前 red.txt 里 7 次运行全红），记录轮数与命中次数；修后的正确性不能依赖概率。
 
+## core container / safemap / goroutine（N13，2026-10-05）
+
+- **遍历回调里改同一个容器**是这几个包的共同缺口：每个容器各有一套语义（持锁调回调、活遍历遇重排、交换删除、复制快照），生成 DAO 的 `RangeX`、`ManagerAccess.Range` 又把它们包成同一个名字。审一个 `Range` 就把四个动作各跑一遍：回调里改已有键、插入到扩容、删未到达的键、Clear，再加“返回 false 是否立即停止”。
+  持锁调回调的用有界等待（2s）判卡死；活遍历的断言写“每个原有键恰好一次、没有零值键”，零值键是读错数组的直接证据。
+- 外层包装吞掉“停止”信号（`RangeAll` 不知道某个桶的 `Range` 因 false 结束）：给内层包一层记录 stopped 的回调，比改公开签名加返回值好。
+- 生成 DAO 的组合不用起整个工程：照 `codegen/scripts/dao-golden-runtime.sh` 拷 golden 与 `runtime/*_test.go` 进一次性模块，`replace` 到本地源码，用 `nest.RunIsolatedTransaction` + 记录型 committer 就能看到提交记录里的 patch 键（NC-182 的 `fast_items.0`）。
+- 窗口很窄的并发红（check-then-send）先确认被测动作真的在进行中再触发另一方（NC-183 第一版在提交方还没开始时就 Shutdown，基线上全绿）；红之前先看第一版到底红没红。
+
 ## 方法手法（跨包）
 
 - **卡在"造不出那个状态"时的两个手法**：**select 屏障**——select 阻塞前会求值所有 channel 操作数，所以传一个 `Done()` 会阻塞的 context

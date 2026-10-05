@@ -1,5 +1,16 @@
 # Bugfix 记录
 
+**10-05 N13 container / safemap / goroutine / misc / internal（revn13）：NC-180～185 已修复、声明场景验证，未发版。** BucketHolder 遍历先复制桶快照再在锁外调回调、false 跨桶停止；FastMap 改已有键不重排、Range 识别表被换掉；TaskPool 受理与关闭互斥；拓扑排序按全部节点判环；KeyMap 遍历每桶先复制。[本轮](../review/REVIEW-2026-10-05-n13.md) · [证据](evidence/noncore-bugfix-20261005-revn13/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-185](RR-20261005-NC-185.md) | `KeyMap.Range` 每桶现读并复制后回调 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-184](RR-20261005-NC-184.md) | 判环与 `len(inDegree)` 比较，未注册依赖按叶子排序 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-183](RR-20261005-NC-183.md) | `taskWorker.closeMu`：读锁内检查并发送，写锁内关闭 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-182](RR-20261005-NC-182.md) | `FastMap.Set` 先查键、只在占新空槽超阈值时扩容；`Range` 表被换掉后回当前表查找；`Clear` 不清零旧数组 | 已修复、声明场景验证（含生成 DAO 组合），未发版 |
+| [RR-20261005-NC-181](RR-20261005-NC-181.md) | `RangeAll` / `RangeWithCursorCnt` 见 false 即返回 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-180](RR-20261005-NC-180.md) | `Bucket.Range` 读锁内复制、锁外回调 | 已修复、声明场景验证（含 EntityManager 组合），未发版 |
+
 **10-05 同形停机核实（stopshape）：NC-170～174 已修复、声明场景验证（含真实 NATS / etcd），未发版。** 统一套用 roost-coding 三步停机：超时返回 ctx 错误并保留对象，重试在 ctx 内再等，排空后才释放。bus JetStream RPC（NC-83 第 4 处）已由 NC-90 修掉。[证据与方向判断](evidence/noncore-bugfix-20261005-stopshape/README.md)
 
 | 编号 | 修复 | 状态 |

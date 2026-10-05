@@ -438,7 +438,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 
 ### 16. 单所有者组件清单（非并发安全，靠实体锁/单 worker 独占）
 
-`timer.Scheduler`（无锁；Tick 内的增删改延迟到 tick 结束统一执行，闭包 timer 纯内存不持久化、不进快照；宿主用偏移时钟驱动 Tick 时必须 `SetClock` 同源注入，否则新建 timer 的 End 与 tick 时钟差一个偏移）、`safemap.FastMap`（常用 import alias 可写为 `fmap`；开放寻址 + tombstone，为"已被外层锁保护的热路径"设计）、`misc.KeyMap`、`misc.ObjectPool`、`misc.BucketHolder` 的游标遍历（`RangeWithCursorCnt` 把全量扫描摊平到多个 tick——大规模实体周期巡检的惯用法）。与之相对：`safemap.ShardedSafeMap`（分片锁；`Compute` 持写锁回调不可重入同分片，`Range` 脱锁回调可安全改 map）、`safemap.SmallSafeMap`（唯一带 BSON codec、可直接嵌 DAO 字段的容器）。
+`timer.Scheduler`（无锁；Tick 内的增删改延迟到 tick 结束统一执行，闭包 timer 纯内存不持久化、不进快照；宿主用偏移时钟驱动 Tick 时必须 `SetClock` 同源注入，否则新建 timer 的 End 与 tick 时钟差一个偏移）、`safemap.FastMap`（常用 import alias 可写为 `fmap`；开放寻址 + tombstone，为"已被外层锁保护的热路径"设计）、`container.KeyMap`、`container.ObjectPool`、`container.BucketHolder` 的游标遍历（`RangeWithCursorCnt` 把全量扫描摊平到多个 tick；`RangeCursor` 无同步，只能单 goroutine 用）。遍历回调里可以读写同一容器、返回 false 立即停止（RR-20261005-NC-180～182、185）：`BucketHolder` / `KeyMap` / `SmallSafeMap` / `ShardedSafeMap` 按快照遍历（回调期间删掉的未到达条目仍可能交出），`FastMap` 活遍历（删掉的不交出，新增的不保证交出）。与之相对：`safemap.ShardedSafeMap`（分片锁；`Compute` 持写锁回调不可重入同分片，`Range` 脱锁回调可安全改 map）、`safemap.SmallSafeMap`（唯一带 BSON codec、可直接嵌 DAO 字段的容器）。
 
 ### 17. 配置管线：meta 定义一切，映射零手写 —— `configdata/auto.go`、`configdata/external.go`、roost-codegen `cfggen`
 

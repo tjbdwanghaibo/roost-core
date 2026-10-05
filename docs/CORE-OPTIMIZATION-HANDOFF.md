@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N13 container / safemap / goroutine / misc / internal（revn13）**：[NC-180～185](review/REVIEW-2026-10-05-n13.md)已修复、声明场景验证（NC-180/181 含 EntityManager 组合，NC-182 含生成 DAO 组合与全新生成 game-demo），未发版。BucketHolder 遍历改为快照、锁外回调（EntityManager.Range 回调里 Destroy 不再卡死），false 跨桶停止；FastMap 改已有键不重排、遍历识别表被换掉；TaskPool / 拓扑排序 / KeyMap 三处零调用方 API 修复。遍历契约统一与零调用方 API 去留见方向判断，待维护者。
+
 **10-05 N12 metrics / log / failurelog / robot（revn12）**：[NC-160～165](review/REVIEW-2026-10-05-n12-revn12.md)已修复、声明场景验证（NC-160 含真实 Redis + 生产驱动，NC-161 / 162 含生成 game-demo 真实网关），未发版。failurelog 结果未知不再降级补写；loadtest 没有样本的阈值判失败；robot 重连后 capture 重新注册、ws 拨号受超时约束；statslog 清空的实体计数归零；log.Close 后日志写控制台 / stderr。生产 servicemetrics 仍无落点（观察 O1）、per-run 序列无删除入口（O2）待维护者定；真实弱网、Cluster、长期容量未验。
 
 **10-05 N05 mirror / ownerroute（revn05）**：[NC-130/131 与 RR-20260913-01 跨节点 L2 删除水位残余](review/REVIEW-2026-10-05-n05-revn05.md)已修复、声明场景验证（含真实 Redis、自起 Redis Cluster），未发版。L2 CAS 落败报 `ErrStaleWrite` 且不再把旧快照装进 L1；版本化删除在共享 L2 留墓碑（L2 键格式多 `deleted_version`，旧节点混跑时退回修复前行为）。ownerroute / 赠礼静态 sid 路由无缺陷；真实 JetStream 新 sid 重放历史（O5）、兴趣容量是全集群合计（O4）待维护者定；快照缓存删除 / 版本水位的方向判断见本轮记录。Mirror DTO 方案仍未实施。
@@ -197,6 +199,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N13 revn13：[NC-180](bug/RR-20261005-NC-180.md) P2（潜伏）与 [NC-181～185](review/REVIEW-2026-10-05-n13.md#3-确认的缺陷) P3 **已修复、声明场景验证，未发版**（审查 `e7bbac3d`，修复 `7e4ed438` / `20400337` / `1d600b9b` / `4c26b4b5`）；[本轮](review/REVIEW-2026-10-05-n13.md)（含方向判断）。行为变化：`BucketHolder` / `EntityManager.Range` 回调看到快照、false 立即停止；`FastMap` 遍历中写 map 的语义（README §16）。
+
 10-05 同形停机核实（stopshape）：[NC-170](bug/RR-20261005-NC-170.md) / [NC-171](bug/RR-20261005-NC-171.md) / [NC-172](bug/RR-20261005-NC-172.md) / [NC-173](bug/RR-20261005-NC-173.md) / [NC-174](bug/RR-20261005-NC-174.md) 五个 P3 **已修复、声明场景验证（NC-172 真实 NATS、NC-173 真实 etcd），未发版**；[证据与方向判断](bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)。NC-83 记录的 6 处同形停机：5 处确认并按三步停机修复，bus JetStream RPC 已由 NC-90 修掉。行为变化：这些停止入口超预算时如实返回 ctx 错误并保留对象（App 判定停机不完整、不释放其依赖），不再报告成功；新增 syncbus JetStream / mirror Replicator 的 `StopWithContext`。方向：第二类（退订不等在途回调）已有三份相同的准入门实现，建议抽共用小类型或把排空下沉到 ISyncBus 退订契约；T-251。
 
 10-05 N14 revn14：[NC-190](bug/RR-20261005-NC-190.md) / [NC-191](bug/RR-20261005-NC-191.md) / [NC-192](bug/RR-20261005-NC-192.md) 三个 P2 与 [NC-193](bug/RR-20261005-NC-193.md) / [NC-194](bug/RR-20261005-NC-194.md) 两个 P3 **已登记，未修复**；NC-192（生产校验要求的开关无读取方）待维护者选方案。[本轮](review/REVIEW-2026-10-05-n14.md)（含配置 schema 方向判断）。
