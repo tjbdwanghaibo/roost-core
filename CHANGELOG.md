@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.20.1] - 2026-10-05
+
+> 补丁版本：v1.20.0 整体验证与后续 review 收敛。saga 原生步骤按操作实例最多生效一次（U-0280，含复审两处补修）、过期无回执命令不再无限 nak（U-0281）、Nest 暂时性冲突重排加抖动（U-0279）；驱动层 Redis 脚本不再被驱动重放（NC-100，P1）、Mongo 事务窗口覆盖提交与 EndSession（NC-101）；非核心 review NC-50～52、NC-60～65、NC-70～75、NC-80～83、NC-90～93、NC-100～102、NC-110～117、NC-120～123、NC-140～147 与 RR-20261005-01。**行为变化**：saga 步骤预算改由配置提供（`saga.step_defaults` / `saga.steps`）、原生步骤租约封顶到命令截止；Redis 脚本回复丢失返回结果未知；限流器每 owner 默认 256 key；生成器 Core 下限升到 v1.20.1。已生成工程不提供迁移（维护者决定）。
+
 ### Fixed
 
 - **World 定时器堆随 Nest 事务回滚；timer Tick 期间的取消 / 改期 / 重入按承诺生效**（RR-20261005-NC-140～147）：game-demo `TimerComponent` 在武装和到期 Tick 前向当前可回滚事务登记逆操作，事务失败或提交被拒时堆与 DAO 一起恢复（此前撤回的武装留在内存、撤回的触发从堆里消失，截止时间丢到重启）；已过期的截止时间武装为下一次 Tick 触发，不再报告已武装却没有节点。`timer.Scheduler` 在 Tick 期间对仍在堆里的定时器取消 / 改期立即生效（此前它仍按旧期限触发一次），重入 Tick 只由最外层收尾。另修 `spatial.BlockIndex.BlockRect` 在 int64 上界的溢出，`index` 在 NaN 值、混合动态类型接口键、零值 `OrderedIndex` 上的 panic / 丢写。模板改动需 `roost project sync`。见 [N11 记录](docs/review/REVIEW-2026-10-05-n11.md)。

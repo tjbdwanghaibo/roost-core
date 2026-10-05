@@ -57,13 +57,17 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // ErrDeliveryNotApplied (RR-20260929-20/23), which v1.17.2 lacks,
 // and to v1.20.0 because the generated bootstrap installs app.Singleton with
 // kitredis.SingletonStore and the game-demo activity reads app.SingletonLiveness
-// (APP-SINGLETON-LOCK-2026-10-05), which v1.19.x lacks.
+// (APP-SINGLETON-LOCK-2026-10-05), which v1.19.x lacks,
+// and to v1.20.1 because generated saga definitions no longer spell out step
+// budgets (the kit saga Mod fills them from saga.step_defaults / saga.steps) and
+// the game-demo budget test calls kitsaga.StepBudgetsFromConfig (U-0280), which
+// v1.20.0 lacks.
 // Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.20.0",
+	Core:    "v1.20.1",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
