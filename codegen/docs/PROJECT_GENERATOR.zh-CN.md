@@ -592,20 +592,22 @@ v1.7.0 起，新项目同时生成三套部署入口：
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
 
 停机时长按服务生成（RR-20260926-66）：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的
-`dataengine.shutdown_timeout`，生成值 30s；托管 player TCP 接入的服务另加生成的 TCP Mod 声明的 `player_access.tcp.shutdown_timeout`，生成值 10s，RR-20260927-05）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限），
+`dataengine.shutdown_timeout`，生成值 30s；托管 player TCP 接入的服务另加生成的 TCP Mod 声明的 `player_access.tcp.shutdown_timeout`，生成值 10s，RR-20260927-05）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限）+ 3s（生成配置打开 `singleton.enabled` 的服务，即带 dataengine 的服务：App 单实例锁在 Mod 停完后 Release，Mod 停机截止时间为此提前 3s），
 Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Kit Mod、框架 ClientMod / owner Mod、rpc Mod、player access Mod）；
 只有生成器 Manifest 已知的 Mod 计入：应用手写、在 bootstrap 里自行注册的 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget`，其声明值也不进公式，`roost project doctor` 同样不检查它，
 需要时手工调大该服务的 `shutdown.total_timeout` 与下面各处宽限期（RR-20260926-66，OPEN-ITEMS C31）；
 k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh` / `second-game.sh` 的
 `kill -9` 前等待均为 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`（读 `config.<svc>.yaml`、`.prod.example.yaml` 与 k8s secret 示例，
-缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 114s / 119s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 108s / 113s；RR-20260927-05 之前为 107s / 112s、101s / 106s）；每个框架服务 6 个 Mod → 23s / 28s。
+缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 117s / 122s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 111s / 116s；计入单实例锁 Release 之前为 114s / 119s、108s / 113s，RR-20260927-05 之前为 107s / 112s、101s / 106s）；每个框架服务 6 个 Mod → 23s / 28s。
 配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
 改过的段或旧版生成器写的段保持不动，宽限期跟随它们的值。配置段的改写在渲染模板之前、与模板同一次提交（同受回滚与并发输入检查保护），
 增减 Mod 后一次 sync 即收敛、`roost project diff` 为空（RR-20260926-80）。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置
 total + 5s 为 FAIL（未 sync 或手改模板，会被 SIGKILL）；三份配置逐份判定，任一份的 total 覆盖不了 Mod 保底即 WARN 并指明文件，
 `Set it to` 的建议值按该份配置里实际的 `dataengine.shutdown_timeout` 计算（各份不同时逐文件给出），0 或负的时长按运行时的 30s 兜底判定（RR-20260927-04）；
 示例配置解析失败或时长非法时 WARN 只指明文件与键，不附 `Set it to` 建议（dev 配置时长非法为 FAIL）；
-OK / WARN 行显示磁盘上部署模板的实际宽限期。
+OK / WARN 行显示磁盘上部署模板的实际宽限期；配置里 `singleton.enabled: true` 时所需合计另加 3s。
+
+App 单实例锁（[方案](../../docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) §6.3）：项目里有 `redis` Mod 或带 `dataengine` 的服务时，bootstrap 生成 `a.Singleton(kitredis.SingletonStore)`；带 `dataengine` 的服务配置写 `singleton.enabled: true`（`key_prefix: roost:<project>:singleton`、15s / 3s / 5s / 30s），没有 `redis:` 段时只补配置段（开发 compose 随之带 redis），其他服务写同一段的 `enabled: false`；`add mod` 之后才带上 dataengine 的服务把未改过的 `enabled: false` 段翻成 `true`（改过的段保持并 WARN）。启用的服务部署侧的启动等待覆盖 `singleton.startup_wait`：k8s `startupProbe` 为 `startup_wait + 30s`（默认 60s），shell 的 `HEALTH_ATTEMPTS` 默认 `startup_wait + dataengine.startup_timeout` 次（60，其他服务 30），compose `start_period` 60s（其他服务 30s）。
 
 新项目还会生成 `.github/workflows/ci.yml`、`dependency-update.yml`、`release.yml`、`deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml` 和 `security.yml`。普通 CI 使用已经提交的 `go.mod/go.sum`，不会执行 `deps-update` 或 `go get -u`；追踪最新框架由独立依赖升级流水线完成并创建 PR。Release 构建一次不可变二进制包和 OCI 镜像，Shell 使用版本包，Docker 与 Kubernetes 使用同一个镜像 digest。
 

@@ -11,6 +11,9 @@ package roost
 // 是 CHANGE_ME，由运维填）。
 // Secret 示例这里只比这三段；Secret 与生产示例整体同源（含 add saga / player TCP 事后追加的 saga、
 // player_access 段）由 RR-20260928-07 的 k8s_secret_config_promises_test.go 守。
+// App 单实例锁（APP-SINGLETON-LOCK-2026-10-05 §6.3）：game 带 dataengine，三份配置都要
+// singleton.enabled: true、key_prefix 为 roost:<project>:singleton，取值满足 App 启动校验的三条关系；
+// game_route 段仍由当前 playerowner 读取，随按玩家 Redis 表在方案第 3 笔删除。
 
 import (
 	"fmt"
@@ -109,7 +112,7 @@ func checkDemoGameInitConfig(body string) error {
 // demoGameSection reports whether a dotted key belongs to one of the sections
 // the demo appends to the game service's configs.
 func demoGameSection(key string) bool {
-	for _, section := range []string{"game_route", "activity", "platform"} {
+	for _, section := range []string{"game_route", "activity", "platform", "singleton"} {
 		if key == section || strings.HasPrefix(key, section+".") {
 			return true
 		}
@@ -173,6 +176,7 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 			if err := checkDemoGameInitConfig(body); err != nil {
 				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
 			}
+			assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
 			// The prefixes the game borrows are the owning services' own.
 			for owner, key := range map[string]string{"activity": "activity.key_prefix", "platform": "platform.key_prefix"} {
 				ownerRel := "configs/service/config." + owner + ".prod.example.yaml"

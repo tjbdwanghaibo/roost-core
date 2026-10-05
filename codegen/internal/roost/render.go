@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func renderProject(m Manifest) (map[string]plannedFile, error) {
@@ -323,6 +324,10 @@ func renderBootstrap(m Manifest) string {
 		spec := modCatalog[name]
 		imports[spec.ImportPath] = spec.Alias
 	}
+	installSingleton := projectInstallsSingleton(m)
+	if installSingleton {
+		imports[modCatalog["redis"].ImportPath] = modCatalog["redis"].Alias
+	}
 	services := sortedServiceNames(m)
 	for _, name := range services {
 		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
@@ -378,6 +383,11 @@ func renderBootstrap(m Manifest) string {
 	// entities in Provide.
 	b.WriteString("\tif err := registry.RegisterAll(); err != nil { return nil, err }\n")
 	fmt.Fprintf(&b, "\ta := app.New(%q, buildinfo.VersionString())\n", m.Project.Name)
+	if installSingleton {
+		// 单实例锁的后端（app.Singleton）。是否启用由每个服务配置的 singleton.enabled 决定，
+		// enabled=false 时 opener 不会被调用，所以只要有配置能打开它就安装（projectInstallsSingleton）。
+		b.WriteString("\ta.Singleton(kitredis.SingletonStore)\n")
+	}
 	shared, _ := resolveMods(m.SharedMods)
 	if len(shared) > 0 {
 		b.WriteString("\ta.Mods(\n")
@@ -531,6 +541,60 @@ func Managers() []app.IManager {
 `, safeIdent(name))
 }
 
+// App 单实例锁（app.Singleton，docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §6）的生成规则。
+//
+// 生成值与 app/singleton.go 的默认值相同（15s / 3s / 5s / 2×ttl），满足 ValidateServiceConfig 钉住的三条关系：
+// renew_interval ≤ guard、2×renew_interval ≤ ttl − guard、startup_wait ≥ ttl + 2×renew_interval。
+const (
+	generatedSingletonTTL           = 15 * time.Second
+	generatedSingletonRenewInterval = 3 * time.Second
+	generatedSingletonGuard         = 5 * time.Second
+	// generatedSingletonStartupWait 是 singleton.startup_wait 的生成值（2×ttl）；部署侧的启动等待
+	// （k8s startupProbe、shell HEALTH_ATTEMPTS、compose start_period）按它覆盖。
+	generatedSingletonStartupWait = 2 * generatedSingletonTTL
+)
+
+// serviceSingletonEnabled 报告生成器是否给这个服务的配置写 singleton.enabled: true：resolved mods 含
+// dataengine（方案 §6.2 / D-B）。带 DataEngine 的服务按 sid 划分 WAL 目录，设计上就是每个 sid 一个写者，
+// 打开不改变部署形态；其他服务是否按 sid 多副本部署生成器不知道，写 enabled: false，由应用自己打开。
+func serviceSingletonEnabled(m Manifest, service string) bool {
+	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
+	return contains(mods, "dataengine")
+}
+
+// projectInstallsSingleton 报告 bootstrap 是否安装 kitredis.SingletonStore：项目里有 redis Mod（任何服务
+// 都可以在配置里手工打开 singleton，bootstrap 是生成文件、用户改不了，方案 §6.3），或有服务默认打开
+// （dataengine 服务没有 redis Mod 时同样要装，否则启动时 fail-closed）。
+func projectInstallsSingleton(m Manifest) bool {
+	all := allProjectMods(m)
+	return contains(all, "redis") || contains(all, "dataengine")
+}
+
+// renderSingletonConfig 是服务配置里的 singleton: 段。打开的段要求同一文件有 redis: 段
+// （kitredis.SingletonStore 从它建自己的连接），renderServiceConfig 与 appendModConfigSections 负责补上。
+func renderSingletonConfig(project string, enabled bool) string {
+	var b strings.Builder
+	b.WriteString("singleton:\n")
+	b.WriteString("  # One process per server type + sid: before any Mod starts, the App takes the Redis key\n")
+	b.WriteString("  # <key_prefix>:<server_type>:<sid> (connecting with this file's redis.* settings), renews it,\n")
+	b.WriteString("  # stops the process when it is lost, and releases it after every Mod has stopped.\n")
+	if enabled {
+		b.WriteString("  # On by default for a service with the Data Engine (one WAL writer per sid). The App refuses\n")
+		b.WriteString("  # to start unless renew_interval <= guard, 2 x renew_interval <= ttl - guard and\n")
+		b.WriteString("  # startup_wait >= ttl + 2 x renew_interval. Raising startup_wait: raise the deployment's\n")
+		b.WriteString("  # start-up allowance with it (k8s startupProbe, compose start_period, HEALTH_ATTEMPTS).\n")
+	} else {
+		b.WriteString("  # Off: the generator cannot tell whether this service runs more than one process per sid.\n")
+		b.WriteString("  # Turning it on needs redis.addr or redis.cluster_addrs in this file.\n")
+	}
+	fmt.Fprintf(&b, "  enabled: %t\n", enabled)
+	fmt.Fprintf(&b, "  key_prefix: roost:%s:singleton\n", project)
+	fmt.Fprintf(&b, "  ttl: %s\n  renew_interval: %s\n  guard: %s\n  startup_wait: %s\n",
+		seconds(generatedSingletonTTL), seconds(generatedSingletonRenewInterval), seconds(generatedSingletonGuard),
+		seconds(generatedSingletonStartupWait))
+	return b.String()
+}
+
 func renderServiceConfig(m Manifest, service string, production bool) string {
 	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
 	var b strings.Builder
@@ -548,6 +612,12 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
 		b.WriteString(spec.ConfigFunc(m.Project.Name))
 	}
+	singleton := serviceSingletonEnabled(m, service)
+	if singleton && !seen["redis"] {
+		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
+		b.WriteString(modCatalog["redis"].Config)
+	}
+	b.WriteString(renderSingletonConfig(m.Project.Name, singleton))
 	if !production {
 		// One machine, every service at once: each gets its own ops port
 		// (see opsPort). Production keeps 9100 — one process per container.
@@ -599,8 +669,29 @@ func appendModConfigSections(root string, before, after Manifest, service string
 			sections = append(sections, modCatalog[name].Config)
 		}
 	}
+	// 后加进 dataengine 的服务：生成时写的 enabled: false 段翻成 true（turnGeneratedSingletonOn），
+	// 没有 singleton: 段的文件追加打开的段，并补上单实例锁连接用的 redis: 段（已有则跳过）。
+	// 否则这个服务会带着 enabled: false 静默不启用（方案 §6.3）。
+	turnOn := !serviceSingletonEnabled(before, service) && serviceSingletonEnabled(after, service)
+	if turnOn {
+		sections = append(sections, modCatalog["redis"].Config, renderSingletonConfig(after.Project.Name, true))
+	}
 	if len(sections) == 0 {
 		return nil, nil
+	}
+	// edit applies both steps to one config text; kept reports a singleton: block
+	// that is not the generated one and was left as it is.
+	edit := func(rel, body string, production bool) (string, bool) {
+		appendedAny := false
+		if turnOn {
+			var kept bool
+			body, appendedAny, kept = turnGeneratedSingletonOn(body, after.Project.Name, production)
+			if kept {
+				fmt.Fprintf(warn, "WARN: %s: the singleton: block was edited, left as it is; service %s now runs the Data Engine, set singleton.enabled: true there by hand\n", rel, service)
+			}
+		}
+		body, appended := appendMissingConfigBlocks(body, sections, production)
+		return body, appendedAny || appended
 	}
 	var changed []string
 	for _, target := range []struct {
@@ -623,7 +714,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		// 早已按原行尾写回，这两份文件走同一对 lfText / restoreLineEndings。
 		// 空文件与 LF 文件保持 LF。
 		text, crlf := lfText(raw)
-		body, appended := appendMissingConfigBlocks(text, sections, target.production)
+		body, appended := edit(target.rel, text, target.production)
 		if !appended {
 			continue
 		}
@@ -633,7 +724,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		changed = append(changed, target.rel)
 	}
 	secret, err := editKubernetesSecretExampleConfig(root, service, warn, func(config string) (string, error) {
-		if body, appended := appendMissingConfigBlocks(config, sections, true); appended {
+		if body, appended := edit(kubernetesSecretExampleRel(service), config, true); appended {
 			return body, nil
 		}
 		return config, nil
@@ -645,6 +736,26 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		changed = append(changed, secret)
 	}
 	return changed, nil
+}
+
+// turnGeneratedSingletonOn replaces the generated enabled: false singleton:
+// block of one config text with the enabled one. A singleton: block that is
+// not exactly the generated one is a hand edit and stays (kept); a text with
+// no singleton: block is left to appendMissingConfigBlocks.
+func turnGeneratedSingletonOn(body, project string, production bool) (out string, changed, kept bool) {
+	off, on := renderSingletonConfig(project, false), renderSingletonConfig(project, true)
+	if production {
+		off, on = productionizeConfig(off), productionizeConfig(on)
+	}
+	if strings.Count(body, off) == 1 {
+		return strings.Replace(body, off, on, 1), true, false
+	}
+	for _, block := range topLevelConfigBlocks(body) {
+		if block.key == "singleton" {
+			return body, false, !strings.Contains(block.text, "\n  enabled: true\n")
+		}
+	}
+	return body, false, false
 }
 
 // appendMissingConfigBlocks appends to one config text the top-level blocks of
@@ -1024,6 +1135,13 @@ func renderCompose(m Manifest) string {
 	for _, name := range allProjectMods(m) {
 		if svc := modCatalog[name].DevService; svc != "" {
 			needed[svc] = true
+		}
+	}
+	// A service whose generated config turns the singleton on connects to Redis
+	// for the lock even without the Redis Mod.
+	for _, service := range sortedServiceNames(m) {
+		if serviceSingletonEnabled(m, service) {
+			needed["redis"] = true
 		}
 	}
 	var b strings.Builder

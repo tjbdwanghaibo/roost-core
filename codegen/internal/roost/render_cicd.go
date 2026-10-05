@@ -455,7 +455,9 @@ func renderProductionCompose(m Manifest) string {
 		b.WriteString("    tmpfs: [\"/tmp:rw,noexec,nosuid,size=64m\"]\n")
 		// shutdown.total_timeout of this service + 5s (serviceShutdownPlan, RR-20260926-66).
 		fmt.Fprintf(&b, "    stop_grace_period: %s\n", seconds(serviceShutdownPlan(m, service).grace))
-		b.WriteString("    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: 30s\n")
+		// start_period covers startupAllowance: singleton.startup_wait + dataengine.startup_timeout
+		// for a service with the singleton on.
+		fmt.Fprintf(&b, "    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: %s\n", seconds(startupAllowance(m, service)))
 		// Long syntax with an explicit type. In short syntax a source that
 		// does not begin with "/", "./" or "../" is a NAMED volume, so a
 		// relative ROOST_CONFIG_ROOT made compose report "refers to undefined

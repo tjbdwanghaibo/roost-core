@@ -123,8 +123,7 @@ LOG_ROOT=${LOG_ROOT:-/var/log/roost/$INSTANCE}
 RELEASE_ROOT=$APP_ROOT/releases/$VERSION
 UNIT_PATH=/etc/systemd/system/$INSTANCE.service
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
-HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
-[ ! -e "$RELEASE_ROOT" ] || { printf 'release already exists and is immutable: %s\n' "$RELEASE_ROOT" >&2; exit 2; }
+{{HEALTH_ATTEMPTS}}[ ! -e "$RELEASE_ROOT" ] || { printf 'release already exists and is immutable: %s\n' "$RELEASE_ROOT" >&2; exit 2; }
 
 {{STATEFUL_GUARD}}if ! getent passwd "$RUN_USER" >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin "$RUN_USER"
@@ -234,7 +233,39 @@ exit 1
 		fmt.Fprintf(&stopTimeouts, "  %s) STOP_TIMEOUT=%s ;;\n", service, seconds(serviceShutdownPlan(m, service).grace))
 	}
 	value = strings.ReplaceAll(value, "{{STOP_TIMEOUTS}}", stopTimeouts.String())
-	return value
+	return strings.ReplaceAll(value, "{{HEALTH_ATTEMPTS}}", renderShellHealthAttempts(m))
+}
+
+// startupAllowance is how long a service may take from process start to
+// ready, as the deployment templates wait for it. A service whose generated
+// config turns the singleton on (serviceSingletonEnabled) may first wait up to
+// singleton.startup_wait for the key a previous process still holds — it
+// crashed, or its stop ran out of time — and only then replays the WAL
+// (dataengine.startup_timeout); a normal rolling deploy stops the old process
+// first and does not wait. Other services keep the 30s the templates always had.
+func startupAllowance(m Manifest, service string) time.Duration {
+	allowance := 30 * time.Second
+	if serviceSingletonEnabled(m, service) {
+		allowance = max(allowance, generatedSingletonStartupWait+generatedDataEngineStartupTimeout)
+	}
+	return allowance
+}
+
+// renderShellHealthAttempts is the per-service default readiness wait of
+// install.sh and rollback.sh: one attempt a second for startupAllowance.
+// SERVICE is checked against the same list before this runs.
+func renderShellHealthAttempts(m Manifest) string {
+	var b strings.Builder
+	b.WriteString("# Readiness attempts, one a second. A service with singleton.enabled may first wait up to\n")
+	b.WriteString("# singleton.startup_wait for the lock a previous process still holds, then replay its WAL\n")
+	b.WriteString("# (dataengine.startup_timeout); raise HEALTH_ATTEMPTS when raising either.\n")
+	b.WriteString("case \"$SERVICE\" in\n")
+	for _, service := range sortedServiceNames(m) {
+		fmt.Fprintf(&b, "  %s) DEFAULT_HEALTH_ATTEMPTS=%d ;;\n", service, int64(startupAllowance(m, service)/time.Second))
+	}
+	b.WriteString("  *) DEFAULT_HEALTH_ATTEMPTS=30 ;;\nesac\n")
+	b.WriteString("HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-$DEFAULT_HEALTH_ATTEMPTS}\n")
+	return b.String()
 }
 
 // renderStatefulWALGuard is the install-time check that a stateful service's
@@ -393,8 +424,7 @@ fi
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
-HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
-if systemctl start "$INSTANCE.service"; then
+{{HEALTH_ATTEMPTS}}if systemctl start "$INSTANCE.service"; then
   attempt=1
   while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
     if sh "$ROOT/deploy/shell/healthcheck.sh" "$HEALTH_URL" >/dev/null 2>&1; then
@@ -411,6 +441,7 @@ exit 1
 `, m)
 	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(sortedServiceNames(m), " "))
 	value = strings.ReplaceAll(value, "{{UNIT_RECORD}}", renderShellUnitRecord())
+	value = strings.ReplaceAll(value, "{{HEALTH_ATTEMPTS}}", renderShellHealthAttempts(m))
 	return strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(sortedServiceNames(m), "|"))
 }
 
@@ -463,7 +494,7 @@ func renderShellReadme(m Manifest) string {
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
 5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和按 Service 生成的 SIGTERM 停机预算：TimeoutStopSec = max(该 Service 按实际注册的 Mod 生成的 shutdown.total_timeout, 配置里实际的 total_timeout) + 5s，当前为 {{STOP_BUDGETS}}；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload；切换前先按正在用的 unit 停掉当前进程，正在运行的版本按它自己 unit 的 TimeoutStopSec 停机，再装入目标 unit 启动。readiness 未在预算内成功、或目标 unit 装不上（install / daemon-reload 失败）时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本（版本号不能是 . 或 ..），目标版本 readiness 失败或 unit 装不上会恢复原版本并以非零退出。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current；unit 的 WorkingDirectory 是 current 指向的 release，相对的 config_data.dir（configs/data）与 stats_log.dir（log）都按它解析——用 configdata 的 Service 安装时把工程里的 configs/data（可用 CONFIG_DATA 指定）拷进 release，与镜像布局一致，每个 release 里的 log 链接到实例日志目录 /var/log/roost/<instance>（LOG_ROOT，服务唯一可写的日志位置）；创建专用 systemd unit、非登录用户、只读系统保护和按 Service 生成的 SIGTERM 停机预算：TimeoutStopSec = max(该 Service 按实际注册的 Mod 生成的 shutdown.total_timeout, 配置里实际的 total_timeout) + 5s，当前为 {{STOP_BUDGETS}}；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算。同一版本名拒绝覆盖。每个 release 在它自己安装时写的 systemd unit 下运行：unit 记在 $APP_ROOT/units/<version>.service，覆盖前先把正在用的那份记给当前 release，切换 current 时一并装回目标 release 的 unit 并 daemon-reload；切换前先按正在用的 unit 停掉当前进程，正在运行的版本按它自己 unit 的 TimeoutStopSec 停机，再装入目标 unit 启动。readiness 未在预算内成功、或目标 unit 装不上（install / daemon-reload 失败）时自动切回上一 release 及其 unit；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本（版本号不能是 . 或 ..），目标版本 readiness 失败或 unit 装不上会恢复原版本并以非零退出。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数；HEALTH_ATTEMPTS 默认按 Service（每秒一次），打开 singleton（App 单实例锁）的 Service 先可能等旧进程的锁最多 singleton.startup_wait、再做 WAL 重放（dataengine.startup_timeout），当前为 {{HEALTH_DEFAULTS}}，调大这两个值时同步调大。
 
 统计文件 LOG_ROOT/<service>-<sid>.stats.log 不轮转：statslog 以 O_APPEND 打开它、进程运行期间不重开，长期运行的实例由运维配 logrotate，必须用 copytruncate（create / 改名式轮转会让进程继续写旧文件，新文件一直是空的；也没有可发的 reload 信号）。示例 /etc/logrotate.d/{{APP}}-stats：
 
@@ -485,7 +516,12 @@ copytruncate 在复制与截断之间追加的记录会丢，至多一条（默�
 	for _, service := range sortedServiceNames(m) {
 		budgets = append(budgets, service+" "+seconds(serviceShutdownPlan(m, service).grace))
 	}
-	return strings.ReplaceAll(value, "{{STOP_BUDGETS}}", strings.Join(budgets, "、"))
+	value = strings.ReplaceAll(value, "{{STOP_BUDGETS}}", strings.Join(budgets, "、"))
+	var attempts []string
+	for _, service := range sortedServiceNames(m) {
+		attempts = append(attempts, fmt.Sprintf("%s %d", service, int64(startupAllowance(m, service)/time.Second)))
+	}
+	return strings.ReplaceAll(value, "{{HEALTH_DEFAULTS}}", strings.Join(attempts, "、"))
 }
 
 func renderDockerReadme(m Manifest) string {
@@ -942,7 +978,15 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	if serviceOwnsPlayerTCP(m, service) {
 		head.WriteString("            - name: player-tcp\n              containerPort: 7000\n              protocol: TCP\n")
 	}
-	head.WriteString("          startupProbe:\n            httpGet: {path: /healthz, port: ops}\n            failureThreshold: 30\n            periodSeconds: 2\n          readinessProbe:\n            httpGet: {path: /readyz, port: ops}\n            periodSeconds: 5\n            timeoutSeconds: 2\n            failureThreshold: 3\n          livenessProbe:\n            httpGet: {path: /healthz, port: ops}\n            periodSeconds: 10\n            timeoutSeconds: 2\n            failureThreshold: 3\n          resources:\n            requests: {cpu: \"250m\", memory: \"256Mi\"}\n            limits: {cpu: \"2\", memory: \"2Gi\"}\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n          volumeMounts:\n            - {name: config, mountPath: /etc/roost, readOnly: true}\n            - {name: tmp, mountPath: /tmp}\n")
+	// /healthz is the shared ops Mod's unconditional answer, up once the singleton lock is taken
+	// (before the Data Engine replays), so the startup probe covers singleton.startup_wait + 30s.
+	head.WriteString("          startupProbe:\n")
+	if serviceSingletonEnabled(m, service) {
+		head.WriteString("            # Covers singleton.startup_wait (the lock a previous process still holds) + 30s to start;\n")
+		head.WriteString("            # raise failureThreshold with startup_wait.\n")
+	}
+	fmt.Fprintf(&head, "            httpGet: {path: /healthz, port: ops}\n            failureThreshold: %d\n            periodSeconds: 2\n", kubernetesStartupFailureThreshold(m, service))
+	head.WriteString("          readinessProbe:\n            httpGet: {path: /readyz, port: ops}\n            periodSeconds: 5\n            timeoutSeconds: 2\n            failureThreshold: 3\n          livenessProbe:\n            httpGet: {path: /healthz, port: ops}\n            periodSeconds: 10\n            timeoutSeconds: 2\n            failureThreshold: 3\n          resources:\n            requests: {cpu: \"250m\", memory: \"256Mi\"}\n            limits: {cpu: \"2\", memory: \"2Gi\"}\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n          volumeMounts:\n            - {name: config, mountPath: /etc/roost, readOnly: true}\n            - {name: tmp, mountPath: /tmp}\n")
 	if stateful {
 		head.WriteString("            - {name: wal, mountPath: /var/lib/roost/wal}\n")
 	}
@@ -975,6 +1019,17 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 		head.WriteString("    - {name: player-tcp, port: 7000, targetPort: player-tcp, protocol: TCP}\n")
 	}
 	return head.String()
+}
+
+// kubernetesStartupFailureThreshold is the startupProbe's failureThreshold at
+// periodSeconds 2: 60s, or singleton.startup_wait + 30s for a service with the
+// singleton on (the same 60s at the generated 30s startup_wait).
+func kubernetesStartupFailureThreshold(m Manifest, service string) int {
+	allowance := 60 * time.Second
+	if serviceSingletonEnabled(m, service) {
+		allowance = max(allowance, generatedSingletonStartupWait+30*time.Second)
+	}
+	return int(allowance / (2 * time.Second))
 }
 
 func renderKubernetesPDB(m Manifest, service string) string {

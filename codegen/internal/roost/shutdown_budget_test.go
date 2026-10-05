@@ -77,16 +77,18 @@ type declaringMods struct{ dataengine, playerTCP bool }
 // expectedShutdown is the formula of the fix, applied to what the bootstrap
 // registers: dataengine declares dataengine.shutdown_timeout (30s in the
 // generated config), the player TCP Mod player_access.tcp.shutdown_timeout
-// (10s, RR-20260927-05); every other Mod declares nothing.
+// (10s, RR-20260927-05); every other Mod declares nothing. A service with
+// dataengine has singleton.enabled: true in its generated config, and the App
+// keeps 3s of the window back from the Mods for the release (APP-SINGLETON-LOCK §3.5).
 func expectedShutdown(mods int, declares declaringMods) (totalSeconds, graceSeconds int) {
-	declared, undeclared := 0, mods
+	declared, undeclared, release := 0, mods, 0
 	if declares.dataengine {
-		declared, undeclared = declared+30, undeclared-1
+		declared, undeclared, release = declared+30, undeclared-1, 3
 	}
 	if declares.playerTCP {
 		declared, undeclared = declared+10, undeclared-1
 	}
-	total := declared + 3*undeclared + 5
+	total := declared + 3*undeclared + 5 + release
 	return total, total + 5
 }
 
@@ -164,8 +166,8 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 	if counts["game"] != 23 || !declares["game"].dataengine || !declares["game"].playerTCP {
 		t.Fatalf("game registers %d Mods (declaring: %+v), want 23 with dataengine and the player TCP Mod", counts["game"], declares["game"])
 	}
-	// 30s + 10s + 3s x 21 + 5s; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
-	pinned := map[string][2]int{"game": {108, 113}, "account": {23, 28}}
+	// 30s + 10s + 3s x 21 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
+	pinned := map[string][2]int{"game": {111, 116}, "account": {23, 28}}
 	for service, mods := range counts {
 		total, grace := expectedShutdown(mods, declares[service])
 		if want, ok := pinned[service]; ok && (want[0] != total || want[1] != grace) {
@@ -177,7 +179,7 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 		t.Fatalf("account registers %d Mods, game %d", counts["account"], counts["game"])
 	}
 	// The second game process runs the game service's Mods and waits as long.
-	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 113 ]`)
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 116 ]`)
 }
 
 // A service with few Mods gets a smaller window than the demo's game service.
@@ -192,8 +194,8 @@ func TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods(t *testing.T) {
 		t.Fatalf("gate unexpectedly runs a declaring Mod: %+v", declares["gate"])
 	}
 	total, grace := expectedShutdown(counts["gate"], declaringMods{})
-	if total >= 108 {
-		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 108s", counts["gate"], total)
+	if total >= 111 {
+		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 111s", counts["gate"], total)
 	}
 	assertGeneratedShutdown(t, target, "gate", total, grace)
 }
@@ -319,9 +321,9 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 		end := strings.Index(body, "  serve_wait_timeout: 5s\n") + len("  serve_wait_timeout: 5s\n")
 		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
 	}
-	// game: a hand-edited total above the formula's 108s.
+	// game: a hand-edited total above the formula's 111s.
 	game := readProjectFile(t, target, "configs/service/config.game.yaml")
-	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 108s\n", "total_timeout: 120s\n", 1))
+	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 111s\n", "total_timeout: 120s\n", 1))
 	if _, err := SyncProject(target); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +380,7 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 28s < total_timeout 60s + 5s") {
 		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
 	}
-	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 23 Mods (40s declared + 3s x 21 = 103s)") || !strings.Contains(item.Detail, "Set it to 108s") {
+	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 23 Mods (40s declared + 3s x 21 + 3s singleton release = 106s)") || !strings.Contains(item.Detail, "Set it to 111s") {
 		t.Errorf("game on 60s: %s %s", item.Status, item.Detail)
 	}
 	// Sync follows the configured total: the grace period is back above it.

@@ -41,6 +41,10 @@ const (
 	// generated config writes it (catalog.go): the stop budget kit/dataengine
 	// declares to the App.
 	generatedDataEngineShutdownTimeout = 30 * time.Second
+	// generatedDataEngineStartupTimeout is dataengine.startup_timeout as the
+	// generated config writes it (catalog.go): how long the WAL replay may take
+	// before the service is ready. The deployment's start-up allowance counts it.
+	generatedDataEngineStartupTimeout = 30 * time.Second
 	// generatedPlayerTCPShutdownTimeout is player_access.tcp.shutdown_timeout
 	// as the generated config writes it (player_tcp_config.go): the stop
 	// budget the generated player TCP Mod declares to the App.
@@ -65,6 +69,12 @@ const (
 	// appDefaultShutdownTotal is what the App uses when a config has no
 	// shutdown.total_timeout (app.App.Execute).
 	appDefaultShutdownTotal = 30 * time.Second
+	// generatedSingletonRelease mirrors app.singletonReleaseBudget: with
+	// singleton.enabled the App ends the Mods' stop deadline this much early
+	// to release the lock after every Mod has stopped, so a service whose
+	// generated config turns the singleton on (serviceSingletonEnabled) counts
+	// it in total_timeout.
+	generatedSingletonRelease = 3 * time.Second
 )
 
 // serviceShutdown is the stop plan of one service's process as generated.
@@ -80,6 +90,9 @@ type serviceShutdown struct {
 	dataEngine int
 	playerTCP  int
 	margin     time.Duration
+	// release is the singleton release share (generatedSingletonRelease) for a
+	// service whose generated config turns the singleton on, zero otherwise.
+	release time.Duration
 	// total is the formula's shutdown.total_timeout.
 	total time.Duration
 	// grace is what the deployment templates wait after SIGTERM:
@@ -93,7 +106,7 @@ func (plan serviceShutdown) undeclared() int { return plan.mods - plan.declaring
 // (grace is not part of it: the block states total_timeout + 5s).
 func (plan serviceShutdown) sameFormula(other serviceShutdown) bool {
 	return plan.mods == other.mods && plan.declaring == other.declaring && plan.declared == other.declared &&
-		plan.margin == other.margin && plan.total == other.total
+		plan.margin == other.margin && plan.release == other.release && plan.total == other.total
 }
 
 // serviceShutdownPlan counts what the bootstrap registers for the service
@@ -127,7 +140,12 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 		plan.playerTCP++
 		plan.declared += generatedPlayerTCPShutdownTimeout
 	}
-	plan.total = plan.declared + time.Duration(plan.undeclared())*generatedModStopFloor + plan.margin
+	// App 单实例锁：Mod 停机截止时间提前 3s 留给 Release（app/app.go 的 releaseReserve），
+	// 只给 Mod 留 total − 3s，所以生成配置打开 singleton 的服务把这 3s 计入 total。
+	if serviceSingletonEnabled(m, service) {
+		plan.release = generatedSingletonRelease
+	}
+	plan.total = plan.declared + time.Duration(plan.undeclared())*generatedModStopFloor + plan.margin + plan.release
 	plan.grace = max(plan.total, m.configuredShutdown[service]) + generatedGraceOverTotal
 	return plan
 }
@@ -209,6 +227,22 @@ func seconds(value time.Duration) string {
 // summary line is also how refreshGeneratedShutdownConfigs recognises a block
 // nobody has edited (parseGeneratedShutdown).
 func renderShutdownConfig(plan serviceShutdown) string {
+	if plan.release > 0 {
+		return fmt.Sprintf("shutdown:\n"+
+			"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n"+
+			"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n"+
+			"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n"+
+			"  # when the rest cannot cover it. Generated for this service's %d Mods: %s declared + 3s x %d\n"+
+			"  # undeclared + %s for Service.Shutdown + %s for the singleton release = %s (the App keeps the\n"+
+			"  # release share back from the Mods while singleton.enabled is true). roost sync updates this\n"+
+			"  # block while it is unedited when the service's Mods change; roost doctor checks an edited one.\n"+
+			"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n"+
+			"  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be\n"+
+			"  # >= total_timeout + 5s: %s for this service.\n"+
+			"  total_timeout: %s\n  serve_wait_timeout: 5s\n",
+			plan.mods, seconds(plan.declared), plan.undeclared(), seconds(plan.margin), seconds(plan.release), seconds(plan.total),
+			seconds(plan.total+generatedGraceOverTotal), seconds(plan.total))
+	}
 	return fmt.Sprintf("shutdown:\n"+
 		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n"+
 		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n"+
@@ -224,7 +258,7 @@ func renderShutdownConfig(plan serviceShutdown) string {
 		seconds(plan.total+generatedGraceOverTotal), seconds(plan.total))
 }
 
-var generatedShutdownSummary = regexp.MustCompile(`Generated for this service's (\d+) Mods: (\d+)s declared \+ 3s x (\d+)\n *# undeclared \+ (\d+)s for Service\.Shutdown = (\d+)s\.`)
+var generatedShutdownSummary = regexp.MustCompile(`Generated for this service's (\d+) Mods: (\d+)s declared \+ 3s x (\d+)\n *# undeclared \+ (\d+)s for Service\.Shutdown(?: \+ (\d+)s for the singleton release)? = (\d+)s[. ]`)
 
 // parseGeneratedShutdown reads back the plan a generated shutdown: block was
 // rendered from.
@@ -241,7 +275,8 @@ func parseGeneratedShutdown(body string) (serviceShutdown, bool) {
 		mods:     number(1),
 		declared: time.Duration(number(2)) * time.Second,
 		margin:   time.Duration(number(4)) * time.Second,
-		total:    time.Duration(number(5)) * time.Second,
+		release:  time.Duration(number(5)) * time.Second,
+		total:    time.Duration(number(6)) * time.Second,
 	}
 	plan.declaring = plan.mods - number(3)
 	plan.grace = plan.total + generatedGraceOverTotal
@@ -481,9 +516,15 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				continue
 			}
 			need := declared + time.Duration(plan.undeclared())*generatedModStopFloor
+			// singleton.enabled 时 App 从 Mod 停机截止时间里预留 Release 的 3s，按这份配置自己的开关计入。
+			release := ""
+			if enabled, _ := strconv.ParseBool(strings.TrimSpace(settings.Singleton.Enabled)); enabled {
+				need += generatedSingletonRelease
+				release = " + " + seconds(generatedSingletonRelease) + " singleton release"
+			}
 			if total < need {
-				shortfalls = append(shortfalls, fmt.Sprintf("%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d = %s)",
-					target.rel, describeTotal(written, total), plan.mods, seconds(declared), plan.undeclared(), seconds(need)))
+				shortfalls = append(shortfalls, fmt.Sprintf("%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d%s = %s)",
+					target.rel, describeTotal(written, total), plan.mods, seconds(declared), plan.undeclared(), release, seconds(need)))
 				// RR-20260927-04：建议值 = 这份配置自己的所需（按它写的 dataengine 预算）+ 余量。
 				// 原先用生成公式（dataengine 按常量 30s），调大 dataengine.shutdown_timeout 后
 				// 照着改完仍然 WARN。project sync 的公式不变（OPEN-ITEMS D11）。
@@ -523,6 +564,11 @@ type shutdownSettings struct {
 			ShutdownTimeout string `yaml:"shutdown_timeout"`
 		} `yaml:"tcp"`
 	} `yaml:"player_access"`
+	// Singleton.Enabled is read as text and parsed like viper's GetBool, so a
+	// value the App accepts never makes the doctor's parse fail.
+	Singleton struct {
+		Enabled string `yaml:"enabled"`
+	} `yaml:"singleton"`
 }
 
 // configuredDeclaredBudgets is the sum of the stop budgets the service's

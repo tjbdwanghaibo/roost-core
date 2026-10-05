@@ -8,7 +8,7 @@ RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登�
 
 ## 2026-10-05 App 单实例锁（main，未发版）
 
-`singleton.enabled=true` 的服务在任何 Mod Init 之前先拿 `<key_prefix>:<server_type>:<sid>` 的锁，别人持有就等，失锁即 fail-stop，全部 Mod 停完才释放；`RuntimeFailure.OnFail` 让任何 fail-stop 先围栏 Nest（Remote Entity fatal 从此也会围栏，行为变化）；`app.ModSingleton` 提供只读的 `Live` 活性查询。配置、行为与约束见 [§2 单实例锁](#单实例锁singleton)。codegen 的装配与配置生成尚未落地（方案第 2 笔），现在需要手工接入。
+`singleton.enabled=true` 的服务在任何 Mod Init 之前先拿 `<key_prefix>:<server_type>:<sid>` 的锁，别人持有就等，失锁即 fail-stop，全部 Mod 停完才释放；`RuntimeFailure.OnFail` 让任何 fail-stop 先围栏 Nest（Remote Entity fatal 从此也会围栏，行为变化）；`app.ModSingleton` 提供只读的 `Live` 活性查询。配置、行为与约束见 [§2 单实例锁](#单实例锁singleton)。codegen 生成装配与配置（方案第 2 笔）：项目有 redis Mod 或带 dataengine 的服务时 bootstrap 安装 `kitredis.SingletonStore`，带 dataengine 的服务默认 `singleton.enabled: true`。
 
 ## 2026-10-04 Mongo替身事务与Redis锁接入（main，未发版）
 
@@ -102,13 +102,18 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 
 同一服务类型 + sid 同一时刻只让一个进程跑 Mod。它只针对**同一 sid 崩溃重启时短暂出现两个进程**：旧进程卡住（SIGSTOP、长 GC、调试器）或没完全退出，新进程已被拉起。跨主机 / 换卷并存、网络分区、Redis failover 丢键不在保证范围内（[方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) §1）。模块不感知锁、也不应各自检查：fail-stop 由 App 统一触发。
 
-接入（codegen 生成这一行在方案第 2 笔，之前手工加）：
+接入（codegen 生成的 bootstrap 已包含，手写装配时照此添加）：
 
 ```go
-app.New(name, version).
-	Singleton(kitredis.SingletonStore). // kitredis = github.com/tjbdwanghaibo/roost-core/kit/redis
-	Mods(...)
+a := app.New(name, version)
+a.Singleton(kitredis.SingletonStore) // kitredis = github.com/tjbdwanghaibo/roost-core/kit/redis
 ```
+
+codegen 生成规则（方案 §6.3）：
+- bootstrap：项目里有 `redis` Mod，或有带 `dataengine` 的服务，就生成 `a.Singleton(kitredis.SingletonStore)`。是否启用由各服务配置决定，`enabled=false` 时 opener 不会被调用；既没有 redis 也没有 dataengine 的项目要打开 singleton，先给某个服务 `roost add mod redis`，bootstrap 随之安装（生成的 bootstrap 不要手改）。
+- 服务配置：resolved mods 含 `dataengine` 的服务写 `singleton.enabled: true`（`key_prefix: roost:<project>:singleton`，15s / 3s / 5s / 30s），同一文件没有 `redis:` 段时只补配置段、不强加 Redis Mod；其他服务写同一段的 `enabled: false`，按 sid 多副本部署与否生成器不知道，由应用自己打开。之后 `add mod` 让服务带上 dataengine 时，未改过的 `enabled: false` 段翻成 `true`，改过的段保持并 WARN。
+- 停机预算：启用的服务 `shutdown.total_timeout` 计入 Release 的 3s（game-demo game 服务 111s / 宽限 116s）；`roost project doctor` 对 `singleton.enabled: true` 的配置同样计入。
+- 启动等待：启用的服务 k8s `startupProbe` 覆盖 `startup_wait + 30s`（默认 60s，阈值不变），shell 部署 `HEALTH_ATTEMPTS` 默认 `startup_wait + dataengine.startup_timeout` = 60 次（其他服务 30），compose `start_period` 60s。调大 `startup_wait` 时同步调大这几处。
 
 ```yaml
 singleton:

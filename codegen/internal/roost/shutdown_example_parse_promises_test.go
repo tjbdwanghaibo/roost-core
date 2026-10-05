@@ -107,7 +107,7 @@ func TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure(t *testing.T) 
 	if item.Status != StatusWarn {
 		t.Fatalf("%s %s, want a WARN", item.Status, item.Detail)
 	}
-	shortfall := secret + ": total_timeout 60s cannot cover 23 Mods (40s declared + 3s x 21 = 103s); " + staleShutdownAdvice + ". Set it to 108s"
+	shortfall := secret + ": total_timeout 60s cannot cover 23 Mods (40s declared + 3s x 21 + 3s singleton release = 106s); " + staleShutdownAdvice + ". Set it to 111s"
 	if !strings.Contains(item.Detail, shortfall) {
 		t.Errorf("WARN does not carry the shortfall with its advice %q: %s", shortfall, item.Detail)
 	}
