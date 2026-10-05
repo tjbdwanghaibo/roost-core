@@ -1,5 +1,14 @@
 # Roost Review 问题索引
 
+**10-05 N06 S1/S2/S3/S6 复核（revn06）：NC-50 P3、NC-51 P3、NC-52 P2 与 RR-20261001-06 残余已修复、声明场景验证，未发版。** 换名也释放名字已被他人提交的死建角计划、补偿失败重新计数；activity sweep 对已确认 Keys 先验证键合法/归属；versionstore RedisStore 退避后重读，消除伪 ErrConflict。[本轮](../review/REVIEW-2026-10-05-n06-revn06.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-52](RR-20261005-NC-52.md) | P2 versionstore RedisStore.Update 退避后用旧值重试，伪 ErrConflict | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-51](RR-20261005-NC-51.md) | P3 activity sweep 不校验已确认 Keys，跨组写与 Delivering 永久残留 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-50](RR-20261005-NC-50.md) | P3 account 建角补偿失败不计 `rollback.failed` | 已修复、声明场景验证，未发版 |
+| [RR-20261001-06 残余](RR-20261001-06.md#复核后的补修2026-10-05) | P2 死建角计划只在同名重试时释放，换名永远 ErrRoleLimit | 已修复（含残余补修，未发版） |
+
 **10-05 N01 App singleton 增量 + N06-S4 global / App 替代：RR-20261005-01 P2 已修复，未发版。** 单实例锁状态机、`run` 退出路径、`OnFail`、kitredis 后端与生成器装配本轮无新确认缺陷；activity 候选集含重复 sid 或超过 `Live` 单次上限时每个窗口都开不出来。[本轮](../review/REVIEW-2026-10-05-n01s4.md)
 
 | 编号 | 问题 | 状态 |

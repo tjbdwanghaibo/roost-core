@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **versionstore RedisStore 输掉 compare-and-set 后退避再重读**（RR-20261005-NC-52）：此前退避后仍用退避前 CompareAndSet 带回的值重试，竞争写落在退避窗口里时每次重试必输，同键并发（如 chat 世界频道）出现伪 `ErrConflict`。现在只在输掉 CAS 后多一次 GET，尝试次数与退避策略不变。[记录](docs/bugfix/RR-20261005-NC-52.md)
+- **activity sweep 对已确认窗口键先验证合法与归属**（RR-20261005-NC-51）：与 Opening 共用 `windowKeyProblem`；坏条目跳过、保留给运维、计 `sweep.window_key_malformed`，不再结算别的组的活动或把跨组键并入本组 Delivering。[记录](docs/bugfix/RR-20261005-NC-51.md)
+- **account 换名建角也释放名字已被他人提交的死计划**（RR-20261001-06 残余）：此前只有同名重试会释放，玩家直接换名永远得到 `ErrRoleLimit`；补偿失败重新计 `rollback.failed`（RR-20261005-NC-50）。[记录](docs/bugfix/RR-20261001-06.md#复核后的补修2026-10-05)
 - **game-demo activity 启动时拒绝注定开不出窗口的 `activity.game_sids`**（RR-20261005-01）：列表里重复的 sid（两个都活时协调器拒绝带重复项的 expected 集合）、超出 int32 的值（会被截成另一个服的 sid）、本服加配置超过 `app.SingletonLiveMaxSIDs`（每次 `Live` 都报错）三种情形，修复前进程照常启动、此后每个窗口都开不出来、只有 Warn；现在 `startActivity` 在任何远端调用之前按键名报错，`Service.Init` 失败。本服 sid 与非正数照旧跳过；生成值 `[1000]` 不受影响。顺带更正 kit `global.Service.Bind` 注释里不存在的 `Rebind`。[记录](docs/bugfix/RR-20261005-01.md)
 - **attribute.Container.Snapshot 在读锁内复制**（RR-20261005-NC-60）：之前先释放读锁再 CloneProfile，并发 Apply / ClearDirty 能改写正在复制的 profile，快照撕裂、-race 报竞争。现在复制期间持读锁；CloneProfile 不得回调同一容器。[记录](docs/bugfix/RR-20261005-NC-60.md)
 - **game-demo 属性层随事务回滚**（RR-20261005-NC-61）：升级 / 换装改的是组件内存里的属性层，Nest 只撤回 DAO；失败或提交被拒绝后容器保留新值，下一次成功提交把虚高的 Base 持久化。模板 AttributeComponent 改层前用 `RecordUndo` 登记层的副本。已生成工程需 `roost project sync`；已污染的存量不自动修正。[记录](docs/bugfix/RR-20261005-NC-61.md)

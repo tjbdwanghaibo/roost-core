@@ -367,19 +367,18 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		if result.Applied {
 			return Versioned[T]{Value: next, Version: current.Version + 1}, true, nil
 		}
-		// Lost the race. CompareAndSet hands back what is stored now, so the
-		// retry re-applies mutate to fresh state without another round trip.
+		// Lost the race. Back off, then re-read: the backoff exists so the
+		// writer that won takes its turn, and the value CompareAndSet handed
+		// back is the state from BEFORE that turn. Re-applying mutate to it
+		// loses again whenever anyone wrote during the backoff, so under steady
+		// contention every retry was spent on a compare that could not pass
+		// and the caller got ErrConflict (RR-20261005-NC-52). The extra GET is
+		// paid only after a lost compare-and-set.
 		s.backoff(attempt)
-		raw = result.Current
-		if len(raw) == 0 {
-			current, found = Versioned[T]{}, false
-			continue
-		}
-		current, err = s.decodeEnvelope(raw)
+		raw, current, found, err = s.readRaw(ctx, redisKey)
 		if err != nil {
 			return Versioned[T]{}, false, err
 		}
-		found = true
 	}
 	return Versioned[T]{}, false, fmt.Errorf("%w: %s after %d attempts", ErrConflict, redisKey, s.cfg.MaxAttempts)
 }

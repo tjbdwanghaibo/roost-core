@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N06 S1/S2/S3/S6 复核（revn06）**：[NC-50/51/52 与 RR-20261001-06 残余](review/REVIEW-2026-10-05-n06-revn06.md)已修复、声明场景验证，未发版；versionstore 退避后重读（所有 Redis 服务的伪冲突），隔离真实 Redis 集成 891 pass/23 环境 skip。S4/S5 由其他 agent 接续，N06 仍部分完成；默认生成工程无指标落点（观察 1）待功能决定。
+
 **10-05 N07第一批**：[NC-60～63](review/REVIEW-2026-10-05-noncore-n07.md)已修复、声明场景验证，未发版。attribute快照锁、game-demo属性层随事务回滚（已污染存量不自动修正）、属性生成器与errcode扫描的生成期拒绝；8相关包race、根包、build/vet、codegen、全新生成game-demo消费通过。event零接线与configdata发布后回调可见性记为观察，N07未整体完成。
 
 **10-05 N06第三批**：[NC-41/42与RR-09残余](review/REVIEW-2026-10-05-noncore-27.md)已修复、声明场景验证，未发版；13新增正式回归、7行为红/overlay红绿，race420/2Cluster skip、根包14/build/vet及两生成消费通过。坏持久计划保留不自动迁移，N06未整体完成。交给另一agent的[全部后续review清单](review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)从global RPC/Mod/App.Live增量接续，外部专项单列。
@@ -184,6 +186,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N06 revn06：[NC-50](bug/RR-20261005-NC-50.md) / [NC-51](bug/RR-20261005-NC-51.md) / [NC-52](bug/RR-20261005-NC-52.md) 与 [RR-20261001-06 残余](bugfix/RR-20261001-06.md#复核后的补修2026-10-05) **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n06-revn06.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。T-229/230，T-182 追加。无格式/API/wire 变化，NC-52 只在输掉 CAS 后多一次 GET。
+
 10-05 N01 / N06-S4 审查：[RR-20261005-01](bug/RR-20261005-01.md) P2 **已修复，未发版**（[修复](bugfix/RR-20261005-01.md)）——game-demo activity 的 `activity.game_sids` 含重复 sid 或候选超过 `app.SingletonLiveMaxSIDs` 时修复前启动成功、此后每个窗口被协调器 / `Live` 拒绝，现在启动时按键名拒绝。单实例锁本体无新确认缺陷，观察 9 条见[运行记录](review/REVIEW-2026-10-05-n01s4.md)。
 
 10-05 N07第一批：[NC-60](bug/RR-20261005-NC-60.md) / [NC-61](bug/RR-20261005-NC-61.md) / [NC-62](bug/RR-20261005-NC-62.md) / [NC-63](bug/RR-20261005-NC-63.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。模板改动需 `roost project sync`；用常量编号的 errcode / float 属性声明在生成期失败；T-227/228。
@@ -444,7 +448,7 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20261004-04](bug/RR-20261004-04.md) | P3 `ReadThroughStore` 的 loader 回填被 L1 以 stale 拒绝时，`Get` 返回 `ErrStaleWrite`（读取因写被拒而失败）（NC 复审） | [修复](bugfix/RR-20261004-04.md)（未发布） |
 | [RR-20261004-05](bug/RR-20261004-05.md) | P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 复审） | [修复](bugfix/RR-20261004-05.md)（未发布；替身行为收紧） |
 | [RR-20261004-01](bug/RR-20261004-01.md) | P2 TryLock 取锁结果未知不记 token，实体卡到 LockTTL | [修复](bugfix/RR-20261004-01.md)（未发布；token 格式 `<base32>.<seq>`，TryLock 脚本 ARGV 3 → 4；T-207） |
-| [RR-20261001-06](bug/RR-20261001-06.md) | P2 account pending slot 无释放入口（W-01 拍板） | [修复](bugfix/RR-20261001-06.md)（未发布；新码 560115 / 560116、`Admin.ResolvePendingCreation`、committed 自动释放、T-182） |
+| [RR-20261001-06](bug/RR-20261001-06.md) | P2 account pending slot 无释放入口（W-01 拍板） | [修复](bugfix/RR-20261001-06.md)（未发布；新码 560115 / 560116、`Admin.ResolvePendingCreation`、committed 自动释放、T-182）；10-05 复核残余补修：换名也释放死计划，[记录](bugfix/RR-20261001-06.md#复核后的补修2026-10-05)，未发版 |
 | [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | [修复](bugfix/RR-20261001-07.md)（未发布；已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20261001-08](bug/RR-20261001-08.md) | P3 chat 最新页 `Gap=true` 误报（W-03 拍板） | [修复](bugfix/RR-20261001-08.md)（未发布；wire 语义收紧，无 API 变化） |
 | [RR-20261001-09](bug/RR-20261001-09.md) | P3 activity legacy Opening / 坏 Intent（W-04 拍板） | [修复](bugfix/RR-20261001-09.md)（未发布；T-181） |

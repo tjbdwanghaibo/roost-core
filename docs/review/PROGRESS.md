@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N06 S1/S2/S3/S6 复核（revn06）
+
+起点 `50e9a4e8`，独立 worktree 分支 `revn06`；S4 global/App 与 S5 Saga 由其他 agent 负责，本轮不读改其生产文件。[本轮](REVIEW-2026-10-05-n06-revn06.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。RR-20261001-06 残余 P2、NC-50 P3、NC-51 P3、NC-52 P2 已修复、声明场景验证，未发版。
+
+| 项 | 本轮 | 状态/边界 |
+| --- | --- | --- |
+| S1 account | 丢回复 / 并发 Admin / 建角组合推演；换名路径不判死计划（残余补修）、补偿失败无指标（NC-50）；4 新用例 Memory + 隔离真实 Redis 红→绿 | 跨进程同时换名、Cluster、默认 30s ClaimTTL 未实跑 |
+| S2 chat | 两副本时钟差 2h 并发 Append + 周期 Prune + AfterSeq 翻页组合控制；真实 Redis 上暴露 versionstore 伪冲突（NC-52），修后 9/9 | chat 自身无新缺陷；热点频道容量未测，Cluster 未跑 |
+| S3 activity | 已确认 Keys 与 Opening 共用 `windowKeyProblem`（NC-51）；ledger 预约身份、oversized 轮转、Admin 前置条件复核 | 已混入 Delivering 的跨组键需运维；预约身份余项见观察 3 |
+| S6 servicemetrics/Mail | 逐包上报点盘点；默认生成工程 Reporter 为 nil、无生产适配器（观察 1）；Mail 真实信封恢复 4 组合控制通过 | 默认指标落点待功能决定；其余服务只经 versionstore 回归 |
+
+9 个新正式叶子（含 3 子用例）+ 2 组组合控制；7 原红。相关 race、真实 Redis 集成 891 pass/23 环境 skip/0 fail、根包、build/vet 通过，不累计作覆盖率。N06 仍部分完成，不计 completed/15。方向判断：activity 窗口条目验证第四次在相邻循环被打破、account 建角判定只在部分入口生效，建议收敛为单一入口 / 决策表（见本轮记录）。不等待 CI，不发版。
+
 ## 2026-10-05 N07第一批（configdata/attribute/event/errcode）
 
 基线50e9a4e8（origin/main），分支revn07，图谱generation 2026-09-30、以源码补证。[本轮/矩阵](REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。NC-60/61/63（P2）、NC-62（P3）已修复、声明场景验证，未发版。

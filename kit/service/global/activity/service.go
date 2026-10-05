@@ -151,7 +151,9 @@ type Service struct {
 	// (RR-20261001-09). The Server is generated code and cannot carry this.
 	openingMu sync.Mutex
 	// 按所属窗口分组；坏条目的 Key.GroupID 本身可能不可信，不能用它决定日志清理归属。
-	malformedOpening map[string]map[Key]string
+	// 已确认 Keys 里的坏条目（NC-51）与 Opening 分开记，同一个键可能同时出现在两处。
+	malformedOpening   map[string]map[Key]string
+	malformedConfirmed map[string]map[Key]string
 
 	cfg    Config
 	report servicemetrics.Sink
@@ -784,8 +786,16 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			due = append(due, candidate{key: key, deadline: activity.GraceDeadlineUnix})
 		}
 	}
+	// NC-51：确认条目与 Opening 守同一条边界——键合法且属于本组才读写 Activities、
+	// 才能进本组 Delivering。坏条目跳过并保留给运维，不自动剪掉：剪掉的依据是
+	// “记录不在了”，而对一个不该在这里的键读出的结论不属于本组。
+	malformedConfirmed := make(map[Key]string)
 	for _, key := range keys {
 		if _, scan := selected[key]; !scan {
+			continue
+		}
+		if reason := windowKeyProblem(key, groupID); reason != "" {
+			malformedConfirmed[key] = reason
 			continue
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, key)
@@ -833,12 +843,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			continue
 		}
 		// RR-20261001-09 残余：键合法且属于本组才可读写 Activities/其他窗口。
-		if err := entry.Key.Validate(); err != nil {
-			malformed[entry.Key] = err.Error()
-			continue
-		}
-		if entry.Key.GroupID != groupID {
-			malformed[entry.Key] = "entry key belongs to a different group"
+		if reason := windowKeyProblem(entry.Key, groupID); reason != "" {
+			malformed[entry.Key] = reason
 			continue
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, entry.Key)
@@ -869,6 +875,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		classify(entry.Key, current.Value)
 	}
 	s.noteMalformedOpenings(groupID, snapshot, selected, malformed)
+	s.noteMalformedConfirmed(groupID, snapshot, selected, malformedConfirmed)
 	for _, key := range confirm {
 		if err := s.confirmWindow(ctx, key); err != nil {
 			return nil, err
@@ -927,11 +934,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 // the plan, so a non-empty answer means the stored record was changed by
 // something other than this package.
 func openingIntentProblem(entry OpeningEntry, groupID string) string {
-	if err := entry.Key.Validate(); err != nil {
-		return err.Error()
-	}
-	if entry.Key.GroupID != groupID {
-		return "entry key belongs to a different group"
+	if reason := windowKeyProblem(entry.Key, groupID); reason != "" {
+		return reason
 	}
 	switch {
 	case entry.Intent == nil:
@@ -945,6 +949,60 @@ func openingIntentProblem(entry OpeningEntry, groupID string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// windowKeyProblem says why a key stored in groupID's window must not be acted
+// on by groupID's sweep, or "" when it may. Every key this package writes into
+// a window passed Validate and belongs to that window's group, so a non-empty
+// answer means the stored record was changed by something else
+// (RR-20261001-09 for Opening entries, NC-51 for confirmed Keys).
+func windowKeyProblem(key Key, groupID string) string {
+	if err := key.Validate(); err != nil {
+		return err.Error()
+	}
+	if key.GroupID != groupID {
+		return "entry key belongs to a different group"
+	}
+	return ""
+}
+
+// noteMalformedConfirmed is noteMalformedOpenings for confirmed Keys (NC-51):
+// counted every tick, logged when an entry first appears and once when it is
+// gone or usable again, never on every sweep.
+func (s *Service) noteMalformedConfirmed(groupID string, snapshot Window, scanned map[Key]struct{}, malformed map[Key]string) {
+	s.report.Dropped("sweep.window_key_malformed", len(malformed))
+	s.openingMu.Lock()
+	defer s.openingMu.Unlock()
+	if s.malformedConfirmed == nil {
+		s.malformedConfirmed = make(map[string]map[Key]string)
+	}
+	known := s.malformedConfirmed[groupID]
+	if known == nil {
+		known = make(map[Key]string)
+		s.malformedConfirmed[groupID] = known
+	}
+	for key, reason := range malformed {
+		if known[key] == reason {
+			continue
+		}
+		known[key] = reason
+		slog.Warn("activity: confirmed window key is malformed; entry skipped and kept until repaired",
+			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase, "reason", reason)
+	}
+	for key := range known {
+		if _, still := malformed[key]; still {
+			continue
+		}
+		if _, scan := scanned[key]; !scan && slices.Contains(snapshot.Keys, key) {
+			continue
+		}
+		delete(known, key)
+		slog.Info("activity: confirmed window key is usable again or the entry is gone",
+			"group_id", groupID, "activity_id", key.ActivityID, "phase", key.Phase)
+	}
+	if len(known) == 0 {
+		delete(s.malformedConfirmed, groupID)
+	}
 }
 
 // noteMalformedOpenings counts this tick's unusable opening plans and logs

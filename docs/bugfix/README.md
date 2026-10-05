@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N06 S1/S2/S3/S6 复核（revn06）：NC-50/51/52 与 RR-20261001-06 残余已修复、声明场景验证，未发版。** 7 原红（Memory；账号 3 条另在隔离真实 Redis 同文）→ 绿；新增 chat 两副本 Prune/翻页与 Mail 真实信封恢复两组组合控制。相关 race、真实 Redis 集成 891 pass/23 环境 skip、根包/build/vet 通过。[证据](evidence/noncore-bugfix-20261005-revn06/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-52](RR-20261005-NC-52.md) | RedisStore.Update 输掉 CAS 后退避再重读 | 已修复，未发版 |
+| [RR-20261005-NC-51](RR-20261005-NC-51.md) | `windowKeyProblem` 同时约束已确认 Keys 与 Opening，坏条目跳过保留并计数 | 已修复，未发版 |
+| [RR-20261005-NC-50](RR-20261005-NC-50.md) | 建角补偿失败经 `compensated` 计 `rollback.failed` | 已修复，未发版 |
+| [RR-20261001-06](RR-20261001-06.md#复核后的补修2026-10-05) | 换名请求用同一判死证明释放死计划 | 已修复（含残余补修，未发版） |
+
 **10-05 N01 / N06-S4 审查：RR-20261005-01 已修复，未发版。** game-demo activity 在启动时按键名拒绝重复 sid、超出 int32、超过一次 `Live` 上限的 `activity.game_sids`（修前启动成功、此后每个窗口被拒）。[审查运行记录](../review/REVIEW-2026-10-05-n01s4.md)
 
 | 编号 | 修复 | 状态 |
