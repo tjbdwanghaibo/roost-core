@@ -41,10 +41,15 @@ func (h *BucketHolder[K, T]) RangeWithCursor(f func(K, T) bool) {
 }
 
 // RangeWithCursorCnt 从游标处依次遍历 cursorCnt 个桶；f 返回 false 时立即停止，
-// 游标停在下一个桶（已开始的桶算作走过）。
+// 游标前进走过的桶数（已开始的桶算作走过）。
+//
+// 要遍历的桶在进入时就按游标定下（C7 遍历回调契约）：之前每个桶都现读游标，回调里
+// 再调一次游标遍历会推进同一个游标，外层随后重走同一个桶、把同一条目交出两次。
+// 回调里推进的游标照样保留（这里是累加，不是覆盖）。
 func (h *BucketHolder[K, T]) RangeWithCursorCnt(cursorCnt uint, f func(K, T) bool) {
-	for range cursorCnt {
-		stopped := rangeBucket(h.Buckets[h.RangeCursor%uint(h.BucketCnt)], f)
+	start := h.RangeCursor
+	for i := range cursorCnt {
+		stopped := rangeBucket(h.Buckets[(start+i)%uint(h.BucketCnt)], f)
 		h.RangeCursor++
 		if stopped {
 			return

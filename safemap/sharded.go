@@ -67,6 +67,9 @@ func (m *ShardedSafeMap[K, V]) Get(key K) (V, bool) {
 	return value, ok
 }
 
+// Read 在键所在分片的读锁内调用 f，f 拿到的值在回调期间不会被并发写替换。
+// f 不能写同一个 map（同分片要写锁，当场自锁），也不要做 I/O；这不是遍历回调，不适用
+// Range 的“回调里可读写”契约（N13 O6）。
 func (m *ShardedSafeMap[K, V]) Read(key K, f func(value V, exists bool)) bool {
 	if f == nil {
 		_, ok := m.Get(key)
@@ -96,6 +99,7 @@ func (m *ShardedSafeMap[K, V]) LoadOrStore(key K, value V) (actual V, loaded boo
 	return actual, loaded
 }
 
+// Compute 在键所在分片的写锁内调用 f，原子地读改写一个键。f 不能访问同一个 map。
 func (m *ShardedSafeMap[K, V]) Compute(key K, f ComputeFunc[V]) (V, bool) {
 	var zero V
 	if f == nil {
@@ -183,6 +187,8 @@ func (m *ShardedSafeMap[K, V]) Snapshot() []Entry[K, V] {
 	return entries
 }
 
+// Range 逐分片在读锁内复制、锁外调用 f（快照语义），f 返回 false 立即停止；回调里可以
+// 读写同一个 map（C7 遍历回调契约）。
 func (m *ShardedSafeMap[K, V]) Range(f func(key K, value V) bool) {
 	if f == nil {
 		return

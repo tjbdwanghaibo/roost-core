@@ -79,6 +79,8 @@ func (m *SmallSafeMap[K, V]) Clear() {
 	m.entries = nil
 }
 
+// Range 在读锁内复制全部条目、锁外调用 f（快照语义），f 返回 false 立即停止；回调里可以
+// 读写同一个 map（C7 遍历回调契约）。
 func (m *SmallSafeMap[K, V]) Range(f func(key K, value V) bool) {
 	if f == nil {
 		return

@@ -202,6 +202,10 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
+
+10-06 C7（维护者决定）：遍历回调定为仓库级契约（回调里可读写同一容器、false 立即停止），写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）。**已实施，未发版**（[方案与实施](feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md)）。
+
 10-05 A2（维护者决定）：Redis 驱动默认不再重放写命令，只在确定没执行时重发（脚本在这类错误上同样重发）；新增 `driver.IsDefinitelyNotExecuted`；Mongo 提交发出之后的失败带 `mongo.ErrCommitResultUnknown`；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。**已实施，未发版**。契约表见 [redis/driver](../redis/driver/README.md) 和 [mongo/driver](../mongo/driver/README.md)，[方案、红绿与调用方核对](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)。Redis Cluster 与 bus 的 SETNX 去重仍在外部验证或归属方待办里。
 
 10-05 N09 skill 第四批（revn09d）：[NC-210](bug/RR-20261005-NC-210.md) / [NC-211](bug/RR-20261005-NC-211.md) / [NC-214](bug/RR-20261005-NC-214.md)（P2）与 [NC-212](bug/RR-20261005-NC-212.md) / [NC-213](bug/RR-20261005-NC-213.md) / [NC-215](bug/RR-20261005-NC-215.md) / [NC-216](bug/RR-20261005-NC-216.md)（P3）**已修复、声明场景验证，未发版**（[修复](bugfix/README.md)）——编译器对 memory / catalog 名字用 map 零值兜底、移交后 area finish 的不变量失败、catalog key 唯一、只编译不传 Host 的字段、Host 都拒绝的取值、schema 协商空区间；[本轮](review/REVIEW-2026-10-05-n09-batch4.md)（编译 ⇒ 可执行的变异性质测试已落地；方向判断：编译器接受集合与 Runtime / Host 可执行集合各自维护，第四次出现）。

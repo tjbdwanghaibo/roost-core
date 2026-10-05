@@ -367,13 +367,7 @@ func (m *EntityManager) CountByCategory(category EntityCategory) int {
 // Touch 失败（已摘除）就跳过。持有引用期间 Destroy 的 ClearBase 不会清理，
 // 最后一个 UnTouch 才清理——与 nest 分发持有实体引用是同一协议。
 func (m *EntityManager) rangeHeld(fn func(IThreadSafeEntity) bool) {
-	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool {
-		if e == nil || !e.Touch() {
-			return true
-		}
-		defer e.UnTouch()
-		return fn(e)
-	})
+	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool { return visitHeld(e, fn) })
 }
 
 func (m *EntityManager) addGroupIndexLockedByManager(e IThreadSafeEntity) {
@@ -482,13 +476,30 @@ func (m *EntityManager) GetGroupEntities(groupID int64) []IThreadSafeEntity {
 	return ret
 }
 
+// RangeGroupEntities 遍历组索引的快照，规则与 Range 相同：回调在锁外、可以 Add / Destroy，
+// 返回 false 立即停止；每个实体先持引用（Touch）再交给 fn，到达前已被摘除的实体不交出，
+// fn 期间被销毁的实体推迟到引用归还才清理。
+//
+// 之前直接遍历切片快照、不持引用（C7 遍历回调契约发现）：回调里 Destroy 同组还没走到的
+// 实体，doClear 立刻把它清零，随后以 ID 0 交给 fn——与 NC-180 复审在 Range 上补的是同一处。
+// 不改组索引本身；nest 的 EntityLockGroupScope.Range 走 GetGroupEntities 并按 GroupLockID
+// 过滤，不受影响。
 func (m *EntityManager) RangeGroupEntities(groupID int64, fn func(IThreadSafeEntity) bool) {
 	if m == nil || groupID == 0 || fn == nil {
 		return
 	}
 	for _, e := range m.GetGroupEntities(groupID) {
-		if !fn(e) {
+		if !visitHeld(e, fn) {
 			return
 		}
 	}
+}
+
+// visitHeld 持引用调用 fn：Touch 失败（已摘除 / 已清理）时跳过并继续遍历。
+func visitHeld(e IThreadSafeEntity, fn func(IThreadSafeEntity) bool) bool {
+	if e == nil || !e.Touch() {
+		return true
+	}
+	defer e.UnTouch()
+	return fn(e)
 }

@@ -74,6 +74,8 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 - `glsvet` 默认对带 ctx 的停止类函数里不受 ctx 约束的通道接收给出 `hint:`（含跟进一层同包 helper），只提示、不计入违例；看到提示时确认通道一定在预算内关闭，或改成 select ctx / `Lifetime.Wait`。Mutex.Lock 不提示（实测全是短临界区），锁被在途工作长期持有的风险靠契约骨架在行为上覆盖。
 - 排空下沉到传输层（`ISyncBus` 带 ctx 的退订）是下个大版本的方向（A3 ②），现在仍由订阅者各自用 Lifetime 排空。
 
+**遍历回调契约**（维护者决定 C7，2026-10-05，[方案](../../feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md)）：凡框架交给业务的 `Range`（container、safemap、`EntityManager` / `ManagerAccess`、生成 DAO 的 `RangeX`），回调里可以读写同一个容器，返回 false 立即停止。具体是：回调里 Get / Set / Delete / Clear / 嵌套 Range 不死锁不 panic；false 之后不再调用回调（跨桶 / 跨分片也停）；不交出不存在的条目（零值键、已被清理的实体），同一键至多一次；开始时就在、期间没被删除的键恰好一次；期间删掉的未到达键在快照实现里可能仍交出，回调里新增的键是否交出不承诺。实现上回调不在容器锁内执行（锁内复制、锁外回调），实体先持引用（`Touch`）再交出。新增或修改遍历入口时用共用辅助 `internal/rangecontract.Check` 套一遍（`container` / `safemap` / `entity` 的 `range_contract_promises_test.go`，生成 DAO 见 `codegen/internal/dao/testdata/runtime/range_contract_test.go`）。不是遍历的回调（`ShardedSafeMap.Read` / `Compute` 持分片锁调用）不适用，回调里不能访问同一个 map。
+
 性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。停机预算的生成值（`shutdown.total_timeout` 与部署宽限期）只计入生成器 Manifest 已知的 Mod：手写 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget` 也不计入，doctor 也不检查它，新增这类 Mod 时须手工调大 total 与宽限期（RR-20260926-66，OPEN-ITEMS C31）。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
 
 当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像（它是 no-op）。投影时被跳过 / 持久拒绝后的在线恢复已有定案契约（RR-20260926-30 / 39，维护者批准），新路径沿用它，不另建机制：

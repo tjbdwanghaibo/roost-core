@@ -46,8 +46,8 @@
 | [RR-20261005-NC-184](RR-20261005-NC-184.md) | P3 TopologicalSortCache 遇未注册的依赖误报环，或把真正的环藏起来 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-183](RR-20261005-NC-183.md) | P3 TaskPool Submit 与 Shutdown 并发 panic “send on closed channel” | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-182](RR-20261005-NC-182.md) | P3 FastMap 遍历回调里改已有键触发重排，交出零值键、漏键 | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-181](RR-20261005-NC-181.md) | P3 RangeAll 的 false 只停当前桶，EntityManager.Range 的提前停止不成立 | 已修复、声明场景验证，未发版 |
-| [RR-20261005-NC-180](RR-20261005-NC-180.md) | P2 BucketHolder 持桶读锁调用遍历回调，回调改同一容器即自锁 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-181](RR-20261005-NC-181.md) | P3 RangeAll 的 false 只停当前桶，EntityManager.Range 的提前停止不成立 | 已修复（含残余补修，未发版） |
+| [RR-20261005-NC-180](RR-20261005-NC-180.md) | P2 BucketHolder 持桶读锁调用遍历回调，回调改同一容器即自锁 | 已修复（含残余补修，未发版） |
 
 **10-05 同形停机核实（stopshape）：NC-170～174 五个 P3 已修复、声明场景验证（NC-172 含真实 NATS、NC-173 含真实 etcd），未发版；NC-83 记录的第 4 处（bus JetStream RPC）已由 NC-90 修掉。** 停机超时后把“已停止”记成清空的字段 / 取走的列表、退订不等在途回调、等待不看 ctx。统一按三步停机修复。[证据与方向判断](../bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)
 

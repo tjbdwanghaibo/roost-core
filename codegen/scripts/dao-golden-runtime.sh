@@ -27,6 +27,11 @@ rm -f "$work"/gen/gen_*_redis_dao.go
 for t in "$here"/internal/dao/testdata/runtime/*_test.go; do
 	sed '/^\/\/go:build daoruntime$/d' "$t" > "$work/gen/$(basename "$t")"
 done
+# The shared Range contract helper (C7) lives in roost-core's internal/ and
+# cannot be imported from another module; range_contract_test.go imports this
+# source copy instead.
+mkdir -p "$work/rangecontract"
+cp "$here/../internal/rangecontract/rangecontract.go" "$work/rangecontract/"
 
 cd "$work"
 GOWORK=off go mod init daogoldenruntime >/dev/null
