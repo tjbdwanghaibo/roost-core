@@ -21,6 +21,10 @@ var (
 	loggerMu      sync.RWMutex
 	defaultLogger = slog.Default()
 	outputFile    io.Closer
+	// consoleOutput 是 Init 配置的非文件输出（Output 或 stdout），文件 sink 时为 nil；
+	// sinkOptions 是那次 Init 的选项。Close 用它们重建默认 logger（RR-20261005-NC-165）。
+	consoleOutput io.Writer
+	sinkOptions   Options
 )
 
 type Options struct {
@@ -62,10 +66,14 @@ func Init(opts Options) error {
 
 	writers := make([]io.Writer, 0, 2)
 	var file io.WriteCloser
+	var console io.Writer
 	if opts.Output != nil {
-		writers = append(writers, opts.Output)
+		console = opts.Output
 	} else if opts.Stdout || !opts.File {
-		writers = append(writers, os.Stdout)
+		console = os.Stdout
+	}
+	if console != nil {
+		writers = append(writers, console)
 	}
 	if opts.File {
 		file, err = openLogWriter(opts)
@@ -83,19 +91,12 @@ func Init(opts Options) error {
 		output = io.MultiWriter(writers...)
 	}
 
-	handlerOpts := &slog.HandlerOptions{Level: level}
-	var handler slog.Handler
-	if opts.JSON {
-		handler = slog.NewJSONHandler(output, handlerOpts)
-	} else {
-		handler = newOrderedTextHandler(output, handlerOpts)
-	}
-	handler = contextHandler{next: handler, opts: opts}
-
-	logger := slog.New(handler)
+	logger := newLogger(output, opts)
 	loggerMu.Lock()
 	oldFile := outputFile
 	outputFile = file
+	consoleOutput = console
+	sinkOptions = opts
 	defaultLogger = logger
 	loggerMu.Unlock()
 	if oldFile != nil {
@@ -105,14 +106,43 @@ func Init(opts Options) error {
 	return nil
 }
 
+func newLogger(output io.Writer, opts Options) *slog.Logger {
+	handlerOpts := &slog.HandlerOptions{Level: opts.Level}
+	var handler slog.Handler
+	if opts.JSON {
+		handler = slog.NewJSONHandler(output, handlerOpts)
+	} else {
+		handler = newOrderedTextHandler(output, handlerOpts)
+	}
+	return slog.New(contextHandler{next: handler, opts: opts})
+}
+
+// Close 关闭 Init 打开的日志文件，并把默认 logger 换成同格式、只写非文件输出的 logger；
+// 只配了文件时改写 stderr（RR-20261005-NC-165）。
+//
+// 关闭之后仍有日志要写：app.run 返回后生成的 main 用 slog 写 "server exit" 和退出原因，停机超时时
+// 仍在运行的 Serve / Shutdown / Mod 也会继续打日志。旧 Close 只关文件、默认 logger 仍写已关闭的
+// 文件，只配文件 sink 时这些行全部被吞掉。调用方在 Init 之后自己 SetDefault 了别的 logger 时，
+// 只更新本包的 Default，不覆盖调用方的 slog 默认值。
 func Close() error {
 	loggerMu.Lock()
-	defer loggerMu.Unlock()
 	if outputFile == nil {
+		loggerMu.Unlock()
 		return nil
 	}
 	err := outputFile.Close()
 	outputFile = nil
+	fallback := consoleOutput
+	if fallback == nil {
+		fallback = os.Stderr
+	}
+	installed := defaultLogger
+	defaultLogger = newLogger(fallback, sinkOptions)
+	replacement := defaultLogger
+	loggerMu.Unlock()
+	if slog.Default() == installed {
+		slog.SetDefault(replacement)
+	}
 	return err
 }
 

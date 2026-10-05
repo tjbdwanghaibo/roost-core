@@ -1,0 +1,3 @@
+--- PASS: TestLogsAfterCloseOfAFileOnlySinkReachStderr (0.00s)
+--- PASS: TestLogsAfterCloseKeepTheConsoleWriter (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/log	4.786s
