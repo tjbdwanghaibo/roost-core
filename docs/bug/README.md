@@ -1,5 +1,11 @@
 # Roost Review 问题索引
 
+**10-05 N01 App singleton 增量 + N06-S4 global / App 替代：RR-20261005-01 P2，未修复。** 单实例锁状态机、`run` 退出路径、`OnFail`、kitredis 后端与生成器装配本轮无新确认缺陷；activity 候选集含重复 sid 或超过 `Live` 单次上限时每个窗口都开不出来。[本轮](../review/REVIEW-2026-10-05-n01s4.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-01](RR-20261005-01.md) | P2 activity.game_sids 重复 / 超上限时启动成功、此后永不开窗 | 未修复 |
+
 **10-05 N07第一批：NC-60/61/63三个P2与NC-62 P3已修复、声明场景验证，未发版。** attribute快照锁、game-demo属性层随事务回滚、属性生成器拒绝不可表示声明、errcode扫描拒绝读不懂的Define并查重名；4组反例红→绿。event/configdata本批无确认缺陷，矩阵与观察见[本轮](../review/REVIEW-2026-10-05-noncore-n07.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n07/README.md)。
 
 | 编号 | 问题 | 状态 |
