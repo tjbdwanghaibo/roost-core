@@ -54,6 +54,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 待方案 + 实施 |
 | A2～A5 | 按推荐 | 待实施（A5 测试侧已按“共享”改完，补文档与全局命令持锁核对） |
+| A3 | 按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示 | **已实施（`50f2ac2a`）**：`internal/operation.Lifetime` 补 `Wait(ctx)`，bus / syncbus / mirror 三份迁移；`internal/stopcontract` 骨架套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP；glsvet `-stophints`（Mutex.Lock 误报约 100%，未加）；骨架发现 NC-173 残余并补修。② 排空下沉到 ISyncBus 退订留待下个大版本。[方案](../feature/REFACTOR-2026-10-05-shared-stop-contract.md) |
 | B1 | 协调器接收 completion 时核对代际：做 | 待实施 |
 | B2 | 维护者问“什么意思”，已解释，待决定 | 待决定 |
 | B3 | lower 查找失败一律报错：做 | 待实施 |
