@@ -46,14 +46,42 @@ func NewStringFastMap[V any](capHint int) *FastMap[string, V] {
 	return NewFastMap[string, V](capHint, HashString)
 }
 
+// Set 先查键：改已有键、复用墓碑都原地写，只有占用新的空槽且会超过装载率时
+// 才扩容 / 重排。之前 Set 先 ensureWritable 再查键，装载率到阈值时改已有键
+// 也会换掉整张表，Range 回调里的 `Set(k, v*10)` 因此让遍历读错数组
+// （RR-20261005-NC-182）。used（已占用 + 墓碑）不超过装载率的不变量不变，
+// 探测总能遇到空槽结束。
 func (m *FastMap[K, V]) Set(key K, value V) {
+	if len(m.states) > 0 {
+		idx, found := m.findSlot(key)
+		if found {
+			m.values[idx] = value
+			return
+		}
+		if m.hasRoomFor(idx) {
+			m.insertAt(idx, key, value)
+			return
+		}
+	}
 	m.ensureWritable()
-
 	idx, found := m.findSlot(key)
 	if found {
 		m.values[idx] = value
 		return
 	}
+	m.insertAt(idx, key, value)
+}
+
+// hasRoomFor 报告往 idx 这个空闲槽插入后装载率是否仍在阈值内：复用墓碑不增加
+// used，总在阈值内。
+func (m *FastMap[K, V]) hasRoomFor(idx int) bool {
+	if m.states[idx] != slotEmpty {
+		return true
+	}
+	return (m.used+1)*100 <= len(m.states)*fastMapLoadPercent
+}
+
+func (m *FastMap[K, V]) insertAt(idx int, key K, value V) {
 	if m.states[idx] == slotEmpty {
 		m.used++
 	}
@@ -100,9 +128,9 @@ func (m *FastMap[K, V]) Len() int {
 	return m.size
 }
 
+// Clear 丢弃整张表。旧数组不清零：正在进行的 Range 还持有它们，靠
+// “表已被换掉”回到当前表查找（见 Range）；清零会让它读到零值键。
 func (m *FastMap[K, V]) Clear() {
-	clear(m.keys)
-	clear(m.values)
 	m.keys = nil
 	m.values = nil
 	m.states = nil
@@ -110,18 +138,43 @@ func (m *FastMap[K, V]) Clear() {
 	m.used = 0
 }
 
+// Range 按槽位顺序遍历，f 返回 false 即停止。回调里可以 Set / Delete / Clear
+// 这个 map：每个未被删除的原有键恰好交出一次、带当前值，被删除的未到达键不
+// 交出，回调里新增的键是否交出不承诺（与 Go map 相同）。
+//
+// 遍历固定开始时的三个数组。回调扩容 / 重排 / Clear 换掉了表之后，旧数组里
+// 还没走到的键改到当前表里查，查不到（已删除）就跳过——之前 Range 拿旧 states
+// 的下标去读新数组，交出零值键、漏掉原有键，Clear 后下标越界
+// （RR-20261005-NC-182）。
 func (m *FastMap[K, V]) Range(f func(key K, value V) bool) {
 	if f == nil {
 		return
 	}
-	for i, state := range m.states {
+	keys, values, states := m.keys, m.values, m.states
+	for i, state := range states {
 		if state != slotFilled {
 			continue
 		}
-		if !f(m.keys[i], m.values[i]) {
+		if m.replaced(states) {
+			// 旧数组不再被写入，states[i] 仍是“开始时就在、还没走到”的键。
+			value, ok := m.Get(keys[i])
+			if !ok {
+				continue
+			}
+			if !f(keys[i], value) {
+				return
+			}
+			continue
+		}
+		if !f(keys[i], values[i]) {
 			return
 		}
 	}
+}
+
+// replaced 报告 states 是否已不是当前表（被 rehash 或 Clear 换掉）。
+func (m *FastMap[K, V]) replaced(states []uint8) bool {
+	return len(m.states) != len(states) || &m.states[0] != &states[0]
 }
 
 func (m *FastMap[K, V]) Cap() int {
