@@ -1,0 +1,64 @@
+# NC-182 生成 DAO 组合（修前，core = 基线 f6245613 worktree，replace）
+# 一次性模块：codegen/internal/dao/testdata/golden/*.go（去掉 redis）+ runtime/*_test.go + 下面的用例；做法同 codegen/scripts/dao-golden-runtime.sh，只是 replace 到本地源码
+$ GOWORK=off go test -count=1 -run TestNC182 -v ./gen
+=== RUN   TestNC182GeneratedRangeThenSetExisting
+    zz_fastrange_test.go:35: seen=map[0:3 1:1 3:1 4:1] len=7 phantom_key0=true
+    zz_fastrange_test.go:38: item 1 = 10
+    zz_fastrange_test.go:38: item 2 = 2
+    zz_fastrange_test.go:38: item 3 = 30
+    zz_fastrange_test.go:38: item 4 = 40
+    zz_fastrange_test.go:38: item 5 = 5
+    zz_fastrange_test.go:38: item 6 = 6
+    zz_fastrange_test.go:40: last commit record: {ID:debba3d750ab1b9d0000000000000002 Handler:double RequestID: CreatedAt:1791204450221759000 Durability:strict Mutations:[{Key:{Database:game Scope:0 Resource:varieties ID:1} Kind:2 ExpectedVersion:1 NextVersion:2 Mask:8 Schema:1 Codec:bson-v2 Data:[] Patch:{SetBSON:[77 0 0 0 16 102 97 115 116 95 105 116 101 109 115 46 48 0 0 0 0 0 16 102 97 115 116 95 105 116 101 109 115 46 49 0 10 0 0 0 16 102 97 115 116 95 105 116 101 109 115 46 51 0 30 0 0 0 16 102 97 115 116 95 105 116 101 109 115 46 52 0 40 0 0 0 0] Unset:[]} Remote:<nil> EntityID:0 Database: DatabaseScope:0 Resource: Version:0}] Effects:[] Receipts:[]}
+    zz_fastrange_test.go:42: generated RangeFastItems + SetFastItems: seen=map[0:3 1:1 3:1 4:1] phantom key 0=true
+--- FAIL: TestNC182GeneratedRangeThenSetExisting (0.00s)
+FAIL
+FAIL	daogoldenruntime/gen	0.360s
+FAIL
+
+# 用例源码
+package testdata
+
+import (
+	"context"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// NC-182 在生成 DAO 上的组合：RangeFastItems 回调里 SetFastItems 改已有键。
+func TestNC182GeneratedRangeThenSetExisting(t *testing.T) {
+	d := NewVarietyDao()
+	d.SetId(1)
+	c := &ownershipCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), c, "fill", func() (any, error) {
+		for i := int64(1); i <= 6; i++ {
+			d.SetFastItems(i, int32(i))
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]int{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), c, "double", func() (any, error) {
+		d.RangeFastItems(func(k int64, v int32) bool {
+			seen[k]++
+			d.SetFastItems(k, v*10)
+			return true
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, phantom := d.GetFastItems(0)
+	t.Logf("seen=%v len=%d phantom_key0=%v", seen, d.FastItemsLen(), phantom)
+	for i := int64(1); i <= 6; i++ {
+		v, _ := d.GetFastItems(i)
+		t.Logf("item %d = %d", i, v)
+	}
+	t.Logf("last commit record: %+v", c.records[len(c.records)-1])
+	if phantom || len(seen) != 6 {
+		t.Fatalf("generated RangeFastItems + SetFastItems: seen=%v phantom key 0=%v", seen, phantom)
+	}
+}
+fast_items.0 decoded: SetBSON 里第一项 key 为 'fast_items.0'（bytes 102 97 115 116 95 105 116 101 109 115 46 48），值 0

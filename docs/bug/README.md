@@ -12,6 +12,17 @@
 
 **v1.20.1 已发布（2026-10-05，tag → `be7407ab`）**：U-0279 / U-0280（含复审补修）/ U-0281、NC-100 / NC-101（含复审补修）、RR-20261005-01，以及截至 `be7407ab` 的非核心 review 修复（NC-50～52、60～65、70～75、80～83、90～93、100～102、110～117、120～123、140～147）随本版发布；`be7407ab` 之后提交的（如 N05 的 NC-130 / NC-131 / RR-20260913-01 残余）未发版。下方“未发版”指发布前状态。
 
+**10-05 N13 container / safemap / goroutine / misc / internal（revn13）：NC-180 P2（潜伏）与 NC-181～185 P3 已复现，未修复。** BucketHolder 持桶读锁调用遍历回调，EntityManager.Range 回调里 Destroy 卡死；RangeAll 的 false 不跨桶停止；FastMap 遍历回调里改已有键重排后交出零值键（生成 DAO 写进提交）；TaskPool Submit / Shutdown 并发 panic；拓扑排序遇未注册依赖误报 / 掩盖环；KeyMap 遍历删除当前键漏键。[本轮](../review/REVIEW-2026-10-05-n13.md)。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-185](RR-20261005-NC-185.md) | P3 KeyMap 遍历中删除当前键，漏掉一个键并交出零值键 | 已复现，未修复 |
+| [RR-20261005-NC-184](RR-20261005-NC-184.md) | P3 TopologicalSortCache 遇未注册的依赖误报环，或把真正的环藏起来 | 已复现，未修复 |
+| [RR-20261005-NC-183](RR-20261005-NC-183.md) | P3 TaskPool Submit 与 Shutdown 并发 panic “send on closed channel” | 已复现，未修复 |
+| [RR-20261005-NC-182](RR-20261005-NC-182.md) | P3 FastMap 遍历回调里改已有键触发重排，交出零值键、漏键 | 已复现，未修复 |
+| [RR-20261005-NC-181](RR-20261005-NC-181.md) | P3 RangeAll 的 false 只停当前桶，EntityManager.Range 的提前停止不成立 | 已复现，未修复 |
+| [RR-20261005-NC-180](RR-20261005-NC-180.md) | P2 BucketHolder 持桶读锁调用遍历回调，回调改同一容器即自锁 | 已复现，未修复 |
+
 **10-05 同形停机核实（stopshape）：NC-170～174 五个 P3 已修复、声明场景验证（NC-172 含真实 NATS、NC-173 含真实 etcd），未发版；NC-83 记录的第 4 处（bus JetStream RPC）已由 NC-90 修掉。** 停机超时后把“已停止”记成清空的字段 / 取走的列表、退订不等在途回调、等待不看 ctx。统一按三步停机修复。[证据与方向判断](../bugfix/evidence/noncore-bugfix-20261005-stopshape/README.md)
 
 | 编号 | 问题 | 状态 |
