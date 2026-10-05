@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N09 skill 第一批（执行/状态 + 事务/结算）
+
+基线 `be7bcc18`（origin/main），分支 `revn09`，NC 段 110～119（用 110～113）；图谱 generation 2026-09-30，skill 自 09-27 无代码提交，以当前源码补证。[本轮/清单/矩阵](REVIEW-2026-10-05-n09-batch1.md) · [修复](../bugfix/RR-20261005-NC-110.md)。NC-110/111/112（P2）、NC-113（P3）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 执行/状态（55） | E1～E4 施法开始 / 打断取消释放 / 结束 / 重复触发：`runtime.go`、`runtime_cast_window.go`、`runtime_cast_policy.go`、`scheduler.go`、`executor.go` 等主干 | NC-110～112（终止路径收尾不一致，统一为 `failCastLocked`）；checkpoint / 回放 / owned 进程 / 选择与输入等未审 |
+| 事务/结算（3） | S1～S3、T1～T2：combatcomponent 全部 + combat attributes / buffs / damage；Nest 回滚 4 组合探针、BSON 往返 | NC-61 同形核对不成立（combat 状态随回滚恢复）；NC-113 map 共享；O1 Runtime 状态不在事务里、O2 属性修饰到不了伤害（待维护者） |
+| 同步/接入（14） | T3 只核对生成接线：game-demo 只编译 catalog | skillsync / presentation 全部未审，下一批首选 |
+| 数据/属性（107） | 未审 | 第三批：Parse + Compile 拒绝路径、skillcompose |
+
+6 个新正式用例（skill 5、combatcomponent 1）修前红 → 修后绿；skill 5 包 race×3、examples / sync-e2e、build/vet、根包通过，不累计作覆盖率。N09 部分完成，不计 completed/15。方向判断：施法终止路径同一不变量（policy 槽位释放）第二次被打破（v1.5.0 修过 Cancel / Interrupt），建议并已按“唯一失败终态入口 + 对外 API 先判终态”收敛，不再按分支补步骤。不等待 CI，不发版。
+
 ## 2026-10-05 N06 S1/S2/S3/S6 复核（revn06）
 
 起点 `50e9a4e8`，独立 worktree 分支 `revn06`；S4 global/App 与 S5 Saga 由其他 agent 负责，本轮不读改其生产文件。[本轮](REVIEW-2026-10-05-n06-revn06.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn06/README.md)。RR-20261001-06 残余 P2、NC-50 P3、NC-51 P3、NC-52 P2 已修复、声明场景验证，未发版。

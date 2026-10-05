@@ -68,3 +68,18 @@ NC-110～112 是同一类：施法的终止路径各自手写收尾步骤（撤�
 ## 7. 方向判断
 
 施法终止路径反复出缺陷：v1.5.0 修过“Cancel / Interrupt 不释放 policy 槽位”（`releasePolicySlot`），本批又在失败路径上打破同一个不变量（NC-112），并在启动失败（NC-110）与 Cancel / Release 中途出错（NC-111）上各漏了不同的收尾步骤。根因不是某一行，而是 8 个终止点（`startLocked`、`Cancel`、`Interrupt`、`releaseCast` 的 charge 取消、`executeAutoRelease`、`failScheduledCast`、`executeScheduledTask` 通用错误分支、`completeCastRecovery`）各自手写“撤任务 / 停进程 / 释放槽位 / 记 finished”。建议收敛为唯一的失败终态入口，并让对外 API 先判断终态再动手；修复按这个方向做（见修复记录），不在各分支继续补步骤。成本：失败路径统一撤销本 cast 的全部排程任务（按 cast ID 而不是当前 phase token），之前留到触发时才丢弃的失效任务现在立即清理，checkpoint 内容随之变少，不改 wire 格式。
+
+## 8. 修复与验证（审查提交之后追加）
+
+审查提交 `9789730b`（`docs(review)`）之后按授权修复，单独一笔 `fix(skill)`。NC-110～112 一个修复单元（[记录](../bugfix/RR-20261005-NC-110.md)），NC-113（[记录](../bugfix/RR-20261005-NC-113.md)）。
+
+| 命令（`GOWORK=off`，模块根） | 结果 |
+| --- | --- |
+| `go test ./skill -run 'TestFailedStart|TestCheckpointAfterFailedStart|TestCancelCallbackFailure|TestChargeReleaseFailure|TestFailedToggle' -count=1`（修前） | 5 FAIL，原文见 NC-110～112 |
+| `go test ./skill/combatcomponent -run TestCombatantCopies -count=1`（修前） | FAIL，两条断言，原文见 NC-113 |
+| `gofmt -l skill` | 空 |
+| `go vet ./skill/... && go test -race -count=3 ./skill/...` | skill / combat / combatcomponent / skillcompose / skillsync 全部 ok（skill 包全量在增量 state mutation 影子校验下运行） |
+| `skill/examples`：`go build ./...`、`go run ./fireball`；`skill/integration/sync-e2e`：`go test -count=1 ./...` | 通过 |
+| `go build ./... && go vet ./...`；`go test -count=1 .` | 通过 |
+
+没有改生成形状（模板、codegen 未动），没有跑 codegen 测试与 game-demo 生成；game-demo 只用 Parse + Compile，不经过本次改动的 Runtime 路径（观察 O3）。外部依赖（Mongo / Redis / NATS）本批没有用到。

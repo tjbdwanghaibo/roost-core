@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N09 skill 第一批（revn09）：NC-110～113 已修复、声明场景验证，未发版。** 施法失败统一走 `failCastLocked`（撤本 cast 全部排程任务、停进程、释放 policy 槽位、记 finished），对外 API 先判终态；Combatant 进出组件都复制 map。6 个新正式用例修前红 → 修后绿，skill 5 包 race×3、examples / sync-e2e、build/vet、根包通过。[本轮](../review/REVIEW-2026-10-05-n09-batch1.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-113](RR-20261005-NC-113.md) | `cloneCombatant`：Combatant() 与 InitCombatant 复制 ElementMultipliersBP | 已修复，未发版 |
+| [RR-20261005-NC-112](RR-20261005-NC-112.md) | 失败终态释放 policy 槽位；`castEnded` 拒绝对 failed cast 的 Cancel / Interrupt / Release | 已修复，未发版 |
+| [RR-20261005-NC-111](RR-20261005-NC-111.md) | Cancel / Interrupt / Release 改动 cast 后出错进失败终态 | 已修复，未发版 |
+| [RR-20261005-NC-110](RR-20261005-NC-110.md) | `failCastLocked` 按 cast ID 撤全部排程任务后再删 cast、复用 ID | 已修复，未发版 |
+
 **10-05 N06 S1/S2/S3/S6 复核（revn06）：NC-50/51/52 与 RR-20261001-06 残余已修复、声明场景验证，未发版。** 7 原红（Memory；账号 3 条另在隔离真实 Redis 同文）→ 绿；新增 chat 两副本 Prune/翻页与 Mail 真实信封恢复两组组合控制。相关 race、真实 Redis 集成 891 pass/23 环境 skip、根包/build/vet 通过。[证据](evidence/noncore-bugfix-20261005-revn06/README.md)。
 
 | 编号 | 修复 | 状态 |

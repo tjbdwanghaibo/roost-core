@@ -217,8 +217,27 @@ func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bo
 func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason)                 {}
 func (component *CombatComponent) Dao() *CombatDao                                        { return component.dao }
 
-// Combatant returns a copy of the vitals block.
-func (component *CombatComponent) Combatant() combat.Combatant { return component.dao.combatant }
+// Combatant returns a copy of the vitals block. The element multiplier map is
+// copied too: a shared map would let callers change authoritative state
+// outside the transaction, undo, and dirty tracking (RR-20261005-NC-113).
+func (component *CombatComponent) Combatant() combat.Combatant {
+	return cloneCombatant(component.dao.combatant)
+}
+
+// cloneCombatant copies the only reference-typed field of the vitals block.
+// The DAO never mutates ElementMultipliersBP in place, so every value that
+// crosses the component boundary owning its own map keeps the stored map
+// immutable — which also keeps undoVitals' shallow "before" copy exact.
+func cloneCombatant(combatant combat.Combatant) combat.Combatant {
+	if combatant.ElementMultipliersBP != nil {
+		multipliers := make(map[combat.Element]int64, len(combatant.ElementMultipliersBP))
+		for element, value := range combatant.ElementMultipliersBP {
+			multipliers[element] = value
+		}
+		combatant.ElementMultipliersBP = multipliers
+	}
+	return combatant
+}
 
 // AttributeCurrent resolves an attribute's effective value.
 func (component *CombatComponent) AttributeCurrent(id combat.AttributeID) int64 {
@@ -298,10 +317,12 @@ func (component *CombatComponent) requireTransaction() {
 	}
 }
 
-// InitCombatant replaces the vitals block (spawn/config load).
+// InitCombatant replaces the vitals block (spawn/config load). The caller's
+// element multiplier map is copied, so a template shared across entities
+// stays independent of every stored combatant (RR-20261005-NC-113).
 func (component *CombatComponent) InitCombatant(combatant combat.Combatant) {
 	component.undoVitals()
-	component.dao.combatant = combatant
+	component.dao.combatant = cloneCombatant(combatant)
 	component.markDirty(FieldVitals)
 }
 

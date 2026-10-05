@@ -431,10 +431,10 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	runtime.recordTrace(TraceEvent{Kind: TraceCastActivated, Tick: runtime.currentTick, CastID: cast.id})
 	runtime.markAbilityCastStarted(cast)
 	if err := runtime.prepareCast(cast); err != nil {
-		cast.status, cast.failure = CastFailed, err.Error()
-		_ = runtime.stopProcesses(cast, true)
-		runtime.markAbilityCastFinished(cast)
+		runtime.failCastLocked(cast, err)
 		if !cast.committed {
+			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
+			// failCastLocked 已撤掉它名下的全部排程任务，复用 ID 才安全（NC-110）。
 			delete(runtime.casts, cast.id)
 			runtime.nextCastID--
 			return 0, err

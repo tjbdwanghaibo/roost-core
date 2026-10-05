@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **skill 施法失败只走一个终态入口**（RR-20261005-NC-110 / NC-111 / NC-112）：启动失败的 cast 被删除、ID 复用前先撤掉它的全部排程任务（此前旧任务会落到下一个拿到同一 ID 的 cast 上，失败启动后的 checkpoint 也恢复不了）；Cancel / Interrupt / Release 在改动 cast 后出错时 cast 进入 failed 终态（此前停在半终止，施法者永久 `ErrCasterBusy`）；排程失败的 toggle / hold / charge 释放 policy 槽位，对 failed cast 的 Cancel / Interrupt / Release 返回 `ErrCastInputRejected`（此前下一次激活会对失败 cast 执行 toggle-off）。行为收紧：手动 Release 付费失败后不能再重试，与 auto release 一致。[记录](docs/bugfix/RR-20261005-NC-110.md)
+- **combatcomponent Combatant 副本不再共享 map**（RR-20261005-NC-113）：`Combatant()` 返回、`InitCombatant` 存入的 `ElementMultipliersBP` 都是拷贝；此前改副本或改共用的配置模板会在事务、逆操作与脏标记之外改掉权威战斗状态。[记录](docs/bugfix/RR-20261005-NC-113.md)
 - **versionstore RedisStore 输掉 compare-and-set 后退避再重读**（RR-20261005-NC-52）：此前退避后仍用退避前 CompareAndSet 带回的值重试，竞争写落在退避窗口里时每次重试必输，同键并发（如 chat 世界频道）出现伪 `ErrConflict`。现在只在输掉 CAS 后多一次 GET，尝试次数与退避策略不变。[记录](docs/bugfix/RR-20261005-NC-52.md)
 - **activity sweep 对已确认窗口键先验证合法与归属**（RR-20261005-NC-51）：与 Opening 共用 `windowKeyProblem`；坏条目跳过、保留给运维、计 `sweep.window_key_malformed`，不再结算别的组的活动或把跨组键并入本组 Delivering。[记录](docs/bugfix/RR-20261005-NC-51.md)
 - **account 换名建角也释放名字已被他人提交的死计划**（RR-20261001-06 残余）：此前只有同名重试会释放，玩家直接换名永远得到 `ErrRoleLimit`；补偿失败重新计 `rollback.failed`（RR-20261005-NC-50）。[记录](docs/bugfix/RR-20261001-06.md#复核后的补修2026-10-05)

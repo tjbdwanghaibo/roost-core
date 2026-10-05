@@ -10,6 +10,7 @@
 ## 施法互斥与全局冷却
 
 - **施法互斥**：默认情况下，同一 caster 在已有施法窗口（windup / commit / recovery 阶段）内发起新的主动施法会得到 `ErrCasterBusy`。技能可在激活声明上用 `"concurrent": true` 退出互斥。proc / 被动触发的施法不受互斥与 GCD 限制。
+- **失败终态**：`Cancel` / `Interrupt` / `Release` 在已经改动 cast 之后出错（cancel 回调失败、Release 重新进入窗口时付费失败等），以及排程任务失败，cast 都进入 failed 终态：撤掉它的全部排程任务、停进程、释放 toggle / hold / charge 的 policy 槽位、不再占施法窗口；错误照常返回。对 failed cast 再调这三个 API 返回 `ErrCastInputRejected`。未提交就失败的 `Start` 返回 `(0, err)`，不留下任何排程工作（RR-20261005-NC-110～112）。
 - **全局冷却**：定义顶层的 `"global_cooldown_ticks": N`。**从 commit tick 起算**（不是 Activate 时刻）：施法提交时把 caster 置入 N tick 的全局冷却，期间任何技能的主动施法返回 `ErrGlobalCooldownActive`。多次提交取最晚到期时间。
 - 全局冷却以保留程序 id `"$gcd"` 作为一条普通冷却条目存在：`StateSnapshot().Cooldowns`、增量 mutation 与 checkpoint 都能直接看到它，客户端按普通冷却渲染即可。
 

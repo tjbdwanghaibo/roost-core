@@ -236,10 +236,7 @@ func (runtime *Runtime) Cancel(id CastID) error {
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[id]
-	if cast == nil {
-		return ErrCastInputRejected
-	}
-	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+	if cast == nil || castEnded(cast) {
 		return ErrCastInputRejected
 	}
 	cast.releaseReason = "cancelled"
@@ -248,13 +245,14 @@ func (runtime *Runtime) Cancel(id CastID) error {
 	if cast.committed && (cast.program.cast.mode == castModeToggle || cast.program.cast.mode == castModeHold) {
 		runtime.startCooldown(cast)
 	}
+	// 走到这里 cast 已经被改动（任务撤了、token 推进了），出错必须进失败终态，不能停在半终止（NC-111）。
 	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], "cancel"); found {
 		if _, err := runtime.executeOperation(cast, operation); err != nil {
-			return err
+			return runtime.failCastLocked(cast, err)
 		}
 	}
 	if err := runtime.stopProcesses(cast, true); err != nil {
-		return err
+		return runtime.failCastLocked(cast, err)
 	}
 	runtime.releasePolicySlot(cast)
 	cast.windowStage = CastWindowCancelled
@@ -287,10 +285,7 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
 	cast := runtime.casts[id]
-	if cast == nil || !containsGameplayTag(cast.program.cast.interruptTags, tag) {
-		return ErrCastInputRejected
-	}
-	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+	if cast == nil || !containsGameplayTag(cast.program.cast.interruptTags, tag) || castEnded(cast) {
 		return ErrCastInputRejected
 	}
 	cast.releaseReason = "cancelled"
@@ -300,7 +295,7 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 		runtime.startCooldown(cast)
 	}
 	if err := runtime.stopProcesses(cast, true); err != nil {
-		return err
+		return runtime.failCastLocked(cast, err)
 	}
 	runtime.releasePolicySlot(cast)
 	cast.windowStage = CastWindowCancelled
@@ -322,8 +317,24 @@ func (runtime *Runtime) Release(id CastID) error {
 	return runtime.releaseCast(cast, "input_release")
 }
 
+// castEnded 报告 cast 是否已不接受 Cancel / Interrupt / Release：逻辑结束、进入恢复期、窗口已完成或已取消，
+// 或已是 failed / finished 终态。只看窗口阶段会把排程失败的 cast（阶段仍是 executing）当成活的，
+// 再对它执行 cancel / release 回调（NC-112）。
+func castEnded(cast *castInstance) bool {
+	if cast.status == CastFailed || cast.status == CastFinished || cast.logicalFinished {
+		return true
+	}
+	switch cast.windowStage {
+	case CastWindowRecovering, CastWindowComplete, CastWindowCancelled:
+		return true
+	}
+	return false
+}
+
+// releaseCast 处理 Release、toggle 二次激活与排程的自动释放 / 资源耗尽释放。前置检查之后的任何错误都让 cast
+// 进入失败终态（NC-111）：charge 已撤掉 auto release 任务、阶段回到 preparing，原样返回会永久占住施法者窗口。
 func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
-	if cast.logicalFinished || cast.windowStage == CastWindowRecovering || cast.windowStage == CastWindowComplete || cast.windowStage == CastWindowCancelled {
+	if castEnded(cast) {
 		return ErrCastInputRejected
 	}
 	if cast.program.cast.mode == castModeCharge {
@@ -344,7 +355,10 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 		runtime.cancelPhaseTasks(cast, cast.phaseToken)
 		cast.phaseToken++
 		cast.status = CastRunning
-		return runtime.prepareCastWindow(cast, "release")
+		if err := runtime.prepareCastWindow(cast, "release"); err != nil {
+			return runtime.failCastLocked(cast, err)
+		}
+		return nil
 	}
 	if cast.program.cast.mode != castModeToggle && cast.program.cast.mode != castModeHold {
 		return ErrCastInputRejected
@@ -356,7 +370,10 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 	runtime.cancelPhaseTasks(cast, cast.phaseToken)
 	cast.phaseToken++
 	runtime.startCooldown(cast)
-	return runtime.executeCastEvent(cast, "release")
+	if err := runtime.executeCastEvent(cast, "release"); err != nil {
+		return runtime.failCastLocked(cast, err)
+	}
+	return nil
 }
 
 func (runtime *Runtime) executeCastEvent(cast *castInstance, event string) error {

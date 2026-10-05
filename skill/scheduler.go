@@ -468,20 +468,49 @@ func (runtime *Runtime) executeScheduledTask(task scheduledTask) error {
 		return ErrProgramInvariant
 	}
 	if err != nil {
-		cast.status, cast.failure = CastFailed, err.Error()
-		_ = runtime.stopProcesses(cast, true)
-		runtime.markAbilityCastFinished(cast)
-		return err
+		return runtime.failCastLocked(cast, err)
 	}
 	return runtime.resolveControl(cast, control)
 }
 
 func (runtime *Runtime) failScheduledCast(cast *castInstance, err error) error {
-	cast.status, cast.failure = CastFailed, err.Error()
-	runtime.cancelPhaseTasks(cast, cast.phaseToken)
+	return runtime.failCastLocked(cast, err)
+}
+
+// failCastLocked 是施法失败的唯一终态入口：记 failed（保留第一次的失败原因）、撤掉本 cast 名下的全部排程
+// 任务与帧、停进程、释放 policy 槽位、结束 ability 计数。可重复调用（排程路径里 releaseCast 已失败收尾后，
+// failScheduledCast 还会再进来一次）。
+//
+// 之前每条终止路径各自手写这些步骤、各漏一步：启动失败不撤任务而 ID 被复用（NC-110）、Cancel / Interrupt /
+// Release 出错直接返回停在半终止（NC-111）、排程失败不释放 policy 槽位（NC-112，v1.5.0 只修了 Cancel / Interrupt）。
+// 新的失败终止点一律走这里，不再在分支里补步骤。
+func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
+	if cast.status != CastFailed {
+		cast.status, cast.failure = CastFailed, err.Error()
+	}
+	runtime.cancelCastTasks(cast)
 	_ = runtime.stopProcesses(cast, true)
+	runtime.releasePolicySlot(cast)
 	runtime.markAbilityCastFinished(cast)
 	return err
+}
+
+// cancelCastTasks 撤掉 cast 名下的全部排程任务与帧，不分 phase token。cancelPhaseTasks 只撤当前 token，
+// 足够处理 goto / 取消；失败终态要的是“这个 cast 之后不再有任何工作”，启动失败时 ID 还会被复用。
+func (runtime *Runtime) cancelCastTasks(cast *castInstance) {
+	kept := runtime.scheduler.tasks[:0]
+	for _, task := range runtime.scheduler.tasks {
+		if castID, _ := scheduledTaskIdentity(task.Payload); castID == cast.id {
+			if frame := task.Payload.frameID(); frame != 0 {
+				delete(runtime.frames, frame)
+			}
+			continue
+		}
+		kept = append(kept, task)
+	}
+	runtime.scheduler.tasks = kept
+	heap.Init(&runtime.scheduler.tasks)
+	cast.pendingTasks = 0
 }
 
 func (runtime *Runtime) executeProcessStep(cast *castInstance, processID ProcessID) error {
