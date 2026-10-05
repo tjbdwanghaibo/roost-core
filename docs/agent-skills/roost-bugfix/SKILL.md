@@ -50,6 +50,7 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 - **提交链**：`gofmt -l` 空 → `GOWORK=off go vet ./pkg && GOWORK=off go test ./pkg -count=1 -race && git add <显式路径> && git commit && git push`，用 `&&` 串。**不要 `git add -A`**：排除 `artifacts/`、压测二进制、env.sh / 凭据、本地大日志。
 - **不要信 `set -e` 里的 python heredoc 断言**——zsh 下断言失败后续步骤照跑；python 改文档后用 `&&` 接 git，或分两步跑。
 - 并行修复用 worktree 隔离时：共享索引（bug / bugfix README、交接、CHANGELOG）只由主会话统一改，各组只写自己 RR 的记录，合并用 cherry-pick。
+- **反复出问题要上报方向判断**（维护者 2026-10-05）：同一模块 / 同一机制在近期多轮里反复出缺陷，或某次 bugfix 之后又在同一处出 bug（修复被打回、补修再补修），不要只是继续打补丁——在汇报里单列一段给维护者：列出该模块近期的问题与修复链（编号、提交），判断根因是实现细节还是前提 / 设计 / 实现方向有问题，给出是否需要修正思路、简化或改变实现方向的建议（候选方向与代价）。信号：同一不变量第二次被打破；修复在增加状态 / 分支 / 重试而不是减少；状态机交错类问题反复；修复依赖越来越多的时间 / 预算假设。先例：game-demo PlayerOwners 的按玩家租约连续多轮出问题，维护者确认前提不成立后改为静态绑定 + App 单实例锁（`docs/feature/APP-SINGLETON-LOCK-2026-10-05.md`）。
 
 ## 3. 一轮的步骤
 
@@ -132,5 +133,6 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 
 按 RR 列：修了什么、根因在哪一行、测试怎么红怎么绿（命令 + 结果）、改了哪些文档、提交号；未验证项、兼容限制单列。
 最后一句说明是否发版（及下一个版本号），并区分"已提交 / 已推送 / 已发布"。
+若本轮触发"反复出问题要上报方向判断"（§2），汇报里单列"方向判断"一段。
 
 反复用到的事实（各包 harness、踩坑手法、环境）见 `reference/lessons.md`。
