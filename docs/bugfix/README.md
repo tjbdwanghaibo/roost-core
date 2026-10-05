@@ -1,5 +1,14 @@
 # Bugfix 记录
 
+**10-05 N10 第一批（revn10）：NC-120～123 已修复、声明场景验证，未发版。** Controller 拆出 `notifiable()`，冻结只暂停 Tick；排队项丢弃统一走 `discardQueued` 逐个发 OnEnded（取消）；启动失败分支在 Cancel 后识别重入；hotcode 补丁点状态合成一个不可变 `pointState` 整体发布。[本轮](../review/REVIEW-2026-10-05-noncore-n10.md) · [证据](evidence/noncore-bugfix-20261005-n10/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-123](RR-20261005-NC-123.md) | 补丁点 fn / Meta / 代数整体发布，写者按点串行 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-122](RR-20261005-NC-122.md) | 启动失败分支 Cancel 之后判定 `unit.cur != entry` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-121](RR-20261005-NC-121.md) | 丢弃排队项逐个发 OnEnded（取消），不调 Cancel / 不发切换 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-120](RR-20261005-NC-120.md) | 冻结只暂停 Tick，结束通知照常交给策略 | 已修复、声明场景验证，未发版 |
+
 **10-05 N09 skill 第二批（revn09b）：NC-114～117 已修复、声明场景验证，未发版。** skillsync 的 presentation reset 经 `Coordinator.presentationReset` 复用 observer 的 `FilterPresentation`；ability 快照按 handle 过滤、cast / process remove 带归属实体、persistent remove 按 Binding 过滤；Applier 只在准入成功时开新 epoch；提交前失败的 cast 进完成队列按 `CompletedCastLimit` 回收，checkpoint 恢复与 live 保留集合一致。[本轮](../review/REVIEW-2026-10-05-n09-batch2.md)。
 
 | 编号 | 修复 | 状态 |

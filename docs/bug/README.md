@@ -1,5 +1,14 @@
 # Roost Review 问题索引
 
+**10-05 N10 第一批（revn10）：NC-120 / NC-121 P2、NC-122 / NC-123 P3 已修复、声明场景验证，未发版。** ai Controller 冻结时丢结束通知、行为树 Recover 后永远 Running；actionflow 丢弃排队动作不发 OnEnded、启动失败的 Cancel 重入留下孤儿动作；hotcode 并发 Replace / Revert 留下 Patched 与 Meta 矛盾的补丁点。ai / actionflow 目前无生产使用方。[本轮](../review/REVIEW-2026-10-05-noncore-n10.md)（含方向判断）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-123](RR-20261005-NC-123.md) | P3 hotcode 并发 Replace / Revert 留下当前函数与 Meta 互相矛盾的补丁点 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-122](RR-20261005-NC-122.md) | P3 actionflow 启动失败、Cancel 里重入启动的动作被清出当前位成孤儿 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-121](RR-20261005-NC-121.md) | P2 actionflow ClearQueue / EndAll / ClearMission 丢弃排队动作不发 OnEnded | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-120](RR-20261005-NC-120.md) | P2 ai Controller 冻结期间丢弃动作 / 任务结束通知，行为树 Recover 后永远 Running | 已修复、声明场景验证，未发版 |
+
 **10-05 N09 skill 第二批（revn09b）：NC-114 P2、NC-115 P2、NC-116 P3、NC-117 P2 已修复、声明场景验证，未发版。** skillsync 的 presentation reset 不经过可见性策略、state 快照与增量的可见性口径不一致（ability handle、三类 remove）、Applier 被一个畸形 full 包永久卡死；提交前失败的 cast 不进完成队列、永不回收，超过 CompletedCastLimit 后 checkpoint 无法恢复。[本轮](../review/REVIEW-2026-10-05-n09-batch2.md)。
 
 | 编号 | 问题 | 状态 |

@@ -36,13 +36,35 @@ type PointInfo struct {
 	Meta       Meta
 }
 
+// pointState 是一个补丁点在某一代的完整状态：当前函数、对应的 Meta 与代数。它整体
+// 发布、发布后不再修改，读者一次 Load 拿到的三项总是同一次 Replace / Revert 写下的。
+type pointState struct {
+	fn   any
+	meta Meta
+	gen  uint64
+}
+
+// point 是一个补丁点。之前 current / meta / gen 是三个独立的原子值，并发的 Replace 与
+// Revert 交错写入后会永久留下“当前是原函数、Meta 却是补丁版本”或反过来的组合，List
+// 报出的 Patched 与 Meta 互相矛盾（RR-20261005-NC-123）。现在写者在 writeMu 下基于上一代
+// 生成新的 pointState 整体替换；Resolve / List 不取锁，只读 state。
 type point struct {
 	name     string
 	fnType   reflect.Type
 	original any
-	current  atomic.Value
-	meta     atomic.Value
-	gen      atomic.Uint64
+	writeMu  sync.Mutex
+	state    atomic.Pointer[pointState]
+}
+
+// publish 在 writeMu 下发布下一代状态，代数在上一代基础上加一。
+func (p *point) publish(fn any, meta Meta) {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	next := &pointState{fn: fn, meta: meta}
+	if previous := p.state.Load(); previous != nil {
+		next.gen = previous.gen + 1
+	}
+	p.state.Store(next)
 }
 
 // Registry owns all hot-code patch points for one process.
@@ -109,7 +131,7 @@ func (r *Registry) Register(name string, fn any) error {
 		fnType:   reflect.TypeOf(fn),
 		original: fn,
 	}
-	p.current.Store(fn)
+	p.state.Store(&pointState{fn: fn})
 	r.points[name] = p
 	return nil
 }
@@ -132,9 +154,7 @@ func (r *Registry) Replace(name string, fn any, meta Meta) error {
 	if meta.LoadedAt.IsZero() {
 		meta.LoadedAt = time.Now()
 	}
-	p.current.Store(fn)
-	p.meta.Store(meta)
-	p.gen.Add(1)
+	p.publish(fn, meta)
 	return nil
 }
 
@@ -143,9 +163,7 @@ func (r *Registry) Revert(name string) error {
 	if err != nil {
 		return err
 	}
-	p.current.Store(p.original)
-	p.meta.Store(Meta{})
-	p.gen.Add(1)
+	p.publish(p.original, Meta{})
 	return nil
 }
 
@@ -154,11 +172,11 @@ func (r *Registry) Resolve(name string, fallback any) any {
 	if err != nil {
 		return fallback
 	}
-	fn := p.current.Load()
-	if fn == nil {
+	state := p.state.Load()
+	if state == nil || state.fn == nil {
 		return fallback
 	}
-	return fn
+	return state.fn
 }
 
 func (r *Registry) List() []PointInfo {
@@ -166,16 +184,13 @@ func (r *Registry) List() []PointInfo {
 	defer r.mu.RUnlock()
 	ret := make([]PointInfo, 0, len(r.points))
 	for _, p := range r.points {
-		info := PointInfo{
-			Name:       p.name,
-			Type:       p.fnType.String(),
-			Generation: p.gen.Load(),
-		}
-		if fn := p.current.Load(); fn != nil {
-			info.Patched = reflect.ValueOf(fn).Pointer() != reflect.ValueOf(p.original).Pointer()
-		}
-		if meta, ok := p.meta.Load().(Meta); ok {
-			info.Meta = meta
+		info := PointInfo{Name: p.name, Type: p.fnType.String()}
+		if state := p.state.Load(); state != nil {
+			info.Generation = state.gen
+			info.Meta = state.meta
+			if state.fn != nil {
+				info.Patched = reflect.ValueOf(state.fn).Pointer() != reflect.ValueOf(p.original).Pointer()
+			}
 		}
 		ret = append(ret, info)
 	}

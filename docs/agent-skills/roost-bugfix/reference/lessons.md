@@ -105,6 +105,15 @@
 - **属性容器是组件内存**：改 game-demo 属性组件时同时看三处——事务回滚（NC-61）、加载重建与 `attr_final` 回写（NC-65）、热更后的重算（观察 C-O8）；
   用生成 DAO 的 `Marshal` → `RestorePersisted` → `IsCreate=false` 构建做加载往返，不要只测新建玩家。
 
+## core ai / actionflow / hotcode（N10，2026-10-05）
+
+- 三者都“由 Entity 锁串行调用、自身无锁”，要审的不是跨 goroutine 并发，而是**回调内重入**与**生命周期事件是否成对**（OnQueued↔OnEnded、进入↔离开切换）。
+  harness：actionflow `newReentrancyRunner(t, hooks)`（构建参数直接是 Action）、`runnerTestAction`；ai `treeData` / `treeCtx`、`controllerTestStrategy`。
+  仓内没有 `ActionList` 实现，组合验证要自己按接口注释最小接线（OnEnded→MissionRunner.OnActionEnd，ClearActions→ClearMission），证据写探针输出、不提交探针。
+- “一个开关管两件事”是 NC-120 的根因（`ready()` 同时管 Tick 与通知）：冻结 / 暂停类状态先问“暂停的是决策还是记账”，丢记账的事件就是永久丢失。
+- 多个独立原子值描述同一份状态（hotcode current / meta / gen）时，并发写者交错会**永久**撕裂，而不只是读者瞬时看到中间态；修法是合成一个不可变状态整体发布。
+  没有调度注入点时用有界轮数对撞做红（NC-123 用 100000 轮，修前 red.txt 里 7 次运行全红），记录轮数与命中次数；修后的正确性不能依赖概率。
+
 ## 方法手法（跨包）
 
 - **卡在"造不出那个状态"时的两个手法**：**select 屏障**——select 阻塞前会求值所有 channel 操作数，所以传一个 `Done()` 会阻塞的 context

@@ -35,6 +35,11 @@ type Controller struct {
 
 func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks: hooks} }
 
+// SetStrategy 换上 next。顺序是：旧策略同意被替换 → next.Init（失败则 Stop next、
+// 保留旧策略，这是“事务式替换”）→ EndActions 结束现有动作 → Stop 旧策略 → 发布。
+// EndActions 在 Init 成功之后才跑，通常接 ActionList.EndAllAction，所以 Init 里就发起的
+// 动作也会被一并结束，而且切换期间的结束通知不送达策略：策略应在第一次 Tick 里发起
+// 动作，不要在 Init 里发起（BehaviorStrategy.Init 只重置树）。
 func (c *Controller) SetStrategy(next Strategy) error {
 	if c == nil {
 		return ErrStrategyInit
@@ -104,16 +109,20 @@ func (c *Controller) Tick(now time.Time) {
 		c.report(err)
 	}
 }
+
+// OnActionEnd 把一次动作结束交给当前策略。冻结期间照常送达（见 notifiable）。
 func (c *Controller) OnActionEnd(id int64, kind coreflow.ActionKind, reason coreflow.ActionReason) {
-	if !c.ready() {
+	if !c.notifiable() {
 		return
 	}
 	if err := callStrategyActionEnd(c.strategy, c.context(c.now()), id, kind, reason); err != nil {
 		c.report(err)
 	}
 }
+
+// OnMissionEnd 把一次任务结束交给当前策略。冻结期间照常送达（见 notifiable）。
 func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.ActionReason) {
-	if !c.ready() {
+	if !c.notifiable() {
 		return
 	}
 	if err := callStrategyMissionEnd(c.strategy, c.context(c.now()), mission, reason); err != nil {
@@ -135,7 +144,17 @@ func (c *Controller) Shutdown(reason string) {
 		c.changed(previous, nil)
 	}
 }
-func (c *Controller) ready() bool { return c != nil && !c.frozen && !c.switching && c.strategy != nil }
+
+// ready 判断能否驱动策略做决策（Tick）：冻结、切换中或没有策略时都不能。
+func (c *Controller) ready() bool { return c.notifiable() && !c.frozen }
+
+// notifiable 判断结束通知能否交给当前策略。Freeze 只暂停决策，不暂停记账：动作在冻结
+// 期间照样会结束（被业务 EndAllAction、被替换、被取消），策略——尤其 BehaviorStrategy 里
+// 等某个动作 ID 的 TaskflowAction 叶子——只能从这条通知得知结果；丢掉它，Recover 之后
+// 树会永远停在 Running（RR-20261005-NC-120）。切换策略期间仍然丢弃：那时结束的是旧
+// 策略的动作（EndActions），新策略不该收到。策略若在 OnActionEnd 里直接发起新动作，
+// 冻结期间也会被调用，需要自己判断时机（BehaviorStrategy 只缓冲到下一次 Tick）。
+func (c *Controller) notifiable() bool { return c != nil && !c.switching && c.strategy != nil }
 func (c *Controller) now() time.Time {
 	if c.hooks.Now != nil {
 		var now time.Time

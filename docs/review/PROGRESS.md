@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N10 第一批（ai / actionflow / featureflag / hotcode）
+
+基线 `197f7bb9`，分支 `revn10`，NC 段 120～129（用 120～123）；图谱 generation 09-30，四包此后无提交，模板与 demo 用法以源码补证。[本轮/矩阵](REVIEW-2026-10-05-noncore-n10.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-n10/README.md)。NC-120 / 121（P2）、NC-122 / 123（P3）已修复、声明场景验证，未发版。
+
+| 子域 | 场景 | 状态 / 下一入口 |
+| --- | --- | --- |
+| actionflow | A1～A6 替换 / 入队 / 重入 / 丢弃 / 冻结，M1～M4 任务推进 / 取消 / EndAll（最小接线探针） | NC-121、NC-122；O-A1～O-A4 观察；第二批：UpdateAction、Context 池化存储 |
+| ai | T1～T7 事务式替换、冻结、Init/Shutdown 收尾、中断传播、SetMission 注释、解析 | NC-120；O-T3 / O-T6 补注释；第二批：nodes 逐节点红线 |
+| featureflag | F1～F5；运行期热更复用 N07b H0～H4（不重做） | 无缺陷；O-F1 观察 |
+| hotcode | H1～H8 可见性、旧请求生命周期（Nest 每次派发解析一次）、并发替换、插件部分应用 | NC-123；O-H1～O-H4；真实 .so 加载未跑 |
+
+7 条新正式用例修前红 → 修后绿；四包 race×3、`./nest` race、全仓 build/vet、根包、全新生成 game-demo build/vet 与相关包测试通过。ai / actionflow 无生产使用方。N10 第一批完成、场景部分完成，不计 completed/15。方向判断：actionflow 回调重入靠事后比对 `unit.cur`，NC-122 是 U-0100 同机制的漏网分支，建议结构上禁止重入或改延后命令队列（或移出 core 待真实使用方）。不等待 CI，不发版。
+
 ## 2026-10-05 N09 skill 第二批（同步/接入 + 执行/状态余项）
 
 基线 `855c2a38`（origin/main），分支 `revn09b`，NC 段 114～119（用 114～117）；图谱 generation 2026-09-30，早于第一批修复，按当前源码逐行补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch2.md) · [修复](../bugfix/RR-20261005-NC-114.md)。NC-114/115/117（P2）、NC-116（P3）已修复、声明场景验证，未发版。

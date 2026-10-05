@@ -1,0 +1,19 @@
+# 控制探针（基线 197f7bb9 + 本分支修复；探针是临时 zz_probe_n10_test.go，跑完删除，不提交）
+
+## actionflow：ActionRunner + MissionRunner 按 ActionList 接口注释最小接线（OnEnded→MissionRunner.OnActionEnd，ClearActions→ClearMission）
+    zz_probe_n10_test.go:69: M3 after stale end: info={Status:1 CurrentStep:0 CurrentAction:1 LastResult:{Status:0 Reason:}}
+    zz_probe_n10_test.go:71: M3 after step1: info={Status:1 CurrentStep:1 CurrentAction:1 LastResult:{Status:2 Reason:action done}} a2.starts=1
+    zz_probe_n10_test.go:73: M3 after step2: info={Status:2 CurrentStep:-1 CurrentAction:0 LastResult:{Status:2 Reason:action done}} inMission=false log=[action-end action-end clear mission-end]
+    zz_probe_n10_test.go:80: M4 cancel: info={Status:4 CurrentStep:-1 CurrentAction:0 LastResult:{Status:4 Reason:abort}} b1.cancels=1 b2.starts=0 current=<nil> log=[clear action-end mission-end]
+    zz_probe_n10_test.go:87: A8 endall: current=true c2.starts=1 inMission=true log=[action-end]
+--- PASS: TestProbeMissionWiring (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/actionflow	0.484s
+
+## ai：中断传播与 Shutdown
+    zz_probe_n10_test.go:26: T5 parallel: 1 3 interrupted=[1]
+    zz_probe_n10_test.go:34: T5 timelimit: [1 1 1 3 1] interrupted=[2]
+    zz_probe_n10_test.go:42: T4 shutdown: strategy=<nil> interrupted=[3]
+--- PASS: TestProbeInterrupts (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/ai	0.509s

@@ -215,14 +215,15 @@ func (r *ActionRunner) EndAll(force bool, reason ActionReason) error {
 				errs = append(errs, err)
 			}
 		}
-		unit.next = nil
+		r.discardQueued(unit, nil, reason)
 	}
 	return errors.Join(errs...)
 }
 
+// ClearQueue 丢弃全部排队动作；每个被丢弃的动作发一次 OnEnded（取消，RR-20261005-NC-121）。
 func (r *ActionRunner) ClearQueue() {
 	for _, unit := range r.orderedGroups() {
-		unit.next = nil
+		r.discardQueued(unit, nil, NewActionReason("queue cleared"))
 	}
 }
 
@@ -237,18 +238,42 @@ func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionR
 				errs = append(errs, err)
 			}
 		}
-		dst := unit.next[:0]
-		for _, next := range unit.next {
-			if next != nil && next.MissionID != missionID {
-				dst = append(dst, next)
-			}
-		}
-		for index := len(dst); index < len(unit.next); index++ {
-			unit.next[index] = nil
-		}
-		unit.next = dst
+		r.discardQueued(unit, func(entry *actionEntry) bool { return entry.MissionID == missionID }, reason)
 	}
 	return errors.Join(errs...)
+}
+
+// discardQueued 把一个组里命中 match（nil 表示全部）的排队动作移出队列，再为每个发一次
+// OnEnded。排队动作已经发过 OnQueued、ID 也交给了 Enqueue 的调用方（ai.TaskflowAction 等
+// 这个 ID 的结束），静默丢弃会让等待方永远等不到结果（RR-20261005-NC-121）。它们从未
+// 启动，所以不调 Cancel、不发激活切换，结束状态一律是取消。先改队列再发 Hook：Hook 里
+// 重入排进来的新动作留在队列里，不被这次丢弃误伤。
+func (r *ActionRunner) discardQueued(unit *actionGroupState, match func(*actionEntry) bool, reason ActionReason) {
+	if unit == nil || len(unit.next) == 0 {
+		return
+	}
+	var kept, dropped []*actionEntry
+	for _, entry := range unit.next {
+		switch {
+		case entry == nil:
+		case match == nil || match(entry):
+			dropped = append(dropped, entry)
+		default:
+			kept = append(kept, entry)
+		}
+	}
+	unit.next = kept
+	if len(dropped) == 0 {
+		return
+	}
+	message := reason.Message
+	if message == "" && reason.Err != nil {
+		message = reason.Err.Error()
+	}
+	canceled := ActionReason{Message: message, Err: reason.Err, Result: ActionResult{Status: ActionStatusCanceled, Reason: message}}
+	for _, entry := range dropped {
+		r.ended(entry, canceled)
+	}
 }
 
 func (r *ActionRunner) Freeze(group ActionGroup) { r.group(group).frozen = true }
@@ -306,6 +331,13 @@ func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now tim
 		return nil
 	}
 	cancelErr := r.callCancel(entry.Action, now, "start failed")
+	if unit.cur != entry {
+		// Cancel 里重入改了当前动作（结束了它、或装上了别的动作）：重入路径已经替这个
+		// 动作收尾，这里不能再清空 unit.cur——那会把重入装上、已经 Start 的动作变成没人
+		// 驱动也没人结束的孤儿——也不能再发离开 / 结束或越过它启动下一个排队项。与 finish
+		// 的同类判定一致（RR-20261005-NC-122）。
+		return errors.Join(err, cancelErr, ErrReentrantMutation)
+	}
 	unit.cur = nil
 	r.transition(entry, false)
 	err = errors.Join(err, cancelErr)

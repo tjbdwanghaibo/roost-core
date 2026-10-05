@@ -127,9 +127,13 @@ func (s *BehaviorStrategy[C]) Stop(*Context, string) {
 
 // TaskflowAction is the leaf that closes the tree/taskflow loop: the tree
 // decides, taskflow executes. On first tick it launches an action through
-// the injected Launch (CreateAction, EnqueueAction, or SetMission — the
-// business picks the taskflow verb), then stays Running until the matching
+// the injected Launch (CreateAction or EnqueueAction — the business picks the
+// verb and returns the action id), then stays Running until the matching
 // ActionEnd arrives, mapping its reason through Succeeded.
+//
+// 只按动作 ID 匹配 OnActionEnd 送来的结束。任务（SetMission）不能用这个叶子等待：SetMission
+// 不返回 ID，任务结束走 OnMissionEnd，BehaviorStrategy 不把它交给叶子，而且任务 ID 与动作
+// ID 是两套计数、会撞号；等任务请用读 MissionManager.InMission 的 Condition。
 //
 // An interrupted branch (Reset while running) does NOT cancel the underlying
 // action by itself — Reset carries no context. Supply OnInterrupt (a closure

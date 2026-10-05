@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **ai Controller 冻结期间不再丢弃结束通知**（RR-20261005-NC-120）：`Freeze` 只暂停 Tick；动作 / 任务结束照常交给策略。此前通知被丢，BehaviorStrategy 里等该动作的 TaskflowAction 叶子在 Recover 后永远 Running。[记录](docs/bugfix/RR-20261005-NC-120.md)
+- **actionflow 丢弃排队动作时发 OnEnded，启动失败的 Cancel 重入不再留下孤儿**（RR-20261005-NC-121 / NC-122）：`ClearQueue` / `EndAll` / `ClearMission` 为每个被丢弃的排队项发一次取消状态的 OnEnded（不调 Cancel、不发切换）；启动失败后 Cancel 里重入装上的动作留在当前位，外层返回 `ErrReentrantMutation`。[记录](docs/bugfix/RR-20261005-NC-121.md) · [NC-122](docs/bugfix/RR-20261005-NC-122.md)
+- **hotcode 补丁点状态整体发布**（RR-20261005-NC-123）：当前函数、Meta、代数合成一个不可变状态原子替换，写者按点串行。此前并发 Replace / Revert 可永久留下 Patched 与 Meta 互相矛盾的点，`hotcode.list` 误报。[记录](docs/bugfix/RR-20261005-NC-123.md)
 - **skillsync presentation reset 按 observer 可见性过滤**（RR-20261005-NC-114）：presentation 游标过期的 Flush 与 Recover 生成的 reset 现在把每条持续表现交给 observer 的 `VisibilityPolicy.FilterPresentation`（复用现有方法，自定义策略无需改动）；此前 reset 原样投影 `Runtime.PresentationSnapshot()`，不可见施法者的持续表现、目标与坐标发给所有 observer。[记录](docs/bugfix/RR-20261005-NC-114.md)
 - **skillsync state 快照与增量的可见性一致**（RR-20261005-NC-115）：ability 快照与增量一样按具体 handle 问 `FieldVisible`；cast / process remove mutation 带上归属实体（追加 `caster` / `owner` 字段），persistent remove 按 `Binding` 判断，不可见实体的 remove 不再下发。行为收紧：observer 可见性在 upsert 与 remove 之间变化时，以 remove 时的可见性为准，业务应在可见性变化时重发快照。[记录](docs/bugfix/RR-20261005-NC-114.md)
 - **skillsync Applier 不再被一个畸形 full 包卡死**（RR-20261005-NC-116）：开新 epoch 的状态只在准入成功时置位；此前 BaseSequence 非零的 full 包被拒绝后，Applier 对之后每个包（包括合法的恢复 full）都返回 `ErrApplyInProgress`。[记录](docs/bugfix/RR-20261005-NC-116.md)

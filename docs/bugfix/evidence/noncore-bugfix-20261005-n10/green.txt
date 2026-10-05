@@ -1,0 +1,39 @@
+# 修后（本分支，提交前）
+$ gofmt -l ai actionflow hotcode featureflag
+$ GOWORK=off go vet ./ai ./actionflow ./hotcode
+vet ok
+$ GOWORK=off go test -race -count=3 ./ai ./actionflow ./hotcode ./featureflag
+ok  	github.com/tjbdwanghaibo/roost-core/ai	1.581s
+ok  	github.com/tjbdwanghaibo/roost-core/actionflow	1.985s
+ok  	github.com/tjbdwanghaibo/roost-core/hotcode	4.963s
+ok  	github.com/tjbdwanghaibo/roost-core/featureflag	2.939s
+$ GOWORK=off go test -count=1 -v -run 'Frozen|Discarded|ClearMissionKeeps|StartFailureWhoseCancel|ConcurrentReplaceAndRevert' ./ai ./actionflow ./hotcode
+--- PASS: TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor (0.00s)
+--- PASS: TestAFrozenControllerStillDeliversMissionEndsButNotTicks (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/ai	0.475s
+--- PASS: TestActionRunnerRefusesToStartInAFrozenGroup (0.00s)
+--- PASS: TestDiscardedQueuedActionsAreReportedAsEnded (0.00s)
+    --- PASS: TestDiscardedQueuedActionsAreReportedAsEnded/ClearQueue (0.00s)
+    --- PASS: TestDiscardedQueuedActionsAreReportedAsEnded/EndAll (0.00s)
+    --- PASS: TestDiscardedQueuedActionsAreReportedAsEnded/ClearMission (0.00s)
+--- PASS: TestClearMissionKeepsAnotherMissionsQueuedActions (0.00s)
+--- PASS: TestStartFailureWhoseCancelStartsAnotherActionKeepsThatAction (0.00s)
+--- PASS: TestQueuedStartFailureWhoseCancelStartsAnotherActionKeepsThatAction (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/actionflow	0.685s
+--- PASS: TestConcurrentReplaceAndRevertLeaveAConsistentPoint (0.11s)
+ok  	github.com/tjbdwanghaibo/roost-core/hotcode	0.982s
+
+## 生成工程（全新 game-demo n10gd，replace 到本分支，未连任何外部依赖）
+$ GOWORK=off go build ./... && GOWORK=off go vet ./...
+build-vet-ok
+$ GOWORK=off go test -count=1 ./game/rewards/... ./internal/service/game/...
+ok  	example.com/n10gd/game/rewards
+ok  	example.com/n10gd/internal/service/game
+
+## 全仓
+$ GOWORK=off go build ./... && GOWORK=off go vet ./...
+build+vet ok
+$ GOWORK=off go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	0.791s
+$ GOWORK=off go test -race -count=1 ./nest   # hotcode 唯一的生产消费者
+ok  	github.com/tjbdwanghaibo/roost-core/nest	3.480s

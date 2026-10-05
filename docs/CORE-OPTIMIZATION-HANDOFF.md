@@ -190,6 +190,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N10 第一批（revn10）：[NC-120](bug/RR-20261005-NC-120.md) / [NC-121](bug/RR-20261005-NC-121.md)（P2）与 [NC-122](bug/RR-20261005-NC-122.md) / [NC-123](bug/RR-20261005-NC-123.md)（P3）**已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-noncore-n10.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-n10/README.md)。冻结中的 ai Controller 照常转交结束通知；丢弃排队动作补发 OnEnded；hotcode 补丁点状态整体发布。无格式 / API / wire 变化；ai / actionflow 无生产使用方，方向判断见本轮。
+
 10-05 N09 skill 第二批（revn09b）：[NC-114](bug/RR-20261005-NC-114.md) / [NC-115](bug/RR-20261005-NC-115.md) / [NC-117](bug/RR-20261005-NC-117.md)（P2）与 [NC-116](bug/RR-20261005-NC-116.md)（P3）**已修复、声明场景验证，未发版**——presentation reset 与 state 快照 / remove 的可见性泄漏、Applier 被畸形 full 包卡死、提交前失败的 cast 无界保留并使 checkpoint 无法恢复；[本轮](review/REVIEW-2026-10-05-n09-batch2.md)、[修复](bugfix/RR-20261005-NC-114.md)。cast / process remove mutation 多带 `caster` / `owner`（追加字段）；可见性中途变化后的 remove 不再下发（O12）。
 
 10-05 N04 revn04：[NC-100](bug/RR-20261005-NC-100.md) P1 / [NC-101](bug/RR-20261005-NC-101.md) P2 / [NC-102](bug/RR-20261005-NC-102.md) P3 **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n04-revn04.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn04/README.md)。T-238/239（T-231～237 已被并行线占用，顺延）。行为收紧：回复丢失的 Redis 脚本、超时的 Mongo 提交都以错误返回，调用方按结果未知处理；无 API / 持久格式变化。
