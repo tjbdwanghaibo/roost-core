@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：方案。**状态（2026-10-05）：第 1、2、2b、3、3b、4 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`、`f051e24a`、`40d89ac6`、`5bdac773`）；第 5 笔未实施。
+- 性质：方案。**状态（2026-10-05）：第 1～5 笔已实施**（第 1、2、2b、3、3b、4 笔提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`、`f051e24a`、`40d89ac6`、`5bdac773`；第 5 笔文档与真实进程演练见 §13，演练中的修复 `364b763c`）。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -411,7 +411,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 
 ## 11. 没有核实的事实
 
-- 没有实现，也没有跑演练。§1.1 的时间线、§4 的 `flock` 互斥与“先重放后服务”来自读码（`nestwal/wal.go:222-228`、`dataengine/engine/runtime.go:86-106`），由第 5 笔提交用真实进程验证。
+- ~~没有实现，也没有跑演练~~：已实现（第 1～4 笔），§1.1 的时间线、§4 的 `flock` 互斥与“先重放后服务”已由第 5 笔真实进程演练验证（§13）。
 - ~~DataEngine 之前启动的 Mod 是否还有按 sid 的副作用~~：审查时已按生成的 game-demo bootstrap 逐个核对，结论见 §4（只有 NATS 非队列订阅造成的死信）。其他项目的 Mod 组合不同，第 1 笔提交在 USER_GUIDE 里写明“拿锁后、WAL `flock` 前启动的 Mod 不应有按 sid 的外部写”这条约定。
 - ~~systemd `TimeoutStartSec`、compose 健康检查时长~~：已核对，见 §6.3（systemd 是 `Type=simple`，不涉及；shell 部署 `HEALTH_ATTEMPTS` 与 compose `start_period` 需要调整）。
 - `Live` 的“停机中仍算活”会让恰在那一刻开的活动窗口等到宽限期（§7.2 差异 3），没有量化；实测若成问题，可让 App 在 `PhaseServiceStopping` 时把键的值改成“停机中”标记、`Live` 不计入（不改释放时机）。
@@ -537,3 +537,39 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
   3. `send_gift` 取不到驻留表时回错误码（与 enter_game 同样的处理），不发起赠礼。
 - 验证（`GOWORK=off`，独立 worktree）：`gofmt -l` 空；`go build ./...`；`go vet ./codegen/...`；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 84s，未遇 `go_command_tree` 超时）；根包 `go test -count=1 .` 通过；`go generate ./...` 后 porcelain 只有本笔改动；生成 game-demo（`project new sdemo4 -template game-demo` + `go mod edit -replace` 指向本 worktree）`Sync_StartGift(ctx, id, fromPlayerID int64, fromSID int32, …)`，`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/`、`go test ./...` 全绿。生成工程没有需要真实 Mongo / NATS 的赠礼 integration 用例，未起隔离环境。
 - 未验证：多 sid 部署下的真实转交（两个 game 进程、bus 寻址 `<prefix>.svc.<game>.<sid>`、离线发送方在其 sid 上冷加载执行 debit / refund），属第 5 笔 §8.2 演练；`second-game.sh` 两进程实跑未做。
+
+### 第 5 笔（2026-10-05，文档 + 真实进程演练）
+
+- 范围：§8.2 真实进程演练；文档——GAME_DEMO_TEMPLATE 新节 §9.15（取代 §9.11.2 所有权表，§9.8.2 / §9.12 的取代注记压成指向）、`render_access.go` 的 WriteGate 注释去掉 “ownership lease”、USER_GUIDE（启动等待的精确表述、game-demo activity 对 `Live` 的使用、etcd Discovery 与 `App.Live` 的分工）与 `etcd/driver/discovery.go` / `kit/etcd/etcd_mod.go` 注释、bug / bugfix 索引与交接文档里玩家租约相关 RR 的“已被取代”标注（另含 RR-20260920-03 / 04、RR-20260929-13 / 17：前两条是 `playerroute` / 租约失效写入，后两条是第 3b 笔删掉的 global 租约 API；RR-20260928-06 只有 `game_route` 一部分失效，未标）、交接文档 2026-10-05 状态、TROUBLESHOOTING T-212 / T-213 按实际日志改写。演练中发现一处代码缺陷，单独一笔修复：`fix(codegen)：生成的 etcd.service_prefix 带结尾斜杠`。
+- 环境：`~/.roost-it/roost-dataengine-it`（端口偏移 1000）；自起一个 etcd（127.0.0.1:23791，数据在 scratchpad）。生成 `roost project new drill5 -template game-demo` + `go mod edit -replace` 指向本 worktree（基线 `64acd782`，未含 `c493a791`）。所有 Mongo 库名、`nats.prefix`、syncbus / effects / saga 的主题与流、durable、Redis `key_prefix`（含 `singleton.key_prefix`、`snapshot_l2_key_prefix`）、`etcd.service_prefix` 都换成 `drill5_202610051039`；九个框架服务各起一个（sid 1000），`accountctl upsert-server` 注册 1300 / 1302。game 1300 与 1302 各自的 WAL 目录、ops / 客户端端口。
+- **隔离的教训**：DAO 的库名是 `db/def` 编译期常量（生成为 `"game"`，`db/gen_*_dao.go` 的 `*DaoDBName`），不受 `dataengine.database` 配置影响。第一次预演只改了配置，Player / Guild / World 的投影写进了共享的 `game` 库（oplog 核对：`game.player` / `guild` / `world` / `_guild_id_sequence` 四个集合由本次预演创建，`game.players` 是 10-04 已有的）。正式演练前把三个 `*DaoDBName` 改成带后缀的库名、换新前缀重来；正式演练开始后 oplog 里除 `config`（事务会话簿记）与 noop 外只有 `drill5_202610051039_*` 三个库。以后在共享环境跑 game-demo 演练，要连 `db/def` 一起改。
+- 时间线（`ttl / renew_interval / guard / startup_wait = 15s / 3s / 5s / 30s`；P* 都是 sid 1300、同一配置与 WAL 目录）：
+
+| 步骤 | 动作 | 观测 | 耗时 |
+| --- | --- | --- | --- |
+| 0 | 起 P1；机器人 A、A2 各 10 个 | 都 `success=10`；Mongo 20 个玩家 | P1 启动到 `/readyz` 1.6s |
+| 1 | SIGSTOP P1（键剩 13.2s）→ 起 P2 | P2 只有 `singleton: acquiring` / `waiting … holder=<P1 token>|<host>|43917|…`，没有任何 `mod init`；`acquired` 后 Mod 启动，ops 报端口占用，DataEngine 报 `nestwal: directory is already locked`，逆序停完后 `singleton: released`，退出码 1；键随即不存在 | 等锁 15.004s，拿锁到退出 0.22s |
+| 2 | SIGCONT P1 | 下一拍续期 NotHeld：`singleton lock lost; fail-stop`（holder 为空）→ `runtime infrastructure failure` → `service shutdown` → Mod 逆序停 → `singleton: lock was lost; not releasing` → 退出码 1；全程无 `fatal projection version conflict` | SIGCONT 到判定失锁 10ms，到退出 156ms |
+| 3 | 再起 P2 | 立即 `acquired`，重放 WAL、就绪；Mongo 20 个玩家与 SIGSTOP 时快照逐字段相同；机器人 B 10 个 `success=10`，Mongo 30 个玩家状态完全一致；60 个 saga 全部终结（30 completed / 30 compensated） | 启动到就绪 0.26s |
+| 4 | kill -9 P2（键剩 13.3s）→ 立刻起 P3 | 等待后 `acquired`，activity 正常启动、`service init` 正常（没有租约冲突） | 等锁 15.005s，启动到就绪 15.1s |
+| 5 | SIGTERM P3 → 40ms 后起 P4 | P3 66ms 停完并 `released`；P4 在 P3 释放之前就开始获取，于是在下一拍拿到 | P4 等锁 3.0s |
+| 5b | SIGTERM P4，**等它退出**再起 P5 | P5 立即 `acquired` | 等锁 0ms，P4 停机 0.35s |
+| 1b/2b/3b | 机器人跑在 P5 上（`player_tcp_connections 8`、`wal_unacked=1`）时 SIGSTOP → P6 → SIGCONT → P7 | 与 1～3 相同；P7 就绪后 `wal_unacked=0`，Mongo 40 个玩家与 SIGSTOP 时快照相同；P5 上的机器人 8 个在战斗阶段超时失败（进程被停），之前的写入都在 | P6 等锁 15.004s；SIGCONT 到判定失锁 4ms、到退出 62ms |
+| 1c/2c | 4 个只 `enter_game` 后空闲的机器人连在 P7 上，SIGSTOP → P8 → SIGCONT | P7 失锁后 `game: disconnected the players this process served sessions_closed=4` | P8 等锁 15.006s |
+| 6 | 起 P9（1300）与 Q1（1302） | 两个键各自持有；Q1 activity 的 `Live` 给出 `[1302, 1300]` | 都 < 0.2s 就绪 |
+| 6a | 两个 sid 各 10 个机器人 | 都 `success=10`；P9 46 次 `step left to the sender's sid` / 14 次 `ran a step handed over by another process`，Q1 45 / 16；120 个 saga 全部终结 | — |
+| 6b | 1300 上 10 个机器人赠礼进行中 kill -9 P9 → 立刻起 P10 | kill 时 7 个 saga 在途（`status=2` Waiting，debit / refund 阶段）；P10 上线后（`player_tcp_connections 0`，发送方全部离线）Q1 按 `FromSID` 转交、P10 执行，7 个全部 compensated（`attempt=0`），没有 `manual_required` | kill 到 P10 就绪 15.87s；最后一个在途 saga 在 P10 就绪后 0.55s 终结 |
+
+- 结论：§8.2 六步全部符合预期，等待时长与参数一致。kill -9 / SIGSTOP 之后“立刻”起新进程实测都是 15.0s：获取按 `启动 + k × renew_interval` 重试，键在最后一次续期后 `ttl` 过期，而最后一次续期在停之前 0～3s，过期时刻落在 `(启动+12s, 启动+15s]`，于是总在 `启动+15s` 那一拍拿到；§8.2 第 4 步写的“约 18s”是上界 `ttl + renew_interval`，新进程晚于停机启动时等待相应缩短。跨服赠礼按 `FromSID` 转交、离线发送方在其绑定 sid 上执行都在真实进程上成立。
+- 与方案预期的偏差（都不是代码缺陷，已写进文档）：
+  1. §8.2 第 5 步“SIGTERM 后立即拉起新进程不等待”只在旧进程**已经停完**时成立；旧进程还在停机时新进程等到释放后的下一拍（≤ `renew_interval`，实测 3.0s）——重试不监听删除。USER_GUIDE 与 T-212 已改为精确表述。
+  2. §8.2 第 2 步期望“日志里有 Nest 被围栏”：`NestMgr.Fence` 不打日志，可见的只有 `runtime infrastructure failure`（`OnFail` 回调在它之前同步执行完）；连接关闭可见（`disconnected the players this process served`，前提是失锁时还有服务中的连接——1b 那次机器人在暂停期间已超时断开，没有这条）。
+  3. P1 暂停超过 `etcd.lease_ttl`（10s）后恢复：`etcd Discovery: lease lost`，停机时 `mod etcd stop: etcd Discovery: revoke: etcdserver: requested lease not found` 记为 Mod 停机失败并并入退出错误。不影响 Release（只有超时算停机不完整）；同样的情况发生在一次正常停机里会让退出码变成非零。未修，记为观察。
+- 观察（未改）：
+  - 两个 sid 同时跑时，demo 场景的成本 p95 落进 16.384s 的桶，超过 loadtest 缺省 `-max-p95 16`，两边都 `rc=1`（机器人全部成功）：赠礼步骤落到非发送方进程要弹一两次才转交到位。单 sid 时整轮 7.4s。
+  - 开窗是先写者赢：P9 先以 `[1300]` 打开 `race-1791168300`，Q1 随后日志 `activity: window open … expected_game_sids [1302, 1300]` 是它自己算的，协调器记录仍是 `[1300]`。日志易误读，已写进 GAME_DEMO_TEMPLATE §9.15.3。
+  - cobra 在 `server exit` 之后打印 `Usage:`，与运行期错误无关的噪音。
+- 演练产物：日志、时间线、玩家快照、生成工程在 scratchpad `c5-drill/`（不进仓库）。
+- 清理：演练进程、etcd 均已停止。Mongo 库（`drill5_202610051033_*` 预演、`drill5_202610051039_*` 正式各 3 个）、JetStream 流（各 3 个 `DRILL5_…`）、Redis 键（`drill5_20261005103*:*`）以及预演误写进共享 `game` 库的四个集合，删除操作被本机的自动权限分类器拦下，**未删除**，交由维护者处理（命令见第 5 笔报告）。
+- 验证（`GOWORK=off`）：见提交说明。
+- 未验证：Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围内）；`c493a791` 与 obs34 的补偿预算调整之后的代码没有重跑演练（6b 在 `64acd782` 上测）。

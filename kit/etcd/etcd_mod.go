@@ -140,6 +140,9 @@ func (m *EtcdMod) Provide(r *app.Registry) error {
 	)
 }
 
+// Start 连接并在 Discovery 里注册本进程（<service_prefix><server_type>/<sid>）。注册只做地址 / 元数据
+// 发现，不是存活权威：“这个 sid 有没有进程在跑”以 App 单实例锁的 Live（app.ModSingleton）为准。
+// Mod Start 在 App 拿到单实例锁之后，所以同一 sid 同一时刻只有一个进程注册。
 func (m *EtcdMod) Start() error {
 	if m == nil || m.asm == nil {
 		return errors.New("etcd mod: not provided")

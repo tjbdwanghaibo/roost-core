@@ -361,8 +361,9 @@ const (
 	// have every player request checked before it reaches a handler.
 	//
 	// It exists for deployments with more than one process, where "this
-	// player is served here" is a fact with an expiry date: a process whose
-	// ownership lease has lapsed must stop acting on that player's requests,
+	// player is served here" is not true of every connection: a process must
+	// not act on requests for a player it is not serving right now (in the
+	// game-demo, one bound to another sid or whose copy is being unloaded),
 	// and the boundary is the only place that covers every endpoint at once —
 	// including endpoints added later. A project that publishes nothing under
 	// this name is unaffected.
@@ -371,8 +372,9 @@ const (
 
 // WriteGate decides whether this process may act on a request at all. It is
 // asked the message id as well as the player, because the gate's owner is the
-// only one that knows which messages must work BEFORE the process holds
-// anything — a login has to be able to run, since it is what takes ownership.
+// only one that knows which messages must work BEFORE the process serves the
+// player — a login has to be able to run, since it is what takes the player
+// into service.
 //
 // Returning an error refuses the request; the error reaches the client
 // through the usual coded-response path.

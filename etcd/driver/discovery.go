@@ -20,6 +20,10 @@ const (
 )
 
 // Discovery implements fetcd.IDiscovery.
+//
+// 键是 prefix + serviceType + "/" + sid，prefix 自己要带结尾的 "/"（这里不补）。注册只做地址 /
+// 元数据发现，etcd 租约过期 / 重新注册不代表进程存活与否：进程级存活以 App 单实例锁的 Live 为准
+// （docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §12）。
 type Discovery struct {
 	cli     *clientv3.Client
 	prefix  string

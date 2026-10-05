@@ -484,7 +484,7 @@ bootstrap 在 app 之前构造，构造函数里拿不到 registry；索引要�
 ### 9.8 第十六批（2026-09-19）：限时活动——World 的持久计时器与跨服聚合
 
 一条链子把两个零覆盖的东西串起来：core 的 `timer`（实体自己的定时器，没有任何生成工程用过）与
-kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，kit 最后两个零使用服务）。
+kit 的 `global` + `global/activity`（路由 / 租约〔租约 2026-10-05 已删除，见 §9.15.3〕与跨服阶段聚合，kit 最后两个零使用服务）。
 串起来才有意义——活动需要一个"到点关闭"的截止时刻，而截止时刻需要活过重启。
 
 #### 9.8.1 World 的计时器堆（core `timer`）
@@ -511,11 +511,8 @@ kit 的 `global` + `global/activity`（路由 / 租约与跨服阶段聚合，ki
   什么叫一分、结算发什么，全在 `game/activity` 和游戏进程里。
 - **窗口 id 由时钟算出来**（`race-<窗口起点>`），不是谁分配的。于是组里每台服务器对同一个窗口算出同一个 id，
   中途重启的服务器**重新加入它本来就在贡献的那个活动**，不需要任何人告诉它。
-- **租约来自 `global`**：进程启动 `Bind`（只插不改，第二次起冲突就是围栏）+ `AcquireLease`，循环里续约，
-  停机时归还。活动的预期集合取自 `LiveGames(候选集)`——**没起来的服务器不能被等**，否则每个窗口都要等到宽限期。
-  （**已被取代（2026-10-05）**：activity 不再持有 global 租约，预期集合改为 App 单实例锁的
-  `app.SingletonLiveness.Live(本进程 server_type, 候选集)`，`Bind` 的组绑定保留；见
-  [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §7.2；kit `global` 的租约 API 随后在第 3b 笔删除。）
+- **预期集合**：进程启动时 `Bind` 到活动组（只插不改，第二次起冲突就是围栏）；开窗时只等活着的服务器——没起来的服务器不能被等，
+  否则每个窗口都要等到宽限期。（2026-10-05 起“活着”由 App 单实例锁的 `Live` 回答，原来的 global 租约已删除，见 §9.15.3。）
 - **贡献的幂等锚是 dungeon run id**，和清关奖励用的是同一个：重投的贡献被 coordinator 的 reservation 挡掉，
   而不是记两次。机器人断言的是精确的 1（清关一次 + 重放一次），不是"至少 1"。
 - **结算的顺序是 邮件 → 记录 → ack**，每一步都能重复：邮件按 (活动, 玩家) 幂等；World 上的记录让整张榜
@@ -662,26 +659,9 @@ dataengine fatal storage outcome: ... fatal projection version conflict: game/pl
 | `game/world/1034` | 两个进程各自的 World 单例 | `WorldUniqueID` 是常量 `1`，注释却写着"每个 game server 各有一个" |
 | （不是写冲突）`battle not found` | 两个进程各自的 matchmaker | 谁提交了匹配谁就在**自己内存里**建战斗，玩家却连在另一个进程上 |
 
-#### 9.11.2 所有权表：`game/playerroute`
+#### 9.11.2 所有权表：`game/playerroute`（已删除）
 
-> **已被取代（2026-10-05）**：本节描述的按玩家 Redis 租约表 `game/playerroute` 及 `PlayerOwners` 的租约、续租、
-> 归还已删除，改为静态绑定——玩家只在 account 绑定的 sid（`Role.ServerID`）上服务，登录按会话 Claims 里的
-> `server_id` 判定，同一 sid 只有一个进程由 App 单实例锁保证，`PlayerOwners` 只剩本地驻留表与闲置卸载；
-> `player_elsewhere` 的含义收窄为“玩家绑定在另一个服，不要在本服重试”。见
-> [静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)、[App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)
-> §7；完整的新节在该方案第 5 笔补写。下文保留作历史记录。
-
-一个 Redis key 一个玩家，值是持有者 sid，带 30 秒租约、10 秒续约。`Claim` 是 insert-only（SetNX），
-所以"没人持有"时两个进程抢同一份工作只会有一个赢；`GetRoute` 把无人持有报成 **NOT FOUND** 而不是"我"——
-报"我"就等于每个进程都是每个空闲玩家的持有者，正是这张表要防的事。
-
-一个反直觉的结论写在这里，因为它是第一版做错的地方：**所有权不跟着连接走，跟着实体走。**
-第一版在最后一个 session 关闭时释放，实跑里立刻看见六个刚下线玩家的礼物步骤在几秒内漂到另一个进程——
-Player 实体在连接断开后仍然驻留在原进程（demo 从不卸载它），于是"释放"等于把文档交给另一个进程去加载第二份。
-现在只有两种情况结束所有权：实体被销毁（demo 里不会发生，因此长驻进程会持续持有）或进程没了、租约自然到期。
-登录因此变成 fail-closed：落在非持有者进程上的登录被 `player_elsewhere`（100015）明确拒绝，
-客户端改连持有者的网关，或者等对方的租约到期——demo 没有把驻留实体在进程间搬家的手段，
-"明确拒绝"和"悄悄写坏"之间只能选前者。
+> **已被取代（2026-10-05）**：按玩家的 Redis 租约表与 `PlayerOwners` 的租约部分已删除，现行设计见 §9.15（静态绑定 + App 单实例锁）。
 
 #### 9.11.3 准入必须排在认领之前（core 的新缝 `StepConsumerConfig.Admit`）
 
@@ -703,7 +683,7 @@ World 从 `const WorldUniqueID int64 = 1` 变成 `WorldUniqueID(registry) = sid`
 各有一个"，只是 id 没有兑现这句话。Scene 是 `noPersist`，两个进程各有一份内存对象不写同一个文档，不动。
 
 matchmaker 在分组前按所有权过滤候选票（`OwnedHere`，**不**认领——只是看一眼就把空闲玩家拉进自己进程是错的）。
-（2026-10-05 起改为 `Resident`：只看本地驻留表，见 §9.11.2 的取代说明。）
+（2026-10-05 起改为 `Resident`：只看本地驻留表，见 §9.15.5。）
 代价写在这里：**跨进程的匹配做不了**，它需要一个战斗宿主和把另一方输入路由过去的能力，demo 没有；
 现在的失败形态是"队列多等一会儿"，而不是"建出一场谁都打不了的战斗"。
 
@@ -731,15 +711,8 @@ matchmaker 在分组前按所有权过滤候选票（`OwnedHere`，**不**认领
 
 ### 9.12 第二十批（2026-09-19）：拒绝变成转交，`ownerroute` 有了第一个使用方
 
-> **部分取代（2026-10-05）**：“拒绝 + 转交、没有收据就不 ack、`runHandoff` 自己认领”的结构不变，
-> 改变的是**按什么路由**：持有者不再查按玩家的 Redis 表，赠礼命令自己携带发送方绑定的 sid
-> （`gift.State.FromSID`，json `from_sid`，由发起赠礼的进程写入本进程 sid；`start_gift` 多一个 `fromSID` 参数）。
-> 准入与转交接收方都用 `PlayerOwners.AdmitBound(From, FromSID)`：是本服就接入并执行（**离线、没有副本的发送方
-> 也照常在其绑定 sid 上 debit / refund**，Nest 在慢池冷加载）；不是本服就转交给 `FromSID` 后拒绝，本进程不建驻留
-> 记录；`FromSID == 0` 视为非法载荷，拒绝并记 Error，不兜底。`ownerroute.Router` 的键换成 sid、解析器是
-> 静态的 `GetRoute(sid) = (sid, sid > 0)`。下文“无人持有时不认领”“所有权读不出来时拒绝”两条测试承诺已随
-> 静态绑定改写或删除，现行的 `gift_handoff_test` 见 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §13 第 4 笔记录。
-> 下文保留作历史记录。
+> **部分取代（2026-10-05）**：“拒绝 + 转交、没有收据就不 ack、`runHandoff` 自己认领”的结构不变，路由改为按命令携带的
+> `FromSID`（离线发送方也在其绑定 sid 上执行），见 §9.15.4；下文“无人持有时不认领”“所有权读不出来时拒绝”两条承诺已改写或删除。下文保留作历史记录。
 
 §9.11.6 的第一条。上一批把不归自己的步骤**拒掉**，靠 durable 的重投最终落到持有者身上；
 这一批把拒绝改成**拒绝 + 转交**，于是 `ownerroute` 这个此前零覆盖的包有了真实使用方。
@@ -915,6 +888,70 @@ snapshot）、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 playe
 场景里的那个重试**没有**保留：它不能解决 79 秒，只会把一个已知问题藏在一次更慢的绿跑里。
 （顺带记一个坑：我第一版把 `wait` 写在 `found_guild` **后面**，sequence 遇错即停，于是 20 次重试在几毫秒内烧完。
 场景里既有的 `poll_match` 重试就是 `wait` 在前，正是这个原因。）
+
+### 9.15 2026-10-05：静态绑定 + App 单实例锁（取代 §9.11.2 的所有权表）
+
+[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)与 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md)
+第 1～5 笔之后，“同一玩家至多一个写者”不再靠按玩家的共享租约，而是拆成两条各自简单的事实：
+
+1. **玩家只在绑定的 sid 上服务**（静态绑定，game-demo 负责）；
+2. **同一服务类型 + sid 同一时刻只有一个进程**（App 单实例锁，core `app` 负责，模块不感知）。
+
+两条合起来就是“一个玩家一个写者”。§9.11.2 的 `game/playerroute`（Redis 租约表、续约、归还、无人持有报 NOT FOUND）、
+`PlayerOwners` 的租约部分与 activity 自己的 global 租约都已删除。
+
+#### 9.15.1 绑定从哪里来、登录怎么判
+
+- **来源**：account 建角时把角色绑定到一个 game sid（`Role.ServerID`），之后不迁移。机器人用
+  `cmd/loadtest -server-id <sid>` 在指定 sid 上建角色（第二个 game 进程的机器人要在它的 sid 上建）。
+- **登录**：`auth.go` 校验会话时把 account 返回的 `role.ServerID` 写进 `Principal.Claims["server_id"]`
+  （权威值，不是客户端自报）；`enter_game` 用它调 `PlayerOwners.Serve`：
+  - 等于本进程 sid → 建立驻留记录、装载 Player；
+  - 是别的 sid → `player_elsewhere`（100015，带 `owner_sid`），客户端改连那个服，**不要在本服重试**；
+  - Claims 里没有 `server_id`（认证器被换掉、没记绑定）→ fail-closed，同样 `player_elsewhere`（`owner_sid=0`）并记 Error。
+- **驻留表**：`PlayerOwners` 只记“本进程正在为哪些玩家服务”。记录只在绑定校验通过后建立（登录走 `Serve`，
+  后台步骤走 `AdmitBound(玩家, 命令携带的 sid)`），所以 WriteGate 的 `Admit` 只看“有记录且不在卸载中”就够了，
+  拒绝错误是 `ErrNotServedHere`。
+- **闲置卸载**：没有连接、`IdleUnload`（5 分钟）内没被使用的玩家，每 30 秒一轮扫描，丢掉内存副本、删掉记录，
+  不交出任何东西；之后在本进程重新装载，等待的是 DataEngine 冷加载已有的投影屏障。卸载进行中 `Admit` /
+  `AdmitBound` 拒绝，`Serve` 最多等 5 秒（超出回 `login_timeout`）。这只是内存管理，与所有权无关。
+- **停机**：`Service.Shutdown` 第一步断开全部服务中的玩家（日志 `game: disconnected the players this process served`），
+  优雅停机与 fail-stop 走同一路径。
+
+#### 9.15.2 App 单实例锁在 demo 里做什么
+
+game 服务带 DataEngine，生成配置默认 `singleton.enabled: true`（键 `<singleton.key_prefix>:<server_type>:<sid>`，
+ttl / renew_interval / guard / startup_wait = 15s / 3s / 5s / 30s）。App 在任何 Mod Init 之前拿锁、每 3 秒续期、
+失锁即 fail-stop（`OnFail` 先围栏 Nest，再走 `Service.Shutdown` 与 Mod 停机）、全部 Mod 停完才释放。
+demo 代码里没有任何“持有锁吗”的检查——这正是维护者要的：模块不感知锁。崩溃重启时新进程会先等旧键过期
+（最多约 ttl + renew_interval），真实进程演练的时间线见方案 §13 第 5 笔。
+
+#### 9.15.3 activity 用 `Live`
+
+activity 不再持有 global 租约。开窗时的预期集合是
+`app.SingletonLiveness.Live(本进程 server_type, activity.game_sids ∪ 本 sid)`：持有锁的 sid 就算活
+（从拿锁到全部 Mod 停完，崩溃的进程最多再算 ttl 秒）；查询为空时只等自己，查询报错这一拍不开窗。
+`routing.Bind` 的组绑定保留。前提：同一部署的 game 进程共用一个 `redis.*` 与 `singleton.key_prefix`，
+且 game 没有关掉 singleton（关掉后 `Live` 恒空，activity 退化为只等自己）。开窗是先写者赢
+（`OpenActivity` 已存在即返回），后到的进程日志里的 `expected_game_sids` 是它自己算的，以协调器记录为准。
+
+#### 9.15.4 赠礼按 `FromSID` 路由
+
+赠礼状态携带发送方绑定的 sid（`gift.State.FromSID`，json `from_sid`，由发起赠礼的进程写入本进程 sid）。
+saga 步骤落到哪个 game 进程由共享 durable 决定；准入与转交接收方都用 `AdmitBound(From, FromSID)`：
+
+- 是本服 → 接入并执行，**离线、没有副本的发送方也照常在其绑定 sid 上 debit / refund**（Nest 慢池冷加载）；
+- 不是本服 → 经 `ownerroute` 转交给 `FromSID`（bus 寻址 `<prefix>.svc.<game>.<sid>`）后拒绝，本进程不建驻留记录；
+- `FromSID == 0` → 非法载荷，拒绝并记 Error，不兜底。
+
+转交是“一两次弹跳”而不是直达：演练里两个 sid 各 10 个机器人时，每个进程约 45 次“step left to the sender's sid”
+对应 15 次“ran a step handed over by another process”，全部 saga 终结；把发送方所在 sid 的进程 kill -9
+之后，在途的 debit / refund 等新进程拿锁上线（约 16 秒）后经转交在离线发送方身上执行完，没有进 `manual_required`。
+
+#### 9.15.5 matchmaker 只看本地驻留
+
+matchmaker 分组前用 `Resident` 过滤候选票：只匹配本进程驻留的玩家，只看不认领（只读查看不算使用）。
+跨进程匹配仍然做不了（§9.11.4 的代价不变）。
 
 ## 8. 相关文件速查
 

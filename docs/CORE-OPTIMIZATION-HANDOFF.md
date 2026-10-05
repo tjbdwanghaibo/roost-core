@@ -129,6 +129,7 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 - **已撤回**：独立10ms快照预算窗口试验无稳定收益，最终无 `SnapshotBudget.Interval` / `-snapshot-window` API；不要据旧方案补回。也没有按负载ID特判、跳过冻结或拼接opaque delta。
 - **独立后续需求**：共享帧协议+网关多播需要网关/客户端配套；并行Flush、空间分片、每Profile独立版本链当前没有收益证据，不当作漏掉的收尾。
+- **2026-10-05 静态绑定 + App 单实例锁已实施（main，未发版）**：[App 单实例锁方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) 第 1～5 笔与[静态绑定方案](feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md)落地——core `app` 在任何 Mod Init 之前拿 `<key_prefix>:<server_type>:<sid>` 的 Redis 锁、失锁 fail-stop（`RuntimeFailure.OnFail` 先围栏 Nest）、全部 Mod 停完才释放，`app.ModSingleton` 提供只读 `Live`；game-demo 玩家只在 account 绑定的 sid 上服务（驻留表 + 闲置卸载），activity 用 `Live`，赠礼按 `FromSID` 路由；`game/playerroute`、activity 全局租约、kit `service/global` 租约 API、`redis.lock` / `etcd.election` capability 删除。第 5 笔在隔离环境做了真实进程演练（SIGSTOP / SIGCONT / kill -9 / SIGTERM、两个 sid + 跨服赠礼，时间线见方案 §13）。§7 里玩家租约相关的 RR（RR-20260920-03 / 04 / 09～12、RR-20260921-03 / 04、RR-20260926-31、RR-20260929-13 / 17、RR-20260930-23 / 24、RR-20261001-07、RR-20261004-10 / 11 / 14）所在代码已被取代，索引行已标注。
 - **2026-10-04 v1.19.2 已发布（tag → `4ee44f34`）**：v1.19.1 回归 RR-20261004-09、RR-20261004-08、历史遗留 RR-20260921-03 / 04 / 05；本地 pretag（干净 worktree）与故障矩阵 21/21（`matrix-v1192-4ee44f34`）通过后打 tag（维护者 10-04：验收以本地为准，不等 GitHub CI），tag 后生成 game-demo 编译 / vet 通过。
 - **2026-10-04 v1.19.1 已发布（tag → `d3e69336`）**：NC 修复复审确认的 RR-20261004-02～07 与 NC-30；pretag、故障矩阵 21/21（`matrix-v1191-d3e69336`）、CI 全绿后打 tag，tag 后生成 game-demo 编译 / vet 通过。
 - **2026-10-04 v1.19.0 已发布（tag → `74e1ba39`）**：发版前 pretag（干净 worktree）通过、Remote 故障矩阵 21/21（`artifacts/perf/remote/matrix-v1190-74e1ba39`，本地）、main CI 全绿（此前 ci 自 10-01 起红：RR-20261001-01 补修与 NC-07 补修，见 CHANGELOG）；生成的 game-demo 对 v1.18.0 与 v1.19.0 均可编译，生成器 Core 下限不变。下表 §7 中 10-01 之后各行“未发布”= 已随 v1.19.0 发布。
@@ -292,7 +293,7 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20260926-28](bug/RR-20260926-28.md) | Durability 0 未提交结果永无结论 | [修复](bugfix/RR-20260926-28.md) |
 | [RR-20260926-29](bug/RR-20260926-29.md) | kit/dataengine 集成测试夹具失效 | [修复](bugfix/RR-20260926-29.md) |
 | [RR-20260926-30](bug/RR-20260926-30.md) | 本地 lease fence 跳过后投影 fatal | [修复](bugfix/RR-20260926-30.md)（v1.17.1） |
-| [RR-20260926-31](bug/RR-20260926-31.md) | 闲置交还未等投影即释放租约 | [修复](bugfix/RR-20260926-31.md) |
+| [RR-20260926-31](bug/RR-20260926-31.md) | 闲置交还未等投影即释放租约 | [修复](bugfix/RR-20260926-31.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20260926-32](bug/RR-20260926-32.md) | 提交后 release hook panic 仍 Abort | [修复](bugfix/RR-20260926-32.md) |
 | [RR-20260926-33](bug/RR-20260926-33.md) | WAL fsync 失败后仍信任后续 fsync，checkpoint 越过未落盘数据 | [修复](bugfix/RR-20260926-33.md)（v1.17.1） |
 | [RR-20260926-34](bug/RR-20260926-34.md) | 投影在 Mongo 事务内撞键后继续读，真实 Mongo 下投影卡死 | [修复](bugfix/RR-20260926-34.md)（v1.17.1） |
@@ -403,11 +404,11 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20260930-15](bug/RR-20260930-15.md) | P3 值类型实体实现在 `holding` 比较时 panic（N29） | [修复](bugfix/RR-20260930-15.md)（未发布；契约 + 入口校验） |
 | [RR-20261004-06](bug/RR-20261004-06.md) | P2 etcd Campaign 在 session 建好后的失败 / 取消分支不再撤…（NC 复审） | [修复](bugfix/RR-20261004-06.md)（未发布；NC-11 回退修复；T-208） |
 | [RR-20260921-05](bug/RR-20260921-05.md) | P2 本仓 go:generate 产物与 codegen 运行期守卫无 CI 校验（09-21 登记、10-04 核实） | [修复](bugfix/RR-20260921-05.md)（未发布） |
-| [RR-20260921-03](bug/RR-20260921-03.md) | P1 playerowner 归还中被重新 Claim，`mine=true` 而共享表无主（09-21 登记、10-04 核实） | [修复](bugfix/RR-20260921-03.md)（未发布） |
-| [RR-20260921-04](bug/RR-20260921-04.md) | P2 归还批次占住刷新循环 45s > Lease（09-21 登记、10-04 核实） | [修复](bugfix/RR-20260921-04.md)（未发布） |
-| [RR-20261004-10](bug/RR-20261004-10.md) | P2 playerowner 重新认领无回合预算、续租确认排在等待之后（W-03） | [修复](bugfix/RR-20261004-10.md)（未发布；已生成工程手工合并） |
-| [RR-20261004-11](bug/RR-20261004-11.md) | P3 撤离进行中 Admit 照常放行（W-04） | [修复](bugfix/RR-20261004-11.md)（未发布；已生成工程手工合并） |
-| [RR-20261004-14](bug/RR-20261004-14.md) | P3 playerowner 窗口起算时刻与认领丢回复（W-07） | [修复](bugfix/RR-20261004-14.md)（未发布；已生成工程手工合并） |
+| [RR-20260921-03](bug/RR-20260921-03.md) | P1 playerowner 归还中被重新 Claim，`mine=true` 而共享表无主（09-21 登记、10-04 核实） | [修复](bugfix/RR-20260921-03.md)（未发布） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| [RR-20260921-04](bug/RR-20260921-04.md) | P2 归还批次占住刷新循环 45s > Lease（09-21 登记、10-04 核实） | [修复](bugfix/RR-20260921-04.md)（未发布） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| [RR-20261004-10](bug/RR-20261004-10.md) | P2 playerowner 重新认领无回合预算、续租确认排在等待之后（W-03） | [修复](bugfix/RR-20261004-10.md)（未发布；已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| [RR-20261004-11](bug/RR-20261004-11.md) | P3 撤离进行中 Admit 照常放行（W-04） | [修复](bugfix/RR-20261004-11.md)（未发布；已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| [RR-20261004-14](bug/RR-20261004-14.md) | P3 playerowner 窗口起算时刻与认领丢回复（W-07） | [修复](bugfix/RR-20261004-14.md)（未发布；已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20261004-13](bug/RR-20261004-13.md) | P3 go 子命令超时不杀孙进程 / Wait 被管道拖住（W-06） | [修复](bugfix/RR-20261004-13.md)（未发布；Windows 未实跑） |
 | [RR-20261004-12](bug/RR-20261004-12.md) | P3 生成器 chdir 整个进程（W-2026-10-04-05） | [修复](bugfix/RR-20261004-12.md)（未发布；生成物不变） |
 | [RR-20261004-09](bug/RR-20261004-09.md) | P2 RefHMap 注册表 guard 误报冲突（NC-30 回归，v1.19.1） | [修复](bugfix/RR-20261004-09.md)（未发布；v1.19.1 回归修复） |
@@ -419,7 +420,7 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20261004-05](bug/RR-20261004-05.md) | P3 mongotest 忽略 `IndexModel.Sparse`，非 sparse 唯一索引把缺字段跳过，而真实 Mongo 当作 null（替身比真实宽松）（NC 复审） | [修复](bugfix/RR-20261004-05.md)（未发布；替身行为收紧） |
 | [RR-20261004-01](bug/RR-20261004-01.md) | P2 TryLock 取锁结果未知不记 token，实体卡到 LockTTL | [修复](bugfix/RR-20261004-01.md)（未发布；token 格式 `<base32>.<seq>`，TryLock 脚本 ARGV 3 → 4；T-207） |
 | [RR-20261001-06](bug/RR-20261001-06.md) | P2 account pending slot 无释放入口（W-01 拍板） | [修复](bugfix/RR-20261001-06.md)（未发布；新码 560115 / 560116、`Admin.ResolvePendingCreation`、committed 自动释放、T-182） |
-| [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | [修复](bugfix/RR-20261001-07.md)（未发布；已生成工程手工合并） |
+| [RR-20261001-07](bug/RR-20261001-07.md) | P3 playerowner 取回后 stale 副本被 Refresh 续租（W-02 拍板） | [修复](bugfix/RR-20261001-07.md)（未发布；已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20261001-08](bug/RR-20261001-08.md) | P3 chat 最新页 `Gap=true` 误报（W-03 拍板） | [修复](bugfix/RR-20261001-08.md)（未发布；wire 语义收紧，无 API 变化） |
 | [RR-20261001-09](bug/RR-20261001-09.md) | P3 activity legacy Opening / 坏 Intent（W-04 拍板） | [修复](bugfix/RR-20261001-09.md)（未发布；T-181） |
 | [RR-20261001-05](bug/RR-20261001-05.md) | P2 activity pending 名额在 ledger TTL 后永不回收（复审 B 线） | [修复](bugfix/RR-20261001-05.md)（未发布；新码 620119、`Admin.ReconcileProgress`、T-180） |
@@ -428,8 +429,8 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20261001-04](bug/RR-20261001-04.md) | P3 v1 manifest + 手写 JSON 无迁移说明（复审 B 线） | [修复](bugfix/RR-20261001-04.md)（未发布；错误文本 + 文档） |
 | [RR-20261001-01](bug/RR-20261001-01.md) | P2 ci Redis job 漏设四个门变量，service Redis 变体静默不跑 | [修复](bugfix/RR-20261001-01.md)（未发布） |
 | [RR-20260930-22](bug/RR-20260930-22.md) | P2 game-demo gift 收件人检查读错库（B27 第 3 批暴露） | [修复](bugfix/RR-20260930-22.md)（未发布） |
-| [RR-20260930-23](bug/RR-20260930-23.md) | P2 续租中断重取后在线玩家被 Destroy、脱离场景（B27 第 3 批暴露） | [修复](bugfix/RR-20260930-23.md)（未发布；T-179，已生成工程手工合并） |
-| [RR-20260930-24](bug/RR-20260930-24.md) | P3 活动租约丢失后永不重取（B27 第 3 批暴露） | [修复](bugfix/RR-20260930-24.md)（未发布） |
+| [RR-20260930-23](bug/RR-20260930-23.md) | P2 续租中断重取后在线玩家被 Destroy、脱离场景（B27 第 3 批暴露） | [修复](bugfix/RR-20260930-23.md)（未发布；T-179，已生成工程手工合并） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| [RR-20260930-24](bug/RR-20260930-24.md) | P3 活动租约丢失后永不重取（B27 第 3 批暴露） | [修复](bugfix/RR-20260930-24.md)（未发布） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20260930-20](bug/RR-20260930-20.md) | P2 回滚后 release hook panic 吞掉业务错误（B27 第 2 批暴露） | [修复](bugfix/RR-20260930-20.md)（未发布；`nest/nest_dispatch.go` `joinRecoveredError`） |
 | [RR-20260930-21](bug/RR-20260930-21.md) | P2 解锁失败后本地 `acquired` 不清，实体本进程内永久不可写（B27 第 2 批暴露） | [修复](bugfix/RR-20260930-21.md)（未发布；释放失败 → 持有状态未知，`TryLock` 以 Redis 为准；T-178） |
 | [RR-20260930-16](bug/RR-20260930-16.md) | P4 CRLF 配置追加 Mod 段用 LF（N23） | [修复](bugfix/RR-20260930-16.md)（未发布） |

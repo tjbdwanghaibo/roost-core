@@ -55,26 +55,26 @@
 [RR-20261004-07](RR-20261004-07.md)：`Bus.StopWithContext` 超预算只返回 ctx 错误并保留 pool，之后的调用继续等同一次排空；NatsMod 只在 ctx 错误时保留 bus / asm、终态错误照常关闭 Assembly；`Bus.Stop()` / `RPCClient.Stop()` 停止已发起时立即返回（复审 S2）；RPC 停止排空加 `callbackMu` 屏障（S1，确定性红）；两条回归由挂起改为断言失败（S4）（未发版）。
 [RR-20261004-08](RR-20261004-08.md)：`Assembly.Close` drain 失败（超预算 / 已关闭 / 重连中）返回终态 `natsdriver.ErrClosedUndrained`（包裹原错误），NatsMod 报告并释放 `m.asm`，之后 Stop 返回 nil；RPC 回调等待超预算时仍保留可重试；真实 NATS 与协议桩先红后绿（未发版）。
 [RR-20260921-05](RR-20260921-05.md)：ci.yml 新 job `generated-code`：`go generate ./...` 后 `git status --porcelain` 非空即失败，并跑 codegen 四个运行期守卫；守卫 pin 改由 `codegen/scripts/core-pin.sh` 读 `minimumVersions.Core`；根包测试钉住形状（未发版）。
-[RR-20260921-03](RR-20260921-03.md)：game-demo 归还进行中的 Claim 等归还结束再决定（`enterClaim` / `claiming` 互斥，`handingBack` 只由归还清除，Release 前复核、释放完才解除标记）；两种交错回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
-[RR-20260921-04](RR-20260921-04.md)：game-demo 闲置归还回合时间预算 `handBackPassBudget` = Lease − RefreshInterval − AdmissionGuard（15s），撤离与投影等待都在预算内，没轮到的留在服务到下一轮；可控时钟回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
+[RR-20260921-03](RR-20260921-03.md)：game-demo 归还进行中的 Claim 等归还结束再决定（`enterClaim` / `claiming` 互斥，`handingBack` 只由归还清除，Release 前复核、释放完才解除标记）；两种交错回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20260921-04](RR-20260921-04.md)：game-demo 闲置归还回合时间预算 `handBackPassBudget` = Lease − RefreshInterval − AdmissionGuard（15s），撤离与投影等待都在预算内，没轮到的留在服务到下一轮；可控时钟回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261004-09](RR-20261004-09.md)：RefHMap Set / Delete 的注册表 guard 由逐字节比较改为“当前注册表 ⊆ 本次 KEYS”覆盖检查，同布局并发首建 / 并发删除 / 交错 / 到期不再误报，schema 竞争仍拒绝；`LayeredStore.Delete` 远端失败也删 L1；真实 Redis 7 红 1 对照转绿（未发版）。
 [RR-20261004-12](RR-20261004-12.md)：`generator.Run` 接收 root、参数取 root 下绝对路径，`servicerpc.RunIn`；`runGenerators` 不再 chdir 整个进程，生成物逐字节不变（未发版）。
-[RR-20261004-10](RR-20261004-10.md)：game-demo `renew` 先确认全部续租、再在同一份 `handBackPassBudget` 内先重新认领后归还；可控时钟与缩放回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
-[RR-20261004-11](RR-20261004-11.md)：game-demo `Admit` 在玩家撤离进行中拒绝，撤离结束即回到服务（不 abandon 无间断租约）；RR-20260921-04 缩放用例断言按新承诺改写；已生成工程手工合并 playerowner.go（未发版）。
+[RR-20261004-10](RR-20261004-10.md)：game-demo `renew` 先确认全部续租、再在同一份 `handBackPassBudget` 内先重新认领后归还；可控时钟与缩放回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20261004-11](RR-20261004-11.md)：game-demo `Admit` 在玩家撤离进行中拒绝，撤离结束即回到服务（不 abandon 无间断租约）；RR-20260921-04 缩放用例断言按新承诺改写；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261004-13](RR-20261004-13.md)：新增 `runCommandTree`——`WaitDelay` 5s；Unix 进程组 + `kill(-pgid)`，运行期间接住 SIGINT / SIGTERM / SIGHUP 杀树后重发信号（Ctrl-C 行为不变）；Windows `taskkill /T /F`；doctor 与依赖命令都改用它（未发版）。
-[RR-20261004-14](RR-20261004-14.md)：窗口从设键那次请求（SetNX / Refresh 发出时刻）起算；未答复的跨间断认领记 interrupted，interrupted 的 Held 改为重新认领；已生成工程手工合并 playerowner.go（未发版）。
+[RR-20261004-14](RR-20261004-14.md)：窗口从设键那次请求（SetNX / Refresh 发出时刻）起算；未答复的跨间断认领记 interrupted，interrupted 的 Held 改为重新认领；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261004-01](RR-20261004-01.md)：取锁 token 按锁对象分代（随机前缀 + 递增序号），owner 是本锁对象更早一代时下一次 TryLock 由 Lua 换新 token / 新 fence 取回，别人持有照旧 NotAcquired、迟到旧代脚本挤不掉新代；RR-20260930-21 的 `releaseUnknownToken` 并入同一判定；T-207（未发版）。
 [RR-20261001-06](RR-20261001-06.md)：名字被别的账号 committed 后同名重试自动释放 pending slot（仍答 `ErrNameTaken`，孤儿未发布角色记录保留且不可玩）；新 owner-only `Admin.ResolvePendingCreation` 备注写 `Account.admin_note`、版本 + 身份围栏 DeleteIf 释放，名字仍被本计划 reserved / committed、已发布、legacy 空 slot 拒绝 `ErrNotResolvable`（560115）；Memory + 真实 Redis 真等租约过期先红后绿；T-182（未发版）。
 [RR-20261001-09](RR-20261001-09.md)：activity sweep 对无 Intent 的 legacy Opening 过 `OpeningGrace` 回收名额（CAS 里只删仍无计划的那一段）；畸形 Intent 跳过、指标 `sweep.opening_intent_malformed`、日志只在出现 / 恢复时各一次、名额保留；单条 Create 失败在同组其余工作做完后再上报；Memory + 真实 Redis 先红后绿；T-181（未发版）。
 [RR-20261001-08](RR-20261001-08.md)：chat `pageOf` 去掉“到达 ring 头部且头部序号 > 1”这条洞判定，普通容量淘汰后的无游标最新页 / 翻到保留边缘 `Gap=false`、不计 `history.gap`；Gap 只剩页内洞、游标点名消息已不在、尾部缺失三种；Memory + 真实 Redis 先红后绿（未发版）。
-[RR-20261001-07](RR-20261001-07.md)：game-demo `PlayerOwners.Claim` 扔副本失败后 `abandon` 本地租约状态——刷新循环不再续、`confirmRenewal` 不再清 `interrupted`、`Admit` 持续拒绝，租约自然过期，恢复点是之后的 `Claim` 等清除完成；模板回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。
+[RR-20261001-07](RR-20261001-07.md)：game-demo `PlayerOwners.Claim` 扔副本失败后 `abandon` 本地租约状态——刷新循环不再续、`confirmRenewal` 不再清 `interrupted`、`Admit` 持续拒绝，租约自然过期，恢复点是之后的 `Claim` 等清除完成；模板回归先红后绿；已生成工程手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261001-05](RR-20261001-05.md)：activity `applyProgress` 把 ledger 条目已过期的 pending 证明回收（条目消失即越过 ReservationTTL 重试地平线）；满窗改报 `ErrProgressBacklog`（620119）不再是 `ErrConflict`；新 owner-only `Admin.ReconcileProgress` 补 ledger mark 后释放证明；Memory + 真实 Redis 真等 TTL 先红后绿；T-180（未发版）。
 [RR-20261001-04](RR-20261001-04.md)：v1 manifest 遇未认领 JSON 的错误文本写明两条恢复路径（旧生成物删除；手写 JSON 移出 → 生成升 v2 → 移回）并指向 `CODEGEN_REFERENCE.zh-CN.md` §9.1（新增 manifest / 退役 / v1 升级一节）；失败设计不变（未发版）。
 [RR-20261001-03](RR-20261001-03.md)：`roost generate` config-data 在 `configs/table` 没有 CSV 时只有 manifest `tables` 非空才跑 tablegen（新增 `tablegen.ManifestOwnsJSON`），schema 已写、CSV 未写的工程恢复 v1.17.2 的通过；RR-09 退役回归不变（未发版）。
 [RR-20261001-02](RR-20261001-02.md)：`sameSendIntent` 去掉 `reflect.DeepEqual` 改逐字段比较（切片 `slices.Equal` / `bytes.Equal`，nil 与空等价），自定义 EnvelopeStore 还原空切片时 RR-20260929-16 的同 RequestID 恢复不再永久 `ErrConflict`；替换正文 / 期限 / 收件人仍拒绝（未发版）。
 [RR-20261001-01](RR-20261001-01.md)：Redis job `env:` 补四个门变量、守卫正则扩展；根包 `TestCIRedisJobSetsEveryRedisGateVariable` 把测试文件里 `os.Getenv` 的 Redis 门变量钉到 ci.yml（未发版）。
-[RR-20260930-24](RR-20260930-24.md)：game-demo 活动租约续租失败按 `errors.Is` 分类——过期 / 不持有立刻 `AcquireLease`，拿不到进 standby 每心跳重试，瞬时错误下周期再续，日志只在状态变化时打（未发版）。
-[RR-20260930-23](RR-20260930-23.md)：game-demo `PlayerOwners.renew` 取回失效租约后像围栏一样 `CloseSessions`（日志加 `sessions_closed`），副本扔不掉的结局（`errStaleCopyKept`）同样关连接；两进程 + SIGSTOP 40s 演练实跑通过；T-179；已生成工程须手工合并 playerowner.go（未发版）。
+[RR-20260930-24](RR-20260930-24.md)：game-demo 活动租约续租失败按 `errors.Is` 分类——过期 / 不持有立刻 `AcquireLease`，拿不到进 standby 每心跳重试，瞬时错误下周期再续，日志只在状态变化时打（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20260930-23](RR-20260930-23.md)：game-demo `PlayerOwners.renew` 取回失效租约后像围栏一样 `CloseSessions`（日志加 `sessions_closed`），副本扔不掉的结局（`errStaleCopyKept`）同样关连接；两进程 + SIGSTOP 40s 演练实跑通过；T-179；已生成工程须手工合并 playerowner.go（未发版）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20260930-22](RR-20260930-22.md)：game-demo gift deliver 收件人检查改读 Player DAO 的 `db.PlayerDaoDBName` / `PlayerDaoCollection`，隔离端到端 6 机器人通过；已有工程 `project sync` 或手改一处（未发版）。
 [RR-20260930-21](RR-20260930-21.md)：释放 Redis 锁没有明确答复（错误用尽重试 / ctx 到期）后锁进入“持有状态未知”，下一次 `TryLock` 以 Redis 为准——租约仍是自己的就在同一条 Lua 里换新 token / 新 fence 重新取得，被别人持有走 NotAcquired；端到端用例去掉 Skip；T-178（未发版）。
 [RR-20260930-20](RR-20260930-20.md)：`dispatchLoadedEntities` 兜底释放在自己的 recover 边界里跑，hook panic 以 `errors.Join` 并进在途业务错误；`runNestLogic` / `dispatchNest` 的 recover 改并入不覆盖；已提交路径 `ErrAfterCommitFailed` 语义与文本不变；两条生成链路端到端用例去 Skip（未发版）。
@@ -325,7 +325,7 @@
 
 [RR-20260926-32](RR-20260926-32.md)：Remote 批次按显式持久提交状态决定 Commit / Abort。
 
-[RR-20260926-31](RR-20260926-31.md)：demo 闲置交还驱逐后等待本实体投影再释放租约。
+[RR-20260926-31](RR-20260926-31.md)：demo 闲置交还驱逐后等待本实体投影再释放租约。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 
 [RR-20260926-30](RR-20260926-30.md)：本地 lease fence 跳过——评估后按维护者决定修复：实体屏障 + 跳过后驱逐重载，Sync 强制全量（v1.17.1）。
 
@@ -525,17 +525,17 @@
 | RR-20260919-01 | codegen | 顶层 nested 指针字段替换 / 回滚后没有解绑离开的对象，游离对象仍能提交该字段 | U-0249 | [RR-20260919-01.md](RR-20260919-01.md) |
 | RR-20260919-07 | core+kit | 没有订单的索引条目永远排在页首、占住每一页的槽位 | U-0256 | [RR-20260919-07.md](RR-20260919-07.md) |
 | RR-20260919-10 | core+kit+codegen | activity 的 dispatch 没有交付者：sweep 空耗尝试次数、游戏端只能猜两个窗口 | U-0257 | [RR-20260919-10.md](RR-20260919-10.md) |
-| RR-20260920-03 | core+codegen | 玩家租约的 `GET` 之后再 `EXPIRE`/`DEL`：旧 owner 会给新 owner 续期或删掉它 | U-0258 | [RR-20260920-03.md](RR-20260920-03.md) |
-| RR-20260920-04 | codegen | 租约丢了不阻断本地写入：续租结果被丢弃，实体既不卸载也不停服务 | U-0259 | [RR-20260920-04.md](RR-20260920-04.md) |
+| RR-20260920-03 | core+codegen | 玩家租约的 `GET` 之后再 `EXPIRE`/`DEL`：旧 owner 会给新 owner 续期或删掉它 | U-0258 | [RR-20260920-03.md](RR-20260920-03.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-04 | codegen | 租约丢了不阻断本地写入：续租结果被丢弃，实体既不卸载也不停服务 | U-0259 | [RR-20260920-04.md](RR-20260920-04.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | RR-20260920-02 | core | 普通 room delta 走 latest-only 通道，待发帧被下一帧替掉，独有字段永久丢失 | U-0260 | [RR-20260920-02.md](RR-20260920-02.md) |
 | RR-20260920-01 | core | snapshot 的 checksum 是完整 64 位散列，BSON 装不下高位为 1 的那一半；失败记录还会成为启动毒丸 | U-0261 | [RR-20260920-01.md](RR-20260920-01.md) |
 | RR-20260920-07 | core | `SmallSafeMap` 的 BSON 方法签名不符合驱动接口，从未生效，该类型被写成空文档 | U-0265 | [RR-20260920-07.md](RR-20260920-07.md) |
 | RR-20260920-08 | core | `OpTimeout` 在拿到写闸之后才生效，排队没有上界（调用方无 deadline 时无限等） | U-0266 | [RR-20260920-08.md](RR-20260920-08.md) |
 | RR-20260920-06 | codegen | 被房间拒绝的 subscribe 只记一条日志就丢掉，那个观察者永久收不到那个 subject | U-0267 | [RR-20260920-06.md](RR-20260920-06.md) |
-| RR-20260920-09 | codegen | 租约失而复得后仍用失效期间没重新加载过的常驻 Player 实体；有间断就扔副本 | U-0268 | [RR-20260920-09.md](RR-20260920-09.md) |
-| RR-20260920-10 | codegen | 后台为离线玩家取得的租约永不归还，玩家被钉在一个进程上；空闲即归还（先扔副本再还租约） | U-0269 | [RR-20260920-10.md](RR-20260920-10.md) |
-| RR-20260920-11 | codegen | 为新工作重新取得的租约带着旧时间戳被当成空闲还掉；拆开续租与认领两种事件，并在归还前先停准入 | U-0271 | [RR-20260920-11.md](RR-20260920-11.md) |
-| RR-20260920-12 | codegen | 撤离的 ctx 预算不覆盖它要等的实体锁，一个忙实体钉住整轮刷新；撤离改成跑到底，预算只限制调用方等多久 | U-0272 | [RR-20260920-12.md](RR-20260920-12.md) |
+| RR-20260920-09 | codegen | 租约失而复得后仍用失效期间没重新加载过的常驻 Player 实体；有间断就扔副本 | U-0268 | [RR-20260920-09.md](RR-20260920-09.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-10 | codegen | 后台为离线玩家取得的租约永不归还，玩家被钉在一个进程上；空闲即归还（先扔副本再还租约） | U-0269 | [RR-20260920-10.md](RR-20260920-10.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-11 | codegen | 为新工作重新取得的租约带着旧时间戳被当成空闲还掉；拆开续租与认领两种事件，并在归还前先停准入 | U-0271 | [RR-20260920-11.md](RR-20260920-11.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-12 | codegen | 撤离的 ctx 预算不覆盖它要等的实体锁，一个忙实体钉住整轮刷新；撤离改成跑到底，预算只限制调用方等多久 | U-0272 | [RR-20260920-12.md](RR-20260920-12.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | RR-20260921-01 | core `demo` | 贡献落进哪个窗口没有回传通路，机器人只能对读时的窗口下断言；加时钟缝 + 回传窗口 id | U-0273 | [RR-20260921-01.md](RR-20260921-01.md) |
 | RR-20260921-02 | core `.github` | demo-publish 从未发布过：发布的树自带 workflow 文件，token 推不上去；改名 generated-github/ | U-0274 | [RR-20260921-02.md](RR-20260921-02.md) |
 | RR-20260922-01 | core `entitysync` + `room` | 撤订阅以"Leave 投递成功"为前提，断线观察者永远撤不掉，room 每次 flush 都给死会话生成帧、整批被拒，其后所有观察者停摆；改为撤订阅无条件完成、Leave 尽力投递并用 `ErrLeaveNotDelivered` 上报 | U-0277 | [RR-20260922-01.md](RR-20260922-01.md) |

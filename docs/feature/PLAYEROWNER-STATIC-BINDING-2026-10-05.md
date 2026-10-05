@@ -2,7 +2,7 @@
 
 - 范围：`demo/internal/service/game/playerowner.go.tmpl`（`PlayerOwners`）、`demo/game/playerroute/playerroute.go.tmpl`（Redis 共享表 `Store`），以及调用方 `demo/game/controllers/player/enter_game.go.tmpl`、`gift_saga.go.tmpl`、`matchmaker.go.tmpl`、`service.go.tmpl`、`activity.go.tmpl`、`demo/internal/access/player/tcp/auth.go.tmpl`。
 - 基线：main `3127d37c`。`playerowner.go.tmpl` 最后一次改动是 `890abdda`（RR-20261004-14），所以 [状态机文档](PLAYEROWNER-LEASE-STATE-MACHINE-2026-10-04.md) 里的 `po:N` 行号仍然有效。本文 `sv:N` 指 `service.go.tmpl`，`gs:N` 指 `gift_saga.go.tmpl`，`mm:N` 指 `matchmaker.go.tmpl`，`ac:N` 指 `activity.go.tmpl`，`eg:N` 指 `enter_game.go.tmpl`，`au:N` 指 `auth.go.tmpl`。
-- 性质：方案。**状态（2026-10-05）**：按 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §9 的合并拆分，本文第 2 笔（去掉 sid 锁部分，即 App 锁方案第 3 笔）已实施，提交 `f051e24a`，实施记录与回归去向见该方案 §13；赠礼与 matchmaker 按 `server_id` 路由（本文第 3 笔）也已实施：matchmaker 改用 `Resident` 随 App 锁方案第 3 笔完成，赠礼按 `FromSID` 准入与转交是 App 锁方案第 4 笔（提交 `5bdac773`），记录（含与 §3.3 的差异：转交接收方核对信封与载荷一致、`Encode` 拒绝无 sid 的赠礼）见该方案 §13；§3.3 的旧 payload 兜底按维护者决定未做。
+- 性质：方案。**状态（2026-10-05）**：按 [App 单实例锁方案](APP-SINGLETON-LOCK-2026-10-05.md) §9 的合并拆分，本文第 2 笔（去掉 sid 锁部分，即 App 锁方案第 3 笔）已实施，提交 `f051e24a`，实施记录与回归去向见该方案 §13；赠礼与 matchmaker 按 `server_id` 路由（本文第 3 笔）也已实施：matchmaker 改用 `Resident` 随 App 锁方案第 3 笔完成，赠礼按 `FromSID` 准入与转交是 App 锁方案第 4 笔（提交 `5bdac773`），记录（含与 §3.3 的差异：转交接收方核对信封与载荷一致、`Encode` 拒绝无 sid 的赠礼）见该方案 §13；§3.3 的旧 payload 兜底按维护者决定未做。文档与真实进程演练（含两个 sid 的跨服赠礼转交、离线发送方在绑定 sid 上执行）是 App 锁方案第 5 笔，见该方案 §13。
 - 取代：状态机文档 §7 推荐的“重写核心、外部接口不变”（选项 A）。那份文档的前提是“玩家可以在进程间动态迁移”，维护者 2026-10-05 确认这个前提不成立。它对现状的分析（§1～§4）仍然是本文删除清单的依据。
 
 > **2026-10-05 维护者决定**（本文其余部分保留原文，与下列决定冲突处以决定为准）：

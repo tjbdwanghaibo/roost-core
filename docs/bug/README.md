@@ -155,9 +155,9 @@
 
 **09-30 Codegen 第二轮：**[RR-20260930-01/02](REVIEW-2026-09-30-codegen-01.md) 原触发已修复并按声明场景验证，见 [RPC](../bugfix/RR-20260930-01.md) / [Protocol](../bugfix/RR-20260930-02.md)。新增 [RR-20260930-04 Entity、RR-20260930-05 Nest 旧生成物留存](REVIEW-2026-09-30-codegen-02.md)，两项 P2 **未修复**，已有隔离 CLI 反例。[运行](../review/REVIEW-2026-09-30-codegen-02.md)。
 
-[RR-20261004-11](RR-20261004-11.md)：P3 归还撤离超时、租约回到服务后后台撤离仍在销毁实体，`Admit` 照常放行，登录跳过撤离直接在将被销毁的实体上进场（W-2026-10-04-04）（已修复，未发版；[修复记录](../bugfix/RR-20261004-11.md)）。
-[RR-20261004-10](RR-20261004-10.md)：**P2** playerowner `renew` 逐个“丢失 → 重新认领”每人等一份 `evictBudget`，一批丢失把刷新循环占住超过 Lease；排在后面的续租确认让本地窗口越过 Redis 键 TTL（W-2026-10-04-03）（已修复，未发版；[修复记录](../bugfix/RR-20261004-10.md)）。
-[RR-20261004-14](RR-20261004-14.md)：P3 playerowner 本地窗口从确认时刻起算（跨间断撤离 ≤5s / 慢 Refresh 越过键减保护带）；认领丢回复后下一轮 Held 续回未扔的副本（W-2026-10-04-07）（已修复，未发版；[修复记录](../bugfix/RR-20261004-14.md)）。
+[RR-20261004-11](RR-20261004-11.md)：P3 归还撤离超时、租约回到服务后后台撤离仍在销毁实体，`Admit` 照常放行，登录跳过撤离直接在将被销毁的实体上进场（W-2026-10-04-04）（已修复，未发版；[修复记录](../bugfix/RR-20261004-11.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20261004-10](RR-20261004-10.md)：**P2** playerowner `renew` 逐个“丢失 → 重新认领”每人等一份 `evictBudget`，一批丢失把刷新循环占住超过 Lease；排在后面的续租确认让本地窗口越过 Redis 键 TTL（W-2026-10-04-03）（已修复，未发版；[修复记录](../bugfix/RR-20261004-10.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20261004-14](RR-20261004-14.md)：P3 playerowner 本地窗口从确认时刻起算（跨间断撤离 ≤5s / 慢 Refresh 越过键减保护带）；认领丢回复后下一轮 Held 续回未扔的副本（W-2026-10-04-07）（已修复，未发版；[修复记录](../bugfix/RR-20261004-14.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261004-13](RR-20261004-13.md)：P3 roost 跑的 go 命令（doctor / project deps / generate）超时只杀 go，compile / link / git 孙进程留在 `.roost-deps-*` / `.roost-generate-*` 暂存树，缓冲输出时 Wait 被孙进程管道拖住（W-2026-10-04-06）（已修复，未发版；[修复记录](../bugfix/RR-20261004-13.md)）。
 [RR-20261004-12](RR-20261004-12.md)：P3 生成器运行期间 `os.Chdir` 整个进程，并发启动的子进程继承 `.roost-sync-*` 为工作目录（Windows 上暂存目录删不掉，W-2026-10-04-05）（已修复，未发版；[修复记录](../bugfix/RR-20261004-12.md)）。
 [RR-20261004-09](RR-20261004-09.md)：**P2** RefHMap 注册表 guard 逐字节比较，无 schema 变化的并发首次创建 / 并发删除也误报 `ErrRefHMapRegistryChanged`；经 Layered 时 L1 留着已被删除的值（NC-30 引入，v1.19.1 回归）（已修复，未发版；[修复记录](../bugfix/RR-20261004-09.md)）。
@@ -171,15 +171,15 @@
 [RR-20261004-01](RR-20261004-01.md)：**P2** `versionedLock.TryLock` 取锁无明确答复（Eval 因 ctx 截止 / 网络错误返回而脚本已在 Redis 执行）时不记 token，实体本进程内不可写直到 LockTTL（缺省 24h）（W-2026-10-04-01，harness 区间核验负对照暴露）（已修复，未发版；[修复记录](../bugfix/RR-20261004-01.md)，T-207）。
 [RR-20261001-09](RR-20261001-09.md)：P3 activity 无 Intent 的 legacy Opening 永久占名额；单条坏 Intent 让整组 `AdvanceExpired` 每 tick 失败（W-2026-10-01-04 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-09.md)，T-181）。
 [RR-20261001-08](RR-20261001-08.md)：P3 chat 无游标最新页在正常容量淘汰后也报 `Gap=true` 并每次打指标（W-2026-10-01-03 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-08.md)）。
-[RR-20261001-07](RR-20261001-07.md)：P3 game-demo `Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 清掉 `interrupted`、stale 副本又被 `Admit` 放行（W-2026-10-01-02 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-07.md)）。
+[RR-20261001-07](RR-20261001-07.md)：P3 game-demo `Claim` 认领成功但副本扔不掉时，下一轮 `Refresh` 清掉 `interrupted`、stale 副本又被 `Admit` 放行（W-2026-10-01-02 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-07.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20261001-06](RR-20261001-06.md)：**P2** account 建角 pending slot 没有 owner-only 释放入口，名字被他人拿走后该账号在该区服永久建不了角色（W-2026-10-01-01 拍板）（已修复，未发版；[修复记录](../bugfix/RR-20261001-06.md)，T-182）。
 [RR-20261001-05](RR-20261001-05.md)：**P2** activity `applyProgress` 在 ledger 条目被 TTL 删除后永不回收 `PendingRequestIDs`，32 个孤儿后该参与者每个新请求永久 `ErrConflict`，无对账入口（B 线 service 修复复审，RR-20260929-02 修法引入）（已修复，未发版；[修复记录](../bugfix/RR-20261001-05.md)，T-180）。
 [RR-20261001-04](RR-20261001-04.md)：P3 v1 manifest 工程有手写 JSON 时生成链路失败于 `untracked table JSON … migrate it explicitly`，无文档无命令说明迁移（B 线 codegen 修复复审 D2）（已修复：错误文本给出恢复步骤 + 参考文档 §9.1，未发版；[修复记录](../bugfix/RR-20261001-04.md)）。
 [RR-20261001-03](RR-20261001-03.md)：**P2** schema 已写、`configs/table` 还没有 CSV 的工程在 v1.18.0 上 `generate` / `sync` / `--check` 全部失败——`153cac3d` 让空 CSV 目录也跑 tablegen，v1.17.2 通过（B 线 codegen 修复复审 D1，回归）（已修复，未发版；[修复记录](../bugfix/RR-20261001-03.md)）。
 [RR-20261001-02](RR-20261001-02.md)：P3 `service/mail` `sameSendIntent` 用 `reflect.DeepEqual`，nil 与空切片判为不同，自定义 EnvelopeStore 下同 RequestID 恢复永久 `ErrConflict`（B 线 service 修复复审）（已修复，未发版；[修复记录](../bugfix/RR-20261001-02.md)）。
 [RR-20261001-01](RR-20261001-01.md)：**P2** ci.yml 的 Redis job 只设 `REDIS_ADDR`，09-29 service 修复的 Redis 变体（`ROOST_REVIEW_REDIS` / `ROOST_REDIS_TEST_ADDR` / `ROOST_REVIEW3_BACKEND` / `ROOST_REVIEW4_BACKEND`，9 个测试文件）静默 SKIP 或落回 Memory（B 线修复复审发现）（已修复，含残余补修 `ROOST_BUGFIX5_BACKEND`，未发版；[修复记录](../bugfix/RR-20261001-01.md)）。
-[RR-20260930-24](RR-20260930-24.md)：P3 game-demo 活动租约丢失后永不重取，`activity: lease not renewed` 每 5s 一条直到停机（B27 第 3 批真实环境暴露）（已修复，未发版；[修复记录](../bugfix/RR-20260930-24.md)）。
-[RR-20260930-23](RR-20260930-23.md)：**P2** 进程续租中断后重取租约，仍连着的玩家被当作过期副本 Destroy，连接活着却脱离场景，Rebind 在此路径无效（B27 第 3 批真实环境暴露，RR-20260927-23 / RR-20260926-70 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-23.md)，T-179）。
+[RR-20260930-24](RR-20260930-24.md)：P3 game-demo 活动租约丢失后永不重取，`activity: lease not renewed` 每 5s 一条直到停机（B27 第 3 批真实环境暴露）（已修复，未发版；[修复记录](../bugfix/RR-20260930-24.md)）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
+[RR-20260930-23](RR-20260930-23.md)：**P2** 进程续租中断后重取租约，仍连着的玩家被当作过期副本 Destroy，连接活着却脱离场景，Rebind 在此路径无效（B27 第 3 批真实环境暴露，RR-20260927-23 / RR-20260926-70 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-23.md)，T-179）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 [RR-20260930-22](RR-20260930-22.md)：**P2** game-demo gift 发放的收件人检查读 `dataengine.database`，而 Player DAO 固定 `db=game`；库名一改所有赠礼都被补偿（B27 第 3 批真实环境暴露）（已修复，未发版；[修复记录](../bugfix/RR-20260930-22.md)）。
 [RR-20260930-21](RR-20260930-21.md)：**P2** 提交后释放 Redis 锁失败，`versionedLock` 本地 `acquired` 不清，同一实体在本进程内永久 `versioned lock already acquired`（B27 第 2 批端到端暴露，RR-20260926-46 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-21.md)，T-178）。
 [RR-20260930-20](RR-20260930-20.md)：**P2** handler 业务失败后 release hook panic，回复丢失业务错误、只剩 `release hook failed after commit`（B27 第 2 批端到端暴露，RR-20260926-53 / 32 后续）（已修复，未发版；[修复记录](../bugfix/RR-20260930-20.md)）。
@@ -238,11 +238,11 @@
 | --- | --- | --- |
 | [RR-20260929-11](REVIEW-2026-09-29-services-02.md#rr-20260929-11) | P2 | account 已验证身份键碰撞 |
 | [RR-20260929-12](REVIEW-2026-09-29-services-02.md#rr-20260929-12) | P2 | account slot 提交未知时误删角色、遗留占位 |
-| [RR-20260929-13](REVIEW-2026-09-29-services-02.md#rr-20260929-13) | P2 | global 迁移后旧路由 lease 可续期 |
+| [RR-20260929-13](REVIEW-2026-09-29-services-02.md#rr-20260929-13) | P2 | global 迁移后旧路由 lease 可续期 （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20260929-14](REVIEW-2026-09-29-services-02.md#rr-20260929-14) | P2 | session Attach 接受伪造释放标记 |
 | [RR-20260929-15](REVIEW-2026-09-29-services-02.md#rr-20260929-15) | P2 | activity 非负累加回绕为负 |
 | [RR-20260929-16](REVIEW-2026-09-29-services-02.md#rr-20260929-16) | P2 | mail 正文写失败后同请求无法恢复 |
-| [RR-20260929-17](REVIEW-2026-09-29-services-02.md#rr-20260929-17) | P3 | global Load 输出引用污染 MemoryStore |
+| [RR-20260929-17](REVIEW-2026-09-29-services-02.md#rr-20260929-17) | P3 | global Load 输出引用污染 MemoryStore （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | [RR-20260929-18](REVIEW-2026-09-29-services-02.md#rr-20260929-18) | P3 | session Finish 重试成功仍留 claim |
 
 09-29 Core 全 service 审查：[问题与实施交接](REVIEW-2026-09-29-services.md) · [9 项反例及源码](REPRO-2026-09-29-services.md)。本轮未修生产代码；RR-09 为源码接线缺口，其他九项动态复现。
@@ -466,7 +466,7 @@
 
 [RR-20260926-32](RR-20260926-32.md)：P2 提交后 release hook panic 仍 Abort（RR-14 根因）（已修复，v1.17.0）。
 
-[RR-20260926-31](RR-20260926-31.md)：P2 demo 闲置交还先释放租约未等投影，跨进程读旧版本（已修复，v1.17.0）。
+[RR-20260926-31](RR-20260926-31.md)：P2 demo 闲置交还先释放租约未等投影，跨进程读旧版本（已修复，v1.17.0）。（2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)）
 
 [RR-20260926-30](RR-20260926-30.md)：P2 saga 原生步骤本地 lease fence 过期跳过后，后续投影 fatal、重启起不来（已修复，v1.17.1）。
 
@@ -625,8 +625,8 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260921-03 | P1 | 归还租约的过程中被重新 `Claim`：`handingBack` 被 `confirmClaim` 清掉，而归还流程再也不回头看它——登录方拿到"是你的"，共享表里却已无人拥有该玩家，另一进程可装载第二份副本 | 已修复，未发版（[问题](RR-20260921-03.md) · [修复](../bugfix/RR-20260921-03.md)） |
-| RR-20260921-04 | P2 | `handBackBudget`(8) × `evictBudget`(5s) = 40s > `Lease`(30s)：一次归还批次能把刷新循环占住到本进程**其余所有**租约过期 | 已修复，未发版（[问题](RR-20260921-04.md) · [修复](../bugfix/RR-20260921-04.md)） |
+| RR-20260921-03 | P1 | 归还租约的过程中被重新 `Claim`：`handingBack` 被 `confirmClaim` 清掉，而归还流程再也不回头看它——登录方拿到"是你的"，共享表里却已无人拥有该玩家，另一进程可装载第二份副本 | 已修复，未发版（[问题](RR-20260921-03.md) · [修复](../bugfix/RR-20260921-03.md)） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260921-04 | P2 | `handBackBudget`(8) × `evictBudget`(5s) = 40s > `Lease`(30s)：一次归还批次能把刷新循环占住到本进程**其余所有**租约过期 | 已修复，未发版（[问题](RR-20260921-04.md) · [修复](../bugfix/RR-20260921-04.md)） （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | RR-20260921-05 | P2 | 本仓 13 处 `go:generate` 的产物没有任何 CI 步骤校验，`generate --check` 只跑在生成工程那侧（已漏过一次） | 已修复，未发版（[问题](RR-20260921-05.md) · [修复](../bugfix/RR-20260921-05.md)） |
 
 09-21：只分流合仓期间挂起的两条 Wanted，不审新链路。新增 **2 个 P2**，都出在"信息在一条没人接的返回值/流水线里断掉"：[问题与实施方向](REVIEW-2026-09-21.md) · [独立复现](REPRO-2026-09-21.md)
@@ -640,15 +640,15 @@
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260920-11 | P1 | `confirm` 只在 `lastUsed` 为零时盖章，为新工作重新取得的租约带着旧时间戳，下一轮就被当成空闲连同实体一起还掉——还在跑的步骤脚下被抽空 | 已修复（U-0271，codegen v1.15.31）→ [bugfix](../bugfix/RR-20260920-11.md) |
-| RR-20260920-12 | P2 | `evictBudget` 是 ctx 超时，而 `EntityManager.Destroy` 等实体锁时不读 ctx；一个忙实体能钉住整轮刷新，后面所有玩家的续租排队 | 已修复（U-0272，codegen v1.15.31）→ [bugfix](../bugfix/RR-20260920-12.md) |
+| RR-20260920-11 | P1 | `confirm` 只在 `lastUsed` 为零时盖章，为新工作重新取得的租约带着旧时间戳，下一轮就被当成空闲连同实体一起还掉——还在跑的步骤脚下被抽空 | 已修复（U-0271，codegen v1.15.31）→ [bugfix](../bugfix/RR-20260920-11.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-12 | P2 | `evictBudget` 是 ctx 超时，而 `EntityManager.Destroy` 等实体锁时不读 ctx；一个忙实体能钉住整轮刷新，后面所有玩家的续租排队 | 已修复（U-0272，codegen v1.15.31）→ [bugfix](../bugfix/RR-20260920-12.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 
 09-20 第三轮：无挂起 Wanted，按"最近几个单元碰过的地方"审玩家所有权链（U-0258 / U-0259 / U-0267）与第十八批 Guild。新增 **1 个 P1、1 个 P2**，两条都在同一处：所有权可以结束，而**实体和租约都没有与之对应的终点**。[问题与实施方向](REVIEW-2026-09-20-03.md) · [独立复现](REPRO-2026-09-20-03.md)
 
 | 编号 | 等级 | 问题 | 状态 |
 | --- | --- | --- | --- |
-| RR-20260920-09 | P1 | 租约失而复得后仍用失效期间没重新加载过的常驻 Player 实体；表里也无法分辨中间有没有别人写过 | 已修复（U-0268，codegen v1.15.29）→ [bugfix](../bugfix/RR-20260920-09.md) |
-| RR-20260920-10 | P2 | 后台消费者为离线玩家取得的租约永不归还，该玩家此后只能从那一个进程登录 | 已修复（U-0269，codegen v1.15.29）→ [bugfix](../bugfix/RR-20260920-10.md) |
+| RR-20260920-09 | P1 | 租约失而复得后仍用失效期间没重新加载过的常驻 Player 实体；表里也无法分辨中间有没有别人写过 | 已修复（U-0268，codegen v1.15.29）→ [bugfix](../bugfix/RR-20260920-09.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-10 | P2 | 后台消费者为离线玩家取得的租约永不归还，该玩家此后只能从那一个进程登录 | 已修复（U-0269，codegen v1.15.29）→ [bugfix](../bugfix/RR-20260920-10.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 
 09-20 第二轮：不审新代码，只把实现侧挂起的三条 Wanted 查到根因并分流。新增 **1 个 P1、2 个 P2**：[问题与实施方向](REVIEW-2026-09-20-02.md) · [独立复现](REPRO-2026-09-20-02.md)。
 
@@ -664,8 +664,8 @@
 | --- | --- | --- | --- |
 | RR-20260920-01 | P1 | Remote snapshot checksum 的完整 uint64 直接写 BSON，高位为 1 时提交及 WAL 恢复失败 | 已修复（U-0261，core v1.15.15）→ [bugfix](../bugfix/RR-20260920-01.md) |
 | RR-20260920-02 | P1 | latest-only datagram 覆盖已经提交 dirty 的 room delta，独有字段永久丢失 | 已修复（U-0260，core v1.15.14）→ [bugfix](../bugfix/RR-20260920-02.md) |
-| RR-20260920-03 | P1 | player owner 的 GET→EXPIRE/DEL 非原子，旧 owner 可续期或删除新租约 | 已修复（U-0258，core v1.15.13 / codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-03.md) |
-| RR-20260920-04 | P1 | owner 租约失效不 fence resident Player 的写入，允许两个进程同时写 | 已修复（U-0259，codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-04.md) |
+| RR-20260920-03 | P1 | player owner 的 GET→EXPIRE/DEL 非原子，旧 owner 可续期或删除新租约 | 已修复（U-0258，core v1.15.13 / codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-03.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
+| RR-20260920-04 | P1 | owner 租约失效不 fence resident Player 的写入，允许两个进程同时写 | 已修复（U-0259，codegen v1.15.23）→ [bugfix](../bugfix/RR-20260920-04.md) （2026-10-05 所在代码已被静态绑定 / App 单实例锁取代，见 [APP-SINGLETON-LOCK](../feature/APP-SINGLETON-LOCK-2026-10-05.md)） |
 | RR-20260920-05 | P2 | 不可解码 pending 不隔离，128 个最老 poison 条目可占满重试页 | 已修复（U-0262，core v1.15.17 / kit v1.14.16）→ [bugfix](../bugfix/RR-20260920-05.md) |
 
 09-19 第二轮：重启并同步到 Core `a2e8fa0` / Kit `5116f2a` / Codegen `fde74d1`。新确认 **3 个 P1、1 个 P2**：pending 分页坏项饥饿、loader panic 污染 singleflight、Nest 缺失实体 nil 分派、activity 尝试预算与真实交付断链。[问题与实施方向](REVIEW-2026-09-19-02.md) · [复现记录](REPRO-2026-09-19-02.md) · [运行与限制](../review/REVIEW-2026-09-19-02.md)。
