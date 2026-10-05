@@ -60,13 +60,17 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 	defer cancel()
 
 	backoff := time.Duration(0)
+	// lastErr 是触发这次重跑的 TransientTransactionError（回调或提交返回的），一定没有提交。
+	var lastErr error
 	for {
 		if backoff > 0 {
 			wait := time.NewTimer(time.Duration(rand.Int64N(int64(backoff))) + time.Nanosecond)
 			select {
 			case <-ctx.Done():
 				wait.Stop()
-				return ctx.Err()
+				// 与驱动的 timeoutError{Wrapped: err} 相同，保留最后一次错误的链与标签：调用方按它
+				// 分流（撞键换会话重试、版本冲突回读回执），只给 ctx.Err() 会让这些分支在窗口到期时落空。
+				return errors.Join(ctx.Err(), lastErr)
 			case <-wait.C:
 			}
 			backoff = min(backoff+backoff/2, transactionBackoffMax)
@@ -80,6 +84,7 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 		if err := fn(mongo.NewSessionContext(ctx, s.sess)); err != nil {
 			s.abort(ctx)
 			if hasErrorLabel(err, labelTransient) && ctx.Err() == nil {
+				lastErr = err
 				continue
 			}
 			return err
@@ -91,6 +96,7 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 		}
 		retryCallback, err := s.commit(ctx)
 		if retryCallback {
+			lastErr = err
 			continue
 		}
 		return err
@@ -98,7 +104,7 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 }
 
 // commit 提交当前事务。retryCallback 表示服务端要求整个事务重跑（提交被判为暂时性失败，
-// 一定没有提交）。
+// 一定没有提交），此时 err 是那次提交错误，只供窗口到期时保留。
 func (s *session) commit(ctx context.Context) (retryCallback bool, err error) {
 	for {
 		err = s.sess.CommitTransaction(ctx)
@@ -114,7 +120,7 @@ func (s *session) commit(ctx context.Context) (retryCallback bool, err error) {
 				continue
 			}
 			if command.HasErrorLabel(labelTransient) {
-				return true, nil
+				return true, err
 			}
 		}
 		return false, err
