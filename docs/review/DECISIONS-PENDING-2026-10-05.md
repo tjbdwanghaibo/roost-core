@@ -88,10 +88,10 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | 待实施 |
 | B4 | skill Runtime 状态**不进**事务：保持现状，文档写明约束（handler 失败回滚后 Runtime 状态不回退，业务按此设计） | 待实施（文档） |
-| B6 | CLI 信号统一接管：CLI 入口接管信号 → ctx 取消 → 正常回滚后再重抛 | 待实施 |
+| B6 | CLI 信号统一接管：CLI 入口接管信号 → ctx 取消 → 正常回滚后再重抛 | **已实施（`f556049c`）**：`roost.Main` 接管 SIGINT / SIGTERM / SIGHUP，复制 / 生成器 / go 命令 / 提交点前按 ctx 停下并回滚、删暂存树，已开始的提交做完，最后重抛（退出码不变）；`runCommandTree` 的信号重发、NC-70 登记表删除，`reraisedSignalGrace` 只留入口一处；cb11be90 / NC-70 回归断言不变。N08 O2 / O3 / O6 一并修复。Windows 不接管（与之前相同，只 vet）。[方案与实施](../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md) |
 | B9 | activity 窗口条目统一读入口 + 持有方修复入口；account 建角改为“名额状态 × 名字状态 → 动作”判定表 | **已实施（`bd6df5e5`，分支 `b9svc`）**：activity 的 `PendingActivities` / `DeliveringActivities` / `RetireDelivered` / sweep 全经 `readWindowEntries`，坏条目跳过、保留、按列表计数（新增 `sweep.delivering_key_malformed`）；持有方专用 `Admin.MalformedWindowEntries` / `RemoveMalformedWindowEntry`；N06 S3 留项补齐（Delivering 坏条目、`RetireDelivered` 只在本次移走时回报 true、`plan_released` 并发只计一次），见 NC-51 / NC-50 复核补修。account：`decideCreation`（名额 6 × 入口 4 × 名字 6，144 格表格测试），create_role 同名 / 换名、同名被拒后释放、Admin 都查它，行为不变。C4 的按组 key 与入口一致，无需改动。表里看出的一处不对称（未 admitted 计划、名字只被他人 reserved：同名请求释放、换名不释放）保持现状，列给维护者。[方案](../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md) |
 | B10 | 按推荐：configdata 新增能看到原始字段是否出现的接口，必填在加载 / 热更时检查（A）；规则统一由运行时加载层强制，生成期检查只作提前反馈。维护者附加原则：**config 使用要容易，手写整理代码尽量少，结构简单易懂** | 待实施 |
 | C2 | “需要可见”：按协调者理解——保持新快照即刻可见的语义并写进契约；同时让热更失败 / 回滚可见（日志 + 指标，N07 C-O5） | 待实施 |
 | C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | **已实施（`bd6df5e5`）**：`app/singleton.go` 的 `SingletonLiveness` 注释、USER_GUIDE §2、APP-SINGLETON-LOCK §3.6 / §7.2 写明契约与对 activity 的影响（窗口可能等到宽限期）；用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住 |
-| C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | 待实施 |
+| C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | **已实施（`f556049c`）**：常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），根包 `TestNetworkCodegenTestsRunInSomeWorkflow` 钉住；两条用例本机联网实跑通过（v1.20.2 刚发布，需 `GOPROXY=direct`）。默认 `go test` 不联网。 |
 | Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 排队 |
