@@ -1,0 +1,4 @@
+TestAStalledOldConnectionDoesNotResetTheLiveClient: scene_connections_test.go:281: dial tcp 127.0.0.1:9444: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.
+TestAPlayerWhoseEveryConnectionStallsLeavesTheScene: scene_connections_test.go:351: dial tcp 127.0.0.1:9446: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.
+TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses: scene_connections_test.go:409: dial tcp 127.0.0.1:9448: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.
+TestADisconnectAndReconnectInsideOneTickEndsWithTheNewConnectionReplicated: scene_connections_test.go:498: dial tcp 127.0.0.1:9450: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.

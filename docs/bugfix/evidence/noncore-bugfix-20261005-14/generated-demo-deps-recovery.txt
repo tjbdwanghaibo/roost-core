@@ -1,0 +1,2 @@
+go: downloading google.golang.org/genproto v0.0.0-20251202230838-ff82c1b0f217
+go: upgraded google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55 => v0.0.0-20251202230838-ff82c1b0f217

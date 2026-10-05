@@ -1,0 +1,50 @@
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/tenant
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/entity
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/scope
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/policy
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/tenant
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/entity
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/scope
+=== RUN   TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/policy
+--- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/tenant (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/entity (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/scope (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode1/policy (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/tenant (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/entity (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/scope (0.00s)
+    --- PASS: TestAuthoritativeLoaderRejectsForeignKeyBeforePublish/mode3/policy (0.00s)
+=== RUN   TestAuthoritativeReadChecksStoredMinimumVersion
+=== RUN   TestAuthoritativeReadChecksStoredMinimumVersion/mode1
+=== RUN   TestAuthoritativeReadChecksStoredMinimumVersion/mode3
+--- PASS: TestAuthoritativeReadChecksStoredMinimumVersion (0.00s)
+    --- PASS: TestAuthoritativeReadChecksStoredMinimumVersion/mode1 (0.00s)
+    --- PASS: TestAuthoritativeReadChecksStoredMinimumVersion/mode3 (0.00s)
+=== RUN   TestAuthoritativeReadRechecksExpiryAfterL2Publish
+=== RUN   TestAuthoritativeReadRechecksExpiryAfterL2Publish/mode1
+=== RUN   TestAuthoritativeReadRechecksExpiryAfterL2Publish/mode3
+--- PASS: TestAuthoritativeReadRechecksExpiryAfterL2Publish (0.50s)
+    --- PASS: TestAuthoritativeReadRechecksExpiryAfterL2Publish/mode1 (0.25s)
+    --- PASS: TestAuthoritativeReadRechecksExpiryAfterL2Publish/mode3 (0.25s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/entity	2.568s
+=== RUN   TestRemoteAssemblyRetryAfterSecondSubscriptionFailure
+--- PASS: TestRemoteAssemblyRetryAfterSecondSubscriptionFailure (0.00s)
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/gap
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/epoch
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/schema
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/loader-error
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/foreign-key
+=== RUN   TestSnapshotReplicaAuthoritativeRepairAdmission/retained-epoch
+--- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission (0.01s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/gap (0.00s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/epoch (0.00s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/schema (0.00s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/loader-error (0.00s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/foreign-key (0.00s)
+    --- PASS: TestSnapshotReplicaAuthoritativeRepairAdmission/retained-epoch (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/remoteentity	2.147s

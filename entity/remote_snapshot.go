@@ -294,6 +294,11 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	if err != nil || !ok {
 		return snapshot, ok, err
 	}
+	// RR-20261005-NC-35：加载回调也属于身份边界，必须在任何缓存写入前
+	// 绑定完整请求键；否则会写入别的视图，再把请求键的旧值误当成功返回。
+	if snapshot.Key != key {
+		return RemoteSnapshotEnvelope{}, false, fmt.Errorf("remote snapshot: authoritative result key does not match requested key")
+	}
 	if snapshot.StateVersion < minVersion {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
@@ -302,8 +307,7 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	// after Publish both have to pass it (RR-20260913-08 复核: the first fix
 	// only covered the cached hit). An expired authoritative answer is a
 	// miss, and is not cached — nothing could ever read it.
-	now := time.Now()
-	if snapshot.Expired(now) {
+	if snapshot.Expired(time.Now()) {
 		return RemoteSnapshotEnvelope{}, false, nil
 	}
 	if err := c.Publish(loadCtx, snapshot); err != nil {
@@ -313,8 +317,14 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	if err != nil || !found {
 		return stored.Clone(), found, err
 	}
-	if stored.Expired(now) {
+	// RR-20260913-08 残余：Publish 可能等待 L2，不能复用发布前的时间。
+	if stored.Expired(time.Now()) {
 		return RemoteSnapshotEnvelope{}, false, nil
+	}
+	// RR-20261005-NC-36：epoch 准入或并发发布可能保留另一份 L1；
+	// 最低版本承诺约束的是最终返回值，不能只检查权威的原始结果。
+	if stored.StateVersion < minVersion {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
 	return stored.Clone(), true, nil
 }

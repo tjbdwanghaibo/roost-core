@@ -175,6 +175,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05第十四批：[NC-35](bug/RR-20261005-NC-35.md) / [NC-36](bug/RR-20261005-NC-36.md) 与 [RR-20260913-08残余](bugfix/RR-20260913-08.md) **已修复、声明场景验证，未发版**。权威加载绑定完整请求键，最终L1重新验最低版本与当前有效期；T-216/217，旧T-69追加。[红绿/复跑](bugfix/evidence/noncore-bugfix-20261005-14/README.md)、[本轮进度](review/REVIEW-2026-10-05-noncore-24.md)、[读取与生命周期机制](review/IMPLEMENTATION-AUTHORITATIVE-SNAPSHOT-POSTCONDITIONS.md)。同一源码19新正式叶子，真实broker/HA/跨节点水位/长容量仍未验，不扩写另一线核心专项或新App feature完整验收。
+
 10-05第十三批：[NC-33](bug/RR-20261005-NC-33.md) / [NC-34](bug/RR-20261005-NC-34.md) **已修复、声明场景验证，未发版**；[缓存修法](bugfix/RR-20261005-NC-33.md)、[兴趣修法](bugfix/RR-20261005-NC-34.md)、[红绿/复跑](bugfix/evidence/noncore-bugfix-20261005-13/README.md)。T-214/215。格式不变、错误身份写前拒绝；不新增认证、版本化Delete或DTO Mirror。
 
 10-05第十二批：[NC-32](bug/RR-20261005-NC-32.md) **已修复、声明场景验证，未发版**；[决策/重新生成要求](bugfix/RR-20261005-NC-32.md)、[红绿](bugfix/evidence/noncore-bugfix-20261005-12/README.md)。T-211。唯一父归属保护保留，无BSON/WAL格式或公开签名变更，不补历史漏写数据。

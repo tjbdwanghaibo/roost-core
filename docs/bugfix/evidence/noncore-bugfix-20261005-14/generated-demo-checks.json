@@ -1,0 +1,32 @@
+[
+  {
+    "name": "consumer",
+    "command": "go test -mod=mod -race -count=1 -json ./internal/service/game/... ./game/controllers/player/...",
+    "exit": 0,
+    "passedLeaves": 91,
+    "passedEvents": 104,
+    "skipped": [
+      "example.com/nc24demo/game/controllers/player::TestGuildIDsRealMongoWALRestart",
+      "example.com/nc24demo/game/controllers/player::TestGuildIDsRealMongoConcurrentFirstMint"
+    ],
+    "failed": []
+  },
+  {
+    "name": "build",
+    "command": "go build -mod=mod ./...",
+    "exit": 0,
+    "passedLeaves": 0,
+    "passedEvents": 0,
+    "skipped": [],
+    "failed": []
+  },
+  {
+    "name": "vet",
+    "command": "go vet -mod=mod ./...",
+    "exit": 0,
+    "passedLeaves": 0,
+    "passedEvents": 0,
+    "skipped": [],
+    "failed": []
+  }
+]

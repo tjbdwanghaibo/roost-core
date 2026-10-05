@@ -31,6 +31,9 @@
 ### Fixed
 
 - **codegen：生成的 `etcd.service_prefix` 带结尾 `/`**（2026-10-05 App 单实例锁第 5 笔真实进程演练发现）：etcd Discovery 的键是 `service_prefix + server_type + "/" + sid`，自己不补分隔符（core 缺省 `/service/`），生成值 `/roost/services` 让 game 1300 注册成 `/roost/servicesgame/1300`。新工程改为 `/roost/services/`；已生成工程的配置归应用所有，不自动改写——需要时手工补上 `/`（同一部署的所有进程一起改，注册与查询用同一个前缀，混跑期间互相看不见）。回归 `TestGeneratedEtcdServicePrefixSeparatesTheServerType`。
+- **权威快照加载在写缓存前绑定完整请求键**（RR-20261005-NC-35，P2）：异键结果明确拒绝，不写其他视图，合法加载可恢复；API/wire不变。[记录](docs/bugfix/RR-20261005-NC-35.md)
+- **权威读取重新检查最终L1最低版本**（RR-20261005-NC-36，P2）：旧epoch结果被缓存准入拒绝后，实际L1版本不足返回ErrRemoteSnapshotStale；保留epoch防护、不新增重试。[记录](docs/bugfix/RR-20261005-NC-36.md)
+- **快照有效期残余补修**（RR-20260913-08）：L2发布期间跨过ExpiresAt时，以返回前当前时间判过期并返回miss，避免用发布前时间服务过期值；不新编号。[记录](docs/bugfix/RR-20260913-08.md)
 
 - **etcd Discovery：租约已过期时停机注销不再算失败**（2026-10-05 App 单实例锁第 5 笔真实进程演练偏差 3）：进程暂停超过 `etcd.lease_ttl` 后恢复、重注册尚未成功就停机时，`Deregister` 对已过期的租约 Revoke 得到 `etcdserver: requested lease not found`，此前记为 `mod etcd stop` 失败并入 `run` 的返回值，正常停机（SIGTERM）的退出码因此非零。现在“租约已不存在”（`rpctypes.ErrLeaseNotFound`，或未转换 / 被包裹的 gRPC NotFound 同描述）视为注销已达成（键已随租约删除），记 Info；其他 Revoke 错误照旧报告并保留登记以便重试。同时 `Deregister` 在注册循环退出后再取消一次 keepalive：停机期间才完成的重注册不再留下一个续期中的 keepalive。核实：这个错误不影响单实例锁——Mod 停机返回普通错误算已停完，锁照常 Release，下一个进程不用多等一个 TTL（只有超时 / 取消算停机不完整）。kit `EtcdMod` 停机的错误只来自 `Assembly.Close`，无需另改。回归 `TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered`、`TestAssemblyCloseTreatsLeaseNotFoundAsDeregistered`、`TestDiscoveryDeregisterStopsRegistrationThatCompletedDuringShutdown`、`TestSingletonIsReleasedWhenAModStopReturnsAnOrdinaryError`，真机 `TestRealEtcdCloseAfterLeaseVanishedIsClean`（`-tags integration`）。
 

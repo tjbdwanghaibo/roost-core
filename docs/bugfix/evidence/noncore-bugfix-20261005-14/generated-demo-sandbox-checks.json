@@ -1,0 +1,17 @@
+{
+  "check": "consumer",
+  "command": "go test -mod=mod -race -count=1 -json ./internal/service/game/... ./game/controllers/player/...",
+  "exit": 1,
+  "passedLeaves": 85,
+  "passedEvents": 97,
+  "skipped": [
+    "example.com/nc24demo/game/controllers/player::TestGuildIDsRealMongoWALRestart",
+    "example.com/nc24demo/game/controllers/player::TestGuildIDsRealMongoConcurrentFirstMint"
+  ],
+  "failed": [
+    "example.com/nc24demo/internal/service/game::TestAStalledOldConnectionDoesNotResetTheLiveClient",
+    "example.com/nc24demo/internal/service/game::TestAPlayerWhoseEveryConnectionStallsLeavesTheScene",
+    "example.com/nc24demo/internal/service/game::TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses",
+    "example.com/nc24demo/internal/service/game::TestADisconnectAndReconnectInsideOneTickEndsWithTheNewConnectionReplicated"
+  ]
+}

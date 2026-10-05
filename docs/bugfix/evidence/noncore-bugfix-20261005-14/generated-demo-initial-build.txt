@@ -1,0 +1,7 @@
+go: downloading google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55
+..\..\review-codegen-20260930\gomodcache\go.etcd.io\etcd\api\v3@v3.7.1\etcdserverpb\rpc.pb.go:18:2: ambiguous import: found package google.golang.org/genproto/googleapis/api/annotations in multiple modules:
+	google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55 (D:\whb_s\.tmp\review-codegen-20260930\gomodcache\google.golang.org\genproto@v0.0.0-20190819201941-24fa4b261c55\googleapis\api\annotations)
+	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa (D:\whb_s\.tmp\review-codegen-20260930\gomodcache\google.golang.org\genproto\googleapis\api@v0.0.0-20260526163538-3dc84a4a5aaa\annotations)
+..\..\review-codegen-20260930\gomodcache\google.golang.org\grpc@v1.83.2\status\status.go:35:2: ambiguous import: found package google.golang.org/genproto/googleapis/rpc/status in multiple modules:
+	google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55 (D:\whb_s\.tmp\review-codegen-20260930\gomodcache\google.golang.org\genproto@v0.0.0-20190819201941-24fa4b261c55\googleapis\rpc\status)
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa (D:\whb_s\.tmp\review-codegen-20260930\gomodcache\google.golang.org\genproto\googleapis\rpc@v0.0.0-20260526163538-3dc84a4a5aaa\status)

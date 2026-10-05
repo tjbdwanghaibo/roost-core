@@ -2,6 +2,8 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-217 | 权威读取/副本回填出现 ErrRemoteSnapshotStale，旧版曾成功返回低于minVersion的结果 | RR-20261005-NC-36：旧版只验权威原始版本，Publish可能保留较新epoch的另一份L1 | 请求minVersion、权威与最终L1的完整key/epoch/version | 使用最终版本检查修复；恢复正确epoch/版本的权威结果后重读，不放宽epoch保护或把低版本当成功 |
+| T-216 | 权威加载出现 result key does not match requested key，或旧版把结果写进另一视图 | RR-20261005-NC-35：loader结果身份未绑定请求 | callback请求与返回的Tenant/EntityID/Kind/Scope/Policy、实际L1/L2 | 使用写前绑定修复，修正loader完整身份映射，不忽略错误；历史污染按权威来源核对，不批量删生产键 |
 | T-215 | interest消息返回identity不匹配，或旧版本发生另一scope/SID被续租/撤销 | RR-20261005-NC-34：旧接收只解码，未绑定payload到信封 | payload完整key/SID、信封哈希key、ExpiresAt/version及Upsert；Generation另作代际比较 | 使用写前校验修复，统一发送端格式；错误消息不盲重试，不删其他订阅；校验不替代内部topic发布权限 |
 | T-214 | cache副本信封是key7/version3但键8被写，或返回replica payload mismatch/null | RR-20261005-NC-33：旧适配器未将实际业务对象绑定到信封 | 发送与接收ReplicaConfig.KeyOf/VersionOf、payload和Store实际值 | 使用写前校验修复，统一提取器，修正发布源；无提取器不保证相应维度，普通Delete不防历史复活，不用忽略错误当修复 |
 | T-211 | DAO加载后深层子字段内存已改，Nest没有该DAO提交记录，重载仍为旧值 | RR-20261005-NC-32：旧wire转换先绑定子通知再复制父对象，回调指向临时副本 | 在正式Nest事务内验加载后setter、提交mutation与fresh Manager重载；不能只验BSON值roundtrip | 升级生成工具并重生成关联DAO/nested代码，再验证；仅升级runtime无效，历史漏写按业务来源恢复，不删除WAL或放宽唯一父保护 |
@@ -97,7 +99,7 @@
 | T-65 | 一封早已领取的附件邮件重新可领并拿到新 token,而信封还没过期 | kit v1.14.3 的墓碑按条数收界,计数保证不了时间期限:同一信封生命周期内有 `MaxSettledClaims` 条更新的已领取邮件被淘汰,它就被挤掉了 | 邮箱 `Evicted` 很大而墓碑数恰好在上限 | 升级 kit(墓碑改为按信封可领取窗口保留,挤不下时以 `ErrClaimHistoryFull` 拒绝投递);发奖侧不要只靠 token 去重 |
 | T-66 | 停机期间带 delay 的同步 Request 既没有结果也没有错误,最后报成取消或超时 | core ≤ v1.15.2 的 `Dispatcher.OnDestroyWithContext` 回收延迟队列时不向 `RetChan` 发终态 | Shutdown 返回成功,而调用方在自己的超时后才失败 | 升级 core;旧版本停机前先等延迟队列排空 |
 | T-68 | 权威快照后端变慢时,读请求持续报 `ErrRemoteOverloaded`,而并发数远低于 MaxWaiters | core ≤ v1.15.2 的 `loadMonotonic` 在跟随者取消时不归还名额,上限变成"本次加载累计入场次数" | 首个加载结束后自行恢复 | 升级 core;临时调大 MaxWaiters 或拉长调用方超时 |
-| T-69 | 读到的远程快照 `Expired(now)` 为真却被当作命中返回 | core ≤ v1.15.2 的 `Get` 只看容器 TTL,不看信封自己的 `ExpiresAt` | 只影响显式设置了 `ExpiresAt` 的快照 | 升级 core(过期即视为未命中,Monotonic 会回权威) |
+| T-69 | 读到的远程快照 `Expired(now)` 为真却被当作命中返回 | core ≤ v1.15.2 的 `Get` 只看容器 TTL,不看信封自己的 `ExpiresAt`；后续权威路径曾复用Publish前时间 | 显式设置ExpiresAt、L2发布跨越截止时间 | 升级 core(过期即视为未命中,Monotonic 会回权威)；10-05残余补修以最终返回前当前时间再判，有效期不由容器TTL替代 |
 | T-70 | 同一版本的快照在不同进程解码结果不同 | core ≤ v1.15.2 的 L2 CAS 只比 checksum,而 checksum 只覆盖 payload 字节,schema / codec 可以被同版本改掉 | 本地缓存拒绝而 L2 接受同一次发布 | 升级 core 并让所有发布方同时升级 |
 | T-71 | 版本号超过 2^53 之后,较旧的快照写入被接受、版本回退;或真正更新的版本被判为同版本冲突 | core ≤ v1.15.2 的 L2 脚本用 Lua 的 `tonumber` 比较,Lua 数值是 float64 | 版本量级在 9007199254740992 附近 | 升级 core;迁移或导入大版本号前先升级 |
 | T-72 | `GetOwnership` 报 `invalid marker lease "shared:1001:1e+14:1"`,且此后一直失败 | core ≤ v1.15.2 的 marker 脚本拼接 Lua 数值,Lua 5.1 用 `%.14g` 渲染,10^14 变成科学计数法并已写入 Redis | lease 字符串里出现 `e+` | 升级 core;已损坏的记录要人工改回十进制或重新 claim |

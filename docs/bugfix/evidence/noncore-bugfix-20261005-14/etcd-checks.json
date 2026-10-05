@@ -1,0 +1,38 @@
+[
+  {
+    "check": "race",
+    "command": "go test -race -count=1 -json ./app ./etcd/driver",
+    "exit": 0,
+    "passedLeaves": 162,
+    "passedEvents": 173,
+    "skipped": [],
+    "failed": []
+  },
+  {
+    "check": "build",
+    "command": "go build ./...",
+    "exit": 0,
+    "passedLeaves": 0,
+    "passedEvents": 0,
+    "skipped": [],
+    "failed": []
+  },
+  {
+    "check": "root",
+    "command": "go test -count=1 -json .",
+    "exit": 0,
+    "passedLeaves": 14,
+    "passedEvents": 14,
+    "skipped": [],
+    "failed": []
+  },
+  {
+    "check": "vet",
+    "command": "go vet ./app ./etcd/driver",
+    "exit": 0,
+    "passedLeaves": 0,
+    "passedEvents": 0,
+    "skipped": [],
+    "failed": []
+  }
+]
