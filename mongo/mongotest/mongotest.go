@@ -976,26 +976,56 @@ func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
 // and the missing ones still count as null. Checked on a real replica set
 // (8.0.28). The fake used to skip a document whenever any field was missing
 // and ignored Sparse, so it accepted duplicate null keys real Mongo rejects.
-// Array values (multikey) are still compared whole, not per element.
-func uniqueKey(doc bson.M, index uniqueIndex) (values []any, ok bool) {
+func uniqueKey(doc bson.M, index uniqueIndex) (values []any, ok bool, err error) {
 	values = make([]any, len(index.fields))
 	present := false
 	for i, field := range index.fields {
-		if value, found := lookupPath(doc, field); found {
+		value, found, err := uniqueFieldValue(doc, field)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
 			values[i] = value
 			present = true
 		}
 	}
 	if index.sparse && !present {
-		return nil, false
+		return nil, false, nil
 	}
-	return values, true
+	return values, true, nil
+}
+
+// uniqueFieldValue reads one indexed path, refusing arrays.
+//
+// RR-20261005-NC-102: real Mongo builds a multikey entry per array element —
+// {tags:[1,2]} collides with {tags:[2,3]} and with {tags:2}, and a path
+// through an array of documents ("m.n" over m:[{n:1}]) indexes each element's
+// n. The fake used to compare the whole array as one value and treat a path
+// through an array as missing (null), so it accepted duplicates real Mongo
+// rejects and reported duplicates real Mongo accepts. It does not model
+// multikey indexes, so it says so instead of guessing.
+func uniqueFieldValue(doc bson.M, path string) (any, bool, error) {
+	parts := strings.Split(path, ".")
+	for depth := 1; depth <= len(parts); depth++ {
+		value, found := lookupPath(doc, strings.Join(parts[:depth], "."))
+		if !found {
+			return nil, false, nil
+		}
+		switch value.(type) {
+		case bson.A, []any:
+			return nil, false, fmt.Errorf("%w: unique index path %q reaches an array (multikey index)", ErrUnsupported, path)
+		}
+		if depth == len(parts) {
+			return value, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, index uniqueIndex) error {
-	values, ok := uniqueKey(doc, index)
-	if !ok {
-		return nil
+	values, ok, err := uniqueKey(doc, index)
+	if err != nil || !ok {
+		return err
 	}
 	for key, existing := range c.docs {
 		if key == selfKey {
@@ -1003,10 +1033,14 @@ func (c *Collection) checkUniqueFieldsLocked(doc bson.M, selfKey string, index u
 		}
 		// Same rule as uniqueKey, inline so the scan does not allocate per
 		// stored document: a missing field compares as null, and a sparse
-		// index skips a stored document none of whose fields exist.
+		// index skips a stored document none of whose fields exist. Stored
+		// documents passed the same array refusal on their own write.
 		same, present := true, false
 		for i, field := range index.fields {
-			other, found := lookupPath(existing, field)
+			other, found, err := uniqueFieldValue(existing, field)
+			if err != nil {
+				return err
+			}
 			present = present || found
 			eq, err := valuesEqual(other, values[i])
 			if err != nil {

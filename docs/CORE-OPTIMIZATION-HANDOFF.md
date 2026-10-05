@@ -109,6 +109,8 @@ Sync：提交条件满足 → Interest事实 → 单一Flush → 版本/预算/�
 
 ## 4. 最新验收与用户接受的边界
 
+**10-05 N04 接续（revn04）**：[NC-100/101/102](review/REVIEW-2026-10-05-n04-revn04.md)已修复、声明场景验证，未发版。Redis 驱动脚本不再自动重放（真实 Redis 上修前一次 Update 写两次）、事务提交受 `transaction_timeout` 约束（真实副本集修前阻塞到网络恢复）、mongotest 唯一索引遇数组拒绝；第 22 轮正式 Repository 链路 28 叶子首次在真实副本集上通过。Redis Cluster / mongos 未验，默认 `MaxRetries` 对非脚本写命令的重放待维护者定（运行记录观察 3）。
+
 **10-05 N07第二批**：[NC-64/65](review/REVIEW-2026-10-05-noncore-n07b.md)已修复、声明场景验证，未发版。生成game-demo真实进程经`gm.config.reload`热更（成功/失败/rollback、flags与scene refresh读取）符合契约，handler内两次读不跨代（新增控制用例）；修的是模板层：玩家加载后重建Gear与attr_final、开关热更说明改指configs/data JSON。第一批C-O1/2/3与event未接线在真实进程里无触发路径，维持观察；generate不跳过`.dev/`与运行时不查required移交N08。
 
 **10-05 N06 S1/S2/S3/S6 复核（revn06）**：[NC-50/51/52 与 RR-20261001-06 残余](review/REVIEW-2026-10-05-n06-revn06.md)已修复、声明场景验证，未发版；versionstore 退避后重读（所有 Redis 服务的伪冲突），隔离真实 Redis 集成 891 pass/23 环境 skip。S4/S5 由其他 agent 接续，N06 仍部分完成；默认生成工程无指标落点（观察 1）待功能决定。
@@ -188,6 +190,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N04 revn04：[NC-100](bug/RR-20261005-NC-100.md) P1 / [NC-101](bug/RR-20261005-NC-101.md) P2 / [NC-102](bug/RR-20261005-NC-102.md) P3 **已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-05-n04-revn04.md)、[证据](bugfix/evidence/noncore-bugfix-20261005-revn04/README.md)。T-238/239（T-231～237 已被并行线占用，顺延）。行为收紧：回复丢失的 Redis 脚本、超时的 Mongo 提交都以错误返回，调用方按结果未知处理；无 API / 持久格式变化。
+
 10-05 N08 codegen：[NC-70](bug/RR-20261005-NC-70.md) / [NC-71](bug/RR-20261005-NC-71.md) / [NC-72](bug/RR-20261005-NC-72.md) / [NC-73](bug/RR-20261005-NC-73.md) 四个 P3 **已修复、声明场景验证，未发版**（[本轮](review/REVIEW-2026-10-05-n08-codegen.md)；修复 [NC-70](bugfix/RR-20261005-NC-70.md) / [NC-71](bugfix/RR-20261005-NC-71.md) / [NC-72](bugfix/RR-20261005-NC-72.md) / [NC-73](bugfix/RR-20261005-NC-73.md)）——中断后暂存树残留、预览漏列配置刷新、cfggen 帮助目录冲突、roost id 错误码扫描与生成器不一致（NC-63 残余）。T-232～T-234。
 
 10-05 N07第二批：[NC-64](bug/RR-20261005-NC-64.md) / [NC-65](bug/RR-20261005-NC-65.md) **已修复、声明场景验证，未发版**；[证据](bugfix/evidence/noncore-bugfix-20261005-n07b/README.md)。模板改动需 `roost project sync`；NC-65 不改存储格式，存量玩家下次加载即正确；T-231。

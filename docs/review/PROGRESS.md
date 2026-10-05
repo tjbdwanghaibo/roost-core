@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N04 接续（revn04）
+
+起点 `be7bcc18`，独立 worktree 分支 `revn04`；图谱 generation 2026-09-30、以当前源码补证。[本轮](REVIEW-2026-10-05-n04-revn04.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-revn04/README.md)。NC-100 P1、NC-101 P2、NC-102 P3 已修复、声明场景验证，未发版。
+
+| 项 | 本轮 | 状态 / 边界 |
+| --- | --- | --- |
+| versionstore NC-52 复核 | Memory / Redis 两实现与 rank、activity、RedisDispatches 等 CAS 循环逐一对照 | 一致，无同形态；真实 Redis 丢回复暴露 NC-100（与 NC-52 无因果） |
+| Redis | 丢回复（自建 toxiproxy 代理）、RefHMap Patch TTL 多 hash、私有 AOF 实例 kill -9 重启 | NC-100 修复；TTL / 重连 / 持久恢复控制通过；Cluster 未跑 |
+| 真实 Mongo | 事务重试、未知提交（upstream / downstream 黑洞）、唯一索引 9 组对照 | NC-101、NC-102 修复；mongos / 主从切换中提交未验 |
+| 正式 Repository 链路 | 第 22 轮 28 消费叶子换真实副本集后端（迁移→文件 WAL→投影→新 Manager 重载、强杀子进程重开 WAL） | 28/28 通过两次；DataEngine 本体未改 |
+
+4 组新正式回归（driver RESP 替身 1、versionstore 真实 Redis 1、mongo/driver 真实副本集 1、mongotest 1），修前红原文入证据。真实 Redis 集成 1008 pass / 30 环境 skip / 0 fail，相关 race -count=3、mongotest 消费包、根包、build/vet 通过，计数不累计作覆盖率。N04 仍场景部分完成，不计 completed/15。方向判断：第三方驱动默认重试 / 超时语义与“结果未知交给调用方”契约反复不一致（见本轮记录）。不等待 CI，不发版。
+
 ## 2026-10-05 N03 bus / nats / servicerpc / etcd（revn03）
 
 基线 `be7bcc18`，分支 `revn03`，NC 段 90～99（用 90～93）；图谱 generation 2026-09-30 早于 N03 全部 10-04 / 10-05 修复，以当前源码补证。[本轮](REVIEW-2026-10-05-noncore-n03.md) · [审查证据](evidence/noncore-review-20261005-n03/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n03/README.md)。审查 `e81d81bc`，修复 `ae742984` / `64179ad5` / `25646001` / `89a102db`。

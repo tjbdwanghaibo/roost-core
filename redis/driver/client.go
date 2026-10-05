@@ -322,12 +322,51 @@ func (c *Client) Pipeline() fredis.IPipeline {
 	return newPipeline(c.rdb.Pipeline())
 }
 
+// scriptCmd 是一条不让 go-redis 自动重放的脚本命令。
+//
+// 驱动的 MaxRetries 在连接 EOF / 读超时后会把同一条命令换连接再发；对脚本来说，回复丢失时
+// 服务端可能已经执行过，重放就是第二次执行。CompareAndSet 第二次执行看到的是自己刚写的值、
+// 回答“没比上”，versionstore.Update 于是把 mutate 叠在自己那次写上再写一次并返回成功
+// （RR-20261005-NC-100）。结果未知只能由调用方按语义裁决，所以脚本的传输错误原样返回，
+// 由调用方决定是否、怎样重试；普通读写命令仍保留驱动的自动重试。
+// 集群模式下 MOVED / ASK 重定向不受影响（脚本在错误节点上没有执行）。
+type scriptCmd struct{ *goredis.Cmd }
+
+func (scriptCmd) NoRetry() bool { return true }
+
+// Clone 保留不可重放标记；路由层复制命令时不能退回普通 *Cmd。
+func (c scriptCmd) Clone() goredis.Cmder {
+	return scriptCmd{c.Cmd.Clone().(*goredis.Cmd)}
+}
+
+// newScriptCmd 与 go-redis 的 cmdable.eval 组装相同的参数与首键位置，只是带上 NoRetry。
+func newScriptCmd(ctx context.Context, name, payload string, keys []string, args ...any) scriptCmd {
+	cmdArgs := make([]any, 0, 3+len(keys)+len(args))
+	cmdArgs = append(cmdArgs, name, payload, len(keys))
+	for _, key := range keys {
+		cmdArgs = append(cmdArgs, key)
+	}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := goredis.NewCmd(ctx, cmdArgs...)
+	if len(keys) > 0 {
+		cmd.SetFirstKeyPos(3)
+	}
+	return scriptCmd{cmd}
+}
+
+// runScript 发一次脚本，不经驱动重放。
+func runScript(ctx context.Context, rdb goredis.UniversalClient, name, payload string, keys []string, args ...any) *goredis.Cmd {
+	cmd := newScriptCmd(ctx, name, payload, keys, args...)
+	_ = rdb.Process(ctx, cmd)
+	return cmd.Cmd
+}
+
 func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
-	return c.rdb.Eval(ctx, script, keys, args...).Result()
+	return runScript(ctx, c.rdb, "eval", script, keys, args...).Result()
 }
 
 func (c *Client) EvalSha(ctx context.Context, sha string, keys []string, args ...any) (any, error) {
-	return c.rdb.EvalSha(ctx, sha, keys, args...).Result()
+	return runScript(ctx, c.rdb, "evalsha", sha, keys, args...).Result()
 }
 
 // EvalDurable pins a physical connection so WAITAOF observes the replication
@@ -359,7 +398,10 @@ func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []fr
 
 	commands := make([]*goredis.Cmd, 0, len(calls))
 	for _, call := range calls {
-		commands = append(commands, pipe.Eval(ctx, script, call.Keys, call.Args...))
+		// 与 Eval 相同，脚本不经驱动重放（RR-20261005-NC-100）：含 NoRetry 命令的流水线整体不重发。
+		command := newScriptCmd(ctx, "eval", script, call.Keys, call.Args...)
+		_ = pipe.Process(ctx, command)
+		commands = append(commands, command.Cmd)
 	}
 	waitCommand := pipe.Do(ctx, "WAITAOF", numLocal, numReplicas, timeout.Milliseconds())
 	if _, err := pipe.Exec(ctx); err != nil {

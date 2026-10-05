@@ -86,6 +86,13 @@ type Store[K comparable, T any] interface {
 	// Update applies mutate under a compare-and-set, retrying on conflict.
 	// It returns the value that was written and its new version; applied is
 	// false when mutate declined to save.
+	//
+	// A transport error (connection reset, timeout) leaves the outcome
+	// unknown: the write may have landed. Retrying the same Update re-applies
+	// mutate to whatever is stored, so a caller that retries needs an
+	// idempotent mutate — typically a request id recorded inside the value.
+	// The store itself never replays a write whose reply was lost
+	// (RR-20261005-NC-100).
 	Update(ctx context.Context, key K, mutate Mutate[T]) (result Versioned[T], applied bool, err error)
 
 	// Create stores a value only if the key is absent, and reports whether it

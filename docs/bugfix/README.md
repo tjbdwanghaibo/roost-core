@@ -1,5 +1,13 @@
 # Bugfix 记录
 
+**10-05 N04 接续（revn04）：NC-100/101/102 已修复、声明场景验证，未发版。** Redis 驱动的脚本命令不再自动重放（真实 Redis + 自建 toxiproxy 代理红→绿）；事务提交受 `transaction_timeout` 约束（真实副本集 upstream / downstream 黑洞红→绿）；mongotest 唯一索引遇数组明确拒绝。真实 Redis 集成 1008 pass / 30 环境 skip，第 22 轮正式 Repository 链路 28 叶子在真实副本集上通过。[证据](evidence/noncore-bugfix-20261005-revn04/README.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-100](RR-20261005-NC-100.md) | `redis/driver` 的 Eval / EvalSha / EvalBatchDurable 以 NoRetry 命令发送 | 已修复，未发版 |
+| [RR-20261005-NC-101](RR-20261005-NC-101.md) | session.WithTransaction 自实现重试规则，提交受截止约束 | 已修复，未发版 |
+| [RR-20261005-NC-102](RR-20261005-NC-102.md) | mongotest 唯一索引路径遇数组返回 ErrUnsupported | 已修复，未发版 |
+
 **10-05 N03 通信 / etcd（revn03）：NC-90～92 三个 P2 与 NC-93 P3 已修复、声明场景验证（含真实 NATS / etcd），未发版。** Bus 停止把在途 JetStream handler 纳入排空、回包不随停止取消；派发池拒绝的轻量 RPC 立即回失败包、不进死信；被 JetStream 请求流截获的轻量调用不执行并返回 `bus.ErrRPCCapturedByJetStream`；Resign 按调用方期限返回。[本轮](../review/REVIEW-2026-10-05-noncore-n03.md) · [证据](evidence/noncore-bugfix-20261005-n03/README.md)
 
 | 编号 | 修复 | 状态 |

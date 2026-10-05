@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **Redis 驱动不再自动重放回复丢失的 Lua 脚本**（RR-20261005-NC-100）：`MaxRetries`（缺省 3）此前在 EOF / 读超时后把 EVAL 换连接重发，脚本可能执行两次；versionstore 的 compare-and-set 第二次执行看到自己的写，`Update` 于是把 mutate 再叠一次并返回成功（真实 Redis 上一次 Update 写入两条相同消息）。`redis/driver` 的 `Eval` / `EvalSha` / `EvalBatchDurable` 改为不可重放命令，回复丢失时返回传输错误；普通读写命令的重试不变。依赖驱动“救回”脚本调用的代码现在会看到该错误。[记录](docs/bugfix/RR-20261005-NC-100.md)
+- **`mongo.transaction_timeout` 现在也约束事务提交**（RR-20261005-NC-101）：此前驱动便捷 API 用 background ctx 提交，网络在回调之后黑洞时事务阻塞到网络恢复（3s 窗口实测 40s / 150s）。`mongo/driver` 的 session 以相同重试规则自实现循环，提交使用带截止的 ctx；到时返回的错误可能已提交，按结果未知处理。[记录](docs/bugfix/RR-20261005-NC-101.md)
+- **mongotest 唯一索引路径上遇到数组时返回 `ErrUnsupported`**（RR-20261005-NC-102）：此前把数组当一个值比较，放过真实 Mongo 会拒绝的重复、又误报真实 Mongo 接受的写入。[记录](docs/bugfix/RR-20261005-NC-102.md)
 - **roost 被 Ctrl-C / SIGTERM / SIGHUP 打断 go 命令时不再把暂存树留在工程旁**（RR-20261005-NC-70）：`project deps / sync / upgrade / new` 与 `generate` 在 `.roost-deps-*` / `.roost-generate-*` 里跑 `go get` / `go mod tidy` 时被中断，roost 照旧杀掉 go 进程树并死于该信号，但此前进程死于信号不跑 defer，整份工程副本留在父目录。现在 `runCommandTree` 在重发信号前删掉本次命令所在、已登记的那一棵暂存树。[记录](docs/bugfix/RR-20261005-NC-70.md)
 - **`roost project diff` 与 `project upgrade --dry-run` 列出 sync 将刷新的应用自有配置**（RR-20261005-NC-71）：预览先对 `config.<svc>.yaml`、`config.<svc>.prod.example.yaml`、`secret.<svc>.example.yaml` 的副本做与 sync 相同的 shutdown 块刷新，再按刷新后的值渲染模板；此前 Mod 变化或旧工程升级时这三份文件不出现在预览里。生成工程文档与 `roost help project` 同步写明 sync / upgrade 会刷新未手改的生成 shutdown 块。[记录](docs/bugfix/RR-20261005-NC-71.md)
 - **`roost id next / check` 与 `roost add errcode` 按生成器的口径识别错误码**（RR-20261005-NC-73，RR-20261005-NC-63 残余）：此前用正则，别名导入的 `ec.Define(…)` 不算占用（分配到已占用的码，直到 `roost generate` 才报 duplicate），注释 / 字符串里的文字却算占用（`roost id check` 误报重复）。现在复用 errcode 生成器导出的 AST 扫描 `ScanDefinitions`；与生成器一致，`_test.go` 里的定义不再计入，非字面量 `Define` 会让 ID 工具报同一条错误。[记录](docs/bugfix/RR-20261005-NC-73.md)

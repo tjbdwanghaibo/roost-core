@@ -1,0 +1,33 @@
+=== RUN   TestIsIndexDefinitionConflict
+--- PASS: TestIsIndexDefinitionConflict (0.00s)
+=== RUN   TestIsIndexNotFound
+--- PASS: TestIsIndexNotFound (0.00s)
+=== RUN   TestIndexConflictPolicyRequiresExplicitAutoRecreate
+--- PASS: TestIndexConflictPolicyRequiresExplicitAutoRecreate (0.00s)
+=== RUN   TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry
+--- PASS: TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry (0.00s)
+=== RUN   TestStringifyIDDoesNotExposeNilSentinel
+--- PASS: TestStringifyIDDoesNotExposeNilSentinel (0.00s)
+=== RUN   TestBulkWriteRefusesAnUnknownModelTypeBeforeReachingTheDriver
+--- PASS: TestBulkWriteRefusesAnUnknownModelTypeBeforeReachingTheDriver (0.00s)
+=== RUN   TestWrapErrorKeepsTheDriverChainBehindTheSentinel
+--- PASS: TestWrapErrorKeepsTheDriverChainBehindTheSentinel (0.00s)
+=== RUN   TestClientAndCollectionGuardsWithoutADeployment
+--- PASS: TestClientAndCollectionGuardsWithoutADeployment (0.00s)
+=== RUN   TestRealMongoValidateDeploymentRefusesAStandalone
+    real_mongo_promises_test.go:87: standalone reports logicalSessionTimeoutMinutes=30: client.go:93 is unreachable on this server version
+--- PASS: TestRealMongoValidateDeploymentRefusesAStandalone (1.58s)
+=== RUN   TestRealMongoIndexConflictIsSurfacedUnlessRecreationIsAllowed
+--- PASS: TestRealMongoIndexConflictIsSurfacedUnlessRecreationIsAllowed (0.69s)
+=== RUN   TestRealMongoWriteErrorAbortsTransactionAndKeepsDriverChain
+--- PASS: TestRealMongoWriteErrorAbortsTransactionAndKeepsDriverChain (0.53s)
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout/upstream
+    transaction_deadline_integration_test.go:150: upstream: elapsed=2s calls=1 committed=0 err= connection(127.0.0.1:57151[-144]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:57154->127.0.0.1:57151: i/o timeout: connection(127.0.0.1:57151[-144]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:57154->127.0.0.1:57151: i/o timeout
+=== RUN   TestRealMongoCommitIsBoundedByTransactionTimeout/downstream
+    transaction_deadline_integration_test.go:150: downstream: elapsed=2s calls=1 committed=1 err= connection(127.0.0.1:57278[-251]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:57285->127.0.0.1:57278: i/o timeout: connection(127.0.0.1:57278[-251]) incomplete read of message header: context deadline exceeded: client timed out waiting for server response: read tcp 127.0.0.1:57285->127.0.0.1:57278: i/o timeout
+--- PASS: TestRealMongoCommitIsBoundedByTransactionTimeout (5.37s)
+    --- PASS: TestRealMongoCommitIsBoundedByTransactionTimeout/upstream (2.79s)
+    --- PASS: TestRealMongoCommitIsBoundedByTransactionTimeout/downstream (2.58s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/mongo/driver	8.716s
