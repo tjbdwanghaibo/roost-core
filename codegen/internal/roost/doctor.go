@@ -139,6 +139,13 @@ func runDoctorGoCommand(root, name string, timeout time.Duration, success, fix s
 func runDoctorCommand(binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	return runDoctorCommandUntil(ctx, binary, root, name, timeout, success, fix, args...)
+}
+
+// runDoctorCommandUntil runs the command until ctx ends; a ctx that ends with
+// context.DeadlineExceeded is reported as having timed out after timeout. It
+// lets tests decide when the deadline passes instead of racing a timer.
+func runDoctorCommandUntil(ctx context.Context, binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
 	// RR-20261004-13: a tree, so the timeout also kills go's compile / link
 	// children and their copy of the output pipe cannot hold the call open.
 	var output bytes.Buffer

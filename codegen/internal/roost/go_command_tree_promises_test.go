@@ -13,6 +13,10 @@ package roost
 //
 // 这里用一个 sh 替身代替 go：起一个长寿孙进程（继承 stdout / stderr 与工作目录）后 wait，
 // 和被 kill 的 go 留下 compile 子进程是同一形态。
+//
+// 同步全部是确定性的：替身把孙进程 pid 原子地写进文件，测试等到这份报告之后才取消或让
+// 期限到达；“等报告”“等孙进程消失”的时间上限只作兜底，放得很宽，满载时也不会误报。
+// 唯一按时间断言的是承诺本身：上下文结束后命令要在 treeCommandReturnBound 内返回。
 
 import (
 	"bytes"
@@ -26,14 +30,27 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
 
 // treeCommandReturnBound is how long a cancelled command may take to return.
-// It is well above the production WaitDelay; the grandchild lives 30s.
+// It is the promise under test, twice the production WaitDelay.
 const treeCommandReturnBound = 10 * time.Second
+
+// treeStartBound and grandchildExitBound are backstops, not expectations: the
+// tests wait for the fake's report and for the grandchild's death, and these
+// only keep a broken run from hanging. A loaded machine (go test -race ./...
+// beside other builds) can take seconds to exec a fresh script, so they are
+// generous. The grandchild lives far longer than both, so a leaked one is
+// still alive when it is checked.
+const (
+	treeStartBound      = 2 * time.Minute
+	grandchildExitBound = 30 * time.Second
+	grandchildLifetime  = "600"
+)
 
 type fakeGoTree struct {
 	binary  string
@@ -55,7 +72,7 @@ func newFakeGoTree(t *testing.T) fakeGoTree {
 	binary := filepath.Join(base, "fake-go")
 	script := "#!/bin/sh\n" +
 		"echo fake go started\n" +
-		"sleep 30 &\n" +
+		"sleep " + grandchildLifetime + " &\n" +
 		"echo $! > '" + pidFile + ".tmp' && mv '" + pidFile + ".tmp' '" + pidFile + "'\n" +
 		"wait\n"
 	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
@@ -63,7 +80,7 @@ func newFakeGoTree(t *testing.T) fakeGoTree {
 	}
 	fake := fakeGoTree{binary: binary, pidFile: pidFile, dir: dir}
 	t.Cleanup(func() {
-		// Never leave the 30s sleeper behind, whatever the outcome.
+		// Never leave the sleeper behind, whatever the outcome.
 		if pid, ok := fake.grandchild(); ok {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
@@ -80,18 +97,73 @@ func (f fakeGoTree) grandchild() (int, bool) {
 	return pid, err == nil && pid > 0
 }
 
-func (f fakeGoTree) waitStarted(t *testing.T) int {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+// waitStarted waits for the fake's report that its grandchild is running. It
+// gives up early if ended closes first (whatever runs the fake went away
+// before the report, so it never will come), and otherwise only after the
+// treeStartBound backstop.
+func (f fakeGoTree) waitStarted(ended <-chan struct{}) (int, error) {
+	backstop := time.NewTimer(treeStartBound)
+	defer backstop.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		if pid, ok := f.grandchild(); ok {
-			return pid
+			return pid, nil
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-tick.C:
+		case <-ended:
+			if pid, ok := f.grandchild(); ok {
+				return pid, nil
+			}
+			return 0, errors.New("the command ended before fake go reported its grandchild")
+		case <-backstop.C:
+			return 0, fmt.Errorf("fake go did not report its grandchild within the %s backstop", treeStartBound)
+		}
 	}
-	t.Fatalf("fake go did not start its grandchild within 5s")
-	return 0
 }
+
+// processGone reports whether pid no longer runs. A killed grandchild is
+// reparented to init / launchd and stays a zombie until reaped there, which
+// can lag under load; a zombie runs nothing, so it counts as gone.
+func processGone(pid int) bool {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		return true
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	state := strings.TrimSpace(string(out))
+	if err != nil {
+		var exit *exec.ExitError
+		return errors.As(err, &exit) && state == ""
+	}
+	return strings.HasPrefix(state, "Z")
+}
+
+// deadlineAtWill is a context whose deadline passes when the test says so, so
+// a timeout path can be driven after the fake reported its grandchild instead
+// of racing a timer against a slow exec.
+type deadlineAtWill struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newDeadlineAtWill() *deadlineAtWill {
+	return &deadlineAtWill{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *deadlineAtWill) Done() <-chan struct{} { return c.done }
+
+func (c *deadlineAtWill) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *deadlineAtWill) pass() { c.once.Do(func() { close(c.done) }) }
 
 // awaitReturn waits for a command whose context ended at ctxEnd to return. If
 // it does not return in time, the grandchild is killed so the call can unwind
@@ -111,17 +183,18 @@ func (f fakeGoTree) awaitReturn(t *testing.T, what string, ctxEnd time.Time, don
 	<-done
 }
 
-// assertGrandchildGone fails if the grandchild is still alive shortly after the
-// command returned (it is reparented and reaped, so allow a moment).
+// assertGrandchildGone fails if the grandchild still runs after the command
+// returned. The tree kill was sent before Wait returned, so it is already
+// dying; grandchildExitBound only absorbs scheduling delay under load.
 func (f fakeGoTree) assertGrandchildGone(t *testing.T, what string) {
 	t.Helper()
 	pid, ok := f.grandchild()
 	if !ok {
 		t.Fatalf("%s: fake go never recorded its grandchild", what)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(grandchildExitBound)
 	for {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		if processGone(pid) {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -137,27 +210,58 @@ func (f fakeGoTree) assertGrandchildGone(t *testing.T, what string) {
 			}
 		}
 	}
-	t.Errorf("%s returned but grandchild %d is still alive 2s later (working directory %s; command Dir was %s)", what, pid, cwd, f.dir)
+	t.Errorf("%s returned but grandchild %d is still alive %s later (working directory %s; command Dir was %s)", what, pid, grandchildExitBound, cwd, f.dir)
 }
 
+// The doctor's deadline passes only once the fake reported its grandchild: a
+// real 3s timer raced the exec of the fake, and on a loaded machine it often
+// fired before the grandchild existed, so the test proved nothing and failed
+// with "fake go never recorded its grandchild".
 func TestDoctorGoCommandTimeoutReturnsAndLeavesNoGrandchild(t *testing.T) {
+	fake := newFakeGoTree(t)
+	ctx := newDeadlineAtWill()
+	t.Cleanup(ctx.pass)
+	done := make(chan struct{})
+	var item CheckItem
+	go func() {
+		defer close(done)
+		item = runDoctorCommandUntil(ctx, fake.binary, fake.dir, "compile:go-test", 3*time.Second, "ok", "retry", "test", "./...")
+	}()
+	if _, err := fake.waitStarted(done); err != nil {
+		t.Fatalf("runDoctorGoCommand: %v", err)
+	}
+	expired := time.Now()
+	ctx.pass()
+	fake.awaitReturn(t, "runDoctorGoCommand", expired, done)
+	t.Logf("returned %s after its deadline: %s %s", time.Since(expired).Round(time.Millisecond), item.Status, item.Detail)
+	if item.Status != StatusFail || !strings.Contains(item.Detail, "timed out after 3s") {
+		t.Errorf("doctor item = %s %q, want a fail that says it timed out after 3s", item.Status, item.Detail)
+	}
+	fake.assertGrandchildGone(t, "runDoctorGoCommand")
+}
+
+// runDoctorCommand itself turns its timeout into the deadline: a real timer,
+// so the fake may or may not have reached its grandchild when it fires. Either
+// way the call returns in time, says it timed out, and leaves nothing running.
+func TestDoctorGoCommandTimeoutIsItsOwnDeadline(t *testing.T) {
 	fake := newFakeGoTree(t)
 	done := make(chan struct{})
 	var item CheckItem
 	started := time.Now()
 	go func() {
 		defer close(done)
-		// The timeout leaves the fake ample time to start its grandchild (the
-		// first exec of a fresh script can be slow on macOS); the call itself
-		// cannot be cancelled any other way.
-		item = runDoctorCommand(fake.binary, fake.dir, "compile:go-test", 3*time.Second, "ok", "retry", "test", "./...")
+		item = runDoctorCommand(fake.binary, fake.dir, "compile:go-test", time.Second, "ok", "retry", "test", "./...")
 	}()
-	fake.awaitReturn(t, "runDoctorGoCommand", started.Add(3*time.Second), done)
-	t.Logf("returned after %s: %s %s", time.Since(started).Round(time.Millisecond), item.Status, item.Detail)
-	if item.Status != StatusFail || !strings.Contains(item.Detail, "timed out after 3s") {
-		t.Errorf("doctor item = %s %q, want a fail that says it timed out after 3s", item.Status, item.Detail)
+	fake.awaitReturn(t, "runDoctorGoCommand", started.Add(time.Second), done)
+	if elapsed := time.Since(started); elapsed < time.Second {
+		t.Errorf("returned after %s, before its 1s timeout", elapsed)
 	}
-	fake.assertGrandchildGone(t, "runDoctorGoCommand")
+	if item.Status != StatusFail || !strings.Contains(item.Detail, "timed out after 1s") {
+		t.Errorf("doctor item = %s %q, want a fail that says it timed out after 1s", item.Status, item.Detail)
+	}
+	if _, ok := fake.grandchild(); ok {
+		fake.assertGrandchildGone(t, "runDoctorGoCommand")
+	}
 }
 
 // The generate path (TidyProjectDependencies inside GenerateTransactional)
@@ -173,7 +277,9 @@ func TestDependencyCommandCancelWithBufferedOutputReturnsAndLeavesNoGrandchild(t
 		defer close(done)
 		err = runDependencyBinary(ctx, fake.binary, fake.dir, &stdout, &stderr, "mod", "tidy")
 	}()
-	fake.waitStarted(t)
+	if _, startErr := fake.waitStarted(done); startErr != nil {
+		t.Fatalf("runDependencyCommand (buffered output): %v", startErr)
+	}
 	cancel()
 	fake.awaitReturn(t, "runDependencyCommand (buffered output)", time.Now(), done)
 	if err == nil {
@@ -215,7 +321,9 @@ func TestDependencyCommandCancelWithFileOutputLeavesNoGrandchild(t *testing.T) {
 		defer close(done)
 		runErr = runDependencyBinary(ctx, fake.binary, fake.dir, out, out, "get", "example.com/x@latest")
 	}()
-	fake.waitStarted(t)
+	if _, startErr := fake.waitStarted(done); startErr != nil {
+		t.Fatalf("runDependencyCommand (file output): %v", startErr)
+	}
 	cancel()
 	fake.awaitReturn(t, "runDependencyCommand (file output)", time.Now(), done)
 	if runErr == nil {
@@ -255,8 +363,23 @@ func TestDependencyCommandInterruptKillsTheGoTreeAndStillKillsRoost(t *testing.T
 		t.Fatal(err)
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- child.Wait() }()
-	fake.waitStarted(t)
+	childEnded := make(chan struct{})
+	go func() {
+		exited <- child.Wait()
+		close(childEnded)
+	}()
+	// The child is a fresh exec of this (possibly -race) test binary, which a
+	// loaded machine can take many seconds to bring up; wait for the report.
+	if _, err := fake.waitStarted(childEnded); err != nil {
+		select {
+		case <-childEnded:
+			t.Fatalf("roost (test child): %v; it ended with %v, stderr: %s", err, child.ProcessState, childStderr.String())
+		default:
+			_ = child.Process.Kill()
+			<-childEnded
+			t.Fatalf("roost (test child): %v", err)
+		}
+	}
 	if err := syscall.Kill(-child.Process.Pid, syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}

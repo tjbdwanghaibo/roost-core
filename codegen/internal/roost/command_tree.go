@@ -15,6 +15,12 @@ import (
 // that ignores the kill. After it, exec kills the process and closes the pipes.
 const commandTreeWaitDelay = 5 * time.Second
 
+// reraisedSignalGrace is how long runCommandTree waits for a signal it
+// re-raised on itself to end the process. The default action normally takes
+// effect at once; the wait only runs out when something else in the process
+// handles the signal, and then the call returns the interruption as an error.
+const reraisedSignalGrace = 10 * time.Second
+
 // runCommandTree runs binary to completion in dir and treats it and everything
 // it starts as one tree: when ctx ends, the whole tree is killed and the call
 // returns within commandTreeWaitDelay.
@@ -63,6 +69,12 @@ func runCommandTree(ctx context.Context, dir string, env []string, stdout, stder
 		signal.Stop(interrupts)
 		if self, findErr := os.FindProcess(os.Getpid()); findErr == nil {
 			_ = self.Signal(sig)
+			// kill(2) on our own pid does not wait for the default action: in
+			// a multi-threaded process another thread may take the signal, and
+			// on a loaded machine the caller then ran on — rolling back, printing
+			// the error, exiting with its own status — before the signal ended
+			// the process. Wait for it instead of returning into that path.
+			time.Sleep(reraisedSignalGrace)
 		}
 		// Reached only if something else in the process handles sig.
 		return fmt.Errorf("interrupted by %v: %w", sig, err)
