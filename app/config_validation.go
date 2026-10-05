@@ -58,6 +58,7 @@ func ValidateServiceConfig(cfg *viper.Viper) error {
 	validateNonNegativeIntIfSet(&errs, cfg, "remote_entity.sync_retry_queue_cap")
 	validatePositiveDurationIfSet(&errs, cfg, "remote_entity.lock_ttl")
 	validatePositiveDurationIfSet(&errs, cfg, "remote_entity.op_timeout")
+	errs = append(errs, readSingletonSettings(cfg).validate()...)
 	validateProductionServiceConfig(&errs, cfg, serverType)
 	return errors.Join(errs...)
 }

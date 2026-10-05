@@ -12,6 +12,6 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$repo_dir"
 export GOWORK=off
-# -p 1：四个包共用同一个集群，串行避免互相干扰。同包里以 REDIS_ADDR / ROOST_DATAENGINE_IT
+# -p 1：这些包共用同一个集群，串行避免互相干扰。同包里以 REDIS_ADDR / ROOST_DATAENGINE_IT
 # 准入的用例在这里照常 skip，它们各自的入口是 ci.yml 的 Redis job 与 dataengine-env.sh test。
-go test -tags=integration -count=1 -p 1 ./kit/service/mail ./redis/driver ./remoteentity ./service/mail
+go test -tags=integration -count=1 -p 1 ./kit/redis ./kit/service/mail ./redis/driver ./remoteentity ./service/mail

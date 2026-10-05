@@ -4,6 +4,10 @@
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-05 App 单实例锁（main，未发版）
+
+`singleton.enabled=true` 的服务在任何 Mod Init 之前先拿 `<key_prefix>:<server_type>:<sid>` 的锁，别人持有就等，失锁即 fail-stop，全部 Mod 停完才释放；`RuntimeFailure.OnFail` 让任何 fail-stop 先围栏 Nest（Remote Entity fatal 从此也会围栏，行为变化）；`app.ModSingleton` 提供只读的 `Live` 活性查询。配置、行为与约束见 [§2 单实例锁](#单实例锁singleton)。codegen 的装配与配置生成尚未落地（方案第 2 笔），现在需要手工接入。
+
 ## 2026-10-04 Mongo替身事务与Redis锁接入（main，未发版）
 
 NC-26～29现已修：BSON.D dotted路径可读写且保留兄弟字段，unique建立拒绝已有重复，非法bulk Type在写前拒绝。事务ctx使用私有快照，事务外Lookup/Documents/Seed只见已提交数据；集合粒度冲突可重跑callback，callback须幂等并等待自身操作结束。finished ctx不能留给后台继续写，事务内EnsureIndexes明确ErrUnsupported。完整Mongo索引/数组路径、Drop/namespace并发、未知commit/HA不由替身证明。[限制与消费者](bugfix/RR-20261004-NC-29.md)。
@@ -91,6 +95,40 @@ Mod 生命周期为 `Init → Provide → Start → StopWithContext`。硬依赖
 | 长事务协调器 | mongo、nats、dataengine、saga、ops |
 | 状态同步 | player 接入层或 nettransport 作为 `entitysync.Transport`；业务装 `entitysync.Manager`，`policy.Interest / Group / Direct` 作为订阅政策（Manager 因传输失败丢掉会话而观察者仍在时，重开会话后 `Interest.Resubscribe` 恢复其订阅，见 RR-20260926-40；实体卸载后重载不了被框架退回 remove、之后重新登记时，三种政策自动重新提交仍持有的订阅，见 RR-20260926-70） |
 | 确定性帧同步 | lockstep + KCP/QUIC/UDP transport |
+
+### 单实例锁（singleton.*）
+
+同一服务类型 + sid 同一时刻只让一个进程跑 Mod。它只针对**同一 sid 崩溃重启时短暂出现两个进程**：旧进程卡住（SIGSTOP、长 GC、调试器）或没完全退出，新进程已被拉起。跨主机 / 换卷并存、网络分区、Redis failover 丢键不在保证范围内（[方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) §1）。模块不感知锁、也不应各自检查：fail-stop 由 App 统一触发。
+
+接入（codegen 生成这一行在方案第 2 笔，之前手工加）：
+
+```go
+app.New(name, version).
+	Singleton(kitredis.SingletonStore). // kitredis = github.com/tjbdwanghaibo/roost-core/kit/redis
+	Mods(...)
+```
+
+```yaml
+singleton:
+  enabled: true                       # 默认 false：不建连接，行为与不装完全相同
+  key_prefix: roost:<project>:singleton  # 启用时必填，不能含空白
+  ttl: 15s
+  renew_interval: 3s                  # 单次续期的超时也取这个值
+  guard: 5s                           # 本地窗口提前于键过期结束的量
+  startup_wait: 30s                   # 缺省 2 × ttl
+redis:
+  addr: 127.0.0.1:6379                # 或 cluster_addrs；启用 singleton 时必须显式配置
+```
+
+- **后端**：`kitredis.SingletonStore` 从同一份 `redis.*` 建一条独立的小连接（不依赖 Redis Mod），CAS 复用 `redis.CompareAndSet` / `CompareAndDelete`；缺 `redis.addr` 与 `redis.cluster_addrs` 时启动失败（不沿用 Redis Mod 的 `localhost:6379` 兜底）。`enabled=true` 而 bootstrap 没调 `Singleton` 时启动失败，错误是 `app.ErrSingletonOpenerMissing`。
+- **时间关系**（`ValidateServiceConfig` 校验，违反即启动失败）：`renew_interval ≤ guard`、`2 × renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2 × renew_interval`。默认 15 / 3 / 5 / 30s 全部满足。
+- **启动**：键被别人持有时等待，每 `renew_interval` 重试，持有者变化时打一条 `singleton: waiting for the current holder to release or expire`（带对方的值，含 hostname / pid）；等待期间什么 Mod 都不 Init。对方正常停机会释放键，新进程立即拿到；对方崩溃或卡住时最多等 `ttl + renew_interval`。到 `startup_wait` 仍被持有返回 `app.ErrSingletonHeld`——对方一直在续期，说明两个健康进程配了同一个服务类型 + sid，是部署错误，App 不会抢锁；最后一次是报错 / 超时则返回 `app.ErrSingletonStoreUnavailable`。等待期间 SIGTERM 按默认处置直接终止进程（还没持有锁）。
+- **持有**：一个 goroutine 按固定节拍续期（上一次成功的请求发出时刻 + k × `renew_interval`），窗口 `validUntil` 从请求发出时刻起算；回复迟到（晚于 `asked + ttl − guard`）不作数、立即再续一次。续期答“键已不是我的”，或续期失败且已到 `validUntil − guard`，即 `RuntimeFailure.Fail(app.ErrSingletonLost …)`：Nest 立即围栏、`Service.Shutdown`、Mod 逆序停、非零退出。代价是 Redis 连续不可用约 `ttl − guard`（默认 10s）以上时进程会退出重启；需要更宽容时调大 `ttl`。
+- **释放**：只在全部 Mod 停完之后 `CompareAndDelete` 自己的值（停机路径用 `min(shutdown 剩余, 3s)`；启用时 App 把 Mod 停机的截止时间提前至多 3s 留给它，部署的 `shutdown.total_timeout` 应相应加 3s）。`Service.Shutdown` 超时、服务专属或共享 Mod 停机不完整、失锁三种情况不释放，键在 `ttl` 内自然过期；启动失败（Mod Init / Provide / Start、`Service.Init` 失败）在已启动的 Mod 停完后释放。
+- **约定**：拿锁之后、DataEngine 打开 WAL（`flock`）之前启动的 Mod 不应有按 sid 的外部写——旧进程卡住超过 `ttl` 时，新进程会拿到锁、启动这些 Mod，然后在 `nestwal: directory is already locked` 处退出（T-213）。
+- **fail-stop 统一围栏**：`RuntimeFailure.OnFail(hook)` 登记首次失败时的回调（恰好一次、按登记顺序、在调用 `Fail` 的 goroutine 上同步执行，执行完才唤醒 `run`）。kit Nest Mod 登记了 `NestMgr.Fence`，所以失锁、DataEngine fatal、Remote Entity fatal 都会立即拒绝新的和排队中的派发（`nest.ErrNestFenced`）。回调必须快速、不阻塞、不做 I/O。启动期间发生的 fail-stop 让 `run` 停在下一个阶段边界，不再启动后面的 Mod。
+- **活性查询**：`app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)`，`Live(ctx, serverType, sids)` 返回其中持有锁的 sid（按入参顺序，一次最多 200 个）。“活”= 进程持有锁：从任何 Mod Init 之前到全部 Mod 停完，崩溃的进程最多再算 `ttl`。只能看见开了 `singleton.enabled` 的服务类型，且要求查询方与被查方共用同一个 Redis 与 `key_prefix`；`serverType` 传自己的 `server_type`（`registry.Config().GetString("server_type")`），不要写死。`enabled=false` 时不登记，依赖它的模块应在 Init 报错。
+- **观测**：`/readyz` 多一项 `singleton`：持有为 ok，窗口内续期结果未知为 degraded，失锁或未持有为 fail（`/healthz` 不受影响）。
 
 ## 3. Entity、Component 与 DAO
 

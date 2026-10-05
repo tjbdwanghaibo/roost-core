@@ -6,7 +6,15 @@
 
 ### Added
 
+- **App 单实例锁：同一服务类型 + sid 只跑一个进程**（[方案](docs/feature/APP-SINGLETON-LOCK-2026-10-05.md) 第 1 笔，维护者 10-05 决定 D-A / D-B）：`singleton.enabled=true` 时 App 在 `NewRegistry` 之后、第一个 Mod `Init` 之前用后端单键 CAS 获取 `<singleton.key_prefix>:<server_type>:<sid>`（值 `token|hostname|pid|started_unix_ms`）；键被别人持有就等待（每 `renew_interval` 重试，最多 `startup_wait`，到上限返回 `app.ErrSingletonHeld`，最后一次是报错则 `app.ErrSingletonStoreUnavailable`，不抢锁），丢回复后键是自己的值则认领。持有期间一个 goroutine 按固定节拍续期，窗口从请求发出时刻起算，迟到的 Applied 不作数；续期答“不是我的”或续期失败已到 `validUntil − guard` 即 `RuntimeFailure.Fail(app.ErrSingletonLost …)` fail-stop（Redis 连续不可用约 10s 以上进程会退出重启）。全部 Mod 停完才释放（Mod 停机截止时间为此提前至多 3s）；`Service.Shutdown` 超时、Mod 停机不完整、失锁三条路径不释放、键在 TTL 内过期。配置 `singleton.{enabled,key_prefix,ttl,renew_interval,guard,startup_wait}`（默认 15s / 3s / 5s / 2×ttl），`ValidateServiceConfig` 钉住 `renew_interval ≤ guard`、`2×renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2×renew_interval`；启用而 bootstrap 没调 `App.Singleton` 时启动失败（`app.ErrSingletonOpenerMissing`）。后端 `app.SingletonStore` / `app.SingletonOpener`，Redis 实现 `kitredis.SingletonStore`（从同一份 `redis.*` 建独立小连接；缺 `redis.addr` / `redis.cluster_addrs` 报错，不用 localhost 兜底）。`/readyz` 多一项 `singleton` 健康检查。codegen 生成装配与配置在第 2 笔，本版需要手工在 bootstrap 调用 `Singleton(kitredis.SingletonStore)` 并写配置。[使用说明](docs/USER_GUIDE.md#单实例锁singleton)、T-212 / T-213
+- **`RuntimeFailure.OnFail(hook)`**：登记首次失败时调用的回调（恰好一次、按登记顺序、在调用 `Fail` 的 goroutine 上同步执行，全部执行完才投递 `Done`；失败后登记立即调用；回调 panic 被 recover 并并入 `Err`，回调里再调 `Fail` 不死锁）。`run` 现在也在启动各阶段之间检查 `RuntimeFailure.Err()`：启动期间发生的 fail-stop 不再继续启动后面的 Mod，而是按启动失败路径停掉已启动的 Mod。
+- **单实例锁的只读活性查询 `app.SingletonLiveness.Live`**：能力名 `app.ModSingleton`（kit 别名 `mods.ModSingleton`），`Live(ctx, serverType, sids)` 按 `<key_prefix>:<serverType>:<sid>` 逐键读、值非空即活，按入参顺序返回，一次最多 `app.SingletonLiveMaxSIDs`（200）个；Redis 实现逐键 GET（pipeline），Redis Cluster 下跨槽不报 `CROSSSLOT`。`singleton.enabled=false` 时不登记。
 - **codegen：`//roost:dao nocoll` 声明无集合的内存 DAO**（W-2026-09-18-09，维护者 10-04 选 A，[方案](docs/feature/DAO-NO-COLLECTION-2026-10-04.md)）：全部字段须 `nopersist`；生成物保留读写、undo、回滚快照与 `MarshalSync` / `ApplySync`，不生成集合 / 库名常量和任何 Mongo 读写、迁移、加载路径，以 `<Dao>RegistryKey` 在 DaoManager 登记。与 `coll=` / `db=` 同时出现、`nocoll=<值>`、含持久字段，以及持久实体或 `remote=managed` 实体使用它时，都在生成期报错并点名。game-demo 的 `MonsterDao` 已改用该声明，不再编造 `monsters` 集合；已生成工程把 marker 改成 `nocoll` 后 `roost generate` 即可原地迁移。
+
+### Changed
+
+- **Remote Entity fatal 现在也会围栏 Nest**（行为变化，App 单实例锁方案 §5）：kit Nest Mod 在 `Provide` 里把 `NestMgr.Fence` 登记进 `RuntimeFailure.OnFail`，任何 fail-stop（单实例锁丢失、DataEngine fatal、Remote Entity 释放失败 fatal）都在唤醒停机之前立即拒绝新的和排队中的 Nest 派发（`nest.ErrNestFenced`）。此前 Remote Entity fatal 只调 `Fail`、Nest 在优雅停机开始前仍接受派发。DataEngine `onFatal` 里显式的 `Fence` 保持不变（幂等）。
+- **kit/redis 的 Redis 集成套件进入 CI Redis job**：`kit/redis` 新增以 `REDIS_ADDR` 准入的 integration 用例（单实例锁 store），ci.yml 的 `service-redis` 与 `kit/scripts/integration/redis-cluster-suites.sh` 都列入 `./kit/redis`。
 
 ### Fixed
 

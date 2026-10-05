@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：**只出方案**，代码没改。
+- 性质：方案。**状态（2026-10-05）：第 1 笔已实施**（`feat(app)：同一服务类型 + sid 的单实例锁`，提交号见 §13）；第 2～5 笔（含 2b / 3b）未实施。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -432,3 +432,20 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 默认“一个 sid 一个进程”、由 App 锁使之成立而无需改动的代码：World 实体 ID = sid、demo `runtimeid` 以 sid 分片（两个同 sid 进程会撞 ID）、bus 按实例订阅 `svc.<type>.<sid>`、JetStream 按实例 RPC durable、syncbus 每 sid 一个 durable、部署清单单副本。
 
 `Live` 只能看见开了 `singleton.enabled` 的服务类型；activity 的 candidates 都是 game（默认开启）。若项目给 game 关掉 singleton，`Live` 恒空、activity 退化为只等自己——USER_GUIDE 写明这条约束。
+
+## 13. 实施记录
+
+### 第 1 笔（2026-10-05）
+
+- 范围：`app/singleton.go`（`SingletonStore` / `SingletonOpener` / `SingletonLiveness`、`App.Singleton`、`app.ModSingleton`、状态机、健康检查 `singleton`）、`app/app.go` 的 `run` 挂点与统一 `defer` 收尾、`app/runtime_failure.go` 的 `OnFail`、`app/config_validation.go` 的 `singleton.*` 校验；`kit/redis/singleton.go`（`kitredis.SingletonStore`，`redisConfig` 与 `RedisMod.Init` 共用）；`kit/nest/nest_mod.go` 登记 `OnFail(mgr.Fence)`；`kit/mods.ModSingleton` 别名；ci.yml Redis job 与 `redis-cluster-suites.sh` 加 `./kit/redis`；CHANGELOG / USER_GUIDE / TROUBLESHOOTING T-212、T-213。§7.2 末条“kit service README 写明 global 租约 API 保留”按 §12 作废，未写。
+- 先红后绿：骨架（接口、`App.Singleton` 只存 opener、`OnFail` 只存回调、`run` 不拿锁）下 §8.1 的 #1～#14 与“启动期间 RuntimeFailure 停在阶段边界”全部在断言上失败（例：#1 `service started serving while the singleton key belonged to another process`，#13 `hooks ran [], want [first second] once`，#12 `ValidateServiceConfig = <nil>`）；`kit/nest` 的 `TestRuntimeFailureFencesNestDispatch` 在原代码上 `FenceError after RuntimeFailure = <nil>`。实现后 `go test -race -count=3 ./app/ ./kit/nest/ ./kit/redis/` 通过，singleton 用例 `-count=30 -race` 稳定。
+- 与方案的差异（均为细化，语义不变）：
+  1. 启动获取时遇到**迟到的 Applied** 与“丢回复认领”同样处理：立即用一次 Renew 确认、以那次的 `asked` 起算窗口（§3.4 只对续期写了迟到规则）。
+  2. Mod 停机截止时间的 Release 预留取 `min(3s, shutdown.total_timeout / 2)`，避免很小的 total_timeout 被预留吃光；codegen 第 2 笔给 total_timeout 加 3s 后与方案一致。
+  3. `runtimeFailure.Err()` 的检查点：每个 Mod `Start` 之前、最后一个 `Start` 之后（`PhaseModsStarted` 之前）、`Service.Init` 之后（与 `PhaseServiceStarted` 失败同一清理路径：`Service.Shutdown` + 逆序停 Mod；该路径错误文本由 `cleanup after lifecycle failure` 改为 `cleanup after startup failure`）。
+  4. 启动失败路径只有在逆序停止**全部完成**（没有 Mod 停机超时）时才 Release；`stopModsReverse` 为此返回是否停完。
+  5. 健康检查在打开 store 时就登记，未持有时报 fail（`not acquired`）；等待期间 ops 还没启动，不可见。
+  6. `kitredis.SingletonStore` 关闭 go-redis 自动重试（`MaxRetries = -1`），每次 CAS 是一次往返，重试由状态机按节拍负责。
+  7. 测试注入的 `signalSource` 在启动等待期间被监听，收到信号 `run` 返回 nil（生产上等待期间不注册信号，按默认处置终止进程，与方案相同）。
+  8. `Live` 拒绝空 `serverType`；空 `sids` 直接返回、不访问 store。
+- 验证：见提交说明；`kitredis` integration 在隔离 Redis 上通过，`Get` 跨槽在本机临时起的 3 主 Redis Cluster（用完即删）上通过。未验证：§8.2 真实进程演练（第 5 笔）、codegen 生成链路（第 2 笔）。

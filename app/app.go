@@ -38,6 +38,10 @@ type App struct {
 	// where a process cannot deliver os.Interrupt to itself (notably Windows).
 	// Production leaves it nil and uses the process signal notifier below.
 	signalSource func() (<-chan os.Signal, func())
+
+	singletonOpener SingletonOpener
+	singletonClock  singletonClock
+	singleton       *singletonLock
 }
 
 // serviceEntry holds a service and its specific mods.
@@ -171,8 +175,49 @@ func (a *App) run(serverType ServiceName) error {
 	}); err != nil {
 		return err
 	}
+	runtimeFailure, _ := Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
+	// startupFailure 在启动各阶段之间检查：启动期间（例如 DataEngine 重放很长时）发生的 fail-stop
+	// （失锁、DataEngine / Remote fatal）不等进入 Serve 的 select，按启动失败路径停掉已启动的 Mod。
+	startupFailure := func() error {
+		if err := runtimeFailure.Err(); err != nil {
+			return fmt.Errorf("app: runtime failure during startup: %w", err)
+		}
+		return nil
+	}
+
+	// --- Singleton lock: before any Mod Init ---
+	// 同一服务类型 + sid 只让一个进程跑 Mod（docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）。
+	// 收尾统一在 defer 里：先停续期，再按 singletonReleasable 决定是否 Release，最后关闭 store。
+	// singletonReleasable 只在“全部 Mod 都停完”的路径上置位（逐个返回点置位，漏掉的路径默认不释放，
+	// 键在 TTL 内自然过期，方向是安全的）；singletonReleaseDeadline 是停机路径 shutdownCtx 的截止时间。
+	singleton, err := a.openSingleton(serverType)
+	if err != nil {
+		return err
+	}
+	var singletonReleasable bool
+	var singletonReleaseDeadline time.Time
+	if singleton != nil {
+		defer func() { singleton.finish(singletonReleasable, singletonReleaseDeadline) }()
+		var waitSignals <-chan os.Signal
+		if a.signalSource != nil {
+			signals, stop := a.signalSource()
+			waitSignals = signals
+			defer stop()
+		}
+		slog.Info("singleton: acquiring", "key", singleton.key)
+		if err := singleton.acquire(waitSignals); err != nil {
+			if errors.Is(err, errSingletonWaitInterrupted) {
+				return nil
+			}
+			return err
+		}
+		slog.Info("singleton: acquired", "key", singleton.key, "value", string(singleton.value))
+		singleton.startRenewal()
+	}
+
 	sharedMods, err := sortMods(a.mods, nil)
 	if err != nil {
+		singletonReleasable = true
 		return err
 	}
 	var startedSharedMods []Mod
@@ -184,20 +229,25 @@ func (a *App) run(serverType ServiceName) error {
 	for _, mod := range sharedMods {
 		slog.Info("mod init", "mod", mod.Name())
 		if err := mod.Init(a.cfg); err != nil {
+			singletonReleasable = true
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
 	for _, mod := range sharedMods {
 		if err := mod.Provide(a.registry); err != nil {
-			stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
+			singletonReleasable = stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
 		providedSharedMods = append(providedSharedMods, mod)
 	}
 	for _, mod := range sharedMods {
+		if err := startupFailure(); err != nil {
+			singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
+			return err
+		}
 		slog.Info("mod start", "mod", mod.Name())
 		if err := mod.Start(); err != nil {
-			stopModsReverse(providedSharedMods, "mod stop")
+			singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
 		}
 		startedSharedMods = append(startedSharedMods, mod)
@@ -206,7 +256,7 @@ func (a *App) run(serverType ServiceName) error {
 	// --- Service entry ---
 	entry, ok := a.services[serverType]
 	if !ok {
-		stopModsReverse(startedSharedMods, "mod stop")
+		singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
 		return fmt.Errorf("unknown server type: %s", serverType)
 	}
 	sharedNames := make(map[ModName]struct{}, len(sharedMods))
@@ -215,7 +265,7 @@ func (a *App) run(serverType ServiceName) error {
 	}
 	serviceMods, err := sortMods(entry.mods, sharedNames)
 	if err != nil {
-		stopModsReverse(startedSharedMods, "mod stop")
+		singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
 		return err
 	}
 
@@ -223,34 +273,49 @@ func (a *App) run(serverType ServiceName) error {
 	for _, mod := range serviceMods {
 		slog.Info("mod init (service-specific)", "mod", mod.Name())
 		if err := mod.Init(a.cfg); err != nil {
-			stopModsReverse(startedSharedMods, "mod stop")
+			singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
 	for _, mod := range serviceMods {
 		if err := mod.Provide(a.registry); err != nil {
-			stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)")
-			stopModsReverse(startedSharedMods, "mod stop")
+			singletonReleasable = allStopped(
+				stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)"),
+				stopModsReverse(startedSharedMods, "mod stop"))
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
 		providedServiceMods = append(providedServiceMods, mod)
 	}
 	for _, mod := range serviceMods {
+		if err := startupFailure(); err != nil {
+			singletonReleasable = allStopped(
+				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
+				stopModsReverse(startedSharedMods, "mod stop"))
+			return err
+		}
 		slog.Info("mod start (service-specific)", "mod", mod.Name())
 		if err := mod.Start(); err != nil {
-			stopModsReverse(providedServiceMods, "mod stop (service-specific)")
-			stopModsReverse(startedSharedMods, "mod stop")
+			singletonReleasable = allStopped(
+				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
+				stopModsReverse(startedSharedMods, "mod stop"))
 			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
 		}
 		startedServiceMods = append(startedServiceMods, mod)
+	}
+	if err := startupFailure(); err != nil {
+		singletonReleasable = allStopped(
+			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
+			stopModsReverse(startedSharedMods, "mod stop"))
+		return err
 	}
 	if err := a.emitLifecycle(context.Background(), lifecycle.Event{
 		Phase:   lifecycle.PhaseModsStarted,
 		Service: string(serverType),
 		Name:    a.name,
 	}); err != nil {
-		stopModsReverse(startedServiceMods, "mod stop (service-specific)")
-		stopModsReverse(startedSharedMods, "mod stop")
+		singletonReleasable = allStopped(
+			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
+			stopModsReverse(startedSharedMods, "mod stop"))
 		return err
 	}
 
@@ -258,23 +323,29 @@ func (a *App) run(serverType ServiceName) error {
 	svc := entry.svc
 	slog.Info("service init", "service", svc.Name())
 	if err := svc.Init(a.registry); err != nil {
-		stopModsReverse(startedServiceMods, "mod stop (service-specific)")
-		stopModsReverse(startedSharedMods, "mod stop")
+		singletonReleasable = allStopped(
+			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
+			stopModsReverse(startedSharedMods, "mod stop"))
 		return fmt.Errorf("service %s init: %w", svc.Name(), err)
 	}
-	if err := a.emitLifecycle(context.Background(), lifecycle.Event{
-		Phase:   lifecycle.PhaseServiceStarted,
-		Service: string(serverType),
-		Name:    string(svc.Name()),
-	}); err != nil {
+	startErr := startupFailure()
+	if startErr == nil {
+		startErr = a.emitLifecycle(context.Background(), lifecycle.Event{
+			Phase:   lifecycle.PhaseServiceStarted,
+			Service: string(serverType),
+			Name:    string(svc.Name()),
+		})
+	}
+	if startErr != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if cleanupErr := svc.Shutdown(cleanupCtx); cleanupErr != nil {
-			err = errors.Join(err, fmt.Errorf("service %s cleanup after lifecycle failure: %w", svc.Name(), cleanupErr))
+			startErr = errors.Join(startErr, fmt.Errorf("service %s cleanup after startup failure: %w", svc.Name(), cleanupErr))
 		}
 		cleanupCancel()
-		stopModsReverse(startedServiceMods, "mod stop (service-specific)")
-		stopModsReverse(startedSharedMods, "mod stop")
-		return err
+		singletonReleasable = allStopped(
+			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
+			stopModsReverse(startedSharedMods, "mod stop"))
+		return startErr
 	}
 
 	// Register signal handling before Serve can expose readiness and receive
@@ -290,7 +361,6 @@ func (a *App) run(serverType ServiceName) error {
 		serveErr <- svc.Serve(ctx)
 	}()
 
-	runtimeFailure, _ := Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
 	// Wait for signal, fail-stop infrastructure, or service exit.
 	var serviceErr error
 	serveDone := false
@@ -316,6 +386,18 @@ func (a *App) run(serverType ServiceName) error {
 	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+	// 启用单实例锁时，Mod 停机用的截止时间提前 releaseReserve，留给全部 Mod 停完之后的 Release：
+	// stopModsReverseBefore 会把截止前的剩余时间全部分给 Mod。预留不超过总时长的一半，避免很小的
+	// total_timeout 被预留吃光（codegen 会把 Release 的 3s 计入 total_timeout）。
+	modStopCtx := shutdownCtx
+	if singleton != nil {
+		deadline, _ := shutdownCtx.Deadline()
+		singletonReleaseDeadline = deadline
+		releaseReserve := min(singletonReleaseBudget, shutdownTimeout/2)
+		var modStopCancel context.CancelFunc
+		modStopCtx, modStopCancel = context.WithDeadline(shutdownCtx, deadline.Add(-releaseReserve))
+		defer modStopCancel()
+	}
 
 	slog.Info("service shutdown", "service", svc.Name())
 	var shutdownErr error
@@ -348,13 +430,14 @@ func (a *App) run(serverType ServiceName) error {
 			// Dependencies must remain alive while Serve or Shutdown can still
 			// access them. Returning without stopping mods is safer than racing
 			// an uncooperative service during process termination.
+			// 单实例锁同理不释放（singletonReleasable 保持 false）。
 			return errors.Join(serviceErr, shutdownErr)
 		}
 	}
 
 	// Stop service-specific mods in reverse order
 	// 共享 Mod 在服务专属 Mod 之后停止，但共用同一个总时限：规划时把它们声明的预算算进去。
-	if err := stopModsReverseBefore(shutdownCtx, startedServiceMods, startedSharedMods, "mod stop (service-specific)"); err != nil {
+	if err := stopModsReverseBefore(modStopCtx, startedServiceMods, startedSharedMods, "mod stop (service-specific)"); err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
 		if stopIncomplete(err) {
 			// A service-specific Mod may still use shared capabilities. Preserve
@@ -364,8 +447,11 @@ func (a *App) run(serverType ServiceName) error {
 	}
 
 	// Stop shared mods in reverse order
-	if err := stopModsReverseWithContext(shutdownCtx, startedSharedMods, "mod stop"); err != nil {
+	if err := stopModsReverseWithContext(modStopCtx, startedSharedMods, "mod stop"); err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
+		singletonReleasable = !stopIncomplete(err)
+	} else {
+		singletonReleasable = true
 	}
 
 	slog.Info("server stopped", "type", serverType)
@@ -403,10 +489,25 @@ func isMissingConfig(err error) bool {
 	return errors.As(err, &notFound)
 }
 
-func stopModsReverse(mods []Mod, msg string) {
-	if err := stopModsReverseWithContext(context.Background(), mods, msg); err != nil {
+// stopModsReverse 是启动失败路径的逆序停止（无总截止时间，每个 Mod 用自己的默认时长）。
+// 返回是否全部停完：某个 Mod 停机超时会中断后续停止、保留它们的依赖，此时返回 false，
+// 调用方据此不释放单实例锁。Mod 返回普通错误仍算停完。
+func stopModsReverse(mods []Mod, msg string) bool {
+	err := stopModsReverseWithContext(context.Background(), mods, msg)
+	if err != nil {
 		slog.Error("mod stop failed", "err", err)
 	}
+	return !stopIncomplete(err)
+}
+
+// allStopped 合并几段 stopModsReverse 的结果；参数在调用前已全部求值，每段都会执行。
+func allStopped(stopped ...bool) bool {
+	for _, ok := range stopped {
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func stopModsReverseWithContext(ctx context.Context, mods []Mod, msg string) error {

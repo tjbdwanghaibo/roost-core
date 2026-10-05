@@ -187,6 +187,13 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		m.engine = nil
 		return err
 	}
+	// 任何 fail-stop（单实例锁丢失、DataEngine fatal、Remote fatal）都由 App 的 RuntimeFailure 在唤醒
+	// 停机之前先执行这个回调：立即拒绝新的和排队中的派发，模块不用各自“找 Nest、围栏”。
+	// Fence 只拿 lifecycleMu 与 dispatcher.mu 各一次、不做 I/O，满足 OnFail“快速、不阻塞”的要求；
+	// 失败若已经发生（例如启动期间），登记时立即围栏。
+	if failure, ok := app.Lookup[*app.RuntimeFailure](registry, mods.ModRuntimeFailure); ok && failure != nil {
+		failure.OnFail(m.engine.Fence)
+	}
 	if healthRegistry, ok := app.Lookup[*health.Registry](registry, mods.ModHealth); ok && healthRegistry != nil {
 		healthRegistry.Register("nest", health.CheckerFunc(m.checkHealth))
 	}

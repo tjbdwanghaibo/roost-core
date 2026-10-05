@@ -11,6 +11,7 @@ const (
 	ModAdminMetadata  app.ModName = app.ModAdminMetadata
 	ModLifecycle      app.ModName = app.ModLifecycle
 	ModRuntimeFailure app.ModName = app.ModRuntimeFailure
+	ModSingleton      app.ModName = app.ModSingleton
 
 	ModRedis      app.ModName = "redis"
 	ModRedisLock  app.ModName = "redis.lock"

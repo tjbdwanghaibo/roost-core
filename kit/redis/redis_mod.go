@@ -30,28 +30,30 @@ func NewRedisMod() *RedisMod {
 func (m *RedisMod) Name() app.ModName { return mods.ModRedis }
 
 func (m *RedisMod) Init(cfg *viper.Viper) error {
-	addr := cfg.GetString("redis.addr")
-	if addr == "" {
-		addr = "localhost:6379"
+	m.cfg = redisConfig(cfg)
+	if m.cfg.Addr == "" {
+		m.cfg.Addr = "localhost:6379"
 	}
-	m.cfg = fredis.DefaultConfig(addr)
-	m.cfg.Password = cfg.GetString("redis.password")
-	m.cfg.DB = cfg.GetInt("redis.db")
+	return nil
+}
 
+// redisConfig 把 redis.* 解析成连接配置，RedisMod 与单实例锁的 SingletonStore 共用。
+// redis.addr 缺省时 Addr 留空：RedisMod 自己兜底 localhost:6379，SingletonStore 则报错。
+func redisConfig(cfg *viper.Viper) *fredis.Config {
+	out := fredis.DefaultConfig(cfg.GetString("redis.addr"))
+	out.Password = cfg.GetString("redis.password")
+	out.DB = cfg.GetInt("redis.db")
 	if poolSize := cfg.GetInt("redis.pool_size"); poolSize > 0 {
-		m.cfg.PoolSize = poolSize
+		out.PoolSize = poolSize
 	}
 	if minIdle := cfg.GetInt("redis.min_idle_conns"); minIdle > 0 {
-		m.cfg.MinIdleConns = minIdle
+		out.MinIdleConns = minIdle
 	}
-
 	// Cluster mode
-	clusterAddrs := cfg.GetString("redis.cluster_addrs")
-	if clusterAddrs != "" {
-		m.cfg.ClusterAddrs = strings.Split(clusterAddrs, ",")
+	if clusterAddrs := cfg.GetString("redis.cluster_addrs"); clusterAddrs != "" {
+		out.ClusterAddrs = strings.Split(clusterAddrs, ",")
 	}
-
-	return nil
+	return out
 }
 
 func (m *RedisMod) Provide(r *app.Registry) error {
