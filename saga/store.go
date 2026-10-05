@@ -20,9 +20,10 @@ type Query struct {
 	Limit             int
 }
 
-// ApplyRequest 的 CloseOperation 写 tombstone 时，Receipt 非空表示操作“带结果关闭”（协调器接收了它的
-// completion），为空表示“放弃关闭”（超时用尽、saga 截止、定义缺失）。实现 CompletionHistoryStore 的
-// Store 要把这个区别记进 tombstone（U-0280）。
+// ApplyRequest 的 CloseOperation 写 tombstone 时，Receipt 是成功表示操作“带结果关闭”（协调器接收了它的
+// 成功 completion，计入 CompletedSteps），其余都是“放弃关闭”：没有 Receipt（超时用尽、saga 截止、人工
+// Compensate、定义缺失），或以失败关闭（可重试失败用尽、拒绝）——这些关闭都没有记下任何生效的结果。
+// 实现 CompletionHistoryStore 的 Store 要把这个区别记进 tombstone（U-0280）。
 type ApplyRequest struct {
 	ExpectedVersion uint64
 	ExpectedLease   Lease
@@ -67,9 +68,10 @@ type OperationClosure uint8
 const (
 	// OperationClosureUnknown：没有 tombstone，或 tombstone 早于 U-0280、没有记录关闭方式。
 	OperationClosureUnknown OperationClosure = iota
-	// OperationClosedWithResult：协调器接收了这个 operation 的某次 completion 后关闭它。
+	// OperationClosedWithResult：协调器接收了这个 operation 的某次成功 completion 后关闭它。
 	OperationClosedWithResult
-	// OperationAbandoned：协调器没有拿到结果就关闭了它（重试用尽、saga 截止、定义缺失）。
+	// OperationAbandoned：协调器没有接收成功就关闭了它（超时或可重试失败用尽、拒绝、saga 截止、
+	// 人工 Compensate、定义缺失）；之后到达的成功说明那一步已生效却未被计入。
 	OperationAbandoned
 )
 

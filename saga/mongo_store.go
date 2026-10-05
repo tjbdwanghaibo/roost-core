@@ -303,8 +303,10 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 		if request.CloseOperation != "" {
 			var existing operationDoc
 			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &existing)
+			// 只有接收了成功才算“带结果关闭”：协调器只把成功计入 CompletedSteps、纳入补偿。以失败关闭
+			// （可重试失败用尽、拒绝）与超时用尽一样没有记下任何生效的结果，之后到达的成功仍要告警。
 			closure := operationClosureAbandoned
-			if request.Receipt != nil {
+			if request.Receipt != nil && request.Receipt.Success {
 				closure = operationClosureResult
 			}
 			switch {

@@ -157,7 +157,7 @@ func (s *memoryStore) Apply(_ context.Context, q ApplyRequest) (ApplyOutcome, er
 		s.receipts[q.Receipt.CommandID] = *q.Receipt
 	}
 	if q.CloseOperation != "" {
-		if q.Receipt != nil {
+		if q.Receipt != nil && q.Receipt.Success {
 			s.closures[q.CloseOperation] = OperationClosedWithResult
 		} else if _, already := s.closed[q.CloseOperation]; !already {
 			s.closures[q.CloseOperation] = OperationAbandoned

@@ -156,12 +156,14 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
    - 仍 pending 且租约有效 → 不执行，返回可重试错误（nak 后重投），等它有结论；
    - pending 且租约已过期 → **接替**（`status=superseded`、`lease_token+1`），它在 WAL 里未投影的记录随后被 fence 跳过；
      被接替尝试的迟到投递直接 ack、不执行。
-4. **放弃之后迟到的成功只告警**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”
-   （接收了结果才关闭的记为“带结果关闭”）。放弃关闭之后才到的成功说明那一步已生效、却不在 `CompletedSteps` 里、不会被补偿：
+4. **放弃之后迟到的成功只告警**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
+   只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭——协调器在等最后一次尝试时
+   可能接收较早尝试晚到的可重试失败而用尽重试，正在执行的最后一次尝试仍会生效（审查 2026-10-05）。放弃关闭之后才到的成功说明那一步已生效、却不在 `CompletedSteps` 里、不会被补偿：
    记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{saga_type,phase}`，**不重开终态、不自动补偿**。
    运维按 TROUBLESHOOTING T-226 核对：saga 停在 Failed（这一步前面没有已完成步骤）时可以 `Resume`，新一生的同一步骤
    （原生收件箱）回放这次成功、继续往后走，而不是再执行；已进入补偿或 Compensated 的，补偿不含这一步，要按业务手工撤销它。
-   B 之后这只剩“截止前已投影、completion 在放弃后才送达”（effect 发布延迟）与时钟偏差两种来源。
+   B 之后这只剩“截止前已投影、completion 在放弃后才送达”（effect 发布延迟）、“较早尝试晚到的失败让协调器在最后一次尝试执行中放弃”
+   与时钟偏差三种来源。
 5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），原生步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等。
    Mongo 步骤（`MongoCommandInbox`）不在本契约内：它仍是“同一命令最多一次”，跨尝试按 `IdempotencyKey` 做业务幂等
    （如 mail 的 `RequestID`），因为它的提交点在 handler 的 Mongo 事务里、与命令截止时间没有绑定。
