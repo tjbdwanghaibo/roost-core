@@ -372,6 +372,30 @@ func (inbox *DataEngineStepInbox) resolveOtherAttempts(ctx context.Context, comm
 	return Reservation{}, false, nil
 }
 
+// operationSuccess 找同一操作实例另一次尝试已经生效的成功（任何一生）。只读：不写守卫、不接替，
+// 供不会执行的投递（过期、认领前过截止）在 ack 前把成功重发给协调器（见 replayOperationSuccess）。
+func (inbox *DataEngineStepInbox) operationSuccess(ctx context.Context, command Command) (Completion, bool, error) {
+	var claims []dataEngineClaim
+	filter := bson.M{"namespace": dataEngineStepNamespace, "operation_key": command.IdempotencyKey}
+	if err := inbox.claims().Find(ctx, filter, &claims, fmongo.FindOption{Limit: maxOperationAttempts + 1}); err != nil {
+		return Completion{}, false, err
+	}
+	for i := range claims {
+		other := claims[i]
+		if other.CommandID == command.ID || other.Status == claimStatusSuperseded {
+			continue
+		}
+		completion, settled, err := inbox.attemptResult(ctx, other)
+		if err != nil {
+			return Completion{}, false, err
+		}
+		if settled && completion.Success {
+			return completion, true, nil
+		}
+	}
+	return Completion{}, false, nil
+}
+
 // attemptResult 读另一次尝试的结论：claim 已标 completed 就用它保存的 completion；仍 pending 时看回执
 // （投影已写回执、claim 还没来得及标记），有回执顺手标记。settled=false 表示还没有结论。
 func (inbox *DataEngineStepInbox) attemptResult(ctx context.Context, claim dataEngineClaim) (Completion, bool, error) {

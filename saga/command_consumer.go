@@ -357,9 +357,17 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 				return replayErr
 			}
 			if !found {
-				metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
-				slog.Info("saga: step command expired before it ran; acknowledged without executing",
-					"command_id", command.ID, "saga_id", command.SagaID, "deadline_at", command.DeadlineAt)
+				// 这次尝试不执行，但同一操作实例另一次尝试的成功可能在退避期间被协调器丢弃，而这条可能是
+				// 最后一次尝试：ack 前把那次成功重发，协调器还在等就接收，已放弃就告警（U-0280 复核）。
+				replayed, err := replayOperationSuccess(messageCtx, inbox, transport, command)
+				if err != nil {
+					return err
+				}
+				if !replayed {
+					metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
+					slog.Info("saga: step command expired before it ran; acknowledged without executing",
+						"command_id", command.ID, "saga_id", command.SagaID, "deadline_at", command.DeadlineAt)
+				}
 			}
 			return nil
 		}
@@ -372,8 +380,21 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		defer cancel()
 		reservation, err := inbox.Reserve(processCtx, command)
 		switch {
-		case errors.Is(err, errAttemptSuperseded), errors.Is(err, ErrCommandExpired):
-			// 这次尝试已被同一操作实例的较新尝试接替，或在认领前过了截止时间：它永远不会执行，ack。
+		case errors.Is(err, ErrCommandExpired):
+			// 认领前过了截止时间：不执行，ack；与上面的过期分支一样先重发同一操作实例已生效的成功。
+			// 用 messageCtx：processCtx 的截止就是命令截止，此刻已经过了。
+			replayed, replayErr := replayOperationSuccess(messageCtx, inbox, transport, command)
+			if replayErr != nil {
+				return replayErr
+			}
+			if !replayed {
+				metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
+				slog.Info("saga: step attempt will not run; acknowledged without executing",
+					"command_id", command.ID, "saga_id", command.SagaID, "reason", err)
+			}
+			return nil
+		case errors.Is(err, errAttemptSuperseded):
+			// 这次尝试已被同一操作实例的较新尝试接替：它永远不会执行，ack（接替者负责回放或执行）。
 			metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
 			slog.Info("saga: step attempt will not run; acknowledged without executing",
 				"command_id", command.ID, "saga_id", command.SagaID, "reason", err)
@@ -411,6 +432,17 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		_, err = inbox.waitReplay(processCtx, command)
 		return err
 	})
+}
+
+// replayOperationSuccess 把同一操作实例另一次尝试已生效的成功经 saga 结果流重发给协调器，供不会执行的
+// 投递在 ack 前调用。协调器已接收过那次成功则按回执去重；还在等这个操作则接收；已放弃则告警。
+func replayOperationSuccess(ctx context.Context, inbox *DataEngineStepInbox, transport *JetStreamPublisher, command Command) (bool, error) {
+	completion, found, err := inbox.operationSuccess(ctx, command)
+	if err != nil || !found {
+		return false, err
+	}
+	metrics.IncCounter("saga.step.attempt_replayed_total", nil, 1)
+	return true, transport.PublishCompletion(ctx, completion)
 }
 
 func decodeStepCommand(message *fnats.JetStreamMsg) (Command, error) {
