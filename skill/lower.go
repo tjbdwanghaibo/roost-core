@@ -14,6 +14,43 @@ type loweringContext struct {
 	input          map[string]uint16
 	nextEffect     EffectIndex
 	nextRandomSite RandomSiteIndex
+	// path 是正在 lower 的定义位置（operation 的源路径或声明路径），查找失败时用来定位。
+	path string
+	// failures 收集查找失败（B3 ①）。lower 不在第一处失败就返回，以便一次报出全部未解析的
+	// 名字；有任何失败时 lowerProgram 不交出 Program。
+	failures []Diagnostic
+}
+
+// resolveName 是 lower 里“名字 → 槽位 / handle”查找的唯一入口（维护者决定 B3 ①）：查不到时
+// 记一条 LOWER_UNRESOLVED 编译错误并返回零值，lowerProgram 收尾时整体失败，不交出 Program。
+//
+// 之前各处直接读 map 零值：前面的 pass 漏查一种名字时，lower 静默产出指向槽位 / handle 0 的
+// Program（NC-210 的 memory、NC-214 的 status / attribute / resource），或在少数地方 panic。
+// 类型检查仍是第一道防线，这里是第二道：编译通过的 Program 不再含“查不到却用了 0”的引用。
+func resolveName[T any](c *loweringContext, table map[string]T, kind, name string) T {
+	value, found := table[name]
+	if !found {
+		c.unresolved(kind, name)
+	}
+	return value
+}
+
+func (c *loweringContext) unresolved(kind, name string) {
+	path := c.path
+	if path == "" {
+		path = "$"
+	}
+	c.failures = append(c.failures, Diagnostic{
+		Code: DiagnosticLowerUnresolved, Severity: DiagnosticError, Path: path,
+		Message: fmt.Sprintf("%s %q has no compiled slot or handle (an earlier compiler pass accepted a name it did not resolve)", kind, name),
+	})
+}
+
+// at 把诊断位置切到 path，返回恢复函数。
+func (c *loweringContext) at(path string) func() {
+	previous := c.path
+	c.path = path
+	return func() { c.path = previous }
 }
 
 type lowerScope map[string]LocalIndex
@@ -23,10 +60,17 @@ func Compile(definition *Definition, environment CompileEnvironment) (*Program, 
 	if artifacts == nil || diagnosticsHaveErrors(diagnostics) {
 		return nil, diagnostics
 	}
-	return lowerProgram(artifacts), diagnostics
+	program, lowerDiagnostics := lowerProgram(artifacts)
+	diagnostics = append(diagnostics, lowerDiagnostics...)
+	if diagnosticsHaveErrors(lowerDiagnostics) {
+		return nil, diagnostics
+	}
+	return program, diagnostics
 }
 
-func lowerProgram(artifacts *compileArtifacts) *Program {
+// lowerProgram 把编译产物降成 Program。任一名字查找失败时返回 nil 与 LOWER_UNRESOLVED 诊断；
+// 产物不完整、IR 形状未知、operation 计数对不上等编译器自身的不变量仍然 panic。
+func lowerProgram(artifacts *compileArtifacts) (*Program, []Diagnostic) {
 	if artifacts == nil || artifacts.ir == nil || !artifacts.lowerReady || artifacts.types.types == nil || artifacts.graph.Index == nil {
 		panic("skill: lowerProgram called without complete compiler artifacts")
 	}
@@ -58,8 +102,11 @@ func lowerProgram(artifacts *compileArtifacts) *Program {
 	program.visuals = append([]visualProgram(nil), artifacts.visual.entries...)
 	program.castVisual, program.hasCastVisual = artifacts.visual.castIndex, artifacts.visual.hasCast
 	program.visualCatalogRevision, program.visualCatalogDigest = artifacts.metadata.VisualRevision, artifacts.metadata.VisualDigest
-	if initial, ok := artifacts.graph.Index[artifacts.ir.initialPhase]; ok {
-		program.initialPhase = PhaseIndex(initial)
+	restore := context.at("$.initial_phase")
+	program.initialPhase = PhaseIndex(resolveName(&context, artifacts.graph.Index, "initial phase", artifacts.ir.initialPhase))
+	restore()
+	if len(context.failures) > 0 {
+		return nil, context.failures
 	}
 	if len(program.operations) != len(artifacts.identity.Operations) {
 		panic(fmt.Sprintf("skill: lowering produced %d operations for %d identities", len(program.operations), len(artifacts.identity.Operations)))
@@ -70,27 +117,61 @@ func lowerProgram(artifacts *compileArtifacts) *Program {
 	program.identity.sourceDocumentDigest = artifacts.metadata.SourceDocumentDigest
 	program.identity.gameplayDigest = digestGameplayProgram(program)
 	program.identity.presentationDigest = digestPresentationProgram(program, artifacts.metadata)
-	return program
+	return program, nil
 }
 
 func (c *loweringContext) lowerProcessProperties() {
+	defer c.at("$environment.process_properties")()
 	policies := append([]ProcessPropertyPolicy(nil), c.artifacts.environmentProcessProperties()...)
 	sort.Slice(policies, func(left, right int) bool { return policies[left].Handle < policies[right].Handle })
 	for _, policy := range policies {
 		var operations uint8
 		for _, operation := range policy.Operations {
-			operations |= uint8(1 << lowerProcessNumericOperation(operation))
+			operations |= uint8(1 << c.lowerProcessNumericOperation(operation))
 		}
 		processKinds := make([]processPropertyProcessKind, len(policy.ProcessKinds))
 		for index, processKind := range policy.ProcessKinds {
-			processKinds[index] = lowerProcessPropertyProcessKind(processKind)
+			processKinds[index] = resolveName(c, processPropertyProcessKinds, "process property process kind", processKind)
 		}
 		slotBindings := make([]processPropertySlotBindingProgram, len(policy.SlotBindings))
 		for index, binding := range policy.SlotBindings {
-			slotBindings[index] = lowerProcessPropertySlotBinding(binding)
+			slotBindings[index] = processPropertySlotBindingProgram{
+				stage:   resolveName(c, processPropertySlotStages, "process property slot stage", binding.Stage),
+				variant: resolveName(c, processPropertySlotVariants, "process property slot variant", binding.Variant),
+				field:   resolveName(c, processPropertySlotFields, "process property slot field", binding.Field),
+			}
 		}
-		c.program.processProperties = append(c.program.processProperties, processPropertyProgram{handle: policy.Handle, key: lowerProcessPropertyKey(policy.Key), minimum: policy.Minimum, maximum: policy.Maximum, interpolation: processNumericLinearInteger, rounding: processNumericTruncateTowardZero, allowedOperationsMask: operations, processKinds: processKinds, slotBindings: slotBindings})
+		key := resolveName(c, processPropertyKeys, "process property key", policy.Key)
+		c.program.processProperties = append(c.program.processProperties, processPropertyProgram{handle: policy.Handle, key: key, minimum: policy.Minimum, maximum: policy.Maximum, interpolation: processNumericLinearInteger, rounding: processNumericTruncateTowardZero, allowedOperationsMask: operations, processKinds: processKinds, slotBindings: slotBindings})
 	}
+}
+
+// 环境里 process property 名字到 Program 枚举的对照。lower 经 resolveName 查，查不到报编译错误。
+var (
+	processNumericOperations = map[string]processNumericOperation{"set": processNumericSet, "add": processNumericAdd, "mul_bp": processNumericMulBP}
+	processPropertyKeys      = map[string]processPropertyKey{
+		"speed": processPropertySpeed, "radius": processPropertyRadius, "arc_height": processPropertyArcHeight,
+		"turn_rate_mdeg_per_tick": processPropertyTurnRateMDegPerTick, "angular_speed_mdeg_per_tick": processPropertyAngularSpeedMDegPerTick,
+		"offset_amplitude": processPropertyOffsetAmplitude, "offset_radius": processPropertyOffsetRadius,
+		"return_speed_bp": processPropertyReturnSpeedBP, "collision_force": processPropertyCollisionForce,
+	}
+	processPropertyProcessKinds = map[string]processPropertyProcessKind{"dash": processPropertyProcessDash, "orbit": processPropertyProcessOrbit, "projectile": processPropertyProcessProjectile, "area": processPropertyProcessArea}
+	processPropertySlotStages   = map[string]processPropertySlotStage{"trajectory": processPropertySlotTrajectory, "steering": processPropertySlotSteering, "offset": processPropertySlotOffset, "completion": processPropertySlotCompletion, "collision": processPropertySlotCollision}
+	processPropertySlotVariants = map[string]processPropertySlotVariant{"linear": processPropertyVariantLinear, "path": processPropertyVariantPath, "parabola": processPropertyVariantParabola, "orbit": processPropertyVariantOrbit, "tracking": processPropertyVariantTracking, "zigzag": processPropertyVariantZigzag, "circular": processPropertyVariantCircular, "boomerang": processPropertyVariantBoomerang, "present": processPropertyVariantPresent}
+	processPropertySlotFields   = map[string]processPropertySlotField{"speed": processPropertyFieldSpeed, "radius": processPropertyFieldRadius, "height": processPropertyFieldHeight, "turn_rate_mdeg_per_tick": processPropertyFieldTurnRateMDegPerTick, "angular_speed": processPropertyFieldAngularSpeed, "amplitude": processPropertyFieldAmplitude, "return_speed_bp": processPropertyFieldReturnSpeedBP, "force": processPropertyFieldForce}
+)
+
+func (c *loweringContext) lowerProcessNumericOperation(operation string) processNumericOperation {
+	return resolveName(c, processNumericOperations, "process numeric operation", operation)
+}
+
+// lookupProcessProperty 按名字找环境里的 process property 策略。
+func (c *loweringContext) lookupProcessProperty(key string) ProcessPropertyPolicy {
+	if policy, found := lookupProcessPropertyPolicyByArtifacts(c.artifacts, key); found {
+		return policy
+	}
+	c.unresolved("process property", key)
+	return ProcessPropertyPolicy{}
 }
 
 func (artifacts *compileArtifacts) environmentProcessProperties() []ProcessPropertyPolicy {
@@ -104,69 +185,6 @@ func lookupProcessPropertyPolicyByArtifacts(artifacts *compileArtifacts, key str
 		}
 	}
 	return ProcessPropertyPolicy{}, false
-}
-
-func lowerProcessNumericOperation(operation string) processNumericOperation {
-	switch operation {
-	case "set":
-		return processNumericSet
-	case "add":
-		return processNumericAdd
-	case "mul_bp":
-		return processNumericMulBP
-	default:
-		panic("skill: unsupported process numeric operation")
-	}
-}
-
-func lowerProcessPropertyKey(key string) processPropertyKey {
-	switch key {
-	case "speed":
-		return processPropertySpeed
-	case "radius":
-		return processPropertyRadius
-	case "arc_height":
-		return processPropertyArcHeight
-	case "turn_rate_mdeg_per_tick":
-		return processPropertyTurnRateMDegPerTick
-	case "angular_speed_mdeg_per_tick":
-		return processPropertyAngularSpeedMDegPerTick
-	case "offset_amplitude":
-		return processPropertyOffsetAmplitude
-	case "offset_radius":
-		return processPropertyOffsetRadius
-	case "return_speed_bp":
-		return processPropertyReturnSpeedBP
-	case "collision_force":
-		return processPropertyCollisionForce
-	default:
-		panic("skill: unsupported process property key")
-	}
-}
-
-func lowerProcessPropertyProcessKind(kind string) processPropertyProcessKind {
-	switch kind {
-	case "dash":
-		return processPropertyProcessDash
-	case "orbit":
-		return processPropertyProcessOrbit
-	case "projectile":
-		return processPropertyProcessProjectile
-	case "area":
-		return processPropertyProcessArea
-	default:
-		panic("skill: unsupported process property process kind")
-	}
-}
-
-func lowerProcessPropertySlotBinding(binding ProcessPropertySlotBinding) processPropertySlotBindingProgram {
-	stage := map[string]processPropertySlotStage{"trajectory": processPropertySlotTrajectory, "steering": processPropertySlotSteering, "offset": processPropertySlotOffset, "completion": processPropertySlotCompletion, "collision": processPropertySlotCollision}[binding.Stage]
-	variant := map[string]processPropertySlotVariant{"linear": processPropertyVariantLinear, "path": processPropertyVariantPath, "parabola": processPropertyVariantParabola, "orbit": processPropertyVariantOrbit, "tracking": processPropertyVariantTracking, "zigzag": processPropertyVariantZigzag, "circular": processPropertyVariantCircular, "boomerang": processPropertyVariantBoomerang, "present": processPropertyVariantPresent}[binding.Variant]
-	field := map[string]processPropertySlotField{"speed": processPropertyFieldSpeed, "radius": processPropertyFieldRadius, "height": processPropertyFieldHeight, "turn_rate_mdeg_per_tick": processPropertyFieldTurnRateMDegPerTick, "angular_speed": processPropertyFieldAngularSpeed, "amplitude": processPropertyFieldAmplitude, "return_speed_bp": processPropertyFieldReturnSpeedBP, "force": processPropertyFieldForce}[binding.Field]
-	if stage == 0 || variant == 0 || field == 0 {
-		panic("skill: unsupported process property slot binding")
-	}
-	return processPropertySlotBindingProgram{stage: stage, variant: variant, field: field}
 }
 
 func (c *loweringContext) lowerAbilityProperties() {
@@ -185,6 +203,7 @@ func (c *loweringContext) lowerAbilityProperties() {
 func (c *loweringContext) lowerState() {
 	for _, name := range sortedStateNames(c.artifacts.ir.persistentState) {
 		declaration := c.artifacts.ir.persistentState[name]
+		restore := c.at(declaration.source.Path)
 		minimum, maximum := int64(0), int64(0)
 		if declaration.minimum != nil {
 			minimum = *declaration.minimum
@@ -193,11 +212,12 @@ func (c *loweringContext) lowerState() {
 			maximum = *declaration.maximum
 		}
 		c.program.states = append(c.program.states, stateSlotProgram{
-			slot: c.artifacts.state.slots[name], name: name, typ: declaredStateType(declaration.declaredType), scope: declaration.scope,
+			slot: resolveName(c, c.artifacts.state.slots, "state slot", name), name: name, typ: declaredStateType(declaration.declaredType), scope: declaration.scope,
 			defaultValue: c.lowerValue(declaration.defaultValue, nil), minimum: minimum, maximum: maximum,
 			enumValues: append([]string(nil), declaration.enumValues...), durationTicks: declaration.durationTicks,
 			maximumDurationTicks: declaration.maximumDurationTicks, onWrite: declaration.onWrite, clearOn: append([]string(nil), declaration.clearOn...),
 		})
+		restore()
 	}
 }
 
@@ -219,16 +239,21 @@ func (c *loweringContext) lowerCastAndCosts() {
 	if window.hasRecoveryExpression {
 		c.program.cast.recoveryExpression = c.lowerValue(window.recoveryExpression, nil)
 	}
+	restore := c.at("$.activation.cast_window.interrupt_tags")
 	for _, key := range window.interruptTags {
-		if handle, ok := c.artifacts.authority.tags[key]; ok {
-			c.program.cast.interruptTags = append(c.program.cast.interruptTags, handle)
-		}
+		// 之前查不到就静默跳过：打断标签少一个，施法不再被它打断。
+		c.program.cast.interruptTags = append(c.program.cast.interruptTags, resolveName(c, c.artifacts.authority.tags, "interrupt tag", key))
+	}
+	restore()
+	lowerCost := func(cost costIR) costProgram {
+		defer c.at(cost.source.Path)()
+		return costProgram{resource: resolveName(c, c.artifacts.authority.resources, "resource", cost.resource), amount: c.lowerValue(cost.amount, nil)}
 	}
 	for _, cost := range c.artifacts.ir.costs {
-		c.program.costs = append(c.program.costs, costProgram{resource: lookupResourceHandle(c.artifacts, cost.resource), amount: c.lowerValue(cost.amount, nil)})
+		c.program.costs = append(c.program.costs, lowerCost(cost))
 	}
 	for _, cost := range policy.sustainCosts {
-		c.program.cast.sustainCosts = append(c.program.cast.sustainCosts, costProgram{resource: lookupResourceHandle(c.artifacts, cost.resource), amount: c.lowerValue(cost.amount, nil)})
+		c.program.cast.sustainCosts = append(c.program.cast.sustainCosts, lowerCost(cost))
 	}
 }
 
@@ -288,14 +313,18 @@ func (c *loweringContext) lowerMemory() {
 	}
 	for index, name := range names {
 		declaration := c.artifacts.ir.memory[name]
+		restore := c.at(declaration.source.Path)
 		c.program.memory[index].defaultValue = c.lowerValue(declaration.defaultValue, nil)
+		restore()
 	}
 }
 
 func (c *loweringContext) lowerPhases() {
 	for phaseIndex, phase := range c.artifacts.ir.phases {
 		compiled := phaseProgram{index: PhaseIndex(phaseIndex), id: phase.id, timeoutTicks: phase.timeoutTicks}
-		for _, event := range phaseEventFlows(phase.events) {
+		// 只导出 Runtime 会派发的事件（单一来源见 phase_events.go）；没有派发点的事件已在
+		// 编译期被拒绝，这里不会再见到。
+		for _, event := range dispatchedPhaseEventFlows(phase.events) {
 			if event.flow == nil {
 				continue
 			}
@@ -305,19 +334,6 @@ func (c *loweringContext) lowerPhases() {
 			compiled.roots = append(compiled.roots, root.index)
 		}
 		c.program.phases = append(c.program.phases, compiled)
-	}
-}
-
-type namedFlow struct {
-	name string
-	flow flowIR
-}
-
-func phaseEventFlows(events phaseEventsIR) []namedFlow {
-	return []namedFlow{
-		{"enter", events.enter}, {"recast", events.recast}, {"cancel", events.cancel},
-		{"direction_changed", events.directionChanged}, {"target_changed", events.targetChanged},
-		{"timeout", events.timeout}, {"release", events.release}, {"pulse", events.pulse},
 	}
 }
 
@@ -331,6 +347,7 @@ func (c *loweringContext) lowerFlow(flow flowIR, scope lowerScope) (OperationInd
 		panic(fmt.Sprintf("skill: operation identity mismatch at %d", index))
 	}
 	c.program.operations = append(c.program.operations, nil)
+	defer c.at(header.sourcePath)()
 	switch typed := flow.(type) {
 	case *sequenceFlowIR:
 		operation := sequenceOperation{operationHeader: header}
@@ -393,10 +410,7 @@ func (c *loweringContext) lowerFlow(flow flowIR, scope lowerScope) (OperationInd
 	case *effectFlowIR:
 		c.program.operations[index] = c.lowerEffect(header, typed, scope)
 	case *gotoFlowIR:
-		phase, ok := c.artifacts.graph.Index[typed.phase]
-		if !ok {
-			panic("skill: unresolved goto reached lower")
-		}
+		phase := resolveName(c, c.artifacts.graph.Index, "goto phase", typed.phase)
 		c.program.operations[index] = gotoOperation{operationHeader: header, phase: PhaseIndex(phase)}
 	case *finishFlowIR:
 		c.program.operations[index] = finishOperation{operationHeader: header, reason: typed.reason}
@@ -442,7 +456,7 @@ func (c *loweringContext) lowerShape(shape shapeIR, scope lowerScope) shapeProgr
 func (c *loweringContext) lowerCollision(keys []string) []CollisionLayerHandle {
 	result := make([]CollisionLayerHandle, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, c.artifacts.authority.collision[key])
+		result = append(result, resolveName(c, c.artifacts.authority.collision, "collision layer", key))
 	}
 	return result
 }
@@ -456,15 +470,15 @@ func (c *loweringContext) lowerFilters(filters []filterIR, scope lowerScope) []f
 		case *relationFilterIR:
 			result = append(result, filterProgram{kind: "relation", relation: typed.relation})
 		case *statusFilterIR:
-			result = append(result, filterProgram{kind: typed.kind, status: lookupStatusHandle(c.artifacts, typed.status)})
+			result = append(result, filterProgram{kind: typed.kind, status: c.statusHandle(typed.status)})
 		case *attributeCompareFilterIR:
-			result = append(result, filterProgram{kind: "attribute_compare", attribute: lookupAttributeHandle(c.artifacts, typed.attribute), operation: typed.op, value: c.lowerValue(typed.value, scope)})
+			result = append(result, filterProgram{kind: "attribute_compare", attribute: c.attributeHandle(typed.attribute), operation: typed.op, value: c.lowerValue(typed.value, scope)})
 		case *gameplayTagFilterIR:
-			result = append(result, filterProgram{kind: typed.kind, tag: c.artifacts.authority.tags[typed.tag]})
+			result = append(result, filterProgram{kind: typed.kind, tag: c.tagHandle(typed.tag)})
 		case *lineOfSightFilterIR:
 			result = append(result, filterProgram{kind: "line_of_sight", collision: c.lowerCollision(typed.collision)})
 		case *abilityTagFilterIR:
-			result = append(result, filterProgram{kind: "ability_tag", tag: c.artifacts.authority.tags[typed.tag]})
+			result = append(result, filterProgram{kind: "ability_tag", tag: c.tagHandle(typed.tag)})
 		case *abilitySlotFilterIR:
 			result = append(result, filterProgram{kind: "ability_slot", slot: typed.slot})
 		case *ownedSourceSkillFilterIR:
@@ -474,16 +488,16 @@ func (c *loweringContext) lowerFilters(filters []filterIR, scope lowerScope) []f
 		case *ownedSpawnTickFilterIR:
 			result = append(result, filterProgram{kind: typed.kind, tick: typed.tick})
 		case *ownedUnitTemplateFilterIR:
-			result = append(result, filterProgram{kind: "unit_template", template: c.artifacts.authority.unitTemplates[typed.template]})
+			result = append(result, filterProgram{kind: "unit_template", template: c.unitTemplateHandle(typed.template)})
 		case *ownedEntityTagFilterIR:
-			result = append(result, filterProgram{kind: "entity_tag", tag: c.artifacts.authority.tags[typed.tag]})
+			result = append(result, filterProgram{kind: "entity_tag", tag: c.tagHandle(typed.tag)})
 		case *statusInstanceFilterIR:
 			filter := filterProgram{kind: typed.kind, text: typed.text, operation: typed.operation}
 			if typed.status != "" {
-				filter.status = lookupStatusHandle(c.artifacts, typed.status)
+				filter.status = c.statusHandle(typed.status)
 			}
 			if typed.kind == "status_tag" {
-				filter.tag = c.artifacts.authority.tags[typed.text]
+				filter.tag = c.tagHandle(typed.text)
 			}
 			if typed.value != nil {
 				filter.value = c.lowerValue(typed.value, scope)
@@ -533,11 +547,8 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 			template.motion = c.lowerMotionProgram(flow.process.motion, scope)
 			template.numericTracks = make([]numericTrackProgram, len(flow.process.numericTracks))
 			for index, track := range flow.process.numericTracks {
-				policy, found := lookupProcessPropertyPolicyByArtifacts(c.artifacts, track.property)
-				if !found {
-					panic("skill: process property was not resolved")
-				}
-				template.numericTracks[index] = numericTrackProgram{property: policy.Handle, operation: lowerProcessNumericOperation(track.operation), value: c.lowerValue(track.value, scope), overTicks: track.overTicks}
+				policy := c.lookupProcessProperty(track.property)
+				template.numericTracks[index] = numericTrackProgram{property: policy.Handle, operation: c.lowerProcessNumericOperation(track.operation), value: c.lowerValue(track.value, scope), overTicks: track.overTicks}
 			}
 		}
 		if flow.callbacks != nil {
@@ -562,24 +573,21 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 	}
 	switch effect := flow.effect.(type) {
 	case *captureSnapshotEffectIR:
-		profile, found := c.artifacts.temporal.profiles[effect.source.Path]
-		if !found {
-			panic("skill: temporal profile was not resolved")
-		}
+		profile := resolveName(c, c.artifacts.temporal.profiles, "temporal profile at", effect.source.Path)
 		return captureSnapshotOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), profile: profile.handle}
 	case *restoreSnapshotEffectIR:
 		return restoreSnapshotOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), snapshot: c.lowerValue(effect.snapshot, scope), onBlocked: effect.onBlocked}
 	case *damageEffectIR:
-		semantics := c.artifacts.gameplay.damage[effect.source.Path]
+		semantics := resolveName(c, c.artifacts.gameplay.damage, "damage semantics at", effect.source.Path)
 		return damageOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), amount: c.lowerValue(effect.amount, scope), damageType: semantics.DamageType, element: semantics.Element, combatTags: append([]GameplayTagHandle(nil), semantics.CombatTags...), canCritical: effect.canCritical}
 	case *healEffectIR:
 		return healOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), amount: c.lowerValue(effect.amount, scope)}
 	case *shieldEffectIR:
 		return shieldOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), amount: c.lowerValue(effect.amount, scope), durationTicks: effect.durationTicks}
 	case *addStatusEffectIR:
-		return statusOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), status: lookupStatusHandle(c.artifacts, effect.status), durationTicks: effect.durationTicks, stacks: effect.stacks, maxStacks: pointerIntValue(effect.maxStacks)}
+		return statusOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), status: c.statusHandle(effect.status), durationTicks: effect.durationTicks, stacks: effect.stacks, maxStacks: pointerIntValue(effect.maxStacks)}
 	case *removeStatusEffectIR:
-		return statusOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), status: lookupStatusHandle(c.artifacts, effect.status), remove: true}
+		return statusOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), status: c.statusHandle(effect.status), remove: true}
 	case *modifyStatusInstanceEffectIR:
 		operation := modifyStatusInstanceOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, status: c.lowerValue(effect.status, scope), operation: effect.operation, ownershipPolicy: effect.ownershipPolicy}
 		if effect.value != nil {
@@ -590,15 +598,15 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 		}
 		return operation
 	case *attributeModifierEffectIR:
-		return attributeModifierOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), attribute: lookupAttributeHandle(c.artifacts, effect.attribute), operation: effect.operation, value: c.lowerValue(effect.value, scope), durationTicks: effect.durationTicks, stackPolicy: effect.stackPolicy, maxStacks: effect.maxStacks}
+		return attributeModifierOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), attribute: c.attributeHandle(effect.attribute), operation: effect.operation, value: c.lowerValue(effect.value, scope), durationTicks: effect.durationTicks, stackPolicy: effect.stackPolicy, maxStacks: effect.maxStacks}
 	case *resourceEffectIR:
-		return resourceOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), amount: c.lowerValue(effect.amount, scope), resource: lookupResourceHandle(c.artifacts, effect.resource), operation: effect.operation}
+		return resourceOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), amount: c.lowerValue(effect.amount, scope), resource: resolveName(c, c.artifacts.authority.resources, "resource", effect.resource), operation: effect.operation}
 	case *setMemoryEffectIR:
-		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: c.memory[effect.name], operation: "set", value: c.lowerValue(effect.value, scope)}
+		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: resolveName(c, c.memory, "memory", effect.name), operation: "set", value: c.lowerValue(effect.value, scope)}
 	case *addMemoryEffectIR:
-		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: c.memory[effect.name], operation: "add", value: c.lowerValue(effect.value, scope)}
+		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: resolveName(c, c.memory, "memory", effect.name), operation: "add", value: c.lowerValue(effect.value, scope)}
 	case *clearMemoryEffectIR:
-		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: c.memory[effect.name], operation: "clear"}
+		return memoryOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, memory: resolveName(c, c.memory, "memory", effect.name), operation: "clear"}
 	case *modifyStateEffectIR:
 		operation := stateOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, state: c.lowerStateReference(effect.state), binding: c.lowerStateBinding(effect.owner, effect.subject, effect.teamOf, scope), operation: effect.operation, durationTicks: effect.durationTicks, expiryPolicy: effect.expiryPolicy}
 		if effect.value != nil {
@@ -607,24 +615,21 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 		}
 		return operation
 	case *modifyAbilityStateEffectIR:
-		property := c.artifacts.ability.properties[effect.property]
+		property := resolveName(c, c.artifacts.ability.properties, "ability property", effect.property)
 		return abilityStateOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, owner: c.lowerValue(effect.owner, scope), ability: c.lowerValue(effect.ability, scope), property: property.handle, propertyName: effect.property, operation: effect.operation, value: c.lowerValue(effect.value, scope), durationTicks: effect.durationTicks}
 	case *modifyProcessEffectIR:
-		policy, found := lookupProcessPropertyPolicyByArtifacts(c.artifacts, effect.property)
-		if !found {
-			panic("skill: process property was not resolved")
-		}
-		return modifyProcessOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, process: c.lowerValue(effect.process, scope), property: policy.Handle, operation: lowerProcessNumericOperation(effect.operation), value: c.lowerValue(effect.value, scope), overTicks: effect.overTicks}
+		policy := c.lookupProcessProperty(effect.property)
+		return modifyProcessOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, process: c.lowerValue(effect.process, scope), property: policy.Handle, operation: c.lowerProcessNumericOperation(effect.operation), value: c.lowerValue(effect.value, scope), overTicks: effect.overTicks}
 	case *spawnEffectIR:
 		overrides := make([]spawnAttributeOverrideProgram, len(effect.attributeOverrides))
 		for index, override := range effect.attributeOverrides {
-			overrides[index] = spawnAttributeOverrideProgram{attribute: c.artifacts.authority.attributes[override.attribute], value: c.lowerValue(override.value, scope)}
+			overrides[index] = spawnAttributeOverrideProgram{attribute: c.attributeHandle(override.attribute), value: c.lowerValue(override.value, scope)}
 		}
 		parameters := make([]spawnParameterBindingProgram, len(effect.parameterBindings))
 		for index, binding := range effect.parameterBindings {
 			parameters[index] = spawnParameterBindingProgram{name: binding.name, value: c.lowerValue(binding.value, scope)}
 		}
-		return spawnOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, template: c.artifacts.authority.unitTemplates[effect.template], position: c.lowerValue(effect.position, scope), count: effect.count, durationTicks: effect.durationTicks, attributeOverrides: overrides, parameterBindings: parameters}
+		return spawnOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, template: c.unitTemplateHandle(effect.template), position: c.lowerValue(effect.position, scope), count: effect.count, durationTicks: effect.durationTicks, attributeOverrides: overrides, parameterBindings: parameters}
 	case *entityCommandEffectIR:
 		operation := entityCommandOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), command: effect.command, behavior: effect.behavior}
 		if effect.position != nil {
@@ -746,18 +751,15 @@ func (c *loweringContext) lowerValue(value valueIR, scope lowerScope) programVal
 		}
 		return result
 	case *attributeReadValueIR:
-		plan, planned := c.artifacts.snapshots.reads[typed.source.Path]
-		if !planned {
-			// A read the snapshot pass never visited would lower to attribute
-			// handle 0 and silently read the wrong (or no) attribute at
-			// runtime — the walkValues traversal must cover every value site.
-			panic("skill: attribute read at " + typed.source.Path + " has no snapshot plan")
-		}
+		// A read the snapshot pass never visited would lower to attribute
+		// handle 0 and silently read the wrong (or no) attribute at runtime —
+		// the walkValues traversal must cover every value site.
+		plan := resolveName(c, c.artifacts.snapshots.reads, "attribute snapshot plan at", typed.source.Path)
 		return attributeReadProgramValue{entity: c.lowerValue(typed.entity, scope), attribute: plan.Attribute, snapshot: plan.Snapshot, snapshotSlot: plan.SnapshotSlot, typ: typed.resolvedType}
 	case *stateReadValueIR:
 		return stateReadProgramValue{state: c.lowerStateReference(typed.state), binding: c.lowerStateBinding(typed.owner, typed.subject, typed.teamOf, scope), snapshot: typed.snapshot, typ: typed.resolvedType}
 	case *abilityStateReadValueIR:
-		property := c.artifacts.ability.properties[typed.property]
+		property := resolveName(c, c.artifacts.ability.properties, "ability property", typed.property)
 		return abilityStateReadProgramValue{owner: c.lowerValue(typed.owner, scope), ability: c.lowerValue(typed.ability, scope), property: property.handle, name: typed.property, snapshot: typed.snapshot, typ: typed.resolvedType}
 	default:
 		panic(fmt.Sprintf("skill: unsupported value %T", value))
@@ -767,7 +769,8 @@ func (c *loweringContext) lowerValue(value valueIR, scope lowerScope) programVal
 func (c *loweringContext) lowerStateReference(name string) stateReferenceProgram {
 	plan, found := c.artifacts.state.plans[name]
 	if !found {
-		panic("skill: unresolved state reference")
+		c.unresolved("state", name)
+		return stateReferenceProgram{}
 	}
 	return stateReferenceProgram{
 		shared: plan.shared, slot: plan.slot, typ: plan.typ, scope: plan.scope,
@@ -800,6 +803,14 @@ func (c *loweringContext) lowerReference(reference *referenceValueIR, scope lowe
 	}
 	if index, found := c.input[reference.reference]; found {
 		return referenceProgramValue{kind: referenceInput, index: index, typ: reference.resolvedType}
+	}
+	// $memory / $local / $input 前缀的引用查不到不是 builtin：之前退成同名 builtin，运行期才以
+	// ErrProgramInvariant 失败（B3 ①）。
+	for _, prefix := range []string{"$memory.", "$local.", "$input."} {
+		if strings.HasPrefix(reference.reference, prefix) {
+			c.unresolved("reference", reference.reference)
+			return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType}
+		}
 	}
 	return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType}
 }
@@ -921,16 +932,20 @@ func pointerIntValue(value *int) int {
 	return *value
 }
 
-func lookupStatusHandle(artifacts *compileArtifacts, key string) StatusHandle {
-	return artifacts.authority.statuses[key]
+func (c *loweringContext) statusHandle(key string) StatusHandle {
+	return resolveName(c, c.artifacts.authority.statuses, "status", key)
 }
 
-func lookupAttributeHandle(artifacts *compileArtifacts, key string) AttributeHandle {
-	return artifacts.authority.attributes[key]
+func (c *loweringContext) attributeHandle(key string) AttributeHandle {
+	return resolveName(c, c.artifacts.authority.attributes, "attribute", key)
 }
 
-func lookupResourceHandle(artifacts *compileArtifacts, key string) ResourceHandle {
-	return artifacts.authority.resources[key]
+func (c *loweringContext) tagHandle(key string) GameplayTagHandle {
+	return resolveName(c, c.artifacts.authority.tags, "gameplay tag", key)
+}
+
+func (c *loweringContext) unitTemplateHandle(key string) UnitTemplateHandle {
+	return resolveName(c, c.artifacts.authority.unitTemplates, "unit template", key)
 }
 
 func digestGameplayProgram(program *Program) string {

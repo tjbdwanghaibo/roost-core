@@ -8,8 +8,8 @@ type inputSlotProgram struct {
 type InputPort string
 
 const (
-	InputPortDirectionChanged InputPort = "direction_changed"
-	InputPortTargetChanged    InputPort = "target_changed"
+	InputPortDirectionChanged InputPort = phaseEventDirectionChanged
+	InputPortTargetChanged    InputPort = phaseEventTargetChanged
 )
 
 type inputProgram struct {

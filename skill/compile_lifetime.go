@@ -188,13 +188,11 @@ func maxInt(left, right int) int {
 // target_changed（UpdateInput）取 root；recast 与 timeout 没有派发点，
 // timeout_ticks 也不排任何计时。在 Runtime 实现它们之前，编译期拒绝这两个
 // 事件，并对非零 timeout_ticks 给出 warning，而不是编出永远不会执行的分支。
+// 哪些事件有派发点只在 phase_events.go 的 phaseEventTable 里写一次（B3 ②）。
 func requireDispatchedPhaseEvents(context *compileContext, phase phaseIR, index int) {
 	path := fmt.Sprintf("$.phases[%d]", index)
-	if phase.events.recast != nil {
-		context.addDiagnostic(DiagnosticCapabilityUnknown, path+".on.recast", "phase event recast is not dispatched by the runtime")
-	}
-	if phase.events.timeout != nil {
-		context.addDiagnostic(DiagnosticCapabilityUnknown, path+".on.timeout", "phase event timeout is not dispatched by the runtime")
+	for _, event := range undispatchedPhaseEventFlows(phase.events) {
+		context.addDiagnostic(DiagnosticCapabilityUnknown, path+".on."+event.name, "phase event "+event.name+" is not dispatched by the runtime")
 	}
 	if phase.timeoutTicks > 0 {
 		context.diagnostics = append(context.diagnostics, Diagnostic{Code: DiagnosticCapabilityUnknown, Severity: DiagnosticWarning, Path: path + ".timeout_ticks", Message: "phase timeout_ticks is not enforced by the runtime; the phase ends only through finish or goto"})

@@ -32,11 +32,11 @@ func (runtime *Runtime) prepareCast(cast *castInstance) error {
 	cast.startTick = runtime.currentTick
 	if cast.program.cast.mode == castModeCharge {
 		cast.windowStage = CastWindowExecuting
-		cast.pendingRootEvent = "enter"
+		cast.pendingRootEvent = phaseEventEnter
 		runtime.emitCastLifecycleEvent(cast, "cast_charging")
 		return runtime.executeCast(cast)
 	}
-	return runtime.prepareCastWindow(cast, "enter")
+	return runtime.prepareCastWindow(cast, phaseEventEnter)
 }
 
 func (runtime *Runtime) prepareCastWindow(cast *castInstance, event string) error {
@@ -134,8 +134,8 @@ func (runtime *Runtime) beginCastExecution(cast *castInstance) error {
 	cast.windowStage = CastWindowExecuting
 	cast.status = CastRunning
 	runtime.emitCastLifecycleEvent(cast, "cast_executing")
-	if cast.pendingRootEvent == "release" {
-		return runtime.executeCastEvent(cast, "release")
+	if cast.pendingRootEvent == phaseEventRelease {
+		return runtime.executeCastEvent(cast, phaseEventRelease)
 	}
 	return runtime.executeCast(cast)
 }
@@ -246,7 +246,7 @@ func (runtime *Runtime) Cancel(id CastID) error {
 		runtime.startCooldown(cast)
 	}
 	// 走到这里 cast 已经被改动（任务撤了、token 推进了），出错必须进失败终态，不能停在半终止（NC-111）。
-	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], "cancel"); found {
+	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], phaseEventCancel); found {
 		if _, err := runtime.executeOperation(cast, operation); err != nil {
 			return runtime.failCastLocked(cast, err)
 		}
@@ -355,7 +355,7 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 		runtime.cancelPhaseTasks(cast, cast.phaseToken)
 		cast.phaseToken++
 		cast.status = CastRunning
-		if err := runtime.prepareCastWindow(cast, "release"); err != nil {
+		if err := runtime.prepareCastWindow(cast, phaseEventRelease); err != nil {
 			return runtime.failCastLocked(cast, err)
 		}
 		return nil
@@ -370,7 +370,7 @@ func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 	runtime.cancelPhaseTasks(cast, cast.phaseToken)
 	cast.phaseToken++
 	runtime.startCooldown(cast)
-	if err := runtime.executeCastEvent(cast, "release"); err != nil {
+	if err := runtime.executeCastEvent(cast, phaseEventRelease); err != nil {
 		return runtime.failCastLocked(cast, err)
 	}
 	return nil

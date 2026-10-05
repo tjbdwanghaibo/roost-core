@@ -47,7 +47,7 @@ func (runtime *Runtime) executeCastPulse(cast *castInstance, pulseIndex int64) e
 	}
 	cast.pulseIndex = pulseIndex
 	runtime.emitCastLifecycleEvent(cast, "cast_pulse")
-	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], "pulse"); found {
+	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], phaseEventPulse); found {
 		control, err := runtime.executeOperation(cast, operation)
 		if err != nil {
 			return err

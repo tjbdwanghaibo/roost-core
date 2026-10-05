@@ -206,6 +206,8 @@ bash scripts/test-remote-matrix.sh
 
 10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
 
+10-06 B3 ①②（维护者决定）：skill `lower.go` 的名字查找经唯一入口 `resolveName`，查不到返回 `LOWER_UNRESOLVED` 编译错误、不交出 Program（类型检查之外的第二道防线，回归 `skill/lower_lookup_promises_test.go` 对全部种子逐表删条目）；phase 事件派发表单一来源 `skill/phase_events.go`。**已实施，未发版**（[方案与实施](feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)）。
+
 10-06 C7（维护者决定）：遍历回调定为仓库级契约（回调里可读写同一容器、false 立即停止），写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）。**已实施，未发版**（[方案与实施](feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md)）。
 
 10-05 A4 / C1 / A5（维护者决定）：框架配置一律严格读取——新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`，kit 各 Mod 与 app 不再用 viper 宽松 getter，`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（含 syncbus 三段与 `<service>.call_timeout`）在任何 Mod Init 之前检查，守卫测试扫描源码（[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md)；kit/redis 三个整数键留给 A2 之后，生成的 player TCP / RPC 客户端代码为兼容已发布 core 仍用 getter，均由启动校验兜住）。[NC-192](bugfix/RR-20261005-NC-192.md) 按 C1 方案 1 修复：`env: production` 只校验有读取方的设置，生成的生产示例与 Secret 示例打开生产模式可以启动。A5：隔离环境按共享模式使用，全局运维命令运行期间持有 `remote-acceptance.lock`（[NC-203 复核补修](bugfix/RR-20261005-NC-203.md#复核后的补修2026-10-05维护者决定-a5)），规则见 `kit/scripts/integration/README.md`“共享使用规则”。行为收紧，未发版。
