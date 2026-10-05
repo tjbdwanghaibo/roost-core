@@ -61,13 +61,18 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // and to v1.20.1 because generated saga definitions no longer spell out step
 // budgets (the kit saga Mod fills them from saga.step_defaults / saga.steps) and
 // the game-demo budget test calls kitsaga.StepBudgetsFromConfig (U-0280), which
-// v1.20.0 lacks.
+// v1.20.0 lacks,
+// and to v1.20.2 because the generated project calls activity.LoadGroupsFile
+// (C4 activity groups file), servicemetrics.NewMetricsReporter (C6 default
+// service metrics) and app.ConfigReader / app.ConfigDuration (A4 strict reads
+// in the player TCP access layer and the RPC client Mod), none of which
+// v1.20.1 has.
 // Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.20.1",
+	Core:    "v1.20.2",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
