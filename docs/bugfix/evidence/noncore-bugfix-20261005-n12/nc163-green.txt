@@ -1,0 +1,10 @@
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext/dial_timeout
+    dial_bounds_promises_test.go:76: dial returned after 201ms: robot transport: dial websocket ws://127.0.0.1:52725/: websocket.Dial ws://127.0.0.1:52725/: context deadline exceeded
+=== RUN   TestWebSocketDialHonorsDialTimeoutAndContext/ctx_cancel
+    dial_bounds_promises_test.go:76: dial returned after 201ms: robot transport: dial websocket ws://127.0.0.1:52725/: websocket.Dial ws://127.0.0.1:52725/: context deadline exceeded
+--- PASS: TestWebSocketDialHonorsDialTimeoutAndContext (0.40s)
+    --- PASS: TestWebSocketDialHonorsDialTimeoutAndContext/dial_timeout (0.20s)
+    --- PASS: TestWebSocketDialHonorsDialTimeoutAndContext/ctx_cancel (0.20s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	0.911s

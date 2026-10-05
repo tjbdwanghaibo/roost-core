@@ -150,7 +150,10 @@ func dialTCP(ctx context.Context, cfg Config) (Conn, error) {
 	return NewTCPConn(conn, cfg.MaxPayloadSize), nil
 }
 
-func dialWebSocket(_ context.Context, cfg Config) (Conn, error) {
+// dialWebSocket 的 DialTimeout 覆盖 TCP 建连加 HTTP 升级握手，并服从调用方 ctx
+// （RR-20261005-NC-163）。旧实现用 websocket.DialConfig，两者都不看：端点接受 TCP 却不回升级
+// 响应时握手无限阻塞，connect 不返回，runner.Stop 也停不下这个机器人。
+func dialWebSocket(ctx context.Context, cfg Config) (Conn, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("robot transport: websocket endpoint is required")
 	}
@@ -161,7 +164,16 @@ func dialWebSocket(_ context.Context, cfg Config) (Conn, error) {
 	for k, v := range cfg.Headers {
 		wsCfg.Header.Set(k, v)
 	}
-	conn, err := websocket.DialConfig(wsCfg)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg.DialTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.DialTimeout)
+		defer cancel()
+	}
+	wsCfg.Dialer = &net.Dialer{}
+	conn, err := wsCfg.DialContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("robot transport: dial websocket %s: %w", cfg.Endpoint, err)
 	}
