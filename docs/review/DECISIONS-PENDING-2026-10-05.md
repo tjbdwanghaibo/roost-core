@@ -54,7 +54,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 已实施（5407f127，[方案与实施](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）；skill Runtime 状态进 DAO 列为后续（方案 §4.4） |
 | A2～A5 | 按推荐 | A2、A3 见下行；A4、A5 **已实施（`3e3350d5`）**，见下两行 |
-| A4 | 按推荐：先 ②（逐个改严格读取），① schema 作为后续重构 | **已实施（`3e3350d5`）**：新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`；kit 各 Mod 与 app 改严格读取；`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键，含 syncbus 三段与 `<service>.call_timeout`）检查；守卫测试扫描源码。生成工程三份配置在严格校验下全部通过（game-demo 与 CI full 场景）。**未做**：kit/redis 三个整数读取（留给 A2 之后，启动校验已兜住）；生成的 player TCP / RPC 客户端代码改严格读取（等生成器 Core 下限升到 v1.20.2）；① schema。[方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) |
+| A4 | 按推荐：先 ②（逐个改严格读取），① schema 作为后续重构 | **已实施（`3e3350d5`）**：新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`；kit 各 Mod 与 app 改严格读取；`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键，含 syncbus 三段与 `<service>.call_timeout`）检查；守卫测试扫描源码。生成工程三份配置在严格校验下全部通过（game-demo 与 CI full 场景）。**未做**：~~kit/redis 三个整数读取（留给 A2 之后，启动校验已兜住）~~ 已改为严格读取并删掉守卫放行（`5df60765`，分支 `c4c6`）；生成的 player TCP / RPC 客户端代码改严格读取（等生成器 Core 下限升到 v1.20.2）；① schema。[方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) |
 | A5 | 按推荐：② 共享，全局运维命令保留锁 | **已实施（`3e3350d5`）**：共享使用规则写进 `kit/scripts/integration/README.md`、roost-coding、roost-bugfix（SKILL 与 lessons）；核对发现 NC-203 之后全局命令只检查锁、不持有，failover 用例与带故障的生成工程验收整段不持锁，按先红后绿补修（NC-203 复核补修）。[记录](../bugfix/RR-20261005-NC-203.md#复核后的补修2026-10-05维护者决定-a5) |
 | C1 | 随 A4 按方案 1 | **已实施（`3e3350d5`）**：生产校验删去九组无读取方的要求，USER_GUIDE §10 写明 `env: production` 校验范围；生成的生产示例 / Secret 示例打开生产模式可以启动。[记录](../bugfix/RR-20261005-NC-192.md) |
 | A2 | 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做 | **已实施（`cf5721c9`）**：Redis 写命令、含写的 pipeline、EvalBatchDurable、DistLock 都不经驱动重放，只在 `driver.IsDefinitelyNotExecuted` 判为真时重发（脚本同样，NC-101 复审应改项 1）；Mongo 提交发出之后的失败包 `mongo.ErrCommitResultUnknown`（应改项 2）；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。契约表：[redis/driver](../../redis/driver/README.md)、[mongo/driver](../../mongo/driver/README.md)。调用方核对没有发现双写；bus 的 SETNX 去重、global Bind 的误报、L2 快照 DEL 被吞掉、Redis Cluster 实测，留作观察或交给归属方。[方案](../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) |
@@ -65,8 +65,8 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | B5 | etcd 选举：保留（不弃用） | — |
 | B7 | ai / actionflow：保留在 core | 重入方向见第三轮（b），已实施 |
 | C3 / C8 | event、index 与零调用方 API：保留 | — |
-| C4 | 维护者问“什么是活动组 game 服”，已解释，待决定上限 | 待决定 |
-| C6 | 默认 metrics adapter：做 | 待实施 |
+| C4 | 维护者问“什么是活动组 game 服”，已解释，待决定上限 | 已在第三轮决定，见下表 |
+| C6 | 默认 metrics adapter：做 | **已实施（`491aaf3b`，分支 `c4c6`）**：`servicemetrics.NewMetricsReporter` 把服务事件写成 `service.{accepted,refused,replayed,dropped,conflict}.total` 与 `service.depth` 六个固定名，经 ops `/metrics` 导出；队列 key / 看板 ID 改为 `key` 标签（`KeyedReporter` / `Sink.DepthOf`，项目自写 Reporter 不受影响），`session.swept` 改为计数 `run.swept`；生成工程 `Metrics()` 默认返回它，`service_metrics.enabled: false` 或返回 nil 关闭；真实进程 `/metrics` 修前 0 行、修后有 `service_*`。**未做**：注册表按标签删除序列（N12 O2 / O3）。新生成工程需要 core ≥ v1.20.2，发版时升 `minimumVersions.Core` 与 framework-compat `minimum`。[方案](../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md) |
 | C7 | 遍历回调语义定为仓库级契约：是 | **已实施（`cd43a5ac`）**：契约写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map 的 `RangeX`；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）；index / lock 无遍历回调。[方案](../feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md) |
 | C10 | N10 临时 worktree：已删除（分支已并入 main） | 完成 |
 | 发布 | v1.20.2 暂不发，上述实施完成后统一发版 | — |
@@ -79,5 +79,5 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
 | B2 | 按推荐：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约 | **已实施（`f376bba0`、`7d49e54d`）**：L1 写入一律先经 L2 版本 CAS / 带版本删除，L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness`（缺省 = `snapshot_cache_ttl`）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（O5）；O4 容量、L2 落后于权威（写 L2 失败）、生成配置模板留作后续。[方案](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) |
-| C4 | 活动组（参与同一全服活动的 game sid 集合）应由一个配置文件定义；每组上限暂定 64，启动 / 加载时校验 | 待实施 |
+| C4 | 活动组（参与同一全服活动的 game sid 集合）应由一个配置文件定义；每组上限暂定 64，启动 / 加载时校验 | **已实施（`277e1252`，分支 `c4c6`）**：`configs/activity_groups.yaml`（`groups: [{id, game_sids}]`）由生成器为托管 activity 协调器的工程创建，协调器与 game-demo 的 game 经 `activity.groups_file` 读同一文件、用同一个 `kit/service/global/activity.LoadGroupsFile` 校验（每组 ≤ `MaxExpectedGames` = 64、sid 唯一且只属于一个组、正的 int32、本服 sid 必须在组里）；协调器 `sweep_groups` 为空时扫文件里的全部组；game 配置 `activity.game_sids` 删除，已生成工程不迁移。kit activity 除导出上限外还改了 Mod 读取组文件（为了“协调器读同一份定义”，Service 逻辑不变）。新生成的 game-demo 需要 core ≥ v1.20.2。[方案](../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md) |
 | B7 | actionflow 回调重入：按推荐（b）——回调里对 runner 的变更进延后命令队列，回调返回后按序执行，判定集中一处 | **已实施（`a9b7075b`）**：判定集中在 `ActionRunner.submit`，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），拿到 ID 必有 OnEnded；`MaxDeferredCommands` / `MaxDeferredSteps` 有界防失控；O-A2 / O-A3 消失并钉住，O-A1 定义为“EndAll 先结束全部、回调变更随后执行”；`MissionRunner` 未改。[方案](../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md) |
